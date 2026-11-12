@@ -178,6 +178,23 @@ class StrictValidationTests(CatalogCase):
         entry['config_files'][0]['path'] = '.local/share/woowbk-demo/state.json'
         catalog.validate_entry(entry, paths=self.paths, user_lookup=lookup)
 
+    def test_config_paths_stay_in_the_apps_own_directories(self):
+        # Review SEC-8: user units, the user manager's environment, the Podman configuration and autostart
+        # entries could be defined by archive bytes when a catalog declared such a path.
+        for bad in ('.local/share/systemd/user/x.service', '.config/environment.d/50-x.conf',
+                    '.config/containers/containers.conf', '.config/autostart/x.desktop', '.config/other-app/app.env',
+                    '.config/woowbk-demo-evil/app.env', '.config/woowbk-demo'):
+            self.assert_rejected(lambda e, bad=bad: e['config_files'][0].update(path=bad))
+        for app_id in ('systemd', 'containers', 'autostart'):
+            entry = demo_entry(self.paths)
+            entry['id'] = app_id
+            entry['config_files'][0]['path'] = f'.config/{app_id}/x.conf'
+            with self.assertRaises(BackupError):
+                catalog.validate_entry(entry, paths=self.paths, user_lookup=lookup)
+        entry = demo_entry(self.paths)
+        entry['config_files'][0]['path'] = '.config/woowbk-demo/nested/dir/app.toml'
+        catalog.validate_entry(entry, paths=self.paths, user_lookup=lookup)
+
     def test_mode_rules(self):
         for good in ('0644', '0600', '0400', '0640'):
             entry = demo_entry(self.paths)

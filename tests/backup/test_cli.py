@@ -189,6 +189,14 @@ class StatusTests(CliCase):
         self.assertEqual(response['apps'][0]['state'], 'error')
         self.assertEqual(response['apps'][0]['problems'], ['找不到應用擁有者帳號 appowner。'])
 
+    def test_running_but_unhealthy_app_is_not_shown_as_running(self):
+        # Lab H5 open issue: units were active while /healthz answered 503; the page said 執行中.
+        self.world.health_hints['woowbk-demo'] = '服務已啟動，但健康檢查未通過（http://127.0.0.1:18090/healthz，HTTP 503）。'
+        demo = self.call(['status'])['apps'][0]
+        self.assertEqual(demo['state'], 'error')
+        self.assertIn('HTTP 503', demo['problems'][-1])
+        self.assertEqual(self.call(['status'])['apps'][1]['state'], 'running')
+
     def test_list_shape(self):
         self.make_backup()
         response = self.call(['list'])
@@ -253,6 +261,41 @@ class InspectTests(CliCase):
             self.assertEqual(set(check), {'id', 'status', 'message'})
             self.assertIn(check['status'], ('ok', 'warn', 'fail'))
         self.assertTrue(self.storage.index[self.backup_id]['inspected'])
+
+    def test_a_wrong_key_is_never_saved(self):
+        # Review F4: with save_key, the key was imported before decryption and kept although it was wrong.
+        response = self.call(['inspect'], {'backup_id': self.backup_id, 'key': TEST_SECRET, 'save_key': True})
+        self.assertEqual(response['error']['code'], 'wrong-key')
+        self.assertEqual(self.keys.imported, [])
+        self.assertFalse(any(p.exists() for p in self.keys.temp_paths))
+
+    def test_sigterm_during_inspect_removes_the_pasted_key(self):
+        # Review SEC-4: cockpit-bridge sends SIGTERM when the channel closes; the temp key must still go.
+        import signal
+        self.reencrypt_for_imported_key()
+        read_manifest = self.archive.read_manifest
+
+        def interrupted(path, identities, **kwargs):
+            os.kill(os.getpid(), signal.SIGTERM)
+            import time
+            time.sleep(5)
+            return read_manifest(path, identities, **kwargs)
+        self.archive.read_manifest = interrupted
+        previous = signal.getsignal(signal.SIGTERM)
+        with contextlib.redirect_stderr(io.StringIO()):
+            response = self.call(['inspect'], {'backup_id': self.backup_id, 'key': TEST_SECRET})
+        self.assertEqual(signal.getsignal(signal.SIGTERM), previous)
+        self.assertFalse(response['ok'])
+        self.assertTrue(self.keys.temp_paths)
+        self.assertFalse(any(p.exists() for p in self.keys.temp_paths))
+
+    def test_lone_surrogates_never_break_the_one_json_object_contract(self):
+        # Review SEC-5: a hostile note came back from inspect; stdout must still be exactly one JSON object.
+        out = io.StringIO()
+        cli._emit(out, {'ok': True, 'note': 'x\ud800y'})
+        self.assertEqual(json.loads(out.getvalue())['note'], 'x\ud800y')
+        out.getvalue().encode('ascii')
+        self.assertEqual(self.error_code(['download-info'], raw='{"backup_id": "\\ud800"}'), 'invalid-request')
 
     def test_key_required_then_temporary_key_then_saved_key(self):
         self.reencrypt_for_imported_key()
@@ -320,9 +363,26 @@ class JobCommandTests(CliCase):
         self.call(['job-cancel'], {'job_id': first['job_id']})
         jobs.run_job(self.paths, first['job_id'], deps=self.deps)
         self.assertFalse(key_file.exists())
-        second = self.call(['restore-start'], dict(base, request_id='req-00000002', key=TEST_SECRET, save_key=True))
+        # Review F4: a key is saved only after it opened this backup; this one did not (wrong key).
+        refused = self.call(['restore-start'], dict(base, request_id='req-00000002', key=TEST_SECRET, save_key=True))
+        self.assertEqual(refused['error']['code'], 'wrong-key')
+        self.assertEqual(self.keys.imported, [])
+        path = self.storage.archive_path(self.backup_id)
+        data = json.loads(path.read_text())
+        data['header']['key_id'] = TEST_SECRET_ID
+        path.write_text(json.dumps(data))
+        second = self.call(['restore-start'], dict(base, request_id='req-00000003', key=TEST_SECRET, save_key=True))
         self.assertFalse(jobs.JobStore(self.paths).key_path(second['job_id']).exists())
         self.assertEqual([k.key_id for k in self.keys.imported], [TEST_SECRET_ID])
+        self.assertFalse(any(p.exists() for p in self.keys.temp_paths))
+
+    def test_restore_start_without_safety_backup_is_explicit(self):
+        # Review CR-16: only an explicit, separately confirmed option skips the safety backup.
+        base = {'backup_id': self.backup_id, 'apps': ['woowbk-demo'], 'confirm': True}
+        started = self.call(['restore-start'], dict(base, request_id='req-00000004', allow_no_safety=True))
+        self.assertEqual(jobs.JobStore(self.paths).get(started['job_id'])['params']['allow_no_safety'], True)
+        self.assertEqual(self.error_code(['restore-start'], dict(base, request_id='req-00000005',
+                                                                 allow_no_safety='yes')), 'invalid-request')
 
     def test_restore_start_validation(self):
         base = {'backup_id': self.backup_id, 'apps': ['woowbk-demo'], 'confirm': True, 'request_id': 'req-00000001'}
@@ -390,6 +450,27 @@ class JobCommandTests(CliCase):
 
 
 class FileCommandTests(CliCase):
+    def test_delete_refuses_the_running_restores_safety_backup(self):
+        # Review CR-08: deleting it would take away the rollback source of the running restore.
+        backup_id = self.make_backup()
+        safety_id = self.make_backup()
+        self.storage.index[safety_id]['type'] = 'safety'
+        other_safety = self.make_backup()
+        self.storage.index[other_safety]['type'] = 'safety'
+        started = self.call(['restore-start'], {'backup_id': backup_id, 'apps': ['woowbk-demo'], 'confirm': True,
+                                                'request_id': 'req-00000009'})
+        self.active_units.add(f'woowtech-backup-{started["job_id"]}.service')
+        store = jobs.JobStore(self.paths)
+        record = store.get(started['job_id'])
+        record.update(state='running', safety_backup_id=safety_id)
+        store.save(record)
+        response = self.call(['delete'], {'backup_id': safety_id})
+        self.assertEqual((response['error']['code'], response['error']['details']['job_id']), ('busy', started['job_id']))
+        self.assertEqual(self.error_code(['delete'], {'backup_id': other_safety}), 'busy')
+        self.assertIn(safety_id, self.storage.index)
+        manual = self.make_backup()
+        self.assertEqual(self.call(['delete'], {'backup_id': manual}), {'ok': True})
+
     def test_delete_refuses_backup_in_use(self):
         backup_id = self.make_backup()
         started = self.call(['restore-start'], {'backup_id': backup_id, 'apps': ['woowbk-demo'], 'confirm': True,
@@ -404,7 +485,7 @@ class FileCommandTests(CliCase):
         self.assertEqual(self.error_code(['delete'], {'backup_id': backup_id}), 'not-found')
 
     def test_upload_and_download_shapes(self):
-        begin = self.call(['upload-begin'], {'filename': 'woowtech-backup-dev-a-20261113-0200.woowbackup', 'size': 4096})
+        begin = self.call(['upload-begin'], {'filename': 'woowtech-backup-dev-a-20261113-020000.woowbackup', 'size': 4096})
         self.assertEqual(set(begin), {'ok', 'upload_id', 'path', 'max_size'})
         finished = self.call(['upload-finish'], {'upload_id': begin['upload_id']})
         self.assertEqual(set(finished['backup']) - {'uploaded_at'}, META_KEYS)

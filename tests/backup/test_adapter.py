@@ -7,6 +7,7 @@ import http.server
 import json
 import os
 import shutil
+import tarfile
 import tempfile
 import threading
 import types
@@ -19,14 +20,16 @@ from woowbackup.adapters import quadlet_postgres as qp
 from woowbackup.errors import BackupError
 from woowbackup.paths import Paths
 
+from .tarfixtures import image_id, oci_archive, read_oci, tar_listing, volume_tar
 from .test_catalog import demo_entry, lookup as user_lookup
 
 PODMAN, SYSTEMCTL, PYTHON, HELPER = podman.PODMAN, podman.SYSTEMCTL, podman.PYTHON, podman.FILE_HELPER
 Q = '.config/containers/systemd/'
 PG_REF = 'docker.io/library/postgres:16-alpine'
 APP_REF = 'localhost/woowbk-demo-app:1'
-PG_ID = 'sha256:' + 'a' * 64
-APP_ID = 'sha256:' + 'b' * 64
+PG_ENV = ['PG_MAJOR=16']
+PG_ID = image_id(PG_REF, PG_ENV)  # image id = digest of the OCI config blob, as with podman
+APP_ID = image_id(APP_REF)
 DB_PASSWORD = b'pw-Sup3r-S3cret-value'
 APP_KEY = b'app-key-\x00\xff-binary\n'
 QUADLETS = {
@@ -38,7 +41,7 @@ QUADLETS = {
                                   b'Volume=woowbk-demo-files:/data\n# Image=ignored-comment\n'),
 }
 DUMP = b'PGDMP' + bytes(range(256)) * 4
-VOLUME_TAR = b'TAR!' + bytes(4092)
+VOLUME_TAR = volume_tar()
 CONFIG = b'TITLE=Demo\n'
 SUMMARY = {'notes': 12, 'files': 4, 'digest': 'abc', 'title': 'Demo', 'signatures_valid': True, 'uptime': 99}
 PREFIX = ['/usr/sbin/runuser', '-u', 'appowner', '--', '/usr/bin/env', '-i', 'PATH=/usr/sbin:/usr/bin:/sbin:/bin',
@@ -53,6 +56,11 @@ def helper(op, *args):
 def psql(sql, database='notes'):
     return [PODMAN, 'exec', 'woowbk-demo-db', 'psql', '-X', '-w', '-A', '-t', '-v', 'ON_ERROR_STOP=1', '-U', 'notes',
             '-d', database, '-c', sql]
+
+
+DATABASES_SQL = 'SELECT datname FROM pg_database WHERE NOT datistemplate ORDER BY 1'
+ROLES_SQL = "SELECT rolname FROM pg_roles WHERE rolname !~ '^pg_' AND rolname <> current_user ORDER BY 1"
+SCOPE = [psql(DATABASES_SQL, 'postgres'), psql(ROLES_SQL, 'postgres')]
 
 
 class FakeOwner:
@@ -70,26 +78,48 @@ class FakeOwner:
             self.volumes = {'woowbk-demo-files': VOLUME_TAR, 'woowbk-demo-pgdata': b'PGDATA'}
         self.images = {PG_REF: PG_ID, APP_REF: APP_ID}
         self.known_ids = {PG_ID, APP_ID}
-        self.image_env = {PG_REF: ['PG_MAJOR=16'], APP_REF: []}
+        self.image_env = {PG_REF: list(PG_ENV), APP_REF: []}
+        self.masked = set()
+        self.loaded = []
         self.pullable = set()
         self.arch = 'amd64'
-        self.db = {'data': DUMP if deployed else b'', 'num': '160015', 'version': '16.15', 'databases': {'notes'}}
+        self.db = {'data': DUMP if deployed else b'', 'num': '160015', 'version': '16.15', 'databases': {'notes'},
+                   'roles': []}
         self.containers = {'woowbk-demo-db': 'woowbk-demo-db.service'}
         self.fail = []
+        self.fail_load = set()      # refs whose `podman load` fails
+        self.signal_on = None       # (needle, exception): the command runs, then the signal arrives
+        self.dump_readable = True   # False: the TOC is intact but the table data is cut off
+        self.dump_crashes_db = False  # True: the database shuts down while pg_dump runs
 
     # ------------------------------------------------------------- plumbing
-    def __call__(self, argv, *, input=None, stdout=None, timeout=None, cwd=None, env=None):
+    def __call__(self, argv, *, input=None, stdout=None, timeout=None, cwd=None, env=None, max_output=None):
         assert argv[:len(PREFIX)] == PREFIX, argv[:len(PREFIX)]
         assert cwd == '/home/appowner' and env == podman.ROOT_ENV, (cwd, env)
         inner = list(argv[len(PREFIX):])
         # Real podman distinguishes a pipe (bytes fed by the runner) from a regular-file stdin.
         self.input_kind = 'pipe' if isinstance(input, (bytes, bytearray)) else ('file' if input is not None else None)
+        if input is not None and not isinstance(input, (bytes, bytearray)):
+            try:
+                if os.fstat(input.fileno()).st_mode & 0o170000 == 0o010000:
+                    self.input_kind = 'stream'  # a pipe fed by the engine (canonical tar)
+            except (AttributeError, OSError, ValueError):
+                pass
         data = input if input is None or isinstance(input, (bytes, bytearray)) else input.read()
-        self.calls.append({'argv': inner, 'input': data, 'timeout': timeout, 'env': env, 'kind': self.input_kind})
+        self.calls.append({'argv': inner, 'input': data, 'timeout': timeout, 'env': env, 'kind': self.input_kind,
+                           'max_output': max_output})
         text = self.text(inner)
         for needle, code in self.fail:
             if needle in text:
                 return podman.Result(code, b'', b'injected failure\nCommand was: SELECT secret')
+        if self.signal_on and self.signal_on[0] in text:
+            needle, exc = self.signal_on
+            self.signal_on = None
+            self.dispatch(inner, data, stdout)
+            raise exc
+        return self.dispatch(inner, data, stdout)
+
+    def dispatch(self, inner, data, stdout):
         if inner[:3] == [PYTHON, '-I', '-c']:
             assert inner[3] == HELPER
             return self.helper(inner[4], inner[5:], data, stdout)
@@ -153,17 +183,25 @@ class FakeOwner:
         if verb == 'show':
             blocks = []
             for unit in args[args.index('--') + 1:]:
+                load = 'masked' if unit in self.masked else 'loaded'
                 if unit in self.units:
-                    blocks.append(f'Id={unit}\nLoadState=loaded\nActiveState={self.units[unit]}\nSubState=x')
+                    blocks.append(f'Id={unit}\nLoadState={load}\nActiveState={self.units[unit]}\nSubState=x')
                 else:
                     blocks.append(f'Id={unit}\nLoadState=not-found\nActiveState=inactive\nSubState=dead')
             return podman.Result(0, ('\n\n'.join(blocks) + '\n').encode(), b'')
-        if verb in ('start', 'stop'):
+        if verb in ('mask', 'unmask'):
+            assert args[1] == '--'
+            for unit in args[2:]:
+                (self.masked.add if verb == 'mask' else self.masked.discard)(unit)
+            return podman.Result(0, b'', b'')
+        if verb in ('start', 'stop', 'restart'):
             assert args[1] == '--'
             unit = args[2]
             if unit not in self.units:
-                return podman.Result(5, b'', b'Unit not found.')
-            self.units[unit] = 'active' if verb == 'start' else 'inactive'
+                return podman.Result(5, b'', f'Unit {unit} not loaded.'.encode())
+            if verb != 'stop' and unit in self.masked:
+                return podman.Result(1, b'', f'Unit {unit} is masked.'.encode())
+            self.units[unit] = 'inactive' if verb == 'stop' else 'active'
             return podman.Result(0, b'', b'')
         if verb == 'daemon-reload':
             for name in QUADLETS:
@@ -199,15 +237,26 @@ class FakeOwner:
                     value = '8000000'
                 elif 'FROM pg_database WHERE datname' in sql:
                     value = '1' if 'notes' in self.db['databases'] else ''
+                elif sql == DATABASES_SQL:
+                    value = '\n'.join(sorted(self.db['databases'] | {'postgres'}))
+                elif sql == ROLES_SQL:
+                    value = '\n'.join(self.db['roles'])
                 else:
                     raise AssertionError(sql)
                 return self.out(0, (value + '\n').encode(), stdout)
             if tool[0] == 'pg_dump':
+                if self.dump_crashes_db:
+                    self.units['woowbk-demo-db.service'] = 'inactive'
+                    return podman.Result(137, b'', b'')
                 return self.out(0, self.db['data'], stdout)
             if tool[0] == 'pg_restore':
                 valid = bool(data) and data.startswith(b'PGDMP')
                 if '--list' in tool:
                     return self.out(0 if valid else 1, b'', stdout)
+                if tool[1:3] == ['-f', '/dev/null']:  # full read check of a dump, nothing is restored
+                    readable = valid and self.dump_readable
+                    return podman.Result(0 if readable else 1, b'', b'' if readable else
+                                         b'pg_restore: error: could not read from input file: end of file')
                 if not valid:
                     return podman.Result(1, b'', b'pg_restore: error: not a valid archive')
                 self.db['data'] = bytes(data)
@@ -252,6 +301,7 @@ class FakeOwner:
                 return ok
             if verb == 'import':
                 assert args[3] == '-'
+                assert self.input_kind == 'stream', 'podman volume import only ever reads the canonical stream'
                 if args[2] not in self.volumes:
                     return missing
                 self.volumes[args[2]] = bytes(data)
@@ -262,6 +312,9 @@ class FakeOwner:
                 return self.out(0, f'/home/appowner/.local/share/containers/storage/volumes/{args[-1]}/_data\n'.encode(),
                                 stdout)
         if cmd == 'unshare':
+            if args[1:4] == ['du', '-s', '--inodes']:
+                assert args[4] == '--'
+                return self.out(0, b'7\t' + args[5].encode() + b'\n', stdout)
             assert args[1:6] == ['du', '-s', '-B1', '--apparent-size', '--']
             return self.out(0, b'4096\t' + args[6].encode() + b'\n', stdout)
         if cmd == 'image':
@@ -278,15 +331,26 @@ class FakeOwner:
         if cmd == 'tag':
             self.images[args[2]] = 'sha256:' + args[1]
             return ok
+        if cmd == 'untag':
+            assert args[1] == args[2]
+            self.images.pop(args[1], None)
+            return ok
         if cmd == 'save':
             assert args[1:4] == ['--quiet', '--format', 'oci-archive']
-            return self.out(0, f'IMAGE|{args[-1]}|{self.images[args[-1]]}'.encode(), stdout)
+            ref = args[-1]
+            data = oci_archive(ref, env=self.image_env.get(ref, []))
+            assert image_id(ref, self.image_env.get(ref, [])) == self.images[ref], 'fake image ids are config digests'
+            return self.out(0, data, stdout)
         if cmd == 'load':
             assert args[1:] == ['--quiet']
-            _, ref, image_id = data.decode().split('|')
-            self.images[ref] = image_id
-            self.known_ids.add(image_id)
-            return ok
+            assert self.input_kind == 'stream', 'podman load only ever reads the canonical stream'
+            ref, loaded = read_oci(data)
+            if ref in self.fail_load:
+                return podman.Result(125, b'', b'Error: payload does not match any of the supported image formats')
+            self.loaded.append(tar_listing(data))
+            self.images[ref] = loaded
+            self.known_ids.add(loaded)
+            return self.out(0, f'Loaded image: {ref}\n'.encode(), stdout)
         if cmd == 'pull':
             if args[-1] not in self.pullable:
                 return missing
@@ -295,6 +359,7 @@ class FakeOwner:
         if cmd == 'manifest':
             return podman.Result(0 if args[-1] in self.pullable else 125, b'', b'')
         if cmd in ('network', 'pod'):
+            assert args[1] == 'rm' and '-f' not in args, 'networks and pods are never force-removed'
             return ok
         raise AssertionError(args)
 
@@ -303,6 +368,7 @@ class FakeHttp:
     def __init__(self):
         self.health_status = 200
         self.summary = dict(SUMMARY)
+        self.summaries = []  # consumed first: one summary per request
         self.fail_summary = False
         self.calls = []
 
@@ -313,7 +379,7 @@ class FakeHttp:
         if url.endswith('/api/summary'):
             if self.fail_summary:
                 raise OSError('connection refused')
-            return 200, json.dumps(self.summary).encode()
+            return 200, json.dumps(self.summaries.pop(0) if self.summaries else self.summary).encode()
         raise OSError('refused')
 
 
@@ -391,11 +457,12 @@ GOLDEN_BACKUP = [
     helper('read', Q + 'woowbk-demo-app.container', '1048576'),
     [PODMAN, 'image', 'inspect', PG_REF],
     [PODMAN, 'image', 'inspect', APP_REF],
+    *SCOPE,
     [SYSTEMCTL, '--user', 'stop', '--', 'woowbk-demo-app.service'],
     psql('SHOW server_version_num'),
     psql('SHOW server_version'),
     [PODMAN, 'exec', 'woowbk-demo-db', 'pg_dump', '-w', '-U', 'notes', '-d', 'notes', '-Fc'],
-    [PODMAN, 'exec', '-i', 'woowbk-demo-db', 'pg_restore', '--list'],
+    [PODMAN, 'exec', '-i', 'woowbk-demo-db', 'pg_restore', '-f', '/dev/null'],
     helper('relay', PODMAN, 'volume', 'export', 'woowbk-demo-files'),
     [PODMAN, 'secret', 'inspect', '--showsecret', '--format', '{{.SecretData}}', 'woowbk-demo-db-password'],
     [PODMAN, 'secret', 'inspect', '--showsecret', '--format', '{{.SecretData}}', 'woowbk-demo-app-key'],
@@ -464,7 +531,7 @@ class BackupTests(AdapterCase):
         self.assertNotIn('Command was', self.everything_logged())
 
     def test_writers_restarted_whatever_step_fails(self):
-        for needle in ('pg_dump', 'pg_restore --list', 'volume export', 'secret inspect',
+        for needle in ('pg_dump', 'pg_restore -f /dev/null', 'volume export', 'secret inspect',
                        'HELPER read .config/woowbk-demo/app.env', 'SHOW server_version_num'):
             with self.subTest(step=needle):
                 owner = FakeOwner()
@@ -473,9 +540,61 @@ class BackupTests(AdapterCase):
                     self.make_adapter(owner).backup(self.staging / needle.replace(' ', '_').replace('/', '_'),
                                                     include_images=False)
                 argvs = owner.argvs()
-                self.assertIn([SYSTEMCTL, '--user', 'stop', '--', 'woowbk-demo-app.service'], argvs)
-                self.assertEqual(argvs[-1], [SYSTEMCTL, '--user', 'start', '--', 'woowbk-demo-app.service'])
+                stop = argvs.index([SYSTEMCTL, '--user', 'stop', '--', 'woowbk-demo-app.service'])
+                start = argvs.index([SYSTEMCTL, '--user', 'start', '--', 'woowbk-demo-app.service'])
+                self.assertGreater(start, stop)
+                # after the restart only read-only probes of the (healthy) database follow
+                self.assertTrue(all(a[:3] == [SYSTEMCTL, '--user', 'show'] or 'pg_isready' in a
+                                    for a in argvs[start + 1:]), argvs[start + 1:])
                 self.assertEqual(owner.units['woowbk-demo-app.service'], 'active')
+
+    def test_failed_backup_keeps_the_failing_phase(self):
+        # Lab H3: restarting the writers after a pg_dump failure moved the job to 'start', so the page showed
+        # "恢復應用" as the failed step although the writer was restarted fine.
+        self.owner.fail = [('pg_dump', 1)]
+        with self.assertRaises(BackupError):
+            self.run_backup()
+        self.assertEqual(self.phases, ['stop', 'dump'])
+        self.assertEqual(self.owner.units['woowbk-demo-app.service'], 'active')
+        self.assertIn('已恢復服務 woowbk-demo-app.service', self.everything_logged())
+        self.assertEqual(self.hook_calls, [['woowbk-demo-app.service'], []])
+
+    def test_dump_must_be_fully_readable(self):
+        # Lab H3: half a dump with exit status 0 passed `pg_restore --list` (TOC only) and was listed as verified.
+        self.owner.dump_readable = False
+        with self.assertRaises(BackupError) as caught:
+            self.run_backup()
+        self.assertIn('pg_restore', caught.exception.message)
+        self.assertIn([PODMAN, 'exec', '-i', 'woowbk-demo-db', 'pg_restore', '-f', '/dev/null'], self.owner.argvs())
+        self.assertEqual(self.phases, ['stop', 'dump'])
+        self.assertEqual(self.owner.units['woowbk-demo-app.service'], 'active')
+
+    def test_database_stopped_during_dump_is_started_again(self):
+        # Lab H3: the database shut down while pg_dump ran; the app came back without it.
+        self.owner.dump_crashes_db = True
+        with self.assertRaises(BackupError):
+            self.run_backup()
+        argvs = self.owner.argvs()
+        self.assertIn([SYSTEMCTL, '--user', 'start', '--', 'woowbk-demo-db.service'], argvs)
+        self.assertEqual(argvs[-1], [SYSTEMCTL, '--user', 'restart', '--', 'woowbk-demo-app.service'])
+        self.assertEqual(self.owner.units, {'woowbk-demo-db.service': 'active', 'woowbk-demo-app.service': 'active'})
+        self.assertIn('資料庫服務 woowbk-demo-db.service 在備份過程中停止', self.everything_logged())
+
+    def test_healthy_database_is_left_alone_after_a_failed_backup(self):
+        self.owner.fail = [('volume export', 1)]
+        with self.assertRaises(BackupError):
+            self.run_backup()
+        verbs = [(a[2], a[-1]) for a in self.owner.argvs() if a[0] == SYSTEMCTL and a[2] in ('start', 'restart')]
+        self.assertEqual(verbs, [('start', 'woowbk-demo-app.service')])
+
+    def test_database_that_stays_down_is_reported_not_raised(self):
+        self.owner.dump_crashes_db = True
+        self.owner.fail = [('start -- woowbk-demo-db.service', 1)]
+        with self.assertRaises(BackupError) as caught:
+            self.run_backup()
+        self.assertIn('pg_dump', caught.exception.message)  # the original error stands
+        self.assertIn('無法重新啟動資料庫服務 woowbk-demo-db.service', self.everything_logged())
+        self.assertNotIn('restart', [a[2] for a in self.owner.argvs() if a[0] == SYSTEMCTL])
 
     def test_empty_or_invalid_dump_fails_and_restarts(self):
         self.owner.db['data'] = b'garbage'
@@ -536,11 +655,13 @@ class BackupTests(AdapterCase):
         self.assertEqual(caught.exception.code, 'not-deployed')
 
     def test_estimate_bytes(self):
-        self.assertEqual(self.adapter.estimate_bytes(), 1024 * 1024 + 8000000 + 4096)
-        self.assertEqual(self.adapter.estimate_bytes(include_images=True), 1024 * 1024 + 8000000 + 4096 + 2000)
-        self.assertIn([PODMAN, 'unshare', 'du', '-s', '-B1', '--apparent-size', '--',
-                       '/home/appowner/.local/share/containers/storage/volumes/woowbk-demo-files/_data'],
-                      self.owner.argvs())
+        # Review CR-15: each member of the export tar costs a 512-byte header plus up to 511 bytes of padding.
+        volume = 4096 + qp.TAR_OVERHEAD * 7 + 1024
+        self.assertEqual(self.adapter.estimate_bytes(), 1024 * 1024 + 8000000 + volume)
+        self.assertEqual(self.adapter.estimate_bytes(include_images=True), 1024 * 1024 + 8000000 + volume + 2000)
+        mountpoint = '/home/appowner/.local/share/containers/storage/volumes/woowbk-demo-files/_data'
+        self.assertIn([PODMAN, 'unshare', 'du', '-s', '-B1', '--apparent-size', '--', mountpoint], self.owner.argvs())
+        self.assertIn([PODMAN, 'unshare', 'du', '-s', '--inodes', '--', mountpoint], self.owner.argvs())
         del self.owner.volumes['woowbk-demo-files']
         with self.assertRaises(BackupError):
             self.adapter.estimate_bytes()
@@ -648,19 +769,22 @@ class RestoreTests(AdapterCase):
         self.mutate(owner)
         adapter = self.make_adapter(owner)
         adapter.restore(self.manifest, self.extract, mode='inplace')
-        if self.include_images():  # included images are loaded, then the ref is checked
+        if self.include_images():  # included images are loaded from the canonical stream, then the id is checked
             images = [[PODMAN, 'load', '--quiet'], [PODMAN, 'image', 'inspect', PG_REF],
                       [PODMAN, 'load', '--quiet'], [PODMAN, 'image', 'inspect', APP_REF]]
         else:  # the exact image used at backup time is still present: only (re)tag if needed
-            images = [[PODMAN, 'image', 'exists', 'a' * 64], [PODMAN, 'image', 'inspect', PG_REF],
-                      [PODMAN, 'image', 'exists', 'b' * 64], [PODMAN, 'image', 'inspect', APP_REF]]
+            images = [[PODMAN, 'image', 'exists', PG_ID[7:]], [PODMAN, 'image', 'inspect', PG_REF],
+                      [PODMAN, 'image', 'exists', APP_ID[7:]], [PODMAN, 'image', 'inspect', APP_REF]]
         self.assertEqual(owner.argvs(), [
             helper('read', Q + 'woowbk-demo.network', '1048576'),
             helper('read', Q + 'woowbk-demo-db.container', '1048576'),
             helper('read', Q + 'woowbk-demo-app.container', '1048576'),
+            *SCOPE,  # no undeclared database would be lost (review CR-07)
+            [PODMAN, 'image', 'inspect', PG_REF], [PODMAN, 'image', 'inspect', APP_REF],  # tags to restore (CR-10)
             *images,
             [SYSTEMCTL, '--user', 'stop', '--', 'woowbk-demo-app.service'],
             [SYSTEMCTL, '--user', 'stop', '--', 'woowbk-demo-db.service'],
+            [SYSTEMCTL, '--user', 'mask', '--', 'woowbk-demo-app.service'],  # no start at boot until done (CR-06)
             [SYSTEMCTL, '--user', 'stop', '--', 'woowbk-demo-network.service'],
             [PODMAN, 'secret', 'exists', 'woowbk-demo-db-password'], [PODMAN, 'secret', 'rm', 'woowbk-demo-db-password'],
             [PODMAN, 'secret', 'create', 'woowbk-demo-db-password', '-'],
@@ -677,12 +801,16 @@ class RestoreTests(AdapterCase):
             psql("SELECT 1 FROM pg_database WHERE datname = 'notes'", 'postgres'),
             [PODMAN, 'exec', '-i', 'woowbk-demo-db', 'pg_restore', '--exit-on-error', '--single-transaction',
              '--no-owner', '--no-privileges', '-w', '-U', 'notes', '-d', 'notes'],
+            [SYSTEMCTL, '--user', 'unmask', '--', 'woowbk-demo-app.service'],
             [SYSTEMCTL, '--user', 'start', '--', 'woowbk-demo-app.service'],
         ])
+        self.assertEqual(owner.masked, set())
         self.assertEqual(self.phases, ['stop', 'restore', 'start'])
         self.assertTrue(adapter.destructive_started)
         self.assertEqual(owner.secrets, {'woowbk-demo-db-password': DB_PASSWORD, 'woowbk-demo-app-key': APP_KEY})
-        self.assertEqual(owner.volumes['woowbk-demo-files'], VOLUME_TAR)
+        imported = tar_listing(owner.volumes['woowbk-demo-files'])
+        self.assertEqual([(r[0], r[5]) for r in imported], [(r[0], r[5]) for r in tar_listing(VOLUME_TAR)],
+                         'podman imported a canonical copy with the same names and contents')
         self.assertNotIn('woowbk-demo-pgdata', owner.volumes)
         self.assertEqual(owner.files['.config/woowbk-demo/app.env'], CONFIG)
         self.assertEqual(owner.db['data'], DUMP)
@@ -755,19 +883,25 @@ class FreshRestoreTests(RestoreTests):
         adapter = self.make_adapter(owner)
         adapter.restore(self.manifest, self.extract, mode='fresh')
         argvs = owner.argvs()
-        self.assertEqual(argvs[:4], [[PODMAN, 'load', '--quiet'], [PODMAN, 'image', 'inspect', PG_REF],
+        self.assertEqual(argvs[:6], [[PODMAN, 'image', 'inspect', PG_REF], [PODMAN, 'image', 'inspect', APP_REF],
+                                     [PODMAN, 'load', '--quiet'], [PODMAN, 'image', 'inspect', PG_REF],
                                      [PODMAN, 'load', '--quiet'], [PODMAN, 'image', 'inspect', APP_REF]])
+        for listing in owner.loaded:  # only the canonical OCI layout reached podman load
+            names = [row[0] for row in listing]
+            self.assertEqual(names[:4], ['oci-layout', 'index.json', 'blobs', 'blobs/sha256'])
         writes = [a for a in argvs if a[:5] == helper('write')]
         self.assertEqual([w[5:] for w in writes[:3]], [[Q + 'woowbk-demo.network', '0644', '16777216'],
                                                        [Q + 'woowbk-demo-db.container', '0644', '16777216'],
                                                        [Q + 'woowbk-demo-app.container', '0644', '16777216']])
-        self.assertEqual(argvs[argvs.index(writes[2]) + 1: argvs.index(writes[2]) + 3],
+        self.assertEqual(argvs[argvs.index(writes[2]) + 1: argvs.index(writes[2]) + 4],
                          [[SYSTEMCTL, '--user', 'daemon-reload'],
+                          [SYSTEMCTL, '--user', 'mask', '--', 'woowbk-demo-app.service'],
                           [SYSTEMCTL, '--user', 'stop', '--', 'woowbk-demo-network.service']])
         self.assertNotIn([SYSTEMCTL, '--user', 'stop', '--', 'woowbk-demo-db.service'], argvs)
         self.assertEqual([owner.files[Q + n] for n in QUADLETS], list(QUADLETS.values()))
         self.assertEqual(owner.secrets['woowbk-demo-db-password'], DB_PASSWORD)
-        self.assertEqual(owner.volumes['woowbk-demo-files'], VOLUME_TAR)
+        self.assertEqual([(r[0], r[5]) for r in tar_listing(owner.volumes['woowbk-demo-files'])],
+                         [(r[0], r[5]) for r in tar_listing(VOLUME_TAR)])
         self.assertEqual(owner.db['data'], DUMP)
         self.assertEqual(owner.units, {'woowbk-demo-db.service': 'active', 'woowbk-demo-app.service': 'active'})
         self.assertEqual(owner.images[APP_REF], APP_ID)
@@ -781,6 +915,7 @@ class FreshRestoreTests(RestoreTests):
         self.assertEqual(owner.argvs(), [
             [SYSTEMCTL, '--user', 'stop', '--', 'woowbk-demo-app.service'],
             [SYSTEMCTL, '--user', 'stop', '--', 'woowbk-demo-db.service'],
+            [SYSTEMCTL, '--user', 'unmask', '--', 'woowbk-demo-app.service'],
             [SYSTEMCTL, '--user', 'stop', '--', 'woowbk-demo-network.service'],
             helper('remove', Q + 'woowbk-demo.network'), helper('remove', Q + 'woowbk-demo-db.container'),
             helper('remove', Q + 'woowbk-demo-app.container'),
@@ -792,7 +927,8 @@ class FreshRestoreTests(RestoreTests):
             [PODMAN, 'secret', 'exists', 'woowbk-demo-db-password'], [PODMAN, 'secret', 'rm', 'woowbk-demo-db-password'],
             [PODMAN, 'secret', 'exists', 'woowbk-demo-app-key'], [PODMAN, 'secret', 'rm', 'woowbk-demo-app-key'],
             helper('remove', '.config/woowbk-demo/app.env'),
-            [PODMAN, 'network', 'rm', '-f', 'systemd-woowbk-demo'],
+            [PODMAN, 'network', 'rm', 'systemd-woowbk-demo'],  # never forced: another app may use it (CR-13)
+            [PODMAN, 'image', 'inspect', PG_REF], [PODMAN, 'image', 'inspect', APP_REF],  # names put back (CR-10)
         ])
         self.assertEqual((owner.files, owner.secrets, owner.volumes, owner.units), ({}, {}, {}, {}))
 
@@ -846,9 +982,12 @@ class PreflightTests(AdapterCase):
         owner = FakeOwner(deployed=False)
         owner.volumes = {'woowbk-demo-pgdata': b'old'}
         owner.secrets = {'woowbk-demo-app-key': b'old'}
+        owner.files['.config/woowbk-demo/app.env'] = b'TITLE=left over\n'
         statuses = self.statuses(self.make_adapter(owner).preflight(self.manifest, mode='fresh'))
         self.assertEqual(statuses['woowbk-demo/volume-conflict'], 'fail')
-        self.assertEqual(statuses['woowbk-demo/secret-existing'], 'warn')
+        # Review SEC-6/CR-13: a failed fresh restore removes what it created, so leftovers must not be overwritten.
+        self.assertEqual(statuses['woowbk-demo/secret-existing'], 'fail')
+        self.assertEqual(statuses['woowbk-demo/config-existing'], 'fail')
 
     def test_included_image_with_other_arch(self):
         manifest = json.loads(json.dumps(self.manifest))
@@ -913,6 +1052,217 @@ class CheckTests(AdapterCase):
         for bad in (b'[Container]\nImage=-rm evil\n', b'[Container]\nImage=x y\n', b'[Container]\nImage=app.image\n'):
             with self.assertRaises(BackupError):
                 self.adapter.container_images({'woowbk-demo-db.container': bad})
+
+
+class ReviewRegressionTests(AdapterCase):
+    """Review findings of the backup engine (SEC-*, CR-*), one test each."""
+
+    def backup_and_extract(self, include_images=False):
+        manifest, entries = self.run_backup(include_images=include_images)
+        extract = self.root / 'extract'
+        extract.mkdir(mode=0o700)
+        extract_entries(entries, extract)
+        return manifest, extract
+
+    def assert_untouched(self, owner, adapter):
+        self.assertFalse(adapter.destructive_started)
+        verbs = [a[2] for a in owner.argvs() if a[0] == SYSTEMCTL]
+        self.assertNotIn('stop', verbs)
+        self.assertNotIn('mask', verbs)
+        self.assertFalse([a for a in owner.argvs() if a[:3] in ([PODMAN, 'volume', 'import'], [PODMAN, 'load', '--quiet'])])
+
+    def test_sec1_hostile_volume_tar_is_refused_before_any_change(self):
+        manifest, extract = self.backup_and_extract()
+        target = extract / 'apps/woowbk-demo/volumes/woowbk-demo-files.tar'
+        target.write_bytes(volume_tar([
+            {'name': 'esc', 'kind': tarfile.SYMTYPE, 'linkname': '/home/appowner/.config/systemd/user'},
+            {'name': 'esc/evil.service', 'data': b'[Service]\nExecStart=/bin/true\n'}]))
+        owner = FakeOwner()
+        adapter = self.make_adapter(owner)
+        with self.assertRaises(BackupError) as caught:
+            adapter.restore(manifest, extract, mode='inplace')
+        self.assertEqual(caught.exception.code, 'corrupt-archive')
+        self.assert_untouched(owner, adapter)
+        self.assertEqual(owner.volumes['woowbk-demo-files'], VOLUME_TAR)
+
+    def test_sec1_hostile_image_archives_are_refused_before_any_change(self):
+        cases = {
+            'planted symlink': oci_archive(PG_REF, env=PG_ENV, extra=[
+                {'name': 'esc', 'kind': tarfile.SYMTYPE, 'linkname': '/home/appowner/.config/containers'}]),
+            'names another image': oci_archive(PG_REF, env=PG_ENV, annotation='localhost/woowbk-sec-probe-other:9'),
+            'other image than recorded': oci_archive(PG_REF, env=['PG_MAJOR=17']),
+        }
+        manifest, entries = self.run_backup(include_images=True)
+        for label, data in cases.items():
+            with self.subTest(label):
+                extract = Path(tempfile.mkdtemp(dir=self.root))
+                os.chmod(extract, 0o700)
+                extract_entries(entries, extract)
+                (extract / 'apps/woowbk-demo/images/0.oci.tar').write_bytes(data)
+                owner = FakeOwner()
+                adapter = self.make_adapter(owner)
+                with self.assertRaises(BackupError) as caught:
+                    adapter.restore(manifest, extract, mode='inplace')
+                self.assertEqual(caught.exception.code, 'corrupt-archive')
+                self.assert_untouched(owner, adapter)
+                self.assertEqual(owner.images, {PG_REF: PG_ID, APP_REF: APP_ID})
+
+    def test_sec3_outputs_are_bounded(self):
+        self.free = 600 * 1024 * 1024
+        self.run_backup(include_images=True)
+        budget = 600 * 1024 * 1024 - qp.SPACE_RESERVE
+        by_tool = {}
+        for call in self.owner.calls:
+            argv = call['argv']
+            key = 'pg_dump' if 'pg_dump' in argv else 'export' if 'export' in argv else \
+                'save' if argv[:2] == [PODMAN, 'save'] else 'psql' if 'psql' in argv else \
+                'secret' if argv[:3] == [PODMAN, 'secret', 'inspect'] else None
+            if key:
+                by_tool.setdefault(key, set()).add(call['max_output'])
+        self.assertEqual(by_tool['pg_dump'], {budget})
+        self.assertEqual(by_tool['export'], {budget})
+        self.assertEqual(by_tool['save'], {budget})
+        self.assertEqual(by_tool['psql'], {qp.SMALL_OUTPUT})
+        self.assertEqual(by_tool['secret'], {qp.MAX_SECRET_BYTES + 2})
+
+    def test_cr04_snapshot_that_changes_during_the_backup_is_not_kept(self):
+        # A note committed between the snapshot and the writer stop is in the dump but not in the snapshot.
+        self.http.summaries = [dict(SUMMARY), dict(SUMMARY, notes=13)]
+        manifest, _ = self.run_backup()
+        self.assertEqual(manifest['verify_snapshot'], {})
+        self.assertIn('資料核對快照在備份期間有變動', self.everything_logged())
+        self.http.summaries = []
+        manifest, _ = self.make_adapter().backup(self.staging / 'again', include_images=False)
+        self.assertEqual(manifest['verify_snapshot']['summary']['notes'], 12)
+
+    def test_cr06_units_stay_masked_when_a_restore_dies_and_probe_says_so(self):
+        manifest, extract = self.backup_and_extract()
+        owner = FakeOwner()
+        owner.fail = [('pg_restore --exit-on-error', 1)]
+        with self.assertRaises(BackupError):
+            self.make_adapter(owner).restore(manifest, extract, mode='inplace')
+        self.assertEqual(owner.masked, {'woowbk-demo-app.service'}, 'the app cannot start at boot on half data')
+        owner.fail = []
+        owner.units['woowbk-demo-db.service'] = 'active'
+        probe = self.make_adapter(owner).probe()
+        self.assertEqual(probe['state'], 'error')
+        self.assertTrue(any('暫時停用' in problem for problem in probe['problems']))
+        statuses = {c['id']: c['status'] for c in self.make_adapter(owner).preflight(manifest, mode='inplace')}
+        self.assertEqual(statuses['woowbk-demo/units-masked'], 'warn')
+
+    def test_cr07_undeclared_databases_block_an_inplace_restore(self):
+        manifest, extract = self.backup_and_extract()
+        owner = FakeOwner()
+        owner.db['databases'].add('company2')
+        owner.db['roles'] = ['reporting']
+        checks = {c['id']: c for c in self.make_adapter(owner).preflight(manifest, mode='inplace')}
+        self.assertEqual(checks['woowbk-demo/databases']['status'], 'fail')
+        self.assertIn('company2', checks['woowbk-demo/databases']['message'])
+        self.assertEqual(checks['woowbk-demo/roles']['status'], 'warn')
+        adapter = self.make_adapter(owner)
+        with self.assertRaises(BackupError) as caught:
+            adapter.restore(manifest, extract, mode='inplace')
+        self.assertEqual(caught.exception.code, 'incompatible')
+        self.assert_untouched(owner, adapter)
+        self.logs.clear()
+        self.make_adapter(owner).backup(self.staging / 'scope', include_images=False)
+        self.assertIn('company2', self.everything_logged())
+
+    def test_cr10_image_names_are_put_back_when_preparation_fails(self):
+        manifest, entries = self.run_backup(include_images=True)
+        extract = self.root / 'extract-images'
+        extract.mkdir(mode=0o700)
+        extract_entries(entries, extract)
+        owner = FakeOwner()
+        old_pg, old_app = 'sha256:' + 'e' * 64, 'sha256:' + 'f' * 64
+        owner.images = {PG_REF: old_pg, APP_REF: old_app}
+        owner.known_ids = {old_pg, old_app}
+        owner.fail_load = {APP_REF}
+        adapter = self.make_adapter(owner)
+        with self.assertRaises(BackupError):
+            adapter.restore(manifest, extract, mode='inplace')
+        self.assertFalse(adapter.destructive_started)
+        self.assertEqual(owner.images, {PG_REF: old_pg, APP_REF: old_app}, 'postgres points at the old image again')
+        self.assertIn([PODMAN, 'tag', 'e' * 64, PG_REF], owner.argvs())
+
+    def test_cr11_image_errors_are_not_absence_and_rollbacks_never_pull(self):
+        owner = FakeOwner()
+        owner.fail = [('image exists', 125)]
+        with self.assertRaises(BackupError) as caught:
+            self.make_adapter(owner)._image_exists(PG_REF)
+        self.assertIn('125', caught.exception.message)
+        manifest, extract = self.backup_and_extract()
+        owner = FakeOwner()
+        owner.known_ids = {APP_ID}
+        owner.images = {PG_REF: 'sha256:' + 'c' * 64, APP_REF: APP_ID}  # same name, another (newer) image
+        owner.pullable = {PG_REF}
+        with self.assertRaises(BackupError) as caught:
+            self.make_adapter(owner).restore(manifest, extract, mode='inplace', rollback=True)
+        self.assertEqual(caught.exception.code, 'incompatible')
+        self.assertFalse([a for a in owner.argvs() if a[:2] == [PODMAN, 'pull']])
+        self.make_adapter(owner).restore(manifest, extract, mode='inplace')  # a normal restore may use it
+
+    def test_cr12_cleanup_before_daemon_reload_is_not_manual_work(self):
+        manifest, entries = self.run_backup(include_images=True)
+        extract = self.root / 'extract-fresh'
+        extract.mkdir(mode=0o700)
+        extract_entries(entries, extract)
+        owner = FakeOwner(deployed=False)
+        owner.fail = [('HELPER write ' + Q + 'woowbk-demo-db.container', 1)]
+        adapter = self.make_adapter(owner)
+        with self.assertRaises(BackupError):
+            adapter.restore(manifest, extract, mode='fresh')
+        self.assertTrue(adapter.destructive_started)
+        owner.fail = []
+        adapter.remove_fresh()  # units never loaded: `systemctl stop` exits 5, which is fine
+        self.assertEqual([k for k in owner.files if k.startswith(Q)], [])
+
+    def test_cr14_a_signal_during_the_writer_stop_still_restarts_it(self):
+        from woowbackup.jobs import Terminated
+        self.owner.signal_on = ('stop -- woowbk-demo-app.service', Terminated(15))
+        with self.assertRaises(Terminated):
+            self.run_backup()
+        self.assertEqual(self.owner.units['woowbk-demo-app.service'], 'active')
+        self.assertEqual(self.hook_calls, [['woowbk-demo-app.service'], []])
+
+    def test_cr14_a_signal_during_restarts_still_starts_the_other_writers(self):
+        from woowbackup.jobs import Terminated
+        entry = demo_entry(self.paths)
+        entry['writer_units'] = ['woowbk-demo-db.service', 'woowbk-demo-app.service']
+        entry['postgres'] = []
+        self.app = catalog.validate_entry(entry, paths=self.paths, user_lookup=user_lookup)
+        adapter = self.make_adapter()
+        self.owner.signal_on = ('start -- woowbk-demo-db.service', Terminated(15))
+        stopped = ['woowbk-demo-app.service', 'woowbk-demo-db.service']
+        for unit in stopped:
+            self.owner.units[unit] = 'inactive'
+        with self.assertRaises(Terminated):
+            adapter._restart_writers(stopped, 0.0, raise_errors=True)
+        self.assertEqual(self.owner.units['woowbk-demo-app.service'], 'active')
+
+    def test_cr17_postgres_9_is_reported_as_unsupported(self):
+        self.assertEqual(qp.pg_major('90624'), 9)
+        self.assertEqual(qp.pg_major('160015'), 16)
+        self.assertTrue(qp.unsupported_major(9) and qp.unsupported_major(906) and not qp.unsupported_major(16))
+        manifest, _ = self.run_backup()
+        manifest['postgres'][0]['major'] = 9
+        owner = FakeOwner()
+        owner.image_env[PG_REF] = ['PG_MAJOR=9.6']
+        failing = [c['message'] for c in self.make_adapter(owner).preflight(manifest, mode='inplace')
+                   if c['status'] == 'fail']
+        self.assertTrue(any('PostgreSQL 10 以前' in m for m in failing), failing)
+        self.assertFalse(any('906' in m for m in failing))
+        owner = FakeOwner()
+        owner.db['num'], owner.db['version'] = '90624', '9.6.24'
+        with self.assertRaises(BackupError) as caught:
+            self.make_adapter(owner).backup(self.staging / 'old', include_images=False)
+        self.assertEqual(caught.exception.code, 'incompatible')
+        self.assertEqual(owner.units['woowbk-demo-app.service'], 'active')
+
+    def test_health_hint_for_the_status_page(self):
+        self.assertIsNone(self.adapter.health_hint())
+        self.http.health_status = 503
+        self.assertIn('HTTP 503', self.adapter.health_hint())
 
 
 class Handler(http.server.BaseHTTPRequestHandler):

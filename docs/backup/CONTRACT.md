@@ -1,6 +1,9 @@
 # Backup & Restore — Engineering Contract (v1)
 
 Status: binding interface for the implementation teams on branch `feat/backup-restore`.
+Revised 2026-11-13 after the security/correctness review and lab hardening (H1–H8): nested-tar checks (§5),
+second-resolution file names (§5), restore result fields and inspect/restore-start key rules (§7), job unit limits,
+signal handling and recovery duties (§8), the backup/restore algorithm details (§9), config-path allowlist (§4).
 Product docs for customers are written separately in Traditional Chinese (`docs/backup.md`).
 All UI text is **Traditional Chinese (zh-TW)**. Code comments in English.
 
@@ -57,7 +60,7 @@ root). No `sudo`. Do not write user-supplied credentials anywhere.
 | `/etc/woowtech-cockpit/backup/apps/<id>.json` | root 0644, dir 0755 | **trusted catalog** |
 | `/usr/local/share/woowtech-cockpit-backup/catalog/<id>/` | root 0755/0644 | trusted templates (quadlet files, app assets) |
 | `/etc/woowtech-cockpit/backup/keys/` | root 0700 | `device-<KEYID>.key`, `imported-<KEYID>.key` (0600), `keys.json` |
-| `/var/lib/woowtech-backup/` | root 0700 | `archives/<id>.woowbackup` + `archives/<id>.json` (index), `uploads/`, `staging/<job>/`, `jobs/<job>.json` + `.log`, `requests.json` |
+| `/var/lib/woowtech-backup/` | root 0700 | `archives/<id>.woowbackup` + `archives/<id>.json` (index), `uploads/<upload_id>.{part,json,done}` (`.done` names the backup of a finished upload for 24 h), `staging/<job>/`, `jobs/<job>.json` + `.log`, `requests.json` |
 | `/run/woowtech-backup/` | root 0700 (tmpfs) | `engine.lock`, transient key files `key-<random>` (0600, deleted in `finally`) |
 
 `woowbackup.paths.Paths` holds these. Tests construct `Paths(base=tmpdir)`; real paths are used
@@ -94,7 +97,9 @@ Validation (strict; unknown keys rejected): `id` `^[a-z0-9][a-z0-9-]{1,40}$`; `o
 non-root existing user matching `^[a-z_][a-z0-9_-]{0,31}$`; units `^[A-Za-z0-9][A-Za-z0-9_.@-]{0,200}\.service$`;
 container/volume names `^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$`; secret names `^[A-Za-z0-9][A-Za-z0-9_.-]{0,200}$`;
 quadlet file names `^[A-Za-z0-9][A-Za-z0-9_.@-]*\.(container|network|volume|pod)$`; config paths are
-relative, no `..`, no empty/`.` segments, and start with `.config/` or `.local/share/`; modes are
+relative, no `..`, no empty/`.` segments, and lie in the app's own directory `.config/<id>/` or
+`.local/share/<id>/` (an allowlist; `.config/{systemd,containers,environment.d,autostart,dbus-1,user-tmpfiles.d}/`
+and `.local/share/{systemd,containers,dbus-1,applications}/` stay forbidden even for a colliding id); modes are
 octal strings ≤ `0644`; `template_dir` must be inside the templates root above; URLs must be
 `http://127.0.0.1:<port>/…` or `http://localhost:<port>/…` (loopback only). Catalog files and
 directories must be root-owned, not group/world-writable, and not symlinks. `units` is the start
@@ -116,7 +121,8 @@ WOOWTECH-BACKUP/1\n
 
 * Line 1 exactly `WOOWTECH-BACKUP/1`. Another `WOOWTECH-BACKUP/<n>` → `unsupported-format`;
   anything else → `not-a-backup`. Header line ≤ 4096 bytes, strict keys above.
-* Encryption: `age` CLI with X25519 recipients (`age -r age1…`), identities via `-i <file>`.
+* Encryption: `age` CLI with X25519 recipients from a 0600 recipients file in staging (`age -e -R <file>`, so the
+  device recipient never shows in `/proc/<pid>/cmdline`), identities via `-i <file>`.
   Never pass key material in argv/env; identity files live in `/run/woowtech-backup` (0600).
 * Tar members, in order: `manifest.json` first, then each entry listed in `manifest.entries` in
   that order. Regular files only, mode 0600, uid/gid 0, names exactly as listed.
@@ -161,7 +167,18 @@ streaming.
 
 Key id: `sha256(recipient_utf8).hexdigest()[:16].upper()` grouped as `XXXX-XXXX-XXXX-XXXX`.
 Backup id: `YYYYMMDDTHHMMSSZ-<8 lowercase hex>`. Job id: `j` + same pattern.
-Download filename: `woowtech-backup-<hostname>-<YYYYMMDD-HHMM>.woowbackup` (hostname sanitized).
+Download filename: `woowtech-backup-<hostname>-<YYYYMMDD-HHMMSS>.woowbackup` (hostname sanitized; seconds since
+2026-11 so two backups of the same minute differ). An uploaded file keeps its name when it matches this pattern or the
+older `…-<YYYYMMDD-HHMM>.woowbackup`; any other name is replaced by `woowtech-backup-uploaded-<YYYYMMDD-HHMMSS>.woowbackup`.
+
+Nested tars (image entries `apps/<id>/images/<n>.oci.tar`, volume entries `apps/<id>/volumes/<name>.tar`) are untrusted
+too. Before any change on the device the restore checks each completely (`woowbackup.nested`): a volume tar may hold
+only regular files, directories, symlinks and hard links to an earlier regular file, with no absolute or `..` names,
+no duplicates and no member below a symlink or other non-directory; an image entry must be exactly a podman OCI
+archive (`oci-layout`, `index.json`, `blobs/`, `blobs/sha256/<hex>`) with one manifest whose
+`org.opencontainers.image.ref.name` is the ref the local templates need and whose config digest is the image `id`
+recorded in the manifest. Podman is then fed a canonical tar rebuilt from the validated members only (setuid/setgid
+dropped from non-directories, owner names dropped, only `SCHILY.xattr.user.*` kept), never the archive's bytes.
 
 ## 6. Python module contract (signatures are in the scaffold files; keep them)
 
@@ -189,33 +206,37 @@ Key material only ever travels in stdin JSON field `key`.
 | --- | --- | --- |
 | `status` | – | `version, host{hostname,arch,os,podman}, storage{path,free_bytes,total_bytes,backups_bytes,backup_count}, key{key_id,created,kit_confirmed}\|null, imported_keys[], apps[App], active_job Job\|null, warnings[]` |
 | `list` | – | `backups[BackupMeta]` (newest first) |
-| `inspect` | `backup_id, key?, save_key?` | `backup BackupMeta, manifest ManifestSummary, preflight Preflight` |
+| `inspect` | `backup_id, key?, save_key?` | `backup BackupMeta, manifest ManifestSummary, preflight Preflight` (with `key`, only that key is used; `save_key` imports it only after it decrypted the manifest, else `wrong-key`) |
 | `key-init` | – | `key, created(bool)` |
 | `key-kit` | – | `key_id, filename, content` (kit text) |
 | `key-confirm` | `key_id` | – |
 | `key-import` | `key` | `key{key_id,created}` |
 | `backup-start` | `apps[], include_images, note, request_id` | `job_id, deduplicated` |
 | `verify-start` | `backup_id, request_id, key?` | `job_id, deduplicated` |
-| `restore-start` | `backup_id, apps[], request_id, confirm:true, key?, save_key?` | `job_id, deduplicated` |
+| `restore-start` | `backup_id, apps[], request_id, confirm:true, key?, save_key?, allow_no_safety?` | `job_id, deduplicated` (`save_key` imports only a key that opens this backup; `allow_no_safety: true` is the explicit, separately confirmed "restore even if no safety backup can be made") |
 | `job-status` | `job_id` | `job Job, log[str]` (≤ 200 lines, secrets never logged) |
 | `jobs` | – | `jobs[Job]` (≤ 50, newest first, no log) |
 | `job-cancel` | `job_id` | `state` |
-| `delete` | `backup_id` | – |
+| `delete` | `backup_id` | – (`busy` with `details.job_id` while a queued/running job uses it as source or as its `safety_backup_id`, or for any `safety` backup while a restore runs; checked under the start lock) |
 | `upload-begin` | `filename, size` | `upload_id, path, max_size` |
-| `upload-finish` | `upload_id` | `backup BackupMeta` |
+| `upload-finish` | `upload_id` | `backup BackupMeta` (idempotent: a retry after success returns the same backup; a failure after the move puts the file back) |
 | `upload-abort` | `upload_id` | – |
 | `download-info` | `backup_id` | `path, filename, size` |
 | `run-job` (internal) | argv: `run-job <job_id>` | – |
 
 Shapes:
 
-* `App`: `id, name, description, owner, adapter, deployed(bool), state("running"|"stopped"|"partial"|"not-deployed"|"error"), units[{name,active}], last_backup{id,created}|null, problems[str]`
+* `App`: `id, name, description, owner, adapter, deployed(bool), state("running"|"stopped"|"partial"|"not-deployed"|"error"), units[{name,active}], last_backup{id,created}|null, problems[str]` — `error` also when every unit is active but a quick health request fails, and while units are masked by an unfinished restore (both explained in `problems`).
 * `BackupMeta`: `id, type("manual"|"safety"|"uploaded"), created|null, note, apps[{id,name}], size, sha256, key_id, key_available(bool), include_images(bool), filename, source{hostname}|null, verified{at,ok}|null, inspected(bool), uploaded_at?`
 * `ManifestSummary`: `backup_id, created, type, note, tool, source, consistency, total_size, apps[{id,name,adapter,owner{name,uid},images[{ref,included}],postgres[{id,database,major}],volumes[{name}],secrets_count,config_files_count,verify_snapshot}]`
 * `Preflight`: `ok(bool), checks[Check], apps[{id,name,restorable(bool),mode("inplace"|"fresh"),checks[Check]}]`
 * `Check`: `id, status("ok"|"warn"|"fail"), message(zh-TW)`
 * `Job`: `id, type("backup"|"restore"|"verify"), state("queued"|"running"|"succeeded"|"failed"|"rolled-back"|"interrupted"|"cancelled"), phase, phases[{id,label,state("pending"|"active"|"done"|"failed"|"skipped")}], progress{percent,message}, created, started|null, finished|null, params, result|null, error{code,message}|null, cancellable(bool)`
-* Job `result`: backup → `backup_id, size, apps[], downtime_seconds`; restore → `apps[], safety_backup_id|null, health[Check], verification[{app,match,before,after}], rolled_back(bool)`; verify → `ok, entries, bytes`.
+* Job `result`: backup → `backup_id, size, apps[], downtime_seconds`; restore → `apps[], safety_backup_id|null, health[Check], verification[{app,match,before,after}], rolled_back(bool), changed(bool), fresh_apps[str], safety_skipped(bool), safety_failed(bool)`; verify → `ok, entries, bytes`.
+  `changed`: a destructive step started (false → nothing on the device changed); `fresh_apps`: apps deployed from templates;
+  `safety_skipped`: in-place apps were restored without a new safety backup (the source is a safety backup, or
+  `allow_no_safety`); `safety_failed`: refused because no safety backup could be made. A failed restore always carries
+  its result. `verification[].before/after` hold only the catalog's `compare` keys, each value ≤ 2 KiB of JSON.
 
 Phases — backup: `prepare 準備`, `check 檢查空間與應用`, `stop 暫停應用寫入`, `dump 匯出資料庫`,
 `export 匯出資料卷與設定`, `start 恢復應用`, `package 加密封裝`, `verify 驗證備份`.
@@ -233,11 +254,21 @@ permission-denied, not-cancellable, job-failed, internal-error`.
 * `*-start` validates, deduplicates by `request_id` (24 h), refuses with `busy` while another job is
   queued/running, writes the job record, then launches
   `systemd-run --unit=woowtech-backup-<job_id>.service --collect --quiet --property=KillMode=mixed
-  /usr/local/libexec/woowtech-cockpit-backup run-job <job_id>` and returns immediately.
+  --property=MemoryMax=50% --property=TasksMax=512 /usr/local/libexec/woowtech-cockpit-backup run-job <job_id>`
+  and returns immediately.
+* Every helper command turns SIGTERM/SIGHUP/SIGINT into an exception, so `finally` blocks run (a pasted key in
+  `/run/woowtech-backup` is always deleted when cockpit-bridge closes the channel). Captured output of owner commands
+  is capped (default 16 MiB + 64 KiB, 1 MiB for psql/pg_isready/systemctl, secrets 512 000 + 1 bytes, stderr keeps
+  its last 64 KiB); file outputs (pg_dump, volume export, podman save) are copied through the helper with a budget of
+  free space − 512 MiB, and the child is killed when it is exceeded.
 * `run-job` takes an exclusive `flock` on `/run/woowtech-backup/engine.lock` for its lifetime and
   updates the record atomically (write temp + rename) at every phase/progress change.
 * A record in `queued|running` whose unit is not active and whose lock is free is marked
-  `interrupted` by `recover_interrupted()` (called by `status`, `jobs`, `job-status`).
+  `interrupted` by `recover_interrupted()` (called by `status`, `jobs`, `job-status`). Recovery also, for dead and
+  for finished records, restarts writers still listed in `stopped_writers` and removes an unfinished fresh deployment
+  listed in `fresh_apps` (recorded before the first fresh step), each once; it deletes `key-<job>` files of jobs
+  that are not running and `key-*` files older than 15 minutes. `run-job` indexes archives that a hard kill left in
+  `archives/` without a sidecar (older than one hour) as type `uploaded`.
 * User-provided keys for a job are stored as `/run/woowtech-backup/key-<job_id>` (0600) and
   removed by `run-job` in `finally`; `save_key: true` imports the key permanently instead.
 * Cancel is honoured only before any destructive step (backup: until `stop`; also during `package`
@@ -246,34 +277,57 @@ permission-denied, not-cancellable, job-failed, internal-error`.
 
 ## 9. Backup and restore algorithms (adapter `quadlet-postgres`)
 
-Backup (per app): probe (owner, linger runtime dir, quadlet files, units active) → estimate size →
-space check (free ≥ 2.2 × estimate + 512 MiB) → snapshot business verify → stop `writer_units`
-→ `podman exec <db> pg_dump -U <user> -d <db> -Fc` (stream to staging file) and check with
-`pg_restore --list` → `podman volume export <vol>` (stdout to staging) → read secrets with
-`podman secret inspect --showsecret` → read config + quadlet files as the owner → optionally
-`podman save --format oci-archive` per image → **always restart writers in `finally`** → health
-check (only when every unit was active before the backup; an app that was already down is not
-waited for, and `downtime_seconds` is 0 when no writer had to be stopped). Then the engine writes
-the archive (temp file, fsync, atomic rename), verifies it fully with the device key, writes the
-index, and deletes staging.
+Backup (per app): probe (owner, linger runtime dir, quadlet files, units active) → estimate size (volumes:
+apparent size + 1 KiB per member for tar headers and padding) → space check (free ≥ 2.2 × estimate + 512 MiB) →
+log databases/roles of the instance that the catalog does not declare (they are not backed up) → snapshot business
+verify → stop `writer_units` → `podman exec <db> pg_dump -U <user> -d <db> -Fc` (stream to staging file) and check
+it with a full read `pg_restore -f /dev/null` (`--list` only reads the table of contents) → `podman volume export
+<vol>` (stdout to staging) → read secrets with `podman secret inspect --showsecret` → read config + quadlet files as
+the owner → **always restart writers in `finally`** (a writer is listed before its stop, so a signal during the stop
+still restarts it; after an ordinary failure a database that stopped during the backup is started again and the
+writers restarted once more) → health check (only when every unit was active before the backup; an app that was
+already down is not waited for, and `downtime_seconds` is 0 when no writer had to be stopped) → a second verify
+snapshot: the snapshot is stored only when it equals the one taken before the stop, otherwise none is stored (writes
+or settings applied at restart would make every restore of that backup fail its data check) → optionally `podman
+save --format oci-archive` per image. Then the engine writes the archive in staging (temp file, fsync, rename),
+verifies it fully with the device key, moves it into `archives/` (rename without overwrite), writes the index, and
+deletes staging.
 
 Restore (per app, after full archive verification + extraction to staging):
-* `fresh` (quadlet files absent): install catalog templates as the owner into
-  `~/.config/containers/systemd/`, `systemctl --user daemon-reload`.
-* `inplace`: first create and fully verify a `safety` backup of the app; abort without changes if
-  that fails. Then stop units (reverse order).
-* Recreate secrets (`podman secret rm` + `podman secret create <name> -` from stdin), write config
-  files (as owner, `O_NOFOLLOW`, declared mode), load included images (`podman load`), recreate
-  volumes (`podman volume rm -f`, `create`, `import <vol> -`), remove the database data volume,
-  start the DB unit, wait for `pg_isready`, `pg_restore --exit-on-error --single-transaction
-  --no-owner --no-privileges`, start remaining units in order, run health checks, then compare
-  verify output with `verify_snapshot` on the `compare` keys.
-* Any failure after the first destructive step → automatic rollback from the safety backup
-  (`inplace`) or full removal of what was created (`fresh`), then state `rolled-back` (or `failed`
-  with `需人工處理` guidance when rollback also fails). Keep the 3 newest `safety` backups per app.
+* Before any change: check every nested tar (section 5); `inplace` refuses (`incompatible`) when the database
+  instance holds databases the catalog does not declare (the data volume is rebuilt from one `pg_dump -d`); remember
+  which image each needed ref points to.
+* `fresh` (quadlet files absent): preflight fails when a catalog volume, template-declared volume, secret or config
+  file already exists (a failed fresh restore removes what it created, so a leftover would be destroyed); install
+  catalog templates as the owner into `~/.config/containers/systemd/`, `systemctl --user daemon-reload`.
+* `inplace`: first create and fully verify a `safety` backup of the app (its plaintext staging is deleted as soon
+  as it is published); abort without changes if that fails, unless the backup being restored is itself a `safety`
+  backup or the request has `allow_no_safety: true` — then the restore proceeds without one (`safety` phase skipped,
+  `result.safety_skipped`). With a safety backup, abort without changes (`insufficient-space`) unless free space plus
+  the extracted archive covers the safety backup's plaintext + 512 MiB (what a rollback needs). Then stop units
+  (reverse order).
+* `systemctl --user mask` the app's non-database units until the restore finished (an interrupted restore must not
+  start on half-restored data at boot); recreate secrets (`podman secret rm` + `podman secret create <name> -` from
+  stdin), write config files (as owner, `O_NOFOLLOW`, declared mode), load included images (`podman load` of the
+  canonical OCI stream; the loaded id must equal the manifest's), recreate volumes (`podman volume rm -f`, `create`,
+  `import <vol> -` of the canonical stream), remove the database data volume, start the DB unit, wait for
+  `pg_isready`, `pg_restore --exit-on-error --single-transaction --no-owner --no-privileges`, `unmask`, start
+  remaining units in order, run health checks, then compare verify output with `verify_snapshot` on the `compare` keys.
+* A failure before the first destructive step puts back the image names it loaded, retagged or pulled
+  (`result.changed` false). Any failure after the first destructive step → automatic rollback, each app on its own:
+  the extracted archive is deleted first, then the safety backup is extracted and restored (`inplace`; a rollback
+  never pulls an image: the exact pre-restore image id must still exist) or what was created is removed (`fresh`:
+  `systemctl stop` exit 5 counts as stopped, networks and pods are removed without force, image names are put back),
+  then state `rolled-back` (or `failed` with `需人工處理` guidance when rollback also fails). Exception: a termination
+  signal while systemd reports the machine is shutting down starts no rollback; the job ends `interrupted` naming the
+  safety backup, and a partial fresh deployment is removed by the recovery after boot.
+* Only after a successful restore: keep the 3 newest `safety` backups per app, never deleting the backup being
+  restored, the safety backup this restore took, or a safety backup that a failed/interrupted restore (not rolled back
+  and not followed by a successful restore of that app) still names.
 
 Images: if not included, the local image for the ref must exist or be pullable; otherwise the app
-preflight fails. PostgreSQL major in the archive must be ≤ the target image major.
+preflight fails (`podman image exists` exit 1 is "absent", any other non-zero exit is an error). PostgreSQL major
+in the archive must be ≤ the target image major; PostgreSQL before 10 is not supported (preflight and backup say so).
 
 ## 10. Security rules (reviewers will check each)
 
@@ -301,7 +355,11 @@ preflight fails. PostgreSQL major in the archive must be ≤ the target image ma
 * Upload: `upload-begin` → `cockpit.channel({payload:"fsreplace1", path, binary:true,
   superuser:"require", size, "send-acks":"bytes"})`, send 64 KiB chunks from `File.slice`,
   keep ≤ 2 MiB unacknowledged, progress from `ack` control messages, `channel.control({command:"done"})`,
-  wait for `close`; cancel → `channel.close()` + `upload-abort`; then `upload-finish`.
+  wait for `close`; cancel → `channel.close()` + `upload-abort`; then `upload-finish` (timeout ≥ 15 min, 2 min +
+  size at 20 MB/s; on a timeout the upload is kept and can be confirmed again — `upload-finish` is idempotent and
+  returns the same backup after success). The 2 MiB window stays: the lab measured 2/4/8 MiB at 8.2/8.6/9.4 MB/s
+  median, below the ≥ 30 % gain required to change it. While an upload runs it is never replaced by another restore
+  and a banner links back to it.
 * Download: `download-info` then navigate a hidden iframe to
   `<channel prefix>?<base64(JSON{payload:"fsread1", binary:"raw", path, superuser:"require",
   max_read_size:-1, external:{"content-disposition": attachment; filename*=UTF-8''…,
@@ -310,10 +368,16 @@ preflight fails. PostgreSQL major in the archive must be ≤ the target image ma
 * Restore wizard: 選擇檔案 → 上傳 → 金鑰（only if `key-required`） → 預檢 → 確認（explicit checkbox,
   lists affected apps, downtime, safety backup） → 進度 → 結果（health + data verification table).
 * Jobs: poll `job-status` every 1.5 s while active; resume the progress view after reload from
-  `status.active_job`. Show `interrupted` guidance and offer restoring the safety backup.
+  `status.active_job`. Show `interrupted` guidance and offer restoring the safety backup. Results derive what
+  happened from `result.changed` (or the phases of older records): "manual work" and the primary "restore the safety
+  backup" only after a destructive step with an incomplete rollback or interruption; after a successful rollback the
+  primary action is the overview. Background refreshes never rebuild the view under a focused text field or an IME
+  composition.
 * Emergency kit: when `status.key` is null show setup; after `key-init` show key id + the secret
   key text once with a download button (Blob from `key-kit`) and a confirm checkbox; keep a banner
-  until `kit_confirmed`.
+  until `kit_confirmed`. Leaving the keys page drops the kit; it is fetched again only on request. After
+  confirmation the kit can be downloaded again behind a dialog that explains its sensitivity; the secret is never
+  put into the page then.
 * States: loading, empty catalog (`尚未設定可備份的應用`), admin access required (pattern of
   `services/service.js`), disconnected, helper missing, busy.
 * RWD: 1440/1024/768/390/360/320 px without horizontal page scroll; keyboard reachable; visible

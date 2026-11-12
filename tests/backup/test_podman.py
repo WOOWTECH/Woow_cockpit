@@ -50,10 +50,11 @@ class LocalRunner:
     def __init__(self):
         self.calls = []
 
-    def __call__(self, argv, *, input=None, stdout=None, timeout=None, cwd=None, env=None):
+    def __call__(self, argv, *, input=None, stdout=None, timeout=None, cwd=None, env=None, max_output=None):
         assert argv[:4] == ['/usr/sbin/runuser', '-u', 'appowner', '--'], argv[:4]
         self.calls.append(argv)
-        return podman.default_runner(argv[4:], input=input, stdout=stdout, timeout=timeout, cwd=cwd, env=env)
+        return podman.default_runner(argv[4:], input=input, stdout=stdout, timeout=timeout, cwd=cwd, env=env,
+                                     max_output=max_output)
 
 
 class PrefixTests(unittest.TestCase):
@@ -277,6 +278,59 @@ class FileHelperTests(unittest.TestCase):
         with self.assertRaises(BackupError) as caught:
             self.runner.run(['/bin/sh', '-c', 'sleep 30 & sleep 30'], timeout=1)
         self.assertIn('逾時', caught.exception.message)
+
+
+class BoundedOutputTests(unittest.TestCase):
+    """Review finding SEC-3: nothing a child prints can grow the root helper or fill the disk."""
+
+    def test_capture_is_limited_and_the_child_is_killed(self):
+        with self.assertRaises(podman.OutputLimitExceeded) as caught:
+            podman.default_runner(['/bin/sh', '-c', 'head -c 100000000 /dev/zero; sleep 30'], max_output=1 << 20,
+                                  timeout=20)
+        self.assertFalse(caught.exception.to_file)
+
+    def test_default_capture_limit(self):
+        self.assertEqual(podman.MAX_CAPTURE, podman.MAX_FILE_BYTES + 64 * 1024)
+        with self.assertRaises(podman.OutputLimitExceeded):
+            podman.default_runner(['/bin/sh', '-c', f'head -c {podman.MAX_CAPTURE + 1} /dev/zero'], timeout=60)
+
+    def test_file_output_has_a_byte_budget(self):
+        with tempfile.TemporaryFile() as sink:
+            with self.assertRaises(podman.OutputLimitExceeded) as caught:
+                podman.default_runner(['/bin/sh', '-c', 'head -c 5000000 /dev/zero; sleep 30'], stdout=sink,
+                                      max_output=1000000, timeout=20)
+            self.assertTrue(caught.exception.to_file)
+            sink.seek(0, os.SEEK_END)
+            self.assertLessEqual(sink.tell(), 1000000 + podman.READ_CHUNK)
+        with tempfile.TemporaryFile() as sink:
+            result = podman.default_runner(['/bin/sh', '-c', 'head -c 3000000 /dev/zero'], stdout=sink, timeout=20)
+            sink.seek(0, os.SEEK_END)
+            self.assertEqual((result.returncode, result.stdout, sink.tell()), (0, None, 3000000))
+
+    def test_stderr_keeps_only_a_tail(self):
+        result = podman.default_runner(['/bin/sh', '-c', 'head -c 3000000 /dev/zero >&2; echo END >&2'], timeout=20)
+        self.assertEqual(len(result.stderr), podman.STDERR_TAIL)
+        self.assertTrue(result.stderr.endswith(b'END\n'))
+
+    def test_large_stdin_and_stdout_do_not_deadlock(self):
+        data = os.urandom(3 * 1024 * 1024)
+        result = podman.default_runner(['/bin/cat'], input=data, timeout=30)
+        self.assertEqual(result.stdout, data)
+
+    def test_owner_runner_maps_overflows(self):
+        runner = podman.OwnerRunner('appowner', runner=Recorder(exc=podman.OutputLimitExceeded(10, to_file=False)),
+                                    user_lookup=owner_lookup())
+        with self.assertRaises(BackupError) as caught:
+            runner.podman('exec', 'db', 'psql', max_output=10)
+        self.assertEqual(caught.exception.code, 'limit-exceeded')
+        runner = podman.OwnerRunner('appowner', runner=Recorder(exc=podman.OutputLimitExceeded(10, to_file=True)),
+                                    user_lookup=owner_lookup())
+        with self.assertRaises(BackupError) as caught:
+            runner.podman('exec', 'db', 'pg_dump', stdout=io.BytesIO(), max_output=10)
+        self.assertEqual(caught.exception.code, 'insufficient-space')
+        rec = Recorder()
+        podman.OwnerRunner('appowner', runner=rec, user_lookup=owner_lookup()).podman('ps', max_output=7)
+        self.assertEqual(rec.calls[0][1]['max_output'], 7)
 
 
 if __name__ == '__main__':

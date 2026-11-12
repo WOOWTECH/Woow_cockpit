@@ -113,7 +113,7 @@ class IndexTests(StorageTestCase):
                                     uploaded_at='2026-11-13T05:00:00Z', source=None)
         self.assertNotIn('key_available', newer)
         self.assertEqual(newer['size'], 1000)
-        self.assertEqual(newer['filename'], 'woowtech-backup-dev-a-20261113-0200.woowbackup')
+        self.assertEqual(newer['filename'], 'woowtech-backup-dev-a-20261113-020000.woowbackup')
         self.assertEqual(mode(self.storage.index_path(newer['id'])), 0o600)
         self.assertEqual([r['id'] for r in self.storage.list_backups()],
                          [newer['id'], older['id'], uploaded['id']], 'newest first')
@@ -241,13 +241,17 @@ class UploadTests(StorageTestCase):
         archive_file = self.storage.archive_path(rec['id'])
         self.assertEqual(archive_file.read_bytes(), data)
         self.assertEqual(mode(archive_file), 0o600)
-        self.assertEqual(os.listdir(self.paths.uploads), [], 'upload files cleaned up')
+        self.assertEqual(os.listdir(self.paths.uploads), [f'{begun["upload_id"]}.done'],
+                         'upload files cleaned up; only the small completion marker stays (24 h)')
         self.assertEqual([r['id'] for r in self.storage.list_backups()], [rec['id']])
+        # Review F6: a retry after the page timed out returns the same backup instead of "not found".
+        self.assertEqual(self.storage.finish_upload(begun['upload_id']), rec)
         # Same file again: deduplicated to the existing record.
         again = self.storage.begin_upload('copy.woowbackup', len(data))
         self.simulate_fsreplace(again['path'], data)
         self.assertEqual(self.storage.finish_upload(again['upload_id']), rec)
-        self.assertEqual(os.listdir(self.paths.uploads), [])
+        self.assertEqual(sorted(os.listdir(self.paths.uploads)),
+                         sorted([f'{begun["upload_id"]}.done', f'{again["upload_id"]}.done']))
         # Same backup id, different bytes: refused, the original stays intact.
         evil = fake_archive_bytes(backup_id='20261101T080000Z-0123abcd', created='2026-11-01T08:00:00Z',
                                   payload=b'\x01' * 64)
@@ -263,7 +267,55 @@ class UploadTests(StorageTestCase):
         begun = self.storage.begin_upload('../../My Backup (1).woowbackup', len(data))
         self.simulate_fsreplace(begun['path'], data)
         rec = self.storage.finish_upload(begun['upload_id'])
-        self.assertEqual(rec['filename'], 'woowtech-backup-uploaded-20261113-0200.woowbackup')
+        self.assertEqual(rec['filename'], 'woowtech-backup-uploaded-20261113-020000.woowbackup')
+
+    def test_uploaded_names_with_and_without_seconds_are_kept(self):
+        # Coordinator decision: download names carry seconds; names from older engines (HHMM) stay accepted.
+        for name, backup_id in (('woowtech-backup-dev-b-20261101-080005.woowbackup', '20261101T080005Z-0123abc1'),
+                                ('woowtech-backup-dev-b-20261101-0800.woowbackup', '20261101T080000Z-0123abc2')):
+            data = fake_archive_bytes(backup_id=backup_id, created=f'2026-11-01T08:00:{backup_id[13:15]}Z')
+            begun = self.storage.begin_upload(name, len(data))
+            self.simulate_fsreplace(begun['path'], data)
+            self.assertEqual(self.storage.finish_upload(begun['upload_id'])['filename'], name)
+
+    def test_a_failure_after_the_move_puts_the_file_back(self):
+        # Review SEC-4 (upload window): nothing may stay in archives/ unlisted, and a retry can still finish.
+        data = fake_archive_bytes(backup_id='20261101T080000Z-0123abcf')
+        begun = self.storage.begin_upload('u.woowbackup', len(data))
+        self.simulate_fsreplace(begun['path'], data)
+        register = self.storage.register
+
+        def interrupted(*args, **kwargs):
+            raise KeyboardInterrupt
+        self.storage.register = interrupted
+        with self.assertRaises(KeyboardInterrupt):
+            self.storage.finish_upload(begun['upload_id'])
+        self.assertEqual(os.listdir(self.paths.archives), [])
+        self.assertEqual(Path(begun['path']).read_bytes(), data)
+        self.storage.register = register
+        self.assertEqual(self.storage.finish_upload(begun['upload_id'])['id'], '20261101T080000Z-0123abcf')
+
+    def test_unindexed_archives_are_adopted(self):
+        # Lab open issue: a hard kill between publishing and indexing left a never-listed archive.
+        data = fake_archive_bytes(backup_id='20261101T080000Z-0123abd0', key_id='1234-5678-9ABC-DEF0')
+        orphan = self.storage.archive_path('20261101T080000Z-0123abd0')
+        self.storage.ensure_layout()
+        orphan.write_bytes(data)
+        self.assertEqual(self.storage.adopt_orphans(), [], 'too recent: it may be being published right now')
+        self.assertEqual(self.storage.adopt_orphans(now=time.time() + 7200), ['20261101T080000Z-0123abd0'])
+        rec = self.storage.get('20261101T080000Z-0123abd0')
+        self.assertEqual((rec['type'], rec['key_id'], rec['sha256']),
+                         ('uploaded', '1234-5678-9ABC-DEF0', hashlib.sha256(data).hexdigest()))
+        (self.paths.archives / '20261101T080000Z-0123abd1.woowbackup').write_bytes(b'not a backup' * 20)
+        self.assertEqual(self.storage.adopt_orphans(now=time.time() + 7200), [])
+
+    def test_reupload_of_an_unindexed_archive_indexes_it(self):
+        data = fake_archive_bytes(backup_id='20261101T080000Z-0123abd2')
+        self.storage.ensure_layout()
+        self.storage.archive_path('20261101T080000Z-0123abd2').write_bytes(data)
+        begun = self.storage.begin_upload('again.woowbackup', len(data))
+        self.simulate_fsreplace(begun['path'], data)
+        self.assertEqual(self.storage.finish_upload(begun['upload_id'])['id'], '20261101T080000Z-0123abd2')
 
     def test_begin_validation_space_and_limits(self):
         for filename, size in (('', 100), ('a\nb', 100), ('x' * 300, 100), ('ok', 10), ('ok', True), ('ok', '100'),

@@ -6,12 +6,14 @@ keys rejected), exactly one JSON object on stdout, exit 0 (`{"ok": true, ...}`) 
 `internal-error` with a generic zh-TW message; the traceback goes to stderr (journal) only.
 Key material is only ever accepted in the stdin field `key` and never echoed.
 """
+import contextlib
 import json
 import os
 import platform
 import re
 import secrets
 import sys
+import threading
 import traceback
 from contextlib import ExitStack
 
@@ -125,7 +127,8 @@ SPECS = {
                      'key': (OPTIONAL, v_key)},
     'restore-start': {'backup_id': (REQUIRED, v_backup_id), 'apps': (REQUIRED, v_apps),
                       'request_id': (REQUIRED, v_request_id), 'confirm': (REQUIRED, v_true),
-                      'key': (OPTIONAL, v_key), 'save_key': (OPTIONAL, v_bool)},
+                      'key': (OPTIONAL, v_key), 'save_key': (OPTIONAL, v_bool),
+                      'allow_no_safety': (OPTIONAL, v_bool)},
     'job-status': {'job_id': (REQUIRED, v_job_id)},
     'job-cancel': {'job_id': (REQUIRED, v_job_id)},
     'delete': {'backup_id': (REQUIRED, v_backup_id)},
@@ -150,6 +153,21 @@ def _no_constants(name):
     raise ValueError(f'unsupported constant {name}')
 
 
+def _valid_text(value):
+    """False when any string (or key) holds a lone surrogate (JSON "\\ud800"), which is not text."""
+    if isinstance(value, str):
+        try:
+            value.encode('utf-8')
+        except UnicodeEncodeError:
+            return False
+        return True
+    if isinstance(value, dict):
+        return all(_valid_text(key) and _valid_text(item) for key, item in value.items())
+    if isinstance(value, list):
+        return all(_valid_text(item) for item in value)
+    return True
+
+
 def read_request(stream):
     raw = stream.buffer.read(MAX_STDIN + 1) if hasattr(stream, 'buffer') else stream.read(MAX_STDIN + 1)
     if isinstance(raw, str):
@@ -164,6 +182,8 @@ def read_request(stream):
         raise BackupError('invalid-request', '請求內容不是有效的 JSON。') from None
     if not isinstance(data, dict):
         raise BackupError('invalid-request', '請求內容必須是 JSON 物件。')
+    if not _valid_text(data):
+        raise BackupError('invalid-request', '請求內容含有無效的文字。')
     return data
 
 
@@ -223,22 +243,15 @@ class Services:
 
     def restart_writers(self, stopped):
         """Restart writer units an interrupted backup left stopped; returns the units that failed."""
-        failed = []
-        catalog = self.catalog()
-        for app_id, units in stopped.items():
-            app = catalog.get(app_id)
-            if app is None:
-                failed.extend(units)
-                continue
-            try:
-                failed.extend(self.adapter(app).start_units([u for u in units if u in app.writer_units]))
-            except BackupError:
-                failed.extend(units)
-        return failed
+        return flows.restart_writers(self.deps, stopped)
+
+    def cleanup_fresh(self, app_ids):
+        """Remove the unfinished fresh deployments a dead restore left; returns zh-TW problems."""
+        return flows.remove_fresh_apps(self.deps, app_ids)
 
     def recover(self):
         return jobmod.recover_interrupted(self.paths, unit_active=self.unit_active,
-                                          restart_writers=self.restart_writers)
+                                          restart_writers=self.restart_writers, cleanup_fresh=self.cleanup_fresh)
 
     def key_ids(self):
         return {info.key_id for info in self.keys.identities()}
@@ -270,7 +283,13 @@ def storage_usage(storage, backups):
 
 def app_view(svc, app, backups):
     try:
-        info = svc.adapter(app).probe()
+        adapter = svc.adapter(app)
+        info = adapter.probe()
+        if info.get('state') == 'running' and hasattr(adapter, 'health_hint'):
+            # Units can be active while the app is broken (lab H5): one quick health request.
+            hint = adapter.health_hint()
+            if hint:
+                info = dict(info, state='error', problems=[*info.get('problems', []), hint])
     except BackupError as error:
         info = {'deployed': False, 'state': 'error', 'units': [{'name': u, 'active': False} for u in app.units],
                 'problems': [error.message]}
@@ -311,13 +330,13 @@ def build_preflight(svc, manifest):
     required = total + int(svc.paths.reserve_bytes)
     if free < required:
         checks.append({'id': 'space', 'status': 'fail',
-                       'message': f'本設備空間不足以解開備份：需要約 {flows.human(required)}，可用 {flows.human(free)}。'})
+                       'message': f'這台設備空間不足以解開備份：需要約 {flows.human(required)}，可用 {flows.human(free)}。'})
     else:
-        checks.append({'id': 'space', 'status': 'ok', 'message': f'本設備空間足夠（可用 {flows.human(free)}）。'})
+        checks.append({'id': 'space', 'status': 'ok', 'message': f'這台設備空間足夠（可用 {flows.human(free)}）。'})
     source_arch = (manifest.get('source') or {}).get('arch')
     if source_arch and source_arch != platform.machine():
         checks.append({'id': 'arch', 'status': 'warn',
-                       'message': f'備份來源的 CPU 架構（{source_arch}）與本設備（{platform.machine()}）不同。'})
+                       'message': f'備份來源的 CPU 架構（{source_arch}）與這台設備（{platform.machine()}）不同。'})
     catalog = svc.catalog()
     entry_sizes = {e.get('path'): e.get('size', 0) for e in manifest.get('entries') or []}
     device_key = svc.keys.device_key()
@@ -339,7 +358,7 @@ def build_preflight(svc, manifest):
             app_checks = [{'id': f'{app.id}/probe', 'status': 'fail', 'message': error.message}]
         if mode == 'inplace' and device_key is None:
             app_checks.append({'id': f'{app.id}/device-key', 'status': 'fail',
-                               'message': '原位還原需要先建立本設備的備份金鑰（用於建立還原前備份）。'})
+                               'message': '原位還原需要先建立這台設備的加密金鑰（用於建立還原前備份）。'})
         apps.append({'id': app.id, 'name': app.name, 'mode': mode, 'checks': app_checks,
                      'restorable': not any(c['status'] == 'fail' for c in app_checks)})
     ok = not any(c['status'] == 'fail' for c in checks) and any(a['restorable'] for a in apps)
@@ -378,16 +397,17 @@ def cmd_inspect(svc, req):
     path = svc.storage.archive_path(backup_id)
     header = svc.archive.read_header(path)
     key_text = req.get('key')
-    if key_text is not None and req.get('save_key'):
-        svc.keys.import_key(key_text)
-        key_text = None
     identities = list(svc.keys.identities())
     with ExitStack() as stack:
         if key_text is not None:
-            identities.append(stack.enter_context(svc.keys.temp_identity(key_text, f'key-inspect-{secrets.token_hex(8)}')))
+            # Only the supplied key: a key that cannot open this backup fails with wrong-key here, before
+            # anything is saved (review finding F4: a wrong key used to be imported permanently).
+            identities = [stack.enter_context(svc.keys.temp_identity(key_text, f'key-inspect-{secrets.token_hex(8)}'))]
         elif header.get('key_id') not in {info.key_id for info in identities}:
-            raise BackupError('key-required', '此備份使用的金鑰不在本設備，請輸入緊急金鑰。', key_id=header.get('key_id'))
+            raise BackupError('key-required', '此備份使用的金鑰不在這台設備，請輸入緊急金鑰。', key_id=header.get('key_id'))
         manifest = svc.archive.read_manifest(path, identities)
+    if key_text is not None and req.get('save_key'):
+        svc.keys.import_key(key_text)
     summary = manifest_summary(manifest)
     preflight = build_preflight(svc, manifest)
     meta = svc.storage.update(
@@ -406,7 +426,7 @@ def cmd_key_init(svc, _req):
 def cmd_key_kit(svc, _req):
     info = svc.keys.device_key()
     if info is None:
-        raise BackupError('no-device-key', '本設備尚未建立備份金鑰。')
+        raise BackupError('no-device-key', '這台設備尚未建立加密金鑰。')
     content = svc.keys.kit_text()
     filename = svc.keys.kit_filename() if hasattr(svc.keys, 'kit_filename') else f'woowtech-backup-key-{info.key_id}.txt'
     return {'key_id': info.key_id, 'filename': filename, 'content': content}
@@ -425,11 +445,12 @@ def cmd_key_import(svc, req):
 def cmd_backup_start(svc, req):
     flows.resolve_apps(svc.catalog(), req['apps'])
     if svc.keys.device_key() is None:
-        raise BackupError('no-device-key', '尚未建立本設備的備份金鑰，請先完成金鑰設定。')
+        raise BackupError('no-device-key', '這台設備尚未建立加密金鑰，請先完成金鑰設定。')
     params = {'apps': list(req['apps']), 'include_images': bool(req.get('include_images', False)),
               'note': req.get('note', '')}
     return jobmod.start_job(svc.paths, 'backup', params, req['request_id'], launcher=svc.launcher,
-                            unit_active=svc.unit_active, restart_writers=svc.restart_writers)
+                            unit_active=svc.unit_active, restart_writers=svc.restart_writers,
+                            cleanup_fresh=svc.cleanup_fresh)
 
 
 def cmd_verify_start(svc, req):
@@ -437,7 +458,7 @@ def cmd_verify_start(svc, req):
     params = {'backup_id': req['backup_id'], 'key_provided': 'key' in req}
     return jobmod.start_job(svc.paths, 'verify', params, req['request_id'], key_text=req.get('key'),
                             launcher=svc.launcher, unit_active=svc.unit_active,
-                            restart_writers=svc.restart_writers)
+                            restart_writers=svc.restart_writers, cleanup_fresh=svc.cleanup_fresh)
 
 
 def cmd_restore_start(svc, req):
@@ -445,12 +466,18 @@ def cmd_restore_start(svc, req):
     flows.resolve_apps(svc.catalog(), req['apps'])
     key_text = req.get('key')
     if key_text is not None and req.get('save_key'):
+        # Saved only after it opened this backup (review finding F4).
+        path = svc.storage.archive_path(req['backup_id'])
+        with svc.keys.temp_identity(key_text, f'key-check-{secrets.token_hex(8)}') as identity:
+            svc.archive.read_manifest(path, [identity])
         svc.keys.import_key(key_text)
         key_text = None
     params = {'backup_id': req['backup_id'], 'apps': list(req['apps']), 'key_provided': key_text is not None}
+    if req.get('allow_no_safety'):
+        params['allow_no_safety'] = True
     return jobmod.start_job(svc.paths, 'restore', params, req['request_id'], key_text=key_text,
                             launcher=svc.launcher, unit_active=svc.unit_active,
-                            restart_writers=svc.restart_writers)
+                            restart_writers=svc.restart_writers, cleanup_fresh=svc.cleanup_fresh)
 
 
 def cmd_job_status(svc, req):
@@ -470,10 +497,23 @@ def cmd_job_cancel(svc, req):
 
 
 def cmd_delete(svc, req):
-    active = jobmod.active_job(svc.paths)
-    if active and (active.get('params') or {}).get('backup_id') == req['backup_id']:
-        raise BackupError('busy', '此備份正被進行中的作業使用，請稍後再刪除。', job_id=active['id'])
-    svc.storage.delete(req['backup_id'])
+    """Refuses (busy) while a queued or running job uses the backup: as its source, as the safety backup a
+    running restore just took, or any safety backup while a restore runs (it may be its rollback source;
+    review finding CR-08). Checked under the start lock, so no job can start in between."""
+    backup_id = req['backup_id']
+    svc.recover()
+    with jobmod.start_lock(svc.paths):
+        meta = svc.storage.get(backup_id)
+        for record in jobmod.JobStore(svc.paths).list(limit=None):
+            if record.get('state') not in jobmod.ACTIVE:
+                continue
+            params = record.get('params') or {}
+            if backup_id in (params.get('backup_id'), record.get('safety_backup_id')):
+                raise BackupError('busy', '此備份正被進行中的作業使用，請等作業完成後再刪除。', job_id=record['id'])
+            if meta.get('type') == 'safety' and record.get('type') == 'restore':
+                raise BackupError('busy', '還原作業進行中時不能刪除還原前備份（還原失敗時可能需要它來自動回復），'
+                                          '請等作業完成後再刪除。', job_id=record['id'])
+        svc.storage.delete(backup_id)
     return {}
 
 
@@ -529,7 +569,11 @@ def _dispatch(argv, paths, stdin, services, require_root):
 
 
 def _emit(stream, response):
-    text = json.dumps(response, ensure_ascii=False, separators=(',', ':'), default=str)
+    try:
+        text = json.dumps(response, ensure_ascii=False, separators=(',', ':'), default=str)
+        text.encode('utf-8')
+    except ValueError:  # lone surrogates from hostile input: \\u escapes keep the one-JSON-object contract
+        text = json.dumps(response, ensure_ascii=True, separators=(',', ':'), default=str)
     try:
         stream.write(text + '\n')
         stream.flush()
@@ -542,7 +586,12 @@ def main(argv=None, *, paths=None, stdin=None, stdout=None, services=None, requi
     argv = list(sys.argv[1:] if argv is None else argv)
     out = stdout if stdout is not None else sys.stdout
     try:
-        payload = _dispatch(argv, paths, stdin, services, require_root)
+        # SIGTERM/SIGHUP/SIGINT (cockpit-bridge closing the channel, a page timeout) become an exception, so
+        # every `finally` runs: a pasted key in /run/woowtech-backup is always deleted (review finding SEC-4).
+        guard = (jobmod.signals_as_exceptions() if threading.current_thread() is threading.main_thread()
+                 else contextlib.nullcontext())
+        with guard:
+            payload = _dispatch(argv, paths, stdin, services, require_root)
         response, code = {'ok': True, **(payload or {})}, 0
     except BackupError as error:
         response, code = {'ok': False, 'error': error.as_dict()}, 1

@@ -158,6 +158,12 @@ summary:focus-visible, [tabindex]:focus-visible {
 #page-error .button-group { flex-basis: 100%; }
 details.notice { display: block; }
 details.notice summary { cursor: pointer; font-weight: 500; }
+/* Brand: an MDI chevron instead of the browser's disclosure triangle (review finding F16). */
+summary { list-style: none; display: flex; align-items: center; gap: 6px; }
+summary::-webkit-details-marker { display: none; }
+summary svg.summary-icon { inline-size: 18px; block-size: 18px; flex: none; transition: transform .15s ease; }
+details[open] > summary svg.summary-icon { transform: rotate(90deg); }
+.notice .dialog-error-actions { flex-basis: 100%; margin-block-start: 8px; }
 details.notice ul { padding-inline-start: 20px; margin-block-start: 8px; }
 .status-line { min-block-size: 22px; font-size: 14px; color: var(--text-secondary); overflow-wrap: anywhere; }
 .footnote { font-size: 13px; }
@@ -360,9 +366,10 @@ progress::-moz-progress-bar { background: var(--ww-blue); border-radius: var(--r
 .app-preflight:has(input:checked) { border-color: var(--ww-blue); }
 .app-preflight.is-blocked { background: var(--surface-muted); }
 .app-preflight-head { display: flex; justify-content: space-between; align-items: flex-start; flex-wrap: wrap; gap: 8px 12px; }
-.app-select { display: inline-flex; gap: 10px; align-items: flex-start; font-weight: 600; min-inline-size: 0; cursor: pointer; }
+.app-select { display: inline-flex; gap: 10px; align-items: center; font-weight: 600; min-inline-size: 0; cursor: pointer;
+  min-block-size: 32px; }
 .app-select-name { min-inline-size: 0; }
-.app-details summary { cursor: pointer; font-size: 14px; font-weight: 500; color: var(--link); }
+.app-details summary { cursor: pointer; font-size: 14px; font-weight: 500; color: var(--link); min-block-size: 32px; }
 .app-details .metadata { margin-block-start: 10px; }
 .app-content { padding-block-start: 14px; border-block-start: 1px solid var(--hairline); }
 .app-content h4 { margin-block-end: 8px; }
@@ -375,10 +382,10 @@ progress::-moz-progress-bar { background: var(--ww-blue); border-radius: var(--r
 .title-row { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; }
 .job-meta { margin-block-start: 4px; font-size: 13px; overflow-wrap: anywhere; }
 .job-error:empty, .job-cancel-error:empty, .job-result:empty, .job-stepper:empty { display: none; }
-.phases { list-style: none; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 8px; }
+.phases { list-style: none; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(168px, 1fr)); gap: 8px; }
 .phase { display: grid; grid-template-columns: auto minmax(0, 1fr); grid-template-rows: auto auto; column-gap: 8px; padding: 10px 12px; border-radius: var(--radius-sm); border: 1px solid var(--hairline); background: var(--surface-card); min-inline-size: 0; }
 .phase-icon { grid-row: 1 / span 2; display: inline-grid; place-items: center; color: var(--text-secondary); }
-.phase-label { font-size: 14px; font-weight: 500; min-inline-size: 0; }
+.phase-label { font-size: 14px; font-weight: 500; min-inline-size: 0; text-wrap: pretty; word-break: keep-all; overflow-wrap: anywhere; }
 .phase-state { font-size: 12px; color: var(--text-secondary); }
 .phase-active { border-color: var(--ww-blue); background: var(--ww-blue-050); }
 .phase-active .phase-icon, .phase-done .phase-icon { color: var(--link); }
@@ -474,6 +481,7 @@ dialog > * + * { margin-block-start: 16px; }
   .form-footer > * { flex: 1 1 auto; }
   button, .button { min-block-size: 44px; }
   button.small, .button.small { min-block-size: 38px; }
+  .app-select, .app-details summary { min-block-size: 44px; }
   dialog { padding: 20px 16px; }
   .phases { grid-template-columns: minmax(0, 1fr); }
 }

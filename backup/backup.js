@@ -1,4 +1,4 @@
-/* WOOWTECH Cockpit「備份與還原」(Cockpit package woowtechbackup).
+/* woowtech Cockpit「備份與還原」(Cockpit package woowtechbackup).
  *
  * Binding contract: docs/backup/CONTRACT.md §7 (helper CLI) and §11 (UI).
  * - Every privileged action runs the fixed root helper through cockpit.spawn with the request as
@@ -28,19 +28,24 @@
   const TERMINAL = new Set(["succeeded", "failed", "rolled-back", "interrupted", "cancelled"]);
   const READS = new Set(["status", "list", "jobs", "job-status", "inspect", "key-kit", "download-info"]);
   const TIMEOUTS = {
-    inspect: 300000, "upload-begin": 120000, "upload-finish": 900000, "upload-abort": 120000,
+    inspect: 300000, "upload-begin": 120000, "upload-finish": 900000, "upload-abort": 120000, "key-import": 120000,
     "backup-start": 120000, "restore-start": 120000, "verify-start": 120000, "key-init": 120000, delete: 120000
   };
+  // upload-finish hashes the whole file before it answers: allow 20 MB/s plus two minutes, at least 15 minutes.
+  const finishTimeout = size => Math.max(TIMEOUTS["upload-finish"], 120000 + Math.ceil((Number(size) || 0) / (20 * 1000 * 1000)) * 1000);
+  const UPLOADING = new Set(["begin", "sending", "finishing"]);
+  const WRONG_KEY = "這把金鑰無法解開這份備份（金鑰 ID 不符）。請確認是建立這份備份的設備所產生的緊急金鑰。";
+  const VERIFY_FAILED = "這份備份上次驗證未通過。還原時會先完整驗證整份備份，驗證不通過就不會變更任何資料，但這份備份很可能無法使用。";
   const ROUTES = new Set(["overview", "backups", "create", "restore", "jobs", "keys", "activity"]);
   const NAV_FOR = { overview: "overview", backups: "backups", create: "overview", restore: "restore", jobs: "activity", keys: "keys", activity: "activity" };
 
-  const TYPE_LABELS = { manual: "手動", safety: "還原前自動", uploaded: "上傳" };
+  const TYPE_LABELS = { manual: "手動", safety: "還原前備份", uploaded: "上傳" };
   const JOB_TYPES = { backup: "備份", restore: "還原", verify: "驗證" };
   const JOB_STATES = {
     queued: "等待開始", running: "執行中", succeeded: "已完成", failed: "失敗",
     "rolled-back": "已自動回復", interrupted: "已中斷", cancelled: "已取消"
   };
-  const APP_STATES = { running: "執行中", stopped: "已停止", partial: "部分執行", "not-deployed": "未部署", error: "無法讀取" };
+  const APP_STATES = { running: "執行中", stopped: "已停止", partial: "部分執行", "not-deployed": "未部署", error: "異常" };
   const PHASE_STATES = { pending: "等待", active: "進行中", done: "完成", failed: "失敗", skipped: "略過" };
   const CHECK_STATES = { ok: "通過", warn: "注意", fail: "未通過" };
   const MODES = { inplace: "原位還原", fresh: "全新部署" };
@@ -53,6 +58,7 @@
     "check": "M21,7L9,19L3.5,13.5L4.91,12.09L9,16.17L19.59,5.59L21,7Z",
     "check-circle": "M12 2C6.5 2 2 6.5 2 12S6.5 22 12 22 22 17.5 22 12 17.5 2 12 2M10 17L5 12L6.41 10.59L10 14.17L17.59 6.58L19 8L10 17Z",
     "check-circle-outline": "M12 2C6.5 2 2 6.5 2 12S6.5 22 12 22 22 17.5 22 12 17.5 2 12 2M12 20C7.59 20 4 16.41 4 12S7.59 4 12 4 20 7.59 20 12 16.41 20 12 20M16.59 7.58L10 14.17L7.41 11.59L6 13L10 17L18 9L16.59 7.58Z",
+    "chevron-right": "M8.59,16.58L13.17,12L8.59,7.41L10,6L16,12L10,18L8.59,16.58Z",
     "circle-medium": "M12,8A4,4 0 0,0 8,12A4,4 0 0,0 12,16A4,4 0 0,0 16,12A4,4 0 0,0 12,8Z",
     "clipboard-text-outline": "M19,3H14.82C14.25,1.44 12.53,0.64 11,1.2C10.14,1.5 9.5,2.16 9.18,3H5A2,2 0 0,0 3,5V19A2,2 0 0,0 5,21H19A2,2 0 0,0 21,19V5A2,2 0 0,0 19,3M12,3A1,1 0 0,1 13,4A1,1 0 0,1 12,5A1,1 0 0,1 11,4A1,1 0 0,1 12,3M7,7H17V5H19V19H5V5H7V7M17,11H7V9H17V11M15,15H7V13H15V15Z",
     "close-circle-outline": "M12,20C7.59,20 4,16.41 4,12C4,7.59 7.59,4 12,4C16.41,4 20,7.59 20,12C20,16.41 16.41,20 12,20M12,2C6.47,2 2,6.47 2,12C2,17.53 6.47,22 12,22C17.53,22 22,17.53 22,12C22,6.47 17.53,2 12,2M14.59,8L12,10.59L9.41,8L8,9.41L10.59,12L8,14.59L9.41,16L12,13.41L14.59,16L16,14.59L13.41,12L16,9.41L14.59,8Z",
@@ -233,7 +239,9 @@
   }
 
   const appName = id => state.status?.apps?.find(app => app.id === id)?.name || id;
-  const backupTitle = backup => `${TYPE_LABELS[backup.type] || "其他"}備份 · ${date(backup.created || backup.uploaded_at)}`;
+  // Glossary (review F14): the full name is 還原前自動備份; chips and filters say 還原前備份.
+  const TITLE_LABELS = { manual: "手動備份", safety: "還原前自動備份", uploaded: "上傳備份" };
+  const backupTitle = backup => `${TITLE_LABELS[backup.type] || "其他備份"} · ${date(backup.created || backup.uploaded_at)}`;
 
   // ------------------------------------------------------------------ helper calls
 
@@ -270,12 +278,12 @@
       return result;
     }
     if (problem === "not-found") {
-      const result = new HelperError("找不到備份管理程式。請確認此主機已安裝 WOOWTECH 備份元件後再試。", { code: "helper-missing", problem });
+      const result = new HelperError("找不到備份管理程式。請確認這台設備已安裝 woowtech 備份元件後再試。", { code: "helper-missing", problem });
       result.helperMissing = true;
       return result;
     }
     if (["disconnected", "terminated", "no-session", "timeout-transport"].includes(problem)) {
-      const result = new HelperError("與這台主機的管理連線已中斷。請按「重新連線」重新載入頁面；已送出的背景作業會繼續執行，不會自動重做。", { code: "disconnected", problem });
+      const result = new HelperError("與這台設備的管理連線已中斷。請按「重新連線」重新載入頁面；已送出的背景作業會繼續執行，不會自動重做。", { code: "disconnected", problem });
       result.disconnected = true;
       return result;
     }
@@ -285,7 +293,7 @@
   }
 
   // One helper command: argv is fixed, the request is JSON on stdin, the reply one JSON object.
-  function call(command, request) {
+  function call(command, request, { timeout = null } = {}) {
     return new Promise((resolve, reject) => {
       let stdout = "";
       let settled = false;
@@ -318,7 +326,7 @@
             ? "讀取資料逾時，請重試。"
             : "操作回應逾時，結果尚未確認。請重新整理確認狀態後再決定是否重試。", { code: "timeout" }));
           try { process.close("timeout"); } catch { /* already closed */ }
-        }, TIMEOUTS[command] || 60000);
+        }, timeout || TIMEOUTS[command] || 60000);
         process.then(
           output => settle(stdout + (isString(output) ? output : "")),
           (error, output) => settle(stdout + (isString(output) ? output : ""), error || {}));
@@ -369,7 +377,7 @@
     create: { selected: null, includeImages: false, note: "", requestId: null, signature: "", busy: false, error: null },
     keys: { kit: null, busy: false, error: null, confirmChecked: false, importText: "", importBusy: false, importError: null, imported: null },
     list: { query: "", type: "all" },
-    verifyRequest: null,
+    verifyRequest: null, openDetails: new Set(), composing: false, viewStale: false, pendingWizard: null,
     jobUi: { id: null, root: null, nodes: null, cancelBusy: false, cancelError: null }
   };
 
@@ -392,7 +400,7 @@
     state.loading.add("status");
     state.statusTried = Date.now();
     if (!quiet) announce("正在載入備份狀態…");
-    render();
+    render({ background: quiet });
     try {
       const data = await call("status");
       requireShape(isObject(data.host) && isObject(data.storage) && (data.key === null || isObject(data.key)) &&
@@ -418,14 +426,14 @@
       if (!quiet) announce(error.accessDenied ? "需要管理員權限才能載入備份狀態。" : "備份狀態載入失敗。");
     } finally {
       state.loading.delete("status");
-      render();
+      render({ background: quiet });
     }
   }
 
   async function loadBackups({ quiet = true } = {}) {
     if (state.loading.has("backups")) return;
     state.loading.add("backups");
-    render();
+    render({ background: quiet });
     try {
       const data = await call("list");
       requireShape(Array.isArray(data.backups) && data.backups.every(validBackup), "備份清單");
@@ -437,7 +445,7 @@
       if (!error.accessDenied) state.pageError = { source: "backups", error };
     } finally {
       state.loading.delete("backups");
-      render();
+      render({ background: quiet });
     }
   }
 
@@ -447,7 +455,7 @@
     render();
     try {
       const data = await call("jobs");
-      requireShape(Array.isArray(data.jobs) && data.jobs.every(validJob), "作業紀錄");
+      requireShape(Array.isArray(data.jobs) && data.jobs.every(validJob), "活動紀錄");
       state.jobs = data.jobs;
       state.jobsAt = Date.now();
       if (state.pageError?.source === "jobs") state.pageError = null;
@@ -595,6 +603,11 @@
     const changed = state.lastPage !== `${route.page}/${route.arg || ""}`;
     state.lastPage = `${route.page}/${route.arg || ""}`;
     state.actionError = null;
+    if (route.page !== "keys") {
+      // The emergency kit secret is shown once: leaving the page drops it (review finding F11).
+      state.keys.kit = null;
+      state.keys.confirmChecked = false;
+    }
     render();
     ensureData(route);
     if (changed) {
@@ -632,17 +645,67 @@
     }
   }
 
-  function render() {
+  const EDITABLE = 'input:not([type]), input[type="text"], input[type="search"], textarea';
+
+  function editingInView() {
+    const element = document.activeElement;
+    return Boolean(element && element !== document.body && $("view").contains(element) && element.matches?.(EDITABLE));
+  }
+
+  // A background refresh (status poll, finished job) never rebuilds the view under a focused text field or an
+  // IME composition: rebuilding replaced the field and corrupted Zhuyin/Cangjie input (review finding F5). The
+  // view catches up when the field loses focus.
+  function render({ background = false } = {}) {
     const route = currentRoute();
+    const view = $("view");
+    if (background && (state.composing || editingInView())) {
+      state.viewStale = true;
+      renderNav(route);
+      renderBanners(route);
+      view.setAttribute("aria-busy", String(state.loading.size > 0));
+      $("refresh").disabled = state.loading.has("status") || state.disconnected;
+      return;
+    }
+    state.viewStale = false;
     const snapshot = captureFocus();
     renderNav(route);
     renderBanners(route);
-    const view = $("view");
     const nodes = buildView(route);
     if (!(nodes.length === 1 && view.childNodes.length === 1 && view.firstChild === nodes[0])) fill(view, ...nodes);
     view.setAttribute("aria-busy", String(state.loading.size > 0));
     $("refresh").disabled = state.loading.has("status") || state.disconnected;
     restoreFocus(snapshot);
+  }
+
+  // Replace a container's content only when it changed: re-inserting an unchanged role=alert notice made
+  // screen readers announce the same error on every poll (review finding F9).
+  function setOnly(container, node) {
+    if (node ? container.childNodes.length === 1 && container.firstChild === node : !container.childNodes.length) return;
+    fill(container, node);
+  }
+
+  const noticeSlots = new Map();
+  function stableNotice(slot, error, options) {
+    const cached = noticeSlots.get(slot);
+    if (cached && cached.error === error) return cached.node;
+    const node = errorNotice(error, options);
+    noticeSlots.set(slot, { error, node });
+    return node;
+  }
+
+  function activeUpload() {
+    const upload = state.wizard?.source === "upload" ? state.wizard.upload : null;
+    return upload && !upload.cancelled && UPLOADING.has(upload.phase) ? upload : null;
+  }
+
+  function toggleDetails(key, open) {
+    if (open) state.openDetails.add(key);
+    else state.openDetails.delete(key);
+  }
+
+  function disclosure(key, label, ...content) {
+    return h("details", { class: "app-details", open: state.openDetails.has(key), on: { toggle: event => toggleDetails(key, event.target.open) } },
+      h("summary", { dataset: { focus: key } }, icon("chevron-right", "icon summary-icon"), h("span", { text: label })), ...content);
   }
 
   function renderNav(route = currentRoute()) {
@@ -660,9 +723,9 @@
     text($("access-text"), `${who}${ACCESS_HELP}權限啟用後會自動重新載入資料。`);
 
     const pageError = state.disconnected
-      ? new HelperError("與這台主機的管理連線已中斷。請按「重新連線」重新載入頁面；已送出的背景作業會繼續執行，不會自動重做。")
+      ? new HelperError("與這台設備的管理連線已中斷。請按「重新連線」重新載入頁面；已送出的背景作業會繼續執行，不會自動重做。")
       : state.helperMissing
-        ? new HelperError("找不到備份管理程式。請確認此主機已安裝 WOOWTECH 備份元件（woowtech-cockpit-backup）後再重試。")
+        ? new HelperError("找不到備份管理程式。請確認這台設備已安裝 woowtech 備份元件（woowtech-cockpit-backup）後再重試。")
         : state.pageError?.error || null;
     $("page-error").hidden = !pageError;
     text($("page-error-message"), pageError ? pageError.message : "");
@@ -684,6 +747,19 @@
       fill(keyBanner);
     }
 
+    const upload = activeUpload();
+    const uploadBanner = $("upload-banner");
+    if (upload && !(route.page === "restore" && !route.arg)) {
+      uploadBanner.hidden = false;
+      fill(uploadBanner,
+        icon("tray-arrow-up"),
+        h("p", null, h("strong", { text: "上傳進行中" }), " · 重新整理或關閉這一頁會中斷上傳。"),
+        link("查看上傳", ["restore"], { class: "button small", dataset: { focus: "banner-upload" } }));
+    } else {
+      uploadBanner.hidden = true;
+      fill(uploadBanner);
+    }
+
     const job = activeJob();
     const jobBanner = $("job-banner");
     if (job && !(route.page === "jobs" && route.arg === job.id)) {
@@ -699,12 +775,15 @@
       fill(jobBanner);
     }
 
-    fill($("action-error"), ...(state.actionError
-      ? [errorNotice(state.actionError, { dismiss: () => { state.actionError = null; renderBanners(); } })] : []));
+    setOnly($("action-error"), state.actionError
+      ? stableNotice("action", state.actionError, { dismiss: () => { state.actionError = null; renderBanners(); } }) : null);
 
     const warnings = state.status?.warnings || [];
     $("warnings").hidden = !warnings.length || state.accessDenied;
-    text($("warnings-title"), `備份設定提示（${warnings.length}）`);
+    const title = `備份設定提示（${warnings.length}）`;
+    if ($("warnings-title").textContent !== title) {
+      fill($("warnings-title"), icon("chevron-right", "icon summary-icon"), h("span", { text: title }));
+    }
     fill($("warning-list"), ...warnings.map(item => h("li", { text: item })));
   }
 
@@ -713,7 +792,7 @@
     if (route.unknown) return [viewTitle("找不到頁面", "這個網址不是備份與還原的頁面。"), notFound("找不到頁面", "請使用上方的分頁切換。")];
     if (!state.status && state.helperMissing) {
       return [h("section", { class: "card" }, emptyState("alert-circle-outline", "找不到備份管理程式",
-        "這台主機尚未安裝 WOOWTECH 備份元件，或安裝不完整。請由系統管理員安裝後，再按上方的「重試」。"))];
+        "這台設備尚未安裝 woowtech 備份元件，或安裝不完整。請由系統管理員安裝後，再按上方的「重試」。"))];
     }
     if (!state.status && state.disconnected) {
       return [h("section", { class: "card" }, emptyState("alert-circle-outline", "管理連線已中斷", "請按上方的「重新連線」重新載入頁面。"))];
@@ -734,7 +813,7 @@
   function viewTitle(title, description, actions = []) {
     return h("div", { class: "view-title" },
       h("div", { class: "view-title-text" },
-        h("h2", { id: "view-heading", tabIndex: -1, text: title }),
+        h("h2", { id: "view-heading", tabIndex: -1, text: title, dataset: { focus: "view-heading" } }),
         description ? h("p", { class: "muted", text: description }) : null),
       actions.length ? h("div", { class: "button-group" }, actions) : null);
   }
@@ -907,7 +986,7 @@
 
     const host = status.host;
     const hostLine = h("p", { class: "host-line muted" }, icon("server-network"),
-      h("span", { text: [host.hostname && `主機 ${host.hostname}`, host.os, host.arch, host.podman && `Podman ${host.podman}`,
+      h("span", { text: [host.hostname && `設備 ${host.hostname}`, host.os, host.arch, host.podman && `Podman ${host.podman}`,
         status.version && `備份元件 ${status.version}`].filter(Boolean).map(str).join(" · ") }));
     return [head, stats, appSection, backupSection, hostLine];
   }
@@ -957,7 +1036,7 @@
       on: { input: event => { state.list.query = event.target.value; updateBackupResults(); } }
     });
     const filters = h("div", { class: "filter-group", role: "group", "aria-label": "依類型篩選" },
-      [["all", "全部"], ["manual", "手動"], ["safety", "還原前自動"], ["uploaded", "上傳"]].map(([value, label]) =>
+      [["all", "全部"], ["manual", "手動"], ["safety", "還原前備份"], ["uploaded", "上傳"]].map(([value, label]) =>
         h("button", {
           type: "button", class: "filter", "aria-pressed": String(state.list.type === value), dataset: { focus: `filter-${value}` },
           on: { click: () => { state.list.type = value; render(); } }
@@ -1022,9 +1101,10 @@
         small: compact, icon: "shield-check-outline", disabled: Boolean(active), label: `驗證 ${title}`, focus: `verify-${backup.id}`,
         title: active ? "已有作業進行中，請等它完成後再驗證。" : undefined
       }),
+      // No deletes while a job runs: a restore may need any safety backup to roll back (review finding CR-08).
       button("刪除", () => deleteBackup(backup), {
-        small: compact, icon: "delete-outline", danger: true, disabled: Boolean(inUse), label: `刪除 ${title}`, focus: `delete-${backup.id}`,
-        title: inUse ? "此備份正被進行中的作業使用。" : undefined
+        small: compact, icon: "delete-outline", danger: true, disabled: Boolean(active), label: `刪除 ${title}`, focus: `delete-${backup.id}`,
+        title: inUse ? "此備份正被進行中的作業使用。" : active ? "有作業進行中，請等它完成後再刪除。" : undefined
       }));
   }
 
@@ -1083,15 +1163,27 @@
 
   function inspectDetail(backup) {
     const run = async (key = null, save = false) => {
+      // The key alone; it is saved only after it opened this backup (review finding F4).
       const request = { backup_id: backup.id };
-      if (key) {
-        request.key = key;
-        if (save) request.save_key = true;
+      if (key) request.key = key;
+      let data;
+      try {
+        data = await call("inspect", request);
+      } catch (error) {
+        if (key && ["key-required", "wrong-key"].includes(error.code)) throw new HelperError(WRONG_KEY, { code: error.code });
+        throw error;
       }
-      const data = await call("inspect", request);
       requireShape(validBackup(data.backup) && isObject(data.manifest) && isObject(data.preflight), "備份內容");
       upsertBackup(data.backup);
-      if (save) loadStatus({ quiet: true });
+      if (key && save) {
+        try {
+          await call("key-import", { key });
+          loadStatus({ quiet: true });
+          loadBackups();
+        } catch (error) {
+          state.actionError = new HelperError(`這把金鑰可以解開這份備份，但保存到這台設備失敗：${error.message}`, { code: error.code });
+        }
+      }
       return data;
     };
     if (!backup.key_available) {
@@ -1146,7 +1238,7 @@
       ["資料庫", databases.length ? databases.map(db => `PostgreSQL ${str(db.major)} · ${str(db.database)}`).join("、") : "無"],
       ["資料卷", volumes.length ? volumes.map(volume => str(volume.name)).join("、") : "無"],
       ["容器映像", images.length ? images.map(image => `${str(image.ref)}（${image.included ? "已包含" : "未包含"}）`).join("、") : "無"],
-      ["密鑰與設定", `${Number(app.secrets_count) || 0} 個密鑰 · ${Number(app.config_files_count) || 0} 個設定檔`]
+      ["應用機密與設定", `${Number(app.secrets_count) || 0} 個應用機密 · ${Number(app.config_files_count) || 0} 個設定檔`]
     ]);
   }
 
@@ -1226,7 +1318,7 @@
     h("aside", { class: "card side-card", "aria-labelledby": "create-side" },
       h("h3", { id: "create-side", text: "這份備份包含什麼？" }),
       h("ul", { class: "bullet-list" },
-        ["PostgreSQL 資料庫（以 pg_dump 匯出，還原前會檢查）", "應用的資料卷", "應用密鑰（Podman secrets）與設定檔", "Quadlet 服務定義",
+        ["PostgreSQL 資料庫（以 pg_dump 匯出，還原前會檢查）", "應用的資料卷", "應用機密（Podman secrets）與設定檔", "Quadlet 服務定義",
           "容器映像（僅在勾選時）"].map(item => h("li", { text: item }))),
       h("p", { class: "muted", text: status.key ? `使用這台設備的金鑰（${str(status.key.key_id)}）加密，完成後會完整驗證才列出。` : "使用這台設備的金鑰加密，完成後會完整驗證才列出。" }),
       h("p", { class: "muted", text: `保存位置：這台設備的 ${str(status.storage.path) || "備份目錄"}。備份與原資料在同一顆磁碟上，請另外下載保存到其他位置。` })));
@@ -1287,11 +1379,15 @@
   // ------------------------------------------------------------------ restore wizard
 
   function newWizard(source, backupId = null) {
+    // A result page can open the wizard with options (review CR-16: restore without a safety backup).
+    const pending = state.pendingWizard && state.pendingWizard.backupId === backupId ? state.pendingWizard : null;
+    state.pendingWizard = null;
     return {
       source, backupId, file: null, fileError: null, upload: null, backup: null,
       step: source === "upload" ? "file" : "inspect", keyNeeded: false, keyId: null, keyText: "", key: null,
       keySaved: false, saveKey: false, keyError: null, inspect: null, inspectError: null, selected: new Set(),
-      confirmed: false, requestId: null, signature: "", busy: false, error: null, jobId: null, notice: null
+      confirmed: false, requestId: null, signature: "", busy: false, error: null, jobId: null, notice: null,
+      allowNoSafety: Boolean(pending?.allowNoSafety), confirmedNoSafety: false, preselect: pending ? list(pending.apps) : null
     };
   }
 
@@ -1318,7 +1414,11 @@
     if (arg && !BACKUP_ID_RE.test(arg)) return [backLink("返回備份列表", ["backups"]), viewTitle("還原備份"), notFound("找不到這份備份", "網址中的備份 ID 格式不正確。")];
     let wizard = state.wizard;
     if (arg) {
-      if (!wizard || wizard.source !== "local" || wizard.backupId !== arg || wizard.jobId) {
+      // Never drop a running upload for another restore: it kept streaming with no page to see or cancel it
+      // and lost its leave-page guard (review finding F7).
+      if (activeUpload()) return uploadBusyView();
+      const pending = state.pendingWizard?.backupId === arg;  // options from a result page start a new wizard
+      if (pending || !wizard || wizard.source !== "local" || wizard.backupId !== arg || wizard.jobId) {
         wizard = state.wizard = newWizard("local", arg);
         queueMicrotask(() => runInspect(wizard));
       }
@@ -1334,12 +1434,18 @@
     const body = {
       file: stepFile, upload: stepUpload, inspect: stepInspect, key: stepKey, preflight: stepPreflight, confirm: stepConfirm
     }[wizard.step]?.(wizard) || [];
+    const sourceSafety = (known?.type || wizard.inspect?.manifest?.type) === "safety";
     const side = h("aside", { class: "card side-card", "aria-labelledby": "restore-side" },
       h("h3", { id: "restore-side", text: "還原如何保護你的資料" }),
       h("ul", { class: "bullet-list" }, [
         "完整驗證備份檔（解密、逐項核對大小與 SHA-256）之前，不會變更任何資料。",
         "只會寫入這台設備已設定的應用；備份檔中其他內容會被忽略並列出。",
-        "原位還原前一定會先建立並驗證「還原前自動備份」；還原失敗時自動回復。",
+        // Review F1: restoring a pre-restore backup may proceed without a new one; say so instead of "一定會".
+        sourceSafety
+          ? "還原這份還原前備份時，會先嘗試再建立一份還原前備份；若應用目前無法運作而無法建立，仍會直接還原，且還原失敗時無法自動回復。"
+          : wizard.allowNoSafety
+            ? "你已選擇在無法建立還原前備份時直接還原：這時還原失敗將無法自動回復。"
+            : "原位還原前會先建立並驗證「還原前自動備份」；建立失敗時不會變更任何資料，還原失敗時自動回復。",
         "還原後會做健康檢查，並比對備份時與還原後的業務資料。"
       ].map(item => h("li", { text: item }))));
     return [
@@ -1351,6 +1457,14 @@
 
   function wizardError(wizard) {
     return wizard.error ? errorNotice(wizard.error) : null;
+  }
+
+  function uploadBusyView() {
+    return [backLink("返回備份列表", ["backups"]), viewTitle("還原備份"),
+      h("section", { class: "card" }, emptyState("tray-arrow-up", "目前有上傳進行中",
+        "請先等上傳完成，或取消上傳，再還原其他備份。", [
+          link("查看上傳", ["restore"], { class: "button primary", dataset: { focus: "upload-busy-view" } }),
+          button("取消上傳", () => cancelUpload(state.wizard), { focus: "upload-busy-cancel" })]))];
   }
 
   function stepFile(wizard) {
@@ -1401,18 +1515,22 @@
 
   function stepUpload(wizard) {
     const upload = wizard.upload || {};
+    const unconfirmed = upload.phase === "unconfirmed";
     const nodes = [
       h("h3", { class: "step-title", text: "上傳備份檔" }),
       metadata([["檔名", wizard.file?.name || "—"], ["大小", bytes(wizard.file?.size)]]),
+      unconfirmed ? infoNotice("檢查上傳檔案的時間比預期久，結果尚未確認。檔案仍保留在這台設備上；請稍候再按「重新確認」。", "warn", "timer-sand",
+        h("div", { class: "button-group" },
+          button(wizard.busy ? "正在確認…" : "重新確認", () => recheckUpload(wizard), { small: true, primary: true, disabled: wizard.busy, focus: "upload-recheck" }))) : null,
       h("div", { class: "progress-block" },
         h("p", { id: "upload-progress-label", class: "progress-label" },
           h("span", { id: "upload-percent", class: "progress-percent" }), h("span", { id: "upload-message", class: "progress-message" })),
         h("progress", { id: "upload-progress", max: 100, value: 0, "aria-labelledby": "upload-progress-label" }),
         h("p", { id: "upload-bytes", class: "muted" })),
       h("div", { class: "form-footer button-group" },
-        button("取消上傳", () => cancelUpload(wizard), {
+        button(unconfirmed ? "放棄這次上傳" : "取消上傳", () => cancelUpload(wizard), {
           icon: "stop-circle-outline", focus: "upload-cancel",
-          disabled: upload.cancelled || ["finishing", "done"].includes(upload.phase)
+          disabled: upload.cancelled || ["finishing", "done"].includes(upload.phase) || wizard.busy
         }))
     ];
     queueMicrotask(() => updateUploadUi(wizard));
@@ -1427,7 +1545,8 @@
     progress.value = percent;
     text($("upload-percent"), `${percent}%`);
     text($("upload-message"), {
-      begin: "正在準備上傳…", sending: "上傳中", finishing: "正在檢查檔案完整性…", done: "上傳完成", cancelling: "正在取消上傳…"
+      begin: "正在準備上傳…", sending: "上傳中", finishing: "正在檢查檔案完整性…", done: "上傳完成", cancelling: "正在取消上傳…",
+      unconfirmed: "結果尚未確認"
     }[upload.phase] || "");
     text($("upload-bytes"), `已上傳 ${bytes(upload.acked)} / ${bytes(upload.size)}`);
     const cancel = document.querySelector('[data-focus="upload-cancel"]');
@@ -1468,20 +1587,60 @@
       if (upload.cancelled) return;
       upload.phase = "finishing";
       updateUploadUi(wizard);
-      const finished = await call("upload-finish", { upload_id: upload.id });
-      requireShape(validBackup(finished.backup), "備份資訊");
-      upload.phase = "done";
-      wizard.backup = finished.backup;
-      wizard.backupId = finished.backup.id;
-      upsertBackup(finished.backup);
-      if (!state.backups) loadBackups();
-      wizard.busy = false;
-      announce("上傳完成，正在檢查備份內容。");
-      await runInspect(wizard);
+      await finishUpload(wizard, upload);
     } catch (error) {
-      if (upload.cancelled || state.wizard !== wizard) return;
+      if (upload.cancelled) return;
+      if (error.code === "timeout" && upload.phase === "finishing") {
+        // The helper may still be hashing a large file: never discard an upload whose result is unknown
+        // (review finding F6). The user can confirm again later.
+        upload.phase = "unconfirmed";
+        wizard.busy = false;
+        if (state.wizard === wizard) render();
+        return;
+      }
+      // Always remove a failed upload, also when another view replaced this wizard (review finding F7).
       if (upload.id && upload.phase !== "done") call("upload-abort", { upload_id: upload.id }).catch(() => {});
+      if (state.wizard !== wizard) return;
       Object.assign(wizard, { busy: false, error, step: "file", upload: null });
+      render();
+    }
+  }
+
+  async function finishUpload(wizard, upload) {
+    const finished = await call("upload-finish", { upload_id: upload.id }, { timeout: finishTimeout(upload.size) });
+    requireShape(validBackup(finished.backup), "備份資訊");
+    upload.phase = "done";
+    wizard.backup = finished.backup;
+    wizard.backupId = finished.backup.id;
+    upsertBackup(finished.backup);
+    if (!state.backups) loadBackups();
+    wizard.busy = false;
+    if (state.wizard !== wizard) return;
+    announce("上傳完成，正在檢查備份內容。");
+    await runInspect(wizard);
+  }
+
+  async function recheckUpload(wizard) {
+    const upload = wizard.upload;
+    if (!upload || upload.phase !== "unconfirmed" || wizard.busy) return;
+    wizard.busy = true;
+    upload.phase = "finishing";
+    render();
+    try {
+      await finishUpload(wizard, upload);
+    } catch (error) {
+      if (state.wizard !== wizard) return;
+      if (error.code === "timeout") {
+        upload.phase = "unconfirmed";
+        wizard.busy = false;
+      } else {
+        const missing = error.code === "not-found";
+        if (missing) loadBackups();
+        Object.assign(wizard, {
+          busy: false, step: "file", upload: null,
+          error: missing ? new HelperError("找不到這次上傳。若檔案已檢查完成，它會出現在「備份列表」（類型：上傳）；否則請重新上傳。", { code: "not-found" }) : error
+        });
+      }
       render();
     }
   }
@@ -1575,13 +1734,13 @@
       noteFailure(transport);
       return transport;
     }
-    if (problem === "not-found") return new HelperError("找不到上傳目的地，上傳工作可能已逾時或被清除，請重新上傳。", { code: "upload-missing" });
+    if (problem === "not-found") return new HelperError("找不到上傳目的地，這次上傳可能已逾時或被清除，請重新上傳。", { code: "upload-missing" });
     const detail = isString(closed.message) && closed.message ? `：${closed.message.slice(0, 200)}` : "";
     return new HelperError(`上傳失敗（${problem}）${detail}。請確認可用空間後重試。`, { code: "upload-failed" });
   }
 
   async function cancelUpload(wizard) {
-    const upload = wizard.upload;
+    const upload = wizard?.upload;
     if (!upload || upload.cancelled || ["finishing", "done"].includes(upload.phase)) return;
     upload.cancelled = true;
     upload.phase = "cancelling";
@@ -1598,7 +1757,7 @@
     });
     announce(wizard.notice);
     render();
-    $("restore-file")?.focus();
+    document.querySelector('[data-focus="restore-file-button"]')?.focus();  // not the hidden file input (F10)
   }
 
   function stepInspect(wizard) {
@@ -1611,7 +1770,7 @@
         errorNotice(error),
         h("div", { class: "form-footer button-group" },
           wizard.source === "upload" ? button("重新選擇檔案", () => { state.wizard = newWizard("upload"); render(); }, { focus: "inspect-new-file" }) : null,
-          unreadable && backup ? button("刪除這份備份檔", () => deleteBackup(backup), { danger: true, icon: "delete-outline", focus: "inspect-delete" }) : null,
+          unreadable && backup ? button("刪除這份備份檔", () => deleteBackup(backup), { danger: true, icon: "delete-outline", focus: "inspect-delete", disabled: Boolean(activeJob()) }) : null,
           button("重新檢查", () => runInspect(wizard), { primary: true, focus: "inspect-retry", disabled: wizard.busy }))
       ];
     }
@@ -1625,33 +1784,35 @@
     if (!key) wizard.step = "inspect";
     render();
     try {
+      // The key alone, never `save_key`: only a key that just opened this backup is saved (review finding F4).
       const request = { backup_id: wizard.backupId };
-      if (key) {
-        request.key = key;
-        if (saveKey) request.save_key = true;
-      }
+      if (key) request.key = key;
       const data = await call("inspect", request);
       requireShape(validBackup(data.backup) && isObject(data.manifest) && isObject(data.preflight) &&
         Array.isArray(data.preflight.apps) && Array.isArray(data.preflight.checks), "備份內容");
       if (state.wizard !== wizard) return;
       upsertBackup(data.backup);
+      const restorable = data.preflight.apps.filter(app => isObject(app) && app.restorable === true).map(app => app.id);
+      const preferred = wizard.preselect ? restorable.filter(id => wizard.preselect.includes(id)) : [];
       Object.assign(wizard, {
-        inspect: data, backup: data.backup, step: "preflight", confirmed: false, keyText: "",
-        selected: new Set(data.preflight.apps.filter(app => isObject(app) && app.restorable === true).map(app => app.id))
+        inspect: data, backup: data.backup, step: "preflight", confirmed: false, confirmedNoSafety: false, keyText: "",
+        selected: new Set(preferred.length ? preferred : restorable)
       });
-      if (key && saveKey) {
-        wizard.key = null;
-        wizard.keySaved = true;
-        loadStatus({ quiet: true });
-      } else if (key) wizard.key = key;
+      if (key) {
+        wizard.key = key;
+        if (saveKey) await saveVerifiedKey(wizard, key);
+      }
       announce("備份內容與相容性檢查完成。");
     } catch (error) {
       if (state.wizard !== wizard) return;
-      if (error.code === "key-required") {
+      if (key && ["key-required", "wrong-key"].includes(error.code)) {
+        wizard.step = "key";
+        wizard.keyError = WRONG_KEY;
+      } else if (error.code === "key-required") {
         wizard.keyNeeded = true;
         wizard.keyId = isString(error.details.key_id) ? error.details.key_id : wizard.backup?.key_id || null;
         wizard.step = "key";
-      } else if (key && ["wrong-key", "invalid-request"].includes(error.code)) {
+      } else if (key && error.code === "invalid-request") {
         wizard.step = "key";
         wizard.keyError = error.message;
       } else {
@@ -1662,9 +1823,23 @@
       if (state.wizard === wizard) {
         wizard.busy = false;
         render();
-        const target = { key: "key-text", preflight: "view-heading" }[wizard.step];
-        if (target === "key-text") $("key-text")?.focus();
+        // Keyboard users land on the new step, never on <body> (review finding F10).
+        if (wizard.step === "key") $("key-text")?.focus();
+        else if (wizard.step === "preflight") $("view-heading")?.focus({ preventScroll: true });
       }
+    }
+  }
+
+  async function saveVerifiedKey(wizard, key) {
+    try {
+      const data = await call("key-import", { key });
+      requireShape(isObject(data.key) && isString(data.key.key_id), "金鑰資訊");
+      wizard.key = null;
+      wizard.keySaved = true;
+      loadStatus({ quiet: true });
+      if (state.backups) loadBackups();
+    } catch (error) {
+      wizard.notice = `這把金鑰可以解開這份備份，但保存到這台設備失敗（${error.message}）；這次還原仍會使用你輸入的金鑰。`;
     }
   }
 
@@ -1701,7 +1876,7 @@
           on: { change: event => { wizard.saveKey = event.target.checked; } }
         }),
         h("span", { class: "choice-body" }, h("strong", { text: "保存此金鑰到這台設備" }),
-          h("small", { text: "日後還原以同一把金鑰加密的備份時不必再次輸入。不保存時，金鑰只用於這次還原。" }))),
+          h("small", { text: "確認金鑰可以解開這份備份後才會保存；日後還原以同一把金鑰加密的備份時不必再次輸入。不保存時，金鑰只用於這次還原。" }))),
       wizard.keyError ? h("div", { class: "notice notice-error", role: "alert" }, icon("alert-circle-outline"), h("p", { text: wizard.keyError })) : null,
       h("div", { class: "form-footer button-group" },
         button("取消", () => { state.wizard = null; go(wizard.source === "upload" ? ["overview"] : ["backups"]); }, { focus: "key-cancel" }),
@@ -1728,6 +1903,7 @@
     const restorable = apps.filter(app => app.restorable === true);
     const manifestApps = new Map(list(manifest.apps).filter(isObject).map(app => [app.id, app]));
     const canContinue = !globalFail && wizard.selected.size > 0;
+    const verifiedFailed = isObject(wizard.backup?.verified) && wizard.backup.verified.ok === false;
     const cards = apps.map(app => {
       const content = manifestApps.get(app.id);
       const enabled = app.restorable === true;
@@ -1743,15 +1919,18 @@
           h("span", { id: `pf-mode-${app.id}`, class: "chips" },
             chip(MODES[app.mode] || str(app.mode), app.mode === "inplace" ? "warn" : "info"),
             enabled ? chip("可還原", "ok", "check-circle-outline") : chip("無法還原", "fail", "close-circle-outline"))),
-        h("p", { class: "muted", text: app.mode === "inplace"
+        // Only for apps that can be restored: a blocked app's checks say why (review finding F13).
+        enabled ? h("p", { class: "muted", text: app.mode === "inplace"
           ? "這台設備已部署此應用：會覆寫目前的資料，還原前會先自動建立還原前備份。"
-          : "這台設備尚未部署此應用：會依這台設備的受信任設定全新建立服務、資料卷與資料庫。" }),
+          : "這台設備尚未部署此應用：會依這台設備的受信任設定全新建立服務、資料卷與資料庫。" }) : null,
         checkList(app.checks, `${str(app.name || app.id)} 的檢查結果`),
-        content ? h("details", { class: "app-details" }, h("summary", { dataset: { focus: `pf-details-${app.id}` }, text: "備份內容" }), appContents(content)) : null);
+        content ? disclosure(`pf-details-${app.id}`, "備份內容", appContents(content)) : null);
     });
     return [
       h("h3", { class: "step-title", text: "預檢結果" }),
       h("p", { class: "muted", text: "以下檢查不會變更任何資料。選擇要還原的應用；未通過檢查的應用無法選擇。" }),
+      wizard.notice ? infoNotice(wizard.notice, "warn", "alert-outline") : null,
+      verifiedFailed ? infoNotice(VERIFY_FAILED, "warn", "alert-outline") : null,
       h("div", { class: "preflight-summary" }, metadata([
         ["備份", `${backupTitle(wizard.backup || { type: manifest.type, created: manifest.created })}`],
         ["備份 ID", str(manifest.backup_id), "mono"],
@@ -1779,9 +1958,32 @@
     const apps = list(preflight.apps).filter(app => isObject(app) && wizard.selected.has(app.id));
     const inplace = apps.filter(app => app.mode === "inplace");
     const fresh = apps.filter(app => app.mode !== "inplace");
+    const names = items => items.map(app => str(app.name || app.id)).join("、");
+    const sourceSafety = (wizard.backup?.type || manifest.type) === "safety";
+    const noSafety = wizard.allowNoSafety && inplace.length > 0;
     const active = activeJob();
     const downtime = manifest.consistency?.downtime_seconds;
-    const canStart = wizard.confirmed && apps.length > 0 && !wizard.busy && !active;
+    const verifiedFailed = isObject(wizard.backup?.verified) && wizard.backup.verified.ok === false;
+    // Warnings shown on 預檢 are repeated here, where the decision is made (review finding F13).
+    const warnings = [...list(preflight.checks), ...apps.flatMap(app => list(app.checks))]
+      .filter(check => isObject(check) && check.status === "warn");
+    const canStart = wizard.confirmed && (!noSafety || wizard.confirmedNoSafety) && apps.length > 0 && !wizard.busy && !active;
+    // Review F1: restoring a pre-restore backup (or an explicit "without safety backup" restore) may proceed
+    // without a new safety backup, so the page must not promise one.
+    let safetyText = null;
+    if (inplace.length && sourceSafety) {
+      safetyText = `你正在還原一份還原前備份。系統會先嘗試為 ${names(inplace)} 再建立一份還原前備份；若應用目前無法運作而無法建立，仍會直接還原，且還原失敗時無法自動回復。`;
+    } else if (noSafety) {
+      safetyText = `系統會先嘗試為 ${names(inplace)} 建立還原前備份；若無法建立，會依你的選擇直接還原，這時還原失敗將無法自動回復，資料可能只還原一部分。`;
+    } else if (inplace.length) {
+      safetyText = `開始還原前，系統會先為 ${names(inplace)} 建立並完整驗證「還原前自動備份」；建立失敗時不會變更任何資料。還原失敗時，會自動用它回復到還原前的狀態。每個應用保留最近 3 份還原前備份。`;
+    }
+    const checkboxText = !inplace.length ? `我了解還原會在這台設備全新部署上列 ${apps.length} 個應用`
+      : !fresh.length ? `我了解還原會停止並覆寫上列 ${apps.length} 個應用的資料`
+        : `我了解還原會停止並覆寫 ${inplace.length} 個應用的資料，並全新部署 ${fresh.length} 個應用`;
+    const checkboxHint = inplace.length && (sourceSafety || noSafety)
+      ? "已確認受影響的應用與停機時間；若無法建立新的還原前備份，仍會直接還原，且還原失敗時無法自動回復。"
+      : "已確認受影響的應用、停機時間，以及還原前備份與自動回復的方式。";
     return [
       h("h3", { class: "step-title", text: "確認還原" }),
       h("p", { class: "muted", text: "請確認以下影響。按下「開始還原」後，作業會在背景執行，關閉瀏覽器也會繼續。" }),
@@ -1789,31 +1991,42 @@
       h("ul", { class: "card item-list affected" }, apps.map(app => h("li", { class: "item-row" }, tile("package-variant-closed", true),
         h("div", { class: "item-main" }, h("strong", { class: "item-title", text: str(app.name || app.id) }),
           h("span", { class: "secondary", text: app.mode === "inplace"
-            ? "原位還原：會停止服務，並以備份內容覆寫資料庫、資料卷、密鑰與設定檔。"
+            ? "原位還原：會停止服務，並以備份內容覆寫資料庫、資料卷、應用機密與設定檔。"
             : "全新部署：會在這台設備建立服務、資料卷與資料庫。" })),
         h("div", { class: "item-side" }, chip(MODES[app.mode] || str(app.mode), app.mode === "inplace" ? "warn" : "info"))))),
       h("h4", { class: "subheading", text: "停機時間" }),
       h("p", { text: `還原期間，上列應用會停止服務，直到資料還原、啟動與健康檢查完成。這份備份內容約 ${bytes(manifest.total_size)}；備份當時暫停寫入約 ${duration(downtime)}，還原通常需要更久。` }),
       h("h4", { class: "subheading", text: "還原前備份與自動回復" }),
-      inplace.length
-        ? h("p", { text: `開始還原前，系統會先為 ${inplace.map(app => str(app.name || app.id)).join("、")} 建立並完整驗證「還原前自動備份」；建立失敗時不會變更任何資料。還原失敗時，會自動用它回復到還原前的狀態。每個應用保留最近 3 份還原前備份。` })
-        : null,
+      safetyText ? h("p", { text: safetyText }) : null,
       fresh.length
-        ? h("p", { text: `${fresh.map(app => str(app.name || app.id)).join("、")} 是全新部署；若還原失敗，系統會移除這次新建立的服務、資料卷與資料庫。` })
+        ? h("p", { text: `${names(fresh)} 是全新部署；若還原失敗，系統會移除這次新建立的服務、資料卷與資料庫。` })
         : null,
+      warnings.length ? [h("h4", { class: "subheading", text: "注意事項" }), checkList(warnings, "注意事項")] : null,
+      verifiedFailed ? infoNotice(VERIFY_FAILED, "warn", "alert-outline") : null,
       wizard.key && !wizard.keySaved ? h("p", { class: "muted", text: "你輸入的緊急金鑰只會交給這次還原作業使用，作業結束後即刪除，不會保存在這台設備。" }) : null,
       active ? infoNotice(`目前有${JOB_TYPES[active.type]}作業正在進行，需等它完成後才能開始還原。`, "info", "progress-clock",
         link("查看進度", ["jobs", active.id], { class: "button small", dataset: { focus: "confirm-active-job" } })) : null,
+      noSafety ? h("label", { class: "choice confirm-choice" },
+        h("input", {
+          type: "checkbox", id: "confirm-no-safety", checked: wizard.confirmedNoSafety, disabled: wizard.busy, dataset: { focus: "confirm-no-safety" },
+          on: { change: event => { wizard.confirmedNoSafety = event.target.checked; render(); } }
+        }),
+        h("span", { class: "choice-body" }, h("strong", { text: "我了解這次還原可能沒有還原前備份，失敗時無法自動回復" }),
+          h("small", { text: "只有在應用已無法運作（例如資料庫無法啟動）、又沒有可用的還原前備份時才這樣做。" }))) : null,
       h("label", { class: "choice confirm-choice" },
         h("input", {
           type: "checkbox", id: "confirm-restore", checked: wizard.confirmed, disabled: wizard.busy, dataset: { focus: "confirm-restore" },
           on: { change: event => { wizard.confirmed = event.target.checked; render(); } }
         }),
-        h("span", { class: "choice-body" }, h("strong", { text: `我了解還原會停止並覆寫上列 ${apps.length} 個應用的資料` }),
-          h("small", { text: "已確認受影響的應用、停機時間，以及還原前備份與自動回復的方式。" }))),
+        h("span", { class: "choice-body" }, h("strong", { text: checkboxText }), h("small", { text: checkboxHint }))),
       wizardError(wizard),
       h("div", { class: "form-footer button-group" },
-        button("上一步", () => { wizard.step = "preflight"; wizard.confirmed = false; render(); }, { focus: "confirm-back", disabled: wizard.busy }),
+        button("上一步", () => {
+          wizard.step = "preflight";
+          wizard.confirmed = false;
+          render();
+          $("view-heading")?.focus({ preventScroll: true });
+        }, { focus: "confirm-back", disabled: wizard.busy }),
         button(wizard.busy ? "正在開始…" : "開始還原", () => startRestore(wizard), {
           primary: true, icon: "backup-restore", disabled: !canStart, focus: "confirm-start"
         }))
@@ -1822,14 +2035,18 @@
 
   async function startRestore(wizard) {
     if (!wizard.confirmed || wizard.busy || !wizard.selected.size || activeJob()) return;
-    const apps = list(wizard.inspect.preflight.apps).filter(app => isObject(app) && wizard.selected.has(app.id)).map(app => app.id);
-    const signature = JSON.stringify([wizard.backupId, apps, Boolean(wizard.key)]);
+    const selected = list(wizard.inspect.preflight.apps).filter(app => isObject(app) && wizard.selected.has(app.id));
+    const apps = selected.map(app => app.id);
+    const noSafety = wizard.allowNoSafety && selected.some(app => app.mode === "inplace");
+    if (noSafety && !wizard.confirmedNoSafety) return;
+    const signature = JSON.stringify([wizard.backupId, apps, Boolean(wizard.key), noSafety]);
     if (!wizard.requestId || wizard.signature !== signature) {
       wizard.requestId = requestId();
       wizard.signature = signature;
     }
     const request = { backup_id: wizard.backupId, apps, request_id: wizard.requestId, confirm: true };
     if (wizard.key) request.key = wizard.key;
+    if (noSafety) request.allow_no_safety = true;
     wizard.busy = true;
     wizard.error = null;
     render();
@@ -1864,7 +2081,7 @@
     const ui = state.jobUi;
     const nodes = {};
     nodes.stepper = h("div", { class: "job-stepper" });
-    nodes.title = h("h2", { id: "view-heading", tabIndex: -1, text: "作業進度" });
+    nodes.title = h("h2", { id: "view-heading", tabIndex: -1, text: "作業進度", dataset: { focus: "view-heading" } });
     nodes.state = h("span", { class: "job-state" });
     nodes.meta = h("p", { class: "muted job-meta" });
     nodes.error = h("div", { class: "job-error" });
@@ -1892,7 +2109,7 @@
       nodes.result,
       h("section", { class: "card", "aria-labelledby": "job-log-heading" },
         h("div", { class: "card-head" }, h("h3", { id: "job-log-heading", text: "作業紀錄" }),
-          h("span", { class: "muted small-text", text: "最近 200 行；不含金鑰與密鑰內容" })),
+          h("span", { class: "muted small-text", text: "最近 200 行；不含金鑰與應用機密內容" })),
         h("div", { class: "card-body" }, nodes.log)),
       h("section", { class: "card", "aria-labelledby": "job-params-heading" },
         h("div", { class: "card-head" }, h("h3", { id: "job-params-heading", text: "作業內容" })), nodes.params));
@@ -1904,9 +2121,9 @@
     const nodes = ui.nodes;
     const entry = state.jobCache.get(ui.id);
     const job = entry?.job;
-    fill(nodes.error, entry?.error ? errorNotice(entry.error, {
+    setOnly(nodes.error, entry?.error ? stableNotice(`job-${ui.id}`, entry.error, {
       retry: () => fetchJob(ui.id).then(item => { if (ACTIVE.has(item.job.state)) watchJob(ui.id); }, () => {})
-    }) : []);
+    }) : null);
     if (!job) {
       text(nodes.title, "作業進度");
       text(nodes.meta, entry?.error ? "無法取得作業狀態。" : "正在載入作業狀態…");
@@ -1931,7 +2148,7 @@
     text(nodes.cancelHint, active
       ? job.cancellable ? "目前階段可以安全取消，不會變更應用資料。" : "目前階段無法取消；作業會繼續執行到完成，失敗時會自動回復。"
       : "");
-    fill(nodes.cancelError, ui.cancelError ? errorNotice(ui.cancelError) : []);
+    setOnly(nodes.cancelError, ui.cancelError ? stableNotice(`cancel-${ui.id}`, ui.cancelError) : null);
     fill(nodes.result, ...(TERMINAL.has(job.state) ? buildResult(job) : []));
     const log = nodes.log;
     const atBottom = log.scrollTop + log.clientHeight >= log.scrollHeight - 8;
@@ -1974,14 +2191,26 @@
       backupId ? ["備份", link(backupId, ["backups", backupId], { class: "mono", dataset: { focus: "job-param-backup" } })] : null,
       job.type === "backup" ? ["容器映像", params.include_images ? "包含" : "不包含"] : null,
       job.type === "backup" && params.note ? ["備註", str(params.note)] : null,
-      params.key_provided ? ["金鑰", "使用輸入的緊急金鑰（作業結束後即刪除）"] : null
+      params.key_provided ? ["金鑰", "使用輸入的緊急金鑰（作業結束後即刪除）"] : null,
+      params.allow_no_safety ? ["還原前備份", "無法建立時直接還原（你已確認；失敗時無法自動回復）"] : null
     ]);
   }
 
   function buildResult(job) {
     const result = isObject(job.result) ? job.result : null;
     const error = isObject(job.error) ? job.error : null;
+    const params = isObject(job.params) ? job.params : {};
     const safetyId = isString(result?.safety_backup_id) && BACKUP_ID_RE.test(result.safety_backup_id) ? result.safety_backup_id : null;
+    const backupId = isString(params.backup_id) && BACKUP_ID_RE.test(params.backup_id) ? params.backup_id : null;
+    const restore = job.type === "restore";
+    // What really happened comes from the phases (and `changed` from newer engines), never from rolled_back
+    // alone: a failure before any change is not "rollback incomplete" (review findings F2, F3, CR-09).
+    const reached = id => job.phases.some(item => item.id === id && !["pending", "skipped"].includes(item.state));
+    const rollbackPhase = job.phases.some(item => item.id === "rollback");
+    const touched = typeof result?.changed === "boolean" ? result.changed
+      : ["stop", "restore", "start", "check", "rollback"].some(reached);
+    const freshApps = list(result?.fresh_apps).filter(isString);
+    const manualWork = restore && job.state === "failed" && rollbackPhase && result?.rolled_back === false;
     const body = [];
     const actions = [];
     let title = "作業結束";
@@ -2009,50 +2238,79 @@
     }
 
     if (job.type === "backup" && job.state === "succeeded" && result) {
-      const backupId = isString(result.backup_id) && BACKUP_ID_RE.test(result.backup_id) ? result.backup_id : null;
+      const createdId = isString(result.backup_id) && BACKUP_ID_RE.test(result.backup_id) ? result.backup_id : null;
       body.push(h("p", { text: "備份已建立，並以這台設備的金鑰完整解密驗證後才列出。" }), metadata([
-        ["備份", backupId ? link(backupId, ["backups", backupId], { class: "mono", dataset: { focus: "result-backup" } }) : "—"],
+        ["備份", createdId ? link(createdId, ["backups", createdId], { class: "mono", dataset: { focus: "result-backup" } }) : "—"],
         ["大小", bytes(result.size)],
         ["應用寫入暫停", duration(result.downtime_seconds)],
         ["應用", list(result.apps).map(id => appName(str(id))).join("、") || "—"]
       ]));
-      const backup = backupId ? state.backups?.find(item => item.id === backupId) || { id: backupId, type: "manual", created: job.finished } : null;
+      const backup = createdId ? state.backups?.find(item => item.id === createdId) || { id: createdId, type: "manual", created: job.finished } : null;
       if (backup) {
         actions.push(button("下載備份", () => downloadBackup(backup), { primary: true, icon: "tray-arrow-down", focus: "result-download" }),
-          link("查看備份", ["backups", backupId], { class: "button", dataset: { focus: "result-open" } }));
+          link("查看備份", ["backups", createdId], { class: "button", dataset: { focus: "result-open" } }));
       }
     } else if (job.type === "verify" && job.state === "succeeded" && result) {
       body.push(h("p", { text: result.ok
         ? "備份檔已完整解密，每個項目的大小與 SHA-256 都與目錄一致。"
         : "驗證未通過：備份檔內容與目錄不一致，請勿使用這份備份還原。" }), metadata([
         ["項目數", str(result.entries)], ["資料量", bytes(result.bytes)]]));
-    } else if (job.type === "restore" && job.state === "succeeded") {
+    } else if (restore && job.state === "succeeded") {
       body.push(h("p", { text: "所選應用已還原並啟動，健康檢查與資料核對結果如下。" }));
+      if (result?.safety_skipped) {
+        body.push(infoNotice("這次還原沒有建立還原前備份（無法建立，而你還原的是還原前備份，或已選擇直接還原）。", "warn", "alert-outline"));
+      }
     }
 
     if (job.state === "rolled-back") {
-      body.push(h("p", { text: "還原過程發生錯誤。系統已使用還原前自動備份，把應用回復到還原前的狀態（全新部署的項目已移除）。" }));
+      body.push(h("p", { text: "還原過程發生錯誤。系統已使用還原前備份，把應用回復到還原前的狀態（全新部署的項目已移除）。不需要再做其他處理。" }));
     }
     if (error && job.state !== "succeeded") body.push(h("div", { class: "notice notice-error" }, icon("alert-circle-outline"), h("p", { text: str(error.message) })));
+    if (restore && job.state === "failed") {
+      if (manualWork) {
+        body.push(h("p", { class: "muted", text: safetyId
+          ? "自動回復未完成，需要人工處理。可以使用上列還原前備份再次還原。"
+          : "自動回復未完成，需要人工處理；請聯絡系統管理員檢查應用。" }));
+      } else if (!touched) {
+        body.push(h("p", { text: safetyId
+          ? "還原在變更任何資料前失敗，應用維持原狀。已建立的還原前備份可保留，或到備份列表刪除。"
+          : "還原在變更任何資料前失敗，應用維持原狀。" }));
+        if (result?.safety_failed && backupId) {
+          // Review CR-16: an app whose database cannot start has no other way back from the page.
+          body.push(h("p", { class: "muted", text: "若應用已無法運作（例如資料庫無法啟動），又沒有可用的還原前備份，可以選擇不建立還原前備份直接還原；這時還原失敗將無法自動回復。" }));
+          actions.push(button("不建立還原前備份，直接還原…", () => {
+            state.pendingWizard = { backupId, apps: list(params.apps).filter(isString), allowNoSafety: true };
+            go(["restore", backupId]);
+          }, { icon: "backup-restore", focus: "result-no-safety" }));
+        }
+      }
+    }
     if (job.state === "interrupted") {
-      body.push(h("h4", { class: "subheading", text: "接下來怎麼做" }), h("ol", { class: "guidance" },
-        h("li", { text: "到「總覽」確認各應用的狀態是否為「執行中」。" }),
-        job.type === "restore"
-          ? h("li", { text: safetyId
-            ? "若應用無法正常運作，請使用下方的還原前備份再次還原，把資料回復到這次還原開始前的狀態。"
-            : "還原在建立還原前備份之前就中斷，應用資料應未被變更；請確認應用狀態後再決定是否重新還原。" })
-          : h("li", { text: job.type === "backup" ? "確認應用已恢復執行後，重新建立備份。中斷的備份不會被列出。" : "重新執行驗證。" }),
-        h("li", { text: "系統不會自動重做中斷的作業；若不確定應用狀態，請先聯絡系統管理員。" })));
+      const steps = [h("li", { text: "到「總覽」確認各應用的狀態是否為「執行中」。" })];
+      if (restore) {
+        steps.push(h("li", { text: safetyId && touched
+          ? "若應用無法正常運作，請使用下方的還原前備份再次還原，把資料回復到這次還原開始前的狀態。"
+          : touched
+            ? "還原在變更資料途中中斷（全新部署或沒有還原前備份），應用可能只完成一部分。請再次還原這份備份，或聯絡系統管理員。"
+            : "還原在變更任何資料前就中斷，應用資料應未被變更；請確認應用狀態後再決定是否重新還原。" }));
+        if (freshApps.length) {
+          steps.push(h("li", { text: `全新部署（${freshApps.map(appName).join("、")}）沒有完成；系統會清除未完成的部署（結果見上方訊息），之後可以再次還原同一份備份。` }));
+        }
+        if (!safetyId && (touched || freshApps.length) && backupId) {
+          actions.push(button("再次還原這份備份", () => go(["restore", backupId]), { primary: true, icon: "backup-restore", focus: "result-restore-again" }));
+        }
+      } else {
+        steps.push(h("li", { text: job.type === "backup" ? "確認應用已恢復執行後，重新建立備份。中斷的備份不會被列出。" : "重新執行驗證。" }));
+      }
+      steps.push(h("li", { text: "系統不會自動重做中斷的作業；若不確定應用狀態，請先聯絡系統管理員。" }));
+      body.push(h("h4", { class: "subheading", text: "接下來怎麼做" }), h("ol", { class: "guidance" }, steps));
     }
     if (job.state === "cancelled") {
-      body.push(h("p", { text: job.type === "backup" ? "沒有建立備份；應用的寫入服務已恢復。" : job.type === "restore" ? "還原在變更任何資料前已取消。" : "驗證已取消。" }));
+      body.push(h("p", { text: job.type === "backup" ? "沒有建立備份；應用的寫入服務已恢復。" : restore ? "還原在變更任何資料前已取消。" : "驗證已取消。" }));
     }
-    if (job.type === "restore" && result) {
+    if (restore && result) {
       if (safetyId) {
         body.push(metadata([["還原前備份", link(safetyId, ["backups", safetyId], { class: "mono", dataset: { focus: "result-safety" } })]]));
-      }
-      if (job.state === "failed" && result.rolled_back === false && safetyId) {
-        body.push(h("p", { class: "muted", text: "自動回復未完成，需要人工處理。可以使用上列還原前備份再次還原。" }));
       }
       const health = list(result.health).filter(isObject);
       if (health.length) body.push(h("h4", { class: "subheading", text: "健康檢查" }), checkList(health, "健康檢查結果"));
@@ -2060,12 +2318,17 @@
       if (verification.length) body.push(h("h4", { class: "subheading", text: "資料核對（備份時與還原後）" }), verificationTable(verification));
       else if (job.state === "succeeded") body.push(h("p", { class: "muted", text: "這份備份沒有資料核對快照，已略過資料比對。" }));
     }
-    if (safetyId && job.state !== "succeeded") {
-      actions.push(button("使用還原前備份還原", () => go(["restore", safetyId]), { primary: true, icon: "backup-restore", focus: "result-restore-safety" }));
+    // Another destructive restore is offered as the primary step only when recovery is really needed: not after a
+    // successful rollback and not after a failure that changed nothing (review findings F2, F8).
+    if (safetyId && (manualWork || (job.state === "interrupted" && touched))) {
+      actions.unshift(button("使用還原前備份還原", () => go(["restore", safetyId]), { primary: true, icon: "backup-restore", focus: "result-restore-safety" }));
     }
-    if (job.state !== "succeeded") actions.push(link("查看總覽", ["overview"], { class: "button", dataset: { focus: "result-overview" } }));
+    if (job.state !== "succeeded") {
+      const primary = !actions.some(item => item.classList?.contains("primary"));
+      actions.push(link("查看總覽", ["overview"], { class: primary ? "button primary" : "button", dataset: { focus: "result-overview" } }));
+    }
     if (job.state === "interrupted" && job.type === "backup") actions.push(link("重新建立備份", ["create"], { class: "button", dataset: { focus: "result-create" } }));
-    if (job.type === "restore" && job.state === "succeeded") actions.push(link("查看總覽", ["overview"], { class: "button", dataset: { focus: "result-overview" } }));
+    if (restore && job.state === "succeeded") actions.push(link("查看總覽", ["overview"], { class: "button", dataset: { focus: "result-overview" } }));
     return [h("section", { class: `card result result-${tone}`, "aria-labelledby": "result-heading" },
       h("div", { class: "card-head" }, h("div", { class: "result-title" }, tile(glyph, true), h("h3", { id: "result-heading", text: title }))),
       h("div", { class: "card-body" }, body, actions.length ? h("div", { class: "button-group result-actions" }, actions) : null))];
@@ -2156,11 +2419,11 @@
       deviceCard = h("section", { class: "card", "aria-labelledby": "key-setup" },
         h("div", { class: "card-head" }, h("div", { class: "result-title" }, tile("key-outline", true), h("h3", { id: "key-setup", text: "建立加密金鑰" }))),
         h("div", { class: "card-body" },
-          h("p", { text: "這台設備還沒有備份金鑰。建立後，所有備份都會用它加密；系統會顯示一次緊急金鑰，請下載並保存到這台設備以外的地方。" }),
+          h("p", { text: "這台設備還沒有加密金鑰。建立後，所有備份都會用它加密；系統會顯示一次緊急金鑰，請下載並保存到這台設備以外的地方。" }),
           h("ul", { class: "bullet-list" },
             h("li", { text: "金鑰保存在這台設備的受保護目錄，只有管理員可以使用。" }),
             h("li", { text: "在其他設備還原，或這台設備重新安裝後，需要緊急金鑰才能解密備份。" }),
-            h("li", { text: "遺失緊急金鑰且這台設備故障時，任何人（包括 WOOWTECH）都無法還原備份。" })),
+            h("li", { text: "遺失緊急金鑰且這台設備故障時，任何人（包括 woowtech）都無法還原備份。" })),
           keys.error ? errorNotice(keys.error) : null,
           h("div", { class: "button-group" }, button(keys.busy ? "正在建立…" : "建立加密金鑰", createKey, { primary: true, icon: "key-outline", disabled: keys.busy, focus: "key-create" }))));
     } else if (!key.kit_confirmed || keys.kit) {
@@ -2172,7 +2435,7 @@
         h("div", { class: "card-body" }, metadata([["金鑰 ID", str(key.key_id), "mono"], ["建立時間", date(key.created)]]),
           h("p", { class: "muted", text: "緊急金鑰已確認保存。需要另一份時可以重新下載；請像保管密碼一樣保管它。" }),
           keys.error ? errorNotice(keys.error) : null,
-          h("div", { class: "button-group" }, button(keys.busy ? "正在準備…" : "重新下載緊急金鑰", redownloadKit, { icon: "tray-arrow-down", disabled: keys.busy, focus: "kit-redownload" }))));
+          h("div", { class: "button-group" }, button("重新下載緊急金鑰…", redownloadKit, { icon: "tray-arrow-down", disabled: keys.busy, focus: "kit-redownload" }))));
     }
     const imported = status.imported_keys;
     const importedCard = h("section", { class: "card", "aria-labelledby": "imported-keys" },
@@ -2225,7 +2488,7 @@
       body.push(
         h("p", { text: "這是金鑰內容唯一顯示的地方。請下載緊急金鑰檔，或抄寫下方金鑰，保存到密碼管理器、加密隨身碟，或列印後上鎖保管。" }),
         metadata([["金鑰 ID", kit.key_id, "mono"], ["檔名", kit.filename, "mono"]]),
-        h("div", { class: "field" }, h("span", { class: "field-label", id: "kit-secret-label", text: "備份金鑰" }),
+        h("div", { class: "field" }, h("span", { class: "field-label", id: "kit-secret-label", text: "緊急金鑰" }),
           h("code", { id: "kit-secret", class: "secret", "aria-labelledby": "kit-secret-label", text: kit.secret || "（請下載緊急金鑰檔查看）" })),
         h("div", { class: "button-group kit-actions" },
           button("下載緊急金鑰", downloadKit, { primary: true, icon: "tray-arrow-down", focus: "kit-download" }),
@@ -2233,7 +2496,7 @@
         kit.downloaded ? infoNotice(`已下載 ${kit.filename}。請把它移到這台設備以外的安全位置。`, "ok", "check-circle-outline") : null,
         h("ul", { class: "bullet-list warning-list" },
           h("li", { text: "遺失這把金鑰後，以它加密的備份將無法在其他設備還原；任何人都無法替你找回。" }),
-          h("li", { text: "任何同時取得金鑰與備份檔的人，都能讀取備份中的資料庫、檔案與應用密鑰。請勿以電子郵件或聊天訊息傳送。" })),
+          h("li", { text: "任何同時取得金鑰與備份檔的人，都能讀取備份中的資料庫、檔案與應用機密。請勿以電子郵件或聊天訊息傳送。" })),
         h("label", { class: "choice confirm-choice" },
           h("input", {
             type: "checkbox", id: "kit-confirm", checked: keys.confirmChecked, disabled: keys.busy, dataset: { focus: "kit-confirm" },
@@ -2356,22 +2619,27 @@
     }
   }
 
-  async function redownloadKit() {
+  // Coordinator decision: the kit can be downloaded again after confirmation (like Home Assistant), but only
+  // through a dialog that explains its sensitivity; the secret is never put into the page (review F11).
+  function redownloadKit() {
     const keys = state.keys;
     if (keys.busy) return;
-    keys.busy = true;
-    keys.error = null;
-    render();
-    try {
-      const kit = await fetchKit();
-      saveText(kit.filename, kit.content);
-      announce(`已下載緊急金鑰 ${kit.filename}。`);
-    } catch (error) {
-      keys.error = error;
-    } finally {
-      keys.busy = false;
-      render();
-    }
+    confirmDialog({
+      title: "重新下載緊急金鑰？",
+      body: [
+        h("p", { text: "緊急金鑰檔含有可以解開這台設備所有備份的私密金鑰。任何同時取得它與備份檔的人，都能讀取備份中的資料庫、檔案與應用機密。" }),
+        h("ul", { class: "bullet-list" },
+          h("li", { text: "下載後請直接移到密碼管理器、加密隨身碟等這台設備以外的安全位置。" }),
+          h("li", { text: "不要以電子郵件、聊天訊息或公開雲端分享傳送，也不要和備份檔放在一起。" })),
+        h("p", { class: "muted", text: "金鑰內容不會顯示在頁面上；檔案只在這台電腦的瀏覽器中產生。" })
+      ],
+      confirmLabel: "下載緊急金鑰",
+      action: async () => {
+        const kit = await fetchKit();
+        saveText(kit.filename, kit.content);
+        announce(`已下載緊急金鑰 ${kit.filename}。請把它移到這台設備以外的安全位置。`);
+      }
+    });
   }
 
   async function importKey() {
@@ -2409,8 +2677,8 @@
   function viewActivity() {
     const head = viewTitle("活動紀錄", "最近 50 筆備份、還原與驗證作業。作業在背景執行，可隨時回來查看。", [
       button("更新紀錄", () => loadJobs(), { icon: "refresh", focus: "activity-refresh", disabled: state.loading.has("jobs") })]);
-    if (!state.jobs) return [head, pendingCard("jobs", "正在載入作業紀錄…")];
-    if (!state.jobs.length) return [head, h("section", { class: "card" }, emptyState("clipboard-text-outline", "尚無作業紀錄", "建立備份或還原後，作業會顯示在這裡。"))];
+    if (!state.jobs) return [head, pendingCard("jobs", "正在載入活動紀錄…")];
+    if (!state.jobs.length) return [head, h("section", { class: "card" }, emptyState("clipboard-text-outline", "尚無活動紀錄", "建立備份或還原後，作業會顯示在這裡。"))];
     const rows = state.jobs.map(job => {
       const params = isObject(job.params) ? job.params : {};
       const summary = [
@@ -2427,7 +2695,7 @@
         h("td", { "data-label": "結果", text: isObject(job.error) ? str(job.error.message) : ACTIVE.has(job.state) ? `${clamp(Number(job.progress?.percent) || 0, 0, 100)}% · ${str(job.progress?.message)}` : JOB_STATES[job.state] || "" }));
     });
     return [head, h("section", { class: "card list-card" }, h("table", { class: "data jobs-table" },
-      h("caption", { class: "sr-only", text: "作業紀錄" }),
+      h("caption", { class: "sr-only", text: "活動紀錄" }),
       h("thead", null, h("tr", null, ["時間", "作業", "狀態", "內容", "結果"].map(label => h("th", { scope: "col", text: label })))),
       h("tbody", null, rows)))];
   }
@@ -2559,9 +2827,20 @@
   let confirmState = null;
   let keyDialogState = null;
 
-  function setDialogError(prefix, message) {
-    $(`${prefix}-error`).hidden = !message;
-    text($(`${prefix}-error-message`), message || "");
+  function setDialogError(prefix, error) {
+    const box = $(`${prefix}-error`);
+    const message = isString(error) ? error : str(error?.message);
+    box.hidden = !message;
+    text($(`${prefix}-error-message`), message);
+    box.querySelector(".dialog-error-actions")?.remove();
+    // A busy refusal links to the blocking job, as errorNotice does elsewhere (review finding F12).
+    const jobId = error?.details?.job_id;
+    if (error?.code === "busy" && isString(jobId) && JOB_ID_RE.test(jobId)) {
+      box.append(h("div", { class: "button-group dialog-error-actions" }, link("查看進行中的作業", ["jobs", jobId], {
+        class: "button small", dataset: { focus: "dialog-busy-job" },
+        on: { click: () => { const dialog = box.closest("dialog"); if (dialog?.open) dialog.close(); } }
+      })));
+    }
   }
 
   function confirmDialog({ title, body, confirmLabel = "確認", cancelLabel = "取消", danger = false, action }) {
@@ -2595,7 +2874,7 @@
       current.done = true;
       $("confirm-dialog").close();
     } catch (error) {
-      setDialogError("confirm", error.message || "操作失敗，請重試。");
+      setDialogError("confirm", error?.message ? error : "操作失敗，請重試。");
       text($("confirm-status"), "操作未完成；不會自動重試。");
     } finally {
       current.busy = false;
@@ -2677,6 +2956,15 @@
   }
 
   function wireStaticControls() {
+    // Review F5: track IME composition so a background refresh never rebuilds the field being composed in.
+    document.addEventListener("compositionstart", () => { state.composing = true; }, true);
+    document.addEventListener("compositionend", () => {
+      state.composing = false;
+      setTimeout(() => { if (state.viewStale && !editingInView()) render(); }, 0);
+    }, true);
+    $("view").addEventListener("focusout", () => {
+      setTimeout(() => { if (state.viewStale && !state.composing && !editingInView()) render(); }, 0);
+    });
     $("refresh").addEventListener("click", () => {
       state.pageError = null;
       loadStatus().then(() => ensureData(currentRoute(), true));
@@ -2723,8 +3011,7 @@
       });
     }
     window.addEventListener("beforeunload", event => {
-      const upload = state.wizard?.upload;
-      if (upload && !upload.cancelled && ["begin", "sending", "finishing"].includes(upload.phase)) {
+      if (activeUpload()) {
         event.preventDefault();
         event.returnValue = "";
       }

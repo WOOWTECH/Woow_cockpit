@@ -32,7 +32,7 @@ MAX_KEY_FILE = 4096
 MAX_KEYS_JSON = 256 * 1024
 KEYGEN_TIMEOUT = 30
 
-MSG_BAD_SECRET = '金鑰格式不正確，請貼上以 AGE-SECRET-KEY-1 開頭的完整備份金鑰。'
+MSG_BAD_SECRET = '金鑰格式不正確，請貼上以 AGE-SECRET-KEY-1 開頭的完整緊急金鑰。'
 
 
 @dataclass(frozen=True)
@@ -78,7 +78,7 @@ def normalize_secret(text):
 def _keygen(args, stdin_data=None):
     tool = util.find_tool('age-keygen')
     if tool is None:
-        raise BackupError('internal-error', '系統缺少 age-keygen 工具，無法管理備份金鑰。')
+        raise BackupError('internal-error', '系統缺少 age-keygen 工具，無法管理加密金鑰。')
     try:
         return subprocess.run([tool, *args], input=stdin_data, stdout=subprocess.PIPE,
                               stderr=subprocess.PIPE, env=util.clean_env(), timeout=KEYGEN_TIMEOUT,
@@ -178,7 +178,7 @@ class KeyStore:
             raw = util.read_file_limited(path, MAX_KEY_FILE)
             return normalize_secret(raw.decode('ascii', 'strict'))
         except (OSError, ValueError, BackupError) as exc:
-            raise BackupError('internal-error', '讀取本機備份金鑰失敗，金鑰檔可能已損毀。') from exc
+            raise BackupError('internal-error', '讀取這台設備的加密金鑰失敗，金鑰檔可能已損毀。') from exc
 
     def _scan(self):
         """[(kind, key_id, path, stat)] of plausible key files: regular, not symlinks, ours, 0600."""
@@ -265,7 +265,7 @@ class KeyStore:
                 return current, False
             proc = _keygen([])  # stdout is a pipe: the secret is never on argv/env/a world-readable file
             if proc.returncode != 0:
-                raise BackupError('internal-error', '建立備份金鑰失敗。')
+                raise BackupError('internal-error', '建立加密金鑰失敗。')
             secret = normalize_secret(proc.stdout.decode('ascii', 'replace'))
             recipient = recipient_for_secret(secret)
             key_id = key_id_for(recipient)
@@ -318,42 +318,42 @@ class KeyStore:
     def kit_filename(self):
         info = self.device_key()
         if info is None:
-            raise BackupError('no-device-key', '本設備尚未建立備份金鑰。')
+            raise BackupError('no-device-key', '這台設備尚未建立加密金鑰。')
         return f'woowtech-backup-key-{util.sanitize_hostname(util.hostname())}-{info.key_id}.txt'
 
     def kit_text(self):
         """zh-TW emergency kit text containing key id, secret key and restore instructions."""
         info = self.device_key()
         if info is None:
-            raise BackupError('no-device-key', '本設備尚未建立備份金鑰。')
+            raise BackupError('no-device-key', '這台設備尚未建立加密金鑰。')
         secret = self._read_secret(info.path)
         host = util.hostname()
         return '\n'.join([
-            'WOOWTECH Cockpit 備份緊急金鑰',
+            'woowtech Cockpit 備份緊急金鑰',
             '================================',
             '',
-            '這是還原加密備份檔（.woowbackup）所需的金鑰。請立即把本檔案保存到本設備以外的安全位置，',
+            '這是還原加密備份檔（.woowbackup）所需的金鑰。請立即把這個檔案保存到這台設備以外的安全位置，',
             '例如密碼管理器、加密隨身碟，或列印後上鎖保管。',
             '',
             f'金鑰 ID：{info.key_id}',
             f'建立時間：{info.created}（UTC）',
             f'建立設備：{host}',
             '',
-            '備份金鑰（請完整複製下一行，包含開頭的 AGE-SECRET-KEY-1）：',
+            '緊急金鑰（請完整複製下一行，包含開頭的 AGE-SECRET-KEY-1）：',
             '',
             secret,
             '',
             '如何在另一台設備還原',
             '1. 在目標設備登入 Cockpit，以管理員身分開啟「備份與還原」頁面。',
-            '2. 選擇上傳備份，上傳您下載保存的 .woowbackup 備份檔。',
+            '2. 到「從檔案還原」，上傳你下載保存的 .woowbackup 備份檔。',
             '3. 頁面要求輸入金鑰時，貼上上方以 AGE-SECRET-KEY-1 開頭的整行金鑰。',
             '   若選擇在該設備保存金鑰，日後還原同一金鑰加密的備份時就不必再次輸入。',
             '4. 檢查預檢結果與受影響的應用，確認後開始還原。',
             '',
             '重要警告',
-            '- 遺失這把金鑰後，以它加密的備份將永遠無法還原；任何人（包括 WOOWTECH）都無法替您找回或重設。',
-            '- 本設備故障或重新安裝時，設備上保存的金鑰也會一起消失，屆時只能依靠這份緊急金鑰。',
-            '- 任何同時取得這把金鑰與備份檔的人，都能讀取備份中的資料庫、檔案與應用程式密鑰。',
+            '- 遺失這把金鑰後，以它加密的備份將永遠無法還原；任何人（包括 woowtech）都無法替你找回或重設。',
+            '- 這台設備故障或重新安裝時，設備上保存的金鑰也會一起消失，屆時只能依靠這份緊急金鑰。',
+            '- 任何同時取得這把金鑰與備份檔的人，都能讀取備份中的資料庫、檔案與應用機密。',
             '  請勿以電子郵件、聊天訊息或公開雲端分享傳送，也不要和備份檔存放在同一處。',
             '',
         ])
@@ -365,9 +365,9 @@ class KeyStore:
             infos, meta = self._infos()
             current = self._pick_device(infos, meta)
             if current is None:
-                raise BackupError('no-device-key', '本設備尚未建立備份金鑰。')
+                raise BackupError('no-device-key', '這台設備尚未建立加密金鑰。')
             if current.key_id != key_id:
-                raise BackupError('invalid-request', '金鑰 ID 與本設備目前的備份金鑰不符。', key_id=key_id)
+                raise BackupError('invalid-request', '金鑰 ID 與這台設備目前的加密金鑰不符。', key_id=key_id)
             record = meta['keys'].setdefault(key_id, {})
             record.update({'kind': 'device', 'recipient': current.recipient, 'created': current.created,
                            'kit_confirmed': True, 'kit_confirmed_at': util.iso_utc()})

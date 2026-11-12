@@ -90,7 +90,7 @@ function scripts() {
         addBackup: {
           id: B_NEW, type: 'manual', created: '2026-11-13T02:05:00Z', note: '更新前備份', apps: [{ id: 'woowbk-demo', name: '示範筆記應用' }],
           size: 52 * MiB, sha256: 'e'.repeat(64), key_id: KEY_ID, key_available: true, include_images: true,
-          filename: 'woowtech-backup-dev-a-20261113-0205.woowbackup', source: { hostname: 'dev-a' },
+          filename: 'woowtech-backup-dev-a-20261113-020500.woowbackup', source: { hostname: 'dev-a' },
           verified: { at: '2026-11-13T02:05:29Z', ok: true }, inspected: true,
         },
       },
@@ -139,7 +139,7 @@ function rolledBackScript() {
 const backupMeta = (id, extra = {}) => ({
   id, type: 'manual', created: `${id.slice(0, 4)}-${id.slice(4, 6)}-${id.slice(6, 8)}T${id.slice(9, 11)}:${id.slice(11, 13)}:${id.slice(13, 15)}Z`,
   note: '', apps: [{ id: 'woowbk-demo', name: '示範筆記應用' }], size: 48 * MiB, sha256: 'a'.repeat(64), key_id: KEY_ID,
-  key_available: true, include_images: false, filename: `woowtech-backup-dev-a-${id.slice(0, 8)}-${id.slice(9, 13)}.woowbackup`,
+  key_available: true, include_images: false, filename: `woowtech-backup-dev-a-${id.slice(0, 8)}-${id.slice(9, 15)}.woowbackup`,
   source: { hostname: 'dev-a' }, verified: { at: '2026-11-12T02:01:00Z', ok: true }, inspected: true, ...extra,
 });
 
@@ -191,7 +191,7 @@ function fixture(overrides = {}) {
   const safety = backupMeta(B_SAFETY, { type: 'safety', note: '還原前自動備份（還原來源 20261101T020000Z-11112222）', verified: null });
   const uploaded = backupMeta(B_UPLOADED, {
     type: 'uploaded', note: '', apps: [], key_id: OTHER_KEY_ID, key_available: false, inspected: false, verified: null,
-    source: null, uploaded_at: '2026-11-13T01:02:00Z', filename: 'woowtech-backup-dev-b-20261113-0100.woowbackup',
+    source: null, uploaded_at: '2026-11-13T01:02:00Z', filename: 'woowtech-backup-dev-b-20261113-010000.woowbackup',
   });
   const data = {
     allowed: true, latency: 0, ackMode: 'auto', channelFailure: null, failures: [], hold: [],
@@ -222,7 +222,7 @@ function fixture(overrides = {}) {
     },
     downloads: Object.fromEntries([B_MANUAL, B_SAFETY, B_UPLOADED, B_NEW].map(id => [id, {
       path: `/var/lib/woowtech-backup/archives/${id}.woowbackup`, size: 48 * MiB,
-      filename: id === B_NEW ? 'woowtech-backup-dev-a-20261113-0205.woowbackup' : `woowtech-backup-dev-a-${id.slice(0, 8)}-${id.slice(9, 13)}.woowbackup`,
+      filename: id === B_NEW ? 'woowtech-backup-dev-a-20261113-020500.woowbackup' : `woowtech-backup-dev-a-${id.slice(0, 8)}-${id.slice(9, 15)}.woowbackup`,
     }])),
     scripts: scripts(),
     jobs: {},
@@ -247,7 +247,7 @@ function installCockpitFixture() {
     'key-import': { required: ['key'], optional: [] },
     'backup-start': { required: ['apps', 'request_id'], optional: ['include_images', 'note'] },
     'verify-start': { required: ['backup_id', 'request_id'], optional: ['key'] },
-    'restore-start': { required: ['backup_id', 'apps', 'request_id', 'confirm'], optional: ['key', 'save_key'] },
+    'restore-start': { required: ['backup_id', 'apps', 'request_id', 'confirm'], optional: ['key', 'save_key', 'allow_no_safety'] },
     'job-status': { required: ['job_id'], optional: [] }, 'job-cancel': { required: ['job_id'], optional: [] },
     delete: { required: ['backup_id'], optional: [] }, 'upload-begin': { required: ['filename', 'size'], optional: [] },
     'upload-finish': { required: ['upload_id'], optional: [] }, 'upload-abort': { required: ['upload_id'], optional: [] },
@@ -351,7 +351,8 @@ function installCockpitFixture() {
       case 'restore-start':
         if (request.confirm !== true) throw new Refusal('invalid-request', '欄位 confirm 必須為 true（需要明確確認）。');
         if (!backup(request.backup_id)) throw new Refusal('not-found', '找不到指定的備份。');
-        return startJob('restore', { backup_id: request.backup_id, apps: request.apps, key_provided: 'key' in request && !request.save_key }, request.request_id);
+        return startJob('restore', { backup_id: request.backup_id, apps: request.apps, key_provided: 'key' in request && !request.save_key,
+          ...(request.allow_no_safety ? { allow_no_safety: true } : {}) }, request.request_id);
       case 'job-status': {
         const record = data.jobs[request.job_id];
         if (!record) throw new Refusal('not-found', '找不到指定的作業。');
@@ -670,7 +671,7 @@ async function allWidths(page, label) {
   await page.setViewportSize({ width: 1440, height: 900 });
 }
 
-async function check(name, data, body, { allowHttpErrors = [] } = {}) {
+async function check(name, data, body, { allowHttpErrors = [], beforeGoto = null } = {}) {
   await test(name, async () => {
     const context = await browser.newContext({ viewport: { width: 1440, height: 900 }, acceptDownloads: true, locale: 'zh-TW', timezoneId: 'Asia/Taipei' });
     try {
@@ -691,6 +692,7 @@ async function check(name, data, body, { allowHttpErrors = [] } = {}) {
       page.on('response', response => {
         if (response.status() >= 400 && !allowHttpErrors.some(part => response.url().includes(part))) errors.push(`${response.status()} ${response.url()}`);
       });
+      if (beforeGoto) await beforeGoto(page, context);
       await page.goto(`${base}/cockpit/woowtechbackup/index.html`);
       await body(page, context);
       assert.deepEqual(await page.evaluate(() => window.fixtureErrors), [], 'fixture saw malformed or unexpected helper usage');
@@ -817,12 +819,12 @@ try {
     const before = downloadRequests.length;
     const [download] = await Promise.all([page.waitForEvent('download'), page.locator('[data-focus="result-download"]').click()]);
     assert.deepEqual(requestOf((await calls(page, 'download-info')).at(-1)), { backup_id: B_NEW });
-    assert.equal(download.suggestedFilename(), 'woowtech-backup-dev-a-20261113-0205.woowbackup');
+    assert.equal(download.suggestedFilename(), 'woowtech-backup-dev-a-20261113-020500.woowbackup', 'names carry seconds');
     const request = downloadRequests[before];
     assert.equal(request.token, CSRF, 'the channel URL carries the CSRF token from cockpit.transport');
     assert.deepEqual(request.open, {
       payload: 'fsread1', binary: 'raw', path: `/var/lib/woowtech-backup/archives/${B_NEW}.woowbackup`, superuser: 'require', max_read_size: -1,
-      external: { 'content-disposition': "attachment; filename*=UTF-8''woowtech-backup-dev-a-20261113-0205.woowbackup", 'content-type': 'application/octet-stream' },
+      external: { 'content-disposition': "attachment; filename*=UTF-8''woowtech-backup-dev-a-20261113-020500.woowbackup", 'content-type': 'application/octet-stream' },
     });
     const frame = await page.locator('#downloads iframe').last().getAttribute('src');
     assert(frame.startsWith(`/cockpit/channel/${CSRF}?`), 'prefix is the pathname of transport.uri("channel/" + csrf_token)');
@@ -898,7 +900,7 @@ try {
     assert.equal((await calls(page, 'inspect')).length, 1, 'malformed keys are rejected in the browser');
     await page.locator('#key-text').fill(`金鑰：\n${SECRET.toLowerCase()}\n`);
     await page.locator('[data-focus="key-submit"]').click();
-    await page.getByText('金鑰不正確，無法解密這份備份。').waitFor();
+    await page.getByText('這把金鑰無法解開這份備份（金鑰 ID 不符）').waitFor();  // review F4: a clear wrong-key message
     assert.deepEqual(requestOf((await calls(page, 'inspect')).at(-1)), { backup_id: B_UPLOADED, key: SECRET }, 'only the canonical key line is sent');
     await page.locator('#key-file').setInputFiles({ name: 'woowtech-backup-key-dev-b.txt', mimeType: 'text/plain', buffer: Buffer.from(kitText(OTHER_SECRET, OTHER_KEY_ID, 'dev-b')) });
     await page.waitForFunction(secret => document.querySelector('#key-text')?.value === secret, OTHER_SECRET);
@@ -971,7 +973,10 @@ try {
       const rows = await page.locator('.compare tbody tr').evaluateAll(items => items.map(row => [...row.children].map(cell => cell.textContent.trim())));
       assert.deepEqual(rows.find(row => row[1] === 'summary.notes').slice(2), ['12', '11', '不同']);
       assert.match(rows[0][0], /資料不一致/);
-      await page.locator('[data-focus="result-restore-safety"]').waitFor();
+      // Review F8: after a successful rollback the primary action is not another destructive restore.
+      assert.equal(await page.locator('[data-focus="result-restore-safety"]').count(), 0);
+      assert.match(await page.locator('[data-focus="result-overview"]').getAttribute('class'), /primary/);
+      assert.match(text, /不需要再做其他處理/);
       await shot(page, 'restore-rolled-back-1440.png');
       const restore = requestOf((await calls(page, 'restore-start')).at(-1));
       assert.equal(restore.key, undefined, 'no key is sent when the device holds it');
@@ -1224,6 +1229,13 @@ try {
     await page.locator('[data-focus="key-submit"]').click();
     await page.locator('[data-focus="pf-next"]').waitFor();
     await allWidths(page, 'restore: preflight');
+    // Review F15: the controls that choose what gets overwritten are comfortable targets.
+    for (const [width, minimum] of [[1440, 32], [390, 44]]) {
+      await page.setViewportSize({ width, height: 900 });
+      const heights = await page.locator('.app-select, .app-details summary').evaluateAll(items => items.map(item => item.getBoundingClientRect().height));
+      assert(heights.length && heights.every(height => height >= minimum - 0.5), `targets at ${width}px: ${heights}`);
+    }
+    await page.setViewportSize({ width: 1440, height: 900 });
     await page.setViewportSize({ width: 390, height: 900 });
     await shot(page, 'restore-preflight-390.png');
     await page.setViewportSize({ width: 1440, height: 900 });
@@ -1236,6 +1248,17 @@ try {
     await page.locator('[data-focus="confirm-start"]').click();
     await page.locator('.phase-active').first().waitFor();
     await allWidths(page, 'job running');
+    // Review F15: phase labels never break a word across lines at desktop widths.
+    for (const width of [1440, 1280, 1024]) {
+      await page.setViewportSize({ width, height: 900 });
+      const broken = await page.evaluate(() => [...document.querySelectorAll('.phase-label')].filter(label => {
+        const range = document.createRange();
+        range.selectNodeContents(label);
+        return new Set([...range.getClientRects()].map(rect => Math.round(rect.top))).size > 1;
+      }).map(label => label.textContent));
+      assert.deepEqual(broken, [], `phase labels wrap at ${width}px`);
+    }
+    await page.setViewportSize({ width: 1440, height: 900 });
     await page.locator('#result-heading').waitFor();
     await allWidths(page, 'job result');
     await page.setViewportSize({ width: 390, height: 900 });
@@ -1331,7 +1354,7 @@ try {
   });
 
   await check('a failed download page is reported instead of failing silently', fixture({
-    downloads: { [B_MANUAL]: { path: '/var/lib/woowtech-backup/archives/missing.woowbackup', filename: 'woowtech-backup-dev-a-20261112-0200.woowbackup', size: 1 } },
+    downloads: { [B_MANUAL]: { path: '/var/lib/woowtech-backup/archives/missing.woowbackup', filename: 'woowtech-backup-dev-a-20261112-020000.woowbackup', size: 1 } },
   }), async (page) => {
     await ready(page);
     await page.locator('[data-nav="backups"]').click();
@@ -1339,6 +1362,300 @@ try {
     await page.locator('#action-error').getByText('沒有開始').waitFor();
     assert.match(await page.locator('#action-error').textContent(), /找不到備份檔（fixture）/);
   }, { allowHttpErrors: ['/cockpit/channel/'] });
+
+  // ------------------------------------------------------------------ review findings (F1–F16, CR-05/08/16)
+
+  const terminalJob = (id, extra) => ({
+    job: { id, type: 'restore', created: '2026-11-13T01:40:00Z', started: '2026-11-13T01:40:01Z', finished: '2026-11-13T01:45:00Z',
+      params: { backup_id: B_MANUAL, apps: ['woowbk-demo'], key_provided: false }, cancellable: false,
+      progress: { percent: 40, message: '失敗' }, ...extra },
+    log: ['2026-11-13T01:45:00Z 作業結束'], steps: [],
+  });
+  const J_PRE = 'j20261113T014000Z-0000f2f2';
+  const J_FRESH = 'j20261113T014100Z-0000f3f3';
+  const J_SAFETYFAIL = 'j20261113T014200Z-0000c16c';
+  const outcomes = fixture();
+  outcomes.jobs[J_PRE] = terminalJob(J_PRE, {
+    state: 'failed', phase: 'safety',
+    phases: phasesAt('restore', 'stop').map(item => (item.id === 'stop' ? { ...item, state: 'pending' } : item)),
+    error: { code: 'incompatible', message: '映像載入失敗。' },
+    result: { apps: ['woowbk-demo'], safety_backup_id: B_SAFETY_NEW, health: [], verification: [], rolled_back: false, changed: false,
+      fresh_apps: [], safety_skipped: false, safety_failed: false },
+  });
+  outcomes.jobs[J_FRESH] = terminalJob(J_FRESH, {
+    state: 'interrupted', phase: 'restore',
+    phases: phasesAt('restore', 'restore', { failedAt: 'restore', skipped: ['safety'] }),
+    error: { code: 'job-failed', message: '還原作業意外中斷（例如系統重新開機或程序被終止），應用可能處於不完整狀態。全新部署（woowbk-demo）沒有完成；已清除未完成的全新部署，可再次還原。' },
+    result: { apps: ['woowbk-demo'], safety_backup_id: null, health: [], verification: [], rolled_back: false, changed: true,
+      fresh_apps: ['woowbk-demo'], safety_skipped: false, safety_failed: false },
+  });
+  outcomes.jobs[J_SAFETYFAIL] = terminalJob(J_SAFETYFAIL, {
+    state: 'failed', phase: 'safety', phases: phasesAt('restore', 'safety', { failedAt: 'safety' }),
+    error: { code: 'job-failed', message: '無法建立還原前備份，未做任何變更：資料庫服務 woowbk-demo-db.service 未執行。' },
+    result: { apps: ['woowbk-demo'], safety_backup_id: null, health: [], verification: [], rolled_back: false, changed: false,
+      fresh_apps: [], safety_skipped: false, safety_failed: true },
+  });
+  await check('restore results say what really happened (F2, F3, CR-05, CR-09, CR-16)', outcomes, async (page) => {
+    await ready(page);
+    await page.evaluate(id => { window.location.hash = `#/jobs/${id}`; }, J_PRE);
+    await page.locator('#result-heading').filter({ hasText: '還原失敗' }).waitFor();
+    let text = await view(page).textContent();
+    assert.match(text, /還原在變更任何資料前失敗，應用維持原狀/);
+    assert(!/自動回復未完成/.test(text), 'a failure before any change is not "rollback incomplete"');
+    assert.equal(await page.locator('[data-focus="result-restore-safety"]').count(), 0);
+    assert.match(await page.locator('[data-focus="result-overview"]').getAttribute('class'), /primary/);
+    assert.match(await page.locator('.phase').filter({ hasText: '建立還原前備份' }).textContent(), /完成/);
+
+    await page.evaluate(id => { window.location.hash = `#/jobs/${id}`; }, J_FRESH);
+    await page.locator('#result-heading').filter({ hasText: '作業意外中斷' }).waitFor();
+    text = await view(page).textContent();
+    assert(!/應用資料應未被變更/.test(text), 'never "unchanged" after a destructive phase');
+    assert.match(text, /還原在變更資料途中中斷/);
+    assert.match(text, /全新部署（示範筆記應用）沒有完成/);
+    await page.locator('[data-focus="result-restore-again"]').click();
+    await page.waitForFunction(id => window.location.hash === `#/restore/${id}`, B_MANUAL);
+    await page.locator('[data-focus="pf-next"]').waitFor();
+
+    await page.evaluate(id => { window.location.hash = `#/jobs/${id}`; }, J_SAFETYFAIL);
+    await page.locator('[data-focus="result-no-safety"]').waitFor();
+    assert.match(await view(page).textContent(), /不建立還原前備份直接還原/);
+    await page.locator('[data-focus="result-no-safety"]').click();
+    await page.locator('[data-focus="pf-next"]').click();
+    await page.locator('#confirm-no-safety').waitFor();
+    assert.match(await view(page).textContent(), /無法建立，會依你的選擇直接還原/);
+    await page.locator('#confirm-restore').check();
+    assert.equal(await page.locator('[data-focus="confirm-start"]').isDisabled(), true, 'the no-safety risk needs its own checkbox');
+    await page.locator('#confirm-no-safety').check();
+    await enabled(page, '[data-focus="confirm-start"]');
+    await page.locator('[data-focus="confirm-start"]').click();
+    await page.waitForFunction(() => window.location.hash.startsWith('#/jobs/j2026'));
+    const request = requestOf((await calls(page, 'restore-start')).at(-1));
+    assert.equal(request.allow_no_safety, true);
+    assert.deepEqual(request.apps, ['woowbk-demo']);
+  });
+
+  const safetyFlow = fixture();
+  safetyFlow.backups.find(item => item.id === B_SAFETY).verified = { at: '2026-11-12T03:00:00Z', ok: false };
+  await check('restoring a pre-restore backup never promises a new one; warnings repeat on 確認 (F1, F13)', safetyFlow, async (page) => {
+    await ready(page);
+    await page.evaluate(id => { window.location.hash = `#/restore/${id}`; }, B_SAFETY);
+    await page.locator('[data-focus="pf-next"]').waitFor();
+    assert.match(await page.locator('.side-card').textContent(), /仍會直接還原，且還原失敗時無法自動回復/);
+    assert(!/一定會/.test(await page.locator('.side-card').textContent()));
+    assert.match(await view(page).textContent(), /上次驗證未通過/);
+    assert.equal(await page.locator('.app-preflight.is-blocked').getByText('全新建立服務').count(), 0,
+      'no "will deploy" sentence above a failing app');
+    await page.locator('[data-focus="pf-next"]').click();
+    await page.locator('#confirm-restore').waitFor();
+    const text = await view(page).textContent();
+    assert.match(text, /你正在還原一份還原前備份/);
+    assert(!/建立失敗時不會變更任何資料/.test(text));
+    assert.match(text, /注意事項/);
+    assert.match(text, /UID（1001）/);
+    assert.match(text, /上次驗證未通過/);
+    assert.match(await page.locator('label.confirm-choice small').textContent(), /仍會直接還原/);
+  });
+
+  const freshOnly = fixture();
+  freshOnly.inspect[B_MANUAL] = inspectResult(backupMeta(B_MANUAL), { mode: 'fresh' });
+  await check('the confirmation names what happens for fresh deployments (F13)', freshOnly, async (page) => {
+    await ready(page);
+    await page.evaluate(id => { window.location.hash = `#/restore/${id}`; }, B_MANUAL);
+    await page.locator('[data-focus="pf-next"]').click();
+    await page.locator('#confirm-restore').waitFor();
+    assert.equal(await page.locator('label.confirm-choice strong').textContent(), '我了解還原會在這台設備全新部署上列 1 個應用');
+  });
+
+  await check('a wrong key is reported and never saved; a right key is saved only after it worked (F4)', fixture(), async (page) => {
+    await ready(page);
+    await page.evaluate(id => { window.location.hash = `#/restore/${id}`; }, B_UPLOADED);
+    await page.locator('#key-text').waitFor();
+    await page.locator('#key-text').fill(SECRET);
+    await page.locator('#save-key').check();
+    await page.locator('[data-focus="key-submit"]').click();
+    await page.locator('.notice-error[role="alert"]').getByText('這把金鑰無法解開這份備份').waitFor();
+    assert.deepEqual(requestOf((await calls(page, 'inspect')).at(-1)), { backup_id: B_UPLOADED, key: SECRET }, 'no save_key');
+    assert.equal((await calls(page, 'key-import')).length, 0);
+    await page.locator('#key-text').fill(OTHER_SECRET);
+    await page.locator('[data-focus="key-submit"]').click();
+    await page.locator('[data-focus="pf-next"]').waitFor();
+    assert.deepEqual(requestOf((await calls(page, 'inspect')).at(-1)), { backup_id: B_UPLOADED, key: OTHER_SECRET });
+    assert.deepEqual((await calls(page, 'key-import')).map(requestOf), [{ key: OTHER_SECRET }]);
+    assert.equal(await page.evaluate(() => document.activeElement?.id), 'view-heading', 'focus lands on the new step (F10)');
+    await page.locator('[data-focus="pf-next"]').click();
+    await page.locator('#confirm-restore').check();
+    await page.locator('[data-focus="confirm-back"]').click();
+    await page.locator('[data-focus="pf-next"]').waitFor();
+    assert.equal(await page.evaluate(() => document.activeElement?.id), 'view-heading', '上一步 keeps keyboard focus (F10)');
+    await page.locator('[data-focus="pf-next"]').click();
+    await page.locator('#confirm-restore').check();
+    await page.locator('[data-focus="confirm-start"]').click();
+    await page.waitForFunction(() => window.location.hash.startsWith('#/jobs/'));
+    assert.equal(requestOf((await calls(page, 'restore-start')).at(-1)).key, undefined, 'a saved key is not sent again');
+  });
+
+  await check('background polls keep open sections and never break IME input (F5)', fixture(), async (page) => {
+    await ready(page);
+    await page.evaluate(id => { window.location.hash = `#/restore/${id}`; }, B_MANUAL);
+    await page.locator('[data-focus="pf-details-woowbk-demo"]').click();
+    assert.equal(await page.locator('.app-details').first().evaluate(node => node.open), true);
+    const polls = (await calls(page, 'status')).length;
+    await page.clock.fastForward(31000);
+    await page.waitForFunction(count => window.testcalls.filter(call => call.argv[1] === 'status').length > count, polls);
+    await settled(page);
+    assert.equal(await page.locator('.app-details').first().evaluate(node => node.open), true, 'still open after the poll');
+    assert.equal(await page.locator('.app-details summary').first().evaluate(node => getComputedStyle(node).listStyleType), 'none');
+    assert.equal(await page.locator('.app-details summary svg.summary-icon').count() > 0, true, 'MDI chevron (F16)');
+
+    await page.locator('#go-create').click();
+    await page.locator('#backup-note').click();
+    await page.keyboard.insertText('更新前');
+    const cdp = await page.context().newCDPSession(page);
+    await cdp.send('Input.imeSetComposition', { text: 'ㄅㄟˋ', selectionStart: 3, selectionEnd: 3 });
+    const before = (await calls(page, 'status')).length;
+    await page.clock.fastForward(31000);
+    await page.waitForFunction(count => window.testcalls.filter(call => call.argv[1] === 'status').length > count, before);
+    await page.waitForTimeout(200);
+    await cdp.send('Input.insertText', { text: '備' });
+    assert.equal(await page.locator('#backup-note').inputValue(), '更新前備');
+    await page.locator('#include-images').focus();
+    await settled(page);
+    assert.equal(await page.locator('#backup-note').inputValue(), '更新前備', 'the deferred refresh keeps the typed note');
+  }, { beforeGoto: page => page.clock.install() });
+
+  await check('an upload-finish timeout never discards the upload; it can be confirmed again (F6)', fixture(), async (page) => {
+    await ready(page);
+    await page.locator('[data-nav="restore"]').click();
+    await page.evaluate(() => window.__fixture.hold.push('upload-finish'));
+    await page.locator('#restore-file').setInputFiles({ name: 'big.woowbackup', mimeType: 'application/octet-stream', buffer: Buffer.alloc(200 * KiB, 4) });
+    await page.locator('[data-focus="restore-upload"]').click();
+    await page.locator('[data-focus="upload-recheck"]').waitFor();
+    assert.match(await view(page).textContent(), /結果尚未確認/);
+    assert.equal((await calls(page, 'upload-abort')).length, 0, 'an upload with an unknown result is kept');
+    await page.evaluate(() => window.__fixture.release('upload-finish'));
+    await page.locator('[data-focus="upload-recheck"]').click();
+    await page.locator('#key-text').waitFor();
+    assert.equal((await calls(page, 'upload-finish')).length, 2);
+    assert.equal((await calls(page, 'upload-abort')).length, 0);
+  }, {
+    beforeGoto: async (page, context) => context.route('**/backup.js', async route => {
+      const response = await route.fetch();
+      const body = (await response.text()).replace('const finishTimeout = size =>', 'const finishTimeout = size => 400 ||');
+      await route.fulfill({ response, body });
+    }),
+  });
+
+  await check('a running upload is never orphaned by opening another restore (F7, F10)', fixture({ ackMode: 'manual' }), async (page) => {
+    await ready(page);
+    await page.locator('[data-nav="restore"]').click();
+    await page.locator('#restore-file').setInputFiles({ name: 'big.woowbackup', mimeType: 'application/octet-stream', buffer: Buffer.alloc(3 * MiB, 2) });
+    await page.locator('[data-focus="restore-upload"]').click();
+    await page.waitForFunction(() => window.testchannels.at(-1)?.sent >= 2 * 1024 * 1024);
+    await page.locator('[data-nav="backups"]').click();
+    await page.locator('#upload-banner').waitFor();
+    await page.locator(`[data-focus="restore-${B_MANUAL}"]`).click();
+    await view(page).getByText('目前有上傳進行中').waitFor();
+    const guarded = await page.evaluate(() => {
+      const event = new Event('beforeunload', { cancelable: true });
+      window.dispatchEvent(event);
+      return event.defaultPrevented;
+    });
+    assert.equal(guarded, true, 'the leave-page guard stays active');
+    await page.locator('[data-focus="upload-busy-view"]').click();
+    await page.locator('#upload-progress').waitFor();
+    await page.locator('[data-focus="upload-cancel"]').click();
+    await page.locator('[data-focus="restore-upload"]').waitFor();
+    assert.equal(await page.evaluate(() => document.activeElement?.dataset?.focus), 'restore-file-button', 'focus after cancel (F10)');
+    assert.deepEqual((await calls(page, 'upload-abort')).map(requestOf), [{ upload_id: UPLOAD_ID }]);
+  });
+
+  await check('one persistent error is announced once; deletes wait for the running job (F9, CR-08)', fixture({
+    scripts: { ...scripts(), verify: Array.from({ length: 30 }, (_, index) => runningStep('verify', 'decrypt', 10 + index, { cancellable: true })) },
+    downloads: { [B_MANUAL]: { path: '/var/lib/woowtech-backup/archives/missing.woowbackup', filename: 'woowtech-backup-dev-a-20261112-020000.woowbackup', size: 1 } },
+  }), async (page) => {
+    await ready(page);
+    await page.locator('[data-nav="backups"]').click();
+    await page.locator(`[data-focus="verify-${B_MANUAL}"]`).click();
+    await page.waitForFunction(() => window.location.hash.startsWith('#/jobs/'));
+    await page.locator('[data-nav="backups"]').click();
+    await page.locator('.backups-table').waitFor();
+    assert.equal(await page.locator(`[data-focus="delete-${B_SAFETY}"]`).isDisabled(), true, 'no deletes while a job runs');
+    await page.locator(`[data-focus="download-${B_MANUAL}"]`).click();
+    await page.locator('#action-error').getByText('沒有開始').waitFor();
+    await page.evaluate(() => {
+      window.__alerts = 0;
+      new MutationObserver(records => {
+        for (const record of records) for (const node of record.addedNodes) {
+          if (node.nodeType === 1 && (node.matches('[role="alert"]') || node.querySelector('[role="alert"]'))) window.__alerts += 1;
+        }
+      }).observe(document.body, { childList: true, subtree: true });
+    });
+    const polls = (await calls(page, 'job-status')).length;
+    await page.waitForFunction(count => window.testcalls.filter(call => call.argv[1] === 'job-status').length >= count + 3, polls);
+    assert.equal(await page.evaluate(() => window.__alerts), 0, 'the unchanged error is not re-inserted on every poll');
+  }, { allowHttpErrors: ['/cockpit/channel/'] });
+
+  await check('a busy refusal in the delete dialog links to the blocking job (F12)', fixture({
+    failures: [{ command: 'delete', code: 'busy', message: '此備份正被進行中的作業使用，請等作業完成後再刪除。', details: { job_id: J_OTHER } }],
+  }), async (page) => {
+    await ready(page);
+    await page.locator('[data-nav="backups"]').click();
+    await page.locator(`[data-focus="delete-${B_SAFETY}"]`).click();
+    await page.locator('#confirm-ok').click();
+    await page.locator('#confirm-error').getByText('此備份正被進行中的作業使用').waitFor();
+    const jobLink = page.locator('#confirm-dialog [data-focus="dialog-busy-job"]');
+    assert.equal(await jobLink.getAttribute('href'), `#/jobs/${J_OTHER}`);
+    await jobLink.click();
+    await page.locator('#confirm-dialog').waitFor({ state: 'hidden' });
+    await page.waitForFunction(id => window.location.hash === `#/jobs/${id}`, J_OTHER);
+  });
+
+  await check('the kit secret is shown once; re-downloading needs a confirmation and never shows it (F11, decision 1)',
+    fixture({ status: { ...fixture().status, key: null } }), async (page) => {
+      await ready(page);
+      await page.locator('[data-nav="keys"]').click();
+      await page.locator('[data-focus="key-create"]').click();
+      await page.locator('#kit-secret').waitFor();
+      await page.locator('[data-nav="overview"]').click();
+      await page.locator('.stat').first().waitFor();
+      await page.locator('[data-nav="keys"]').click();
+      await page.locator('[data-focus="kit-show"]').waitFor();
+      assert.equal(await page.locator('#kit-secret').count(), 0, 'not shown again without a new request');
+      assert.equal((await calls(page, 'key-kit')).length, 1);
+      await page.locator('[data-focus="kit-show"]').click();
+      await page.locator('#kit-confirm').check();
+      await page.locator('[data-focus="kit-done"]').click();
+      await page.locator('[data-focus="kit-redownload"]').waitFor();
+      assert(!(await page.content()).includes(SECRET));
+      const kitCalls = (await calls(page, 'key-kit')).length;
+      await page.locator('[data-focus="kit-redownload"]').click();
+      await page.locator('#confirm-dialog').waitFor();
+      assert.match(await page.locator('#confirm-body').textContent(), /可以解開這台設備所有備份的私密金鑰/);
+      await page.locator('#confirm-cancel').click();
+      assert.equal((await calls(page, 'key-kit')).length, kitCalls, 'cancel downloads nothing');
+      await page.locator('[data-focus="kit-redownload"]').click();
+      const [download] = await Promise.all([page.waitForEvent('download'), page.locator('#confirm-ok').click()]);
+      assert.equal(download.suggestedFilename(), `woowtech-backup-key-dev-a-${KEY_ID}.txt`);
+      await page.locator('#confirm-dialog').waitFor({ state: 'hidden' });
+      assert(!(await page.content()).includes(SECRET), 'the secret never reaches the DOM');
+    });
+
+  await check('terms and labels follow the glossary; unhealthy apps are not "running" (F14, lab H5)', fixture({
+    status: { ...fixture().status, apps: [app('woowbk-demo', '示範筆記應用', { state: 'error',
+      problems: ['服務已啟動，但健康檢查未通過（http://127.0.0.1:18090/healthz，HTTP 503）。'] })] },
+  }), async (page) => {
+    await ready(page);
+    await page.locator('.item-list').first().waitFor();
+    assert.match(await view(page).textContent(), /異常/);
+    assert.match(await view(page).textContent(), /HTTP 503/);
+    assert.match(await page.locator('.host-line').textContent(), /設備 dev-a/);
+    await page.locator('[data-nav="backups"]').click();
+    await page.locator('.backups-table').waitFor();
+    const chips = await page.locator(`tr[data-backup="${B_SAFETY}"] .chip`).first().textContent();
+    assert.equal(chips.trim(), '還原前備份');
+    assert(!/還原前自動備份備份|WOOWTECH|密鑰/.test(await page.locator('body').textContent()));
+  });
+
 } finally {
   try { await browser?.close(); } finally { if (server.listening) await new Promise(done => server.close(done)); }
 }

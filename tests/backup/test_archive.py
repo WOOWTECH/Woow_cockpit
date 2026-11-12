@@ -317,6 +317,18 @@ class ManifestValidationTests(unittest.TestCase):
         manifest = self.manifest()
         self.assertIs(archive.validate_manifest(manifest), manifest)
 
+    def test_lone_surrogates_are_rejected(self):
+        # Review SEC-5: "\\ud800" passed the schema and later crashed inspect output and job records.
+        for mutate in (lambda m: m.update(note='a\ud800b'),
+                       lambda m: m['apps'][0]['verify_snapshot']['summary'].update(title='\udfff'),
+                       lambda m: m['apps'][0]['verify_snapshot']['summary'].update({'k\ud800': 1}),
+                       lambda m: m['source'].update(os='\ud83d')):
+            manifest = self.manifest()
+            mutate(manifest)
+            with self.assertRaises(BackupError) as caught:
+                archive.validate_manifest(manifest)
+            self.assertEqual(caught.exception.code, 'invalid-manifest')
+
     def test_rejections(self):
         app = f'apps/{APP}'
 
@@ -462,6 +474,26 @@ class RoundTripTests(unittest.TestCase):
             manifest = json.loads(tar.extractfile('manifest.json').read())
         self.assertEqual(manifest['entries'], [{'path': p, 'size': len(d), 'sha256': hashlib.sha256(d).hexdigest()}
                                                for p, d in payloads.items()])
+
+    def test_recipient_never_appears_in_argv(self):
+        # Review SEC-7: `age -e -r <recipient>` showed the device recipient to every local account via /proc.
+        seen = []
+        original = archive.subprocess.Popen
+
+        def spy(argv, *args, **kwargs):
+            seen.append(list(argv))
+            return original(argv, *args, **kwargs)
+        archive.subprocess.Popen = spy
+        try:
+            self.ws.write(demo_payloads(big=16))
+        finally:
+            archive.subprocess.Popen = original
+        age = [argv for argv in seen if os.path.basename(argv[0]) == 'age']
+        self.assertEqual(len(age), 1)
+        self.assertEqual(age[0][1:3], ['-e', '-R'])
+        self.assertNotIn(self.ws.key.recipient, ' '.join(age[0]))
+        self.assertEqual([p.name for p in self.ws.out.iterdir() if p.name.startswith('.recipient')], [],
+                         'the recipients file is removed')
 
     def test_progress_throttled_for_large_entries(self):
         payloads = demo_payloads(big=20 * 1024 * 1024)

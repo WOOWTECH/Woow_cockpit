@@ -218,8 +218,8 @@ class StartJobTests(JobCase):
             jobs.subprocess.run = original
         self.assertEqual(captured['argv'], [
             '/usr/bin/systemd-run', '--unit=woowtech-backup-j20261113T020000Z-0123abcd.service', '--collect',
-            '--quiet', '--property=KillMode=mixed', '/usr/local/libexec/woowtech-cockpit-backup', 'run-job',
-            'j20261113T020000Z-0123abcd'])
+            '--quiet', '--property=KillMode=mixed', '--property=MemoryMax=50%', '--property=TasksMax=512',
+            '/usr/local/libexec/woowtech-cockpit-backup', 'run-job', 'j20261113T020000Z-0123abcd'])
         self.assertEqual(captured['env'], jobs.SAFE_ENV)
 
 
@@ -387,6 +387,42 @@ class RunJobTests(JobCase):
         self.assertEqual(record['result']['safety_backup_id'], '20261113T020000Z-a1b2c3d4')
         self.assertIn('20261113T020000Z-a1b2c3d4', record['error']['message'])
 
+    def test_sigterm_with_writers_still_stopped_restarts_them(self):
+        # Review CR-14: a termination signal must not leave a writer stopped (the job's own restart may have
+        # been interrupted); run-job starts what is still recorded, unless the machine is shutting down.
+        job_id = self.queue()
+        restarted = []
+
+        class Adapter:
+            def __init__(self, app, **kwargs):
+                self.app = app
+
+            def start_units(self, units):
+                restarted.append(list(units))
+                return []
+
+        app = type('App', (), {'id': 'woowbk-demo', 'writer_units': ('woowbk-demo-app.service',)})()
+        deps = flows.Deps(storage=None, keys=None, archive=None, load_catalog=lambda: {'woowbk-demo': app},
+                          adapter_factory=lambda app, **kwargs: Adapter(app), host_info=dict,
+                          system_stopping=lambda: False)
+
+        def handler(ctx, params):
+            ctx.note_writers('woowbk-demo', ['woowbk-demo-app.service'])
+            os.kill(os.getpid(), signal.SIGTERM)
+            time.sleep(5)
+
+        record = jobs.run_job(self.paths, job_id, deps=deps, handlers={'backup': handler})
+        self.assertEqual(record['state'], 'interrupted')
+        self.assertEqual(restarted, [['woowbk-demo-app.service']])
+        self.assertEqual(record['stopped_writers'], {})
+
+    def test_record_with_lone_surrogates_is_still_written(self):
+        # Review SEC-5: a hostile manifest string in a result must not keep the record "running" forever.
+        job_id = self.queue()
+        record, _ = self.run_with(job_id, lambda ctx, params: {'note': 'bad \ud800 text'})
+        self.assertEqual(record['state'], 'succeeded')
+        self.assertEqual(self.store.get(job_id)['result'], {'note': 'bad \ud800 text'})
+
     def test_engine_lock_is_exclusive(self):
         first = jobs.acquire_engine_lock(self.paths, timeout=0)
         try:
@@ -482,6 +518,68 @@ class RecoveryTests(JobCase):
             (Path(self.paths.staging) / name).mkdir(parents=True)
         jobs.recover_interrupted(self.paths, unit_active=self.unit_active)
         self.assertEqual(sorted(p.name for p in Path(self.paths.staging).iterdir()), sorted([queued, 'upload-tmp']))
+
+    def test_terminal_records_with_leftover_work_are_finished_by_recovery(self):
+        # Review CR-14 / CR-05: a finished (interrupted) job can still list stopped writers or a fresh deployment.
+        writers = self.make('interrupted', 30, stopped_writers={'woowbk-demo': ['woowbk-demo-app.service']},
+                            error={'code': 'job-failed', 'message': '中斷。'})
+        fresh = self.make('interrupted', 30, job_type='restore', fresh_apps=['woowbk-demo'],
+                          error={'code': 'job-failed', 'message': '中斷。'})
+        calls = []
+        jobs.recover_interrupted(self.paths, unit_active=self.unit_active,
+                                 restart_writers=lambda stopped: calls.append(('writers', stopped)) or [],
+                                 cleanup_fresh=lambda apps: calls.append(('fresh', apps)) or [])
+        self.assertEqual(sorted(calls, key=str), sorted([('writers', {'woowbk-demo': ['woowbk-demo-app.service']}),
+                                                         ('fresh', ['woowbk-demo'])], key=str))
+        self.assertEqual(self.store.get(writers)['stopped_writers'], {})
+        self.assertEqual(self.store.get(fresh)['fresh_apps'], [])
+        self.assertIn('已清除未完成的全新部署', self.store.get(fresh)['error']['message'])
+        calls.clear()
+        jobs.recover_interrupted(self.paths, unit_active=self.unit_active,
+                                 restart_writers=lambda stopped: calls.append(stopped) or [],
+                                 cleanup_fresh=lambda apps: calls.append(apps) or [])
+        self.assertEqual(calls, [], 'done once, never repeated')
+
+    def test_dead_fresh_restore_is_cleaned_up_and_explained(self):
+        dead = self.make('running', 30, job_type='restore', fresh_apps=['woowbk-demo'])
+        problems = [['無法移除資料卷 woowbk-demo-files']]
+        jobs.recover_interrupted(self.paths, unit_active=self.unit_active,
+                                 cleanup_fresh=lambda apps: problems.pop(0))
+        record = self.store.get(dead)
+        self.assertEqual(record['result']['fresh_apps'], ['woowbk-demo'])
+        self.assertIn('需人工處理', record['error']['message'])
+        self.assertEqual(record['fresh_apps'], [])
+
+    def test_interrupted_restore_result_says_what_was_reached(self):
+        record = self.store.create('restore', {'backup_id': 'b', 'apps': ['woowbk-demo']})
+        message, result = jobs.interrupted_details(record)
+        self.assertIs(result['changed'], False)
+        self.assertIsNone(result['safety_backup_id'])
+        for item in record['phases']:
+            if item['id'] in ('prepare', 'decrypt', 'preflight', 'safety', 'stop'):
+                item['state'] = 'done'
+        record['fresh_apps'] = ['woowbk-demo']
+        message, result = jobs.interrupted_details(record)
+        self.assertIs(result['changed'], True)
+        self.assertEqual(result['fresh_apps'], ['woowbk-demo'])
+        self.assertIn('全新部署（woowbk-demo）沒有完成', message)
+
+    def test_stale_key_files_are_removed(self):
+        # Review SEC-4: a helper killed during inspect left the pasted key on tmpfs until reboot.
+        Path(self.paths.run).mkdir(parents=True, exist_ok=True)
+        inspect_key = Path(self.paths.run) / 'key-inspect-0123456789abcdef'
+        inspect_key.write_text(TEST_SECRET)
+        finished = self.make('succeeded', 30)
+        running = self.make('running', 30)
+        self.active_units.add(f'woowtech-backup-{running}.service')
+        for job_id in (finished, running):
+            self.store.key_path(job_id).write_text(TEST_SECRET)
+        jobs.recover_interrupted(self.paths, unit_active=self.unit_active)
+        self.assertEqual(sorted(p.name for p in Path(self.paths.run).glob('key-*')),
+                         sorted([inspect_key.name, f'key-{running}']), 'an inspect may still be using its key')
+        jobs.recover_interrupted(self.paths, unit_active=self.unit_active,
+                                 now=time.time() + jobs.KEY_FILE_MAX_AGE + 120)
+        self.assertEqual(sorted(p.name for p in Path(self.paths.run).glob('key-*')), [f'key-{running}'])
 
     def test_held_lock_means_alive(self):
         running = self.make('running', 30)

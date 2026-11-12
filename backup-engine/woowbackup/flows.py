@@ -6,9 +6,13 @@ adapters, reporter), so every step can be exercised with fakes. Key rules implem
 * an archive is listed only after it was written atomically and fully verified;
 * in-place restores take a verified `safety` backup first and roll back automatically after any
   failure that happens once the first destructive step started (fresh deployments are removed);
+* the safety backup of the running restore, and any safety backup a failed restore still needs, is
+  never pruned; pruning happens only after a successful restore;
 * staging (plaintext) is always removed in `finally`.
 """
+import contextlib
 import hashlib
+import json
 import os
 import platform
 import shutil
@@ -23,6 +27,8 @@ from .errors import BackupError
 TOOL_NAME = 'woowtech-cockpit-backup'
 SAFETY_KEEP = 3
 SPACE_FACTOR = 2.2
+SNAPSHOT_VALUE_MAX = 2048  # bytes of JSON per compared value kept in a job record
+OMITTED = '（內容過長，已省略）'
 ARCHIVE_DEFECTS = frozenset({'corrupt-archive', 'invalid-manifest', 'limit-exceeded', 'not-a-backup',
                              'unsupported-format'})
 
@@ -48,6 +54,7 @@ class Deps:
     load_catalog: object      # () -> catalog.Catalog
     adapter_factory: object   # (app, *, log, phase, checkpoint) -> Adapter
     host_info: object         # () -> {'hostname','machine_id_sha256','arch','os','podman'}
+    system_stopping: object = None  # () -> bool: the machine is shutting down / rebooting
 
 
 def human(n):
@@ -93,6 +100,17 @@ def host_info():
             'arch': platform.machine()[:32], 'os': _os_name(), 'podman': _podman_version()}
 
 
+def system_stopping():
+    """True while systemd shuts the machine down (`systemctl is-system-running` says "stopping")."""
+    try:
+        out = subprocess.run(['/usr/bin/systemctl', 'is-system-running'], stdin=subprocess.DEVNULL,
+                             capture_output=True, env={'PATH': '/usr/sbin:/usr/bin:/sbin:/bin', 'LANG': 'C.UTF-8'},
+                             timeout=5, check=False).stdout.decode('utf-8', 'replace').strip()
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return out == 'stopping'
+
+
 def default_adapter_factory(app, *, log, phase=None, checkpoint=None, writers_hook=None):
     from .adapters import get_adapter
     from .podman import OwnerRunner
@@ -106,7 +124,7 @@ def default_deps(paths):
     from . import archive, catalog, keys, storage
     return Deps(storage=storage.Storage(paths), keys=keys.KeyStore(paths), archive=archive,
                 load_catalog=lambda: catalog.load_catalog(paths), adapter_factory=default_adapter_factory,
-                host_info=host_info)
+                host_info=host_info, system_stopping=system_stopping)
 
 
 def _noop(*_args, **_kwargs):
@@ -147,6 +165,12 @@ class FlowContext:
 
     def skip(self, phase_id):
         self.reporter.skip(phase_id)
+
+    def complete(self, phase_id):
+        """Mark a phase done without starting the next one (e.g. the safety backup exists)."""
+        done = getattr(self.reporter, 'complete', None)
+        if done is not None:
+            done(phase_id)
 
     def log(self, message):
         self.reporter.log(message)
@@ -237,6 +261,18 @@ def _unlink_quiet(path):
         pass
 
 
+def _publish(staged, dest):
+    """Move a verified archive from staging into archives/ (atomic rename, never overwrites)."""
+    if os.path.lexists(dest):
+        raise BackupError('internal-error', '目標備份檔已存在。')
+    os.rename(staged, dest)
+    fd = os.open(Path(dest).parent, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
 def _cleanup_staging(ctx):
     try:
         ctx.storage.remove_staging(ctx.job_id)
@@ -247,7 +283,7 @@ def _cleanup_staging(ctx):
 def _require_key(ctx, header):
     available = {info.key_id for info in ctx.keys.identities()}
     if header.get('key_id') not in available and (ctx.key_file is None or not ctx.key_file.exists()):
-        raise BackupError('key-required', '此備份使用的金鑰不在本設備，請輸入緊急金鑰。', key_id=header.get('key_id'))
+        raise BackupError('key-required', '此備份使用的金鑰不在這台設備，請輸入緊急金鑰。', key_id=header.get('key_id'))
 
 
 def compare_snapshots(app, before, after):
@@ -269,12 +305,68 @@ def compare_snapshots(app, before, after):
     return True if compared else None
 
 
+def bounded_snapshot(app, snapshot):
+    """Only the catalog's compared keys, each value at most SNAPSHOT_VALUE_MAX bytes of JSON.
+
+    The archive's snapshot is untrusted: copied whole into the job record, a large one made the record
+    unreadable (> 1 MiB) and the job looked interrupted (review finding SEC-5).
+    """
+    bounded = {}
+    for spec in app.verify:
+        values = (snapshot or {}).get(spec['id'])
+        if not isinstance(values, dict):
+            continue
+        kept = {}
+        for key in spec['compare']:
+            if key in values:
+                value = values[key]
+                kept[key] = value if len(json.dumps(value, ensure_ascii=True)) <= SNAPSHOT_VALUE_MAX else OMITTED
+        bounded[spec['id']] = kept
+    return bounded
+
+
 def verification_entry(app, adapter, app_manifest):
     if not app.verify:
         return None
     before = app_manifest.get('verify_snapshot') or {}
     after = adapter.verify_snapshot()
-    return {'app': app.id, 'match': compare_snapshots(app, before, after), 'before': before, 'after': after}
+    return {'app': app.id, 'match': compare_snapshots(app, before, after), 'before': bounded_snapshot(app, before),
+            'after': bounded_snapshot(app, after)}
+
+
+def restart_writers(deps, stopped, *, log=None):
+    """Start writer units a backup left stopped ({app_id: [units]}); returns the units that failed."""
+    failed = []
+    catalog = deps.load_catalog()
+    for app_id, units in (stopped or {}).items():
+        app = catalog.get(app_id)
+        if app is None:
+            failed.extend(units)
+            continue
+        try:
+            adapter = deps.adapter_factory(app, log=log or _noop, phase=None, checkpoint=None)
+            failed.extend(adapter.start_units([u for u in units if u in app.writer_units]))
+        except BackupError:
+            failed.extend(units)
+    return failed
+
+
+def remove_fresh_apps(deps, app_ids, *, log=None):
+    """Remove the unfinished fresh deployments of `app_ids` (recovery after a dead restore); returns problems."""
+    problems = []
+    catalog = deps.load_catalog()
+    for app_id in app_ids or []:
+        app = catalog.get(app_id)
+        if app is None:
+            problems.append(f'找不到應用 {app_id} 的設定')
+            continue
+        try:
+            deps.adapter_factory(app, log=log or _noop, phase=None, checkpoint=None).remove_fresh()
+        except BackupError as error:
+            problems.append(error.message.rstrip('。'))
+        except Exception:  # noqa: BLE001 - reported, never raised from recovery
+            problems.append(f'移除「{app.name}」未完成的部署時發生未預期的錯誤')
+    return problems
 
 
 # ---------------------------------------------------------------- backup
@@ -285,12 +377,13 @@ def run_backup(ctx, params):
     apps = resolve_apps(ctx.catalog(), params.get('apps') or [])
     key = ctx.keys.device_key()
     if key is None:
-        raise BackupError('no-device-key', '尚未建立本設備的備份金鑰，請先完成金鑰設定。')
+        raise BackupError('no-device-key', '這台設備尚未建立加密金鑰，請先完成金鑰設定。')
     ctx.storage.ensure_layout()
     staging = Path(ctx.storage.staging_dir(ctx.job_id))
     try:
-        return create_backup(ctx, apps, staging, include_images=bool(params.get('include_images')),
-                             note=params.get('note') or '', backup_type='manual', key=key, phases=True)
+        result = create_backup(ctx, apps, staging, include_images=bool(params.get('include_images')),
+                               note=params.get('note') or '', backup_type='manual', key=key, phases=True)
+        return {key_: result[key_] for key_ in ('backup_id', 'size', 'apps', 'downtime_seconds')}
     finally:
         _cleanup_staging(ctx)
 
@@ -354,18 +447,24 @@ def create_backup(ctx, apps, staging, *, include_images, note, backup_type, key,
         'apps': manifest_apps, 'entries': [],
     }
     dest = Path(ctx.storage.archive_path(backup_id))
-    registered = False
+    # Written and verified inside staging, then moved into archives/ (same filesystem). A job killed while
+    # packaging or verifying (SIGKILL, power loss) therefore leaves its archive only in staging, which the
+    # recovery removes, instead of an unlisted, never-cleaned file in archives/ (lab H4 finding).
+    staged = Path(staging) / dest.name
+    published = registered = False
     try:
-        info = ctx.archive.write_archive(dest, header, manifest, entries, key.recipient, tmp_dir=staging,
+        info = ctx.archive.write_archive(staged, header, manifest, entries, key.recipient, tmp_dir=staging,
                                          progress=ctx.byte_progress('加密封裝') if phases else None)
         phase('verify')
         if phases:
             ctx.checkpoint()
-        checked = ctx.archive.verify_archive(dest, [key], progress=ctx.byte_progress('驗證備份') if phases else None)
+        checked = ctx.archive.verify_archive(staged, [key], progress=ctx.byte_progress('驗證備份') if phases else None)
         if (checked.get('manifest') or {}).get('backup_id') != backup_id:
             raise BackupError('corrupt-archive', '驗證備份時發現內容不一致，已捨棄此備份。')
         if phases:
             ctx.checkpoint()
+        _publish(staged, dest)
+        published = True
         ctx.storage.register(backup_id, {
             'id': backup_id, 'type': backup_type, 'created': created, 'note': note,
             'apps': [{'id': app.id, 'name': app.name} for app in apps], 'size': int(info['size']),
@@ -375,17 +474,48 @@ def create_backup(ctx, apps, staging, *, include_images, note, backup_type, key,
         registered = True
     finally:
         if not registered:
-            _unlink_quiet(dest)
+            _unlink_quiet(staged)
+            if published:
+                _unlink_quiet(dest)
     ctx.log(f'備份 {backup_id} 已建立並通過完整驗證（{human(info["size"])}）')
     return {'backup_id': backup_id, 'size': int(info['size']), 'apps': [app.id for app in apps],
-            'downtime_seconds': int(round(downtime))}
+            'downtime_seconds': int(round(downtime)), 'plain_bytes': sum(int(e.size) for e in entries)}
+
+
+def pinned_safety(paths):
+    """Safety backups a failed or interrupted restore still points to (newest restore record per app wins).
+
+    They are the only way back to the state before that restore, so pruning never deletes them, also
+    when the user retries the failed restore several times (review finding CR-02).
+    """
+    from . import jobs
+    try:
+        records = jobs.JobStore(paths).list(limit=None)
+    except Exception:  # noqa: BLE001 - unreadable records never block a restore; nothing is pinned then
+        return set()
+    pinned, settled = set(), set()
+    for record in records:  # newest first
+        if record.get('type') != 'restore':
+            continue
+        apps = set((record.get('params') or {}).get('apps') or [])
+        if record.get('state') == 'succeeded':
+            settled |= apps
+            continue
+        result = record.get('result') if isinstance(record.get('result'), dict) else {}
+        safety = result.get('safety_backup_id') or record.get('safety_backup_id')
+        if (safety and record.get('state') in ('failed', 'interrupted') and not result.get('rolled_back')
+                and apps - settled):
+            pinned.add(safety)
+    return pinned
 
 
 def prune_safety(ctx, app_ids, keep=SAFETY_KEEP, exclude=()):
     """Keep the `keep` newest safety backups per app; only backups touching `app_ids` are deleted.
 
-    Backups in `exclude` (e.g. the archive being restored) are never deleted.
+    Backups in `exclude` (the archive being restored and the safety backup this restore took) and
+    safety backups a failed or interrupted restore still needs are never deleted.
     """
+    exclude = set(exclude) | pinned_safety(ctx.paths)
     backups = [b for b in ctx.storage.list_backups() if b.get('type') == 'safety']
     backups.sort(key=lambda b: (b.get('created') or '', b.get('id') or ''), reverse=True)
     keepers, per_app = set(), {}
@@ -455,8 +585,12 @@ def run_restore(ctx, params):
     _require_key(ctx, header)
     ctx.storage.ensure_layout()
     staging = Path(ctx.storage.staging_dir(ctx.job_id))
+    # changed: a destructive step started; fresh_apps: deployed from templates; safety_skipped: in-place apps
+    # were restored without a new safety backup; safety_failed: refused because none could be created.
     result = {'apps': [app.id for app in apps], 'safety_backup_id': None, 'health': [], 'verification': [],
-              'rolled_back': False}
+              'rolled_back': False, 'changed': False, 'fresh_apps': [], 'safety_skipped': False,
+              'safety_failed': False}
+    keep_fresh_marker = False
     try:
         ctx.phase('decrypt')
         extract_dir = _private_dir(staging / 'extract')
@@ -469,31 +603,24 @@ def run_restore(ctx, params):
         device_key = ctx.keys.device_key()
         inplace = [plan for plan in plans if plan.mode == 'inplace']
         if inplace and device_key is None:
-            raise BackupError('no-device-key', '原位還原需要本設備的備份金鑰來建立還原前備份，請先完成金鑰設定。')
+            raise BackupError('no-device-key', '原位還原需要這台設備的加密金鑰來建立還原前備份，請先完成金鑰設定。')
         ctx.checkpoint()
         ctx.cancellable(False)
 
         ctx.phase('safety')
         if inplace:
-            ctx.log('建立還原前備份…')
-            try:
-                safety = create_backup(ctx, [plan.app for plan in inplace], _private_dir(staging / 'safety'),
-                                       include_images=False, note=f'還原前自動備份（還原來源 {backup_id}）',
-                                       backup_type='safety', key=device_key, phases=False, start_databases=True)
-            except BackupError as error:
-                if meta.get('type') != 'safety':
-                    raise BackupError('job-failed', f'無法建立還原前備份，未做任何變更：{error.message}'
-                                                    '若應用因先前的還原中斷或失敗而無法執行，請改為還原最近的「還原前備份」。',
-                                      original=error.code) from None
-                # Recovering *to* a pre-restore backup: the current state is the broken one we are replacing.
-                ctx.log(f'無法建立新的還原前備份（{error.message}）；由於正在還原的就是還原前備份，將直接還原，'
-                        '失敗時無法自動回復。')
-            else:
-                result['safety_backup_id'] = safety['backup_id']
-                ctx.reporter.set_partial(safety_backup_id=safety['backup_id'])
-            prune_safety(ctx, [plan.app.id for plan in inplace], exclude={backup_id})
+            safety = _take_safety_backup(ctx, inplace, staging, backup_id, meta, params, device_key, result)
+            if safety is not None:
+                extracted = sum(int(e.get('size') or 0) for e in manifest.get('entries') or [] if isinstance(e, dict))
+                _require_rollback_space(ctx, safety, extracted)
         else:
             ctx.skip('safety')
+        fresh = [plan.app.id for plan in plans if plan.mode == 'fresh']
+        if fresh:
+            # Recorded before the first fresh step: a job that dies now leaves a partial deployment, which the
+            # recovery removes (review finding CR-05).
+            result['fresh_apps'] = fresh
+            ctx.reporter.set_partial(fresh_apps=fresh)
 
         touched = []
         try:
@@ -522,17 +649,94 @@ def run_restore(ctx, params):
         except BaseException as exc:  # noqa: BLE001 - includes termination signals
             if not any(plan.adapter.destructive_started for plan in touched):
                 raise
+            result['changed'] = True
+            if not isinstance(exc, Exception) and _shutting_down(ctx):
+                # Reboot/poweroff (lab H5): the owner's services and Podman are going away, so a rollback cannot
+                # finish and only produced a misleading "需人工處理" error. The job ends interrupted instead, with
+                # the safety backup named in its guidance; a partial fresh deployment is removed after boot.
+                keep_fresh_marker = True
+                ctx.log('系統正在關機或重新開機，未執行自動回復；開機後請使用還原前備份再次還原。')
+                raise
             error = exc if isinstance(exc, BackupError) else BackupError(
                 'internal-error', '還原過程發生未預期的錯誤。')
             _rollback(ctx, touched, result, staging, error, device_key)
+        result['changed'] = True
+        # Only after a successful restore, and never the backups this restore depends on (review SEC-2, CR-02).
+        if inplace:
+            prune_safety(ctx, [plan.app.id for plan in inplace], exclude={backup_id, result['safety_backup_id']})
         ctx.log('還原完成')
         return result
     except BackupError as error:
         if not hasattr(error, 'result'):
-            error.result = result if result['safety_backup_id'] else None
+            error.result = result
         raise
     finally:
+        if result['fresh_apps'] and not keep_fresh_marker:
+            ctx.reporter.set_partial(fresh_apps=[])
         _cleanup_staging(ctx)
+
+
+def _take_safety_backup(ctx, inplace, staging, backup_id, meta, params, device_key, result):
+    """Create the verified pre-restore backup; returns its create_backup result, or None when skipped."""
+    ctx.log('建立還原前備份…')
+    folder = staging / 'safety'
+    try:
+        safety = create_backup(ctx, [plan.app for plan in inplace], _private_dir(folder),
+                               include_images=False, note=f'還原前自動備份（還原來源 {backup_id}）',
+                               backup_type='safety', key=device_key, phases=False, start_databases=True)
+    except BackupError as error:
+        source_is_safety = meta.get('type') == 'safety'
+        if not source_is_safety and not params.get('allow_no_safety'):
+            result['safety_failed'] = True
+            raise BackupError('job-failed', f'無法建立還原前備份，未做任何變更：{error.message}'
+                                            '若應用因先前的還原中斷或失敗而無法執行，請改為還原最近的「還原前備份」；'
+                                            '沒有可用的還原前備份時，可選擇不建立還原前備份直接還原（失敗時無法自動回復）。',
+                              original=error.code) from None
+        # Recovering *to* a pre-restore backup, or the user explicitly accepted it (review CR-16): the current
+        # state is the broken one being replaced.
+        reason = '由於正在還原的就是還原前備份' if source_is_safety else '你已選擇不建立還原前備份'
+        ctx.log(f'無法建立新的還原前備份（{error.message}）；{reason}，將直接還原，失敗時無法自動回復。')
+        ctx.skip('safety')
+        result['safety_skipped'] = True
+        return None
+    finally:
+        # Plaintext of a backup that is already published: removed now, so a rollback has its space (CR-01).
+        _remove_tree(folder)
+    result['safety_backup_id'] = safety['backup_id']
+    ctx.reporter.set_partial(safety_backup_id=safety['backup_id'])
+    ctx.complete('safety')
+    return safety
+
+
+def _require_rollback_space(ctx, safety, extracted_bytes):
+    """Refuse the restore (nothing changed yet) unless a rollback could extract the safety backup.
+
+    The rollback deletes the extracted archive first, so its size counts as available (review CR-01).
+    """
+    need = int(safety.get('plain_bytes') or 0) + int(ctx.paths.reserve_bytes)
+    free = int(ctx.storage.free_bytes()) + int(extracted_bytes)
+    if free < need:
+        raise BackupError('insufficient-space', f'空間不足以在還原失敗時自動回復：需要約 {human(need)}，'
+                                                f'可用約 {human(free)}。已建立還原前備份，未做任何變更。',
+                          required=need, free=free)
+
+
+def _remove_tree(path):
+    path = Path(path)
+    if os.path.lexists(path):
+        if path.is_dir() and not path.is_symlink():
+            shutil.rmtree(path, ignore_errors=True)
+        else:
+            with contextlib.suppress(OSError):
+                os.unlink(path)
+
+
+def _shutting_down(ctx):
+    check = getattr(ctx.deps, 'system_stopping', None)
+    try:
+        return bool(check and check())
+    except Exception:  # noqa: BLE001 - unknown means "not shutting down": keep the rollback
+        return False
 
 
 def _preflight(ctx, apps, manifest):
@@ -565,44 +769,60 @@ def _rollback(ctx, touched, result, staging, error, device_key):
     ctx.phase('rollback')
     ctx.log(f'還原失敗：{error.message}')
     ctx.log('開始自動回復…')
+    # The failed archive's plaintext is not needed any more; free its space before extracting the safety
+    # backup (review finding CR-01).
+    _remove_tree(Path(staging) / 'extract')
     problems = []
     safety_id = result.get('safety_backup_id')
     inplace = [plan for plan in touched if plan.mode == 'inplace']
     if inplace:
+        folder = safety_manifest = None
         try:
             if not safety_id or device_key is None:
                 raise BackupError('job-failed', '沒有可用的還原前備份。')
             folder = _private_dir(Path(staging) / 'rollback')
             safety_manifest = ctx.archive.extract_archive(ctx.storage.archive_path(safety_id), [device_key], folder)
-            for plan in inplace:
-                app_manifest = next(a for a in safety_manifest['apps'] if a.get('id') == plan.app.id)
+        except BackupError as rollback_error:
+            problems.append(rollback_error.message.rstrip('。'))
+        except Exception:  # noqa: BLE001
+            problems.append('回復時發生未預期的錯誤')
+        # Each app is rolled back on its own: one failing app must not leave the others in the failed
+        # restore's state (review finding CR-03).
+        for plan in inplace if safety_manifest is not None else []:
+            name = plan.app.name
+            try:
+                app_manifest = next((a for a in safety_manifest.get('apps') or [] if a.get('id') == plan.app.id), None)
+                if app_manifest is None:
+                    raise BackupError('job-failed', '還原前備份不含此應用')
                 adapter = ctx.adapter(plan.app, phases=False)
-                adapter.restore(app_manifest, folder, mode='inplace')
+                adapter.restore(app_manifest, folder, mode='inplace', rollback=True)
                 failed = [c for c in adapter.health() if c['status'] == 'fail']
                 if failed:
-                    problems.append(f'「{plan.app.name}」回復後健康檢查未通過')
+                    problems.append(f'「{name}」回復後健康檢查未通過')
                     continue
                 entry = verification_entry(plan.app, adapter, app_manifest)
                 if entry is not None and entry['match'] is False:
-                    problems.append(f'「{plan.app.name}」回復後資料與還原前不一致')
-        except BackupError as rollback_error:
-            problems.append(rollback_error.message)
-        except Exception:  # noqa: BLE001
-            problems.append('回復時發生未預期的錯誤')
+                    problems.append(f'「{name}」回復後資料與還原前不一致')
+                else:
+                    ctx.log(f'應用「{name}」已回復到還原前的狀態')
+            except BackupError as rollback_error:
+                problems.append(f'「{name}」：{rollback_error.message.rstrip("。")}')
+            except Exception:  # noqa: BLE001
+                problems.append(f'「{name}」回復時發生未預期的錯誤')
     for plan in touched:
         if plan.mode != 'fresh':
             continue
         try:
             plan.adapter.remove_fresh()
         except BackupError as cleanup_error:
-            problems.append(cleanup_error.message)
+            problems.append(cleanup_error.message.rstrip('。'))
         except Exception:  # noqa: BLE001
             problems.append(f'移除「{plan.app.name}」新建立的項目時發生未預期的錯誤')
     if problems:
         result['rolled_back'] = False
-        message = f'還原失敗，且自動回復未完成，需人工處理：{"；".join(problems)[:400]}'
+        message = f'還原失敗，且自動回復未完成，需人工處理：{"；".join(problems)[:400].rstrip("。")}。'
         if safety_id:
-            message += f'。可使用還原前備份 {safety_id} 再次還原。'
+            message += f'可使用還原前備份 {safety_id} 再次還原。'
         ctx.log(message)
         failure = BackupError('job-failed', message, original=error.code, safety_backup_id=safety_id)
         failure.result = result

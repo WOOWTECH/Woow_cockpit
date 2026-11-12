@@ -151,7 +151,7 @@ def _check_header_dict(header):
     if not isinstance(fmt, int) or isinstance(fmt, bool):
         raise _corrupt('header format missing')
     if fmt != FORMAT:
-        raise BackupError('unsupported-format', '不支援此備份檔版本，請更新本設備的備份元件。', version=fmt)
+        raise BackupError('unsupported-format', '不支援此備份檔版本，請更新這台設備的備份元件。', version=fmt)
     if header.get('encryption') != ENCRYPTION or header.get('compression') != COMPRESSION:
         if isinstance(header.get('encryption'), str) and isinstance(header.get('compression'), str):
             raise BackupError('unsupported-format', '不支援此備份檔的加密或壓縮方式。')
@@ -175,12 +175,12 @@ def _parse_prefix(buf, file_size):
         if newline >= 0:
             match = re.fullmatch(rb'WOOWTECH-BACKUP/([1-9][0-9]{0,8})', buf[:newline])
             if match and int(match.group(1)) != FORMAT:
-                raise BackupError('unsupported-format', '不支援此備份檔版本，請更新本設備的備份元件。',
+                raise BackupError('unsupported-format', '不支援此備份檔版本，請更新這台設備的備份元件。',
                                   version=int(match.group(1)))
-            raise BackupError('not-a-backup', '這不是 WOOWTECH 備份檔（.woowbackup）。')
+            raise BackupError('not-a-backup', '這不是 woowtech 備份檔（.woowbackup）。')
         if eof and len(buf) >= 8 and (MAGIC.startswith(buf) or buf.startswith(FAMILY)):
             raise _corrupt('truncated in format line')
-        raise BackupError('not-a-backup', '這不是 WOOWTECH 備份檔（.woowbackup）。')
+        raise BackupError('not-a-backup', '這不是 woowtech 備份檔（.woowbackup）。')
     pos = len(MAGIC)
     end = buf.find(b'\n', pos, pos + MAX_HEADER)
     if end < 0:
@@ -211,7 +211,7 @@ def _parse_prefix(buf, file_size):
 def _read_header_fd(fd):
     st = os.fstat(fd)
     if not stat.S_ISREG(st.st_mode):
-        raise BackupError('not-a-backup', '這不是 WOOWTECH 備份檔（.woowbackup）。')
+        raise BackupError('not-a-backup', '這不是 woowtech 備份檔（.woowbackup）。')
     want = len(MAGIC) + MAX_HEADER + MAX_AGE_HEADER + 1
     buf = os.pread(fd, want, 0)
     while len(buf) < min(want, st.st_size):
@@ -229,7 +229,7 @@ def _open_archive(path):
         raise BackupError('not-found', '找不到備份檔。') from None
     except OSError as exc:
         if exc.errno == errno.ELOOP:
-            raise BackupError('not-a-backup', '這不是 WOOWTECH 備份檔（.woowbackup）。') from None
+            raise BackupError('not-a-backup', '這不是 woowtech 備份檔（.woowbackup）。') from None
         raise
     flags = fcntl.fcntl(fd, fcntl.F_GETFL)
     fcntl.fcntl(fd, fcntl.F_SETFL, flags & ~os.O_NONBLOCK)
@@ -265,9 +265,21 @@ def _obj(value, where, required, optional=()):
     _need(not unknown, f'{where} has unknown keys', keys=[str(k)[:64] for k in unknown[:10]])
 
 
+def _utf8(value):
+    """False for text that is not valid Unicode (a lone surrogate from a JSON \\ud800 escape)."""
+    try:
+        value.encode('utf-8')
+    except UnicodeEncodeError:
+        return False
+    return True
+
+
 def _str(value, where, pattern=None, min_len=0, max_len=200):
     _need(isinstance(value, str) and min_len <= len(value) <= max_len, f'{where} must be a string')
     _need('\x00' not in value, f'{where} contains NUL')
+    # A lone surrogate passed every other check and later crashed `inspect` output and job records
+    # (review finding SEC-5).
+    _need(_utf8(value), f'{where} is not valid Unicode text')
     if pattern is not None:
         _need(pattern.match(value) is not None, f'{where} has an invalid format')
 
@@ -293,6 +305,7 @@ def _json_value(value, where, depth=0):
             _json_value(item, where, depth + 1)
     elif isinstance(value, str):
         _need(len(value) <= 16384, f'{where} string too long')
+        _need(_utf8(value), f'{where} is not valid Unicode text')
     elif isinstance(value, float):
         _need(value == value and abs(value) != float('inf'), f'{where} not finite')
     else:
@@ -631,14 +644,22 @@ def write_archive(dest, header, manifest, entries, recipient, *, tmp_dir, progre
         age_err.close()
         zstd_err.close()
         raise _map_os_error(exc, '建立備份暫存檔') from exc
+    # The recipient goes to age in a private file, not in argv where every local account could read it
+    # from /proc (review finding SEC-7: it lets anyone encrypt a hostile archive to this device's key).
+    recipients_path = tmp_dir / f'.recipient-{util.random_hex(6)}'
     try:
         view = memoryview(head)
         while view:
             view = view[os.write(out_fd, view):]
         digest.update(head)
+        rfd = os.open(recipients_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
+        try:
+            os.write(rfd, (recipient + '\n').encode('ascii'))
+        finally:
+            os.close(rfd)
         env = util.clean_env()
-        age = subprocess.Popen([age_bin, '-e', '-r', recipient], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                               stderr=age_err, env=env, close_fds=True)
+        age = subprocess.Popen([age_bin, '-e', '-R', str(recipients_path)], stdin=subprocess.PIPE,
+                               stdout=subprocess.PIPE, stderr=age_err, env=env, close_fds=True)
         procs.append(age)
         zstd = subprocess.Popen([zstd_bin, '-q', '-c', '-3', '-T2'], stdin=subprocess.PIPE, stdout=age.stdin,
                                 stderr=zstd_err, env=env, close_fds=True, bufsize=CHUNK)
@@ -713,6 +734,8 @@ def write_archive(dest, header, manifest, entries, recipient, *, tmp_dir, progre
         if not renamed:
             with contextlib.suppress(FileNotFoundError):
                 os.unlink(tmp_path)
+        with contextlib.suppress(FileNotFoundError):
+            os.unlink(recipients_path)
         age_err.close()
         zstd_err.close()
 
@@ -750,7 +773,7 @@ class _Decryptor:
                 if invalid:
                     raise BackupError('wrong-key', '提供的金鑰無效或已損毀，無法用來解密此備份。',
                                       key_id=self.header['key_id'])
-                raise BackupError('key-required', '需要備份金鑰才能讀取此備份。', key_id=self.header['key_id'])
+                raise BackupError('key-required', '需要緊急金鑰或這台設備的加密金鑰才能讀取此備份。', key_id=self.header['key_id'])
             argv = []
             for path in self.identities:
                 argv += ['-i', str(path)]

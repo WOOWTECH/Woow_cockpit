@@ -5,7 +5,9 @@
 * `run_job` holds an exclusive flock on `paths.lock` for its lifetime, updates the record
   atomically at every phase/progress change and always deletes the job key file.
 * `recover_interrupted` marks queued/running records whose unit is inactive and whose lock is
-  free as `interrupted`; nothing is ever replayed automatically.
+  free as `interrupted`; nothing is ever replayed automatically. It also restarts writers and
+  removes unfinished fresh deployments a dead (or terminated) job left behind, and deletes stale
+  transient key files.
 * Cancellation is a request file honoured by the flow only at safe checkpoints.
 """
 import calendar
@@ -45,6 +47,9 @@ QUEUED_GRACE_SECONDS = 120
 MAX_RECORD_BYTES = 1024 * 1024
 MAX_LOG_LINE = 500
 LOCK_WAIT_SECONDS = 120
+KEY_FILE_MAX_AGE = 15 * 60  # an inspect takes seconds; older key-inspect-* files were left by a killed helper
+# The job unit is bounded independently of the containers it talks to (review finding SEC-3).
+UNIT_LIMITS = ('--property=MemoryMax=50%', '--property=TasksMax=512')
 SAFE_ENV = {'PATH': '/usr/sbin:/usr/bin:/sbin:/bin', 'LANG': 'C.UTF-8', 'LC_ALL': 'C.UTF-8'}
 SECRET_PATTERN = re.compile(r'AGE-SECRET-KEY-1[0-9A-Za-z]+')
 
@@ -54,6 +59,7 @@ INTERRUPTED_MESSAGE = {
                '必要時使用還原前備份再次還原。',
     'verify': '驗證作業意外中斷，請重新執行驗證。',
 }
+FRESH_MESSAGE = '全新部署（{apps}）沒有完成；系統會清除未完成的部署，之後可再次還原同一份備份。'
 
 
 class Terminated(BaseException):
@@ -99,9 +105,18 @@ def _ensure_private_dir(path):
     return path
 
 
+def _json_bytes(obj):
+    """UTF-8 JSON; text that cannot be UTF-8 (lone surrogates from hostile input) is \\u-escaped instead of
+    failing, so a terminal record is always written (review finding SEC-5)."""
+    try:
+        return (json.dumps(obj, ensure_ascii=False, separators=(',', ':')) + '\n').encode('utf-8')
+    except UnicodeEncodeError:
+        return (json.dumps(obj, ensure_ascii=True, separators=(',', ':')) + '\n').encode('ascii')
+
+
 def atomic_write_json(path, obj, mode=0o600):
     path = Path(path)
-    data = (json.dumps(obj, ensure_ascii=False, separators=(',', ':')) + '\n').encode('utf-8')
+    data = _json_bytes(obj)
     tmp = path.parent / f'.{path.name}.{secrets.token_hex(6)}.tmp'
     fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC, mode)
     try:
@@ -233,7 +248,7 @@ class JobStore:
         fd = os.open(self.log_path(job_id), os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW | os.O_CLOEXEC,
                      0o600)
         try:
-            os.write(fd, f'{utc_iso(now)} {line}\n'.encode('utf-8'))
+            os.write(fd, f'{utc_iso(now)} {line}\n'.encode('utf-8', 'backslashreplace'))
         finally:
             os.close(fd)
 
@@ -313,6 +328,13 @@ class JobReporter:
                 item['state'] = 'skipped'
         self._save()
 
+    def complete(self, phase_id):
+        """Mark one phase done (it finished; the next phase has not started yet)."""
+        for item in self.record['phases']:
+            if item['id'] == phase_id and item['state'] in ('pending', 'active'):
+                item['state'] = 'done'
+        self._save()
+
     def add_phase(self, phase_id, label):
         for item in self.record['phases']:
             if item['state'] == 'active':
@@ -382,7 +404,7 @@ class JobReporter:
 # ---------------------------------------------------------------- locks
 
 @contextlib.contextmanager
-def _start_lock(paths):
+def start_lock(paths):
     """Serialises start/recover/cancel decisions (short critical sections)."""
     _ensure_private_dir(paths.run)
     fd = os.open(Path(paths.run) / 'jobs.lock', os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
@@ -428,7 +450,7 @@ def acquire_engine_lock(paths, timeout=LOCK_WAIT_SECONDS, *, sleep=time.sleep, c
 def systemd_run_launcher(paths):
     def launch(job_id):
         argv = ['/usr/bin/systemd-run', f'--unit={unit_name(job_id)}', '--collect', '--quiet',
-                '--property=KillMode=mixed', str(paths.helper), 'run-job', job_id]
+                '--property=KillMode=mixed', *UNIT_LIMITS, str(paths.helper), 'run-job', job_id]
         try:
             result = subprocess.run(argv, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
                                     env=dict(SAFE_ENV), timeout=60, check=False)
@@ -499,7 +521,7 @@ def _remove_key_file(store, job_id):
 # ---------------------------------------------------------------- public API
 
 def start_job(paths, job_type, params, request_id, *, key_text=None, launcher=None, unit_active=None, now=None,
-              restart_writers=None):
+              restart_writers=None, cleanup_fresh=None):
     """Create and launch a job; returns {'job_id', 'deduplicated'}."""
     if job_type not in PHASES:
         raise BackupError('invalid-request', '不支援的作業類型。')
@@ -512,7 +534,7 @@ def start_job(paths, job_type, params, request_id, *, key_text=None, launcher=No
     store.ensure()
     launcher = launcher or systemd_run_launcher(paths)
     now = time.time() if now is None else now
-    with _start_lock(paths):
+    with start_lock(paths):
         requests = _load_requests(paths, now)
         hit = requests.get(request_id)
         if hit:
@@ -523,7 +545,7 @@ def start_job(paths, job_type, params, request_id, *, key_text=None, launcher=No
                 return {'job_id': hit['job_id'], 'deduplicated': True}
             except BackupError:
                 pass
-        _recover_locked(paths, store, unit_active or systemd_unit_active, now, restart_writers)
+        _recover_locked(paths, store, unit_active or systemd_unit_active, now, restart_writers, cleanup_fresh)
         active = [r for r in store.list(limit=None) if r.get('state') in ACTIVE]
         if active:
             raise BackupError('busy', '已有備份或還原作業正在進行，請等它完成後再試。', job_id=active[0]['id'])
@@ -547,15 +569,44 @@ def start_job(paths, job_type, params, request_id, *, key_text=None, launcher=No
     return {'job_id': job_id, 'deduplicated': False}
 
 
+def _destructive_phase_reached(record):
+    return any(item.get('id') in ('stop', 'restore', 'start', 'check', 'rollback')
+               and item.get('state') not in ('pending', 'skipped') for item in record.get('phases') or [])
+
+
 def interrupted_details(record):
     """(zh-TW guidance, result|None) for a job that stopped without finishing."""
     message = INTERRUPTED_MESSAGE.get(record.get('type'), INTERRUPTED_MESSAGE['verify'])
+    if record.get('type') != 'restore':
+        return message, None
     safety = record.get('safety_backup_id')
-    if record.get('type') == 'restore' and safety:
+    fresh = [str(app) for app in record.get('fresh_apps') or []]
+    if safety:
         message += f'還原前備份：{safety}。'
-        return message, {'apps': list((record.get('params') or {}).get('apps') or []), 'safety_backup_id': safety,
-                         'health': [], 'verification': [], 'rolled_back': False}
-    return message, None
+    if fresh:
+        message += FRESH_MESSAGE.format(apps='、'.join(fresh))
+    return message, {'apps': list((record.get('params') or {}).get('apps') or []), 'safety_backup_id': safety,
+                     'health': [], 'verification': [], 'rolled_back': False,
+                     'changed': _destructive_phase_reached(record), 'fresh_apps': fresh, 'safety_skipped': False,
+                     'safety_failed': False}
+
+
+def _remove_unfinished_fresh(store, record, cleanup_fresh):
+    """Remove the partial fresh deployment of a dead restore (review CR-05); returns extra zh-TW guidance."""
+    fresh = [str(app) for app in record.get('fresh_apps') or []]
+    if not fresh or cleanup_fresh is None:
+        return ''
+    try:
+        problems = cleanup_fresh(fresh)
+    except Exception:  # noqa: BLE001 - recovery must never break status/jobs
+        traceback.print_exc(file=sys.stderr)
+        problems = ['清除時發生未預期的錯誤']
+    record['fresh_apps'] = []
+    if problems:
+        store.append_log(record['id'], f'無法完整清除未完成的全新部署：{"；".join(problems)[:300]}')
+        return f'未完成的全新部署沒有完整清除，需人工處理：{"；".join(problems)[:300]}。'
+    store.append_log(record['id'], f'已清除未完成的全新部署：{"、".join(fresh)}')
+    return '已清除未完成的全新部署，可再次還原。'
 
 
 def _restart_stopped_writers(store, record, restart_writers):
@@ -609,10 +660,54 @@ def _sweep_staging(paths, store):
             _remove_dead_staging(paths, name)
 
 
-def _recover_locked(paths, store, unit_active, now, restart_writers=None):
+def _sweep_key_files(paths, store, now):
+    """Delete transient key files no running job needs: `key-<job>` of a finished job and `key-inspect-*` older
+    than KEY_FILE_MAX_AGE (an inspect killed before its `finally` left the secret on tmpfs; review SEC-4)."""
+    try:
+        names = os.listdir(paths.run)
+    except (FileNotFoundError, NotADirectoryError):
+        return
+    for name in names:
+        if not name.startswith('key-'):
+            continue
+        path = Path(paths.run) / name
+        job_id = name[4:]
+        if valid_job_id(job_id):
+            try:
+                if store.get(job_id).get('state') in ACTIVE:
+                    continue
+            except BackupError:
+                pass
+        else:
+            try:
+                st = os.lstat(path)
+            except FileNotFoundError:
+                continue
+            if now - max(st.st_mtime, st.st_ctime) < KEY_FILE_MAX_AGE:
+                continue
+        with contextlib.suppress(FileNotFoundError, IsADirectoryError, PermissionError):
+            os.unlink(path)
+
+
+def _recover_locked(paths, store, unit_active, now, restart_writers=None, cleanup_fresh=None):
     changed = []
     lock_free = None
     for record in store.list(limit=None):
+        if record.get('state') in TERMINAL:
+            # A finished job can still hold work its process could not do: writers a terminated backup left
+            # stopped (review CR-14) or a fresh deployment interrupted by a shutdown (CR-05).
+            if not (record.get('stopped_writers') or record.get('fresh_apps')):
+                continue
+            if lock_free is None:
+                lock_free = lock_is_free(paths)
+            if not lock_free:
+                continue
+            extra = _restart_stopped_writers(store, record, restart_writers)
+            extra += _remove_unfinished_fresh(store, record, cleanup_fresh)
+            if extra and isinstance(record.get('error'), dict):
+                record['error']['message'] = (record['error'].get('message') or '') + extra
+            store.save(record)
+            continue
         if record.get('state') not in ACTIVE:
             continue
         created = parse_iso(record.get('created'))
@@ -628,6 +723,7 @@ def _recover_locked(paths, store, unit_active, now, restart_writers=None):
         if result is not None:
             record['result'] = result
         message += _restart_stopped_writers(store, record, restart_writers)
+        message += _remove_unfinished_fresh(store, record, cleanup_fresh)
         for item in record.get('phases') or []:
             if item.get('state') == 'active':
                 item['state'] = 'failed'
@@ -641,20 +737,22 @@ def _recover_locked(paths, store, unit_active, now, restart_writers=None):
             store.append_log(record['id'], '已清除中斷作業留下的暫存資料')
         changed.append(record['id'])
     _sweep_staging(paths, store)
+    _sweep_key_files(paths, store, now)
     return changed
 
 
-def recover_interrupted(paths, *, unit_active=None, now=None, restart_writers=None):
+def recover_interrupted(paths, *, unit_active=None, now=None, restart_writers=None, cleanup_fresh=None):
     """Mark dead queued/running jobs as interrupted; returns the affected job ids.
 
-    `restart_writers({app_id: [units]}) -> [failed units]` restarts writers a dead backup left stopped.
+    `restart_writers({app_id: [units]}) -> [failed units]` restarts writers a dead backup left stopped;
+    `cleanup_fresh([app_id]) -> [problems]` removes an unfinished fresh deployment.
     """
     if not Path(paths.jobs).is_dir():
         return []
     store = JobStore(paths)
-    with _start_lock(paths):
+    with start_lock(paths):
         return _recover_locked(paths, store, unit_active or systemd_unit_active, time.time() if now is None else now,
-                               restart_writers)
+                               restart_writers, cleanup_fresh)
 
 
 def active_job(paths):
@@ -668,7 +766,7 @@ def active_job(paths):
 def cancel_job(paths, job_id, *, wait_seconds=3.0, sleep=time.sleep, clock=time.monotonic):
     """Request cancellation; honoured at the job's next safe checkpoint. Returns {'state'}."""
     store = JobStore(paths)
-    with _start_lock(paths):
+    with start_lock(paths):
         record = store.get(job_id)
         if record.get('state') in TERMINAL:
             return {'state': record['state']}
@@ -685,8 +783,36 @@ def cancel_job(paths, job_id, *, wait_seconds=3.0, sleep=time.sleep, clock=time.
     return {'state': record.get('state')}
 
 
+def _adopt_orphans(ctx):
+    """List archives a hard kill left unindexed (between publishing and indexing) instead of hiding them."""
+    adopt = getattr(getattr(ctx.deps, 'storage', None), 'adopt_orphans', None)
+    if adopt is None:
+        return
+    try:
+        for backup_id in adopt():
+            ctx.log(f'找到沒有索引的備份檔 {backup_id}（先前作業中斷時留下），已列為上傳的備份')
+    except Exception:  # noqa: BLE001 - never block the job; details go to the journal
+        traceback.print_exc(file=sys.stderr)
+
+
+def _restart_after_termination(ctx):
+    """A termination signal ended the job: start writers that are still recorded as stopped (review CR-14),
+    unless the machine is shutting down (they start with the user manager at boot)."""
+    from . import flows
+    stopped = ctx.reporter.record.get('stopped_writers') or {}
+    if not stopped or flows._shutting_down(ctx):
+        return
+    try:
+        failed = set(flows.restart_writers(ctx.deps, stopped, log=ctx.log))
+    except Exception:  # noqa: BLE001 - recovery retries on the next status call
+        traceback.print_exc(file=sys.stderr)
+        return
+    ctx.reporter.record['stopped_writers'] = {app: [u for u in units if u in failed]
+                                              for app, units in stopped.items() if set(units) & failed}
+
+
 @contextlib.contextmanager
-def _signals_as_exceptions():
+def signals_as_exceptions():
     previous = {}
 
     def handler(signum, _frame):
@@ -729,9 +855,10 @@ def run_job(paths, job_id, *, deps=None, lock_timeout=LOCK_WAIT_SECONDS, handler
         key_file = store.key_path(job_id)
         ctx = flows.FlowContext(paths, job_id, deps or flows.default_deps(paths), reporter,
                                 key_file=key_file if os.path.lexists(key_file) else None)
+        _adopt_orphans(ctx)
         table = handlers or {'backup': flows.run_backup, 'restore': flows.run_restore, 'verify': flows.run_verify}
         handler = table[reporter.record['type']]
-        with _signals_as_exceptions():
+        with signals_as_exceptions():
             try:
                 result = handler(ctx, reporter.record.get('params') or {})
             except flows.Cancelled:
@@ -739,6 +866,7 @@ def run_job(paths, job_id, *, deps=None, lock_timeout=LOCK_WAIT_SECONDS, handler
             except flows.RolledBack as rolled:
                 reporter.finish('rolled-back', result=rolled.result, error=rolled.error.as_dict())
             except Terminated:
+                _restart_after_termination(ctx)
                 message, partial = interrupted_details(reporter.record)
                 reporter.finish('interrupted', result=partial, error={'code': 'job-failed', 'message': message})
             except BackupError as error:
@@ -757,3 +885,8 @@ def run_job(paths, job_id, *, deps=None, lock_timeout=LOCK_WAIT_SECONDS, handler
             with contextlib.suppress(OSError):
                 os.ftruncate(lock_fd, 0)
             os.close(lock_fd)
+
+
+# Old private names, kept for callers and tests written against them.
+_start_lock = start_lock
+_signals_as_exceptions = signals_as_exceptions

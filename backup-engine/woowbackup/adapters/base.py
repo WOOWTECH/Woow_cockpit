@@ -45,8 +45,11 @@ class Adapter:
         """List of Check dicts for restoring this app_manifest here."""
         raise NotImplementedError
 
-    def restore(self, app_manifest, extracted_dir, *, mode):
-        """Perform the restore; raise BackupError on failure (caller handles rollback)."""
+    def restore(self, app_manifest, extracted_dir, *, mode, rollback=False):
+        """Perform the restore; raise BackupError on failure (caller handles rollback).
+
+        `rollback=True` restores the pre-restore safety backup after a failure: nothing may be downloaded.
+        """
         raise NotImplementedError
 
     def start_units(self, units):
@@ -59,6 +62,10 @@ class Adapter:
 
     def health(self):
         raise NotImplementedError
+
+    def health_hint(self):
+        """Quick health problem text for the status page, or None (default: not checked)."""
+        return None
 
     def verify_snapshot(self):
         raise NotImplementedError

@@ -103,11 +103,14 @@ def hostname():
 
 
 def download_filename(host, created):
-    """`woowtech-backup-<hostname>-<YYYYMMDD-HHMM>.woowbackup` (CONTRACT section 5)."""
+    """`woowtech-backup-<hostname>-<YYYYMMDD-HHMMSS>.woowbackup` (CONTRACT section 5).
+
+    Seconds keep two backups made within the same minute apart in a downloads folder.
+    """
     try:
-        stamp = parse_iso_utc(created).strftime('%Y%m%d-%H%M')
+        stamp = parse_iso_utc(created).strftime('%Y%m%d-%H%M%S')
     except ValueError:
-        stamp = utc_now().strftime('%Y%m%d-%H%M')
+        stamp = utc_now().strftime('%Y%m%d-%H%M%S')
     return f'woowtech-backup-{sanitize_hostname(host)}-{stamp}.woowbackup'
 
 
@@ -184,7 +187,11 @@ def atomic_write(path, data, mode=0o600):
 
 def atomic_write_json(path, obj, mode=0o600):
     data = json.dumps(obj, ensure_ascii=False, indent=2, sort_keys=False) + '\n'
-    return atomic_write(path, data.encode('utf-8'), mode)
+    try:
+        raw = data.encode('utf-8')
+    except UnicodeEncodeError:  # lone surrogates: write \\u escapes instead of failing (review SEC-5)
+        raw = (json.dumps(obj, ensure_ascii=True, indent=2, sort_keys=False) + '\n').encode('ascii')
+    return atomic_write(path, raw, mode)
 
 
 def sha256_fd(fd, chunk=CHUNK):

@@ -35,9 +35,14 @@ MODE_RE = re.compile(r'0[0-7]{3}\Z')
 URL_RE = re.compile(r"http://(?:127\.0\.0\.1|localhost):([0-9]{1,5})(/[A-Za-z0-9._~!$&'()*+,;=:@%/?-]*)\Z")
 CONTROL_RE = re.compile(r'[\x00-\x1f\x7f-\x9f]')
 
-CONFIG_PREFIXES = ('.config/', '.local/share/')
-# Unit definitions must only ever come from trusted templates, never from archive bytes.
-FORBIDDEN_CONFIG_PREFIXES = ('.config/containers/systemd/', '.config/systemd/')
+# A config file lives in the app's own directory: `.config/<id>/` or `.local/share/<id>/` (an allowlist).
+CONFIG_ROOTS = ('.config/', '.local/share/')
+# Unit definitions, the user manager's environment and the Podman configuration must only ever come from
+# trusted templates, never from archive bytes; these stay forbidden even for an app id that collides
+# with such a directory name (review finding SEC-8).
+FORBIDDEN_CONFIG_PREFIXES = ('.config/systemd/', '.config/containers/', '.config/environment.d/', '.config/autostart/',
+                             '.config/dbus-1/', '.config/user-tmpfiles.d/', '.local/share/systemd/',
+                             '.local/share/containers/', '.local/share/dbus-1/', '.local/share/applications/')
 
 TOP_REQUIRED = ('schema', 'id', 'name', 'owner', 'adapter', 'quadlet', 'units')
 TOP_OPTIONAL = ('description', 'writer_units', 'postgres', 'volumes', 'secrets', 'config_files', 'health', 'verify')
@@ -140,15 +145,16 @@ def _url(value, where):
     return value
 
 
-def _config_path(value, where):
+def _config_path(value, where, app_id):
     _string(value, where, max_len=1024)
-    if value.startswith('/') or not value.startswith(CONFIG_PREFIXES):
-        _fail(where, '必須是 .config/ 或 .local/share/ 之下的相對路徑。')
+    allowed = tuple(f'{root}{app_id}/' for root in CONFIG_ROOTS)
+    if value.startswith('/') or not value.startswith(allowed):
+        _fail(where, f'必須位於應用自己的設定目錄 .config/{app_id}/ 或 .local/share/{app_id}/ 之下。')
     for segment in value.split('/'):
         if segment in ('', '.', '..') or not SEGMENT_RE.fullmatch(segment):
             _fail(where, '含有不允許的路徑片段。')
     if value.startswith(FORBIDDEN_CONFIG_PREFIXES):
-        _fail(where, '不可指向 systemd 或 Quadlet 單元目錄。')
+        _fail(where, '不可指向 systemd、Podman、使用者環境或自動啟動的設定目錄。')
     return value
 
 
@@ -252,7 +258,7 @@ def validate_entry(data, *, paths, sha256=None, user_lookup=None):
     for i, item in enumerate(_list(data.get('config_files', []), 'config_files', 64)):
         where = f'config_files[{i}]'
         _object(item, where, ('path', 'mode'))
-        config_files.append({'path': _config_path(item['path'], f'{where}.path'),
+        config_files.append({'path': _config_path(item['path'], f'{where}.path', app_id),
                              'mode': _mode(item['mode'], f'{where}.mode')})
     _unique([c['path'] for c in config_files], 'config_files[].path')
 

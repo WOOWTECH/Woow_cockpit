@@ -82,6 +82,26 @@ tests/e2e/lab/owner.sh a python3 /opt/woowbk-demo/tools/check.py --stop-start
 重設 dev-b 只做擁有者層級的移除（停止服務、刪除 Quadlet、資料卷、密鑰、設定檔與示範應用映像）並刪除 dev-b 的備份，
 不重建設備。
 
+## 強化測試（hardening，H1–H8）
+
+`python3 -I tests/e2e/lab/hardening.py <h1|h2|h3|h4|h5|h6|h7|leaks|all>` 與 `node tests/e2e/lab/upload_window.mjs`，
+證據寫入 `~/.woowbk-lab/evidence/hardening/<時間>-<情境>/`（`driver.log`、`result.json`、作業紀錄）。全部在 dev-a
+（需要設備金鑰）執行，H8 上傳到 dev-b；每個情境結束時把設備恢復原狀（刪除測試備份、移除注入的錯誤、卸載 tmpfs）。
+
+| 指令 | 內容 |
+| --- | --- |
+| `h1` | F5：在 dev-a **設備內**用設備金鑰解開一份新的基礎備份，注入一種缺陷後以設備公鑰重新加密（主機只拿到密文），經真正的 bridge 上傳 → upload-finish → inspect → verify 作業 → 原位還原作業。26 種：路徑穿越／絕對路徑／PAX path 覆寫、符號連結／硬連結／裝置／目錄成員、多出／缺少／重複／順序錯亂、大小謊報（大、小）、校驗值錯誤、結尾多餘資料、manifest 不在第一個、檔頭與 manifest 不符、manifest 中的穿越路徑／重複項目／指向其他應用、設定檔路徑不在 `.config/`／含 `..`／權限 0755、擁有者 root、manifest 超過 1 MiB、成員超過 4000、目錄中沒有的應用、目錄未宣告的設定檔／密鑰／資料卷／資料庫／Quadlet／映像（還原成功、全部被略過）。每種都檢查：拒絕原因（引擎驗證器的 `details.reason`）、staging 清空、沒有金鑰暫存檔、沒有孤兒封存檔、應用資料與部署檔不變，並用「變更檔案掃描」（自我測試會先證明它能抓到 /etc、/home、資料目錄與資料卷內的寫入）確認沒有寫到 staging 以外 |
+| `h2` | F6：在設備內把 600 MiB 的 tmpfs 掛在 `/var/lib/woowtech-backup` 上（原資料仍在底下，卸載即恢復）：含映像備份在「檢查」階段以 `insufficient-space` 失敗、寫入服務未暫停、`/healthz` 全程 200；142 MB 上傳在 upload-begin 被拒，`可用−512 MiB` 邊界上下 1 MiB 各測一次；不含映像的備份可放入（對照） |
+| `h3` | F7：替換資料庫容器內的 `pg_dump`（容器重建即消失，結束時一定還原）：失敗並輸出一半、結束碼 0 但少了結尾 64 bytes、結束碼 0 但只有一半、執行中資料庫被關閉。檢查失敗階段為「匯出資料庫」、寫入服務已恢復、沒有列出備份、staging 清空；「被截斷但結束碼 0」的備份若被接受，必須真的能還原 |
+| `h4` | 在設備內用監看程式讀作業紀錄，於 `stop`／`dump`（以慢速 pg_dump 撐住）／`export`／`package`／`verify` 階段 `systemctl kill --signal=SIGKILL`；在呼叫 helper 之前先記錄應用狀態，證明是復原流程重新啟動寫入服務；檢查 interrupted＋指引、staging 移除、沒有孤兒封存檔、下一次備份成功 |
+| `h5` | 還原進入 `start` 階段（資料卷已刪除）時 `labpodman restart woowbk-dev-a`；開機後作業為 interrupted＋還原前備份 ID，還原該備份後資料等於還原前（完整內容） |
+| `h6` | 資料卷寫入約 600 MiB 亂數檔：不含映像的備份、bridge 下載、原位還原；主機端讀取設備 cgroup 的 `memory.peak`（每個 fd 可歸零）與每 0.25 秒的 `memory.stat`，回報包含 page cache 的峰值與 anon＋kernel＋shmem 峰值、OOM 計數；最後刪除大檔與大型備份 |
+| `h7` | `/opt/woow-cockpit-src` 的 `manage.py plan/install/verify` → 回退最新交易 → 繼續回退到備份套件被移除（helper、頁面、目錄設定都不在）→ 重新安裝；每一步比對 `/var/lib/woowtech-backup` 與金鑰目錄的內容雜湊 |
+| `leaks` | 兩台設備的作業紀錄、日誌、索引、requests、journal 沒有應用密鑰或 age 金鑰；沒有 `key-*`、staging、孤兒封存檔；主機 hardening／integration 證據沒有金鑰 |
+| `upload_window.mjs [MiB=2,4,8] [次數=3] [chunkKiB=64]` | H8：以 Playwright 攔截 `backup.js`，只在測試瀏覽器內改 `WINDOW_SIZE`（與實驗用的 `CHUNK_SIZE`）並加上計時；經 cockpit-ws 上傳約 142 MB 到 dev-b，核對 sha256，停在金鑰步驟後刪除。程式庫與設備上的 2 MiB 不變 |
+
+`H1_CASES`、`H3_FAULTS`、`H4_KILLS`、`H5_PHASE`、`H6_FILES`、`H7_FULL=0`、`H2_TMPFS` 環境變數可只跑一部分。
+
 ## 已實測的事實與注意事項
 
 * **巢狀儲存**：appowner 的儲存在 `/home` 資料卷（主機 ext4），`podman info` 為 `overlay`、
@@ -103,4 +123,21 @@ tests/e2e/lab/owner.sh a python3 /opt/woowbk-demo/tools/check.py --stop-start
 * **Cockpit**：登入頁標題為主機名稱；`superuser` 開啟後右上角顯示「Administrative access」。在 Playwright
   的 `frame.evaluate` 中，`cockpit.spawn()` 回傳的是 Cockpit 自己的 thenable，需包在 `async` 函式中 `await`。
 * Ubuntu 套件會啟用 rootful 的 `podman.socket`／`podman-restart.service` 等單元；保留預設，對測試無影響。
+* **tmpfs**：設備內 root 可以 `mount -t tmpfs`（rootless `--privileged`）；掛在資料目錄上時 helper、systemd 作業與
+  cockpit-bridge 都看得到。tmpfs 用量算在設備的記憶體上限內。
+* **記憶體峰值**：設備內寫 `memory.peak` 會 EPERM；主機端（`labpodman inspect --format '{{.State.CgroupPath}}'`）
+  可對同一個 fd 寫入以歸零並讀取該區間的峰值。page cache 會把用量推到 768 MiB 上限（`memory.events` 的 `max` 增加），
+  判斷是否危險要看 anon＋kernel＋shmem 與 `oom_kill`。
+* **journal**：設備的 `/var/log/journal` 是 tmpfs（podman `--systemd=always`），`labpodman restart` 後舊紀錄消失。
+* **labpodman restart**：約 1 秒，3–4 秒後 systemd、appowner 的 user manager 與 cockpit.socket 就緒，linger 會自動啟動示範應用。
+* **共用實驗室**：其他測試者可能同時在 dev-a 以 appowner 建立／刪除 `woowbk-sec-probe-*` 資料卷或映像（journal 可見）；
+  `hardening.py` 的變更檔案掃描因此只容許 podman 自身狀態與目錄 mtime，並記錄視窗內的這類事件數。
 * `podman secret inspect --showsecret --format {{.SecretData}}` 輸出原始值加一個結尾換行。
+* **f8 的故障注入（2026-11-13 修正後）**：原本以「尚未套用的設定檔標題」讓還原後的資料核對不一致，但那正是審查發現
+  CR-04 的快照競態；修正後這種備份不再帶資料核對快照，還原會成功。現在改為對資料庫的 Quadlet 單元暫時加一個
+  drop-in（`~/.config/systemd/user/woowbk-demo-db.service.d/woowbk-f8.conf`，`ExecStartPost=` 只失敗一次並刪除標記檔），
+  使還原時的資料庫啟動失敗、自動回復時的啟動成功；`finally` 一定移除 drop-in 並 `daemon-reload`。
+* **還原期間的遮蔽**：原位與全新部署還原會在第一個破壞性步驟後以 `systemctl --user mask` 暫時停用應用的非資料庫單元
+  （`~/.config/systemd/user/<unit> -> /dev/null`，優先於 Quadlet 產生器），完成或回復後才 `unmask`；作業中斷時
+  總覽會把應用顯示為「異常」並說明需要再次還原。已在 dev-a 實測：`LoadState=masked`、`start` 被拒（結束碼 1）、
+  `unmask` 後恢復。

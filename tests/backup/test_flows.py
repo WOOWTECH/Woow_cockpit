@@ -48,6 +48,9 @@ class FakeReporter:
     def skip(self, phase_id):
         self.events.append(('skip', phase_id))
 
+    def complete(self, phase_id):
+        self.events.append(('complete', phase_id))
+
     def add_phase(self, phase_id, label):
         self.events.append(('add_phase', phase_id))
 
@@ -269,7 +272,7 @@ class FakeArchive:
             raise BackupError('key-required', '需要備份金鑰。')
         if data['header']['key_id'] not in self._key_ids(identities):
             raise BackupError('wrong-key', '金鑰不正確。')
-        if str(path) in self.corrupt:
+        if str(path) in self.corrupt or Path(path).name in self.corrupt:
             raise BackupError('corrupt-archive', '備份檔已損毀或遭到修改，無法使用。')
         return data
 
@@ -319,6 +322,9 @@ class World:
         self.unstartable = set()
         self.hook_probe = None
         self.after_backup = None
+        self.health_hints = {}
+        self.extract_seen = None
+        self.raise_after_destructive = None  # e.g. jobs.Terminated: a signal after the first destructive step
         self.adapters = []
 
     def factory(self, app, *, log, phase=None, checkpoint=None, writers_hook=None):
@@ -392,14 +398,16 @@ class FakeAdapter:
         return [{'id': f'{self.app.id}/items', 'status': 'ok', 'message': '項目齊全。'},
                 {'id': f'{self.app.id}/catalog', 'status': 'warn', 'message': '設定與備份時不同。'}]
 
-    def restore(self, app_manifest, extracted_dir, *, mode):
-        rollback = self.phase is noop
+    def restore(self, app_manifest, extracted_dir, *, mode, rollback=False):
+        assert rollback == (self.phase is noop), 'rollbacks (and only they) use rollback=True and no phases'
         self.world.events.append(('restore', self.app.id, mode, 'rollback' if rollback else 'restore'))
         if self.app.id in self.world.fail_restore_before:
             raise BackupError('incompatible', '映像載入失敗。')
         self.phase('stop')
         self.destructive_started = True
         self.phase('restore')
+        if self.world.raise_after_destructive is not None and not rollback:
+            raise self.world.raise_after_destructive
         if rollback and self.app.id in self.world.fail_rollback_restore:
             raise BackupError('job-failed', '回復時資料卷匯入失敗。')
         data = (Path(extracted_dir) / app_manifest['volumes'][0]['entry']).read_bytes()
@@ -424,6 +432,9 @@ class FakeAdapter:
         status = self.world.unhealthy.get(self.app.id, 'ok')
         return [{'id': f'{self.app.id}/health-1', 'status': status, 'message': f'健康檢查 {status}'}]
 
+    def health_hint(self):
+        return self.world.health_hints.get(self.app.id)
+
     def verify_snapshot(self):
         return snapshot_of(self.world.data[self.app.id])
 
@@ -433,7 +444,8 @@ def make_catalog(paths):
     entry = demo_entry(paths)
     apps['woowbk-demo'] = catalog.validate_entry(entry, paths=paths, user_lookup=user_lookup)
     second = copy.deepcopy(entry)
-    second.update(id='woowbk-two', name='第二個應用')
+    second.update(id='woowbk-two', name='第二個應用',
+                  config_files=[{'path': '.config/woowbk-two/app.env', 'mode': '0600'}])
     apps['woowbk-two'] = catalog.validate_entry(second, paths=paths, user_lookup=user_lookup)
     return apps
 
@@ -485,14 +497,33 @@ class BackupFlowTests(FlowCase):
         self.assertEqual(meta['type'], 'manual')
         self.assertEqual(meta['verified']['ok'], True)
         self.assertEqual(meta['apps'], [{'id': 'woowbk-demo', 'name': '示範筆記應用'}])
-        self.assertEqual(meta['filename'], 'woowtech-backup-dev-a-20261113-0200.woowbackup')
+        self.assertEqual(meta['filename'], 'woowtech-backup-dev-a-20261113-020001.woowbackup')
         manifest = self.archive.writes[0]['manifest']
         self.assertEqual(manifest['created'], '2026-11-13T02:00:01Z')
         self.assertEqual(manifest['consistency'], {'method': 'writers-stopped', 'downtime_seconds': 2})
         self.assertEqual(manifest['source'], HOST)
         self.assertEqual(self.archive.writes[0]['recipient'], self.keys.device.recipient)
-        self.assertEqual(self.archive.verifies, [self.storage.archive_path(result['backup_id'])])
+        # written and verified inside the job's staging, then published into archives/
+        final = self.storage.archive_path(result['backup_id'])
+        self.assertEqual(self.archive.verifies, [self.storage.staging / self.job_id / final.name])
+        self.assertTrue(final.is_file())
         self.assert_staging_clean()
+
+    def test_archive_appears_in_archives_only_after_verification(self):
+        # Lab H4: SIGKILL during 'verify' left an unlisted 142 MB archive in archives/ that nothing removed.
+        seen = []
+        verify = self.archive.verify_archive
+
+        def spy(path, identities, **kwargs):
+            seen.append((Path(path), sorted(p.name for p in self.storage.archives.iterdir())))
+            return verify(path, identities, **kwargs)
+        self.archive.verify_archive = spy
+        result = self.backup()
+        path, listing = seen[0]
+        self.assertEqual(path.parent, self.storage.staging / self.job_id)
+        self.assertEqual(listing, [])
+        self.assertEqual(sorted(p.name for p in self.storage.archives.iterdir()),
+                         [f'{result["backup_id"]}.woowbackup'])
 
     def test_insufficient_space_fails_before_any_writer_stops(self):
         self.storage.free = 1000
@@ -537,7 +568,7 @@ class BackupFlowTests(FlowCase):
         self.assertEqual(list(self.storage.archives.iterdir()), [])
 
     def test_verify_failure_discards_archive(self):
-        self.archive.on_write = lambda: self.archive.corrupt.add(str(self.storage.archive_path('20261113T020001Z-00000001')))
+        self.archive.on_write = lambda: self.archive.corrupt.add('20261113T020001Z-00000001.woowbackup')
         with self.assertRaises(BackupError) as caught:
             self.backup()
         self.assertEqual(caught.exception.code, 'corrupt-archive')
@@ -686,17 +717,38 @@ class RestoreFlowTests(FlowCase):
             self.restore()
         self.assertEqual(caught.exception.code, 'incompatible')
         self.assertNotIn(('add_phase', 'rollback'), self.reporter.events)
-        self.assertEqual(caught.exception.result['safety_backup_id'], self.safety_ids()[0])
+        result = caught.exception.result
+        self.assertEqual(result['safety_backup_id'], self.safety_ids()[0])
+        # Review CR-09/F2: the page must be able to say "nothing changed" instead of "rollback incomplete".
+        self.assertIs(result['changed'], False)
+        self.assertIs(result['rolled_back'], False)
+        self.assertIn(('complete', 'safety'), self.reporter.events, 'the safety phase is done, not failed')
+        self.assertEqual(self.world.data['woowbk-demo'], b'notes-v2-changed')
 
     def test_fresh_failure_removes_what_was_created(self):
         self.world.mode['woowbk-demo'] = 'fresh'
         self.world.fail_restore_after['woowbk-demo'] = 1
-        with self.assertRaises(flows.RolledBack) as caught:
-            self.restore()
+        seen = []
+        self.world.hook_probe = None
+        restore = FakeAdapter.restore
+
+        def spy(adapter, *args, **kwargs):
+            seen.append(dict(self.reporter.partial))
+            return restore(adapter, *args, **kwargs)
+        FakeAdapter.restore = spy
+        try:
+            with self.assertRaises(flows.RolledBack) as caught:
+                self.restore()
+        finally:
+            FakeAdapter.restore = restore
         self.assertIn(('remove_fresh', 'woowbk-demo'), self.world.events)
         self.assertIsNone(caught.exception.result['safety_backup_id'])
+        self.assertEqual(caught.exception.result['fresh_apps'], ['woowbk-demo'])
         self.assertEqual(self.safety_ids(), [])
         self.assertIn(('skip', 'safety'), self.reporter.events)
+        # Review CR-05: recorded before the first fresh step, cleared once the job removed the deployment itself.
+        self.assertEqual(seen[0].get('fresh_apps'), ['woowbk-demo'])
+        self.assertEqual(self.reporter.partial['fresh_apps'], [])
 
     def test_rollback_failure_needs_manual_work(self):
         self.world.fail_restore_after['woowbk-demo'] = 1
@@ -706,9 +758,118 @@ class RestoreFlowTests(FlowCase):
         error = caught.exception
         self.assertEqual(error.code, 'job-failed')
         self.assertIn('需人工處理', error.message)
+        self.assertNotIn('。。', error.message)  # lab H5 showed "…（結束碼 125）。。可使用…"
+        self.assertTrue(error.message.endswith(f'可使用還原前備份 {error.result["safety_backup_id"]} 再次還原。'))
         self.assertFalse(error.result['rolled_back'])
         self.assertTrue(error.result['safety_backup_id'])
         self.assert_staging_clean()
+
+    def test_termination_during_a_fresh_restore_at_shutdown_keeps_the_cleanup_marker(self):
+        # Review CR-05: the recovery after boot removes the partial fresh deployment.
+        from woowbackup.jobs import Terminated
+        self.deps.system_stopping = lambda: True
+        self.world.mode['woowbk-demo'] = 'fresh'
+        self.world.raise_after_destructive = Terminated(15)
+        with self.assertRaises(Terminated):
+            self.restore()
+        self.assertNotIn(('remove_fresh', 'woowbk-demo'), self.world.events)
+        self.assertEqual(self.reporter.partial['fresh_apps'], ['woowbk-demo'])
+
+    def test_termination_during_shutdown_does_not_start_a_rollback(self):
+        # Lab H5: a reboot during the restore sent SIGTERM; the rollback started while the owner's services were
+        # going away and failed with a misleading "podman pull" error. Now the signal propagates (-> interrupted).
+        from woowbackup.jobs import Terminated
+        self.deps.system_stopping = lambda: True
+        self.world.raise_after_destructive = Terminated(15)
+        with self.assertRaises(Terminated):
+            self.restore()
+        self.assertNotIn(('add_phase', 'rollback'), self.reporter.events)
+        self.assertEqual([e for e in self.world.events if e[0] == 'restore'],
+                         [('restore', 'woowbk-demo', 'inplace', 'restore')])
+        self.assertTrue(self.reporter.partial['safety_backup_id'])
+        self.assertTrue(any('系統正在關機或重新開機' in line for line in self.reporter.logs))
+        self.assert_staging_clean()
+
+    def test_termination_while_the_system_runs_still_rolls_back(self):
+        from woowbackup.jobs import Terminated
+        self.deps.system_stopping = lambda: False
+        self.world.raise_after_destructive = Terminated(15)
+        with self.assertRaises(flows.RolledBack) as caught:
+            self.restore()
+        self.assertTrue(caught.exception.result['rolled_back'])
+        self.assertEqual(self.world.data['woowbk-demo'], b'notes-v2-changed')
+
+    def test_failures_roll_back_even_while_shutting_down(self):
+        # Only termination signals skip the rollback; an ordinary failure is still rolled back.
+        self.deps.system_stopping = lambda: True
+        self.world.fail_restore_after['woowbk-demo'] = 1
+        with self.assertRaises(flows.RolledBack):
+            self.restore()
+
+    def test_one_failing_rollback_does_not_stop_the_others(self):
+        # Review CR-03: woowbk-demo's rollback fails; woowbk-two must still get its pre-restore data back.
+        self.world.fail_restore_after['woowbk-two'] = 1
+        self.world.fail_rollback_restore.add('woowbk-demo')
+        with self.assertRaises(BackupError) as caught:
+            self.restore(apps=['woowbk-demo', 'woowbk-two'])
+        rollbacks = [e[1] for e in self.world.events if e[0] == 'restore' and e[3] == 'rollback']
+        self.assertEqual(rollbacks, ['woowbk-demo', 'woowbk-two'])
+        self.assertEqual(self.world.data['woowbk-two'], b'two-v2-changed')
+        self.assertIn('需人工處理', caught.exception.message)
+        self.assertIn('示範筆記應用', caught.exception.message)
+        self.assertNotIn('第二個應用', caught.exception.message)
+
+    def test_rollback_frees_the_extracted_archive_first(self):
+        # Review CR-01: the failed archive's plaintext (and the safety plaintext) is gone before the rollback
+        # extracts the safety backup, so the rollback has the space a successful safety backup needed.
+        staging = self.storage.staging / self.job_id
+        extract = self.archive.extract_archive
+        present = []
+
+        def spy(path, identities, dest_dir, **kwargs):
+            present.append(sorted(p.name for p in staging.iterdir()))
+            return extract(path, identities, dest_dir, **kwargs)
+        self.archive.extract_archive = spy
+        self.world.fail_restore_after['woowbk-demo'] = 1
+        with self.assertRaises(flows.RolledBack):
+            self.restore()
+        self.assertEqual(present, [['extract'], ['rollback']])
+
+    def test_no_restore_when_a_rollback_would_lack_space(self):
+        # Review CR-01: with the safety backup taken, the rollback must fit; otherwise stop before any change.
+        reserve = self.paths.reserve_bytes
+        self.storage.free = reserve + 1000  # enough for the safety backup estimate check below
+        self.world.estimate = 1
+        free = iter([reserve + 10 ** 6, 10])
+
+        def free_bytes():
+            try:
+                return next(free)
+            except StopIteration:
+                return 10
+        self.storage.free_bytes = free_bytes
+        with self.assertRaises(BackupError) as caught:
+            self.restore()
+        self.assertEqual(caught.exception.code, 'insufficient-space')
+        self.assertIn('未做任何變更', caught.exception.message)
+        self.assertNotIn('restore', [e[0] for e in self.world.events])
+        self.assertEqual(len(self.safety_ids()), 1)
+        self.assertIs(caught.exception.result['changed'], False)
+
+    def test_safety_plaintext_is_removed_as_soon_as_it_is_published(self):
+        staging = self.storage.staging / self.job_id
+        names = []
+        restore = FakeAdapter.restore
+
+        def spy(adapter, *args, **kwargs):
+            names.append(sorted(p.name for p in staging.iterdir()))
+            return restore(adapter, *args, **kwargs)
+        FakeAdapter.restore = spy
+        try:
+            self.restore()
+        finally:
+            FakeAdapter.restore = restore
+        self.assertEqual(names, [['extract']])
 
     def test_multi_app_failure_rolls_back_every_touched_app(self):
         self.world.fail_restore_after['woowbk-two'] = 1
@@ -738,6 +899,47 @@ class RestoreFlowTests(FlowCase):
         self.assertIn(('ensure-db', 'woowbk-demo'), self.world.events)
         self.assertTrue(any('將直接還原' in line for line in self.reporter.logs))
         self.assertIn(safety_id, self.storage.index)
+        # Review F1: the page must not claim a safety backup was made; the phase is skipped, not done.
+        self.assertIs(result['safety_skipped'], True)
+        self.assertIn(('skip', 'safety'), self.reporter.events)
+        self.assertNotIn(('complete', 'safety'), self.reporter.events)
+
+    def test_safety_failure_result_tells_the_page_why(self):
+        self.world.db_down.add('woowbk-demo')
+        with self.assertRaises(BackupError) as caught:
+            self.restore()
+        self.assertIs(caught.exception.result['safety_failed'], True)
+        self.assertIs(caught.exception.result['changed'], False)
+        self.assertIn('不建立還原前備份', caught.exception.message)
+
+    def test_explicit_restore_without_a_safety_backup(self):
+        # Review CR-16: an app whose database cannot start can still be restored from a manual or uploaded
+        # backup once the user explicitly accepts that no rollback is possible.
+        self.world.db_down.add('woowbk-demo')
+        result = flows.run_restore(self.ctx(), {'backup_id': self.backup_id, 'apps': ['woowbk-demo'],
+                                                'allow_no_safety': True})
+        self.assertEqual(self.world.data['woowbk-demo'], b'notes-v1')
+        self.assertIsNone(result['safety_backup_id'])
+        self.assertIs(result['safety_skipped'], True)
+        self.assertIn(('skip', 'safety'), self.reporter.events)
+        self.assertTrue(any('你已選擇不建立還原前備份' in line for line in self.reporter.logs))
+        self.assertEqual(self.safety_ids(), [])
+
+    def test_verification_keeps_only_bounded_compared_values(self):
+        # Review SEC-5: the archive's snapshot is untrusted; only compared keys, each bounded, reach the record.
+        data = json.loads(self.storage.archive_path(self.backup_id).read_text())
+        app = data['manifest']['apps'][0]
+        app['verify_snapshot']['summary']['title'] = 'x' * 10000
+        app['verify_snapshot']['summary']['extra'] = 'y' * 10000
+        app['verify_snapshot']['other'] = {'big': 'z' * 10000}
+        self.storage.archive_path(self.backup_id).write_text(json.dumps(data))
+        with self.assertRaises(flows.RolledBack) as caught:  # title differs, so the data check fails
+            self.restore()
+        before = caught.exception.result['verification'][0]['before']
+        self.assertEqual(set(before), {'summary'})
+        self.assertEqual(set(before['summary']), {'notes', 'files', 'digest', 'title', 'signatures_valid'})
+        self.assertEqual(before['summary']['title'], flows.OMITTED)
+        self.assertLess(len(json.dumps(caught.exception.result, ensure_ascii=False)), 4000)
 
     def test_preflight_failure_changes_nothing(self):
         self.world.preflight_fail.add('woowbk-demo')
@@ -808,6 +1010,52 @@ class SafetyPruneTests(FlowCase):
         self.assertEqual(remaining, ['20261020T000000Z-000000aa', '20261021T000000Z-000000bb',
                                      '20261022T000000Z-000000cc', '20261103T000000Z-00000003',
                                      '20261104T000000Z-00000004', '20261105T000000Z-00000005'])
+
+    def test_prune_after_success_keeps_this_restores_safety_backup_despite_clock_skew(self):
+        # Review SEC-2/CR-02: three safety backups dated in the future (clock went backwards). The new safety
+        # backup sorts oldest; it must survive, and a failing restore must still be able to roll back with it.
+        backup_id = self.backup()['backup_id']
+        for day in (1, 2, 3):
+            self.add(f'2026120{day}T000000Z-0000000{day}', f'2026-12-0{day}T00:00:00Z', ['woowbk-demo'])
+        self.world.data['woowbk-demo'] = b'notes-v2-changed'
+        result = flows.run_restore(self.ctx(), {'backup_id': backup_id, 'apps': ['woowbk-demo']})
+        self.assertIn(result['safety_backup_id'], self.storage.index)
+        self.world.data['woowbk-demo'] = b'notes-v3-newest'
+        self.world.fail_restore_after['woowbk-demo'] = 1
+        with self.assertRaises(flows.RolledBack) as caught:
+            flows.run_restore(self.ctx(), {'backup_id': backup_id, 'apps': ['woowbk-demo']})
+        self.assertIn(caught.exception.result['safety_backup_id'], self.storage.index)
+        self.assertEqual(self.world.data['woowbk-demo'], b'notes-v3-newest')
+
+    def test_failed_restores_never_prune(self):
+        backup_id = self.backup()['backup_id']
+        for _ in range(4):
+            flows.run_restore(self.ctx(), {'backup_id': backup_id, 'apps': ['woowbk-demo']})
+        deleted = list(self.storage.deleted)
+        self.world.fail_restore_after['woowbk-demo'] = 1
+        with self.assertRaises(flows.RolledBack):
+            flows.run_restore(self.ctx(), {'backup_id': backup_id, 'apps': ['woowbk-demo']})
+        self.assertEqual(self.storage.deleted, deleted)
+
+    def test_safety_backup_of_a_failed_restore_is_pinned(self):
+        # Review CR-02b: retries after a failed restore must not prune the only good pre-restore backup S1.
+        from woowbackup import jobs
+        for i in range(1, 6):
+            self.add(f'2026110{i}T000000Z-0000000{i}', f'2026-11-0{i}T00:00:00Z', ['woowbk-demo'])
+        store = jobs.JobStore(self.paths)
+        record = store.create('restore', {'backup_id': '20261101T000000Z-00000001', 'apps': ['woowbk-demo']})
+        record.update(state='failed', result={'apps': ['woowbk-demo'], 'safety_backup_id': '20261101T000000Z-00000001',
+                                             'rolled_back': False})
+        store.save(record)
+        flows.prune_safety(self.ctx(), ['woowbk-demo'])
+        self.assertIn('20261101T000000Z-00000001', self.storage.index)
+        self.assertNotIn('20261102T000000Z-00000002', self.storage.index)
+        # A later successful restore of the app settles it: the old safety backup may be pruned again.
+        later = store.create('restore', {'backup_id': 'x', 'apps': ['woowbk-demo']}, now=__import__('time').time() + 60)
+        later.update(state='succeeded')
+        store.save(later)
+        flows.prune_safety(self.ctx(), ['woowbk-demo'])
+        self.assertNotIn('20261101T000000Z-00000001', self.storage.index)
 
     def test_prune_never_deletes_the_backup_being_restored(self):
         for i in range(1, 5):

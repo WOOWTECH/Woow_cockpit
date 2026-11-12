@@ -612,7 +612,7 @@ def scenario_s1(ev):
     info = ok(dev, 'download-info', {'backup_id': backup_id}, ev=ev)
     ev.check('download-info: path inside archives/, contract filename, size',
              info['path'] == f'/var/lib/woowtech-backup/archives/{backup_id}.woowbackup'
-             and re.fullmatch(r'woowtech-backup-woowbk-dev-a-[0-9]{8}-[0-9]{4}\.woowbackup', info['filename'])
+             and re.fullmatch(r'woowtech-backup-woowbk-dev-a-[0-9]{8}-[0-9]{6}\.woowbackup', info['filename'])
              and info['size'] == meta['size'], info)
 
     # Inspect on the source device (key held): preflight must say in-place.
@@ -1001,45 +1001,67 @@ def owner_write_title(dev, title):
     owner(dev, 'python3', '-I', '-c', code, title)
 
 
+F8_DROPIN = '.config/systemd/user/woowbk-demo-db.service.d/woowbk-f8.conf'
+F8_MARKER = '.woowbk-f8-fail-once'
+
+
+def f8_inject(dev, enable):
+    """One-shot failure of the next database start (the restore's); the rollback's start then succeeds.
+
+    A drop-in for the Quadlet unit runs `ExecStartPost=` that fails exactly once (it consumes a marker file).
+    Earlier versions injected a pending env-file edit, i.e. the snapshot race that review finding CR-04 fixed:
+    such a backup now carries no snapshot, so it no longer fails its data check.
+    """
+    if enable:
+        script = (f'mkdir -p "$HOME/{Path(F8_DROPIN).parent}" && touch "$HOME/{F8_MARKER}" && '
+                  f'printf "%s\\n" "[Service]" '
+                  f'"ExecStartPost=/bin/sh -c \'test ! -e $HOME/{F8_MARKER} || {{ rm -f $HOME/{F8_MARKER}; exit 1; }}\'" '
+                  f'> "$HOME/{F8_DROPIN}" && systemctl --user daemon-reload')
+    else:
+        script = (f'rm -f "$HOME/{F8_DROPIN}" "$HOME/{F8_MARKER}"; rmdir "$HOME/{Path(F8_DROPIN).parent}" 2>/dev/null; '
+                  'systemctl --user daemon-reload')
+    owner(dev, 'sh', '-c', script)
+
+
 def scenario_f8(ev):
     """F8: a restore that fails after the destructive step rolls back automatically; data equals pre-restore."""
     dev = 'a'
-    running_title = summary(dev)['title']
-    # Backup whose env file disagrees with the running app (an edit that was never applied): restoring it
-    # restarts the app with the other title, so the data verification mismatches after the destructive step.
-    owner_write_title(dev, 'F8 尚未套用的標題')
     start = ok(dev, 'backup-start', {'apps': [APP], 'include_images': False, 'note': 'F8 回復測試',
                                      'request_id': request_id()}, ev=ev)
     job, _log = wait_job(dev, start['job_id'], ev=ev, label='backup')
     ev.require('F8 backup succeeded', job['state'] == 'succeeded', job.get('error'))
-    # The backup restarted the writer, which applied the pending title. Make the device consistent again
-    # (env file == running app) so the safety backup taken by the restore is self-consistent.
-    owner(dev, 'python3', '/opt/woowbk-demo/tools/seed.py', '--notes', '0', '--files', '0', '--title', running_title)
-    ev.check('device consistent before the restore (running title == env title)', summary(dev)['title'] == running_title)
     f8_id = job['result']['backup_id']
     status_code, _body = app_post(dev, '/api/notes', json.dumps({'title': 'F8 還原前的新筆記', 'body': '回復後必須還在'},
                                                                 ensure_ascii=False).encode(), 'application/json')
     ev.check('pre-restore change: POST /api/notes -> 201', status_code == 201)
     pre, pre_content = summary(dev), content_state(dev)
     t0 = time.monotonic()
-    start = ok(dev, 'restore-start', {'backup_id': f8_id, 'apps': [APP], 'request_id': request_id(), 'confirm': True},
-               ev=ev)
-    job, log = wait_job(dev, start['job_id'], ev=ev, label='restore')
+    f8_inject(dev, True)
+    try:
+        start = ok(dev, 'restore-start', {'backup_id': f8_id, 'apps': [APP], 'request_id': request_id(),
+                                          'confirm': True}, ev=ev)
+        job, log = wait_job(dev, start['job_id'], ev=ev, label='restore')
+    finally:
+        f8_inject(dev, False)
     ev.save('f8-restore-job', {'job': job, 'log': log})
     ev.timings['f8_restore_with_rollback_wall_s'] = round(time.monotonic() - t0, 1)
     result = job.get('result') or {}
     ev.check('F8 job state rolled-back, error job-failed, result.rolled_back true, safety backup recorded',
              job['state'] == 'rolled-back' and job['error']['code'] == 'job-failed' and result.get('rolled_back') is True
-             and result.get('safety_backup_id'), {'state': job['state'], 'error': job.get('error')})
-    ev.check('F8 phases: rollback appended and done, the failing check phase marked failed',
-             phase_states(job).get('rollback') == 'done' and phase_states(job).get('check') == 'failed',
+             and result.get('safety_backup_id') and result.get('changed') is True, {'state': job['state'], 'error': job.get('error')})
+    ev.check('F8 phases: rollback appended and done, the failing start phase marked failed',
+             phase_states(job).get('rollback') == 'done' and phase_states(job).get('start') == 'failed',
              phase_states(job))
-    ev.check('F8 verification entry reports the mismatch (match=false on title)',
-             any(v['match'] is False for v in result.get('verification') or []), result.get('verification'))
+    ev.check('F8 error names the database start that failed', 'woowbk-demo-db.service' in job['error']['message'],
+             job['error']['message'])
+    ev.check('F8 the job log shows the units were masked during the restore and the rollback unmasked them',
+             any('暫時停用' in line for line in log) and any('已自動回復到還原前的狀態' in line for line in log))
     after = summary(dev)
     ev.check('F8 data after rollback equals the pre-restore state (summary)', compare(after, pre) == {}, compare(after, pre))
     ev.check('F8 data after rollback equals the pre-restore state (full content)', content_state(dev) == pre_content)
     ev.check('F8 app healthy after rollback', wait_healthy(dev, 60))
+    app = next(a for a in ok(dev, 'status', ev=ev)['apps'] if a['id'] == APP)
+    ev.check('F8 app running with no problems (units unmasked)', app['state'] == 'running' and not app['problems'], app)
     save_state(f8={'backup_id': f8_id, 'job': start['job_id']})
     return {}
 

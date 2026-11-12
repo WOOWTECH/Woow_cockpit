@@ -11,8 +11,11 @@ import json
 import os
 import pwd
 import re
+import select
+import selectors
 import signal
 import subprocess
+import time
 from dataclasses import dataclass
 
 from .errors import BackupError
@@ -28,6 +31,11 @@ OWNER_RE = re.compile(r'[a-z_][a-z0-9_-]{0,31}\Z')
 REL_SEGMENT_RE = re.compile(r'[A-Za-z0-9._@+-]{1,255}\Z')
 DEVNULL = subprocess.DEVNULL
 MAX_FILE_BYTES = 16 * 1024 * 1024
+# Captured stdout is held in the root helper's memory: never more than this unless a caller asks for
+# less (a hostile container can make psql, pg_isready or podman print gigabytes). stderr keeps a tail.
+MAX_CAPTURE = MAX_FILE_BYTES + 64 * 1024
+STDERR_TAIL = 64 * 1024
+READ_CHUNK = 1024 * 1024
 
 # Exit codes of FILE_HELPER, mapped to BackupError codes by OwnerRunner.
 HELPER_ERRORS = {3: 'not-found', 4: 'not-regular', 5: 'too-large', 6: 'bad-path', 7: 'bad-mode', 8: 'bad-command'}
@@ -194,8 +202,45 @@ class CommandError(BackupError):
         self.stderr = stderr or b''
 
 
-def default_runner(argv, *, input=None, stdout=None, timeout=None, cwd=None, env=None):
-    """Subprocess executor: no shell, own process group (killed as a whole on timeout)."""
+class OutputLimitExceeded(Exception):
+    """A child produced more output than its byte budget allowed; its process group was killed.
+
+    `to_file` tells a file budget (disk space) from a capture limit (helper memory) apart.
+    """
+
+    def __init__(self, limit, *, to_file):
+        super().__init__(f'output exceeded {limit} bytes')
+        self.limit = limit
+        self.to_file = to_file
+
+
+def _kill_group(proc):
+    try:
+        os.killpg(proc.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+
+
+def _write_out(target, data):
+    if hasattr(target, 'write'):
+        view = memoryview(data)
+        while view:
+            written = target.write(view)
+            view = view[written if written is not None else len(view):]
+    else:
+        view = memoryview(data)
+        while view:
+            view = view[os.write(target, view):]
+
+
+def default_runner(argv, *, input=None, stdout=None, timeout=None, cwd=None, env=None, max_output=None):
+    """Subprocess executor: no shell, own process group (killed as a whole on timeout or overflow).
+
+    `stdout`: None captures (at most `max_output`, default MAX_CAPTURE bytes), DEVNULL discards, a
+    writable file receives the output through a pipe copied here, so `max_output` (when given) is a
+    byte budget for that file. stderr keeps only its last STDERR_TAIL bytes. Nothing the child
+    prints can grow this process without bound (CONTRACT section 10, review finding SEC-3).
+    """
     if input is not None and not isinstance(input, (bytes, bytearray)):
         try:
             input.fileno()
@@ -203,25 +248,68 @@ def default_runner(argv, *, input=None, stdout=None, timeout=None, cwd=None, env
             input = input.read()  # in-memory file object: feed its bytes through a pipe
     feed = isinstance(input, (bytes, bytearray))
     stdin = subprocess.PIPE if feed else (input if input is not None else subprocess.DEVNULL)
-    proc = subprocess.Popen(argv, stdin=stdin, stdout=subprocess.PIPE if stdout is None else stdout,
+    discard = stdout is subprocess.DEVNULL
+    to_file = stdout is not None and not discard
+    limit = max_output if max_output is not None else (None if to_file else MAX_CAPTURE)
+    proc = subprocess.Popen(argv, stdin=stdin, stdout=subprocess.DEVNULL if discard else subprocess.PIPE,
                             stderr=subprocess.PIPE, cwd=cwd, env=env, close_fds=True, start_new_session=True)
+    deadline = None if timeout is None else time.monotonic() + timeout
+    chunks, size, err = [], 0, bytearray()
+    pending = memoryview(bytes(input)) if feed else None
+    selector = selectors.DefaultSelector()
     try:
-        out, err = proc.communicate(input=bytes(input) if feed else None, timeout=timeout)
-    except subprocess.TimeoutExpired:
-        try:
-            os.killpg(proc.pid, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
-        proc.communicate()
-        raise
+        if proc.stdout is not None:
+            selector.register(proc.stdout, selectors.EVENT_READ)
+        selector.register(proc.stderr, selectors.EVENT_READ)
+        if feed:
+            if pending:
+                selector.register(proc.stdin, selectors.EVENT_WRITE)
+            else:
+                proc.stdin.close()
+        while selector.get_map():
+            remaining = None if deadline is None else deadline - time.monotonic()
+            if remaining is not None and remaining <= 0:
+                raise subprocess.TimeoutExpired(argv, timeout)
+            for key, _events in selector.select(remaining):
+                if key.fileobj is proc.stdin:
+                    try:
+                        written = os.write(proc.stdin.fileno(), pending[:select.PIPE_BUF])
+                    except BrokenPipeError:
+                        written, pending = 0, pending[:0]
+                    pending = pending[written:]
+                    if not pending:
+                        selector.unregister(proc.stdin)
+                        proc.stdin.close()
+                    continue
+                data = os.read(key.fd, READ_CHUNK)
+                if not data:
+                    selector.unregister(key.fileobj)
+                    key.fileobj.close()
+                    continue
+                if key.fileobj is proc.stderr:
+                    err += data
+                    if len(err) > STDERR_TAIL:
+                        del err[:-STDERR_TAIL]
+                    continue
+                size += len(data)
+                if limit is not None and size > limit:
+                    raise OutputLimitExceeded(limit, to_file=to_file)
+                if to_file:
+                    _write_out(stdout, data)
+                else:
+                    chunks.append(data)
+        remaining = None if deadline is None else max(0.0, deadline - time.monotonic())
+        proc.wait(timeout=remaining)
     except BaseException:
-        try:
-            os.killpg(proc.pid, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
+        _kill_group(proc)
         proc.wait()
         raise
-    return Result(proc.returncode, out, err or b'')
+    finally:
+        selector.close()
+        for handle in (proc.stdin, proc.stdout, proc.stderr):
+            if handle is not None and not handle.closed:
+                handle.close()
+    return Result(proc.returncode, None if to_file else b''.join(chunks) if not discard else None, bytes(err))
 
 
 def describe(argv):
@@ -290,16 +378,24 @@ class OwnerRunner:
                 f'XDG_RUNTIME_DIR=/run/user/{self.uid}',
                 f'DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/{self.uid}/bus']
 
-    def run(self, argv, *, input=None, stdout=None, timeout=300, check=True):
+    def run(self, argv, *, input=None, stdout=None, timeout=300, check=True, max_output=None):
         """Run fixed `argv` as the owner. `input`: bytes or a readable file; `stdout`: None (capture),
-        a writable file, or DEVNULL. Returns Result; raises CommandError when `check` and exit != 0."""
+        a writable file, or DEVNULL. `max_output` caps captured bytes or, with a file, is its byte
+        budget (the child is killed when it is exceeded). Returns Result; raises CommandError when
+        `check` and exit != 0."""
         argv = [str(arg) for arg in argv]
         if not argv or any('\0' in arg for arg in argv):
             raise BackupError('internal-error', '內部命令格式不正確。')
         what = describe(argv)
+        extra = {} if max_output is None else {'max_output': int(max_output)}
         try:
             result = self._runner(self.prefix() + argv, input=input, stdout=stdout, timeout=timeout,
-                                  cwd=self.home, env=dict(ROOT_ENV))
+                                  cwd=self.home, env=dict(ROOT_ENV), **extra)
+        except OutputLimitExceeded as exceeded:
+            if exceeded.to_file:
+                raise BackupError('insufficient-space', f'{what} 的輸出超過可用空間（保留 512 MiB 後的上限），已停止。',
+                                  command=what) from None
+            raise BackupError('limit-exceeded', f'{what} 的輸出超過上限，已停止。', command=what) from None
         except subprocess.TimeoutExpired:
             raise BackupError('job-failed', f'{what} 執行逾時（{timeout} 秒）。', command=what) from None
         except FileNotFoundError:
@@ -318,10 +414,10 @@ class OwnerRunner:
     def systemctl(self, *args, **kwargs):
         return self.run([SYSTEMCTL, '--user', *args], **kwargs)
 
-    def relay(self, podman_args, *, stdout, timeout=3600, check=True):
+    def relay(self, podman_args, *, stdout, timeout=3600, check=True, max_output=None):
         """`podman <args>` whose stdout is an owner-created pipe, copied to `stdout` by the helper."""
         return self.run([PYTHON, '-I', '-c', FILE_HELPER, 'relay', PODMAN, *podman_args], stdout=stdout,
-                        timeout=timeout, check=check)
+                        timeout=timeout, check=check, max_output=max_output)
 
     def _helper(self, args, **kwargs):
         result = self.run([PYTHON, '-I', '-c', FILE_HELPER, *args], check=False, **kwargs)
@@ -339,7 +435,8 @@ class OwnerRunner:
 
     def read_file(self, rel_path, max_bytes=MAX_FILE_BYTES):
         validate_rel_path(rel_path)
-        return self._helper(['read', rel_path, str(int(max_bytes))], timeout=120).stdout or b''
+        return self._helper(['read', rel_path, str(int(max_bytes))], timeout=120,
+                            max_output=int(max_bytes) + 64 * 1024).stdout or b''
 
     def write_file(self, rel_path, data, mode):
         """`data`: bytes or a readable binary file; `mode`: int or octal string, subset of 0644."""
@@ -359,7 +456,7 @@ class OwnerRunner:
         rel_paths = [validate_rel_path(rel) for rel in rel_paths]
         if not rel_paths:
             return {}
-        out = self._helper(['stat', *rel_paths], timeout=60).stdout or b'[]'
+        out = self._helper(['stat', *rel_paths], timeout=60, max_output=1024 * 1024).stdout or b'[]'
         try:
             rows = json.loads(out.decode('utf-8'))
         except ValueError:

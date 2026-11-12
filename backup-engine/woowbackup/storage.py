@@ -22,9 +22,11 @@ STAGING_RE = re.compile(r'^[A-Za-z0-9][A-Za-z0-9_-]{0,100}\Z')
 KEY_ID_RE = re.compile(r'^[0-9A-F]{4}(?:-[0-9A-F]{4}){3}\Z')
 SHA256_RE = re.compile(r'^[0-9a-f]{64}\Z')
 FILENAME_RE = re.compile(r'^[A-Za-z0-9][A-Za-z0-9._-]{0,200}\.woowbackup\Z')
-UPLOADED_NAME_RE = re.compile(r'^woowtech-backup-[a-z0-9-]{1,63}-[0-9]{8}-[0-9]{4}\.woowbackup\Z')
+# Download names carry seconds since 2026-11 (`…-YYYYMMDD-HHMMSS`); older engines wrote `…-YYYYMMDD-HHMM`.
+UPLOADED_NAME_RE = re.compile(r'^woowtech-backup-[a-z0-9-]{1,63}-[0-9]{8}-[0-9]{4}(?:[0-9]{2})?\.woowbackup\Z')
 BRIDGE_TEMP_RE = re.compile(r'^\.(u[0-9a-f]{16})\.part-.+\Z')  # cockpit fsreplace1 temp files
-UPLOAD_FILE_RE = re.compile(r'^(u[0-9a-f]{16})\.(part|json)\Z')
+UPLOAD_FILE_RE = re.compile(r'^(u[0-9a-f]{16})\.(part|json|done)\Z')
+ORPHAN_MIN_AGE = 3600
 
 TYPES = ('manual', 'safety', 'uploaded')
 META_REQUIRED = ('id', 'type', 'created', 'note', 'apps', 'size', 'sha256', 'key_id', 'include_images',
@@ -339,9 +341,43 @@ class Storage:
             raise BackupError('internal-error', '上傳工作的記錄已損毀。', upload_id=upload_id)
         return info
 
+    def _done_path(self, upload_id):
+        self._upload_paths(upload_id)
+        return Path(self.paths.uploads) / f'{upload_id}.done'
+
+    def _finished(self, upload_id):
+        """BackupMeta of an upload that already finished (a retry after the page timed out), else None."""
+        try:
+            done = util.load_json_file(self._done_path(upload_id), max_bytes=4096)
+        except FileNotFoundError:
+            return None
+        except (OSError, ValueError):
+            return None
+        backup_id = done.get('backup_id') if isinstance(done, dict) else None
+        return self.get(backup_id) if valid_backup_id(backup_id) else None
+
+    def _mark_done(self, upload_id, backup_id):
+        with contextlib.suppress(OSError):
+            util.atomic_write_json(self._done_path(upload_id), {'backup_id': backup_id, 'at': util.iso_utc()}, 0o600)
+
+    def _register_uploaded(self, backup_id, header, sha256, filename):
+        original = (filename or '').strip().lower()
+        name = original if UPLOADED_NAME_RE.match(original) else util.download_filename('uploaded', header['created'])
+        return self.register(backup_id, {
+            'type': 'uploaded', 'created': header['created'], 'note': '', 'apps': [], 'sha256': sha256,
+            'key_id': header['key_id'], 'include_images': False, 'filename': name, 'source': None,
+            'verified': None, 'inspected': False, 'uploaded_at': util.iso_utc()})
+
     def finish_upload(self, upload_id):
-        """Validate the written file and register it as type 'uploaded'; returns BackupMeta."""
+        """Validate the written file and register it as type 'uploaded'; returns BackupMeta.
+
+        Idempotent: a retry after success returns the same backup (the page may time out while a large
+        file is hashed). A failure after the file was moved puts it back, so nothing is left unlisted.
+        """
         part, info_path = self._upload_paths(upload_id)
+        finished = self._finished(upload_id)
+        if finished is not None:
+            return finished
         info = self._upload_info(upload_id, info_path)
         try:
             fd = os.open(part, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK)
@@ -367,33 +403,70 @@ class Storage:
                 existing = self._load(backup_id)
                 if existing is not None and existing['sha256'] == sha256 and self._archive_stat(backup_id):
                     self.abort_upload(upload_id)
+                    self._mark_done(upload_id, backup_id)
                     return existing
-                raise BackupError('invalid-request', '本設備已有相同 ID 但內容不同的備份，已拒絕上傳。',
+                if (existing is None and self._archive_stat(backup_id) is not None
+                        and util.sha256_file(dest) == sha256):
+                    # The same file without an index (a kill between publishing and indexing): index it.
+                    rec = self._register_uploaded(backup_id, header, sha256, info['filename'])
+                    self.abort_upload(upload_id)
+                    self._mark_done(upload_id, backup_id)
+                    return rec
+                raise BackupError('invalid-request', '這台設備已有相同 ID 但內容不同的備份，已拒絕上傳。',
                                   backup_id=backup_id)
             os.fchmod(fd, 0o600)
-            os.rename(part, dest)
-            moved = os.lstat(dest)
-            if (moved.st_dev, moved.st_ino) != (st.st_dev, st.st_ino):
-                os.unlink(dest)
-                raise BackupError('invalid-request', '上傳的檔案在驗證期間被更換，已拒絕。')
-            util.fsync_dir(self.paths.archives)
+            moved = False
+            try:
+                os.rename(part, dest)
+                moved = True
+                current = os.lstat(dest)
+                if (current.st_dev, current.st_ino) != (st.st_dev, st.st_ino):
+                    moved = False
+                    os.unlink(dest)
+                    raise BackupError('invalid-request', '上傳的檔案在驗證期間被更換，已拒絕。')
+                util.fsync_dir(self.paths.archives)
+                rec = self._register_uploaded(backup_id, header, sha256, info['filename'])
+            except BaseException:
+                if moved:  # back to the upload area: a retry can finish it, nothing stays unlisted
+                    with contextlib.suppress(OSError):
+                        os.rename(dest, part)
+                raise
         finally:
             os.close(fd)
-        original = info['filename'].strip().lower()
-        filename = original if UPLOADED_NAME_RE.match(original) else util.download_filename('uploaded',
-                                                                                         header['created'])
-        try:
-            rec = self.register(backup_id, {
-                'type': 'uploaded', 'created': header['created'], 'note': '', 'apps': [], 'sha256': sha256,
-                'key_id': header['key_id'], 'include_images': False, 'filename': filename, 'source': None,
-                'verified': None, 'inspected': False, 'uploaded_at': util.iso_utc()})
-        except BaseException:
-            with contextlib.suppress(OSError):
-                os.unlink(dest)
-            raise
+        self._mark_done(upload_id, backup_id)
         with contextlib.suppress(FileNotFoundError):
             os.unlink(info_path)
         return rec
+
+    def adopt_orphans(self, min_age=ORPHAN_MIN_AGE, now=None):
+        """Index archives without a valid sidecar as 'uploaded' (a hard kill between publishing and indexing).
+
+        Only files unchanged for `min_age` seconds are considered (ctime counts: a rename updates it), so an
+        archive being published right now is never touched. Returns the adopted backup ids.
+        """
+        now = time.time() if now is None else now
+        try:
+            names = os.listdir(self.paths.archives)
+        except (FileNotFoundError, NotADirectoryError):
+            return []
+        adopted = []
+        for name in sorted(names):
+            backup_id = name[:-len('.woowbackup')] if name.endswith('.woowbackup') else ''
+            if not valid_backup_id(backup_id) or self._load(backup_id) is not None:
+                continue
+            path = self.archive_path(backup_id)
+            try:
+                st = os.lstat(path)
+                if not stat.S_ISREG(st.st_mode) or now - max(st.st_mtime, st.st_ctime) < min_age:
+                    continue
+                header = archive.read_header(path)
+                if header['backup_id'] != backup_id:
+                    continue
+                self._register_uploaded(backup_id, header, util.sha256_file(path), '')
+            except (BackupError, OSError, ValueError):
+                continue
+            adopted.append(backup_id)
+        return adopted
 
     def abort_upload(self, upload_id):
         part, info = self._upload_paths(upload_id)
