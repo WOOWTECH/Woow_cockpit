@@ -93,13 +93,14 @@
   --pf-t--global--text--color--regular: var(--ww-black);
 }
 
-/* Single-column sign-in on a plain canvas, at every viewport width. */
+/* One responsive sign-in layout. Size the card, never scale its controls or
+ * text; the same maximum applies on both sides of every viewport breakpoint. */
 html body.login-pf {
   box-sizing: border-box;
   min-block-size: 100dvh;
   block-size: auto;
-  padding: 40px 24px;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 460px) minmax(0, 1fr);
+  padding: clamp(16px, 4dvh, 40px) clamp(16px, 4vw, 24px);
+  grid-template-columns: minmax(0, 1fr) minmax(0, 21.5625rem) minmax(0, 1fr);
   grid-template-rows: auto 1fr auto auto auto 1fr;
   grid-template-areas: ". banner ." ". . ." ". logo ." ". login ." ". recent ." ". . .";
   column-gap: 0;
@@ -110,17 +111,19 @@ html:not(.pf-v6-theme-dark) body.login-pf {
   color: var(--ww-black);
 }
 .login-pf #badge {
-  inline-size: 255.2px;
+  display: block;
+  inline-size: min(74%, 15.95rem);
   max-inline-size: 100%;
-  block-size: 70.4px;
-  margin: 0 auto 40px;
+  block-size: auto;
+  aspect-ratio: 29 / 8;
+  margin: 0 auto clamp(24px, 4dvh, 32px);
   background: url("assets/logo-lockup-blue.svg") center / contain no-repeat;
 }
 .login-pf #badge::after { content: none; }
 .login-pf #brand::before {
   content: "裝置管理中心";
   color: var(--ww-black);
-  font: 600 25px/1.4 "Poppins", "Noto Sans TC", sans-serif;
+  font: 600 1.375rem/1.4 "Poppins", "Noto Sans TC", sans-serif;
   letter-spacing: -.02em;
 }
 .login-pf .container {
@@ -129,56 +132,64 @@ html:not(.pf-v6-theme-dark) body.login-pf {
 }
 .login-pf .container {
   min-inline-size: 0;
+  inline-size: 100%;
+  max-inline-size: 21.5625rem;
+  justify-self: center;
   background: var(--ww-white);
   border: 1px solid var(--ww-hairline);
 }
-.login-pf .container .container-body { padding: 36px; }
-.login-pf #brand { text-align: center; padding-block-end: 12px; }
+.login-pf .container .container-body { padding: clamp(20px, 5vw, 24px); }
+.login-pf #brand { text-align: center; padding-block-end: 8px; }
 .login-pf .login-note {
   text-align: center;
   color: var(--ww-deep-gray);
-  font-size: 14px;
-  margin-block-end: 28px;
+  font-size: .875rem;
+  margin-block-end: 20px;
 }
 .login-pf .container .container-footer {
-  padding: 18px 24px;
+  padding: 16px 20px;
   text-align: center;
-  font-size: 12px;
+  font-size: .75rem;
   color: var(--ww-deep-gray);
   overflow-wrap: anywhere;
   border-color: var(--ww-hairline);
   border-radius: 0 0 20px 20px;
   box-shadow: none;
 }
+.login-pf .container .container-footer .control-label {
+  max-inline-size: 100%;
+  white-space: normal;
+  font-size: inherit;
+  font-weight: 400;
+}
+.login-pf :is(.dialog-error, #conversation-message, #login-fatal-message) {
+  min-inline-size: 0;
+  overflow-wrap: anywhere;
+}
+.login-pf pre { max-inline-size: 100%; white-space: pre-wrap; overflow-wrap: anywhere; }
 .login-pf .form-control[type="text"],
 .login-pf .form-control[type="password"],
 .login-pf .pf-v6-c-button.pf-m-control {
   border-radius: 12px;
   min-block-size: 48px;
 }
-.login-pf .form-control { font-size: 16px; }
-.login-pf .container .control-label { font-size: 14px; }
-.login-pf #option-group { font-size: 14px; }
-.login-pf .login-actions { padding-block-start: 16px; }
+.login-pf .form-control { font-size: 1rem; min-inline-size: 0; }
+.login-pf .password-with-toggle { grid-template-columns: minmax(0, 1fr) auto; }
+.login-pf #login-password-toggle { min-inline-size: 48px; }
+.login-pf .container .control-label { font-size: .875rem; }
+.login-pf #option-group { font-size: .875rem; }
+.login-pf .login-actions { padding-block-start: 8px; }
 html:not(.pf-v6-theme-dark) .login-pf .login-button {
   background: var(--ww-blue);
   color: #fff;
   min-block-size: 48px;
-  font-size: 20px;
-  font-weight: 600;
+  font-size: 1.25rem;
+  font-weight: 700;
   border-radius: 999px;
   transition: background var(--ww-motion), transform var(--ww-motion);
 }
 html:not(.pf-v6-theme-dark) .login-pf .login-button:hover { background: var(--ww-blue-700); }
 .login-pf .login-button:active { transform: scale(.97); }
-@media (min-width: 768px) {
-  .login-pf .container {
-    inline-size: 460px;
-    max-inline-size: 100%;
-    justify-self: center;
-    zoom: .75;
-  }
-}
 
 /* Shared shell: retain the same navigation and search controls. */
 html#shell-page:not(.pf-v6-theme-dark) #main,
@@ -292,11 +303,6 @@ html:not(.pf-v6-theme-dark) #nav-system :is(a, button, input, select):focus-visi
   color: #dce2f0;
 }
 @media (max-width: 600px) {
-  html body.login-pf { padding: 24px 16px; }
-  .login-pf .container .container-body { padding: 28px 24px; }
-  .login-pf .container .container-footer { padding: 18px 20px; }
-  .login-pf #badge { inline-size: 228.8px; block-size: 61.6px; margin-block-end: 28px; }
-  .login-pf #brand::before { font-size: 23px; }
   #nav-system::before { margin-inline: 16px; }
   html#system-overview-page .ct-system-overview table :is(th, td):first-child {
     min-inline-size: 6em;

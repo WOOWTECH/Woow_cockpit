@@ -1,0 +1,168 @@
+{
+  "date": "2026-11-12",
+  "source_version": "2026.11.12.4",
+  "engine": "Chromium",
+  "before_breakpoint": [
+    {
+      "width": 767,
+      "document": 767,
+      "cardWidth": 460,
+      "cardHeight": 524.890625,
+      "cardLeft": 153.5,
+      "inputHeight": 48,
+      "inputFont": 16,
+      "zoom": "1",
+      "logoWidth": 255.1875,
+      "logoHeight": 70.390625
+    },
+    {
+      "width": 768,
+      "document": 768,
+      "cardWidth": 345,
+      "cardHeight": 394.671875,
+      "cardLeft": 211.5,
+      "inputHeight": 36,
+      "inputFont": 16,
+      "zoom": "0.75",
+      "logoWidth": 255.1875,
+      "logoHeight": 70.390625
+    }
+  ],
+  "after_width_checks": [
+    {
+      "width": 320,
+      "document": 320,
+      "cardWidth": 288,
+      "cardHeight": 465.890625,
+      "cardLeft": 16,
+      "inputHeight": 48,
+      "inputFont": 16,
+      "zoom": "1",
+      "logoWidth": 213.109375,
+      "logoHeight": 58.78125
+    },
+    {
+      "width": 360,
+      "document": 360,
+      "cardWidth": 328,
+      "cardHeight": 465.890625,
+      "cardLeft": 16,
+      "inputHeight": 48,
+      "inputFont": 16,
+      "zoom": "1",
+      "logoWidth": 242.71875,
+      "logoHeight": 66.953125
+    },
+    {
+      "width": 390,
+      "document": 390,
+      "cardWidth": 345,
+      "cardHeight": 465.890625,
+      "cardLeft": 22.5,
+      "inputHeight": 48,
+      "inputFont": 16,
+      "zoom": "1",
+      "logoWidth": 255.1875,
+      "logoHeight": 70.390625
+    },
+    {
+      "width": 600,
+      "document": 600,
+      "cardWidth": 345,
+      "cardHeight": 473.890625,
+      "cardLeft": 127.5,
+      "inputHeight": 48,
+      "inputFont": 16,
+      "zoom": "1",
+      "logoWidth": 255.1875,
+      "logoHeight": 70.390625
+    },
+    {
+      "width": 601,
+      "document": 601,
+      "cardWidth": 345,
+      "cardHeight": 473.890625,
+      "cardLeft": 128,
+      "inputHeight": 48,
+      "inputFont": 16,
+      "zoom": "1",
+      "logoWidth": 255.1875,
+      "logoHeight": 70.390625
+    },
+    {
+      "width": 767,
+      "document": 767,
+      "cardWidth": 345,
+      "cardHeight": 473.890625,
+      "cardLeft": 211,
+      "inputHeight": 48,
+      "inputFont": 16,
+      "zoom": "1",
+      "logoWidth": 255.1875,
+      "logoHeight": 70.390625
+    },
+    {
+      "width": 768,
+      "document": 768,
+      "cardWidth": 345,
+      "cardHeight": 473.890625,
+      "cardLeft": 211.5,
+      "inputHeight": 48,
+      "inputFont": 16,
+      "zoom": "1",
+      "logoWidth": 255.1875,
+      "logoHeight": 70.390625
+    },
+    {
+      "width": 769,
+      "document": 769,
+      "cardWidth": 345,
+      "cardHeight": 473.890625,
+      "cardLeft": 212,
+      "inputHeight": 48,
+      "inputFont": 16,
+      "zoom": "1",
+      "logoWidth": 255.1875,
+      "logoHeight": 70.390625
+    },
+    {
+      "width": 1024,
+      "document": 1024,
+      "cardWidth": 345,
+      "cardHeight": 473.890625,
+      "cardLeft": 339.5,
+      "inputHeight": 48,
+      "inputFont": 16,
+      "zoom": "1",
+      "logoWidth": 255.1875,
+      "logoHeight": 70.390625
+    },
+    {
+      "width": 1440,
+      "document": 1440,
+      "cardWidth": 345,
+      "cardHeight": 473.890625,
+      "cardLeft": 547.5,
+      "inputHeight": 48,
+      "inputFont": 16,
+      "zoom": "1",
+      "logoWidth": 255.1875,
+      "logoHeight": 70.390625
+    }
+  ],
+  "responsive_state_cases": 50,
+  "case_groups": {
+    "layout_option_states": 44,
+    "large_text": 4,
+    "long_error_and_password_toggle": 2
+  },
+  "uncaught_page_errors": 0,
+  "deployment": {
+    "verified_files": 89
+  },
+  "limits": [
+    "CSS effective viewport and DPR tested, not a claim of physical mobile-device validation.",
+    "200% text enlargement tested; browser UI zoom not directly controlled.",
+    "No Safari or Firefox verification."
+  ]
+}
