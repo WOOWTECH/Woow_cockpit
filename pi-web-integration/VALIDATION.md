@@ -1,0 +1,12 @@
+# 參考主機驗證紀錄
+
+2026-11-13 在 Ubuntu 24.04、Cockpit 362、現有本機 Pi Web 環境驗證。此紀錄不是其他設備的適用性證明。
+
+- 本機 Pi Web 由使用者 systemd `pi-web.service` 運作，原生入口只監聽 `127.0.0.1:30141`；本整合沒有重新啟動 Pi Web。
+- systemd gateway 以 `DynamicUser=yes`、`NoNewPrivileges=yes` 啟動；只綁定參考設備區網地址與指定 port。UFW 只允許管理子網的指定目的地址與 port。
+- 未登入 Cockpit 的請求回 401；登入 Cockpit 但未登入 Pi Web 時，仍必須通過 Pi Web 登入。實際用 Cockpit 選單登出後，舊工作階段被拒絕。
+- 測試拒絕錯誤 Host 與跨來源 POST；fixture 另驗證禁用 Pi Web 密碼時回 503、Cockpit cookie 不被轉送到 Pi Web，以及只接受 Pi Web session 的 Set-Cookie。
+- 實際在 Cockpit 側邊欄嵌入現有 Pi Web，完成獨立登入，讀取對話清單 API，並選用免費模型送出短測試；在助理訊息區確認模型的實際回覆。這包含此次對話所需 SSE，但不代表所有可能的 Pi Web 插件或外部服務均已驗收。
+- 檢查 Cockpit 外層頁面 1440、1024、768、390 與 320px 寬度；此項檢查不等同各實體手機瀏覽器驗收。WebSocket 代理通過本機 mock upgrade；尚未在實際 Pi Web 子功能實測 WebSocket。
+- 本機 Chromium 未信任 gateway 自簽憑證時會拒絕載入；互動驗證為忽略測試憑證錯誤的瀏覽器環境，使用者須先依政策信任入口憑證。此階段未驗證客戶實體裝置的手動信任流程或受信憑證。
+- 僅驗證 `192.168.2.46` 的 LAN 入口。另一台 LAN 裝置的連線、Cloudflare 域名入口、不同系統瀏覽器和 Pi Web 所有第三方擴充尚未驗證。部分 Pi Web 僅允許 localhost 的 OS 本機操作在 LAN 入口會呈現不可使用。

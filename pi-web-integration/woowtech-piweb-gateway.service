@@ -1,0 +1,34 @@
+[Unit]
+Description=WOOWTECH Cockpit Pi Web gateway
+After=network-online.target cockpit.socket
+Wants=network-online.target
+
+[Service]
+Type=simple
+DynamicUser=yes
+Environment=PI_GATEWAY_BIND=__GATEWAY_HOST__
+Environment=PI_GATEWAY_HOST=__GATEWAY_HOST__
+Environment=PI_GATEWAY_PORT=__GATEWAY_PORT__
+Environment=PI_GATEWAY_KEY=%d/gateway-key
+Environment=PI_GATEWAY_CERT=%d/gateway-cert
+Environment=PI_GATEWAY_COCKPIT_CA=%d/cockpit-ca
+LoadCredential=gateway-key:/etc/woowtech-cockpit/piweb-gateway/key.pem
+LoadCredential=gateway-cert:/etc/woowtech-cockpit/piweb-gateway/cert.pem
+LoadCredential=cockpit-ca:/etc/cockpit/ws-certs.d/0-self-signed.cert
+ExecStart=/usr/bin/node /usr/local/libexec/woowtech-piweb-gateway.mjs
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+CapabilityBoundingSet=
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target
