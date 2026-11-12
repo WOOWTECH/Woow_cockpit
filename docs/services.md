@@ -5,11 +5,11 @@
 ## 能做什麼
 
 - 在「管理範圍」選擇本機系統，或安裝時設定的 rootless 服務擁有者。
-- 查看啟用／未啟用／失敗狀態、服務類型、關聯容器、服務來源與最近100筆日誌。
+- 查看啟用／未啟用／失敗狀態、服務類型、關聯容器、服務來源與最近100筆日誌。詳情另列 PID、記憶體、累計 CPU 時間、工作數、啟動時間、重啟規則與相依服務；系統未提供的值會標示未提供。
 - 依名稱、描述、映像、狀態及類型搜尋，每頁最多40筆。
 - 啟動、停止、重新啟動一個既有 systemd 服務；確認視窗會再讀取狀態並顯示目標服務與管理範圍。
 - 查看 Podman 容器、映像、狀態與連接埠；有 `PODMAN_SYSTEMD_UNIT` 的容器可管理其對應服務。
-- 原生 Podman 連結帶入擁有者 UID；進入後仍需確認 Show 選項。沒有 systemd 關聯的一般容器沿用該頁的原生操作。
+- 原生 Podman 連結帶入擁有者 UID；Owner 選擁有者，Show 篩選容器狀態。沒有 systemd 關聯的一般容器沿用該頁的原生操作。
 
 Quadlet 的操作執行 `systemctl --user start/stop/restart`，保留既有單元相依與重啟規則。停止 Quadlet 後容器可能被移除，但服務仍會列在清單，可再次啟動。此頁不執行映像升版、卷刪除或容器重建設定。
 
@@ -34,19 +34,23 @@ sudo python3 scripts/manage.py install
 | 原生頁面 | 跨使用者限制 |
 | --- | --- |
 | Services 的 User 範圍 | 指的是目前登入者，提升管理權限不會切換成應用擁有者 |
-| Podman 的 All | 合併系統與目前登入者，沒有合併所有使用者 |
-| Podman 其他使用者選單 | 從運行中容器發現擁有者；只有停止容器的使用者可能不出現 |
+| 未修補 Podman124 的 All | 合併系統與目前登入者，沒有合併所有使用者 |
+| 未修補 Podman124 其他使用者選單 | 從運行中容器發現擁有者；只有停止容器的使用者可能不出現 |
 | 其他使用者的 Quadlet | 原生頁刻意限制停止／重啟，未完整探索其停止中的生成服務 |
 
 因此管理頁直接在已設定擁有者的身分下查詢其 systemd。它同時讀取已載入服務與 unit files，再取得狀態，避免只看運行中容器而漏掉可啟動的服務。未命名的 `foo@.service` 模板不是可運行的實例，不列入操作清單。
 
 原生頁的擁有者導覽為 `/podman#/?owner=<UID>`。本頁只在系統範圍提供原生 Services 服務連結，避免把其他使用者的單元錯連到登入者範圍。
 
-### 原生 Podman 首次載入限制
+### 2026.11.12.3 的原生 Podman 整合
 
-124版會在其他使用者的發現完成前處理網址，有機會把指定 UID 改回 `All`。實機也觀察到選中正確 UID 後清單仍未載入；直接查詢相同 socket 的 API 有容器。實測解法是在原生頁將 Show 切到 `All`，再選回服務擁有者。`All` 空白不代表其他帳號沒有容器。
+本專案為 cockpit-podman124 提供可重建的修補：從相同的服務擁有者設定讀取帳號，管理員模式下 `Owner → All` 自動連線至設定帳號，不必手動切換兩次；指定 UID 的網址會等待帳號載入。也處理提升權限後重新探索、重複 UID、無效 subordinate UID，以及快速切換擁有者時舊連線清理掉新資料的問題。
 
-曾試用官方 manifest preload 機制，但無法保證權限切換及首次載入都正確，已撤除。此版本沒有修改上游 Podman 程式，也不宣稱修好其載入問題。跨使用者 Quadlet 的日常管理使用本專案「服務管理」；它直接讀取選定帳號，沒有依賴上述原生頁的探索狀態。
+使用原生 Cockpit transport、Podman API 與容器控制，沒有新增 Web API 或獨立授權。未取得管理權限時仍不提供其他使用者資料。一般容器可使用原生頁的建立、啟停、日誌與刪除；其他使用者的 Quadlet 啟停仍使用「服務管理」。
+
+修補只安裝到124版；125及其他版本保留 Ubuntu 提供的 JS，不能把本輪結果延伸成新版本已驗收。來源、上游版本、授權及重建見 [native/podman](../native/podman/README.md)。
+
+服務管理若收到斷線錯誤，會提供「重新連線」重新載入該頁，建立新的 Cockpit transport；先前的啟停指令不會重送。若 Cockpit 整體工作階段已失效，仍須重新登入。
 
 上游依據：[Podman124 擁有者選擇](https://github.com/cockpit-project/cockpit-podman/blob/124/src/ContainerHeader.jsx)、[其他使用者 Quadlet 控制限制](https://github.com/cockpit-project/cockpit-podman/blob/124/src/Containers.jsx)、[Cockpit362 Services](https://github.com/cockpit-project/cockpit/blob/362/pkg/systemd/services.jsx)。
 
@@ -67,6 +71,6 @@ sudo python3 scripts/manage.py install
 - 保留原有 `[Install]`、timer和開機設定；不對生成的 Quadlet 執行 `systemctl enable`。
 - Cockpit、D-Bus、登入與使用者管理器等會中斷管理連線的關鍵單元，須從本機維護終端處理。
 - 「本機自訂」分類依 unit 檔案來源判定；系統套件提供的原生服務仍可從系統範圍找到。
-- 原生 Podman 的擁有者發現限制仍存在；跨使用者 Quadlet 應使用本頁。需要原生頁管理只有停止容器的帳號時，可直接用該帳號登入。
+- 原生整合僅自動載入已設定的擁有者；不會把所有系統帳號一律加進管理範圍。跨使用者 Quadlet 仍使用本頁。
 
 回退會還原此套件、helper及設定檔；不會回復操作者先前透過頁面執行的服務啟停。`--no-services` 僅停止管理套件檔案，不是解除安裝或撤銷既有服務操作。

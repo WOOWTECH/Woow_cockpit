@@ -167,6 +167,28 @@ class InstallationContract(unittest.TestCase):
                 manage.desired_files(self.root, service_owners=[owner])
         self.assertEqual(self.snapshot(), self.original)
 
+    def test_native_podman_bundle_is_version_gated_and_rollback_restores_distribution(self):
+        native = self.source / 'native/podman/dist'
+        (native / 'licenses').mkdir(parents=True)
+        (native / 'index.js.gz').write_bytes(gzip.compress(b'integrated JavaScript'))
+        (native / 'index.js.LEGAL.txt').write_text('license notice')
+        (native / 'licenses/NOTICE').write_text('runtime attribution')
+        target = self.root / manage.PODMAN / 'index.js.gz'
+        target.parent.mkdir(parents=True)
+        original = gzip.compress(b'distribution JavaScript')
+        target.write_bytes(original)
+        status = self.root / 'var/lib/dpkg/status'
+        cockpit = status.read_text()
+        for version in ('125-1', '124-1~bpo24.04.1'):
+            status.write_text(cockpit + f'Package: cockpit-podman\nStatus: install ok installed\nVersion: {version}\n\n')
+            before = self.snapshot()
+            desired, state = manage.desired_files(self.root)
+            result = manage.install(self.root, desired, state)
+            expected = b'integrated JavaScript' if version.startswith('124-') else b'distribution JavaScript'
+            self.assertEqual(gzip.decompress(target.read_bytes()), expected)
+            manage.rollback(self.root, result['backup_id'])
+            self.assertEqual(self.snapshot(), before)
+
 
 if __name__ == '__main__':
     unittest.main()

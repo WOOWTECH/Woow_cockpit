@@ -10,7 +10,7 @@
     html{scroll-behavior:smooth}
     body{margin:0;background:var(--ww-gray);color:var(--ww-black);font:400 16px/1.6 Outfit,"Noto Sans TC",sans-serif}
     a{color:var(--ww-blue-700)}
-    a:focus-visible{outline:2px solid var(--ww-blue);outline-offset:3px}
+    a:focus-visible{outline:2px solid var(--ww-blue);outline-offset:-3px}
     .wrap{width:min(1200px,calc(100% - 48px));margin-inline:auto}
     .top{background:#fff;border-bottom:1px solid var(--hairline)}
     .top .wrap{display:flex;align-items:center;justify-content:space-between;gap:20px;min-height:92px}

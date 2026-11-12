@@ -2,7 +2,7 @@
 
 Ubuntu 裝置管理介面的部署來源。將 woowtech 品牌樣式、既有服務管理、獨立「畫面參考」套件及安裝／回退工具集中維護，供其他設備重複部署。
 
-**目前版本：2026.11.12.2。** 參考環境為 Ubuntu 24.04.4 LTS、Cockpit 362、cockpit-podman 124。此專案提供品牌介面及既有服務管理；應用服務、Quadlet、資料庫與客戶資料須由各自專案部署。
+**目前版本：2026.11.12.3。** 參考環境為 Ubuntu 24.04.4 LTS、Cockpit 362、cockpit-podman 124。此專案提供品牌介面及既有服務管理；應用服務、Quadlet、資料庫與客戶資料須由各自專案部署。
 
 ## 快速部署
 
@@ -29,17 +29,19 @@ sudo python3 scripts/manage.py verify
 | 項目 | 現況 |
 | --- | --- |
 | 登入、側欄、頁面底色 | 全白、官方 SVG、主題藍 `#6183FC`；沒有背景照片 |
-| 元件樣式 | 20px 卡片、12px 輸入框、本地字型、保留原生警示色與終端機配色 |
+| 元件樣式 | 桌面登入卡片縮為75%、登入 Logo 放大10%；20px 卡片、12px 輸入框、本地字型、保留原生警示色與終端機配色 |
 | 原生頁面 | 主機、日誌、儲存、網路、Podman、帳號、服務、應用、更新、終端、硬體、指標 |
 | 排版修正 | 總覽斷點、長名稱、映像清單區域捲動、手機帳號／服務、指標卡片 |
 | 畫面參考套件 | 17 個截圖位置、排版研究紀錄；缺少本機截圖時顯示提示 |
-| 服務管理套件 | 本機系統及指定使用者的 systemd 服務；狀態、搜尋、分頁、日誌、啟動／停止／重新啟動 |
-| Podman／Quadlet | 列出指定擁有者容器；Quadlet 透過 systemd 控制，停止後仍列出服務；一般容器連到原生頁後需確認擁有者選項 |
+| 服務管理套件 | 本機系統及指定使用者的 systemd 服務；狀態、搜尋、分頁、PID／記憶體／累計 CPU／相依服務、日誌、啟動／停止／重新啟動 |
+| Podman／Quadlet | 列出指定擁有者容器；Quadlet 透過 systemd 控制，停止後仍列出服務；原生124版 All 自動載入設定的擁有者，一般容器沿用原生建立／啟停／刪除 |
 | 部署管理 | 變更預覽、逐檔備份、重複安裝、SHA-256 檢查、拒絕覆蓋較新修改的回退 |
 | 客戶應用備份還原中心 | **尚未實作**；本專案的 rollback 只還原此次介面安裝的檔案 |
 | GitHub 應用更新／Supervisor | **尚未實作**；目前由管理者手動部署 |
 
 原生頁面能否管理設備，仍取決於權限及 NetworkManager、UDisks、Podman、PackageKit 等後端。畫面套用成功不代表所有管理情境均已驗收。PCP 歷史圖、套件更新完成和整機災難復原不在此次完成範圍。
+
+原生 Podman 整合只套用至已驗證的124版；較新版本保留其原生程式，跨使用者管理仍可使用「服務管理」。[修補來源與重建方式](native/podman/README.md)。
 
 ## 其他設備導入前先看
 
@@ -59,7 +61,7 @@ sudo python3 scripts/manage.py verify
 ```bash
 python3 -m unittest discover -s tests -v
 python3 scripts/check_source.py
-bash -n scripts/bootstrap-ubuntu.sh
+bash -n scripts/bootstrap-ubuntu.sh scripts/build-podman.sh
 npm ci
 npx playwright-core install chromium
 npm test

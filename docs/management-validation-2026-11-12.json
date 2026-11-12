@@ -1,0 +1,85 @@
+{
+  "date": "2026-11-12",
+  "source_version": "2026.11.12.3",
+  "versions": {
+    "cockpit": "362",
+    "cockpit-podman": "124",
+    "podman": "4.9.3"
+  },
+  "automated": {
+    "python": 22,
+    "owner_lifecycle": 4,
+    "service_browser": 9,
+    "gallery": 6,
+    "passed": true
+  },
+  "layout": {
+    "pages": 14,
+    "widths": [
+      1440,
+      1024,
+      768,
+      390
+    ],
+    "checks": 56,
+    "document_overflow": 0,
+    "clipped_focus": 0,
+    "uncaught_page_errors": 0
+  },
+  "login": {
+    "desktop": {
+      "card_width_before": 460,
+      "card_width_after": 345,
+      "ratios": {
+        "cardWidth": 0.75,
+        "cardHeight": 0.7519126008394607,
+        "logoWidth": 1.0999461206896552,
+        "logoHeight": 1.099853515625
+      }
+    },
+    "mobile": {
+      "card": {
+        "width": 358,
+        "height": 508.890625
+      },
+      "logo": {
+        "width": 228.796875,
+        "height": 61.59375
+      },
+      "viewport": 390,
+      "document": 390
+    }
+  },
+  "live": {
+    "managed_user_units": 287,
+    "managed_user_containers": 54,
+    "native_all_configured_owner_visible": true,
+    "inline_privilege_elevation": true,
+    "service_details_metrics_logs": true,
+    "native_container_creation": true,
+    "native_actual_log_output": true,
+    "native_lifecycle_actions": [
+      "stop",
+      "start",
+      "restart",
+      "stop",
+      "delete"
+    ],
+    "native_events_cross_checked": true,
+    "test_container_removed": true,
+    "production_primary_units_active": 12
+  },
+  "deployment": {
+    "source_archive_build": "passed; installed bundle identical",
+    "verified_files": 89,
+    "repeat_install_changed": 0
+  },
+  "limits": [
+    "Original user-session disconnect not naturally reproduced; root cause unconfirmed.",
+    "Disconnected transport recovery tested with API fixture; no action replay.",
+    "Native bundle integration applies only to cockpit-podman 124.",
+    "Native terminal has upstream CSP/style and form accessibility console warnings.",
+    "Cross-user Quadlet lifecycle uses the custom service page.",
+    "No app backup/restore center, app-store upgrade or new-device live deployment validation."
+  ]
+}

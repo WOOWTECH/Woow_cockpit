@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 """Validate deployable asset references and keep runtime data out of source."""
 from html.parser import HTMLParser
+import gzip
 import json
 from pathlib import Path
 import re
 import sys
+import tarfile
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'scripts'))
@@ -27,7 +29,7 @@ class References(HTMLParser):
 
 def check():
     count = 0
-    for parent in ('branding', 'preview', 'services'):
+    for parent in ('branding', 'preview', 'services', 'native'):
         for item in (ROOT / parent).rglob('*'):
             assert not item.is_symlink(), f'Symlink in payload: {item}'
     for css in (ROOT / 'branding/branding.css', ROOT / 'preview/gallery.css', ROOT / 'preview/layout-review.css'):
@@ -75,7 +77,22 @@ def check():
     assert '#6183fc' in css and 'bg-frosted' not in css
     for path in (ROOT / 'branding/fonts').glob('*.ttf'):
         assert path.stat().st_size > 10000, f'Invalid font: {path.name}'
-    print(f'Source check passed: {count} asset references, manifest, local fonts, CSS and CSP.')
+    native = ROOT / 'native/podman'
+    bundle = gzip.decompress((native / 'dist/index.js.gz').read_bytes())
+    assert b'/usr/local/libexec/woowtech-cockpit-services' in bundle
+    assert b'woowManaged' in bundle
+    assert (native / 'dist/licenses/LGPL-2.1.txt').is_file()
+    with tarfile.open(native / 'source-124.tar.gz') as archive:
+        members = archive.getmembers()
+        for member in members:
+            path = Path(member.name)
+            assert not path.is_absolute() and '..' not in path.parts
+            assert not member.issym() and not member.islnk()
+            assert not {'.git', 'node_modules', '.local'} & set(path.parts)
+        names = {member.name for member in members}
+        for required in ('src/app.jsx', 'pkg/lib/cockpit.js', 'package-lock.json', 'build.js'):
+            assert f'cockpit-podman-124/{required}' in names, f'Missing native build source: {required}'
+    print(f'Source check passed: {count} asset references, manifest, local fonts, CSS, CSP and native source/bundle.')
 
 
 if __name__ == '__main__':

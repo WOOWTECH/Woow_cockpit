@@ -40,11 +40,17 @@ podman ps
 systemctl --user status podman.socket
 ```
 
-可直接用服務擁有者登入 Cockpit；需要跨使用者管理時，先取得管理員權限，再在 Podman 頁選正確擁有者。若該使用者需要 API socket，可由該使用者執行 `systemctl --user enable --now podman.socket`。需要登出後維持使用者服務時，管理者可執行 `sudo loginctl enable-linger <服務使用者>`。這些動作應依設備用途設定，安裝品牌不會代為執行。
+可直接用服務擁有者登入 Cockpit；需要跨使用者管理時，先取得管理員權限。安裝本專案的124版整合後，Podman 頁的 Owner → All 會載入設定的服務擁有者，也可選單一帳號。Show 是容器狀態篩選。若該使用者需要 API socket，可由該使用者執行 `systemctl --user enable --now podman.socket`。需要登出後維持使用者服務時，管理者可執行 `sudo loginctl enable-linger <服務使用者>`。這些動作應依設備用途設定，安裝品牌不會代為執行。
 
-**跨使用者的 Quadlet 啟停請使用新增的「服務管理」。** 原生 Podman124 的其他使用者選單依賴運行中容器發現，且限制其他使用者的 Quadlet 控制；原生 Services 的 User 只代表登入者。完整限制與新入口見 [services.md](services.md)。
+**跨使用者的 Quadlet 啟停請使用新增的「服務管理」。** 本專案修正原生 Podman124 的擁有者探索，但保留其他使用者的 Quadlet 控制限制；原生 Services 的 User 只代表登入者。完整限制與新入口見 [services.md](services.md)。
 
 不要為了顯示容器而重建另一份 Podman 儲存區，也不要更改原有 Quadlet 的擁有者。原生 cockpit-podman 管理的是容器；應用層級的備份順序、資料庫一致性與多容器還原仍需各應用的流程。
+
+## 原生 Podman 版本閘
+
+安裝器讀取 dpkg 的 cockpit-podman 版本，只對124版替換 `/usr/share/cockpit/podman/index.js` 或其 gzip 版本，並安裝相應授權。原檔納入安裝交易備份，支援 verify 與 rollback。125或其他版本不替換原生 JS，服務管理頁仍可使用。APT 升級可能覆寫 JS；升級後重新執行 plan／install／verify，並核對版本與瀏覽器行為。
+
+`--no-services` 同時停止管理這份原生整合，但不移除已部署檔案；需要還原時使用相應交易 rollback。
 
 ## 反向代理
 

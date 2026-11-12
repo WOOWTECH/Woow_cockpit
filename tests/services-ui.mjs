@@ -89,6 +89,7 @@ function installCockpitFixture() {
             const failed = data.failures.findIndex(item => item.command === command);
             if (failed >= 0) {
               const failure = data.failures.splice(failed, 1)[0];
+              if (failure.problem) throw Object.assign(new Error(failure.message), { problem: failure.problem });
               emit({ error: failure.message });
               throw Object.assign(new Error('Process exited with code 1'), { exit_status: 1 });
             }
@@ -100,6 +101,8 @@ function installCockpitFixture() {
             else if (command === 'details' && unit) result = {
               unit: { id, description: unit.description, active: unit.active, sub: unit.sub, enabled: unit.enabled,
                 can_start: unit.can_start, can_stop: unit.can_stop,
+                metrics: { MainPID: '321', MemoryCurrent: '67108864', CPUUsageNSec: '1250000000', TasksCurrent: '18446744073709551615',
+                  Requires: 'postgres.service <b>literal</b>', Restart: 'always' }, result: 'success',
                 source: unit.kind === 'quadlet' ? `/home/${inventory.owner}/.config/containers/systemd/n8n.container` : '',
                 fragment: `/run/user/${data.scopes.find(item => item.id === scope).uid}/systemd/generator/${id}` },
               logs: data.logs,
@@ -193,6 +196,18 @@ try {
   await new Promise((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolve); });
   base = `http://127.0.0.1:${server.address().port}`;
   browser = await chromium.launch({ executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE || undefined });
+  await check('disconnected transport offers a fresh page connection without replaying actions', fixture(), async page => {
+    await ready(page);
+    await page.evaluate(() => window.__fixture.failures.push({command:'inventory', problem:'disconnected', message:'Transport closed'}));
+    await page.locator('#refresh').click();
+    await page.locator('#page-error').waitFor({state:'visible'});
+    assert.equal(await page.locator('#retry').textContent(), '重新連線');
+    const navigation = page.waitForEvent('framenavigated', f => f === page.mainFrame());
+    await page.locator('#retry').click();
+    await navigation;
+    await ready(page);
+    assert.equal((await calls(page, 'action')).length, 0);
+  });
 
   await check('denied access reveals no inventory; permission changed reloads automatically', fixture({ allowed: false }), async page => {
     await page.locator('#access-note').waitFor();
@@ -310,6 +325,13 @@ try {
     await enabled(page, '#refresh-logs');
     assert.equal(await page.locator('#logs').textContent(), hostileLog);
     assert.equal(await page.locator('#logs *').count(), 0);
+    const field = label => page.locator('#details-fields dt').getByText(label, { exact: true }).locator('xpath=following-sibling::dd[1]');
+    assert.equal(await field('主程序 PID').textContent(), '321');
+    assert.equal(await field('目前記憶體').textContent(), '64.0 MiB');
+    assert.equal(await field('累計 CPU 時間').textContent(), '1.25 秒');
+    assert.equal(await field('目前工作數').textContent(), '未提供');
+    assert.equal(await field('必要相依').textContent(), 'postgres.service <b>literal</b>');
+    assert.equal(await page.locator('#details-fields b').count(), 0);
     const refreshed = `${hostileLog}\nnew journal entry <b>still literal</b>`;
     await page.evaluate(logs => { window.__fixture.logs = logs; }, refreshed);
     await page.locator('#refresh-logs').click();

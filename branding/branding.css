@@ -110,9 +110,9 @@ html:not(.pf-v6-theme-dark) body.login-pf {
   color: var(--ww-black);
 }
 .login-pf #badge {
-  inline-size: 232px;
+  inline-size: 255.2px;
   max-inline-size: 100%;
-  block-size: 64px;
+  block-size: 70.4px;
   margin: 0 auto 40px;
   background: url("assets/logo-lockup-blue.svg") center / contain no-repeat;
 }
@@ -171,6 +171,14 @@ html:not(.pf-v6-theme-dark) .login-pf .login-button {
 }
 html:not(.pf-v6-theme-dark) .login-pf .login-button:hover { background: var(--ww-blue-700); }
 .login-pf .login-button:active { transform: scale(.97); }
+@media (min-width: 768px) {
+  .login-pf .container {
+    inline-size: 460px;
+    max-inline-size: 100%;
+    justify-self: center;
+    zoom: .75;
+  }
+}
 
 /* Shared shell: retain the same navigation and search controls. */
 html#shell-page:not(.pf-v6-theme-dark) #main,
@@ -264,7 +272,12 @@ html:not(.pf-v6-theme-dark) :is(.pf-v6-c-form-control, .pf-v6-c-menu-toggle, .pf
 html:not(.pf-v6-theme-dark) :is(a, .pf-v6-c-button.pf-m-link) { color: var(--ww-blue-700); }
 html:not(.pf-v6-theme-dark) :is(a, button, input, select, textarea):focus-visible {
   outline: 2px solid var(--ww-blue);
-  outline-offset: 2px;
+  outline-offset: -3px;
+}
+/* Shell navigation and its filter sit exactly against an overflow boundary.
+ * Keep keyboard focus visible inside the control instead of clipping it. */
+html:not(.pf-v6-theme-dark) #nav-system :is(a, button, input, select):focus-visible {
+  outline-offset: -3px;
 }
 
 /* Cockpit can be set to a dark theme manually. Keep its native contrast there. */
@@ -282,7 +295,7 @@ html:not(.pf-v6-theme-dark) :is(a, button, input, select, textarea):focus-visibl
   html body.login-pf { padding: 24px 16px; }
   .login-pf .container .container-body { padding: 28px 24px; }
   .login-pf .container .container-footer { padding: 18px 20px; }
-  .login-pf #badge { inline-size: 208px; block-size: 56px; margin-block-end: 28px; }
+  .login-pf #badge { inline-size: 228.8px; block-size: 61.6px; margin-block-end: 28px; }
   .login-pf #brand::before { font-size: 23px; }
   #nav-system::before { margin-inline: 16px; }
   html#system-overview-page .ct-system-overview table :is(th, td):first-child {

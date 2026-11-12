@@ -21,6 +21,7 @@ PREVIEW = 'usr/local/share/cockpit/woowtechpreview'
 SERVICES = 'usr/local/share/cockpit/woowtechservices'
 HELPER = 'usr/local/libexec/woowtech-cockpit-services'
 SERVICE_CONFIG = 'etc/woowtech-cockpit/services.json'
+PODMAN = 'usr/share/cockpit/podman'
 NATIVE = ('systemd/logs.html', 'systemd/services.html', 'systemd/hwinfo.html',
           'systemd/terminal.html', 'networkmanager/firewall.html')
 LINK = '  <link href="../../static/branding.css" rel="stylesheet" />\n'
@@ -141,6 +142,20 @@ def desired_files(root, include_preview=True, screenshots=None, include_services
         desired[SERVICE_CONFIG] = (config_data, 'service-config')
     elif service_owners is not None:
         raise ValueError('--service-owner requires the services package.')
+    # This integration is built from exactly cockpit-podman 124. Never overwrite
+    # a newer distribution bundle with an older implementation.
+    podman_bundle = SOURCE / 'native/podman/dist/index.js.gz'
+    package_status = safe_path(root, 'var/lib/dpkg/status').read_text()
+    native_supported = bool(re.search(r'(?m)^Package: cockpit-podman\n(?:(?!\n\n)[\s\S])*?^Version: (?:\d+:)?124(?:[-+~.]|$)', package_status))
+    if include_services and native_supported and podman_bundle.is_file():
+        for suffix in ('', '.gz'):
+            target = f'{PODMAN}/index.js{suffix}'
+            if safe_path(root, target).is_file():
+                data = podman_bundle.read_bytes()
+                desired[target] = (data if suffix else gzip.decompress(data), 'native-podman-integration')
+        for name, data in source_files(SOURCE / 'native/podman/dist/licenses'):
+            desired[f'{PODMAN}/woowtech-licenses/{name}'] = (data, 'native-podman-license')
+        desired[f'{PODMAN}/index.js.LEGAL.txt'] = ((SOURCE / 'native/podman/dist/index.js.LEGAL.txt').read_bytes(), 'native-podman-license')
     for name in NATIVE:
         relative = f'usr/share/cockpit/{name}'
         target = safe_path(root, relative)
@@ -238,7 +253,7 @@ def install(root, desired, state):
 
 
 def allowed_target(name):
-    return name in (STATE, HELPER, SERVICE_CONFIG) or name.startswith((BRAND + '/', PREVIEW + '/', SERVICES + '/')) or name in {
+    return name in (STATE, HELPER, SERVICE_CONFIG, f'{PODMAN}/index.js', f'{PODMAN}/index.js.gz', f'{PODMAN}/index.js.LEGAL.txt') or name.startswith((BRAND + '/', PREVIEW + '/', SERVICES + '/', PODMAN + '/woowtech-licenses/')) or name in {
         'usr/share/cockpit/' + n + suffix for n in NATIVE for suffix in ('', '.gz')}
 
 

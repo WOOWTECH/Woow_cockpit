@@ -14,7 +14,9 @@
 3. 部分原生 iframe 沒有品牌樣式入口。安裝程式只在下列 HTML 的 `</head>` 前補 `../../static/branding.css` 連結：systemd 的 logs、services、hwinfo、terminal，以及 networkmanager 的 firewall。不存在的選用頁會略過；已有連結不重複加入；支援 gzip 版檔案。
 4. `services/` 的 HTML／CSS／JS／manifest 安裝到 `/usr/local/share/cockpit/woowtechservices/`；Python helper 獨立安裝到 `/usr/local/libexec/woowtech-cockpit-services`，不放在 Web 套件目錄。設備擁有者設定為 `/etc/woowtech-cockpit/services.json`。此頁負責實際服務狀態、日誌和啟停，使用既有管理員授權。
 
-Cockpit 套件升級可能覆寫第三部分；重新執行安裝可針對升級後的新檔案補連結。CSS 使用 PatternFly 6 類別；Cockpit 改版後需要重測，不能保證所有未來版本自動相容。
+5. `native/podman/` 提供124版原生頁整合、完整建置來源封存及授權。符合版本時替換原生 `index.js` bundle，使 All 包含已設定擁有者；沿用上游 API、元件及控制。
+
+Cockpit 套件升級可能覆寫第三及第五部分；重新執行安裝可針對升級後的新檔案補連結。CSS 使用 PatternFly 6 類別；Cockpit 改版後需要重測，不能保證所有未來版本自動相容。
 
 ## 原始碼索引
 
@@ -24,6 +26,8 @@ Cockpit 套件升級可能覆寫第三部分；重新執行安裝可針對升級
 | `branding/assets/` | 官方 SVG 標誌 |
 | `branding/fonts/` | 本地 webfont 與授權文字 |
 | `preview/` | 圖集、缺圖處理、歷史排版說明 |
+| `native/podman/` | 原生124版整合、來源封存、修補、建置產物及授權 |
+| `scripts/build-podman.sh` | 從封存及 lockfile 重建原生 JS |
 | `services/` | 實際服務管理頁及受控管理 helper |
 | `scripts/manage.py` | 安裝、SHA-256 檢查及回退 |
 | `scripts/bootstrap-ubuntu.sh` | Ubuntu backports 套件安裝 |

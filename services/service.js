@@ -21,7 +21,7 @@
     scopes: [], scope: "", inventory: null, view: "services", filters: new Map(),
     loading: false, initializing: false, pending: false, stale: false,
     accessDenied: false, permissionRetry: false, lastAttempt: 0,
-    details: null, confirmation: null, permission: null, poll: null
+    details: null, confirmation: null, permission: null, poll: null, reconnectRequired: false
   };
 
   const string = value => typeof value === "string";
@@ -66,7 +66,11 @@
     const denied = error?.problem === "access-denied" || error?.problem === "not-authorized" ||
       /access.denied|permission.denied|not.authorized|管理員存取|管理權限|administrative access/i.test(reason);
     if (error?.problem === "not-found") reason = "找不到服務管理程式，請確認此主機已安裝服務管理元件。";
-    if (error?.problem === "disconnected") reason = "與主機的連線已中斷，請恢復連線後重新整理。";
+    if (error?.problem === "disconnected") {
+      reason = "此頁的管理連線已中斷。請按「重新連線」重新載入頁面；先前的服務操作不會自動重做。";
+      state.reconnectRequired = true;
+      text($("retry"), "重新連線");
+    }
     const result = new Error(denied ? `${reason} ${ACCESS_HELP}` : reason);
     result.accessDenied = denied;
     return result;
@@ -353,7 +357,7 @@
     text($("scope-owner"), scope ? `${scopeText(scope)} · ${scope.id === "system" ? "系統層級服務" : "使用者層級服務"}` : "尚未取得管理範圍。");
     if (scope) $("native-podman").title = `開啟原生頁，並確認擁有者為 ${scope.owner}（UID ${scope.uid}）`;
     $("native-podman-hint").hidden = !scope || scope.id === "system";
-    text($("native-podman-hint"), scope ? `若使用原生 Podman 頁，請確認 Show 選為 ${scope.owner}；若清單空白，先選 All 再選回 ${scope.owner}。本頁可直接管理下列服務。` : "");
+    text($("native-podman-hint"), scope ? `原生 Podman 的 Owner 可選 ${scope.owner}；Show 用來篩選容器狀態。` : "");
   }
 
   async function initialize() {
@@ -453,6 +457,20 @@
         ["載入方式", unit.enabled || "未提供"], ["來源", unit.source || "未提供"],
         ["單元檔案", unit.fragment || "未提供"]
       ];
+      if (object(unit.metrics)) {
+        const values = unit.metrics;
+        const labels = {MainPID:"主程序 PID", MemoryCurrent:"目前記憶體", CPUUsageNSec:"累計 CPU 時間", TasksCurrent:"目前工作數",
+          NRestarts:"自動重啟次數", ActiveEnterTimestamp:"最近啟動", InactiveEnterTimestamp:"最近停止", ExecMainStatus:"主程序結束碼",
+          Type:"服務模式", Restart:"重啟規則", Requires:"必要相依", Wants:"選用相依", After:"啟動順序在其後", TriggeredBy:"觸發單元"};
+        for (const [key, label] of Object.entries(labels)) {
+          let value = values[key];
+          if (!string(value) || !value || value === '[not set]' || value === '18446744073709551615') value = "未提供";
+          else if (key === 'MemoryCurrent' && /^\d+$/.test(value)) value = `${(Number(value) / 1048576).toFixed(1)} MiB`;
+          else if (key === 'CPUUsageNSec' && /^\d+$/.test(value)) value = `${(Number(value) / 1e9).toFixed(2)} 秒`;
+          fields.push([label, value]);
+        }
+        fields.push(["最近執行結果", string(unit.result) && unit.result ? unit.result : "未提供"]);
+      }
       $("details-fields").replaceChildren(...fields.flatMap(([label, value]) => [make("dt", label), make("dd", value)]));
       text($("details-action-hint"), actionHint(unit));
       text($("logs"), data.logs || "目前沒有日誌。");
@@ -624,7 +642,11 @@
     render();
   });
   $("refresh").addEventListener("click", () => refreshInventory());
-  $("retry").addEventListener("click", () => state.scopes.length ? refreshInventory() : initialize());
+  $("retry").addEventListener("click", () => {
+    if (state.reconnectRequired && !state.pending) window.location.reload();
+    else if (state.scopes.length) refreshInventory();
+    else initialize();
+  });
   $("native-services").addEventListener("click", () => jumpServices());
   $("native-podman").addEventListener("click", () => jumpPodman());
   $("details-native-services").addEventListener("click", () => jumpServices(state.details?.scope, state.details?.id));
