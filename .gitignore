@@ -1,0 +1,17 @@
+.local/
+node_modules/
+__pycache__/
+*.pyc
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+*storage-state*.json
+*auth-state*.json
+preview/screenshots/
+preview/layout-images/
+playwright-report/
+test-results/

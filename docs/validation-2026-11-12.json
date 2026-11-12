@@ -1,0 +1,29 @@
+{
+  "date": "2026-11-12",
+  "source_version": "2026.11.12.1",
+  "theme_sha256": "b98a75ca8f306c082774161ea886ebd9c17f08730394fdd2b81a0b44b1fd75ff",
+  "installer_tests": { "passed": 7, "failed": 0 },
+  "isolated_gallery": {
+    "widths": [1440, 1024, 390, 360],
+    "missing_capture_fallback": "passed",
+    "local_capture_and_link": "passed",
+    "historical_report_missing_images": "passed"
+  },
+  "reference_host": {
+    "managed_files_verified": 59,
+    "repeat_install_changed": 0,
+    "cockpit_socket": "active",
+    "native_desktop_pages_passed": 12,
+    "overview_additional_widths_passed": [1024, 390],
+    "private_screenshots_created": 17,
+    "gallery_viewports_passed": [1440, 390],
+    "gallery_loaded_images_per_viewport": 17
+  },
+  "not_tested": [
+    "APT bootstrap on a second physical device",
+    "complete application backup and restore",
+    "all native management write actions",
+    "PackageKit update completion",
+    "PCP historical metrics"
+  ]
+}

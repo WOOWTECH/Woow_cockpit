@@ -1,0 +1,8 @@
+* text=auto
+*.py text eol=lf
+*.sh text eol=lf
+*.mjs text eol=lf
+*.ttf binary
+*.png binary
+*.ico binary
+branding/fonts/LICENSE-*.txt whitespace=-blank-at-eol

@@ -1,0 +1,12 @@
+{
+  "tools": {
+    "index": {
+      "label": "畫面參考",
+      "order": 120
+    }
+  },
+  "version": 1,
+  "requires": {
+    "cockpit": "362"
+  }
+}

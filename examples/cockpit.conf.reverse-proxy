@@ -1,0 +1,5 @@
+# Optional: merge into the existing config after replacing the hostname.
+# Do not install this template unchanged. Direct HTTPS :9090 needs no override.
+[WebService]
+Origins = https://console.example.com
+ProtocolHeader = X-Forwarded-Proto

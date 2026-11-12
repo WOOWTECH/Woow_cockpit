@@ -1,0 +1,434 @@
+/* woowtech branding for Cockpit 362 / PatternFly 6.
+ * Installed through Cockpit's supported /etc/cockpit/branding override.
+ * Website-aligned palette verified at https://aiot.woowtech.io/ on 2026-11-12.
+ * Native markup and controls are retained; branding is limited to presentation.
+ * 2026-11-12: page canvas is plain white per the user's updated direction.
+ */
+@font-face {
+  font-family: "Poppins";
+  src: url("fonts/Poppins-Regular.ttf") format("truetype");
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Poppins";
+  src: url("fonts/Poppins-Medium.ttf") format("truetype");
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Poppins";
+  src: url("fonts/Poppins-SemiBold.ttf") format("truetype");
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Poppins";
+  src: url("fonts/Poppins-Bold.ttf") format("truetype");
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Outfit";
+  src: url("fonts/Outfit.ttf") format("truetype");
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Noto Sans TC";
+  src: url("fonts/NotoSansTC.ttf") format("truetype");
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Yellowtail";
+  src: url("fonts/Yellowtail-Regular.ttf") format("truetype");
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+}
+
+:root {
+  --ww-blue: #6183fc;
+  --ww-blue-700: #4a6bd4;
+  --ww-blue-050: #eef2ff;
+  --ww-white: #fff;
+  --ww-page-background: #fff;
+  --ww-gray: #eff1f5;
+  --ww-deep-gray: #646262;
+  --ww-black: #212121;
+  --ww-orange: #e66d3e;
+  --ww-hairline: rgba(33, 33, 33, .08);
+  --ww-shadow: 0 2px 8px rgba(33, 33, 33, .035);
+  --ww-motion: 220ms cubic-bezier(.4, 0, .2, 1);
+  --ct-color-host-accent: var(--ww-blue) !important;
+  --pf-t--global--color--brand--default: var(--ww-blue);
+  --pf-t--global--color--brand--hover: var(--ww-blue-700);
+  --pf-t--global--color--brand--clicked: var(--ww-blue-700);
+  --pf-t--global--font--family--body: "Outfit", "Noto Sans TC", sans-serif;
+  --pf-t--global--font--family--heading: "Poppins", "Noto Sans TC", sans-serif;
+  --pf-t--global--border--radius--small: 12px;
+  --pf-t--global--border--radius--medium: 20px;
+  --pf-t--global--border--radius--large: 20px;
+  --pf-t--global--border--radius--pill: 999px;
+}
+
+:root:not(.pf-v6-theme-dark) {
+  --color-body-background: var(--ww-page-background);
+  --color-background: var(--ww-white);
+  --color-text: var(--ww-black);
+  --color-primary: var(--ww-blue);
+  --color-primary-active: var(--ww-blue-700);
+  --color-link: var(--ww-blue-700);
+  --color-link-active: var(--ww-blue-700);
+  --color-border: #d9dce4;
+  --pf-t--global--background--color--secondary--default: var(--ww-gray);
+  --pf-t--global--background--color--primary--default: var(--ww-white);
+  --pf-t--global--text--color--regular: var(--ww-black);
+}
+
+/* Single-column sign-in on a plain canvas, at every viewport width. */
+html body.login-pf {
+  box-sizing: border-box;
+  min-block-size: 100dvh;
+  block-size: auto;
+  padding: 40px 24px;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 460px) minmax(0, 1fr);
+  grid-template-rows: auto 1fr auto auto auto 1fr;
+  grid-template-areas: ". banner ." ". . ." ". logo ." ". login ." ". recent ." ". . .";
+  column-gap: 0;
+  row-gap: 0;
+}
+html:not(.pf-v6-theme-dark) body.login-pf {
+  background: var(--ww-white);
+  color: var(--ww-black);
+}
+.login-pf #badge {
+  inline-size: 232px;
+  max-inline-size: 100%;
+  block-size: 64px;
+  margin: 0 auto 40px;
+  background: url("assets/logo-lockup-blue.svg") center / contain no-repeat;
+}
+.login-pf #badge::after { content: none; }
+.login-pf #brand::before {
+  content: "裝置管理中心";
+  color: var(--ww-black);
+  font: 600 25px/1.4 "Poppins", "Noto Sans TC", sans-serif;
+  letter-spacing: -.02em;
+}
+.login-pf .container {
+  border-radius: 20px;
+  box-shadow: 0 6px 24px rgba(33,33,33,.045);
+}
+.login-pf .container {
+  min-inline-size: 0;
+  background: var(--ww-white);
+  border: 1px solid var(--ww-hairline);
+}
+.login-pf .container .container-body { padding: 36px; }
+.login-pf #brand { text-align: center; padding-block-end: 12px; }
+.login-pf .login-note {
+  text-align: center;
+  color: var(--ww-deep-gray);
+  font-size: 14px;
+  margin-block-end: 28px;
+}
+.login-pf .container .container-footer {
+  padding: 18px 24px;
+  text-align: center;
+  font-size: 12px;
+  color: var(--ww-deep-gray);
+  overflow-wrap: anywhere;
+  border-color: var(--ww-hairline);
+  border-radius: 0 0 20px 20px;
+  box-shadow: none;
+}
+.login-pf .form-control[type="text"],
+.login-pf .form-control[type="password"],
+.login-pf .pf-v6-c-button.pf-m-control {
+  border-radius: 12px;
+  min-block-size: 48px;
+}
+.login-pf .form-control { font-size: 16px; }
+.login-pf .container .control-label { font-size: 14px; }
+.login-pf #option-group { font-size: 14px; }
+.login-pf .login-actions { padding-block-start: 16px; }
+html:not(.pf-v6-theme-dark) .login-pf .login-button {
+  background: var(--ww-blue);
+  color: #fff;
+  min-block-size: 48px;
+  font-size: 20px;
+  font-weight: 600;
+  border-radius: 999px;
+  transition: background var(--ww-motion), transform var(--ww-motion);
+}
+html:not(.pf-v6-theme-dark) .login-pf .login-button:hover { background: var(--ww-blue-700); }
+.login-pf .login-button:active { transform: scale(.97); }
+
+/* Shared shell: retain the same navigation and search controls. */
+html#shell-page:not(.pf-v6-theme-dark) #main,
+html:not(.pf-v6-theme-dark) #content,
+html:not(.pf-v6-theme-dark) .area-ct-content {
+  background: var(--ww-page-background);
+}
+html:not(.pf-v6-theme-dark) #nav-system,
+html:not(.pf-v6-theme-dark) #nav-hosts,
+html:not(.pf-v6-theme-dark) #hosts-sel,
+html:not(.pf-v6-theme-dark) #topnav {
+  background: var(--ww-white);
+  color: var(--ww-black);
+}
+#nav-system::before {
+  content: "";
+  display: block;
+  box-sizing: border-box;
+  min-block-size: 48px;
+  margin: 24px 24px 16px;
+  background: url("assets/logo-wordmark-blue.svg") left center / 148px auto no-repeat;
+  color: var(--ww-deep-gray);
+  font: 400 10px/1.4 "Outfit", "Noto Sans TC", sans-serif;
+  letter-spacing: .01em;
+}
+html:not(.pf-v6-theme-dark) #nav-system .pf-v6-c-nav__link,
+html:not(.pf-v6-theme-dark) #nav-system a {
+  border-radius: 12px;
+  color: var(--ww-deep-gray);
+  transition: background var(--ww-motion), color var(--ww-motion);
+}
+html:not(.pf-v6-theme-dark) #nav-system .pf-m-current > .pf-v6-c-nav__link,
+html:not(.pf-v6-theme-dark) #nav-system .pf-m-current > a,
+html:not(.pf-v6-theme-dark) #nav-system a[aria-current="page"] {
+  background: var(--ww-blue-050);
+  color: var(--ww-blue-700);
+}
+
+/* Inner pages. The same stylesheet is included by every installed Cockpit package. */
+html:not(.pf-v6-theme-dark) body {
+  background-color: var(--ww-page-background);
+  color: var(--ww-black);
+  font-family: "Outfit", "Noto Sans TC", sans-serif;
+}
+/* One continuous white canvas across the shell and each native iframe.
+ * Keep gray tokens for controls/charts, and 20px corners on actual cards.
+ */
+html:not(.pf-v6-theme-dark) :is(.pf-v6-c-page, .pf-v6-c-page__main-container, .pf-v6-c-page__main, .pf-v6-c-page__main-section) {
+  background: var(--ww-page-background);
+}
+html:not(.pf-v6-theme-dark) .pf-v6-c-page__main-container {
+  border-radius: 0;
+  box-shadow: none;
+}
+html:not(.pf-v6-theme-dark) :is(h1, h2, h3, h4, .pf-v6-c-title) {
+  color: var(--ww-black);
+  font-family: "Poppins", "Noto Sans TC", sans-serif;
+  letter-spacing: -.02em;
+}
+html:not(.pf-v6-theme-dark) :is(.pf-v6-c-card, .ct-card, .pf-v6-c-panel, .pf-v6-c-modal-box) {
+  border-radius: 20px;
+  border-color: var(--ww-hairline);
+  box-shadow: var(--ww-shadow);
+}
+html:not(.pf-v6-theme-dark) :is(.pf-v6-c-card, .ct-card) {
+  background: var(--ww-white);
+}
+html:not(.pf-v6-theme-dark) :is(.pf-v6-c-button.pf-m-primary, .pf-v6-c-button.pf-m-secondary) {
+  border-radius: 999px;
+  transition: background var(--ww-motion), transform var(--ww-motion);
+}
+html:not(.pf-v6-theme-dark) .pf-v6-c-button.pf-m-primary:not(.pf-m-danger) {
+  --pf-v6-c-button--m-primary--BackgroundColor: var(--ww-blue);
+}
+/* Dark text keeps small admin actions readable on the exact website blue. */
+html:not(.pf-v6-theme-dark) .pf-v6-c-button.pf-m-primary:not(.pf-m-danger):not(:disabled):not(.pf-m-disabled):not([aria-disabled="true"]) {
+  background: var(--ww-blue);
+  color: var(--ww-black);
+}
+html:not(.pf-v6-theme-dark) .pf-v6-c-button.pf-m-primary:not(.pf-m-danger):not(:disabled):not(.pf-m-disabled):not([aria-disabled="true"]):hover {
+  background: var(--ww-blue-700);
+  color: var(--ww-white);
+}
+html:not(.pf-v6-theme-dark) .login-pf #login-button { color: var(--ww-white); }
+html:not(.pf-v6-theme-dark) :is(.pf-v6-c-button.pf-m-primary, .pf-v6-c-button.pf-m-secondary):active {
+  transform: scale(.97);
+}
+html:not(.pf-v6-theme-dark) :is(.pf-v6-c-form-control, .pf-v6-c-menu-toggle, .pf-v6-c-search-input, input:not([type="checkbox"]):not([type="radio"]), select, textarea) {
+  border-radius: 12px;
+}
+html:not(.pf-v6-theme-dark) :is(a, .pf-v6-c-button.pf-m-link) { color: var(--ww-blue-700); }
+html:not(.pf-v6-theme-dark) :is(a, button, input, select, textarea):focus-visible {
+  outline: 2px solid var(--ww-blue);
+  outline-offset: 2px;
+}
+
+/* Cockpit can be set to a dark theme manually. Keep its native contrast there. */
+.pf-v6-theme-dark .login-pf #badge,
+.pf-v6-theme-dark #badge {
+  background-image: url("assets/logo-lockup-white.svg");
+}
+.pf-v6-theme-dark .login-pf .container { background: var(--color-background); }
+.pf-v6-theme-dark .login-pf #brand::before { color: var(--color-text); }
+.pf-v6-theme-dark #nav-system::before {
+  background-image: url("assets/logo-wordmark-white.svg");
+  color: #dce2f0;
+}
+@media (max-width: 600px) {
+  html body.login-pf { padding: 24px 16px; }
+  .login-pf .container .container-body { padding: 28px 24px; }
+  .login-pf .container .container-footer { padding: 18px 20px; }
+  .login-pf #badge { inline-size: 208px; block-size: 56px; margin-block-end: 28px; }
+  .login-pf #brand::before { font-size: 23px; }
+  #nav-system::before { margin-inline: 16px; }
+  html#system-overview-page .ct-system-overview table :is(th, td):first-child {
+    min-inline-size: 6em;
+    padding-inline-end: 16px;
+    white-space: nowrap;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { transition-duration: 0ms !important; }
+}
+
+/* Layout corrections, 2026-11-12. Colors, assets and control behavior are unchanged. */
+
+/* Let the available content width choose one or two readable overview columns. */
+#system-overview-page .ct-system-overview {
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, max(25rem, calc((100% - 16px) / 2))), 1fr));
+  align-items: start;
+  gap: 16px;
+}
+#system-overview-page .ct-system-overview > .pf-v6-c-card > .pf-v6-c-card__title {
+  padding: 20px 20px 12px;
+}
+#system-overview-page .ct-system-overview .pf-v6-c-card__title-text { font-size: 20px; }
+#system-overview-page .ct-system-overview > .pf-v6-c-card > .pf-v6-c-card__body { padding: 0 20px 16px; }
+#system-overview-page .ct-system-overview > .pf-v6-c-card > .pf-v6-c-card__footer { padding: 0 20px 20px; }
+#system-overview-page .ct-system-overview .pf-v6-c-card__footer:empty { display: none; }
+#system-overview-page .ct-system-overview table :is(th, td):first-child {
+  min-inline-size: 6em;
+  white-space: nowrap;
+  padding-inline-end: 16px;
+}
+
+/* Wider metrics cards; short cards do not stretch to the longest table. */
+#metrics-page .current-metrics {
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, max(22rem, calc((100% - 16px) / 2))), 1fr));
+  align-items: start;
+  gap: 16px;
+}
+#metrics-page .current-metrics .pf-v6-c-card__body { flex-grow: 0; }
+#metrics-page :is(#current-metrics-card-cpu, .current-metrics-network) { grid-column: 1 / -1; }
+
+/* Keep the container section reachable even with hundreds of expanded images. */
+#containers-images .pf-v6-c-expandable-section.pf-m-expanded > .pf-v6-c-expandable-section__content {
+  max-block-size: min(52dvh, 480px);
+  overflow: auto;
+  overscroll-behavior: auto;
+  scrollbar-gutter: stable;
+}
+#containers-containers .container-pod.pf-m-plain { box-shadow: none; }
+@media (min-width: 768px) {
+  #containers-images table { min-inline-size: 100%; }
+  #containers-images table thead { position: sticky; inset-block-start: 0; z-index: 2; background: var(--color-background, var(--ww-white)); }
+  #containers-images table thead th:nth-child(2),
+  #containers-images table td[data-label="Image"] {
+    min-inline-size: 240px;
+    inline-size: 28%;
+    overflow-wrap: anywhere;
+  }
+  #containers-images table thead th:nth-child(4) { inline-size: 104px; }
+  #containers-images table thead th:nth-child(5) { inline-size: 112px; }
+  #containers-images table :is(th,td) { padding-inline: 8px; }
+  #containers-images table td[data-label="Owner"] { white-space: normal; min-inline-size: 144px; }
+}
+
+/* Preserve the native two-cell service row while keeping it compact on laptops. */
+@media (max-width: 991px) {
+  #services-list > tbody > tr {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) max-content;
+    gap: 12px;
+    padding: 14px 16px;
+    align-items: center;
+  }
+  #services-list > tbody > tr > :is(th,td) {
+    display: block;
+    grid-column: auto;
+    min-inline-size: 0;
+    padding: 0;
+  }
+  #services-list .service-unit-first-column { min-inline-size: 0; }
+  #services-list .service-unit-description { margin-block-start: 4px; overflow-wrap: anywhere; }
+  #services-list .service-unit-status-flex-container {
+    flex-direction: column;
+    align-items: end;
+    gap: 6px;
+  }
+  #services-list .service-unit-id { white-space: normal; overflow-wrap: anywhere; }
+}
+
+/* Phone layouts use a consistent edge inset and room for useful data. */
+@media (max-width: 600px) {
+  :is(#system-overview-page, #users-page, #metrics-page, #system-services-page, #podman-page) .pf-v6-c-page__main-section {
+    padding-inline: 16px;
+  }
+  #system-overview-page .ct-overview-header-hostname > h1 { font-size: 22px !important; }
+  #system-overview-page .ct-overview-header { gap: 12px; }
+  #system-overview-page .ct-system-overview > .pf-v6-c-card > .pf-v6-c-card__title { padding: 16px 16px 12px; }
+  #system-overview-page .ct-system-overview > .pf-v6-c-card > .pf-v6-c-card__body { padding: 0 16px 12px; }
+  #system-overview-page .ct-system-overview > .pf-v6-c-card > .pf-v6-c-card__footer { padding: 0 16px 16px; }
+  #users-page .card-groups > .pf-v6-c-card__header {
+    display: grid;
+    grid-template-columns: 24px minmax(0, 1fr);
+    gap: 12px 8px;
+    align-items: start;
+    padding: 16px;
+  }
+  #users-page .card-groups .pf-v6-c-card__header-toggle { grid-column: 1; grid-row: 1; margin: 0; }
+  #users-page .card-groups .pf-v6-c-card__header-main { grid-column: 2; grid-row: 1; min-inline-size: 0; }
+  #users-page .card-groups .pf-v6-c-card__actions { grid-column: 2; grid-row: 2; margin: 0; justify-self: start; }
+  #users-page .card-groups .pf-v6-c-card__title-text { display: flex; flex-flow: row wrap; gap: 8px; }
+  #users-page .card-groups h2 { flex-basis: 100%; margin: 0; }
+  #users-page .ct-card.pf-m-plain > .pf-v6-c-card__header { padding: 16px; gap: 12px; }
+  #users-page .accounts-toolbar-header .pf-v6-c-toolbar__content-section { gap: 8px; }
+  #users-page .accounts-toolbar-header .pf-v6-c-divider { display: none; }
+  #users-page .accounts-toolbar-header .pf-v6-c-toolbar__item { flex: 1 1 220px; }
+  #users-page #accounts-create { inline-size: 100%; }
+  #podman-page :is(#containers-images, #containers-containers) > .pf-v6-c-card__body { padding-inline: 16px; }
+  #podman-page :is(#containers-images, #containers-containers) > .pf-v6-c-card__header { padding: 16px; }
+  #containers-images tbody > tr[data-row-id], #accounts-list tbody > tr[data-row-id] {
+    grid-template-columns: minmax(0, 1fr) 37px;
+    column-gap: 8px;
+    padding: 12px 8px;
+  }
+  #containers-images td[data-label], #accounts-list td[data-label]:not(.pf-v6-c-table__action) {
+    grid-column: 1 / -1;
+    grid-template-columns: 100px minmax(0, 1fr);
+    gap: 8px;
+    overflow-wrap: anywhere;
+  }
+  #containers-images td[data-label="Image"], #accounts-list td[data-label="使用者名稱"] {
+    display: block;
+    grid-row: 1;
+    padding-inline-end: 44px;
+  }
+  #containers-images td.pf-v6-c-table__action, #accounts-list td.pf-v6-c-table__action {
+    display: block;
+    grid-column: 2;
+    grid-row: 1;
+    justify-self: end;
+    align-self: start;
+    padding: 0;
+  }
+  #containers-images td.pf-v6-c-table__toggle { grid-column: 2; justify-self: end; }
+  #containers-images td[data-label="Image"]::before, #accounts-list td[data-label="使用者名稱"]::before {
+    display: block;
+    margin-block-end: 4px;
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "name": "woowtech-cockpit-validation",
+  "version": "2026.11.12",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node tests/preview.mjs",
+    "capture": "node scripts/capture.mjs"
+  },
+  "devDependencies": { "playwright-core": "1.58.2" },
+  "engines": { "node": ">=22" }
+}
