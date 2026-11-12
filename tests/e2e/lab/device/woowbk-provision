@@ -1,0 +1,66 @@
+#!/bin/bash
+# Provision a booted lab device (idempotent). Runs as root inside the device; called by up.sh.
+#
+#   woowbk-provision --appowner-uid <uid>      devadmin password: first line of stdin
+#
+# * devadmin  : sudo member, Cockpit login; password set from stdin (never from argv/env).
+# * appowner  : rootless Podman owner with the requested uid, linger, subordinate ids that are valid
+#               inside this container's 65536-id user namespace.
+set -euo pipefail
+export PATH=/usr/sbin:/usr/bin:/sbin:/bin LANG=C.UTF-8
+
+OWNER=appowner
+# Nested ids must lie inside the device's own namespace (0..65535) and must not overlap real
+# accounts (0..9999 incl. devadmin/appowner) or nobody/nogroup (65534).
+SUB_START=10000
+SUB_COUNT=55000
+
+die() { echo "woowbk-provision: $*" >&2; exit 1; }
+
+uid=''
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --appowner-uid) uid="${2:-}"; shift 2 ;;
+        *) die "unknown argument: $1" ;;
+    esac
+done
+[[ "$uid" =~ ^[0-9]+$ ]] && [ "$uid" -ge 1001 ] && [ "$uid" -le 9999 ] || die '--appowner-uid must be 1001..9999'
+[ "$(id -u)" -eq 0 ] || die 'must run as root'
+
+# 1. devadmin password (stdin, one line).
+IFS= read -r password || true
+[ -n "${password:-}" ] || die 'expected the devadmin password on stdin'
+printf 'devadmin:%s\n' "$password" | chpasswd
+unset password
+
+# 2. appowner with a fixed uid (different per device on purpose).
+if id -u "$OWNER" >/dev/null 2>&1; then
+    current=$(id -u "$OWNER")
+    [ "$current" = "$uid" ] || die "$OWNER exists with uid $current, expected $uid (run reset.sh)"
+else
+    if getent group "$uid" >/dev/null; then die "gid $uid already taken"; fi
+    groupadd -g "$uid" "$OWNER"
+    useradd -m -u "$uid" -g "$uid" -s /bin/bash -c 'Rootless application owner' "$OWNER"
+fi
+chown "$uid:$uid" "/home/$OWNER"
+chmod 0750 "/home/$OWNER"
+
+# 3. Subordinate ids: useradd adds 100000:65536 by default, which is unusable inside a container
+#    whose namespace only maps 65536 ids. Rewrite both files with valid ranges only.
+printf '%s:%s:%s\n' "$OWNER" "$SUB_START" "$SUB_COUNT" > /etc/subuid
+printf '%s:%s:%s\n' "$OWNER" "$SUB_START" "$SUB_COUNT" > /etc/subgid
+chmod 0644 /etc/subuid /etc/subgid
+
+# 4. Linger: start the user manager now and on every boot.
+install -d -m 0755 /var/lib/systemd/linger
+loginctl enable-linger "$OWNER"
+for _ in $(seq 1 60); do
+    if systemctl is-active --quiet "user@$uid.service" && [ -S "/run/user/$uid/bus" ]; then
+        break
+    fi
+    sleep 1
+done
+systemctl is-active --quiet "user@$uid.service" || die "user@$uid.service is not active"
+[ -S "/run/user/$uid/bus" ] || die "/run/user/$uid/bus is missing (dbus-user-session)"
+
+echo "provisioned: devadmin=$(id -u devadmin) $OWNER=$uid subids=$SUB_START:$SUB_COUNT linger=yes"

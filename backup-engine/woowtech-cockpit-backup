@@ -1,24 +1,62 @@
 #!/usr/bin/python3 -I
-"""Root helper for the Cockpit backup page. Imports only from the root-owned library dir."""
+"""Root helper for the Cockpit backup page. Imports only from the root-owned library dir.
+
+Installed as /usr/local/libexec/woowtech-cockpit-backup (root 0755). It refuses to run unless
+euid == 0 and every directory and module of the engine library is root-owned, not a symlink and
+not group/world-writable. Environment variables are never honoured (`-I`), bytecode is neither
+written nor read next to the sources, and nothing but one JSON object is printed on stdout.
+"""
+import json
 import os
 import stat
 import sys
 
 LIB = '/usr/local/lib/woowtech-cockpit-backup'
+PACKAGE_DIRS = ('woowbackup', 'woowbackup/adapters')
 
 
-def trusted(path):
-    st = os.lstat(path)
-    return stat.S_ISDIR(st.st_mode) and st.st_uid == 0 and not st.st_mode & 0o022
+def fail(code, message):
+    sys.stdout.write(json.dumps({'ok': False, 'error': {'code': code, 'message': message, 'details': {}}},
+                                ensure_ascii=False) + '\n')
+    sys.stdout.flush()
+    sys.exit(1)
+
+
+def trusted(path, directory=True):
+    try:
+        st = os.lstat(path)
+    except OSError:
+        return False
+    kind = stat.S_ISDIR if directory else stat.S_ISREG
+    return kind(st.st_mode) and st.st_uid == 0 and not st.st_mode & 0o022
+
+
+def library_trusted():
+    if not trusted(LIB):
+        return False
+    for rel in PACKAGE_DIRS:
+        directory = os.path.join(LIB, rel)
+        if not trusted(directory):
+            return False
+        for name in os.listdir(directory):
+            if name.endswith('.py') and not trusted(os.path.join(directory, name), directory=False):
+                return False
+    return True
 
 
 if __name__ == '__main__':
+    os.umask(0o077)
     if os.geteuid() != 0:
-        sys.stdout.write('{"ok": false, "error": {"code": "permission-denied", "message": "需要管理員權限。", "details": {}}}\n')
-        sys.exit(1)
-    if not (trusted(LIB) and trusted(os.path.join(LIB, 'woowbackup'))):
-        sys.stdout.write('{"ok": false, "error": {"code": "internal-error", "message": "備份元件安裝不完整或權限不安全。", "details": {}}}\n')
-        sys.exit(1)
+        fail('permission-denied', '需要管理員權限，請先在 Cockpit 開啟管理員存取權限。')
+    if not library_trusted():
+        fail('internal-error', '備份元件安裝不完整或權限不安全。')
+    sys.dont_write_bytecode = True
+    sys.pycache_prefix = '/nonexistent/woowtech-cockpit-backup-pycache'  # never read cached bytecode
     sys.path.insert(0, LIB)
-    from woowbackup.cli import main
+    try:
+        from woowbackup.cli import main
+    except Exception:  # noqa: BLE001 - keep the one-JSON-object contract
+        import traceback
+        traceback.print_exc(file=sys.stderr)
+        fail('internal-error', '備份元件載入失敗，請重新安裝。')
     sys.exit(main(sys.argv[1:]))

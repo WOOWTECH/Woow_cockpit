@@ -1,0 +1,78 @@
+# WOOWTECH backup lab "device": Ubuntu 24.04 with systemd as PID 1, Cockpit from noble-backports
+# (same 362 line as the production host), rootless Podman tooling (nested, per-user) and the
+# archive tools the backup engine needs (age, zstd, python3).
+#
+# Build ONLY with the isolated lab storage (never plain `podman`):
+#   tests/e2e/lab/build.sh            # wraps the command below
+#   ~/.woowbk-lab/bin/labpodman build --memory 768m -t localhost/woowbk-device:noble \
+#       -f tests/e2e/lab/Containerfile.device tests/e2e/lab
+#
+# Accounts: devadmin (uid 1000, sudo, Cockpit login) exists in the image with a locked password;
+# appowner is created at device start by woowbk-provision (uid 1001 on dev-a, 1007 on dev-b).
+FROM docker.io/library/ubuntu:24.04
+
+ARG UBUNTU_MIRROR=http://tw.archive.ubuntu.com/ubuntu/
+ENV DEBIAN_FRONTEND=noninteractive LANG=C.UTF-8 container=podman
+
+# Deterministic apt sources: noble + updates + backports (Cockpit) + security.
+RUN set -eux; \
+    rm -f /etc/apt/sources.list; \
+    printf '%s\n' \
+      'Types: deb' "URIs: ${UBUNTU_MIRROR}" 'Suites: noble noble-updates noble-backports' \
+      'Components: main restricted universe multiverse' \
+      'Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg' '' \
+      'Types: deb' 'URIs: http://security.ubuntu.com/ubuntu/' 'Suites: noble-security' \
+      'Components: main restricted universe multiverse' \
+      'Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg' \
+      > /etc/apt/sources.list.d/ubuntu.sources; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends \
+        systemd systemd-sysv dbus dbus-user-session libpam-systemd sudo \
+        podman uidmap fuse-overlayfs passt slirp4netns catatonit crun conmon netavark aardvark-dns iptables \
+        age zstd python3 curl ca-certificates iproute2 procps openssl less; \
+    apt-get install -y --no-install-recommends -t noble-backports cockpit-ws cockpit-bridge cockpit-system; \
+    dpkg-query -W -f='${Package}=${Version}\n' cockpit-ws cockpit-bridge cockpit-system podman crun conmon \
+        netavark aardvark-dns fuse-overlayfs slirp4netns passt uidmap age zstd python3 systemd sudo \
+        > /etc/woowbk-device-versions; \
+    apt-get clean; \
+    rm -rf /var/lib/apt/lists/*
+
+# systemd inside a rootless container: no udev, kernel modules, consoles or remounts.
+# An empty machine-id makes every device derive its own id at first boot (podman passes
+# container_uuid), so dev-a and dev-b never share the id baked in by systemd's postinst.
+RUN set -eux; \
+    systemctl mask \
+        systemd-udevd.service systemd-udevd-kernel.socket systemd-udevd-control.socket \
+        systemd-udev-trigger.service systemd-udev-settle.service systemd-modules-load.service \
+        systemd-remount-fs.service systemd-firstboot.service sys-kernel-debug.mount \
+        sys-kernel-tracing.mount sys-kernel-config.mount sys-fs-fuse-connections.mount \
+        getty.target console-getty.service serial-getty@.service getty@.service \
+        proc-sys-fs-binfmt_misc.automount proc-sys-fs-binfmt_misc.mount systemd-binfmt.service \
+        apt-daily.timer apt-daily-upgrade.timer motd-news.timer dpkg-db-backup.timer e2scrub_all.timer \
+        fstrim.timer; \
+    systemctl enable cockpit.socket; \
+    systemctl set-default multi-user.target; \
+    rm -f /etc/machine-id /var/lib/dbus/machine-id; \
+    : > /etc/machine-id; \
+    ln -s /etc/machine-id /var/lib/dbus/machine-id; \
+    printf 'Set disable_coredump false\n' >> /etc/sudo.conf
+
+# Accounts and runtime directories (CONTRACT section 3 data dir is a volume at run time).
+RUN set -eux; \
+    if id ubuntu >/dev/null 2>&1; then userdel -r ubuntu; fi; \
+    useradd -m -u 1000 -U -G sudo -s /bin/bash -c 'Lab device admin' devadmin; \
+    passwd -l devadmin; \
+    : > /etc/subuid; : > /etc/subgid; \
+    install -d -m 0755 /var/lib/systemd/linger; \
+    install -d -m 0700 /var/lib/woowtech-backup; \
+    install -d -m 0755 /opt
+
+COPY device/woowbk-provision /usr/local/sbin/woowbk-provision
+COPY device/woowbk-owner /usr/local/bin/woowbk-owner
+COPY device/woowbk-rshared.service /etc/systemd/system/woowbk-rshared.service
+RUN chmod 0755 /usr/local/sbin/woowbk-provision /usr/local/bin/woowbk-owner \
+ && chmod 0644 /etc/systemd/system/woowbk-rshared.service \
+ && systemctl enable woowbk-rshared.service
+
+STOPSIGNAL SIGRTMIN+3
+CMD ["/sbin/init"]

@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "requires": {
+    "cockpit": "362"
+  },
+  "menu": {
+    "index": {
+      "label": "備份與還原",
+      "order": 46,
+      "keywords": [
+        {
+          "matches": ["backup", "restore", "podman", "quadlet", "備份", "還原", "緊急金鑰"]
+        }
+      ]
+    }
+  }
+}

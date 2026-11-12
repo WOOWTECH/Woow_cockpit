@@ -6,3 +6,4 @@
 *.png binary
 *.ico binary
 branding/fonts/LICENSE-*.txt whitespace=-blank-at-eol
+backup-engine/woowtech-cockpit-backup text eol=lf

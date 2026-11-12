@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>備份與還原 · woowtech</title>
+  <link rel="stylesheet" href="../../static/branding.css">
+  <link rel="stylesheet" href="backup.css">
+  <script src="../base1/cockpit.js" defer></script>
+  <script src="backup.js" defer></script>
+</head>
+<body>
+  <div class="page" id="backup-app">
+    <header class="page-header">
+      <div class="page-title">
+        <p class="eyebrow">BACKUP &amp; RESTORE</p>
+        <h1>備份與還原</h1>
+        <p class="muted">為 Podman 應用建立加密備份，可下載成單一檔案，並在這台或另一台相容設備上還原。</p>
+      </div>
+      <div class="button-group header-actions">
+        <button type="button" id="refresh" data-focus="refresh">重新整理</button>
+        <a class="button" id="go-restore" href="#/restore" data-focus="go-restore">從檔案還原</a>
+        <a class="button primary" id="go-create" href="#/create" data-focus="go-create">建立備份</a>
+      </div>
+    </header>
+
+    <nav class="tabs" aria-label="備份與還原頁面">
+      <a href="#/overview" data-nav="overview" data-focus="nav-overview">總覽</a>
+      <a href="#/backups" data-nav="backups" data-focus="nav-backups">備份列表</a>
+      <a href="#/restore" data-nav="restore" data-focus="nav-restore">從檔案還原</a>
+      <a href="#/keys" data-nav="keys" data-focus="nav-keys">加密金鑰</a>
+      <a href="#/activity" data-nav="activity" data-focus="nav-activity">活動紀錄</a>
+    </nav>
+
+    <div class="banners">
+      <div id="access-note" class="notice notice-warn" role="status" hidden>
+        <p><strong>需要管理員權限。</strong><span id="access-text">請在 Cockpit 頂端開啟「管理員存取權限」，再重試。權限啟用後會自動重新載入資料。</span></p>
+      </div>
+      <div id="page-error" class="notice notice-error" hidden>
+        <p id="page-error-message" role="alert"></p>
+        <div class="button-group"><button type="button" id="retry" data-focus="retry">重試</button></div>
+      </div>
+      <div id="key-banner" class="notice notice-key" hidden></div>
+      <div id="job-banner" class="notice notice-info" hidden></div>
+      <div id="action-error"></div>
+      <details id="warnings" class="notice" hidden>
+        <summary id="warnings-title" data-focus="warnings">資料提示</summary>
+        <ul id="warning-list"></ul>
+      </details>
+    </div>
+    <p id="status" class="status-line" role="status" aria-live="polite" aria-atomic="true"></p>
+
+    <main id="view" class="view" tabindex="-1" aria-busy="true">
+      <section class="card loading-card"><p>正在載入備份狀態…</p></section>
+    </main>
+
+    <p class="footnote muted">備份預設保存在這台設備；請另外下載保存到其他位置，以防這顆磁碟故障。作業在背景執行，關閉瀏覽器後仍會繼續。</p>
+    <noscript><p class="notice notice-error">請啟用 JavaScript 以使用備份與還原。</p></noscript>
+  </div>
+
+  <dialog id="confirm-dialog" aria-labelledby="confirm-title" aria-describedby="confirm-body">
+    <h2 id="confirm-title">確認操作</h2>
+    <div id="confirm-body" class="dialog-body"></div>
+    <div id="confirm-error" class="notice notice-error" hidden><p id="confirm-error-message" role="alert"></p></div>
+    <p id="confirm-status" class="status-line" role="status" aria-live="polite"></p>
+    <footer class="button-group dialog-footer">
+      <button type="button" id="confirm-cancel" autofocus>取消</button>
+      <button type="button" id="confirm-ok" class="primary">確認</button>
+    </footer>
+  </dialog>
+
+  <dialog id="key-dialog" aria-labelledby="key-dialog-title" aria-describedby="key-dialog-description">
+    <h2 id="key-dialog-title">輸入緊急金鑰</h2>
+    <p id="key-dialog-description" class="muted"></p>
+    <div class="field">
+      <label for="key-dialog-text">緊急金鑰</label>
+      <textarea id="key-dialog-text" class="mono" rows="3" autocomplete="off" autocapitalize="off" spellcheck="false" aria-describedby="key-dialog-hint"></textarea>
+      <p id="key-dialog-hint" class="hint">貼上以 AGE-SECRET-KEY-1 開頭的整行金鑰，或貼上整份緊急金鑰檔的內容。</p>
+    </div>
+    <div class="field">
+      <span class="field-label" id="key-dialog-file-label">或讀取緊急金鑰檔案（.txt）</span>
+      <div class="file-picker">
+        <input id="key-dialog-file" type="file" accept=".txt,text/plain" hidden tabindex="-1">
+        <button type="button" id="key-dialog-file-button" aria-label="選擇檔案：緊急金鑰檔（.txt）">選擇檔案</button>
+        <span class="file-name">只會在瀏覽器讀取，不會上傳檔案</span>
+      </div>
+    </div>
+    <label class="choice" id="key-dialog-save-wrap">
+      <input type="checkbox" id="key-dialog-save">
+      <span class="choice-body"><strong>保存此金鑰到這台設備</strong><small>日後檢視或還原以同一把金鑰加密的備份時，不必再次輸入。</small></span>
+    </label>
+    <div id="key-dialog-error" class="notice notice-error" hidden><p id="key-dialog-error-message" role="alert"></p></div>
+    <p id="key-dialog-status" class="status-line" role="status" aria-live="polite"></p>
+    <footer class="button-group dialog-footer">
+      <button type="button" id="key-dialog-cancel">取消</button>
+      <button type="button" id="key-dialog-ok" class="primary">繼續</button>
+    </footer>
+  </dialog>
+
+  <div id="downloads" hidden></div>
+</body>
+</html>

@@ -1,0 +1,26 @@
+{
+  "schema": 1,
+  "id": "woowbk-demo",
+  "name": "示範筆記應用",
+  "description": "PostgreSQL、檔案與密鑰的備份還原示範應用",
+  "owner": "appowner",
+  "adapter": "quadlet-postgres",
+  "quadlet": {
+    "files": ["woowbk-demo.network", "woowbk-demo-db.container", "woowbk-demo-app.container"],
+    "template_dir": "/usr/local/share/woowtech-cockpit-backup/catalog/woowbk-demo/quadlet"
+  },
+  "units": ["woowbk-demo-db.service", "woowbk-demo-app.service"],
+  "writer_units": ["woowbk-demo-app.service"],
+  "postgres": [
+    {"id": "main", "container": "woowbk-demo-db", "unit": "woowbk-demo-db.service",
+     "database": "notes", "user": "notes", "data_volume": "woowbk-demo-pgdata"}
+  ],
+  "volumes": [{"name": "woowbk-demo-files", "label": "上傳檔案"}],
+  "secrets": [{"name": "woowbk-demo-db-password"}, {"name": "woowbk-demo-app-key"}],
+  "config_files": [{"path": ".config/woowbk-demo/app.env", "mode": "0600"}],
+  "health": [{"type": "http", "url": "http://127.0.0.1:18090/healthz", "expect_status": 200, "timeout_seconds": 90}],
+  "verify": [
+    {"id": "summary", "type": "http-json", "url": "http://127.0.0.1:18090/api/summary",
+     "compare": ["notes", "files", "digest", "title", "signatures_valid"]}
+  ]
+}

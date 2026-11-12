@@ -8,7 +8,7 @@ permissions:
 jobs:
   validate:
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -18,15 +18,22 @@ jobs:
         with:
           node-version: '22'
           cache: npm
+      - name: Backup engine tools (age, zstd)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends age zstd
+          age --version
+          zstd --version
       - name: Installer and source contracts
         run: |
-          python3 -m unittest discover -s tests -v
+          python3 -m unittest discover -s tests -t . -v
           python3 scripts/check_source.py
           bash -n scripts/bootstrap-ubuntu.sh scripts/build-podman.sh
           node --check native/podman/managed-owners.js
           node --check scripts/capture.mjs
           node --check services/service.js
+          node --check backup/backup.js
       - run: npm ci
       - run: npx playwright-core install --with-deps chromium
-      - name: Gallery and service management browser tests
+      - name: Gallery, service management and backup browser tests
         run: npm test

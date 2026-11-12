@@ -252,8 +252,10 @@ space check (free ≥ 2.2 × estimate + 512 MiB) → snapshot business verify �
 `pg_restore --list` → `podman volume export <vol>` (stdout to staging) → read secrets with
 `podman secret inspect --showsecret` → read config + quadlet files as the owner → optionally
 `podman save --format oci-archive` per image → **always restart writers in `finally`** → health
-check. Then the engine writes the archive (temp file, fsync, atomic rename), verifies it fully
-with the device key, writes the index, and deletes staging.
+check (only when every unit was active before the backup; an app that was already down is not
+waited for, and `downtime_seconds` is 0 when no writer had to be stopped). Then the engine writes
+the archive (temp file, fsync, atomic rename), verifies it fully with the device key, writes the
+index, and deletes staging.
 
 Restore (per app, after full archive verification + extraction to staging):
 * `fresh` (quadlet files absent): install catalog templates as the owner into

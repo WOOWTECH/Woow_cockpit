@@ -1,0 +1,283 @@
+"""OwnerRunner: exact runuser/env prefix, error mapping, and the owner-side file helper.
+
+The FILE_HELPER snippet is executed for real (as the current user, with HOME pointing at a temp
+home) to prove the O_NOFOLLOW component walk, atomic writes and modes.
+"""
+import io
+import os
+import stat
+import subprocess
+import tempfile
+import types
+import unittest
+from pathlib import Path
+
+from woowbackup import podman
+from woowbackup.errors import BackupError
+
+OWNER = types.SimpleNamespace(pw_name='appowner', pw_uid=1001, pw_gid=1001, pw_dir='/home/appowner')
+EXPECTED_PREFIX = ['/usr/sbin/runuser', '-u', 'appowner', '--', '/usr/bin/env', '-i',
+                   'PATH=/usr/sbin:/usr/bin:/sbin:/bin', 'HOME=/home/appowner', 'LANG=C.UTF-8',
+                   'XDG_RUNTIME_DIR=/run/user/1001', 'DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1001/bus']
+
+
+class Recorder:
+    def __init__(self, result=None, exc=None):
+        self.calls = []
+        self.result = result or podman.Result(0, b'out', b'')
+        self.exc = exc
+
+    def __call__(self, argv, **kwargs):
+        self.calls.append((argv, kwargs))
+        if self.exc:
+            raise self.exc
+        return self.result
+
+
+def owner_lookup(home='/home/appowner'):
+    def lookup(name):
+        if name == 'appowner':
+            return types.SimpleNamespace(pw_name='appowner', pw_uid=1001, pw_gid=1001, pw_dir=home)
+        if name == 'zeroalias':
+            return types.SimpleNamespace(pw_name='zeroalias', pw_uid=0, pw_gid=0, pw_dir='/root')
+        raise KeyError(name)
+    return lookup
+
+
+class LocalRunner:
+    """Executes the command after the runuser prefix as the current user (env -i keeps it hermetic)."""
+
+    def __init__(self):
+        self.calls = []
+
+    def __call__(self, argv, *, input=None, stdout=None, timeout=None, cwd=None, env=None):
+        assert argv[:4] == ['/usr/sbin/runuser', '-u', 'appowner', '--'], argv[:4]
+        self.calls.append(argv)
+        return podman.default_runner(argv[4:], input=input, stdout=stdout, timeout=timeout, cwd=cwd, env=env)
+
+
+class PrefixTests(unittest.TestCase):
+    def runner(self, **kwargs):
+        rec = Recorder(**kwargs)
+        return podman.OwnerRunner('appowner', runner=rec, user_lookup=owner_lookup()), rec
+
+    def test_exact_prefix_cwd_and_root_env(self):
+        runner, rec = self.runner()
+        runner.run(['/usr/bin/podman', 'ps', '--all'])
+        argv, kwargs = rec.calls[0]
+        self.assertEqual(argv, EXPECTED_PREFIX + ['/usr/bin/podman', 'ps', '--all'])
+        self.assertEqual(kwargs['cwd'], '/home/appowner')
+        self.assertEqual(kwargs['env'], {'PATH': '/usr/sbin:/usr/bin:/sbin:/bin', 'LANG': 'C.UTF-8', 'LC_ALL': 'C.UTF-8'})
+        self.assertEqual(kwargs['timeout'], 300)
+
+    def test_podman_and_systemctl_helpers(self):
+        runner, rec = self.runner()
+        runner.podman('volume', 'exists', 'x', timeout=5)
+        runner.systemctl('start', '--', 'a.service')
+        self.assertEqual(rec.calls[0][0][len(EXPECTED_PREFIX):], ['/usr/bin/podman', 'volume', 'exists', 'x'])
+        self.assertEqual(rec.calls[0][1]['timeout'], 5)
+        self.assertEqual(rec.calls[1][0][len(EXPECTED_PREFIX):], ['/usr/bin/systemctl', '--user', 'start', '--', 'a.service'])
+
+    def test_relay_wraps_podman_in_the_owner_helper(self):
+        runner, rec = self.runner()
+        sink = io.BytesIO()
+        runner.relay(['volume', 'export', 'vol'], stdout=sink)
+        inner = rec.calls[0][0][len(EXPECTED_PREFIX):]
+        self.assertEqual(inner[:3], ['/usr/bin/python3', '-I', '-c'])
+        self.assertEqual(inner[3], podman.FILE_HELPER)
+        self.assertEqual(inner[4:], ['relay', '/usr/bin/podman', 'volume', 'export', 'vol'])
+        self.assertIs(rec.calls[0][1]['stdout'], sink)
+
+    def test_nonzero_exit_raises_command_error_without_stdout(self):
+        runner, _ = self.runner(result=podman.Result(125, b'SECRET-STDOUT', b'Error: no such volume'))
+        with self.assertRaises(podman.CommandError) as caught:
+            runner.podman('volume', 'export', 'missing')
+        error = caught.exception
+        self.assertEqual((error.code, error.returncode), ('job-failed', 125))
+        self.assertIn('podman volume export missing', error.message)
+        self.assertNotIn('SECRET-STDOUT', error.message + str(error.details))
+        self.assertEqual(error.stderr, b'Error: no such volume')
+
+    def test_check_false_returns_result(self):
+        runner, _ = self.runner(result=podman.Result(1, b'', b''))
+        self.assertEqual(runner.podman('secret', 'exists', 'x', check=False).returncode, 1)
+
+    def test_timeout_and_missing_tool(self):
+        runner, _ = self.runner(exc=subprocess.TimeoutExpired('x', 1))
+        with self.assertRaises(BackupError) as caught:
+            runner.systemctl('stop', '--', 'a.service', timeout=1)
+        self.assertEqual(caught.exception.code, 'job-failed')
+        self.assertIn('逾時', caught.exception.message)
+        runner, _ = self.runner(exc=FileNotFoundError())
+        with self.assertRaises(BackupError) as caught:
+            runner.podman('ps')
+        self.assertEqual(caught.exception.code, 'owner-missing')
+
+    def test_owner_validation(self):
+        for name in ('root', 'Bad', '-x', '', None):
+            with self.assertRaises(BackupError):
+                podman.OwnerRunner(name, runner=Recorder(), user_lookup=owner_lookup())
+        with self.assertRaises(BackupError) as caught:
+            podman.OwnerRunner('ghost', runner=Recorder(), user_lookup=owner_lookup())
+        self.assertEqual(caught.exception.code, 'owner-missing')
+        with self.assertRaises(BackupError):
+            podman.OwnerRunner('zeroalias', runner=Recorder(), user_lookup=owner_lookup())
+        with self.assertRaises(BackupError):
+            podman.OwnerRunner('appowner', runner=Recorder(), user_lookup=owner_lookup(home='relative/home'))
+
+    def test_nul_in_argv_refused(self):
+        runner, rec = self.runner()
+        with self.assertRaises(BackupError):
+            runner.run(['/usr/bin/podman', 'a\0b'])
+        self.assertEqual(rec.calls, [])
+
+    def test_rel_path_validation_happens_before_running(self):
+        runner, rec = self.runner()
+        for bad in ('../etc/passwd', '/etc/passwd', 'a//b', './x', 'a/../b', '', 'a\nb', 'x' * 2000):
+            with self.assertRaises(BackupError):
+                runner.read_file(bad)
+            with self.assertRaises(BackupError):
+                runner.write_file(bad, b'x', 0o600)
+        with self.assertRaises(BackupError):
+            runner.write_file('.config/x', b'x', 0o755)
+        self.assertEqual(rec.calls, [])
+
+    def test_describe_never_contains_helper_code(self):
+        text = podman.describe(['/usr/bin/python3', '-I', '-c', podman.FILE_HELPER, 'read', '.config/a', '10'])
+        self.assertEqual(text, 'owner-file read .config/a')
+        self.assertEqual(podman.describe(['/usr/bin/python3', '-I', '-c', podman.FILE_HELPER, 'relay',
+                                          '/usr/bin/podman', 'volume', 'export', 'v']), 'podman volume export v')
+
+    def test_stderr_tail_drops_sql_echo_and_warnings(self):
+        err = (b'time="x" level=warning msg="noise"\npg_restore: error: relation "t" already exists\n'
+               b'Command was: CREATE TABLE t (secret text);\nmore sql')
+        self.assertEqual(podman.stderr_tail(err), ['pg_restore: error: relation "t" already exists'])
+
+
+class FileHelperTests(unittest.TestCase):
+    """Real execution of FILE_HELPER with an isolated HOME."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.home = Path(self.tmp.name) / 'home'
+        self.home.mkdir()
+        self.outside = Path(self.tmp.name) / 'outside'
+        self.outside.mkdir()
+        self.local = LocalRunner()
+        self.runner = podman.OwnerRunner('appowner', runner=self.local, user_lookup=owner_lookup(str(self.home)))
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_read_regular_file(self):
+        (self.home / '.config' / 'app').mkdir(parents=True)
+        (self.home / '.config/app/app.env').write_bytes(b'TITLE=x\n\x00\xff')
+        self.assertEqual(self.runner.read_file('.config/app/app.env'), b'TITLE=x\n\x00\xff')
+
+    def test_read_errors(self):
+        (self.home / '.config').mkdir()
+        with self.assertRaises(BackupError) as caught:
+            self.runner.read_file('.config/missing')
+        self.assertEqual(caught.exception.code, 'not-found')
+        (self.outside / 'secret').write_text('outside')
+        os.symlink(self.outside / 'secret', self.home / '.config' / 'link')
+        with self.assertRaises(BackupError) as caught:
+            self.runner.read_file('.config/link')
+        self.assertEqual(caught.exception.code, 'permission-denied')
+        os.symlink(self.outside, self.home / '.config' / 'dirlink')
+        with self.assertRaises(BackupError) as caught:
+            self.runner.read_file('.config/dirlink/secret')
+        self.assertEqual(caught.exception.code, 'permission-denied')
+        (self.home / '.config' / 'big').write_bytes(b'x' * 100)
+        with self.assertRaises(BackupError) as caught:
+            self.runner.read_file('.config/big', max_bytes=10)
+        self.assertEqual(caught.exception.code, 'limit-exceeded')
+        os.mkfifo(self.home / '.config' / 'fifo')
+        with self.assertRaises(BackupError) as caught:
+            self.runner.read_file('.config/fifo')
+        self.assertEqual(caught.exception.code, 'permission-denied')
+
+    def test_write_creates_private_dirs_and_exact_mode(self):
+        self.runner.write_file('.config/woowbk-demo/app.env', b'A=1\n', '0600')
+        target = self.home / '.config/woowbk-demo/app.env'
+        self.assertEqual(target.read_bytes(), b'A=1\n')
+        self.assertEqual(stat.S_IMODE(target.stat().st_mode), 0o600)
+        self.assertEqual(stat.S_IMODE((self.home / '.config/woowbk-demo').stat().st_mode), 0o700)
+        self.runner.write_file('.config/woowbk-demo/app.env', io.BytesIO(b'B=2\n'), 0o644)
+        self.assertEqual(target.read_bytes(), b'B=2\n')
+        self.assertEqual(stat.S_IMODE(target.stat().st_mode), 0o644)
+        leftovers = [p.name for p in (self.home / '.config/woowbk-demo').iterdir() if p.name != 'app.env']
+        self.assertEqual(leftovers, [])
+
+    def test_write_never_follows_symlinks(self):
+        (self.home / '.config').mkdir()
+        os.symlink(self.outside, self.home / '.config' / 'woowbk-demo')
+        with self.assertRaises(BackupError) as caught:
+            self.runner.write_file('.config/woowbk-demo/app.env', b'x', 0o600)
+        self.assertEqual(caught.exception.code, 'permission-denied')
+        self.assertEqual(list(self.outside.iterdir()), [])
+        (self.outside / 'victim').write_text('keep')
+        os.symlink(self.outside / 'victim', self.home / '.config' / 'final')
+        self.runner.write_file('.config/final', b'new', 0o600)
+        self.assertEqual((self.outside / 'victim').read_text(), 'keep')
+        self.assertFalse((self.home / '.config/final').is_symlink())
+        self.assertEqual((self.home / '.config/final').read_bytes(), b'new')
+
+    def test_write_onto_directory_fails_cleanly(self):
+        (self.home / '.config' / 'adir').mkdir(parents=True)
+        with self.assertRaises(BackupError):
+            self.runner.write_file('.config/adir', b'x', 0o600)
+        self.assertEqual([p.name for p in (self.home / '.config').iterdir()], ['adir'])
+
+    def test_remove_and_stat(self):
+        (self.home / '.config').mkdir()
+        (self.home / '.config/file').write_text('x')
+        (self.outside / 'target').write_text('keep')
+        os.symlink(self.outside / 'target', self.home / '.config' / 'link')
+        os.symlink(self.outside, self.home / '.config' / 'dirlink')
+        (self.home / '.config/sub').mkdir()
+        stats = self.runner.stat_files(['.config/file', '.config/link', '.config/missing', '.config/dirlink/target',
+                                        '.config/sub'])
+        self.assertEqual({k: v['type'] for k, v in stats.items()},
+                         {'.config/file': 'file', '.config/link': 'link', '.config/missing': 'missing',
+                          '.config/dirlink/target': 'blocked', '.config/sub': 'dir'})
+        self.assertTrue(self.runner.remove_file('.config/file'))
+        self.assertFalse(self.runner.remove_file('.config/file'))
+        self.assertTrue(self.runner.remove_file('.config/link'))
+        self.assertEqual((self.outside / 'target').read_text(), 'keep')
+        with self.assertRaises(BackupError):
+            self.runner.remove_file('.config/sub')
+        self.assertFalse(self.runner.remove_file('.config/nothere/x'))
+
+    def test_relay_only_runs_podman(self):
+        result = self.runner.run(['/usr/bin/python3', '-I', '-c', podman.FILE_HELPER, 'relay', '/bin/sh', '-c', 'id'],
+                                 check=False)
+        self.assertEqual(result.returncode, 8)
+
+    def test_relay_copies_stream_and_exit_code(self):
+        # Same relay logic with the allowed binary swapped for /bin/sh (podman is never run on the host).
+        helper = podman.FILE_HELPER.replace("argv[0] != '/usr/bin/podman'", "argv[0] != '/bin/sh'")
+        with tempfile.TemporaryFile() as sink:
+            result = self.runner.run(['/usr/bin/python3', '-I', '-c', helper, 'relay', '/bin/sh', '-c',
+                                      'head -c 300000 /dev/zero; exit 3'], stdout=sink, check=False)
+            sink.seek(0)
+            self.assertEqual(len(sink.read()), 300000)
+        self.assertEqual(result.returncode, 3)
+
+    def test_environment_is_hermetic(self):
+        os.environ['WOOWBK_LEAK_TEST'] = 'leak'
+        try:
+            out = self.runner.run(['/usr/bin/env']).stdout.decode()
+        finally:
+            del os.environ['WOOWBK_LEAK_TEST']
+        names = sorted(line.split('=', 1)[0] for line in out.splitlines())
+        self.assertEqual(names, ['DBUS_SESSION_BUS_ADDRESS', 'HOME', 'LANG', 'PATH', 'XDG_RUNTIME_DIR'])
+
+    def test_timeout_kills_process_group(self):
+        with self.assertRaises(BackupError) as caught:
+            self.runner.run(['/bin/sh', '-c', 'sleep 30 & sleep 30'], timeout=1)
+        self.assertIn('逾時', caught.exception.message)
+
+
+if __name__ == '__main__':
+    unittest.main()
