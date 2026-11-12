@@ -24,7 +24,8 @@ jobs:
           python3 scripts/check_source.py
           bash -n scripts/bootstrap-ubuntu.sh
           node --check scripts/capture.mjs
+          node --check services/service.js
       - run: npm ci
       - run: npx playwright-core install --with-deps chromium
-      - name: First-device gallery rendering
+      - name: Gallery and service management browser tests
         run: npm test

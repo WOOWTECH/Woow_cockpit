@@ -1,0 +1,184 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>服務管理 · woowtech</title>
+  <link rel="stylesheet" href="../../static/branding.css">
+  <link rel="stylesheet" href="service.css">
+  <script src="../base1/cockpit.js" defer></script>
+  <script src="service.js" defer></script>
+</head>
+<body>
+  <main class="page" id="main">
+    <header class="page-header">
+      <div>
+        <h1>服務管理</h1>
+        <p class="muted">依擁有者查看服務狀態、容器與日誌。</p>
+      </div>
+      <nav class="button-group" aria-label="原生管理頁面">
+        <button type="button" id="native-services" hidden>原生系統服務</button>
+        <button type="button" id="native-podman" disabled>原生 Podman</button>
+        <button type="button" id="refresh" disabled>重新整理</button>
+      </nav>
+    </header>
+
+    <section class="card scope-card" aria-labelledby="scope-label">
+      <div class="field">
+        <label id="scope-label" for="scope">管理範圍</label>
+        <select id="scope" aria-describedby="scope-owner" disabled>
+          <option value="">正在載入範圍…</option>
+        </select>
+      </div>
+      <p id="scope-owner" class="muted">正在確認服務擁有者。</p>
+    </section>
+
+    <p id="native-podman-hint" class="muted" hidden></p>
+    <p id="access-note" class="notice" role="status" hidden>請在 Cockpit 頂端開啟「管理員存取權限」，再重試。權限啟用後會自動重新載入資料。</p>
+    <div id="page-error" class="notice" hidden>
+      <p id="error-message" role="alert"></p>
+      <button id="retry" type="button">重試</button>
+    </div>
+    <details id="warnings" class="notice" hidden>
+      <summary id="warnings-title">部分資料無法取得</summary>
+      <ul id="warning-list"></ul>
+    </details>
+    <p id="status" class="status-line" role="status" aria-live="polite" aria-atomic="true">正在載入管理範圍…</p>
+
+    <section class="card inventory" aria-label="服務與容器">
+      <div class="inventory-header">
+        <div class="tabs" role="tablist" aria-label="檢視內容">
+          <button id="services-tab" type="button" role="tab" aria-selected="true" aria-controls="services-panel" tabindex="0">服務 <span id="service-count">—</span></button>
+          <button id="containers-tab" type="button" role="tab" aria-selected="false" aria-controls="containers-panel" tabindex="-1">容器 <span id="container-count">—</span></button>
+        </div>
+        <p id="captured-at" class="muted">尚未更新</p>
+      </div>
+      <div class="filters">
+        <div class="field search-field">
+          <label for="search">搜尋</label>
+          <input id="search" type="search" placeholder="名稱、描述、映像或服務單元" autocomplete="off" disabled>
+        </div>
+        <div class="field">
+          <label for="state-filter">狀態</label>
+          <select id="state-filter" disabled>
+            <option value="all">全部狀態</option>
+            <option value="active">啟用中</option>
+            <option value="inactive">未啟用</option>
+            <option value="failed">失敗</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="kind-filter">服務類型</label>
+          <select id="kind-filter" aria-describedby="filter-note" disabled>
+            <option value="all">全部類型</option>
+            <option value="local">本機自訂</option>
+            <option value="quadlet">Quadlet</option>
+            <option value="system">系統套件</option>
+          </select>
+        </div>
+        <button id="clear-filters" type="button" disabled>顯示全部</button>
+      </div>
+      <p id="filter-note" class="filter-note muted">可使用篩選條件縮小清單。</p>
+
+      <div id="inventory-content" aria-busy="true">
+        <section id="services-panel" role="tabpanel" aria-labelledby="services-tab" tabindex="0">
+          <table id="services-table">
+            <caption class="sr-only">目前管理範圍的服務</caption>
+            <thead><tr><th scope="col">服務</th><th scope="col">狀態</th><th scope="col">類型／載入方式</th><th scope="col">關聯容器</th><th scope="col">操作</th></tr></thead>
+            <tbody id="services-body"></tbody>
+          </table>
+        </section>
+        <section id="containers-panel" role="tabpanel" aria-labelledby="containers-tab" tabindex="0" hidden>
+          <table id="containers-table">
+            <caption class="sr-only">目前管理範圍的容器</caption>
+            <thead><tr><th scope="col">容器／映像</th><th scope="col">狀態</th><th scope="col">連接埠</th><th scope="col">關聯 systemd 服務</th><th scope="col">管理入口</th></tr></thead>
+            <tbody id="containers-body"></tbody>
+          </table>
+        </section>
+        <div id="empty-state" class="empty-state">
+          <h2 id="empty-title">正在載入…</h2>
+          <p id="empty-description" class="muted">正在取得服務與容器資料。</p>
+        </div>
+      </div>
+      <footer class="pagination" aria-label="清單分頁">
+        <p id="page-summary" role="status" aria-live="polite">每頁最多 40 筆</p>
+        <div class="button-group">
+          <button id="previous-page" type="button" disabled>上一頁</button>
+          <button id="next-page" type="button" disabled>下一頁</button>
+        </div>
+      </footer>
+    </section>
+    <p class="footnote muted">頁面可見且未操作或開啟對話框時，每 30 秒更新一次。容器的服務操作會透過關聯的 systemd 服務執行。</p>
+    <noscript><p class="notice">請啟用 JavaScript 以使用服務管理。</p></noscript>
+  </main>
+
+  <dialog id="details" aria-labelledby="details-title" aria-describedby="details-context">
+    <header class="dialog-header">
+      <h2 id="details-title">服務詳細資料</h2>
+      <button id="close-details" type="button" autofocus>關閉</button>
+    </header>
+    <p id="details-context" class="muted"></p>
+    <p id="details-status" role="status" aria-live="polite"></p>
+    <div id="details-error" class="notice" hidden>
+      <p id="details-error-message" role="alert"></p>
+      <button id="retry-details" type="button">重試詳細資料</button>
+    </div>
+    <dl id="details-fields" class="metadata"></dl>
+    <div id="details-actions" class="button-group">
+      <button type="button" data-action="start" disabled>啟動</button>
+      <button type="button" data-action="stop" disabled>停止</button>
+      <button type="button" data-action="restart" disabled>重新啟動</button>
+    </div>
+    <p id="details-action-hint" class="muted"></p>
+    <div class="log-header">
+      <h3>最近日誌</h3>
+      <button id="refresh-logs" type="button" disabled>更新日誌</button>
+    </div>
+    <p id="logs-status" role="status" aria-live="polite"></p>
+    <pre id="logs" tabindex="0" aria-label="服務最近日誌">正在載入日誌…</pre>
+    <footer class="button-group">
+      <button id="details-native-services" type="button" hidden>在原生系統服務中開啟</button>
+      <button id="details-native-podman" type="button">在原生 Podman 中開啟</button>
+    </footer>
+  </dialog>
+
+  <dialog id="action-dialog" aria-labelledby="action-title" aria-describedby="action-description confirm-state confirm-hint">
+    <h2 id="action-title">確認服務操作</h2>
+    <p id="action-description"></p>
+    <dl class="metadata">
+      <dt>服務單元</dt><dd id="confirm-unit"></dd>
+      <dt>管理範圍</dt><dd id="confirm-scope"></dd>
+      <dt>目前狀態</dt><dd id="confirm-state">正在確認…</dd>
+    </dl>
+    <p id="confirm-hint" class="muted"></p>
+    <p id="confirm-status" role="status" aria-live="polite"></p>
+    <div id="confirm-error" class="notice" hidden>
+      <p id="confirm-error-message" role="alert"></p>
+      <button id="retry-confirm" type="button">重新確認狀態</button>
+    </div>
+    <footer class="button-group dialog-footer">
+      <button id="cancel-action" type="button" autofocus>取消</button>
+      <button id="confirm-action" class="primary" type="button" disabled>確認操作</button>
+    </footer>
+  </dialog>
+
+  <template id="service-row">
+    <tr>
+      <th scope="row" data-label="服務"><button type="button" class="text-button" data-open-details></button><span class="secondary" data-field="id"></span><span class="secondary" data-field="description"></span></th>
+      <td data-label="狀態"><strong class="state" data-field="active"></strong><span class="secondary" data-field="sub"></span></td>
+      <td data-label="類型／載入方式"><span data-field="kind"></span><span class="secondary" data-field="enabled"></span></td>
+      <td data-label="關聯容器" data-field="containers"></td>
+      <td data-label="操作"><div class="row-actions"><button type="button" data-action="start">啟動</button><button type="button" data-action="stop">停止</button><button type="button" data-action="restart">重新啟動</button></div><span class="secondary action-hint"></span></td>
+    </tr>
+  </template>
+  <template id="container-row">
+    <tr>
+      <th scope="row" data-label="容器／映像"><strong data-field="name"></strong><span class="secondary" data-field="image"></span><span class="secondary mono" data-field="id"></span></th>
+      <td data-label="狀態"><strong class="state" data-field="state"></strong><span class="secondary" data-field="status"></span></td>
+      <td data-label="連接埠" data-field="ports"></td>
+      <td data-label="關聯 systemd 服務" data-field="unit"></td>
+      <td data-label="管理入口"><span class="secondary" data-field="hint"></span><button type="button" data-open-podman>原生 Podman</button></td>
+    </tr>
+  </template>
+</body>
+</html>

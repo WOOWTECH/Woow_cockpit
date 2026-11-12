@@ -1,0 +1,239 @@
+{
+  "recorded_date": "2026-11-12",
+  "source_version": "2026.11.12.2",
+  "runtime": {
+    "ubuntu": "24.04.4",
+    "cockpit": "362",
+    "cockpit_podman": "124",
+    "podman": "4.9.3"
+  },
+  "automated_checks": {
+    "python_passed": 21,
+    "service_browser_passed": 8,
+    "gallery_checks_passed": 6
+  },
+  "deployment": {
+    "managed_files_verified": 65,
+    "repeat_install_changes": 0,
+    "helper_mode": "0755",
+    "owner_config_mode": "0600"
+  },
+  "inventory": {
+    "user_services": 287,
+    "quadlet_units": 63,
+    "custom_units": 28,
+    "containers": 54,
+    "containers_with_unit": 48
+  },
+  "live_actions": {
+    "fixture_types": [
+      "system-service",
+      "user-service",
+      "user-quadlet"
+    ],
+    "successful_mutations": 11,
+    "checks": [
+      {
+        "case": "limited-session-no-cross-user-data",
+        "pass": true
+      },
+      {
+        "case": "cancel-does-not-start",
+        "pass": true,
+        "fixture_kind": "user-service"
+      },
+      {
+        "case": "actual-browser-start",
+        "active": "active",
+        "pidChanged": true,
+        "pass": true,
+        "fixture_kind": "user-service"
+      },
+      {
+        "case": "actual-browser-restart",
+        "active": "active",
+        "pidChanged": true,
+        "pass": true,
+        "fixture_kind": "user-service"
+      },
+      {
+        "case": "actual-browser-stop",
+        "active": "inactive",
+        "pidChanged": true,
+        "pass": true,
+        "fixture_kind": "user-service"
+      },
+      {
+        "case": "correct-scope-journal",
+        "pass": true,
+        "fixture_kind": "user-service"
+      },
+      {
+        "case": "cancel-does-not-start",
+        "pass": true,
+        "fixture_kind": "user-quadlet"
+      },
+      {
+        "case": "actual-browser-start",
+        "active": "active",
+        "pidChanged": true,
+        "pass": true,
+        "fixture_kind": "user-quadlet"
+      },
+      {
+        "case": "actual-browser-restart",
+        "active": "active",
+        "pidChanged": true,
+        "pass": true,
+        "fixture_kind": "user-quadlet"
+      },
+      {
+        "case": "actual-browser-stop",
+        "active": "inactive",
+        "pidChanged": true,
+        "pass": true,
+        "fixture_kind": "user-quadlet"
+      },
+      {
+        "case": "stopped-quadlet-still-manageable",
+        "pass": true
+      },
+      {
+        "case": "actual-browser-start",
+        "active": "active",
+        "pidChanged": true,
+        "pass": true,
+        "fixture_kind": "user-quadlet"
+      },
+      {
+        "case": "actual-browser-stop",
+        "active": "inactive",
+        "pidChanged": true,
+        "pass": true,
+        "fixture_kind": "user-quadlet"
+      },
+      {
+        "case": "correct-scope-journal",
+        "pass": true,
+        "fixture_kind": "user-quadlet"
+      },
+      {
+        "case": "cancel-does-not-start",
+        "pass": true,
+        "fixture_kind": "system-service"
+      },
+      {
+        "case": "actual-browser-start",
+        "active": "active",
+        "pidChanged": true,
+        "pass": true,
+        "fixture_kind": "system-service"
+      },
+      {
+        "case": "actual-browser-restart",
+        "active": "active",
+        "pidChanged": true,
+        "pass": true,
+        "fixture_kind": "system-service"
+      },
+      {
+        "case": "actual-browser-stop",
+        "active": "inactive",
+        "pidChanged": true,
+        "pass": true,
+        "fixture_kind": "system-service"
+      },
+      {
+        "case": "correct-scope-journal",
+        "pass": true,
+        "fixture_kind": "system-service"
+      },
+      {
+        "case": "layout",
+        "viewport": 1440,
+        "width": 1200,
+        "scroll": 1200,
+        "bg": "rgb(255, 255, 255)",
+        "rows": 40,
+        "pass": true
+      },
+      {
+        "case": "layout",
+        "viewport": 1024,
+        "width": 784,
+        "scroll": 784,
+        "bg": "rgb(255, 255, 255)",
+        "rows": 40,
+        "pass": true
+      },
+      {
+        "case": "layout",
+        "viewport": 390,
+        "width": 390,
+        "scroll": 390,
+        "bg": "rgb(255, 255, 255)",
+        "rows": 40,
+        "pass": true
+      },
+      {
+        "case": "layout",
+        "viewport": 360,
+        "width": 360,
+        "scroll": 360,
+        "bg": "rgb(255, 255, 255)",
+        "rows": 40,
+        "pass": true
+      }
+    ],
+    "page_errors": [],
+    "fixtures_removed": true
+  },
+  "final_browser_smoke": {
+    "results": [
+      {
+        "case": "limited-session-no-cross-user-data",
+        "pass": true
+      },
+      {
+        "case": "default-owner-active-production-service",
+        "pass": true
+      },
+      {
+        "case": "native-system-scope-inventory",
+        "pass": true
+      },
+      {
+        "case": "production-container-service-mapping",
+        "pass": true
+      },
+      {
+        "case": "final-live-layout",
+        "viewport": 1440,
+        "pass": true
+      },
+      {
+        "case": "final-live-layout",
+        "viewport": 390,
+        "pass": true
+      },
+      {
+        "case": "native-podman-manual-owner-selection",
+        "pass": true
+      }
+    ],
+    "failures": []
+  },
+  "production_main_units_active": 12,
+  "production_mutation_tests": false,
+  "native_podman": {
+    "automatic_owner_handoff": "known-failure-on-cold-load",
+    "manual_owner_selection": "passed",
+    "preload_experiment": "removed; did not guarantee correct loading",
+    "upstream_code_modified": false
+  },
+  "not_verified": [
+    "new physical device full install",
+    "all production application business behavior",
+    "application backup/restore"
+  ]
+}

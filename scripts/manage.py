@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Install/verify/roll back the WOOWTECH presentation layer; Python stdlib only."""
+"""Install/verify/roll back WOOWTECH Cockpit packages; Python stdlib only."""
 import argparse
 from datetime import datetime, timezone
 import gzip
@@ -7,6 +7,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import pwd
 import re
 import stat
 import sys
@@ -17,6 +18,9 @@ STATE = 'var/lib/woowtech-cockpit/installed.json'
 BACKUPS = 'var/backups/woowtech-cockpit-source'
 BRAND = 'etc/cockpit/branding'
 PREVIEW = 'usr/local/share/cockpit/woowtechpreview'
+SERVICES = 'usr/local/share/cockpit/woowtechservices'
+HELPER = 'usr/local/libexec/woowtech-cockpit-services'
+SERVICE_CONFIG = 'etc/woowtech-cockpit/services.json'
 NATIVE = ('systemd/logs.html', 'systemd/services.html', 'systemd/hwinfo.html',
           'systemd/terminal.html', 'networkmanager/firewall.html')
 LINK = '  <link href="../../static/branding.css" rel="stylesheet" />\n'
@@ -85,7 +89,7 @@ def source_files(directory):
             yield path.relative_to(directory).as_posix(), path.read_bytes()
 
 
-def desired_files(root, include_preview=True, screenshots=None):
+def desired_files(root, include_preview=True, screenshots=None, include_services=True, service_owners=None):
     version = cockpit_version(root)
     desired = {}
     for name, data in source_files(SOURCE / 'branding'):
@@ -114,6 +118,29 @@ def desired_files(root, include_preview=True, screenshots=None):
                 if not data.startswith(b'\x89PNG\r\n\x1a\n') or len(data) > 30 * 1024 * 1024:
                     raise ValueError(f'Invalid or oversized PNG: {src.name}')
                 desired[f'{PREVIEW}/screenshots/{src.name}'] = (data, 'screenshot')
+    if include_services and (SOURCE / 'services/service-manager.py').is_file():
+        for name in ('manifest.json', 'index.html', 'service.css', 'service.js'):
+            desired[f'{SERVICES}/{name}'] = ((SOURCE / 'services' / name).read_bytes(), 'services')
+        desired[HELPER] = ((SOURCE / 'services/service-manager.py').read_bytes(), 'helper')
+        config_path = safe_path(root, SERVICE_CONFIG)
+        if service_owners is not None:
+            owners = list(dict.fromkeys(service_owners))
+            for owner in owners:
+                if not re.fullmatch(r'[a-z_][a-z0-9_-]{0,31}\$?', owner) or owner == 'root':
+                    raise ValueError(f'Invalid service owner: {owner}')
+                if root == Path('/'):
+                    pwd.getpwnam(owner)
+            config_data = (json.dumps({'owners': owners}, indent=2) + '\n').encode()
+        elif config_path.is_file():
+            config_data = config_path.read_bytes()
+        else:
+            config_data = b'{"owners": []}\n'
+        config = json.loads(config_data)
+        if not isinstance(config, dict) or not isinstance(config.get('owners'), list):
+            raise ValueError('Invalid service owner configuration.')
+        desired[SERVICE_CONFIG] = (config_data, 'service-config')
+    elif service_owners is not None:
+        raise ValueError('--service-owner requires the services package.')
     for name in NATIVE:
         relative = f'usr/share/cockpit/{name}'
         target = safe_path(root, relative)
@@ -149,7 +176,16 @@ def desired_files(root, include_preview=True, screenshots=None):
 
 def changes(root, desired):
     return [name for name, (data, _) in desired.items()
-            if file_hash(safe_path(root, name)) != digest(data)]
+            if file_hash(safe_path(root, name)) != digest(data)
+            or (name in (HELPER, SERVICE_CONFIG) and
+                (stat.S_IMODE(safe_path(root, name).stat().st_mode) != desired_mode(name)
+                 or (root == Path('/') and safe_path(root, name).stat().st_uid != 0)))]
+
+
+def desired_mode(name):
+    if name == HELPER:
+        return 0o755
+    return 0o600 if name in (STATE, SERVICE_CONFIG) else 0o644
 
 
 def restore_records(root, backup, records):
@@ -188,7 +224,7 @@ def install(root, desired, state):
     applied = []
     try:
         for rec in records:
-            atomic_write(safe_path(root, rec['path']), desired[rec['path']][0], 0o600 if rec['path'] == STATE else 0o644)
+            atomic_write(safe_path(root, rec['path']), desired[rec['path']][0], desired_mode(rec['path']))
             applied.append(rec)
     except Exception:
         restore_records(root, backup, applied)
@@ -202,7 +238,7 @@ def install(root, desired, state):
 
 
 def allowed_target(name):
-    return name == STATE or name.startswith((BRAND + '/', PREVIEW + '/')) or name in {
+    return name in (STATE, HELPER, SERVICE_CONFIG) or name.startswith((BRAND + '/', PREVIEW + '/', SERVICES + '/')) or name in {
         'usr/share/cockpit/' + n + suffix for n in NATIVE for suffix in ('', '.gz')}
 
 
@@ -236,6 +272,11 @@ def verify(root):
     state = json.loads(safe_path(root, STATE).read_text())
     drift = [name for name, meta in state['files'].items()
              if not allowed_target(name) or file_hash(safe_path(root, name)) != meta['sha256']]
+    for name in (HELPER, SERVICE_CONFIG):
+        if name in state['files'] and name not in drift:
+            st = safe_path(root, name).stat()
+            if stat.S_IMODE(st.st_mode) != desired_mode(name) or (root == Path('/') and st.st_uid != 0):
+                drift.append(name)
     return {'status': 'drift' if drift else 'verified', 'files': len(state['files']),
             'source_version': state['source_version'], 'drift': drift}
 
@@ -248,6 +289,8 @@ def main():
         sub = subs.add_parser(name)
         sub.add_argument('--no-preview', action='store_true', help='Do not manage the reference gallery; existing gallery is kept.')
         sub.add_argument('--screenshots', type=Path, help='Opt-in local PNGs from scripts/capture.mjs; never committed.')
+        sub.add_argument('--no-services', action='store_true', help='Do not manage the service management package; existing files are kept.')
+        sub.add_argument('--service-owner', action='append', help='Rootless service owner; repeat for several accounts. Omit to preserve device config.')
     subs.add_parser('verify')
     sub = subs.add_parser('rollback')
     sub.add_argument('backup_id')
@@ -257,7 +300,7 @@ def main():
         parser.error('Live installation/rollback requires sudo.')
     try:
         if args.command in ('plan', 'install'):
-            desired, state = desired_files(root, not args.no_preview, args.screenshots)
+            desired, state = desired_files(root, not args.no_preview, args.screenshots, not args.no_services, args.service_owner)
             if args.command == 'plan':
                 result = {'source_version': state['source_version'], 'cockpit_version': state['cockpit_version'],
                           'changed': changes(root, desired), 'managed_files': len(desired) - 1}

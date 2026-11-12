@@ -18,6 +18,14 @@ npm test
 
 CI 不部署真實 Ubuntu 服務、不登入參考主機、不測試完整災難復原。參考主機的真實驗證範圍見 current-state。
 
+## 服務管理測試
+
+`tests/test_services.py` 以模擬指令結果驗證權限、固定指令參數、使用者身分、日誌範圍、輸出過濾、停止中的 Quadlet、錯誤／逾時、並行鎖定及失敗狀態。未命名模板會讓 systemctl 的批次 show 提前結束，因此有專門的回歸案例，避免後方服務被漏列。含安裝器共21項 Python 測試。
+
+`tests/services-ui.mjs` 提供本機 Cockpit API fixture，測試8個行為：未授權資料隔離、停止服務與分頁、確認／取消、stdout錯誤、關鍵服務保護、日誌文字安全、擁有者導覽、桌面／手機版面。它不執行真實主機操作；與圖集測試同由 `npm test` 執行。
+
+真實驗證另使用三個獨立測試單元：一般使用者服務、使用者 Quadlet，以及系統服務。從已登入的 Cockpit 頁面點擊啟動／重新啟動／停止，再由 systemd 狀態及實際 PID 交叉確認；Quadlet 另確認停止後容器移除但服務仍可再啟動。驗證完成後移除測試單元與容器，不對正式應用進行停機測試。
+
 ## 從本機 Cockpit 擷取畫面
 
 瀏覽器驗證需要 Node.js 22+、Playwright Chromium。若已有相容 Chromium，可用 `PLAYWRIGHT_CHROMIUM_EXECUTABLE` 指向執行檔，省略下載。

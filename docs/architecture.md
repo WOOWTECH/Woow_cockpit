@@ -3,14 +3,16 @@
 ```text
 瀏覽器 → Cockpit TLS／登入 → Cockpit shell
                             ├─ 原生管理頁（各自 iframe）→ 系統管理後端
+                            ├─ woowtechservices → Cockpit 提權 → root helper → 指定使用者 systemd／Podman
                             └─ woowtechpreview → 靜態畫面參考
 ```
 
-## 三個部署部分
+## 部署部分
 
 1. `branding/` 安裝到 `/etc/cockpit/branding/`。Cockpit 官方品牌機制讀取這個目錄，登入與 shell 使用品牌 CSS／圖示。字型與 SVG 隨包提供，不依賴 CDN。
 2. `preview/` 安裝到 `/usr/local/share/cockpit/woowtechpreview/`。`manifest.json` 的 `tools.index` 註冊「工具 → 畫面參考」。Cockpit 載入此目錄的 HTML、CSS、JS。這是獨立靜態頁，沒有服務控制 API、備份引擎或額外登入系統。
 3. 部分原生 iframe 沒有品牌樣式入口。安裝程式只在下列 HTML 的 `</head>` 前補 `../../static/branding.css` 連結：systemd 的 logs、services、hwinfo、terminal，以及 networkmanager 的 firewall。不存在的選用頁會略過；已有連結不重複加入；支援 gzip 版檔案。
+4. `services/` 的 HTML／CSS／JS／manifest 安裝到 `/usr/local/share/cockpit/woowtechservices/`；Python helper 獨立安裝到 `/usr/local/libexec/woowtech-cockpit-services`，不放在 Web 套件目錄。設備擁有者設定為 `/etc/woowtech-cockpit/services.json`。此頁負責實際服務狀態、日誌和啟停，使用既有管理員授權。
 
 Cockpit 套件升級可能覆寫第三部分；重新執行安裝可針對升級後的新檔案補連結。CSS 使用 PatternFly 6 類別；Cockpit 改版後需要重測，不能保證所有未來版本自動相容。
 
@@ -22,6 +24,7 @@ Cockpit 套件升級可能覆寫第三部分；重新執行安裝可針對升級
 | `branding/assets/` | 官方 SVG 標誌 |
 | `branding/fonts/` | 本地 webfont 與授權文字 |
 | `preview/` | 圖集、缺圖處理、歷史排版說明 |
+| `services/` | 實際服務管理頁及受控管理 helper |
 | `scripts/manage.py` | 安裝、SHA-256 檢查及回退 |
 | `scripts/bootstrap-ubuntu.sh` | Ubuntu backports 套件安裝 |
 | `scripts/capture.mjs` | 使用環境變數登入目標主機、擷取本機畫面 |

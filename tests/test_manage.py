@@ -121,6 +121,52 @@ class InstallationContract(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'requires Cockpit'):
             self.install()
 
+    def test_services_install_has_executable_helper_private_config_and_exact_rollback(self):
+        source = self.source / 'services'
+        source.mkdir()
+        for name in ('service-manager.py', 'manifest.json', 'index.html', 'service.css', 'service.js'):
+            (source / name).write_text('test payload')
+        desired, state = manage.desired_files(self.root, service_owners=['operator'])
+        result = manage.install(self.root, desired, state)
+        helper = self.root / manage.HELPER
+        config = self.root / manage.SERVICE_CONFIG
+        self.assertEqual(helper.stat().st_mode & 0o777, 0o755)
+        self.assertEqual(config.stat().st_mode & 0o777, 0o600)
+        self.assertEqual(json.loads(config.read_text()), {'owners': ['operator']})
+        self.assertNotIn('service-manager.py', [p.name for p in (self.root / manage.SERVICES).iterdir()])
+        desired, state = manage.desired_files(self.root)
+        self.assertEqual(manage.install(self.root, desired, state)['changed'], 0)
+        self.assertEqual(manage.verify(self.root)['status'], 'verified')
+        manage.rollback(self.root, result['backup_id'])
+        self.assertEqual(self.snapshot(), self.original)
+
+    def test_services_configuration_and_helper_permission_drift_is_repaired(self):
+        source = self.source / 'services'
+        source.mkdir()
+        for name in ('service-manager.py', 'manifest.json', 'index.html', 'service.css', 'service.js'):
+            (source / name).write_text('test payload')
+        desired, state = manage.desired_files(self.root, service_owners=['operator'])
+        manage.install(self.root, desired, state)
+        helper = self.root / manage.HELPER
+        config = self.root / manage.SERVICE_CONFIG
+        helper.chmod(0o666)
+        config.chmod(0o644)
+        self.assertEqual(set(manage.verify(self.root)['drift']), {manage.HELPER, manage.SERVICE_CONFIG})
+        desired, state = manage.desired_files(self.root)
+        manage.install(self.root, desired, state)
+        self.assertEqual(manage.verify(self.root)['status'], 'verified')
+        self.assertEqual(json.loads(config.read_text())['owners'], ['operator'])
+
+    def test_service_owner_input_cannot_be_a_path_or_option(self):
+        source = self.source / 'services'
+        source.mkdir()
+        for name in ('service-manager.py', 'manifest.json', 'index.html', 'service.css', 'service.js'):
+            (source / name).write_text('test payload')
+        for owner in ('root', '../operator', '--help', 'a;id'):
+            with self.assertRaisesRegex(ValueError, 'Invalid service owner'):
+                manage.desired_files(self.root, service_owners=[owner])
+        self.assertEqual(self.snapshot(), self.original)
+
 
 if __name__ == '__main__':
     unittest.main()

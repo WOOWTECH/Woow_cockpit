@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "requires": {
+    "cockpit": "362"
+  },
+  "menu": {
+    "index": {
+      "label": "服務管理",
+      "order": 45
+    }
+  }
+}

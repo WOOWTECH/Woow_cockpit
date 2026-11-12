@@ -27,7 +27,7 @@ class References(HTMLParser):
 
 def check():
     count = 0
-    for parent in ('branding', 'preview'):
+    for parent in ('branding', 'preview', 'services'):
         for item in (ROOT / parent).rglob('*'):
             assert not item.is_symlink(), f'Symlink in payload: {item}'
     for css in (ROOT / 'branding/branding.css', ROOT / 'preview/gallery.css', ROOT / 'preview/layout-review.css'):
@@ -60,6 +60,17 @@ def check():
     assert manifest['tools']['index']['label'] == '畫面參考'
     assert manifest['requires']['cockpit'] == '362'
     assert 'content-security-policy' not in manifest, 'Keep the default restrictive CSP'
+    service_manifest = json.loads((ROOT / 'services/manifest.json').read_text())
+    assert service_manifest['menu']['index']['label'] == '服務管理'
+    assert 'content-security-policy' not in service_manifest
+    parser = References()
+    parser.feed((ROOT / 'services/index.html').read_text())
+    for rel in parser.paths:
+        if rel in ('../../static/branding.css', '../base1/cockpit.js'):
+            continue  # Cockpit-provided authenticated runtime dependencies.
+        assert (ROOT / 'services' / rel).is_file(), f'Missing services asset: {rel}'
+        count += 1
+    assert (ROOT / 'services/service-manager.py').read_text().startswith('#!/usr/bin/python3 -I\n')
     css = (ROOT / 'branding/branding.css').read_text().lower()
     assert '#6183fc' in css and 'bg-frosted' not in css
     for path in (ROOT / 'branding/fonts').glob('*.ttf'):

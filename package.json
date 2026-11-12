@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "node tests/preview.mjs",
+    "test": "node tests/preview.mjs && node tests/services-ui.mjs",
     "capture": "node scripts/capture.mjs"
   },
   "devDependencies": { "playwright-core": "1.58.2" },

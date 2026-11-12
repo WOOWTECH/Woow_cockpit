@@ -1,8 +1,8 @@
 # woowtech Cockpit
 
-Ubuntu 裝置管理介面的部署來源。將 woowtech 品牌樣式、現有 Cockpit 頁面排版修正、獨立「畫面參考」套件及安裝／回退工具集中維護，供其他設備重複部署。
+Ubuntu 裝置管理介面的部署來源。將 woowtech 品牌樣式、既有服務管理、獨立「畫面參考」套件及安裝／回退工具集中維護，供其他設備重複部署。
 
-**目前版本：2026.11.12.1。** 參考環境為 Ubuntu 24.04.4 LTS、Cockpit 362、cockpit-podman 124。此專案部署 Cockpit 的呈現層；應用服務、Quadlet、資料庫與客戶資料須由各自專案部署。
+**目前版本：2026.11.12.2。** 參考環境為 Ubuntu 24.04.4 LTS、Cockpit 362、cockpit-podman 124。此專案提供品牌介面及既有服務管理；應用服務、Quadlet、資料庫與客戶資料須由各自專案部署。
 
 ## 快速部署
 
@@ -14,11 +14,13 @@ cd Woow_cockpit
 bash scripts/bootstrap-ubuntu.sh --plan
 sudo bash scripts/bootstrap-ubuntu.sh --apply
 sudo python3 scripts/manage.py plan
-sudo python3 scripts/manage.py install
+sudo python3 scripts/manage.py install --service-owner "$(id -un)"
 sudo python3 scripts/manage.py verify
 ```
 
 開啟 `https://<設備 IP>:9090`，使用該設備的 Linux 帳號登入。安裝不建立共用帳密、不更改既有密碼。若已有 Cockpit 362 以上，可略過 bootstrap，先查看 `plan`。
+
+`--service-owner` 指定實際部署 rootless 服務的 Linux 帳號；若與目前帳號不同，請替換成正確名稱。登入後開啟管理員存取權限，從「系統 → 服務管理」查看該使用者的服務、容器與日誌，並啟動／停止／重新啟動服務。之後更新時省略此參數會保留設備設定。詳見[服務管理](docs/services.md)。
 
 安裝後請登出再登入並強制重新整理，讓 Cockpit 更新套件清單和瀏覽器快取。登入後「工具 → 畫面參考」對應 `/woowtechpreview`。防火牆、可信憑證及帳號權限由設備管理者依環境設定，見[部署說明](docs/deployment.md)。
 
@@ -31,6 +33,8 @@ sudo python3 scripts/manage.py verify
 | 原生頁面 | 主機、日誌、儲存、網路、Podman、帳號、服務、應用、更新、終端、硬體、指標 |
 | 排版修正 | 總覽斷點、長名稱、映像清單區域捲動、手機帳號／服務、指標卡片 |
 | 畫面參考套件 | 17 個截圖位置、排版研究紀錄；缺少本機截圖時顯示提示 |
+| 服務管理套件 | 本機系統及指定使用者的 systemd 服務；狀態、搜尋、分頁、日誌、啟動／停止／重新啟動 |
+| Podman／Quadlet | 列出指定擁有者容器；Quadlet 透過 systemd 控制，停止後仍列出服務；一般容器連到原生頁後需確認擁有者選項 |
 | 部署管理 | 變更預覽、逐檔備份、重複安裝、SHA-256 檢查、拒絕覆蓋較新修改的回退 |
 | 客戶應用備份還原中心 | **尚未實作**；本專案的 rollback 只還原此次介面安裝的檔案 |
 | GitHub 應用更新／Supervisor | **尚未實作**；目前由管理者手動部署 |
@@ -40,6 +44,7 @@ sudo python3 scripts/manage.py verify
 ## 其他設備導入前先看
 
 - [部署與 rootless Podman](docs/deployment.md)
+- [服務管理與權限範圍](docs/services.md)
 - [檔案結構、Cockpit 套件機制](docs/architecture.md)
 - [更新、驗證、回退與故障排查](docs/operations.md)
 - [參考主機現況與驗證範圍](docs/current-state.md)
