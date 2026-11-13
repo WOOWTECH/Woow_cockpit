@@ -230,6 +230,7 @@ DIRFLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
 ACLS = ('system.posix_acl_access', 'system.posix_acl_default')
 MAX_SIBLINGS, MAX_MOUNTS = 50, 16
 LIBC = ctypes.CDLL(None, use_errno=True)
+STATX_MNT_ID, AT_EMPTY_PATH, AT_SYMLINK_NOFOLLOW = 0x1000, 0x1000, 0x100
 def die(code, detail=''):
     sys.stderr.write(code + (': ' + detail if detail else '') + '\n')
     sys.exit(CODES.get(code, 1))
@@ -269,8 +270,25 @@ def kind_of(dfd, name):
     except FileNotFoundError:
         return 'missing'
     return 'dir' if stat.S_ISDIR(st.st_mode) else 'link' if stat.S_ISLNK(st.st_mode) else 'other'
+def mount_key(dfd, name=''):
+    """(device, mount id) of <name> in dfd, or of dfd itself. A bind mount within one filesystem keeps the device but
+    has its own mount id (statx, Linux 5.8); without it the device alone decides."""
+    dev = (os.stat(name, dir_fd=dfd, follow_symlinks=False) if name else os.fstat(dfd)).st_dev
+    try:
+        fn = LIBC.statx
+        fn.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_uint, ctypes.c_char_p]
+    except AttributeError:
+        return dev, None
+    buf = ctypes.create_string_buffer(256)
+    if fn(dfd, os.fsencode(name), AT_SYMLINK_NOFOLLOW | (0 if name else AT_EMPTY_PATH), STATX_MNT_ID, buf) != 0:
+        return dev, None
+    if not int.from_bytes(buf.raw[0:4], sys.byteorder) & STATX_MNT_ID:
+        return dev, None
+    return dev, int.from_bytes(buf.raw[144:152], sys.byteorder)
+def same_mount(a, b):
+    return a[0] == b[0] and (a[1] is None or b[1] is None or a[1] == b[1])
 def is_mount(dfd, name):
-    return os.stat(name, dir_fd=dfd, follow_symlinks=False).st_dev != os.fstat(dfd).st_dev
+    return not same_mount(mount_key(dfd, name), mount_key(dfd))
 def shown(path):
     return path.encode('utf-8', 'surrogateescape').decode('utf-8', 'replace')[:300]
 def rename(dfd, old, new):
@@ -303,17 +321,17 @@ def sync_fs(fd):
 def scan(dfd, files):
     """Walk the directory open at dfd without following symlinks; a mount point below it is reported and not
     entered. files=True also counts entries, bytes of regular files (hard links once) and entries with ACLs."""
-    dev = os.fstat(dfd).st_dev
+    root = mount_key(dfd)
     out = {'mounts': [], 'more_mounts': 0, 'bytes': 0, 'members': 1, 'acls': 0}
     seen = set()
     for top, dirs, names, fd in os.fwalk('.', dir_fd=dfd, follow_symlinks=False):
         kept = []
         for name in dirs:
             try:
-                st = os.stat(name, dir_fd=fd, follow_symlinks=False)
+                key = mount_key(fd, name)
             except FileNotFoundError:
                 continue
-            if st.st_dev == dev:
+            if same_mount(key, root):
                 kept.append(name)
             elif len(out['mounts']) < MAX_MOUNTS:
                 out['mounts'].append(shown(os.path.normpath(os.path.join(top, name))))
@@ -364,7 +382,7 @@ def op_measure(rel, files):
     pfd, name, _ = parent(rel)
     dfd = os.open(name, DIRFLAGS, dir_fd=pfd)
     out = scan(dfd, files)
-    out['mount_root'] = os.fstat(dfd).st_dev != os.fstat(pfd).st_dev
+    out['mount_root'] = not same_mount(mount_key(dfd), mount_key(pfd))
     if not files:
         out = {key: out[key] for key in ('mount_root', 'mounts', 'more_mounts')}
     sys.stdout.write(json.dumps(out))
