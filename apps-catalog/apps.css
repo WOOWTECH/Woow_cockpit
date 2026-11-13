@@ -13,7 +13,7 @@
   color-scheme: dark;
   --page: #15171c; --surface: #20232a; --subtle: #292e37;
   --text: #f1f2f5; --muted: #c1c5ce; --border: #49515e; --divider: #3a404b;
-  --brand: #94aaff; --brand-text: #b7c5ff; --brand-wash: #293657;
+  --brand: #6183fc; --brand-text: #6183fc; --brand-wash: #1b2131;
   --button-text: #111a3a; --notice-bg: #443126; --notice-text: #ffddc4;
   --success: #85d4a0; --error: #ff9f9f; --inactive: #b4bbc5;
   --shadow: 0 10px 28px rgba(0,0,0,.18);
@@ -36,7 +36,7 @@ button { cursor: pointer }
 .secondary,.action { border: 1px solid var(--border); background: var(--surface); color: var(--text); border-radius: 999px; padding: 9px 18px; transition: background 220ms, transform 220ms }
 .secondary:hover,.action:hover:not(:disabled) { background: var(--subtle) }
 .action.primary { background: #6183fc; color: var(--button-text); border-color: #6183fc; font-weight: 600 }
-.action.primary:hover:not(:disabled) { background: #8099ff }
+.action.primary:hover:not(:disabled) { background: #6183fc; filter: brightness(1.08) }
 .action:disabled { opacity: .5; cursor: not-allowed }
 button:active:not(:disabled) { transform: scale(.97) }
 .link { border: 0; background: transparent; padding: 4px 0; color: var(--brand-text) }

@@ -203,6 +203,8 @@ try {
     assert.equal(await page.locator('body').evaluate(e => getComputedStyle(e).backgroundColor), 'rgb(21, 23, 28)');
     assert.equal(await page.locator('.inventory').evaluate(e => getComputedStyle(e).backgroundColor), 'rgb(32, 35, 42)');
     assert.equal(await page.locator('#search').evaluate(e => getComputedStyle(e, '::placeholder').color), 'rgb(193, 197, 206)');
+    assert.equal(await service(page, 'n8n.service').locator('[data-open-details]').evaluate(e => getComputedStyle(e).color), 'rgb(97, 131, 252)');
+    assert.equal(await page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue('--pf-t--global--text--color--brand--default').trim().toLowerCase()), '#6183fc');
     await page.locator('#search').fill('n8n.service');
     await service(page, 'n8n.service').locator('[data-open-details]').click();
     await enabled(page, '#refresh-logs');

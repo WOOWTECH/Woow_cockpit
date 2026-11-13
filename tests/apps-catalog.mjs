@@ -13,6 +13,11 @@ const lightBackground=await bodyBackground();
 await themeController.evaluate(()=>localStorage.setItem('shell:style','dark'));
 await p.waitForFunction(()=>document.documentElement.classList.contains('pf-v6-theme-dark'));
 assert.notEqual(await bodyBackground(),lightBackground);
+assert.equal(await p.locator('.icon').first().evaluate(e=>getComputedStyle(e).color),'rgb(97, 131, 252)');
+assert.equal(await p.locator('.icon').first().evaluate(e=>getComputedStyle(e).backgroundColor),'rgb(27, 33, 49)');
+const iconContrast=await p.locator('.icon').first().evaluate(e=>{const css=getComputedStyle(e);const luminance=c=>{const a=c.match(/\d+/g).slice(0,3).map(Number).map(x=>x/255).map(x=>x<=.04045?x/12.92:((x+.055)/1.055)**2.4);return .2126*a[0]+.7152*a[1]+.0722*a[2]};const a=luminance(css.color),b=luminance(css.backgroundColor);return (Math.max(a,b)+.05)/(Math.min(a,b)+.05)});
+assert(iconContrast>=4.5,`Brand blue needs sufficient contrast: ${iconContrast}`);
+
 await themeController.evaluate(()=>localStorage.setItem('shell:style','light'));
 await p.waitForFunction(()=>!document.documentElement.classList.contains('pf-v6-theme-dark'));
 assert.equal(await bodyBackground(),lightBackground);

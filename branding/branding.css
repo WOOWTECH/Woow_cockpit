@@ -291,6 +291,32 @@ html:not(.pf-v6-theme-dark) #nav-system :is(a, button, input, select):focus-visi
   outline-offset: -3px;
 }
 
+/* Match the primary woowtech blue in dark Cockpit components. The darker
+ * selection surface keeps #6183fc readable while keeping status colors intact. */
+:root.pf-v6-theme-dark {
+  --pf-t--global--color--brand--default: var(--ww-blue) !important;
+  --pf-t--global--text--color--brand--default: var(--ww-blue) !important;
+  --pf-t--global--text--color--brand--hover: var(--ww-blue) !important;
+  --pf-t--global--text--color--brand--clicked: var(--ww-blue) !important;
+  --pf-t--global--icon--color--brand--default: var(--ww-blue) !important;
+  --pf-t--global--icon--color--brand--hover: var(--ww-blue) !important;
+  --pf-t--global--icon--color--brand--clicked: var(--ww-blue) !important;
+  --pf-t--global--text--color--link--default: var(--ww-blue) !important;
+  --pf-t--global--text--color--link--hover: var(--ww-blue) !important;
+  --pf-t--global--text--color--link--clicked: var(--ww-blue) !important;
+  --color-link: var(--ww-blue);
+  --color-link-active: var(--ww-blue);
+}
+html.pf-v6-theme-dark #nav-system :is(a.pf-m-current, a[aria-current="page"], .pf-m-current > a) {
+  color: var(--ww-blue);
+  background: #1b2131;
+  border-radius: 12px;
+}
+html.pf-v6-theme-dark #nav-system :is(a.pf-m-current, a[aria-current="page"], .pf-m-current > a):hover {
+  color: var(--ww-blue);
+  background: #1b2131;
+}
+
 /* Cockpit can be set to a dark theme manually. Keep its native contrast there. */
 .pf-v6-theme-dark .login-pf #badge,
 .pf-v6-theme-dark #badge {

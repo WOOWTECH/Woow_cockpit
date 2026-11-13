@@ -26,12 +26,13 @@
   --text-secondary: #c1c5ce;
   --line: #49515e;
   --hairline: #3a404b;
-  --ww-blue-050: #293657;
-  --ww-blue-700: #b7c5ff;
+  --ww-blue-050: #1b2131;
+  --ww-blue-700: #6183fc;
   --shadow: 0 2px 8px rgba(0, 0, 0, .18);
 }
 :root.pf-v6-theme-dark button.primary:hover:not(:disabled) {
-  background: #8099ff;
+  background: var(--ww-blue);
+  filter: brightness(1.08);
 }
 :root.pf-v6-theme-dark dialog { box-shadow: 0 10px 28px rgba(0, 0, 0, .18); }
 :root.pf-v6-theme-dark dialog::backdrop { background: rgba(0, 0, 0, .55); }
