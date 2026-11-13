@@ -333,7 +333,7 @@ html.pf-v6-theme-dark .login-pf #login-button:not(:disabled):hover {
 .pf-v6-theme-dark .login-pf .container { background: var(--color-background); }
 .pf-v6-theme-dark .login-pf #brand::before { color: var(--color-text); }
 .pf-v6-theme-dark #nav-system::before {
-  background-image: url("assets/logo-wordmark-white.svg");
+  background-image: url("assets/logo-wordmark-blue.svg");
   color: #dce2f0;
 }
 @media (max-width: 600px) {
