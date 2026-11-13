@@ -30,6 +30,18 @@ The gateway is the rootless Podman container `woow-cockpit-pwa`, supervised by `
 
 The origin remains HTTP locally. Cloudflare supplies public HTTPS; no local TLS certificate was added. `/etc/cockpit/cockpit.conf` allows this specific public origin and trusts `X-Forwarded-Proto` from the local proxy. The gateway injects manifest/theme/icon links into HTML and forwards HTTP and WebSocket traffic to Cockpit on 9090. It does not cache administrative content or implement offline operations.
 
-Desktop Chromium automation is not a physical Android or iOS installation test; no phone was attached to cluster1 during this run. The existing Pi Web sidebar package is restricted to configured LAN/VPN HTTP origins. Its embedding through this new public HTTPS origin has not been implemented or accepted by these tests.
+Desktop Chromium automation is not a physical Android or iOS installation test; no phone was attached to cluster1 during this run. The Pi Web sidebar now also supports the exact configured public HTTPS origin through the loopback Pi gateway; see the integration tests and notes below.
 
-No actual workload was started, stopped or restored during these checks.
+No deployed application service was stopped or restored during these checks. The Pi Web follow-up uses its own new test conversation without tool calls.
+
+## Pi Web public ingress follow-up
+
+The Pi Web wrapper initially reproduced the reported hidden-frame error because it only allowed LAN/VPN HTTP origins. The new wrapper accepts the configured public HTTPS origin and opens `/pi-web/` on that same origin. A separate DynamicUser system service listens on `127.0.0.1:19095`. It checks the secure Cockpit session, requires Pi's independent authentication and strips Cockpit credentials before forwarding to the native server.
+
+The native server's Host allowlist initially rejected the new public domain. The ingress now validates the external Host/Origin first, then uses a fixed loopback authority on the internal hop and rewrites loopback redirect locations. This did not require modifying the native Pi configuration or restarting Pi Web. The public origin remains explicit and visitor-supplied forwarding headers do not control the session-validation protocol.
+
+Live browser checks cover independent Pi login, light/dark synchronization with the exact brand blue, mobile overflow, and absence of root-scope service-worker registrations. The theme bridge has an explicit Nginx route alongside the native Next.js assets, APIs and iframe/RSC navigation paths. Pi's own `/sw.js` is excluded so that it cannot control the entire Cockpit origin.
+
+A real test conversation used the existing LiteLLM provider and `chatgpt/gpt-5.6-luna` model. Its persisted session contains one user message, an assistant-role reply with the requested unique marker, and zero tool calls; the reply took approximately 4.5 seconds. This checks the assistant entry rather than matching the marker in the user's prompt.
+
+Deployment backup: `/var/backups/woowtech-cockpit-pi-public/20261113T083515Z` on woowtechopenclaw. The installer requires the public origin as its fourth argument. Run `tests/pi-web-public-live.mjs` with `COCKPIT_PASSWORD`, `PI_WEB_PASSWORD`, and optionally `COCKPIT_URL`. `PI_WEB_CHAT_TEST=1` additionally sends one prompt in a new test session and checks assistant-role output and its event stream; it is opt-in and is not part of CI.

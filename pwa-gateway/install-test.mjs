@@ -18,7 +18,8 @@ try {
     headless: process.env.PWA_HEADFUL !== '1',
   });
   const page = context.pages()[0];
-  await page.goto(base, { waitUntil: 'networkidle' });
+  await page.goto(base, { waitUntil: 'domcontentloaded' });
+  await page.locator('#login-button').waitFor({ state: 'visible' });
   const pageCDP = await context.newCDPSession(page);
   const manifest = await pageCDP.send('Page.getAppManifest');
   assert.deepEqual(manifest.errors, []);
@@ -43,7 +44,8 @@ try {
     if (!app) await new Promise(resolve => setTimeout(resolve, 100));
   }
   assert(app, 'Installation must launch a standalone app window');
-  await app.waitForLoadState('networkidle');
+  await app.waitForLoadState('domcontentloaded');
+  await app.locator('#login-button').waitFor({ state: 'visible' });
   assert(await app.evaluate(() => isSecureContext));
   assert(await app.locator('#login-button').isVisible());
   if (process.env.COCKPIT_PASSWORD) {
