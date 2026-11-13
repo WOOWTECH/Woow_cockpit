@@ -463,4 +463,6 @@ html:not(.pf-v6-theme-dark) #nav-system :is(a, button, input, select):focus-visi
   #main[data-woow-mobile-tools-ready] #toolbar .pf-v6-c-toolbar__item:has(> #toggle-docs),
   #main[data-woow-mobile-tools-ready] #toolbar .pf-v6-c-toolbar__item:has(> #toggle-menu) { flex: 1 1 0; min-width: 0; }
   #main[data-woow-mobile-tools-ready] :is(#toggle-docs, #toggle-menu) { width: 100%; max-width: none; }
+  #main[data-woow-menu-section="system"] #host-apps section[data-woow-nav-group="tools"],
+  #main[data-woow-menu-section="tools"] #host-apps section[data-woow-nav-group="system"] { display: none; }
 }

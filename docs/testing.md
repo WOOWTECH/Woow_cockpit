@@ -70,4 +70,4 @@ sudo python3 scripts/manage.py install --screenshots .local/screenshots
 
 ## 手機導覽列
 
-`tests/mobile-navigation-live.mjs` 是選用的實機瀏覽器測試，需在環境變數提供 `COCKPIT_URL`、`COCKPIT_USER`、`COCKPIT_PASSWORD`，以及必要時 `CHROMIUM_PATH`。它檢查 320–767px 五個按鈕的順序和可點範圍、工具與系統之間的切換、鍵盤、主機／說明／作業階段選單，以及桌面寬度。測試會建立 Cockpit 登入工作階段，但不儲存 Cookie 或操作服務。CI 只檢查語法，不會連接真實主機。
+`tests/mobile-navigation-live.mjs` 是選用的實機瀏覽器測試，需在環境變數提供 `COCKPIT_URL`、`COCKPIT_USER`、`COCKPIT_PASSWORD`，以及必要時 `CHROMIUM_PATH`。它檢查 320–767px 五個按鈕的順序和可點範圍、工具與系統清單分離及搜尋切換、鍵盤、主機／說明／作業階段選單，以及桌面寬度。測試會建立 Cockpit 登入工作階段，但不儲存 Cookie 或操作服務。CI 只檢查語法，不會連接真實主機。

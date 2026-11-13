@@ -26,10 +26,25 @@ try {
   await page.locator('#woow-mobile-tools').click();
   await page.locator('#nav-system.interact').waitFor();
   assert.equal(await page.locator('#woow-mobile-tools').getAttribute('aria-expanded'), 'true');
-  const group = page.locator('#host-apps nav.pf-v6-c-nav > section').nth(1);
-  await group.locator('a').first().waitFor({ state: 'visible' });
+  const tools = page.locator('#host-apps section[data-woow-nav-group="tools"]');
+  const system = page.locator('#host-apps section[data-woow-nav-group="system"]');
+  await tools.locator('a').first().waitFor({ state: 'visible' });
+  assert.equal(await system.isVisible(), false);
+  const search = page.locator('#host-apps .search input');
+  await search.fill('Pi Web');
+  await page.getByRole('link', { name: 'Pi Web', exact: true }).waitFor({ state: 'visible' });
   await page.locator('#nav-system-item').click();
   assert.equal(await page.locator('#woow-mobile-tools').getAttribute('aria-expanded'), 'false');
+  await system.locator('a').first().waitFor({ state: 'visible' });
+  assert.equal(await search.inputValue(), '');
+  assert.equal(await tools.isVisible(), false);
+  await search.fill('系統日誌');
+  await page.getByRole('link', { name: '系統日誌', exact: true }).waitFor({ state: 'visible' });
+  await page.locator('#woow-mobile-tools').click();
+  await tools.locator('a').first().waitFor({ state: 'visible' });
+  assert.equal(await search.inputValue(), '');
+  assert.equal(await system.isVisible(), false);
+  await page.locator('#nav-system-item').click();
   await page.locator('#nav-system-item').click();
   await page.locator('#woow-mobile-tools').focus();
   await page.keyboard.press('Enter');
@@ -44,6 +59,8 @@ try {
   }
   await page.setViewportSize({ width: 1000, height: 844 });
   assert.equal(await page.locator('#woow-mobile-tools').isVisible(), false);
+  assert.equal(await system.isVisible(), true);
+  assert.equal(await tools.isVisible(), true);
   assert.deepEqual(errors, []);
   console.log('PASS: mobile navigation layout, tools, menu controls and desktop');
 } finally {
