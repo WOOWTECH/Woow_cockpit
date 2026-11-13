@@ -16,7 +16,8 @@ LOCK_DIR = Path('/run/woowtech-cockpit-services')
 UNIT = re.compile(r'[A-Za-z0-9_][A-Za-z0-9_.:@\\-]{0,239}\.service\Z')
 OWNER = re.compile(r'[a-z_][a-z0-9_-]{0,31}\$?\Z')
 METRICS = ('MainPID', 'MemoryCurrent', 'CPUUsageNSec', 'TasksCurrent', 'NRestarts',
-           'ActiveEnterTimestamp', 'InactiveEnterTimestamp', 'ExecMainStatus', 'Type', 'Restart', 'Requires', 'Wants', 'After', 'TriggeredBy')
+           'ActiveEnterTimestamp', 'InactiveEnterTimestamp', 'ExecMainStatus', 'Type', 'Restart', 'Requires', 'Wants', 'After', 'TriggeredBy',
+           'RequiredBy', 'BoundBy', 'ConsistsOf')
 PROPERTIES = 'Id,Description,LoadState,ActiveState,SubState,UnitFileState,FragmentPath,SourcePath,CanStart,CanStop,Result,' + ','.join(METRICS)
 ENV = {'PATH': '/usr/sbin:/usr/bin:/sbin:/bin', 'LANG': 'C.UTF-8', 'LC_ALL': 'C.UTF-8', 'SYSTEMD_COLORS': '0', 'SYSTEMD_PAGER': 'cat'}
 

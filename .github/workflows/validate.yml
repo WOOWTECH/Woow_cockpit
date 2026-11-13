@@ -27,6 +27,8 @@ jobs:
           node --check branding/mobile-navigation.js
           node --check tests/mobile-navigation-live.mjs
           node --check apps-catalog/apps.js
+          node --check apps-catalog/stacks.js
+          node --test tests/stack-plans.mjs
           node --check scripts/capture.mjs
           node --check services/service.js
       - run: npm ci
