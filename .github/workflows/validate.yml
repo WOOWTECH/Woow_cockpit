@@ -26,9 +26,12 @@ jobs:
           node --check native/podman/managed-owners.js
           node --check branding/mobile-navigation.js
           node --check tests/mobile-navigation-live.mjs
+          node --check apps-catalog/apps.js
           node --check scripts/capture.mjs
           node --check services/service.js
       - run: npm ci
       - run: npx playwright-core install --with-deps chromium
       - name: Gallery and service management browser tests
         run: npm test
+      - name: Application catalogue browser tests
+        run: node tests/apps-catalog.mjs

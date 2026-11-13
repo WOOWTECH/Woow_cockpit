@@ -19,6 +19,7 @@ BACKUPS = 'var/backups/woowtech-cockpit-source'
 BRAND = 'etc/cockpit/branding'
 PREVIEW = 'usr/local/share/cockpit/woowtechpreview'
 SERVICES = 'usr/local/share/cockpit/woowtechservices'
+APPS = 'usr/local/share/cockpit/woowtechapps'
 HELPER = 'usr/local/libexec/woowtech-cockpit-services'
 SERVICE_CONFIG = 'etc/woowtech-cockpit/services.json'
 PODMAN = 'usr/share/cockpit/podman'
@@ -123,6 +124,9 @@ def desired_files(root, include_preview=True, screenshots=None, include_services
     if include_services and (SOURCE / 'services/service-manager.py').is_file():
         for name in ('manifest.json', 'index.html', 'service.css', 'service.js'):
             desired[f'{SERVICES}/{name}'] = ((SOURCE / 'services' / name).read_bytes(), 'services')
+        if (SOURCE / 'apps-catalog').is_dir():
+            for name, data in source_files(SOURCE / 'apps-catalog'):
+                desired[f'{APPS}/{name}'] = (data, 'apps-catalog')
         desired[HELPER] = ((SOURCE / 'services/service-manager.py').read_bytes(), 'helper')
         config_path = safe_path(root, SERVICE_CONFIG)
         if service_owners is not None:
@@ -265,7 +269,7 @@ def install(root, desired, state):
 
 
 def allowed_target(name):
-    return name in (STATE, HELPER, SERVICE_CONFIG, 'usr/share/cockpit/shell/index.html', f'{PODMAN}/index.js', f'{PODMAN}/index.js.gz', f'{PODMAN}/index.js.LEGAL.txt') or name.startswith((BRAND + '/', PREVIEW + '/', SERVICES + '/', PODMAN + '/woowtech-licenses/')) or name in {
+    return name in (STATE, HELPER, SERVICE_CONFIG, 'usr/share/cockpit/shell/index.html', f'{PODMAN}/index.js', f'{PODMAN}/index.js.gz', f'{PODMAN}/index.js.LEGAL.txt') or name.startswith((BRAND + '/', PREVIEW + '/', SERVICES + '/', APPS + '/', PODMAN + '/woowtech-licenses/')) or name in {
         'usr/share/cockpit/' + n + suffix for n in NATIVE for suffix in ('', '.gz')}
 
 
