@@ -8,7 +8,7 @@ const bind=required('PI_GATEWAY_BIND'), host=required('PI_GATEWAY_HOST'), port=N
 const cockpitPort=Number(process.env.PI_GATEWAY_COCKPIT_PORT||9090), piPort=Number(process.env.PI_GATEWAY_UPSTREAM_PORT||30141);
 if(!/^\d{1,3}(\.\d{1,3}){3}$/.test(host)||bind!==host||!Number.isInteger(port)||port<1024||port>65535) throw Error('Invalid listen configuration');
 if(![cockpitPort,piPort].every(value=>Number.isInteger(value)&&value>=1&&value<=65535)) throw Error('Invalid backend port');
-const authority=`${host}:${port}`, expectedOrigin=`http://${authority}`, cockpitOrigin=`http://${host}:9090`;
+const authority=`${host}:${port}`, expectedOrigin=`http://${authority}`, cockpitOrigin=`http://${host}:${cockpitPort}`;
 const maxBytes=128*1024*1024;
 function cookies(header){
  const result={};for(const pair of String(header||'').split(';')){const i=pair.indexOf('=');if(i<1)continue;const k=pair.slice(0,i).trim();if(k==='cockpit'||k==='pi_web_session'){if(Object.hasOwn(result,k))return null;result[k]=pair.slice(i+1).trim();}}return result;
@@ -37,6 +37,7 @@ function piAuthEnabled(){return new Promise(resolve=>{
 });}
 function outgoing(req, jar){
  const headers={...req.headers,host:authority,'x-forwarded-host':authority,'x-forwarded-proto':'http'};
+ if(req.method==='GET'&&String(req.headers.accept||'').includes('text/html')){headers['accept-encoding']='identity';delete headers['if-none-match'];delete headers['if-modified-since'];}
  delete headers['x-forwarded-for'];delete headers['x-real-ip'];delete headers['proxy-authorization'];
  delete headers.cookie;if(jar.pi_web_session)headers.cookie=`pi_web_session=${jar.pi_web_session}`;
  return headers;
@@ -53,14 +54,32 @@ function outputHeaders(headers){
  const original=copy['content-security-policy'];copy['content-security-policy']=original?`${original}; frame-ancestors ${cockpitOrigin}`:`frame-ancestors ${cockpitOrigin}`;
  copy['cache-control']='no-store';return copy;
 }
+// The theme bridge runs only in embedded Pi Web pages. It accepts messages
+// exclusively from the authenticated Cockpit parent, and never changes pi-theme
+// in localStorage, so standalone Pi Web retains its own preference.
+const themeBridge=`(()=>{'use strict';if(window.parent===window)return;const expected=${JSON.stringify(cockpitOrigin)};let chosen=null;const root=document.documentElement;function apply(){if(!chosen)return;if(root.dataset.theme!==chosen)root.dataset.theme=chosen;const dark=chosen==='dark';if(root.classList.contains('dark')!==dark)root.classList.toggle('dark',dark);root.style.setProperty('--accent','#6183fc');root.style.setProperty('--accent-hover','#6183fc');root.style.setProperty('--accent-contrast','#111a3a')}window.addEventListener('message',event=>{if(event.origin!==expected||event.source!==window.parent||event.data?.type!=='woow-cockpit-theme'||!['light','dark'].includes(event.data.theme))return;chosen=event.data.theme;apply()});new MutationObserver(apply).observe(root,{attributes:true,attributeFilter:['class','data-theme']});window.parent.postMessage({type:'woow-cockpit-theme-ready'},expected)})();`;
+const bridgeTag='<script defer src="/__woow_cockpit_theme.js"></script>';
+function injectThemeBridge(){
+ let prefix=Buffer.alloc(0),done=false;
+ return new Transform({transform(chunk,encoding,callback){
+  if(done){callback(null,chunk);return;}
+  prefix=Buffer.concat([prefix,chunk]);const index=prefix.indexOf('</head>');
+  if(index>=0){done=true;callback(null,Buffer.concat([prefix.subarray(0,index),Buffer.from(bridgeTag),prefix.subarray(index)]));prefix=Buffer.alloc(0);}
+  else if(prefix.length>262144){done=true;callback(null,prefix);prefix=Buffer.alloc(0);}else callback();
+ },flush(callback){if(prefix.length)this.push(prefix);callback();}});
+}
 const server=http.createServer(async(req,res)=>{
  if(!validRequest(req)){res.writeHead(403).end('Forbidden');return;}
  const jar=cookies(req.headers.cookie);
  if(!jar||!await authorized(jar.cockpit)){res.writeHead(401,{'content-type':'text/plain; charset=utf-8','cache-control':'no-store'}).end('請先登入 Cockpit，然後重新載入此頁。');return;}
  if(!await piAuthEnabled()){res.writeHead(503,{'content-type':'text/plain; charset=utf-8','cache-control':'no-store'}).end('Pi Web 無法連線，或尚未啟用獨立登入。');return;}
+ if(req.url==='/__woow_cockpit_theme.js'&&req.method==='GET'){res.writeHead(200,{'content-type':'application/javascript; charset=utf-8','cache-control':'no-store','x-content-type-options':'nosniff'}).end(themeBridge);return;}
  const n=Number(req.headers['content-length']||0);if(!Number.isFinite(n)||n>maxBytes){res.writeHead(413).end('Payload too large');return;}
  let sent=false;const target=http.request({hostname:'127.0.0.1',port:piPort,path:req.url,method:req.method,headers:outgoing(req,jar)},up=>{
-  sent=true;res.writeHead(up.statusCode,outputHeaders(up.headers));up.pipe(res);
+  sent=true;const headers=outputHeaders(up.headers);
+  const inject=req.method==='GET'&&up.statusCode===200&&/^text\/html(?:;|$)/i.test(String(up.headers['content-type']||''))&&!up.headers['content-encoding'];
+  if(inject){delete headers['content-length'];delete headers.etag;delete headers['content-md5'];}
+  res.writeHead(up.statusCode,headers);if(inject)up.pipe(injectThemeBridge()).pipe(res);else up.pipe(res);
   // A long SSE stream must stop after the authenticated Cockpit session is gone.
   const timer=setInterval(async()=>{if(!await authorized(jar.cockpit)||!await piAuthEnabled()){up.destroy();res.destroy()}},15000);timer.unref();res.on('close',()=>clearInterval(timer));
  });

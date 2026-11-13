@@ -9,5 +9,20 @@
   document.getElementById('secure-link').href=`http://${host}:${window.location.port||9090}/`;
   return;
  }
- frame.src=`http://${host}:__GATEWAY_PORT__/`;
+ const gatewayOrigin=`http://${host}:__GATEWAY_PORT__`;
+ const systemTheme=window.matchMedia('(prefers-color-scheme: dark)');
+ function syncTheme(){
+  let preference='auto';try{preference=localStorage.getItem('shell:style')||'auto'}catch{}
+  const theme=preference==='dark'||(preference==='auto'&&systemTheme.matches)?'dark':'light';
+  document.documentElement.classList.toggle('pf-v6-theme-dark',theme==='dark');
+  document.documentElement.style.colorScheme=theme;
+  frame.contentWindow?.postMessage({type:'woow-cockpit-theme',theme},gatewayOrigin);
+ }
+ frame.addEventListener('load',syncTheme);
+ window.addEventListener('storage',event=>{if(event.key==='shell:style'||event.key===null)syncTheme()});
+ window.addEventListener('cockpit-style',syncTheme);
+ systemTheme.addEventListener('change',syncTheme);
+ window.addEventListener('message',event=>{if(event.origin===gatewayOrigin&&event.source===frame.contentWindow&&event.data?.type==='woow-cockpit-theme-ready')syncTheme()});
+ syncTheme();
+ frame.src=`${gatewayOrigin}/`;
 })();

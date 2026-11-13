@@ -320,7 +320,15 @@ html.pf-v6-theme-dark #nav-system :is(a.pf-m-current, a[aria-current="page"], .p
 /* Cockpit can be set to a dark theme manually. Keep its native contrast there. */
 .pf-v6-theme-dark .login-pf #badge,
 .pf-v6-theme-dark #badge {
-  background-image: url("assets/logo-lockup-white.svg");
+  background-image: url("assets/logo-lockup-blue.svg");
+}
+html.pf-v6-theme-dark .login-pf #login-button:not(:disabled) {
+  background: var(--ww-blue);
+  color: #111a3a;
+}
+html.pf-v6-theme-dark .login-pf #login-button:not(:disabled):hover {
+  background: var(--ww-blue);
+  filter: brightness(1.08);
 }
 .pf-v6-theme-dark .login-pf .container { background: var(--color-background); }
 .pf-v6-theme-dark .login-pf #brand::before { color: var(--color-text); }
