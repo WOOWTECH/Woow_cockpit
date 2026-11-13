@@ -467,7 +467,7 @@ in the archive must be ≤ the target image major; PostgreSQL before 10 is not s
 * Device image `localhost/woowbk-device:noble`: Ubuntu 24.04 + systemd + cockpit (ws, bridge,
   system; noble-backports, record version) + podman + uidmap + age + zstd + python3.
   Devices `woowbk-dev-a` (127.0.0.1:19091→9090, appowner uid 1001) and `woowbk-dev-b`
-  (127.0.0.1:19092→9090, appowner uid 1007, different hostname/machine-id). `--memory 1g`,
+  (127.0.0.1:19092→9090, appowner uid 1007, different hostname/machine-id). `--memory 768m`,
   `--cpus 1.5`. Users: `devadmin` (sudo; Cockpit login; generated password in
   `~/.woowbk-lab/secrets/devadmin.pass`, 0600), `appowner` (linger, subuid/subgid).
 * Demo app `woowbk-demo`: `docker.io/library/postgres:16-alpine` + `localhost/woowbk-demo-app:1`

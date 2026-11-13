@@ -3,7 +3,7 @@
 `woowbk-demo` 是「備份與還原」功能的測試夾具，不是產品功能。它刻意把一個 rootless Podman
 Quadlet 應用的狀態分散在**資料庫、資料卷、Podman 密鑰與設定檔**四處，讓備份／還原是否完整
 可以用一個 `/api/summary` 結果直接比對。所有名稱都以 `woowbk-` 開頭，只部署在實驗室設備
-（`tests/e2e/lab/`），不可部署到正式主機。
+（`tests/e2e/lab/`）；正式主機只在負責人同意的實測中例外部署，測完可移除（見 `docs/current-state.md`）。不可用來測試正式應用的資料。
 
 ## 組成
 

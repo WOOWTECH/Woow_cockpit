@@ -1578,7 +1578,7 @@
     progress.value = percent;
     text($("upload-percent"), `${percent}%`);
     text($("upload-message"), {
-      begin: "正在準備上傳…", sending: "上傳中", finishing: "正在檢查檔案完整性…", done: "上傳完成", cancelling: "正在取消上傳…",
+      begin: "正在準備上傳…", sending: "上傳中", finishing: "正在確認上傳的檔案…", done: "上傳完成", cancelling: "正在取消上傳…",
       unconfirmed: "結果尚未確認"
     }[upload.phase] || "");
     text($("upload-bytes"), `已上傳 ${bytes(upload.acked)} / ${bytes(upload.size)}`);

@@ -76,7 +76,7 @@ tests/e2e/lab/owner.sh a python3 /opt/woowbk-demo/tools/check.py --stop-start
 
 | 指令 | 內容 |
 | --- | --- |
-| `python3 -I tests/e2e/lab/cli_e2e.py all` | 以頁面相同的方式呼叫**已安裝**的 helper（root、stdin JSON、單一 JSON 回應）；下載／上傳走設備內真正的 `cockpit-bridge`（`fsread1`、`fsreplace1`＋`send-acks`、64 KiB、≤ 2 MiB 未確認）。情境：`s1`（dev-a 金鑰、植入、含映像備份、F10 去重與 busy、變更、原位還原）、`s2`（先把 dev-b 重設為全新目標；A 下載 → B 上傳、key-required、F1 錯誤金鑰、緊急金鑰、全新部署還原、還原後可寫入）、`faults`（F2 截斷、F3 翻轉位元、F4 非備份檔與新版格式、驗證作業、F12 非 root）、`s3`（不含映像的備份在沒有本機映像的設備預檢失敗、不留任何東西）、`s2-again`、`f8`（破壞性步驟後失敗 → 自動回復，資料等於還原前）、`f9`（SIGKILL 還原 → interrupted、以還原前備份還原）、`leaks`（作業紀錄、日誌、索引、journal 沒有密鑰或金鑰）。dev-a 的緊急金鑰（實驗室拋棄式）存於 `~/.woowbk-lab/secrets/dev-a-kit.txt` |
+| `python3 -I tests/e2e/lab/cli_e2e.py all` | 以頁面相同的方式呼叫**已安裝**的 helper（root、stdin JSON、單一 JSON 回應）；下載／上傳走設備內真正的 `cockpit-bridge`（`fsread1`、`fsreplace1`＋`send-acks`、512 KiB、≤ 4 MiB 未確認）。情境：`s1`（dev-a 金鑰、植入、含映像備份、F10 去重與 busy、變更、原位還原）、`s2`（先把 dev-b 重設為全新目標；A 下載 → B 上傳、key-required、F1 錯誤金鑰、緊急金鑰、全新部署還原、還原後可寫入）、`faults`（F2 截斷、F3 翻轉位元、F4 非備份檔與新版格式、驗證作業、F12 非 root）、`s3`（不含映像的備份在沒有本機映像的設備預檢失敗、不留任何東西）、`s2-again`、`f8`（破壞性步驟後失敗 → 自動回復，資料等於還原前）、`f9`（SIGKILL 還原 → interrupted、以還原前備份還原）、`leaks`（作業紀錄、日誌、索引、journal 沒有密鑰或金鑰）。dev-a 的緊急金鑰（實驗室拋棄式）存於 `~/.woowbk-lab/secrets/dev-a-kit.txt` |
 | `node tests/e2e/lab/ui_e2e.mjs all` | 以 Playwright 登入真正的 Cockpit 362（devadmin），操作已安裝的「備份與還原」頁面：`admin`（受限存取 → 需要管理員權限；切換後載入真實資料，F12）、`s1`（頁面建立含映像備份、作業中關閉分頁再開啟會回到作業（F11）、經 cockpit-ws 外部 `fsread1` 通道下載並核對 SHA-256、從列表原位還原、結果表「資料一致」）、`s2`（dev-b 重設後由頁面上傳（websocket `fsreplace1`）、金鑰步驟、預檢 UID 1007、全新部署、可寫入）。需要 `PLAYWRIGHT_CHROMIUM_EXECUTABLE` 或 `~/.cache/ms-playwright/chromium-1248` |
 
 重設 dev-b 只做擁有者層級的移除（停止服務、刪除 Quadlet、資料卷、密鑰、設定檔與示範應用映像）並刪除 dev-b 的備份，
@@ -92,7 +92,7 @@ dev-b 重設為全新目標，`fresh` 結束時 dev-b 和 cli_e2e s2 之後一�
 
 | 指令 | 內容 |
 | --- | --- |
-| `h1` | F5：在 dev-a **設備內**用設備金鑰解開一份新的基礎備份，注入一種缺陷後以設備公鑰重新加密（主機只拿到密文），經真正的 bridge 上傳 → upload-finish → inspect → verify 作業 → 原位還原作業。26 種：路徑穿越／絕對路徑／PAX path 覆寫、符號連結／硬連結／裝置／目錄成員、多出／缺少／重複／順序錯亂、大小謊報（大、小）、校驗值錯誤、結尾多餘資料、manifest 不在第一個、檔頭與 manifest 不符、manifest 中的穿越路徑／重複項目／指向其他應用、設定檔路徑不在 `.config/`／含 `..`／權限 0755、擁有者 root、manifest 超過 1 MiB、成員超過 4000、目錄中沒有的應用、目錄未宣告的設定檔／密鑰／資料卷／資料庫／Quadlet／映像（還原成功、全部被略過）。每種都檢查：拒絕原因（引擎驗證器的 `details.reason`）、staging 清空、沒有金鑰暫存檔、沒有孤兒封存檔、應用資料與部署檔不變，並用「變更檔案掃描」（自我測試會先證明它能抓到 /etc、/home、資料目錄與資料卷內的寫入）確認沒有寫到 staging 以外 |
+| `h1` | F5：在 dev-a **設備內**用設備金鑰解開一份新的基礎備份，注入一種缺陷後以設備公鑰重新加密（主機只拿到密文），經真正的 bridge 上傳 → upload-finish → inspect → verify 作業 → 原位還原作業。28 種加 1 個對照組：路徑穿越／絕對路徑／PAX path 覆寫、符號連結／硬連結／裝置／目錄成員、多出／缺少／重複／順序錯亂、大小謊報（大、小）、校驗值錯誤、結尾多餘資料、manifest 不在第一個、檔頭與 manifest 不符、manifest 中的穿越路徑／重複項目／指向其他應用、設定檔路徑不在 `.config/`／含 `..`／權限 0755、擁有者 root、manifest 超過 1 MiB、成員超過 4000、目錄中沒有的應用、目錄未宣告的設定檔／密鑰／資料卷／資料庫／Quadlet／映像（還原成功、全部被略過）。每種都檢查：拒絕原因（引擎驗證器的 `details.reason`）、staging 清空、沒有金鑰暫存檔、沒有孤兒封存檔、應用資料與部署檔不變，並用「變更檔案掃描」（自我測試會先證明它能抓到 /etc、/home、資料目錄與資料卷內的寫入）確認沒有寫到 staging 以外 |
 | `h2` | F6：在設備內把 600 MiB 的 tmpfs 掛在 `/var/lib/woowtech-backup` 上（原資料仍在底下，卸載即恢復）：含映像備份在「檢查」階段以 `insufficient-space` 失敗、寫入服務未暫停、`/healthz` 全程 200；142 MB 上傳在 upload-begin 被拒，`可用−512 MiB` 邊界上下 1 MiB 各測一次；不含映像的備份可放入（對照） |
 | `h3` | F7：替換資料庫容器內的 `pg_dump`（容器重建即消失，結束時一定還原）：失敗並輸出一半、結束碼 0 但少了結尾 64 bytes、結束碼 0 但只有一半、執行中資料庫被關閉。檢查失敗階段為「匯出資料庫」、寫入服務已恢復、沒有列出備份、staging 清空；「被截斷但結束碼 0」的備份若被接受，必須真的能還原 |
 | `h4` | 在設備內用監看程式讀作業紀錄，於 `stop`／`dump`（以慢速 pg_dump 撐住）／`export`／`package`／`verify` 階段 `systemctl kill --signal=SIGKILL`；在呼叫 helper 之前先記錄應用狀態，證明是復原流程重新啟動寫入服務；檢查 interrupted＋指引、staging 移除、沒有孤兒封存檔、下一次備份成功 |
