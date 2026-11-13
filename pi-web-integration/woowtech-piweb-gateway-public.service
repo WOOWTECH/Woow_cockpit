@@ -1,0 +1,29 @@
+[Unit]
+Description=WOOWTECH Cockpit Pi Web HTTPS ingress
+After=network-online.target cockpit.socket
+Wants=network-online.target
+
+[Service]
+Type=simple
+DynamicUser=yes
+Environment=PI_GATEWAY_BIND=127.0.0.1
+Environment=PI_GATEWAY_HOST=127.0.0.1
+Environment=PI_GATEWAY_PORT=19095
+Environment=PI_GATEWAY_PUBLIC_ORIGIN=__PUBLIC_ORIGIN__
+ExecStart=/usr/bin/node /usr/local/libexec/woowtech-piweb-gateway.mjs
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+CapabilityBoundingSet=
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target
