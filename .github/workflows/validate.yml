@@ -26,9 +26,20 @@ jobs:
           node --check native/podman/managed-owners.js
           node --check branding/mobile-navigation.js
           node --check tests/mobile-navigation-live.mjs
+          node --check apps-catalog/theme.js
+          node --check apps-catalog/apps.js
+          node --check apps-catalog/stacks.js
+          node --test tests/stack-plans.mjs
           node --check scripts/capture.mjs
           node --check services/service.js
+          node --check pi-web-integration/gateway.mjs
+          node --check pi-web-integration/package/app.js
+          node --test pi-web-integration/tests/gateway.mjs
       - run: npm ci
       - run: npx playwright-core install --with-deps chromium
       - name: Gallery and service management browser tests
         run: npm test
+      - name: Application catalogue browser tests
+        run: node tests/apps-catalog.mjs
+      - name: Pi Web embedded theme browser tests
+        run: node tests/embedded-theme.mjs

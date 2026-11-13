@@ -63,6 +63,23 @@ class InstallationContract(unittest.TestCase):
         manage.rollback(self.root, result['backup_id'])
         self.assertEqual(self.snapshot(), self.original)
 
+    def test_app_catalog_is_installed_verified_and_rolled_back(self):
+        catalog = self.source / 'apps-catalog'
+        catalog.mkdir()
+        (catalog / 'manifest.json').write_text('{"tools":{"index":{"label":"應用軟體"}}}')
+        (catalog / 'index.html').write_text('application catalogue')
+        services = self.source / 'services'
+        services.mkdir()
+        for name in ('manifest.json', 'index.html', 'service.css', 'service.js', 'service-manager.py'):
+            (services / name).write_text('fixture')
+        result = self.install()
+        target = self.root / manage.APPS / 'index.html'
+        self.assertEqual(target.read_text(), 'application catalogue')
+        self.assertEqual(manage.verify(self.root)['status'], 'verified')
+        self.assertEqual(self.install()['changed'], 0)
+        manage.rollback(self.root, result['backup_id'])
+        self.assertFalse(target.exists())
+
     def test_upstream_upgrade_is_rebased_and_old_rollback_refuses_it(self):
         original_install = self.install()
         target = self.root / 'usr/share/cockpit/systemd/logs.html'

@@ -40,3 +40,7 @@ sudo systemctl status woowtech-piweb-gateway.service woowtech-piweb-gateway-vpn.
 ```
 
 不需要此功能時可停用相應 gateway，並個別移除防火牆規則；不會移除 Pi Web 服務或對話資料。
+
+## Cockpit 主題同步
+
+從 Cockpit 嵌入開啟 Pi Web 時，入口會依 Cockpit 的淺色、深色或系統預設切換 Pi Web 的顯示與品牌藍；直接開啟 Pi Web 仍使用 Pi Web 自己的主題偏好。此同步不修改瀏覽器儲存的 `pi-theme`。入口只接受來自已設定 Cockpit origin 的主題訊息。Pi Web 升級後應重新驗證 HTML 注入、登入、對話、WebSocket 與主題切換。

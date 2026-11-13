@@ -1,0 +1,33 @@
+/* Dark overlay for the static backup design preview; no backup data or logic. */
+:root.pf-v6-theme-dark {
+  color-scheme: dark;
+  --ww-blue: #6183fc;
+  --ww-blue-700: #6183fc;
+  --ww-blue-050: #1b2131;
+  --ww-white: #20232a;
+  --ww-gray: #292e37;
+  --ww-deep-gray: #c1c5ce;
+  --ww-black: #f1f2f5;
+  --text-primary: #f1f2f5;
+  --text-secondary: #c1c5ce;
+  --surface-page: #15171c;
+  --surface-card: #20232a;
+  --surface-wash: #1b2131;
+  --hairline: #3a404b;
+  --shadow-sm: 0 2px 8px rgba(0,0,0,.18);
+  --shadow-md: 0 10px 28px rgba(0,0,0,.18);
+}
+.pf-v6-theme-dark .btn.primary { color: #111a3a; background: #6183fc; border-color: #6183fc }
+.pf-v6-theme-dark .btn.primary:hover { background: #6183fc; filter: brightness(1.08) }
+.pf-v6-theme-dark .input,.pf-v6-theme-dark select { background: #20232a; color: #f1f2f5; border-color: #49515e }
+.pf-v6-theme-dark .input::placeholder { color: #c1c5ce; opacity: 1 }
+.pf-v6-theme-dark th { background: #292e37; color: #c1c5ce }
+.pf-v6-theme-dark .choice:has(input:checked),.pf-v6-theme-dark .upload { background: #1b2131 }
+.pf-v6-theme-dark .step.active b,.pf-v6-theme-dark .step.done b { background: #6183fc; color: #111a3a }
+.pf-v6-theme-dark #toast { background: #292e37; color: #f1f2f5 }
+/* Keep the preview readable while the locally hosted CJK font is loading. */
+@font-face{font-family:Poppins;src:url('assets/fonts/Poppins-Regular.ttf');font-weight:400;font-display:swap}
+@font-face{font-family:Poppins;src:url('assets/fonts/Poppins-SemiBold.ttf');font-weight:600;font-display:swap}
+@font-face{font-family:Outfit;src:url('assets/fonts/Outfit.ttf');font-display:swap}
+@font-face{font-family:'Noto Sans TC';src:url('assets/fonts/NotoSansTC.ttf');font-display:swap}
+@font-face{font-family:Yellowtail;src:url('assets/fonts/Yellowtail-Regular.ttf');font-display:swap}
