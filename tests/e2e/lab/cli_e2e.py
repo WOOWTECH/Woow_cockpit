@@ -929,8 +929,9 @@ true
 
 def owner_footprint(dev):
     """What exists of the demo app for the owner: quadlets, env file, volumes, secrets, app image."""
-    script = ('cd "$HOME"; ls .config/containers/systemd/ 2>/dev/null | grep woowbk; ls .config/woowbk-demo/ 2>/dev/null; '
-              'podman volume ls -q | grep woowbk; podman secret ls --format "{{.Name}}" | grep woowbk; '
+    # Only woowbk-demo: the host-directory fixture (woowbk-dirs, tests/e2e/lab/dirs_e2e.py) may be deployed too.
+    script = ('cd "$HOME"; ls .config/containers/systemd/ 2>/dev/null | grep woowbk-demo; ls .config/woowbk-demo/ 2>/dev/null; '
+              'podman volume ls -q | grep woowbk-demo; podman secret ls --format "{{.Name}}" | grep woowbk-demo; '
               'podman image exists localhost/woowbk-demo-app:1 && echo image:localhost/woowbk-demo-app:1; true')
     return owner(dev, 'sh', '-c', script).stdout.decode().split()
 
@@ -1116,7 +1117,9 @@ def scenario_f9(ev):
     status = ok(dev, 'status', ev=ev)
     app = next(a for a in status['apps'] if a['id'] == APP)
     ev.check('F9 app running afterwards and no active job', app['state'] == 'running' and status['active_job'] is None, app)
-    safeties = [b for b in ok(dev, 'list', ev=ev)['backups'] if b['type'] == 'safety']
+    # Retention is per app; other fixture apps (woowbk-dirs) keep their own safety backups on the same device.
+    safeties = [b for b in ok(dev, 'list', ev=ev)['backups']
+                if b['type'] == 'safety' and [a['id'] for a in b.get('apps') or []] == [APP]]
     ev.check('at most 3 safety backups are kept for the app', len(safeties) <= 3, [b['id'] for b in safeties])
     return {}
 

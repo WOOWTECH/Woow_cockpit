@@ -133,6 +133,11 @@ class FakeOwner:
                    'roles': [], 'templates': set(), 'maintenance': 0, 'closed': set()}
         self.id_map = LAB_ID_MAP
         self.containers = {'woowbk-demo-db': 'woowbk-demo-db.service'}
+        # Bind mounts of running containers (`podman ps` + `container inspect`): {'id', 'name', 'unit', 'source', 'rw'};
+        # a container with a unit runs while that unit is active.
+        self.bind_mounts = []
+        self.storage = ('/home/appowner/.local/share/containers/storage',
+                        '/home/appowner/.local/share/containers/storage/volumes')
         self.fail = []
         self.fail_load = set()      # refs whose `podman load` fails
         self.signal_on = None       # (needle, exception): the command runs, then the signal arrives
@@ -431,6 +436,24 @@ class FakeOwner:
         if cmd in ('network', 'pod'):
             assert args[1] == 'rm' and '-f' not in args, 'networks and pods are never force-removed'
             return ok
+        if cmd == 'ps':
+            assert args[1:] == ['--format', '{{.ID}}'], args
+            running = [m for m in self.bind_mounts if m['unit'] is None or self.units.get(m['unit']) == 'active']
+            return podman.Result(0, ''.join(f'{cid}\n' for cid in dict.fromkeys(m['id'] for m in running)).encode(), b'')
+        if cmd == 'container' and args[1] == 'inspect':
+            assert args[2:4] == ['--format', '{{json .Name}}\t{{json .Config.Labels}}\t{{json .Mounts}}'], args
+            lines = []
+            for cid in args[4:]:
+                rows = [m for m in self.bind_mounts if m['id'] == cid]
+                if not rows:
+                    return podman.Result(125, b'', f'Error: no such container {cid}'.encode())
+                labels = {'PODMAN_SYSTEMD_UNIT': rows[0]['unit']} if rows[0]['unit'] else {}
+                mounts = [{'Type': 'bind', 'Source': m['source'], 'Destination': '/data', 'RW': m['rw']} for m in rows]
+                lines.append('\t'.join(json.dumps(value) for value in (rows[0]['name'], labels, mounts)))
+            return podman.Result(0, ''.join(line + '\n' for line in lines).encode(), b'')
+        if cmd == 'info':
+            assert args[1:] == ['--format', '{{.Store.GraphRoot}}\t{{.Store.VolumePath}}'], args
+            return podman.Result(0, ('\t'.join(self.storage) + '\n').encode(), b'')
         raise AssertionError(args)
 
 

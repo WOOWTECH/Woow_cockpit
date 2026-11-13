@@ -1,0 +1,34 @@
+# woowbk-dirs application (rootless Quadlet template, test fixture).
+# Runs as container uid 33 (www-data in Debian images, like Nextcloud) and writes the HOST DIRECTORY
+# ~/woowbk-dirs/data (mounted at /srv/data; its www/ subdirectory belongs to uid 33). No :U option on purpose:
+# ownership must come from the restore, never be repaired at start.
+# Image localhost/woowbk-dirs-app:1 exists only where it was built or restored from a backup that includes it.
+[Unit]
+Description=woowbk-dirs application (host directory written as container uid 33)
+Requires=woowbk-dirs-db.service
+After=woowbk-dirs-db.service
+
+[Container]
+ContainerName=woowbk-dirs-app
+Image=localhost/woowbk-dirs-app:1
+Network=woowbk-dirs.network
+PublishPort=127.0.0.1:18091:8080
+User=33:33
+Volume=%h/woowbk-dirs/data:/srv/data
+Secret=woowbk-dirs-role-password
+Secret=woowbk-dirs-app-key
+EnvironmentFile=%h/.config/woowbk-dirs/app.env
+Environment=DB_HOST=woowbk-dirs-db DB_USER=dirs_app DB_NAME=dirs DB_AUDIT_NAME=dirs_audit
+HealthCmd=python3 /app/app.py --healthcheck
+HealthInterval=30s
+HealthTimeout=10s
+HealthRetries=5
+HealthStartPeriod=30s
+PodmanArgs=--memory 128m
+
+[Service]
+Restart=on-failure
+TimeoutStartSec=300
+
+[Install]
+WantedBy=default.target

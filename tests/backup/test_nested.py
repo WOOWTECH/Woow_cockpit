@@ -331,6 +331,111 @@ class DeltaReviewVolumeTests(TempCase):
                          .warnings('v'), [])
 
 
+def gnu_dir_tar(members):
+    """A host directory tar as GNU tar writes it inside the owner's namespace: `./` root entry with the directory's
+    own owner and mode, `./`-prefixed names, namespace owners, nanosecond PAX mtimes (checked in the lab)."""
+    buffer = io.BytesIO()
+    with tarfile.open(fileobj=buffer, mode='w', format=tarfile.PAX_FORMAT) as tar:
+        for item in members:
+            item = dict(item)
+            data = item.pop('data', b'')
+            info = tarfile.TarInfo(item.pop('name'))
+            info.type = item.pop('type', tarfile.REGTYPE)
+            info.size = len(data) if info.type == tarfile.REGTYPE else 0
+            info.pax_headers = item.pop('pax', {})
+            for key, value in item.items():
+                setattr(info, key, value)
+            tar.addfile(info, io.BytesIO(data) if info.size else None)
+    return buffer.getvalue()
+
+
+DIR_MEMBERS = [
+    {'name': '.', 'type': tarfile.DIRTYPE, 'mode': 0o750, 'uid': 33, 'gid': 33, 'pax': {'mtime': '1700000000.123456789'}},
+    {'name': './pg', 'type': tarfile.DIRTYPE, 'mode': 0o700, 'uid': 70, 'gid': 70},
+    {'name': './pg/PG_VERSION', 'data': b'16\n', 'mode': 0o600, 'uid': 70, 'gid': 70},
+    {'name': './www', 'type': tarfile.DIRTYPE, 'mode': 0o2775, 'uid': 33, 'gid': 33},
+    {'name': './www/config.php', 'data': b'<?php\n', 'mode': 0o640, 'uid': 33, 'gid': 33},
+    {'name': './www/second-name.php', 'type': tarfile.LNKTYPE, 'linkname': './www/config.php', 'uid': 33, 'gid': 33},
+    {'name': './www/abs-link', 'type': tarfile.SYMTYPE, 'linkname': '/etc/hostname', 'mode': 0o777},
+    {'name': './secrets.yaml', 'type': tarfile.SYMTYPE, 'linkname': '../secrets.yaml', 'mode': 0o777},
+    {'name': './fifo', 'type': tarfile.FIFOTYPE, 'mode': 0o640},
+    {'name': './tool', 'data': b'#!/bin/sh\n', 'mode': 0o4755},
+    {'name': './x', 'data': b'x', 'mode': 0o644, 'uid': 54999, 'gid': 54998,
+     'pax': {'SCHILY.xattr.user.tag': 'v', 'SCHILY.xattr.security.capability': 'c'}},
+]
+LAB_IDS = (nested.IdMap('0 1001 1\n1 10000 55000\n'), nested.IdMap('0 1001 1\n1 10000 55000\n'))
+
+
+class HostDirectoryTests(TempCase):
+    """Host directory tars: the volume rules, a root entry, symlinks that may point outside (kept, never followed)."""
+
+    def test_gnu_tar_layout_is_accepted_and_reported(self):
+        path = self.file(gnu_dir_tar(DIR_MEMBERS))
+        report = nested.check_dir(path, LAB_IDS)
+        self.assertEqual(report.members, len(DIR_MEMBERS))
+        self.assertEqual((report.max_uid, report.max_gid), (54999, 54998))
+        self.assertEqual((report.outside_links, report.outside_link_samples), (2, ['www/abs-link', 'secrets.yaml']))
+        notes = report.warnings('~/homeassistant/config')
+        self.assertEqual(len(notes), 2)
+        self.assertTrue(notes[0].startswith('主機資料夾 ~/homeassistant/config 有 1 個檔案的 setuid'), notes)
+        self.assertIn('security.capability', notes[1])
+        self.assertIn('2 個符號連結指向資料夾以外', report.link_note('~/homeassistant/config'))
+        with self.assertRaises(BackupError) as caught:  # a volume would refuse the same links (podman's import rule)
+            nested.check_volume(path, LAB_IDS)
+        self.assertEqual(caught.exception.details['reason'], 'symlink pointing outside the volume')
+
+    def test_canonical_copy_keeps_owners_modes_links_and_exact_mtimes(self):
+        path = self.file(gnu_dir_tar(DIR_MEMBERS))
+        out = stream(lambda source, target: nested.stream_dir(source, target, LAB_IDS), path)
+        with tarfile.open(fileobj=io.BytesIO(out), mode='r:') as tar:
+            members = {m.name: m for m in tar.getmembers()}
+        self.assertEqual(list(members), ['.', 'pg', 'pg/PG_VERSION', 'www', 'www/config.php', 'www/second-name.php',
+                                         'www/abs-link', 'secrets.yaml', 'fifo', 'tool', 'x'])
+        root = members['.']
+        self.assertEqual((root.type, root.mode, root.uid, root.gid), (tarfile.DIRTYPE, 0o750, 33, 33))
+        self.assertEqual(root.pax_headers.get('mtime'), '1700000000.123456789', 'nanoseconds kept verbatim')
+        self.assertEqual(members['www'].mode, 0o2775, 'setgid directories keep their mode')
+        self.assertEqual(members['tool'].mode, 0o755, 'setuid dropped from a file')
+        self.assertEqual(members['www/second-name.php'].linkname, 'www/config.php')
+        self.assertEqual(members['secrets.yaml'].linkname, '../secrets.yaml', 'kept verbatim, never followed')
+        self.assertEqual((members['x'].uid, members['x'].gid), (54999, 54998))
+        self.assertEqual({k for k in members['x'].pax_headers if k.startswith('SCHILY')}, {'SCHILY.xattr.user.tag'})
+        self.assertTrue(all(not m.uname and not m.gname for m in members.values()))
+
+    def test_owner_outside_the_target_namespace_is_incompatible(self):
+        small = (nested.IdMap('0 1007 1\n1 10500 1000\n'), nested.IdMap('0 1007 1\n1 10500 1000\n'))
+        with self.assertRaises(BackupError) as caught:
+            nested.check_dir(self.file(gnu_dir_tar(DIR_MEMBERS)), small)
+        error = caught.exception
+        self.assertEqual(error.code, 'incompatible')
+        self.assertTrue(error.message.startswith('主機資料夾中的 x 屬於 UID 54999／GID 54998'), error.message)
+        self.assertIn('無法以應用帳號還原', error.message)
+        self.assertEqual(error.details['reason'], 'owner id outside the user namespace')
+
+    def test_hostile_directory_members(self):
+        base = [{'name': '.', 'type': tarfile.DIRTYPE, 'mode': 0o755}]
+        cases = {
+            'absolute member name': [{'name': '/etc/passwd', 'data': b'x'}],
+            'member name with an empty, "." or ".." component': [{'name': './a/../../etc', 'data': b'x'}],
+            'member below a symlink, hard link or file': [
+                {'name': './link', 'type': tarfile.SYMTYPE, 'linkname': '/home/appowner/.ssh'},
+                {'name': './link/authorized_keys', 'data': b'ssh-ed25519 AAAA'}],
+            'member type not allowed (device, sparse or unknown)': [
+                {'name': './sda', 'type': tarfile.BLKTYPE, 'devmajor': 8, 'devminor': 0}],
+            'duplicate member': [{'name': './a', 'data': b'1'}, {'name': 'a', 'data': b'2'}],
+            'hard link to something other than an earlier non-directory member': [
+                {'name': './h', 'type': tarfile.LNKTYPE, 'linkname': './nowhere'}],
+            'the volume root is not a directory': [{'name': '.', 'type': tarfile.SYMTYPE, 'linkname': '/'}],
+        }
+        for reason, members in cases.items():
+            with self.subTest(reason):
+                data = gnu_dir_tar((base if members[0]['name'] != '.' else []) + members)
+                error = self.rejected(nested.check_dir, data, reason)
+                self.assertIn('主機資料夾', error.message)
+                with self.assertRaises(BackupError):
+                    stream(nested.stream_dir, self.file(data, 'again.tar'))
+
+
 class DeltaReviewImageNameTests(TempCase):
     """Delta review finding HD-01: podman saves an image under the name its ref resolved to."""
 

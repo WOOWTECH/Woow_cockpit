@@ -1,0 +1,7 @@
+# woowbk-dirs private network (rootless Quadlet template, test fixture).
+# Installed into ~appowner/.config/containers/systemd/; generates woowbk-dirs-network.service.
+[Unit]
+Description=woowbk-dirs network
+
+[Network]
+NetworkName=woowbk-dirs

@@ -1,0 +1,32 @@
+# woowbk-dirs PostgreSQL 16 whose data directory is a HOST DIRECTORY (rootless Quadlet template, test fixture),
+# like Nextcloud's ~/.local/share/nextcloud-office/postgres. It runs as container uid 70 (alpine's postgres) from
+# the start, so its files are owned by a subordinate id of the owner and the entrypoint never chowns anything:
+# a restore that loses ownership or modes makes PostgreSQL refuse to start instead of being silently repaired.
+# Cold backup: the catalog declares no postgres entries and lists this unit in writer_units, so the engine stops
+# it and copies the data directory at file level (roles, passwords, owners and grants included).
+[Unit]
+Description=woowbk-dirs PostgreSQL database (data directory on the host)
+
+[Container]
+ContainerName=woowbk-dirs-db
+Image=docker.io/library/postgres:16-alpine
+Network=woowbk-dirs.network
+User=70:70
+Volume=%h/.local/share/woowbk-dirs/postgres:/var/lib/postgresql/data
+Environment=POSTGRES_USER=dirs POSTGRES_DB=dirs
+Secret=woowbk-dirs-db-password,type=env,target=POSTGRES_PASSWORD
+HealthCmd=pg_isready -h 127.0.0.1 -p 5432 -U dirs -d dirs
+HealthInterval=30s
+HealthTimeout=5s
+HealthRetries=5
+HealthStartPeriod=20s
+# A clean (fast) shutdown leaves a consistent data directory; allow it more than podman's default 10 s.
+PodmanArgs=--memory 256m --stop-timeout 60
+
+[Service]
+Restart=on-failure
+# The first start may pull the image.
+TimeoutStartSec=900
+
+[Install]
+WantedBy=default.target

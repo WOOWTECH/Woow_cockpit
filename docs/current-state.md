@@ -148,8 +148,16 @@ base1 manifest 的 API 版本不能當 Cockpit 套件版本；安裝程式從 dp
 - **沒有第二台實體設備**：兩台實驗室設備在同一台實體主機上，尚未在兩台實體機器之間下載、上傳與還原。
 - **只驗證 x86_64**：其他 CPU 架構未測。
 - **大型資料未測**：多 GB 的備份與超過 8 GiB 的單一項目都沒有實測；目前最大的實測是約 600 MiB 的資料卷（備份檔 638 MB）。
-- **正式應用沒有啟用**：沒有任何正式應用的目錄項目；參考主機上只有示範應用（見上一節），也還沒有建立過備份金鑰或任何備份。接入評估見 [production-onboarding.md](backup/production-onboarding.md)。
+- **正式應用**：撰寫本節時尚未啟用；之後已接入並實測，見下方 2026.11.13.2 一節與 [production-onboarding.md](backup/production-onboarding.md)。
 - **頁面上建立金鑰**：已在實驗室設備 dev-b 以真正的 Cockpit 362 實測一次（建立、只顯示一次、下載緊急金鑰、確認後清除），尚未納入可重跑的頁面端到端腳本；詳見 [testing.md](testing.md)。
 - 沒有 PostgreSQL 的應用、PostgreSQL 16 以外的版本都沒有實測；只有單元測試的情況列在 [testing.md](testing.md)。
 - 觀察：「驗證」作業只檢查外層封存，備份內被改造的資料卷或映像封存仍會顯示「已驗證」，要到還原作業的相容性檢查才被拒絕（拒絕前沒有任何變更）。
 - 觀察：全新部署被強制終止後，復原會移除部署，但作業載入映像時移走的既有映像名稱不會改回。
+
+## 2026.11.13.2：主機資料夾、冷備份與正式應用實測
+
+備份與還原支援應用放在擁有者家目錄中的主機資料夾（Quadlet bind mount，目錄項目的 `data_dirs`），以及把 PostgreSQL 資料檔整份備份的冷備份方式；規則見 [app-catalog.md](backup/app-catalog.md)，工程規格見 [CONTRACT.md](backup/CONTRACT.md) 第 4–10 節。實作後經一次獨立的安全與正確性審查：沒有從應用帳號取得 root 的路徑，也沒有刪除唯一一份資料的情況；指出的 5 個中度與 7 個輕度問題已全部修正（輔助程式的回傳一律檢查、掛載點與共用資料夾的容器會被擋下、回復直接移回原內容、復原一定找得到這個作業的資料夾、更多不可列入的家目錄位置等）。
+
+- 實驗室：主機資料夾情境 258／258、一般應用回歸 126／126、單元測試三種環境各 613 項、頁面 fixture 35／35，詳見 [testing.md](testing.md)。
+- 參考主機：2026-11-13 20:13（UTC+8）以 commit 0b14a16 的內容手動安裝頁面、引擎與 helper，安裝後逐檔比對相同。沒有用 `manage.py install`：其他分支也直接部署到這台主機，從落後 `main` 的分支完整安裝會覆蓋它們已部署的檔案。已安裝 20 個應用的目錄項目（含示範應用）。Odoo（含自訂模組資料夾）、Home Assistant 與 Nextcloud 以這版實測備份與原位還原；LiteLLM、n8n、Hermes、EMQX、OpenDesign、10 個 MCP 管理服務與 Headscale 先前已以 2026.11.13.1 實測。全部通過，結果見 [production-onboarding.md](backup/production-onboarding.md)。
+- 還沒有接入：Omnigent、Cloudflare Tunnel、code-server、pi-web。正式應用沒有做跨設備還原。

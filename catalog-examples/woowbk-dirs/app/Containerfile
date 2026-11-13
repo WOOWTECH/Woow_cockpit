@@ -1,0 +1,12 @@
+# woowbk-dirs application image (host-directory backup/restore test fixture, not a product).
+# Built as the app owner inside a lab device:
+#   podman build --memory 512m -t localhost/woowbk-dirs-app:1 <fixture>/app
+# The image only exists locally (localhost/...): a cross-device restore needs a backup that includes it.
+# The Quadlet runs it as container uid 33 (User=33:33), so the host files it writes are owned by a
+# subordinate id of the app owner, like Nextcloud's www-data files.
+FROM docker.io/library/python:3.12-alpine
+RUN pip install --no-cache-dir --disable-pip-version-check --root-user-action=ignore pg8000==1.31.2
+COPY app.py treelist.py /app/
+ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 PORT=8080
+EXPOSE 8080
+CMD ["python3", "/app/app.py"]

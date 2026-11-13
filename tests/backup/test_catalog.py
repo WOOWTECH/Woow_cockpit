@@ -335,3 +335,128 @@ class FileSecurityTests(CatalogCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class DataDirsTests(CatalogCase):
+    """Host directories (`data_dirs`): paths relative to the owner's home, outside login keys, unit definitions and
+    the Podman storage, not overlapping each other, the config files, or another app's directories."""
+
+    def entry(self, *dirs):
+        entry = demo_entry(self.paths)
+        entry['data_dirs'] = [dict(item) for item in dirs]
+        return entry
+
+    def validate(self, entry):
+        return catalog.validate_entry(entry, paths=self.paths, user_lookup=lookup)
+
+    def test_valid_entries_and_defaults(self):
+        app = self.validate(self.entry({'path': '.local/share/nextcloud-office/html', 'label': '網站程式'},
+                                       {'path': '.local/share/nextcloud-office/postgres'},
+                                       {'path': 'homeassistant/config-preinstalled'},
+                                       {'path': 'woowbk-demo-data'},
+                                       {'path': '.config/woowbk-demo/state'}))
+        self.assertEqual(app.data_dirs[0], {'path': '.local/share/nextcloud-office/html', 'label': '網站程式'})
+        self.assertEqual(app.data_dirs[1], {'path': '.local/share/nextcloud-office/postgres', 'label': ''})
+        self.assertEqual(self.validate(demo_entry(self.paths)).data_dirs, (), 'optional; older entries stay valid')
+        cold = self.entry({'path': 'woowbk-dirs/pgdata'})
+        cold.update(postgres=[], writer_units=list(cold['units']))  # the cold database pattern
+        self.assertEqual(self.validate(cold).postgres, ())
+
+    def test_path_rules(self):
+        cases = {
+            '': '不可為空白', '.': '路徑片段', '..': '路徑片段', '/': '不可以 / 開頭', '/home/appowner/x': '不可以 / 開頭',
+            'data/': '不可以 / 開頭', 'a//b': '路徑片段', 'a/./b': '路徑片段', 'a/../b': '路徑片段', '../x': '路徑片段',
+            'my data': '路徑片段', 'data\n': '控制字元', 'dätä': '路徑片段', '~/data': '路徑片段', 'a/' + 'b' * 201: '最後一段名稱',
+        }
+        for value, needle in cases.items():
+            with self.subTest(value=value):
+                error = self.assert_rejected(lambda e, v=value: e.update(data_dirs=[{'path': v}]))
+                self.assertIn(needle, error.message)
+                self.assertEqual(error.details['field'], 'data_dirs[0].path')
+        self.validate(self.entry({'path': 'a/' + 'b' * 200}))
+
+    def test_forbidden_trees_equal_inside_or_containing(self):
+        for value in ('.ssh', '.ssh/keys', '.gnupg', '.config', '.config/systemd', '.config/systemd/user',
+                      '.config/containers', '.config/containers/systemd', '.local', '.local/share',
+                      '.local/share/containers', '.local/share/containers/storage/volumes', '.config/environment.d',
+                      '.config/autostart', '.config/dbus-1', '.config/user-tmpfiles.d', '.local/share/systemd/user',
+                      '.local/share/dbus-1', '.local/share/applications'):
+            with self.subTest(value=value):
+                error = self.assert_rejected(lambda e, v=value: e.update(data_dirs=[{'path': v}]))
+                self.assertIn('不可等於、位於或包含', error.message)
+        for value in ('.sshkeys', '.config/containers-data', '.local/share/containers2', '.config/systemd-backup'):
+            self.validate(self.entry({'path': value}))
+
+    def test_login_programs_tmpfiles_and_case_variants_are_forbidden(self):
+        # Review L1: user tmpfiles write any file of the owner at his next login; shell start-up files, program
+        # search paths and Python user site-packages run at his logins; a case-insensitive home matches .SSH.
+        for value in ('.local/share/user-tmpfiles.d', '.local/bin', 'bin', 'bin/tools', '.bashrc.d', '.config/fish',
+                      '.local/lib/python3.12/site-packages', '.SSH', '.Ssh/keys', '.Config/Systemd/user',
+                      '.LOCAL/share/containers'):
+            with self.subTest(value=value):
+                error = self.assert_rejected(lambda e, v=value: e.update(data_dirs=[{'path': v}]))
+                self.assertIn('不可等於、位於或包含', error.message)
+        self.validate(self.entry({'path': 'binaries'}, {'path': '.local/library'}))
+
+    def test_names_like_the_restore_siblings_are_refused(self):
+        # Review L3: `<dir>.woowbk-new-<job>` is the restore's own copy; a declared directory may not look like one.
+        for value in ('html.woowbk-new-keepme', 'apps/x.woowbk-old-1/data', 'data.WOOWBK-del-2'):
+            with self.subTest(value=value):
+                error = self.assert_rejected(lambda e, v=value: e.update(data_dirs=[{'path': v}]))
+                self.assertIn('.woowbk-', error.message)
+        self.validate(self.entry({'path': 'woowbk-data'}, {'path': 'data.woowbk'}))
+
+    def test_a_directory_may_not_hold_another_apps_config_file(self):
+        # Review L2: restoring the first app would replace the second one's config file with bytes from its archive.
+        first = self.entry({'path': '.config/woowbk-zz'})
+        first.update(id='woowbk-aa', config_files=[])
+        second = demo_entry(self.paths)
+        second.update(id='woowbk-zz', config_files=[{'path': '.config/woowbk-zz/app.env', 'mode': '0600'}])
+        self.write('woowbk-aa.json', first)
+        self.write('woowbk-zz.json', second)
+        loaded = self.load()
+        self.assertEqual(sorted(loaded), ['woowbk-aa'])
+        self.assertEqual(loaded.problem_for('woowbk-zz')['message'],
+                         '應用 woowbk-zz 的設定檔 ~/.config/woowbk-zz/app.env 與應用 woowbk-aa 的主機資料夾 ~/.config/woowbk-zz '
+                         '重疊（同一個擁有者），已略過 woowbk-zz.json。')
+
+    def test_overlaps_and_duplicates(self):
+        for first, second in (('data', 'data'), ('data', 'data/pg'), ('data/pg', 'data')):
+            with self.subTest((first, second)):
+                error = self.assert_rejected(lambda e, a=first, b=second: e.update(
+                    data_dirs=[{'path': a}, {'path': b}]))
+                self.assertIn('重疊', error.message)
+        self.validate(self.entry({'path': 'data'}, {'path': 'data2'}, {'path': 'data-pg'}))
+        for value in ('.config/woowbk-demo', '.config/woowbk-demo/app.env', '.config'):
+            with self.subTest(config=value):
+                self.assert_rejected(lambda e, v=value: e.update(data_dirs=[{'path': v}]))
+
+    def test_item_shape_and_limits(self):
+        self.assert_rejected(lambda e: e.update(data_dirs=[{'path': 'data', 'mode': '0755'}]))
+        self.assert_rejected(lambda e: e.update(data_dirs=[{'label': 'x'}]))
+        self.assert_rejected(lambda e: e.update(data_dirs=['data']))
+        self.assert_rejected(lambda e: e.update(data_dirs={'path': 'data'}))
+        self.assert_rejected(lambda e: e.update(data_dirs=[{'path': 'data', 'label': 'x' * 81}]))
+        self.assert_rejected(lambda e: e.update(data_dirs=[{'path': 'data', 'label': '換行\n'}]))
+        self.assert_rejected(lambda e: e.update(data_dirs=[{'path': f'd{i}'} for i in range(17)]))
+        self.validate(self.entry(*[{'path': f'd{i}'} for i in range(16)]))
+
+    def test_catalog_digest_covers_data_dirs(self):
+        with_dirs = self.validate(self.entry({'path': 'data'}))
+        self.assertNotEqual(with_dirs.sha256, self.validate(demo_entry(self.paths)).sha256)
+
+    def test_two_apps_of_one_owner_may_not_share_a_directory(self):
+        first = self.entry({'path': 'shared/data'})
+        second = self.entry({'path': 'shared'})
+        second.update(id='woowbk-other', config_files=[])
+        third = self.entry({'path': 'third'})
+        third.update(id='woowbk-third', config_files=[])
+        self.write('woowbk-demo.json', first)
+        self.write('woowbk-other.json', second)
+        self.write('woowbk-third.json', third)
+        loaded = self.load()
+        self.assertEqual(sorted(loaded), ['woowbk-demo', 'woowbk-third'])
+        problem = loaded.problem_for('woowbk-other')
+        self.assertEqual(problem['code'], 'invalid-request')
+        self.assertEqual(problem['message'], '應用 woowbk-other 的主機資料夾 ~/shared 與應用 woowbk-demo 的 ~/shared/data '
+                                             '重疊（同一個擁有者），已略過 woowbk-other.json。')

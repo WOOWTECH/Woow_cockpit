@@ -11,7 +11,8 @@ export PATH=/usr/sbin:/usr/bin:/sbin:/bin LANG=C.UTF-8
 
 OWNER=appowner
 # Nested ids must lie inside the device's own namespace (0..65535) and must not overlap real
-# accounts (0..9999 incl. devadmin/appowner) or nobody/nogroup (65534).
+# accounts (0..9999 incl. devadmin/appowner) or nobody/nogroup (65534). Default range; a valid range
+# already set on the device is kept (step 3).
 SUB_START=10000
 SUB_COUNT=55000
 
@@ -46,9 +47,22 @@ chown "$uid:$uid" "/home/$OWNER"
 chmod 0750 "/home/$OWNER"
 
 # 3. Subordinate ids: useradd adds 100000:65536 by default, which is unusable inside a container
-#    whose namespace only maps 65536 ids. Rewrite both files with valid ranges only.
-printf '%s:%s:%s\n' "$OWNER" "$SUB_START" "$SUB_COUNT" > /etc/subuid
-printf '%s:%s:%s\n' "$OWNER" "$SUB_START" "$SUB_COUNT" > /etc/subgid
+#    whose namespace only maps 65536 ids. A valid lab range that is already set is kept (subids.sh gives
+#    a device its own range, e.g. dev-b 10500:55000, so cross-device restores see different subordinate
+#    ids); anything else is replaced by the default range in both files.
+valid_range() {  # <file>: prints START:COUNT when the file is exactly one valid appowner line
+    awk -F: -v owner="$OWNER" 'NF == 3 && $1 == owner && $2 ~ /^[0-9]+$/ && $3 ~ /^[0-9]+$/ &&
+        $2 >= 10000 && $3 >= 1000 && $2 + $3 <= 65534 { n++; r = $2 ":" $3 }
+        END { if (n == 1 && NR == 1) print r }' "$1" 2>/dev/null || true
+}
+current=$(valid_range /etc/subuid)
+if [ -n "$current" ] && [ "$current" = "$(valid_range /etc/subgid)" ]; then
+    SUB_START=${current%%:*}
+    SUB_COUNT=${current##*:}
+else
+    printf '%s:%s:%s\n' "$OWNER" "$SUB_START" "$SUB_COUNT" > /etc/subuid
+    printf '%s:%s:%s\n' "$OWNER" "$SUB_START" "$SUB_COUNT" > /etc/subgid
+fi
 chmod 0644 /etc/subuid /etc/subgid
 
 # 4. Linger: start the user manager now and on every boot.

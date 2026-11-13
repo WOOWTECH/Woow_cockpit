@@ -576,6 +576,54 @@ class RecoveryTests(JobCase):
         jobs.recover_interrupted(self.paths, unit_active=self.unit_active, cleanup_fresh=cleanup)
         self.assertEqual(calls, [['woowbk-demo']], 'decided once, never repeated')
 
+    def test_host_directories_of_a_dead_restore_are_settled_once_before_fresh_removal(self):
+        dead = self.make('running', 30, job_type='restore', dir_apps=['woowbk-demo'], fresh_apps=['woowbk-demo'])
+        calls = []
+
+        def settle(job_id, apps):
+            calls.append(('dirs', job_id, apps))
+            return ['已把 ~/woowbk-demo-data 的原內容移回（~/woowbk-demo-data.woowbk-old-x）',
+                    '~/html 被取代前的內容保留在 ~/html.woowbk-old-x，確認應用正常後可刪除']
+        jobs.recover_interrupted(self.paths, unit_active=self.unit_active, settle_dirs=settle,
+                                 cleanup_fresh=lambda apps: calls.append(('fresh', apps)) or [])
+        self.assertEqual(calls, [('dirs', dead, ['woowbk-demo']), ('fresh', ['woowbk-demo'])],
+                         'a missing directory gets its copy back before a fresh deployment is removed')
+        record = self.store.get(dead)
+        self.assertEqual((record['state'], record['dir_apps']), ('interrupted', []))
+        self.assertIn('主機資料夾：已把 ~/woowbk-demo-data 的原內容移回', record['error']['message'])
+        self.assertIn('確認應用正常後可刪除', record['error']['message'])
+        self.assertTrue(any('主機資料夾：' in line for line in self.store.read_log(dead)))
+        jobs.recover_interrupted(self.paths, unit_active=self.unit_active, settle_dirs=settle)
+        self.assertEqual(len(calls), 2, 'decided once, never repeated')
+
+    def test_a_shutdown_interrupted_record_keeps_its_directories_for_the_recovery(self):
+        # A restore cut by a shutdown ends `interrupted` itself and keeps `dir_apps` (flows); the next pass settles.
+        finished = self.make('interrupted', 30, job_type='restore', dir_apps=['woowbk-demo'],
+                             error={'code': 'job-failed', 'message': '中斷。'})
+        self.assertTrue(jobs.has_leftovers(self.store.get(finished)))
+        settled = []
+        jobs.recover_interrupted(self.paths, unit_active=self.unit_active,
+                                 settle_dirs=lambda job_id, apps: settled.append((job_id, apps)) or [])
+        self.assertEqual(settled, [(finished, ['woowbk-demo'])])
+        record = self.store.get(finished)
+        self.assertEqual((record['dir_apps'], record['error']['message']), ([], '中斷。'), 'nothing to add')
+
+    def test_settle_errors_never_break_recovery(self):
+        import contextlib
+        import io
+        dead = self.make('running', 30, job_type='restore', dir_apps=['woowbk-demo'])
+        with contextlib.redirect_stderr(io.StringIO()):
+            jobs.recover_interrupted(self.paths, unit_active=self.unit_active,
+                                     settle_dirs=lambda job_id, apps: 1 / 0)
+        record = self.store.get(dead)
+        self.assertEqual((record['state'], record['dir_apps']), ('interrupted', []))
+        self.assertIn('需人工確認', record['error']['message'])
+
+    def test_without_a_settle_hook_the_marker_waits(self):
+        dead = self.make('running', 30, job_type='restore', dir_apps=['woowbk-demo'])
+        jobs.recover_interrupted(self.paths, unit_active=self.unit_active)
+        self.assertEqual(self.store.get(dead)['dir_apps'], ['woowbk-demo'], 'kept for a pass that can settle it')
+
     def test_interrupted_restore_result_says_what_was_reached(self):
         record = self.store.create('restore', {'backup_id': 'b', 'apps': ['woowbk-demo']})
         message, result = jobs.interrupted_details(record)
@@ -589,6 +637,16 @@ class RecoveryTests(JobCase):
         self.assertIs(result['changed'], True)
         self.assertEqual(result['fresh_apps'], ['woowbk-demo'])
         self.assertIn('全新部署（woowbk-demo）沒有完成', message)
+
+    def test_a_restore_that_died_while_deleting_replaced_copies_had_succeeded(self):
+        # Review L4: killed in the last step (the old host-directory copies), the restore itself was complete.
+        record = self.store.create('restore', {'backup_id': 'b', 'apps': ['woowbk-demo']})
+        record.update(finishing=True, safety_backup_id='s')
+        message, result = jobs.interrupted_details(record)
+        self.assertEqual(message, jobs.FINISHING_MESSAGE)
+        self.assertIn('應用不需要再次還原', message)
+        self.assertNotIn('還原前備份', message)
+        self.assertEqual(result['safety_backup_id'], 's')
 
     def test_stale_key_files_are_removed(self):
         # Review SEC-4: a helper killed during inspect left the pasted key on tmpfs until reboot.

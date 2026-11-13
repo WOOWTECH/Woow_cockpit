@@ -52,6 +52,12 @@ if [ "$system_state" != running ]; then
     "$LP" exec "$NAME" systemctl --failed --no-legend --plain >&2 || true
 fi
 
+# A device created from an older image build still has that build's helpers; install the repo's current
+# provisioning and owner wrappers first (the provisioning script keeps a device's own subordinate id range).
+for helper in woowbk-provision:/usr/local/sbin woowbk-owner:/usr/local/bin; do
+    "$LP" exec -i "$NAME" sh -c "cat > ${helper#*:}/.${helper%%:*}.new && chmod 0755 ${helper#*:}/.${helper%%:*}.new &&
+        mv ${helper#*:}/.${helper%%:*}.new ${helper#*:}/${helper%%:*}" < "$LAB_DIR/device/${helper%%:*}"
+done
 dexec "$NAME" /usr/local/sbin/woowbk-provision --appowner-uid "$OWNER_UID" < "$PASS_FILE"
 
 wait_for 60 "cockpit.socket on 9090" \

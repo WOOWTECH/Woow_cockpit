@@ -60,7 +60,7 @@ TOOL_WAIT = 60
 
 BACKUP_ID_RE = re.compile(r'^[0-9]{8}T[0-9]{6}Z-[0-9a-f]{8}\Z')
 SHA256_RE = re.compile(r'^[0-9a-f]{64}\Z')
-ENTRY_RE = re.compile(r'^apps/[a-z0-9][a-z0-9-]{1,40}/(images|postgres|volumes|secrets|config|quadlet)/'
+ENTRY_RE = re.compile(r'^apps/[a-z0-9][a-z0-9-]{1,40}/(images|postgres|volumes|dirs|secrets|config|quadlet)/'
                       r'[A-Za-z0-9][A-Za-z0-9_.@-]{0,200}\Z')
 APP_ID_RE = re.compile(r'^[a-z0-9][a-z0-9-]{1,40}\Z')
 ADAPTER_RE = re.compile(r'^[a-z0-9][a-z0-9-]{0,40}\Z')
@@ -79,8 +79,10 @@ METHOD_RE = re.compile(r'^[a-z][a-z0-9-]{0,40}\Z')
 MODE_RE = re.compile(r'^0[0-7]{3}\Z')
 VERIFY_ID_RE = re.compile(r'^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}\Z')
 CONFIG_SEGMENT_RE = re.compile(r'^[^\x00-\x1f\x7f/\\]{1,255}\Z')
+DIR_SEGMENT_RE = re.compile(r'^[A-Za-z0-9._@+-]{1,255}\Z')
+MAX_DATA_DIRS = 16
 SECTIONS = {  # manifest app section -> entry category directory
-    'images': 'images', 'postgres': 'postgres', 'volumes': 'volumes',
+    'images': 'images', 'postgres': 'postgres', 'volumes': 'volumes', 'data_dirs': 'dirs',
     'secrets': 'secrets', 'config_files': 'config', 'quadlet_files': 'quadlet',
 }
 MAX_SIZE = 2 ** 53
@@ -322,6 +324,15 @@ def _config_path(value, where):
           f'{where} must be under .config/ or .local/share/')
 
 
+def _dir_path(value, where):
+    """A host directory relative to the owner's home. Only compared with the local catalog's paths, which alone
+    decide what is written (CONTRACT section 4), but held to the catalog's segment rules all the same."""
+    _str(value, where, min_len=1, max_len=1024)
+    _need(not value.startswith('/') and not value.endswith('/'), f'{where} must be a relative directory path')
+    _need(all(s not in ('.', '..') and DIR_SEGMENT_RE.match(s) for s in value.split('/')),
+          f'{where} has invalid segments')
+
+
 def validate_manifest(manifest):
     """Strict schema validation; returns the manifest or raises BackupError('invalid-manifest')."""
     _obj(manifest, 'manifest', ('format', 'backup_id', 'created', 'type', 'note', 'key_id', 'tool',
@@ -380,8 +391,10 @@ def validate_manifest(manifest):
     app_ids = set()
     for index, app in enumerate(apps):
         where = f'apps[{index}]'
+        # `data_dirs` (host directories) is optional: archives written before host directories have none.
         _obj(app, where, ('id', 'name', 'adapter', 'adapter_version', 'catalog_sha256', 'owner', 'images',
-                          'postgres', 'volumes', 'secrets', 'config_files', 'quadlet_files', 'verify_snapshot'))
+                          'postgres', 'volumes', 'secrets', 'config_files', 'quadlet_files', 'verify_snapshot'),
+             ('data_dirs',))
         _str(app['id'], f'{where}.id', APP_ID_RE, max_len=41)
         app_id = app['id']
         _need(app_id not in app_ids, 'duplicate app id', app=app_id)
@@ -444,6 +457,18 @@ def validate_manifest(manifest):
             _str(item['mode'], f'{w}.mode', MODE_RE, max_len=4)
             _need(int(item['mode'], 8) & ~0o644 == 0, f'{w}.mode exceeds 0644')
             ref(app_id, 'config_files', item['entry'], f'{w}.entry')
+
+        if 'data_dirs' in app:
+            _list(app['data_dirs'], f'{where}.data_dirs', MAX_DATA_DIRS)
+            seen = []
+            for i, item in enumerate(app['data_dirs']):
+                w = f'{where}.data_dirs[{i}]'
+                _obj(item, w, ('path', 'entry'))
+                _dir_path(item['path'], f'{w}.path')
+                _need(all(item['path'] != other and not item['path'].startswith(other + '/')
+                          and not other.startswith(item['path'] + '/') for other in seen), f'{w}.path overlaps')
+                seen.append(item['path'])
+                ref(app_id, 'data_dirs', item['entry'], f'{w}.entry')
 
         snapshot = app['verify_snapshot']
         _need(isinstance(snapshot, dict) and len(snapshot) <= 20, f'{where}.verify_snapshot must be an object')

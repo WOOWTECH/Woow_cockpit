@@ -12,11 +12,12 @@ systemd 為 PID 1 的 rootless 容器，內含 Cockpit 362、rootless Podman（�
 | Cockpit（HTTPS，自簽憑證） | https://127.0.0.1:19091 | https://127.0.0.1:19092 |
 | 主機名稱 | `woowbk-dev-a` | `woowbk-dev-b` |
 | appowner UID／GID | 1001 | 1007 |
+| appowner subuid／subgid | `10000:55000`（預設） | `10500:55000`（`subids.sh` 設定，與 dev-a 刻意不同） |
 | machine-id | 每台不同（首次開機由 podman 的 `container_uuid` 產生；重建容器會改變） | 同左 |
 | 管理員 | `devadmin`（UID 1000，sudo 群組，Cockpit 登入，密碼見下） | 同左 |
 | 資源上限 | `--memory 768m --cpus 1.5` | 同左 |
 | 資料卷 | `woowbk-dev-a-home`→`/home`、`-varlib`→`/var/lib/woowtech-backup`（0700）、`-containers`→`/var/lib/containers` | `woowbk-dev-b-…` |
-| 預設狀態 | 已部署並植入 woowbk-demo（執行中） | 只有 appowner，**未部署**應用（跨設備還原目標） |
+| 預設狀態 | 已部署並植入 woowbk-demo 與 woowbk-dirs（執行中） | 只有 appowner，**未部署**應用（跨設備還原目標；可能留有 postgres、python 基礎映像） |
 
 `devadmin` 密碼由 `up.sh` 以 `openssl rand -hex 16` 產生一次，存於
 `~/.woowbk-lab/secrets/devadmin.pass`（0600），每次 `up.sh` 由標準輸入設定到設備內，不出現在參數或日誌。
@@ -52,9 +53,13 @@ systemd 為 PID 1 的 rootless 容器，內含 Cockpit 362、rootless Podman（�
 | `engine.sh <a\|b> <command> [json\|-]` | 以 root 呼叫 `/usr/local/libexec/woowtech-cockpit-backup`，輸出單一 JSON 並遮蔽 `key`／`content` 字串；帶金鑰的請求用 `-` 由標準輸入提供 |
 | `deploy-src.sh <a\|b> [--fallback]` | 把**目前工作樹**（排除 `.git node_modules .local design __pycache__`）複製到設備 `/opt/woow-cockpit-src`（root 擁有、不可群組／其他人寫入），安裝程式支援時執行 `manage.py install --backup-demo-catalog`；尚不支援時結束碼 3，`--fallback` 執行檔頭記載的實驗室專用手動安裝 |
 | `deploy-demo.sh <a\|b> [--notes N] [--files M] [--title T] [--no-seed]` | 不經引擎、以 appowner 手動部署 woowbk-demo（拉取 postgres、建置應用映像、安裝 Quadlet、daemon-reload、seed） |
-| `verify-device.sh <a\|b> [--no-browser]` | 實測：systemd `running`、Cockpit socket、user manager、巢狀 podman（alpine、uid map、`--memory`）、Quadlet 產生器、Playwright 登入並開啟管理員存取 |
+| `deploy-dirs.sh <a\|b> [--items N] [--delete K] [--title T] [--owner-note T] [--seed S] [--no-seed]` | 同上，部署主機資料夾示範應用 woowbk-dirs（`catalog-examples/woowbk-dirs/README.md`）：複製到 `/opt/woowbk-dirs`、拉取 postgres（已有則略過）、建置 `localhost/woowbk-dirs-app:1`、安裝 Quadlet、seed（密鑰、設定檔、主機資料夾與容器帳號擁有者、資料庫角色與第二個資料庫、項目） |
+| `dirs-catalog.sh <a\|b> install\|remove\|status` | 以 root 安裝或移除 woowbk-dirs 的受信任目錄項目（`/etc/woowtech-cockpit/backup/apps/woowbk-dirs.json`）與 Quadlet 範本，並列出已安裝引擎對它的判斷（沒有主機資料夾支援的引擎回報「不支援的欄位：data_dirs」並略過此應用） |
+| `teardown-dirs.sh <a\|b> [--keep-image]` | 以擁有者身分移除整個 woowbk-dirs 部署（停止並解除遮蔽服務、測試 drop-in、Quadlet、容器、密鑰、網路、設定檔、兩個主機資料夾與其 `.woowbk-new-*`／`.woowbk-old-*`、應用映像），列出剩下的東西（必須是空的）；備份與目錄項目不動 |
+| `subids.sh <a\|b> [START:COUNT --reset-storage]` | 顯示 appowner 的 subuid／subgid 與實際 `uid_map`；給範圍時先拆除兩個示範應用、確認家目錄沒有其他 ID 的檔案，再以舊對應 `podman system reset`、改寫 `/etc/subuid`／`/etc/subgid`、`podman system migrate` 並核對新對應（之後映像要重新取得或由備份還原）。`woowbk-provision` 會保留設備上有效的範圍 |
+| `verify-device.sh <a\|b> [--no-browser]` | 實測：systemd `running`、Cockpit socket、user manager、巢狀 podman（alpine、uid map 等於設備 `/etc/subuid` 的範圍、`--memory`）、Quadlet 產生器、Playwright 登入並開啟管理員存取 |
 | `cockpit-login.mjs <a\|b>` | Playwright：HTTPS 登入 devadmin → 開啟管理員存取 → `cockpit.spawn(['id','-u'], {superuser:'require'})` 必須為 0；截圖存於 `~/.woowbk-lab/evidence/lab/`（只在未輸入密碼或密碼欄消失後截圖） |
-| `status.sh` | 兩台設備的狀態、systemd、記憶體、示範應用 `/healthz` |
+| `status.sh` | 兩台設備的狀態、systemd、記憶體、subuid 範圍、兩個示範應用的 `/healthz`（`demo-healthz` 18090、`dirs-healthz` 18091；000 為未部署或停止） |
 
 離線夾具測試：`python3 -B -m unittest discover -s tests/e2e -p 'test_*.py' -v`。
 
@@ -107,6 +112,40 @@ dev-b 重設為全新目標，`fresh` 結束時 dev-b 和 cli_e2e s2 之後一�
 
 `H1_CASES`、`H3_FAULTS`、`H4_KILLS`、`H5_PHASE`、`H6_FILES`、`H7_FULL=0`、`H2_TMPFS` 環境變數可只跑一部分。
 
+## 主機資料夾情境（dirs_e2e.py，D1–D6）
+
+`python3 -I tests/e2e/lab/dirs_e2e.py <prep|selftest|d1|d2|d3|d4|d5|d6|leaks|all>`，證據寫入
+`~/.woowbk-lab/evidence/dirs/<時間>-<情境>/`（`driver.log`、`result.json`、作業紀錄），跨情境的狀態（來源備份 ID、
+下載檔、備份時的快照）在 `~/.woowbk-lab/evidence/dirs/state.json`。呼叫方式與 `cli_e2e.py` 相同（已安裝的 helper、
+root、stdin JSON；下載／上傳走設備內真正的 `cockpit-bridge`）。夾具是 `catalog-examples/woowbk-dirs`：PostgreSQL 16
+的資料目錄是主機資料夾（容器內 UID 70，冷備份：不列 `postgres`、資料庫服務也在 `writer_units`），應用以容器內 UID 33
+寫入另一個主機資料夾（巢狀資料夾、符號連結、硬連結、`user.*` 延伸屬性、WAL 模式的 SQLite、中文與空白檔名、0444
+檔案、空資料夾）。比對以應用的 `/api/summary`（9 個值）之外，另比對完整的資料夾清單（`app/treelist.py`：類型、容器內
+擁有者、權限、大小、sha256、整秒修改時間、連結目標、延伸屬性、硬連結）、兩個資料庫的資料列與角色／擁有者／叢集識別碼，
+以及 SQLite 的資料列；清單在擁有者的使用者命名空間內讀取（`podman unshare`），應用停止或被遮蔽時也能比對。
+
+前置條件（`prep` 逐項檢查，缺目錄項目時自動執行 `dirs-catalog.sh <a|b> install`，dev-a 應用不健康時執行
+`deploy-dirs.sh a`）：兩台設備執行中、主機可用記憶體 ≥ 1200 MB；**已安裝含主機資料夾支援的引擎**（`deploy-src.sh a`、
+`deploy-src.sh b`）；dev-a 的 woowbk-dirs 健康且 `tools/check.py` 通過；dev-b 的 subuid／subgid 範圍與 dev-a 不同
+（`subids.sh b 10500:55000 --reset-storage`）；dev-a 的設備金鑰與緊急金鑰檔 `~/.woowbk-lab/secrets/dev-a-kit.txt`
+（`cli_e2e.py s1` 建立）。`all` 依序執行 `prep d1 d3 d4 d5 d6 d2 leaks`，`prep` 未通過就停止。
+
+| 情境 | 內容 |
+| --- | --- |
+| `prep` | 前置條件（見上） |
+| `selftest` | 不需要引擎的新功能：使用者命名空間清單等於應用的 `/api/tree`、主機上的擁有者依 `uid_map` 換算、D4 的狀態注入（在暫存資料夾）、D4 的整棵行程樹終止（替身 systemd 單元，其中 `podman unshare` 的子行程被 podman 移到使用者的 scope，`systemctl kill` 殺不到它）、D5 的惡意 tar 產生器對已安裝引擎的巢狀檢查（每一種都被拒絕、原始 tar 通過） |
+| `d1` | dev-a 原位：植入 → 備份（不含映像；寫入服務含資料庫都停止，`/healthz` 期間中斷，`downtime_seconds` > 0）→ inspect（`data_dirs` 列出兩個路徑、沒有 pg_dump 資料庫、快照等於備份前）→ 變更所有種類的狀態（兩個資料庫的資料列、新角色與新資料庫、UID 33 檔案的權限／延伸屬性／符號連結／多一個檔案、刪除空資料夾、擁有者的檔案、SQLite、設定檔）→ 原位還原 → 摘要、完整清單、資料庫與 SQLite 等於備份時；容器內與主機上的擁有者；沒有 `.woowbk-*` 旁資料夾（舊內容在成功後刪除）；新角色與新資料庫消失；應用可寫入；還原前備份含兩個主機資料夾；同設備的 woowbk-demo 不受影響 |
+| `d2` | 跨設備全新部署：dev-a 含映像備份 → bridge 下載 → dev-b 以 `teardown-dirs.sh` 拆除 → 上傳 → 無金鑰 `key-required` → 緊急金鑰 inspect（來源 UID 1001、預檢 fresh）→ 還原 → dev-b 的摘要、完整清單（含容器內 UID 0／33／70、權限、修改時間、延伸屬性、硬連結）、資料庫（含叢集識別碼與角色）與 SQLite 等於 dev-a 備份時；主機上的擁有者依 **dev-b** 的對應（33 → 10532、70 → 10569，與 dev-a 的 10032／10069 不同）；缺少的上層資料夾由擁有者（1007）建立；應用以還原的 `dirs_app` 密碼寫入新資料 |
+| `d3` | 備份 → 變更 → 以一次性的 drop-in 讓資料庫服務在還原的 `start` 階段（資料夾已對調之後）啟動失敗 → 自動回復：狀態 `rolled-back`，資料（摘要、清單、資料庫、SQLite）等於**還原前**而非備份，服務已解除遮蔽；沒有 `.woowbk-new-*`，回復保留的 `.woowbk-old-*`（舊內容只在作業成功後刪除）必須寫在作業的注意事項或紀錄中，且資料夾的那一份等於還原前的內容（之後由測試刪除） |
+| `d4` | 三種強制終止（整棵行程樹 SIGSTOP＋SIGKILL，再 `systemctl kill`，所以沒有任何 helper 能在之後完成改名）：`extract`（第一個 `.woowbk-new-*` 出現時，正在解開）、`between`（資料夾 `woowbk-dirs/data` 的新內容出現時終止，再以擁有者身分把現場整理成「兩次改名之間」：`<路徑>` 不存在、`.woowbk-old-<作業>` 是原內容、`.woowbk-new-<作業>` 是新內容；改名之間只有微秒，無法可靠地在那一刻終止，所以用狀態注入）、`after-swap`（作業進入 `start` 階段時）。之後 `job-status` 觸發復原：作業 `interrupted` 並指出還原前備份、每個宣告的資料夾都存在、沒有 `.woowbk-new-*`、`between` 的原資料夾被移回（清單等於還原前）、整理過的資料夾都寫在作業訊息或紀錄中；保留的 `.woowbk-old-*` 必須有說明。最後還原還原前備份，資料等於終止前。`D4_CASES=extract,between` 可只跑一部分 |
+| `d5` | 在 dev-a **設備內**以設備金鑰解開一份新的基礎備份，把 `woowbk-dirs/data` 的資料夾 tar 換成惡意版本（所有真實項目之後加上：絕對符號連結＋其下的檔案、離開資料夾的相對符號連結＋其下的檔案、絕對路徑、`..`、PAX path 覆寫、檔案之下的項目、指向資料夾外的硬連結、裝置檔、UID 60000（超出命名空間）、重複項目），修正 manifest 的大小與 sha256 後以設備公鑰重新加密（主機只拿到密文）。每一種都經 bridge 上傳 → 還原：必須在任何變更之前被拒絕（`incompatible`／`corrupt-archive`，安全備份與停止都沒有執行）、資料與兩個資料夾不變、找不到任何 `woowbk-d5-planted` 路徑、`~/.config/systemd/user` 與 `~/.config/containers` 不變。另有兩個授權規則案例：manifest 多列一個本機目錄沒有的資料夾（`woowbk-d5-planted-undeclared`、`.config/systemd/user`）→ 被拒絕，或還原成功但完全不寫入該路徑。`D5_CASES` 可只跑一部分 |
+| `d6` | dev-b 全新部署目標上已存在**有內容**的 `woowbk-dirs/data`（另一次是 PostgreSQL 資料夾）→ inspect 的預檢不可還原並指出路徑、還原作業在預檢以 `incompatible` 失敗 → 資料夾內容、部署痕跡（Quadlet、密鑰、設定檔、另一個資料夾）都沒有變；已存在但**空的**資料夾只記錄預檢結果 |
+| `leaks` | 兩台設備的作業紀錄、日誌、索引、requests、journal 沒有 woowbk-dirs 的三個密鑰或 age 金鑰；主機的 dirs 證據沒有金鑰 |
+
+2026-11-13 已實測（引擎尚未支援主機資料夾，設備上是 2026.11.12.4）：`selftest` 21/21 通過；`prep` 16/18，未通過的
+兩項就是「已安裝引擎不支援 `data_dirs`」，跑完後已以 `dirs-catalog.sh a|b remove` 移除目錄項目，其他測試者的狀態頁不會多出
+提示。d1–d6 與 `leaks` 需要新引擎，由整合者在 `deploy-src.sh a`、`deploy-src.sh b` 之後執行。
+
 ## 作業紀錄競態探測（race probe）
 
 `python3 -I tests/e2e/lab/race_probe.py <a|b> [--jobs 110] [--pollers 3] [--settle 0.5] [--census-only]`，
@@ -126,9 +165,9 @@ dev-b 重設為全新目標，`fresh` 結束時 dev-b 和 cli_e2e s2 之後一�
 
 * **巢狀儲存**：appowner 的儲存在 `/home` 資料卷（主機 ext4），`podman info` 為 `overlay`、
   `Native Overlay Diff: true`、`Backing Filesystem: extfs`，不需要 fuse-overlayfs（仍已安裝並傳入 `/dev/fuse`）。
-* **subuid/subgid**：`appowner:10000:55000`。設備容器本身只對應 65536 個 ID（0–65535），useradd 預設的
+* **subuid/subgid**：dev-a `appowner:10000:55000`，dev-b `appowner:10500:55000`（2026-11-13 以 `subids.sh` 設定，跨設備還原時容器帳號的檔案在兩台設備上的主機 ID 不同；`woowbk-provision` 保留它）。設備容器本身只對應 65536 個 ID（0–65535），useradd 預設的
   `100000:65536` 在設備內無效，`woowbk-provision` 會改寫兩個檔案。巢狀容器對應為 `0→<appowner uid>`、
-  `1..55000→10000..64999`，避開真實帳號（0–9999）與 nobody（65534）。映像中若有 UID > 55000 的檔案無法使用。
+  `1..55000→10000..64999`（dev-b：`10500..65499`），避開真實帳號（0–9999）與 nobody（65534）。映像中若有 UID > 55000 的檔案無法使用。
 * **cgroup**：v2，systemd 管理；`cpu memory pids` 委派到 `user@<uid>.service`，巢狀容器的 `--memory` 有效
   （實測 alpine `memory.max=67108864`）。示範應用的 Quadlet 以 `PodmanArgs=--memory` 限制 256m／128m。
 * **網路**：rootless 巢狀容器用 netavark＋aardvark-dns（名稱解析）＋slirp4netns，可連外網拉取映像；

@@ -251,9 +251,19 @@ class Services:
         """Remove the unfinished fresh deployments a dead restore left; returns zh-TW problems."""
         return flows.remove_fresh_apps(self.deps, app_ids)
 
+    def settle_dirs(self, job_id, app_ids):
+        """Settle the host-directory siblings a dead restore left; returns zh-TW notes."""
+        return flows.settle_dirs(self.deps, job_id, app_ids)
+
     def recover(self):
         return jobmod.recover_interrupted(self.paths, unit_active=self.unit_active,
-                                          restart_writers=self.restart_writers, cleanup_fresh=self.cleanup_fresh)
+                                          restart_writers=self.restart_writers, cleanup_fresh=self.cleanup_fresh,
+                                          settle_dirs=self.settle_dirs)
+
+    def start(self, job_type, params, request_id, **kwargs):
+        return jobmod.start_job(self.paths, job_type, params, request_id, launcher=self.launcher,
+                                unit_active=self.unit_active, restart_writers=self.restart_writers,
+                                cleanup_fresh=self.cleanup_fresh, settle_dirs=self.settle_dirs, **kwargs)
 
     def key_ids(self):
         return {info.key_id for info in self.keys.identities()}
@@ -317,15 +327,22 @@ def app_views(svc, apps, backups):
         return list(pool.map(lambda app: app_view(svc, app, backups), apps))
 
 
-def manifest_summary(manifest):
+def manifest_summary(manifest, catalog=None):
+    """ManifestSummary (CONTRACT section 7). `data_dirs[]`: host directories in the backup, `path` relative to the
+    owner's home, `size` of their tar entry, `label` from this device's catalog when it declares the same path."""
+    sizes = {e.get('path'): e.get('size', 0) for e in manifest.get('entries') or [] if isinstance(e, dict)}
     apps = []
     for app in manifest.get('apps') or []:
+        local = (catalog or {}).get(app['id'])
+        labels = {d['path']: d.get('label', '') for d in getattr(local, 'data_dirs', ()) or ()}
         apps.append({
             'id': app['id'], 'name': app['name'], 'adapter': app['adapter'],
             'owner': {'name': app['owner']['name'], 'uid': app['owner']['uid']},
             'images': [{'ref': img['ref'], 'included': 'entry' in img} for img in app.get('images') or []],
             'postgres': [{'id': p['id'], 'database': p['database'], 'major': p['major']} for p in app.get('postgres') or []],
             'volumes': [{'name': v['name']} for v in app.get('volumes') or []],
+            'data_dirs': [{'path': d['path'], 'size': int(sizes.get(d['entry']) or 0), 'label': labels.get(d['path'], '')}
+                          for d in app.get('data_dirs') or []],
             'secrets_count': len(app.get('secrets') or []), 'config_files_count': len(app.get('config_files') or []),
             'verify_snapshot': app.get('verify_snapshot') or {},
         })
@@ -420,7 +437,7 @@ def cmd_inspect(svc, req):
         manifest = svc.archive.read_manifest(path, identities)
     if key_text is not None and req.get('save_key'):
         svc.keys.import_key(key_text)
-    summary = manifest_summary(manifest)
+    summary = manifest_summary(manifest, svc.catalog())
     preflight = build_preflight(svc, manifest)
     meta = svc.storage.update(
         backup_id, created=manifest['created'], note=manifest['note'],
@@ -460,17 +477,13 @@ def cmd_backup_start(svc, req):
         raise BackupError('no-device-key', '這台設備尚未建立加密金鑰，請先完成金鑰設定。')
     params = {'apps': list(req['apps']), 'include_images': bool(req.get('include_images', False)),
               'note': req.get('note', '')}
-    return jobmod.start_job(svc.paths, 'backup', params, req['request_id'], launcher=svc.launcher,
-                            unit_active=svc.unit_active, restart_writers=svc.restart_writers,
-                            cleanup_fresh=svc.cleanup_fresh)
+    return svc.start('backup', params, req['request_id'])
 
 
 def cmd_verify_start(svc, req):
     svc.storage.get(req['backup_id'])
     params = {'backup_id': req['backup_id'], 'key_provided': 'key' in req}
-    return jobmod.start_job(svc.paths, 'verify', params, req['request_id'], key_text=req.get('key'),
-                            launcher=svc.launcher, unit_active=svc.unit_active,
-                            restart_writers=svc.restart_writers, cleanup_fresh=svc.cleanup_fresh)
+    return svc.start('verify', params, req['request_id'], key_text=req.get('key'))
 
 
 def cmd_restore_start(svc, req):
@@ -487,9 +500,7 @@ def cmd_restore_start(svc, req):
     params = {'backup_id': req['backup_id'], 'apps': list(req['apps']), 'key_provided': key_text is not None}
     if req.get('allow_no_safety'):
         params['allow_no_safety'] = True
-    return jobmod.start_job(svc.paths, 'restore', params, req['request_id'], key_text=key_text,
-                            launcher=svc.launcher, unit_active=svc.unit_active,
-                            restart_writers=svc.restart_writers, cleanup_fresh=svc.cleanup_fresh)
+    return svc.start('restore', params, req['request_id'], key_text=key_text)
 
 
 def cmd_job_status(svc, req):
