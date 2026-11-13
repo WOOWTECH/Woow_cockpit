@@ -1,0 +1,7 @@
+# woowbk-demo private network (rootless Quadlet template, test fixture).
+# Installed into ~appowner/.config/containers/systemd/; generates woowbk-demo-network.service.
+[Unit]
+Description=woowbk-demo network
+
+[Network]
+NetworkName=woowbk-demo

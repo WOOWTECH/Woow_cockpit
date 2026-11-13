@@ -1,0 +1,15 @@
+#!/bin/sh
+# Run a command as appowner the way the backup engine does (runuser + fixed environment).
+#   woowbk-owner podman ps
+#   woowbk-owner systemctl --user status woowbk-demo-app.service
+set -eu
+OWNER=appowner
+uid=$(id -u "$OWNER")
+home=$(getent passwd "$OWNER" | cut -d: -f6)
+[ "$#" -gt 0 ] || set -- /bin/bash -l
+cd "$home"
+exec /usr/sbin/runuser -u "$OWNER" -- /usr/bin/env -i \
+    PATH=/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin HOME="$home" USER="$OWNER" LOGNAME="$OWNER" \
+    LANG=C.UTF-8 TERM="${TERM:-dumb}" \
+    XDG_RUNTIME_DIR="/run/user/$uid" DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$uid/bus" \
+    "$@"

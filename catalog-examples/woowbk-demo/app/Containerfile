@@ -1,0 +1,11 @@
+# woowbk-demo application image (backup/restore test fixture, not a product).
+# Built as the app owner inside a lab device:
+#   podman build -t localhost/woowbk-demo-app:1 <fixture>/app
+# The image only exists locally (localhost/...), which is what the "missing image" restore
+# scenario relies on: a backup without images cannot be restored where this image is absent.
+FROM docker.io/library/python:3.12-alpine
+RUN pip install --no-cache-dir --disable-pip-version-check --root-user-action=ignore pg8000==1.31.2
+COPY app.py /app/app.py
+ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 PORT=8080
+EXPOSE 8080
+CMD ["python3", "/app/app.py"]

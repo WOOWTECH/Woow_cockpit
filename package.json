@@ -1,10 +1,10 @@
 {
   "name": "woowtech-cockpit-validation",
-  "version": "2026.11.12",
+  "version": "2026.11.13",
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "node --test tests/managed-owners.mjs && node tests/preview.mjs && node tests/services-ui.mjs",
+    "test": "node --test tests/managed-owners.mjs && node tests/preview.mjs && node tests/services-ui.mjs && node tests/backup-ui.mjs",
     "capture": "node scripts/capture.mjs"
   },
   "devDependencies": { "playwright-core": "1.58.2" },

@@ -1,0 +1,30 @@
+# woowbk-demo notes application (rootless Quadlet template, test fixture).
+# Image localhost/woowbk-demo-app:1 exists only where it was built or restored from a backup.
+[Unit]
+Description=woowbk-demo notes application
+Requires=woowbk-demo-db.service
+After=woowbk-demo-db.service
+
+[Container]
+ContainerName=woowbk-demo-app
+Image=localhost/woowbk-demo-app:1
+Network=woowbk-demo.network
+PublishPort=127.0.0.1:18090:8080
+Volume=woowbk-demo-files:/data
+Secret=woowbk-demo-db-password
+Secret=woowbk-demo-app-key
+EnvironmentFile=%h/.config/woowbk-demo/app.env
+Environment=DB_HOST=woowbk-demo-db DB_NAME=notes DB_USER=notes
+HealthCmd=python3 /app/app.py --healthcheck
+HealthInterval=30s
+HealthTimeout=10s
+HealthRetries=5
+HealthStartPeriod=30s
+PodmanArgs=--memory 128m
+
+[Service]
+Restart=on-failure
+TimeoutStartSec=300
+
+[Install]
+WantedBy=default.target

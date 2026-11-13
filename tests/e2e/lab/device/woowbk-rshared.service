@@ -1,0 +1,15 @@
+# systemd skips `mount --make-rshared /` inside containers; rootless Podman then warns on every
+# command ("/" is not a shared mount). Real hosts have / shared, so restore that here.
+[Unit]
+Description=Make / a shared mount for rootless Podman (lab device)
+DefaultDependencies=no
+After=local-fs.target
+Before=sysinit.target user@.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/bin/mount --make-rshared /
+
+[Install]
+WantedBy=sysinit.target

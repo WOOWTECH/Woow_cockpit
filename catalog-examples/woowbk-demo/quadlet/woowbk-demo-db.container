@@ -1,0 +1,27 @@
+# woowbk-demo PostgreSQL 16 (rootless Quadlet template, test fixture).
+# The backup engine reaches this container by name (catalog postgres[].container) for
+# pg_isready / pg_dump / pg_restore over the local socket; the data volume is recreated on restore.
+[Unit]
+Description=woowbk-demo PostgreSQL database
+
+[Container]
+ContainerName=woowbk-demo-db
+Image=docker.io/library/postgres:16-alpine
+Network=woowbk-demo.network
+Volume=woowbk-demo-pgdata:/var/lib/postgresql/data
+Environment=POSTGRES_USER=notes POSTGRES_DB=notes
+Secret=woowbk-demo-db-password,type=env,target=POSTGRES_PASSWORD
+HealthCmd=pg_isready -h 127.0.0.1 -p 5432 -U notes -d notes
+HealthInterval=30s
+HealthTimeout=5s
+HealthRetries=5
+HealthStartPeriod=20s
+PodmanArgs=--memory 256m
+
+[Service]
+Restart=on-failure
+# The first start may pull the image.
+TimeoutStartSec=900
+
+[Install]
+WantedBy=default.target

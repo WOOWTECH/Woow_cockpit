@@ -1,0 +1,9 @@
+# Test runner for the backup engine unit tests (team E1).
+# Ubuntu 24.04 ships age 1.1.1 and zstd, the same tools production devices use.
+# Build only with the isolated lab storage:
+#   ~/.woowbk-lab/bin/labpodman build --memory 512m -t localhost/woowbk-testrunner:noble \
+#       -f tests/backup/Containerfile.testrunner tests/backup
+FROM docker.io/library/ubuntu:24.04
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends python3 age zstd ca-certificates \
+ && rm -rf /var/lib/apt/lists/*
