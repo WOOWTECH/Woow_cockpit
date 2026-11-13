@@ -13,7 +13,7 @@
 // screenshot is taken while a password or key is on screen. Evidence: ~/.woowbk-lab/evidence/integration/ui-*.
 import { spawnSync } from 'node:child_process';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
-import { createReadStream, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { chmodSync, createReadStream, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { chromium } from 'playwright-core';
@@ -235,13 +235,18 @@ async function scenarioS1(browser) {
     const dlStart = Date.now();
     const [download] = await Promise.all([page.waitForEvent('download', { timeout: 120000 }),
       frame.locator('[data-focus="result-download"]').click()]);
+    mkdirSync(join(LAB, 'downloads'), { recursive: true, mode: 0o700 });
     const target = join(LAB, 'downloads', `ui-${download.suggestedFilename()}`);
     await download.saveAs(target);
+    // saveAs copies with the default umask (0644 here); a downloaded backup stays private to the lab user.
+    chmodSync(target, 0o600);
     timings.ui_download_s = Math.round((Date.now() - dlStart) / 100) / 10;
     const digest = await sha256File(target);
     check('UI download through cockpit-ws external fsread1 channel: filename, size and sha256 match the index',
       download.suggestedFilename() === meta.filename && statSync(target).size === meta.size && digest === meta.sha256,
       { filename: download.suggestedFilename(), size: statSync(target).size, seconds: timings.ui_download_s });
+    check('the downloaded backup is private to the lab user (0600)', (statSync(target).mode & 0o777) === 0o600,
+      (statSync(target).mode & 0o777).toString(8));
     const actionError = (await frame.locator('#action-error').textContent().catch(() => '')).trim();
     check('UI download is not reported as an error', actionError === '', actionError);
 

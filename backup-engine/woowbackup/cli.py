@@ -15,6 +15,7 @@ import secrets
 import sys
 import threading
 import traceback
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import ExitStack
 
 from . import flows
@@ -30,6 +31,7 @@ KEY_ID_RE = re.compile(r'[0-9A-F]{4}(?:-[0-9A-F]{4}){3}\Z')
 APP_ID_RE = re.compile(r'[a-z0-9][a-z0-9-]{1,40}\Z')
 CONTROL_RE = re.compile(r'[\x00-\x1f\x7f-\x9f]')
 GENERIC_ERROR = '發生未預期的內部錯誤，請查看系統日誌。'
+STATUS_WORKERS = 8  # apps probed (and health-hinted) at the same time by `status`
 
 
 # ---------------------------------------------------------------- request validation
@@ -305,6 +307,16 @@ def app_view(svc, app, backups):
             'units': info['units'], 'last_backup': last, 'problems': list(info['problems'])}
 
 
+def app_views(svc, apps, backups):
+    """app_view of every app, several at a time: each quick health request is bounded (review finding HD-07), and
+    running them side by side keeps `status` within the page's timeout with many apps."""
+    apps = list(apps)
+    if len(apps) <= 1:
+        return [app_view(svc, app, backups) for app in apps]
+    with ThreadPoolExecutor(max_workers=min(STATUS_WORKERS, len(apps)), thread_name_prefix='woowbackup-status') as pool:
+        return list(pool.map(lambda app: app_view(svc, app, backups), apps))
+
+
 def manifest_summary(manifest):
     apps = []
     for app in manifest.get('apps') or []:
@@ -380,7 +392,7 @@ def cmd_status(svc, _req):
         'storage': storage_usage(svc.storage, backups),
         'key': key_view(svc.keys.device_key()),
         'imported_keys': [{'key_id': k.key_id, 'created': k.created} for k in identities if k.kind == 'imported'],
-        'apps': [app_view(svc, app, backups) for app in catalog.values()],
+        'apps': app_views(svc, catalog.values(), backups),
         'active_job': jobmod.public_job(active) if active else None,
         'warnings': [p['message'] for p in getattr(catalog, 'problems', [])],
     }

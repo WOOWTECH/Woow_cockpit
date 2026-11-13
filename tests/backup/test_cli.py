@@ -197,6 +197,31 @@ class StatusTests(CliCase):
         self.assertIn('HTTP 503', demo['problems'][-1])
         self.assertEqual(self.call(['status'])['apps'][1]['state'], 'running')
 
+    def test_hd07_apps_are_probed_side_by_side(self):
+        # Each status call probes every app and sends one bounded health request per running app; with many
+        # apps they run concurrently, so one slow app no longer adds up with the others (review finding HD-07).
+        import threading
+        import time
+        from .test_flows import FakeAdapter
+        threads = set()
+
+        def slow_hint(adapter):
+            threads.add(threading.current_thread().name)
+            time.sleep(1.0)
+            return None
+        original = FakeAdapter.health_hint
+        FakeAdapter.health_hint = slow_hint
+        try:
+            start = time.monotonic()
+            response = self.call(['status'])
+            elapsed = time.monotonic() - start
+        finally:
+            FakeAdapter.health_hint = original
+        self.assertTrue(response['ok'])
+        self.assertEqual([app['id'] for app in response['apps']], ['woowbk-demo', 'woowbk-two'], 'catalog order kept')
+        self.assertEqual(len(threads), 2)
+        self.assertLess(elapsed, 1.8, f'{elapsed:.2f} s for two apps of 1 s each')
+
     def test_list_shape(self):
         self.make_backup()
         response = self.call(['list'])

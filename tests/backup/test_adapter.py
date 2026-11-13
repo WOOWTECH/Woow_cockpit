@@ -4,17 +4,20 @@ Asserts the exact argv of every owner command, that secrets never reach argv/env
 writers are restarted whatever fails, when restores become destructive, and the preflight rules.
 """
 import http.server
+import io
 import json
 import os
+import socket
 import shutil
 import tarfile
 import tempfile
 import threading
+import time
 import types
 import unittest
 from pathlib import Path
 
-from woowbackup import catalog, podman
+from woowbackup import catalog, nested, podman
 from woowbackup.adapters import get_adapter
 from woowbackup.adapters import quadlet_postgres as qp
 from woowbackup.errors import BackupError
@@ -58,9 +61,51 @@ def psql(sql, database='notes'):
             '-d', database, '-c', sql]
 
 
-DATABASES_SQL = 'SELECT datname FROM pg_database WHERE NOT datistemplate ORDER BY 1'
+DATABASES_SQL = "SELECT datname FROM pg_database WHERE datname NOT IN ('template0', 'template1') ORDER BY 1"
 ROLES_SQL = "SELECT rolname FROM pg_roles WHERE rolname !~ '^pg_' AND rolname <> current_user ORDER BY 1"
-SCOPE = [psql(DATABASES_SQL, 'postgres'), psql(ROLES_SQL, 'postgres')]
+ALL_DATABASES_SQL = 'SELECT datname FROM pg_database ORDER BY 1'
+# Review HD-06: the shared catalogs are read through the app's own database (the one pg_dump uses), not `postgres`.
+SCOPE = [psql(DATABASES_SQL), psql(ROLES_SQL)]
+MAINTENANCE_SQL = (  # the exact query (golden argv); test_hd06_* checks the engine still sends it
+    "SELECT (SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace "
+    "WHERE c.relkind IN ('r', 'p', 'v', 'm', 'S', 'f') AND n.nspname NOT IN ('pg_catalog', 'information_schema') "
+    "AND n.nspname !~ '^pg_(toast|temp)') + (SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON "
+    "n.oid = p.pronamespace WHERE n.nspname NOT IN ('pg_catalog', 'information_schema')) + "
+    "(SELECT count(*) FROM pg_extension WHERE extname <> 'plpgsql')")
+MAINTENANCE = [psql(ALL_DATABASES_SQL), psql(MAINTENANCE_SQL, 'postgres')]
+ID_MAPS = [[PODMAN, 'unshare', 'cat', '/proc/self/uid_map'], [PODMAN, 'unshare', 'cat', '/proc/self/gid_map']]
+LAB_ID_MAP = '         0       1001          1\n         1      10000      55000\n'  # appowner:10000:55000 (lab)
+
+
+def _split_ref(ref):
+    name, _, digest = ref.partition('@')
+    slash, colon = name.rfind('/'), name.rfind(':')
+    tag = None
+    if colon > slash:
+        name, tag = name[:colon], name[colon + 1:]
+    first, _, rest = name.partition('/')
+    if rest and ('.' in first or ':' in first or first == 'localhost'):
+        return first, rest, tag, digest or None
+    return None, name, tag, digest or None
+
+
+def _join_ref(registry, path, tag, digest):
+    if registry == 'docker.io' and '/' not in path:
+        path = f'library/{path}'
+    name = f'{registry}/{path}'
+    return f'{name}@{digest}' if digest else f'{name}:{tag or "latest"}'
+
+
+def podman_name(ref):
+    """The name podman 4.9 stores a ref under (libimage NormalizeName): a short name gets `localhost/`."""
+    registry, path, tag, digest = _split_ref(ref)
+    return _join_ref(registry or 'localhost', path, tag, digest)
+
+
+def docker_name(ref):
+    """containers/image's docker.io normalization (podman's last fallback for a short name)."""
+    registry, path, tag, digest = _split_ref(ref)
+    return _join_ref(registry or 'docker.io', path, tag, digest)
 
 
 class FakeOwner:
@@ -82,15 +127,29 @@ class FakeOwner:
         self.masked = set()
         self.loaded = []
         self.pullable = set()
+        self.aliases = {}           # short repository -> full repository (registries.conf.d/shortnames.conf)
         self.arch = 'amd64'
         self.db = {'data': DUMP if deployed else b'', 'num': '160015', 'version': '16.15', 'databases': {'notes'},
-                   'roles': []}
+                   'roles': [], 'templates': set(), 'maintenance': 0, 'closed': set()}
+        self.id_map = LAB_ID_MAP
         self.containers = {'woowbk-demo-db': 'woowbk-demo-db.service'}
         self.fail = []
         self.fail_load = set()      # refs whose `podman load` fails
         self.signal_on = None       # (needle, exception): the command runs, then the signal arrives
         self.dump_readable = True   # False: the TOC is intact but the table data is cut off
         self.dump_crashes_db = False  # True: the database shuts down while pg_dump runs
+
+    def resolve(self, name):
+        """The local image a name means, the way podman 4.9.3 looks it up (checked in the lab): as written, then for
+        a short name its alias target (shortnames.conf), `localhost/<short name>`, then Docker Hub (the search
+        registries are not modelled)."""
+        registry, path, tag, digest = _split_ref(name)
+        alias = self.aliases.get(path) if registry is None else None
+        aliased = (f'{alias}@{digest}' if digest else f'{alias}:{tag or "latest"}') if alias else None
+        for candidate in (name, aliased, podman_name(name), docker_name(name)):
+            if candidate and candidate in self.images:
+                return candidate
+        return None
 
     # ------------------------------------------------------------- plumbing
     def __call__(self, argv, *, input=None, stdout=None, timeout=None, cwd=None, env=None, max_output=None):
@@ -229,16 +288,23 @@ class FakeOwner:
                 return missing
             if tool[0] == 'psql':
                 sql = tool[tool.index('-c') + 1]
+                if tool[tool.index('-d') + 1] in self.db['closed']:  # e.g. REVOKE CONNECT, or the database is gone
+                    return podman.Result(2, b'', b'psql: error: FATAL:  permission denied for database')
                 if sql == 'SHOW server_version_num':
                     value = self.db['num']
                 elif sql == 'SHOW server_version':
                     value = self.db['version']
                 elif 'pg_database_size' in sql:
                     value = '8000000'
-                elif 'FROM pg_database WHERE datname' in sql:
+                elif sql.startswith('SELECT 1 FROM pg_database WHERE datname'):
                     value = '1' if 'notes' in self.db['databases'] else ''
                 elif sql == DATABASES_SQL:
-                    value = '\n'.join(sorted(self.db['databases'] | {'postgres'}))
+                    value = '\n'.join(sorted(self.db['databases'] | {'postgres'} | self.db['templates']))
+                elif sql == ALL_DATABASES_SQL:
+                    value = '\n'.join(sorted(self.db['databases'] | {'postgres', 'template0', 'template1'}
+                                             | self.db['templates']))
+                elif sql == MAINTENANCE_SQL:
+                    value = str(self.db['maintenance'])
                 elif sql == ROLES_SQL:
                     value = '\n'.join(self.db['roles'])
                 else:
@@ -312,6 +378,8 @@ class FakeOwner:
                 return self.out(0, f'/home/appowner/.local/share/containers/storage/volumes/{args[-1]}/_data\n'.encode(),
                                 stdout)
         if cmd == 'unshare':
+            if args[1:3] == ['cat', '/proc/self/uid_map'] or args[1:3] == ['cat', '/proc/self/gid_map']:
+                return self.out(0, self.id_map.encode(), stdout)
             if args[1:4] == ['du', '-s', '--inodes']:
                 assert args[4] == '--'
                 return self.out(0, b'7\t' + args[5].encode() + b'\n', stdout)
@@ -320,35 +388,37 @@ class FakeOwner:
         if cmd == 'image':
             verb, target = args[1], args[-1]
             if verb == 'inspect':
-                if target not in self.images:
+                name = self.resolve(target)
+                if name is None:
                     return missing
-                info = [{'Id': self.images[target][7:], 'Digest': 'sha256:' + 'd' * 64, 'Architecture': self.arch,
-                         'Size': 1000, 'Config': {'Env': self.image_env.get(target, [])}}]
+                info = [{'Id': self.images[name][7:], 'Digest': 'sha256:' + 'd' * 64, 'Architecture': self.arch,
+                         'Size': 1000, 'Config': {'Env': self.image_env.get(name, [])},
+                         'RepoTags': sorted(n for n, i in self.images.items() if i == self.images[name])}]
                 return self.out(0, json.dumps(info).encode(), stdout)
             if verb == 'exists':
-                found = target in self.images or 'sha256:' + target in self.known_ids
+                found = self.resolve(target) is not None or 'sha256:' + target in self.known_ids
                 return podman.Result(0 if found else 1, b'', b'')
-        if cmd == 'tag':
-            self.images[args[2]] = 'sha256:' + args[1]
+        if cmd == 'tag':  # podman names a short ref localhost/<ref>
+            self.images[podman_name(args[2])] = 'sha256:' + args[1]
             return ok
         if cmd == 'untag':
             assert args[1] == args[2]
-            self.images.pop(args[1], None)
+            self.images.pop(podman_name(args[1]), None)
             return ok
         if cmd == 'save':
             assert args[1:4] == ['--quiet', '--format', 'oci-archive']
-            ref = args[-1]
-            data = oci_archive(ref, env=self.image_env.get(ref, []))
-            assert image_id(ref, self.image_env.get(ref, [])) == self.images[ref], 'fake image ids are config digests'
+            name = self.resolve(args[-1])  # podman writes the name the ref resolved to (review finding HD-01)
+            data = oci_archive(name, env=self.image_env.get(name, []))
+            assert image_id(name, self.image_env.get(name, [])) == self.images[name], 'fake image ids are config digests'
             return self.out(0, data, stdout)
         if cmd == 'load':
             assert args[1:] == ['--quiet']
             assert self.input_kind == 'stream', 'podman load only ever reads the canonical stream'
             ref, loaded = read_oci(data)
-            if ref in self.fail_load:
+            if ref in self.fail_load or self.resolve(ref) in self.fail_load:
                 return podman.Result(125, b'', b'Error: payload does not match any of the supported image formats')
             self.loaded.append(tar_listing(data))
-            self.images[ref] = loaded
+            self.images[podman_name(ref)] = loaded
             self.known_ids.add(loaded)
             return self.out(0, f'Loaded image: {ref}\n'.encode(), stdout)
         if cmd == 'pull':
@@ -370,14 +440,20 @@ class FakeHttp:
         self.summary = dict(SUMMARY)
         self.summaries = []  # consumed first: one summary per request
         self.fail_summary = False
+        self.fail_summary_times = 0  # this many summary requests fail first
         self.calls = []
+        self.read_body = []
 
-    def __call__(self, url, timeout):
+    def __call__(self, url, timeout, *, read_body=True):
         self.calls.append(url)
+        self.read_body.append(read_body)
         if url.endswith('/healthz'):
             return self.health_status, b'ok'
         if url.endswith('/api/summary'):
             if self.fail_summary:
+                raise OSError('connection refused')
+            if self.fail_summary_times:
+                self.fail_summary_times -= 1
                 raise OSError('connection refused')
             return 200, json.dumps(self.summaries.pop(0) if self.summaries else self.summary).encode()
         raise OSError('refused')
@@ -458,6 +534,7 @@ GOLDEN_BACKUP = [
     [PODMAN, 'image', 'inspect', PG_REF],
     [PODMAN, 'image', 'inspect', APP_REF],
     *SCOPE,
+    *MAINTENANCE,
     [SYSTEMCTL, '--user', 'stop', '--', 'woowbk-demo-app.service'],
     psql('SHOW server_version_num'),
     psql('SHOW server_version'),
@@ -468,6 +545,7 @@ GOLDEN_BACKUP = [
     [PODMAN, 'secret', 'inspect', '--showsecret', '--format', '{{.SecretData}}', 'woowbk-demo-app-key'],
     helper('read', '.config/woowbk-demo/app.env', '16777216'),
     [SYSTEMCTL, '--user', 'start', '--', 'woowbk-demo-app.service'],
+    *ID_MAPS,  # the export is checked like a restore checks it (review HD-02, HD-03), after the restart
 ]
 
 
@@ -779,6 +857,7 @@ class RestoreTests(AdapterCase):
             helper('read', Q + 'woowbk-demo.network', '1048576'),
             helper('read', Q + 'woowbk-demo-db.container', '1048576'),
             helper('read', Q + 'woowbk-demo-app.container', '1048576'),
+            *ID_MAPS,  # volume member owners must fit the owner's user namespace (review HD-02)
             *SCOPE,  # no undeclared database would be lost (review CR-07)
             [PODMAN, 'image', 'inspect', PG_REF], [PODMAN, 'image', 'inspect', APP_REF],  # tags to restore (CR-10)
             *images,
@@ -883,7 +962,8 @@ class FreshRestoreTests(RestoreTests):
         adapter = self.make_adapter(owner)
         adapter.restore(self.manifest, self.extract, mode='fresh')
         argvs = owner.argvs()
-        self.assertEqual(argvs[:6], [[PODMAN, 'image', 'inspect', PG_REF], [PODMAN, 'image', 'inspect', APP_REF],
+        self.assertEqual(argvs[:8], [*ID_MAPS,
+                                     [PODMAN, 'image', 'inspect', PG_REF], [PODMAN, 'image', 'inspect', APP_REF],
                                      [PODMAN, 'load', '--quiet'], [PODMAN, 'image', 'inspect', PG_REF],
                                      [PODMAN, 'load', '--quiet'], [PODMAN, 'image', 'inspect', APP_REF]])
         for listing in owner.loaded:  # only the canonical OCI layout reached podman load
@@ -1265,6 +1345,359 @@ class ReviewRegressionTests(AdapterCase):
         self.assertIn('HTTP 503', self.adapter.health_hint())
 
 
+SHORT_PG = 'postgres:16-alpine'  # the same image as PG_REF, spelled the way many Quadlet files spell it
+
+
+class DeltaReviewTests(AdapterCase):
+    """Delta review findings HD-01 .. HD-09 of the adapter, one test (or more) each."""
+
+    def backup_and_extract(self, include_images=False, folder='extract'):
+        manifest, entries = self.run_backup(include_images=include_images)
+        extract = self.root / folder
+        extract.mkdir(mode=0o700)
+        extract_entries(entries, extract)
+        return manifest, extract
+
+    def use_short_image_name(self, owner=None):
+        """Image=postgres:16-alpine in the owner's Quadlet file and in the trusted templates."""
+        data = QUADLETS['woowbk-demo-db.container'].replace(PG_REF.encode(), SHORT_PG.encode())
+        for target in [self.owner] + ([owner] if owner else []):
+            if Q + 'woowbk-demo-db.container' in target.files:
+                target.files[Q + 'woowbk-demo-db.container'] = data
+        path = Path(self.app.template_dir) / 'woowbk-demo-db.container'
+        path.write_bytes(data)
+        os.chmod(path, 0o644)
+        return data
+
+    def assert_untouched(self, owner, adapter):
+        ReviewRegressionTests.assert_untouched(self, owner, adapter)
+
+    def test_hd01_an_image_saved_under_its_resolved_name_restores_in_place_and_fresh(self):
+        self.use_short_image_name()
+        manifest, extract = self.backup_and_extract(include_images=True)
+        self.assertEqual([i['ref'] for i in manifest['images']], [SHORT_PG, APP_REF])
+        saved = (extract / manifest['images'][0]['entry']).read_bytes()
+        self.assertEqual(read_oci(saved), (PG_REF, PG_ID), 'podman wrote the resolved name, as 4.9.3 does')
+        # In place, while another image carries the Docker Hub name: preflight (with the extracted archive) is ok,
+        # and the restore loads the archived image under localhost/<ref>, which <ref> resolves to first.
+        owner = FakeOwner()
+        self.use_short_image_name(owner)
+        newer = 'sha256:' + 'c' * 64
+        owner.images[PG_REF] = newer
+        owner.known_ids.add(newer)
+        adapter = self.make_adapter(owner)
+        checks = adapter.preflight(manifest, mode='inplace', extracted_dir=extract)
+        self.assertEqual([c for c in checks if c['status'] == 'fail'], [])
+        adapter.restore(manifest, extract, mode='inplace')
+        self.assertEqual(owner.images['localhost/postgres:16-alpine'], PG_ID)
+        self.assertEqual(owner.images[PG_REF], newer, 'the Docker Hub name of another image is left alone')
+        self.assertEqual(owner.resolve(SHORT_PG), 'localhost/postgres:16-alpine')
+        self.assertEqual(set(owner.units.values()), {'active'})
+        self.assertEqual(adapter.destructive_started, True)
+        # Fresh on a device without the image.
+        fresh = FakeOwner(deployed=False)
+        fresh.images, fresh.known_ids = {}, set()
+        adapter = self.make_adapter(fresh)
+        statuses = {c['id']: c['status'] for c in adapter.preflight(manifest, mode='fresh', extracted_dir=extract)}
+        self.assertNotIn('fail', statuses.values(), statuses)
+        adapter.restore(manifest, extract, mode='fresh')
+        self.assertEqual(fresh.images['localhost/postgres:16-alpine'], PG_ID)
+        self.assertEqual(fresh.db['data'], DUMP)
+
+    def test_hd01_a_load_that_fails_puts_back_the_names_it_moved(self):
+        self.use_short_image_name()
+        manifest, extract = self.backup_and_extract(include_images=True)
+        owner = FakeOwner()
+        self.use_short_image_name(owner)
+        old_pg = 'sha256:' + 'e' * 64
+        owner.images = {PG_REF: old_pg, APP_REF: 'sha256:' + 'f' * 64}
+        owner.known_ids = set(owner.images.values())
+        owner.fail_load = {APP_REF}
+        adapter = self.make_adapter(owner)
+        with self.assertRaises(BackupError):
+            adapter.restore(manifest, extract, mode='inplace')
+        self.assertFalse(adapter.destructive_started)
+        self.assertNotIn('localhost/postgres:16-alpine', owner.images, 'the loaded name was removed again')
+        self.assertEqual(owner.images[PG_REF], old_pg)
+        self.assertEqual(owner.resolve(SHORT_PG), PG_REF)
+
+    def test_hd01_an_aliased_short_name_follows_its_alias_target_and_is_put_back_on_failure(self):
+        """A short name with an alias (shortnames.conf: ubuntu, python, node, ...) resolves to an existing image under
+        the alias target before localhost/<ref> (podman 4.9.3, checked in the lab). With a newer image under that
+        name (e.g. pulled again after the backup) the restore failed as a corrupt archive after the safety backup."""
+        aliases = {'postgres': 'docker.io/library/postgres'}  # stands in for e.g. "node" = "docker.io/library/node"
+        self.use_short_image_name()
+        self.owner.aliases = dict(aliases)
+        manifest, extract = self.backup_and_extract(include_images=True)
+        self.assertEqual(read_oci((extract / manifest['images'][0]['entry']).read_bytes()), (PG_REF, PG_ID))
+        newer = 'sha256:' + 'c' * 64
+
+        def device():
+            owner = FakeOwner()
+            self.use_short_image_name(owner)
+            owner.aliases = dict(aliases)
+            owner.images[PG_REF] = newer
+            owner.known_ids.add(newer)
+            return owner
+
+        # In place: the archived image is loaded and the alias target name follows it.
+        owner = device()
+        self.logs.clear()
+        self.make_adapter(owner).restore(manifest, extract, mode='inplace')
+        self.assertEqual(owner.resolve(SHORT_PG), PG_REF)
+        self.assertEqual(owner.images[PG_REF], PG_ID, 'Image=postgres:16-alpine now runs the restored image')
+        self.assertEqual(owner.images['localhost/postgres:16-alpine'], PG_ID)
+        self.assertIn([PODMAN, 'tag', PG_ID[7:], PG_REF], owner.argvs())
+        self.assertIn(f'已將 {PG_REF}（{SHORT_PG} 的別名目標）指向備份時的映像版本', self.logs)
+        self.assertEqual(set(owner.units.values()), {'active'})
+        # A failure before the first destructive step (the second image's load) puts both names back.
+        owner = device()
+        owner.fail_load = {APP_REF}
+        before = dict(owner.images)
+        adapter = self.make_adapter(owner)
+        with self.assertRaises(BackupError):
+            adapter.restore(manifest, extract, mode='inplace')
+        self.assertFalse(adapter.destructive_started)
+        self.assertEqual(owner.images, before, 'the alias target points at the newer image again, no localhost/ name')
+        # Only the image ids in the backup (no image entries), the recorded image still on the device: the tag path
+        # moves the alias target name the same way.
+        ids_only = json.loads(json.dumps(manifest))
+        for image in ids_only['images']:
+            image.pop('entry', None)
+        owner = device()
+        self.make_adapter(owner).restore(ids_only, extract, mode='inplace')
+        self.assertEqual(owner.images[PG_REF], PG_ID)
+        self.assertEqual(owner.images[owner.resolve(SHORT_PG)], PG_ID)
+        # A name of the other image that does not mean the ref is never moved.
+        owner = device()
+        owner.images['docker.io/library/redis:7'] = newer
+        self.make_adapter(owner).restore(manifest, extract, mode='inplace')
+        self.assertEqual(owner.images['docker.io/library/redis:7'], newer)
+
+    def test_hd01_a_foreign_image_name_fails_preflight_before_the_safety_backup(self):
+        manifest, extract = self.backup_and_extract(include_images=True)
+        (extract / manifest['images'][0]['entry']).write_bytes(
+            oci_archive(PG_REF, env=PG_ENV, annotation='localhost/woowbk-sec-probe-other:9'))
+        owner = FakeOwner()
+        adapter = self.make_adapter(owner)
+        checks = adapter.preflight(manifest, mode='inplace', extracted_dir=extract)
+        failing = [c for c in checks if c['status'] == 'fail']
+        self.assertEqual([c['id'] for c in failing], ['woowbk-demo/image-archive'])
+        self.assertIn('映像名稱與應用需要的不同', failing[0]['message'])
+        self.assertFalse([a for a in owner.argvs() if a[:2] in ([PODMAN, 'load'], [PODMAN, 'tag'], [PODMAN, 'volume'])
+                          or (a[0] == SYSTEMCTL and a[2] in ('stop', 'mask'))], 'preflight changed nothing')
+        # Without the extracted archive (the page's inspect) the nested check cannot run.
+        self.assertNotIn('fail', {c['status'] for c in self.make_adapter(FakeOwner()).preflight(manifest, mode='inplace')})
+
+    def test_hd02_a_symlink_leaving_the_volume_fails_the_backup_after_the_writers_restarted(self):
+        self.owner.volumes['woowbk-demo-files'] = volume_tar([
+            {'name': 'dir/', 'kind': tarfile.DIRTYPE},
+            {'name': 'dir/rel-escape-link', 'kind': tarfile.SYMTYPE, 'linkname': '../../etc/passwd'}])
+        with self.assertRaises(BackupError) as caught:
+            self.run_backup()
+        self.assertEqual(caught.exception.code, 'job-failed')
+        self.assertIn('woowbk-demo-files', caught.exception.message)
+        self.assertIn('指向資料卷外的符號連結：dir/rel-escape-link', caught.exception.message)
+        self.assertIn('沒有建立', caught.exception.message)
+        self.assertEqual(self.owner.units['woowbk-demo-app.service'], 'active')
+        self.assertEqual(self.hook_calls, [['woowbk-demo-app.service'], []])
+
+    def test_hd02_owners_outside_the_target_user_namespace_are_refused_before_any_change(self):
+        manifest, extract = self.backup_and_extract()
+        target = extract / 'apps/woowbk-demo/volumes/woowbk-demo-files.tar'
+        target.write_bytes(volume_tar([{'name': 'big-uid.txt', 'data': b'b', 'uid': 70000, 'gid': 70000}]))
+        owner = FakeOwner()
+        adapter = self.make_adapter(owner)
+        statuses = {c['id']: c for c in adapter.preflight(manifest, mode='inplace', extracted_dir=extract)}
+        self.assertEqual(statuses['woowbk-demo/volume-archive']['status'], 'fail')
+        self.assertIn('UID 70000', statuses['woowbk-demo/volume-archive']['message'])
+        adapter = self.make_adapter(owner)
+        with self.assertRaises(BackupError) as caught:
+            adapter.restore(manifest, extract, mode='inplace')
+        self.assertEqual(caught.exception.code, 'incompatible')
+        self.assert_untouched(owner, adapter)
+        self.assertEqual(owner.volumes['woowbk-demo-files'], VOLUME_TAR)
+        # The overflow ID of an unmapped file fails a backup on the source device already.
+        self.owner.volumes['woowbk-demo-files'] = volume_tar([{'name': 'nobody.txt', 'data': b'n', 'uid': 65534}])
+        with self.assertRaises(BackupError) as caught:
+            self.make_adapter().backup(self.staging / 'nobody', include_images=False)
+        self.assertIn('UID 65534', caught.exception.message)
+
+    def test_hd03_fifos_and_hard_links_to_symlinks_back_up_and_restore(self):
+        export = volume_tar([
+            {'name': 'public/', 'kind': tarfile.DIRTYPE},
+            {'name': 'public/pickup', 'kind': tarfile.FIFOTYPE, 'mode': 0o622},
+            {'name': 'data/', 'kind': tarfile.DIRTYPE},
+            {'name': 'data/sym', 'kind': tarfile.SYMTYPE, 'linkname': '/etc/hostname'},
+            {'name': 'data/sym-hardlink', 'kind': tarfile.LNKTYPE, 'linkname': 'data/sym'}])
+        self.owner.volumes['woowbk-demo-files'] = export
+        manifest, extract = self.backup_and_extract()
+        owner = FakeOwner()
+        adapter = self.make_adapter(owner)
+        adapter.restore(manifest, extract, mode='inplace')
+        imported = {row[0]: row[1] for row in tar_listing(owner.volumes['woowbk-demo-files'])}
+        self.assertEqual((imported['public/pickup'], imported['data/sym-hardlink']), (tarfile.FIFOTYPE, tarfile.LNKTYPE))
+
+    def test_hd03_the_member_cap_is_enforced_when_the_backup_is_made(self):
+        original = nested.MAX_VOLUME_MEMBERS
+        nested.MAX_VOLUME_MEMBERS = 3
+        try:
+            with self.assertRaises(BackupError) as caught:
+                self.run_backup()
+        finally:
+            nested.MAX_VOLUME_MEMBERS = original
+        self.assertEqual(caught.exception.code, 'limit-exceeded')
+        self.assertIn('上限', caught.exception.message)
+        self.assertEqual(self.owner.units['woowbk-demo-app.service'], 'active')
+
+    def test_hd04_the_import_hook_runs_after_the_data_and_before_the_units_are_unmasked(self):
+        manifest, extract = self.backup_and_extract(include_images=True)
+        owner = FakeOwner(deployed=False)
+        owner.images, owner.known_ids = {}, set()
+        seen = []
+        runner = podman.OwnerRunner('appowner', runner=owner, user_lookup=user_lookup)
+        adapter = qp.QuadletPostgresAdapter(
+            self.app, runner, self.logs.append, imported_hook=lambda: seen.append(len(owner.calls)), http_get=self.http,
+            clock=self.clock.now, sleep=self.clock.sleep, runtime_ready=lambda: True, templates_uid=os.getuid())
+        self.assertEqual(adapter.fresh_in_use(), [], 'nothing deployed yet')
+        adapter.restore(manifest, extract, mode='fresh')
+        self.assertEqual(len(seen), 1)
+        before, after = owner.argvs()[:seen[0]], owner.argvs()[seen[0]:]
+        self.assertTrue(before[-1][:5] == [PODMAN, 'exec', '-i', 'woowbk-demo-db', 'pg_restore'], before[-1])
+        self.assertEqual(after[0], [SYSTEMCTL, '--user', 'unmask', '--', 'woowbk-demo-app.service'])
+        # Recovery's view: a completed deployment is in use; one cut before the import finished is not.
+        self.assertEqual(adapter.fresh_in_use(), ['woowbk-demo-app.service'])
+        owner.masked.add('woowbk-demo-app.service')
+        owner.units['woowbk-demo-app.service'] = 'inactive'
+        self.assertEqual(adapter.fresh_in_use(), [], 'masked and stopped: the import never finished')
+        owner.units['woowbk-demo-db.service'] = 'active'
+        self.assertEqual(adapter.fresh_in_use(), [], 'the database runs during the import itself')
+
+    def test_hd05_a_partly_running_app_still_confirms_its_snapshot(self):
+        entry = demo_entry(self.paths)
+        entry['units'] = ['woowbk-demo-db.service', 'woowbk-demo-app.service', 'woowbk-demo-worker.service']
+        entry['writer_units'] = ['woowbk-demo-app.service', 'woowbk-demo-worker.service']
+        self.app = catalog.validate_entry(entry, paths=self.paths, user_lookup=user_lookup)
+        self.owner.units['woowbk-demo-worker.service'] = 'failed'
+        self.http.summaries = [dict(SUMMARY), dict(SUMMARY, notes=13)]  # a write lands while web stops
+        manifest, _ = self.make_adapter().backup(self.staging / 'partly', include_images=False)
+        self.assertEqual(manifest['verify_snapshot'], {})
+        self.assertIn('資料核對快照在備份期間有變動', self.everything_logged())
+        self.assertFalse([url for url in self.http.calls if url.endswith('/healthz')], 'no health wait')
+        # Unchanged values are kept; the second read is retried while the restarted writer comes up.
+        self.http.summaries = []
+        self.http.calls.clear()
+        self.http.fail_summary_times = 0
+        adapter = self.make_adapter()
+        adapter.verify_snapshot = None  # replaced below to fail once after the stop
+        reads = []
+
+        def snapshot():
+            reads.append(1)
+            if len(reads) == 2:
+                raise BackupError('job-failed', '無法取得資料核對結果。')
+            return qp.QuadletPostgresAdapter.verify_snapshot(adapter)
+        adapter.verify_snapshot = snapshot
+        manifest, _ = adapter.backup(self.staging / 'partly-again', include_images=False)
+        self.assertEqual(len(reads), 3)
+        self.assertEqual(manifest['verify_snapshot']['summary']['notes'], 12)
+
+    def test_hd06_databases_are_listed_through_the_apps_own_database(self):
+        self.assertEqual(qp.MAINTENANCE_OBJECTS_SQL, MAINTENANCE_SQL)
+        manifest, extract = self.backup_and_extract()
+        owner = FakeOwner()
+        owner.db['closed'] = {'postgres'}  # REVOKE CONNECT on postgres, or the database was dropped
+        owner.db['databases'].add('company2')
+        adapter = self.make_adapter(owner)
+        checks = {c['id']: c for c in adapter.preflight(manifest, mode='inplace')}
+        self.assertEqual(checks['woowbk-demo/databases']['status'], 'fail')
+        self.assertIn('company2', checks['woowbk-demo/databases']['message'])
+        self.assertEqual(checks['woowbk-demo/maintenance-db']['status'], 'warn')
+        with self.assertRaises(BackupError) as caught:
+            adapter.restore(manifest, extract, mode='inplace')
+        self.assertEqual(caught.exception.code, 'incompatible')
+        self.assert_untouched(owner, adapter)
+        self.assertEqual(sorted(owner.volumes), ['woowbk-demo-files', 'woowbk-demo-pgdata'])
+
+    def test_hd06_an_instance_that_cannot_be_listed_is_not_rebuilt(self):
+        manifest, extract = self.backup_and_extract()
+        owner = FakeOwner()
+        owner.db['closed'] = {'notes', 'postgres'}
+        adapter = self.make_adapter(owner)
+        statuses = {c['id']: c['status'] for c in adapter.preflight(manifest, mode='inplace')}
+        self.assertEqual(statuses['woowbk-demo/databases'], 'fail')
+        with self.assertRaises(BackupError) as caught:
+            adapter.restore(manifest, extract, mode='inplace')
+        self.assertEqual(caught.exception.code, 'incompatible')
+        self.assertIn('無法確認', caught.exception.message)
+        self.assert_untouched(owner, adapter)
+        self.assertNotIn([PODMAN, 'volume', 'rm', '-f', 'woowbk-demo-pgdata'], owner.argvs())
+        # Without a safety backup that the user accepted, it proceeds and says what it could not check.
+        owner = FakeOwner()
+        owner.db['closed'] = {'notes', 'postgres'}
+        adapter = self.make_adapter(owner)
+        owner.db['closed'] = set()
+        adapter.undeclared = lambda pg: None
+        adapter.restore(manifest, extract, mode='inplace', unchecked_databases_ok=True)
+        self.assertTrue(any('無法確認資料庫 main' in note for note in adapter.warnings))
+        self.assertIn('無法確認資料庫 main', self.everything_logged())
+
+    def test_hd06_custom_template_databases_and_the_postgres_database_count(self):
+        manifest, extract = self.backup_and_extract()
+        owner = FakeOwner()
+        owner.db['templates'] = {'template_postgis'}
+        owner.db['maintenance'] = 3  # e.g. pg_cron's tables and functions in `postgres`
+        checks = {c['id']: c for c in self.make_adapter(owner).preflight(manifest, mode='inplace')}
+        self.assertEqual(checks['woowbk-demo/databases']['status'], 'fail')
+        self.assertIn('template_postgis', checks['woowbk-demo/databases']['message'])
+        self.assertEqual(checks['woowbk-demo/maintenance-db']['status'], 'warn')
+        self.assertIn('3 個', checks['woowbk-demo/maintenance-db']['message'])
+        self.logs.clear()
+        self.owner.db['maintenance'] = 2
+        self.make_adapter().backup(self.staging / 'maintenance', include_images=False)
+        self.assertIn('postgres 資料庫中有 2 個', self.everything_logged())
+
+    def test_hd06_a_rollback_rebuilds_its_own_volume_even_with_the_database_down(self):
+        manifest, extract = self.backup_and_extract()
+        owner = FakeOwner()
+        owner.units['woowbk-demo-db.service'] = 'inactive'  # e.g. the failed restore's database never started
+        adapter = self.make_adapter(owner)
+        adapter.restore(manifest, extract, mode='inplace', rollback=True)
+        self.assertEqual(owner.db['data'], DUMP)
+        self.assertFalse([a for a in owner.argvs() if a[-1] == DATABASES_SQL])
+
+    def test_hd07_the_status_hint_never_reads_a_body(self):
+        self.assertIsNone(self.adapter.health_hint())
+        self.assertEqual(self.http.read_body, [False])
+        self.adapter.health()
+        self.assertEqual(self.http.read_body[-1], False)
+        self.adapter.verify_snapshot()
+        self.assertEqual(self.http.read_body[-1], True)
+
+    def test_hd09_what_the_restore_drops_is_logged_and_reported(self):
+        buffer = io.BytesIO()
+        with tarfile.open(fileobj=buffer, mode='w', format=tarfile.PAX_FORMAT) as tar:
+            for name, mode, pax in (('helper', 0o4755, {}),
+                                    ('ping', 0o755, {'SCHILY.xattr.security.capability': 'cap'})):
+                info = tarfile.TarInfo(name)
+                info.mode, info.size, info.pax_headers = mode, 1, pax
+                tar.addfile(info, io.BytesIO(b'x'))
+        self.owner.volumes['woowbk-demo-files'] = buffer.getvalue()
+        manifest, extract = self.backup_and_extract()
+        self.assertIn('setuid／setgid', self.everything_logged(), 'already said when the backup is made')
+        self.logs.clear()
+        owner = FakeOwner()
+        adapter = self.make_adapter(owner)
+        adapter.restore(manifest, extract, mode='inplace')
+        self.assertEqual(len(adapter.warnings), 2)
+        self.assertIn('helper', adapter.warnings[0])
+        self.assertIn('security.capability', adapter.warnings[1])
+        self.assertIn('ping', adapter.warnings[1])
+        self.assertIn('注意：資料卷 woowbk-demo-files 有 1 個檔案的 setuid', self.everything_logged())
+        imported = {row[0]: row[2] for row in tar_listing(owner.volumes['woowbk-demo-files'])}
+        self.assertEqual(imported['helper'], 0o755)
+
+
 class Handler(http.server.BaseHTTPRequestHandler):
     def do_GET(self):  # noqa: N802
         if self.path == '/json':
@@ -1318,6 +1751,89 @@ class LoopbackTests(unittest.TestCase):
         for url in ('http://192.0.2.1/x', 'https://127.0.0.1/x', 'http://user:pw@127.0.0.1:1/x'):
             with self.assertRaises(ValueError):
                 qp.loopback_get(url, 1)
+
+
+class DripServer:
+    """A loopback server that sends `head` at once, then one byte of `drip` every `interval` seconds (HD-07)."""
+
+    def __init__(self, head, drip=b'x' * 1000, interval=0.2):
+        self.head, self.drip, self.interval = head, drip, interval
+        self.sock = socket.socket()
+        self.sock.bind(('127.0.0.1', 0))
+        self.sock.listen(4)
+        self.port = self.sock.getsockname()[1]
+        self.stop = threading.Event()
+        threading.Thread(target=self.serve, daemon=True).start()
+
+    def serve(self):
+        while not self.stop.is_set():
+            try:
+                conn, _ = self.sock.accept()
+            except OSError:
+                return
+            threading.Thread(target=self.handle, args=(conn,), daemon=True).start()
+
+    def handle(self, conn):
+        with conn:
+            try:
+                conn.recv(4096)
+                conn.sendall(self.head)
+                for byte in self.drip:
+                    if self.stop.wait(self.interval):
+                        return
+                    conn.sendall(bytes([byte]))
+            except OSError:
+                return
+
+    def close(self):
+        self.stop.set()
+        self.sock.close()
+
+
+class LoopbackDeadlineTests(unittest.TestCase):
+    """Review finding HD-07: a peer that drips one byte at a time kept a status call busy far past its timeout."""
+
+    def drip(self, head, **kwargs):
+        server = DripServer(head, **kwargs)
+        self.addCleanup(server.close)
+        return f'http://127.0.0.1:{server.port}/healthz'
+
+    def timed(self, *args, **kwargs):
+        start = time.monotonic()
+        try:
+            return qp.loopback_get(*args, **kwargs), time.monotonic() - start
+        except Exception as error:  # noqa: BLE001 - the time is what is checked
+            return error, time.monotonic() - start
+
+    def test_a_dripping_body_ends_at_the_total_deadline(self):
+        url = self.drip(b'HTTP/1.1 200 OK\r\nContent-Length: 1000\r\n\r\n')
+        result, elapsed = self.timed(url, 1.0)
+        self.assertIsInstance(result, OSError)
+        self.assertLess(elapsed, 1.6, f'{elapsed:.2f} s')
+
+    def test_a_dripping_status_line_ends_at_the_total_deadline(self):
+        url = self.drip(b'', drip=b'HTTP/1.1 200 OK' + b'x' * 1000)
+        result, elapsed = self.timed(url, 1.0)
+        self.assertIsInstance(result, OSError)
+        self.assertLess(elapsed, 1.6, f'{elapsed:.2f} s')
+
+    def test_without_the_body_the_status_comes_back_at_once(self):
+        url = self.drip(b'HTTP/1.1 503 Service Unavailable\r\nContent-Length: 1000\r\n\r\n')
+        result, elapsed = self.timed(url, 3.0, read_body=False)
+        self.assertEqual(result, (503, b''))
+        self.assertLess(elapsed, 1.0)
+        url = self.drip(b'HTTP/1.1 200 OK\r\nContent-Length: 1000\r\n\r\n')
+        result, elapsed = self.timed(url, 3.0, read_body=False)
+        self.assertEqual(result, (200, b''))
+        self.assertLess(elapsed, 1.0)
+
+    def test_health_hint_of_a_dripping_app_is_bounded(self):
+        url = self.drip(b'HTTP/1.1 200 OK\r\nContent-Length: 1000\r\n\r\n')
+        app = types.SimpleNamespace(id='x', name='x', health=[{'url': url, 'expect_status': 200, 'timeout_seconds': 90}])
+        adapter = qp.QuadletPostgresAdapter(app, None, lambda message: None)
+        start = time.monotonic()
+        self.assertIsNone(adapter.health_hint(timeout=1))
+        self.assertLess(time.monotonic() - start, 1.0)
 
 
 if __name__ == '__main__':

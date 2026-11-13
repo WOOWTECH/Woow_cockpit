@@ -10,17 +10,22 @@ class Adapter:
     name = 'base'
     version = 1
 
-    def __init__(self, app, runner, log, *, phase=None, checkpoint=None, writers_hook=None):
+    def __init__(self, app, runner, log, *, phase=None, checkpoint=None, writers_hook=None, imported_hook=None):
         self.app, self.runner, self.log = app, runner, log
         self.phase = phase or (lambda phase_id: None)
         self.checkpoint = checkpoint or (lambda: None)
         # Called with the writer units a backup is about to stop, and with [] once they run again,
         # so an interrupted job can be recovered (see jobs.recover_interrupted).
         self.writers_hook = writers_hook or (lambda units: None)
+        # Called by restore() once the app's data import finished, right before its units may start: from then on
+        # a fresh deployment is no longer "unfinished" for the recovery of a dead job (review finding HD-04).
+        self.imported_hook = imported_hook or (lambda: None)
         # Set once restore() has changed anything on the system; the caller then rolls back.
         self.destructive_started = False
         # Seconds writers were stopped during the last backup().
         self.last_downtime = 0.0
+        # zh-TW notes about what a restore could not keep (e.g. setuid bits); flows puts them in the result.
+        self.warnings = []
 
     def probe(self):
         """{'deployed': bool, 'state': str, 'units': [{'name','active'}], 'problems': [str]}"""
@@ -41,14 +46,16 @@ class Adapter:
         """Return (manifest_app_dict, [archive.Entry]). Writers are always restarted."""
         raise NotImplementedError
 
-    def preflight(self, app_manifest, *, mode, entry_sizes=None):
-        """List of Check dicts for restoring this app_manifest here."""
+    def preflight(self, app_manifest, *, mode, entry_sizes=None, extracted_dir=None):
+        """List of Check dicts for restoring this app_manifest here (`extracted_dir`: also check nested data)."""
         raise NotImplementedError
 
-    def restore(self, app_manifest, extracted_dir, *, mode, rollback=False):
+    def restore(self, app_manifest, extracted_dir, *, mode, rollback=False, unchecked_databases_ok=False):
         """Perform the restore; raise BackupError on failure (caller handles rollback).
 
         `rollback=True` restores the pre-restore safety backup after a failure: nothing may be downloaded.
+        `unchecked_databases_ok=True`: the restore runs without a safety backup (explicitly accepted), so data
+        that cannot be inspected may be replaced.
         """
         raise NotImplementedError
 
@@ -59,6 +66,10 @@ class Adapter:
     def remove_fresh(self):
         """Undo a failed fresh deployment (units, quadlet files, volumes, secrets, config)."""
         raise NotImplementedError
+
+    def fresh_in_use(self):
+        """Units showing that a fresh deployment may already hold new data ([] = unfinished, may be removed)."""
+        return []
 
     def health(self):
         raise NotImplementedError

@@ -1,12 +1,19 @@
-"""Job records, dedup, busy, launcher injection, flock, recovery, cancel and signal handling."""
+"""Job records, dedup, busy, launcher injection, flock, recovery, cancel and signal handling.
+
+Also the job-record races found by the release regression (16-repro_recover_race.py): recovery judging a job
+from a stale listing, side effects taken from that listing, cancel vs. the job's own record writes, a launch
+failure vs. a run-job that already started, and the retention that bounds what status/jobs/job-status read.
+"""
 import json
 import os
 import signal
 import stat
 import tempfile
+import threading
 import time
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from woowbackup import flows, jobs
 from woowbackup.errors import BackupError
@@ -67,7 +74,10 @@ class StoreTests(JobCase):
         self.assertEqual([p['id'] for p in public['phases']], ['prepare', 'decrypt', 'preflight', 'safety', 'stop',
                                                                'restore', 'start', 'check'])
         self.assertEqual(public['progress'], {'percent': 0, 'message': '等待開始'})
-        self.assertEqual([p.name for p in Path(self.paths.jobs).iterdir()], [path.name])
+        # No temp file is left; the record lock file (jobs/<id>.lock, 0600, empty) sits next to the record.
+        self.assertEqual(sorted(p.name for p in Path(self.paths.jobs).iterdir()), [path.name, f'{record["id"]}.lock'])
+        lock = self.store.lock_path(record['id'])
+        self.assertEqual((stat.S_IMODE(lock.stat().st_mode), lock.stat().st_size), (0o600, 0))
 
     def test_list_newest_first_and_limit(self):
         ids = [self.store.create('verify', {'backup_id': str(i)}, now=1_700_000_000 + i)['id'] for i in range(5)]
@@ -550,6 +560,22 @@ class RecoveryTests(JobCase):
         self.assertIn('需人工處理', record['error']['message'])
         self.assertEqual(record['fresh_apps'], [])
 
+    def test_hd04_a_fresh_deployment_already_in_use_is_kept_and_reported_once(self):
+        dead = self.make('running', 30, job_type='restore', fresh_apps=['woowbk-demo'])
+        calls = []
+
+        def cleanup(apps):
+            calls.append(apps)
+            return ['「示範筆記應用」的服務（woowbk-demo-app.service）已解除暫時停用或正在執行，可能已有新的資料，'
+                    '因此沒有自動移除；需人工確認是否保留這個部署']
+        jobs.recover_interrupted(self.paths, unit_active=self.unit_active, cleanup_fresh=cleanup)
+        record = self.store.get(dead)
+        self.assertEqual((record['state'], record['fresh_apps']), ('interrupted', []))
+        self.assertIn('需人工確認', record['error']['message'])
+        self.assertEqual(record['result']['warnings'], [])
+        jobs.recover_interrupted(self.paths, unit_active=self.unit_active, cleanup_fresh=cleanup)
+        self.assertEqual(calls, [['woowbk-demo']], 'decided once, never repeated')
+
     def test_interrupted_restore_result_says_what_was_reached(self):
         record = self.store.create('restore', {'backup_id': 'b', 'apps': ['woowbk-demo']})
         message, result = jobs.interrupted_details(record)
@@ -592,6 +618,471 @@ class RecoveryTests(JobCase):
 
     def test_no_jobs_dir(self):
         self.assertEqual(jobs.recover_interrupted(Paths(base=Path(self.tmp.name) / 'empty'), unit_active=self.unit_active), [])
+
+
+# ---------------------------------------------------------------- release regression 16: job-record races
+
+class ListingHookStore(jobs.JobStore):
+    """Runs `after_listing` once, right after the recovery listed every record: the window of the race."""
+
+    def __init__(self, paths, after_listing):
+        super().__init__(paths)
+        self.after_listing = after_listing
+
+    def list(self, limit=50):
+        records = super().list(limit)
+        if limit is None and self.after_listing is not None:
+            hook, self.after_listing = self.after_listing, None
+            hook()
+        return records
+
+
+class SimulatedRunJob:
+    """What a run-job process does with its record: it holds the engine lock while it runs, writes through a
+    JobReporter, writes its final state, and only then is the lock released and the unit inactive."""
+
+    def __init__(self, case, job_type, params=None, **fields):
+        self.case = case
+        record = case.store.create(job_type, params or {}, now=time.time() - 30)
+        self.engine_fd = jobs.acquire_engine_lock(case.paths, timeout=0)
+        case.assertIsNotNone(self.engine_fd)
+        record.update({'state': 'running', 'started': jobs.utc_iso(), **fields})
+        self.reporter = jobs.JobReporter(case.store, record, min_interval=0)
+        self.reporter.set_partial()  # saves the running record
+        self.job_id = record['id']
+        self.unit = jobs.unit_name(self.job_id)
+        case.active_units.add(self.unit)
+
+    def finish(self, state, **kwargs):
+        self.reporter.finish(state, **kwargs)
+        self.exit()
+
+    def exit(self):
+        """The process is gone (finished or SIGKILL): the kernel drops its flock, systemd marks the unit inactive."""
+        if self.engine_fd is not None:
+            os.close(self.engine_fd)
+            self.engine_fd = None
+        self.case.active_units.discard(self.unit)
+
+
+class RecoveryRaceTests(JobCase):
+    """A job that finishes while a helper command runs the recovery keeps the record it wrote itself."""
+
+    def setUp(self):
+        super().setUp()
+        self.calls = {'restart_writers': [], 'cleanup_fresh': []}
+
+    def restart_writers(self, stopped):
+        self.calls['restart_writers'].append(stopped)
+        return []
+
+    def cleanup_fresh(self, apps):
+        self.calls['cleanup_fresh'].append(apps)
+        return []
+
+    def recover(self, store=None, unit_active=None):
+        return jobs._recover_locked(self.paths, store or self.store, unit_active or self.unit_active, time.time(),
+                                    restart_writers=self.restart_writers, cleanup_fresh=self.cleanup_fresh)
+
+    def assert_untouched(self, job_id, state, changed):
+        record = self.store.get(job_id)
+        self.assertEqual(record['state'], state)
+        self.assertEqual(changed, [])
+        self.assertEqual(self.calls, {'restart_writers': [], 'cleanup_fresh': []})
+        self.assertFalse(any('作業被判定為已中斷' in line for line in self.store.read_log(job_id)))
+        return record
+
+    # The reproduction of the release regression, ported unchanged in substance: the unit probe plays the job's
+    # last steps (clear markers, final record, exit) exactly between the listing and the decision.
+    def repro(self, job_type, final_state, extra):
+        record = self.store.create(job_type, {'apps': ['woowbk-demo']} if job_type == 'restore' else {})
+        record.update({'state': 'running', 'phase': 'check', **extra})
+        self.store.save(record)
+
+        def unit_active(_unit):
+            final = self.store.get(record['id'])
+            final.update({'state': final_state, 'finished': jobs.utc_iso(), 'fresh_apps': [], 'stopped_writers': {},
+                          'error': None if final_state == 'succeeded' else {'code': 'corrupt-archive', 'message': 'x'}})
+            self.store.save(final)
+            self.store.append_log(record['id'], f'作業結束：{final_state}')
+            return False
+
+        return self.assert_untouched(record['id'], final_state, self.recover(unit_active=unit_active))
+
+    def test_repro_verify_that_failed_meanwhile_stays_failed(self):
+        record = self.repro('verify', 'failed', {})
+        self.assertEqual(record['error'], {'code': 'corrupt-archive', 'message': 'x'})
+
+    def test_repro_backup_that_succeeded_meanwhile_keeps_writers_alone(self):
+        self.repro('backup', 'succeeded', {'stopped_writers': {'woowbk-demo': ['woowbk-demo-app.service']}})
+
+    def test_repro_fresh_restore_that_succeeded_meanwhile_is_not_removed(self):
+        self.repro('restore', 'succeeded', {'fresh_apps': ['woowbk-demo'], 'safety_backup_id': None})
+
+    def test_job_finishing_right_after_the_listing_keeps_its_final_record(self):
+        # The same race with the real locking: the job holds the engine lock until its final record is written.
+        cases = (('verify', {}, 'failed'),
+                 ('backup', {'stopped_writers': {'woowbk-demo': ['woowbk-demo-app.service']}}, 'succeeded'),
+                 ('restore', {'fresh_apps': ['woowbk-demo'], 'safety_backup_id': None}, 'succeeded'))
+        for job_type, fields, final in cases:
+            with self.subTest(job_type=job_type):
+                job = SimulatedRunJob(self, job_type, {'apps': ['woowbk-demo']}, **fields)
+
+                def last_steps(job=job, final=final):
+                    job.reporter.set_partial(stopped_writers={}, fresh_apps=[])  # the flow's own clean-up
+                    job.finish(final, error=None if final == 'succeeded' else {'code': 'corrupt-archive',
+                                                                                  'message': 'x'})
+
+                self.assert_untouched(job.job_id, final, self.recover(store=ListingHookStore(self.paths, last_steps)))
+
+    def test_running_job_is_left_alone_without_probing_its_unit(self):
+        job = SimulatedRunJob(self, 'verify')
+        probes = []
+        self.assertEqual(self.recover(unit_active=lambda unit: probes.append(unit) or False), [])
+        self.assertEqual(probes, [], 'no systemctl call while the job holds the engine lock')
+        self.assertEqual(self.store.get(job.job_id)['state'], 'running')
+        job.finish('succeeded', result={'ok': True})
+        self.assertEqual(self.recover(), [])
+        self.assertEqual(self.store.get(job.job_id)['state'], 'succeeded')
+
+    def test_killed_job_side_effects_come_from_its_last_record_not_the_listing(self):
+        # A fresh deployment recorded after the listing, then SIGKILL: it is removed (was forgotten before).
+        job = SimulatedRunJob(self, 'restore', {'apps': ['woowbk-demo']}, safety_backup_id=None)
+
+        def recorded_then_killed():
+            job.reporter.set_partial(fresh_apps=['woowbk-demo'])
+            job.exit()
+
+        self.assertEqual(self.recover(store=ListingHookStore(self.paths, recorded_then_killed)), [job.job_id])
+        record = self.store.get(job.job_id)
+        self.assertEqual(record['state'], 'interrupted')
+        self.assertEqual(self.calls['cleanup_fresh'], [['woowbk-demo']])
+        self.assertEqual((record['fresh_apps'], record['result']['fresh_apps']), ([], ['woowbk-demo']))
+        self.assertIn('已清除未完成的全新部署', record['error']['message'])
+
+        # Writers restarted by the backup itself after the listing, then SIGKILL: nothing is restarted again.
+        self.calls = {'restart_writers': [], 'cleanup_fresh': []}
+        job = SimulatedRunJob(self, 'backup', {'apps': ['woowbk-demo']},
+                              stopped_writers={'woowbk-demo': ['woowbk-demo-app.service']})
+
+        def restarted_then_killed():
+            job.reporter.set_partial(stopped_writers={})
+            job.exit()
+
+        self.assertEqual(self.recover(store=ListingHookStore(self.paths, restarted_then_killed)), [job.job_id])
+        self.assertEqual(self.store.get(job.job_id)['state'], 'interrupted')
+        self.assertEqual(self.calls['restart_writers'], [])
+
+    def test_queued_job_waits_while_recovery_holds_the_engine_lock_then_runs(self):
+        dead = SimulatedRunJob(self, 'backup', {'apps': ['woowbk-demo']},
+                               stopped_writers={'woowbk-demo': ['woowbk-demo-app.service']})
+        dead.exit()  # SIGKILL; the recovery inside start_job (no restart_writers here) leaves its writers listed
+        queued = self.start(job_type='verify', params={'backup_id': 'b'}, request_id='req-wait-00000001')['job_id']
+        self.assertEqual(self.store.get(dead.job_id)['state'], 'interrupted')
+        self.active_units.add(jobs.unit_name(queued))  # its run-job is alive, waiting for the engine lock
+        in_clean_up, release = threading.Event(), threading.Event()
+
+        def slow_restart(stopped):
+            in_clean_up.set()
+            release.wait(10)
+            return []
+
+        worker = threading.Thread(target=jobs.recover_interrupted, args=(self.paths,),
+                                  kwargs={'unit_active': self.unit_active, 'restart_writers': slow_restart})
+        worker.start()
+        try:
+            self.assertTrue(in_clean_up.wait(10))
+            self.assertIsNone(jobs.try_engine_lock(self.paths), 'the recovery holds the engine lock while it cleans up')
+            threading.Timer(0.5, release.set).start()
+            record = jobs.run_job(self.paths, queued, deps=object(), lock_timeout=30,
+                                  handlers={'verify': lambda ctx, params: {'ok': True}})
+        finally:
+            release.set()
+            worker.join(10)
+        self.assertEqual(record['state'], 'succeeded')
+        self.assertEqual(self.store.get(dead.job_id)['stopped_writers'], {})
+
+    def test_leftovers_of_a_finished_job_wait_while_another_job_runs(self):
+        # Restarting writers of an old interrupted backup while a new backup has them stopped would break its dump.
+        old = SimulatedRunJob(self, 'backup', {'apps': ['woowbk-demo']})
+        old.finish('interrupted', error={'code': 'job-failed', 'message': '中斷。'})
+        record = self.store.get(old.job_id)
+        record['stopped_writers'] = {'woowbk-demo': ['woowbk-demo-app.service']}
+        self.store.save(record)
+        running = SimulatedRunJob(self, 'backup', {'apps': ['woowbk-demo']})
+        self.recover()
+        self.assertEqual(self.calls['restart_writers'], [])
+        running.finish('succeeded', result={})
+        self.recover()
+        self.assertEqual(self.calls['restart_writers'], [{'woowbk-demo': ['woowbk-demo-app.service']}])
+        self.assertEqual(self.store.get(old.job_id)['stopped_writers'], {})
+
+
+class CancelRaceTests(JobCase):
+    """job-cancel vs. the job's own record writes and its end."""
+
+    def queue(self):
+        return self.start(params={'apps': ['woowbk-demo']}, request_id=f'req-cancel-{time.monotonic_ns()}')['job_id']
+
+    def run_handler(self, job_id, handler):
+        return jobs.run_job(self.paths, job_id, deps=object(), handlers={'backup': handler})
+
+    def test_cancel_accepted_just_before_the_window_closes_stops_the_job_there(self):
+        job_id = self.queue()
+        destructive = []
+
+        def handler(ctx, params):
+            ctx.checkpoint()
+            # job-cancel arrives after the last checkpoint and before the job closes the cancellable window
+            self.assertEqual(jobs.cancel_job(self.paths, job_id, wait_seconds=0), {'state': 'running'})
+            ctx.cancellable(False)
+            destructive.append('writers stopped')
+            return {}
+
+        record = self.run_handler(job_id, handler)
+        self.assertEqual((record['state'], destructive), ('cancelled', []))
+        self.assertEqual(self.store.get(job_id)['state'], 'cancelled')
+        self.assertFalse(self.store.cancel_requested(job_id))
+
+    def test_cancel_request_survives_whole_record_rewrites(self):
+        job_id = self.queue()
+
+        def handler(ctx, params):
+            ctx.phase('prepare')
+            jobs.cancel_job(self.paths, job_id, wait_seconds=0)
+            for i in range(40):  # every progress/phase update rewrites the whole record
+                ctx.reporter.progress(fraction=i / 40, message=str(i), force=True)
+                ctx.phase('check' if i % 2 else 'prepare')
+            ctx.checkpoint()
+            raise AssertionError('the cancel request was lost')
+
+        self.assertEqual(self.run_handler(job_id, handler)['state'], 'cancelled')
+
+    def test_cancel_from_another_thread_while_progress_is_written(self):
+        job_id = self.queue()
+        started, stop = threading.Event(), threading.Event()
+        replies, bad_reads, reads = [], [], [0]
+
+        def reader():
+            while not stop.is_set():
+                try:
+                    if self.store.get(job_id)['id'] != job_id:
+                        bad_reads.append('wrong id')
+                    reads[0] += 1
+                except BackupError as error:
+                    bad_reads.append(error.message)
+
+        def canceller():
+            if started.wait(10):
+                replies.append(jobs.cancel_job(self.paths, job_id, wait_seconds=0))
+
+        threads = [threading.Thread(target=reader), threading.Thread(target=canceller)]
+        for thread in threads:
+            thread.start()
+
+        def handler(ctx, params):
+            ctx.phase('prepare')
+            started.set()
+            deadline, i = time.monotonic() + 15, 0
+            while time.monotonic() < deadline:
+                i += 1
+                ctx.reporter.progress(fraction=(i % 100) / 100, message=f'{i}', force=True)
+                ctx.checkpoint()
+            raise AssertionError('the cancel request was never honoured')
+
+        try:
+            record = self.run_handler(job_id, handler)
+        finally:
+            stop.set()
+            for thread in threads:
+                thread.join(15)
+        self.assertEqual(record['state'], 'cancelled')
+        self.assertEqual(replies, [{'state': 'running'}])
+        self.assertEqual(bad_reads, [])
+        self.assertGreater(reads[0], 0)
+
+    def test_cancel_racing_with_the_end_of_the_job_leaves_no_stale_request(self):
+        job_id = self.queue()
+        record = self.store.get(job_id)
+        record['state'] = 'running'
+        self.store.save(record)
+        original = jobs.JobStore.request_cancel
+        seen = {}
+
+        def request_cancel(store, jid):
+            # The job (another process) ends between job-cancel's check and the request file.
+            def job_ends():
+                other = jobs.JobStore(self.paths)
+                jobs.JobReporter(other, other.get(jid)).finish('succeeded', result={})
+                other.clear_cancel(jid)  # run-job's finally
+
+            thread = threading.Thread(target=job_ends)
+            thread.start()
+            thread.join(0.5)
+            seen['thread'] = thread
+            original(store, jid)
+
+        with mock.patch.object(jobs.JobStore, 'request_cancel', request_cancel):
+            jobs.cancel_job(self.paths, job_id, wait_seconds=0)
+        seen['thread'].join(10)
+        self.assertEqual(self.store.get(job_id)['state'], 'succeeded')
+        self.assertFalse(self.store.cancel_requested(job_id), 'a finished job kept a cancel request')
+
+
+class LaunchRaceTests(JobCase):
+    def test_launcher_error_after_the_job_already_started_keeps_the_running_job(self):
+        def launcher(job_id):
+            # systemd-run started the unit and run-job took the job, then systemd-run reported a timeout
+            record = self.store.get(job_id)
+            record.update(state='running', started=jobs.utc_iso())
+            self.store.save(record)
+            raise BackupError('internal-error', '無法啟動背景作業。')
+
+        result = self.start(job_type='verify', params={'backup_id': 'b'}, key_text=TEST_SECRET, launcher=launcher)
+        self.assertEqual(result['deduplicated'], False)
+        self.assertEqual(self.store.get(result['job_id'])['state'], 'running')
+        self.assertTrue(self.store.key_path(result['job_id']).exists(), 'the running job still needs its key')
+
+    def test_launch_failure_before_the_start_wins_and_a_late_run_job_refuses(self):
+        with self.assertRaises(BackupError):
+            self.start(job_type='verify', params={'backup_id': 'b'}, key_text=TEST_SECRET, launcher=Launcher(fail=True))
+        record = self.store.list()[0]
+        self.assertEqual(record['state'], 'failed')
+        self.assertFalse(self.store.key_path(record['id']).exists())
+        calls = []
+        late = jobs.run_job(self.paths, record['id'], deps=object(),
+                            handlers={'verify': lambda ctx, params: calls.append(params) or {}})
+        self.assertEqual((late['state'], calls), ('failed', []))
+
+
+class RetentionTests(JobCase):
+    def make(self, job_type, state, age, params=None, **fields):
+        record = self.store.create(job_type, params if params is not None else {'apps': ['woowbk-demo']},
+                                   now=time.time() - age)
+        record.update(state=state, **fields)
+        self.store.save(record)
+        self.store.append_log(record['id'], 'x')
+        return record['id']
+
+    def side_files(self, job_id):
+        return sorted(p.name for p in Path(self.paths.jobs).iterdir() if job_id in p.name)
+
+    def listed(self):
+        return {record['id'] for record in self.store.list(limit=None)}
+
+    def test_keeps_newest_finished_records_and_everything_still_needed(self):
+        safety = '20261101T000000Z-00000001'
+        pinning = self.make('restore', 'failed', 100_000, params={'backup_id': 'b', 'apps': ['woowbk-demo']},
+                            result={'apps': ['woowbk-demo'], 'safety_backup_id': safety, 'rolled_back': False})
+        settled = self.make('restore', 'failed', 99_000, params={'backup_id': 'b', 'apps': ['other-app']},
+                            result={'apps': ['other-app'], 'safety_backup_id': '20261101T000000Z-00000002',
+                                    'rolled_back': False})
+        settling = self.make('restore', 'succeeded', 98_000, params={'backup_id': 'b', 'apps': ['other-app']})
+        leftover = self.make('backup', 'interrupted', 97_000, error={'code': 'job-failed', 'message': '中斷。'},
+                             stopped_writers={'woowbk-demo': ['woowbk-demo-app.service']})
+        alive = self.make('backup', 'running', 96_000)
+        self.active_units.add(jobs.unit_name(alive))
+        finished = [self.make('verify', 'succeeded', 50_000 - i) for i in range(210)]  # oldest first
+        self.store.request_cancel(finished[0])
+        pinned_before = flows.pinned_safety(self.paths)
+        self.assertEqual(pinned_before, {safety})
+        jobs.recover_interrupted(self.paths, unit_active=self.unit_active)  # no restart_writers: leftover stays
+        self.assertEqual(self.listed(), set(finished[10:]) | {pinning, leftover, alive})
+        for gone in [*finished[:10], settled, settling]:
+            self.assertEqual(self.side_files(gone), [], 'record, log, lock and cancel request are all removed')
+        self.assertEqual(self.side_files(finished[10]), [f'{finished[10]}.json', f'{finished[10]}.lock',
+                                                          f'{finished[10]}.log'])
+        self.assertEqual(flows.pinned_safety(self.paths), pinned_before)
+        jobs.recover_interrupted(self.paths, unit_active=self.unit_active)
+        self.assertEqual(len(self.listed()), 203, 'stable once pruned')
+
+    def test_unreadable_records_and_orphaned_side_files_are_cleaned_when_old(self):
+        jobs_dir = Path(self.paths.jobs)
+        finished = [self.make('verify', 'succeeded', 50_000 - i) for i in range(jobs.KEEP_TERMINAL)]
+        unreadable = 'j20200101T000000Z-0badf00d'
+        (jobs_dir / f'{unreadable}.json').write_text('not json')
+        old, young = 'j20200102T000000Z-0000000a', 'j20200103T000000Z-0000000b'
+        for name in (f'{old}.log', f'{old}.lock', f'{old}.cancel', f'.{finished[0]}.json.0123456789ab.tmp',
+                     f'{young}.log'):
+            (jobs_dir / name).write_text('')
+        stale = time.time() - jobs.ORPHAN_MAX_AGE - 60
+        for name in (f'{old}.log', f'{old}.lock', f'{old}.cancel', f'.{finished[0]}.json.0123456789ab.tmp'):
+            os.utime(jobs_dir / name, (stale, stale))
+        jobs.recover_interrupted(self.paths, unit_active=self.unit_active)
+        names = {p.name for p in jobs_dir.iterdir()}
+        self.assertNotIn(f'{unreadable}.json', names, 'the oldest, beyond the newest 200: deleted')
+        self.assertEqual({n for n in names if old in n or n.endswith('.tmp')}, set())
+        self.assertIn(f'{young}.log', names, 'an orphan younger than an hour is kept')
+        self.assertEqual(self.listed(), set(finished))
+
+    def test_status_jobs_and_job_status_read_a_bounded_number_of_records(self):
+        for i in range(jobs.KEEP_TERMINAL + 60):
+            self.make('verify', 'succeeded', 10_000 - i)
+        jobs.recover_interrupted(self.paths, unit_active=self.unit_active)  # prunes to the newest 200
+        reads = []
+        original = jobs.read_json
+
+        def counting(path, *args, **kwargs):
+            reads.append(Path(path).name)
+            return original(path, *args, **kwargs)
+
+        with mock.patch.object(jobs, 'read_json', counting):
+            jobs.recover_interrupted(self.paths, unit_active=self.unit_active)
+            recovery_reads = len(reads)
+            reads.clear()
+            listed = self.store.list(50)
+        self.assertLessEqual(recovery_reads, jobs.KEEP_TERMINAL)
+        self.assertEqual((len(listed), len(reads)), (50, 50), 'jobs reads only what it returns')
+
+
+class ConcurrentPollerTests(JobCase):
+    def test_short_jobs_with_three_concurrent_pollers_are_never_misclassified(self):
+        """The live probe in miniature: back-to-back short jobs while three threads run the recovery the way
+        status/jobs/job-status do. Every job keeps the state it wrote itself."""
+        current = {'unit': None}
+        stop = threading.Event()
+        errors, passes = [], [0]
+
+        def unit_active(unit):
+            return unit == current['unit']
+
+        def poller():
+            while not stop.is_set():
+                try:
+                    jobs.recover_interrupted(self.paths, unit_active=unit_active)
+                    passes[0] += 1
+                except Exception as exc:  # noqa: BLE001 - reported by the assertion below
+                    errors.append(repr(exc))
+
+        def handler(ctx, params):
+            ctx.phase('decrypt')
+            time.sleep(0.002)
+            ctx.phase('check')
+            return {'ok': True, 'entries': 1, 'bytes': 1}
+
+        threads = [threading.Thread(target=poller, daemon=True) for _ in range(3)]
+        for thread in threads:
+            thread.start()
+        ids = []
+        try:
+            for i in range(30):
+                job_id = jobs.start_job(self.paths, 'verify', {'backup_id': 'b'}, f'req-stress-{i:04d}',
+                                        launcher=lambda jid: current.update(unit=jobs.unit_name(jid)),
+                                        unit_active=unit_active)['job_id']
+                jobs.run_job(self.paths, job_id, deps=object(), handlers={'verify': handler})
+                current['unit'] = None  # the process exited
+                ids.append(job_id)
+                time.sleep(0.003)
+        finally:
+            stop.set()
+            for thread in threads:
+                thread.join(15)
+        self.assertEqual(errors, [])
+        self.assertGreater(passes[0], 0)
+        states = {job_id: self.store.get(job_id)['state'] for job_id in ids}
+        self.assertEqual({s for s in states.values()}, {'succeeded'}, states)
+        judged = [job_id for job_id in ids if any('作業被判定為已中斷' in line for line in self.store.read_log(job_id))]
+        self.assertEqual(judged, [])
 
 
 if __name__ == '__main__':

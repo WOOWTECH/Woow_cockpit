@@ -102,6 +102,21 @@ tests/e2e/lab/owner.sh a python3 /opt/woowbk-demo/tools/check.py --stop-start
 
 `H1_CASES`、`H3_FAULTS`、`H4_KILLS`、`H5_PHASE`、`H6_FILES`、`H7_FULL=0`、`H2_TMPFS` 環境變數可只跑一部分。
 
+## 作業紀錄競態探測（race probe）
+
+`python3 -I tests/e2e/lab/race_probe.py <a|b> [--jobs 110] [--pollers 3] [--settle 0.5] [--census-only]`，
+證據寫入 `~/.woowbk-lab/evidence/race/<時間>-probe-<設備>/`（`driver.log`、`result.json`、`probe-summary.json`、
+`census-before.json`、`census-after.json`）。在設備內以 root、和頁面相同的方式呼叫已安裝的 helper：連續執行 N 個最小
+本機備份的驗證作業，同時有 P 個執行緒不停呼叫目前作業的 `job-status`，另有一個呼叫 `jobs`、一個呼叫 `status`
+（三者都會執行中斷復原）；作業結束後 pollers 再持續 `--settle` 秒，這正是舊版復原把剛結束的作業誤判為「已中斷」的視窗
+（發布回歸 16）。作業紀錄的狀態必須等於作業自己寫下的結果（日誌中的 `作業結束：…`），不能出現
+`作業被判定為已中斷`，任何 poller 也不能看到 `interrupted`。為了證明探測真的落在競態視窗內，另外統計「作業寫入最後紀錄
+（紀錄檔 mtime）的那一刻，仍在執行中的 `job-status`／`jobs`／`status` 呼叫數」，沒有任何重疊時判定探測無效（失敗）。同時檢查保留策略（已結束的紀錄最多 200 筆，加上進行中、
+仍需復原處理與釘選還原前備份的紀錄；日誌與鎖檔不會比紀錄多；釘選的還原前備份前後相同）、每種 helper 呼叫的延遲、
+`/run/woowtech-backup` 的暫時金鑰與 staging。dev-a 驗證自己的最小備份（應全部成功）；dev-b 沒有那份上傳備份的金鑰，
+驗證作業會以 `key-required` 結束（全部「失敗」，同樣是作業自己寫下的結果），不需要傳送任何金鑰。
+`--census-only` 只用已安裝的程式庫唯讀統計紀錄，不呼叫 helper（不會觸發復原或保留策略）。
+
 ## 已實測的事實與注意事項
 
 * **巢狀儲存**：appowner 的儲存在 `/home` 資料卷（主機 ext4），`podman info` 為 `overlay`、

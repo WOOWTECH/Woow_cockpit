@@ -39,6 +39,7 @@ def noop(*_args, **_kwargs):
 class FakeReporter:
     def __init__(self):
         self.events, self.logs, self.partial = [], [], {}
+        self.partials = []  # every set_partial call, in order
         self.cancellable = True
         self.cancel = False
 
@@ -68,6 +69,7 @@ class FakeReporter:
         return self.cancel
 
     def set_partial(self, **fields):
+        self.partials.append(copy.deepcopy(fields))
         self.partial.update(fields)
 
     def phases(self):
@@ -325,10 +327,16 @@ class World:
         self.health_hints = {}
         self.extract_seen = None
         self.raise_after_destructive = None  # e.g. jobs.Terminated: a signal after the first destructive step
+        self.raise_in = {}  # app id -> exception raised after that app's first destructive step
         self.adapters = []
+        self.preflight_dirs = []
+        self.unchecked = []
+        self.restore_warnings = {}
+        self.fresh_live = {}  # app id -> units adapter.fresh_in_use() reports
+        self.fresh_live_error = set()
 
-    def factory(self, app, *, log, phase=None, checkpoint=None, writers_hook=None):
-        adapter = FakeAdapter(app, self, log, phase, checkpoint, writers_hook)
+    def factory(self, app, *, log, phase=None, checkpoint=None, writers_hook=None, imported_hook=None):
+        adapter = FakeAdapter(app, self, log, phase, checkpoint, writers_hook, imported_hook)
         self.adapters.append(adapter)
         return adapter
 
@@ -339,13 +347,15 @@ def snapshot_of(data):
 
 
 class FakeAdapter:
-    def __init__(self, app, world, log, phase, checkpoint, writers_hook=None):
+    def __init__(self, app, world, log, phase, checkpoint, writers_hook=None, imported_hook=None):
         self.app, self.world, self.log = app, world, log
         self.phase = phase or noop
         self.checkpoint = checkpoint or noop
         self.writers_hook = writers_hook or noop
+        self.imported_hook = imported_hook or noop
         self.destructive_started = False
         self.last_downtime = 0.0
+        self.warnings = []
 
     def probe(self):
         deployed = self.world.deployed[self.app.id]
@@ -392,15 +402,18 @@ class FakeAdapter:
                     'config_files': [], 'quadlet_files': [], 'verify_snapshot': snapshot_of(data)}
         return manifest, [entry]
 
-    def preflight(self, app_manifest, *, mode, entry_sizes=None):
+    def preflight(self, app_manifest, *, mode, entry_sizes=None, extracted_dir=None):
+        self.world.preflight_dirs.append(extracted_dir)
         if self.app.id in self.world.preflight_fail:
             return [{'id': f'{self.app.id}/image', 'status': 'fail', 'message': '缺少映像 localhost/x:1。'}]
         return [{'id': f'{self.app.id}/items', 'status': 'ok', 'message': '項目齊全。'},
                 {'id': f'{self.app.id}/catalog', 'status': 'warn', 'message': '設定與備份時不同。'}]
 
-    def restore(self, app_manifest, extracted_dir, *, mode, rollback=False):
+    def restore(self, app_manifest, extracted_dir, *, mode, rollback=False, unchecked_databases_ok=False):
         assert rollback == (self.phase is noop), 'rollbacks (and only they) use rollback=True and no phases'
         self.world.events.append(('restore', self.app.id, mode, 'rollback' if rollback else 'restore'))
+        if not rollback:
+            self.world.unchecked.append((self.app.id, unchecked_databases_ok))
         if self.app.id in self.world.fail_restore_before:
             raise BackupError('incompatible', '映像載入失敗。')
         self.phase('stop')
@@ -408,6 +421,8 @@ class FakeAdapter:
         self.phase('restore')
         if self.world.raise_after_destructive is not None and not rollback:
             raise self.world.raise_after_destructive
+        if self.app.id in self.world.raise_in and not rollback:
+            raise self.world.raise_in[self.app.id]
         if rollback and self.app.id in self.world.fail_rollback_restore:
             raise BackupError('job-failed', '回復時資料卷匯入失敗。')
         data = (Path(extracted_dir) / app_manifest['volumes'][0]['entry']).read_bytes()
@@ -417,11 +432,19 @@ class FakeAdapter:
         if left and not rollback:
             self.world.fail_restore_after[self.app.id] = left - 1
             raise BackupError('job-failed', '資料卷匯入失敗。')
+        self.warnings.extend(self.world.restore_warnings.get(self.app.id, []))
+        self.world.events.append(('imported', self.app.id))
+        self.imported_hook()  # like the real adapter: the import finished, the units start next (HD-04)
         self.phase('start')
 
     def start_units(self, units):
         self.world.events.append(('start_units', self.app.id, tuple(units)))
         return [u for u in units if u in self.world.unstartable]
+
+    def fresh_in_use(self):
+        if self.app.id in self.world.fresh_live_error:
+            raise BackupError('job-failed', 'systemctl --user show 執行失敗。')
+        return list(self.world.fresh_live.get(self.app.id, []))
 
     def remove_fresh(self):
         self.world.events.append(('remove_fresh', self.app.id))
@@ -990,6 +1013,73 @@ class RestoreFlowTests(FlowCase):
         with self.assertRaises(BackupError) as caught:
             self.restore(apps=['woowbk-two'])
         self.assertEqual(caught.exception.code, 'incompatible')
+
+
+class DeltaReviewFlowTests(RestoreFlowTests):
+    """Delta review findings HD-01, HD-04, HD-06 and HD-09 at the flow level."""
+
+    def fresh_markers(self):
+        return [item['fresh_apps'] for item in self.reporter.partials if 'fresh_apps' in item]
+
+    def test_hd04_an_app_leaves_the_fresh_marker_once_its_import_finished(self):
+        # The finding's probe: fresh restore of woowbk-demo, then woowbk-two; a shutdown signal arrives in
+        # woowbk-two after its destructive step. woowbk-demo was complete (and starts at boot): never removed.
+        from woowbackup.jobs import Terminated
+        self.deps.system_stopping = lambda: True
+        self.world.mode.update({'woowbk-demo': 'fresh', 'woowbk-two': 'fresh'})
+        self.world.raise_in['woowbk-two'] = Terminated(15)
+        with self.assertRaises(Terminated):
+            self.restore(apps=['woowbk-demo', 'woowbk-two'])
+        self.assertIn(('imported', 'woowbk-demo'), self.world.events)
+        self.assertEqual(self.fresh_markers(), [['woowbk-demo', 'woowbk-two'], ['woowbk-two']])
+        self.assertEqual(self.reporter.partial['fresh_apps'], ['woowbk-two'], 'kept for the recovery after boot')
+        # What the recovery then does with an older record that still lists both apps: the complete one runs.
+        self.world.fresh_live = {'woowbk-demo': ['woowbk-demo-app.service']}
+        self.world.events.clear()
+        problems = flows.remove_fresh_apps(self.deps, ['woowbk-demo', 'woowbk-two'])
+        self.assertEqual([e for e in self.world.events if e[0] == 'remove_fresh'], [('remove_fresh', 'woowbk-two')])
+        self.assertEqual(len(problems), 1)
+        self.assertIn('示範筆記應用', problems[0])
+        self.assertIn('需人工確認', problems[0])
+        self.world.fresh_live_error = {'woowbk-two'}
+        self.world.events.clear()
+        problems = flows.remove_fresh_apps(self.deps, ['woowbk-two'])
+        self.assertEqual(self.world.events, [], 'a state that cannot be read is never "unfinished"')
+        self.assertIn('需人工確認', problems[0])
+
+    def test_hd04_a_rollback_lists_the_fresh_app_again_before_removing_it(self):
+        self.world.mode['woowbk-demo'] = 'fresh'
+        self.world.unhealthy['woowbk-demo'] = 'fail'
+        with self.assertRaises(flows.RolledBack):
+            self.restore()
+        self.assertIn(('remove_fresh', 'woowbk-demo'), self.world.events)
+        self.assertEqual(self.fresh_markers(), [['woowbk-demo'], [], ['woowbk-demo'], []])
+
+    def test_hd01_the_job_preflight_checks_the_extracted_archive_before_the_safety_backup(self):
+        self.world.preflight_fail.add('woowbk-demo')
+        with self.assertRaises(BackupError):
+            self.restore()
+        self.assertEqual(self.world.preflight_dirs, [self.storage.staging / self.job_id / 'extract'])
+        self.assertEqual(self.safety_ids(), [], 'refused before the safety backup')
+
+    def test_hd06_an_unqueryable_database_may_be_rebuilt_only_without_a_safety_backup(self):
+        self.restore()
+        self.assertEqual(self.world.unchecked, [('woowbk-demo', False)])
+        self.world.unchecked.clear()
+        self.world.db_down.add('woowbk-demo')  # no safety backup possible; the user accepted restoring anyway
+        flows.run_restore(self.ctx(), {'backup_id': self.backup_id, 'apps': ['woowbk-demo'], 'allow_no_safety': True})
+        self.assertEqual(self.world.unchecked, [('woowbk-demo', True)])
+
+    def test_hd09_what_an_adapter_could_not_keep_reaches_the_result(self):
+        note = '資料卷 data 有 1 個檔案的 setuid／setgid 權限在還原時會被移除（例如 bin/helper）。'
+        self.world.restore_warnings['woowbk-demo'] = [note]
+        result = self.restore()
+        self.assertEqual(result['warnings'], [note])
+        self.world.fail_restore_after['woowbk-two'] = 1
+        self.world.restore_warnings['woowbk-two'] = [note]
+        with self.assertRaises(flows.RolledBack) as caught:
+            self.restore(apps=['woowbk-demo', 'woowbk-two'])
+        self.assertEqual(caught.exception.result['warnings'], [note])
 
 
 class SafetyPruneTests(FlowCase):

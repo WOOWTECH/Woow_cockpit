@@ -9,9 +9,11 @@ import os
 import stat
 import sys
 import tempfile
+import threading
 import time
 import unittest
 from pathlib import Path
+from unittest import mock
 
 ENGINE = Path(__file__).resolve().parents[2] / 'backup-engine'
 if str(ENGINE) not in sys.path:
@@ -186,6 +188,49 @@ class IndexTests(StorageTestCase):
                 self.storage.get(backup_id)
 
 
+class IndexRaceTests(StorageTestCase):
+    """Sidecar read-modify-writes from two processes (job-record race audit, release regression 16)."""
+
+    def race_after_read(self, other_step):
+        """self.storage reads the sidecar; `other_step` (another process) runs right then, in a thread."""
+        original_get = Storage.get
+        seen = {}
+
+        def get(storage, backup_id):
+            rec = original_get(storage, backup_id)
+            if storage is self.storage and 'thread' not in seen:
+                seen['thread'] = threading.Thread(target=other_step)
+                seen['thread'].start()
+                seen['thread'].join(0.5)  # blocked by the index lock (fixed) or already done (lost update)
+            return rec
+
+        return mock.patch.object(Storage, 'get', get), seen
+
+    def test_inspect_does_not_revert_the_result_a_verify_job_just_recorded(self):
+        backup_id = self.put_archive('20261113T020000Z-00000001', verified={'at': '2026-11-12T00:00:00Z', 'ok': True})['id']
+        job = Storage(self.paths, free_space=lambda path: self.free)  # the verify job's process
+        failed = {'at': '2026-11-13T03:00:00Z', 'ok': False}
+        patch, seen = self.race_after_read(lambda: job.update(backup_id, verified=failed))
+        with patch:
+            self.storage.update(backup_id, inspected=True, note='已檢查')  # what inspect records
+        seen['thread'].join(10)
+        final = self.storage.get(backup_id)
+        self.assertEqual(final['verified'], failed, 'a failed verification must never be masked')
+        self.assertEqual((final['inspected'], final['note']), (True, '已檢查'))
+
+    def test_update_never_brings_back_a_deleted_backups_sidecar(self):
+        backup_id = self.put_archive('20261113T020000Z-00000001')['id']
+        other = Storage(self.paths, free_space=lambda path: self.free)
+        patch, seen = self.race_after_read(lambda: other.delete(backup_id))
+        with patch:
+            self.storage.update(backup_id, inspected=True)
+        seen['thread'].join(10)
+        self.assertFalse(self.storage.index_path(backup_id).exists())
+        self.assertFalse(self.storage.archive_path(backup_id).exists())
+        self.assertEqual(sorted(p.name for p in Path(self.paths.archives).iterdir()), [],
+                         'archives/ holds archives and sidecars only (the lock lives in the run directory)')
+
+
 class StagingTests(StorageTestCase):
     def test_staging_dir(self):
         path = self.storage.staging_dir('j20261113T020000Z-a1b2c3d4')
@@ -316,6 +361,86 @@ class UploadTests(StorageTestCase):
         begun = self.storage.begin_upload('again.woowbackup', len(data))
         self.simulate_fsreplace(begun['path'], data)
         self.assertEqual(self.storage.finish_upload(begun['upload_id'])['id'], '20261101T080000Z-0123abd2')
+
+    def test_hd10_an_unreadable_sidecar_is_never_replaced_by_an_uploaded_one(self):
+        # A safety backup's sidecar a newer engine wrote (one extra field): unlisted here, but never rewritten.
+        backup_id = '20261101T080000Z-0123abd3'
+        data = fake_archive_bytes(backup_id=backup_id, key_id='1234-5678-9ABC-DEF0')
+        self.storage.archive_path(backup_id).write_bytes(data)
+        self.storage.register(backup_id, meta(type='safety', note='還原前自動備份', key_id='1234-5678-9ABC-DEF0',
+                                              sha256=hashlib.sha256(data).hexdigest()))
+        index = self.storage.index_path(backup_id)
+        record = json.loads(index.read_text())
+        record['restore_job'] = 'j20261101T080000Z-0123abcd'
+        index.write_text(json.dumps(record))
+        before = index.read_bytes()
+        self.assertEqual(self.storage.list_backups(), [])
+        self.assertEqual(self.storage.adopt_orphans(now=time.time() + 7200), [])
+        self.assertEqual(index.read_bytes(), before)
+        begun = self.storage.begin_upload('again.woowbackup', len(data))
+        self.simulate_fsreplace(begun['path'], data)
+        with self.assertRaises(BackupError) as caught:
+            self.storage.finish_upload(begun['upload_id'])
+        self.assertEqual(caught.exception.code, 'invalid-request')
+        self.assertIn('索引無法讀取', caught.exception.message)
+        self.assertEqual(index.read_bytes(), before)
+        self.assertEqual(self.storage.archive_path(backup_id).read_bytes(), data)
+        with self.assertRaises(BackupError):  # the guard itself
+            self.storage.register(backup_id, meta(sha256=hashlib.sha256(data).hexdigest()), exclusive=True)
+
+    def test_hd08_a_page_timeout_no_longer_stops_the_check(self):
+        # cockpit-bridge sends SIGTERM when the page closes the channel on a timeout; the check now runs to its
+        # end, so the page's "重新確認" finds the backup instead of hashing from byte 0 again (review HD-08).
+        import signal
+        from woowbackup import jobs, util
+        data = fake_archive_bytes(backup_id='20261101T080000Z-0123abd4')
+        begun = self.storage.begin_upload('slow.woowbackup', len(data))
+        self.simulate_fsreplace(begun['path'], data)
+        real = util.sha256_fd
+        hashed = []
+
+        def hashing(fd, *args, **kwargs):
+            os.kill(os.getpid(), signal.SIGTERM)
+            hashed.append(1)
+            return real(fd, *args, **kwargs)
+        with mock.patch.object(util, 'sha256_fd', hashing), jobs.signals_as_exceptions():
+            rec = self.storage.finish_upload(begun['upload_id'])
+            self.assertIs(signal.getsignal(signal.SIGTERM) not in (signal.SIG_IGN, signal.SIG_DFL), True,
+                          'the termination handler is back after the check')
+        self.assertEqual((rec['id'], len(hashed)), ('20261101T080000Z-0123abd4', 1))
+        self.assertTrue((self.paths.uploads / f'{begun["upload_id"]}.done').exists())
+        self.assertEqual(self.storage.finish_upload(begun['upload_id']), rec, 'the retry returns the same backup')
+        self.assertEqual(len(hashed), 1)
+
+    def test_hd08_a_retry_waits_for_the_running_check_and_returns_its_backup(self):
+        from woowbackup import util
+        data = fake_archive_bytes(backup_id='20261101T080000Z-0123abd5')
+        begun = self.storage.begin_upload('slow.woowbackup', len(data))
+        self.simulate_fsreplace(begun['path'], data)
+        started, release, hashed, results = threading.Event(), threading.Event(), [], {}
+        real = util.sha256_fd
+
+        def slow(fd, *args, **kwargs):
+            hashed.append(1)
+            started.set()
+            release.wait(10)
+            return real(fd, *args, **kwargs)
+
+        def finish(name):
+            results[name] = self.storage.finish_upload(begun['upload_id'])
+        with mock.patch.object(util, 'sha256_fd', slow):
+            first = threading.Thread(target=finish, args=('first',))
+            first.start()
+            self.assertTrue(started.wait(10))
+            second = threading.Thread(target=finish, args=('second',))
+            second.start()
+            time.sleep(0.3)
+            self.assertTrue(second.is_alive(), 'the retry waits for the running check')
+            release.set()
+            first.join(10)
+            second.join(10)
+        self.assertEqual(results['first'], results['second'])
+        self.assertEqual(len(hashed), 1, 'hashed once')
 
     def test_begin_validation_space_and_limits(self):
         for filename, size in (('', 100), ('a\nb', 100), ('x' * 300, 100), ('ok', 10), ('ok', True), ('ok', '100'),

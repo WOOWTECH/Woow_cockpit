@@ -5,8 +5,8 @@ Every engine call is made the way the Cockpit page makes it: the installed helpe
 `/usr/local/libexec/woowtech-cockpit-backup <command>` runs as root inside the device, the request
 JSON goes to stdin and exactly one JSON object comes back on stdout. Downloads and uploads use the
 device's real `cockpit-bridge` (run as root, like the superuser bridge): `fsread1` (binary raw,
-max_read_size -1) for the download and `fsreplace1` with `size` + `"send-acks": "bytes"`, 64 KiB
-frames and at most 2 MiB unacknowledged for the upload, exactly the channel options the page uses.
+max_read_size -1) for the download and `fsreplace1` with `size` + `"send-acks": "bytes"`, 512 KiB
+frames and at most 4 MiB unacknowledged for the upload, exactly the channel options the page uses.
 
     python3 -I tests/e2e/lab/cli_e2e.py s1        # dev-a: key, seed, backup (+images), mutate, in-place restore
     python3 -I tests/e2e/lab/cli_e2e.py s2        # A -> B: download, upload, key-required, kit key, fresh restore
@@ -51,8 +51,8 @@ DEVICES = {'a': {'name': 'woowbk-dev-a', 'uid': 1001}, 'b': {'name': 'woowbk-dev
 APP = 'woowbk-demo'
 APP_URL = 'http://127.0.0.1:18090'
 SECRET_RE = re.compile(r'AGE-SECRET-KEY-1[0-9A-Za-z]+')
-CHUNK = 64 * 1024
-WINDOW = 2 * 1024 * 1024
+CHUNK = 512 * 1024  # the page's frame size and unacknowledged window (backup.js, CONTRACT section 11)
+WINDOW = 4 * 1024 * 1024
 COMPARE = ('notes', 'files', 'digest', 'title', 'signatures_valid')
 
 
@@ -438,7 +438,7 @@ def bridge_download(dev, path, dest, *, ev):
 
 
 def bridge_upload(dev, path, source, *, ev, truncate_to=None, flip_at=None):
-    """fsreplace1 {size, send-acks: bytes}, 64 KiB frames, <= 2 MiB unacknowledged, done, wait for close."""
+    """fsreplace1 {size, send-acks: bytes}, 512 KiB frames, <= 4 MiB unacknowledged, done, wait for close."""
     total = os.path.getsize(source) if truncate_to is None else truncate_to
     bridge = Bridge(dev)
     started = time.monotonic()
@@ -729,7 +729,7 @@ def scenario_s2(ev):
              and begin['max_size'] >= got['bytes'], begin)
     sent = bridge_upload('b', begin['path'], local, ev=ev)
     ev.timings['s2_upload_s'] = sent['seconds']
-    ev.check('upload: 64 KiB frames, never more than 2 MiB unacknowledged, every byte acknowledged',
+    ev.check('upload: 512 KiB frames, never more than 4 MiB unacknowledged, every byte acknowledged',
              sent['max_unacked'] <= WINDOW and sent['acked'] == sent['sent'] == got['bytes'], sent)
     finish = ok('b', 'upload-finish', {'upload_id': begin['upload_id']}, ev=ev, timeout=1800)
     uploaded = finish['backup']

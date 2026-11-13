@@ -75,6 +75,7 @@ function runningStep(type, phase, percent, extra = {}) {
   };
 }
 
+const RESTORE_NOTE = '資料卷 woowbk-demo-files 有 1 個檔案的 setuid／setgid 權限在還原時會被移除（例如 bin/helper）；需要這些權限的程式可能無法正常運作。';
 const VERIFY_BEFORE = { summary: { notes: 12, files: 4, digest: '9c1d0f7a', title: '示範筆記', signatures_valid: true } };
 
 function scripts() {
@@ -103,7 +104,8 @@ function scripts() {
           finished: '2026-11-13T02:09:00Z', cancellable: false,
           result: { apps: ['woowbk-demo'], safety_backup_id: B_SAFETY_NEW, rolled_back: false,
             health: [{ id: 'woowbk-demo/health/0', status: 'ok', message: '健康檢查通過：http://127.0.0.1:18090/healthz 回應 200。' }],
-            verification: [{ app: 'woowbk-demo', match: true, before: VERIFY_BEFORE, after: structuredClone(VERIFY_BEFORE) }] } },
+            verification: [{ app: 'woowbk-demo', match: true, before: VERIFY_BEFORE, after: structuredClone(VERIFY_BEFORE) }],
+            warnings: [RESTORE_NOTE] } },
         log: ['2026-11-13T02:08:59Z 應用「示範筆記應用」資料核對一致', '2026-11-13T02:09:00Z 作業結束：已完成'],
       },
     ],
@@ -833,28 +835,28 @@ try {
     await shot(page, 'job-backup-succeeded-1440.png');
   });
 
-  await check('upload streams 64 KiB frames within a 2 MiB ack window; cancel closes the channel and aborts',
+  await check('upload streams 512 KiB frames within a 4 MiB ack window; cancel closes the channel and aborts',
     fixture({ ackMode: 'manual' }), async (page) => {
       await ready(page);
       await page.locator('[data-nav="restore"]').click();
-      const size = 3 * MiB + 1234;
+      const size = 6 * MiB + 1234;
       await page.locator('#restore-file').setInputFiles({ name: 'woowtech-backup-dev-b-20261113-0100.woowbackup', mimeType: 'application/octet-stream', buffer: Buffer.alloc(size, 7) });
       await page.locator('[data-focus="restore-upload"]').click();
-      await page.waitForFunction(() => window.testchannels.at(-1)?.sent >= 2 * 1024 * 1024);
+      await page.waitForFunction(() => window.testchannels.at(-1)?.sent >= 4 * 1024 * 1024);
       await page.waitForTimeout(300);
       let [channel] = await channels(page);
       assert.deepEqual(channel.options, { payload: 'fsreplace1', path: UPLOAD_PATH, binary: true, superuser: 'require', size, 'send-acks': 'bytes' });
-      assert.equal(channel.sent, 2 * MiB, 'sending stops at 2 MiB unacknowledged');
-      assert.equal(channel.frames, 32);
-      assert.equal(channel.maxFrame, 64 * KiB);
+      assert.equal(channel.sent, 4 * MiB, 'sending stops at 4 MiB unacknowledged');
+      assert.equal(channel.frames, 8);
+      assert.equal(channel.maxFrame, 512 * KiB);
       assert.deepEqual(requestOf((await calls(page, 'upload-begin')).at(-1)), { filename: 'woowtech-backup-dev-b-20261113-0100.woowbackup', size });
       assert.equal(await page.locator('#upload-percent').textContent(), '0%', 'progress comes from acks, not from sent bytes');
-      await page.evaluate(() => window.__fixture.releaseAcks(8));
+      await page.evaluate(() => window.__fixture.releaseAcks(2));
       await page.waitForFunction(() => document.querySelector('#upload-percent')?.textContent === '16%');
-      assert.equal(await page.locator('#upload-bytes').textContent(), '已上傳 512 KiB / 3.0 MiB');
-      await page.waitForFunction(() => window.testchannels.at(-1).sent === 2.5 * 1024 * 1024);
+      assert.equal(await page.locator('#upload-bytes').textContent(), '已上傳 1.0 MiB / 6.0 MiB');
+      await page.waitForFunction(() => window.testchannels.at(-1).sent === 5 * 1024 * 1024);
       [channel] = await channels(page);
-      assert(channel.maxUnacked <= 2 * MiB, 'never more than 2 MiB unacknowledged');
+      assert(channel.maxUnacked <= 4 * MiB, 'never more than 4 MiB unacknowledged');
       await shot(page, 'restore-upload-progress-1440.png');
       await page.locator('[data-focus="upload-cancel"]').click();
       await page.locator('[data-focus="restore-upload"]').waitFor();
@@ -888,8 +890,8 @@ try {
     assert.equal(channel.sent, size);
     assert.equal(channel.done, true, 'channel.control({command: "done"}) after the last frame');
     assert.equal(channel.closedBy, 'bridge', 'waited for the bridge close before upload-finish');
-    assert.equal(channel.frames, Math.ceil(size / (64 * KiB)));
-    assert(channel.maxUnacked <= 2 * MiB);
+    assert.equal(channel.frames, Math.ceil(size / (512 * KiB)));
+    assert(channel.maxUnacked <= 4 * MiB);
     assert.deepEqual((await calls(page, 'upload-finish')).map(requestOf), [{ upload_id: UPLOAD_ID }]);
     assert.deepEqual(requestOf((await calls(page, 'inspect'))[0]), { backup_id: B_UPLOADED }, 'first inspect has no key');
     assert.match(await view(page).textContent(), new RegExp(`金鑰 ${OTHER_KEY_ID} 加密`));
@@ -948,6 +950,8 @@ try {
     assert.match(rows[0][0], /資料一致/);
     assert.match(await view(page).textContent(), /健康檢查通過/);
     assert.match(await view(page).textContent(), new RegExp(B_SAFETY_NEW));
+    // Review HD-09: what the restore could not keep is said on the result, not only in the job log.
+    assert.equal(await page.locator('ul[aria-label="還原注意事項"] .check-warn .check-message').textContent(), RESTORE_NOTE);
     for (const call of await calls(page, 'job-status')) assert(!call.stdin.includes('AGE-SECRET-KEY'), 'the key is not resent after the job started');
     await shot(page, 'restore-result-1440.png');
   });
@@ -1537,6 +1541,43 @@ try {
     await page.locator('#key-text').waitFor();
     assert.equal((await calls(page, 'upload-finish')).length, 2);
     assert.equal((await calls(page, 'upload-abort')).length, 0);
+  }, {
+    beforeGoto: async (page, context) => context.route('**/backup.js', async route => {
+      const response = await route.fetch();
+      const body = (await response.text()).replace('const finishTimeout = size =>', 'const finishTimeout = size => 400 ||');
+      await route.fulfill({ response, body });
+    }),
+  });
+
+  await check('an unconfirmed upload stays the active upload: banner, leave-page guard, never replaced (HD-08)', fixture(), async (page) => {
+    await ready(page);
+    await page.locator('[data-nav="restore"]').click();
+    await page.evaluate(() => window.__fixture.hold.push('upload-finish'));
+    await page.locator('#restore-file').setInputFiles({ name: 'big.woowbackup', mimeType: 'application/octet-stream', buffer: Buffer.alloc(200 * KiB, 4) });
+    await page.locator('[data-focus="restore-upload"]').click();
+    await page.locator('[data-focus="upload-recheck"]').waitFor();
+    assert.match(await view(page).textContent(), /檢查也會繼續完成/);
+    const guarded = () => page.evaluate(() => {
+      const event = new Event('beforeunload', { cancelable: true });
+      window.dispatchEvent(event);
+      return event.defaultPrevented;
+    });
+    assert.equal(await guarded(), true, 'leaving the page asks first while the result is unknown');
+    await page.locator('[data-nav="backups"]').click();
+    await page.locator('#upload-banner').getByText('上傳結果尚未確認').waitFor();
+    await page.locator(`[data-focus="restore-${B_MANUAL}"]`).click();
+    await view(page).getByText('目前有上傳尚待確認').waitFor();
+    assert.equal((await calls(page, 'upload-abort')).length, 0, 'opening another restore keeps the upload');
+    await page.locator('[data-focus="upload-busy-view"]').click();
+    await page.locator('[data-focus="upload-recheck"]').waitFor();
+    await page.locator(`[data-nav="backups"]`).click();
+    await page.locator(`[data-focus="restore-${B_MANUAL}"]`).click();
+    await page.locator('[data-focus="upload-busy-cancel"]').click();
+    await page.waitForFunction(() => window.testcalls.some(call => call.argv[1] === 'upload-abort'));
+    assert.deepEqual((await calls(page, 'upload-abort')).map(requestOf), [{ upload_id: UPLOAD_ID }]);
+    await page.locator('[data-focus="pf-next"]').waitFor();  // now the restore that was asked for opens
+    assert.equal(await guarded(), false, 'an abandoned upload no longer guards the page');
+    await page.evaluate(() => window.__fixture.release('upload-finish'));
   }, {
     beforeGoto: async (page, context) => context.route('**/backup.js', async route => {
       const response = await route.fetch();

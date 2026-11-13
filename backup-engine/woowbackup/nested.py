@@ -12,25 +12,39 @@ sees those bytes directly:
   (`stream_volume`, `stream_oci` through `pipe_from`), so no parser difference between Python's
   tarfile and Go's archive/tar can matter.
 
-Volume tars may hold regular files, directories, symlinks (any target: a symlink is never traversed
-while unpacking, because no later member may lie below a symlink or other non-directory) and hard
-links to an earlier regular file. Rejected: devices, FIFOs, sparse/contiguous/unknown types, global
-PAX headers, absolute or `..` names, duplicates, a non-directory replacing a directory, members
-below a non-directory, and hard links to anything else. Re-emitted members keep their mode (without
-setuid/setgid on non-directories), numeric owner, mtime and `SCHILY.xattr.user.*` records only.
+Volume tars may hold regular files, directories, FIFOs, symlinks and hard links to an earlier
+non-directory member (Go's os.Link does not follow a symlink; `podman volume export` writes a second name
+of a symlink or FIFO as such a hard link, review finding HD-03). A symlink is never traversed while
+unpacking, because no later member may lie below a symlink or other non-directory; its target is only
+checked the way podman's import checks it: resolved from the link's own directory it must stay inside the
+volume (podman aborts the import half-way otherwise, after the volume was emptied; finding HD-02).
+Rejected: devices, sparse/contiguous/unknown types, global PAX headers, absolute or `..` names,
+duplicates, a non-directory replacing a directory, members below a non-directory, and, when the owner's
+ID map is given, a member owner the owner's user namespace cannot represent (podman's lchown fails
+half-way otherwise; HD-02). Re-emitted members keep their mode (without setuid/setgid on
+non-directories), numeric owner, mtime and `SCHILY.xattr.user.*` records only; what was dropped is
+counted in the check report, so the restore can say so (HD-09). Member names are remembered as keyed
+128-bit digests, not strings, which keeps a pass at the 2,000,000-member cap well below the job's memory
+limit (HD-03).
 
 OCI archives (`podman save --format oci-archive`) may only contain `oci-layout`, `index.json`,
 `blobs/`, `blobs/sha256/` and `blobs/sha256/<64 hex>` (regular files and directories). The index
-must hold exactly one OCI image manifest whose `org.opencontainers.image.ref.name` equals the ref
-the trusted local templates need (podman names the loaded image after it, so a foreign name would
-retag another image of the owner), the manifest blob must match its digest and its config digest
-must equal the image id recorded in the backup manifest.
+must hold exactly one OCI image manifest, the manifest blob must match its digest and its config digest
+must equal the image id recorded in the backup manifest. Its `org.opencontainers.image.ref.name` must name
+the same image as the ref the trusted local templates need: podman writes the name it resolved the ref to
+(`postgres:16` is saved as `docker.io/library/postgres:16`, a locally built `app:1` as `localhost/app:1`;
+review finding HD-01), so a short ref accepts the same repository path and tag under any registry. The
+rebuilt index never carries the archive's name: it names the image `local_name(ref)`, the name
+`podman tag <id> <ref>` would give it, so a crafted archive can never choose which image name of the owner
+the load moves.
 """
 import contextlib
 import hashlib
 import json
 import os
+import posixpath
 import re
+import secrets
 import tarfile
 import threading
 
@@ -50,12 +64,23 @@ KEEP_PAX = 'SCHILY.xattr.user.'
 COPY_CHUNK = 1024 * 1024
 ENCODING, ERRORS = 'utf-8', 'surrogateescape'
 REGULAR = (tarfile.REGTYPE, tarfile.AREGTYPE)
-KIND_TYPES = {'dir': tarfile.DIRTYPE, 'file': tarfile.REGTYPE, 'symlink': tarfile.SYMTYPE, 'link': tarfile.LNKTYPE}
+KIND_TYPES = {'dir': tarfile.DIRTYPE, 'file': tarfile.REGTYPE, 'symlink': tarfile.SYMTYPE, 'link': tarfile.LNKTYPE,
+              'fifo': tarfile.FIFOTYPE}
+LINKABLE = frozenset({'file', 'symlink', 'link', 'fifo'})  # hard links may name any earlier non-directory
+KIND_CODES = {'dir': 0, 'file': 1, 'symlink': 2, 'link': 3, 'fifo': 4}
+CODE_KINDS = {code: kind for kind, code in KIND_CODES.items()}
 VOLUME, IMAGE = '資料卷', '容器映像'
+SAMPLES = 5
+REGISTRY_RE = re.compile(r'[A-Za-z0-9.-]+(?::[0-9]+)?\Z')
 
 
-def _bad(what, reason, **details):
-    return BackupError('corrupt-archive', f'備份中的{what}含有不安全或不支援的內容，已拒絕還原；這台設備沒有任何變更。',
+def _bad(what, reason, label=None, **details):
+    """corrupt-archive for an unsafe or unsupported nested tar; `reason` (English) and the zh-TW `label` go to
+    the details, so a backup-time check can explain the same rule in its own words."""
+    detail = f'（{label}）' if label else ''
+    if label:
+        details['label'] = label
+    return BackupError('corrupt-archive', f'備份中的{what}含有不安全或不支援的內容{detail}，已拒絕還原；這台設備沒有任何變更。',
                        reason=reason, **details)
 
 
@@ -89,7 +114,7 @@ def _members(tar, what, limit):
             break
         count += 1
         if count > limit:
-            raise _bad(what, 'too many members', limit=limit)
+            raise _bad(what, 'too many members', f'超過 {limit:,} 個項目的上限', limit=limit)
         yield member
         tar.members.clear()
     if tar.pax_headers:
@@ -105,12 +130,93 @@ def _open(path, what, mode):
 
 # ---------------------------------------------------------------- volumes
 
-class _VolumePolicy:
-    """Order-aware member rules; one instance per pass over a volume tar."""
+class IdMap:
+    """IDs a user namespace can represent, from `/proc/self/uid_map` (or gid_map) text read inside it
+    (`podman unshare cat /proc/self/uid_map`): lines of "inside outside count"."""
+
+    def __init__(self, text):
+        self.ranges = []
+        for line in str(text).splitlines():
+            fields = line.split()
+            if len(fields) != 3 or not all(field.isdigit() for field in fields):
+                continue
+            inside, _outside, count = (int(field) for field in fields)
+            if count > 0:
+                self.ranges.append((inside, inside + count))
+        self.ranges.sort()
+
+    def __contains__(self, value):
+        return any(start <= value < end for start, end in self.ranges)
+
+    def describe(self):
+        return '、'.join(f'{start}–{end - 1}' for start, end in self.ranges) or '（無）'
+
+
+def _escapes(name, target):
+    """True when a symlink `name` -> `target` leaves the volume, resolved the way podman's import checks it:
+    the target joined to the link's directory (also an absolute target: Go's filepath.Join keeps it below)."""
+    folder = posixpath.dirname(name)
+    base = '/R' if not folder else f'/R/{folder}'
+    resolved = posixpath.normpath(f'{base}/{target}')
+    return not (resolved == '/R' or resolved.startswith('/R/'))
+
+
+class VolumeReport:
+    """What a volume check found: member count, and what the canonical copy drops (CONTRACT section 5)."""
 
     def __init__(self):
-        self.kinds = {}        # explicit member -> 'dir' | 'file' | 'symlink' | 'link'
-        self.implicit = set()  # parents created implicitly by the unpacker
+        self.members = 0
+        self.special_modes = 0          # setuid/setgid bits dropped from non-directories
+        self.special_mode_samples = []
+        self.dropped_xattrs = 0         # members with extended attributes other than user.* (dropped)
+        self.dropped_xattr_names = []   # e.g. security.capability (bounded)
+        self.dropped_xattr_samples = []
+
+    def note(self, member, name, kind):
+        if kind != 'dir' and member.mode & 0o6000:
+            self.special_modes += 1
+            if len(self.special_mode_samples) < SAMPLES:
+                self.special_mode_samples.append(name)
+        dropped = [key[len('SCHILY.xattr.'):] for key in member.pax_headers
+                   if key.startswith('SCHILY.xattr.') and not key.startswith(KEEP_PAX)]
+        if dropped:
+            self.dropped_xattrs += 1
+            if len(self.dropped_xattr_samples) < SAMPLES:
+                self.dropped_xattr_samples.append(name)
+            for key in dropped:
+                if key not in self.dropped_xattr_names and len(self.dropped_xattr_names) < 10:
+                    self.dropped_xattr_names.append(key[:100])
+
+    def warnings(self, volume):
+        """zh-TW notes for the job log and the restore result (review finding HD-09)."""
+        notes = []
+        if self.special_modes:
+            notes.append(f'資料卷 {volume} 有 {self.special_modes} 個檔案的 setuid／setgid 權限在還原時會被移除'
+                         f'（例如 {"、".join(self.special_mode_samples)}）；需要這些權限的程式可能無法正常運作。')
+        if self.dropped_xattrs:
+            notes.append(f'資料卷 {volume} 有 {self.dropped_xattrs} 個檔案的延伸屬性（{"、".join(self.dropped_xattr_names)}）'
+                         f'在還原時會被移除，例如 file capabilities（例如 {"、".join(self.dropped_xattr_samples)}）；'
+                         '只有 user.* 屬性會保留。')
+        return notes
+
+
+class _VolumePolicy:
+    """Order-aware member rules; one instance per pass over a volume tar.
+
+    Names are remembered as keyed 128-bit digests (a random key per pass, so a crafted archive cannot aim at
+    a collision; a collision could only refuse a valid archive): a str per member cost about twice the memory.
+    """
+
+    def __init__(self, ids=None):
+        self.kinds = {}        # digest of an explicit member -> kind code
+        self.implicit = set()  # digests of parents created implicitly by the unpacker
+        self.ids = ids         # (uid IdMap, gid IdMap) of the owner's user namespace, or None
+        self.report = VolumeReport()
+        self._key = secrets.token_bytes(16)
+
+    def _digest(self, name):
+        return int.from_bytes(hashlib.blake2b(name.encode(ENCODING, ERRORS), digest_size=16, key=self._key).digest(),
+                              'little')
 
     def admit(self, member):
         name = _normalize(member.name, VOLUME)
@@ -122,31 +228,48 @@ class _VolumePolicy:
             kind = 'symlink'
         elif member.type == tarfile.LNKTYPE:
             kind = 'link'
+        elif member.type == tarfile.FIFOTYPE:
+            kind = 'fifo'
         else:
-            raise _bad(VOLUME, 'member type not allowed (device, FIFO, sparse or unknown)',
+            raise _bad(VOLUME, 'member type not allowed (device, sparse or unknown)', '裝置檔或不支援的檔案類型',
                        member=name[:200], type=member.type.decode('latin-1'))
         if name == '.' and kind != 'dir':
             raise _bad(VOLUME, 'the volume root is not a directory')
-        if name in self.kinds:
+        key = self._digest(name)
+        if key in self.kinds:
             raise _bad(VOLUME, 'duplicate member', member=name[:200])
-        if kind != 'dir' and name in self.implicit:
+        if kind != 'dir' and key in self.implicit:
             raise _bad(VOLUME, 'a non-directory replaces a directory', member=name[:200])
         parts = [] if name == '.' else name.split('/')
         for depth in range(1, len(parts)):
-            prefix = '/'.join(parts[:depth])
-            if self.kinds.get(prefix, 'dir') != 'dir':
+            prefix = self._digest('/'.join(parts[:depth]))
+            if self.kinds.get(prefix, 0) != 0:
                 raise _bad(VOLUME, 'member below a symlink, hard link or file', member=name[:200])
             self.implicit.add(prefix)
         link = None
         if kind == 'link':
             link = _normalize(member.linkname, VOLUME)
-            if self.kinds.get(link) != 'file':
-                raise _bad(VOLUME, 'hard link to something other than an earlier regular file', member=name[:200])
+            target = self.kinds.get(self._digest(link))
+            if target is None or CODE_KINDS[target] not in LINKABLE:
+                raise _bad(VOLUME, 'hard link to something other than an earlier non-directory member', member=name[:200])
         elif kind == 'symlink':
             link = member.linkname
             if not isinstance(link, str) or not link or '\x00' in link or len(link) > MAX_NAME:
                 raise _bad(VOLUME, 'invalid symlink target', member=name[:200])
-        self.kinds[name] = kind
+            if _escapes(name, link):
+                raise _bad(VOLUME, 'symlink pointing outside the volume', '指向資料卷外的符號連結',
+                           member=name[:200], target=link[:200])
+        if self.ids is not None:
+            uid, gid = int(member.uid), int(member.gid)
+            if uid not in self.ids[0] or gid not in self.ids[1]:
+                raise BackupError('incompatible', f'資料卷中的 {name[:200]} 屬於 UID {uid}／GID {gid}，超出這台設備應用帳號'
+                                                  f'可用的 ID 範圍（UID {self.ids[0].describe()}；GID {self.ids[1].describe()}），'
+                                                  'Podman 無法匯入；這台設備沒有任何變更。',
+                                  reason='owner id outside the user namespace', label=f'擁有者 UID {uid}／GID {gid} 超出帳號可用的範圍',
+                                  member=name[:200], uid=uid, gid=gid)
+        self.kinds[key] = KIND_CODES[kind]
+        self.report.members += 1
+        self.report.note(member, name, kind)
         return name, kind, link
 
 
@@ -165,20 +288,21 @@ def _volume_info(member, name, kind, link):
     return info
 
 
-def check_volume(path):
-    """Validate a volume tar completely (no output); returns the member count."""
-    count = 0
-    policy = _VolumePolicy()
+def check_volume(path, ids=None):
+    """Validate a volume tar completely (no output); returns a VolumeReport.
+
+    `ids`: (uid IdMap, gid IdMap) of the owner's user namespace; every member owner must be in it.
+    """
+    policy = _VolumePolicy(ids)
     with _open(path, VOLUME, 'r|') as tar:
         for member in _members(tar, VOLUME, MAX_VOLUME_MEMBERS):
             policy.admit(member)
-            count += 1
-    return count
+    return policy.report
 
 
-def stream_volume(path, out):
+def stream_volume(path, out, ids=None):
     """Write a canonical tar of the validated members of `path` to the binary file `out`."""
-    policy = _VolumePolicy()
+    policy = _VolumePolicy(ids)
     with _open(path, VOLUME, 'r|') as tar, \
             tarfile.open(fileobj=out, mode='w|', format=tarfile.PAX_FORMAT, encoding=ENCODING, errors=ERRORS,
                          bufsize=COPY_CHUNK) as dest:
@@ -193,9 +317,74 @@ def stream_volume(path, out):
                     raise _bad(VOLUME, 'member data truncated', member=name[:200]) from None
             else:
                 dest.addfile(info)
+    return policy.report
 
 
 # ---------------------------------------------------------------- OCI archives
+
+def _split_ref(ref):
+    """(registry or None, path, tag or None, digest or None) of an image reference, without normalizing."""
+    name, _, digest = ref.partition('@')
+    slash, colon = name.rfind('/'), name.rfind(':')
+    tag = None
+    if colon > slash:
+        name, tag = name[:colon], name[colon + 1:]
+    first, _, rest = name.partition('/')
+    if rest and ('.' in first or ':' in first or first == 'localhost'):
+        return first, rest, tag, digest or None
+    return None, name, tag, digest or None
+
+
+def _join_ref(registry, path, tag, digest):
+    if registry in ('docker.io', 'index.docker.io'):
+        registry = 'docker.io'
+        if '/' not in path:
+            path = f'library/{path}'
+    name = f'{registry}/{path}' if registry else path
+    if digest:
+        return f'{name}@{digest}'  # a tagged and digested name keeps only the digest (like podman)
+    return f'{name}:{tag or "latest"}'
+
+
+def local_name(ref):
+    """The name podman gives `ref` locally (libimage NormalizeName, which `podman tag <id> <ref>` and
+    `podman load` use): a short name gets `localhost/`, Docker Hub names `library/`, no tag `:latest`.
+    `podman image inspect <ref>` and a Quadlet `Image=<ref>` resolve to it (localhost/ is tried first), except a
+    short name with an alias (`registries.conf.d/shortnames.conf`, e.g. ubuntu, python, node): an existing image
+    under the alias target wins (podman 4.9.3), which the adapter handles (`_resolve_to`)."""
+    registry, path, tag, digest = _split_ref(ref)
+    return _join_ref(registry or 'localhost', path, tag, digest)
+
+
+def is_short_ref(ref):
+    """True for a reference without a registry (`postgres:16`, `team/app:1`), which podman resolves through
+    aliases, `localhost/` and search registries."""
+    return isinstance(ref, str) and bool(ref) and _split_ref(ref)[0] is None
+
+
+def same_image_name(saved, ref):
+    """True when `saved` (the name `podman save` wrote for `ref` on the backup device) names the image the
+    trusted `ref` means: the same name after normalization; for a short ref the same repository path and tag
+    under any registry (the device resolved it through its own search registries), Docker Hub's `library/`
+    included."""
+    if not isinstance(saved, str) or not saved or len(saved) > 512 or not isinstance(ref, str) or not ref:
+        return False
+    if saved == ref:
+        return True
+    registry, path, tag, digest = _split_ref(saved)
+    want_registry, want_path, want_tag, want_digest = _split_ref(ref)
+    if (digest or None) != (want_digest or None):
+        return False
+    if not digest and (tag or 'latest') != (want_tag or 'latest'):
+        return False
+    if registry is not None and not REGISTRY_RE.fullmatch(registry):
+        return False
+    if want_registry is not None:
+        return _join_ref(registry, path, tag, digest) == _join_ref(want_registry, want_path, want_tag, want_digest)
+    if registry in ('docker.io', 'index.docker.io') and '/' not in want_path:
+        return path in (want_path, f'library/{want_path}')
+    return path == want_path
+
 
 def _read_member(tar, member, limit, what, label):
     if member.size > limit:
@@ -244,7 +433,7 @@ def _oci_members(tar):
 
 
 def check_oci(path, *, ref, image_id):
-    """Validate an OCI archive for `ref`; returns the plan `stream_oci` needs."""
+    """Validate an OCI archive for `ref`; returns the plan `stream_oci` needs (the image is named `local_name(ref)`)."""
     match = IMAGE_ID_RE.fullmatch(image_id) if isinstance(image_id, str) else None
     if not match:
         raise _bad(IMAGE, 'the backup manifest has no valid image id', ref=str(ref)[:200])
@@ -265,8 +454,10 @@ def check_oci(path, *, ref, image_id):
         annotations = descriptor.get('annotations')
         if descriptor.get('mediaType') != OCI_MANIFEST:
             raise _bad(IMAGE, 'the index entry is not an OCI image manifest')
-        if not isinstance(annotations, dict) or annotations.get(REF_NAME) != ref:
-            raise _bad(IMAGE, 'the image name in the archive differs from the name the app needs', ref=str(ref)[:200])
+        if not isinstance(annotations, dict) or not same_image_name(annotations.get(REF_NAME), ref):
+            raise _bad(IMAGE, 'the image name in the archive differs from the name the app needs',
+                       '映像名稱與應用需要的不同', ref=str(ref)[:200],
+                       saved=str((annotations or {}).get(REF_NAME) if isinstance(annotations, dict) else '')[:200])
         manifest_hex = _digest(descriptor.get('digest'), IMAGE, 'manifest')
 
         def blob(hex_digest, label):
@@ -298,10 +489,11 @@ def check_oci(path, *, ref, image_id):
             blob(layer_hex, 'layer')
             if layer_hex not in blobs:
                 blobs.append(layer_hex)
+    name = local_name(ref)  # from the trusted ref, never the archive's annotation
     index_data = json.dumps({'schemaVersion': 2, 'manifests': [{
         'mediaType': OCI_MANIFEST, 'digest': f'sha256:{manifest_hex}', 'size': len(manifest_data),
-        'annotations': {REF_NAME: ref}}]}, separators=(',', ':')).encode()
-    return {'ref': ref, 'image_id': f'sha256:{config_hex}', 'index': index_data, 'blobs': blobs}
+        'annotations': {REF_NAME: name}}]}, separators=(',', ':')).encode()
+    return {'ref': ref, 'name': name, 'image_id': f'sha256:{config_hex}', 'index': index_data, 'blobs': blobs}
 
 
 def stream_oci(path, plan, out):

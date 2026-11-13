@@ -16,16 +16,24 @@ Facts this adapter relies on (verified with Podman 4.9 rootless + systemd --user
   for a missing image and 125 for an error.
 * `podman load` and `podman volume import` follow symlinks planted in their input tar; both are
   only ever fed canonical tars written by `woowbackup.nested` (review finding SEC-1).
+* `podman volume import` aborts half-way (exit 125, after `volume rm` + `create`) on a relative symlink that
+  leaves the volume and on a member owner outside the owner's user namespace; `podman volume export` writes
+  FIFOs and second names of a symlink (hard links) that the import accepts (review findings HD-02, HD-03).
+* `podman save` names an image after the name a short ref resolves to (`postgres:16` ->
+  `docker.io/library/postgres:16`); `podman load` and `podman tag` name a short ref `localhost/<ref>`, which a
+  short-name lookup tries first (review finding HD-01) -- except for a short name with an alias
+  (`/etc/containers/registries.conf.d/shortnames.conf`: ubuntu, python, node, alpine, ...): an existing image under
+  the alias target (`docker.io/library/ubuntu:24.04`) wins over `localhost/ubuntu:24.04` (verified in the lab).
 """
+import http.client
 import json
 import os
 import platform
 import re
+import socket
 import stat
 import time
-import urllib.error
 import urllib.parse
-import urllib.request
 from pathlib import Path
 
 from .. import nested
@@ -59,30 +67,87 @@ SPACE_RESERVE = 512 * 1024 * 1024
 SMALL_OUTPUT = 1024 * 1024        # psql, pg_isready, systemctl show, podman load --quiet
 INSPECT_OUTPUT = 4 * 1024 * 1024  # podman image inspect
 TAR_OVERHEAD = 1024               # per member of a volume export: 512-byte header + up to 511 bytes padding
+# User objects in a database: relations and routines outside the system schemas, plus extensions besides plpgsql.
+MAINTENANCE_OBJECTS_SQL = (
+    "SELECT (SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace "
+    "WHERE c.relkind IN ('r', 'p', 'v', 'm', 'S', 'f') AND n.nspname NOT IN ('pg_catalog', 'information_schema') "
+    "AND n.nspname !~ '^pg_(toast|temp)') + (SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON "
+    "n.oid = p.pronamespace WHERE n.nspname NOT IN ('pg_catalog', 'information_schema')) + "
+    "(SELECT count(*) FROM pg_extension WHERE extname <> 'plpgsql')")
 SNAPSHOT_CHANGED = ('資料核對快照在備份期間有變動（例如仍有寫入進行中，或設定在服務重新啟動時才生效）；'
                     '這份備份不含資料核對快照，還原後會略過資料比對。')
 
 
-class _NoRedirect(urllib.request.HTTPRedirectHandler):
-    def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: D401 - never follow
-        return None
+class _DeadlineSocket(socket.socket):
+    """A socket whose every receive waits at most `per_op` seconds and never past `deadline` (monotonic):
+    a peer that sends one byte at a time can no longer stretch one request without bound (review HD-07)."""
+
+    per_op = 3.0
+    deadline = 0.0
+
+    def _arm(self):
+        remaining = self.deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError('loopback request deadline exceeded')
+        self.settimeout(min(self.per_op, remaining))
+
+    def recv_into(self, buffer, nbytes=0, flags=0):
+        self._arm()
+        return super().recv_into(buffer, nbytes, flags)
+
+    def recv(self, bufsize, flags=0):
+        self._arm()
+        return super().recv(bufsize, flags)
 
 
-def loopback_get(url, timeout):
-    """GET a catalog URL on the loopback interface only: no proxies, no redirects, bounded body."""
+class _LoopbackConnection(http.client.HTTPConnection):
+    def __init__(self, host, port, *, per_op, deadline):
+        super().__init__(host, port, timeout=per_op)
+        self._per_op, self._deadline = per_op, deadline
+
+    def connect(self):
+        error = OSError('no address')
+        for family, kind, proto, _name, address in socket.getaddrinfo(self.host, self.port, 0, socket.SOCK_STREAM):
+            sock = _DeadlineSocket(family, kind, proto)
+            sock.per_op, sock.deadline = self._per_op, self._deadline
+            try:
+                remaining = self._deadline - time.monotonic()
+                if remaining <= 0:
+                    raise TimeoutError('loopback request deadline exceeded')
+                sock.settimeout(min(self._per_op, remaining))
+                sock.connect(address)
+            except OSError as exc:
+                sock.close()
+                error = exc
+                continue
+            self.sock = sock
+            return
+        raise error
+
+
+def loopback_get(url, timeout, *, read_body=True):
+    """GET a catalog URL on the loopback interface only: no proxies, no redirects, bounded body, and at most
+    `timeout` seconds in total (connect, headers and body; review finding HD-07). Non-2xx statuses come back
+    with an empty body; `read_body=False` returns as soon as the status line and headers arrived."""
     parts = urllib.parse.urlsplit(url)
     if parts.scheme != 'http' or parts.hostname not in ('127.0.0.1', 'localhost') or parts.username or parts.password:
         raise ValueError('only loopback http URLs are allowed')
-    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), _NoRedirect())
-    request = urllib.request.Request(url, headers={'User-Agent': 'woowtech-cockpit-backup', 'Accept': 'application/json'})
+    timeout = max(0.1, float(timeout))
+    connection = _LoopbackConnection(parts.hostname, parts.port or 80, per_op=timeout,
+                                     deadline=time.monotonic() + timeout)
+    target = (parts.path or '/') + (f'?{parts.query}' if parts.query else '')
     try:
-        with opener.open(request, timeout=timeout) as response:
-            body = response.read(MAX_HTTP_BODY + 1)
-            if len(body) > MAX_HTTP_BODY:
-                raise ValueError('response too large')
-            return response.status, body
-    except urllib.error.HTTPError as error:
-        return error.code, b''
+        connection.request('GET', target, headers={'User-Agent': 'woowtech-cockpit-backup', 'Accept': 'application/json',
+                                                   'Connection': 'close'})
+        response = connection.getresponse()
+        if not 200 <= response.status < 300 or not read_body:
+            return response.status, b''
+        body = response.read(MAX_HTTP_BODY + 1)
+        if len(body) > MAX_HTTP_BODY:
+            raise ValueError('response too large')
+        return response.status, body
+    finally:
+        connection.close()
 
 
 def parse_unit_file(text):
@@ -160,15 +225,19 @@ class QuadletPostgresAdapter(Adapter):
     name = 'quadlet-postgres'
     version = 1
 
-    def __init__(self, app, runner, log, *, phase=None, checkpoint=None, writers_hook=None, http_get=None, clock=None,
-                 sleep=None, runtime_ready=None, templates_uid=0, statvfs=None):
-        super().__init__(app, runner, log, phase=phase, checkpoint=checkpoint, writers_hook=writers_hook)
+    def __init__(self, app, runner, log, *, phase=None, checkpoint=None, writers_hook=None, imported_hook=None,
+                 http_get=None, clock=None, sleep=None, runtime_ready=None, templates_uid=0, statvfs=None):
+        super().__init__(app, runner, log, phase=phase, checkpoint=checkpoint, writers_hook=writers_hook,
+                         imported_hook=imported_hook)
         self.http_get = http_get or loopback_get
         self.clock = clock or time.monotonic
         self.sleep = sleep or time.sleep
         self._runtime_ready_fn = runtime_ready
         self.templates_uid = templates_uid
         self.statvfs = statvfs or os.statvfs
+        self._owner_ids = None
+        self._nested_checked = {}  # nested tars already checked by this adapter (preflight, then restore)
+        self._previous_tags = {}   # image name -> image id it pointed at before this restore moved it
 
     # ----------------------------------------------------------------- helpers
     @staticmethod
@@ -288,8 +357,9 @@ class QuadletPostgresAdapter(Adapter):
         if image_id and not image_id.startswith('sha256:'):
             image_id = 'sha256:' + image_id
         config = data.get('Config') or {}
+        names = [name for name in data.get('RepoTags') or [] if isinstance(name, str) and 0 < len(name) <= 512][:64]
         return {'id': image_id, 'digest': str(data.get('Digest') or ''), 'arch': str(data.get('Architecture') or ''),
-                'size': int(data.get('Size') or 0), 'env': list(config.get('Env') or [])}
+                'size': int(data.get('Size') or 0), 'env': list(config.get('Env') or []), 'names': names}
 
     @staticmethod
     def _bare_id(image_id):
@@ -326,18 +396,67 @@ class QuadletPostgresAdapter(Adapter):
         return out.decode('utf-8', 'replace').strip()
 
     def undeclared(self, pg):
-        """(databases, roles) of the instance beyond the catalog's database, `postgres`, templates and built-in
-        roles, or None when the database cannot be queried. An in-place restore rebuilds the whole data volume
-        from one `pg_dump -d <database>`, so anything listed here would be lost (review finding CR-07)."""
+        """(databases, roles) of the instance beyond the catalog's database, `postgres` and template0/template1, or
+        None when the instance cannot be queried. An in-place restore rebuilds the whole data volume from one
+        `pg_dump -d <database>`, so anything listed here would be lost (review finding CR-07).
+
+        The shared catalogs are read through the catalog's own database, the one `pg_dump` uses (review finding
+        HD-06: `-d postgres` failed where that database was dropped or closed to the app user, and the guard then
+        let the restore delete every other database). Template-flagged databases count too, only template0 and
+        template1 are skipped, by name.
+        """
         try:
-            databases = self.psql_scalar(pg, 'SELECT datname FROM pg_database WHERE NOT datistemplate ORDER BY 1',
-                                         database='postgres').splitlines()
+            databases = self.psql_scalar(pg, "SELECT datname FROM pg_database WHERE datname NOT IN ('template0', "
+                                             "'template1') ORDER BY 1").splitlines()
             roles = self.psql_scalar(pg, "SELECT rolname FROM pg_roles WHERE rolname !~ '^pg_' "
-                                         'AND rolname <> current_user ORDER BY 1', database='postgres').splitlines()
+                                         'AND rolname <> current_user ORDER BY 1').splitlines()
         except BackupError:
             return None
         extra = [name for name in databases if name and name not in (pg['database'], 'postgres')]
         return extra, [name for name in roles if name]
+
+    def maintenance_objects(self, pg):
+        """Number of tables, views, sequences, functions and extensions (besides plpgsql) stored in the instance's
+        `postgres` database, which an in-place restore does not keep (e.g. pg_cron jobs; review finding HD-06);
+        0 when that database does not exist, None when it cannot be read."""
+        try:
+            if 'postgres' not in self.psql_scalar(pg, 'SELECT datname FROM pg_database ORDER BY 1').splitlines():
+                return 0
+            value = self.psql_scalar(pg, MAINTENANCE_OBJECTS_SQL, database='postgres')
+            return int(value or 0)
+        except (BackupError, ValueError):
+            return None
+
+    def owner_ids(self):
+        """(uid IdMap, gid IdMap) of the owner's rootless user namespace, read inside it (cached). Volume members
+        must be owned by IDs in it, or `podman volume import` stops half-way (review finding HD-02)."""
+        if self._owner_ids is None:
+            maps = []
+            for name in ('uid_map', 'gid_map'):
+                out = self.runner.podman('unshare', 'cat', f'/proc/self/{name}', timeout=SHORT_TIMEOUT,
+                                         max_output=SMALL_OUTPUT).stdout or b''
+                ids = nested.IdMap(out.decode('utf-8', 'replace'))
+                if not ids.ranges:
+                    raise BackupError('job-failed', f'無法讀取帳號 {self.runner.owner} 的使用者命名空間 ID 對應。',
+                                      app=self.app.id)
+                maps.append(ids)
+            self._owner_ids = tuple(maps)
+        return self._owner_ids
+
+    def _check_volume_entry(self, name, path, *, log=True):
+        """Check one volume tar (cached per path); returns its nested.VolumeReport. Notes about what the canonical
+        copy drops are kept in `self.warnings` (and logged unless the caller reports them; finding HD-09)."""
+        key = ('volume', str(path))
+        report = self._nested_checked.get(key)
+        if report is None:
+            report = nested.check_volume(path, ids=self.owner_ids())
+            self._nested_checked[key] = report
+            for note in report.warnings(name):
+                if note not in self.warnings:
+                    self.warnings.append(note)
+                    if log:
+                        self.log(f'注意：{note}')
+        return report
 
     def _output_budget(self, folder):
         """Bytes a command may write into `folder` before only the reserve would be left (review finding SEC-3)."""
@@ -390,7 +509,8 @@ class QuadletPostgresAdapter(Adapter):
         """
         for spec in self.app.health:
             try:
-                status, _body = self.http_get(spec['url'], min(timeout, spec['timeout_seconds']))
+                # The status line is all the hint needs; the body is never read (review finding HD-07).
+                status, _body = self.http_get(spec['url'], min(timeout, spec['timeout_seconds']), read_body=False)
             except Exception:  # noqa: BLE001 - any transport error means "not answering"
                 return f'服務已啟動，但健康檢查沒有回應（{spec["url"]}）。'
             if status != spec['expect_status']:
@@ -482,6 +602,10 @@ class QuadletPostgresAdapter(Adapter):
                 self.log(f'注意：資料庫執行個體中還有應用設定未宣告的資料庫（{", ".join(found[0][:10])}），不會包含在備份中。')
             if found and found[1]:
                 self.log(f'注意：資料庫角色 {", ".join(found[1][:10])} 不會包含在備份中。')
+            objects = self.maintenance_objects(pg)
+            if objects:
+                self.log(f'注意：資料庫執行個體的 postgres 資料庫中有 {objects} 個資料表、函式或擴充功能（例如排程工作），'
+                         '不會包含在備份中。')
         snapshot = self._snapshot_for_backup()
         for sub in ('postgres', 'volumes', 'secrets', 'config', 'quadlet', 'images'):
             (staging / sub).mkdir(mode=0o700, exist_ok=True)
@@ -515,13 +639,20 @@ class QuadletPostgresAdapter(Adapter):
                 self._restart_lost_databases(active, stopped)
             raise
         self._restart_writers(stopped, started_at, raise_errors=True)
+        # Each export is checked the way a restore checks it, once the writers run again: content podman cannot
+        # import, or more members than a restore accepts, fails this backup now instead of every restore of it
+        # (review findings HD-02, HD-03).
+        for volume in volumes:
+            self._check_exported_volume(volume)
         if was_running:
             self._log_health_after_backup()
             snapshot = self._confirm_snapshot(snapshot)
         else:
             # Waiting out the catalog health timeout for an app that was already down only delays the job
-            # (e.g. the safety backup taken before restoring an app a killed restore left stopped).
+            # (e.g. the safety backup taken before restoring an app a killed restore left stopped). The snapshot
+            # is still confirmed (review finding HD-05), retried while the restarted writers come up.
             self.log('備份前應用並未完整執行，略過備份後的健康檢查。')
+            snapshot = self._confirm_snapshot(snapshot, wait=True)
 
         if include_images:
             for i, image in enumerate(images):
@@ -571,21 +702,29 @@ class QuadletPostgresAdapter(Adapter):
             self.log(f'警告：無法取得備份時的資料核對快照（{error.message}）；還原後將無法比對資料。')
             return {}
 
-    def _confirm_snapshot(self, first):
+    def _confirm_snapshot(self, first, *, wait=False):
         """Keep the pre-stop snapshot only if the app reports the same values once it runs again.
 
         The snapshot is read from the running app before the writers stop, so a write committed in
         between (or a setting applied only at restart) is in the dump but not in the snapshot, and every
         restore of that backup would fail its data check (review finding CR-04). Equal snapshots before
-        the stop and after the restart prove the dump in between has the same values.
+        the stop and after the restart prove the dump in between has the same values. This holds for an app
+        that was only partly running too (review finding HD-05); its health was not awaited, so with `wait` the
+        second read is retried up to the catalog's health timeout.
         """
         if not first:
             return first
-        try:
-            second = self.verify_snapshot()
-        except BackupError as error:
-            self.log(f'警告：無法在服務恢復後再次取得資料核對快照（{error.message}）；這份備份不含資料核對快照。')
-            return {}
+        limit = max((spec['timeout_seconds'] for spec in self.app.health), default=60) if wait else 0
+        deadline = self.clock() + limit
+        while True:
+            try:
+                second = self.verify_snapshot()
+                break
+            except BackupError as error:
+                if self.clock() >= deadline:
+                    self.log(f'警告：無法在服務恢復後再次取得資料核對快照（{error.message}）；這份備份不含資料核對快照。')
+                    return {}
+                self.sleep(HEALTH_INTERVAL)
         if second != first:
             self.log(SNAPSHOT_CHANGED)
             return {}
@@ -708,6 +847,22 @@ class QuadletPostgresAdapter(Adapter):
             raise BackupError('job-failed', f'資料卷 {name} 匯出結果不完整。', app=self.app.id)
         return {'name': name, 'file': dest}
 
+    def _check_exported_volume(self, volume):
+        self.owner_ids()  # a failure to read the ID map keeps its own message
+        try:
+            self._check_volume_entry(volume['name'], volume['file'])
+        except BackupError as error:
+            details = error.details or {}
+            if 'reason' not in details:
+                raise
+            label = details.get('label') or '格式不符'
+            member = details.get('member')
+            code = 'limit-exceeded' if details.get('reason') == 'too many members' else 'job-failed'
+            raise BackupError(code, f'資料卷 {volume["name"]} 含有還原時無法匯入的內容（{label}'
+                                    f'{"：" + str(member) if member else ""}），這份備份無法還原，因此沒有建立；'
+                                    '應用已恢復執行。', app=self.app.id, volume=volume['name'],
+                              reason=details.get('reason')) from None
+
     def _read_secret(self, name, staging):
         result = self.runner.podman('secret', 'inspect', '--showsecret', '--format', '{{.SecretData}}', name,
                                     timeout=SHORT_TIMEOUT, max_output=MAX_SECRET_BYTES + 2)
@@ -779,7 +934,10 @@ class QuadletPostgresAdapter(Adapter):
             raise BackupError('corrupt-archive', f'備份內容的項目 {entry} 不是一般檔案。', app=self.app.id)
         return path
 
-    def preflight(self, app_manifest, *, mode, entry_sizes=None):
+    def preflight(self, app_manifest, *, mode, entry_sizes=None, extracted_dir=None):
+        """Checks for restoring `app_manifest` here. With `extracted_dir` (the restore job, after the archive was
+        extracted) the nested image and volume tars are checked too, before the safety backup: a backup whose
+        image or volume would be refused fails here (review finding HD-01) and restore() reuses the results."""
         app = self.app
         checks = []
         seen = {}
@@ -830,13 +988,16 @@ class QuadletPostgresAdapter(Adapter):
                     add('units-masked', 'warn', f'服務 {", ".join(masked)} 因先前的還原沒有完成而被暫時停用；這次還原完成後會恢復。')
                 down = [p['unit'] for p in app.postgres if states[p['unit']].get('ActiveState') != 'active']
                 if down and not lost:
-                    add('database-down', 'warn', f'資料庫服務 {", ".join(down)} 目前未執行；建立還原前備份時會先嘗試啟動它。')
+                    add('database-down', 'warn', f'資料庫服務 {", ".join(down)} 目前未執行；建立還原前備份時會先嘗試啟動它，'
+                                                 '並確認執行個體中沒有應用設定未宣告的資料庫。')
                 for pg in app.postgres:
                     if pg['unit'] in down:
                         continue
                     found = self.undeclared(pg)
                     if found is None:
-                        add('databases', 'warn', f'無法列出資料庫 {pg["id"]} 執行個體中的資料庫與角色。')
+                        # Review finding HD-06: unknown is not "none"; the restore would delete whatever is there.
+                        add('databases', 'fail', f'無法列出資料庫 {pg["id"]} 執行個體中的資料庫與角色。原位還原會重建整個資料庫資料卷，'
+                                                 '無法確認沒有其他資料庫時不會還原；請確認資料庫可以連線後再試。')
                         continue
                     databases, roles = found
                     if databases:
@@ -844,12 +1005,40 @@ class QuadletPostgresAdapter(Adapter):
                                                  '原位還原會重建整個資料庫資料卷，這些資料庫會遺失；請先移出後再還原。')
                     if roles:
                         add('roles', 'warn', f'還原後不會保留這些資料庫角色與權限設定：{", ".join(roles[:10])}。')
+                    objects = self.maintenance_objects(pg)
+                    if objects is None:
+                        add('maintenance-db', 'warn', '無法讀取資料庫執行個體中 postgres 資料庫的內容；其中若有資料表或排程工作，'
+                                                      '原位還原後不會保留。')
+                    elif objects:
+                        add('maintenance-db', 'warn', f'資料庫執行個體的 postgres 資料庫中有 {objects} 個資料表、函式或擴充功能'
+                                                      '（例如排程工作）；原位還原會重建整個資料庫資料卷，這些內容不會保留。')
             add('safety', 'ok', '還原前會先建立並驗證此應用的還原前備份；失敗時會自動回復。')
 
         if sources is not None and self.runtime_ready():
             self._preflight_images(app_manifest, sources, add)
+            if extracted_dir is not None:
+                self._preflight_nested(app_manifest, Path(extracted_dir), sources, add)
         self._preflight_space(app_manifest, entry_sizes, add)
         return checks
+
+    def _preflight_nested(self, app_manifest, root, sources, add):
+        """Check the extracted image and volume tars now (cached for restore()); see preflight()."""
+        try:
+            self._check_image_entries(app_manifest, root, self.container_images(sources))
+        except BackupError as error:
+            add('image-archive', 'fail', error.message)
+        found, _missing, _extra = self.match_items(app_manifest)
+        for volume in self.app.volumes:
+            item = found['volumes'].get(volume['name'])
+            if item is None:
+                continue  # reported as a missing item already
+            try:
+                report = self._check_volume_entry(volume['name'], self.entry_path(root, item['entry']), log=False)
+            except BackupError as error:
+                add('volume-archive', 'fail', error.message)
+                continue
+            for note in report.warnings(volume['name']):
+                add('volume-attributes', 'warn', note)
 
     def _preflight_leftovers(self, sources, add):
         """Fresh mode: anything the restore would create must not exist yet. A failed fresh restore removes what
@@ -933,9 +1122,11 @@ class QuadletPostgresAdapter(Adapter):
         else:
             add('space', 'ok', f'應用資料所在磁碟空間足夠（可用 {_human(free)}）。')
 
-    def restore(self, app_manifest, extracted_dir, *, mode, rollback=False):
+    def restore(self, app_manifest, extracted_dir, *, mode, rollback=False, unchecked_databases_ok=False):
         """Restore one app from an extracted archive. `rollback=True` (restoring the pre-restore safety backup
-        after a failure) never pulls an image: the exact pre-restore image must still be here."""
+        after a failure) never pulls an image: the exact pre-restore image must still be here.
+        `unchecked_databases_ok`: the restore runs without a safety backup that the user accepted (or it restores a
+        safety backup), so an instance that cannot be queried at all may be rebuilt (review finding HD-06)."""
         app = self.app
         root = Path(extracted_dir)
         self.destructive_started = False
@@ -947,12 +1138,14 @@ class QuadletPostgresAdapter(Adapter):
         templates = self.read_templates() if mode == 'fresh' else None
         sources = templates if mode == 'fresh' else self._read_owner_quadlets()
         needed = self.container_images(sources)
-        # Nested tars from the archive are checked completely before anything changes (review finding SEC-1).
+        # Nested tars from the archive are checked completely before anything changes (review finding SEC-1); the
+        # job's preflight usually did so already, before the safety backup (HD-01), and the results are reused.
         loads = self._check_image_entries(app_manifest, root, needed)
         for volume in app.volumes:
-            nested.check_volume(files['volumes'][volume['name']])
-        if mode == 'inplace':
-            self._refuse_undeclared_databases()
+            self._check_volume_entry(volume['name'], files['volumes'][volume['name']])
+        if mode == 'inplace' and not rollback:
+            # A rollback rebuilds the volume the failed restore itself created from the archive: nothing else is in it.
+            self._refuse_undeclared_databases(unchecked_ok=unchecked_databases_ok)
         self._remember_tags(needed)
         try:
             self._prepare_images(app_manifest, root, needed, loads, allow_pull=not rollback)
@@ -998,6 +1191,9 @@ class QuadletPostgresAdapter(Adapter):
                 self._check_target_major(pg, app_manifest)
                 self._ensure_database(pg)
                 self._restore_database(pg, files['postgres'][pg['id']])
+            # The data import is complete: from now on the app may hold new data (its units start, also at boot), so
+            # a recovery must never remove it as an unfinished fresh deployment (review finding HD-04).
+            self.imported_hook()
             self._unmask_units()
             for unit in app.units:
                 if unit not in started:
@@ -1028,10 +1224,20 @@ class QuadletPostgresAdapter(Adapter):
         if units:
             self.runner.systemctl('unmask', '--', *units, timeout=SHORT_TIMEOUT, check=check)
 
-    def _refuse_undeclared_databases(self):
+    def _refuse_undeclared_databases(self, unchecked_ok=False):
         for pg in self.app.postgres:
             found = self.undeclared(pg)
-            if found and found[0]:
+            if found is None:
+                if not unchecked_ok:
+                    raise BackupError('incompatible', f'無法確認資料庫 {pg["id"]} 的執行個體中是否還有應用設定未宣告的資料庫'
+                                                      '（資料庫沒有執行或無法連線）。原位還原會重建整個資料庫資料卷，'
+                                                      '為避免遺失其他資料庫，未做任何變更。', app=self.app.id)
+                note = (f'無法確認資料庫 {pg["id"]} 的執行個體中是否還有其他資料庫（資料庫沒有執行或無法連線）；這次還原沒有'
+                        '還原前備份（已確認直接還原，或還原的就是還原前備份），會重建整個資料庫資料卷，其中若有其他資料庫將會遺失。')
+                self.log(f'注意：{note}')
+                self.warnings.append(note)
+                continue
+            if found[0]:
                 raise BackupError('incompatible', f'資料庫執行個體中還有應用設定未宣告的資料庫：{", ".join(found[0][:10])}。'
                                                   '原位還原會重建整個資料庫資料卷，這些資料庫會遺失；未做任何變更。', app=self.app.id)
 
@@ -1040,26 +1246,41 @@ class QuadletPostgresAdapter(Adapter):
         self.runner.systemctl('start', '--', unit, timeout=START_TIMEOUT)
 
     def _check_image_entries(self, app_manifest, root, needed):
-        """{ref: (path, plan)} for every included image the trusted templates need, each validated by nested."""
+        """{ref: (path, plan)} for every included image the trusted templates need, each validated by nested
+        (cached per ref and path)."""
         archived = {img.get('ref'): img for img in app_manifest.get('images') or [] if isinstance(img, dict)}
         loads = {}
         for ref in dict.fromkeys(needed.values()):
             image = archived.get(ref)
             if image and image.get('entry'):
                 path = self.entry_path(root, image['entry'])
-                loads[ref] = (path, nested.check_oci(path, ref=ref, image_id=image.get('id')))
+                key = ('image', ref, str(path))
+                plan = self._nested_checked.get(key)
+                if plan is None:
+                    plan = nested.check_oci(path, ref=ref, image_id=image.get('id'))
+                    self._nested_checked[key] = plan
+                loads[ref] = (path, plan)
         return loads
 
     def _remember_tags(self, needed):
+        """Record where every name this restore may move points now: the local name a load or tag gives a ref
+        (`localhost/<short ref>`, put back first) and the ref itself as it resolves (review findings CR-10, HD-01)."""
         self._previous_tags = {}
         for ref in dict.fromkeys(needed.values()):
-            info = self.image_inspect(ref)
-            self._previous_tags[ref] = info['id'] if info else None
+            for name in dict.fromkeys((nested.local_name(ref), ref)):
+                if name not in self._previous_tags:
+                    info = self.image_inspect(name)
+                    self._previous_tags[name] = info['id'] if info else None
 
     def _restore_tags(self):
-        """Point every image name this restore loaded, retagged or pulled back at its previous image."""
+        """Point every image name this restore loaded, retagged or pulled back at its previous image.
+
+        Only full names are tagged back: `podman tag <id> <short ref>` would create `localhost/<short ref>`, which has
+        a key of its own, and an alias name this restore moved was recorded under its full name (`_resolve_to`)."""
         previous, self._previous_tags = getattr(self, '_previous_tags', None) or {}, {}
         for ref, old in previous.items():
+            if nested.is_short_ref(ref):
+                continue
             try:
                 info = self.image_inspect(ref)
                 current = info['id'] if info else None
@@ -1084,8 +1305,7 @@ class QuadletPostgresAdapter(Adapter):
                 self.log(f'載入映像 {ref}')
                 with nested.pipe_from(lambda out, path=path, plan=plan: nested.stream_oci(path, plan, out)) as feed:
                     self.runner.podman('load', '--quiet', input=feed, timeout=IMAGE_TIMEOUT, max_output=SMALL_OUTPUT)
-                loaded = self.image_inspect(ref)
-                if not loaded or loaded['id'] != plan['image_id']:
+                if not self._resolve_to(ref, plan['image_id']):
                     raise BackupError('corrupt-archive', f'載入的映像 {ref} 與備份記錄的版本不符。', app=self.app.id)
                 continue
             if image and image.get('id'):
@@ -1105,13 +1325,37 @@ class QuadletPostgresAdapter(Adapter):
     def _ensure_tag(self, image_id, ref):
         if not isinstance(image_id, str) or not re.fullmatch(r'(sha256:)?[0-9a-f]{64}', image_id):
             return
+        full_id = image_id if image_id.startswith('sha256:') else 'sha256:' + image_id
         current = self.image_inspect(ref)
-        if current and current['id'] == (image_id if image_id.startswith('sha256:') else 'sha256:' + image_id):
+        if current and current['id'] == full_id:
             return
         if not self._image_exists(self._bare_id(image_id)):
             raise BackupError('incompatible', f'映像 {ref} 載入後找不到預期的版本。', app=self.app.id)
         self.runner.podman('tag', self._bare_id(image_id), ref, timeout=SHORT_TIMEOUT)
         self.log(f'已將 {ref} 指向備份時的映像版本')
+        if not self._resolve_to(ref, full_id):
+            raise BackupError('incompatible', f'無法讓映像名稱 {ref} 指向備份時的版本（{full_id[:19]}…）。', app=self.app.id)
+
+    def _resolve_to(self, ref, image_id):
+        """Make the trusted `ref` resolve to `image_id` here (after a load or tag named it `local_name(ref)`); True
+        when it does.
+
+        A short name with an alias (shortnames.conf: ubuntu, python, node, ...) resolves to an existing image under
+        the alias target before `localhost/<ref>`. Then the names of the image `ref` resolves to that mean the image
+        `ref` names (`nested.same_image_name`, e.g. `docker.io/library/node:20` for `node:20`) are moved to `image_id`
+        too: names this device already uses for `ref`, never a name from the archive. Each is remembered first, so a
+        failure puts it back (review finding HD-01; a re-pulled `node:20` no longer fails a restore as corrupt)."""
+        current = self.image_inspect(ref)
+        if current is None or current['id'] == image_id or not nested.is_short_ref(ref):
+            return current is not None and current['id'] == image_id
+        for name in current.get('names') or []:
+            if name == nested.local_name(ref) or not nested.same_image_name(name, ref):
+                continue
+            self._previous_tags.setdefault(name, current['id'])
+            self.runner.podman('tag', self._bare_id(image_id), name, timeout=SHORT_TIMEOUT)
+            self.log(f'已將 {name}（{ref} 的別名目標）指向備份時的映像版本')
+        current = self.image_inspect(ref)
+        return current is not None and current['id'] == image_id
 
     def _check_target_major(self, pg, app_manifest):
         source = next((p.get('major') for p in app_manifest.get('postgres') or []
@@ -1141,7 +1385,8 @@ class QuadletPostgresAdapter(Adapter):
         self.runner.podman('volume', 'rm', '-f', name, timeout=STOP_TIMEOUT)
         self.runner.podman('volume', 'create', name, timeout=SHORT_TIMEOUT)
         # podman only ever reads a canonical tar of the validated members (review finding SEC-1).
-        with nested.pipe_from(lambda out: nested.stream_volume(path, out)) as feed:
+        ids = self.owner_ids()
+        with nested.pipe_from(lambda out: nested.stream_volume(path, out, ids)) as feed:
             self.runner.podman('volume', 'import', name, '-', input=feed, timeout=EXPORT_TIMEOUT)
         self.log(f'已重建資料卷 {name}')
 
@@ -1183,6 +1428,23 @@ class QuadletPostgresAdapter(Adapter):
             except BackupError:
                 failed.append(unit)
         return failed
+
+    def fresh_in_use(self):
+        """Units showing that a fresh deployment may already hold new data, for the recovery of a dead restore
+        (review finding HD-04): a non-database unit that is not masked (restore() masks them right after the
+        templates are installed and unmasks them once the data import finished) or that is running; for an app
+        without such units, any running unit. [] means the deployment is still unfinished and may be removed."""
+        states = self.unit_states(self.app.units)
+        maskable = self._maskable_units()
+        running = ('active', 'activating', 'deactivating', 'reloading', 'refreshing')
+        live = []
+        for unit in self.app.units:
+            load, active = states[unit].get('LoadState'), states[unit].get('ActiveState')
+            if unit in maskable and (load not in ('masked', 'not-found') or active in running):
+                live.append(unit)
+            elif not maskable and active in running:
+                live.append(unit)
+        return live
 
     def remove_fresh(self):
         """Undo a fresh deployment. Pre-existing secrets, config files and volumes of the same names fail the
@@ -1259,7 +1521,7 @@ class QuadletPostgresAdapter(Adapter):
         last = '沒有回應'
         while True:
             try:
-                status, _body = self.http_get(spec['url'], min(10, spec['timeout_seconds']))
+                status, _body = self.http_get(spec['url'], min(10, spec['timeout_seconds']), read_body=False)
                 if status == spec['expect_status']:
                     return True, f'HTTP {status}'
                 last = f'HTTP {status}'

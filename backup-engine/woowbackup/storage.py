@@ -2,10 +2,19 @@
 
 Layout below `paths.data` (all 0700): `archives/<id>.woowbackup` + `archives/<id>.json` (index
 sidecar, 0600), `uploads/<upload_id>.part` + `uploads/<upload_id>.json`, `staging/<job>/`, `jobs/`.
-Sidecars are written atomically; unreadable or invalid sidecars are ignored by listings.
+Sidecars are written atomically; unreadable or invalid sidecars are ignored by listings. Every sidecar
+write (register, update, delete) happens under one index lock in the run directory, and `update` reads the
+sidecar under it: a helper command (`inspect`) and a job (a verify result) never overwrite each other's fields,
+and an update never brings back the sidecar of a backup deleted meanwhile. A sidecar that exists but cannot be
+read (e.g. written by a newer engine) is never replaced by an `uploaded` one (review finding HD-10).
+
+`upload-finish` hashes the whole file before it answers. Once it started it runs to its end even when the page
+times out and cockpit-bridge terminates it (SIGTERM is ignored meanwhile), and a second `upload-finish` of the
+same upload waits for the first and then returns its result (review finding HD-08).
 """
 import contextlib
 import errno
+import fcntl
 import os
 import re
 import shutil
@@ -198,37 +207,58 @@ class Storage:
             raise BackupError('internal-error', '備份索引資料格式不正確。', backup_id=backup_id)
         return rec
 
-    def register(self, backup_id, meta):
-        """Atomically write the index sidecar for an archive already in place."""
+    @contextlib.contextmanager
+    def _index_lock(self):
+        """Exclusive flock on `<run>/index.lock` around one sidecar read-modify-write (held briefly, not nested).
+
+        In the run directory (tmpfs) rather than in archives/, which holds archives and sidecars only.
+        """
+        run = util.ensure_dir(self.paths.run, 0o700)
+        fd = os.open(Path(run) / 'index.lock', os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX)
+            yield
+        finally:
+            os.close(fd)
+
+    def register(self, backup_id, meta, *, exclusive=False):
+        """Atomically write the index sidecar for an archive already in place; `exclusive=True` never replaces an
+        existing sidecar, readable or not (raises invalid-request)."""
         self._check_id(backup_id)
-        st = self._archive_stat(backup_id)
-        if st is None:
-            raise BackupError('not-found', MSG_NOT_FOUND, backup_id=backup_id)
-        rec = self._normalize(backup_id, meta, st)
-        util.atomic_write_json(self.index_path(backup_id), rec, 0o600)
+        with self._index_lock():
+            if exclusive and os.path.lexists(self.index_path(backup_id)):
+                raise BackupError('invalid-request', '這份備份已有索引，未覆寫。', backup_id=backup_id)
+            st = self._archive_stat(backup_id)
+            if st is None:
+                raise BackupError('not-found', MSG_NOT_FOUND, backup_id=backup_id)
+            rec = self._normalize(backup_id, meta, st)
+            util.atomic_write_json(self.index_path(backup_id), rec, 0o600)
         return rec
 
     def update(self, backup_id, **fields):
-        rec = self.get(backup_id)
-        for key in fields:
-            if key == 'id' or key not in (*META_REQUIRED, *META_OPTIONAL):
-                raise BackupError('internal-error', '不可更新此備份索引欄位。', field=str(key)[:64])
-        rec.update(fields)
-        source = rec.get('source')
-        if isinstance(source, dict) and 'hostname' in source:
-            rec['source'] = {'hostname': source['hostname']}
-        if not _valid_meta(rec, backup_id):
-            raise BackupError('internal-error', '備份索引資料格式不正確。', backup_id=backup_id)
-        util.atomic_write_json(self.index_path(backup_id), rec, 0o600)
+        """Change some fields of a sidecar, read and written under the index lock."""
+        with self._index_lock():
+            rec = self.get(backup_id)
+            for key in fields:
+                if key == 'id' or key not in (*META_REQUIRED, *META_OPTIONAL):
+                    raise BackupError('internal-error', '不可更新此備份索引欄位。', field=str(key)[:64])
+            rec.update(fields)
+            source = rec.get('source')
+            if isinstance(source, dict) and 'hostname' in source:
+                rec['source'] = {'hostname': source['hostname']}
+            if not _valid_meta(rec, backup_id):
+                raise BackupError('internal-error', '備份索引資料格式不正確。', backup_id=backup_id)
+            util.atomic_write_json(self.index_path(backup_id), rec, 0o600)
         return rec
 
     def delete(self, backup_id):
         index, path = self.index_path(backup_id), self.archive_path(backup_id)
-        if not os.path.lexists(index) and not os.path.lexists(path):
-            raise BackupError('not-found', MSG_NOT_FOUND, backup_id=backup_id)
-        for target in (index, path):  # sidecar first: a listed backup always has its file
-            with contextlib.suppress(FileNotFoundError):
-                os.unlink(target)
+        with self._index_lock():
+            if not os.path.lexists(index) and not os.path.lexists(path):
+                raise BackupError('not-found', MSG_NOT_FOUND, backup_id=backup_id)
+            for target in (index, path):  # sidecar first: a listed backup always has its file
+                with contextlib.suppress(FileNotFoundError):
+                    os.unlink(target)
         util.fsync_dir(self.paths.archives)
 
     # ------------------------------------------------------------ space
@@ -360,24 +390,48 @@ class Storage:
         with contextlib.suppress(OSError):
             util.atomic_write_json(self._done_path(upload_id), {'backup_id': backup_id, 'at': util.iso_utc()}, 0o600)
 
-    def _register_uploaded(self, backup_id, header, sha256, filename):
+    def _register_uploaded(self, backup_id, header, sha256, filename, *, exclusive=False):
         original = (filename or '').strip().lower()
         name = original if UPLOADED_NAME_RE.match(original) else util.download_filename('uploaded', header['created'])
-        return self.register(backup_id, {
+        return self.register(backup_id, exclusive=exclusive, meta={
             'type': 'uploaded', 'created': header['created'], 'note': '', 'apps': [], 'sha256': sha256,
             'key_id': header['key_id'], 'include_images': False, 'filename': name, 'source': None,
             'verified': None, 'inspected': False, 'uploaded_at': util.iso_utc()})
+
+    @contextlib.contextmanager
+    def _upload_lock(self, upload_id, info_path):
+        """Exclusive flock on the upload's `.json` (it exists from upload-begin until a successful finish removes it):
+        a second upload-finish of the same upload waits here for the first one, then finds its `.done`."""
+        try:
+            fd = os.open(info_path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK)
+        except FileNotFoundError:
+            raise BackupError('not-found', '找不到上傳工作，可能已逾時或取消。', upload_id=upload_id) from None
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX)  # waiting stays interruptible: nothing is lost if this one is stopped
+            yield
+        finally:
+            os.close(fd)
 
     def finish_upload(self, upload_id):
         """Validate the written file and register it as type 'uploaded'; returns BackupMeta.
 
         Idempotent: a retry after success returns the same backup (the page may time out while a large
         file is hashed). A failure after the file was moved puts it back, so nothing is left unlisted.
+        Once the check started it runs to its end although the page timed out (review finding HD-08), and a
+        concurrent retry waits for it.
         """
         part, info_path = self._upload_paths(upload_id)
         finished = self._finished(upload_id)
         if finished is not None:
             return finished
+        with self._upload_lock(upload_id, info_path):
+            finished = self._finished(upload_id)
+            if finished is not None:
+                return finished
+            with util.termination_ignored():
+                return self._finish_upload_locked(upload_id, part, info_path)
+
+    def _finish_upload_locked(self, upload_id, part, info_path):
         info = self._upload_info(upload_id, info_path)
         try:
             fd = os.open(part, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK)
@@ -405,13 +459,18 @@ class Storage:
                     self.abort_upload(upload_id)
                     self._mark_done(upload_id, backup_id)
                     return existing
-                if (existing is None and self._archive_stat(backup_id) is not None
-                        and util.sha256_file(dest) == sha256):
+                same_file = (existing is None and self._archive_stat(backup_id) is not None
+                             and util.sha256_file(dest) == sha256)
+                if same_file and not os.path.lexists(self.index_path(backup_id)):
                     # The same file without an index (a kill between publishing and indexing): index it.
-                    rec = self._register_uploaded(backup_id, header, sha256, info['filename'])
+                    rec = self._register_uploaded(backup_id, header, sha256, info['filename'], exclusive=True)
                     self.abort_upload(upload_id)
                     self._mark_done(upload_id, backup_id)
                     return rec
+                if same_file:
+                    # Its index exists but cannot be read (e.g. a newer engine wrote it): kept as it is (HD-10).
+                    raise BackupError('invalid-request', '這台設備已有這份備份，但它的索引無法讀取（可能由較新版本的備份元件建立），'
+                                                         '已保留原狀，未重複上傳。', backup_id=backup_id)
                 raise BackupError('invalid-request', '這台設備已有相同 ID 但內容不同的備份，已拒絕上傳。',
                                   backup_id=backup_id)
             os.fchmod(fd, 0o600)
@@ -439,10 +498,12 @@ class Storage:
         return rec
 
     def adopt_orphans(self, min_age=ORPHAN_MIN_AGE, now=None):
-        """Index archives without a valid sidecar as 'uploaded' (a hard kill between publishing and indexing).
+        """Index archives without a sidecar as 'uploaded' (a hard kill between publishing and indexing).
 
         Only files unchanged for `min_age` seconds are considered (ctime counts: a rename updates it), so an
-        archive being published right now is never touched. Returns the adopted backup ids.
+        archive being published right now is never touched. A sidecar that exists but cannot be read or validated
+        (a transient read error, a newer engine's extra field) is never replaced: adopting it turned a safety
+        backup into an 'uploaded' one and dropped its apps and note (review finding HD-10). Returns the adopted ids.
         """
         now = time.time() if now is None else now
         try:
@@ -452,7 +513,7 @@ class Storage:
         adopted = []
         for name in sorted(names):
             backup_id = name[:-len('.woowbackup')] if name.endswith('.woowbackup') else ''
-            if not valid_backup_id(backup_id) or self._load(backup_id) is not None:
+            if not valid_backup_id(backup_id) or os.path.lexists(self.index_path(backup_id)):
                 continue
             path = self.archive_path(backup_id)
             try:
@@ -462,7 +523,7 @@ class Storage:
                 header = archive.read_header(path)
                 if header['backup_id'] != backup_id:
                     continue
-                self._register_uploaded(backup_id, header, util.sha256_file(path), '')
+                self._register_uploaded(backup_id, header, util.sha256_file(path), '', exclusive=True)
             except (BackupError, OSError, ValueError):
                 continue
             adopted.append(backup_id)

@@ -15,8 +15,11 @@
 
   const cockpit = window.cockpit;
   const HELPER = "/usr/local/libexec/woowtech-cockpit-backup";
-  const CHUNK_SIZE = 64 * 1024;
-  const WINDOW_SIZE = 2 * 1024 * 1024;
+  // Upload frames and the unacknowledged window (CONTRACT §11). Measured through the real Cockpit 362 on the lab
+  // (H8, 2026-11-13, 6 sha256-checked runs each): 512 KiB frames in a 4 MiB window 12.8 MB/s median against
+  // 6.7 MB/s for 64 KiB in 2 MiB; the frame size, not the window, was the bottleneck.
+  const CHUNK_SIZE = 512 * 1024;
+  const WINDOW_SIZE = 4 * 1024 * 1024;
   const JOB_POLL_MS = 1500;
   const STATUS_POLL_MS = 30000;
   const BACKUP_ID_RE = /^\d{8}T\d{6}Z-[0-9a-f]{8}$/;
@@ -34,6 +37,9 @@
   // upload-finish hashes the whole file before it answers: allow 20 MB/s plus two minutes, at least 15 minutes.
   const finishTimeout = size => Math.max(TIMEOUTS["upload-finish"], 120000 + Math.ceil((Number(size) || 0) / (20 * 1000 * 1000)) * 1000);
   const UPLOADING = new Set(["begin", "sending", "finishing"]);
+  // An upload whose check timed out is still on the device, and the device keeps checking it (review finding HD-08):
+  // it stays the active upload, so another restore never replaces it and leaving the page asks first.
+  const UPLOAD_PENDING = new Set([...UPLOADING, "unconfirmed"]);
   const WRONG_KEY = "這把金鑰無法解開這份備份（金鑰 ID 不符）。請確認是建立這份備份的設備所產生的緊急金鑰。";
   const VERIFY_FAILED = "這份備份上次驗證未通過。還原時會先完整驗證整份備份，驗證不通過就不會變更任何資料，但這份備份很可能無法使用。";
   const ROUTES = new Set(["overview", "backups", "create", "restore", "jobs", "keys", "activity"]);
@@ -695,7 +701,7 @@
 
   function activeUpload() {
     const upload = state.wizard?.source === "upload" ? state.wizard.upload : null;
-    return upload && !upload.cancelled && UPLOADING.has(upload.phase) ? upload : null;
+    return upload && !upload.cancelled && UPLOAD_PENDING.has(upload.phase) ? upload : null;
   }
 
   function toggleDetails(key, open) {
@@ -753,7 +759,9 @@
       uploadBanner.hidden = false;
       fill(uploadBanner,
         icon("tray-arrow-up"),
-        h("p", null, h("strong", { text: "上傳進行中" }), " · 重新整理或關閉這一頁會中斷上傳。"),
+        upload.phase === "unconfirmed"
+          ? h("p", null, h("strong", { text: "上傳結果尚未確認" }), " · 檔案仍在這台設備上檢查中，請回到上傳頁按「重新確認」。")
+          : h("p", null, h("strong", { text: "上傳進行中" }), " · 重新整理或關閉這一頁會中斷上傳。"),
         link("查看上傳", ["restore"], { class: "button small", dataset: { focus: "banner-upload" } }));
     } else {
       uploadBanner.hidden = true;
@@ -1460,11 +1468,14 @@
   }
 
   function uploadBusyView() {
+    const unconfirmed = activeUpload()?.phase === "unconfirmed";
     return [backLink("返回備份列表", ["backups"]), viewTitle("還原備份"),
-      h("section", { class: "card" }, emptyState("tray-arrow-up", "目前有上傳進行中",
-        "請先等上傳完成，或取消上傳，再還原其他備份。", [
+      h("section", { class: "card" }, emptyState("tray-arrow-up", unconfirmed ? "目前有上傳尚待確認" : "目前有上傳進行中",
+        unconfirmed
+          ? "上傳的檔案仍在這台設備上檢查中。請先回到上傳頁按「重新確認」，或放棄這次上傳，再還原其他備份。"
+          : "請先等上傳完成，或取消上傳，再還原其他備份。", [
           link("查看上傳", ["restore"], { class: "button primary", dataset: { focus: "upload-busy-view" } }),
-          button("取消上傳", () => cancelUpload(state.wizard), { focus: "upload-busy-cancel" })]))];
+          button(unconfirmed ? "放棄這次上傳" : "取消上傳", () => cancelUpload(state.wizard), { focus: "upload-busy-cancel" })]))];
   }
 
   function stepFile(wizard) {
@@ -1519,7 +1530,7 @@
     const nodes = [
       h("h3", { class: "step-title", text: "上傳備份檔" }),
       metadata([["檔名", wizard.file?.name || "—"], ["大小", bytes(wizard.file?.size)]]),
-      unconfirmed ? infoNotice("檢查上傳檔案的時間比預期久，結果尚未確認。檔案仍保留在這台設備上；請稍候再按「重新確認」。", "warn", "timer-sand",
+      unconfirmed ? infoNotice("檢查上傳檔案的時間比預期久，結果尚未確認。檔案仍保留在這台設備上，檢查也會繼續完成；請稍候再按「重新確認」。", "warn", "timer-sand",
         h("div", { class: "button-group" },
           button(wizard.busy ? "正在確認…" : "重新確認", () => recheckUpload(wizard), { small: true, primary: true, disabled: wizard.busy, focus: "upload-recheck" }))) : null,
       h("div", { class: "progress-block" },
@@ -1645,7 +1656,7 @@
     }
   }
 
-  // Stream the file over fsreplace1: 64 KiB frames, at most 2 MiB unacknowledged (CONTRACT §11).
+  // Stream the file over fsreplace1: 512 KiB frames, at most 4 MiB unacknowledged (CONTRACT §11).
   function sendFile(upload, file, path, onProgress) {
     return new Promise((resolve, reject) => {
       let channel;
@@ -2012,7 +2023,8 @@
           on: { change: event => { wizard.confirmedNoSafety = event.target.checked; render(); } }
         }),
         h("span", { class: "choice-body" }, h("strong", { text: "我了解這次還原可能沒有還原前備份，失敗時無法自動回復" }),
-          h("small", { text: "只有在應用已無法運作（例如資料庫無法啟動）、又沒有可用的還原前備份時才這樣做。" }))) : null,
+          h("small", { text: "只有在應用已無法運作（例如資料庫無法啟動）、又沒有可用的還原前備份時才這樣做。資料庫無法連線時，"
+            + "也無法確認執行個體中是否還有其他資料庫；還原會重建整個資料庫資料卷。" }))) : null,
       h("label", { class: "choice confirm-choice" },
         h("input", {
           type: "checkbox", id: "confirm-restore", checked: wizard.confirmed, disabled: wizard.busy, dataset: { focus: "confirm-restore" },
@@ -2314,6 +2326,10 @@
       }
       const health = list(result.health).filter(isObject);
       if (health.length) body.push(h("h4", { class: "subheading", text: "健康檢查" }), checkList(health, "健康檢查結果"));
+      // What the restore could not keep, e.g. setuid bits or file capabilities in a volume (review finding HD-09).
+      const notes = list(result.warnings).filter(isString).slice(0, 50);
+      if (notes.length) body.push(h("h4", { class: "subheading", text: "注意事項" }),
+        checkList(notes.map((message, index) => ({ id: `warning-${index}`, status: "warn", message })), "還原注意事項"));
       const verification = list(result.verification).filter(isObject);
       if (verification.length) body.push(h("h4", { class: "subheading", text: "資料核對（備份時與還原後）" }), verificationTable(verification));
       else if (job.state === "succeeded") body.push(h("p", { class: "muted", text: "這份備份沒有資料核對快照，已略過資料比對。" }));

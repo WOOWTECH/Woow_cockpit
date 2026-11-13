@@ -7,6 +7,7 @@ Everything here is dependency free (stdlib only) and safe to call as root:
 * hostname sanitising for download file names,
 * a sanitised environment and tool lookup for subprocesses (CONTRACT section 10.2).
 """
+import contextlib
 import datetime
 import hashlib
 import json
@@ -14,9 +15,11 @@ import os
 import re
 import secrets
 import shutil
+import signal
 import socket
 import stat
 import tempfile
+import threading
 from pathlib import Path
 
 SAFE_PATH = '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin'
@@ -192,6 +195,26 @@ def atomic_write_json(path, obj, mode=0o600):
     except UnicodeEncodeError:  # lone surrogates: write \\u escapes instead of failing (review SEC-5)
         raw = (json.dumps(obj, ensure_ascii=True, indent=2, sort_keys=False) + '\n').encode('ascii')
     return atomic_write(path, raw, mode)
+
+
+@contextlib.contextmanager
+def termination_ignored():
+    """Ignore SIGTERM, SIGHUP and SIGINT inside the block (main thread only; elsewhere it changes nothing).
+
+    For work that must run to its end once started although its caller went away: cockpit-bridge sends SIGTERM
+    when the page closes the channel on a timeout (review finding HD-08). The previous handlers come back after.
+    """
+    if threading.current_thread() is not threading.main_thread():
+        yield
+        return
+    previous = {}
+    try:
+        for sig in (signal.SIGTERM, signal.SIGHUP, signal.SIGINT):
+            previous[sig] = signal.signal(sig, signal.SIG_IGN)
+        yield
+    finally:
+        for sig, handler in previous.items():
+            signal.signal(sig, handler)
 
 
 def sha256_fd(fd, chunk=CHUNK):

@@ -51,7 +51,9 @@ def stream(function, *args):
 class VolumeTests(TempCase):
     def test_podman_style_export_is_accepted_and_rebuilt(self):
         path = self.file(volume_tar())
-        self.assertEqual(nested.check_volume(path), 5)
+        report = nested.check_volume(path)
+        self.assertEqual(report.members, 5)
+        self.assertEqual((report.special_modes, report.special_mode_samples), (1, ['files/b.txt']))
         rebuilt = tar_listing(stream(nested.stream_volume, path))
         original = tar_listing(volume_tar())
         self.assertEqual([row[0] for row in rebuilt], [row[0] for row in original])
@@ -92,15 +94,15 @@ class VolumeTests(TempCase):
             'hard link through symlink': [
                 {'name': 'esc', 'kind': tarfile.SYMTYPE, 'linkname': '/home/appowner'},
                 {'name': 'l', 'kind': tarfile.LNKTYPE, 'linkname': 'esc/.bashrc'}],
-            'hard link to a symlink': [
-                {'name': 's', 'kind': tarfile.SYMTYPE, 'linkname': '/etc/passwd'},
-                {'name': 'l', 'kind': tarfile.LNKTYPE, 'linkname': 's'}],
+            'hard link to a directory': [
+                {'name': 'd/', 'kind': tarfile.DIRTYPE}, {'name': 'l', 'kind': tarfile.LNKTYPE, 'linkname': 'd'}],
             'below a hard link': [
                 {'name': 'f', 'data': b'x'}, {'name': 'l', 'kind': tarfile.LNKTYPE, 'linkname': 'f'},
                 {'name': 'l/x', 'data': b'x'}],
             'below a file': [{'name': 'f', 'data': b'x'}, {'name': 'f/x', 'data': b'x'}],
             'device': [{'name': 'dev', 'kind': tarfile.CHRTYPE}],
-            'fifo': [{'name': 'pipe', 'kind': tarfile.FIFOTYPE}],
+            'block device': [{'name': 'disk', 'kind': tarfile.BLKTYPE}],
+            'below a fifo': [{'name': 'pipe', 'kind': tarfile.FIFOTYPE}, {'name': 'pipe/x', 'data': b'x'}],
             'duplicate': [{'name': 'a', 'data': b'1'}, {'name': 'a', 'data': b'2'}],
             'file replaces a directory': [{'name': 'd/x', 'data': b'1'}, {'name': 'd', 'data': b'2'}],
             'symlink replaces a directory': [{'name': 'd/', 'kind': tarfile.DIRTYPE},
@@ -186,6 +188,185 @@ class OciTests(TempCase):
         bad = oci_archive(REF, config=config)
         self.check(self.file(data))
         self.rejected(lambda path: self.check(path, image='sha256:' + sha(b'other')), bad)
+
+
+LAB_MAP = '         0       1001          1\n         1      10000      55000\n'  # appowner:10000:55000 (lab devices)
+
+
+def lab_ids():
+    return nested.IdMap(LAB_MAP), nested.IdMap(LAB_MAP)
+
+
+class DeltaReviewVolumeTests(TempCase):
+    """Delta review findings HD-02, HD-03 and HD-09 (volume tars); each case was a podman 4.9.3 lab run."""
+
+    def test_hd02_a_symlink_leaving_the_volume_is_refused_like_podman_refuses_it(self):
+        # `podman volume import` aborts on `dir/rel-escape-link -> ../../etc/passwd` after `volume rm` + `create`,
+        # with only the members before it written; the check now refuses it before any change.
+        for label, target in {'relative': '../../etc/passwd', 'absolute with ..': '/../../etc'}.items():
+            with self.subTest(label):
+                data = volume_tar([{'name': 'dir/', 'kind': tarfile.DIRTYPE},
+                                   {'name': 'dir/rel-escape-link', 'kind': tarfile.SYMTYPE, 'linkname': target},
+                                   {'name': 'z/after.txt', 'data': b'z'}])
+                error = self.rejected(nested.check_volume, data, 'symlink pointing outside the volume')
+                self.assertIn('指向資料卷外的符號連結', error.message)
+                with self.assertRaises(BackupError):
+                    stream(nested.stream_volume, self.file(data, 'again.tar'))
+        # What podman imports stays accepted: absolute targets, relative ones that stay inside, the volume root.
+        fine = volume_tar([{'name': 'dir/', 'kind': tarfile.DIRTYPE},
+                           {'name': 'dir/abs-link', 'kind': tarfile.SYMTYPE, 'linkname': '/etc/passwd'},
+                           {'name': 'dir/rel-inside-link', 'kind': tarfile.SYMTYPE, 'linkname': '../z/after.txt'},
+                           {'name': 'dir/root-link', 'kind': tarfile.SYMTYPE, 'linkname': '..'},
+                           {'name': 'top-link', 'kind': tarfile.SYMTYPE, 'linkname': 'dir/../z'},
+                           {'name': 'z/after.txt', 'data': b'z'}])
+        self.assertEqual(nested.check_volume(self.file(fine, 'fine.tar')).members, 6)
+
+    def test_hd02_member_owners_must_fit_the_owners_user_namespace(self):
+        ids = lab_ids()
+        self.assertEqual([70000 in ids[0], 55000 in ids[0], 0 in ids[0], 65534 in ids[0]], [False, True, True, False])
+        self.assertEqual(ids[0].describe(), '0–0、1–55000')
+        data = volume_tar([{'name': 'ok.txt', 'data': b'a', 'uid': 70, 'gid': 70},
+                           {'name': 'big-uid.txt', 'data': b'b', 'uid': 70000, 'gid': 70000},
+                           {'name': 'z.txt', 'data': b'z'}])
+        path = self.file(data)
+        self.assertEqual(nested.check_volume(path).members, 3, 'no map given: not checked')
+        for check in (lambda: nested.check_volume(path, ids=ids),
+                      lambda: stream(lambda p, out: nested.stream_volume(p, out, ids), path)):
+            with self.assertRaises(BackupError) as caught:
+                check()
+            self.assertEqual(caught.exception.code, 'incompatible')
+            self.assertEqual((caught.exception.details['member'], caught.exception.details['uid']), ('big-uid.txt', 70000))
+            self.assertIn('沒有任何變更', caught.exception.message)
+        gid_only = volume_tar([{'name': 'g.txt', 'data': b'g', 'uid': 0, 'gid': 65534}])  # the overflow gid
+        with self.assertRaises(BackupError):
+            nested.check_volume(self.file(gid_only, 'gid.tar'), ids=ids)
+
+    def test_hd03_fifos_and_second_names_of_symlinks_and_fifos_are_kept(self):
+        # What `podman volume export` wrote for `mkfifo public/pickup` and `ln -P data/sym data/sym-hardlink`.
+        data = volume_tar([
+            {'name': 'public/', 'kind': tarfile.DIRTYPE, 'mode': 0o710},
+            {'name': 'public/pickup', 'kind': tarfile.FIFOTYPE, 'mode': 0o622, 'uid': 90, 'gid': 90},
+            {'name': 'public/pickup-2', 'kind': tarfile.LNKTYPE, 'linkname': 'public/pickup'},
+            {'name': 'data/', 'kind': tarfile.DIRTYPE},
+            {'name': 'data/sym', 'kind': tarfile.SYMTYPE, 'linkname': '/etc/hostname'},
+            {'name': 'data/sym-hardlink', 'kind': tarfile.LNKTYPE, 'linkname': 'data/sym'},
+            {'name': 'data/f', 'data': b'f'},
+            {'name': 'data/f-2', 'kind': tarfile.LNKTYPE, 'linkname': 'data/f'},
+            {'name': 'data/f-3', 'kind': tarfile.LNKTYPE, 'linkname': 'data/f-2'},
+        ])
+        path = self.file(data)
+        self.assertEqual(nested.check_volume(path, ids=lab_ids()).members, 9)
+        rebuilt = {row[0]: row for row in tar_listing(stream(lambda p, out: nested.stream_volume(p, out, lab_ids()), path))}
+        self.assertEqual(rebuilt['public/pickup'][1:3], (tarfile.FIFOTYPE, 0o622), 'a FIFO is re-emitted as a FIFO')
+        self.assertEqual(rebuilt['public/pickup'][3], 0)
+        self.assertEqual(rebuilt['data/sym-hardlink'][1], tarfile.LNKTYPE)
+        self.assertEqual(rebuilt['data/sym-hardlink'][4], 'data/sym')
+        self.assertEqual((rebuilt['data/f-3'][1], rebuilt['data/f-3'][4]), (tarfile.LNKTYPE, 'data/f-2'))
+        # Still refused: a member below a FIFO, a hard link to a directory or to something not yet seen.
+        for members in ([{'name': 'p', 'kind': tarfile.FIFOTYPE}, {'name': 'p/x', 'data': b'x'}],
+                        [{'name': 'd/', 'kind': tarfile.DIRTYPE}, {'name': 'l', 'kind': tarfile.LNKTYPE, 'linkname': 'd'}],
+                        [{'name': 'l', 'kind': tarfile.LNKTYPE, 'linkname': 'later'}, {'name': 'later', 'data': b'x'}]):
+            self.rejected(nested.check_volume, volume_tar(members))
+
+    def test_hd03_member_cap_and_bounded_memory(self):
+        import tracemalloc
+        members = [{'name': f'previews/{i // 100:05d}/p{i:07d}-preview-256x256.jpg', 'data': b''} for i in range(4)]
+        path = self.file(volume_tar(members))
+        original = nested.MAX_VOLUME_MEMBERS
+        nested.MAX_VOLUME_MEMBERS = 3
+        try:
+            error = self.rejected(nested.check_volume, volume_tar(members), 'too many members')
+            self.assertIn('上限', error.message)
+        finally:
+            nested.MAX_VOLUME_MEMBERS = original
+        self.assertEqual(nested.check_volume(path).members, 4)
+        # Names are remembered as fixed-size digests: the cost per member no longer grows with the name (a str per
+        # member cost 167 bytes for these 93-character names, the digest 89; finding HD-03 measured ~215 B/member).
+        count = 30000
+        infos = []
+        for i in range(count):
+            info = tarfile.TarInfo(f'appdata_ocb2c3d4e5f6/preview/{i // 100:05d}/{i:07d}-4096-4096-max-and-crop-preview-'
+                                   'file-of-a-photo.jpg')
+            info.size = 0
+            infos.append(info)
+        policy = nested._VolumePolicy()
+        tracemalloc.start()
+        try:
+            before = tracemalloc.get_traced_memory()[0]
+            for info in infos:
+                policy.admit(info)
+            retained = tracemalloc.get_traced_memory()[0] - before
+        finally:
+            tracemalloc.stop()
+        self.assertLess(retained / count, 120, f'{retained / count:.0f} bytes per member')
+
+    def test_hd09_dropped_setuid_bits_and_capabilities_are_reported(self):
+        buffer = io.BytesIO()
+        with tarfile.open(fileobj=buffer, mode='w', format=tarfile.PAX_FORMAT) as tar:
+            for name, mode, pax in (('bin/suid', 0o4755, {}), ('bin/sgid', 0o2755, {}),
+                                    ('bin/capfile', 0o755, {'SCHILY.xattr.security.capability': '\x01\x00\x00\x02'}),
+                                    ('etc/tagged', 0o644, {'SCHILY.xattr.user.tag': 'keep'}), ('dir', 0o2775, None)):
+                info = tarfile.TarInfo(name)
+                info.mode = mode
+                if pax is None:
+                    info.type = tarfile.DIRTYPE
+                    tar.addfile(info)
+                    continue
+                info.size, info.pax_headers = 1, pax
+                tar.addfile(info, io.BytesIO(b'x'))
+        path = self.file(buffer.getvalue())
+        report = nested.check_volume(path)
+        self.assertEqual((report.special_modes, report.special_mode_samples), (2, ['bin/suid', 'bin/sgid']))
+        self.assertEqual((report.dropped_xattrs, report.dropped_xattr_names, report.dropped_xattr_samples),
+                         (1, ['security.capability'], ['bin/capfile']))
+        notes = report.warnings('woowbk-demo-files')
+        self.assertEqual(len(notes), 2)
+        self.assertIn('setuid／setgid', notes[0])
+        self.assertIn('bin/suid', notes[0])
+        self.assertIn('security.capability', notes[1])
+        rebuilt = {row[0]: row[2] for row in tar_listing(stream(nested.stream_volume, path))}
+        self.assertEqual((rebuilt['bin/suid'], rebuilt['bin/sgid'], rebuilt['dir']), (0o755, 0o755, 0o2775),
+                         'the canonical copy still drops them (CONTRACT section 5); only the silence was the defect')
+        self.assertEqual(nested.check_volume(self.file(volume_tar([{'name': 'a', 'data': b'a'}]), 'plain.tar'))
+                         .warnings('v'), [])
+
+
+class DeltaReviewImageNameTests(TempCase):
+    """Delta review finding HD-01: podman saves an image under the name its ref resolved to."""
+
+    def test_names_podman_writes_for_a_ref_are_accepted_and_the_load_name_comes_from_the_ref(self):
+        cases = [  # (Image= in the Quadlet file, name podman 4.9.3 wrote into index.json, local name for the load)
+            ('ubuntu:24.04', 'docker.io/library/ubuntu:24.04', 'localhost/ubuntu:24.04'),
+            ('docker.io/ubuntu:24.04', 'docker.io/library/ubuntu:24.04', 'docker.io/library/ubuntu:24.04'),
+            ('docker.io/library/ubuntu:24.04', 'docker.io/library/ubuntu:24.04', 'docker.io/library/ubuntu:24.04'),
+            ('woowbk-testrunner:noble', 'localhost/woowbk-testrunner:noble', 'localhost/woowbk-testrunner:noble'),
+            ('postgres', 'docker.io/library/postgres:latest', 'localhost/postgres:latest'),
+            ('foo/bar:1', 'quay.io/foo/bar:1', 'localhost/foo/bar:1'),  # resolved through another search registry
+            ('registry.example:5000/team/app:2', 'registry.example:5000/team/app:2', 'registry.example:5000/team/app:2'),
+        ]
+        for ref, saved, local in cases:
+            with self.subTest(ref):
+                path = self.file(oci_archive(saved), 'image.tar')
+                plan = nested.check_oci(path, ref=ref, image_id=image_id(saved))
+                self.assertEqual(plan['name'], local)
+                self.assertEqual(nested.local_name(ref), local)
+                out = stream(nested.stream_oci, path, plan)
+                self.assertEqual(read_oci(out), (local, image_id(saved)), 'podman load names it like `podman tag <id> <ref>`')
+
+    def test_another_image_name_is_still_refused(self):
+        for ref, saved in (('postgres:16-alpine', 'localhost/woowbk-sec-probe-other:9'),
+                           ('postgres:16', 'docker.io/library/postgres:15'),
+                           ('postgres:16', 'docker.io/library/redis:16'),
+                           ('postgres:16', 'evil.example/library/postgres:16'),
+                           ('docker.io/library/postgres:16', 'quay.io/library/postgres:16'),
+                           ('localhost/app:1', 'docker.io/library/app:1'),
+                           ('app@sha256:' + 'a' * 64, 'docker.io/library/app:latest')):
+            with self.subTest(f'{ref} <- {saved}'):
+                error = self.rejected(lambda path, ref=ref, saved=saved: nested.check_oci(path, ref=ref, image_id=image_id(saved)),
+                                      oci_archive(saved), 'differs from the name the app needs')
+                self.assertEqual(error.details['saved'], saved)
+        self.assertFalse(nested.same_image_name('', 'postgres:16'))
+        self.assertFalse(nested.same_image_name(None, 'postgres:16'))
 
 
 class PipeTests(unittest.TestCase):

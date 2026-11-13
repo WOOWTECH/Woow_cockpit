@@ -6,6 +6,8 @@ adapters, reporter), so every step can be exercised with fakes. Key rules implem
 * an archive is listed only after it was written atomically and fully verified;
 * in-place restores take a verified `safety` backup first and roll back automatically after any
   failure that happens once the first destructive step started (fresh deployments are removed);
+* the record lists a fresh deployment for the recovery of a dead job only until that app's data import
+  finished (review finding HD-04); the recovery itself never removes a deployment whose units run;
 * the safety backup of the running restore, and any safety backup a failed restore still needs, is
   never pruned; pruning happens only after a successful restore;
 * staging (plaintext) is always removed in `finally`.
@@ -52,7 +54,7 @@ class Deps:
     keys: object
     archive: object
     load_catalog: object      # () -> catalog.Catalog
-    adapter_factory: object   # (app, *, log, phase, checkpoint) -> Adapter
+    adapter_factory: object   # (app, *, log, phase, checkpoint, writers_hook, imported_hook) -> Adapter
     host_info: object         # () -> {'hostname','machine_id_sha256','arch','os','podman'}
     system_stopping: object = None  # () -> bool: the machine is shutting down / rebooting
 
@@ -111,13 +113,14 @@ def system_stopping():
     return out == 'stopping'
 
 
-def default_adapter_factory(app, *, log, phase=None, checkpoint=None, writers_hook=None):
+def default_adapter_factory(app, *, log, phase=None, checkpoint=None, writers_hook=None, imported_hook=None):
     from .adapters import get_adapter
     from .podman import OwnerRunner
     cls = get_adapter(app.adapter)
     if cls is None:
         raise BackupError('internal-error', '找不到此應用的轉接器。', app=app.id)
-    return cls(app, OwnerRunner(app.owner), log, phase=phase, checkpoint=checkpoint, writers_hook=writers_hook)
+    return cls(app, OwnerRunner(app.owner), log, phase=phase, checkpoint=checkpoint, writers_hook=writers_hook,
+               imported_hook=imported_hook)
 
 
 def default_deps(paths):
@@ -142,6 +145,7 @@ class FlowContext:
         self.key_file = Path(key_file) if key_file else None
         self._catalog = None
         self._stopped_writers = {}
+        self._unfinished_fresh = []
 
     @property
     def storage(self):
@@ -176,7 +180,10 @@ class FlowContext:
         self.reporter.log(message)
 
     def cancellable(self, flag):
-        self.reporter.set_cancellable(flag)
+        """Open/close the cancellable window. Closing it is a checkpoint: a cancel request accepted while the job
+        was still cancellable stops the job here, before the destructive step that follows."""
+        if self.reporter.set_cancellable(flag) and not flag:
+            raise Cancelled()
 
     def checkpoint(self):
         if self.reporter.cancellable and self.reporter.cancel_requested():
@@ -194,10 +201,32 @@ class FlowContext:
         self._stopped_writers[app_id] = list(units)
         self.reporter.set_partial(stopped_writers={k: v for k, v in self._stopped_writers.items() if v})
 
+    def mark_fresh(self, app_ids):
+        """Record the apps about to be deployed from templates, before the first fresh step: a job that dies leaves
+        a partial deployment, which the recovery removes (review finding CR-05)."""
+        self._unfinished_fresh = list(app_ids)
+        self.reporter.set_partial(fresh_apps=list(self._unfinished_fresh))
+
+    def note_imported(self, app_id):
+        """An app's data import finished (its units start next): it is no longer an unfinished fresh deployment.
+        Dropped from the record before its units are unmasked, so a recovery after a reboot never removes a
+        deployment users may already have written to (review finding HD-04)."""
+        if app_id in self._unfinished_fresh:
+            self._unfinished_fresh.remove(app_id)
+            self.reporter.set_partial(fresh_apps=list(self._unfinished_fresh))
+
+    def note_removing(self, app_id):
+        """A rollback is about to remove this fresh deployment: list it again, so a job killed half-way through
+        the removal leaves it to the recovery."""
+        if app_id not in self._unfinished_fresh:
+            self._unfinished_fresh.append(app_id)
+            self.reporter.set_partial(fresh_apps=list(self._unfinished_fresh))
+
     def adapter(self, app, *, phases=True):
         return self.deps.adapter_factory(app, log=self.log, phase=self.phase if phases else None,
                                          checkpoint=self.checkpoint,
-                                         writers_hook=lambda units, app_id=app.id: self.note_writers(app_id, units))
+                                         writers_hook=lambda units, app_id=app.id: self.note_writers(app_id, units),
+                                         imported_hook=lambda app_id=app.id: self.note_imported(app_id))
 
     def identities(self):
         """Decryption identities: KeyInfo objects held by this device plus the job's temporary key file."""
@@ -352,7 +381,13 @@ def restart_writers(deps, stopped, *, log=None):
 
 
 def remove_fresh_apps(deps, app_ids, *, log=None):
-    """Remove the unfinished fresh deployments of `app_ids` (recovery after a dead restore); returns problems."""
+    """Remove the unfinished fresh deployments of `app_ids` (recovery after a dead restore); returns problems.
+
+    Only a deployment that is still unfinished is removed. Once an app's data import finished its units are
+    unmasked and start (also at boot), and users may have written to it since, so it is kept and reported for
+    manual confirmation instead (review finding HD-04). The restore drops such an app from `fresh_apps` itself;
+    this check also covers records an older engine wrote and a state that cannot be read.
+    """
     problems = []
     catalog = deps.load_catalog()
     for app_id in app_ids or []:
@@ -361,7 +396,18 @@ def remove_fresh_apps(deps, app_ids, *, log=None):
             problems.append(f'找不到應用 {app_id} 的設定')
             continue
         try:
-            deps.adapter_factory(app, log=log or _noop, phase=None, checkpoint=None).remove_fresh()
+            adapter = deps.adapter_factory(app, log=log or _noop, phase=None, checkpoint=None)
+            try:
+                live = adapter.fresh_in_use()
+            except Exception:  # noqa: BLE001 - unknown is never "unfinished": keep it
+                problems.append(f'無法確認「{app.name}」的服務狀態，為避免刪除可能已有的新資料而沒有自動移除；'
+                                '需人工確認是否保留這個部署')
+                continue
+            if live:
+                problems.append(f'「{app.name}」的服務（{"、".join(live)}）已解除暫時停用或正在執行，可能已有新的資料，'
+                                '因此沒有自動移除；需人工確認是否保留這個部署')
+                continue
+            adapter.remove_fresh()
         except BackupError as error:
             problems.append(error.message.rstrip('。'))
         except Exception:  # noqa: BLE001 - reported, never raised from recovery
@@ -493,20 +539,8 @@ def pinned_safety(paths):
         records = jobs.JobStore(paths).list(limit=None)
     except Exception:  # noqa: BLE001 - unreadable records never block a restore; nothing is pinned then
         return set()
-    pinned, settled = set(), set()
-    for record in records:  # newest first
-        if record.get('type') != 'restore':
-            continue
-        apps = set((record.get('params') or {}).get('apps') or [])
-        if record.get('state') == 'succeeded':
-            settled |= apps
-            continue
-        result = record.get('result') if isinstance(record.get('result'), dict) else {}
-        safety = result.get('safety_backup_id') or record.get('safety_backup_id')
-        if (safety and record.get('state') in ('failed', 'interrupted') and not result.get('rolled_back')
-                and apps - settled):
-            pinned.add(safety)
-    return pinned
+    # Job retention never deletes these restore records, so the pins survive it (release regression 16 fix).
+    return set(jobs.pinned_safety_records(records).values())
 
 
 def prune_safety(ctx, app_ids, keep=SAFETY_KEEP, exclude=()):
@@ -589,7 +623,7 @@ def run_restore(ctx, params):
     # were restored without a new safety backup; safety_failed: refused because none could be created.
     result = {'apps': [app.id for app in apps], 'safety_backup_id': None, 'health': [], 'verification': [],
               'rolled_back': False, 'changed': False, 'fresh_apps': [], 'safety_skipped': False,
-              'safety_failed': False}
+              'safety_failed': False, 'warnings': []}
     keep_fresh_marker = False
     try:
         ctx.phase('decrypt')
@@ -599,7 +633,7 @@ def run_restore(ctx, params):
         ctx.log(f'備份 {backup_id} 已解密並通過完整驗證')
 
         ctx.phase('preflight')
-        plans = _preflight(ctx, apps, manifest)
+        plans = _preflight(ctx, apps, manifest, extract_dir)
         device_key = ctx.keys.device_key()
         inplace = [plan for plan in plans if plan.mode == 'inplace']
         if inplace and device_key is None:
@@ -618,9 +652,10 @@ def run_restore(ctx, params):
         fresh = [plan.app.id for plan in plans if plan.mode == 'fresh']
         if fresh:
             # Recorded before the first fresh step: a job that dies now leaves a partial deployment, which the
-            # recovery removes (review finding CR-05).
-            result['fresh_apps'] = fresh
-            ctx.reporter.set_partial(fresh_apps=fresh)
+            # recovery removes (review finding CR-05). Each app leaves the record once its import finished (HD-04);
+            # result['fresh_apps'] keeps naming every app deployed from templates.
+            result['fresh_apps'] = list(fresh)
+            ctx.mark_fresh(fresh)
 
         touched = []
         try:
@@ -628,7 +663,9 @@ def run_restore(ctx, params):
                 touched.append(plan)
                 label = '原位還原' if plan.mode == 'inplace' else '全新部署'
                 ctx.log(f'還原應用「{plan.app.name}」（{label}）')
-                plan.adapter.restore(plan.manifest, extract_dir, mode=plan.mode)
+                plan.adapter.restore(plan.manifest, extract_dir, mode=plan.mode,
+                                     unchecked_databases_ok=bool(result['safety_skipped']))
+                _collect_warnings(result, plan.adapter)
                 ctx.phase('check')
                 health = plan.adapter.health()
                 result['health'].extend(health)
@@ -647,6 +684,8 @@ def run_restore(ctx, params):
                     else:
                         ctx.log(f'應用「{plan.app.name}」資料核對一致')
         except BaseException as exc:  # noqa: BLE001 - includes termination signals
+            for plan in touched:
+                _collect_warnings(result, plan.adapter)
             if not any(plan.adapter.destructive_started for plan in touched):
                 raise
             result['changed'] = True
@@ -674,6 +713,13 @@ def run_restore(ctx, params):
         if result['fresh_apps'] and not keep_fresh_marker:
             ctx.reporter.set_partial(fresh_apps=[])
         _cleanup_staging(ctx)
+
+
+def _collect_warnings(result, adapter):
+    """Notes an adapter made about what a restore could not keep (e.g. setuid bits; review finding HD-09)."""
+    for note in getattr(adapter, 'warnings', None) or []:
+        if isinstance(note, str) and note not in result['warnings'] and len(result['warnings']) < 50:
+            result['warnings'].append(note[:1000])
 
 
 def _take_safety_backup(ctx, inplace, staging, backup_id, meta, params, device_key, result):
@@ -739,7 +785,9 @@ def _shutting_down(ctx):
         return False
 
 
-def _preflight(ctx, apps, manifest):
+def _preflight(ctx, apps, manifest, extract_dir=None):
+    """Per-app preflight of the extracted archive; the nested image and volume tars are checked here already, so
+    a backup that would be refused fails before the safety backup is taken (review finding HD-01)."""
     plans, failures = [], []
     entry_sizes = {e.get('path'): e.get('size', 0) for e in manifest.get('entries') or [] if isinstance(e, dict)}
     for app in apps:
@@ -748,7 +796,7 @@ def _preflight(ctx, apps, manifest):
             raise BackupError('incompatible', f'此備份不包含應用「{app.name}」。', app=app.id)
         adapter = ctx.adapter(app)
         mode = adapter.detect_mode()
-        checks = adapter.preflight(app_manifest, mode=mode, entry_sizes=entry_sizes)
+        checks = adapter.preflight(app_manifest, mode=mode, entry_sizes=entry_sizes, extracted_dir=extract_dir)
         for check in checks:
             if check['status'] == 'warn':
                 ctx.log(f'注意：{check["message"]}')
@@ -813,6 +861,7 @@ def _rollback(ctx, touched, result, staging, error, device_key):
         if plan.mode != 'fresh':
             continue
         try:
+            ctx.note_removing(plan.app.id)
             plan.adapter.remove_fresh()
         except BackupError as cleanup_error:
             problems.append(cleanup_error.message.rstrip('。'))
