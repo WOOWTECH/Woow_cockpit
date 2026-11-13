@@ -1,6 +1,6 @@
 {
   "version": 1,
   "requires": { "cockpit": "362" },
-  "content-security-policy": "default-src 'self'; frame-src http://__GATEWAY_HOST__:__GATEWAY_PORT__ __VPN_FRAME_SRC__; base-uri 'none'; form-action 'self'; object-src 'none'",
+  "content-security-policy": "default-src 'self'; frame-src 'self' http://__GATEWAY_HOST__:__GATEWAY_PORT__ __VPN_FRAME_SRC__; base-uri 'none'; form-action 'self'; object-src 'none'",
   "tools": { "index": { "label": "Pi Web", "order": 46 } }
 }
