@@ -779,8 +779,8 @@ def _finish_dirs(ctx, adapters, result):
         try:
             notes = finish()
         except BaseException as exc:  # noqa: BLE001 - incl. a termination signal: the restore itself is complete
-            notes = ['刪除被取代的主機資料夾內容時發生錯誤或作業被中止；資料夾旁名稱含「.woowbk-old-」的資料夾可能還在，'
-                     '確認應用正常後可手動刪除。']
+            notes = ['刪除被取代的主機資料夾內容時發生錯誤或作業被中止；資料夾旁名稱含「.woowbk-old-」或「.woowbk-del-」的資料夾'
+                     '可能還在，確認應用正常後可手動刪除。']
             stopped = not isinstance(exc, Exception)
         for note in notes or []:
             ctx.log(f'注意：{note}')

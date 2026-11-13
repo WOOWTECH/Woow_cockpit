@@ -867,7 +867,8 @@ class QuadletPostgresAdapter(Adapter):
             return []
         except BackupError as error:
             self._log_command_error(error)
-            return [f'無法刪除 ~/{rel}.woowbk-old-{token}（{what}，{error.message.rstrip("。")}）；確認後可手動刪除。']
+            return [f'無法刪除 ~/{rel}.woowbk-old-{token}（{what}，{error.message.rstrip("。")}；刪除前會先改名為 '
+                    f'~/{rel}.woowbk-del-{token}）；確認後可手動刪除。']
 
     def discard_dirs(self):
         """After a failure: put back a directory that was moved aside but not replaced (the content before the
