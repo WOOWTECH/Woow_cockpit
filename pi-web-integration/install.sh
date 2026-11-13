@@ -19,29 +19,13 @@ fi
 if [[ -n "$pi_vpn" ]] && ! systemctl is-active --quiet woowtech-piweb-gateway-vpn.service && ss -H -ltn "( sport = :$pi_port )" | awk '{print $4}' | grep -Fxq "$pi_vpn:$pi_port"; then
   echo 'The requested VPN gateway address and port are already in use.' >&2; exit 1
 fi
-[ -r /etc/cockpit/ws-certs.d/0-self-signed.cert ] || { echo 'Expected Cockpit local CA certificate is missing.' >&2; exit 1; }
 pi_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
-pi_cred=/etc/woowtech-cockpit/piweb-gateway
 pi_pkg=/usr/local/share/cockpit/woowpiweb
-# Existing credentials are not rotated on reinstall.
 install -d -m 0755 "$pi_pkg"
-ensure_certificate() {
-  local dir=$1 ip=$2
-  install -d -m 0755 "$dir"
-  if [[ ! -e "$dir/key.pem" && ! -e "$dir/cert.pem" ]]; then
-    (umask 077; openssl req -x509 -newkey rsa:3072 -noenc -keyout "$dir/key.pem" -out "$dir/cert.pem" -days 365 -subj "/CN=$ip" -addext "subjectAltName=IP:$ip" >/dev/null 2>&1)
-  elif [[ ! -f "$dir/key.pem" || ! -f "$dir/cert.pem" ]]; then
-    echo 'Partial gateway certificate exists; inspect it before retrying.' >&2; exit 1
-  fi
-  chmod 0600 "$dir/key.pem"; chmod 0644 "$dir/cert.pem"
-  openssl x509 -in "$dir/cert.pem" -noout -checkip "$ip" | grep -q 'does match' || { echo 'Existing certificate does not match this IP.' >&2; exit 1; }
-}
-ensure_certificate "$pi_cred" "$pi_host"
-if [[ -n "$pi_vpn" ]]; then ensure_certificate "${pi_cred}-vpn" "$pi_vpn"; fi
 install -m 0755 "$pi_root/gateway.mjs" /usr/local/libexec/woowtech-piweb-gateway.mjs
 install -m 0644 "$pi_root/package/index.html" "$pi_root/package/style.css" "$pi_pkg/"
 sed -e "s/__GATEWAY_HOST__/$pi_host/g" -e "s/__VPN_HOST__/$pi_vpn/g" -e "s/__GATEWAY_PORT__/$pi_port/g" "$pi_root/package/app.js" > "$pi_pkg/app.js"
-vpn_frame=''; if [[ -n "$pi_vpn" ]]; then vpn_frame="https://$pi_vpn:$pi_port"; fi
+vpn_frame=''; if [[ -n "$pi_vpn" ]]; then vpn_frame="http://$pi_vpn:$pi_port"; fi
 sed -e "s/__GATEWAY_HOST__/$pi_host/g" -e "s/__GATEWAY_PORT__/$pi_port/g" -e "s|__VPN_FRAME_SRC__|$vpn_frame|g" "$pi_root/package/manifest.json" > "$pi_pkg/manifest.json"
 sed -e "s/__GATEWAY_HOST__/$pi_host/g" -e "s/__GATEWAY_PORT__/$pi_port/g" "$pi_root/woowtech-piweb-gateway.service" > /etc/systemd/system/woowtech-piweb-gateway.service
 chmod 0644 "$pi_pkg/app.js" "$pi_pkg/manifest.json" /etc/systemd/system/woowtech-piweb-gateway.service
@@ -51,7 +35,7 @@ systemctl enable woowtech-piweb-gateway.service
 systemctl restart woowtech-piweb-gateway.service
 systemctl is-active --quiet woowtech-piweb-gateway.service || { echo 'Gateway did not start.' >&2; exit 1; }
 if [[ -n "$pi_vpn" ]]; then
-  sed -e "s/__GATEWAY_HOST__/$pi_vpn/g" -e "s/__GATEWAY_PORT__/$pi_port/g" -e 's|piweb-gateway/|piweb-gateway-vpn/|g' "$pi_root/woowtech-piweb-gateway.service" > /etc/systemd/system/woowtech-piweb-gateway-vpn.service
+  sed -e "s/__GATEWAY_HOST__/$pi_vpn/g" -e "s/__GATEWAY_PORT__/$pi_port/g" "$pi_root/woowtech-piweb-gateway.service" > /etc/systemd/system/woowtech-piweb-gateway-vpn.service
   chmod 0644 /etc/systemd/system/woowtech-piweb-gateway-vpn.service
   systemd-analyze verify /etc/systemd/system/woowtech-piweb-gateway-vpn.service
   systemctl daemon-reload
@@ -59,4 +43,4 @@ if [[ -n "$pi_vpn" ]]; then
   systemctl restart woowtech-piweb-gateway-vpn.service
   systemctl is-active --quiet woowtech-piweb-gateway-vpn.service || { echo 'VPN gateway did not start.' >&2; exit 1; }
 fi
-printf 'Installed Pi Web gateway on https://%s:%s/ . Sign out/in to refresh Cockpit package list.\n' "$pi_host" "$pi_port"
+printf 'Installed Pi Web gateway on http://%s:%s/ . Sign out/in to refresh Cockpit package list.\n' "$pi_host" "$pi_port"

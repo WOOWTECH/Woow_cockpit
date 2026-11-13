@@ -16,3 +16,10 @@
 - 新增 `100.112.140.82:19094` 專用 gateway 與自簽憑證，Pi Web 原服務仍只監聽 loopback。UFW 規則限定 `tailscale0` 與 VPN 目的 IP。
 - 從本機瀏覽器使用 VPN IP 的 HTTPS Cockpit 登入，再從側邊欄登入既有 Pi Web、讀取對話清單、使用免費模型取得助理實際回覆；檢查 1440、1024、768、390、320px。HTTP Cockpit 會提供切換 HTTPS 的提示。
 - 實測未登入 401、惡意來源與 Host 403，並確認 Cockpit 登出後舊工作階段失效。瀏覽器測試允許自簽憑證；另一台 VPN 裝置的實際網路路徑與手動信任流程未驗證。
+
+## 同日 HTTP 區網與 VPN 調整
+
+使用者要求 LAN 和 VPN 均改為 HTTP；以下為本次最終狀態，取代上述 HTTPS 入口與自簽憑證描述。Cockpit HTTP session 必須用本機 Cockpit HTTP 端點驗證，不能用 HTTPS 端點驗證；gateway 已調整。服務分別監聽 LAN 與 VPN 指定 IP，原生 Pi Web 仍只監聽 loopback。LAN HTTP 未加密；VPN 是否加密取決於 VPN。未部署 Cloudflare 外網入口。
+
+- 實際由本機 Chromium 使用 LAN 和 VPN IP 的 HTTP Cockpit 開啟 Pi Web，完成獨立登入、讀取對話清單及五種畫面寬度檢查；VPN HTTP 入口另實測得到模型回覆。這是本機對自身位址的測試，並非另一台設備跨網路的驗證。
+- LAN 與 VPN 分別驗證兩階段登入、錯誤 Origin/Host 遭拒絕，以及 Cockpit 登出後舊工作階段失效。外網 HTTPS 與 Cloudflare Tunnel 不在本次部署範圍。

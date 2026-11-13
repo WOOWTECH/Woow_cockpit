@@ -12,10 +12,10 @@ function render(host,protocol){
  vm.runInNewContext(code,{window:{location:{hostname:host,protocol,port:'9090'}},document:{getElementById:id=>elements[id]}});
  return elements;
 }
-test('embedded Pi Web selects only configured HTTPS LAN or VPN hosts',()=>{
+test('embedded Pi Web selects only configured HTTP LAN or VPN hosts',()=>{
  for(const host of ['192.168.2.46','100.112.140.82']){
-  const e=render(host,'https:');assert.equal(e.pi.src,`https://${host}:19094/`);assert.equal(e.direct.href,e.pi.src);
+  const e=render(host,'http:');assert.equal(e.pi.src,`http://${host}:19094/`);assert.equal(e.direct.href,e.pi.src);
  }
- const http=render('100.112.140.82','http:');assert.equal(http.pi.hidden,true);assert.equal(http['secure-required'].hidden,false);assert.equal(http['secure-link'].href,'https://100.112.140.82:9090/');
+ const https=render('100.112.140.82','https:');assert.equal(https.pi.hidden,true);assert.equal(https['secure-required'].hidden,false);assert.equal(https['secure-link'].href,'http://100.112.140.82:9090/');
  const bad=render('example.com','https:');assert.equal(bad.pi.hidden,true);assert.equal(bad.unavailable.hidden,false);
 });

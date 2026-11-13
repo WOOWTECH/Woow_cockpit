@@ -1,8 +1,6 @@
 #!/usr/bin/env node
 // LAN gateway for one Pi Web instance. Cockpit session AND Pi Web auth required.
-import https from 'node:https';
 import http from 'node:http';
-import fs from 'node:fs';
 import { Transform } from 'node:stream';
 
 const required = key => { const value=process.env[key]; if(!value) throw Error(`Missing ${key}`); return value; };
@@ -10,9 +8,7 @@ const bind=required('PI_GATEWAY_BIND'), host=required('PI_GATEWAY_HOST'), port=N
 const cockpitPort=Number(process.env.PI_GATEWAY_COCKPIT_PORT||9090), piPort=Number(process.env.PI_GATEWAY_UPSTREAM_PORT||30141);
 if(!/^\d{1,3}(\.\d{1,3}){3}$/.test(host)||bind!==host||!Number.isInteger(port)||port<1024||port>65535) throw Error('Invalid listen configuration');
 if(![cockpitPort,piPort].every(value=>Number.isInteger(value)&&value>=1&&value<=65535)) throw Error('Invalid backend port');
-const authority=`${host}:${port}`, expectedOrigin=`https://${authority}`, cockpitOrigin=`https://${host}:9090`;
-const tls={key:fs.readFileSync(required('PI_GATEWAY_KEY')),cert:fs.readFileSync(required('PI_GATEWAY_CERT')),minVersion:'TLSv1.2'};
-const cockpitCA=fs.readFileSync(required('PI_GATEWAY_COCKPIT_CA'));
+const authority=`${host}:${port}`, expectedOrigin=`http://${authority}`, cockpitOrigin=`http://${host}:9090`;
 const maxBytes=128*1024*1024;
 function cookies(header){
  const result={};for(const pair of String(header||'').split(';')){const i=pair.indexOf('=');if(i<1)continue;const k=pair.slice(0,i).trim();if(k==='cockpit'||k==='pi_web_session'){if(Object.hasOwn(result,k))return null;result[k]=pair.slice(i+1).trim();}}return result;
@@ -27,7 +23,9 @@ function validRequest(req){
 }
 function authorized(cookie){return new Promise(resolve=>{
  if(!cookie||!/^[A-Za-z0-9._~%+\/-]+=*$/.test(cookie)||cookie.length>8192)return resolve(false);
- const request=https.request({hostname:'127.0.0.1',port:cockpitPort,path:'/cockpit/login',method:'GET',ca:cockpitCA,headers:{cookie:`cockpit=${cookie}`},timeout:4000},res=>{res.resume();resolve(res.statusCode===200)});
+ // Cockpit binds HTTP and HTTPS sessions separately, so use the HTTP
+ // loopback listener to validate cookies issued by the HTTP interface.
+ const request=http.request({hostname:'127.0.0.1',port:cockpitPort,path:'/cockpit/login',method:'GET',headers:{cookie:`cockpit=${cookie}`},timeout:4000},res=>{res.resume();resolve(res.statusCode===200)});
  request.on('error',()=>resolve(false));request.on('timeout',()=>request.destroy());request.end();
 });}
 // Fail closed if Pi Web password protection is disabled or cannot be checked.
@@ -38,7 +36,7 @@ function piAuthEnabled(){return new Promise(resolve=>{
  });request.on('error',()=>resolve(false));request.on('timeout',()=>request.destroy());
 });}
 function outgoing(req, jar){
- const headers={...req.headers,host:authority,'x-forwarded-host':authority,'x-forwarded-proto':'https'};
+ const headers={...req.headers,host:authority,'x-forwarded-host':authority,'x-forwarded-proto':'http'};
  delete headers['x-forwarded-for'];delete headers['x-real-ip'];delete headers['proxy-authorization'];
  delete headers.cookie;if(jar.pi_web_session)headers.cookie=`pi_web_session=${jar.pi_web_session}`;
  return headers;
@@ -55,7 +53,7 @@ function outputHeaders(headers){
  const original=copy['content-security-policy'];copy['content-security-policy']=original?`${original}; frame-ancestors ${cockpitOrigin}`:`frame-ancestors ${cockpitOrigin}`;
  copy['cache-control']='no-store';return copy;
 }
-const server=https.createServer(tls,async(req,res)=>{
+const server=http.createServer(async(req,res)=>{
  if(!validRequest(req)){res.writeHead(403).end('Forbidden');return;}
  const jar=cookies(req.headers.cookie);
  if(!jar||!await authorized(jar.cockpit)){res.writeHead(401,{'content-type':'text/plain; charset=utf-8','cache-control':'no-store'}).end('請先登入 Cockpit，然後重新載入此頁。');return;}

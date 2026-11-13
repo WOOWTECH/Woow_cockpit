@@ -9,12 +9,6 @@ DynamicUser=yes
 Environment=PI_GATEWAY_BIND=__GATEWAY_HOST__
 Environment=PI_GATEWAY_HOST=__GATEWAY_HOST__
 Environment=PI_GATEWAY_PORT=__GATEWAY_PORT__
-Environment=PI_GATEWAY_KEY=%d/gateway-key
-Environment=PI_GATEWAY_CERT=%d/gateway-cert
-Environment=PI_GATEWAY_COCKPIT_CA=%d/cockpit-ca
-LoadCredential=gateway-key:/etc/woowtech-cockpit/piweb-gateway/key.pem
-LoadCredential=gateway-cert:/etc/woowtech-cockpit/piweb-gateway/cert.pem
-LoadCredential=cockpit-ca:/etc/cockpit/ws-certs.d/0-self-signed.cert
 ExecStart=/usr/bin/node /usr/local/libexec/woowtech-piweb-gateway.mjs
 Restart=on-failure
 RestartSec=3
