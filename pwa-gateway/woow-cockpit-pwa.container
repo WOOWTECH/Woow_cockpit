@@ -1,0 +1,18 @@
+[Unit]
+Description=woowtech Cockpit PWA gateway
+After=network-online.target
+
+[Container]
+Image=docker.io/nginxinc/nginx-unprivileged:1.29.3-alpine
+ContainerName=woow-cockpit-pwa
+Network=host
+Volume=%h/.local/share/woowtech-cockpit-pwa/nginx.conf:/etc/nginx/nginx.conf:ro
+Volume=%h/.local/share/woowtech-cockpit-pwa/assets:/opt/woow-pwa:ro
+NoNewPrivileges=true
+
+[Service]
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

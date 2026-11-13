@@ -2,7 +2,13 @@
 # Install this integration separately from Cockpit's shared backup installer.
 set -euo pipefail
 [ "$(id -u)" = 0 ] || { echo 'Run with sudo.' >&2; exit 1; }
-pi_host=${1:-}; pi_port=${2:-19094}; pi_vpn=${3:-}
+pi_host=${1:-}; pi_port=${2:-19094}; pi_vpn=${3:-}; pi_public=${4:-}
+if [[ -n "$pi_public" ]]; then
+  node -e 'const s=process.argv[1];const u=new URL(s);if(u.protocol!=="https:"||u.origin!==s||u.username||u.password||!/^[a-z0-9.-]+$/i.test(u.hostname))process.exit(1)' "$pi_public" || { echo 'Public origin must be an exact HTTPS DNS origin without a path.' >&2; exit 1; }
+  if ! systemctl is-active --quiet woowtech-piweb-gateway-public.service && [[ -n "$(ss -H -ltn '( sport = :19095 )')" ]]; then
+    echo 'The public gateway port 19095 is already in use.' >&2; exit 1
+  fi
+fi
 validate_ip() {
   local ip=$1 a b c d part
   [[ "$ip" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]] || { echo 'Supply a valid IPv4 address.' >&2; exit 1; }
@@ -24,7 +30,7 @@ pi_pkg=/usr/local/share/cockpit/woowpiweb
 install -d -m 0755 "$pi_pkg"
 install -m 0755 "$pi_root/gateway.mjs" /usr/local/libexec/woowtech-piweb-gateway.mjs
 install -m 0644 "$pi_root/package/index.html" "$pi_root/package/style.css" "$pi_pkg/"
-sed -e "s/__GATEWAY_HOST__/$pi_host/g" -e "s/__VPN_HOST__/$pi_vpn/g" -e "s/__GATEWAY_PORT__/$pi_port/g" "$pi_root/package/app.js" > "$pi_pkg/app.js"
+sed -e "s/__GATEWAY_HOST__/$pi_host/g" -e "s/__VPN_HOST__/$pi_vpn/g" -e "s/__GATEWAY_PORT__/$pi_port/g" -e "s|__PUBLIC_ORIGIN__|$pi_public|g" "$pi_root/package/app.js" > "$pi_pkg/app.js"
 vpn_frame=''; if [[ -n "$pi_vpn" ]]; then vpn_frame="http://$pi_vpn:$pi_port"; fi
 sed -e "s/__GATEWAY_HOST__/$pi_host/g" -e "s/__GATEWAY_PORT__/$pi_port/g" -e "s|__VPN_FRAME_SRC__|$vpn_frame|g" "$pi_root/package/manifest.json" > "$pi_pkg/manifest.json"
 sed -e "s/__GATEWAY_HOST__/$pi_host/g" -e "s/__GATEWAY_PORT__/$pi_port/g" "$pi_root/woowtech-piweb-gateway.service" > /etc/systemd/system/woowtech-piweb-gateway.service
@@ -42,5 +48,14 @@ if [[ -n "$pi_vpn" ]]; then
   systemctl enable woowtech-piweb-gateway-vpn.service
   systemctl restart woowtech-piweb-gateway-vpn.service
   systemctl is-active --quiet woowtech-piweb-gateway-vpn.service || { echo 'VPN gateway did not start.' >&2; exit 1; }
+fi
+if [[ -n "$pi_public" ]]; then
+  sed -e "s|__PUBLIC_ORIGIN__|$pi_public|g" "$pi_root/woowtech-piweb-gateway-public.service" > /etc/systemd/system/woowtech-piweb-gateway-public.service
+  chmod 0644 /etc/systemd/system/woowtech-piweb-gateway-public.service
+  systemd-analyze verify /etc/systemd/system/woowtech-piweb-gateway-public.service
+  systemctl daemon-reload
+  systemctl enable woowtech-piweb-gateway-public.service
+  systemctl restart woowtech-piweb-gateway-public.service
+  systemctl is-active --quiet woowtech-piweb-gateway-public.service || { echo 'Public gateway did not start.' >&2; exit 1; }
 fi
 printf 'Installed Pi Web gateway on http://%s:%s/ . Sign out/in to refresh Cockpit package list.\n' "$pi_host" "$pi_port"
