@@ -37,6 +37,9 @@ button { cursor: pointer }
 .action:disabled { opacity: .5; cursor: not-allowed }
 button:active:not(:disabled) { transform: scale(.97) }
 .link { border: 0; background: transparent; padding: 4px 0; color: var(--brand-text) }
+.back-button { display: inline-flex; align-items: center; gap: 8px; min-height: 44px; padding: 9px 16px; margin-bottom: 20px; border: 1px solid var(--border); border-radius: 999px; background: var(--surface); color: var(--brand-text); font-weight: 600; }
+.back-button:hover { background: var(--brand-wash); border-color: var(--brand) }
+.back-button svg { width: 20px; height: 20px; flex: none; fill: currentColor }
 .search { display: block; margin: 20px 0 24px; max-width: 480px }
 .search span { display: block; font-size: 13px; margin-bottom: 6px; color: var(--muted) }
 .search input,#log-service { width: 100%; border: 1px solid var(--border); border-radius: 12px; padding: 12px 14px; background: var(--surface); color: var(--text) }
@@ -77,3 +80,10 @@ details summary { cursor: pointer }
   .row { align-items: flex-start } .details { grid-template-columns: 1fr; gap: 5px } .details dd { margin-bottom: 8px }
 }
 @media (prefers-reduced-motion:reduce) { *,*::before,*::after { transition-duration: 0s !important } }
+
+.link-settings { display: grid; gap: 8px; max-width: 600px; margin: 16px 0 24px; }
+.link-settings label { font-size: 14px; font-weight: 500; }
+.link-settings input { width: 100%; min-width: 0; padding: 12px 14px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface); color: var(--text); }
+.link-settings input::placeholder { color: var(--muted); opacity: 1; }
+.link-settings button { justify-self: start; margin-top: 8px; }
+.link-settings p:empty { display: none; }

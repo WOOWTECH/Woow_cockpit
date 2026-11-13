@@ -10,9 +10,13 @@ import pwd
 import re
 import subprocess
 import sys
+import tempfile
+from urllib.parse import urlsplit
 
 CONFIG = Path('/etc/woowtech-cockpit/services.json')
 LOCK_DIR = Path('/run/woowtech-cockpit-services')
+APP_LINKS = Path('/var/lib/woowtech-cockpit/app-links.json')
+APP_ID = re.compile(r'[A-Za-z0-9_][A-Za-z0-9_.:@-]{0,239}\Z')
 UNIT = re.compile(r'[A-Za-z0-9_][A-Za-z0-9_.:@\\-]{0,239}\.service\Z')
 OWNER = re.compile(r'[a-z_][a-z0-9_-]{0,31}\$?\Z')
 METRICS = ('MainPID', 'MemoryCurrent', 'CPUUsageNSec', 'TasksCurrent', 'NRestarts',
@@ -247,16 +251,75 @@ def action(scope, name, verb):
     return {'ok': True, 'unit': name, 'action': verb, 'active': f.get('ActiveState'), 'sub': f.get('SubState')}
 
 
+
+def validate_app_link(url, external=False):
+    if not isinstance(url, str) or len(url) > 2048 or any(ord(c) < 33 or ord(c) == 127 or c == "\\" for c in url):
+        raise ServiceError('網址格式不正確。')
+    if not url:
+        return ''
+    try:
+        parsed = urlsplit(url)
+        port = parsed.port
+        if parsed.scheme not in (('https',) if external else ('http', 'https')) or not parsed.hostname or parsed.username is not None or parsed.password is not None:
+            raise ValueError()
+        if not parsed.hostname.isascii() or any(c in parsed.hostname for c in '/%?#') or (port is not None and not 1 <= port <= 65535):
+            raise ValueError()
+    except ValueError:
+        raise ServiceError('請輸入有效的 HTTPS 對外網址。' if external else '請輸入有效的 HTTP 或 HTTPS 區網網址。') from None
+    return url
+
+
+def app_links(scope, app_id, values=None):
+    if not isinstance(app_id, str) or not APP_ID.fullmatch(app_id):
+        raise ServiceError('應用識別名稱不正確。')
+    if values is not None:
+        values = {'internal': validate_app_link(values[0]), 'external': validate_app_link(values[1], True)}
+    LOCK_DIR.mkdir(mode=0o700, exist_ok=True)
+    fd = os.open(LOCK_DIR / 'app-links', os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+    with os.fdopen(fd, 'w') as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        data = {}
+        if APP_LINKS.is_symlink():
+            raise ServiceError('應用網址設定不可使用符號連結。')
+        if APP_LINKS.exists():
+            st = APP_LINKS.stat()
+            if st.st_uid != os.geteuid() or st.st_mode & 0o077 or st.st_size > 1024 * 1024:
+                raise ServiceError('應用網址設定檔權限或大小不正確。')
+            data = json.loads(APP_LINKS.read_text())
+            if not isinstance(data, dict):
+                raise ServiceError('應用網址設定格式不正確。')
+        key = scope.key + '/' + app_id
+        if values is not None:
+            if any(values.values()): data[key] = values
+            else: data.pop(key, None)
+            APP_LINKS.parent.mkdir(mode=0o755, parents=True, exist_ok=True)
+            descriptor, name = tempfile.mkstemp(prefix='.app-links-', dir=APP_LINKS.parent)
+            try:
+                with os.fdopen(descriptor, 'w') as output:
+                    json.dump(data, output, ensure_ascii=False, indent=2)
+                    output.write('\n'); output.flush(); os.fsync(output.fileno())
+                os.replace(name, APP_LINKS)
+            finally:
+                if os.path.exists(name): os.unlink(name)
+        value = data.get(key, {})
+        if not isinstance(value, dict): raise ServiceError('應用網址設定格式不正確。')
+        return {'internal': validate_app_link(value.get('internal', '')), 'external': validate_app_link(value.get('external', ''), True)}
+
+
 def main(argv):
     if os.geteuid() != 0:
         raise ServiceError('請先在 Cockpit 右上角開啟管理員存取權限。')
     config = load_config()
     if argv == ['scopes']:
         return scopes(config)
-    if len(argv) not in (2, 3, 4):
+    if len(argv) not in (2, 3, 4, 5):
         raise ServiceError('服務管理指令格式不正確。')
     command = argv[0]
     scope = Scope(argv[1], config)
+    if command == 'app-links-get' and len(argv) == 3:
+        return app_links(scope, argv[2])
+    if command == 'app-links-set' and len(argv) == 5:
+        return app_links(scope, argv[2], argv[3:])
     if command == 'inventory' and len(argv) == 2:
         return inventory(scope)
     if command == 'details' and len(argv) == 3:
