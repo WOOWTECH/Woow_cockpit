@@ -82,11 +82,13 @@ tests/e2e/lab/owner.sh a python3 /opt/woowbk-demo/tools/check.py --stop-start
 重設 dev-b 只做擁有者層級的移除（停止服務、刪除 Quadlet、資料卷、密鑰、設定檔與示範應用映像）並刪除 dev-b 的備份，
 不重建設備。
 
-## 強化測試（hardening，H1–H8）
+## 強化測試（hardening，H1–H8 與發布回歸情境）
 
-`python3 -I tests/e2e/lab/hardening.py <h1|h2|h3|h4|h5|h6|h7|leaks|all>` 與 `node tests/e2e/lab/upload_window.mjs`，
-證據寫入 `~/.woowbk-lab/evidence/hardening/<時間>-<情境>/`（`driver.log`、`result.json`、作業紀錄）。全部在 dev-a
-（需要設備金鑰）執行，H8 上傳到 dev-b；每個情境結束時把設備恢復原狀（刪除測試備份、移除注入的錯誤、卸載 tmpfs）。
+`python3 -I tests/e2e/lab/hardening.py <h1|h2|h3|h4|h5|h6|h7|sec1|fidelity|fresh|leaks|all>` 與
+`node tests/e2e/lab/upload_window.mjs`，證據寫入 `~/.woowbk-lab/evidence/hardening/<時間>-<情境>/`（`driver.log`、
+`result.json`、作業紀錄）。H1–H7 與 `sec1` 在 dev-a（需要設備金鑰）執行，H8 上傳到 dev-b；`fidelity` 用兩台，`fresh`
+在 dev-b。每個情境結束時把設備恢復原狀（刪除測試備份、移除注入的錯誤與探測檔、卸載 tmpfs）；`fidelity` 與 `fresh` 會先把
+dev-b 重設為全新目標，`fresh` 結束時 dev-b 和 cli_e2e s2 之後一樣：示範應用已部署並執行。
 
 | 指令 | 內容 |
 | --- | --- |
@@ -97,8 +99,11 @@ tests/e2e/lab/owner.sh a python3 /opt/woowbk-demo/tools/check.py --stop-start
 | `h5` | 還原進入 `start` 階段（資料卷已刪除）時 `labpodman restart woowbk-dev-a`；開機後作業為 interrupted＋還原前備份 ID，還原該備份後資料等於還原前（完整內容） |
 | `h6` | 資料卷寫入約 600 MiB 亂數檔：不含映像的備份、bridge 下載、原位還原；主機端讀取設備 cgroup 的 `memory.peak`（每個 fd 可歸零）與每 0.25 秒的 `memory.stat`，回報包含 page cache 的峰值與 anon＋kernel＋shmem 峰值、OOM 計數；最後刪除大檔與大型備份 |
 | `h7` | `/opt/woow-cockpit-src` 的 `manage.py plan/install/verify` → 回退最新交易 → 繼續回退到備份套件被移除（helper、頁面、目錄設定都不在）→ 重新安裝；每一步比對 `/var/lib/woowtech-backup` 與金鑰目錄的內容雜湊 |
+| `sec1` | 審查發現 SEC-1 的實機版：先做對照組，證明設備上真正的 podman 4.9.3 會照做（appowner 以裸 `podman volume import` 與 `podman load` 匯入「絕對路徑符號連結＋其下的成員」的 tar，成員確實被寫進家目錄中的標記目錄，之後刪除）。接著在 dev-a **設備內**用設備金鑰解開一份新的含映像備份（串流到 `/var/tmp/woowbk-sec1-work`，明文在離開前刪除），在資料卷 tar 與應用映像的 OCI 封存**所有真實成員之後**各加上指向 `~/.config/systemd/user`、`~/.config/containers` 的絕對符號連結與其下的成員，修正 manifest 的大小與 sha256，以設備公鑰重新加密（主機只拿到密文）；並以已安裝引擎的 `nested` 檢查記錄原始項目通過、改造項目被拒的原因。經真正的 bridge 上傳 → upload-finish → inspect → 驗證作業 → 原位還原作業：還原必須在 preflight 失敗（safety、stop 未執行），錯誤分別點名容器映像與資料卷；期間 appowner 的 podman 沒有任何 image／volume 事件（沒有 load、tag、volume create/remove/import）、變更檔案掃描乾淨、整台設備找不到 `woowbk-sec1` 路徑、家目錄設定與應用資料、部署檔、映像名稱不變、沒有還原前備份。驗證作業只檢查外層封存，會回報完整（記為觀察） |
+| `fidelity` | 合法資料的保真度：在 dev-a 應用資料卷的 `woowbk-fidelity/`（應用不計數）以 `podman unshare` 建立絕對／相對／懸空符號連結、硬連結、超過 100 bytes 的名稱與超過 255 bytes 的路徑、空目錄、setgid 與 sticky 目錄、user.* 延伸屬性、非 UTF-8 檔名、中文檔名、FIFO、不同擁有者（70、1000、33、54999）、唯讀與可執行檔、次秒 mtime；以**應用容器內**（`podman exec`）看到的完整清單（類型、容器內 uid/gid、權限、大小、mtime、連結目標、sha256、延伸屬性、硬連結群組）為準。含映像備份 → 修改探測目錄 → 原位還原 → 清單必須相同；再下載 → dev-b 重設 → 上傳 → 全新部署還原（緊急金鑰）→ dev-b 容器內清單必須相同（只有次秒 mtime 因 tar 只存整秒而不同）。結束時刪除探測目錄與測試備份 |
+| `fresh` | dev-b 全新部署還原：(1) 預先存在同名的應用機密、設定檔、資料卷或資料庫資料卷（各自單獨測）→ inspect 與還原作業都在 preflight 拒絕，什麼都沒有刪除或建立；(2) 另建無關的資料卷、機密、設定檔、網路與映像名稱，並讓 `localhost/woowbk-demo-app:1` 先指向探測映像；還原在 `start` 階段被 SIGKILL（範本、遮蔽、機密、設定檔、資料卷都已建立）→ 復原移除整個部署、無關物件不變；已載入的映像名稱照 CONTRACT §8 保留；(3) 以一次性的資料庫 drop-in 讓還原在破壞性步驟後失敗 → 程序內自動回復 → `remove_fresh` 把映像名稱改回原本的探測映像（retag），或移除這次新增的名稱（untag），無關物件不變。最後再做一次全新部署還原，資料等於來源備份 |
 | `leaks` | 兩台設備的作業紀錄、日誌、索引、requests、journal 沒有應用密鑰或 age 金鑰；沒有 `key-*`、staging、孤兒封存檔；主機 hardening／integration 證據沒有金鑰 |
-| `upload_window.mjs [MiB=2,4,8] [次數=3] [chunkKiB=64]` | H8：以 Playwright 攔截 `backup.js`，只在測試瀏覽器內改 `WINDOW_SIZE`（與實驗用的 `CHUNK_SIZE`）並加上計時；經 cockpit-ws 上傳約 142 MB 到 dev-b，核對 sha256，停在金鑰步驟後刪除。程式庫與設備上的 2 MiB 不變 |
+| `upload_window.mjs [MiB=2,4] [次數=3] [chunkKiB=64,256,512]` | H8：以 Playwright 攔截 `backup.js`，只在測試瀏覽器內改 `WINDOW_SIZE` 與 `CHUNK_SIZE` 並加上計時；經 cockpit-ws 上傳約 142 MB 到 dev-b，核對 sha256，停在金鑰步驟後刪除。程式庫與設備上的預設值（4 MiB 視窗、512 KiB 訊框）不變 |
 
 `H1_CASES`、`H3_FAULTS`、`H4_KILLS`、`H5_PHASE`、`H6_FILES`、`H7_FULL=0`、`H2_TMPFS` 環境變數可只跑一部分。
 

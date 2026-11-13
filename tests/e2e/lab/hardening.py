@@ -12,6 +12,9 @@ cockpit-bridge (fsreplace1 / fsread1). Faults are injected only inside the lab d
     python3 -I tests/e2e/lab/hardening.py h5   # device reboot (labpodman restart) during a restore
     python3 -I tests/e2e/lab/hardening.py h6   # ~600 MB files volume: backup, bridge download, in-place restore, memory
     python3 -I tests/e2e/lab/hardening.py h7   # manage.py plan/install/verify, rollback, re-install on a device
+    python3 -I tests/e2e/lab/hardening.py sec1      # SEC-1: nested volume/OCI tars with an absolute symlink + member below
+    python3 -I tests/e2e/lab/hardening.py fidelity  # legitimate volume content: in-place and cross-device listing equal
+    python3 -I tests/e2e/lab/hardening.py fresh     # dev-b fresh restore: leftovers refused, SIGKILL recovery, rollback tags
     python3 -I tests/e2e/lab/hardening.py leaks
     (H8, browser upload windows, is tests/e2e/lab/upload_window.mjs)
 
@@ -1476,6 +1479,1016 @@ def scenario_h7(ev):
     return {'rolled_back_latest': latest, 'further_rollbacks': removed, 'reinstall': inst.get('backup_id')}
 
 
+# ------------------------------------------------------------------ shared helpers of the release lab cases
+
+def owner_images(dev):
+    """{image name: image id} of the app owner's named images."""
+    data = json.loads(owner(dev, 'podman', 'images', '--format', 'json').stdout or b'[]')
+    return dict(sorted((name, image['Id']) for image in data for name in image.get('Names') or []))
+
+
+def image_id(dev, name):
+    proc = owner(dev, 'podman', 'image', 'inspect', '--format', '{{.Id}}', name, check=False)
+    return proc.stdout.decode().strip() if proc.returncode == 0 else None
+
+
+def owner_events(dev, since, until):
+    """Image and volume events of the owner's podman between two device times (journald event log)."""
+    proc = owner(dev, 'podman', 'events', '--stream=false', '--since', str(int(since)), '--until', str(int(until) + 1),
+                 '--filter', 'type=image', '--filter', 'type=volume', '--format', 'json', check=False, timeout=120)
+    events = []
+    for line in proc.stdout.decode('utf-8', 'replace').splitlines():
+        try:
+            event = json.loads(line)
+        except ValueError:
+            continue
+        if str(event.get('Name') or '').startswith('woowbk-sec-probe'):
+            continue  # another lab user's probe (see README), not this engine
+        events.append({key: event.get(key) for key in ('Type', 'Status', 'Name', 'Time')})
+    return proc.returncode, events
+
+
+def volume_mountpoint(dev, name):
+    out = owner(dev, 'podman', 'volume', 'inspect', '--format', '{{.Mountpoint}}', name).stdout.decode().strip()
+    if not out.startswith('/'):
+        raise Failed(f'dev-{dev}: no mountpoint for volume {name}: {out!r}')
+    return out
+
+
+def in_userns(dev, code, *args, timeout=300):
+    """Run Python as root of the owner's user namespace (`podman unshare`), the IDs a container sees."""
+    return owner(dev, 'podman', 'unshare', 'python3', '-I', '-c', code, *map(str, args), timeout=timeout).stdout.decode()
+
+
+def file_sha256(path):
+    digest = hashlib.sha256()
+    with open(path, 'rb') as handle:
+        for chunk in iter(lambda: handle.read(1 << 20), b''):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def dev_a_image_backup(ev):
+    """(host file, backup id, verify snapshot) of a dev-a backup *with* images: the one cli_e2e s1/s2 downloaded when it
+    is still intact on the host, otherwise a new one (backup on dev-a + bridge download)."""
+    state = e2e.load_state()
+    s1, local = state.get('s1') or {}, Path((state.get('s2') or {}).get('download') or '/nonexistent')
+    if s1.get('sha256') and local.is_file() and file_sha256(local) == s1['sha256']:
+        return local, s1['backup_id'], s1.get('snapshot')
+    snapshot = summary('a')
+    job, _log = backup_once('a', ev, '發布回歸：跨設備來源（含映像）', images=True, label='backup[source]')
+    ev.require('source backup with images on dev-a succeeded', job['state'] == 'succeeded', job.get('error'))
+    backup_id = job['result']['backup_id']
+    info = ok('a', 'download-info', {'backup_id': backup_id}, ev=ev)
+    local = private_dir(WORK / 'source') / info['filename']
+    e2e.bridge_download('a', info['path'], local, ev=ev)
+    return local, backup_id, snapshot
+
+
+# ------------------------------------------------------------------ SEC-1: nested tar symlink escape (live)
+
+SEC1_TAG = 'woowbk-sec1'
+SEC1_WORK = '/var/tmp/woowbk-sec1-work'  # device root fs: /tmp is a tmpfs that counts against the device memory limit
+SEC1_APP_REF = 'localhost/woowbk-demo-app:1'
+
+# Runs as the app owner in the device: the primitive the engine defends against, on the device's real podman 4.9.3.
+# A tar holding an absolute symlink and a member below it goes to bare `podman volume import` and `podman load`; each
+# writes the member through the symlink into a canary directory of the owner's home. Harmless text; all removed.
+SEC1_CONTROL = r'''
+import io, json, os, shutil, subprocess, sys, tarfile
+tag = sys.argv[1]
+home = os.path.expanduser('~')
+canary = {'volume-import': os.path.join(home, tag + '-canary-vol'), 'load': os.path.join(home, tag + '-canary-img')}
+work = os.path.join(home, '.' + tag + '-ctl')
+def hostile(target, planted):
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode='w', format=tarfile.PAX_FORMAT) as tar:
+        link = tarfile.TarInfo(tag + '-esc')
+        link.type, link.linkname, link.mode = tarfile.SYMTYPE, target, 0o777
+        tar.addfile(link)
+        data = b'woowbk SEC-1 lab control (harmless)\n'
+        member = tarfile.TarInfo(tag + '-esc/' + planted)
+        member.size, member.mode = len(data), 0o644
+        tar.addfile(member, io.BytesIO(data))
+    return buf.getvalue()
+result = {}
+try:
+    for folder in (*canary.values(), work):
+        os.mkdir(folder, 0o700)
+    volume_tar, image_tar = os.path.join(work, 'volume.tar'), os.path.join(work, 'image.tar')
+    with open(volume_tar, 'wb') as handle:
+        handle.write(hostile(canary['volume-import'], tag + '-planted-by-volume-import'))
+    with open(image_tar, 'wb') as handle:
+        handle.write(hostile(canary['load'], tag + '-planted-by-load'))
+    volume = tag + '-ctl-vol'
+    subprocess.run(['podman', 'volume', 'create', volume], capture_output=True, check=True)
+    try:
+        result['volume_import_rc'] = subprocess.run(['podman', 'volume', 'import', volume, volume_tar],
+                                                    capture_output=True).returncode
+    finally:
+        subprocess.run(['podman', 'volume', 'rm', '-f', volume], capture_output=True)
+    run = subprocess.run(['podman', 'load', '-i', image_tar], capture_output=True)
+    result['load_rc'] = run.returncode
+    result['load_stderr_tail'] = run.stderr.decode('utf-8', 'replace')[-300:]
+    result['written_through_symlink'] = {key: sorted(os.listdir(path)) for key, path in canary.items()}
+finally:
+    for folder in (*canary.values(), work):
+        shutil.rmtree(folder, ignore_errors=True)
+print(json.dumps(result))
+'''
+
+# Runs as root inside dev-a. Streams a base backup (with images) through the device key into a work directory on the
+# device's disk, appends to the volume tar and to the app image's OCI archive an absolute symlink into the owner's home
+# plus a member below it (after all real members: a check that streams into podman would already have changed the
+# device), fixes the manifest entries (size, sha256) and re-encrypts to the device recipient, so only ciphertext leaves
+# the device. All plaintext is deleted before it exits. stdout: one JSON report, including the verdicts of the installed
+# engine's own nested checks on the original and the crafted entries (reason and member only).
+CRAFT_SEC1 = r'''
+import glob, hashlib, io, json, os, pwd, secrets, shutil, subprocess, sys, tarfile, time
+base_id, work, app_ref, tag = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
+sys.path.insert(0, '/usr/local/lib/woowtech-cockpit-backup')
+sys.dont_write_bytecode = True
+from woowbackup import nested
+from woowbackup.errors import BackupError
+ENV = {'PATH': '/usr/bin:/bin', 'LANG': 'C.UTF-8'}
+home = pwd.getpwnam('appowner').pw_dir
+def pipeline(stages, source, sink):
+    procs, stdin = [], source
+    for i, argv in enumerate(stages):
+        proc = subprocess.Popen(argv, stdin=stdin, stdout=sink if i == len(stages) - 1 else subprocess.PIPE, env=ENV)
+        if stdin is not source:
+            stdin.close()
+        stdin = proc.stdout
+        procs.append(proc)
+    codes = [proc.wait() for proc in procs]
+    if any(codes):
+        raise SystemExit('%s exited %s' % ([s[0] for s in stages], codes))
+def info(name, size=0, kind=tarfile.REGTYPE, link='', mode=0o644):
+    ti = tarfile.TarInfo(name)
+    ti.size, ti.type, ti.linkname, ti.mode, ti.uid, ti.gid, ti.mtime = size, kind, link, mode, 0, 0, int(time.time())
+    return ti
+def outer(name, size):
+    ti = info(name, size, mode=0o600)
+    ti.uname = ti.gname = 'root'
+    return ti
+def digest(path):
+    h, size = hashlib.sha256(), 0
+    with open(path, 'rb') as handle:
+        for chunk in iter(lambda: handle.read(1 << 20), b''):
+            h.update(chunk)
+            size += len(chunk)
+    return h.hexdigest(), size
+def verdict(check):
+    try:
+        check()
+        return {'accepted': True}
+    except BackupError as error:
+        return {'accepted': False, 'code': error.code, 'reason': error.details.get('reason'),
+                'member': error.details.get('member'), 'type': error.details.get('type')}
+os.mkdir(work, 0o700)
+report = {}
+try:
+    keyfiles = sorted(glob.glob('/etc/woowtech-cockpit/backup/keys/device-*.key'))
+    if len(keyfiles) != 1:
+        raise SystemExit('need exactly one device key')
+    recipient = subprocess.run(['age-keygen', '-y', keyfiles[0]], capture_output=True, env=ENV,
+                               check=True).stdout.decode().split()[0]
+    source_path = '/var/lib/woowtech-backup/archives/%s.woowbackup' % base_id
+    with open(source_path, 'rb') as handle:
+        magic, header_line = handle.readline(), handle.readline()
+        offset = handle.tell()
+    if magic != b'WOOWTECH-BACKUP/1\n':
+        raise SystemExit('not a backup')
+    old_header = json.loads(header_line)
+    plain_path = os.path.join(work, 'plain.tar')
+    with open(source_path, 'rb') as source, open(plain_path, 'wb') as sink:
+        source.seek(offset)
+        pipeline([['age', '-d', '-i', keyfiles[0]], ['zstd', '-d', '-c', '-q']], source, sink)
+    plain = tarfile.open(plain_path, 'r:')
+    members = plain.getmembers()
+    if members[0].name != 'manifest.json':
+        raise SystemExit('manifest is not the first member')
+    manifest = json.loads(plain.extractfile(members[0]).read())
+    app = manifest['apps'][0]
+    volume = app['volumes'][0]
+    image = next((i for i in app['images'] if i.get('ref') == app_ref and i.get('entry')), None)
+    if image is None:
+        raise SystemExit('the base backup does not include ' + app_ref)
+    by_name = {m.name: m for m in members}
+    def extract(entry, dest):
+        with plain.extractfile(by_name[entry]) as raw, open(dest, 'wb') as out:
+            shutil.copyfileobj(raw, out, 1 << 20)
+    def append_escape(original, dest, target, planted, payload):
+        with open(original, 'rb') as raw, tarfile.open(fileobj=raw, mode='r|') as inner, \
+                open(dest, 'wb') as out_file, tarfile.open(fileobj=out_file, mode='w|', format=tarfile.PAX_FORMAT) as out:
+            count = 0
+            for member in inner:
+                out.addfile(member, inner.extractfile(member) if member.isreg() else None)
+                count += 1
+            out.addfile(info(tag + '-esc', kind=tarfile.SYMTYPE, link=target, mode=0o777))
+            out.addfile(info(tag + '-esc/' + planted, len(payload)), io.BytesIO(payload))
+        return count
+    orig_volume, orig_image = os.path.join(work, 'volume.orig.tar'), os.path.join(work, 'image.orig.tar')
+    new_volume, new_image = os.path.join(work, 'volume.tar'), os.path.join(work, 'image.tar')
+    extract(volume['entry'], orig_volume)
+    extract(image['entry'], orig_image)
+    report.update(volume=volume['name'], volume_entry=volume['entry'], image_ref=image['ref'], image_entry=image['entry'],
+                  volume_symlink_target=home + '/.config/systemd/user', image_symlink_target=home + '/.config/containers')
+    report['volume_members_kept'] = append_escape(
+        orig_volume, new_volume, report['volume_symlink_target'], tag + '-planted.service',
+        b'[Unit]\nDescription=woowbk SEC-1 lab canary (harmless, never started)\n')
+    report['image_members_kept'] = append_escape(orig_image, new_image, report['image_symlink_target'],
+                                                 tag + '-planted.conf', b'# woowbk SEC-1 lab canary (harmless)\n')
+    report['engine_checks'] = {
+        'volume_original': verdict(lambda: nested.check_volume(orig_volume)),
+        'volume_crafted': verdict(lambda: nested.check_volume(new_volume)),
+        'image_original': verdict(lambda: nested.check_oci(orig_image, ref=image['ref'], image_id=image['id'])),
+        'image_crafted': verdict(lambda: nested.check_oci(new_image, ref=image['ref'], image_id=image['id'])),
+    }
+    replaced = {volume['entry']: new_volume, image['entry']: new_image}
+    entries = {e['path']: e for e in manifest['entries']}
+    for entry, local in replaced.items():
+        sha, size = digest(local)
+        entries[entry].update(size=size, sha256=sha)
+    now = time.gmtime()
+    new_id = time.strftime('%Y%m%dT%H%M%SZ', now) + '-' + secrets.token_hex(4)
+    created = time.strftime('%Y-%m-%dT%H:%M:%SZ', now)
+    manifest.update(backup_id=new_id, created=created, note='SEC-1 lab: nested tar symlink escape')
+    data = json.dumps(manifest, ensure_ascii=False, separators=(',', ':')).encode()
+    new_plain = os.path.join(work, 'plain.new.tar')
+    with open(new_plain, 'wb') as out_file, tarfile.open(fileobj=out_file, mode='w', format=tarfile.PAX_FORMAT) as out:
+        out.addfile(outer('manifest.json', len(data)), io.BytesIO(data))
+        for member in members[1:]:
+            if member.name in replaced:
+                with open(replaced[member.name], 'rb') as handle:
+                    out.addfile(outer(member.name, entries[member.name]['size']), handle)
+            else:
+                out.addfile(outer(member.name, member.size), plain.extractfile(member))
+    plain.close()
+    for path in (plain_path, orig_volume, orig_image, new_volume, new_image):
+        os.unlink(path)
+    header = {'format': 1, 'backup_id': new_id, 'created': created, 'key_id': old_header['key_id'],
+              'encryption': 'age-x25519', 'compression': 'zstd'}
+    out_path = os.path.join(work, 'crafted.woowbackup')
+    with open(out_path, 'wb') as sink:
+        sink.write(b'WOOWTECH-BACKUP/1\n' + json.dumps(header, separators=(',', ':')).encode() + b'\n')
+        sink.flush()
+        with open(new_plain, 'rb') as source:
+            pipeline([['zstd', '-q', '-c', '-3'], ['age', '-e', '-r', recipient]], source, sink)
+    report.update(backup_id=new_id, path=out_path, size=os.path.getsize(out_path), plain_bytes=os.path.getsize(new_plain))
+finally:
+    for name in os.listdir(work):
+        if not name.endswith('.woowbackup'):
+            os.unlink(os.path.join(work, name))
+print(json.dumps(report))
+'''
+
+
+def sec1_craft(dev, base_id, ev):
+    sh(dev, f'rm -rf {SEC1_WORK}', check=False)
+    proc = py(dev, CRAFT_SEC1, base_id, SEC1_WORK, SEC1_APP_REF, SEC1_TAG, timeout=900, check=False)
+    if proc.returncode != 0:
+        sh(dev, f'rm -rf {SEC1_WORK}', check=False)
+        raise Failed(f'SEC-1 craft failed rc={proc.returncode}: {redact(proc.stderr.decode("utf-8", "replace")[-600:])}')
+    report = json.loads(proc.stdout)
+    local = private_dir(WORK / 'sec1') / 'sec1-crafted.woowbackup'
+    try:
+        write_private_stream(dev, report['path'], local)
+    finally:
+        sh(dev, f'rm -rf {SEC1_WORK}', check=False)
+    report.update(file=str(local), host_size=local.stat().st_size, sha256=file_sha256(local))
+    return report
+
+
+def write_private_stream(dev, device_path, local):
+    """Copy a (ciphertext) file out of a device into a 0600 host file."""
+    e2e.write_private(local, b'')
+    with open(local, 'wb') as handle:
+        proc = subprocess.run([LP, 'exec', dev_name(dev), 'cat', device_path], stdout=handle, stderr=subprocess.PIPE,
+                              timeout=600)
+    if proc.returncode != 0:
+        raise Failed(f'copy of {device_path} from dev-{dev} failed rc={proc.returncode}')
+
+
+def scenario_sec1(ev):
+    """SEC-1 live: a backup encrypted to dev-a's own key whose volume tar and app-image OCI archive each hold an
+    absolute symlink into the owner's home plus a member written through it. The restore must refuse it before any
+    podman load or volume import; nothing may be written outside staging; the app stays untouched."""
+    dev = 'a'
+    status = ok(dev, 'status', ev=ev)
+    ev.require('dev-a: device key present, app running, no active job',
+               status['key'] and status['active_job'] is None
+               and next(a for a in status['apps'] if a['id'] == APP)['state'] == 'running', status.get('key'))
+    ev.require('dev-a: no orphan archives and empty staging before SEC-1', orphans(dev) == [] and staging_empty(dev),
+               orphans(dev))
+    ev.require('dev-a: no woowbk-sec1 path anywhere before the case', canaries(dev, SEC1_TAG) == [],
+               canaries(dev, SEC1_TAG))
+    scanner_selftest(dev, ev)
+
+    # Control: the crafted shape really escapes with bare podman, so the engine's refusal is what protects the owner.
+    control = json.loads(owner(dev, 'python3', '-I', '-c', SEC1_CONTROL, SEC1_TAG, timeout=300).stdout)
+    ev.save('sec1-control', control)
+    written = control.get('written_through_symlink') or {}
+    ev.check('SEC-1 control: bare `podman volume import` writes the member through the absolute symlink into the '
+             "owner's home (podman 4.9.3 on the device)", control.get('volume_import_rc') == 0
+             and written.get('volume-import') == [f'{SEC1_TAG}-planted-by-volume-import'], control)
+    ev.check("SEC-1 control: bare `podman load` (oci-archive attempt) writes it into the owner's home as well",
+             written.get('load') == [f'{SEC1_TAG}-planted-by-load'], control)
+    ev.check('SEC-1 control left nothing behind', canaries(dev, SEC1_TAG) == [], canaries(dev, SEC1_TAG))
+
+    created = []
+    try:
+        job, _log = backup_once(dev, ev, 'SEC-1 基礎備份（含映像）', images=True, label='backup[sec1-base]')
+        ev.require('SEC-1 base backup with images succeeded', job['state'] == 'succeeded', job.get('error'))
+        base_id = job['result']['backup_id']
+        created.append(base_id)
+        meta = sec1_craft(dev, base_id, ev)
+        ev.save('sec1-crafted', meta)
+        checks = meta['engine_checks']
+        ev.log(f'SEC-1 crafted {meta["host_size"]} bytes (plain {meta["plain_bytes"]}), backup {meta["backup_id"]}; '
+               f'engine nested checks: {checks}')
+        ev.check('SEC-1 crafting: the original volume tar and OCI archive pass the engine checks (only the planted '
+                 'members differ)', checks['volume_original'] == {'accepted': True}
+                 and checks['image_original'] == {'accepted': True}, checks)
+        ev.check('SEC-1 crafting: the engine refuses the crafted volume tar (member below a symlink)',
+                 checks['volume_crafted'].get('code') == 'corrupt-archive'
+                 and 'below a symlink' in (checks['volume_crafted'].get('reason') or '')
+                 and checks['volume_crafted'].get('member') == f'{SEC1_TAG}-esc/{SEC1_TAG}-planted.service',
+                 checks['volume_crafted'])
+        ev.check('SEC-1 crafting: the engine refuses the crafted OCI archive (the planted symlink is not a regular file '
+                 'or directory)', checks['image_crafted'].get('code') == 'corrupt-archive'
+                 and checks['image_crafted'].get('member') == f'{SEC1_TAG}-esc', checks['image_crafted'])
+        with open(meta['file'], 'rb') as handle:
+            head = handle.read(4096)
+        ev.check('SEC-1 crafting: the host received ciphertext only (outer header + age, no plaintext manifest)',
+                 meta['host_size'] == meta['size'] and head.startswith(b'WOOWTECH-BACKUP/1\n') and b'"apps"' not in head
+                 and b'age-encryption.org/v1' in head)
+        backup_id = meta['backup_id']
+        created.append(backup_id)
+
+        baseline = {'summary': summary(dev), 'content': content_state(dev), 'owner': owner_fingerprint(dev),
+                    'images': owner_images(dev), 'home_config': owner_config_listing(dev)}
+        before_ids = backup_ids(dev, ev)
+        t_start = device_clock(dev)
+        _begin, (_rc, reply) = e2e.upload_file(dev, meta['file'], ev=ev, filename='sec1-crafted.woowbackup')
+        uploaded = reply.get('backup') or {}
+        ev.require('SEC-1 upload-finish accepts the archive (outer header, age header and size are valid)',
+                   reply.get('ok') and uploaded.get('id') == backup_id and uploaded.get('key_available') is True,
+                   reply.get('error'))
+        _rc, inspected = helper(dev, 'inspect', {'backup_id': backup_id}, ev=ev)
+        ev.save('sec1-inspect', inspected)
+        ev.check('SEC-1 inspect (manifest only, what the wizard shows) answers; it cannot open nested tars, the restore '
+                 "job's preflight checks them (CONTRACT section 5)", inspected.get('ok'), inspected.get('error'))
+        start = ok(dev, 'verify-start', {'backup_id': backup_id, 'request_id': request_id()}, ev=ev)
+        vjob, vlog = wait_job(dev, start['job_id'], ev=ev, timeout=600, label='verify[sec1]')
+        save_job(ev, 'sec1-verify', vjob, vlog)
+        ev.log(f'SEC-1 verify job: {vjob["state"]} {vjob.get("error")} {vjob.get("result")}')
+        ev.check('SEC-1 verify job checks the outer archive only (decryption, entries, sizes, sha256 all match, so it '
+                 'succeeds; nested tars are refused by the restore, CONTRACT sections 5 and 8) and changes nothing',
+                 vjob['state'] == 'succeeded', vjob.get('error'))
+        ev.log('SEC-1 observation: the verify job and the wizard preflight report this archive as intact/restorable; '
+               'only the restore job (preflight with the extracted archive) refuses it')
+
+        rstart = ok(dev, 'restore-start', {'backup_id': backup_id, 'apps': [APP], 'request_id': request_id(),
+                                          'confirm': True}, ev=ev)
+        rjob, rlog = wait_job(dev, rstart['job_id'], ev=ev, timeout=900, label='restore[sec1]')
+        save_job(ev, 'sec1-restore', rjob, rlog)
+        phases = phase_states(rjob)
+        message = (rjob.get('error') or {}).get('message') or ''
+        ev.check('SEC-1 restore job fails in preflight, before the safety backup and before any stop',
+                 rjob['state'] == 'failed' and (rjob.get('error') or {}).get('code') == 'incompatible'
+                 and phases.get('preflight') == 'failed' and phases.get('safety') == 'pending'
+                 and phases.get('stop') == 'pending' and (rjob.get('result') or {}).get('changed') is not True,
+                 {'state': rjob['state'], 'error': rjob.get('error'), 'phases': phases})
+        ev.check('SEC-1 both nested tars are refused on their own (image and volume each named in the error)',
+                 '容器映像含有不安全' in message and '資料卷含有不安全' in message, message)
+        ev.check('SEC-1 the job log names each refusal and never reaches 載入映像 or 已重建資料卷',
+                 sum('未通過：' in line and '不安全' in line and '作業結束' not in line for line in rlog) == 2
+                 and not any('載入映像' in line or '已重建資料卷' in line or '停止服務' in line for line in rlog),
+                 [line for line in rlog if '未通過' in line])
+        t_end = device_clock(dev)
+        rc, events = owner_events(dev, t_start, t_end)
+        ev.save('sec1-podman-events', {'rc': rc, 'events': events})
+        ev.check('SEC-1 no podman image or volume event at all during upload, verify and restore (no load, tag, '
+                 'volume create/remove or import)', rc == 0 and events == [], events)
+        unexpected, counts = changed_since(dev, t_start)
+        ev.save('sec1-changed-scan', {'unexpected': unexpected, 'counts': counts,
+                                      'foreign_podman_events_in_window': foreign_activity(dev, t_start)})
+        ev.check('SEC-1 no file written or changed outside the engine records/staging during the attempt',
+                 unexpected == {}, unexpected)
+        found = canaries(dev, SEC1_TAG)
+        ev.check(f'SEC-1 no {SEC1_TAG} path exists anywhere on the device (nothing planted in ~/.config/systemd/user '
+                 'or ~/.config/containers)', found == [], found)
+        ev.check("SEC-1 the owner's ~/.config/systemd/user and ~/.config/containers are unchanged",
+                 owner_config_listing(dev) == baseline['home_config'], owner_config_listing(dev))
+        ev.check('SEC-1 app data, deployment files, volumes, secrets and image names unchanged; units active',
+                 content_state(dev) == baseline['content'] and compare(summary(dev), baseline['summary']) == {}
+                 and owner_fingerprint(dev) == baseline['owner'] and owner_images(dev) == baseline['images']
+                 and units_active(dev)[0], {'images': owner_images(dev)})
+        ev.check('SEC-1 staging empty, no job key files, no orphan archive files',
+                 staging_empty(dev) and no_job_keys(dev) and orphans(dev) == [], {'orphans': orphans(dev)})
+        new_ids = backup_ids(dev, ev) - before_ids
+        ev.check('SEC-1 no backup listed except the upload itself (no safety backup was taken)', new_ids == {backup_id},
+                 sorted(new_ids))
+        return {'backup_id': backup_id, 'engine_checks': checks, 'verify_job': vjob['state'],
+                'restore': {'state': rjob['state'], 'error': rjob.get('error'), 'phases': phases}}
+    finally:
+        for backup_id in created:
+            if backup_id in backup_ids(dev, ev):
+                ok(dev, 'delete', {'backup_id': backup_id}, ev=ev)
+        sh(dev, f'rm -rf {SEC1_WORK}', check=False)
+        ev.check('dev-a after SEC-1: app running, staging empty, no orphans, work directory removed',
+                 app_status(dev, ev)['state'] == 'running' and staging_empty(dev) and orphans(dev) == []
+                 and sh(dev, f'test -e {SEC1_WORK}', check=False).returncode != 0)
+
+
+def owner_config_listing(dev):
+    """Names, sizes and sha256 of the files in the owner's ~/.config/systemd/user and ~/.config/containers."""
+    script = ('cd "$HOME"/.config && find systemd/user containers -xdev \\( -type f -o -type l \\) '
+              '-printf "%y %s %p -> %l\\n" 2>/dev/null | sort; find systemd/user containers -xdev -type f '
+              '-exec sha256sum {} + 2>/dev/null | sort; true')
+    return owner(dev, 'sh', '-c', script).stdout.decode()
+
+
+# ------------------------------------------------------------------ fidelity: legitimate volume content
+
+FIDELITY_DIR = 'woowbk-fidelity'  # next to files/ in the app volume: the app does not count it
+FIDELITY_FIELDS = ('type', 'uid', 'gid', 'mode', 'size', 'mtime', 'nlink', 'link', 'sha256', 'xattrs', 'link_group')
+
+# Runs as root of the owner's user namespace (the IDs the container sees). argv[1]: the volume mountpoint.
+MAKE_FIDELITY = r'''
+import hashlib, json, os, sys
+root = os.path.join(os.fsencode(sys.argv[1]), b'woowbk-fidelity')
+os.mkdir(root, 0o755)
+notes = {}
+def path(rel):
+    return os.path.join(root, os.fsencode(rel) if isinstance(rel, str) else rel)
+def data(label, size):
+    out, block = b'', hashlib.sha256(label.encode()).digest()
+    while len(out) < size:
+        block = hashlib.sha256(block).digest()
+        out += block
+    return out[:size]
+def stamp(p, mtime, follow=True):
+    ns = int(round(mtime * 10**9))
+    os.utime(p, ns=(ns, ns), follow_symlinks=follow)
+def put(rel, content, mode=0o644, uid=0, gid=0, mtime=1700000000):
+    p = path(rel)
+    with open(p, 'wb') as handle:
+        handle.write(content)
+    os.chown(p, uid, gid)
+    os.chmod(p, mode)
+    stamp(p, mtime)
+def link(rel, target, uid=0, gid=0, mtime=1700000500):
+    p = path(rel)
+    os.symlink(os.fsencode(target), p)
+    os.lchown(p, uid, gid)
+    stamp(p, mtime, follow=False)
+def mkdir(rel, mode=0o755, uid=0, gid=0):
+    p = path(rel)
+    os.mkdir(p)
+    os.chown(p, uid, gid)
+    os.chmod(p, mode)
+long_dir = 'deep/' + 'd' * 120 + '/' + 'e' * 120
+put('plain.bin', data('plain', 65536 + 17))
+put('empty.txt', b'', mode=0o600, mtime=1700000001)
+put('hard-a.txt', b'hardlinked content\n', mode=0o640, uid=1000, gid=1000, mtime=1700000002)
+os.link(path('hard-a.txt'), path('hard-b.txt'))
+link('abs-link-dir', '/data/files')
+link('abs-link-file', '/data/woowbk-fidelity/plain.bin', uid=70, gid=70)
+link('abs-dangling', '/etc/woowbk-fidelity-missing')
+link('rel-link', '../files')
+put('n' * 180 + '.txt', b'long name\n', mtime=1700000003)
+mkdir('deep')
+mkdir('deep/' + 'd' * 120)
+mkdir(long_dir, mode=0o700)
+put(long_dir + '/' + 'f' * 150 + '.dat', data('deep', 4096), mtime=1700000004)
+mkdir('empty-dir', mode=0o750, uid=33, gid=33)
+mkdir('sgid-dir', mode=0o2775, gid=1000)
+put('sgid-dir/inner.txt', b'inherits the group\n', mode=0o664, gid=1000, mtime=1700000005)
+mkdir('sticky-dir', mode=0o1777)
+put('xattr.txt', b'has user xattrs\n', mtime=1700000006)
+try:
+    os.setxattr(path('xattr.txt'), 'user.woowbk.fidelity', 'value-中-\x01'.encode())
+    os.setxattr(path('xattr.txt'), 'user.woowbk.second', b'2')
+    notes['xattr'] = True
+except OSError as error:
+    notes['xattr'] = '%s: %s' % (type(error).__name__, error)
+try:
+    put(b'latin1-caf\xe9-\xff.bin', b'non-utf8 name\n', mtime=1700000007)
+    notes['non_utf8_name'] = True
+except OSError as error:
+    notes['non_utf8_name'] = '%s: %s' % (type(error).__name__, error)
+put('中文檔名-\U00020bb7.txt', '內容\n'.encode(), mtime=1700000008)
+os.mkfifo(path('pipe'))
+os.chmod(path('pipe'), 0o620)
+stamp(path('pipe'), 1700000009)
+put('subsecond.txt', b'sub-second mtime\n', mtime=1700000123.456789)
+put('owned-70.txt', b'postgres-like owner\n', uid=70, gid=70, mtime=1700000010)
+put('owned-54999.txt', b'high mapped owner\n', uid=54999, gid=54999, mtime=1700000011)
+put('exec.sh', b'#!/bin/sh\necho fidelity\n', mode=0o755, mtime=1700000012)
+put('ro.txt', b'read only\n', mode=0o444, mtime=1700000013)
+for rel, t in ((long_dir, 1700000100), ('deep/' + 'd' * 120, 1700000101), ('deep', 1700000102), ('empty-dir', 1700000103),
+               ('sgid-dir', 1700000104), ('sticky-dir', 1700000105)):
+    stamp(path(rel), t)
+stamp(root, 1700000106)
+print(json.dumps(notes))
+'''
+
+# Changes after the backup, so the in-place restore has to put every kind of entry back.
+MUTATE_FIDELITY = r'''
+import os, sys
+root = os.path.join(os.fsencode(sys.argv[1]), b'woowbk-fidelity')
+def path(rel):
+    return os.path.join(root, os.fsencode(rel) if isinstance(rel, str) else rel)
+os.unlink(path('hard-b.txt'))
+with open(path('plain.bin'), 'r+b') as handle:
+    handle.write(b'MUTATED')
+os.removexattr(path('xattr.txt'), 'user.woowbk.fidelity')
+os.chmod(path('sgid-dir'), 0o755)
+os.unlink(path(b'latin1-caf\xe9-\xff.bin'))
+os.unlink(path('n' * 180 + '.txt'))
+os.chown(path('owned-70.txt'), 0, 0)
+os.unlink(path('abs-link-file'))
+os.symlink(b'/etc/hostname', path('abs-link-file'))
+os.rmdir(path('empty-dir'))
+os.utime(path('ro.txt'), (1600000000, 1600000000))
+with open(path('extra-after-backup.txt'), 'wb') as handle:
+    handle.write(b'must not survive the restore\n')
+print('mutated')
+'''
+
+REMOVE_FIDELITY = r'''
+import os, shutil, sys
+root = os.path.join(os.fsencode(sys.argv[1]), b'woowbk-fidelity')
+if os.path.lexists(root):
+    shutil.rmtree(root)
+print(os.path.lexists(root))
+'''
+
+# Runs inside the app container (`podman exec`): the volume as the application sees it. One row per entry: type,
+# uid/gid, mode, size, mtime, link count and hard-link group, symlink target, sha256, user.* xattrs; names as hex.
+LIST_FIDELITY = r'''
+import hashlib, json, os, stat, sys
+root = os.fsencode(sys.argv[1])
+rows, inodes = {}, {}
+def row(p):
+    st = os.lstat(p)
+    rel = os.path.relpath(p, root)
+    mode = st.st_mode
+    kind = ('dir' if stat.S_ISDIR(mode) else 'file' if stat.S_ISREG(mode) else 'symlink' if stat.S_ISLNK(mode)
+            else 'fifo' if stat.S_ISFIFO(mode) else 'other')
+    r = {'name': rel.decode('utf-8', 'backslashreplace'), 'name_hex': rel.hex(), 'type': kind, 'uid': st.st_uid,
+         'gid': st.st_gid, 'mode': oct(stat.S_IMODE(mode)), 'size': st.st_size if kind in ('file', 'symlink') else None,
+         'mtime': st.st_mtime_ns // 10**9, 'mtime_ns': st.st_mtime_ns, 'nlink': None if kind == 'dir' else st.st_nlink}
+    if kind == 'symlink':
+        r['link'] = os.readlink(p).decode('utf-8', 'backslashreplace')
+    if kind == 'file':
+        h = hashlib.sha256()
+        with open(p, 'rb') as handle:
+            for chunk in iter(lambda: handle.read(1 << 20), b''):
+                h.update(chunk)
+        r['sha256'] = h.hexdigest()
+    try:
+        names = sorted(n for n in os.listxattr(p, follow_symlinks=False) if n.startswith('user.'))
+        r['xattrs'] = {n: os.getxattr(p, n, follow_symlinks=False).hex() for n in names}
+    except OSError as error:
+        r['xattrs'] = 'error %s' % error.errno
+    if kind != 'dir' and st.st_nlink > 1:
+        inodes.setdefault(st.st_ino, []).append(r['name'])
+    r['_ino'] = st.st_ino
+    rows[r['name_hex']] = r
+for base, dirs, files in os.walk(root):
+    row(base)
+    for name in files:
+        row(os.path.join(base, name))
+    for name in dirs:
+        if os.path.islink(os.path.join(base, name)):
+            row(os.path.join(base, name))
+groups = {ino: sorted(names)[0] for ino, names in inodes.items()}
+for r in rows.values():
+    r['link_group'] = groups.get(r.pop('_ino'))
+print(json.dumps(sorted(rows.values(), key=lambda r: r['name_hex'])))
+'''
+
+
+def fidelity_listing(dev):
+    """The probe directory as the running app container sees it."""
+    out = owner(dev, 'podman', 'exec', '-i', 'woowbk-demo-app', 'python3', '-I', '-', f'/data/{FIDELITY_DIR}',
+                input=LIST_FIDELITY.encode(), timeout=300).stdout
+    return json.loads(out)
+
+
+def fidelity_userns_listing(dev, mountpoint):
+    """The same directory read from the device side through `podman unshare` (must equal the container view)."""
+    return json.loads(in_userns(dev, LIST_FIDELITY, f'{mountpoint}/{FIDELITY_DIR}'))
+
+
+def listing_diff(want, got, fields=FIDELITY_FIELDS):
+    """{display name: {field: [want, got]} | 'missing' | 'unexpected'} over the union of both listings."""
+    a = {row['name_hex']: row for row in want}
+    b = {row['name_hex']: row for row in got}
+    diff = {}
+    for key in sorted(set(a) | set(b)):
+        if key not in b:
+            diff[a[key]['name']] = 'missing'
+        elif key not in a:
+            diff[b[key]['name']] = 'unexpected'
+        else:
+            changed = {f: [a[key].get(f), b[key].get(f)] for f in fields if a[key].get(f) != b[key].get(f)}
+            if changed:
+                diff[a[key]['name']] = changed
+    return diff
+
+
+def kinds_present(listing):
+    """What the probe covers, from the listing itself (so a silently skipped entry fails the scenario)."""
+    by_name = {row['name']: row for row in listing}
+    return {
+        'absolute symlink': any(r['type'] == 'symlink' and (r.get('link') or '').startswith('/') for r in listing),
+        'hard link': any(r.get('link_group') for r in listing),
+        'name > 100 bytes': any(len(bytes.fromhex(r['name_hex']).rsplit(b'/', 1)[-1]) > 100 for r in listing),
+        'path > 255 bytes': any(len(bytes.fromhex(r['name_hex'])) > 255 for r in listing),
+        'empty directory': by_name.get('empty-dir', {}).get('type') == 'dir',
+        'setgid directory': by_name.get('sgid-dir', {}).get('mode') == '0o2775',
+        'user xattr': bool((by_name.get('xattr.txt') or {}).get('xattrs')),
+        'non-UTF-8 name': any(_not_utf8(r['name_hex']) for r in listing),
+        'fifo': by_name.get('pipe', {}).get('type') == 'fifo',
+        'owner other than root': any(r['uid'] not in (0,) for r in listing),
+    }
+
+
+def _not_utf8(name_hex):
+    try:
+        bytes.fromhex(name_hex).decode('utf-8')
+        return False
+    except UnicodeDecodeError:
+        return True
+
+
+def scenario_fidelity(ev):
+    """Legitimate volume content survives backup -> in-place restore (dev-a) and -> cross-device fresh restore (dev-b):
+    a full listing as the app container sees it (type, uid/gid, mode, size, mtime, link target, sha256, xattrs, hard
+    links) must be identical."""
+    dev = 'a'
+    status = ok(dev, 'status', ev=ev)
+    ev.require('dev-a: device key present, app running, no active job',
+               status['key'] and status['active_job'] is None
+               and next(a for a in status['apps'] if a['id'] == APP)['state'] == 'running')
+    mount_a = volume_mountpoint(dev, 'woowbk-demo-files')
+    in_userns(dev, REMOVE_FIDELITY, mount_a)  # a previous aborted run
+    created_a, created_b, local = [], [], None
+    try:
+        notes = json.loads(in_userns(dev, MAKE_FIDELITY, mount_a))
+        ev.save('fidelity-make', notes)
+        ev.check('fidelity: the file system takes user xattrs and a non-UTF-8 file name', notes == {
+            'xattr': True, 'non_utf8_name': True}, notes)
+        before = fidelity_listing(dev)
+        ev.save('fidelity-L0-dev-a-before-backup', before)
+        present = kinds_present(before)
+        ev.check(f'fidelity: the probe holds every kind of entry ({len(before)} entries)', all(present.values()),
+                 present)
+        userns_view = fidelity_userns_listing(dev, mount_a)
+        ev.check('fidelity: the container view equals the `podman unshare` view (same IDs)',
+                 listing_diff(before, userns_view, FIDELITY_FIELDS + ('mtime_ns',)) == {},
+                 listing_diff(before, userns_view))
+        snapshot = summary(dev)
+        job, log = backup_once(dev, ev, '發布回歸：資料卷內容保真度', images=True, label='backup[fidelity]')
+        save_job(ev, 'fidelity-backup', job, log)
+        ev.require('fidelity backup with images succeeded', job['state'] == 'succeeded', job.get('error'))
+        backup_id = job['result']['backup_id']
+        created_a.append(backup_id)
+        ev.check('fidelity backup: no warning about dropped modes or attributes (nothing here is dropped)',
+                 not any('setuid' in line or '延伸屬性' in line for line in log), [l for l in log if '注意' in l][:5])
+
+        in_userns(dev, MUTATE_FIDELITY, mount_a)
+        mutated = fidelity_listing(dev)
+        ev.check('fidelity: the mutation after the backup took effect (listing differs)',
+                 len(listing_diff(before, mutated)) >= 8, sorted(listing_diff(before, mutated))[:12])
+        start = ok(dev, 'restore-start', {'backup_id': backup_id, 'apps': [APP], 'request_id': request_id(),
+                                          'confirm': True}, ev=ev)
+        rjob, rlog = wait_job(dev, start['job_id'], ev=ev, label='restore[fidelity-inplace]')
+        save_job(ev, 'fidelity-restore-inplace', rjob, rlog)
+        created_a.append((rjob.get('result') or {}).get('safety_backup_id'))
+        ev.require('fidelity: in-place restore on dev-a succeeded', rjob['state'] == 'succeeded', rjob.get('error'))
+        ev.check('fidelity: the in-place restore reports no dropped attributes',
+                 not (rjob.get('result') or {}).get('warnings'), (rjob.get('result') or {}).get('warnings'))
+        after_a = fidelity_listing(dev)
+        ev.save('fidelity-L1-dev-a-after-inplace-restore', after_a)
+        diff_a = listing_diff(before, after_a)
+        ev.check('fidelity: dev-a after the in-place restore equals the backup-time listing (type, uid/gid in the '
+                 'container, mode, size, mtime, link target, sha256, xattrs, hard links)', diff_a == {}, diff_a)
+        ns_a = sorted(k for k, v in listing_diff(before, after_a, ('mtime_ns',)).items())
+        ev.check('fidelity: sub-second mtimes are the only nanosecond difference (tar keeps whole seconds)',
+                 ns_a in ([], ['subsecond.txt']), ns_a)
+        ev.check('fidelity: app data equals the backup-time snapshot on dev-a', compare(summary(dev), snapshot) == {},
+                 compare(summary(dev), snapshot))
+
+        # Cross-device: download from A, fresh restore on B (appowner UID 1007, same subordinate range).
+        info = ok(dev, 'download-info', {'backup_id': backup_id}, ev=ev)
+        local = private_dir(WORK / 'fidelity') / info['filename']
+        got = e2e.bridge_download(dev, info['path'], local, ev=ev)
+        ev.require('fidelity download: size equals the index', got['bytes'] == info['size'], got)
+        e2e.reset_target('b', ev)
+        _begin, (_rc, reply) = e2e.upload_file('b', local, ev=ev)
+        ev.require('fidelity backup uploaded to dev-b', reply.get('ok'), reply.get('error'))
+        created_b.append(backup_id)
+        start = ok('b', 'restore-start', {'backup_id': backup_id, 'apps': [APP], 'request_id': request_id(),
+                                          'confirm': True, 'key': e2e.kit_secret()}, ev=ev)
+        bjob, blog = wait_job('b', start['job_id'], ev=ev, label='restore[fidelity-fresh-b]')
+        save_job(ev, 'fidelity-restore-fresh-dev-b', bjob, blog)
+        ev.require('fidelity: cross-device fresh restore on dev-b succeeded', bjob['state'] == 'succeeded',
+                   bjob.get('error'))
+        after_b = fidelity_listing('b')
+        ev.save('fidelity-L2-dev-b-after-fresh-restore', after_b)
+        diff_b = listing_diff(before, after_b)
+        ev.check('fidelity: dev-b after the cross-device restore equals the dev-a backup-time listing (IDs as the '
+                 'container sees them)', diff_b == {}, diff_b)
+        ns_b = sorted(listing_diff(before, after_b, ('mtime_ns',)))
+        ev.check('fidelity: on dev-b too only sub-second mtimes differ at nanosecond level', ns_b in ([], ['subsecond.txt']),
+                 ns_b)
+        device_ids = sh('b', 'stat -c "%u:%g" /home/appowner/.local/share/containers/storage/volumes/woowbk-demo-files/'
+                             f'_data/{FIDELITY_DIR}/plain.bin').stdout.decode().strip()
+        ev.check('fidelity: on the device a container-root file belongs to dev-b\'s own appowner (1007)',
+                 device_ids == '1007:1007', device_ids)
+        ev.check('fidelity: app data on dev-b equals the dev-a snapshot', compare(summary('b'), snapshot) == {},
+                 compare(summary('b'), snapshot))
+        return {'entries': len(before), 'kinds': present, 'diff_inplace': diff_a, 'diff_cross_device': diff_b}
+    finally:
+        in_userns(dev, REMOVE_FIDELITY, mount_a)
+        ev.check('fidelity probe directory removed from dev-a', fidelity_absent(dev, mount_a))
+        try:
+            mount_b = volume_mountpoint('b', 'woowbk-demo-files')
+            in_userns('b', REMOVE_FIDELITY, mount_b)
+            ev.check('fidelity probe directory removed from dev-b', fidelity_absent('b', mount_b))
+        except Failed as error:
+            ev.log(f'dev-b has no app volume to clean: {error}')
+        for backup_id in created_a:
+            if backup_id and backup_id in backup_ids(dev, ev):
+                ok(dev, 'delete', {'backup_id': backup_id}, ev=ev)
+        for backup_id in created_b:
+            if backup_id in backup_ids('b', ev):
+                ok('b', 'delete', {'backup_id': backup_id}, ev=ev)
+        if local is not None and local.exists():
+            local.unlink()
+
+
+def fidelity_absent(dev, mountpoint):
+    return in_userns(dev, f'import os,sys; print(os.path.lexists(os.path.join(sys.argv[1], {FIDELITY_DIR!r})))',
+                     mountpoint).strip() == 'False'
+
+
+# ------------------------------------------------------------------ fresh restore: leftovers, SIGKILL, rollback
+
+FRESH_PROBE_IMAGE = 'localhost/woowbk-fresh-probe:old'
+KEEP = {'volume': 'woowbk-keep-vol', 'secret': 'woowbk-keep-secret', 'config': '.config/woowbk-keep/keep.env',
+        'network': 'woowbk-keep-net', 'image': 'localhost/woowbk-keep:1'}
+APP_IMAGE = 'localhost/woowbk-demo-app:1'
+PG_IMAGE = 'docker.io/library/postgres:16-alpine'
+
+# Objects of the same names as the app's (preflight must refuse a fresh restore) and unrelated objects (nothing may
+# remove them). Random contents are generated in the device and never read back; only ids and sha256 are compared.
+LEFTOVERS = {
+    'secret': ('woowbk-demo-db-password', 'head -c 24 /dev/urandom | base64 | podman secret create woowbk-demo-db-password -'
+               ' >/dev/null', 'podman secret rm woowbk-demo-db-password >/dev/null', 'secret-existing'),
+    'config': ('.config/woowbk-demo/app.env', 'mkdir -p -m 700 .config/woowbk-demo && umask 077 && '
+               '(echo "# leftover of an earlier deployment"; echo "APP_TITLE=leftover") > .config/woowbk-demo/app.env',
+               'rm -f .config/woowbk-demo/app.env', 'config-existing'),
+    'volume': ('woowbk-demo-files', 'podman volume create woowbk-demo-files >/dev/null && echo leftover > '
+               '"$(podman volume inspect --format "{{.Mountpoint}}" woowbk-demo-files)/leftover.txt"',
+               'podman volume rm -f woowbk-demo-files >/dev/null', 'volume-conflict'),
+    'database-volume': ('woowbk-demo-pgdata', 'podman volume create woowbk-demo-pgdata >/dev/null && echo leftover > '
+                        '"$(podman volume inspect --format "{{.Mountpoint}}" woowbk-demo-pgdata)/leftover.txt"',
+                        'podman volume rm -f woowbk-demo-pgdata >/dev/null', 'volume-conflict'),
+}
+
+OBJECT_STATE = r'''
+cd "$HOME"
+for v in woowbk-demo-files woowbk-demo-pgdata woowbk-keep-vol; do
+  if podman volume exists "$v"; then
+    mp=$(podman volume inspect --format '{{.Mountpoint}} {{.CreatedAt}}' "$v"); echo "volume $v $mp"
+    (cd "${mp%% *}" && find . -type f -exec sha256sum {} + 2>/dev/null | sort | sed "s|^|content $v |")
+  fi
+done
+for s in woowbk-demo-db-password woowbk-demo-app-key woowbk-keep-secret; do
+  podman secret exists "$s" && echo "secret $s $(podman secret inspect --format '{{.ID}} {{.CreatedAt}}' "$s")"
+done
+for f in .config/woowbk-demo/app.env .config/woowbk-keep/keep.env; do
+  test -e "$f" && echo "config $f $(stat -c '%a %s %Y' "$f") $(sha256sum < "$f" | cut -c1-64)"
+done
+for n in woowbk-demo woowbk-keep-net; do
+  podman network exists "$n" && echo "network $n $(podman network inspect --format '{{.ID}}' "$n")"
+done
+ls -A .config/containers/systemd/ 2>/dev/null | sed 's/^/quadlet /'
+ls -A .config/systemd/user/ 2>/dev/null | grep woowbk | sed 's/^/user-unit /'
+true
+'''
+
+
+def object_state(dev):
+    """Owner-side objects relevant to the fresh cases (names, ids, creation times, content digests; no contents)."""
+    return owner(dev, 'sh', '-c', OBJECT_STATE).stdout.decode().splitlines()
+
+
+def keep_objects(dev, create):
+    if create:
+        script = (f'cd "$HOME" && podman volume create {KEEP["volume"]} >/dev/null && head -c 4096 /dev/urandom > '
+                  f'"$(podman volume inspect --format "{{{{.Mountpoint}}}}" {KEEP["volume"]})/keep.bin" && '
+                  f'head -c 24 /dev/urandom | base64 | podman secret create {KEEP["secret"]} - >/dev/null && '
+                  f'mkdir -p -m 700 "$(dirname {KEEP["config"]})" && umask 077 && head -c 64 /dev/urandom | base64 > '
+                  f'{KEEP["config"]} && podman network create {KEEP["network"]} >/dev/null && '
+                  f'podman tag {FRESH_PROBE_IMAGE} {KEEP["image"]}')
+    else:
+        script = (f'cd "$HOME"; podman volume rm -f {KEEP["volume"]} >/dev/null 2>&1; '
+                  f'podman secret rm {KEEP["secret"]} >/dev/null 2>&1; rm -f {KEEP["config"]}; '
+                  f'rmdir "$(dirname {KEEP["config"]})" 2>/dev/null; podman network rm {KEEP["network"]} >/dev/null 2>&1; '
+                  f'podman untag {KEEP["image"]} {KEEP["image"]} >/dev/null 2>&1; true')
+    owner(dev, 'sh', '-c', script)
+
+
+def keep_state(state_lines, images):
+    """The unrelated objects only, from object_state() lines and owner_images()."""
+    return {'objects': [line for line in state_lines if 'woowbk-keep' in line], 'image': images.get(KEEP['image'])}
+
+
+def deployment_left(state_lines):
+    """Lines naming the app's own deployment (quadlets, env file, volumes, secrets, network, unit masks)."""
+    return [line for line in state_lines if 'woowbk-keep' not in line and line.split(' ', 1)[0] in (
+        'volume', 'secret', 'config', 'network', 'quadlet', 'user-unit')]
+
+
+def make_probe_image(dev):
+    owner(dev, 'sh', '-c', f'tar -cf - -T /dev/null | podman import --quiet - {FRESH_PROBE_IMAGE} >/dev/null')
+    return image_id(dev, FRESH_PROBE_IMAGE)
+
+
+def fresh_restore(dev, backup_id, ev):
+    start = ok(dev, 'restore-start', {'backup_id': backup_id, 'apps': [APP], 'request_id': request_id(),
+                                      'confirm': True, 'key': e2e.kit_secret()}, ev=ev)
+    return start['job_id']
+
+
+def scenario_fresh(ev):
+    """Fresh restores on dev-b: (1) a leftover secret, config file, volume or database volume of the app's names makes
+    the restore refuse before any change, deleting nothing; (2) a fresh restore SIGKILLed after its first destructive
+    step is removed by the recovery, which leaves every unrelated object alone; (3) a fresh restore that fails after
+    the destructive step rolls back in-process and remove_fresh puts the previous image names back (retag) or removes
+    the name it added. Ends with the app deployed and running on dev-b again."""
+    dev = 'b'
+    local, backup_id, snapshot = dev_a_image_backup(ev)
+    ev.require('dev-b idle: no active job', ok(dev, 'status', ev=ev)['active_job'] is None)
+    e2e.reset_target(dev, ev)
+    ev.require('dev-b torn down: no deployment left', deployment_left(object_state(dev)) == [], object_state(dev))
+    _begin, (_rc, reply) = e2e.upload_file(dev, local, ev=ev)
+    ev.require('dev-a backup (with images) uploaded to dev-b', reply.get('ok'), reply.get('error'))
+    probe_id = make_probe_image(dev)
+    ev.require('probe image created on dev-b (podman import of an empty tar)', probe_id, probe_id)
+    keep_objects(dev, True)
+    results = {}
+    try:
+        keep_before = keep_state(object_state(dev), owner_images(dev))
+        ev.save('fresh-keep-before', keep_before)
+        ev.require('unrelated objects exist (volume with data, secret, config file, network, image name)',
+                   len(keep_before['objects']) >= 5 and keep_before['image'] == probe_id, keep_before)
+
+        # (1) leftovers: each one alone must make the fresh restore refuse, and nothing is deleted.
+        for name, (obj, create, remove, check_id) in LEFTOVERS.items():
+            owner(dev, 'sh', '-c', f'cd "$HOME" && {create}')
+            try:
+                state0, images0 = object_state(dev), owner_images(dev)
+                inspected = ok(dev, 'inspect', {'backup_id': backup_id, 'key': e2e.kit_secret()}, ev=ev)
+                papp = inspected['preflight']['apps'][0]
+                failing = [c for c in papp['checks'] if c['status'] == 'fail']
+                ev.check(f'fresh leftover {name}: inspect preflight (fresh mode) fails with {check_id} naming {obj}',
+                         papp['mode'] == 'fresh' and not papp['restorable']
+                         and [c['id'] for c in failing] == [f'{APP}/{check_id}'] and obj in failing[0]['message'],
+                         failing)
+                job_id = fresh_restore(dev, backup_id, ev)
+                job, log = wait_job(dev, job_id, ev=ev, label=f'restore[leftover-{name}]')
+                save_job(ev, f'fresh-leftover-{name}', job, log)
+                phases = phase_states(job)
+                ev.check(f'fresh leftover {name}: the restore job fails in preflight (incompatible) before any step',
+                         job['state'] == 'failed' and (job.get('error') or {}).get('code') == 'incompatible'
+                         and phases.get('preflight') == 'failed' and phases.get('stop') == 'pending'
+                         and obj in (job.get('error') or {}).get('message', ''),
+                         {'error': job.get('error'), 'phases': phases})
+                state1 = object_state(dev)
+                ev.check(f'fresh leftover {name}: nothing deleted or created (leftover, unrelated objects and image '
+                         'names unchanged)', state1 == state0 and owner_images(dev) == images0,
+                         {'before': state0, 'after': state1})
+                ev.check(f'fresh leftover {name}: staging empty, no job key', staging_empty(dev) and no_job_keys(dev))
+                results[f'leftover-{name}'] = {'state': job['state'], 'error': job.get('error')}
+            finally:
+                owner(dev, 'sh', '-c', f'cd "$HOME" && {remove}')
+        ev.require('leftovers removed again', deployment_left(object_state(dev)) == [], object_state(dev))
+
+        # (2) SIGKILL after the first destructive step (phase start: templates installed, units masked, secrets,
+        # config file and files volume created); the recovery removes the deployment and nothing else.
+        owner(dev, 'podman', 'tag', FRESH_PROBE_IMAGE, APP_IMAGE)
+        images_before = owner_images(dev)
+        watcher = Watcher(dev, kill_phases=('start',), timeout=900)
+        ev.require('fresh kill: watcher ready', watcher.wait_for(lambda e: e.get('ready'), 60))
+        job_id = fresh_restore(dev, backup_id, ev)
+        killed = watcher.wait_for(lambda e: 'killed_in' in e or e.get('eof'), 900)
+        events = watcher.stop()
+        ev.log(f'fresh kill: watcher events {events}')
+        ev.require(f'fresh kill: job {job_id} SIGKILLed in phase start', killed and killed.get('killed_in') == 'start'
+                   and killed.get('rc') == 0, killed)
+        ev.log(f'fresh kill: unit {wait_unit_gone(dev, job_id)}')
+        record = json.loads(sh(dev, f'cat {DATA}/jobs/{job_id}.json').stdout)
+        before_recovery = object_state(dev)
+        ev.save('fresh-kill-before-recovery', {'record_fresh_apps': record.get('fresh_apps'), 'phase': record.get('phase'),
+                                                'objects': before_recovery, 'images': owner_images(dev)})
+        ev.check('fresh kill: the dead job had created its deployment (quadlets, env file, files volume, secrets, unit '
+                 'mask) and still listed the app in fresh_apps', record.get('fresh_apps') == [APP]
+                 and len(deployment_left(before_recovery)) >= 7, deployment_left(before_recovery))
+        job, log = wait_job(dev, job_id, ev=ev, timeout=300, label='killed[fresh]')
+        save_job(ev, 'fresh-kill-job', job, log)
+        ev.check('fresh kill: the job is interrupted and its message says the unfinished deployment was removed',
+                 job['state'] == 'interrupted' and '已清除未完成的全新部署' in (job.get('error') or {}).get('message', ''),
+                 job.get('error'))
+        after_recovery = object_state(dev)
+        ev.check('fresh kill: recovery removed the whole deployment (quadlets, env file, volumes, secrets, network, '
+                 'masks)', deployment_left(after_recovery) == [], deployment_left(after_recovery))
+        ev.check('fresh kill: recovery left every unrelated object as it was',
+                 keep_state(after_recovery, owner_images(dev)) == keep_before,
+                 keep_state(after_recovery, owner_images(dev)))
+        images_after = owner_images(dev)
+        ev.check('fresh kill: images the dead job loaded keep their names (CONTRACT section 8: only an in-process '
+                 'rollback puts names back); the probe image still exists under its own name',
+                 images_after.get(APP_IMAGE) not in (None, probe_id) and images_after.get(FRESH_PROBE_IMAGE) == probe_id
+                 and images_after.get(PG_IMAGE) == images_before.get(PG_IMAGE),
+                 {'before': images_before, 'after': images_after})
+        ev.check('fresh kill: staging empty, no job key', staging_empty(dev) and no_job_keys(dev))
+        results['kill'] = {'state': job['state'], 'error': job.get('error'), 'images_after': images_after}
+
+        # (3) in-process rollback: the database start fails once (drop-in), remove_fresh must put image names back.
+        for variant, previous in (('retag', probe_id), ('untag', None)):
+            if previous:
+                owner(dev, 'podman', 'tag', FRESH_PROBE_IMAGE, APP_IMAGE)
+            else:
+                owner(dev, 'podman', 'untag', APP_IMAGE, APP_IMAGE, check=False)
+            images_before = owner_images(dev)
+            ev.require(f'fresh rollback {variant}: {APP_IMAGE} before the restore -> {previous}',
+                       images_before.get(APP_IMAGE) == previous, images_before)
+            e2e.f8_inject(dev, True)
+            try:
+                job_id = fresh_restore(dev, backup_id, ev)
+                job, log = wait_job(dev, job_id, ev=ev, label=f'restore[rollback-{variant}]')
+            finally:
+                e2e.f8_inject(dev, False)
+            save_job(ev, f'fresh-rollback-{variant}', job, log)
+            result = job.get('result') or {}
+            ev.check(f'fresh rollback {variant}: the database start fails after the destructive step and the job rolls '
+                     'back in-process', job['state'] == 'rolled-back' and result.get('rolled_back') is True
+                     and result.get('changed') is True and phase_states(job).get('rollback') == 'done'
+                     and phase_states(job).get('start') == 'failed', {'state': job['state'], 'error': job.get('error'),
+                                                                      'phases': phase_states(job)})
+            images_after = owner_images(dev)
+            wanted = (f'已將映像 {APP_IMAGE} 改回還原前的版本' if previous else f'已移除這次還原加上的映像名稱 {APP_IMAGE}')
+            ev.check(f'fresh rollback {variant}: remove_fresh puts {APP_IMAGE} back ({previous or "no name"}) and says so; '
+                     f'{PG_IMAGE} unchanged', images_after.get(APP_IMAGE) == previous
+                     and images_after.get(PG_IMAGE) == images_before.get(PG_IMAGE) and any(wanted in line for line in log),
+                     {'before': images_before, 'after': images_after, 'log': [l for l in log if '映像' in l][-4:]})
+            state = object_state(dev)
+            ev.check(f'fresh rollback {variant}: the deployment is removed and the unrelated objects are untouched',
+                     deployment_left(state) == [] and keep_state(state, images_after) == keep_before,
+                     {'left': deployment_left(state), 'keep': keep_state(state, images_after)})
+            ev.check(f'fresh rollback {variant}: staging empty, no job key', staging_empty(dev) and no_job_keys(dev))
+            results[f'rollback-{variant}'] = {'state': job['state'], 'images_after': images_after}
+    finally:
+        e2e.f8_inject(dev, False)
+        keep_objects(dev, False)
+        owner(dev, 'sh', '-c', f'id=$(podman image inspect --format "{{{{.Id}}}}" {FRESH_PROBE_IMAGE} 2>/dev/null); '
+                               f'test -n "$id" && podman rmi -f "$id" >/dev/null; true')
+        if deployment_left(object_state(dev)):  # an aborted case left a leftover or a partial deployment
+            ev.log(f'fresh: tearing down what an aborted case left: {deployment_left(object_state(dev))}')
+            owner(dev, 'sh', '-c', e2e.TEARDOWN, timeout=600)
+        final_fresh_restore(dev, backup_id, snapshot, ev)
+    return {'cases': results, 'source_backup': backup_id}
+
+
+def final_fresh_restore(dev, backup_id, snapshot, ev):
+    """Leave dev-b as after cli_e2e s2: the app deployed from the same backup and running (failures are recorded)."""
+    try:
+        job_id = fresh_restore(dev, backup_id, ev)
+        job, log = wait_job(dev, job_id, ev=ev, label='restore[final-fresh]')
+        save_job(ev, 'fresh-final-restore', job, log)
+        ev.check('fresh: a final fresh restore succeeds afterwards (nothing left behind blocks it)',
+                 job['state'] == 'succeeded', job.get('error'))
+        status = ok(dev, 'status', ev=ev)
+        app = next(a for a in status['apps'] if a['id'] == APP)
+        ev.check('dev-b after the fresh cases: app deployed and running, no unrelated or probe objects left, no active '
+                 'job', app['state'] == 'running' and status['active_job'] is None
+                 and keep_state(object_state(dev), owner_images(dev)) == {'objects': [], 'image': None}
+                 and FRESH_PROBE_IMAGE not in owner_images(dev), app)
+        if snapshot:
+            ev.check('dev-b data equals the source backup snapshot', compare(summary(dev), snapshot) == {},
+                     compare(summary(dev), snapshot))
+    except (Failed, OSError, ValueError, subprocess.SubprocessError) as error:
+        ev.check('fresh: final fresh restore of dev-b ran', False, f'{type(error).__name__}: {redact(str(error))}')
+
+
 # ------------------------------------------------------------------ leak scan (devices + hardening evidence)
 
 def scenario_leaks(ev):
@@ -1504,7 +2517,8 @@ def scenario_leaks(ev):
 # ------------------------------------------------------------------ main
 
 SCENARIOS = {'h1': scenario_h1, 'h2': scenario_h2, 'h3': scenario_h3, 'h4': scenario_h4, 'h5': scenario_h5,
-             'h6': scenario_h6, 'h7': scenario_h7, 'leaks': scenario_leaks}
+             'h6': scenario_h6, 'h7': scenario_h7, 'sec1': scenario_sec1, 'fidelity': scenario_fidelity,
+             'fresh': scenario_fresh, 'leaks': scenario_leaks}
 
 
 def main():
