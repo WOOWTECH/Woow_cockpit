@@ -196,6 +196,32 @@ try {
   await new Promise((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolve); });
   base = `http://127.0.0.1:${server.address().port}`;
   browser = await chromium.launch({ executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE || undefined });
+  await check('service page follows Cockpit and system theme across inventory and dialogs', fixture(), async page => {
+    await ready(page);
+    await page.evaluate(() => { localStorage.setItem('shell:style','dark'); window.dispatchEvent(new CustomEvent('cockpit-style',{detail:{style:'dark'}})); });
+    await page.waitForFunction(() => document.documentElement.classList.contains('pf-v6-theme-dark'));
+    assert.equal(await page.locator('body').evaluate(e => getComputedStyle(e).backgroundColor), 'rgb(21, 23, 28)');
+    assert.equal(await page.locator('.inventory').evaluate(e => getComputedStyle(e).backgroundColor), 'rgb(32, 35, 42)');
+    assert.equal(await page.locator('#search').evaluate(e => getComputedStyle(e, '::placeholder').color), 'rgb(193, 197, 206)');
+    await page.locator('#search').fill('n8n.service');
+    await service(page, 'n8n.service').locator('[data-open-details]').click();
+    await enabled(page, '#refresh-logs');
+    assert.equal(await page.locator('#logs').evaluate(e => getComputedStyle(e).color), 'rgb(241, 242, 245)');
+    assert.equal(await page.locator('#details').evaluate(e => getComputedStyle(e).backgroundColor), 'rgb(32, 35, 42)');
+    for (const width of [320,390,768,1440]) {
+      await page.setViewportSize({width,height:900});
+      assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
+    }
+    await page.evaluate(() => { localStorage.setItem('shell:style','light'); window.dispatchEvent(new CustomEvent('cockpit-style',{detail:{style:'light'}})); });
+    await page.waitForFunction(() => !document.documentElement.classList.contains('pf-v6-theme-dark'));
+    assert.equal(await page.locator('body').evaluate(e => getComputedStyle(e).backgroundColor), 'rgb(255, 255, 255)');
+    await page.evaluate(() => localStorage.setItem('shell:style','auto'));
+    await page.emulateMedia({colorScheme:'dark'});
+    await page.waitForFunction(() => document.documentElement.classList.contains('pf-v6-theme-dark'));
+    await page.emulateMedia({colorScheme:'light'});
+    await page.waitForFunction(() => !document.documentElement.classList.contains('pf-v6-theme-dark'));
+  });
+
   await check('disconnected transport offers a fresh page connection without replaying actions', fixture(), async page => {
     await ready(page);
     await page.evaluate(() => window.__fixture.failures.push({command:'inventory', problem:'disconnected', message:'Transport closed'}));

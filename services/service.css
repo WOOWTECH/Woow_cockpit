@@ -16,6 +16,26 @@
   --motion: 220ms cubic-bezier(.4, 0, .2, 1);
 }
 
+
+/* Follow the same Cockpit theme as the shell and application catalogue. */
+:root.pf-v6-theme-dark {
+  color-scheme: dark;
+  --surface-page: #15171c;
+  --surface-card: #20232a;
+  --text-primary: #f1f2f5;
+  --text-secondary: #c1c5ce;
+  --line: #49515e;
+  --hairline: #3a404b;
+  --ww-blue-050: #293657;
+  --ww-blue-700: #b7c5ff;
+  --shadow: 0 2px 8px rgba(0, 0, 0, .18);
+}
+:root.pf-v6-theme-dark button.primary:hover:not(:disabled) {
+  background: #8099ff;
+}
+:root.pf-v6-theme-dark dialog { box-shadow: 0 10px 28px rgba(0, 0, 0, .18); }
+:root.pf-v6-theme-dark dialog::backdrop { background: rgba(0, 0, 0, .55); }
+
 *, *::before, *::after { box-sizing: border-box; }
 [hidden] { display: none !important; }
 html { background: var(--surface-page); }
@@ -68,6 +88,7 @@ input, select {
   color: var(--text-primary);
   font-size: 16px;
 }
+input::placeholder { color: var(--text-secondary); opacity: 1; }
 select { text-overflow: ellipsis; }
 input:disabled, select:disabled { opacity: .65; }
 .page { max-inline-size: 1440px; margin-inline: auto; padding: 28px 24px 40px; }
