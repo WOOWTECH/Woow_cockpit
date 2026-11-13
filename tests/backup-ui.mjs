@@ -1736,6 +1736,7 @@ try {
     await ready(page);
     await page.locator('[data-nav="backups"]').click();
     await page.locator(`[data-focus="open-${B_MANUAL}"]`).click();
+    await page.locator(`[data-focus="inspect-${B_MANUAL}"]`).waitFor();  // the detail view is rendered (no race)
     assert.match(await view(page).textContent(), /查看應用、資料庫、資料卷、主機資料夾與映像/);
     await page.locator(`[data-focus="inspect-${B_MANUAL}"]`).click();
     await page.locator('.app-content .path-list').first().waitFor();
