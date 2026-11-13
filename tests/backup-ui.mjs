@@ -1060,7 +1060,7 @@ try {
     await page.getByText('尚未設定可備份的應用').first().waitFor();
     await shot(page, 'empty-catalog-1440.png');
     await page.locator('#go-create').click();
-    await page.getByText('尚未設定可備份的應用').waitFor();
+    await page.getByRole('heading', { name: '尚未設定可備份的應用' }).waitFor();
     assert.equal(await page.locator('[data-focus="create-submit"]').count(), 0);
     await page.locator('[data-nav="backups"]').click();
     await page.getByText('還沒有備份').waitFor();
@@ -1710,6 +1710,7 @@ try {
     const background = () => page.evaluate(() => getComputedStyle(document.body).backgroundColor);
     assert.equal(await isDark(), true, 'shell:style=dark from Cockpit applies before the first render');
     assert.equal(await background(), 'rgb(21, 23, 28)');
+    const steady = () => page.waitForFunction(() => document.getAnimations().every(animation => animation.playState !== 'running'));
     const contrast = () => page.evaluate(() => {
       const rgb = value => (value.match(/[\d.]+/g) || []).map(Number);
       const luminance = ([r, g, b]) => [r, g, b].map(v => { v /= 255; return v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4; })
@@ -1742,6 +1743,7 @@ try {
         await page.locator(`[data-nav="${route}"]`).click();
         await settled(page);
       }
+      await steady();
       const result = await contrast();
       assert(result.checked > 10, `${route}: enough text was checked (${result.checked})`);
       assert.deepEqual(result.failures, [], `${route}: dark-theme text keeps WCAG AA contrast`);
@@ -1750,7 +1752,13 @@ try {
     await page.locator('[data-nav="overview"]').click();
     await settled(page);
     await shot(page, 'overview-dark-1440.png');
-    await page.evaluate(() => window.dispatchEvent(new CustomEvent('cockpit-style', { detail: { style: 'light' } })));
+    const transitionsDuringSwitch = await page.evaluate(() => {
+      window.dispatchEvent(new CustomEvent('cockpit-style', { detail: { style: 'light' } }));
+      getComputedStyle(document.body).backgroundColor;
+      return document.getAnimations().filter(animation => animation instanceof CSSTransition).length;
+    });
+    assert.equal(transitionsDuringSwitch, 0, 'a theme switch starts no colour transitions (no unreadable mid-tones)');
+    await steady();
     assert.equal(await isDark(), false, 'switching Cockpit to light applies live');
     assert.equal(await background(), 'rgb(255, 255, 255)');
     await page.evaluate(() => window.dispatchEvent(new CustomEvent('cockpit-style', { detail: { style: 'dark' } })));

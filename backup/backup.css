@@ -59,6 +59,7 @@
 :root.pf-v6-theme-dark .dropzone.dragging { background: var(--ww-blue-050); }
 :root.pf-v6-theme-dark :is(button.primary:hover:not(:disabled), .button.primary:hover) { background: var(--ww-blue); filter: brightness(1.08); }
 :root.pf-v6-theme-dark dialog::backdrop { background: rgba(0, 0, 0, .55); }
+:root.theme-switching *, :root.theme-switching *::before, :root.theme-switching *::after { transition: none !important; }
 
 *, *::before, *::after { box-sizing: border-box; }
 [hidden] { display: none !important; }

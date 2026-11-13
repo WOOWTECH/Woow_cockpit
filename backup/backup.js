@@ -22,8 +22,13 @@
       try { preference = localStorage.getItem('shell:style'); } catch { /* use system preference */ }
     }
     preference ||= 'auto';
-    document.documentElement.classList.toggle('pf-v6-theme-dark',
-      preference === 'dark' || (preference === 'auto' && system.matches));
+    const root = document.documentElement;
+    const dark = preference === 'dark' || (preference === 'auto' && system.matches);
+    if (root.classList.contains('pf-v6-theme-dark') === dark) return;
+    // Switch without colour transitions, so controls never pass through unreadable mid-tones.
+    root.classList.add('theme-switching');
+    root.classList.toggle('pf-v6-theme-dark', dark);
+    requestAnimationFrame(() => requestAnimationFrame(() => root.classList.remove('theme-switching')));
   }
   window.addEventListener('storage', event => {
     if (event.key === 'shell:style' || event.key === null) applyTheme();
