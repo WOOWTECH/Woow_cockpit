@@ -10,3 +10,9 @@
 - 檢查 Cockpit 外層頁面 1440、1024、768、390 與 320px 寬度；此項檢查不等同各實體手機瀏覽器驗收。WebSocket 代理通過本機 mock upgrade；尚未在實際 Pi Web 子功能實測 WebSocket。
 - 本機 Chromium 未信任 gateway 自簽憑證時會拒絕載入；互動驗證為忽略測試憑證錯誤的瀏覽器環境，使用者須先依政策信任入口憑證。此階段未驗證客戶實體裝置的手動信任流程或受信憑證。
 - 僅驗證 `192.168.2.46` 的 LAN 入口。另一台 LAN 裝置的連線、Cloudflare 域名入口、不同系統瀏覽器和 Pi Web 所有第三方擴充尚未驗證。部分 Pi Web 僅允許 localhost 的 OS 本機操作在 LAN 入口會呈現不可使用。
+
+## 同日 VPN 擴充
+
+- 新增 `100.112.140.82:19094` 專用 gateway 與自簽憑證，Pi Web 原服務仍只監聽 loopback。UFW 規則限定 `tailscale0` 與 VPN 目的 IP。
+- 從本機瀏覽器使用 VPN IP 的 HTTPS Cockpit 登入，再從側邊欄登入既有 Pi Web、讀取對話清單、使用免費模型取得助理實際回覆；檢查 1440、1024、768、390、320px。HTTP Cockpit 會提供切換 HTTPS 的提示。
+- 實測未登入 401、惡意來源與 Host 403，並確認 Cockpit 登出後舊工作階段失效。瀏覽器測試允許自簽憑證；另一台 VPN 裝置的實際網路路徑與手動信任流程未驗證。

@@ -11,15 +11,24 @@ sudo bash pi-web-integration/install.sh 192.168.2.46 19094
 sudo systemctl status woowtech-piweb-gateway.service
 ```
 
+若要另外透過這台設備自己的 VPN IPv4 存取，第三個參數可指定該位址：
+
+```bash
+sudo bash pi-web-integration/install.sh 192.168.2.46 19094 100.112.140.82
+sudo systemctl status woowtech-piweb-gateway-vpn.service
+```
+
+安裝器會建立獨立 VPN gateway 與其自簽憑證，既有 Pi Web、資料和 LAN 憑證不需更換。VPN 介面和 IP 必須存在，並另行設定防火牆及 VPN 的存取規則；例如參考主機只在 `tailscale0` 介面允許前往 VPN IP 的 19094/tcp。VPN 未就緒時服務可能暫時失敗並由 systemd 重試。若曾安裝 VPN gateway，後續重裝時請繼續提供第三個參數；僅省略參數不會移除先前的 systemd 服務或防火牆規則。
+
 安裝套件到 `/usr/local/share/cockpit/woowpiweb/`，gateway 到 `/usr/local/libexec/woowtech-piweb-gateway.mjs`，systemd unit 到 `/etc/systemd/system/`。首次產生自簽 TLS 憑證於 `/etc/woowtech-cockpit/piweb-gateway/`；private key 僅 root 可讀，systemd 用 credentials 提供給隔離的動態使用者。重裝不自動換證；憑證更新和多設備部署需要另行規劃。
 
 此安裝器**不自動修改防火牆**。若該設備使用 UFW 且只允許特定管理網段，需由管理者允許選定地址與 port。參考機的配置只允許 `192.168.2.0/24` 連到 `192.168.2.46:19094`，未開放 Pi Web 原生 `30141`。
 
-重新登入 `https://<設定的IP>:9090` 後，在「系統 → Pi Web」開啟。Pi Web 保留獨立登入。第一次使用時，新入口的自簽憑證在瀏覽器中未必受信；如果 iframe 無法載入，使用頁面上「在新視窗開啟」檢查並依設備的憑證政策完成信任，再返回 Cockpit 重新整理。建議正式出貨使用設備的可信憑證與受控主機名稱；勿在未知設備上盲目接受憑證。
+重新登入 `https://<設定的IP>:9090` 後，在「系統 → Pi Web」開啟。Pi Web 保留獨立登入。若 Cockpit 使用 HTTP，頁面會提示切換 HTTPS，避免因瀏覽器跨協定的 Cookie 限制而無法驗證。第一次使用時，Cockpit 與 Pi Web 入口各自的自簽憑證在瀏覽器中未必受信；如果 iframe 無法載入，使用頁面上「在新視窗開啟」檢查並依設備的憑證政策完成信任，再返回 Cockpit 重新整理。建議正式出貨使用設備的可信憑證與受控主機名稱；勿在未知設備上盲目接受憑證。
 
 ## 操作與安全邊界
 
-- gateway 只綁定安裝時的指定 IPv4；package 僅對相同 hostname 開啟此入口。Cloudflare Tunnel、其他 IP、DNS 與跨站 cookie 均未驗證，頁面會提示不支援。IP 變更需重新規劃憑證、網路與設定；不可僅改前端網址。
+- 每個 gateway 只綁定安裝時的 LAN 或 VPN 指定 IPv4；package 僅對設定的 hostname 開啟對應入口。Cloudflare Tunnel、其他 IP、DNS 與跨站 cookie 均未驗證，頁面會提示不支援。IP 變更需重新規劃憑證、網路與設定；不可僅改前端網址。
 - 每個 HTTP 請求先向本機 Cockpit `/cockpit/login` 驗證 Cockpit cookie，再確認本機 Pi Web 的密碼保護已啟用；Pi Web 自己繼續驗證它的 session。gateway 在長 SSE／WebSocket 期間定期檢查，Cockpit 登出後關閉連線。
 - `/cockpit/login` 是本機 Cockpit 的 session 機制，並非 Cockpit 官方承諾的穩定外部 REST API。此整合已針對 Cockpit 362 實測，Cockpit 升級前後必須重新做授權、登入和登出回歸測試；無法驗證時 gateway 拒絕通過。
 - 去除傳至 Pi Web 的 Cockpit cookie；只允許 Pi Web 的 session cookie 由 upstream 設定，防止跨 port 的同 host cookie 碰撞。動態使用者、systemd credentials 與 `ProtectHome` 降低代理對本機帳號的暴露。

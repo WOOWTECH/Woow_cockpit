@@ -21,4 +21,4 @@ jobs:
           bash -n pi-web-integration/install.sh
           node --check pi-web-integration/gateway.mjs
           node --check pi-web-integration/package/app.js
-          node --test pi-web-integration/tests/gateway.mjs
+          node --test pi-web-integration/tests/*.mjs
