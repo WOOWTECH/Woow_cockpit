@@ -520,6 +520,7 @@ class ToolTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as home:
             self.seed.home = lambda rel='': os.path.join(home, rel) if rel else home
             self.seed.unshare = fake
+            self.seed.unshare_exists = os.path.lexists  # no user namespace here: the host view is the whole view
             created = self.seed.ensure_dirs()
             self.assertEqual(self.seed.ensure_dirs(), [])   # idempotent: existing items are never changed
             self.assertIn('woowbk-dirs/data/www/tmp', created)

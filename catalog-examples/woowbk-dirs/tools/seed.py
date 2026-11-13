@@ -174,6 +174,11 @@ def unshare(*argv):
     return run(['podman', 'unshare', *argv])
 
 
+def unshare_exists(path):
+    """True when `path` exists as the owner's user namespace sees it."""
+    return run(['podman', 'unshare', 'test', '-e', path], check=False).returncode == 0
+
+
 def write_owner_note(text):
     """README.txt in the data root, written by the owner (container root inside the app), 0644 + a user xattr."""
     path = home(f'{DATA_REL}/README.txt')
@@ -194,7 +199,7 @@ def _mkdir(rel, mode, created, owner_id=None):
         return False
     # A parent owned by a container id (www/ is 0750 for uid 33) hides its children from the owner's host view, so
     # lexists() above says "missing" for an existing www/tmp; check again inside the user namespace.
-    if owner_id is not None and run(['podman', 'unshare', 'test', '-e', path], check=False).returncode == 0:
+    if owner_id is not None and unshare_exists(path):
         return False
     if owner_id is None:
         os.mkdir(path, mode)
