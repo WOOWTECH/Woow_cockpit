@@ -7,3 +7,5 @@ Cockpit「工具 → 應用軟體」提供使用者導向的服務卡片與詳�
 應用卡片中出現的服務名稱及分組規則不帶主機密碼；服務日誌可能包含機密，僅限具 Cockpit 管理員權限的使用者讀取。測試與部署見專案根目錄的管理工具。VPN 與非預設位址的應用入口需要另外驗證，不要直接推斷服務可以跨網路使用。
 
 介面使用 Material Design Icons 路徑資料，授權文字見同目錄 MDI-LICENSE.txt。
+
+應用頁使用本機字型與 Material Design Icons，提供淺色及深色配色；會跟隨 Cockpit 的「風格」選擇，選擇「預設值」時跟隨裝置的系統主題。畫面遵循 woowtech 的藍色、圓角與簡潔留白，不依賴外部字型或圖片 CDN。Gira Sans 和文鼎授權字型目前分別以 Poppins 和 Noto Sans TC 替代。
