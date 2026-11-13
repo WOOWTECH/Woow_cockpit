@@ -27,6 +27,39 @@
   --mono: ui-monospace, "SFMono-Regular", Consolas, "Liberation Mono", monospace;
 }
 
+/* Follow the Cockpit shell theme (same dark palette as service management and the
+ * application catalogue). Primary buttons keep dark text on the brand blue. */
+:root.pf-v6-theme-dark {
+  color-scheme: dark;
+  --ww-blue-050: #1b2131;
+  --ww-gray: #2a2e36;
+  --link: #8aa4ff;
+  --surface-page: #15171c;
+  --surface-card: #20232a;
+  --surface-wash: #1b2131;
+  --surface-muted: #1a1d23;
+  --text-primary: #f1f2f5;
+  --text-secondary: #c1c5ce;
+  --line: #49515e;
+  --hairline: #3a404b;
+  --shadow: 0 2px 8px rgba(0, 0, 0, .18);
+  --shadow-md: 0 10px 28px rgba(0, 0, 0, .28);
+}
+:root.pf-v6-theme-dark :is(.chip-ok, .chip-info, .chip-warn, .chip-fail, .result-warn .tile) { color: var(--text-primary); }
+:root.pf-v6-theme-dark .chip-warn { border-color: var(--text-secondary); }
+:root.pf-v6-theme-dark :is(.notice-warn, .notice-key) { border-inline-start-color: var(--text-primary); }
+:root.pf-v6-theme-dark :is(.notice-warn > svg.icon, .notice-key > svg.icon, .check-warn svg.icon) { color: var(--text-primary); }
+:root.pf-v6-theme-dark .warning-list li::marker { color: var(--text-primary); }
+:root.pf-v6-theme-dark .result-warn { border-color: rgba(241, 242, 245, .3); }
+:root.pf-v6-theme-dark :is(.chip-fail, .result-fail .tile, button.danger:hover:not(:disabled)) { background: #3a1f24; }
+:root.pf-v6-theme-dark :is(button.danger svg.icon, .notice-error > svg.icon, .notice-fail > svg.icon, .chip-fail svg.icon,
+  .check-fail svg.icon, .phase-failed .phase-icon, .result-fail .tile) { color: #ff8a96; }
+:root.pf-v6-theme-dark .hint-error { color: #ff9aa5; }
+:root.pf-v6-theme-dark :is(.choice:has(input:checked), .dropzone, .secret) { background: #1d2333; }
+:root.pf-v6-theme-dark .dropzone.dragging { background: var(--ww-blue-050); }
+:root.pf-v6-theme-dark :is(button.primary:hover:not(:disabled), .button.primary:hover) { background: var(--ww-blue); filter: brightness(1.08); }
+:root.pf-v6-theme-dark dialog::backdrop { background: rgba(0, 0, 0, .55); }
+
 *, *::before, *::after { box-sizing: border-box; }
 [hidden] { display: none !important; }
 html { background: var(--surface-page); }

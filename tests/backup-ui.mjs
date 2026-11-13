@@ -730,9 +730,12 @@ try {
     const html = await readFile(join(root, 'backup/index.html'), 'utf8');
     const css = await readFile(join(root, 'backup/backup.css'), 'utf8');
     const manifest = JSON.parse(await readFile(join(root, 'backup/manifest.json'), 'utf8'));
-    for (const banned of ['innerHTML', 'outerHTML', 'insertAdjacentHTML', 'document.write', 'eval(', 'new Function', 'localStorage', 'sessionStorage']) {
+    for (const banned of ['innerHTML', 'outerHTML', 'insertAdjacentHTML', 'document.write', 'eval(', 'new Function', 'sessionStorage']) {
       assert(!js.includes(banned), `backup.js must not use ${banned}`);
     }
+    // The page only reads Cockpit's own theme preference; it never stores anything in the browser.
+    assert.deepEqual([...js.matchAll(/localStorage[.\w]*\([^)]*\)/g)].map(match => match[0]), ["localStorage.getItem('shell:style')"]);
+    assert.equal(js.split('localStorage').length - 1, 1, 'localStorage is used exactly once, to read shell:style');
     assert(js.includes('"/usr/local/libexec/woowtech-cockpit-backup"'));
     assert.equal(manifest.menu.index.label, '備份與還原');
     assert.equal(manifest.menu.index.order, 46);
@@ -1696,6 +1699,63 @@ try {
     assert.equal(chips.trim(), '還原前備份');
     assert(!/還原前自動備份備份|WOOWTECH|密鑰/.test(await page.locator('body').textContent()));
   });
+
+  await check('follows the Cockpit dark theme live with readable contrast in every surface', fixture({
+    status: { ...fixture().status, key: { key_id: KEY_ID, created: '2026-11-01T08:00:00Z', kit_confirmed: false },
+      warnings: ['示範：部分應用的設定需要檢查。'] },
+  }), async (page) => {
+    await ready(page);
+    await page.locator('.stat').first().waitFor();
+    const isDark = () => page.evaluate(() => document.documentElement.classList.contains('pf-v6-theme-dark'));
+    const background = () => page.evaluate(() => getComputedStyle(document.body).backgroundColor);
+    assert.equal(await isDark(), true, 'shell:style=dark from Cockpit applies before the first render');
+    assert.equal(await background(), 'rgb(21, 23, 28)');
+    const contrast = () => page.evaluate(() => {
+      const rgb = value => (value.match(/[\d.]+/g) || []).map(Number);
+      const luminance = ([r, g, b]) => [r, g, b].map(v => { v /= 255; return v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4; })
+        .reduce((sum, v, i) => sum + v * [0.2126, 0.7152, 0.0722][i], 0);
+      const backgroundOf = node => {
+        for (let el = node; el; el = el.parentElement) {
+          const [r, g, b, a = 1] = rgb(getComputedStyle(el).backgroundColor);
+          if (a > 0.5) return [r, g, b];
+        }
+        return [255, 255, 255];
+      };
+      const failures = [];
+      let checked = 0;
+      for (const el of document.querySelectorAll('h1, h2, h3, p, a, button, .chip, label, dt, dd, td, th, li, small, .muted')) {
+        const box = el.getBoundingClientRect();
+        if (!box.width || !box.height || !el.textContent.trim()) continue;
+        const style = getComputedStyle(el);
+        if (style.visibility === 'hidden' || Number(style.opacity) < 0.9) continue;
+        const fg = luminance(rgb(style.color)), bg = luminance(backgroundOf(el));
+        const ratio = (Math.max(fg, bg) + 0.05) / (Math.min(fg, bg) + 0.05);
+        const size = parseFloat(style.fontSize), bold = Number(style.fontWeight) >= 700;
+        const minimum = size >= 24 || (bold && size >= 18.66) ? 3 : 4.5;
+        checked++;
+        if (ratio < minimum) failures.push(`${el.tagName.toLowerCase()}.${el.className} "${el.textContent.trim().slice(0, 24)}" ${ratio.toFixed(2)}`);
+      }
+      return { checked, failures };
+    });
+    for (const route of ['overview', 'backups', 'keys']) {
+      if (route !== 'overview') {
+        await page.locator(`[data-nav="${route}"]`).click();
+        await settled(page);
+      }
+      const result = await contrast();
+      assert(result.checked > 10, `${route}: enough text was checked (${result.checked})`);
+      assert.deepEqual(result.failures, [], `${route}: dark-theme text keeps WCAG AA contrast`);
+      await allWidths(page, `dark ${route}`);
+    }
+    await page.locator('[data-nav="overview"]').click();
+    await settled(page);
+    await shot(page, 'overview-dark-1440.png');
+    await page.evaluate(() => window.dispatchEvent(new CustomEvent('cockpit-style', { detail: { style: 'light' } })));
+    assert.equal(await isDark(), false, 'switching Cockpit to light applies live');
+    assert.equal(await background(), 'rgb(255, 255, 255)');
+    await page.evaluate(() => window.dispatchEvent(new CustomEvent('cockpit-style', { detail: { style: 'dark' } })));
+    assert.equal(await isDark(), true, 'switching back to dark applies live');
+  }, { beforeGoto: page => page.addInitScript(() => localStorage.setItem('shell:style', 'dark')) });
 
 } finally {
   try { await browser?.close(); } finally { if (server.listening) await new Promise(done => server.close(done)); }
