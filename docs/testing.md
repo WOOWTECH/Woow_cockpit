@@ -67,3 +67,7 @@ sudo python3 scripts/manage.py install --screenshots .local/screenshots
 檢查視窗寬度320、360、390、600、601、767、768、769、1024、1440px，特別比較斷點兩側，不能只驗證桌面與手機截圖。標準字級下卡片最大345px，輸入框至少48px高；縮窄視窗不應讓卡片反而變大。登入選項展開、長主機名稱、長錯誤訊息、200%文字及橫放短視窗也須檢查，登入按鈕應可捲動到可視範圍。
 
 2026.11.12.4已對部署主機以Chromium完成上述驗收，摘要見current-state。這些實機登入頁驗證不依賴CI中的Cockpit API fixture，亦不代表CI已連上實際主機。
+
+## 手機導覽列
+
+`tests/mobile-navigation-live.mjs` 是選用的實機瀏覽器測試，需在環境變數提供 `COCKPIT_URL`、`COCKPIT_USER`、`COCKPIT_PASSWORD`，以及必要時 `CHROMIUM_PATH`。它檢查 320–767px 五個按鈕的順序和可點範圍、工具與系統清單分離及搜尋切換、鍵盤、主機／說明／作業階段選單，以及桌面寬度。測試會建立 Cockpit 登入工作階段，但不儲存 Cookie 或操作服務。CI 只檢查語法，不會連接真實主機。

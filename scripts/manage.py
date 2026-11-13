@@ -25,6 +25,7 @@ PODMAN = 'usr/share/cockpit/podman'
 NATIVE = ('systemd/logs.html', 'systemd/services.html', 'systemd/hwinfo.html',
           'systemd/terminal.html', 'networkmanager/firewall.html')
 LINK = '  <link href="../../static/branding.css" rel="stylesheet" />\n'
+SHELL_SCRIPT = '  <script defer src="../../static/mobile-navigation.js"></script>\n'
 SHOTS = ('00-login', '01-overview', '02-logs', '03-storage', '04-network',
          '05-podman', '06-accounts', '07-services', '08-applications',
          '09-updates', '10-terminal', '11-hardware', '12-metrics',
@@ -176,6 +177,17 @@ def desired_files(root, include_preview=True, screenshots=None, include_services
         else:
             data = original
         desired[relative] = (data, 'native-stylesheet-link')
+    # Load the mobile shortcut only in the shell; the script is a separately
+    # installed local branding asset, and does not replace Cockpit's bundle.
+    relative = 'usr/share/cockpit/shell/index.html'
+    target = safe_path(root, relative)
+    if target.is_file():
+        html = target.read_text()
+        if 'static/mobile-navigation.js' not in html:
+            if '</head>' not in html:
+                raise ValueError(f'Unknown native template: {relative}; no changes applied.')
+            html = html.replace('</head>', SHELL_SCRIPT + '</head>', 1)
+        desired[relative] = (html.encode(), 'native-mobile-navigation')
     for relative in desired:
         target = safe_path(root, relative)
         if target.exists() and not target.is_file():
@@ -253,7 +265,7 @@ def install(root, desired, state):
 
 
 def allowed_target(name):
-    return name in (STATE, HELPER, SERVICE_CONFIG, f'{PODMAN}/index.js', f'{PODMAN}/index.js.gz', f'{PODMAN}/index.js.LEGAL.txt') or name.startswith((BRAND + '/', PREVIEW + '/', SERVICES + '/', PODMAN + '/woowtech-licenses/')) or name in {
+    return name in (STATE, HELPER, SERVICE_CONFIG, 'usr/share/cockpit/shell/index.html', f'{PODMAN}/index.js', f'{PODMAN}/index.js.gz', f'{PODMAN}/index.js.LEGAL.txt') or name.startswith((BRAND + '/', PREVIEW + '/', SERVICES + '/', PODMAN + '/woowtech-licenses/')) or name in {
         'usr/share/cockpit/' + n + suffix for n in NATIVE for suffix in ('', '.gz')}
 
 

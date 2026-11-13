@@ -22,6 +22,7 @@ class InstallationContract(unittest.TestCase):
             'var/lib/dpkg/status': b'Package: cockpit-bridge\nStatus: install ok installed\nVersion: 362-1\n\n',
             'etc/cockpit/cockpit.conf': b'[WebService]\nAllowUnencrypted=false\n',
             'usr/share/cockpit/systemd/logs.html': b'<html><head></head><body>native log view</body></html>',
+            'usr/share/cockpit/shell/index.html': b'<html><head></head><body>native shell</body></html>',
             'usr/share/cockpit/systemd/services.html.gz': gzip.compress(b'<html><head></head>services</html>', mtime=0),
             'usr/local/share/cockpit/woowtechpreview/screenshots/customer.png': b'customer capture, retain',
             'etc/cockpit/branding/branding.css': b'previous theme',
@@ -31,6 +32,7 @@ class InstallationContract(unittest.TestCase):
             target.write_bytes(data)
         (self.root / 'etc/cockpit/branding/branding.css').chmod(0o640)
         for file, data in {'VERSION': b'test.1', 'branding/branding.css': b'new theme',
+                           'branding/mobile-navigation.js': b'local navigation script',
                            'branding/favicon.ico': b'icon', 'branding/assets/logo.svg': b'<svg/>',
                            'branding/fonts/font.ttf': b'font', 'preview/index.html': b'gallery',
                            'preview/manifest.json': b'{"tools":{"index":{"label":"Reference"}}}'}.items():
@@ -54,6 +56,7 @@ class InstallationContract(unittest.TestCase):
         result = self.install()
         self.assertEqual(manage.verify(self.root)['status'], 'verified')
         self.assertIn(manage.LINK.encode(), (self.root / 'usr/share/cockpit/systemd/logs.html').read_bytes())
+        self.assertIn(manage.SHELL_SCRIPT.encode(), (self.root / 'usr/share/cockpit/shell/index.html').read_bytes())
         self.assertIn(manage.LINK.encode(), gzip.decompress((self.root / 'usr/share/cockpit/systemd/services.html.gz').read_bytes()))
         self.assertEqual(self.install()['changed'], 0)
         self.assertEqual((self.root / 'etc/cockpit/cockpit.conf').read_bytes(), self.original['etc/cockpit/cockpit.conf'][0])

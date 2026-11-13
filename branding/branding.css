@@ -451,3 +451,18 @@ html:not(.pf-v6-theme-dark) #nav-system :is(a, button, input, select):focus-visi
     margin-block-end: 4px;
   }
 }
+
+/* Five evenly sized mobile navigation items; desktop layout is untouched. */
+@media (max-width: 767px) {
+  #main[data-woow-mobile-tools-ready] { grid-template-columns: 2fr 1fr 2fr; }
+  #main[data-woow-mobile-tools-ready] #sidebar-toggle > button { flex: 1 1 0; min-width: 0; width: 50%; }
+  #main[data-woow-mobile-tools-ready] #hosts-sel .ct-switcher > .pf-v6-c-select { flex: 1; min-width: 0; }
+  #main[data-woow-mobile-tools-ready] #host-toggle { width: 100%; max-width: none; }
+  #main[data-woow-mobile-tools-ready] #toolbar .ct-topnav-content,
+  #main[data-woow-mobile-tools-ready] #toolbar .pf-v6-c-toolbar__content-section { width: 100%; }
+  #main[data-woow-mobile-tools-ready] #toolbar .pf-v6-c-toolbar__item:has(> #toggle-docs),
+  #main[data-woow-mobile-tools-ready] #toolbar .pf-v6-c-toolbar__item:has(> #toggle-menu) { flex: 1 1 0; min-width: 0; }
+  #main[data-woow-mobile-tools-ready] :is(#toggle-docs, #toggle-menu) { width: 100%; max-width: none; }
+  #main[data-woow-menu-section="system"] #host-apps section[data-woow-nav-group="tools"],
+  #main[data-woow-menu-section="tools"] #host-apps section[data-woow-nav-group="system"] { display: none; }
+}
