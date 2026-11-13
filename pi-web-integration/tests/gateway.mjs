@@ -1,0 +1,28 @@
+import {test} from 'node:test';import assert from 'node:assert/strict';import http from 'node:http';import net from 'node:net';import path from 'node:path';import {spawn} from 'node:child_process';
+
+test('gateway requires both protections, strips Cockpit credentials and validates requests',async()=>{
+ let enabled=true,lastCookie='',lastProto='';
+ const listen=server=>new Promise(resolve=>server.listen(0,'127.0.0.1',()=>resolve(server.address().port)));
+ const cockpit=http.createServer((req,res)=>{res.writeHead(req.url==='/cockpit/login'&&req.headers.cookie==='cockpit=valid'?200:401).end()});
+ const pi=http.createServer((req,res)=>{if(req.url==='/html'){res.writeHead(200,{'content-type':'text/html; charset=utf-8','etag':'unmodified'});res.write('<html><he');res.end('ad><title>Pi</title></head><body>ok</body></html>');return;}if(req.url==='/api/web-auth'){res.writeHead(200,{'Content-Type':'application/json'}).end(JSON.stringify({enabled}));return;}lastCookie=req.headers.cookie||'';lastProto=req.headers['x-forwarded-proto'];res.writeHead(200,{'Set-Cookie':['cockpit=hostile; Path=/','pi_web_session=abc; Path=/']}).end('ok')});
+ pi.on('upgrade',(req,socket)=>{lastCookie=req.headers.cookie||'';socket.write('HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n\r\n');socket.pipe(socket)});
+ const cp=await listen(cockpit),pp=await listen(pi);const probe=http.createServer();const gp=await listen(probe);await new Promise(resolve=>probe.close(resolve));
+ const child=spawn(process.execPath,[path.resolve('pi-web-integration/gateway.mjs')],{env:{...process.env,PI_GATEWAY_BIND:'127.0.0.1',PI_GATEWAY_HOST:'127.0.0.1',PI_GATEWAY_PORT:String(gp),PI_GATEWAY_COCKPIT_PORT:String(cp),PI_GATEWAY_UPSTREAM_PORT:String(pp)},stdio:['ignore','pipe','pipe']});
+ const request=(headers={},method='GET',url='/resource')=>new Promise((resolve,reject)=>{const q=http.request({hostname:'127.0.0.1',port:gp,path:url,method,headers:{host:`127.0.0.1:${gp}`,...headers}},r=>{let body='';r.setEncoding('utf8');r.on('data',chunk=>body+=chunk);r.on('end',()=>resolve({status:r.statusCode,headers:r.headers,body}))});q.on('error',reject);q.end()});
+ try{
+  await new Promise((resolve,reject)=>{child.stdout.once('data',resolve);child.once('exit',code=>reject(Error(`gateway exited ${code}`)));setTimeout(()=>reject(Error('gateway startup timed out')),5000).unref()});
+  assert.equal((await request()).status,401);assert.equal((await request({cookie:'cockpit=wrong'})).status,401);
+  assert.equal((await request({cookie:'cockpit=valid',origin:'https://evil.example'},'POST')).status,403);
+  assert.equal((await request({cookie:'cockpit=valid',host:'evil.example'})).status,403);
+  let r=await request({cookie:'cockpit=valid; pi_web_session=abc','x-forwarded-proto':'https'});assert.equal(r.status,200);assert.equal(lastCookie,'pi_web_session=abc');assert.equal(lastProto,'http');assert.equal(r.headers['content-security-policy'],`frame-ancestors http://127.0.0.1:${cp}`);assert.deepEqual(r.headers['set-cookie'],['pi_web_session=abc; Path=/']);
+  const html=await request({cookie:'cockpit=valid',accept:'text/html'},'GET','/html');
+  assert.match(html.body,/<script defer src=\"\/__woow_cockpit_theme.js\"><\/script><\/head>/);
+  assert.equal(html.headers.etag,undefined);
+  assert.equal((await request({},'GET','/__woow_cockpit_theme.js')).status,401);
+  const bridge=await request({cookie:'cockpit=valid'},'GET','/__woow_cockpit_theme.js');
+  assert.equal(bridge.status,200);assert.match(bridge.body,/event.origin!==expected/);assert.match(bridge.body,/event.source!==window.parent/);assert.doesNotMatch(bridge.body,/localStorage/);
+  enabled=false;assert.equal((await request({cookie:'cockpit=valid'})).status,503);enabled=true;
+  let handshake=await new Promise((resolve,reject)=>{const s=net.connect({host:'127.0.0.1',port:gp},()=>s.write(`GET /ws HTTP/1.1\r\nHost: 127.0.0.1:${gp}\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nOrigin: http://127.0.0.1:${gp}\r\nCookie: cockpit=valid; pi_web_session=abc\r\n\r\n`));s.once('data',d=>{resolve(String(d));s.destroy()});s.on('error',reject)});
+  assert.match(handshake,/^HTTP\/1\.1 101 /);assert.equal(lastCookie,'pi_web_session=abc');
+ }finally{child.kill('SIGTERM');await Promise.all([new Promise(r=>cockpit.close(r)),new Promise(r=>pi.close(r))]);}
+});

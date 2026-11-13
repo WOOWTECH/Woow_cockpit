@@ -1,0 +1,24 @@
+name: Validate Pi Web integration
+on:
+  push:
+    branches: [feat/cockpit-piweb]
+  pull_request:
+    paths:
+      - 'pi-web-integration/**'
+      - '.github/workflows/pi-web-validation.yml'
+permissions:
+  contents: read
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Gateway safety and syntax checks
+        run: |
+          bash -n pi-web-integration/install.sh
+          node --check pi-web-integration/gateway.mjs
+          node --check pi-web-integration/package/app.js
+          node --test pi-web-integration/tests/*.mjs

@@ -332,5 +332,35 @@ class ServiceManagerContract(unittest.TestCase):
                 self.assertFalse(self.commands('/usr/bin/podman'))
 
 
+
+class ApplicationLinksContract(unittest.TestCase):
+    def test_persist_isolate_clear_and_validate(self):
+        with tempfile.TemporaryDirectory() as directory:
+            with patch.object(manager, 'APP_LINKS', Path(directory) / 'state' / 'links.json'), patch.object(manager, 'LOCK_DIR', Path(directory) / 'locks'):
+                user = SimpleNamespace(key='user:alice')
+                other = SimpleNamespace(key='user:bob')
+                self.assertEqual(manager.app_links(user, 'n8n.service'), {'internal': '', 'external': ''})
+                links = ['http://192.168.2.46:15678/', 'https://workflow.example.com/path']
+                self.assertEqual(manager.app_links(user, 'n8n.service', links), dict(zip(('internal','external'), links)))
+                self.assertEqual(manager.app_links(user, 'n8n.service')['external'], links[1])
+                self.assertEqual(manager.app_links(other, 'n8n.service')['external'], '')
+                self.assertEqual(manager.APP_LINKS.stat().st_mode & 0o777, 0o600)
+                for invalid in ('http://evil.example', 'javascript:alert(1)', 'https://user:password@example.com', 'https://example.com\\@evil.com', 'https://example.com\n'):
+                    with self.subTest(url=invalid), self.assertRaises(manager.ServiceError):
+                        manager.app_links(user, 'n8n.service', ['', invalid])
+                self.assertEqual(manager.app_links(user, 'n8n.service')['external'], links[1])
+                with self.assertRaises(manager.ServiceError): manager.app_links(user, '../bad')
+                manager.app_links(user, 'n8n.service', ['', ''])
+                self.assertEqual(manager.app_links(user, 'n8n.service')['external'], '')
+
+    def test_symlink_file_is_refused(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / 'other').write_text('{}')
+            (root / 'links').symlink_to(root / 'other')
+            with patch.object(manager, 'APP_LINKS', root / 'links'), patch.object(manager, 'LOCK_DIR', root / 'locks'):
+                with self.assertRaises(manager.ServiceError): manager.app_links(SimpleNamespace(key='system'), 'n8n.service')
+
+
 if __name__ == '__main__':
     unittest.main()

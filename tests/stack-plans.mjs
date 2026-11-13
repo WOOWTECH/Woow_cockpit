@@ -1,0 +1,6 @@
+import {test} from 'node:test';import assert from 'node:assert/strict';import fs from 'node:fs';import vm from 'node:vm';
+const c={window:{}};vm.runInNewContext(fs.readFileSync('apps-catalog/stacks.js','utf8'),c);const p=c.window.woowStacks;
+const unit=(id,fields={})=>({id,metrics:{After:'',Requires:'',RequiredBy:'',BoundBy:'',ConsistsOf:'',...fields}});
+test('only explicit application members; unrelated tests excluded',()=>{const found=p.members({name:'Headscale'},[{id:'headscale.service'},{id:'headscale-soak-test.service'}]);assert.deepEqual(Array.from(found,x=>x.id),['headscale.service']);});
+test('start dependencies before applications and stop in reverse',()=>{const units=[unit('web.service',{Requires:'db.service',After:'db.service'}),unit('db.service',{RequiredBy:'web.service'})];assert.deepEqual(Array.from(p.plan(units,'start'),u=>u.id),['db.service','web.service']);assert.deepEqual(Array.from(p.plan(units,'stop'),u=>u.id),['web.service','db.service']);});
+test('shared outside dependents, missing metadata and cycles fail closed',()=>{assert.throws(()=>p.plan([unit('db.service',{RequiredBy:'other.service'})],'stop'),/組外服務/);assert.throws(()=>p.plan([{id:'x.service'}],'stop'),/無法確認/);assert.throws(()=>p.plan([unit('a.service',{After:'b.service'}),unit('b.service',{After:'a.service'})],'start'),/循環/);});
