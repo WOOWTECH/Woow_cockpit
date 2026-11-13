@@ -416,9 +416,12 @@ class FakeAdapter:
         return [{'id': f'{self.app.id}/items', 'status': 'ok', 'message': '項目齊全。'},
                 {'id': f'{self.app.id}/catalog', 'status': 'warn', 'message': '設定與備份時不同。'}]
 
-    def restore(self, app_manifest, extracted_dir, *, mode, rollback=False, unchecked_databases_ok=False):
+    def restore(self, app_manifest, extracted_dir, *, mode, rollback=False, unchecked_databases_ok=False,
+                replaced_dirs=()):
         assert rollback == (self.phase is noop), 'rollbacks (and only they) use rollback=True and no phases'
         self.world.events.append(('restore', self.app.id, mode, 'rollback' if rollback else 'restore'))
+        if rollback:
+            self.world.events.append(('replaced_dirs', self.app.id, tuple(sorted(replaced_dirs))))
         self.run = 'rollback' if rollback else 'restore'
         if not rollback:
             self.world.unchecked.append((self.app.id, unchecked_databases_ok))
@@ -445,6 +448,10 @@ class FakeAdapter:
         self.imported_hook()  # like the real adapter: the import finished, the units start next (HD-04)
         self.phase('start')
 
+    def swapped_dirs(self):
+        # Like the real adapter: what its restore swapped (all of the app's directories once it got that far).
+        return {item['path'] for item in self.app.data_dirs} if self.destructive_started else set()
+
     def start_units(self, units):
         self.world.events.append(('start_units', self.app.id, tuple(units)))
         return [u for u in units if u in self.world.unstartable]
@@ -458,10 +465,16 @@ class FakeAdapter:
 
     def discard_dirs(self):
         self.world.events.append(('discard_dirs', self.app.id, self.run))
-        return list(self.world.discard_problems.get(self.app.id, []))
+        problems = self.world.discard_problems.get(self.app.id, [])
+        if isinstance(problems, BaseException):
+            raise problems
+        return list(problems)
 
     def dir_leftovers(self):
-        return list(self.world.leftover_notes.get(self.app.id, []))
+        notes = self.world.leftover_notes.get(self.app.id, [])
+        if isinstance(notes, BaseException):
+            raise notes
+        return list(notes)
 
     def recover_dirs(self):
         self.world.events.append(('recover_dirs', self.app.id, self.job_id))
@@ -718,7 +731,8 @@ class RestoreFlowTests(FlowCase):
         safety = self.safety_ids()
         self.assertEqual(len(safety), 1)
         self.assertEqual(result['safety_backup_id'], safety[0])
-        self.assertEqual(self.reporter.partial, {'safety_backup_id': safety[0], 'stopped_writers': {}})
+        self.assertEqual(self.reporter.partial, {'safety_backup_id': safety[0], 'stopped_writers': {},
+                                                 'finishing': True})
         self.assertEqual(self.storage.index[safety[0]]['apps'], [{'id': 'woowbk-demo', 'name': '示範筆記應用'}])
         self.assertFalse(self.storage.index[safety[0]]['include_images'])
         self.assertEqual(result['health'][0]['status'], 'ok')
@@ -1127,7 +1141,7 @@ class HostDirFlowTests(RestoreFlowTests):
     def test_inplace_success(self):  # the inherited restore cases all run with a host directory declared too
         result = self.restore()
         self.assertEqual(self.reporter.partial, {'safety_backup_id': result['safety_backup_id'], 'stopped_writers': {},
-                                                 'dir_apps': []})
+                                                 'dir_apps': [], 'finishing': True})
         self.assertEqual(self.world.data['woowbk-demo'], b'notes-v1')
 
     def test_marker_before_the_first_copy_and_finish_after_success_only(self):
@@ -1187,6 +1201,27 @@ class HostDirFlowTests(RestoreFlowTests):
         self.assertFalse(caught.exception.result['rolled_back'])
         self.assertEqual(self.reporter.partial['dir_apps'], ['woowbk-demo'],
                          'kept: the next recovery pass settles the directories again')
+
+    def test_the_rollback_knows_which_directories_the_failed_restore_swapped(self):
+        self.world.fail_restore_after['woowbk-demo'] = 1
+        with self.assertRaises(flows.RolledBack):
+            self.restore()
+        self.assertEqual(self.events('replaced_dirs'), [('replaced_dirs', 'woowbk-demo', ('woowbk-demo-data',))])
+
+    def test_unexpected_directory_errors_never_stop_another_apps_rollback(self):
+        # Review M1: a TypeError from an owner's answer used to escape _rollback: the other app stayed half-restored.
+        self.world.fail_restore_after['woowbk-two'] = 1
+        self.world.discard_problems['woowbk-demo'] = TypeError('string indices must be integers')
+        self.world.leftover_notes['woowbk-demo'] = RecursionError('maximum recursion depth exceeded')
+        with self.assertRaises(BackupError) as caught:
+            self.restore(apps=('woowbk-demo', 'woowbk-two'))
+        self.assertEqual([e[1] for e in self.world.events if e[0] == 'restore' and e[3] == 'rollback'],
+                         ['woowbk-demo', 'woowbk-two'])
+        self.assertEqual(self.world.data['woowbk-two'], b'two-v2-changed', 'woowbk-two got its pre-restore data back')
+        self.assertEqual(caught.exception.code, 'job-failed')
+        self.assertIn('需人工處理', caught.exception.message)
+        self.assertIn('無法整理「示範筆記應用」的主機資料夾', caught.exception.message)
+        self.assertIn('無法列出「示範筆記應用」主機資料夾旁留下的資料夾', caught.exception.result['warnings'][0])
 
     def test_a_failed_rollback_without_directory_problems_clears_the_marker(self):
         self.world.fail_restore_after['woowbk-demo'] = 1

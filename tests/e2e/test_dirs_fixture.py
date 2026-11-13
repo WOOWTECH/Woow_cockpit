@@ -673,8 +673,10 @@ class DriverTests(unittest.TestCase):
                     out = subprocess.run([sys.executable, '-I', '-c', d.INJECT_BETWEEN, str(data)], capture_output=True,
                                          check=True).stdout
                     self.assertIn('renamed <path>', json.loads(out)['action'])
-                    state = json.loads(self.helper(home, 'state', 'data').stdout)
-                    self.assertEqual(state, [{'path': 'data', 'type': 'missing', 'empty': None, 'siblings': [
+                    state = json.loads(self.helper(home, 'state', token, 'data').stdout)
+                    self.assertEqual([{k: row[k] for k in ('path', 'type', 'empty', 'mount', 'siblings', 'more')}
+                                      for row in state], [{'path': 'data', 'type': 'missing', 'empty': None,
+                                                           'mount': False, 'more': 0, 'siblings': [
                         {'kind': 'new', 'token': token, 'type': 'dir'}, {'kind': 'old', 'token': token, 'type': 'dir'}]}])
             # What QuadletPostgresAdapter.recover_dirs does for a missing directory: move the old copy back, drop new.
             self.assertEqual(self.helper(home, 'back', 'data', token).returncode, 0)

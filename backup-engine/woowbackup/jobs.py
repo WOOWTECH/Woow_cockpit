@@ -81,6 +81,8 @@ INTERRUPTED_MESSAGE = {
     'verify': '驗證作業意外中斷，請重新執行驗證。',
 }
 FRESH_MESSAGE = '全新部署（{apps}）沒有完成；系統會清除未完成的部署，之後可再次還原同一份備份。'
+FINISHING_MESSAGE = ('還原已完成並通過檢查，但在刪除主機資料夾被取代的舊內容時作業中斷（例如系統重新開機）。'
+                     '系統會接手整理留下的資料夾；應用不需要再次還原。')
 
 
 class Terminated(BaseException):
@@ -727,7 +729,10 @@ def interrupted_details(record):
         return message, None
     safety = record.get('safety_backup_id')
     fresh = [str(app) for app in record.get('fresh_apps') or []]
-    if safety:
+    if record.get('finishing'):
+        # The restore itself had succeeded; only deleting the replaced host-directory copies was cut short (L4).
+        message = FINISHING_MESSAGE
+    elif safety:
         message += f'還原前備份：{safety}。'
     if fresh:
         message += FRESH_MESSAGE.format(apps='、'.join(fresh))

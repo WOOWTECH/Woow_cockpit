@@ -638,6 +638,16 @@ class RecoveryTests(JobCase):
         self.assertEqual(result['fresh_apps'], ['woowbk-demo'])
         self.assertIn('全新部署（woowbk-demo）沒有完成', message)
 
+    def test_a_restore_that_died_while_deleting_replaced_copies_had_succeeded(self):
+        # Review L4: killed in the last step (the old host-directory copies), the restore itself was complete.
+        record = self.store.create('restore', {'backup_id': 'b', 'apps': ['woowbk-demo']})
+        record.update(finishing=True, safety_backup_id='s')
+        message, result = jobs.interrupted_details(record)
+        self.assertEqual(message, jobs.FINISHING_MESSAGE)
+        self.assertIn('應用不需要再次還原', message)
+        self.assertNotIn('還原前備份', message)
+        self.assertEqual(result['safety_backup_id'], 's')
+
     def test_stale_key_files_are_removed(self):
         # Review SEC-4: a helper killed during inspect left the pasted key on tmpfs until reboot.
         Path(self.paths.run).mkdir(parents=True, exist_ok=True)

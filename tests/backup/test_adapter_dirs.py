@@ -15,6 +15,7 @@ import stat
 import tarfile
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 from woowbackup import catalog, nested, podman
@@ -58,6 +59,7 @@ class DirOwner(FakeOwner):
         self.dir_ops = []
         self.dir_fail = {}  # op -> exit status injected instead of running it
         self.dir_hook = None  # callable(op, args) run before an op (simulates what happens meanwhile)
+        self.dir_answers = {}  # (op, first argument) -> what the helper prints instead (bytes, or data as JSON)
 
     @staticmethod
     def text(inner):
@@ -77,6 +79,9 @@ class DirOwner(FakeOwner):
             self.dir_hook(args[0], args[1:])
         if args[0] in self.dir_fail:
             return podman.Result(self.dir_fail[args[0]], b'', b'injected failure\n')
+        answer = self.dir_answers.get((args[0], args[1] if len(args) > 1 else None))
+        if answer is not None:  # e.g. a helper the owner replaced inside his namespace (review M1)
+            return podman.Result(0, answer if isinstance(answer, bytes) else json.dumps(answer).encode(), b'')
         env = {'HOME': str(self.home), 'PATH': '/usr/bin:/bin', 'LANG': 'C.UTF-8'}
         return podman.default_runner([PYTHON, '-I', '-c', DIR_HELPER, *args], input=data, stdout=stdout, env=env,
                                      timeout=120)
@@ -221,13 +226,62 @@ class DirBackupTests(DirCase):
             self.adapter.estimate_bytes()
         self.assertEqual(caught.exception.code, 'not-found')
 
-    def test_running_units_mounting_a_directory_must_be_writers(self):
-        self.owner.files[Q + 'woowbk-demo-db.container'] += f'Volume=%h/{DATA}/db:/var/lib/extra:Z\n'.encode()
-        self.owner.files[Q + 'woowbk-demo-app.container'] += f'Volume=/home/appowner/{HTML}:/var/www\n'.encode()
+    def test_running_containers_writing_into_a_directory_must_be_stopped(self):
+        # Review M5: whatever started it (Quadlet Volume=/Mount=, a pod, by hand), a running container that can write
+        # into a host directory and is not a writer stopped by the backup fails it before anything stops. A writer's
+        # own container and a read-only mount are fine.
+        home = '/home/appowner'
+        self.owner.bind_mounts = [
+            {'id': 'a' * 12, 'name': 'woowbk-demo-app', 'unit': 'woowbk-demo-app.service', 'source': f'{home}/{HTML}',
+             'rw': True},
+            {'id': 'b' * 12, 'name': 'viewer', 'unit': None, 'source': f'{home}/{DATA}', 'rw': False}]
         self.run_backup()
-        logged = self.everything_logged()
-        self.assertIn(f'服務 woowbk-demo-db.service 掛載了主機資料夾 ~/{DATA}，但沒有列在 writer_units', logged)
-        self.assertNotIn('服務 woowbk-demo-app.service 掛載了', logged, 'a writer is stopped: no warning')
+        for extra, needle in (
+                ({'id': 'c' * 12, 'name': 'sidecar', 'unit': 'other.service', 'source': f'{home}/{DATA}/db', 'rw': True},
+                 f'服務 other.service 的容器 sidecar 以可寫入方式掛載了 ~/{DATA}/db（與主機資料夾 ~/{DATA} 重疊）'),
+                ({'id': 'd' * 12, 'name': 'shell', 'unit': None, 'source': home, 'rw': True},
+                 f'容器 shell 以可寫入方式掛載了整個家目錄（包含主機資料夾 ~/{HTML}）')):
+            with self.subTest(extra['name']):
+                owner = self.new_owner()
+                owner.units['other.service'] = 'active'
+                owner.bind_mounts = self.owner.bind_mounts + [extra]
+                with self.assertRaises(BackupError) as caught:
+                    self.make_adapter(owner).backup(self.staging / extra['name'], include_images=False)
+                self.assertEqual(caught.exception.code, 'incompatible')
+                self.assertIn(needle, caught.exception.message)
+                self.assertIn('請先停止它，或把它的服務加入這個應用的 writer_units', caught.exception.message)
+                self.assertFalse(any(a[:3] == [SYSTEMCTL, '--user', 'stop'] for a in owner.argvs()), 'nothing stopped')
+
+    def test_mount_points_fail_the_backup_before_anything_stops(self):
+        # Review M2: tar stays on one filesystem, so content below a mount point would be missing, and a restore can
+        # neither rename a mount point nor delete the replaced copy without entering the other filesystem.
+        for answer, needle in (({'mount_root': True, 'mounts': [], 'more_mounts': 0}, '是另一個檔案系統的掛載點'),
+                               ({'mount_root': False, 'mounts': ['db/disk'], 'more_mounts': 2},
+                                f'中有其他檔案系統的掛載點（~/{DATA}/db/disk等 3 處）')):
+            with self.subTest(needle):
+                owner = self.new_owner()
+                owner.dir_answers = {('measure', DATA): {'bytes': 1, 'members': 1, 'acls': 0, **answer}}
+                with self.assertRaises(BackupError) as caught:
+                    self.make_adapter(owner).backup(self.staging / str(len(needle)), include_images=False)
+                self.assertEqual(caught.exception.code, 'incompatible')
+                self.assertIn(needle, caught.exception.message)
+                self.assertFalse(any(a[:3] == [SYSTEMCTL, '--user', 'stop'] for a in owner.argvs()), 'nothing stopped')
+        owner = self.new_owner()
+        owner.dir_answers = {('measure', DATA): {'bytes': 1, 'members': 1, 'acls': 3, 'mount_root': False, 'mounts': [],
+                                                 'more_mounts': 0}}
+        self.make_adapter(owner).backup(self.staging / 'acls', include_images=False)
+        self.assertIn(f'主機資料夾 ~/{DATA} 有 3 個項目設定了 POSIX ACL 權限；備份不包含 ACL', self.everything_logged())
+
+    def test_owner_controlled_answers_are_checked(self):
+        # Review M1: the helper runs in a namespace the owner controls; any other shape is a BackupError.
+        for bad in (b'[]', b'{"bytes": "1"}', b'[' * 100000 + b']' * 100000, b'\xff', b'{"bytes": true, "members": 1}'):
+            with self.subTest(bad[:20]):
+                owner = self.new_owner()
+                owner.dir_answers = {('measure', DATA): bad}
+                with self.assertRaises(BackupError) as caught:
+                    self.make_adapter(owner).backup(self.staging / 'bad', include_images=False)
+                self.assertEqual(caught.exception.code, 'job-failed')
+                self.assertIn('結果格式不正確', caught.exception.message)
 
 
 class DirRestoreCase(DirCase):
@@ -259,14 +313,19 @@ class DirRestoreTests(DirRestoreCase):
         adapter = self.make_adapter(owner)
         adapter.restore(self.manifest, self.extract, mode='inplace')
         argvs = owner.argvs()
+        unpack_at = argvs.index(dir_call('unpack', HTML, JOB))
+        self.assertEqual(argvs[unpack_at + 1], dir_call('unpack', DATA, JOB))
+        self.assertLess(argvs.index([SYSTEMCTL, '--user', 'stop', '--', 'woowbk-demo-db.service']), unpack_at,
+                        'written only once every unit is stopped')
+        # Review M3: both copies are written before anything that exists changes (secrets, volumes, the database).
+        self.assertLess(unpack_at, min(i for i, a in enumerate(argvs) if a[:3] in ([PODMAN, 'secret', 'create'],
+                                                                                   [PODMAN, 'volume', 'rm'])))
         import_at = argvs.index([PODMAN, 'volume', 'import', 'woowbk-demo-files', '-'])
-        self.assertEqual(argvs[import_at + 1:import_at + 7], [
+        self.assertEqual(argvs[import_at + 1:import_at + 6], [
             [PODMAN, 'volume', 'rm', '-f', 'woowbk-demo-pgdata'],
-            dir_call('unpack', HTML, JOB), dir_call('swap', HTML, JOB, 'inplace'),
-            dir_call('unpack', DATA, JOB), dir_call('swap', DATA, JOB, 'inplace'),
+            [PODMAN, 'ps', '--format', '{{.ID}}'],  # no container may still use a directory (review M5)
+            dir_call('swap', HTML, JOB, 'inplace'), dir_call('swap', DATA, JOB, 'inplace'),
             [SYSTEMCTL, '--user', 'start', '--', 'woowbk-demo-db.service']])
-        self.assertLess(argvs.index([SYSTEMCTL, '--user', 'stop', '--', 'woowbk-demo-db.service']),
-                        argvs.index(dir_call('unpack', HTML, JOB)), 'written only once every unit is stopped')
         unpack = next(c for c in owner.calls if c['argv'] == dir_call('unpack', HTML, JOB))
         self.assertEqual(unpack['kind'], 'stream', 'GNU tar only ever reads the canonical stream')
         for rel in (HTML, DATA):
@@ -340,7 +399,7 @@ class DirRestoreTests(DirRestoreCase):
         with self.assertRaises(BackupError) as caught:
             self.make_adapter(owner).restore(self.manifest, self.extract, mode='inplace')
         self.assertEqual(caught.exception.code, 'incompatible')
-        self.assertEqual({op[0] for op in owner.dir_ops}, {'state'}, 'only read: nothing was written')
+        self.assertLessEqual({op[0] for op in owner.dir_ops}, {'state', 'mounts'}, 'only read: nothing was written')
 
     def test_preflight_reports_target_state_capacity_and_space(self):
         sizes = {e.path: e.size for e in self.entries}
@@ -352,7 +411,8 @@ class DirRestoreTests(DirRestoreCase):
         self.assertIn(f'整個取代主機資料夾 ~/{HTML}', by_id['dir-target'][0]['message'])
         self.assertTrue(all(c['status'] == 'ok' for c in by_id['dir-ids']))
         self.assertIn('最大 UID', by_id['dir-ids'][0]['message'])
-        self.assertIn('已計入', by_id['space'][0]['message'])
+        self.assertIn('應用資料所在磁碟空間足夠', by_id['space'][0]['message'])
+        self.assertEqual([c['status'] for c in by_id['dir-mounts']] if 'dir-mounts' in by_id else [], [])
         self.assertNotIn('fail', [c['status'] for c in checks], checks)
         inspect = self.adapter.preflight(self.manifest, mode='inplace', entry_sizes=sizes)  # no extracted archive
         ids = [c for c in inspect if c['id'] == 'woowbk-demo/dir-ids']
@@ -367,15 +427,83 @@ class DirRestoreTests(DirRestoreCase):
         self.self_free_space_check(sizes)
 
     def self_free_space_check(self, sizes):
-        dirs = sum(size for path, size in sizes.items() if '/dirs/' in path)
         need = sum(sizes.values())
-        self.free = 2 * need + dirs + qp.SPACE_RESERVE - 4096
-        space = [c for c in self.make_adapter().preflight(self.manifest, mode='inplace', entry_sizes=sizes)
-                 if c['id'] == 'woowbk-demo/space']
-        self.assertEqual(space[0]['status'], 'fail', 'room for the copy a rollback writes is required in place')
-        space = [c for c in self.make_adapter(self.new_owner(deployed=False)).preflight(
-            self.manifest, mode='fresh', entry_sizes=sizes) if c['id'] == 'woowbk-demo/space']
-        self.assertEqual(space[0]['status'], 'ok')
+        for free, status in ((2 * need + qp.SPACE_RESERVE - 4096, 'fail'), (2 * need + qp.SPACE_RESERVE + 4096, 'ok')):
+            self.free = free
+            for mode in ('inplace', 'fresh'):
+                owner = self.new_owner(deployed=mode == 'inplace')
+                space = [c for c in self.make_adapter(owner).preflight(self.manifest, mode=mode, entry_sizes=sizes)
+                         if c['id'] == 'woowbk-demo/space']
+                # Review M3: a rollback moves the replaced copy back, so no room for a third copy is required.
+                self.assertEqual(space[0]['status'], status, (mode, free))
+
+    def test_a_directory_on_another_filesystem_counts_there(self):
+        sizes = {e.path: e.size for e in self.entries}
+        html = next(path for path in sizes if path.endswith('/dirs/0.tar'))
+        adapter = self.make_adapter()
+        checks = []
+        adapter._dir_space = {HTML: (4242, sizes[html] + qp.SPACE_RESERVE - 1), DATA: (None, None)}
+        home = os.stat(self.home)
+        with mock.patch.object(qp.os, 'stat', return_value=home):
+            adapter._preflight_space(self.manifest, sizes, lambda *check: checks.append(check))
+        self.assertEqual(checks[0][1], 'fail', checks)
+        self.assertIn(f'~/{HTML} 所在磁碟需要約', checks[0][2])
+        self.assertNotIn('家目錄所在磁碟', checks[0][2], 'the home has room for the rest')
+
+    def test_preflight_refuses_mount_points_podman_storage_and_other_users(self):
+        home = '/home/appowner'
+        row = {'type': 'dir', 'empty': False, 'mount': False, 'dev': 1, 'free': 1 << 40, 'siblings': [], 'more': 0}
+        cases = [
+            # Review M2: the directory is a mount point (cannot be renamed), or holds one (moved and deleted with it).
+            ('state', lambda o: o.dir_answers.update({('state', '-'): [{**row, 'path': HTML, 'mount': True},
+                                                                       {**row, 'path': DATA}]}),
+             'dir-target', f'~/{HTML} 是另一個檔案系統的掛載點'),
+            ('mounts', lambda o: o.dir_answers.update({('mounts', DATA): {'mount_root': False, 'mounts': ['cache'],
+                                                                         'more_mounts': 0}}),
+             'dir-mounts', f'主機資料夾 ~/{DATA} 中有其他檔案系統的掛載點（~/{DATA}/cache）'),
+            # Review L1: a storage.conf moved the Podman storage into a declared directory.
+            ('storage', lambda o: setattr(o, 'storage', (f'{home}/{DATA}/storage', f'{home}/{DATA}/storage/volumes')),
+             'dir-target', f'主機資料夾 ~/{DATA} 與 Podman 的儲存位置 {home}/{DATA}/storage 重疊'),
+            # Review M5: another unit's container (even read-only) keeps the replaced copy after the swap.
+            ('in-use', lambda o: o.bind_mounts.extend([
+                {'id': 'e' * 12, 'name': 'woowbk-demo-app', 'unit': 'woowbk-demo-app.service', 'source': f'{home}/{HTML}',
+                 'rw': True},
+                {'id': 'f' * 12, 'name': 'viewer', 'unit': None, 'source': f'{home}/{DATA}', 'rw': False}]),
+             'dir-in-use', f'容器 viewer 掛載了主機資料夾 ~/{DATA}；還原替換資料夾後它仍會使用被取代的內容'),
+        ]
+        for name, setup, check_id, needle in cases:
+            with self.subTest(name):
+                owner = self.new_owner()
+                setup(owner)
+                checks = self.make_adapter(owner).preflight(self.manifest, mode='inplace')
+                failing = [c for c in checks if c['status'] == 'fail']
+                self.assertEqual([re.sub(r'-[0-9]+$', '', c['id']) for c in failing], [f'woowbk-demo/{check_id}'], checks)
+                self.assertIn(needle, failing[0]['message'])
+        owner = self.new_owner()
+        owner.dir_answers = {('state', '-'): [{**row, 'path': HTML, 'mount': True}, {**row, 'path': DATA}]}
+        with self.assertRaises(BackupError) as caught:  # also when a caller skipped the preflight
+            self.make_adapter(owner).restore(self.manifest, self.extract, mode='inplace')
+        self.assertIn('是另一個檔案系統的掛載點', caught.exception.message)
+        self.assertEqual({op[0] for op in owner.dir_ops}, {'state'}, 'refused before any change')
+
+    def test_a_container_started_meanwhile_stops_the_restore_before_the_swap(self):
+        owner = self.new_owner()
+
+        def started(op, args):
+            if op == 'unpack' and args[0] == DATA:
+                owner.bind_mounts.append({'id': '1' * 12, 'name': 'late', 'unit': None,
+                                          'source': f'/home/appowner/{HTML}', 'rw': True})
+        owner.dir_hook = started
+        adapter = self.make_adapter(owner)
+        with self.assertRaises(BackupError) as caught:
+            adapter.restore(self.manifest, self.extract, mode='inplace')
+        self.assertIn('容器 late 以可寫入方式掛載了主機資料夾', caught.exception.message)
+        self.assertTrue(adapter.destructive_started)
+        self.assertNotIn('swap', [op[0] for op in owner.dir_ops], 'nothing swapped')
+        self.assertEqual(adapter.discard_dirs(), [])
+        for rel in (HTML, DATA):
+            self.assertEqual(snapshot(self.home / rel), self.original[rel])
+            self.assertEqual(self.siblings(rel), [], 'the new copies are discarded')
 
     def test_symlinked_target_fails_preflight_and_restore(self):
         shutil.rmtree(self.home / DATA)
@@ -437,17 +565,22 @@ class DirFreshTests(DirRestoreCase):
         owner = self.new_owner(deployed=False, populate=False)
         adapter = self.make_adapter(owner)
         adapter.restore(self.manifest, self.extract, mode='fresh')
-        (self.home / HTML).parent.joinpath('html.woowbk-new-jx').mkdir()
-        (self.home / HTML).parent.joinpath('html.woowbk-old-jy').mkdir()
+        parent = (self.home / HTML).parent
+        for name in ('html.woowbk-new-jx', f'html.woowbk-new-{JOB}', f'html.woowbk-del-{JOB}', 'html.woowbk-old-jy'):
+            parent.joinpath(name).mkdir()
         adapter.remove_fresh()
         self.assertFalse((self.home / HTML).exists())
         self.assertFalse((self.home / DATA).exists())
-        self.assertEqual(self.siblings(HTML), ['.woowbk-old-jy'], 'a moved-aside copy is never removed here')
+        # Review L3: only this job's copies go; another job's (or a folder of the user named like one) stays, and a
+        # moved-aside copy is never removed here.
+        self.assertEqual(self.siblings(HTML), ['.woowbk-new-jx', '.woowbk-old-jy'])
 
 
 class DirRollbackTests(DirRestoreCase):
-    """The rollback restores the directories from the safety backup (its own siblings, `-rollback`); after it was
-    verified the failed restore's data goes, the pre-restore content stays and is reported."""
+    """The rollback moves what a directory held before the failed restore back from its `-old-<job>` copy (review M3:
+    no third copy, no extraction); the failed restore's data goes to `-old-<job>-rollback` and is deleted once the
+    rollback was verified. A directory the failed restore never changed is left alone; one it replaced without such
+    a copy is extracted from the safety backup."""
 
     def failed_restore(self, swapped=True):
         self.mutate()
@@ -468,43 +601,85 @@ class DirRollbackTests(DirRestoreCase):
         owner.fail, owner.dir_fail = [], {}
         return owner, adapter, safety_manifest
 
+    def rollback(self, owner, failed, safety_manifest):
+        adapter = self.make_adapter(owner)
+        start = len(owner.dir_ops)
+        adapter.restore(safety_manifest, self.safety, mode='inplace', rollback=True,
+                        replaced_dirs=failed.swapped_dirs())
+        return adapter, owner.dir_ops[start:]
+
     def test_rollback_after_both_directories_were_swapped(self):
         owner, failed, safety_manifest = self.failed_restore()
+        self.assertEqual(failed.swapped_dirs(), {HTML, DATA})
         self.assertEqual(failed.discard_dirs(), [])
-        rollback = self.make_adapter(owner)
-        rollback.restore(safety_manifest, self.safety, mode='inplace', rollback=True)
-        self.assertIn(dir_call('unpack', HTML, ROLLBACK), owner.argvs())
-        notes = rollback.finish_dirs()
+        rollback, ops = self.rollback(owner, failed, safety_manifest)
+        self.assertEqual([op for op in ops if op[0] not in ('state', 'mounts')],
+                         [['revert', HTML, JOB, ROLLBACK], ['revert', DATA, JOB, ROLLBACK]], 'nothing extracted')
         for rel in (HTML, DATA):
-            self.assertEqual(snapshot(self.home / rel), self.pre_restore[rel], 'back to the safety backup')
-            self.assertEqual(self.siblings(rel), [f'.woowbk-old-{JOB}'], 'the failed data goes, the original stays')
-            self.assertEqual(snapshot(self.home / (rel + f'.woowbk-old-{JOB}')), self.pre_restore[rel])
-        self.assertEqual(len(notes), 2)
-        self.assertIn(f'在還原前的原內容保留在 ~/{HTML}.woowbk-old-{JOB}', notes[0])
+            self.assertEqual(snapshot(self.home / rel), self.pre_restore[rel], 'what it held before the restore')
+            self.assertEqual(self.siblings(rel), [f'.woowbk-old-{ROLLBACK}'], 'the failed data, until verified')
+        self.assertEqual(rollback.finish_dirs(), [])
+        for rel in (HTML, DATA):
+            self.assertEqual(self.siblings(rel), [], 'the failed restore\'s data is deleted after a verified rollback')
+        logged = self.everything_logged()
+        self.assertIn(f'已把主機資料夾 ~/{HTML} 還原前的內容移回', logged)
+        self.assertIn(f'已刪除 ~/{HTML}.woowbk-old-{ROLLBACK}（還原失敗時寫入的內容）', logged)
 
     def test_rollback_of_directories_the_failed_restore_never_reached(self):
         owner, failed, safety_manifest = self.failed_restore(swapped=False)
+        self.assertEqual(failed.swapped_dirs(), set())
         self.assertEqual(failed.discard_dirs(), [])
         self.assertEqual(self.siblings(HTML), [], 'the partial copy is gone')
-        rollback = self.make_adapter(owner)
-        rollback.restore(safety_manifest, self.safety, mode='inplace', rollback=True)
-        notes = rollback.finish_dirs()
+        rollback, ops = self.rollback(owner, failed, safety_manifest)
+        self.assertEqual({op[0] for op in ops}, {'state'}, 'never changed by the failed restore: left alone')
+        self.assertEqual(rollback.finish_dirs(), [])
         for rel in (HTML, DATA):
-            self.assertEqual(self.siblings(rel), [f'.woowbk-old-{ROLLBACK}'], 'the only original copy is kept')
-        self.assertIn(f'~/{HTML}.woowbk-old-{ROLLBACK}', notes[0])
+            self.assertEqual(snapshot(self.home / rel), self.pre_restore[rel])
+            self.assertEqual(self.siblings(rel), [])
+        self.assertIn(f'主機資料夾 ~/{HTML} 沒有被失敗的還原變更，保留原內容', self.everything_logged())
+
+    def test_rollback_extracts_a_replaced_directory_whose_copy_is_gone(self):
+        owner, failed, safety_manifest = self.failed_restore()
+        shutil.rmtree(self.home / (DATA + f'.woowbk-old-{JOB}'))  # removed by hand meanwhile
+        rollback, ops = self.rollback(owner, failed, safety_manifest)
+        self.assertIn(['revert', HTML, JOB, ROLLBACK], ops)
+        self.assertIn(['unpack', DATA, ROLLBACK], ops)
+        self.assertIn(['swap', DATA, ROLLBACK, 'inplace'], ops)
+        self.assertEqual(rollback.finish_dirs(), [])
+        for rel in (HTML, DATA):
+            self.assertEqual(snapshot(self.home / rel), self.pre_restore[rel], 'from the copy, or the safety backup')
+            self.assertEqual(self.siblings(rel), [])
 
     def test_failed_rollback_reports_where_the_copies_are(self):
         owner, failed, safety_manifest = self.failed_restore()
         rollback = self.make_adapter(owner)
-        owner.dir_fail = {'swap': 11}
+        owner.dir_fail = {'revert': 11}
         with self.assertRaises(BackupError):
-            rollback.restore(safety_manifest, self.safety, mode='inplace', rollback=True)
+            rollback.restore(safety_manifest, self.safety, mode='inplace', rollback=True,
+                             replaced_dirs=failed.swapped_dirs())
         owner.dir_fail = {}
         self.assertEqual(rollback.discard_dirs(), [])
         notes = failed.dir_leftovers()
         self.assertEqual(len(notes), 2)
-        self.assertIn(f'~/{HTML}.woowbk-old-{JOB}', notes[0])
+        self.assertIn(f'~/{HTML}.woowbk-old-{JOB}（還原前的原內容，處理完成前請勿刪除）', notes[0])
         self.assertTrue((self.home / HTML).is_dir())
+
+    def test_a_revert_cut_between_its_renames_is_put_back_in_process(self):
+        owner, failed, safety_manifest = self.failed_restore()
+        rollback = self.make_adapter(owner)
+
+        def cut(op, args):  # the helper dies after its first rename: the directory is missing
+            if op == 'revert' and args[0] == HTML:
+                os.rename(self.home / HTML, self.home / (HTML + f'.woowbk-old-{ROLLBACK}'))
+                owner.dir_fail = {'revert': 137}
+        owner.dir_hook = cut
+        with self.assertRaises(BackupError):
+            rollback.restore(safety_manifest, self.safety, mode='inplace', rollback=True,
+                             replaced_dirs=failed.swapped_dirs())
+        owner.dir_fail, owner.dir_hook = {}, None
+        self.assertEqual(rollback.discard_dirs(), [])
+        self.assertEqual(snapshot(self.home / HTML), self.pre_restore[HTML], 'the content before the restore first')
+        self.assertEqual(self.siblings(HTML), [f'.woowbk-old-{ROLLBACK}'])
 
 
 class DirRecoveryTests(DirRestoreCase):
@@ -529,10 +704,12 @@ class DirRecoveryTests(DirRestoreCase):
         elif step == 'after-swap':
             os.rename(base, old)
             os.rename(new, base)
-        elif step == 'during-finish':
+        elif step == 'during-finish':  # drop renames the old copy to `-del-` first, then deletes it (review L4)
             os.rename(base, old)
             os.rename(new, base)
-            shutil.rmtree(old / 'config')
+            doomed = self.home / (HTML + f'.woowbk-del-{token}')
+            os.rename(old, doomed)
+            shutil.rmtree(doomed / 'config')
         return owner
 
     def recover(self, owner):
@@ -544,7 +721,7 @@ class DirRecoveryTests(DirRestoreCase):
         restored = self.original[HTML]
         for step, content, kept in (('during-unpack', 'pre', []), ('between-renames', 'pre', []),
                                     ('after-swap', 'restored', [f'.woowbk-old-{JOB}']),
-                                    ('during-finish', 'restored', [f'.woowbk-old-{JOB}'])):
+                                    ('during-finish', 'restored', [])):
             with self.subTest(step):
                 shutil.rmtree(self.home)
                 self.home.mkdir()
@@ -558,7 +735,10 @@ class DirRecoveryTests(DirRestoreCase):
                 if kept:
                     self.assertIn(f'~/{HTML}.woowbk-old-{JOB}', ' '.join(notes))
                 if step == 'between-renames':
-                    self.assertIn(f'已把 ~/{HTML} 的原內容移回', ' '.join(notes))
+                    self.assertIn(f'已把 ~/{HTML} 移回還原前的原內容', ' '.join(notes))
+                if step == 'during-finish':
+                    self.assertIn(f'已刪除先前沒刪完的 ~/{HTML}.woowbk-del-{JOB}', ' '.join(notes))
+                    self.assertNotIn('保留', ' '.join(notes), 'a half-deleted copy is never reported as kept content')
                 again = self.recover(self.new_owner(populate=False))
                 self.assertEqual(snapshot(self.home / HTML), pre if content == 'pre' else restored, 'idempotent')
                 self.assertEqual(self.siblings(HTML), kept)
@@ -568,13 +748,16 @@ class DirRecoveryTests(DirRestoreCase):
         shutil.rmtree(self.home)
         self.home.mkdir()
         self.populate(marker='pre')
+        pre = snapshot(self.home / HTML)
         owner = self.kill_at('after-swap')  # the restore swapped HTML (the original is the -old-<job> copy)
         failed_content = snapshot(self.home / HTML)
         self.kill_at('between-renames', rollback=True)  # then the rollback was killed between its renames
-        notes = self.recover(self.new_owner(populate=False))
-        self.assertEqual(snapshot(self.home / HTML), failed_content, 'the last step is undone')
-        self.assertEqual(self.siblings(HTML), [f'.woowbk-old-{JOB}'])
-        self.assertIn(f'~/{HTML}.woowbk-old-{JOB}', ' '.join(notes))
+        notes = ' '.join(self.recover(self.new_owner(populate=False)))
+        self.assertEqual(snapshot(self.home / HTML), pre, 'the content before the restore comes back (review L4)')
+        self.assertEqual(self.siblings(HTML), [f'.woowbk-old-{ROLLBACK}'])
+        self.assertEqual(snapshot(self.home / (HTML + f'.woowbk-old-{ROLLBACK}')), failed_content, 'kept, reported')
+        self.assertIn(f'已把 ~/{HTML} 移回還原前的原內容（~/{HTML}.woowbk-old-{JOB}）', notes)
+        self.assertIn(f'~/{HTML} 還原失敗時寫入的內容保留在 ~/{HTML}.woowbk-old-{ROLLBACK}', notes)
         self.assertTrue(owner)
 
     def test_fresh_deployment_killed_during_its_extraction(self):

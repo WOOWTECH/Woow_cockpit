@@ -194,26 +194,42 @@ main()
 # Host directories (catalog `data_dirs`). Executed as `podman unshare /usr/bin/python3 -I -c DIR_HELPER <op> ...`,
 # i.e. as the owner inside his rootless user namespace (uid 0 there), so files of his subordinate ids (container
 # users such as www-data or postgres) can be read, created with their owners, and removed. It never has more than
-# the owner's own rights. Every path component from $HOME down is opened with O_NOFOLLOW (a directory that is a
-# symlink, or lies below one, is refused), the directory itself is reached through a directory fd (fchdir) before
-# GNU tar runs, and renames use renameat2(RENAME_NOREPLACE). Siblings are `<name>.woowbk-new-<token>` (being
-# written) and `<name>.woowbk-old-<token>` (the replaced copy). Operations:
-#   pack <rel>                     GNU tar (POSIX format, numeric owners, xattrs) of the directory -> stdout
-#   measure <rel>                  {"bytes", "members"}: apparent size of regular files (hard links once), entries
+# the owner's own rights. The owner also controls that namespace (he can bind-mount over /usr/bin/python3 in it), so
+# every answer is untrusted: OwnerRunner checks its shape and turns anything else into a BackupError (review M1).
+# Every path component from $HOME down is opened with O_NOFOLLOW (a directory that is a symlink, or lies below one,
+# is refused), the directory itself is reached through a directory fd (fchdir) before GNU tar runs, and renames use
+# renameat2(RENAME_NOREPLACE). A directory must be on its parent's filesystem and hold no other mount (review M2):
+# measure and mounts report mount points, pack stays on one filesystem, swap and revert refuse a mount point, and a
+# removal checks every directory's device before deleting anything. Siblings are `<name>.woowbk-new-<token>` (being
+# written), `<name>.woowbk-old-<token>` (the replaced copy) and `<name>.woowbk-del-<token>` (an old copy being
+# deleted: renamed first, so an interrupted deletion is never taken for content worth keeping). Operations:
+#   pack <rel>                     GNU tar (POSIX format, numeric owners, xattrs, one filesystem) of it -> stdout
+#   measure <rel>                  {"bytes", "members", "acls", "mount_root", "mounts", "more_mounts"}: apparent size of
+#                                  regular files (hard links once), entries, entries with POSIX ACLs, mount points
+#   mounts <rel>                   {"mount_root", "mounts", "more_mounts"} (walks directories only)
 #   unpack <rel> <token>           stdin tar -> new sibling (missing parents created 0700); {"created": [parents]}
 #   swap <rel> <token> inplace|fresh  <name> -> old sibling (inplace) or rmdir an empty <name> (fresh), then
 #                                  new sibling -> <name>; {"replaced", "removed_empty"}
-#   drop <rel> new|old|target <token>  remove a sibling (or <name> itself: "target") without following symlinks
+#   revert <rel> <token> <rtoken>  a rollback without a copy: <name> -> old sibling of <rtoken>, then the old sibling
+#                                  of <token> (the content before the restore) -> <name>; {"replaced"}
+#   drop <rel> new|old|del|target <token>  remove a sibling (old: renamed to del first) or <name> itself ("target")
+#                                  without following symlinks or crossing into another filesystem
 #   back <rel> <token>             old sibling -> <name>, only while <name> is missing
-#   state <rel>...                 JSON list of {path, type, empty, siblings: [{kind, token, type}]}
+#   state <tokens> <rel>...        JSON list of {path, type, empty, mount, dev, free, siblings: [{kind, token, type}],
+#                                  more}; the siblings of the comma-separated <tokens> ("-": none) are always listed,
+#                                  other siblings up to 50 (`more` counts the rest; review M4)
 DIR_HELPER = r'''
 import ctypes, errno, json, os, re, shutil, stat, subprocess, sys
 TAR = '/usr/bin/tar'
-CODES = {'not-found': 3, 'not-dir': 4, 'bad-path': 6, 'bad-command': 8, 'exists': 9, 'not-empty': 10, 'tar': 11}
+CODES = {'not-found': 3, 'not-dir': 4, 'bad-path': 6, 'bad-command': 8, 'exists': 9, 'not-empty': 10, 'tar': 11,
+         'mount': 12}
 SEG = re.compile(r'[A-Za-z0-9._@+-]{1,255}\Z')
 TOKEN = re.compile(r'[A-Za-z0-9][A-Za-z0-9._-]{0,63}\Z')
-SIBLING = re.compile(r'\.woowbk-(new|old)-([A-Za-z0-9][A-Za-z0-9._-]{0,63})\Z')
+SIBLING = re.compile(r'\.woowbk-(new|old|del)-([A-Za-z0-9][A-Za-z0-9._-]{0,63})\Z')
 DIRFLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
+ACLS = ('system.posix_acl_access', 'system.posix_acl_default')
+MAX_SIBLINGS, MAX_MOUNTS = 50, 16
+LIBC = ctypes.CDLL(None, use_errno=True)
 def die(code, detail=''):
     sys.stderr.write(code + (': ' + detail if detail else '') + '\n')
     sys.exit(CODES.get(code, 1))
@@ -253,12 +269,15 @@ def kind_of(dfd, name):
     except FileNotFoundError:
         return 'missing'
     return 'dir' if stat.S_ISDIR(st.st_mode) else 'link' if stat.S_ISLNK(st.st_mode) else 'other'
+def is_mount(dfd, name):
+    return os.stat(name, dir_fd=dfd, follow_symlinks=False).st_dev != os.fstat(dfd).st_dev
+def shown(path):
+    return path.encode('utf-8', 'surrogateescape').decode('utf-8', 'replace')[:300]
 def rename(dfd, old, new):
     try:
-        libc = ctypes.CDLL(None, use_errno=True)
-        fn = libc.renameat2
+        fn = LIBC.renameat2
         fn.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_uint]
-    except (OSError, AttributeError):
+    except AttributeError:
         fn = None
     if fn is not None:
         if fn(dfd, os.fsencode(old), dfd, os.fsencode(new), 1) == 0:
@@ -271,25 +290,84 @@ def rename(dfd, old, new):
     if kind_of(dfd, new) != 'missing':
         die('exists', new)
     os.rename(old, new, src_dir_fd=dfd, dst_dir_fd=dfd)
+def sync_fs(fd):
+    # Only the filesystem being written (review L7): os.sync() waited for every mount, a hung NFS one included.
+    try:
+        fn = LIBC.syncfs
+    except AttributeError:
+        os.sync()
+        return
+    if fn(fd) != 0:
+        err = ctypes.get_errno()
+        raise OSError(err, os.strerror(err))
+def scan(dfd, files):
+    """Walk the directory open at dfd without following symlinks; a mount point below it is reported and not
+    entered. files=True also counts entries, bytes of regular files (hard links once) and entries with ACLs."""
+    dev = os.fstat(dfd).st_dev
+    out = {'mounts': [], 'more_mounts': 0, 'bytes': 0, 'members': 1, 'acls': 0}
+    seen = set()
+    for top, dirs, names, fd in os.fwalk('.', dir_fd=dfd, follow_symlinks=False):
+        kept = []
+        for name in dirs:
+            try:
+                st = os.stat(name, dir_fd=fd, follow_symlinks=False)
+            except FileNotFoundError:
+                continue
+            if st.st_dev == dev:
+                kept.append(name)
+            elif len(out['mounts']) < MAX_MOUNTS:
+                out['mounts'].append(shown(os.path.normpath(os.path.join(top, name))))
+            else:
+                out['more_mounts'] += 1
+        dirs[:] = kept
+        if not files:
+            continue
+        out['members'] += len(kept) + len(names)
+        os.fchdir(fd)
+        for name in kept + names + (['.'] if top == '.' else []):
+            try:
+                if any(attr in ACLS for attr in os.listxattr(name, follow_symlinks=False)):
+                    out['acls'] += 1
+            except OSError:
+                pass
+        for name in names:
+            st = os.stat(name, dir_fd=fd, follow_symlinks=False)
+            if stat.S_ISREG(st.st_mode) and (st.st_nlink < 2 or (st.st_dev, st.st_ino) not in seen):
+                out['bytes'] += st.st_size
+                if st.st_nlink > 1:
+                    seen.add((st.st_dev, st.st_ino))
+    os.chdir('/')
+    return out
+def one_filesystem(pfd, name):
+    """Refuse, before anything is changed, a tree that is a mount point or holds one."""
+    if is_mount(pfd, name):
+        die('mount', name)
+    dfd = os.open(name, DIRFLAGS, dir_fd=pfd)
+    try:
+        found = scan(dfd, False)['mounts']
+    finally:
+        os.close(dfd)
+    if found:
+        die('mount', found[0])
+def remove(pfd, name, checked=False):
+    if not checked:
+        one_filesystem(pfd, name)
+    shutil.rmtree(name, dir_fd=pfd)
+    os.fsync(pfd)
 def op_pack(rel):
     pfd, name, _ = parent(rel)
     dfd = os.open(name, DIRFLAGS, dir_fd=pfd)
     os.fchdir(dfd)
     os.execv(TAR, [TAR, '--create', '--file=-', '--format=posix', '--numeric-owner', '--xattrs', '--no-acls',
-                   '--no-selinux', '.'])
-def op_measure(rel):
+                   '--no-selinux', '--one-file-system', '.'])
+def op_measure(rel, files):
     pfd, name, _ = parent(rel)
     dfd = os.open(name, DIRFLAGS, dir_fd=pfd)
-    total, members, seen = 0, 1, set()
-    for _top, dirs, files, fd in os.fwalk('.', dir_fd=dfd, follow_symlinks=False):
-        members += len(dirs) + len(files)
-        for entry in files:
-            st = os.stat(entry, dir_fd=fd, follow_symlinks=False)
-            if stat.S_ISREG(st.st_mode) and (st.st_nlink < 2 or (st.st_dev, st.st_ino) not in seen):
-                total += st.st_size
-                if st.st_nlink > 1:
-                    seen.add((st.st_dev, st.st_ino))
-    sys.stdout.write(json.dumps({'bytes': total, 'members': members}))
+    out = scan(dfd, files)
+    out['mount_root'] = os.fstat(dfd).st_dev != os.fstat(pfd).st_dev
+    if not files:
+        out = {key: out[key] for key in ('mount_root', 'mounts', 'more_mounts')}
+    sys.stdout.write(json.dumps(out))
 def op_unpack(rel, token):
     pfd, name, created = parent(rel, create=True)
     new = sibling(name, 'new', token)
@@ -308,7 +386,7 @@ def op_unpack(rel, token):
         except OSError:
             pass
         die('tar', 'exit %d' % code)
-    os.sync()
+    sync_fs(nfd)
     sys.stdout.write(json.dumps({'created': created}))
 def op_swap(rel, token, mode):
     if mode not in ('inplace', 'fresh'):
@@ -318,6 +396,8 @@ def op_swap(rel, token, mode):
     if kind_of(pfd, new) != 'dir':
         die('not-found', new)
     current, replaced, removed = kind_of(pfd, name), False, False
+    if current == 'dir' and is_mount(pfd, name):
+        die('mount', name)
     if current == 'dir' and mode == 'fresh':
         try:
             os.rmdir(name, dir_fd=pfd)
@@ -334,8 +414,24 @@ def op_swap(rel, token, mode):
     rename(pfd, new, name)
     os.fsync(pfd)
     sys.stdout.write(json.dumps({'replaced': replaced, 'removed_empty': removed}))
+def op_revert(rel, token, rtoken):
+    pfd, name, _ = parent(rel)
+    old, aside = sibling(name, 'old', token), sibling(name, 'old', rtoken)
+    if kind_of(pfd, old) != 'dir':
+        die('not-found', old)
+    current, replaced = kind_of(pfd, name), False
+    if current == 'dir':
+        if is_mount(pfd, name):
+            die('mount', name)
+        rename(pfd, name, aside)
+        replaced = True
+    elif current != 'missing':
+        die('not-dir', name)
+    rename(pfd, old, name)
+    os.fsync(pfd)
+    sys.stdout.write(json.dumps({'replaced': replaced}))
 def op_drop(rel, which, token):
-    if which not in ('new', 'old', 'target'):
+    if which not in ('new', 'old', 'del', 'target'):
         die('bad-command')
     try:
         pfd, name, _ = parent(rel)
@@ -349,8 +445,18 @@ def op_drop(rel, which, token):
         return
     if kind != 'dir':
         die('not-dir', target)
-    shutil.rmtree(target, dir_fd=pfd)
-    os.fsync(pfd)
+    one_filesystem(pfd, target)
+    if which == 'old':
+        doomed = sibling(name, 'del', token)
+        left = kind_of(pfd, doomed)
+        if left == 'dir':
+            remove(pfd, doomed)  # an earlier deletion of this token was cut short
+        elif left != 'missing':
+            die('not-dir', doomed)
+        rename(pfd, target, doomed)
+        os.fsync(pfd)
+        target = doomed
+    remove(pfd, target, checked=True)
     sys.stdout.write('removed')
 def op_back(rel, token):
     pfd, name, _ = parent(rel)
@@ -362,10 +468,12 @@ def op_back(rel, token):
     rename(pfd, old, name)
     os.fsync(pfd)
     sys.stdout.write('restored')
-def op_state(rels):
+def op_state(tokens, rels):
+    wanted = set() if tokens == '-' else {check_token(token) for token in tokens.split(',')}
     rows = []
     for rel in rels:
-        row = {'path': rel, 'type': 'missing', 'empty': None, 'siblings': []}
+        row = {'path': rel, 'type': 'missing', 'empty': None, 'mount': False, 'dev': None, 'free': None,
+               'siblings': [], 'more': 0}
         rows.append(row)
         try:
             pfd, name, _ = parent(rel)
@@ -374,42 +482,53 @@ def op_state(rels):
         except OSError:
             row['type'] = 'blocked'
             continue
-        row['type'] = kind_of(pfd, name)
-        if row['type'] == 'dir':
-            try:
-                dfd = os.open(name, DIRFLAGS, dir_fd=pfd)
-                with os.scandir(dfd) as entries:
-                    row['empty'] = next(entries, None) is None
-                os.close(dfd)
-            except OSError:
-                row['type'] = 'blocked'
-        prefix = name + '.woowbk-'
-        with os.scandir(pfd) as entries:
-            for entry in entries:
-                match = SIBLING.fullmatch(entry.name[len(name):]) if entry.name.startswith(prefix) else None
-                if match and len(row['siblings']) < 50:
-                    row['siblings'].append({'kind': match.group(1), 'token': match.group(2),
-                                            'type': 'dir' if entry.is_dir(follow_symlinks=False) else 'other'})
-        row['siblings'].sort(key=lambda item: (item['token'], item['kind']))
-        os.close(pfd)
+        found = []
+        try:
+            vfs = os.fstatvfs(pfd)
+            row['dev'], row['free'] = os.fstat(pfd).st_dev, vfs.f_bavail * vfs.f_frsize
+            row['type'] = kind_of(pfd, name)
+            if row['type'] == 'dir':
+                try:
+                    row['mount'] = is_mount(pfd, name)
+                    dfd = os.open(name, DIRFLAGS, dir_fd=pfd)
+                    with os.scandir(dfd) as entries:
+                        row['empty'] = next(entries, None) is None
+                    os.close(dfd)
+                except OSError:
+                    row['type'], row['empty'] = 'blocked', None
+            prefix = name + '.woowbk-'
+            with os.scandir(pfd) as entries:
+                for entry in entries:
+                    match = SIBLING.fullmatch(entry.name[len(name):]) if entry.name.startswith(prefix) else None
+                    if match:
+                        found.append({'kind': match.group(1), 'token': match.group(2),
+                                      'type': 'dir' if entry.is_dir(follow_symlinks=False) else 'other'})
+        finally:
+            os.close(pfd)
+        found.sort(key=lambda item: (item['token'], item['kind']))
+        others = [item for item in found if item['token'] not in wanted]
+        row['siblings'] = [item for item in found if item['token'] in wanted] + others[:MAX_SIBLINGS]
+        row['more'] = max(0, len(others) - MAX_SIBLINGS)
     sys.stdout.write(json.dumps(rows))
 def main():
     op, args = sys.argv[1], sys.argv[2:]
     try:
         if op == 'pack' and len(args) == 1:
             op_pack(args[0])
-        elif op == 'measure' and len(args) == 1:
-            op_measure(args[0])
+        elif op in ('measure', 'mounts') and len(args) == 1:
+            op_measure(args[0], op == 'measure')
         elif op == 'unpack' and len(args) == 2:
             op_unpack(args[0], args[1])
         elif op == 'swap' and len(args) == 3:
             op_swap(*args)
+        elif op == 'revert' and len(args) == 3:
+            op_revert(*args)
         elif op == 'drop' and len(args) == 3:
             op_drop(*args)
         elif op == 'back' and len(args) == 2:
             op_back(*args)
-        elif op == 'state' and args:
-            op_state(args)
+        elif op == 'state' and len(args) >= 2:
+            op_state(args[0], args[1:])
         else:
             die('bad-command')
     except FileNotFoundError:
@@ -419,11 +538,13 @@ def main():
             die('not-dir')
         if error.errno in (errno.ENOTEMPTY, errno.EEXIST):
             die('not-empty')
+        if error.errno in (errno.EBUSY, errno.EXDEV):
+            die('mount', os.strerror(error.errno))
         die('io-error', os.strerror(error.errno or 0))
 main()
 '''
 DIR_HELPER_ERRORS = {3: 'not-found', 4: 'not-dir', 6: 'bad-path', 8: 'bad-command', 9: 'exists', 10: 'not-empty',
-                     11: 'tar'}
+                     11: 'tar', 12: 'mount'}
 
 
 @dataclass
@@ -721,7 +842,7 @@ class OwnerRunner:
         """BackupError for a failed DIR_HELPER call (the relay passes the helper's exit status through podman)."""
         code = DIR_HELPER_ERRORS.get(result.returncode)
         detail = (result.stderr or b'').decode('utf-8', 'replace').strip().splitlines()
-        detail = detail[-1][:200] if detail else ''
+        detail = _printable(detail[-1][:200]) if detail else ''
         if code == 'not-found':
             return BackupError('not-found', f'找不到主機資料夾 ~/{rel}（或它的上層資料夾）。', path=rel)
         if code == 'not-dir':
@@ -731,8 +852,25 @@ class OwnerRunner:
                                              '可能是先前中斷的還原留下的；請先確認後再試。', path=rel)
         if code == 'not-empty':
             return BackupError('incompatible', f'~/{rel} 已存在且不是空的資料夾，為避免覆寫既有資料而停止。', path=rel)
+        if code == 'mount':
+            return BackupError('incompatible', f'~/{rel} 是掛載點或其中有其他檔案系統的掛載；為避免移動或刪除其他檔案系統的內容，'
+                                               f'無法{what}這個主機資料夾。', path=rel)
         return CommandError(f'無法以擁有者身分{what}主機資料夾 ~/{rel}（結束碼 {result.returncode}）。',
                             returncode=result.returncode, stderr=result.stderr, command=f'owner-dir {what}')
+
+    @staticmethod
+    def _dir_answer(result, rel, what, check):
+        """The JSON a DIR_HELPER call printed, once `check(value)` accepts its shape. The helper runs in the owner's
+        namespace, so the answer is untrusted: undecodable or deeply nested JSON and any other shape are a
+        BackupError, never a TypeError that would skip a rollback (review M1)."""
+        try:
+            value = json.loads((result.stdout or b'').decode('utf-8'))
+            ok = check(value)
+        except (ValueError, RecursionError, TypeError, KeyError, AttributeError):
+            ok = False
+        if not ok:
+            raise BackupError('job-failed', f'主機資料夾 ~/{rel} 的{what}結果格式不正確，已停止。', path=rel)
+        return value
 
     def dir_pack(self, rel_path, *, stdout, timeout=3 * 3600, max_output=None):
         """GNU tar of ~/<rel_path>, read as the owner inside his user namespace, through the owner-side relay."""
@@ -743,16 +881,24 @@ class OwnerRunner:
             raise self._dir_failure(result, rel_path, '讀取')
 
     def dir_measure(self, rel_path):
-        """(apparent bytes of the regular files, number of entries) of ~/<rel_path>."""
+        """{'bytes', 'members', 'acls', 'mount_root', 'mounts', 'more_mounts'} of ~/<rel_path>: apparent bytes of the
+        regular files, entries, entries with POSIX ACLs (not kept), and mount points at or below it."""
         validate_rel_path(rel_path)
         result = self.run(self._dir_argv('measure', rel_path), timeout=1800, check=False, max_output=SMALL_JSON)
         if result.returncode:
             raise self._dir_failure(result, rel_path, '讀取')
-        try:
-            data = json.loads((result.stdout or b'').decode('utf-8'))
-            return int(data['bytes']), int(data['members'])
-        except (ValueError, KeyError, TypeError):
-            raise BackupError('job-failed', f'無法估算主機資料夾 ~/{rel_path} 的大小。', path=rel_path) from None
+        data = self._dir_answer(result, rel_path, '大小估算', lambda d: isinstance(d, dict) and _mounts_ok(d) and all(
+            _count(d[key]) for key in ('bytes', 'members', 'acls')))
+        return {key: data[key] for key in ('bytes', 'members', 'acls', 'mount_root', 'mounts', 'more_mounts')}
+
+    def dir_mounts(self, rel_path):
+        """{'mount_root', 'mounts', 'more_mounts'}: whether ~/<rel_path> is a mount point, and mount points below it."""
+        validate_rel_path(rel_path)
+        result = self.run(self._dir_argv('mounts', rel_path), timeout=1800, check=False, max_output=SMALL_JSON)
+        if result.returncode:
+            raise self._dir_failure(result, rel_path, '讀取')
+        data = self._dir_answer(result, rel_path, '掛載檢查', lambda d: isinstance(d, dict) and _mounts_ok(d))
+        return {key: data[key] for key in ('mount_root', 'mounts', 'more_mounts')}
 
     def dir_unpack(self, rel_path, token, *, input, timeout=3 * 3600):
         """Extract a (canonical) tar from `input` into ~/<rel_path>.woowbk-new-<token>, creating missing parents as
@@ -762,11 +908,11 @@ class OwnerRunner:
                           check=False, max_output=SMALL_JSON)
         if result.returncode:
             raise self._dir_failure(result, rel_path, '寫入')
-        try:
-            created = json.loads((result.stdout or b'').decode('utf-8')).get('created') or []
-        except (ValueError, AttributeError):
-            created = []
-        return [item for item in created if isinstance(item, str)]
+        parents = {'/'.join(rel_path.split('/')[:i]) for i in range(1, rel_path.count('/') + 1)}
+        data = self._dir_answer(result, rel_path, '寫入', lambda d: isinstance(d, dict) and isinstance(
+            d['created'], list) and len(set(d['created'])) == len(d['created']) and all(
+                isinstance(item, str) and item in parents for item in d['created']))
+        return list(data['created'])
 
     def dir_swap(self, rel_path, token, *, fresh=False):
         """Move ~/<rel_path> aside (`.woowbk-old-<token>`; fresh: remove it when empty) and the new sibling in."""
@@ -775,16 +921,28 @@ class OwnerRunner:
                           timeout=SHORT_TIMEOUT, check=False, max_output=SMALL_JSON)
         if result.returncode:
             raise self._dir_failure(result, rel_path, '替換')
-        try:
-            data = json.loads((result.stdout or b'').decode('utf-8'))
-        except ValueError:
-            data = {}
-        return {'replaced': bool(data.get('replaced')), 'removed_empty': bool(data.get('removed_empty'))}
+        data = self._dir_answer(result, rel_path, '替換', lambda d: isinstance(d, dict) and set(d) == {
+            'replaced', 'removed_empty'} and all(type(value) is bool for value in d.values()))
+        return {'replaced': data['replaced'], 'removed_empty': data['removed_empty']}
+
+    def dir_revert(self, rel_path, token, rollback_token):
+        """Rollback without a copy: ~/<rel_path> (the failed restore's data) moves to `.woowbk-old-<rollback_token>`,
+        and `.woowbk-old-<token>` (what the directory held before the restore) moves back; {'replaced'}."""
+        validate_rel_path(rel_path)
+        result = self.run(self._dir_argv('revert', rel_path, self._check_token(token),
+                                         self._check_token(rollback_token)),
+                          timeout=SHORT_TIMEOUT, check=False, max_output=SMALL_JSON)
+        if result.returncode:
+            raise self._dir_failure(result, rel_path, '移回')
+        data = self._dir_answer(result, rel_path, '移回', lambda d: isinstance(d, dict) and set(d) == {'replaced'}
+                                and type(d['replaced']) is bool)
+        return {'replaced': data['replaced']}
 
     def dir_drop(self, rel_path, which, token='-'):
-        """Remove `<rel>.woowbk-new-<token>` / `-old-<token>`, or ~/<rel_path> itself ('target'); True if removed."""
+        """Remove `<rel>.woowbk-new|old|del-<token>`, or ~/<rel_path> itself ('target'); True if removed. An old copy
+        is renamed to `del` first, so an interrupted deletion leaves a name the recovery deletes."""
         validate_rel_path(rel_path)
-        if which not in ('new', 'old', 'target'):
+        if which not in ('new', 'old', 'del', 'target'):
             raise BackupError('internal-error', '內部命令格式不正確。')
         if which != 'target':
             self._check_token(token)
@@ -802,18 +960,53 @@ class OwnerRunner:
         if result.returncode:
             raise self._dir_failure(result, rel_path, '移回')
 
-    def dir_states(self, rel_paths):
-        """{rel: {'type': 'dir'|'missing'|'link'|'other'|'blocked', 'empty': bool|None,
-        'siblings': [{'kind': 'new'|'old', 'token', 'type'}]}} of host directories, read inside the namespace."""
+    def dir_states(self, rel_paths, tokens=()):
+        """{rel: {'type': 'dir'|'missing'|'link'|'other'|'blocked', 'empty': bool|None, 'mount': bool,
+        'dev': int|None, 'free': int|None, 'siblings': [{'kind': 'new'|'old'|'del', 'token', 'type'}], 'more': int}}
+        of host directories, read inside the namespace. The siblings of `tokens` are always listed, others up to 50."""
         rel_paths = [validate_rel_path(rel) for rel in rel_paths]
         if not rel_paths:
             return {}
-        result = self.run(self._dir_argv('state', *rel_paths), timeout=SHORT_TIMEOUT, check=False,
-                          max_output=SMALL_JSON)
+        tokens = [self._check_token(token) for token in tokens]
+        result = self.run(self._dir_argv('state', ','.join(tokens) or '-', *rel_paths), timeout=SHORT_TIMEOUT,
+                          check=False, max_output=SMALL_JSON)
         if result.returncode:
             raise self._dir_failure(result, rel_paths[0], '讀取')
-        try:
-            rows = json.loads((result.stdout or b'').decode('utf-8'))
-        except ValueError:
-            raise BackupError('job-failed', '無法讀取主機資料夾的狀態。') from None
-        return {row['path']: row for row in rows if isinstance(row, dict) and row.get('path') in rel_paths}
+        rows = self._dir_answer(result, rel_paths[0], '狀態讀取', lambda d: isinstance(d, list) and sorted(
+            row['path'] for row in d) == sorted(rel_paths) and all(_state_ok(row) for row in d))
+        return {row['path']: row for row in rows}
+
+
+def _printable(text):
+    """Owner-controlled text (helper stderr, paths) for a message: no control characters."""
+    return ''.join(ch if ch.isprintable() else '?' for ch in text)
+
+
+def _count(value):
+    return type(value) is int and value >= 0
+
+
+def _mounts_ok(data):
+    mounts = data['mounts']
+    return (type(data['mount_root']) is bool and _count(data['more_mounts']) and isinstance(mounts, list)
+            and len(mounts) <= 16 and all(isinstance(item, str) and 0 < len(item) <= 300 for item in mounts))
+
+
+STATE_TYPES = ('dir', 'missing', 'link', 'other', 'blocked')
+STATE_KEYS = {'path', 'type', 'empty', 'mount', 'dev', 'free', 'siblings', 'more'}
+
+
+def _state_ok(row):
+    """One row of the `state` answer, checked field by field (review M1)."""
+    if not isinstance(row, dict) or set(row) != STATE_KEYS or row['type'] not in STATE_TYPES:
+        return False
+    if not (row['empty'] is None or type(row['empty']) is bool) or type(row['mount']) is not bool \
+            or not _count(row['more']):
+        return False
+    if not all(row[key] is None or _count(row[key]) for key in ('dev', 'free')):
+        return False
+    siblings = row['siblings']
+    return isinstance(siblings, list) and len(siblings) <= 64 and all(
+        isinstance(item, dict) and set(item) == {'kind', 'token', 'type'} and item['kind'] in ('new', 'old', 'del')
+        and isinstance(item['token'], str) and TOKEN_RE.fullmatch(item['token']) and item['type'] in ('dir', 'other')
+        for item in siblings)

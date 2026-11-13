@@ -4,6 +4,7 @@ The FILE_HELPER snippet is executed for real (as the current user, with HOME poi
 home) to prove the O_NOFOLLOW component walk, atomic writes and modes.
 """
 import io
+import json
 import os
 import stat
 import subprocess
@@ -537,9 +538,11 @@ class DirHelperTests(unittest.TestCase):
 
     def test_measure_and_failed_unpack(self):
         top = self.build()
-        size, members = self.runner.dir_measure('apps/data')
+        info = self.runner.dir_measure('apps/data')
         expected = sum(row[2] for path, row in tree(top).items() if path != 'www/second-name.php')
-        self.assertEqual((size, members), (expected, len(tree(top)) + 1))
+        self.assertEqual((info['bytes'], info['members']), (expected, len(tree(top)) + 1))
+        self.assertEqual((info['mount_root'], info['mounts'], info['more_mounts'], info['acls']), (False, [], 0, 0))
+        self.assertEqual(self.runner.dir_mounts('apps/data'), {'mount_root': False, 'mounts': [], 'more_mounts': 0})
         garbage = Path(self.tmp.name) / 'garbage'
         garbage.write_bytes(b'not a tar' * 100)
         with open(garbage, 'rb') as feed, self.assertRaises(BackupError) as caught:
@@ -550,6 +553,69 @@ class DirHelperTests(unittest.TestCase):
         with self.assertRaises(BackupError) as caught:
             self.unpack('apps/other', 'j1', self.pack('apps/data'))
         self.assertIn('旁已有同名的資料夾', caught.exception.message)
+
+    def test_revert_moves_the_previous_content_back_without_a_copy(self):
+        # Review M3: a rollback moves the failed restore's data aside and the content before it back (two renames).
+        top = self.build()
+        before = tree(top)
+        packed = self.pack('apps/data')
+        (top / 'added-later').write_text('pre-restore only')
+        before_restore = tree(top)
+        self.unpack('apps/data', 'j1', packed)
+        self.runner.dir_swap('apps/data', 'j1')
+        self.assertEqual(tree(top), before)
+        self.assertEqual(self.runner.dir_revert('apps/data', 'j1', 'j1-rollback'), {'replaced': True})
+        self.assertEqual(tree(top), before_restore, 'what the directory held before the restore')
+        self.assertEqual(tree(self.home / 'apps/data.woowbk-old-j1-rollback'), before, "the failed restore's data")
+        self.assertFalse((self.home / 'apps/data.woowbk-old-j1').exists())
+        with self.assertRaises(BackupError) as caught:  # nothing to move back any more
+            self.runner.dir_revert('apps/data', 'j1', 'j1-rollback')
+        self.assertEqual(caught.exception.code, 'not-found')
+        os.rename(top, self.home / 'apps/data.woowbk-old-j2')  # the directory is missing: only the move back
+        self.assertEqual(self.runner.dir_revert('apps/data', 'j2', 'j2-rollback'), {'replaced': False})
+        self.assertEqual(tree(top), before_restore)
+
+    def test_an_old_copy_is_renamed_before_it_is_deleted(self):
+        # Review L4: a deletion cut short leaves `-del-<token>`, never something that looks like content to keep.
+        self.build()
+        old = self.home / 'apps/data.woowbk-old-j3'
+        (old / 'deep').mkdir(parents=True)
+        (old / 'deep/file').write_text('old')
+        stale = self.home / 'apps/data.woowbk-del-j3'
+        stale.mkdir()
+        (stale / 'rest').write_text('half deleted')
+        state = self.runner.dir_states(['apps/data'], tokens=['j3'])['apps/data']
+        self.assertEqual(state['siblings'], [{'kind': 'del', 'token': 'j3', 'type': 'dir'},
+                                             {'kind': 'old', 'token': 'j3', 'type': 'dir'}])
+        self.assertTrue(self.runner.dir_drop('apps/data', 'old', 'j3'))
+        self.assertEqual(sorted(os.listdir(self.home / 'apps')), ['data'], 'the stale del copy went first')
+        stale.mkdir()
+        self.assertTrue(self.runner.dir_drop('apps/data', 'del', 'j3'))
+        self.assertFalse(self.runner.dir_drop('apps/data', 'del', 'j3'), 'already gone')
+
+    def test_state_always_lists_the_requested_tokens(self):
+        # Review M4: with many older siblings the job's own were cut off by the cap and the recovery did nothing.
+        self.build()
+        apps = self.home / 'apps'
+        for i in range(120):
+            (apps / f'data.woowbk-old-a{i:03d}').mkdir()
+        (apps / 'data.woowbk-old-zz-mine').mkdir()
+        (apps / 'data.woowbk-new-zz-mine').mkdir()
+        mine = self.runner.dir_states(['apps/data'], tokens=['zz-mine', 'zz-mine-rollback'])['apps/data']
+        self.assertEqual(mine['siblings'][:2], [{'kind': 'new', 'token': 'zz-mine', 'type': 'dir'},
+                                                {'kind': 'old', 'token': 'zz-mine', 'type': 'dir'}])
+        self.assertEqual((len(mine['siblings']), mine['more']), (52, 70))
+        plain = self.runner.dir_states(['apps/data'])['apps/data']
+        self.assertEqual((len(plain['siblings']), plain['more']), (50, 72))
+        self.assertEqual(plain['siblings'][0]['token'], 'a000', 'sorted, so the listing is stable')
+
+    def test_state_reports_the_filesystem_of_each_directory(self):
+        top = self.build()
+        state = self.runner.dir_states(['apps/data', 'apps/missing'])
+        self.assertEqual((state['apps/data']['dev'], state['apps/data']['mount']), (os.stat(top.parent).st_dev, False))
+        self.assertGreater(state['apps/data']['free'], 0)
+        self.assertEqual(state['apps/missing']['dev'], os.stat(top.parent).st_dev, 'the parent exists')
+        self.assertEqual(self.runner.dir_states(['nothing/here'])['nothing/here']['dev'], None)
 
     def test_arguments_are_validated_before_anything_runs(self):
         for call in (lambda: self.runner.dir_states(['../x']), lambda: self.runner.dir_drop('a', 'old', '../x'),
@@ -581,8 +647,43 @@ class DirArgvTests(unittest.TestCase):
         self.assertEqual(podman.describe(argvs[0][len(EXPECTED_PREFIX):]), 'owner-dir pack .local/share/app/html')
         self.assertEqual(podman.describe(argvs[1][len(EXPECTED_PREFIX):]), 'owner-dir swap homeassistant/config')
 
+    def test_owner_controlled_answers_of_another_shape_are_errors(self):
+        # Review M1: the helper runs in a namespace the owner controls (he can bind-mount over python3 there), so
+        # its answers are untrusted; anything but the documented shape is a BackupError, never a TypeError.
+        row = {'path': 'data', 'type': 'dir', 'empty': False, 'mount': False, 'dev': 1, 'free': 2, 'siblings': [],
+               'more': 0}
+        sibling = {'kind': 'old', 'token': 'j1', 'type': 'dir'}
+        bad_states = [b'', b'\xff', b'[' * 50000 + b']' * 50000, b'{}', b'[]', json.dumps([row, row]),
+                      json.dumps([{**row, 'path': 'other'}]), json.dumps([{**row, 'type': 'socket'}]),
+                      json.dumps([{**row, 'empty': 0}]), json.dumps([{**row, 'more': -1}]),
+                      json.dumps([{**row, 'extra': 1}]), json.dumps([{**row, 'siblings': [{**sibling, 'token': '../x'}]}]),
+                      json.dumps([{**row, 'siblings': [{**sibling, 'kind': 'all'}]}]),
+                      json.dumps([{**row, 'siblings': [sibling] * 65}]), json.dumps([{**row, 'dev': 'x'}])]
+        calls = [(lambda: self.runner.dir_states(['data']), [s.encode() if isinstance(s, str) else s for s in bad_states]),
+                 (lambda: self.runner.dir_swap('data', 'j1'), [b'[]', b'{"replaced": 1, "removed_empty": false}',
+                                                               b'{"replaced": true}']),
+                 (lambda: self.runner.dir_revert('data', 'j1', 'j1-rollback'), [b'{"replaced": "yes"}', b'null']),
+                 (lambda: self.runner.dir_unpack('data/deep', 'j1', input=b''), [b'{"created": ["/etc"]}',
+                                                                                 b'{"created": "data"}', b'{}']),
+                 (lambda: self.runner.dir_measure('data'), [b'{"bytes": 1}', b'{"bytes": -1, "members": 1, "acls": 0, '
+                                                            b'"mount_root": false, "mounts": [], "more_mounts": 0}']),
+                 (lambda: self.runner.dir_mounts('data'), [b'{"mount_root": 0, "mounts": [], "more_mounts": 0}',
+                                                           b'{"mount_root": false, "mounts": [1], "more_mounts": 0}'])]
+        for call, answers in calls:
+            for answer in answers:
+                with self.subTest(answer=answer[:40]):
+                    self.rec.result = podman.Result(0, answer, b'')
+                    with self.assertRaises(BackupError) as caught:
+                        call()
+                    self.assertEqual(caught.exception.code, 'job-failed')
+                    self.assertIn('結果格式不正確', caught.exception.message)
+        self.rec.result = podman.Result(0, json.dumps([{**row, 'siblings': [sibling]}]).encode(), b'')
+        self.assertEqual(self.runner.dir_states(['data'], tokens=['j1'])['data']['siblings'], [sibling])
+        self.assertEqual(self.rec.calls[-1][0][-2:], ['j1', 'data'], 'the tokens come first')
+
     def test_error_mapping(self):
         cases = {3: ('not-found', '找不到主機資料夾 ~/data'), 4: ('permission-denied', '不是資料夾'),
+                 12: ('incompatible', '是掛載點或其中有其他檔案系統的掛載'),
                  9: ('job-failed', '旁已有同名的資料夾'), 10: ('incompatible', '不是空的資料夾'),
                  11: ('job-failed', '無法以擁有者身分替換主機資料夾 ~/data'), 125: ('job-failed', '結束碼 125')}
         for code, (error_code, needle) in cases.items():

@@ -387,6 +387,39 @@ class DataDirsTests(CatalogCase):
         for value in ('.sshkeys', '.config/containers-data', '.local/share/containers2', '.config/systemd-backup'):
             self.validate(self.entry({'path': value}))
 
+    def test_login_programs_tmpfiles_and_case_variants_are_forbidden(self):
+        # Review L1: user tmpfiles write any file of the owner at his next login; shell start-up files, program
+        # search paths and Python user site-packages run at his logins; a case-insensitive home matches .SSH.
+        for value in ('.local/share/user-tmpfiles.d', '.local/bin', 'bin', 'bin/tools', '.bashrc.d', '.config/fish',
+                      '.local/lib/python3.12/site-packages', '.SSH', '.Ssh/keys', '.Config/Systemd/user',
+                      '.LOCAL/share/containers'):
+            with self.subTest(value=value):
+                error = self.assert_rejected(lambda e, v=value: e.update(data_dirs=[{'path': v}]))
+                self.assertIn('不可等於、位於或包含', error.message)
+        self.validate(self.entry({'path': 'binaries'}, {'path': '.local/library'}))
+
+    def test_names_like_the_restore_siblings_are_refused(self):
+        # Review L3: `<dir>.woowbk-new-<job>` is the restore's own copy; a declared directory may not look like one.
+        for value in ('html.woowbk-new-keepme', 'apps/x.woowbk-old-1/data', 'data.WOOWBK-del-2'):
+            with self.subTest(value=value):
+                error = self.assert_rejected(lambda e, v=value: e.update(data_dirs=[{'path': v}]))
+                self.assertIn('.woowbk-', error.message)
+        self.validate(self.entry({'path': 'woowbk-data'}, {'path': 'data.woowbk'}))
+
+    def test_a_directory_may_not_hold_another_apps_config_file(self):
+        # Review L2: restoring the first app would replace the second one's config file with bytes from its archive.
+        first = self.entry({'path': '.config/woowbk-zz'})
+        first.update(id='woowbk-aa', config_files=[])
+        second = demo_entry(self.paths)
+        second.update(id='woowbk-zz', config_files=[{'path': '.config/woowbk-zz/app.env', 'mode': '0600'}])
+        self.write('woowbk-aa.json', first)
+        self.write('woowbk-zz.json', second)
+        loaded = self.load()
+        self.assertEqual(sorted(loaded), ['woowbk-aa'])
+        self.assertEqual(loaded.problem_for('woowbk-zz')['message'],
+                         '應用 woowbk-zz 的設定檔 ~/.config/woowbk-zz/app.env 與應用 woowbk-aa 的主機資料夾 ~/.config/woowbk-zz '
+                         '重疊（同一個擁有者），已略過 woowbk-zz.json。')
+
     def test_overlaps_and_duplicates(self):
         for first, second in (('data', 'data'), ('data', 'data/pg'), ('data/pg', 'data')):
             with self.subTest((first, second)):

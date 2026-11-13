@@ -740,7 +740,9 @@ def run_restore(ctx, params):
                 'internal-error', '還原過程發生未預期的錯誤。')
             _rollback(ctx, touched, result, staging, error, device_key)
         result['changed'] = True
-        # The job succeeded: the host-directory copies its restore moved aside can go now, and only now.
+        # The job succeeded: the host-directory copies its restore moved aside can go now, and only now. Recorded
+        # first, so a job that dies while deleting them is reported as a finished restore (review L4).
+        ctx.reporter.set_partial(finishing=True)
         _finish_dirs(ctx, [plan.adapter for plan in plans], result)
         # Only after a successful restore, and never the backups this restore depends on (review SEC-2, CR-02).
         if inplace:
@@ -791,7 +793,10 @@ def _discard_dirs(ctx, adapter):
     """Undo an adapter's unfinished host-directory step after a failure; returns zh-TW problems. A problem keeps the
     record's `dir_apps`, so the recovery settles those directories again later."""
     discard = getattr(adapter, 'discard_dirs', None)
-    problems = [str(problem) for problem in (discard() if discard else []) or []]
+    try:
+        problems = [str(problem) for problem in (discard() if discard else []) or []]
+    except Exception:  # noqa: BLE001 - never skips the rollback of the other apps (review M1)
+        problems = [f'無法整理「{adapter.app.name}」的主機資料夾，需人工確認']
     if problems:
         ctx.dirs_unsettled = True
     return problems
@@ -931,7 +936,9 @@ def _rollback(ctx, touched, result, staging, error, device_key):
                 if app_manifest is None:
                     raise BackupError('job-failed', '還原前備份不含此應用')
                 adapter = ctx.adapter(plan.app, phases=False)
-                adapter.restore(app_manifest, folder, mode='inplace', rollback=True)
+                swapped = getattr(plan.adapter, 'swapped_dirs', None)
+                adapter.restore(app_manifest, folder, mode='inplace', rollback=True,
+                                replaced_dirs=swapped() if swapped else ())
                 failed = [c for c in adapter.health() if c['status'] == 'fail']
                 if failed:
                     problems.append(f'「{name}」回復後健康檢查未通過')
@@ -966,7 +973,11 @@ def _rollback(ctx, touched, result, staging, error, device_key):
         result['rolled_back'] = False
         for plan in touched:  # where the copies of each host directory are now (nothing of them was deleted)
             leftovers = getattr(plan.adapter, 'dir_leftovers', None)
-            for note in (leftovers() if leftovers else []):
+            try:
+                notes = leftovers() if leftovers else []
+            except Exception:  # noqa: BLE001 - a report only; the failure below is raised either way
+                notes = [f'無法列出「{plan.app.name}」主機資料夾旁留下的資料夾，需人工確認']
+            for note in notes:
                 ctx.log(f'注意：{note}')
                 _add_warning(result, note)
         message = f'還原失敗，且自動回復未完成，需人工處理：{"；".join(problems)[:400].rstrip("。")}。'

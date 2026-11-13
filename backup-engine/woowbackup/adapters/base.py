@@ -52,7 +52,8 @@ class Adapter:
         """List of Check dicts for restoring this app_manifest here (`extracted_dir`: also check nested data)."""
         raise NotImplementedError
 
-    def restore(self, app_manifest, extracted_dir, *, mode, rollback=False, unchecked_databases_ok=False):
+    def restore(self, app_manifest, extracted_dir, *, mode, rollback=False, unchecked_databases_ok=False,
+                replaced_dirs=()):
         """Perform the restore; raise BackupError on failure (caller handles rollback).
 
         `rollback=True` restores the pre-restore safety backup after a failure: nothing may be downloaded.
