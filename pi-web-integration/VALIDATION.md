@@ -25,3 +25,7 @@
 - LAN 與 VPN 分別驗證兩階段登入、錯誤 Origin/Host 遭拒絕，以及 Cockpit 登出後舊工作階段失效。外網 HTTPS 與 Cloudflare Tunnel 不在本次部署範圍。
 - LAN 模型也實際回覆了「测试成功」。自動測試原本只接受繁體字而逾時；檢查助理訊息後確認回覆是簡體字，故不應把該次斷言逾時視作模型未回覆。
 - 重現先 HTTPS 登入再切 HTTP 的登入循環：Cockpit 登入端點成功後，瀏覽器因既有 Secure cookie 未接收新的 HTTP cookie，回到登入頁。移除舊 cookie 後，同一瀏覽器實測 HTTP 登入成功。
+
+## 側邊欄位置與全版面
+
+Pi Web 移至「工具」，右側嵌入頁移除標題、說明與外層間距。以實際 Cockpit 登入後確認 Pi Web 可讀取對話清單，並在 1440、1024、768、390、320px 寬度檢查 iframe 貼齊且填滿 Cockpit 的內容區；這不代表所有實體行動裝置皆已驗證。

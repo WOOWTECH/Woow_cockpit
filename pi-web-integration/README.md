@@ -23,7 +23,7 @@ sudo bash pi-web-integration/install.sh 192.168.2.46 19094 100.112.140.82
 
 若曾安裝 VPN gateway，後續重裝時請繼續提供第三個參數；省略參數不會移除先前服務或防火牆規則。舊版建立的憑證保留在磁碟但本版 gateway 不使用。安裝過程不會重啟 Pi Web。
 
-使用 `http://<已設定的IP>:9090` 登入，點「系統 → Pi Web」，再登入 Pi Web。要變更 IP，需同步調整 Cockpit Origins、systemd、套件設定及防火牆。不同網域、Cloudflare 及跨站 cookie 未驗證。
+使用 `http://<已設定的IP>:9090` 登入，點「工具 → Pi Web」，再登入 Pi Web。要變更 IP，需同步調整 Cockpit Origins、systemd、套件設定及防火牆。不同網域、Cloudflare 及跨站 cookie 未驗證。
 
 如果同一瀏覽器先前用 HTTPS 登入同一個 IP，轉為 HTTP 時可能因既有 `Secure` Cockpit cookie 阻擋新 cookie 而反覆回到登入頁。可先以無痕視窗測試，或清除該 IP 的網站資料後重新登入；清除網站資料也可能使該 IP 的其他服務登出，但不會刪除伺服器上的對話。
 
