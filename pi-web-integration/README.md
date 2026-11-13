@@ -25,6 +25,8 @@ sudo bash pi-web-integration/install.sh 192.168.2.46 19094 100.112.140.82
 
 使用 `http://<已設定的IP>:9090` 登入，點「系統 → Pi Web」，再登入 Pi Web。要變更 IP，需同步調整 Cockpit Origins、systemd、套件設定及防火牆。不同網域、Cloudflare 及跨站 cookie 未驗證。
 
+如果同一瀏覽器先前用 HTTPS 登入同一個 IP，轉為 HTTP 時可能因既有 `Secure` Cockpit cookie 阻擋新 cookie 而反覆回到登入頁。可先以無痕視窗測試，或清除該 IP 的網站資料後重新登入；清除網站資料也可能使該 IP 的其他服務登出，但不會刪除伺服器上的對話。
+
 ## 驗證與操作限制
 
 - 每個請求向 `127.0.0.1:9090/cockpit/login` 驗證 Cockpit 的 HTTP session，再檢查 Pi Web 密碼保護；在長 SSE／WebSocket 期間定期重新確認。

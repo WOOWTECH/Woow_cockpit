@@ -23,3 +23,5 @@
 
 - 實際由本機 Chromium 使用 LAN 和 VPN IP 的 HTTP Cockpit 開啟 Pi Web，完成獨立登入、讀取對話清單及五種畫面寬度檢查；VPN HTTP 入口另實測得到模型回覆。這是本機對自身位址的測試，並非另一台設備跨網路的驗證。
 - LAN 與 VPN 分別驗證兩階段登入、錯誤 Origin/Host 遭拒絕，以及 Cockpit 登出後舊工作階段失效。外網 HTTPS 與 Cloudflare Tunnel 不在本次部署範圍。
+- LAN 模型也實際回覆了「测试成功」。自動測試原本只接受繁體字而逾時；檢查助理訊息後確認回覆是簡體字，故不應把該次斷言逾時視作模型未回覆。
+- 重現先 HTTPS 登入再切 HTTP 的登入循環：Cockpit 登入端點成功後，瀏覽器因既有 Secure cookie 未接收新的 HTTP cookie，回到登入頁。移除舊 cookie 後，同一瀏覽器實測 HTTP 登入成功。
