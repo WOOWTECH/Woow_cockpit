@@ -24,12 +24,21 @@ Facts this adapter relies on (verified with Podman 4.9 rootless + systemd --user
   short-name lookup tries first (review finding HD-01) -- except for a short name with an alias
   (`/etc/containers/registries.conf.d/shortnames.conf`: ubuntu, python, node, alpine, ...): an existing image under
   the alias target (`docker.io/library/ubuntu:24.04`) wins over `localhost/ubuntu:24.04` (verified in the lab).
+* Host directories (`data_dirs`, bind mounts `Volume=%h/<dir>:<path>`) hold files of the owner's subordinate ids
+  (container users). Inside `podman unshare` the owner is uid 0 of his namespace: GNU tar (`--numeric-owner
+  --xattrs`) then reads them with their namespace owners (33 for www-data, 70 for alpine's postgres), extracts them
+  with those owners, modes (setgid directories included), nanosecond mtimes, hard links, symlinks, FIFOs, long and
+  non-UTF-8 names and `user.*` xattrs; `trusted.*` xattrs cannot be set there; sockets are skipped with exit 0;
+  `podman unshare` keeps HOME and passes the command's exit status and stdin through (all checked in the lab,
+  podman 4.9.3, GNU tar 1.35). A restore extracts into `<dir>.woowbk-new-<job>` and swaps it in; the replaced copy
+  `<dir>.woowbk-old-<job>` is deleted only after the job succeeded (CONTRACT section 9).
 """
 import http.client
 import json
 import os
 import platform
 import re
+import secrets
 import socket
 import stat
 import time
@@ -38,6 +47,7 @@ from pathlib import Path
 
 from .. import nested
 from ..archive import Entry
+from ..catalog import paths_overlap
 from ..errors import BackupError
 from ..podman import DEVNULL, CommandError, stderr_tail
 from .base import Adapter
@@ -48,8 +58,10 @@ MAX_SECRET_BYTES = 511999  # podman: "secret data must be larger than 0 and less
 MAX_HTTP_BODY = 1024 * 1024
 IMAGE_RE = re.compile(r'[A-Za-z0-9][A-Za-z0-9._/:@-]{0,254}\Z')
 NAME_RE = re.compile(r'[A-Za-z0-9][A-Za-z0-9_.-]{0,127}\Z')
-ENTRY_RE = re.compile(r'apps/([a-z0-9][a-z0-9-]{1,40})/(images|postgres|volumes|secrets|config|quadlet)/'
+ENTRY_RE = re.compile(r'apps/([a-z0-9][a-z0-9-]{1,40})/(images|postgres|volumes|dirs|secrets|config|quadlet)/'
                       r'[A-Za-z0-9][A-Za-z0-9_.@-]{0,200}\Z')
+TOKEN_RE = re.compile(r'[A-Za-z0-9][A-Za-z0-9._-]{0,54}\Z')
+ROLLBACK_SUFFIX = '-rollback'
 ARCH = {'x86_64': 'amd64', 'aarch64': 'arm64', 'armv7l': 'arm', 'ppc64le': 'ppc64le', 's390x': 's390x'}
 
 STOP_TIMEOUT = 180
@@ -67,6 +79,10 @@ SPACE_RESERVE = 512 * 1024 * 1024
 SMALL_OUTPUT = 1024 * 1024        # psql, pg_isready, systemctl show, podman load --quiet
 INSPECT_OUTPUT = 4 * 1024 * 1024  # podman image inspect
 TAR_OVERHEAD = 1024               # per member of a volume export: 512-byte header + up to 511 bytes padding
+# Per member of a host directory tar (GNU tar --format=posix): a PAX extended header (two blocks: its header and
+# the atime/ctime/mtime records) before every member header, plus padding. Measured in the lab: 1,759 bytes per
+# member for 33,662 small files.
+DIR_TAR_OVERHEAD = 2048
 # User objects in a database: relations and routines outside the system schemas, plus extensions besides plpgsql.
 MAINTENANCE_OBJECTS_SQL = (
     "SELECT (SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace "
@@ -238,6 +254,14 @@ class QuadletPostgresAdapter(Adapter):
         self._owner_ids = None
         self._nested_checked = {}  # nested tars already checked by this adapter (preflight, then restore)
         self._previous_tags = {}   # image name -> image id it pointed at before this restore moved it
+        # Host directories: the job id names the restore's siblings (`<dir>.woowbk-new-<job>`, `-old-<job>`; a
+        # rollback appends `-rollback`), so the recovery of a dead job finds exactly its own. flows sets it.
+        self.job_id = None
+        self._local_token = 'x' + secrets.token_hex(8)  # without a job (tests, direct use)
+        self._dir_run = None      # 'restore' or 'rollback' once restore() touched host directories
+        self._dir_new = set()     # directories whose new sibling this adapter may have left (being written)
+        self._dir_swapped = {}    # directory -> True when its previous copy was moved to the old sibling
+        self._dirs_tracked = False  # restore() ran here: _dir_swapped names every directory it put in place
 
     # ----------------------------------------------------------------- helpers
     @staticmethod
@@ -549,6 +573,11 @@ class QuadletPostgresAdapter(Adapter):
                                   app=self.app.id) from None
         for volume in self.app.volumes:
             total += self._volume_size(volume['name'])
+        for item in self.app.data_dirs:
+            # Read inside the owner's namespace without following links; a missing directory, or one that is a
+            # symlink or lies below one, fails the backup here, before any writer is stopped.
+            size, members = self.runner.dir_measure(item['path'])
+            total += size + DIR_TAR_OVERHEAD * members + 2 * 512
         if include_images:
             for ref in dict.fromkeys(self.container_images(self._read_owner_quadlets()).values()):
                 info = self.image_inspect(ref)
@@ -573,6 +602,259 @@ class QuadletPostgresAdapter(Adapter):
                 raise BackupError('job-failed', f'無法估算資料卷 {name} 的大小。', app=self.app.id) from None
         apparent, members = values
         return apparent + TAR_OVERHEAD * members + 2 * 512
+
+    # ----------------------------------------------------------------- host directories
+    def _dir_token(self, rollback=False):
+        """Sibling token of this job's restore (or of its rollback)."""
+        job = self.job_id if isinstance(self.job_id, str) and TOKEN_RE.fullmatch(self.job_id) else self._local_token
+        return job + ROLLBACK_SUFFIX if rollback else job
+
+    def _dir_mounts(self, sources):
+        """{unit: [paths relative to the owner's home]} of the `Volume=` bind mounts from the owner's home
+        (`%h/<dir>` or the home's absolute path) in the app's `.container` files."""
+        mounts = {}
+        home = self.runner.home.rstrip('/') + '/'
+        for name in self.app.quadlet_files:
+            if not name.endswith('.container') or name not in sources:
+                continue
+            for key, value in parse_unit_file(sources[name].decode('utf-8', 'replace')).get('Container', []):
+                if key != 'Volume':
+                    continue
+                source = value.split(':', 1)[0].strip()
+                rel = source[3:] if source.startswith('%h/') else source[len(home):] if source.startswith(home) else ''
+                rel = os.path.normpath(rel) if rel else ''
+                if rel and rel not in ('.', '..') and not rel.startswith(('../', '/')):
+                    mounts.setdefault(quadlet_unit(name), []).append(rel)
+        return mounts
+
+    def _log_dir_writers(self, sources, active):
+        """Warn when a running unit that the backup does not stop mounts one of the app's host directories."""
+        if not self.app.data_dirs:
+            return
+        for unit, rels in sorted(self._dir_mounts(sources).items()):
+            if unit in self.app.writer_units or not active.get(unit):
+                continue
+            for item in self.app.data_dirs:
+                if any(paths_overlap(rel, item['path']) for rel in rels):
+                    self.log(f'警告：服務 {unit} 掛載了主機資料夾 ~/{item["path"]}，但沒有列在 writer_units，備份期間不會暫停；'
+                             '它若在備份時寫入，這個資料夾的備份可能不一致。')
+
+    def _export_dir(self, index, item, staging):
+        rel = item['path']
+        dest = staging / 'dirs' / f'{index}.tar'
+        self.log(f'匯出主機資料夾 ~/{rel}')
+        with _create(dest) as handle:
+            self.runner.dir_pack(rel, stdout=handle, timeout=EXPORT_TIMEOUT, max_output=self._output_budget(staging))
+            handle.flush()
+            os.fsync(handle.fileno())
+        if dest.stat().st_size < 1024:
+            raise BackupError('job-failed', f'主機資料夾 ~/{rel} 匯出結果不完整。', app=self.app.id, path=rel)
+        return {'path': rel, 'index': index, 'file': dest}
+
+    def _check_dir_entry(self, rel, path, *, log=True):
+        """Check one host directory tar (cached per path) with the owner's ID map; returns its nested.VolumeReport.
+        What the canonical copy drops is kept in `self.warnings` (and logged unless the caller reports it)."""
+        key = ('dir', str(path))
+        report = self._nested_checked.get(key)
+        if report is None:
+            report = nested.check_dir(path, ids=self.owner_ids())
+            self._nested_checked[key] = report
+            for note in report.warnings(f'~/{rel}'):
+                if note not in self.warnings:
+                    self.warnings.append(note)
+                    if log:
+                        self.log(f'注意：{note}')
+        return report
+
+    def _check_exported_dir(self, item):
+        """A directory export is checked the way a restore checks it (like a volume export, review HD-02/HD-03)."""
+        self.owner_ids()  # a failure to read the ID map keeps its own message
+        try:
+            report = self._check_dir_entry(item['path'], item['file'])
+        except BackupError as error:
+            details = error.details or {}
+            if 'reason' not in details:
+                raise
+            label = details.get('label') or '格式不符'
+            member = details.get('member')
+            code = 'limit-exceeded' if details.get('reason') == 'too many members' else 'job-failed'
+            raise BackupError(code, f'主機資料夾 ~/{item["path"]} 含有還原時無法寫入的內容（{label}'
+                                    f'{"：" + str(member) if member else ""}），這份備份無法還原，因此沒有建立；'
+                                    '應用已恢復執行。', app=self.app.id, path=item['path'],
+                              reason=details.get('reason')) from None
+        note = report.link_note(f'~/{item["path"]}')
+        if note:
+            self.log(f'注意：{note}')
+
+    def _check_dir_targets(self, mode):
+        """Before any change (also when a caller skipped the preflight): no directory may be a symlink or lie below
+        one, and a fresh deployment never replaces a directory that holds something."""
+        if not self.app.data_dirs:
+            return
+        states = self.runner.dir_states([item['path'] for item in self.app.data_dirs])
+        for item in self.app.data_dirs:
+            state = states.get(item['path']) or {}
+            if state.get('type') not in ('dir', 'missing'):
+                raise BackupError('incompatible', f'~/{item["path"]} 不是資料夾，或路徑中含有符號連結；未做任何變更。',
+                                  app=self.app.id, path=item['path'])
+            if mode == 'fresh' and state.get('type') == 'dir' and not state.get('empty'):
+                raise BackupError('incompatible', f'此設備已存在主機資料夾 ~/{item["path"]} 且不是空的；為避免覆寫既有資料，'
+                                                  '未做任何變更。', app=self.app.id, path=item['path'])
+
+    def _restore_dir(self, rel, path, *, fresh, rollback):
+        """Write the canonical copy of a checked directory tar into `<rel>.woowbk-new-<token>` as the owner inside
+        his namespace (missing parents are created), then swap it in: the current directory moves to
+        `<rel>.woowbk-old-<token>` (fresh: an empty one is removed), the new one takes its name."""
+        token = self._dir_token(rollback)
+        ids = self.owner_ids()
+        self._dir_run = 'rollback' if rollback else 'restore'
+        self._dir_new.add(rel)  # listed first: a failure part-way leaves a partial copy to remove
+        self.log(f'寫入主機資料夾 ~/{rel}（先寫到 ~/{rel}.woowbk-new-{token}）')
+        with nested.pipe_from(lambda out: nested.stream_dir(path, out, ids)) as feed:
+            created = self.runner.dir_unpack(rel, token, input=feed, timeout=EXPORT_TIMEOUT)
+        for parent in created:
+            self.log(f'已以擁有者身分建立資料夾 ~/{parent}')
+        swap = self.runner.dir_swap(rel, token, fresh=fresh)
+        self._dir_new.discard(rel)
+        self._dir_swapped[rel] = swap['replaced']
+        if swap['replaced']:
+            self.log(f'已還原主機資料夾 ~/{rel}；原內容暫時保留在 ~/{rel}.woowbk-old-{token}，作業成功後才刪除')
+        else:
+            self.log(f'已還原主機資料夾 ~/{rel}')
+
+    def finish_dirs(self):
+        """Delete the copies this adapter's restore moved aside, once the job succeeded (or, for a rollback, once
+        the rollback was verified). Never the only copy of what a directory held before the job: after a rollback,
+        the pre-restore content stays (as the failed restore's `-old-<job>` copy, or as the rollback's own when the
+        failed restore had not reached that directory) and is reported. Returns zh-TW notes."""
+        if not self._dir_swapped:
+            return []
+        rollback = self._dir_run == 'rollback'
+        token, restore_token = self._dir_token(rollback), self._dir_token(False)
+        notes, states = [], {}
+        if rollback:
+            try:
+                states = self.runner.dir_states(list(self._dir_swapped))
+            except BackupError:
+                states = None
+        for rel, replaced in self._dir_swapped.items():
+            if rollback:
+                if states is None:
+                    if replaced:
+                        notes.append(f'主機資料夾 ~/{rel} 被取代的內容保留在 ~/{rel}.woowbk-old-{token}；確認應用正常後可刪除。')
+                    continue
+                olds = {item.get('token') for item in (states.get(rel) or {}).get('siblings') or []
+                        if item.get('kind') == 'old'}
+                if restore_token in olds:
+                    # The failed restore had moved the original aside: what the rollback replaced is its data.
+                    if replaced:
+                        notes.extend(self._drop_old(rel, token, '還原失敗時寫入的內容'))
+                    notes.append(f'主機資料夾 ~/{rel} 在還原前的原內容保留在 ~/{rel}.woowbk-old-{restore_token}；'
+                                 '回復已改用還原前備份的內容，確認應用正常後可刪除這份。')
+                elif replaced:
+                    notes.append(f'主機資料夾 ~/{rel} 在還原前的原內容保留在 ~/{rel}.woowbk-old-{token}；'
+                                 '回復已改用還原前備份的內容，確認應用正常後可刪除這份。')
+                continue
+            if replaced:
+                notes.extend(self._drop_old(rel, token, '原內容'))
+        self._dir_swapped = {}
+        return notes
+
+    def _drop_old(self, rel, token, what):
+        try:
+            self.runner.dir_drop(rel, 'old', token)
+            self.log(f'已刪除 ~/{rel}.woowbk-old-{token}（{what}）')
+            return []
+        except BackupError as error:
+            self._log_command_error(error)
+            return [f'無法刪除 ~/{rel}.woowbk-old-{token}（{what}，{error.message.rstrip("。")}）；確認後可手動刪除。']
+
+    def discard_dirs(self):
+        """After a failure: put back a directory that was moved aside but not replaced, and remove the new copies
+        this adapter was writing. Swapped directories stay (a rollback replaces them). Returns zh-TW problems."""
+        rels = sorted(self._dir_new)
+        if not rels:
+            return []
+        token = self._dir_token(self._dir_run == 'rollback')
+        try:
+            states = self.runner.dir_states(rels)
+        except BackupError as error:
+            self._log_command_error(error)
+            return [f'無法檢查主機資料夾 {"、".join("~/" + rel for rel in rels)}（{error.message.rstrip("。")}）']
+        problems = []
+        for rel in rels:
+            state = states.get(rel) or {}
+            siblings = {(item.get('kind'), item.get('token')) for item in state.get('siblings') or []}
+            try:
+                if state.get('type') == 'missing' and ('old', token) in siblings:
+                    self.runner.dir_back(rel, token)
+                    self.log(f'已把 ~/{rel} 的原內容移回')
+                if ('new', token) in siblings:
+                    self.runner.dir_drop(rel, 'new', token)
+                    self.log(f'已移除沒寫完的 ~/{rel}.woowbk-new-{token}')
+                self._dir_new.discard(rel)
+            except BackupError as error:
+                self._log_command_error(error)
+                problems.append(f'主機資料夾 ~/{rel}：{error.message.rstrip("。")}')
+        return problems
+
+    def dir_leftovers(self):
+        """zh-TW notes naming the copies this job left next to the app's directories (after a failed rollback)."""
+        if not self.app.data_dirs:
+            return []
+        tokens = {self._dir_token(False), self._dir_token(True)}
+        try:
+            states = self.runner.dir_states([item['path'] for item in self.app.data_dirs])
+        except BackupError:
+            return []
+        notes = []
+        for item in self.app.data_dirs:
+            rel = item['path']
+            names = [f'~/{rel}.woowbk-{s["kind"]}-{s["token"]}' for s in (states.get(rel) or {}).get('siblings') or []
+                     if s.get('token') in tokens]
+            if names:
+                notes.append(f'主機資料夾 ~/{rel} 旁留有這次還原的資料夾：{"、".join(names)}；「-old-」是被取代的內容，'
+                             '處理完成前請勿刪除。')
+        return notes
+
+    def recover_dirs(self):
+        """Recovery of a dead job (`self.job_id`): bring every directory of this app to a safe final state.
+
+        Per directory, the rollback's siblings first, then the restore's: a missing directory gets its moved-aside
+        copy back, new copies (being written, or written but never swapped in) are removed, and moved-aside copies
+        of a directory that exists are kept and reported -- the only copy of the previous content is never
+        deleted. Returns zh-TW notes (also problems)."""
+        if not self.app.data_dirs:
+            return []
+        try:
+            states = self.runner.dir_states([item['path'] for item in self.app.data_dirs])
+        except BackupError as error:
+            return [f'無法檢查「{self.app.name}」的主機資料夾（{error.message.rstrip("。")}），需人工確認']
+        notes = []
+        for item in self.app.data_dirs:
+            rel = item['path']
+            state = states.get(rel) or {}
+            siblings = {(s.get('kind'), s.get('token')) for s in state.get('siblings') or [] if s.get('type') == 'dir'}
+            missing = state.get('type') == 'missing'
+            kept = []
+            try:
+                for token in (self._dir_token(True), self._dir_token(False)):
+                    if missing and ('old', token) in siblings:
+                        self.runner.dir_back(rel, token)
+                        siblings.discard(('old', token))
+                        missing = False
+                        notes.append(f'已把 ~/{rel} 的原內容移回（~/{rel}.woowbk-old-{token}）')
+                    if ('new', token) in siblings:
+                        self.runner.dir_drop(rel, 'new', token)
+                        notes.append(f'已移除沒寫完或未換上的 ~/{rel}.woowbk-new-{token}')
+                    if ('old', token) in siblings:
+                        kept.append(f'~/{rel}.woowbk-old-{token}')
+            except BackupError as error:
+                notes.append(f'無法整理主機資料夾 ~/{rel}（{error.message.rstrip("。")}），需人工確認')
+                continue
+            if kept:
+                notes.append(f'~/{rel} 被取代前的內容保留在 {"、".join(kept)}，確認應用正常後可刪除')
+        return notes
 
     # ----------------------------------------------------------------- backup
     def backup(self, staging_dir, *, include_images):
@@ -606,8 +888,9 @@ class QuadletPostgresAdapter(Adapter):
             if objects:
                 self.log(f'注意：資料庫執行個體的 postgres 資料庫中有 {objects} 個資料表、函式或擴充功能（例如排程工作），'
                          '不會包含在備份中。')
+        self._log_dir_writers(quadlets, active)
         snapshot = self._snapshot_for_backup()
-        for sub in ('postgres', 'volumes', 'secrets', 'config', 'quadlet', 'images'):
+        for sub in ('postgres', 'volumes', 'dirs', 'secrets', 'config', 'quadlet', 'images'):
             (staging / sub).mkdir(mode=0o700, exist_ok=True)
 
         writers = [unit for unit in app.units if unit in app.writer_units and active.get(unit)]
@@ -626,6 +909,7 @@ class QuadletPostgresAdapter(Adapter):
             dumps = [self._dump_database(pg, staging) for pg in app.postgres]
             self.phase('export')
             volumes = [self._export_volume(v['name'], staging) for v in app.volumes]
+            dirs = [self._export_dir(i, item, staging) for i, item in enumerate(app.data_dirs)]
             secrets = [self._read_secret(s['name'], staging) for s in app.secrets]
             configs = [self._read_config(i, c, staging) for i, c in enumerate(app.config_files)]
             for name in app.quadlet_files:
@@ -644,6 +928,8 @@ class QuadletPostgresAdapter(Adapter):
         # (review findings HD-02, HD-03).
         for volume in volumes:
             self._check_exported_volume(volume)
+        for item in dirs:
+            self._check_exported_dir(item)
         if was_running:
             self._log_health_after_backup()
             snapshot = self._confirm_snapshot(snapshot)
@@ -679,6 +965,10 @@ class QuadletPostgresAdapter(Adapter):
         for volume in volumes:
             manifest['volumes'].append({'name': volume['name'],
                                         'entry': entry('volumes', f'{volume["name"]}.tar', volume['file'])})
+        if app.data_dirs:
+            # Only apps with host directories carry the key: other archives stay readable by older engines.
+            manifest['data_dirs'] = [{'path': item['path'], 'entry': entry('dirs', f'{item["index"]}.tar', item['file'])}
+                                     for item in dirs]
         for secret in secrets:
             manifest['secrets'].append({'name': secret['name'], 'entry': entry('secrets', secret['name'], secret['file'])})
         for i, config in enumerate(configs):
@@ -903,22 +1193,28 @@ class QuadletPostgresAdapter(Adapter):
             return {x.get(field): x for x in app_manifest.get(key) or [] if isinstance(x, dict)}
 
         archive = {'postgres': index('postgres', 'id'), 'volumes': index('volumes', 'name'),
-                   'secrets': index('secrets', 'name'), 'config': index('config_files', 'path')}
+                   'dirs': index('data_dirs', 'path'), 'secrets': index('secrets', 'name'),
+                   'config': index('config_files', 'path')}
         local = {'postgres': [p['id'] for p in app.postgres], 'volumes': [v['name'] for v in app.volumes],
-                 'secrets': [s['name'] for s in app.secrets], 'config': [c['path'] for c in app.config_files]}
-        labels = {'postgres': '資料庫', 'volumes': '資料卷', 'secrets': '應用機密', 'config': '設定檔'}
+                 'dirs': [d['path'] for d in app.data_dirs], 'secrets': [s['name'] for s in app.secrets],
+                 'config': [c['path'] for c in app.config_files]}
+        labels = {'postgres': '資料庫', 'volumes': '資料卷', 'dirs': '主機資料夾', 'secrets': '應用機密', 'config': '設定檔'}
+
+        def shown(kind, key):
+            return f'{labels[kind]} ~/{key}' if kind == 'dirs' else f'{labels[kind]} {key}'
+
         found, missing, extra = {}, [], []
         for kind, keys in local.items():
             found[kind] = {}
             for key in keys:
                 item = archive[kind].get(key)
                 if item is None or not isinstance(item.get('entry'), str):
-                    missing.append(f'{labels[kind]} {key}')
+                    missing.append(shown(kind, key))
                 else:
                     found[kind][key] = item
             for key in archive[kind]:
                 if key not in keys:
-                    extra.append(f'{labels[kind]} {key}')
+                    extra.append(shown(kind, key))
         return found, missing, extra
 
     def entry_path(self, root, entry):
@@ -1014,12 +1310,54 @@ class QuadletPostgresAdapter(Adapter):
                                                       '（例如排程工作）；原位還原會重建整個資料庫資料卷，這些內容不會保留。')
             add('safety', 'ok', '還原前會先建立並驗證此應用的還原前備份；失敗時會自動回復。')
 
+        if self.runtime_ready():
+            self._preflight_dirs(mode, add)
         if sources is not None and self.runtime_ready():
             self._preflight_images(app_manifest, sources, add)
             if extracted_dir is not None:
                 self._preflight_nested(app_manifest, Path(extracted_dir), sources, add)
-        self._preflight_space(app_manifest, entry_sizes, add)
+        if extracted_dir is None and self.app.data_dirs and self.runtime_ready():
+            try:
+                uids, gids = self.owner_ids()
+                add('dir-ids', 'ok', f'還原前會先確認主機資料夾中的檔案擁有者都在帳號 {self.runner.owner} 可用的 ID 範圍內'
+                                     f'（UID {uids.describe()}；GID {gids.describe()}）。')
+            except BackupError as error:
+                add('dir-ids', 'fail', error.message)
+        self._preflight_space(app_manifest, entry_sizes, add, mode=mode)
         return checks
+
+    def _preflight_dirs(self, mode, add):
+        """Target state of every host directory: in place it is replaced (a missing one is created), fresh it must be
+        missing or empty; a symlink anywhere on its path refuses the restore. Leftover siblings are reported."""
+        rels = [item['path'] for item in self.app.data_dirs]
+        if not rels:
+            return
+        try:
+            states = self.runner.dir_states(rels)
+        except BackupError as error:
+            add('dir-target', 'fail', f'無法檢查主機資料夾的狀態：{error.message}')
+            return
+        for rel in rels:
+            state = states.get(rel) or {}
+            kind = state.get('type')
+            if kind in ('blocked', 'link', 'other') or kind is None:
+                add('dir-target', 'fail', f'~/{rel} 不是資料夾，或路徑中含有符號連結；無法還原到這裡。')
+            elif mode == 'fresh' and kind == 'dir' and not state.get('empty'):
+                add('dir-conflict', 'fail', f'此設備已存在主機資料夾 ~/{rel} 且不是空的；為避免覆寫既有資料，請先移走後再還原'
+                                            '（沒有刪除任何東西）。')
+            elif mode == 'fresh' and kind == 'dir':
+                add('dir-target', 'ok', f'主機資料夾 ~/{rel} 已存在且是空的，還原時會以備份內容取代。')
+            elif mode == 'fresh':
+                add('dir-target', 'ok', f'還原時會建立主機資料夾 ~/{rel}（上層資料夾不存在時以應用擁有者身分建立）。')
+            elif kind == 'dir':
+                add('dir-target', 'ok', f'還原時會以備份內容整個取代主機資料夾 ~/{rel}（不合併）；原內容保留到還原成功後才刪除。')
+            else:
+                add('dir-target', 'warn', f'主機資料夾 ~/{rel} 目前不存在，還原時會建立；建立還原前備份時需要讀取它，'
+                                          '因此還原前備份可能無法建立。')
+            leftovers = [f'~/{rel}.woowbk-{item["kind"]}-{item["token"]}' for item in state.get('siblings') or []]
+            if leftovers:
+                add('dir-leftover', 'warn', f'主機資料夾 ~/{rel} 旁有先前還原留下的資料夾（{"、".join(leftovers[:4])}）；'
+                                            '不影響這次還原，確認不需要後可刪除。')
 
     def _preflight_nested(self, app_manifest, root, sources, add):
         """Check the extracted image and volume tars now (cached for restore()); see preflight()."""
@@ -1039,6 +1377,22 @@ class QuadletPostgresAdapter(Adapter):
                 continue
             for note in report.warnings(volume['name']):
                 add('volume-attributes', 'warn', note)
+        for directory in self.app.data_dirs:
+            rel = directory['path']
+            item = found['dirs'].get(rel)
+            if item is None:
+                continue  # reported as a missing item already
+            try:
+                report = self._check_dir_entry(rel, self.entry_path(root, item['entry']), log=False)
+            except BackupError as error:
+                # Owners the target namespace cannot map ("capacity"), unsafe members: nothing has changed yet.
+                add('dir-archive', 'fail', error.message)
+                continue
+            uids, gids = self.owner_ids()
+            add('dir-ids', 'ok', f'主機資料夾 ~/{rel} 的檔案擁有者（最大 UID {report.max_uid}／GID {report.max_gid}）都在帳號 '
+                                 f'{self.runner.owner} 可用的範圍內（UID {uids.describe()}；GID {gids.describe()}）。')
+            for note in report.warnings(f'~/{rel}'):
+                add('dir-attributes', 'warn', note)
 
     def _preflight_leftovers(self, sources, add):
         """Fresh mode: anything the restore would create must not exist yet. A failed fresh restore removes what
@@ -1105,22 +1459,26 @@ class QuadletPostgresAdapter(Adapter):
             else:
                 add('postgres-version', 'ok', f'PostgreSQL 主版本相容（備份 {source}，此設備 {target}）。')
 
-    def _preflight_space(self, app_manifest, entry_sizes, add):
+    def _preflight_space(self, app_manifest, entry_sizes, add, mode='inplace'):
+        """Free space where the app's data lives: the extracted archive plus the restored data; host directories in
+        place also need room for a rollback's copy, since the replaced copy stays until the job succeeded."""
         if not entry_sizes:
             return
         prefix = f'apps/{self.app.id}/'
         need = sum(size for path, size in entry_sizes.items() if path.startswith(prefix))
+        dirs = sum(size for path, size in entry_sizes.items() if path.startswith(f'{prefix}dirs/'))
         try:
             st = self.statvfs(self.runner.home)
             free = st.f_bavail * st.f_frsize
         except OSError:
             add('space', 'warn', '無法確認應用擁有者家目錄的可用空間。')
             return
-        required = 2 * need + SPACE_RESERVE
+        required = 2 * need + (dirs if mode == 'inplace' else 0) + SPACE_RESERVE
+        kept = '（主機資料夾的原內容保留到還原成功後才刪除，已計入）' if dirs and mode == 'inplace' else ''
         if free < required:
-            add('space', 'fail', f'應用資料所在磁碟空間不足：需要約 {_human(required)}，可用 {_human(free)}。')
+            add('space', 'fail', f'應用資料所在磁碟空間不足：需要約 {_human(required)}，可用 {_human(free)}{kept}。')
         else:
-            add('space', 'ok', f'應用資料所在磁碟空間足夠（可用 {_human(free)}）。')
+            add('space', 'ok', f'應用資料所在磁碟空間足夠（可用 {_human(free)}）{kept}。')
 
     def restore(self, app_manifest, extracted_dir, *, mode, rollback=False, unchecked_databases_ok=False):
         """Restore one app from an extracted archive. `rollback=True` (restoring the pre-restore safety backup
@@ -1143,6 +1501,10 @@ class QuadletPostgresAdapter(Adapter):
         loads = self._check_image_entries(app_manifest, root, needed)
         for volume in app.volumes:
             self._check_volume_entry(volume['name'], files['volumes'][volume['name']])
+        for item in app.data_dirs:  # same rules, with the target owner's ID map ("capacity")
+            self._check_dir_entry(item['path'], files['dirs'][item['path']])
+        self._dirs_tracked = True
+        self._check_dir_targets(mode)
         if mode == 'inplace' and not rollback:
             # A rollback rebuilds the volume the failed restore itself created from the archive: nothing else is in it.
             self._refuse_undeclared_databases(unchecked_ok=unchecked_databases_ok)
@@ -1180,6 +1542,8 @@ class QuadletPostgresAdapter(Adapter):
                 self._recreate_volume(volume['name'], files['volumes'][volume['name']])
             for pg in app.postgres:
                 self.runner.podman('volume', 'rm', '-f', pg['data_volume'], timeout=STOP_TIMEOUT)
+            for item in app.data_dirs:
+                self._restore_dir(item['path'], files['dirs'][item['path']], fresh=mode == 'fresh', rollback=rollback)
 
             self.phase('start')
             started = []
@@ -1491,6 +1855,30 @@ class QuadletPostgresAdapter(Adapter):
                 self.runner.remove_file(config['path'])
             except BackupError:
                 errors.append(config['path'])
+        for item in app.data_dirs:
+            # The fresh preflight required the directory to be missing or empty, so what is there now was written by
+            # the restore; new copies are archive data. A moved-aside `-old-` copy is never touched here. Undoing
+            # this adapter's own restore, only the directories it put in place are removed: one it never reached
+            # is not its data (the recovery of a dead job has no such memory and relies on the preflight alone).
+            rel = item['path']
+            ours = not self._dirs_tracked or rel in self._dir_swapped
+            try:
+                state = self.runner.dir_states([rel]).get(rel) or {}
+                for sibling in state.get('siblings') or []:
+                    if sibling.get('kind') == 'new' and sibling.get('type') == 'dir':
+                        self.runner.dir_drop(rel, 'new', sibling['token'])
+                if state.get('type') == 'dir' and ours:
+                    self.runner.dir_drop(rel, 'target')
+                    self.log(f'已移除還原建立的主機資料夾 ~/{rel}')
+                elif state.get('type') == 'dir':
+                    self.log(f'主機資料夾 ~/{rel} 不是這次還原寫入的，保留不動')
+                elif state.get('type') not in ('missing', None):
+                    errors.append(f'~/{rel}')
+            except BackupError as error:
+                self._log_command_error(error)
+                errors.append(f'~/{rel}')
+        self._dir_new.clear()
+        self._dir_swapped = {}
         objects = self._named_objects(sources)
         for pod in objects['pod']:
             if self.runner.podman('pod', 'rm', pod, timeout=STOP_TIMEOUT, check=False).returncode != 0:

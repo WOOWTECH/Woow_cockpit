@@ -14,8 +14,9 @@
 * `recover_interrupted` decides only while it holds the start lock and, taken without waiting, the engine
   lock, so no job can be running or finishing meanwhile. For each candidate it probes the unit and then
   re-reads the record under its record lock: a record still queued/running whose unit is inactive is
-  marked `interrupted`, and the writers / unfinished fresh deployment that this fresh record (never the
-  earlier listing) still lists are restarted / removed, each once. A job that finished while the records
+  marked `interrupted`, and the writers / host directories / unfinished fresh deployment that this fresh record
+  (never the earlier listing) still lists are restarted / settled / removed, each once. A job that finished while the
+  records
   were listed therefore keeps its own final record (release regression 16). Nothing is ever replayed. It
   also deletes stale transient key files and staging folders of jobs that are not running.
 * Retention: records of active jobs, records with recovery work left and failed/interrupted restores whose
@@ -190,8 +191,9 @@ def unit_name(job_id):
 
 
 def has_leftovers(record):
-    """The record still lists writers a dead job left stopped or an unfinished fresh deployment."""
-    return bool(record.get('stopped_writers') or record.get('fresh_apps'))
+    """The record still lists writers a dead job left stopped, an unfinished fresh deployment, or apps whose host
+    directories a dead restore may have left siblings of."""
+    return bool(record.get('stopped_writers') or record.get('fresh_apps') or record.get('dir_apps'))
 
 
 _THREAD = threading.local()
@@ -645,7 +647,7 @@ def _remove_key_file(store, job_id):
 # ---------------------------------------------------------------- public API
 
 def start_job(paths, job_type, params, request_id, *, key_text=None, launcher=None, unit_active=None, now=None,
-              restart_writers=None, cleanup_fresh=None):
+              restart_writers=None, cleanup_fresh=None, settle_dirs=None):
     """Create and launch a job; returns {'job_id', 'deduplicated'}."""
     if job_type not in PHASES:
         raise BackupError('invalid-request', '不支援的作業類型。')
@@ -669,7 +671,8 @@ def start_job(paths, job_type, params, request_id, *, key_text=None, launcher=No
                 return {'job_id': hit['job_id'], 'deduplicated': True}
             except BackupError:
                 pass
-        _recover_locked(paths, store, unit_active or systemd_unit_active, now, restart_writers, cleanup_fresh)
+        _recover_locked(paths, store, unit_active or systemd_unit_active, now, restart_writers, cleanup_fresh,
+                        settle_dirs)
         active = [r for r in store.list(limit=None) if r.get('state') in ACTIVE]
         if active:
             raise BackupError('busy', '已有備份或還原作業正在進行，請等它完成後再試。', job_id=active[0]['id'])
@@ -753,6 +756,25 @@ def _remove_unfinished_fresh(store, record, cleanup_fresh):
         return f'未完成的全新部署沒有完整清除，需人工處理：{"；".join(problems)[:300]}。'
     store.append_log(record['id'], f'已清除未完成的全新部署：{"、".join(fresh)}')
     return '已清除未完成的全新部署，可再次還原。'
+
+
+def _settle_dirs(store, record, settle_dirs):
+    """Settle the host-directory siblings a dead restore left (moved-aside copies back where a directory is missing,
+    new copies removed, nothing that is the only copy deleted); returns extra zh-TW guidance. Attempted once."""
+    apps = [str(app) for app in record.get('dir_apps') or []]
+    if not apps or settle_dirs is None:
+        return ''
+    try:
+        notes = [str(note) for note in settle_dirs(record['id'], apps) or []]
+    except Exception:  # noqa: BLE001 - recovery must never break status/jobs
+        traceback.print_exc(file=sys.stderr)
+        notes = ['整理主機資料夾時發生未預期的錯誤，需人工確認']
+    record['dir_apps'] = []
+    if not notes:
+        return ''
+    text = '；'.join(notes)[:600]
+    store.append_log(record['id'], f'主機資料夾：{text}')
+    return f'主機資料夾：{text}。'
 
 
 def _restart_stopped_writers(store, record, restart_writers):
@@ -841,18 +863,20 @@ def _queued_grace(record, now):
     return record.get('state') == 'queued' and created is not None and now - created < QUEUED_GRACE_SECONDS
 
 
-def _finish_leftovers(store, record, restart_writers, cleanup_fresh):
-    """Restart writers / remove the unfinished fresh deployment that a finished record still lists (writers a
-    terminated backup left stopped, review CR-14; a fresh deployment cut by a shutdown, CR-05). `record` is a
-    fresh read and the caller holds its record lock and the engine lock."""
+def _finish_leftovers(store, record, restart_writers, cleanup_fresh, settle_dirs=None):
+    """Restart writers / settle host directories / remove the unfinished fresh deployment that a finished record
+    still lists (writers a terminated backup left stopped, review CR-14; a restore cut by a shutdown, CR-05). The
+    directories come first: a missing one gets its moved-aside copy back before a fresh deployment is removed.
+    `record` is a fresh read and the caller holds its record lock and the engine lock."""
     extra = _restart_stopped_writers(store, record, restart_writers)
+    extra += _settle_dirs(store, record, settle_dirs)
     extra += _remove_unfinished_fresh(store, record, cleanup_fresh)
     if extra and isinstance(record.get('error'), dict):
         record['error']['message'] = (record['error'].get('message') or '') + extra
     store.save(record)
 
 
-def _mark_interrupted(paths, store, record, now, restart_writers, cleanup_fresh):
+def _mark_interrupted(paths, store, record, now, restart_writers, cleanup_fresh, settle_dirs=None):
     """Finish a dead job's fresh record as `interrupted`; the state is committed before any clean-up runs, so a
     helper killed during the clean-up leaves a finished record whose leftovers the next pass completes."""
     message, result = interrupted_details(record)
@@ -867,13 +891,13 @@ def _mark_interrupted(paths, store, record, now, restart_writers, cleanup_fresh)
     store.save(record)
     store.append_log(record['id'], f'作業被判定為已中斷：{message}')
     if has_leftovers(record):
-        _finish_leftovers(store, record, restart_writers, cleanup_fresh)
+        _finish_leftovers(store, record, restart_writers, cleanup_fresh, settle_dirs)
     _remove_key_file(store, record['id'])
     if _remove_dead_staging(paths, record['id']):
         store.append_log(record['id'], '已清除中斷作業留下的暫存資料')
 
 
-def _recover_one(paths, store, job_id, unit, unit_active, now, restart_writers, cleanup_fresh):
+def _recover_one(paths, store, job_id, unit, unit_active, now, restart_writers, cleanup_fresh, settle_dirs=None):
     """Decide one candidate while the start and engine locks are held; True when it was marked interrupted.
 
     With the engine lock held no run-job is between taking and releasing it, and a run-job writes its final
@@ -890,11 +914,11 @@ def _recover_one(paths, store, job_id, unit, unit_active, now, restart_writers, 
             return False
         if record.get('state') in TERMINAL:
             if has_leftovers(record):
-                _finish_leftovers(store, record, restart_writers, cleanup_fresh)
+                _finish_leftovers(store, record, restart_writers, cleanup_fresh, settle_dirs)
             return False
         if record.get('state') not in ACTIVE or _queued_grace(record, now):
             return False
-        _mark_interrupted(paths, store, record, now, restart_writers, cleanup_fresh)
+        _mark_interrupted(paths, store, record, now, restart_writers, cleanup_fresh, settle_dirs)
     return True
 
 
@@ -963,7 +987,7 @@ def _retain(store, records, now, keep=KEEP_TERMINAL):
     _sweep_orphans(store, now)
 
 
-def _recover_locked(paths, store, unit_active, now, restart_writers=None, cleanup_fresh=None):
+def _recover_locked(paths, store, unit_active, now, restart_writers=None, cleanup_fresh=None, settle_dirs=None):
     """One recovery pass (the caller holds the start lock); returns the ids marked interrupted.
 
     The listing only picks candidates: records queued/running (past the queued grace) and finished records
@@ -980,7 +1004,8 @@ def _recover_locked(paths, store, unit_active, now, restart_writers=None, cleanu
         if engine_fd is not None:
             try:
                 for job_id, unit in candidates:
-                    if _recover_one(paths, store, job_id, unit, unit_active, now, restart_writers, cleanup_fresh):
+                    if _recover_one(paths, store, job_id, unit, unit_active, now, restart_writers, cleanup_fresh,
+                                    settle_dirs):
                         changed.append(job_id)
             finally:
                 os.close(engine_fd)
@@ -993,18 +1018,20 @@ def _recover_locked(paths, store, unit_active, now, restart_writers=None, cleanu
     return changed
 
 
-def recover_interrupted(paths, *, unit_active=None, now=None, restart_writers=None, cleanup_fresh=None):
+def recover_interrupted(paths, *, unit_active=None, now=None, restart_writers=None, cleanup_fresh=None,
+                        settle_dirs=None):
     """Mark dead queued/running jobs as interrupted; returns the affected job ids.
 
     `restart_writers({app_id: [units]}) -> [failed units]` restarts writers a dead backup left stopped;
-    `cleanup_fresh([app_id]) -> [problems]` removes an unfinished fresh deployment.
+    `cleanup_fresh([app_id]) -> [problems]` removes an unfinished fresh deployment;
+    `settle_dirs(job_id, [app_id]) -> [notes]` settles the host-directory siblings a dead restore left.
     """
     if not Path(paths.jobs).is_dir():
         return []
     store = JobStore(paths)
     with start_lock(paths):
         return _recover_locked(paths, store, unit_active or systemd_unit_active, time.time() if now is None else now,
-                               restart_writers, cleanup_fresh)
+                               restart_writers, cleanup_fresh, settle_dirs)
 
 
 def active_job(paths):

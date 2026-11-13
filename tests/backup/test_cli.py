@@ -273,7 +273,9 @@ class InspectTests(CliCase):
         self.assertEqual(set(manifest), {'backup_id', 'created', 'type', 'note', 'tool', 'source', 'consistency',
                                          'total_size', 'apps'})
         self.assertEqual(set(manifest['apps'][0]), {'id', 'name', 'adapter', 'owner', 'images', 'postgres', 'volumes',
-                                                    'secrets_count', 'config_files_count', 'verify_snapshot'})
+                                                    'data_dirs', 'secrets_count', 'config_files_count',
+                                                    'verify_snapshot'})
+        self.assertEqual(manifest['apps'][0]['data_dirs'], [], 'an archive without host directories lists none')
         self.assertEqual(manifest['apps'][0]['images'], [{'ref': 'localhost/x:1', 'included': False}])
         preflight = response['preflight']
         self.assertEqual(set(preflight), {'ok', 'checks', 'apps'})
@@ -524,3 +526,60 @@ class FileCommandTests(CliCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class HostDirCliTests(CliCase):
+    def test_manifest_summary_lists_directories_with_size_and_local_label(self):
+        from woowbackup import catalog as catalog_module
+        from .test_catalog import demo_entry, lookup
+        entry = demo_entry(self.paths)
+        entry['data_dirs'] = [{'path': 'homeassistant/config', 'label': '設定資料夾'}]
+        local = {'woowbk-demo': catalog_module.validate_entry(entry, paths=self.paths, user_lookup=lookup)}
+        manifest = {'backup_id': '20261113T020000Z-a1b2c3d4', 'created': '2026-11-13T02:00:00Z', 'type': 'manual',
+                    'note': '', 'tool': {}, 'source': {}, 'consistency': {},
+                    'entries': [{'path': 'apps/woowbk-demo/dirs/0.tar', 'size': 4096, 'sha256': '0' * 64},
+                                {'path': 'apps/woowbk-demo/dirs/1.tar', 'size': 10, 'sha256': '0' * 64}],
+                    'apps': [{'id': 'woowbk-demo', 'name': '示範', 'adapter': 'quadlet-postgres',
+                              'owner': {'name': 'appowner', 'uid': 1001}, 'images': [], 'postgres': [], 'volumes': [],
+                              'secrets': [], 'config_files': [], 'verify_snapshot': {},
+                              'data_dirs': [{'path': 'homeassistant/config', 'entry': 'apps/woowbk-demo/dirs/0.tar'},
+                                            {'path': 'not/declared', 'entry': 'apps/woowbk-demo/dirs/1.tar'}]}]}
+        summary = cli.manifest_summary(manifest, local)
+        self.assertEqual(summary['apps'][0]['data_dirs'], [
+            {'path': 'homeassistant/config', 'size': 4096, 'label': '設定資料夾'},
+            {'path': 'not/declared', 'size': 10, 'label': ''}])
+        self.assertEqual(cli.manifest_summary(manifest)['apps'][0]['data_dirs'][0]['label'], '')
+
+    def test_recovery_from_status_settles_the_directories_of_a_dead_restore(self):
+        store = jobs.JobStore(self.paths)
+        store.ensure()
+        record = store.create('restore', {'backup_id': '20261113T020000Z-a1b2c3d4', 'apps': ['woowbk-demo']},
+                              now=jobs.time.time() - 60)
+        record.update(state='running', dir_apps=['woowbk-demo'])
+        store.save(record)
+        self.world.recover_notes['woowbk-demo'] = ['已移除沒寫完或未換上的 ~/data.woowbk-new-x']
+        response = self.call(['status'])
+        self.assertTrue(response['ok'])
+        self.assertIn(('recover_dirs', 'woowbk-demo', record['id']), self.world.events)
+        saved = store.get(record['id'])
+        self.assertEqual((saved['state'], saved['dir_apps']), ('interrupted', []))
+        self.assertIn('已移除沒寫完或未換上的 ~/data.woowbk-new-x', saved['error']['message'])
+
+    def test_start_commands_give_the_recovery_its_directory_hook(self):
+        seen = []
+        original = jobs.start_job
+
+        def spy(paths, job_type, params, request_id, **kwargs):
+            seen.append((job_type, kwargs.get('settle_dirs')))
+            return {'job_id': 'j20261113T020000Z-00000001', 'deduplicated': False}
+        jobs.start_job = spy
+        try:
+            self.call(['backup-start'], {'apps': ['woowbk-demo'], 'request_id': 'req-dirs-0001'})
+            backup_id = self.make_backup()
+            self.call(['restore-start'], {'backup_id': backup_id, 'apps': ['woowbk-demo'], 'request_id': 'req-dirs-0002',
+                                          'confirm': True})
+            self.call(['verify-start'], {'backup_id': backup_id, 'request_id': 'req-dirs-0003'})
+        finally:
+            jobs.start_job = original
+        self.assertEqual([kind for kind, _ in seen], ['backup', 'restore', 'verify'])
+        self.assertTrue(all(callable(hook) for _, hook in seen))

@@ -146,6 +146,9 @@ class FlowContext:
         self._catalog = None
         self._stopped_writers = {}
         self._unfinished_fresh = []
+        # A failed restore could not undo a host-directory step (a moved-aside copy not put back, a new copy not
+        # removed): the record keeps `dir_apps`, so the next recovery pass settles the directories again.
+        self.dirs_unsettled = False
 
     @property
     def storage(self):
@@ -222,11 +225,18 @@ class FlowContext:
             self._unfinished_fresh.append(app_id)
             self.reporter.set_partial(fresh_apps=list(self._unfinished_fresh))
 
+    def mark_dirs(self, app_ids):
+        """Record the apps whose host directories this restore is about to write (siblings named after the job),
+        before the first copy is written: the recovery of a job that dies settles what it left."""
+        self.reporter.set_partial(dir_apps=list(app_ids))
+
     def adapter(self, app, *, phases=True):
-        return self.deps.adapter_factory(app, log=self.log, phase=self.phase if phases else None,
-                                         checkpoint=self.checkpoint,
-                                         writers_hook=lambda units, app_id=app.id: self.note_writers(app_id, units),
-                                         imported_hook=lambda app_id=app.id: self.note_imported(app_id))
+        adapter = self.deps.adapter_factory(app, log=self.log, phase=self.phase if phases else None,
+                                            checkpoint=self.checkpoint,
+                                            writers_hook=lambda units, app_id=app.id: self.note_writers(app_id, units),
+                                            imported_hook=lambda app_id=app.id: self.note_imported(app_id))
+        adapter.job_id = self.job_id  # names the restore's host-directory siblings
+        return adapter
 
     def identities(self):
         """Decryption identities: KeyInfo objects held by this device plus the job's temporary key file."""
@@ -413,6 +423,29 @@ def remove_fresh_apps(deps, app_ids, *, log=None):
         except Exception:  # noqa: BLE001 - reported, never raised from recovery
             problems.append(f'移除「{app.name}」未完成的部署時發生未預期的錯誤')
     return problems
+
+
+def settle_dirs(deps, job_id, app_ids, *, log=None):
+    """Recovery of a dead restore `job_id`: bring the host directories of `app_ids` to a safe final state (a missing
+    directory gets its moved-aside copy back, new copies are removed, the only copy of earlier content is never
+    deleted). Returns zh-TW notes about what was done and what is left."""
+    notes = []
+    catalog = deps.load_catalog()
+    for app_id in app_ids or []:
+        app = catalog.get(app_id)
+        if app is None:
+            notes.append(f'找不到應用 {app_id} 的設定，沒有整理它的主機資料夾，需人工確認')
+            continue
+        try:
+            adapter = deps.adapter_factory(app, log=log or _noop, phase=None, checkpoint=None)
+            adapter.job_id = job_id
+            recover = getattr(adapter, 'recover_dirs', None)
+            notes.extend(note for note in (recover() if recover else []) if isinstance(note, str))
+        except BackupError as error:
+            notes.append(f'「{app.name}」的主機資料夾：{error.message.rstrip("。")}，需人工確認')
+        except Exception:  # noqa: BLE001 - reported, never raised from recovery
+            notes.append(f'整理「{app.name}」的主機資料夾時發生未預期的錯誤，需人工確認')
+    return notes
 
 
 # ---------------------------------------------------------------- backup
@@ -625,6 +658,7 @@ def run_restore(ctx, params):
               'rolled_back': False, 'changed': False, 'fresh_apps': [], 'safety_skipped': False,
               'safety_failed': False, 'warnings': []}
     keep_fresh_marker = False
+    dirs_marked = False
     try:
         ctx.phase('decrypt')
         extract_dir = _private_dir(staging / 'extract')
@@ -656,6 +690,12 @@ def run_restore(ctx, params):
             # result['fresh_apps'] keeps naming every app deployed from templates.
             result['fresh_apps'] = list(fresh)
             ctx.mark_fresh(fresh)
+        dir_apps = [plan.app.id for plan in plans if getattr(plan.app, 'data_dirs', ())]
+        if dir_apps:
+            # Before the first host-directory copy is written: a job that dies leaves siblings named after it, which
+            # the recovery settles (moved-aside copies back where a directory is missing, new copies removed).
+            ctx.mark_dirs(dir_apps)
+            dirs_marked = True
 
         touched = []
         try:
@@ -700,6 +740,8 @@ def run_restore(ctx, params):
                 'internal-error', '還原過程發生未預期的錯誤。')
             _rollback(ctx, touched, result, staging, error, device_key)
         result['changed'] = True
+        # The job succeeded: the host-directory copies its restore moved aside can go now, and only now.
+        _finish_dirs(ctx, [plan.adapter for plan in plans], result)
         # Only after a successful restore, and never the backups this restore depends on (review SEC-2, CR-02).
         if inplace:
             prune_safety(ctx, [plan.app.id for plan in inplace], exclude={backup_id, result['safety_backup_id']})
@@ -712,7 +754,47 @@ def run_restore(ctx, params):
     finally:
         if result['fresh_apps'] and not keep_fresh_marker:
             ctx.reporter.set_partial(fresh_apps=[])
+        if dirs_marked and not keep_fresh_marker and not getattr(ctx, 'dirs_unsettled', False):
+            # Settled in this process (finished, rolled back or reported); a shutdown, or a directory step the
+            # rollback could not undo, leaves it to the recovery (which only moves copies back and removes new ones).
+            ctx.reporter.set_partial(dir_apps=[])
         _cleanup_staging(ctx)
+
+
+def _add_warning(result, note):
+    if isinstance(note, str) and note not in result['warnings'] and len(result['warnings']) < 50:
+        result['warnings'].append(note[:1000])
+
+
+def _finish_dirs(ctx, adapters, result):
+    """Delete the host-directory copies that `adapters` moved aside (the job, or that app's rollback, succeeded).
+    A termination signal here does not undo a finished restore: the copies left are reported instead."""
+    stopped = False
+    for adapter in adapters:
+        finish = getattr(adapter, 'finish_dirs', None)
+        if finish is None:
+            continue
+        try:
+            notes = finish()
+        except BaseException as exc:  # noqa: BLE001 - incl. a termination signal: the restore itself is complete
+            notes = ['刪除被取代的主機資料夾內容時發生錯誤或作業被中止；資料夾旁名稱含「.woowbk-old-」的資料夾可能還在，'
+                     '確認應用正常後可手動刪除。']
+            stopped = not isinstance(exc, Exception)
+        for note in notes or []:
+            ctx.log(f'注意：{note}')
+            _add_warning(result, note)
+        if stopped:
+            break  # a termination signal: leave the remaining copies (reported above) and end quickly
+
+
+def _discard_dirs(ctx, adapter):
+    """Undo an adapter's unfinished host-directory step after a failure; returns zh-TW problems. A problem keeps the
+    record's `dir_apps`, so the recovery settles those directories again later."""
+    discard = getattr(adapter, 'discard_dirs', None)
+    problems = [str(problem) for problem in (discard() if discard else []) or []]
+    if problems:
+        ctx.dirs_unsettled = True
+    return problems
 
 
 def _collect_warnings(result, adapter):
@@ -821,6 +903,10 @@ def _rollback(ctx, touched, result, staging, error, device_key):
     # backup (review finding CR-01).
     _remove_tree(Path(staging) / 'extract')
     problems = []
+    # A host-directory step the failure cut short: a directory moved aside but not replaced goes back, the new copy
+    # being written is removed. Directories already swapped stay for the rollback (or the fresh removal) below.
+    for plan in touched:
+        problems.extend(_discard_dirs(ctx, plan.adapter))
     safety_id = result.get('safety_backup_id')
     inplace = [plan for plan in touched if plan.mode == 'inplace']
     if inplace:
@@ -838,6 +924,8 @@ def _rollback(ctx, touched, result, staging, error, device_key):
         # restore's state (review finding CR-03).
         for plan in inplace if safety_manifest is not None else []:
             name = plan.app.name
+            adapter = None
+            verified = False
             try:
                 app_manifest = next((a for a in safety_manifest.get('apps') or [] if a.get('id') == plan.app.id), None)
                 if app_manifest is None:
@@ -847,16 +935,23 @@ def _rollback(ctx, touched, result, staging, error, device_key):
                 failed = [c for c in adapter.health() if c['status'] == 'fail']
                 if failed:
                     problems.append(f'「{name}」回復後健康檢查未通過')
-                    continue
-                entry = verification_entry(plan.app, adapter, app_manifest)
-                if entry is not None and entry['match'] is False:
-                    problems.append(f'「{name}」回復後資料與還原前不一致')
                 else:
-                    ctx.log(f'應用「{name}」已回復到還原前的狀態')
+                    entry = verification_entry(plan.app, adapter, app_manifest)
+                    if entry is not None and entry['match'] is False:
+                        problems.append(f'「{name}」回復後資料與還原前不一致')
+                    else:
+                        verified = True
+                        ctx.log(f'應用「{name}」已回復到還原前的狀態')
             except BackupError as rollback_error:
                 problems.append(f'「{name}」：{rollback_error.message.rstrip("。")}')
             except Exception:  # noqa: BLE001
                 problems.append(f'「{name}」回復時發生未預期的錯誤')
+            if adapter is not None and verified:
+                # This app's rollback is verified: the failed restore's directory data it moved aside can go; the
+                # pre-restore content stays and is reported (never the only copy).
+                _finish_dirs(ctx, [adapter], result)
+            elif adapter is not None:
+                problems.extend(_discard_dirs(ctx, adapter))
     for plan in touched:
         if plan.mode != 'fresh':
             continue
@@ -869,6 +964,11 @@ def _rollback(ctx, touched, result, staging, error, device_key):
             problems.append(f'移除「{plan.app.name}」新建立的項目時發生未預期的錯誤')
     if problems:
         result['rolled_back'] = False
+        for plan in touched:  # where the copies of each host directory are now (nothing of them was deleted)
+            leftovers = getattr(plan.adapter, 'dir_leftovers', None)
+            for note in (leftovers() if leftovers else []):
+                ctx.log(f'注意：{note}')
+                _add_warning(result, note)
         message = f'還原失敗，且自動回復未完成，需人工處理：{"；".join(problems)[:400].rstrip("。")}。'
         if safety_id:
             message += f'可使用還原前備份 {safety_id} 再次還原。'

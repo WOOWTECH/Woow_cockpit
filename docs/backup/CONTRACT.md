@@ -7,6 +7,10 @@ signal handling and recovery duties (§8), the backup/restore algorithm details 
 Revised again after the delta review (HD-01–HD-10): image names and volume members podman really writes (§5),
 restore `warnings` (§7), the fresh-deployment marker and its recovery, upload-finish completion (§8), backup-time
 volume checks, snapshot confirmation, database enumeration and bounded health requests (§9), upload frames (§11).
+Revised 2026-11-13 (branch `feat/backup-host-dirs`) for **host directories** (`data_dirs`, 主機資料夾): catalog
+schema (§4), manifest, entries and nested-tar rules (§5), the owner-side directory helper (§6), summary, preflight
+and result fields (§7), the `dir_apps` marker and its recovery (§8), the backup/restore/rollback algorithms (§9),
+security rules (§10); the emergency kit is an age identity file (§5).
 Product docs for customers are written separately in Traditional Chinese (`docs/backup.md`).
 All UI text is **Traditional Chinese (zh-TW)**. Code comments in English.
 
@@ -108,11 +112,35 @@ octal strings ≤ `0644`; `template_dir` must be inside the templates root above
 directories must be root-owned, not group/world-writable, and not symlinks. `units` is the start
 order (stop = reverse); `writer_units` ⊆ `units` are stopped during a backup while databases stay up.
 
-**Authority rule:** during restore, *what* gets written (secret names, config paths, volume names,
-databases, units, templates) always comes from the **local** catalog. The archive only supplies
+**Host directories** (optional `data_dirs`, schema stays 1): directories in the owner's home that Quadlet files
+bind-mount (`Volume=%h/<dir>:<path>`), backed up and restored **as a whole**:
+
+```json
+"data_dirs": [{"path": ".local/share/nextcloud-office/html", "label": "網站程式"},
+              {"path": "homeassistant/config-preinstalled"}]
+```
+
+At most 16 items `{"path", "label"?}` (unknown keys rejected; `label` 0–80 characters, no control characters).
+`path` is relative to the owner's home and normalized: no leading or trailing `/`, segments
+`^[A-Za-z0-9._@+-]{1,255}$` and not `.`/`..` (so never the home itself), last segment ≤ 200 characters (room for
+the restore's sibling names). It may neither equal, lie inside nor contain `.ssh`, `.gnupg`, `.config/systemd`,
+`.config/containers`, `.local/share/containers`, `.config/environment.d`, `.config/autostart`, `.config/dbus-1`,
+`.config/user-tmpfiles.d`, `.local/share/systemd`, `.local/share/dbus-1` or `.local/share/applications` (login
+keys, unit definitions, the user manager's environment and the Podman storage never come from archive bytes).
+Items must not overlap each other (equal, or one inside the other) or any `config_files` path; two loaded apps of
+the same owner must not declare overlapping directories (the later entry, in file name order, is reported in
+`status.warnings` and not loaded). Every unit that mounts a directory belongs in `writer_units` (the backup logs a
+warning for a running non-writer unit whose `.container` file mounts it). **Cold databases:** a PostgreSQL whose
+data lives in a volume or host directory may be declared without a `postgres` entry: list the data volume in
+`volumes` or the data directory in `data_dirs` and put the database unit in `writer_units`; everything stops during
+the backup and roles, passwords, owners and grants are kept at file level (the major version must then be the same
+on restore).
+
+**Authority rule:** during restore, *what* gets written (secret names, config paths, volume names, host directory
+paths, databases, units, templates) always comes from the **local** catalog. The archive only supplies
 bytes for items the local catalog declares. Items present in the archive but not in the local
 catalog are ignored and reported; items declared locally but missing in the archive make the app
-incompatible.
+incompatible (an archive without `data_dirs` is incompatible with a catalog entry that declares some).
 
 ## 5. Archive format `.woowbackup` v1
 

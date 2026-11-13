@@ -943,6 +943,22 @@
       h("dt", { text: label }), h("dd", { class: className || null }, value instanceof Node ? value : str(value) || "—")]));
   }
 
+  // Host directories (主機資料夾): manifest summary apps[].data_dirs, paths relative to the app owner's home, shown as
+  // ~/<path>. Archives and engines from before host directories have none; malformed entries are skipped, never guessed.
+  function dataDirs(app) {
+    return list(app?.data_dirs).filter(item => isObject(item) && isString(item.path) && item.path.length > 0)
+      .map(item => ({ path: item.path, label: isString(item.label) ? item.label : "", size: isNumber(item.size) && item.size >= 0 ? item.size : null }));
+  }
+
+  // One line per directory: optional app name, the path (never shortened) and the catalog label or size when known.
+  function dirList(entries, label) {
+    return h("ul", { class: "path-list", "aria-label": label }, entries.map(({ app = null, dir }) => h("li", null,
+      app ? h("span", { class: "path-app", text: app }) : null,
+      h("span", { class: "mono path", text: `~/${dir.path}` }),
+      dir.label || dir.size !== null
+        ? h("span", { class: "secondary", text: [dir.label, dir.size !== null ? bytes(dir.size) : ""].filter(Boolean).join(" · ") }) : null)));
+  }
+
   function errorNotice(error, { retry = null, dismiss = null } = {}) {
     const extras = [];
     const jobId = error?.details?.job_id;
@@ -1185,7 +1201,7 @@
     else if (detail?.data) body.push(...manifestSummary(detail.data.manifest));
     else {
       body.push(h("p", { class: "muted", text: backup.key_available
-        ? "解密備份的目錄資訊，查看應用、資料庫、資料卷與映像。這不會變更任何資料。"
+        ? "解密備份的目錄資訊，查看應用、資料庫、資料卷、主機資料夾與映像。這不會變更任何資料。"
         : "這台設備沒有這份備份的金鑰。輸入建立它的設備所產生的緊急金鑰後，才能檢視內容。" }));
       if (detail?.error) body.push(errorNotice(detail.error));
       body.push(h("div", { class: "button-group" }, button(backup.key_available ? "檢視內容" : "輸入金鑰並檢視", () => inspectDetail(backup), {
@@ -1267,11 +1283,14 @@
     const images = list(app.images).filter(isObject);
     const databases = list(app.postgres).filter(isObject);
     const volumes = list(app.volumes).filter(isObject);
+    const dirs = dataDirs(app);
     return metadata([
       ["應用 ID", str(app.id), "mono"],
       ["擁有者", owner.name ? `${str(owner.name)}（UID ${str(owner.uid)}）` : "—"],
-      ["資料庫", databases.length ? databases.map(db => `PostgreSQL ${str(db.major)} · ${str(db.database)}`).join("、") : "無"],
+      // A database kept as files (stopped with the app, inside a volume or host directory) has no dump of its own.
+      ["資料庫", databases.length ? databases.map(db => `PostgreSQL ${str(db.major)} · ${str(db.database)}`).join("、") : "沒有以 pg_dump 匯出的資料庫"],
       ["資料卷", volumes.length ? volumes.map(volume => str(volume.name)).join("、") : "無"],
+      ["主機資料夾", dirs.length ? dirList(dirs.map(dir => ({ dir })), `${str(app.name || app.id)} 的主機資料夾`) : "無"],
       ["容器映像", images.length ? images.map(image => `${str(image.ref)}（${image.included ? "已包含" : "未包含"}）`).join("、") : "無"],
       ["應用機密與設定", `${Number(app.secrets_count) || 0} 個應用機密 · ${Number(app.config_files_count) || 0} 個設定檔`]
     ]);
@@ -1343,7 +1362,7 @@
         h("div", { class: "field" }, h("label", { htmlFor: "backup-note", text: "備註（選填）" }), note,
           h("p", { id: "backup-note-hint", class: "hint", text: "" }))),
       h("div", { class: "form-section" }, h("h3", { text: "備份期間" }),
-        h("p", { class: "muted", text: "為了取得一致的資料，備份時會暫停應用的寫入服務（資料庫保持運作以便匯出），匯出完成後立即自動恢復。暫停時間通常為數秒到數分鐘，取決於資料量。" })),
+        h("p", { class: "muted", text: "為了取得一致的資料，備份時會暫停應用設定列出的寫入服務，匯出完成後立即自動恢復。以 pg_dump 匯出的資料庫保持運作；資料庫檔案隨資料卷或主機資料夾整份備份時，資料庫也會一起暫停。暫停時間通常為數秒到數分鐘，取決於資料量。" })),
       ...blockers,
       create.error ? errorNotice(create.error) : null,
       h("div", { class: "form-footer button-group" },
@@ -1353,7 +1372,7 @@
     h("aside", { class: "card side-card", "aria-labelledby": "create-side" },
       h("h3", { id: "create-side", text: "這份備份包含什麼？" }),
       h("ul", { class: "bullet-list" },
-        ["PostgreSQL 資料庫（以 pg_dump 匯出，還原前會檢查）", "應用的資料卷", "應用機密（Podman secrets）與設定檔", "Quadlet 服務定義",
+        ["PostgreSQL 資料庫（以 pg_dump 匯出，還原前會檢查）", "應用的資料卷與主機資料夾", "應用機密（Podman secrets）與設定檔", "Quadlet 服務定義",
           "容器映像（僅在勾選時）"].map(item => h("li", { text: item }))),
       h("p", { class: "muted", text: status.key ? `使用這台設備的金鑰（${str(status.key.key_id)}）加密，完成後會完整驗證才列出。` : "使用這台設備的金鑰加密，完成後會完整驗證才列出。" }),
       h("p", { class: "muted", text: `保存位置：這台設備的 ${str(status.storage.path) || "備份目錄"}。備份與原資料在同一顆磁碟上，請另外下載保存到其他位置。` })));
@@ -2005,6 +2024,14 @@
     // Warnings shown on 預檢 are repeated here, where the decision is made (review finding F13).
     const warnings = [...list(preflight.checks), ...apps.flatMap(app => list(app.checks))]
       .filter(check => isObject(check) && check.status === "warn");
+    // Host directories are replaced as a whole, not merged: say which ones before the decision. The list comes from
+    // the backup; only those this device's catalog declares are written (CONTRACT §4 authority rule).
+    const contents = new Map(list(manifest.apps).filter(isObject).map(app => [app.id, app]));
+    const dirsOf = app => dataDirs(contents.get(app.id));
+    const dirEntries = mode => apps.filter(app => (app.mode === "inplace") === (mode === "inplace"))
+      .flatMap(app => dirsOf(app).map(dir => ({ app: str(app.name || app.id), dir })));
+    const inplaceDirs = dirEntries("inplace");
+    const freshDirs = dirEntries("fresh");
     const canStart = wizard.confirmed && (!noSafety || wizard.confirmedNoSafety) && apps.length > 0 && !wizard.busy && !active;
     // Review F1: restoring a pre-restore backup (or an explicit "without safety backup" restore) may proceed
     // without a new safety backup, so the page must not promise one.
@@ -2029,9 +2056,18 @@
       h("ul", { class: "card item-list affected" }, apps.map(app => h("li", { class: "item-row" }, tile("package-variant-closed", true),
         h("div", { class: "item-main" }, h("strong", { class: "item-title", text: str(app.name || app.id) }),
           h("span", { class: "secondary", text: app.mode === "inplace"
-            ? "原位還原：會停止服務，並以備份內容覆寫資料庫、資料卷、應用機密與設定檔。"
-            : "全新部署：會在這台設備建立服務、資料卷與資料庫。" })),
+            ? `原位還原：會停止服務，並以備份內容覆寫資料庫、資料卷、${dirsOf(app).length ? "主機資料夾、" : ""}應用機密與設定檔。`
+            : `全新部署：會在這台設備建立服務、資料卷${dirsOf(app).length ? "、主機資料夾" : ""}與資料庫。` })),
         h("div", { class: "item-side" }, chip(MODES[app.mode] || str(app.mode), app.mode === "inplace" ? "warn" : "info"))))),
+      inplaceDirs.length || freshDirs.length ? h("h4", { class: "subheading", text: "主機資料夾" }) : null,
+      inplaceDirs.length ? [
+        h("p", { text: "原位還原會以備份內容整個取代下列資料夾，不會合併：資料夾回到備份時的內容，之後新增的檔案會被移除。系統先在同一層寫入新的資料夾，再與原資料夾對調；原本的內容保留到整個還原成功後才刪除，所以還原期間需要能同時存放新舊兩份內容的空間。" }),
+        dirList(inplaceDirs, "原位還原會取代的主機資料夾")] : null,
+      freshDirs.length ? [
+        h("p", { text: "全新部署會建立下列資料夾；它們在這台設備上必須不存在或是空的（預檢會確認），上層資料夾不存在時會以應用擁有者身分建立。" }),
+        dirList(freshDirs, "全新部署會建立的主機資料夾")] : null,
+      inplaceDirs.length || freshDirs.length
+        ? h("p", { class: "muted", text: "路徑中的 ~ 是這台設備上應用擁有者的家目錄。只會寫入這台設備應用設定列出的資料夾；備份中其他資料夾會被略過，預檢會列出。" }) : null,
       h("h4", { class: "subheading", text: "停機時間" }),
       h("p", { text: `還原期間，上列應用會停止服務，直到資料還原、啟動與健康檢查完成。這份備份內容約 ${bytes(manifest.total_size)}；備份當時暫停寫入約 ${duration(downtime)}，還原通常需要更久。` }),
       h("h4", { class: "subheading", text: "還原前備份與自動回復" }),
@@ -2235,6 +2271,19 @@
     ]);
   }
 
+  // Host directories of the apps a restore job covers, known only while this page still holds the backup's contents
+  // (the wizard that started the job); after a reload the engine's own messages say what happened. What is written
+  // follows this device's catalog (CONTRACT §4), so the copy around these lists never claims more than that.
+  function restoreDirs(job) {
+    const wizard = state.wizard?.jobId === job.id ? state.wizard : null;
+    if (!isObject(wizard?.inspect)) return [];
+    const contents = new Map(list(wizard.inspect.manifest?.apps).filter(isObject).map(app => [app.id, app]));
+    const planned = new Map(list(wizard.inspect.preflight?.apps).filter(isObject).map(app => [app.id, app]));
+    return list(job.params?.apps).filter(isString).flatMap(id => dataDirs(contents.get(id)).map(dir => ({
+      app: str(planned.get(id)?.name || appName(id)), mode: planned.get(id)?.mode === "inplace" ? "inplace" : "fresh", dir
+    })));
+  }
+
   function buildResult(job) {
     const result = isObject(job.result) ? job.result : null;
     const error = isObject(job.error) ? job.error : null;
@@ -2250,6 +2299,7 @@
       : ["stop", "restore", "start", "check", "rollback"].some(reached);
     const freshApps = list(result?.fresh_apps).filter(isString);
     const manualWork = restore && job.state === "failed" && rollbackPhase && result?.rolled_back === false;
+    const dirs = restore ? restoreDirs(job) : [];
     const body = [];
     const actions = [];
     let title = "作業結束";
@@ -2310,6 +2360,9 @@
         body.push(h("p", { class: "muted", text: safetyId
           ? "自動回復未完成，需要人工處理。可以使用上列還原前備份再次還原。"
           : "自動回復未完成，需要人工處理；請聯絡系統管理員檢查應用。" }));
+        if (dirs.length) {
+          body.push(h("p", { class: "muted", text: "主機資料夾旁名稱含「.woowbk-old-」的資料夾可能是還原前的內容，處理完成前請勿刪除。" }));
+        }
       } else if (!touched) {
         body.push(h("p", { text: safetyId
           ? "還原在變更任何資料前失敗，應用維持原狀。已建立的還原前備份可保留，或到備份列表刪除。"
@@ -2335,6 +2388,10 @@
         if (freshApps.length) {
           steps.push(h("li", { text: `全新部署（${freshApps.map(appName).join("、")}）沒有完成；系統會清除未完成的部署（結果見上方訊息），之後可以再次還原同一份備份。` }));
         }
+        if (dirs.length) {
+          steps.push(h("li", { text: "主機資料夾旁名稱含「.woowbk-new-」或「.woowbk-old-」的資料夾，是還原寫到一半的新內容或原本的內容。"
+            + "系統判定中斷時會整理它們（原資料夾不在時把原本的內容移回、移除沒寫完的新內容，絕不刪除僅存的一份），結果見上方訊息與作業紀錄；請勿手動刪除或改名。" }));
+        }
         if (!safetyId && (touched || freshApps.length) && backupId) {
           actions.push(button("再次還原這份備份", () => go(["restore", backupId]), { primary: true, icon: "backup-restore", focus: "result-restore-again" }));
         }
@@ -2353,6 +2410,19 @@
       }
       const health = list(result.health).filter(isObject);
       if (health.length) body.push(h("h4", { class: "subheading", text: "健康檢查" }), checkList(health, "健康檢查結果"));
+      if (job.state === "succeeded" && dirs.length) {
+        const replaced = dirs.filter(item => item.mode === "inplace");
+        const created = dirs.filter(item => item.mode !== "inplace");
+        body.push(h("h4", { class: "subheading", text: "主機資料夾" }));
+        if (replaced.length) {
+          body.push(h("p", { text: `原位還原的應用在備份中有下列主機資料夾；這台設備應用設定列出的，已整個換成備份時的內容${safetyId ? "，還原前的內容保留在上列還原前備份中" : ""}。` }),
+            dirList(replaced, "原位還原的主機資料夾"));
+        }
+        if (created.length) {
+          body.push(h("p", { text: "全新部署的應用在備份中有下列主機資料夾；這台設備應用設定列出的，已建立並寫入備份時的內容。" }),
+            dirList(created, "全新部署的主機資料夾"));
+        }
+      }
       // What the restore could not keep, e.g. setuid bits or file capabilities in a volume (review finding HD-09).
       const notes = list(result.warnings).filter(isString).slice(0, 50);
       if (notes.length) body.push(h("h4", { class: "subheading", text: "注意事項" }),

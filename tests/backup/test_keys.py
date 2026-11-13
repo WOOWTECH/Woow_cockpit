@@ -290,3 +290,78 @@ class KeyStoreTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+def old_layout_kit(key_id, created, host, secret):
+    """The emergency kit as engines before 2026-11-13 wrote it (prose without '#'): still accepted whole."""
+    return '\n'.join([
+        'woowtech Cockpit 備份緊急金鑰', '================================', '',
+        '這是還原加密備份檔（.woowbackup）所需的金鑰。請立即把這個檔案保存到這台設備以外的安全位置，',
+        '例如密碼管理器、加密隨身碟，或列印後上鎖保管。', '',
+        f'金鑰 ID：{key_id}', f'建立時間：{created}（UTC）', f'建立設備：{host}', '',
+        '緊急金鑰（請完整複製下一行，包含開頭的 AGE-SECRET-KEY-1）：', '', secret, '',
+        '如何在另一台設備還原', '1. 在目標設備登入 Cockpit，以管理員身分開啟「備份與還原」頁面。',
+        '2. 到「從檔案還原」，上傳你下載保存的 .woowbackup 備份檔。',
+        '3. 頁面要求輸入金鑰時，貼上上方以 AGE-SECRET-KEY-1 開頭的整行金鑰。',
+        '   若選擇在該設備保存金鑰，日後還原同一金鑰加密的備份時就不必再次輸入。',
+        '4. 檢查預檢結果與受影響的應用，確認後開始還原。', '', '重要警告',
+        '- 遺失這把金鑰後，以它加密的備份將永遠無法還原；任何人（包括 woowtech）都無法替你找回或重設。',
+        '- 這台設備故障或重新安裝時，設備上保存的金鑰也會一起消失，屆時只能依靠這份緊急金鑰。',
+        '- 任何同時取得這把金鑰與備份檔的人，都能讀取備份中的資料庫、檔案與應用機密。',
+        '  請勿以電子郵件、聊天訊息或公開雲端分享傳送，也不要和備份檔存放在同一處。', ''])
+
+
+@needs_age
+class KitIdentityFileTests(unittest.TestCase):
+    """The kit is an age identity file (`age -d -i kit.txt`), and key import accepts new and old kits whole."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.paths = Paths(base=Path(self.tmp.name))
+        self.store = KeyStore(self.paths)
+        self.info, _ = self.store.ensure_device_key()
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_every_line_but_the_key_is_a_comment(self):
+        kit = self.store.kit_text()
+        lines = kit.split('\n')
+        self.assertEqual(lines[-1], '', 'ends with a newline')
+        keys_ = [line for line in lines[:-1] if not line.startswith('#')]
+        self.assertEqual(len(keys_), 1)
+        self.assertRegex(keys_[0], r'^AGE-SECRET-KEY-1[0-9A-Z]{58}$')
+        self.assertTrue(all(line == '#' or line.startswith('# ') for line in lines[:-1] if line != keys_[0]))
+        self.assertIn(f'# public key: {self.info.recipient}', lines)
+        self.assertEqual(lines[0], f'# {keys.KIT_TITLE}')
+
+    def test_age_decrypts_with_the_kit_file(self):
+        kit_file = Path(self.tmp.name) / 'woowtech-backup-key.txt'
+        kit_file.write_text(self.store.kit_text(), encoding='utf-8')
+        cipher = subprocess.run(['age', '-r', self.info.recipient], input=b'payload of a backup',
+                                stdout=subprocess.PIPE, check=True).stdout
+        plain = subprocess.run(['age', '-d', '-i', str(kit_file)], input=cipher, stdout=subprocess.PIPE,
+                               stderr=subprocess.PIPE, check=True).stdout
+        self.assertEqual(plain, b'payload of a backup')
+
+    def test_import_accepts_new_and_old_kits_whole(self):
+        kit = self.store.kit_text()
+        secret = next(line for line in kit.splitlines() if line.startswith('AGE-SECRET-KEY-1'))
+        self.assertEqual(normalize_secret(kit), secret)
+        self.assertEqual(normalize_secret(kit.replace('\n', '\r\n')), secret)
+        self.assertEqual(self.store.import_key(kit), self.info, 'the device key is not duplicated')
+        other = fresh_secret()
+        old = old_layout_kit('ABCD-EF01-2345-6789', '2026-11-01T00:00:00Z', 'dev-a', other)
+        self.assertEqual(normalize_secret(old), other)
+        self.assertEqual(normalize_secret('﻿' + old), other, 'a byte order mark from an editor')
+        imported = self.store.import_key(old)
+        self.assertEqual((imported.kind, imported.recipient), ('imported', keys.recipient_for_secret(other)))
+
+    def test_old_layout_with_two_keys_or_without_one_is_refused(self):
+        two = old_layout_kit('ABCD-EF01-2345-6789', 'x', 'dev-a', fresh_secret()) + fresh_secret() + '\n'
+        none = old_layout_kit('ABCD-EF01-2345-6789', 'x', 'dev-a', 'not a key')
+        prose = 'some notes\n' + fresh_secret() + '\n'  # not a kit: a key with extra text stays ambiguous
+        for bad in (two, none, prose):
+            with self.subTest(bad=bad[:20]), self.assertRaises(BackupError) as caught:
+                normalize_secret(bad)
+            assert_no_key_material(self, caught.exception)

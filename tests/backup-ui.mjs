@@ -188,6 +188,28 @@ function inspectResult(backup, { mode = 'inplace', hostname = 'dev-a', uid = 100
   };
 }
 
+// Host directories (主機資料夾, catalog `data_dirs`) as the manifest summary lists them (paths relative to the owner's
+// home), plus preflight checks with ids this page has never seen: they must render generically. The demo database is
+// kept as files here (the cold pattern), so it has no pg_dump entry.
+const HA_DIR = 'homeassistant/config-preinstalled';
+const NC_DB_DIR = '.local/share/nextcloud-office/postgres';
+const DIR_CHECKS = [
+  { id: 'woowbk-demo/data-dir', status: 'ok', message: '主機資料夾 ~/homeassistant/config-preinstalled 已存在，將以備份內容整個取代。' },
+  { id: 'woowbk-demo/data-dir-space', status: 'warn', message: '還原期間主機資料夾的新舊內容會同時存在：需要約 160.0 MiB，擁有者家目錄可用 2.0 GiB。' },
+  { id: 'woowbk-demo/data-dir-idmap', status: 'ok', message: '主機資料夾內檔案擁有者的最大 UID／GID（100999）在 appowner 的使用者命名空間對應範圍內。' },
+];
+const DIR_ROWS = [[`~/${HA_DIR}`, '74.0 MiB'], [`~/${NC_DB_DIR}`, '資料庫資料（冷備份）']];
+
+function withHostDirs(data, { mode = 'inplace', dirs = [{ path: HA_DIR, size: 74 * MiB }, { path: NC_DB_DIR, label: '資料庫資料（冷備份）' }] } = {}) {
+  for (const result of Object.values(data.inspect)) {
+    Object.assign(result.manifest.apps.find(item => item.id === 'woowbk-demo'), { postgres: [], data_dirs: structuredClone(dirs) });
+    const planned = result.preflight.apps.find(item => item.id === 'woowbk-demo');
+    planned.mode = mode;
+    planned.checks.push(...structuredClone(DIR_CHECKS));
+  }
+  return data;
+}
+
 function fixture(overrides = {}) {
   const manual = backupMeta(B_MANUAL, { note: '每日備份', include_images: true });
   const safety = backupMeta(B_SAFETY, { type: 'safety', note: '還原前自動備份（還原來源 20261101T020000Z-11112222）', verified: null });
@@ -624,6 +646,13 @@ let browser;
 let base;
 const calls = (page, command) => page.evaluate(name => window.testcalls.filter(call => call.argv[1] === name), command);
 const requestOf = call => (call.stdin ? JSON.parse(call.stdin) : {});
+// [app name|null, path, label/size|null] for every line of a host-directory list.
+const dirRows = list => list.locator('li').evaluateAll(items => items.map(item => [
+  item.querySelector('.path-app')?.textContent ?? null, item.querySelector('.path')?.textContent ?? null,
+  item.querySelector('.secondary')?.textContent ?? null]));
+// Every <dl class="metadata"> under a locator as {label: value}.
+const metadataOf = locator => locator.locator('dl.metadata').evaluateAll(lists => lists.map(dl =>
+  Object.fromEntries([...dl.querySelectorAll(':scope > dt')].map(dt => [dt.textContent, dt.nextElementSibling?.textContent ?? null]))));
 const channels = page => page.evaluate(() => window.testchannels.map(({ ackOne, ...rest }) => rest));
 const enabled = (page, selector) => page.locator(`${selector}:enabled`).first().waitFor();
 const view = page => page.locator('#view');
@@ -929,6 +958,9 @@ try {
     const confirmText = await view(page).textContent();
     assert.match(confirmText, /示範筆記應用/);
     assert(!/團隊知識庫/.test(await page.locator('.affected').textContent()), 'only selected apps are listed as affected');
+    // An archive from before host directories (no data_dirs) lists none and says nothing about them.
+    assert.equal(await page.locator('.path-list').count(), 0);
+    assert(!/主機資料夾/.test(await page.locator('.affected').textContent()));
     assert.match(confirmText, /停止服務/);
     assert.match(confirmText, /還原前自動備份/);
     assert.match(confirmText, /自動用它回復/);
@@ -1700,10 +1732,166 @@ try {
     assert(!/還原前自動備份備份|WOOWTECH|密鑰/.test(await page.locator('body').textContent()));
   });
 
-  await check('follows the Cockpit dark theme live with readable contrast in every surface', fixture({
+  await check('host directories are listed in backup details, preflight, confirmation and the restore result', withHostDirs(fixture()), async (page) => {
+    await ready(page);
+    await page.locator('[data-nav="backups"]').click();
+    await page.locator(`[data-focus="open-${B_MANUAL}"]`).click();
+    assert.match(await view(page).textContent(), /查看應用、資料庫、資料卷、主機資料夾與映像/);
+    await page.locator(`[data-focus="inspect-${B_MANUAL}"]`).click();
+    await page.locator('.app-content .path-list').first().waitFor();
+    const [demo, wiki] = await metadataOf(page.locator('.app-content'));
+    assert.equal(demo['資料庫'], '沒有以 pg_dump 匯出的資料庫', 'a database kept as files has no dump of its own');
+    assert.equal(wiki['主機資料夾'], '無', 'an app without host directories says so');
+    assert.deepEqual(await dirRows(page.locator('.app-content .path-list').first()), DIR_ROWS.map(row => [null, ...row]));
+    await allWidths(page, 'detail with host directories');
+
+    await page.locator(`[data-focus="restore-${B_MANUAL}"]`).click();
+    await page.locator('[data-focus="pf-next"]').waitFor();
+    const card = page.locator('.app-preflight').first();
+    const checks = await card.locator('.check').evaluateAll(items => items.map(item => [item.className, item.querySelector('.check-message').textContent]));
+    for (const check of DIR_CHECKS) {
+      assert(checks.some(([className, message]) => className === `check check-${check.status}` && message === check.message),
+        `new check id ${check.id} renders as ${check.status} with its own message`);
+    }
+    assert.deepEqual(await dirRows(card.locator('details.app-details .path-list')), DIR_ROWS.map(row => [null, ...row]),
+      'the preflight card lists the backup contents, host directories included');
+    await allWidths(page, 'preflight with host directories');
+
+    await page.locator('[data-focus="pf-next"]').click();
+    await page.locator('#confirm-restore').waitFor();
+    assert.match(await page.locator('.affected').textContent(), /以備份內容覆寫資料庫、資料卷、主機資料夾、應用機密與設定檔/);
+    assert.deepEqual(await dirRows(page.locator('ul[aria-label="原位還原會取代的主機資料夾"]')), DIR_ROWS.map(row => ['示範筆記應用', ...row]));
+    assert.equal(await page.locator('ul[aria-label="全新部署會建立的主機資料夾"]').count(), 0);
+    const text = await view(page).textContent();
+    assert.match(text, /整個取代下列資料夾，不會合併/);
+    assert.match(text, /原本的內容保留到整個還原成功後才刪除/);
+    assert.match(text, /路徑中的 ~ 是這台設備上應用擁有者的家目錄/);
+    assert.match(await page.locator('ul[aria-label="注意事項"]').textContent(), /新舊內容會同時存在/, 'the space warning repeats where the decision is made');
+    await allWidths(page, 'confirm with host directories');
+    await page.setViewportSize({ width: 320, height: 900 });
+    await shot(page, 'restore-confirm-host-dirs-320.png');
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.locator('#confirm-restore').check();
+    await page.locator('[data-focus="confirm-start"]').click();
+    await page.locator('#result-heading').filter({ hasText: '還原完成' }).waitFor();
+    assert.deepEqual(await dirRows(page.locator('ul[aria-label="原位還原的主機資料夾"]')), DIR_ROWS.map(row => ['示範筆記應用', ...row]));
+    assert.match(await page.locator('.job-result').textContent(), /這台設備應用設定列出的，已整個換成備份時的內容，還原前的內容保留在上列還原前備份中/);
+    await allWidths(page, 'result with host directories');
+    await shot(page, 'restore-result-host-dirs-1440.png');
+  });
+
+  await check('a fresh restore names the host directories it creates', withHostDirs(fixture(), { mode: 'fresh' }), async (page) => {
+    await ready(page);
+    await page.evaluate(id => { window.location.hash = `#/restore/${id}`; }, B_MANUAL);
+    await page.locator('[data-focus="pf-next"]').click();
+    await page.locator('#confirm-restore').waitFor();
+    assert.match(await page.locator('.affected').textContent(), /全新部署：會在這台設備建立服務、資料卷、主機資料夾與資料庫/);
+    assert.equal(await page.locator('ul[aria-label="原位還原會取代的主機資料夾"]').count(), 0);
+    assert.deepEqual(await dirRows(page.locator('ul[aria-label="全新部署會建立的主機資料夾"]')), DIR_ROWS.map(row => ['示範筆記應用', ...row]));
+    assert.match(await view(page).textContent(), /必須不存在或是空的（預檢會確認），上層資料夾不存在時會以應用擁有者身分建立/);
+    await page.locator('#confirm-restore').check();
+    await page.locator('[data-focus="confirm-start"]').click();
+    await page.locator('#result-heading').filter({ hasText: '還原完成' }).waitFor();
+    assert.equal(await page.locator('ul[aria-label="原位還原的主機資料夾"]').count(), 0);
+    assert.equal(await page.locator('ul[aria-label="全新部署的主機資料夾"] li').count(), 2);
+    assert.match(await page.locator('.job-result').textContent(), /已建立並寫入備份時的內容/);
+  });
+
+  // The engine reports what interruption recovery did with leftover <path>.woowbk-new-/.woowbk-old- folders in the
+  // job's own message; the page adds guidance and never hides that message.
+  const DIR_RECOVERY = '還原作業意外中斷（例如系統重新開機或程序被終止），應用可能處於不完整狀態。'
+    + `主機資料夾 ~/${HA_DIR} 不在原位，已把原本的內容（~/${HA_DIR}.woowbk-old-j20261113T020011Z-00abc001）移回；已移除未完成的新內容。`
+    + `還原前備份：${B_SAFETY}。`;
+  const dirsInterrupted = withHostDirs(fixture());
+  dirsInterrupted.scripts.restore = [
+    runningStep('restore', 'restore', 60, { safety_backup_id: B_SAFETY }),
+    {
+      job: { state: 'interrupted', finished: '2026-11-13T02:09:00Z', progress: { percent: 60, message: '已中斷' }, cancellable: false,
+        phases: phasesAt('restore', 'restore', { failedAt: 'restore' }), error: { code: 'job-failed', message: DIR_RECOVERY },
+        result: { apps: ['woowbk-demo'], safety_backup_id: B_SAFETY, health: [], verification: [], rolled_back: false, changed: true,
+          fresh_apps: [], safety_skipped: false, safety_failed: false, warnings: [] } },
+      log: ['2026-11-13T02:09:00Z 作業被判定為已中斷'],
+    },
+  ];
+  const manualDirs = [{
+    job: { state: 'failed', phase: 'rollback', finished: '2026-11-13T02:12:00Z', progress: { percent: 90, message: '失敗' }, cancellable: false,
+      phases: phasesAt('restore', null, { failedAt: 'start', rollback: 'failed' }),
+      error: { code: 'job-failed', message: `自動回復未完成，需人工處理：無法把主機資料夾 ~/${NC_DB_DIR} 回復到還原前的狀態。` },
+      result: { apps: ['woowbk-demo'], safety_backup_id: B_SAFETY_NEW, health: [], verification: [], rolled_back: false, changed: true,
+        fresh_apps: [], safety_skipped: false, safety_failed: false, warnings: [] } },
+    log: ['2026-11-13T02:12:00Z 作業結束：失敗'],
+  }];
+  await check('interrupted or unrecovered restores explain leftover host-directory copies', dirsInterrupted, async (page) => {
+    await ready(page);
+    await page.evaluate(id => { window.location.hash = `#/restore/${id}`; }, B_MANUAL);
+    await page.locator('[data-focus="pf-next"]').click();
+    await page.locator('#confirm-restore').check();
+    await page.locator('[data-focus="confirm-start"]').click();
+    await page.locator('#result-heading').filter({ hasText: '作業意外中斷' }).waitFor();
+    assert.equal(await page.locator('.job-result .notice-error p').textContent(), DIR_RECOVERY, 'the engine report is shown verbatim');
+    assert.match(await page.locator('.guidance').textContent(), /名稱含「\.woowbk-new-」或「\.woowbk-old-」的資料夾.*請勿手動刪除或改名/);
+    await page.locator('[data-focus="result-restore-safety"]').waitFor();
+    await allWidths(page, 'interrupted restore with host directories');
+
+    // Rollback incomplete: the old copy may be the pre-restore content; the page says not to delete it.
+    await page.evaluate(script => { window.__fixture.scripts.restore = script; }, manualDirs);
+    await page.locator('[data-focus="result-restore-safety"]').click();
+    await page.locator('[data-focus="pf-next"]').click();
+    await page.locator('#confirm-restore').check();
+    await page.locator('[data-focus="confirm-start"]').click();
+    await page.locator('#result-heading').filter({ hasText: '還原失敗' }).waitFor();
+    const text = await page.locator('.job-result').textContent();
+    assert.match(text, /自動回復未完成，需要人工處理/);
+    assert.match(text, /名稱含「\.woowbk-old-」的資料夾可能是還原前的內容，處理完成前請勿刪除/);
+  });
+
+  const hostileDirs = withHostDirs(fixture(), { dirs: [
+    { path: `${evil}/config`, label: evil },
+    { path: `${'deep/'.repeat(12)}${long}`, label: long, size: 3 * GiB },
+  ] });
+  hostileDirs.inspect[B_MANUAL].preflight.apps[0].checks.push({ id: `woowbk-demo/${evil}`, status: '<i>odd</i>', message: `${evil}${long}` });
+  hostileDirs.scripts.restore.at(-1).job.result.warnings = [`主機資料夾 ~/${evil}：${long}`];
+  await check('hostile host-directory paths and labels are rendered literally and wrap at every width', hostileDirs, async (page) => {
+    const noInjection = async label => {
+      const found = await page.evaluate(() => ({
+        injected: document.querySelectorAll('body img, body script, body b, body i, body iframe:not(#downloads iframe), body svg:not(.icon)').length,
+        xss: Boolean(window.__xss),
+      }));
+      assert.deepEqual(found, { injected: 0, xss: false }, `${label}: no element created from data`);
+    };
+    await ready(page);
+    await page.locator('[data-nav="backups"]').click();
+    await page.locator(`[data-focus="open-${B_MANUAL}"]`).click();
+    await page.locator(`[data-focus="inspect-${B_MANUAL}"]`).click();
+    await page.locator('.app-content .path-list').first().waitFor();
+    const rows = await dirRows(page.locator('.app-content .path-list').first());
+    assert.deepEqual(rows[0], [null, `~/${evil}/config`, evil], 'path and label are text, character for character');
+    assert.deepEqual(rows[1], [null, `~/${'deep/'.repeat(12)}${long}`, `${long} · 3.0 GiB`]);
+    await noInjection('detail');
+    await allWidths(page, 'hostile host directories: detail');
+    await page.locator(`[data-focus="restore-${B_MANUAL}"]`).click();
+    await page.locator('[data-focus="pf-next"]').waitFor();
+    assert.match(await page.locator('.app-preflight').first().textContent(), /<img src=x onerror/);
+    await noInjection('preflight');
+    await allWidths(page, 'hostile host directories: preflight');
+    await page.locator('[data-focus="pf-next"]').click();
+    await page.locator('#confirm-restore').waitFor();
+    assert.equal((await dirRows(page.locator('ul[aria-label="原位還原會取代的主機資料夾"]')))[0][1], `~/${evil}/config`);
+    await noInjection('confirm');
+    await allWidths(page, 'hostile host directories: confirm');
+    await page.locator('#confirm-restore').check();
+    await page.locator('[data-focus="confirm-start"]').click();
+    await page.locator('#result-heading').filter({ hasText: '還原完成' }).waitFor();
+    assert.equal((await dirRows(page.locator('ul[aria-label="原位還原的主機資料夾"]')))[0][1], `~/${evil}/config`);
+    assert.equal(await page.locator('ul[aria-label="還原注意事項"] .check-message').textContent(), `主機資料夾 ~/${evil}：${long}`);
+    await noInjection('result');
+    await allWidths(page, 'hostile host directories: result');
+  });
+
+  await check('follows the Cockpit dark theme live with readable contrast in every surface', withHostDirs(fixture({
     status: { ...fixture().status, key: { key_id: KEY_ID, created: '2026-11-01T08:00:00Z', kit_confirmed: false },
       warnings: ['示範：部分應用的設定需要檢查。'] },
-  }), async (page) => {
+  })), async (page) => {
     await ready(page);
     await page.locator('.stat').first().waitFor();
     const isDark = () => page.evaluate(() => document.documentElement.classList.contains('pf-v6-theme-dark'));
@@ -1711,7 +1899,7 @@ try {
     assert.equal(await isDark(), true, 'shell:style=dark from Cockpit applies before the first render');
     assert.equal(await background(), 'rgb(21, 23, 28)');
     const steady = () => page.waitForFunction(() => document.getAnimations().every(animation => animation.playState !== 'running'));
-    const contrast = () => page.evaluate(() => {
+    const contrast = (extra = '') => page.evaluate(extra => {
       const rgb = value => (value.match(/[\d.]+/g) || []).map(Number);
       const luminance = ([r, g, b]) => [r, g, b].map(v => { v /= 255; return v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4; })
         .reduce((sum, v, i) => sum + v * [0.2126, 0.7152, 0.0722][i], 0);
@@ -1724,7 +1912,7 @@ try {
       };
       const failures = [];
       let checked = 0;
-      for (const el of document.querySelectorAll('h1, h2, h3, p, a, button, .chip, label, dt, dd, td, th, li, small, .muted')) {
+      for (const el of document.querySelectorAll(`h1, h2, h3, p, a, button, .chip, label, dt, dd, td, th, li, small, .muted${extra}`)) {
         const box = el.getBoundingClientRect();
         if (!box.width || !box.height || !el.textContent.trim()) continue;
         const style = getComputedStyle(el);
@@ -1737,7 +1925,7 @@ try {
         if (ratio < minimum) failures.push(`${el.tagName.toLowerCase()}.${el.className} "${el.textContent.trim().slice(0, 24)}" ${ratio.toFixed(2)}`);
       }
       return { checked, failures };
-    });
+    }, extra);
     for (const route of ['overview', 'backups', 'keys']) {
       if (route !== 'overview') {
         await page.locator(`[data-nav="${route}"]`).click();
@@ -1749,6 +1937,17 @@ try {
       assert.deepEqual(result.failures, [], `${route}: dark-theme text keeps WCAG AA contrast`);
       await allWidths(page, `dark ${route}`);
     }
+    // Backup details with host directories: the path list keeps the same contrast and fits every width.
+    await page.locator('[data-nav="backups"]').click();
+    await page.locator(`[data-focus="open-${B_MANUAL}"]`).click();
+    await page.locator(`[data-focus="inspect-${B_MANUAL}"]`).click();
+    await page.locator('.app-content .path-list').first().waitFor();
+    await steady();
+    const detail = await contrast(', .path, .path-app, .path-list .secondary');
+    assert(detail.checked > 10, `detail: enough text was checked (${detail.checked})`);
+    assert.deepEqual(detail.failures, [], 'detail with host directories: dark-theme text keeps WCAG AA contrast');
+    await allWidths(page, 'dark detail with host directories');
+    await shot(page, 'detail-host-dirs-dark-1440.png');
     await page.locator('[data-nav="overview"]').click();
     await settled(page);
     await shot(page, 'overview-dark-1440.png');

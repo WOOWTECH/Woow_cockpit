@@ -26,6 +26,8 @@ class Adapter:
         self.last_downtime = 0.0
         # zh-TW notes about what a restore could not keep (e.g. setuid bits); flows puts them in the result.
         self.warnings = []
+        # The job this adapter works for (set by flows); names the restore's host-directory siblings.
+        self.job_id = None
 
     def probe(self):
         """{'deployed': bool, 'state': str, 'units': [{'name','active'}], 'problems': [str]}"""
@@ -69,6 +71,24 @@ class Adapter:
 
     def fresh_in_use(self):
         """Units showing that a fresh deployment may already hold new data ([] = unfinished, may be removed)."""
+        return []
+
+    # Host directories (catalog `data_dirs`); adapters without them keep these defaults.
+    def finish_dirs(self):
+        """Delete the directory copies a restore moved aside once the job succeeded (for a rollback adapter: once the
+        rollback was verified), never the only copy of the previous content; returns zh-TW notes."""
+        return []
+
+    def discard_dirs(self):
+        """After a failure: undo an unfinished directory step (new copy being written); returns zh-TW problems."""
+        return []
+
+    def dir_leftovers(self):
+        """zh-TW notes naming the directory copies this job left (after a failed rollback)."""
+        return []
+
+    def recover_dirs(self):
+        """Recovery of the dead job `self.job_id`: settle the directory copies it left; returns zh-TW notes."""
         return []
 
     def health(self):

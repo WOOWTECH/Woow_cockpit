@@ -27,6 +27,11 @@ counted in the check report, so the restore can say so (HD-09). Member names are
 128-bit digests, not strings, which keeps a pass at the 2,000,000-member cap well below the job's memory
 limit (HD-03).
 
+Host directory tars (`apps/<id>/dirs/<n>.tar`, written by GNU tar as the owner inside his user namespace) follow
+the volume rules with two differences: the root entry `./` is expected (it carries the directory's own owner,
+mode and mtime), and a symlink may point anywhere (it is restored verbatim and never followed: no member may lie
+below it, and GNU tar extracts into a new, empty directory). Such links are counted for the backup log.
+
 OCI archives (`podman save --format oci-archive`) may only contain `oci-layout`, `index.json`,
 `blobs/`, `blobs/sha256/` and `blobs/sha256/<64 hex>` (regular files and directories). The index
 must hold exactly one OCI image manifest, the manifest blob must match its digest and its config digest
@@ -69,9 +74,10 @@ KIND_TYPES = {'dir': tarfile.DIRTYPE, 'file': tarfile.REGTYPE, 'symlink': tarfil
 LINKABLE = frozenset({'file', 'symlink', 'link', 'fifo'})  # hard links may name any earlier non-directory
 KIND_CODES = {'dir': 0, 'file': 1, 'symlink': 2, 'link': 3, 'fifo': 4}
 CODE_KINDS = {code: kind for kind, code in KIND_CODES.items()}
-VOLUME, IMAGE = '資料卷', '容器映像'
+VOLUME, IMAGE, DIRECTORY = '資料卷', '容器映像', '主機資料夾'
 SAMPLES = 5
 REGISTRY_RE = re.compile(r'[A-Za-z0-9.-]+(?::[0-9]+)?\Z')
+MTIME_RE = re.compile(r'[0-9]{1,12}(?:\.[0-9]{1,9})?\Z')
 
 
 def _bad(what, reason, label=None, **details):
@@ -162,17 +168,25 @@ def _escapes(name, target):
 
 
 class VolumeReport:
-    """What a volume check found: member count, and what the canonical copy drops (CONTRACT section 5)."""
+    """What a volume (or host directory) check found: member count, the largest member owner ids, symlinks that
+    point outside, and what the canonical copy drops (CONTRACT section 5)."""
 
-    def __init__(self):
+    def __init__(self, subject=VOLUME):
+        self.subject = subject          # 資料卷 or 主機資料夾, for the notes
         self.members = 0
+        self.max_uid = 0                # largest member owner (uid / gid): what the target namespace must map
+        self.max_gid = 0
         self.special_modes = 0          # setuid/setgid bits dropped from non-directories
         self.special_mode_samples = []
         self.dropped_xattrs = 0         # members with extended attributes other than user.* (dropped)
         self.dropped_xattr_names = []   # e.g. security.capability (bounded)
         self.dropped_xattr_samples = []
+        self.outside_links = 0          # host directories only: symlinks whose target is outside the directory
+        self.outside_link_samples = []
 
     def note(self, member, name, kind):
+        self.max_uid = max(self.max_uid, int(member.uid))
+        self.max_gid = max(self.max_gid, int(member.gid))
         if kind != 'dir' and member.mode & 0o6000:
             self.special_modes += 1
             if len(self.special_mode_samples) < SAMPLES:
@@ -187,31 +201,45 @@ class VolumeReport:
                 if key not in self.dropped_xattr_names and len(self.dropped_xattr_names) < 10:
                     self.dropped_xattr_names.append(key[:100])
 
+    def note_outside_link(self, name):
+        self.outside_links += 1
+        if len(self.outside_link_samples) < SAMPLES:
+            self.outside_link_samples.append(name)
+
     def warnings(self, volume):
         """zh-TW notes for the job log and the restore result (review finding HD-09)."""
         notes = []
         if self.special_modes:
-            notes.append(f'資料卷 {volume} 有 {self.special_modes} 個檔案的 setuid／setgid 權限在還原時會被移除'
+            notes.append(f'{self.subject} {volume} 有 {self.special_modes} 個檔案的 setuid／setgid 權限在還原時會被移除'
                          f'（例如 {"、".join(self.special_mode_samples)}）；需要這些權限的程式可能無法正常運作。')
         if self.dropped_xattrs:
-            notes.append(f'資料卷 {volume} 有 {self.dropped_xattrs} 個檔案的延伸屬性（{"、".join(self.dropped_xattr_names)}）'
+            notes.append(f'{self.subject} {volume} 有 {self.dropped_xattrs} 個檔案的延伸屬性（{"、".join(self.dropped_xattr_names)}）'
                          f'在還原時會被移除，例如 file capabilities（例如 {"、".join(self.dropped_xattr_samples)}）；'
                          '只有 user.* 屬性會保留。')
         return notes
 
+    def link_note(self, name):
+        """Backup-log note about symlinks that leave a host directory (kept as links; their targets are not in it)."""
+        if not self.outside_links:
+            return None
+        return (f'{self.subject} {name} 有 {self.outside_links} 個符號連結指向資料夾以外（例如 '
+                f'{"、".join(self.outside_link_samples)}）；連結本身會備份與還原，但它指向的內容不在這份備份中。')
+
 
 class _VolumePolicy:
-    """Order-aware member rules; one instance per pass over a volume tar.
+    """Order-aware member rules; one instance per pass over a volume (or host directory) tar.
 
     Names are remembered as keyed 128-bit digests (a random key per pass, so a crafted archive cannot aim at
     a collision; a collision could only refuse a valid archive): a str per member cost about twice the memory.
+    `what` is VOLUME or DIRECTORY; a host directory keeps symlinks that point outside it (see the module notes).
     """
 
-    def __init__(self, ids=None):
+    def __init__(self, ids=None, what=VOLUME):
         self.kinds = {}        # digest of an explicit member -> kind code
         self.implicit = set()  # digests of parents created implicitly by the unpacker
         self.ids = ids         # (uid IdMap, gid IdMap) of the owner's user namespace, or None
-        self.report = VolumeReport()
+        self.what = what
+        self.report = VolumeReport(what)
         self._key = secrets.token_bytes(16)
 
     def _digest(self, name):
@@ -219,7 +247,8 @@ class _VolumePolicy:
                               'little')
 
     def admit(self, member):
-        name = _normalize(member.name, VOLUME)
+        what = self.what
+        name = _normalize(member.name, what)
         if member.type == tarfile.DIRTYPE:
             kind = 'dir'
         elif member.type in REGULAR:
@@ -231,45 +260,51 @@ class _VolumePolicy:
         elif member.type == tarfile.FIFOTYPE:
             kind = 'fifo'
         else:
-            raise _bad(VOLUME, 'member type not allowed (device, sparse or unknown)', '裝置檔或不支援的檔案類型',
+            raise _bad(what, 'member type not allowed (device, sparse or unknown)', '裝置檔或不支援的檔案類型',
                        member=name[:200], type=member.type.decode('latin-1'))
         if name == '.' and kind != 'dir':
-            raise _bad(VOLUME, 'the volume root is not a directory')
+            raise _bad(what, 'the volume root is not a directory')
         key = self._digest(name)
         if key in self.kinds:
-            raise _bad(VOLUME, 'duplicate member', member=name[:200])
+            raise _bad(what, 'duplicate member', member=name[:200])
         if kind != 'dir' and key in self.implicit:
-            raise _bad(VOLUME, 'a non-directory replaces a directory', member=name[:200])
+            raise _bad(what, 'a non-directory replaces a directory', member=name[:200])
         parts = [] if name == '.' else name.split('/')
         for depth in range(1, len(parts)):
             prefix = self._digest('/'.join(parts[:depth]))
             if self.kinds.get(prefix, 0) != 0:
-                raise _bad(VOLUME, 'member below a symlink, hard link or file', member=name[:200])
+                raise _bad(what, 'member below a symlink, hard link or file', member=name[:200])
             self.implicit.add(prefix)
         link = None
+        outside = False
         if kind == 'link':
-            link = _normalize(member.linkname, VOLUME)
+            link = _normalize(member.linkname, what)
             target = self.kinds.get(self._digest(link))
             if target is None or CODE_KINDS[target] not in LINKABLE:
-                raise _bad(VOLUME, 'hard link to something other than an earlier non-directory member', member=name[:200])
+                raise _bad(what, 'hard link to something other than an earlier non-directory member', member=name[:200])
         elif kind == 'symlink':
             link = member.linkname
             if not isinstance(link, str) or not link or '\x00' in link or len(link) > MAX_NAME:
-                raise _bad(VOLUME, 'invalid symlink target', member=name[:200])
-            if _escapes(name, link):
-                raise _bad(VOLUME, 'symlink pointing outside the volume', '指向資料卷外的符號連結',
+                raise _bad(what, 'invalid symlink target', member=name[:200])
+            if what == DIRECTORY:
+                outside = link.startswith('/') or _escapes(name, link)
+            elif _escapes(name, link):
+                raise _bad(what, 'symlink pointing outside the volume', '指向資料卷外的符號連結',
                            member=name[:200], target=link[:200])
         if self.ids is not None:
             uid, gid = int(member.uid), int(member.gid)
             if uid not in self.ids[0] or gid not in self.ids[1]:
-                raise BackupError('incompatible', f'資料卷中的 {name[:200]} 屬於 UID {uid}／GID {gid}，超出這台設備應用帳號'
+                tool = 'Podman 無法匯入' if what == VOLUME else '無法以應用帳號還原'
+                raise BackupError('incompatible', f'{what}中的 {name[:200]} 屬於 UID {uid}／GID {gid}，超出這台設備應用帳號'
                                                   f'可用的 ID 範圍（UID {self.ids[0].describe()}；GID {self.ids[1].describe()}），'
-                                                  'Podman 無法匯入；這台設備沒有任何變更。',
+                                                  f'{tool}；這台設備沒有任何變更。',
                                   reason='owner id outside the user namespace', label=f'擁有者 UID {uid}／GID {gid} 超出帳號可用的範圍',
                                   member=name[:200], uid=uid, gid=gid)
         self.kinds[key] = KIND_CODES[kind]
         self.report.members += 1
         self.report.note(member, name, kind)
+        if outside:
+            self.report.note_outside_link(name)
         return name, kind, link
 
 
@@ -285,28 +320,28 @@ def _volume_info(member, name, kind, link):
     if link is not None:
         info.linkname = link
     info.pax_headers = {key: value for key, value in member.pax_headers.items() if key.startswith(KEEP_PAX)}
+    # GNU tar writes nanosecond mtimes ("1700000000.123456789"); tarfile keeps a float (about 100 ns here). A
+    # plain decimal string is passed on as is, so a host directory keeps its exact modification times.
+    exact = member.pax_headers.get('mtime')
+    if isinstance(exact, str) and MTIME_RE.fullmatch(exact):
+        info.pax_headers['mtime'] = exact
     return info
 
 
-def check_volume(path, ids=None):
-    """Validate a volume tar completely (no output); returns a VolumeReport.
-
-    `ids`: (uid IdMap, gid IdMap) of the owner's user namespace; every member owner must be in it.
-    """
-    policy = _VolumePolicy(ids)
-    with _open(path, VOLUME, 'r|') as tar:
-        for member in _members(tar, VOLUME, MAX_VOLUME_MEMBERS):
+def _check(path, ids, what):
+    policy = _VolumePolicy(ids, what)
+    with _open(path, what, 'r|') as tar:
+        for member in _members(tar, what, MAX_VOLUME_MEMBERS):
             policy.admit(member)
     return policy.report
 
 
-def stream_volume(path, out, ids=None):
-    """Write a canonical tar of the validated members of `path` to the binary file `out`."""
-    policy = _VolumePolicy(ids)
-    with _open(path, VOLUME, 'r|') as tar, \
+def _stream(path, out, ids, what):
+    policy = _VolumePolicy(ids, what)
+    with _open(path, what, 'r|') as tar, \
             tarfile.open(fileobj=out, mode='w|', format=tarfile.PAX_FORMAT, encoding=ENCODING, errors=ERRORS,
                          bufsize=COPY_CHUNK) as dest:
-        for member in _members(tar, VOLUME, MAX_VOLUME_MEMBERS):
+        for member in _members(tar, what, MAX_VOLUME_MEMBERS):
             name, kind, link = policy.admit(member)
             info = _volume_info(member, name, kind, link)
             if kind == 'file':
@@ -314,10 +349,33 @@ def stream_volume(path, out, ids=None):
                 try:
                     dest.addfile(info, source)
                 except OSError:
-                    raise _bad(VOLUME, 'member data truncated', member=name[:200]) from None
+                    raise _bad(what, 'member data truncated', member=name[:200]) from None
             else:
                 dest.addfile(info)
     return policy.report
+
+
+def check_volume(path, ids=None):
+    """Validate a volume tar completely (no output); returns a VolumeReport.
+
+    `ids`: (uid IdMap, gid IdMap) of the owner's user namespace; every member owner must be in it.
+    """
+    return _check(path, ids, VOLUME)
+
+
+def stream_volume(path, out, ids=None):
+    """Write a canonical tar of the validated members of `path` to the binary file `out`."""
+    return _stream(path, out, ids, VOLUME)
+
+
+def check_dir(path, ids=None):
+    """Validate a host directory tar completely (no output); returns a VolumeReport (volume rules, see above)."""
+    return _check(path, ids, DIRECTORY)
+
+
+def stream_dir(path, out, ids=None):
+    """Write a canonical tar of the validated members of a host directory tar to the binary file `out`."""
+    return _stream(path, out, ids, DIRECTORY)
 
 
 # ---------------------------------------------------------------- OCI archives

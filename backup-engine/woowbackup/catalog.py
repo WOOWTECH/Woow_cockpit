@@ -43,9 +43,20 @@ CONFIG_ROOTS = ('.config/', '.local/share/')
 FORBIDDEN_CONFIG_PREFIXES = ('.config/systemd/', '.config/containers/', '.config/environment.d/', '.config/autostart/',
                              '.config/dbus-1/', '.config/user-tmpfiles.d/', '.local/share/systemd/',
                              '.local/share/containers/', '.local/share/dbus-1/', '.local/share/applications/')
+# Host directories (`data_dirs`) may lie anywhere in the owner's home except these trees: login keys, unit
+# definitions, the user manager's environment and the Podman storage and configuration must never be replaced by
+# archive bytes. A data directory may be neither one of them, nor inside one, nor contain one (`.config` would
+# contain `.config/systemd`).
+FORBIDDEN_DATA_DIRS = ('.ssh', '.gnupg', '.config/systemd', '.config/containers', '.local/share/containers',
+                       '.config/environment.d', '.config/autostart', '.config/dbus-1', '.config/user-tmpfiles.d',
+                       '.local/share/systemd', '.local/share/dbus-1', '.local/share/applications')
+MAX_DATA_DIRS = 16
+# The last segment leaves room for the restore's sibling `<name>.woowbk-old-<job id>-rollback` within NAME_MAX (255).
+MAX_DATA_DIR_NAME = 200
 
 TOP_REQUIRED = ('schema', 'id', 'name', 'owner', 'adapter', 'quadlet', 'units')
-TOP_OPTIONAL = ('description', 'writer_units', 'postgres', 'volumes', 'secrets', 'config_files', 'health', 'verify')
+TOP_OPTIONAL = ('description', 'writer_units', 'postgres', 'volumes', 'data_dirs', 'secrets', 'config_files', 'health',
+                'verify')
 
 
 @dataclass(frozen=True)
@@ -66,6 +77,7 @@ class App:
     health: tuple
     verify: tuple
     sha256: str
+    data_dirs: tuple = ()  # ({'path': <relative to the owner's home>, 'label': str}, ...)
     raw: dict = field(compare=False, repr=False, default_factory=dict)
 
 
@@ -155,6 +167,28 @@ def _config_path(value, where, app_id):
             _fail(where, '含有不允許的路徑片段。')
     if value.startswith(FORBIDDEN_CONFIG_PREFIXES):
         _fail(where, '不可指向 systemd、Podman、使用者環境或自動啟動的設定目錄。')
+    return value
+
+
+def paths_overlap(a, b):
+    """True when one relative path equals the other or lies below it (`a/b` and `a`, never `ab` and `a`)."""
+    return a == b or a.startswith(b + '/') or b.startswith(a + '/')
+
+
+def _data_dir_path(value, where):
+    """A directory in the owner's home: normalized relative POSIX path, safe segments, outside forbidden trees."""
+    _string(value, where, max_len=1024)
+    if value.startswith('/') or value.endswith('/'):
+        _fail(where, '必須是相對於擁有者家目錄的資料夾路徑，不可以 / 開頭或結尾。')
+    segments = value.split('/')
+    for segment in segments:
+        if segment in ('', '.', '..') or not SEGMENT_RE.fullmatch(segment):
+            _fail(where, '含有不允許的路徑片段（只能用 A-Z a-z 0-9 . _ @ + -，不可為空、. 或 ..）。')
+    if len(segments[-1]) > MAX_DATA_DIR_NAME:
+        _fail(where, f'最後一段名稱不可超過 {MAX_DATA_DIR_NAME} 個字元。')
+    for forbidden in FORBIDDEN_DATA_DIRS:
+        if paths_overlap(value, forbidden):
+            _fail(where, f'不可等於、位於或包含 ~/{forbidden}（登入金鑰、systemd、Podman 或使用者環境的設定）。')
     return value
 
 
@@ -262,6 +296,20 @@ def validate_entry(data, *, paths, sha256=None, user_lookup=None):
                              'mode': _mode(item['mode'], f'{where}.mode')})
     _unique([c['path'] for c in config_files], 'config_files[].path')
 
+    data_dirs = []
+    for i, item in enumerate(_list(data.get('data_dirs', []), 'data_dirs', MAX_DATA_DIRS)):
+        where = f'data_dirs[{i}]'
+        _object(item, where, ('path',), ('label',))
+        path = _data_dir_path(item['path'], f'{where}.path')
+        for earlier in data_dirs:
+            if paths_overlap(path, earlier['path']):
+                _fail(f'{where}.path', f'與 data_dirs 中的 {earlier["path"]} 重疊（一個資料夾不可位於另一個之內）。')
+        for config in config_files:
+            if paths_overlap(path, config['path']):
+                _fail(f'{where}.path', f'與設定檔 {config["path"]} 重疊。')
+        data_dirs.append({'path': path,
+                          'label': _string(item.get('label', ''), f'{where}.label', max_len=80, allow_empty=True)})
+
     health = []
     for i, item in enumerate(_list(data.get('health', []), 'health', 8)):
         where = f'health[{i}]'
@@ -300,7 +348,7 @@ def validate_entry(data, *, paths, sha256=None, user_lookup=None):
                quadlet_files=tuple(files), template_dir=template_dir, units=tuple(units),
                writer_units=tuple(writers), postgres=tuple(postgres), volumes=tuple(volumes),
                secrets=tuple(secrets), config_files=tuple(config_files), health=tuple(health),
-               verify=tuple(verify), sha256=sha256, raw=data)
+               verify=tuple(verify), sha256=sha256, data_dirs=tuple(data_dirs), raw=data)
 
 
 def _reject_duplicates(pairs):
@@ -363,7 +411,27 @@ def load_catalog(paths, *, trusted_uid=0, user_lookup=None):
                 catalog.problems.append(problem)
     finally:
         os.close(dfd)
+    _drop_shared_data_dirs(catalog)
     return catalog
+
+
+def _drop_shared_data_dirs(catalog):
+    """Two apps of one owner must not declare overlapping host directories: restoring one would replace the other's
+    data. The later entry (file name order) is reported and not loaded."""
+    kept = []
+    for app_id in list(catalog):
+        app = catalog[app_id]
+        clash = next(((other, mine, theirs) for other in kept if other.owner == app.owner
+                      for mine in app.data_dirs for theirs in other.data_dirs
+                      if paths_overlap(mine['path'], theirs['path'])), None)
+        if clash is None:
+            kept.append(app)
+            continue
+        other, mine, theirs = clash
+        del catalog[app_id]
+        catalog.problems.append({'file': f'{app_id}.json', 'id': app_id, 'code': 'invalid-request',
+                                 'message': f'應用 {app_id} 的主機資料夾 ~/{mine["path"]} 與應用 {other.id} 的 '
+                                            f'~/{theirs["path"]} 重疊（同一個擁有者），已略過 {app_id}.json。'})
 
 
 def _load_one(catalog, dfd, name, paths, trusted_uid, user_lookup):

@@ -411,6 +411,68 @@ class ManifestValidationTests(unittest.TestCase):
                 self.assertTrue(ctx.exception.message)
 
 
+class DataDirManifestTests(unittest.TestCase):
+    """Host directories (`data_dirs`, entries `apps/<id>/dirs/<n>.tar`): optional, strict when present."""
+
+    def manifest(self, dirs=(('.local/share/nextcloud-office/html', 0), ('homeassistant/config-preinstalled', 1))):
+        payloads = demo_payloads(big=16)
+        app = demo_app()
+        app['data_dirs'] = []
+        for path, index in dirs:
+            entry = f'apps/{APP}/dirs/{index}.tar'
+            payloads[entry] = f'dir-tar-{index}'.encode()
+            app['data_dirs'].append({'path': path, 'entry': entry})
+        manifest = demo_manifest('ABCD-EF01-2345-6789', apps=[app])
+        manifest['entries'] = [{'path': p, 'size': len(d), 'sha256': hashlib.sha256(d).hexdigest()}
+                               for p, d in payloads.items()]
+        return manifest
+
+    def test_valid_with_and_without_data_dirs(self):
+        manifest = self.manifest()
+        self.assertIs(archive.validate_manifest(manifest), manifest)
+        old = ManifestValidationTests.manifest(self)  # an archive written before host directories existed
+        self.assertNotIn('data_dirs', old['apps'][0])
+        self.assertIs(archive.validate_manifest(old), old)
+        empty = self.manifest(dirs=())
+        self.assertIs(archive.validate_manifest(empty), empty)
+        self.assertTrue(archive.ENTRY_RE.match(f'apps/{APP}/dirs/0.tar'))
+
+    def test_rejections(self):
+        def item(manifest):
+            return manifest['apps'][0]['data_dirs'][0]
+
+        cases = {
+            'not a list': lambda m: m['apps'][0].update(data_dirs={'path': 'x'}),
+            'too many': lambda m: m['apps'][0].update(data_dirs=[dict(item(m))] * 17),
+            'unknown key': lambda m: item(m).update(mode='0755'),
+            'missing entry': lambda m: item(m).pop('entry'),
+            'absolute path': lambda m: item(m).update(path='/etc'),
+            'trailing slash': lambda m: item(m).update(path='homeassistant/'),
+            'dotdot': lambda m: item(m).update(path='a/../../etc'),
+            'dot segment': lambda m: item(m).update(path='./a'),
+            'empty segment': lambda m: item(m).update(path='a//b'),
+            'empty path': lambda m: item(m).update(path=''),
+            'space': lambda m: item(m).update(path='my dir'),
+            'newline': lambda m: item(m).update(path='a\n'),
+            'duplicate path': lambda m: m['apps'][0]['data_dirs'][1].update(path=item(m)['path']),
+            'nested paths': lambda m: m['apps'][0]['data_dirs'][1].update(path=item(m)['path'] + '/data'),
+            'entry in another section': lambda m: (m['entries'].append({'path': f'apps/{APP}/volumes/x.tar', 'size': 1,
+                                                                         'sha256': '0' * 64}),
+                                                   item(m).update(entry=f'apps/{APP}/volumes/x.tar')),
+            'entry of another app': lambda m: item(m).update(entry='apps/other-app/dirs/0.tar'),
+            'entry not listed': lambda m: item(m).update(entry=f'apps/{APP}/dirs/9.tar'),
+            'entry used twice': lambda m: m['apps'][0]['data_dirs'][1].update(entry=item(m)['entry']),
+            'orphan dir entry': lambda m: m['apps'][0]['data_dirs'].pop(),
+        }
+        for name, mutate in cases.items():
+            with self.subTest(name):
+                manifest = self.manifest()
+                mutate(manifest)
+                with self.assertRaises(BackupError) as caught:
+                    archive.validate_manifest(manifest)
+                self.assertEqual(caught.exception.code, 'invalid-manifest')
+
+
 # ---------------------------------------------------------------------------- real encryption
 
 @needs_age
@@ -459,6 +521,20 @@ class RoundTripTests(unittest.TestCase):
                 self.assertEqual(mode, 0o700, rel)
         self.assertEqual({k for k, v in tree.items() if v[0] == 'file'}, set(payloads))
         self.assertEqual(tool_children(), [], 'age/zstd children reaped')
+
+    def test_round_trip_with_host_directory_entries(self):
+        payloads = demo_payloads(big=4096)
+        app = demo_app()
+        tar_bytes = b'dir-tar' * 3000
+        payloads[f'apps/{APP}/dirs/0.tar'] = tar_bytes
+        app['data_dirs'] = [{'path': '.local/share/nextcloud-office/postgres', 'entry': f'apps/{APP}/dirs/0.tar'}]
+        manifest = demo_manifest(self.ws.key.key_id, apps=[app])
+        dest, _, _ = self.ws.write(payloads, manifest=manifest)
+        ids = self.ws.keys.identities()
+        self.assertEqual(archive.read_manifest(dest, ids)['apps'][0]['data_dirs'], app['data_dirs'])
+        target = self.ws.dest()
+        archive.extract_archive(dest, ids, target)
+        self.assertEqual((target / f'apps/{APP}/dirs/0.tar').read_bytes(), tar_bytes)
 
     def test_member_layout_matches_contract(self):
         payloads = demo_payloads(big=4096)

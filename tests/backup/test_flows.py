@@ -334,6 +334,11 @@ class World:
         self.restore_warnings = {}
         self.fresh_live = {}  # app id -> units adapter.fresh_in_use() reports
         self.fresh_live_error = set()
+        self.finish_notes = {}    # (app id, 'restore'|'rollback') -> notes finish_dirs() returns
+        self.finish_raises = {}   # (app id, 'restore'|'rollback') -> exception finish_dirs() raises
+        self.discard_problems = {}  # app id -> problems discard_dirs() returns
+        self.leftover_notes = {}  # app id -> notes dir_leftovers() returns
+        self.recover_notes = {}   # app id -> notes recover_dirs() returns
 
     def factory(self, app, *, log, phase=None, checkpoint=None, writers_hook=None, imported_hook=None):
         adapter = FakeAdapter(app, self, log, phase, checkpoint, writers_hook, imported_hook)
@@ -356,6 +361,8 @@ class FakeAdapter:
         self.destructive_started = False
         self.last_downtime = 0.0
         self.warnings = []
+        self.job_id = None
+        self.run = None
 
     def probe(self):
         deployed = self.world.deployed[self.app.id]
@@ -412,6 +419,7 @@ class FakeAdapter:
     def restore(self, app_manifest, extracted_dir, *, mode, rollback=False, unchecked_databases_ok=False):
         assert rollback == (self.phase is noop), 'rollbacks (and only they) use rollback=True and no phases'
         self.world.events.append(('restore', self.app.id, mode, 'rollback' if rollback else 'restore'))
+        self.run = 'rollback' if rollback else 'restore'
         if not rollback:
             self.world.unchecked.append((self.app.id, unchecked_databases_ok))
         if self.app.id in self.world.fail_restore_before:
@@ -440,6 +448,27 @@ class FakeAdapter:
     def start_units(self, units):
         self.world.events.append(('start_units', self.app.id, tuple(units)))
         return [u for u in units if u in self.world.unstartable]
+
+    def finish_dirs(self):
+        self.world.events.append(('finish_dirs', self.app.id, self.run, self.job_id))
+        error = self.world.finish_raises.get((self.app.id, self.run))
+        if error is not None:
+            raise error
+        return list(self.world.finish_notes.get((self.app.id, self.run), []))
+
+    def discard_dirs(self):
+        self.world.events.append(('discard_dirs', self.app.id, self.run))
+        return list(self.world.discard_problems.get(self.app.id, []))
+
+    def dir_leftovers(self):
+        return list(self.world.leftover_notes.get(self.app.id, []))
+
+    def recover_dirs(self):
+        self.world.events.append(('recover_dirs', self.app.id, self.job_id))
+        notes = self.world.recover_notes.get(self.app.id, [])
+        if isinstance(notes, BaseException):
+            raise notes
+        return list(notes)
 
     def fresh_in_use(self):
         if self.app.id in self.world.fresh_live_error:
@@ -1080,6 +1109,118 @@ class DeltaReviewFlowTests(RestoreFlowTests):
         with self.assertRaises(flows.RolledBack) as caught:
             self.restore(apps=['woowbk-demo', 'woowbk-two'])
         self.assertEqual(caught.exception.result['warnings'], [note])
+
+
+class HostDirFlowTests(RestoreFlowTests):
+    """flows around the adapters' host-directory steps: the record marker, finishing only after success, the
+    rollback's own siblings, reporting what stays, and the recovery entry point."""
+
+    def setUp(self):
+        super().setUp()
+        entry = demo_entry(self.paths)
+        entry['data_dirs'] = [{'path': 'woowbk-demo-data', 'label': '資料'}]
+        self.catalog['woowbk-demo'] = catalog.validate_entry(entry, paths=self.paths, user_lookup=user_lookup)
+
+    def events(self, *kinds):
+        return [e for e in self.world.events if e[0] in kinds]
+
+    def test_inplace_success(self):  # the inherited restore cases all run with a host directory declared too
+        result = self.restore()
+        self.assertEqual(self.reporter.partial, {'safety_backup_id': result['safety_backup_id'], 'stopped_writers': {},
+                                                 'dir_apps': []})
+        self.assertEqual(self.world.data['woowbk-demo'], b'notes-v1')
+
+    def test_marker_before_the_first_copy_and_finish_after_success_only(self):
+        seen = []
+        restore = FakeAdapter.restore
+
+        def spy(adapter, *args, **kwargs):
+            seen.append(dict(self.reporter.partial))
+            return restore(adapter, *args, **kwargs)
+        FakeAdapter.restore = spy
+        self.world.finish_notes[('woowbk-demo', 'restore')] = []
+        try:
+            result = self.restore(apps=('woowbk-demo', 'woowbk-two'))
+        finally:
+            FakeAdapter.restore = restore
+        self.assertEqual(seen[0].get('dir_apps'), ['woowbk-demo'], 'only apps with host directories, before any copy')
+        self.assertEqual(self.reporter.partial['dir_apps'], [], 'settled in-process')
+        finishes = self.events('finish_dirs')
+        self.assertEqual(finishes, [('finish_dirs', 'woowbk-demo', 'restore', self.job_id),
+                                    ('finish_dirs', 'woowbk-two', 'restore', self.job_id)])
+        last_check = max(i for i, e in enumerate(self.world.events) if e[0] == 'restore')
+        self.assertGreater(self.world.events.index(finishes[0]), last_check, 'after every app was restored and checked')
+        self.assertEqual(result['warnings'], [])
+        self.assertTrue(all(adapter.job_id == self.job_id for adapter in self.world.adapters))
+
+    def test_failure_discards_rolls_back_and_finishes_only_the_verified_rollback(self):
+        self.world.fail_restore_after['woowbk-demo'] = 1
+        kept = '主機資料夾 ~/woowbk-demo-data 在還原前的原內容保留在 ~/woowbk-demo-data.woowbk-old-x'
+        self.world.finish_notes[('woowbk-demo', 'rollback')] = [kept]
+        with self.assertRaises(flows.RolledBack) as caught:
+            self.restore()
+        self.assertEqual(self.events('discard_dirs', 'finish_dirs'), [
+            ('discard_dirs', 'woowbk-demo', 'restore'),
+            ('finish_dirs', 'woowbk-demo', 'rollback', self.job_id)], 'the failed restore is never finished')
+        self.assertIn(kept, caught.exception.result['warnings'])
+        self.assertTrue(any(kept in line for line in self.reporter.logs))
+        self.assertEqual(self.reporter.partial['dir_apps'], [])
+
+    def test_a_failed_rollback_names_where_the_copies_are(self):
+        self.world.fail_restore_after['woowbk-demo'] = 1
+        self.world.fail_rollback_restore.add('woowbk-demo')
+        note = '主機資料夾 ~/woowbk-demo-data 旁留有這次還原的資料夾：~/woowbk-demo-data.woowbk-old-x'
+        self.world.leftover_notes['woowbk-demo'] = [note]
+        with self.assertRaises(BackupError) as caught:
+            self.restore()
+        self.assertIn('需人工處理', caught.exception.message)
+        self.assertIn(note, caught.exception.result['warnings'])
+        self.assertEqual([e[2] for e in self.events('discard_dirs')], ['restore', 'rollback'])
+        self.assertEqual(self.events('finish_dirs'), [])
+
+    def test_a_discard_problem_makes_the_rollback_incomplete(self):
+        self.world.fail_restore_after['woowbk-demo'] = 1
+        self.world.discard_problems['woowbk-demo'] = ['主機資料夾 ~/woowbk-demo-data：無法移回']
+        with self.assertRaises(BackupError) as caught:
+            self.restore()
+        self.assertIn('無法移回', caught.exception.message)
+        self.assertFalse(caught.exception.result['rolled_back'])
+        self.assertEqual(self.reporter.partial['dir_apps'], ['woowbk-demo'],
+                         'kept: the next recovery pass settles the directories again')
+
+    def test_a_failed_rollback_without_directory_problems_clears_the_marker(self):
+        self.world.fail_restore_after['woowbk-demo'] = 1
+        self.world.fail_rollback_restore.add('woowbk-demo')
+        with self.assertRaises(BackupError):
+            self.restore()
+        self.assertEqual(self.reporter.partial['dir_apps'], [], 'the copies are settled and reported (dir_leftovers)')
+
+    def test_a_signal_while_finishing_does_not_undo_a_finished_restore(self):
+        from woowbackup.jobs import Terminated
+        self.world.finish_raises[('woowbk-demo', 'restore')] = Terminated(15)
+        result = self.restore(apps=('woowbk-demo', 'woowbk-two'))
+        self.assertEqual(self.events('finish_dirs'), [('finish_dirs', 'woowbk-demo', 'restore', self.job_id)],
+                         'the remaining apps are left (reported), the job ends quickly')
+        self.assertTrue(any('.woowbk-old-' in note for note in result['warnings']))
+
+    def test_shutdown_keeps_the_marker_for_the_recovery_after_boot(self):
+        from woowbackup.jobs import Terminated
+        self.deps.system_stopping = lambda: True
+        self.world.raise_after_destructive = Terminated(15)
+        with self.assertRaises(Terminated):
+            self.restore()
+        self.assertEqual(self.reporter.partial['dir_apps'], ['woowbk-demo'])
+        self.assertEqual(self.events('discard_dirs', 'finish_dirs'), [])
+
+    def test_recovery_entry_point(self):
+        self.world.recover_notes = {'woowbk-demo': ['已把 ~/woowbk-demo-data 的原內容移回'],
+                                    'woowbk-two': RuntimeError('boom')}
+        notes = flows.settle_dirs(self.deps, 'j20261101T000000Z-deadbeef', ['woowbk-demo', 'woowbk-two', 'gone-app'])
+        self.assertEqual(self.events('recover_dirs'), [('recover_dirs', 'woowbk-demo', 'j20261101T000000Z-deadbeef'),
+                                                       ('recover_dirs', 'woowbk-two', 'j20261101T000000Z-deadbeef')])
+        self.assertEqual(notes[0], '已把 ~/woowbk-demo-data 的原內容移回')
+        self.assertIn('需人工確認', notes[1])
+        self.assertIn('gone-app', notes[2])
 
 
 class SafetyPruneTests(FlowCase):

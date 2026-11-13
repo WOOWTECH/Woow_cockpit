@@ -33,6 +33,9 @@ MAX_KEYS_JSON = 256 * 1024
 KEYGEN_TIMEOUT = 30
 
 MSG_BAD_SECRET = '金鑰格式不正確，請貼上以 AGE-SECRET-KEY-1 開頭的完整緊急金鑰。'
+# First line of the emergency kit. Kits written before 2026-11-13 had it (and their other text) without "# ", so they
+# were not age identity files; normalize_secret still accepts them whole.
+KIT_TITLE = 'woowtech Cockpit 備份緊急金鑰'
 
 
 @dataclass(frozen=True)
@@ -59,14 +62,18 @@ def key_id_for(recipient):
 def normalize_secret(text):
     """Return the single canonical `AGE-SECRET-KEY-1…` line contained in user text.
 
-    Accepted: the bare key line, or an age identity file (comment lines starting with '#',
-    blank lines and exactly one key line). Bech32 is case-insensitive, so the key is upper-cased.
-    Anything else raises BackupError('invalid-request') without echoing the input.
+    Accepted: the bare key line, an age identity file (comment lines starting with '#', blank lines and
+    exactly one key line; the emergency kit is one), or a whole emergency kit of the older layout (first line
+    KIT_TITLE, text lines without '#', exactly one key line). Bech32 is case-insensitive, so the key is
+    upper-cased. Anything else raises BackupError('invalid-request') without echoing the input.
     """
     if not isinstance(text, str) or not text or len(text) > MAX_SECRET_INPUT or '\x00' in text:
         raise BackupError('invalid-request', MSG_BAD_SECRET)
     lines = [line.strip() for line in text.replace('\r\n', '\n').replace('\r', '\n').split('\n')]
     candidates = [line for line in lines if line and not line.startswith('#')]
+    if len(candidates) > 1 and candidates[0].lstrip('﻿') == KIT_TITLE:
+        # An older kit: its prose lines are not comments. Only whole lines that are a key count.
+        candidates = [line for line in candidates if SECRET_RE.match(line.upper())]
     if len(candidates) != 1:
         raise BackupError('invalid-request', MSG_BAD_SECRET)
     key = candidates[0].upper()
@@ -322,14 +329,19 @@ class KeyStore:
         return f'woowtech-backup-key-{util.sanitize_hostname(util.hostname())}-{info.key_id}.txt'
 
     def kit_text(self):
-        """zh-TW emergency kit text containing key id, secret key and restore instructions."""
+        """zh-TW emergency kit text containing key id, secret key and restore instructions.
+
+        The kit is itself an age identity file: every line except the key line is a `#` comment, so
+        `age -d -i <kit>.txt` decrypts a backup's payload directly (CONTRACT section 5), and the whole file can be
+        pasted or read into the page as it is."""
         info = self.device_key()
         if info is None:
             raise BackupError('no-device-key', '這台設備尚未建立加密金鑰。')
         secret = self._read_secret(info.path)
+        recipient = info.recipient
         host = util.hostname()
-        return '\n'.join([
-            'woowtech Cockpit 備份緊急金鑰',
+        prose = [
+            KIT_TITLE,
             '================================',
             '',
             '這是還原加密備份檔（.woowbackup）所需的金鑰。請立即把這個檔案保存到這台設備以外的安全位置，',
@@ -338,15 +350,16 @@ class KeyStore:
             f'金鑰 ID：{info.key_id}',
             f'建立時間：{info.created}（UTC）',
             f'建立設備：{host}',
+            f'public key: {recipient}',
             '',
-            '緊急金鑰（請完整複製下一行，包含開頭的 AGE-SECRET-KEY-1）：',
-            '',
-            secret,
-            '',
+            '緊急金鑰在下方不以「#」開頭的那一行（包含開頭的 AGE-SECRET-KEY-1）。這個檔案本身就是 age 的金鑰檔，',
+            '可以整份貼上或在頁面中讀取，也可以直接用 age -d -i <這個檔案> 解密。',
+        ]
+        guide = [
             '如何在另一台設備還原',
             '1. 在目標設備登入 Cockpit，以管理員身分開啟「備份與還原」頁面。',
             '2. 到「從檔案還原」，上傳你下載保存的 .woowbackup 備份檔。',
-            '3. 頁面要求輸入金鑰時，貼上上方以 AGE-SECRET-KEY-1 開頭的整行金鑰。',
+            '3. 頁面要求輸入金鑰時，讀取這個檔案，或貼上上方以 AGE-SECRET-KEY-1 開頭的整行金鑰。',
             '   若選擇在該設備保存金鑰，日後還原同一金鑰加密的備份時就不必再次輸入。',
             '4. 檢查預檢結果與受影響的應用，確認後開始還原。',
             '',
@@ -355,8 +368,12 @@ class KeyStore:
             '- 這台設備故障或重新安裝時，設備上保存的金鑰也會一起消失，屆時只能依靠這份緊急金鑰。',
             '- 任何同時取得這把金鑰與備份檔的人，都能讀取備份中的資料庫、檔案與應用機密。',
             '  請勿以電子郵件、聊天訊息或公開雲端分享傳送，也不要和備份檔存放在同一處。',
-            '',
-        ])
+        ]
+
+        def comment(line):
+            return f'# {line}' if line else '#'
+
+        return '\n'.join([*map(comment, prose), secret, *map(comment, guide), ''])
 
     def confirm_kit(self, key_id):
         if not isinstance(key_id, str) or not KEY_ID_RE.match(key_id):

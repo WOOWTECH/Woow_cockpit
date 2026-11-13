@@ -1,0 +1,26 @@
+{
+  "schema": 1,
+  "id": "woowbk-dirs",
+  "name": "示範主機資料夾應用",
+  "description": "資料庫與應用資料都放在主機資料夾的備份還原示範應用（停機冷備份）",
+  "owner": "appowner",
+  "adapter": "quadlet-postgres",
+  "quadlet": {
+    "files": ["woowbk-dirs.network", "woowbk-dirs-db.container", "woowbk-dirs-app.container"],
+    "template_dir": "/usr/local/share/woowtech-cockpit-backup/catalog/woowbk-dirs/quadlet"
+  },
+  "units": ["woowbk-dirs-db.service", "woowbk-dirs-app.service"],
+  "writer_units": ["woowbk-dirs-db.service", "woowbk-dirs-app.service"],
+  "postgres": [],
+  "data_dirs": [
+    {"path": ".local/share/woowbk-dirs/postgres", "label": "PostgreSQL 資料目錄"},
+    {"path": "woowbk-dirs/data", "label": "應用資料（含 SQLite）"}
+  ],
+  "secrets": [{"name": "woowbk-dirs-db-password"}, {"name": "woowbk-dirs-role-password"}, {"name": "woowbk-dirs-app-key"}],
+  "config_files": [{"path": ".config/woowbk-dirs/app.env", "mode": "0600"}],
+  "health": [{"type": "http", "url": "http://127.0.0.1:18091/healthz", "expect_status": 200, "timeout_seconds": 120}],
+  "verify": [
+    {"id": "summary", "type": "http-json", "url": "http://127.0.0.1:18091/api/summary",
+     "compare": ["items", "events", "db_digest", "db_meta", "tree", "tree_digest", "sqlite", "title", "signatures_valid"]}
+  ]
+}

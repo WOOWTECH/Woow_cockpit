@@ -54,7 +54,9 @@ had_probe_image=no
 owner podman image exists "$PROBE_IMAGE" && had_probe_image=yes
 probe=$(owner podman run --rm --memory 64m --name woowbk-probe-run docker.io/library/alpine:3.20 \
     sh -c 'echo "$(id -u) $(cat /sys/fs/cgroup/memory.max)"; tr -s " " < /proc/self/uid_map | xargs' 2>&1 | tail -2 | xargs)
-expected="0 67108864 0 $uid 1 1 10000 55000"
+# Each device may have its own subordinate range (subids.sh; dev-b differs on purpose): expect the configured one.
+subrange=$("$LP" exec "$NAME" awk -F: -v owner="$OWNER" '$1 == owner { print $2, $3; exit }' /etc/subuid)
+expected="0 67108864 0 $uid 1 1 $subrange"
 [ "$probe" = "$expected" ] && pass "nested alpine: uid/memory.max/uid_map = $probe" || fail "nested alpine: got '$probe', expected '$expected'"
 
 # 5. Quadlet generator -> user service
