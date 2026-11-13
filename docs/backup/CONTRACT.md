@@ -10,7 +10,10 @@ volume checks, snapshot confirmation, database enumeration and bounded health re
 Revised 2026-11-13 (branch `feat/backup-host-dirs`) for **host directories** (`data_dirs`, 主機資料夾): catalog
 schema (§4), manifest, entries and nested-tar rules (§5), the owner-side directory helper (§6), summary, preflight
 and result fields (§7), the `dir_apps` marker and its recovery (§8), the backup/restore/rollback algorithms (§9),
-security rules (§10); the emergency kit is an age identity file (§5).
+security rules (§10); the emergency kit is an age identity file (§5). After the host-directory review (M1–M5,
+L1–L7): helper answers are untrusted and checked, mount points and other containers that use a directory are refused,
+the rollback moves the previous content back instead of extracting a third copy, old copies are renamed to `-del-`
+before they are deleted, and the forbidden trees grew (§4–§10).
 Product docs for customers are written separately in Traditional Chinese (`docs/backup.md`).
 All UI text is **Traditional Chinese (zh-TW)**. Code comments in English.
 
@@ -122,15 +125,23 @@ bind-mount (`Volume=%h/<dir>:<path>`), backed up and restored **as a whole**:
 
 At most 16 items `{"path", "label"?}` (unknown keys rejected; `label` 0–80 characters, no control characters).
 `path` is relative to the owner's home and normalized: no leading or trailing `/`, segments
-`^[A-Za-z0-9._@+-]{1,255}$` and not `.`/`..` (so never the home itself), last segment ≤ 200 characters (room for
-the restore's sibling names). It may neither equal, lie inside nor contain `.ssh`, `.gnupg`, `.config/systemd`,
+`^[A-Za-z0-9._@+-]{1,255}$` and not `.`/`..` (so never the home itself), no segment containing `.woowbk-` (any case:
+the restore's own sibling names), last segment ≤ 200 characters (room for the sibling names). Compared without
+regard to case, it may neither equal, lie inside nor contain `.ssh`, `.gnupg`, `.config/systemd`,
 `.config/containers`, `.local/share/containers`, `.config/environment.d`, `.config/autostart`, `.config/dbus-1`,
-`.config/user-tmpfiles.d`, `.local/share/systemd`, `.local/share/dbus-1` or `.local/share/applications` (login
-keys, unit definitions, the user manager's environment and the Podman storage never come from archive bytes).
-Items must not overlap each other (equal, or one inside the other) or any `config_files` path; two loaded apps of
-the same owner must not declare overlapping directories (the later entry, in file name order, is reported in
-`status.warnings` and not loaded). Every unit that mounts a directory belongs in `writer_units` (the backup logs a
-warning for a running non-writer unit whose `.container` file mounts it). **Cold databases:** a PostgreSQL whose
+`.config/user-tmpfiles.d`, `.local/share/systemd`, `.local/share/dbus-1`, `.local/share/applications`,
+`.local/share/user-tmpfiles.d`, `.local/bin`, `.local/lib`, `bin`, `.bashrc.d` or `.config/fish` (login keys, unit
+definitions, the user manager's environment, user tmpfiles that write any file at the next login, programs, Python
+user site-packages and shell start-up files his logins run, and the Podman storage never come from archive bytes);
+the restore preflight also refuses an overlap with the owner's actual Podman `GraphRoot` and `VolumePath` (a
+`storage.conf` may move them). Items must not overlap each other (equal, or one inside the other) or any
+`config_files` path; two loaded apps of the same owner must not declare overlapping directories, nor a directory
+that holds the other's config file (the later entry, in file name order, is reported in `status.warnings` and not
+loaded). A directory must be on its parent's mount and hold no mount point (another filesystem or a bind mount):
+the backup and the restore preflight refuse it. Every unit whose container can write into a directory belongs in
+`writer_units`: a backup fails, before any writer stops, while a running container that is not a writer it stops
+bind-mounts a directory (or a directory above it) read-write, whatever started it (Quadlet `Volume=`/`Mount=`, a pod,
+`PodmanArgs`, by hand). **Cold databases:** a PostgreSQL whose
 data lives in a volume or host directory may be declared without a `postgres` entry: list the data volume in
 `volumes` or the data directory in `data_dirs` and put the database unit in `writer_units`; everything stops during
 the backup and roles, passwords, owners and grants are kept at file level (the major version must then be the same
@@ -232,6 +243,18 @@ already uses for `<ref>`, never one from the archive — and are put back after 
 leave `<ref>` resolving to the recorded image id. Every volume export is checked the same way when a backup is made
 (§9).
 
+**Host directories in the archive.** An app with `data_dirs` carries `data_dirs: [{path, entry}]` in its manifest
+(apps without them keep the old shape) and one entry `apps/<id>/dirs/<n>.tar` per directory, `<n>` its position in
+the catalog. The tar is GNU tar's POSIX format of the directory read as the owner inside his user namespace (§6):
+numeric owners as the namespace sees them, modes, nanosecond mtimes, hard links, symlinks verbatim, `user.*` xattrs;
+no ACLs, no SELinux labels, one filesystem (`--one-file-system`). `nested.check_dir` checks it like a volume tar plus
+the target owner's ID map: every owner must be mappable on the restoring device ("capacity"), members ≤ the volume
+limit, no absolute names, `..`, links leaving the tree, devices or setuid bits; a restore only ever extracts the
+canonical copy `nested.stream_dir` re-emits. A backup checks each of its own directory exports this way after the
+writers run again, and fails rather than storing a directory a restore would refuse. Files owned by ids outside the
+owner's range appear (and are restored) as the namespace's overflow id 65534; entries with POSIX ACLs are counted and
+reported in the backup log, the ACLs are not kept.
+
 ## 6. Python module contract (signatures are in the scaffold files; keep them)
 
 * `errors.BackupError(code, message, **details)` — every expected failure. `message` is zh-TW.
@@ -245,6 +268,24 @@ leave `<ref>` resolving to the recorded image id. Every volume export is checked
 * `flows`: `run_backup`, `run_restore`, `run_verify` (used by jobs).
 * `jobs`: `JobStore`, `start_job`, `run_job`, `recover_interrupted`.
 * `cli.main(argv) -> int`.
+
+**Directory helper** (`podman.DIR_HELPER`, host directories only). `OwnerRunner` runs
+`podman unshare /usr/bin/python3 -I -c DIR_HELPER <op> …` as the owner, i.e. as root of his rootless user namespace:
+files of his subordinate ids can be read, written with their owners and removed, never more than his own rights.
+Every component from `$HOME` down is opened with `O_NOFOLLOW` (a directory that is a symlink, or lies below one, is
+refused) and renames use `renameat2(RENAME_NOREPLACE)`. Siblings are named `<dir>.woowbk-new-<token>` (being
+written), `<dir>.woowbk-old-<token>` (the replaced copy) and `<dir>.woowbk-del-<token>` (an old copy being deleted);
+`<token>` is the job id, `<job id>-rollback` for its rollback. Operations: `pack` (tar to stdout through the owner-side
+relay), `measure` and `mounts` (size, entries, entries with ACLs; whether the directory is a mount point and the mount
+points below it, compared by device and statx mount id), `unpack` (stdin tar into the new sibling, missing parents
+created 0700), `swap` (directory → old sibling, new sibling → directory; fresh mode only replaces an empty directory),
+`revert` (rollback without a copy: directory → old sibling of the rollback token, the restore's old sibling →
+directory), `drop new|old|del|target` (an old copy is renamed to `del` first; every directory's device and mount id
+are checked before anything is deleted), `back` (old sibling → a missing directory) and `state` (type, empty, mount
+point, device and free space of the parent, siblings: those of the requested tokens always, others up to 50 plus a
+count). The owner controls that namespace (he can bind-mount over `python3` in it), so every answer is untrusted:
+`OwnerRunner` checks each field (types, enums, token format, the requested paths exactly once) and turns undecodable,
+deeply nested or differently shaped answers into `BackupError(job-failed)`; exit status 12 means a mount point.
 
 ## 7. Helper CLI contract (UI ↔ engine)
 
@@ -292,6 +333,15 @@ Shapes:
   `safety_skipped`: in-place apps were restored without a new safety backup (the source is a safety backup, or
   `allow_no_safety`); `safety_failed`: refused because no safety backup could be made. A failed restore always carries
   its result. `verification[].before/after` hold only the catalog's `compare` keys, each value ≤ 2 KiB of JSON.
+
+Host-directory preflight checks (ids under `<app>/`): `dir-target` (a symlink on the path, a mount point, an overlap
+with the Podman storage, or the state in place/fresh), `dir-conflict` (fresh: a non-empty directory exists),
+`dir-mounts` (mount points below it), `dir-in-use` (a running container of another unit, or one started by hand,
+bind-mounts it, read-only included: after the swap it would keep using the replaced copy), `dir-leftover` (siblings
+of earlier restores, warn), `dir-archive`/`dir-ids`/`dir-attributes` (the archived tar and the owner's ID range), and
+`space`: twice what the archive holds for the app on the home's filesystem (the extracted archive and the restored
+data; the replaced copy stays until the job succeeded and moves back after a failure, so no third copy is counted),
+a directory on another filesystem counting there with the free space the helper read.
 
 Phases — backup: `prepare 準備`, `check 檢查空間與應用`, `stop 暫停應用寫入`, `dump 匯出資料庫`,
 `export 匯出資料卷與設定`, `start 恢復應用`, `package 加密封裝`, `verify 驗證備份`.
@@ -358,6 +408,13 @@ permission-denied, not-cancellable, job-failed, internal-error`.
 * Index sidecars are written (register, update, delete) under `/run/woowtech-backup/index.lock`, and an update
   reads the sidecar under it: `inspect` and a verify job's result never overwrite each other. A sidecar that exists but
   cannot be read or validated is never replaced: orphan adoption and a re-upload of the same file leave it as it is.
+* Host directories: before the first copy is written the restore records `dir_apps`; a job that dies leaves siblings
+  named after it, which the recovery settles once (`settle_dirs` → `recover_dirs` per app): deletions cut short
+  (`-del-`) are finished; a missing directory gets a moved-aside copy back, the content before the restore
+  (`-old-<job>`) before the failed restore's data (`-old-<job>-rollback`); new copies are removed; old copies of a
+  directory that exists are kept and reported by what they hold, never deleted. Right before it deletes the replaced
+  copies after success the job records `finishing`; a job that dies then is reported as a finished restore whose
+  clean-up the recovery completes (no "restore the safety backup" guidance).
 * `upload-finish` holds an exclusive `flock` on the upload's `.json` and, once it holds it, ignores SIGTERM/SIGHUP/SIGINT
   until its result is recorded (`.done`): a page timeout makes cockpit-bridge send SIGTERM, and the check must still
   finish. A second `upload-finish` of the same upload (the page's 「重新確認」) waits for that lock, then returns the
@@ -430,6 +487,21 @@ Images: if not included, the local image for the ref must exist or be pullable; 
 preflight fails (`podman image exists` exit 1 is "absent", any other non-zero exit is an error). PostgreSQL major
 in the archive must be ≤ the target image major; PostgreSQL before 10 is not supported (preflight and backup say so).
 
+**Host directories.** Backup: each directory is measured inside the owner's namespace before any writer stops; a
+directory that is a mount point or holds one fails the backup (a restore could not rename it, and tar stays on one
+filesystem), POSIX ACLs are reported. A running container that is not a stopped writer and bind-mounts a directory
+read-write fails it too. The writers stop, each directory is packed through the relay, the writers restart, and each
+export is checked as a restore would check it. Restore (in place and fresh): after the units stop (fresh: the
+templates are installed) every directory is written to its new sibling first, while nothing that exists has changed;
+then secrets, config files, volumes and the database volume; then, right before the swaps, the owner's running
+containers are listed again and any that bind-mounts a directory fails the restore; then each directory is swapped.
+The replaced copies are deleted (renamed to `-del-` first) only after the whole job succeeded. Rollback: a directory
+the failed restore swapped moves back from its `-old-<job>` copy (`revert`, no extraction, no space); one it replaced
+without such a copy (removed meanwhile, or created by the restore) is extracted from the safety backup; one it never
+changed is left alone. The failed restore's data (`-old-<job>-rollback`) is deleted once the rollback was verified,
+and reported otherwise. Any error of a directory step (also an unexpected exception) is recorded as a problem and never
+stops the rollback of the other apps.
+
 ## 10. Security rules (reviewers will check each)
 
 1. Helper refuses to run unless `euid == 0`; entrypoint checks its library dir is root-owned and
@@ -442,7 +514,11 @@ in the archive must be ≤ the target image major; PostgreSQL before 10 is not s
 6. `download-info` only returns paths inside `archives/`; uploads only into helper-generated
    `uploads/<upload_id>.part`; `upload-finish` rejects symlinks/non-regular files/size mismatch.
 7. Staging contains plaintext; it is 0700 root and removed in `finally`; residual risk documented.
-8. All JSON inputs strictly validated (types, lengths, enums, regexes); unknown keys rejected.
+8. All JSON inputs strictly validated (types, lengths, enums, regexes); unknown keys rejected. This includes what
+   the owner-side helpers print: the directory helper runs in a namespace the owner controls (§6).
+9. Host directories: root never opens a path in an owner's home (it only reads `statvfs`/`stat` of the home itself);
+   all directory work runs as the owner in his namespace, without following symlinks, without crossing into another
+   mount, and never deleting the only copy of a directory's earlier content.
 
 ## 11. UI (`backup/`) requirements
 

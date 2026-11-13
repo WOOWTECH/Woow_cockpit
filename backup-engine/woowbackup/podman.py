@@ -871,7 +871,7 @@ class OwnerRunner:
         if code == 'not-empty':
             return BackupError('incompatible', f'~/{rel} 已存在且不是空的資料夾，為避免覆寫既有資料而停止。', path=rel)
         if code == 'mount':
-            return BackupError('incompatible', f'~/{rel} 是掛載點或其中有其他檔案系統的掛載；為避免移動或刪除其他檔案系統的內容，'
+            return BackupError('incompatible', f'~/{rel} 是掛載點或其中有掛載點；為避免移動或刪除其他掛載的內容，'
                                                f'無法{what}這個主機資料夾。', path=rel)
         return CommandError(f'無法以擁有者身分{what}主機資料夾 ~/{rel}（結束碼 {result.returncode}）。',
                             returncode=result.returncode, stderr=result.stderr, command=f'owner-dir {what}')

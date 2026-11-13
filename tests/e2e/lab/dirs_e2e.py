@@ -19,8 +19,11 @@ request JSON on stdin, one JSON object back; downloads/uploads through the devic
     python3 -I tests/e2e/lab/dirs_e2e.py d5        # hostile dir tars (escape symlink, absolute, '..', ...) refused
                                                    # before any change; undeclared paths never written
     python3 -I tests/e2e/lab/dirs_e2e.py d6        # dev-b fresh restore onto an existing non-empty directory: refused
+    python3 -I tests/e2e/lab/dirs_e2e.py d7        # dev-a: a tmpfs below the data dir, the data dir bind-mounted onto
+                                                   # itself, other containers mounting it read-only / read-write:
+                                                   # backups and restore preflights refuse what they must, nothing stops
     python3 -I tests/e2e/lab/dirs_e2e.py leaks     # app secrets / age keys never in records, logs, index, journal
-    python3 -I tests/e2e/lab/dirs_e2e.py all       # prep d1 d3 d4 d5 d6 d2 leaks
+    python3 -I tests/e2e/lab/dirs_e2e.py all       # prep d1 d3 d4 d5 d6 d7 d2 leaks
 
 Prerequisites (prep checks them): both devices up, the engine with host-directory support installed on both
 (deploy-src.sh a|b), the trusted catalog entry on both (dirs-catalog.sh a|b install), woowbk-dirs deployed on dev-a
@@ -819,6 +822,10 @@ def scenario_d3(ev):
     ev.check('D3 no .woowbk-new- copy left after the rollback', not any('.woowbk-new-' in n for n in kept), leftovers)
     ev.check('D3 every copy the rollback kept is reported in the job (warnings or log name it)',
              all(name in job_text(job, log) for name in kept), {'kept': kept, 'warnings': result.get('warnings')})
+    ev.check('D3 the rollback moved each directory back from its pre-restore copy (no third copy extracted) and '
+             "deleted the failed restore's data once verified (review M3)",
+             all(f'已把主機資料夾 ~/{rel} 還原前的內容移回' in job_text(job, log) for rel in DIRS) and not kept,
+             {'kept': kept, 'log': [line for line in job_text(job, log).splitlines() if '移回' in line or '刪除' in line]})
     for name in leftovers.get(DATA_DIR, []):
         ev.check(f'D3 the kept copy {name} holds the pre-restore content of the data dir',
                  entries_of(dev, f'{Path(DATA_DIR).parent}/{name}') == pre_data)
@@ -1494,6 +1501,105 @@ def scenario_d6(ev):
     return results
 
 
+# ------------------------------------------------------------------ scenario: d7 mount points and other containers
+
+D7_MOUNT = f'{DATA_DIR}/woowbk-d7-mount'
+D7_READER = 'woowbk-d7-reader'
+
+
+def d7_mount(dev, how):
+    """As root in the device: 'tmpfs' below the data dir, 'bind' the data dir onto itself (one filesystem: the same
+    device, another mount id), or 'off'. The app keeps working on the same inodes throughout."""
+    if how == 'tmpfs':
+        owner(dev, 'podman', 'unshare', 'mkdir', '-p', f'{HOME}/{D7_MOUNT}')
+        sh(dev, f'mount -t tmpfs -o size=1m tmpfs "{HOME}/{D7_MOUNT}"')
+    elif how == 'bind':
+        sh(dev, f'mount --bind "{HOME}/{DATA_DIR}" "{HOME}/{DATA_DIR}"')
+    else:
+        sh(dev, f'umount "{HOME}/{D7_MOUNT}" 2>/dev/null; umount "{HOME}/{DATA_DIR}" 2>/dev/null; true', check=False)
+        owner(dev, 'podman', 'unshare', 'rmdir', f'{HOME}/{D7_MOUNT}', check=False)
+
+
+def d7_reader(dev, mode):
+    """A container outside the app that bind-mounts the data dir ('ro' or 'rw'); None removes it."""
+    owner(dev, 'podman', 'rm', '-f', '-t', '0', D7_READER, check=False)
+    if mode:
+        spec = f'{HOME}/{DATA_DIR}:/data' + (':ro' if mode == 'ro' else '')
+        owner(dev, 'podman', 'run', '-d', '--name', D7_READER, '--entrypoint', 'sleep', '-v', spec,
+              'localhost/woowbk-dirs-app:1', '900')
+
+
+def d7_refused_backup(dev, ev, label, needles):
+    """A backup that must fail as incompatible naming `needles`, before any writer was stopped."""
+    start = ok(dev, 'backup-start', {'apps': [APP], 'include_images': False, 'note': f'D7 {label}',
+                                     'request_id': request_id()}, ev=ev)
+    job, log = wait_job(dev, start['job_id'], ev=ev, timeout=600, label=f'backup[d7-{label}]')
+    save_job(ev, f'backup[d7-{label}]', job, log)
+    error = job.get('error') or {}
+    ev.check(f'D7 {label}: backup refused (incompatible) naming the cause, and no writer was stopped',
+             job['state'] == 'failed' and error.get('code') == 'incompatible'
+             and all(n in error.get('message', '') for n in needles) and '暫停寫入服務' not in job_text(job, log),
+             {'state': job['state'], 'error': error})
+
+
+def d7_preflight(dev, ev, backup_id, label, check_id, needles):
+    """The restore preflight of `backup_id` must refuse with `check_id` naming `needles` (None: restorable)."""
+    papp = ok(dev, 'inspect', {'backup_id': backup_id}, ev=ev)['preflight']['apps'][0]
+    failing = [c for c in papp['checks'] if c['status'] == 'fail']
+    if check_id is None:
+        ev.check(f'D7 {label}: restore preflight passes', papp['restorable'] and not failing, failing)
+        return
+    ev.check(f'D7 {label}: restore preflight refuses it ({check_id})',
+             not papp['restorable'] and any(c['id'].split('/', 1)[1].startswith(check_id)
+                                            and all(n in c['message'] for n in needles) for c in failing), failing)
+
+
+def scenario_d7(ev):
+    dev = 'a'
+    ev.require('D7 no leftover siblings before the scenario', not leftover_siblings(dev), leftover_siblings(dev))
+    ev.require('D7 app healthy before the scenario', wait_healthy(dev, 120))
+    job, _log = backup(dev, ev, 'D7 基準備份', label='backup[d7-base]')
+    backup_id = job['result']['backup_id']
+    made = [backup_id]
+    try:
+        # Review M2: a mount point below the directory (tar stays on one filesystem; the replaced copy would be
+        # deleted together with it) and the directory itself a mount point (it cannot be renamed); the bind mount
+        # onto itself keeps the device number, only the mount id differs.
+        for how, backup_needle, check_id, preflight_needle in (
+                ('tmpfs', f'中有掛載點（~/{D7_MOUNT}）', 'dir-mounts', f'中有掛載點（~/{D7_MOUNT}）'),
+                ('bind', f'主機資料夾 ~/{DATA_DIR} 是掛載點', 'dir-target', f'~/{DATA_DIR} 是掛載點')):
+            d7_mount(dev, how)
+            try:
+                d7_refused_backup(dev, ev, f'mount-{how}', [backup_needle])
+                d7_preflight(dev, ev, backup_id, f'mount-{how}', check_id, [preflight_needle])
+            finally:
+                d7_mount(dev, 'off')
+            ev.check(f'D7 mount-{how}: app still healthy (nothing was stopped)', wait_healthy(dev, 60))
+        # Review M5: another container using the directory. Read-only it cannot make a backup inconsistent, but a
+        # restore would leave it on the replaced (then deleted) copy; read-write it fails both.
+        d7_reader(dev, 'ro')
+        try:
+            job, _log = backup(dev, ev, 'D7 唯讀掛載的其他容器', label='backup[d7-reader-ro]')
+            made.append(job['result']['backup_id'])
+            ev.check('D7 reader-ro: a read-only reader does not block a backup', job['state'] == 'succeeded')
+            d7_preflight(dev, ev, backup_id, 'reader-ro', 'dir-in-use', [f'容器 {D7_READER} 掛載了主機資料夾 ~/{DATA_DIR}'])
+            d7_reader(dev, 'rw')
+            d7_refused_backup(dev, ev, 'reader-rw', [f'容器 {D7_READER} 以可寫入方式掛載了主機資料夾 ~/{DATA_DIR}',
+                                                     'writer_units'])
+            d7_preflight(dev, ev, backup_id, 'reader-rw', 'dir-in-use', [D7_READER])
+        finally:
+            d7_reader(dev, None)
+        d7_preflight(dev, ev, backup_id, 'all clear', None, [])
+        ev.check('D7 app healthy, no siblings, staging empty, no job keys after the scenario',
+                 wait_healthy(dev, 60) and not leftover_siblings(dev) and staging_empty(dev) and no_job_keys(dev))
+    finally:
+        d7_mount(dev, 'off')
+        d7_reader(dev, None)
+        for made_id in made:
+            delete_backup(dev, made_id, ev)
+    return {'backup_id': backup_id}
+
+
 # ------------------------------------------------------------------ scenario: leaks
 
 def scenario_leaks(ev):
@@ -1820,8 +1926,9 @@ def scenario_selftest(ev):
 # ------------------------------------------------------------------ main
 
 SCENARIOS = {'prep': scenario_prep, 'selftest': scenario_selftest, 'd1': scenario_d1, 'd3': scenario_d3,
-             'd4': scenario_d4, 'd5': scenario_d5, 'd6': scenario_d6, 'd2': scenario_d2, 'leaks': scenario_leaks}
-ALL = ('prep', 'd1', 'd3', 'd4', 'd5', 'd6', 'd2', 'leaks')
+             'd4': scenario_d4, 'd5': scenario_d5, 'd6': scenario_d6, 'd7': scenario_d7, 'd2': scenario_d2,
+             'leaks': scenario_leaks}
+ALL = ('prep', 'd1', 'd3', 'd4', 'd5', 'd6', 'd7', 'd2', 'leaks')
 
 
 def main():

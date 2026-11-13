@@ -703,13 +703,13 @@ class QuadletPostgresAdapter(Adapter):
         must neither be skipped silently nor be deleted with the replaced copy; review M2)."""
         info = self.runner.dir_measure(rel)
         if info['mount_root']:
-            raise BackupError('incompatible', f'主機資料夾 ~/{rel} 是另一個檔案系統的掛載點；還原需要在同一個檔案系統中替換整個'
-                                              '資料夾，這份備份將無法原位還原，因此沒有建立。請改為列出掛載點之內的資料夾。',
+            raise BackupError('incompatible', f'主機資料夾 ~/{rel} 是掛載點（另外掛載的檔案系統或 bind mount）；還原需要在同一個'
+                                              '掛載中替換整個資料夾，這份備份將無法原位還原，因此沒有建立。請改為列出掛載點之內的資料夾。',
                               app=self.app.id, path=rel)
         if info['mounts']:
             more = f'等 {len(info["mounts"]) + info["more_mounts"]} 處' if info['more_mounts'] else ''
-            raise BackupError('incompatible', f'主機資料夾 ~/{rel} 中有其他檔案系統的掛載點（~/{rel}/{info["mounts"][0]}'
-                                              f'{more}）；備份不會跨越檔案系統，還原也無法安全替換，因此沒有建立備份。'
+            raise BackupError('incompatible', f'主機資料夾 ~/{rel} 中有掛載點（~/{rel}/{info["mounts"][0]}{more}）；'
+                                              '備份不會跨越掛載，還原也無法安全替換，因此沒有建立備份。'
                                               '請把掛載點之內的資料夾另外列為主機資料夾，或移除該掛載。',
                               app=self.app.id, path=rel)
         if info['acls']:
@@ -777,8 +777,8 @@ class QuadletPostgresAdapter(Adapter):
                 raise BackupError('incompatible', f'~/{item["path"]} 不是資料夾，或路徑中含有符號連結；未做任何變更。',
                                   app=self.app.id, path=item['path'])
             if state.get('mount'):
-                raise BackupError('incompatible', f'~/{item["path"]} 是另一個檔案系統的掛載點，無法以替換資料夾的方式還原；'
-                                                  '未做任何變更。', app=self.app.id, path=item['path'])
+                raise BackupError('incompatible', f'~/{item["path"]} 是掛載點，無法以替換資料夾的方式還原；未做任何變更。',
+                                  app=self.app.id, path=item['path'])
             if mode == 'fresh' and state.get('type') == 'dir' and not state.get('empty'):
                 raise BackupError('incompatible', f'此設備已存在主機資料夾 ~/{item["path"]} 且不是空的；為避免覆寫既有資料，'
                                                   '未做任何變更。', app=self.app.id, path=item['path'])
@@ -1473,8 +1473,8 @@ class QuadletPostgresAdapter(Adapter):
             if kind in ('blocked', 'link', 'other'):
                 add('dir-target', 'fail', f'~/{rel} 不是資料夾，或路徑中含有符號連結；無法還原到這裡。')
             elif state['mount']:
-                add('dir-target', 'fail', f'~/{rel} 是另一個檔案系統的掛載點；還原需要在同一個檔案系統中替換整個資料夾，'
-                                          '無法還原到這裡。')
+                add('dir-target', 'fail', f'~/{rel} 是掛載點（另外掛載的檔案系統或 bind mount）；還原需要在同一個掛載中替換'
+                                          '整個資料夾，無法還原到這裡。')
             elif mode == 'fresh' and kind == 'dir' and not state['empty']:
                 add('dir-conflict', 'fail', f'此設備已存在主機資料夾 ~/{rel} 且不是空的；為避免覆寫既有資料，請先移走後再還原'
                                             '（沒有刪除任何東西）。')
@@ -1495,7 +1495,7 @@ class QuadletPostgresAdapter(Adapter):
                     add('dir-mounts', 'fail', f'無法檢查主機資料夾 ~/{rel} 中的掛載點：{error.message}')
                 else:
                     if found['mounts']:
-                        add('dir-mounts', 'fail', f'主機資料夾 ~/{rel} 中有其他檔案系統的掛載點（~/{rel}/{found["mounts"][0]}）；'
+                        add('dir-mounts', 'fail', f'主機資料夾 ~/{rel} 中有掛載點（~/{rel}/{found["mounts"][0]}）；'
                                                   '替換資料夾會連同它一起移走並在成功後刪除，因此無法還原到這裡。請先移除該掛載。')
             leftovers = [f'~/{rel}.woowbk-{item["kind"]}-{item["token"]}' for item in state['siblings']]
             if leftovers:

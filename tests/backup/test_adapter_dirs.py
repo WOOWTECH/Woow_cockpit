@@ -255,9 +255,9 @@ class DirBackupTests(DirCase):
     def test_mount_points_fail_the_backup_before_anything_stops(self):
         # Review M2: tar stays on one filesystem, so content below a mount point would be missing, and a restore can
         # neither rename a mount point nor delete the replaced copy without entering the other filesystem.
-        for answer, needle in (({'mount_root': True, 'mounts': [], 'more_mounts': 0}, '是另一個檔案系統的掛載點'),
+        for answer, needle in (({'mount_root': True, 'mounts': [], 'more_mounts': 0}, '是掛載點（另外掛載的檔案系統或 bind mount）'),
                                ({'mount_root': False, 'mounts': ['db/disk'], 'more_mounts': 2},
-                                f'中有其他檔案系統的掛載點（~/{DATA}/db/disk等 3 處）')):
+                                f'中有掛載點（~/{DATA}/db/disk等 3 處）')):
             with self.subTest(needle):
                 owner = self.new_owner()
                 owner.dir_answers = {('measure', DATA): {'bytes': 1, 'members': 1, 'acls': 0, **answer}}
@@ -457,10 +457,10 @@ class DirRestoreTests(DirRestoreCase):
             # Review M2: the directory is a mount point (cannot be renamed), or holds one (moved and deleted with it).
             ('state', lambda o: o.dir_answers.update({('state', '-'): [{**row, 'path': HTML, 'mount': True},
                                                                        {**row, 'path': DATA}]}),
-             'dir-target', f'~/{HTML} 是另一個檔案系統的掛載點'),
+             'dir-target', f'~/{HTML} 是掛載點（另外掛載的檔案系統或 bind mount）'),
             ('mounts', lambda o: o.dir_answers.update({('mounts', DATA): {'mount_root': False, 'mounts': ['cache'],
                                                                          'more_mounts': 0}}),
-             'dir-mounts', f'主機資料夾 ~/{DATA} 中有其他檔案系統的掛載點（~/{DATA}/cache）'),
+             'dir-mounts', f'主機資料夾 ~/{DATA} 中有掛載點（~/{DATA}/cache）'),
             # Review L1: a storage.conf moved the Podman storage into a declared directory.
             ('storage', lambda o: setattr(o, 'storage', (f'{home}/{DATA}/storage', f'{home}/{DATA}/storage/volumes')),
              'dir-target', f'主機資料夾 ~/{DATA} 與 Podman 的儲存位置 {home}/{DATA}/storage 重疊'),
@@ -483,7 +483,7 @@ class DirRestoreTests(DirRestoreCase):
         owner.dir_answers = {('state', '-'): [{**row, 'path': HTML, 'mount': True}, {**row, 'path': DATA}]}
         with self.assertRaises(BackupError) as caught:  # also when a caller skipped the preflight
             self.make_adapter(owner).restore(self.manifest, self.extract, mode='inplace')
-        self.assertIn('是另一個檔案系統的掛載點', caught.exception.message)
+        self.assertIn('是掛載點，無法以替換資料夾的方式還原', caught.exception.message)
         self.assertEqual({op[0] for op in owner.dir_ops}, {'state'}, 'refused before any change')
 
     def test_a_container_started_meanwhile_stops_the_restore_before_the_swap(self):

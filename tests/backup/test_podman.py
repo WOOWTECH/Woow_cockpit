@@ -683,7 +683,7 @@ class DirArgvTests(unittest.TestCase):
 
     def test_error_mapping(self):
         cases = {3: ('not-found', '找不到主機資料夾 ~/data'), 4: ('permission-denied', '不是資料夾'),
-                 12: ('incompatible', '是掛載點或其中有其他檔案系統的掛載'),
+                 12: ('incompatible', '是掛載點或其中有掛載點'),
                  9: ('job-failed', '旁已有同名的資料夾'), 10: ('incompatible', '不是空的資料夾'),
                  11: ('job-failed', '無法以擁有者身分替換主機資料夾 ~/data'), 125: ('job-failed', '結束碼 125')}
         for code, (error_code, needle) in cases.items():
