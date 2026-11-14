@@ -27,6 +27,10 @@ class Paths:
         return self.data / 'staging'
 
     @property
+    def pending(self):
+        return self.data / 'pending'
+
+    @property
     def jobs(self):
         return self.data / 'jobs'
 

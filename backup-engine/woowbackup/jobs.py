@@ -14,14 +14,15 @@
 * `recover_interrupted` decides only while it holds the start lock and, taken without waiting, the engine
   lock, so no job can be running or finishing meanwhile. For each candidate it probes the unit and then
   re-reads the record under its record lock: a record still queued/running whose unit is inactive is
-  marked `interrupted`, and the writers / host directories / unfinished fresh deployment that this fresh record
-  (never the earlier listing) still lists are restarted / settled / removed, each once. A job that finished while the
-  records
-  were listed therefore keeps its own final record (release regression 16). Nothing is ever replayed. It
-  also deletes stale transient key files and staging folders of jobs that are not running.
-* Retention: records of active jobs, records with recovery work left and failed/interrupted restores whose
-  safety backup is still pinned are always kept; of the other (finished) records only the newest
-  KEEP_TERMINAL are kept, with their logs. So status/jobs/job-status read a bounded number of records.
+  marked `interrupted`, and the writers / host directories / unfinished fresh deployment / pre-restore copy that this
+  fresh record (never the earlier listing) still lists are restarted / settled / removed / packaged into its safety
+  backup, each once. A job that finished while the records were listed therefore keeps its own final record (release
+  regression 16). Nothing is ever replayed. It also deletes stale transient key files and staging folders of jobs that
+  are not running; it never touches a pre-restore copy (`pending/<job>/`) except through its packaging.
+* Retention: records of active jobs, records with recovery work left, failed/interrupted restores whose
+  safety backup is still pinned and restores whose pre-restore copy is not (or could not be) packaged are always
+  kept; of the other (finished) records only the newest KEEP_TERMINAL are kept, with their logs. So
+  status/jobs/job-status read a bounded number of records.
 * Cancellation is a request file, accepted only while the record says the job is cancellable and honoured
   at the job's next checkpoint. Leaving the cancellable window is itself such a checkpoint, checked under
   the record lock, so an accepted cancel is never followed by a destructive step.
@@ -43,16 +44,18 @@ import time
 import traceback
 from pathlib import Path
 
+from . import util
 from .errors import BackupError
 
 PHASES = {
     'backup': (('prepare', '準備'), ('check', '檢查空間與應用'), ('stop', '暫停應用寫入'), ('dump', '匯出資料庫'),
                ('export', '匯出資料卷與設定'), ('start', '恢復應用'), ('package', '加密封裝'), ('verify', '驗證備份')),
     # `stage`: host directories are written next to the current ones while the apps still run (nothing that exists
-    # changes); the safety backup then keeps the writers stopped for the restore (CONTRACT section 9).
+    # changes); `safety` copies the data before the restore and keeps the writers stopped for it; `safety-package`
+    # packages and verifies that copy into the safety backup once the apps run again (CONTRACT section 9).
     'restore': (('prepare', '準備'), ('decrypt', '解密並驗證檔案'), ('preflight', '相容性檢查'),
-                ('stage', '預先寫入主機資料夾'), ('safety', '建立還原前備份'), ('stop', '停止應用'), ('restore', '還原資料'),
-                ('start', '啟動應用'), ('check', '健康與資料核對')),
+                ('stage', '預先寫入主機資料夾'), ('safety', '保存還原前資料'), ('stop', '停止應用'), ('restore', '還原資料'),
+                ('start', '啟動應用'), ('check', '健康與資料核對'), ('safety-package', '封裝還原前備份')),
     'verify': (('prepare', '準備'), ('decrypt', '解密並驗證檔案'), ('check', '核對結果')),
     # An unencrypted copy of an encrypted backup for one download (CONTRACT section 8); nothing on the device changes.
     'export': (('prepare', '準備'), ('decrypt', '解密並驗證檔案'), ('package', '封裝未加密副本'), ('verify', '驗證副本')),
@@ -89,6 +92,9 @@ INTERRUPTED_MESSAGE = {
 FRESH_MESSAGE = '全新部署（{apps}）沒有完成；系統會清除未完成的部署，之後可再次還原同一份備份。'
 FINISHING_MESSAGE = ('還原已完成並通過檢查，但在刪除主機資料夾被取代的舊內容時作業中斷（例如系統重新開機）。'
                      '系統會接手整理留下的資料夾；應用不需要再次還原。')
+FINISHING_PACKAGE_MESSAGE = '還原已完成並通過檢查，但在封裝還原前備份時作業中斷（例如系統重新開機）。應用不需要再次還原。'
+PENDING_MESSAGE = '還原前資料已保留，系統會把它封裝成還原前備份。'
+
 
 
 class Terminated(BaseException):
@@ -199,9 +205,10 @@ def unit_name(job_id):
 
 
 def has_leftovers(record):
-    """The record still lists writers a dead job left stopped, an unfinished fresh deployment, or apps whose host
-    directories a dead restore may have left siblings of."""
-    return bool(record.get('stopped_writers') or record.get('fresh_apps') or record.get('dir_apps'))
+    """The record still lists writers a dead job left stopped, an unfinished fresh deployment, apps whose host
+    directories a dead restore may have left siblings of, or a restore's pre-restore copy that is not packaged yet."""
+    return bool(record.get('stopped_writers') or record.get('fresh_apps') or record.get('dir_apps')
+                or (record.get('type') == 'restore' and record.get('safety_pending')))
 
 
 _THREAD = threading.local()
@@ -445,6 +452,20 @@ class JobReporter:
                 item['state'] = 'done'
         self._save()
 
+    def fail(self, phase_id):
+        """Mark one phase failed while the job goes on (a finished restore whose safety backup was not packaged)."""
+        for item in self.record['phases']:
+            if item['id'] == phase_id and item['state'] in ('pending', 'active'):
+                item['state'] = 'failed'
+        self._save()
+
+    def mark(self, phase_id, state):
+        """Set one phase's state whatever it is now (the copy a rollback packaged after `rollback` skipped the phase)."""
+        for item in self.record['phases']:
+            if item['id'] == phase_id:
+                item['state'] = state
+        self._save()
+
     def add_phase(self, phase_id, label):
         for item in self.record['phases']:
             if item['state'] == 'active':
@@ -661,7 +682,7 @@ def _remove_key_file(store, job_id):
 # ---------------------------------------------------------------- public API
 
 def start_job(paths, job_type, params, request_id, *, key_text=None, launcher=None, unit_active=None, now=None,
-              restart_writers=None, cleanup_fresh=None, settle_dirs=None):
+              restart_writers=None, cleanup_fresh=None, settle_dirs=None, package_safety=None):
     """Create and launch a job; returns {'job_id', 'deduplicated'}."""
     if job_type not in PHASES:
         raise BackupError('invalid-request', '不支援的作業類型。')
@@ -686,7 +707,7 @@ def start_job(paths, job_type, params, request_id, *, key_text=None, launcher=No
             except BackupError:
                 pass
         _recover_locked(paths, store, unit_active or systemd_unit_active, now, restart_writers, cleanup_fresh,
-                        settle_dirs)
+                        settle_dirs, package_safety)
         active = [r for r in store.list(limit=None) if r.get('state') in ACTIVE]
         if active:
             raise BackupError('busy', '已有備份或還原作業正在進行，請等它完成後再試。', job_id=active[0]['id'])
@@ -730,7 +751,7 @@ def _fail_unlaunched(store, job_id, error):
 
 
 def _destructive_phase_reached(record):
-    return any(item.get('id') in ('stop', 'restore', 'start', 'check', 'rollback')
+    return any(item.get('id') in ('stop', 'restore', 'start', 'check', 'safety-package', 'rollback')
                and item.get('state') not in ('pending', 'skipped') for item in record.get('phases') or [])
 
 
@@ -740,16 +761,22 @@ def interrupted_details(record):
     if record.get('type') != 'restore':
         return message, None
     safety = record.get('safety_backup_id')
+    pending = bool(record.get('safety_pending')) and not safety
     fresh = [str(app) for app in record.get('fresh_apps') or []]
     if record.get('finishing'):
-        # The restore itself had succeeded; only deleting the replaced host-directory copies was cut short (L4).
-        message = FINISHING_MESSAGE
+        # The restore itself had succeeded; only deleting the replaced host-directory copies (L4) or packaging the
+        # pre-restore copy into the safety backup was cut short.
+        message = (FINISHING_PACKAGE_MESSAGE if record.get('phase') == 'safety-package' and record.get('safety_pending')
+                   else FINISHING_MESSAGE)
     elif safety:
         message += f'還原前備份：{safety}。'
+    if pending:
+        message += PENDING_MESSAGE
     if fresh:
         message += FRESH_MESSAGE.format(apps='、'.join(fresh))
     return message, {'apps': list((record.get('params') or {}).get('apps') or []), 'safety_backup_id': safety,
-                     'health': [], 'verification': [], 'rolled_back': False,
+                     'safety_pending': pending, 'finishing': bool(record.get('finishing')), 'health': [],
+                     'verification': [], 'rolled_back': False,
                      'changed': _destructive_phase_reached(record), 'fresh_apps': fresh, 'safety_skipped': False,
                      'safety_failed': False, 'warnings': []}
 
@@ -845,6 +872,34 @@ def _sweep_staging(paths, store):
             _remove_dead_staging(paths, name)
 
 
+def _sweep_pending(paths, store):
+    """Remove pre-restore copies (`pending/<job>/`) that nothing needs: the record is finished and lists neither a copy
+    to package (`safety_pending`) nor one that could not be (`safety_pending_failed`). Such a copy is either one a job
+    was writing when it died (the flag is on disk before the restore's first destructive step, so the data it copied
+    never changed) or one already packaged (the record named the backup before the copy was deleted). A copy whose
+    record is running, flagged, or missing/unreadable is kept (it may be the only copy of the data before a restore)."""
+    try:
+        names = os.listdir(paths.pending)
+    except (FileNotFoundError, NotADirectoryError):
+        return
+    for name in names:
+        if not valid_job_id(name):
+            continue
+        try:
+            record = store.get(name)
+        except BackupError:
+            continue
+        if (record.get('state') in TERMINAL and not record.get('safety_pending')
+                and not record.get('safety_pending_failed')):
+            path = Path(paths.pending) / name
+            with contextlib.suppress(FileNotFoundError):
+                st = os.lstat(path)
+                if stat.S_ISDIR(st.st_mode):
+                    shutil.rmtree(path, ignore_errors=True)
+                else:
+                    os.unlink(path)
+
+
 def _sweep_key_files(paths, store, now):
     """Delete transient key files no running job needs: `key-<job>` of a finished job and `key-inspect-*` older
     than KEY_FILE_MAX_AGE (an inspect killed before its `finally` left the secret on tmpfs; review SEC-4)."""
@@ -880,20 +935,91 @@ def _queued_grace(record, now):
     return record.get('state') == 'queued' and created is not None and now - created < QUEUED_GRACE_SECONDS
 
 
-def _finish_leftovers(store, record, restart_writers, cleanup_fresh, settle_dirs=None):
-    """Restart writers / settle host directories / remove the unfinished fresh deployment that a finished record
-    still lists (writers a terminated backup left stopped, review CR-14; a restore cut by a shutdown, CR-05). The
-    directories come first: a missing one gets its moved-aside copy back before a fresh deployment is removed.
-    `record` is a fresh read and the caller holds its record lock and the engine lock."""
+def _package_pending_copy(store, record, package_safety):
+    """Package the pre-restore copy a restore kept in `pending/<job>/` (its own packaging failed, or the job died)
+    into its safety backup; returns extra zh-TW guidance (empty when nothing new happened). The outcome is saved in the
+    record before the copy is deleted (registration is the commit point; a copy a kill leaves behind is unflagged and
+    the sweep removes it). Tried once: afterwards `safety_pending` is false, and a failure keeps the copy and records
+    where it is (`safety_pending_failed`). Not enough free space is not a failure: nothing is written, the flag stays
+    and a later pass tries again (`safety_pending_deferred` says why; the guidance is added once).
+
+    This runs inside a helper call (status, jobs, job-status, a start command) under the recovery's locks: packaging
+    and verifying a large copy takes about a minute, acceptable for this rare path. Termination signals are ignored
+    meanwhile (a page timeout makes cockpit-bridge send SIGTERM; cut short, every later call would start over), and
+    the outcome is saved before they apply again."""
+    if record.get('type') != 'restore' or not record.get('safety_pending') or package_safety is None:
+        return ''
+    job_id = record['id']
+    path = Path(store.paths.pending) / job_id
+    result = record.get('result') if isinstance(record.get('result'), dict) else None
+    with util.termination_ignored():
+        deferred = False
+        try:
+            backup_id, problem, deferred = package_safety(job_id)
+        except Exception:  # noqa: BLE001 - recovery must never break status/jobs
+            backup_id, problem = None, '封裝時發生未預期的錯誤'
+            with contextlib.suppress(Exception):  # stderr may be a closed pipe: the outcome is saved regardless
+                traceback.print_exc(file=sys.stderr)
+        if deferred:
+            problem = str(problem or '空間不足').rstrip('。')[:300]
+            if record.get('safety_pending_deferred') == problem:
+                return ''
+            record['safety_pending_deferred'] = problem
+            note = f'還原前資料保留在 {path}，{problem}；有足夠空間後系統會自動封裝成還原前備份。'
+            store.append_log(job_id, f'暫緩封裝還原前備份：{problem}')
+        elif backup_id:
+            record['safety_pending'] = False
+            record.pop('safety_pending_deferred', None)
+            record['safety_backup_id'] = backup_id
+            for item in record.get('phases') or []:
+                if item.get('id') == 'safety-package' and item.get('state') in ('failed', 'skipped'):
+                    item['state'] = 'done'  # the step the job could not finish is done now
+            if result is not None:
+                result.update(safety_backup_id=backup_id, safety_pending=False)
+            store.append_log(job_id, f'已將保留的還原前資料封裝成還原前備份 {backup_id}')
+            note = f'已將保留的還原前資料封裝成還原前備份 {backup_id}，可用它再次還原。'
+        else:
+            problem = str(problem or '原因不明').rstrip('。')[:300]
+            record['safety_pending'] = False
+            record.pop('safety_pending_deferred', None)
+            record['safety_pending_failed'] = {'path': str(path), 'message': problem}
+            if result is not None:
+                result.update(safety_pending=False, safety_pending_failed={'path': str(path), 'message': problem})
+            store.append_log(job_id, f'無法把還原前資料封裝成還原前備份：{problem}；資料保留在 {path}')
+            note = f'還原前資料保留在 {path}，無法封裝成還原前備份：{problem}；需人工處理。'
+        warnings = result.get('warnings') if result is not None else None
+        if not isinstance(record.get('error'), dict) and isinstance(warnings, list) and note not in warnings:
+            warnings.append(note)  # a finished restore has no error message: its result says it
+        if isinstance(record.get('error'), dict):
+            record['error']['message'] = (record['error'].get('message') or '') + note
+        store.save(record)
+        if backup_id:
+            with contextlib.suppress(OSError):
+                shutil.rmtree(path)  # recorded above; what a failure here leaves, the sweep removes
+    return note
+
+
+def _finish_leftovers(store, record, restart_writers, cleanup_fresh, settle_dirs=None, package_safety=None):
+    """Restart writers / settle host directories / remove the unfinished fresh deployment / package the pre-restore
+    copy that a finished record still lists (writers a terminated backup left stopped, review CR-14; a restore cut by
+    a shutdown, CR-05). The directories come first: a missing one gets its moved-aside copy back before a fresh
+    deployment is removed; the packaging comes last (it changes nothing the apps use) and only after the other steps'
+    outcome is saved (it may take a minute; a kill during it must not make them run again).
+    `record` is a fresh read and the caller holds its record lock and the engine lock. Saved only when something
+    changed (a copy waiting for space is looked at on every pass)."""
+    before = json.dumps(record, sort_keys=True, default=str)
     extra = _restart_stopped_writers(store, record, restart_writers)
     extra += _settle_dirs(store, record, settle_dirs)
     extra += _remove_unfinished_fresh(store, record, cleanup_fresh)
     if extra and isinstance(record.get('error'), dict):
         record['error']['message'] = (record['error'].get('message') or '') + extra
-    store.save(record)
+    if json.dumps(record, sort_keys=True, default=str) != before:
+        store.save(record)
+    _package_pending_copy(store, record, package_safety)  # saves its own outcome
 
 
-def _mark_interrupted(paths, store, record, now, restart_writers, cleanup_fresh, settle_dirs=None):
+def _mark_interrupted(paths, store, record, now, restart_writers, cleanup_fresh, settle_dirs=None,
+                      package_safety=None):
     """Finish a dead job's fresh record as `interrupted`; the state is committed before any clean-up runs, so a
     helper killed during the clean-up leaves a finished record whose leftovers the next pass completes."""
     message, result = interrupted_details(record)
@@ -908,13 +1034,14 @@ def _mark_interrupted(paths, store, record, now, restart_writers, cleanup_fresh,
     store.save(record)
     store.append_log(record['id'], f'作業被判定為已中斷：{message}')
     if has_leftovers(record):
-        _finish_leftovers(store, record, restart_writers, cleanup_fresh, settle_dirs)
+        _finish_leftovers(store, record, restart_writers, cleanup_fresh, settle_dirs, package_safety)
     _remove_key_file(store, record['id'])
     if _remove_dead_staging(paths, record['id']):
         store.append_log(record['id'], '已清除中斷作業留下的暫存資料')
 
 
-def _recover_one(paths, store, job_id, unit, unit_active, now, restart_writers, cleanup_fresh, settle_dirs=None):
+def _recover_one(paths, store, job_id, unit, unit_active, now, restart_writers, cleanup_fresh, settle_dirs=None,
+                 package_safety=None):
     """Decide one candidate while the start and engine locks are held; True when it was marked interrupted.
 
     With the engine lock held no run-job is between taking and releasing it, and a run-job writes its final
@@ -931,11 +1058,11 @@ def _recover_one(paths, store, job_id, unit, unit_active, now, restart_writers, 
             return False
         if record.get('state') in TERMINAL:
             if has_leftovers(record):
-                _finish_leftovers(store, record, restart_writers, cleanup_fresh, settle_dirs)
+                _finish_leftovers(store, record, restart_writers, cleanup_fresh, settle_dirs, package_safety)
             return False
         if record.get('state') not in ACTIVE or _queued_grace(record, now):
             return False
-        _mark_interrupted(paths, store, record, now, restart_writers, cleanup_fresh, settle_dirs)
+        _mark_interrupted(paths, store, record, now, restart_writers, cleanup_fresh, settle_dirs, package_safety)
     return True
 
 
@@ -943,8 +1070,10 @@ def pinned_safety_records(records):
     """{restore record id: safety backup id or None} of the failed or interrupted (not rolled back) restores whose
     safety backup -- or, when the restore had none but changed the apps (allow_no_safety, or restoring a safety
     backup), whose source backup -- is still the only way back for one of their apps: no later restore of that app
-    succeeded (review M2). `records` newest first. Used by safety-backup pruning and by retention (such records are
-    never deleted; retention also keeps each pinning record's source backup)."""
+    succeeded (review M2). A restore whose pre-restore copy is not packaged yet (`safety_pending`) or could not be
+    (`safety_pending_failed`) pins the same way, whatever its state: that copy is the data before it. `records` newest
+    first. Used by safety-backup pruning and by retention (such records are never deleted; retention also keeps each
+    pinning record's source backup)."""
     pinned, settled = {}, set()
     for record in records:
         if record.get('type') != 'restore':
@@ -952,11 +1081,13 @@ def pinned_safety_records(records):
         params = record.get('params') if isinstance(record.get('params'), dict) else {}
         listed = params.get('apps') if isinstance(params.get('apps'), list) else []
         apps = {app for app in listed if isinstance(app, str)}
+        result = record.get('result') if isinstance(record.get('result'), dict) else {}
+        safety = result.get('safety_backup_id') or record.get('safety_backup_id')
+        if (record.get('safety_pending') or record.get('safety_pending_failed')) and apps - settled:
+            pinned[record['id']] = safety or None
         if record.get('state') == 'succeeded':
             settled |= apps
             continue
-        result = record.get('result') if isinstance(record.get('result'), dict) else {}
-        safety = result.get('safety_backup_id') or record.get('safety_backup_id')
         changed = result.get('changed') is True or (record.get('state') == 'interrupted'
                                                     and _destructive_phase_reached(record))
         if ((safety or changed) and record.get('state') in ('failed', 'interrupted') and not result.get('rolled_back')
@@ -998,6 +1129,8 @@ def _retain(store, records, now, keep=KEEP_TERMINAL):
         record = by_id.get(job_id)
         if record is not None and (record.get('state') in ACTIVE or has_leftovers(record)):
             continue
+        if os.path.lexists(Path(store.paths.pending) / job_id):
+            continue  # the record names the pre-restore copy (e.g. one that could not be packaged): kept with it
         finished += 1
         if finished <= keep:
             continue
@@ -1008,7 +1141,8 @@ def _retain(store, records, now, keep=KEEP_TERMINAL):
     _sweep_orphans(store, now)
 
 
-def _recover_locked(paths, store, unit_active, now, restart_writers=None, cleanup_fresh=None, settle_dirs=None):
+def _recover_locked(paths, store, unit_active, now, restart_writers=None, cleanup_fresh=None, settle_dirs=None,
+                    package_safety=None):
     """One recovery pass (the caller holds the start lock); returns the ids marked interrupted.
 
     The listing only picks candidates: records queued/running (past the queued grace) and finished records
@@ -1026,11 +1160,12 @@ def _recover_locked(paths, store, unit_active, now, restart_writers=None, cleanu
             try:
                 for job_id, unit in candidates:
                     if _recover_one(paths, store, job_id, unit, unit_active, now, restart_writers, cleanup_fresh,
-                                    settle_dirs):
+                                    settle_dirs, package_safety):
                         changed.append(job_id)
             finally:
                 os.close(engine_fd)
     _sweep_staging(paths, store)
+    _sweep_pending(paths, store)
     _sweep_key_files(paths, store, now)
     try:
         _retain(store, records, now)
@@ -1040,19 +1175,20 @@ def _recover_locked(paths, store, unit_active, now, restart_writers=None, cleanu
 
 
 def recover_interrupted(paths, *, unit_active=None, now=None, restart_writers=None, cleanup_fresh=None,
-                        settle_dirs=None):
+                        settle_dirs=None, package_safety=None):
     """Mark dead queued/running jobs as interrupted; returns the affected job ids.
 
     `restart_writers({app_id: [units]}) -> [failed units]` restarts writers a dead backup left stopped;
     `cleanup_fresh([app_id]) -> [problems]` removes an unfinished fresh deployment;
-    `settle_dirs(job_id, [app_id]) -> [notes]` settles the host-directory siblings a dead restore left.
+    `settle_dirs(job_id, [app_id]) -> [notes]` settles the host-directory siblings a dead restore left;
+    `package_safety(job_id) -> (backup id | None, problem | None)` packages a restore's pre-restore copy.
     """
     if not Path(paths.jobs).is_dir():
         return []
     store = JobStore(paths)
     with start_lock(paths):
         return _recover_locked(paths, store, unit_active or systemd_unit_active, time.time() if now is None else now,
-                               restart_writers, cleanup_fresh, settle_dirs)
+                               restart_writers, cleanup_fresh, settle_dirs, package_safety)
 
 
 def active_job(paths):

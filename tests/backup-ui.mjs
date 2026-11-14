@@ -1413,7 +1413,8 @@ try {
     assert(!/主機資料夾/.test(await page.locator('.affected').textContent()));
     assert.match(confirmText, /停止服務/);
     assert.match(confirmText, /還原前自動備份/);
-    assert.match(confirmText, /自動用它回復/);
+    assert.match(confirmText, /直接用這份資料回復/);
+    assert.match(confirmText, /應用恢復執行後，這份資料會封裝並完整驗證成「還原前自動備份」/);
     assert.equal((await calls(page, 'restore-start')).length, 0);
     await page.locator('#confirm-restore').check();
     await enabled(page, '[data-focus="confirm-start"]');
@@ -1503,6 +1504,26 @@ try {
     await page.locator('[data-focus="pf-next"]').waitFor();
     assert.deepEqual(requestOf((await calls(page, 'inspect')).at(-1)), { backup_id: B_SAFETY });
     assert.equal((await calls(page, 'restore-start')).length, 0, 'nothing is replayed automatically');
+  });
+
+  // 2026.11.14.2: a restore that had finished and passed its checks, interrupted only while packaging its safety backup
+  // (the recovery packaged it afterwards), is not offered to be reverted.
+  const finishedInterrupted = fixture();
+  finishedInterrupted.jobs[J_ACTIVE] = structuredClone(interrupted.jobs[J_ACTIVE]);
+  Object.assign(finishedInterrupted.jobs[J_ACTIVE].steps[0].job, {
+    error: { code: 'job-failed', message: `還原已完成並通過檢查，但在封裝還原前備份時作業中斷（例如系統重新開機）。應用不需要再次還原。已將保留的還原前資料封裝成還原前備份 ${B_SAFETY}，可用它再次還原。` },
+    result: { apps: ['woowbk-demo'], safety_backup_id: B_SAFETY, safety_pending: false, finishing: true, health: [],
+      verification: [], rolled_back: false, changed: true },
+  });
+  finishedInterrupted.status.active_job = structuredClone(finishedInterrupted.jobs[J_ACTIVE].job);
+  await check('an interrupted restore that had already finished is not offered to be reverted', finishedInterrupted, async (page) => {
+    await page.waitForFunction(id => window.location.hash === `#/jobs/${id}`, J_ACTIVE);
+    await page.locator('#result-heading').filter({ hasText: '作業意外中斷' }).waitFor();
+    const text = await view(page).textContent();
+    assert.match(text, /應用不需要再次還原/);
+    assert.match(text, /作業在最後的整理步驟中斷/);
+    assert.equal(await page.locator('[data-focus="result-restore-safety"]').count(), 0, 'no revert offer');
+    assert.equal(await page.locator('[data-focus="result-safety"]').count(), 1, 'the safety backup is still named');
   });
 
   await check('busy refusal links to the running job and keeps the request', fixture({

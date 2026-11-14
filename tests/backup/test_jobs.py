@@ -4,6 +4,8 @@ Also the job-record races found by the release regression (16-repro_recover_race
 from a stale listing, side effects taken from that listing, cancel vs. the job's own record writes, a launch
 failure vs. a run-job that already started, and the retention that bounds what status/jobs/job-status read.
 """
+import contextlib
+import io
 import json
 import os
 import signal
@@ -11,6 +13,7 @@ import stat
 import tempfile
 import threading
 import time
+import sys
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -72,7 +75,8 @@ class StoreTests(JobCase):
         self.assertEqual(list(public), list(jobs.PUBLIC_KEYS))
         self.assertEqual(public['state'], 'queued')
         self.assertEqual([p['id'] for p in public['phases']], ['prepare', 'decrypt', 'preflight', 'stage', 'safety',
-                                                               'stop', 'restore', 'start', 'check'])
+                                                               'stop', 'restore', 'start', 'check', 'safety-package'])
+        self.assertEqual({p['id']: p['label'] for p in public['phases']}['safety'], '保存還原前資料')
         self.assertEqual(public['progress'], {'percent': 0, 'message': '等待開始'})
         # No temp file is left; the record lock file (jobs/<id>.lock, 0600, empty) sits next to the record.
         self.assertEqual(sorted(p.name for p in Path(self.paths.jobs).iterdir()), [path.name, f'{record["id"]}.lock'])
@@ -689,6 +693,274 @@ class RecoveryTests(JobCase):
 
     def test_no_jobs_dir(self):
         self.assertEqual(jobs.recover_interrupted(Paths(base=Path(self.tmp.name) / 'empty'), unit_active=self.unit_active), [])
+
+
+class PendingCopyRecoveryTests(JobCase):
+    """2026.11.14.2: a restore whose pre-restore copy (`pending/<job>/`) was not packaged -- its own packaging failed,
+    or the job died -- gets it packaged by the recovery, once; a failure keeps the copy and says where it is."""
+
+    SAFETY = '20261113T030000Z-0000beef'
+    PARAMS = {'backup_id': '20261113T010000Z-00000001', 'apps': ['woowbk-demo']}
+
+    def make(self, state, age=30, *, phases=None, **extra):
+        record = self.store.create('restore', dict(self.PARAMS), now=time.time() - age)
+        record['state'] = state
+        for item in record['phases']:
+            item['state'] = (phases or {}).get(item['id'], item['state'])
+        record.update(extra)
+        self.store.save(record)
+        return record['id']
+
+    def copy_of(self, job_id):
+        folder = Path(self.paths.pending) / job_id
+        (folder / 'data').mkdir(parents=True)
+        (folder / 'pending.json').write_text('{}')
+        return folder
+
+    def recover(self, package):
+        return jobs.recover_interrupted(self.paths, unit_active=self.unit_active, package_safety=package)
+
+    def test_a_finished_restore_whose_packaging_failed_gets_one_more_try(self):
+        note = '還原已完成，但還原前備份尚未封裝：空間不足。還原前資料保留在 X，系統會再試一次；若仍失敗需人工處理。'
+        done = {pid: 'done' for pid, _label in jobs.PHASES['restore']}
+        job_id = self.make('succeeded', phases=dict(done, **{'safety-package': 'failed'}), safety_pending=True,
+                           finishing=True, result={'apps': ['woowbk-demo'], 'safety_backup_id': None,
+                                                   'safety_pending': True, 'warnings': [note]})
+        self.assertTrue(jobs.has_leftovers(self.store.get(job_id)))
+        calls = []
+        self.recover(lambda jid: calls.append(jid) or (self.SAFETY, None, False))
+        saved = self.store.get(job_id)
+        self.assertEqual(calls, [job_id])
+        self.assertEqual((saved['state'], saved['safety_pending'], saved['safety_backup_id'], saved['error']),
+                         ('succeeded', False, self.SAFETY, None))
+        self.assertEqual((saved['result']['safety_backup_id'], saved['result']['safety_pending']), (self.SAFETY, False))
+        self.assertEqual(saved['result']['warnings'],
+                         [note, f'已將保留的還原前資料封裝成還原前備份 {self.SAFETY}，可用它再次還原。'],
+                         'a finished restore has no error message: its result says it')
+        self.assertEqual({item['id']: item['state'] for item in saved['phases']}['safety-package'], 'done')
+        self.assertTrue(any(f'已將保留的還原前資料封裝成還原前備份 {self.SAFETY}' in line
+                            for line in self.store.read_log(job_id)))
+        self.assertFalse(jobs.has_leftovers(saved))
+        self.recover(lambda jid: calls.append(jid) or (self.SAFETY, None, False))
+        self.assertEqual(calls, [job_id], 'done once, never repeated')
+
+    def test_a_restore_killed_while_packaging_is_interrupted_and_its_copy_packaged(self):
+        done = {pid: 'done' for pid, _label in jobs.PHASES['restore']}
+        job_id = self.make('running', phases=dict(done, **{'safety-package': 'active'}), phase='safety-package',
+                           finishing=True, safety_pending=True)
+        self.assertEqual(self.recover(lambda jid: (self.SAFETY, None, False)), [job_id])
+        saved = self.store.get(job_id)
+        self.assertEqual(saved['state'], 'interrupted')
+        self.assertEqual(saved['error']['message'], jobs.FINISHING_PACKAGE_MESSAGE + jobs.PENDING_MESSAGE
+                         + f'已將保留的還原前資料封裝成還原前備份 {self.SAFETY}，可用它再次還原。')
+        self.assertIn('應用不需要再次還原', saved['error']['message'])
+        self.assertEqual((saved['result']['safety_backup_id'], saved['result']['safety_pending'],
+                          saved['result']['changed']), (self.SAFETY, False, True))
+        self.assertEqual({item['id']: item['state'] for item in saved['phases']}['safety-package'], 'done')
+
+    def test_a_failed_packaging_keeps_the_copy_and_says_where_it_is(self):
+        job_id = self.make('running', phases={'stop': 'done', 'restore': 'active'}, phase='restore',
+                           safety_pending=True)
+        folder = self.copy_of(job_id)
+        problem = '這台設備沒有加密金鑰，無法封裝加密的還原前備份'
+        calls = []
+        self.recover(lambda jid: calls.append(jid) or (None, problem, False))
+        saved = self.store.get(job_id)
+        failed = {'path': str(folder), 'message': problem}
+        self.assertEqual((saved['state'], saved['safety_pending'], saved['safety_pending_failed']),
+                         ('interrupted', False, failed))
+        self.assertEqual(saved['result']['safety_pending_failed'], failed)
+        self.assertTrue(saved['error']['message'].startswith(jobs.INTERRUPTED_MESSAGE['restore'] + jobs.PENDING_MESSAGE))
+        self.assertTrue(saved['error']['message'].endswith(
+            f'還原前資料保留在 {folder}，無法封裝成還原前備份：{problem}；需人工處理。'))
+        self.assertTrue((folder / 'pending.json').exists(), 'the recovery never deletes a copy')
+        self.recover(lambda jid: calls.append(jid) or (None, problem, False))
+        self.assertEqual(calls, [job_id], 'attempted once')
+        self.assertIn(job_id, jobs.pinned_safety_records(self.store.list(limit=None)))
+
+    def test_packaging_errors_never_break_recovery(self):
+        job_id = self.make('rolled-back', safety_pending=True, error={'code': 'job-failed', 'message': '資料卷匯入失敗。'},
+                           result={'rolled_back': True, 'safety_backup_id': None, 'safety_pending': True,
+                                   'warnings': []})
+        with contextlib.redirect_stderr(io.StringIO()):
+            self.recover(lambda jid: 1 / 0)
+        saved = self.store.get(job_id)
+        self.assertEqual(saved['safety_pending_failed']['message'], '封裝時發生未預期的錯誤')
+        self.assertIn('需人工處理', saved['error']['message'])
+        self.assertEqual(saved['result']['warnings'], [], 'said in the error message only')
+
+    def test_without_a_package_hook_the_copy_waits(self):
+        job_id = self.make('succeeded', safety_pending=True)
+        jobs.recover_interrupted(self.paths, unit_active=self.unit_active)
+        self.assertIs(self.store.get(job_id)['safety_pending'], True, 'kept for a pass that can package it')
+        self.assertFalse(self.store.remove(job_id), 'a record with work left is never deleted')
+
+    def test_a_termination_signal_cannot_cut_the_packaging_short(self):
+        # A page timeout makes cockpit-bridge send SIGTERM to the helper doing the recovery: ignored meanwhile.
+        job_id = self.make('succeeded', safety_pending=True, result={'warnings': []})
+
+        def package(jid):
+            os.kill(os.getpid(), signal.SIGTERM)
+            return self.SAFETY, None, False
+        with jobs.signals_as_exceptions():
+            self.recover(package)
+        self.assertEqual(self.store.get(job_id)['safety_backup_id'], self.SAFETY)
+
+    def test_the_sweep_removes_only_copies_nothing_needs(self):
+        # Kept: a copy still to package, one that could not be (manual work), one of a running job, one without a
+        # record. Removed: the copy of a finished record that lists neither (a job that died while copying -- the flag
+        # is on disk before the first destructive step -- or a copy already packaged).
+        flagged = self.make('succeeded', safety_pending=True)
+        failed = self.make('rolled-back', safety_pending_failed={'path': 'p', 'message': 'm'})
+        running = self.make('running', age=0)
+        done = self.make('succeeded', safety_backup_id=self.SAFETY)
+        dead = self.make('running')  # died while copying: marked interrupted by this pass, no flag
+        orphan = 'j20200101T000000Z-00000000'
+        folders = {job_id: self.copy_of(job_id) for job_id in (flagged, failed, running, done, dead, orphan)}
+        for job_id in (done, dead):
+            (Path(self.paths.staging) / job_id).mkdir(parents=True)
+        active = lambda unit: unit == jobs.unit_name(running)  # noqa: E731
+        jobs.recover_interrupted(self.paths, unit_active=active)
+        self.assertEqual(os.listdir(self.paths.staging), [], 'the staging folders went')
+        self.assertEqual(self.store.get(dead)['state'], 'interrupted')
+        kept = {job_id for job_id, folder in folders.items() if folder.exists()}
+        self.assertEqual(kept, {flagged, failed, running, orphan})
+
+    def test_retention_keeps_a_record_while_its_copy_exists(self):
+        # A copy that could not be packaged outlives the pinning (a later restore of the app succeeded): its record,
+        # the only thing that names it, stays as long as the copy does.
+        job_id = self.make('rolled-back', age=400, safety_pending_failed={'path': 'p', 'message': 'm'},
+                           result={'rolled_back': True})
+        self.copy_of(job_id)
+        later = self.store.create('restore', dict(self.PARAMS), now=time.time() - 300)
+        later['state'] = 'succeeded'
+        self.store.save(later)
+        self.assertNotIn(job_id, jobs.pinned_safety_records(self.store.list(limit=None)))
+        for i in range(jobs.KEEP_TERMINAL + 5):
+            record = self.store.create('verify', {'backup_id': 'b'}, now=time.time() - 50 + i * 0.001)
+            record['state'] = 'succeeded'
+            self.store.save(record)
+        jobs.recover_interrupted(self.paths, unit_active=self.unit_active)
+        self.assertIn(job_id, {record['id'] for record in self.store.list(limit=None)})
+
+    def test_the_backup_is_recorded_before_the_copy_goes(self):
+        job_id = self.make('succeeded', safety_pending=True, result={'warnings': []})
+        folder = self.copy_of(job_id)
+        seen = []
+
+        def package(jid):
+            seen.append(folder.exists())
+            return self.SAFETY, None, False
+        saves = []
+        save = self.store.save
+
+        def spy(record):
+            saves.append((record.get('safety_backup_id'), folder.exists()))
+            return save(record)
+        with mock.patch.object(jobs.JobStore, 'save', lambda store, record: spy(record)):
+            self.recover(package)
+        self.assertEqual(seen, [True], 'the packager never deletes the copy')
+        self.assertIn((self.SAFETY, True), saves, 'saved with the backup id while the copy still exists')
+        self.assertFalse(folder.exists(), 'removed once the record names the backup')
+
+    def test_not_enough_space_defers_without_writing_and_says_so_once(self):
+        job_id = self.make('succeeded', safety_pending=True, result={'warnings': []})
+        problem = '空間不足，暫不封裝還原前備份：需要約 3.0 GiB，可用約 1.0 GiB'
+        outcomes = [(None, problem, True), (None, problem, True), (self.SAFETY, None, False)]
+        calls = []
+        package = lambda jid: calls.append(jid) or outcomes[len(calls) - 1]  # noqa: E731
+        self.recover(package)
+        saved = self.store.get(job_id)
+        self.assertEqual((saved['safety_pending'], saved['safety_pending_deferred']), (True, problem))
+        self.assertTrue(jobs.has_leftovers(saved), 'a later pass tries again')
+        notes = [note for note in saved['result']['warnings'] if problem in note]
+        self.assertEqual(len(notes), 1)
+        logs = len(self.store.read_log(job_id))
+        self.recover(package)
+        self.assertEqual(len(self.store.read_log(job_id)), logs, 'the same deferral is not logged again')
+        self.recover(package)
+        saved = self.store.get(job_id)
+        self.assertEqual((saved['safety_pending'], saved['safety_backup_id']), (False, self.SAFETY))
+        self.assertNotIn('safety_pending_deferred', saved)
+        self.assertEqual(len(calls), 3)
+
+    def test_other_leftovers_are_saved_before_the_packaging_starts(self):
+        job_id = self.make('interrupted', safety_pending=True, stopped_writers={'woowbk-demo': ['woowbk-demo-app.service']},
+                           error={'code': 'job-failed', 'message': 'x'}, result={'warnings': []})
+        seen = []
+
+        def package(jid):
+            seen.append(self.store.get(jid).get('stopped_writers'))
+            return self.SAFETY, None, False
+        jobs.recover_interrupted(self.paths, unit_active=self.unit_active, restart_writers=lambda stopped: [],
+                                 package_safety=package)
+        self.assertEqual(seen, [{}], 'the restarted writers were saved before the packaging ran')
+
+    def test_a_closed_stderr_never_makes_the_packaging_repeat(self):
+        job_id = self.make('succeeded', safety_pending=True, result={'warnings': []})
+
+        class Closed:
+            def write(self, _text):
+                raise BrokenPipeError(32, 'Broken pipe')
+
+            def flush(self):
+                raise BrokenPipeError(32, 'Broken pipe')
+        calls = []
+
+        def package(jid):
+            calls.append(jid)
+            raise RuntimeError('unexpected')
+        with mock.patch.object(sys, 'stderr', Closed()):
+            self.recover(package)
+            self.recover(package)
+        saved = self.store.get(job_id)
+        self.assertEqual((saved['safety_pending'], saved['safety_pending_failed']['message']),
+                         (False, '封裝時發生未預期的錯誤'))
+        self.assertEqual(calls, [job_id], 'attempted once')
+
+    def test_interrupted_details_of_a_kept_copy(self):
+        record = self.store.create('restore', dict(self.PARAMS))
+        for item in record['phases']:
+            if item['id'] in ('prepare', 'decrypt', 'preflight', 'safety', 'stop'):
+                item['state'] = 'done'
+        record['safety_pending'] = True
+        message, result = jobs.interrupted_details(record)
+        self.assertEqual(message, jobs.INTERRUPTED_MESSAGE['restore'] + jobs.PENDING_MESSAGE)
+        self.assertEqual((result['safety_pending'], result['safety_backup_id'], result['changed']), (True, None, True))
+        record.update(finishing=True, phase='safety-package')
+        self.assertEqual(jobs.interrupted_details(record)[0], jobs.FINISHING_PACKAGE_MESSAGE + jobs.PENDING_MESSAGE)
+        self.assertIs(jobs.interrupted_details(record)[1]['finishing'], True)
+        record.update(phase='check')
+        self.assertEqual(jobs.interrupted_details(record)[0], jobs.FINISHING_MESSAGE + jobs.PENDING_MESSAGE)
+        record.update(phase='safety-package', safety_pending=False, safety_backup_id=self.SAFETY)
+        self.assertEqual(jobs.interrupted_details(record)[0], jobs.FINISHING_MESSAGE,
+                         'the packaging message only while the copy is not packaged')
+        bare = self.store.create('restore', dict(self.PARAMS))
+        self.assertFalse(jobs._destructive_phase_reached(bare))
+        bare['phases'][-1]['state'] = 'failed'  # safety-package
+        self.assertTrue(jobs._destructive_phase_reached(bare))
+
+    def test_records_with_a_copy_pin_like_a_changed_failed_restore(self):
+        failed_copy = self.make('succeeded', age=300, safety_pending_failed={'path': 'p', 'message': 'm'})
+        rolled_copy = self.make('rolled-back', age=200, safety_pending=True, result={'rolled_back': True})
+        settled = self.make('rolled-back', age=100, result={'rolled_back': True})
+        pinned = jobs.pinned_safety_records(self.store.list(limit=None))
+        self.assertEqual(pinned, {failed_copy: None, rolled_copy: None})
+        self.assertNotIn(settled, pinned)
+        for i in range(jobs.KEEP_TERMINAL + 5):
+            record = self.store.create('verify', {'backup_id': 'b'}, now=time.time() - 50 + i * 0.001)
+            record['state'] = 'succeeded'
+            self.store.save(record)
+        jobs.recover_interrupted(self.paths, unit_active=self.unit_active)
+        listed = {record['id'] for record in self.store.list(limit=None)}
+        self.assertTrue({failed_copy, rolled_copy} <= listed, 'retention keeps them')
+        self.assertNotIn(settled, listed)
+        later = self.store.create('restore', dict(self.PARAMS), now=time.time())
+        later['state'] = 'succeeded'
+        self.store.save(later)
+        self.assertEqual(jobs.pinned_safety_records(self.store.list(limit=None)), {},
+                         'a later successful restore of the app settles them like any failed restore')
+        self.assertFalse(self.store.remove(rolled_copy), 'a copy not packaged yet keeps its record anyway')
 
 
 # ---------------------------------------------------------------- release regression 16: job-record races
