@@ -900,10 +900,10 @@ while time.time() < deadline:
     if not group:
         group = cgroup()
     trigger = None
-    if mode in ('extract', 'between'):
+    if mode == 'extract':
+        # Since 2026-11-13 the copies are written in phase `stage`, before the safety backup and before anything stops.
         found = siblings()
-        wanted = dirs if mode == 'extract' else [target]
-        hit = [rel for rel in wanted if any('.woowbk-new-' in n for n in found[rel])]
+        hit = [rel for rel in dirs if any('.woowbk-new-' in n for n in found[rel])]
         if hit:
             trigger = 'new sibling of %s' % hit[0]
     if trigger is None and now - last_read > 0.05:
@@ -911,6 +911,8 @@ while time.time() < deadline:
         state, phase = job_record()
         if mode == 'after-swap' and state == 'running' and phase == 'start':
             trigger = 'phase start'
+        elif mode == 'between' and state == 'running' and phase == 'restore':
+            trigger = 'phase restore (units stopped and masked, copies about to be swapped)'
         elif state not in (None, 'queued', 'running'):
             result.update(reason='job finished first', state=state, phase=phase)
             break
@@ -1017,6 +1019,23 @@ def d4_case(ev, dev, mode, backup_id):
     job, log = wait_job(dev, job_id, ev=ev, timeout=180, label=f'killed[{mode}]')  # job-status runs the recovery
     save_job(ev, f'd4-{mode}-killed-job', job, log)
     safety = (job.get('result') or {}).get('safety_backup_id')
+    if report.get('phase') == 'stage':
+        # Killed while the copies were written ahead (CONTRACT section 9): nothing had stopped, nothing existing had
+        # changed and no safety backup exists yet; the recovery only removes the new copies.
+        state = dir_state(dev)
+        ev.check(f'D4 {mode}: job interrupted, no safety backup taken yet', job['state'] == 'interrupted' and not safety,
+                 [job.get('state'), job.get('error')])
+        ev.check(f'D4 {mode}: every declared directory exists and no .woowbk- sibling is left',
+                 all((state['paths'][rel] or {}).get('type') == 'dir' for rel in DIRS)
+                 and not any(names for names in state['siblings'].values()), state)
+        ev.check(f'D4 {mode}: the data directory is unchanged', entries_of(dev, DATA_DIR) == pre_data)
+        _status, app = engine_app(dev, ev)
+        ev.check(f'D4 {mode}: the app kept running (nothing had stopped)', app['state'] == 'running' and wait_healthy(dev, 60),
+                 app)
+        after = snapshot(dev)
+        ev.check(f'D4 {mode}: data equals the state before the killed restore', snapshot_diff(after, pre) == {},
+                 snapshot_diff(after, pre))
+        return {'kill': report, 'injected': None, 'job': job_id, 'safety': None, 'old_left': {}}
     ev.check(f'D4 {mode}: job interrupted with guidance naming the safety backup',
              job['state'] == 'interrupted' and safety and safety in (job.get('error') or {}).get('message', ''),
              job.get('error'))
@@ -1177,6 +1196,9 @@ def verdict(path, ids):
 
 # Root inside dev-a: decrypt a base backup with the device key once, write one re-encrypted archive per case
 # (device recipient) into the work directory, print a JSON report (ids, sizes, engine verdicts). Plaintext is deleted.
+# A format 2 base (`archives/<id>.tar`, every backup since 2026-11-13) gives format 2 cases, written with the installed
+# engine's own writer (valid backup.json, README and per-app manifest; only the directory tar is hostile); a format 1
+# base (the self-test's synthetic source) gives format 1 cases.
 CRAFT_D5 = r'''
 import glob, hashlib, json, os, secrets, shutil, subprocess, sys, tarfile, time
 sys.path.insert(0, '/usr/local/lib/woowtech-cockpit-backup')
@@ -1186,8 +1208,10 @@ from woowbackup.errors import BackupError
 ''' + HOSTILE + VERDICT + r'''
 base_id, work, tag, home, data_dir = sys.argv[1:6]
 cases = sys.argv[6].split(',')
-# argv 7 (self-test only): a synthetic source archive instead of the engine's archives/<base_id>.woowbackup
-source = sys.argv[7] if len(sys.argv) > 7 else '/var/lib/woowtech-backup/archives/%s.woowbackup' % base_id
+# argv 7 (self-test only): a synthetic source archive instead of the engine's archives/<base_id>.tar|.woowbackup
+source = sys.argv[7] if len(sys.argv) > 7 else next(
+    (p for p in ('/var/lib/woowtech-backup/archives/%s.tar' % base_id,
+                 '/var/lib/woowtech-backup/archives/%s.woowbackup' % base_id) if os.path.exists(p)), '')
 ENV = {'PATH': '/usr/bin:/bin', 'LANG': 'C.UTF-8'}
 def pipeline(stages, source, sink):
     procs, stdin = [], source
@@ -1220,6 +1244,68 @@ def small_dir_tar(path, member):
         info = tarfile.TarInfo(member)
         info.size, info.mode = len(data), 0o644
         tar.addfile(info, __import__('io').BytesIO(data))
+def craft_v2(recipient, keyfile):
+    from woowbackup import archive as warchive
+    outer_tar = tarfile.open(source, 'r:')
+    doc = json.loads(outer_tar.extractfile('backup.json').read())
+    sealed = os.path.join(work, 'app.sealed')
+    with outer_tar.extractfile(doc['apps'][0]['file']) as raw, open(sealed, 'wb') as out:
+        shutil.copyfileobj(raw, out, 1 << 20)
+    outer_tar.close()
+    plain_path = os.path.join(work, 'plain.tar')
+    with open(sealed, 'rb') as src, open(plain_path, 'wb') as sink:
+        pipeline([['age', '-d', '-i', keyfile], ['zstd', '-d', '-c', '-q']], src, sink)
+    os.unlink(sealed)
+    plain = tarfile.open(plain_path, 'r:')
+    members = plain.getmembers()
+    inner = json.loads(plain.extractfile(members[0]).read())
+    app = inner['app']
+    target = next((d for d in app.get('data_dirs') or [] if d.get('path') == data_dir), None)
+    if target is None:
+        raise SystemExit('the base backup has no data_dirs entry for ' + data_dir)
+    sources = {}
+    for index, member in enumerate(members[1:]):
+        local = os.path.join(work, 'member-%d' % index)
+        with plain.extractfile(member) as raw, open(local, 'wb') as out:
+            shutil.copyfileobj(raw, out, 1 << 20)
+        sources[member.name] = local
+    plain.close()
+    os.unlink(plain_path)
+    original = sources[target['entry']]
+    ids = owner_ids()
+    report.update(entry=target['entry'], dir_members=sum(1 for _ in tarfile.open(original, 'r:')),
+                  name_prefix=name_prefix(original), original_verdict=verdict(original, ids))
+    for case in cases:
+        a = json.loads(json.dumps(app))
+        files = dict(sources)
+        if case in ('undeclared-dir', 'forbidden-path'):
+            path, number = ('woowbk-d5-planted-undeclared', 9) if case == 'undeclared-dir' else ('.config/systemd/user', 8)
+            entry = 'apps/%s/dirs/%d.tar' % (a['id'], number)
+            local = os.path.join(work, case + '.dir.tar')
+            small_dir_tar(local, tag + '-' + case + '.service')
+            a['data_dirs'].append({'path': path, 'entry': entry})
+            files[entry] = local
+        else:
+            local = os.path.join(work, case + '.dir.tar')
+            write_hostile(original, local, case, tag, home)
+            files[target['entry']] = local
+        refs = [e['path'] for e in inner['entries']] + [p for p in files if p not in sources]
+        entries = []
+        for path in refs:
+            sha, size = digest(files[path])
+            entries.append(warchive.Entry(path, files[path], size, sha))
+        now = time.gmtime()
+        new_id = time.strftime('%Y%m%dT%H%M%SZ', now) + '-' + secrets.token_hex(4)
+        head = {key: inner[key] for key in warchive.HEAD_FIELDS}
+        head.update(backup_id=new_id, created=time.strftime('%Y-%m-%dT%H:%M:%SZ', now), note='D5 ' + case,
+                    type='manual')
+        out_path = os.path.join(work, case + '.crafted.tar')
+        with warchive.ArchiveWriter(out_path, head, [a], recipient, tmp_dir=work) as writer:
+            writer.add_app(a, entries)
+            writer.finish()
+        report['cases'][case] = {'backup_id': new_id, 'path': out_path, 'size': os.path.getsize(out_path),
+                                 'engine_verdict': verdict(local, ids)}
+        os.unlink(local)
 os.mkdir(work, 0o700)
 report = {'cases': {}}
 try:
@@ -1232,7 +1318,9 @@ try:
         magic, header_line = handle.readline(), handle.readline()
         offset = handle.tell()
     if magic != b'WOOWTECH-BACKUP/1\n':
-        raise SystemExit('not a backup')
+        craft_v2(recipient, keyfiles[0])
+        print(json.dumps(report))
+        raise SystemExit(0)
     old_header = json.loads(header_line)
     plain_path = os.path.join(work, 'plain.tar')
     with open(source, 'rb') as src, open(plain_path, 'wb') as sink:
@@ -1309,8 +1397,9 @@ try:
         os.unlink(crafted_dir)
     plain.close()
 finally:
+    keep = {os.path.basename(case['path']) for case in report['cases'].values()}
     for name in os.listdir(work):
-        if not name.endswith('.woowbackup'):
+        if name not in keep:
             os.unlink(os.path.join(work, name))
 print(json.dumps(report))
 '''
@@ -1363,7 +1452,7 @@ def d5_case(ev, dev, case, meta, baseline):
     record = {'case': case, 'expect': expect, 'engine_verdict': meta['engine_verdict']}
     backup_id = meta['backup_id']
     before_ids = backup_ids(dev, ev)
-    _begin, (_rc, reply) = e2e.upload_file(dev, meta['file'], ev=ev, filename=f'd5-{case}.woowbackup')
+    _begin, (_rc, reply) = e2e.upload_file(dev, meta['file'], ev=ev, filename=f'd5-{case}{Path(meta["file"]).suffix}')
     if not ev.check(f'D5 {case}: upload-finish accepts it (outer header, age header and size are valid)',
                     reply.get('ok') and reply['backup']['id'] == backup_id, reply.get('error')):
         return record
@@ -1422,7 +1511,7 @@ def scenario_d5(ev):
         crafted = json.loads(proc.stdout)
         work = private_dir(WORK / 'd5')
         for case, meta in crafted['cases'].items():
-            local = work / f'{case}.woowbackup'
+            local = work / f'{case}{".tar" if meta["path"].endswith(".tar") else ".woowbackup"}'
             write_private_stream(dev, meta['path'], local)
             meta.update(file=str(local), host_size=local.stat().st_size)
             created.append(meta['backup_id'])

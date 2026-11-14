@@ -103,12 +103,14 @@ def archive_dir_listing(dev):
 
 
 def orphans(dev):
-    """Archive files without an index sidecar (never listed, never cleaned) and stray temp files."""
+    """Archive files without an index sidecar (never listed, never cleaned) and stray temp files. Archives are
+    `<id>.tar` (format 2, since 2026-11-13) or `<id>.woowbackup` (format 1)."""
     names = set(archive_dir_listing(dev))
     stray = []
     for name in sorted(names):
-        if name.endswith('.woowbackup'):
-            if name[:-len('.woowbackup')] + '.json' not in names:
+        ext = next((e for e in ('.woowbackup', '.tar') if name.endswith(e)), None)
+        if ext and not name.startswith('.'):
+            if name[:-len(ext)] + '.json' not in names:
                 stray.append(name)
         elif not name.endswith('.json'):
             stray.append(name)
@@ -190,7 +192,11 @@ NOISE = {
              re.compile(r'^/home/appowner/\.local/share/containers/cache/'),
              re.compile(r'^/home/appowner/\.local/share/containers/storage/$'),
              re.compile(r'^/home/appowner/\.local/share/containers/$'),
-             re.compile(r'^/home/appowner/$')),
+             re.compile(r'^/home/appowner/$'),
+             # woowbk-dirs (dirs_e2e.py, when deployed on dev-a): its /healthz probe file in its www/ host directory,
+             # written by the container's own health check every 30 s, like woowbk-demo's in its volume above.
+             re.compile(r'^/home/appowner/woowbk-dirs/data/www/$'),
+             re.compile(r'^/home/appowner/woowbk-dirs/data/www/\.healthz-')),
 }
 
 
@@ -244,7 +250,10 @@ from woowbackup import archive
 from woowbackup.errors import BackupError
 from woowbackup.keys import KeyStore
 from woowbackup.paths import Paths
-path = '/var/lib/woowtech-backup/archives/%s.woowbackup' % sys.argv[1]
+import os
+path = '/var/lib/woowtech-backup/archives/%s.tar' % sys.argv[1]
+if not os.path.exists(path):
+    path = path[:-len('.tar')] + '.woowbackup'
 try:
     result = archive.verify_archive(path, list(KeyStore(Paths()).identities()))
     print(json.dumps({'ok': True, 'entries': result['entries']}))
@@ -426,10 +435,14 @@ class CgroupMeter:
 # ------------------------------------------------------------------ H1: hostile archives (F5)
 
 # Runs as root inside the device. Decrypts the base backup with the device key (both stay in the device),
-# applies one defect and writes the re-encrypted `.woowbackup` (device recipient) to stdout. stderr gets a
-# one-line description (member names only, never content).
+# applies one defect and writes the re-encrypted backup (device recipient) to stdout in the base's format: a format 2
+# `.tar` (since 2026-11-13: backup.json + README + the app's age archive; backup.json is built from the app section
+# BEFORE the defect, except where the defect is the app itself, so the authenticated manifest is what gets judged)
+# or a format 1 `.woowbackup`. stderr gets a one-line description (member names only, never content).
 CRAFT = r'''
-import glob, hashlib, io, json, secrets, subprocess, sys, tarfile, time
+import calendar, copy, glob, hashlib, io, json, os, secrets, subprocess, sys, tarfile, time
+sys.path.insert(0, '/usr/local/lib/woowtech-cockpit-backup')
+sys.dont_write_bytecode = True
 case, base_id = sys.argv[1], sys.argv[2]
 ENV = {'PATH': '/usr/bin:/bin', 'LANG': 'C.UTF-8'}
 def run(argv, data):
@@ -442,11 +455,19 @@ keyfiles = sorted(glob.glob('/etc/woowtech-cockpit/backup/keys/device-*.key'))
 if len(keyfiles) != 1:
     sys.exit('need exactly one device key')
 recipient = run(['age-keygen', '-y', keyfiles[0]], b'').decode().split()[0]
-raw = open('/var/lib/woowtech-backup/archives/%s.woowbackup' % base_id, 'rb').read()
-magic, rest = raw.split(b'\n', 1)
-assert magic == b'WOOWTECH-BACKUP/1'
-hline, cipher = rest.split(b'\n', 1)
-old_header = json.loads(hline)
+V2_PATH = '/var/lib/woowtech-backup/archives/%s.tar' % base_id
+FORMAT = 2 if os.path.exists(V2_PATH) else 1
+if FORMAT == 2:
+    with tarfile.open(V2_PATH) as outer:
+        base_doc = json.loads(outer.extractfile('backup.json').read())
+        cipher = outer.extractfile(base_doc['apps'][0]['file']).read()
+    old_header = {'key_id': base_doc['key_id']}
+else:
+    raw = open('/var/lib/woowtech-backup/archives/%s.woowbackup' % base_id, 'rb').read()
+    magic, rest = raw.split(b'\n', 1)
+    assert magic == b'WOOWTECH-BACKUP/1'
+    hline, cipher = rest.split(b'\n', 1)
+    old_header = json.loads(hline)
 plain = run(['zstd', '-d', '-c', '-q'], run(['age', '-d', '-i', keyfiles[0]], cipher))
 members = []
 with tarfile.open(fileobj=io.BytesIO(plain), mode='r:') as tar:
@@ -463,8 +484,11 @@ created = time.strftime('%Y-%m-%dT%H:%M:%SZ', now)
 manifest.update(backup_id=new_id, created=created, note='H1 ' + case)
 header = {'format': 1, 'backup_id': new_id, 'created': created, 'key_id': old_header['key_id'],
           'encryption': 'age-x25519', 'compression': 'zstd'}
-app = manifest['apps'][0]
+app = manifest['app'] if FORMAT == 2 else manifest['apps'][0]
 APP = app['id']
+original_app = copy.deepcopy(app)
+head = {key: manifest[key] for key in ('backup_id', 'created', 'type', 'note', 'key_id', 'encryption', 'tool', 'source',
+                                       'consistency')}
 def entry(name, data):
     return {'path': name, 'size': len(data), 'sha256': hashlib.sha256(data).hexdigest()}
 def sync_entries():
@@ -491,12 +515,13 @@ def build(items, trailing=b''):
                 name, data = item
                 tar.addfile(info(name, len(data)), io.BytesIO(data))
     return buf.getvalue() + trailing
+SECTIONS = ('images', 'postgres', 'volumes', 'secrets', 'config_files', 'quadlet_files', 'data_dirs', 'verify_digests')
 def rename(old, new):
     for item in body:
         if item[0] == old:
             item[0] = new
-    for section in ('images', 'postgres', 'volumes', 'secrets', 'config_files', 'quadlet_files'):
-        for item in app[section]:
+    for section in SECTIONS:
+        for item in app.get(section) or []:
             if item.get('entry') == old:
                 item['entry'] = new
 config0 = app['config_files'][0]['entry']
@@ -586,11 +611,16 @@ elif case == 'too-many-members':
 elif case == 'unknown-app':
     for item in body:
         item[0] = item[0].replace('apps/%s/' % APP, 'apps/woowbk-h1-evil/', 1)
-    for section in ('images', 'postgres', 'volumes', 'secrets', 'config_files', 'quadlet_files'):
-        for item in app[section]:
+    for section in SECTIONS:
+        for item in app.get(section) or []:
             if 'entry' in item:
                 item['entry'] = item['entry'].replace('apps/%s/' % APP, 'apps/woowbk-h1-evil/', 1)
+            for db in item.get('databases') or []:  # instance-mode postgres items
+                if 'entry' in db:
+                    db['entry'] = db['entry'].replace('apps/%s/' % APP, 'apps/woowbk-h1-evil/', 1)
     app['id'], app['name'] = 'woowbk-h1-evil', 'H1 未登錄的應用'
+    if FORMAT == 2:
+        manifest['backup_apps'] = ['woowbk-h1-evil']
     sync_entries()
 elif case == 'undeclared-items':
     vol = io.BytesIO()
@@ -621,12 +651,27 @@ else:
 if items is None:
     items = [manifest_member()] + body
 tar_bytes = build(items, trailing)
-out = (b'WOOWTECH-BACKUP/1\n' + json.dumps(header, separators=(',', ':')).encode() + b'\n'
-       + run(['age', '-e', '-r', recipient], run(['zstd', '-q', '-c', '-3'], tar_bytes)))
+sealed = run(['age', '-e', '-r', recipient], run(['zstd', '-q', '-c', '-3'], tar_bytes))
+if FORMAT == 2:
+    from woowbackup import archive as warchive
+    shown = app if case in ('unknown-app', 'undeclared-items') else original_app
+    doc = warchive._head_view(head)
+    doc['apps'] = [dict(warchive.display_app(shown), file=warchive.inner_name(shown['id'], 'age-x25519'), size=len(sealed),
+                        sha256=hashlib.sha256(sealed).hexdigest())]
+    doc_bytes = json.dumps(doc, ensure_ascii=False, indent=2).encode('utf-8') + b'\n'
+    readme = warchive.readme_text(doc).encode('utf-8')
+    mtime = calendar.timegm(time.strptime(created, '%Y-%m-%dT%H:%M:%SZ'))
+    out = b''
+    for name, data in (('backup.json', doc_bytes), ('README.txt', readme), (doc['apps'][0]['file'], sealed)):
+        out += warchive._outer_header(name, len(data), mtime) + data + warchive._padding(len(data))
+    end = len(out) + 2 * 512
+    out += bytes(2 * 512 + (-end) % (20 * 512))
+else:
+    out = b'WOOWTECH-BACKUP/1\n' + json.dumps(header, separators=(',', ':')).encode() + b'\n' + sealed
 sys.stdout.buffer.write(out)
 names = [i.name if isinstance(i, tarfile.TarInfo) else (i[0].name if isinstance(i[0], tarfile.TarInfo) else i[0])
          for i in items]
-sys.stderr.write(json.dumps({'case': case, 'backup_id': new_id, 'members': len(items), 'entries': len(manifest['entries']),
+sys.stderr.write(json.dumps({'case': case, 'format': FORMAT, 'backup_id': new_id, 'members': len(items), 'entries': len(manifest['entries']),
                              'first_names': names[:4], 'last_name': names[-1], 'tar_bytes': len(tar_bytes)}) + '\n')
 '''
 
@@ -650,8 +695,13 @@ H1_CASES = {
     **{case: {'inspect': 'limit-exceeded', 'verify': 'limit-exceeded', 'restore': ('limit-exceeded', 'decrypt')}
        for case in ('oversize-manifest', 'too-many-members')},
     'unknown-app': {'inspect': 'ok', 'verify': 'succeeded', 'restore': ('incompatible', 'preflight')},
-    'undeclared-items': {'inspect': 'ok', 'verify': 'succeeded', 'restore': 'succeeded'},
+    # The deep verify (2026-11-13) checks every entry like a restore would, also items this device's catalog does not
+    # declare: the junk image entry fails it, while a restore here ignores the undeclared items and succeeds.
+    'undeclared-items': {'inspect': 'ok', 'verify': 'corrupt-archive', 'restore': 'succeeded'},
 }
+# Format 2 reads only the selected apps' archives: restoring woowbk-demo from a backup that holds only another app
+# is refused while decrypting (the app is not in the backup), before the preflight.
+H1_CASES_V2 = {'unknown-app': {'inspect': 'ok', 'verify': 'succeeded', 'restore': ('incompatible', 'decrypt')}}
 
 
 def craft(dev, case, base_id, ev):
@@ -660,7 +710,7 @@ def craft(dev, case, base_id, ev):
     if proc.returncode != 0:
         raise Failed(f'craft {case}: rc={proc.returncode} {redact(proc.stderr.decode("utf-8", "replace")[-400:])}')
     meta = json.loads(proc.stderr.decode().strip().splitlines()[-1])
-    path = private_dir(WORK / 'h1') / f'{case}.woowbackup'
+    path = private_dir(WORK / 'h1') / f'{case}{".tar" if meta.get("format") == 2 else ".woowbackup"}'
     e2e.write_private(path, proc.stdout)
     meta.update(file=str(path), size=len(proc.stdout), sha256=hashlib.sha256(proc.stdout).hexdigest())
     return meta
@@ -671,9 +721,9 @@ def error_code(reply):
 
 
 def h1_case(ev, dev, case, base_id, baseline):
-    expect = H1_CASES[case]
-    record = {'case': case, 'expect': {k: list(v) if isinstance(v, tuple) else v for k, v in expect.items()}}
     meta = craft(dev, case, base_id, ev)
+    expect = (H1_CASES_V2.get(case) if meta.get('format') == 2 else None) or H1_CASES[case]
+    record = {'case': case, 'expect': {k: list(v) if isinstance(v, tuple) else v for k, v in expect.items()}}
     record['crafted'] = meta
     backup_id = meta['backup_id']
     ev.log(f'[{case}] crafted {meta["size"]} bytes, backup {backup_id}, first members {meta["first_names"]}')
@@ -681,7 +731,7 @@ def h1_case(ev, dev, case, base_id, baseline):
     before_ids = backup_ids(dev, ev)
 
     # 1. upload exactly like the page: upload-begin -> fsreplace1 -> upload-finish
-    _begin, (_rc, reply) = e2e.upload_file(dev, meta['file'], ev=ev, filename=f'woowbk-h1-{case}.woowbackup')
+    _begin, (_rc, reply) = e2e.upload_file(dev, meta['file'], ev=ev, filename=f'woowbk-h1-{case}{Path(meta["file"]).suffix}')
     record['upload_finish'] = error_code(reply)
     if not ev.check(f'H1 {case}: upload-finish accepts it (outer header and age header are valid)', reply.get('ok'),
                     reply.get('error')):
@@ -1067,7 +1117,8 @@ def scenario_h2(ev):
     ev.require('dev-a idle and the data dir is the normal ext4 volume',
                status['active_job'] is None and fs_type(dev, DATA) == 'ext4', fs_type(dev, DATA))
     before_ids = backup_ids(dev, ev)
-    big = max(e2e.DOWNLOADS.glob('*.woowbackup'), key=lambda p: p.stat().st_size)
+    # The largest backup a previous run downloaded (cli_e2e s2: with images): `.tar` (format 2) or `.woowbackup`.
+    big = max([*e2e.DOWNLOADS.glob('*.tar'), *e2e.DOWNLOADS.glob('*.woowbackup')], key=lambda p: p.stat().st_size)
     ev.log(f'foreign podman events in the last 10 min before the mount: {foreign_activity(dev, time.time() - 600)}')
     sh(dev, f'mount -t tmpfs -o size={H2_TMPFS},mode=0700 woowbk-h2 {DATA}')
     ev.log(f'mounted tmpfs size={H2_TMPFS} over {DATA} at {time.strftime("%H:%M:%S")}')
@@ -1410,10 +1461,22 @@ def engine_digest(dev):
                    'sha256sum', check=False).stdout.decode().split()[0]
 
 
+DEMO_ENTRY = '/etc/woowtech-cockpit/backup/apps/woowbk-demo.json'
+
+
 def scenario_h7(ev):
     dev = 'a'
     full = os.environ.get('H7_FULL', '1') == '1'
     ev.require('dev-a idle', ok(dev, 'status', ev=ev)['active_job'] is None)
+    # 應用設定 (catalog-install) may have replaced the lab fixture entry that `manage.py --backup-demo-catalog` manages
+    # (e.g. with the generated digest checks): manage.py would list it and refuse to roll back a file changed after its
+    # install. The managed bytes go back for the rollback chain; the administrator's entry is re-installed at the end.
+    admin_entry = None
+    if sh(dev, f'cmp -s {SRC}/catalog-examples/woowbk-demo/catalog.json {DEMO_ENTRY}', check=False).returncode != 0:
+        admin_entry = json.loads(sh(dev, f'cat {DEMO_ENTRY}').stdout)
+        sh(dev, f'install -o root -g root -m 0644 {SRC}/catalog-examples/woowbk-demo/catalog.json {DEMO_ENTRY}')
+        ev.log('H7: the woowbk-demo entry had been changed through 應用設定; the file manage.py manages was put back '
+               'for the rollback chain and the entry is re-installed with catalog-install at the end')
     fp0 = json.loads(py(dev, RUNTIME_FP).stdout)
     status0 = ok(dev, 'status', ev=ev)
     ids0 = backup_ids(dev, ev)
@@ -1476,6 +1539,11 @@ def scenario_h7(ev):
     ev.check('H7 the device key still decrypts: verify job on an existing backup succeeds', job['state'] == 'succeeded',
              job.get('error'))
     ev.save('h7-transactions-after', transactions(dev))
+    if admin_entry is not None:
+        preview = ok(dev, 'catalog-install', {'entry': admin_entry}, ev=ev)
+        done = ok(dev, 'catalog-install', {'entry': admin_entry, 'confirm': True,
+                                           'expected_sha256': preview['expected_sha256']}, ev=ev)
+        ev.check('H7 the woowbk-demo entry from 應用設定 is installed again', done.get('installed') is True, done)
     return {'rolled_back_latest': latest, 'further_rollbacks': removed, 'reinstall': inst.get('backup_id')}
 
 
@@ -1653,23 +1721,38 @@ try:
         raise SystemExit('need exactly one device key')
     recipient = subprocess.run(['age-keygen', '-y', keyfiles[0]], capture_output=True, env=ENV,
                                check=True).stdout.decode().split()[0]
-    source_path = '/var/lib/woowtech-backup/archives/%s.woowbackup' % base_id
-    with open(source_path, 'rb') as handle:
-        magic, header_line = handle.readline(), handle.readline()
-        offset = handle.tell()
-    if magic != b'WOOWTECH-BACKUP/1\n':
-        raise SystemExit('not a backup')
-    old_header = json.loads(header_line)
+    # Format 2 (`.tar`, every backup since 2026-11-13): the app's age archive is copied out of the outer tar and
+    # decrypted; format 1 (`.woowbackup`): the stream after the header line.
+    v2_path = '/var/lib/woowtech-backup/archives/%s.tar' % base_id
+    FORMAT = 2 if os.path.exists(v2_path) else 1
     plain_path = os.path.join(work, 'plain.tar')
-    with open(source_path, 'rb') as source, open(plain_path, 'wb') as sink:
-        source.seek(offset)
-        pipeline([['age', '-d', '-i', keyfiles[0]], ['zstd', '-d', '-c', '-q']], source, sink)
+    if FORMAT == 2:
+        sealed_path = os.path.join(work, 'sealed.age')
+        with tarfile.open(v2_path) as outer_tar:
+            doc = json.loads(outer_tar.extractfile('backup.json').read())
+            with outer_tar.extractfile(doc['apps'][0]['file']) as raw, open(sealed_path, 'wb') as out:
+                shutil.copyfileobj(raw, out, 1 << 20)
+        old_header = {'key_id': doc['key_id']}
+        with open(sealed_path, 'rb') as source, open(plain_path, 'wb') as sink:
+            pipeline([['age', '-d', '-i', keyfiles[0]], ['zstd', '-d', '-c', '-q']], source, sink)
+        os.unlink(sealed_path)
+    else:
+        source_path = '/var/lib/woowtech-backup/archives/%s.woowbackup' % base_id
+        with open(source_path, 'rb') as handle:
+            magic, header_line = handle.readline(), handle.readline()
+            offset = handle.tell()
+        if magic != b'WOOWTECH-BACKUP/1\n':
+            raise SystemExit('not a backup')
+        old_header = json.loads(header_line)
+        with open(source_path, 'rb') as source, open(plain_path, 'wb') as sink:
+            source.seek(offset)
+            pipeline([['age', '-d', '-i', keyfiles[0]], ['zstd', '-d', '-c', '-q']], source, sink)
     plain = tarfile.open(plain_path, 'r:')
     members = plain.getmembers()
     if members[0].name != 'manifest.json':
         raise SystemExit('manifest is not the first member')
     manifest = json.loads(plain.extractfile(members[0]).read())
-    app = manifest['apps'][0]
+    app = manifest['app'] if FORMAT == 2 else manifest['apps'][0]
     volume = app['volumes'][0]
     image = next((i for i in app['images'] if i.get('ref') == app_ref and i.get('entry')), None)
     if image is None:
@@ -1714,6 +1797,30 @@ try:
     new_id = time.strftime('%Y%m%dT%H%M%SZ', now) + '-' + secrets.token_hex(4)
     created = time.strftime('%Y-%m-%dT%H:%M:%SZ', now)
     manifest.update(backup_id=new_id, created=created, note='SEC-1 lab: nested tar symlink escape')
+    if FORMAT == 2:
+        # Only the nested content is hostile: the engine's own writer re-seals the app with the device recipient
+        # (valid per-app manifest, backup.json and checksums).
+        from woowbackup import archive as warchive
+        locals_ = {}
+        for index, member in enumerate(members[1:]):
+            if member.name in replaced:
+                locals_[member.name] = replaced[member.name]
+                continue
+            path = os.path.join(work, 'm%d' % index)
+            with plain.extractfile(member) as raw, open(path, 'wb') as out:
+                shutil.copyfileobj(raw, out, 1 << 20)
+            locals_[member.name] = path
+        plain.close()
+        os.unlink(plain_path)
+        items = [warchive.Entry(e['path'], locals_[e['path']], int(e['size']), e['sha256']) for e in manifest['entries']]
+        head = {key: manifest[key] for key in warchive.HEAD_FIELDS}
+        out_path = os.path.join(work, 'crafted.tar')
+        with warchive.ArchiveWriter(out_path, head, [app], recipient, tmp_dir=work) as writer:
+            writer.add_app(app, items)
+            writer.finish()
+        report.update(backup_id=new_id, path=out_path, size=os.path.getsize(out_path), format=2,
+                      plain_bytes=sum(int(e['size']) for e in manifest['entries']))
+        raise SystemExit(0)
     data = json.dumps(manifest, ensure_ascii=False, separators=(',', ':')).encode()
     new_plain = os.path.join(work, 'plain.new.tar')
     with open(new_plain, 'wb') as out_file, tarfile.open(fileobj=out_file, mode='w', format=tarfile.PAX_FORMAT) as out:
@@ -1735,10 +1842,14 @@ try:
         sink.flush()
         with open(new_plain, 'rb') as source:
             pipeline([['zstd', '-q', '-c', '-3'], ['age', '-e', '-r', recipient]], source, sink)
-    report.update(backup_id=new_id, path=out_path, size=os.path.getsize(out_path), plain_bytes=os.path.getsize(new_plain))
+    report.update(backup_id=new_id, path=out_path, size=os.path.getsize(out_path), format=1,
+                  plain_bytes=os.path.getsize(new_plain))
+except SystemExit as stop:
+    if stop.code not in (0, None):
+        raise
 finally:
     for name in os.listdir(work):
-        if not name.endswith('.woowbackup'):
+        if not name.startswith('crafted.'):
             os.unlink(os.path.join(work, name))
 print(json.dumps(report))
 '''
@@ -1751,7 +1862,7 @@ def sec1_craft(dev, base_id, ev):
         sh(dev, f'rm -rf {SEC1_WORK}', check=False)
         raise Failed(f'SEC-1 craft failed rc={proc.returncode}: {redact(proc.stderr.decode("utf-8", "replace")[-600:])}')
     report = json.loads(proc.stdout)
-    local = private_dir(WORK / 'sec1') / 'sec1-crafted.woowbackup'
+    local = private_dir(WORK / 'sec1') / f'sec1-crafted{".tar" if report.get("format") == 2 else ".woowbackup"}'
     try:
         write_private_stream(dev, report['path'], local)
     finally:
@@ -1819,10 +1930,17 @@ def scenario_sec1(ev):
                  'or directory)', checks['image_crafted'].get('code') == 'corrupt-archive'
                  and checks['image_crafted'].get('member') == f'{SEC1_TAG}-esc', checks['image_crafted'])
         with open(meta['file'], 'rb') as handle:
-            head = handle.read(4096)
-        ev.check('SEC-1 crafting: the host received ciphertext only (outer header + age, no plaintext manifest)',
-                 meta['host_size'] == meta['size'] and head.startswith(b'WOOWTECH-BACKUP/1\n') and b'"apps"' not in head
-                 and b'age-encryption.org/v1' in head)
+            head = handle.read(1 << 20)
+        if meta.get('format') == 2:
+            # Format 2: backup.json (names only) + README + the app's age archive; no plaintext manifest or data.
+            ev.check('SEC-1 crafting: the host received ciphertext only (backup.json/README + age, no plaintext '
+                     'manifest; README.txt only names manifest.json)', meta['host_size'] == meta['size']
+                     and head[257:262] == b'ustar' and head.startswith(b'backup.json') and b'"entries"' not in head
+                     and b'"backup_apps"' not in head and b'age-encryption.org/v1' in head and b'AGE-SECRET-KEY' not in head)
+        else:
+            ev.check('SEC-1 crafting: the host received ciphertext only (outer header + age, no plaintext manifest)',
+                     meta['host_size'] == meta['size'] and head.startswith(b'WOOWTECH-BACKUP/1\n')
+                     and b'"apps"' not in head and b'age-encryption.org/v1' in head)
         backup_id = meta['backup_id']
         created.append(backup_id)
 
@@ -1830,7 +1948,7 @@ def scenario_sec1(ev):
                     'images': owner_images(dev), 'home_config': owner_config_listing(dev)}
         before_ids = backup_ids(dev, ev)
         t_start = device_clock(dev)
-        _begin, (_rc, reply) = e2e.upload_file(dev, meta['file'], ev=ev, filename='sec1-crafted.woowbackup')
+        _begin, (_rc, reply) = e2e.upload_file(dev, meta['file'], ev=ev, filename=Path(meta['file']).name)
         uploaded = reply.get('backup') or {}
         ev.require('SEC-1 upload-finish accepts the archive (outer header, age header and size are valid)',
                    reply.get('ok') and uploaded.get('id') == backup_id and uploaded.get('key_available') is True,
@@ -1843,11 +1961,15 @@ def scenario_sec1(ev):
         vjob, vlog = wait_job(dev, start['job_id'], ev=ev, timeout=600, label='verify[sec1]')
         save_job(ev, 'sec1-verify', vjob, vlog)
         ev.log(f'SEC-1 verify job: {vjob["state"]} {vjob.get("error")} {vjob.get("result")}')
-        ev.check('SEC-1 verify job checks the outer archive only (decryption, entries, sizes, sha256 all match, so it '
-                 'succeeds; nested tars are refused by the restore, CONTRACT sections 5 and 8) and changes nothing',
-                 vjob['state'] == 'succeeded', vjob.get('error'))
-        ev.log('SEC-1 observation: the verify job and the wizard preflight report this archive as intact/restorable; '
-               'only the restore job (preflight with the extracted archive) refuses it')
+        # Since 2026-11-13 the verify job checks every nested tar the way a restore does (deep verify, CONTRACT
+        # section 5): the backup no longer shows as verified while a restore would refuse it.
+        verified = (next((b for b in backups(dev, ev) if b['id'] == backup_id), {}) or {}).get('verified') or {}
+        ev.check('SEC-1 the deep verify job refuses the hostile nested tars (corrupt-archive) and marks the backup '
+                 'verified {ok: false, deep: true}; it changes nothing', vjob['state'] == 'failed'
+                 and (vjob.get('error') or {}).get('code') == 'corrupt-archive' and verified.get('ok') is False
+                 and verified.get('deep') is True, {'error': vjob.get('error'), 'verified': verified})
+        ev.log('SEC-1 observation: inspect (manifests only, what the wizard shows first) still answers; the deep verify '
+               'job and the restore job (preflight with the extracted archive) refuse it')
 
         rstart = ok(dev, 'restore-start', {'backup_id': backup_id, 'apps': [APP], 'request_id': request_id(),
                                           'confirm': True}, ev=ev)
@@ -2279,14 +2401,15 @@ done
 for n in woowbk-demo woowbk-keep-net; do
   podman network exists "$n" && echo "network $n $(podman network inspect --format '{{.ID}}' "$n")"
 done
-ls -A .config/containers/systemd/ 2>/dev/null | sed 's/^/quadlet /'
-ls -A .config/systemd/user/ 2>/dev/null | grep woowbk | sed 's/^/user-unit /'
+ls -A .config/containers/systemd/ 2>/dev/null | grep woowbk-demo | sed 's/^/quadlet /'
+ls -A .config/systemd/user/ 2>/dev/null | grep woowbk-demo | sed 's/^/user-unit /'
 true
 '''
 
 
 def object_state(dev):
-    """Owner-side objects relevant to the fresh cases (names, ids, creation times, content digests; no contents)."""
+    """Owner-side objects relevant to the fresh cases (names, ids, creation times, content digests; no contents).
+    Only woowbk-demo's Quadlet files and unit masks: the host-directory fixture (woowbk-dirs) may be deployed too."""
     return owner(dev, 'sh', '-c', OBJECT_STATE).stdout.decode().splitlines()
 
 
