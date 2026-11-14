@@ -2048,7 +2048,7 @@
           ? "還原這份還原前備份時，會先嘗試再建立一份還原前備份；若應用目前無法運作而無法建立，仍會直接還原，且還原失敗時無法自動回復。"
           : wizard.allowNoSafety
             ? "你已選擇在無法建立還原前備份時直接還原：這時還原失敗將無法自動回復。"
-            : "原位還原前會先建立並驗證「還原前自動備份」；建立失敗時不會變更任何資料，還原失敗時自動回復。",
+            : "原位還原前會先保存一份還原前的資料，寫入磁碟後才開始變更；保存失敗時不會變更任何資料，還原失敗時直接用它自動回復。應用恢復執行後，再封裝並驗證成「還原前自動備份」。",
         "應用設定有資料核對時，資料回到原處後、應用啟動前，先比對資料表筆數與內容、檔案清單與雜湊；不一致就不啟動應用並自動回復。",
         "還原後會做健康檢查，並比對備份時與還原後的業務資料。"
       ].map(item => h("li", { text: item }))));
@@ -2528,7 +2528,7 @@
             enabled ? chip("可還原", "ok", "check-circle-outline") : chip("無法還原", "fail", "close-circle-outline"))),
         // Only for apps that can be restored: a blocked app's checks say why (review finding F13).
         enabled ? h("p", { class: "muted", text: app.mode === "inplace"
-          ? "這台設備已部署此應用：會覆寫目前的資料，還原前會先自動建立還原前備份。"
+          ? "這台設備已部署此應用：會覆寫目前的資料；還原前會先保存目前的資料，應用恢復後再封裝成還原前備份。"
           : "這台設備尚未部署此應用：會依這台設備的受信任設定全新建立服務、資料卷與資料庫。" }) : null,
         checkList(app.checks, `${str(app.name || app.id)} 的檢查結果`),
         content ? disclosure(`pf-details-${app.id}`, "備份內容", appContents(content)) : null);
@@ -2597,11 +2597,11 @@
     } else if (noSafety) {
       safetyText = `系統會先嘗試為 ${names(inplace)} 建立還原前備份；若無法建立，會依你的選擇直接還原，這時還原失敗將無法自動回復，資料可能只還原一部分。`;
     } else if (inplace.length) {
-      safetyText = `開始還原前，系統會先為 ${names(inplace)} 建立並完整驗證「還原前自動備份」；建立失敗時不會變更任何資料。還原失敗時，會自動用它回復到還原前的狀態。每個應用保留最近 3 份還原前備份。`;
+      safetyText = `開始還原前，系統會先在應用停止時為 ${names(inplace)} 保存一份還原前的資料，寫入磁碟後才開始還原；保存失敗時不會變更任何資料。還原失敗時，會直接用這份資料回復到還原前的狀態。應用恢復執行後，這份資料會封裝並完整驗證成「還原前自動備份」；每個應用保留最近 3 份。`;
     }
     // Safety backups follow 預設加密備份 (CONTRACT §9); the writers it stops stay stopped for the restore.
     const safetyMode = inplace.length && settingsOf()
-      ? `還原前備份依「預設加密備份」設定${encryptByDefault() ? "以這台設備的金鑰加密" : "不加密（應用機密以明文保存）"}。建立還原前備份時停止的服務會直接交給還原，應用只停止一次。`
+      ? `還原前備份依「預設加密備份」設定${encryptByDefault() ? "以這台設備的金鑰加密" : "不加密（應用機密以明文保存）"}。保存還原前資料時停止的服務會直接交給還原，應用只停止一次；封裝在應用恢復後才進行，不算在停機時間內。`
       : null;
     const checkboxText = !inplace.length ? `我了解還原會在這台設備全新部署上列 ${apps.length} 個應用`
       : !fresh.length ? `我了解還原會停止並覆寫上列 ${apps.length} 個應用的資料`
@@ -2859,11 +2859,21 @@
     })));
   }
 
+  function restoreFinished(job, result) {
+    return job.type === "restore" && job.state === "interrupted" && result?.finishing === true;
+  }
+
   function buildResult(job) {
     const result = isObject(job.result) ? job.result : null;
     const error = isObject(job.error) ? job.error : null;
     const params = isObject(job.params) ? job.params : {};
     const safetyId = isString(result?.safety_backup_id) && BACKUP_ID_RE.test(result.safety_backup_id) ? result.safety_backup_id : null;
+    // A pre-restore copy that could not be packaged into the safety backup (it stays in pending/ for manual work).
+    const pendingFailed = isObject(result?.safety_pending_failed) && isString(result.safety_pending_failed.path)
+      ? result.safety_pending_failed : null;
+    // An interrupted restore that had already finished and passed its checks (only its clean-up or the packaging of
+    // the safety backup was cut short): it is not offered to be reverted.
+    const finished = restoreFinished(job, result);
     const backupId = isString(params.backup_id) && BACKUP_ID_RE.test(params.backup_id) ? params.backup_id : null;
     const restore = job.type === "restore";
     // What really happened comes from the phases (and `changed` from newer engines), never from rolled_back
@@ -2939,10 +2949,21 @@
       if (result?.safety_skipped) {
         body.push(infoNotice("這次還原沒有建立還原前備份（無法建立，而你還原的是還原前備份，或已選擇直接還原）。", "warn", "alert-outline"));
       }
+      // 2026.11.14.2: the pre-restore copy is packaged after the apps run again; when that failed, the copy stays.
+      if (pendingFailed) {
+        body.push(infoNotice(`還原已完成，但還原前備份無法封裝；還原前的資料保留在 ${str(pendingFailed.path)}，需要人工處理，處理完成前請勿刪除。`, "warn", "alert-outline"));
+      } else if (result?.safety_pending === true && !safetyId) {
+        body.push(infoNotice("還原已完成，但還原前備份尚未封裝完成；系統會再試一次，結果見下方注意事項。", "warn", "alert-outline"));
+      }
     }
 
     if (job.state === "rolled-back") {
-      body.push(h("p", { text: "還原過程發生錯誤。系統已使用還原前備份，把應用回復到還原前的狀態（全新部署的項目已移除）。不需要再做其他處理。" }));
+      body.push(h("p", { text: pendingFailed || (result?.safety_pending === true && !safetyId)
+        ? "還原過程發生錯誤。系統已用還原前保存的資料，把應用回復到還原前的狀態（全新部署的項目已移除）；但還原前備份尚未封裝，見下方說明。"
+        : "還原過程發生錯誤。系統已用還原前保存的資料，把應用回復到還原前的狀態（全新部署的項目已移除）。不需要再做其他處理。" }));
+      if (pendingFailed) {
+        body.push(infoNotice(`還原前備份無法封裝；還原前的資料保留在 ${str(pendingFailed.path)}，需要人工處理，處理完成前請勿刪除。`, "warn", "alert-outline"));
+      }
     }
     if (error && job.state !== "succeeded") body.push(h("div", { class: "notice notice-error" }, icon("alert-circle-outline"), h("p", { text: str(error.message) })));
     if (restore && job.state === "failed") {
@@ -2950,6 +2971,9 @@
         body.push(h("p", { class: "muted", text: safetyId
           ? "自動回復未完成，需要人工處理。可以使用上列還原前備份再次還原。"
           : "自動回復未完成，需要人工處理；請聯絡系統管理員檢查應用。" }));
+        if (!safetyId && pendingFailed) {
+          body.push(infoNotice(`還原前的資料保留在 ${str(pendingFailed.path)}，但無法封裝成還原前備份；處理完成前請勿刪除。`, "warn", "alert-outline"));
+        }
         if (dirs.length) {
           body.push(h("p", { class: "muted", text: "主機資料夾旁名稱含「.woowbk-old-」的資料夾可能是還原前的內容，處理完成前請勿刪除。" }));
         }
@@ -2970,11 +2994,16 @@
     if (job.state === "interrupted") {
       const steps = [h("li", { text: "到「總覽」確認各應用的狀態是否為「執行中」。" })];
       if (restore) {
-        steps.push(h("li", { text: safetyId && touched
+        steps.push(h("li", { text: finished
+          ? "還原已完成並通過檢查，作業在最後的整理步驟中斷；應用不需要再次還原。若應用仍無法正常運作，再聯絡系統管理員。"
+          : safetyId && touched
           ? "若應用無法正常運作，請使用下方的還原前備份再次還原，把資料回復到這次還原開始前的狀態。"
           : touched
             ? "還原在變更資料途中中斷（全新部署或沒有還原前備份），應用可能只完成一部分。請再次還原這份備份，或聯絡系統管理員。"
             : "還原在變更任何資料前就中斷，應用資料應未被變更；請確認應用狀態後再決定是否重新還原。" }));
+        if (!safetyId && pendingFailed) {
+          steps.push(h("li", { text: `還原前的資料保留在 ${str(pendingFailed.path)}，但無法封裝成還原前備份；請聯絡系統管理員處理，處理完成前請勿刪除。` }));
+        }
         if (freshApps.length) {
           steps.push(h("li", { text: `全新部署（${freshApps.map(appName).join("、")}）沒有完成；系統會清除未完成的部署（結果見上方訊息），之後可以再次還原同一份備份。` }));
         }
@@ -3020,7 +3049,7 @@
       const timing = list(result.timing).filter(isObject);
       if (timing.length) {
         body.push(h("h4", { class: "subheading", text: "停機時間" }),
-          h("p", { class: "muted", text: "服務停止：從第一個服務停止（原位還原為建立還原前備份時的停止）到全部服務再次執行；無法使用：到每個健康檢查都通過。" }),
+          h("p", { class: "muted", text: "服務停止：從第一個服務停止（原位還原為保存還原前資料時的停止）到全部服務再次執行；無法使用：到每個健康檢查都通過。" }),
           timingTable(timing, "restore"));
       }
       const verification = list(result.verification).filter(isObject);
@@ -3029,7 +3058,7 @@
     }
     // Another destructive restore is offered as the primary step only when recovery is really needed: not after a
     // successful rollback and not after a failure that changed nothing (review findings F2, F8).
-    if (safetyId && (manualWork || (job.state === "interrupted" && touched))) {
+    if (safetyId && (manualWork || (job.state === "interrupted" && touched && !finished))) {
       actions.unshift(button("使用還原前備份還原", () => go(["restore", safetyId]), { primary: true, icon: "backup-restore", focus: "result-restore-safety" }));
     }
     if (job.state !== "succeeded") {
