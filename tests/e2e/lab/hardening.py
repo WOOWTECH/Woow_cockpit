@@ -196,7 +196,15 @@ NOISE = {
              # woowbk-dirs (dirs_e2e.py, when deployed on dev-a): its /healthz probe file in its www/ host directory,
              # written by the container's own health check every 30 s, like woowbk-demo's in its volume above.
              re.compile(r'^/home/appowner/woowbk-dirs/data/www/$'),
-             re.compile(r'^/home/appowner/woowbk-dirs/data/www/\.healthz-')),
+             re.compile(r'^/home/appowner/woowbk-dirs/data/www/\.healthz-'),
+             # ... and its running PostgreSQL's own data directory, like woowbk-demo-pgdata above: a timed checkpoint
+             # five minutes after dirs_e2e.py last restarted it rewrites pg_control, pg_wal, pg_xact, ... by itself.
+             re.compile(r'^/home/appowner/\.local/share/woowbk-dirs/postgres/'),
+             # woowbk-inst (strengthen_e2e.py instance, when deployed on dev-a): the woowbk-demo app image and a
+             # PostgreSQL of its own, so the same health check probe files and database writes as woowbk-demo's.
+             re.compile(r'^/home/appowner/\.local/share/containers/storage/volumes/woowbk-inst-pgdata/'),
+             re.compile(r'^/home/appowner/\.local/share/containers/storage/volumes/woowbk-inst-files/_data/$'),
+             re.compile(r'^/home/appowner/\.local/share/containers/storage/volumes/woowbk-inst-files/_data/\.healthz-')),
 }
 
 
