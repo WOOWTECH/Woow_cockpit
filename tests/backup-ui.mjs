@@ -49,9 +49,10 @@ function kitText(secret, keyId, host = 'dev-a') {
 const PHASES = {
   backup: [['prepare', '準備'], ['check', '檢查空間與應用'], ['stop', '暫停應用寫入'], ['dump', '匯出資料庫'],
     ['export', '匯出資料卷與設定'], ['start', '恢復應用'], ['package', '加密封裝'], ['verify', '驗證備份']],
-  restore: [['prepare', '準備'], ['decrypt', '解密並驗證檔案'], ['preflight', '相容性檢查'], ['safety', '建立還原前備份'],
-    ['stop', '停止應用'], ['restore', '還原資料'], ['start', '啟動應用'], ['check', '健康與資料核對']],
+  restore: [['prepare', '準備'], ['decrypt', '解密並驗證檔案'], ['preflight', '相容性檢查'], ['stage', '預先寫入主機資料夾'],
+    ['safety', '建立還原前備份'], ['stop', '停止應用'], ['restore', '還原資料'], ['start', '啟動應用'], ['check', '健康與資料核對']],
   verify: [['prepare', '準備'], ['decrypt', '解密並驗證檔案'], ['check', '核對結果']],
+  export: [['prepare', '準備'], ['decrypt', '解密並驗證檔案'], ['package', '封裝未加密副本'], ['verify', '驗證副本']],
 };
 const labelOf = (type, id) => [...PHASES[type], ['rollback', '自動回復']].find(([phase]) => phase === id)?.[1] || id;
 
@@ -76,6 +77,12 @@ function runningStep(type, phase, percent, extra = {}) {
 }
 
 const RESTORE_NOTE = '資料卷 woowbk-demo-files 有 1 個檔案的 setuid／setgid 權限在還原時會被移除（例如 bin/helper）；需要這些權限的程式可能無法正常運作。';
+const VERIFY_NOTE = '資料卷 woowbk-demo-files 有 1 個檔案的 setuid／setgid 權限在還原時會被移除（例如 bin/helper）。';
+const PLAINTEXT = '未加密的備份會以明文儲存與下載資料庫密碼、API 金鑰與存取權杖等應用機密；任何取得備份檔的人都能讀取，也無法確認檔案在設備以外是否被修改過。';
+const EXPORT_ID = 'x0123456789abcdef';
+const EXPORT_NAME = 'woowtech-backup-dev-a-20261112-020000-unencrypted.tar';
+// 30 minutes ahead of the real clock, so the copy never expires while a test runs.
+const EXPORT_EXPIRES = Math.floor(Date.now() / 1000) + 1800;
 const VERIFY_BEFORE = { summary: { notes: 12, files: 4, digest: '9c1d0f7a', title: '示範筆記', signatures_valid: true } };
 
 function scripts() {
@@ -86,13 +93,14 @@ function scripts() {
       {
         job: { state: 'succeeded', phase: 'verify', phases: phasesAt('backup', null), progress: { percent: 100, message: '已完成' },
           finished: '2026-11-13T02:05:30Z', cancellable: false,
-          result: { backup_id: B_NEW, size: 52 * MiB, apps: ['woowbk-demo'], downtime_seconds: 7 } },
+          result: { backup_id: B_NEW, size: 52 * MiB, apps: ['woowbk-demo'], downtime_seconds: 7, unavailable_seconds: 9.4, encrypted: true,
+            timing: [{ app: 'woowbk-demo', writer_pause_seconds: 6.6, unavailable_seconds: 9.4 }] } },
         log: ['2026-11-13T02:05:29Z 備份 20261113T020500Z-feedbeef 已建立並通過完整驗證（52.0 MiB）', '2026-11-13T02:05:30Z 作業結束：已完成'],
         addBackup: {
           id: B_NEW, type: 'manual', created: '2026-11-13T02:05:00Z', note: '更新前備份', apps: [{ id: 'woowbk-demo', name: '示範筆記應用' }],
           size: 52 * MiB, sha256: 'e'.repeat(64), key_id: KEY_ID, key_available: true, include_images: true,
-          filename: 'woowtech-backup-dev-a-20261113-020500.woowbackup', source: { hostname: 'dev-a' },
-          verified: { at: '2026-11-13T02:05:29Z', ok: true }, inspected: true,
+          filename: 'woowtech-backup-dev-a-20261113-020500.tar', source: { hostname: 'dev-a' },
+          verified: { at: '2026-11-13T02:05:29Z', ok: true }, inspected: true, format: 2, encrypted: true, unauthenticated: false,
         },
       },
     ],
@@ -113,8 +121,22 @@ function scripts() {
       runningStep('verify', 'decrypt', 50, { cancellable: true }),
       {
         job: { state: 'succeeded', phase: 'check', phases: phasesAt('verify', null), progress: { percent: 100, message: '已完成' },
-          finished: '2026-11-13T02:10:00Z', cancellable: false, result: { ok: true, entries: 9, bytes: 51 * MiB } },
+          finished: '2026-11-13T02:10:00Z', cancellable: false,
+          result: { ok: true, entries: 9, bytes: 51 * MiB, deep: true, format: 2, encrypted: true, notes: [VERIFY_NOTE],
+            apps: [{ id: 'woowbk-demo', name: '示範筆記應用', checked: { volumes: 1, dirs: 0, images: 2, digests: 2, globals: 0, dumps: 1, secrets: 2 },
+              header_only: ['dumps'] }] } },
         log: ['2026-11-13T02:10:00Z 作業結束：已完成'],
+        verified: { at: '2026-11-13T02:10:00Z', ok: true, deep: true },
+      },
+    ],
+    export: [
+      runningStep('export', 'package', 55, { cancellable: true }),
+      {
+        job: { state: 'succeeded', phase: 'verify', phases: phasesAt('export', null), progress: { percent: 100, message: '已完成' },
+          finished: '2026-11-13T02:11:00Z', cancellable: false,
+          result: { export_id: EXPORT_ID, backup_id: B_MANUAL, filename: EXPORT_NAME, size: 96 * MiB, expires: EXPORT_EXPIRES } },
+        log: ['2026-11-13T02:11:00Z 已建立未加密的下載副本（96.0 MiB），15 分鐘後自動刪除'],
+        addExport: { export_id: EXPORT_ID, backup_id: B_MANUAL, filename: EXPORT_NAME, size: 96 * MiB, expires: EXPORT_EXPIRES },
       },
     ],
   };
@@ -141,8 +163,9 @@ function rolledBackScript() {
 const backupMeta = (id, extra = {}) => ({
   id, type: 'manual', created: `${id.slice(0, 4)}-${id.slice(4, 6)}-${id.slice(6, 8)}T${id.slice(9, 11)}:${id.slice(11, 13)}:${id.slice(13, 15)}Z`,
   note: '', apps: [{ id: 'woowbk-demo', name: '示範筆記應用' }], size: 48 * MiB, sha256: 'a'.repeat(64), key_id: KEY_ID,
-  key_available: true, include_images: false, filename: `woowtech-backup-dev-a-${id.slice(0, 8)}-${id.slice(9, 15)}.woowbackup`,
-  source: { hostname: 'dev-a' }, verified: { at: '2026-11-12T02:01:00Z', ok: true }, inspected: true, ...extra,
+  key_available: true, include_images: false, filename: `woowtech-backup-dev-a-${id.slice(0, 8)}-${id.slice(9, 15)}.tar`,
+  source: { hostname: 'dev-a' }, verified: { at: '2026-11-12T02:01:00Z', ok: true }, inspected: true,
+  format: 2, encrypted: true, unauthenticated: false, ...extra,
 });
 
 function app(id, name, extra = {}) {
@@ -161,6 +184,7 @@ function inspectResult(backup, { mode = 'inplace', hostname = 'dev-a', uid = 100
       tool: { name: 'woowtech-cockpit-backup', version: '2026.11.13.1' },
       source: { hostname, arch: 'x86_64', os: 'Ubuntu 24.04.3 LTS', podman: '4.9.3', machine_id_sha256: 'b'.repeat(64) },
       consistency: { method: 'writers-stopped', downtime_seconds: 7 }, total_size: 50 * MiB,
+      format: backup.format === 1 ? 1 : 2, encryption: backup.encrypted === false ? 'none' : 'age-x25519',
       apps: [
         { id: 'woowbk-demo', name: '示範筆記應用', adapter: 'quadlet-postgres', owner: { name: 'appowner', uid },
           images: [{ ref: 'docker.io/library/postgres:16-alpine', included: true }, { ref: 'localhost/woowbk-demo-app:1', included: true }],
@@ -212,10 +236,11 @@ function withHostDirs(data, { mode = 'inplace', dirs = [{ path: HA_DIR, size: 74
 
 function fixture(overrides = {}) {
   const manual = backupMeta(B_MANUAL, { note: '每日備份', include_images: true });
-  const safety = backupMeta(B_SAFETY, { type: 'safety', note: '還原前自動備份（還原來源 20261101T020000Z-11112222）', verified: null });
+  const safety = backupMeta(B_SAFETY, { type: 'safety', note: '還原前自動備份（還原來源 20261101T020000Z-11112222）', verified: null,
+    format: 1, filename: 'woowtech-backup-dev-a-20261110-153000.woowbackup' });
   const uploaded = backupMeta(B_UPLOADED, {
     type: 'uploaded', note: '', apps: [], key_id: OTHER_KEY_ID, key_available: false, inspected: false, verified: null,
-    source: null, uploaded_at: '2026-11-13T01:02:00Z', filename: 'woowtech-backup-dev-b-20261113-010000.woowbackup',
+    source: null, uploaded_at: '2026-11-13T01:02:00Z', filename: 'woowtech-backup-dev-b-20261113-010000.tar',
   });
   const data = {
     allowed: true, latency: 0, ackMode: 'auto', channelFailure: null, failures: [], hold: [],
@@ -229,8 +254,10 @@ function fixture(overrides = {}) {
           units: [{ name: 'woowbk-wiki-db.service', active: false }, { name: 'woowbk-wiki-app.service', active: false }] }),
       ],
       active_job: null, warnings: [],
+      settings: { encrypt_by_default: true, problem: null, plaintext_warning: PLAINTEXT },
     },
     backups: [manual, safety, uploaded],
+    exports: [],
     kit: { key_id: KEY_ID, filename: `woowtech-backup-key-dev-a-${KEY_ID}.txt`, content: kitText(SECRET, KEY_ID) },
     secrets: { [OTHER_SECRET]: OTHER_KEY_ID, [SECRET]: KEY_ID },
     inspect: {
@@ -244,10 +271,15 @@ function fixture(overrides = {}) {
       begin: { upload_id: UPLOAD_ID, path: UPLOAD_PATH, max_size: 20 * GiB },
       finish: uploaded,
     },
-    downloads: Object.fromEntries([B_MANUAL, B_SAFETY, B_UPLOADED, B_NEW].map(id => [id, {
-      path: `/var/lib/woowtech-backup/archives/${id}.woowbackup`, size: 48 * MiB,
-      filename: id === B_NEW ? 'woowtech-backup-dev-a-20261113-020500.woowbackup' : `woowtech-backup-dev-a-${id.slice(0, 8)}-${id.slice(9, 15)}.woowbackup`,
-    }])),
+    downloads: Object.fromEntries([B_MANUAL, B_SAFETY, B_UPLOADED, B_NEW].map(id => {
+      const extension = id === B_SAFETY ? 'woowbackup' : 'tar';
+      return [id, { path: `/var/lib/woowtech-backup/archives/${id}.${extension}`, size: 48 * MiB,
+        filename: `woowtech-backup-dev-a-${id.slice(0, 8)}-${id.slice(9, 15)}.${extension}` }];
+    })),
+    exportFiles: { [EXPORT_ID]: { path: `/var/lib/woowtech-backup/exports/${EXPORT_ID}.tar`, filename: EXPORT_NAME, size: 96 * MiB,
+      expires: EXPORT_EXPIRES, backup_id: B_MANUAL } },
+    retention: null,
+    catalogData: null,
     scripts: scripts(),
     jobs: {},
     ...overrides,
@@ -269,21 +301,45 @@ function installCockpitFixture() {
     inspect: { required: ['backup_id'], optional: ['key', 'save_key'] },
     'key-confirm': { required: ['key_id'], optional: [] },
     'key-import': { required: ['key'], optional: [] },
-    'backup-start': { required: ['apps', 'request_id'], optional: ['include_images', 'note'] },
+    'backup-start': { required: ['apps', 'request_id'], optional: ['include_images', 'note', 'encrypt', 'acknowledge_plaintext'] },
     'verify-start': { required: ['backup_id', 'request_id'], optional: ['key'] },
-    'restore-start': { required: ['backup_id', 'apps', 'request_id', 'confirm'], optional: ['key', 'save_key', 'allow_no_safety'] },
+    'restore-start': { required: ['backup_id', 'apps', 'request_id', 'confirm'], optional: ['key', 'save_key', 'allow_no_safety', 'accept_unauthenticated'] },
+    'settings-set': { required: ['encrypt_by_default'], optional: ['acknowledge_plaintext'] },
+    'export-start': { required: ['backup_id', 'request_id', 'confirm'], optional: ['key'] },
+    'export-info': { required: ['export_id'], optional: [] }, 'export-delete': { required: ['export_id'], optional: [] },
+    'catalog-suggest': { required: [], optional: ['owner'] },
+    'catalog-install': { required: ['entry'], optional: ['confirm', 'expected_sha256'] },
+    'catalog-remove': { required: ['id'], optional: ['confirm', 'expected_sha256'] },
+    'retention-plan': { required: [], optional: ['policy'] },
+    'retention-apply': { required: ['confirm', 'backup_ids'], optional: ['policy'] },
     'job-status': { required: ['job_id'], optional: [] }, 'job-cancel': { required: ['job_id'], optional: [] },
     delete: { required: ['backup_id'], optional: [] }, 'upload-begin': { required: ['filename', 'size'], optional: [] },
     'upload-finish': { required: ['upload_id'], optional: [] }, 'upload-abort': { required: ['upload_id'], optional: [] },
     'download-info': { required: ['backup_id'], optional: [] },
   };
-  const NO_INPUT = ['status', 'list', 'key-init', 'key-kit', 'jobs'];
+  const NO_INPUT = ['status', 'list', 'key-init', 'key-kit', 'jobs', 'settings-get'];
   const PHASE_LABELS = {
     backup: [['prepare', '準備'], ['check', '檢查空間與應用'], ['stop', '暫停應用寫入'], ['dump', '匯出資料庫'],
       ['export', '匯出資料卷與設定'], ['start', '恢復應用'], ['package', '加密封裝'], ['verify', '驗證備份']],
-    restore: [['prepare', '準備'], ['decrypt', '解密並驗證檔案'], ['preflight', '相容性檢查'], ['safety', '建立還原前備份'],
-      ['stop', '停止應用'], ['restore', '還原資料'], ['start', '啟動應用'], ['check', '健康與資料核對']],
+    restore: [['prepare', '準備'], ['decrypt', '解密並驗證檔案'], ['preflight', '相容性檢查'], ['stage', '預先寫入主機資料夾'],
+      ['safety', '建立還原前備份'], ['stop', '停止應用'], ['restore', '還原資料'], ['start', '啟動應用'], ['check', '健康與資料核對']],
     verify: [['prepare', '準備'], ['decrypt', '解密並驗證檔案'], ['check', '核對結果']],
+    export: [['prepare', '準備'], ['decrypt', '解密並驗證檔案'], ['package', '封裝未加密副本'], ['verify', '驗證副本']],
+  };
+  // A stable stand-in for a sha256 (the page only compares and shortens it).
+  const fakeSha = text => {
+    let hash = 0x811c9dc5;
+    for (const char of String(text)) hash = Math.imul(hash ^ char.codePointAt(0), 0x01000193) >>> 0;
+    return hash.toString(16).padStart(8, '0').repeat(8);
+  };
+  const pretty = entry => JSON.stringify(entry, null, 2).split('\n');
+  const unifiedDiff = (old, now, name) => {
+    const before = old ? pretty(old) : [];
+    const after = now ? pretty(now) : [];
+    const lines = [`--- ${name}（目前）`, `+++ ${name}（新）`, `@@ -1,${before.length} +1,${after.length} @@`];
+    for (const line of before) if (!after.includes(line)) lines.push(`-${line}`);
+    for (const line of after) lines.push(after.includes(line) && before.includes(line) ? ` ${line}` : `+${line}`);
+    return lines;
   };
   let jobSeq = 0;
   const requests = {};
@@ -307,7 +363,7 @@ function installCockpitFixture() {
   const active = () => Object.values(data.jobs).find(item => ACTIVE.includes(item.job.state));
   const backup = id => data.backups.find(item => item.id === id);
   const keyKnown = keyId => keyId === data.status.key?.key_id || data.status.imported_keys.some(item => item.key_id === keyId);
-  const refreshKeys = () => data.backups.forEach(item => { item.key_available = keyKnown(item.key_id); });
+  const refreshKeys = () => data.backups.forEach(item => { item.key_available = item.encrypted === false || keyKnown(item.key_id); });
 
   function startJob(type, params, requestId) {
     if (typeof requestId !== 'string' || requestId.length < 8) throw new Refusal('invalid-request', '請求識別碼格式不正確。');
@@ -325,13 +381,190 @@ function installCockpitFixture() {
     return { job_id: id, deduplicated: false };
   }
 
+  const KNOWN = ['schema', 'id', 'name', 'description', 'owner', 'adapter', 'quadlet', 'units', 'writer_units', 'postgres', 'volumes',
+    'data_dirs', 'secrets', 'config_files', 'health', 'verify'];
+  const appsOf = id => data.backups.filter(item => (item.apps || []).some(app => app.id === id)).length;
+
+  // A stand-in for the loader's validation: enough rules to show a field error, an unknown key and a conflict.
+  function validateEntry(entry) {
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return { message: '應用設定必須是 JSON 物件。', details: { field: '' } };
+    if (typeof entry.id !== 'string' || !/^[a-z0-9][a-z0-9-]{1,40}$/.test(entry.id)) return { message: '欄位 id 格式不正確。', details: { field: 'id' } };
+    if (!Array.isArray(entry.units) || !entry.units.length) return { message: '欄位 units 至少需要一個服務。', details: { field: 'units' } };
+    const unknown = Object.keys(entry).filter(key => !KNOWN.includes(key));
+    if (unknown.length) return { message: `應用設定含有不支援的欄位：${unknown.join(', ')}。`, details: { field: unknown[0] } };
+    const taken = (entry.volumes || []).map(item => item?.name).filter(name => (data.catalogData.taken || []).includes(name));
+    if (taken.length) {
+      const conflicts = taken.map(name => `資料卷 ${name} 已屬於應用「other-app」；同一個項目不可由兩個應用設定管理。`);
+      return { message: conflicts[0], details: { conflicts } };
+    }
+    return null;
+  }
+
+  function catalogCommand(command, request) {
+    const cat = data.catalogData;
+    if (!cat) throw new Refusal('invalid-request', '不支援的指令。');
+    if (command === 'catalog-suggest') {
+      if (request.owner === undefined) return { owners: structuredClone(cat.owners) };
+      const scan = cat.scans[request.owner];
+      if (!scan) throw new Refusal('owner-missing', `找不到帳號 ${request.owner}。`);
+      const result = structuredClone(scan);
+      for (const app of result.apps) {
+        const current = cat.installed[app.id];
+        if (current && !app.installed) {
+          // Like the engine's installed-mode: an installed app keeps the mode it was installed with.
+          const kept = (app.variants || []).find(variant => JSON.stringify(variant.entry) === JSON.stringify(current.entry));
+          if (kept) Object.assign(app, { variant: kept.id, entry: structuredClone(kept.entry) });
+          app.installed = { id: app.id, sha256: current.sha256, entry: structuredClone(current.entry), changes: [], drift: [],
+            same: JSON.stringify(current.entry) === JSON.stringify(app.entry) };
+        }
+      }
+      return result;
+    }
+    if (command === 'catalog-install') {
+      const entry = request.entry;
+      const id = typeof entry?.id === 'string' ? entry.id : null;
+      const current = id ? cat.installed[id] : null;
+      const result = { preview: true, valid: false, error: null, id, file: id ? `${id}.json` : null,
+        current: current ? { sha256: current.sha256, entry: structuredClone(current.entry), owner: current.entry.owner } : null,
+        expected_sha256: current ? current.sha256 : null, new_sha256: null, changes: [], diff: [], compat: [], warnings: [], backups: 0, history: [] };
+      if (id) {
+        result.diff = unifiedDiff(current?.entry, entry, `${id}.json`);
+        result.backups = appsOf(id);
+        if (current) {
+          result.changes = Object.keys({ ...current.entry, ...entry }).filter(key => JSON.stringify(current.entry[key]) !== JSON.stringify(entry[key]))
+            .map(key => ({ path: key, op: !(key in current.entry) ? 'add' : !(key in entry) ? 'remove' : 'change', old: current.entry[key], new: entry[key] }));
+          if (JSON.stringify(current.entry.volumes) !== JSON.stringify(entry.volumes)) result.compat.push('新增的資料卷讓這個應用較舊的備份在新設定下無法還原。');
+          result.history = [`${id}.20261112T020000Z.1a2b3c4d.json`];
+        }
+      }
+      const problem = validateEntry(entry);
+      if (problem) {
+        result.error = { code: 'invalid-request', message: problem.message, details: problem.details };
+        if (request.confirm) throw new Refusal('invalid-request', problem.message, problem.details);
+        return result;
+      }
+      result.valid = true;
+      result.new_sha256 = fakeSha(JSON.stringify(entry));
+      if (!entry.quadlet?.template_dir) result.warnings.push('沒有部署範本（quadlet.template_dir）：只能在已部署此應用的設備上原位還原。');
+      if (current && result.new_sha256 === current.sha256) result.warnings.push('與目前安裝的設定完全相同。');
+      if (!request.confirm) return result;
+      if ((request.expected_sha256 ?? null) !== result.expected_sha256) {
+        throw new Refusal('invalid-request', '安裝的應用設定在預覽之後被變更了。', { reason: 'entry-changed', current_sha256: result.expected_sha256 });
+      }
+      cat.installed[id] = { entry: structuredClone(entry), sha256: result.new_sha256 };
+      if (!data.status.apps.some(app => app.id === id)) {
+        data.status.apps.push({ id, name: entry.name || id, description: entry.description || '', owner: entry.owner, adapter: 'quadlet-postgres',
+          deployed: true, state: 'running', units: (entry.units || []).map(name => ({ name, active: true })), last_backup: null, problems: [] });
+      }
+      return { installed: true, id, file: `${id}.json`, sha256: result.new_sha256,
+        previous: current ? { sha256: current.sha256, backup: `${id}.20261113T020000Z.${current.sha256.slice(0, 8)}.json` } : null,
+        changes: result.changes, compat: result.compat, warnings: result.warnings, backups: result.backups };
+    }
+    const current = cat.installed[request.id];
+    if (!current) throw new Refusal('not-found', `沒有安裝應用「${request.id}」的設定。`);
+    const backups = appsOf(request.id);
+    if (!request.confirm) {
+      return { preview: true, id: request.id, file: `${request.id}.json`, current: { sha256: current.sha256, entry: structuredClone(current.entry), owner: current.entry.owner },
+        expected_sha256: current.sha256, backups, history: [], diff: unifiedDiff(current.entry, null, `${request.id}.json`),
+        warnings: backups ? [`這個應用的 ${backups} 份備份會保留，但在重新安裝它的應用設定之前無法還原。`] : [] };
+    }
+    if ((request.expected_sha256 ?? null) !== current.sha256) throw new Refusal('invalid-request', '安裝的應用設定在預覽之後被變更了。', { reason: 'entry-changed' });
+    delete cat.installed[request.id];
+    data.status.apps = data.status.apps.filter(app => app.id !== request.id);
+    return { removed: true, id: request.id, sha256: current.sha256, backup: `${request.id}.20261113T020000Z.${current.sha256.slice(0, 8)}.json`, backups };
+  }
+
+  // retention.plan / apply_command in miniature: keep-last-N of manual backups per app, protected ids never deleted.
+  function retentionCommand(command, request) {
+    const ret = data.retention;
+    if (!ret) throw new Refusal('invalid-request', '不支援的指令。');
+    const valid = value => value === null || (Number.isInteger(value) && value >= 1 && value <= 1000);
+    if (request.policy && (!valid(request.policy.default_keep_last ?? null) ||
+      Object.values(request.policy.apps || {}).some(item => !valid(item?.keep_last ?? null)))) {
+      throw new Refusal('invalid-request', '保留原則 keep_last 必須是 1 到 1000 的整數或 null。', { field: 'policy' });
+    }
+    const policy = request.policy ? { schema: 1, default_keep_last: request.policy.default_keep_last ?? null, apps: structuredClone(request.policy.apps || {}) }
+      : structuredClone(ret.saved);
+    const keep = id => (policy.apps[id] ? policy.apps[id].keep_last : policy.default_keep_last);
+    const brief = (item, reason) => ({ id: item.id, type: item.type, created: item.created, size: item.size, note: item.note || '',
+      apps: (item.apps || []).map(app => ({ id: app.id, name: app.name || app.id })), ...(reason ? { reason } : {}) });
+    const manual = data.backups.filter(item => item.type === 'manual').sort((a, b) => b.created.localeCompare(a.created));
+    const rank = {};
+    const positions = {};
+    for (const item of manual) {
+      positions[item.id] = {};
+      for (const app of item.apps || []) { rank[app.id] = (rank[app.id] || 0) + 1; positions[item.id][app.id] = rank[app.id]; }
+    }
+    const candidates = [];
+    const blocked = [];
+    for (const item of manual) {
+      const limits = (item.apps || []).map(app => [app, keep(app.id)]);
+      if (!limits.length || limits.some(([, limit]) => limit === null) || !limits.every(([app, limit]) => positions[item.id][app.id] > limit)) continue;
+      const reason = `超出保留份數：${limits.map(([app, limit]) => `「${app.name || app.id}」第 ${positions[item.id][app.id]} 新（保留最新 ${limit} 份）`).join('、')}`;
+      if (ret.protected[item.id]) blocked.push(brief(item, ret.protected[item.id]));
+      else candidates.push(brief(item, reason));
+    }
+    if (command === 'retention-plan') {
+      return { policy, saved_policy: structuredClone(ret.saved), proposed: Boolean(request.policy), policy_problem: ret.problem || null,
+        usage: structuredClone(ret.usage), candidates, blocked, freed_bytes: candidates.reduce((sum, item) => sum + item.size, 0),
+        protected: Object.entries(ret.protected).filter(([id]) => backup(id)).map(([id, reason]) => brief(backup(id), reason)) };
+    }
+    if (request.confirm !== true) throw new Refusal('invalid-request', '欄位 confirm 必須為 true（需要明確確認）。');
+    if (request.policy) ret.saved = policy;
+    const deleted = [];
+    const skipped = [];
+    for (const id of request.backup_ids) {
+      const item = backup(id);
+      if (!item) skipped.push({ id, reason: '找不到這份備份。' });
+      else if (ret.protected[id]) skipped.push({ id, reason: ret.protected[id] });
+      else {
+        deleted.push(brief(item));
+        data.backups = data.backups.filter(entry => entry.id !== id);
+      }
+    }
+    return { policy: structuredClone(ret.saved), policy_problem: null, deleted, skipped, freed_bytes: deleted.reduce((sum, item) => sum + item.size, 0) };
+  }
+
   function handle(command, request) {
     switch (command) {
       case 'status':
         data.status.storage.backup_count = data.backups.length;
         return structuredClone(data.status);
       case 'list':
-        return { backups: structuredClone(data.backups) };
+        return { backups: structuredClone(data.backups), exports: structuredClone(data.exports || []) };
+      case 'settings-set': {
+        if (!request.encrypt_by_default && request.acknowledge_plaintext !== true) {
+          throw new Refusal('invalid-request', `關閉預設加密前必須確認風險：${data.status.settings.plaintext_warning}`, { field: 'acknowledge_plaintext' });
+        }
+        data.status.settings = { ...data.status.settings, encrypt_by_default: request.encrypt_by_default, problem: null };
+        return { settings: structuredClone(data.status.settings) };
+      }
+      case 'export-start': {
+        if (request.confirm !== true) throw new Refusal('invalid-request', '欄位 confirm 必須為 true（需要明確確認）。');
+        const meta = backup(request.backup_id);
+        if (!meta) throw new Refusal('not-found', '找不到指定的備份。');
+        if (meta.encrypted === false) throw new Refusal('invalid-request', '這份備份沒有加密，可以直接下載，不需要建立未加密副本。');
+        if (!keyKnown(meta.key_id) && request.key === undefined) throw new Refusal('key-required', '此備份使用的金鑰不在這台設備，請輸入緊急金鑰。', { key_id: meta.key_id });
+        if (request.key !== undefined && data.secrets[request.key] !== meta.key_id) throw new Refusal('wrong-key', '金鑰不正確，無法解密這份備份。');
+        return startJob('export', { backup_id: request.backup_id, key_provided: 'key' in request }, request.request_id);
+      }
+      case 'export-info': {
+        const info = data.exportFiles[request.export_id];
+        if (!info || !(data.exports || []).some(item => item.export_id === request.export_id)) throw new Refusal('not-found', '找不到這份未加密副本，它可能已過期並刪除。');
+        return structuredClone(info);
+      }
+      case 'export-delete': {
+        const before = (data.exports || []).length;
+        data.exports = (data.exports || []).filter(item => item.export_id !== request.export_id);
+        return { deleted: data.exports.length !== before };
+      }
+      case 'catalog-suggest':
+      case 'catalog-install':
+      case 'catalog-remove':
+        return catalogCommand(command, request);
+      case 'retention-plan':
+      case 'retention-apply':
+        return retentionCommand(command, request);
       case 'jobs':
         return { jobs: Object.values(data.jobs).map(item => structuredClone(item.job)).sort((a, b) => b.created.localeCompare(a.created)) };
       case 'key-init':
@@ -355,7 +588,8 @@ function installCockpitFixture() {
         const meta = backup(request.backup_id);
         const result = data.inspect[request.backup_id];
         if (!meta || !result) throw new Refusal('not-found', '找不到指定的備份。');
-        if (!keyKnown(meta.key_id)) {
+        if (meta.encrypted === false && request.key !== undefined) throw new Refusal('invalid-request', '這份備份沒有加密，不需要金鑰。', { field: 'key' });
+        if (meta.encrypted !== false && !keyKnown(meta.key_id)) {
           if (request.key === undefined) throw new Refusal('key-required', '此備份使用的金鑰不在本設備，請輸入緊急金鑰。', { key_id: meta.key_id });
           if (data.secrets[request.key] !== meta.key_id) throw new Refusal('wrong-key', '金鑰不正確，無法解密這份備份。');
           if (request.save_key) {
@@ -366,17 +600,27 @@ function installCockpitFixture() {
         Object.assign(meta, { inspected: true, apps: structuredClone(result.backup.apps), source: structuredClone(result.backup.source) });
         return { ...structuredClone(result), backup: structuredClone(meta) };
       }
-      case 'backup-start':
+      case 'backup-start': {
         if (!Array.isArray(request.apps) || !request.apps.length) throw new Refusal('invalid-request', '欄位 apps 必須是陣列。');
-        return startJob('backup', { apps: request.apps, include_images: Boolean(request.include_images), note: request.note || '' }, request.request_id);
+        const encrypt = request.encrypt ?? data.status.settings?.encrypt_by_default ?? true;
+        if (encrypt && !data.status.key) throw new Refusal('no-device-key', '這台設備尚未建立加密金鑰，請先完成金鑰設定。');
+        if (!encrypt && data.status.settings?.encrypt_by_default && request.acknowledge_plaintext !== true) {
+          throw new Refusal('invalid-request', '建立未加密的備份前必須確認風險。', { field: 'acknowledge_plaintext' });
+        }
+        return startJob('backup', { apps: request.apps, include_images: Boolean(request.include_images), note: request.note || '', encrypt }, request.request_id);
+      }
       case 'verify-start':
         if (!backup(request.backup_id)) throw new Refusal('not-found', '找不到指定的備份。');
         return startJob('verify', { backup_id: request.backup_id, key_provided: 'key' in request }, request.request_id);
       case 'restore-start':
         if (request.confirm !== true) throw new Refusal('invalid-request', '欄位 confirm 必須為 true（需要明確確認）。');
         if (!backup(request.backup_id)) throw new Refusal('not-found', '找不到指定的備份。');
+        if (backup(request.backup_id).unauthenticated && request.accept_unauthenticated !== true) {
+          throw new Refusal('invalid-request', '這份上傳的備份沒有加密，內容無法驗證。', { field: 'accept_unauthenticated' });
+        }
         return startJob('restore', { backup_id: request.backup_id, apps: request.apps, key_provided: 'key' in request && !request.save_key,
-          ...(request.allow_no_safety ? { allow_no_safety: true } : {}) }, request.request_id);
+          ...(request.allow_no_safety ? { allow_no_safety: true } : {}),
+          ...(request.accept_unauthenticated ? { accept_unauthenticated: true } : {}) }, request.request_id);
       case 'job-status': {
         const record = data.jobs[request.job_id];
         if (!record) throw new Refusal('not-found', '找不到指定的作業。');
@@ -385,6 +629,11 @@ function installCockpitFixture() {
           Object.assign(record.job, step.job);
           record.log.push(...(step.log || []));
           if (step.addBackup) data.backups.unshift(structuredClone(step.addBackup));
+          if (step.addExport) data.exports = [...(data.exports || []), structuredClone(step.addExport)];
+          if (step.verified && record.job.params?.backup_id) {
+            const meta = backup(record.job.params.backup_id);
+            if (meta) meta.verified = structuredClone(step.verified);
+          }
         }
         data.status.active_job = ACTIVE.includes(record.job.state) ? structuredClone(record.job)
           : data.status.active_job?.id === record.job.id ? null : data.status.active_job;
@@ -749,6 +998,202 @@ async function ready(page) {
   await settled(page);
 }
 
+// WCAG AA contrast of visible text (4.5:1, 3:1 for large text) against the nearest opaque background.
+const contrastOf = (page, extra = '') => page.evaluate(extra => {
+  const rgb = value => (value.match(/[\d.]+/g) || []).map(Number);
+  const luminance = ([r, g, b]) => [r, g, b].map(v => { v /= 255; return v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4; })
+    .reduce((sum, v, i) => sum + v * [0.2126, 0.7152, 0.0722][i], 0);
+  const backgroundOf = node => {
+    for (let el = node; el; el = el.parentElement) {
+      const [r, g, b, a = 1] = rgb(getComputedStyle(el).backgroundColor);
+      if (a > 0.5) return [r, g, b];
+    }
+    return [255, 255, 255];
+  };
+  const failures = [];
+  let checked = 0;
+  for (const el of document.querySelectorAll(`h1, h2, h3, h4, p, a, button, .chip, label, dt, dd, td, th, li, small, .muted, select, textarea${extra}`)) {
+    const box = el.getBoundingClientRect();
+    if (!box.width || !box.height || !(el.value || el.textContent).trim()) continue;
+    if (el.closest('[hidden], dialog:not([open])')) continue;
+    const style = getComputedStyle(el);
+    if (style.visibility === 'hidden' || Number(style.opacity) < 0.9) continue;
+    const fg = luminance(rgb(style.color)), bg = luminance(backgroundOf(el));
+    const ratio = (Math.max(fg, bg) + 0.05) / (Math.min(fg, bg) + 0.05);
+    const size = parseFloat(style.fontSize), bold = Number(style.fontWeight) >= 700;
+    const minimum = size >= 24 || (bold && size >= 18.66) ? 3 : 4.5;
+    checked++;
+    if (ratio < minimum) failures.push(`${el.tagName.toLowerCase()}.${el.className} "${(el.value || el.textContent).trim().slice(0, 24)}" ${ratio.toFixed(2)}`);
+  }
+  return { checked, failures };
+}, extra);
+
+// Tab through a view: every focused element has a visible 2px focus ring and stays inside the viewport.
+async function tabKeys(page, label, count) {
+  await page.evaluate(() => document.activeElement?.blur());
+  const seen = [];
+  for (let index = 0; index < count; index += 1) {
+    await page.keyboard.press('Tab');
+    const info = await page.evaluate(() => {
+      const element = document.activeElement;
+      if (!element || element === document.body) return null;
+      const style = getComputedStyle(element);
+      const rect = element.getBoundingClientRect();
+      return { key: element.dataset.focus || element.id || element.tagName, visible: element.matches(':focus-visible'),
+        outline: style.outlineStyle, width: parseFloat(style.outlineWidth), left: rect.left, right: rect.right, viewport: innerWidth };
+    });
+    if (!info) continue;
+    seen.push(info.key);
+    assert(info.visible && info.outline !== 'none' && info.width >= 2, `${label}: no visible focus ring on ${JSON.stringify(info)}`);
+    assert(info.left >= -2 && info.right <= info.viewport + 2, `${label}: focused element outside the viewport ${JSON.stringify(info)}`);
+  }
+  return seen;
+}
+
+// ------------------------------------------------------------------ strengthen phase data (2026-11-13)
+
+const B_PLAIN = '20261113T030000Z-0dd5a1e5';
+const UNAUTH_MESSAGE = '這份上傳的備份沒有加密，內容無法驗證：無法確認它來自你的設備，也無法確認檔案在設備以外沒有被修改過。只有在確定檔案來源可信時才還原；確認還原時需要另外勾選這一點。';
+const DB_SUMMARY = { databases: 1, tables: 3, sequences: 2, rows: 345, roles: 0 };
+const FILES_BEFORE = { entries: 40, files: 30, dirs: 8, symlinks: 2, other: 0, bytes: 123456 };
+const FILES_AFTER = { entries: 41, files: 31, dirs: 8, symlinks: 2, other: 0, bytes: 125000 };
+const DIGEST_CHECKS = () => [
+  { id: 'db', type: 'postgres-digest', target: 'postgres:main', label: '資料表', match: true, before: DB_SUMMARY, after: DB_SUMMARY, differences: null, note: null },
+  { id: 'files', type: 'files-digest', target: 'volume:woowbk-demo-files', label: '上傳檔案', match: false, before: FILES_BEFORE, after: FILES_AFTER,
+    differences: { missing: 0, extra: 1, changed: 1, samples: [
+      { item: 'ticker', change: 'extra', detail: '還原後多出這個項目' },
+      { item: 'notes/3.txt', change: 'changed', detail: '內容不同（大小 12 → 14）' }] }, note: null },
+  { id: 'config', type: 'files-digest', target: `dir:${'homeassistant/config'}`, label: '', match: null, before: null, after: null, differences: null,
+    note: '備份沒有這個項目的資料摘要（例如較舊的備份），未比對。' },
+];
+
+// A restore whose files digest differs: it stops before the app starts and rolls back (CONTRACT §7 DigestCheck).
+function digestRollbackScript(checks = DIGEST_CHECKS()) {
+  return [
+    runningStep('restore', 'restore', 62, { safety_backup_id: B_SAFETY_NEW }),
+    {
+      job: { state: 'rolled-back', phase: 'rollback', phases: phasesAt('restore', null, { failedAt: 'restore', rollback: 'done' }),
+        progress: { percent: 90, message: '已自動回復' }, finished: '2026-11-13T02:12:00Z', cancellable: false,
+        error: { code: 'job-failed', message: '應用「示範筆記應用」還原後的資料與備份時不一致：files：遺失 0、多出 1、不同 1（例如 ticker：還原後多出這個項目）' },
+        result: { apps: ['woowbk-demo'], safety_backup_id: B_SAFETY_NEW, rolled_back: true, changed: true, health: [], warnings: [],
+          timing: [{ app: 'woowbk-demo', writer_pause_seconds: 18, unavailable_seconds: 46.3 }],
+          verification: [{ app: 'woowbk-demo', match: false,
+            before: Object.fromEntries(checks.filter(check => check.before).map(check => [check.id, check.before])),
+            after: Object.fromEntries(checks.filter(check => check.after).map(check => [check.id, check.after])), checks }] } },
+      log: ['2026-11-13T02:11:30Z 資料摘要不一致：files：遺失 0、多出 1、不同 1', '2026-11-13T02:12:00Z 已自動回復到還原前的狀態'],
+    },
+  ];
+}
+
+// A successful restore with the app's JSON summary and two matching digests.
+function digestSuccessScript() {
+  const checks = DIGEST_CHECKS().slice(0, 2).map(check => ({ ...check, match: true, after: check.before, differences: null }));
+  const steps = scripts().restore;
+  Object.assign(steps.at(-1).job.result, {
+    timing: [{ app: 'woowbk-demo', writer_pause_seconds: 12.25, unavailable_seconds: 31.75 }],
+    verification: [{ app: 'woowbk-demo', match: true,
+      before: { ...VERIFY_BEFORE, db: DB_SUMMARY, files: FILES_BEFORE }, after: { ...structuredClone(VERIFY_BEFORE), db: DB_SUMMARY, files: FILES_BEFORE }, checks }],
+  });
+  return steps;
+}
+
+// Draft entries for one app in the three PostgreSQL modes (catalog-suggest Draft.variants).
+function notesEntry(mode) {
+  const base = {
+    schema: 1, id: 'notes', name: 'notes', description: '自動產生的草稿：2 個服務、PostgreSQL 16、2 個資料卷。請審查後再安裝。', owner: 'appowner',
+    adapter: 'quadlet-postgres', quadlet: { files: ['notes.network', 'notes-db.container', 'notes-app.container'] },
+    units: ['notes-db.service', 'notes-app.service'], writer_units: ['notes-app.service'], postgres: [],
+    volumes: [{ name: 'notes-files', label: 'notes-app：/data' }], secrets: [{ name: 'notes-db-password' }],
+    config_files: [{ path: '.config/notes/app.env', mode: '0600' }],
+    health: [{ type: 'http', url: 'http://127.0.0.1:18095/healthz', expect_status: 200, timeout_seconds: 300 }],
+    verify: [{ id: 'vol-notes-files', type: 'files-digest', volume: 'notes-files', label: '資料卷 notes-files' }],
+  };
+  const db = { id: 'main', container: 'notes-db', unit: 'notes-db.service', user: 'notes', data_volume: 'notes-pgdata' };
+  if (mode === 'cold') {
+    return { ...base, writer_units: ['notes-db.service', 'notes-app.service'],
+      volumes: [{ name: 'notes-pgdata', label: 'PostgreSQL 資料（冷備份）' }, ...base.volumes],
+      verify: [{ id: 'db-main', type: 'postgres-digest', container: 'notes-db', unit: 'notes-db.service', user: 'notes', label: 'PostgreSQL 資料表內容' }, ...base.verify] };
+  }
+  const item = mode === 'instance' ? { ...db, scope: 'instance' } : { ...db, database: 'notes' };
+  return { ...base, postgres: [item], verify: [{ id: 'db-main', type: 'postgres-digest', postgres: 'main', label: 'PostgreSQL 資料表內容' }, ...base.verify] };
+}
+
+const VARIANT_LABELS = {
+  cold: '冷備份（預設）：資料庫與應用一起停止，資料檔整份備份；保留整個執行個體（所有資料庫、角色與密碼），還原時 PostgreSQL 主版本必須相同。',
+  instance: '整個執行個體：備份時資料庫保持執行，以 pg_dumpall 保存角色並逐一匯出每個資料庫；還原到相同或更新的主版本。',
+  database: '單一資料庫：備份時資料庫保持執行，只以 pg_dump 匯出一個資料庫，不保留角色與權限；執行個體有其他資料庫時無法原位還原。',
+};
+const INSTALLED_SHA = 'c'.repeat(64);
+
+function catalogData() {
+  const demoInstalled = { schema: 1, id: 'woowbk-demo', name: '示範筆記應用', description: '示範', owner: 'appowner', adapter: 'quadlet-postgres',
+    quadlet: { files: ['woowbk-demo-db.container', 'woowbk-demo-app.container'], template_dir: '/usr/local/share/woowtech-cockpit-backup/catalog/woowbk-demo/quadlet' },
+    units: ['woowbk-demo-db.service', 'woowbk-demo-app.service'], writer_units: ['woowbk-demo-app.service'],
+    postgres: [{ id: 'main', container: 'woowbk-demo-db', unit: 'woowbk-demo-db.service', database: 'notes', user: 'notes', data_volume: 'woowbk-demo-pgdata' }],
+    volumes: [{ name: 'woowbk-demo-files', label: '上傳檔案' }], secrets: [{ name: 'woowbk-demo-db-password' }], config_files: [],
+    health: [{ type: 'http', url: 'http://127.0.0.1:18090/healthz', expect_status: 200, timeout_seconds: 90 }], verify: [] };
+  const demoDraft = structuredClone(demoInstalled);
+  demoDraft.verify = [{ id: 'vol-woowbk-demo-files', type: 'files-digest', volume: 'woowbk-demo-files', label: '資料卷 woowbk-demo-files' }];
+  const notes = {
+    id: 'notes',
+    containers: [
+      { file: 'notes-db.container', unit: 'notes-db.service', container: 'notes-db', image: 'docker.io/library/postgres:16-alpine', state: 'active' },
+      { file: 'notes-app.container', unit: 'notes-app.service', container: 'notes-app', image: 'localhost/notes-app:1', state: 'active' }],
+    databases: [{ unit: 'notes-db.service', container: 'notes-db', kind: 'postgres', image: 'docker.io/library/postgres:16-alpine', major: 16,
+      database: 'notes', user: 'notes', guessed: false, data: { volume: 'notes-pgdata' } }],
+    entry: notesEntry('cold'), valid: true, problem: null, field: null, variant: 'cold',
+    variants: ['cold', 'instance', 'database'].map(id => ({ id, label: VARIANT_LABELS[id], entry: notesEntry(id), valid: true, problem: null, field: null })),
+    installed: null,
+    warnings: [{ code: 'config-mode', level: 'warn', message: '~/.config/notes/start.sh 目前的權限是 0755，超過 0644；還原後會是 0644（不可執行、群組與其他人不可寫入）。', path: '.config/notes/start.sh' }],
+    notes: [{ code: 'cache', level: 'info', message: 'notes-cache.container 是 Redis 類快取／佇列，資料卷會在停止後備份（AOF／RDB 已寫入磁碟）。', file: 'notes-cache.container' }],
+    skipped: [{ kind: 'dir', path: '.ssh', reason: '與 ~/.ssh 重疊（登入金鑰、服務定義、Podman 或使用者環境），規則上禁止列為主機資料夾，未列入。' }],
+    hints: ['健康檢查的預期狀態碼假設為 200、逾時 300 秒；請以實際回應與冷啟動時間確認。'],
+  };
+  const demo = {
+    id: 'woowbk-demo', containers: [
+      { file: 'woowbk-demo-db.container', unit: 'woowbk-demo-db.service', container: 'woowbk-demo-db', image: 'docker.io/library/postgres:16-alpine', state: 'active' },
+      { file: 'woowbk-demo-app.container', unit: 'woowbk-demo-app.service', container: 'woowbk-demo-app', image: 'localhost/woowbk-demo-app:1', state: 'active' }],
+    databases: [], entry: demoDraft, valid: true, problem: null, field: null, variant: 'database', variants: [],
+    installed: { id: 'woowbk-demo', sha256: INSTALLED_SHA, entry: demoInstalled, same: false,
+      changes: [{ path: 'verify[id=vol-woowbk-demo-files]', op: 'add', new: demoDraft.verify[0] }],
+      drift: ['草稿多了內建資料核對 vol-woowbk-demo-files（資料卷 woowbk-demo-files）。'] },
+    warnings: [], notes: [], skipped: [], hints: [],
+  };
+  return {
+    owners: [{ name: 'appowner', uid: 1001, linger: true, catalog_apps: ['woowbk-demo', 'woowbk-wiki'] },
+      { name: 'svcuser', uid: 1002, linger: false, catalog_apps: [] }],
+    scans: { appowner: { owner: 'appowner', uid: 1001, quadlet_dir: '.config/containers/systemd', state: 'ok',
+      owners: [{ name: 'appowner', uid: 1001, linger: true, catalog_apps: ['woowbk-demo', 'woowbk-wiki'] }], apps: [notes, demo],
+      unassigned: [{ file: 'shared-proxy.network', reason: '沒有容器使用這個檔案，也無法依名稱歸入應用。' }],
+      unsupported: [{ file: 'tools.kube', reason: '.kube 檔不在支援範圍，沒有分析。' }],
+      warnings: [{ code: 'dropin', level: 'info', message: 'notes-app.container.d 是 drop-in 資料夾，沒有分析其中的設定。', file: 'notes-app.container.d' }] } },
+    installed: { 'woowbk-demo': { entry: demoInstalled, sha256: INSTALLED_SHA } },
+    taken: ['shared-volume'],
+  };
+}
+
+const RET_IDS = ['20261105T020000Z-0000000a', '20261106T020000Z-0000000b', '20261107T020000Z-0000000c', '20261108T020000Z-0000000d',
+  '20261109T020000Z-0000000e', '20261110T020000Z-0000000f'];
+
+function retentionFixture(extra = {}) {
+  const data = fixture(extra);
+  data.backups.push(...RET_IDS.map((id, index) => backupMeta(id, { note: `每日備份 ${index + 1}`, size: 40 * MiB, verified: null })));
+  data.retention = {
+    saved: { schema: 1, default_keep_last: null, apps: {} }, problem: null,
+    protected: { [B_SAFETY]: '失敗或中斷的還原仍需要這份還原前備份才能回到還原前的狀態。',
+      [RET_IDS[0]]: '失敗或中斷的還原使用這份備份；在該應用成功還原之前保留。' },
+    usage: {
+      apps: [
+        { id: 'woowbk-demo', name: '示範筆記應用', in_catalog: true, backups: 8, types: { manual: 7, safety: 1, uploaded: 0 }, bytes: 336 * MiB,
+          estimated: false, shared: false, newest: '2026-11-12T02:00:00Z', oldest: '2026-11-05T02:00:00Z', keep_last: null },
+        { id: 'woowbk-wiki', name: '團隊知識庫', in_catalog: true, backups: 0, types: { manual: 0, safety: 0, uploaded: 0 }, bytes: 0,
+          estimated: false, shared: false, newest: null, oldest: null, keep_last: null }],
+      unassigned: { backups: 1, bytes: 48 * MiB }, total: { backups: 9, bytes: 384 * MiB },
+    },
+  };
+  return data;
+}
+
 try {
   await new Promise((done, fail) => { server.once('error', fail); server.listen(0, '127.0.0.1', done); });
   base = `http://127.0.0.1:${server.address().port}`;
@@ -830,7 +1275,8 @@ try {
     await page.locator('[data-focus="create-submit"]').click();
     await page.waitForFunction(() => /^#\/jobs\/j\d{8}T\d{6}Z-[0-9a-f]{8}$/.test(window.location.hash));
     const start = requestOf((await calls(page, 'backup-start')).at(-1));
-    assert.deepEqual(Object.keys(start).sort(), ['apps', 'include_images', 'note', 'request_id']);
+    assert.deepEqual(Object.keys(start).sort(), ['apps', 'encrypt', 'include_images', 'note', 'request_id']);
+    assert.equal(start.encrypt, true, '加密此備份 follows 預設加密備份 (on)');
     assert.deepEqual(start.apps, ['woowbk-demo']);
     assert.equal(start.include_images, true);
     assert.equal(start.note, '更新前備份');
@@ -846,6 +1292,10 @@ try {
     assert.match(await page.locator('.log').textContent(), /已建立並通過完整驗證/);
     assert.match(await view(page).textContent(), /52\.0 MiB/);
     assert.match(await view(page).textContent(), /7 秒/);
+    // Writer pause and unavailability per app (CONTRACT §7 Timing), one decimal.
+    assert.deepEqual(await page.locator('table.timing tbody tr').evaluateAll(rows => rows.map(row => [...row.children].map(cell => cell.textContent))),
+      [['示範筆記應用', '6.6 秒', '9.4 秒']]);
+    assert.match(await view(page).textContent(), /服務無法使用9\.4 秒/);
     const statusPolls = (await calls(page, 'job-status')).length;
     assert(statusPolls >= 3, 'polled job-status while active');
     await page.waitForTimeout(1800);
@@ -853,12 +1303,12 @@ try {
     const before = downloadRequests.length;
     const [download] = await Promise.all([page.waitForEvent('download'), page.locator('[data-focus="result-download"]').click()]);
     assert.deepEqual(requestOf((await calls(page, 'download-info')).at(-1)), { backup_id: B_NEW });
-    assert.equal(download.suggestedFilename(), 'woowtech-backup-dev-a-20261113-020500.woowbackup', 'names carry seconds');
+    assert.equal(download.suggestedFilename(), 'woowtech-backup-dev-a-20261113-020500.tar', 'names carry seconds');
     const request = downloadRequests[before];
     assert.equal(request.token, CSRF, 'the channel URL carries the CSRF token from cockpit.transport');
     assert.deepEqual(request.open, {
-      payload: 'fsread1', binary: 'raw', path: `/var/lib/woowtech-backup/archives/${B_NEW}.woowbackup`, superuser: 'require', max_read_size: -1,
-      external: { 'content-disposition': "attachment; filename*=UTF-8''woowtech-backup-dev-a-20261113-020500.woowbackup", 'content-type': 'application/octet-stream' },
+      payload: 'fsread1', binary: 'raw', path: `/var/lib/woowtech-backup/archives/${B_NEW}.tar`, superuser: 'require', max_read_size: -1,
+      external: { 'content-disposition': "attachment; filename*=UTF-8''woowtech-backup-dev-a-20261113-020500.tar", 'content-type': 'application/octet-stream' },
     });
     const frame = await page.locator('#downloads iframe').last().getAttribute('src');
     assert(frame.startsWith(`/cockpit/channel/${CSRF}?`), 'prefix is the pathname of transport.uri("channel/" + csrf_token)');
@@ -1287,8 +1737,9 @@ try {
     await page.locator('[data-focus="confirm-start"]').click();
     await page.locator('.phase-active').first().waitFor();
     await allWidths(page, 'job running');
-    // Review F15: phase labels never break a word across lines at desktop widths.
-    for (const width of [1440, 1280, 1024]) {
+    // Review F15: phase labels never break a word across lines at desktop widths (1176: the page inside Cockpit's
+    // shell next to its sidebar on a 1440 px screen; the longest label is 預先寫入主機資料夾).
+    for (const width of [1440, 1280, 1176, 1024]) {
       await page.setViewportSize({ width, height: 900 });
       const broken = await page.evaluate(() => [...document.querySelectorAll('.phase-label')].filter(label => {
         const range = document.createRange();
@@ -1754,7 +2205,7 @@ try {
       assert(checks.some(([className, message]) => className === `check check-${check.status}` && message === check.message),
         `new check id ${check.id} renders as ${check.status} with its own message`);
     }
-    assert.deepEqual(await dirRows(card.locator('details.app-details .path-list')), DIR_ROWS.map(row => [null, ...row]),
+    assert.deepEqual(await dirRows(card.locator('details.app-details ul[aria-label$="的主機資料夾"]')), DIR_ROWS.map(row => [null, ...row]),
       'the preflight card lists the backup contents, host directories included');
     await allWidths(page, 'preflight with host directories');
 
@@ -1964,6 +2415,668 @@ try {
     await page.evaluate(() => window.dispatchEvent(new CustomEvent('cockpit-style', { detail: { style: 'dark' } })));
     assert.equal(await isDark(), true, 'switching back to dark applies live');
   }, { beforeGoto: page => page.addInitScript(() => localStorage.setItem('shell:style', 'dark')) });
+
+  // ------------------------------------------------------------------ strengthen phase (2026-11-13)
+
+  const plainBackup = () => {
+    const steps = scripts().backup;
+    Object.assign(steps.at(-1).job.result, { encrypted: false });
+    Object.assign(steps.at(-1).addBackup, { encrypted: false, key_id: null, key_available: true });
+    return steps;
+  };
+  await check('an unencrypted backup needs no device key; while 預設加密備份 is on it needs its own acknowledgement',
+    fixture({ status: { ...fixture().status, key: null }, scripts: { ...scripts(), backup: plainBackup() } }), async page => {
+      await ready(page);
+      assert.match(await page.locator('#key-banner').textContent(), /建立第一份加密備份前/);
+      await page.locator('#go-create').click();
+      await page.locator('#encrypt-backup').waitFor();
+      assert.equal(await page.locator('#encrypt-backup').isChecked(), true, '加密此備份 defaults to 預設加密備份');
+      assert.equal(await page.locator('[data-focus="create-submit"]').isDisabled(), true, 'an encrypted backup needs the device key');
+      assert.match(await view(page).textContent(), /或取消勾選「加密此備份」建立不加密的備份/);
+      await page.locator('#encrypt-backup').uncheck();
+      await page.locator('#ack-plaintext').waitFor();
+      assert.match(await view(page).textContent(), /這份備份不會加密。/);
+      assert(await view(page).getByText(PLAINTEXT, { exact: false }).count() > 0, 'the engine warning is shown verbatim');
+      assert.equal(await page.locator('[data-focus="create-keys"]').count(), 0, 'the missing key never blocks an unencrypted backup');
+      assert.equal(await page.locator('[data-focus="create-submit"]').isDisabled(), true, 'plain text is a separately acknowledged decision');
+      await allWidths(page, 'create an unencrypted backup');
+      await page.locator('#ack-plaintext').check();
+      await enabled(page, '[data-focus="create-submit"]');
+      assert.match(await page.locator('[data-focus="create-submit"]').textContent(), /開始備份（不加密）/);
+      await shot(page, 'create-unencrypted-1440.png');
+      await page.locator('[data-focus="create-submit"]').click();
+      await page.waitForFunction(() => /^#\/jobs\//.test(window.location.hash));
+      const start = requestOf((await calls(page, 'backup-start')).at(-1));
+      assert.deepEqual([start.encrypt, start.acknowledge_plaintext], [false, true]);
+      await page.locator('#result-heading').filter({ hasText: '備份完成' }).waitFor();
+      assert.match(await page.locator('.job-result').textContent(), /備份已建立（未加密）/);
+      assert.match(await page.locator('.job-result').textContent(), /加密未加密/);
+      await page.locator('[data-nav="backups"]').click();
+      await page.locator(`tr[data-backup="${B_NEW}"]`).waitFor();
+      assert.deepEqual(await page.locator(`tr[data-backup="${B_NEW}"] td[data-label="加密與驗證"] .chip`).allTextContents(), ['未加密']);
+      assert.equal(await page.locator(`[data-focus="download-menu-row-${B_NEW}"]`).count(), 0, 'an unencrypted backup has no unencrypted-copy menu');
+    });
+
+  await check('預設加密備份: turning it off needs the acknowledged warning, turning it on does not', fixture(), async page => {
+    await ready(page);
+    await page.locator('[data-nav="keys"]').click();
+    await page.locator('#encrypt-default').waitFor();
+    assert.equal(await page.locator('#encrypt-default').isChecked(), true);
+    await page.locator('#encrypt-default').click();
+    await page.locator('#confirm-dialog').waitFor();
+    assert.equal(await page.locator('#encrypt-default').isChecked(), true, 'nothing changes before the decision');
+    assert.match(await page.locator('#confirm-body').textContent(), /應用機密；任何取得備份檔的人都能讀取/);
+    assert.equal(await page.locator('#confirm-ok').isDisabled(), true, 'the button waits for the acknowledgement');
+    await allWidths(page, 'turn off default encryption dialog');
+    await page.locator('#confirm-cancel').click();
+    await page.locator('#confirm-dialog').waitFor({ state: 'hidden' });
+    assert.equal((await calls(page, 'settings-set')).length, 0, 'cancel changes nothing');
+    await page.locator('#encrypt-default').click();
+    await page.locator('#confirm-ack').check();
+    await page.locator('#confirm-ok').click();
+    await page.locator('#confirm-dialog').waitFor({ state: 'hidden' });
+    assert.deepEqual(requestOf((await calls(page, 'settings-set')).at(-1)), { encrypt_by_default: false, acknowledge_plaintext: true });
+    await view(page).getByText('已關閉「預設加密備份」').waitFor();
+    assert.equal(await page.locator('#encrypt-default').isChecked(), false);
+    assert.match(await page.locator('section[aria-labelledby="settings-heading"]').textContent(), /預設不加密/);
+    await shot(page, 'keys-default-encryption-off-1440.png');
+    // New backups now start unencrypted, without a second acknowledgement.
+    await page.locator('#go-create').click();
+    await page.locator('#encrypt-backup').waitFor();
+    assert.equal(await page.locator('#encrypt-backup').isChecked(), false);
+    assert.equal(await page.locator('#ack-plaintext').count(), 0);
+    await page.locator('[data-focus="create-submit"]').click();
+    await page.waitForFunction(() => /^#\/jobs\//.test(window.location.hash));
+    const start = requestOf((await calls(page, 'backup-start')).at(-1));
+    assert.deepEqual([start.encrypt, 'acknowledge_plaintext' in start], [false, false]);
+    await page.locator('#result-heading').waitFor();
+    await page.locator('[data-nav="keys"]').click();
+    await page.locator('#encrypt-default').click();
+    await page.waitForFunction(() => window.testcalls.filter(call => call.argv[1] === 'settings-set').length === 2);
+    assert.deepEqual(requestOf((await calls(page, 'settings-set')).at(-1)), { encrypt_by_default: true }, 'turning it on needs no acknowledgement');
+    await view(page).getByText('已開啟「預設加密備份」。').waitFor();
+    assert.equal(await page.locator('#confirm-dialog').isVisible(), false);
+  });
+
+  await check('download menu: the encrypted .tar by default; 下載未加密版本 warns, runs an export job and downloads the copy', fixture(), async page => {
+    await ready(page);
+    await page.locator('[data-nav="backups"]').click();
+    await page.locator('.backups-table').waitFor();
+    const chipsOf = id => page.locator(`tr[data-backup="${id}"] td[data-label="加密與驗證"] .chip`).allTextContents();
+    assert.deepEqual(await chipsOf(B_MANUAL), ['已加密', '金鑰可用']);
+    assert.deepEqual(await chipsOf(B_UPLOADED), ['已加密', '需要緊急金鑰']);
+    assert.match(await page.locator(`tr[data-backup="${B_SAFETY}"]`).textContent(), /舊格式（\.woowbackup）/);
+    const toggle = page.locator(`[data-focus="download-menu-row-${B_MANUAL}"]`);
+    const focused = () => page.evaluate(() => document.activeElement?.dataset?.focus);
+    assert.equal(await toggle.getAttribute('aria-expanded'), 'false');
+    await toggle.click();
+    await page.locator(`#menu-row-${B_MANUAL}`).waitFor();
+    assert.equal(await toggle.getAttribute('aria-expanded'), 'true');
+    assert.equal(await focused(), `menu-download-row-${B_MANUAL}`, 'focus moves into the menu');
+    assert.deepEqual(await page.locator(`#menu-row-${B_MANUAL} .menu-item-label`).allTextContents(), ['下載加密的備份檔（.tar）', '下載未加密版本…']);
+    await page.keyboard.press('ArrowDown');
+    assert.equal(await focused(), `menu-export-row-${B_MANUAL}`);
+    await page.keyboard.press('ArrowDown');
+    assert.equal(await focused(), `menu-download-row-${B_MANUAL}`, 'arrow keys wrap around');
+    await page.keyboard.press('Escape');
+    await page.locator(`#menu-row-${B_MANUAL}`).waitFor({ state: 'hidden' });
+    assert.equal(await focused(), `download-menu-row-${B_MANUAL}`, 'Escape returns focus to the menu button');
+    await toggle.click();
+    await page.locator('#view-heading').click();
+    await page.locator(`#menu-row-${B_MANUAL}`).waitFor({ state: 'hidden' });
+    await toggle.click();
+    await allWidths(page, 'download menu open');
+    await page.setViewportSize({ width: 320, height: 900 });
+    await shot(page, 'download-menu-320.png');
+    await page.setViewportSize({ width: 1440, height: 900 });
+    const before = downloadRequests.length;
+    const [stored] = await Promise.all([page.waitForEvent('download'), page.locator(`[data-focus="menu-download-row-${B_MANUAL}"]`).click()]);
+    assert.equal(stored.suggestedFilename(), 'woowtech-backup-dev-a-20261112-020000.tar', 'the default is the stored, encrypted file');
+    assert.equal(downloadRequests[before].open.path, `/var/lib/woowtech-backup/archives/${B_MANUAL}.tar`);
+    await toggle.click();
+    await page.locator(`[data-focus="menu-export-row-${B_MANUAL}"]`).click();
+    await page.locator('#confirm-dialog').waitFor();
+    const body = await page.locator('#confirm-body').textContent();
+    assert.match(body, /資料庫密碼、API 金鑰與存取權杖都是明文/);
+    assert.match(body, /15 分鐘/);
+    assert.match(body, /系統日誌/);
+    assert.equal(await page.locator('#confirm-ok').isDisabled(), true);
+    await allWidths(page, 'unencrypted download dialog');
+    await shot(page, 'download-unencrypted-dialog-1440.png');
+    await page.locator('#confirm-cancel').click();
+    await page.locator('#confirm-dialog').waitFor({ state: 'hidden' });
+    assert.equal((await calls(page, 'export-start')).length, 0, 'cancel starts nothing');
+    await toggle.click();
+    await page.locator(`[data-focus="menu-export-row-${B_MANUAL}"]`).click();
+    await page.locator('#confirm-ack').check();
+    const copy = page.waitForEvent('download');
+    await page.locator('#confirm-ok').click();
+    await page.waitForFunction(() => /^#\/jobs\//.test(window.location.hash));
+    const start = requestOf((await calls(page, 'export-start')).at(-1));
+    assert.deepEqual(Object.keys(start).sort(), ['backup_id', 'confirm', 'request_id']);
+    assert.deepEqual([start.backup_id, start.confirm], [B_MANUAL, true]);
+    await page.locator('#result-heading').filter({ hasText: '未加密副本已建立' }).waitFor();
+    assert.equal(await page.locator('#view-heading').textContent(), '建立未加密副本');
+    assert.equal((await copy).suggestedFilename(), EXPORT_NAME, 'the copy downloads by itself once it is ready');
+    assert.deepEqual((await calls(page, 'export-info')).map(requestOf), [{ export_id: EXPORT_ID }]);
+    assert.equal(downloadRequests.at(-1).open.path, `/var/lib/woowtech-backup/exports/${EXPORT_ID}.tar`);
+    assert.match(await page.locator('.job-result').textContent(), /自動刪除/);
+    await allWidths(page, 'export result');
+    await shot(page, 'export-result-1440.png');
+    await page.locator('[data-nav="activity"]').click();
+    await page.locator('.jobs-table').waitFor();
+    assert.match(await page.locator('.jobs-table tbody tr').first().textContent(), /未加密副本/);
+    await page.evaluate(id => { window.location.hash = `#/backups/${id}`; }, B_MANUAL);
+    await page.locator('.export-card').waitFor();
+    assert.match(await page.locator('.export-card').textContent(), new RegExp(EXPORT_NAME));
+    await page.locator(`[data-focus="export-delete-${EXPORT_ID}"]`).click();
+    await page.locator('.export-card').waitFor({ state: 'detached' });
+    assert.deepEqual((await calls(page, 'export-delete')).map(requestOf), [{ export_id: EXPORT_ID }]);
+  });
+
+  await check('下載未加密版本 of a backup whose key is not on this device asks for the emergency key next',
+    fixture(), async page => {
+      await ready(page);
+      await page.locator('[data-nav="backups"]').click();
+      await page.locator(`[data-focus="download-menu-row-${B_UPLOADED}"]`).click();
+      await page.locator(`[data-focus="menu-export-row-${B_UPLOADED}"]`).click();
+      await page.locator('#confirm-dialog').waitFor();
+      assert.match(await page.locator('#confirm-body').textContent(), new RegExp(`金鑰 ${OTHER_KEY_ID} 加密，這台設備沒有這把金鑰`));
+      await page.locator('#confirm-ack').check();
+      await page.locator('#confirm-ok').click();
+      await page.locator('#key-dialog').waitFor();
+      await page.locator('#key-dialog-text').fill(SECRET);
+      await page.locator('#key-dialog-ok').click();
+      await page.locator('#key-dialog-error').getByText('這把金鑰無法解開這份備份').waitFor();
+      await page.locator('#key-dialog-text').fill(OTHER_SECRET);
+      await page.locator('#key-dialog-ok').click();
+      await page.waitForFunction(() => /^#\/jobs\//.test(window.location.hash));
+      const start = requestOf((await calls(page, 'export-start')).at(-1));
+      assert.deepEqual([start.backup_id, start.key], [B_UPLOADED, OTHER_SECRET]);
+      for (const call of await calls(page, 'job-status')) assert(!call.stdin.includes('AGE-SECRET-KEY'), 'the key is not resent after the job started');
+    });
+
+  const plainUpload = fixture();
+  const plainMeta = backupMeta(B_PLAIN, { type: 'uploaded', encrypted: false, unauthenticated: true, key_id: null, key_available: true, inspected: false,
+    apps: [], verified: null, source: null, uploaded_at: '2026-11-13T03:01:00Z', filename: 'woowtech-backup-dev-b-20261113-030000.tar' });
+  plainUpload.upload.finish = plainMeta;
+  plainUpload.inspect[B_PLAIN] = inspectResult({ ...plainMeta, created: '2026-11-13T03:00:00Z' }, { hostname: 'dev-b', uid: 1007 });
+  plainUpload.inspect[B_PLAIN].preflight.checks.unshift({ id: 'unauthenticated', status: 'warn', message: UNAUTH_MESSAGE });
+  await check('an unencrypted upload is unauthenticated: no key step, a preflight warning and a second acknowledgement on 確認', plainUpload, async page => {
+    await ready(page);
+    await page.locator('#go-restore').click();
+    assert.equal(await page.locator('#restore-file').getAttribute('accept'), '.tar,.woowbackup');
+    assert.match(await view(page).textContent(), /\.tar 或舊格式 \.woowbackup/);
+    await page.locator('#restore-file').setInputFiles({ name: 'woowtech-backup-dev-b-20261113-030000.tar', mimeType: 'application/x-tar', buffer: Buffer.alloc(64 * KiB, 5) });
+    assert.equal(await view(page).getByText('檔名不是').count(), 0, 'a .tar name raises no warning');
+    await page.locator('[data-focus="restore-upload"]').click();
+    await page.locator('[data-focus="pf-next"]').waitFor();
+    assert.equal(await page.locator('.stepper .step').filter({ hasText: '金鑰' }).count(), 0, 'no key step for an unencrypted backup');
+    assert.deepEqual(requestOf((await calls(page, 'inspect')).at(-1)), { backup_id: B_PLAIN });
+    assert.match(await view(page).textContent(), /這是上傳的未加密備份/);
+    assert.match(await view(page).textContent(), /未加密（來源無法驗證）/);
+    assert.match(await page.locator('ul[aria-label="整體檢查結果"]').textContent(), /內容無法驗證/);
+    await page.locator('[data-focus="pf-next"]').click();
+    await page.locator('#confirm-unauthenticated').waitFor();
+    await page.locator('#confirm-restore').check();
+    assert.equal(await page.locator('[data-focus="confirm-start"]').isDisabled(), true, 'trusting the file is its own decision');
+    assert.match(await page.locator('ul[aria-label="注意事項"]').textContent(), /內容無法驗證/, 'the warning repeats where the decision is made');
+    await allWidths(page, 'confirm an unauthenticated upload');
+    await page.setViewportSize({ width: 390, height: 900 });
+    await shot(page, 'restore-confirm-unauthenticated-390.png');
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.locator('#confirm-unauthenticated').check();
+    await enabled(page, '[data-focus="confirm-start"]');
+    await page.locator('[data-focus="confirm-start"]').click();
+    await page.waitForFunction(() => /^#\/jobs\//.test(window.location.hash));
+    const restore = requestOf((await calls(page, 'restore-start')).at(-1));
+    assert.equal(restore.accept_unauthenticated, true);
+    assert.equal(restore.key, undefined);
+    await page.locator('#result-heading').waitFor();
+    assert.match(await page.locator('[aria-labelledby="job-params-heading"]').textContent(), /你已確認信任它的來源/);
+    await page.locator('[data-nav="backups"]').click();
+    await page.locator(`tr[data-backup="${B_PLAIN}"]`).waitFor();
+    assert.deepEqual(await page.locator(`tr[data-backup="${B_PLAIN}"] td[data-label="加密與驗證"] .chip`).allTextContents(), ['未加密', '來源未驗證']);
+  });
+
+  await check('a digest mismatch is listed per item with its differences, and the restore reports its downtime',
+    fixture({ scripts: { ...scripts(), restore: digestRollbackScript() } }), async page => {
+      await ready(page);
+      await page.evaluate(id => { window.location.hash = `#/restore/${id}`; }, B_MANUAL);
+      await page.locator('[data-focus="pf-next"]').click();
+      await page.locator('#confirm-restore').check();
+      assert.match(await view(page).textContent(), /還原前備份依「預設加密備份」設定以這台設備的金鑰加密/);
+      await page.locator('[data-focus="confirm-start"]').click();
+      await page.locator('#result-heading').filter({ hasText: '還原失敗，已自動回復' }).waitFor();
+      assert.match(await page.locator('.verify-summary').textContent(), /共 3 項：1 項一致、1 項不一致、1 項未比對。/);
+      const rows = await page.locator('.compare tbody tr').evaluateAll(items => items.map(row => [...row.children].map(cell => cell.textContent.trim())));
+      assert.deepEqual(rows.map(row => row.slice(1)), [
+        ['資料表資料表內容 · PostgreSQL（main）', '資料庫 1、資料表 3、序列 2、資料列 345', '資料庫 1、資料表 3、序列 2、資料列 345', '一致'],
+        ['上傳檔案檔案清單 · 資料卷 woowbk-demo-files', '項目 40、檔案 30、資料夾 8、符號連結 2、121 KiB', '項目 41、檔案 31、資料夾 8、符號連結 2、122 KiB', '不一致遺失 0、多出 1、不同 1'],
+        ['config檔案清單 · 主機資料夾 ~/homeassistant/config', '—', '—', '未比對備份沒有這個項目的資料摘要（例如較舊的備份），未比對。']]);
+      assert.match(rows[0][0], /資料不一致/);
+      const diff = page.locator('details.app-details').filter({ hasText: '「上傳檔案」差異' });
+      assert.match(await diff.locator('summary').textContent(), /遺失 0、多出 1、不同 1（列出 2 \/ 2 筆）/);
+      await diff.locator('summary').click();
+      assert.deepEqual(await diff.locator('li').evaluateAll(items => items.map(item => item.textContent)),
+        ['多出ticker還原後多出這個項目', '不同notes/3.txt內容不同（大小 12 → 14）']);
+      assert.deepEqual(await page.locator('table.timing tbody tr').evaluateAll(items => items.map(row => [...row.children].map(cell => cell.textContent))),
+        [['示範筆記應用', '18.0 秒', '46.3 秒']]);
+      await allWidths(page, 'digest mismatch result');
+      await shot(page, 'restore-digest-mismatch-1440.png');
+      await page.setViewportSize({ width: 390, height: 900 });
+      await shot(page, 'restore-digest-mismatch-390.png');
+      await page.setViewportSize({ width: 1440, height: 900 });
+    });
+
+  await check('a successful restore lists the JSON summary fields and the digests that matched', fixture({ scripts: { ...scripts(), restore: digestSuccessScript() } }), async page => {
+    await ready(page);
+    await page.evaluate(id => { window.location.hash = `#/restore/${id}`; }, B_MANUAL);
+    await page.locator('[data-focus="pf-next"]').click();
+    await page.locator('#confirm-restore').check();
+    await page.locator('[data-focus="confirm-start"]').click();
+    await page.locator('#result-heading').filter({ hasText: '還原完成' }).waitFor();
+    assert.match(await page.locator('.verify-summary').textContent(), /共 7 項：7 項一致、0 項不一致、0 項未比對。/);
+    const rows = await page.locator('.compare tbody tr').evaluateAll(items => items.map(row => [...row.children].map(cell => cell.textContent.trim())));
+    assert.deepEqual(rows.map(row => row[1]), ['summary.notes', 'summary.files', 'summary.digest', 'summary.title', 'summary.signatures_valid',
+      '資料表資料表內容 · PostgreSQL（main）', '上傳檔案檔案清單 · 資料卷 woowbk-demo-files'], 'digest summaries are not repeated as raw fields');
+    assert.deepEqual(await page.locator('table.timing tbody td').allTextContents(), ['12.3 秒', '31.8 秒']);
+  });
+
+  await check('deep verify: what was checked, what a restore would drop, and 已驗證（內容已逐項檢查）', fixture(), async page => {
+    await ready(page);
+    await page.locator('[data-nav="backups"]').click();
+    assert.match(await page.locator(`tr[data-backup="${B_MANUAL}"]`).textContent(), /已驗證（檔案完整）/);
+    await page.locator(`[data-focus="verify-${B_MANUAL}"]`).click();
+    await page.locator('#result-heading').filter({ hasText: '驗證完成' }).waitFor();
+    assert.match(await page.locator('.job-result').textContent(), /以還原時相同的規則逐項檢查了內容/);
+    assert.deepEqual(await page.locator('ul[aria-label="各應用逐項檢查的內容"] li').allTextContents(),
+      ['示範筆記應用資料卷 1、容器映像 2、資料摘要 2、資料庫匯出 1（只檢查格式）、應用機密 2']);
+    // review L8: a dump is only recognized by its pg_dump header; the page says where its body is read in full
+    assert.match(await page.locator('[data-note="dumps-header-only"]').textContent(), /建立備份時已完整讀取過一次，還原時會再完整讀取/);
+    assert.equal(await page.locator('ul[aria-label="驗證注意事項"] .check-message').textContent(), VERIFY_NOTE);
+    await page.locator('[data-nav="backups"]').click();
+    await page.locator(`tr[data-backup="${B_MANUAL}"]`).getByText('已驗證（內容已逐項檢查）', { exact: false }).waitFor();
+  });
+
+  const instance = fixture();
+  Object.assign(instance.inspect[B_MANUAL].manifest.apps[0], {
+    postgres: [{ id: 'main', database: 'postgres', major: 16, scope: 'instance', roles_count: 4,
+      databases: [{ name: 'nextcloud', owner: 'oc_admin' }, { name: 'odoo_prod', owner: 'odoo' }, { name: 'postgres', owner: 'notes' }] }],
+    verify_digests: [{ id: 'db', type: 'postgres-digest', target: 'postgres:main', summary: { databases: 3, tables: 205, sequences: 12, rows: 98765, roles: 4 } },
+      { id: 'files', type: 'files-digest', target: 'volume:woowbk-demo-files', summary: FILES_BEFORE }],
+    archive_size: 51 * MiB });
+  instance.backups[0].apps = [{ id: 'woowbk-demo', name: '示範筆記應用', size: 51 * MiB }];
+  instance.inspect[B_MANUAL].backup.apps[0].size = 51 * MiB;
+  await check('backup details name the PostgreSQL mode (整個執行個體／單一資料庫), the data checks and format 2 facts', instance, async page => {
+    await ready(page);
+    await page.evaluate(id => { window.location.hash = `#/backups/${id}`; }, B_MANUAL);
+    await page.locator(`[data-focus="inspect-${B_MANUAL}"]`).click();
+    await page.locator('.app-content').first().waitFor();
+    const [demo, wiki] = await metadataOf(page.locator('.app-content'));
+    assert.equal(demo['資料庫'], 'PostgreSQL 16整個執行個體3 個資料庫、4 個角色（含密碼雜湊）：nextcloud（擁有者 oc_admin）、odoo_prod（擁有者 odoo）、postgres（擁有者 notes）');
+    assert.equal(wiki['資料庫'], 'PostgreSQL 16單一資料庫wiki');
+    assert.equal(demo['資料核對'], '應用摘要 summary5 個欄位資料表內容PostgreSQL（main）資料庫 3、資料表 205、序列 12、資料列 98,765、角色 4'
+      + '檔案清單資料卷 woowbk-demo-files項目 40、檔案 30、資料夾 8、符號連結 2、121 KiB');
+    assert.equal(demo['應用封存檔'], '51.0 MiB');
+    assert.equal(wiki['資料核對'], '沒有資料核對項目');
+    const [general] = await metadataOf(page.locator('section[aria-labelledby="detail-content"] .card-body'));
+    assert.deepEqual([general['格式'], general['加密']], ['備份檔（.tar，格式 2）', '已加密（age X25519）']);
+    const [info] = await metadataOf(page.locator('section[aria-labelledby="detail-info"]'));
+    assert.deepEqual([info['格式'], info['加密']], ['備份檔（.tar）', '已加密（age X25519，需要金鑰才能讀取）']);
+    assert.match(await page.locator('section[aria-labelledby="detail-apps"]').textContent(), /應用封存檔 51\.0 MiB/);
+    await allWidths(page, 'detail with instance mode and digests');
+  });
+
+  const usage = fixture();
+  usage.status.storage.apps = [
+    { id: 'woowbk-demo', name: '示範筆記應用', in_catalog: true, backups: 5, types: { manual: 3, safety: 2, uploaded: 0 }, bytes: 1.2 * GiB,
+      estimated: false, shared: false, newest: '2026-11-12T02:00:00Z', oldest: '2026-11-01T02:00:00Z', keep_last: 5 },
+    { id: 'old-app', name: 'old-app', in_catalog: false, backups: 1, types: { manual: 0, safety: 0, uploaded: 1 }, bytes: 200 * MiB,
+      estimated: true, shared: true, newest: '2026-11-02T02:00:00Z', oldest: '2026-11-02T02:00:00Z', keep_last: null },
+    { id: 'woowbk-wiki', name: '團隊知識庫', in_catalog: true, backups: 0, types: { manual: 0, safety: 0, uploaded: 0 }, bytes: 0,
+      estimated: false, shared: false, newest: null, oldest: null, keep_last: null }];
+  await check('the overview shows each app\'s backup storage; an engine without retention says so on 清理備份', usage, async page => {
+    await ready(page);
+    await page.locator('.usage-list').waitFor();
+    const rows = await page.locator('.usage-row').evaluateAll(items => items.map(item => [item.dataset.usage,
+      item.querySelector('.usage-size').textContent, item.querySelector(':scope > .secondary').textContent]));
+    assert.deepEqual(rows.map(row => row.slice(0, 2)), [['woowbk-demo', '1.2 GiB'], ['old-app', '200 MiB（估計）']], 'apps without backups are left out');
+    assert.match(rows[0][2], /^5 份備份（手動 3、還原前 2） · 最新 .+ · 保留最新 5 份手動備份$/);
+    assert.match(rows[1][2], /保留全部手動備份/);
+    assert.match(await page.locator('.usage-row[data-usage="old-app"]').textContent(), /這台設備沒有它的應用設定/);
+    await allWidths(page, 'overview with storage per app');
+    await page.locator('[data-focus="overview-cleanup"]').click();
+    await page.waitForFunction(() => window.location.hash === '#/cleanup');
+    await view(page).getByText('這台設備尚不支援清理備份').waitFor();
+    assert.equal(await page.locator('[data-nav="backups"]').getAttribute('aria-current'), 'page');
+  });
+
+  await check('without engine figures the overview computes storage per app from the backup list', fixture(), async page => {
+    await ready(page);
+    await page.locator('.usage-list').waitFor();
+    assert.deepEqual(await page.locator('.usage-row').evaluateAll(items => items.map(item => [item.dataset.usage, item.querySelector('.usage-size').textContent])),
+      [['woowbk-demo', '96.0 MiB']]);
+    assert.match(await page.locator('.usage-row').first().textContent(), /2 份備份（手動 1、還原前 1）/);
+    assert.match(await page.locator('.usage-foot').textContent(), /另有 1 份尚未檢查內容的上傳備份，共 48\.0 MiB/);
+  });
+
+  await check('清理備份: usage, a keep-last policy, a preview with protected backups and a confirmed deletion', retentionFixture(), async page => {
+    await ready(page);
+    await page.locator('[data-nav="backups"]').click();
+    await page.locator('[data-focus="list-cleanup"]').click();
+    await page.locator('.usage-table').waitFor();
+    assert.deepEqual(requestOf((await calls(page, 'retention-plan'))[0]), {}, 'the first plan is for the saved policy');
+    assert.match(await view(page).textContent(), /目前的原則是全部保留，沒有要刪除的備份。/);
+    assert.deepEqual(await page.locator('section[aria-labelledby="cleanup-protected"] .pick-reason').allTextContents(), [
+      '失敗或中斷的還原仍需要這份還原前備份才能回到還原前的狀態。', '失敗或中斷的還原使用這份備份；在該應用成功還原之前保留。']);
+    assert.equal(await page.locator('section[aria-labelledby="cleanup-protected"] input[type="checkbox"]:enabled').count(), 0, 'protected backups cannot be selected');
+    await page.locator('#keep-woowbk-demo-mode').selectOption('last');
+    await page.locator('#keep-woowbk-demo-count').fill('2');
+    await page.locator('#keep-woowbk-demo-count').press('Tab');
+    assert.equal(await page.locator('[data-focus="cleanup-apply"]').isDisabled(), true, 'a changed policy needs a preview first');
+    assert.match(await page.locator('.cleanup-hint').textContent(), /請先按「預覽清理」/);
+    await page.locator('#keep-woowbk-demo-count').fill('0');
+    assert.match(await page.locator('.cleanup-hint').textContent(), /1 到 1000 的整數/);
+    await page.locator('#keep-woowbk-demo-count').fill('2');
+    await page.locator('[data-focus="cleanup-preview"]').click();
+    await page.locator('section[aria-labelledby="cleanup-candidates"] .pick').first().waitFor();
+    assert.deepEqual(requestOf((await calls(page, 'retention-plan')).at(-1)), { policy: { schema: 1, default_keep_last: null, apps: { 'woowbk-demo': { keep_last: 2 } } } });
+    const picks = await page.locator('section[aria-labelledby="cleanup-candidates"] .pick').evaluateAll(items => items.map(item =>
+      [item.dataset.brief, item.querySelector('input').checked, item.querySelector('input').disabled]));
+    assert.deepEqual(picks, [[RET_IDS[4], true, false], [RET_IDS[3], true, false], [RET_IDS[2], true, false], [RET_IDS[1], true, false], [RET_IDS[0], false, true]],
+      'candidates are checked; the pinned one is shown but cannot be selected');
+    assert.match(await page.locator(`[data-brief="${RET_IDS[4]}"]`).textContent(), /「示範筆記應用」第 3 新（保留最新 2 份）/);
+    await page.locator(`#pick-${RET_IDS[1]}`).uncheck();
+    await page.locator('[data-focus="cleanup-others-list"]').click();
+    await page.locator(`#pick-${B_UPLOADED}`).check();
+    assert.match(await page.locator('.cleanup-hint').textContent(), /已選 4 份/);
+    assert.equal(await page.evaluate(() => {
+      const ids = [...document.querySelectorAll('#view [id]')].map(node => node.id);
+      return ids.length - new Set(ids).size;
+    }), 0, 'element ids are unique although a protected candidate is listed twice');
+    // 重新計算 computes the previewed plan again and keeps what was unchecked.
+    const plans = (await calls(page, 'retention-plan')).length;
+    await page.locator('[data-focus="cleanup-refresh"]').click();
+    await page.waitForFunction(count => window.testcalls.filter(call => call.argv[1] === 'retention-plan').length > count, plans);
+    await settled(page);
+    await page.locator('section[aria-labelledby="cleanup-candidates"] .pick').first().waitFor();
+    assert.equal(await page.locator(`#pick-${RET_IDS[1]}`).isChecked(), false, 'the unchecked candidate stays unchecked after a refresh');
+    assert.deepEqual(requestOf((await calls(page, 'retention-plan')).at(-1)), { policy: { schema: 1, default_keep_last: null, apps: { 'woowbk-demo': { keep_last: 2 } } } },
+      'the refresh is for the previewed policy');
+    await allWidths(page, 'cleanup preview');
+    await shot(page, 'cleanup-preview-1440.png');
+    await page.setViewportSize({ width: 360, height: 900 });
+    await shot(page, 'cleanup-preview-360.png');
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.locator('[data-focus="cleanup-apply"]').click();
+    await page.locator('#confirm-dialog').waitFor();
+    assert.match(await page.locator('#confirm-title').textContent(), /刪除 4 份備份/);
+    assert.match(await page.locator('#confirm-body').textContent(), /儲存保留原則：預設全部保留，1 個應用個別設定/);
+    assert.equal(await page.locator('#confirm-ok').isDisabled(), true);
+    await page.locator('#confirm-ack').check();
+    await page.locator('#confirm-ok').click();
+    await page.locator('#cleanup-result').waitFor();
+    const apply = requestOf((await calls(page, 'retention-apply')).at(-1));
+    assert.deepEqual(apply, { confirm: true, backup_ids: [RET_IDS[4], RET_IDS[3], RET_IDS[2], B_UPLOADED],
+      policy: { schema: 1, default_keep_last: null, apps: { 'woowbk-demo': { keep_last: 2 } } } });
+    assert.match(await page.locator('#cleanup-result').textContent(), /已刪除 4 份備份/);
+    await page.locator('section[aria-labelledby="cleanup-policy"] .chip').filter({ hasText: '已儲存' }).waitFor();
+    assert.equal(await page.locator(`[data-brief="${RET_IDS[4]}"]`).count(), 0, 'deleted backups left the lists');
+  });
+
+  await check('應用設定: owners, a scan, draft review, PostgreSQL mode, JSON editing with validation and diff, install and remove',
+    fixture({ catalogData: catalogData() }), async page => {
+      await ready(page);
+      await page.locator('[data-nav="catalog"]').click();
+      await page.locator('[data-focus="owner-appowner"]').waitFor();
+      assert.deepEqual(requestOf((await calls(page, 'catalog-suggest'))[0]), {}, 'owners first, without an owner');
+      assert.equal(await page.locator('[data-focus="owner-appowner"]').isChecked(), true, 'the owner with installed apps is preselected');
+      assert.match(await page.locator('section[aria-labelledby="catalog-installed"]').textContent(), /woowbk-demo\.json/);
+      await page.locator('[data-focus="catalog-scan"]').click();
+      await page.locator('.drafts').waitFor();
+      assert.deepEqual(requestOf((await calls(page, 'catalog-suggest')).at(-1)), { owner: 'appowner' });
+      assert.deepEqual(await page.locator('.drafts > li').evaluateAll(items => items.map(item => [item.dataset.draft,
+        [...item.querySelectorAll('.chip')].map(chipNode => chipNode.textContent).join('|')])),
+      [['notes', '未安裝'], ['woowbk-demo', '已安裝・有 1 項差異']]);
+      assert.match(await view(page).textContent(), /shared-proxy\.network/);
+      assert.match(await view(page).textContent(), /tools\.kube/);
+      await allWidths(page, 'catalog scan');
+      await shot(page, 'catalog-scan-1440.png');
+      await page.locator('[data-focus="draft-notes"]').click();
+      await page.locator('#catalog-editor').waitFor();
+      await page.waitForFunction(() => window.testcalls.filter(call => call.argv[1] === 'catalog-install').length === 1);
+      await page.locator('#catalog-feedback').getByText('檢查通過：可以安裝這份應用設定。').waitFor();
+      assert.deepEqual(requestOf((await calls(page, 'catalog-install'))[0]), { entry: notesEntry('cold') }, 'the preview has no confirm');
+      const [review] = await metadataOf(page.locator('#catalog-review'));
+      assert.match(review['PostgreSQL'], /^冷備份（notes-db\.service）：資料庫與應用一起停止，資料檔隨資料卷 notes-pgdata整份備份/);
+      assert.equal(review['服務（啟動順序）'], 'notes-db.service → notes-app.service');
+      assert.match(await page.locator('section[aria-labelledby="draft-notes"]').textContent(), /目前的權限是 0755/);
+      assert.match(await page.locator('section[aria-labelledby="draft-notes"]').textContent(), /~\/\.ssh/);
+      assert(await page.locator('#catalog-feedback .diff-add').count() > 10, 'a new entry shows the lines it writes');
+      await page.locator('[data-focus="variant-instance"]').check();
+      await page.waitForFunction(() => window.testcalls.filter(call => call.argv[1] === 'catalog-install').length === 2);
+      assert.deepEqual(requestOf((await calls(page, 'catalog-install')).at(-1)).entry.postgres, [notesEntry('instance').postgres[0]]);
+      await page.locator('#catalog-feedback').getByText('檢查通過').waitFor();
+      assert.match((await metadataOf(page.locator('#catalog-review')))[0]['PostgreSQL'], /^整個執行個體（notes-db）：備份時資料庫保持執行/);
+      // Typing never rebuilds the editor; a JSON error is reported in the browser and never sent.
+      const editor = await page.locator('#catalog-editor').elementHandle();
+      const previews = (await calls(page, 'catalog-install')).length;
+      const text = await page.locator('#catalog-editor').inputValue();
+      await page.locator('#catalog-editor').fill(text.replace('"units": [', '"units": ['.slice(0, -1)));
+      await page.locator('#catalog-parse').getByText(/JSON 格式錯誤：第 \d+ 行/).waitFor();
+      assert.equal(await page.locator('[data-focus="catalog-install"]').isDisabled(), true);
+      await page.waitForTimeout(1100);
+      assert.equal((await calls(page, 'catalog-install')).length, previews, 'invalid JSON is not sent');
+      await page.locator('#catalog-editor').fill(text.replace(/"units": \[[^\]]*\]/, '"units": []'));
+      await page.waitForFunction(count => window.testcalls.filter(call => call.argv[1] === 'catalog-install').length > count, previews);
+      await page.locator('#catalog-feedback').getByText('欄位 units 至少需要一個服務。').waitFor();
+      assert.match(await page.locator('#catalog-feedback').textContent(), /欄位：units/);
+      assert.equal(await editor.evaluate(node => node.isConnected), true, 'the editor element survived the previews');
+      await allWidths(page, 'draft with a validation error');
+      await page.locator('#catalog-editor').fill(text.replace('"notes-files"', '"shared-volume"').replace('"notes-files"', '"shared-volume"'));
+      await page.locator('#catalog-feedback').getByText('已屬於應用「other-app」').waitFor();
+      await page.locator('[data-focus="catalog-revert"]').click();
+      await page.locator('#catalog-feedback').getByText('檢查通過：可以安裝這份應用設定。').waitFor();
+      await shot(page, 'catalog-draft-1440.png');
+      await page.setViewportSize({ width: 390, height: 900 });
+      await shot(page, 'catalog-draft-390.png');
+      await page.setViewportSize({ width: 1440, height: 900 });
+      await page.locator('[data-focus="catalog-install"]').click();
+      await page.locator('#confirm-dialog').waitFor();
+      assert.match(await page.locator('#confirm-title').textContent(), /安裝「notes」的應用設定/);
+      assert.match(await page.locator('#confirm-body').textContent(), /沒有部署範本/);
+      assert.equal(await page.locator('#confirm-ok').isDisabled(), true);
+      await page.locator('#confirm-ack').check();
+      await page.locator('#confirm-ok').click();
+      await page.locator('#confirm-dialog').waitFor({ state: 'hidden' });
+      const install = (await calls(page, 'catalog-install')).map(requestOf).filter(request => request.confirm);
+      assert.deepEqual(install, [{ entry: notesEntry('instance'), confirm: true, expected_sha256: null }]);
+      await view(page).getByText('已安裝「notes」的應用設定').first().waitFor();
+      await page.waitForFunction(() => window.testcalls.filter(call => call.argv[1] === 'catalog-suggest').length >= 3);
+      // The rescan reports the installed entry, in the mode it was installed with.
+      await page.locator('#catalog-feedback').getByText('內容與目前安裝的設定完全相同。').waitFor();
+      assert.equal(await page.locator('[data-focus="variant-instance"]').isChecked(), true);
+      assert.equal(await page.locator('[data-focus="catalog-install"]').isDisabled(), true, 'nothing to install');
+      // The installed app is on the overview now; the demo app's installed entry can be replaced and removed.
+      await page.locator('[data-focus="back-catalog"]').click();
+      await page.locator('[data-focus="draft-woowbk-demo"]').click();
+      await page.locator('#catalog-feedback').getByText('檢查通過：可以取代目前安裝的設定。').waitFor();
+      assert.match(await page.locator('#catalog-feedback').textContent(), /與目前安裝的設定比較（1 項變更）/);
+      assert.match(await page.locator('#catalog-feedback').textContent(), /新增的資料卷|verify/);
+      assert.match(await page.locator('section[aria-labelledby="draft-summary"]').textContent(), /草稿多了內建資料核對/);
+      await page.locator('[data-focus="catalog-remove"]').click();
+      await page.locator('#confirm-dialog').waitFor();
+      assert.deepEqual(requestOf((await calls(page, 'catalog-remove')).at(-1)), { id: 'woowbk-demo' }, 'a remove previews first');
+      assert.match(await page.locator('#confirm-body').textContent(), /這個應用的備份2 份（會保留）/);
+      await page.locator('#confirm-ack').check();
+      await page.locator('#confirm-ok').click();
+      await page.locator('#confirm-dialog').waitFor({ state: 'hidden' });
+      assert.deepEqual(requestOf((await calls(page, 'catalog-remove')).at(-1)), { id: 'woowbk-demo', confirm: true, expected_sha256: INSTALLED_SHA });
+      await view(page).getByText('已移除「woowbk-demo」的應用設定').first().waitFor();
+      await page.locator('[data-nav="overview"]').click();
+      await page.locator('.item-list').first().waitFor();
+      const overview = await view(page).textContent();
+      assert.match(overview, /notes/);
+      assert(!/示範筆記應用：PostgreSQL/.test(overview), 'the removed app left the overview');
+    });
+
+  await check('應用設定 on an engine without catalog-suggest explains that this device cannot scan yet',
+    fixture(), async page => {
+      await ready(page);
+      await page.locator('[data-nav="catalog"]').click();
+      await view(page).getByText('這台設備尚不支援應用設定掃描').waitFor();
+      assert.equal((await calls(page, 'catalog-suggest')).length, 1);
+    });
+
+  const hostileStrengthen = fixture({ catalogData: catalogData(), scripts: { ...scripts(), restore: digestRollbackScript() } });
+  const evilText = '<img src=x onerror="window.__xss=1"><b>bold</b>';
+  const draft = hostileStrengthen.catalogData.scans.appowner.apps[0];
+  draft.warnings.push({ code: 'environment-secret', level: 'warn', message: `${evilText}${'x'.repeat(300)}`, file: `${evilText}.container` });
+  draft.hints.push(evilText);
+  draft.entry.description = evilText;
+  draft.variants.forEach(variant => { variant.label = `${evilText}${variant.label}`; variant.entry.volumes[0].label = evilText; });
+  hostileStrengthen.scripts.restore.at(-1).job.result.verification[0].checks[1].differences.samples.push(
+    { item: `${evilText}/${'deep/'.repeat(30)}`, change: 'missing', detail: evilText });
+  hostileStrengthen.scripts.restore.at(-1).job.result.verification[0].checks[1].label = evilText;
+  await check('hostile draft warnings, labels, diff lines and digest samples are rendered literally', hostileStrengthen, async page => {
+    const noInjection = async label => {
+      const found = await page.evaluate(() => ({ injected: document.querySelectorAll('body img, body script, body b').length, xss: Boolean(window.__xss) }));
+      assert.deepEqual(found, { injected: 0, xss: false }, `${label}: no element created from data`);
+    };
+    await ready(page);
+    await page.locator('[data-nav="catalog"]').click();
+    await page.locator('[data-focus="catalog-scan"]').click();
+    await page.locator('.drafts').waitFor();
+    await noInjection('drafts');
+    await page.locator('[data-focus="draft-notes"]').click();
+    await page.locator('#catalog-feedback .diff').waitFor();
+    assert.match(await page.locator('section[aria-labelledby="draft-notes"]').textContent(), /<img src=x/);
+    assert.match(await page.locator('#catalog-feedback .diff').textContent(), /<b>bold<\/b>/);
+    await noInjection('draft');
+    await allWidths(page, 'hostile draft');
+    await page.evaluate(id => { window.location.hash = `#/restore/${id}`; }, B_MANUAL);
+    await page.locator('[data-focus="pf-next"]').click();
+    await page.locator('#confirm-restore').check();
+    await page.locator('[data-focus="confirm-start"]').click();
+    await page.locator('#result-heading').filter({ hasText: '已自動回復' }).waitFor();
+    await page.locator('details.app-details summary').filter({ hasText: '差異' }).click();
+    assert.match(await page.locator('.differences').textContent(), /<img src=x/);
+    await noInjection('digest samples');
+    await allWidths(page, 'hostile digest samples');
+  });
+
+  const strengthenDark = retentionFixture({ catalogData: catalogData(), scripts: { ...scripts(), restore: digestRollbackScript() } });
+  strengthenDark.status.settings.encrypt_by_default = false;
+  strengthenDark.backups.push(backupMeta(B_PLAIN, { type: 'uploaded', encrypted: false, unauthenticated: true, key_id: null, key_available: true }));
+  await check('dark theme: the new views keep WCAG AA contrast and fit every width', strengthenDark, async page => {
+    await ready(page);
+    const steady = () => page.waitForFunction(() => document.getAnimations().every(animation => animation.playState !== 'running'));
+    const audit = async (label, extra = '') => {
+      await steady();
+      const result = await contrastOf(page, extra);
+      assert(result.checked > 10, `${label}: enough text was checked (${result.checked})`);
+      assert.deepEqual(result.failures, [], `${label}: dark-theme text keeps WCAG AA contrast`);
+      await allWidths(page, `dark ${label}`);
+    };
+    assert.equal(await page.evaluate(() => document.documentElement.classList.contains('pf-v6-theme-dark')), true);
+    await page.locator('.usage-list').waitFor();
+    await audit('overview with storage');
+    await page.locator('[data-nav="backups"]').click();
+    await page.locator('.backups-table').waitFor();
+    await page.locator(`[data-focus="download-menu-row-${B_MANUAL}"]`).click();
+    await audit('backup list with an open menu', ', .menu-item-label');
+    await page.keyboard.press('Escape');
+    await page.locator('[data-nav="keys"]').click();
+    await page.locator('#encrypt-default').waitFor();
+    await audit('keys with the encryption setting off');
+    await shot(page, 'keys-settings-dark-1440.png');
+    await page.locator('#go-create').click();
+    await page.locator('#encrypt-backup').waitFor();
+    await audit('create without encryption');
+    await page.evaluate(() => { window.location.hash = '#/cleanup'; });
+    await page.locator('.usage-table').waitFor();
+    await page.locator('#keep-woowbk-demo-mode').selectOption('last');
+    await page.locator('[data-focus="cleanup-preview"]').click();
+    await page.locator('section[aria-labelledby="cleanup-candidates"] .pick').first().waitFor();
+    await audit('cleanup', ', .pick-reason, .keep-control span');
+    await shot(page, 'cleanup-dark-1440.png');
+    await page.locator('[data-nav="catalog"]').click();
+    await page.locator('[data-focus="catalog-scan"]').click();
+    await page.locator('.drafts').waitFor();
+    await audit('catalog scan');
+    await page.locator('[data-focus="draft-notes"]').click();
+    await page.locator('#catalog-feedback .diff').waitFor();
+    await audit('catalog draft', ', .diff span');
+    await shot(page, 'catalog-draft-dark-1440.png');
+    await page.evaluate(id => { window.location.hash = `#/restore/${id}`; }, B_MANUAL);
+    await page.locator('[data-focus="pf-next"]').click();
+    await page.locator('#confirm-restore').check();
+    await page.locator('[data-focus="confirm-start"]').click();
+    await page.locator('#result-heading').filter({ hasText: '已自動回復' }).waitFor();
+    await page.locator('details.app-details summary').filter({ hasText: '差異' }).click();
+    await audit('digest mismatch result', ', .check-name, .verify-summary');
+    await shot(page, 'restore-digests-dark-1440.png');
+  }, { beforeGoto: page => page.addInitScript(() => localStorage.setItem('shell:style', 'dark')) });
+
+  const strengthenLight = retentionFixture({ catalogData: catalogData(), scripts: { ...scripts(), restore: digestRollbackScript() } });
+  strengthenLight.status.settings.encrypt_by_default = false;
+  await check('light theme and keyboard: the new views keep WCAG AA contrast, visible focus and every control reachable', strengthenLight, async page => {
+    await ready(page);
+    const audit = async (label, extra = '') => {
+      const result = await contrastOf(page, extra);
+      assert(result.checked > 10, `${label}: enough text was checked (${result.checked})`);
+      assert.deepEqual(result.failures, [], `${label}: light-theme text keeps WCAG AA contrast`);
+    };
+    await page.locator('.usage-list').waitFor();
+    await audit('overview with storage');
+    const overview = await tabKeys(page, 'overview', 40);
+    for (const key of ['nav-catalog', 'stat-cleanup', 'overview-cleanup']) assert(overview.includes(key), `overview: ${key} reachable (${overview})`);
+    await page.locator('[data-nav="keys"]').click();
+    await page.locator('#encrypt-default').waitFor();
+    await audit('keys with the encryption setting off');
+    assert((await tabKeys(page, 'keys', 14)).includes('encrypt-default'), 'the setting is reachable with Tab');
+    await page.locator('[data-nav="backups"]').click();
+    await page.locator('.backups-table').waitFor();
+    // The menu works from the keyboard alone: Enter opens it, Enter on an item runs it.
+    await page.locator(`[data-focus="download-menu-row-${B_MANUAL}"]`).focus();
+    await page.keyboard.press('Enter');
+    await page.locator(`#menu-row-${B_MANUAL}`).waitFor();
+    await audit('open download menu', ', .menu-item-label');
+    await page.keyboard.press('ArrowDown');
+    await page.keyboard.press('Enter');
+    await page.locator('#confirm-dialog').waitFor();
+    assert.equal(await page.evaluate(() => document.activeElement.id), 'confirm-cancel', 'the dialog focuses the safe choice');
+    await page.keyboard.press('Escape');
+    await page.locator('#confirm-dialog').waitFor({ state: 'hidden' });
+    assert.equal((await calls(page, 'export-start')).length, 0);
+    await page.locator('[data-focus="list-cleanup"]').click();
+    await page.locator('.usage-table').waitFor();
+    await page.locator('#keep-woowbk-demo-mode').selectOption('last');
+    await page.locator('[data-focus="cleanup-preview"]').click();
+    await page.locator('section[aria-labelledby="cleanup-candidates"] .pick').first().waitFor();
+    await audit('cleanup', ', .pick-reason, .keep-control span');
+    const cleanupKeys = await tabKeys(page, 'cleanup', 30);
+    for (const key of ['cleanup-refresh', 'keep-woowbk-demo-mode', 'keep-woowbk-demo-count', 'cleanup-preview']) {
+      assert(cleanupKeys.includes(key), `cleanup: ${key} reachable (${cleanupKeys})`);
+    }
+    await page.locator('[data-nav="catalog"]').click();
+    await page.locator('[data-focus="catalog-scan"]').click();
+    await page.locator('.drafts').waitFor();
+    await audit('catalog scan');
+    await page.locator('[data-focus="draft-notes"]').click();
+    await page.locator('#catalog-feedback .diff').waitFor();
+    await audit('catalog draft', ', .diff span, .check-message');
+    const draftKeys = await tabKeys(page, 'draft', 40);
+    for (const key of ['variant-cold', 'catalog-editor']) assert(draftKeys.includes(key), `draft: ${key} reachable (${draftKeys})`);
+    await page.evaluate(id => { window.location.hash = `#/restore/${id}`; }, B_MANUAL);
+    await page.locator('[data-focus="pf-next"]').click();
+    await page.locator('#confirm-restore').check();
+    await page.locator('[data-focus="confirm-start"]').click();
+    await page.locator('#result-heading').filter({ hasText: '已自動回復' }).waitFor();
+    await page.locator('details.app-details summary').filter({ hasText: '差異' }).click();
+    await audit('digest mismatch result', ', .check-name, .verify-summary');
+  });
 
 } finally {
   try { await browser?.close(); } finally { if (server.listening) await new Promise(done => server.close(done)); }
