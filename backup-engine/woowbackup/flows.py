@@ -668,7 +668,7 @@ def _release_kept(ctx, adapters):
 
 
 def create_backup(ctx, apps, staging, *, include_images, note, backup_type, key, phases, start_databases=False,
-                  keep_stopped=False, defer_package=False):
+                  keep_stopped=False, defer_package=False, space=None):
     """Back up `apps` into a verified, registered archive. `phases=False` for nested safety backups. `key` None writes
     an unencrypted backup (format 2, encryption "none").
 
@@ -679,6 +679,9 @@ def create_backup(ctx, apps, staging, *, include_images, note, backup_type, key,
     `defer_package=True` (the pre-restore copy, CONTRACT section 9): nothing is packaged; the result holds the staged
     pieces (`apps`, `manifest_apps`, `entries`, `downtime`, `plain_bytes`, `timing`, `unavailable_seconds`,
     `handover`) for `_package` once the restore is over.
+    `space(estimate, free, required)` (the pre-restore copy): returns `(required, note)`, the free space needed
+    instead of `required` (a backup packaged right away) and a log line once that check passed; it is called before
+    any writer stops.
     """
     phase = ctx.phase if phases else _noop
     phase('check')
@@ -696,10 +699,15 @@ def create_backup(ctx, apps, staging, *, include_images, note, backup_type, key,
         estimate += int(adapter.estimate_bytes(include_images=include_images))
     free = int(ctx.storage.free_bytes())
     required = int(estimate * SPACE_FACTOR) + int(ctx.paths.reserve_bytes)
+    note = None
+    if space is not None:
+        required, note = space(estimate, free, required)
     ctx.log(f'預估資料量 {human(estimate)}，需要可用空間 {human(required)}，目前可用 {human(free)}')
     if free < required:
         raise BackupError('insufficient-space', f'備份空間不足：預估需要 {human(required)}，目前可用 {human(free)}。'
                                                 '應用未被暫停。', required=required, free=free)
+    if note:
+        ctx.log(note)
     if phases:
         ctx.checkpoint()
         ctx.cancellable(False)
@@ -1057,11 +1065,12 @@ def run_restore(ctx, params):
     staging = Path(ctx.storage.staging_dir(ctx.job_id))
     # changed: a destructive step started; fresh_apps: deployed from templates; safety_skipped: in-place apps
     # were restored without a new safety backup; safety_failed: refused because none could be created;
-    # safety_pending: the pre-restore copy is kept in pending/ and not packaged (yet);
+    # safety_pending: the pre-restore copy is kept in pending/ and not packaged (yet); safety_in_downtime: it was
+    # packaged while the apps were stopped, the space after the restore being too short for it;
     # timing: per app, writers stopped -> units running again -> health checks passed (CONTRACT section 7).
-    result = {'apps': [app.id for app in apps], 'safety_backup_id': None, 'safety_pending': False, 'health': [],
-              'verification': [], 'rolled_back': False, 'changed': False, 'fresh_apps': [], 'safety_skipped': False,
-              'safety_failed': False, 'warnings': [], 'timing': []}
+    result = {'apps': [app.id for app in apps], 'safety_backup_id': None, 'safety_pending': False,
+              'safety_in_downtime': False, 'health': [], 'verification': [], 'rolled_back': False, 'changed': False,
+              'fresh_apps': [], 'safety_skipped': False, 'safety_failed': False, 'warnings': [], 'timing': []}
     keep_fresh_marker = False
     dirs_marked = False
     plans, handover = [], {}
@@ -1102,11 +1111,10 @@ def run_restore(ctx, params):
                 ctx.skip('stage')
             ctx.phase('safety')
             if inplace:
+                extracted = sum(int(e.get('size') or 0) for e in manifest.get('entries') or [] if isinstance(e, dict))
                 pending = _take_safety_copy(ctx, inplace, backup_id, meta, params,
-                                            device_key if encrypt_safety else None, result, handover)
-                if pending is not None:
-                    extracted = sum(int(e.get('size') or 0) for e in manifest.get('entries') or [] if isinstance(e, dict))
-                    _require_package_space(ctx, pending, extracted)
+                                            device_key if encrypt_safety else None, result, handover,
+                                            staging=staging, extracted=extracted)
             else:
                 ctx.skip('safety')
             if pending is None:
@@ -1175,8 +1183,8 @@ def run_restore(ctx, params):
                 # and stopped writers of the apps the restore had not reached.
                 keep_fresh_marker = True
                 ctx.log('系統正在關機或重新開機，未執行自動回復；' + (
-                    '開機後系統會把保留的還原前資料封裝成還原前備份，可用它再次還原。' if pending is not None
-                    else '開機後請使用還原前備份再次還原。'))
+                    '開機後系統會把保留的還原前資料封裝成還原前備份，可用它再次還原。'
+                    if pending is not None and not pending.get('packaged') else '開機後請使用還原前備份再次還原。'))
                 raise
             error = exc if isinstance(exc, BackupError) else BackupError(
                 'internal-error', '還原過程發生未預期的錯誤。')
@@ -1187,7 +1195,9 @@ def run_restore(ctx, params):
         # first, so a job that dies while deleting them is reported as a finished restore (review L4).
         ctx.reporter.set_partial(finishing=True)
         stopped = _finish_dirs(ctx, [plan.adapter for plan in plans], result)
-        if pending is not None:
+        if pending is not None and pending.get('packaged'):
+            _remove_copy(ctx, pending)  # packaged while the apps were stopped: it only served a possible rollback
+        elif pending is not None:
             # Every app runs again and passed its checks: the pre-restore copy becomes the verified safety backup now,
             # outside the outage. The extracted archive goes first (its size counted as free in the space check).
             _remove_tree(staging / 'extract')
@@ -1298,14 +1308,29 @@ def _collect_warnings(result, adapter):
             result['warnings'].append(note[:1000])
 
 
-def _take_safety_copy(ctx, inplace, backup_id, meta, params, key, result, handover):
+def _take_safety_copy(ctx, inplace, backup_id, meta, params, key, result, handover, *, staging, extracted):
     """Keep the pre-restore data of the `inplace` apps in the job's pending directory and return it (CONTRACT section
     9), or None when the restore goes on without one. The writers stop once and stay stopped for the restore (their
     units join `handover`); the copy is on disk with its record (pending.json) before anything changes, and it is
-    packaged into the verified safety backup only once the apps run again (`_package_pending`). `key` None packages
-    it unencrypted (the device setting 預設加密備份 is off)."""
+    packaged into the verified safety backup once the apps run again (`_package_pending`). `key` None packages
+    it unencrypted (the device setting 預設加密備份 is off).
+
+    Where it is packaged is decided before any writer stops: after the restore when the free space holds the copy,
+    its archive and the running reserve (`extracted`, the bytes of the extracted archive, is deleted first);
+    otherwise right away while the apps are stopped (`_package_in_downtime`), as before 2026.11.14.2, which needs no
+    running reserve; with too little space for that either, nothing stops. A copy larger than estimated switches to
+    packaging in the downtime, never to a refusal after the stop."""
     ctx.log('保存還原前資料…' if key is not None else '保存還原前資料（還原前備份依設定不加密）…')
     note = f'還原前自動備份（還原來源 {backup_id}）'
+    after = {}
+
+    def space(estimate, free, required):
+        need = _after_need(ctx, estimate, extracted)
+        after['ok'] = free >= need
+        if after['ok']:
+            return need, None
+        return required, (f'可用空間不足以在應用恢復後封裝還原前備份（約需 {human(need)}，含應用執行時保留的 '
+                          f'{human(running_reserve(ctx))}），改在停機期間封裝，停機時間會比較長。')
     folder = None
     try:
         folder = Path(ctx.storage.pending_dir(ctx.job_id))
@@ -1314,11 +1339,18 @@ def _take_safety_copy(ctx, inplace, backup_id, meta, params, key, result, handov
         # The writers stay stopped for the restore (CONTRACT section 9): the apps stop once, not twice.
         staged = create_backup(ctx, [plan.app for plan in inplace], data, include_images=False, note=note,
                                backup_type='safety', key=key, phases=False, start_databases=True, keep_stopped=True,
-                               defer_package=True)
+                               defer_package=True, space=space)
         handover.update(staged.get('handover') or {})
         # Flushed and recorded before anything changes. A failure here counts as no copy at all: the fallbacks below
         # apply, as they did to a safety backup that could not be written or verified (review).
         pending = _save_pending(ctx, folder, data, staged, backup_id=backup_id, note=note, key=key)
+        if after.get('ok') and not _fits_after(ctx, pending, extracted):
+            ctx.log(f'還原前資料（{human(pending["plain_bytes"])}）比預估多，空間不足以在應用恢復後封裝，改在停機期間封裝。')
+            after['ok'] = False
+        if not after.get('ok'):
+            # A failure here (space, writing, verifying) is a safety backup that could not be made: the same
+            # fallbacks apply, and nothing has changed yet.
+            _package_in_downtime(ctx, pending, result, staging)
     except BackupError as error:
         if folder is not None:
             _remove_tree(folder)  # a partial copy of data that has not changed
@@ -1340,24 +1372,49 @@ def _take_safety_copy(ctx, inplace, backup_id, meta, params, key, result, handov
         if folder is not None:
             _remove_tree(folder)
         raise
+    ctx.complete('safety')
+    if pending.get('packaged'):
+        ctx.log('還原前備份已在停機期間建立，應用維持停止，接著還原。')
+        return pending
     result['safety_pending'] = True
     ctx.reporter.set_partial(safety_pending=True)
-    ctx.complete('safety')
     ctx.log(f'還原前資料已保存（{human(pending["plain_bytes"])}），應用維持停止，接著還原；還原前備份會在應用恢復後封裝。')
     return pending
 
 
-def _require_package_space(ctx, pending, extracted_bytes):
-    """Refuse the restore (nothing changed yet) unless the pre-restore copy can be packaged after it.
+def _after_need(ctx, plain_bytes, extracted_bytes):
+    """Free space, before the copy is written, for the copy and its packaging once the apps run again: the copy, its
+    archive and the running reserve, less the extracted archive (deleted before that packaging, review CR-01); never
+    less than the copy itself with the reserve. `_fits_after` checks the same once the copy is on disk."""
+    plain = int(plain_bytes or 0)
+    return max(plain + int(ctx.paths.reserve_bytes), plain + _package_need(ctx, plain) - int(extracted_bytes or 0))
 
-    The extracted archive is deleted before the packaging, so its size counts as available (review CR-01); the copy
-    itself is on disk already and needs no more room for a rollback.
-    """
-    need = _package_need(ctx, pending['plain_bytes'])
-    free = int(ctx.storage.free_bytes()) + int(extracted_bytes)
+
+def _fits_after(ctx, pending, extracted_bytes):
+    """Whether the pre-restore copy (on disk now) can be packaged after the restore, next to the running apps."""
+    return int(ctx.storage.free_bytes()) + int(extracted_bytes or 0) >= _package_need(ctx, pending['plain_bytes'])
+
+
+def _package_in_downtime(ctx, pending, result, staging):
+    """Package the pre-restore copy right away, while the apps are still stopped (CONTRACT section 9): there is no
+    room to do it next to the running apps after the restore. No running reserve is needed then, only the archive
+    and the device reserve, as for a safety backup before 2026.11.14.2. The copy stays for a rollback, which reads
+    it directly, and is deleted when the job ends; it is not flagged (the safety backup exists already)."""
+    plain = int(pending['plain_bytes'])
+    need, free = plain + plain // 100 + int(ctx.paths.reserve_bytes), int(ctx.storage.free_bytes())
     if free < need:
-        raise BackupError('insufficient-space', f'空間不足以在還原後封裝還原前備份：需要約 {human(need)}，'
-                                                f'可用約 {human(free)}。未做任何變更。', required=need, free=free)
+        raise BackupError('insufficient-space', f'空間不足以封裝還原前備份：需要約 {human(need)}，可用約 {human(free)}。',
+                          required=need, free=free)
+    ctx.log('封裝還原前備份（停機期間）…')
+    record = pending['record']
+    info = _package(ctx, pending['apps'], staging, include_images=False, note=record['note'], backup_type='safety',
+                    key=pending['key'], phases=False, manifest_apps=record['manifest_apps'], entries=pending['entries'],
+                    downtime=record['downtime_seconds'], labels=PACKAGE_LABELS, backup_id=record['safety_backup_id'])
+    pending['packaged'] = True
+    result.update(safety_backup_id=info['backup_id'], safety_in_downtime=True)
+    ctx.reporter.set_partial(safety_backup_id=info['backup_id'])
+    ctx.mark('safety-package', 'done')
+    return info['backup_id']
 
 
 # ---------------------------------------------------------------- the pre-restore copy (pending/<job>/)
@@ -1462,11 +1519,17 @@ def _package_pending(ctx, pending, result, staging):
     # adopts the registered backup instead of packaging again).
     result.update(safety_backup_id=backup_id, safety_pending=False)
     ctx.reporter.set_partial(safety_backup_id=backup_id, safety_pending=False)
+    _remove_copy(ctx, pending)
+    return backup_id
+
+
+def _remove_copy(ctx, pending):
+    """Delete a pre-restore copy whose safety backup exists (what is left of it is reported, and an unflagged copy
+    of a finished job is the recovery sweep's)."""
     try:
         ctx.storage.remove_pending(ctx.job_id)
     except Exception:  # noqa: BLE001 - the backup exists; what is left is reported
         ctx.log(f'警告：無法完整刪除已封裝的還原前資料 {pending["dir"]}，請通知管理員檢查。')
-    return backup_id
 
 
 def _keep_pending(ctx, pending, result, reason, *, finished):
@@ -1661,7 +1724,8 @@ def _preflight(ctx, apps, manifest, extract_dir=None):
 def _rollback(ctx, touched, result, staging, error, pending, *, untouched=(), handover=None):
     """Bring every app the failed restore changed back to its state before the restore, from the pre-restore copy
     `pending` (no extraction: it is laid out like an extracted archive), remove fresh deployments, then package the
-    copy into the safety backup. Raises RolledBack, or BackupError (需人工處理) naming the safety backup or the copy."""
+    copy into the safety backup (or only delete it when it was packaged in the downtime). Raises RolledBack, or
+    BackupError (需人工處理) naming the safety backup or the copy."""
     ctx.reporter.add_phase('rollback', '自動回復')
     ctx.phase('rollback')
     ctx.log(f'還原失敗：{error.message}')
@@ -1757,6 +1821,8 @@ def _rollback(ctx, touched, result, staging, error, pending, *, untouched=(), ha
     if pending is not None:
         if damaged:
             kept = pending['dir']
+        elif pending.get('packaged'):
+            _remove_copy(ctx, pending)  # packaged in the downtime, before anything changed
         else:
             # The rollback only read the copy: it becomes the safety backup now, also when the rollback is incomplete
             # (then it is the way back). A failure keeps the copy, flagged for one more try by a recovery pass.
