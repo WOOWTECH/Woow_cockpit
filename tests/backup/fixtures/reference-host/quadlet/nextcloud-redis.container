@@ -1,0 +1,17 @@
+# Reference-host shape for catalog-suggest tests: names, mounts and dependencies only, no secret values.
+[Unit]
+Description=Nextcloud Redis
+
+
+[Container]
+ContainerName=nextcloud-redis
+Image=docker.io/library/redis:7-alpine
+Network=nextcloud.network
+Volume=%h/.local/share/nextcloud-office/redis:/data
+Exec=redis-server --appendonly yes
+
+[Service]
+Restart=always
+
+[Install]
+WantedBy=default.target

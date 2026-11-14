@@ -1,0 +1,20 @@
+# Reference-host shape for catalog-suggest tests: names, mounts and dependencies only, no secret values.
+[Unit]
+Description=n8n task runners (worker)
+Wants=n8n-worker.service
+After=n8n-worker.service
+
+[Container]
+ContainerName=n8n-worker-runners
+Image=docker.n8n.io/n8nio/runners:1.119.2
+Network=n8n.network
+Volume=%h/.config/n8n/n8n-task-runners.json:/etc/n8n-task-runners.json:ro
+Environment=N8N_RUNNERS_TASK_BROKER_URI=http://n8n-worker:5679
+Secret=n8n-runners-auth-token,type=env,target=N8N_RUNNERS_AUTH_TOKEN
+PodmanArgs=--stop-timeout 60
+
+[Service]
+Restart=always
+
+[Install]
+WantedBy=default.target

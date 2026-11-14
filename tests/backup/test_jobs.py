@@ -71,8 +71,8 @@ class StoreTests(JobCase):
         public = jobs.public_job(self.store.get(record['id']))
         self.assertEqual(list(public), list(jobs.PUBLIC_KEYS))
         self.assertEqual(public['state'], 'queued')
-        self.assertEqual([p['id'] for p in public['phases']], ['prepare', 'decrypt', 'preflight', 'safety', 'stop',
-                                                               'restore', 'start', 'check'])
+        self.assertEqual([p['id'] for p in public['phases']], ['prepare', 'decrypt', 'preflight', 'stage', 'safety',
+                                                               'stop', 'restore', 'start', 'check'])
         self.assertEqual(public['progress'], {'percent': 0, 'message': '等待開始'})
         # No temp file is left; the record lock file (jobs/<id>.lock, 0600, empty) sits next to the record.
         self.assertEqual(sorted(p.name for p in Path(self.paths.jobs).iterdir()), [path.name, f'{record["id"]}.lock'])
@@ -411,7 +411,8 @@ class RunJobTests(JobCase):
                 restarted.append(list(units))
                 return []
 
-        app = type('App', (), {'id': 'woowbk-demo', 'writer_units': ('woowbk-demo-app.service',)})()
+        app = type('App', (), {'id': 'woowbk-demo', 'writer_units': ('woowbk-demo-app.service',),
+                               'units': ('woowbk-demo-db.service', 'woowbk-demo-app.service')})()
         deps = flows.Deps(storage=None, keys=None, archive=None, load_catalog=lambda: {'woowbk-demo': app},
                           adapter_factory=lambda app, **kwargs: Adapter(app), host_info=dict,
                           system_stopping=lambda: False)

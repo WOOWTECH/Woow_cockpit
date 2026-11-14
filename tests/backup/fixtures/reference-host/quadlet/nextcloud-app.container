@@ -1,0 +1,21 @@
+# Reference-host shape for catalog-suggest tests: names, mounts and dependencies only, no secret values.
+[Unit]
+Description=Nextcloud
+Requires=nextcloud-db.service nextcloud-redis.service
+After=nextcloud-db.service nextcloud-redis.service
+
+[Container]
+ContainerName=nextcloud-app
+Image=localhost/nextcloud-woow:30
+Network=nextcloud.network
+Volume=%h/.local/share/nextcloud-office/html:/var/www/html
+Volume=%h/.local/share/nextcloud-office/data:/var/www/html/data
+EnvironmentFile=%h/.config/nextcloud/nextcloud.env
+Secret=nextcloud-db-password,type=env,target=POSTGRES_PASSWORD
+Secret=nextcloud-admin-password,type=env,target=NEXTCLOUD_ADMIN_PASSWORD
+
+[Service]
+Restart=always
+
+[Install]
+WantedBy=default.target

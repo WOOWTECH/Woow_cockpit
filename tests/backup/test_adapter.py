@@ -143,6 +143,13 @@ class FakeOwner:
         self.signal_on = None       # (needle, exception): the command runs, then the signal arrives
         self.dump_readable = True   # False: the TOC is intact but the table data is cut off
         self.dump_crashes_db = False  # True: the database shuts down while pg_dump runs
+        # systemd's After= of each unit, as Quadlet generates it (Requires=/After= lines, Network= adds the network)
+        self.after = {'woowbk-demo-db.service': ['woowbk-demo-network.service', 'basic.target'],
+                      'woowbk-demo-app.service': ['woowbk-demo-db.service', 'woowbk-demo-network.service']}
+        self.fail_units = set()     # units whose start fails (also inside a multi-unit start)
+        # Requires= and BindsTo= of each unit (Quadlet does not add After= for them: review L7)
+        self.requires = {'woowbk-demo-app.service': ['woowbk-demo-db.service']}
+        self.binds = {}
 
     def resolve(self, name):
         """The local image a name means, the way podman 4.9.3 looks it up (checked in the lab): as written, then for
@@ -244,6 +251,11 @@ class FakeOwner:
 
     def systemctl(self, args):
         verb = args[0]
+        if verb == 'show' and args[1] == '--property=Id,After,Requires,BindsTo':
+            return podman.Result(0, '\n\n'.join(f'Id={unit}\nAfter={" ".join(self.after.get(unit, []))}\n'
+                                                 f'Requires={" ".join(self.requires.get(unit, []))}\n'
+                                                 f'BindsTo={" ".join(self.binds.get(unit, []))}'
+                                                 for unit in args[args.index('--') + 1:]).encode() + b'\n', b'')
         if verb == 'show':
             blocks = []
             for unit in args[args.index('--') + 1:]:
@@ -260,13 +272,18 @@ class FakeOwner:
             return podman.Result(0, b'', b'')
         if verb in ('start', 'stop', 'restart'):
             assert args[1] == '--'
-            unit = args[2]
-            if unit not in self.units:
-                return podman.Result(5, b'', f'Unit {unit} not loaded.'.encode())
-            if verb != 'stop' and unit in self.masked:
-                return podman.Result(1, b'', f'Unit {unit} is masked.'.encode())
-            self.units[unit] = 'inactive' if verb == 'stop' else 'active'
-            return podman.Result(0, b'', b'')
+            code, errors = 0, []
+            for unit in args[2:]:  # systemctl runs one job per unit and fails when any of them fails
+                if unit not in self.units:
+                    code, errors = 5, errors + [f'Unit {unit} not loaded.']
+                elif verb != 'stop' and unit in self.masked:
+                    code, errors = 1, errors + [f'Unit {unit} is masked.']
+                elif verb != 'stop' and unit in self.fail_units:
+                    self.units[unit] = 'failed'
+                    code, errors = 1, errors + [f'Job for {unit} failed.']
+                else:
+                    self.units[unit] = 'inactive' if verb == 'stop' else 'active'
+            return podman.Result(code, b'', '\n'.join(errors).encode())
         if verb == 'daemon-reload':
             for name in QUADLETS:
                 unit = qp.quadlet_unit(name)
@@ -448,7 +465,9 @@ class FakeOwner:
                 if not rows:
                     return podman.Result(125, b'', f'Error: no such container {cid}'.encode())
                 labels = {'PODMAN_SYSTEMD_UNIT': rows[0]['unit']} if rows[0]['unit'] else {}
-                mounts = [{'Type': 'bind', 'Source': m['source'], 'Destination': '/data', 'RW': m['rw']} for m in rows]
+                # a row with 'volume' is a named volume mount (`Volume=<name>:/path`), else a bind mount
+                mounts = [{'Type': 'volume', 'Name': m['volume'], 'Destination': '/data', 'RW': m['rw']} if 'volume' in m
+                          else {'Type': 'bind', 'Source': m['source'], 'Destination': '/data', 'RW': m['rw']} for m in rows]
                 lines.append('\t'.join(json.dumps(value) for value in (rows[0]['name'], labels, mounts)))
             return podman.Result(0, ''.join(line + '\n' for line in lines).encode(), b'')
         if cmd == 'info':
@@ -558,6 +577,8 @@ GOLDEN_BACKUP = [
     [PODMAN, 'image', 'inspect', APP_REF],
     *SCOPE,
     *MAINTENANCE,
+    # a running container the backup does not stop must not mount the app's volumes read-write (review H2, F3)
+    [PODMAN, 'ps', '--format', '{{.ID}}'],
     [SYSTEMCTL, '--user', 'stop', '--', 'woowbk-demo-app.service'],
     psql('SHOW server_version_num'),
     psql('SHOW server_version'),
@@ -815,8 +836,11 @@ class SafetyHelperTests(AdapterCase):
     def test_start_units_in_catalog_order(self):
         self.owner.units = {u: 'inactive' for u in self.owner.units}
         self.assertEqual(self.adapter.start_units(['woowbk-demo-app.service', 'woowbk-demo-db.service']), [])
-        self.assertEqual(self.owner.argvs(), [[SYSTEMCTL, '--user', 'start', '--', 'woowbk-demo-db.service'],
-                                              [SYSTEMCTL, '--user', 'start', '--', 'woowbk-demo-app.service']])
+        self.assertEqual(self.owner.argvs(), [  # the app is ordered after the database (After=): two groups
+            [SYSTEMCTL, '--user', 'show', '--property=Id,After,Requires,BindsTo', '--', 'woowbk-demo-db.service',
+             'woowbk-demo-app.service'],
+            [SYSTEMCTL, '--user', 'start', '--', 'woowbk-demo-db.service'],
+            [SYSTEMCTL, '--user', 'start', '--', 'woowbk-demo-app.service']])
         self.owner.fail = [('start -- woowbk-demo-app.service', 1)]
         self.assertEqual(self.adapter.start_units(['woowbk-demo-app.service']), ['woowbk-demo-app.service'])
 
@@ -884,8 +908,8 @@ class RestoreTests(AdapterCase):
             *SCOPE,  # no undeclared database would be lost (review CR-07)
             [PODMAN, 'image', 'inspect', PG_REF], [PODMAN, 'image', 'inspect', APP_REF],  # tags to restore (CR-10)
             *images,
-            [SYSTEMCTL, '--user', 'stop', '--', 'woowbk-demo-app.service'],
-            [SYSTEMCTL, '--user', 'stop', '--', 'woowbk-demo-db.service'],
+            # One call: systemd stops the units side by side, dependents first (CONTRACT section 9)
+            [SYSTEMCTL, '--user', 'stop', '--', 'woowbk-demo-app.service', 'woowbk-demo-db.service'],
             [SYSTEMCTL, '--user', 'mask', '--', 'woowbk-demo-app.service'],  # no start at boot until done (CR-06)
             [SYSTEMCTL, '--user', 'stop', '--', 'woowbk-demo-network.service'],
             [PODMAN, 'secret', 'exists', 'woowbk-demo-db-password'], [PODMAN, 'secret', 'rm', 'woowbk-demo-db-password'],

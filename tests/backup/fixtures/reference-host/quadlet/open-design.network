@@ -1,0 +1,6 @@
+# Reference-host shape for catalog-suggest tests: names, mounts and dependencies only, no secret values.
+[Unit]
+Description=open-design network
+
+[Network]
+NetworkName=open-design

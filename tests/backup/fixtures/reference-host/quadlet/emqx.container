@@ -1,0 +1,29 @@
+# Reference-host shape for catalog-suggest tests: names, mounts and dependencies only, no secret values.
+# Ports are bound to a LAN address on the reference host (documentation address here).
+[Unit]
+Description=EMQX 5 broker
+
+
+[Container]
+ContainerName=emqx
+Image=docker.io/emqx/emqx:5.8.6
+Network=emqx.network
+PublishPort=192.0.2.10:1883:1883
+PublishPort=192.0.2.10:8883:8883
+PublishPort=192.0.2.10:18083:18083
+PublishPort=192.0.2.10:18084:8080
+Volume=emqx-data.volume:/opt/emqx/data
+Volume=emqx-log.volume:/opt/emqx/log
+Volume=%h/.config/emqx/base.hocon:/opt/emqx/etc/base.hocon:ro
+Volume=%h/.config/emqx/acl.conf:/opt/emqx/etc/acl.conf:ro
+EnvironmentFile=%h/.config/emqx/emqx.env
+Secret=woow-emqx-dashboard-password,type=env,target=EMQX_DASHBOARD__DEFAULT_PASSWORD
+Secret=woow-emqx-node-cookie,type=env,target=EMQX_NODE__COOKIE
+Secret=woow-emqx-mqtt-bootstrap,type=mount,target=/opt/emqx/etc/bootstrap-users.json
+HealthCmd=/opt/emqx/bin/emqx ctl status
+
+[Service]
+Restart=always
+
+[Install]
+WantedBy=default.target

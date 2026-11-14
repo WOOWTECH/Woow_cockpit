@@ -1,0 +1,6 @@
+# Reference-host shape for catalog-suggest tests: names, mounts and dependencies only, no secret values.
+[Unit]
+Description=headscale-mcp network
+
+[Network]
+NetworkName=headscale-mcp

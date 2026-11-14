@@ -1,0 +1,21 @@
+# Reference-host shape for catalog-suggest tests: names, mounts and dependencies only, no secret values.
+[Unit]
+Description=LiteLLM PostgreSQL 17
+
+
+[Container]
+ContainerName=litellm-postgres
+Image=docker.io/library/postgres:17-alpine
+Network=litellm.network
+Volume=litellm-pgdata.volume:/var/lib/postgresql/data
+Environment=POSTGRES_USER=litellm POSTGRES_DB=litellm
+Secret=litellm-postgres-password,type=env,target=POSTGRES_PASSWORD
+HealthCmd=pg_isready -h 127.0.0.1 -U litellm -d litellm
+HealthInterval=30s
+
+[Service]
+Restart=always
+TimeoutStartSec=900
+
+[Install]
+WantedBy=default.target

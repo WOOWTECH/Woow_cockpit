@@ -1,0 +1,23 @@
+# Reference-host shape for catalog-suggest tests: names, mounts and dependencies only, no secret values.
+[Unit]
+Description=Headplane management UI
+Requires=headscale.service
+After=headscale.service
+
+[Container]
+ContainerName=headplane
+Image=ghcr.io/tale/headplane:0.6.1
+Network=headscale.network
+PublishPort=127.0.0.1:23000:3000
+Volume=headplane-data.volume:/var/lib/headplane
+Volume=headscale-data.volume:/var/lib/headscale
+Volume=%h/.config/headscale/headplane/config.yaml:/etc/headplane/config.yaml:ro
+Secret=headscale-headplane-cookie,type=env,target=HEADPLANE_COOKIE_SECRET
+Secret=headscale-headplane-api-key,type=env,target=HEADPLANE_HEADSCALE_API_KEY
+HealthCmd=wget -q --spider http://127.0.0.1:3000/
+
+[Service]
+Restart=always
+
+[Install]
+WantedBy=default.target

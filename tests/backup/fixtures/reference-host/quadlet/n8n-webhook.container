@@ -1,0 +1,26 @@
+# Reference-host shape for catalog-suggest tests: names, mounts and dependencies only, no secret values.
+[Unit]
+Description=n8n webhook processor
+Requires=n8n-postgres.service n8n-valkey.service
+After=n8n.service
+
+[Container]
+ContainerName=n8n-webhook
+Image=docker.n8n.io/n8nio/n8n:1.119.2
+Network=n8n.network
+Exec=webhook
+PublishPort=127.0.0.1:15679:5678
+Volume=n8n-data.volume:/home/node/.n8n
+EnvironmentFile=%h/.config/n8n/n8n.env
+Environment=DB_TYPE=postgresdb DB_POSTGRESDB_HOST=n8n-postgres DB_POSTGRESDB_DATABASE=n8n DB_POSTGRESDB_USER=n8n
+Environment=EXECUTIONS_MODE=queue QUEUE_BULL_REDIS_HOST=n8n-valkey N8N_RUNNERS_ENABLED=true N8N_RUNNERS_MODE=external
+Secret=n8n-db-password,type=env,target=DB_POSTGRESDB_PASSWORD
+Secret=n8n-valkey-password,type=env,target=QUEUE_BULL_REDIS_PASSWORD
+Secret=n8n-runners-auth-token,type=env,target=N8N_RUNNERS_AUTH_TOKEN
+HealthCmd=wget -qO- http://127.0.0.1:5678/healthz
+
+[Service]
+Restart=always
+
+[Install]
+WantedBy=default.target

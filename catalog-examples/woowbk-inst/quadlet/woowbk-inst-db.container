@@ -1,0 +1,28 @@
+# woowbk-inst PostgreSQL 16 with pgvector (rootless Quadlet template, lab fixture).
+# One cluster holds what single-database mode cannot keep: a Nextcloud-like database owned by the role the app logs in
+# with (oc_admin, password only in the app's own volume) using the vector extension, and Odoo-like databases owned by
+# an `odoo` role. The catalog entry backs it up in instance mode (roles with password hashes and every database).
+[Unit]
+Description=woowbk-inst PostgreSQL database (pgvector)
+
+[Container]
+ContainerName=woowbk-inst-db
+Image=docker.io/pgvector/pgvector:pg16
+Network=woowbk-inst.network
+Volume=woowbk-inst-pgdata:/var/lib/postgresql/data
+Environment=POSTGRES_USER=ncadmin POSTGRES_DB=ncadmin
+Secret=woowbk-inst-db-password,type=env,target=POSTGRES_PASSWORD
+HealthCmd=pg_isready -h 127.0.0.1 -p 5432 -U ncadmin -d ncadmin
+HealthInterval=30s
+HealthTimeout=5s
+HealthRetries=5
+HealthStartPeriod=20s
+PodmanArgs=--memory 256m
+
+[Service]
+Restart=on-failure
+# The first start may pull the image.
+TimeoutStartSec=900
+
+[Install]
+WantedBy=default.target

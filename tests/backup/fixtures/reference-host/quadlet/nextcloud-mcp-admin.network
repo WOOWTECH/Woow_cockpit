@@ -1,0 +1,6 @@
+# Reference-host shape for catalog-suggest tests: names, mounts and dependencies only, no secret values.
+[Unit]
+Description=nextcloud-mcp-admin network
+
+[Network]
+NetworkName=nextcloud-mcp-admin

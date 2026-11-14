@@ -1,0 +1,20 @@
+# Reference-host shape for catalog-suggest tests: names, mounts and dependencies only, no secret values.
+[Unit]
+Description=n8n queue (Valkey)
+
+
+[Container]
+ContainerName=n8n-valkey
+Image=docker.io/valkey/valkey:8-alpine
+Network=n8n.network
+Volume=n8n-valkey-data.volume:/data
+Volume=%h/.config/n8n/start-valkey.sh:/usr/local/bin/start-valkey.sh:ro
+Secret=n8n-valkey-password,type=mount,target=/run/secrets/valkey-password
+Exec=sh /usr/local/bin/start-valkey.sh
+HealthCmd=valkey-cli ping
+
+[Service]
+Restart=always
+
+[Install]
+WantedBy=default.target

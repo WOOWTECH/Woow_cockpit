@@ -191,6 +191,15 @@ class StrictValidationTests(CatalogCase):
             entry['config_files'][0]['path'] = f'.config/{app_id}/x.conf'
             with self.assertRaises(BackupError):
                 catalog.validate_entry(entry, paths=self.paths, user_lookup=lookup)
+        # review L3: an app id `fish` or `git` must not let archive bytes write the owner's shell or git start-up files
+        for app_id, path in (('fish', '.config/fish/conf.d/x.fish'), ('fish', '.config/fish/config.fish'),
+                             ('git', '.config/git/config'), ('git', '.config/Git/config')):
+            entry = demo_entry(self.paths)
+            entry['id'] = app_id
+            entry['config_files'][0]['path'] = path
+            with self.subTest(path), self.assertRaises(BackupError) as caught:
+                catalog.validate_entry(entry, paths=self.paths, user_lookup=lookup)
+            self.assertIn('git', caught.exception.message)
         entry = demo_entry(self.paths)
         entry['config_files'][0]['path'] = '.config/woowbk-demo/nested/dir/app.toml'
         catalog.validate_entry(entry, paths=self.paths, user_lookup=lookup)
@@ -460,3 +469,92 @@ class DataDirsTests(CatalogCase):
         self.assertEqual(problem['code'], 'invalid-request')
         self.assertEqual(problem['message'], '應用 woowbk-other 的主機資料夾 ~/shared 與應用 woowbk-demo 的 ~/shared/data '
                                              '重疊（同一個擁有者），已略過 woowbk-other.json。')
+
+
+class StrengthenSchemaTests(CatalogCase):
+    """Built-in data verification types and PostgreSQL instance mode (CONTRACT section 4, 2026-11-13)."""
+
+    def validate(self, mutate):
+        entry = demo_entry(self.paths)
+        mutate(entry)
+        return catalog.validate_entry(entry, paths=self.paths, user_lookup=lookup)
+
+    def test_digest_checks_are_normalized(self):
+        def mutate(entry):
+            entry['verify'] += [
+                {'id': 'db', 'type': 'postgres-digest', 'postgres': 'main', 'label': '資料表'},
+                {'id': 'files', 'type': 'files-digest', 'volume': 'woowbk-demo-files', 'exclude': ['*.log', 'cache/tmp']}]
+        app = self.validate(mutate)
+        db, files = app.verify[1], app.verify[2]
+        self.assertEqual(db, {'id': 'db', 'type': 'postgres-digest', 'postgres': 'main', 'container': None, 'unit': None,
+                              'user': None, 'databases': ['notes'], 'exclude_tables': [], 'label': '資料表'})
+        self.assertEqual(files, {'id': 'files', 'type': 'files-digest', 'volume': 'woowbk-demo-files', 'data_dir': None,
+                                 'exclude': ['*.log', 'cache/tmp'], 'label': ''})
+        self.assertEqual([catalog.digest_target(spec) for spec in app.verify],
+                         [None, 'postgres:main', 'volume:woowbk-demo-files'])
+
+    def test_digest_check_rules(self):
+        cases = {
+            'unknown type': {'id': 'x', 'type': 'sql'},
+            'both forms': {'id': 'x', 'type': 'postgres-digest', 'postgres': 'main', 'container': 'c'},
+            'no form': {'id': 'x', 'type': 'postgres-digest'},
+            'unknown postgres id': {'id': 'x', 'type': 'postgres-digest', 'postgres': 'other'},
+            'single mode other database': {'id': 'x', 'type': 'postgres-digest', 'postgres': 'main', 'databases': ['b']},
+            'single mode all': {'id': 'x', 'type': 'postgres-digest', 'postgres': 'main', 'databases': 'all'},
+            'unit with postgres form': {'id': 'x', 'type': 'postgres-digest', 'postgres': 'main', 'unit': 'a.service'},
+            'cold form without user': {'id': 'x', 'type': 'postgres-digest', 'container': 'c',
+                                       'unit': 'woowbk-demo-app.service'},
+            'cold unit not a writer': {'id': 'x', 'type': 'postgres-digest', 'container': 'c',
+                                       'unit': 'woowbk-demo-db.service', 'user': 'u'},
+            'cold container is a dumped one': {'id': 'x', 'type': 'postgres-digest', 'container': 'woowbk-demo-db',
+                                               'unit': 'woowbk-demo-app.service', 'user': 'u'},
+            'database name with =': {'id': 'x', 'type': 'postgres-digest', 'container': 'c',
+                                     'unit': 'woowbk-demo-app.service', 'user': 'u', 'databases': ['a=b']},
+            'database name with leading -': {'id': 'x', 'type': 'postgres-digest', 'container': 'c',
+                                             'unit': 'woowbk-demo-app.service', 'user': 'u', 'databases': ['-x']},
+            'database volume': {'id': 'x', 'type': 'files-digest', 'volume': 'woowbk-demo-pgdata'},
+            'undeclared directory': {'id': 'x', 'type': 'files-digest', 'data_dir': 'somewhere'},
+            'volume and dir': {'id': 'x', 'type': 'files-digest', 'volume': 'woowbk-demo-files', 'data_dir': 'a'},
+            'control character in glob': {'id': 'x', 'type': 'files-digest', 'volume': 'woowbk-demo-files',
+                                          'exclude': ['a\nb']},
+            'unknown key': {'id': 'x', 'type': 'files-digest', 'volume': 'woowbk-demo-files', 'compare': ['a']},
+            'label on http-json': {'id': 'x', 'type': 'http-json', 'url': 'http://127.0.0.1:1/', 'compare': ['a'],
+                                   'label': 'x'},
+        }
+        for label, item in cases.items():
+            with self.subTest(label):
+                self.assert_rejected(lambda entry, item=item: entry['verify'].append(item))
+        self.assert_rejected(lambda entry: entry['verify'].extend([
+            {'id': 'a', 'type': 'files-digest', 'volume': 'woowbk-demo-files'},
+            {'id': 'b', 'type': 'files-digest', 'volume': 'woowbk-demo-files'}]))  # one check per target
+        self.assert_rejected(lambda entry: entry['verify'].extend(
+            [{'id': f'v{i}', 'type': 'http-json', 'url': 'http://127.0.0.1:1/', 'compare': ['a']} for i in range(16)]))
+
+    def test_cold_database_digest(self):
+        def mutate(entry):
+            entry['writer_units'] = list(entry['units'])
+            entry['postgres'] = []
+            entry['verify'] = [{'id': 'db', 'type': 'postgres-digest', 'container': 'woowbk-demo-db',
+                                'unit': 'woowbk-demo-db.service', 'user': 'notes', 'exclude_tables': ['public.cron_*']}]
+        spec = self.validate(mutate).verify[0]
+        self.assertEqual((spec['container'], spec['unit'], spec['user'], spec['databases'], spec['exclude_tables']),
+                         ('woowbk-demo-db', 'woowbk-demo-db.service', 'notes', 'all', ['public.cron_*']))
+        self.assertEqual(catalog.digest_target(spec), 'container:woowbk-demo-db')
+
+    def test_instance_scope(self):
+        def mutate(entry):
+            del entry['postgres'][0]['database']
+            entry['postgres'][0]['scope'] = 'instance'
+            entry['verify'].append({'id': 'db', 'type': 'postgres-digest', 'postgres': 'main'})
+        app = self.validate(mutate)
+        self.assertEqual(app.postgres[0]['scope'], 'instance')
+        self.assertEqual(app.postgres[0]['database'], 'postgres', 'instance-wide statements connect to postgres')
+        self.assertEqual(app.verify[1]['databases'], 'all')
+        self.assertEqual(self.validate(lambda entry: None).postgres[0]['scope'], 'database')
+        self.assert_rejected(lambda entry: entry['postgres'][0].update(scope='instance'))  # no database key then
+        self.assert_rejected(lambda entry: entry['postgres'][0].update(scope='cluster'))
+
+        def listed(entry):
+            mutate(entry)
+            entry['verify'][1]['databases'] = ['nextcloud', 'odoo_prod']
+        self.assertEqual(self.validate(listed).verify[1]['databases'], ['nextcloud', 'odoo_prod'])

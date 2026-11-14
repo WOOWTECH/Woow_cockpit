@@ -218,11 +218,16 @@ main()
 #   state <tokens> <rel>...        JSON list of {path, type, empty, mount, dev, free, siblings: [{kind, token, type}],
 #                                  more}; the siblings of the comma-separated <tokens> ("-": none) are always listed,
 #                                  other siblings up to 50 (`more` counts the rest; review M4)
+#   digest <rel> <flags> [glob...] files-digest of the directory: one line per entry (see digests.py), sorted by path
+#   digestvol <abs> <flags> [glob...]  the same for a volume's mount point (an absolute path podman reported)
+#                                  flags: comma-separated `root` (list the top directory itself), `nosetid` (setuid and
+#                                  setgid of non-directories are not compared: a volume restore drops them), or `-`
 DIR_HELPER = r'''
 import ctypes, errno, json, os, re, shutil, stat, subprocess, sys
 TAR = '/usr/bin/tar'
 CODES = {'not-found': 3, 'not-dir': 4, 'bad-path': 6, 'bad-command': 8, 'exists': 9, 'not-empty': 10, 'tar': 11,
-         'mount': 12}
+         'mount': 12, 'limit': 13, 'changed': 14}
+MAX_ENTRIES = 2000000
 SEG = re.compile(r'[A-Za-z0-9._@+-]{1,255}\Z')
 TOKEN = re.compile(r'[A-Za-z0-9][A-Za-z0-9._-]{0,63}\Z')
 SIBLING = re.compile(r'\.woowbk-(new|old|del)-([A-Za-z0-9][A-Za-z0-9._-]{0,63})\Z')
@@ -528,6 +533,97 @@ def op_state(tokens, rels):
         row['siblings'] = [item for item in found if item['token'] in wanted] + others[:MAX_SIBLINGS]
         row['more'] = max(0, len(others) - MAX_SIBLINGS)
     sys.stdout.write(json.dumps(rows))
+def digest_tree(dfd, flags, patterns):
+    """files-digest lines of the tree open at dfd: `kind mode uid gid size sha256 target path`, hex for names, sorted
+    by path bytes. No symlink is followed, no other mount is entered (refused), sockets are skipped (tar never keeps
+    them); a regular file that changes while it is read is refused."""
+    import fnmatch, hashlib
+    flags = set() if flags == '-' else set(flags.split(','))
+    if not flags <= {'root', 'nosetid'}:
+        die('bad-command')
+    root = mount_key(dfd)
+    lines = []
+    def excluded(rel):
+        text = os.fsdecode(rel)
+        base = text.rsplit('/', 1)[-1]
+        return any(fnmatch.fnmatchcase(text if '/' in p else base, p) for p in patterns)
+    def emit(kind, st, rel, size=0, sha='-', target=None):
+        mode = stat.S_IMODE(st.st_mode)
+        if 'nosetid' in flags and kind != 'd':
+            mode &= ~0o6000
+        lines.append((rel, '%s %04o %d %d %d %s %s %s\n' % (kind, mode, st.st_uid, st.st_gid, size, sha,
+                                                             target.hex() if target is not None else '-', rel.hex())))
+        if len(lines) > MAX_ENTRIES:
+            die('limit', 'more than %d entries' % MAX_ENTRIES)
+    if 'root' in flags:
+        emit('d', os.fstat(dfd), b'.')
+    def opendir(rel):
+        # Directories are opened when their turn comes, one component at a time without following symlinks, so a
+        # tree with many subdirectories never holds more than its depth in open descriptors.
+        fd = os.dup(dfd)
+        for part in rel.split(b'/') if rel else []:
+            try:
+                nfd = os.open(part, DIRFLAGS, dir_fd=fd)
+            finally:
+                os.close(fd)
+            fd = nfd
+        return fd
+    stack = [b'']
+    while stack:
+        prefix = stack.pop()
+        fd = opendir(prefix)
+        prefix = prefix + b'/' if prefix else b''
+        try:
+            for name in sorted(os.listdir(fd), key=os.fsencode):
+                rel = prefix + os.fsencode(name)
+                if excluded(rel):
+                    continue
+                st = os.stat(name, dir_fd=fd, follow_symlinks=False)
+                if stat.S_ISDIR(st.st_mode):
+                    if not same_mount(mount_key(fd, name), root):
+                        die('mount', shown(os.fsdecode(rel)))
+                    emit('d', st, rel)
+                    stack.append(rel)
+                elif stat.S_ISREG(st.st_mode):
+                    ffd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC, dir_fd=fd)
+                    try:
+                        fst = os.fstat(ffd)
+                        if (fst.st_dev, fst.st_ino) != (st.st_dev, st.st_ino):
+                            die('changed', shown(os.fsdecode(rel)))
+                        digest, size = hashlib.sha256(), 0
+                        while True:
+                            chunk = os.read(ffd, 1 << 20)
+                            if not chunk:
+                                break
+                            digest.update(chunk)
+                            size += len(chunk)
+                        if size != fst.st_size or os.fstat(ffd).st_mtime_ns != fst.st_mtime_ns:
+                            die('changed', shown(os.fsdecode(rel)))
+                    finally:
+                        os.close(ffd)
+                    emit('f', fst, rel, size, digest.hexdigest())
+                elif stat.S_ISLNK(st.st_mode):
+                    emit('l', st, rel, target=os.fsencode(os.readlink(name, dir_fd=fd)))
+                elif stat.S_ISFIFO(st.st_mode):
+                    emit('p', st, rel)
+                elif stat.S_ISCHR(st.st_mode) or stat.S_ISBLK(st.st_mode):
+                    emit('c' if stat.S_ISCHR(st.st_mode) else 'b', st, rel)
+        finally:
+            os.close(fd)
+    lines.sort(key=lambda item: item[0])
+    out = os.fdopen(1, 'w', buffering=1 << 20, closefd=False)
+    for _rel, line in lines:
+        out.write(line)
+    out.flush()
+def op_digest(rel, flags, patterns):
+    pfd, name, _ = parent(rel)
+    if is_mount(pfd, name):
+        die('mount', name)
+    digest_tree(os.open(name, DIRFLAGS, dir_fd=pfd), flags, patterns)
+def op_digestvol(path, flags, patterns):
+    if not path.startswith('/') or os.path.normpath(path) != path or len(path) > 4096:
+        die('bad-path')
+    digest_tree(os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC), flags, patterns)
 def main():
     op, args = sys.argv[1], sys.argv[2:]
     try:
@@ -547,6 +643,10 @@ def main():
             op_back(*args)
         elif op == 'state' and len(args) >= 2:
             op_state(args[0], args[1:])
+        elif op == 'digest' and len(args) >= 2:
+            op_digest(args[0], args[1], args[2:])
+        elif op == 'digestvol' and len(args) >= 2:
+            op_digestvol(args[0], args[1], args[2:])
         else:
             die('bad-command')
     except FileNotFoundError:
@@ -562,7 +662,9 @@ def main():
 main()
 '''
 DIR_HELPER_ERRORS = {3: 'not-found', 4: 'not-dir', 6: 'bad-path', 8: 'bad-command', 9: 'exists', 10: 'not-empty',
-                     11: 'tar', 12: 'mount'}
+                     11: 'tar', 12: 'mount', 13: 'limit', 14: 'changed'}
+DIGEST_FLAGS_RE = re.compile(r'(-|(root|nosetid)(,(root|nosetid))?)\Z')
+PATTERN_RE = re.compile(r'[^\x00-\x1f\x7f]{1,200}\Z')
 
 
 @dataclass
@@ -873,6 +975,11 @@ class OwnerRunner:
         if code == 'mount':
             return BackupError('incompatible', f'~/{rel} 是掛載點或其中有掛載點；為避免移動或刪除其他掛載的內容，'
                                                f'無法{what}這個主機資料夾。', path=rel)
+        if code == 'limit':
+            return BackupError('limit-exceeded', f'~/{rel} 的項目超過 2,000,000 個，無法{what}。', path=rel)
+        if code == 'changed':
+            return BackupError('job-failed', f'~/{rel} 中的檔案在{what}時被修改（{detail.split(": ", 1)[-1]}）；'
+                                             '請確認沒有其他程式在寫入。', path=rel)
         return CommandError(f'無法以擁有者身分{what}主機資料夾 ~/{rel}（結束碼 {result.returncode}）。',
                             returncode=result.returncode, stderr=result.stderr, command=f'owner-dir {what}')
 
@@ -897,6 +1004,40 @@ class OwnerRunner:
                           stdout=stdout, timeout=timeout, check=False, max_output=max_output)
         if result.returncode:
             raise self._dir_failure(result, rel_path, '讀取')
+
+    @staticmethod
+    def _digest_args(root, nosetid, exclude):
+        flags = ','.join(name for name, on in (('root', root), ('nosetid', nosetid)) if on) or '-'
+        patterns = list(exclude or ())
+        if not DIGEST_FLAGS_RE.fullmatch(flags) or len(patterns) > 64 or not all(
+                isinstance(p, str) and PATTERN_RE.fullmatch(p) for p in patterns):
+            raise BackupError('internal-error', '內部命令格式不正確。')
+        return [flags, *patterns]
+
+    def dir_digest(self, rel_path, *, stdout, root=True, nosetid=False, exclude=(), timeout=3 * 3600, max_output=None):
+        """files-digest lines of ~/<rel_path> (read as the owner inside his namespace) into `stdout`, a file; the
+        output is untrusted and parsed by woowbackup.digests."""
+        validate_rel_path(rel_path)
+        argv = self._dir_argv('digest', rel_path, *self._digest_args(root, nosetid, exclude))
+        result = self.run([PYTHON, '-I', '-c', FILE_HELPER, 'relay', *argv], stdout=stdout, timeout=timeout,
+                          check=False, max_output=max_output)
+        if result.returncode:
+            raise self._dir_failure(result, rel_path, '計算摘要')
+
+    def volume_digest(self, mountpoint, *, stdout, nosetid=True, exclude=(), timeout=3 * 3600, max_output=None):
+        """files-digest lines of a volume's mount point (as podman reported it); the top directory itself is not
+        listed: `podman volume import` creates it anew (0755, owner 0), it never comes from the archive."""
+        if (not isinstance(mountpoint, str) or not mountpoint.startswith('/') or os.path.normpath(mountpoint) != mountpoint
+                or len(mountpoint) > 4096 or any(ch in mountpoint for ch in '\0\n')):
+            raise BackupError('job-failed', '資料卷的掛載位置格式不正確。')
+        argv = self._dir_argv('digestvol', mountpoint, *self._digest_args(False, nosetid, exclude))
+        result = self.run([PYTHON, '-I', '-c', FILE_HELPER, 'relay', *argv], stdout=stdout, timeout=timeout,
+                          check=False, max_output=max_output)
+        if result.returncode:
+            if DIR_HELPER_ERRORS.get(result.returncode) == 'not-found':
+                raise BackupError('not-found', '找不到資料卷的內容。')
+            raise CommandError(f'無法以擁有者身分計算資料卷內容的摘要（結束碼 {result.returncode}）。',
+                               returncode=result.returncode, stderr=result.stderr, command='owner-dir digestvol')
 
     def dir_measure(self, rel_path):
         """{'bytes', 'members', 'acls', 'mount_root', 'mounts', 'more_mounts'} of ~/<rel_path>: apparent bytes of the

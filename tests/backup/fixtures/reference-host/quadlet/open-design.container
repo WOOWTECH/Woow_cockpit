@@ -1,0 +1,20 @@
+# Reference-host shape for catalog-suggest tests: names, mounts and dependencies only, no secret values.
+[Unit]
+Description=OpenDesign
+
+
+[Container]
+ContainerName=open-design
+Image=localhost/open-design:latest
+Network=open-design.network
+PublishPort=127.0.0.1:7456:7456
+Volume=open-design-data.volume:/app/data
+EnvironmentFile=%h/.config/open-design/open-design.env
+Secret=open-design-api-token,type=env,target=OD_API_TOKEN
+HealthCmd=curl -fsS http://127.0.0.1:7456/api/health
+
+[Service]
+Restart=always
+
+[Install]
+WantedBy=default.target

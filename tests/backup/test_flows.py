@@ -150,8 +150,8 @@ class FakeStorage:
         self.counter += 1
         return f'20261113T0200{self.counter:02d}Z-{self.counter:08x}'
 
-    def archive_path(self, backup_id):
-        return self.archives / f'{backup_id}.woowbackup'
+    def archive_path(self, backup_id, fmt=None):
+        return self.archives / f'{backup_id}{".woowbackup" if fmt == 1 else ".tar"}'
 
     def list_backups(self):
         records = [copy.deepcopy(m) for m in self.index.values() if self.archive_path(m['id']).exists()]
@@ -228,6 +228,7 @@ class FakeArchive:
     def __init__(self):
         self.writes, self.extracts, self.verifies = [], [], []
         self.corrupt = set()
+        self.deep_corrupt = set()  # archive names whose deep check (nested tars) fails
         self.on_write = None
 
     @staticmethod
@@ -270,37 +271,62 @@ class FakeArchive:
 
     def _open(self, path, identities):
         data = self._load(path)
-        if not identities:
-            raise BackupError('key-required', '需要備份金鑰。')
-        if data['header']['key_id'] not in self._key_ids(identities):
-            raise BackupError('wrong-key', '金鑰不正確。')
+        if data['header'].get('encryption') != 'none':
+            if not identities:
+                raise BackupError('key-required', '需要備份金鑰。')
+            if data['header']['key_id'] not in self._key_ids(identities):
+                raise BackupError('wrong-key', '金鑰不正確。')
         if str(path) in self.corrupt or Path(path).name in self.corrupt:
             raise BackupError('corrupt-archive', '備份檔已損毀或遭到修改，無法使用。')
         return data
 
-    def read_manifest(self, path, identities, *, limits=None):
-        return self._open(path, identities)['manifest']
+    @staticmethod
+    def _select(manifest, apps):
+        """Like the real readers: only the selected apps (incompatible when one is missing)."""
+        if apps is None:
+            return manifest
+        for app_id in apps:
+            if app_id not in {app['id'] for app in manifest['apps']}:
+                raise BackupError('incompatible', f'此備份不包含應用「{app_id}」。', app=app_id)
+        return dict(manifest, apps=[a for a in manifest['apps'] if a['id'] in apps],
+                    entries=[e for e in manifest['entries'] if e['path'].split('/')[1] in apps])
 
-    def verify_archive(self, path, identities, *, progress=None, limits=None):
+    def read_manifest(self, path, identities, *, limits=None, apps=None):
+        return self._select(self._open(path, identities)['manifest'], apps)
+
+    def verify_archive(self, path, identities, *, progress=None, limits=None, apps=None, deep=None, scratch_dir=None):
         data = self._open(path, identities)
         self.verifies.append(Path(path))
+        self.verify_limits = limits
+        if deep is not None:
+            assert scratch_dir is not None and Path(scratch_dir).is_dir()
+            deep.start(data['manifest']['apps'])
+            if str(path) in self.deep_corrupt or Path(path).name in self.deep_corrupt:
+                raise BackupError('corrupt-archive', '應用「示範」的資料卷 data 未通過還原前的內容檢查（指向資料卷外的符號連結）；'
+                                                     '這份備份無法還原。', check='volumes')
         if progress:
             progress(1, 1)
         return {'manifest': data['manifest'], 'entries': len(data['files']),
-                'bytes': sum(e['size'] for e in data['manifest']['entries'])}
+                'bytes': sum(e['size'] for e in data['manifest']['entries']),
+                'format': data['manifest'].get('format', 1),
+                'encryption': data['header'].get('encryption', 'age-x25519')}
 
-    def extract_archive(self, path, identities, dest_dir, *, progress=None, limits=None):
+    def extract_archive(self, path, identities, dest_dir, *, progress=None, limits=None, apps=None):
         dest_dir = Path(dest_dir)
         assert dest_dir.is_dir() and not any(dest_dir.iterdir()) and dest_dir.stat().st_mode & 0o077 == 0
         data = self._open(path, identities)
+        manifest = self._select(data['manifest'], apps)
+        wanted = {e['path'] for e in manifest['entries']}
         for rel, blob in data['files'].items():
+            if rel not in wanted:
+                continue
             target = dest_dir / rel
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_bytes(base64.b64decode(blob))
-        self.extracts.append((Path(path), dest_dir))
+        self.extracts.append((Path(path), dest_dir, None if apps is None else list(apps)))
         if progress:
             progress(1, 1)
-        return data['manifest']
+        return manifest
 
 
 class World:
@@ -324,6 +350,7 @@ class World:
         self.unstartable = set()
         self.hook_probe = None
         self.after_backup = None
+        self.keep_stopped_drops_snapshot = False  # like the real adapter: a kept-stopped safety backup has no snapshot
         self.health_hints = {}
         self.extract_seen = None
         self.raise_after_destructive = None  # e.g. jobs.Terminated: a signal after the first destructive step
@@ -339,6 +366,8 @@ class World:
         self.discard_problems = {}  # app id -> problems discard_dirs() returns
         self.leftover_notes = {}  # app id -> notes dir_leftovers() returns
         self.recover_notes = {}   # app id -> notes recover_dirs() returns
+        self.digest_results = {}  # app id -> digest checks its restore() compared (adapter.digest_results)
+        self.fail_stage = set()   # app ids whose stage_dirs() fails
 
     def factory(self, app, *, log, phase=None, checkpoint=None, writers_hook=None, imported_hook=None):
         adapter = FakeAdapter(app, self, log, phase, checkpoint, writers_hook, imported_hook)
@@ -363,6 +392,11 @@ class FakeAdapter:
         self.warnings = []
         self.job_id = None
         self.run = None
+        self.kept_stopped = []
+        self.taken_over = None
+        self.staged = False
+        self.timing = {}
+        self.digest_results = []
 
     def probe(self):
         deployed = self.world.deployed[self.app.id]
@@ -381,10 +415,11 @@ class FakeAdapter:
     def estimate_bytes(self, *, include_images=False):
         return self.world.estimate
 
-    def backup(self, staging_dir, *, include_images):
+    def backup(self, staging_dir, *, include_images, keep_stopped=False):
         self.world.events.append(('backup', self.app.id))
         self.phase('stop')
         self.writers_hook(list(self.app.writer_units))
+        self.timing = {'first_stop': 100.0}
         if self.world.hook_probe:
             self.world.hook_probe()
         self.phase('dump')
@@ -396,9 +431,14 @@ class FakeAdapter:
         data = self.world.data[self.app.id]
         source = Path(staging_dir) / 'data'
         source.write_bytes(data)
-        self.phase('start')
-        self.writers_hook([])
-        self.last_downtime = 2.4
+        if keep_stopped:  # like the real adapter: the restore that follows takes the stopped writers over
+            self.kept_stopped = list(self.app.writer_units)
+            self.world.events.append(('kept-stopped', self.app.id))
+        else:
+            self.phase('start')
+            self.writers_hook([])
+            self.timing.update(started=102.4, healthy=105.0)
+        self.last_downtime = 0.0 if keep_stopped else 2.4
         if self.world.after_backup:
             self.world.after_backup()
         entry = Entry(f'apps/{self.app.id}/volumes/data.tar', source, len(data), hashlib.sha256(data).hexdigest())
@@ -407,6 +447,8 @@ class FakeAdapter:
                     'images': [{'ref': 'localhost/x:1', 'id': 'sha256:' + 'a' * 64, 'digest': '', 'arch': 'amd64'}],
                     'postgres': [], 'volumes': [{'name': 'data', 'entry': entry.path}], 'secrets': [],
                     'config_files': [], 'quadlet_files': [], 'verify_snapshot': snapshot_of(data)}
+        if keep_stopped and self.world.keep_stopped_drops_snapshot:
+            manifest['verify_snapshot'] = {}
         return manifest, [entry]
 
     def preflight(self, app_manifest, *, mode, entry_sizes=None, extracted_dir=None):
@@ -429,7 +471,13 @@ class FakeAdapter:
             raise BackupError('incompatible', '映像載入失敗。')
         self.phase('stop')
         self.destructive_started = True
+        if mode == 'inplace' and not rollback:
+            self.writers_hook(list(self.app.units))
+            self.writers_hook([])  # stopped and masked: the restore owns the stopped state (like the real adapter)
         self.phase('restore')
+        self.digest_results = list(self.world.digest_results.get(self.app.id, [])) if not rollback else []
+        if not rollback and any(item.get('match') is False for item in self.digest_results):
+            raise BackupError('job-failed', f'應用「{self.app.name}」還原後的資料與備份時不一致：資料摘要不同。')
         if self.world.raise_after_destructive is not None and not rollback:
             raise self.world.raise_after_destructive
         if self.app.id in self.world.raise_in and not rollback:
@@ -447,6 +495,22 @@ class FakeAdapter:
         self.world.events.append(('imported', self.app.id))
         self.imported_hook()  # like the real adapter: the import finished, the units start next (HD-04)
         self.phase('start')
+
+    def take_over(self, units, first_stop):
+        self.world.events.append(('take_over', self.app.id, tuple(units)))
+        self.taken_over = (list(units), first_stop)
+        self.timing['first_stop'] = first_stop
+
+    def stage_dirs(self, app_manifest, extracted_dir, *, mode):
+        self.world.events.append(('stage_dirs', self.app.id, mode))
+        if self.app.id in self.world.fail_stage:
+            raise BackupError('job-failed', '無法寫入主機資料夾。')
+        self.staged = True
+
+    def timing_report(self):
+        first, started, healthy = (self.timing.get(key) for key in ('first_stop', 'started', 'healthy'))
+        return {'writer_pause_seconds': None if None in (first, started) else round(started - first, 1),
+                'unavailable_seconds': None if None in (first, healthy) else round(healthy - first, 1)}
 
     def swapped_dirs(self):
         # Like the real adapter: what its restore swapped (all of the app's directories once it got that far).
@@ -495,6 +559,8 @@ class FakeAdapter:
 
     def health(self):
         status = self.world.unhealthy.get(self.app.id, 'ok')
+        if status == 'ok' and self.run == 'restore':
+            self.timing.update(started=110.0, healthy=112.5)
         return [{'id': f'{self.app.id}/health-1', 'status': status, 'message': f'健康檢查 {status}'}]
 
     def health_hint(self):
@@ -562,7 +628,7 @@ class BackupFlowTests(FlowCase):
         self.assertEqual(meta['type'], 'manual')
         self.assertEqual(meta['verified']['ok'], True)
         self.assertEqual(meta['apps'], [{'id': 'woowbk-demo', 'name': '示範筆記應用'}])
-        self.assertEqual(meta['filename'], 'woowtech-backup-dev-a-20261113-020001.woowbackup')
+        self.assertEqual(meta['filename'], 'woowtech-backup-dev-a-20261113-020001.tar')
         manifest = self.archive.writes[0]['manifest']
         self.assertEqual(manifest['created'], '2026-11-13T02:00:01Z')
         self.assertEqual(manifest['consistency'], {'method': 'writers-stopped', 'downtime_seconds': 2})
@@ -588,7 +654,7 @@ class BackupFlowTests(FlowCase):
         self.assertEqual(path.parent, self.storage.staging / self.job_id)
         self.assertEqual(listing, [])
         self.assertEqual(sorted(p.name for p in self.storage.archives.iterdir()),
-                         [f'{result["backup_id"]}.woowbackup'])
+                         [f'{result["backup_id"]}.tar'])
 
     def test_insufficient_space_fails_before_any_writer_stops(self):
         self.storage.free = 1000
@@ -633,7 +699,7 @@ class BackupFlowTests(FlowCase):
         self.assertEqual(list(self.storage.archives.iterdir()), [])
 
     def test_verify_failure_discards_archive(self):
-        self.archive.on_write = lambda: self.archive.corrupt.add('20261113T020001Z-00000001.woowbackup')
+        self.archive.on_write = lambda: self.archive.corrupt.add('20261113T020001Z-00000001.tar')
         with self.assertRaises(BackupError) as caught:
             self.backup()
         self.assertEqual(caught.exception.code, 'corrupt-archive')
@@ -682,9 +748,29 @@ class VerifyFlowTests(FlowCase):
 
     def test_verify_ok_updates_index(self):
         result = flows.run_verify(self.ctx(), {'backup_id': self.backup_id})
-        self.assertEqual(result, {'ok': True, 'entries': 1, 'bytes': len(b'notes-v1')})
+        self.assertEqual({k: result[k] for k in ('ok', 'entries', 'bytes', 'deep', 'format', 'encrypted')},
+                         {'ok': True, 'entries': 1, 'bytes': len(b'notes-v1'), 'deep': True, 'format': 2,
+                          'encrypted': True})
+        self.assertEqual([app['id'] for app in result['apps']], ['woowbk-demo'])
         self.assertEqual(self.reporter.phases(), ['prepare', 'decrypt', 'check'])
-        self.assertTrue(self.storage.index[self.backup_id]['verified']['ok'])
+        self.assertEqual({k: v for k, v in self.storage.index[self.backup_id]['verified'].items() if k != 'at'},
+                         {'ok': True, 'deep': True})
+        self.assertIn(self.job_id, self.storage.removed_staging, 'the scratch directory goes with the staging')
+
+    def test_the_scratch_copies_leave_the_larger_reserve_free(self):
+        # review M4: the verify job copies entries while every app runs: at least 2 GiB stay free, not 512 MiB
+        flows.run_verify(self.ctx(), {'backup_id': self.backup_id})
+        self.assertGreaterEqual(self.archive.verify_limits.reserve_bytes, 2 * 1024 ** 3)
+        self.assertLessEqual(self.archive.verify_limits.reserve_bytes, 10 * 1024 ** 3)
+
+    def test_deep_check_failure_marks_index_failed(self):
+        # Feature 4: a nested tar a restore would refuse makes the verify job fail (未通過), not 已驗證.
+        self.archive.deep_corrupt.add(self.storage.archive_path(self.backup_id).name)
+        with self.assertRaises(BackupError) as caught:
+            flows.run_verify(self.ctx(), {'backup_id': self.backup_id})
+        self.assertEqual(caught.exception.code, 'corrupt-archive')
+        self.assertEqual({k: v for k, v in self.storage.index[self.backup_id]['verified'].items() if k != 'at'},
+                         {'ok': False, 'deep': True})
 
     def test_corrupt_marks_index_failed(self):
         self.archive.corrupt.add(str(self.storage.archive_path(self.backup_id)))
@@ -761,6 +847,18 @@ class RestoreFlowTests(FlowCase):
         safety_path = self.storage.archive_path(rolled.result['safety_backup_id'])
         self.assertEqual(self.archive.extracts[-1][0], safety_path)
         self.assert_staging_clean()
+
+    def test_a_rollback_without_comparable_values_says_it_compared_no_data(self):
+        # review F16: the kept-stopped safety backup of an http-json-only app stores no snapshot; its rollback passes
+        # on the health checks alone and the result says so instead of implying a data check
+        self.world.keep_stopped_drops_snapshot = True
+        self.world.fail_restore_after['woowbk-demo'] = 1
+        with self.assertRaises(flows.RolledBack) as caught:
+            self.restore()
+        self.assertTrue(caught.exception.result['rolled_back'])
+        self.assertTrue(any('未比對資料' in note for note in caught.exception.result['warnings']),
+                        caught.exception.result['warnings'])
+        self.assertEqual(self.world.data['woowbk-demo'], b'notes-v2-changed')
 
     def test_verification_mismatch_rolls_back(self):
         self.world.corrupt_restore.add('woowbk-demo')
@@ -1258,6 +1356,148 @@ class HostDirFlowTests(RestoreFlowTests):
         self.assertIn('gone-app', notes[2])
 
 
+class StrengthenFlowTests(RestoreFlowTests):
+    """2026-11-13: host directories written before anything stops, the safety backup's hand-over of its stopped writers,
+    digest checks in the result, unavailability per app (CONTRACT sections 7, 9)."""
+
+    def with_dirs(self, *app_ids):
+        for app_id in app_ids:
+            entry = demo_entry(self.paths)
+            entry['data_dirs'] = [{'path': f'{app_id}-data'}]
+            if app_id != 'woowbk-demo':
+                entry.update(id=app_id, name='第二個應用', config_files=[{'path': f'.config/{app_id}/app.env',
+                                                                          'mode': '0600'}])
+            self.catalog[app_id] = catalog.validate_entry(entry, paths=self.paths, user_lookup=user_lookup)
+
+    def events(self, *kinds):
+        return [e for e in self.world.events if e[0] in kinds]
+
+    def test_directories_are_staged_before_the_safety_backup_and_writers_are_handed_over(self):
+        self.with_dirs('woowbk-demo')
+        result = self.restore()
+        order = [e[:2] for e in self.world.events if e[0] in ('stage_dirs', 'backup', 'kept-stopped', 'take_over',
+                                                                'restore')]
+        self.assertEqual(order, [('stage_dirs', 'woowbk-demo'), ('backup', 'woowbk-demo'), ('kept-stopped', 'woowbk-demo'),
+                                 ('take_over', 'woowbk-demo'), ('restore', 'woowbk-demo')])
+        self.assertEqual(self.events('take_over'), [('take_over', 'woowbk-demo', ('woowbk-demo-app.service',))])
+        phases = self.reporter.phases()
+        self.assertLess(phases.index('stage'), phases.index('safety'))
+        self.assertEqual(self.reporter.partial.get('stopped_writers'), {}, 'the restore took the stopped units over')
+        self.assertEqual(result['timing'], [{'app': 'woowbk-demo', 'writer_pause_seconds': 10.0,
+                                             'unavailable_seconds': 12.5}])
+        self.assertEqual(self.reporter.partial['dir_apps'], [])
+
+    def test_without_directories_the_stage_phase_is_skipped(self):
+        self.restore()
+        self.assertIn(('skip', 'stage'), self.reporter.events)
+        self.assertFalse(self.events('stage_dirs'))
+
+    def test_a_failure_before_the_first_destructive_step_discards_copies_and_restarts_writers(self):
+        self.with_dirs('woowbk-demo')
+        self.world.fail_restore_before.add('woowbk-demo')
+        with self.assertRaises(BackupError):
+            self.restore()
+        self.assertEqual(self.events('discard_dirs'), [('discard_dirs', 'woowbk-demo', 'restore')])
+        self.assertEqual(self.events('start_units'), [('start_units', 'woowbk-demo', ('woowbk-demo-app.service',))])
+        self.assertEqual(self.reporter.partial['stopped_writers'], {})
+        self.assertEqual(self.reporter.partial['dir_apps'], [], 'every copy was removed: nothing for the recovery')
+
+    def test_a_signal_while_the_copies_are_removed_leaves_them_to_the_recovery(self):
+        # review F14: a termination signal inside discard_dirs must not clear `dir_apps` (the recovery settles them)
+        self.with_dirs('woowbk-demo')
+        self.world.fail_restore_before.add('woowbk-demo')
+        self.world.discard_problems['woowbk-demo'] = KeyboardInterrupt()
+        with self.assertRaises(KeyboardInterrupt):
+            self.restore()
+        self.assertEqual(self.reporter.partial['dir_apps'], ['woowbk-demo'])
+
+    def test_a_staging_failure_changes_nothing(self):
+        self.with_dirs('woowbk-demo')
+        self.world.fail_stage.add('woowbk-demo')
+        with self.assertRaises(BackupError):
+            self.restore()
+        self.assertFalse(self.events('backup'), 'no safety backup, nothing stopped')
+        self.assertEqual(self.events('discard_dirs'), [('discard_dirs', 'woowbk-demo', None)])
+
+    def test_a_safety_backup_that_cannot_be_published_restarts_the_writers_it_kept(self):
+        self.world.fail_backup.clear()
+        self.archive.on_write = lambda: (_ for _ in ()).throw(BackupError('insufficient-space', '空間不足。'))
+        with self.assertRaises(BackupError):
+            self.restore()
+        self.assertEqual(self.events('start_units'), [('start_units', 'woowbk-demo', ('woowbk-demo-app.service',))])
+        self.assertFalse(self.events('restore'))
+
+    def test_an_unstartable_writer_stays_recorded_for_the_recovery(self):
+        self.world.fail_restore_before.add('woowbk-demo')
+        self.world.unstartable.add('woowbk-demo-app.service')
+        with self.assertRaises(BackupError):
+            self.restore()
+        self.assertEqual(self.reporter.partial['stopped_writers'], {'woowbk-demo': ['woowbk-demo-app.service']})
+
+    def test_digest_differences_roll_back_and_reach_the_result(self):
+        check = {'id': 'db', 'type': 'postgres-digest', 'target': 'postgres:main', 'label': '', 'match': False,
+                 'before': {'databases': 1, 'tables': 2, 'sequences': 0, 'rows': 10, 'roles': 0},
+                 'after': {'databases': 1, 'tables': 2, 'sequences': 0, 'rows': 9, 'roles': 0},
+                 'differences': {'missing': 0, 'extra': 0, 'changed': 1, 'samples': [
+                     {'item': '資料表 notes:public.notes', 'change': 'changed', 'detail': '資料列 10 → 9'}]}, 'note': None}
+        self.world.digest_results['woowbk-demo'] = [check]
+        with self.assertRaises(flows.RolledBack) as caught:
+            self.restore()
+        result = caught.exception.result
+        self.assertTrue(result['rolled_back'])
+        entry = result['verification'][0]
+        self.assertEqual((entry['app'], entry['match']), ('woowbk-demo', False))
+        self.assertEqual(entry['checks'][0]['differences']['samples'][0]['detail'], '資料列 10 → 9')
+        self.assertEqual(entry['before']['db']['rows'], 10)
+        self.assertEqual(entry['after']['db']['rows'], 9)
+
+    def test_matching_digests_join_the_http_json_entry(self):
+        check = {'id': 'files', 'type': 'files-digest', 'target': 'volume:x', 'label': '', 'match': True,
+                 'before': {'entries': 3, 'files': 2, 'dirs': 1, 'symlinks': 0, 'other': 0, 'bytes': 9},
+                 'after': {'entries': 3, 'files': 2, 'dirs': 1, 'symlinks': 0, 'other': 0, 'bytes': 9},
+                 'differences': None, 'note': None}
+        self.world.digest_results['woowbk-demo'] = [check]
+        result = self.restore()
+        entry = result['verification'][0]
+        self.assertIs(entry['match'], True)
+        self.assertEqual(set(entry['before']), {'summary', 'files'})
+        self.assertEqual(entry['checks'], [check])
+
+    def test_a_multi_app_failure_releases_the_app_it_never_reached(self):
+        self.with_dirs('woowbk-demo', 'woowbk-two')
+        self.world.fail_restore_after['woowbk-demo'] = 1
+        with self.assertRaises(flows.RolledBack):
+            self.restore(apps=('woowbk-demo', 'woowbk-two'))
+        self.assertIn(('discard_dirs', 'woowbk-two', None), self.events('discard_dirs'))
+        self.assertIn(('start_units', 'woowbk-two', ('woowbk-demo-app.service',)), self.events('start_units'))
+        self.assertFalse([e for e in self.events('restore') if e[1] == 'woowbk-two'])
+
+    def test_an_app_refused_before_its_first_step_is_released_not_rolled_back(self):
+        self.world.fail_restore_before.add('woowbk-two')
+        with self.assertRaises(flows.RolledBack):
+            self.restore(apps=('woowbk-demo', 'woowbk-two'))
+        rollbacks = [e[1] for e in self.events('restore') if e[3] == 'rollback']
+        self.assertEqual(rollbacks, ['woowbk-demo'], 'woowbk-two never changed: nothing to roll back')
+        self.assertIn(('start_units', 'woowbk-two', ('woowbk-demo-app.service',)), self.events('start_units'))
+        self.assertEqual(self.reporter.partial['stopped_writers'], {}, 'no stale hand-over entry is left')
+
+    def test_recovery_starts_any_unit_of_the_app_but_nothing_else(self):
+        # An in-place restore lists every unit it stops until it masked them (CONTRACT section 8): the database too.
+        failed = flows.restart_writers(self.deps, {'woowbk-demo': ['woowbk-demo-db.service', 'woowbk-demo-app.service',
+                                                                   'unrelated.service']})
+        self.assertEqual(self.events('start_units'),
+                         [('start_units', 'woowbk-demo', ('woowbk-demo-db.service', 'woowbk-demo-app.service'))])
+        self.assertEqual(failed, ['unrelated.service'])
+
+    def test_backup_result_reports_the_unavailability(self):
+        result = self.backup(apps=['woowbk-demo', 'woowbk-two'])
+        self.assertEqual(result['timing'], [
+            {'app': 'woowbk-demo', 'writer_pause_seconds': 2.4, 'unavailable_seconds': 5.0},
+            {'app': 'woowbk-two', 'writer_pause_seconds': 2.4, 'unavailable_seconds': 5.0}])
+        self.assertEqual(result['unavailable_seconds'], 10.0)
+        self.assertEqual(result['downtime_seconds'], 5)
+
+
 class SafetyPruneTests(FlowCase):
     def add(self, backup_id, created, apps, kind='safety'):
         self.storage.ensure_layout()
@@ -1322,6 +1562,18 @@ class SafetyPruneTests(FlowCase):
         store.save(later)
         flows.prune_safety(self.ctx(), ['woowbk-demo'])
         self.assertNotIn('20261101T000000Z-00000001', self.storage.index)
+
+    def test_a_damaged_job_record_stops_pruning(self):
+        # review F11: a record that cannot be read may be a failed restore that pins a safety backup
+        from woowbackup import jobs
+        for i in range(1, 6):
+            self.add(f'2026110{i}T000000Z-0000000{i}', f'2026-11-0{i}T00:00:00Z', ['woowbk-demo'])
+        jobs.JobStore(self.paths).ensure()
+        Path(self.paths.jobs, 'j20261110T000000Z-0000abcd.json').write_bytes(b'{damaged')
+        flows.prune_safety(self.ctx(), ['woowbk-demo'])
+        self.assertEqual(len(self.storage.index), 5, 'nothing is pruned while a record cannot be read')
+        self.assertIn('無法讀取部分作業紀錄', '\n'.join(self.reporter.logs))
+        self.assertIsNone(flows.pinned_safety(self.paths))
 
     def test_prune_never_deletes_the_backup_being_restored(self):
         for i in range(1, 5):

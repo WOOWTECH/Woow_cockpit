@@ -1,0 +1,27 @@
+# Reference-host shape for catalog-suggest tests: names, mounts and dependencies only, no secret values.
+[Unit]
+Description=LiteLLM proxy
+Requires=litellm-postgres.service
+After=litellm-postgres.service
+
+[Container]
+ContainerName=litellm
+Image=localhost/litellm-woow:main-stable
+Network=litellm.network
+PublishPort=127.0.0.1:4000:4000
+Volume=%h/.config/litellm/config.yaml:/app/config.yaml:ro,Z
+EnvironmentFile=%h/.config/litellm/litellm.env
+Secret=litellm-database-url,type=env,target=DATABASE_URL
+Secret=litellm-master-key,type=env,target=LITELLM_MASTER_KEY
+Secret=litellm-ui-password,type=env,target=UI_PASSWORD
+Secret=litellm-salt-key,type=env,target=LITELLM_SALT_KEY
+Exec=--config /app/config.yaml --port 4000
+HealthCmd=python3 -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:4000/health/readiness', timeout=5)"
+HealthInterval=30s
+HealthStartPeriod=60s
+
+[Service]
+Restart=always
+
+[Install]
+WantedBy=default.target

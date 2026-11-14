@@ -1,0 +1,21 @@
+# Reference-host shape for catalog-suggest tests: names, mounts and dependencies only, no secret values.
+[Unit]
+Description=k8s MCP admin
+
+
+[Container]
+ContainerName=k8s-mcp-admin
+Image=localhost/woow-mcp-admin:latest
+Network=k8s-mcp-admin.network
+PublishPort=127.0.0.1:18508:8080
+Volume=k8s-mcp-admin.volume:/data
+EnvironmentFile=%h/.config/k8s-mcp-admin/k8s-mcp-admin.env
+Secret=k8s-mcp-admin-jwt-secret,type=env,target=JWT_SECRET
+Secret=k8s-mcp-admin-password,type=env,target=ADMIN_PASSWORD
+HealthCmd=wget -qO- http://127.0.0.1:8080/healthz
+
+[Service]
+Restart=always
+
+[Install]
+WantedBy=default.target

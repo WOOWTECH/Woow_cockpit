@@ -1,0 +1,3 @@
+# Reference-host shape for catalog-suggest tests: names, mounts and dependencies only, no secret values.
+[Volume]
+VolumeName=nextcloud_mcp_admin_data

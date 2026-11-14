@@ -48,10 +48,14 @@ from .errors import BackupError
 PHASES = {
     'backup': (('prepare', '準備'), ('check', '檢查空間與應用'), ('stop', '暫停應用寫入'), ('dump', '匯出資料庫'),
                ('export', '匯出資料卷與設定'), ('start', '恢復應用'), ('package', '加密封裝'), ('verify', '驗證備份')),
+    # `stage`: host directories are written next to the current ones while the apps still run (nothing that exists
+    # changes); the safety backup then keeps the writers stopped for the restore (CONTRACT section 9).
     'restore': (('prepare', '準備'), ('decrypt', '解密並驗證檔案'), ('preflight', '相容性檢查'),
-                ('safety', '建立還原前備份'), ('stop', '停止應用'), ('restore', '還原資料'), ('start', '啟動應用'),
-                ('check', '健康與資料核對')),
+                ('stage', '預先寫入主機資料夾'), ('safety', '建立還原前備份'), ('stop', '停止應用'), ('restore', '還原資料'),
+                ('start', '啟動應用'), ('check', '健康與資料核對')),
     'verify': (('prepare', '準備'), ('decrypt', '解密並驗證檔案'), ('check', '核對結果')),
+    # An unencrypted copy of an encrypted backup for one download (CONTRACT section 8); nothing on the device changes.
+    'export': (('prepare', '準備'), ('decrypt', '解密並驗證檔案'), ('package', '封裝未加密副本'), ('verify', '驗證副本')),
 }
 ACTIVE = ('queued', 'running')
 TERMINAL = ('succeeded', 'failed', 'rolled-back', 'interrupted', 'cancelled')
@@ -79,6 +83,7 @@ INTERRUPTED_MESSAGE = {
     'restore': '還原作業意外中斷（例如系統重新開機或程序被終止），應用可能處於不完整狀態。請檢查應用狀態，'
                '必要時使用還原前備份再次還原。',
     'verify': '驗證作業意外中斷，請重新執行驗證。',
+    'export': '建立未加密副本的作業意外中斷，請重新建立；未完成的副本已清除。',
 }
 FRESH_MESSAGE = '全新部署（{apps}）沒有完成；系統會清除未完成的部署，之後可再次還原同一份備份。'
 FINISHING_MESSAGE = ('還原已完成並通過檢查，但在刪除主機資料夾被取代的舊內容時作業中斷（例如系統重新開機）。'
@@ -308,8 +313,10 @@ class JobStore:
         return sorted((name[:-5] for name in names if name.endswith('.json') and valid_job_id(name[:-5])),
                       reverse=True)
 
-    def list(self, limit=50):
-        """Readable records, newest first; reads only as many record files as it returns (plus unreadable ones)."""
+    def list(self, limit=50, *, unreadable=None):
+        """Readable records, newest first; reads only as many record files as it returns (plus unreadable ones).
+        `unreadable`: a list that receives the ids of record files that could not be read (retention protects every
+        backup then; review F11)."""
         records = []
         for job_id in self.ids():
             if limit is not None and len(records) >= limit:
@@ -317,6 +324,8 @@ class JobStore:
             try:
                 records.append(self.get(job_id))
             except BackupError:
+                if unreadable is not None:
+                    unreadable.append(job_id)
                 continue
         return records
 
@@ -928,9 +937,11 @@ def _recover_one(paths, store, job_id, unit, unit_active, now, restart_writers, 
 
 
 def pinned_safety_records(records):
-    """{restore record id: safety backup id} of the failed or interrupted (not rolled back) restores whose safety
-    backup is still the only way back for one of their apps: no later restore of that app succeeded.
-    `records` newest first. Used by safety-backup pruning and by retention (such records are never deleted)."""
+    """{restore record id: safety backup id or None} of the failed or interrupted (not rolled back) restores whose
+    safety backup -- or, when the restore had none but changed the apps (allow_no_safety, or restoring a safety
+    backup), whose source backup -- is still the only way back for one of their apps: no later restore of that app
+    succeeded (review M2). `records` newest first. Used by safety-backup pruning and by retention (such records are
+    never deleted; retention also keeps each pinning record's source backup)."""
     pinned, settled = {}, set()
     for record in records:
         if record.get('type') != 'restore':
@@ -943,9 +954,11 @@ def pinned_safety_records(records):
             continue
         result = record.get('result') if isinstance(record.get('result'), dict) else {}
         safety = result.get('safety_backup_id') or record.get('safety_backup_id')
-        if (safety and record.get('state') in ('failed', 'interrupted') and not result.get('rolled_back')
+        changed = result.get('changed') is True or (record.get('state') == 'interrupted'
+                                                    and _destructive_phase_reached(record))
+        if ((safety or changed) and record.get('state') in ('failed', 'interrupted') and not result.get('rolled_back')
                 and apps - settled):
-            pinned[record['id']] = safety
+            pinned[record['id']] = safety or None
     return pinned
 
 
@@ -1148,7 +1161,8 @@ def run_job(paths, job_id, *, deps=None, lock_timeout=LOCK_WAIT_SECONDS, handler
         ctx = flows.FlowContext(paths, job_id, deps or flows.default_deps(paths), reporter,
                                 key_file=key_file if os.path.lexists(key_file) else None)
         _adopt_orphans(ctx)
-        table = handlers or {'backup': flows.run_backup, 'restore': flows.run_restore, 'verify': flows.run_verify}
+        table = handlers or {'backup': flows.run_backup, 'restore': flows.run_restore, 'verify': flows.run_verify,
+                             'export': flows.run_export}
         handler = table[reporter.record['type']]
         with signals_as_exceptions():
             try:

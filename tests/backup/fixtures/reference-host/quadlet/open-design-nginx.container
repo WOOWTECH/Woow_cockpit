@@ -1,0 +1,22 @@
+# Reference-host shape for catalog-suggest tests: names, mounts and dependencies only, no secret values.
+[Unit]
+Description=OpenDesign nginx entrance
+Requires=open-design.service open-design-mcp.service
+After=open-design.service open-design-mcp.service
+
+[Container]
+ContainerName=open-design-nginx
+Image=docker.io/library/nginx:1.27-alpine
+Network=open-design.network
+PublishPort=127.0.0.1:7457:80
+Volume=open-design-mcp-run.volume:/run/od-mcp
+Volume=%h/.config/open-design/nginx.conf:/etc/nginx/nginx.conf:ro
+Volume=%h/.config/open-design/nginx-auth.conf:/etc/nginx/conf.d/auth.conf:ro
+Volume=%h/.config/open-design/nginx-paseo.conf:/etc/nginx/conf.d/paseo.conf:ro
+Secret=open-design-htpasswd,type=mount,target=/etc/nginx/htpasswd
+
+[Service]
+Restart=always
+
+[Install]
+WantedBy=default.target

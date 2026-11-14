@@ -1,0 +1,6 @@
+# woowbk-inst private network (rootless Quadlet template, lab fixture for PostgreSQL instance mode).
+[Unit]
+Description=woowbk-inst network
+
+[Network]
+NetworkName=woowbk-inst

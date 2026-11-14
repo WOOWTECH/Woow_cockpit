@@ -130,7 +130,12 @@ def _members(tar, what, limit):
 def _open(path, what, mode):
     try:
         return tarfile.open(path, mode, encoding=ENCODING, errors=ERRORS)
-    except (tarfile.TarError, OSError) as exc:
+    except OSError as exc:
+        if exc.errno is not None:
+            # The local file could not be read (EIO, EMFILE...): not a defect of the archive's content (review F10).
+            raise BackupError('internal-error', f'無法讀取暫存的{what}檔案（{exc.strerror or type(exc).__name__}）。') from None
+        raise _bad(what, f'not a tar file: {str(exc)[:120]}') from None
+    except tarfile.TarError as exc:
         raise _bad(what, f'not a tar file: {str(exc)[:120]}') from None
 
 

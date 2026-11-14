@@ -411,6 +411,72 @@ class ManifestValidationTests(unittest.TestCase):
                 self.assertTrue(ctx.exception.message)
 
 
+class ReviewFixManifestTests(unittest.TestCase):
+    """Manifest keys added by the 2026-11-14 review fixes [format]: an instance item's `bootstrap_user` (F5) and
+    `databases[].template` (F1), a postgres-digest's `server_major` (L4/F7). Optional, strict when present."""
+
+    def manifest(self):
+        payloads = demo_payloads(big=16)
+        app = demo_app()
+        listing = b'D 6e6f746573\n'
+        payloads.update({f'apps/{APP}/postgres/inst.globals.sql': b'CREATE ROLE x;\n',
+                         f'apps/{APP}/postgres/inst.db0.dump': b'PGDMP-a', f'apps/{APP}/postgres/inst.db1.dump': b'PGDMP-b',
+                         f'apps/{APP}/verify/db.txt': listing})
+        db = {'name': 'notes', 'owner': 'notes', 'encoding': 'UTF8', 'collate': 'C', 'ctype': 'C',
+              'locale_provider': 'libc', 'icu_locale': None, 'extensions': []}
+        app['postgres'].append({'id': 'inst', 'scope': 'instance', 'database': 'postgres', 'server_version': '16.4',
+                                'major': 16, 'bootstrap_user': 'notes', 'entry': f'apps/{APP}/postgres/inst.globals.sql',
+                                'databases': [dict(db, template=False, entry=f'apps/{APP}/postgres/inst.db0.dump'),
+                                              dict(db, name='template_gis', template=True,
+                                                   entry=f'apps/{APP}/postgres/inst.db1.dump')],
+                                'roles': [{'name': 'notes', 'superuser': True, 'login': True}]})
+        app['verify_digests'] = [{'id': 'db', 'type': 'postgres-digest', 'target': 'postgres:inst', 'exclude': [],
+                                  'summary': {'databases': 1, 'tables': 0, 'sequences': 0, 'rows': 0, 'roles': 0},
+                                  'digest': hashlib.sha256(listing).hexdigest(), 'entry': f'apps/{APP}/verify/db.txt',
+                                  'databases': ['notes'], 'roles': False, 'server_major': 16}]
+        manifest = demo_manifest('ABCD-EF01-2345-6789', apps=[app])
+        manifest['entries'] = [{'path': p, 'size': len(d), 'sha256': hashlib.sha256(d).hexdigest()}
+                               for p, d in payloads.items()]
+        return manifest
+
+    def test_new_keys_are_accepted_and_optional(self):
+        manifest = self.manifest()
+        self.assertIs(archive.validate_manifest(manifest), manifest)
+        older = copy.deepcopy(manifest)
+        item = older['apps'][0]['postgres'][-1]
+        del item['bootstrap_user']
+        for db in item['databases']:
+            del db['template']
+        del older['apps'][0]['verify_digests'][0]['server_major']
+        self.assertIs(archive.validate_manifest(older), older)
+
+    def test_rejections(self):
+        def inst(m):
+            return m['apps'][0]['postgres'][-1]
+
+        def files_with_major(m):  # a files digest that is otherwise valid: only server_major is foreign to it
+            item = m['apps'][0]['verify_digests'][0]
+            item.update(type='files-digest', summary={'entries': 0, 'files': 0, 'dirs': 0, 'symlinks': 0, 'other': 0,
+                                                      'bytes': 0})
+            del item['databases'], item['roles']
+
+        cases = {
+            'bootstrap user not text': lambda m: inst(m).update(bootstrap_user=10),
+            'bootstrap user with a newline': lambda m: inst(m).update(bootstrap_user='a\nb'),
+            'template not a boolean': lambda m: inst(m)['databases'][1].update(template='yes'),
+            'template0 as a database': lambda m: inst(m)['databases'][1].update(name='template0'),
+            'server_major out of range': lambda m: m['apps'][0]['verify_digests'][0].update(server_major=0),
+            'server_major on a files digest': files_with_major,
+        }
+        for name, mutate in cases.items():
+            with self.subTest(name):
+                manifest = self.manifest()
+                mutate(manifest)
+                with self.assertRaises(BackupError) as ctx:
+                    archive.validate_manifest(manifest)
+                self.assertEqual(ctx.exception.code, 'invalid-manifest')
+
+
 class DataDirManifestTests(unittest.TestCase):
     """Host directories (`data_dirs`, entries `apps/<id>/dirs/<n>.tar`): optional, strict when present."""
 

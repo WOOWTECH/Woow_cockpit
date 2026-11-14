@@ -1,0 +1,18 @@
+# Reference-host shape for catalog-suggest tests: names, mounts and dependencies only, no secret values.
+[Unit]
+Description=Headscale entrance (nginx)
+Requires=headscale.service headplane.service
+After=headscale.service headplane.service
+
+[Container]
+ContainerName=headscale-entrance
+Image=docker.io/library/nginx:1.27-alpine
+Network=headscale.network
+Volume=%h/.config/headscale/entrance/nginx.conf:/etc/nginx/nginx.conf:ro
+Volume=%h/.config/headscale/entrance/htpasswd:/etc/nginx/htpasswd:ro
+
+[Service]
+Restart=always
+
+[Install]
+WantedBy=default.target
