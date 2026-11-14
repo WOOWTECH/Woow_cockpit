@@ -783,9 +783,9 @@ def scenario_s2(ev):
              result['safety_backup_id'] is None and result['rolled_back'] is False
              and all(c['status'] == 'ok' for c in result['health']) and [v['match'] for v in result['verification']] == [True],
              result)
-    ev.check('S2 phases: safety and stage skipped (fresh, no host directories), the rest done',
-             phase_states(job).get('safety') == 'skipped' and phase_states(job).get('stage') == 'skipped'
-             and all(s == 'done' for p, s in phase_states(job).items() if p not in ('safety', 'stage')),
+    ev.check('S2 phases: safety, safety-package and stage skipped (fresh, no host directories), the rest done',
+             all(phase_states(job).get(p) == 'skipped' for p in ('safety', 'safety-package', 'stage'))
+             and all(s == 'done' for p, s in phase_states(job).items() if p not in ('safety', 'safety-package', 'stage')),
              phase_states(job))
     ev.timings['s2_restore_wall_s'] = round(wall, 1)
     after = summary('b')

@@ -6,6 +6,7 @@ import os
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from woowbackup import cli, flows, jobs
 from woowbackup.errors import BackupError
@@ -34,6 +35,8 @@ class CliCase(unittest.TestCase):
         self.root = Path(self.tmp.name)
         self.paths = Paths(base=self.root / 'sys')
         self.storage = FakeStorage(self.root / 'data')
+        # Pre-restore copies live where the recovery (jobs.py) looks for them, as on a device (CONTRACT section 3).
+        self.storage.pending = Path(self.paths.pending)
         self.keys = FakeKeys(self.root)
         self.archive = FakeArchive()
         self.world = World()
@@ -760,3 +763,52 @@ class CatalogRetentionCliTests(CliCase):
             retention.app_usage = original
         self.assertTrue(response['ok'])
         self.assertEqual(response['storage']['apps'], [])
+
+
+class PendingCopyCliTests(CliCase):
+    """2026.11.14.2: the helper's recovery packages the pre-restore copy a restore kept (CONTRACT section 8)."""
+
+    def test_job_status_packages_the_copy_a_restore_cut_by_a_shutdown_kept(self):
+        backup_id = self.make_backup()
+        self.world.data['woowbk-demo'] = b'notes-v2-changed'
+        started = self.call(['restore-start'], {'backup_id': backup_id, 'apps': ['woowbk-demo'], 'confirm': True,
+                                                'request_id': 'req-pending-0001'})
+        job_id = started['job_id']
+        self.deps.system_stopping = lambda: True
+        self.world.raise_after_destructive = jobs.Terminated(15)
+        self.assertEqual(self.call(['run-job', job_id])['state'], 'interrupted')
+        pending = self.storage.pending / job_id
+        record = jobs.JobStore(self.paths).get(job_id)
+        self.assertTrue((pending / 'pending.json').is_file())
+        self.assertIs(record['safety_pending'], True)
+        self.assertIn(jobs.PENDING_MESSAGE, record['error']['message'])
+        self.assertEqual([b for b in self.storage.list_backups() if b['type'] == 'safety'], [])
+        status = self.call(['job-status'], {'job_id': job_id})
+        job = status['job']
+        safety = job['result']['safety_backup_id']
+        self.assertEqual(self.storage.index[safety]['type'], 'safety')
+        self.assertEqual(self.storage.index[safety]['note'], f'還原前自動備份（還原來源 {backup_id}）')
+        self.assertIs(job['result']['safety_pending'], False)
+        self.assertTrue(job['error']['message'].endswith(f'已將保留的還原前資料封裝成還原前備份 {safety}，可用它再次還原。'))
+        self.assertTrue(any(f'備份 {safety} 已建立並通過完整驗證' in line for line in status['log']), status['log'])
+        self.assertFalse(pending.exists())
+        self.assertNotIn('safety_pending', job, 'record fields beyond the public ones stay private')
+        self.call(['status'])
+        self.assertEqual(len([b for b in self.storage.list_backups() if b['type'] == 'safety']), 1, 'packaged once')
+
+    def test_every_recovery_entry_point_gets_the_package_hook(self):
+        seen = []
+
+        def start(paths, job_type, params, request_id, **kwargs):
+            seen.append(('start', kwargs.get('package_safety')))
+            return {'job_id': 'j20261113T020000Z-00000001', 'deduplicated': False}
+
+        def recover(paths, **kwargs):
+            seen.append(('recover', kwargs.get('package_safety')))
+            return []
+        with mock.patch.object(jobs, 'start_job', start), mock.patch.object(jobs, 'recover_interrupted', recover):
+            self.call(['status'])
+            self.call(['backup-start'], {'apps': ['woowbk-demo'], 'request_id': 'req-pack-0001'})
+        self.assertEqual([kind for kind, _hook in seen], ['recover', 'start'])
+        self.assertTrue(all(callable(hook) for _kind, hook in seen))
+        self.assertEqual(seen[0][1]('j20261113T020000Z-00000002'), (None, '找不到還原前資料的紀錄（pending.json）', False))

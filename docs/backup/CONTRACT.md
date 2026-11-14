@@ -66,8 +66,9 @@ from a Cockpit page "備份與還原", modelled on Home Assistant backups:
    (explicit confirmation, deleted after a short TTL).
 3. **Upload** a `.tar` (encrypted or not) or `.woowbackup` on the same or **another compatible device**, enter the
    emergency key if this device does not hold it (encrypted only), run preflight, confirm, restore.
-4. In-place restore always takes a verified **pre-restore safety backup** first and
-   **rolls back automatically** if the restore fails.
+4. In-place restore always keeps a **pre-restore copy** first (on disk before anything changes), **rolls back
+   automatically** from it if the restore fails, and packages it into a verified **pre-restore safety backup** once the
+   apps run again (2026.11.14.2: one outage, the packaging outside it; §9).
 5. Jobs run in the background (systemd), survive browser close, show phases/progress/log.
 6. Encryption key management with an HA-style **emergency kit** (download once, confirm saved).
 7. Built-in data checks compared before the app starts, downtime figures per app, PostgreSQL instance mode and a deep
@@ -118,7 +119,7 @@ root). No `sudo`. Do not write user-supplied credentials anywhere.
 | `/usr/local/share/woowtech-cockpit-backup/catalog/<id>/` | root 0755/0644 | trusted templates (quadlet files, app assets) |
 | `/etc/woowtech-cockpit/backup/keys/` | root 0700 | `device-<KEYID>.key`, `imported-<KEYID>.key` (0600), `keys.json` |
 | `/etc/woowtech-cockpit/backup/settings.json` | root 0644 | `{"schema": 1, "encrypt_by_default": bool, "updated": "…Z"}` (預設加密備份); missing, not root-owned, group/world-writable, a symlink or invalid → ignored: **encrypted** (with a `problem` in `status.settings`) |
-| `/var/lib/woowtech-backup/` | root 0700 | `archives/<id>.tar` (format 2, every new backup) or `archives/<id>.woowbackup` (format 1) + `archives/<id>.json` (index), `uploads/<upload_id>.{part,json,done}` (`.done` names the backup of a finished upload for 24 h), `staging/<job>/`, `exports/<export_id>.tar` + `.json` (unencrypted download copies, 0600, deleted after `EXPORT_TTL` = 15 min; §8), `jobs/<job>.json` + `.log` + `.lock` (record lock, empty, 0600) + `.cancel` (pending cancel request), `requests.json` |
+| `/var/lib/woowtech-backup/` | root 0700 | `archives/<id>.tar` (format 2, every new backup) or `archives/<id>.woowbackup` (format 1) + `archives/<id>.json` (index), `uploads/<upload_id>.{part,json,done}` (`.done` names the backup of a finished upload for 24 h), `staging/<job>/`, `pending/<job>/` (an in-place restore's pre-restore copy: `pending.json` + `data/apps/<id>/…`, plaintext like staging, kept until it is packaged into the safety backup and removed only by that packaging or before the restore changed anything; §8, §9), `exports/<export_id>.tar` + `.json` (unencrypted download copies, 0600, deleted after `EXPORT_TTL` = 15 min; §8), `jobs/<job>.json` + `.log` + `.lock` (record lock, empty, 0600) + `.cancel` (pending cancel request), `requests.json` |
 | `/run/woowtech-backup/` | root 0700 (tmpfs) | `engine.lock`, `jobs.lock` (start lock), `index.lock` (index sidecar writes), transient key files `key-<random>` (0600, deleted in `finally`) |
 
 `woowbackup.paths.Paths` holds these. Tests construct `Paths(base=tmpdir)`; real paths are used
@@ -793,10 +794,11 @@ Shapes:
   evenly: `estimated`; catalog apps without backups are included).
 * `BackupBrief`: `id, type, created, size, note, apps[{id,name}], reason?`.
 * `Job`: `id, type("backup"|"restore"|"verify"|"export"), state("queued"|"running"|"succeeded"|"failed"|"rolled-back"|"interrupted"|"cancelled"), phase, phases[{id,label,state("pending"|"active"|"done"|"failed"|"skipped")}], progress{percent,message}, created, started|null, finished|null, params, result|null, error{code,message}|null, cancellable(bool)`
-* Job `result`: backup → `backup_id, size, apps[], downtime_seconds, unavailable_seconds|null, timing[Timing], encrypted(bool), retention_deleted[str]` (`retention_deleted`: older manual backups the saved keep-last policy deleted after this manual backup, §8); export → `export_id, backup_id, filename, size, expires`; restore → `apps[], safety_backup_id|null, health[Check], verification[{app,match,before,after,checks?[DigestCheck]}], rolled_back(bool), changed(bool), fresh_apps[str], safety_skipped(bool), safety_failed(bool), warnings[str], timing[Timing]`; verify → `ok, entries, bytes, deep(true), format, encrypted, apps[{id,name,checked{volumes,dirs,images,digests,globals,dumps,secrets},header_only[str]}], notes[str]` (`checked`: entries that passed a restore's content check; `header_only` (2026-11-14, review L8): the kinds checked only by their format header -- `dumps`: a dump is recognized by its pg_dump header, its body was read in full by `pg_restore` when this device made the backup and is read again by a restore, so an uploaded backup's dump bodies are first read at restore; `notes`: what a restore would drop, e.g. setuid bits). A local read error while checking (EIO, EMFILE, ENOSPC on the scratch copy) fails the job with `internal-error` and records no `verified`; only defects of the content record `verified.ok: false` (review F10).
+* Job `result`: backup → `backup_id, size, apps[], downtime_seconds, unavailable_seconds|null, timing[Timing], encrypted(bool), retention_deleted[str]` (`retention_deleted`: older manual backups the saved keep-last policy deleted after this manual backup, §8); export → `export_id, backup_id, filename, size, expires`; restore → `apps[], safety_backup_id|null, health[Check], verification[{app,match,before,after,checks?[DigestCheck]}], rolled_back(bool), changed(bool), fresh_apps[str], safety_skipped(bool), safety_failed(bool), safety_pending(bool), safety_in_downtime(bool), safety_pending_failed{path,message}?, warnings[str], timing[Timing]` (`safety_pending`: the pre-restore copy is kept in `pending/<job>/` and not packaged (yet); `safety_in_downtime`: it was packaged while the apps were stopped, the free space being too short for packaging next to the running apps (§9); `safety_pending_failed`: the recovery could not package it either, it stays at `path` for manual work); verify → `ok, entries, bytes, deep(true), format, encrypted, apps[{id,name,checked{volumes,dirs,images,digests,globals,dumps,secrets},header_only[str]}], notes[str]` (`checked`: entries that passed a restore's content check; `header_only` (2026-11-14, review L8): the kinds checked only by their format header -- `dumps`: a dump is recognized by its pg_dump header, its body was read in full by `pg_restore` when this device made the backup and is read again by a restore, so an uploaded backup's dump bodies are first read at restore; `notes`: what a restore would drop, e.g. setuid bits). A local read error while checking (EIO, EMFILE, ENOSPC on the scratch copy) fails the job with `internal-error` and records no `verified`; only defects of the content record `verified.ok: false` (review F10).
   `Timing`: `{app, writer_pause_seconds|null, unavailable_seconds|null}` (one decimal): writers (restore: units) stopped →
   every unit running again, and first stop → every health check of the app passed; null when not measured (nothing was
-  stopped, a health check failed). The first stop of an in-place restore is the safety backup's writer stop (§9).
+  stopped, a health check failed). The first stop of an in-place restore is the pre-restore copy's writer stop (§9); its
+  packaging into the safety backup runs after the health checks and is not part of these figures.
   `downtime_seconds` stays the backup's total writer pause (whole seconds), `unavailable_seconds` the sum of the apps'.
   `DigestCheck`: `{id, type("postgres-digest"|"files-digest"), target, label, match(true|false|null), before{summary}|null,
   after{summary}|null, differences{missing,extra,changed,samples[{item,change("missing"|"extra"|"changed"),detail}]}|null,
@@ -849,8 +851,12 @@ Phases — backup: `prepare 準備`, `check 檢查空間與應用`, `stop 暫停
 `export 匯出資料卷與設定`, `start 恢復應用`, `package 加密封裝` (`封裝（未加密）` for a backup made with `encrypt`
 false), `verify 驗證備份`.
 Restore: `prepare 準備`, `decrypt 解密並驗證檔案`, `preflight 相容性檢查`, `stage 預先寫入主機資料夾` (skipped without
-host directories), `safety 建立還原前備份`, `stop 停止應用`, `restore 還原資料`, `start 啟動應用`, `check 健康與資料核對`,
-and `rollback 自動回復` appended on failure. Verify: `prepare`, `decrypt` (decrypt and check every entry, deep), `check`.
+host directories), `safety 保存還原前資料`, `stop 停止應用`, `restore 還原資料`, `start 啟動應用`, `check 健康與資料核對`,
+`safety-package 封裝還原前備份` (skipped without a pre-restore copy; `done` already during `safety` when the copy was
+packaged in the downtime, and kept `done` while the restore's phases and a rollback run; `failed` while the job still
+succeeds when the copy could not be packaged, `done` again once a recovery pass packaged it; never counted as a
+destructive phase for `changed`), and `rollback 自動回復` appended on failure (the
+copy is packaged inside it). Verify: `prepare`, `decrypt` (decrypt and check every entry, deep), `check`.
 Export: `prepare 準備`, `decrypt 解密並驗證檔案`, `package 封裝未加密副本`, `verify 驗證副本`. Digests are taken inside `dump`
 (PostgreSQL) and `export` (files) and compared inside `restore` (files) and `start` (PostgreSQL, before other units).
 
@@ -905,8 +911,33 @@ leftovers settled), like `delete`.
   later fresh restore of the same backup loads them again. It deletes
   `key-<job>` files of jobs that are not running and `key-*` files older than 15 minutes. `run-job` indexes
   archives that a hard kill left in `archives/` without a sidecar (older than one hour) as type `uploaded`.
+* Pre-restore copies (2026.11.14.2): a restore record with `safety_pending` (its own packaging failed, or the job died
+  or was stopped by a shutdown after the copy was saved) has recovery work left: the recovery packages `pending/<job>/`
+  into its safety backup once (`package_safety` → `flows.package_pending_safety`, from `pending.json`; entries outside
+  the copy, symlinks or other files than regular ones are refused; an encrypted copy needs the device key). The id the
+  copy's record chose is adopted when it is registered already (a packaging cut short before the record said so), and an
+  archive of that id published but never registered is this job's own output and packaged again: never a second safety
+  backup. The record gets `safety_backup_id` (also in the result, the phase `safety-package` back to `done`) and the
+  guidance, and is saved, before the copy is deleted; a failure records `safety_pending_failed {path, message}` and keeps
+  the copy for manual work. Either way `safety_pending` is then false, so it is tried once. Too little free space (the
+  §9 need) is not a failure: nothing is written, the flag stays, `safety_pending_deferred` and one note say why (said
+  once: later passes only update the field with the latest figures, so the record never grows; review 2026-11-14), and
+  each later pass checks again; the dead job's staging is removed before the space is checked. A copy of an
+  interrupted, failed or cancelled restore that never reached a destructive phase (and is not `finishing`) is not
+  packaged but deleted, flag first: its data is unchanged where it came from, as after a failure there; such a record's
+  message says so (`UNCHANGED_MESSAGE`, naming a safety backup made in the downtime, if any). The other leftovers of
+  the record are saved before the packaging starts. It runs inside the helper call that holds the recovery's locks
+  (status/jobs/job-status wait for it): about a minute for a large copy, acceptable for this rare path; termination
+  signals are ignored meanwhile (a page timeout makes cockpit-bridge send SIGTERM) and its outcome is saved before they
+  apply again. A restore whose copy is not packaged yet or could not be pins like a failed restore (its source backup
+  is protected) until a later restore of its apps succeeded, and its record is kept as long as the copy exists. Each pass
+  also sweeps `pending/`: the copy of a finished record that lists neither `safety_pending` nor `safety_pending_failed`
+  is removed (a job that died while copying -- the flag is on disk before the first destructive step, so that data never
+  changed -- or a copy already packaged); copies of running, flagged or unreadable/missing records are kept. An
+  interrupted restore's result says `finishing` when the restore itself had finished and passed its checks (only its
+  clean-up or packaging was cut short): the page does not offer to revert it.
 * Retention (each recovery pass): records of queued/running jobs, records with `stopped_writers`/`fresh_apps`
-  left, and failed/interrupted (not rolled back) restores whose safety backup is still pinned (at least one of
+  left or a pre-restore copy not packaged yet, and failed/interrupted (not rolled back) restores whose safety backup is still pinned (at least one of
   their apps has had no successful restore since) are always kept; of the other records only the newest 200 are kept, with their `.log`, `.lock`
   and `.cancel`. A `.log`/`.lock`/`.cancel` whose record is gone and temp files of interrupted writes are removed
   after one hour. A request id whose job was pruned starts a new job.
@@ -1059,7 +1090,61 @@ restore before the app runs, with the differing items (first 20) in the result, 
 own digests are compared the same way). Probed in the lab (2026-11-13, postgres:16-alpine 16.16): identical digests on the source and on a cluster restored
 by instance mode, including timestamptz, float8, real, numeric, bytea and jsonb columns.
 
-**Hand-over from the safety backup.** The safety backup of an in-place restore leaves its writers stopped
+**Pre-restore copy (2026.11.14.2).** Phase `safety` copies the in-place apps' data exactly as a safety backup did
+(`create_backup(..., keep_stopped=True, defer_package=True)`: same consistency, digests and hand-over) into
+`pending/<job>/data/` (laid out like an extracted archive), checks that every entry's file is `data/<entry path>`, fsyncs
+every file and directory of the copy, writes its record `pending.json` atomically (entries with size and sha256, the
+apps' manifest sections, note, downtime, the encryption choice made at the job's start, and the id the safety backup
+will get) and records `safety_pending` before the restore's first destructive step: from then on a power loss leaves a
+complete copy. A failure to save or record the copy counts as no safety backup (`safety_failed`, or the
+`allow_no_safety`/safety-source fallback). **Where the copy is packaged is decided before any writer stops**, from the
+estimate E (review 2026-11-14, three rounds). After the restore when the free space holds the copy counted with a
+tenth more (E', for what the estimate leaves out and the other apps' writes meanwhile), its archive (E' + 1 %) and the
+running reserve (the apps run while it is written: 5 % of the filesystem, at least 2 GiB and at most 10 GiB, review
+M4), less what the restore gives back first: the in-place apps' extracted data except images (deleted before that
+packaging, review CR-01), at most E, because where the apps' storage shares the filesystem the restored data takes the
+place of what it replaces. Otherwise -- and also when the job deploys an app from templates, whose data on disk is not
+known before it runs -- in the downtime when the free space holds what 2026.11.14.1 needed for its safety backup
+(E × 2.2 + the device reserve): exactly as then, the copy is packaged, verified and registered before the first
+destructive step and then deleted, so the restore keeps the room it had then, and a rollback extracts the safety
+backup into the job's staging (the failed restore's extracted archive deleted first); only when that extraction would
+not fit (the free space once the copy is deleted, with the extracted archive, less than the copy + the device reserve)
+the copy stays and the rollback reads it. A deletion that fails half-way still counts as deleted: the rollback extracts
+the safety backup, and what is left of the unflagged copy is the recovery sweep's.
+No restore that 2026.11.14.1 accepted is refused. With too little space for either, the restore is refused before any
+writer stops (`safety_failed`, `應用未被暫停`), the error naming the smaller need (rounded up) and the log both; with
+`allow_no_safety` or a safety-backup source it goes on without a copy, as before. Once the copy is on disk, its real
+size and the databases the backup brings are checked again: a copy that will not fit after the restore (larger than
+estimated, or an in-place database dump in the backup larger than the one just copied: the database grows with the
+restore) is packaged in the downtime instead when that fits (the copy + 1 % + the device reserve). **Space is then no
+reason to refuse any more**: a downtime packaging that does not fit (or fails with ENOSPC, also while registering)
+leaves the copy for the packaging after the restore (flagged as `safety_pending`; the rollback reads it), which checks
+the space again and waits for space if it must. The one exception: with less free space than the device reserve
+after the copy, neither the restore nor a rollback could be trusted to finish (the job's own records may fail to
+save), so the restore is refused there, the copy deleted (its data is unchanged), also with `allow_no_safety`. A
+restore is otherwise refused after the stop only when the copy itself cannot be written or recorded, or when the
+downtime packaging fails for another reason than space and restoring without a safety backup is not accepted (as
+before 2026.11.14.2; production 2026-11-14: Hermes was paused 2 min 16 s and then refused, 11.8 GiB needed after the
+restore, 11.6 GiB free, because only the check after the copy knew the running reserve). Packaging in the downtime
+sets `safety_in_downtime` and marks phase `safety-package` `done` during `safety`, kept so through the restore's
+phases and a rollback; that phase never counts as a destructive step (`changed`, §7). A termination signal while the
+copy is deleted right after that packaging stops the job (nothing has changed yet); once the restore or a rollback is
+over, one while the copy is deleted leaves the rest to the recovery sweep and the outcome stands. For packaging after the restore, the same need is checked again right before it starts (images pulled or WAL
+written meanwhile). A successful restore deletes
+the replaced host-directory copies, the extracted archive, and then packages the copy in phase `safety-package` (written
+and fully verified like any backup, then registered; `safety_backup_id` set) and deletes it -- outside the outage
+(production 2026-11-14: Hermes 66 s and Nextcloud 35 s of the outage were this packaging). A failed restore rolls back
+**from the copy** (no extraction) after checking every entry again (regular file, no symlink, recorded size and sha256;
+a damaged copy means no rollback: `需人工處理`), then packages it inside `rollback` (the message names the new safety
+backup); a copy deleted after its packaging in the downtime is replaced by the safety backup, extracted. A termination
+signal after the packaging registered the safety backup (while that is being recorded) reports it packaged, not kept. Registration is the commit point: the record names the backup (`safety_backup_id`, flag cleared) before the
+copy is deleted. Packaging that fails, finds too little space or is cut by a termination signal keeps the copy and the
+flag, and the job's outcome stands (a finished restore still ends `succeeded`, a rollback `rolled-back`, with their
+full result; `warnings` say where the copy is); a shutdown during the restore itself leaves both for the recovery after
+boot. Nothing deletes a copy except its successful packaging, a failure before the first destructive step (its data is
+unchanged where it came from; the flag is cleared first), or the recovery's sweep of copies nothing needs (§8).
+
+**Hand-over from the pre-restore copy.** The pre-restore copy of an in-place restore leaves its writers stopped
 (`keep_stopped`): no restart, no health wait, no second stop. Its http-json snapshot is then not stored (it cannot be
 confirmed while the app is down); digests are exact anyway and are what the rollback compares. An app with http-json
 checks but no digest (the hand-written production entries) therefore has a rollback that is checked by the health checks
@@ -1067,8 +1152,8 @@ only: the preflight says so before the restore (`rollback-unverified`, warn), th
 rollback that compared no data adds a note to the result's `warnings` instead of implying a data check (review F16; a
 second stop and health wait to confirm the snapshot -- the behaviour before 2026-11-13 -- is not traded for it; adding
 digest checks makes rollbacks compare data). Any failure before the
-restore's first destructive step (the safety backup's packaging, the rollback-space check, a refusal inside `restore()`)
-starts those writers again; apps a multi-app restore had not reached when it failed are started again by the rollback.
+restore's first destructive step (saving the pre-restore copy, the packaging-space check, a refusal inside `restore()`)
+starts those writers again and deletes the copy; apps a multi-app restore had not reached when it failed are started again by the rollback.
 
 **Host directories before the stop.** After the preflight (the cancellable window closed, `dir_apps` recorded) phase
 `stage` writes each archived host directory to `<dir>.woowbk-new-<job>` while the apps still run (HA's 30 s and

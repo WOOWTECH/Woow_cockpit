@@ -316,10 +316,17 @@ class Services:
         """Settle the host-directory siblings a dead restore left; returns zh-TW notes."""
         return flows.settle_dirs(self.deps, job_id, app_ids)
 
+    def package_safety(self, job_id):
+        """Package the pre-restore copy a restore kept (`pending/<job>/`) into its safety backup; returns (backup id,
+        problem). Its log lines go to that job's log."""
+        store = jobmod.JobStore(self.paths)
+        return flows.package_pending_safety(self.paths, self.deps, job_id,
+                                            log=lambda message: store.append_log(job_id, message))
+
     def recover(self):
         changed = jobmod.recover_interrupted(self.paths, unit_active=self.unit_active,
                                              restart_writers=self.restart_writers, cleanup_fresh=self.cleanup_fresh,
-                                             settle_dirs=self.settle_dirs)
+                                             settle_dirs=self.settle_dirs, package_safety=self.package_safety)
         # Every recovery pass also deletes expired unencrypted copies (after a reboot the transient timer is gone;
         # review L1).
         self.cleanup_exports()
@@ -328,7 +335,8 @@ class Services:
     def start(self, job_type, params, request_id, **kwargs):
         return jobmod.start_job(self.paths, job_type, params, request_id, launcher=self.launcher,
                                 unit_active=self.unit_active, restart_writers=self.restart_writers,
-                                cleanup_fresh=self.cleanup_fresh, settle_dirs=self.settle_dirs, **kwargs)
+                                cleanup_fresh=self.cleanup_fresh, settle_dirs=self.settle_dirs,
+                                package_safety=self.package_safety, **kwargs)
 
     def key_ids(self):
         return {info.key_id for info in self.keys.identities()}

@@ -694,8 +694,10 @@ def scenario_d2(ev):
              result['safety_backup_id'] is None and result['rolled_back'] is False
              and all(c['status'] == 'ok' for c in result['health'])
              and [v['match'] for v in result['verification']] == [True], result)
-    ev.check('D2 phases: safety skipped, the rest done', phase_states(job).get('safety') == 'skipped'
-             and all(s == 'done' for p, s in phase_states(job).items() if p != 'safety'), phase_states(job))
+    ev.check('D2 phases: safety and safety-package skipped, the rest done',
+             phase_states(job).get('safety') == 'skipped' and phase_states(job).get('safety-package') == 'skipped'
+             and all(s == 'done' for p, s in phase_states(job).items() if p not in ('safety', 'safety-package')),
+             phase_states(job))
     after = snapshot('b')
     ev.save('d2-after', after)
     ev.require('D2 dev-b equals the dev-a backup time (summary, full tree incl. container ids/modes/mtimes/xattrs/'

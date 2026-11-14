@@ -11,8 +11,9 @@ Owner: catalog + retention engineer.
   verification failed (`verified.ok` false) does not count toward N and is a candidate itself (review M1):
   - the source or safety backup of a queued/running job, and every safety backup while a restore is queued/running;
   - the safety backup a failed or interrupted (not rolled back) restore still pins (`jobs.pinned_safety_records`), and
-    that restore's source backup (also when it had no safety backup but changed the apps; review M2), until a later
-    restore of its apps succeeded;
+    that restore's source backup (also when it had no safety backup but changed the apps; review M2, or when its
+    pre-restore copy is not packaged yet or could not be, whatever its state), until a later restore of its apps
+    succeeded;
   - everything, while a job record cannot be read (review F11).
 * `retention-plan` previews (optionally with a proposed policy), `retention-apply` saves the policy and deletes
   exactly the backup ids the administrator confirmed that are still not protected, under the start lock (like
@@ -216,10 +217,13 @@ def protected_backups(paths, backups=()):
     for record_id, safety in jobs.pinned_safety_records(records).items():
         if isinstance(safety, str):
             reasons.setdefault(safety, '失敗或中斷的還原仍需要這份還原前備份才能回到還原前的狀態。')
-        params = (by_id.get(record_id) or {}).get('params')
+        record = by_id.get(record_id) or {}
+        params = record.get('params')
         source = params.get('backup_id') if isinstance(params, dict) else None
         if isinstance(source, str):
-            reasons.setdefault(source, '失敗或中斷的還原使用這份備份；在該應用成功還原之前保留。')
+            reasons.setdefault(source, '還原前資料尚未封裝成還原前備份的還原使用這份備份；在該應用之後成功還原之前保留。'
+                               if record.get('safety_pending') or record.get('safety_pending_failed')
+                               else '失敗或中斷的還原使用這份備份；在該應用成功還原之前保留。')
     if restore_active:
         for backup in backups:
             if backup.get('type') == 'safety' and isinstance(backup.get('id'), str):

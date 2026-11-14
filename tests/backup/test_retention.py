@@ -250,6 +250,20 @@ class ProtectionTests(RetentionCase):
         pinned = jobs.pinned_safety_records(jobs.JobStore(self.paths).list(limit=None))
         self.assertEqual(list(pinned.values()), [None], 'no safety backup, but the record is pinned (kept)')
 
+    def test_a_restore_whose_pre_restore_copy_was_not_packaged_pins_its_source(self):
+        # 2026.11.14.2: like a changed failed restore, whatever its state, until a later restore of the app succeeded
+        source = self.make(1, ['odoo'])
+        other = self.make(2, ['n8n'])
+        self.job('restore', {'backup_id': source, 'apps': ['odoo']}, 'succeeded',
+                 safety_pending_failed={'path': '/var/lib/woowtech-backup/pending/j1', 'message': '空間不足'})
+        self.job('restore', {'backup_id': other, 'apps': ['n8n']}, 'rolled-back', safety_pending=True,
+                 result={'safety_backup_id': None, 'rolled_back': True})
+        protected = retention.protected_backups(self.paths, self.storage.list_backups())
+        self.assertEqual(set(protected), {source, other})
+        self.assertIn('還原前資料尚未封裝成還原前備份', protected[source])
+        self.job('restore', {'backup_id': source, 'apps': ['odoo']}, 'succeeded')
+        self.assertEqual(set(retention.protected_backups(self.paths, self.storage.list_backups())), {other})
+
     def test_a_damaged_record_protects_everything(self):
         # review F11: JobStore.list skips a record it cannot read; that record may be a failed restore's pin
         first = self.make(1, ['odoo'])

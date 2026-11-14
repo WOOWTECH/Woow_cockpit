@@ -262,6 +262,51 @@ class StagingTests(StorageTestCase):
                 self.assertEqual(ctx.exception.code, 'invalid-request')
 
 
+class PendingTests(StorageTestCase):
+    """pending/<job>/: an in-place restore's pre-restore copy until it is packaged (2026.11.14.2)."""
+
+    JOB = 'j20261113T020000Z-a1b2c3d4'
+
+    def test_layout_and_a_new_copy(self):
+        self.assertEqual(self.paths.pending, self.paths.data / 'pending')
+        self.assertEqual(mode(self.paths.pending), 0o700)
+        path = self.storage.pending_dir(self.JOB)
+        self.assertEqual(path, self.paths.pending / self.JOB)
+        self.assertEqual(self.storage.pending_path(self.JOB), path)
+        self.assertEqual((mode(path), os.listdir(path)), (0o700, []))
+
+    def test_an_existing_copy_is_never_replaced(self):
+        path = self.storage.pending_dir(self.JOB)
+        (path / 'pending.json').write_text('{}')
+        with self.assertRaises(BackupError) as ctx:
+            self.storage.pending_dir(self.JOB)
+        self.assertEqual(ctx.exception.code, 'internal-error')
+        self.assertEqual(os.listdir(path), ['pending.json'], 'the earlier copy is untouched')
+        os.rename(path, self.base / 'moved')
+        path.symlink_to(self.base / 'moved')
+        with self.assertRaises(BackupError):
+            self.storage.pending_dir(self.JOB)
+        self.assertTrue(path.is_symlink(), 'a symlink in its place is not replaced either')
+
+    def test_remove_and_ids(self):
+        path = self.storage.pending_dir(self.JOB)
+        (path / 'data').mkdir()
+        outside = self.base / 'outside'
+        outside.mkdir()
+        (outside / 'keep').write_text('keep')
+        (path / 'data' / 'link').symlink_to(outside)
+        self.storage.remove_pending(self.JOB)
+        self.assertFalse(os.path.lexists(path))
+        self.assertEqual((outside / 'keep').read_text(), 'keep', 'symlink inside the copy not followed')
+        self.storage.remove_pending(self.JOB)  # idempotent
+        for bad in ('../escape', 'a/b', '.hidden', '', 'x' * 120, None, '..'):
+            with self.subTest(bad=bad):
+                for call in (self.storage.pending_dir, self.storage.pending_path, self.storage.remove_pending):
+                    with self.assertRaises(BackupError) as ctx:
+                        call(bad)
+                    self.assertEqual(ctx.exception.code, 'invalid-request')
+
+
 class UploadTests(StorageTestCase):
     def simulate_fsreplace(self, path, data):
         """What cockpit's fsreplace1 does: write a temp file next to `path`, then rename over it."""
