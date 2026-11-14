@@ -1191,6 +1191,135 @@ def scenario_h2(ev):
     return results
 
 
+# ------------------------------------------------------------------ SPACE: where the pre-restore copy is packaged
+
+SPACE_TMPFS = os.environ.get('SPACE_TMPFS', '1536m')
+SPACE_VOLUME = '/home/appowner/.local/share/containers/storage/volumes/woowbk-demo-files/_data'
+
+
+def space_restore(dev, ev, backup_id, label):
+    start = ok(dev, 'restore-start', {'backup_id': backup_id, 'apps': [APP], 'request_id': request_id(),
+                                      'confirm': True}, ev=ev)
+    return wait_job(dev, start['job_id'], ev=ev, timeout=900, label=label)
+
+
+def first_line(log, text):
+    return next((i for i, line in enumerate(log) if text in line), None)
+
+
+def scenario_space(ev):
+    """2026.11.14.2 host test (Hermes paused 2 min 16 s, then refused): on a 1.5 GiB tmpfs over the data directory the
+    running reserve (2 GiB) cannot follow the restore, so the pre-restore copy is packaged in the downtime, decided
+    before any writer stops, once, also around a rollback; with too little space for that either, nothing stops."""
+    dev = 'a'
+    status = ok(dev, 'status', ev=ev)
+    ev.require('dev-a idle and the data dir is the normal ext4 volume',
+               status['active_job'] is None and fs_type(dev, DATA) == 'ext4', fs_type(dev, DATA))
+    before_ids = backup_ids(dev, ev)
+    sh(dev, f'mount -t tmpfs -o size={SPACE_TMPFS},mode=0700 woowbk-space {DATA}')
+    ev.log(f'mounted tmpfs size={SPACE_TMPFS} over {DATA} at {time.strftime("%H:%M:%S")}')
+    results = {}
+    try:
+        storage = ok(dev, 'status', ev=ev)['storage']
+        results['storage_on_tmpfs'] = storage
+        ev.check('SPACE: the engine sees the small filesystem (no backups)',
+                 storage['backup_count'] == 0 and storage['total_bytes'] < 1700 * MIB, storage)
+        job, log = backup_once(dev, ev, 'SPACE 還原來源', label='backup[space]')
+        ev.require('SPACE: the source backup fits and succeeds', job['state'] == 'succeeded', job.get('error'))
+        source = job['result']['backup_id']
+        baseline = content_state(dev)
+
+        # 1. In-place restore: packaged in the downtime, decided before the writers stop, once.
+        status_code, _body = e2e.app_post(dev, '/api/notes', json.dumps({'title': 'SPACE 還原後應消失', 'body': '-'},
+                                                                    ensure_ascii=False).encode(), 'application/json')
+        ev.check('SPACE: a change after the backup (POST /api/notes -> 201)', status_code == 201)
+        job, log = space_restore(dev, ev, source, 'restore[space]')
+        save_job(ev, 'space-restore-job', job, log)
+        result = job.get('result') or {}
+        decided, paused = first_line(log, '改在停機期間封裝'), first_line(log, '暫停寫入服務')
+        packaged, stopping = first_line(log, '已建立並通過完整驗證'), first_line(log, '階段：停止應用')
+        results['restore'] = {'state': job['state'], 'error': job.get('error'), 'phases': phase_states(job),
+                              'safety_in_downtime': result.get('safety_in_downtime'), 'lines': [decided, paused, packaged, stopping]}
+        ev.check('SPACE restore: succeeded, the safety backup packaged in the downtime (safety_in_downtime)',
+                 job['state'] == 'succeeded' and result.get('safety_in_downtime') is True
+                 and result.get('safety_backup_id') and result.get('safety_pending') is False,
+                 {'state': job['state'], 'error': job.get('error'), 'result': result})
+        ev.check('SPACE restore: decided before the writers stopped, packaged before the stop phase',
+                 None not in (decided, paused, packaged, stopping) and decided < paused < packaged < stopping,
+                 results['restore']['lines'])
+        ev.check('SPACE restore: packaged once', sum('已建立並通過完整驗證' in line for line in log) == 1)
+        ev.check('SPACE restore: phases (safety and safety-package done, the restore phases done)',
+                 all(phase_states(job).get(p) == 'done' for p in ('safety', 'stop', 'restore', 'start', 'check', 'safety-package')),
+                 phase_states(job))
+        safety = next((b for b in backups(dev, ev) if b['id'] == result.get('safety_backup_id')), {})
+        ev.check('SPACE restore: the safety backup is listed and verified',
+                 safety.get('type') == 'safety' and (safety.get('verified') or {}).get('ok') is True, safety)
+        ev.check('SPACE restore: data equals the source backup (the later note is gone)', content_state(dev) == baseline)
+        ev.check('SPACE restore: pending/ and staging empty, no job key, no orphan archive',
+                 sh(dev, f'ls -A {DATA}/pending').stdout.strip() == b'' and staging_empty(dev) and no_job_keys(dev)
+                 and orphans(dev) == [], {'orphans': orphans(dev)})
+
+        # 2. A restore that fails after its first destructive step: rolled back from the copy, nothing packaged again.
+        status_code, _body = e2e.app_post(dev, '/api/notes', json.dumps({'title': 'SPACE 回復後必須還在', 'body': '-'},
+                                                                    ensure_ascii=False).encode(), 'application/json')
+        ev.check('SPACE rollback: a change before the restore (POST /api/notes -> 201)', status_code == 201)
+        pre = content_state(dev)
+        e2e.f8_inject(dev, True)
+        try:
+            job, log = space_restore(dev, ev, source, 'restore[space-rollback]')
+        finally:
+            e2e.f8_inject(dev, False)
+        save_job(ev, 'space-rollback-job', job, log)
+        result = job.get('result') or {}
+        results['rollback'] = {'state': job['state'], 'error': job.get('error'), 'phases': phase_states(job)}
+        ev.check('SPACE rollback: rolled back, the safety backup packaged in the downtime',
+                 job['state'] == 'rolled-back' and result.get('rolled_back') is True
+                 and result.get('safety_in_downtime') is True and result.get('safety_backup_id'),
+                 {'state': job['state'], 'error': job.get('error')})
+        ev.check('SPACE rollback: one packaging, before the stop (none after the rollback)',
+                 sum('已建立並通過完整驗證' in line for line in log) == 1
+                 and first_line(log, '已建立並通過完整驗證') < first_line(log, '階段：停止應用'))
+        ev.check('SPACE rollback: data equals the state before the restore', content_state(dev) == pre)
+        ev.check('SPACE rollback: app healthy, pending/ empty',
+                 wait_healthy(dev, 120) and sh(dev, f'ls -A {DATA}/pending').stdout.strip() == b'')
+
+        # 3. Not even packaging in the downtime fits: refused before any writer stops (a bigger app, a fuller disk).
+        sh(dev, f'fallocate -l 400M {SPACE_VOLUME}/woowbk-space-big.bin')
+        sh(dev, f'fallocate -l 300M {DATA}/woowbk-space-filler')
+        try:
+            before = content_state(dev)
+            monitor = e2e.HealthMonitor(dev, 300)
+            job, log = space_restore(dev, ev, source, 'restore[space-refused]')
+            health = monitor.stop()
+        finally:
+            sh(dev, f'rm -f {DATA}/woowbk-space-filler')
+            sh(dev, f'rm -f {SPACE_VOLUME}/woowbk-space-big.bin')
+        save_job(ev, 'space-refused-job', job, log)
+        result = job.get('result') or {}
+        results['refused'] = {'state': job['state'], 'error': job.get('error'), 'phases': phase_states(job),
+                              'estimate_line': next((l for l in log if '預估資料量' in l), ''), 'health': health}
+        ev.check('SPACE refused: failed with no safety backup possible, saying no app was paused',
+                 job['state'] == 'failed' and result.get('safety_failed') is True
+                 and '應用未被暫停' in (job.get('error') or {}).get('message', ''), job.get('error'))
+        ev.check('SPACE refused: no writer was paused (no stop line, stop phase pending)',
+                 not any('暫停寫入服務' in line for line in log) and phase_states(job).get('stop') == 'pending',
+                 phase_states(job))
+        ev.check('SPACE refused: the app never went down (/healthz sampled every 0.25 s)',
+                 health['unhealthy_samples'] == 0 and health['samples'] > 0, health)
+        ev.check('SPACE refused: data unchanged', content_state(dev) == before)
+    finally:
+        for _ in range(60):
+            if ok(dev, 'status', ev=ev)['active_job'] is None:
+                break
+            time.sleep(2)
+        sh(dev, f'umount {DATA}')
+        ev.log(f'unmounted the tmpfs at {time.strftime("%H:%M:%S")}')
+    ev.check('SPACE: after umount the original data is back (same backups listed, ext4)',
+             fs_type(dev, DATA) == 'ext4' and backup_ids(dev, ev) == before_ids, sorted(backup_ids(dev, ev) ^ before_ids))
+    ev.check('SPACE: app running afterwards', app_status(dev, ev)['state'] == 'running')
+    return results
+
+
 # ------------------------------------------------------------------ H5: reboot during a restore
 
 def host_memory_ok():
@@ -2647,7 +2776,7 @@ def scenario_leaks(ev):
 
 # ------------------------------------------------------------------ main
 
-SCENARIOS = {'h1': scenario_h1, 'h2': scenario_h2, 'h3': scenario_h3, 'h4': scenario_h4, 'h5': scenario_h5,
+SCENARIOS = {'h1': scenario_h1, 'h2': scenario_h2, 'space': scenario_space, 'h3': scenario_h3, 'h4': scenario_h4, 'h5': scenario_h5,
              'h6': scenario_h6, 'h7': scenario_h7, 'sec1': scenario_sec1, 'fidelity': scenario_fidelity,
              'fresh': scenario_fresh, 'leaks': scenario_leaks}
 
