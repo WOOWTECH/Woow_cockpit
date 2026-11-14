@@ -213,8 +213,11 @@ class KeyStoreTests(unittest.TestCase):
         secret_line = next(line for line in Path(info.path).read_text().splitlines()
                            if line.startswith('AGE-SECRET-KEY-1'))
         for needle in (info.key_id, info.created, secret_line, '金鑰 ID', '建立時間', '建立設備', '另一台設備',
-                       '遺失', '永遠無法還原', '.woowbackup'):
+                       '遺失', '永遠無法還原', '.tar', '舊格式的 .woowbackup', '應用設定', 'README.txt'):
             self.assertIn(needle, kit)
+        # 2026-11-15: the kit named only the old format's file (.woowbackup) although backups are .tar since
+        # 2026-11-13, and left out that the target device needs the apps' settings before it can restore them.
+        self.assertNotIn('上傳你下載保存的 .woowbackup 備份檔', kit)
         hostname = os.uname().nodename
         self.assertIn(hostname, kit)
         self.assertRegex(self.store.kit_filename(), r'^woowtech-backup-key-[a-z0-9-]+-[0-9A-F-]{19}\.txt$')
