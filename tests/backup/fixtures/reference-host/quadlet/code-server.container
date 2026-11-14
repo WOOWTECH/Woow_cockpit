@@ -1,0 +1,24 @@
+# Reference-host shape for catalog-suggest tests: names, mounts and dependencies only, no secret values.
+[Unit]
+Description=code-server
+
+
+[Container]
+ContainerName=code-server
+Image=docker.io/codercom/code-server:4.96.4
+PublishPort=127.0.0.1:8443:8080
+Volume=code-server-data:/home/coder/.local/share/code-server
+Volume=code-server-config:/home/coder/.config
+Volume=code-server-cache:/home/coder/.cache
+Volume=%h/Desktop:/home/coder/Desktop
+Volume=%h/.ssh:/home/coder/.ssh:ro
+Volume=%h/.gitconfig:/home/coder/.gitconfig:ro
+Volume=%h/.local/bin:/home/coder/.local/bin:ro
+Environment=PASSWORD=fixture-dummy-value-0000
+HealthCmd=curl -fsS http://localhost:8080/healthz
+
+[Service]
+Restart=always
+
+[Install]
+WantedBy=default.target

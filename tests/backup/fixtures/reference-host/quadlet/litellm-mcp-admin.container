@@ -1,0 +1,21 @@
+# Reference-host shape for catalog-suggest tests: names, mounts and dependencies only, no secret values.
+[Unit]
+Description=litellm MCP admin
+
+
+[Container]
+ContainerName=litellm-mcp-admin
+Image=localhost/woow-mcp-admin:latest
+Network=litellm-mcp-admin.network
+PublishPort=127.0.0.1:18505:8080
+Volume=litellm-mcp-admin.volume:/data
+EnvironmentFile=%h/.config/litellm-mcp-admin/litellm-mcp-admin.env
+Secret=litellm-mcp-admin-jwt-secret,type=env,target=JWT_SECRET
+Secret=litellm-mcp-admin-password,type=env,target=ADMIN_PASSWORD
+HealthCmd=wget -qO- http://127.0.0.1:8080/healthz
+
+[Service]
+Restart=always
+
+[Install]
+WantedBy=default.target

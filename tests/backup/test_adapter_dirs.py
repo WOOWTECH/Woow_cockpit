@@ -192,10 +192,10 @@ class DirBackupTests(DirCase):
         self.app = catalog.validate_entry(dirs_entry(self.paths, cold=True), paths=self.paths, user_lookup=user_lookup)
         adapter = self.make_adapter()
         manifest, _ = adapter.backup(self.staging / 'cold', include_images=False)
-        stops = [a[-1] for a in self.owner.argvs() if a[:3] == [SYSTEMCTL, '--user', 'stop']]
-        starts = [a[-1] for a in self.owner.argvs() if a[:3] == [SYSTEMCTL, '--user', 'start']]
-        self.assertEqual(stops, ['woowbk-demo-app.service', 'woowbk-demo-db.service'])
-        self.assertEqual(starts, ['woowbk-demo-db.service', 'woowbk-demo-app.service'])
+        stops = [a[4:] for a in self.owner.argvs() if a[:3] == [SYSTEMCTL, '--user', 'stop']]
+        starts = [a[4:] for a in self.owner.argvs() if a[:3] == [SYSTEMCTL, '--user', 'start']]
+        self.assertEqual(stops, [['woowbk-demo-app.service', 'woowbk-demo-db.service']], 'one call, dependents first')
+        self.assertEqual(starts, [['woowbk-demo-db.service'], ['woowbk-demo-app.service']], 'the app is After= the db')
         self.assertEqual(manifest['postgres'], [])
         self.assertNotIn('pg_dump', ' '.join(self.owner.text(a) for a in self.owner.argvs()))
 
@@ -315,8 +315,9 @@ class DirRestoreTests(DirRestoreCase):
         argvs = owner.argvs()
         unpack_at = argvs.index(dir_call('unpack', HTML, JOB))
         self.assertEqual(argvs[unpack_at + 1], dir_call('unpack', DATA, JOB))
-        self.assertLess(argvs.index([SYSTEMCTL, '--user', 'stop', '--', 'woowbk-demo-db.service']), unpack_at,
-                        'written only once every unit is stopped')
+        self.assertLess(argvs.index([SYSTEMCTL, '--user', 'stop', '--', 'woowbk-demo-app.service',
+                                     'woowbk-demo-db.service']), unpack_at,
+                        'without stage_dirs() the copies are written once every unit is stopped')
         # Review M3: both copies are written before anything that exists changes (secrets, volumes, the database).
         self.assertLess(unpack_at, min(i for i, a in enumerate(argvs) if a[:3] in ([PODMAN, 'secret', 'create'],
                                                                                    [PODMAN, 'volume', 'rm'])))
@@ -520,6 +521,84 @@ class DirRestoreTests(DirRestoreCase):
         self.assertEqual([op[0] for op in owner.dir_ops], ['state'], 'refused before any change')
         self.assertFalse(any(a[:3] == [SYSTEMCTL, '--user', 'stop'] for a in owner.argvs()))
         self.assertEqual(os.listdir(elsewhere), [], 'nothing written through the link')
+
+
+class DirStageTests(DirRestoreCase):
+    """Host directories are written before anything stops (CONTRACT section 9, 2026-11-13): stage_dirs() runs while the
+    apps still run, restore() only swaps; a failure before the restore's first destructive step removes the copies."""
+
+    def test_copies_are_written_before_any_unit_stops_and_only_swapped_later(self):
+        self.mutate()
+        owner = self.new_owner()
+        adapter = self.make_adapter(owner)
+        adapter.stage_dirs(self.manifest, self.extract, mode='inplace')
+        self.assertEqual(self.siblings(HTML), [f'.woowbk-new-{JOB}'])
+        self.assertEqual(owner.units['woowbk-demo-app.service'], 'active', 'the app still runs')
+        self.assertFalse([a for a in owner.argvs() if a[:3] == [SYSTEMCTL, '--user', 'stop']])
+        self.assertEqual(snapshot(self.home / HTML)['added-after-backup.txt'][2], b'new file', 'nothing existing changed')
+        staged = len(owner.argvs())
+        adapter.restore(self.manifest, self.extract, mode='inplace')
+        later = owner.argvs()[staged:]
+        self.assertFalse([a for a in later if a[:len(UNSHARE) + 1] == [*UNSHARE, 'unpack']], 'not written twice')
+        swaps = [i for i, a in enumerate(later) if a[:len(UNSHARE) + 1] == [*UNSHARE, 'swap']]
+        stop = later.index([SYSTEMCTL, '--user', 'stop', '--', 'woowbk-demo-app.service', 'woowbk-demo-db.service'])
+        self.assertTrue(swaps and all(stop < i for i in swaps))
+        for rel in (HTML, DATA):
+            self.assertEqual(snapshot(self.home / rel), self.original[rel], rel)
+        self.assertEqual(adapter.finish_dirs(), [])
+        self.assertEqual((self.siblings(HTML), self.siblings(DATA)), ([], []))
+
+    def test_a_failure_before_the_stop_removes_the_copies_and_changes_nothing(self):
+        self.mutate()
+        before = {rel: snapshot(self.home / rel) for rel in (HTML, DATA)}
+        owner = self.new_owner()
+        adapter = self.make_adapter(owner)
+        adapter.stage_dirs(self.manifest, self.extract, mode='inplace')
+        owner.fail = [('image exists', 125)]  # e.g. the restore refuses before its first destructive step
+        with self.assertRaises(BackupError):
+            adapter.restore(self.manifest, self.extract, mode='inplace')
+        self.assertFalse(adapter.destructive_started)
+        self.assertEqual(adapter.discard_dirs(), [])
+        self.assertEqual((self.siblings(HTML), self.siblings(DATA)), ([], []))
+        self.assertEqual({rel: snapshot(self.home / rel) for rel in (HTML, DATA)}, before)
+        self.assertEqual(owner.units['woowbk-demo-app.service'], 'active')
+
+    def test_staging_refuses_what_the_restore_would_refuse(self):
+        owner = self.new_owner()
+        os.rename(self.home / DATA, self.home / 'elsewhere')
+        os.symlink(self.home / 'elsewhere', self.home / DATA)
+        with self.assertRaises(BackupError):
+            self.make_adapter(owner).stage_dirs(self.manifest, self.extract, mode='inplace')
+        self.assertEqual(self.siblings(DATA), [])
+
+    def test_files_digest_of_a_host_directory_is_exact_after_the_swap(self):
+        def mutate(entry):
+            entry['verify'].append({'id': 'html', 'type': 'files-digest', 'data_dir': HTML, 'exclude': ['*.tmp']})
+        entry = dirs_entry(self.paths)
+        mutate(entry)
+        self.app = catalog.validate_entry(entry, paths=self.paths, user_lookup=user_lookup)
+        (self.home / HTML / 'scratch.tmp').write_text('not compared')
+        owner = self.new_owner()
+        manifest, entries = self.make_adapter(owner).backup(self.staging / 'digest', include_images=False)
+        item = manifest['verify_digests'][0]
+        self.assertEqual((item['target'], item['exclude']), (f'dir:{HTML}', ['*.tmp']))
+        extract = self.root / 'job2' / 'extract'
+        extract.mkdir(parents=True)
+        extract_entries(entries, extract)
+        self.mutate()
+        (self.home / HTML / 'scratch.tmp').write_text('changed but excluded')
+        owner = self.new_owner()
+        adapter = self.make_adapter(owner)
+        adapter.stage_dirs(manifest, extract, mode='inplace')
+        adapter.restore(manifest, extract, mode='inplace')
+        result = adapter.digest_results[0]
+        self.assertIs(result['match'], True, result)
+        self.assertEqual(result['before']['dirs'] + result['before']['files'] + result['before']['symlinks']
+                         + result['before']['other'], result['before']['entries'])
+        argvs = owner.argvs()
+        digest_at = next(i for i, a in enumerate(argvs) if 'digest' in a and HTML in a)
+        self.assertLess(max(i for i, a in enumerate(argvs) if a[:len(UNSHARE) + 1] == [*UNSHARE, 'swap']), digest_at)
+        self.assertLess(digest_at, next(i for i, a in enumerate(argvs) if a[:3] == [SYSTEMCTL, '--user', 'start']))
 
 
 class DirFreshTests(DirRestoreCase):

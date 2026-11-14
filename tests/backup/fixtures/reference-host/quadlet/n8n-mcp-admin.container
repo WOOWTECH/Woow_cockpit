@@ -1,0 +1,21 @@
+# Reference-host shape for catalog-suggest tests: names, mounts and dependencies only, no secret values.
+[Unit]
+Description=n8n MCP admin
+
+
+[Container]
+ContainerName=n8n-mcp-admin
+Image=localhost/woow-mcp-admin:latest
+Network=n8n-mcp-admin.network
+PublishPort=127.0.0.1:18503:8080
+Volume=n8n-mcp-admin.volume:/data
+EnvironmentFile=%h/.config/n8n-mcp-admin/n8n-mcp-admin.env
+Secret=n8n-mcp-admin-jwt-secret,type=env,target=JWT_SECRET
+Secret=n8n-mcp-admin-password,type=env,target=ADMIN_PASSWORD
+HealthCmd=wget -qO- http://127.0.0.1:8080/healthz
+
+[Service]
+Restart=always
+
+[Install]
+WantedBy=default.target

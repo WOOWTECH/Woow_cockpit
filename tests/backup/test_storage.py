@@ -89,6 +89,10 @@ class LayoutTests(StorageTestCase):
         self.assertRegex(backup_id, r'^20261113T020000Z-[0-9a-f]{8}$')
         self.assertRegex(self.storage.new_backup_id(), r'^\d{8}T\d{6}Z-[0-9a-f]{8}$')
         self.assertNotEqual(self.storage.new_backup_id(fixed), self.storage.new_backup_id(fixed))
+        # A new backup is format 2 (`.tar`); format 1 files keep `.woowbackup` and are found by either call.
+        self.assertEqual(self.storage.archive_path(backup_id), self.paths.archives / f'{backup_id}.tar')
+        self.assertEqual(self.storage.archive_path(backup_id, 1), self.paths.archives / f'{backup_id}.woowbackup')
+        self.storage.archive_path(backup_id, 1).write_bytes(b'v1')
         self.assertEqual(self.storage.archive_path(backup_id), self.paths.archives / f'{backup_id}.woowbackup')
         for bad in ('../../etc/passwd', '20261113T020000Z-a1b2c3d4/../x', '20261113T020000Z-A1B2C3D4', '', None,
                     'j20261113T020000Z-a1b2c3d4', '20261113T020000Z-a1b2c3d4\n', '２０２６１１１３T020000Z-a1b2c3d4'):
@@ -115,7 +119,8 @@ class IndexTests(StorageTestCase):
                                     uploaded_at='2026-11-13T05:00:00Z', source=None)
         self.assertNotIn('key_available', newer)
         self.assertEqual(newer['size'], 1000)
-        self.assertEqual(newer['filename'], 'woowtech-backup-dev-a-20261113-020000.woowbackup')
+        self.assertEqual(newer['filename'], 'woowtech-backup-dev-a-20261113-020000.tar')
+        self.assertEqual((newer['format'], newer['encrypted']), (2, True))
         self.assertEqual(mode(self.storage.index_path(newer['id'])), 0o600)
         self.assertEqual([r['id'] for r in self.storage.list_backups()],
                          [newer['id'], older['id'], uploaded['id']], 'newest first')
@@ -343,7 +348,7 @@ class UploadTests(StorageTestCase):
     def test_unindexed_archives_are_adopted(self):
         # Lab open issue: a hard kill between publishing and indexing left a never-listed archive.
         data = fake_archive_bytes(backup_id='20261101T080000Z-0123abd0', key_id='1234-5678-9ABC-DEF0')
-        orphan = self.storage.archive_path('20261101T080000Z-0123abd0')
+        orphan = self.storage.archive_path('20261101T080000Z-0123abd0', 1)
         self.storage.ensure_layout()
         orphan.write_bytes(data)
         self.assertEqual(self.storage.adopt_orphans(), [], 'too recent: it may be being published right now')
@@ -357,7 +362,7 @@ class UploadTests(StorageTestCase):
     def test_reupload_of_an_unindexed_archive_indexes_it(self):
         data = fake_archive_bytes(backup_id='20261101T080000Z-0123abd2')
         self.storage.ensure_layout()
-        self.storage.archive_path('20261101T080000Z-0123abd2').write_bytes(data)
+        self.storage.archive_path('20261101T080000Z-0123abd2', 1).write_bytes(data)
         begun = self.storage.begin_upload('again.woowbackup', len(data))
         self.simulate_fsreplace(begun['path'], data)
         self.assertEqual(self.storage.finish_upload(begun['upload_id'])['id'], '20261101T080000Z-0123abd2')
@@ -366,7 +371,7 @@ class UploadTests(StorageTestCase):
         # A safety backup's sidecar a newer engine wrote (one extra field): unlisted here, but never rewritten.
         backup_id = '20261101T080000Z-0123abd3'
         data = fake_archive_bytes(backup_id=backup_id, key_id='1234-5678-9ABC-DEF0')
-        self.storage.archive_path(backup_id).write_bytes(data)
+        self.storage.archive_path(backup_id, 1).write_bytes(data)
         self.storage.register(backup_id, meta(type='safety', note='還原前自動備份', key_id='1234-5678-9ABC-DEF0',
                                               sha256=hashlib.sha256(data).hexdigest()))
         index = self.storage.index_path(backup_id)

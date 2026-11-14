@@ -1,0 +1,19 @@
+# Reference-host shape for catalog-suggest tests: names, mounts and dependencies only, no secret values.
+[Unit]
+Description=Odoo PostgreSQL 17 (several business databases, created by Odoo)
+
+
+[Container]
+ContainerName=odoo18-db
+Image=docker.io/library/postgres:17
+Network=odoo.network
+Volume=odoo-db-data.volume:/var/lib/postgresql/data
+Environment=POSTGRES_USER=postgres POSTGRES_DB=postgres
+Secret=odoo18-postgres-super-password,type=env,target=POSTGRES_PASSWORD
+PodmanArgs=--stop-timeout 60
+
+[Service]
+Restart=always
+
+[Install]
+WantedBy=default.target

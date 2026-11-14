@@ -16,7 +16,7 @@ from .test_flows import (TEST_SECRET, TEST_SECRET_ID, FakeArchive, FakeKeys, Fak
 
 APP_KEYS = ['id', 'name', 'description', 'owner', 'adapter', 'deployed', 'state', 'units', 'last_backup', 'problems']
 META_KEYS = {'id', 'type', 'created', 'note', 'apps', 'size', 'sha256', 'key_id', 'include_images', 'filename',
-             'source', 'verified', 'inspected', 'key_available'}
+             'source', 'verified', 'inspected', 'key_available', 'format', 'encrypted', 'unauthenticated'}
 
 
 class ExplodingStdin:
@@ -161,9 +161,17 @@ class StatusTests(CliCase):
         backup_id = self.make_backup()
         response = self.call(['status'])
         self.assertEqual(set(response), {'ok', 'version', 'host', 'storage', 'key', 'imported_keys', 'apps',
-                                         'active_job', 'warnings'})
+                                         'active_job', 'warnings', 'settings'})
+        self.assertEqual(set(response['settings']), {'encrypt_by_default', 'problem', 'plaintext_warning'})
+        self.assertIs(response['settings']['encrypt_by_default'], True)
         self.assertEqual(response['host'], {k: HOST[k] for k in ('hostname', 'arch', 'os', 'podman')})
-        self.assertEqual(set(response['storage']), {'path', 'free_bytes', 'total_bytes', 'backups_bytes', 'backup_count'})
+        self.assertEqual(set(response['storage']), {'path', 'free_bytes', 'total_bytes', 'backups_bytes', 'backup_count',
+                                                    'apps'})
+        usage = {row['id']: row for row in response['storage']['apps']}
+        self.assertEqual(set(usage), {'woowbk-demo', 'woowbk-two'})
+        self.assertEqual((usage['woowbk-demo']['backups'], usage['woowbk-demo']['types']['manual']), (1, 1))
+        self.assertTrue(usage['woowbk-demo']['in_catalog'])
+        self.assertIsNone(usage['woowbk-demo']['keep_last'])
         self.assertEqual(response['key'], {'key_id': 'AAAA-BBBB-CCCC-DDDD', 'created': '2026-11-01T00:00:00Z',
                                            'kit_confirmed': False})
         self.assertEqual(response['imported_keys'], [])
@@ -271,11 +279,13 @@ class InspectTests(CliCase):
         self.assertEqual(set(response['backup']), META_KEYS)
         manifest = response['manifest']
         self.assertEqual(set(manifest), {'backup_id', 'created', 'type', 'note', 'tool', 'source', 'consistency',
-                                         'total_size', 'apps'})
+                                         'total_size', 'apps', 'format', 'encryption'})
+        self.assertEqual((manifest['format'], manifest['encryption']), (2, 'age-x25519'))
         self.assertEqual(set(manifest['apps'][0]), {'id', 'name', 'adapter', 'owner', 'images', 'postgres', 'volumes',
                                                     'data_dirs', 'secrets_count', 'config_files_count',
-                                                    'verify_snapshot'})
+                                                    'verify_snapshot', 'verify_digests'})
         self.assertEqual(manifest['apps'][0]['data_dirs'], [], 'an archive without host directories lists none')
+        self.assertEqual(manifest['apps'][0]['verify_digests'], [], 'an archive without digests lists none')
         self.assertEqual(manifest['apps'][0]['images'], [{'ref': 'localhost/x:1', 'included': False}])
         preflight = response['preflight']
         self.assertEqual(set(preflight), {'ok', 'checks', 'apps'})
@@ -369,7 +379,8 @@ class JobCommandTests(CliCase):
         self.active_units.add(f'woowtech-backup-{first["job_id"]}.service')
         self.assertEqual(self.error_code(['backup-start'], dict(request, request_id='req-00000002')), 'busy')
         record = jobs.JobStore(self.paths).get(first['job_id'])
-        self.assertEqual(record['params'], {'apps': ['woowbk-demo'], 'include_images': True, 'note': '週末前'})
+        self.assertEqual(record['params'], {'apps': ['woowbk-demo'], 'include_images': True, 'note': '週末前',
+                                            'encrypt': True})
 
     def test_backup_start_validation(self):
         self.assertEqual(self.error_code(['backup-start'], {'apps': ['nope-app'], 'request_id': 'req-00000001'}),
@@ -428,7 +439,9 @@ class JobCommandTests(CliCase):
         job = status['job']
         self.assertEqual(list(job), list(jobs.PUBLIC_KEYS))
         self.assertEqual(job['state'], 'succeeded')
-        self.assertEqual(set(job['result']), {'backup_id', 'size', 'apps', 'downtime_seconds'})
+        self.assertEqual(set(job['result']), {'backup_id', 'size', 'apps', 'downtime_seconds', 'unavailable_seconds',
+                                              'timing', 'encrypted', 'retention_deleted'})
+        self.assertEqual(job['result']['retention_deleted'], [])
         self.assertTrue(status['log'])
         self.assertTrue(all(isinstance(line, str) for line in status['log']))
         listed = self.call(['jobs'])['jobs']
@@ -438,7 +451,12 @@ class JobCommandTests(CliCase):
         verify = self.call(['verify-start'], {'backup_id': job['result']['backup_id'], 'request_id': 'req-00000010'})
         self.assertEqual(self.call(['run-job', verify['job_id']])['state'], 'succeeded')
         verified = self.call(['job-status'], {'job_id': verify['job_id']})['job']
-        self.assertEqual(verified['result'], {'ok': True, 'entries': 1, 'bytes': len(b'notes-v1')})
+        self.assertEqual(verified['result'], {'ok': True, 'entries': 1, 'bytes': len(b'notes-v1'), 'deep': True,
+                                              'format': 2, 'encrypted': True, 'notes': [],
+                                              'apps': [{'id': 'woowbk-demo', 'name': '示範筆記應用',
+                                                        'checked': {'volumes': 0, 'dirs': 0, 'images': 0,
+                                                                    'digests': 0, 'globals': 0, 'dumps': 0,
+                                                                    'secrets': 0}, 'header_only': []}]})
 
     def test_status_shows_active_job_and_interrupted_recovery(self):
         started = self.call(['backup-start'], {'apps': ['woowbk-demo'], 'request_id': 'req-00000001'})
@@ -521,7 +539,7 @@ class FileCommandTests(CliCase):
         backup_id = self.make_backup()
         info = self.call(['download-info'], {'backup_id': backup_id})
         self.assertEqual(set(info), {'ok', 'path', 'filename', 'size'})
-        self.assertTrue(info['path'].endswith(f'{backup_id}.woowbackup'))
+        self.assertTrue(info['path'].endswith(f'{backup_id}.tar'))
 
 
 if __name__ == '__main__':
@@ -583,3 +601,162 @@ class HostDirCliTests(CliCase):
             jobs.start_job = original
         self.assertEqual([kind for kind, _ in seen], ['backup', 'restore', 'verify'])
         self.assertTrue(all(callable(hook) for _, hook in seen))
+
+
+class CatalogRetentionCliTests(CliCase):
+    """應用設定 and 清理備份 through the helper (CONTRACT sections 4, 7, 8): strict requests, dispatch to suggest,
+    catalog_admin and retention, `status.storage.apps` and the backup job's `retention_deleted`."""
+
+    POLICY = {'schema': 1, 'default_keep_last': 1, 'apps': {}}
+
+    def setUp(self):
+        super().setUp()
+        self.audit = []
+        self.deps.audit = self.audit.append
+        # The trusted configuration directory as the loader wants it: owned by the uid the services trust, 0755.
+        self.paths.config.mkdir(parents=True, exist_ok=True)
+        os.chmod(self.paths.config, 0o755)
+
+    def services(self):
+        return cli.Services(self.paths, deps=self.deps, launcher=self.launched.append,
+                            unit_active=lambda unit: unit in self.active_units, trusted_uid=os.geteuid())
+
+    def enforce(self, app_ids, *, exclude, log):
+        from woowbackup import retention
+        return retention.enforce_after_backup(self.paths, self.storage, app_ids, exclude=exclude, log=log,
+                                              audit=self.audit.append, trusted_uid=os.geteuid())
+
+    def test_requests_are_strict(self):
+        backup_id = '20261113T020000Z-a1b2c3d4'
+        cases = [
+            ('catalog-suggest', {'owner': 'root'}), ('catalog-suggest', {'owner': 'Bad Name'}),
+            ('catalog-suggest', {'owner': 'appowner', 'extra': 1}), ('catalog-suggest', {'owner': 7}),
+            ('catalog-install', {}), ('catalog-install', {'entry': []}), ('catalog-install', {'entry': 'x'}),
+            ('catalog-install', {'entry': {}, 'confirm': 'yes'}),
+            ('catalog-install', {'entry': {}, 'confirm': True}),
+            ('catalog-install', {'entry': {}, 'confirm': True, 'expected_sha256': 'A' * 64}),
+            ('catalog-install', {'entry': {}, 'expected_sha256': 'abc'}),
+            ('catalog-remove', {}), ('catalog-remove', {'id': '../etc'}), ('catalog-remove', {'id': 'x'}),
+            ('catalog-remove', {'id': 'woowbk-demo', 'confirm': True}),
+            ('retention-plan', {'policy': []}), ('retention-plan', {'policy': self.POLICY, 'x': 1}),
+            ('retention-apply', {'backup_ids': []}), ('retention-apply', {'confirm': False, 'backup_ids': []}),
+            ('retention-apply', {'confirm': True}), ('retention-apply', {'confirm': True, 'backup_ids': ['nope']}),
+            ('retention-apply', {'confirm': True, 'backup_ids': [backup_id, backup_id]}),
+            ('retention-apply', {'confirm': True, 'backup_ids': [f'20261113T020000Z-{n:08x}' for n in range(501)]}),
+            ('retention-apply', {'confirm': True, 'backup_ids': [], 'policy': 'keep'}),
+        ]
+        for command, request in cases:
+            with self.subTest(command=command, request=str(request)[:80]):
+                self.assertEqual(self.error_code([command], request), 'invalid-request')
+        response = self.call(['catalog-install'], {'entry': {}, 'confirm': True})
+        self.assertEqual(response['error']['details']['field'], 'expected_sha256')
+        # Without input the command is refused (catalog-suggest takes `{}`), and the read is bounded as usual.
+        self.assertEqual(self.error_code(['catalog-suggest'], raw=''), 'invalid-request')
+
+    def test_catalog_suggest_dispatch(self):
+        from woowbackup import suggest
+        seen = []
+        original = suggest.suggest
+
+        def spy(owner, *, paths, catalog=None, **_kwargs):
+            seen.append((owner, paths, catalog))
+            return {'owners': [{'name': 'appowner', 'uid': 1001, 'linger': True, 'catalog_apps': ['woowbk-demo']}]}
+        suggest.suggest = spy
+        try:
+            self.assertEqual(self.call(['catalog-suggest'], {})['owners'][0]['name'], 'appowner')
+            self.call(['catalog-suggest'], {'owner': 'appowner'})
+        finally:
+            suggest.suggest = original
+        self.assertEqual([owner for owner, _paths, _catalog in seen], [None, 'appowner'])
+        self.assertTrue(all(paths == self.paths and catalog is self.catalog for _owner, paths, catalog in seen))
+
+    def test_catalog_install_preview_is_the_loaders_validation_and_confirm_passes_the_previewed_digest(self):
+        from woowbackup import catalog_admin
+        from .test_catalog import demo_entry
+        entry = demo_entry(self.paths)
+        entry['owner'] = 'woowbk-no-such-owner'
+        preview = self.call(['catalog-install'], {'entry': entry})
+        self.assertTrue(preview['ok'])
+        self.assertEqual((preview['preview'], preview['valid'], preview['id']), (True, False, 'woowbk-demo'))
+        self.assertEqual(preview['error']['code'], 'owner-missing')
+        self.assertIsNone(preview['expected_sha256'])
+        self.assertFalse((self.paths.catalog / 'woowbk-demo.json').exists())
+        seen = []
+        original = catalog_admin.install
+
+        def spy(paths, entry_, expected, **kwargs):
+            kwargs['audit']('catalog-install probe')  # the journal writer of the services (deps.audit here)
+            seen.append((entry_['id'], expected, kwargs['trusted_uid'], len(kwargs['backups'])))
+            return {'installed': True, 'id': entry_['id']}
+        catalog_admin.install = spy
+        try:
+            self.make_backup()
+            done = self.call(['catalog-install'], {'entry': entry, 'confirm': True, 'expected_sha256': None})
+        finally:
+            catalog_admin.install = original
+        self.assertEqual(done, {'ok': True, 'installed': True, 'id': 'woowbk-demo'})
+        self.assertEqual(seen, [('woowbk-demo', None, os.geteuid(), 1)])
+        self.assertEqual(self.audit, ['catalog-install probe'])
+
+    def test_catalog_remove_of_an_entry_that_is_not_installed(self):
+        self.assertEqual(self.error_code(['catalog-remove'], {'id': 'woowbk-demo'}), 'not-found')
+        self.assertEqual(self.error_code(['catalog-remove'], {'id': 'woowbk-demo', 'confirm': True,
+                                                               'expected_sha256': None}), 'not-found')
+
+    def test_retention_plan_apply_status_and_the_backup_jobs_policy(self):
+        self.deps.enforce_retention = self.enforce
+        first, second = self.make_backup(), self.make_backup()
+        plan = self.call(['retention-plan'], {})
+        self.assertEqual(set(plan), {'ok', 'policy', 'saved_policy', 'proposed', 'policy_problem', 'usage', 'candidates',
+                                     'blocked', 'protected', 'freed_bytes'})
+        self.assertEqual((plan['proposed'], plan['candidates'], plan['policy_problem']), (False, [], None))
+        self.assertEqual({row['id'] for row in plan['usage']['apps']}, {'woowbk-demo', 'woowbk-two'})
+        proposed = self.call(['retention-plan'], {'policy': self.POLICY})
+        self.assertTrue(proposed['proposed'])
+        self.assertEqual([item['id'] for item in proposed['candidates']], [first])
+        self.assertFalse((self.paths.config / 'retention.json').exists(), 'a preview saves nothing')
+        applied = self.call(['retention-apply'], {'confirm': True, 'backup_ids': [first], 'policy': self.POLICY})
+        self.assertEqual([item['id'] for item in applied['deleted']], [first])
+        self.assertEqual((applied['skipped'], applied['policy']['default_keep_last']), ([], 1))
+        self.assertEqual(oct((self.paths.config / 'retention.json').stat().st_mode & 0o777), '0o644')
+        self.assertTrue(any(line.startswith('retention-policy default=1 ') for line in self.audit), self.audit)
+        self.assertTrue(any(line.startswith(f'retention-delete backup={first} type=manual ') for line in self.audit))
+        usage = {row['id']: row for row in self.call(['status'])['storage']['apps']}
+        self.assertEqual((usage['woowbk-demo']['keep_last'], usage['woowbk-demo']['backups']), (1, 1))
+        again = self.call(['retention-apply'], {'confirm': True, 'backup_ids': [first]})
+        self.assertEqual(again['deleted'], [])
+        self.assertEqual(again['skipped'][0]['id'], first)
+        # A manual backup job applies the saved policy (keep the newest 1): the older one goes, the new one stays.
+        started = self.call(['backup-start'], {'apps': ['woowbk-demo'], 'request_id': 'req-retain-0001'})
+        self.assertEqual(self.call(['run-job', started['job_id']])['state'], 'succeeded')
+        status = self.call(['job-status'], {'job_id': started['job_id']})
+        result = status['job']['result']
+        self.assertEqual(result['retention_deleted'], [second])
+        self.assertTrue(any('已依保留原則刪除較舊的手動備份' in line for line in status['log']), status['log'])
+        self.assertEqual([b['id'] for b in self.storage.list_backups()], [result['backup_id']])
+
+    def test_a_retention_problem_never_fails_the_backup(self):
+        def broken(_app_ids, *, exclude, log):
+            raise OSError('disk on fire')
+        self.deps.enforce_retention = broken
+        started = self.call(['backup-start'], {'apps': ['woowbk-demo'], 'request_id': 'req-retain-0002'})
+        self.assertEqual(self.call(['run-job', started['job_id']])['state'], 'succeeded')
+        status = self.call(['job-status'], {'job_id': started['job_id']})
+        self.assertEqual(status['job']['result']['retention_deleted'], [])
+        self.assertTrue(any('無法套用備份保留原則' in line for line in status['log']), status['log'])
+
+    def test_status_storage_apps_never_breaks_the_status(self):
+        from woowbackup import retention
+        original = retention.app_usage
+
+        def broken(*_args, **_kwargs):
+            raise RuntimeError('usage failed')
+        retention.app_usage = broken
+        err = io.StringIO()
+        try:
+            with contextlib.redirect_stderr(err):
+                response = self.call(['status'])
+        finally:
+            retention.app_usage = original
+        self.assertTrue(response['ok'])
+        self.assertEqual(response['storage']['apps'], [])

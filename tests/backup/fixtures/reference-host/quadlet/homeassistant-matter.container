@@ -1,0 +1,17 @@
+# Reference-host shape for catalog-suggest tests: names, mounts and dependencies only, no secret values.
+[Unit]
+Description=Matter server
+
+
+[Container]
+ContainerName=homeassistant-matter
+Image=ghcr.io/home-assistant-libs/python-matter-server:7.0
+Network=host
+Volume=homeassistant-matter-data.volume:/data
+Volume=/run/dbus:/run/dbus:ro
+
+[Service]
+Restart=always
+
+[Install]
+WantedBy=default.target

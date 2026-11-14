@@ -1,0 +1,21 @@
+# Reference-host shape for catalog-suggest tests: names, mounts and dependencies only, no secret values.
+[Unit]
+Description=vk MCP admin
+
+
+[Container]
+ContainerName=vk-mcp-admin
+Image=localhost/woow-mcp-admin:latest
+Network=vk-mcp-admin.network
+PublishPort=127.0.0.1:18509:8080
+Volume=vk-mcp-admin.volume:/data
+EnvironmentFile=%h/.config/vk-mcp-admin/vk-mcp-admin.env
+Secret=vk-mcp-admin-jwt-secret,type=env,target=JWT_SECRET
+Secret=vk-mcp-admin-password,type=env,target=ADMIN_PASSWORD
+HealthCmd=wget -qO- http://127.0.0.1:8080/healthz
+
+[Service]
+Restart=always
+
+[Install]
+WantedBy=default.target

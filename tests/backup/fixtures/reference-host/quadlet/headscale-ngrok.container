@@ -1,0 +1,17 @@
+# Reference-host shape for catalog-suggest tests: names, mounts and dependencies only, no secret values.
+[Unit]
+Description=Headscale public tunnel (ngrok)
+
+
+[Container]
+ContainerName=headscale-ngrok
+Image=docker.io/ngrok/ngrok:3
+Network=headscale.network
+Secret=headscale-ngrok-authtoken,type=env,target=NGROK_AUTHTOKEN
+Exec=http headscale-entrance:80
+
+[Service]
+Restart=always
+
+[Install]
+WantedBy=default.target

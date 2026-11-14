@@ -611,8 +611,9 @@ def scenario_s1(ev):
                            'include_images', 'filename', 'source', 'verified', 'inspected'}, sorted(meta))
     info = ok(dev, 'download-info', {'backup_id': backup_id}, ev=ev)
     ev.check('download-info: path inside archives/, contract filename, size',
-             info['path'] == f'/var/lib/woowtech-backup/archives/{backup_id}.woowbackup'
-             and re.fullmatch(r'woowtech-backup-woowbk-dev-a-[0-9]{8}-[0-9]{6}\.woowbackup', info['filename'])
+             info['path'] in (f'/var/lib/woowtech-backup/archives/{backup_id}.tar',  # format 2 (2026-11-13)
+                              f'/var/lib/woowtech-backup/archives/{backup_id}.woowbackup')
+             and re.fullmatch(r'woowtech-backup-woowbk-dev-a-[0-9]{8}-[0-9]{6}\.(tar|woowbackup)', info['filename'])
              and info['size'] == meta['size'], info)
 
     # Inspect on the source device (key held): preflight must say in-place.
@@ -663,8 +664,10 @@ def scenario_s1(ev):
              result['safety_backup_id'] and result['rolled_back'] is False and result['health']
              and all(c['status'] == 'ok' for c in result['health'])
              and [v['match'] for v in result['verification']] == [True], result)
-    ev.check('restore phases: all done (no skip needed for in-place)', all(s == 'done' for s in phase_states(job).values()),
-             phase_states(job))
+    # `stage` (host directories written before the stop, 2026-11-13) is skipped for an app without data_dirs.
+    ev.check('restore phases: all done (stage skipped: the demo app has no host directories)',
+             all(s == 'done' for k, s in phase_states(job).items() if k != 'stage')
+             and phase_states(job).get('stage') == 'skipped', phase_states(job))
     after = summary(dev)
     ev.save('s1-after-restore', {'summary': after, 'content': content_state(dev)})
     ev.require('S1 /api/summary after restore equals the backup-time snapshot', compare(after, snapshot) == {},
@@ -780,9 +783,10 @@ def scenario_s2(ev):
              result['safety_backup_id'] is None and result['rolled_back'] is False
              and all(c['status'] == 'ok' for c in result['health']) and [v['match'] for v in result['verification']] == [True],
              result)
-    ev.check('S2 phases: safety skipped, the rest done',
-             phase_states(job).get('safety') == 'skipped'
-             and all(s == 'done' for p, s in phase_states(job).items() if p != 'safety'), phase_states(job))
+    ev.check('S2 phases: safety and stage skipped (fresh, no host directories), the rest done',
+             phase_states(job).get('safety') == 'skipped' and phase_states(job).get('stage') == 'skipped'
+             and all(s == 'done' for p, s in phase_states(job).items() if p not in ('safety', 'stage')),
+             phase_states(job))
     ev.timings['s2_restore_wall_s'] = round(wall, 1)
     after = summary('b')
     ev.save('s2-after-restore', after)
@@ -863,8 +867,11 @@ def scenario_faults(ev):
     size = local.stat().st_size
     cases = {'F2 truncated (half)': {'truncate_to': size // 2}, 'F3 flipped byte in the payload': {'flip_at': size // 2}}
     for label, options in cases.items():
-        # dev-b already holds this backup id (S2), so delete it first; it is uploaded intact again below.
-        ok('b', 'delete', {'backup_id': s1['backup_id']}, ev=ev)
+        # dev-b already holds this backup id (S2), so delete it first; it is uploaded intact again below. A format 2
+        # upload is read whole at upload-finish, so the previous damaged copy may have been refused there already.
+        _rc, reply = helper('b', 'delete', {'backup_id': s1['backup_id']}, ev=ev)
+        if not reply['ok'] and reply['error']['code'] != 'not-found':
+            raise Failed(f'delete failed: {redact(reply.get("error"))}')
         _begin, (_rc, reply) = upload_file('b', local, ev=ev, **options)
         if not reply['ok']:
             ev.check(f'{label} -> rejected at upload-finish', reply['error']['code'] in ('corrupt-archive', 'invalid-request'),
@@ -891,7 +898,9 @@ def scenario_faults(ev):
         ev.check(f'{label} -> staging empty and no job key file afterwards',
                  sh('b', 'ls -A /var/lib/woowtech-backup/staging').stdout.strip() == b''
                  and b'key-' not in sh('b', 'ls -A /run/woowtech-backup').stdout)
-    ok('b', 'delete', {'backup_id': s1['backup_id']}, ev=ev)
+    _rc, reply = helper('b', 'delete', {'backup_id': s1['backup_id']}, ev=ev)
+    if not reply['ok'] and reply['error']['code'] != 'not-found':
+        raise Failed(f'delete failed: {redact(reply.get("error"))}')
     _begin, (_rc, reply) = upload_file('b', local, ev=ev)
     ev.check('intact archive uploads again after the fault cases', reply['ok'], reply.get('error'))
     start = ok('b', 'verify-start', {'backup_id': s1['backup_id'], 'request_id': request_id(), 'key': secret}, ev=ev)
@@ -960,7 +969,8 @@ def scenario_s3(ev):
     s3_id = job['result']['backup_id']
     ev.timings['s3_backup_size_bytes'] = job['result']['size']
     info = ok('a', 'download-info', {'backup_id': s3_id}, ev=ev)
-    s3_local = DOWNLOADS / info['filename'].replace('.woowbackup', '-s3.woowbackup')
+    stem, ext = os.path.splitext(info['filename'])
+    s3_local = DOWNLOADS / f'{stem}-s3{ext}'  # off the contract pattern on purpose
     bridge_download('a', info['path'], s3_local, ev=ev)
     _begin, (_rc, reply) = upload_file('b', s3_local, ev=ev)
     ev.require('S3 archive uploaded to dev-b', reply['ok'], reply.get('error'))
@@ -1155,7 +1165,7 @@ def scenario_cancel(ev):
     after = {b['id'] for b in ok(dev, 'list', ev=ev)['backups']}
     ev.check('no backup was listed for the cancelled job', after == before, sorted(after - before))
     leftovers = sh(dev, 'ls -A /var/lib/woowtech-backup/staging; ls -A /var/lib/woowtech-backup/archives | '
-                        'grep -v -E "^[0-9]{8}T[0-9]{6}Z-[0-9a-f]{8}\\.(woowbackup|json)$" || true').stdout.decode().split()
+                        'grep -v -E "^[0-9]{8}T[0-9]{6}Z-[0-9a-f]{8}\\.(woowbackup|tar|json)$" || true').stdout.decode().split()
     ev.check('partial archive and staging discarded', leftovers == [], leftovers)
     app = next(a for a in ok(dev, 'status', ev=ev)['apps'] if a['id'] == APP)
     ev.check('writers are running after the cancel', app['state'] == 'running', app['units'])
@@ -1187,8 +1197,8 @@ for root in ('/var/lib/woowtech-backup',):
     for base, dirs, names in os.walk(root):
         for n in names:
             p = os.path.join(base, n)
-            if p.endswith('.woowbackup') or '/uploads/' in p:
-                continue
+            if p.endswith(('.woowbackup', '.tar')) or '/uploads/' in p or '/exports/' in p:
+                continue  # backup files themselves (format 1 and 2) and download copies are not records
             files.append(p)
 journal = subprocess.run(['journalctl', '-o', 'cat', '--no-pager'], capture_output=True).stdout
 report = {'files_scanned': len(files), 'needles': sorted(k for k in needles), 'hits': {}}

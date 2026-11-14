@@ -1,0 +1,19 @@
+# Reference-host shape for catalog-suggest tests: names, mounts and dependencies only, no secret values.
+[Unit]
+Description=Odoo gateway (nginx)
+Requires=odoo.service
+After=odoo.service
+
+[Container]
+ContainerName=odoo18-gateway
+Image=docker.io/library/nginx:1.27-alpine
+Network=odoo.network
+PublishPort=127.0.0.1:18080:80
+Secret=odoo18-gateway-conf,type=mount,target=/etc/nginx/conf.d/default.conf
+HealthCmd=curl -fsS http://localhost/web/health
+
+[Service]
+Restart=always
+
+[Install]
+WantedBy=default.target

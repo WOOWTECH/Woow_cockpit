@@ -97,20 +97,21 @@ dev-b 重設為全新目標，`fresh` 結束時 dev-b 和 cli_e2e s2 之後一�
 
 | 指令 | 內容 |
 | --- | --- |
-| `h1` | F5：在 dev-a **設備內**用設備金鑰解開一份新的基礎備份，注入一種缺陷後以設備公鑰重新加密（主機只拿到密文），經真正的 bridge 上傳 → upload-finish → inspect → verify 作業 → 原位還原作業。28 種加 1 個對照組：路徑穿越／絕對路徑／PAX path 覆寫、符號連結／硬連結／裝置／目錄成員、多出／缺少／重複／順序錯亂、大小謊報（大、小）、校驗值錯誤、結尾多餘資料、manifest 不在第一個、檔頭與 manifest 不符、manifest 中的穿越路徑／重複項目／指向其他應用、設定檔路徑不在 `.config/`／含 `..`／權限 0755、擁有者 root、manifest 超過 1 MiB、成員超過 4000、目錄中沒有的應用、目錄未宣告的設定檔／密鑰／資料卷／資料庫／Quadlet／映像（還原成功、全部被略過）。每種都檢查：拒絕原因（引擎驗證器的 `details.reason`）、staging 清空、沒有金鑰暫存檔、沒有孤兒封存檔、應用資料與部署檔不變，並用「變更檔案掃描」（自我測試會先證明它能抓到 /etc、/home、資料目錄與資料卷內的寫入）確認沒有寫到 staging 以外 |
+| `h1` | F5：在 dev-a **設備內**用設備金鑰解開一份新的基礎備份（2026-11-13 起是格式 2 `.tar`：解開該應用的封存檔，注入缺陷後重新封裝成 `backup.json`＋README＋應用封存檔；`backup.json` 依注入前的應用內容產生，所以被判斷的是經過驗證的清單；格式 1 的基礎備份仍產生格式 1），注入一種缺陷後以設備公鑰重新加密（主機只拿到密文），經真正的 bridge 上傳 → upload-finish → inspect → verify 作業 → 原位還原作業。28 種加 1 個對照組：路徑穿越／絕對路徑／PAX path 覆寫、符號連結／硬連結／裝置／目錄成員、多出／缺少／重複／順序錯亂、大小謊報（大、小）、校驗值錯誤、結尾多餘資料、manifest 不在第一個、檔頭與 manifest 不符、manifest 中的穿越路徑／重複項目／指向其他應用、設定檔路徑不在 `.config/`／含 `..`／權限 0755、擁有者 root、manifest 超過 1 MiB、成員超過 4000、目錄中沒有的應用、目錄未宣告的設定檔／密鑰／資料卷／資料庫／Quadlet／映像（還原成功、全部被略過）。每種都檢查：拒絕原因（引擎驗證器的 `details.reason`）、staging 清空、沒有金鑰暫存檔、沒有孤兒封存檔、應用資料與部署檔不變，並用「變更檔案掃描」（自我測試會先證明它能抓到 /etc、/home、資料目錄與資料卷內的寫入）確認沒有寫到 staging 以外 |
 | `h2` | F6：在設備內把 600 MiB 的 tmpfs 掛在 `/var/lib/woowtech-backup` 上（原資料仍在底下，卸載即恢復）：含映像備份在「檢查」階段以 `insufficient-space` 失敗、寫入服務未暫停、`/healthz` 全程 200；142 MB 上傳在 upload-begin 被拒，`可用−512 MiB` 邊界上下 1 MiB 各測一次；不含映像的備份可放入（對照） |
 | `h3` | F7：替換資料庫容器內的 `pg_dump`（容器重建即消失，結束時一定還原）：失敗並輸出一半、結束碼 0 但少了結尾 64 bytes、結束碼 0 但只有一半、執行中資料庫被關閉。檢查失敗階段為「匯出資料庫」、寫入服務已恢復、沒有列出備份、staging 清空；「被截斷但結束碼 0」的備份若被接受，必須真的能還原 |
 | `h4` | 在設備內用監看程式讀作業紀錄，於 `stop`／`dump`（以慢速 pg_dump 撐住）／`export`／`package`／`verify` 階段 `systemctl kill --signal=SIGKILL`；在呼叫 helper 之前先記錄應用狀態，證明是復原流程重新啟動寫入服務；檢查 interrupted＋指引、staging 移除、沒有孤兒封存檔、下一次備份成功 |
 | `h5` | 還原進入 `start` 階段（資料卷已刪除）時 `labpodman restart woowbk-dev-a`；開機後作業為 interrupted＋還原前備份 ID，還原該備份後資料等於還原前（完整內容） |
 | `h6` | 資料卷寫入約 600 MiB 亂數檔：不含映像的備份、bridge 下載、原位還原；主機端讀取設備 cgroup 的 `memory.peak`（每個 fd 可歸零）與每 0.25 秒的 `memory.stat`，回報包含 page cache 的峰值與 anon＋kernel＋shmem 峰值、OOM 計數；最後刪除大檔與大型備份 |
 | `h7` | `/opt/woow-cockpit-src` 的 `manage.py plan/install/verify` → 回退最新交易 → 繼續回退到備份套件被移除（helper、頁面、目錄設定都不在）→ 重新安裝；每一步比對 `/var/lib/woowtech-backup` 與金鑰目錄的內容雜湊 |
-| `sec1` | 審查發現 SEC-1 的實機版：先做對照組，證明設備上真正的 podman 4.9.3 會照做（appowner 以裸 `podman volume import` 與 `podman load` 匯入「絕對路徑符號連結＋其下的成員」的 tar，成員確實被寫進家目錄中的標記目錄，之後刪除）。接著在 dev-a **設備內**用設備金鑰解開一份新的含映像備份（串流到 `/var/tmp/woowbk-sec1-work`，明文在離開前刪除），在資料卷 tar 與應用映像的 OCI 封存**所有真實成員之後**各加上指向 `~/.config/systemd/user`、`~/.config/containers` 的絕對符號連結與其下的成員，修正 manifest 的大小與 sha256，以設備公鑰重新加密（主機只拿到密文）；並以已安裝引擎的 `nested` 檢查記錄原始項目通過、改造項目被拒的原因。經真正的 bridge 上傳 → upload-finish → inspect → 驗證作業 → 原位還原作業：還原必須在 preflight 失敗（safety、stop 未執行），錯誤分別點名容器映像與資料卷；期間 appowner 的 podman 沒有任何 image／volume 事件（沒有 load、tag、volume create/remove/import）、變更檔案掃描乾淨、整台設備找不到 `woowbk-sec1` 路徑、家目錄設定與應用資料、部署檔、映像名稱不變、沒有還原前備份。驗證作業只檢查外層封存，會回報完整（記為觀察） |
+| `sec1` | 審查發現 SEC-1 的實機版：先做對照組，證明設備上真正的 podman 4.9.3 會照做（appowner 以裸 `podman volume import` 與 `podman load` 匯入「絕對路徑符號連結＋其下的成員」的 tar，成員確實被寫進家目錄中的標記目錄，之後刪除）。接著在 dev-a **設備內**用設備金鑰解開一份新的含映像備份（串流到 `/var/tmp/woowbk-sec1-work`，明文在離開前刪除），在資料卷 tar 與應用映像的 OCI 封存**所有真實成員之後**各加上指向 `~/.config/systemd/user`、`~/.config/containers` 的絕對符號連結與其下的成員，修正 manifest 的大小與 sha256，以設備公鑰重新加密（主機只拿到密文）；並以已安裝引擎的 `nested` 檢查記錄原始項目通過、改造項目被拒的原因。經真正的 bridge 上傳 → upload-finish → inspect → 驗證作業 → 原位還原作業：還原必須在 preflight 失敗（safety、stop 未執行），錯誤分別點名容器映像與資料卷；期間 appowner 的 podman 沒有任何 image／volume 事件（沒有 load、tag、volume create/remove/import）、變更檔案掃描乾淨、整台設備找不到 `woowbk-sec1` 路徑、家目錄設定與應用資料、部署檔、映像名稱不變、沒有還原前備份。2026-11-13 起深入驗證作業以 `corrupt-archive` 拒絕，索引記錄 `verified {ok: false, deep: true}`（先前只檢查外層封存、回報完整）；格式 2 的基礎備份以已安裝引擎的 `ArchiveWriter` 重新封裝 |
 | `fidelity` | 合法資料的保真度：在 dev-a 應用資料卷的 `woowbk-fidelity/`（應用不計數）以 `podman unshare` 建立絕對／相對／懸空符號連結、硬連結、超過 100 bytes 的名稱與超過 255 bytes 的路徑、空目錄、setgid 與 sticky 目錄、user.* 延伸屬性、非 UTF-8 檔名、中文檔名、FIFO、不同擁有者（70、1000、33、54999）、唯讀與可執行檔、次秒 mtime；以**應用容器內**（`podman exec`）看到的完整清單（類型、容器內 uid/gid、權限、大小、mtime、連結目標、sha256、延伸屬性、硬連結群組）為準。含映像備份 → 修改探測目錄 → 原位還原 → 清單必須相同；再下載 → dev-b 重設 → 上傳 → 全新部署還原（緊急金鑰）→ dev-b 容器內清單必須相同（只有次秒 mtime 因 tar 只存整秒而不同）。結束時刪除探測目錄與測試備份 |
 | `fresh` | dev-b 全新部署還原：(1) 預先存在同名的應用機密、設定檔、資料卷或資料庫資料卷（各自單獨測）→ inspect 與還原作業都在 preflight 拒絕，什麼都沒有刪除或建立；(2) 另建無關的資料卷、機密、設定檔、網路與映像名稱，並讓 `localhost/woowbk-demo-app:1` 先指向探測映像；還原在 `start` 階段被 SIGKILL（範本、遮蔽、機密、設定檔、資料卷都已建立）→ 復原移除整個部署、無關物件不變；已載入的映像名稱照 CONTRACT §8 保留；(3) 以一次性的資料庫 drop-in 讓還原在破壞性步驟後失敗 → 程序內自動回復 → `remove_fresh` 把映像名稱改回原本的探測映像（retag），或移除這次新增的名稱（untag），無關物件不變。最後再做一次全新部署還原，資料等於來源備份 |
 | `leaks` | 兩台設備的作業紀錄、日誌、索引、requests、journal 沒有應用密鑰或 age 金鑰；沒有 `key-*`、staging、孤兒封存檔；主機 hardening／integration 證據沒有金鑰 |
 | `upload_window.mjs [MiB=2,4] [次數=3] [chunkKiB=64,256,512]` | H8：以 Playwright 攔截 `backup.js`，只在測試瀏覽器內改 `WINDOW_SIZE` 與 `CHUNK_SIZE` 並加上計時；經 cockpit-ws 上傳約 142 MB 到 dev-b，核對 sha256，停在金鑰步驟後刪除。程式庫與設備上的預設值（4 MiB 視窗、512 KiB 訊框）不變 |
 
 `H1_CASES`、`H3_FAULTS`、`H4_KILLS`、`H5_PHASE`、`H6_FILES`、`H7_FULL=0`、`H2_TMPFS` 環境變數可只跑一部分。
+格式 2 的 `unknown-app`：只讀被選應用的封存檔，還原 woowbk-demo 時在「解密並驗證檔案」就以 `incompatible` 拒絕（格式 1 在預檢）。`h7` 期待設備是 `deploy-src.sh` 剛安裝的狀態：若 woowbk-demo 的目錄項目已由「應用設定」（`catalog-install`）改過，`manage.py plan` 會列出它、回退也會拒絕（檔案在安裝後被變更）；`h7` 會先把 manage.py 管理的夾具內容放回，結束時再以 `catalog-install` 裝回管理者的版本。dev-a 的安裝交易紀錄中有一筆在 2026-11-13 被實驗室專用的 archive.py 修補改過（引擎核心角色的 E1–E3 暫時修補），所以完整回退鏈（`H7_FULL=1`）會在那一筆被 `manage.py` 正確拒絕（「Changed since installation」）；2026-11-14 整合輪以 `H7_FULL=0` 在一組乾淨的交易（先部署舊版再部署工作樹）上驗證。
 
 ## 主機資料夾情境（dirs_e2e.py，D1–D6）
 
@@ -137,14 +138,72 @@ root、stdin JSON；下載／上傳走設備內真正的 `cockpit-bridge`）。�
 | `d1` | dev-a 原位：植入 → 備份（不含映像；寫入服務含資料庫都停止，`/healthz` 期間中斷，`downtime_seconds` > 0）→ inspect（`data_dirs` 列出兩個路徑、沒有 pg_dump 資料庫、快照等於備份前）→ 變更所有種類的狀態（兩個資料庫的資料列、新角色與新資料庫、UID 33 檔案的權限／延伸屬性／符號連結／多一個檔案、刪除空資料夾、擁有者的檔案、SQLite、設定檔）→ 原位還原 → 摘要、完整清單、資料庫與 SQLite 等於備份時；容器內與主機上的擁有者；沒有 `.woowbk-*` 旁資料夾（舊內容在成功後刪除）；新角色與新資料庫消失；應用可寫入；還原前備份含兩個主機資料夾；同設備的 woowbk-demo 不受影響 |
 | `d2` | 跨設備全新部署：dev-a 含映像備份 → bridge 下載 → dev-b 以 `teardown-dirs.sh` 拆除 → 上傳 → 無金鑰 `key-required` → 緊急金鑰 inspect（來源 UID 1001、預檢 fresh）→ 還原 → dev-b 的摘要、完整清單（含容器內 UID 0／33／70、權限、修改時間、延伸屬性、硬連結）、資料庫（含叢集識別碼與角色）與 SQLite 等於 dev-a 備份時；主機上的擁有者依 **dev-b** 的對應（33 → 10532、70 → 10569，與 dev-a 的 10032／10069 不同）；缺少的上層資料夾由擁有者（1007）建立；應用以還原的 `dirs_app` 密碼寫入新資料 |
 | `d3` | 備份 → 變更 → 以一次性的 drop-in 讓資料庫服務在還原的 `start` 階段（資料夾已對調之後）啟動失敗 → 自動回復：狀態 `rolled-back`，資料（摘要、清單、資料庫、SQLite）等於**還原前**而非備份，服務已解除遮蔽；沒有 `.woowbk-new-*`，回復保留的 `.woowbk-old-*`（舊內容只在作業成功後刪除）必須寫在作業的注意事項或紀錄中，且資料夾的那一份等於還原前的內容（之後由測試刪除） |
-| `d4` | 三種強制終止（整棵行程樹 SIGSTOP＋SIGKILL，再 `systemctl kill`，所以沒有任何 helper 能在之後完成改名）：`extract`（第一個 `.woowbk-new-*` 出現時，正在解開）、`between`（資料夾 `woowbk-dirs/data` 的新內容出現時終止，再以擁有者身分把現場整理成「兩次改名之間」：`<路徑>` 不存在、`.woowbk-old-<作業>` 是原內容、`.woowbk-new-<作業>` 是新內容；改名之間只有微秒，無法可靠地在那一刻終止，所以用狀態注入）、`after-swap`（作業進入 `start` 階段時）。之後 `job-status` 觸發復原：作業 `interrupted` 並指出還原前備份、每個宣告的資料夾都存在、沒有 `.woowbk-new-*`、`between` 的原資料夾被移回（清單等於還原前）、整理過的資料夾都寫在作業訊息或紀錄中；保留的 `.woowbk-old-*` 必須有說明。最後還原還原前備份，資料等於終止前。`D4_CASES=extract,between` 可只跑一部分 |
-| `d5` | 在 dev-a **設備內**以設備金鑰解開一份新的基礎備份，把 `woowbk-dirs/data` 的資料夾 tar 換成惡意版本（所有真實項目之後加上：絕對符號連結＋其下的檔案、離開資料夾的相對符號連結＋其下的檔案、絕對路徑、`..`、PAX path 覆寫、檔案之下的項目、指向資料夾外的硬連結、裝置檔、UID 60000（超出命名空間）、重複項目），修正 manifest 的大小與 sha256 後以設備公鑰重新加密（主機只拿到密文）。每一種都經 bridge 上傳 → 還原：必須在任何變更之前被拒絕（`incompatible`／`corrupt-archive`，安全備份與停止都沒有執行）、資料與兩個資料夾不變、找不到任何 `woowbk-d5-planted` 路徑、`~/.config/systemd/user` 與 `~/.config/containers` 不變。另有兩個授權規則案例：manifest 多列一個本機目錄沒有的資料夾（`woowbk-d5-planted-undeclared`、`.config/systemd/user`）→ 被拒絕，或還原成功但完全不寫入該路徑。`D5_CASES` 可只跑一部分 |
+| `d4` | 三種強制終止（整棵行程樹 SIGSTOP＋SIGKILL，再 `systemctl kill`，所以沒有任何 helper 能在之後完成改名）：`extract`（第一個 `.woowbk-new-*` 出現時，正在解開；2026-11-13 起主機資料夾在 `stage` 階段、還原前備份與任何停止之前就先寫入，所以這時應用仍在執行、還沒有還原前備份：作業 `interrupted`、應用照常執行、資料不變、新資料夾由復原移除，不還原還原前備份）、`between`（作業進入 `restore` 階段時終止（服務已停止並遮蔽、資料夾即將對調），再以擁有者身分把現場整理成「兩次改名之間」：`<路徑>` 不存在、`.woowbk-old-<作業>` 是原內容、`.woowbk-new-<作業>` 是新內容；改名之間只有微秒，無法可靠地在那一刻終止，所以用狀態注入）、`after-swap`（作業進入 `start` 階段時）。之後 `job-status` 觸發復原：作業 `interrupted` 並指出還原前備份、每個宣告的資料夾都存在、沒有 `.woowbk-new-*`、`between` 的原資料夾被移回（清單等於還原前）、整理過的資料夾都寫在作業訊息或紀錄中；保留的 `.woowbk-old-*` 必須有說明。最後還原還原前備份，資料等於終止前。`D4_CASES=extract,between` 可只跑一部分 |
+| `d5` | 在 dev-a **設備內**以設備金鑰解開一份新的基礎備份（2026-11-13 起是格式 2 `.tar`：只解開該應用的封存檔，惡意案例以已安裝引擎的 `ArchiveWriter` 重新封裝成合法的 `backup.json`／README／每應用清單，只有資料夾 tar 是惡意的；格式 1 的基礎備份仍產生格式 1 案例），把 `woowbk-dirs/data` 的資料夾 tar 換成惡意版本（所有真實項目之後加上：絕對符號連結＋其下的檔案、離開資料夾的相對符號連結＋其下的檔案、絕對路徑、`..`、PAX path 覆寫、檔案之下的項目、指向資料夾外的硬連結、裝置檔、UID 60000（超出命名空間）、重複項目），修正 manifest 的大小與 sha256 後以設備公鑰重新加密（主機只拿到密文）。每一種都經 bridge 上傳 → 還原：必須在任何變更之前被拒絕（`incompatible`／`corrupt-archive`，安全備份與停止都沒有執行）、資料與兩個資料夾不變、找不到任何 `woowbk-d5-planted` 路徑、`~/.config/systemd/user` 與 `~/.config/containers` 不變。另有兩個授權規則案例：manifest 多列一個本機目錄沒有的資料夾（`woowbk-d5-planted-undeclared`、`.config/systemd/user`）→ 被拒絕，或還原成功但完全不寫入該路徑。`D5_CASES` 可只跑一部分 |
 | `d6` | dev-b 全新部署目標上已存在**有內容**的 `woowbk-dirs/data`（另一次是 PostgreSQL 資料夾）→ inspect 的預檢不可還原並指出路徑、還原作業在預檢以 `incompatible` 失敗 → 資料夾內容、部署痕跡（Quadlet、密鑰、設定檔、另一個資料夾）都沒有變；已存在但**空的**資料夾只記錄預檢結果 |
 | `leaks` | 兩台設備的作業紀錄、日誌、索引、requests、journal 沒有 woowbk-dirs 的三個密鑰或 age 金鑰；主機的 dirs 證據沒有金鑰 |
 
 2026-11-13 已實測（引擎尚未支援主機資料夾，設備上是 2026.11.12.4）：`selftest` 21/21 通過；`prep` 16/18，未通過的
 兩項就是「已安裝引擎不支援 `data_dirs`」，跑完後已以 `dirs-catalog.sh a|b remove` 移除目錄項目，其他測試者的狀態頁不會多出
 提示。d1–d6 與 `leaks` 需要新引擎，由整合者在 `deploy-src.sh a`、`deploy-src.sh b` 之後執行。
+
+## 備份格式 2 與加密選擇（format_e2e.py，S4–S6、F13–F15）
+
+`python3 -I tests/e2e/lab/format_e2e.py <v1|encrypted|plain|export|deep|partial|cleanup|all>`，證據寫入
+`~/.woowbk-lab/evidence/format/<時間>-<情境>/`，建立的備份（含其還原前備份）記在同目錄的 `state.json`，由 `cleanup`
+刪除。前置條件：兩台設備已 `deploy-src.sh a|b`、woowbk-demo 在兩台都執行中、woowbk-dirs 在 dev-a 執行中（`partial`）、
+dev-a 的緊急金鑰檔（實驗室拋棄式）在 `~/.woowbk-lab/secrets/dev-a-kit.txt`。主機上解開的明文只放在
+`~/.woowbk-lab/run/format/` 的 0700 資料夾，情境結束前刪除。
+
+| 情境 | 內容 |
+| --- | --- |
+| `v1` | F15：dev-a 上既有的格式 1（`.woowbackup`）woowbk-demo 備份仍可 inspect、深入驗證（結果 `format` 1、`verified.deep`）並原位還原，資料等於備份時；沒有舊備份時略過 |
+| `encrypted` | S4：預設加密的格式 2 備份（索引 `format` 2、每應用封存檔大小）→ bridge 下載 → 主機 GNU tar 列出 `backup.json`、`README.txt`、`apps/woowbk-demo.tar.zst.age`；`backup.json` 沒有公鑰或私鑰文字；**照 README 的指令**以緊急金鑰 `age -d | zstd -d | tar -x` 解開，每個項目的大小與 sha256 等於清單 → 深入驗證作業（資料卷、資料庫匯出、應用機密都檢查過）→ 上傳到 dev-b（保留檔名、未持有金鑰）→ 以緊急金鑰 inspect 與還原 → dev-b 資料等於 dev-a 備份時 |
+| `plain` | S5：設定開啟時 `encrypt:false` 沒有 `acknowledge_plaintext` 被拒 → 確認後建立未加密備份（`key_id` null、不需金鑰）→ 主機只用 `tar -xzf` 解開並核對 → 原位還原（還原前備份依設定加密）→ 上傳 dev-b：`unauthenticated`、預檢警告、沒有 `accept_unauthenticated` 的還原被拒、有則成功 → 關閉「預設加密備份」（需確認，settings.json root 0644）後備份與還原前備份都不加密 → 設定改回；journal 記錄兩次設定變更 |
+| `export` | S6：沒有 `confirm` 的 export-start 被拒 → 未加密副本作業四個階段完成 → `export-info` 的路徑在 `exports/`、`-unencrypted.tar`、約 15 分鐘後到期；`exports/` root 0700、副本 root 0600；有暫時計時器 → 下載並以 `tar -xzf` 解開核對 → 模擬到期後由計時器的 `export-cleanup` 刪除；第二份由下一次 `status` 刪除 → journal 有 request／created／download／deleted |
+| `deep` | F13：在設備內把一份新備份的資料卷 tar 加上離開資料卷的符號連結，以設備公鑰重新封裝（sha256 都正確）→ 上傳成功 → 深入驗證作業以 `corrupt-archive`（資料卷）失敗、索引 `verified {ok:false, deep:true}` → 還原在任何變更之前被拒、資料不變 |
+| `partial` | F14：woowbk-demo＋woowbk-dirs 兩應用備份 → 在設備內破壞 `apps/woowbk-dirs.tar.zst.age` 中間一個位元組 → 只還原 woowbk-demo 成功、資料等於備份 → 驗證作業找到另一個應用的損壞 → 還原 woowbk-dirs 在任何變更之前失敗、應用仍執行 |
+| `cleanup` | 刪除各情境建立的備份與還原前備份、未加密副本，確認設定為加密、沒有進行中的作業、staging 為空 |
+
+## 強化階段整合情境（strengthen_e2e.py、strengthen_ui.mjs，整合者）
+
+`python3 -I tests/e2e/lab/strengthen_e2e.py <情境…|all>` 與 `node tests/e2e/lab/strengthen_ui.mjs <部分…>`，證據寫入
+`~/.woowbk-lab/evidence/strengthen/<時間>-<情境>/`。呼叫方式與 `cli_e2e.py` 相同（已安裝的 helper、root、stdin JSON；
+下載／上傳走設備內真正的 `cockpit-bridge`）；頁面部分以 Playwright 操作真正的 Cockpit 362。建立的備份記在同目錄的
+`state.json`（頁面：`ui-state.json`），由 `cleanup`（頁面：`cleanup-lab`）刪除。前置條件：兩台設備已 `deploy-src.sh a|b`、
+woowbk-demo 與 woowbk-dirs 在兩台都執行中、dev-a 的緊急金鑰檔。惡意或損毀的封存檔都在 dev-a **設備內**以設備金鑰重新封裝
+（主機只拿到密文）；巢狀容器一律帶 `--memory`。
+
+| 情境 | 內容 |
+| --- | --- |
+| `catalog-apply` | 兩台設備：`catalog-suggest {}` 列出 appowner → 兩個示範應用的草稿（已安裝的設定＋產生器附加的 `postgres-digest`／`files-digest`，`installed.changes` 只有這兩項、沒有 drift）→ `catalog-install` 預覽（引擎驗證）→ 以預覽的 `expected_sha256` 確認安裝 → 檔案 root 0644、舊設定在 `apps-history`；兩台設備的設定完全相同。重新部署（`deploy-src.sh` 會把 woowbk-demo 換回夾具）後其他情境會自動補裝 |
+| `digests` | woowbk-demo（單一資料庫）與 woowbk-dirs（主機資料夾中的冷備份資料庫）：備份時在寫入服務停止期間計算摘要 → inspect 列出摘要與統計 → 變更資料 → dev-a 原位還原：兩個摘要逐項一致、http-json 也一致、所有摘要比對都在應用單元啟動之前 → 下載、dev-b 拆除後上傳、以緊急金鑰全新部署還原（UID 1007、另一組 subuid）：摘要同樣一致 |
+| `mismatch` | (a) 備份在設備內重新封裝，只把一個上傳檔案的內容改一個位元組（所有 sha256 都正確，深入驗證也通過）→ 原位還原：files-digest 指出該檔案「內容不同」、應用沒有在損毀的資料上啟動、自動回復、資料等於還原前；(b) 目錄不知道的容器，以及資料庫容器內的工作（類似 pg_cron，經本機 socket 寫入），在備份期間持續寫入資料庫 → 備份時兩次讀取的資料庫摘要不同，這份備份不保存資料庫摘要並在作業紀錄說明（2026-11-14 審查 H2/F3；以前會保存並讓每次還原都比對失敗）；(c) 它們仍在寫入時再還原 (a) 的備份：還原前備份也不保存資料庫摘要，還原因檔案摘要不同而自動回復並**完成**（`rolled-back`，應用沒有被暫時停用；以前回復時資料庫摘要不一致，應用停在暫時停用）；(d) 寫入的容器仍在時，還原一份沒有寫入者時建立的備份：資料庫摘要不一致時再讀一次，兩次不同就是資料仍在移動，這一項「未比對」並列入注意事項，還原完成（寫入者在兩次讀取之後才重新連上時，摘要直接一致）；寫入者移除後還原 (b) 的備份成功，資料庫摘要顯示「未比對」、檔案摘要一致。只用另一個容器寫入不夠穩定：應用容器停止後，它在共用的 Podman 網路上有幾秒連不上資料庫（實驗室 2026-11-14 第一次執行時因此兩次讀取相同） |
+| `deep` | 以重新封裝（sha256 都正確）的備份檢查深入驗證：未修改的對照組通過且索引 `verified.deep`；資料卷離開資料卷的符號連結、主機資料夾的絕對符號連結與其下的檔案、與統計不符的摘要清單、不是 pg_dump 的資料庫匯出都讓驗證作業以 `corrupt-archive` 失敗並記錄 `{ok: false, deep: true}`；inspect（只讀清單）仍然很快且可以讀 |
+| `instance` | 實驗室應用 `woowbk-inst`（`catalog-examples/woowbk-inst`：pgvector 映像、類 Nextcloud 的 `oc_admin`（應用用它登入，密碼只在應用資料卷）與 vector／pg_trgm、HNSW／GIN 索引，類 Odoo 的 `odoo` 角色擁有兩個資料庫）：以擁有者部署 → `catalog-suggest` 的「整個執行個體」變體＋範本位置與應用核對 → `catalog-install` 到兩台 → 備份（資料庫不停止）→ 破壞 → 原位還原與 dev-b 全新部署還原：角色與密碼雜湊、成員、設定、資料庫擁有者／定序／權限／註解、內容、擴充套件版本、索引都等於備份時，`odoo` 以原密碼登入、應用正常、摘要一致 |
+| `keyless` | dev-b（沒有設備金鑰）：預設加密時建立備份 → `no-device-key`；`encrypt:false` 需要 `acknowledge_plaintext`；確認後建立未加密備份（`key_id` null、不是 unauthenticated）；設定開啟時原位還原需要金鑰（預檢 `device-key` 失敗、作業在任何變更前失敗）；關閉設定（需確認，settings.json root 0644）後不帶 `encrypt` 的備份不加密、原位還原成功且還原前備份也不加密；設定改回後加密備份仍需要金鑰；journal 記錄兩次設定變更 |
+| `retention` | dev-b：保留最新 2 份 → 每次手動備份依原則刪除較舊的手動備份（不刪剛建立的那份）、journal 記錄；以 SIGKILL 中斷一次原位還原 → 還原前備份與該次還原的來源都列為受保護、`retention-apply` 略過並說明 → 還原還原前備份成功後不再受保護、可刪除；原則改回全部保留 |
+| `tampered-json` | 下載的格式 2 備份：`backup.json` 的成員 sha256 被改 → `upload-finish` 拒絕；只改說明文字 → 上傳成功但 inspect、驗證作業、還原都以 `corrupt-archive` 拒絕（與經過驗證的各應用清單不符），資料不變；原檔仍可正常上傳 |
+| `e4`、`e4-cleanup` | 停機量測：woowbk-dirs 加上兩個停止需 15 秒的寫入服務（模擬 n8n 的 task runners）與 300 MB 主機資料夾，以同一份資料比較目前安裝的引擎（`E4_LABEL`）；`E4_AFTER=1` 讓這兩個服務宣告 `After=` 應用（正式主機 n8n-runners 的寫法）。輸出寫入暫停、應用自己 `/healthz` 中斷的次數與時間（區分停止期間與其他時間） |
+| `cleanup` | 刪除本驅動程式建立的備份、移除 woowbk-inst（部署、目錄項目、範本、pgvector 映像），設定與保留原則改回預設 |
+
+`strengthen_ui.mjs` 的部分：`catalog`（dev-a「應用設定」：掃描 appowner、編輯器的 JSON 語法錯誤（行與字元位置，不送出）、
+引擎拒絕 owner root 並指出欄位、預覽差異只多兩個摘要核對、勾選確認後安裝兩個應用、`apps-history` 與 journal）、`cleanup`
+（dev-a「清理備份」：woowbk-demo 保留最新 5 份 → 預覽清單等於引擎的 `retention-plan`、可取消勾選（保留最新的 `.woowbackup`）
+→ 確認刪除 → journal；再以「只儲存原則」改回全部保留）、`backups`（預設加密備份關閉與開啟、建立頁的加密選擇兩種、頁面下載
+加密 `.tar` 後以 tar 讀 `backup.json`、照 README 指令以緊急金鑰解開並核對每個項目、未加密副本、深入驗證、原位還原結果的
+資料核對表與停機時間）、`devb`（dev-b 沒有金鑰仍可建立未加密備份；關閉設定後經頁面上傳 dev-a 的未加密備份：預檢警告來源
+無法驗證、確認步驟需要額外勾選、還原成功且摘要一致；設定改回）、`cleanup-lab`（刪除頁面建立的備份與未加密副本）。
+
+### 資料摘要 SQL 探測（digest_sql_probe.py，2026-11-14 審查修正）
+
+`python3 -I tests/e2e/lab/digest_sql_probe.py [證據目錄]`：以 labpodman 啟動一次性的 `postgres:16-alpine`（`--memory 384m`），
+用引擎自己的 `woowbackup.digests` SQL（與 adapter 相同的 `psql -f -`、`PGOPTIONS`、`PGCLIENTENCODING=UTF8`）檢查：
+非超級使用者的資料表擁有者定義 `CREATE CAST (victim AS text) WITH FUNCTION evil(victim)`（函式以 `COPY … TO PROGRAM`
+寫一個標記檔）——修正前的 `t::text` 會以超級使用者身分執行它（標記檔內容 `postgres super=true`），引擎的 SQL 不會（H1）；
+沒有自訂轉換、沒有 `t` 欄位的資料表，摘要與修正前完全相同；有名為 `t` 的欄位時，其他欄位改變摘要也會改變（F2）；
+SQL_ASCII 資料庫中 0x80 以上的位元組、LATIN1 資料庫的非 ASCII 資料表名稱（與 UTF-8 資料庫的相同內容摘要相同；F6）。
+結束時移除容器，結果寫入 `digest-sql-probe.json`。
 
 ## 作業紀錄競態探測（race probe）
 

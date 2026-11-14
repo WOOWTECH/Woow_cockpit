@@ -1,0 +1,20 @@
+# Reference-host shape for catalog-suggest tests: names, mounts and dependencies only, no secret values.
+[Unit]
+Description=headscale MCP admin
+
+
+[Container]
+ContainerName=headscale-mcp-admin
+Image=localhost/woow-mcp-admin:latest
+Network=headscale-mcp.network
+PublishPort=127.0.0.1:18500:8080
+Volume=headscale-mcp.volume:/data
+Secret=headscale-mcp-admin-jwt-secret,type=env,target=JWT_SECRET
+Secret=headscale-mcp-admin-password,type=env,target=ADMIN_PASSWORD
+HealthCmd=wget -qO- http://127.0.0.1:8080/healthz
+
+[Service]
+Restart=always
+
+[Install]
+WantedBy=default.target

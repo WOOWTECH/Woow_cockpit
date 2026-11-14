@@ -1,0 +1,23 @@
+# Reference-host shape for catalog-suggest tests: names, mounts and dependencies only, no secret values.
+[Unit]
+Description=Headscale control server
+
+
+[Container]
+ContainerName=headscale
+Image=docker.io/headscale/headscale:0.26.1
+Network=headscale.network
+PublishPort=127.0.0.1:28080:8080
+PublishPort=127.0.0.1:29090:9090
+Volume=headscale-data.volume:/var/lib/headscale
+Volume=headscale-run.volume:/var/run/headscale
+Volume=%h/.config/headscale/headscale:/etc/headscale:ro
+EnvironmentFile=%h/.config/headscale/headscale.env
+Exec=serve
+HealthCmd=wget -qO- http://127.0.0.1:9090/metrics
+
+[Service]
+Restart=always
+
+[Install]
+WantedBy=default.target

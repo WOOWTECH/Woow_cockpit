@@ -1,0 +1,17 @@
+# Reference-host shape for catalog-suggest tests: names, mounts and dependencies only, no secret values.
+[Unit]
+Description=Collabora Online for Nextcloud
+
+
+[Container]
+ContainerName=nextcloud-office
+Image=docker.io/collabora/code:24.04.13.2.1
+Network=nextcloud.network
+PublishPort=127.0.0.1:19980:9980
+Secret=nextcloud-office-password,type=env,target=password
+
+[Service]
+Restart=always
+
+[Install]
+WantedBy=default.target

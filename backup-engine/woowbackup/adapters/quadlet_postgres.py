@@ -33,6 +33,7 @@ Facts this adapter relies on (verified with Podman 4.9 rootless + systemd --user
   podman 4.9.3, GNU tar 1.35). A restore extracts into `<dir>.woowbk-new-<job>` and swaps it in; the replaced copy
   `<dir>.woowbk-old-<job>` is deleted only after the job succeeded (CONTRACT section 9).
 """
+import contextlib
 import http.client
 import json
 import os
@@ -45,9 +46,9 @@ import time
 import urllib.parse
 from pathlib import Path
 
-from .. import nested
+from .. import digests, nested
 from ..archive import Entry
-from ..catalog import paths_overlap
+from ..catalog import DB_NAME_RE, digest_target, paths_overlap
 from ..errors import BackupError
 from ..podman import DEVNULL, CommandError, stderr_tail
 from .base import Adapter
@@ -58,7 +59,7 @@ MAX_SECRET_BYTES = 511999  # podman: "secret data must be larger than 0 and less
 MAX_HTTP_BODY = 1024 * 1024
 IMAGE_RE = re.compile(r'[A-Za-z0-9][A-Za-z0-9._/:@-]{0,254}\Z')
 NAME_RE = re.compile(r'[A-Za-z0-9][A-Za-z0-9_.-]{0,127}\Z')
-ENTRY_RE = re.compile(r'apps/([a-z0-9][a-z0-9-]{1,40})/(images|postgres|volumes|dirs|secrets|config|quadlet)/'
+ENTRY_RE = re.compile(r'apps/([a-z0-9][a-z0-9-]{1,40})/(images|postgres|volumes|dirs|secrets|config|quadlet|verify)/'
                       r'[A-Za-z0-9][A-Za-z0-9_.@-]{0,200}\Z')
 TOKEN_RE = re.compile(r'[A-Za-z0-9][A-Za-z0-9._-]{0,54}\Z')
 CONTAINER_ID_RE = re.compile(r'[0-9a-f]{12,64}\Z')
@@ -93,6 +94,179 @@ MAINTENANCE_OBJECTS_SQL = (
     "(SELECT count(*) FROM pg_extension WHERE extname <> 'plpgsql')")
 SNAPSHOT_CHANGED = ('資料核對快照在備份期間有變動（例如仍有寫入進行中，或設定在服務重新啟動時才生效）；'
                     '這份備份不含資料核對快照，還原後會略過資料比對。')
+DIGEST_TYPES = ('postgres-digest', 'files-digest')
+DIGEST_TIMEOUT = 3 * 3600
+DIGEST_OUTPUT = 32 * 1024 * 1024  # psql's JSON answer of a digest query (about 120 bytes per table)
+# A files-digest listing the owner side writes: at most this much, whatever the free space (review M4). 2,000,000
+# entries (digests.MAX_ENTRIES) of about 300 bytes each fit; an owner cannot fill the disk through it.
+DIGEST_LISTING_MAX = 1024 * 1024 * 1024
+GLOBALS_MAX = 16 * 1024 * 1024    # a pg_dumpall --globals-only script
+PG_ROLE_NAME_MAX = 63
+# Database facts recorded for an instance-mode backup (names checked against catalog.DB_NAME_RE).
+DATABASES_JSON_SQL = (
+    "SELECT coalesce(json_agg(json_build_object('name', d.datname, 'owner', pg_get_userbyid(d.datdba), 'encoding', "
+    "pg_encoding_to_char(d.encoding), 'template', d.datistemplate, 'connect', d.datallowconn, 'row', row_to_json(d)) "
+    "ORDER BY d.datname), '[]'::json) FROM pg_database d")
+EXTENSIONS_SQL = ("SELECT coalesce(json_agg(json_build_array(extname, extversion) ORDER BY extname), '[]'::json) "
+                  "FROM pg_extension WHERE extname <> 'plpgsql'")
+AVAILABLE_EXTENSIONS_SQL = "SELECT coalesce(json_agg(name ORDER BY name), '[]'::json) FROM pg_available_extensions"
+ROLE_FLAGS_SQL = ("SELECT coalesce(json_agg(json_build_array(rolname, rolsuper, rolcanlogin) ORDER BY rolname), "
+                  "'[]'::json) FROM pg_roles WHERE rolname !~ '^pg_'")
+SUPERUSER_SQL = 'SELECT rolsuper FROM pg_roles WHERE rolname = current_user'
+# The bootstrap superuser (the role initdb created, oid 10) next to the connecting role: an instance restore runs in
+# a cluster the image just created, where only the bootstrap superuser exists (review F5).
+BOOTSTRAP_SQL = 'SELECT json_build_array((SELECT rolname FROM pg_roles WHERE oid = 10), current_user)'
+# Every database of an instance besides template0/template1: [name, template, accepts connections].
+INSTANCE_CATALOG_SQL = ("SELECT coalesce(json_agg(json_build_array(datname, datistemplate, datallowconn) ORDER BY "
+                        "datname), '[]'::json) FROM pg_database WHERE datname NOT IN ('template0', 'template1')")
+# initdb time of the running cluster (the high 32 bits of its system identifier are the seconds of initdb).
+CLUSTER_ID_SQL = "SELECT json_build_array((SELECT system_identifier FROM pg_control_system())::text)"
+# The restore's own role after the roles script: still a superuser that can log in, sessions not read-only (L2, F8).
+SESSION_STATE_SQL = ("SELECT json_build_array((SELECT rolsuper AND rolcanlogin FROM pg_roles WHERE rolname = "
+                     "current_user), current_setting('default_transaction_read_only'))")
+INSTANCE_MAINTENANCE_DB = 'template1'
+LOCALE_RE = re.compile(r'[A-Za-z0-9_.@-]{0,100}\Z')
+ENCODING_RE = re.compile(r'[A-Za-z0-9_]{1,32}\Z')
+# Statements a pg_dumpall --globals-only script may hold (CONTRACT section 9, instance mode).
+GLOBAL_STATEMENT_RE = re.compile(r'(SET|CREATE ROLE|ALTER ROLE|GRANT|REVOKE|COMMENT ON ROLE)\b')
+SAFE_SETTINGS = frozenset({'SET default_transaction_read_only = off', "SET client_encoding = 'UTF8'",
+                           'SET standard_conforming_strings = on'})
+RESTRICT_RE = re.compile(r'\\(?:un)?restrict [A-Za-z0-9]{1,128}\Z')
+# Role names a pg_dumpall script never uses as the target of CREATE/ALTER ROLE (they would hide which role changes).
+RESERVED_ROLE_NAMES = frozenset({'CURRENT_USER', 'SESSION_USER', 'CURRENT_ROLE', 'ALL', 'PUBLIC'})
+# Role settings that load server-side code at every session of that role.
+LIBRARY_SETTINGS = frozenset({'session_preload_libraries', 'local_preload_libraries', 'shared_preload_libraries',
+                              'dynamic_library_path', 'jit_provider'})
+
+
+def _unprintable(text):
+    return any(not ch.isprintable() for ch in text)
+
+
+def _unquote_ident(text):
+    """The role name of a (possibly double-quoted) SQL identifier, or None."""
+    if text.startswith('"'):
+        if len(text) < 2 or not text.endswith('"') or '"' in text[1:-1].replace('""', ''):
+            return None
+        return text[1:-1].replace('""', '"')
+    return text.lower() if re.fullmatch(r'[A-Za-z_][A-Za-z0-9_$]*', text) else None
+
+
+def globals_statements(data, *, session_user=None):
+    """The statements of a `pg_dumpall --globals-only` script, checked before psql ever reads it (instance mode).
+
+    The archive's bytes are untrusted: a psql meta-command (`\\!`) would run a shell in the database container. So the
+    script is scanned the way psql scans it: only standard string literals ('' escapes, after whitespace, `(`, `,` or
+    `=`), double-quoted identifiers and `--` comments; a backslash outside them, block comments, dollar quoting and
+    E''/U&'' strings are refused; the `\\restrict`/`\\unrestrict` lines PostgreSQL >= 16.10 writes are dropped (an older
+    psql does not know them). Every statement must be SET (the three pg_dumpall writes), CREATE/ALTER ROLE, GRANT,
+    REVOKE or COMMENT ON ROLE. With `session_user` (the restore's own superuser, already created by the image):
+    its CREATE ROLE is dropped (reconciled by the ALTER ROLE that follows) and an ALTER ROLE that would take away its
+    SUPERUSER or LOGIN is refused. Returns [statement text]; raises BackupError('incompatible')."""
+    def refuse(reason):
+        raise BackupError('incompatible', f'備份中的資料庫角色定義（pg_dumpall）無法安全執行：{reason}。')
+
+    try:
+        text = data.decode('utf-8')
+    except UnicodeDecodeError:
+        refuse('不是 UTF-8 文字')
+    text = '\n'.join(line for line in text.split('\n') if not RESTRICT_RE.fullmatch(line))
+
+    def quoted(start, quote, what):
+        end = start + 1
+        while True:
+            end = text.find(quote, end)
+            if end < 0:
+                refuse(f'{what}沒有結束')
+            if text[end + 1:end + 2] == quote:
+                end += 2
+                continue
+            return end + 1
+
+    statements, verbatim, tokens, word, i, n = [], [], [], [], 0, len(text)
+
+    def flush():
+        if word:
+            tokens.append(''.join(word))
+            word.clear()
+
+    while i < n:
+        ch = text[i]
+        if ch == "'":
+            if i and not (text[i - 1].isspace() or text[i - 1] in '(,='):
+                refuse('含有不支援的字串寫法')  # E'', U&'' or another prefix: psql would read it differently
+            end = quoted(i, "'", '字串')
+            flush()
+            tokens.append(text[i:end])
+            verbatim.append(text[i:end])
+            i = end
+        elif ch == '"':
+            end = quoted(i, '"', '名稱')
+            if '\n' in text[i:end] or '\0' in text[i:end]:
+                refuse('名稱含有控制字元')
+            word.append(text[i:end])
+            verbatim.append(text[i:end])
+            i = end
+        elif text.startswith('--', i):
+            end = text.find('\n', i)
+            i = n if end < 0 else end
+        elif text.startswith('/*', i) or ch in '\\$\0&':
+            # `&` only appears in U&"..." identifiers, which name a role the checks below would not recognize (L2)
+            refuse('含有不支援的語法（註解區塊、反斜線命令、U& 名稱或特殊字串）')
+        elif ch == ';':
+            flush()
+            if tokens:
+                statements.append((''.join(verbatim).strip(), list(tokens)))
+            verbatim, tokens = [], []
+            i += 1
+        else:
+            verbatim.append(ch)
+            if ch.isspace():
+                flush()
+            elif ch in '(),=':
+                flush()
+                tokens.append(ch)
+            else:
+                word.append(ch)
+            i += 1
+    flush()
+    if tokens:
+        refuse('最後一個敘述沒有結束')
+    kept = []
+    for statement, words in statements:
+        # Keywords compare without regard to case, as PostgreSQL reads them (review L2, F8); quoted parts stay as written.
+        upper = [word if word.startswith(("'", '"')) else word.upper() for word in words]
+        head = ' '.join(upper)
+        if not GLOBAL_STATEMENT_RE.match(head):
+            refuse(f'含有角色以外的敘述（{words[0][:20]}）')
+        if upper[0] == 'SET' and ' '.join(words) not in SAFE_SETTINGS:
+            refuse('含有不支援的連線設定')
+        if upper[0] in ('CREATE', 'ALTER') and len(words) > 2:
+            target = words[2]
+            if not target.startswith('"') and target.upper() in RESERVED_ROLE_NAMES:
+                refuse('含有以 CURRENT_USER、SESSION_USER、ALL 等特殊名稱指定的角色')  # pg_dumpall names every role
+            if upper[0] == 'ALTER' and 'RENAME' in upper[3:]:
+                refuse('含有重新命名角色的敘述')
+            if 'SET' in upper[3:]:
+                at = upper.index('SET', 3)
+                raw = words[at + 1] if len(words) > at + 1 else ''
+                setting = _unquote_ident(raw) or raw.strip('"').lower()
+                if setting in LIBRARY_SETTINGS:
+                    refuse('含有載入程式庫的角色設定')  # e.g. session_preload_libraries runs code at every login
+            name = _unquote_ident(target)
+            if session_user is not None and name == session_user:
+                if upper[0] == 'CREATE' and len(words) == 3:
+                    continue  # the image created it; the ALTER ROLE that follows sets its attributes and password
+                if any(word in ('NOSUPERUSER', 'NOLOGIN') for word in upper[3:]):
+                    raise BackupError('incompatible', f'備份中的資料庫角色 {session_user} 不是可登入的超級使用者；以它還原整個'
+                                                      '資料庫執行個體會失去管理權限，未做任何變更。')
+        kept.append(statement)
+    return kept
+
+
+def globals_script(data, *, session_user=None):
+    """The checked statements as a psql script (one per line)."""
+    return ''.join(f'{statement};\n' for statement in globals_statements(data, session_user=session_user)).encode()
 
 
 class _DeadlineSocket(socket.socket):
@@ -248,6 +422,7 @@ class QuadletPostgresAdapter(Adapter):
                          imported_hook=imported_hook)
         self.http_get = http_get or loopback_get
         self.clock = clock or time.monotonic
+        self.wall = time.time  # wall clock (an instance restore compares it with the cluster's initdb time)
         self.sleep = sleep or time.sleep
         self._runtime_ready_fn = runtime_ready
         self.templates_uid = templates_uid
@@ -266,6 +441,14 @@ class QuadletPostgresAdapter(Adapter):
         self._dir_space = {}      # directory -> (device, free bytes) of its parent, from the preflight
         self._dir_swapped = {}    # directory -> True when its previous copy was moved to the old sibling
         self._dirs_tracked = False  # restore() ran here: _dir_swapped names every directory it put in place
+        self._staged = set()      # directories stage_dirs() wrote ahead (restore() only swaps them in)
+        # Service availability (CONTRACT section 9): monotonic times of the first stop, of the moment every unit ran
+        # again and of the first passing health check; the units a safety backup left stopped for the restore.
+        self.timing = {}
+        self.kept_stopped = []
+        self._taken_over = []
+        self.digest_results = []  # per digest check of the last restore: CONTRACT section 7 `verification[].checks`
+        self.unstable_digests = []  # digest checks the last backup dropped because two reads differed (H2, F3)
 
     # ----------------------------------------------------------------- helpers
     @staticmethod
@@ -303,6 +486,134 @@ class QuadletPostgresAdapter(Adapter):
         # the next start of a dependent unit re-run `podman network create --ignore`.
         for unit in self.aux_units():
             self.runner.systemctl('stop', '--', unit, timeout=STOP_TIMEOUT, check=False)
+
+    # ----------------------------------------------------------------- unit groups (CONTRACT section 9)
+    def _unit_after(self, units):
+        """{unit: units it waits for} for `units`, or None when that cannot be read: the units it is ordered after
+        (systemd After=) and the units it requires (Requires=, BindsTo=). systemd starts a required unit side by side
+        with its dependent unless After= orders them, and Quadlet does not add After= for Requires= (review L7); the
+        engine used to start them one after the other, so it keeps waiting for them."""
+        try:
+            out = self.runner.systemctl('show', '--property=Id,After,Requires,BindsTo', '--', *units,
+                                        timeout=SHORT_TIMEOUT, max_output=SMALL_OUTPUT).stdout or b''
+        except BackupError:
+            return None
+        blocks = [block for block in out.decode('utf-8', 'replace').split('\n\n') if block.strip()]
+        if len(blocks) != len(units):
+            return None
+        result = {}
+        for unit, block in zip(units, blocks):
+            fields = dict(line.split('=', 1) for line in block.splitlines() if '=' in line)
+            if fields.get('Id') != unit:
+                return None
+            result[unit] = set(' '.join(fields.get(key, '') for key in ('After', 'Requires', 'BindsTo')).split())
+        return result
+
+    def start_groups(self, units):
+        """`units` (any order) as consecutive groups that may start together, in catalog order.
+
+        A unit whose Quadlet file orders it after other units of this app (After=) or requires them (Requires=,
+        BindsTo=) waits only for those of them that are started here; a unit that names none of them waits for every
+        unit before it in the catalog order (the catalog order is the fallback, as before). A catalog order that
+        contradicts them, or dependencies that cannot be read, start one unit at a time."""
+        wanted = set(units)
+        order = [unit for unit in self.app.units if unit in wanted]
+        if len(order) < 2:
+            return [order] if order else []
+        after = self._unit_after(order)
+        if after is None:
+            return [[unit] for unit in order]
+        ours_all = set(self.app.units)
+        levels = {}
+        for index, unit in enumerate(order):
+            ours = after.get(unit, set()) & ours_all
+            if ours & set(order[index + 1:]):
+                return [[item] for item in order]
+            prerequisites = (ours & set(order[:index])) if ours else order[:index]
+            levels[unit] = 1 + max((levels[item] for item in prerequisites), default=-1)
+        groups = [[] for _ in range(max(levels.values()) + 1)]
+        for unit in order:
+            groups[levels[unit]].append(unit)
+        return groups
+
+    def _stop_units(self, units, *, label):
+        """Stop `units` with one `systemctl --user stop`: systemd stops them side by side, dependents first."""
+        wanted = set(units)
+        order = [unit for unit in reversed(self.app.units) if unit in wanted]
+        if not order:
+            return
+        for unit in order:
+            self.log(f'{label} {unit}')
+        self.runner.systemctl('stop', '--', *order, timeout=STOP_TIMEOUT + 60 * (len(order) - 1))
+
+    def _start_units(self, units, *, attempts=1, before=None, after=None, failed_note=None, keep_going=True):
+        """Start `units` group by group (start_groups), one `systemctl --user start` per group. With `attempts=2` a
+        unit that did not start is tried once more on its own. A termination signal still starts the remaining groups
+        (review CR-14). `keep_going=False` (a restore, which fails and rolls back anyway) stops after the first group
+        with a unit that did not start. Returns (units that did not start, the termination exception or None) -- the
+        caller raises."""
+        failed, interrupted = [], None
+        for group in self.start_groups(units):
+            if failed and not keep_going:
+                break
+            if before:
+                for unit in group:
+                    self.log(f'{before} {unit}')
+            try:
+                result = self.runner.systemctl('start', '--', *group, timeout=START_TIMEOUT + 60 * (len(group) - 1),
+                                               check=False)
+                if result.returncode == 0:
+                    pending = []
+                else:
+                    self._log_command_error(CommandError('systemctl start', returncode=result.returncode,
+                                                         stderr=result.stderr))
+                    pending = list(group) if len(group) == 1 else [
+                        unit for unit, state in self.unit_states(group).items() if state.get('ActiveState') != 'active']
+            except BaseException as exc:  # noqa: BLE001 - a signal or an error of the call itself
+                if not isinstance(exc, BackupError):
+                    interrupted = interrupted or exc
+                    failed.extend(group)
+                    continue
+                self._log_command_error(exc)
+                pending = list(group)
+            for unit in pending:
+                started = False
+                for _attempt in range(attempts - 1):
+                    try:
+                        self.sleep(2)
+                        self.runner.systemctl('start', '--', unit, timeout=START_TIMEOUT)
+                        started = True
+                        break
+                    except BackupError as error:
+                        self._log_command_error(error)
+                    except BaseException as exc:  # termination signal: go on with the other units (CR-14)
+                        interrupted = interrupted or exc
+                        break
+                if not started:
+                    failed.append(unit)
+                    if failed_note:
+                        self.log(f'{failed_note} {unit}')
+            if after:
+                for unit in group:
+                    if unit not in failed:
+                        self.log(f'{after} {unit}')
+        return failed, interrupted
+
+    def take_over(self, units, first_stop):
+        """The safety backup left `units` stopped for this restore (CONTRACT section 9); `first_stop` is when they
+        stopped (monotonic), the start of the app's unavailability."""
+        self._taken_over = [unit for unit in self.app.units if unit in set(units or ())]
+        if first_stop is not None:
+            self.timing['first_stop'] = first_stop
+
+    def timing_report(self):
+        """{'writer_pause_seconds', 'unavailable_seconds'} of the last backup or restore (None when not measured):
+        writers stopped -> every unit running again, and first stop -> every health check passed."""
+        first = self.timing.get('first_stop')
+        started, healthy = self.timing.get('started'), self.timing.get('healthy')
+        pause = round(max(0.0, started - first), 1) if first is not None and started is not None else None
+        down = round(max(0.0, healthy - first), 1) if first is not None and healthy is not None else None
+        return {'writer_pause_seconds': pause, 'unavailable_seconds': down}
 
     def _quadlet_presence(self):
         rels = {name: self.qrel(name) for name in self.app.quadlet_files}
@@ -571,7 +882,12 @@ class QuadletPostgresAdapter(Adapter):
         total = 1024 * 1024
         for pg in self.app.postgres:
             try:
-                total += int(self.psql_scalar(pg, 'SELECT pg_database_size(current_database())') or 0)
+                if pg['scope'] == 'instance':
+                    total += int(self.psql_scalar(pg, 'SELECT coalesce(sum(pg_database_size(datname)), 0) FROM pg_database '
+                                                      "WHERE datname NOT IN ('template0', 'template1') AND datallowconn",
+                                                  database=self._connect_db(pg['container'], pg['user'])) or 0)
+                else:
+                    total += int(self.psql_scalar(pg, 'SELECT pg_database_size(current_database())') or 0)
             except (BackupError, ValueError):
                 raise BackupError('job-failed', f'無法讀取資料庫 {pg["id"]} 的大小；請確認資料庫服務正在執行。',
                                   app=self.app.id) from None
@@ -620,12 +936,10 @@ class QuadletPostgresAdapter(Adapter):
         """Directories whose content this adapter's restore replaced (for the rollback after a failure)."""
         return set(self._dir_swapped)
 
-    def _running_bind_mounts(self):
-        """[(container, unit, path relative to the owner's home or '' for all of it, read-write)] of the bind mounts
-        of the owner's running containers that reach into his home, whatever started them (Quadlet Volume= or
-        Mount=, a pod, PodmanArgs, by hand); review M5. A container that stopped between the listing and the
-        inspection fails the inspection, which is retried once."""
-        home = self.runner.home.rstrip('/')
+    def _running_mounts(self):
+        """[(container, unit, [mount dicts])] of the owner's running containers, whatever started them (Quadlet
+        Volume= or Mount=, a pod, PodmanArgs, by hand); review M5. A container that stopped between the listing and
+        the inspection fails the inspection, which is retried once."""
         for attempt in (1, 2):
             listed = self.runner.podman('ps', '--format', '{{.ID}}', timeout=SHORT_TIMEOUT, check=False,
                                         max_output=SMALL_OUTPUT)
@@ -641,31 +955,61 @@ class QuadletPostgresAdapter(Adapter):
             if result.returncode == 0:
                 break
         else:
-            raise BackupError('job-failed', '無法列出執行中的容器及其掛載，無法確認主機資料夾沒有被其他容器使用。',
+            raise BackupError('job-failed', '無法列出執行中的容器及其掛載，無法確認資料沒有被其他容器使用。',
                               app=self.app.id)
-        mounts = []
+        containers = []
         try:
             for line in (result.stdout or b'').decode('utf-8').splitlines():
                 if not line.strip():
                     continue
                 name, labels, items = (json.loads(part) for part in line.split('\t'))
                 unit = (labels or {}).get('PODMAN_SYSTEMD_UNIT') if isinstance(labels, dict) else None
-                for item in items or []:
-                    if not isinstance(item, dict) or item.get('Type') != 'bind' or not isinstance(item.get('Source'), str):
-                        continue
-                    source = os.path.normpath(item['Source'])
-                    if source == home or (home + '/').startswith(source.rstrip('/') + '/'):
-                        rel = ''  # the whole home (or a directory above it)
-                    elif source.startswith(home + '/'):
-                        rel = source[len(home) + 1:]
-                    else:
-                        continue
-                    mounts.append((str(name)[:128], unit if isinstance(unit, str) else None, rel,
-                                   item.get('RW') is not False))
+                containers.append((str(name)[:128], unit if isinstance(unit, str) else None,
+                                   [item for item in items or [] if isinstance(item, dict)]))
         except (ValueError, RecursionError, TypeError, AttributeError):
-            raise BackupError('job-failed', '無法讀取執行中容器的掛載資訊，無法確認主機資料夾沒有被其他容器使用。',
+            raise BackupError('job-failed', '無法讀取執行中容器的掛載資訊，無法確認資料沒有被其他容器使用。',
                               app=self.app.id) from None
+        return containers
+
+    def _running_bind_mounts(self):
+        """[(container, unit, path relative to the owner's home or '' for all of it, read-write)] of the bind mounts
+        of the owner's running containers that reach into his home (review M5)."""
+        home = self.runner.home.rstrip('/')
+        mounts = []
+        for name, unit, items in self._running_mounts():
+            for item in items:
+                if item.get('Type') != 'bind' or not isinstance(item.get('Source'), str):
+                    continue
+                source = os.path.normpath(item['Source'])
+                if source == home or (home + '/').startswith(source.rstrip('/') + '/'):
+                    rel = ''  # the whole home (or a directory above it)
+                elif source.startswith(home + '/'):
+                    rel = source[len(home) + 1:]
+                else:
+                    continue
+                mounts.append((name, unit, rel, item.get('RW') is not False))
         return mounts
+
+    def _require_unused_volumes(self, *, exclude):
+        """A backup refuses a running container that the backup does not stop (its unit is not one of `exclude`) and
+        that mounts one of the app's volumes read-write: it could write while the volume is exported, and the copy
+        (and its files digest) would not match (review H2, F3; the host-directory rule is M5)."""
+        names = {volume['name'] for volume in self.app.volumes}
+        if not names:
+            return
+        problems = []
+        for name, unit, items in self._running_mounts():
+            if unit in exclude:
+                continue
+            for item in items:
+                if item.get('Type') == 'volume' and item.get('Name') in names and item.get('RW') is not False:
+                    owner = f'服務 {unit} 的容器 {name}' if unit else f'容器 {name}'
+                    problems.append(f'{owner} 以可寫入方式掛載了資料卷 {item["Name"]}')
+                    break
+        if problems:
+            raise BackupError('incompatible', f'{"；".join(problems[:4])}，備份時不會停止它；為避免資料不一致，已停止備份。'
+                                              '請先停止它，或把它的服務加入這個應用的 writer_units（不寫入的容器可改為唯讀掛載 :ro）。',
+                              app=self.app.id)
 
     def _dir_users(self, *, exclude=(), writable_only=False):
         """zh-TW problems naming the running containers, except those of the `exclude` units, that bind-mount one of
@@ -978,11 +1322,260 @@ class QuadletPostgresAdapter(Adapter):
                 notes.append(f'~/{rel} 還原失敗時寫入的內容保留在 ~/{rel}.woowbk-old-{rollback_token}，確認不需要後可刪除')
         return notes
 
+    # ----------------------------------------------------------------- data digests (CONTRACT sections 4, 5, 9)
+    def digest_specs(self, kind=None):
+        return [spec for spec in self.app.verify if spec['type'] in DIGEST_TYPES and (kind is None or spec['type'] == kind)]
+
+    def _psql_json(self, container, user, database, sql, what):
+        """One JSON value from psql, with the session settings that make `row::text` deterministic; the query goes on
+        stdin (a list of relation ids can be long)."""
+        result = self.runner.podman('exec', '-i', '-e', f'PGOPTIONS={digests.PG_OPTIONS}', '-e', 'PGCLIENTENCODING=UTF8',
+                                    container, 'psql', '-X', '-w', '-A', '-t', '-q', '-v', 'ON_ERROR_STOP=1', '-U', user,
+                                    '-d', database, '-f', '-', input=sql.encode(), timeout=DIGEST_TIMEOUT,
+                                    max_output=DIGEST_OUTPUT)
+        return digests.parse_psql_json(result.stdout, what)
+
+    def _connect_db(self, container, user):
+        """`postgres`, or `template1` where that database was dropped: the database instance-wide statements use."""
+        key = (container, user)
+        cache = self.__dict__.setdefault('_connect_dbs', {})
+        if key not in cache:
+            for name in ('postgres', 'template1'):
+                result = self.runner.podman('exec', container, 'psql', '-X', '-w', '-A', '-t', '-U', user, '-d', name,
+                                            '-c', 'SELECT 1', timeout=SHORT_TIMEOUT, check=False,
+                                            max_output=SMALL_OUTPUT)
+                if result.returncode == 0:
+                    cache[key] = name
+                    break
+            else:
+                raise BackupError('job-failed', f'無法連線到容器 {container} 的資料庫（postgres、template1）。', app=self.app.id)
+        return cache[key]
+
+    def _digest_source(self, spec):
+        """(container, user, scope) a postgres-digest reads: a pg_dump entry (`database`/`instance`) or a cold
+        database container (`cold`)."""
+        if spec['postgres']:
+            pg = next(p for p in self.app.postgres if p['id'] == spec['postgres'])
+            return pg['container'], pg['user'], pg['scope']
+        return spec['container'], spec['user'], 'cold'
+
+    def _instance_databases(self, container, user, connect, what):
+        names = self._psql_json(container, user, connect, "SELECT coalesce(json_agg(datname ORDER BY datname), "
+                                "'[]'::json) FROM pg_database WHERE NOT datistemplate AND datallowconn", what)
+        if not isinstance(names, list) or not all(isinstance(name, str) for name in names):
+            raise digests.DigestError(f'{what}的資料庫清單格式不正確。')
+        for name in names:
+            if not DB_NAME_RE.fullmatch(name):
+                raise BackupError('incompatible', f'資料庫名稱「{name[:63]}」含有不支援的字元（只支援英數字與 _ . $ -），'
+                                                  '無法計算摘要或備份整個執行個體。', app=self.app.id)
+        return names
+
+    def _capture_pg_digest(self, spec, dest, *, databases=None, roles=None):
+        """Write the postgres-digest listing of `spec` to `dest`; returns {databases, roles, summary, digest}.
+        `databases`/`roles`: what the backup recorded (a restore reads the same; None: decide as at backup time)."""
+        container, user, scope = self._digest_source(spec)
+        what = f'資料庫摘要 {spec["id"]}'
+        connect = self._connect_db(container, user) if scope != 'database' else None
+        if databases is None:
+            databases = (self._instance_databases(container, user, connect, what) if spec['databases'] == 'all'
+                         else list(spec['databases']))
+        tables = {}
+        for name in databases:
+            sql = digests.tables_sql()
+            if spec['exclude_tables']:
+                listed = self._psql_json(container, user, name, digests.LIST_SQL, what)
+                if not isinstance(listed, list) or not all(isinstance(row, list) and len(row) == 3 and isinstance(
+                        row[0], int) and isinstance(row[1], str) and isinstance(row[2], str) for row in listed):
+                    raise digests.DigestError(f'{what}的資料表清單格式不正確。')
+                sql = digests.tables_sql([row[0] for row in listed
+                                          if not digests.excluded_table(spec['exclude_tables'], row[1], row[2])])
+            tables[name] = self._psql_json(container, user, name, digests.in_snapshot(sql), what)
+        if roles is None:
+            # Roles are compared where a restore brings them back: a whole instance, or a cold copy read by a superuser.
+            roles = scope == 'instance' or (scope == 'cold' and self._psql_json(
+                container, user, connect, f'SELECT json_build_array(({SUPERUSER_SQL}))', what) == [True])
+        role_rows = self._psql_json(container, user, connect or databases[0], digests.ROLES_SQL, what) if roles else None
+        major = self._psql_json(container, user, connect or databases[0],
+                                "SELECT json_build_array(current_setting('server_version_num'))", what)
+        try:
+            major = pg_major(major[0])
+        except (TypeError, ValueError, IndexError, KeyError):
+            raise digests.DigestError(f'{what}無法讀取 PostgreSQL 版本。') from None
+        digests.write_lines(dest, digests.pg_lines(tables, role_rows))
+        summary, digest = digests.read_pg_detail(dest, what=what)
+        return {'databases': list(databases), 'roles': bool(roles), 'summary': summary, 'digest': digest,
+                'server_major': major}
+
+    def _volume_mountpoint(self, name):
+        result = self.runner.podman('volume', 'inspect', '--format', '{{.Mountpoint}}', name,
+                                    timeout=SHORT_TIMEOUT, check=False, max_output=SMALL_OUTPUT)
+        mountpoint = (result.stdout or b'').decode('utf-8', 'replace').strip()
+        if result.returncode != 0 or not mountpoint.startswith('/'):
+            raise BackupError('not-deployed', f'找不到資料卷 {name}。', app=self.app.id, volume=name)
+        return mountpoint
+
+    def _listing_budget(self, folder):
+        budget = self._output_budget(folder)
+        return DIGEST_LISTING_MAX if budget is None else min(budget, DIGEST_LISTING_MAX)
+
+    def _capture_files_digest(self, spec, dest, budget_dir):
+        """Write the files-digest listing of `spec` to `dest` (read as the owner inside his namespace)."""
+        what = f'資料卷 {spec["volume"]}' if spec['volume'] else f'主機資料夾 ~/{spec["data_dir"]}'
+        budget = self._listing_budget(budget_dir)
+        with _create(dest) as handle:
+            try:
+                if spec['volume']:
+                    # Setuid/setgid of files are not compared: a volume restore drops them (CONTRACT section 5); the
+                    # volume's top directory is not listed: `podman volume import` creates it anew.
+                    self.runner.volume_digest(self._volume_mountpoint(spec['volume']), stdout=handle, nosetid=True,
+                                              exclude=spec['exclude'], timeout=DIGEST_TIMEOUT, max_output=budget)
+                else:
+                    self.runner.dir_digest(spec['data_dir'], stdout=handle, root=True, exclude=spec['exclude'],
+                                           timeout=DIGEST_TIMEOUT, max_output=budget)
+            except BackupError as error:
+                if error.code == 'insufficient-space' and budget == DIGEST_LISTING_MAX:
+                    raise BackupError('limit-exceeded', f'{what}的資料摘要清單超過 1 GiB 的上限；請以 exclude 排除大量的小檔案'
+                                                        '（例如快取），或移除這項資料摘要。', app=self.app.id) from None
+                raise
+            handle.flush()
+            os.fsync(handle.fileno())
+        summary, digest = digests.read_files_detail(dest, what=what)
+        return {'summary': summary, 'digest': digest}
+
+    def _capture_digests(self, specs, folder, suffix=''):
+        """Backup: {check id: record} for `specs`, listings written to `folder/<id><suffix>.txt`."""
+        records = {}
+        for spec in specs:
+            dest = Path(folder) / f'{spec["id"]}{suffix}.txt'
+            if spec['type'] == 'files-digest':
+                info = self._capture_files_digest(spec, dest, folder)
+            else:
+                info = self._capture_pg_digest(spec, dest)
+            info['file'] = dest
+            records[spec['id']] = info
+            if not suffix:
+                self.log(f'已計算資料摘要 {spec["id"]}（{digests.summary_text(spec["type"], info["summary"])}）')
+        return records
+
+    def _confirm_digests(self, specs, first, folder, reason):
+        """Read `specs` a second time; keep the checks whose digest did not change since `first` (review H2, F3).
+
+        A digest is read at a different moment than the dump or the copy it vouches for. Equal reads before and after
+        that copy prove it holds the same data; when they differ (a writer the catalog does not stop, a job inside the
+        database), the backup keeps no digest for the check -- otherwise every restore of the backup, and the rollback
+        of a failed restore that depends on it, would fail the comparison. The backup itself is still made."""
+        second = self._capture_digests(specs, folder)
+        kept = {}
+        for spec in specs:
+            before, after = first.get(spec['id']), second.get(spec['id'])
+            with contextlib.suppress(OSError):
+                os.unlink(before['file'])
+            if before['digest'] == after['digest'] and before.get('databases') == after.get('databases'):
+                kept[spec['id']] = after
+                continue
+            with contextlib.suppress(OSError):
+                os.unlink(after['file'])
+            self.log(f'警告：資料摘要 {spec["id"]} 兩次讀取的結果不同（{reason}，例如有應用設定未停止的服務或排程仍在寫入）；'
+                     '這份備份不含這項資料摘要，還原時不會比對它。請把寫入的服務加入 writer_units，或把變動的資料表或檔案排除。')
+            self.unstable_digests.append(spec['id'])
+        return kept
+
+    def _digest_manifest(self, spec, record, entry):
+        item = {'id': spec['id'], 'type': spec['type'], 'target': digest_target(spec),
+                'exclude': list(spec['exclude'] if spec['type'] == 'files-digest' else spec['exclude_tables']),
+                'summary': record['summary'], 'digest': record['digest'], 'entry': entry}
+        if spec['type'] == 'postgres-digest':
+            item.update(databases=record['databases'], roles=record['roles'])
+            if isinstance(record.get('server_major'), int):
+                item['server_major'] = record['server_major']
+        return item
+
+    def _verify_digests(self, app_manifest, root, work, kind):
+        """After a restore, before the units that use the data start: read each `kind` digest again and compare it with
+        the backup's. Appends to `digest_results`; raises BackupError on a difference (the caller rolls back)."""
+        archived = {item.get('id'): item for item in app_manifest.get('verify_digests') or [] if isinstance(item, dict)}
+        mismatches = []
+        for spec in self.digest_specs(kind):
+            result = {'id': spec['id'], 'type': kind, 'target': digest_target(spec), 'label': spec.get('label') or '',
+                      'match': None, 'before': None, 'after': None, 'differences': None, 'note': None}
+            self.digest_results.append(result)
+            item = archived.get(spec['id'])
+            exclude = spec['exclude'] if kind == 'files-digest' else spec['exclude_tables']
+            if item is None or not isinstance(item.get('entry'), str):
+                result['note'] = '備份沒有這個項目的資料摘要（例如較舊的備份），未比對。'
+                continue
+            if item.get('type') != kind or item.get('target') != digest_target(spec) or item.get('exclude') != exclude:
+                result['note'] = '此設備的核對設定與備份時不同，未比對。'
+                continue
+            before_path = self.entry_path(root, item['entry'])
+            read = digests.read_files_detail if kind == 'files-digest' else digests.read_pg_detail
+            before, before_digest = read(before_path, what=f'備份中的資料摘要 {spec["id"]}')
+            if before_digest != item.get('digest'):
+                raise BackupError('corrupt-archive', f'備份中的資料摘要 {spec["id"]} 與記錄不符。', app=self.app.id)
+            dest = Path(work) / f'{spec["id"]}.txt'
+            if kind == 'files-digest':
+                after = self._capture_files_digest(spec, dest, work)
+            else:
+                names = item.get('databases')
+                if not isinstance(names, list) or not all(isinstance(n, str) and DB_NAME_RE.fullmatch(n) for n in names):
+                    raise BackupError('corrupt-archive', f'備份中的資料摘要 {spec["id"]} 記錄格式不正確。', app=self.app.id)
+                # Exactly the databases the backup read (also for "all"): a missing one fails, one the image created
+                # at its first start that the backup never had is not part of the comparison.
+                after = self._capture_pg_digest(spec, dest, databases=names, roles=bool(item.get('roles')))
+                source = item.get('server_major')
+                if (isinstance(source, int) and not isinstance(source, bool) and source < digests.FLOAT_TEXT_MAJOR
+                        <= after['server_major']):
+                    # Float values print differently from 12 on (review L4/F7): an exact comparison would fail.
+                    result.update(before=before, after=after['summary'],
+                                  note=f'備份來自 PostgreSQL {source}，此設備是 {after["server_major"]}；兩者的浮點數文字格式不同，'
+                                       '這項資料摘要未比對。')
+                    self.log(f'注意：資料摘要 {spec["id"]} 跨越 PostgreSQL 11 與 12 的格式差異，未比對')
+                    continue
+            result.update(before=before, after=after['summary'], match=after['digest'] == before_digest)
+            if result['match']:
+                self.log(f'資料摘要 {spec["id"]} 與備份時一致（{digests.summary_text(kind, before)}）')
+                continue
+            # A difference is read once more: data that is still changing (a writer the catalog does not stop, e.g. a
+            # client of the running database between pg_restore and this read) makes the comparison meaningless, not
+            # failed -- a rollback would meet the same writer and leave the app stopped and masked (lab 2026-11-14,
+            # review H2). Equal reads that differ from the backup are a real difference.
+            again_path = Path(work) / f'{spec["id"]}.again.txt'
+            if kind == 'files-digest':
+                again = self._capture_files_digest(spec, again_path, work)
+            else:
+                again = self._capture_pg_digest(spec, again_path, databases=item['databases'],
+                                                roles=bool(item.get('roles')))
+            if again['digest'] != after['digest']:
+                note = (f'資料摘要 {spec["id"]} 在比對期間仍在變動（有應用設定未停止的寫入者，例如其他容器或排程），無法比對，'
+                        '這一項未比對；請把寫入者加入 writer_units。')
+                result.update(match=None, after=again['summary'], note=note)
+                self.log(f'警告：{note}')
+                if note not in self.warnings:
+                    self.warnings.append(note)
+                continue
+            result['differences'] = digests.diff(kind, before_path, dest)
+            counts = result['differences']
+            sample = counts['samples'][0] if counts['samples'] else None
+            text = (f'{spec["id"]}：遺失 {counts["missing"]}、多出 {counts["extra"]}、不同 {counts["changed"]}'
+                    + (f'（例如 {sample["item"]}：{sample["detail"]}）' if sample else ''))
+            self.log(f'資料摘要不一致：{text}')
+            mismatches.append(text)
+        if mismatches:
+            raise BackupError('job-failed', f'應用「{self.app.name}」還原後的資料與備份時不一致：{"；".join(mismatches)[:600]}',
+                              app=self.app.id)
+
     # ----------------------------------------------------------------- backup
-    def backup(self, staging_dir, *, include_images):
+    def backup(self, staging_dir, *, include_images, keep_stopped=False):
+        """Back up the app into `staging_dir`; returns (manifest app section, [Entry]).
+
+        The writers stop with one `systemctl --user stop` (a cold database whose digest is read stops in a second one,
+        right after its digest); dumps, exports and digests are taken while they are stopped. `keep_stopped` (a
+        pre-restore safety backup): the writers stay stopped for the restore that follows (`kept_stopped`), so the
+        http-json snapshot cannot be confirmed and is not stored -- the digests are exact anyway."""
         app = self.app
         staging = Path(staging_dir)
         staging.mkdir(mode=0o700, parents=True, exist_ok=True)
+        self.timing, self.kept_stopped, self.unstable_digests = {}, [], []
         info = self.probe()
         if not info['deployed']:
             raise BackupError('not-deployed', f'應用「{app.name}」尚未部署在此設備，無法備份。', app=app.id)
@@ -1001,6 +1594,8 @@ class QuadletPostgresAdapter(Adapter):
                 raise BackupError('job-failed', f'找不到應用使用的映像 {ref}。', app=app.id)
             images.append({'ref': ref, **image})
         for pg in app.postgres:
+            if pg['scope'] == 'instance':
+                continue  # every database and every role of the instance is in the backup
             found = self.undeclared(pg)
             if found and found[0]:
                 self.log(f'注意：資料庫執行個體中還有應用設定未宣告的資料庫（{", ".join(found[0][:10])}），不會包含在備份中。')
@@ -1017,30 +1612,56 @@ class QuadletPostgresAdapter(Adapter):
         # A running container that writes into a host directory and is not stopped would make its copy inconsistent
         # (also a SQLite database or a PostgreSQL data directory read while it changes): refused (review M5).
         self._require_unused_dirs(exclude=set(writers), writable_only=True, when='備份')
+        self._require_unused_volumes(exclude=set(writers))
         snapshot = self._snapshot_for_backup()
-        for sub in ('postgres', 'volumes', 'dirs', 'secrets', 'config', 'quadlet', 'images'):
+        cold = [spec for spec in self.digest_specs('postgres-digest') if spec['container']]
+        for spec in cold:
+            if not active.get(spec['unit']):
+                self.log(f'注意：資料庫服務 {spec["unit"]} 未執行，這份備份不含資料摘要 {spec["id"]}。')
+        cold = [spec for spec in cold if active.get(spec['unit'])]
+        cold_units = {spec['unit'] for spec in cold}
+        for sub in ('postgres', 'volumes', 'dirs', 'secrets', 'config', 'quadlet', 'images', 'verify'):
             (staging / sub).mkdir(mode=0o700, exist_ok=True)
 
-        stopped = []
+        stopped, records = [], {}
         self.phase('stop')
         if writers:
             self.writers_hook(list(writers))
+            self.timing['first_stop'] = self.clock()
         started_at = self.clock()
         try:
-            for unit in reversed(writers):
-                # Listed before the stop: a signal while systemd stops it must still restart it (review CR-14).
-                stopped.append(unit)
-                self.log(f'暫停寫入服務 {unit}')
-                self.runner.systemctl('stop', '--', unit, timeout=STOP_TIMEOUT)
+            first = [unit for unit in writers if unit not in cold_units]
+            # Listed before the stop: a signal while systemd stops them must still restart them (review CR-14).
+            stopped.extend(first)
+            self._stop_units(first, label='暫停寫入服務')
+            verify_dir = staging / 'verify'
+            if cold_units:
+                # A cold database is read while the apps that use it are stopped, right before it stops itself: the
+                # files copied next hold that state. It is read twice; a database that changed in between (a client
+                # or a job the catalog does not stop) keeps no digest (review H2, F3).
+                first_read = self._capture_digests(cold, verify_dir, suffix='.first')
+                records.update(self._confirm_digests(cold, first_read, verify_dir, '資料庫在讀取摘要期間有變動'))
+                second = [unit for unit in writers if unit in cold_units]
+                stopped.extend(second)
+                self._stop_units(second, label='暫停寫入服務')
             self.phase('dump')
-            dumps = [self._dump_database(pg, staging) for pg in app.postgres]
+            exported_pg = [spec for spec in self.digest_specs('postgres-digest') if spec['postgres']]
+            # Read before and after the dumps: equal digests prove the dumps in between hold that exact data; a
+            # database something else wrote to meanwhile keeps no digest instead of failing every restore (H2, F3).
+            first_read = self._capture_digests(exported_pg, verify_dir, suffix='.first')
+            dumps = [self._dump_instance(pg, staging) if pg['scope'] == 'instance' else self._dump_database(pg, staging)
+                     for pg in app.postgres]
+            records.update(self._confirm_digests(exported_pg, first_read, verify_dir, '資料庫在匯出期間有變動'))
             self.phase('export')
+            file_specs = self.digest_specs('files-digest')
+            first_read = self._capture_digests(file_specs, verify_dir, suffix='.first')
             volumes = [self._export_volume(v['name'], staging) for v in app.volumes]
             dirs = [self._export_dir(i, item, staging) for i, item in enumerate(app.data_dirs)]
             secrets = [self._read_secret(s['name'], staging) for s in app.secrets]
             configs = [self._read_config(i, c, staging) for i, c in enumerate(app.config_files)]
             for name in app.quadlet_files:
                 _write_private(staging / 'quadlet' / name, quadlets[name])
+            records.update(self._confirm_digests(file_specs, first_read, verify_dir, '檔案在匯出期間有變動'))
         except BaseException as error:
             self._log_command_error(error)
             # The job's active phase stays the one that failed (e.g. dump); moving on to 'start' here made the
@@ -1049,7 +1670,14 @@ class QuadletPostgresAdapter(Adapter):
             if isinstance(error, Exception):  # not on termination signals: the system may be going down
                 self._restart_lost_databases(active, stopped)
             raise
-        self._restart_writers(stopped, started_at, raise_errors=True)
+        if keep_stopped:
+            # Handed over to the restore that follows (CONTRACT section 9): stopped once for both.
+            self.kept_stopped = list(stopped)
+            self.last_downtime = 0.0
+            if stopped:
+                self.log(f'寫入服務 {", ".join(stopped)} 維持停止，由接下來的還原接手')
+        else:
+            self._restart_writers(stopped, started_at, raise_errors=True)
         # Each export is checked the way a restore checks it, once the writers run again: content podman cannot
         # import, or more members than a restore accepts, fails this backup now instead of every restore of it
         # (review findings HD-02, HD-03).
@@ -1057,7 +1685,14 @@ class QuadletPostgresAdapter(Adapter):
             self._check_exported_volume(volume)
         for item in dirs:
             self._check_exported_dir(item)
-        if was_running:
+        if keep_stopped:
+            if snapshot:
+                # Without a digest the rollback compares no data: the preflight says so before the restore starts
+                # (`rollback-unverified`, review F16); the downtime of a second stop is not traded for it.
+                self.log('應用維持停止，無法再次確認資料核對快照；這份還原前備份不含資料核對快照'
+                         + ('，回復時以資料摘要核對。' if records else '，還原失敗而回復時只以健康檢查確認，不比對資料。'))
+            snapshot = {}
+        elif was_running:
             self._log_health_after_backup()
             snapshot = self._confirm_snapshot(snapshot)
         else:
@@ -1086,6 +1721,9 @@ class QuadletPostgresAdapter(Adapter):
             'verify_snapshot': snapshot,
         }
         for dump in dumps:
+            if dump.get('scope') == 'instance':
+                manifest['postgres'].append(self._instance_manifest(dump, entry))
+                continue
             manifest['postgres'].append({'id': dump['id'], 'database': dump['database'],
                                          'server_version': dump['server_version'], 'major': dump['major'],
                                          'entry': entry('postgres', f'{dump["id"]}.dump', dump['file'])})
@@ -1103,6 +1741,12 @@ class QuadletPostgresAdapter(Adapter):
                                              'entry': entry('config', str(i), config['file'])})
         for name in app.quadlet_files:
             manifest['quadlet_files'].append({'name': name, 'entry': entry('quadlet', name, staging / 'quadlet' / name)})
+        if records:
+            # Only apps with digest checks carry the key (like data_dirs): other manifests keep their shape.
+            manifest['verify_digests'] = [
+                self._digest_manifest(spec, records[spec['id']],
+                                      entry('verify', f'{spec["id"]}.txt', records[spec['id']]['file']))
+                for spec in self.digest_specs() if spec['id'] in records]
         for i, image in enumerate(images):
             item = {'ref': image['ref'], 'id': image['id'], 'digest': image['digest'], 'arch': image['arch']}
             if image.get('file'):
@@ -1111,7 +1755,7 @@ class QuadletPostgresAdapter(Adapter):
         return manifest, entries
 
     def _snapshot_for_backup(self):
-        if not self.app.verify:
+        if not self.http_specs():
             return {}
         try:
             return self.verify_snapshot()
@@ -1150,27 +1794,14 @@ class QuadletPostgresAdapter(Adapter):
     def _restart_writers(self, stopped, started_at, *, raise_errors, report_phase=True):
         if report_phase:
             self.phase('start')
-        failed, interrupted = [], None
-        for unit in [u for u in self.app.units if u in stopped]:
-            for attempt in (1, 2):
-                try:
-                    self.runner.systemctl('start', '--', unit, timeout=START_TIMEOUT)
-                    self.log(f'已恢復服務 {unit}')
-                    break
-                except BackupError as error:
-                    self._log_command_error(error)
-                    if attempt == 2:
-                        failed.append(unit)
-                        self.log(f'無法重新啟動服務 {unit}')
-                    else:
-                        self.sleep(2)
-                except BaseException as exc:  # termination signal: still start the remaining writers (CR-14)
-                    interrupted = interrupted or exc
-                    failed.append(unit)
-                    break
+        # Side by side where the units' dependencies allow (start_groups); a unit that does not start is tried once
+        # more on its own, and a termination signal still starts the remaining writers (review CR-14).
+        failed, interrupted = self._start_units(stopped, attempts=2, after='已恢復服務', failed_note='無法重新啟動服務')
         # Downtime caused by the backup: none when no writer had to be stopped (it was not running).
-        self.last_downtime = max(0.0, self.clock() - started_at) if stopped else 0.0
+        now = self.clock()
+        self.last_downtime = max(0.0, now - started_at) if stopped else 0.0
         if stopped:
+            self.timing['started'] = now
             self.writers_hook(failed)
         if interrupted is not None:
             raise interrupted
@@ -1225,8 +1856,32 @@ class QuadletPostgresAdapter(Adapter):
                 self.log(f'警告：{check["message"]}')
 
     def _dump_database(self, pg, staging):
-        number = self.psql_scalar(pg, 'SHOW server_version_num')
-        version = self.psql_scalar(pg, 'SHOW server_version').split(' ')[0][:32]
+        version, major = self._server_version(pg, pg['database'])
+        dest = staging / 'postgres' / f'{pg["id"]}.dump'
+        self.log(f'匯出資料庫 {pg["id"]}（{pg["database"]}，PostgreSQL {version}）')
+        self._pg_dump(pg, pg['database'], dest, staging)
+        return {'id': pg['id'], 'database': pg['database'], 'server_version': version, 'major': major, 'file': dest}
+
+    def _pg_dump(self, pg, database, dest, staging):
+        """`pg_dump -Fc` of one database into `dest`, then a full read of it."""
+        with _create(dest) as handle:
+            self.runner.podman('exec', pg['container'], 'pg_dump', '-w', '-U', pg['user'], '-d', database, '-Fc',
+                               stdout=handle, timeout=DUMP_TIMEOUT, max_output=self._output_budget(staging))
+            handle.flush()
+            os.fsync(handle.fileno())
+        if dest.stat().st_size == 0:
+            raise BackupError('job-failed', f'資料庫 {pg["id"]}（{database}）匯出結果為空。', app=self.app.id)
+        # A full read (SQL script to /dev/null) decompresses every data block. `pg_restore --list` only reads
+        # the table of contents and accepted a dump cut in half with exit status 0 (lab H3): the backup was
+        # listed as verified and its restore failed.
+        with open(dest, 'rb') as handle:
+            self.runner.podman('exec', '-i', pg['container'], 'pg_restore', '-f', '/dev/null', input=handle,
+                               stdout=DEVNULL, timeout=DUMP_TIMEOUT)
+        self.log(f'資料庫 {pg["id"]}（{database}）匯出完成並通過完整讀取檢查（{_human(dest.stat().st_size)}）')
+
+    def _server_version(self, pg, database):
+        number = self.psql_scalar(pg, 'SHOW server_version_num', database=database)
+        version = self.psql_scalar(pg, 'SHOW server_version', database=database).split(' ')[0][:32]
         try:
             major = pg_major(number)
         except ValueError:
@@ -1234,23 +1889,130 @@ class QuadletPostgresAdapter(Adapter):
         if unsupported_major(major):
             raise BackupError('incompatible', f'資料庫 {pg["id"]} 是 PostgreSQL {version}；PostgreSQL 10 以前的版本不受支援。',
                               app=self.app.id)
-        dest = staging / 'postgres' / f'{pg["id"]}.dump'
-        self.log(f'匯出資料庫 {pg["id"]}（{pg["database"]}，PostgreSQL {version}）')
-        with _create(dest) as handle:
-            self.runner.podman('exec', pg['container'], 'pg_dump', '-w', '-U', pg['user'], '-d', pg['database'], '-Fc',
-                               stdout=handle, timeout=DUMP_TIMEOUT, max_output=self._output_budget(staging))
+        return version, major
+
+    def _dump_instance(self, pg, staging):
+        """Instance mode (CONTRACT section 9): the roles with their password hashes (`pg_dumpall --globals-only
+        --no-tablespaces`, checked like a restore checks it) and every database that accepts connections
+        (`pg_dump -Fc` each, while the writers are stopped and the database keeps running)."""
+        what = f'資料庫 {pg["id"]}'
+        container, user = pg['container'], pg['user']
+        connect = self._connect_db(container, user)
+        version, major = self._server_version(pg, connect)
+        if self._psql_json(container, user, connect, f'SELECT json_build_array(({SUPERUSER_SQL}))', what) != [True]:
+            raise BackupError('incompatible', f'資料庫 {pg["id"]} 設定為備份整個執行個體，但帳號 {user} 不是資料庫超級使用者'
+                                              '（讀取角色與密碼需要）。', app=self.app.id)
+        bootstrap = self._bootstrap_user(container, user, connect, what)
+        if bootstrap != user:
+            raise BackupError('incompatible', self._bootstrap_message(pg, bootstrap), app=self.app.id)
+        rows = self._psql_json(container, user, connect, DATABASES_JSON_SQL, what)
+        if not isinstance(rows, list) or len(rows) > 1000 or not all(isinstance(row, dict) for row in rows):
+            raise digests.DigestError(f'{what}的資料庫清單格式不正確。')
+        databases = []
+        for row in rows:
+            name, raw = row.get('name'), row.get('row') if isinstance(row.get('row'), dict) else {}
+            if not isinstance(name, str):
+                raise digests.DigestError(f'{what}的資料庫清單格式不正確。')
+            if name in ('template0', 'template1'):
+                continue  # created by initdb on every cluster
+            if row.get('connect') is not True:
+                # pg_dump cannot read it, and an in-place restore replaces the whole cluster: it would be lost for good,
+                # the safety backup included (review F1).
+                raise BackupError('incompatible', f'資料庫 {name[:63]} 不接受連線（ALLOW_CONNECTIONS false），無法備份整個執行個體：'
+                                                  '它無法匯出，原位還原後會永久遺失。請先允許連線（ALTER DATABASE … '
+                                                  'ALLOW_CONNECTIONS true），或改用冷備份模式。', app=self.app.id)
+            if not DB_NAME_RE.fullmatch(name):
+                raise BackupError('incompatible', f'資料庫名稱「{name[:63]}」含有不支援的字元（只支援英數字與 _ . $ -），'
+                                                  '無法備份整個執行個體。', app=self.app.id)
+            owner, encoding = row.get('owner'), row.get('encoding')
+            provider = {'c': 'libc', 'i': 'icu', 'b': 'builtin'}.get(raw.get('datlocprovider') or 'c')
+            locales = [raw.get('datcollate') or '', raw.get('datctype') or '',
+                       raw.get('daticulocale') or raw.get('datlocale') or '']
+            if (not isinstance(owner, str) or not 0 < len(owner) <= PG_ROLE_NAME_MAX or _unprintable(owner)
+                    or not isinstance(encoding, str) or not ENCODING_RE.fullmatch(encoding) or provider is None
+                    or not all(isinstance(value, str) and LOCALE_RE.fullmatch(value) for value in locales)):
+                raise BackupError('incompatible', f'資料庫 {name} 的擁有者、編碼或語系設定不受支援，無法備份整個執行個體。',
+                                  app=self.app.id)
+            extensions = self._psql_json(container, user, name, EXTENSIONS_SQL, what)
+            if not isinstance(extensions, list) or not all(
+                    isinstance(item, list) and len(item) == 2 and all(isinstance(v, str) and 0 < len(v) <= 63 for v in item)
+                    for item in extensions):
+                raise digests.DigestError(f'{what}的擴充功能清單格式不正確。')
+            # A template database (e.g. one an image's init script made) is kept too: pg_restore --create marks it
+            # a template again (review F1).
+            databases.append({'name': name, 'owner': owner, 'encoding': encoding, 'collate': locales[0],
+                              'ctype': locales[1], 'locale_provider': provider, 'icu_locale': locales[2] or None,
+                              'template': row.get('template') is True,
+                              'extensions': [{'name': n, 'version': v} for n, v in extensions]})
+        if not databases or len(databases) > 64:
+            raise BackupError('limit-exceeded', f'{what}有 {len(databases)} 個資料庫；整個執行個體的備份支援 1 到 64 個。',
+                              app=self.app.id)
+        roles = self._psql_json(container, user, connect, ROLE_FLAGS_SQL, what)
+        if not isinstance(roles, list) or len(roles) > 1000 or not all(
+                isinstance(r, list) and len(r) == 3 and isinstance(r[0], str) and 0 < len(r[0]) <= PG_ROLE_NAME_MAX
+                and not _unprintable(r[0]) and isinstance(r[1], bool) and isinstance(r[2], bool) for r in roles):
+            raise digests.DigestError(f'{what}的角色清單格式不正確。')
+        self.log(f'匯出資料庫 {pg["id"]} 的整個執行個體（PostgreSQL {version}，{len(databases)} 個資料庫、'
+                 f'{len(roles)} 個角色）')
+        customized = self._template1_objects(container, user)
+        if customized:
+            self.log(f'注意：template1 中有 {customized} 個自訂的資料表、函式或擴充功能；整個執行個體的還原以映像新建的 '
+                     'template1 為準，不會保留它們。')
+        globals_file = staging / 'postgres' / f'{pg["id"]}.globals.sql'
+        with _create(globals_file) as handle:
+            self.runner.podman('exec', container, 'pg_dumpall', '-w', '-U', user, '-l', connect, '--globals-only',
+                               '--no-tablespaces', stdout=handle, timeout=DUMP_TIMEOUT, max_output=GLOBALS_MAX)
             handle.flush()
             os.fsync(handle.fileno())
-        if dest.stat().st_size == 0:
-            raise BackupError('job-failed', f'資料庫 {pg["id"]} 匯出結果為空。', app=self.app.id)
-        # A full read (SQL script to /dev/null) decompresses every data block. `pg_restore --list` only reads
-        # the table of contents and accepted a dump cut in half with exit status 0 (lab H3): the backup was
-        # listed as verified and its restore failed.
-        with open(dest, 'rb') as handle:
-            self.runner.podman('exec', '-i', pg['container'], 'pg_restore', '-f', '/dev/null', input=handle,
-                               stdout=DEVNULL, timeout=DUMP_TIMEOUT)
-        self.log(f'資料庫 {pg["id"]} 匯出完成並通過完整讀取檢查（{_human(dest.stat().st_size)}）')
-        return {'id': pg['id'], 'database': pg['database'], 'server_version': version, 'major': major, 'file': dest}
+        # Checked now the way the restore checks it: a backup whose roles a restore would refuse is not made.
+        globals_statements(globals_file.read_bytes(), session_user=user)
+        for index, item in enumerate(databases):
+            item['file'] = staging / 'postgres' / f'{pg["id"]}.db{index}.dump'
+            self._pg_dump(pg, item['name'], item['file'], staging)
+        return {'id': pg['id'], 'scope': 'instance', 'database': connect, 'server_version': version, 'major': major,
+                'globals': globals_file, 'databases': databases, 'bootstrap_user': bootstrap,
+                'roles': [{'name': r[0], 'superuser': r[1], 'login': r[2]} for r in roles]}
+
+    def _bootstrap_user(self, container, user, connect, what):
+        answer = self._psql_json(container, user, connect, BOOTSTRAP_SQL, what)
+        if (not isinstance(answer, list) or len(answer) != 2 or not all(isinstance(v, str) for v in answer)
+                or not 0 < len(answer[0]) <= PG_ROLE_NAME_MAX or _unprintable(answer[0])):
+            raise digests.DigestError(f'{what}的初始超級使用者格式不正確。')
+        return answer[0]
+
+    @staticmethod
+    def _bootstrap_message(pg, bootstrap):
+        return (f'資料庫 {pg["id"]} 設定以帳號 {pg["user"]} 備份整個執行個體，但這個執行個體的初始超級使用者是 {bootstrap[:63]}；'
+                '還原時映像新建的執行個體只有初始超級使用者（映像的 POSTGRES_USER），以其他帳號將無法還原。'
+                f'請在應用設定中把 user 改為 {bootstrap[:63]}。')
+
+    def _template1_objects(self, container, user):
+        """User objects in template1 (an instance restore keeps the image's own template1); 0 when unknown."""
+        try:
+            value = self._psql_json(container, user, 'template1', f'SELECT json_build_array(({MAINTENANCE_OBJECTS_SQL}))',
+                                    'template1')
+            return int(value[0]) if isinstance(value, list) and value and isinstance(value[0], int) else 0
+        except (BackupError, ValueError, TypeError):
+            return 0
+
+    def _instance_catalog(self, container, user, connect, what):
+        """[(name, template, accepts connections)] of every database besides template0/template1."""
+        rows = self._psql_json(container, user, connect, INSTANCE_CATALOG_SQL, what)
+        if not isinstance(rows, list) or len(rows) > 10000 or not all(
+                isinstance(row, list) and len(row) == 3 and isinstance(row[0], str) and isinstance(row[1], bool)
+                and isinstance(row[2], bool) for row in rows):
+            raise digests.DigestError(f'{what}的資料庫清單格式不正確。')
+        return [(row[0], row[1], row[2]) for row in rows]
+
+    def _instance_manifest(self, dump, entry):
+        return {'id': dump['id'], 'scope': 'instance', 'database': dump['database'],
+                'server_version': dump['server_version'], 'major': dump['major'],
+                'bootstrap_user': dump['bootstrap_user'],
+                'entry': entry('postgres', f'{dump["id"]}.globals.sql', dump['globals']),
+                'databases': [{**{key: value for key, value in item.items() if key != 'file'},
+                               'entry': entry('postgres', f'{dump["id"]}.db{index}.dump', item['file'])}
+                              for index, item in enumerate(dump['databases'])],
+                'roles': dump['roles']}
 
     def _export_volume(self, name, staging):
         dest = staging / 'volumes' / f'{name}.tar'
@@ -1371,6 +2133,13 @@ class QuadletPostgresAdapter(Adapter):
             checks.append({'id': f'{app.id}/{check_id}{suffix}', 'status': status, 'message': message})
 
         add('owner', 'ok', f'將以此設備帳號 {self.runner.owner}（UID {self.runner.uid}）還原。')
+        archived_owner = app_manifest.get('owner') if isinstance(app_manifest.get('owner'), dict) else {}
+        source_owner = archived_owner.get('name')
+        if isinstance(source_owner, str) and source_owner != self.runner.owner:
+            # An entry re-owned to another account, or a move between accounts: the backup's data, secrets and config
+            # files will belong to this account (review M3).
+            add('owner-changed', 'warn', f'這份備份來自帳號 {source_owner[:32]} 的應用；還原後它的資料、應用機密與設定檔'
+                                         f'會屬於此設備的帳號 {self.runner.owner}。請確認這是你要的（例如搬到另一個帳號）。')
         if not self.runtime_ready():
             add('runtime', 'fail', f'帳號 {self.runner.owner} 的使用者服務管理器未啟動，請先啟用 linger。')
         if app_manifest.get('adapter') != self.name:
@@ -1386,6 +2155,16 @@ class QuadletPostgresAdapter(Adapter):
             add('items', 'ok', '備份包含此設備設定需要的所有資料、應用機密與設定檔。')
         if extra:
             add('extra', 'warn', f'備份中有此設備未設定的項目，將略過：{", ".join(extra)}。')
+        for pg in app.postgres:
+            item = _found['postgres'].get(pg['id'])
+            if isinstance(item, dict) and item.get('scope', 'database') != pg['scope']:
+                add('postgres-scope', 'fail', f'備份中的資料庫 {pg["id"]} 是'
+                                              f'{"整個執行個體" if item.get("scope") == "instance" else "單一資料庫"}，'
+                                              f'此設備設定為{"整個執行個體" if pg["scope"] == "instance" else "單一資料庫"}；'
+                                              '請以相同的設定還原。')
+            elif pg['scope'] == 'instance' and mode == 'fresh':
+                self._preflight_instance(pg, item, add, running=False)
+        self._preflight_digests(app_manifest, add)
 
         sources = None
         if mode == 'fresh':
@@ -1414,6 +2193,10 @@ class QuadletPostgresAdapter(Adapter):
                     add('database-down', 'warn', f'資料庫服務 {", ".join(down)} 目前未執行；建立還原前備份時會先嘗試啟動它，'
                                                  '並確認執行個體中沒有應用設定未宣告的資料庫。')
                 for pg in app.postgres:
+                    if pg['scope'] == 'instance':
+                        self._preflight_instance(pg, _found['postgres'].get(pg['id']), add,
+                                                 running=pg['unit'] not in down)
+                        continue
                     if pg['unit'] in down:
                         continue
                     found = self.undeclared(pg)
@@ -1436,6 +2219,12 @@ class QuadletPostgresAdapter(Adapter):
                         add('maintenance-db', 'warn', f'資料庫執行個體的 postgres 資料庫中有 {objects} 個資料表、函式或擴充功能'
                                                       '（例如排程工作）；原位還原會重建整個資料庫資料卷，這些內容不會保留。')
             add('safety', 'ok', '還原前會先建立並驗證此應用的還原前備份；失敗時會自動回復。')
+            if self.http_specs() and not self.digest_specs():
+                # The safety backup keeps the units stopped for the restore, so its http-json snapshot cannot be
+                # confirmed and is not stored: a rollback is then checked by the health checks only (review F16).
+                add('rollback-unverified', 'warn', '這個應用沒有資料摘要（postgres-digest／files-digest）：還原失敗而自動回復時，'
+                                                   '只以健康檢查確認回復結果，不比對資料（還原前備份讓服務維持停止交給還原，無法保存'
+                                                   '應用回報的核對值）。需要回復時也比對資料，請在應用設定加入資料摘要。')
 
         if self.runtime_ready():
             self._preflight_dirs(mode, add)
@@ -1452,6 +2241,77 @@ class QuadletPostgresAdapter(Adapter):
                 add('dir-ids', 'fail', error.message)
         self._preflight_space(app_manifest, entry_sizes, add, mode=mode)
         return checks
+
+    def _preflight_instance(self, pg, item, add, *, running):
+        """Instance mode: the restore's own superuser must stay one, the image must have every extension the backup
+        uses, and databases that exist now but not in the backup are named (they go; the safety backup keeps them)."""
+        if not isinstance(item, dict) or item.get('scope') != 'instance':
+            return
+        archived = [db.get('name') for db in item.get('databases') or [] if isinstance(db, dict)
+                    and isinstance(db.get('name'), str)]
+        roles = {role.get('name'): role for role in item.get('roles') or [] if isinstance(role, dict)}
+        role = roles.get(pg['user'])
+        if role is not None and not (role.get('superuser') is True and role.get('login') is True):
+            add('roles', 'fail', f'備份中的資料庫角色 {pg["user"]} 不是可登入的超級使用者，無法以它還原整個資料庫執行個體。')
+        bootstrap = item.get('bootstrap_user')
+        if isinstance(bootstrap, str) and bootstrap != pg['user']:
+            add('bootstrap', 'fail', f'備份時執行個體的初始超級使用者是 {bootstrap[:63]}，此設備的應用設定以 {pg["user"]} 還原；'
+                                     '映像新建的執行個體只有初始超級使用者，請先把應用設定的 user 改成相同的帳號。')
+        add('instance', 'ok', f'將還原資料庫 {pg["id"]} 的整個執行個體：{len(archived)} 個資料庫（'
+                              f'{"、".join(name[:63] for name in archived[:6])}{"…" if len(archived) > 6 else ""}）與 '
+                              f'{len(roles)} 個角色（含密碼）；{pg["user"]} 由此設備的映像建立，只更新它的屬性與密碼。')
+        needed = sorted({ext.get('name') for db in item.get('databases') or [] if isinstance(db, dict)
+                         for ext in db.get('extensions') or [] if isinstance(ext, dict) and isinstance(ext.get('name'), str)})
+        if not running:
+            if needed:
+                add('extensions', 'warn', f'還原時會在建立新的執行個體後確認映像具備擴充功能 {", ".join(needed[:10])}；'
+                                          '缺少時會停止並自動回復。')
+            return
+        what = f'資料庫 {pg["id"]}'
+        try:
+            connect = self._connect_db(pg['container'], pg['user'])
+            current = self._instance_catalog(pg['container'], pg['user'], connect, what)
+            available = self._psql_json(pg['container'], pg['user'], connect, AVAILABLE_EXTENSIONS_SQL, what)
+            bootstrap_now = self._bootstrap_user(pg['container'], pg['user'], connect, what)
+        except BackupError as error:
+            add('instance-current', 'warn', f'無法讀取目前的資料庫執行個體（{error.message.rstrip("。")}）；還原時會再確認擴充功能。')
+            return
+        if bootstrap_now != pg['user']:
+            add('bootstrap-current', 'fail', self._bootstrap_message(pg, bootstrap_now))
+        closed = [name for name, _template, connects in current if not connects]
+        if closed:
+            # pg_dump cannot read them: neither this backup nor the safety backup has them (review F1).
+            add('databases-closed', 'fail', f'目前的執行個體中有不接受連線的資料庫：{"、".join(closed[:10])}；還原前備份無法保留它們，'
+                                            '原位還原會讓它們永久遺失。請先允許連線（ALTER DATABASE … ALLOW_CONNECTIONS true）'
+                                            '或移除它們後再還原。')
+        gone = [name for name, _template, connects in current if connects and name not in archived]
+        if gone:
+            add('databases', 'warn', f'目前的執行個體中有備份時沒有的資料庫：{"、".join(gone[:10])}；還原後會被移除'
+                                     '（還原前備份會保留它們）。')
+        customized = self._template1_objects(pg['container'], pg['user'])
+        if customized:
+            add('template1', 'warn', f'目前執行個體的 template1 中有 {customized} 個自訂的資料表、函式或擴充功能；還原後以映像新建的 '
+                                     'template1 為準，這些不會保留。')
+        missing = [name for name in needed if name not in (available if isinstance(available, list) else [])]
+        if missing:
+            add('extensions', 'fail', f'此設備的資料庫映像沒有備份使用的擴充功能：{", ".join(missing[:10])}；請改用含有'
+                                      '這些擴充功能的映像後再還原。')
+        elif needed:
+            add('extensions', 'ok', f'資料庫映像具備備份使用的擴充功能（{", ".join(needed[:10])}）。')
+
+    def _preflight_digests(self, app_manifest, add):
+        """Which data digests the restore will compare (exactly, before the app starts)."""
+        specs = self.digest_specs()
+        if not specs:
+            return
+        archived = {item.get('id'): item for item in app_manifest.get('verify_digests') or [] if isinstance(item, dict)}
+        compared = [spec['id'] for spec in specs if isinstance(archived.get(spec['id']), dict)
+                    and archived[spec['id']].get('target') == digest_target(spec)]
+        skipped = [spec['id'] for spec in specs if spec['id'] not in compared]
+        if compared:
+            add('digests', 'ok', f'還原後、應用啟動前會核對資料摘要：{", ".join(compared)}；不一致時會自動回復。')
+        if skipped:
+            add('digests-missing', 'warn', f'備份沒有資料摘要 {", ".join(skipped)}（或核對設定已變更），這些項目不會比對。')
 
     def _preflight_dirs(self, mode, add):
         """Target state of every host directory: in place it is replaced (a missing one is created), fresh it must be
@@ -1679,6 +2539,46 @@ class QuadletPostgresAdapter(Adapter):
         else:
             add('space', 'ok', f'應用資料所在磁碟空間足夠（可用 {_human(free)}）。')
 
+    def stage_dirs(self, app_manifest, extracted_dir, *, mode):
+        """Write every host directory of the archive to its `<dir>.woowbk-new-<job>` sibling before anything stops
+        (before the pre-restore safety backup; CONTRACT section 9): nothing that exists changes, and restore() then
+        only swaps them in while the units are stopped. After a failure before the restore's first destructive step
+        the caller removes them again (discard_dirs)."""
+        app = self.app
+        if not app.data_dirs:
+            return
+        found, missing, _extra = self.match_items(app_manifest)
+        if missing:
+            raise BackupError('incompatible', f'備份缺少此設備設定需要的項目：{", ".join(missing)}。', app=app.id)
+        root = Path(extracted_dir)
+        paths = {item['path']: self.entry_path(root, found['dirs'][item['path']]['entry']) for item in app.data_dirs}
+        for rel, path in paths.items():  # same rules as restore(), with the target owner's ID map ("capacity")
+            self._check_dir_entry(rel, path)
+        self._check_dir_targets(mode)
+        for rel, path in paths.items():
+            self._unpack_dir(rel, path, rollback=False)
+            self._staged.add(rel)
+
+    def _instance_item(self, pg, item, root):
+        """The archive's instance-mode item for `pg`, checked: [(database dict, dump path)] and the globals path."""
+        if not isinstance(item, dict) or item.get('scope') != 'instance':
+            raise BackupError('incompatible', f'備份中的資料庫 {pg["id"]} 只有單一資料庫，此設備設定為還原整個執行個體；'
+                                              '請以相同的設定還原。', app=self.app.id)
+        databases = item.get('databases')
+        if not isinstance(databases, list) or not 0 < len(databases) <= 64:
+            raise BackupError('corrupt-archive', f'備份中的資料庫 {pg["id"]} 記錄格式不正確。', app=self.app.id)
+        result, seen = [], set()
+        for db in databases:
+            if (not isinstance(db, dict) or not isinstance(db.get('name'), str) or not DB_NAME_RE.fullmatch(db['name'])
+                    or db['name'] in seen or db['name'] in ('template0', 'template1')
+                    or not isinstance(db.get('template', False), bool) or not isinstance(db.get('extensions', []), list)
+                    or not all(isinstance(ext, dict) and isinstance(ext.get('name'), str) and 0 < len(ext['name']) <= 63
+                               for ext in db.get('extensions', []))):
+                raise BackupError('corrupt-archive', f'備份中的資料庫 {pg["id"]} 記錄格式不正確。', app=self.app.id)
+            seen.add(db['name'])
+            result.append((db, self.entry_path(root, db.get('entry'))))
+        return result, self.entry_path(root, item.get('entry'))
+
     def restore(self, app_manifest, extracted_dir, *, mode, rollback=False, unchecked_databases_ok=False,
                 replaced_dirs=()):
         """Restore one app from an extracted archive. `rollback=True` (restoring the pre-restore safety backup
@@ -1686,15 +2586,27 @@ class QuadletPostgresAdapter(Adapter):
         move back from the failed restore's `-old-` copies (`replaced_dirs`: the directories it swapped, extracted
         from the safety backup when that copy is gone).
         `unchecked_databases_ok`: the restore runs without a safety backup that the user accepted (or it restores a
-        safety backup), so an instance that cannot be queried at all may be rebuilt (review finding HD-06)."""
+        safety backup), so an instance that cannot be queried at all may be rebuilt (review finding HD-06).
+
+        Order (CONTRACT section 9): every unit stops with one `systemctl --user stop` (units a safety backup already
+        stopped stay stopped), the data is put in place (directories stage_dirs() wrote are only swapped), the
+        files digests are compared before anything starts, then the database units start alone (pg_restore, the
+        SQL digests), and only then the other units, in groups where their dependencies allow."""
         app = self.app
         root = Path(extracted_dir)
         self.destructive_started = False
+        self.digest_results = []
         found, missing, _extra = self.match_items(app_manifest)
         if missing:
             raise BackupError('incompatible', f'備份缺少此設備設定需要的項目：{", ".join(missing)}。', app=app.id)
         files = {kind: {key: self.entry_path(root, item['entry']) for key, item in items.items()}
                  for kind, items in found.items()}
+        instances = {pg['id']: self._instance_item(pg, found['postgres'][pg['id']], root)
+                     for pg in app.postgres if pg['scope'] == 'instance'}
+        for pg in app.postgres:
+            if pg['scope'] == 'database' and found['postgres'][pg['id']].get('scope', 'database') != 'database':
+                raise BackupError('incompatible', f'備份中的資料庫 {pg["id"]} 是整個執行個體，此設備設定為單一資料庫；'
+                                                  '請以相同的設定還原。', app=app.id)
         templates = self.read_templates() if mode == 'fresh' else None
         sources = templates if mode == 'fresh' else self._read_owner_quadlets()
         needed = self.container_images(sources)
@@ -1708,7 +2620,7 @@ class QuadletPostgresAdapter(Adapter):
         else:
             dir_plan = {item['path']: 'extract' for item in app.data_dirs}
         for rel, how in dir_plan.items():  # same rules, with the target owner's ID map ("capacity")
-            if how == 'extract':
+            if how == 'extract' and rel not in self._staged:
                 self._check_dir_entry(rel, files['dirs'][rel])
         self._dirs_tracked = True
         self._check_dir_targets(mode)
@@ -1725,24 +2637,30 @@ class QuadletPostgresAdapter(Adapter):
 
         self.phase('stop')
         self.destructive_started = True
+        work = Path(extracted_dir).parent / f'digests-{app.id}-{self._dir_token(rollback)}'
         try:
             if mode == 'inplace':
-                for unit in reversed(app.units):
-                    self.log(f'停止服務 {unit}')
-                    self.runner.systemctl('stop', '--', unit, timeout=STOP_TIMEOUT)
+                self.timing.setdefault('first_stop', self.clock())
+                if not rollback:
+                    # Listed first: should the job die before the mask, the recovery starts them again (nothing has
+                    # changed yet). A rollback finds them stopped and masked already.
+                    self.writers_hook(list(app.units))
+                self._stop_units(app.units, label='停止服務')
             else:
                 for name in app.quadlet_files:
                     self.runner.write_file(self.qrel(name), templates[name], 0o644)
                 self.log('已安裝部署範本')
                 self.runner.systemctl('daemon-reload', timeout=SHORT_TIMEOUT)
             self._mask_units()
+            if mode == 'inplace' and not rollback:
+                self.writers_hook([])  # masked: from here on the restore (or its rollback) owns the stopped state
             self._reset_aux_units()
 
             self.phase('restore')
-            # Host directories are written next to the current ones first: nothing that exists changes, and a failure
-            # here leaves the database volume and everything else as it was (review M3).
+            # Host directories are written next to the current ones first (stage_dirs() usually did so before the
+            # stop): nothing that exists changes, and a failure here leaves everything else as it was (review M3).
             for rel, how in dir_plan.items():
-                if how == 'extract':
+                if how == 'extract' and rel not in self._staged:
                     self._unpack_dir(rel, files['dirs'][rel], rollback=rollback)
             for secret in app.secrets:
                 self._recreate_secret(secret['name'], files['secrets'][secret['name']])
@@ -1752,7 +2670,9 @@ class QuadletPostgresAdapter(Adapter):
                 self.log(f'已寫入設定檔 ~/{config["path"]}')
             for volume in app.volumes:
                 self._recreate_volume(volume['name'], files['volumes'][volume['name']])
+            removed_at = {}
             for pg in app.postgres:
+                removed_at[pg['id']] = self.wall()  # an instance restore checks that the cluster is newer (F4)
                 self.runner.podman('volume', 'rm', '-f', pg['data_volume'], timeout=STOP_TIMEOUT)
             if app.data_dirs:
                 # Right before the swap: a container still running with a directory mounted would keep using (and
@@ -1765,6 +2685,10 @@ class QuadletPostgresAdapter(Adapter):
                     self._revert_dir(rel)
                 else:
                     self.log(f'主機資料夾 ~/{rel} 沒有被失敗的還原變更，保留原內容')
+            if self.digest_specs():
+                work.mkdir(mode=0o700, parents=True, exist_ok=True)
+            # Every file is in place and nothing that uses it runs yet: the comparison is exact.
+            self._verify_digests(app_manifest, root, work, 'files-digest')
 
             self.phase('start')
             started = []
@@ -1774,19 +2698,101 @@ class QuadletPostgresAdapter(Adapter):
                     started.append(pg['unit'])
                 self._wait_for_postgres(pg)
                 self._check_target_major(pg, app_manifest)
-                self._ensure_database(pg)
-                self._restore_database(pg, files['postgres'][pg['id']])
+                if pg['scope'] == 'instance':
+                    self._restore_instance(pg, *instances[pg['id']], removed_at=removed_at.get(pg['id']))
+                else:
+                    self._ensure_database(pg)
+                    self._restore_database(pg, files['postgres'][pg['id']])
+            for spec in self.digest_specs('postgres-digest'):
+                # A cold database starts alone (its data is a volume or a host directory) so its digest is read before
+                # the apps that use it start.
+                if spec['container'] and spec['unit'] not in started:
+                    self.runner.systemctl('unmask', '--', spec['unit'], timeout=SHORT_TIMEOUT)
+                    self._start(spec['unit'])
+                    started.append(spec['unit'])
+                    self._wait_for_postgres({'id': spec['id'], 'container': spec['container'], 'user': spec['user'],
+                                             'database': 'postgres'})
+            self._verify_digests(app_manifest, root, work, 'postgres-digest')
             # The data import is complete: from now on the app may hold new data (its units start, also at boot), so
             # a recovery must never remove it as an unfinished fresh deployment (review finding HD-04).
             self.imported_hook()
             self._unmask_units()
-            for unit in app.units:
-                if unit not in started:
-                    self._start(unit)
-                    started.append(unit)
+            failed, interrupted = self._start_units([unit for unit in app.units if unit not in started],
+                                                    before='啟動服務', keep_going=False)
+            if interrupted is not None:
+                raise interrupted
+            if failed:
+                raise BackupError('job-failed', f'無法啟動服務：{", ".join(failed)}。', app=app.id, units=failed)
+            self.timing['started'] = self.clock()
         except BackupError as error:
             self._log_command_error(error)
             raise
+
+    def _restore_instance(self, pg, databases, globals_path, *, removed_at=None):
+        """Instance mode into the fresh cluster the image just initialized (CONTRACT section 9): the cluster must be
+        newer than the removal of the data volume, extension preflight, the roles (the bootstrap superuser reconciled,
+        never recreated; it must stay a superuser that can log in), then every database of the backup created as it
+        was (`pg_restore --create`: owner, encoding, locale, settings, grants, comment, template flag) and restored
+        with its owners and privileges. A database of the backup that the image already created (POSTGRES_DB, an init
+        script's template, `postgres` itself) is dropped first, whatever its init scripts put into it: the cluster is
+        new (review F4). Everything runs from `template1`, which no backup holds."""
+        container, user = pg['container'], pg['user']
+        what = f'資料庫 {pg["id"]}'
+        maint = INSTANCE_MAINTENANCE_DB
+        self._require_new_cluster(pg, maint, removed_at, what)
+        available = self._psql_json(container, user, maint, AVAILABLE_EXTENSIONS_SQL, what)
+        if not isinstance(available, list):
+            raise digests.DigestError(f'{what}的擴充功能清單格式不正確。')
+        missing = sorted({ext['name'] for db, _path in databases for ext in db.get('extensions', [])} - set(available))
+        if missing:
+            raise BackupError('incompatible', f'此設備的資料庫映像沒有備份使用的擴充功能：{", ".join(missing[:10])}；'
+                                              '請改用含有這些擴充功能的映像（例如 pgvector/pgvector）後再還原。', app=self.app.id)
+        fd = os.open(globals_path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+        with os.fdopen(fd, 'rb') as handle:
+            data = handle.read(GLOBALS_MAX + 1)
+        if len(data) > GLOBALS_MAX:
+            raise BackupError('limit-exceeded', f'備份中資料庫 {pg["id"]} 的角色定義超過 16 MiB。', app=self.app.id)
+        script = globals_script(data, session_user=user)
+        self.log(f'還原資料庫 {pg["id"]} 的角色與密碼設定（{user} 為此設備映像建立的管理帳號，只更新它的屬性與密碼）')
+        self.runner.podman('exec', '-i', container, 'psql', '-X', '-w', '-q', '-v', 'ON_ERROR_STOP=1', '-U', user, '-d',
+                           maint, '-f', '-', input=script, stdout=DEVNULL, timeout=RESTORE_TIMEOUT)
+        # A new session of the restore's role: still a superuser that can log in, and not read-only. The script was
+        # checked statement by statement; this catches every other way it could have taken that away (L2, F8).
+        state = self._psql_json(container, user, maint, SESSION_STATE_SQL, what)
+        if state != [True, 'off']:
+            raise BackupError('incompatible', f'套用備份中的資料庫角色定義後，帳號 {user} 不再是可登入、可寫入的超級使用者；'
+                                              '還原已停止並會自動回復。', app=self.app.id)
+        existing = {name: template for name, template, _connects in self._instance_catalog(container, user, maint, what)}
+        for db, path in databases:
+            name = db['name']
+            if name in existing:
+                # Created by the image at the cluster's first start: recreated exactly as the backup has it.
+                if existing[name]:
+                    self._psql_command(container, user, maint, f'ALTER DATABASE "{name}" IS_TEMPLATE false')
+                self._psql_command(container, user, maint, f'DROP DATABASE "{name}"')
+            self.log(f'還原資料庫 {pg["id"]}：{name}（擁有者 {db.get("owner", "?")}）')
+            with open(path, 'rb') as handle:
+                self.runner.podman('exec', '-i', container, 'pg_restore', '--create', '--exit-on-error',
+                                   '--no-tablespaces', '-w', '-U', user, '-d', maint, input=handle,
+                                   timeout=RESTORE_TIMEOUT)
+
+    def _psql_command(self, container, user, database, sql):
+        self.runner.podman('exec', container, 'psql', '-X', '-w', '-q', '-v', 'ON_ERROR_STOP=1', '-U', user, '-d', database,
+                           '-c', sql, timeout=SHORT_TIMEOUT, max_output=SMALL_OUTPUT)
+
+    def _require_new_cluster(self, pg, maint, removed_at, what):
+        """The cluster was initialized after the data volume was removed (its system identifier holds the initdb
+        time): otherwise the volume was not rebuilt and the restore would write over existing data (review F4)."""
+        if removed_at is None:
+            return
+        answer = self._psql_json(pg['container'], pg['user'], maint, CLUSTER_ID_SQL, what)
+        try:
+            initialized = int(answer[0]) >> 32
+        except (TypeError, ValueError, IndexError, KeyError):
+            raise digests.DigestError(f'{what}無法讀取執行個體的識別碼。') from None
+        if initialized < int(removed_at) - 5:
+            raise BackupError('job-failed', f'資料庫 {pg["id"]} 的執行個體不是這次還原新建立的（資料庫資料卷沒有重建）；'
+                                            '為避免覆寫，已停止還原。', app=self.app.id)
 
     def _maskable_units(self):
         databases = {pg['unit'] for pg in self.app.postgres}
@@ -1811,6 +2817,27 @@ class QuadletPostgresAdapter(Adapter):
 
     def _refuse_undeclared_databases(self, unchecked_ok=False):
         for pg in self.app.postgres:
+            if pg['scope'] == 'instance':
+                # The whole instance comes from the archive, but a database that accepts no connections is in neither
+                # it nor the safety backup: the volume is removed only when there is none (review F1).
+                try:
+                    closed = [name for name, _template, connects in self._instance_catalog(
+                        pg['container'], pg['user'], self._connect_db(pg['container'], pg['user']), f'資料庫 {pg["id"]}')
+                        if not connects]
+                except BackupError:
+                    if not unchecked_ok:
+                        raise BackupError('incompatible', f'無法列出資料庫 {pg["id"]} 執行個體中的資料庫（資料庫沒有執行或無法連線）。'
+                                                          '原位還原會重建整個資料庫資料卷，無法確認時不會還原；未做任何變更。',
+                                          app=self.app.id) from None
+                    note = (f'無法列出資料庫 {pg["id"]} 執行個體中的資料庫；這次還原沒有還原前備份，會重建整個資料庫資料卷，'
+                            '其中不在備份中的資料庫將會遺失。')
+                    self.log(f'注意：{note}')
+                    self.warnings.append(note)
+                    continue
+                if closed:
+                    raise BackupError('incompatible', f'資料庫執行個體中有不接受連線的資料庫：{", ".join(closed[:10])}。原位還原會重建'
+                                                      '整個資料庫資料卷，它們不在任何備份中，會永久遺失；未做任何變更。', app=self.app.id)
+                continue
             found = self.undeclared(pg)
             if found is None:
                 if not unchecked_ok:
@@ -2006,12 +3033,11 @@ class QuadletPostgresAdapter(Adapter):
                                input=handle, timeout=RESTORE_TIMEOUT)
 
     def start_units(self, units):
-        failed = []
-        for unit in [u for u in self.app.units if u in units]:
-            try:
-                self._start(unit)
-            except BackupError:
-                failed.append(unit)
+        """Start `units` of this app (the recovery of a dead job), in groups where their dependencies allow."""
+        failed, interrupted = self._start_units([u for u in self.app.units if u in units], attempts=2,
+                                                before='啟動服務', failed_note='無法啟動服務')
+        if interrupted is not None:
+            raise interrupted
         return failed
 
     def fresh_in_use(self):
@@ -2125,6 +3151,9 @@ class QuadletPostgresAdapter(Adapter):
             message = (f'健康檢查通過（{spec["url"]}）' if ok
                        else f'健康檢查未通過（{spec["url"]}）：{detail}')
             checks.append({'id': f'{self.app.id}/health-{i}', 'status': 'ok' if ok else 'fail', 'message': message})
+        if all(check['status'] == 'ok' for check in checks):
+            # The end of the app's unavailability (CONTRACT section 9); without health checks, the moment its units ran.
+            self.timing['healthy'] = self.clock() if checks else self.timing.get('started')
         return checks
 
     def _poll(self, spec):
@@ -2142,9 +3171,13 @@ class QuadletPostgresAdapter(Adapter):
                 return False, last
             self.sleep(HEALTH_INTERVAL)
 
+    def http_specs(self):
+        return [spec for spec in self.app.verify if spec['type'] == 'http-json']
+
     def verify_snapshot(self):
+        """The http-json checks' values (the digest checks are compared inside restore())."""
         snapshot = {}
-        for spec in self.app.verify:
+        for spec in self.http_specs():
             try:
                 status, body = self.http_get(spec['url'], 15)
             except Exception:  # noqa: BLE001

@@ -71,8 +71,8 @@ class StoreTests(JobCase):
         public = jobs.public_job(self.store.get(record['id']))
         self.assertEqual(list(public), list(jobs.PUBLIC_KEYS))
         self.assertEqual(public['state'], 'queued')
-        self.assertEqual([p['id'] for p in public['phases']], ['prepare', 'decrypt', 'preflight', 'safety', 'stop',
-                                                               'restore', 'start', 'check'])
+        self.assertEqual([p['id'] for p in public['phases']], ['prepare', 'decrypt', 'preflight', 'stage', 'safety',
+                                                               'stop', 'restore', 'start', 'check'])
         self.assertEqual(public['progress'], {'percent': 0, 'message': '等待開始'})
         # No temp file is left; the record lock file (jobs/<id>.lock, 0600, empty) sits next to the record.
         self.assertEqual(sorted(p.name for p in Path(self.paths.jobs).iterdir()), [path.name, f'{record["id"]}.lock'])
@@ -102,6 +102,18 @@ class StoreTests(JobCase):
         self.assertNotIn(TEST_SECRET, Path(self.store.log_path(record['id'])).read_text())
         self.assertTrue(log[-1].endswith('line 249'))
         self.assertEqual(stat.S_IMODE(self.store.log_path(record['id']).stat().st_mode), 0o600)
+
+
+    def test_unencrypted_backup_package_phase_says_so(self):
+        labels = {encrypt: {p['id']: p['label'] for p in self.store.create('backup', {'encrypt': encrypt})['phases']}
+                  for encrypt in (True, False)}
+        self.assertEqual(labels[True]['package'], '加密封裝')
+        self.assertEqual(labels[False]['package'], '封裝（未加密）')
+        self.assertEqual({k: v for k, v in labels[False].items() if k != 'package'},
+                         {k: v for k, v in labels[True].items() if k != 'package'})
+        record = self.store.create('backup', {'encrypt': False})
+        jobs.JobReporter(self.store, record, min_interval=0).phase('package')
+        self.assertTrue(self.store.read_log(record['id'])[-1].endswith('階段：封裝（未加密）'))
 
 
 class ReporterTests(JobCase):
@@ -411,7 +423,8 @@ class RunJobTests(JobCase):
                 restarted.append(list(units))
                 return []
 
-        app = type('App', (), {'id': 'woowbk-demo', 'writer_units': ('woowbk-demo-app.service',)})()
+        app = type('App', (), {'id': 'woowbk-demo', 'writer_units': ('woowbk-demo-app.service',),
+                               'units': ('woowbk-demo-db.service', 'woowbk-demo-app.service')})()
         deps = flows.Deps(storage=None, keys=None, archive=None, load_catalog=lambda: {'woowbk-demo': app},
                           adapter_factory=lambda app, **kwargs: Adapter(app), host_info=dict,
                           system_stopping=lambda: False)

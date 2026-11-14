@@ -105,8 +105,12 @@ def hostname():
         return 'device'
 
 
-def download_filename(host, created):
-    """`woowtech-backup-<hostname>-<YYYYMMDD-HHMMSS>.woowbackup` (CONTRACT section 5).
+FORMAT_EXTENSIONS = {1: '.woowbackup', 2: '.tar'}
+
+
+def download_filename(host, created, fmt=1, *, unencrypted_copy=False):
+    """`woowtech-backup-<hostname>-<YYYYMMDD-HHMMSS>.tar` (format 2) or `….woowbackup` (format 1); an unencrypted
+    copy made for download (CONTRACT section 5) ends in `-unencrypted.tar`.
 
     Seconds keep two backups made within the same minute apart in a downloads folder.
     """
@@ -114,7 +118,8 @@ def download_filename(host, created):
         stamp = parse_iso_utc(created).strftime('%Y%m%d-%H%M%S')
     except ValueError:
         stamp = utc_now().strftime('%Y%m%d-%H%M%S')
-    return f'woowtech-backup-{sanitize_hostname(host)}-{stamp}.woowbackup'
+    suffix = '-unencrypted' if unencrypted_copy else ''
+    return f'woowtech-backup-{sanitize_hostname(host)}-{stamp}{suffix}{FORMAT_EXTENSIONS[fmt]}'
 
 
 # ---------------------------------------------------------------- files

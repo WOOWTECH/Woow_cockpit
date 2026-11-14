@@ -1,0 +1,19 @@
+# Reference-host shape for catalog-suggest tests: names, mounts and dependencies only, no secret values.
+[Unit]
+Description=n8n PostgreSQL 16
+
+
+[Container]
+ContainerName=n8n-postgres
+Image=docker.io/library/postgres:16-alpine
+Network=n8n.network
+Volume=n8n-postgres-data.volume:/var/lib/postgresql/data
+Environment=POSTGRES_USER=n8n POSTGRES_DB=n8n
+Secret=n8n-db-password,type=env,target=POSTGRES_PASSWORD
+HealthCmd=pg_isready -h 127.0.0.1 -U n8n -d n8n
+
+[Service]
+Restart=always
+
+[Install]
+WantedBy=default.target

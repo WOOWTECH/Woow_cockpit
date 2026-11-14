@@ -1,0 +1,17 @@
+# Reference-host shape for catalog-suggest tests: names, mounts and dependencies only, no secret values.
+[Unit]
+Description=OpenDesign web terminal
+Requires=open-design.service
+After=open-design.service
+
+[Container]
+ContainerName=open-design-terminal
+Image=localhost/open-design-terminal:latest
+Network=open-design.network
+Volume=open-design-data.volume:/workspace
+
+[Service]
+Restart=always
+
+[Install]
+WantedBy=default.target

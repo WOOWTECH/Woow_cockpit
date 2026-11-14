@@ -1,7 +1,10 @@
-"""Local backup storage, index sidecars, uploads and staging (CONTRACT section 3). Owner: E1.
+"""Local backup storage, index sidecars, uploads, staging and unencrypted download copies (CONTRACT section 3). Owner: E1.
 
-Layout below `paths.data` (all 0700): `archives/<id>.woowbackup` + `archives/<id>.json` (index
-sidecar, 0600), `uploads/<upload_id>.part` + `uploads/<upload_id>.json`, `staging/<job>/`, `jobs/`.
+Layout below `paths.data` (all 0700): `archives/<id>.tar` (format 2, every new backup) or `archives/<id>.woowbackup`
+(format 1, read forever) + `archives/<id>.json` (index sidecar, 0600), `uploads/<upload_id>.part` +
+`uploads/<upload_id>.json`, `staging/<job>/`, `jobs/`, `exports/<export_id>.tar` + `.json` (unencrypted copies made for
+one download: root 0600, deleted after EXPORT_TTL seconds by the next status/list/export command or the transient
+timer the export job schedules; CONTRACT section 8).
 Sidecars are written atomically; unreadable or invalid sidecars are ignored by listings. Every sidecar
 write (register, update, delete) happens under one index lock in the run directory, and `update` reads the
 sidecar under it: a helper command (`inspect`) and a job (a verify result) never overwrite each other's fields,
@@ -13,8 +16,10 @@ times out and cockpit-bridge terminates it (SIGTERM is ignored meanwhile), and a
 same upload waits for the first and then returns its result (review finding HD-08).
 """
 import contextlib
+import datetime
 import errno
 import fcntl
+import hashlib
 import os
 import re
 import shutil
@@ -30,9 +35,18 @@ UPLOAD_ID_RE = re.compile(r'^u[0-9a-f]{16}\Z')
 STAGING_RE = re.compile(r'^[A-Za-z0-9][A-Za-z0-9_-]{0,100}\Z')
 KEY_ID_RE = re.compile(r'^[0-9A-F]{4}(?:-[0-9A-F]{4}){3}\Z')
 SHA256_RE = re.compile(r'^[0-9a-f]{64}\Z')
-FILENAME_RE = re.compile(r'^[A-Za-z0-9][A-Za-z0-9._-]{0,200}\.woowbackup\Z')
-# Download names carry seconds since 2026-11 (`…-YYYYMMDD-HHMMSS`); older engines wrote `…-YYYYMMDD-HHMM`.
-UPLOADED_NAME_RE = re.compile(r'^woowtech-backup-[a-z0-9-]{1,63}-[0-9]{8}-[0-9]{4}(?:[0-9]{2})?\.woowbackup\Z')
+FILENAME_RE = re.compile(r'^[A-Za-z0-9][A-Za-z0-9._-]{0,200}\.(woowbackup|tar)\Z')
+# Download names carry seconds since 2026-11 (`…-YYYYMMDD-HHMMSS`); older engines wrote `…-YYYYMMDD-HHMM`. Format 2 files
+# end in `.tar`, an unencrypted download copy in `-unencrypted.tar`.
+UPLOADED_NAME_RE = re.compile(r'^woowtech-backup-[a-z0-9-]{1,63}-[0-9]{8}-[0-9]{4}(?:[0-9]{2})?(?:-unencrypted)?'
+                              r'\.(woowbackup|tar)\Z')
+EXTENSIONS = {1: '.woowbackup', 2: '.tar'}
+EXPORT_ID_RE = re.compile(r'^x[0-9a-f]{16}\Z')
+EXPORT_FILE_RE = re.compile(r'^(x[0-9a-f]{16})\.(tar|json)\Z')
+EXPORT_TEMP_RE = re.compile(r'^\.x[0-9a-f]{16}\..+\.tmp\Z')
+EXPORT_TTL = 15 * 60          # seconds an unencrypted copy stays downloadable
+EXPORT_ORPHAN_AGE = 3600      # a copy without its sidecar (or a temp file) is removed after this
+MAX_EXPORTS = 2               # unencrypted copies kept at the same time (the oldest goes first)
 BRIDGE_TEMP_RE = re.compile(r'^\.(u[0-9a-f]{16})\.part-.+\Z')  # cockpit fsreplace1 temp files
 UPLOAD_FILE_RE = re.compile(r'^(u[0-9a-f]{16})\.(part|json|done)\Z')
 ORPHAN_MIN_AGE = 3600
@@ -40,7 +54,7 @@ ORPHAN_MIN_AGE = 3600
 TYPES = ('manual', 'safety', 'uploaded')
 META_REQUIRED = ('id', 'type', 'created', 'note', 'apps', 'size', 'sha256', 'key_id', 'include_images',
                  'filename', 'source', 'verified', 'inspected')
-META_OPTIONAL = ('uploaded_at',)
+META_OPTIONAL = ('uploaded_at', 'format', 'encrypted')
 MAX_SIDECAR = 256 * 1024
 MAX_PENDING_UPLOADS = 4
 MIN_UPLOAD = 64
@@ -54,8 +68,16 @@ def valid_backup_id(value):
     return isinstance(value, str) and BACKUP_ID_RE.match(value) is not None
 
 
+def _is_int(value):
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
 def _valid_meta(rec, backup_id=None):
-    """True when `rec` is a complete, well-typed index record (BackupMeta without key_available)."""
+    """True when `rec` is a complete, well-typed index record (BackupMeta without the derived fields).
+
+    `format` (1|2) and `encrypted` are optional: sidecars written before format 2 have neither (format 1, encrypted).
+    An unencrypted backup has `key_id` null; `apps[]` may carry `size` (bytes of its application archive in a format
+    2 file) and `verified` may carry `deep` (the verify job checked the content like a restore, CONTRACT section 5)."""
     if not isinstance(rec, dict) or set(rec) - set(META_REQUIRED) - set(META_OPTIONAL):
         return False
     if any(key not in rec for key in META_REQUIRED):
@@ -72,15 +94,24 @@ def _valid_meta(rec, backup_id=None):
     if not isinstance(apps, list) or len(apps) > 100:
         return False
     for app in apps:
-        if (not isinstance(app, dict) or set(app) != {'id', 'name'} or not isinstance(app['id'], str)
+        if (not isinstance(app, dict) or set(app) - {'size'} != {'id', 'name'} or not isinstance(app['id'], str)
                 or not isinstance(app['name'], str) or len(app['id']) > 64 or len(app['name']) > 200):
             return False
+        if 'size' in app and (not _is_int(app['size']) or app['size'] < 0):
+            return False
     size = rec['size']
-    if not isinstance(size, int) or isinstance(size, bool) or size < 0:
+    if not _is_int(size) or size < 0:
         return False
     if not isinstance(rec['sha256'], str) or not SHA256_RE.match(rec['sha256']):
         return False
-    if not isinstance(rec['key_id'], str) or not KEY_ID_RE.match(rec['key_id']):
+    fmt = rec.get('format', 1)
+    encrypted = rec.get('encrypted', True)
+    if fmt not in (1, 2) or not _is_int(fmt) or not isinstance(encrypted, bool) or (fmt == 1 and not encrypted):
+        return False
+    if encrypted:
+        if not isinstance(rec['key_id'], str) or not KEY_ID_RE.match(rec['key_id']):
+            return False
+    elif rec['key_id'] is not None:
         return False
     if not isinstance(rec['include_images'], bool) or not isinstance(rec['inspected'], bool):
         return False
@@ -91,12 +122,19 @@ def _valid_meta(rec, backup_id=None):
                                or not isinstance(source['hostname'], str) or len(source['hostname']) > 255):
         return False
     verified = rec['verified']
-    if verified is not None and (not isinstance(verified, dict) or set(verified) != {'at', 'ok'}
-                                 or not util.is_iso_utc(verified['at']) or not isinstance(verified['ok'], bool)):
+    if verified is not None and (not isinstance(verified, dict) or set(verified) - {'deep'} != {'at', 'ok'}
+                                 or not util.is_iso_utc(verified['at']) or not isinstance(verified['ok'], bool)
+                                 or not isinstance(verified.get('deep', False), bool)):
         return False
     if 'uploaded_at' in rec and not util.is_iso_utc(rec['uploaded_at']):
         return False
     return True
+
+
+def unauthenticated(rec):
+    """True for an unencrypted backup that did not come from this device's own jobs (an upload or an adopted file):
+    nothing in it is authenticated, so a restore needs an extra acknowledgement (CONTRACT section 7)."""
+    return rec.get('encrypted', True) is False and rec.get('type') not in ('manual', 'safety')
 
 
 class Storage:
@@ -107,10 +145,14 @@ class Storage:
 
     # ------------------------------------------------------------ layout and ids
 
+    @property
+    def exports(self):
+        return Path(self.paths.data) / 'exports'
+
     def ensure_layout(self):
         """Create data/run dirs with mode 0700 (root-owned in production)."""
         for path in (self.paths.data, self.paths.archives, self.paths.uploads, self.paths.staging,
-                     self.paths.jobs, self.paths.run):
+                     self.paths.jobs, self.paths.run, self.exports):
             try:
                 util.ensure_dir(path, 0o700)
             except NotADirectoryError as exc:
@@ -125,8 +167,18 @@ class Storage:
             raise BackupError('invalid-request', MSG_BAD_ID)
         return backup_id
 
-    def archive_path(self, backup_id):
-        return Path(self.paths.archives) / f'{self._check_id(backup_id)}.woowbackup'
+    def archive_path(self, backup_id, fmt=None):
+        """`archives/<id>.tar` or `archives/<id>.woowbackup`: the file that exists (format 2 first), else the name a
+        new backup of format `fmt` gets (format 2 by default)."""
+        self._check_id(backup_id)
+        base = Path(self.paths.archives)
+        if fmt is not None:
+            return base / f'{backup_id}{EXTENSIONS[fmt]}'
+        for ext in (EXTENSIONS[2], EXTENSIONS[1]):
+            path = base / f'{backup_id}{ext}'
+            if os.path.lexists(path):
+                return path
+        return base / f'{backup_id}{EXTENSIONS[2]}'
 
     def index_path(self, backup_id):
         return Path(self.paths.archives) / f'{self._check_id(backup_id)}.json'
@@ -139,6 +191,11 @@ class Storage:
         except FileNotFoundError:
             return None
         return st if stat.S_ISREG(st.st_mode) else None
+
+    def _archive_files(self, backup_id):
+        """Every archive file of this id that exists (normally one)."""
+        return [path for path in (self.archive_path(backup_id, 2), self.archive_path(backup_id, 1))
+                if os.path.lexists(path)]
 
     def _load(self, backup_id):
         try:
@@ -196,12 +253,15 @@ class Storage:
         rec.setdefault('source', None)
         rec.setdefault('verified', None)
         rec.setdefault('inspected', False)
+        path = self.archive_path(backup_id)
+        rec.setdefault('format', 1 if path.name.endswith(EXTENSIONS[1]) else 2)
+        rec.setdefault('encrypted', rec['format'] == 1 or rec.get('key_id') is not None)
         rec['size'] = st.st_size
         if 'sha256' not in rec:
-            rec['sha256'] = util.sha256_file(self.archive_path(backup_id))
+            rec['sha256'] = util.sha256_file(path)
         if 'filename' not in rec:
             host = (rec['source'] or {}).get('hostname') or util.hostname()
-            rec['filename'] = util.download_filename(host, rec['created'] or util.iso_utc())
+            rec['filename'] = util.download_filename(host, rec['created'] or util.iso_utc(), rec['format'])
         rec = {key: rec[key] for key in (*META_REQUIRED, *META_OPTIONAL) if key in rec}
         if not _valid_meta(rec, backup_id):
             raise BackupError('internal-error', '備份索引資料格式不正確。', backup_id=backup_id)
@@ -252,11 +312,12 @@ class Storage:
         return rec
 
     def delete(self, backup_id):
-        index, path = self.index_path(backup_id), self.archive_path(backup_id)
+        index = self.index_path(backup_id)
         with self._index_lock():
-            if not os.path.lexists(index) and not os.path.lexists(path):
+            files = self._archive_files(backup_id)
+            if not os.path.lexists(index) and not files:
                 raise BackupError('not-found', MSG_NOT_FOUND, backup_id=backup_id)
-            for target in (index, path):  # sidecar first: a listed backup always has its file
+            for target in (index, *files):  # sidecar first: a listed backup always has its file
                 with contextlib.suppress(FileNotFoundError):
                     os.unlink(target)
         util.fsync_dir(self.paths.archives)
@@ -391,12 +452,17 @@ class Storage:
             util.atomic_write_json(self._done_path(upload_id), {'backup_id': backup_id, 'at': util.iso_utc()}, 0o600)
 
     def _register_uploaded(self, backup_id, header, sha256, filename, *, exclusive=False):
+        """Index an uploaded (or adopted) file as type `uploaded`. Its apps stay empty until `inspect` read the
+        authenticated manifests; backup.json of a format 2 file is not trusted for that (CONTRACT section 5)."""
+        fmt = header.get('format', 1)
         original = (filename or '').strip().lower()
-        name = original if UPLOADED_NAME_RE.match(original) else util.download_filename('uploaded', header['created'])
+        keep = UPLOADED_NAME_RE.match(original) and original.endswith(EXTENSIONS[fmt])
+        name = original if keep else util.download_filename('uploaded', header['created'], fmt)
         return self.register(backup_id, exclusive=exclusive, meta={
             'type': 'uploaded', 'created': header['created'], 'note': '', 'apps': [], 'sha256': sha256,
             'key_id': header['key_id'], 'include_images': False, 'filename': name, 'source': None,
-            'verified': None, 'inspected': False, 'uploaded_at': util.iso_utc()})
+            'verified': None, 'inspected': False, 'uploaded_at': util.iso_utc(), 'format': fmt,
+            'encrypted': header.get('encryption', 'age-x25519') != 'none'})
 
     @contextlib.contextmanager
     def _upload_lock(self, upload_id, info_path):
@@ -448,19 +514,28 @@ class Storage:
             if st.st_size != info['size']:
                 raise BackupError('invalid-request', '上傳的檔案大小與宣告不符，上傳可能未完成。',
                                   expected=info['size'], actual=st.st_size)
-            header = archive._read_header_fd(fd)[0]
-            os.lseek(fd, 0, os.SEEK_SET)
-            sha256 = util.sha256_fd(fd)[0]
+            # Format 1: the outer header, then the file's sha256. Format 2: one pass over every byte checks the outer
+            # tar strictly (backup.json, README.txt, each application archive against backup.json's sha256, the end
+            # of the archive) and hashes the file. Neither needs a key; the content is checked by inspect/restore.
+            hasher = hashlib.sha256()
+            described = archive.describe_fd(fd, check_members=True, hasher=hasher)
+            header = described['header']
+            if described['format'] == 1:
+                os.lseek(fd, 0, os.SEEK_SET)
+                sha256 = util.sha256_fd(fd)[0]
+            else:
+                sha256 = hasher.hexdigest()
             backup_id = header['backup_id']
-            dest = self.archive_path(backup_id)
-            if os.path.lexists(dest) or os.path.lexists(self.index_path(backup_id)):
+            dest = self.archive_path(backup_id, described['format'])
+            present = self._archive_files(backup_id)
+            if present or os.path.lexists(self.index_path(backup_id)):
                 existing = self._load(backup_id)
                 if existing is not None and existing['sha256'] == sha256 and self._archive_stat(backup_id):
                     self.abort_upload(upload_id)
                     self._mark_done(upload_id, backup_id)
                     return existing
-                same_file = (existing is None and self._archive_stat(backup_id) is not None
-                             and util.sha256_file(dest) == sha256)
+                same_file = (existing is None and len(present) == 1 and present[0] == dest
+                             and self._archive_stat(backup_id) is not None and util.sha256_file(dest) == sha256)
                 if same_file and not os.path.lexists(self.index_path(backup_id)):
                     # The same file without an index (a kill between publishing and indexing): index it.
                     rec = self._register_uploaded(backup_id, header, sha256, info['filename'], exclusive=True)
@@ -512,16 +587,21 @@ class Storage:
             return []
         adopted = []
         for name in sorted(names):
-            backup_id = name[:-len('.woowbackup')] if name.endswith('.woowbackup') else ''
+            backup_id, ext = '', None
+            for fmt, suffix in EXTENSIONS.items():
+                if name.endswith(suffix):
+                    backup_id, ext = name[:-len(suffix)], fmt
             if not valid_backup_id(backup_id) or os.path.lexists(self.index_path(backup_id)):
                 continue
-            path = self.archive_path(backup_id)
+            if len(self._archive_files(backup_id)) != 1:
+                continue  # both names exist: never guess which one the index should describe
+            path = self.archive_path(backup_id, ext)
             try:
                 st = os.lstat(path)
                 if not stat.S_ISREG(st.st_mode) or now - max(st.st_mtime, st.st_ctime) < min_age:
                     continue
                 header = archive.read_header(path)
-                if header['backup_id'] != backup_id:
+                if header['backup_id'] != backup_id or header.get('format', 1) != ext:
                     continue
                 self._register_uploaded(backup_id, header, util.sha256_file(path), '', exclusive=True)
             except (BackupError, OSError, ValueError):
@@ -575,6 +655,160 @@ class Storage:
         real = os.path.realpath(path)
         base = os.path.realpath(self.paths.archives)
         if (not stat.S_ISREG(st.st_mode) or os.path.dirname(real) != base
-                or os.path.basename(real) != f'{backup_id}.woowbackup'):
+                or os.path.basename(real) not in (f'{backup_id}{ext}' for ext in EXTENSIONS.values())):
             raise BackupError('permission-denied', '備份檔位置不安全，已拒絕下載。', backup_id=backup_id)
         return {'path': real, 'filename': rec['filename'], 'size': st.st_size}
+
+    # ------------------------------------------------------------ unencrypted download copies (exports)
+
+    def new_export_id(self):
+        return 'x' + util.random_hex(8)
+
+    def _export_paths(self, export_id):
+        if not isinstance(export_id, str) or not EXPORT_ID_RE.match(export_id):
+            raise BackupError('invalid-request', '下載副本 ID 格式不正確。')
+        return self.exports / f'{export_id}.tar', self.exports / f'{export_id}.json'
+
+    def _load_export(self, export_id):
+        path, side = self._export_paths(export_id)
+        try:
+            rec = util.load_json_file(side, max_bytes=16 * 1024)
+        except (OSError, ValueError):
+            return None
+        keys = {'export_id', 'backup_id', 'filename', 'size', 'sha256', 'created', 'expires'}
+        if (not isinstance(rec, dict) or set(rec) != keys or rec['export_id'] != export_id
+                or not valid_backup_id(rec['backup_id']) or not isinstance(rec['filename'], str)
+                or not UPLOADED_NAME_RE.match(rec['filename']) or not rec['filename'].endswith('-unencrypted.tar')
+                or not _is_int(rec['size']) or rec['size'] < 0 or not isinstance(rec['sha256'], str)
+                or not SHA256_RE.match(rec['sha256']) or not util.is_iso_utc(rec['created'])
+                or not _is_int(rec['expires'])):
+            return None
+        return rec
+
+    def publish_export(self, export_id, staged, *, backup_id, filename, sha256, ttl=EXPORT_TTL, now=None,
+                       evicted=None):
+        """Move a verified unencrypted copy from staging into exports/ (rename, never overwrites; root 0600) and record
+        when it expires. Older copies beyond MAX_EXPORTS - 1 are removed first (their ids are appended to `evicted`, for
+        the journal; review F17). Returns the export record."""
+        self.ensure_layout()
+        now = time.time() if now is None else now
+        path, side = self._export_paths(export_id)
+        def age(rec):  # `created` has whole seconds: the copy's own mtime (ns) orders copies made in one second
+            st = self._export_file(rec['export_id'])
+            return (rec['created'], st.st_mtime_ns if st is not None else 0)
+
+        current = sorted(self.list_exports(now=now), key=age)
+        for rec in current[:max(0, len(current) - (MAX_EXPORTS - 1))]:
+            if self.delete_export(rec['export_id']) and evicted is not None:
+                evicted.append(rec['export_id'])
+        if os.path.lexists(path) or os.path.lexists(side):
+            raise BackupError('internal-error', '下載副本已存在。')
+        fd = os.open(staged, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+        try:
+            st = os.fstat(fd)
+            if not stat.S_ISREG(st.st_mode):
+                raise BackupError('internal-error', '下載副本不是一般檔案。')
+            os.fchmod(fd, 0o600)
+        finally:
+            os.close(fd)
+        os.rename(staged, path)
+        util.fsync_dir(self.exports)
+        rec = {'export_id': export_id, 'backup_id': backup_id, 'filename': filename, 'size': st.st_size,
+               'sha256': sha256, 'created': util.iso_utc(datetime.datetime.fromtimestamp(now, datetime.timezone.utc)),
+               'expires': int(now) + int(ttl)}
+        try:
+            util.atomic_write_json(side, rec, 0o600)
+        except BaseException:
+            with contextlib.suppress(FileNotFoundError):
+                os.unlink(path)
+            raise
+        return rec
+
+    def list_exports(self, *, now=None):
+        """Records of the copies that exist and have not expired (expired ones are left to cleanup_exports)."""
+        now = time.time() if now is None else now
+        try:
+            names = os.listdir(self.exports)
+        except (FileNotFoundError, NotADirectoryError):
+            return []
+        found = []
+        for name in sorted(names):
+            match = EXPORT_FILE_RE.match(name)
+            if not match or match.group(2) != 'json':
+                continue
+            rec = self._load_export(match.group(1))
+            if rec is not None and rec['expires'] > now and self._export_file(match.group(1)) is not None:
+                found.append(rec)
+        return found
+
+    def _export_file(self, export_id):
+        path, _side = self._export_paths(export_id)
+        try:
+            st = os.lstat(path)
+        except FileNotFoundError:
+            return None
+        return st if stat.S_ISREG(st.st_mode) else None
+
+    def export_info(self, export_id, *, now=None, removed=None):
+        """{path, filename, size, expires, backup_id} of a copy that has not expired; not-found otherwise. Expired copies
+        are deleted first (their ids are appended to `removed`, for the journal; review F17)."""
+        now = time.time() if now is None else now
+        gone = self.cleanup_exports(now=now)
+        if removed is not None:
+            removed.extend(gone)
+        path, _side = self._export_paths(export_id)
+        rec = self._load_export(export_id)
+        st = self._export_file(export_id)
+        if rec is None or st is None or rec['expires'] <= now:
+            raise BackupError('not-found', '找不到這份未加密的下載副本（可能已過期並被刪除），請重新建立。',
+                              export_id=export_id)
+        real = os.path.realpath(path)
+        if os.path.dirname(real) != os.path.realpath(self.exports) or os.path.basename(real) != f'{export_id}.tar':
+            raise BackupError('permission-denied', '下載副本位置不安全，已拒絕下載。', export_id=export_id)
+        if st.st_size != rec['size']:
+            raise BackupError('not-found', '下載副本已損毀，請重新建立。', export_id=export_id)
+        return {'path': real, 'filename': rec['filename'], 'size': st.st_size, 'expires': rec['expires'],
+                'backup_id': rec['backup_id']}
+
+    def delete_export(self, export_id):
+        """Remove a copy (file first, then its record); True when something was removed."""
+        path, side = self._export_paths(export_id)
+        removed = False
+        for target in (path, side):
+            with contextlib.suppress(FileNotFoundError):
+                os.unlink(target)
+                removed = True
+        return removed
+
+    def cleanup_exports(self, *, now=None):
+        """Delete expired copies, copies without a valid record and leftover temp files (older than an hour).
+        Returns the ids of the copies removed."""
+        now = time.time() if now is None else now
+        try:
+            names = os.listdir(self.exports)
+        except (FileNotFoundError, NotADirectoryError):
+            return []
+        removed = []
+        for name in names:
+            target = self.exports / name
+            match = EXPORT_FILE_RE.match(name)
+            if match:
+                export_id = match.group(1)
+                rec = self._load_export(export_id)
+                if rec is not None and rec['expires'] > now:
+                    continue
+                if rec is None:
+                    try:
+                        st = os.lstat(target)
+                    except FileNotFoundError:
+                        continue
+                    if now - max(st.st_mtime, st.st_ctime) < EXPORT_ORPHAN_AGE and match.group(2) == 'tar':
+                        continue  # being published right now (the record follows the rename)
+                if self.delete_export(export_id) and export_id not in removed:
+                    removed.append(export_id)
+            elif EXPORT_TEMP_RE.match(name):
+                with contextlib.suppress(FileNotFoundError):
+                    st = os.lstat(target)
+                    if now - max(st.st_mtime, st.st_ctime) >= EXPORT_ORPHAN_AGE and not stat.S_ISDIR(st.st_mode):
+                        os.unlink(target)
+        return removed

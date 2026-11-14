@@ -1,0 +1,18 @@
+# Reference-host shape for catalog-suggest tests: names, mounts and dependencies only, no secret values.
+[Unit]
+Description=Hermes PostgreSQL 15
+
+
+[Container]
+ContainerName=hermes-postgresql
+Image=docker.io/library/postgres:15-alpine
+Network=hermes.network
+Volume=hermes-postgres-data.volume:/var/lib/postgresql/data
+Environment=POSTGRES_USER=hermes POSTGRES_DB=hermes
+Secret=hermes-postgres-password,type=env,target=POSTGRES_PASSWORD
+
+[Service]
+Restart=always
+
+[Install]
+WantedBy=default.target

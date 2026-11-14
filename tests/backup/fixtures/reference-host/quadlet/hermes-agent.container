@@ -1,0 +1,26 @@
+# Reference-host shape for catalog-suggest tests: names, mounts and dependencies only, no secret values.
+[Unit]
+Description=Hermes agent gateway
+Requires=hermes-postgres.service hermes-redis.service
+After=hermes-postgres.service hermes-redis.service
+
+[Container]
+ContainerName=hermes-agent
+Image=localhost/hermes-agent:latest
+Network=hermes.network
+PublishPort=127.0.0.1:18642:8642
+PublishPort=127.0.0.1:18644:8644
+Volume=hermes-data.volume:/opt/data
+EnvironmentFile=%h/.config/hermes/hermes.env
+Secret=hermes-api-server-key,type=env,target=API_SERVER_KEY
+Secret=hermes-webhook-secret,type=env,target=WEBHOOK_SECRET
+Secret=hermes-dashboard-password,type=env,target=DASHBOARD_PASSWORD
+Secret=hermes-dashboard-session-secret,type=env,target=DASHBOARD_SESSION_SECRET
+Secret=hermes-postgres-password,type=env,target=POSTGRES_PASSWORD
+HealthCmd=sh -c 'curl -fsS http://127.0.0.1:8642/health && curl -fsS http://127.0.0.1:8644/health'
+
+[Service]
+Restart=always
+
+[Install]
+WantedBy=default.target

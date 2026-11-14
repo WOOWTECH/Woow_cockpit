@@ -31,6 +31,9 @@ PG_IDENT_RE = re.compile(r'[A-Za-z_][A-Za-z0-9_]{0,62}\Z')
 CHECK_ID_RE = re.compile(r'[a-z0-9][a-z0-9_-]{0,31}\Z')
 COMPARE_KEY_RE = re.compile(r'[A-Za-z0-9_][A-Za-z0-9_.-]{0,63}\Z')
 SEGMENT_RE = re.compile(r'[A-Za-z0-9._@+-]{1,255}\Z')
+# Database names a digest or an instance-mode backup may name: they travel in argv (`psql -d <name>`), so no leading
+# `-` and no `=` (psql would read a connection string). The same rule applies to names found in an instance.
+DB_NAME_RE = re.compile(r'[A-Za-z0-9_][A-Za-z0-9_.$-]{0,62}\Z')
 MODE_RE = re.compile(r'0[0-7]{3}\Z')
 URL_RE = re.compile(r"http://(?:127\.0\.0\.1|localhost):([0-9]{1,5})(/[A-Za-z0-9._~!$&'()*+,;=:@%/?-]*)\Z")
 CONTROL_RE = re.compile(r'[\x00-\x1f\x7f-\x9f]')
@@ -51,10 +54,19 @@ FORBIDDEN_CONFIG_PREFIXES = ('.config/systemd/', '.config/containers/', '.config
 FORBIDDEN_DATA_DIRS = ('.ssh', '.gnupg', '.config/systemd', '.config/containers', '.local/share/containers',
                        '.config/environment.d', '.config/autostart', '.config/dbus-1', '.config/user-tmpfiles.d',
                        '.local/share/systemd', '.local/share/dbus-1', '.local/share/applications',
-                       '.local/share/user-tmpfiles.d', '.local/bin', '.local/lib', 'bin', '.bashrc.d', '.config/fish')
+                       '.local/share/user-tmpfiles.d', '.local/bin', '.local/lib', 'bin', '.bashrc.d', '.config/fish',
+                       '.config/git')
+# A config file must not lie in any of these trees either (an app id `fish` or `git` would otherwise allow
+# `.config/fish/conf.d/x.fish` or `.config/git/config`, which the owner's next login or git command runs; review L3).
 MAX_DATA_DIRS = 16
 # The last segment leaves room for the restore's sibling `<name>.woowbk-old-<job id>-rollback` within NAME_MAX (255).
 MAX_DATA_DIR_NAME = 200
+# Data verification (CONTRACT section 4): an app's own JSON summary (http-json), or digests the engine computes itself
+# while every writer is stopped, at backup time and after a restore before the app's units start.
+VERIFY_TYPES = ('http-json', 'postgres-digest', 'files-digest')
+MAX_VERIFY = 16
+MAX_EXCLUDES = 64
+PG_SCOPES = ('database', 'instance')
 
 TOP_REQUIRED = ('schema', 'id', 'name', 'owner', 'adapter', 'quadlet', 'units')
 TOP_OPTIONAL = ('description', 'writer_units', 'postgres', 'volumes', 'data_dirs', 'secrets', 'config_files', 'health',
@@ -167,9 +179,15 @@ def _config_path(value, where, app_id):
     for segment in value.split('/'):
         if segment in ('', '.', '..') or not SEGMENT_RE.fullmatch(segment):
             _fail(where, '含有不允許的路徑片段。')
-    if value.startswith(FORBIDDEN_CONFIG_PREFIXES):
-        _fail(where, '不可指向 systemd、Podman、使用者環境或自動啟動的設定目錄。')
+    if value.startswith(FORBIDDEN_CONFIG_PREFIXES) or forbidden_config_tree(value):
+        _fail(where, '不可指向 systemd、Podman、使用者環境、自動啟動、殼層或 git 的設定目錄。')
     return value
+
+
+def forbidden_config_tree(rel):
+    """True when the config path lies in (or is) one of FORBIDDEN_DATA_DIRS (compared without regard to case)."""
+    lower = rel.lower()
+    return any(lower == tree or lower.startswith(tree + '/') for tree in FORBIDDEN_DATA_DIRS)
 
 
 def paths_overlap(a, b):
@@ -195,6 +213,104 @@ def _data_dir_path(value, where):
         if paths_overlap(value.lower(), forbidden):
             _fail(where, f'不可等於、位於或包含 ~/{forbidden}（登入金鑰、systemd、Podman 或使用者環境的設定）。')
     return value
+
+
+def _patterns(value, where, max_items=MAX_EXCLUDES):
+    """Exclusion patterns (fnmatch globs): printable text, no NUL or control characters."""
+    items = _list(value, where, max_items)
+    for i, pattern in enumerate(items):
+        _string(pattern, f'{where}[{i}]', max_len=200)
+    _unique(items, where)
+    return list(items)
+
+
+def digest_target(spec):
+    """What a digest check reads, as stable text (`volume:<name>`, `dir:<path>`, `postgres:<id>`, `container:<name>`),
+    recorded with the digest; None for http-json."""
+    if spec.get('type') == 'files-digest':
+        return f'volume:{spec["volume"]}' if spec.get('volume') else f'dir:{spec["data_dir"]}'
+    if spec.get('type') == 'postgres-digest':
+        return f'postgres:{spec["postgres"]}' if spec.get('postgres') else f'container:{spec["container"]}'
+    return None
+
+
+def _verify_item(item, where, *, writers, postgres, volumes, data_dirs):
+    """One `verify` entry, normalized: every key present (None or a default when not given)."""
+    if not isinstance(item, dict):
+        _fail(where, '必須是 JSON 物件。')
+    kind = item.get('type')
+    if kind not in VERIFY_TYPES:
+        _fail(f'{where}.type', f'只支援 {"、".join(VERIFY_TYPES)}。')
+    check_id = None
+    if kind == 'http-json':
+        _object(item, where, ('id', 'type', 'url', 'compare'))
+        compare = _list(item['compare'], f'{where}.compare', 32, min_items=1)
+        for j, key in enumerate(compare):
+            _string(key, f'{where}.compare[{j}]', COMPARE_KEY_RE, max_len=64)
+        _unique(compare, f'{where}.compare')
+        check_id = _string(item['id'], f'{where}.id', CHECK_ID_RE, max_len=32)
+        return {'id': check_id, 'type': 'http-json', 'url': _url(item['url'], f'{where}.url'), 'compare': list(compare)}
+    if kind == 'files-digest':
+        _object(item, where, ('id', 'type'), ('volume', 'data_dir', 'exclude', 'label'))
+        check_id = _string(item['id'], f'{where}.id', CHECK_ID_RE, max_len=32)
+        if ('volume' in item) == ('data_dir' in item):
+            _fail(where, '必須指定 volume 或 data_dir 其中之一。')
+        volume = data_dir = None
+        if 'volume' in item:
+            volume = _string(item['volume'], f'{where}.volume', VOLUME_RE, max_len=128)
+            if volume not in volumes:
+                _fail(f'{where}.volume', '必須是 volumes 中列出的資料卷（資料庫資料卷會由還原重建，無法逐檔比對）。')
+        else:
+            data_dir = _string(item['data_dir'], f'{where}.data_dir', max_len=1024)
+            if data_dir not in data_dirs:
+                _fail(f'{where}.data_dir', '必須是 data_dirs 中列出的主機資料夾。')
+        return {'id': check_id, 'type': 'files-digest', 'volume': volume, 'data_dir': data_dir,
+                'exclude': _patterns(item.get('exclude', []), f'{where}.exclude'),
+                'label': _string(item.get('label', ''), f'{where}.label', max_len=80, allow_empty=True)}
+    _object(item, where, ('id', 'type'),
+            ('postgres', 'container', 'unit', 'user', 'databases', 'exclude_tables', 'label'))
+    check_id = _string(item['id'], f'{where}.id', CHECK_ID_RE, max_len=32)
+    if ('postgres' in item) == ('container' in item):
+        _fail(where, '必須指定 postgres（資料庫項目 ID）或 container（冷備份的資料庫容器）其中之一。')
+    spec = {'id': check_id, 'type': 'postgres-digest', 'postgres': None, 'container': None, 'unit': None,
+            'user': None, 'databases': None,
+            'exclude_tables': _patterns(item.get('exclude_tables', []), f'{where}.exclude_tables'),
+            'label': _string(item.get('label', ''), f'{where}.label', max_len=80, allow_empty=True)}
+    if 'postgres' in item:
+        for key in ('unit', 'user'):
+            if key in item:
+                _fail(f'{where}.{key}', '只能和 container 一起使用（資料庫項目已指定）。')
+        pg_id = _string(item['postgres'], f'{where}.postgres', PG_ID_RE, max_len=32)
+        pg = next((p for p in postgres if p['id'] == pg_id), None)
+        if pg is None:
+            _fail(f'{where}.postgres', '必須是 postgres 中列出的資料庫項目 ID。')
+        spec['postgres'] = pg_id
+        default = 'all' if pg['scope'] == 'instance' else [pg['database']]
+    else:
+        spec['container'] = _string(item['container'], f'{where}.container', CONTAINER_RE, max_len=128)
+        if 'unit' not in item or 'user' not in item:
+            _fail(where, '使用 container 時必須同時指定 unit 與 user。')
+        spec['unit'] = _string(item['unit'], f'{where}.unit', UNIT_RE, max_len=210)
+        if spec['unit'] not in writers:
+            # The container form is the cold pattern: the database unit stops with the writers and its data is copied
+            # as files; its digest is read right before it stops and after a restore before anything else starts.
+            _fail(f'{where}.unit', '必須列在 writer_units 之中（冷備份的資料庫）；以 pg_dump 備份的資料庫請改用 postgres。')
+        spec['user'] = _string(item['user'], f'{where}.user', PG_IDENT_RE, max_len=63)
+        if spec['container'] in {p['container'] for p in postgres}:
+            _fail(f'{where}.container', '這個容器已是 postgres 中的資料庫項目，請改用 postgres 指定。')
+        default = 'all'
+    databases = item.get('databases', default)
+    if databases != 'all':
+        _list(databases, f'{where}.databases', 64, min_items=1)
+        for j, name in enumerate(databases):
+            _string(name, f'{where}.databases[{j}]', DB_NAME_RE, max_len=63)
+        _unique(databases, f'{where}.databases')
+        databases = list(databases)
+    if spec['postgres'] and default != 'all' and databases != default:
+        # Single-database mode restores only that database: any other one would never match.
+        _fail(f'{where}.databases', f'這個資料庫項目只備份資料庫 {default[0]}，只能核對它。')
+    spec['databases'] = databases
+    return spec
 
 
 def _mode(value, where):
@@ -258,14 +374,21 @@ def validate_entry(data, *, paths, sha256=None, user_lookup=None):
     postgres = []
     for i, item in enumerate(_list(data.get('postgres', []), 'postgres', 8)):
         where = f'postgres[{i}]'
-        _object(item, where, ('id', 'container', 'unit', 'database', 'user', 'data_volume'))
+        scope = item.get('scope', 'database') if isinstance(item, dict) else 'database'
+        if scope not in PG_SCOPES:
+            _fail(f'{where}.scope', '只能是 database（單一資料庫，預設）或 instance（整個資料庫執行個體）。')
+        # Instance scope backs up every database of the instance and its roles; the engine connects to `postgres`
+        # (template1 when that database is gone), so `database` is not given then.
+        required = ('id', 'container', 'unit', 'user', 'data_volume') + (('database',) if scope == 'database' else ())
+        _object(item, where, required, ('scope',))
         entry = {
             'id': _string(item['id'], f'{where}.id', PG_ID_RE, max_len=32),
             'container': _string(item['container'], f'{where}.container', CONTAINER_RE, max_len=128),
             'unit': _string(item['unit'], f'{where}.unit', UNIT_RE, max_len=210),
-            'database': _string(item['database'], f'{where}.database', PG_IDENT_RE, max_len=63),
+            'database': _string(item.get('database', 'postgres'), f'{where}.database', PG_IDENT_RE, max_len=63),
             'user': _string(item['user'], f'{where}.user', PG_IDENT_RE, max_len=63),
             'data_volume': _string(item['data_volume'], f'{where}.data_volume', VOLUME_RE, max_len=128),
+            'scope': scope,
         }
         if entry['unit'] not in units:
             _fail(f'{where}.unit', '必須列在 units 之中。')
@@ -326,18 +449,14 @@ def validate_entry(data, *, paths, sha256=None, user_lookup=None):
                        'timeout_seconds': _int(item.get('timeout_seconds', 60), f'{where}.timeout_seconds', 1, 600)})
 
     verify = []
-    for i, item in enumerate(_list(data.get('verify', []), 'verify', 8)):
-        where = f'verify[{i}]'
-        _object(item, where, ('id', 'type', 'url', 'compare'))
-        if item['type'] != 'http-json':
-            _fail(f'{where}.type', '只支援 http-json。')
-        compare = _list(item['compare'], f'{where}.compare', 32, min_items=1)
-        for j, key in enumerate(compare):
-            _string(key, f'{where}.compare[{j}]', COMPARE_KEY_RE, max_len=64)
-        _unique(compare, f'{where}.compare')
-        verify.append({'id': _string(item['id'], f'{where}.id', CHECK_ID_RE, max_len=32), 'type': 'http-json',
-                       'url': _url(item['url'], f'{where}.url'), 'compare': list(compare)})
+    for i, item in enumerate(_list(data.get('verify', []), 'verify', MAX_VERIFY)):
+        verify.append(_verify_item(item, f'verify[{i}]', writers=writers, postgres=postgres,
+                                   volumes=[v['name'] for v in volumes], data_dirs=[d['path'] for d in data_dirs]))
     _unique([v['id'] for v in verify], 'verify[].id')
+    for i, spec in enumerate(verify):
+        target = digest_target(spec)
+        if target and target in [digest_target(other) for other in verify[:i]]:
+            _fail(f'verify[{i}]', f'與前面的核對項目重複（{target}）。')
 
     try:
         account = lookup(owner)

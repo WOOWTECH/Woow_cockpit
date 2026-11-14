@@ -1,0 +1,21 @@
+# Reference-host shape for catalog-suggest tests: names, mounts and dependencies only, no secret values.
+[Unit]
+Description=hermes MCP admin
+
+
+[Container]
+ContainerName=hermes-mcp-admin
+Image=localhost/woow-mcp-admin:latest
+Network=hermes-mcp-admin.network
+PublishPort=127.0.0.1:18502:8080
+Volume=hermes-mcp-admin.volume:/data
+EnvironmentFile=%h/.config/hermes-mcp-admin/hermes-mcp-admin.env
+Secret=hermes-mcp-admin-jwt-secret,type=env,target=JWT_SECRET
+Secret=hermes-mcp-admin-password,type=env,target=ADMIN_PASSWORD
+HealthCmd=wget -qO- http://127.0.0.1:8080/healthz
+
+[Service]
+Restart=always
+
+[Install]
+WantedBy=default.target

@@ -1,0 +1,21 @@
+# Reference-host shape for catalog-suggest tests: names, mounts and dependencies only, no secret values.
+[Unit]
+Description=odoo MCP admin
+
+
+[Container]
+ContainerName=odoo-mcp-admin
+Image=localhost/woow-mcp-admin:latest
+Network=odoo-mcp-admin.network
+PublishPort=127.0.0.1:18504:8080
+Volume=odoo-mcp-admin.volume:/data
+EnvironmentFile=%h/.config/odoo-mcp-admin/odoo-mcp-admin.env
+Secret=odoo-mcp-admin-jwt-secret,type=env,target=JWT_SECRET
+Secret=odoo-mcp-admin-password,type=env,target=ADMIN_PASSWORD
+HealthCmd=wget -qO- http://127.0.0.1:8080/healthz
+
+[Service]
+Restart=always
+
+[Install]
+WantedBy=default.target

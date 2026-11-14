@@ -1,0 +1,20 @@
+# Reference-host shape for catalog-suggest tests: names, mounts and dependencies only, no secret values.
+[Unit]
+Description=OpenDesign MCP
+Requires=open-design.service
+After=open-design.service
+
+[Container]
+ContainerName=open-design-mcp
+Image=localhost/open-design-mcp:latest
+Network=open-design.network
+Volume=open-design-mcp-data.volume:/data
+Volume=open-design-mcp-run.volume:/run/od-mcp
+Volume=%h/.config/open-design/od-export-bridge.js:/app/od-export-bridge.js:ro
+Secret=open-design-api-token,type=env,target=OD_API_TOKEN
+
+[Service]
+Restart=always
+
+[Install]
+WantedBy=default.target

@@ -2,7 +2,7 @@
 
 對象：維護 Podman 應用套件的 WOOWTECH 工程師與審查者。一個應用要出現在「備份與還原」頁，設備上必須裝有它的**受信任目錄項目**（catalog entry）。本文說明目錄項目的格式、每個欄位的驗證規則、應用本身需要符合的條件，以及在實驗室設備測試與審查的方式。
 
-規則依據 [CONTRACT.md](CONTRACT.md) 第 4、9 節，以及引擎的驗證程式 `backup-engine/woowbackup/catalog.py` 與轉接器 `backup-engine/woowbackup/adapters/quadlet_postgres.py`。兩者不一致時以程式為準，並回報規格維護者。主機資料夾（`data_dirs`）是 2026-11-13 開始的新功能，相關段落都註明了驗證狀態。管理者操作見 [../backup.md](../backup.md)；正式應用的盤點與接入順序見 [production-onboarding.md](production-onboarding.md)。
+規則依據 [CONTRACT.md](CONTRACT.md) 第 4、9 節、第 4 節「Catalog drafts」與「Installing and removing entries」（草稿產生與安裝），以及引擎的驗證程式 `backup-engine/woowbackup/catalog.py` 與轉接器 `backup-engine/woowbackup/adapters/quadlet_postgres.py`。兩者不一致時以程式為準，並回報規格維護者。目錄項目可以手寫，也可以在頁面「應用設定」由應用的 Quadlet 檔產生草稿、審查後安裝（見「用「應用設定」產生與安裝」）。管理者操作見 [../backup.md](../backup.md)；正式應用的盤點、實測結果與各應用使用的方式見 [production-onboarding.md](production-onboarding.md)。
 
 ## 目錄項目的作用
 
@@ -23,7 +23,10 @@
 
 ### 目前的安裝方式
 
-正式應用目錄項目的發佈機制（由各應用套件安裝）尚未建立。`manage.py` 只會安裝實驗室示範項目（`--backup-demo-catalog`）。在此之前，經審查的項目由設備管理者以 root 手動放置：
+由各應用套件發佈目錄項目的機制尚未建立；`manage.py` 只會安裝實驗室示範項目（`--backup-demo-catalog`）。經審查的項目有兩種放法：
+
+- **頁面「應用設定」**（備份元件提供 `catalog-install` 時）：貼上或產生項目、預覽檢查與差異後安裝，見下一節。檔案以 root 擁有、0644 寫入，取代的舊項目保留在 `/etc/woowtech-cockpit/backup/apps-history/`，每次安裝與移除都記錄在系統日誌。部署範本（`quadlet.template_dir`）不會由頁面建立，需要全新部署時仍要手動放置範本。
+- **手動**，由設備管理者以 root 執行：
 
 ```bash
 # <id> 為應用 ID；在目標設備上、從已審查的檔案執行
@@ -35,7 +38,41 @@ sudo install -o root -g root -m 0644 quadlet/<每個 Quadlet 範本> /usr/local/
 sudo install -o root -g root -m 0644 <id>.json /etc/woowtech-cockpit/backup/apps/<id>.json
 ```
 
-放置後重新整理頁面：「總覽」應列出該應用，且沒有「備份設定提示」。`manage.py` 不追蹤這些手動放置的檔案：`verify` 不檢查它們，之後的 `install` 與 `rollback` 也不會修改或移除它們。
+放置後重新整理頁面：「總覽」應列出該應用，且沒有「備份設定提示」。`manage.py` 不追蹤目錄項目（不論是手動或由頁面放置）：`verify` 不檢查它們，之後的 `install` 與 `rollback` 也不會修改或移除它們。
+
+## 用「應用設定」產生與安裝（2026-11-13）
+
+頁面「應用設定」把手寫目錄項目的工作變成「產生草稿 → 審查 → 預覽 → 安裝」。只有取得管理員權限才能使用；掃描與預覽都只讀取，安裝與移除需要另外確認。
+
+**掃描（`catalog-suggest`）**：選擇一個應用擁有者（啟用 linger 的一般帳號，或已有目錄項目的擁有者）後，引擎**以該帳號的身分**讀取 `~/.config/containers/systemd/` 的 Quadlet 檔（不遞迴、不跟隨符號連結；drop-in 資料夾與子資料夾只列出不分析），並以該帳號查詢 `podman secret ls`、`podman volume ls` 與服務狀態。環境變數檔從不讀取，`Environment=` 的值與 `HealthCmd=` 的指令內容也不會出現在結果中（PostgreSQL 的使用者與資料庫名稱除外）。
+
+**分組**：容器依彼此的服務相依（`Requires`、`After`、`BindsTo`、`PartOf` 等）、共用網路命名空間、同一個 pod、共用的具名資料卷或重疊的主機資料夾、`app=` 標籤，以及名稱前綴相符的 Quadlet 網路分在同一個應用；有 `io.woowtech.app=<id>` 標籤時以它為準，不同值的容器絕不合併。沒有被任何應用使用的 `.network`、`.volume` 檔列為「沒有歸入應用的檔案」，`.kube`、`.image`、`.build` 與範本服務列為「不支援的檔案」。
+
+**草稿內容與提醒**：
+
+| 欄位 | 草稿怎麼產生 | 會提醒的情況 |
+| --- | --- | --- |
+| `units` | 依 `After=`／`Before=` 與網路命名空間排序；平手時資料庫、快取在前 | `After=` 形成循環 |
+| `writer_units` | 掛載會備份的資料卷、主機資料夾或設定檔的服務；資料庫的每個用戶端；冷備份的資料庫；以及 systemd 會跟著一起停止的服務 | 資料庫相依於寫入服務 |
+| PostgreSQL | 依映像名稱（`postgres`、`pgvector`、`postgis`…）或 `POSTGRES_*` 環境變數加資料掛載辨識；主版本取自映像標籤 | 資料庫或使用者名稱是猜測的、標籤看不出主版本、其他資料庫（MariaDB、MongoDB 等只能冷備份） |
+| `volumes` | 容器使用的具名資料卷（`VolumeName=` 解析後）；只掛在 `/run`、`/tmp` 等執行期路徑的略過 | 資料卷不存在 |
+| `data_dirs` | 家目錄中以 bind mount 掛進容器的資料夾（只列最外層） | **禁止的路徑**（`.ssh`、`.local/bin`、整個 `.config` 等，依「主機資料夾」的規則）與**敏感路徑**（`Desktop`、`Documents`、`.cache`、`.aws` 等）不列入並說明原因；全部唯讀掛載的設定或程式資料夾仍列入但提醒；Podman socket、符號連結、不存在的路徑 |
+| `config_files` | `EnvironmentFile=` 的檔案（0600）與掛進容器的單一檔案（0644，或群組與其他人不可讀時 0600），只限 `.config/<id>/`、`.local/share/<id>/` 之下 | 目前權限超過 0644（還原後會變成 0644）；位置不在允許目錄的檔案列入「沒有列入的項目」 |
+| `secrets` | 所有 `Secret=` 名稱 | 密鑰不存在；`Environment=` 直接寫入看似機密的變數（值不顯示） |
+| `health` | `HealthCmd=` 中的 `localhost`／`127.0.0.1` 網址，對應到發佈在 127.0.0.1 的主機埠；只保留路徑，`?` 之後的查詢參數（可能含存取權杖）不寫入（目錄項目所有帳號都能讀取） | 只發佈在區網、HTTPS 或沒有發佈的埠只給建議；網址有查詢參數；狀態碼 200 與逾時是假設值 |
+| `verify` | 每個 PostgreSQL 一個 `postgres-digest`、每個資料卷與主機資料夾一個 `files-digest`（資料庫的資料卷除外） | 資料量大的核對會延長停機，可刪除不需要的項目 |
+
+**PostgreSQL 方式**：偵測到 PostgreSQL 時，草稿預設**冷備份**；資料在具名資料卷時，另外提供「整個執行個體」與「單一資料庫」兩種寫法，在草稿頁切換。已安裝、且以匯出方式（整個執行個體或單一資料庫）備份的應用，草稿保留原本的方式：改變方式會讓既有備份在新項目下無法還原。
+
+**ID 與擁有者（2026-11-14）**：草稿的 ID 已被另一個擁有者的目錄項目使用時（`id-taken`，等級 error），草稿標為無法安裝，請先把 `id` 改成其他名稱。安裝不會把已安裝的項目改成另一個擁有者（`details.reason: owner-change`）：它的備份會被還原到新的帳號、並計入那個帳號的保留份數；確實要搬移時，先「移除」再以新擁有者安裝。還原時備份來自另一個帳號的應用，相容性檢查以 `owner-changed` 提醒。
+
+**已安裝的應用**：草稿沿用已安裝項目的名稱、說明、範本資料夾、資料卷與資料夾說明、健康檢查與資料核對，並列出結構上的差異（只在一邊出現的資料卷、資料夾、密鑰、設定檔、服務、寫入服務或 Quadlet 檔）。「載入已安裝的設定」可以改為編輯目前安裝的內容。
+
+**審查與編輯**：草稿頁列出掃描到的容器、PostgreSQL 方式、「這份設定會備份什麼」的摘要，以及所有提醒、沒有列入的項目與建議。JSON 可以直接編輯：格式錯誤時在瀏覽器就指出行與位置；停止輸入約 1 秒後，以這台設備載入目錄時相同的驗證檢查（含與同一擁有者其他應用的衝突），並顯示與目前安裝的項目的差異、對既有備份的影響（新增的資料卷、資料夾、密鑰或設定檔讓舊備份無法還原；改變 PostgreSQL 方式；改變擁有者）與這個應用已有幾份備份。
+
+**安裝（`catalog-install`）與移除（`catalog-remove`）**：只有檢查通過、且預覽的是目前編輯中的內容時才能安裝；確認對話框要另外勾選已審查差異與影響。安裝時引擎再確認目前安裝的檔案沒有在預覽之後被改過（否則要求重新預覽），沒有作業進行中、也沒有中斷的作業還要用這個應用的舊項目整理；寫入後重新載入目錄，新項目必須載入、其他應用也必須照常載入，否則放回原本的檔案。移除也先預覽，確認後把項目移到 `apps-history`；應用本身與它的備份都不變，但在重新安裝項目之前無法備份或還原它。
+
+草稿只是起點：送審前仍要依本文的規則與最後的「審查清單」逐項確認，並在實驗室演練。
 
 ## 應用需要符合的條件（`quadlet-postgres`）
 
@@ -51,7 +88,7 @@ sudo install -o root -g root -m 0644 <id>.json /etc/woowtech-cockpit/backup/apps
 - 具名 Podman 資料卷。還原時以 `podman volume create <名稱>` 的預設選項重建，`.volume` 檔中設定的驅動或掛載選項不會重新套用。
   - 資料卷的內容必須能被 `podman volume import` 完整匯入：只能有一般檔案、目錄、FIFO、符號連結與硬連結；不可有裝置檔；符號連結的目標從連結所在目錄解析後不可離開資料卷（這是 podman 匯入的規則，例如放在資料卷最上層、目標為 `../x` 的連結會被拒絕）；檔案擁有者（UID／GID）必須在應用擁有者的 rootless 使用者命名空間對應範圍內；最多 2,000,000 個項目。備份時每個資料卷匯出都以這些規則檢查，不符合時備份失敗並指出資料卷與項目（應用已恢復執行）。
   - 還原時資料卷由引擎重新產生的 tar 匯入：非目錄檔案的 setuid／setgid 位元與 `user.*` 以外的延伸屬性（例如 file capabilities）不保留，結果頁「注意事項」會列出；修改時間只保留到秒。符號連結、硬連結、FIFO、長檔名、非 UTF-8 檔名、setgid／sticky 目錄、`user.*` 延伸屬性與不同擁有者都會保留（實驗室以 27 個項目實測）。依賴 setuid 程式或 file capabilities 的應用需另外評估。
-- 主機資料夾：應用擁有者家目錄中、以 bind mount（`Volume=%h/<資料夾>:<容器內路徑>`）掛進容器的整個資料夾，見下方「主機資料夾（`data_dirs`）」。**新功能，實驗室端到端驗證尚未完成。**
+- 主機資料夾：應用擁有者家目錄中、以 bind mount（`Volume=%h/<資料夾>:<容器內路徑>`）掛進容器的整個資料夾，見下方「主機資料夾（`data_dirs`）」。實驗室（D1–D7）與參考主機（Odoo、Home Assistant、Nextcloud，2026-11-13）已實測。
 - 應用自己的設定目錄 `~/.config/<id>/` 或 `~/.local/share/<id>/`（`<id>` 為應用 ID）之下的單一設定檔，每個最大 16 MiB。備份時照原樣讀取內容，不檢查檔案目前的權限；還原時一律以目錄宣告的 `mode`（最多 0644）寫入，例如原本 0664 的檔案還原後是 0644。還原時上層資料夾不存在會以擁有者身分建立（0700）。
 - Podman secrets，每個 1–511,999 bytes（Podman 的限制），還原時以預設驅動重建。
 - PostgreSQL 資料庫：列在 `postgres` 項目以 `pg_dump` 匯出（條件如下），或冷備份：資料檔隨資料卷或主機資料夾整份備份（見「PostgreSQL 冷備份」）。
@@ -82,7 +119,7 @@ sudo install -o root -g root -m 0644 <id>.json /etc/woowtech-cockpit/backup/apps
 | Nextcloud | `.local/share/nextcloud-office/html`、`…/data`、`…/postgres`、`…/redis` | `html` 約 897 MB、32,839 個檔案（含 `config/config.php`），`data` 約 80 MB，`postgres` 是 PostgreSQL 16 的資料目錄；檔案屬於容器內的 www-data、postgres 等帳號（主機上是 subuid） |
 | Odoo | `.local/share/odoo18/addons` | 自訂模組，容器內唯讀 |
 
-大小與檔案數是負責人 2026-11-13 在正式主機上量到的參考值，只用來說明規模；這些應用的目錄項目尚未建立。
+大小與檔案數是負責人 2026-11-13 在正式主機上量到的參考值，只用來說明規模。這三個應用的目錄項目已在參考主機建立並實測備份與原位還原，結果見 [production-onboarding.md](production-onboarding.md)。
 
 ### 宣告方式
 
@@ -94,7 +131,7 @@ sudo install -o root -g root -m 0644 <id>.json /etc/woowtech-cockpit/backup/apps
 
 - `path`：相對於應用擁有者家目錄的資料夾路徑。與設定檔不同，**不限於** `.config/<id>/` 或 `.local/share/<id>/`，但下列規則全部適用：
   - 正規化的相對路徑（`/` 分隔），不可為空、不可以 `/` 開頭；每一段只能用 `A-Z a-z 0-9 . _ @ + -`，不可為空、`.` 或 `..`；
-  - 不可是家目錄本身；不可等於、位於或包含 `.ssh`、`.gnupg`、`.config/systemd`、`.config/containers`、`.local/share/containers`、`.config/environment.d`、`.config/autostart`、`.config/dbus-1`、`.config/user-tmpfiles.d`、`.local/share/systemd`、`.local/share/dbus-1`、`.local/share/applications`、`.local/share/user-tmpfiles.d`、`.local/bin`、`.local/lib`、`bin`、`.bashrc.d`、`.config/fish`（登入金鑰、服務定義、使用者環境、登入時會執行的程式與殼層設定、Python 使用者套件、Podman 儲存區都不能由備份內容取代）；比對時不分大小寫；
+  - 不可是家目錄本身；不可等於、位於或包含 `.ssh`、`.gnupg`、`.config/systemd`、`.config/containers`、`.local/share/containers`、`.config/environment.d`、`.config/autostart`、`.config/dbus-1`、`.config/user-tmpfiles.d`、`.local/share/systemd`、`.local/share/dbus-1`、`.local/share/applications`、`.local/share/user-tmpfiles.d`、`.local/bin`、`.local/lib`、`bin`、`.bashrc.d`、`.config/fish`、`.config/git`（登入金鑰、服務定義、使用者環境、登入時會執行的程式與殼層設定、Python 使用者套件、Podman 儲存區都不能由備份內容取代）；比對時不分大小寫；
   - 任何一段都不可包含 `.woowbk-`（保留給還原時的暫存資料夾名稱）；
   - 各項目不可互相重疊（一個不可位於另一個之內），也不可與 `config_files` 的任何路徑重疊；同一個擁有者的兩個應用，主機資料夾不可互相重疊，也不可包含另一個應用的設定檔（較晚載入的項目會被略過並在狀態中說明）。
 - `label`：選填，頁面顯示用的中文說明。
@@ -103,7 +140,7 @@ sudo install -o root -g root -m 0644 <id>.json /etc/woowtech-cockpit/backup/apps
 
 ### 應用需要符合的條件
 
-- **每個使用這個資料夾的服務都要列在 `writer_units`。** 備份時引擎只停止 `writer_units`。備份開始前，引擎會列出應用擁有者所有執行中的容器（不論是 Quadlet 的 `Volume=`／`Mount=`、Pod、`PodmanArgs` 或手動啟動的），只要有不會被停止的容器以可寫入方式掛載這個資料夾（或它的上層資料夾），備份就會在停止任何服務之前失敗並說明是哪個容器。唯讀掛載不影響備份，但還原時一樣會被擋下（見下方）。原則上不要讓其他應用共用資料夾。
+- **每個使用這個資料夾的服務都要列在 `writer_units`。**（2026-11-14 起具名資料卷也一樣：有不會被停止的執行中容器以可寫入方式掛載應用的資料卷時，備份在停止任何服務之前失敗；只讀取的容器請改用 `:ro` 唯讀掛載。） 備份時引擎只停止 `writer_units`。備份開始前，引擎會列出應用擁有者所有執行中的容器（不論是 Quadlet 的 `Volume=`／`Mount=`、Pod、`PodmanArgs` 或手動啟動的），只要有不會被停止的容器以可寫入方式掛載這個資料夾（或它的上層資料夾），備份就會在停止任何服務之前失敗並說明是哪個容器。唯讀掛載不影響備份，但還原時一樣會被擋下（見下方）。原則上不要讓其他應用共用資料夾。
 - 資料夾**不可是掛載點，也不可包含掛載點**（另外掛載的檔案系統或 bind mount）。還原要在同一個掛載中替換整個資料夾：掛載點無法改名；資料夾內的掛載點會連同被取代的舊內容一起移走，成功後刪除時會刪到另一個掛載的內容。備份與還原前的檢查都會拒絕。資料放在另一顆磁碟時，請列出掛載點**之內**的資料夾，例如掛載點是 `~/data` 就列 `~/data/nextcloud`。
 - 資料夾中設定了 POSIX ACL 權限的項目，備份不包含 ACL，備份紀錄會說明有幾個；擁有者不在應用擁有者 UID／GID 範圍內的檔案（例如 root 擁有），還原後會變成範圍內的 65534。
 - 資料夾與其每一層上層資料夾都**不可是符號連結**；資料夾內的符號連結會原樣備份，但不會被跟隨到資料夾外。
@@ -150,9 +187,9 @@ PostgreSQL 的資料目錄放在具名資料卷或主機資料夾時，可以不
 ]
 ```
 
-（實驗室主機資料夾示範項目 [catalog-examples/woowbk-dirs/catalog.json](../../catalog-examples/woowbk-dirs/catalog.json) 的寫法，由實驗室成員同時建置中。）
+（實驗室主機資料夾示範項目 [catalog-examples/woowbk-dirs/catalog.json](../../catalog-examples/woowbk-dirs/catalog.json) 的寫法。）
 
-這樣備份時所有服務都停止（停止順序與 `units` 相反，應用先停、資料庫最後停；恢復時資料庫先啟動），資料檔是資料庫正常關閉後的一致狀態。和 `pg_dump` 方式比較：
+這樣備份時所有服務都停止，資料檔是資料庫正常關閉後的一致狀態。服務以一次 `systemctl --user stop` 停止，先後由 systemd 依 Quadlet 的 `After=` 決定：應用服務寫明 `After=<資料庫>.service` 時，應用先停、資料庫最後停；設定了這個資料庫的 `postgres-digest` 時，資料庫在讀完摘要後才以第二次停止。恢復時資料庫先啟動。和 `pg_dump` 方式比較：
 
 | | `postgres` 項目（pg_dump） | 冷備份 |
 | --- | --- | --- |
@@ -166,8 +203,26 @@ PostgreSQL 的資料目錄放在具名資料卷或主機資料夾時，可以不
 
 - 資料庫映像以主版本固定標籤（例如 `postgres:16-alpine`），並讓容器有足夠時間正常關閉（例如 `PodmanArgs=--stop-timeout 60`）；被強制終止的資料庫只能靠 WAL 復原。
 - 主版本不同時，還原後資料庫無法啟動，健康檢查不會通過，依一般流程應會自動回復；這個情況尚未實測。升級 PostgreSQL 主版本前後請各做一次備份。
-- 引擎不會列出執行個體中的資料庫或角色，預檢也不檢查 PostgreSQL 版本；資料核對（`verify`）請涵蓋資料庫內容，健康檢查請確認資料庫可連線。
+- 引擎不會列出執行個體中的資料庫或角色，預檢也不檢查 PostgreSQL 版本。請以 `postgres-digest` 的冷備份寫法（`container`＋`unit`＋`user`，見「資料核對」）核對資料庫內容：它在資料庫停止前讀取摘要，還原後在應用啟動前比對；健康檢查請確認資料庫可連線。
 - 已驗證的範圍（2026-11-13）：**具名資料卷**的冷備份在實驗室 dev-a 以示範應用實測：備份暫停寫入約 4 秒，原位還原約 18 秒，資料核對（筆數、內容雜湊、設定檔與密鑰）與備份時一致；負責人另以同一方式在正式主機測試 Odoo（備份暫停 8 秒），還原後 205 個資料表的內容清單與 filestore 檔案清單和備份前相同。**主機資料夾**中的資料庫（Nextcloud 的形態）以實驗室示範項目 `woowbk-dirs`（PostgreSQL 16 資料目錄在主機資料夾，含額外角色與第二個資料庫）實測原位還原、跨設備還原（不同 UID 與 subuid 範圍）、自動回復與中斷後整理，角色、密碼與資料都與備份時一致。
+
+## PostgreSQL 的三種備份方式（2026-11-13）
+
+| 方式 | 目錄寫法 | 備份時資料庫 | 保留的內容 | 還原的條件 |
+| --- | --- | --- | --- | --- |
+| 單一資料庫 | `postgres` 項目（預設 `"scope": "database"`） | 保持執行 | 只有 `database` 這一個資料庫；擁有者改為 `user`，權限不保留 | 主版本 ≥ 備份時；原位還原時執行個體中不可有其他資料庫 |
+| 整個執行個體 | `postgres` 項目加 `"scope": "instance"`，**不寫** `database`；`user` 是映像的初始超級使用者 | 保持執行 | template0／template1 以外的所有資料庫（範本資料庫也保留；不接受連線的資料庫讓備份失敗）、所有角色（含密碼雜湊）、角色成員、角色與資料庫層級設定、擁有者、權限、編碼與語系、註解 | 主版本 ≥ 備份時；映像必須有每個資料庫用到的擴充功能（例如 pgvector） |
+| 冷備份 | 不列 `postgres`；資料卷或資料夾列入 `volumes`／`data_dirs`，資料庫服務列入 `writer_units` | 一起停止 | 資料檔整份 | **主版本相同** |
+
+```json
+"postgres": [{"id": "main", "scope": "instance", "container": "nextcloud-db", "unit": "nextcloud-db.service",
+              "user": "nextcloud", "data_volume": "nextcloud-pgdata"}]
+```
+
+- **單一資料庫**：應用只用一個資料庫、不需要額外角色（多數小型應用）。
+- **整個執行個體**：應用自己建立角色或資料庫時，例如 Nextcloud 安裝時建立的 `oc_<管理員>` 角色（擁有 `nextcloud` 資料庫）、Odoo 的 `odoo` 角色與它建立的公司資料庫；或需要還原到較新主版本時。`user` 必須是映像建立的**初始超級使用者**（映像的 `POSTGRES_USER`，PostgreSQL 內部 oid 10 的角色）：還原時新建的執行個體只有這個角色，其他帳號備份與預檢都不通過（2026-11-14 審查 F5）。還原時資料庫資料卷會重建，映像建立的超級使用者不會重新建立，而是套用備份時的屬性與密碼雜湊（密鑰也會還原成對應的密碼）；備份中這個角色若不是可登入的超級使用者，預檢不通過。備份 template0、template1 以外的每個資料庫（範本資料庫也保留）；有**不接受連線**的資料庫時無法備份（pg_dump 讀不到，原位還原後會永久遺失），請先允許連線或改用冷備份。映像初始化程式（postgis、timescaledb 等）在新執行個體裡建立或載入擴充功能的資料庫，還原時以備份內容重建。原位還原時，備份之後才建立的資料庫會被移除（預檢會列出；還原前備份保留它們）。實驗室範例：[`catalog-examples/woowbk-inst`](../../catalog-examples/woowbk-inst/README.md)（pgvector 映像、應用以 `oc_admin` 登入、`odoo` 角色擁有兩個資料庫；由「應用設定」草稿的「整個執行個體」寫法產生，原位與跨設備全新部署還原都已實測）。
+- **冷備份**：無法用 `pg_dump`（沒有超級使用者、非 PostgreSQL 的資料庫）或希望整份檔案級複製時；停機時間包含資料庫的停止與啟動。
+- 實驗室已驗證（postgres:16-alpine 16.16）：Nextcloud 形態（`oc_admin` 擁有資料庫、角色成員、資料庫內的角色設定）與 Odoo 形態（`odoo` 角色含 CREATEDB 與連線上限、LC_COLLATE C 的資料庫、撤銷 PUBLIC 連線、資料庫設定與註解）、ICU 語系資料庫，還原後角色、密碼雜湊、擁有者、權限與資料都和備份時相同；pgvector 的資料庫還原到沒有 `vector` 的映像時在還原任何資料前就被拒絕。
 
 ## 範例
 
@@ -223,9 +278,9 @@ PostgreSQL 的資料目錄放在具名資料卷或主機資料夾時，可以不
 | `quadlet` | 是 | 物件，只能有 `files` 與 `template_dir` | Quadlet 設定 |
 | `quadlet.files` | 是 | 1–32 個檔名，副檔名為 `.container`、`.network`、`.volume` 或 `.pod` | 擁有者 `~/.config/containers/systemd/` 中屬於此應用的 Quadlet 檔 |
 | `quadlet.template_dir` | 否 | 正規化的絕對路徑，位於 `/usr/local/share/woowtech-cockpit-backup/catalog/` 之內 | 全新部署用的範本資料夾；沒有時無法還原到尚未部署此應用的設備 |
-| `units` | 是 | 1–32 個 `.service` 名稱 | 啟動順序；停止時反向 |
+| `units` | 是 | 1–32 個 `.service` 名稱 | 應用的服務；沒有寫明 `After=` 時作為啟動順序 |
 | `writer_units` | 否 | 0–32 個，每個都必須在 `units` 中，且不可是任何 `postgres[].unit` | 備份時暫停的服務 |
-| `postgres` | 否 | 0–8 個物件，每個都必須且只能有 `id`、`container`、`unit`、`database`、`user`、`data_volume` | 要匯出的資料庫 |
+| `postgres` | 否 | 0–8 個物件：`id`、`container`、`unit`、`user`、`data_volume` 必填，`scope` 選填（`database` 為預設、`instance`）；單一資料庫方式必須有 `database`，整個執行個體方式不可有 `database` | 要匯出的資料庫（三種方式見「PostgreSQL 的三種備份方式」） |
 | `postgres[].unit` | — | 必須在 `units` 中，不可在 `writer_units` 中 | 資料庫服務 |
 | `postgres[].data_volume` | — | 不可同時列在 `volumes` | 資料庫的資料卷，還原時刪除重建 |
 | `volumes` | 否 | 0–32 個物件：`name` 必填，`label` 選填（0–80 字） | 要備份的資料卷 |
@@ -233,7 +288,7 @@ PostgreSQL 的資料目錄放在具名資料卷或主機資料夾時，可以不
 | `secrets` | 否 | 0–64 個物件，只有 `name` | 要備份的 Podman secrets |
 | `config_files` | 否 | 0–64 個物件，`path` 與 `mode` 都必填 | 要備份的設定檔 |
 | `health` | 否 | 0–8 個物件：`type`、`url` 必填，`type` 只能是 `http`；`expect_status` 100–599（預設 200）；`timeout_seconds` 1–600（預設 60） | 健康檢查 |
-| `verify` | 否 | 0–8 個物件，`id`、`type`、`url`、`compare` 都必填；`type` 只能是 `http-json`；`compare` 1–32 個鍵 | 資料核對 |
+| `verify` | 否 | 0–16 個物件，`id` 不可重複；`type` 為 `http-json`（`url`、`compare` 1–32 個鍵）、`postgres-digest` 或 `files-digest`（欄位見「資料核對」）；`label` 只用於後兩種 | 資料核對 |
 
 名稱格式（正規表示式）：
 
@@ -255,7 +310,7 @@ config_files[].mode                   ^0[0-7]{3}$，且不可超過 0644
 quadlet.template_dir 的每一段          ^[A-Za-z0-9._@+-]{1,255}$，不可為 . 或 ..
 ```
 
-`config_files[].path`：相對於擁有者家目錄，必須位於應用自己的設定目錄 `.config/<id>/` 或 `.local/share/<id>/` 之下，最多 1024 字元；每一段 1–255 字元，只能用 `A-Z a-z 0-9 . _ @ + -`，不可為空、`.` 或 `..`。即使應用 ID 與下列目錄同名，也不可指向 `.config/systemd/`、`.config/containers/`、`.config/environment.d/`、`.config/autostart/`、`.config/dbus-1/`、`.config/user-tmpfiles.d/`、`.local/share/systemd/`、`.local/share/containers/`、`.local/share/dbus-1/`、`.local/share/applications/`：服務定義、使用者環境與 Podman 設定只能來自受信任的範本。`mode` 不可有執行權限，群組與其他人不可寫入；放密碼的檔案請用 `0600`。
+`config_files[].path`：相對於擁有者家目錄，必須位於應用自己的設定目錄 `.config/<id>/` 或 `.local/share/<id>/` 之下，最多 1024 字元；每一段 1–255 字元，只能用 `A-Z a-z 0-9 . _ @ + -`，不可為空、`.` 或 `..`。即使應用 ID 與下列目錄同名，也不可指向 `.config/systemd/`、`.config/containers/`、`.config/environment.d/`、`.config/autostart/`、`.config/dbus-1/`、`.config/user-tmpfiles.d/`、`.local/share/systemd/`、`.local/share/containers/`、`.local/share/dbus-1/`、`.local/share/applications/`，也不可位於主機資料夾禁止的任何目錄中（例如 `.config/fish/`、`.config/git/`，不分大小寫：應用 ID 是 `fish` 或 `git` 時，備份內容不能寫入擁有者下次登入或執行 git 時會執行的設定；2026-11-14 審查 L3）：服務定義、使用者環境、殼層與 Podman 設定只能來自受信任的範本。`mode` 不可有執行權限，群組與其他人不可寫入；放密碼的檔案請用 `0600`。
 
 `health[].url`、`verify[].url`：只能是 `http://127.0.0.1:<埠>/…` 或 `http://localhost:<埠>/…`，埠 1–65535，最多 500 字元，路徑只能用 URL 安全字元。引擎不跟隨轉址、不使用 proxy，回應本文最多讀取 1 MiB。
 
@@ -271,11 +326,14 @@ quadlet.template_dir 的每一段          ^[A-Za-z0-9._@+-]{1,255}$，不可為
 
 ## 服務順序與 `writer_units`
 
-- `units` 是啟動順序，停止時反向。還原時引擎先啟動資料庫服務並匯入資料，再依 `units` 順序啟動其餘服務。只需列出 `.container` 產生的服務；`.network`、`.volume`、`.pod` 產生的輔助服務由引擎依 `quadlet.files` 自行處理。
+- `units` 是啟動順序（服務沒有寫明 `After=` 時的後備，見下方「啟動」）；停止時一次停止全部，先後由 systemd 依 `After=` 決定。還原時引擎先啟動資料庫服務並匯入資料（有資料核對時也在這時比對），再啟動其餘服務。只需列出 `.container` 產生的服務；`.network`、`.volume`、`.pod` 產生的輔助服務由引擎依 `quadlet.files` 自行處理。
 - 備份時只暫停 `writer_units` 中正在執行的服務；`postgres` 項目的資料庫保持執行以便 `pg_dump`。**所有會寫入資料庫、資料卷、主機資料夾或設定檔的服務都要列入**：主服務、worker、排程、webhook 處理、會把資料存到已列入資料卷或主機資料夾的快取或佇列等。沒列入的服務在備份期間繼續寫入，資料庫匯出、資料卷與主機資料夾就可能來自不同時間點。
 - 主機資料夾與冷備份的資料卷：**每個掛載它的服務**都要列入，包括資料庫服務本身（見「PostgreSQL 冷備份」）。
 - 資料卷或主機資料夾若被其他應用的服務共用，這個項目無法暫停那些服務，備份會不一致；共用需在審查時特別評估（見 [production-onboarding.md](production-onboarding.md)）。
-- 每個服務停止的逾時為 180 秒、啟動為 600 秒。暫停期間（停止到重新啟動完成）就是應用停機時間，會量測並記錄在備份中；寫入服務應能快速停止與啟動。
+- 停止：所有要停的服務用**一次** `systemctl --user stop` 停止，systemd 依 `After=` 決定先後，其餘同時停止（不再逐一停止；n8n 的 task runner 各需約 50 秒）。停止很慢的輔助服務（task runner、worker）若在 Quadlet 檔案寫明 `After=<主服務>.service`，systemd 會先停它們、主服務最後才停，使用者看到的中斷較短；沒寫依賴時全部同時停止，主服務一開始就停（實驗室量測：兩個各需 15 秒停止的獨立服務，備份暫停寫入由 41 秒降為 26 秒，但主服務的中斷由 9.8 秒變成 25.6 秒）。
+- 啟動：Quadlet 檔案以 `After=`（`Requires=` 會一併加上）指明依賴其他服務的，只等它依賴且這次要啟動的服務；完全沒指明依賴的服務，等 `units` 中排在它前面的所有服務（`units` 順序仍是後備）。可以同時啟動的服務以一次 `systemctl --user start` 啟動。`units` 順序和 `After=` 矛盾、或讀不到依賴時，逐一啟動。因此請在 Quadlet 檔案寫明 `Requires=`／`After=`，啟動會更快。
+- 每個服務停止的逾時為 180 秒、啟動為 600 秒。暫停期間（停止到重新啟動完成）與服務中斷時間（第一次停止到所有健康檢查通過）都會量測，備份與還原的結果都會列出；寫入服務應能快速停止與啟動。
+- 原位還原：還原前備份停止的寫入服務**不再重新啟動**，直接交給還原（應用只停一次）；主機資料夾在任何服務停止之前就先寫到旁邊的新資料夾，停機時只需對調。
 - 匯出後一定會重新啟動被暫停的服務（每個最多試兩次）；仍無法啟動時備份失敗，訊息指出是哪個服務。備份開始時沒有執行的服務不會被啟動或停止。
 
 ## 健康檢查（`health`）
@@ -287,12 +345,29 @@ quadlet.template_dir 的每一段          ^[A-Za-z0-9._@+-]{1,255}$，不可為
 
 ## 資料核對（`verify`）
 
+除了應用自己的 JSON 端點（`http-json`，見下），引擎可以自己計算資料摘要，不需要應用提供任何 API：
+
+```json
+"verify": [
+  {"id": "db", "type": "postgres-digest", "postgres": "main", "label": "資料表內容"},
+  {"id": "files", "type": "files-digest", "volume": "woowbk-demo-files", "exclude": ["*.log"], "label": "上傳檔案"},
+  {"id": "config", "type": "files-digest", "data_dir": "homeassistant/config"}
+]
+```
+
+- `postgres-digest`：每個資料表與序列的筆數與內容摘要（與資料列順序無關）。`postgres` 指定 `postgres` 項目（單一資料庫只能核對那個資料庫；整個執行個體預設 `"databases": "all"`，並核對角色與成員）；冷備份的資料庫改用 `container`＋`unit`（必須在 `writer_units`）＋`user`。`exclude_tables` 可排除資料庫自己會寫入的表（`schema.table` 萬用字元，例如 `"cron.job_run_details"`）。資料列以資料列型別本身的輸出函式（`record_out`）讀取：資料表擁有者自訂的型別轉換不會被執行，名為 `t` 的欄位也不會讓其他欄位漏掉（2026-11-14 審查 H1、F2）；SQL_ASCII 資料庫以原始位元組計算。
+- `files-digest`：資料卷（`volume`，不可是資料庫資料卷）或主機資料夾（`data_dir`）的每個項目：類型、權限、擁有者、大小、連結目標與 sha256。`exclude` 不含 `/` 時比對任何名稱（資料夾連同其下全部），含 `/` 時比對從最上層起的路徑。不比對 socket、資料卷最上層資料夾本身，以及資料卷中檔案的 setuid／setgid（還原會去掉）。
+- **何時計算**：備份時在寫入服務停止期間**讀兩次**，把它要證明的匯出夾在中間（資料庫在 `pg_dump` 前後、冷備份的資料庫在它停止之前連讀兩次、檔案在匯出前後）；兩次相同才保存。兩次不同代表還有目錄沒有停止的寫入者（其他容器或主機上的程式、排程、資料庫內的 pg_cron 或 TimescaleDB 工作），這份備份就不保存這一項，作業紀錄說明原因，還原時這一項「未比對」；請把寫入者列入 `writer_units`，或用 `exclude`／`exclude_tables` 排除會變動的部分。還原時在資料放回之後、應用服務啟動**之前**計算（資料庫服務先單獨啟動）。所以是精確比對：任何差異都表示資料不一致，還原會在應用啟動前停止並自動回復，結果頁列出不同的項目（最多 20 個）與筆數；不一致時會再讀一次，兩次也不同就表示還有寫入者在動資料，這一項顯示「未比對」並列入注意事項。
+- 摘要會延長暫停時間（備份時完整讀兩次資料），只為重要的資料設定。檔案清單最大 1 GiB（約 200 萬個項目），超過時備份失敗並建議排除大量的小檔案。PostgreSQL 11 以前讀取的摘要與 12 以後讀取的不比對（浮點數文字格式不同）。
+
+`http-json`：
+
 - **流程**：備份時，在暫停寫入服務**之前**讀取 `url`，必須回 HTTP 200 與 JSON 物件；保存 `compare` 列出的鍵的值（每個核對項目的值轉成 JSON 後最多 16,384 個字元）。服務恢復後會再讀一次（備份前應用只部分執行時，讀不到會重試到目錄設定的健康檢查逾時）：兩次相同才保存快照，不同或讀不到就不保存（作業紀錄會說明）。還原並通過健康檢查後，再讀一次並逐鍵比對，任何一個值不同就視為還原失敗並自動回復。結果頁以「備份時／還原後」表格列出每個值。
 - **讀不到或沒有保存快照時**：備份仍會完成並記錄警告，但用這份備份還原時會略過比對，結果顯示「未比對」。
 - **設計建議**：
   - 值必須只由持久資料決定、可重現：筆數、內容雜湊、來自設定檔的值、用密鑰計算的檢查結果。示範應用的 `/api/summary` 同時涵蓋資料庫、資料卷、設定檔與密鑰（`signatures_valid` 用目前的密鑰重新驗證每筆資料的 HMAC，密鑰差一個位元組就會變成 `false`）。
   - 不要放時間戳記、執行時間、請求計數、隨機值、快取統計，或應用每次啟動都會改變的值。
-  - 端點須唯讀、只發佈在 127.0.0.1、15 秒內回應、不需登入。引擎不送任何帳密；HTTP 介面必須登入的應用目前無法使用 `verify`，請先不設定（還原結果會顯示「未比對」）。以 SQL 核對的擴充見 [production-onboarding.md](production-onboarding.md)。
+  - 端點須唯讀、只發佈在 127.0.0.1、15 秒內回應、不需登入。引擎不送任何帳密；HTTP 介面必須登入的應用無法使用 `http-json`，請改用上面的 `postgres-digest`／`files-digest`（不需要應用的 API）。
 - **時間差注意**：快照在暫停寫入服務之前讀取（端點通常由寫入服務本身提供），與實際匯出的資料之間有短暫空檔。若應用在這段時間（包括服務停止的過程中）仍會改變被比對的值，恢復後的第二次讀取就會不同，這份備份便沒有快照、還原時無法比對資料。只比對在這段空檔內不會變動的值，並確保所有寫入都來自 `writer_units`。
 - **未套用的設定變更**：設定檔已修改但服務尚未重新啟動時，備份重新啟動服務會讓新設定生效；比對來自設定檔的值（例如示範的 `title`）因此改變時，同樣不會保存快照。這是管理者操作面的已知限制，見 [../backup.md](../backup.md)。
 
@@ -336,7 +411,7 @@ print("通過：", app.id, "服務", ", ".join(app.units))
 
 1. **啟動並安裝來源**：`tests/e2e/lab/up.sh a`、`up.sh b`（啟動前會確認主機可用記憶體至少 1200 MB），再以 `tests/e2e/lab/deploy-src.sh a`、`b` 安裝目前工作樹。
 2. **在 dev-a 部署應用**：以 `tests/e2e/lab/owner.sh a …`（以 appowner 執行，方式與引擎相同）取得或建置映像、由標準輸入建立 secrets、寫入設定檔與 Quadlet 檔、`systemctl --user daemon-reload` 後啟動，並寫入可核對的測試資料。可參考 `tests/e2e/lab/deploy-demo.sh`。設備記憶體上限為 768 MiB，巢狀容器請設定記憶體上限（例如 Quadlet 的 `PodmanArgs=--memory 256m`）。
-3. **放入目錄項目與範本**：兩台設備都要放。`tests/e2e/lab/exec.sh` 以 root 在設備內執行指令，並把標準輸入傳給它，例如 `tests/e2e/lab/exec.sh a sh -c 'cat > /root/<id>.json' < <id>.json`，再於設備內依「目前的安裝方式」的 `install` 指令放到正確位置。實驗室的擁有者帳號是 `appowner`（dev-a 為 UID 1001、dev-b 為 1007）。
+3. **放入目錄項目與範本**：兩台設備都要放。可以在設備的 Cockpit 頁面「應用設定」掃描 appowner、審查並安裝草稿（範本仍要手動放）；或以 `tests/e2e/lab/exec.sh` 以 root 在設備內執行指令（標準輸入會傳給它），例如 `tests/e2e/lab/exec.sh a sh -c 'cat > /root/<id>.json' < <id>.json`，再於設備內依「目前的安裝方式」的 `install` 指令放到正確位置。實驗室的擁有者帳號是 `appowner`（dev-a 為 UID 1001、dev-b 為 1007）。
 4. **確認載入**：`tests/e2e/lab/engine.sh a status` 的 `apps` 列出此應用、`state` 為 `running`、`problems` 是空的，且 `warnings` 沒有它的訊息。
 5. **跑完整情境**（引擎呼叫格式見 `engine.sh` 檔頭；帶金鑰的請求以 `-` 從標準輸入提供）：
    - 同機：建立金鑰 → 含映像與不含映像各備份一次 → 變更資料 → 原位還原 → 健康檢查通過、`verification` 全部一致、還原前備份列出。
@@ -345,7 +420,7 @@ print("通過：", app.id, "服務", ", ".join(app.units))
    - 缺映像：不含映像的備份還原到沒有該映像的設備 → 預檢失敗，沒有任何變更。
    - 中斷：在「還原資料」階段終止還原作業 → 「已中斷」→ 用還原前備份還原。
    - 洩漏：作業紀錄、日誌、索引與 journal 不含此應用的密鑰內容。
-   - 記錄備份時間、寫入暫停秒數（作業結果的 `downtime_seconds`）、還原停機時間，以及映像、PostgreSQL 與應用版本。
+   - 記錄備份時間、作業結果 `timing` 中每個應用的寫入暫停與無法使用秒數（備份與還原都有），以及映像、PostgreSQL 與應用版本；有資料核對時，確認還原結果的每一項都「一致」。
 6. **保存證據**：寫到 `~/.woowbk-lab/evidence/`，不可包含任何密鑰或金鑰。
 7. **清理**：移除測試應用與目錄項目，或以 `tests/e2e/lab/reset.sh b --up` 重設 dev-b（會刪除該設備所有資料卷與備份）。
 
@@ -375,7 +450,8 @@ print("通過：", app.id, "服務", ", ".join(app.units))
 - [ ] **設定檔與密鑰**：路徑與名稱和應用實際使用的一致；設定檔位於 `.config/<id>/` 或 `.local/share/<id>/`；權限不超過 0644，放密碼的檔案為 0600；密鑰大小在限制內。
 - [ ] **部署範本**：與正式部署一致、與主機無關、不含密鑰；全新部署後應用可正常啟動。
 - [ ] **健康檢查**：反映應用真正可用；逾時足以涵蓋冷啟動；無副作用。
-- [ ] **資料核對**：值穩定可重現，涵蓋資料庫、資料卷、設定檔與密鑰；唯讀、不需登入；已評估快照時間差。
+- [ ] **資料核對**：重要的資料庫、資料卷與主機資料夾有 `postgres-digest`／`files-digest`，排除了應用自己一直在寫的表或檔案（例如排程紀錄、快取），並評估了計算摘要增加的停機時間；`http-json` 的值穩定可重現、唯讀、不需登入，已評估快照時間差。
+- [ ] **由草稿產生時**：「應用設定」草稿的每一項注意（禁止或敏感的路徑、權限超過 0644 的設定檔、直接寫在 `Environment=` 的機密、猜測的資料庫名稱、沒有對應主機埠的健康檢查）都已處理或記錄理由；PostgreSQL 方式是刻意選擇的（冷備份、整個執行個體或單一資料庫）。
 - [ ] **相容性**：與先前版本的目錄項目相比，沒有讓需要還原的舊備份失去必要項目。
 - [ ] **檔案與權限**：離線檢查通過；放到設備後，頁面沒有「備份設定提示」（`status` 的 `warnings` 是空的）。
 - [ ] **實驗室證據**：同機、跨設備（不同 UID）、失敗回復、缺映像、中斷與洩漏檢查都通過；已記錄停機時間與版本。

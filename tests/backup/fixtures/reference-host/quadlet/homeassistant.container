@@ -1,0 +1,19 @@
+# Reference-host shape for catalog-suggest tests: names, mounts and dependencies only, no secret values.
+[Unit]
+Description=Home Assistant core
+Wants=homeassistant-matter.service
+After=homeassistant-matter.service
+
+[Container]
+ContainerName=homeassistant
+Image=ghcr.io/home-assistant/home-assistant:2025.11
+Network=host
+Volume=%h/homeassistant/config-preinstalled:/config
+Volume=/etc/localtime:/etc/localtime:ro
+HealthCmd=curl -fsS http://127.0.0.1:8123/manifest.json
+
+[Service]
+Restart=always
+
+[Install]
+WantedBy=default.target

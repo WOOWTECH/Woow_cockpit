@@ -1,0 +1,19 @@
+# Reference-host shape for catalog-suggest tests: names, mounts and dependencies only, no secret values.
+[Unit]
+Description=Nextcloud PostgreSQL 16 (data directory on the host)
+
+
+[Container]
+ContainerName=nextcloud-db
+Image=docker.io/library/postgres:16-alpine
+Network=nextcloud.network
+Volume=%h/.local/share/nextcloud-office/postgres:/var/lib/postgresql/data
+Environment=POSTGRES_USER=nextcloud POSTGRES_DB=nextcloud
+Secret=nextcloud-db-password,type=env,target=POSTGRES_PASSWORD
+PodmanArgs=--stop-timeout 60
+
+[Service]
+Restart=always
+
+[Install]
+WantedBy=default.target
