@@ -2,9 +2,10 @@
 
 Layout below `paths.data` (all 0700): `archives/<id>.tar` (format 2, every new backup) or `archives/<id>.woowbackup`
 (format 1, read forever) + `archives/<id>.json` (index sidecar, 0600), `uploads/<upload_id>.part` +
-`uploads/<upload_id>.json`, `staging/<job>/`, `jobs/`, `exports/<export_id>.tar` + `.json` (unencrypted copies made for
-one download: root 0600, deleted after EXPORT_TTL seconds by the next status/list/export command or the transient
-timer the export job schedules; CONTRACT section 8).
+`uploads/<upload_id>.json`, `staging/<job>/`, `pending/<job>/` (an in-place restore's pre-restore copy until it is
+packaged into its safety backup; never replaced, only its packaging removes it), `jobs/`, `exports/<export_id>.tar` +
+`.json` (unencrypted copies made for one download: root 0600, deleted after EXPORT_TTL seconds by the next
+status/list/export command or the transient timer the export job schedules; CONTRACT section 8).
 Sidecars are written atomically; unreadable or invalid sidecars are ignored by listings. Every sidecar
 write (register, update, delete) happens under one index lock in the run directory, and `update` reads the
 sidecar under it: a helper command (`inspect`) and a job (a verify result) never overwrite each other's fields,
@@ -152,7 +153,7 @@ class Storage:
     def ensure_layout(self):
         """Create data/run dirs with mode 0700 (root-owned in production)."""
         for path in (self.paths.data, self.paths.archives, self.paths.uploads, self.paths.staging,
-                     self.paths.jobs, self.paths.run, self.exports):
+                     self.paths.pending, self.paths.jobs, self.paths.run, self.exports):
             try:
                 util.ensure_dir(path, 0o700)
             except NotADirectoryError as exc:
@@ -380,6 +381,33 @@ class Storage:
 
     def remove_staging(self, job_id):
         self._remove_tree(self._staging_path(job_id))
+
+    # ------------------------------------------------------------ pre-restore copies
+
+    def pending_path(self, job_id):
+        """`pending/<job>/`: the pre-restore copy of an in-place restore until it is packaged (CONTRACT section 3)."""
+        if not isinstance(job_id, str) or not STAGING_RE.match(job_id):
+            raise BackupError('invalid-request', '工作 ID 格式不正確。')
+        return Path(self.paths.pending) / job_id
+
+    def pending_dir(self, job_id):
+        """Create and return the job's empty 0700 pending directory. One that exists is never replaced: it may hold
+        the only copy of the data an earlier restore changed."""
+        path = self.pending_path(job_id)
+        self.ensure_layout()
+        if os.path.lexists(path):
+            raise BackupError('internal-error', '這個作業的還原前資料資料夾已存在，已停止。', path=str(path))
+        os.mkdir(path, 0o700)
+        fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
+        try:
+            os.fchmod(fd, 0o700)
+        finally:
+            os.close(fd)
+        return path
+
+    def remove_pending(self, job_id):
+        """Delete a pre-restore copy (after it was packaged, or before the restore changed anything)."""
+        self._remove_tree(self.pending_path(job_id))
 
     # ------------------------------------------------------------ uploads
 
