@@ -794,7 +794,7 @@ Shapes:
   evenly: `estimated`; catalog apps without backups are included).
 * `BackupBrief`: `id, type, created, size, note, apps[{id,name}], reason?`.
 * `Job`: `id, type("backup"|"restore"|"verify"|"export"), state("queued"|"running"|"succeeded"|"failed"|"rolled-back"|"interrupted"|"cancelled"), phase, phases[{id,label,state("pending"|"active"|"done"|"failed"|"skipped")}], progress{percent,message}, created, started|null, finished|null, params, result|null, error{code,message}|null, cancellable(bool)`
-* Job `result`: backup → `backup_id, size, apps[], downtime_seconds, unavailable_seconds|null, timing[Timing], encrypted(bool), retention_deleted[str]` (`retention_deleted`: older manual backups the saved keep-last policy deleted after this manual backup, §8); export → `export_id, backup_id, filename, size, expires`; restore → `apps[], safety_backup_id|null, health[Check], verification[{app,match,before,after,checks?[DigestCheck]}], rolled_back(bool), changed(bool), fresh_apps[str], safety_skipped(bool), safety_failed(bool), safety_pending(bool), safety_pending_failed{path,message}?, warnings[str], timing[Timing]` (`safety_pending`: the pre-restore copy is kept in `pending/<job>/` and not packaged (yet); `safety_pending_failed`: the recovery could not package it either, it stays at `path` for manual work); verify → `ok, entries, bytes, deep(true), format, encrypted, apps[{id,name,checked{volumes,dirs,images,digests,globals,dumps,secrets},header_only[str]}], notes[str]` (`checked`: entries that passed a restore's content check; `header_only` (2026-11-14, review L8): the kinds checked only by their format header -- `dumps`: a dump is recognized by its pg_dump header, its body was read in full by `pg_restore` when this device made the backup and is read again by a restore, so an uploaded backup's dump bodies are first read at restore; `notes`: what a restore would drop, e.g. setuid bits). A local read error while checking (EIO, EMFILE, ENOSPC on the scratch copy) fails the job with `internal-error` and records no `verified`; only defects of the content record `verified.ok: false` (review F10).
+* Job `result`: backup → `backup_id, size, apps[], downtime_seconds, unavailable_seconds|null, timing[Timing], encrypted(bool), retention_deleted[str]` (`retention_deleted`: older manual backups the saved keep-last policy deleted after this manual backup, §8); export → `export_id, backup_id, filename, size, expires`; restore → `apps[], safety_backup_id|null, health[Check], verification[{app,match,before,after,checks?[DigestCheck]}], rolled_back(bool), changed(bool), fresh_apps[str], safety_skipped(bool), safety_failed(bool), safety_pending(bool), safety_in_downtime(bool), safety_pending_failed{path,message}?, warnings[str], timing[Timing]` (`safety_pending`: the pre-restore copy is kept in `pending/<job>/` and not packaged (yet); `safety_in_downtime`: it was packaged while the apps were stopped, the free space being too short for packaging next to the running apps (§9); `safety_pending_failed`: the recovery could not package it either, it stays at `path` for manual work); verify → `ok, entries, bytes, deep(true), format, encrypted, apps[{id,name,checked{volumes,dirs,images,digests,globals,dumps,secrets},header_only[str]}], notes[str]` (`checked`: entries that passed a restore's content check; `header_only` (2026-11-14, review L8): the kinds checked only by their format header -- `dumps`: a dump is recognized by its pg_dump header, its body was read in full by `pg_restore` when this device made the backup and is read again by a restore, so an uploaded backup's dump bodies are first read at restore; `notes`: what a restore would drop, e.g. setuid bits). A local read error while checking (EIO, EMFILE, ENOSPC on the scratch copy) fails the job with `internal-error` and records no `verified`; only defects of the content record `verified.ok: false` (review F10).
   `Timing`: `{app, writer_pause_seconds|null, unavailable_seconds|null}` (one decimal): writers (restore: units) stopped →
   every unit running again, and first stop → every health check of the app passed; null when not measured (nothing was
   stopped, a health check failed). The first stop of an in-place restore is the pre-restore copy's writer stop (§9); its
@@ -852,8 +852,9 @@ Phases — backup: `prepare 準備`, `check 檢查空間與應用`, `stop 暫停
 false), `verify 驗證備份`.
 Restore: `prepare 準備`, `decrypt 解密並驗證檔案`, `preflight 相容性檢查`, `stage 預先寫入主機資料夾` (skipped without
 host directories), `safety 保存還原前資料`, `stop 停止應用`, `restore 還原資料`, `start 啟動應用`, `check 健康與資料核對`,
-`safety-package 封裝還原前備份` (skipped without a pre-restore copy; `failed` while the job still succeeds when the copy
-could not be packaged, `done` again once a recovery pass packaged it), and `rollback 自動回復` appended on failure (the
+`safety-package 封裝還原前備份` (skipped without a pre-restore copy; `done` already during `safety` when the copy was
+packaged in the downtime; `failed` while the job still succeeds when the copy could not be packaged, `done` again once a
+recovery pass packaged it), and `rollback 自動回復` appended on failure (the
 copy is packaged inside it). Verify: `prepare`, `decrypt` (decrypt and check every entry, deep), `check`.
 Export: `prepare 準備`, `decrypt 解密並驗證檔案`, `package 封裝未加密副本`, `verify 驗證副本`. Digests are taken inside `dump`
 (PostgreSQL) and `export` (files) and compared inside `restore` (files) and `start` (PostgreSQL, before other units).
@@ -1090,9 +1091,20 @@ every file and directory of the copy, writes its record `pending.json` atomicall
 apps' manifest sections, note, downtime, the encryption choice made at the job's start, and the id the safety backup
 will get) and records `safety_pending` before the restore's first destructive step: from then on a power loss leaves a
 complete copy. A failure to save or record the copy counts as no safety backup (`safety_failed`, or the
-`allow_no_safety`/safety-source fallback). The space check counts the later packaging: the copy's plain size + 1 % +
-the running reserve (the apps run while it is written; at least 2 GiB, review M4), the extracted archive counted as
-free; the same need is checked again right before the packaging starts (images pulled or WAL written meanwhile). A successful restore deletes
+`allow_no_safety`/safety-source fallback). **Where the copy is packaged is decided before any writer stops**, from the
+estimate: after the restore when the free space holds the copy, its archive and the running reserve (the apps run while
+it is written: 5 % of the filesystem, at least 2 GiB and at most 10 GiB, review M4), less the extracted archive
+(deleted before that packaging); otherwise in the downtime, as a safety backup was packaged before 2026.11.14.2 (the
+estimate × 2.2 + the device reserve; no running reserve: the apps are stopped), the log saying so; with too little space
+for that either, the restore is refused before any writer stops (`safety_failed`, `應用未被暫停`). Once the copy is on
+disk the choice is checked again with its real size: a copy larger than estimated switches to packaging in the
+downtime, never to a refusal after the stop (production 2026-11-14: Hermes was paused 2 min 16 s and then refused,
+11.8 GiB needed after the restore, 11.6 GiB free, because only the second check knew the running reserve). Packaging in
+the downtime (`safety_in_downtime` true, phase `safety-package` marked `done` during `safety`) writes, verifies and
+registers the safety backup before the first destructive step; the copy is not flagged and stays only for a rollback
+(which reads it directly and packages nothing more) and is deleted when the job ends. A failure of that packaging
+counts as no safety backup, like one before 2026.11.14.2. For packaging after the restore, the same need is checked
+again right before it starts (images pulled or WAL written meanwhile). A successful restore deletes
 the replaced host-directory copies, the extracted archive, and then packages the copy in phase `safety-package` (written
 and fully verified like any backup, then registered; `safety_backup_id` set) and deletes it -- outside the outage
 (production 2026-11-14: Hermes 66 s and Nextcloud 35 s of the outage were this packaging). A failed restore rolls back
