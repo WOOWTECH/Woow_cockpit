@@ -884,8 +884,51 @@ class PendingCopyRecoveryTests(JobCase):
         self.assertNotIn('safety_pending_deferred', saved)
         self.assertEqual(len(calls), 3)
 
+    def test_a_deferral_is_said_once_whatever_the_figures(self):
+        # Review 2026-11-14: the text names the free space; a note per change made the record grow on every pass
+        # until it could not be read.
+        job_id = self.make('interrupted', phases={'stop': 'done', 'restore': 'failed'}, safety_pending=True,
+                           error={'code': 'job-failed', 'message': 'x'}, result={'warnings': []})
+        figures = iter(range(1, 50))
+        package = lambda jid: (None, f'空間不足，暫不封裝還原前備份：需要約 3.0 GiB，可用約 {next(figures)}.0 MiB', True)  # noqa: E731
+        self.recover(package)
+        first = self.store.get(job_id)
+        logs = len(self.store.read_log(job_id))
+        for _ in range(20):
+            self.recover(package)
+        saved = self.store.get(job_id)
+        self.assertEqual(saved['error']['message'], first['error']['message'], 'said once')
+        self.assertEqual(len(self.store.read_log(job_id)), logs, 'logged once')
+        self.assertTrue(saved['safety_pending_deferred'].endswith('可用約 21.0 MiB'), 'the latest figures')
+        self.assertIs(saved['safety_pending'], True)
+
+    def test_a_copy_of_a_restore_cut_before_any_change_is_deleted(self):
+        # Review 2026-11-14: its data is unchanged where it came from (as after a failure there); kept, it waited for
+        # space forever and its message promised a packaging.
+        job_id = self.make('running', phases={'prepare': 'done', 'decrypt': 'done', 'preflight': 'done',
+                                              'stage': 'skipped', 'safety': 'done'}, phase='safety', safety_pending=True)
+        folder = self.copy_of(job_id)
+        calls = []
+        self.recover(lambda jid: calls.append(jid) or (self.SAFETY, None, False))
+        saved = self.store.get(job_id)
+        self.assertEqual(calls, [], 'not packaged')
+        self.assertEqual((saved['state'], saved['safety_pending'], saved['result']['safety_pending'],
+                          saved['result']['changed']), ('interrupted', False, False, False))
+        self.assertEqual(saved['error']['message'], jobs.UNCHANGED_MESSAGE)
+        self.assertFalse(folder.exists())
+        self.assertFalse(jobs.has_leftovers(saved))
+        self.assertIn('還原在變更任何資料之前就中斷，保留的還原前資料不再需要，已刪除', self.store.read_log(job_id)[-1])
+
+    def test_a_copy_packaged_by_the_recovery_marks_its_step_done(self):
+        job_id = self.make('running', phases={'stop': 'done', 'restore': 'active'}, phase='restore', safety_pending=True)
+        self.copy_of(job_id)
+        self.recover(lambda jid: (self.SAFETY, None, False))
+        phases = {item['id']: item['state'] for item in self.store.get(job_id)['phases']}
+        self.assertEqual((phases['restore'], phases['safety-package']), ('failed', 'done'))
+
     def test_other_leftovers_are_saved_before_the_packaging_starts(self):
-        job_id = self.make('interrupted', safety_pending=True, stopped_writers={'woowbk-demo': ['woowbk-demo-app.service']},
+        job_id = self.make('interrupted', phases={'stop': 'done', 'restore': 'failed'}, safety_pending=True,
+                           stopped_writers={'woowbk-demo': ['woowbk-demo-app.service']},
                            error={'code': 'job-failed', 'message': 'x'}, result={'warnings': []})
         seen = []
 
@@ -953,7 +996,7 @@ class PendingCopyRecoveryTests(JobCase):
         message, result = jobs.interrupted_details(record)
         self.assertIs(result['changed'], False)
         self.assertEqual(result['safety_backup_id'], self.SAFETY)
-        self.assertEqual(message, jobs.INTERRUPTED_MESSAGE['restore'] + f'還原前備份：{self.SAFETY}。')
+        self.assertEqual(message, jobs.UNCHANGED_MESSAGE + f'這次建立的還原前備份 {self.SAFETY} 仍保留在備份列表中。')
         record['phases'][[item['id'] for item in record['phases']].index('stop')]['state'] = 'failed'
         self.assertIs(jobs.interrupted_details(record)[1]['changed'], True)
 

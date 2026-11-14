@@ -1058,11 +1058,11 @@ class RestoreFlowTests(RestoreCase):
 
     def test_space_gone_after_the_copy_is_no_refusal(self):
         # Review 2026-11-14 (the 2026.11.14.2 host test: Hermes paused 2 min 16 s, then refused): once the copy is on
-        # disk, space is no reason to refuse any more. The downtime packaging chosen before the stop does not fit
-        # after all, so the copy is packaged after the restore instead; that waits for space here, keeping the copy.
+        # disk, packaging space is no reason to refuse any more. The downtime packaging chosen before the stop does
+        # not fit after all, so the copy is packaged after the restore instead; that waits for space here.
         reserve = self.paths.reserve_bytes
         self.world.estimate = 1
-        self.storage.free_bytes = lambda: 10 if (self.pending() / 'pending.json').exists() else reserve + 10 ** 6
+        self.storage.free_bytes = lambda: reserve + 10 if (self.pending() / 'pending.json').exists() else reserve + 10 ** 6
         writes = len(self.archive.writes)
         result = self.restore()
         logs = self.reporter.logs
@@ -1073,10 +1073,33 @@ class RestoreFlowTests(RestoreCase):
         self.assertEqual(len(self.archive.writes), writes, 'no space for any archive')
         self.assertEqual((result['safety_backup_id'], result['safety_pending'], result['safety_in_downtime'],
                           result['safety_failed']), (None, True, False, False))
-        self.assertTrue(any('空間不足，暫不封裝還原前備份' in note for note in result['warnings']))
+        self.assertTrue(any('空間不足，暫不封裝還原前備份' in note and '有足夠空間後系統會自動封裝' in note
+                            for note in result['warnings']))
         self.assertTrue((self.pending() / 'pending.json').is_file(), 'kept, flagged, for the recovery')
         self.assertIs(self.reporter.partial.get('safety_pending'), True)
 
+    def test_a_disk_left_below_the_reserve_after_the_copy_is_refused_before_any_change(self):
+        # Review 2026-11-14: with less than the device reserve left, neither the restore nor a rollback could be
+        # trusted to finish (the job's own records may fail to save); nothing has changed yet, so it stops there,
+        # also when restoring without a safety backup is accepted.
+        for allow in (False, True):
+            with self.subTest(allow_no_safety=allow):
+                self.fresh_world() if hasattr(self, 'fresh_world') else None
+                reserve = self.paths.reserve_bytes
+                self.world.estimate = 1
+                self.storage.free_bytes = lambda: 10 if (self.pending() / 'pending.json').exists() else reserve + 10 ** 6
+                with self.assertRaises(BackupError) as caught:
+                    flows.run_restore(self.ctx(), {'backup_id': self.backup_id, 'apps': ['woowbk-demo'],
+                                                   'allow_no_safety': allow})
+                self.assertEqual(caught.exception.code, 'insufficient-space')
+                self.assertIn('少於設備保留的', caught.exception.message)
+                self.assertIn('未做任何變更', caught.exception.message)
+                self.assertNotIn('restore', [e[0] for e in self.world.events])
+                self.assertIn(('start_units', 'woowbk-demo', ('woowbk-demo-app.service',)), self.world.events)
+                self.assertFalse(self.pending().exists())
+                self.assertEqual((caught.exception.result['changed'], caught.exception.result['safety_failed'],
+                                  caught.exception.result['safety_skipped']), (False, False, False))
+                self.world.events.clear()
     def test_the_pre_restore_copy_lies_outside_staging_while_the_restore_runs(self):
         # 2026.11.14.2: the copy is in pending/<job>/ (durable, flushed, with its record), not in the job's staging.
         staging = self.storage.staging / self.job_id
@@ -1666,8 +1689,8 @@ class PendingCopyFlowTests(RestoreCase):
         self.assertEqual((result['safety_backup_id'], result['safety_pending']), (None, True))
         self.assertIs(self.reporter.partial['safety_pending'], True, 'flagged: a recovery pass tries once more')
         self.assertNotIn('safety_backup_id', self.reporter.partial)
-        note = (f'還原已完成，但還原前備份尚未封裝：空間不足。還原前資料保留在 {self.pending()}，系統會再試一次；'
-                '若仍失敗需人工處理。')
+        note = (f'還原已完成，但還原前備份尚未封裝：空間不足。還原前資料保留在 {self.pending()}，'
+                '有足夠空間後系統會自動封裝成還原前備份。')
         self.assertEqual(result['warnings'], [note])
         self.assertIn(note, self.reporter.logs)
         self.assertIn(('fail', 'safety-package'), self.reporter.events)
@@ -1763,7 +1786,7 @@ class PendingCopyFlowTests(RestoreCase):
         result = caught.exception.result
         self.assertTrue(result['rolled_back'], 'the apps are back; only the safety backup is missing')
         self.assertEqual(self.world.data['woowbk-demo'], b'notes-v2-changed')
-        self.assertIn(f'還原前備份尚未封裝：空間不足。還原前資料保留在 {self.pending()}，系統會再試一次；若仍失敗需人工處理。',
+        self.assertIn(f'還原前備份尚未封裝：空間不足。還原前資料保留在 {self.pending()}，有足夠空間後系統會自動封裝成還原前備份。',
                       result['warnings'])
         self.assertEqual((result['safety_backup_id'], result['safety_pending']), (None, True))
         self.assertIs(self.reporter.partial['safety_pending'], True)
@@ -1860,6 +1883,23 @@ class PendingCopyFlowTests(RestoreCase):
         self.assertEqual((backup_id, problem), (chosen, None))
         self.assertEqual(self.storage.index[chosen]['type'], 'safety')
 
+    def test_the_recovery_clears_the_dead_jobs_staging_before_checking_the_space(self):
+        # Review 2026-11-14: the first pass deferred for the space the dead job's extracted archive still held.
+        self.interrupted_copy()
+        staging = self.storage.staging / self.job_id
+        staging.mkdir(parents=True, exist_ok=True)
+        (staging / 'extract').mkdir(exist_ok=True)
+        seen = []
+        check = flows._check_package_space
+
+        def spy(ctx, plain):
+            seen.append(staging.exists())
+            return check(ctx, plain)
+        with mock.patch.object(flows, '_check_package_space', spy):
+            backup_id, problem, _deferred = flows.package_pending_safety(self.paths, self.deps, self.job_id)
+        self.assertEqual((seen, problem), ([False], None))
+        self.assertTrue(backup_id)
+
     def test_the_recovery_waits_for_space_without_writing(self):
         self.interrupted_copy()
         self.storage.free = 1024
@@ -1924,13 +1964,32 @@ class PendingCopyFlowTests(RestoreCase):
         self.assertFalse(self.pending().exists())
         self.assertIs(caught.exception.result['changed'], False)
 
-    def test_once_decided_after_the_restore_the_copy_is_packaged_then_whatever_its_size(self):
-        # Review 2026-11-14: a switch to the downtime once the copy was on disk could only fit where the restore needs
-        # little of the extracted archive, and refused after the stop otherwise. Decided before the stop, the
-        # packaging after the restore stays; it checks the space again then, and waits for space when short.
+    def test_a_packaging_failure_other_than_space_is_tried_once_more(self):
+        self.archive.on_write = lambda: (_ for _ in ()).throw(BackupError('corrupt-archive', '驗證備份時發現內容不一致。'))
+        result = self.restore()
+        self.assertEqual(result['warnings'], [f'還原已完成，但還原前備份尚未封裝：驗證備份時發現內容不一致。還原前資料保留在 '
+                                              f'{self.pending()}，系統會再試一次；若仍失敗需人工處理。'])
+
+    def test_a_copy_that_no_longer_fits_after_the_restore_is_packaged_in_the_downtime(self):
+        # Review 2026-11-14: checked again with the copy's real size before anything changes; what would not fit
+        # after the restore is packaged in the downtime, which needs no running reserve.
         reserve = self.paths.reserve_bytes
         self.world.estimate = 1
         self.storage.free_bytes = lambda: reserve + 10 ** 6 if (self.pending() / 'pending.json').exists() else 3 * 1024 ** 3
+        writes = self.spy_writes()
+        result = self.restore()
+        logs = self.reporter.logs
+        self.assertFalse(any('停機時間會比較長' in line for line in logs), 'packaging after the restore fitted the estimate')
+        self.assertIn('還原前資料比預估多，應用恢復後的空間可能不足以封裝還原前備份，改在停機期間封裝。', logs)
+        self.assertEqual(len(writes), 1)
+        self.assertNotIn('restore', [event[0] for event in writes[0][1]], 'before the first destructive step')
+        self.assertEqual((result['safety_in_downtime'], result['safety_pending']), (True, False))
+        self.assertFalse(self.pending().exists())
+
+    def test_a_copy_too_large_for_either_packaging_waits_for_space_after_the_restore(self):
+        reserve = self.paths.reserve_bytes
+        self.world.estimate = 1
+        self.storage.free_bytes = lambda: reserve + 10 if (self.pending() / 'pending.json').exists() else 3 * 1024 ** 3
         writes = len(self.archive.writes)
         result = self.restore()
         self.assertFalse(any('停機期間' in line for line in self.reporter.logs))
@@ -1940,31 +1999,51 @@ class PendingCopyFlowTests(RestoreCase):
                          (True, False, False))
         self.assertTrue((self.pending() / 'pending.json').is_file())
 
+    def test_a_larger_database_in_the_backup_is_packaged_in_the_downtime(self):
+        # Review 2026-11-14 (restoring into a freshly installed app): the databases grow only with the restore.
+        self.storage.free = 3 * 1024 ** 3  # enough after the restore for the estimate, not with that growth
+        with mock.patch.object(flows, '_growth_bytes', return_value=10 * 1024 ** 3):
+            result = self.restore()
+        self.assertIn('備份中的資料庫比目前的大（至少多約 10.0 GiB），應用恢復後的空間可能不足以封裝還原前備份，改在停機期間封裝。',
+                      self.reporter.logs)
+        self.assertIs(result['safety_in_downtime'], True)
+
+    def test_the_growth_of_the_databases(self):
+        plans = [types.SimpleNamespace(app=types.SimpleNamespace(id='woowbk-demo'))]
+        pending = {'entries': [Entry('apps/woowbk-demo/postgres/main.dump', Path('x'), 100, 'a' * 64),
+                               Entry('apps/woowbk-demo/volumes/data.tar', Path('y'), 50, 'b' * 64)]}
+        manifest = {'entries': [{'path': 'apps/woowbk-demo/postgres/main.dump', 'size': 700},
+                                {'path': 'apps/woowbk-demo/postgres/other.dump', 'size': 30},
+                                {'path': 'apps/woowbk-demo/volumes/data.tar', 'size': 5000},
+                                {'path': 'apps/woowbk-two/postgres/main.dump', 'size': 9000}, 'junk']}
+        self.assertEqual(flows._growth_bytes(manifest, pending, plans), 600 + 30,
+                         'only the in-place apps\' dumps, by how much the backup\'s is larger')
+
+    def test_a_job_that_also_deploys_apps_packages_in_the_downtime(self):
+        # Review 2026-11-14: a fresh deployment's data on disk is not known before it runs.
+        self.world.mode['woowbk-two'] = 'fresh'
+        self.world.deployed['woowbk-two'] = False
+        result = self.restore(apps=('woowbk-demo', 'woowbk-two'))
+        self.assertTrue(any(line.startswith('這次還原也會全新部署應用') and '改在停機期間封裝' in line
+                            for line in self.reporter.logs))
+        self.assertEqual((result['safety_in_downtime'], result['fresh_apps']), (True, ['woowbk-two']))
     def test_the_space_checks_before_the_stop(self):
         # Review 2026-11-14, on the reference host's numbers (running reserve 10 GiB, device reserve 512 MiB).
         gib = 1024 ** 3
-        ctx = types.SimpleNamespace(paths=types.SimpleNamespace(reserve_bytes=512 * 1024 ** 2),
+        reserve = 512 * 1024 ** 2
+        ctx = types.SimpleNamespace(paths=types.SimpleNamespace(reserve_bytes=reserve),
                                     storage=types.SimpleNamespace(total_bytes=lambda: 233 * gib))
         self.assertEqual(flows.running_reserve(ctx), 10 * gib)
         estimate = 18 * gib // 10  # Hermes, 2026.11.14.2 host test: 11.6 GiB free
-        after, downtime = flows._after_need(ctx, estimate, estimate), flows._downtime_need(ctx, estimate)
         copy = estimate + estimate // 10
+        after = flows._after_need(ctx, estimate, estimate)
         self.assertEqual(after, copy + copy + copy // 100 + 10 * gib - estimate)
-        self.assertEqual(downtime, int(estimate * flows.SPACE_FACTOR) + copy + 512 * 1024 ** 2)
-        self.assertGreater(after, int(11.6 * gib))
-        self.assertLess(downtime, int(11.6 * gib), 'packaged in the downtime')
+        self.assertGreater(after, int(11.6 * gib), 'not after the restore ...')
+        downtime = int(estimate * flows.SPACE_FACTOR) + reserve  # what 2026.11.14.1 needed (parity, review F1)
+        self.assertLess(downtime, 5 * gib, '... but in the downtime, as 2026.11.14.1 would, also with 5 GiB free')
         # What the restore gives back counts at most the copy's own size (the restored data takes its place).
         self.assertEqual(flows._after_need(ctx, estimate, 50 * gib), after)
         self.assertEqual(flows._after_need(ctx, estimate, 0), after + estimate)
-        # The review's case: 2 GiB running reserve, 10 GiB to copy, 10 GiB extracted, 12.2 GiB free. Before, the
-        # packaging after the restore was chosen without a margin and the restore refused after the copy; now neither
-        # packaging fits, and nothing stops.
-        small = types.SimpleNamespace(paths=ctx.paths, storage=types.SimpleNamespace(total_bytes=lambda: 40 * gib))
-        self.assertEqual(flows.running_reserve(small), 2 * gib)
-        free = int(12.2 * gib)
-        self.assertLess(free, flows._after_need(small, 10 * gib, 10 * gib))
-        self.assertLess(free, flows._downtime_need(small, 10 * gib))
-
     def test_what_the_restore_gives_back(self):
         plans = [types.SimpleNamespace(app=types.SimpleNamespace(id='woowbk-demo'))]
         manifest = {'entries': [{'path': 'apps/woowbk-demo/volumes/data.tar', 'size': 100},
@@ -1975,33 +2054,92 @@ class PendingCopyFlowTests(RestoreCase):
         self.assertEqual(flows._regained_bytes(manifest, plans), 120,
                          'the in-place apps\' data only: no images, no fresh app (they stay as the apps\' own)')
 
+    def test_a_restore_2026_11_14_1_accepted_is_never_refused(self):
+        # Review 2026-11-14 (F1): packaging in the downtime needs what 2026.11.14.1 needed, no more.
+        threshold = int(self.world.estimate * flows.SPACE_FACTOR) + self.paths.reserve_bytes
+        self.storage.free = threshold
+        result = self.restore()
+        self.assertIs(result['safety_in_downtime'], True)
+        self.fresh_world()
+        self.storage.free = threshold - 1
+        with self.assertRaises(BackupError) as caught:
+            self.restore()
+        self.assertIn('應用未被暫停', caught.exception.message)
+
     def test_the_refusal_before_the_stop_names_the_smaller_need(self):
         self.storage.free = 10
         with self.assertRaises(BackupError) as caught:
             self.restore()
         ctx = types.SimpleNamespace(paths=self.paths, storage=self.storage)
-        downtime = flows._downtime_need(ctx, self.world.estimate)
+        downtime = int(self.world.estimate * flows.SPACE_FACTOR) + self.paths.reserve_bytes
         self.assertLess(downtime, flows._after_need(ctx, self.world.estimate, 0))
-        self.assertIn(f'預估需要 {flows.human(downtime)}，目前可用', caught.exception.message)
+        self.assertIn(f'預估需要 {flows.human(downtime, up=True)}，目前可用', caught.exception.message)
         self.assertTrue(any(line.startswith('可用空間不足以建立還原前備份：在應用恢復後封裝約需') for line in self.reporter.logs))
 
-    def test_a_rollback_after_packaging_in_the_downtime_reads_the_copy_and_packages_nothing_more(self):
+    def test_needed_amounts_are_rounded_up(self):
+        self.assertEqual((flows.human(6.44 * 1024 ** 3), flows.human(6.44 * 1024 ** 3, up=True)), ('6.4 GiB', '6.5 GiB'))
+        self.assertEqual((flows.human(2 * 1024 ** 3, up=True), flows.human(10.2, up=True)), ('2.0 GiB', '11 B'))
+    def test_a_rollback_after_packaging_in_the_downtime_extracts_the_safety_backup(self):
+        # As before 2026.11.14.2 (review 2026-11-14): the copy goes once packaged, so the restore keeps the room it
+        # had then, and a rollback extracts the safety backup.
         self.short_space()
         restores = self.spy_restores()
         writes = self.spy_writes()
+        removed = []
+        remove = self.storage.remove_pending
         self.world.fail_restore_after['woowbk-demo'] = 1
-        with self.assertRaises(flows.RolledBack) as caught:
-            self.restore()
+
+        def spy_remove(job_id):
+            removed.append([e[0] for e in self.world.events])
+            return remove(job_id)
+        with mock.patch.object(self.storage, 'remove_pending', spy_remove):
+            with self.assertRaises(flows.RolledBack) as caught:
+                self.restore()
         result = caught.exception.result
+        self.assertNotIn('restore', removed[0], 'the copy went before the first destructive step')
         self.assertEqual(restores, [('restore', self.storage.staging / self.job_id / 'extract'),
-                                    ('rollback', self.pending() / 'data')])
+                                    ('rollback', self.storage.staging / self.job_id / 'rollback')])
         self.assertEqual(self.world.data['woowbk-demo'], b'notes-v2-changed')
         self.assertEqual(len(writes), 1, 'the safety backup exists already: nothing is packaged after the rollback')
+        self.assertEqual(len(self.archive.extracts), 2, 'the source, then the safety backup')
+        self.assertIn(f'解開還原前備份 {result["safety_backup_id"]}，用它自動回復…', self.reporter.logs)
         self.assertEqual((result['rolled_back'], result['safety_in_downtime'], result['safety_pending']),
                          (True, True, False))
         self.assertEqual(self.safety_ids(), [result['safety_backup_id']])
         self.assertFalse(self.pending().exists())
 
+    def test_without_room_to_extract_the_safety_backup_the_rollback_reads_the_copy(self):
+        reserve = self.paths.reserve_bytes
+        self.world.estimate = 1
+        self.storage.free_bytes = lambda: reserve + 10 ** 6 if not self.safety_ids() else 0
+        restores = self.spy_restores()
+        self.world.fail_restore_after['woowbk-demo'] = 1
+        with self.assertRaises(flows.RolledBack) as caught:
+            self.restore()
+        self.assertTrue(caught.exception.result['safety_in_downtime'])
+        self.assertIn('空間不足以在還原失敗時解開還原前備份，保留還原前資料供自動回復使用。', self.reporter.logs)
+        self.assertEqual(restores[-1], ('rollback', self.pending() / 'data'))
+        self.assertEqual(self.world.data['woowbk-demo'], b'notes-v2-changed')
+        self.assertFalse(self.pending().exists(), 'deleted once the rollback is over')
+
+    def test_no_space_to_record_the_downtime_packaging_falls_back_to_after_the_restore(self):
+        # Review 2026-11-14: ENOSPC from the backup index is short of space too, not a refusal after the stop.
+        self.short_space()
+        register = self.storage.register
+        full = []
+
+        def once(backup_id, meta):
+            if not full:
+                full.append(backup_id)
+                raise OSError(errno.ENOSPC, 'No space left on device')
+            return register(backup_id, meta)
+        with mock.patch.object(self.storage, 'register', once):
+            result = self.restore()
+        self.assertIn('無法在停機期間封裝還原前備份（磁碟空間不足），改在應用恢復後封裝。', self.reporter.logs)
+        self.assertEqual(self.world.data['woowbk-demo'], b'notes-v1', 'restored, not refused after the stop')
+        self.assertEqual((result['safety_in_downtime'], result['safety_pending']), (False, True))
+        self.assertEqual(self.safety_ids(), [], 'the unrecorded archive is gone; the copy waits for space')
+        self.assertTrue((self.pending() / 'pending.json').is_file())
     def test_a_failed_packaging_in_the_downtime_is_a_safety_backup_that_could_not_be_made(self):
         self.short_space()
         self.archive.on_write = lambda: (_ for _ in ()).throw(BackupError('corrupt-archive', '驗證備份時發現內容不一致。'))
@@ -2071,35 +2209,65 @@ class PendingCopyFlowTests(RestoreCase):
         self.assertEqual((states['safety-package'], states['rollback']), ('done', 'done'))
 
     def test_a_signal_while_the_packaged_copy_is_deleted_keeps_the_outcome(self):
-        # Review 2026-11-14: the safety backup exists, and what is left of the unflagged copy is the recovery
-        # sweep's; the finished restore (or rollback) still ends as it did.
+        # Review 2026-11-14: once the restore (or a rollback) is over, the safety backup exists and what is left of
+        # the unflagged copy is the recovery sweep's; the job still ends as it did.
         from woowbackup.jobs import Terminated
-        remove = self.storage.remove_pending
         calls = []
 
-        def cut(job_id):
-            calls.append(job_id)
-            if len(calls) == 1:
-                raise Terminated(15)
-            return remove(job_id)
-        self.short_space()
-        with mock.patch.object(self.storage, 'remove_pending', cut):
+        def patched():
+            remove = self.storage.remove_pending
+
+            def cut(job_id):
+                calls.append(job_id)
+                if len(calls) == 1:
+                    raise Terminated(15)
+                return remove(job_id)
+            return mock.patch.object(self.storage, 'remove_pending', cut)
+        with patched():
             result = self.restore()
         self.assertEqual(self.world.data['woowbk-demo'], b'notes-v1')
         self.assertEqual(self.safety_ids(), [result['safety_backup_id']])
         self.assertTrue(any(line.startswith('刪除已封裝的還原前資料時作業被要求停止') for line in self.reporter.logs))
         self.assertIn('還原完成', self.reporter.logs)
         self.fresh_world()
-        self.short_space()
         self.world.fail_restore_after['woowbk-demo'] = 1
         calls.clear()
-        remove = self.storage.remove_pending
-        with mock.patch.object(self.storage, 'remove_pending', cut):
+        with patched():
             with self.assertRaises(flows.RolledBack) as caught:
                 self.restore()
         self.assertIs(caught.exception.result['rolled_back'], True)
         self.assertEqual(self.world.data['woowbk-demo'], b'notes-v2-changed')
 
+    def test_a_signal_while_the_copy_goes_after_the_downtime_packaging_stops_before_any_change(self):
+        from woowbackup.jobs import Terminated
+        self.short_space()
+        with mock.patch.object(self.storage, 'remove_pending', side_effect=Terminated(15)):
+            with self.assertRaises(Terminated):
+                self.restore()
+        self.assertNotIn('restore', [e[0] for e in self.world.events])
+        self.assertIn(('start_units', 'woowbk-demo', ('woowbk-demo-app.service',)), self.world.events)
+        self.assertEqual(len(self.safety_ids()), 1, 'the safety backup made before stays (pruned as usual)')
+
+    def test_a_signal_while_the_packaging_is_recorded_reports_it_packaged(self):
+        # Review 2026-11-14: registered, then cut while the record said so; no false "not packaged" warning.
+        from woowbackup.jobs import Terminated
+        set_partial = self.reporter.set_partial
+
+        def cut(**fields):
+            if fields.get('safety_backup_id') and not getattr(cut, 'done', False):
+                cut.done = True
+                raise Terminated(15)
+            return set_partial(**fields)
+        ctx = self.ctx()
+        ctx.reporter.set_partial = cut
+        set_partial = FakeReporter.set_partial.__get__(ctx.reporter)
+        result = flows.run_restore(ctx, {'backup_id': self.backup_id, 'apps': ['woowbk-demo']})
+        self.assertEqual(self.safety_ids(), [result['safety_backup_id']])
+        self.assertEqual((result['safety_pending'], ctx.reporter.partial.get('safety_pending')), (False, False))
+        self.assertEqual(ctx.reporter.partial.get('safety_backup_id'), result['safety_backup_id'])
+        self.assertFalse(any('尚未封裝' in note for note in result['warnings']))
+        self.assertNotIn(('fail', 'safety-package'), ctx.reporter.events)
+        self.assertFalse(self.pending().exists())
     def test_a_copy_that_cannot_be_recorded_counts_as_none_when_restoring_without_one_is_allowed(self):
         full = OSError(errno.ENOSPC, 'No space left on device')
         with mock.patch.object(flows.util, 'atomic_write_json', side_effect=full):

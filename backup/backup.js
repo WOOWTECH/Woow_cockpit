@@ -2952,7 +2952,7 @@
       // 2026.11.14.2: the pre-restore copy is packaged after the apps run again; when that failed, the copy stays.
       // Too little space for that packaging next to the running apps: it was done in the downtime instead.
       if (result?.safety_in_downtime === true && safetyId) {
-        body.push(infoNotice("可用空間不足以在應用恢復後封裝，這次的還原前備份是在停機期間建立的，所以停機時間比較長。"));
+        body.push(infoNotice("這次的還原前備份是在停機期間建立的，所以停機時間比較長：應用恢復後的空間可能不足以封裝，或這次還原也會全新部署應用（原因見作業紀錄）。"));
       }
       if (pendingFailed) {
         body.push(infoNotice(`還原已完成，但還原前備份無法封裝；還原前的資料保留在 ${str(pendingFailed.path)}，需要人工處理，處理完成前請勿刪除。`, "warn", "alert-outline"));

@@ -1960,7 +1960,7 @@ try {
     await ready(page);
     await page.evaluate(id => { window.location.hash = `#/jobs/${id}`; }, J_DOWNTIME);
     await page.locator('#result-heading').filter({ hasText: '還原完成' }).waitFor();
-    assert.match(await view(page).textContent(), /這次的還原前備份是在停機期間建立的，所以停機時間比較長/);
+    assert.match(await view(page).textContent(), /這次的還原前備份是在停機期間建立的，所以停機時間比較長：應用恢復後的空間可能不足以封裝/);
     assert.equal(await page.locator('[data-focus="result-safety"]').count(), 1, 'the safety backup is named');
   });
 

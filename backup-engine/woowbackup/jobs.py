@@ -89,6 +89,8 @@ INTERRUPTED_MESSAGE = {
     'verify': '驗證作業意外中斷，請重新執行驗證。',
     'export': '建立未加密副本的作業意外中斷，請重新建立；未完成的副本已清除。',
 }
+UNCHANGED_MESSAGE = ('還原作業在變更任何資料之前就中斷（例如系統重新開機或程序被終止），應用資料沒有被變更；'
+                     '因還原而停止的服務會重新啟動。可以再次還原。')
 FRESH_MESSAGE = '全新部署（{apps}）沒有完成；系統會清除未完成的部署，之後可再次還原同一份備份。'
 FINISHING_MESSAGE = ('還原已完成並通過檢查，但在刪除主機資料夾被取代的舊內容時作業中斷（例如系統重新開機）。'
                      '系統會接手整理留下的資料夾；應用不需要再次還原。')
@@ -767,13 +769,18 @@ def interrupted_details(record):
     if record.get('type') != 'restore':
         return message, None
     safety = record.get('safety_backup_id')
-    pending = bool(record.get('safety_pending')) and not safety
+    changed = _destructive_phase_reached(record)
+    pending = bool(record.get('safety_pending')) and not safety and (changed or bool(record.get('finishing')))
     fresh = [str(app) for app in record.get('fresh_apps') or []]
     if record.get('finishing'):
         # The restore itself had succeeded; only deleting the replaced host-directory copies (L4) or packaging the
         # pre-restore copy into the safety backup was cut short.
         message = (FINISHING_PACKAGE_MESSAGE if record.get('phase') == 'safety-package' and record.get('safety_pending')
                    else FINISHING_MESSAGE)
+    elif not changed:
+        # Cut short before its first destructive step (review 2026-11-14): nothing to restore again; a copy it kept
+        # is deleted by the recovery, its data being unchanged where it came from.
+        message = UNCHANGED_MESSAGE + (f'這次建立的還原前備份 {safety} 仍保留在備份列表中。' if safety else '')
     elif safety:
         message += f'還原前備份：{safety}。'
     if pending:
@@ -783,7 +790,7 @@ def interrupted_details(record):
     return message, {'apps': list((record.get('params') or {}).get('apps') or []), 'safety_backup_id': safety,
                      'safety_pending': pending, 'finishing': bool(record.get('finishing')), 'health': [],
                      'verification': [], 'rolled_back': False,
-                     'changed': _destructive_phase_reached(record), 'fresh_apps': fresh, 'safety_skipped': False,
+                     'changed': changed, 'fresh_apps': fresh, 'safety_skipped': False,
                      'safety_failed': False, 'warnings': []}
 
 
@@ -958,6 +965,20 @@ def _package_pending_copy(store, record, package_safety):
     job_id = record['id']
     path = Path(store.paths.pending) / job_id
     result = record.get('result') if isinstance(record.get('result'), dict) else None
+    if record.get('state') in ('interrupted', 'failed', 'cancelled') and not record.get('finishing') \
+            and not _destructive_phase_reached(record) and (result or {}).get('changed') is not True:
+        # Cut short before its first destructive step (review 2026-11-14): the data it copied is unchanged where it
+        # came from, so the copy is not needed, as after a failure there. The flag goes first (a kill during the
+        # deletion leaves an unflagged copy, which the sweep removes).
+        record['safety_pending'] = False
+        record.pop('safety_pending_deferred', None)
+        if result is not None:
+            result['safety_pending'] = False
+        store.save(record)
+        with contextlib.suppress(OSError):
+            shutil.rmtree(path)
+        store.append_log(job_id, '還原在變更任何資料之前就中斷，保留的還原前資料不再需要，已刪除')
+        return ''
     with util.termination_ignored():
         deferred = False
         try:
@@ -968,7 +989,12 @@ def _package_pending_copy(store, record, package_safety):
                 traceback.print_exc(file=sys.stderr)
         if deferred:
             problem = str(problem or '空間不足').rstrip('。')[:300]
-            if record.get('safety_pending_deferred') == problem:
+            if 'safety_pending_deferred' in record:
+                # Said once (review 2026-11-14: the text names the free space, so a note per pass made the record
+                # grow until it could not be read); the latest figures only replace the field.
+                if record['safety_pending_deferred'] != problem:
+                    record['safety_pending_deferred'] = problem
+                    store.save(record)
                 return ''
             record['safety_pending_deferred'] = problem
             note = f'還原前資料保留在 {path}，{problem}；有足夠空間後系統會自動封裝成還原前備份。'
@@ -978,8 +1004,8 @@ def _package_pending_copy(store, record, package_safety):
             record.pop('safety_pending_deferred', None)
             record['safety_backup_id'] = backup_id
             for item in record.get('phases') or []:
-                if item.get('id') == 'safety-package' and item.get('state') in ('failed', 'skipped'):
-                    item['state'] = 'done'  # the step the job could not finish is done now
+                if item.get('id') == 'safety-package' and item.get('state') != 'done':
+                    item['state'] = 'done'  # the step the job could not do (or reach) is done now
             if result is not None:
                 result.update(safety_backup_id=backup_id, safety_pending=False)
             store.append_log(job_id, f'已將保留的還原前資料封裝成還原前備份 {backup_id}')

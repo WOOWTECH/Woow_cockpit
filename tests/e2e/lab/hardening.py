@@ -1210,8 +1210,8 @@ def first_line(log, text):
 def scenario_space(ev):
     """2026.11.14.2 host test (Hermes paused 2 min 16 s, then refused): on a 1.5 GiB tmpfs over the data directory the
     running reserve (2 GiB) cannot follow the restore, so the pre-restore copy is packaged in the downtime, decided
-    before any writer stops, once, also around a rollback (its phase staying done); with too little space for either
-    packaging, nothing stops."""
+    before any writer stops, once, as 2026.11.14.1 did (the copy deleted once packaged, a rollback extracting the
+    safety backup; the phase staying done); with too little space for either packaging, nothing stops."""
     dev = 'a'
     status = ok(dev, 'status', ev=ev)
     ev.require('dev-a idle and the data dir is the normal ext4 volume',
@@ -1280,6 +1280,8 @@ def scenario_space(ev):
         ev.check('SPACE rollback: one packaging, before the stop (none after the rollback)',
                  sum('已建立並通過完整驗證' in line for line in log) == 1
                  and first_line(log, '已建立並通過完整驗證') < first_line(log, '階段：停止應用'))
+        ev.check('SPACE rollback: the copy went after the downtime packaging; the rollback extracted the safety backup',
+                 any(f'解開還原前備份 {result.get("safety_backup_id")}' in line for line in log), log[-12:])
         ev.check('SPACE rollback: safety-package stays done through the rollback (review 2026-11-14: was skipped)',
                  phase_states(job).get('safety-package') == 'done' and phase_states(job).get('rollback') == 'done',
                  phase_states(job))
