@@ -87,14 +87,15 @@ class Deps:
     enforce_retention: object = None
 
 
-def human(n, up=False):
-    """`n` bytes for people; `up` rounds up (a needed amount: freeing what it names is enough, review 2026-11-14)."""
+def human(n, up=False, down=False):
+    """`n` bytes for people; `up` rounds up (a needed amount: freeing what it names is enough, review 2026-11-14),
+    `down` rounds down (what is left, compared with a need)."""
     n = float(n or 0)
     for unit in ('B', 'KiB', 'MiB', 'GiB', 'TiB'):
         if n < 1024 or unit == 'TiB':
             if unit == 'B':
-                return f'{math.ceil(n) if up else n:.0f} {unit}'
-            return f'{math.ceil(n * 10) / 10 if up else n:.1f} {unit}'
+                return f'{math.ceil(n) if up else math.floor(n) if down else n:.0f} {unit}'
+            return f'{math.ceil(n * 10) / 10 if up else math.floor(n * 10) / 10 if down else n:.1f} {unit}'
         n /= 1024
     return str(n)
 
@@ -1391,7 +1392,7 @@ def _take_safety_copy(ctx, inplace, backup_id, meta, params, key, result, handov
         free = int(ctx.storage.free_bytes())
         floor = int(ctx.paths.reserve_bytes)
         if free < floor:
-            floor_error = BackupError('insufficient-space', f'保存還原前資料後，可用空間只剩約 {human(free)}，少於設備保留的 '
+            floor_error = BackupError('insufficient-space', f'保存還原前資料後，可用空間只剩約 {human(free, down=True)}，少於設備保留的 '
                                                             f'{human(floor)}：還原可能用盡磁碟，失敗時也無法自動回復。'
                                                             '未做任何變更，請先清出空間再試。', required=floor, free=free)
             raise floor_error
@@ -1514,15 +1515,22 @@ def _package_in_downtime(ctx, pending, result, staging, extracted):
                     downtime=record['downtime_seconds'], labels=PACKAGE_LABELS, backup_id=record['safety_backup_id'])
     pending['packaged'] = True
     result.update(safety_backup_id=info['backup_id'], safety_in_downtime=True)
-    ctx.reporter.set_partial(safety_backup_id=info['backup_id'])
-    ctx.mark('safety-package', 'done')
-    if int(ctx.storage.free_bytes()) + int(extracted) >= plain + int(ctx.paths.reserve_bytes):
+    # Registered: the bookkeeping below is only what the job's final record says too (review 2026-11-14: a failure
+    # to save it must not read as a packaging that did not fit).
+    with contextlib.suppress(OSError):
+        ctx.reporter.set_partial(safety_backup_id=info['backup_id'])
+    with contextlib.suppress(OSError):
+        ctx.mark('safety-package', 'done')
+    # Deleting the copy frees its size: the extraction fits when the free space then, with the failed restore's
+    # extracted archive deleted first, holds the copy and the device reserve (review 2026-11-14, as 2026.11.14.1's
+    # check, which ran with the copy gone).
+    if int(ctx.storage.free_bytes()) + plain + int(extracted) >= plain + int(ctx.paths.reserve_bytes):
+        pending['removed'] = True  # also when the deletion fails half-way: the rollback extracts the safety backup
         try:
             ctx.storage.remove_pending(ctx.job_id)  # a termination signal here stops the job: nothing changed yet
-        except Exception:  # noqa: BLE001 - the copy then stays for the rollback, which reads it
-            ctx.log(f'警告：無法刪除已封裝的還原前資料 {pending["dir"]}，自動回復會改用它；請通知管理員檢查。')
-        else:
-            pending['removed'] = True
+        except Exception:  # noqa: BLE001 - what is left of the unflagged copy is the recovery sweep's
+            ctx.log(f'警告：無法完整刪除已封裝的還原前資料 {pending["dir"]}，剩下的部分會由系統稍後清除；'
+                    '還原失敗時，自動回復會解開還原前備份。')
     else:
         ctx.log('空間不足以在還原失敗時解開還原前備份，保留還原前資料供自動回復使用。')
     return info['backup_id']
@@ -1542,7 +1550,7 @@ def _check_package_space(ctx, plain_bytes):
     the restore may have pulled images or written WAL since the check before the stop)."""
     need, free = _package_need(ctx, plain_bytes), int(ctx.storage.free_bytes())
     if free < need:
-        raise BackupError('insufficient-space', f'空間不足，暫不封裝還原前備份：需要約 {human(need)}，可用約 {human(free)}',
+        raise BackupError('insufficient-space', f'空間不足，暫不封裝還原前備份：需要約 {human(need, up=True)}，可用約 {human(free)}',
                           required=need, free=free)
 
 def _raise(error):
@@ -1635,7 +1643,8 @@ def _package_pending(ctx, pending, result, staging):
 
 
 def _short_of_space(exc):
-    return isinstance(exc, BackupError) and exc.code == 'insufficient-space'
+    return (isinstance(exc, BackupError) and exc.code == 'insufficient-space'
+            or isinstance(exc, OSError) and exc.errno in (errno.ENOSPC, errno.EDQUOT))
 
 
 def _packaged_meanwhile(ctx, pending, result):
@@ -1822,9 +1831,9 @@ def package_pending_safety(paths, deps, job_id, *, log=None):
             with contextlib.suppress(OSError):
                 storage.remove_staging(job_id)
     except BackupError as error:
-        return None, error.message.rstrip('。'), False
+        return None, error.message.rstrip('。'), _short_of_space(error)  # out of space while writing: wait for it
     except OSError as error:
-        return None, f'讀寫還原前資料時發生錯誤（{error.strerror or type(error).__name__}）', False
+        return None, f'讀寫還原前資料時發生錯誤（{error.strerror or type(error).__name__}）', _short_of_space(error)
     return info['backup_id'], None, False
 
 

@@ -1900,6 +1900,16 @@ class PendingCopyFlowTests(RestoreCase):
         self.assertEqual((seen, problem), ([False], None))
         self.assertTrue(backup_id)
 
+    def test_the_recovery_waits_when_the_space_runs_out_while_packaging(self):
+        # Review 2026-11-14: out of space while writing (not only at the check before) is a deferral, never a
+        # packaging given up for manual work.
+        self.interrupted_copy()
+        self.archive.on_write = lambda: (_ for _ in ()).throw(BackupError('insufficient-space', '磁碟空間不足，無法完成備份封裝。'))
+        backup_id, problem, deferred = flows.package_pending_safety(self.paths, self.deps, self.job_id)
+        self.assertEqual((backup_id, deferred), (None, True))
+        self.assertIn('磁碟空間不足', problem)
+        self.assertTrue((self.pending() / 'pending.json').is_file())
+
     def test_the_recovery_waits_for_space_without_writing(self):
         self.interrupted_copy()
         self.storage.free = 1024
@@ -2079,6 +2089,8 @@ class PendingCopyFlowTests(RestoreCase):
     def test_needed_amounts_are_rounded_up(self):
         self.assertEqual((flows.human(6.44 * 1024 ** 3), flows.human(6.44 * 1024 ** 3, up=True)), ('6.4 GiB', '6.5 GiB'))
         self.assertEqual((flows.human(2 * 1024 ** 3, up=True), flows.human(10.2, up=True)), ('2.0 GiB', '11 B'))
+        # What is left, compared with a need, rounds down (review 2026-11-14: "只剩約 512.0 MiB，少於 512.0 MiB").
+        self.assertEqual(flows.human(512 * 1024 ** 2 - 1, down=True), '511.9 MiB')
     def test_a_rollback_after_packaging_in_the_downtime_extracts_the_safety_backup(self):
         # As before 2026.11.14.2 (review 2026-11-14): the copy goes once packaged, so the restore keeps the room it
         # had then, and a rollback extracts the safety backup.
@@ -2121,6 +2133,63 @@ class PendingCopyFlowTests(RestoreCase):
         self.assertEqual(restores[-1], ('rollback', self.pending() / 'data'))
         self.assertEqual(self.world.data['woowbk-demo'], b'notes-v2-changed')
         self.assertFalse(self.pending().exists(), 'deleted once the rollback is over')
+
+    def test_the_copy_goes_when_deleting_it_makes_room_for_the_extraction(self):
+        # Review 2026-11-14 (N1): the check ran with the copy still on disk and kept it although deleting it freed
+        # the room 2026.11.14.1 had; the restore then ran with a whole copy less headroom.
+        reserve = self.paths.reserve_bytes
+        self.world.estimate = 1
+        self.storage.free_bytes = lambda: reserve if self.safety_ids() else reserve + 10 ** 6
+        seen = []
+        remove = self.storage.remove_pending
+
+        def spy(job_id):
+            seen.append([e[0] for e in self.world.events])
+            return remove(job_id)
+        with mock.patch.object(self.storage, 'remove_pending', spy):
+            result = self.restore()
+        self.assertIs(result['safety_in_downtime'], True)
+        self.assertNotIn('restore', seen[0], 'deleted before the first destructive step')
+        self.assertNotIn('空間不足以在還原失敗時解開還原前備份，保留還原前資料供自動回復使用。', self.reporter.logs)
+
+    def test_a_copy_deleted_half_way_after_the_downtime_packaging_still_allows_the_rollback(self):
+        # Review 2026-11-14 (N2): the half-deleted copy failed its check and the rollback did not run, although the
+        # verified safety backup existed.
+        self.short_space()
+        remove = self.storage.remove_pending
+
+        def half(job_id):
+            (self.pending() / 'data/apps/woowbk-demo/volumes/data.tar').unlink()
+            raise OSError(errno.EIO, 'Input/output error')
+        self.world.fail_restore_after['woowbk-demo'] = 1
+        restores = self.spy_restores()
+        with mock.patch.object(self.storage, 'remove_pending', half):
+            with self.assertRaises(flows.RolledBack) as caught:
+                self.restore()
+        self.assertIs(caught.exception.result['rolled_back'], True)
+        self.assertEqual(restores[-1], ('rollback', self.storage.staging / self.job_id / 'rollback'))
+        self.assertEqual(self.world.data['woowbk-demo'], b'notes-v2-changed')
+        self.assertTrue(any(line.startswith('警告：無法完整刪除已封裝的還原前資料') for line in self.reporter.logs))
+        remove(self.job_id)
+
+    def test_a_record_that_cannot_be_saved_after_the_downtime_packaging_is_no_fallback(self):
+        # Review 2026-11-14 (N3): an error saving the record after the registration read as a packaging that did not
+        # fit, and the phase was never marked done.
+        self.short_space()
+        ctx = self.ctx()
+        set_partial = ctx.reporter.set_partial
+
+        def full(**fields):
+            if fields.get('safety_backup_id'):
+                raise OSError(errno.ENOSPC, 'No space left on device')
+            return set_partial(**fields)
+        ctx.reporter.set_partial = full
+        result = flows.run_restore(ctx, {'backup_id': self.backup_id, 'apps': ['woowbk-demo']})
+        self.assertIs(result['safety_in_downtime'], True)
+        self.assertFalse(any(line.startswith('無法在停機期間封裝還原前備份') for line in ctx.reporter.logs))
+        self.assertIn(('mark', 'safety-package', 'done'), ctx.reporter.events)
+        self.assertEqual(self.safety_ids(), [result['safety_backup_id']])
+        self.assertFalse(self.pending().exists())
 
     def test_no_space_to_record_the_downtime_packaging_falls_back_to_after_the_restore(self):
         # Review 2026-11-14: ENOSPC from the backup index is short of space too, not a refusal after the stop.

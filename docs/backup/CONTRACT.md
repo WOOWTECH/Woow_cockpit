@@ -1108,7 +1108,9 @@ known before it runs -- in the downtime when the free space holds what 2026.11.1
 (E × 2.2 + the device reserve): exactly as then, the copy is packaged, verified and registered before the first
 destructive step and then deleted, so the restore keeps the room it had then, and a rollback extracts the safety
 backup into the job's staging (the failed restore's extracted archive deleted first); only when that extraction would
-not fit (free space + the extracted archive < the copy + the device reserve) the copy stays and the rollback reads it.
+not fit (the free space once the copy is deleted, with the extracted archive, less than the copy + the device reserve)
+the copy stays and the rollback reads it. A deletion that fails half-way still counts as deleted: the rollback extracts
+the safety backup, and what is left of the unflagged copy is the recovery sweep's.
 No restore that 2026.11.14.1 accepted is refused. With too little space for either, the restore is refused before any
 writer stops (`safety_failed`, `應用未被暫停`), the error naming the smaller need (rounded up) and the log both; with
 `allow_no_safety` or a safety-backup source it goes on without a copy, as before. Once the copy is on disk, its real
