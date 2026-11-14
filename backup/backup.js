@@ -2528,7 +2528,7 @@
             enabled ? chip("可還原", "ok", "check-circle-outline") : chip("無法還原", "fail", "close-circle-outline"))),
         // Only for apps that can be restored: a blocked app's checks say why (review finding F13).
         enabled ? h("p", { class: "muted", text: app.mode === "inplace"
-          ? "這台設備已部署此應用：會覆寫目前的資料；還原前會先保存目前的資料，應用恢復後再封裝成還原前備份。"
+          ? "這台設備已部署此應用：會覆寫目前的資料；還原前會先保存目前的資料，並封裝成還原前備份（空間足夠時在應用恢復後才封裝）。"
           : "這台設備尚未部署此應用：會依這台設備的受信任設定全新建立服務、資料卷與資料庫。" }) : null,
         checkList(app.checks, `${str(app.name || app.id)} 的檢查結果`),
         content ? disclosure(`pf-details-${app.id}`, "備份內容", appContents(content)) : null);
@@ -2597,11 +2597,11 @@
     } else if (noSafety) {
       safetyText = `系統會先嘗試為 ${names(inplace)} 建立還原前備份；若無法建立，會依你的選擇直接還原，這時還原失敗將無法自動回復，資料可能只還原一部分。`;
     } else if (inplace.length) {
-      safetyText = `開始還原前，系統會先在應用停止時為 ${names(inplace)} 保存一份還原前的資料，寫入磁碟後才開始還原；保存失敗時不會變更任何資料。還原失敗時，會直接用這份資料回復到還原前的狀態。應用恢復執行後，這份資料會封裝並完整驗證成「還原前自動備份」；每個應用保留最近 3 份。`;
+      safetyText = `開始還原前，系統會先在應用停止時為 ${names(inplace)} 保存一份還原前的資料，寫入磁碟後才開始還原；保存失敗時不會變更任何資料。還原失敗時，會直接用這份資料回復到還原前的狀態。應用恢復執行後，這份資料會封裝並完整驗證成「還原前自動備份」；若可用空間不足以在應用執行時封裝，改在停機期間封裝，停機時間會比較長。每個應用保留最近 3 份。`;
     }
     // Safety backups follow 預設加密備份 (CONTRACT §9); the writers it stops stay stopped for the restore.
     const safetyMode = inplace.length && settingsOf()
-      ? `還原前備份依「預設加密備份」設定${encryptByDefault() ? "以這台設備的金鑰加密" : "不加密（應用機密以明文保存）"}。保存還原前資料時停止的服務會直接交給還原，應用只停止一次；封裝在應用恢復後才進行，不算在停機時間內。`
+      ? `還原前備份依「預設加密備份」設定${encryptByDefault() ? "以這台設備的金鑰加密" : "不加密（應用機密以明文保存）"}。保存還原前資料時停止的服務會直接交給還原，應用只停止一次；空間足夠時，封裝在應用恢復後才進行，不算在停機時間內。`
       : null;
     const checkboxText = !inplace.length ? `我了解還原會在這台設備全新部署上列 ${apps.length} 個應用`
       : !fresh.length ? `我了解還原會停止並覆寫上列 ${apps.length} 個應用的資料`
@@ -2950,6 +2950,10 @@
         body.push(infoNotice("這次還原沒有建立還原前備份（無法建立，而你還原的是還原前備份，或已選擇直接還原）。", "warn", "alert-outline"));
       }
       // 2026.11.14.2: the pre-restore copy is packaged after the apps run again; when that failed, the copy stays.
+      // Too little space for that packaging next to the running apps: it was done in the downtime instead.
+      if (result?.safety_in_downtime === true && safetyId) {
+        body.push(infoNotice("可用空間不足以在應用恢復後封裝，這次的還原前備份是在停機期間建立的，所以停機時間比較長。"));
+      }
       if (pendingFailed) {
         body.push(infoNotice(`還原已完成，但還原前備份無法封裝；還原前的資料保留在 ${str(pendingFailed.path)}，需要人工處理，處理完成前請勿刪除。`, "warn", "alert-outline"));
       } else if (result?.safety_pending === true && !safetyId) {

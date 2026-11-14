@@ -1945,6 +1945,25 @@ try {
     assert.deepEqual(request.apps, ['woowbk-demo']);
   });
 
+  // 2026.11.14.2 host test: with too little space to package the pre-restore copy next to the running apps, it was
+  // packaged in the downtime; the result says why the outage was longer.
+  const J_DOWNTIME = 'j20261113T014300Z-0000d0d0';
+  const downtime = fixture();
+  downtime.jobs[J_DOWNTIME] = terminalJob(J_DOWNTIME, {
+    state: 'succeeded', phase: 'check', phases: phasesAt('restore', null), progress: { percent: 100, message: '已完成' },
+    result: { apps: ['woowbk-demo'], safety_backup_id: B_SAFETY, safety_pending: false, safety_in_downtime: true,
+      health: [{ id: 'woowbk-demo/health/0', status: 'ok', message: '健康檢查通過：http://127.0.0.1:18090/healthz 回應 200。' }],
+      verification: [], rolled_back: false, changed: true, fresh_apps: [], safety_skipped: false, safety_failed: false,
+      warnings: [] },
+  });
+  await check('a safety backup packaged in the downtime explains the longer outage', downtime, async (page) => {
+    await ready(page);
+    await page.evaluate(id => { window.location.hash = `#/jobs/${id}`; }, J_DOWNTIME);
+    await page.locator('#result-heading').filter({ hasText: '還原完成' }).waitFor();
+    assert.match(await view(page).textContent(), /這次的還原前備份是在停機期間建立的，所以停機時間比較長/);
+    assert.equal(await page.locator('[data-focus="result-safety"]').count(), 1, 'the safety backup is named');
+  });
+
   const safetyFlow = fixture();
   safetyFlow.backups.find(item => item.id === B_SAFETY).verified = { at: '2026-11-12T03:00:00Z', ok: false };
   await check('restoring a pre-restore backup never promises a new one; warnings repeat on 確認 (F1, F13)', safetyFlow, async (page) => {
