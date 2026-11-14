@@ -846,7 +846,8 @@ The app check `device-key` (fail: an in-place restore needs the device key for i
 setting 預設加密備份 is on: safety backups follow it.
 
 Phases — backup: `prepare 準備`, `check 檢查空間與應用`, `stop 暫停應用寫入`, `dump 匯出資料庫`,
-`export 匯出資料卷與設定`, `start 恢復應用`, `package 加密封裝`, `verify 驗證備份`.
+`export 匯出資料卷與設定`, `start 恢復應用`, `package 加密封裝` (`封裝（未加密）` for a backup made with `encrypt`
+false), `verify 驗證備份`.
 Restore: `prepare 準備`, `decrypt 解密並驗證檔案`, `preflight 相容性檢查`, `stage 預先寫入主機資料夾` (skipped without
 host directories), `safety 建立還原前備份`, `stop 停止應用`, `restore 還原資料`, `start 啟動應用`, `check 健康與資料核對`,
 and `rollback 自動回復` appended on failure. Verify: `prepare`, `decrypt` (decrypt and check every entry, deep), `check`.

@@ -57,6 +57,7 @@ PHASES = {
     # An unencrypted copy of an encrypted backup for one download (CONTRACT section 8); nothing on the device changes.
     'export': (('prepare', '準備'), ('decrypt', '解密並驗證檔案'), ('package', '封裝未加密副本'), ('verify', '驗證副本')),
 }
+PLAIN_PACKAGE_LABEL = '封裝（未加密）'  # the package phase of a backup made with 加密此備份 off encrypts nothing
 ACTIVE = ('queued', 'running')
 TERMINAL = ('succeeded', 'failed', 'rolled-back', 'interrupted', 'cancelled')
 PUBLIC_KEYS = ('id', 'type', 'state', 'phase', 'phases', 'progress', 'created', 'started', 'finished', 'params',
@@ -278,9 +279,11 @@ class JobStore:
         now = time.time() if now is None else now
         self.ensure()
         job_id = new_job_id(now)
+        plain = job_type == 'backup' and isinstance(params, dict) and params.get('encrypt') is False
         record = {
             'id': job_id, 'type': job_type, 'state': 'queued', 'phase': PHASES[job_type][0][0],
-            'phases': [{'id': pid, 'label': label, 'state': 'pending'} for pid, label in PHASES[job_type]],
+            'phases': [{'id': pid, 'label': PLAIN_PACKAGE_LABEL if plain and pid == 'package' else label,
+                        'state': 'pending'} for pid, label in PHASES[job_type]],
             'progress': {'percent': 0, 'message': '等待開始'}, 'created': utc_iso(now), 'started': None,
             'finished': None, 'params': params, 'result': None, 'error': None, 'cancellable': True,
             'request_id': request_id, 'unit': unit_name(job_id),

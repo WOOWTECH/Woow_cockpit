@@ -104,6 +104,18 @@ class StoreTests(JobCase):
         self.assertEqual(stat.S_IMODE(self.store.log_path(record['id']).stat().st_mode), 0o600)
 
 
+    def test_unencrypted_backup_package_phase_says_so(self):
+        labels = {encrypt: {p['id']: p['label'] for p in self.store.create('backup', {'encrypt': encrypt})['phases']}
+                  for encrypt in (True, False)}
+        self.assertEqual(labels[True]['package'], '加密封裝')
+        self.assertEqual(labels[False]['package'], '封裝（未加密）')
+        self.assertEqual({k: v for k, v in labels[False].items() if k != 'package'},
+                         {k: v for k, v in labels[True].items() if k != 'package'})
+        record = self.store.create('backup', {'encrypt': False})
+        jobs.JobReporter(self.store, record, min_interval=0).phase('package')
+        self.assertTrue(self.store.read_log(record['id'])[-1].endswith('階段：封裝（未加密）'))
+
+
 class ReporterTests(JobCase):
     def test_phase_semantics_and_rollback_phase(self):
         record = self.store.create('restore', {})
