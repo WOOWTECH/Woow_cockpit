@@ -586,6 +586,19 @@ already uses for `<ref>`, never one from the archive — and are put back after 
 leave `<ref>` resolving to the recorded image id. Every volume export is checked the same way when a backup is made
 (§9).
 
+**The app's settings in the archive (2026.11.15.2).** Every app section a backup writes carries `catalog_entry`: the
+app's catalog entry as installed when the backup was made (the parsed JSON of `/etc/woowtech-cockpit/backup/apps/<id>.json`,
+not its bytes). Readers check only its shape (a JSON object for the same app id, ≤ 256 KiB, depth ≤ 8, finite numbers,
+text without NUL; otherwise `invalid-manifest`); it is never installed by a restore. `inspect` offers it for review where
+the device has no settings for the app or other ones (`Preflight.apps[].settings`, §7), and the page installs it only
+through `catalog-install` (the same validation, owner and conflict checks, apps-history, journal line and acknowledged
+confirmation as any entry, §4). A drill on a new device found that settings drafted there by `catalog-suggest` can
+differ from the source's (a database copied as a cold volume instead of dumped), which leaves the backup unrestorable:
+the backup now brings the settings its items match. The preflight compares a carried entry with the local one as JSON
+(an entry installed from a backup is formatted otherwise than a hand-written file); backups without it compare
+`catalog_sha256` as before. Engines before 2026.11.15.2 refuse new backups (`invalid-manifest`: the app section is
+strict); every backup made before stays readable.
+
 **Host directories in the archive.** An app with `data_dirs` carries `data_dirs: [{path, entry}]` in its manifest
 (apps without them keep the old shape) and one entry `apps/<id>/dirs/<n>.tar` per directory, `<n>` its position in
 the catalog. The tar is GNU tar's POSIX format of the directory read as the owner inside his user namespace (§6):
@@ -770,8 +783,8 @@ Shapes:
 * `App`: `id, name, description, owner, adapter, deployed(bool), state("running"|"stopped"|"partial"|"not-deployed"|"error"), units[{name,active}], last_backup{id,created}|null, problems[str]` — `error` also when every unit is active but a quick health request fails, and while units are masked by an unfinished restore (both explained in `problems`).
 * `BackupMeta`: `id, type("manual"|"safety"|"uploaded"), created|null, note, apps[{id,name,size?}], size, sha256, key_id|null, key_available(bool), include_images(bool), filename, source{hostname}|null, verified{at,ok,deep?}|null, inspected(bool), uploaded_at?, format(1|2), encrypted(bool), unauthenticated(bool)` — `key_id` null and `key_available` true when not encrypted; `apps[].size` the bytes of the app's archive in a format 2 file (backups made here; uploads after `inspect`); `verified.deep` true when the verify job checked the content like a restore; `unauthenticated` = not encrypted and `type` `uploaded` (also adopted files). Sidecars written before format 2 have no `format`/`encrypted` (format 1, encrypted).
 * `Settings`: `encrypt_by_default(bool), problem(zh-TW)|null, plaintext_warning(zh-TW)` — the text the page shows for every acknowledgement of an unencrypted backup or copy: database passwords, API keys and tokens are stored and downloaded in plain text.
-* `ManifestSummary`: `backup_id, created, type, note, tool, source, consistency, total_size, format(1|2), encryption("age-x25519"|"none"), apps[{id,name,adapter,owner{name,uid},images[{ref,included}],postgres[{id,database,major,scope("database"|"instance"),databases?[{name,owner}],roles_count?}],volumes[{name}],data_dirs[{path,size,label}],secrets_count,config_files_count,verify_snapshot,verify_digests[{id,type,target,summary}],archive_size?}]` (`databases`/`roles_count` only for scope `instance`; `archive_size` the app's member in a format 2 file)
-* `Preflight`: `ok(bool), checks[Check], apps[{id,name,restorable(bool),mode("inplace"|"fresh"),checks[Check]}]`
+* `ManifestSummary`: `backup_id, created, type, note, tool, source, consistency, total_size, format(1|2), encryption("age-x25519"|"none"), apps[{id,name,adapter,owner{name,uid},images[{ref,included}],postgres[{id,database,major,scope("database"|"instance"),databases?[{name,owner}],roles_count?}],volumes[{name}],data_dirs[{path,size,label}],secrets_count,config_files_count,settings_included(bool),verify_snapshot,verify_digests[{id,type,target,summary}],archive_size?}]` (`databases`/`roles_count` only for scope `instance`; `archive_size` the app's member in a format 2 file)
+* `Preflight`: `ok(bool), checks[Check], apps[{id,name,restorable(bool),mode("inplace"|"fresh"),checks[Check],settings?{state("missing"|"different"|"same"),entry}}]` (`settings`: only when the backup carries the app's settings, §5: `missing` where this device has none for the app (the app is not restorable until they are installed), `different` where its settings differ, `entry` the carried settings for `catalog-install`; `settings_included` in `ManifestSummary` says the same for the backup's contents)
 * `Check`: `id, status("ok"|"warn"|"fail"), message(zh-TW)`
 * `Owner`: `name, uid, linger(bool), catalog_apps[str]` (lingering accounts and owners of loaded entries; never root).
 * `Draft`: `id, containers[{file,unit,container,image,state}], databases[DatabaseView], entry, valid, problem|null,

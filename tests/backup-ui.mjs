@@ -452,6 +452,17 @@ function installCockpitFixture() {
         throw new Refusal('invalid-request', '安裝的應用設定在預覽之後被變更了。', { reason: 'entry-changed', current_sha256: result.expected_sha256 });
       }
       cat.installed[id] = { entry: structuredClone(entry), sha256: result.new_sha256 };
+      // The settings a backup carries (2026.11.15.2), installed: the next inspect compares them with these.
+      for (const inspected of Object.values(data.inspect)) {
+        for (const app of inspected.preflight.apps) {
+          if (app.id !== id || !app.settings) continue;
+          const same = JSON.stringify(app.settings.entry) === JSON.stringify(entry);
+          app.settings.state = same ? 'same' : 'different';
+          app.checks = app.checks.filter(check => check.id !== `${id}/catalog`);
+          if (!same) app.checks.push({ id: `${id}/catalog`, status: 'warn', message: '此設備的應用設定與備份時不同；將以此設備的設定為準。也可以審查並改用備份中附上的設定。' });
+          app.restorable = !app.checks.some(check => check.status === 'fail');
+        }
+      }
       if (!data.status.apps.some(app => app.id === id)) {
         data.status.apps.push({ id, name: entry.name || id, description: entry.description || '', owner: entry.owner, adapter: 'quadlet-postgres',
           deployed: true, state: 'running', units: (entry.units || []).map(name => ({ name, active: true })), last_backup: null, problems: [] });
@@ -1962,6 +1973,69 @@ try {
     await page.locator('#result-heading').filter({ hasText: '還原完成' }).waitFor();
     assert.match(await view(page).textContent(), /這次的還原前備份是在停機期間建立的，所以停機時間比較長：應用恢復後的空間可能不足以封裝/);
     assert.equal(await page.locator('[data-focus="result-safety"]').count(), 1, 'the safety backup is named');
+  });
+
+  // 2026.11.15.2 (the new-device drill): a backup carries the settings it was made with; the restore wizard offers
+  // them for review where this device has none (or other ones), installs them like 應用設定 does, checks again.
+  const wikiEntry = { schema: 1, id: 'woowbk-wiki', name: '團隊知識庫', description: '知識庫', owner: 'appowner', adapter: 'quadlet-postgres',
+    quadlet: { files: ['woowbk-wiki-db.container', 'woowbk-wiki-app.container'] }, units: ['woowbk-wiki-db.service', 'woowbk-wiki-app.service'],
+    writer_units: ['woowbk-wiki-app.service'], postgres: [{ id: 'main', container: 'woowbk-wiki-db', unit: 'woowbk-wiki-db.service', database: 'wiki', user: 'wiki', data_volume: 'woowbk-wiki-pgdata' }],
+    volumes: [], secrets: [{ name: 'woowbk-wiki-db-password' }], config_files: [], health: [], verify: [] };
+  const carried = fixture({ catalogData: catalogData() });
+  {
+    const result = carried.inspect[B_MANUAL];
+    for (const app of result.manifest.apps) app.settings_included = true;
+    const [demo, wiki] = result.preflight.apps;
+    demo.settings = { state: 'different', entry: { ...structuredClone(carried.catalogData.installed['woowbk-demo'].entry), description: '備份時的說明' } };
+    demo.checks.push({ id: 'woowbk-demo/catalog', status: 'warn', message: '此設備的應用設定與備份時不同；將以此設備的設定為準。也可以審查並改用備份中附上的設定。' });
+    wiki.checks = [{ id: 'woowbk-wiki/catalog', status: 'fail', message: '此設備沒有這個應用的應用設定。這份備份附有建立時的設定，審查並安裝後即可還原。' }];
+    wiki.settings = { state: 'missing', entry: structuredClone(wikiEntry) };
+  }
+  await check("a backup's settings are reviewed and installed from the restore wizard, then checked again", carried, async (page) => {
+    await ready(page);
+    await page.evaluate(id => { window.location.hash = `#/restore/${id}`; }, B_MANUAL);
+    await page.locator('.app-preflight').first().waitFor();
+    assert.equal(await page.locator('[data-focus="pf-select-woowbk-wiki"]').isDisabled(), true, 'not restorable before its settings');
+    assert.match(await view(page).textContent(), /這台設備沒有這個應用的設定。這份備份附有建立時的應用設定/);
+    assert.match(await view(page).textContent(), /這台設備的應用設定與備份時不同。可以維持目前的設定/);
+    await page.locator('[data-focus="pf-settings-woowbk-wiki"]').click();
+    await page.getByText('檢查通過：可以安裝這份應用設定。').waitFor();
+    assert.deepEqual(requestOf((await calls(page, 'catalog-install')).at(-1)), { entry: wikiEntry }, 'a preview first, of the carried settings');
+    assert.match(await view(page).textContent(), /將寫入的內容/);
+    await fits(page, 'settings review');
+    await page.locator('[data-focus="pf-settings-install-woowbk-wiki"]').click();
+    await page.locator('#confirm-dialog').waitFor();
+    assert.equal(await page.locator('#confirm-ok').isDisabled(), true, 'the install waits for the acknowledgement');
+    await page.locator('#confirm-ack').check();
+    await page.locator('#confirm-ok').click();
+    await page.waitForFunction(() => document.querySelector('[data-focus="pf-select-woowbk-wiki"]')?.disabled === false);
+    assert.deepEqual(requestOf((await calls(page, 'catalog-install')).at(-1)), { entry: wikiEntry, confirm: true, expected_sha256: null });
+    assert.equal((await calls(page, 'inspect')).length, 2, 'the preflight ran again after the install');
+    assert.match(await view(page).textContent(), /已安裝備份中「團隊知識庫」的應用設定。/);
+    assert.equal(await page.locator('[data-focus="pf-settings-woowbk-wiki"]').count(), 0, 'the same settings now: nothing to review');
+    assert.equal(await page.locator('[data-focus="pf-settings-woowbk-demo"]').count(), 1, 'other settings here: still offered, never required');
+    await page.locator('[data-focus="pf-details-woowbk-wiki"]').click().catch(() => {});
+    assert.match(await view(page).textContent(), /應用設定已附上（還原時可審查並安裝）/);
+    await shot(page, 'restore-settings-installed-1440.png');
+  });
+
+  const carriedInvalid = fixture({ catalogData: catalogData() });
+  {
+    const wiki = carriedInvalid.inspect[B_MANUAL].preflight.apps[1];
+    wiki.checks = [{ id: 'woowbk-wiki/catalog', status: 'fail', message: '此設備沒有這個應用的應用設定。這份備份附有建立時的設定，審查並安裝後即可還原。' }];
+    wiki.settings = { state: 'missing', entry: { ...structuredClone(wikiEntry), unknown_field: true } };
+  }
+  await check("settings this device cannot take as they are are shown with the reason, never installed", carriedInvalid, async (page) => {
+    await ready(page);
+    await page.evaluate(id => { window.location.hash = `#/restore/${id}`; }, B_MANUAL);
+    await page.locator('[data-focus="pf-settings-woowbk-wiki"]').click();
+    await page.getByText('應用設定含有不支援的欄位：unknown_field。').waitFor();
+    assert.equal(await page.locator('[data-focus="pf-settings-install-woowbk-wiki"]').count(), 0, 'no install of an invalid entry');
+    assert.equal(await page.locator('[data-focus="pf-settings-copy-woowbk-wiki"]').count(), 1);
+    assert.match(await view(page).textContent(), /請複製內容，到「應用設定」修正後安裝/);
+    assert.equal((await calls(page, 'catalog-install')).filter(call => requestOf(call).confirm).length, 0);
+    await page.locator('[data-focus="pf-settings-close-woowbk-wiki"]').click();
+    await page.locator('[data-focus="pf-settings-woowbk-wiki"]').waitFor();
   });
 
   const safetyFlow = fixture();

@@ -34,6 +34,7 @@ Facts this adapter relies on (verified with Podman 4.9 rootless + systemd --user
   `<dir>.woowbk-old-<job>` is deleted only after the job succeeded (CONTRACT section 9).
 """
 import contextlib
+import copy
 import http.client
 import json
 import os
@@ -1720,6 +1721,11 @@ class QuadletPostgresAdapter(Adapter):
             'images': [], 'postgres': [], 'volumes': [], 'secrets': [], 'config_files': [], 'quadlet_files': [],
             'verify_snapshot': snapshot,
         }
+        if isinstance(app.raw, dict) and app.raw:
+            # The app's settings as installed when the backup was made (2026.11.15.2): a new device installs these
+            # after the administrator reviewed them (never by itself), so the backup's items match its settings.
+            # Every backup carries them, so engines before 2026.11.15.2 cannot read new backups (CONTRACT section 5).
+            manifest['catalog_entry'] = copy.deepcopy(app.raw)
         for dump in dumps:
             if dump.get('scope') == 'instance':
                 manifest['postgres'].append(self._instance_manifest(dump, entry))
@@ -2146,8 +2152,12 @@ class QuadletPostgresAdapter(Adapter):
             add('adapter', 'fail', '備份使用的應用轉接器與此設備不同。')
         elif not isinstance(app_manifest.get('adapter_version'), int) or app_manifest['adapter_version'] > self.version:
             add('adapter', 'fail', '備份由較新版本的轉接器建立，請先更新此設備的備份元件。')
-        if app_manifest.get('catalog_sha256') != app.sha256:
-            add('catalog', 'warn', '此設備的應用設定與備份時不同；將以此設備的設定為準。')
+        carried = app_manifest.get('catalog_entry')
+        # The settings a backup carries are compared as JSON (an entry installed from them is written formatted
+        # differently from a hand-written file); older backups only have the file's digest.
+        if not (carried == app.raw if isinstance(carried, dict) else app_manifest.get('catalog_sha256') == app.sha256):
+            add('catalog', 'warn', '此設備的應用設定與備份時不同；將以此設備的設定為準。'
+                + ('也可以審查並改用備份中附上的設定。' if isinstance(carried, dict) else ''))
         _found, missing, extra = self.match_items(app_manifest)
         if missing:
             add('items', 'fail', f'備份缺少此設備設定需要的項目：{", ".join(missing)}。')

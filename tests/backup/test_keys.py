@@ -213,7 +213,8 @@ class KeyStoreTests(unittest.TestCase):
         secret_line = next(line for line in Path(info.path).read_text().splitlines()
                            if line.startswith('AGE-SECRET-KEY-1'))
         for needle in (info.key_id, info.created, secret_line, '金鑰 ID', '建立時間', '建立設備', '另一台設備',
-                       '遺失', '永遠無法還原', '.tar', '舊格式的 .woowbackup', '應用設定', 'README.txt'):
+                       '遺失', '永遠無法還原', '.tar', '舊格式的 .woowbackup', '應用設定', 'README.txt',
+                       '在「加密金鑰」建立這台設備自己的金鑰', '按「審查備份中的應用設定」'):
             self.assertIn(needle, kit)
         # 2026-11-15: the kit named only the old format's file (.woowbackup) although backups are .tar since
         # 2026-11-13, and left out that the target device needs the apps' settings before it can restore them.

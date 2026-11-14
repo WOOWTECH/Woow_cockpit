@@ -216,6 +216,10 @@ class RoundTripTests(unittest.TestCase):
         readme = members['README.txt'].decode()
         self.assertIn('沒有加密', readme)
         self.assertIn('NOT encrypted', readme)
+        # 2026.11.15.2 (the new-device drill): the device's own key first; the settings the backup carries.
+        for needle in ('在新設備上，先在「加密金鑰」建立這台設備的金鑰', '可以審查並安裝這份備份附上的應用設定',
+                       "first create the device's own key", 'install the application settings this backup carries'):
+            self.assertIn(needle, readme)
 
     def test_cancel_from_progress_leaves_nothing(self):
         def cancel(done, total):
@@ -677,6 +681,43 @@ class InnerArchiveTests(unittest.TestCase):
 # ---------------------------------------------------------------------------- per-app partial restore
 
 @needs_age
+class CarriedSettingsTests(unittest.TestCase):
+    """2026.11.15.2: an app section may carry the app's settings as installed at backup time (`catalog_entry`):
+    plain JSON of an installable size for the same app id; everything else about it is refused like any manifest
+    defect (a device installs these settings only after the administrator reviewed them)."""
+    FILES = InnerArchiveTests.FILES
+    setUp = InnerArchiveTests.setUp
+    backup = InnerArchiveTests.backup
+    outcome = InnerArchiveTests.outcome
+
+    def with_settings(self, entry):
+        inner = small_inner(APP, self.ws.key.key_id, self.FILES)
+        inner['app']['catalog_entry'] = entry
+        return self.backup(inner_tar(inner, self.FILES), inner)
+
+    def test_settings_of_the_app_are_accepted_and_kept(self):
+        entry = {'id': APP, 'name': '示範', 'owner': 'appowner', 'units': ['a.service'], 'verify': [
+            {'id': 'v', 'type': 'files-digest', 'volume': 'vol', 'exclude': ['cache/**', 'tmp/*']}], 'ratio': 0.5,
+            'nested': {'a': {'b': {'c': [1, None, True]}}}}
+        path = self.with_settings(entry)
+        target = self.ws.dest('settings')
+        manifest = archive.extract_archive(path, self.ids, target)
+        self.assertEqual(manifest['apps'][0]['catalog_entry'], entry)
+
+    def test_bad_settings_are_a_manifest_defect(self):
+        deep = {'id': APP}
+        node = deep
+        for _ in range(9):
+            node['x'] = {}
+            node = node['x']
+        cases = {'not an object': ['x'], 'another app': {'id': 'other-app'}, 'no id': {'name': 'x'},
+                 'too deep': deep, 'too large': {'id': APP, 'blob': ['x' * 60000] * 5},
+                 'NUL in a string': {'id': APP, 'name': 'a\x00b'}, 'not finite': {'id': APP, 'ratio': float('nan')}}
+        for name, entry in cases.items():
+            with self.subTest(name):
+                self.assertEqual(self.outcome(self.with_settings(entry)), 'invalid-manifest')
+
+
 class PartialRestoreTests(unittest.TestCase):
     def setUp(self):
         self.ws = V2Workspace(self)

@@ -1794,6 +1794,8 @@
       ["容器映像", images.length ? images.map(image => `${str(image.ref)}（${image.included ? "已包含" : "未包含"}）`).join("、") : "無"],
       ["應用機密與設定", `${Number(app.secrets_count) || 0} 個應用機密 · ${Number(app.config_files_count) || 0} 個設定檔`],
       ["資料核對", verifyList(app)],
+      // 2026.11.15.2: a backup carries the app's settings, for a device that has none (or other ones) to install.
+      typeof app.settings_included === "boolean" ? ["應用設定", app.settings_included ? "已附上（還原時可審查並安裝）" : "未附上（較早的備份）"] : null,
       isNumber(app.archive_size) ? ["應用封存檔", bytes(app.archive_size)] : null
     ]);
   }
@@ -2503,6 +2505,109 @@
     runInspect(wizard, parsed.key, wizard.saveKey);
   }
 
+  // 2026.11.15.2: the settings a backup was made with, for a device that has none (or other ones) for the app. They
+  // are checked and installed exactly like a draft in 應用設定 (catalog-install: preview, then an acknowledged
+  // install), never by the restore itself; the preflight then runs again with the key already entered.
+  function settingsReview(wizard, app) {
+    const settings = isObject(app.settings) && isObject(app.settings.entry) ? app.settings : null;
+    if (!settings || !["missing", "different"].includes(settings.state)) return null;
+    const review = wizard.settingsReview?.id === app.id ? wizard.settingsReview : null;
+    const name = str(app.name || app.id);
+    const text = pretty(settings.entry);
+    const body = [
+      h("h5", { class: "subheading", text: "備份中的應用設定" }),
+      h("p", { text: settings.state === "missing"
+        ? "這台設備沒有這個應用的設定。這份備份附有建立時的應用設定，審查並安裝後就能還原。"
+        : "這台設備的應用設定與備份時不同。可以維持目前的設定（還原以這台設備的設定為準），或審查並改用備份中的設定。" }),
+      wizard.backup?.unauthenticated === true
+        ? infoNotice("這是上傳的未加密備份：設定的內容無法確認來自你的設備，安裝前請逐項審查。", "warn", "lock-open-variant-outline") : null
+    ];
+    if (!review) {
+      body.push(h("div", { class: "button-group" }, button(wizard.busy ? "正在檢查…" : "審查備份中的應用設定", () => reviewSettings(wizard, app), {
+        icon: "file-document-outline", disabled: wizard.busy, focus: `pf-settings-${app.id}`
+      })));
+    } else if (review.error) {
+      body.push(errorNotice(review.error, { retry: () => reviewSettings(wizard, app) }));
+    } else {
+      const preview = review.preview;
+      const same = preview.valid && preview.current && preview.expected_sha256 === preview.new_sha256;
+      body.push(...draftFeedback({ id: app.id, text, previewFor: text, preview, previewBusy: false, previewError: null }));
+      if (!preview.valid) {
+        body.push(h("p", { class: "muted", text: "這份設定不能直接安裝在這台設備。請複製內容，到「應用設定」修正後安裝，再回到這裡按「重新檢查」。" }));
+      }
+      body.push(h("div", { class: "button-group" },
+        preview.valid && !same ? button(preview.current ? "改用備份中的設定…" : "安裝備份中的設定…", () => installSettings(wizard, app, preview), {
+          primary: true, icon: "check", disabled: wizard.busy, focus: `pf-settings-install-${app.id}`
+        }) : null,
+        button("複製設定內容", () => copySettings(text), { icon: "content-copy", focus: `pf-settings-copy-${app.id}` }),
+        button("收合", () => { wizard.settingsReview = null; render(); }, { focus: `pf-settings-close-${app.id}` })));
+    }
+    return h("section", { class: "settings-review", "aria-label": `${name} 的備份中的應用設定` }, body);
+  }
+
+  async function reviewSettings(wizard, app) {
+    if (wizard.busy || state.wizard !== wizard) return;
+    wizard.busy = true;
+    render();
+    try {
+      const data = await call("catalog-install", { entry: app.settings.entry });
+      requireShape(isObject(data) && typeof data.valid === "boolean", "應用設定的檢查結果");
+      if (state.wizard === wizard) wizard.settingsReview = { id: app.id, preview: data };
+    } catch (error) {
+      if (state.wizard === wizard) wizard.settingsReview = { id: app.id, error };
+    } finally {
+      if (state.wizard === wizard) {
+        wizard.busy = false;
+        render();
+      }
+    }
+  }
+
+  function installSettings(wizard, app, preview) {
+    const id = app.id;
+    confirmDialog({
+      title: preview.current ? `改用備份中「${str(app.name || id)}」的應用設定？` : `安裝備份中「${str(app.name || id)}」的應用設定？`,
+      body: [
+        h("p", { text: preview.current
+          ? "會以備份中的設定取代這台設備目前的設定；舊的設定保留在 apps-history（每個應用最近 10 份）。安裝後重新檢查這份備份。"
+          : "會安裝備份中的應用設定（root 擁有、權限 0644），之後這個應用會出現在備份頁。安裝後重新檢查這份備份。" }),
+        metadata([["檔案", `/etc/woowtech-cockpit/backup/apps/${id}.json`, "mono"],
+          preview.current ? ["變更", `${list(preview.changes).length} 項`] : null,
+          ["這個應用的備份", `${Number(preview.backups) || 0} 份`]]),
+        list(preview.compat).length ? [h("h4", { text: "對既有備份的影響" }), h("ul", { class: "bullet-list warning-list" }, list(preview.compat).filter(isString).map(item => h("li", { text: item })))] : null,
+        list(preview.warnings).length ? [h("h4", { text: "提醒" }), h("ul", { class: "bullet-list" }, list(preview.warnings).filter(isString).map(item => h("li", { text: item })))] : null,
+        h("p", { class: "muted", text: "這項變更會記錄在系統日誌。安裝只寫入應用設定檔，不會建立部署範本，也不會變更服務或資料；還原仍要在確認步驟另外確認。" })
+      ],
+      acknowledge: "我已審查上面的內容、差異與影響",
+      confirmLabel: preview.current ? "改用這份設定" : "安裝設定",
+      action: async () => {
+        try {
+          const data = await call("catalog-install", { entry: app.settings.entry, confirm: true, expected_sha256: preview.expected_sha256 ?? null });
+          requireShape(data.installed === true && isString(data.sha256), "安裝結果");
+        } catch (error) {
+          if (error.details?.reason === "entry-changed") {
+            throw new HelperError("這台設備的設定在審查之後被變更了。請重新審查，確認差異後再安裝。", { code: error.code });
+          }
+          throw error;
+        }
+        announce(`已${preview.current ? "改用" : "安裝"}備份中「${id}」的應用設定，正在重新檢查。`);
+        wizard.settingsReview = null;
+        wizard.notice = `已${preview.current ? "改用" : "安裝"}備份中「${str(app.name || id)}」的應用設定。`;
+        loadStatus({ quiet: true });
+        if (state.wizard === wizard) runInspect(wizard, wizard.key, false);
+      }
+    });
+  }
+
+  async function copySettings(text) {
+    try {
+      await navigator.clipboard.writeText(text);
+      announce("已複製應用設定的內容。");
+    } catch {
+      announce("無法自動複製；請在上方「將寫入的內容」中選取文字後複製。");
+    }
+  }
+
   function stepPreflight(wizard) {
     const { manifest, preflight } = wizard.inspect;
     const globalFail = list(preflight.checks).some(check => check?.status === "fail");
@@ -2531,6 +2636,7 @@
           ? "這台設備已部署此應用：會覆寫目前的資料；還原前會先保存目前的資料，並封裝成還原前備份（空間足夠時在應用恢復後才封裝）。"
           : "這台設備尚未部署此應用：會依這台設備的受信任設定全新建立服務、資料卷與資料庫。" }) : null,
         checkList(app.checks, `${str(app.name || app.id)} 的檢查結果`),
+        settingsReview(wizard, app),
         content ? disclosure(`pf-details-${app.id}`, "備份內容", appContents(content)) : null);
     });
     const unauthenticated = wizard.backup?.unauthenticated === true;

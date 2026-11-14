@@ -1,5 +1,6 @@
 """CLI contract (CONTRACT section 7): one JSON object on stdout, exit codes, strict stdin, shapes."""
 import contextlib
+import copy
 import io
 import json
 import os
@@ -286,7 +287,8 @@ class InspectTests(CliCase):
         self.assertEqual((manifest['format'], manifest['encryption']), (2, 'age-x25519'))
         self.assertEqual(set(manifest['apps'][0]), {'id', 'name', 'adapter', 'owner', 'images', 'postgres', 'volumes',
                                                     'data_dirs', 'secrets_count', 'config_files_count',
-                                                    'verify_snapshot', 'verify_digests'})
+                                                    'settings_included', 'verify_snapshot', 'verify_digests'})
+        self.assertIs(manifest['apps'][0]['settings_included'], False, 'an archive made before 2026.11.15.2')
         self.assertEqual(manifest['apps'][0]['data_dirs'], [], 'an archive without host directories lists none')
         self.assertEqual(manifest['apps'][0]['verify_digests'], [], 'an archive without digests lists none')
         self.assertEqual(manifest['apps'][0]['images'], [{'ref': 'localhost/x:1', 'included': False}])
@@ -301,6 +303,40 @@ class InspectTests(CliCase):
             self.assertEqual(set(check), {'id', 'status', 'message'})
             self.assertIn(check['status'], ('ok', 'warn', 'fail'))
         self.assertTrue(self.storage.index[self.backup_id]['inspected'])
+
+    def carry_settings(self, entries):
+        """The stored backup, as if made by 2026.11.15.2: its app sections carry these settings."""
+        path = self.storage.archive_path(self.backup_id)
+        data = json.loads(path.read_text())
+        for app in data['manifest']['apps']:
+            if app['id'] in entries:
+                app['catalog_entry'] = entries[app['id']]
+        path.write_text(json.dumps(data))
+
+    def test_the_settings_a_backup_carries(self):
+        # 2026.11.15.2 (the new-device drill): offered for review where this device has none or other ones.
+        demo = copy.deepcopy(self.catalog['woowbk-demo'].raw)
+        two = dict(copy.deepcopy(demo), id='woowbk-two', name='第二個應用')
+        self.carry_settings({'woowbk-demo': demo, 'woowbk-two': two})
+        response = self.call(['inspect'], {'backup_id': self.backup_id})
+        apps = {app['id']: app for app in response['preflight']['apps']}
+        self.assertEqual(apps['woowbk-demo']['settings'], {'state': 'same', 'entry': demo})
+        self.assertTrue(apps['woowbk-demo']['restorable'])
+        self.assertEqual(apps['woowbk-two']['settings'], {'state': 'missing', 'entry': two})
+        self.assertFalse(apps['woowbk-two']['restorable'], 'never restorable before the settings are installed')
+        self.assertIn('這份備份附有建立時的設定，審查並安裝後即可還原', apps['woowbk-two']['checks'][0]['message'])
+        self.assertTrue(all(app['settings_included'] for app in response['manifest']['apps']))
+        other = dict(copy.deepcopy(demo), description='另一份設定')
+        self.carry_settings({'woowbk-demo': other})
+        apps = {app['id']: app for app in self.call(['inspect'], {'backup_id': self.backup_id})['preflight']['apps']}
+        self.assertEqual(apps['woowbk-demo']['settings'], {'state': 'different', 'entry': other})
+
+    def test_an_older_backup_says_where_the_settings_must_come_from(self):
+        response = self.call(['inspect'], {'backup_id': self.backup_id})
+        apps = {app['id']: app for app in response['preflight']['apps']}
+        self.assertNotIn('settings', apps['woowbk-demo'])
+        self.assertNotIn('settings', apps['woowbk-two'])
+        self.assertIn('這份備份沒有附上設定', apps['woowbk-two']['checks'][0]['message'])
 
     def test_a_wrong_key_is_never_saved(self):
         # Review F4: with save_key, the key was imported before decryption and kept although it was wrong.

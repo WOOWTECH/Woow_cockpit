@@ -397,6 +397,7 @@ progress::-moz-progress-bar { background: var(--ww-blue); border-radius: var(--r
 
 .preflight-summary { padding: 16px; border-radius: var(--radius); background: var(--surface-muted); border: 1px solid var(--hairline); }
 .app-preflight-list { display: grid; gap: 12px; }
+.settings-review { border-top: 1px solid var(--hairline); padding-top: 12px; display: grid; gap: 10px; min-inline-size: 0; }
 .app-preflight { border: 1px solid var(--hairline); border-radius: var(--radius); padding: 16px; display: grid; gap: 10px; min-inline-size: 0; }
 .app-preflight:has(input:checked) { border-color: var(--ww-blue); }
 .app-preflight.is-blocked { background: var(--surface-muted); }
