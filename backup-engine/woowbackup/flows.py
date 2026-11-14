@@ -699,15 +699,15 @@ def create_backup(ctx, apps, staging, *, include_images, note, backup_type, key,
         estimate += int(adapter.estimate_bytes(include_images=include_images))
     free = int(ctx.storage.free_bytes())
     required = int(estimate * SPACE_FACTOR) + int(ctx.paths.reserve_bytes)
-    note = None
+    space_note = None
     if space is not None:
-        required, note = space(estimate, free, required)
+        required, space_note = space(estimate, free, required)
     ctx.log(f'預估資料量 {human(estimate)}，需要可用空間 {human(required)}，目前可用 {human(free)}')
     if free < required:
         raise BackupError('insufficient-space', f'備份空間不足：預估需要 {human(required)}，目前可用 {human(free)}。'
                                                 '應用未被暫停。', required=required, free=free)
-    if note:
-        ctx.log(note)
+    if space_note:
+        ctx.log(space_note)
     if phases:
         ctx.checkpoint()
         ctx.cancellable(False)

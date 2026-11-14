@@ -652,6 +652,8 @@ class BackupFlowTests(FlowCase):
         self.assertEqual(self.reporter.events[stop_at - 1], ('cancellable', False))
         meta = self.storage.index[result['backup_id']]
         self.assertEqual(meta['type'], 'manual')
+        self.assertEqual((meta['note'], self.archive.writes[0]['manifest']['note']), ('手動', '手動'),
+                         'the note reaches the archive (lab 2026-11-14: a shadowed `note` wrote None, invalid-manifest)')
         self.assertEqual(meta['verified']['ok'], True)
         self.assertEqual(meta['apps'], [{'id': 'woowbk-demo', 'name': '示範筆記應用'}])
         self.assertEqual(meta['filename'], 'woowtech-backup-dev-a-20261113-020001.tar')
@@ -1899,6 +1901,7 @@ class PendingCopyFlowTests(RestoreCase):
         self.assertEqual(self.safety_ids(), [result['safety_backup_id']])
         self.assertEqual(self.safety_files(result['safety_backup_id']),
                          {'apps/woowbk-demo/volumes/data.tar': b'notes-v2-changed'})
+        self.assertEqual(self.storage.index[result['safety_backup_id']]['note'], f'還原前自動備份（還原來源 {self.backup_id}）')
         self.assertIn(('mark', 'safety-package', 'done'), self.reporter.events)
         self.assertNotIn(('phase', 'safety-package'), self.reporter.events)
         self.assertEqual([item for item in self.reporter.partials if item.get('safety_pending')], [])
