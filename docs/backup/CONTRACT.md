@@ -853,8 +853,9 @@ false), `verify 驗證備份`.
 Restore: `prepare 準備`, `decrypt 解密並驗證檔案`, `preflight 相容性檢查`, `stage 預先寫入主機資料夾` (skipped without
 host directories), `safety 保存還原前資料`, `stop 停止應用`, `restore 還原資料`, `start 啟動應用`, `check 健康與資料核對`,
 `safety-package 封裝還原前備份` (skipped without a pre-restore copy; `done` already during `safety` when the copy was
-packaged in the downtime; `failed` while the job still succeeds when the copy could not be packaged, `done` again once a
-recovery pass packaged it), and `rollback 自動回復` appended on failure (the
+packaged in the downtime, and kept `done` while the restore's phases and a rollback run; `failed` while the job still
+succeeds when the copy could not be packaged, `done` again once a recovery pass packaged it; never counted as a
+destructive phase for `changed`), and `rollback 自動回復` appended on failure (the
 copy is packaged inside it). Verify: `prepare`, `decrypt` (decrypt and check every entry, deep), `check`.
 Export: `prepare 準備`, `decrypt 解密並驗證檔案`, `package 封裝未加密副本`, `verify 驗證副本`. Digests are taken inside `dump`
 (PostgreSQL) and `export` (files) and compared inside `restore` (files) and `start` (PostgreSQL, before other units).
@@ -1092,19 +1093,31 @@ apps' manifest sections, note, downtime, the encryption choice made at the job's
 will get) and records `safety_pending` before the restore's first destructive step: from then on a power loss leaves a
 complete copy. A failure to save or record the copy counts as no safety backup (`safety_failed`, or the
 `allow_no_safety`/safety-source fallback). **Where the copy is packaged is decided before any writer stops**, from the
-estimate: after the restore when the free space holds the copy, its archive and the running reserve (the apps run while
-it is written: 5 % of the filesystem, at least 2 GiB and at most 10 GiB, review M4), less the extracted archive
-(deleted before that packaging); otherwise in the downtime, as a safety backup was packaged before 2026.11.14.2 (the
-estimate × 2.2 + the device reserve; no running reserve: the apps are stopped), the log saying so; with too little space
-for that either, the restore is refused before any writer stops (`safety_failed`, `應用未被暫停`). Once the copy is on
-disk the choice is checked again with its real size: a copy larger than estimated switches to packaging in the
-downtime, never to a refusal after the stop (production 2026-11-14: Hermes was paused 2 min 16 s and then refused,
-11.8 GiB needed after the restore, 11.6 GiB free, because only the second check knew the running reserve). Packaging in
-the downtime (`safety_in_downtime` true, phase `safety-package` marked `done` during `safety`) writes, verifies and
-registers the safety backup before the first destructive step; the copy is not flagged and stays only for a rollback
-(which reads it directly and packages nothing more) and is deleted when the job ends. A failure of that packaging
-counts as no safety backup, like one before 2026.11.14.2. For packaging after the restore, the same need is checked
-again right before it starts (images pulled or WAL written meanwhile). A successful restore deletes
+estimate E, counted with a tenth more (E', for what the estimate leaves out and the other apps' writes meanwhile):
+after the restore when the free space holds E', its archive (E' + 1 %) and the running reserve (the apps run while it
+is written: 5 % of the filesystem, at least 2 GiB and at most 10 GiB, review M4), less what the restore gives back
+first: the in-place apps' extracted data (deleted before that packaging, review CR-01), at most E, because where the
+apps' storage shares the filesystem the restored data takes the place of what it replaces; images and fresh apps'
+data never count. Otherwise in the downtime when the free space holds E × 2.2 + the device reserve (what a safety
+backup needed before 2026.11.14.2) and E' more for the copy, which stays for a rollback until the job ends, so the
+restore keeps the room it had before; no running reserve: the apps are stopped. With too little space for either, the
+restore is refused before any writer stops (`safety_failed`, `應用未被暫停`), the error naming the smaller need and the
+log both (review 2026-11-14). **Once the copy is on disk, space is no reason to refuse any more**: a copy the downtime
+packaging cannot take after all (much larger than estimated, or the space used meanwhile) is packaged after the
+restore instead (flagged as `safety_pending`; it stays for a rollback), and a copy decided for packaging after the
+restore keeps that choice whatever its size; that packaging checks the space again and waits for space if it must. A
+restore is refused after the stop only when the copy itself cannot be written (larger than the free space, beyond
+both margins) or recorded, or when the downtime packaging fails for another reason than space (production
+2026-11-14: Hermes was paused 2 min 16 s and then refused, 11.8 GiB needed after the restore, 11.6 GiB free, because
+only the check after the copy knew the running reserve). Packaging in the downtime (`safety_in_downtime` true, phase
+`safety-package` marked `done` during `safety` and kept so through the restore's phases and a rollback) writes,
+verifies and registers the safety backup before the first destructive step; the copy is not flagged and stays only for
+a rollback (which reads it directly and packages nothing more) and is deleted when the job ends (a termination signal
+while it is deleted leaves the rest to the recovery sweep; the outcome stands). That phase never counts as a
+destructive step (`changed`, §7). A failure of that packaging other than space counts as no safety backup, like one
+before 2026.11.14.2; with `allow_no_safety` or a safety-backup source the copy is kept and packaged after the restore
+instead. For packaging after the restore, the same need is checked again right before it starts (images pulled or WAL
+written meanwhile). A successful restore deletes
 the replaced host-directory copies, the extracted archive, and then packages the copy in phase `safety-package` (written
 and fully verified like any backup, then registered; `safety_backup_id` set) and deletes it -- outside the outage
 (production 2026-11-14: Hermes 66 s and Nextcloud 35 s of the outage were this packaging). A failed restore rolls back

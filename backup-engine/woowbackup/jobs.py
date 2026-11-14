@@ -404,6 +404,7 @@ class JobReporter:
         self.min_interval = min_interval
         self._last_save = 0.0
         self._phase_index = 0
+        self._marked = set()  # phases set by mark(): an earlier phase starting again leaves them as they are
 
     @property
     def job_id(self):
@@ -430,7 +431,7 @@ class JobReporter:
                 item['state'] = 'done'
             elif i == index:
                 item['state'] = 'active'
-            elif i > index and item['state'] in ('active', 'done'):
+            elif i > index and item['state'] in ('active', 'done') and item['id'] not in self._marked:
                 item['state'] = 'pending'  # re-entered for the next app of a multi-app job
         self._phase_index = index
         self.record['phase'] = phase_id
@@ -460,7 +461,10 @@ class JobReporter:
         self._save()
 
     def mark(self, phase_id, state):
-        """Set one phase's state whatever it is now (the copy a rollback packaged after `rollback` skipped the phase)."""
+        """Set one phase's state whatever it is now, and keep it while earlier phases run (the pre-restore copy
+        packaged in the downtime, before the restore's phases; the copy a rollback packaged after `rollback` skipped
+        the phase; review 2026-11-14)."""
+        self._marked.add(phase_id)
         for item in self.record['phases']:
             if item['id'] == phase_id:
                 item['state'] = state
@@ -751,7 +755,9 @@ def _fail_unlaunched(store, job_id, error):
 
 
 def _destructive_phase_reached(record):
-    return any(item.get('id') in ('stop', 'restore', 'start', 'check', 'safety-package', 'rollback')
+    # Not safety-package: packaged in the downtime, it is done before the first destructive step; after the restore,
+    # it follows check (review 2026-11-14).
+    return any(item.get('id') in ('stop', 'restore', 'start', 'check', 'rollback')
                and item.get('state') not in ('pending', 'skipped') for item in record.get('phases') or [])
 
 

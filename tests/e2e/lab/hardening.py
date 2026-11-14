@@ -1210,7 +1210,8 @@ def first_line(log, text):
 def scenario_space(ev):
     """2026.11.14.2 host test (Hermes paused 2 min 16 s, then refused): on a 1.5 GiB tmpfs over the data directory the
     running reserve (2 GiB) cannot follow the restore, so the pre-restore copy is packaged in the downtime, decided
-    before any writer stops, once, also around a rollback; with too little space for that either, nothing stops."""
+    before any writer stops, once, also around a rollback (its phase staying done); with too little space for either
+    packaging, nothing stops."""
     dev = 'a'
     status = ok(dev, 'status', ev=ev)
     ev.require('dev-a idle and the data dir is the normal ext4 volume',
@@ -1279,6 +1280,9 @@ def scenario_space(ev):
         ev.check('SPACE rollback: one packaging, before the stop (none after the rollback)',
                  sum('已建立並通過完整驗證' in line for line in log) == 1
                  and first_line(log, '已建立並通過完整驗證') < first_line(log, '階段：停止應用'))
+        ev.check('SPACE rollback: safety-package stays done through the rollback (review 2026-11-14: was skipped)',
+                 phase_states(job).get('safety-package') == 'done' and phase_states(job).get('rollback') == 'done',
+                 phase_states(job))
         ev.check('SPACE rollback: data equals the state before the restore', content_state(dev) == pre)
         ev.check('SPACE rollback: app healthy, pending/ empty',
                  wait_healthy(dev, 120) and sh(dev, f'ls -A {DATA}/pending').stdout.strip() == b'')
@@ -1301,6 +1305,10 @@ def scenario_space(ev):
         ev.check('SPACE refused: failed with no safety backup possible, saying no app was paused',
                  job['state'] == 'failed' and result.get('safety_failed') is True
                  and '應用未被暫停' in (job.get('error') or {}).get('message', ''), job.get('error'))
+        need = first_line(log, '可用空間不足以建立還原前備份：在應用恢復後封裝約需')
+        results['refused']['need_line'] = log[need] if need is not None else None
+        ev.check('SPACE refused: the log names both needs before the refusal (review 2026-11-14)',
+                 need is not None and '在停機期間封裝約需' in log[need], results['refused']['need_line'])
         ev.check('SPACE refused: no writer was paused (no stop line, stop phase pending)',
                  not any('暫停寫入服務' in line for line in log) and phase_states(job).get('stop') == 'pending',
                  phase_states(job))

@@ -938,7 +938,44 @@ class PendingCopyRecoveryTests(JobCase):
         bare = self.store.create('restore', dict(self.PARAMS))
         self.assertFalse(jobs._destructive_phase_reached(bare))
         bare['phases'][-1]['state'] = 'failed'  # safety-package
+        self.assertFalse(jobs._destructive_phase_reached(bare), 'safety-package alone never counts')
+        bare['phases'][-2]['state'] = 'done'  # check
         self.assertTrue(jobs._destructive_phase_reached(bare))
+
+    def test_a_copy_packaged_in_the_downtime_is_no_change(self):
+        # Review 2026-11-14: packaged while the apps are stopped, safety-package is done before the restore's first
+        # destructive step. A job cut short then (loading images, say) changed nothing, and the page must say so.
+        record = self.store.create('restore', dict(self.PARAMS))
+        for item in record['phases']:
+            if item['id'] in ('prepare', 'decrypt', 'preflight', 'stage', 'safety', 'safety-package'):
+                item['state'] = 'done'
+        record.update(phase='safety', safety_backup_id=self.SAFETY)
+        message, result = jobs.interrupted_details(record)
+        self.assertIs(result['changed'], False)
+        self.assertEqual(result['safety_backup_id'], self.SAFETY)
+        self.assertEqual(message, jobs.INTERRUPTED_MESSAGE['restore'] + f'還原前備份：{self.SAFETY}。')
+        record['phases'][[item['id'] for item in record['phases']].index('stop')]['state'] = 'failed'
+        self.assertIs(jobs.interrupted_details(record)[1]['changed'], True)
+
+    def test_a_marked_phase_stays_while_earlier_phases_run(self):
+        # Review 2026-11-14: the copy packaged in the downtime marks safety-package done during safety; the
+        # restore's phases that follow, and a rollback, leave it done.
+        record = self.store.create('restore', dict(self.PARAMS))
+        reporter = jobs.JobReporter(self.store, record)
+        for phase in ('prepare', 'decrypt', 'preflight', 'safety'):
+            reporter.phase(phase)
+        reporter.mark('safety-package', 'done')
+        for phase in ('stop', 'restore', 'start', 'check', 'stop', 'restore'):
+            reporter.phase(phase)
+        states = lambda: {item['id']: item['state'] for item in record['phases']}  # noqa: E731
+        self.assertEqual((states()['safety-package'], states()['check']), ('done', 'pending'),
+                         'check is re-entered for the next app; the marked phase is not')
+        reporter.add_phase('rollback', '自動回復')
+        reporter.phase('rollback')
+        self.assertEqual((states()['safety-package'], states()['restore'], states()['start']),
+                         ('done', 'failed', 'skipped'))
+        reporter.finish('rolled-back')
+        self.assertEqual((states()['safety-package'], states()['rollback']), ('done', 'done'))
 
     def test_records_with_a_copy_pin_like_a_changed_failed_restore(self):
         failed_copy = self.make('succeeded', age=300, safety_pending_failed={'path': 'p', 'message': 'm'})
