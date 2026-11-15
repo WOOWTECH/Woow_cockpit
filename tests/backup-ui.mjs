@@ -1222,8 +1222,10 @@ try {
     assert.deepEqual([...js.matchAll(/localStorage[.\w]*\([^)]*\)/g)].map(match => match[0]), ["localStorage.getItem('shell:style')"]);
     assert.equal(js.split('localStorage').length - 1, 1, 'localStorage is used exactly once, to read shell:style');
     assert(js.includes('"/usr/local/libexec/woowtech-cockpit-backup"'));
-    assert.equal(manifest.menu.index.label, '備份與還原');
-    assert.equal(manifest.menu.index.order, 46);
+    // In the sidebar's Tools group, right below 應用軟體 (order 40); scripts/check_source.py checks the neighbours.
+    assert.equal(manifest.menu, undefined, 'not in the System group');
+    assert.equal(manifest.tools.index.label, '備份與還原');
+    assert.equal(manifest.tools.index.order, 41);
     assert.deepEqual([...html.matchAll(/<script\b[^>]*>/g)].map(match => match[0]),
       ['<script src="../base1/cockpit.js" defer>', '<script src="backup.js" defer>'], 'only the two package scripts, no inline script');
     assert(!/\sstyle=/.test(html) && !/<style/.test(html), 'no inline styles');
