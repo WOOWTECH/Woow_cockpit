@@ -3,6 +3,8 @@
 set -euo pipefail
 [ "$(id -u)" = 0 ] || { echo 'Run with sudo.' >&2; exit 1; }
 pi_host=${1:-}; pi_port=${2:-19094}; pi_vpn=${3:-}; pi_public=${4:-}
+pi_vpn_userspace=${PI_GATEWAY_VPN_USERSPACE:-0}
+[[ "$pi_vpn_userspace" = 0 || "$pi_vpn_userspace" = 1 ]] || { echo 'PI_GATEWAY_VPN_USERSPACE must be 0 or 1.' >&2; exit 1; }
 if [[ -n "$pi_public" ]]; then
   node -e 'const s=process.argv[1];const u=new URL(s);if(u.protocol!=="https:"||u.origin!==s||u.username||u.password||!/^[a-z0-9.-]+$/i.test(u.hostname))process.exit(1)' "$pi_public" || { echo 'Public origin must be an exact HTTPS DNS origin without a path.' >&2; exit 1; }
   if ! systemctl is-active --quiet woowtech-piweb-gateway-public.service && [[ -n "$(ss -H -ltn '( sport = :19095 )')" ]]; then
@@ -14,16 +16,21 @@ validate_ip() {
   [[ "$ip" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]] || { echo 'Supply a valid IPv4 address.' >&2; exit 1; }
   IFS=. read -r a b c d <<< "$ip"
   for part in "$a" "$b" "$c" "$d"; do ((10#$part <= 255)) || { echo 'Invalid IP.' >&2; exit 1; }; done
-  ip -4 -o address show | awk '{print $4}' | cut -d/ -f1 | grep -Fxq "$ip" || { echo "IP $ip is not on a local interface." >&2; exit 1; }
+  if [[ ${2:-0} != 1 ]]; then
+    ip -4 -o address show | awk '{print $4}' | cut -d/ -f1 | grep -Fxq "$ip" || { echo "IP $ip is not on a local interface." >&2; exit 1; }
+  fi
 }
 validate_ip "$pi_host"
-if [[ -n "$pi_vpn" ]]; then validate_ip "$pi_vpn"; [[ "$pi_vpn" != "$pi_host" ]] || { echo 'VPN and LAN addresses must differ.' >&2; exit 1; }; fi
+if [[ -n "$pi_vpn" ]]; then validate_ip "$pi_vpn" "$pi_vpn_userspace"; [[ "$pi_vpn" != "$pi_host" ]] || { echo 'VPN and LAN addresses must differ.' >&2; exit 1; }; fi
 [[ "$pi_port" =~ ^[0-9]{1,5}$ ]] && ((pi_port >= 1024 && pi_port <= 65535)) || { echo 'Invalid port.' >&2; exit 1; }
 if ! systemctl is-active --quiet woowtech-piweb-gateway.service && [[ -n "$(ss -H -ltn "( sport = :$pi_port )")" ]]; then
   echo 'The requested gateway port is already in use.' >&2; exit 1
 fi
 if [[ -n "$pi_vpn" ]] && ! systemctl is-active --quiet woowtech-piweb-gateway-vpn.service && ss -H -ltn "( sport = :$pi_port )" | awk '{print $4}' | grep -Fxq "$pi_vpn:$pi_port"; then
   echo 'The requested VPN gateway address and port are already in use.' >&2; exit 1
+fi
+if [[ -n "$pi_vpn" && "$pi_vpn_userspace" = 1 ]] && ! systemctl is-active --quiet woowtech-piweb-gateway-vpn.service && ss -H -ltn "( sport = :$pi_port )" | awk '{print $4}' | grep -Eq "^(127\\.0\\.0\\.1|0\\.0\\.0\\.0|\\*):$pi_port$"; then
+  echo 'The userspace VPN loopback gateway port is already in use.' >&2; exit 1
 fi
 pi_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 pi_pkg=/usr/local/share/cockpit/woowpiweb
@@ -42,6 +49,9 @@ systemctl restart woowtech-piweb-gateway.service
 systemctl is-active --quiet woowtech-piweb-gateway.service || { echo 'Gateway did not start.' >&2; exit 1; }
 if [[ -n "$pi_vpn" ]]; then
   sed -e "s/__GATEWAY_HOST__/$pi_vpn/g" -e "s/__GATEWAY_PORT__/$pi_port/g" "$pi_root/woowtech-piweb-gateway.service" > /etc/systemd/system/woowtech-piweb-gateway-vpn.service
+  if [[ "$pi_vpn_userspace" = 1 ]]; then
+    sed -i "s/^Environment=PI_GATEWAY_BIND=.*/Environment=PI_GATEWAY_BIND=127.0.0.1\nEnvironment=PI_GATEWAY_LOOPBACK_FORWARD=1/" /etc/systemd/system/woowtech-piweb-gateway-vpn.service
+  fi
   chmod 0644 /etc/systemd/system/woowtech-piweb-gateway-vpn.service
   systemd-analyze verify /etc/systemd/system/woowtech-piweb-gateway-vpn.service
   systemctl daemon-reload

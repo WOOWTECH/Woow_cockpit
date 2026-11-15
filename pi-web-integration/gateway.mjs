@@ -7,8 +7,14 @@ import { Transform } from 'node:stream';
 const required = key => { const value=process.env[key]; if(!value) throw Error(`Missing ${key}`); return value; };
 const bind=required('PI_GATEWAY_BIND'), host=required('PI_GATEWAY_HOST'), port=Number(required('PI_GATEWAY_PORT'));
 const cockpitPort=Number(process.env.PI_GATEWAY_COCKPIT_PORT||9090), piPort=Number(process.env.PI_GATEWAY_UPSTREAM_PORT||30141);
-if(!/^\d{1,3}(\.\d{1,3}){3}$/.test(host)||bind!==host||!Number.isInteger(port)||port<1024||port>65535) throw Error('Invalid listen configuration');
-if(![cockpitPort,piPort].every(value=>Number.isInteger(value)&&value>=1&&value<=65535)) throw Error('Invalid backend port');
+const cockpitBrowserPort=Number(process.env.PI_GATEWAY_COCKPIT_BROWSER_PORT||cockpitPort);
+// A userspace VPN forwards its public tailnet address to a loopback socket.
+// Keep that opt-in separate from the browser authority; never trust forwarded Host headers.
+const loopbackForward=process.env.PI_GATEWAY_LOOPBACK_FORWARD==='1';
+if(!/^\d{1,3}(\.\d{1,3}){3}$/.test(host)||host.split('.').some(part=>Number(part)>255)||
+   (bind!==host&&!(loopbackForward&&bind==='127.0.0.1'))||
+   !Number.isInteger(port)||port<1024||port>65535) throw Error('Invalid listen configuration');
+if(![cockpitPort,piPort,cockpitBrowserPort].every(value=>Number.isInteger(value)&&value>=1&&value<=65535)) throw Error('Invalid backend port');
 const publicOrigin=process.env.PI_GATEWAY_PUBLIC_ORIGIN||'';
 let publicURL;
 if(publicOrigin){
@@ -16,7 +22,7 @@ if(publicOrigin){
  if(publicURL.protocol!=='https:'||publicURL.origin!==publicOrigin||publicURL.username||publicURL.password||bind!=='127.0.0.1')throw Error('Public ingress requires an exact HTTPS origin and a loopback listener');
 }
 const authority=publicURL?publicURL.host:`${host}:${port}`;
-const expectedOrigin=publicOrigin||`http://${authority}`, cockpitOrigin=publicOrigin||`http://${host}:${cockpitPort}`;
+const expectedOrigin=publicOrigin||`http://${authority}`, cockpitOrigin=publicOrigin||`http://${host}:${cockpitBrowserPort}`;
 const maxBytes=128*1024*1024;
 function cookies(header){
  const result={};for(const pair of String(header||'').split(';')){const i=pair.indexOf('=');if(i<1)continue;const k=pair.slice(0,i).trim();if(k==='cockpit'||k==='pi_web_session'){if(Object.hasOwn(result,k))return null;result[k]=pair.slice(i+1).trim();}}return result;

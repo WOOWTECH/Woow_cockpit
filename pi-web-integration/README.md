@@ -54,3 +54,24 @@ sudo systemctl status woowtech-piweb-gateway.service woowtech-piweb-gateway-vpn.
 ## Cockpit 主題同步
 
 從 Cockpit 嵌入開啟 Pi Web 時，入口會依 Cockpit 的淺色、深色或系統預設切換 Pi Web 的顯示與品牌藍；直接開啟 Pi Web 仍使用 Pi Web 自己的主題偏好。此同步不修改瀏覽器儲存的 `pi-theme`。入口只接受來自已設定 Cockpit origin 的主題訊息。Pi Web 升級後應重新驗證 HTML 注入、登入、對話、WebSocket 與主題切換。
+# Userspace VPN forwarding
+
+A userspace VPN can own its tailnet address without assigning that address to a
+Linux network interface. Use `PI_GATEWAY_VPN_USERSPACE=1` when installing with
+that VPN address as the third argument. The LAN address must still belong to a
+local interface. The VPN gateway binds **127.0.0.1**, while its accepted browser
+Host, Origin and embedded parent remain the exact configured VPN address and
+port. Configure the VPN's TCP forwarding separately to this loopback port;
+the installer does not change VPN identity, ACLs or existing forwards.
+
+For example, `sudo PI_GATEWAY_VPN_USERSPACE=1 ./install.sh LAN_IP 19094 VPN_IP`
+creates independent LAN and loopback listeners. Keep the VPN forwarding port
+the same as the gateway port. Ordinary kernel VPN deployments retain the
+existing interface-bound behavior. Cockpit session verification and Pi Web's
+independent password remain required in both modes.
+
+When an HTTP front proxy retains the original Cockpit browser port while moving
+Cockpit's backend to another loopback port, set `PI_GATEWAY_COCKPIT_PORT` to the
+backend and `PI_GATEWAY_COCKPIT_BROWSER_PORT` to the original browser port in all
+gateway services. This preserves the exact iframe parent and theme-message
+origin. Without this override, the browser port follows the backend port.
