@@ -1093,8 +1093,38 @@ class PreflightTests(AdapterCase):
 
     def test_newer_adapter_and_catalog_drift(self):
         manifest = dict(self.manifest, adapter_version=2, catalog_sha256='0' * 64)
+        del manifest['catalog_entry']  # a backup made before 2026.11.15.2: only the settings file's digest
         statuses = self.statuses(self.adapter.preflight(manifest, mode='inplace'))
         self.assertEqual((statuses['woowbk-demo/adapter'], statuses['woowbk-demo/catalog']), ('fail', 'warn'))
+
+    def test_the_backup_carries_the_settings_it_was_made_with(self):
+        # 2026.11.15.2 (the new-device drill: settings scanned there did not match the backup's items).
+        self.assertEqual(self.manifest['catalog_entry'], self.app.raw)
+        self.assertIsNot(self.manifest['catalog_entry'], self.app.raw, 'a copy')
+        from woowbackup import archive
+        archive._validate_app(self.manifest, 'app', lambda *_args: None, {})  # the schema takes the new key
+        checks = {c['id']: c for c in self.adapter.preflight(self.manifest, mode='inplace')}
+        self.assertNotIn('woowbk-demo/catalog', checks, 'the same settings: no drift')
+        # Compared as JSON: the same settings installed from the backup are written formatted otherwise (another
+        # file digest), and that is no drift either.
+        reformatted = dict(self.manifest, catalog_sha256='0' * 64)
+        self.assertNotIn('woowbk-demo/catalog', {c['id'] for c in self.adapter.preflight(reformatted, mode='inplace')})
+        other = json.loads(json.dumps(self.manifest))
+        other['catalog_entry']['description'] = '另一份設定'
+        drift = {c['id']: c for c in self.adapter.preflight(other, mode='inplace')}['woowbk-demo/catalog']
+        self.assertEqual(drift['status'], 'warn')
+        self.assertTrue(drift['message'].endswith('也可以審查並改用備份中附上的設定。'), drift['message'])
+
+    def test_settings_a_backup_cannot_hold_are_left_out_not_fatal(self):
+        # Review 2026-11-15: a hand-written settings file the catalog loads can hold a lone surrogate escape, which a
+        # backup refuses: its backups then carry no settings (and say so) instead of failing after the downtime.
+        self.app.raw['description'] = 'broken \ud83d'
+        self.logs.clear()
+        manifest, _entries = self.adapter.backup(self.staging / 'again', include_images=False)
+        self.assertNotIn('catalog_entry', manifest)
+        self.assertIn('這份備份不附上應用設定；在新設備還原時，需要另外安裝它的應用設定。', self.everything_logged())
+        from woowbackup import archive
+        archive._validate_app(manifest, 'app', lambda *_args: None, {})
 
     def test_fresh_missing_local_only_image_fails(self):
         owner = FakeOwner(deployed=False)

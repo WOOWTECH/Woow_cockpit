@@ -193,7 +193,8 @@ async function partCatalog() {
         await editor.fill(original);
         await waitText(feedback, /與目前安裝的設定比較（2 項變更）/, 60000);
       }
-      const changes = await feedback.textContent();
+      // The text the wait matched: the page may check the draft again meanwhile (after the other app's install).
+      const changes = await waitText(feedback, /與目前安裝的設定比較（2 項變更）/, 120000);
       check(`${app}: the preview shows the two generated digest checks as additions`, /與目前安裝的設定比較（2 項變更）/.test(changes)
         && /postgres-digest/.test(changes) && /files-digest/.test(changes), changes.slice(0, 300));
       const install = frame.locator('[data-focus="catalog-install"]');

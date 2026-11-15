@@ -150,6 +150,20 @@ class PreviewTests(AdminCase):
         if size > catalog.MAX_ENTRY_BYTES:
             self.assertEqual(result['error']['code'], 'limit-exceeded')
 
+    def test_odd_shapes_are_explained_not_an_internal_error(self):
+        # Review 2026-11-15: the notes on replacing an entry are made before validation; a number for `volumes` (a
+        # backup's settings, or a draft typed by hand) made the preview fail with internal-error.
+        self.install(entry())
+        for key, value in (('volumes', 5), ('secrets', True), ('postgres', 3), ('data_dirs', 'x'), ('quadlet', 'x'),
+                           ('config_files', {'a': 1})):
+            with self.subTest(key):
+                result = catalog_admin.preview_install(self.paths, entry(**{key: value}), **self.kwargs())
+                self.assertFalse(result['valid'])
+                self.assertEqual(result['error']['code'], 'invalid-request', result['error'])
+        odd = {'id': 'notes', 'volumes': 5, 'postgres': 3, 'quadlet': 'x'}
+        self.assertIn('擁有者帳號改變：服務、資料卷與密鑰會以新的帳號操作。', catalog_admin.compat_notes(odd, entry()))
+        self.assertTrue(all(isinstance(note, str) for note in catalog_admin.compat_notes(entry(), odd)))
+
     def test_conflicts_with_other_entries_of_the_same_owner(self):
         self.install(entry('notes'))
         clash = entry('notes2', units=['notes-db.service', 'notes2-app.service'],

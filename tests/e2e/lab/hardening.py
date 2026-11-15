@@ -627,6 +627,10 @@ elif case == 'unknown-app':
                 if 'entry' in db:
                     db['entry'] = db['entry'].replace('apps/%s/' % APP, 'apps/woowbk-h1-evil/', 1)
     app['id'], app['name'] = 'woowbk-h1-evil', 'H1 未登錄的應用'
+    if isinstance(app.get('catalog_entry'), dict):
+        # The settings it carries (2026.11.15.2) renamed too: an archive for an app this device does not know, which
+        # still claims woowbk-demo's units, volumes and secrets.
+        app['catalog_entry']['id'], app['catalog_entry']['name'] = 'woowbk-h1-evil', 'H1 未登錄的應用'
     if FORMAT == 2:
         manifest['backup_apps'] = ['woowbk-h1-evil']
     sync_entries()
@@ -799,6 +803,17 @@ def h1_case(ev, dev, case, base_id, baseline):
         ev.check('H1 unknown-app: restore-start for the archive app id -> app-not-in-catalog, no job created',
                  error_code(reply) == 'app-not-in-catalog'
                  and {j['id'] for j in ok(dev, 'jobs', ev=ev)['jobs']} == jobs_before, reply.get('error'))
+        carried = (apps[0].get('settings') or {}) if apps else {}
+        if carried:
+            # 2026.11.15.2: the settings the crafted archive carries are offered, and the device's own review refuses
+            # them: they claim another app's items (nothing is installed without catalog-install anyway).
+            preview = ok(dev, 'catalog-install', {'entry': carried.get('entry')}, ev=ev)
+            ev.check('H1 unknown-app: the carried settings are offered (missing) and the device\'s own review refuses '
+                     'them (they claim woowbk-demo\'s items)', carried.get('state') == 'missing'
+                     and preview.get('valid') is False and isinstance(preview.get('error'), dict),
+                     {'state': carried.get('state'), 'error': preview.get('error')})
+            ev.check('H1 unknown-app: nothing was installed', not sh(dev, 'test -e /etc/woowtech-cockpit/backup/apps/'
+                                                                     'woowbk-h1-evil.json && echo y || true').stdout.strip())
 
     # 5. nothing escaped staging, staging and keys cleaned, app untouched, no new backups but the upload
     unexpected, counts = changed_since(dev, t_start)

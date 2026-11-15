@@ -123,8 +123,20 @@ def diff_text(old, new, name):
     return lines
 
 
+def _items(entry, key):
+    """entry[key] when it is a list, else []: the notes are made before validation (review 2026-11-15: a number
+    for `volumes` made the preview fail with internal-error instead of saying what is wrong)."""
+    value = entry.get(key) if isinstance(entry, dict) else None
+    return value if isinstance(value, list) else []
+
+
+def _template_dir(entry):
+    quadlet = entry.get('quadlet') if isinstance(entry, dict) else None
+    return quadlet.get('template_dir') if isinstance(quadlet, dict) else None
+
+
 def _names(entry, key, ident):
-    return [item.get(ident) for item in (entry or {}).get(key) or [] if isinstance(item, dict)]
+    return [item.get(ident) for item in _items(entry, key) if isinstance(item, dict)]
 
 
 def compat_notes(old, new, backups=0):
@@ -146,8 +158,8 @@ def compat_notes(old, new, backups=0):
                          '安裝後請重新備份。')
         if removed:
             notes.append(f'不再備份{label} {"、".join(map(str, removed[:5]))}；還原之前的備份時會略過這些項目。')
-    old_pg = {json.dumps(item, sort_keys=True) for item in (old or {}).get('postgres') or []}
-    new_pg = {json.dumps(item, sort_keys=True) for item in (new or {}).get('postgres') or []}
+    old_pg = {json.dumps(item, sort_keys=True) for item in _items(old, 'postgres')}
+    new_pg = {json.dumps(item, sort_keys=True) for item in _items(new, 'postgres')}
     if old_pg != new_pg:
         if not old_pg:
             notes.append(f'資料庫改以匯出方式備份（postgres 項目）：{held}以冷備份保存資料檔，在新設定下無法還原。')
@@ -155,9 +167,10 @@ def compat_notes(old, new, backups=0):
             notes.append(f'資料庫改為冷備份：{held}只有資料庫匯出檔，在新設定下無法還原。')
         else:
             notes.append(f'資料庫的備份設定改變：{held}可能無法以新設定還原，安裝後請重新備份。')
-    if (old or {}).get('owner') != (new or {}).get('owner'):
+    owner_of = lambda entry: entry.get('owner') if isinstance(entry, dict) else None  # noqa: E731
+    if owner_of(old) != owner_of(new):
         notes.append('擁有者帳號改變：服務、資料卷與密鑰會以新的帳號操作。')
-    if (old or {}).get('quadlet', {}).get('template_dir') and not (new or {}).get('quadlet', {}).get('template_dir'):
+    if _template_dir(old) and not _template_dir(new):
         notes.append('移除部署範本：之後只能原位還原，不能在尚未部署此應用的設備上還原。')
     return notes
 

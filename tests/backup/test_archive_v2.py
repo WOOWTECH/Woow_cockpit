@@ -216,6 +216,13 @@ class RoundTripTests(unittest.TestCase):
         readme = members['README.txt'].decode()
         self.assertIn('沒有加密', readme)
         self.assertIn('NOT encrypted', readme)
+        # 2026.11.15.2 (the new-device drill): the device's own key first; the settings the backup carries.
+        for needle in ('在新設備上，先在「加密金鑰」建立這台設備的金鑰', '可以審查並安裝這份備份附上的應用設定',
+                       "first create the device's own key", 'install the application settings this backup carries',
+                       # Engines before 2026.11.15.2 refuse backups that carry settings: update, never delete the file.
+                       '「備份與還原」2026.11.15.2 或更新版本', '請先更新那台設備，不要刪除這個檔案',
+                       'version 2026.11.15.2 or newer'):
+            self.assertIn(needle, readme)
 
     def test_cancel_from_progress_leaves_nothing(self):
         def cancel(done, total):
@@ -672,6 +679,62 @@ class InnerArchiveTests(unittest.TestCase):
         # backup.json names this device's key, but the archive was encrypted to another one: damaged, not wrong key.
         self.assertEqual(self.outcome(self.backup(None, enc, member=foreign)), 'corrupt-archive')
         self.assertEqual(self.outcome(self.backup(None, enc, member=sealed), ids=[]), 'key-required')
+
+
+# ---------------------------------------------------------------------------- the app's settings (2026.11.15.2)
+
+@needs_age
+class CarriedSettingsTests(unittest.TestCase):
+    """2026.11.15.2: an app section may carry the app's settings as installed at backup time (`catalog_entry`):
+    plain JSON of an installable size for the same app id; everything else about it is refused like any manifest
+    defect (a device installs these settings only after the administrator reviewed them)."""
+    FILES = InnerArchiveTests.FILES
+    setUp = InnerArchiveTests.setUp
+    backup = InnerArchiveTests.backup
+    outcome = InnerArchiveTests.outcome
+
+    def with_settings(self, entry):
+        inner = small_inner(APP, self.ws.key.key_id, self.FILES)
+        inner['app']['catalog_entry'] = entry
+        return self.backup(inner_tar(inner, self.FILES), inner)
+
+    def test_settings_of_the_app_are_accepted_and_kept(self):
+        entry = {'id': APP, 'name': '示範', 'owner': 'appowner', 'units': ['a.service'], 'verify': [
+            {'id': 'v', 'type': 'files-digest', 'volume': 'vol', 'exclude': ['cache/**', 'tmp/*']}], 'ratio': 0.5,
+            'nested': {'a': {'b': {'c': [1, None, True]}}}}
+        path = self.with_settings(entry)
+        target = self.ws.dest('settings')
+        manifest = archive.extract_archive(path, self.ids, target)
+        self.assertEqual(manifest['apps'][0]['catalog_entry'], entry)
+
+    def test_bad_settings_are_a_manifest_defect(self):
+        deep = {'id': APP}
+        node = deep
+        for _ in range(9):
+            node['x'] = {}
+            node = node['x']
+        cases = {'not an object': ['x'], 'another app': {'id': 'other-app'}, 'no id': {'name': 'x'},
+                 'too deep': deep, 'too large': {'id': APP, 'blob': ['x' * 60000] * 5},
+                 'NUL in a string': {'id': APP, 'name': 'a\x00b'}, 'not finite': {'id': APP, 'ratio': float('nan')}}
+        for name, entry in cases.items():
+            with self.subTest(name):
+                self.assertEqual(self.outcome(self.with_settings(entry)), 'invalid-manifest')
+
+
+class CarriedSettingsSizeTests(unittest.TestCase):
+    def test_every_settings_file_the_catalog_loads_fits(self):
+        # Review 2026-11-15: the catalog limits a settings file's bytes however compactly it is written; measured with
+        # ', ' and ': ', an entry the device had loaded was refused and every backup of the app failed after its downtime.
+        entry = {'id': APP, 'items': [0] * 2000, 'pads': ['x' * 60000] * 4}
+        entry['pads'].append('x' * (archive.MAX_CATALOG_ENTRY - 100 - len(json.dumps(entry, separators=(',', ':')).encode())))
+        self.assertLessEqual(len(json.dumps(entry, separators=(',', ':')).encode()), archive.MAX_CATALOG_ENTRY)
+        self.assertGreater(len(json.dumps(entry).encode()), archive.MAX_CATALOG_ENTRY)
+        self.assertIsNone(archive.carried_settings_problem(entry, APP))
+        self.assertEqual(archive.carried_settings_problem(dict(entry, pads=entry['pads'] + ['x' * 200]), APP),
+                         'catalog_entry too large')
+        # A lone surrogate escape the loader accepts: the adapter leaves such settings out (test_adapter).
+        self.assertEqual(archive.carried_settings_problem({'id': APP, 'name': 'broken \ud83d'}, APP),
+                         'catalog_entry is not valid Unicode text')
 
 
 # ---------------------------------------------------------------------------- per-app partial restore

@@ -569,10 +569,11 @@ def _verify_digests(items, where, app_id, ref, by_path):
 def _validate_app(app, where, ref, by_path):
     """One app section (v1 manifest `apps[]`, v2 per-app manifest `app`). `ref(app_id, section, entry, where)` checks
     an entry reference."""
-    # `data_dirs` (host directories) and `verify_digests` are optional: archives written before them have none.
+    # `data_dirs` (host directories), `verify_digests` and `catalog_entry` (2026.11.15.2) are optional: archives
+    # written before them have none.
     _obj(app, where, ('id', 'name', 'adapter', 'adapter_version', 'catalog_sha256', 'owner', 'images',
                       'postgres', 'volumes', 'secrets', 'config_files', 'quadlet_files', 'verify_snapshot'),
-         ('data_dirs', 'verify_digests'))
+         ('data_dirs', 'verify_digests', 'catalog_entry'))
     _str(app['id'], f'{where}.id', APP_ID_RE, max_len=41)
     app_id = app['id']
     _str(app['name'], f'{where}.name', min_len=1, max_len=200)
@@ -654,12 +655,64 @@ def _validate_app(app, where, ref, by_path):
     if 'verify_digests' in app:
         _verify_digests(app['verify_digests'], f'{where}.verify_digests', app_id, ref, by_path)
 
+    if 'catalog_entry' in app:
+        _catalog_entry(app['catalog_entry'], f'{where}.catalog_entry', app_id)
+
     snapshot = app['verify_snapshot']
     _need(isinstance(snapshot, dict) and len(snapshot) <= 20, f'{where}.verify_snapshot must be an object')
     for key, value in snapshot.items():
         _str(key, f'{where}.verify_snapshot key', VERIFY_ID_RE, max_len=64)
         _need(isinstance(value, dict), f'{where}.verify_snapshot.{key} must be an object')
         _json_value(value, f'{where}.verify_snapshot.{key}')
+
+
+MAX_CATALOG_ENTRY = 256 * 1024  # catalog.MAX_ENTRY_BYTES: the largest entry a device installs
+
+
+def _catalog_entry(entry, where, app_id):
+    """The app's settings as installed at backup time: plain JSON of an installable size for the same app id. Only
+    its shape is checked here; a device installs it after the administrator reviewed it, through the catalog's own
+    validation (catalog-install), never by itself."""
+    _need(isinstance(entry, dict), f'{where} must be an object')
+    _need(entry.get('id') == app_id, f'{where}.id is not the app id')
+    _settings_value(entry, where, 0)
+    try:
+        # Compact: every file the catalog loads (at most MAX_CATALOG_ENTRY bytes, however it is written) fits.
+        size = len(json.dumps(entry, ensure_ascii=False, separators=(',', ':')).encode('utf-8'))
+    except (TypeError, ValueError, UnicodeEncodeError, RecursionError):
+        size = MAX_CATALOG_ENTRY + 1
+    _need(size <= MAX_CATALOG_ENTRY, f'{where} too large')
+
+
+def carried_settings_problem(entry, app_id):
+    """Why `entry` (an app's installed settings) cannot travel in its backups, or None. A file the catalog loads can
+    still hold what a backup refuses (a lone surrogate escape written by hand): its backups then carry no settings
+    rather than fail (review 2026-11-15)."""
+    try:
+        _catalog_entry(entry, 'catalog_entry', app_id)
+    except BackupError as error:
+        return str(error.details.get('reason') or error.message)
+    return None
+
+
+def _settings_value(value, where, depth):
+    _need(depth <= 8, f'{where} nested too deeply')
+    if isinstance(value, dict):
+        _need(len(value) <= 200, f'{where} too many keys')
+        for key, item in value.items():
+            _str(key, f'{where} key', max_len=200)
+            _settings_value(item, where, depth + 1)
+    elif isinstance(value, list):
+        _need(len(value) <= 2000, f'{where} too many items')
+        for item in value:
+            _settings_value(item, where, depth + 1)
+    elif isinstance(value, str):
+        _need(len(value) <= 65536 and '\x00' not in value, f'{where} string invalid')
+        _need(_utf8(value), f'{where} is not valid Unicode text')
+    elif isinstance(value, float):
+        _need(value == value and abs(value) != float('inf'), f'{where} not finite')
+    else:
+        _need(value is None or isinstance(value, (bool, int)), f'{where} has an invalid type')
 
 
 def _referencer(by_path):
@@ -1292,7 +1345,8 @@ def _write_v1(dest, header, manifest, entries, recipient, *, tmp_dir, progress=N
 README_TEXT = """woowtech Cockpit 備份檔（格式 2）
 ====================================
 
-這個檔案是 woowtech Cockpit「備份與還原」建立的應用備份，可直接上傳到任何安裝了「備份與還原」的設備還原。
+這個檔案是 woowtech Cockpit「備份與還原」建立的應用備份，可直接上傳到安裝了「備份與還原」2026.11.15.2 或更新版本的
+設備還原。較舊的版本讀不到它，會顯示「備份內容清單（manifest）格式不正確」：請先更新那台設備，不要刪除這個檔案。
 
 備份 ID：{backup_id}
 建立時間：{created}（UTC）
@@ -1304,10 +1358,12 @@ README_TEXT = """woowtech Cockpit 備份檔（格式 2）
 {apps_zh}
 
 在 Cockpit 還原
-1. 登入目標設備的 Cockpit，以管理員身分開啟「備份與還原」。
+1. 登入目標設備的 Cockpit，以管理員身分開啟「備份與還原」。在新設備上，先在「加密金鑰」建立這台設備的金鑰
+   （原位還原時用它加密還原前備份）。
 2. 在「從檔案還原」上傳這個 .tar 檔案（不需要先解開）。
 {key_step_zh}
-4. 檢查相容性檢查的結果與受影響的應用，確認後開始還原。
+4. 相容性檢查若顯示這台設備沒有某個應用的設定，或設定與備份時不同，可以審查並安裝這份備份附上的應用設定。
+5. 檢查相容性檢查的結果與受影響的應用，確認後開始還原。
 
 手動解開（進階）
 backup.json 只是方便閱讀的說明，沒有經過驗證；還原時以各應用封存檔內的 manifest.json 為準。
@@ -1320,8 +1376,9 @@ backup.json 只是方便閱讀的說明，沒有經過驗證；還原時以各�
 woowtech Cockpit backup (format 2)
 ==================================
 
-This file is an application backup made by "Backup & Restore" (備份與還原) in woowtech Cockpit. Upload it on any
-device that runs it to restore.
+This file is an application backup made by "Backup & Restore" (備份與還原) in woowtech Cockpit. Upload it on a
+device that runs version 2026.11.15.2 or newer to restore. Older versions cannot read it and report that the manifest
+format is not correct (內容清單格式不正確): update that device first, and keep this file.
 
 Backup ID:  {backup_id}
 Created:    {created} (UTC)
@@ -1333,10 +1390,13 @@ Applications:
 {apps_en}
 
 Restore in Cockpit
-1. Log in to Cockpit on the target device with administrative access and open "備份與還原".
+1. Log in to Cockpit on the target device with administrative access and open "備份與還原". On a new device,
+   first create the device's own key under "加密金鑰" (an in-place restore encrypts its pre-restore backup with it).
 2. Under "從檔案還原" (restore from a file), upload this .tar file as it is.
 {key_step_en}
-4. Review the compatibility check and the affected applications, then confirm.
+4. If the check says the device has no settings for an application, or other settings than the backup's, review
+   and install the application settings this backup carries.
+5. Review the compatibility check and the affected applications, then confirm.
 
 Unpack by hand (advanced)
 backup.json is informational and NOT authenticated; a restore trusts only the manifest.json inside each

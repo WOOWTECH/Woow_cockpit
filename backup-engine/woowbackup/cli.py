@@ -471,6 +471,7 @@ def manifest_summary(manifest, catalog=None):
             'data_dirs': [{'path': d['path'], 'size': int(sizes.get(d['entry']) or 0), 'label': labels.get(d['path'], '')}
                           for d in app.get('data_dirs') or []],
             'secrets_count': len(app.get('secrets') or []), 'config_files_count': len(app.get('config_files') or []),
+            'settings_included': isinstance(app.get('catalog_entry'), dict),
             'verify_snapshot': app.get('verify_snapshot') or {},
             # Built-in data verification recorded at backup time (CONTRACT section 7): what each digest covers.
             'verify_digests': [{'id': d['id'], 'type': d['type'], 'target': d['target'], 'summary': d['summary']}
@@ -513,11 +514,29 @@ def build_preflight(svc, manifest, meta=None):
     apps = []
     for app_manifest in manifest.get('apps') or []:
         app = catalog.get(app_manifest['id'])
+        # The settings the backup was made with (2026.11.15.2), for the page to offer for review and installation.
+        carried = app_manifest.get('catalog_entry') if isinstance(app_manifest.get('catalog_entry'), dict) else None
         if app is None:
+            # No settings here, or a settings file that could not be loaded (`problem`): never promise more than the
+            # catalog's own review can give (review 2026-11-15: an account that does not exist stays missing).
             problem = catalog.problem_for(app_manifest['id']) if hasattr(catalog, 'problem_for') else None
-            message = problem['message'] if problem else '此設備沒有設定這個應用，無法還原。'
-            apps.append({'id': app_manifest['id'], 'name': app_manifest['name'], 'restorable': False, 'mode': 'fresh',
-                         'checks': [{'id': f'{app_manifest["id"]}/catalog', 'status': 'fail', 'message': message}]})
+            if carried is None:
+                message = problem['message'] if problem else ('此設備沒有設定這個應用，無法還原。請先在「應用設定」安裝'
+                                                              '建立這份備份時使用的應用設定（這份備份沒有附上設定）。')
+            elif problem is None:
+                message = '此設備沒有這個應用的應用設定。這份備份附有建立時的設定，可以審查並安裝；安裝後會重新檢查能否還原。'
+            elif problem.get('code') == 'owner-missing':
+                owner = carried.get('owner') if isinstance(carried.get('owner'), str) else '—'
+                message = (problem['message'] + f'這份備份附有建立時的應用設定（擁有者帳號 {owner[:32]}）；這台設備要有'
+                           '該帳號才能安裝。建立帳號後請重新檢查。')
+            else:
+                message = (problem['message'] + '這份備份附有建立時的應用設定，可以審查後用它取代無法載入的設定檔；'
+                           '安裝後會重新檢查能否還原。')
+            item = {'id': app_manifest['id'], 'name': app_manifest['name'], 'restorable': False, 'mode': 'fresh',
+                    'checks': [{'id': f'{app_manifest["id"]}/catalog', 'status': 'fail', 'message': message}]}
+            if carried is not None:
+                item['settings'] = {'state': 'unloadable' if problem else 'missing', 'entry': carried}
+            apps.append(item)
             continue
         adapter = svc.adapter(app)
         mode = 'fresh'
@@ -529,8 +548,11 @@ def build_preflight(svc, manifest, meta=None):
         if mode == 'inplace' and device_key is None and safety_encrypted:
             app_checks.append({'id': f'{app.id}/device-key', 'status': 'fail',
                                'message': '原位還原需要先建立這台設備的加密金鑰（用於建立還原前備份）。'})
-        apps.append({'id': app.id, 'name': app.name, 'mode': mode, 'checks': app_checks,
-                     'restorable': not any(c['status'] == 'fail' for c in app_checks)})
+        item = {'id': app.id, 'name': app.name, 'mode': mode, 'checks': app_checks,
+                'restorable': not any(c['status'] == 'fail' for c in app_checks)}
+        if carried is not None:
+            item['settings'] = {'state': 'same' if carried == app.raw else 'different', 'entry': carried}
+        apps.append(item)
     ok = not any(c['status'] == 'fail' for c in checks) and any(a['restorable'] for a in apps)
     return {'ok': ok, 'checks': checks, 'apps': apps}
 
