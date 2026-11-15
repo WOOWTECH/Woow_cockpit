@@ -147,7 +147,9 @@ def cockpit_version(root):
         raise ValueError('Ubuntu/Debian dpkg database missing; install Cockpit first.')
     for block in status_file.read_text().split('\n\n'):
         fields = dict(line.split(': ', 1) for line in block.splitlines() if ': ' in line and not line.startswith(' '))
-        if fields.get('Package') == 'cockpit-bridge' and fields.get('Status') == 'install ok installed':
+        # dpkg's first status word is the requested selection. apt-mark hold
+        # changes it to "hold" without uninstalling or deconfiguring the package.
+        if fields.get('Package') == 'cockpit-bridge' and fields.get('Status') in ('install ok installed', 'hold ok installed'):
             version = fields['Version']
             match = re.match(r'(?:\d+:)?(\d+)', version)
             if not match or int(match[1]) < 362:
