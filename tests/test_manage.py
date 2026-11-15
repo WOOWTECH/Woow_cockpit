@@ -231,6 +231,22 @@ class InstallationContract(HostFixture):
         with self.assertRaisesRegex(ValueError, 'requires Cockpit'):
             self.install()
 
+    def test_held_cockpit_can_install_and_verify(self):
+        status = self.root / 'var/lib/dpkg/status'
+        status.write_text(status.read_text().replace('Status: install ok installed', 'Status: hold ok installed'))
+        self.install()
+        self.assertEqual(manage.verify(self.root)['status'], 'verified')
+
+    def test_held_older_cockpit_still_fails_version_gate(self):
+        (self.root / 'var/lib/dpkg/status').write_text('Package: cockpit-bridge\nStatus: hold ok installed\nVersion: 314-1\n\n')
+        with self.assertRaisesRegex(ValueError, 'requires Cockpit'):
+            self.install()
+
+    def test_held_unconfigured_cockpit_is_not_accepted(self):
+        (self.root / 'var/lib/dpkg/status').write_text('Package: cockpit-bridge\nStatus: hold ok unpacked\nVersion: 362-1\n\n')
+        with self.assertRaisesRegex(ValueError, 'not installed'):
+            self.install()
+
     def test_services_install_has_executable_helper_private_config_and_exact_rollback(self):
         source = self.source / 'services'
         source.mkdir()
