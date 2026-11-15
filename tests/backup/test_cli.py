@@ -324,12 +324,32 @@ class InspectTests(CliCase):
         self.assertTrue(apps['woowbk-demo']['restorable'])
         self.assertEqual(apps['woowbk-two']['settings'], {'state': 'missing', 'entry': two})
         self.assertFalse(apps['woowbk-two']['restorable'], 'never restorable before the settings are installed')
-        self.assertIn('這份備份附有建立時的設定，審查並安裝後即可還原', apps['woowbk-two']['checks'][0]['message'])
+        self.assertIn('這份備份附有建立時的設定，可以審查並安裝；安裝後會重新檢查能否還原',
+                      apps['woowbk-two']['checks'][0]['message'])
         self.assertTrue(all(app['settings_included'] for app in response['manifest']['apps']))
         other = dict(copy.deepcopy(demo), description='另一份設定')
         self.carry_settings({'woowbk-demo': other})
         apps = {app['id']: app for app in self.call(['inspect'], {'backup_id': self.backup_id})['preflight']['apps']}
         self.assertEqual(apps['woowbk-demo']['settings'], {'state': 'different', 'entry': other})
+
+    def test_settings_here_that_could_not_be_loaded(self):
+        # Review 2026-11-15: a file that failed to load is not "no settings", and the backup's settings are no
+        # promise: they need the same owner account, and the catalog's own review decides.
+        demo = copy.deepcopy(self.catalog['woowbk-demo'].raw)
+        two = dict(copy.deepcopy(demo), id='woowbk-two', name='第二個應用')
+        self.carry_settings({'woowbk-two': two})
+        self.catalog.problems.append({'file': 'woowbk-two.json', 'id': 'woowbk-two', 'code': 'invalid-request',
+                                      'message': '應用設定 woowbk-two.json 不是有效的 JSON，已略過。'})
+        app = {a['id']: a for a in self.call(['inspect'], {'backup_id': self.backup_id})['preflight']['apps']}['woowbk-two']
+        self.assertEqual((app['settings']['state'], app['restorable']), ('unloadable', False))
+        self.assertEqual(app['checks'][0]['message'], '應用設定 woowbk-two.json 不是有效的 JSON，已略過。這份備份附有建立時的應用設定，'
+                                                      '可以審查後用它取代無法載入的設定檔；安裝後會重新檢查能否還原。')
+        self.catalog.problems[-1].update(code='owner-missing', message='woowbk-two.json：應用「第二個應用」的擁有者帳號 ghost 不存在於此設備。')
+        app = {a['id']: a for a in self.call(['inspect'], {'backup_id': self.backup_id})['preflight']['apps']}['woowbk-two']
+        self.assertEqual(app['settings']['state'], 'unloadable')
+        self.assertIn('這份備份附有建立時的應用設定（擁有者帳號 appowner）；這台設備要有該帳號才能安裝。建立帳號後請重新檢查。',
+                      app['checks'][0]['message'])
+        self.assertNotIn('即可還原', app['checks'][0]['message'])
 
     def test_an_older_backup_says_where_the_settings_must_come_from(self):
         response = self.call(['inspect'], {'backup_id': self.backup_id})

@@ -1115,6 +1115,17 @@ class PreflightTests(AdapterCase):
         self.assertEqual(drift['status'], 'warn')
         self.assertTrue(drift['message'].endswith('也可以審查並改用備份中附上的設定。'), drift['message'])
 
+    def test_settings_a_backup_cannot_hold_are_left_out_not_fatal(self):
+        # Review 2026-11-15: a hand-written settings file the catalog loads can hold a lone surrogate escape, which a
+        # backup refuses: its backups then carry no settings (and say so) instead of failing after the downtime.
+        self.app.raw['description'] = 'broken \ud83d'
+        self.logs.clear()
+        manifest, _entries = self.adapter.backup(self.staging / 'again', include_images=False)
+        self.assertNotIn('catalog_entry', manifest)
+        self.assertIn('這份備份不附上應用設定；在新設備還原時，需要另外安裝它的應用設定。', self.everything_logged())
+        from woowbackup import archive
+        archive._validate_app(manifest, 'app', lambda *_args: None, {})
+
     def test_fresh_missing_local_only_image_fails(self):
         owner = FakeOwner(deployed=False)
         owner.images = {PG_REF: PG_ID}

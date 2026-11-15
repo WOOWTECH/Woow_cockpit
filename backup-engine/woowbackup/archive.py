@@ -677,10 +677,22 @@ def _catalog_entry(entry, where, app_id):
     _need(entry.get('id') == app_id, f'{where}.id is not the app id')
     _settings_value(entry, where, 0)
     try:
-        size = len(json.dumps(entry, ensure_ascii=False).encode('utf-8'))
+        # Compact: every file the catalog loads (at most MAX_CATALOG_ENTRY bytes, however it is written) fits.
+        size = len(json.dumps(entry, ensure_ascii=False, separators=(',', ':')).encode('utf-8'))
     except (TypeError, ValueError, UnicodeEncodeError, RecursionError):
         size = MAX_CATALOG_ENTRY + 1
     _need(size <= MAX_CATALOG_ENTRY, f'{where} too large')
+
+
+def carried_settings_problem(entry, app_id):
+    """Why `entry` (an app's installed settings) cannot travel in its backups, or None. A file the catalog loads can
+    still hold what a backup refuses (a lone surrogate escape written by hand): its backups then carry no settings
+    rather than fail (review 2026-11-15)."""
+    try:
+        _catalog_entry(entry, 'catalog_entry', app_id)
+    except BackupError as error:
+        return str(error.details.get('reason') or error.message)
+    return None
 
 
 def _settings_value(value, where, depth):
@@ -1333,7 +1345,8 @@ def _write_v1(dest, header, manifest, entries, recipient, *, tmp_dir, progress=N
 README_TEXT = """woowtech Cockpit 備份檔（格式 2）
 ====================================
 
-這個檔案是 woowtech Cockpit「備份與還原」建立的應用備份，可直接上傳到任何安裝了「備份與還原」的設備還原。
+這個檔案是 woowtech Cockpit「備份與還原」建立的應用備份，可直接上傳到安裝了「備份與還原」2026.11.15.2 或更新版本的
+設備還原。較舊的版本讀不到它，會顯示「備份內容清單（manifest）格式不正確」：請先更新那台設備，不要刪除這個檔案。
 
 備份 ID：{backup_id}
 建立時間：{created}（UTC）
@@ -1363,8 +1376,9 @@ backup.json 只是方便閱讀的說明，沒有經過驗證；還原時以各�
 woowtech Cockpit backup (format 2)
 ==================================
 
-This file is an application backup made by "Backup & Restore" (備份與還原) in woowtech Cockpit. Upload it on any
-device that runs it to restore.
+This file is an application backup made by "Backup & Restore" (備份與還原) in woowtech Cockpit. Upload it on a
+device that runs version 2026.11.15.2 or newer to restore. Older versions cannot read it and report that the manifest
+format is not correct (內容清單格式不正確): update that device first, and keep this file.
 
 Backup ID:  {backup_id}
 Created:    {created} (UTC)

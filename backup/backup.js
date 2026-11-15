@@ -1063,7 +1063,7 @@
         ? h("span", { class: "secondary", text: [dir.label, dir.size !== null ? bytes(dir.size) : ""].filter(Boolean).join(" · ") }) : null)));
   }
 
-  function errorNotice(error, { retry = null, dismiss = null } = {}) {
+  function errorNotice(error, { retry = null, dismiss = null, live = true } = {}) {
     const extras = [];
     const jobId = error?.details?.job_id;
     if (error?.code === "busy" && isString(jobId) && JOB_ID_RE.test(jobId)) {
@@ -1073,7 +1073,7 @@
     if (error?.code === "insufficient-space") extras.push(h("span", { class: "muted", text: "可刪除不需要的備份後再試。" }));
     if (retry) extras.push(button("重試", retry, { small: true, focus: "error-retry" }));
     if (dismiss) extras.push(button("關閉提示", dismiss, { small: true, focus: "error-dismiss" }));
-    return h("div", { class: "notice notice-error", role: "alert" },
+    return h("div", { class: "notice notice-error", role: live ? "alert" : null },
       icon("alert-circle-outline"),
       h("div", { class: "notice-body" }, h("p", { text: error?.message || "發生錯誤，請重試。" }),
         extras.length ? h("div", { class: "button-group" }, extras) : null));
@@ -2387,7 +2387,7 @@
       h("p", { class: "muted", role: "status", text: "正在讀取備份檔並檢查與這台設備的相容性…" })];
   }
 
-  async function runInspect(wizard, key = null, saveKey = false) {
+  async function runInspect(wizard, key = null, saveKey = false, { focus = null } = {}) {
     if (state.wizard !== wizard) return;
     Object.assign(wizard, { busy: true, inspectError: null, keyError: null, error: null });
     if (!key) wizard.step = "inspect";
@@ -2403,9 +2403,14 @@
       upsertBackup(data.backup);
       const restorable = data.preflight.apps.filter(app => isObject(app) && app.restorable === true).map(app => app.id);
       const preferred = wizard.preselect ? restorable.filter(id => wizard.preselect.includes(id)) : [];
+      // Checked again (重新檢查, or after installing a backup's settings): the administrator's choice stays, and only
+      // apps that could not be restored before are added (review 2026-11-15: an in-place app the administrator had
+      // unticked was selected again). A settings review belongs to the check it was made for.
+      const before = wizard.inspect ? list(wizard.inspect.preflight?.apps).filter(app => isObject(app) && app.restorable === true).map(app => app.id) : null;
+      const selected = before ? restorable.filter(id => wizard.selected.has(id) || !before.includes(id)) : preferred.length ? preferred : restorable;
       Object.assign(wizard, {
         inspect: data, backup: data.backup, step: "preflight", confirmed: false, confirmedNoSafety: false, acceptUnauthenticated: false, keyText: "",
-        selected: new Set(preferred.length ? preferred : restorable)
+        selected: new Set(selected), settingsReview: null
       });
       if (key) {
         wizard.key = key;
@@ -2433,8 +2438,9 @@
         wizard.busy = false;
         render();
         // Keyboard users land on the new step, never on <body> (review finding F10).
+        const target = focus ? document.querySelector(`[data-focus="${CSS.escape(focus)}"]`) : null;
         if (wizard.step === "key") $("key-text")?.focus();
-        else if (wizard.step === "preflight") $("view-heading")?.focus({ preventScroll: true });
+        else if (wizard.step === "preflight") (target && !target.disabled ? target : $("view-heading"))?.focus({ preventScroll: true });
       }
     }
   }
@@ -2505,49 +2511,70 @@
     runInspect(wizard, parsed.key, wizard.saveKey);
   }
 
-  // 2026.11.15.2: the settings a backup was made with, for a device that has none (or other ones) for the app. They
-  // are checked and installed exactly like a draft in 應用設定 (catalog-install: preview, then an acknowledged
-  // install), never by the restore itself; the preflight then runs again with the key already entered.
+  // 2026.11.15.2: the settings a backup was made with, for a device that has none for the app, other ones, or a file
+  // that could not be loaded. They are checked and installed exactly like a draft in 應用設定 (catalog-install: preview,
+  // then an acknowledged install), never by the restore itself; the preflight then runs again with the key already
+  // entered. The review shows what the settings declare and their complete text, never only a diff cut at 400 lines in
+  // an order the backup chose (review 2026-11-15).
+  const SETTINGS_STATES = {
+    missing: "這台設備沒有這個應用的設定。這份備份附有建立時的應用設定，可以審查並安裝；安裝後會重新檢查能否還原。",
+    unloadable: "這台設備上這個應用的設定檔無法載入（原因見上方的檢查結果）。這份備份附有建立時的應用設定，可以審查後用它取代；安裝後會重新檢查能否還原。",
+    different: "這台設備的應用設定與備份時不同。可以維持目前的設定（還原以這台設備的設定為準），或審查並改用備份中的設定。"
+  };
+  const SETTINGS_CHANGED = "這台設備的設定在審查之後被變更了，頁面已重新審查。請關閉這個視窗，確認新的審查結果後再安裝。";
+
   function settingsReview(wizard, app) {
     const settings = isObject(app.settings) && isObject(app.settings.entry) ? app.settings : null;
-    if (!settings || !["missing", "different"].includes(settings.state)) return null;
-    const review = wizard.settingsReview?.id === app.id ? wizard.settingsReview : null;
-    const name = str(app.name || app.id);
+    if (!settings || !SETTINGS_STATES[settings.state]) return null;
+    const id = app.id;
+    const review = wizard.settingsReview?.id === id ? wizard.settingsReview : null;
     const text = pretty(settings.entry);
+    const close = () => {
+      wizard.settingsReview = null;
+      render();
+      document.querySelector(`[data-focus="pf-settings-${CSS.escape(id)}"]`)?.focus();
+    };
     const body = [
-      h("h5", { class: "subheading", text: "備份中的應用設定" }),
-      h("p", { text: settings.state === "missing"
-        ? "這台設備沒有這個應用的設定。這份備份附有建立時的應用設定，審查並安裝後就能還原。"
-        : "這台設備的應用設定與備份時不同。可以維持目前的設定（還原以這台設備的設定為準），或審查並改用備份中的設定。" }),
+      h("h5", { class: "subheading", tabIndex: -1, dataset: { focus: `pf-settings-title-${id}` }, text: "備份中的應用設定" }),
+      h("p", { text: SETTINGS_STATES[settings.state] }),
       wizard.backup?.unauthenticated === true
-        ? infoNotice("這是上傳的未加密備份：設定的內容無法確認來自你的設備，安裝前請逐項審查。", "warn", "lock-open-variant-outline") : null
+        ? infoNotice("這是上傳的未加密備份：設定的內容無法確認來自你的設備，安裝前請逐項審查下方的摘要與完整內容。", "warn", "lock-open-variant-outline") : null
     ];
     if (!review) {
-      body.push(h("div", { class: "button-group" }, button(wizard.busy ? "正在檢查…" : "審查備份中的應用設定", () => reviewSettings(wizard, app), {
-        icon: "file-document-outline", disabled: wizard.busy, focus: `pf-settings-${app.id}`
+      body.push(h("div", { class: "button-group" }, button(wizard.settingsBusy === id ? "正在檢查…" : "審查備份中的應用設定", () => reviewSettings(wizard, app), {
+        icon: "file-document-outline", disabled: wizard.busy, focus: `pf-settings-${id}`
       })));
     } else if (review.error) {
-      body.push(errorNotice(review.error, { retry: () => reviewSettings(wizard, app) }));
+      // Announced once when the review ends, never again on each background refresh (review finding F9).
+      body.push(errorNotice(review.error, { retry: () => reviewSettings(wizard, app), dismiss: close, live: false }));
     } else {
       const preview = review.preview;
       const same = preview.valid && preview.current && preview.expected_sha256 === preview.new_sha256;
-      body.push(...draftFeedback({ id: app.id, text, previewFor: text, preview, previewBusy: false, previewError: null }));
+      body.push(
+        ...draftFeedback({ id, text, previewFor: text, preview, previewBusy: false, previewError: null }, { heading: "h6", live: false, fullText: true }),
+        h("h6", { class: "subheading", text: "這份設定會做什麼" }),
+        entrySummary(settings.entry, null, "備份中設定的主機資料夾"),
+        h("h6", { class: "subheading", text: `完整內容（${text.split("\n").length - 1} 行）` }),
+        h("pre", {
+          id: `pf-settings-text-${id}`, class: "settings-text", tabIndex: 0, "aria-label": "備份中的應用設定（完整內容）", "data-scroll": "",
+          dataset: { focus: `pf-settings-text-${id}` }, text
+        }));
       if (!preview.valid) {
-        body.push(h("p", { class: "muted", text: "這份設定不能直接安裝在這台設備。請複製內容，到「應用設定」修正後安裝，再回到這裡按「重新檢查」。" }));
+        body.push(h("p", { class: "muted", text: "這份設定不能直接安裝在這台設備，原因如上。請先依原因處理（例如建立擁有者帳號、安裝應用的套件），再按「重新檢查」。需要修改內容時，可以複製完整內容，在「應用設定」掃描到這個應用後貼到它的草稿，修改後安裝。" }));
       }
       body.push(h("div", { class: "button-group" },
         preview.valid && !same ? button(preview.current ? "改用備份中的設定…" : "安裝備份中的設定…", () => installSettings(wizard, app, preview), {
-          primary: true, icon: "check", disabled: wizard.busy, focus: `pf-settings-install-${app.id}`
+          primary: true, icon: "check", disabled: wizard.busy, focus: `pf-settings-install-${id}`
         }) : null,
-        button("複製設定內容", () => copySettings(text), { icon: "content-copy", focus: `pf-settings-copy-${app.id}` }),
-        button("收合", () => { wizard.settingsReview = null; render(); }, { focus: `pf-settings-close-${app.id}` })));
+        button("複製完整內容", () => copySettings(id, text), { icon: "content-copy", focus: `pf-settings-copy-${id}` }),
+        button("收合", close, { focus: `pf-settings-close-${id}` })));
     }
-    return h("section", { class: "settings-review", "aria-label": `${name} 的備份中的應用設定` }, body);
+    return h("section", { class: "settings-review", "aria-label": `${str(app.name || id)} 的備份中的應用設定` }, body);
   }
 
   async function reviewSettings(wizard, app) {
     if (wizard.busy || state.wizard !== wizard) return;
-    wizard.busy = true;
+    Object.assign(wizard, { busy: true, settingsBusy: app.id });
     render();
     try {
       const data = await call("catalog-install", { entry: app.settings.entry });
@@ -2557,54 +2584,82 @@
       if (state.wizard === wizard) wizard.settingsReview = { id: app.id, error };
     } finally {
       if (state.wizard === wizard) {
-        wizard.busy = false;
+        Object.assign(wizard, { busy: false, settingsBusy: null });
         render();
+        // Keyboard and screen reader users land on the result, never on <body> (review finding F10).
+        const review = wizard.settingsReview?.id === app.id ? wizard.settingsReview : null;
+        if (review) {
+          announce(review.error ? `無法審查備份中的應用設定：${review.error.message}`
+            : review.preview.valid ? "審查完成：這份設定通過這台設備的檢查。" : `審查完成：這份設定沒有通過檢查。${str(review.preview.error?.message)}`);
+          document.querySelector(`[data-focus="pf-settings-title-${CSS.escape(app.id)}"]`)?.focus();
+        }
       }
     }
   }
 
   function installSettings(wizard, app, preview) {
     const id = app.id;
+    const entry = app.settings.entry;
+    const name = str(app.name || id);
+    const dirs = list(entry.data_dirs).filter(dir => isObject(dir) && isString(dir.path));
+    const unauthenticated = wizard.backup?.unauthenticated === true;
     confirmDialog({
-      title: preview.current ? `改用備份中「${str(app.name || id)}」的應用設定？` : `安裝備份中「${str(app.name || id)}」的應用設定？`,
+      title: preview.current ? `改用備份中「${name}」的應用設定？` : `安裝備份中「${name}」的應用設定？`,
       body: [
         h("p", { text: preview.current
           ? "會以備份中的設定取代這台設備目前的設定；舊的設定保留在 apps-history（每個應用最近 10 份）。安裝後重新檢查這份備份。"
           : "會安裝備份中的應用設定（root 擁有、權限 0644），之後這個應用會出現在備份頁。安裝後重新檢查這份備份。" }),
         metadata([["檔案", `/etc/woowtech-cockpit/backup/apps/${id}.json`, "mono"],
+          ["擁有者", str(entry.owner) || "—"],
+          ["服務", list(entry.units).map(str).join(" → ") || "無"],
+          ["主機資料夾", dirs.length ? dirList(dirs.map(dir => ({ dir: { path: dir.path, label: str(dir.label), size: null } })), "備份中設定的主機資料夾") : "無"],
+          ["部署範本", isObject(entry.quadlet) && entry.quadlet.template_dir ? str(entry.quadlet.template_dir) : "未設定"],
           preview.current ? ["變更", `${list(preview.changes).length} 項`] : null,
           ["這個應用的備份", `${Number(preview.backups) || 0} 份`]]),
         list(preview.compat).length ? [h("h4", { text: "對既有備份的影響" }), h("ul", { class: "bullet-list warning-list" }, list(preview.compat).filter(isString).map(item => h("li", { text: item })))] : null,
         list(preview.warnings).length ? [h("h4", { text: "提醒" }), h("ul", { class: "bullet-list" }, list(preview.warnings).filter(isString).map(item => h("li", { text: item })))] : null,
         h("p", { class: "muted", text: "這項變更會記錄在系統日誌。安裝只寫入應用設定檔，不會建立部署範本，也不會變更服務或資料；還原仍要在確認步驟另外確認。" })
       ],
-      acknowledge: "我已審查上面的內容、差異與影響",
+      acknowledge: unauthenticated ? "我已逐項審查這份設定，並信任這個備份檔的來源" : "我已審查這份設定的內容、差異與影響",
       confirmLabel: preview.current ? "改用這份設定" : "安裝設定",
       action: async () => {
+        // A review replaced meanwhile (the device's settings changed): never install what was not reviewed.
+        if (state.wizard !== wizard || wizard.settingsReview?.preview !== preview) throw new HelperError(SETTINGS_CHANGED, { code: "invalid-request" });
         try {
-          const data = await call("catalog-install", { entry: app.settings.entry, confirm: true, expected_sha256: preview.expected_sha256 ?? null });
+          const data = await call("catalog-install", { entry, confirm: true, expected_sha256: preview.expected_sha256 ?? null });
           requireShape(data.installed === true && isString(data.sha256), "安裝結果");
         } catch (error) {
           if (error.details?.reason === "entry-changed") {
-            throw new HelperError("這台設備的設定在審查之後被變更了。請重新審查，確認差異後再安裝。", { code: error.code });
+            wizard.settingsReview = null;
+            reviewSettings(wizard, app);
+            throw new HelperError(SETTINGS_CHANGED, { code: error.code });
           }
           throw error;
         }
-        announce(`已${preview.current ? "改用" : "安裝"}備份中「${id}」的應用設定，正在重新檢查。`);
-        wizard.settingsReview = null;
-        wizard.notice = `已${preview.current ? "改用" : "安裝"}備份中「${str(app.name || id)}」的應用設定。`;
+        announce(`已${preview.current ? "改用" : "安裝"}備份中「${name}」的應用設定，正在重新檢查。`);
+        // Its own notice: the key-save warning in wizard.notice stays (review 2026-11-15).
+        Object.assign(wizard, { settingsReview: null, settingsNotice: `已${preview.current ? "改用" : "安裝"}備份中「${name}」的應用設定。` });
         loadStatus({ quiet: true });
-        if (state.wizard === wizard) runInspect(wizard, wizard.key, false);
+        runInspect(wizard, wizard.key, false, { focus: `pf-select-${id}` });
       }
     });
   }
 
-  async function copySettings(text) {
+  async function copySettings(id, text) {
     try {
       await navigator.clipboard.writeText(text);
-      announce("已複製應用設定的內容。");
+      announce("已複製應用設定的完整內容。");
     } catch {
-      announce("無法自動複製；請在上方「將寫入的內容」中選取文字後複製。");
+      // No clipboard (e.g. Cockpit opened over plain HTTP): select the complete text instead, like copySecret.
+      const node = $(`pf-settings-text-${id}`);
+      if (node) {
+        const range = document.createRange();
+        range.selectNodeContents(node);
+        const selection = window.getSelection();
+        selection.removeAllRanges();
+        selection.addRange(range);
+      }
+      announce("無法自動複製，已選取設定的完整內容，請按 Ctrl+C（Mac 為 Command+C）複製。");
     }
   }
 
@@ -2644,6 +2699,7 @@
       h("h3", { class: "step-title", text: "預檢結果" }),
       h("p", { class: "muted", text: "以下檢查不會變更任何資料。選擇要還原的應用；未通過檢查的應用無法選擇。" }),
       wizard.notice ? infoNotice(wizard.notice, "warn", "alert-outline") : null,
+      wizard.settingsNotice ? infoNotice(wizard.settingsNotice, "ok", "check-circle-outline") : null,
       verifiedFailed ? infoNotice(VERIFY_FAILED, "warn", "alert-outline") : null,
       unauthenticated ? infoNotice("這是上傳的未加密備份：無法確認它來自你的設備，也無法確認檔案在設備以外沒有被修改過。確認還原時，需要另外勾選你信任這個檔案的來源。", "warn", "lock-open-variant-outline") : null,
       h("div", { class: "preflight-summary" }, metadata([
@@ -4199,6 +4255,8 @@
         ? `整個執行個體（${str(item.container)}）：備份時資料庫保持執行，保留角色、密碼雜湊與所有資料庫；可還原到相同或更新的主版本`
         : `單一資料庫 ${str(item.database)}（${str(item.container)}）：以 pg_dump 匯出，不保留角色與權限；執行個體有其他資料庫時無法原位還原`)).join("\n");
     }
+    // A backup's settings (the restore wizard) come without a scan: what the database is, only its items tell.
+    if (!app) return "沒有資料庫匯出項目（若有資料庫，會隨資料卷或主機資料夾以冷備份保存）";
     const cold = list(app?.databases).filter(db => isObject(db) && db.kind === "postgres");
     if (cold.length) {
       return cold.map(db => `冷備份（${str(db.unit)}）：資料庫與應用一起停止，資料檔隨${db.data?.dir ? `主機資料夾 ~/${str(db.data.dir)}` : `資料卷 ${str(db.data?.volume || "")}`}整份備份；還原需要相同的 PostgreSQL 主版本`).join("\n");
@@ -4209,32 +4267,36 @@
   function draftReview(draft) {
     const parsed = parseEntry(draft.text);
     if (parsed.entry) draft.lastGood = parsed.entry;
-    const entry = isObject(draft.lastGood) ? draft.lastGood : {};
+    return [
+      parsed.error ? infoNotice("JSON 有錯誤，下方摘要是最後一次可讀取的內容。", "warn", "alert-outline") : null,
+      entrySummary(isObject(draft.lastGood) ? draft.lastGood : {}, draft.app, "草稿的主機資料夾")
+    ];
+  }
+
+  // What an entry declares, in words: a draft in 應用設定, and a backup's settings in the restore wizard (`app` null).
+  function entrySummary(entry, app, dirsLabel) {
     const names = (items, key, extra) => {
       const rows = list(items).filter(isObject);
       return rows.length ? rows.map(item => `${str(item[key])}${extra ? extra(item) : ""}`).join("\n") : "無";
     };
-    return [
-      parsed.error ? infoNotice("JSON 有錯誤，下方摘要是最後一次可讀取的內容。", "warn", "alert-outline") : null,
-      metadata([
-        ["應用 ID", str(entry.id) || "—", "mono"],
-        ["名稱", str(entry.name) || "—"],
-        ["擁有者", str(entry.owner) || "—"],
-        ["服務（啟動順序）", list(entry.units).map(str).join(" → ") || "無"],
-        ["備份時停止", list(entry.writer_units).map(str).join("、") || "無"],
-        ["PostgreSQL", draftMode(entry, draft.app)],
-        ["資料卷", names(entry.volumes, "name", item => (item.label ? `（${str(item.label)}）` : ""))],
-        ["主機資料夾", list(entry.data_dirs).filter(isObject).length
-          ? dirList(list(entry.data_dirs).filter(isObject).map(dir => ({ dir: { path: str(dir.path), label: str(dir.label), size: null } })), "草稿的主機資料夾") : "無"],
-        ["應用機密", names(entry.secrets, "name")],
-        ["設定檔", names(entry.config_files, "path", item => `（權限 ${str(item.mode)}）`)],
-        ["健康檢查", names(entry.health, "url")],
-        ["資料核對", list(entry.verify).filter(isObject).length ? list(entry.verify).filter(isObject).map(item =>
-          `${DIGEST_TYPES[item.type] || str(item.type)}：${str(item.label) || targetText(item.volume ? `volume:${item.volume}` : item.data_dir ? `dir:${item.data_dir}`
-            : item.postgres ? `postgres:${item.postgres}` : item.container ? `container:${item.container}` : str(item.url))}`).join("\n") : "無"],
-        ["部署範本", isObject(entry.quadlet) && entry.quadlet.template_dir ? str(entry.quadlet.template_dir) : "未設定：只能還原到已部署此應用的設備（原位還原）"]
-      ])
-    ];
+    return metadata([
+      ["應用 ID", str(entry.id) || "—", "mono"],
+      ["名稱", str(entry.name) || "—"],
+      ["擁有者", str(entry.owner) || "—"],
+      ["服務（啟動順序）", list(entry.units).map(str).join(" → ") || "無"],
+      ["備份時停止", list(entry.writer_units).map(str).join("、") || "無"],
+      ["PostgreSQL", draftMode(entry, app)],
+      ["資料卷", names(entry.volumes, "name", item => (item.label ? `（${str(item.label)}）` : ""))],
+      ["主機資料夾", list(entry.data_dirs).filter(isObject).length
+        ? dirList(list(entry.data_dirs).filter(isObject).map(dir => ({ dir: { path: str(dir.path), label: str(dir.label), size: null } })), dirsLabel) : "無"],
+      ["應用機密", names(entry.secrets, "name")],
+      ["設定檔", names(entry.config_files, "path", item => `（權限 ${str(item.mode)}）`)],
+      ["健康檢查", names(entry.health, "url")],
+      ["資料核對", list(entry.verify).filter(isObject).length ? list(entry.verify).filter(isObject).map(item =>
+        `${DIGEST_TYPES[item.type] || str(item.type)}：${str(item.label) || targetText(item.volume ? `volume:${item.volume}` : item.data_dir ? `dir:${item.data_dir}`
+          : item.postgres ? `postgres:${item.postgres}` : item.container ? `container:${item.container}` : str(item.url))}`).join("\n") : "無"],
+      ["部署範本", isObject(entry.quadlet) && entry.quadlet.template_dir ? str(entry.quadlet.template_dir) : "未設定：只能還原到已部署此應用的設備（原位還原）"]
+    ]);
   }
 
   function draftParseLine(draft) {
@@ -4246,13 +4308,16 @@
   }
 
   function changeList(changes) {
-    const rows = list(changes).filter(item => isObject(item) && isString(item.path)).slice(0, 60);
+    const all = list(changes).filter(item => isObject(item) && isString(item.path));
+    const rows = all.slice(0, 60);
     if (!rows.length) return null;
-    return h("ul", { class: "path-list changes", "aria-label": "結構化差異" }, rows.map(item => h("li", null,
+    return [h("ul", { class: "path-list changes", "aria-label": "結構化差異" }, rows.map(item => h("li", null,
       chip(OP_LABELS[item.op] || str(item.op), item.op === "remove" ? "fail" : item.op === "add" ? "info" : "neutral"),
       h("span", { class: "mono path", text: item.path }),
       item.op === "change" || item.op === "order"
-        ? h("span", { class: "secondary", text: `${formatValue(item.old)} → ${formatValue(item.new)}` }) : null)));
+        ? h("span", { class: "secondary", text: `${formatValue(item.old)} → ${formatValue(item.new)}` }) : null))),
+      // Never cut silently (review 2026-11-15).
+      all.length > rows.length ? h("p", { class: "muted", text: `另有 ${all.length - rows.length} 項變更未列出，請參考文字差異。` }) : null];
   }
 
   function diffView(lines, label) {
@@ -4265,7 +4330,9 @@
     })));
   }
 
-  function draftFeedback(draft) {
+  // `heading`: the level under the caller's own heading; `live`: false where the caller announces the result once;
+  // `fullText`: the caller shows the complete entry itself, so a new entry needs no "將寫入的內容" diff.
+  function draftFeedback(draft, { heading = "h4", live = true, fullText = false } = {}) {
     const preview = draft.previewFor === draft.text ? draft.preview : null;
     if (draft.previewError) {
       return [unsupported(draft.previewError) ? infoNotice(UNSUPPORTED, "warn", "alert-outline") : errorNotice(draft.previewError, { retry: () => previewDraft(draft.id) })];
@@ -4280,7 +4347,7 @@
     return [
       preview.valid
         ? infoNotice(same ? "內容與目前安裝的設定完全相同。" : preview.current ? "檢查通過：可以取代目前安裝的設定。" : "檢查通過：可以安裝這份應用設定。", "ok", "check-circle-outline")
-        : h("div", { class: "notice notice-error", role: "alert" }, icon("alert-circle-outline"), h("div", { class: "notice-body" },
+        : h("div", { class: "notice notice-error", role: live ? "alert" : null }, icon("alert-circle-outline"), h("div", { class: "notice-body" },
           h("p", { text: str(error?.message) || "這份應用設定沒有通過檢查。" }),
           field ? h("p", { class: "secondary", text: `欄位：${field}` }) : null,
           conflicts.length > 1 ? h("ul", { class: "bullet-list" }, conflicts.map(item => h("li", { text: item }))) : null)),
@@ -4290,13 +4357,13 @@
         ["這個應用的備份", `${Number(preview.backups) || 0} 份`],
         ["先前的設定", list(preview.history).length ? `${list(preview.history).length} 份保留在 apps-history` : "無"]
       ]),
-      list(preview.compat).length ? [h("h4", { class: "subheading", text: "對既有備份的影響" }),
+      list(preview.compat).length ? [h(heading, { class: "subheading", text: "對既有備份的影響" }),
         checkList(list(preview.compat).filter(isString).map((message, index) => ({ id: `compat-${index}`, status: "warn", message })), "對既有備份的影響")] : null,
-      list(preview.warnings).length ? [h("h4", { class: "subheading", text: "提醒" }),
+      list(preview.warnings).length ? [h(heading, { class: "subheading", text: "提醒" }),
         checkList(list(preview.warnings).filter(isString).map((message, index) => ({ id: `warn-${index}`, status: "warn", message })), "安裝提醒")] : null,
-      preview.current ? [h("h4", { class: "subheading", text: `與目前安裝的設定比較（${list(preview.changes).length} 項變更）` }), changeList(preview.changes)] : null,
-      h("h4", { class: "subheading", text: preview.current ? "文字差異" : "將寫入的內容" }),
-      diffView(preview.diff, "應用設定的文字差異")
+      preview.current ? [h(heading, { class: "subheading", text: `與目前安裝的設定比較（${list(preview.changes).length} 項變更）` }), changeList(preview.changes)] : null,
+      preview.current || !fullText ? [h(heading, { class: "subheading", text: preview.current ? "文字差異" : "將寫入的內容" }),
+        diffView(preview.diff, "應用設定的文字差異")] : null
     ];
   }
 

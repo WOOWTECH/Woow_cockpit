@@ -517,17 +517,25 @@ def build_preflight(svc, manifest, meta=None):
         # The settings the backup was made with (2026.11.15.2), for the page to offer for review and installation.
         carried = app_manifest.get('catalog_entry') if isinstance(app_manifest.get('catalog_entry'), dict) else None
         if app is None:
+            # No settings here, or a settings file that could not be loaded (`problem`): never promise more than the
+            # catalog's own review can give (review 2026-11-15: an account that does not exist stays missing).
             problem = catalog.problem_for(app_manifest['id']) if hasattr(catalog, 'problem_for') else None
-            if carried is not None:
-                message = ((problem['message'] + '這份備份附有建立時的應用設定，審查並安裝後即可還原。') if problem
-                           else '此設備沒有這個應用的應用設定。這份備份附有建立時的設定，審查並安裝後即可還原。')
-            else:
+            if carried is None:
                 message = problem['message'] if problem else ('此設備沒有設定這個應用，無法還原。請先在「應用設定」安裝'
                                                               '建立這份備份時使用的應用設定（這份備份沒有附上設定）。')
+            elif problem is None:
+                message = '此設備沒有這個應用的應用設定。這份備份附有建立時的設定，可以審查並安裝；安裝後會重新檢查能否還原。'
+            elif problem.get('code') == 'owner-missing':
+                owner = carried.get('owner') if isinstance(carried.get('owner'), str) else '—'
+                message = (problem['message'] + f'這份備份附有建立時的應用設定（擁有者帳號 {owner[:32]}）；這台設備要有'
+                           '該帳號才能安裝。建立帳號後請重新檢查。')
+            else:
+                message = (problem['message'] + '這份備份附有建立時的應用設定，可以審查後用它取代無法載入的設定檔；'
+                           '安裝後會重新檢查能否還原。')
             item = {'id': app_manifest['id'], 'name': app_manifest['name'], 'restorable': False, 'mode': 'fresh',
                     'checks': [{'id': f'{app_manifest["id"]}/catalog', 'status': 'fail', 'message': message}]}
             if carried is not None:
-                item['settings'] = {'state': 'missing', 'entry': carried}
+                item['settings'] = {'state': 'unloadable' if problem else 'missing', 'entry': carried}
             apps.append(item)
             continue
         adapter = svc.adapter(app)
