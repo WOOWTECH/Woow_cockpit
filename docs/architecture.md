@@ -19,7 +19,7 @@
 4. `services/` 的 HTML／CSS／JS／manifest 安裝到 `/usr/local/share/cockpit/woowtechservices/`；Python helper 獨立安裝到 `/usr/local/libexec/woowtech-cockpit-services`，不放在 Web 套件目錄。設備擁有者設定為 `/etc/woowtech-cockpit/services.json`。此頁負責實際服務狀態、日誌和啟停，使用既有管理員授權。
 
 5. `native/podman/` 提供124版原生頁整合、完整建置來源封存及授權。符合版本時替換原生 `index.js` bundle，使 All 包含已設定擁有者；沿用上游 API、元件及控制。
-6. 備份與還原：`backup/` 安裝到 `/usr/local/share/cockpit/woowtechbackup/`（選單「備份與還原」）；`backup-engine/woowbackup/` 安裝到 `/usr/local/lib/woowtech-cockpit-backup/`；入口 `backup-engine/woowtech-cockpit-backup` 安裝為 `/usr/local/libexec/woowtech-cockpit-backup`（root 0755，`#!/usr/bin/python3 -I`）。受信任應用目錄為 `/etc/woowtech-cockpit/backup/apps/`，預設是空的；全新部署用的範本在 `/usr/local/share/woowtech-cockpit-backup/catalog/`。執行資料（備份檔、金鑰、作業）由引擎建立，安裝器不管理。使用方式見 [backup.md](backup.md)。
+6. 備份與還原：`backup/` 安裝到 `/usr/local/share/cockpit/woowtechbackup/`（「工具 → 備份與還原」，在「應用軟體」下面）；`backup-engine/woowbackup/` 安裝到 `/usr/local/lib/woowtech-cockpit-backup/`；入口 `backup-engine/woowtech-cockpit-backup` 安裝為 `/usr/local/libexec/woowtech-cockpit-backup`（root 0755，`#!/usr/bin/python3 -I`）。受信任應用目錄為 `/etc/woowtech-cockpit/backup/apps/`，預設是空的；全新部署用的範本在 `/usr/local/share/woowtech-cockpit-backup/catalog/`。執行資料（備份檔、金鑰、作業）由引擎建立，安裝器不管理。使用方式見 [backup.md](backup.md)。
 
 Cockpit 套件升級可能覆寫第三及第五部分；重新執行安裝可針對升級後的新檔案補連結。CSS 使用 PatternFly 6 類別；Cockpit 改版後需要重測，不能保證所有未來版本自動相容。
 

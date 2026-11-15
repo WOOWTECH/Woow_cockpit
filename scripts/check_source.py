@@ -16,6 +16,9 @@ import manage
 
 COCKPIT_RUNTIME = ('../base1/cockpit.js', '../../static/branding.css')
 BACKUP_PAGE = ('manifest.json', 'index.html', 'backup.css', 'backup.js')
+# The Cockpit packages of this source; their tools entries make up its part of the sidebar's Tools group.
+PACKAGE_MANIFESTS = ('apps-catalog/manifest.json', 'backup/manifest.json', 'pi-web-integration/package/manifest.json',
+                     'preview/manifest.json', 'services/manifest.json')
 ENGINE_MODULES = ('__init__', 'errors', 'paths', 'archive', 'keys', 'storage', 'util', 'catalog', 'podman',
                   'flows', 'jobs', 'cli', 'adapters/__init__', 'adapters/base', 'adapters/quadlet_postgres')
 CATALOG_REQUIRED = ('schema', 'id', 'name', 'owner', 'adapter', 'quadlet', 'units')
@@ -105,8 +108,17 @@ def check_backup_page():
     for name in BACKUP_PAGE:
         assert (page / name).is_file(), f'Missing backup page file: backup/{name}'
     manifest = json_strict(page / 'manifest.json')
-    assert manifest['menu']['index']['label'] == '備份與還原', 'backup/manifest.json: menu label must be 備份與還原'
-    assert manifest['menu']['index'].get('order') == 46, 'backup/manifest.json: menu order must be 46'
+    assert 'menu' not in manifest, 'backup/manifest.json: the page is in the Tools group (tools), not System (menu)'
+    assert manifest['tools']['index']['label'] == '備份與還原', 'backup/manifest.json: tools label must be 備份與還原'
+    assert manifest['tools']['index'].get('order') == 41, 'backup/manifest.json: tools order must be 41'
+    # Right below 應用軟體. Cockpit sorts a group by order (1000 when missing) and breaks ties by the label in the
+    # viewer's language, so neither neighbour may share the page's order.
+    tools = sorted((entry.get('order', 1000), entry['label']) for name in PACKAGE_MANIFESTS
+                   for entry in json_strict(ROOT / name).get('tools', {}).values())
+    at = tools.index((41, '備份與還原'))
+    before, after = tools[at - 1] if at else None, tools[at + 1] if at + 1 < len(tools) else None
+    assert before and before[1] == '應用軟體' and before[0] < 41 and (not after or after[0] > 41), \
+        f'backup/manifest.json: 備份與還原 must come right after 應用軟體 in the Tools group: {tools}'
     assert manifest['requires']['cockpit'] == '362', 'backup/manifest.json: requires.cockpit must be "362"'
     assert not find_keys(manifest, 'content-security-policy'), 'backup/manifest.json: keep the default restrictive CSP'
     parser = StrictPage()
