@@ -85,6 +85,9 @@ class Deps:
     # (app_ids, *, exclude, log) -> [deleted backup ids]: keep-last-N of manual backups after a manual backup
     # (default: retention.enforce_after_backup with the saved policy)
     enforce_retention: object = None
+    # (app_ids, keep_last, *, exclude, log) -> [deleted backup ids]: the schedule's keep-last after a scheduled run
+    # (default: retention.enforce_schedule)
+    enforce_schedule_retention: object = None
 
 
 def human(n, up=False, down=False):
@@ -318,6 +321,20 @@ class FlowContext:
                                                   log=self.log, audit=self.audit)
         except Exception as error:  # noqa: BLE001 - retention never fails a backup that was made
             self.log(f'警告：無法套用備份保留原則（{getattr(error, "message", None) or type(error).__name__}）')
+            return []
+
+    def enforce_schedule_retention(self, app_ids, keep_last, *, exclude=()):
+        """Keep the schedule's newest `keep_last` scheduled backups of `app_ids` (CONTRACT section 8). Never fails the
+        run: a problem is logged and nothing more is deleted."""
+        enforce = getattr(self.deps, 'enforce_schedule_retention', None)
+        try:
+            if enforce is not None:
+                return list(enforce(list(app_ids), keep_last, exclude=list(exclude), log=self.log) or [])
+            from . import retention
+            return retention.enforce_schedule(self.paths, self.storage, list(app_ids), keep_last,
+                                              exclude=list(exclude), log=self.log, audit=self.audit)
+        except Exception as error:  # noqa: BLE001 - retention never fails a backup that was made
+            self.log(f'警告：無法套用排程備份的保留份數（{getattr(error, "message", None) or type(error).__name__}）')
             return []
 
 
@@ -631,6 +648,8 @@ def settle_dirs(deps, job_id, app_ids, *, log=None):
 # ---------------------------------------------------------------- backup
 
 def run_backup(ctx, params):
+    if isinstance(params.get('schedule'), dict):
+        return run_scheduled_backup(ctx, params)
     ctx.cancellable(True)
     ctx.phase('prepare')
     apps = resolve_apps(ctx.catalog(), params.get('apps') or [])
@@ -658,6 +677,76 @@ def run_backup(ctx, params):
         _cleanup_staging(ctx)
 
 
+TRIGGER_TEXT = {'on-time': '依排程', 'late': '等其他作業結束後開始', 'catch-up': '補做錯過的排程',
+                'run-now': '立即執行一次'}
+
+
+def _schedule_info(params):
+    """slot, trigger and keep_last of a scheduled job's params (written by this engine; checked anyway)."""
+    from . import schedule
+    info = params.get('schedule') if isinstance(params.get('schedule'), dict) else {}
+    slot = info.get('slot') if util.is_iso_utc(info.get('slot')) else None
+    trigger = info.get('trigger') if info.get('trigger') in schedule.TRIGGERS else 'run-now'
+    keep = info.get('keep_last')
+    if isinstance(keep, bool) or not isinstance(keep, int) or not 1 <= keep <= schedule.MAX_KEEP:
+        keep = None
+    return slot, trigger, keep
+
+
+def run_scheduled_backup(ctx, params):
+    """排程備份 (CONTRACT sections 8, 9): a manual backup (index type `manual`, note 排程備份) of the apps the schedule
+    names. The backup id is chosen first and listed in the schedule's registry before any app pauses; a failure to
+    write it fails the job before anything stops. Apps missing from the catalog, not deployed or reporting problems are
+    skipped (the result is `partial`; none left fails the job). Space is checked before any pause, as for every backup.
+    After the run the schedule's keep-last rule removes older scheduled backups of the apps it holds."""
+    from . import schedule
+    slot, trigger, keep = _schedule_info(params)
+    ctx.cancellable(True)
+    ctx.phase('prepare')
+    catalog = ctx.catalog()
+    apps, skipped = [], []
+    for app_id in params.get('apps') or []:
+        app = catalog.get(app_id)
+        if app is not None:
+            apps.append(app)
+            continue
+        problem = catalog.problem_for(app_id) if hasattr(catalog, 'problem_for') else None
+        reason = problem['message'] if problem else f'此設備沒有設定應用 {app_id}。'
+        skipped.append({'id': app_id, 'name': app_id, 'reason': reason})
+        ctx.log(f'略過應用 {app_id}：{reason}')
+    if not apps:
+        raise BackupError('job-failed', '沒有可以備份的應用：這次排程包含的應用都不在這台設備的應用設定中。',
+                          skipped=[item['id'] for item in skipped])
+    encrypt = params.get('encrypt', True) is not False
+    key = ctx.keys.device_key() if encrypt else None
+    if encrypt and key is None:
+        raise BackupError('no-device-key', '這台設備尚未建立加密金鑰，請先完成金鑰設定。')
+    if not encrypt:
+        ctx.log('這份備份不加密：應用機密（資料庫密碼、API 金鑰、存取權杖）會以明文存放在備份檔中')
+    backup_id = ctx.storage.new_backup_id()
+    try:
+        schedule.register_run(ctx.paths, backup_id, ctx.job_id, slot, trigger)
+    except Exception as error:  # noqa: BLE001 - nothing has stopped yet: the job fails here
+        raise BackupError('job-failed', '無法寫入排程備份紀錄，沒有暫停任何應用。') from error
+    ctx.log(f'排程備份（{TRIGGER_TEXT.get(trigger, trigger)}{"，排程時間 " + slot if slot else ""}）：備份 ID {backup_id}')
+    ctx.storage.ensure_layout()
+    staging = Path(ctx.storage.staging_dir(ctx.job_id))
+    try:
+        result = create_backup(ctx, apps, staging, include_images=bool(params.get('include_images')),
+                               note=schedule.NOTE, backup_type='manual', key=key, phases=True, skipped=skipped,
+                               backup_id=backup_id)
+        out = {key_: result[key_] for key_ in ('backup_id', 'size', 'apps', 'downtime_seconds', 'unavailable_seconds',
+                                               'timing')}
+        out['encrypted'] = key is not None
+        out.update(scheduled=True, slot=slot, trigger=trigger, partial=bool(skipped), skipped_apps=list(skipped))
+        if skipped:
+            ctx.log(f'部分完成：沒有包含 {"、".join(item["name"] for item in skipped)}')
+        out['retention_deleted'] = ctx.enforce_schedule_retention(result['apps'], keep, exclude=[result['backup_id']])
+        return out
+    finally:
+        _cleanup_staging(ctx)
+
+
 def _release_kept(ctx, adapters):
     """A backup that left writers stopped for a restore failed afterwards: start them again (CONTRACT section 9)."""
     for adapter in adapters:
@@ -673,7 +762,7 @@ def _release_kept(ctx, adapters):
 
 
 def create_backup(ctx, apps, staging, *, include_images, note, backup_type, key, phases, start_databases=False,
-                  keep_stopped=False, defer_package=False, space=None):
+                  keep_stopped=False, defer_package=False, space=None, skipped=None, backup_id=None):
     """Back up `apps` into a verified, registered archive. `phases=False` for nested safety backups. `key` None writes
     an unencrypted backup (format 2, encryption "none").
 
@@ -687,6 +776,8 @@ def create_backup(ctx, apps, staging, *, include_images, note, backup_type, key,
     `space(estimate, free, required)` (the pre-restore copy): returns `(required, note)`, the free space needed
     instead of `required` (a backup packaged right away) and a log line once that check passed; it is called before
     any writer stops.
+    `skipped` (a list; scheduled backups only): an app that is not deployed or reports problems is left out and
+    appended `{id, name, reason}` instead of failing the backup; none left fails it. `backup_id`: the id chosen ahead.
     """
     phase = ctx.phase if phases else _noop
     phase('check')
@@ -695,13 +786,28 @@ def create_backup(ctx, apps, staging, *, include_images, note, backup_type, key,
         for adapter in adapters:
             adapter.ensure_databases_running()
     estimate = 0
+    ready = []
     for app, adapter in zip(apps, adapters):
         info = adapter.probe()
+        problem = None
         if not info['deployed']:
-            raise BackupError('not-deployed', f'應用「{app.name}」尚未部署在此設備，無法備份。', app=app.id)
-        if info['problems']:
-            raise BackupError('job-failed', f'應用「{app.name}」狀態異常：{info["problems"][0]}', app=app.id)
+            problem = BackupError('not-deployed', f'應用「{app.name}」尚未部署在此設備，無法備份。', app=app.id)
+        elif info['problems']:
+            problem = BackupError('job-failed', f'應用「{app.name}」狀態異常：{info["problems"][0]}', app=app.id)
+        if problem is not None:
+            if skipped is None:
+                raise problem
+            skipped.append({'id': app.id, 'name': app.name, 'reason': problem.message})
+            ctx.log(f'略過：{problem.message}')
+            continue
+        ready.append((app, adapter))
         estimate += int(adapter.estimate_bytes(include_images=include_images))
+    if skipped is not None:
+        if not ready:
+            raise BackupError('job-failed', '沒有可以備份的應用：' + '；'.join(item['reason'].rstrip('。')
+                                                                      for item in skipped[:5]) + '。',
+                              skipped=[item['id'] for item in skipped])
+        apps, adapters = [app for app, _adapter in ready], [adapter for _app, adapter in ready]
     free = int(ctx.storage.free_bytes())
     required = int(estimate * SPACE_FACTOR) + int(ctx.paths.reserve_bytes)
     space_note = None
@@ -744,7 +850,8 @@ def create_backup(ctx, apps, staging, *, include_images, note, backup_type, key,
                       'plain_bytes': sum(int(e.size) for e in entries)}
         else:
             result = _package(ctx, apps, staging, include_images=include_images, note=note, backup_type=backup_type,
-                              key=key, phases=phases, manifest_apps=manifest_apps, entries=entries, downtime=downtime)
+                              key=key, phases=phases, manifest_apps=manifest_apps, entries=entries, downtime=downtime,
+                              backup_id=backup_id)
     except BaseException:
         if keep_stopped:
             _release_kept(ctx, adapters)

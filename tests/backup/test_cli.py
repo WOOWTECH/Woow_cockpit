@@ -18,7 +18,7 @@ from .test_flows import (TEST_SECRET, TEST_SECRET_ID, FakeArchive, FakeKeys, Fak
 
 APP_KEYS = ['id', 'name', 'description', 'owner', 'adapter', 'deployed', 'state', 'units', 'last_backup', 'problems']
 META_KEYS = {'id', 'type', 'created', 'note', 'apps', 'size', 'sha256', 'key_id', 'include_images', 'filename',
-             'source', 'verified', 'inspected', 'key_available', 'format', 'encrypted', 'unauthenticated'}
+             'source', 'verified', 'inspected', 'key_available', 'format', 'encrypted', 'unauthenticated', 'scheduled'}
 
 
 class ExplodingStdin:
@@ -165,7 +165,7 @@ class StatusTests(CliCase):
         backup_id = self.make_backup()
         response = self.call(['status'])
         self.assertEqual(set(response), {'ok', 'version', 'host', 'storage', 'key', 'imported_keys', 'apps',
-                                         'active_job', 'warnings', 'settings'})
+                                         'active_job', 'warnings', 'settings', 'schedule'})
         self.assertEqual(set(response['settings']), {'encrypt_by_default', 'problem', 'plaintext_warning'})
         self.assertIs(response['settings']['encrypt_by_default'], True)
         self.assertEqual(response['host'], {k: HOST[k] for k in ('hostname', 'arch', 'os', 'podman')})
@@ -599,6 +599,32 @@ class FileCommandTests(CliCase):
         info = self.call(['download-info'], {'backup_id': backup_id})
         self.assertEqual(set(info), {'ok', 'path', 'filename', 'size'})
         self.assertTrue(info['path'].endswith(f'{backup_id}.tar'))
+
+
+class ScheduleCliShapeTests(CliCase):
+    """排程備份 in the existing shapes: `status.schedule`, `BackupMeta.scheduled`, `jobs.schedule_events`."""
+
+    def test_existing_commands_carry_the_schedule_fields(self):
+        from woowbackup import schedule
+        manual = self.make_backup()
+        status = self.call(['status'])
+        self.assertFalse(status['schedule']['enabled'])
+        self.assertIsNone(status['schedule']['attention'])
+        self.assertIs(self.call(['list'])['backups'][0]['scheduled'], False)
+        schedule.register_run(self.paths, manual, 'j20261113T010000Z-00000001', None, 'run-now')
+        self.assertIs(self.call(['list'])['backups'][0]['scheduled'], True)
+        usage = {row['id']: row for row in self.call(['status'])['storage']['apps']}
+        self.assertEqual(usage['woowbk-demo']['types'], {'manual': 0, 'safety': 0, 'uploaded': 0, 'scheduled': 1})
+        self.assertEqual(self.call(['jobs'])['schedule_events'], [])
+        self.assertTrue(self.call(['schedule-get'])['ok'])
+
+    def test_a_broken_schedule_summary_never_breaks_status(self):
+        from woowbackup import schedule
+        with mock.patch.object(schedule, 'summary', side_effect=RuntimeError('boom')), \
+                contextlib.redirect_stderr(io.StringIO()):
+            response = self.call(['status'])
+        self.assertTrue(response['ok'])
+        self.assertIsNone(response['schedule'])
 
 
 if __name__ == '__main__':

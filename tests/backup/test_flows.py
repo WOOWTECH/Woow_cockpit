@@ -2529,5 +2529,42 @@ class CompareTests(unittest.TestCase):
         self.assertEqual(flows.created_from_id('20261113T020000Z-a1b2c3d4'), '2026-11-13T02:00:00Z')
 
 
+class ScheduledBackupFlowTests(FlowCase):
+    """排程備份 (CONTRACT section 8): the scheduled mode of the backup job."""
+
+    def scheduled(self, apps=('woowbk-demo', 'woowbk-two'), keep_last=7):
+        from woowbackup import schedule
+        settings = dict(schedule.defaults(), keep_last=keep_last)
+        params = schedule.job_params(settings, list(apps), True, slot=None, trigger='run-now')
+        return flows.run_backup(self.ctx(), params)
+
+    def test_scheduled_mode_lists_its_backup_first_skips_unready_apps_and_notes_it(self):
+        from woowbackup import schedule
+        self.world.deployed['woowbk-two'] = False
+        seen = []
+        original = schedule.register_run
+
+        def spy(*args):
+            seen.append((list(self.world.events), self.reporter.phases()))
+            return original(*args)
+
+        with mock.patch.object(schedule, 'register_run', spy):
+            result = self.scheduled()
+        self.assertEqual(seen, [([], ['prepare'])], 'listed before any app was probed or paused')
+        self.assertEqual((result['partial'], result['apps'], result['trigger']), (True, ['woowbk-demo'], 'run-now'))
+        self.assertEqual(result['skipped_apps'][0]['id'], 'woowbk-two')
+        meta = self.storage.index[result['backup_id']]
+        self.assertEqual((meta['type'], meta['note']), ('manual', '排程備份'))
+        self.assertEqual(schedule.scheduled_ids(self.paths), (frozenset({result['backup_id']}), None))
+        self.assert_staging_clean()
+
+    def test_a_manual_backup_still_fails_for_an_app_that_is_not_ready(self):
+        self.world.deployed['woowbk-two'] = False
+        with self.assertRaises(BackupError) as caught:
+            self.backup(apps=('woowbk-demo', 'woowbk-two'))
+        self.assertEqual(caught.exception.code, 'not-deployed', 'skipping is for scheduled backups only')
+        self.assertEqual(self.world.events, [])
+
+
 if __name__ == '__main__':
     unittest.main()

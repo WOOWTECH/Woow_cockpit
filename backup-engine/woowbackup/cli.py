@@ -195,8 +195,11 @@ SPECS = {
     'retention-plan': {'policy': (OPTIONAL, v_object)},
     'retention-apply': {'confirm': (REQUIRED, v_true), 'backup_ids': (REQUIRED, v_backup_ids),
                         'policy': (OPTIONAL, v_object)},
+    # 排程備份 (CONTRACT sections 7, 8 "Scheduled backups"); `schedule` is validated deeply by schedule.validate.
+    'schedule-set': {'schedule': (REQUIRED, v_object), 'confirm': (OPTIONAL, v_bool)},
+    'schedule-run-now': {'request_id': (REQUIRED, v_request_id)},
 }
-NO_INPUT = frozenset({'status', 'list', 'key-init', 'key-kit', 'jobs', 'settings-get'})
+NO_INPUT = frozenset({'status', 'list', 'key-init', 'key-kit', 'jobs', 'settings-get', 'schedule-get'})
 
 
 def _no_duplicates(pairs):
@@ -268,14 +271,16 @@ def validate(command, data):
 # ---------------------------------------------------------------- services
 
 class Services:
-    """Dependencies of the commands; tests replace `deps`, `launcher` and `unit_active`."""
+    """Dependencies of the commands; tests replace `deps`, `launcher`, `unit_active`, `clock` and `timer`."""
 
-    def __init__(self, paths, *, deps=None, launcher=None, unit_active=None, trusted_uid=0):
+    def __init__(self, paths, *, deps=None, launcher=None, unit_active=None, trusted_uid=0, clock=None, timer=None):
         self.paths = paths
         self._deps = deps
         self.launcher = launcher
         self.unit_active = unit_active
         self.trusted_uid = trusted_uid  # owner of /etc/woowtech-cockpit/backup/settings.json (root; tests: themselves)
+        self.clock = clock  # () -> schedule.Env; the device's clock, zone (/etc/localtime) and uptime otherwise
+        self.timer = timer  # () -> {enabled, active} of the schedule's timer; `systemctl show` otherwise
         self._catalog = None
 
     @property
@@ -358,6 +363,60 @@ class Services:
             from .catalog_admin import audit_log as write
         write(line)
 
+    def journal(self, line, warning=False):
+        """A schedule line for the journal: notice, or warning for failures (`deps.journal(line, warning)` or
+        `deps.audit(line)` in tests)."""
+        write = getattr(self.deps, 'journal', None)
+        if write is not None:
+            write(line, warning)
+        elif getattr(self.deps, 'audit', None) is not None:
+            self.deps.audit(line)
+        else:
+            from .schedule import journal
+            journal(line, warning)
+
+    # ------------------------------------------------------------ 排程備份
+
+    def env(self):
+        from . import schedule
+        return self.clock() if self.clock is not None else schedule.system_env()
+
+    def timer_view(self, env):
+        """`timer` of the schedule views: {enabled, active (null when systemd cannot be asked), last_tick_age}."""
+        from . import schedule
+        try:
+            if self.timer is not None:
+                state = self.timer()
+            else:  # a relocated layout (tests) has no timer of its own: unknown
+                state = schedule.timer_state() if self.paths.base is None else {}
+        except Exception:  # noqa: BLE001 - unknown, never a broken page
+            traceback.print_exc(file=sys.stderr)
+            state = {}
+        return {'enabled': state.get('enabled'), 'active': state.get('active'),
+                'last_tick_age': schedule.last_tick_age(self.paths, env.now)}
+
+    def schedule_settings(self):
+        from . import schedule
+        return schedule.load(self.paths, trusted_uid=self.trusted_uid)
+
+    def scheduled_ids(self):
+        """Ids of the scheduled backups (empty when the registry cannot be read; retention then protects them)."""
+        from . import schedule
+        return schedule.scheduled_ids(self.paths)[0]
+
+    def job_record(self, job_id):
+        try:
+            return jobmod.JobStore(self.paths).get(job_id)
+        except BackupError:
+            return None
+
+    def backup_present(self, backup_id):
+        """True while the backup's index or archive exists (listed or not): a registry entry stays that long."""
+        present = getattr(self.storage, 'present', None)
+        if present is not None:
+            return bool(present(backup_id))
+        return any(item.get('id') == backup_id for item in self.storage.list_backups())
+
     def cleanup_exports(self):
         """Delete expired unencrypted download copies (each status/list/export command does; CONTRACT section 8)."""
         cleanup = getattr(self.storage, 'cleanup_exports', None)
@@ -385,15 +444,17 @@ def key_view(info):
     return {'key_id': info.key_id, 'created': info.created, 'kit_confirmed': bool(info.kit_confirmed)}
 
 
-def backup_view(meta, key_ids):
-    """BackupMeta for the page: `format` (1|2), `encrypted`, `key_available` (always true without encryption) and
-    `unauthenticated` (an unencrypted upload: a restore needs `accept_unauthenticated`)."""
+def backup_view(meta, key_ids, scheduled=frozenset()):
+    """BackupMeta for the page: `format` (1|2), `encrypted`, `key_available` (always true without encryption),
+    `unauthenticated` (an unencrypted upload: a restore needs `accept_unauthenticated`) and `scheduled` (a manual backup
+    the schedule's registry lists: 排程備份; the index itself is unchanged)."""
     from .storage import unauthenticated
     view = dict(meta)
     view.setdefault('format', 1)
     view.setdefault('encrypted', True)
     view['key_available'] = (not view['encrypted']) or meta.get('key_id') in key_ids
     view['unauthenticated'] = unauthenticated(view)
+    view['scheduled'] = view.get('type') == 'manual' and view.get('id') in scheduled
     return view
 
 
@@ -565,10 +626,24 @@ def apps_usage(svc, backups, catalog):
     from . import retention
     try:
         policy, _problem = retention.load_policy(svc.paths, trusted_uid=svc.trusted_uid)
-        return retention.app_usage(backups, catalog, policy)['apps']
+        return retention.app_usage(backups, catalog, policy, svc.scheduled_ids())['apps']
     except Exception:  # noqa: BLE001 - the overview simply falls back to its own computation
         traceback.print_exc(file=sys.stderr)
         return []
+
+
+def schedule_summary(svc):
+    """`status.schedule` (schedule.summary); null when it cannot be computed (never a broken status page)."""
+    from . import schedule
+    try:
+        env = svc.env()
+        settings, problem, saved = svc.schedule_settings()
+        state, state_problem = schedule.read_state(svc.paths)
+        return schedule.summary(settings, problem, saved, state, state_problem, env, svc.timer_view(env),
+                                svc.job_record)
+    except Exception:  # noqa: BLE001 - the overview simply shows no schedule
+        traceback.print_exc(file=sys.stderr)
+        return None
 
 
 def cmd_status(svc, _req):
@@ -591,14 +666,16 @@ def cmd_status(svc, _req):
         'active_job': jobmod.public_job(active) if active else None,
         'warnings': [p['message'] for p in getattr(catalog, 'problems', [])],
         'settings': svc.settings_view(),
+        'schedule': schedule_summary(svc),
     }
 
 
 def cmd_list(svc, _req):
     svc.cleanup_exports()
     ids = svc.key_ids()
+    scheduled = svc.scheduled_ids()
     exports = getattr(svc.storage, 'list_exports', lambda: [])()
-    return {'backups': [backup_view(meta, ids) for meta in svc.storage.list_backups()],
+    return {'backups': [backup_view(meta, ids, scheduled) for meta in svc.storage.list_backups()],
             'exports': [{key: rec[key] for key in ('export_id', 'backup_id', 'filename', 'size', 'expires')}
                         for rec in exports]}
 
@@ -652,7 +729,8 @@ def cmd_inspect(svc, req):
               for a in manifest['apps']],
         include_images=any('entry' in img for a in manifest['apps'] for img in a.get('images') or []),
         source={'hostname': manifest['source']['hostname']}, inspected=True)
-    return {'backup': backup_view(meta, svc.key_ids()), 'manifest': summary, 'preflight': preflight}
+    return {'backup': backup_view(meta, svc.key_ids(), svc.scheduled_ids()), 'manifest': summary,
+            'preflight': preflight}
 
 
 def cmd_key_init(svc, _req):
@@ -734,8 +812,13 @@ def cmd_job_status(svc, req):
 
 
 def cmd_jobs(svc, _req):
+    """`jobs` (≤ 50, newest first) and `schedule_events`: the schedule's recent events (slots that did not run, waits,
+    results), [] when its state cannot be read."""
+    from . import schedule
     svc.recover()
-    return {'jobs': [jobmod.public_job(r) for r in jobmod.JobStore(svc.paths).list(50)]}
+    state, _problem = schedule.read_state(svc.paths)
+    return {'jobs': [jobmod.public_job(r) for r in jobmod.JobStore(svc.paths).list(50)],
+            'schedule_events': schedule.events_view(state)}
 
 
 def cmd_job_cancel(svc, req):
@@ -773,7 +856,7 @@ def cmd_upload_begin(svc, req):
 
 def cmd_upload_finish(svc, req):
     meta = svc.storage.finish_upload(req['upload_id'])
-    return {'backup': backup_view(meta, svc.key_ids())}
+    return {'backup': backup_view(meta, svc.key_ids(), svc.scheduled_ids())}
 
 
 def cmd_upload_abort(svc, req):
@@ -886,6 +969,107 @@ def cmd_retention_apply(svc, req):
                                    trusted_uid=svc.trusted_uid, audit=svc.audit)
 
 
+# ---------------------------------------------------------------- 排程備份
+
+def schedule_gate(svc):
+    """What turning the schedule on needs (like Home Assistant): while 預設加密備份 is on, a device key and a saved
+    emergency kit. `blocked`: null, 'no-device-key' or 'kit-unconfirmed'."""
+    encrypt = bool(svc.encrypt_by_default())
+    key = svc.keys.device_key()
+    blocked = None
+    if encrypt and key is None:
+        blocked = 'no-device-key'
+    elif encrypt and not key.kit_confirmed:
+        blocked = 'kit-unconfirmed'
+    return {'encrypt': encrypt, 'device_key': key is not None,
+            'kit_confirmed': bool(key is not None and key.kit_confirmed), 'blocked': blocked}
+
+
+def _runs(schedule, settings, env):
+    if not settings['enabled']:
+        return []
+    return [schedule.instant_view(slot, env.zone) for slot in schedule.next_slots(settings, env.zone, env.now, 3)]
+
+
+def cmd_schedule_get(svc, _req):
+    """The saved schedule, the next 3 runs, the timer, the last run, the slot waiting for another job, the attention
+    item, the recent events, the device's zone and what turning it on needs (`gate`)."""
+    from . import schedule
+    env = svc.env()
+    settings, problem, saved = svc.schedule_settings()
+    state, state_problem = schedule.read_state(svc.paths)
+    view = schedule.summary(settings, problem, saved, state, state_problem, env, svc.timer_view(env), svc.job_record)
+    return {'schedule': schedule.settings_view(settings, problem or state_problem, saved),
+            'next_runs': _runs(schedule, settings, env) if view['enabled'] else [], 'timer': view['timer'],
+            'last_run': view['last_run'], 'waiting': view['waiting'], 'attention': view['attention'],
+            'events': schedule.events_view(state), 'timezone': view['timezone'], 'gate': schedule_gate(svc)}
+
+
+def cmd_schedule_set(svc, req):
+    """Without `confirm` a preview (the settings as they would be saved, the next 3 runs, which scheduled backups the
+    next successful run would delete); with it the settings are saved (root 0644) and audited. Turning the schedule on
+    while 預設加密備份 is on needs a device key (`no-device-key`) and a saved emergency kit (`invalid-request`,
+    `details.reason` 'kit-unconfirmed'). Saving never deletes anything."""
+    from . import retention, schedule
+    proposed = schedule.validate(req['schedule'])
+    catalog = svc.catalog()
+    if isinstance(proposed['apps'], list):
+        flows.resolve_apps(catalog, proposed['apps'])  # each app must be in this device's catalog when saved
+    if proposed['enabled']:
+        gate = schedule_gate(svc)
+        if gate['blocked'] == 'no-device-key':
+            raise BackupError('no-device-key', '開啟排程備份前，請先到「加密金鑰」建立這台設備的加密金鑰，並保存緊急金鑰。')
+        if gate['blocked'] == 'kit-unconfirmed':
+            raise BackupError('invalid-request', '開啟排程備份前，請先保存緊急金鑰。', reason='kit-unconfirmed',
+                              field='schedule.enabled')
+    env = svc.env()
+    previous, _problem, saved = svc.schedule_settings()
+    if req.get('confirm'):
+        record, previous = schedule.save(svc.paths, proposed, trusted_uid=svc.trusted_uid, now=env.now)
+        svc.audit(schedule.audit_line(record, previous))
+        saved = True
+    else:
+        record = schedule.prepared(previous, proposed, env.now)
+    apps = [app_id for app_id in schedule.run_apps(record, list(catalog.keys())) if catalog.get(app_id) is not None]
+    plan = retention.schedule_plan(svc.paths, svc.storage, apps, record['keep_last'])
+    return {'saved': bool(req.get('confirm')), 'schedule': schedule.settings_view(record, None, saved),
+            'next_runs': _runs(schedule, record, env),
+            'retention': {'keep_last': record['keep_last'], 'apps': apps, 'delete': plan['candidates'],
+                          'blocked': plan['blocked'], 'freed_bytes': plan['freed_bytes']},
+            'timezone': schedule.timezone_view(env)}
+
+
+def cmd_schedule_run_now(svc, req):
+    """One scheduled run now with the saved settings (enabled or not; like a manual backup, not kit-gated): it counts
+    as scheduled and the schedule's keep-last rule runs after it. Encrypted as 預設加密備份 says now."""
+    from . import schedule
+    settings, problem, saved = svc.schedule_settings()
+    if problem:
+        raise BackupError('invalid-request', problem, reason='settings-problem')
+    if not saved:
+        raise BackupError('invalid-request', '請先儲存排程設定，再立即執行一次。', reason='not-saved')
+    _state, state_problem = schedule.read_state(svc.paths)
+    if state_problem:
+        raise BackupError('invalid-request', state_problem, reason='state-problem')
+    catalog = svc.catalog()
+    app_ids = schedule.run_apps(settings, list(catalog.keys()))
+    if not [app_id for app_id in app_ids if catalog.get(app_id) is not None]:
+        raise BackupError('invalid-request', '沒有可以備份的應用：排程包含的應用都不在這台設備的應用設定中。',
+                          reason='no-apps')
+    encrypt = bool(svc.encrypt_by_default())
+    if encrypt and svc.keys.device_key() is None:
+        raise BackupError('no-device-key', '這台設備尚未建立加密金鑰，請先完成金鑰設定。')
+    started = svc.start('backup', schedule.job_params(settings, app_ids, encrypt, slot=None, trigger='run-now'),
+                        req['request_id'])
+    if not started.get('deduplicated'):
+        try:
+            schedule.record_run_now(svc.paths, started, settings, app_ids, encrypt, svc.job_record, svc.env(),
+                                    svc.journal)
+        except Exception:  # noqa: BLE001 - the job runs and registers itself; only the overview's last run lags
+            traceback.print_exc(file=sys.stderr)
+    return started
+
+
 COMMANDS = {
     'status': cmd_status, 'list': cmd_list, 'inspect': cmd_inspect, 'key-init': cmd_key_init,
     'key-kit': cmd_key_kit, 'key-confirm': cmd_key_confirm, 'key-import': cmd_key_import,
@@ -896,6 +1080,7 @@ COMMANDS = {
     'export-start': cmd_export_start, 'export-info': cmd_export_info, 'export-delete': cmd_export_delete,
     'catalog-suggest': cmd_catalog_suggest, 'catalog-install': cmd_catalog_install,
     'catalog-remove': cmd_catalog_remove, 'retention-plan': cmd_retention_plan, 'retention-apply': cmd_retention_apply,
+    'schedule-get': cmd_schedule_get, 'schedule-set': cmd_schedule_set, 'schedule-run-now': cmd_schedule_run_now,
 }
 
 
@@ -917,6 +1102,12 @@ def _dispatch(argv, paths, stdin, services, require_root):
         if len(argv) != 1:
             raise BackupError('invalid-request', 'export-cleanup 不需要參數。')
         return {'removed': svc.cleanup_exports()}
+    if command == 'schedule-tick':
+        # Internal (woowtech-cockpit-backup-schedule.timer every 5 minutes): argv only, no stdin.
+        if len(argv) != 1:
+            raise BackupError('invalid-request', 'schedule-tick 不需要參數。')
+        from . import schedule
+        return schedule.run_tick(svc)
     if command not in COMMANDS or len(argv) != 1:
         raise BackupError('invalid-request', '不支援的指令。')
     if command in NO_INPUT:
