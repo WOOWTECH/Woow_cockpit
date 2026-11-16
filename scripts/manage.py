@@ -12,6 +12,7 @@ import posixpath
 import pwd
 import re
 import stat
+import subprocess
 import sys
 import tempfile
 
@@ -35,6 +36,15 @@ BACKUP_CONFIG = 'etc/woowtech-cockpit/backup'
 BACKUP_CATALOG = f'{BACKUP_CONFIG}/apps'
 BACKUP_SHARE = 'usr/local/share/woowtech-cockpit-backup'
 BACKUP_TEMPLATES = f'{BACKUP_SHARE}/catalog'
+# 排程備份: a static timer and its oneshot tick service in the local unit directory (docs/backup/CONTRACT.md section 8).
+# The installer writes them, reloads systemd when one changed and enables the timer on the live root only.
+UNIT_DIR = 'usr/local/lib/systemd/system'
+SCHEDULE_TIMER = 'woowtech-cockpit-backup-schedule.timer'
+SCHEDULE_SERVICE = 'woowtech-cockpit-backup-schedule.service'
+UNIT_FILES = (f'{UNIT_DIR}/{SCHEDULE_SERVICE}', f'{UNIT_DIR}/{SCHEDULE_TIMER}')
+TIMER_FILE = f'{UNIT_DIR}/{SCHEDULE_TIMER}'
+SYSTEMCTL = '/usr/bin/systemctl'
+SAFE_ENV = {'PATH': '/usr/sbin:/usr/bin:/sbin:/bin', 'LANG': 'C.UTF-8', 'LC_ALL': 'C.UTF-8'}
 DEMO_APP = 'woowbk-demo'
 DEMO_CATALOG = f'{BACKUP_CATALOG}/{DEMO_APP}.json'
 DEMO_TEMPLATES = f'{BACKUP_TEMPLATES}/{DEMO_APP}'
@@ -90,7 +100,7 @@ def runtime_path(name):
 
 def backup_path(name):
     """Files of the backup package; their mode and owner are part of the contract."""
-    return name in (BACKUP_HELPER, BACKUP_VERSION, DEMO_CATALOG) or name.startswith(
+    return name in (BACKUP_HELPER, BACKUP_VERSION, DEMO_CATALOG, *UNIT_FILES) or name.startswith(
         (BACKUP_UI + '/', BACKUP_ENGINE + '/', DEMO_TEMPLATES + '/'))
 
 
@@ -247,6 +257,16 @@ def backup_payload(desired, demo, notices):
             desired[f'{BACKUP_ENGINE}/{name}'] = (data, 'backup-engine')
         desired[BACKUP_VERSION] = ((SOURCE / 'VERSION').read_bytes(), 'backup-engine')
         managed.append(BACKUP_ENGINE + '/')
+        units = engine / 'systemd'
+        absent = [name for name in (SCHEDULE_SERVICE, SCHEDULE_TIMER) if not (units / name).is_file()]
+        if absent:
+            notices.append(f'Skipped the scheduled-backup timer: backup-engine/systemd/{", ".join(absent)} not in the '
+                           'source tree; units already installed are kept.')
+        else:
+            for name in (SCHEDULE_SERVICE, SCHEDULE_TIMER):
+                if (units / name).is_symlink():
+                    raise ValueError(f'Source symlink is not supported: {units / name}')
+                desired[f'{UNIT_DIR}/{name}'] = ((units / name).read_bytes(), 'backup-unit')
     if demo:
         fixture = SOURCE / 'catalog-examples' / DEMO_APP
         desired[DEMO_CATALOG] = (demo_catalog(fixture), 'backup-demo-catalog')
@@ -465,6 +485,10 @@ def directory_plan(root, state, live=None, uid=0):
     wanted = set(owned)
     if BACKUP_HELPER in state.get('files', {}):
         wanted.add(posixpath.dirname(BACKUP_HELPER))
+    if any(name in state.get('files', {}) for name in UNIT_FILES):
+        # A shared system directory like libexec: created when missing, never re-moded, refused when unsafe
+        # (systemd runs what is in it as root).
+        wanted.add(UNIT_DIR)
     parents = set()
     for directory in wanted:
         parent = posixpath.dirname(directory)
@@ -543,11 +567,110 @@ def restore_records(root, backup, records):
             target.unlink()
 
 
-def install(root, desired, state):
+# ---------------------------------------------------------------- systemd (the live root only)
+
+def run_systemctl(argv):
+    """Run one fixed systemctl argv (no shell, no input, sanitized environment); (returncode, stdout, stderr)."""
+    try:
+        result = subprocess.run(argv, stdin=subprocess.DEVNULL, capture_output=True, env=dict(SAFE_ENV), timeout=120,
+                                check=False)
+    except (OSError, subprocess.TimeoutExpired) as error:
+        return 127, '', str(error)
+    return result.returncode, result.stdout.decode('utf-8', 'replace'), result.stderr.decode('utf-8', 'replace')
+
+
+class Systemd:
+    """systemctl steps for the scheduled-backup timer through an injectable `runner(argv) -> (code, stdout, stderr)`.
+    Only the fixed unit name is ever passed; `steps` records the changing calls in order."""
+
+    def __init__(self, runner=run_systemctl):
+        self.runner = runner
+        self.steps = []
+        self.warnings = []
+
+    def run(self, *args, check=True):
+        code, _out, err = self.runner([SYSTEMCTL, *args])
+        self.steps.append(' '.join(args))
+        if code != 0:
+            message = f'systemctl {" ".join(args)} failed (exit {code}): {err.strip()[-300:]}'
+            if check:
+                raise ValueError(message)
+            self.warnings.append(message)
+        return code
+
+    def timer_state(self):
+        """{load_state, unit_file_state, active_state, enabled, active} of the timer (read-only `systemctl show`)."""
+        code, out, _err = self.runner([SYSTEMCTL, 'show', '--property=LoadState', '--property=UnitFileState',
+                                       '--property=ActiveState', '--', SCHEDULE_TIMER])
+        values = dict(line.split('=', 1) for line in out.splitlines() if '=' in line) if code == 0 else {}
+        load, unit_file, active = (str(values.get(key, ''))[:40]
+                                   for key in ('LoadState', 'UnitFileState', 'ActiveState'))
+        return {'load_state': load, 'unit_file_state': unit_file, 'active_state': active,
+                'enabled': unit_file in ('enabled', 'enabled-runtime'), 'active': active == 'active'}
+
+
+def live_systemd(root):
+    """systemctl only for the running system; with --root nothing is run (a notice says what to do there)."""
+    return Systemd() if root == Path('/') else None
+
+
+def timer_plan(names, state, before):
+    """systemctl steps an install runs: stop the timer before backup files change, reload when a unit file changed,
+    and enable --now the timer when it is installed and not enabled and running (a timer whose units this source does
+    not ship is only started again)."""
+    steps = []
+    stop = bool(before and before['active']) and any(backup_path(name) for name in names)
+    if stop:
+        steps.append(f'stop {SCHEDULE_TIMER}')
+    if any(name in UNIT_FILES for name in names):
+        steps.append('daemon-reload')
+    if TIMER_FILE in state.get('files', {}):
+        if stop or not before or not before['enabled'] or not before['active']:
+            steps.append(f'enable --now {SCHEDULE_TIMER}')
+    elif stop:
+        steps.append(f'start {SCHEDULE_TIMER}')
+    return steps
+
+
+def _ensure_timer(systemd, state, stopped=False):
+    """After the files: the installed timer runs (enabled and active); one this source does not ship (kept from an
+    earlier install) only starts again when this install stopped it."""
+    if TIMER_FILE not in state.get('files', {}):
+        if stopped:
+            systemd.run('start', SCHEDULE_TIMER)
+        return
+    current = systemd.timer_state()
+    if not current['enabled'] or not current['active']:
+        systemd.run('enable', '--now', SCHEDULE_TIMER)
+
+
+def _timer_back(systemd, before, unit_touched, timer_present):
+    """Put the timer back to `before` once the files are back (failed install, rollback); best effort, warnings kept."""
+    if unit_touched:
+        systemd.run('daemon-reload', check=False)
+    if not timer_present():
+        return
+    if before.get('enabled'):
+        systemd.run('enable', SCHEDULE_TIMER, check=False)
+    if before.get('active'):
+        systemd.run('start', SCHEDULE_TIMER, check=False)
+
+
+def install(root, desired, state, systemd=None):
+    systemd = live_systemd(root) if systemd is None else systemd
     names = changes(root, desired)
     directories = directory_plan(root, state)
     if not names and not directories:
-        return {'changed': 0, 'status': 'already-current'}
+        result = {'changed': 0, 'status': 'already-current'}
+        if systemd is not None and TIMER_FILE in state.get('files', {}):
+            _ensure_timer(systemd, state)  # e.g. disabled by hand: the installed package runs its timer
+            result['timer'] = timer_view(systemd.timer_state())
+            if systemd.steps:
+                result['systemctl'] = list(systemd.steps)
+        return result
+    before = systemd.timer_state() if systemd is not None else None
+    stop = bool(before and before['active']) and any(backup_path(name) for name in names)
+    unit_touched = any(name in UNIT_FILES for name in names)
     backup_id = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S%fZ')
     backup = safe_path(root, f'{BACKUPS}/{backup_id}')
     make_parents(backup)
@@ -564,9 +687,14 @@ def install(root, desired, state):
             atomic_write(safe_path(backup / 'files', name), target.read_bytes(), 0o600)
         records.append(rec)
     journal = {'schema': 1, 'id': backup_id, 'status': 'prepared', 'files': records, 'directories': directories}
+    if systemd is not None:
+        # What the timer was before (rollback puts it back) and whether this install stops it while writing.
+        journal['systemd'] = {'timer': SCHEDULE_TIMER, 'before': timer_view(before), 'stopped': stop}
     atomic_write(backup / 'transaction.json', json.dumps(journal, indent=2).encode(), 0o600)
     applied, made = [], []
     try:
+        if stop:
+            systemd.run('stop', SCHEDULE_TIMER)  # no tick starts while the engine files change
         for rec in directories:
             apply_directory(root, rec)
             made.append(rec)
@@ -577,18 +705,48 @@ def install(root, desired, state):
             else:
                 atomic_write(safe_path(root, rec['path']), data, desired_mode(rec['path']))
             applied.append(rec)
+        if systemd is not None:
+            if unit_touched:
+                systemd.run('daemon-reload')
+            _ensure_timer(systemd, state, stopped=stop)
     except Exception:
+        if systemd is not None and not before['enabled']:
+            systemd.run('disable', '--now', SCHEDULE_TIMER, check=False)  # while the new unit file still exists
         restore_records(root, backup, applied)
         undo_directories(root, made)
+        if systemd is not None:
+            _timer_back(systemd, before, unit_touched, lambda: safe_path(root, TIMER_FILE).is_file())
         journal['status'] = 'failed-restored'
         atomic_write(backup / 'transaction.json', json.dumps(journal, indent=2).encode(), 0o600)
         raise
     journal['status'] = 'installed'
     atomic_write(backup / 'transaction.json', json.dumps(journal, indent=2).encode(), 0o600)
-    return {'status': 'installed', 'changed': len(names) + len(directories), 'files': len(names),
-            'removed': sum(1 for rec in records if rec['after_sha256'] is None),
-            'directories': len(directories), 'backup_id': backup_id,
-            'backup': str(backup), 'source_version': state['source_version']}
+    result = {'status': 'installed', 'changed': len(names) + len(directories), 'files': len(names),
+              'removed': sum(1 for rec in records if rec['after_sha256'] is None),
+              'directories': len(directories), 'backup_id': backup_id,
+              'backup': str(backup), 'source_version': state['source_version']}
+    if systemd is not None:
+        result['systemctl'] = list(systemd.steps)
+        result['timer'] = timer_view(systemd.timer_state())
+    return result
+
+
+def timer_view(state):
+    """The part of a timer state the journal and the outputs keep."""
+    return {'load_state': state['load_state'], 'unit_file_state': state['unit_file_state'],
+            'active_state': state['active_state'], 'enabled': state['enabled'], 'active': state['active']}
+
+
+def valid_systemd_record(rec):
+    """The journal's `systemd` record names only the fixed timer, with the state it had before the install."""
+    if not isinstance(rec, dict) or set(rec) != {'timer', 'before', 'stopped'} or rec['timer'] != SCHEDULE_TIMER:
+        return False
+    before = rec['before']
+    return (isinstance(rec['stopped'], bool) and isinstance(before, dict)
+            and set(before) == {'load_state', 'unit_file_state', 'active_state', 'enabled', 'active'}
+            and all(isinstance(before[key], str) and len(before[key]) <= 40
+                    for key in ('load_state', 'unit_file_state', 'active_state'))
+            and isinstance(before['enabled'], bool) and isinstance(before['active'], bool))
 
 
 def allowed_target(name):
@@ -602,7 +760,7 @@ def allowed_directory(name):
     """Directories a journal may ask rollback to remove (only when created and empty) or re-mode."""
     if not normalized(name) or runtime_path(name):
         return False
-    bases = BACKUP_DIR_ROOTS + (posixpath.dirname(BACKUP_HELPER),)
+    bases = BACKUP_DIR_ROOTS + (posixpath.dirname(BACKUP_HELPER), UNIT_DIR)
     return any(under(name, base) or base.startswith(name + '/') for base in bases)
 
 
@@ -613,7 +771,8 @@ def valid_directory_record(rec):
     return not rec['existed'] or (isinstance(before, int) and not isinstance(before, bool) and 0 <= before <= 0o7777)
 
 
-def rollback(root, backup_id):
+def rollback(root, backup_id, systemd=None):
+    systemd = live_systemd(root) if systemd is None else systemd
     if not re.fullmatch(r'\d{8}T\d{12}Z', backup_id):
         raise ValueError('Use the backup_id printed by install (not a filesystem path).')
     backup = safe_path(root, f'{BACKUPS}/{backup_id}')
@@ -643,17 +802,39 @@ def rollback(root, backup_id):
             raise ValueError(f'Changed since installation: {rec["path"]}; refusing to overwrite newer work.')
         if rec['existed'] and file_hash(safe_path(backup / 'files', rec['path'])) != rec['before_sha256']:
             raise ValueError(f'Corrupt backup: {rec["path"]}; nothing restored.')
+    unit_touched = any(rec['path'] in UNIT_FILES for rec in records)
+    record = journal.get('systemd')
+    if record is not None and not valid_systemd_record(record):
+        raise ValueError('Backup contains an invalid systemd record; nothing restored.')
+    timer = systemd is not None and (record is not None or unit_touched)
+    timer_present = lambda: safe_path(root, TIMER_FILE).is_file()  # noqa: E731
+    if timer:
+        current = systemd.timer_state()
+        if current['active']:
+            systemd.run('stop', SCHEDULE_TIMER, check=False)  # no tick runs while files go back
+        if unit_touched and current['enabled'] and timer_present():
+            systemd.run('disable', SCHEDULE_TIMER, check=False)  # while its unit file still exists
     restore_records(root, backup, records)
     kept = undo_directories(root, directories)
+    if timer:
+        # The state before the install (a transaction of an installer without the timer: not installed).
+        before = record['before'] if record is not None else {'enabled': False, 'active': False}
+        _timer_back(systemd, before, unit_touched, timer_present)
     journal['status'] = 'rolled-back'
     atomic_write(manifest, json.dumps(journal, indent=2).encode(), 0o600)
     result = {'status': 'rolled-back', 'restored': len(records), 'backup_id': backup_id}
     if kept:
         result['kept_directories'] = kept
+    if timer:
+        result['systemctl'] = list(systemd.steps)
+        result['timer'] = timer_view(systemd.timer_state())
+        if systemd.warnings:
+            result['warnings'] = list(systemd.warnings)
     return result
 
 
-def verify(root):
+def verify(root, systemd=None):
+    systemd = live_systemd(root) if systemd is None else systemd
     live = root == Path('/')
     state = json.loads(safe_path(root, STATE).read_text())
     drift = [name for name, meta in state['files'].items()
@@ -672,9 +853,13 @@ def verify(root):
             continue
         if not stat.S_ISDIR(st.st_mode) or stat.S_IMODE(st.st_mode) != DIR_MODE or (live and st.st_uid != 0):
             drift.append(f'{directory}/')
-    return {'status': 'drift' if drift else 'verified', 'files': len(state['files']),
-            'directories': len(state.get('directories', [])),
-            'source_version': state['source_version'], 'drift': drift}
+    result = {'status': 'drift' if drift else 'verified', 'files': len(state['files']),
+              'directories': len(state.get('directories', [])),
+              'source_version': state['source_version'], 'drift': drift}
+    if TIMER_FILE in state['files']:
+        # Reported, never drift: an administrator may stop the timer on purpose; install enables it again.
+        result['timer'] = timer_view(systemd.timer_state()) if systemd is not None else 'not-checked'
+    return result
 
 
 def main():
@@ -706,18 +891,27 @@ def main():
             if args.backup_demo_catalog:
                 notices.append(f'--backup-demo-catalog adds the lab fixture "{DEMO_APP}" to the trusted backup catalog; '
                                'never use it on customer devices.')
+            if root != Path('/') and TIMER_FILE in state['files']:
+                print(f'Note: --root: the scheduled-backup units are written below {root} but no systemctl command '
+                      'runs; on that system run "systemctl daemon-reload" and '
+                      f'"systemctl enable --now {SCHEDULE_TIMER}".', file=sys.stderr)
             for notice in notices:
                 print(f'Note: {notice}', file=sys.stderr)
             if args.command == 'plan':
+                names = changes(root, desired)
+                systemd = live_systemd(root)
                 result = {'source_version': state['source_version'], 'cockpit_version': state['cockpit_version'],
-                          'changed': changes(root, desired),
+                          'changed': names,
                           'remove': [name for name, (data, _) in desired.items() if data is None],
                           'directories': [f'{rec["path"]}/' for rec in directory_plan(root, state)],
-                          'managed_files': len(state['files']), 'notices': notices}
+                          'managed_files': len(state['files']), 'notices': notices,
+                          'systemctl': timer_plan(names, state, systemd.timer_state()) if systemd else []}
             else:
                 result = install(root, desired, state)
                 print('After installation, sign out/in and force-refresh the browser. No Cockpit service restart was requested.', file=sys.stderr)
         elif args.command == 'rollback':
+            if root != Path('/'):
+                print('Note: --root: no systemctl command runs for the scheduled-backup timer.', file=sys.stderr)
             result = rollback(root, args.backup_id)
         else:
             result = verify(root)

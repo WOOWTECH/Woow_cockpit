@@ -20,7 +20,24 @@ BACKUP_PAGE = ('manifest.json', 'index.html', 'backup.css', 'backup.js')
 PACKAGE_MANIFESTS = ('apps-catalog/manifest.json', 'backup/manifest.json', 'pi-web-integration/package/manifest.json',
                      'preview/manifest.json', 'services/manifest.json')
 ENGINE_MODULES = ('__init__', 'errors', 'paths', 'archive', 'keys', 'storage', 'util', 'catalog', 'podman',
-                  'flows', 'jobs', 'cli', 'adapters/__init__', 'adapters/base', 'adapters/quadlet_postgres')
+                  'flows', 'jobs', 'cli', 'schedule', 'adapters/__init__', 'adapters/base', 'adapters/quadlet_postgres')
+# 排程備份 (docs/backup/CONTRACT.md section 8): the static timer and its tick service, exactly these settings. Unit files
+# are parsed here and in the unit tests; `systemd-analyze verify` is never run (it touched a live manager's sockets).
+UNIT_SOURCE = 'backup-engine/systemd'
+HELPER_PATH = '/usr/local/libexec/woowtech-cockpit-backup'
+UNITS = {
+    manage.SCHEDULE_TIMER: {
+        'Unit': {'Description': None},
+        'Timer': {'OnCalendar': '*:0/5', 'AccuracySec': '15s'},
+        'Install': {'WantedBy': 'timers.target'},
+    },
+    manage.SCHEDULE_SERVICE: {
+        'Unit': {'Description': None, 'ConditionPathExists': HELPER_PATH},
+        'Service': {'Type': 'oneshot', 'ExecStart': f'{HELPER_PATH} schedule-tick', 'StandardInput': 'null',
+                    'StandardOutput': 'null', 'SyslogLevel': 'warning', 'LogLevelMax': 'notice',
+                    'TimeoutStartSec': '15min'},
+    },
+}
 CATALOG_REQUIRED = ('schema', 'id', 'name', 'owner', 'adapter', 'quadlet', 'units')
 # Process launchers that go through a shell; the engine must use fixed argv lists (CONTRACT section 10).
 SHELL_CALLS = {'os.system', 'os.popen', 'subprocess.getoutput', 'subprocess.getstatusoutput'}
@@ -188,6 +205,52 @@ def check_engine():
     return len(sources)
 
 
+def parse_unit(text, where):
+    """{section: {key: value}} of a unit file; a repeated section or key, a line outside a section or any other syntax
+    (continuations, quoting tricks) is refused: these units stay simple enough to read at a glance."""
+    sections, current = {}, None
+    for number, line in enumerate(text.splitlines(), 1):
+        stripped = line.strip()
+        if not stripped or stripped.startswith(('#', ';')):
+            continue
+        assert line == stripped and not stripped.endswith('\\'), \
+            f'{where}:{number}: unexpected indentation or continuation'
+        if stripped.startswith('['):
+            assert re.fullmatch(r'\[[A-Za-z]+\]', stripped), f'{where}:{number}: bad section header'
+            current = stripped[1:-1]
+            assert current not in sections, f'{where}:{number}: section [{current}] repeated'
+            sections[current] = {}
+            continue
+        assert current is not None and '=' in stripped, f'{where}:{number}: expected key=value inside a section'
+        key, value = stripped.split('=', 1)
+        assert re.fullmatch(r'[A-Za-z]+', key), f'{where}:{number}: bad key {key!r}'
+        assert key not in sections[current], f'{where}:{number}: {key} repeated in [{current}]'
+        sections[current][key] = value
+    return sections
+
+
+def check_units(directory=None):
+    """The scheduled-backup units: names outside the woowtech-backup-* job units, exactly the expected sections and
+    settings (no Persistent=, no [Install] for the service), ASCII only."""
+    directory = Path(directory) if directory is not None else ROOT / UNIT_SOURCE
+    for name, expected in UNITS.items():
+        assert not name.startswith('woowtech-backup-'), f'{name}: would match the job units woowtech-backup-*'
+        path = directory / name
+        where = f'{UNIT_SOURCE}/{name}'
+        assert path.is_file() and not path.is_symlink(), f'Missing unit file: {where}'
+        raw = path.read_bytes()
+        assert raw.isascii(), f'{where}: keep unit files ASCII'
+        sections = parse_unit(raw.decode('ascii'), where)
+        assert set(sections) == set(expected), f'{where}: sections {sorted(sections)}, expected {sorted(expected)}'
+        for section, keys in expected.items():
+            assert set(sections[section]) == set(keys), \
+                f'{where}: [{section}] has {sorted(sections[section])}, expected {sorted(keys)}'
+            for key, value in keys.items():
+                assert value is None or sections[section][key] == value, \
+                    f'{where}: {key}={sections[section][key]}, expected {key}={value}'
+    return len(UNITS)
+
+
 def check_demo_catalog():
     fixture = ROOT / 'catalog-examples' / manage.DEMO_APP
     entry = json_strict(fixture / 'catalog.json')
@@ -281,10 +344,11 @@ def check():
             assert f'cockpit-podman-124/{required}' in names, f'Missing native build source: {required}'
     count += check_backup_page()
     modules = check_engine()
+    units = check_units()
     templates = check_demo_catalog()
     print(f'Source check passed: {count} asset references, manifest, local fonts, CSS, CSP and native source/bundle; '
           f'backup page (manifest, CSP, DOM sinks), {modules} engine sources (shebang, syntax, no shell), '
-          f'demo catalog with {templates} Quadlet templates.')
+          f'{units} scheduled-backup units, demo catalog with {templates} Quadlet templates.')
 
 
 if __name__ == '__main__':

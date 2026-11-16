@@ -38,6 +38,9 @@ ENGINE_SOURCE = {
     'backup-engine/woowbackup/archive.py': 'FORMAT = 1\n',
     'backup-engine/woowbackup/adapters/__init__.py': '',
     'backup-engine/woowbackup/adapters/quadlet_postgres.py': 'ADAPTER_VERSION = 1\n',
+    # The scheduled-backup units ship with the engine (排程備份).
+    'backup-engine/systemd/woowtech-cockpit-backup-schedule.service': '[Unit]\nDescription=tick (test payload)\n',
+    'backup-engine/systemd/woowtech-cockpit-backup-schedule.timer': '[Unit]\nDescription=timer (test payload)\n',
     # Bytecode caches in a checkout must never be deployed.
     'backup-engine/woowbackup/__pycache__/cli.cpython-312.pyc': 'stale bytecode',
     'backup-engine/woowbackup/adapters/__pycache__/base.cpython-312.pyc': 'stale bytecode',
@@ -771,6 +774,323 @@ class BackupPackageContract(HostFixture):
         rolled = run('rollback', backup_id)
         self.assertEqual(rolled.returncode, 0, rolled.stderr)
         self.assertFalse((self.root / manage.BACKUP_UI).exists())
+
+
+class FakeSystemctl:
+    """systemctl of a fixture root (the runner `manage.Systemd` takes): keeps the timer's enabled/active state the way
+    PID 1 would, needs the unit file below the root for enable/disable/start, records every changing call."""
+
+    def __init__(self, root, *, enabled=False, active=False, fail=()):
+        self.root = root
+        self.enabled, self.active = enabled, active
+        self.fail = set(fail)
+        self.calls = []
+
+    def unit_file(self):
+        return (self.root / manage.TIMER_FILE).is_file()
+
+    def __call__(self, argv):
+        assert argv[0] == manage.SYSTEMCTL, argv
+        args = list(argv[1:])
+        if args[0] == 'show':
+            assert args[-2:] == ['--', manage.SCHEDULE_TIMER], args
+            loaded = self.unit_file()
+            unit_file = ('enabled' if self.enabled else 'disabled') if loaded else ''
+            return 0, (f'LoadState={"loaded" if loaded else "not-found"}\nUnitFileState={unit_file}\n'
+                       f'ActiveState={"active" if self.active else "inactive"}\n'), ''
+        command = ' '.join(args)
+        self.calls.append(command)
+        if command in self.fail:
+            return 1, '', 'Failed (test)'
+        if args == ['daemon-reload']:
+            return 0, '', ''
+        assert args[0] in ('enable', 'disable', 'start', 'stop') and args[-1] == manage.SCHEDULE_TIMER, args
+        if args[0] in ('enable', 'disable', 'start') and not self.unit_file():
+            return 1, '', 'Unit file does not exist.'
+        if args[0] == 'enable':
+            self.enabled = True
+            self.active = self.active or '--now' in args
+        elif args[0] == 'disable':
+            self.enabled = False
+            self.active = self.active and '--now' not in args
+        else:
+            self.active = args[0] == 'start'
+        return 0, '', ''
+
+
+def load_check_source():
+    spec = importlib.util.spec_from_file_location('check_source', REPO / 'scripts/check_source.py')
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+class ScheduleTimerContract(BackupPackageContract):
+    """排程備份: the timer and its tick service ship with the engine; on the live root the installer stops the timer while
+    it writes, reloads systemd when a unit changed and enables the timer; the journal keeps its earlier state for the
+    rollback; --no-backup and --root run no systemctl (docs/backup/CONTRACT.md section 8, docs/deployment.md)."""
+
+    TIMER = manage.SCHEDULE_TIMER
+
+    def live(self, runner, **options):
+        desired, state = manage.desired_files(self.root, **options)
+        return manage.install(self.root, desired, state, systemd=manage.Systemd(runner))
+
+    def test_units_install_with_the_engine_and_verify_like_its_files(self):
+        self.add_backup_source()
+        before = self.tree(*BACKUP_TREES)
+        result = self.install()
+        for name in manage.UNIT_FILES:
+            path = self.root / name
+            source = ENGINE_SOURCE[f'backup-engine/systemd/{posixpath.basename(name)}']
+            self.assertEqual((path.read_text(), mode(path)), (source, 0o644))
+            self.assertEqual(self.state()['files'][name]['role'], 'backup-unit')
+        self.assertEqual(mode(self.root / manage.UNIT_DIR), 0o755)
+        verified = manage.verify(self.root)
+        self.assertEqual((verified['status'], verified['timer']), ('verified', 'not-checked'))
+        (self.root / manage.TIMER_FILE).chmod(0o664)
+        self.assertEqual(manage.verify(self.root)['drift'], [manage.TIMER_FILE])
+        self.install()
+        manage.rollback(self.root, result['backup_id'])
+        self.assertEqual(self.tree(*BACKUP_TREES), before, 'the unit files and the directories made for them are gone')
+
+    def test_a_first_live_install_reloads_and_enables_the_timer_and_journals_its_state(self):
+        self.add_backup_source()
+        runner = FakeSystemctl(self.root)
+        result = self.live(runner)
+        self.assertEqual(runner.calls, ['daemon-reload', f'enable --now {self.TIMER}'])
+        self.assertEqual(result['systemctl'], runner.calls)
+        self.assertEqual((result['timer']['enabled'], result['timer']['active']), (True, True))
+        self.assertEqual(self.journal(result['backup_id'])['systemd'], {
+            'timer': self.TIMER, 'stopped': False,
+            'before': {'load_state': 'not-found', 'unit_file_state': '', 'active_state': 'inactive', 'enabled': False,
+                       'active': False}})
+        verified = manage.verify(self.root, systemd=manage.Systemd(runner))
+        self.assertEqual((verified['status'], verified['timer']['active']), ('verified', True))
+        runner.active = False  # stopped by hand: reported, never drift
+        verified = manage.verify(self.root, systemd=manage.Systemd(runner))
+        self.assertEqual((verified['status'], verified['drift'], verified['timer']['active']), ('verified', [], False))
+
+    def test_an_upgrade_stops_the_timer_while_it_writes_and_enables_it_again(self):
+        self.add_backup_source()
+        runner = FakeSystemctl(self.root)
+        self.live(runner)
+        runner.calls.clear()
+        self.add_source({'backup-engine/woowbackup/cli.py': 'def main(argv):\n    return 9\n'})
+        seen = []
+        original = manage.atomic_write
+
+        def spy(path, data, mode=0o644):
+            if '/woowbackup/' in str(path) and manage.BACKUPS not in str(path):  # the installed copies
+                seen.append(runner.active)
+            return original(path, data, mode)
+
+        with patch.object(manage, 'atomic_write', spy):
+            result = self.live(runner)
+        self.assertEqual(runner.calls, [f'stop {self.TIMER}', f'enable --now {self.TIMER}'], 'no unit changed')
+        self.assertTrue(seen and not any(seen), 'no tick can start while the engine files change')
+        self.assertTrue(self.journal(result['backup_id'])['systemd']['stopped'])
+        runner.calls.clear()
+        self.add_source({'backup-engine/systemd/woowtech-cockpit-backup-schedule.timer': '[Unit]\nDescription=v2\n'})
+        self.live(runner)
+        self.assertEqual(runner.calls, [f'stop {self.TIMER}', 'daemon-reload', f'enable --now {self.TIMER}'])
+        self.assertEqual(manage.timer_plan([manage.TIMER_FILE], self.state(), {'enabled': True, 'active': True}),
+                         [f'stop {self.TIMER}', 'daemon-reload', f'enable --now {self.TIMER}'])
+
+    def test_an_install_with_nothing_to_change_enables_a_timer_turned_off_by_hand(self):
+        self.add_backup_source()
+        runner = FakeSystemctl(self.root)
+        self.live(runner)
+        runner.enabled = runner.active = False
+        runner.calls.clear()
+        result = self.live(runner)
+        self.assertEqual((result['status'], result['changed']), ('already-current', 0))
+        self.assertEqual((runner.calls, result['systemctl']), ([f'enable --now {self.TIMER}'],) * 2)
+        runner.calls.clear()
+        self.assertNotIn('systemctl', self.live(runner))
+        self.assertEqual(runner.calls, [], 'enabled and running: nothing to do')
+
+    def test_rollback_disables_and_stops_the_timer_removes_the_units_and_reloads(self):
+        self.add_backup_source()
+        runner = FakeSystemctl(self.root)
+        first = self.live(runner)
+        runner.calls.clear()
+        result = manage.rollback(self.root, first['backup_id'], systemd=manage.Systemd(runner))
+        self.assertEqual(runner.calls, [f'stop {self.TIMER}', f'disable {self.TIMER}', 'daemon-reload'])
+        self.assertEqual((runner.enabled, runner.active), (False, False))
+        self.assertFalse(any((self.root / name).exists() for name in manage.UNIT_FILES))
+        self.assertEqual((result['timer']['enabled'], result['timer']['active']), (False, False))
+        self.assertNotIn('warnings', result)
+        again = self.live(runner)
+        self.assertEqual((again['status'], runner.enabled, runner.active), ('installed', True, True), 'reinstall')
+
+    def test_rollback_of_an_upgrade_puts_the_previous_units_and_timer_back(self):
+        self.add_backup_source()
+        runner = FakeSystemctl(self.root)
+        self.live(runner)
+        old_unit = (self.root / manage.TIMER_FILE).read_text()
+        self.add_source({'backup-engine/systemd/woowtech-cockpit-backup-schedule.timer': '[Unit]\nDescription=v2\n'})
+        second = self.live(runner)
+        runner.calls.clear()
+        manage.rollback(self.root, second['backup_id'], systemd=manage.Systemd(runner))
+        self.assertEqual(runner.calls, [f'stop {self.TIMER}', f'disable {self.TIMER}', 'daemon-reload',
+                                        f'enable {self.TIMER}', f'start {self.TIMER}'])
+        self.assertEqual(((self.root / manage.TIMER_FILE).read_text(), runner.enabled, runner.active),
+                         (old_unit, True, True))
+        # An engine-only upgrade: the timer is stopped while the files go back and runs again afterwards.
+        self.live(runner)  # the source still has the second timer
+        self.add_source({'backup-engine/woowbackup/cli.py': 'def main(argv):\n    return 8\n'})
+        third = self.live(runner)
+        runner.calls.clear()
+        manage.rollback(self.root, third['backup_id'], systemd=manage.Systemd(runner))
+        self.assertEqual(runner.calls, [f'stop {self.TIMER}', f'enable {self.TIMER}', f'start {self.TIMER}'])
+
+    def test_a_failed_install_restores_the_files_and_the_timer(self):
+        self.add_backup_source()
+        before = self.tree(*BACKUP_TREES), self.snapshot()
+        runner = FakeSystemctl(self.root, fail={f'enable --now {self.TIMER}'})
+        with self.assertRaisesRegex(ValueError, 'systemctl enable --now'):
+            self.live(runner)
+        self.assertEqual((self.tree(*BACKUP_TREES), self.snapshot()), before)
+        self.assertEqual(runner.calls, ['daemon-reload', f'enable --now {self.TIMER}', f'disable --now {self.TIMER}',
+                                        'daemon-reload'])
+        self.assertEqual((runner.enabled, runner.active), (False, False))
+        backup_id = next(p.name for p in (self.root / manage.BACKUPS).iterdir())
+        self.assertEqual(self.journal(backup_id)['status'], 'failed-restored')
+        # An upgrade that fails while writing: the files go back and the stopped timer runs again.
+        runner = FakeSystemctl(self.root)
+        self.live(runner)
+        self.add_source({'backup-engine/woowbackup/cli.py': 'def main(argv):\n    return 7\n'})
+        original = manage.atomic_write
+
+        def broken(path, data, mode=0o644):
+            if str(path).endswith('/woowbackup/cli.py') and manage.BACKUPS not in str(path):
+                raise OSError('simulated disk failure')
+            return original(path, data, mode)
+
+        runner.calls.clear()
+        with patch.object(manage, 'atomic_write', broken), self.assertRaisesRegex(OSError, 'simulated'):
+            self.live(runner)
+        self.assertEqual(runner.calls, [f'stop {self.TIMER}', f'enable {self.TIMER}', f'start {self.TIMER}'])
+        self.assertEqual((runner.enabled, runner.active), (True, True))
+
+    def test_no_backup_and_root_never_run_systemctl(self):
+        self.add_backup_source()
+        runner = FakeSystemctl(self.root)
+        self.live(runner)
+        runner.calls.clear()
+        self.add_source({'backup-engine/systemd/woowtech-cockpit-backup-schedule.timer': '[Unit]\nDescription=v3\n'})
+        self.live(runner, include_backup=False)
+        self.assertEqual(runner.calls, [], '--no-backup leaves the units and the timer alone')
+        self.assertNotEqual((self.root / manage.TIMER_FILE).read_text(), '[Unit]\nDescription=v3\n')
+
+        def forbidden(argv):
+            raise AssertionError(f'systemctl ran for a --root install: {argv}')
+
+        with patch.object(manage, 'run_systemctl', forbidden):
+            result = self.install()  # self.root is not "/": no systemctl at all
+            self.assertEqual(result['status'], 'installed')
+            self.assertNotIn('systemctl', result)
+            self.assertEqual(manage.verify(self.root)['timer'], 'not-checked')
+            self.assertNotIn('systemctl', manage.rollback(self.root, result['backup_id']))
+        self.assertIsNone(manage.live_systemd(self.root))
+        self.assertIsInstance(manage.live_systemd(Path('/')), manage.Systemd)
+
+    def test_rollback_refuses_a_journal_with_a_foreign_unit(self):
+        self.add_backup_source()
+        runner = FakeSystemctl(self.root)
+        result = self.live(runner)
+        path = self.root / manage.BACKUPS / result['backup_id'] / 'transaction.json'
+        pristine = json.loads(path.read_text())
+        for change in ({'timer': 'ssh.service'}, {'stopped': 'yes'}, {'extra': 1},
+                       {'before': {'enabled': True, 'active': True}}):
+            with self.subTest(change=change):
+                journal = json.loads(json.dumps(pristine))
+                journal['systemd'].update(change)
+                path.write_text(json.dumps(journal))
+                runner.calls.clear()
+                before = self.tree(*BACKUP_TREES), self.snapshot()
+                with self.assertRaisesRegex(ValueError, 'invalid systemd record'):
+                    manage.rollback(self.root, result['backup_id'], systemd=manage.Systemd(runner))
+                self.assertEqual((self.tree(*BACKUP_TREES), self.snapshot(), runner.calls), (*before, []))
+
+    def test_the_unit_directory_is_a_shared_parent_that_must_be_safe(self):
+        self.add_backup_source()
+        desired, state = manage.desired_files(self.root)
+        for path in [self.root, *self.root.rglob('*')]:
+            if path.is_dir() and not path.is_symlink():
+                path.chmod(0o755)
+        planned = [rec['path'] for rec in manage.directory_plan(self.root, state, live=True, uid=os.getuid())]
+        self.assertIn(manage.UNIT_DIR, planned)
+        units = self.root / manage.UNIT_DIR
+        units.mkdir(parents=True)
+        for path in (units, *units.parents):
+            if self.root in path.parents:
+                path.chmod(0o755)
+        units.chmod(0o750)
+        self.assertNotIn(manage.UNIT_DIR, [rec['path'] for rec in manage.directory_plan(self.root, state, live=True,
+                                                                                         uid=os.getuid())],
+                         'an existing safe directory is not re-moded')
+        units.chmod(0o775)
+        with self.assertRaisesRegex(ValueError, 'lib/systemd/system is writable by group/others'):
+            manage.directory_plan(self.root, state, live=True, uid=os.getuid())
+        self.assertTrue(manage.allowed_directory(manage.UNIT_DIR))
+        self.assertTrue(all(manage.allowed_target(name) and manage.backup_path(name) for name in manage.UNIT_FILES))
+        self.assertFalse(manage.allowed_target(f'{manage.UNIT_DIR}/ssh.service'))
+
+    def test_missing_unit_sources_are_skipped_with_a_notice(self):
+        self.add_backup_source()
+        for name in (manage.SCHEDULE_SERVICE, manage.SCHEDULE_TIMER):
+            (self.source / 'backup-engine/systemd' / name).unlink()
+        notices = []
+        desired, state = manage.desired_files(self.root, notices=notices)
+        self.assertEqual(len(notices), 1)
+        self.assertIn('Skipped the scheduled-backup timer', notices[0])
+        self.assertFalse(any(name in desired for name in manage.UNIT_FILES))
+        self.assertIn(manage.BACKUP_HELPER, desired, 'the engine itself is still installed')
+
+    def test_the_repository_units_pass_the_source_check_and_changes_are_refused(self):
+        check = load_check_source()
+        self.assertEqual(check.check_units(), 2)
+        units = Path(self.temp.name) / 'units'
+        bad = {
+            'Persistent': (manage.SCHEDULE_TIMER,
+                           lambda text: text.replace('AccuracySec=15s', 'AccuracySec=15s\nPersistent=true')),
+            'OnCalendar': (manage.SCHEDULE_TIMER, lambda text: text.replace('*:0/5', 'daily')),
+            'Install': (manage.SCHEDULE_SERVICE, lambda text: text + '\n[Install]\nWantedBy=multi-user.target\n'),
+            'LogLevelMax': (manage.SCHEDULE_SERVICE, lambda text: text.replace('LogLevelMax=notice\n', '')),
+            'ExecStart': (manage.SCHEDULE_SERVICE, lambda text: text.replace('schedule-tick', 'schedule-tick --x')),
+            'repeated': (manage.SCHEDULE_SERVICE,
+                         lambda text: text.replace('Type=oneshot', 'Type=oneshot\nType=simple')),
+            'ASCII': (manage.SCHEDULE_TIMER, lambda text: text + '# 排程\n'),
+        }
+        for label, (name, damage) in bad.items():
+            with self.subTest(label=label):
+                if units.exists():
+                    for path in units.iterdir():
+                        path.unlink()
+                else:
+                    units.mkdir()
+                for unit in (manage.SCHEDULE_SERVICE, manage.SCHEDULE_TIMER):
+                    text = (REPO / 'backup-engine/systemd' / unit).read_text()
+                    (units / unit).write_text(damage(text) if unit == name else text)
+                with self.assertRaises(AssertionError):
+                    check.check_units(units)
+        parsed = check.parse_unit((REPO / 'backup-engine/systemd' / manage.SCHEDULE_SERVICE).read_text(), 'service')
+        self.assertEqual(parsed['Service']['ExecStart'], '/usr/local/libexec/woowtech-cockpit-backup schedule-tick')
+        self.assertFalse(manage.SCHEDULE_TIMER.startswith('woowtech-backup-'), 'outside the job units glob')
+
+    def test_root_installs_print_what_to_run_on_the_target(self):
+        if not (REPO / 'backup-engine/systemd' / manage.SCHEDULE_TIMER).is_file():
+            self.skipTest('units not in the repository')
+        result = subprocess.run([sys.executable, str(REPO / 'scripts/manage.py'), '--root', str(self.root), 'plan',
+                                 '--no-preview', '--no-services'], capture_output=True, text=True, timeout=120)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn(f'systemctl enable --now {manage.SCHEDULE_TIMER}', result.stderr)
+        planned = json.loads(result.stdout)
+        self.assertEqual(planned['systemctl'], [])
+        self.assertIn(manage.TIMER_FILE, planned['changed'])
+        self.assertIn(f'{manage.UNIT_DIR}/', planned['directories'])
 
 
 if __name__ == '__main__':

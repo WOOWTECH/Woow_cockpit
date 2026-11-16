@@ -1,0 +1,15 @@
+# Scheduled backups: one tick of the schedule (docs/backup/CONTRACT.md section 8). Fixed argv and no input: the helper
+# decides from its own files whether a backup job starts (as woowtech-backup-<job>.service, like a backup started from
+# the page). The name stays outside the woowtech-backup-* job units. Errors on stderr are logged as warnings.
+[Unit]
+Description=WOOWTECH Cockpit scheduled backups (tick)
+ConditionPathExists=/usr/local/libexec/woowtech-cockpit-backup
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/libexec/woowtech-cockpit-backup schedule-tick
+StandardInput=null
+StandardOutput=null
+SyslogLevel=warning
+LogLevelMax=notice
+TimeoutStartSec=15min
