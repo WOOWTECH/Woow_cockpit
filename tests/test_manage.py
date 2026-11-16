@@ -825,12 +825,18 @@ def load_check_source():
     return module
 
 
-class ScheduleTimerContract(BackupPackageContract):
+class ScheduleTimerContract(HostFixture):
     """排程備份: the timer and its tick service ship with the engine; on the live root the installer stops the timer while
     it writes, reloads systemd when a unit changed and enables the timer; the journal keeps its earlier state for the
     rollback; --no-backup and --root run no systemctl (docs/backup/CONTRACT.md section 8, docs/deployment.md)."""
 
     TIMER = manage.SCHEDULE_TIMER
+    # The backup package's helpers, without running its tests a second time.
+    add_source = BackupPackageContract.add_source
+    add_backup_source = BackupPackageContract.add_backup_source
+    tree = BackupPackageContract.tree
+    state = BackupPackageContract.state
+    journal = BackupPackageContract.journal
 
     def live(self, runner, **options):
         desired, state = manage.desired_files(self.root, **options)
