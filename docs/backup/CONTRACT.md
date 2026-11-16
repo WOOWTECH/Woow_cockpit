@@ -48,6 +48,14 @@ case and the restore's role is re-checked after it (§9, §10); retention ignore
 counts and protects everything while a job record cannot be read (§8); exports and plaintext downloads are audited on
 every path (§8, §10); an installed entry cannot change its owner (§4); config files may not lie in shell or git
 configuration trees (§4).
+Revised 2026-11-17 (branch `feat/backup-schedule`, 2026.11.17.1) for **排程備份 (scheduled backups)**, like Home
+Assistant's automatic backups (owner decisions: off by default; daily at 03:00 when turned on; all apps; no images;
+encrypted like manual backups; keep the newest 7 scheduled backups; manual, pre-restore and uploaded backups are never
+deleted by the schedule; the emergency kit must be saved before turning it on; a missed slot is caught up once; apps that
+are not ready are skipped and the run is 部分完成): the settings and state files and the units (§3), the commands and
+shapes (§7), the timer, the tick decision, the registry and the two retention pools (§8), security rule 17 (§10), the
+page (§11) and the lab scenarios (§13). The archive and index formats are unchanged: a scheduled backup is a `manual`
+backup with the note 排程備份 that the schedule's registry lists, readable by 2026.11.15.2.
 Product docs for customers are written separately in Traditional Chinese (`docs/backup.md`).
 All UI text is **Traditional Chinese (zh-TW)**. Code comments in English.
 
@@ -76,8 +84,10 @@ from a Cockpit page "備份與還原", modelled on Home Assistant backups:
 8. **應用設定**: catalog drafts from an owner's Quadlet files, reviewed, edited and installed or removed from the page;
    **清理備份**: storage per app and a keep-last-N policy for manual backups
    (§4 "Catalog drafts", "Installing and removing entries", §7, §8, §11).
+9. **排程備份** (2026.11.17.1): backups of the chosen apps on chosen weekdays at a chosen time of the device, started by
+   a static systemd timer that ticks every 5 minutes; the newest N scheduled backups per app are kept (§3, §7, §8, §11).
 
-Non-goals this phase: scheduled backups, retention beyond keep-last-N of manual backups, NAS/cloud targets, rootful
+Non-goals this phase: retention beyond keep-last-N (manual policy, schedule rule), NAS/cloud targets, rootful
 (system) Quadlet apps, multi-node apps, OS/bare-metal restore, shipping catalog entries with application packages (an
 entry is generated or written per device and reviewed). Owner `root` is rejected.
 
@@ -116,11 +126,13 @@ root). No `sudo`. Do not write user-supplied credentials anywhere.
 | `/etc/woowtech-cockpit/backup/apps/<id>.json` | root 0644, dir 0755 | **trusted catalog** (created by `catalog-install` when missing) |
 | `/etc/woowtech-cockpit/backup/apps-history/` | root 0755 | previous catalog entries `<id>.<YYYYMMDDTHHMMSSZ>.<sha256[:8]>[-<n>].json` (root 0644), the newest 10 per app id, written by `catalog-install` (the replaced entry) and `catalog-remove` (the removed entry); the loader never reads it |
 | `/etc/woowtech-cockpit/backup/retention.json` | root 0644 | keep-last-N policy of manual backups (§8); missing = keep everything |
+| `/etc/woowtech-cockpit/backup/schedule.json` | root 0644 | 排程備份 settings (§7 `Schedule`, §8): `{"schema": 1, "enabled", "days", "time", "apps", "include_images", "keep_last", "updated", "armed_at"}`, ≤ 16 KiB, exactly these keys; written only by `schedule-set`; missing = off (every day 03:00, all apps, no images, keep 7); not root-owned, group/world-writable, a symlink, too large or invalid → the schedule is off with a `problem`, nothing is deleted |
+| `/usr/local/lib/systemd/system/woowtech-cockpit-backup-schedule.timer`, `….service` | root 0644 | the static timer (`OnCalendar=*:0/5`) and its oneshot tick service (§8), installed by `scripts/manage.py` with the engine; the helper never writes unit files |
 | `/usr/local/share/woowtech-cockpit-backup/catalog/<id>/` | root 0755/0644 | trusted templates (quadlet files, app assets) |
 | `/etc/woowtech-cockpit/backup/keys/` | root 0700 | `device-<KEYID>.key`, `imported-<KEYID>.key` (0600), `keys.json` |
 | `/etc/woowtech-cockpit/backup/settings.json` | root 0644 | `{"schema": 1, "encrypt_by_default": bool, "updated": "…Z"}` (預設加密備份); missing, not root-owned, group/world-writable, a symlink or invalid → ignored: **encrypted** (with a `problem` in `status.settings`) |
-| `/var/lib/woowtech-backup/` | root 0700 | `archives/<id>.tar` (format 2, every new backup) or `archives/<id>.woowbackup` (format 1) + `archives/<id>.json` (index), `uploads/<upload_id>.{part,json,done}` (`.done` names the backup of a finished upload for 24 h), `staging/<job>/`, `pending/<job>/` (an in-place restore's pre-restore copy: `pending.json` + `data/apps/<id>/…`, plaintext like staging, kept until it is packaged into the safety backup and removed only by that packaging or before the restore changed anything; §8, §9), `exports/<export_id>.tar` + `.json` (unencrypted download copies, 0600, deleted after `EXPORT_TTL` = 15 min; §8), `jobs/<job>.json` + `.log` + `.lock` (record lock, empty, 0600) + `.cancel` (pending cancel request), `requests.json` |
-| `/run/woowtech-backup/` | root 0700 (tmpfs) | `engine.lock`, `jobs.lock` (start lock), `index.lock` (index sidecar writes), transient key files `key-<random>` (0600, deleted in `finally`) |
+| `/var/lib/woowtech-backup/` | root 0700 | `archives/<id>.tar` (format 2, every new backup) or `archives/<id>.woowbackup` (format 1) + `archives/<id>.json` (index), `uploads/<upload_id>.{part,json,done}` (`.done` names the backup of a finished upload for 24 h), `staging/<job>/`, `pending/<job>/` (an in-place restore's pre-restore copy: `pending.json` + `data/apps/<id>/…`, plaintext like staging, kept until it is packaged into the safety backup and removed only by that packaging or before the restore changed anything; §8, §9), `exports/<export_id>.tar` + `.json` (unencrypted download copies, 0600, deleted after `EXPORT_TTL` = 15 min; §8), `jobs/<job>.json` + `.log` + `.lock` (record lock, empty, 0600) + `.cancel` (pending cancel request), `requests.json`, `schedule-state.json` (0600, ≤ 4 MiB: the schedule's registry `{backup id: {job, slot, trigger}}`, last handled slot, waiting slot, last run, events ≤ 50; §8) |
+| `/run/woowtech-backup/` | root 0700 (tmpfs) | `engine.lock`, `jobs.lock` (start lock), `index.lock` (index sidecar writes), transient key files `key-<random>` (0600, deleted in `finally`), `schedule-tick` (empty, 0600; its mtime is the last tick), `schedule-tick.lock` (one tick at a time), `schedule.lock` (state file writes), `schedule-state.reported` (an unreadable state file was journaled this boot) |
 
 `woowbackup.paths.Paths` holds these. Tests construct `Paths(base=tmpdir)`; real paths are used
 when `base` is None. The entrypoint never honours environment overrides when running as root.
@@ -752,7 +764,7 @@ Key material only ever travels in stdin JSON field `key`.
 
 | Command | stdin | stdout (ok) |
 | --- | --- | --- |
-| `status` | – | `version, host{hostname,arch,os,podman}, storage{path,free_bytes,total_bytes,backups_bytes,backup_count,apps[AppUsage]}, key{key_id,created,kit_confirmed}\|null, imported_keys[], apps[App], active_job Job\|null, warnings[], settings Settings` (deletes expired unencrypted copies first, §8; `storage.apps` is the per-app usage of the overview, no I/O beyond the index listing and the policy file, `[]` when it cannot be computed) |
+| `status` | – | `version, host{hostname,arch,os,podman}, storage{path,free_bytes,total_bytes,backups_bytes,backup_count,apps[AppUsage]}, key{key_id,created,kit_confirmed}\|null, imported_keys[], apps[App], active_job Job\|null, warnings[], settings Settings, schedule ScheduleSummary\|null` (deletes expired unencrypted copies first, §8; `storage.apps` is the per-app usage of the overview, no I/O beyond the index listing and the policy file, `[]` when it cannot be computed; `schedule` null when it cannot be computed, 2026.11.17.1) |
 | `list` | – | `backups[BackupMeta]` (newest first), `exports[{export_id,backup_id,filename,size,expires}]` (unencrypted copies that can still be downloaded; `expires` epoch seconds) |
 | `inspect` | `backup_id, key?, save_key?` | `backup BackupMeta, manifest ManifestSummary, preflight Preflight` (with `key`, only that key is used; `save_key` imports it only after it decrypted the manifest, else `wrong-key`; an unencrypted backup needs no key and refuses one with `invalid-request`). Fast: a format 2 backup decrypts only each app's manifest |
 | `key-init` | – | `key, created(bool)` |
@@ -773,8 +785,12 @@ Key material only ever travels in stdin JSON field `key`.
 | `catalog-remove` | `id, confirm?, expected_sha256?` | preview: `preview:true, id, file, current, expected_sha256, backups, warnings[str], history[str], diff[str]` (`not-found` when not installed); confirmed: `removed:true, id, sha256, backup, backups` |
 | `retention-plan` | `{}` or `{policy}` | `policy, saved_policy, proposed(bool), policy_problem\|null, usage{apps[AppUsage],unassigned{backups,bytes},total{backups,bytes}}, candidates[BackupBrief], blocked[BackupBrief], protected[BackupBrief], freed_bytes` (read-only, §8) |
 | `retention-apply` | `confirm:true, backup_ids[], policy?` | `policy, policy_problem\|null, deleted[BackupBrief], skipped[{id,reason}], freed_bytes` (§8) |
+| `schedule-get` | – | `schedule Schedule, next_runs[Instant]` (the next 3 slots; `[]` while off or stopped by a problem), `timer Timer, last_run LastRun\|null, waiting Waiting\|null, attention Attention\|null, events[ScheduleEvent]` (≤ 50, newest first), `timezone{name,utc_offset}, gate Gate` (2026.11.17.1, §8) |
+| `schedule-set` | `schedule{enabled,days,time,apps,include_images,keep_last}, confirm?` | `saved(bool), schedule Schedule` (as saved, or as it would be saved), `next_runs[Instant], retention{keep_last, apps[], delete[BackupBrief], blocked[BackupBrief], freed_bytes}, timezone{name,utc_offset}` — without `confirm` (or `false`) a preview that writes nothing: `retention.delete` lists the scheduled backups the **next successful run** of `retention.apps` would delete (its new backup counted as the newest), `blocked` those that are protected; with `confirm: true` the settings are saved (root 0644) and journaled (`schedule-set …`, §8). Saving never deletes anything |
+| `schedule-run-now` | `request_id` | `job_id, deduplicated` — one scheduled run now with the saved settings, enabled or not (like Home Assistant's "create automatic backup"); not kit-gated (like `backup-start`); it counts as a scheduled backup and the schedule's keep-last rule runs after it |
+| `schedule-tick` (internal) | argv only | `decision` (`idle`, `settle`, `missed`, `started`, `busy`, `no-key`, `no-apps`, `start-failed`, `settings-problem`, `state-problem`, `tick-running`), `slot?`, `trigger?`, `job_id?`, `deduplicated?` (run by `woowtech-cockpit-backup-schedule.service`; never reads stdin; any argument is `invalid-request`) |
 | `job-status` | `job_id` | `job Job, log[str]` (≤ 200 lines, secrets never logged) |
-| `jobs` | – | `jobs[Job]` (≤ 50, newest first, no log) |
+| `jobs` | – | `jobs[Job]` (≤ 50, newest first, no log), `schedule_events[ScheduleEvent]` (≤ 50, newest first, `[]` when the schedule's state cannot be read; 2026.11.17.1) |
 | `job-cancel` | `job_id` | `state` |
 | `delete` | `backup_id` | – (`busy` with `details.job_id` while a queued/running job uses it as source or as its `safety_backup_id`, or for any `safety` backup while a restore runs; checked under the start lock; journaled `backup-delete backup=… type=… encrypted=true\|false loginuid=…`, review L6) |
 | `upload-begin` | `filename, size` | `upload_id, path, max_size` |
@@ -786,7 +802,7 @@ Key material only ever travels in stdin JSON field `key`.
 Shapes:
 
 * `App`: `id, name, description, owner, adapter, deployed(bool), state("running"|"stopped"|"partial"|"not-deployed"|"error"), units[{name,active}], last_backup{id,created}|null, problems[str]` — `error` also when every unit is active but a quick health request fails, and while units are masked by an unfinished restore (both explained in `problems`).
-* `BackupMeta`: `id, type("manual"|"safety"|"uploaded"), created|null, note, apps[{id,name,size?}], size, sha256, key_id|null, key_available(bool), include_images(bool), filename, source{hostname}|null, verified{at,ok,deep?}|null, inspected(bool), uploaded_at?, format(1|2), encrypted(bool), unauthenticated(bool)` — `key_id` null and `key_available` true when not encrypted; `apps[].size` the bytes of the app's archive in a format 2 file (backups made here; uploads after `inspect`); `verified.deep` true when the verify job checked the content like a restore; `unauthenticated` = not encrypted and `type` `uploaded` (also adopted files). Sidecars written before format 2 have no `format`/`encrypted` (format 1, encrypted).
+* `BackupMeta`: `id, type("manual"|"safety"|"uploaded"), created|null, note, apps[{id,name,size?}], size, sha256, key_id|null, key_available(bool), include_images(bool), filename, source{hostname}|null, verified{at,ok,deep?}|null, inspected(bool), uploaded_at?, format(1|2), encrypted(bool), unauthenticated(bool), scheduled(bool)` — `key_id` null and `key_available` true when not encrypted; `apps[].size` the bytes of the app's archive in a format 2 file (backups made here; uploads after `inspect`); `verified.deep` true when the verify job checked the content like a restore; `unauthenticated` = not encrypted and `type` `uploaded` (also adopted files); `scheduled` (2026.11.17.1) = `type` `manual` and listed in the schedule's registry (排程備份; derived, never stored in the index; false while the registry cannot be read). Sidecars written before format 2 have no `format`/`encrypted` (format 1, encrypted).
 * `Settings`: `encrypt_by_default(bool), problem(zh-TW)|null, plaintext_warning(zh-TW)` — the text the page shows for every acknowledgement of an unencrypted backup or copy: database passwords, API keys and tokens are stored and downloaded in plain text.
 * `ManifestSummary`: `backup_id, created, type, note, tool, source, consistency, total_size, format(1|2), encryption("age-x25519"|"none"), apps[{id,name,adapter,owner{name,uid},images[{ref,included}],postgres[{id,database,major,scope("database"|"instance"),databases?[{name,owner}],roles_count?}],volumes[{name}],data_dirs[{path,size,label}],secrets_count,config_files_count,settings_included(bool),verify_snapshot,verify_digests[{id,type,target,summary}],archive_size?}]` (`databases`/`roles_count` only for scope `instance`; `archive_size` the app's member in a format 2 file)
 * `Preflight`: `ok(bool), checks[Check], apps[{id,name,restorable(bool),mode("inplace"|"fresh"),checks[Check],settings?{state("missing"|"unloadable"|"different"|"same"),entry}}]` (`settings`: only when the backup carries the app's settings, §5: `missing` where this device has none for the app and `unloadable` where its settings file could not be loaded (the app is not restorable until settings are installed; the check says what else is needed, e.g. the owner account, and never promises the restore), `different` where its settings differ, `entry` the carried settings for `catalog-install`; `settings_included` in `ManifestSummary` says the same for the backup's contents)
@@ -807,12 +823,54 @@ Shapes:
   db-tag, db-guessed, db-depends-on-writer, db-other, cache, installed-mode, no-digests, dependency-cycle`.
 * `Change`: `path` (`volumes[name=x].label`, `units`, `secrets[name=y]`, `a[]` for scalar list items), `op("add"|"remove"|
   "change"|"order")`, `old?`, `new?`.
-* `AppUsage`: `id, name, in_catalog, backups, types{manual,safety,uploaded}, bytes, estimated, shared, newest|null,
-  oldest|null, keep_last|null` (a backup of several apps is split by the per-app archive sizes the index records, else
-  evenly: `estimated`; catalog apps without backups are included).
-* `BackupBrief`: `id, type, created, size, note, apps[{id,name}], reason?`.
+* `AppUsage`: `id, name, in_catalog, backups, types{manual,safety,uploaded,scheduled}, bytes, estimated, shared,
+  newest|null, oldest|null, keep_last|null` (a backup of several apps is split by the per-app archive sizes the index
+  records, else evenly: `estimated`; catalog apps without backups are included; `types.manual` counts the manual backups
+  that are not scheduled, `types.scheduled` the scheduled ones; `keep_last` is the manual policy's).
+* `BackupBrief`: `id, type, created, size, note, apps[{id,name}], scheduled?(bool), reason?` (`scheduled` in the
+  retention and schedule commands' lists).
+* `Schedule` (2026.11.17.1): `enabled(bool), days[str]` (unique of `mon tue wed thu fri sat sun`, 1–7, week order; all 7
+  = every day), `time` (`HH:MM`, 00:00–23:55 in 5-minute steps, device time), `apps("all"|[id])` (`"all"`: every app of the
+  catalog at run time, later ones included; a list: 1–100 ids, each in the catalog when saved), `include_images(bool),
+  keep_last(1..1000|null)` (null keeps every scheduled backup), `updated|null, armed_at|null` (when it was turned on or
+  its time or days changed: earlier slots never run), `saved(bool)` (a file exists), `problem(zh-TW)|null`.
+* `Instant`: `at` (UTC `…Z`), `local` (`YYYY-MM-DDTHH:MM` in the device's zone), `utc_offset` (`+08:00`).
+* `Timer`: `enabled(bool|null), active(bool|null)` (of `woowtech-cockpit-backup-schedule.timer`, `systemctl show`; null
+  when systemd cannot be asked), `last_tick_age(int seconds|null)` (age of `/run/woowtech-backup/schedule-tick`; null
+  before the first tick of this boot).
+* `LastRun`: `slot|null` (null: `schedule-run-now`), `local|null, job_id, trigger("on-time"|"late"|"catch-up"|"run-now"),
+  state` (the job's state, null when its record is gone), `result("queued"|"running"|"succeeded"|"partial"|"failed"|
+  "interrupted"|"cancelled"|"unknown")` (live from the job record), `backup_id|null, started, finished|null,
+  skipped_apps[{id,name,reason}], error{code,message}|null`.
+* `Waiting`: `slot, local, since, job_id|null` (a due slot waiting for another job, `job_id` the job it waits for).
+* `ScheduleEvent`: `at, kind, slot|null, first|null, count, job_id|null, message(zh-TW), not_run(bool)`; kinds: `waiting`
+  (a slot waits for another job), `missed` (no tick saw the slot in time and it was not caught up; `first`/`count` cover
+  several), `skipped` (the slot waited for another job until the next slot came), `no-key` (預設加密備份 on, no device
+  key), `no-apps` (nothing to back up), `settings-problem` (slot null; once per problem), `failed` (the run failed or was
+  interrupted, with `job_id`; without `job_id` the job could not be launched), `partial` (with `job_id`), `cancelled`.
+  `not_run` (shown as 未執行): `missed`, `skipped`, `no-key`, `no-apps` and `failed` without a job.
+* `Gate`: `encrypt(bool)` (預設加密備份 now), `device_key(bool), kit_confirmed(bool), blocked(null|"no-device-key"|
+  "kit-unconfirmed")` — what turning the schedule on needs.
+* `Attention`: `code, message(zh-TW)`, plus `slot?`, `job_id?`, `reason?` (`skipped`: `busy`|`no-key`|`no-apps`;
+  `missed`: `missed`). One item, the first that applies: `settings-problem` (the settings or state file is bad: the
+  problem text, which says the schedule is paused) → `timer-inactive` (enabled, and systemd says the timer is not active
+  or no tick for 15 minutes once the device has been up that long: 「排程檢查沒有在執行，排程備份不會自動開始。請重新執行
+  備份元件的安裝程式來啟用它。」) → `overdue` (enabled, a slot ≥ 30 minutes old is neither handled nor waiting: 「排程備份已逾期：
+  <local> 的排程備份還沒有開始。」) → the newest outcome: a slot that did not run (`missed`: 「<local> 的排程備份沒有執行：
+  設備當時沒有開機，或排程檢查沒有在執行。」, several: 「<first> 到 <last> 共 N 次的排程備份沒有執行：…」; `skipped` busy:
+  「<local> 的排程備份沒有執行：當時有其他作業一直在進行。」, no-key: 「…沒有執行：預設加密備份已開啟，但這台設備還沒有加密金鑰。」,
+  no-apps: 「…沒有執行：沒有可以備份的應用。」; a job that could not be launched: `failed`, 「上次排程備份失敗：<local> 的排程備份
+  沒有開始：…」) or the last run (`failed` for failed/interrupted: 「上次排程備份失敗：<job error message>」; `partial`:
+  「部分完成：上次排程備份沒有包含「A」、「B」。請查看作業結果了解原因。」; a success or a cancelled run: none). Only
+  `settings-problem` is reported while the schedule is off.
+* `ScheduleSummary` (`status.schedule`): `enabled` (false also while a problem stops it), `saved, problem|null, days, time,
+  apps, include_images, keep_last, next_run Instant|null, last_run LastRun|null, waiting Waiting|null, attention
+  Attention|null, timezone{name,utc_offset}, timer Timer`.
 * `Job`: `id, type("backup"|"restore"|"verify"|"export"), state("queued"|"running"|"succeeded"|"failed"|"rolled-back"|"interrupted"|"cancelled"), phase, phases[{id,label,state("pending"|"active"|"done"|"failed"|"skipped")}], progress{percent,message}, created, started|null, finished|null, params, result|null, error{code,message}|null, cancellable(bool)`
-* Job `result`: backup → `backup_id, size, apps[], downtime_seconds, unavailable_seconds|null, timing[Timing], encrypted(bool), retention_deleted[str]` (`retention_deleted`: older manual backups the saved keep-last policy deleted after this manual backup, §8); export → `export_id, backup_id, filename, size, expires`; restore → `apps[], safety_backup_id|null, health[Check], verification[{app,match,before,after,checks?[DigestCheck]}], rolled_back(bool), changed(bool), fresh_apps[str], safety_skipped(bool), safety_failed(bool), safety_pending(bool), safety_in_downtime(bool), safety_pending_failed{path,message}?, warnings[str], timing[Timing]` (`safety_pending`: the pre-restore copy is kept in `pending/<job>/` and not packaged (yet); `safety_in_downtime`: it was packaged while the apps were stopped, the free space being too short for packaging next to the running apps (§9); `safety_pending_failed`: the recovery could not package it either, it stays at `path` for manual work); verify → `ok, entries, bytes, deep(true), format, encrypted, apps[{id,name,checked{volumes,dirs,images,digests,globals,dumps,secrets},header_only[str]}], notes[str]` (`checked`: entries that passed a restore's content check; `header_only` (2026-11-14, review L8): the kinds checked only by their format header -- `dumps`: a dump is recognized by its pg_dump header, its body was read in full by `pg_restore` when this device made the backup and is read again by a restore, so an uploaded backup's dump bodies are first read at restore; `notes`: what a restore would drop, e.g. setuid bits). A local read error while checking (EIO, EMFILE, ENOSPC on the scratch copy) fails the job with `internal-error` and records no `verified`; only defects of the content record `verified.ok: false` (review F10).
+* Job `params` of a scheduled backup (2026.11.17.1): a manual backup's `apps[], include_images, note` (`排程備份`),
+  `encrypt` (預設加密備份 when it started), plus `schedule{slot|null, trigger, keep_last|null}`; 2026.11.15.2 reads such
+  records (it checks no params) and lists them as backup jobs.
+* Job `result`: backup → `backup_id, size, apps[], downtime_seconds, unavailable_seconds|null, timing[Timing], encrypted(bool), retention_deleted[str]` (`retention_deleted`: older manual backups the saved keep-last policy deleted after this manual backup, §8); a scheduled backup adds `scheduled(true), slot|null, trigger, partial(bool), skipped_apps[{id,name,reason}]` (apps left out: not in the catalog, not deployed or reporting problems) and its `retention_deleted` are older scheduled backups the schedule's keep-last deleted (a partial run is `succeeded` with `partial: true`; no new job state); export → `export_id, backup_id, filename, size, expires`; restore → `apps[], safety_backup_id|null, health[Check], verification[{app,match,before,after,checks?[DigestCheck]}], rolled_back(bool), changed(bool), fresh_apps[str], safety_skipped(bool), safety_failed(bool), safety_pending(bool), safety_in_downtime(bool), safety_pending_failed{path,message}?, warnings[str], timing[Timing]` (`safety_pending`: the pre-restore copy is kept in `pending/<job>/` and not packaged (yet); `safety_in_downtime`: it was packaged while the apps were stopped, the free space being too short for packaging next to the running apps (§9); `safety_pending_failed`: the recovery could not package it either, it stays at `path` for manual work); verify → `ok, entries, bytes, deep(true), format, encrypted, apps[{id,name,checked{volumes,dirs,images,digests,globals,dumps,secrets},header_only[str]}], notes[str]` (`checked`: entries that passed a restore's content check; `header_only` (2026-11-14, review L8): the kinds checked only by their format header -- `dumps`: a dump is recognized by its pg_dump header, its body was read in full by `pg_restore` when this device made the backup and is read again by a restore, so an uploaded backup's dump bodies are first read at restore; `notes`: what a restore would drop, e.g. setuid bits). A local read error while checking (EIO, EMFILE, ENOSPC on the scratch copy) fails the job with `internal-error` and records no `verified`; only defects of the content record `verified.ok: false` (review F10).
   `Timing`: `{app, writer_pause_seconds|null, unavailable_seconds|null}` (one decimal): writers (restore: units) stopped →
   every unit running again, and first stop → every health check of the app passed; null when not measured (nothing was
   stopped, a health check failed). The first stop of an in-place restore is the pre-restore copy's writer stop (§9); its
@@ -892,6 +950,18 @@ validation `retention.validate_policy`); `backup_ids` an array of at most 500 un
 `permission-denied`, `internal-error`, `job-failed` (the owner-side scan answer). A confirmed `catalog-install`/
 `catalog-remove` and both retention commands run the recovery first (dead jobs are marked interrupted and their
 leftovers settled), like `delete`.
+
+Requests and errors of the schedule commands (2026.11.17.1, strict like every command): `schedule` a JSON object with
+exactly `enabled` (bool), `days`, `time`, `apps`, `include_images` (bool), `keep_last` (rules in `Schedule`; `updated`
+and `armed_at` are the engine's and refused); `confirm` boolean; `request_id` as for `backup-start`. `schedule-set`:
+`invalid-request` with `details.field` (`schedule` or `schedule.<field>`), or with `details.reason: "kit-unconfirmed"`
+and `field: "schedule.enabled"` (「開啟排程備份前，請先保存緊急金鑰。」) when it would be on while 預設加密備份 is on and the
+emergency kit is not confirmed; `no-device-key` when it would be on while 預設加密備份 is on and the device has no key;
+`app-not-in-catalog` / `owner-missing` (`details.app`) for a listed app the catalog does not load; `permission-denied` /
+`limit-exceeded` when the existing `schedule.json` is not root's, a symlink or too large (saving); turning it off is never
+gated. `schedule-run-now`: `invalid-request` with `details.reason` `not-saved` (no settings saved yet),
+`settings-problem` (the message is the file's problem), `state-problem` or `no-apps`; `no-device-key` (預設加密備份 on,
+no key); `busy` (`details.job_id`). `schedule-get` and `schedule-tick` take no input.
 
 ## 8. Job execution
 
@@ -1003,7 +1073,7 @@ leftovers settled), like `delete`.
   --unit=woowtech-backup-export-clean-<export_id> … export-cleanup`) **before** it publishes the copy, so it also goes
   when no page asks and when the job dies right after publishing (review L1). A transient timer does not survive a
   reboot: a copy that expired meanwhile is deleted by the next helper command (opening the page, any job); no persistent
-  timer is installed (the installer manages no system units). A download that already started keeps reading its open
+  timer is installed for it (the only system units the installer manages are the schedule's timer and service below). A download that already started keeps reading its open
   file. Space needed: the largest app's plaintext + the backup's plaintext (+1 %) + the larger reserve of a job that runs
   while the apps keep running: 5 % of the filesystem, at least 2 GiB and at most 10 GiB (never less than 512 MiB; review
   M4; the deep verify's scratch copies keep the same reserve). The job may be cancelled at any time (nothing on the
@@ -1047,6 +1117,83 @@ leftovers settled), like `delete`.
   * Usage per app (`retention.app_usage`): bytes of the backups of each app; a backup of several apps is split by the per-app
     sizes when the index records them (`apps[].size`, e.g. from the v2 `backup.json`), else evenly (`estimated: true`);
     catalog apps without backups are included; uploaded backups not inspected yet (`apps: []`) are `unassigned`.
+
+* **Scheduled backups (排程備份, 2026.11.17.1; `schedule.py`, the timer, the backup job's scheduled mode):**
+  * Trigger: the static `woowtech-cockpit-backup-schedule.timer` (`OnCalendar=*:0/5`, `AccuracySec=15s`, no `Persistent=`,
+    `WantedBy=timers.target`) starts `woowtech-cockpit-backup-schedule.service` (`Type=oneshot`,
+    `ExecStart=/usr/local/libexec/woowtech-cockpit-backup schedule-tick`, `ConditionPathExists=` that helper,
+    `StandardInput=null`, `StandardOutput=null`, `SyslogLevel=warning` (a traceback on stderr is a warning),
+    `LogLevelMax=notice`, `TimeoutStartSec=15min`). Both live in `/usr/local/lib/systemd/system/`, outside the
+    `woowtech-backup-*` job units; the timer only ticks: no unit config is generated, the helper never writes units or runs
+    `daemon-reload`. Never run `systemd-analyze verify` against a live system or a lab device's runtime directories (a
+    `--user` verify once replaced a running manager's private socket): the unit files are checked by parsing
+    (`scripts/check_source.py`, unit tests) and with `systemctl show` in the lab.
+  * Time: the engine unsets `TZ` and calls `tzset()`; slots are in the device's zone (`/etc/localtime`, read per tick, so a
+    change applies at the next tick). A slot is a local date and `time` on a scheduled weekday as a UTC instant; a time a
+    DST change skips is the moment the clock jumps past it (02:30 on a 02:00→03:00 day runs at 03:00), a repeated time
+    runs at its first occurrence. Slots before `armed_at` never run (`armed_at` above the clock — it went back — counts as
+    now). A slot is handled once: run, recorded as missed/skipped/no-key/no-apps, or a launch failure.
+  * Each tick: touches `/run/woowtech-backup/schedule-tick`; holds `schedule-tick.lock` (a second tick returns
+    `tick-running`); when the last scheduled job is still recorded queued/running, runs the recovery first (it never judges
+    a job that runs; a dead one becomes `interrupted`); records the last run's outcome once its job ended
+    (`schedule-result`, events `failed`/`partial`/`cancelled`); drops registry entries whose backup is gone (neither its
+    index nor its archive exists) and whose job is not running; resets the handled slot when it lies more than a day ahead
+    (the clock went back: everything up to now counts as handled, `schedule-clock` once); then decides (`schedule.decide`,
+    pure: settings, state, clock, zone, uptime):
+    * off → nothing (a waiting slot is dropped); a bad settings file → nothing, one `settings-problem` event per problem;
+    * the latest due slot that is not handled: less than 15 minutes late → start (`on-time`); a slot that waits for
+      another job → start as soon as no job is queued/running (`late`, any delay), and recorded `skipped` (busy) when the
+      next slot arrives first; otherwise no tick saw it in time: when the next slot is less than 3 hours away it is
+      recorded `missed`, else it is caught up once (`catch-up`); several missed slots → one run of the latest, the others
+      one collapsed `missed` event (`first`, `count`);
+    * no run starts before 10 minutes of uptime (`settle`: nothing recorded; the slot is judged again by the next tick).
+  * Starting: apps = the catalog's apps for `"all"`, else the saved list; none of them in the catalog → `no-apps` event;
+    預設加密備份 on and no device key → `no-key` event (no job, no retry). Otherwise `start_job('backup', params,
+    "schedule-<slot as YYYYMMDDTHHMMSSZ>")` — the request id makes two ticks of one slot start one job (dedup 24 h, and the
+    handled slot after that); `busy` → the slot waits (`pending`, one `waiting` event and `schedule-wait`); another error
+    → a `failed` event without job (no retry). The state is written outside the start (the state lock is a leaf lock: it is
+    never held while another lock is taken).
+  * The job (`flows.run_scheduled_backup`): resolves the apps (missing ones are skipped with the catalog's problem or
+    「此設備沒有設定應用 <id>。」), checks the device key when encrypting, chooses the backup id and writes its registry entry
+    `{job, slot, trigger}` **before any app is probed or paused** (if that write fails the job fails with 「無法寫入排程備份
+    紀錄，沒有暫停任何應用。」), checks the space before any pause (as every backup), skips apps that are not deployed or
+    report problems (`partial`; none left → `job-failed`), packages with the note 排程備份 and type `manual`, then applies
+    the schedule's keep-last rule. Encryption follows 預設加密備份 when the run started. Cancelling and interruption work as
+    for a manual backup; an interrupted run is shown as 已中斷 and is not retried (the next slot runs as usual).
+  * Registry and pools: a backup is scheduled only when its index type is `manual` and its id is in the registry. The
+    manual keep-last policy (`retention.json`) never counts or deletes a scheduled backup; the schedule's rule keeps the
+    newest `keep_last` scheduled backups per app (`retention.plan` on the scheduled pool: a backup goes only when it is
+    outside the newest N of every app it holds, a backup that failed verification does not count, every protection of the
+    manual policy applies, the new backup is excluded) and runs only after a successful or partial scheduled run, for the
+    apps it holds; `keep_last` null keeps all. Journal: `retention-delete backup=<id> type=manual size=<n> apps=<a,b>
+    reason=schedule`. Safety and uploaded backups are untouched; an explicit `retention-apply`/`delete` may delete a
+    scheduled backup. While `schedule-state.json` cannot be read the schedule stops (`state-problem`, journaled once a
+    boot), every manual backup is protected (`retention-plan` lists them as blocked, both rules delete nothing) and the file
+    is never overwritten.
+  * Compatibility: the archive and index formats are unchanged (frozen lists in `tests/backup/test_schedule.py`), so
+    2026.11.15.2 lists, inspects and restores a scheduled backup as a manual one (note 排程備份). Downloaded and uploaded
+    elsewhere it is `uploaded` and never deleted automatically; uploading the same file again on the same device returns
+    the existing record. Downgrading on the same host: scheduled backups appear as 手動 and an older manual policy counts
+    them; the install transaction's rollback removes the timer (docs/operations.md).
+  * Journal (ident `woowtech-cockpit-backup`, authpriv; notice unless marked *warning*), once per slot or change:
+    `schedule-set enabled=<bool> days=<mon,…> time=<HH:MM> apps=<all|a,b> include_images=<bool> keep_last=<n|null>
+    previous_enabled=<bool> loginuid=<uid|->`; `schedule-run slot=<ISO|-> job=<id> trigger=<t> apps=<a,b>
+    encrypted=<bool>`; `schedule-wait slot=<ISO> busy_job=<id|->`; `schedule-skip slot=<ISO> reason=busy count=<n>`;
+    *warning* `schedule-skip slot=<ISO> reason=no-key|no-apps`; *warning* `schedule-skip reason=settings-problem`;
+    *warning* `schedule-skip reason=state-unreadable`; `schedule-missed slot=<ISO> first=<ISO> count=<n>`;
+    `schedule-result slot=<ISO|-> job=<id> trigger=<t> result=succeeded backup=<id>`; *warning* `… result=partial
+    backup=<id> skipped=<a,b>`; *warning* `… result=failed|interrupted|unknown code=<code|->`; `… result=cancelled`;
+    *warning* `schedule-result slot=<ISO> job=- trigger=<t> result=failed code=<code>` (not launched); *warning*
+    `schedule-clock reset handled=<ISO> now=<ISO>`.
+  * Installer (`scripts/manage.py`, live root `/` only, fixed argv `/usr/bin/systemctl …` with the timer's name): it
+    records the timer's state (`systemctl show`: load, unit file and active state) in the transaction journal
+    (`systemd{timer, before, stopped}`), stops the timer before it writes backup files when it is active, runs
+    `daemon-reload` when a unit file changed and `enable --now` the timer when it is not enabled and active (also on an
+    install with nothing to change). A failed install restores the files and the earlier timer state. Rollback stops the
+    timer, disables it while its unit file still exists when the units are rolled back, restores or removes the files,
+    runs `daemon-reload` and enables/starts it again when it was enabled/active before. `verify` reports `timer` (or
+    `not-checked`), never as drift. `--no-backup` leaves the units and the timer alone; `--root` writes the files below that
+    root, prints what to run there and runs no systemctl.
 
 ## 9. Backup and restore algorithms (adapter `quadlet-postgres`)
 
@@ -1357,6 +1504,16 @@ stops the rollback of the other apps.
    removing entries"); every change keeps the previous entry and is audited in the journal. Retention deletes only
    unprotected backups, only after an explicit confirmation (`retention-apply`) or a policy the administrator saved,
    and audits every deletion.
+17. 排程備份: the timer's service runs the helper with the fixed argv `schedule-tick`, no input and `python3 -I`; the
+   tick decides only from root-owned files (`schedule.json` trusted like `retention.json`: root-owned, not group/world
+   writable, no symlink, ≤ 16 KiB, strictly validated, unknown keys rejected; `schedule-state.json` root 0600 in the 0700
+   data directory) and starts jobs only through `start_job` (dedup, busy, recovery), like the page. A bad settings file
+   only stops the schedule; a bad state file stops it and every automatic deletion and is never overwritten. The
+   schedule's rule deletes only scheduled backups beyond `keep_last`, with every protection of the manual policy, after a
+   successful or partial scheduled run. Turning the schedule on while 預設加密備份 is on needs the device key and a
+   confirmed emergency kit. Every settings change, run, wait, skip, missed slot, result and deletion is journaled. The
+   installer names only `woowtech-cockpit-backup-schedule.timer` in systemctl argv, only on the live root, never runs
+   `systemd-analyze verify`, and the unit names stay outside `woowtech-backup-*`.
 
 ## 11. UI (`backup/`) requirements
 
@@ -1440,6 +1597,26 @@ stops the rollback of the other apps.
   「我了解移除後無法再備份或還原這個應用…」.
 * An engine older than the page answers the new commands with `invalid-request` 「不支援的指令。」: 應用設定 and 清理備份
   then say that this device does not support them yet instead of failing.
+* **排程備份 (`#/schedule`, 2026.11.17.1):** a route titled 「排程備份」 under 總覽 (no seventh tab), reached from an overview
+  card (from `status.schedule`: on/off, next run, last run), a button in 備份列表 and the banners. It loads
+  `schedule-get`; an engine without it (`invalid-request` 「不支援的指令。」, or `status.schedule` missing) shows
+  「這台設備的備份元件不支援排程」. Controls: switch 「自動建立排程備份」; 「每天」／「每週指定的日子」 + 週一–週日 (`days`, week
+  order); the time in 5-minute steps (`time`) with the hint 「以這台設備的時間（<timezone.name>，UTC±hh:mm）為準，會在這個時間後 5
+  分鐘內開始。備份時每個應用會暫停寫入約 10–90 秒。」 (and a hint when the browser's zone differs from `timezone`);
+  「全部應用（之後新增的也會包含）」 (`apps: "all"`)／「只備份選擇的應用」 (a list); 「包含容器映像」 (`include_images`, off, with a
+  size warning); a read-only line on the encryption (`gate.encrypt`: 預設加密備份); 「保留最新幾份排程備份」 (`keep_last`,
+  default 7, or keep all) with 「手動備份、還原前自動備份與上傳的備份不會被刪除。」. 「儲存排程…」 first previews
+  (`schedule-set {schedule}`) and shows a dialog with the next runs (`next_runs[].local`) and what the next successful run
+  would delete (`retention.delete`, `blocked`), then saves with `schedule-set {schedule, confirm: true}`; 「立即執行一次」
+  sends `schedule-run-now {request_id}` (a saved schedule; enabled or not) and opens the job view. Turning it on while
+  `gate.blocked` is `kit-unconfirmed` (or the save answers `invalid-request` with `details.reason: "kit-unconfirmed"`)
+  shows the kit step 「開啟排程備份前，請先保存緊急金鑰。」 with a link to 加密金鑰, which offers 「回到排程備份」; `no-device-key`
+  leads to creating the key. Banners from `status.schedule.attention` (`message` as sent): 「上次排程備份失敗：…」,
+  「…的排程備份沒有執行：…」, 「排程備份已逾期…」, 「排程檢查沒有在執行…」, 「部分完成：…」, and the settings problem; `waiting`
+  is shown as information, not a problem. Backup list: a chip 「排程」 and a filter from `BackupMeta.scheduled`, the title
+  「排程備份 · <date>」; 清理備份 counts per type with `types.scheduled`; 活動紀錄 rows for `jobs.schedule_events` with
+  `not_run` (「未執行」) next to the jobs (a scheduled job is recognized by `params.schedule`). Plain zh-TW, no jargon;
+  widths 1440–320, dark/light, keyboard, as every view.
 * Download: `download-info` then navigate a hidden iframe to
   `<channel prefix>?<base64(JSON{payload:"fsread1", binary:"raw", path, superuser:"require",
   max_read_size:-1, external:{"content-disposition": attachment; filename*=UTF-8''…,
@@ -1517,6 +1694,22 @@ with its journal lines. F13 a backup whose nested volume tar a restore would ref
 fails the verify job (deep). F14 restoring one app of a two-app backup whose other application archive is damaged
 succeeds and reads only that app's archive. F15 a backup made by the previous engine (format 1) still verifies and
 restores.
+
+**Scheduled backups (2026.11.17.1; unit level in `tests/backup/test_schedule.py`, additions to `test_cli`, `test_flows`,
+`test_retention`, `tests/test_manage.py`; lab in `tests/e2e/lab/schedule_e2e.py`, run by the main session).** S7 install
+shows the timer enabled and active (`verify` → `timer`), rolling back the install transaction disables and removes it,
+reinstalling enables it again (extends H7). S8 a real timer run at the next 5-minute boundary after saving a slot
+(`time` = that boundary) starts one job with `trigger: on-time`. S9 fast ticks: `schedule.json` written as root (0644)
+with `time` = the latest 5-minute boundary up to now and `armed_at` before it, then `systemctl start
+woowtech-cockpit-backup-schedule.service` twice → one job (`schedule-run` once). S10 busy: a verify job first → the slot
+waits (`waiting`, `schedule-wait`), starts `late` when the verify ended. S11 retention: three scheduled runs with
+`keep_last: 2` plus manual backups under a manual keep-last policy → the oldest scheduled one goes (`reason=schedule`),
+manual backups follow only their own policy. S12 a stopped demo app → `partial` with its id in `skipped_apps`. S13 a time
+zone relink (`/etc/localtime`) moves the next run at the next tick. S14 compatibility: a scheduled backup uploaded to
+dev-b running the c393dfb engine (2026.11.15.2) is listed, inspected and restored. S15 (optional) reboot across a slot:
+caught up once after 10 minutes of uptime, or `missed` when the next slot is near. S16 journal noise: one line per slot
+decision, nothing per quiet tick; whether systemd 255 also hides PID 1's Starting/Finished lines with `LogLevelMax=notice`
+is recorded.
 
 **Catalog drafts, catalog administration and retention (2026-11-13, module level, catalog + retention engineer).**
 * Unit tests: `python3 -m unittest tests.backup.test_suggest tests.backup.test_catalog_admin tests.backup.test_retention`
