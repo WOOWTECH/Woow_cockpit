@@ -141,6 +141,8 @@ class BrandInstallation(unittest.TestCase):
         backup = brand_profile.render_file('backup/backup.css', (REPO / 'backup/backup.css').read_bytes(), profile)
         self.assertIn(b'#c63b4b', backup)
         self.assertIn(b'#ff8a96', backup)
+        branding = brand_profile.render_file('branding/branding.css', (REPO / 'branding/branding.css').read_bytes(), profile)
+        self.assertIn(b'border-radius: 8px !important', branding)
         for name in ('native/podman/managed-owners.js', 'pi-web-integration/gateway.mjs', 'services/service-manager.py'):
             data = (REPO / name).read_bytes()
             self.assertEqual(brand_profile.render_file(name, data, profile), data)

@@ -246,7 +246,7 @@ html .login-pf #login-button:focus {{ border-color: var(--brand-primary); }}
 html:not(.pf-v6-theme-dark) .login-pf #login-button,
 html:not(.pf-v6-theme-dark) .pf-v6-c-button.pf-m-primary:not(.pf-m-danger):not(:disabled):not(.pf-m-disabled):not([aria-disabled="true"]),
 html.pf-v6-theme-dark .login-pf #login-button:not(:disabled) {{ color: var(--brand-on-primary); background: var(--brand-primary); }}
-html .login-pf .login-button, html :is(.pf-v6-c-button.pf-m-primary,.pf-v6-c-button.pf-m-secondary) {{ border-radius: {control}px; }}
+html .login-pf .login-button, html :is(.pf-v6-c-button.pf-m-primary,.pf-v6-c-button.pf-m-secondary) {{ border-radius: {control}px !important; }}
 html:not(.pf-v6-theme-dark) .login-pf .container, html:not(.pf-v6-theme-dark) :is(.pf-v6-c-card,.ct-card) {{ background: var(--brand-surface); }}
 '''
     else:
