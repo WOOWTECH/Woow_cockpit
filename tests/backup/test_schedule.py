@@ -148,20 +148,23 @@ class SettingsTests(unittest.TestCase):
             self.assertTrue(saved)
             return text
 
+        # The page shows these as they are: plain zh-TW for the device's owner, no file names (those are in the
+        # journal and the CONTRACT); each says that the schedule is paused and what to do.
+        unsafe = '排程備份的設定檔權限不安全（必須只有系統管理員能修改），排程備份已暫停。請通知工程人員檢查。'
         os.chmod(self.file, 0o666)
-        self.assertIn('不可讓其他帳號寫入', problem())
+        self.assertEqual(problem(), unsafe)
         os.chmod(self.file, 0o644)
         for text in ('not json', json.dumps(dict(record, extra=1)), json.dumps(dict(record, time='03:01')),
                      json.dumps(dict(record, schema=2)), json.dumps(dict(record, armed_at=None)),
                      '{"schema": 1, "schema": 1}'):
             with self.subTest(text=text[:60]):
                 self.file.write_text(text)
-                self.assertIn('格式不正確', problem())
+                self.assertEqual(problem(), '排程備份的設定檔內容不正確，排程備份已暫停。請重新儲存排程設定。')
         self.file.write_text(' ' * (schedule.MAX_BYTES + 1))
-        self.assertIn('過大', problem())
+        self.assertEqual(problem(), '排程備份的設定檔過大，排程備份已暫停。請通知工程人員檢查。')
         self.file.unlink()
         os.symlink(Path(self.tmp.name) / 'elsewhere.json', self.file)
-        self.assertIn('符號連結', problem())
+        self.assertEqual(problem(), '排程備份的設定檔不是一般檔案，排程備份已暫停。請通知工程人員檢查。')
         self.file.unlink()
         self.file.write_text(good)
         os.chmod(self.file, 0o644)
@@ -169,9 +172,11 @@ class SettingsTests(unittest.TestCase):
         os.chmod(self.paths.config, 0o777)
         settings_, text, _saved = schedule.load(self.paths, trusted_uid=self.uid)
         self.assertFalse(settings_['enabled'])
-        self.assertIn('資料夾', text)
+        self.assertEqual(text, '排程備份的設定檔所在的資料夾權限不安全，排程備份已暫停。請通知工程人員檢查。')
         os.chmod(self.paths.config, 0o755)
         self.assertIsNotNone(schedule.load(self.paths, trusted_uid=self.uid + 1)[1], 'a file of another owner')
+        for text in (unsafe, schedule.STATE_PROBLEM):
+            self.assertNotRegex(text, r'[A-Za-z]', 'no file names or other English in a problem the page shows')
 
 
 # ---------------------------------------------------------------- slots
@@ -727,6 +732,44 @@ class TickTests(ScheduleCase):
         self.tick('2026-11-16T19:20:00Z')
         self.assertEqual(self.state()['registry'], {})
 
+    def test_an_unreadable_job_record_is_not_recorded_as_a_failed_run(self):
+        # Ended means what it means for the registry (Services.job_ended): a record that exists but cannot be read is
+        # unknown, so the run stays unsettled until a tick can read it (review: it was recorded as failed for good).
+        self.write_schedule(armed_at='2026-11-16T18:00:00Z')
+        job_id = self.tick()['job_id']
+        self.assertEqual(self.ok(['run-job', job_id])['state'], 'succeeded')
+        record = self.store().path(job_id)
+        good = record.read_text()
+        record.write_text('{"id": ')
+        self.tick('2026-11-16T19:10:00Z')
+        self.tick('2026-11-16T19:15:00Z')
+        last = self.state()['last_run']
+        self.assertEqual((last['recorded'], last['result']), (False, None))
+        self.assertEqual((self.state()['events'], self.lines('schedule-result')), ([], []))
+        record.write_text(good)  # readable again: the real outcome is recorded
+        self.tick('2026-11-16T19:20:00Z')
+        last = self.state()['last_run']
+        self.assertEqual((last['recorded'], last['result']), (True, 'succeeded'))
+        self.assertEqual([warning for _line, warning in self.lines('schedule-result')], [False])
+        self.assertEqual(self.state()['events'], [])
+
+    def test_a_job_record_that_is_gone_records_the_run_as_unknown(self):
+        self.write_schedule(armed_at='2026-11-16T18:00:00Z')
+        job_id = self.tick()['job_id']
+        self.ok(['run-job', job_id])
+        self.store().path(job_id).unlink()  # deleted with the oldest finished records
+        self.tick('2026-11-16T19:10:00Z')
+        last = self.state()['last_run']
+        self.assertEqual((last['recorded'], last['result']), (True, 'unknown'))
+        event = self.state()['events'][0]
+        self.assertEqual((event['kind'], event['job_id'], event['message']),
+                         ('failed', job_id, '2026-11-17 03:00 的排程備份的作業紀錄已不存在。'))
+        self.assertEqual(self.lines('schedule-result'),
+                         [(f'schedule-result slot={SLOT} job={job_id} trigger=on-time result=unknown code=-', True)])
+        attention = self.ok(['status'])['schedule']['attention']
+        self.assertEqual((attention['code'], attention['message'], attention['job_id']),
+                         ('failed', '上次排程備份失敗：作業紀錄已不存在。', job_id))
+
     def test_a_second_tick_while_one_runs_does_nothing(self):
         self.write_schedule(armed_at='2026-11-16T18:00:00Z')
         with schedule.tick_lock(self.paths) as held:
@@ -966,7 +1009,7 @@ class PoolTests(ScheduleCase):
         logs = []
         self.assertEqual(retention.enforce_after_backup(self.paths, self.storage, ['woowbk-demo'], log=logs.append,
                                                         trusted_uid=os.geteuid()), [])
-        self.assertIn('schedule-state.json', logs[-1])
+        self.assertEqual(logs[-1], f'警告：{schedule.STATE_PROBLEM}')
         self.assertEqual(set(self.storage.index), {manual, scheduled})
 
     def test_the_preview_counts_the_next_run_as_the_newest(self):
@@ -991,7 +1034,7 @@ class CommandTests(ScheduleCase):
                                          'events', 'timezone', 'gate'})
         self.assertEqual(response['schedule'], {'enabled': False, 'days': list(schedule.DAYS), 'time': '03:00',
                                                 'apps': 'all', 'include_images': False, 'keep_last': 7, 'updated': None,
-                                                'armed_at': None, 'saved': False, 'problem': None})
+                                                'armed_at': None, 'saved': False, 'problem': None, 'defaults': True})
         self.assertEqual((response['next_runs'], response['last_run'], response['waiting'], response['attention'],
                           response['events']), ([], None, None, None, []))
         self.assertEqual(response['timer'], {'enabled': True, 'active': True, 'last_tick_age': None})
@@ -1007,9 +1050,35 @@ class CommandTests(ScheduleCase):
             {'at': '2026-11-19T19:00:00Z', 'local': '2026-11-20T03:00', 'utc_offset': '+08:00'}])
         self.assertEqual(response['timer']['last_tick_age'], 0)
         self.assertEqual(set(response['last_run']), {'slot', 'local', 'job_id', 'trigger', 'state', 'result',
-                                                     'backup_id', 'started', 'finished', 'skipped_apps', 'error'})
+                                                     'backup_id', 'started', 'started_local', 'finished',
+                                                     'finished_local', 'skipped_apps', 'error'})
         last = response['last_run']
-        self.assertEqual((last['local'], last['result']), ('2026-11-17T03:00', 'queued'))
+        self.assertEqual((last['local'], last['started_local'], last['finished_local'], last['result']),
+                         ('2026-11-17T03:00', '2026-11-17T03:02', None, 'queued'))
+        self.assertIs(response['schedule']['defaults'], False, 'the saved file is shown')
+        self.ok(['run-job', last['job_id']])
+        self.env = env_at('2026-11-16T19:30:00Z', name='Asia/Taipei')
+        last = self.ok(['schedule-get'])['last_run']
+        finished = self.store().get(last['job_id'])['finished']  # the job's own clock
+        self.assertEqual((last['finished'], last['finished_local']),
+                         (finished, at(finished).astimezone(TAIPEI).strftime('%Y-%m-%dT%H:%M')))
+
+    def test_schedule_get_says_whether_the_fields_are_the_defaults(self):
+        self.assertIs(self.ok(['schedule-get'])['schedule']['defaults'], True, 'nothing saved yet')
+        self.assertIs(self.ok(['schedule-set'], {'schedule': self.REQUEST})['schedule']['defaults'], False)
+        self.write_schedule(armed_at='2026-11-16T18:00:00Z', time='02:30')
+        view = self.ok(['schedule-get'])['schedule']
+        self.assertEqual((view['defaults'], view['time'], view['problem']), (False, '02:30', None))
+        (Path(self.paths.config) / schedule.FILE).write_text('not json')
+        view = self.ok(['schedule-get'])['schedule']
+        self.assertEqual((view['defaults'], view['saved'], view['enabled'], view['time'], view['problem']),
+                         (True, True, False, '03:00', '排程備份的設定檔內容不正確，排程備份已暫停。請重新儲存排程設定。'))
+        self.write_schedule(armed_at='2026-11-16T18:00:00Z', time='02:30')
+        schedule.state_path(self.paths).parent.mkdir(parents=True, exist_ok=True)
+        schedule.state_path(self.paths).write_text('[]')
+        view = self.ok(['schedule-get'])['schedule']
+        self.assertEqual((view['defaults'], view['time'], view['problem']), (False, '02:30', schedule.STATE_PROBLEM),
+                         'an unreadable state file: the saved settings are shown')
 
     def test_schedule_set_preview_saves_nothing_and_confirm_saves_and_audits(self):
         preview = self.ok(['schedule-set'], {'schedule': self.REQUEST})
@@ -1155,7 +1224,12 @@ class CommandTests(ScheduleCase):
         self.assertIn('沒有加密金鑰', skipped['message'])
         events = self.ok(['jobs'])['schedule_events']
         self.assertEqual([event['kind'] for event in events][:2], ['no-key', 'missed'])
-        self.assertEqual(set(events[0]), {'at', 'kind', 'slot', 'first', 'count', 'job_id', 'message', 'not_run'})
+        self.assertEqual(set(events[0]), {'at', 'kind', 'slot', 'local', 'first', 'first_local', 'count', 'job_id',
+                                          'message', 'not_run'})
+        self.assertEqual((events[0]['slot'], events[0]['local'], events[0]['first'], events[0]['first_local']),
+                         ('2026-11-18T19:00:00Z', '2026-11-19T03:00', None, None))
+        self.assertEqual((events[1]['local'], events[1]['first_local']), ('2026-11-18T03:00', '2026-11-18T03:00'))
+        self.assertEqual(self.ok(['schedule-get'])['events'], events)
         self.assertTrue(events[0]['not_run'])
         self.assertFalse(next(event for event in events if event['kind'] == 'failed')['not_run'])
         status = self.ok(['status'])['schedule']

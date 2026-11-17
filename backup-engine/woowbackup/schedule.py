@@ -27,8 +27,10 @@
   past it again), the floor kept while the clock is below `armed_at`, the slot waiting for another job, the last run
   and the recent events (newest first, at most 50). The job writes its registry entry before any app pauses; an
   entry goes once its job ended (its record is readable and finished, or gone) and then its backup is gone (an
-  unreadable record keeps it). A state file that cannot be read stops the schedule and every automatic deletion of
-  manual and scheduled backups (retention cannot tell them apart then); it is never overwritten.
+  unreadable record keeps it). The last run's outcome is recorded once its job ended the same way: an unreadable
+  record is not an ended job, so no failure is recorded for it. A state file that cannot be read stops the schedule and
+  every automatic deletion of manual and scheduled backups (retention cannot tell them apart then); it is never
+  overwritten. Problems are worded for the device's owner, without file names (CONTRACT section 3 names the files).
 * Journal (syslog ident woowtech-cockpit-backup, authpriv; notice, warning for failures), once per slot:
   `schedule-set`, `schedule-run`, `schedule-wait`, `schedule-skip`, `schedule-missed`, `schedule-result`,
   `schedule-clock` (the clock went back) and the scheduled retention's `retention-delete … reason=schedule`.
@@ -88,8 +90,9 @@ EVENT_KINDS = ('waiting', 'missed', 'skipped', 'no-key', 'no-apps', 'settings-pr
 # Kinds of slots that did not run (the activity list shows them as 未執行).
 NOT_RUN = ('missed', 'skipped', 'no-key', 'no-apps')
 UTC = datetime.timezone.utc
-STATE_PROBLEM = ('排程備份的紀錄檔 schedule-state.json 無法讀取，排程備份已暫停；在修復之前，也不會依保留份數自動刪除手動或排程備份。'
+STATE_PROBLEM = ('排程備份的紀錄檔無法讀取，排程備份已暫停；在修復之前，也不會依保留份數自動刪除手動或排程備份。'
                  '請通知工程人員檢查。')
+ASK_ENGINEER = '請通知工程人員檢查。'
 TIMER_MESSAGE = '排程檢查沒有在執行，排程備份不會自動開始。請重新執行備份元件的安裝程式來啟用它。'
 
 
@@ -161,8 +164,9 @@ def _from_file(data):
     return {**settings, 'updated': data['updated'], 'armed_at': data['armed_at']}
 
 
-def _problem(text):
-    return f'排程備份設定檔 {FILE} {text}，排程備份已暫停。'
+def _problem(text, advice=ASK_ENGINEER):
+    """The zh-TW problem of a settings file the engine does not use (the page shows it as is)."""
+    return f'排程備份的設定檔{text}，排程備份已暫停。{advice}'
 
 
 def load(paths, *, trusted_uid=0):
@@ -173,11 +177,11 @@ def load(paths, *, trusted_uid=0):
     except BackupError as error:
         if error.code == 'internal-error':  # no configuration directory yet: nothing was saved
             return defaults(), None, False
-        return defaults(), _problem('所在的資料夾必須由 root 擁有且不可讓其他帳號寫入'), False
+        return defaults(), _problem('所在的資料夾權限不安全'), False
     try:
         current = read_trusted_file(cfd, FILE, max_bytes=MAX_BYTES)
     except BackupError as error:
-        text = '過大' if error.code == 'limit-exceeded' else '不是一般檔案或是符號連結'
+        text = '過大' if error.code == 'limit-exceeded' else '不是一般檔案'
         return defaults(), _problem(text), True
     except OSError:
         return defaults(), _problem('無法讀取'), True
@@ -186,11 +190,11 @@ def load(paths, *, trusted_uid=0):
     if current is None:
         return defaults(), None, False
     if current['uid'] != trusted_uid or current['mode'] & 0o022:
-        return defaults(), _problem('必須由 root 擁有且不可讓其他帳號寫入'), True
+        return defaults(), _problem('權限不安全（必須只有系統管理員能修改）'), True
     try:
         return _from_file(catalog.parse_json_bytes(current['data'])), None, True
     except (BackupError, ValueError, UnicodeDecodeError, RecursionError):
-        return defaults(), _problem('格式不正確') + '請重新儲存排程設定。', True
+        return defaults(), _problem('內容不正確', '請重新儲存排程設定。'), True
 
 
 def prepared(previous, schedule, now=None):
@@ -212,7 +216,8 @@ def save(paths, schedule, *, trusted_uid=0, now=None):
     try:
         current = read_trusted_file(cfd, FILE, max_bytes=MAX_BYTES)
         if current is not None and current['uid'] != trusted_uid:
-            raise BackupError('permission-denied', f'{FILE} 不是由 root 擁有；請先以 root 手動處理後再試。', file=FILE)
+            raise BackupError('permission-denied', '排程備份的設定檔權限不正確，無法儲存；請通知工程人員處理後再試。',
+                              file=FILE)
         write_trusted_file(cfd, FILE, pretty(record).encode('utf-8'))
     finally:
         os.close(cfd)
@@ -230,13 +235,14 @@ def audit_line(record, previous):
             f'loginuid={"-" if uid is None else uid}')
 
 
-def settings_view(settings, problem, saved):
-    """`schedule` of `schedule-get`: the settings, `saved` and the problem (or null)."""
+def settings_view(settings, problem, saved, *, defaults_shown=False):
+    """`schedule` of `schedule-get`/`schedule-set`: the settings, `saved`, the problem (or null) and `defaults` (the
+    fields are the defaults, not a saved file's: nothing was saved, or the saved file cannot be used)."""
     view = {key: settings[key] for key in (*FIELDS, 'updated', 'armed_at')}
     view['days'] = list(view['days'])
     if isinstance(view['apps'], list):
         view['apps'] = list(view['apps'])
-    return {**view, 'saved': bool(saved), 'problem': problem}
+    return {**view, 'saved': bool(saved), 'problem': problem, 'defaults': bool(defaults_shown)}
 
 
 def run_apps(settings, catalog_ids):
@@ -340,8 +346,7 @@ def _when(instant, zone):
 
 def instant_view(instant, zone):
     """{at (UTC), local (device time, YYYY-MM-DDTHH:MM), utc_offset} of a slot."""
-    return {'at': util.iso_utc(instant), 'local': instant.astimezone(zone).strftime('%Y-%m-%dT%H:%M'),
-            'utc_offset': offset_text(zone, instant)}
+    return {'at': util.iso_utc(instant), 'local': local_text(instant, zone), 'utc_offset': offset_text(zone, instant)}
 
 
 def parse_time(text):
@@ -351,6 +356,15 @@ def parse_time(text):
         return util.parse_iso_utc(text)
     except ValueError:
         return None
+
+
+def local_text(value, zone):
+    """Device time `YYYY-MM-DDTHH:MM` of an instant (or its ISO text) in `zone`, for the page: it shows the schedule's
+    times as the device keeps them, whatever the browser's zone. None without an instant or a zone."""
+    instant = value if isinstance(value, datetime.datetime) else parse_time(value) if isinstance(value, str) else None
+    if instant is None or zone is None:
+        return None
+    return instant.astimezone(zone).strftime('%Y-%m-%dT%H:%M')
 
 
 # ---------------------------------------------------------------- slots
@@ -731,12 +745,19 @@ def _names(items):
     return '、'.join(f'「{item["name"]}」' for item in items[:10]) + ('等' if len(items) > 10 else '')
 
 
-def settle_last_run(state, job_lookup, env, journal):
-    """Record the outcome of the last run once its job ended (events, `schedule-result`); idempotent."""
+def settle_last_run(state, job_lookup, job_ended, env, journal):
+    """Record the outcome of the last run once its job ended (events, `schedule-result`); idempotent. Ended is what
+    `job_ended` says (Services.job_ended, as for the registry): a record that exists but cannot be read is unknown,
+    never ended, so nothing is recorded and a later tick looks again (a newer run replaces it without an event); a
+    record that is gone settles as `unknown` (a `failed` event: the record no longer exists)."""
     last = state.get('last_run')
     if not last or last.get('recorded'):
         return
     record = job_lookup(last['job'])
+    if record is None:
+        if not job_ended(last['job']):
+            return
+        record = job_lookup(last['job'])  # readable again since the first read
     result = outcome(record)
     if result in jobs.ACTIVE:
         return
@@ -783,7 +804,7 @@ def prune_registry(state, job_ended, backup_present):
 
 def last_run_view(state, job_lookup, zone):
     """`last_run` of status/schedule-get, live from the job record: {slot, local, job_id, trigger, state, result,
-    backup_id, started, finished, skipped_apps[], error}."""
+    backup_id, started, started_local, finished, finished_local, skipped_apps[], error} (`*_local`: device time)."""
     last = (state or {}).get('last_run')
     if not last:
         return None
@@ -795,18 +816,21 @@ def last_run_view(state, job_lookup, zone):
         value = record['result'].get('backup_id')
         backup_id = value if isinstance(value, str) and BACKUP_ID_RE.fullmatch(value) else backup_id
     error = record.get('error') if record is not None and isinstance(record.get('error'), dict) else None
-    return {'slot': last.get('slot'), 'local': instant_view(slot, zone)['local'] if slot else None,
+    finished = (record or {}).get('finished') or last.get('finished')
+    return {'slot': last.get('slot'), 'local': local_text(slot, zone),
             'job_id': last['job'], 'trigger': last['trigger'], 'state': (record or {}).get('state'), 'result': result,
             'backup_id': backup_id, 'started': last.get('started'),
-            'finished': (record or {}).get('finished') or last.get('finished'),
+            'started_local': local_text(last.get('started'), zone), 'finished': finished,
+            'finished_local': local_text(finished, zone),
             'skipped_apps': _skipped_apps(record) if record is not None else [],
             'error': {'code': error.get('code'), 'message': error.get('message')} if error else None}
 
 
-def events_view(state):
-    """`events` (schedule-get) / `schedule_events` (jobs): newest first, at most 50; `not_run` marks a slot that did not
-    run (未執行)."""
-    return [dict(event, not_run=event['kind'] in NOT_RUN or (event['kind'] == 'failed' and not event['job_id']))
+def events_view(state, zone):
+    """`events` (schedule-get) / `schedule_events` (jobs): newest first, at most 50; `local`/`first_local` are the
+    slots in device time (null without a slot or a zone); `not_run` marks a slot that did not run (未執行)."""
+    return [dict(event, local=local_text(event['slot'], zone), first_local=local_text(event['first'], zone),
+                 not_run=event['kind'] in NOT_RUN or (event['kind'] == 'failed' and not event['job_id']))
             for event in (state or {}).get('events') or []]
 
 
@@ -958,7 +982,7 @@ def _tick(host, env):
         if state_problem:
             return {'decision': 'state-problem'}
         before = json.dumps(state, sort_keys=True)
-        settle_last_run(state, host.job_record, env, log)
+        settle_last_run(state, host.job_record, host.job_ended, env, log)
         prune_registry(state, host.job_ended, host.backup_present)
         _check_clock(state, settings, env, log)
         if problem:
@@ -1036,7 +1060,7 @@ def _start(host, env, settings, decision):
             state['pending'] = None
             last = state.get('last_run')
             if not last or last.get('job') != started['job_id']:
-                settle_last_run(state, host.job_record, env, log)
+                settle_last_run(state, host.job_record, host.job_ended, env, log)
                 state['last_run'] = {'slot': stamp, 'job': started['job_id'], 'trigger': trigger,
                                      'started': util.iso_utc(env.now), 'recorded': False, 'result': None,
                                      'finished': None, 'backup_id': None}
@@ -1069,7 +1093,7 @@ def _start(host, env, settings, decision):
     return summary
 
 
-def record_run_now(paths, started, settings, app_ids, encrypt, job_lookup, env, journal):
+def record_run_now(paths, started, settings, app_ids, encrypt, job_lookup, job_ended, env, journal):
     """Remember a `schedule-run-now` job as the last run (its outcome is recorded like a slot's)."""
     lines = []
 
@@ -1080,7 +1104,7 @@ def record_run_now(paths, started, settings, app_ids, encrypt, job_lookup, env, 
         last = state.get('last_run')
         if last and last.get('job') == started['job_id']:
             return
-        settle_last_run(state, job_lookup, env, log)
+        settle_last_run(state, job_lookup, job_ended, env, log)
         state['last_run'] = {'slot': None, 'job': started['job_id'], 'trigger': 'run-now',
                              'started': util.iso_utc(env.now), 'recorded': False, 'result': None, 'finished': None,
                              'backup_id': None}

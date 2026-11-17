@@ -290,14 +290,15 @@ function fixture(overrides = {}) {
 }
 
 // The schedule as the engine keeps it (schedule.json, schedule-state.json, the timer), with the fixture's clock:
-// 2026-11-17 10:00 UTC is Tuesday 18:00 in Asia/Taipei. Off and never saved, like a fresh install.
+// 2026-11-17 10:00 UTC is Tuesday 18:00 in Asia/Taipei. Off and never saved, like a fresh install. `unusable`: a saved
+// file the engine cannot use (the settings are then the defaults, `defaults` in schedule-get).
 const SCHEDULE_NOW = '2026-11-17T10:00:00Z';
 const ALL_DAYS = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'];
 function scheduleData(extra = {}) {
   return {
     now: SCHEDULE_NOW,
     settings: { enabled: false, days: [...ALL_DAYS], time: '03:00', apps: 'all', include_images: false, keep_last: 7, updated: null, armed_at: null },
-    saved: false, problem: null, writes: 0,
+    saved: false, problem: null, unusable: false, writes: 0,
     timezone: { name: 'Asia/Taipei', utc_offset: '+08:00' },
     timer: { enabled: true, active: true, last_tick_age: 140 },
     last_run: null, waiting: null, attention: null, events: [], protected: {}, summaryNull: false,
@@ -570,6 +571,8 @@ function installCockpitFixture() {
     return match ? (match[1] === '-' ? -1 : 1) * (Number(match[2]) * 60 + Number(match[3])) : 0;
   };
   const isoOf = ms => new Date(ms).toISOString().replace(/\.\d{3}Z$/, 'Z');
+  // An instant in the device's time (its fixed offset), YYYY-MM-DDTHH:MM like the engine's `local` texts.
+  const localOf = iso => (iso ? isoOf(Date.parse(iso) + minutesOf(data.schedule.timezone.utc_offset) * 60000).slice(0, 16) : null);
   function nextRuns(settings, count = 3) {
     const sched = data.schedule;
     if (!settings.enabled) return [];
@@ -634,7 +637,7 @@ function installCockpitFixture() {
     const job = record.job;
     const result = ACTIVE.includes(job.state) ? job.state : job.state === 'succeeded' ? (job.result?.partial ? 'partial' : 'succeeded') : job.state;
     return { ...structuredClone(last), state: job.state, result, backup_id: job.result?.backup_id || last.backup_id, finished: job.finished,
-      skipped_apps: structuredClone(job.result?.skipped_apps || []), error: job.error ? structuredClone(job.error) : null };
+      finished_local: localOf(job.finished), skipped_apps: structuredClone(job.result?.skipped_apps || []), error: job.error ? structuredClone(job.error) : null };
   }
   function scheduleSummary() {
     const sched = data.schedule;
@@ -649,7 +652,7 @@ function installCockpitFixture() {
   function scheduleCommand(command, request) {
     const sched = scheduleOrRefuse();
     if (command === 'schedule-get') {
-      return { schedule: { ...structuredClone(sched.settings), saved: sched.saved, problem: sched.problem },
+      return { schedule: { ...structuredClone(sched.settings), saved: sched.saved, problem: sched.problem, defaults: sched.unusable || !sched.saved },
         next_runs: sched.settings.enabled && !sched.problem ? nextRuns(sched.settings) : [], timer: structuredClone(sched.timer),
         last_run: lastRun(), waiting: structuredClone(sched.waiting), attention: structuredClone(sched.attention),
         events: structuredClone(sched.events), timezone: structuredClone(sched.timezone), gate: scheduleGate() };
@@ -672,10 +675,10 @@ function installCockpitFixture() {
       const rearmed = proposed.enabled && (!before.enabled || !before.armed_at || before.time !== proposed.time || before.days.join() !== proposed.days.join());
       const record = { ...proposed, updated: sched.now, armed_at: rearmed ? sched.now : before.armed_at };
       const confirmed = request.confirm === true;
-      if (confirmed) Object.assign(sched, { settings: record, saved: true, problem: null, writes: sched.writes + 1 });
+      if (confirmed) Object.assign(sched, { settings: record, saved: true, problem: null, unusable: false, writes: sched.writes + 1 });
       const apps = proposed.apps === 'all' ? data.status.apps.map(app => app.id) : proposed.apps;
       const plan = schedulePlan(apps, proposed.keep_last);
-      return { saved: confirmed, schedule: { ...structuredClone(record), saved: confirmed || sched.saved, problem: null }, next_runs: nextRuns(proposed),
+      return { saved: confirmed, schedule: { ...structuredClone(record), saved: confirmed || sched.saved, problem: null, defaults: false }, next_runs: nextRuns(proposed),
         retention: { keep_last: proposed.keep_last, apps, delete: plan.delete, blocked: plan.blocked, freed_bytes: plan.freed_bytes },
         timezone: structuredClone(sched.timezone) };
     }
@@ -689,7 +692,7 @@ function installCockpitFixture() {
       schedule: { slot: null, trigger: 'run-now', keep_last: settings.keep_last } }, request.request_id);
     if (!started.deduplicated) {
       sched.last_run = { slot: null, local: null, job_id: started.job_id, trigger: 'run-now', state: 'queued', result: 'queued', backup_id: null,
-        started: sched.now, finished: null, skipped_apps: [], error: null };
+        started: sched.now, started_local: localOf(sched.now), finished: null, finished_local: null, skipped_apps: [], error: null };
     }
     return started;
   }
@@ -3515,13 +3518,14 @@ try {
   }
   const EVIL = '<img src=x onerror="window.__xss=1">';
   const SCHEDULE_EVENTS = [
-    { at: '2026-11-17T02:30:00Z', kind: 'skipped', slot: '2026-11-16T19:00:00Z', first: '2026-11-16T19:00:00Z', count: 1, job_id: null,
-      message: '2026-11-17 03:00 的排程備份沒有執行：當時有其他作業一直在進行。', not_run: true },
-    { at: '2026-11-16T19:05:00Z', kind: 'waiting', slot: '2026-11-16T19:00:00Z', first: '2026-11-16T19:00:00Z', count: 1, job_id: J_OTHER,
-      message: '2026-11-17 03:00 的排程備份等待其他作業完成後開始。', not_run: false },
-    { at: '2026-11-15T19:05:00Z', kind: 'no-apps', slot: '2026-11-15T19:00:00Z', first: '2026-11-15T19:00:00Z', count: 1, job_id: null,
-      message: `${EVIL}2026-11-16 03:00 的排程備份沒有執行：沒有可以備份的應用。`, not_run: true },
-    { at: '2026-11-14T04:00:00Z', kind: 'missed', slot: '2026-11-13T19:00:00Z', first: '2026-11-11T19:00:00Z', count: 3, job_id: null,
+    { at: '2026-11-17T02:30:00Z', kind: 'skipped', slot: '2026-11-16T19:00:00Z', local: '2026-11-17T03:00', first: '2026-11-16T19:00:00Z',
+      first_local: '2026-11-17T03:00', count: 1, job_id: null, message: '2026-11-17 03:00 的排程備份沒有執行：當時有其他作業一直在進行。', not_run: true },
+    { at: '2026-11-16T19:05:00Z', kind: 'waiting', slot: '2026-11-16T19:00:00Z', local: '2026-11-17T03:00', first: null, first_local: null,
+      count: 1, job_id: J_OTHER, message: '2026-11-17 03:00 的排程備份等待其他作業完成後開始。', not_run: false },
+    { at: '2026-11-15T19:05:00Z', kind: 'no-apps', slot: '2026-11-15T19:00:00Z', local: '2026-11-16T03:00', first: null, first_local: null,
+      count: 1, job_id: null, message: `${EVIL}2026-11-16 03:00 的排程備份沒有執行：沒有可以備份的應用。`, not_run: true },
+    { at: '2026-11-14T04:00:00Z', kind: 'missed', slot: '2026-11-13T19:00:00Z', local: '2026-11-14T03:00', first: '2026-11-11T19:00:00Z',
+      first_local: '2026-11-12T03:00', count: 3, job_id: null,
       message: '2026-11-12 03:00 到 2026-11-14 03:00 共 3 次的排程備份沒有執行：設備當時沒有開機，或排程檢查沒有在執行。', not_run: true },
   ];
 
@@ -3602,6 +3606,17 @@ try {
       await page.locator('#schedule-keep').press('Tab');
       assert.match(await page.locator('.form-title').textContent(), /尚未儲存/);
       assert.equal(await page.locator('[data-focus="schedule-run-now"]').isDisabled(), true);
+      // A reload of the saved settings (重新整理, the poll, the way back from 加密金鑰) keeps the edited draft.
+      const reads = (await calls(page, 'schedule-get')).length;
+      await page.locator('#refresh').click();
+      await page.waitForFunction(count => window.testcalls.filter(call => call.argv[1] === 'schedule-get').length > count, reads);
+      await settled(page);
+      assert.deepEqual(await page.evaluate(() => [...document.querySelectorAll('#view form input:checked')].map(input => input.id)),
+        ['schedule-enabled', 'schedule-frequency-weekly', 'schedule-day-mon', 'schedule-day-wed', 'schedule-day-fri', 'schedule-apps-some',
+          'schedule-app-woowbk-demo', 'schedule-images'], 'the edited choices are kept');
+      assert.deepEqual([await page.locator('#schedule-hour').inputValue(), await page.locator('#schedule-minute').inputValue(),
+        await page.locator('#schedule-keep').inputValue()], ['02', '30', '2']);
+      assert.match(await page.locator('.form-title').textContent(), /尚未儲存/);
       await allWidths(page, 'schedule form');
       await shot(page, 'schedule-form-1440.png');
       await page.setViewportSize({ width: 320, height: 900 });
@@ -3715,7 +3730,7 @@ try {
       await page.locator('.usage-table').waitFor();
       assert.equal(await page.locator('.usage-table tbody td[data-label="備份"] .secondary').first().textContent(), '手動 1、排程 3、還原前 1');
       assert.equal(await page.locator('.schedule-keep-note').textContent(),
-        '排程備份有自己的保留份數（目前每個應用保留最新 3 份），這裡的原則不會計算或刪除它們；要調整請到 排程備份。');
+        '排程備份有自己的保留份數（目前每個應用保留最新 3 份），這裡的原則不會計算或刪除它們；要調整請到排程備份。');
       assert.equal(await page.locator('[data-focus="cleanup-schedule"]').getAttribute('href'), '#/schedule');
       await page.locator('[data-focus="cleanup-others-list"]').click();
       assert.equal(await page.locator(`[data-brief="${B_NEW}"] .chip`).first().textContent(), '排程');
@@ -3782,7 +3797,10 @@ try {
         waiting: { slot: '2026-11-16T19:00:00Z', local: '2026-11-17T03:00', since: '2026-11-16T19:00:40Z', job_id: job } }), J_OTHER);
       await page.locator('#refresh').click();
       await banner.waitFor({ state: 'hidden' });
-      await view(page).getByText('2026/11/17（週二）03:00 的排程備份正在等其他作業完成，完成後會馬上開始。').waitFor();
+      await view(page).getByText('2026/11/17（週二）03:00 的排程備份正在等其他作業完成，會在它結束後 5 分鐘內開始。').waitFor();
+      assert.match(await view(page).textContent(), /有其他作業進行中時，會在它結束後 5 分鐘內開始。/);
+      assert.equal(await page.locator('section[aria-labelledby="schedule-state-heading"] p.muted').textContent(),
+        '每一次排程備份與沒有執行的排程，都記錄在活動紀錄。');
       assert.equal(await page.locator('[data-focus="schedule-waiting-job"]').getAttribute('href'), `#/jobs/${J_OTHER}`);
       await page.locator('[data-nav="overview"]').click();
       await page.locator('[data-stat="schedule"]').filter({ hasText: '等其他作業完成後開始' }).waitFor();
@@ -3953,6 +3971,10 @@ try {
       await page.locator('#schedule-day-sun').focus();
       await page.keyboard.press('Space');
       assert.equal(await page.locator('#schedule-day-sun').isChecked(), false);
+      await page.locator('#schedule-day-mon').focus();
+      await page.keyboard.press('Space');
+      await page.keyboard.press('Space');
+      assert.equal(await page.locator('#schedule-day-mon').isChecked(), true, 'Monday ticked again, after the others');
       await page.locator('[data-focus="schedule-save"]').focus();
       await page.keyboard.press('Enter');
       await page.locator('#confirm-dialog').waitFor();
@@ -3965,6 +3987,365 @@ try {
       assert.equal(await page.evaluate(() => document.activeElement.dataset.focus), 'schedule-save');
       assert.equal(await page.evaluate(() => window.__fixture.schedule.writes), 0);
     });
+
+  // ------------------------------------------------------------------ 排程備份 review (2026-11-17)
+
+  // A device in New York (UTC-05:00) and the administrator's browser in Taipei (UTC+08:00): 03:00 there is 16:00 here.
+  const NY_SLOT = '2026-11-17T08:00:00Z';
+  const NY_JOB = 'j20261117T080010Z-0000a001';
+  const NY_RUN = 'j20261117T093000Z-0000a002';
+  const nyJob = (id, schedule, created, finished) => ({ id, type: 'backup', state: 'succeeded', phase: 'verify', phases: phasesAt('backup', null),
+    progress: { percent: 100, message: '已完成' }, created, started: created, finished,
+    params: { apps: ['woowbk-demo'], include_images: false, note: '排程備份', encrypt: true, schedule },
+    result: { backup_id: SCHED_IDS[2], size: 22 * MiB, apps: ['woowbk-demo'], downtime_seconds: 7, unavailable_seconds: 9, encrypted: true, timing: [],
+      scheduled: true, slot: schedule.slot, trigger: schedule.trigger, partial: false, skipped_apps: [], retention_deleted: [] },
+    error: null, cancellable: false });
+  const NY_EVENTS = [
+    { at: '2026-11-16T08:05:00Z', kind: 'no-key', slot: '2026-11-16T08:00:00Z', local: '2026-11-16T03:00', first: null, first_local: null, count: 1,
+      job_id: null, message: '2026-11-16 03:00 的排程備份沒有執行：預設加密備份已開啟，但這台設備還沒有加密金鑰。', not_run: true },
+    // Without the device's texts (an engine that sends none): the page converts the slots with the device's zone.
+    { at: '2026-11-15T12:00:00Z', kind: 'missed', slot: '2026-11-15T08:00:00Z', first: '2026-11-13T08:00:00Z', count: 3, job_id: null,
+      message: '2026-11-13 03:00 到 2026-11-15 03:00 共 3 次的排程備份沒有執行：設備當時沒有開機，或排程檢查沒有在執行。', not_run: true },
+  ];
+  const nyFixture = scheduleFixture({ jobs: {
+    [NY_JOB]: { job: nyJob(NY_JOB, { slot: NY_SLOT, trigger: 'on-time', keep_last: 3 }, '2026-11-17T08:00:10Z', '2026-11-17T08:03:00Z'), log: [], steps: [] },
+    [NY_RUN]: { job: nyJob(NY_RUN, { slot: null, trigger: 'run-now', keep_last: 3 }, '2026-11-17T09:30:00Z', '2026-11-17T09:33:00Z'), log: [], steps: [] },
+  } }, { settings: SAVED_DAILY, saved: true, events: NY_EVENTS, timezone: { name: 'America/New_York', utc_offset: '-05:00' },
+    last_run: { slot: null, local: null, job_id: NY_RUN, trigger: 'run-now', state: 'succeeded', result: 'succeeded', backup_id: SCHED_IDS[2],
+      started: '2026-11-17T09:30:00Z', started_local: '2026-11-17T04:30', finished: '2026-11-17T09:33:00Z', finished_local: '2026-11-17T04:33',
+      skipped_apps: [], error: null } });
+  // The page trusts the zone's name only while it keeps the engine's offset now, so the browser's clock is the
+  // fixture's (New York keeps -05:00 then, whatever the date of the test run).
+  await check('schedule times are the device\'s on the overview card, the schedule card, 活動紀錄 and the job view when the browser keeps another time',
+    nyFixture, async page => {
+      await ready(page);
+      // 上次 is the device's time like 下次 (立即執行一次: when it started, 04:30 in New York, not 17:30 in Taipei).
+      await page.locator('[data-stat="schedule"]').filter({ hasText: '上次' }).waitFor();
+      assert.equal(await page.locator('[data-stat="schedule"]').textContent(),
+        '排程備份已開啟每天 03:00 · 全部應用下次 2026/11/18（週三）03:00上次 2026/11/17（週二）04:30 · 已完成設定排程備份');
+      await page.evaluate(() => { window.location.hash = '#/schedule'; });
+      await page.locator('.last-run').waitFor();
+      assert.match(await page.locator('.last-run').textContent(), /^2026\/11\/17（週二）04:30 · 已完成（立即執行一次）/);
+      // 活動紀錄: the jobs in this computer's time, the slots that did not run in the device's, marked as such.
+      await page.locator('[data-nav="activity"]').click();
+      await page.locator('tr[data-event="missed"]').waitFor();
+      const rows = () => page.locator('.jobs-table tbody tr').evaluateAll(items => items.map(row => [row.dataset.event || row.dataset.job,
+        ...[...row.children].map(cell => cell.textContent)]));
+      const shown = await rows();
+      assert.deepEqual(shown.map(row => row[0]), [NY_RUN, NY_JOB, 'no-key', 'missed']);
+      assert.equal(shown[1][1], `2026/11/17 16:00${NY_JOB}`, 'a job keeps this computer\'s time');
+      assert.deepEqual(shown[2].slice(1, 5), ['2026/11/16 03:00排程時間（設備時間）', '排程備份', '未執行', '沒有加密金鑰']);
+      assert.deepEqual(shown[3].slice(1, 5), ['2026/11/15 03:00排程時間（設備時間）', '排程備份', '未執行', '錯過的排程（共 3 次，從 2026/11/13 03:00 起）']);
+      await allWidths(page, 'activity with device times');
+      await shot(page, 'activity-device-time-1440.png');
+      // The job view: the slot of a scheduled job in the device's time (its record has no local text).
+      await page.locator(`[data-focus="job-${NY_JOB}"]`).click();
+      await page.locator('section[aria-labelledby="job-params-heading"]').waitFor();
+      const params = async () => (await metadataOf(page.locator('section[aria-labelledby="job-params-heading"]')))[0]['排程'];
+      assert.equal(await params(), '依排程（排程時間 2026/11/17（週二）03:00，設備時間）');
+      await shot(page, 'job-device-time-1440.png');
+      // A zone this page cannot name (no IANA name): the computer's time, said so; the engine's texts stay the device's.
+      await page.evaluate(() => { window.__fixture.schedule.timezone = { name: 'localtime', utc_offset: '-05:00' }; });
+      const reads = (await calls(page, 'status')).length;
+      await page.locator('#refresh').click();
+      await page.waitForFunction(count => window.testcalls.filter(call => call.argv[1] === 'status').length > count, reads);
+      await settled(page);
+      await page.locator('[data-nav="activity"]').click();
+      await page.locator('tr[data-event="missed"]').waitFor();
+      const after = await rows();
+      assert.equal(after[2][1], '2026/11/16 03:00排程時間（設備時間）', 'the engine\'s local text');
+      assert.equal(after[3][1], '2026/11/15 16:00排程時間（你電腦上的時間）');
+      assert.equal(after[3][4], '錯過的排程（共 3 次，從 2026/11/13 16:00 起）');
+      await page.locator(`[data-focus="job-${NY_JOB}"]`).click();
+      await page.locator('section[aria-labelledby="job-params-heading"]').waitFor();
+      assert.equal(await params(), '依排程（排程時間 2026/11/17（週二）16:00，你電腦上的時間）');
+      await page.locator('[data-nav="overview"]').click();
+      assert.match(await page.locator('[data-stat="schedule"]').textContent(), /上次 2026\/11\/17（週二）04:30 · 已完成/);
+    }, { beforeGoto: page => page.clock.setFixedTime(new Date(SCHEDULE_NOW)) });
+
+  await check('a device in the browser\'s zone: no 設備時間 marks, the same times as before',
+    scheduleFixture({ jobs: { [NY_JOB]: { job: nyJob(NY_JOB, { slot: '2026-11-16T19:00:00Z', trigger: 'catch-up', keep_last: 3 }, '2026-11-16T19:20:00Z',
+      '2026-11-16T19:23:00Z'), log: [], steps: [] } } }, { settings: SAVED_DAILY, saved: true, events: SCHEDULE_EVENTS }), async page => {
+      await ready(page);
+      await page.evaluate(() => { window.location.hash = '#/activity'; });
+      await page.locator('tr[data-event="missed"]').waitFor();
+      assert.equal(await page.locator('tr[data-event="missed"] th').textContent(), '2026/11/14 03:00排程時間');
+      await page.evaluate(id => { window.location.hash = `#/jobs/${id}`; }, NY_JOB);
+      await page.locator('section[aria-labelledby="job-params-heading"]').waitFor();
+      assert.equal((await metadataOf(page.locator('section[aria-labelledby="job-params-heading"]')))[0]['排程'], '補做錯過的排程（排程時間 2026/11/17（週二）03:00）');
+    });
+
+  await check('turning 排程備份 off needs no deletion checkbox and saves it off; saving again while off says it stays off',
+    scheduleFixture({}, { settings: SAVED_DAILY, saved: true }), async page => {
+      await ready(page);
+      await page.evaluate(() => { window.location.hash = '#/schedule'; });
+      await page.locator('#schedule-enabled').waitFor();
+      await page.locator('#schedule-enabled').uncheck();
+      await page.locator('[data-focus="schedule-save"]').click();
+      await page.locator('#confirm-dialog').waitFor();
+      assert.equal(await page.locator('#confirm-title').textContent(), '關閉排程備份？');
+      const body = page.locator('#confirm-body');
+      assert.equal(await body.locator('p').first().textContent(), '排程會關閉，之後不會再自動建立或刪除備份；已建立的排程備份會保留。');
+      assert.equal(await body.getByText('下一次排程備份成功後').count(), 0, 'nothing runs by itself, so nothing is listed for deletion');
+      assert.equal(await body.locator('ul[aria-label="會刪除的排程備份"]').count(), 0);
+      assert.equal(await body.locator('.schedule-run-now-note').textContent(),
+        '之後仍可以按「立即執行一次」；它完成後才會依保留份數刪除較舊的排程備份（以目前的備份來說是 1 份，共 20.0 MiB）。');
+      assert.equal(await page.locator('#confirm-ack').count(), 0, 'no acknowledgement to turn it off');
+      assert.equal(await page.locator('#confirm-ok').isDisabled(), false);
+      assert.equal(await page.locator('#confirm-ok').textContent(), '關閉排程備份');
+      await allWidths(page, 'turning the schedule off');
+      await shot(page, 'schedule-off-dialog-1440.png');
+      await page.locator('#confirm-ok').click();
+      await page.locator('#confirm-dialog').waitFor({ state: 'hidden' });
+      const off = { enabled: false, days: ALL_DAYS, time: '03:00', apps: 'all', include_images: false, keep_last: 3 };
+      assert.deepEqual((await calls(page, 'schedule-set')).map(requestOf), [{ schedule: off }, { schedule: off, confirm: true }]);
+      assert.deepEqual(await page.evaluate(() => [window.__fixture.schedule.settings.enabled, window.__fixture.schedule.writes]), [false, 1]);
+      const notice = '已儲存：排程備份已關閉，不會再自動建立備份。';
+      await view(page).getByText(notice).waitFor();
+      assert.equal(await page.locator('#status').textContent(), notice);
+      assert.equal(await page.locator('#schedule-enabled').isChecked(), false);
+      assert.equal(await page.locator('section[aria-labelledby="schedule-state-heading"] .chip').textContent(), '已關閉');
+      // Saved again while off (another time): it stays off and nothing is asked about deletions.
+      await page.locator('#schedule-hour').selectOption('04');
+      await page.locator('[data-focus="schedule-save"]').click();
+      await page.locator('#confirm-dialog').waitFor();
+      assert.equal(await page.locator('#confirm-title').textContent(), '儲存排程備份？');
+      assert.equal(await body.locator('p').first().textContent(), '排程維持關閉，不會自動建立或刪除備份。儲存本身不會建立或刪除任何備份。');
+      assert.equal(await page.locator('#confirm-ack').count(), 0);
+      await page.locator('#confirm-ok').click();
+      await page.locator('#confirm-dialog').waitFor({ state: 'hidden' });
+      assert.deepEqual(requestOf((await calls(page, 'schedule-set')).at(-1)), { schedule: { ...off, time: '04:00' }, confirm: true });
+      await page.locator('[data-nav="overview"]').click();
+      await page.locator('[data-stat="schedule"]').filter({ hasText: '已關閉' }).waitFor();
+    });
+
+  await check('全部保留 saves keep_last null: the dialog lists no deletions and the form keeps 全部保留',
+    scheduleFixture({}, { settings: SAVED_DAILY, saved: true }), async page => {
+      await ready(page);
+      await page.evaluate(() => { window.location.hash = '#/schedule'; });
+      await page.locator('#schedule-keep-mode').waitFor();
+      await page.locator('#schedule-keep-mode').selectOption('all');
+      assert.equal(await page.locator('#schedule-keep').count(), 0);
+      assert.match(await page.locator('#schedule-keep-help').textContent(), /^保留所有排程備份，不會自動刪除/);
+      await page.locator('[data-focus="schedule-save"]').click();
+      await page.locator('#confirm-dialog').waitFor();
+      assert.equal((await metadataOf(page.locator('#confirm-body')))[0]['保留'], '保留全部排程備份');
+      assert.match(await page.locator('#confirm-body').textContent(), /下一次排程備份成功後保留全部排程備份，不會自動刪除。/);
+      assert.equal(await page.locator('#confirm-ack').count(), 0);
+      await page.locator('#confirm-ok').click();
+      await page.locator('#confirm-dialog').waitFor({ state: 'hidden' });
+      const all = { enabled: true, days: ALL_DAYS, time: '03:00', apps: 'all', include_images: false, keep_last: null };
+      assert.deepEqual((await calls(page, 'schedule-set')).map(requestOf), [{ schedule: all }, { schedule: all, confirm: true }]);
+      assert.equal(await page.evaluate(() => window.__fixture.schedule.settings.keep_last), null);
+      await page.locator('.form-title').filter({ hasText: '已儲存' }).waitFor();
+      assert.equal(await page.locator('#schedule-keep-mode').inputValue(), 'all');
+    });
+
+  await check('an engine refusal for a missing device key shows the kit step that creates the key and opens no dialog', scheduleFixture(), async page => {
+    await ready(page);
+    await page.evaluate(() => { window.location.hash = '#/schedule'; });
+    await page.locator('#schedule-enabled').check();
+    assert.equal(await page.locator('#schedule-kit-step').count(), 0, 'this page saw a key and a saved kit');
+    const refusal = '開啟排程備份前，請先到「加密金鑰」建立這台設備的加密金鑰，並保存緊急金鑰。';
+    await page.evaluate(message => window.__fixture.failures.push({ command: 'schedule-set', code: 'no-device-key', message }), refusal);
+    await page.locator('[data-focus="schedule-save"]').click();
+    await page.locator('#schedule-kit-step').waitFor();
+    assert.match(await page.locator('#schedule-kit-step').textContent(), /^開啟排程備份前，請先建立加密金鑰並保存緊急金鑰。/);
+    assert.equal(await page.locator('#confirm-dialog').isVisible(), false);
+    assert.equal(await view(page).locator('.notice-error').count(), 0, 'the kit step, not an error');
+    assert.equal(await page.locator('#status').textContent(), refusal);
+    assert.equal(await page.locator('[data-focus="schedule-save"]').isDisabled(), true);
+    assert.equal((await calls(page, 'schedule-set')).length, 1);
+  });
+
+  await check('立即執行一次: an error is shown, a retry sends the same request id and the next run a new one',
+    scheduleFixture({}, { settings: SAVED_DAILY, saved: true }), async page => {
+      await ready(page);
+      await page.evaluate(() => { window.location.hash = '#/schedule'; });
+      const run = page.locator('[data-focus="schedule-run-now"]');
+      await page.locator('[data-focus="schedule-run-now"]:enabled').waitFor();
+      const failure = '無法啟動背景作業：systemd-run 沒有回應。';
+      await page.evaluate(message => window.__fixture.failures.push({ command: 'schedule-run-now', code: 'internal-error', message }), failure);
+      await run.click();
+      await view(page).locator('.notice-error').filter({ hasText: failure }).waitFor();
+      assert.equal(await page.evaluate(() => window.location.hash), '#/schedule');
+      await page.locator('[data-focus="schedule-run-now"]:enabled').waitFor();
+      await run.click();
+      await page.waitForFunction(() => /^#\/jobs\/j/.test(window.location.hash));
+      const [first, retry] = (await calls(page, 'schedule-run-now')).map(requestOf).map(item => item.request_id);
+      assert.match(first, UUID_RE);
+      assert.equal(retry, first, 'a retry may find the job the first request started');
+      await page.locator('#result-heading').waitFor();
+      await page.evaluate(() => { window.location.hash = '#/schedule'; });
+      await page.locator('[data-focus="schedule-run-now"]:enabled').waitFor();
+      assert.equal(await view(page).locator('.notice-error').count(), 0, 'the old error is gone');
+      await page.locator('[data-focus="schedule-run-now"]').click();
+      await page.waitForFunction(() => window.testcalls.filter(call => call.argv[1] === 'schedule-run-now').length === 3);
+      const third = requestOf((await calls(page, 'schedule-run-now'))[2]).request_id;
+      assert.match(third, UUID_RE);
+      assert.notEqual(third, first, 'a new run is a new request');
+    });
+
+  await check('立即執行一次 needs this device\'s key while 預設加密備份 is on; an unencrypted run needs none',
+    scheduleFixture({ status: { ...fixture().status, key: null } }, { settings: { ...SAVED_DAILY, enabled: false }, saved: true }), async page => {
+      await ready(page);
+      await page.evaluate(() => { window.location.hash = '#/schedule'; });
+      await page.locator('#schedule-state-heading').waitFor();
+      await settled(page);
+      assert.equal(await page.locator('[data-focus="schedule-run-now"]').isDisabled(), true);
+      assert.equal(await page.locator('.schedule-hint').textContent(), '加密的排程備份需要這台設備的加密金鑰，請先到「加密金鑰」建立。');
+      await page.evaluate(() => { window.__fixture.status.settings.encrypt_by_default = false; });
+      await page.locator('#refresh').click();
+      await page.locator('[data-focus="schedule-run-now"]:enabled').waitFor();
+      assert.match(await page.locator('.schedule-encryption').textContent(), /「預設加密備份」目前關閉，排程備份不會加密/);
+      assert.equal(await page.locator('.schedule-hint').textContent(), '設定已儲存。「立即執行一次」會依已儲存的設定，馬上建立一份排程備份。');
+    });
+
+  await check('an error when confirming keeps the dialog open with the engine\'s words; nothing is saved and the edits stay',
+    scheduleFixture({}, { settings: SAVED_DAILY, saved: true }), async page => {
+      await ready(page);
+      await page.evaluate(() => { window.location.hash = '#/schedule'; });
+      await page.locator('#schedule-images').waitFor();
+      await page.locator('#schedule-images').check();
+      await page.locator('[data-focus="schedule-save"]').click();
+      await page.locator('#confirm-dialog').waitFor();
+      const denied = '排程備份的設定檔權限不正確，無法儲存；請通知工程人員處理後再試。';
+      await page.evaluate(message => window.__fixture.failures.push({ command: 'schedule-set', code: 'permission-denied', message,
+        details: { file: 'schedule.json' } }), denied);
+      await page.locator('#confirm-ack').check();
+      await page.locator('#confirm-ok').click();
+      await page.locator('#confirm-error:not([hidden])').waitFor();
+      assert.equal(await page.locator('#confirm-error-message').textContent(), denied);
+      assert.equal(await page.locator('#confirm-status').textContent(), '操作未完成；不會自動重試。');
+      assert.equal(await page.locator('#confirm-ok').isDisabled(), false, 'it can be confirmed again');
+      assert.equal(await page.evaluate(() => window.__fixture.schedule.writes), 0);
+      await page.locator('#confirm-cancel').click();
+      await page.locator('#confirm-dialog').waitFor({ state: 'hidden' });
+      assert.equal(await page.evaluate(() => document.activeElement.dataset.focus), 'schedule-save');
+      assert.match(await page.locator('.form-title').textContent(), /尚未儲存/);
+      assert.equal(await page.locator('#schedule-images').isChecked(), true, 'the edit is kept');
+      assert.equal(await page.locator('#schedule-kit-step').count(), 0, 'a refusal that is not about the kit');
+      // The kit was unconfirmed meanwhile: the engine refuses at the confirmation and the kit step comes back.
+      await page.locator('[data-focus="schedule-save"]').click();
+      await page.locator('#confirm-dialog').waitFor();
+      await page.evaluate(() => window.__fixture.failures.push({ command: 'schedule-set', code: 'invalid-request', message: '開啟排程備份前，請先保存緊急金鑰。',
+        details: { reason: 'kit-unconfirmed', field: 'schedule.enabled' } }));
+      await page.locator('#confirm-ack').check();
+      await page.locator('#confirm-ok').click();
+      await page.locator('#confirm-error-message').filter({ hasText: '開啟排程備份前，請先保存緊急金鑰。' }).waitFor();
+      await page.locator('#confirm-cancel').click();
+      await page.locator('#confirm-dialog').waitFor({ state: 'hidden' });
+      await page.locator('#schedule-kit-step').waitFor();
+      assert.equal(await page.locator('#schedule-images').isChecked(), true);
+      assert.equal(await page.evaluate(() => window.__fixture.schedule.writes), 0);
+      assert.deepEqual((await calls(page, 'schedule-set')).map(call => requestOf(call).confirm === true), [false, true, false, true]);
+    });
+
+  await check('turning 預設加密備份 off while the schedule is on says that its runs will not be encrypted either',
+    scheduleFixture({}, { settings: { ...SAVED_DAILY, days: ['mon', 'wed', 'fri'], time: '02:30' }, saved: true }), async page => {
+      await ready(page);
+      await page.evaluate(() => { window.location.hash = '#/keys'; });
+      await page.locator('#encrypt-default').waitFor();
+      await page.locator('#encrypt-default').click();
+      await page.locator('#confirm-dialog').waitFor();
+      assert.deepEqual(await page.locator('#confirm-body li').allTextContents(), ['關閉後，新的備份預設不加密，「還原前自動備份」也不加密。',
+        '排程備份（每週一、三、五 02:30）也會不加密。', '已建立的備份不受影響；每份備份仍可在建立時選擇加密。', '這項變更會記錄在系統日誌。']);
+      await shot(page, 'encryption-off-schedule-1440.png');
+      await page.locator('#confirm-ack').check();
+      await page.locator('#confirm-ok').click();
+      await page.locator('#confirm-dialog').waitFor({ state: 'hidden' });
+      const notice = '已關閉「預設加密備份」：新的備份、還原前自動備份與排程備份都不加密。';
+      await view(page).getByText(notice).waitFor();
+      assert.equal(await page.locator('#status').textContent(), notice);
+      assert.match(await view(page).textContent(), /目前新的備份、還原前自動備份與排程備份都不加密。/);
+      // The schedule turned off elsewhere: turning 預設加密備份 off again does not name it.
+      await page.locator('#encrypt-default').click();
+      await view(page).getByText('已開啟「預設加密備份」。').waitFor();
+      await page.evaluate(() => { window.__fixture.schedule.settings.enabled = false; });
+      const reads = (await calls(page, 'status')).length;
+      await page.locator('#refresh').click();
+      await page.waitForFunction(count => window.testcalls.filter(call => call.argv[1] === 'status').length > count, reads);
+      await settled(page);
+      await page.locator('#encrypt-default').click();
+      await page.locator('#confirm-dialog').waitFor();
+      assert.equal(await page.locator('#confirm-body li').count(), 3);
+      assert.equal(await page.locator('#confirm-body').getByText('排程備份').count(), 0);
+      await page.locator('#confirm-cancel').click();
+    });
+
+  await check('the 排程檢查 row says what the banner says: not running while the checks stopped, 正常 only after a recorded check',
+    scheduleFixture({}, { settings: SAVED_DAILY, saved: true, timer: { enabled: true, active: true, last_tick_age: null },
+      attention: ATTENTIONS.find(item => item.code === 'timer-inactive') }), async page => {
+      await ready(page);
+      await page.evaluate(() => { window.location.hash = '#/schedule'; });
+      await page.locator('#schedule-state-heading').waitFor();
+      await settled(page);
+      const checks = async () => (await metadataOf(page.locator('section[aria-labelledby="schedule-state-heading"]')))[0]['排程檢查'];
+      assert.match(await page.locator('#schedule-banner p').textContent(), /排程檢查沒有在執行/);
+      assert.equal(await checks(), '沒有在執行：排程備份不會自動開始', 'no check recorded while the device has been up for long');
+      const refresh = async change => {
+        await page.evaluate(change);
+        const reads = (await calls(page, 'schedule-get')).length;
+        await page.locator('#refresh').click();
+        await page.waitForFunction(count => window.testcalls.filter(call => call.argv[1] === 'schedule-get').length > count, reads);
+        await settled(page);
+      };
+      await refresh(() => { window.__fixture.schedule.attention = null; });
+      assert.equal(await page.locator('#schedule-banner').isVisible(), false);
+      assert.equal(await checks(), '等待第一次檢查（每 5 分鐘一次）', 'not 正常 before a check was recorded');
+      await refresh(() => { window.__fixture.schedule.timer.last_tick_age = 140; });
+      assert.equal(await checks(), '正常，2 分鐘前檢查過（每 5 分鐘一次）');
+      await refresh(() => { window.__fixture.schedule.timer.active = false; });
+      assert.equal(await checks(), '沒有在執行：排程備份不會自動開始');
+    });
+
+  await check('a saved settings file the engine cannot use: the form says it shows the defaults and needs saving again',
+    (() => {
+      const unusable = '排程備份的設定檔內容不正確，排程備份已暫停。請重新儲存排程設定。';
+      return scheduleFixture({}, { saved: true, unusable: true, problem: unusable, attention: { code: 'settings-problem', message: unusable } });
+    })(), async page => {
+      await ready(page);
+      assert.match(await page.locator('[data-stat="schedule"]').textContent(), /^排程備份已暫停/);
+      await page.evaluate(() => { window.location.hash = '#/schedule'; });
+      await page.locator('#schedule-state-heading').waitFor();
+      await settled(page);
+      assert.equal(await page.locator('.form-title .chip').textContent(), '需要重新儲存');
+      assert.equal(await page.locator('.form-card .notice-warn p').textContent(),
+        '儲存的排程設定無法使用（原因見上方），下面顯示的是預設值，不是上次儲存的設定。處理後請確認每個選項，再按「儲存排程…」重新儲存。');
+      const [card] = await metadataOf(page.locator('section[aria-labelledby="schedule-state-heading"]'));
+      assert.equal(card['排程'], '已暫停：設定無法使用，需要重新儲存');
+      assert.equal(await page.locator('[data-focus="schedule-run-now"]').isDisabled(), true);
+      await allWidths(page, 'schedule with an unusable settings file');
+      await shot(page, 'schedule-unusable-1440.png');
+      // Saving the shown settings writes a good file.
+      await page.locator('[data-focus="schedule-save"]').click();
+      await page.locator('#confirm-dialog').waitFor();
+      await page.locator('#confirm-ok').click();
+      await page.locator('#confirm-dialog').waitFor({ state: 'hidden' });
+      await page.locator('.form-title').filter({ hasText: '已儲存' }).waitFor();
+      assert.equal(await page.locator('.form-card .notice-warn').count(), 0);
+    });
+
+  await check('the 排程備份 switch keeps its knob with forced colors: on and off look different', scheduleFixture({}, { settings: SAVED_DAILY, saved: true }), async page => {
+    await page.emulateMedia({ forcedColors: 'active' });
+    await ready(page);
+    await page.evaluate(() => { window.location.hash = '#/schedule'; });
+    const toggle = page.locator('#schedule-enabled');
+    await toggle.waitFor();
+    const look = async () => {
+      await page.evaluate(() => document.activeElement?.blur());
+      const style = await toggle.evaluate(element => [getComputedStyle(element).backgroundImage, getComputedStyle(element).forcedColorAdjust]);
+      return { style, shot: await toggle.screenshot({ animations: 'disabled' }) };
+    };
+    const on = await look();
+    await toggle.uncheck();
+    const off = await look();
+    for (const [label, seen] of [['on', on], ['off', off]]) {
+      assert.match(seen.style[0], /radial-gradient/, `${label}: the knob is still drawn`);
+      assert.equal(seen.style[1], 'none', `${label}: drawn in system colors by the page`);
+    }
+    assert(!on.shot.equals(off.shot), 'on and off are told apart');
+  });
 
 } finally {
   try { await browser?.close(); } finally { if (server.listening) await new Promise(done => server.close(done)); }

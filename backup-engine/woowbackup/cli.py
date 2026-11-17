@@ -826,12 +826,17 @@ def cmd_job_status(svc, req):
 
 def cmd_jobs(svc, _req):
     """`jobs` (≤ 50, newest first) and `schedule_events`: the schedule's recent events (slots that did not run, waits,
-    results), [] when its state cannot be read."""
+    results) with their slots in device time, [] when its state cannot be read."""
     from . import schedule
     svc.recover()
     state, _problem = schedule.read_state(svc.paths)
+    try:
+        zone = svc.env().zone
+    except Exception:  # noqa: BLE001 - the activity list never fails over the zone; the events then have no local times
+        traceback.print_exc(file=sys.stderr)
+        zone = None
     return {'jobs': [jobmod.public_job(r) for r in jobmod.JobStore(svc.paths).list(50)],
-            'schedule_events': schedule.events_view(state)}
+            'schedule_events': schedule.events_view(state, zone)}
 
 
 def cmd_job_cancel(svc, req):
@@ -1012,10 +1017,12 @@ def cmd_schedule_get(svc, _req):
     settings, problem, saved = svc.schedule_settings()
     state, state_problem = schedule.read_state(svc.paths)
     view = schedule.summary(settings, problem, saved, state, state_problem, env, svc.timer_view(env), svc.job_record)
-    return {'schedule': schedule.settings_view(settings, problem or state_problem, saved),
+    # `defaults`: the form shows the defaults, not a saved file's (nothing saved, or the file cannot be used).
+    return {'schedule': schedule.settings_view(settings, problem or state_problem, saved,
+                                               defaults_shown=bool(problem) or not saved),
             'next_runs': _runs(schedule, settings, env) if view['enabled'] else [], 'timer': view['timer'],
             'last_run': view['last_run'], 'waiting': view['waiting'], 'attention': view['attention'],
-            'events': schedule.events_view(state), 'timezone': view['timezone'], 'gate': schedule_gate(svc)}
+            'events': schedule.events_view(state, env.zone), 'timezone': view['timezone'], 'gate': schedule_gate(svc)}
 
 
 def cmd_schedule_set(svc, req):
@@ -1076,8 +1083,8 @@ def cmd_schedule_run_now(svc, req):
                         req['request_id'])
     if not started.get('deduplicated'):
         try:
-            schedule.record_run_now(svc.paths, started, settings, app_ids, encrypt, svc.job_record, svc.env(),
-                                    svc.journal)
+            schedule.record_run_now(svc.paths, started, settings, app_ids, encrypt, svc.job_record, svc.job_ended,
+                                    svc.env(), svc.journal)
         except Exception:  # noqa: BLE001 - the job runs and registers itself; only the overview's last run lags
             traceback.print_exc(file=sys.stderr)
     return started

@@ -833,17 +833,25 @@ Shapes:
   = every day), `time` (`HH:MM`, 00:00–23:55 in 5-minute steps, device time), `apps("all"|[id])` (`"all"`: every app of the
   catalog at run time, later ones included; a list: 1–100 ids, each in the catalog when saved), `include_images(bool),
   keep_last(1..1000|null)` (null keeps every scheduled backup), `updated|null, armed_at|null` (when it was turned on or
-  its time or days changed: earlier slots never run), `saved(bool)` (a file exists), `problem(zh-TW)|null`.
+  its time or days changed: earlier slots never run), `saved(bool)` (a file exists), `problem(zh-TW)|null` (a settings
+  file the engine does not use, or a state file it cannot read; worded for the device's owner without file names, e.g.
+  「排程備份的設定檔內容不正確，排程備份已暫停。請重新儲存排程設定。」, 「排程備份的紀錄檔無法讀取，排程備份已暫停；…請通知工程人員
+  檢查。」), `defaults(bool)` (`schedule-get` only, false in `schedule-set` replies: the fields are the defaults, not a
+  saved file's — nothing was saved, or the saved file cannot be used; the page then says so and asks to save again).
 * `Instant`: `at` (UTC `…Z`), `local` (`YYYY-MM-DDTHH:MM` in the device's zone), `utc_offset` (`+08:00`).
 * `Timer`: `enabled(bool|null), active(bool|null)` (of `woowtech-cockpit-backup-schedule.timer`, `systemctl show`; null
   when systemd cannot be asked), `last_tick_age(int seconds|null)` (age of `/run/woowtech-backup/schedule-tick`; null
   before the first tick of this boot).
 * `LastRun`: `slot|null` (null: `schedule-run-now`), `local|null, job_id, trigger("on-time"|"late"|"catch-up"|"run-now"),
   state` (the job's state, null when its record is gone), `result("queued"|"running"|"succeeded"|"partial"|"failed"|
-  "interrupted"|"cancelled"|"unknown")` (live from the job record), `backup_id|null, started, finished|null,
-  skipped_apps[{id,name,reason}], error{code,message}|null`.
+  "interrupted"|"cancelled"|"unknown")` (live from the job record; `unknown`: its record is gone or cannot be read),
+  `backup_id|null, started, started_local, finished|null, finished_local|null, skipped_apps[{id,name,reason}],
+  error{code,message}|null`. Every `local`/`*_local` here and in `Waiting` and `ScheduleEvent` is that instant in the
+  device's zone as `YYYY-MM-DDTHH:MM` (like `Instant.local`): the page shows the schedule's times in device time, whatever
+  the browser's zone.
 * `Waiting`: `slot, local, since, job_id|null` (a due slot waiting for another job, `job_id` the job it waits for).
-* `ScheduleEvent`: `at, kind, slot|null, first|null, count, job_id|null, message(zh-TW), not_run(bool)`; kinds: `waiting`
+* `ScheduleEvent`: `at, kind, slot|null, local|null, first|null, first_local|null, count, job_id|null, message(zh-TW),
+  not_run(bool)` (`local`/`first_local`: `slot`/`first` in device time, null without them); kinds: `waiting`
   (a slot waits for another job), `missed` (no tick saw the slot in time and it was not caught up; `first`/`count` cover
   several), `skipped` (the slot waited for another job until the next slot came), `no-key` (預設加密備份 on, no device
   key), `no-apps` (nothing to back up), `settings-problem` (slot null; once per problem), `failed` (the run failed or was
@@ -860,9 +868,10 @@ Shapes:
   設備當時沒有開機，或排程檢查沒有在執行。」, several: 「<first> 到 <last> 共 N 次的排程備份沒有執行：…」; `skipped` busy:
   「<local> 的排程備份沒有執行：當時有其他作業一直在進行。」, no-key: 「…沒有執行：預設加密備份已開啟，但這台設備還沒有加密金鑰。」,
   no-apps: 「…沒有執行：沒有可以備份的應用。」; a job that could not be launched: `failed`, 「上次排程備份失敗：<local> 的排程備份
-  沒有開始：…」) or the last run (`failed` for failed/interrupted: 「上次排程備份失敗：<job error message>」; `partial`:
-  「部分完成：上次排程備份沒有包含「A」、「B」。請查看作業結果了解原因。」; a success or a cancelled run: none). Only
-  `settings-problem` is reported while the schedule is off.
+  沒有開始：…」) or the last run (`failed` for failed/interrupted: 「上次排程備份失敗：<job error message>」, and for `unknown`,
+  its job record gone (or unreadable): 「上次排程備份失敗：作業紀錄已不存在。」; `partial`: 「部分完成：上次排程備份沒有包含「A」、
+  「B」。請查看作業結果了解原因。」; a success or a cancelled run: none). Only `settings-problem` is reported while the
+  schedule is off.
 * `ScheduleSummary` (`status.schedule`): `enabled` (false also while a problem stops it), `saved, problem|null, days, time,
   apps, include_images, keep_last, next_run Instant|null, last_run LastRun|null, waiting Waiting|null, attention
   Attention|null, timezone{name,utc_offset}, timer Timer`.
@@ -1140,13 +1149,16 @@ no key); `busy` (`details.job_id`). `schedule-get` and `schedule-tick` take no i
   * Each tick: touches `/run/woowtech-backup/schedule-tick`; holds `schedule-tick.lock` (a second tick returns
     `tick-running`); when the last scheduled job is still recorded queued/running, runs the recovery first (it never judges
     a job that runs; a dead one becomes `interrupted`); records the last run's outcome once its job ended
-    (`schedule-result`, events `failed`/`partial`/`cancelled`); drops registry entries whose job ended (its record is
-    readable and finished, or gone; an unreadable record keeps the entry) and whose backup is then gone (neither its index
-    nor its archive exists; the job is read first, so a job that publishes and ends between the two reads keeps its
-    entry); resets the handled slot when it lies more than a day ahead (the clock went back: everything up to now counts
-    as handled, `schedule-clock` once) and puts the old one aside (`handled_before_reset`): once the clock is past it again
-    (it came back, e.g. NTP after a lost RTC) it counts as handled, so the slots that ran are not reported missed; then
-    decides (`schedule.decide`, pure: settings, state, clock, zone, uptime):
+    (`schedule-result`, events `failed`/`partial`/`cancelled`; ended as for the registry: a record that exists but cannot
+    be read is unknown, so nothing is recorded and the next tick looks again — a newer run replaces it without an event —
+    while a record that is gone is recorded `unknown`, a `failed` event 「…的作業紀錄已不存在。」); drops registry entries
+    whose job ended (its record is readable and finished, or gone; an unreadable record keeps the entry) and whose backup
+    is then gone (neither its index nor its archive exists; the job is read first, so a job that publishes and ends
+    between the two reads keeps its entry); resets the handled slot when it lies more than a day ahead (the clock went
+    back: everything up to now counts as handled, `schedule-clock` once) and puts the old one aside
+    (`handled_before_reset`): once the clock is past it again (it came back, e.g. NTP after a lost RTC) it counts as
+    handled, so the slots that ran are not reported missed; then decides (`schedule.decide`, pure: settings, state,
+    clock, zone, uptime):
     * off → nothing (a waiting slot is dropped); a bad settings file → nothing, one `settings-problem` event per problem;
     * the latest due slot that is not handled: less than 15 minutes late → start (`on-time`); a slot that waits for
       another job → start as soon as no job is queued/running (`late`, any delay), and recorded `skipped` (busy) when the
@@ -1623,8 +1635,19 @@ stops the rollback of the other apps.
   size warning); a read-only line on the encryption (`gate.encrypt`: 預設加密備份); 「保留最新幾份排程備份」 (`keep_last`,
   default 7, or keep all) with 「手動備份、還原前自動備份與上傳的備份不會被刪除。」. 「儲存排程…」 first previews
   (`schedule-set {schedule}`) and shows a dialog with the next runs (`next_runs[].local`) and what the next successful run
-  would delete (`retention.delete`, `blocked`), then saves with `schedule-set {schedule, confirm: true}`; 「立即執行一次」
-  sends `schedule-run-now {request_id}` (a saved schedule; enabled or not) and opens the job view. Turning it on while
+  would delete (`retention.delete`, `blocked`; acknowledged), then saves with `schedule-set {schedule, confirm: true}`.
+  Saved off (turned off, or saved again while off) nothing runs or is deleted by itself: the dialog lists no deletions
+  and asks for no acknowledgement, and only says that 「立即執行一次」 would apply the keep-last afterwards. 「立即執行一次」
+  sends `schedule-run-now {request_id}` (a saved schedule; enabled or not; this device's key while 預設加密備份 is on; a
+  retry after an error sends the same `request_id`, a new run a new one) and opens the job view. Every time of the
+  schedule is the device's: the engine's `local` texts (`next_runs`, `LastRun.local`/`started_local`, events'
+  `local`/`first_local`), else the instant in `timezone.name` when the browser knows that IANA zone and it keeps
+  `utc_offset` now (the job view's `params.schedule.slot`); otherwise the time is this computer's and says so
+  (「你電腦上的時間」). In 活動紀錄 and the job view, beside the jobs' times of this computer, the device's are marked
+  「設備時間」 when the two differ. 「排程檢查」 says 「沒有在執行」 whenever `attention.code` is `timer-inactive` and 正常 only
+  after a recorded tick. `schedule.defaults` with a `problem`: the form says that it shows the defaults and needs saving
+  again (「需要重新儲存」). Turning 預設加密備份 off while the schedule is on names it in the confirmation (「排程備份（每天
+  03:00）也會不加密。」). Turning it on while
   `gate.blocked` is `kit-unconfirmed` (or the save answers `invalid-request` with `details.reason: "kit-unconfirmed"`)
   shows the kit step 「開啟排程備份前，請先保存緊急金鑰。」 with a link to 加密金鑰, which offers 「回到排程備份」; `no-device-key`
   leads to creating the key. Banners from `status.schedule.attention` (`message` as sent): 「上次排程備份失敗：…」,

@@ -649,6 +649,8 @@
   }
 
   const statusSchedule = () => (isObject(state.status?.schedule) ? state.status.schedule : null);
+  // The schedule is on and runs (a problem stops it; CONTRACT §7 ScheduleSummary.enabled).
+  const scheduleOn = () => statusSchedule()?.enabled === true;
 
   function upsertBackup(backup) {
     if (!validBackup(backup) || !state.backups) return;
@@ -3630,7 +3632,7 @@
           h("span", { class: "choice-body" }, h("strong", { text: "預設加密備份" }),
             h("small", { id: "encrypt-default-help", text: "開啟時，新的備份預設以這台設備的金鑰加密，「還原前自動備份」也一律加密（建議）。建立備份時仍可為單一備份取消加密；關閉需要另外確認風險。" }))),
         settings.problem ? infoNotice(str(settings.problem), "warn", "alert-outline") : null,
-        on ? null : infoNotice(`目前新的備份與還原前自動備份都不加密。${plaintextWarning()}`, "warn", "lock-open-variant-outline"),
+        on ? null : infoNotice(`目前新的備份、還原前自動備份${scheduleOn() ? "與排程備份" : ""}都不加密。${plaintextWarning()}`, "warn", "lock-open-variant-outline"),
         on && !state.status?.key ? h("p", { class: "muted", text: "加密的備份需要這台設備的加密金鑰；請在下方建立金鑰並保存緊急金鑰。" }) : null,
         ui.notice ? infoNotice(ui.notice, "ok", "check-circle-outline") : null,
         ui.error ? errorNotice(ui.error) : null,
@@ -3649,7 +3651,8 @@
         const data = await call("settings-set", request);
         requireShape(isObject(data.settings) && typeof data.settings.encrypt_by_default === "boolean", "設定");
         if (state.status) state.status.settings = data.settings;
-        ui.notice = data.settings.encrypt_by_default ? "已開啟「預設加密備份」。" : "已關閉「預設加密備份」：新的備份與還原前自動備份都不加密。";
+        ui.notice = data.settings.encrypt_by_default ? "已開啟「預設加密備份」。"
+          : `已關閉「預設加密備份」：新的備份、還原前自動備份${scheduleOn() ? "與排程備份" : ""}都不加密。`;
         announce(ui.notice);
       } finally {
         ui.busy = false;
@@ -3660,12 +3663,15 @@
       save({ encrypt_by_default: true }).catch(error => { ui.error = error; render(); });
       return;
     }
+    // A schedule that is on encrypts as 預設加密備份 says when each run starts: its runs are named with their days and time.
+    const schedule = scheduleOn() ? statusSchedule() : null;
     confirmDialog({
       title: "關閉預設加密備份？",
       body: [
         h("div", { class: "notice notice-warn" }, icon("alert-outline"), h("p", { text: plaintextWarning() })),
         h("ul", { class: "bullet-list warning-list" },
           h("li", { text: "關閉後，新的備份預設不加密，「還原前自動備份」也不加密。" }),
+          schedule ? h("li", { text: `排程備份（${timeText(schedule)}）也會不加密。` }) : null,
           h("li", { text: "已建立的備份不受影響；每份備份仍可在建立時選擇加密。" }),
           h("li", { text: "這項變更會記錄在系統日誌。" }))
       ],
@@ -4181,7 +4187,7 @@
     if (!scheduleSupported()) return null;
     const keep = statusSchedule()?.keep_last;
     const rule = keep === null ? "目前保留全部排程備份" : Number.isInteger(keep) ? `目前每個應用保留最新 ${keep} 份` : null;
-    return h("p", { class: "muted schedule-keep-note" }, `排程備份有自己的保留份數${rule ? `（${rule}）` : ""}，這裡的原則不會計算或刪除它們；要調整請到 `,
+    return h("p", { class: "muted schedule-keep-note" }, `排程備份有自己的保留份數${rule ? `（${rule}）` : ""}，這裡的原則不會計算或刪除它們；要調整請到`,
       link("排程備份", ["schedule"], { dataset: { focus: "cleanup-schedule" } }), "。");
   }
 
@@ -4278,14 +4284,90 @@
   // `confirm`; nothing is written before the confirmation). Times are the device's (`timezone`); 「立即執行一次」 runs the
   // saved settings once now and is followed like a manual backup.
 
-  // `local` (YYYY-MM-DDTHH:MM in the device's zone) as 2026/11/18（週三）03:00.
-  function deviceTime(local) {
-    const match = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/.exec(str(local));
+  const LOCAL_RE = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/;
+
+  // `local` (YYYY-MM-DDTHH:MM, a wall time) as 2026/11/18（週三）03:00, or 2026/11/18 03:00 without the weekday.
+  function deviceTime(local, { weekday = true } = {}) {
+    const match = LOCAL_RE.exec(str(local));
     if (!match) return "—";
     const [, year, month, day, hour, minute] = match;
-    const weekday = "日一二三四五六"[new Date(Date.UTC(Number(year), Number(month) - 1, Number(day))).getUTCDay()];
-    return `${year}/${month}/${day}（週${weekday}）${hour}:${minute}`;
+    if (!weekday) return `${year}/${month}/${day} ${hour}:${minute}`;
+    const name = "日一二三四五六"[new Date(Date.UTC(Number(year), Number(month) - 1, Number(day))).getUTCDay()];
+    return `${year}/${month}/${day}（週${name}）${hour}:${minute}`;
   }
+
+  // Minutes east of UTC as the engine writes them: +08:00.
+  function offsetText(minutes) {
+    const value = Math.abs(minutes);
+    return `${minutes < 0 ? "-" : "+"}${String(Math.floor(value / 60)).padStart(2, "0")}:${String(value % 60).padStart(2, "0")}`;
+  }
+
+  // The wall time of an instant (YYYY-MM-DDTHH:MM) in a zone's formatter (deviceZone), or in this browser's zone.
+  function wallTime(instant, formatter) {
+    const pad = value => String(value).padStart(2, "0");
+    if (!formatter) {
+      return `${instant.getFullYear()}-${pad(instant.getMonth() + 1)}-${pad(instant.getDate())}T${pad(instant.getHours())}:${pad(instant.getMinutes())}`;
+    }
+    const parts = Object.fromEntries(formatter.formatToParts(instant).map(part => [part.type, part.value]));
+    return `${parts.year}-${parts.month}-${parts.day}T${parts.hour === "24" ? "00" : parts.hour}:${parts.minute}`;
+  }
+
+  // Minutes east of UTC that a formatter's zone keeps at an instant.
+  function zoneOffset(formatter, instant) {
+    const [, year, month, day, hour, minute] = LOCAL_RE.exec(wallTime(instant, formatter)).map(Number);
+    return Math.round((Date.UTC(year, month - 1, day, hour, minute) - Math.floor(instant.getTime() / 60000) * 60000) / 60000);
+  }
+
+  // The device's zone (CONTRACT §7 `timezone{name, utc_offset}`) as an Intl formatter: only an IANA name this browser
+  // knows and that keeps the engine's offset now (a zone file whose name is not what /etc/localtime holds is not
+  // trusted); null otherwise. Times without the engine's `local` text are converted with it.
+  const zoneFormatters = new Map();
+  const deviceZoneInfo = () => [statusSchedule()?.timezone, state.schedule.data?.timezone].find(isObject) || null;
+  function deviceZone() {
+    const zone = deviceZoneInfo();
+    const name = str(zone?.name);
+    if (!/^[A-Za-z][A-Za-z0-9_+-]*(?:\/[A-Za-z0-9_+-]+)*$/.test(name) || name.length > 64 || name === "localtime") return null;
+    const key = `${name} ${str(zone.utc_offset)}`;
+    if (!zoneFormatters.has(key)) {
+      let formatter = null;
+      try {
+        formatter = new Intl.DateTimeFormat("en-US", {
+          timeZone: name, hourCycle: "h23", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit"
+        });
+        if (isString(zone.utc_offset) && offsetText(zoneOffset(formatter, new Date())) !== zone.utc_offset) formatter = null;
+      } catch { formatter = null; /* a name this browser does not know */ }
+      zoneFormatters.set(key, formatter);
+    }
+    return zoneFormatters.get(key);
+  }
+
+  // Whether this browser keeps another time than the device at an instant (the device's offset then, else now).
+  function zonesDiffer(instant) {
+    const parsed = new Date(str(instant));
+    const when = Number.isNaN(parsed.getTime()) ? new Date() : parsed;
+    const zone = deviceZone();
+    const device = zone ? offsetText(zoneOffset(zone, when)) : str(deviceZoneInfo()?.utc_offset);
+    return device !== offsetText(-when.getTimezoneOffset());
+  }
+
+  // A time of the schedule as the device keeps it: the engine's `local` text, else the instant in the device's zone.
+  // When neither is known here it is this computer's time and says so (`where`: "device" | "computer").
+  function scheduleClock(instant, local, { weekday = true } = {}) {
+    if (LOCAL_RE.test(str(local))) return { text: deviceTime(local, { weekday }), where: "device" };
+    const parsed = new Date(str(instant));
+    if (!isString(instant) || !instant || Number.isNaN(parsed.getTime())) return { text: "—", where: "device" };
+    const zone = deviceZone();
+    return { text: deviceTime(wallTime(parsed, zone), { weekday }), where: zone ? "device" : "computer" };
+  }
+
+  // Next to times of this computer (活動紀錄, the job view): 設備時間 when the device keeps another time, and always
+  // 你電腦上的時間 for a time the device's zone could not give.
+  const clockLabel = (clock, instant) => (clock.where === "computer" ? "你電腦上的時間" : zonesDiffer(instant) ? "設備時間" : "");
+  // On the schedule's own surfaces every time is the device's; only a computer's time is labeled.
+  const scheduleText = (instant, local) => {
+    const clock = scheduleClock(instant, local);
+    return clock.where === "computer" ? `${clock.text}（你電腦上的時間）` : clock.text;
+  };
 
   // 每天, or 每週一、三、五 (week order).
   function daysText(days) {
@@ -4299,10 +4381,14 @@
     : list(apps).filter(isString).map(appName).join("、") || "—");
   const scheduledKeepText = keep => (Number.isInteger(keep) ? `每個應用保留最新 ${keep} 份排程備份` : "保留全部排程備份");
 
-  // How a scheduled run started (`params.schedule` of its job).
+  // How a scheduled run started (`params.schedule` of its job); the slot in device time (the job record has no
+  // local text: the device's zone converts it).
   function triggerText(info) {
     const label = TRIGGER_TEXT[info?.trigger] || "排程備份";
-    return isString(info?.slot) && info.slot ? `${label}（排程時間 ${date(info.slot)}）` : label;
+    if (!isString(info?.slot) || !info.slot) return label;
+    const clock = scheduleClock(info.slot, null);
+    const where = clockLabel(clock, info.slot);
+    return `${label}（排程時間 ${clock.text}${where ? `，${where}` : ""}）`;
   }
 
   // The device's zone for people: Asia/Taipei，UTC+08:00 (a zone without a name only by its offset).
@@ -4313,11 +4399,7 @@
   }
 
   // The browser's UTC offset at an instant, written like the engine's (+08:00).
-  function browserOffset(instant) {
-    const minutes = -instant.getTimezoneOffset();
-    const value = Math.abs(minutes);
-    return `${minutes < 0 ? "-" : "+"}${String(Math.floor(value / 60)).padStart(2, "0")}:${String(value % 60).padStart(2, "0")}`;
-  }
+  const browserOffset = instant => offsetText(-instant.getTimezoneOffset());
 
   // Said only when the computer in front of the administrator keeps another time than the device (CONTRACT §11): the
   // next run in both times.
@@ -4448,7 +4530,7 @@
       if (!summary.saved) action = "開啟排程備份";
     }
     const last = isObject(summary?.last_run) ? summary.last_run : null;
-    if (last) lines.push(`上次 ${last.local ? deviceTime(last.local) : date(last.started)} · ${runResult(last)}`);
+    if (last) lines.push(`上次 ${lastRunTime(last)} · ${runResult(last)}`);
     if (isObject(summary?.waiting)) lines.push(`${deviceTime(summary.waiting.local)} 的排程備份等其他作業完成後開始`);
     return h("section", { class: "card stat", "aria-label": "排程備份", dataset: { stat: "schedule" } }, tile("calendar-clock-outline"),
       h("div", { class: "stat-main" }, h("p", { class: "stat-label", text: "排程備份" }), h("p", { class: "stat-value", text: value }),
@@ -4457,6 +4539,8 @@
   }
 
   const runResult = last => RUN_RESULTS[last.result] || RUN_RESULTS.unknown;
+  // A slot's run by its slot, 立即執行一次 by when it started; both in device time (CONTRACT §7 LastRun).
+  const lastRunTime = last => (last.local ? deviceTime(last.local) : scheduleText(last.started, last.started_local));
 
   function viewSchedule() {
     const ui = state.schedule;
@@ -4483,6 +4567,10 @@
       scheduleStatusCard(data), scheduleForm(data)];
   }
 
+  // A settings file the engine cannot use: the form shows the defaults (CONTRACT §7 Schedule `defaults`), not what was
+  // saved, and the settings have to be saved again.
+  const unusableSettings = settings => settings?.defaults === true && Boolean(str(settings.problem));
+
   function scheduleStatusCard(data) {
     const settings = data.schedule;
     const problem = str(settings.problem);
@@ -4496,23 +4584,24 @@
         h("h3", { id: "schedule-state-heading", text: "目前狀態" })),
       problem ? chip("已暫停", "warn", "alert-outline") : on ? chip("已開啟", "ok", "check-circle-outline") : chip("已關閉", "neutral")),
       h("div", { class: "card-body" },
-        waiting ? infoNotice(`${deviceTime(waiting.local)} 的排程備份正在等其他作業完成，完成後會馬上開始。`, "info", "progress-clock",
+        waiting ? infoNotice(`${deviceTime(waiting.local)} 的排程備份正在等其他作業完成，會在它結束後 5 分鐘內開始。`, "info", "progress-clock",
           waitingJob ? h("div", { class: "button-group" }, link("查看進行中的作業", ["jobs", waitingJob], { class: "button small", dataset: { focus: "schedule-waiting-job" } })) : null) : null,
         metadata([
           ["排程", on ? `${timeText(settings)} · ${scheduleAppsText(settings.apps)}`
-            : settings.saved ? "關閉：不會自動建立備份" : "尚未設定：開啟後會在你選的時間自動備份"],
+            : unusableSettings(settings) ? "已暫停：設定無法使用，需要重新儲存"
+              : settings.saved ? "關閉：不會自動建立備份" : "尚未設定：開啟後會在你選的時間自動備份"],
           ["接下來", runs.length ? h("ul", { class: "path-list schedule-runs", "aria-label": "接下來的排程" },
             runs.map(run => h("li", { text: deviceTime(run.local) }))) : on && problem ? "已暫停，排程需要處理" : "—"],
           ["上次執行", last ? lastRunNode(last) : "還沒有執行過"],
-          on ? ["排程檢查", timerText(isObject(data.timer) ? data.timer : {})] : null,
+          on ? ["排程檢查", timerText(isObject(data.timer) ? data.timer : {}, [data.attention, statusSchedule()?.attention])] : null,
           ["設備時區", zoneText(data.timezone)]
         ]),
-        h("p", { class: "muted" }, "每一次排程備份與沒有執行的排程，都記錄在 ",
+        h("p", { class: "muted" }, "每一次排程備份與沒有執行的排程，都記錄在",
           link("活動紀錄", ["activity"], { dataset: { focus: "schedule-activity" } }), "。")));
   }
 
   function lastRunNode(last) {
-    const when = last.local ? deviceTime(last.local) : date(last.started);
+    const when = lastRunTime(last);
     const how = last.trigger && last.trigger !== "on-time" ? `（${TRIGGER_TEXT[last.trigger] || "排程備份"}）` : "";
     const jobId = isString(last.job_id) && JOB_ID_RE.test(last.job_id) ? last.job_id : null;
     const backupId = isString(last.backup_id) && BACKUP_ID_RE.test(last.backup_id) ? last.backup_id : null;
@@ -4526,15 +4615,17 @@
         backupId ? link("查看備份", ["backups", backupId], { dataset: { focus: "schedule-last-backup" } }) : null) : null);
   }
 
-  // The schedule checks (the timer, every 5 minutes): what systemd and the tick file's age say.
-  function timerText(timer) {
-    if (timer.active === false) return "沒有在執行：排程備份不會自動開始";
+  // The schedule checks (the timer, every 5 minutes): what systemd and the tick file's age say. The engine decides
+  // whether they run (`attention.code` timer-inactive, also when the timer has been active for 15 minutes without a
+  // check): this row says the same as the banner, and 正常 only after a recorded check.
+  function timerText(timer, attentions) {
+    if (timer.active === false || attentions.some(item => item?.code === "timer-inactive")) return "沒有在執行：排程備份不會自動開始";
     const age = timer.last_tick_age;
     if (isNumber(age)) {
       if (age > 15 * 60) return `已經 ${Math.round(age / 60)} 分鐘沒有檢查`;
       return age < 60 ? "正常，剛剛檢查過（每 5 分鐘一次）" : `正常，${Math.round(age / 60)} 分鐘前檢查過（每 5 分鐘一次）`;
     }
-    return timer.active === true ? "正常，等待第一次檢查（每 5 分鐘一次）" : "無法確認";
+    return timer.active === true ? "等待第一次檢查（每 5 分鐘一次）" : "無法確認";
   }
 
   // One radio as a card-like choice, like the other choices of this page.
@@ -4678,7 +4769,10 @@
     },
     h("section", { class: "card form-card", "aria-labelledby": "schedule-form-heading" },
       h("div", { class: "form-title" }, h("h3", { id: "schedule-form-heading", text: "排程設定" }),
-        scheduleChanged() ? chip("尚未儲存", "warn") : data.schedule.saved ? chip("已儲存", "ok", "check-circle-outline") : chip("尚未設定", "neutral")),
+        scheduleChanged() ? chip("尚未儲存", "warn") : unusableSettings(data.schedule) ? chip("需要重新儲存", "warn", "alert-outline")
+          : data.schedule.saved ? chip("已儲存", "ok", "check-circle-outline") : chip("尚未設定", "neutral")),
+      unusableSettings(data.schedule) ? infoNotice("儲存的排程設定無法使用（原因見上方），下面顯示的是預設值，不是上次儲存的設定。處理後請確認每個選項，再按「儲存排程…」重新儲存。",
+        "warn", "alert-outline") : null,
       switchRow, when, appsSection, options, keep,
       ui.saveError ? errorNotice(ui.saveError) : null,
       ui.runError ? errorNotice(ui.runError) : null,
@@ -4688,7 +4782,7 @@
       h("ul", { class: "bullet-list" }, [
         "到了設定的時間，會在 5 分鐘內開始；和手動備份一樣短暫暫停應用寫入，完成並驗證後才列出。",
         "設備當時沒有開機時，開機約 10 分鐘後補做一次，只補最近的一次；下一次排程在 3 小時內就不補。",
-        "有其他作業進行中時，會等它結束後馬上開始。",
+        "有其他作業進行中時，會在它結束後 5 分鐘內開始。",
         "尚未部署或狀態異常的應用會略過，其他應用照常備份，結果標示「部分完成」。",
         "失敗時不會自動重試，原因會顯示在頁面上方；下一次排程照常執行。",
         "沒有執行的排程，會在「活動紀錄」標示「未執行」。"
@@ -4777,11 +4871,15 @@
     const line = item => h("li", null,
       h("span", { text: `${backupTitle({ type: item.type, scheduled: item.scheduled !== false, created: item.created })} · ${list(item.apps).map(app => str(app?.name || app?.id)).filter(Boolean).join("、") || "—"} · ${bytes(item.size)}` }),
       item.reason ? h("span", { class: "secondary", text: str(item.reason) }) : null);
+    // A schedule that is saved off deletes nothing by itself: what the next run would delete is said only while it is
+    // on (and acknowledged); off, only 「立即執行一次」 would apply the keep-last, which is said without blocking.
+    const deletes = request.enabled && request.keep_last !== null && removals.length > 0;
     confirmDialog({
       title: turningOn ? "開啟排程備份？" : turningOff ? "關閉排程備份？" : "儲存排程備份？",
       body: [
         h("p", { text: request.enabled ? "確認下列設定後儲存。儲存本身不會建立或刪除任何備份。"
-          : "排程會關閉，之後不會再自動建立備份；已建立的排程備份會保留。" }),
+          : turningOff ? "排程會關閉，之後不會再自動建立或刪除備份；已建立的排程備份會保留。"
+            : "排程維持關閉，不會自動建立或刪除備份。儲存本身不會建立或刪除任何備份。" }),
         metadata([
           ["排程", request.enabled ? "開啟" : "關閉"],
           ["日子與時間", `${timeText(request)}（設備時間，${zoneText(zone)}）`],
@@ -4793,16 +4891,19 @@
         request.enabled ? [h("h4", { class: "subheading", text: "接下來的排程" }), runs.length
           ? h("ul", { class: "bullet-list schedule-preview-runs", "aria-label": "接下來的排程" }, runs.map(run => h("li", { text: deviceTime(run.local) })))
           : h("p", { class: "muted", text: "—" })] : null,
-        h("h4", { class: "subheading", text: "下一次排程備份成功後" }),
-        request.keep_last === null ? h("p", { text: "保留全部排程備份，不會自動刪除。" })
-          : removals.length ? [h("p", { text: `會刪除下列 ${removals.length} 份較舊的排程備份（共 ${bytes(retention.freed_bytes)}）：` }),
-            h("ul", { class: "bullet-list warning-list schedule-removals", "aria-label": "會刪除的排程備份" }, removals.map(line))]
-            : h("p", { text: "不會刪除任何備份。" }),
-        kept.length ? [h("p", { text: `下列 ${kept.length} 份超出保留份數，但目前仍被需要，暫時不會刪除：` }),
-          h("ul", { class: "bullet-list schedule-kept", "aria-label": "暫時不會刪除的排程備份" }, kept.map(line))] : null,
+        request.enabled ? [h("h4", { class: "subheading", text: "下一次排程備份成功後" }),
+          request.keep_last === null ? h("p", { text: "保留全部排程備份，不會自動刪除。" })
+            : removals.length ? [h("p", { text: `會刪除下列 ${removals.length} 份較舊的排程備份（共 ${bytes(retention.freed_bytes)}）：` }),
+              h("ul", { class: "bullet-list warning-list schedule-removals", "aria-label": "會刪除的排程備份" }, removals.map(line))]
+              : h("p", { text: "不會刪除任何備份。" }),
+          kept.length ? [h("p", { text: `下列 ${kept.length} 份超出保留份數，但目前仍被需要，暫時不會刪除：` }),
+            h("ul", { class: "bullet-list schedule-kept", "aria-label": "暫時不會刪除的排程備份" }, kept.map(line))] : null]
+          : request.keep_last === null ? null
+            : h("p", { class: "schedule-run-now-note", text: `之後仍可以按「立即執行一次」；它完成後才會依保留份數刪除較舊的排程備份${removals.length
+              ? `（以目前的備份來說是 ${removals.length} 份，共 ${bytes(retention.freed_bytes)}）` : ""}。` }),
         h("p", { class: "muted", text: "手動備份、還原前自動備份與上傳的備份不會被刪除。這項變更會記錄在系統日誌。" })
       ],
-      acknowledge: request.keep_last !== null && removals.length ? "我了解下一次排程備份成功後，上列備份會被刪除" : null,
+      acknowledge: deletes ? "我了解下一次排程備份成功後，上列備份會被刪除" : null,
       confirmLabel: turningOn ? "開啟排程備份" : turningOff ? "關閉排程備份" : "儲存排程",
       action: async () => {
         let data;
@@ -5524,16 +5625,21 @@
   }
 
   // A scheduled slot that did not run (missed, skipped, no key, no apps, or a job that could not be launched); the
-  // engine's message says why, in the device's time.
+  // engine's message says why. Its times are the device's like the message (CONTRACT §7 ScheduleEvent `local`,
+  // `first_local`), marked 設備時間 when this computer keeps another time than the jobs' rows.
   function eventRow(event) {
     const several = Number.isInteger(event.count) && event.count > 1 && isString(event.first);
     const kind = EVENT_KINDS[event.kind] || "排程備份";
+    const instant = event.slot || event.at;
+    const clock = scheduleClock(instant, event.slot ? event.local : null, { weekday: false });
+    const where = clockLabel(clock, instant);
+    const first = several ? scheduleClock(event.first, event.first_local, { weekday: false }).text : "";
     return h("tr", { dataset: { event: event.kind } },
-      h("th", { scope: "row", "data-label": "時間" }, h("span", { class: "row-title", text: date(event.slot || event.at) }),
-        h("span", { class: "secondary", text: event.slot ? "排程時間" : "記錄時間" })),
+      h("th", { scope: "row", "data-label": "時間" }, h("span", { class: "row-title", text: clock.text }),
+        h("span", { class: "secondary", text: `${event.slot ? "排程時間" : "記錄時間"}${where ? `（${where}）` : ""}` })),
       h("td", { "data-label": "作業", text: "排程備份" }),
       h("td", { "data-label": "狀態" }, chip("未執行", "warn", "calendar-remove-outline")),
-      h("td", { "data-label": "內容", text: several ? `${kind}（共 ${event.count} 次，從 ${date(event.first)} 起）` : kind }),
+      h("td", { "data-label": "內容", text: several ? `${kind}（共 ${event.count} 次，從 ${first} 起）` : kind }),
       h("td", { "data-label": "結果", text: str(event.message) }));
   }
 
