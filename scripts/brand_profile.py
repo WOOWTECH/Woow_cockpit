@@ -235,6 +235,7 @@ html.pf-v6-theme-dark #nav-system::before {{ color: #212121; }}
 html body.login-pf {{ background: var(--brand-page); color: var(--brand-text); }}
 html .login-pf .container {{ background: var(--brand-surface); }}
 html .login-pf :is(.login-note,.container-footer) {{ color: var(--brand-muted); }}
+html .login-pf .container .container-footer {{ color: var(--brand-muted); }}
 html .login-pf .form-control {{ background-color: var(--brand-subtle); color: var(--brand-text); }}
 html .login-pf .form-control::placeholder {{ color: var(--brand-muted); opacity: 1; }}
 html .login-pf .form-control:focus:not([aria-invalid="true"]) {{ border-color: var(--brand-primary); }}

@@ -14,6 +14,8 @@ let browserCDP;
 let installed = false;
 try {
   context = await chromium.launchPersistentContext(profile, {
+    // PWA installation requires the full browser, not the headless-shell build.
+    channel: 'chromium',
     executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE || undefined,
     headless: process.env.PWA_HEADFUL !== '1',
   });
