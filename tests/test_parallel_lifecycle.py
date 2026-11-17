@@ -273,6 +273,41 @@ class DeploymentTransitions(HostFixture):
         self.assertEqual((self.base / 'current').read_bytes(), b'do not replace')
         self.assertEqual(self.calls, [])
 
+    def test_untrusted_node_ancestor_aborts_before_render_or_service_changes(self):
+        self.setup_install(existing=False)
+        ancestor = self.host / 'usr/bin'
+        alternate = self.host / 'usr/private-bin'
+        for kind in ('writable', 'nonroot', 'symlink'):
+            with self.subTest(kind=kind):
+                if kind == 'writable': ancestor.chmod(0o775)
+                elif kind == 'nonroot': self.owners[ancestor] = 1000
+                else:
+                    ancestor.rename(alternate)
+                    ancestor.symlink_to(alternate)
+                try:
+                    with self.assertRaisesRegex(ValueError, 'Node.*ancestors'):
+                        m.install(self.c)
+                    m.render.assert_not_called()
+                    self.assertEqual(self.calls, [])
+                    self.assertFalse(self.base.exists())
+                    self.assertEqual(self.state, self.before_state)
+                    self.assertEqual(self.conf.read_bytes(), self.before_files[self.conf])
+                finally:
+                    if kind == 'writable': ancestor.chmod(0o755)
+                    elif kind == 'nonroot': self.owners.clear()
+                    else:
+                        ancestor.unlink()
+                        alternate.rename(ancestor)
+
+    def test_nonexecutable_node_aborts_before_render_or_service_changes(self):
+        self.setup_install(existing=False)
+        (self.host / 'usr/bin/node').chmod(0o644)
+        with self.assertRaisesRegex(ValueError, 'Node'):
+            m.install(self.c)
+        m.render.assert_not_called()
+        self.assertEqual(self.calls, [])
+        self.assertFalse(self.base.exists())
+
     def test_global_lock_rejects_concurrent_operation_and_releases_after_exception(self):
         with self.assertRaisesRegex(RuntimeError, 'simulated failure'):
             with m.deployment_lock():
@@ -352,6 +387,16 @@ class ReceiptIntegrity(HostFixture):
         drift = m.audit_receipt(self.release, self.meta)
         self.assertIn(self.backend_name, drift)
         self.assertTrue(any('permissions' in item for item in drift))
+
+    def test_0600_release_file_is_drift_even_when_its_hash_matches(self):
+        asset = self.release / 'public/index.html'
+        self.assertEqual(m.audit_receipt(self.release, self.meta), [])
+        asset.chmod(0o600)
+        self.assertEqual(m.digest(asset.read_bytes()), self.meta['files']['public/index.html'])
+        self.assertEqual(m.audit_receipt(self.release, self.meta),
+                         ['release ownership/permissions: ' + str(asset)])
+        asset.chmod(0o644)
+        self.assertEqual(m.audit_receipt(self.release, self.meta), [])
 
     def test_symlink_asset_is_rejected_even_with_identical_bytes(self):
         asset = self.release / 'public/index.html'
