@@ -1,4 +1,5 @@
 """Deployment transitions with a disposable host and no live service commands."""
+import base64
 import configparser
 import copy
 from contextlib import ExitStack, nullcontext
@@ -158,7 +159,9 @@ class HostFixture(unittest.TestCase):
                          'public/branding/brand.json', 'public/packages/woowpiweb/index.html'):
                 path = out / name
                 path.parent.mkdir(parents=True, exist_ok=True)
-                path.write_bytes(b'payload')
+                data = (f'ExecStart=/usr/bin/node {self.base}/current/pi-gateway.mjs\n'.encode()
+                        if name in ('pi-public.service', 'pi-local.service') else b'payload')
+                path.write_bytes(data)
 
         real_write = m.write
         real_snapshot = m.snapshot
@@ -188,8 +191,116 @@ class HostFixture(unittest.TestCase):
             self.assertEqual(path.read_bytes() if path.exists() else None, content, str(path))
         self.assertFalse((self.base / 'current').is_symlink())
 
+    def setup_managed(self):
+        self.setup_install(existing=False)
+        with patch.object(m, 'verify', return_value={'status': 'verified'}):
+            m.install(self.c)
+        self.calls.clear()
+        m.render.reset_mock()
+        m.write.reset_mock()
+        m.write_quadlet.reset_mock()
+        return (self.base / 'current').resolve()
+
+    def tree_state(self):
+        return {str(p.relative_to(self.host)): ('symlink', os.readlink(p)) if p.is_symlink()
+                else (stat.S_IMODE(p.stat().st_mode), p.read_bytes() if p.is_file() else None)
+                for p in self.host.rglob('*')}
+
 
 class DeploymentTransitions(HostFixture):
+    def test_external_quadlet_rewrite_rejects_upgrade_before_any_mutation(self):
+        self.setup_managed()
+        self.qpath.write_bytes(b'[Container]\nContainerName=apporo-cockpit-pwa\n'
+                               b'Volume=/home/operator/apporo-cockpit-release-20261117:/opt/parallel:ro\n')
+        before = self.tree_state()
+        with self.assertRaisesRegex(ValueError, 'Managed current deployment drift:.*quadlet'):
+            m.install(self.c)
+        self.assertEqual(self.tree_state(), before)
+        self.assertEqual(self.calls, [])
+        m.render.assert_not_called()
+        m.write.assert_not_called()
+        m.write_quadlet.assert_not_called()
+
+    def test_pi_unit_and_release_receipt_drift_reject_upgrade_before_any_mutation(self):
+        release = self.setup_managed()
+        cases = [(unit, unit.read_bytes() + b'# external edit\n') for unit in self.units]
+        cases += [(release / 'pi-gateway.mjs', b'changed gateway'),
+                  (release / 'receipt.json', b'not JSON')]
+        for path, altered in cases:
+            with self.subTest(path=path):
+                original = path.read_bytes()
+                path.write_bytes(altered)
+                before = self.tree_state()
+                try:
+                    with self.assertRaisesRegex(ValueError, 'Managed current deployment drift'):
+                        m.install(self.c)
+                    self.assertEqual(self.tree_state(), before)
+                    self.assertEqual(self.calls, [])
+                    m.render.assert_not_called()
+                    m.write.assert_not_called()
+                finally: path.write_bytes(original)
+
+    def test_consistent_inactive_current_can_upgrade_and_rollback_to_matching_snapshot(self):
+        previous = self.setup_managed()
+        previous_link = os.readlink(self.base / 'current')
+        for unit in m.unit_names(self.c): self.state[unit] = {'enabled': False, 'active': False}
+        self.state['frontend_active'] = False
+        inactive_state = copy.deepcopy(self.state)
+        with patch.object(m, 'verify', return_value={'status': 'verified'}):
+            m.install(self.c)
+        active = (self.base / 'current').resolve()
+        self.assertNotEqual(active, previous)
+        record = json.loads((self.base / 'transactions' / (active.name + '.json')).read_text())
+        self.assertEqual(record['previous'], previous_link)
+        self.assertEqual(record['service_state'], inactive_state)
+        expected = {self.qpath: 'quadlet.container', self.units[0]: 'pi-public.service', self.units[1]: 'pi-local.service'}
+        for path, name in expected.items():
+            self.assertEqual(base64.b64decode(record['before'][str(path)]['data']), (previous / name).read_bytes())
+        m.restore(self.c, record)
+        self.assertEqual(m.validate_current(self.c), previous_link)
+        self.assertEqual(self.state, inactive_state)
+
+    def test_external_rewrite_during_render_is_not_adopted_as_rollback_state(self):
+        self.setup_managed()
+        previous_link = os.readlink(self.base / 'current')
+        journals = set((self.base / 'transactions').iterdir())
+        before_units = {p: p.read_bytes() for p in self.units}
+        payload = m.render.side_effect
+        external = self.qpath.read_bytes() + b'# another agent\n'
+
+        def concurrent_render(c, out):
+            payload(c, out)
+            self.qpath.write_bytes(external)
+
+        with patch.object(m, 'render', side_effect=concurrent_render):
+            with self.assertRaisesRegex(ValueError, 'Managed current deployment drift:.*quadlet'):
+                m.install(self.c)
+        self.assertEqual(os.readlink(self.base / 'current'), previous_link)
+        self.assertEqual(set((self.base / 'transactions').iterdir()), journals)
+        self.assertEqual(self.qpath.read_bytes(), external)
+        self.assertEqual({p: p.read_bytes() for p in self.units}, before_units)
+        m.write_quadlet.assert_not_called()
+        self.assertFalse(any(args[:2] == ['systemctl', 'restart'] for kind, args in self.calls if kind == 'system'))
+
+    def test_snapshot_bytes_must_match_previous_even_when_live_files_match_again(self):
+        self.setup_managed()
+        previous_link = os.readlink(self.base / 'current')
+        journals = set((self.base / 'transactions').iterdir())
+        take_snapshot = m.snapshot.side_effect
+
+        def transient_rewrite(files):
+            result = take_snapshot(files)
+            result[str(self.qpath)]['data'] = base64.b64encode(b'unrelated external Quadlet').decode()
+            return result
+
+        with patch.object(m, 'snapshot', side_effect=transient_rewrite):
+            with self.assertRaisesRegex(ValueError, 'Rollback snapshot differs.*quadlet'):
+                m.install(self.c)
+        self.assertEqual(os.readlink(self.base / 'current'), previous_link)
+        self.assertEqual(set((self.base / 'transactions').iterdir()), journals)
+        m.write_quadlet.assert_not_called()
+        self.assertEqual(m.validate_current(self.c), previous_link)
+
     def test_late_health_failure_restores_bytes_modes_and_independent_unit_states(self):
         self.setup_install(existing=True, frontend_active=False)
         with patch.object(m, 'verify', side_effect=ValueError('health failed')):

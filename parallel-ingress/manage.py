@@ -187,6 +187,7 @@ def install(c):
     if os.geteuid()!=0:raise ValueError('install requires sudo')
     meta=metadata(c)
     base,qpath=paths(c)
+    previous=validate_current(c)
     hashes=backend_hashes()
     node=Path(c['node_path'])
     if not node.is_file() or not node.stat().st_mode&0o111:
@@ -200,10 +201,6 @@ def install(c):
     if qpath.exists() and f"ContainerName={c['instance']}-cockpit-pwa" not in qpath.read_text().splitlines():
         raise ValueError('An unrelated Quadlet already uses this instance name')
     directory(base);directory(base/'releases');directory(base/'transactions',0o700)
-    if (base/'current').exists() and not (base/'current').is_symlink():
-        raise ValueError('Unexpected non-symlink current release')
-    if (base/'current').is_symlink():
-        current(c['instance'])
     for unit in unit_names(c):
         p=Path('/etc/systemd/system')/unit
         if p.exists() and f'{base}/current/pi-gateway.mjs' not in p.read_text():
@@ -229,8 +226,13 @@ def install(c):
     additions=[c['public_origin'],c['public_origin'].replace('https:','wss:',1),f"http://127.0.0.1:{c['listen_port']}"]
     changed=origins(old,additions).encode()
     units=[Path('/etc/systemd/system')/n for n in unit_names(c)]
-    record={'config':c,'release':release_id,'previous':os.readlink(base/'current') if (base/'current').is_symlink() else None,
+    record={'config':c,'release':release_id,'previous':previous,
             'before':snapshot([qpath,conf,*units]),'service_state':service_state(c)}
+    # Other writers may not take our lock. Never record their unrelated files
+    # as the rollback state for the managed release checked before rendering.
+    if validate_current(c)!=previous:
+        raise ValueError('Managed current deployment drift: current release changed during preparation')
+    validate_previous(base,record)
     journal=base/'transactions'/f'{release_id}.json'
     write(journal,(json.dumps(record)+'\n').encode(),0o600)
     try:
@@ -289,6 +291,45 @@ def audit_receipt(target,meta):
     return drift
 
 
+def installed_file_drift(target,c,before=None):
+    """Compare live files or captured rollback bytes with one fixed release."""
+    _,qpath=paths(c)
+    files={qpath:'quadlet.container',**{Path('/etc/systemd/system')/unit:f'pi-{mode}.service'
+                                      for mode,unit in zip(('public','local'),unit_names(c))}}
+    drift=[]
+    for path,name in files.items():
+        expected=target/name
+        if before is None:
+            data=path.read_bytes() if path.is_file() and not path.is_symlink() else None
+        else:
+            entry=before.get(str(path))
+            data=base64.b64decode(entry['data'],validate=True) if entry else None
+        if data is None or not expected.is_file() or data!=expected.read_bytes():
+            drift.append('quadlet' if path==qpath else path.name)
+    return drift
+
+
+def validate_current(c):
+    """Preflight managed state without requiring an active frontend or Pi unit."""
+    base,_=paths(c)
+    link=base/'current'
+    if not link.is_symlink():
+        if link.exists():raise ValueError('Unexpected non-symlink current release')
+        return None
+    previous=os.readlink(link)
+    try:
+        _,_,meta,installed=current(c['instance'])
+        if installed['owner']!=c['owner']:
+            raise ValueError('managed instance owner cannot change during upgrade')
+        target=base/previous
+        drift=audit_receipt(target,meta)+installed_file_drift(target,installed)
+        if not link.is_symlink() or os.readlink(link)!=previous:drift.append('current release changed')
+        if drift:raise ValueError(', '.join(drift))
+    except (OSError,ValueError,KeyError,TypeError) as error:
+        raise ValueError('Managed current deployment drift: '+str(error)) from error
+    return previous
+
+
 def validate_previous(base,record):
     previous=record['previous']
     if not previous:return  # Existing legacy sample has no managed receipt.
@@ -297,15 +338,14 @@ def validate_previous(base,record):
     meta=json.loads((target/'receipt.json').read_text())
     drift=audit_receipt(target,meta)
     if drift:raise ValueError('Previous release no longer matches the common backend or trusted assets: '+', '.join(drift))
+    drift=installed_file_drift(target,config(meta['config']),record['before'])
+    if drift:raise ValueError('Rollback snapshot differs from the previous managed release: '+', '.join(drift))
 
 
 def verify(instance):
     base,target,meta,c=current(instance)
-    drift=audit_receipt(target,meta)
-    _,qpath=paths(c)
-    if qpath.read_bytes()!=(target/'quadlet.container').read_bytes():drift.append('quadlet')
-    for mode,unit in zip(('public','local'),unit_names(c)):
-        if (Path('/etc/systemd/system')/unit).read_bytes()!=(target/f'pi-{mode}.service').read_bytes():drift.append(unit)
+    drift=audit_receipt(target,meta)+installed_file_drift(target,c)
+    for unit in unit_names(c):
         command(['systemctl','is-active','--quiet',unit])
     user_command(c['owner'],'systemctl','--user','is-active','--quiet',f"{c['instance']}-cockpit-pwa.service")
     opener=urllib.request.build_opener(urllib.request.ProxyHandler({}))
