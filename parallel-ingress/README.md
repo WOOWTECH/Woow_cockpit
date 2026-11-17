@@ -1,6 +1,6 @@
 # 同一台主機的 WOOW／Apporo 雙入口
 
-`parallel-ingress` 在保留原 WOOW 入口的主機上，增加可選的 Apporo Cockpit／PWA／Pi 呈現。兩個入口管理**同一份主機服務、備份引擎、Podman 應用及原生 Pi 資料**。它不安裝第二組 47 個應用容器，也不建立第二個租戶、服務 owner 或獨立備份引擎；任一入口的管理操作都會影響同一台主機。
+`parallel-ingress` 在保留原 WOOW 入口的主機上，增加可選的 Apporo Cockpit／PWA／Pi 呈現。兩個入口管理**同一份主機服務、備份引擎、Podman 應用及原生 Pi 資料**。它不安裝第二組應用容器，也不建立第二個租戶、服務 owner 或獨立備份引擎；任一入口的管理操作都會影響同一台主機。
 
 Apporo 使用一個 `apporo-cockpit-pwa` 前端容器及兩個 root systemd Pi gateway units。已有同名 Apporo 樣板入口時，沿用其 Quadlet 名稱原地更新。原 Cockpit 登入、管理員提權和 Pi 自己的密碼保護繼續適用。
 
@@ -13,7 +13,7 @@ git rev-parse HEAD 'HEAD^{tree}'
 git status --porcelain
 ```
 
-工作樹必須乾淨，所有程式與文件已 commit。installer 會記錄 source commit／tree 並拒絕 dirty source；不要直接修改 checkout 裡的樣板來放設備設定，應將設定複製到後述 root 目錄。本頁不提供尚未完成驗收／合併的最終 SHA；以實際交付材料為準。
+工作樹必須乾淨，所有程式與文件已 commit。installer 會記錄 source commit／tree 並拒絕 dirty source；不要直接修改 checkout 裡的樣板來放設備設定，應將設定複製到後述 root 目錄。發行材料的完整 SHA 由 Ubuntu 發行倉庫的品牌材料鎖記錄。
 
 共同後端必須先安裝**同一份固定來源**：service manager helper、backup helper、所有 backup engine Python 模組的內容及模組清單都必須一致。缺少、修改或多出模組都會拒絕部署，不能只看 UI 版本號相同。
 
@@ -110,3 +110,7 @@ sudo env PYTHONDONTWRITEBYTECODE=1 python3 parallel-ingress/manage.py rollback -
 rollback 依該 instance 的 transaction journal 還原入口 release、Quadlet、Pi units、服務狀態及受管理的 Cockpit 設定，可能重啟相關入口／Cockpit。它只回退這次 UI／入口設定交易，不還原應用資料、對話、備份檔、Secret、共同 engine 或全域品牌；也不回退 Cloudflare policy／DNS／Tunnel。若受管理檔案在安裝後被另行修改，或前一 release 已不符合共同後端，必須先處理差異，不能覆寫檔案硬退。
 
 並行入口與共同後端升級應使用相容來源並分開記錄驗收。保留既有設備資料和入口，不代表提供租戶隔離或零中斷保證；本文件與樣板本身也不代表特定設備已完成實機驗收。
+
+## 實機驗收工具
+
+`tests/parallel-ingress-live.mjs` 使用環境變數 `COCKPIT_URL`、`COCKPIT_USER`、`COCKPIT_PASSWORD`，驗證登入、提權、實際備份／排程／服務資料、手機主題與 PWA manifest；不修改排程或啟停應用。`tests/pi-web-public-live.mjs` 另驗證 Pi 自身登入、主題與串流；Apporo 設 `PI_WEB_EXPECTED_ACCENT=#8B6B24`，需要真實對話時才設 `PI_WEB_CHAT_TEST=1`。畫面參考的 17 個位置會顯示「尚未建立此設備的畫面紀錄」；可重現來源不攜帶客戶實機截圖，也不會要求不存在的圖片。

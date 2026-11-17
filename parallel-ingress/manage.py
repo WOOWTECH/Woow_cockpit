@@ -189,8 +189,12 @@ def install(c):
     base,qpath=paths(c)
     hashes=backend_hashes()
     node=Path(c['node_path'])
-    if not node.is_file() or node.stat().st_uid!=0 or node.stat().st_mode&0o022:
+    if not node.is_file() or not node.stat().st_mode&0o111:
         raise ValueError('Node must be root-owned and not writable by others')
+    for p in [*reversed(node.parents),node]:
+        s=p.lstat()
+        if p.is_symlink() or s.st_uid!=0 or s.st_mode&0o022:
+            raise ValueError('Node and its ancestors must be trusted root-owned paths: '+str(p))
     if not qpath.parent.is_dir():raise ValueError('Configure the existing rootless Podman owner first')
     # The legacy Apporo sample's exact unit is the intentional in-place upgrade target.
     if qpath.exists() and f"ContainerName={c['instance']}-cockpit-pwa" not in qpath.read_text().splitlines():
@@ -268,7 +272,8 @@ def audit_receipt(target,meta):
     if actual!=set(meta['files']):drift.append('release inventory')
     for p in [target.resolve(),*target.rglob('*')]:
         s=p.lstat()
-        if p.is_symlink() or s.st_uid!=0 or s.st_mode&0o022 or (p.is_dir() and stat.S_IMODE(s.st_mode)!=0o755):
+        expected_mode=0o755 if p.is_dir() else 0o644
+        if p.is_symlink() or s.st_uid!=0 or stat.S_IMODE(s.st_mode)!=expected_mode:
             drift.append('release ownership/permissions: '+str(p))
     for name,h in {**meta['files']}.items():
         p=target/name
