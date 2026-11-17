@@ -3,6 +3,22 @@
 // Cockpit session AND Pi Web auth required in either mode.
 import http from 'node:http';
 import { Transform } from 'node:stream';
+import { existsSync, readFileSync } from 'node:fs';
+
+// Presentation comes from the same installed profile as Cockpit. Service IDs,
+// request validation, authentication and the theme bridge protocol stay shared.
+const brandPath=process.env.PI_GATEWAY_BRAND_FILE||'/etc/cockpit/branding/brand.json';
+let brandColors={light:{primary:'#6183fc',hover:'#6183fc',on_primary:'#111a3a'},dark:{primary:'#6183fc',hover:'#6183fc',on_primary:'#111a3a'}};
+if(process.env.PI_GATEWAY_BRAND_FILE||existsSync(brandPath)){
+ const raw=readFileSync(brandPath,'utf8');
+ if(raw.length>16384)throw Error('Brand profile is too large');
+ const profile=JSON.parse(raw);
+ if(profile.schema!==1||!['woowtech','apporo'].includes(profile.id))throw Error('Invalid brand profile');
+ for(const mode of ['light','dark'])for(const key of ['primary','hover','on_primary']){
+  if(!/^#[0-9a-f]{6}$/i.test(profile.colors?.[mode]?.[key]||''))throw Error(`Invalid brand color: ${mode}.${key}`);
+ }
+ brandColors=profile.colors;
+}
 
 const required = key => { const value=process.env[key]; if(!value) throw Error(`Missing ${key}`); return value; };
 const bind=required('PI_GATEWAY_BIND'), host=required('PI_GATEWAY_HOST'), port=Number(required('PI_GATEWAY_PORT'));
@@ -81,7 +97,7 @@ function outputHeaders(headers){
 // The theme bridge runs only in embedded Pi Web pages. It accepts messages
 // exclusively from the authenticated Cockpit parent, and never changes pi-theme
 // in localStorage, so standalone Pi Web retains its own preference.
-const themeBridge=`(()=>{'use strict';if(window.parent===window)return;const expected=${JSON.stringify(cockpitOrigin)};let chosen=null;const root=document.documentElement;function apply(){if(!chosen)return;if(root.dataset.theme!==chosen)root.dataset.theme=chosen;const dark=chosen==='dark';if(root.classList.contains('dark')!==dark)root.classList.toggle('dark',dark);root.style.setProperty('--accent','#6183fc');root.style.setProperty('--accent-hover','#6183fc');root.style.setProperty('--accent-contrast','#111a3a')}window.addEventListener('message',event=>{if(event.origin!==expected||event.source!==window.parent||event.data?.type!=='woow-cockpit-theme'||!['light','dark'].includes(event.data.theme))return;chosen=event.data.theme;apply()});new MutationObserver(apply).observe(root,{attributes:true,attributeFilter:['class','data-theme']});window.parent.postMessage({type:'woow-cockpit-theme-ready'},expected)})();`;
+const themeBridge=`(()=>{'use strict';if(window.parent===window)return;const expected=${JSON.stringify(cockpitOrigin)};const palettes=${JSON.stringify(brandColors)};let chosen=null;const root=document.documentElement;function apply(){if(!chosen)return;if(root.dataset.theme!==chosen)root.dataset.theme=chosen;const dark=chosen==='dark';if(root.classList.contains('dark')!==dark)root.classList.toggle('dark',dark);const palette=palettes[chosen];root.style.setProperty('--accent',palette.primary);root.style.setProperty('--accent-hover',palette.hover);root.style.setProperty('--accent-contrast',palette.on_primary)}window.addEventListener('message',event=>{if(event.origin!==expected||event.source!==window.parent||event.data?.type!=='woow-cockpit-theme'||!['light','dark'].includes(event.data.theme))return;chosen=event.data.theme;apply()});new MutationObserver(apply).observe(root,{attributes:true,attributeFilter:['class','data-theme']});window.parent.postMessage({type:'woow-cockpit-theme-ready'},expected)})();`;
 const bridgeTag='<script defer src="/__woow_cockpit_theme.js"></script>';
 function injectThemeBridge(){
  let prefix=Buffer.alloc(0),done=false;

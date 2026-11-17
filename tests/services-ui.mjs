@@ -6,7 +6,8 @@ import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
 import { chromium } from 'playwright-core';
 
-const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+const root = process.env.BRAND_UI_ROOT || resolve(dirname(fileURLToPath(import.meta.url)), '..');
+const apporo = process.env.UI_BRAND === 'apporo';
 const helper = '/usr/local/libexec/woowtech-cockpit-services';
 const scopes = [
   { id: 'system', label: '本機系統', owner: 'root', uid: 0 },
@@ -200,16 +201,16 @@ try {
     await ready(page);
     await page.evaluate(() => { localStorage.setItem('shell:style','dark'); window.dispatchEvent(new CustomEvent('cockpit-style',{detail:{style:'dark'}})); });
     await page.waitForFunction(() => document.documentElement.classList.contains('pf-v6-theme-dark'));
-    assert.equal(await page.locator('body').evaluate(e => getComputedStyle(e).backgroundColor), 'rgb(21, 23, 28)');
-    assert.equal(await page.locator('.inventory').evaluate(e => getComputedStyle(e).backgroundColor), 'rgb(32, 35, 42)');
+    assert.equal(await page.locator('body').evaluate(e => getComputedStyle(e).backgroundColor), (apporo ? 'rgb(24, 24, 27)' : 'rgb(21, 23, 28)'));
+    assert.equal(await page.locator('.inventory').evaluate(e => getComputedStyle(e).backgroundColor), (apporo ? 'rgb(31, 31, 34)' : 'rgb(32, 35, 42)'));
     assert.equal(await page.locator('#search').evaluate(e => getComputedStyle(e, '::placeholder').color), 'rgb(193, 197, 206)');
-    assert.equal(await service(page, 'n8n.service').locator('[data-open-details]').evaluate(e => getComputedStyle(e).color), 'rgb(97, 131, 252)');
-    assert.equal(await page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue('--pf-t--global--text--color--brand--default').trim().toLowerCase()), '#6183fc');
+    assert.equal(await service(page, 'n8n.service').locator('[data-open-details]').evaluate(e => getComputedStyle(e).color), (apporo ? 'rgb(196, 158, 83)' : 'rgb(97, 131, 252)'));
+    assert.equal(await page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue('--pf-t--global--text--color--brand--default').trim().toLowerCase()), apporo ? '#c49e53' : '#6183fc');
     await page.locator('#search').fill('n8n.service');
     await service(page, 'n8n.service').locator('[data-open-details]').click();
     await enabled(page, '#refresh-logs');
     assert.equal(await page.locator('#logs').evaluate(e => getComputedStyle(e).color), 'rgb(241, 242, 245)');
-    assert.equal(await page.locator('#details').evaluate(e => getComputedStyle(e).backgroundColor), 'rgb(32, 35, 42)');
+    assert.equal(await page.locator('#details').evaluate(e => getComputedStyle(e).backgroundColor), (apporo ? 'rgb(31, 31, 34)' : 'rgb(32, 35, 42)'));
     for (const width of [320,390,768,1440]) {
       await page.setViewportSize({width,height:900});
       assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));

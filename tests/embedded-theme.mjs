@@ -5,6 +5,7 @@ import {readFile} from 'node:fs/promises';
 import {chromium} from 'playwright-core';
 const listen=s=>new Promise(r=>s.listen(0,'127.0.0.1',()=>r(s.address().port)));
 let wrapper=await readFile('pi-web-integration/package/app.js','utf8');
+const palettes=process.env.PI_GATEWAY_BRAND_FILE ? JSON.parse(await readFile(process.env.PI_GATEWAY_BRAND_FILE,'utf8')).colors : {light:{primary:'#6183fc'},dark:{primary:'#6183fc'}};
 const cockpit=http.createServer((req,res)=>{
  if(req.url==='/cockpit/login'){res.writeHead(req.headers.cookie?.includes('cockpit=valid')?200:401).end();return;}
  if(req.url==='/wrapper.js'){res.writeHead(200,{'content-type':'text/javascript'}).end(wrapper);return;}
@@ -35,11 +36,12 @@ try {
  await attacker.evaluate(()=>window.parent.frames[0].postMessage({type:'woow-cockpit-theme',theme:'light'},'*'));
  await page.waitForTimeout(100);assert.equal(await piFrame.evaluate(()=>document.documentElement.dataset.theme),'dark');
 
- assert.equal(await piFrame.evaluate(()=>document.documentElement.style.getPropertyValue('--accent')),'#6183fc');
+ assert.equal(await piFrame.evaluate(()=>document.documentElement.style.getPropertyValue('--accent')),palettes.dark.primary);
  await piFrame.evaluate(()=>{document.documentElement.dataset.theme='light';document.documentElement.classList.remove('dark')});
  await piFrame.waitForFunction(()=>document.documentElement.dataset.theme==='dark'&&document.documentElement.classList.contains('dark'));
  await control.evaluate(()=>localStorage.setItem('shell:style','light'));
  await piFrame.waitForFunction(()=>document.documentElement.dataset.theme==='light'&&!document.documentElement.classList.contains('dark'));
+ assert.equal(await piFrame.evaluate(()=>document.documentElement.style.getPropertyValue('--accent')),palettes.light.primary);
  await control.evaluate(()=>localStorage.setItem('shell:style','auto'));
  await page.emulateMedia({colorScheme:'dark'});await piFrame.waitForFunction(()=>document.documentElement.dataset.theme==='dark');
  await page.emulateMedia({colorScheme:'light'});await piFrame.waitForFunction(()=>document.documentElement.dataset.theme==='light');

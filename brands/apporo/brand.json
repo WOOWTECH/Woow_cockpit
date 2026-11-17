@@ -1,0 +1,51 @@
+{
+  "schema": 1,
+  "id": "apporo",
+  "display_name": "apporo 設備管理",
+  "company": "APPORO UNION INC.",
+  "tagline": "",
+  "colors": {
+    "light": {
+      "primary": "#8B6B24",
+      "hover": "#8B6B24",
+      "on_primary": "#FFFFFF",
+      "page": "#FFFFFF",
+      "surface": "#FAFAFA",
+      "subtle": "#F4F4F5"
+    },
+    "dark": {
+      "primary": "#C49E53",
+      "hover": "#C49E53",
+      "on_primary": "#1C1C1E",
+      "page": "#18181B",
+      "surface": "#1F1F22",
+      "subtle": "#27272A"
+    }
+  },
+  "assets": {
+    "logo_lockup_light": "assets/company/apporo-logo-with-wordmark.svg",
+    "logo_lockup_dark": "assets/company/apporo-logo-with-wordmark.svg",
+    "logo_wordmark_light": "assets/company/apporo-mark-source.svg",
+    "logo_wordmark_dark": "assets/company/apporo-mark-source.svg",
+    "logo_symbol": "assets/company/apporo-mark-source.svg",
+    "favicon": "assets/smart/desktop-icon.ico",
+    "apple_touch_icon": "assets/smart/apple-touch-icon.png",
+    "pwa_icon_192": "assets/smart/pwa-icon-192.png",
+    "pwa_icon_512": "assets/smart/pwa-icon-512.png"
+  },
+  "typography": {
+    "family": "system-ui, -apple-system, BlinkMacSystemFont, \"Segoe UI\", sans-serif"
+  },
+  "layout": {
+    "card_radius": 16,
+    "control_radius": 8
+  },
+  "provenance": {
+    "status": "official-assets-supplied",
+    "colors": "MacBook source confirmed by project owner, 2026-11-17",
+    "hover": "Same as primary; no authoritative hover supplied.",
+    "layout": "Management adaptation from Smart ramp; not a corporate rule.",
+    "products": "Smart: desktop agent collaboration; platform: Odoo ERP; aiot: HA app; Assistant: separate. This edition is apporo 設備管理.",
+    "assets": "See asset-provenance.json, maintained by the main agent; company SVG source verified against a pinned upstream commit."
+  }
+}

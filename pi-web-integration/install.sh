@@ -2,6 +2,8 @@
 # Install this integration separately from Cockpit's shared backup installer.
 set -euo pipefail
 [ "$(id -u)" = 0 ] || { echo 'Run with sudo.' >&2; exit 1; }
+pi_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+python3 "$pi_root/../scripts/runtime_brand.py" --brand "${BRAND:-}" >/dev/null
 pi_host=${1:-}; pi_port=${2:-19094}; pi_vpn=${3:-}; pi_public=${4:-}
 pi_vpn_userspace=${PI_GATEWAY_VPN_USERSPACE:-0}
 [[ "$pi_vpn_userspace" = 0 || "$pi_vpn_userspace" = 1 ]] || { echo 'PI_GATEWAY_VPN_USERSPACE must be 0 or 1.' >&2; exit 1; }
@@ -32,7 +34,6 @@ fi
 if [[ -n "$pi_vpn" && "$pi_vpn_userspace" = 1 ]] && ! systemctl is-active --quiet woowtech-piweb-gateway-vpn.service && ss -H -ltn "( sport = :$pi_port )" | awk '{print $4}' | grep -Eq "^(127\\.0\\.0\\.1|0\\.0\\.0\\.0|\\*):$pi_port$"; then
   echo 'The userspace VPN loopback gateway port is already in use.' >&2; exit 1
 fi
-pi_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 pi_pkg=/usr/local/share/cockpit/woowpiweb
 install -d -m 0755 "$pi_pkg"
 install -m 0755 "$pi_root/gateway.mjs" /usr/local/libexec/woowtech-piweb-gateway.mjs

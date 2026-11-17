@@ -12,7 +12,8 @@ import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
 import { chromium } from 'playwright-core';
 
-const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+const root = process.env.BRAND_UI_ROOT || resolve(dirname(fileURLToPath(import.meta.url)), '..');
+const apporo = process.env.UI_BRAND === 'apporo';
 const HELPER = '/usr/local/libexec/woowtech-cockpit-backup';
 const CSRF = 'fixture-csrf-7f3a91';
 const SHOTS = process.env.BACKUP_UI_SCREENSHOTS || '';
@@ -2764,7 +2765,7 @@ try {
     const isDark = () => page.evaluate(() => document.documentElement.classList.contains('pf-v6-theme-dark'));
     const background = () => page.evaluate(() => getComputedStyle(document.body).backgroundColor);
     assert.equal(await isDark(), true, 'shell:style=dark from Cockpit applies before the first render');
-    assert.equal(await background(), 'rgb(21, 23, 28)');
+    assert.equal(await background(), (apporo ? 'rgb(24, 24, 27)' : 'rgb(21, 23, 28)'));
     const steady = () => page.waitForFunction(() => document.getAnimations().every(animation => animation.playState !== 'running'));
     const contrast = (extra = '') => page.evaluate(extra => {
       const rgb = value => (value.match(/[\d.]+/g) || []).map(Number);
