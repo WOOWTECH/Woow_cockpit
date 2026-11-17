@@ -32,6 +32,7 @@ jobs:
           node --check native/podman/managed-owners.js
           node --check branding/mobile-navigation.js
           node --check tests/mobile-navigation-live.mjs
+          node --check tests/parallel-ingress-live.mjs
           node --check apps-catalog/theme.js
           node --check apps-catalog/apps.js
           node --check apps-catalog/stacks.js

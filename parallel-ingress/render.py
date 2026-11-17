@@ -126,7 +126,7 @@ http {{
   }}
   location /woow-pwa/ {{
    alias /opt/parallel/public/pwa/assets/;
-   types {{ application/manifest+json webmanifest; image/png png; }}
+   types {{ application/manifest+json webmanifest; image/png png; application/javascript js; }}
    add_header Cache-Control 'no-store';
   }}
   location = /favicon.ico {{ alias /opt/parallel/public/branding/favicon.ico; add_header Cache-Control 'no-store'; }}
