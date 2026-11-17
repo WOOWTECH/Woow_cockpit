@@ -87,4 +87,8 @@ For a standalone Cockpit deployment, after restoring managed files, run
 only the already active Pi gateway services. Do not run the fresh Pi installer
 with empty VPN/public arguments to perform a brand rollback.
 
-This branch starts at main `c393dfb` (2026.11.15.2). The separate dirty checkout's backup-schedule branch is not merged or replaced by this work. Reconcile that feature separately and rerun its timer/retention tests when integrating; this profile implementation does not assert that its schedule functionality is included in main.
+The integrated main source `7387124` includes both the brand profiles (PR #17)
+and scheduled backups (PR #16). Both brands share that backup engine and its
+timer/retention behavior. The final CI tested the exact merged source tree,
+including 1,056 Python tests and 79 backup browser scenarios per brand; see
+[validation evidence](../docs/brand-validation-20261117.md).
