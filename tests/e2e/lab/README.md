@@ -103,7 +103,7 @@ dev-b 重設為全新目標，`fresh` 結束時 dev-b 和 cli_e2e s2 之後一�
 | `h4` | 在設備內用監看程式讀作業紀錄，於 `stop`／`dump`（以慢速 pg_dump 撐住）／`export`／`package`／`verify` 階段 `systemctl kill --signal=SIGKILL`；在呼叫 helper 之前先記錄應用狀態，證明是復原流程重新啟動寫入服務；檢查 interrupted＋指引、staging 移除、沒有孤兒封存檔、下一次備份成功 |
 | `h5` | 還原進入 `start` 階段（資料卷已刪除）時 `labpodman restart woowbk-dev-a`；開機後作業為 interrupted＋還原前備份 ID，還原該備份後資料等於還原前（完整內容） |
 | `h6` | 資料卷寫入約 600 MiB 亂數檔：不含映像的備份、bridge 下載、原位還原；主機端讀取設備 cgroup 的 `memory.peak`（每個 fd 可歸零）與每 0.25 秒的 `memory.stat`，回報包含 page cache 的峰值與 anon＋kernel＋shmem 峰值、OOM 計數；最後刪除大檔與大型備份 |
-| `h7` | `/opt/woow-cockpit-src` 的 `manage.py plan/install/verify` → 回退最新交易 → 繼續回退到備份套件被移除（helper、頁面、目錄設定都不在）→ 重新安裝；每一步比對 `/var/lib/woowtech-backup` 與金鑰目錄的內容雜湊 |
+| `h7` | `/opt/woow-cockpit-src` 的 `manage.py plan/install/verify` → 回退最新交易 → 繼續回退到備份套件被移除（helper、頁面、目錄設定都不在）→ 重新安裝；每一步比對 `/var/lib/woowtech-backup` 與金鑰目錄的內容雜湊。2026.11.17.1 起另檢查排程備份的計時器（唯讀：`systemctl show`、單元檔、`timers.target.wants` 連結）：安裝後 enabled／active、`plan` 與 already-current 的 `install` 沒有 systemctl 步驟、`verify` 回報計時器；回退新增單元的那筆交易時步驟為 stop、disable、daemon-reload，單元檔、連結與它建立的單元目錄都移除、systemd 不再載入計時器、`verify` 不再有 timer；重新安裝時為 daemon-reload、enable --now，交易紀錄的 `systemd.before` 是「未載入」；只更新套件的交易回退後計時器回到交易前的狀態 |
 | `sec1` | 審查發現 SEC-1 的實機版：先做對照組，證明設備上真正的 podman 4.9.3 會照做（appowner 以裸 `podman volume import` 與 `podman load` 匯入「絕對路徑符號連結＋其下的成員」的 tar，成員確實被寫進家目錄中的標記目錄，之後刪除）。接著在 dev-a **設備內**用設備金鑰解開一份新的含映像備份（串流到 `/var/tmp/woowbk-sec1-work`，明文在離開前刪除），在資料卷 tar 與應用映像的 OCI 封存**所有真實成員之後**各加上指向 `~/.config/systemd/user`、`~/.config/containers` 的絕對符號連結與其下的成員，修正 manifest 的大小與 sha256，以設備公鑰重新加密（主機只拿到密文）；並以已安裝引擎的 `nested` 檢查記錄原始項目通過、改造項目被拒的原因。經真正的 bridge 上傳 → upload-finish → inspect → 驗證作業 → 原位還原作業：還原必須在 preflight 失敗（safety、stop 未執行），錯誤分別點名容器映像與資料卷；期間 appowner 的 podman 沒有任何 image／volume 事件（沒有 load、tag、volume create/remove/import）、變更檔案掃描乾淨、整台設備找不到 `woowbk-sec1` 路徑、家目錄設定與應用資料、部署檔、映像名稱不變、沒有還原前備份。2026-11-13 起深入驗證作業以 `corrupt-archive` 拒絕，索引記錄 `verified {ok: false, deep: true}`（先前只檢查外層封存、回報完整）；格式 2 的基礎備份以已安裝引擎的 `ArchiveWriter` 重新封裝 |
 | `fidelity` | 合法資料的保真度：在 dev-a 應用資料卷的 `woowbk-fidelity/`（應用不計數）以 `podman unshare` 建立絕對／相對／懸空符號連結、硬連結、超過 100 bytes 的名稱與超過 255 bytes 的路徑、空目錄、setgid 與 sticky 目錄、user.* 延伸屬性、非 UTF-8 檔名、中文檔名、FIFO、不同擁有者（70、1000、33、54999）、唯讀與可執行檔、次秒 mtime；以**應用容器內**（`podman exec`）看到的完整清單（類型、容器內 uid/gid、權限、大小、mtime、連結目標、sha256、延伸屬性、硬連結群組）為準。含映像備份 → 修改探測目錄 → 原位還原 → 清單必須相同；再下載 → dev-b 重設 → 上傳 → 全新部署還原（緊急金鑰）→ dev-b 容器內清單必須相同（只有次秒 mtime 因 tar 只存整秒而不同）。結束時刪除探測目錄與測試備份 |
 | `fresh` | dev-b 全新部署還原：(1) 預先存在同名的應用機密、設定檔、資料卷或資料庫資料卷（各自單獨測）→ inspect 與還原作業都在 preflight 拒絕，什麼都沒有刪除或建立；(2) 另建無關的資料卷、機密、設定檔、網路與映像名稱，並讓 `localhost/woowbk-demo-app:1` 先指向探測映像；還原在 `start` 階段被 SIGKILL（範本、遮蔽、機密、設定檔、資料卷都已建立）→ 復原移除整個部署、無關物件不變；已載入的映像名稱照 CONTRACT §8 保留；(3) 以一次性的資料庫 drop-in 讓還原在破壞性步驟後失敗 → 程序內自動回復 → `remove_fresh` 把映像名稱改回原本的探測映像（retag），或移除這次新增的名稱（untag），無關物件不變。最後再做一次全新部署還原，資料等於來源備份 |
@@ -111,7 +111,7 @@ dev-b 重設為全新目標，`fresh` 結束時 dev-b 和 cli_e2e s2 之後一�
 | `upload_window.mjs [MiB=2,4] [次數=3] [chunkKiB=64,256,512]` | H8：以 Playwright 攔截 `backup.js`，只在測試瀏覽器內改 `WINDOW_SIZE` 與 `CHUNK_SIZE` 並加上計時；經 cockpit-ws 上傳約 142 MB 到 dev-b，核對 sha256，停在金鑰步驟後刪除。程式庫與設備上的預設值（4 MiB 視窗、512 KiB 訊框）不變 |
 
 `H1_CASES`、`H3_FAULTS`、`H4_KILLS`、`H5_PHASE`、`H6_FILES`、`H7_FULL=0`、`H2_TMPFS` 環境變數可只跑一部分。
-格式 2 的 `unknown-app`：只讀被選應用的封存檔，還原 woowbk-demo 時在「解密並驗證檔案」就以 `incompatible` 拒絕（格式 1 在預檢）。`h7` 期待設備是 `deploy-src.sh` 剛安裝的狀態：若 woowbk-demo 的目錄項目已由「應用設定」（`catalog-install`）改過，`manage.py plan` 會列出它、回退也會拒絕（檔案在安裝後被變更）；`h7` 會先把 manage.py 管理的夾具內容放回，結束時再以 `catalog-install` 裝回管理者的版本。dev-a 的安裝交易紀錄中有一筆在 2026-11-13 被實驗室專用的 archive.py 修補改過（引擎核心角色的 E1–E3 暫時修補），所以完整回退鏈（`H7_FULL=1`）會在那一筆被 `manage.py` 正確拒絕（「Changed since installation」）；2026-11-14 整合輪以 `H7_FULL=0` 在一組乾淨的交易（先部署舊版再部署工作樹）上驗證。
+格式 2 的 `unknown-app`：只讀被選應用的封存檔，還原 woowbk-demo 時在「解密並驗證檔案」就以 `incompatible` 拒絕（格式 1 在預檢）。`h7` 期待設備是 `deploy-src.sh` 剛安裝的狀態：若 woowbk-demo 的目錄項目已由「應用設定」（`catalog-install`）改過，`manage.py plan` 會列出它、回退也會拒絕（檔案在安裝後被變更）；`h7` 會先把 manage.py 管理的夾具內容放回，結束時再以 `catalog-install` 裝回管理者的版本。dev-a 的安裝交易紀錄中有一筆在 2026-11-13 被實驗室專用的 archive.py 修補改過（引擎核心角色的 E1–E3 暫時修補），所以完整回退鏈（`H7_FULL=1`）會在那一筆被 `manage.py` 正確拒絕（「Changed since installation」）；2026-11-14 整合輪以 `H7_FULL=0` 在一組乾淨的交易（先部署舊版再部署工作樹）上驗證。2026.11.17.1 起，`h7` 比對 `/var/lib/woowtech-backup` 的指紋時排程必須沒有到期的時段（關閉或沒有設定檔，例如 `schedule_e2e.py cleanup` 之後）：計時器每 5 分鐘的檢查只碰 `/run`，但開始的排程備份會寫入狀態檔與作業紀錄。2026-11-17 以 `H7_FULL=0` 在剛由 c393dfb 部署工作樹的 dev-a 上 23／23 通過（回退的就是新增單元的那筆交易）。
 
 ## 主機資料夾情境（dirs_e2e.py，D1–D6）
 
@@ -205,6 +205,61 @@ woowbk-demo 與 woowbk-dirs 在兩台都執行中、dev-a 的緊急金鑰檔。�
 SQL_ASCII 資料庫中 0x80 以上的位元組、LATIN1 資料庫的非 ASCII 資料表名稱（與 UTF-8 資料庫的相同內容摘要相同；F6）。
 結束時移除容器，結果寫入 `digest-sql-probe.json`。
 
+## 排程備份情境（schedule_e2e.py，2026.11.17.1）
+
+`python3 -I tests/e2e/lab/schedule_e2e.py <install|timer|fast|busy|timezone|run-now|retention|partial|kit-gate|compat|noise|reboot|cleanup|all>`，
+證據寫入 `~/.woowbk-lab/evidence/schedule/<時間>-<情境>/`（`driver.log`、`result.json`、作業紀錄、journal 行、
+`systemctl show`／`cat` 的輸出），建立的備份與還沒復原的實驗室變更記在同目錄的 `state.json`，由 `cleanup` 收尾。呼叫方式與
+`cli_e2e.py` 相同（已安裝的 helper、root、stdin JSON；下載／上傳走設備內真正的 `cockpit-bridge`）；設備內的其他指令一律直接以
+argv 執行（`labpodman exec <設備> <指令…>`，或以標準輸入交給 `python3 -I -` 的程式），不經過 shell。觸發也是真的：systemd 依
+`woowtech-cockpit-backup-schedule.timer` 在每個 5 分鐘整點啟動 `woowtech-cockpit-backup-schedule.service`，或以
+`systemctl start` 立即做一次檢查。**不要對設備執行 `systemd-analyze verify`**（曾取代執行中管理器的 socket），單元只以
+`systemctl show`／`systemctl cat` 檢查。
+
+讓時段立刻到期（不等到 03:00）：root 直接寫 `/etc/woowtech-cockpit/backup/schedule.json`（root 0644、剛好是文件列出的欄位），
+`time` 為設備時間最近一個已過的 5 分鐘整點（不到 15 分鐘前），`armed_at` 為它的前一分鐘，再 `systemctl start` 檢查服務。不需要
+立刻到期的地方走頁面的路徑（`schedule-set`），時間選今天已經過去、早於 `armed_at` 的時段，所以明天之前不會執行。同一個時段只會
+處理一次（`schedule-state.json` 的 `handled`），所以每個以檢查觸發的情境要等到下一個整點（最多 5 分鐘）。
+
+前置條件：兩台設備執行中（`labpodman start`）、woowbk-demo 在兩台都執行中、dev-a 有設備金鑰且緊急金鑰已確認
+（`~/.woowbk-lab/secrets/dev-a-kit.txt`）、dev-b 沒有設備金鑰（`kit-gate` 在 dev-b 建立實驗室金鑰，`cleanup` 移除）、主機可用
+記憶體 ≥ 1200 MB；`install` 最先執行（它執行 `deploy-src.sh a`、`b`）。`all` 依序執行 install、timer、fast、busy、timezone、
+run-now、retention、partial、kit-gate、compat、noise、reboot、cleanup。安裝器的回退與重新安裝（計時器的停用與再啟用）在
+`hardening.py h7`。
+
+| 情境 | 內容 |
+| --- | --- |
+| `install` | 兩台設備各執行 `deploy-src.sh`：從沒有計時器的 2026.11.15.2 安裝時，`manage.py install` 的步驟是 `daemon-reload`、`enable --now <timer>`（沒在執行，不先 stop），交易紀錄的 `systemd.before` 是安裝前的狀態（not-found、`stopped: false`）；已是最新時為 `already-current` 並回報計時器。`systemctl show`：計時器由 `/usr/local/lib/systemd/system/` 載入、enabled、active、`OnCalendar=*-*-* *:00/5:00`、`AccuracyUSec=15s`、`Persistent=no`、啟動 tick 服務、`WantedBy=timers.target`、下一次在 5 分鐘內的整點；服務為 oneshot、固定 argv `…/woowtech-cockpit-backup schedule-tick`、stdin／stdout 為 null、`SyslogLevel=4`（warning）、`LogLevelMax=5`（notice）、`TimeoutStartUSec=15min`；`systemctl cat` 與來源的單元檔逐字相同（含 `ConditionPathExists=`），檔案 root:root 0644、sha256 相同、`timers.target.wants` 有連結；`manage.py verify` 為 verified 並回報計時器（不算漂移），之後的 `plan` 沒有變更也沒有 systemctl 步驟；已安裝的引擎、helper、VERSION 與工作樹逐檔相同；`schedule-get` 看到計時器 enabled／active、排程預設關閉 |
+| `timer` | dev-a：`schedule-set` 預覽（不寫檔、下一次正是目標整點、不刪任何備份）→ 確認（root 0644、只有文件列出的欄位、`armed_at` 為現在、journal `schedule-set … previous_enabled=false`）→ 不手動觸發，等計時器：服務在整點後 15 秒內啟動、作業由這次檢查建立（request id `schedule-<UTC 時段>`）、參數是手動備份的參數加 `schedule{slot, trigger: on-time, keep_last}`、備註「排程備份」，結果 `scheduled`、不是部分完成、有加密；`list` 顯示「排程」；journal 一行 `schedule-run`；下一次是明天同一時間。另外重現安裝剛完成的狀態（計時器剛啟動、還沒檢查過）：這時不應出現任何提醒（見下方「已知問題」） |
+| `fast` | dev-a：另一個檢查持有 `schedule-tick.lock` 時，手動檢查回傳 `tick-running`、服務仍然成功；寫入到期的時段後 `systemctl start` 兩次、再手動檢查一次 → 這個時段只有一個作業（後兩次是 `idle`）；作業與結果同上；`inspect`：封存本身是 `manual`、備註「排程備份」（格式不變）；`schedule-state.json` root 0600、登記表 `{job, slot, trigger}`、`handled`；作業結束後的檢查記錄結果，journal 對這個時段只有 `schedule-run`、`schedule-result` 各一行（notice）；`schedule-get` 與 `status.schedule` 的上次執行、下次執行、時區、計時器；各應用用量把它算在 `types.scheduled`；備份刪除後，下一次檢查移除它的登記 |
+| `busy` | dev-a：先開始驗證作業（最大的實驗室備份，深入驗證約 15 秒），以 SIGSTOP 暫停它的作業單元（紀錄仍是 running），檢查遇到 `busy` → 時段等待（`waiting {slot, local, since, job_id}`、事件 `waiting`、`status.schedule.waiting`、`jobs.schedule_events`、journal `schedule-wait … busy_job=<驗證作業>`）；仍在執行時再檢查一次：`busy`、trigger `late`、沒有第二筆事件；SIGCONT 讓驗證完成後，下一次檢查以 `late` 開始這個時段、不再等待 |
+| `timezone` | dev-a：Etc/UTC 下 03:00 的下一次是 `03:00:00Z`；`/etc/localtime` 改連到 Asia/Taipei 後，下一個指令就用新時區（`+08:00`、台北 03:00 = 前一天 19:00Z）；呼叫端的 `TZ=America/New_York` 被忽略；以台北時間寫入到期的時段（同一個 HH:MM 以 UTC 看還沒到）→ 下一次檢查就開始這個時段；再改連 America/New_York（11 月 `-05:00`）；最後連回原本的時區 |
+| `run-now` | dev-a：沒有儲存的設定 → `invalid-request`（reason `not-saved`）；嚴格的請求檢查；`schedule-tick` 只看 argv（標準輸入不讀，多一個參數就是 `invalid-request`）；`schedule.json` 被改成群組可寫 → 顯示問題、`run-now` 以 reason `settings-problem` 拒絕、兩次檢查只記一筆 `settings-problem` 事件與一行 warning、注意事項 `settings-problem`；權限改回後問題消失；排程關閉時 `run-now` 照樣執行，相同 request id 去重、執行中另一個請求 `busy`（`details.job_id`）；`slot` null、trigger `run-now`、算作排程備份；journal `schedule-run slot=-` 與 `schedule-result slot=-` 各一行 |
+| `retention` | dev-a：手動保留原則設為「woowbk-demo 保留最新 K+2 份」（K 為現有的手動備份份數，先預覽確認不會刪除任何既有備份），排程保留 2 份，依序 S1（排程）、M1（手動）、S2、S3、M2：只有 S3 刪除了東西，就是最舊的排程備份 S1；手動備份一份都沒刪（若排程備份被算進手動原則，M2 會刪掉兩份最舊的手動備份）；S2 之後的 `schedule-set` 預覽正好列出 S1；`retention-plan` 沒有候選、用量為手動 K+2、排程 2；journal 只有一行 `retention-delete backup=<S1> … reason=schedule`；最後原則改回、測試備份刪除 |
+| `partial` | dev-a：(a) 擁有者停止 woowbk-demo 的兩個單元（狀態「已停止」），排程 apps 為 `"all"`，立即執行一次 → 預期部分完成、略過 woowbk-demo、其他應用照常備份；(b) 排程列出 woowbk-demo 與 woowbk-dirs，woowbk-dirs 的目錄項目暫時移到 `/root/woowbk-schedule-lab/`（之後放回並比對 sha256）→ 部分完成，原因「此設備沒有設定應用 woowbk-dirs。」。兩者都檢查下一次檢查記錄的 `partial` 事件、`status.schedule.attention`（「部分完成：上次排程備份沒有包含「…」。…」）、journal 的 warning `schedule-result … result=partial … skipped=<id>`、列表中的備份不含被略過的應用 |
+| `kit-gate` | dev-b（沒有設備金鑰）：`gate` 為 `no-device-key`，開啟（預覽與確認）都是 `no-device-key` 且不寫檔；儲存關閉的設定不受限制；`run-now` 也是 `no-device-key`；「預設加密備份」關閉時不需要金鑰；`key-init` 建立實驗室金鑰後 `gate` 為 `kit-unconfirmed`，開啟被拒（`invalid-request`、reason `kit-unconfirmed`、field `schedule.enabled`、「開啟排程備份前，請先保存緊急金鑰。」）、`schedule.json` 不變；這時 `run-now` 可以執行（和手動備份一樣不受緊急金鑰限制）；`key-kit` → `key-confirm` 之後可以開啟（journal `schedule-set enabled=true … previous_enabled=false`），再關閉。緊急金鑰內容不保存 |
+| `compat` | 需要 `kit-gate` 的結果。dev-a 的排程備份經 bridge 下載；上傳回 dev-a 時回傳原本的紀錄（仍是排程備份）。dev-b 以安裝程式自己的回退（文件記載的降級方式）回到 c393dfb：回退步驟為 stop、disable、daemon-reload，單元檔、`timers.target.wants` 連結與安裝時建立的單元目錄都移除，引擎與 c393dfb 逐檔相同（2026.11.15.2）。舊引擎在新檔案（`schedule.json`、`schedule-state.json`）與新作業紀錄存在時：`status`、`jobs`（排程作業列為備份作業）、`job-status` 都正常；dev-b 自己的排程備份列為手動備份、備註「排程備份」、可以 `inspect`。dev-a 的排程備份上傳到舊引擎 → `uploaded`、沒有金鑰時 `key-required`、以 dev-a 的緊急金鑰 `inspect`（manual、排程備份、來源 woowbk-dev-a、可原位還原）→ 原位還原成功、資料核對一致、dev-b 的資料等於 dev-a 備份時。之後 `deploy-src.sh b` 回到工作樹（daemon-reload、enable --now）：dev-b 自己的那份又是「排程」，上傳的那份是 `uploaded`、不是排程；保留 1 份的預覽只會刪除 dev-b 自己的排程備份 |
+| `noise` | dev-a：排程關閉時 3 次 `systemctl start` 加上 2 次計時器的檢查，以 `journalctl _PID=1` 計算 PID 1 對 tick 服務寫的行；對照組是兩個暫時單元（`systemd-run`，一個沒有、一個有 `LogLevelMax=notice`） |
+| `reboot` | dev-a（選用；先刪除登記表已空的狀態檔，模擬從沒處理過時段的設備）：(1) 最近的時段在 22 小時前、下一個在 2 小時後，共 3 天 → `missed`、一筆合併事件（count 3、first／slot）、注意事項 `missed`、journal 一行 `schedule-missed`、沒有作業；(2) 35 分鐘前、沒有檢查看到的時段 → 下一次檢查前為 `overdue`；停止計時器（「設備關機」）→ `timer-inactive`；在 CLOCK_BOOTTIME 為 120 秒的時間命名空間中以已安裝的引擎檢查 → `settle`、什麼都不記錄、沒有作業；(3) `labpodman restart` 後計時器自己回來（enabled），重新開機後計時器的第一次檢查以 `catch-up` 補做這個時段，journal 各一行 |
+| `cleanup` | 復原中途停止的情境留下的變更（時區、移走的目錄項目、停止的示範應用、保留原則）；兩台設備的排程關閉、本驅動程式建立的備份刪除、`schedule.json` 與 `schedule-state.json` 刪除（登記表已空時）；woowbk-demo 目錄項目換回夾具；移除 dev-b 的實驗室金鑰（只刪 `kit-gate` 新增的 `device-<id>.key` 與 `keys.json`），確認 dev-b 沒有設備金鑰；刪除下載的備份檔；證據不含金鑰 |
+
+2026-11-17 實測（feat/backup-schedule，c455a07 加上這個驅動程式；兩台設備先由 2026.11.15.2（c393dfb）以 `deploy-src.sh` 安裝工作樹）：`install` 23／23（最後一次：dev-a 在計時器執行中更新頁面 → stop、enable --now，交易紀錄 `stopped: true`；第一次部署時兩台都是 daemon-reload、enable --now，當時 2 項未通過是驅動程式讀錯屬性，已修正）、`hardening.py h7`（`H7_FULL=0`，新增單元的交易）23／23、`timer` 16／17、`fast` 19／19、`busy` 15／15、`timezone` 14／14、`run-now` 18／18、`retention` 11／11、`partial` 12／13、`kit-gate` 20／20、`compat` 30／30、`noise` 7／7、`reboot` 16／16、`cleanup` 12／12。未通過的兩項就是下面的產品問題。`noise`：3 次 `systemctl start` 與 2 次計時器檢查，systemd 255 對 tick 服務沒有寫任何 PID 1 行（`LogLevelMax=notice` 也過濾 PID 1 對這個單元的 info 訊息）；沒有 `LogLevelMax` 的對照單元每次 3 行（Starting…、Deactivated successfully.、Finished…，priority 6），有 `LogLevelMax=notice` 的對照單元 0 行；沒有事的檢查也不寫引擎的行。排程作業本身的 `woowtech-backup-<作業>.service` 照常有 PID 1 的行（每個時段一次）。
+
+**這個驅動程式找到、尚未修正的產品問題（2026-11-17，2026.11.17.1；測試保持嚴格，修正前這兩項會失敗）：**
+
+1. `partial` (a)：擁有者停止的應用（兩個單元都停止，`status` 為「已停止」、沒有 `problems`）不會被略過，整次排程備份在
+   「檢查空間與應用」階段以 `job-failed`「無法讀取資料庫 main 的大小；請確認資料庫服務正在執行。」失敗，同一次排程的其他應用
+   （woowbk-dirs、woowbk-inst）也都沒有備份。設計是「沒有準備好的應用略過、標示部分完成」。原因：排程模式只略過 `probe()`
+   回報未部署或有 `problems` 的應用，而停止的應用 `problems` 是空的，接著的資料量估算（之後的 `資料庫服務 … 未執行`）讓整個
+   作業失敗。重現：`woowbk-owner systemctl --user stop woowbk-demo-app.service woowbk-demo-db.service`，排程 apps 為
+   `"all"`，`schedule-run-now` → 作業 `failed`、沒有任何備份。
+2. `timer` 的「安裝後、第一次檢查前」：計時器剛啟動（安裝程式的 `enable --now`）而 `/run/woowtech-backup/schedule-tick`
+   還不存在時，只要設備已開機超過 15 分鐘，排程開啟時的 `schedule-get`／`status.schedule.attention` 就是 `timer-inactive`
+   （「排程檢查沒有在執行，排程備份不會自動開始。請重新執行備份元件的安裝程式來啟用它。」），直到第一次檢查（最多 5 分鐘）。
+   `timer_inactive()` 在沒有檢查標記時用開機時間判斷，沒有考慮計時器何時啟動（`ActiveEnterTimestamp`）。重現：
+   `systemctl restart woowtech-cockpit-backup-schedule.timer`、刪除檢查標記、開啟排程 → `schedule-get` 的 `attention.code`
+   為 `timer-inactive`，而 `systemctl show` 是 active、下一次在 5 分鐘內。
+
 ## 作業紀錄競態探測（race probe）
 
 `python3 -I tests/e2e/lab/race_probe.py <a|b> [--jobs 110] [--pollers 3] [--settle 0.5] [--census-only]`，
@@ -248,6 +303,14 @@ SQL_ASCII 資料庫中 0x80 以上的位元組、LATIN1 資料庫的非 ASCII �
   判斷是否危險要看 anon＋kernel＋shmem 與 `oom_kill`。
 * **journal**：設備的 `/var/log/journal` 是 tmpfs（podman `--systemd=always`），`labpodman restart` 後舊紀錄消失。
 * **labpodman restart**：約 1 秒，3–4 秒後 systemd、appowner 的 user manager 與 cockpit.socket 就緒，linger 會自動啟動示範應用。
+* **開機時間（排程備份）**：設備容器沿用主機核心的時間命名空間（`/proc/self/ns/time` 與主機相同），所以設備內的
+  `/proc/uptime` 與引擎用的 `CLOCK_BOOTTIME` 都是**主機**的開機時間（2026-11-17 實測約 17.6 天），`labpodman restart` 之後也一樣。
+  「開機 10 分鐘內不執行排程」因此無法用重新開機實測：`schedule_e2e.py reboot` 在設備內以新的時間命名空間（CLOCK_BOOTTIME
+  設為 120 秒）執行已安裝引擎的檢查來證明；util-linux 2.39.3 的 `unshare --boottime` 不能解析負數，所以由 Python 呼叫
+  `os.unshare(CLONE_NEWTIME)` 並寫入 `/proc/self/timens_offsets`。同理，設備重新開機後、第一次檢查以前，「已開機 15 分鐘仍沒有
+  檢查」的條件在實驗室中立即成立，`status.schedule.attention` 會是 `timer-inactive`（實機開機後不會）。
+* **讓作業保持執行中**：`systemctl kill --signal=SIGSTOP woowtech-backup-<作業>.service` 暫停整個作業單元（紀錄仍是 running、
+  單元仍是 active），`--signal=SIGCONT` 繼續；`schedule_e2e.py busy` 以此讓兩次檢查都遇到同一個驗證作業。
 * **共用實驗室**：其他測試者可能同時在 dev-a 以 appowner 建立／刪除 `woowbk-sec-probe-*` 資料卷或映像（journal 可見）；
   `hardening.py` 的變更檔案掃描因此只容許 podman 自身狀態與目錄 mtime，並記錄視窗內的這類事件數。
 * `podman secret inspect --showsecret --format {{.SecretData}}` 輸出原始值加一個結尾換行。

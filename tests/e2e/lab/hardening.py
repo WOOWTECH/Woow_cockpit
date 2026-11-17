@@ -11,7 +11,8 @@ cockpit-bridge (fsreplace1 / fsread1). Faults are injected only inside the lab d
     python3 -I tests/e2e/lab/hardening.py h4   # SIGKILL a backup job in stop/dump/export (+ verify) windows
     python3 -I tests/e2e/lab/hardening.py h5   # device reboot (labpodman restart) during a restore
     python3 -I tests/e2e/lab/hardening.py h6   # ~600 MB files volume: backup, bridge download, in-place restore, memory
-    python3 -I tests/e2e/lab/hardening.py h7   # manage.py plan/install/verify, rollback, re-install on a device
+    python3 -I tests/e2e/lab/hardening.py h7   # manage.py plan/install/verify, rollback, re-install on a device;
+                                                # the scheduled-backup timer enabled, removed, enabled again
     python3 -I tests/e2e/lab/hardening.py sec1      # SEC-1: nested volume/OCI tars with an absolute symlink + member below
     python3 -I tests/e2e/lab/hardening.py fidelity  # legitimate volume content: in-place and cross-device listing equal
     python3 -I tests/e2e/lab/hardening.py fresh     # dev-b fresh restore: leftovers refused, SIGKILL recovery, rollback tags
@@ -1624,6 +1625,53 @@ def engine_digest(dev):
 
 
 DEMO_ENTRY = '/etc/woowtech-cockpit/backup/apps/woowbk-demo.json'
+# 排程備份 (2026.11.17.1): the installer writes the timer and its tick service and enables the timer; the rollback
+# of that install stops and disables it and removes the units (docs/backup/CONTRACT.md section 8, "Installer").
+SCHEDULE_TIMER = 'woowtech-cockpit-backup-schedule.timer'
+SCHEDULE_UNIT_DIR = '/usr/local/lib/systemd/system'
+SCHEDULE_UNITS = (f'{SCHEDULE_UNIT_DIR}/woowtech-cockpit-backup-schedule.service', f'{SCHEDULE_UNIT_DIR}/{SCHEDULE_TIMER}')
+TIMER_WANTS = f'/etc/systemd/system/timers.target.wants/{SCHEDULE_TIMER}'
+TIMER_RUNNING = {'load_state': 'loaded', 'unit_file_state': 'enabled', 'active_state': 'active', 'enabled': True,
+                 'active': True}
+# Read-only: systemctl show (never `systemd-analyze verify`), the unit files and the timers.target.wants link.
+TIMER_PY = r'''
+import json, os, subprocess, sys
+units, wants, unit_dir = sys.argv[1:3], sys.argv[3], sys.argv[4]
+shown = subprocess.run(['systemctl', 'show', '--property=LoadState', '--property=UnitFileState',
+                        '--property=ActiveState', '--', os.path.basename(units[1])], capture_output=True, text=True)
+values = dict(line.split('=', 1) for line in shown.stdout.splitlines() if '=' in line)
+print(json.dumps({'load_state': values.get('LoadState', ''), 'unit_file_state': values.get('UnitFileState', ''),
+                  'active_state': values.get('ActiveState', ''), 'units': [os.path.isfile(u) for u in units],
+                  'wants': os.readlink(wants) if os.path.islink(wants) else None, 'unit_dir': os.path.isdir(unit_dir)}))
+'''
+TRANSACTION_UNITS_PY = r'''
+import json, sys
+with open(f'/var/backups/woowtech-cockpit-source/{sys.argv[1]}/transaction.json', encoding='utf-8') as handle:
+    data = json.load(handle)
+print(json.dumps({'units': [[r['path'], r['existed']] for r in data['files'] if r['path'].startswith('usr/local/lib/systemd/')],
+                  'dirs': [[r['path'], r['existed']] for r in data.get('directories', [])
+                           if r['path'].startswith('usr/local/lib/systemd')], 'systemd': data.get('systemd')}))
+'''
+
+
+def schedule_timer(dev):
+    """The scheduled-backup timer as systemd and the file system see it."""
+    return json.loads(py(dev, TIMER_PY, *SCHEDULE_UNITS, TIMER_WANTS, SCHEDULE_UNIT_DIR).stdout)
+
+
+def timer_view(state):
+    view = {key: state[key] for key in ('load_state', 'unit_file_state', 'active_state')}
+    view.update(enabled=state['unit_file_state'] in ('enabled', 'enabled-runtime'), active=state['active_state'] == 'active')
+    return view
+
+
+def timer_running(state):
+    return timer_view(state) == TIMER_RUNNING and state['units'] == [True, True] and state['wants'] == SCHEDULE_UNITS[1]
+
+
+def timer_gone(state):
+    return (state['load_state'] == 'not-found' and state['active_state'] == 'inactive' and state['units'] == [False, False]
+            and state['wants'] is None)
 
 
 def scenario_h7(ev):
@@ -1653,14 +1701,49 @@ def scenario_h7(ev):
     ev.check('H7 install: already-current', rc == 0 and inst.get('status') == 'already-current', inst)
     rc, ver = manage(dev, 'verify', check=False)
     ev.check('H7 verify: verified, no drift', rc == 0 and ver.get('status') == 'verified', ver)
+    timer0 = schedule_timer(dev)
+    ev.save('h7-timer-before', timer0)
+    ships_timer = all(timer0['units'])  # the installed package has the scheduled-backup units (2026.11.17.1 on)
+    if ships_timer:
+        ev.check('H7 install: the scheduled-backup timer is enabled and active, both units in /usr/local/lib/systemd/'
+                 'system, linked from timers.target.wants', timer_running(timer0), timer0)
+        ev.check('H7 plan/install (already-current) run no systemctl step and report the timer running',
+                 plan.get('systemctl') == [] and inst.get('timer') == TIMER_RUNNING and 'systemctl' not in inst,
+                 {'plan': plan.get('systemctl'), 'install': inst.get('timer')})
+        ev.check('H7 verify reports the timer enabled and active (never as drift)', ver.get('timer') == TIMER_RUNNING,
+                 ver.get('timer'))
     chain = transactions(dev)
     ev.save('h7-transactions-before', chain)
     installed = [t for t in chain if t[1] == 'installed']
     latest = installed[-1][0]
+    record = json.loads(py(dev, TRANSACTION_UNITS_PY, latest).stdout)
+    ev.save('h7-latest-transaction-units', record)
+    adds_units = bool(record['units']) and all(existed is False for _path, existed in record['units'])
     rc, rb = manage(dev, 'rollback', latest)
     ev.check(f'H7 rollback of the latest transaction {latest}', rc == 0 and rb.get('status') == 'rolled-back', rb)
+    timer1 = schedule_timer(dev)
+    ev.save('h7-timer-after-rollback', {'rollback': rb, 'timer': timer1})
+    if adds_units:
+        ev.check('H7 rollback of the install that added the units: stop, disable (while the unit file exists), '
+                 'daemon-reload; the timer is not loaded any more',
+                 rb.get('systemctl') == [f'stop {SCHEDULE_TIMER}', f'disable {SCHEDULE_TIMER}', 'daemon-reload']
+                 and (rb.get('timer') or {}).get('load_state') == 'not-found' and rb['timer']['enabled'] is False
+                 and rb['timer']['active'] is False and 'warnings' not in rb, rb.get('systemctl'))
+        ev.check('H7 after that rollback: no unit files, no timers.target.wants link, systemd does not know the timer, '
+                 'the unit directories it created are gone', timer_gone(timer1)
+                 and timer1['unit_dir'] is (not any(existed is False for _p, existed in record['dirs'])), timer1)
+    elif record['units'] or record['systemd']:
+        expected = record['systemd']['before'] if record['systemd'] else TIMER_RUNNING
+        ev.check('H7 rollback of an install that only changed the package: the timer is back as it was before it',
+                 timer_view(timer1) == expected, {'timer': timer1, 'before': expected})
+    else:
+        ev.check('H7 rollback of a transaction of an installer without the timer leaves it alone',
+                 timer1 == timer0, timer1)
     rc, ver = manage(dev, 'verify', check=False)
     ev.check('H7 verify after rollback: verified against the restored state', rc == 0 and ver.get('status') == 'verified', ver)
+    if adds_units:
+        ev.check('H7 verify after that rollback has no timer entry (the restored package ships none)', 'timer' not in ver,
+                 ver.get('timer'))
     ev.check('H7 after rollback: the previous engine is installed and the helper still works',
              engine_digest(dev) != digest0 and helper(dev, 'status')[1].get('ok') is True)
     fp1 = json.loads(py(dev, RUNTIME_FP).stdout)
@@ -1684,10 +1767,29 @@ def scenario_h7(ev):
         ev.check('H7 runtime data and keys untouched with the package removed (keys dir kept)', fp2 == fp0,
                  {'before': fp0, 'after': fp2})
         ev.check('H7 app keeps running without the backup package', units_active(dev)[0])
+        if ships_timer:
+            ev.check('H7 package removed: no scheduled-backup units and no timer', timer_gone(schedule_timer(dev)))
+    before_reinstall = schedule_timer(dev)
     rc, inst = manage(dev, 'install', '--backup-demo-catalog')
     ev.check('H7 re-install', rc == 0 and inst.get('status') == 'installed', inst)
     rc, ver = manage(dev, 'verify', check=False)
     ev.check('H7 verify after re-install: verified', rc == 0 and ver.get('status') == 'verified', ver)
+    if ships_timer:
+        timer3 = schedule_timer(dev)
+        ev.save('h7-timer-after-reinstall', {'install': inst, 'timer': timer3})
+        ev.check('H7 re-install enables and starts the timer again: units back, timers.target.wants link, running',
+                 timer_running(timer3), timer3)
+        if timer_gone(before_reinstall):
+            ev.check('H7 re-install over a package without the timer: daemon-reload, then enable --now (nothing to '
+                     'stop)', inst.get('systemctl') == ['daemon-reload', f'enable --now {SCHEDULE_TIMER}'],
+                     inst.get('systemctl'))
+            reinstall = json.loads(py(dev, TRANSACTION_UNITS_PY, inst['backup_id']).stdout)
+            ev.check('H7 the re-install transaction records the timer as it was (not loaded, not stopped by it)',
+                     reinstall['systemd'] == {'timer': SCHEDULE_TIMER, 'stopped': False,
+                                              'before': timer_view(before_reinstall)}, reinstall['systemd'])
+        ev.check('H7 re-install output and verify report the timer enabled and active',
+                 inst.get('timer') == TIMER_RUNNING and ver.get('timer') == TIMER_RUNNING,
+                 {'install': inst.get('timer'), 'verify': ver.get('timer')})
     fp3 = json.loads(py(dev, RUNTIME_FP).stdout)
     ev.check('H7 runtime data and keys identical to before H7', fp3 == fp0, {'before': fp0, 'after': fp3})
     status3 = ok(dev, 'status', ev=ev)
