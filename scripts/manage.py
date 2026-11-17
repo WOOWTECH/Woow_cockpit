@@ -348,6 +348,8 @@ def desired_files(root, include_preview=True, screenshots=None, include_services
             desired[f'{PREVIEW}/licenses/{name}'] = (data, 'preview')
         if (SOURCE / 'NOTICE.md').is_file():
             desired[f'{PREVIEW}/NOTICE.md'] = ((SOURCE / 'NOTICE.md').read_bytes(), 'preview')
+        if brand == 'apporo':
+            desired[f'{PREVIEW}/theme.js'] = ((SOURCE / 'apps-catalog/theme.js').read_bytes(), 'preview')
     if screenshots:
         if not include_preview:
             raise ValueError('--screenshots needs the preview package.')

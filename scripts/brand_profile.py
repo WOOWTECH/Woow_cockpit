@@ -185,6 +185,7 @@ def _css_tokens(profile):
   --brand-subtle: {p.get('subtle', '#F4F4F5' if mode == 'light' else '#27272A')};
   --brand-text: {'#212121' if mode == 'light' else '#F1F2F5'};
   --brand-muted: {'#646262' if mode == 'light' else '#C1C5CE'};
+  --brand-logo-filter: {'none' if mode == 'light' else 'brightness(0) invert(1)'};
   --brand-wash: {wash};
   --ww-blue: var(--brand-primary); --ww-blue-700: var(--brand-hover); --ww-blue-050: var(--brand-wash);
   --ww-page-background: var(--brand-page);
@@ -227,14 +228,15 @@ def _render_css(path, text, profile):
         text = text.replace('content: "裝置管理中心"', 'content: ' + json.dumps(profile['display_name'], ensure_ascii=False))
         label = json.dumps('apporo' if profile['id'] == 'apporo' else profile['display_name'])
         text += f'''
-/* Official square lockup, and official mark plus a plain UI label in the sidebar.
- * White plates preserve the supplied gray artwork in either theme. */
-.login-pf #badge {{ aspect-ratio: 1; inline-size: min(50%, 10rem); background-color: #fff;
-  background-size: 80% auto; border-radius: {card}px; }}
+/* Original transparent vectors. Theme color is presentation only; the source
+ * geometry/alpha are unchanged. Login dimensions are 80% of the previous size. */
+.login-pf #badge {{ aspect-ratio: 1; inline-size: min(40%, 8rem); background-color: transparent;
+  background-size: 80% auto; border-radius: 0; filter: var(--brand-logo-filter); }}
 #nav-system::before {{ content: {label}; background-size: 32px 32px; background-position: 8px center;
-  background-color: #fff; padding: 12px 8px 12px 48px; border-radius: {control}px;
-  color: #212121; font: 600 16px/24px var(--brand-font); letter-spacing: normal; }}
-html.pf-v6-theme-dark #nav-system::before {{ color: #212121; }}
+  background-color: transparent; padding: 12px 8px 12px 48px; border-radius: 0;
+  color: var(--brand-text); font: 600 16px/24px var(--brand-font); letter-spacing: normal;
+  filter: var(--brand-logo-filter); }}
+html.pf-v6-theme-dark #nav-system::before {{ color: var(--brand-text); }}
 html body.login-pf {{ background: var(--brand-page); color: var(--brand-text); }}
 html .login-pf .container {{ background: var(--brand-surface); }}
 html .login-pf :is(.login-note,.container-footer) {{ color: var(--brand-muted); }}
@@ -269,6 +271,17 @@ button.primary, .button.primary, .action.primary {{ color: var(--brand-on-primar
 #backup-app a.button.primary {{ color: var(--brand-on-primary); background: var(--brand-primary); }}
 #backup-app a.button.primary:hover {{ color: var(--brand-on-primary); background: var(--brand-hover); }}
 '''
+    if path == 'preview/gallery.css':
+        text += '''
+/* The reference header uses the same theme and transparent logo as the shell.
+ * Historical screenshots retain their captured colors. */
+:root { --ww-white: var(--brand-surface); --ww-gray: var(--brand-page);
+  --ww-black: var(--brand-text); --ww-deep-gray: var(--brand-muted); }
+:root.pf-v6-theme-dark { --hairline: rgba(255,255,255,.12); }
+body { background: var(--brand-page); color: var(--brand-text); }
+.top,.hero,.fact,.jump a,figure,.shot-link,.notice,.review-inner { background: var(--brand-surface); }
+.top img { background: transparent; filter: var(--brand-logo-filter); }
+'''
     return text
 
 
@@ -298,13 +311,15 @@ def render_file(relative_path: str, data: bytes, profile: dict) -> bytes:
             'Poppins／Outfit／Noto Sans TC': '系統字型', '20px 卡片、12px 輸入框與圓形按鈕': '16px 卡片、8px 輸入框與按鈕'}
         for old, new in replacements.items():
             text = text.replace(old, new)
+        if path.startswith('preview/'):
+            text = text.replace('</head>', '<script src="theme.js"></script></head>')
         # Keep historical layout review explicitly historical; current gallery
         # must not claim the working backup package does not exist.
         if path == 'preview/index.html':
             text = text.replace('目前 Cockpit 尚未安裝專屬備份還原頁；這份圖集呈現現有頁面。新增頁面可沿用這套品牌樣式與導覽結構。',
                 '備份與還原由獨立套件提供；此頁僅為畫面參考，不會執行備份操作。')
             text = text.replace('Outfit 是品牌指定字型；Poppins、Noto Sans TC 分別替代 Gira Sans、文鼎 UD 晶熙黑體。',
-                '管理介面使用系統字型；標誌沿用正式素材，未重繪或改色。')
+                '管理介面使用系統字型；標誌沿用正式透明素材，深色模式顯示淺色標誌，淺色模式顯示深色標誌。')
     elif path == 'backup/backup.js':
         text = text.replace('已安裝 woowtech 備份元件', '已安裝 ' + name + ' 備份元件')
         text = text.replace('尚未安裝 woowtech 備份元件', '尚未安裝 ' + name + ' 備份元件')
