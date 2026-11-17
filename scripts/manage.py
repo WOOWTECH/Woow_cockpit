@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 import errno
 import gzip
 import hashlib
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -16,9 +17,14 @@ import sys
 import tempfile
 
 SOURCE = Path(__file__).resolve().parents[1]
+# Load the fixed sibling module for both direct CLI execution and fixture imports.
+_brand_spec = importlib.util.spec_from_file_location('cockpit_brand_profile', SOURCE / 'scripts/brand_profile.py')
+brand_profile = importlib.util.module_from_spec(_brand_spec)
+_brand_spec.loader.exec_module(brand_profile)
 STATE = 'var/lib/woowtech-cockpit/installed.json'
 BACKUPS = 'var/backups/woowtech-cockpit-source'
 BRAND = 'etc/cockpit/branding'
+BRAND_CONFIG = f'{BRAND}/brand.json'
 PREVIEW = 'usr/local/share/cockpit/woowtechpreview'
 SERVICES = 'usr/local/share/cockpit/woowtechservices'
 APPS = 'usr/local/share/cockpit/woowtechapps'
@@ -293,7 +299,10 @@ def backup_directories(desired):
 
 
 def desired_files(root, include_preview=True, screenshots=None, include_services=True, service_owners=None,
-                  include_backup=True, backup_demo_catalog=False, notices=None):
+                  include_backup=True, backup_demo_catalog=False, notices=None, brand='woowtech'):
+    # Validate all official assets before planning any host change. Profiles are
+    # part of this installer's source, not device settings or user input.
+    profile = brand_profile.load_profile(brand)
     notices = [] if notices is None else notices
     if backup_demo_catalog and not include_backup:
         raise ValueError('--backup-demo-catalog needs the backup package; drop --no-backup.')
@@ -401,6 +410,26 @@ def desired_files(root, include_preview=True, screenshots=None, include_services
         prefixes = backup_payload(desired, backup_demo_catalog, notices)
         obsolete_files(root, desired, prefixes, notices)
         directories = backup_directories(desired)
+    # Render presentation only, in memory. Keep source files, stable package IDs,
+    # helper commands, archive formats and all device-owned runtime data intact.
+    source_prefixes = ((BRAND, 'branding'), (PREVIEW, 'preview'), (SERVICES, 'services'),
+                       (APPS, 'apps-catalog'), (BACKUP_UI, 'backup'))
+    for relative, (data, role) in list(desired.items()):
+        if data is None:
+            continue
+        for target_prefix, source_prefix in source_prefixes:
+            if relative.startswith(target_prefix + '/'):
+                source_name = source_prefix + relative[len(target_prefix):]
+                desired[relative] = (brand_profile.render_file(source_name, data, profile), role)
+                break
+    for name, data in brand_profile.branding_assets(profile).items():
+        desired[f'{BRAND}/{name}'] = (data, 'branding')
+        if include_preview and name.startswith('assets/'):
+            desired[f'{PREVIEW}/{name}'] = (data, 'preview')
+        elif include_preview and name == 'favicon.ico':
+            desired[f'{PREVIEW}/assets/favicon.ico'] = (data, 'preview')
+    public_profile = brand_profile.render_runtime_json(profile)
+    desired[BRAND_CONFIG] = (public_profile, 'brand-profile')
     for relative in desired:
         if runtime_path(relative):
             raise ValueError(f'Refusing to manage backup runtime data: {relative}')
@@ -412,6 +441,7 @@ def desired_files(root, include_preview=True, screenshots=None, include_services
         if target.exists() and not target.is_dir():
             raise ValueError(f'Target is not a directory: {target}')
     state = {'schema': 1, 'source_version': (SOURCE / 'VERSION').read_text().strip(),
+             'brand': profile['id'], 'brand_profile_sha256': digest(public_profile),
              'cockpit_version': version, 'preview': include_preview,
              'backup': include_backup, 'backup_demo_catalog': backup_demo_catalog,
              'files': {name: {'sha256': digest(data), 'role': role}
@@ -429,7 +459,7 @@ def desired_mode(name):
 
 
 def mode_checked(name):
-    return name in (HELPER, SERVICE_CONFIG) or backup_path(name)
+    return name in (HELPER, SERVICE_CONFIG, BRAND_CONFIG) or backup_path(name)
 
 
 def metadata_drift(path, name, live):
@@ -677,12 +707,33 @@ def verify(root):
             'source_version': state['source_version'], 'drift': drift}
 
 
+def selected_brand(root, requested=None):
+    """An explicit switch wins; unattended upgrades retain the installed brand."""
+    if requested is not None:
+        return requested
+    path = safe_path(root, BRAND_CONFIG)
+    if not path.exists():
+        return 'woowtech'
+    if not path.is_file() or path.stat().st_size > 65536:
+        raise ValueError('Invalid installed brand.json; refusing to select a different brand.')
+    try:
+        current = json.loads(path.read_text(), object_pairs_hook=unique_keys)
+    except (ValueError, UnicodeError):
+        raise ValueError('Malformed installed brand.json; refusing to select a different brand.') from None
+    if (not isinstance(current, dict) or type(current.get('schema')) is not int or current['schema'] != 1
+            or current.get('id') not in brand_profile.BRANDS):
+        raise ValueError('Invalid installed brand.json schema/id; refusing to select a different brand.')
+    return current['id']
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--root', type=Path, default=Path('/'), help='Alternate Ubuntu root for image/fixture validation.')
     subs = parser.add_subparsers(dest='command', required=True)
     for name in ('plan', 'install'):
         sub = subs.add_parser(name)
+        sub.add_argument('--brand', choices=brand_profile.BRANDS, default=None,
+                         help='Explicitly select a brand; otherwise keep the installed brand (new hosts: woowtech).')
         sub.add_argument('--no-preview', action='store_true', help='Do not manage the reference gallery; existing gallery is kept.')
         sub.add_argument('--screenshots', type=Path, help='Opt-in local PNGs from scripts/capture.mjs; never committed.')
         sub.add_argument('--no-services', action='store_true', help='Do not manage the service management package; existing files are kept.')
@@ -702,7 +753,8 @@ def main():
         if args.command in ('plan', 'install'):
             notices = []
             desired, state = desired_files(root, not args.no_preview, args.screenshots, not args.no_services,
-                                           args.service_owner, not args.no_backup, args.backup_demo_catalog, notices)
+                                           args.service_owner, not args.no_backup, args.backup_demo_catalog, notices,
+                                           brand=selected_brand(root, args.brand))
             if args.backup_demo_catalog:
                 notices.append(f'--backup-demo-catalog adds the lab fixture "{DEMO_APP}" to the trusted backup catalog; '
                                'never use it on customer devices.')
@@ -717,6 +769,7 @@ def main():
             else:
                 result = install(root, desired, state)
                 print('After installation, sign out/in and force-refresh the browser. No Cockpit service restart was requested.', file=sys.stderr)
+            result['brand'] = state['brand']
         elif args.command == 'rollback':
             result = rollback(root, args.backup_id)
         else:

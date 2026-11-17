@@ -1,0 +1,157 @@
+{
+  "schema": 1,
+  "snapshot_date": "2026-11-17",
+  "assets": [
+    {
+      "path": "assets/company/apporo-mark-source.svg",
+      "purpose": "Original geometric mark",
+      "product_scope": "company",
+      "bytes": 1961,
+      "sha256": "40d6f7a4cdf05ea62969168182e6c689153bf3f0bf1da69f38b03945616bf28d",
+      "license": {
+        "status": "owner_authorized_brand_use",
+        "owner": "APPORO UNION INC. (brand/company attribution)",
+        "public_redistribution_license": "not established; trademark rights separate from source code licenses",
+        "authorization": "Project owner authorized using these materials for the apporo edition of this shared platform."
+      },
+      "transformation": "verbatim",
+      "source": {
+        "snapshot_commit": null,
+        "upstream_repository": "WOOWTECH/Woow_apporo_ha_app",
+        "upstream_path": "tools/brand/assets/apporo-mark-source.svg",
+        "upstream_commit": "50203b0f12e9cbb55ebb86d10f7f816fecab5837",
+        "source_sha256": "40d6f7a4cdf05ea62969168182e6c689153bf3f0bf1da69f38b03945616bf28d",
+        "provenance": "Verified byte-for-byte against GitHub source at the pinned commit on 2026-11-17.",
+        "upstream_blob": "f06e0c185d56fc38c0a20f6b91f0b51502e3f3f9"
+      }
+    },
+    {
+      "path": "assets/company/apporo-logo-with-wordmark.svg",
+      "purpose": "Original complete outlined apporo wordmark; do not typeset or redraw",
+      "product_scope": "company",
+      "bytes": 3859,
+      "sha256": "a86c783ce870c60bc378c44c4cc228513aa7ab72dd11d64ad2b88eb56f04e433",
+      "license": {
+        "status": "owner_authorized_brand_use",
+        "owner": "APPORO UNION INC. (brand/company attribution)",
+        "public_redistribution_license": "not established; trademark rights separate from source code licenses",
+        "authorization": "Project owner authorized using these materials for the apporo edition of this shared platform."
+      },
+      "transformation": "verbatim",
+      "source": {
+        "snapshot_commit": null,
+        "upstream_repository": "WOOWTECH/Woow_apporo_ha_app",
+        "upstream_path": "tools/brand/assets/apporo-logo-with-wordmark.svg",
+        "upstream_commit": "50203b0f12e9cbb55ebb86d10f7f816fecab5837",
+        "source_sha256": "a86c783ce870c60bc378c44c4cc228513aa7ab72dd11d64ad2b88eb56f04e433",
+        "provenance": "Verified byte-for-byte against GitHub source at the pinned commit on 2026-11-17.",
+        "upstream_blob": "f1e060858b01f0a6da817861ba0053731ac7697b"
+      }
+    },
+    {
+      "path": "assets/smart/favicon.png",
+      "purpose": "Existing Smart favicon",
+      "product_scope": "Apporo smart",
+      "bytes": 1930,
+      "sha256": "e405211b4dc50ece204bb755825a81e424f82ad0f7aa2737dc8b017a924b63ba",
+      "license": {
+        "status": "owner_authorized_brand_use",
+        "owner": "APPORO UNION INC. (brand/company attribution)",
+        "public_redistribution_license": "not established; trademark rights separate from source code licenses",
+        "authorization": "Project owner authorized using these materials for the apporo edition of this shared platform."
+      },
+      "transformation": "verbatim",
+      "source": {
+        "path": "woowtech/brands/apporo/assets/packages/app/assets/images/favicon.png",
+        "snapshot_commit": "fb96335087d944b13e99bf67f511b760eb868b3c",
+        "last_change_commit": "5d42669225cb3c2d1f6264b243442136b18bca06",
+        "source_sha256": "e405211b4dc50ece204bb755825a81e424f82ad0f7aa2737dc8b017a924b63ba",
+        "repository": "WOOWTECH/woowtech-smart"
+      }
+    },
+    {
+      "path": "assets/smart/pwa-icon-192.png",
+      "purpose": "Existing Smart PWA/touch icon",
+      "product_scope": "Apporo smart",
+      "bytes": 14926,
+      "sha256": "84508edce98b4a33b4060ecb907a983e57eec5b75126107550a5446817bedd94",
+      "license": {
+        "status": "owner_authorized_brand_use",
+        "owner": "APPORO UNION INC. (brand/company attribution)",
+        "public_redistribution_license": "not established; trademark rights separate from source code licenses",
+        "authorization": "Project owner authorized using these materials for the apporo edition of this shared platform."
+      },
+      "transformation": "verbatim",
+      "source": {
+        "path": "woowtech/brands/apporo/assets/packages/app/public/pwa-icon-192.png",
+        "snapshot_commit": "fb96335087d944b13e99bf67f511b760eb868b3c",
+        "last_change_commit": "5d42669225cb3c2d1f6264b243442136b18bca06",
+        "source_sha256": "84508edce98b4a33b4060ecb907a983e57eec5b75126107550a5446817bedd94",
+        "repository": "WOOWTECH/woowtech-smart"
+      }
+    },
+    {
+      "path": "assets/smart/pwa-icon-512.png",
+      "purpose": "Existing Smart PWA/touch icon",
+      "product_scope": "Apporo smart",
+      "bytes": 50133,
+      "sha256": "1a7738939f45042d9037ec8a0edd6104fe54839788875132ae0ec0173a21b69e",
+      "license": {
+        "status": "owner_authorized_brand_use",
+        "owner": "APPORO UNION INC. (brand/company attribution)",
+        "public_redistribution_license": "not established; trademark rights separate from source code licenses",
+        "authorization": "Project owner authorized using these materials for the apporo edition of this shared platform."
+      },
+      "transformation": "verbatim",
+      "source": {
+        "path": "woowtech/brands/apporo/assets/packages/app/public/pwa-icon-512.png",
+        "snapshot_commit": "fb96335087d944b13e99bf67f511b760eb868b3c",
+        "last_change_commit": "5d42669225cb3c2d1f6264b243442136b18bca06",
+        "source_sha256": "1a7738939f45042d9037ec8a0edd6104fe54839788875132ae0ec0173a21b69e",
+        "repository": "WOOWTECH/woowtech-smart"
+      }
+    },
+    {
+      "path": "assets/smart/apple-touch-icon.png",
+      "purpose": "Existing Smart PWA/touch icon",
+      "product_scope": "Apporo smart",
+      "bytes": 8024,
+      "sha256": "7f1ee74cf913c55adc61f818551da25aa4e88a0ed2b2541af590d303eec479d0",
+      "license": {
+        "status": "owner_authorized_brand_use",
+        "owner": "APPORO UNION INC. (brand/company attribution)",
+        "public_redistribution_license": "not established; trademark rights separate from source code licenses",
+        "authorization": "Project owner authorized using these materials for the apporo edition of this shared platform."
+      },
+      "transformation": "verbatim",
+      "source": {
+        "path": "woowtech/brands/apporo/assets/packages/app/public/apple-touch-icon.png",
+        "snapshot_commit": "fb96335087d944b13e99bf67f511b760eb868b3c",
+        "last_change_commit": "5d42669225cb3c2d1f6264b243442136b18bca06",
+        "source_sha256": "7f1ee74cf913c55adc61f818551da25aa4e88a0ed2b2541af590d303eec479d0",
+        "repository": "WOOWTECH/woowtech-smart"
+      }
+    },
+    {
+      "path": "assets/smart/desktop-icon.ico",
+      "purpose": "Existing desktop ICO",
+      "product_scope": "Apporo smart",
+      "bytes": 33761,
+      "sha256": "f7ab1dffb8d611e280d4560ac9fcd1dc208e592b0eced0d91b12673ab1696860",
+      "license": {
+        "status": "owner_authorized_brand_use",
+        "owner": "APPORO UNION INC. (brand/company attribution)",
+        "public_redistribution_license": "not established; trademark rights separate from source code licenses",
+        "authorization": "Project owner authorized using these materials for the apporo edition of this shared platform."
+      },
+      "transformation": "verbatim",
+      "source": {
+        "path": "woowtech/brands/apporo/assets/packages/desktop/assets/icon.ico",
+        "snapshot_commit": "fb96335087d944b13e99bf67f511b760eb868b3c",
+        "last_change_commit": "5d42669225cb3c2d1f6264b243442136b18bca06",
+        "source_sha256": "f7ab1dffb8d611e280d4560ac9fcd1dc208e592b0eced0d91b12673ab1696860",
+        "repository": "WOOWTECH/woowtech-smart"
+      }
+    }
+  ]
+}

@@ -1,0 +1,33 @@
+{
+  "schema": 1,
+  "id": "woowtech",
+  "display_name": "woowtech 設備管理",
+  "company": "WOOWTECH",
+  "tagline": "The Smart Space Solution",
+  "colors": {
+    "light": {
+      "primary": "#6183FC",
+      "hover": "#6183FC",
+      "on_primary": "#111A3A"
+    },
+    "dark": {
+      "primary": "#6183FC",
+      "hover": "#6183FC",
+      "on_primary": "#111A3A"
+    }
+  },
+  "assets": {
+    "logo_lockup_light": "../../branding/assets/logo-lockup-blue.svg",
+    "logo_lockup_dark": "../../branding/assets/logo-lockup-blue.svg",
+    "logo_wordmark_light": "../../branding/assets/logo-wordmark-blue.svg",
+    "logo_wordmark_dark": "../../branding/assets/logo-wordmark-blue.svg",
+    "logo_symbol": "../../branding/assets/logo-symbol-blue.svg",
+    "favicon": "../../branding/favicon.ico",
+    "apple_touch_icon": "../../branding/apple-touch-icon.png",
+    "pwa_icon_192": "../../pwa-gateway/assets/icon-192.png",
+    "pwa_icon_512": "../../pwa-gateway/assets/icon-512.png"
+  },
+  "provenance": {
+    "colors": "Runtime bridge preserves the existing Pi palette. The woowtech Cockpit skin is passed through byte-for-byte, including its existing light hover and text colors."
+  }
+}
