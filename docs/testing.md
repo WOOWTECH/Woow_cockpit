@@ -104,7 +104,26 @@ node tests/e2e/lab/upload_window.mjs                         # H8：上傳視窗
 | 洩漏掃描 | 各執行器的 leaks 情境都通過；主機上這一輪 622 個證據檔不含實驗室密碼、dev-a 緊急金鑰或 age 私鑰格式 |
 | 設備最後的狀態 | 兩台都是最後一版（28 個檔案與工作樹相同），目錄項目換回夾具（只有 http-json 核對），woowbk-inst 已移除，預設加密備份開啟、保留原則為全部保留、沒有作業、暫存與未加密副本都是空的；dev-a 保留 34 份各執行器仍參照的備份，dev-b 1 份 |
 
-排程備份（2026-11-17，`feat/backup-schedule`，c455a07 加上 `schedule_e2e.py`；兩台設備由 2026.11.15.2（c393dfb）以 `deploy-src.sh` 安裝工作樹）：`install` 23／23、`hardening.py h7`（`H7_FULL=0`，回退的正是新增單元的那筆交易）23／23、`timer` 16／17（計時器在整點後 0–1 秒啟動檢查並建立作業）、`fast` 19／19、`busy` 15／15、`timezone` 14／14、`run-now` 18／18、`retention` 11／11、`partial` 12／13、`kit-gate` 20／20、`compat` 30／30（dev-b 以安裝程式的回退降到 c393dfb，舊引擎讀取新檔案與作業紀錄，上傳、檢視並原位還原 dev-a 的排程備份，再回到工作樹）、`noise` 7／7、`reboot` 16／16、`cleanup` 12／12。systemd 255 在 `LogLevelMax=notice` 時連 PID 1 對 tick 服務的 Starting／Finished 都不寫（5 次檢查 0 行；沒有這個設定的對照單元每次 3 行）。實驗室設備的 `CLOCK_BOOTTIME` 是主機的開機時間，所以「開機 10 分鐘內不執行」是以時間命名空間在設備上證明，重新開機情境證明的是計時器自動回來與錯過時段的補做。未通過的兩項是產品問題，見 [tests/e2e/lab/README.md](../tests/e2e/lab/README.md) 的排程備份情境：已停止的應用讓整次排程備份失敗（應略過並標示部分完成），以及安裝後第一次檢查前、開機已久的設備會誤報「排程檢查沒有在執行」。證據在 `~/.woowbk-lab/evidence/schedule/`。
+排程備份（2026-11-17，`feat/backup-schedule`）。第一輪（c455a07 加上 `schedule_e2e.py`）找到兩個產品問題：已停止的應用讓整次排程備份失敗（應略過並標示部分完成），以及安裝後第一次檢查前、開機已久的設備會誤報「排程檢查沒有在執行」；兩者都在 ad7858e 修正（引擎另改以 PID 1 啟動後的秒數為開機時間，並加上設備時間的 `local` 文字、`schedule.defaults`、tick 服務的 `StandardError=journal` 與對遮蔽計時器的處理）。第二輪在 ad7858e 上：dev-a 先以安裝程式的回退回到 2026.11.15.2 再部署（新增單元的交易），dev-b 從第一輪的工作樹升級，排程情境全部通過，接著跑完整的實驗室回歸。systemd 255 在 `LogLevelMax=notice` 時連 PID 1 對 tick 服務的 Starting／Finished 都不寫（兩輪各 5 次檢查 0 行；沒有這個設定的對照單元每次 3 行）。實驗室設備的 `/proc/uptime` 與 `CLOCK_BOOTTIME` 是主機的開機時間，引擎改用 PID 1 的啟動時間後，`reboot` 以真正的 `labpodman restart` 證明 PID 1 未滿 10 分鐘的檢查都不補做、滿 10 分鐘後第一次檢查才補做。證據在 `~/.woowbk-lab/evidence/schedule/` 與各執行器的目錄。
+
+| 項目（2026-11-17 第二輪，ad7858e） | 結果 |
+| --- | --- |
+| `schedule_e2e.py` | install 29、timer 17、fast 20、busy 15、timezone 15、run-now 19、retention 11、partial 19、kit-gate 20、compat 31、noise 7、reboot 24、cleanup 13，全部通過 |
+| `hardening.py h7`（`H7_FULL=0`，新增單元的交易） | 23／23 |
+| `verify-device.sh a`、`b` | 各 10 項通過 |
+| `cli_e2e.py all` | 122／122：s1 29、s2 22、faults 11、s3 8、s2-again 22、f8 10、f9 9、cancel 6、leaks 5 |
+| `hardening.py all`（`H7_FULL=0`） | 588／588：h1 327、h2 13、space 25、h3 28、h4 48、h5 15、h6 12、h7 23、sec1 26、fidelity 21、fresh 43、leaks 7 |
+| `format_e2e.py all` | 105／105：v1 7、encrypted 21、plain 27、export 20、deep 6、partial 7、cleanup 17 |
+| `dirs_e2e.py all` | 257／257：prep 20、d1 29、d3 18、d4 29、d5 107、d6 11、d7 16、d2 22、leaks 5 |
+| `ui_e2e.mjs all` | 29／29（admin、s1、s2） |
+| `race_probe.py a`、`b` | 各 11／11（各 110 個作業，0 個被誤判） |
+| `digest_sql_probe.py` | 9／9 |
+| `strengthen_ui.mjs` | catalog 16／16；cleanup 9／10、backups 26／26、devb 9／9、cleanup-lab 45／45；cleanup 重跑 11／11（見下） |
+| `strengthen_e2e.py` | 205／205：catalog-apply 28、digests 38、mismatch 22、deep 19、instance 53、keyless 19、retention 16、tampered-json 10；cleanup 197／197 |
+| `upload_window.mjs`（H8） | 18 次上傳、0 個錯誤（6 種視窗／分段設定各 3 次，到 dev-b、停在金鑰步驟後刪除）；預設的 4 MiB／512 KiB 中位數 15.1 MB/s，主機 CPU 約 97% 忙碌 |
+| 離線夾具測試（`tests/e2e`） | 35／35 |
+
+`strengthen_ui.mjs cleanup` 第一次 9／10 是執行順序的問題，不是引擎：`ui_e2e.mjs s1` 在建立頁保留預設的全選，dev-a 上的備份含 woowbk-demo、woowbk-dirs、woowbk-inst，另外兩個應用保留全部，所以它不是 woowbk-demo「保留最新 5 份」的候選（CONTRACT §8：多個應用的備份在任一應用仍需要時保留），而這項檢查假設 woowbk-demo 的手動備份都只含它（候選數 = 手動份數 − 5）。刪除那份測試備份、補 6 份只含 woowbk-demo 的備份後重跑 11／11，之後刪除補的備份。
 
 `ui_e2e.mjs` 與 `upload_window.mjs` 需要 `PLAYWRIGHT_CHROMIUM_EXECUTABLE` 或 `~/.cache/ms-playwright/chromium-1248`。每個執行器也可只跑單一情境：
 

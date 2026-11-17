@@ -11,7 +11,8 @@ the page's path (schedule-set) saves the settings, with a time whose slots lie b
 directly (`labpodman exec <device> <argv>`, Python programs on stdin), never through a shell.
 
     python3 -I tests/e2e/lab/schedule_e2e.py install    # deploy-src a and b: units root 0644 equal to the source, the
-                                                        # timer enabled and active (systemctl show/cat), verify
+                                                        # timer enabled and active (systemctl show/cat), verify; dev-a:
+                                                        # a masked timer is left masked, enabled again once unmasked
     python3 -I tests/e2e/lab/schedule_e2e.py timer      # dev-a: schedule-set for the next boundary; the timer runs it
     python3 -I tests/e2e/lab/schedule_e2e.py fast       # dev-a: due slot, two starts and a held tick lock -> one job;
                                                         # 排程 in list, note 排程備份, journal lines once per slot
@@ -26,8 +27,8 @@ directly (`labpodman exec <device> <argv>`, Python programs on stdin), never thr
                                                         # and job records; dev-a's scheduled backup uploaded, inspected,
                                                         # restored; dev-b back on the working tree
     python3 -I tests/e2e/lab/schedule_e2e.py noise      # dev-a: PID 1 lines per tick with LogLevelMax=notice + controls
-    python3 -I tests/e2e/lab/schedule_e2e.py reboot     # dev-a: missed slots, overdue, timer stopped, the 10-minute wait
-                                                        # (time namespace), restart -> catch-up (uptime caveat: README)
+    python3 -I tests/e2e/lab/schedule_e2e.py reboot     # dev-a: missed slots, overdue, timer stopped; restart -> ticks
+                                                        # settle until PID 1 is 10 minutes old, then the catch-up
     python3 -I tests/e2e/lab/schedule_e2e.py cleanup    # test backups, schedule files, dev-b's lab key, demo entry
     python3 -I tests/e2e/lab/schedule_e2e.py all
 
@@ -619,7 +620,7 @@ def unit_checks(ev, dev, tag):
     timer = show(dev, TIMER, 'LoadState', 'UnitFileState', 'ActiveState', 'FragmentPath', 'TimersCalendar',
                  'AccuracyUSec', 'RandomizedDelayUSec', 'Persistent', 'Unit', 'WantedBy', 'NextElapseUSecRealtime')
     service = show(dev, SERVICE, 'LoadState', 'FragmentPath', 'Type', 'ExecStart', 'StandardInput', 'StandardOutput',
-                   'SyslogLevel', 'LogLevelMax', 'TimeoutStartUSec', 'RemainAfterExit', 'ActiveState')
+                   'StandardError', 'SyslogLevel', 'LogLevelMax', 'TimeoutStartUSec', 'RemainAfterExit', 'ActiveState')
     cat = out(dev, 'systemctl', 'cat', '--', TIMER, SERVICE)
     layout = unit_layout(dev)
     ev.save(f'{tag}-units', {'timer': timer, 'service': service, 'cat': cat, 'layout': layout})
@@ -635,12 +636,13 @@ def unit_checks(ev, dev, tag):
     ev.check(f'{tag}: next elapse on a 5-minute boundary within 5 minutes',
              following is not None and int(following) % 300 == 0 and 0 < following - time.time() <= 300,
              timer.get('TimersCalendar'))
-    ev.check(f'{tag}: service oneshot, fixed argv `{HELPER} schedule-tick`, stdin/stdout null, SyslogLevel warning, '
-             f'LogLevelMax notice, 15 min timeout',
+    ev.check(f'{tag}: service oneshot, fixed argv `{HELPER} schedule-tick`, stdin/stdout null, stderr to the journal, '
+             f'SyslogLevel warning, LogLevelMax notice, 15 min timeout',
              service.get('LoadState') == 'loaded' and service.get('FragmentPath') == f'{UNIT_DIR}/{SERVICE}'
              and service.get('Type') == 'oneshot'
              and f'argv[]={HELPER} schedule-tick ;' in service.get('ExecStart', '')
              and service.get('StandardInput') == 'null' and service.get('StandardOutput') == 'null'
+             and service.get('StandardError') == 'journal'
              and service.get('SyslogLevel') == '4' and service.get('LogLevelMax') == '5'
              and service.get('TimeoutStartUSec') == '15min', service)
     ev.check(f'{tag}: systemctl cat shows exactly the source unit files (ConditionPathExists of the helper included)',
@@ -673,12 +675,14 @@ def scenario_install(ev):
                 ev.check(f'dev-{dev} install over an engine without the timer: daemon-reload, then enable --now of '
                          f'the timer (no stop: it was not running)', steps == ['daemon-reload', f'enable --now {TIMER}'],
                          steps)
-            else:
-                ev.check(f'dev-{dev} install over an engine with the timer: stopped while files change, running again',
-                         steps and steps[0] == f'stop {TIMER}' and steps[-1] == f'enable --now {TIMER}', steps)
             chain = transactions(dev)
             latest = next(t for t in reversed(chain) if t['id'] == result.get('backup_id'))
             ev.save(f'install-{dev}-transaction', latest)
+            if before['load_state'] != 'not-found':
+                reload = ['daemon-reload'] if latest['units'] else []
+                ev.check(f'dev-{dev} install over an engine with the timer: stopped while the files change, '
+                         f'daemon-reload only for a changed unit file ({[u for u, _e in latest["units"]]}), running again',
+                         steps == [f'stop {TIMER}', *reload, f'enable --now {TIMER}'], steps)
             ev.check(f'dev-{dev} transaction journal records the timer as it was before the install',
                      (latest.get('systemd') or {}).get('timer') == TIMER
                      and latest['systemd']['before'] == before and latest['systemd']['stopped'] is bool(before['active']),
@@ -708,7 +712,37 @@ def scenario_install(ev):
         version = out(dev, 'cat', '/usr/local/lib/woowtech-cockpit-backup/VERSION').strip()
         report[dev] = {'status': result.get('status'), 'systemctl': steps, 'version': version,
                        'transaction': result.get('backup_id')}
+        if dev == 'a':
+            masked_timer(ev, dev)
     return {'devices': report}
+
+
+def masked_timer(ev, dev):
+    """`systemctl mask` is the administrator's decision: the installer leaves the timer masked (a notice, no failure);
+    once unmasked, an install enables it again."""
+    run(dev, 'systemctl', 'stop', TIMER)
+    run(dev, 'systemctl', 'mask', TIMER)
+    try:
+        state = timer_state(dev)
+        rc, result, _err = manage(dev, 'install', '--backup-demo-catalog')
+        rc_plan, plan, _err = manage(dev, 'plan', '--backup-demo-catalog')
+        view = ok(dev, 'schedule-get', ev=ev)
+        ev.save('install-masked', {'before': state, 'install': result, 'plan': plan, 'timer': view['timer']})
+        ev.check('masked timer: install completes (already-current) without any systemctl step and says it is left masked',
+                 rc == 0 and result.get('status') == 'already-current' and 'systemctl' not in result
+                 and any('masked' in note and 'unmask' in note for note in result.get('notices', []))
+                 and (result.get('timer') or {}).get('load_state') == 'masked'
+                 and (result.get('timer') or {}).get('active') is False, result)
+        ev.check('masked timer: plan names it and plans no systemctl step', rc_plan == 0 and plan.get('systemctl') == []
+                 and any('masked' in note for note in plan.get('notices', [])), plan.get('notices'))
+        ev.check('masked timer: the engine sees it not enabled and not active',
+                 view['timer']['enabled'] is False and view['timer']['active'] is False, view['timer'])
+    finally:
+        run(dev, 'systemctl', 'unmask', TIMER)
+    rc, result, _err = manage(dev, 'install', '--backup-demo-catalog')
+    ev.check('unmasked: the next install enables and starts it again (enable --now)', rc == 0
+             and result.get('systemctl') == [f'enable --now {TIMER}'] and result.get('timer') == TIMER_ON, result)
+    ev.check('unmasked: the timer runs as installed', timer_state(dev) == TIMER_ON, timer_state(dev))
 
 
 # ------------------------------------------------------------------ timer: a real timer-driven run
@@ -763,7 +797,8 @@ def scenario_timer(ev):
                                             'timer': show(dev, TIMER, 'ActiveEnterTimestamp', 'TimersCalendar')})
         ev.check('timer just started (as by an install) and no tick yet: no attention (the page must not say '
                  '「排程檢查沒有在執行」 for the first 5 minutes on a device that has been up for long)',
-                 view['attention'] is None and status['attention'] is None,
+                 view['attention'] is None and status['attention'] is None and view['timer']['last_tick_age'] is None
+                 and view['timer']['active_age'] is not None and view['timer']['active_age'] < 60,
                  {'timer': view['timer'], 'attention': view['attention']})
         sleep_until(target, ev, f'the timer at {iso(target)}')
         view = wait_last_run(dev, ev, slot_iso=iso(target), timeout=180)
@@ -881,6 +916,12 @@ def scenario_fast(ev):
                                                    'result': 'succeeded', 'backup_id': backup_id, 'skipped_apps': [],
                                                    'error': None}
                  and view['attention'] is None and new_events == [], {'last_run': view['last_run'], 'new': new_events})
+        last = view['last_run']
+        ev.check('last run in device time: started_local/finished_local; the form shows the saved settings',
+                 last['started_local'] == local_text(parse_iso(last['started']), zone)
+                 and last['finished_local'] == local_text(parse_iso(last['finished']), zone)
+                 and view['schedule']['defaults'] is False and view['schedule']['saved'] is True,
+                 {k: last.get(k) for k in ('started', 'started_local', 'finished', 'finished_local')})
         ev.check('status.schedule: on, the same last run, next run tomorrow at that time, the zone, the timer',
                  summary['enabled'] is True and summary['last_run'] == view['last_run']
                  and summary['next_run']['at'] == iso(slot + datetime.timedelta(days=1))
@@ -944,8 +985,9 @@ def scenario_busy(ev):
                  and (view['last_run'] or {}).get('slot') != iso(slot) and slot_jobs(dev, ev, iso(slot)) == [],
                  view['waiting'])
         event = (view['events'] or [{}])[0]
-        ev.check('event waiting for the slot, with the job it waits for, shown as not a missed run',
+        ev.check('event waiting for the slot (device time in local), with the job it waits for, not a missed run',
                  event.get('kind') == 'waiting' and event.get('slot') == iso(slot) and event.get('job_id') == busy_job
+                 and event.get('local') == local_text(slot, zone) and event.get('first_local') is None
                  and event.get('not_run') is False and '等待其他作業完成後開始' in event.get('message', ''), event)
         ev.check('status.schedule.waiting and jobs.schedule_events show the same',
                  ok(dev, 'status', ev=ev)['schedule']['waiting'] == view['waiting']
@@ -1036,6 +1078,12 @@ def scenario_timezone(ev):
                  and hhmm(slot, taipei) != hhmm(slot, UTC), view['last_run'])
         job, log = wait_job(dev, job_id, ev=ev, label='timezone-run')
         ev.save('timezone-job', {'job': job, 'log': log})
+        last = ok(dev, 'schedule-get', ev=ev)['last_run']
+        ev.check('the last run\'s times are given in Taipei device time (started_local/finished_local)',
+                 last['started_local'] == local_text(parse_iso(last['started']), taipei)
+                 and last['finished_local'] == local_text(parse_iso(last['finished']), taipei)
+                 and last['started_local'] != local_text(parse_iso(last['started']), UTC),
+                 {k: last.get(k) for k in ('started', 'started_local', 'finished', 'finished_local')})
         backup_id = (job.get('result') or {}).get('backup_id')
         remember(dev, backup_id)
         made.append(backup_id)
@@ -1068,6 +1116,10 @@ def scenario_run_now(ev):
     made = []
     try:
         run(dev, 'rm', '-f', '--', SCHEDULE_FILE)
+        fresh = ok(dev, 'schedule-get', ev=ev)['schedule']
+        ev.check('nothing saved: schedule-get shows the defaults (defaults true, saved false, no problem)',
+                 fresh['defaults'] is True and fresh['saved'] is False and fresh['problem'] is None
+                 and fresh['time'] == '03:00' and fresh['keep_last'] == 7 and fresh['apps'] == 'all', fresh)
         rc, reply = helper(dev, 'schedule-run-now', {'request_id': request_id()}, ev=ev)
         ev.check('run-now without saved settings: invalid-request, reason not-saved',
                  rc == 1 and reply['error']['code'] == 'invalid-request'
@@ -1087,9 +1139,13 @@ def scenario_run_now(ev):
         run(dev, 'chmod', '0664', SCHEDULE_FILE)
         view = ok(dev, 'schedule-get', ev=ev)
         rc, reply = helper(dev, 'schedule-run-now', {'request_id': request_id()}, ev=ev)
-        ev.check('schedule.json group-writable: problem shown, run-now refused with reason settings-problem',
-                 view['schedule']['problem'] and '排程備份已暫停' in view['schedule']['problem'] and rc == 1
-                 and reply['error']['details'].get('reason') == 'settings-problem', view['schedule']['problem'])
+        ev.check('schedule.json group-writable: the owner-worded problem (no file name), the defaults shown, '
+                 'run-now refused with reason settings-problem',
+                 view['schedule']['problem'] == '排程備份的設定檔權限不安全（必須只有系統管理員能修改），排程備份已暫停。'
+                                                '請通知工程人員檢查。'
+                 and view['schedule']['defaults'] is True and rc == 1
+                 and reply['error']['details'].get('reason') == 'settings-problem'
+                 and reply['error']['message'] == view['schedule']['problem'], view['schedule']['problem'])
         tick_service(dev)
         tick_service(dev)
         problem_events = [e for e in ok(dev, 'schedule-get', ev=ev)['events'] if e['kind'] == 'settings-problem']
@@ -1101,8 +1157,9 @@ def scenario_run_now(ev):
                  == 'settings-problem')
         run(dev, 'chmod', '0644', SCHEDULE_FILE)
         tick_service(dev)
-        ev.check('mode fixed: the problem is gone at the next command', ok(dev, 'schedule-get', ev=ev)['schedule']
-                 ['problem'] is None)
+        fixed = ok(dev, 'schedule-get', ev=ev)['schedule']
+        ev.check('mode fixed: the problem is gone at the next command, the saved settings shown',
+                 fixed['problem'] is None and fixed['defaults'] is False and fixed['saved'] is True, fixed)
         # Saved but off: one run now with the saved settings.
         t1 = time.time()
         rid = request_id()
@@ -1273,11 +1330,15 @@ def scenario_partial(ev):
         undo('demo-stopped', 'a')
         as_owner(dev, 'systemctl', '--user', 'stop', *DEMO_UNITS, timeout=300)
         app = next(a for a in ok(dev, 'status', ev=ev)['apps'] if a['id'] == DEMO)
-        ev.log(f'woowbk-demo after the stop: state={app["state"]} problems={app["problems"]}')
+        ev.check('woowbk-demo stopped by its owner: status says stopped, no problems', app['state'] == 'stopped'
+                 and app['problems'] == [] and app['deployed'] is True, app)
         t0 = time.time()
         job, log = run_now(dev, ev, 'partial-stopped')
         made.append((job.get('result') or {}).get('backup_id'))
         stopped_job = job['id']
+        reason = ((job.get('result') or {}).get('skipped_apps') or [{}])[0].get('reason')
+        ev.check('(a) the stopped app\'s reason: 「應用「…」已停止，無法備份：備份時它的資料庫必須在執行中。」',
+                 reason == f'應用「{app["name"]}」已停止，無法備份：備份時它的資料庫必須在執行中。', reason)
         partial_checks(ev, dev, '(a) woowbk-demo stopped', job, DEMO, t0)
         ev.save('partial-stopped-app', {'app': app, 'job_error': job.get('error'), 'log_tail': log[-12:]})
         ev.require('woowbk-demo starts again', start_demo(dev, ev))
@@ -1595,20 +1656,17 @@ def scenario_noise(ev):
 
 # ------------------------------------------------------------------ reboot: missed slots and the catch-up
 
-TIMENS_PY = r'''
-import os, sys, time
-# Run argv[2:] in a new time namespace whose CLOCK_BOOTTIME reads argv[1] seconds (util-linux 2.39 unshare cannot
-# parse a negative --boottime offset).
-offset = int(float(sys.argv[1]) - time.clock_gettime(time.CLOCK_BOOTTIME))
-os.unshare(os.CLONE_NEWTIME)
-with open('/proc/self/timens_offsets', 'w') as handle:
-    handle.write(f'boottime {offset} 0\n')
-pid = os.fork()
-if pid == 0:
-    os.execv(sys.argv[2], sys.argv[2:])
-_pid, status = os.waitpid(pid, 0)
-sys.exit(os.waitstatus_to_exitcode(status))
-'''
+ENGINE_UPTIME_PY = r"""
+import sys
+sys.path.insert(0, '/usr/local/lib/woowtech-cockpit-backup')
+from woowbackup import schedule
+print(schedule.uptime())
+"""
+
+
+def engine_uptime(dev):
+    """The uptime the installed engine decides with: seconds since the device's PID 1 started (read-only)."""
+    return float(py(dev, ENGINE_UPTIME_PY).stdout.decode().strip())
 
 
 def reset_state(dev, ev):
@@ -1638,6 +1696,16 @@ def wait_device(dev, ev, uid=1001):
     return healthy(dev, 180)
 
 
+def before_boundary(ev, zone, seconds):
+    """Wait until `seconds` before the next 5-minute boundary that is at least that far away; returns it."""
+    now = utcnow()
+    boundary = floor5(now, zone) + datetime.timedelta(minutes=5)
+    if (boundary - now).total_seconds() < seconds + 5:
+        boundary += datetime.timedelta(minutes=5)
+    sleep_until(boundary - datetime.timedelta(seconds=seconds), ev, f'{seconds}s before the boundary {iso(boundary)}')
+    return boundary
+
+
 @scenario('reboot')
 def scenario_reboot(ev):
     dev = 'a'
@@ -1646,8 +1714,11 @@ def scenario_reboot(ev):
     zone, _name = device_zone(dev, ev)
     proc_uptime = float(out(dev, 'cat', '/proc/uptime').split()[0])
     host_uptime = float(Path('/proc/uptime').read_text().split()[0])
-    ev.log(f'uptime inside dev-a {proc_uptime:.0f}s, host {host_uptime:.0f}s: the device sees the host kernel\'s '
-           f'CLOCK_BOOTTIME')
+    engine_before = engine_uptime(dev)
+    ev.log(f'dev-a: /proc/uptime {proc_uptime:.0f}s (the host kernel\'s; host {host_uptime:.0f}s), the engine\'s uptime '
+           f'(since PID 1 started) {engine_before:.0f}s')
+    ev.check('the engine counts uptime from the device\'s PID 1, not from the host kernel\'s boot',
+             0 < engine_before < proc_uptime - 60, {'engine': round(engine_before), 'proc_uptime': round(proc_uptime)})
     made = []
     reset_state(dev, ev)
     try:
@@ -1655,6 +1726,7 @@ def scenario_reboot(ev):
         now = clear_of_boundary(ev, zone)
         base = floor5(now, zone)
         missed_time = base + datetime.timedelta(hours=2)
+        first_missed = missed_time - datetime.timedelta(days=3)
         t0 = time.time()
         write_schedule(dev, ev, time_=hhmm(missed_time, zone), armed_at=now - datetime.timedelta(days=3, minutes=10))
         reply = tick_by_hand(dev, ev)
@@ -1665,17 +1737,20 @@ def scenario_reboot(ev):
         ev.check('three missed slots, the next one 2 h away: decision missed, one collapsed event (count 3), no job',
                  reply.get('decision') == 'missed' and reply.get('slot') == iso(latest) and event.get('kind') == 'missed'
                  and event.get('count') == 3 and event.get('slot') == iso(latest)
-                 and event.get('first') == iso(missed_time - datetime.timedelta(days=3)) and event.get('not_run') is True
+                 and event.get('first') == iso(first_missed) and event.get('not_run') is True
                  and '共 3 次的排程備份沒有執行：設備當時沒有開機，或排程檢查沒有在執行。' in event.get('message', '')
                  and view['last_run'] is None, event)
+        ev.check('the event names its slots in device time (local, first_local)',
+                 event.get('local') == local_text(latest, zone) and event.get('first_local') == local_text(first_missed,
+                                                                                                          zone),
+                 {k: event.get(k) for k in ('local', 'first_local')})
         ev.check('attention missed with the event\'s text; next run in 2 h', (view['attention'] or {}).get('code')
                  == 'missed' and view['attention']['message'] == event.get('message')
                  and view['next_runs'][0]['at'] == iso(missed_time), view['attention'])
         lines = engine_lines(dev, t0, 'schedule-')
         ev.check('journal: one schedule-missed line (notice) with first and count',
-                 [(t, p) for t, p in lines] == [(f'schedule-missed slot={iso(latest)} '
-                                                 f'first={iso(missed_time - datetime.timedelta(days=3))} count=3', 5)],
-                 lines)
+                 [(t, p) for t, p in lines] == [(f'schedule-missed slot={iso(latest)} first={iso(first_missed)} count=3',
+                                                 5)], lines)
         # (2) A slot 35 minutes ago that no tick saw: overdue now; the timer stops ("device off").
         now = clear_of_boundary(ev, zone)
         slot = floor5(now, zone) - datetime.timedelta(minutes=35)
@@ -1691,38 +1766,71 @@ def scenario_reboot(ev):
         run(dev, 'systemctl', 'stop', TIMER)
         view = ok(dev, 'schedule-get', ev=ev)
         ev.check('timer stopped: timer.active false, attention timer-inactive (it comes before overdue)',
-                 view['timer']['active'] is False and (view['attention'] or {}).get('code') == 'timer-inactive',
+                 view['timer']['active'] is False and view['timer']['active_age'] is None
+                 and (view['attention'] or {}).get('code') == 'timer-inactive',
                  {'timer': view['timer'], 'attention': view['attention']})
-        before = schedule_state(dev)
-        settle = json.loads(py(dev, TIMENS_PY, '120', HELPER, 'schedule-tick').stdout.decode().splitlines()[-1])
-        after = schedule_state(dev)
-        ev.check('a tick that sees 2 minutes of uptime (time namespace, CLOCK_BOOTTIME 120 s): settle, nothing '
-                 'recorded, no job', settle.get('decision') == 'settle' and settle.get('slot') == iso(slot)
-                 and {k: after.get(k) for k in ('handled', 'pending', 'events', 'last_run')}
-                 == {k: before.get(k) for k in ('handled', 'pending', 'events', 'last_run')}
-                 and not slot_jobs(dev, ev, iso(slot)), settle)
-        # (3) Restart the device right after a boundary (the apps are up before the next tick); the timer comes back
-        # by itself (enabled, timers.target).
-        just_after_boundary(ev, zone)
+        # (3) Restart the device 40 s before a boundary: ticks come at PID 1 ages of about 1, 6 and 11 minutes.
+        first = before_boundary(ev, zone, 40)
         restarted = time.time()
         subprocess.run([LP, 'restart', dev_name(dev)], capture_output=True, timeout=180, check=True)
         ev.require('dev-a back: systemd running, woowbk-demo healthy', wait_device(dev, ev))
+        age = engine_uptime(dev)
+        pid1_started = time.time() - age
         state = timer_state(dev)
         view = ok(dev, 'schedule-get', ev=ev)
-        ev.save('reboot-after-boot', {'timer': state, 'schedule_get': view})
+        ev.save('reboot-after-boot', {'timer': state, 'schedule_get': view, 'engine_uptime': age})
         ev.check('after the restart the timer is active again without any command (enabled in timers.target)',
                  state == TIMER_ON, state)
-        ev.log(f'after the restart, before the first tick: last_tick_age={view["timer"]["last_tick_age"]} '
-               f'attention={view["attention"]} (lab: CLOCK_BOOTTIME is the host\'s, so "no tick for 15 minutes once '
-               f'the device has been up that long" already holds)')
-        first = floor5(utcnow(), zone) + datetime.timedelta(minutes=5)
-        sleep_until(first, ev, f'the first timer tick after the restart at {iso(first)}')
-        view = wait_last_run(dev, ev, slot_iso=iso(slot), trigger='catch-up', timeout=180)
-        job_id = view['last_run']['job_id']
-        tick = show(dev, SERVICE, 'ExecMainStartTimestamp')
-        ev.check('the first timer tick after the restart caught the missed slot up (trigger catch-up)',
-                 unix_ts(tick['ExecMainStartTimestamp']) is not None
-                 and unix_ts(tick['ExecMainStartTimestamp']) >= first.timestamp() - 1, tick)
+        ev.check('the engine\'s uptime started again with the device: PID 1 younger than 10 minutes',
+                 0 <= age < 600 and pid1_started >= restarted - 5, {'engine_uptime': round(age)})
+        ev.check('after the restart: no 「排程檢查沒有在執行」 (the timer just became active); the missed slot is overdue',
+                 view['timer']['active'] is True and view['timer']['active_age'] is not None
+                 and view['timer']['active_age'] < 600 and (view['attention'] or {}).get('code') == 'overdue'
+                 and view['attention'].get('slot') == iso(slot), {'timer': view['timer'], 'attention': view['attention']})
+        before = schedule_state(dev)
+        reply = tick_by_hand(dev, ev)
+        after = schedule_state(dev)
+        ev.check('a tick while PID 1 is younger than 10 minutes: settle, nothing recorded, no job',
+                 reply.get('decision') == 'settle' and reply.get('slot') == iso(slot)
+                 and {k: after.get(k) for k in ('handled', 'pending', 'events', 'last_run')}
+                 == {k: before.get(k) for k in ('handled', 'pending', 'events', 'last_run')}
+                 and not slot_jobs(dev, ev, iso(slot)), reply)
+        settles, job_id, caught = [], None, None
+        boundary = first
+        while boundary.timestamp() < pid1_started + 20 * 60:
+            sleep_until(boundary + datetime.timedelta(seconds=BOUNDARY_MARGIN), ev, f'the timer tick at {iso(boundary)}')
+            unit = show(dev, SERVICE, 'ExecMainStartTimestamp', 'InvocationID', 'Result')
+            started = unix_ts(unit.get('ExecMainStartTimestamp'))
+            if started is None or started < boundary.timestamp() - 1:
+                ev.log(f'no timer tick at {iso(boundary)} ({unit})')
+                boundary += datetime.timedelta(minutes=5)
+                continue
+            tick_age = started - pid1_started
+            view = ok(dev, 'schedule-get', ev=ev)
+            last = view['last_run'] or {}
+            record = {'boundary': iso(boundary), 'pid1_age_at_tick': round(tick_age), 'result': unit.get('Result'),
+                      'last_run_slot': last.get('slot'), 'attention': (view['attention'] or {}).get('code')}
+            if tick_age < 590:
+                settles.append(record)
+                ev.check(f'timer tick at {iso(boundary)} with PID 1 {tick_age:.0f}s old: no catch-up (settle); the slot '
+                         f'is still overdue', last.get('slot') != iso(slot) and not slot_jobs(dev, ev, iso(slot))
+                         and record['attention'] == 'overdue' and unit.get('Result') == 'success', record)
+            elif tick_age < 610 and last.get('slot') != iso(slot):
+                ev.log(f'tick at {iso(boundary)} too close to 10 minutes of PID 1 ({tick_age:.0f}s) to judge: {record}')
+            else:
+                caught = record
+                job_id = last.get('job_id') if last.get('slot') == iso(slot) else None
+                ev.check(f'the first timer tick with PID 1 at least 10 minutes old ({iso(boundary)}, {tick_age:.0f}s) '
+                         'caught the missed slot up', job_id is not None and last.get('trigger') == 'catch-up', record)
+                break
+            boundary += datetime.timedelta(minutes=5)
+        ev.save('reboot-ticks', {'settle_ticks': settles, 'catch_up_tick': caught, 'pid1_started': pid1_started})
+        ev.require('timer ticks came while PID 1 was younger than 10 minutes, and the catch-up after that',
+                   settles and job_id, {'settle_ticks': settles, 'catch_up_tick': caught})
+        record = job_record(dev, job_id)
+        ev.check('the catch-up job was created once PID 1 was 10 minutes old',
+                 parse_iso(record['created']).timestamp() >= pid1_started + 600 - 2,
+                 {'created': record['created'], 'pid1_age': round(parse_iso(record['created']).timestamp() - pid1_started)})
         job, log = wait_job(dev, job_id, ev=ev, label='reboot-catch-up')
         ev.save('reboot-job', {'job': job, 'log': log})
         backup_id = (job.get('result') or {}).get('backup_id')
@@ -1732,15 +1840,16 @@ def scenario_reboot(ev):
         tick_service(dev)
         lines = engine_lines(dev, restarted, 'schedule-')
         ev.save('reboot-journal', lines)
-        ev.check('journal after the restart: schedule-run trigger=catch-up and its result, once each',
+        ev.check('journal after the restart: only schedule-run trigger=catch-up and its result, once each',
                  [p for t, p in lines if t.startswith(f'schedule-run slot={iso(slot)} job={job_id} trigger=catch-up ')]
                  == [5] and [p for t, p in lines if t.startswith(f'schedule-result slot={iso(slot)} job={job_id} '
-                                                                  'trigger=catch-up result=succeeded')] == [5], lines)
+                                                                  'trigger=catch-up result=succeeded')] == [5]
+                 and len(lines) == 2, lines)
         view = ok(dev, 'schedule-get', ev=ev)
         ev.check('after the catch-up: no attention, the missed event of step 1 is still listed',
                  view['attention'] is None and any(e['kind'] == 'missed' for e in view['events']), view['attention'])
         return {'proc_uptime_s': round(proc_uptime), 'host_uptime_s': round(host_uptime), 'catch_up_job': job_id,
-                'slot': iso(slot)}
+                'slot': iso(slot), 'settle_ticks': settles, 'catch_up_tick': caught}
     finally:
         if timer_state(dev)['active'] is False:
             run(dev, 'systemctl', 'start', TIMER, check=False)
