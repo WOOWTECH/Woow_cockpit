@@ -4703,7 +4703,8 @@
       }),
       h("span", { class: "choice-body" }, h("strong", { text: app.name || app.id }), app.description ? h("small", { text: app.description }) : null,
         h("span", { class: "choice-meta" }, appStateChip(app.state),
-          selectable(app) ? null : h("small", { text: "目前無法備份；排程時若仍是這樣，會略過這個應用，結果標示「部分完成」。" }))));
+          selectable(app) ? app.state === "stopped" ? h("small", { text: "目前已停止；排程時若仍停止而無法備份（例如資料庫沒有在執行），會略過這個應用，結果標示「部分完成」。" }) : null
+            : h("small", { text: "目前無法備份；排程時若仍是這樣，會略過這個應用，結果標示「部分完成」。" }))));
     // Saved ids this device no longer has: the engine refuses to save them (app-not-in-catalog), so they are named.
     const gone = draft.savedApps.filter(id => !apps.some(app => app.id === id)).map(id => h("label", { class: "choice", htmlFor: `schedule-app-${id}` },
       h("input", {
@@ -4715,7 +4716,7 @@
     const appsSection = h("div", { class: "form-section" }, h("fieldset", { class: "form-group" }, h("legend", { text: "要備份哪些應用" }),
       h("div", { class: "choices" },
         radioChoice({ name: "schedule-apps", value: "all", checked: !draft.some, label: "全部應用（之後新增的也會包含）", focus: "schedule-apps-all",
-          help: "每次都備份這台設備當時設定的所有應用。尚未部署或狀態異常的應用會略過，結果標示「部分完成」。", onChange: next => { next.some = false; } }),
+          help: "每次都備份這台設備當時設定的所有應用。尚未部署、狀態異常，或已停止而無法備份的應用會略過，結果標示「部分完成」。", onChange: next => { next.some = false; } }),
         radioChoice({ name: "schedule-apps", value: "some", checked: draft.some, label: "只備份選擇的應用", focus: "schedule-apps-some",
           help: "只備份下面勾選的應用；之後新增的應用不會自動加入。", onChange: next => {
             next.some = true;
@@ -4783,7 +4784,7 @@
         "到了設定的時間，會在 5 分鐘內開始；和手動備份一樣短暫暫停應用寫入，完成並驗證後才列出。",
         "設備當時沒有開機時，開機約 10 分鐘後補做一次，只補最近的一次；下一次排程在 3 小時內就不補。",
         "有其他作業進行中時，會在它結束後 5 分鐘內開始。",
-        "尚未部署或狀態異常的應用會略過，其他應用照常備份，結果標示「部分完成」。",
+        "尚未部署、狀態異常，或已停止而無法備份的應用會略過，其他應用照常備份，結果標示「部分完成」。",
         "失敗時不會自動重試，原因會顯示在頁面上方；下一次排程照常執行。",
         "沒有執行的排程，會在「活動紀錄」標示「未執行」。"
       ].map(item => h("li", { text: item }))),

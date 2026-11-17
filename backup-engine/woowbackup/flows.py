@@ -776,8 +776,9 @@ def create_backup(ctx, apps, staging, *, include_images, note, backup_type, key,
     `space(estimate, free, required)` (the pre-restore copy): returns `(required, note)`, the free space needed
     instead of `required` (a backup packaged right away) and a log line once that check passed; it is called before
     any writer stops.
-    `skipped` (a list; scheduled backups only): an app that is not deployed or reports problems is left out and
-    appended `{id, name, reason}` instead of failing the backup; none left fails it. `backup_id`: the id chosen ahead.
+    `skipped` (a list; scheduled backups only): an app that is not deployed, reports problems or cannot be backed up
+    in its current state (`adapter.unavailable`, e.g. stopped with a database to dump) is left out and appended
+    `{id, name, reason}` instead of failing the backup; none left fails it. `backup_id`: the id chosen ahead.
     """
     phase = ctx.phase if phases else _noop
     phase('check')
@@ -794,6 +795,12 @@ def create_backup(ctx, apps, staging, *, include_images, note, backup_type, key,
             problem = BackupError('not-deployed', f'應用「{app.name}」尚未部署在此設備，無法備份。', app=app.id)
         elif info['problems']:
             problem = BackupError('job-failed', f'應用「{app.name}」狀態異常：{info["problems"][0]}', app=app.id)
+        elif skipped is not None:
+            # Scheduled only: a stopped app failed the whole run here (lab 2026-11-17: its database size could not be
+            # read); it is left out like an app that is not deployed. A manual backup keeps failing with the reason.
+            reason = adapter.unavailable(info)
+            if reason:
+                problem = BackupError('job-failed', reason, app=app.id)
         if problem is not None:
             if skipped is None:
                 raise problem

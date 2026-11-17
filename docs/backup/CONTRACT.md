@@ -708,7 +708,10 @@ displays names and counts; passwords never appear outside the globals entry.
   `summary_text()`, `notes`.
 * `catalog`: `load_catalog(paths) -> dict[str, App]`.
 * `podman`: `OwnerRunner(owner)` — runs as the owner via `runuser`, user systemd, safe file I/O.
-* `adapters.quadlet_postgres.QuadletPostgresAdapter` — implements `adapters.base.Adapter`.
+* `adapters.quadlet_postgres.QuadletPostgresAdapter` — implements `adapters.base.Adapter`; `unavailable(info)`
+  (2026.11.17.1) gives the zh-TW reason why `backup()` cannot run in the app's current state (`info` from `probe()`:
+  a database it dumps is not running — 「應用「<name>」已停止，無法備份：備份時它的資料庫必須在執行中。」, or 「應用「<name>」的資料庫沒有在
+  執行，…」 while other units run), None when it can (an app with nothing to dump is backed up while stopped).
 * `flows`: `run_backup`, `run_restore`, `run_verify` (deep), `run_export` (used by jobs); `Deps` gains optional
   `encrypt_by_default() -> bool`, `schedule_cleanup(seconds, export_id)`, `audit(line)` and
   `enforce_retention(app_ids, *, exclude, log) -> [backup ids]` (default `retention.enforce_after_backup`);
@@ -840,8 +843,9 @@ Shapes:
   saved file's — nothing was saved, or the saved file cannot be used; the page then says so and asks to save again).
 * `Instant`: `at` (UTC `…Z`), `local` (`YYYY-MM-DDTHH:MM` in the device's zone), `utc_offset` (`+08:00`).
 * `Timer`: `enabled(bool|null), active(bool|null)` (of `woowtech-cockpit-backup-schedule.timer`, `systemctl show`; null
-  when systemd cannot be asked), `last_tick_age(int seconds|null)` (age of `/run/woowtech-backup/schedule-tick`; null
-  before the first tick of this boot).
+  when systemd cannot be asked), `active_age(int seconds|null)` (since the timer last became active, from its
+  `ActiveEnterTimestampMonotonic`; null while it is not active or systemd cannot be asked), `last_tick_age(int
+  seconds|null)` (age of `/run/woowtech-backup/schedule-tick`; null before the first tick of this boot).
 * `LastRun`: `slot|null` (null: `schedule-run-now`), `local|null, job_id, trigger("on-time"|"late"|"catch-up"|"run-now"),
   state` (the job's state, null when its record is gone), `result("queued"|"running"|"succeeded"|"partial"|"failed"|
   "interrupted"|"cancelled"|"unknown")` (live from the job record; `unknown`: its record is gone or cannot be read),
@@ -861,9 +865,10 @@ Shapes:
   "kit-unconfirmed")` — what turning the schedule on needs.
 * `Attention`: `code, message(zh-TW)`, plus `slot?`, `job_id?`, `reason?` (`skipped`: `busy`|`no-key`|`no-apps`;
   `missed`: `missed`). One item, the first that applies: `settings-problem` (the settings or state file is bad: the
-  problem text, which says the schedule is paused) → `timer-inactive` (enabled, and systemd says the timer is not active
-  or no tick for 15 minutes once the device has been up that long: 「排程檢查沒有在執行，排程備份不會自動開始。請重新執行
-  備份元件的安裝程式來啟用它。」) → `overdue` (enabled, a slot ≥ 30 minutes old is neither handled nor waiting: 「排程備份已逾期：
+  problem text, which says the schedule is paused) → `timer-inactive` (enabled, and systemd says the timer is not active,
+  or for 15 minutes neither a tick nor the timer becoming active (`min(last_tick_age, active_age)` > 15 minutes: a
+  timer just enabled or restarted waits for its first tick; PID 1's age stands in when systemd cannot say and there was
+  no tick): 「排程檢查沒有在執行，排程備份不會自動開始。請重新執行備份元件的安裝程式來啟用它。」) → `overdue` (enabled, a slot ≥ 30 minutes old is neither handled nor waiting: 「排程備份已逾期：
   <local> 的排程備份還沒有開始。」) → the newest outcome: a slot that did not run (`missed`: 「<local> 的排程備份沒有執行：
   設備當時沒有開機，或排程檢查沒有在執行。」, several: 「<first> 到 <last> 共 N 次的排程備份沒有執行：…」; `skipped` busy:
   「<local> 的排程備份沒有執行：當時有其他作業一直在進行。」, no-key: 「…沒有執行：預設加密備份已開啟，但這台設備還沒有加密金鑰。」,
@@ -879,7 +884,7 @@ Shapes:
 * Job `params` of a scheduled backup (2026.11.17.1): a manual backup's `apps[], include_images, note` (`排程備份`),
   `encrypt` (預設加密備份 when it started), plus `schedule{slot|null, trigger, keep_last|null}`; 2026.11.15.2 reads such
   records (it checks no params) and lists them as backup jobs.
-* Job `result`: backup → `backup_id, size, apps[], downtime_seconds, unavailable_seconds|null, timing[Timing], encrypted(bool), retention_deleted[str]` (`retention_deleted`: older manual backups the saved keep-last policy deleted after this manual backup, §8); a scheduled backup adds `scheduled(true), slot|null, trigger, partial(bool), skipped_apps[{id,name,reason}]` (apps left out: not in the catalog, not deployed or reporting problems) and its `retention_deleted` are older scheduled backups the schedule's keep-last deleted (a partial run is `succeeded` with `partial: true`; no new job state); export → `export_id, backup_id, filename, size, expires`; restore → `apps[], safety_backup_id|null, health[Check], verification[{app,match,before,after,checks?[DigestCheck]}], rolled_back(bool), changed(bool), fresh_apps[str], safety_skipped(bool), safety_failed(bool), safety_pending(bool), safety_in_downtime(bool), safety_pending_failed{path,message}?, warnings[str], timing[Timing]` (`safety_pending`: the pre-restore copy is kept in `pending/<job>/` and not packaged (yet); `safety_in_downtime`: it was packaged while the apps were stopped, the free space being too short for packaging next to the running apps (§9); `safety_pending_failed`: the recovery could not package it either, it stays at `path` for manual work); verify → `ok, entries, bytes, deep(true), format, encrypted, apps[{id,name,checked{volumes,dirs,images,digests,globals,dumps,secrets},header_only[str]}], notes[str]` (`checked`: entries that passed a restore's content check; `header_only` (2026-11-14, review L8): the kinds checked only by their format header -- `dumps`: a dump is recognized by its pg_dump header, its body was read in full by `pg_restore` when this device made the backup and is read again by a restore, so an uploaded backup's dump bodies are first read at restore; `notes`: what a restore would drop, e.g. setuid bits). A local read error while checking (EIO, EMFILE, ENOSPC on the scratch copy) fails the job with `internal-error` and records no `verified`; only defects of the content record `verified.ok: false` (review F10).
+* Job `result`: backup → `backup_id, size, apps[], downtime_seconds, unavailable_seconds|null, timing[Timing], encrypted(bool), retention_deleted[str]` (`retention_deleted`: older manual backups the saved keep-last policy deleted after this manual backup, §8); a scheduled backup adds `scheduled(true), slot|null, trigger, partial(bool), skipped_apps[{id,name,reason}]` (apps left out: not in the catalog, not deployed, reporting problems, or not backed up in their current state, e.g. stopped with a database to dump: `Adapter.unavailable`) and its `retention_deleted` are older scheduled backups the schedule's keep-last deleted (a partial run is `succeeded` with `partial: true`; no new job state); export → `export_id, backup_id, filename, size, expires`; restore → `apps[], safety_backup_id|null, health[Check], verification[{app,match,before,after,checks?[DigestCheck]}], rolled_back(bool), changed(bool), fresh_apps[str], safety_skipped(bool), safety_failed(bool), safety_pending(bool), safety_in_downtime(bool), safety_pending_failed{path,message}?, warnings[str], timing[Timing]` (`safety_pending`: the pre-restore copy is kept in `pending/<job>/` and not packaged (yet); `safety_in_downtime`: it was packaged while the apps were stopped, the free space being too short for packaging next to the running apps (§9); `safety_pending_failed`: the recovery could not package it either, it stays at `path` for manual work); verify → `ok, entries, bytes, deep(true), format, encrypted, apps[{id,name,checked{volumes,dirs,images,digests,globals,dumps,secrets},header_only[str]}], notes[str]` (`checked`: entries that passed a restore's content check; `header_only` (2026-11-14, review L8): the kinds checked only by their format header -- `dumps`: a dump is recognized by its pg_dump header, its body was read in full by `pg_restore` when this device made the backup and is read again by a restore, so an uploaded backup's dump bodies are first read at restore; `notes`: what a restore would drop, e.g. setuid bits). A local read error while checking (EIO, EMFILE, ENOSPC on the scratch copy) fails the job with `internal-error` and records no `verified`; only defects of the content record `verified.ok: false` (review F10).
   `Timing`: `{app, writer_pause_seconds|null, unavailable_seconds|null}` (one decimal): writers (restore: units) stopped →
   every unit running again, and first stop → every health check of the app passed; null when not measured (nothing was
   stopped, a health check failed). The first stop of an in-place restore is the pre-restore copy's writer stop (§9); its
@@ -1178,10 +1183,12 @@ no key); `busy` (`details.job_id`). `schedule-get` and `schedule-tick` take no i
   * The job (`flows.run_scheduled_backup`): resolves the apps (missing ones are skipped with the catalog's problem or
     「此設備沒有設定應用 <id>。」), checks the device key when encrypting, chooses the backup id and writes its registry entry
     `{job, slot, trigger}` **before any app is probed or paused** (if that write fails the job fails with 「無法寫入排程備份
-    紀錄，沒有暫停任何應用。」), checks the space before any pause (as every backup), skips apps that are not deployed or
-    report problems (`partial`; none left → `job-failed`), packages with the note 排程備份 and type `manual`, then applies
-    the schedule's keep-last rule. Encryption follows 預設加密備份 when the run started. Cancelling and interruption work as
-    for a manual backup; an interrupted run is shown as 已中斷 and is not retried (the next slot runs as usual).
+    紀錄，沒有暫停任何應用。」), checks the space before any pause (as every backup), skips apps that are not deployed,
+    report problems or cannot be backed up as they are (`Adapter.unavailable`: a stopped app whose database must be
+    dumped; a manual backup of it still fails) (`partial`; none left → `job-failed`), packages with the note 排程備份 and
+    type `manual`, then applies the schedule's keep-last rule. Encryption follows 預設加密備份 when the run started.
+    Cancelling and interruption work as for a manual backup; an interrupted run is shown as 已中斷 and is not retried (the
+    next slot runs as usual).
   * Registry and pools: a backup is scheduled only when its index type is `manual` and its id is in the registry. The
     manual keep-last policy (`retention.json`) never counts or deletes a scheduled backup; the schedule's rule keeps the
     newest `keep_last` scheduled backups per app (`retention.plan` on the scheduled pool: a backup goes only when it is

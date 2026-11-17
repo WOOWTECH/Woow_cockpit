@@ -360,6 +360,10 @@ class World:
         self.data = {'woowbk-demo': b'notes-v1', 'woowbk-two': b'two-v1'}
         self.mode = {'woowbk-demo': 'inplace', 'woowbk-two': 'inplace'}
         self.deployed = {'woowbk-demo': True, 'woowbk-two': True}
+        # Stopped apps (every unit inactive); `cold`: those whose backup works while stopped (nothing to dump). Like
+        # the real adapter, the size of a stopped app with a database cannot be read.
+        self.stopped = set()
+        self.cold = set()
         self.estimate = 1000
         self.events = []
         self.fail_backup = set()
@@ -424,8 +428,14 @@ class FakeAdapter:
 
     def probe(self):
         deployed = self.world.deployed[self.app.id]
-        return {'deployed': deployed, 'state': 'running' if deployed else 'not-deployed',
-                'units': [{'name': u, 'active': deployed} for u in self.app.units], 'problems': []}
+        running = deployed and self.app.id not in self.world.stopped
+        return {'deployed': deployed, 'state': 'running' if running else 'stopped' if deployed else 'not-deployed',
+                'units': [{'name': u, 'active': running} for u in self.app.units], 'problems': []}
+
+    def unavailable(self, info):
+        if info['state'] == 'running' or self.app.id in self.world.cold:
+            return None
+        return f'應用「{self.app.name}」已停止，無法備份：備份時它的資料庫必須在執行中。'
 
     def detect_mode(self):
         return self.world.mode[self.app.id]
@@ -437,6 +447,8 @@ class FakeAdapter:
         return []
 
     def estimate_bytes(self, *, include_images=False):
+        if self.app.id in self.world.stopped and self.app.id not in self.world.cold:
+            raise BackupError('job-failed', '無法讀取資料庫 main 的大小；請確認資料庫服務正在執行。', app=self.app.id)
         return self.world.estimate
 
     def backup(self, staging_dir, *, include_images, keep_stopped=False):

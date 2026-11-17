@@ -810,6 +810,31 @@ class TickTests(ScheduleCase):
         self.assertEqual(attention['code'], 'partial')
         self.assertIn('「第二個應用」', attention['message'])
 
+    def test_a_stopped_app_is_left_out_and_the_others_are_backed_up(self):
+        # Lab 2026-11-17: a stopped app failed the whole scheduled run in `check` (its database size could not be
+        # read) and no app was backed up. A scheduled run leaves it out (部分完成); an app whose backup works while
+        # stopped (nothing to dump) is still backed up; a manual backup of the stopped app fails as before.
+        self.write_schedule(armed_at='2026-11-16T18:00:00Z')
+        self.world.stopped.add('woowbk-demo')
+        job_id = self.tick()['job_id']
+        self.assertEqual(self.ok(['run-job', job_id])['state'], 'succeeded')
+        result = self.store().get(job_id)['result']
+        self.assertEqual((result['partial'], result['apps']), (True, ['woowbk-two']))
+        self.assertEqual(result['skipped_apps'], [{'id': 'woowbk-demo', 'name': '示範筆記應用',
+                                                   'reason': '應用「示範筆記應用」已停止，無法備份：備份時它的資料庫必須在執行中。'}])
+        self.assertEqual(self.storage.index[result['backup_id']]['apps'], [{'id': 'woowbk-two', 'name': '第二個應用'}])
+        self.tick('2026-11-16T19:10:00Z')
+        self.assertEqual(self.ok(['status'])['schedule']['attention']['code'], 'partial')
+        self.world.cold.add('woowbk-demo')
+        cold = self.ok(['schedule-run-now'], {'request_id': 'run-now-0001'})['job_id']
+        self.assertEqual(self.ok(['run-job', cold])['state'], 'succeeded')
+        self.assertEqual(self.store().get(cold)['result']['apps'], ['woowbk-demo', 'woowbk-two'])
+        self.world.cold.clear()
+        manual = self.ok(['backup-start'], {'apps': ['woowbk-demo', 'woowbk-two'],
+                                            'request_id': 'manual-0001'})['job_id']
+        self.assertEqual(self.ok(['run-job', manual])['state'], 'failed')
+        self.assertEqual(self.store().get(manual)['error']['message'], '無法讀取資料庫 main 的大小；請確認資料庫服務正在執行。')
+
 
 # ---------------------------------------------------------------- the scheduled job (flows)
 
@@ -1037,7 +1062,8 @@ class CommandTests(ScheduleCase):
                                                 'armed_at': None, 'saved': False, 'problem': None, 'defaults': True})
         self.assertEqual((response['next_runs'], response['last_run'], response['waiting'], response['attention'],
                           response['events']), ([], None, None, None, []))
-        self.assertEqual(response['timer'], {'enabled': True, 'active': True, 'last_tick_age': None})
+        self.assertEqual(response['timer'], {'enabled': True, 'active': True, 'active_age': None,
+                                             'last_tick_age': None})
         self.assertEqual(response['timezone'], {'name': 'Asia/Taipei', 'utc_offset': '+08:00'})
         self.assertEqual(response['gate'], {'encrypt': True, 'device_key': True, 'kit_confirmed': True,
                                             'blocked': None})
@@ -1235,6 +1261,49 @@ class CommandTests(ScheduleCase):
         status = self.ok(['status'])['schedule']
         self.assertEqual(status['next_run'], {'at': '2026-11-19T19:00:00Z', 'local': '2026-11-20T03:00',
                                               'utc_offset': '+08:00'})
+
+    def test_a_timer_that_just_became_active_is_given_its_first_ticks(self):
+        # Lab 2026-11-17: right after the installer's `enable --now` on a device up for a while there is no tick file
+        # yet, and 「排程檢查沒有在執行」 showed for up to 5 minutes. No tick is a problem only once the timer has been
+        # active for 15 minutes (a tick file from before a long stop does not count against a restarted timer).
+        self.write_schedule(armed_at='2026-11-16T18:00:00Z')
+
+        def attention():
+            return self.ok(['status'])['schedule']['attention']
+
+        self.timer = {'enabled': True, 'active': True, 'active_age': 120}
+        self.assertIsNone(attention(), 'enabled 2 minutes ago, the device up for a day')
+        self.assertEqual(self.ok(['schedule-get'])['timer'],
+                         {'enabled': True, 'active': True, 'active_age': 120, 'last_tick_age': None})
+        self.timer['active_age'] = 16 * 60
+        self.assertEqual(attention(), {'code': 'timer-inactive', 'message': schedule.TIMER_MESSAGE})
+        schedule.touch_tick(self.paths, at('2026-11-16T18:00:00Z'))  # an hour before the clock
+        self.timer['active_age'] = 60
+        self.assertIsNone(attention(), 'restarted a minute ago')
+        self.timer['active_age'] = 20 * 60
+        self.assertEqual(attention()['code'], 'timer-inactive', 'active for 20 minutes without a tick')
+        schedule.touch_tick(self.paths, self.env.now)
+        self.assertIsNone(attention())
+        self.timer = {'enabled': None, 'active': None, 'active_age': None}  # systemd cannot be asked
+        os.unlink(schedule.tick_path(self.paths))
+        self.assertEqual(attention()['code'], 'timer-inactive', 'no tick since PID 1 started a day ago')
+
+    def test_the_timer_state_says_since_when_it_is_active(self):
+        output = (b'UnitFileState=enabled\nActiveState=active\nActiveEnterTimestampMonotonic=5000000\n')
+        done = mock.Mock(returncode=0, stdout=output)
+        with mock.patch.object(schedule.subprocess, 'run', return_value=done) as run:
+            self.assertEqual(schedule.timer_state(monotonic=lambda: 125.5),
+                             {'enabled': True, 'active': True, 'active_age': 120})
+        self.assertEqual(run.call_args.args[0], ['/usr/bin/systemctl', 'show', '--property=UnitFileState',
+                                                 '--property=ActiveState', '--property=ActiveEnterTimestampMonotonic',
+                                                 '--', schedule.TIMER])
+        done.stdout = b'UnitFileState=disabled\nActiveState=inactive\nActiveEnterTimestampMonotonic=0\n'
+        with mock.patch.object(schedule.subprocess, 'run', return_value=done):
+            self.assertEqual(schedule.timer_state(monotonic=lambda: 125.5),
+                             {'enabled': False, 'active': False, 'active_age': None})
+        done.returncode = 1
+        with mock.patch.object(schedule.subprocess, 'run', return_value=done):
+            self.assertEqual(schedule.timer_state(), {'enabled': None, 'active': None, 'active_age': None})
 
     def test_status_shows_the_slot_waiting_for_another_job(self):
         self.write_schedule(armed_at='2026-11-16T18:00:00Z')

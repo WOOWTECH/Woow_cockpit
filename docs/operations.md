@@ -101,7 +101,7 @@ sudo python3 scripts/manage.py rollback <安裝輸出的 backup_id>
 - **錯過的排程**（設備當時沒有開機或排程檢查沒有在執行）：開機 10 分鐘後補做一次，只補最近的一次；如果下一次排程在 3 小時內，就不補做，記為「未執行」。開機未滿 10 分鐘時不會開始任何排程備份（在容器中執行時，從容器啟動起算）。
 - **有其他作業進行中**：每次檢查都再看一次，作業結束後馬上開始（標為延後開始）；一直到下一次排程時間都還在進行，前一次就記為「未執行」。
 - **不會自動重試**：開始前發現的問題（「預設加密備份」開啟但沒有加密金鑰、沒有可備份的應用、設定檔有問題）只記錄事件；作業中的問題（例如空間不足，在暫停任何應用前就檢查）是一個失敗的作業。下一次排程照常執行。
-- **部分完成**：尚未部署或狀態異常的應用會被略過，其他應用照常備份，作業結果列出略過的應用；一個都不能備份時作業失敗。
+- **部分完成**：尚未部署、狀態異常，或已停止而無法備份（資料庫沒有在執行，無法匯出）的應用會被略過，其他應用照常備份，作業結果列出略過的應用與原因；一個都不能備份時作業失敗。手動備份已停止的應用仍會失敗。
 - **時鐘或時區改變**：時區改變在下一次檢查生效。時鐘被往回調超過一天時，排程從現在重新開始計算，系統日誌記一行 `schedule-clock`；之後時鐘再調回正確時間（例如開機時時鐘不準、連上網路校時後），往回調之前已經執行過的排程不會被記為「未執行」。時鐘被調到開啟排程（或變更時間、星期）的時間之前時，排程從第一次發現這件事的那次檢查開始照常執行，不會等到時鐘再走到開啟的時間。
 
 主機端檢查（以 root 執行）：
@@ -112,7 +112,7 @@ systemctl list-timers 'woowtech-cockpit-backup-schedule*'
 journalctl -t woowtech-cockpit-backup --since today | grep -E 'schedule-|reason=schedule'
 ```
 
-系統日誌每次排程只記一次決定：`schedule-run`（開始）、`schedule-wait`（等待其他作業）、`schedule-skip`（未執行，原因 `busy`、`no-key`、`no-apps`、`settings-problem`、`state-unreadable`）、`schedule-missed`（錯過）、`schedule-result`（結果）與 `schedule-set`（設定變更）；平常沒有事要做的檢查不寫日誌。失敗、部分完成與無法執行的原因以 warning 等級記錄。排程備份的作業日誌與其他作業一樣在 `journalctl -u woowtech-backup-<作業 ID>.service`。頁面顯示「排程檢查沒有在執行」時，先看計時器狀態；計時器被停用時重新執行安裝（`sudo python3 scripts/manage.py install`）會再啟用它。計時器被遮蔽（`systemctl mask`）時安裝不會啟用它，要先 `systemctl unmask woowtech-cockpit-backup-schedule.timer`。排程檢查本身出錯時，錯誤內容在 `journalctl -u woowtech-cockpit-backup-schedule.service`。
+系統日誌每次排程只記一次決定：`schedule-run`（開始）、`schedule-wait`（等待其他作業）、`schedule-skip`（未執行，原因 `busy`、`no-key`、`no-apps`、`settings-problem`、`state-unreadable`）、`schedule-missed`（錯過）、`schedule-result`（結果）與 `schedule-set`（設定變更）；平常沒有事要做的檢查不寫日誌。失敗、部分完成與無法執行的原因以 warning 等級記錄。排程備份的作業日誌與其他作業一樣在 `journalctl -u woowtech-backup-<作業 ID>.service`。頁面顯示「排程檢查沒有在執行」時（計時器沒有啟動，或已啟動 15 分鐘仍沒有檢查紀錄；剛安裝或重新啟動的計時器先等第一次檢查），先看計時器狀態；計時器被停用時重新執行安裝（`sudo python3 scripts/manage.py install`）會再啟用它。計時器被遮蔽（`systemctl mask`）時安裝不會啟用它，要先 `systemctl unmask woowtech-cockpit-backup-schedule.timer`。排程檢查本身出錯時，錯誤內容在 `journalctl -u woowtech-cockpit-backup-schedule.service`。
 
 **排程備份的紀錄檔無法讀取時**（頁面提示「排程備份的紀錄檔 schedule-state.json 無法讀取…」）：排程會暫停，手動與排程備份都不會被保留規則自動刪除。不要刪除這個檔案（刪除後排程建立的備份會被當成手動備份）；記錄訊息並交由工程人員處理。
 

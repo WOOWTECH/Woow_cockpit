@@ -847,20 +847,29 @@ def journal(line, warning=False):
         pass
 
 
-def timer_state():
-    """{enabled, active} of woowtech-cockpit-backup-schedule.timer (`systemctl show`, read-only, fixed argv); None
-    values when systemd cannot be asked."""
-    argv = ['/usr/bin/systemctl', 'show', '--property=UnitFileState', '--property=ActiveState', '--', TIMER]
+def timer_state(monotonic=time.monotonic):
+    """{enabled, active, active_age} of woowtech-cockpit-backup-schedule.timer (`systemctl show`, read-only, fixed
+    argv); None values when systemd cannot be asked. `active_age`: seconds since the timer last became active
+    (ActiveEnterTimestampMonotonic, CLOCK_MONOTONIC in microseconds like `time.monotonic()`), None while it is not
+    active or when systemd does not say."""
+    unknown = {'enabled': None, 'active': None, 'active_age': None}
+    argv = ['/usr/bin/systemctl', 'show', '--property=UnitFileState', '--property=ActiveState',
+            '--property=ActiveEnterTimestampMonotonic', '--', TIMER]
     try:
         result = subprocess.run(argv, stdin=subprocess.DEVNULL, capture_output=True, env=dict(jobs.SAFE_ENV),
                                 timeout=20, check=False)
     except (OSError, subprocess.TimeoutExpired):
-        return {'enabled': None, 'active': None}
+        return unknown
     if result.returncode != 0:
-        return {'enabled': None, 'active': None}
+        return unknown
     values = dict(line.split('=', 1) for line in result.stdout.decode('utf-8', 'replace').splitlines() if '=' in line)
-    return {'enabled': values.get('UnitFileState') in ('enabled', 'enabled-runtime'),
-            'active': values.get('ActiveState') == 'active'}
+    active = values.get('ActiveState') == 'active'
+    entered = values.get('ActiveEnterTimestampMonotonic', '').strip()
+    age = None
+    if active and entered.isdigit() and int(entered) > 0:
+        age = max(0, int(monotonic() - int(entered) / 1e6))
+    return {'enabled': values.get('UnitFileState') in ('enabled', 'enabled-runtime'), 'active': active,
+            'active_age': age}
 
 
 # ---------------------------------------------------------------- the tick
@@ -1118,15 +1127,16 @@ def record_run_now(paths, started, settings, app_ids, encrypt, job_lookup, job_e
 # ---------------------------------------------------------------- status
 
 def timer_inactive(timer, env):
-    """The schedule checks do not run: systemd says the timer is not active, or no tick touched the tick file for 15
-    minutes once the device has been up that long (a timer whose service fails before the engine runs, e.g. a helper
-    that refuses its library, is active and never ticks)."""
+    """The schedule checks do not run: systemd says the timer is not active, or for 15 minutes nothing showed that
+    they run: no tick touched the tick file and the timer has been active that long (a timer whose service fails
+    before the engine runs, e.g. a helper that refuses its library, is active and never ticks). A timer that just
+    became active (the installer's `enable --now`, a restart) is given its first ticks, whatever the device's uptime
+    or the age of a tick file from before it stopped. When systemd cannot say since when it is active and there was
+    no tick, PID 1's age stands in (`env.uptime`)."""
     if timer.get('active') is False:
         return True
-    age = timer.get('last_tick_age')
-    if age is None:
-        return env.uptime > TICK_STALE_SECONDS
-    return age > TICK_STALE_SECONDS
+    ages = [value for value in (timer.get('last_tick_age'), timer.get('active_age')) if value is not None]
+    return min(ages or [env.uptime]) > TICK_STALE_SECONDS
 
 
 def _overdue(settings, state, env):

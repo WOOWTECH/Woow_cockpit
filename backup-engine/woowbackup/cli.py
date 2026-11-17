@@ -382,7 +382,8 @@ class Services:
         return self.clock() if self.clock is not None else schedule.system_env()
 
     def timer_view(self, env):
-        """`timer` of the schedule views: {enabled, active (null when systemd cannot be asked), last_tick_age}."""
+        """`timer` of the schedule views: {enabled, active, active_age (null when systemd cannot be asked),
+        last_tick_age}."""
         from . import schedule
         try:
             if self.timer is not None:
@@ -392,7 +393,7 @@ class Services:
         except Exception:  # noqa: BLE001 - unknown, never a broken page
             traceback.print_exc(file=sys.stderr)
             state = {}
-        return {'enabled': state.get('enabled'), 'active': state.get('active'),
+        return {'enabled': state.get('enabled'), 'active': state.get('active'), 'active_age': state.get('active_age'),
                 'last_tick_age': schedule.last_tick_age(self.paths, env.now)}
 
     def schedule_settings(self):
