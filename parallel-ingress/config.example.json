@@ -1,0 +1,15 @@
+{
+  "schema": 1,
+  "instance": "apporo",
+  "brand": "apporo",
+  "owner": "operator",
+  "public_origin": "https://apporo.example.test",
+  "listen_port": 29092,
+  "compatibility_port": null,
+  "pi_public_port": 19096,
+  "pi_local_port": 19097,
+  "cockpit_port": 9090,
+  "pi_upstream_port": 30141,
+  "node_path": "/usr/bin/node",
+  "image": "docker.io/nginxinc/nginx-unprivileged@sha256:5aea7cc516b419e3526f47dd1531be31a56a046cfe44754d94f9383e13e2ee99"
+}

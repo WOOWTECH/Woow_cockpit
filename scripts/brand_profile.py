@@ -27,7 +27,8 @@ ASSET_TARGETS = {
     'pwa_icon_512': 'assets/icon-512.png',
 }
 CSS_FILES = frozenset(('branding/branding.css', 'services/service.css', 'backup/backup.css',
-                       'apps-catalog/apps.css', 'preview/gallery.css', 'preview/layout-review.css'))
+                       'apps-catalog/apps.css', 'preview/gallery.css', 'preview/layout-review.css',
+                       'pi-web-integration/package/style.css'))
 HTML_FILES = frozenset(('services/index.html', 'backup/index.html', 'preview/index.html',
                         'preview/layout-review.html'))
 COLOR = re.compile(r'#[0-9a-fA-F]{6}\Z')
@@ -198,7 +199,7 @@ def _css_tokens(profile):
 def _render_css(path, text, profile):
     # Bounded to authored presentation CSS. Status colors, terminal palettes,
     # app data and third-party bundles never enter this renderer.
-    mapping = {'#6183fc':'var(--brand-primary)', '#4a6bd4':'var(--brand-hover)',
+    mapping = {'#6183fc':'var(--brand-primary)', '#3f63e8':'var(--brand-primary)', '#4a6bd4':'var(--brand-hover)',
                '#3455bf':'var(--brand-primary)', '#8aa4ff':'var(--brand-primary)',
                '#eef2ff':'var(--brand-wash)', '#1b2131':'var(--brand-wash)',
                '#1d2333':'var(--brand-wash)', '#fafbff':'var(--brand-wash)',
@@ -218,6 +219,8 @@ def _render_css(path, text, profile):
     text = re.sub(r'(--(?:radius|radius-sm|pf-t--global--border--radius--(?:small|medium|large))\s*:\s*)(12|20)px',
                   lambda m: m[1] + str(control if m[2] == '12' else card) + 'px', text)
     text += _css_tokens(profile)
+    if path == 'pi-web-integration/package/style.css':
+        text += '\n:root { font-family: var(--brand-font); }\n'
     if path == 'branding/branding.css':
         text = text.replace('background-image: url("assets/logo-lockup-blue.svg")', 'background-image: url("assets/logo-lockup-dark.svg")')
         text = text.replace('background-image: url("assets/logo-wordmark-blue.svg")', 'background-image: url("assets/logo-wordmark-dark.svg")')
@@ -248,6 +251,11 @@ html:not(.pf-v6-theme-dark) .pf-v6-c-button.pf-m-primary:not(.pf-m-danger):not(:
 html.pf-v6-theme-dark .login-pf #login-button:not(:disabled) {{ color: var(--brand-on-primary); background: var(--brand-primary); }}
 html .login-pf .login-button, html :is(.pf-v6-c-button.pf-m-primary,.pf-v6-c-button.pf-m-secondary) {{ border-radius: {control}px !important; }}
 html:not(.pf-v6-theme-dark) .login-pf .container, html:not(.pf-v6-theme-dark) :is(.pf-v6-c-card,.ct-card) {{ background: var(--brand-surface); }}
+html:root, html:root.pf-v6-theme-dark {{
+  --pf-t--global--font--family--body: var(--brand-font);
+  --pf-t--global--font--family--heading: var(--brand-font);
+}}
+html body, html body.login-pf {{ font-family: var(--brand-font); }}
 '''
     else:
         text += f'''

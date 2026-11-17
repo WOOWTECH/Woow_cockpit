@@ -1,6 +1,6 @@
 #!/usr/bin/env node
-// LAN/VPN or explicit loopback HTTPS ingress for one Pi Web instance.
-// Cockpit session AND Pi Web auth required in either mode.
+// LAN/VPN or explicit public HTTPS/local HTTP ingress for one Pi Web instance.
+// Cockpit session AND Pi Web auth required in every mode.
 import http from 'node:http';
 import { Transform } from 'node:stream';
 import { existsSync, readFileSync } from 'node:fs';
@@ -32,13 +32,22 @@ if(!/^\d{1,3}(\.\d{1,3}){3}$/.test(host)||host.split('.').some(part=>Number(part
    !Number.isInteger(port)||port<1024||port>65535) throw Error('Invalid listen configuration');
 if(![cockpitPort,piPort,cockpitBrowserPort].every(value=>Number.isInteger(value)&&value>=1&&value<=65535)) throw Error('Invalid backend port');
 const publicOrigin=process.env.PI_GATEWAY_PUBLIC_ORIGIN||'';
-let publicURL;
+const localOrigin=process.env.PI_GATEWAY_LOCAL_ORIGIN||'';
+if(publicOrigin&&localOrigin)throw Error('Public and local ingress origins are mutually exclusive');
+let publicURL,localURL;
 if(publicOrigin){
  publicURL=new URL(publicOrigin);
  if(publicURL.protocol!=='https:'||publicURL.origin!==publicOrigin||publicURL.username||publicURL.password||bind!=='127.0.0.1')throw Error('Public ingress requires an exact HTTPS origin and a loopback listener');
 }
-const authority=publicURL?publicURL.host:`${host}:${port}`;
-const expectedOrigin=publicOrigin||`http://${authority}`, cockpitOrigin=publicOrigin||`http://${host}:${cockpitBrowserPort}`;
+if(localOrigin){
+ localURL=new URL(localOrigin);
+ if(localURL.protocol!=='http:'||localURL.hostname!=='127.0.0.1'||!localURL.port||Number(localURL.port)<1||
+    localURL.origin!==localOrigin||localURL.username||localURL.password||bind!=='127.0.0.1')throw Error('Local ingress requires an exact HTTP 127.0.0.1 origin with a port and a loopback listener');
+}
+const ingressURL=publicURL||localURL, ingressOrigin=publicOrigin||localOrigin;
+const ingressScheme=publicURL?'https':'http';
+const authority=ingressURL?ingressURL.host:`${host}:${port}`;
+const expectedOrigin=ingressOrigin||`http://${authority}`, cockpitOrigin=ingressOrigin||`http://${host}:${cockpitBrowserPort}`;
 const maxBytes=128*1024*1024;
 function cookies(header){
  const result={};for(const pair of String(header||'').split(';')){const i=pair.indexOf('=');if(i<1)continue;const k=pair.slice(0,i).trim();if(k==='cockpit'||k==='pi_web_session'){if(Object.hasOwn(result,k))return null;result[k]=pair.slice(i+1).trim();}}return result;
@@ -53,10 +62,10 @@ function validRequest(req){
 }
 function authorized(cookie){return new Promise(resolve=>{
  if(!cookie||!/^[A-Za-z0-9._~%+\/-]+=*$/.test(cookie)||cookie.length>8192)return resolve(false);
- // Cockpit binds sessions to HTTP/HTTPS. Public ingress validates the secure
- // session using the configured origin, never a visitor-supplied proxy header.
+ // Cockpit binds sessions to HTTP/HTTPS. Ingress validates the session with
+ // its configured scheme and authority, never visitor-supplied proxy headers.
  const headers={cookie:`cockpit=${cookie}`};
- if(publicURL){headers.host=publicURL.host;headers['x-forwarded-proto']='https';}
+ if(ingressURL){headers.host=ingressURL.host;headers['x-forwarded-proto']=ingressScheme;}
  const request=http.request({hostname:'127.0.0.1',port:cockpitPort,path:'/cockpit/login',method:'GET',headers,timeout:4000},res=>{res.resume();resolve(res.statusCode===200)});
  request.on('error',()=>resolve(false));request.on('timeout',()=>request.destroy());request.end();
 });}
@@ -71,9 +80,9 @@ function outgoing(req, jar){
  // The ingress validates the external Host/Origin above. The native Pi server
  // trusts loopback by default; use that fixed authority on the internal hop
  // so adding Cockpit does not require restarting Pi or widening its allowlist.
- const backendAuthority=publicURL?`127.0.0.1:${piPort}`:authority;
- const headers={...req.headers,host:backendAuthority,'x-forwarded-host':authority,'x-forwarded-proto':publicURL?'https':'http'};
- if(publicURL&&headers.origin)headers.origin=`https://${backendAuthority}`;
+ const backendAuthority=ingressURL?`127.0.0.1:${piPort}`:authority;
+ const headers={...req.headers,host:backendAuthority,'x-forwarded-host':authority,'x-forwarded-proto':ingressScheme};
+ if(ingressURL&&headers.origin)headers.origin=`${ingressScheme}://${backendAuthority}`;
  if(req.method==='GET'&&String(req.headers.accept||'').includes('text/html')){headers['accept-encoding']='identity';delete headers['if-none-match'];delete headers['if-modified-since'];}
  delete headers['x-forwarded-for'];delete headers['x-real-ip'];delete headers['proxy-authorization'];
  delete headers.cookie;if(jar.pi_web_session)headers.cookie=`pi_web_session=${jar.pi_web_session}`;
@@ -81,7 +90,7 @@ function outgoing(req, jar){
 }
 function outputHeaders(headers){
  const copy={...headers};delete copy['x-powered-by'];
- if(publicURL&&copy.location){
+ if(ingressURL&&copy.location){
   try{const target=new URL(copy.location);if(['127.0.0.1','localhost','[::1]'].includes(target.hostname)&&target.port===String(piPort))copy.location=expectedOrigin+target.pathname+target.search+target.hash;}catch{}
  }
  // Do not let the upstream set or replace a Cockpit authentication cookie.
@@ -114,8 +123,8 @@ const server=http.createServer(async(req,res)=>{
  if(!jar||!await authorized(jar.cockpit)){res.writeHead(401,{'content-type':'text/plain; charset=utf-8','cache-control':'no-store'}).end('請先登入 Cockpit，然後重新載入此頁。');return;}
  if(!await piAuthEnabled()){res.writeHead(503,{'content-type':'text/plain; charset=utf-8','cache-control':'no-store'}).end('Pi Web 無法連線，或尚未啟用獨立登入。');return;}
  // Pi's native worker requests scope '/'. That scope would also control the
- // Cockpit shell on a shared origin, so embedded public ingress excludes it.
- if(publicURL&&new URL(req.url,expectedOrigin).pathname==='/sw.js'){res.writeHead(404,{'cache-control':'no-store'}).end('Offline worker is not available in Cockpit ingress.');return;}
+ // Cockpit shell on a shared origin, so public and local ingress exclude it.
+ if(ingressURL&&new URL(req.url,expectedOrigin).pathname==='/sw.js'){res.writeHead(404,{'cache-control':'no-store'}).end('Offline worker is not available in Cockpit ingress.');return;}
  if(req.url==='/__woow_cockpit_theme.js'&&req.method==='GET'){res.writeHead(200,{'content-type':'application/javascript; charset=utf-8','cache-control':'no-store','x-content-type-options':'nosniff'}).end(themeBridge);return;}
  const n=Number(req.headers['content-length']||0);if(!Number.isFinite(n)||n>maxBytes){res.writeHead(413).end('Payload too large');return;}
  let sent=false;const target=http.request({hostname:'127.0.0.1',port:piPort,path:req.url,method:req.method,headers:outgoing(req,jar)},up=>{

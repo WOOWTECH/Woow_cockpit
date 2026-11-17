@@ -48,6 +48,7 @@ sudo python3 scripts/manage.py verify
 ## 其他設備導入前先看
 
 - [部署與 rootless Podman](docs/deployment.md)
+- [同一台主機的 WOOW／Apporo 雙入口：安裝、驗證、回退](parallel-ingress/README.md)
 - [服務管理與權限範圍](docs/services.md)
 - [備份與還原（管理者指南）](docs/backup.md)
 - [應用如何加入備份：目錄項目撰寫與審查](docs/backup/app-catalog.md)
@@ -55,6 +56,7 @@ sudo python3 scripts/manage.py verify
 - [檔案結構、Cockpit 套件機制與信任邊界](docs/architecture.md)
 - [更新、驗證、回退與故障排查](docs/operations.md)
 - [參考主機現況與驗證範圍](docs/current-state.md)
+- [Apporo 雙入口收尾驗收](docs/parallel-ingress-validation-20261117.md)
 - [可重現測試、實驗室端到端測試與本機截圖](docs/testing.md)
 - [尚待實作的功能](docs/roadmap.md)
 - [備份與還原工程規格](docs/backup/CONTRACT.md)
