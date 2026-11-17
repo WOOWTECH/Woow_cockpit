@@ -1,18 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 here=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
-brand=$(python3 - "${BRAND:-}" <<'PY'
-import json
-import sys
-from pathlib import Path
-p = Path('/etc/cockpit/branding/brand.json')
-installed = json.loads(p.read_text())['id'] if p.exists() else 'woowtech'
-requested = sys.argv[1] or installed
-if requested not in ('woowtech', 'apporo') or requested != installed:
-    raise SystemExit('Install the matching Cockpit brand profile before installing its PWA.')
-print(requested)
-PY
-)
+brand=$(python3 "$here/../scripts/runtime_brand.py" --brand "${BRAND:-}")
 stage=$(mktemp -d)
 trap 'rm -rf -- "$stage"' EXIT
 python3 "$here/render.py" --brand "$brand" --output "$stage"
