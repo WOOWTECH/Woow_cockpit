@@ -45,6 +45,11 @@ class ParallelIngress(unittest.TestCase):
         self.assertNotIn('__PUBLIC_ORIGIN__',js)
         self.assertIn('https://apporo.example.test',js)
         self.assertIn('http://127.0.0.1:29092',js)
+        for name in ('index.html','layout-review.html'):
+            html=(self.out/'public/packages/woowtechpreview'/name).read_text()
+            self.assertNotIn('src="screenshots/',html)
+            self.assertNotIn('src="layout-images/',html)
+            self.assertIn('尚未建立此設備的畫面紀錄',html)
         self.assertEqual(before,{p:p.read_bytes() for p in self.root.rglob('*') if p.is_file()})
 
     def test_backend_drift_stops_before_generating_output(self):

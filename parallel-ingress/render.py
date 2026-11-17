@@ -223,6 +223,20 @@ WantedBy=default.target
 '''
 
 
+def reference_placeholders(html):
+    """Private host captures are intentionally not shipped in reusable releases."""
+    def figure(match):
+        block=match.group(0)
+        if not re.search(r'src="(?:screenshots|layout-images)/',block):return block
+        block=re.sub(r'<a\b[^>]*class="shot-link"[^>]*>.*?</a>',
+                     '<div class="missing-shot" role="note">尚未建立此設備的畫面紀錄</div>',block,flags=re.S)
+        block=re.sub(r'<a\b[^>]*class="open"[^>]*>.*?</a>','',block,flags=re.S)
+        block=re.sub(r'<span class="state">.*?</span>','<span class="state">待擷取</span>',block)
+        block=re.sub(r'<p class="preview-note">.*?</p>','',block,flags=re.S)
+        return block.replace('實機瀏覽器截圖 · 點圖看原尺寸','此設備尚無對應畫面紀錄')
+    return re.sub(r'<figure\b[^>]*>.*?</figure>',figure,html,flags=re.S)
+
+
 def render(c, out, root=Path('/')):
     c = config(c)
     hashes = backend_hashes(root)
@@ -232,6 +246,9 @@ def render(c, out, root=Path('/')):
         for prefix, dest in PREFIXES.items():
             if data is not None and name.startswith(prefix+'/'):
                 files['public/'+dest+name[len(prefix):]] = data
+    for name in ('index.html','layout-review.html'):
+        key='public/packages/woowtechpreview/'+name
+        files[key]=reference_placeholders(files[key].decode()).encode()
     # Each entrance has its own exact same-origin Pi page; no global package or
     # user's standalone Pi preferences are changed.
     origin = [c['public_origin'], f"http://127.0.0.1:{c['listen_port']}"]

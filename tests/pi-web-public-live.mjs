@@ -37,7 +37,7 @@ try {
   await page.evaluate(() => localStorage.setItem('shell:style', 'light'));
   await pi.waitForFunction(() => document.documentElement.dataset.theme === 'light', null, { timeout: 10000 });
   assert.equal(await pi.evaluate(() => localStorage.getItem('pi-theme')), nativePreference);
-  assert.equal(await pi.evaluate(() => document.documentElement.style.getPropertyValue('--accent')), '#6183fc');
+  assert.equal(await pi.evaluate(() => document.documentElement.style.getPropertyValue('--accent')), process.env.PI_WEB_EXPECTED_ACCENT || '#6183fc');
   assert.equal(await pi.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
   assert.deepEqual(await page.evaluate(async () => (await navigator.serviceWorker.getRegistrations()).map(r => r.scope)), []);
   if (process.env.PI_WEB_CHAT_TEST === '1') {
