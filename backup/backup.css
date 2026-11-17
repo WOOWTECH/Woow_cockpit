@@ -220,7 +220,7 @@ details.notice ul { padding-inline-start: 20px; margin-block-start: 8px; }
 .loading-card { padding: 28px 22px; color: var(--text-secondary); }
 .stack { display: grid; gap: 20px; min-inline-size: 0; align-content: start; }
 .grid { display: grid; gap: 18px; }
-.grid.stats { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.grid.stats { grid-template-columns: repeat(4, minmax(0, 1fr)); }
 .grid.two { grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; }
 .section > * + * { margin-block-start: 14px; }
 .section-head { display: flex; justify-content: space-between; align-items: flex-end; gap: 12px; flex-wrap: wrap; }
@@ -344,6 +344,7 @@ label, .field-label { font-size: 14px; font-weight: 500; }
 .form-card { padding: 24px; min-inline-size: 0; }
 .form-section { border: 0; margin: 0; padding: 0; min-inline-size: 0; }
 .form-section + .form-section, .form-card > .notice { margin-block-start: 22px; }
+.form-card > .notice + .form-section { margin-block-start: 18px; }
 .form-section + .form-section { padding-block-start: 22px; border-block-start: 1px solid var(--hairline); }
 .form-section > legend, .form-section > h3 { font: 600 17px/1.35 "Poppins", "Noto Sans TC", sans-serif; letter-spacing: -.02em; padding: 0; }
 .form-section > p.muted { font-size: 14px; margin-block: 4px 12px; }
@@ -571,7 +572,69 @@ textarea.editor { font: 14px/1.55 var(--mono); min-block-size: 360px; tab-size: 
 .diff-hunk, .diff-file { color: var(--text-secondary); }
 .diff-file { font-weight: 600; }
 
+/* ---------------------------------------------------------------- 排程備份 */
+/* A real checkbox (role="switch") drawn as a switch: the knob is a radial gradient, so no pseudo-element is needed and
+ * the focus ring stays the input's own. */
+input.switch[type="checkbox"] {
+  -webkit-appearance: none; appearance: none; inline-size: 44px; block-size: 24px; margin: 0; flex: none; cursor: pointer;
+  border: 1px solid var(--text-secondary); border-radius: var(--radius-pill);
+  background: var(--surface-card) radial-gradient(circle at 11px 50%, var(--text-secondary) 0 7px, transparent 7.5px) no-repeat;
+  transition: background-color var(--motion), border-color var(--motion);
+}
+input.switch[type="checkbox"]:checked {
+  border-color: var(--ww-blue);
+  background: var(--ww-blue) radial-gradient(circle at calc(100% - 11px) 50%, var(--ww-white) 0 7px, transparent 7.5px) no-repeat;
+}
+input.switch[type="checkbox"]:disabled { cursor: default; opacity: .6; }
+/* Forced colors drop background images, and with them the knob: the switch keeps its own drawing in system colors. */
+@media (forced-colors: active) {
+  input.switch[type="checkbox"] {
+    forced-color-adjust: none; border-color: CanvasText;
+    background: Canvas radial-gradient(circle at 11px 50%, CanvasText 0 7px, transparent 7.5px) no-repeat;
+  }
+  input.switch[type="checkbox"]:checked {
+    border-color: Highlight;
+    background: Highlight radial-gradient(circle at calc(100% - 11px) 50%, HighlightText 0 7px, transparent 7.5px) no-repeat;
+  }
+  input.switch[type="checkbox"]:disabled { border-color: GrayText; }
+  input.switch[type="checkbox"]:focus-visible { outline-color: CanvasText; }
+}
+.switch-choice { align-items: center; }
+.form-title { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px 12px; margin-block-end: 18px; }
+.form-title > h3 { font-size: 17px; }
+.kit-step { margin-block-start: 14px; }
+.form-group { border: 0; margin: 0; padding: 0; min-inline-size: 0; }
+.form-group > legend { padding: 0; margin-block-end: 12px; font: 600 17px/1.35 "Poppins", "Noto Sans TC", sans-serif; letter-spacing: -.02em; }
+.weekdays { border: 0; margin: 14px 0 0; padding: 0; min-inline-size: 0; }
+.weekdays > legend { padding: 0; margin-block-end: 8px; font-size: 14px; font-weight: 500; }
+.weekday-list { display: flex; flex-wrap: wrap; gap: 8px; }
+.weekday {
+  display: inline-flex; align-items: center; gap: 8px; min-block-size: 44px; padding: 6px 14px; border: 1px solid var(--line);
+  border-radius: var(--radius-pill); cursor: pointer; font-weight: 500; transition: border-color var(--motion), background var(--motion);
+}
+.weekday:has(input:checked) { border-color: var(--ww-blue); background: var(--ww-blue-050); }
+.weekday input[type="checkbox"] { margin: 0; }
+.weekdays .hint-error { margin-block-start: 8px; }
+.time-picker { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; min-inline-size: 0; }
+.time-picker select { inline-size: auto; min-inline-size: 5.5em; flex: 0 0 auto; }
+.time-separator { font-weight: 600; }
+.schedule-apps { border: 0; margin: 14px 0 0; padding: 0; min-inline-size: 0; }
+.schedule-apps > legend { padding: 0; margin-block-end: 8px; font-size: 14px; font-weight: 500; }
+.schedule-apps .hint-error { margin-block-start: 8px; }
+.schedule-encryption { display: flex; gap: 8px; align-items: flex-start; margin-block-start: 14px; font-size: 14px; }
+.schedule-encryption svg.icon { margin-block-start: 2px; color: var(--link); }
+.schedule-keep { max-inline-size: 420px; margin-block-start: 10px; }
+.form-section > .hint { margin-block-start: 8px; }
+.schedule-footer { align-items: center; }
+.schedule-hint { flex: 1 1 260px; min-inline-size: 0; font-size: 14px; }
+.last-run .secondary { margin-block-start: 2px; }
+.last-run-links { margin-block-start: 6px; gap: 4px 14px; font-size: 14px; }
+.schedule-keep-note a { font-weight: 500; }
+
 /* ---------------------------------------------------------------- responsive */
+@media (max-width: 1280px) {
+  .grid.stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
 @media (max-width: 1100px) {
   .form-layout, .detail-grid { grid-template-columns: minmax(0, 1fr); }
   .grid.stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }

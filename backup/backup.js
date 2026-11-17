@@ -12,6 +12,8 @@
  *   every unencrypted backup, copy or upload is a separately acknowledged decision with the engine's warning text.
  * - 應用設定 (catalog drafts) and 清理備份 (retention) call the read-only previews first and confirm with the
  *   preview's own values (expected_sha256, the kept backup ids); docs/backup/CONTRACT.md sections 4, 7, 8.
+ * - 排程備份 (#/schedule, 2026.11.17.1) saves its settings only after a preview of the next runs and of what the next
+ *   successful run would delete (`schedule-set` without, then with `confirm`); CONTRACT §7, §8, §11.
  * Icons: Material Design Icons path data (Pictogrammers, Apache-2.0), built with DOM APIs; lock-open-variant-outline
  * is the lock-outline path with its shackle opened.
  */
@@ -62,14 +64,16 @@
   const ACTIVE = new Set(["queued", "running"]);
   const TERMINAL = new Set(["succeeded", "failed", "rolled-back", "interrupted", "cancelled"]);
   const READS = new Set(["status", "list", "jobs", "job-status", "inspect", "key-kit", "download-info", "settings-get",
-    "catalog-suggest", "retention-plan"]);
+    "catalog-suggest", "retention-plan", "schedule-get"]);
   const TIMEOUTS = {
     inspect: 300000, "upload-begin": 120000, "upload-finish": 900000, "upload-abort": 120000, "key-import": 120000,
     "backup-start": 120000, "restore-start": 120000, "verify-start": 120000, "key-init": 120000, delete: 120000,
     "settings-set": 120000, "export-start": 120000, "export-info": 120000, "export-delete": 120000,
     // The scan runs owner-side helpers and podman/systemctl as the owner; a cleanup may delete many large files.
     "catalog-suggest": 300000, "catalog-install": 180000, "catalog-remove": 180000, "retention-plan": 180000,
-    "retention-apply": 600000
+    "retention-apply": 600000,
+    // A schedule preview plans the scheduled pool's retention over the backup list, like retention-plan.
+    "schedule-set": 180000, "schedule-run-now": 120000
   };
   // upload-finish hashes the whole file before it answers: allow 20 MB/s plus two minutes, at least 15 minutes.
   const finishTimeout = size => Math.max(TIMEOUTS["upload-finish"], 120000 + Math.ceil((Number(size) || 0) / (20 * 1000 * 1000)) * 1000);
@@ -79,10 +83,11 @@
   const UPLOAD_PENDING = new Set([...UPLOADING, "unconfirmed"]);
   const WRONG_KEY = "這把金鑰無法解開這份備份（金鑰 ID 不符）。請確認是建立這份備份的設備所產生的緊急金鑰。";
   const VERIFY_FAILED = "這份備份上次驗證未通過。還原時會先完整驗證整份備份，驗證不通過就不會變更任何資料，但這份備份很可能無法使用。";
-  const ROUTES = new Set(["overview", "backups", "create", "restore", "jobs", "keys", "activity", "catalog", "cleanup"]);
+  const ROUTES = new Set(["overview", "backups", "create", "restore", "jobs", "keys", "activity", "catalog", "cleanup", "schedule"]);
+  // 排程備份 lives under 總覽 (no seventh tab; CONTRACT §11).
   const NAV_FOR = {
     overview: "overview", backups: "backups", create: "overview", restore: "restore", jobs: "activity", keys: "keys",
-    activity: "activity", catalog: "catalog", cleanup: "backups"
+    activity: "activity", catalog: "catalog", cleanup: "backups", schedule: "overview"
   };
   // The engine's text (settings.PLAINTEXT_WARNING); the status reply carries the authoritative copy.
   const PLAINTEXT_FALLBACK = "未加密的備份會以明文儲存與下載資料庫密碼、API 金鑰與存取權杖等應用機密；任何取得備份檔的人都能讀取，也無法確認檔案在設備以外是否被修改過。";
@@ -92,8 +97,24 @@
   const OWNER_RE = /^[a-z_][a-z0-9_-]{0,31}$/;
   const EXPORT_ID_RE = /^x[0-9a-f]{16}$/;
   const CATALOG_MAX = 256 * 1024;
+  // 排程備份 (CONTRACT §7 Schedule): week order, 00:00–23:55 in 5-minute steps, keep the newest 7 by default.
+  const WEEKDAYS = [["mon", "一"], ["tue", "二"], ["wed", "三"], ["thu", "四"], ["fri", "五"], ["sat", "六"], ["sun", "日"]];
+  const DAY_IDS = WEEKDAYS.map(([id]) => id);
+  const DAY_NAMES = Object.fromEntries(WEEKDAYS);
+  const TIME_RE = /^([01]\d|2[0-3]):[0-5]\d$/;
+  const SCHEDULE_KEEP = 7;
+  const SCHEDULE_APPS_MAX = 100;
+  const TRIGGER_TEXT = { "on-time": "依排程", late: "等其他作業結束後開始", "catch-up": "補做錯過的排程", "run-now": "立即執行一次" };
+  const RUN_RESULTS = {
+    queued: "等待開始", running: "執行中", succeeded: "已完成", partial: "部分完成", failed: "失敗", interrupted: "已中斷",
+    cancelled: "已取消", unknown: "結果不明"
+  };
+  const SCHEDULE_UNSUPPORTED = "這台設備的備份元件不支援排程";
+  // Kinds of schedule events the activity list names in a word (the engine's message says the rest).
+  const EVENT_KINDS = { missed: "錯過的排程", skipped: "其他作業一直在進行", "no-key": "沒有加密金鑰", "no-apps": "沒有可以備份的應用", failed: "作業沒有開始" };
 
-  const TYPE_LABELS = { manual: "手動", safety: "還原前備份", uploaded: "上傳" };
+  // A scheduled backup is a manual backup the schedule's registry lists (BackupMeta.scheduled): 「排程」.
+  const TYPE_LABELS = { manual: "手動", scheduled: "排程", safety: "還原前備份", uploaded: "上傳" };
   const JOB_TYPES = { backup: "備份", restore: "還原", verify: "驗證", export: "未加密副本" };
   const JOB_TITLES = { backup: "備份作業", restore: "還原作業", verify: "驗證作業", export: "建立未加密副本" };
   const jobTitle = type => JOB_TITLES[type] || "作業";
@@ -111,6 +132,9 @@
     "alert-outline": "M12,2L1,21H23M12,6L19.53,19H4.47M11,10V14H13V10M11,16V18H13V16",
     "arrow-left": "M20,11V13H8L13.5,18.5L12.08,19.92L4.16,12L12.08,4.08L13.5,5.5L8,11H20Z",
     "backup-restore": "M12,3A9,9 0 0,0 3,12H0L4,16L8,12H5A7,7 0 0,1 12,5A7,7 0 0,1 19,12A7,7 0 0,1 12,19C10.5,19 9.09,18.5 7.94,17.7L6.5,19.14C8.04,20.3 9.94,21 12,21A9,9 0 0,0 21,12A9,9 0 0,0 12,3M14,12A2,2 0 0,0 12,10A2,2 0 0,0 10,12A2,2 0 0,0 12,14A2,2 0 0,0 14,12Z",
+    "calendar-alert-outline": "M11 16H13V18H11V16M11 10H13V14H11V10M19 3H18V1H16V3H8V1H6V3H5C3.9 3 3 3.9 3 5V19C3 20.1 3.9 21 5 21H19C20.1 21 21 20.1 21 19V5C21 3.9 20.1 3 19 3M19 5V7H5V5H19M5 19V9H19V19H5Z",
+    "calendar-clock-outline": "M6 1V3H5C3.89 3 3 3.89 3 5V19C3 20.1 3.89 21 5 21H11.1C12.36 22.24 14.09 23 16 23C19.87 23 23 19.87 23 16C23 14.09 22.24 12.36 21 11.1V5C21 3.9 20.11 3 19 3H18V1H16V3H8V1M5 5H19V7H5M5 9H19V9.67C18.09 9.24 17.07 9 16 9C12.13 9 9 12.13 9 16C9 17.07 9.24 18.09 9.67 19H5M16 11.15C18.68 11.15 20.85 13.32 20.85 16C20.85 18.68 18.68 20.85 16 20.85C13.32 20.85 11.15 18.68 11.15 16C11.15 13.32 13.32 11.15 16 11.15M15 13V16.69L18.19 18.53L18.94 17.23L16.5 15.82V13Z",
+    "calendar-remove-outline": "M19 3H18V1H16V3H8V1H6V3H5C3.9 3 3 3.9 3 5V19C3 20.11 3.9 21 5 21H19C20.11 21 21 20.11 21 19V5C21 3.9 20.11 3 19 3M19 19H5V9H19V19M5 7V5H19V7H5M8.23 16.41L9.29 17.47L11.73 15.03L14.17 17.47L15.23 16.41L12.79 13.97L15.23 11.53L14.17 10.47L11.73 12.91L9.29 10.47L8.23 11.53L10.67 13.97L8.23 16.41Z",
     "check": "M21,7L9,19L3.5,13.5L4.91,12.09L9,16.17L19.59,5.59L21,7Z",
     "check-circle": "M12 2C6.5 2 2 6.5 2 12S6.5 22 12 22 22 17.5 22 12 17.5 2 12 2M10 17L5 12L6.41 10.59L10 14.17L17.59 6.58L19 8L10 17Z",
     "check-circle-outline": "M12 2C6.5 2 2 6.5 2 12S6.5 22 12 22 22 17.5 22 12 17.5 2 12 2M12 20C7.59 20 4 16.41 4 12S7.59 4 12 4 20 7.59 20 12 16.41 20 12 20M16.59 7.58L10 14.17L7.41 11.59L6 13L10 17L18 9L16.59 7.58Z",
@@ -118,6 +142,7 @@
     "chevron-right": "M8.59,16.58L13.17,12L8.59,7.41L10,6L16,12L10,18L8.59,16.58Z",
     "circle-medium": "M12,8A4,4 0 0,0 8,12A4,4 0 0,0 12,16A4,4 0 0,0 16,12A4,4 0 0,0 12,8Z",
     "clipboard-text-outline": "M19,3H14.82C14.25,1.44 12.53,0.64 11,1.2C10.14,1.5 9.5,2.16 9.18,3H5A2,2 0 0,0 3,5V19A2,2 0 0,0 5,21H19A2,2 0 0,0 21,19V5A2,2 0 0,0 19,3M12,3A1,1 0 0,1 13,4A1,1 0 0,1 12,5A1,1 0 0,1 11,4A1,1 0 0,1 12,3M7,7H17V5H19V19H5V5H7V7M17,11H7V9H17V11M15,15H7V13H15V15Z",
+    "clock-alert-outline": "M11 7V13L16.2 16.1L17 14.9L12.5 12.2V7H11M20 12V18H22V12H20M20 20V22H22V20H20M18 20C16.3 21.3 14.3 22 12 22C6.5 22 2 17.5 2 12S6.5 2 12 2C16.8 2 20.9 5.4 21.8 10H19.7C18.8 6.6 15.7 4 12 4C7.6 4 4 7.6 4 12S7.6 20 12 20C14.4 20 16.5 18.9 18 17.3V20Z",
     "close-circle-outline": "M12,20C7.59,20 4,16.41 4,12C4,7.59 7.59,4 12,4C16.41,4 20,7.59 20,12C20,16.41 16.41,20 12,20M12,2C6.47,2 2,6.47 2,12C2,17.53 6.47,22 12,22C17.53,22 22,17.53 22,12C22,6.47 17.53,2 12,2M14.59,8L12,10.59L9.41,8L8,9.41L10.59,12L8,14.59L9.41,16L12,13.41L14.59,16L16,14.59L13.41,12L16,9.41L14.59,8Z",
     "content-copy": "M19,21H8V7H19M19,5H8A2,2 0 0,0 6,7V21A2,2 0 0,0 8,23H19A2,2 0 0,0 21,21V7A2,2 0 0,0 19,5M16,1H4A2,2 0 0,0 2,3V17H4V3H16V1Z",
     "database-outline": "M12 3C7.58 3 4 4.79 4 7V17C4 19.21 7.59 21 12 21S20 19.21 20 17V7C20 4.79 16.42 3 12 3M18 17C18 17.5 15.87 19 12 19S6 17.5 6 17V14.77C7.61 15.55 9.72 16 12 16S16.39 15.55 18 14.77V17M18 12.45C16.7 13.4 14.42 14 12 14C9.58 14 7.3 13.4 6 12.45V9.64C7.47 10.47 9.61 11 12 11C14.39 11 16.53 10.47 18 9.64V12.45M12 9C8.13 9 6 7.5 6 7S8.13 5 12 5C15.87 5 18 6.5 18 7S15.87 9 12 9Z",
@@ -134,6 +159,7 @@
     "magnify": "M9.5,3A6.5,6.5 0 0,1 16,9.5C16,11.11 15.41,12.59 14.44,13.73L14.71,14H15.5L20.5,19L19,20.5L14,15.5V14.71L13.73,14.44C12.59,15.41 11.11,16 9.5,16A6.5,6.5 0 0,1 3,9.5A6.5,6.5 0 0,1 9.5,3M9.5,5C7,5 5,7 5,9.5C5,12 7,14 9.5,14C12,14 14,12 14,9.5C14,7 12,5 9.5,5Z",
     "minus-circle-outline": "M12,20C7.59,20 4,16.41 4,12C4,7.59 7.59,4 12,4C16.41,4 20,7.59 20,12C20,16.41 16.41,20 12,20M12,2A10,10 0 0,0 2,12A10,10 0 0,0 12,22A10,10 0 0,0 22,12A10,10 0 0,0 12,2M7,13H17V11H7",
     "package-variant-closed": "M21,16.5C21,16.88 20.79,17.21 20.47,17.38L12.57,21.82C12.41,21.94 12.21,22 12,22C11.79,22 11.59,21.94 11.43,21.82L3.53,17.38C3.21,17.21 3,16.88 3,16.5V7.5C3,7.12 3.21,6.79 3.53,6.62L11.43,2.18C11.59,2.06 11.79,2 12,2C12.21,2 12.41,2.06 12.57,2.18L20.47,6.62C20.79,6.79 21,7.12 21,7.5V16.5M12,4.15L10.11,5.22L16,8.61L17.96,7.5L12,4.15M6.04,7.5L12,10.85L13.96,9.75L8.08,6.35L6.04,7.5M5,15.91L11,19.29V12.58L5,9.21V15.91M19,15.91V9.21L13,12.58V19.29L19,15.91Z",
+    "play-circle-outline": "M12,20C7.59,20 4,16.41 4,12C4,7.59 7.59,4 12,4C16.41,4 20,7.59 20,12C20,16.41 16.41,20 12,20M12,2A10,10 0 0,0 2,12A10,10 0 0,0 12,22A10,10 0 0,0 22,12A10,10 0 0,0 12,2M10,16.5L16,12L10,7.5V16.5Z",
     "plus": "M19,13H13V19H11V13H5V11H11V5H13V11H19V13Z",
     "progress-clock": "M13,2.03V2.05L13,4.05C17.39,4.59 20.5,8.58 19.96,12.97C19.5,16.61 16.64,19.5 13,19.93V21.93C18.5,21.38 22.5,16.5 21.95,11C21.5,6.25 17.73,2.5 13,2.03M11,2.06C9.05,2.25 7.19,3 5.67,4.26L7.1,5.74C8.22,4.84 9.57,4.26 11,4.06V2.06M4.26,5.67C3,7.19 2.25,9.04 2.05,11H4.05C4.24,9.58 4.8,8.23 5.69,7.1L4.26,5.67M2.06,13C2.26,14.96 3.03,16.81 4.27,18.33L5.69,16.9C4.81,15.77 4.24,14.42 4.06,13H2.06M7.1,18.37L5.67,19.74C7.18,21 9.04,21.79 11,22V20C9.58,19.82 8.23,19.25 7.1,18.37M12.5,7V12.25L17,14.92L16.25,16.15L11,13V7H12.5Z",
     "refresh": "M17.65,6.35C16.2,4.9 14.21,4 12,4A8,8 0 0,0 4,12A8,8 0 0,0 12,20C15.73,20 18.84,17.45 19.73,14H17.65C16.83,16.33 14.61,18 12,18A6,6 0 0,1 6,12A6,6 0 0,1 12,6C13.66,6 15.14,6.69 16.22,7.78L13,11H20V4L17.65,6.35Z",
@@ -298,8 +324,17 @@
 
   const appName = id => state.status?.apps?.find(app => app.id === id)?.name || id;
   // Glossary (review F14): the full name is 還原前自動備份; chips and filters say 還原前備份.
-  const TITLE_LABELS = { manual: "手動備份", safety: "還原前自動備份", uploaded: "上傳備份" };
-  const backupTitle = backup => `${TITLE_LABELS[backup.type] || "其他備份"} · ${date(backup.created || backup.uploaded_at)}`;
+  const TITLE_LABELS = { manual: "手動備份", scheduled: "排程備份", safety: "還原前自動備份", uploaded: "上傳備份" };
+  // What the list calls a backup: a manual backup the schedule made is 「排程」 (its index type stays `manual`).
+  const backupKind = backup => (backup?.type === "manual" && backup.scheduled === true ? "scheduled" : str(backup?.type));
+  const backupTitle = backup => `${TITLE_LABELS[backupKind(backup)] || "其他備份"} · ${date(backup.created || backup.uploaded_at)}`;
+  // A scheduled backup job carries `params.schedule` {slot, trigger, keep_last} (CONTRACT §7 Job params).
+  const scheduleOf = job => (job?.type === "backup" && isObject(job.params?.schedule) ? job.params.schedule : null);
+  const jobLabel = job => (scheduleOf(job) ? "排程備份作業" : jobTitle(job?.type));
+  const partialRun = job => Boolean(scheduleOf(job)) && job.state === "succeeded" && job.result?.partial === true;
+  const skippedApps = result => list(result?.skipped_apps).filter(item => isObject(item) && isString(item.id))
+    .map(item => ({ id: item.id, name: str(item.name || item.id), reason: str(item.reason) }));
+  const quoted = names => names.map(name => `「${name}」`).join("、");
 
   // Sidecars written before format 2 have no `encrypted`: they are encrypted (CONTRACT §7 BackupMeta).
   const isEncrypted = backup => backup?.encrypted !== false;
@@ -455,6 +490,9 @@
   const validApp = app => isObject(app) && isString(app.id) && isString(app.name) && isString(app.state);
   const validExport = item => isObject(item) && isString(item.export_id) && EXPORT_ID_RE.test(item.export_id) &&
     isString(item.backup_id) && BACKUP_ID_RE.test(item.backup_id) && isNumber(item.expires);
+  const validEvent = item => isObject(item) && isString(item.at) && isString(item.kind) && isString(item.message);
+  const validScheduleGet = data => isObject(data) && isObject(data.schedule) && Array.isArray(data.schedule.days) &&
+    isString(data.schedule.time) && Array.isArray(data.next_runs) && isObject(data.timezone);
 
   // ------------------------------------------------------------------ state
 
@@ -475,6 +513,14 @@
     // this page started (their copy downloads by itself once ready).
     exports: [], exportRequest: null, exportAuto: new Set(), deletedExports: new Set(), menu: null,
     cleanup: { plan: null, loading: false, error: null, draft: null, previewBusy: false, previewError: null, selected: new Set(), extra: new Set(), applyBusy: false, applied: null },
+    // 排程備份: `data` is the schedule-get reply; the draft is what the form shows and is kept across refreshes once
+    // the administrator changed it (`touched`). `kitStep` remembers an engine refusal that asked for the kit first;
+    // `fromSchedule` makes 加密金鑰 offer 「回到排程備份」.
+    schedule: {
+      data: null, at: 0, error: null, draft: null, touched: false, busy: false, saveError: null, notice: null,
+      runBusy: false, runError: null, runRequest: null, kitStep: null, fromSchedule: false
+    },
+    scheduleEvents: [],
     catalog: {
       owners: null, ownersBusy: false, ownersError: null, owner: null, scan: null, scanBusy: false, scanError: null,
       drafts: new Map(), notice: null, busy: false
@@ -558,6 +604,8 @@
       const data = await call("jobs");
       requireShape(Array.isArray(data.jobs) && data.jobs.every(validJob), "活動紀錄");
       state.jobs = data.jobs;
+      // 2026.11.17.1: the schedule's recent events; an older engine sends none.
+      state.scheduleEvents = list(data.schedule_events).filter(validEvent);
       state.jobsAt = Date.now();
       if (state.pageError?.source === "jobs") state.pageError = null;
     } catch (error) {
@@ -567,6 +615,42 @@
       render();
     }
   }
+
+  // 排程備份 (CONTRACT §7 schedule-get). A draft nobody touched follows the saved settings; an edited one is kept
+  // across refreshes, like the draft policy of 清理備份.
+  async function loadSchedule({ quiet = false } = {}) {
+    const ui = state.schedule;
+    if (state.loading.has("schedule")) return;
+    state.loading.add("schedule");
+    if (!quiet) ui.error = null;
+    render({ background: quiet });
+    try {
+      const data = await call("schedule-get");
+      requireShape(validScheduleGet(data), "排程資料");
+      ui.data = data;
+      ui.at = Date.now();
+      ui.error = null;
+      ui.kitStep = null;  // the gate is fresh now
+      if (!ui.draft || !ui.touched) ui.draft = draftFrom(data.schedule);
+    } catch (error) {
+      ui.error = error;
+    } finally {
+      state.loading.delete("schedule");
+      render({ background: quiet });
+    }
+  }
+
+  // null until the status is known; false for an engine older than 排程備份: its status has no `schedule` (a status
+  // that could not compute it sends null) and it refuses the command as unknown.
+  function scheduleSupported() {
+    if (unsupported(state.schedule.error)) return false;
+    if (!state.status) return null;
+    return Object.hasOwn(state.status, "schedule");
+  }
+
+  const statusSchedule = () => (isObject(state.status?.schedule) ? state.status.schedule : null);
+  // The schedule is on and runs (a problem stops it; CONTRACT §7 ScheduleSummary.enabled).
+  const scheduleOn = () => statusSchedule()?.enabled === true;
 
   function upsertBackup(backup) {
     if (!validBackup(backup) || !state.backups) return;
@@ -584,6 +668,10 @@
     if (route.page === "activity" && (!state.jobs || stale(state.jobsAt, 5000))) loadJobs();
     if (route.page === "cleanup" && (!state.cleanup.plan || force) && !state.cleanup.loading) loadPlan();
     if (route.page === "catalog" && !state.catalog.owners && !state.catalog.ownersBusy && !state.catalog.ownersError) loadOwners();
+    // The gate and the last run change elsewhere (加密金鑰, jobs): read them again whenever the view is opened.
+    if (route.page === "schedule" && scheduleSupported() && (!state.schedule.data || stale(state.schedule.at, 3000) || state.schedule.kitStep)) {
+      loadSchedule({ quiet: Boolean(state.schedule.data) });
+    }
     if (route.page === "jobs" && route.arg && JOB_ID_RE.test(route.arg)) {
       const cached = state.jobCache.get(route.arg);
       if (force || !cached?.job || (!TERMINAL.has(cached.job.state) && state.watch.id !== route.arg)) {
@@ -647,12 +735,14 @@
   }
 
   function jobFinished(job) {
-    const label = `${jobTitle(job.type)}${JOB_STATES[job.state] || job.state}`;
+    const label = `${jobLabel(job)}${partialRun(job) ? "部分完成" : JOB_STATES[job.state] || job.state}`;
     announce(`${label}。`);
     loadStatus({ quiet: true });
     if (job.type !== "verify" || state.backups) loadBackups();
     if (state.jobs) loadJobs();
     if (currentRoute().page === "cleanup") loadPlan({ quiet: true });
+    // The schedule's last run, waiting slot and next runs follow the job.
+    if (state.schedule.data) loadSchedule({ quiet: true });
     // The copy this page asked for downloads by itself once; the result keeps a button for another try.
     if (job.type === "export" && state.exportAuto.has(job.id)) {
       state.exportAuto.delete(job.id);
@@ -669,7 +759,7 @@
       const label = job && ACTIVE.has(job.state) ? job.phases.find(item => item.id === job.phase)?.label : null;
       if (label && state.jobUi.announced !== `${job.state}:${label}`) {
         state.jobUi.announced = `${job.state}:${label}`;
-        announce(`${jobTitle(job.type)}：${label}`);
+        announce(`${jobLabel(job)}：${label}`);
       }
       updateJobUi();
     }
@@ -718,6 +808,13 @@
       // The emergency kit secret is shown once: leaving the page drops it (review finding F11).
       state.keys.kit = null;
       state.keys.confirmChecked = false;
+      // 加密金鑰 offers 「回到排程備份」 only right after the schedule's kit step sent the administrator there.
+      state.schedule.fromSchedule = false;
+    }
+    if (route.page !== "schedule" && changed) {
+      state.schedule.notice = null;
+      state.schedule.runError = null;
+      state.schedule.saveError = null;
     }
     render();
     ensureData(route);
@@ -862,6 +959,8 @@
       fill(keyBanner);
     }
 
+    renderScheduleBanner(route);
+
     const upload = activeUpload();
     const uploadBanner = $("upload-banner");
     if (upload && !(route.page === "restore" && !route.arg)) {
@@ -885,7 +984,7 @@
       jobBanner.hidden = false;
       fill(jobBanner, 
         icon("progress-clock"),
-        h("p", null, h("strong", { text: `${jobTitle(job.type)}進行中` }), ` · ${phase || JOB_STATES[job.state]} · ${percent}%`),
+        h("p", null, h("strong", { text: `${jobLabel(job)}進行中` }), ` · ${phase || JOB_STATES[job.state]} · ${percent}%`),
         link("查看進度", ["jobs", job.id], { class: "button small", dataset: { focus: "banner-job" } }));
     } else {
       jobBanner.hidden = true;
@@ -902,6 +1001,40 @@
       fill($("warnings-title"), icon("chevron-right", "icon summary-icon"), h("span", { text: title }));
     }
     fill($("warning-list"), ...warnings.map(item => h("li", { text: item })));
+  }
+
+  // The one thing the schedule needs attention for, worded by the engine (`status.schedule.attention`, CONTRACT §7):
+  // a failed or partial run, a slot that did not run, an overdue slot, schedule checks that stopped, a settings problem.
+  // It is rebuilt only when it changes, so a poll never takes the focus away from its links.
+  const ATTENTION_ICONS = { "timer-inactive": "clock-alert-outline", overdue: "clock-alert-outline" };
+  function renderScheduleBanner(route) {
+    const banner = $("schedule-banner");
+    const attention = statusSchedule()?.attention;
+    if (!state.status || state.accessDenied || !isObject(attention) || !isString(attention.message) || !attention.message.trim()) {
+      banner.hidden = true;
+      if (banner.dataset.signature) {
+        banner.dataset.signature = "";
+        fill(banner);
+      }
+      return;
+    }
+    const code = str(attention.code);
+    const jobId = isString(attention.job_id) && JOB_ID_RE.test(attention.job_id) ? attention.job_id : null;
+    const onSchedule = route.page === "schedule";
+    const signature = JSON.stringify([code, attention.message, jobId, onSchedule]);
+    banner.hidden = false;
+    if (banner.dataset.signature === signature) return;
+    banner.dataset.signature = signature;
+    banner.dataset.code = code;
+    banner.className = `notice ${code === "failed" ? "notice-error" : "notice-warn"}`;
+    const actions = [
+      jobId && ["failed", "partial"].includes(code)
+        ? link("查看作業結果", ["jobs", jobId], { class: "button small", dataset: { focus: "banner-schedule-job" } }) : null,
+      onSchedule ? null : link("查看排程備份", ["schedule"], { class: "button small", dataset: { focus: "banner-schedule" } })
+    ].filter(Boolean);
+    fill(banner, icon(ATTENTION_ICONS[code] || "calendar-alert-outline"),
+      h("p", null, h("strong", { text: "排程備份" }), ` · ${attention.message}`),
+      actions.length ? h("div", { class: "button-group" }, actions) : null);
   }
 
   function buildView(route) {
@@ -922,6 +1055,7 @@
       case "keys": return viewKeys();
       case "activity": return viewActivity();
       case "cleanup": return viewCleanup();
+      case "schedule": return viewSchedule();
       case "catalog": return route.arg ? viewDraft(route.arg) : viewCatalog();
       default: return viewOverview();
     }
@@ -976,8 +1110,9 @@
     return h("span", { class: `chip chip-${tone}` }, iconName ? icon(iconName) : null, h("span", { text: label }));
   }
 
+  // `type` is a backup's kind (backupKind): manual, scheduled, safety or uploaded.
   function typeChip(type) {
-    const icons = { manual: "database-outline", safety: "shield-check-outline", uploaded: "tray-arrow-up" };
+    const icons = { manual: "database-outline", scheduled: "calendar-clock-outline", safety: "shield-check-outline", uploaded: "tray-arrow-up" };
     return chip(TYPE_LABELS[type] || str(type) || "未知", type === "safety" ? "info" : "neutral", icons[type] || null);
   }
 
@@ -987,6 +1122,9 @@
       interrupted: "alert-outline", cancelled: "stop-circle-outline", queued: "timer-sand", running: "progress-clock" };
     return chip(JOB_STATES[jobState] || str(jobState), tones[jobState] || "neutral", icons[jobState] || null);
   }
+
+  // A partial scheduled run is a succeeded job whose result says `partial` (no job state of its own; CONTRACT §7).
+  const runStateChip = job => (partialRun(job) ? chip("部分完成", "warn", "alert-outline") : jobStateChip(job.state));
 
   function appStateChip(appState) {
     const tones = { running: "ok", stopped: "neutral", partial: "warn", "not-deployed": "neutral", error: "fail" };
@@ -1120,7 +1258,8 @@
       h("section", { class: "card stat", "aria-label": "可備份的應用" }, tile("package-variant-closed"),
         h("div", { class: "stat-main" }, h("p", { class: "stat-label", text: "可備份的應用" }),
           h("p", { class: "stat-value", text: `${apps.length} 個` }),
-          h("p", { class: "secondary", text: apps.length ? `已部署 ${deployed} 個 · 執行中 ${running} 個` : "尚未設定可備份的應用" }))));
+          h("p", { class: "secondary", text: apps.length ? `已部署 ${deployed} 個 · 執行中 ${running} 個` : "尚未設定可備份的應用" }))),
+      scheduleStat());
 
     const appSection = h("section", { class: "section", "aria-labelledby": "apps-heading" },
       h("div", { class: "section-head" }, h("div", null, h("h3", { id: "apps-heading", text: "應用" }),
@@ -1138,7 +1277,7 @@
           h("div", { class: "item-main" },
             link(backupTitle(backup), ["backups", backup.id], { class: "item-title", dataset: { focus: `recent-${backup.id}` } }),
             h("span", { class: "secondary", text: [appsText(backup), bytes(backup.size), backup.note].filter(Boolean).join(" · ") })),
-          h("div", { class: "item-side" }, h("span", { class: "chips" }, typeChip(backup.type), backupChips(backup, { key: !backup.key_available }))))))
+          h("div", { class: "item-side" }, h("span", { class: "chips" }, typeChip(backupKind(backup)), backupChips(backup, { key: !backup.key_available }))))))
         : h("section", { class: "card" }, emptyState("database-outline", "還沒有備份", "建立第一份備份後，會顯示在這裡。", apps.length ? [
           link("建立備份", ["create"], { class: "button primary", dataset: { focus: "overview-first-backup" } })] : [])));
 
@@ -1158,7 +1297,7 @@
     const rows = new Map();
     const row = (id, name) => {
       if (!rows.has(id)) {
-        rows.set(id, { id, name: name || id, in_catalog: false, backups: 0, types: { manual: 0, safety: 0, uploaded: 0 }, bytes: 0,
+        rows.set(id, { id, name: name || id, in_catalog: false, backups: 0, types: { manual: 0, scheduled: 0, safety: 0, uploaded: 0 }, bytes: 0,
           estimated: false, shared: false, newest: null, oldest: null, keep_last: undefined });
       }
       return rows.get(id);
@@ -1184,7 +1323,8 @@
       items.forEach((item, index) => {
         const entry = row(item.id, item.name);
         entry.backups += 1;
-        if (Object.hasOwn(entry.types, backup.type)) entry.types[backup.type] += 1;
+        // types.manual counts the manual backups that are not scheduled (retention.app_usage).
+        if (Object.hasOwn(entry.types, backupKind(backup))) entry.types[backupKind(backup)] += 1;
         entry.bytes += shares[index];
         entry.estimated ||= !known && items.length > 1;
         entry.shared ||= items.length > 1;
@@ -1214,7 +1354,7 @@
 
   function typeCounts(types) {
     const counts = isObject(types) ? types : {};
-    return [["manual", "手動"], ["safety", "還原前"], ["uploaded", "上傳"]]
+    return [["manual", "手動"], ["scheduled", "排程"], ["safety", "還原前"], ["uploaded", "上傳"]]
       .filter(([type]) => Number(counts[type]) > 0).map(([type, label]) => `${label} ${Number(counts[type])}`).join("、");
   }
 
@@ -1272,9 +1412,10 @@
   function filteredBackups() {
     const query = state.list.query.trim().toLocaleLowerCase();
     return (state.backups || []).filter(backup => {
-      if (state.list.type !== "all" && backup.type !== state.list.type) return false;
+      // 「手動」 lists the manual backups the schedule did not make; 「排程」 the ones it made.
+      if (state.list.type !== "all" && backupKind(backup) !== state.list.type) return false;
       if (!query) return true;
-      const values = [backup.id, backup.note, backup.filename, backup.key_id, backup.source?.hostname, TYPE_LABELS[backup.type],
+      const values = [backup.id, backup.note, backup.filename, backup.key_id, backup.source?.hostname, TYPE_LABELS[backupKind(backup)],
         ...list(backup.apps).flatMap(app => [app?.id, app?.name])];
       return values.some(value => str(value).toLocaleLowerCase().includes(query));
     });
@@ -1282,6 +1423,7 @@
 
   function viewBackups() {
     const head = viewTitle("備份列表", "這台設備保存的備份。可下載成單一檔案、還原、驗證或刪除。", [
+      link([icon("calendar-clock-outline"), h("span", { text: "排程備份" })], ["schedule"], { class: "button", dataset: { focus: "list-schedule" } }),
       link([icon("delete-outline"), h("span", { text: "清理備份" })], ["cleanup"], { class: "button", dataset: { focus: "list-cleanup" } }),
       link([icon("tray-arrow-up"), h("span", { text: "上傳備份檔" })], ["restore"], { class: "button", dataset: { focus: "list-upload" } }),
       link([icon("plus"), h("span", { text: "建立備份" })], ["create"], { class: "button primary", dataset: { focus: "list-create" } })]);
@@ -1297,8 +1439,10 @@
       autocomplete: "off", dataset: { focus: "backup-search" },
       on: { input: event => { state.list.query = event.target.value; updateBackupResults(); } }
     });
+    // 「排程」 appears once this device can schedule backups (or holds a scheduled backup).
+    const scheduled = scheduleSupported() || state.backups.some(backup => backupKind(backup) === "scheduled");
     const filters = h("div", { class: "filter-group", role: "group", "aria-label": "依類型篩選" },
-      [["all", "全部"], ["manual", "手動"], ["safety", "還原前備份"], ["uploaded", "上傳"]].map(([value, label]) =>
+      [["all", "全部"], ["manual", "手動"], scheduled ? ["scheduled", "排程"] : null, ["safety", "還原前備份"], ["uploaded", "上傳"]].filter(Boolean).map(([value, label]) =>
         h("button", {
           type: "button", class: "filter", "aria-pressed": String(state.list.type === value), dataset: { focus: `filter-${value}` },
           on: { click: () => { state.list.type = value; render(); } }
@@ -1342,7 +1486,7 @@
         }),
         backup.note ? h("span", { class: "secondary note", text: backup.note }) : null,
         h("span", { class: "secondary mono", text: backup.id })),
-      h("td", { "data-label": "類型" }, typeChip(backup.type)),
+      h("td", { "data-label": "類型" }, typeChip(backupKind(backup))),
       h("td", { "data-label": "應用", text: appsText(backup) }),
       h("td", { "data-label": "大小" }, h("span", { text: bytes(backup.size) }),
         backup.include_images ? h("span", { class: "secondary", text: "含容器映像" }) : null,
@@ -1606,10 +1750,10 @@
     const encrypted = isEncrypted(backup);
     const verified = isObject(backup.verified) && backup.verified.ok === true;
     const info = h("section", { class: "card", "aria-labelledby": "detail-info" },
-      h("div", { class: "card-head" }, h("h3", { id: "detail-info", text: "備份資訊" }), h("span", { class: "chips" }, typeChip(backup.type), backupChips(backup, { key: false }))),
+      h("div", { class: "card-head" }, h("h3", { id: "detail-info", text: "備份資訊" }), h("span", { class: "chips" }, typeChip(backupKind(backup)), backupChips(backup, { key: false }))),
       h("div", { class: "card-body" }, metadata([
         ["備份 ID", backup.id, "mono"],
-        ["類型", TYPE_LABELS[backup.type] || backup.type],
+        ["類型", backupKind(backup) === "scheduled" ? "排程（由排程備份自動建立，依排程的保留份數清理）" : TYPE_LABELS[backup.type] || backup.type],
         ["建立時間", date(backup.created)],
         backup.uploaded_at ? ["上傳時間", date(backup.uploaded_at)] : null,
         ["來源設備", backup.source?.hostname || "—"],
@@ -1644,7 +1788,7 @@
     const detail = state.detail?.id === backup.id ? state.detail : null;
     const body = [];
     if (detail?.busy) body.push(h("p", { class: "muted", role: "status", text: isEncrypted(backup) ? "正在解密並讀取備份內容…" : "正在讀取備份內容…" }));
-    else if (detail?.data) body.push(...manifestSummary(detail.data.manifest));
+    else if (detail?.data) body.push(...manifestSummary(detail.data.manifest, backup));
     else {
       body.push(h("p", { class: "muted", text: backup.key_available
         ? `${isEncrypted(backup) ? "解密" : "讀取"}備份的內容清單，查看應用、資料庫、資料卷、主機資料夾與映像。這不會變更任何資料。`
@@ -1704,13 +1848,15 @@
     }).finally(render);
   }
 
-  function manifestSummary(manifest) {
+  // `backup` (optional): the listed backup, whose `scheduled` names a scheduled one (its manifest says `manual`).
+  function manifestSummary(manifest, backup = null) {
     const source = isObject(manifest.source) ? manifest.source : {};
     const tool = isObject(manifest.tool) ? manifest.tool : {};
     const consistency = isObject(manifest.consistency) ? manifest.consistency : {};
+    const kind = manifest.type === "manual" && backupKind(backup) === "scheduled" ? "scheduled" : manifest.type;
     const general = metadata([
       ["建立時間", date(manifest.created)],
-      ["類型", TYPE_LABELS[manifest.type] || str(manifest.type)],
+      ["類型", TYPE_LABELS[kind] || str(manifest.type)],
       ["來源設備", [source.hostname, source.os, source.arch, source.podman && `Podman ${source.podman}`].filter(Boolean).map(str).join(" · ") || "—"],
       ["建立工具", [tool.name, tool.version].filter(Boolean).map(str).join(" ") || "—"],
       ["一致性", consistency.method === "writers-stopped"
@@ -1840,7 +1986,7 @@
       link("設定加密金鑰", ["keys"], { class: "button small", dataset: { focus: "create-keys" } })));
     }
     if (active) {
-      blockers.push(infoNotice(`目前有作業正在進行（${jobTitle(active.type)}），需等它完成後才能建立新的備份。`, "info", "progress-clock",
+      blockers.push(infoNotice(`目前有作業正在進行（${jobLabel(active)}），需等它完成後才能建立新的備份。`, "info", "progress-clock",
         link("查看進度", ["jobs", active.id], { class: "button small", dataset: { focus: "create-active-job" } })));
     }
     const canSubmit = !createBlocked();
@@ -2801,7 +2947,7 @@
       warnings.length ? [h("h4", { class: "subheading", text: "注意事項" }), checkList(warnings, "注意事項")] : null,
       verifiedFailed ? infoNotice(VERIFY_FAILED, "warn", "alert-outline") : null,
       wizard.key && !wizard.keySaved ? h("p", { class: "muted", text: "你輸入的緊急金鑰只會交給這次還原作業使用，作業結束後即刪除，不會保存在這台設備。" }) : null,
-      active ? infoNotice(`目前有作業正在進行（${jobTitle(active.type)}），需等它完成後才能開始還原。`, "info", "progress-clock",
+      active ? infoNotice(`目前有作業正在進行（${jobLabel(active)}），需等它完成後才能開始還原。`, "info", "progress-clock",
         link("查看進度", ["jobs", active.id], { class: "button small", dataset: { focus: "confirm-active-job" } })) : null,
       noSafety ? h("label", { class: "choice confirm-choice" },
         h("input", {
@@ -2941,8 +3087,8 @@
       nodes.cancel.hidden = true;
       return;
     }
-    text(nodes.title, jobTitle(job.type));
-    fill(nodes.state, jobStateChip(job.state));
+    text(nodes.title, jobLabel(job));
+    fill(nodes.state, runStateChip(job));
     text(nodes.meta, [`作業 ID ${job.id}`, `建立於 ${date(job.created)}`,
       job.finished ? `結束於 ${date(job.finished)}` : job.started ? `開始於 ${date(job.started)}` : null].filter(Boolean).join(" · "));
     fill(nodes.stepper, ...(job.type === "restore" ? [jobWizardStepper(job)] : []));
@@ -2995,12 +3141,18 @@
   function jobParams(job) {
     const params = isObject(job.params) ? job.params : {};
     const backupId = isString(params.backup_id) && BACKUP_ID_RE.test(params.backup_id) ? params.backup_id : null;
+    const schedule = scheduleOf(job);
+    // A scheduled run follows 預設加密備份 as it was when the run started; nobody chose it for this backup.
+    const encryption = schedule ? (params.encrypt ? "加密（依「預設加密備份」）" : "不加密（依「預設加密備份」）")
+      : params.encrypt ? "加密此備份" : "不加密（你已確認）";
     return metadata([
-      ["作業類型", jobTitle(job.type)],
+      ["作業類型", jobLabel(job)],
+      schedule ? ["排程", triggerText(schedule)] : null,
       list(params.apps).length ? ["應用", list(params.apps).map(id => appName(str(id))).join("、")] : null,
       backupId ? ["備份", link(backupId, ["backups", backupId], { class: "mono", dataset: { focus: "job-param-backup" } })] : null,
       job.type === "backup" ? ["容器映像", params.include_images ? "包含" : "不包含"] : null,
-      job.type === "backup" && typeof params.encrypt === "boolean" ? ["加密", params.encrypt ? "加密此備份" : "不加密（你已確認）"] : null,
+      job.type === "backup" && typeof params.encrypt === "boolean" ? ["加密", encryption] : null,
+      schedule ? ["保留份數", scheduledKeepText(schedule.keep_last)] : null,
       job.type === "backup" && params.note ? ["備註", str(params.note)] : null,
       params.key_provided ? ["金鑰", "使用輸入的緊急金鑰（作業結束後即刪除）"] : null,
       params.allow_no_safety ? ["還原前備份", "無法建立時直接還原（你已確認；失敗時無法自動回復）"] : null,
@@ -3047,15 +3199,22 @@
     const freshApps = list(result?.fresh_apps).filter(isString);
     const manualWork = restore && job.state === "failed" && rollbackPhase && result?.rolled_back === false;
     const dirs = restore ? restoreDirs(job) : [];
+    // 排程備份: the apps a scheduled run left out (not deployed, reporting problems or gone from the catalog).
+    const scheduled = Boolean(scheduleOf(job));
+    const skipped = scheduled ? skippedApps(result) : [];
     const body = [];
     const actions = [];
     let title = "作業結束";
     let tone = "neutral";
     let glyph = "information-outline";
-    if (job.state === "succeeded") {
+    if (job.state === "succeeded" && partialRun(job)) {
+      tone = "warn";
+      glyph = "alert-outline";
+      title = "排程備份部分完成";
+    } else if (job.state === "succeeded") {
       tone = "ok";
       glyph = "check-circle";
-      title = { backup: "備份完成", restore: "還原完成", verify: "驗證完成", export: "未加密副本已建立" }[job.type];
+      title = scheduled ? "排程備份完成" : { backup: "備份完成", restore: "還原完成", verify: "驗證完成", export: "未加密副本已建立" }[job.type];
     } else if (job.state === "rolled-back") {
       tone = "warn";
       glyph = "backup-restore";
@@ -3063,7 +3222,7 @@
     } else if (job.state === "failed") {
       tone = "fail";
       glyph = "close-circle-outline";
-      title = job.type === "export" ? "建立未加密副本失敗" : `${JOB_TYPES[job.type]}失敗`;
+      title = job.type === "export" ? "建立未加密副本失敗" : scheduled ? "排程備份失敗" : `${JOB_TYPES[job.type]}失敗`;
     } else if (job.state === "interrupted") {
       tone = "warn";
       glyph = "alert-outline";
@@ -3077,6 +3236,10 @@
       const createdId = isString(result.backup_id) && BACKUP_ID_RE.test(result.backup_id) ? result.backup_id : null;
       const encrypted = result.encrypted !== false;
       const deleted = list(result.retention_deleted).filter(isString);
+      if (skipped.length) {
+        body.push(h("p", { text: "排程備份已建立，但沒有包含下列應用。其他應用都已備份；這些應用要等它們可以備份時，下一次排程才會包含。" }),
+          checkList(skipped.map(item => ({ id: item.id, status: "warn", message: `「${item.name}」：${item.reason || "原因不明。"}` })), "沒有包含的應用"));
+      }
       body.push(h("p", { text: encrypted ? "備份已建立，並以這台設備的金鑰完整解密驗證後才列出。"
         : "備份已建立（未加密），並完整驗證後才列出。其中的應用機密是明文，請像保管密碼一樣保管下載的檔案。" }), metadata([
         ["備份", createdId ? link(createdId, ["backups", createdId], { class: "mono", dataset: { focus: "result-backup" } }) : "—"],
@@ -3087,9 +3250,12 @@
         ["應用", list(result.apps).map(id => appName(str(id))).join("、") || "—"]
       ]), timingTable(result.timing, "backup"));
       if (deleted.length) {
-        body.push(infoNotice(`已依保留原則刪除 ${deleted.length} 份較舊的手動備份：${deleted.join("、")}。`, "info", "delete-outline"));
+        // A scheduled run deletes only older scheduled backups (the schedule's keep-last), never manual ones.
+        body.push(infoNotice(scheduled
+          ? `已依排程備份的保留份數刪除 ${deleted.length} 份較舊的排程備份：${deleted.join("、")}。`
+          : `已依保留原則刪除 ${deleted.length} 份較舊的手動備份：${deleted.join("、")}。`, "info", "delete-outline"));
       }
-      const backup = createdId ? state.backups?.find(item => item.id === createdId) || { id: createdId, type: "manual", created: job.finished, encrypted } : null;
+      const backup = createdId ? state.backups?.find(item => item.id === createdId) || { id: createdId, type: "manual", scheduled, created: job.finished, encrypted } : null;
       if (backup) {
         actions.push(button("下載備份", () => downloadBackup(backup), { primary: true, icon: "tray-arrow-down", focus: "result-download" }),
           link("查看備份", ["backups", createdId], { class: "button", dataset: { focus: "result-open" } }));
@@ -3132,6 +3298,9 @@
       }
     }
     if (error && job.state !== "succeeded") body.push(h("div", { class: "notice notice-error" }, icon("alert-circle-outline"), h("p", { text: str(error.message) })));
+    if (scheduled && job.state === "failed") {
+      body.push(h("p", { class: "muted", text: "系統不會自動重試失敗的排程備份；依上方原因處理後，下一次排程照常執行，也可以在「排程備份」按「立即執行一次」。" }));
+    }
     if (restore && job.state === "failed") {
       if (manualWork) {
         body.push(h("p", { class: "muted", text: safetyId
@@ -3181,7 +3350,9 @@
           actions.push(button("再次還原這份備份", () => go(["restore", backupId]), { primary: true, icon: "backup-restore", focus: "result-restore-again" }));
         }
       } else {
-        steps.push(h("li", { text: job.type === "backup" ? "確認應用已恢復執行後，重新建立備份。中斷的備份不會被列出。" : "重新執行驗證。" }));
+        steps.push(h("li", { text: scheduled
+          ? "確認應用已恢復執行。中斷的排程備份不會被列出；下一次排程照常執行，需要時也可以在「排程備份」按「立即執行一次」。"
+          : job.type === "backup" ? "確認應用已恢復執行後，重新建立備份。中斷的備份不會被列出。" : "重新執行驗證。" }));
       }
       steps.push(h("li", { text: "系統不會自動重做中斷的作業；若不確定應用狀態，請先聯絡系統管理員。" }));
       body.push(h("h4", { class: "subheading", text: "接下來怎麼做" }), h("ol", { class: "guidance" }, steps));
@@ -3231,7 +3402,12 @@
       const primary = !actions.some(item => item.classList?.contains("primary"));
       actions.push(link("查看總覽", ["overview"], { class: primary ? "button primary" : "button", dataset: { focus: "result-overview" } }));
     }
-    if (job.state === "interrupted" && job.type === "backup") actions.push(link("重新建立備份", ["create"], { class: "button", dataset: { focus: "result-create" } }));
+    if (job.state === "interrupted" && job.type === "backup") {
+      actions.push(scheduled ? link("前往排程備份", ["schedule"], { class: "button", dataset: { focus: "result-schedule" } })
+        : link("重新建立備份", ["create"], { class: "button", dataset: { focus: "result-create" } }));
+    }
+    // A scheduled run that failed is not retried automatically (CONTRACT §8): the schedule page can run it once now.
+    if (scheduled && job.state === "failed") actions.push(link("前往排程備份", ["schedule"], { class: "button", dataset: { focus: "result-schedule" } }));
     if (restore && job.state === "succeeded") actions.push(link("查看總覽", ["overview"], { class: "button", dataset: { focus: "result-overview" } }));
     return [h("section", { class: `card result result-${tone}`, "aria-labelledby": "result-heading" },
       h("div", { class: "card-head" }, h("div", { class: "result-title" }, tile(glyph, true), h("h3", { id: "result-heading", text: title }))),
@@ -3456,7 +3632,7 @@
           h("span", { class: "choice-body" }, h("strong", { text: "預設加密備份" }),
             h("small", { id: "encrypt-default-help", text: "開啟時，新的備份預設以這台設備的金鑰加密，「還原前自動備份」也一律加密（建議）。建立備份時仍可為單一備份取消加密；關閉需要另外確認風險。" }))),
         settings.problem ? infoNotice(str(settings.problem), "warn", "alert-outline") : null,
-        on ? null : infoNotice(`目前新的備份與還原前自動備份都不加密。${plaintextWarning()}`, "warn", "lock-open-variant-outline"),
+        on ? null : infoNotice(`目前新的備份、還原前自動備份${scheduleOn() ? "與排程備份" : ""}都不加密。${plaintextWarning()}`, "warn", "lock-open-variant-outline"),
         on && !state.status?.key ? h("p", { class: "muted", text: "加密的備份需要這台設備的加密金鑰；請在下方建立金鑰並保存緊急金鑰。" }) : null,
         ui.notice ? infoNotice(ui.notice, "ok", "check-circle-outline") : null,
         ui.error ? errorNotice(ui.error) : null,
@@ -3475,7 +3651,8 @@
         const data = await call("settings-set", request);
         requireShape(isObject(data.settings) && typeof data.settings.encrypt_by_default === "boolean", "設定");
         if (state.status) state.status.settings = data.settings;
-        ui.notice = data.settings.encrypt_by_default ? "已開啟「預設加密備份」。" : "已關閉「預設加密備份」：新的備份與還原前自動備份都不加密。";
+        ui.notice = data.settings.encrypt_by_default ? "已開啟「預設加密備份」。"
+          : `已關閉「預設加密備份」：新的備份、還原前自動備份${scheduleOn() ? "與排程備份" : ""}都不加密。`;
         announce(ui.notice);
       } finally {
         ui.busy = false;
@@ -3486,12 +3663,15 @@
       save({ encrypt_by_default: true }).catch(error => { ui.error = error; render(); });
       return;
     }
+    // A schedule that is on encrypts as 預設加密備份 says when each run starts: its runs are named with their days and time.
+    const schedule = scheduleOn() ? statusSchedule() : null;
     confirmDialog({
       title: "關閉預設加密備份？",
       body: [
         h("div", { class: "notice notice-warn" }, icon("alert-outline"), h("p", { text: plaintextWarning() })),
         h("ul", { class: "bullet-list warning-list" },
           h("li", { text: "關閉後，新的備份預設不加密，「還原前自動備份」也不加密。" }),
+          schedule ? h("li", { text: `排程備份（${timeText(schedule)}）也會不加密。` }) : null,
           h("li", { text: "已建立的備份不受影響；每份備份仍可在建立時選擇加密。" }),
           h("li", { text: "這項變更會記錄在系統日誌。" }))
       ],
@@ -3566,7 +3746,21 @@
         keys.imported ? infoNotice(`已匯入金鑰 ${keys.imported}。`, "ok", "check-circle-outline") : null,
         keys.importError ? errorNotice(keys.importError) : null,
         h("div", { class: "button-group" }, button(keys.importBusy ? "正在匯入…" : "匯入金鑰", importKey, { icon: "key-variant", disabled: keys.importBusy, focus: "import-submit" }))));
-    return [head, settingsCard(), deviceCard, h("div", { class: "grid two" }, importedCard, importCard)];
+    return [head, scheduleReturn(), settingsCard(), deviceCard, h("div", { class: "grid two" }, importedCard, importCard)];
+  }
+
+  // The schedule's kit step sent the administrator here (CONTRACT §11): say what is still needed and offer the way
+  // back; the schedule's unsaved choices are kept.
+  function scheduleReturn() {
+    if (!state.schedule.fromSchedule) return null;
+    const ready = scheduleGate().blocked === null;
+    const back = link([icon("arrow-left"), h("span", { text: "回到排程備份" })], ["schedule"], {
+      class: ready ? "button small primary" : "button small", dataset: { focus: "keys-back-schedule" }
+    });
+    return infoNotice(ready ? "緊急金鑰已保存，現在可以開啟排程備份。"
+      : state.status?.key ? "開啟排程備份前，請先在下方顯示、下載並確認保存緊急金鑰。"
+        : "開啟排程備份前，請先在下方建立加密金鑰，並下載、確認保存緊急金鑰。",
+    ready ? "ok" : "info", ready ? "check-circle-outline" : "calendar-clock-outline", h("div", { class: "button-group" }, back));
   }
 
   function kitCard(key) {
@@ -3879,6 +4073,8 @@
     const backup = state.backups?.find(entry => entry.id === item.id) || item;
     const apps = list(item.apps).map(app => str(app?.name || app?.id)).filter(Boolean).join("、") || appsText(backup);
     const id = `${prefix}-${item.id}`;
+    // BackupBrief says `scheduled` in the retention commands' lists; the backup list says it otherwise.
+    const kind = backupKind({ type: item.type || backup.type, scheduled: typeof item.scheduled === "boolean" ? item.scheduled : backup.scheduled });
     return h("li", { class: disabled ? "item-row pick is-disabled" : "item-row pick", dataset: { brief: item.id } },
       h("input", {
         type: "checkbox", id, checked, disabled: disabled || state.cleanup.applyBusy,
@@ -3886,10 +4082,10 @@
         on: { change: event => { onToggle(event.target.checked); updateCleanupFooter(); } }
       }),
       h("label", { class: "item-main", htmlFor: id },
-        h("span", { class: "item-title", text: backupTitle({ type: item.type, created: item.created || backup.created || backup.uploaded_at }) }),
+        h("span", { class: "item-title", text: backupTitle({ type: item.type || backup.type, scheduled: kind === "scheduled", created: item.created || backup.created || backup.uploaded_at }) }),
         h("span", { id: `${id}-meta`, class: "secondary", text: [apps, bytes(item.size ?? backup.size), item.note].filter(Boolean).join(" · ") }),
         reason ? h("span", { class: "secondary pick-reason", text: reason }) : null),
-      h("span", { class: "chips" }, typeChip(item.type || backup.type), backup.encrypted === false ? chip("未加密", "warn", "lock-open-variant-outline") : null));
+      h("span", { class: "chips" }, typeChip(kind), backup.encrypted === false ? chip("未加密", "warn", "lock-open-variant-outline") : null));
   }
 
   function viewCleanup() {
@@ -3939,6 +4135,7 @@
         policyChanged() ? chip("尚未儲存", "warn") : chip("已儲存", "ok", "check-circle-outline")),
       h("div", { class: "card-body" },
         h("p", { class: "muted", text: "只計算與刪除「手動」備份：一份備份含多個應用時，要超出每個應用的保留份數才會刪除。還原前自動備份維持原規則（每個應用最新 3 份），上傳的備份只會在你勾選時刪除。儲存後，每次手動備份成功都會依這個原則刪除較舊的手動備份。" }),
+        scheduleKeepNote(),
         plan.policy_problem ? infoNotice(str(plan.policy_problem), "warn", "alert-outline") : null,
         h("div", { class: "field policy-default" }, h("span", { class: "field-label", id: "keep-default-label", text: "預設（未個別設定的應用）" }),
           keepControl({ id: "keep-default", value: draft.default_keep_last, inherit: null, label: "預設保留原則",
@@ -3983,6 +4180,15 @@
       cleanup.applied ? cleanupResult(cleanup.applied) : null,
       usageCard, policyCard, planCard, otherCard, protectedCard,
       h("div", { id: "cleanup-footer", class: "form-footer button-group cleanup-footer" }, cleanupFooter())];
+  }
+
+  // 排程備份 has its own keep-last (CONTRACT §8 "two pools"): the manual policy never counts or deletes those backups.
+  function scheduleKeepNote() {
+    if (!scheduleSupported()) return null;
+    const keep = statusSchedule()?.keep_last;
+    const rule = keep === null ? "目前保留全部排程備份" : Number.isInteger(keep) ? `目前每個應用保留最新 ${keep} 份` : null;
+    return h("p", { class: "muted schedule-keep-note" }, `排程備份有自己的保留份數${rule ? `（${rule}）` : ""}，這裡的原則不會計算或刪除它們；要調整請到`,
+      link("排程備份", ["schedule"], { dataset: { focus: "cleanup-schedule" } }), "。");
   }
 
   function cleanupFooter() {
@@ -4069,6 +4275,691 @@
         result.policy_problem ? infoNotice(str(result.policy_problem), "warn", "alert-outline") : null,
         skipped.length ? [h("h4", { class: "subheading", text: `略過 ${skipped.length} 份` }),
           checkList(skipped.map(item => ({ id: item.id, status: "warn", message: `${item.id}：${str(item.reason)}` })), "略過的備份")] : null));
+  }
+
+  // ------------------------------------------------------------------ 排程備份 (scheduled backups)
+
+  // 排程備份 (docs/backup/CONTRACT.md sections 7, 8, 11): the settings come from schedule-get and are saved only after
+  // a preview of the next runs and of what the next successful run would delete (`schedule-set` without, then with
+  // `confirm`; nothing is written before the confirmation). Times are the device's (`timezone`); 「立即執行一次」 runs the
+  // saved settings once now and is followed like a manual backup.
+
+  const LOCAL_RE = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/;
+
+  // `local` (YYYY-MM-DDTHH:MM, a wall time) as 2026/11/18（週三）03:00, or 2026/11/18 03:00 without the weekday.
+  function deviceTime(local, { weekday = true } = {}) {
+    const match = LOCAL_RE.exec(str(local));
+    if (!match) return "—";
+    const [, year, month, day, hour, minute] = match;
+    if (!weekday) return `${year}/${month}/${day} ${hour}:${minute}`;
+    const name = "日一二三四五六"[new Date(Date.UTC(Number(year), Number(month) - 1, Number(day))).getUTCDay()];
+    return `${year}/${month}/${day}（週${name}）${hour}:${minute}`;
+  }
+
+  // Minutes east of UTC as the engine writes them: +08:00.
+  function offsetText(minutes) {
+    const value = Math.abs(minutes);
+    return `${minutes < 0 ? "-" : "+"}${String(Math.floor(value / 60)).padStart(2, "0")}:${String(value % 60).padStart(2, "0")}`;
+  }
+
+  // The wall time of an instant (YYYY-MM-DDTHH:MM) in a zone's formatter (deviceZone), or in this browser's zone.
+  function wallTime(instant, formatter) {
+    const pad = value => String(value).padStart(2, "0");
+    if (!formatter) {
+      return `${instant.getFullYear()}-${pad(instant.getMonth() + 1)}-${pad(instant.getDate())}T${pad(instant.getHours())}:${pad(instant.getMinutes())}`;
+    }
+    const parts = Object.fromEntries(formatter.formatToParts(instant).map(part => [part.type, part.value]));
+    return `${parts.year}-${parts.month}-${parts.day}T${parts.hour === "24" ? "00" : parts.hour}:${parts.minute}`;
+  }
+
+  // Minutes east of UTC that a formatter's zone keeps at an instant.
+  function zoneOffset(formatter, instant) {
+    const [, year, month, day, hour, minute] = LOCAL_RE.exec(wallTime(instant, formatter)).map(Number);
+    return Math.round((Date.UTC(year, month - 1, day, hour, minute) - Math.floor(instant.getTime() / 60000) * 60000) / 60000);
+  }
+
+  // The device's zone (CONTRACT §7 `timezone{name, utc_offset}`) as an Intl formatter: only an IANA name this browser
+  // knows and that keeps the engine's offset now (a zone file whose name is not what /etc/localtime holds is not
+  // trusted); null otherwise. Times without the engine's `local` text are converted with it.
+  const zoneFormatters = new Map();
+  const deviceZoneInfo = () => [statusSchedule()?.timezone, state.schedule.data?.timezone].find(isObject) || null;
+  function deviceZone() {
+    const zone = deviceZoneInfo();
+    const name = str(zone?.name);
+    if (!/^[A-Za-z][A-Za-z0-9_+-]*(?:\/[A-Za-z0-9_+-]+)*$/.test(name) || name.length > 64 || name === "localtime") return null;
+    const key = `${name} ${str(zone.utc_offset)}`;
+    if (!zoneFormatters.has(key)) {
+      let formatter = null;
+      try {
+        formatter = new Intl.DateTimeFormat("en-US", {
+          timeZone: name, hourCycle: "h23", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit"
+        });
+        if (isString(zone.utc_offset) && offsetText(zoneOffset(formatter, new Date())) !== zone.utc_offset) formatter = null;
+      } catch { formatter = null; /* a name this browser does not know */ }
+      zoneFormatters.set(key, formatter);
+    }
+    return zoneFormatters.get(key);
+  }
+
+  // Whether this browser keeps another time than the device at an instant (the device's offset then, else now).
+  function zonesDiffer(instant) {
+    const parsed = new Date(str(instant));
+    const when = Number.isNaN(parsed.getTime()) ? new Date() : parsed;
+    const zone = deviceZone();
+    const device = zone ? offsetText(zoneOffset(zone, when)) : str(deviceZoneInfo()?.utc_offset);
+    return device !== offsetText(-when.getTimezoneOffset());
+  }
+
+  // A time of the schedule as the device keeps it: the engine's `local` text, else the instant in the device's zone.
+  // When neither is known here it is this computer's time and says so (`where`: "device" | "computer").
+  function scheduleClock(instant, local, { weekday = true } = {}) {
+    if (LOCAL_RE.test(str(local))) return { text: deviceTime(local, { weekday }), where: "device" };
+    const parsed = new Date(str(instant));
+    if (!isString(instant) || !instant || Number.isNaN(parsed.getTime())) return { text: "—", where: "device" };
+    const zone = deviceZone();
+    return { text: deviceTime(wallTime(parsed, zone), { weekday }), where: zone ? "device" : "computer" };
+  }
+
+  // Next to times of this computer (活動紀錄, the job view): 設備時間 when the device keeps another time, and always
+  // 你電腦上的時間 for a time the device's zone could not give.
+  const clockLabel = (clock, instant) => (clock.where === "computer" ? "你電腦上的時間" : zonesDiffer(instant) ? "設備時間" : "");
+  // On the schedule's own surfaces every time is the device's; only a computer's time is labeled.
+  const scheduleText = (instant, local) => {
+    const clock = scheduleClock(instant, local);
+    return clock.where === "computer" ? `${clock.text}（你電腦上的時間）` : clock.text;
+  };
+
+  // 每天, or 每週一、三、五 (week order).
+  function daysText(days) {
+    const chosen = DAY_IDS.filter(day => list(days).includes(day));
+    if (!chosen.length) return "—";
+    return chosen.length === DAY_IDS.length ? "每天" : `每週${chosen.map(day => DAY_NAMES[day]).join("、")}`;
+  }
+
+  const timeText = settings => `${daysText(settings?.days)} ${TIME_RE.test(str(settings?.time)) ? settings.time : "—"}`;
+  const scheduleAppsText = apps => (apps === "all" ? "全部應用（之後新增的也會包含）"
+    : list(apps).filter(isString).map(appName).join("、") || "—");
+  const scheduledKeepText = keep => (Number.isInteger(keep) ? `每個應用保留最新 ${keep} 份排程備份` : "保留全部排程備份");
+
+  // How a scheduled run started (`params.schedule` of its job); the slot in device time (the job record has no
+  // local text: the device's zone converts it).
+  function triggerText(info) {
+    const label = TRIGGER_TEXT[info?.trigger] || "排程備份";
+    if (!isString(info?.slot) || !info.slot) return label;
+    const clock = scheduleClock(info.slot, null);
+    const where = clockLabel(clock, info.slot);
+    return `${label}（排程時間 ${clock.text}${where ? `，${where}` : ""}）`;
+  }
+
+  // The device's zone for people: Asia/Taipei，UTC+08:00 (a zone without a name only by its offset).
+  function zoneText(zone) {
+    const offset = isString(zone?.utc_offset) && /^[+-]\d{2}:\d{2}$/.test(zone.utc_offset) ? `UTC${zone.utc_offset}` : "";
+    const name = isString(zone?.name) && zone.name && zone.name !== "localtime" ? zone.name : "";
+    return [name, offset].filter(Boolean).join("，") || "這台設備的時區";
+  }
+
+  // The browser's UTC offset at an instant, written like the engine's (+08:00).
+  const browserOffset = instant => offsetText(-instant.getTimezoneOffset());
+
+  // Said only when the computer in front of the administrator keeps another time than the device (CONTRACT §11): the
+  // next run in both times.
+  function zoneHint(zone, runs) {
+    const next = list(runs).find(run => isObject(run) && isString(run.at) && isString(run.utc_offset) && isString(run.local));
+    const instant = next ? new Date(next.at) : new Date();
+    const deviceOffset = next ? next.utc_offset : zone?.utc_offset;
+    if (!isString(deviceOffset) || Number.isNaN(instant.getTime()) || browserOffset(instant) === deviceOffset) return null;
+    let browserZone = "";
+    try { browserZone = str(Intl.DateTimeFormat().resolvedOptions().timeZone); } catch { /* an unnamed zone */ }
+    const here = [browserZone, `UTC${browserOffset(instant)}`].filter(Boolean).join("，");
+    return h("div", { class: "notice notice-info zone-hint", id: "schedule-zone-hint" }, icon("clock-alert-outline"),
+      h("p", { text: `你目前使用的電腦時區（${here}）和這台設備不同，排程時間一律以設備的時間為準。${next
+        ? `例如下一次排程在設備時間 ${deviceTime(next.local)}，也就是你這裡的 ${date(next.at)}。` : ""}` }));
+  }
+
+  // What turning the schedule on needs (CONTRACT §7 Gate): while 預設加密備份 is on, the device key and a confirmed
+  // emergency kit. The newer of schedule-get's gate and the status (which every key step reloads) decides.
+  function scheduleGate() {
+    const data = state.schedule.data;
+    const gate = isObject(data?.gate) ? data.gate : null;
+    if (state.status && settingsOf() && (!gate || state.statusAt > state.schedule.at)) {
+      const encrypt = encryptByDefault();
+      const key = state.status.key;
+      return { encrypt, blocked: encrypt && !key ? "no-device-key" : encrypt && !key.kit_confirmed ? "kit-unconfirmed" : null };
+    }
+    if (gate) return { encrypt: gate.encrypt !== false, blocked: ["no-device-key", "kit-unconfirmed"].includes(gate.blocked) ? gate.blocked : null };
+    return { encrypt: true, blocked: null };
+  }
+
+  // The form's draft of `Schedule` (checkbox sets, the typed keep-last text and the order of the saved app list).
+  function draftFrom(settings) {
+    const days = DAY_IDS.filter(day => list(settings?.days).includes(day));
+    const apps = settings?.apps === "all" ? null : list(settings?.apps).filter(isString);
+    const keep = settings?.keep_last;
+    const time = str(settings?.time);
+    return {
+      enabled: settings?.enabled === true,
+      weekly: days.length > 0 && days.length < DAY_IDS.length,
+      days: new Set(days.length ? days : DAY_IDS),
+      time: TIME_RE.test(time) && Number(time.slice(3)) % 5 === 0 ? time : "03:00",
+      some: apps !== null,
+      apps: new Set(apps || []),
+      savedApps: apps || [],
+      includeImages: settings?.include_images === true,
+      keepAll: keep === null,
+      keep: Number.isInteger(keep) && keep >= 1 && keep <= KEEP_MAX ? keep : SCHEDULE_KEEP,
+      keepText: String(Number.isInteger(keep) ? keep : SCHEDULE_KEEP)
+    };
+  }
+
+  // Apps in this device's catalog order, then saved ids it no longer has (shown so they can be unchecked).
+  function draftApps(draft) {
+    const known = list(state.status?.apps).map(app => app.id);
+    return [...known, ...draft.savedApps.filter(id => !known.includes(id))].filter(id => draft.apps.has(id));
+  }
+
+  const keepValid = value => /^\d{1,4}$/.test(str(value).trim()) && Number(value) >= 1 && Number(value) <= KEEP_MAX;
+
+  // The request's `schedule`: exactly the six settings (CONTRACT §7; `updated`/`armed_at` are the engine's).
+  function scheduleRequest(draft) {
+    return {
+      enabled: draft.enabled,
+      days: draft.weekly ? DAY_IDS.filter(day => draft.days.has(day)) : [...DAY_IDS],
+      time: draft.time,
+      apps: draft.some ? draftApps(draft) : "all",
+      include_images: draft.includeImages,
+      keep_last: draft.keepAll ? null : draft.keep
+    };
+  }
+
+  const settingsKey = settings => JSON.stringify([settings?.enabled === true, DAY_IDS.filter(day => list(settings?.days).includes(day)),
+    str(settings?.time), settings?.apps === "all" ? "all" : list(settings?.apps).filter(isString).sort(),
+    settings?.include_images === true, Number.isInteger(settings?.keep_last) ? settings.keep_last : null]);
+  const scheduleChanged = () => {
+    const { data, draft } = state.schedule;
+    return Boolean(data && draft) && settingsKey(scheduleRequest(draft)) !== settingsKey(data.schedule);
+  };
+
+  function draftProblem(draft) {
+    if (draft.weekly && !DAY_IDS.some(day => draft.days.has(day))) return "請至少選擇一天。";
+    if (draft.some) {
+      const apps = draftApps(draft);
+      if (!apps.length) return "請至少選擇一個應用。";
+      if (apps.length > SCHEDULE_APPS_MAX) return `最多可以選擇 ${SCHEDULE_APPS_MAX} 個應用。`;
+    }
+    if (!draft.keepAll && !keepValid(draft.keepText)) return "保留份數必須是 1 到 1000 的整數。";
+    return null;
+  }
+
+  // The kit step blocks only a schedule that would be on (turning it off is never gated).
+  const scheduleBlocked = () => (state.schedule.draft?.enabled ? scheduleGate().blocked || state.schedule.kitStep : null);
+
+  function changeDraft(change) {
+    const ui = state.schedule;
+    change(ui.draft);
+    ui.touched = true;
+    ui.notice = null;
+    ui.saveError = null;
+    render();
+  }
+
+  // The overview card (status.schedule): on/off, the next run and the last run.
+  function scheduleStat() {
+    const status = state.status;
+    const summary = statusSchedule();
+    let value;
+    let action = "設定排程備份";
+    const lines = [];
+    if (!Object.hasOwn(status, "schedule")) {
+      value = "不支援";
+      lines.push(`${SCHEDULE_UNSUPPORTED}。`);
+      action = "查看說明";
+    } else if (!summary) {
+      value = "無法讀取";
+      lines.push("目前無法讀取排程狀態，請稍後再試。");
+      action = "查看排程備份";
+    } else if (summary.problem) {
+      value = "已暫停";
+      lines.push("排程需要處理，請查看上方的提示。");
+    } else if (summary.enabled) {
+      value = "已開啟";
+      lines.push(`${timeText(summary)} · ${summary.apps === "all" ? "全部應用" : `${list(summary.apps).length} 個應用`}`);
+      if (isObject(summary.next_run)) lines.push(`下次 ${deviceTime(summary.next_run.local)}`);
+    } else {
+      value = "已關閉";
+      lines.push(summary.saved ? "目前不會自動建立備份。" : "開啟後，會在你選的時間自動備份應用。");
+      if (!summary.saved) action = "開啟排程備份";
+    }
+    const last = isObject(summary?.last_run) ? summary.last_run : null;
+    if (last) lines.push(`上次 ${lastRunTime(last)} · ${runResult(last)}`);
+    if (isObject(summary?.waiting)) lines.push(`${deviceTime(summary.waiting.local)} 的排程備份等其他作業完成後開始`);
+    return h("section", { class: "card stat", "aria-label": "排程備份", dataset: { stat: "schedule" } }, tile("calendar-clock-outline"),
+      h("div", { class: "stat-main" }, h("p", { class: "stat-label", text: "排程備份" }), h("p", { class: "stat-value", text: value }),
+        lines.map(line => h("p", { class: "secondary", text: line })),
+        link(action, ["schedule"], { class: "text-link", dataset: { focus: "stat-schedule" } })));
+  }
+
+  const runResult = last => RUN_RESULTS[last.result] || RUN_RESULTS.unknown;
+  // A slot's run by its slot, 立即執行一次 by when it started; both in device time (CONTRACT §7 LastRun).
+  const lastRunTime = last => (last.local ? deviceTime(last.local) : scheduleText(last.started, last.started_local));
+
+  function viewSchedule() {
+    const ui = state.schedule;
+    const back = backLink("返回總覽", ["overview"]);
+    const head = viewTitle("排程備份", "在你選的日子與時間自動建立備份，不必每次手動操作。排程備份和手動備份一樣保存在這台設備，並依「預設加密備份」加密。");
+    const status = state.status;
+    if (!status) return [back, head, state.statusError ? errorNotice(state.statusError, { retry: () => loadStatus() }) : loadingCard("正在載入備份狀態…")];
+    if (scheduleSupported() === false) {
+      return [back, head, h("section", { class: "card" }, emptyState("calendar-remove-outline", SCHEDULE_UNSUPPORTED,
+        `${UNSUPPORTED}更新後，就可以在這裡設定每天或每週自動備份。`))];
+    }
+    const data = ui.data;
+    if (!data || !ui.draft) {
+      return [back, head, ui.error ? errorNotice(ui.error, { retry: () => loadSchedule() }) : loadingCard("正在載入排程設定…")];
+    }
+    // The settings problem is the banner's when the status says the same; a fresher one is said here.
+    const problem = str(data.schedule.problem);
+    const bannerSays = str(statusSchedule()?.attention?.message);
+    return [back, head,
+      ui.notice ? infoNotice(ui.notice, "ok", "check-circle-outline") : null,
+      ui.error ? errorNotice(ui.error, { retry: () => loadSchedule() }) : null,
+      problem && problem !== bannerSays ? infoNotice(problem, "warn", "alert-outline") : null,
+      status.apps.length ? null : infoNotice("這台設備還沒有可備份的應用。排程開啟時，沒有應用就不會建立備份；請先在「應用設定」安裝應用的設定。", "warn", "package-variant-closed"),
+      scheduleStatusCard(data), scheduleForm(data)];
+  }
+
+  // A settings file the engine cannot use: the form shows the defaults (CONTRACT §7 Schedule `defaults`), not what was
+  // saved, and the settings have to be saved again.
+  const unusableSettings = settings => settings?.defaults === true && Boolean(str(settings.problem));
+
+  function scheduleStatusCard(data) {
+    const settings = data.schedule;
+    const problem = str(settings.problem);
+    const on = settings.enabled === true;
+    const runs = list(data.next_runs).filter(run => isObject(run) && isString(run.local));
+    const last = isObject(data.last_run) ? data.last_run : null;
+    const waiting = isObject(data.waiting) ? data.waiting : null;
+    const waitingJob = isString(waiting?.job_id) && JOB_ID_RE.test(waiting.job_id) ? waiting.job_id : null;
+    return h("section", { class: "card", "aria-labelledby": "schedule-state-heading" },
+      h("div", { class: "card-head" }, h("div", { class: "result-title" }, tile("calendar-clock-outline", true),
+        h("h3", { id: "schedule-state-heading", text: "目前狀態" })),
+      problem ? chip("已暫停", "warn", "alert-outline") : on ? chip("已開啟", "ok", "check-circle-outline") : chip("已關閉", "neutral")),
+      h("div", { class: "card-body" },
+        waiting ? infoNotice(`${deviceTime(waiting.local)} 的排程備份正在等其他作業完成，會在它結束後 5 分鐘內開始。`, "info", "progress-clock",
+          waitingJob ? h("div", { class: "button-group" }, link("查看進行中的作業", ["jobs", waitingJob], { class: "button small", dataset: { focus: "schedule-waiting-job" } })) : null) : null,
+        metadata([
+          ["排程", on ? `${timeText(settings)} · ${scheduleAppsText(settings.apps)}`
+            : unusableSettings(settings) ? "已暫停：設定無法使用，需要重新儲存"
+              : settings.saved ? "關閉：不會自動建立備份" : "尚未設定：開啟後會在你選的時間自動備份"],
+          ["接下來", runs.length ? h("ul", { class: "path-list schedule-runs", "aria-label": "接下來的排程" },
+            runs.map(run => h("li", { text: deviceTime(run.local) }))) : on && problem ? "已暫停，排程需要處理" : "—"],
+          ["上次執行", last ? lastRunNode(last) : "還沒有執行過"],
+          on ? ["排程檢查", timerText(isObject(data.timer) ? data.timer : {}, [data.attention, statusSchedule()?.attention])] : null,
+          ["設備時區", zoneText(data.timezone)]
+        ]),
+        h("p", { class: "muted" }, "每一次排程備份與沒有執行的排程，都記錄在",
+          link("活動紀錄", ["activity"], { dataset: { focus: "schedule-activity" } }), "。")));
+  }
+
+  function lastRunNode(last) {
+    const when = lastRunTime(last);
+    const how = last.trigger && last.trigger !== "on-time" ? `（${TRIGGER_TEXT[last.trigger] || "排程備份"}）` : "";
+    const jobId = isString(last.job_id) && JOB_ID_RE.test(last.job_id) ? last.job_id : null;
+    const backupId = isString(last.backup_id) && BACKUP_ID_RE.test(last.backup_id) ? last.backup_id : null;
+    const skipped = skippedApps(last);
+    const failed = ["failed", "interrupted", "unknown"].includes(last.result);
+    return h("span", { class: "last-run" }, `${when} · ${runResult(last)}${how}`,
+      skipped.length ? h("span", { class: "secondary", text: `沒有包含${quoted(skipped.map(item => item.name))}` }) : null,
+      failed && isObject(last.error) && last.error.message ? h("span", { class: "secondary", text: str(last.error.message) }) : null,
+      jobId || backupId ? h("span", { class: "button-group last-run-links" },
+        jobId ? link("查看作業", ["jobs", jobId], { dataset: { focus: "schedule-last-job" } }) : null,
+        backupId ? link("查看備份", ["backups", backupId], { dataset: { focus: "schedule-last-backup" } }) : null) : null);
+  }
+
+  // The schedule checks (the timer, every 5 minutes): what systemd and the tick file's age say. The engine decides
+  // whether they run (`attention.code` timer-inactive, also when the timer has been active for 15 minutes without a
+  // check): this row says the same as the banner, and 正常 only after a recorded check.
+  function timerText(timer, attentions) {
+    if (timer.active === false || attentions.some(item => item?.code === "timer-inactive")) return "沒有在執行：排程備份不會自動開始";
+    const age = timer.last_tick_age;
+    if (isNumber(age)) {
+      if (age > 15 * 60) return `已經 ${Math.round(age / 60)} 分鐘沒有檢查`;
+      return age < 60 ? "正常，剛剛檢查過（每 5 分鐘一次）" : `正常，${Math.round(age / 60)} 分鐘前檢查過（每 5 分鐘一次）`;
+    }
+    return timer.active === true ? "等待第一次檢查（每 5 分鐘一次）" : "無法確認";
+  }
+
+  // One radio as a card-like choice, like the other choices of this page.
+  function radioChoice({ name, value, checked, label, help, focus, onChange }) {
+    const id = `${name}-${value}`;
+    return h("label", { class: "choice", htmlFor: id },
+      h("input", { type: "radio", id, name, value, checked, disabled: state.schedule.busy, "aria-describedby": `${id}-help`,
+        dataset: { focus }, on: { change: event => { if (event.target.checked) changeDraft(onChange); } } }),
+      h("span", { class: "choice-body" }, h("strong", { text: label }), h("small", { id: `${id}-help`, text: help })));
+  }
+
+  function scheduleForm(data) {
+    const ui = state.schedule;
+    const draft = ui.draft;
+    const busy = ui.busy;
+    const gate = scheduleGate();
+    const blocked = scheduleBlocked();
+    const apps = state.status.apps;
+    const [hour, minute] = draft.time.split(":");
+    const kitStep = blocked ? h("div", { class: "notice notice-key kit-step", id: "schedule-kit-step" }, icon("key-outline"),
+      h("div", { class: "notice-body" },
+        h("p", null, h("strong", { text: blocked === "no-device-key" ? "開啟排程備份前，請先建立加密金鑰並保存緊急金鑰。" : "開啟排程備份前，請先保存緊急金鑰。" })),
+        h("p", { text: "排程備份會在沒有人操作時自動建立加密的備份。萬一這台設備故障，沒有緊急金鑰，就無法在其他設備還原這些備份；所以要先把緊急金鑰保存到這台設備以外的地方。你在這裡的選擇會保留。" }),
+        h("div", { class: "button-group" }, link([icon("key-outline"), h("span", { text: "前往加密金鑰" })], ["keys"], {
+          class: "button small primary", dataset: { focus: "schedule-kit-keys" }, on: { click: () => { state.schedule.fromSchedule = true; } }
+        })))) : null;
+    const switchRow = h("div", { class: "form-section" },
+      h("label", { class: "choice switch-choice", htmlFor: "schedule-enabled" },
+        h("input", {
+          type: "checkbox", role: "switch", class: "switch", id: "schedule-enabled", checked: draft.enabled, disabled: busy,
+          "aria-describedby": "schedule-enabled-help", dataset: { focus: "schedule-enabled" },
+          on: { change: event => {
+            const on = event.target.checked;
+            changeDraft(next => { next.enabled = on; });
+            if (on && scheduleBlocked()) announce(scheduleBlocked() === "no-device-key" ? "開啟排程備份前，請先建立加密金鑰並保存緊急金鑰。" : "開啟排程備份前，請先保存緊急金鑰。");
+          } }
+        }),
+        h("span", { class: "choice-body" }, h("strong", { text: "自動建立排程備份" }),
+          h("small", { id: "schedule-enabled-help", text: "開啟後，會在下面選的日子與時間自動備份。關閉後不會再自動建立備份，已建立的排程備份會保留。" }))),
+      kitStep);
+    const weekdays = draft.weekly ? h("fieldset", { class: "weekdays" }, h("legend", { text: "每週的哪幾天" }),
+      h("div", { class: "weekday-list" }, WEEKDAYS.map(([day, name]) => h("label", { class: "weekday", htmlFor: `schedule-day-${day}` },
+        h("input", {
+          type: "checkbox", id: `schedule-day-${day}`, value: day, checked: draft.days.has(day), disabled: busy, dataset: { focus: `schedule-day-${day}` },
+          on: { change: event => changeDraft(next => { if (event.target.checked) next.days.add(day); else next.days.delete(day); }) }
+        }), h("span", { text: `週${name}` })))),
+      draft.weekly && !DAY_IDS.some(day => draft.days.has(day)) ? h("p", { class: "hint hint-error", text: "請至少選擇一天。" }) : null) : null;
+    const option = (value, selected) => h("option", { value, text: value, selected });
+    const timeField = h("div", { class: "field" },
+      h("span", { class: "field-label", id: "schedule-time-label", text: "時間" }),
+      h("div", { class: "time-picker", role: "group", "aria-labelledby": "schedule-time-label", "aria-describedby": "schedule-time-hint" },
+        h("select", {
+          id: "schedule-hour", "aria-label": "小時", disabled: busy, dataset: { focus: "schedule-hour" },
+          on: { change: event => changeDraft(next => { next.time = `${event.target.value}:${next.time.slice(3)}`; }) }
+        }, Array.from({ length: 24 }, (_, value) => String(value).padStart(2, "0")).map(value => option(value, value === hour))),
+        h("span", { class: "time-separator", "aria-hidden": "true", text: ":" }),
+        h("select", {
+          id: "schedule-minute", "aria-label": "分鐘", disabled: busy, dataset: { focus: "schedule-minute" },
+          on: { change: event => changeDraft(next => { next.time = `${next.time.slice(0, 2)}:${event.target.value}`; }) }
+        }, Array.from({ length: 12 }, (_, step) => String(step * 5).padStart(2, "0")).map(value => option(value, value === minute)))),
+      h("p", { id: "schedule-time-hint", class: "hint", text: `以這台設備的時間（${zoneText(data.timezone)}）為準，會在這個時間後 5 分鐘內開始。備份時每個應用會暫停寫入約 10–90 秒。` }),
+      zoneHint(data.timezone, data.next_runs));
+    // Fieldsets sit inside a plain section, so their legend reads like the other section titles below the divider.
+    const when = h("div", { class: "form-section" }, h("fieldset", { class: "form-group" }, h("legend", { text: "什麼時候備份" }),
+      h("div", { class: "choices" },
+        radioChoice({ name: "schedule-frequency", value: "daily", checked: !draft.weekly, label: "每天", focus: "schedule-daily",
+          help: "每天在同一個時間備份。", onChange: next => { next.weekly = false; } }),
+        radioChoice({ name: "schedule-frequency", value: "weekly", checked: draft.weekly, label: "每週指定的日子", focus: "schedule-weekly",
+          help: "只在勾選的星期幾備份。", onChange: next => { next.weekly = true; } })),
+      weekdays, timeField));
+    const appChoice = app => h("label", { class: "choice", htmlFor: `schedule-app-${app.id}` },
+      h("input", {
+        type: "checkbox", id: `schedule-app-${app.id}`, checked: draft.apps.has(app.id), disabled: busy, dataset: { focus: `schedule-app-${app.id}` },
+        on: { change: event => changeDraft(next => { if (event.target.checked) next.apps.add(app.id); else next.apps.delete(app.id); }) }
+      }),
+      h("span", { class: "choice-body" }, h("strong", { text: app.name || app.id }), app.description ? h("small", { text: app.description }) : null,
+        h("span", { class: "choice-meta" }, appStateChip(app.state),
+          selectable(app) ? app.state === "stopped" ? h("small", { text: "目前已停止；排程時若仍停止而無法備份（例如資料庫沒有在執行），會略過這個應用，結果標示「部分完成」。" }) : null
+            : h("small", { text: "目前無法備份；排程時若仍是這樣，會略過這個應用，結果標示「部分完成」。" }))));
+    // Saved ids this device no longer has: the engine refuses to save them (app-not-in-catalog), so they are named.
+    const gone = draft.savedApps.filter(id => !apps.some(app => app.id === id)).map(id => h("label", { class: "choice", htmlFor: `schedule-app-${id}` },
+      h("input", {
+        type: "checkbox", id: `schedule-app-${id}`, checked: draft.apps.has(id), disabled: busy, dataset: { focus: `schedule-app-${id}` },
+        on: { change: event => changeDraft(next => { if (event.target.checked) next.apps.add(id); else next.apps.delete(id); }) }
+      }),
+      h("span", { class: "choice-body" }, h("strong", { class: "mono", text: id }),
+        h("small", { class: "hint-error", text: "這台設備已沒有這個應用的設定；請取消勾選後再儲存。" }))));
+    const appsSection = h("div", { class: "form-section" }, h("fieldset", { class: "form-group" }, h("legend", { text: "要備份哪些應用" }),
+      h("div", { class: "choices" },
+        radioChoice({ name: "schedule-apps", value: "all", checked: !draft.some, label: "全部應用（之後新增的也會包含）", focus: "schedule-apps-all",
+          help: "每次都備份這台設備當時設定的所有應用。尚未部署、狀態異常，或已停止而無法備份的應用會略過，結果標示「部分完成」。", onChange: next => { next.some = false; } }),
+        radioChoice({ name: "schedule-apps", value: "some", checked: draft.some, label: "只備份選擇的應用", focus: "schedule-apps-some",
+          help: "只備份下面勾選的應用；之後新增的應用不會自動加入。", onChange: next => {
+            next.some = true;
+            if (!next.apps.size) apps.filter(selectable).forEach(app => next.apps.add(app.id));
+          } })),
+      draft.some ? h("fieldset", { class: "schedule-apps" }, h("legend", { text: "選擇的應用" }),
+        h("div", { class: "choices" }, apps.map(appChoice), gone),
+        draftApps(draft).length ? null : h("p", { class: "hint hint-error", text: "請至少選擇一個應用。" })) : null));
+    const options = h("div", { class: "form-section" }, h("h3", { text: "選項" }),
+      h("label", { class: "choice", htmlFor: "schedule-images" },
+        h("input", {
+          type: "checkbox", id: "schedule-images", checked: draft.includeImages, disabled: busy, "aria-describedby": "schedule-images-help",
+          dataset: { focus: "schedule-images" }, on: { change: event => changeDraft(next => { next.includeImages = event.target.checked; }) }
+        }),
+        h("span", { class: "choice-body" }, h("strong", { text: "包含容器映像" }),
+          h("small", { id: "schedule-images-help", text: "勾選後，每一份排程備份都會包含應用使用的容器映像。每個映像可能有數百 MB，每天備份會很快用掉這台設備的空間；通常不需要勾選。" }))),
+      h("p", { class: "schedule-encryption" }, icon(gate.encrypt ? "lock-outline" : "lock-open-variant-outline"),
+        h("span", null, gate.encrypt
+          ? "加密：依「預設加密備份」（目前開啟），排程備份會以這台設備的金鑰加密。"
+          : "加密：「預設加密備份」目前關閉，排程備份不會加密，應用機密會以明文保存。", " ",
+        link("加密設定", ["keys"], { dataset: { focus: "schedule-encryption-settings" } }))));
+    const keepInvalid = !draft.keepAll && !keepValid(draft.keepText);
+    const keep = h("div", { class: "form-section" }, h("h3", { id: "schedule-keep-label", text: "保留最新幾份排程備份" }),
+      h("div", { class: "keep-control schedule-keep", role: "group", "aria-labelledby": "schedule-keep-label" },
+        h("select", {
+          id: "schedule-keep-mode", "aria-label": "排程備份的保留方式", "aria-describedby": "schedule-keep-help", disabled: busy,
+          dataset: { focus: "schedule-keep-mode" }, on: { change: event => changeDraft(next => { next.keepAll = event.target.value === "all"; }) }
+        }, [["last", "保留最新幾份"], ["all", "全部保留"]].map(([value, label]) => h("option", { value, text: label, selected: (value === "all") === draft.keepAll }))),
+        draft.keepAll ? null : h("input", {
+          id: "schedule-keep", type: "number", min: 1, max: KEEP_MAX, step: 1, inputmode: "numeric", value: draft.keepText, disabled: busy,
+          "aria-label": "每個應用保留最新幾份排程備份", "aria-describedby": "schedule-keep-help", "aria-invalid": String(keepInvalid),
+          dataset: { focus: "schedule-keep" },
+          // Typing updates only the footer (a rebuild would replace the field); leaving the field renders the view.
+          on: { input: event => {
+            ui.draft.keepText = event.target.value;
+            if (keepValid(event.target.value)) ui.draft.keep = Number(event.target.value.trim());
+            ui.touched = true;
+            event.target.setAttribute("aria-invalid", String(!keepValid(event.target.value)));
+            updateScheduleFooter();
+          }, change: () => render() }
+        }),
+        draft.keepAll ? null : h("span", { class: "muted", text: "份" })),
+      h("p", { id: "schedule-keep-help", class: "hint" },
+        draft.keepAll ? "保留所有排程備份，不會自動刪除；需要時可以到「清理備份」手動刪除。"
+          : "每個應用保留最新的排程備份，較舊的會在下一次排程備份成功後刪除。",
+        " ", h("strong", { text: "手動備份、還原前自動備份與上傳的備份不會被刪除。" })),
+      keepInvalid ? h("p", { class: "hint hint-error", text: "保留份數必須是 1 到 1000 的整數。" }) : null);
+    return h("form", {
+      class: "form-layout schedule-layout", "aria-labelledby": "view-heading", novalidate: true,
+      on: { submit: event => { event.preventDefault(); saveSchedule(); } }
+    },
+    h("section", { class: "card form-card", "aria-labelledby": "schedule-form-heading" },
+      h("div", { class: "form-title" }, h("h3", { id: "schedule-form-heading", text: "排程設定" }),
+        scheduleChanged() ? chip("尚未儲存", "warn") : unusableSettings(data.schedule) ? chip("需要重新儲存", "warn", "alert-outline")
+          : data.schedule.saved ? chip("已儲存", "ok", "check-circle-outline") : chip("尚未設定", "neutral")),
+      unusableSettings(data.schedule) ? infoNotice("儲存的排程設定無法使用（原因見上方），下面顯示的是預設值，不是上次儲存的設定。處理後請確認每個選項，再按「儲存排程…」重新儲存。",
+        "warn", "alert-outline") : null,
+      switchRow, when, appsSection, options, keep,
+      ui.saveError ? errorNotice(ui.saveError) : null,
+      ui.runError ? errorNotice(ui.runError) : null,
+      h("div", { id: "schedule-footer", class: "form-footer button-group schedule-footer" }, scheduleFooter())),
+    h("aside", { class: "card side-card", "aria-labelledby": "schedule-side" },
+      h("h3", { id: "schedule-side", text: "排程備份怎麼運作？" }),
+      h("ul", { class: "bullet-list" }, [
+        "到了設定的時間，會在 5 分鐘內開始；和手動備份一樣短暫暫停應用寫入，完成並驗證後才列出。",
+        "設備當時沒有開機時，開機約 10 分鐘後補做一次，只補最近的一次；下一次排程在 3 小時內就不補。",
+        "有其他作業進行中時，會在它結束後 5 分鐘內開始。",
+        "尚未部署、狀態異常，或已停止而無法備份的應用會略過，其他應用照常備份，結果標示「部分完成」。",
+        "失敗時不會自動重試，原因會顯示在頁面上方；下一次排程照常執行。",
+        "沒有執行的排程，會在「活動紀錄」標示「未執行」。"
+      ].map(item => h("li", { text: item }))),
+      h("p", { class: "muted", text: "排程備份和手動備份一樣保存在這台設備；重要的備份請另外下載保存到其他位置。" })));
+  }
+
+  function scheduleFooter() {
+    const ui = state.schedule;
+    const draft = ui.draft;
+    const settings = ui.data.schedule;
+    const problem = draftProblem(draft);
+    const blocked = scheduleBlocked();
+    const changed = scheduleChanged();
+    const saved = settings.saved === true;
+    const active = activeJob();
+    const keyMissing = scheduleGate().encrypt && !state.status?.key;
+    const canRun = saved && !settings.problem && !changed && !active && !keyMissing;
+    const hint = ui.busy ? "正在預覽排程…"
+      : problem || (blocked ? "開啟排程備份前，請先完成上方的緊急金鑰步驟。"
+        : changed ? "有尚未儲存的變更。「立即執行一次」只會使用已儲存的設定，請先儲存。"
+          : !saved ? "尚未儲存排程設定；儲存後才能「立即執行一次」。"
+            : settings.problem ? "排程需要處理（見上方），處理後才能立即執行一次。"
+              : active ? "有作業進行中，請等它完成後再立即執行一次。"
+                : keyMissing ? "加密的排程備份需要這台設備的加密金鑰，請先到「加密金鑰」建立。"
+                  : "設定已儲存。「立即執行一次」會依已儲存的設定，馬上建立一份排程備份。");
+    const run = button(ui.runBusy ? "正在開始…" : "立即執行一次", runScheduleNow, { icon: "play-circle-outline", focus: "schedule-run-now", disabled: !canRun });
+    const save = button(ui.busy ? "正在預覽…" : "儲存排程…", saveSchedule, { primary: true, icon: "check", focus: "schedule-save", disabled: Boolean(problem || blocked) });
+    // A pending request keeps its button focusable (the dialog returns the focus to it) but inert.
+    if (ui.runBusy) run.setAttribute("aria-disabled", "true");
+    if (ui.busy) save.setAttribute("aria-disabled", "true");
+    return [h("p", { class: "muted schedule-hint", role: "status", text: hint }), run, save];
+  }
+
+  function updateScheduleFooter() {
+    const footer = $("schedule-footer");
+    if (!footer || !state.schedule.data || !state.schedule.draft) return;
+    const snapshot = captureFocus();
+    fill(footer, ...scheduleFooter());
+    restoreFocus(snapshot);
+  }
+
+  // An engine refusal that asks for the kit (or the key) first shows the kit step; the status then says why.
+  function noteKitRefusal(error) {
+    const reason = error?.details?.reason === "kit-unconfirmed" ? "kit-unconfirmed" : error?.code === "no-device-key" ? "no-device-key" : null;
+    if (!reason) return false;
+    state.schedule.kitStep = reason;
+    loadStatus({ quiet: true });
+    return true;
+  }
+
+  // 「儲存排程…」: a preview first (`schedule-set {schedule}` writes nothing), then a dialog with the next runs and the
+  // backups the next successful run would delete, and only its confirmation saves (`confirm: true`).
+  async function saveSchedule() {
+    const ui = state.schedule;
+    if (ui.busy || !ui.data || !ui.draft || draftProblem(ui.draft) || scheduleBlocked()) return;
+    const request = scheduleRequest(ui.draft);
+    const before = ui.data.schedule;
+    ui.busy = true;
+    ui.saveError = null;
+    ui.notice = null;
+    render();
+    let preview = null;
+    try {
+      preview = await call("schedule-set", { schedule: request });
+      requireShape(isObject(preview.schedule) && Array.isArray(preview.next_runs) && isObject(preview.retention), "排程預覽");
+    } catch (error) {
+      preview = null;
+      if (noteKitRefusal(error)) announce(error.message);
+      else ui.saveError = unsupported(error) ? new HelperError(`${SCHEDULE_UNSUPPORTED}。${UNSUPPORTED}`, { code: error.code }) : error;
+    } finally {
+      ui.busy = false;
+      render();
+    }
+    if (preview) previewDialog(request, preview, before);
+  }
+
+  function previewDialog(request, preview, before) {
+    const retention = preview.retention;
+    const runs = list(preview.next_runs).filter(run => isObject(run) && isString(run.local));
+    const removals = list(retention.delete).filter(validBrief);
+    const kept = list(retention.blocked).filter(validBrief);
+    const zone = isObject(preview.timezone) ? preview.timezone : state.schedule.data.timezone;
+    const turningOn = request.enabled && before.enabled !== true;
+    const turningOff = !request.enabled && before.enabled === true;
+    const line = item => h("li", null,
+      h("span", { text: `${backupTitle({ type: item.type, scheduled: item.scheduled !== false, created: item.created })} · ${list(item.apps).map(app => str(app?.name || app?.id)).filter(Boolean).join("、") || "—"} · ${bytes(item.size)}` }),
+      item.reason ? h("span", { class: "secondary", text: str(item.reason) }) : null);
+    // A schedule that is saved off deletes nothing by itself: what the next run would delete is said only while it is
+    // on (and acknowledged); off, only 「立即執行一次」 would apply the keep-last, which is said without blocking.
+    const deletes = request.enabled && request.keep_last !== null && removals.length > 0;
+    confirmDialog({
+      title: turningOn ? "開啟排程備份？" : turningOff ? "關閉排程備份？" : "儲存排程備份？",
+      body: [
+        h("p", { text: request.enabled ? "確認下列設定後儲存。儲存本身不會建立或刪除任何備份。"
+          : turningOff ? "排程會關閉，之後不會再自動建立或刪除備份；已建立的排程備份會保留。"
+            : "排程維持關閉，不會自動建立或刪除備份。儲存本身不會建立或刪除任何備份。" }),
+        metadata([
+          ["排程", request.enabled ? "開啟" : "關閉"],
+          ["日子與時間", `${timeText(request)}（設備時間，${zoneText(zone)}）`],
+          ["應用", scheduleAppsText(request.apps)],
+          ["容器映像", request.include_images ? "包含" : "不包含"],
+          ["加密", scheduleGate().encrypt ? "依「預設加密備份」加密" : "不加密（「預設加密備份」已關閉）"],
+          ["保留", scheduledKeepText(request.keep_last)]
+        ]),
+        request.enabled ? [h("h4", { class: "subheading", text: "接下來的排程" }), runs.length
+          ? h("ul", { class: "bullet-list schedule-preview-runs", "aria-label": "接下來的排程" }, runs.map(run => h("li", { text: deviceTime(run.local) })))
+          : h("p", { class: "muted", text: "—" })] : null,
+        request.enabled ? [h("h4", { class: "subheading", text: "下一次排程備份成功後" }),
+          request.keep_last === null ? h("p", { text: "保留全部排程備份，不會自動刪除。" })
+            : removals.length ? [h("p", { text: `會刪除下列 ${removals.length} 份較舊的排程備份（共 ${bytes(retention.freed_bytes)}）：` }),
+              h("ul", { class: "bullet-list warning-list schedule-removals", "aria-label": "會刪除的排程備份" }, removals.map(line))]
+              : h("p", { text: "不會刪除任何備份。" }),
+          kept.length ? [h("p", { text: `下列 ${kept.length} 份超出保留份數，但目前仍被需要，暫時不會刪除：` }),
+            h("ul", { class: "bullet-list schedule-kept", "aria-label": "暫時不會刪除的排程備份" }, kept.map(line))] : null]
+          : request.keep_last === null ? null
+            : h("p", { class: "schedule-run-now-note", text: `之後仍可以按「立即執行一次」；它完成後才會依保留份數刪除較舊的排程備份${removals.length
+              ? `（以目前的備份來說是 ${removals.length} 份，共 ${bytes(retention.freed_bytes)}）` : ""}。` }),
+        h("p", { class: "muted", text: "手動備份、還原前自動備份與上傳的備份不會被刪除。這項變更會記錄在系統日誌。" })
+      ],
+      acknowledge: deletes ? "我了解下一次排程備份成功後，上列備份會被刪除" : null,
+      confirmLabel: turningOn ? "開啟排程備份" : turningOff ? "關閉排程備份" : "儲存排程",
+      action: async () => {
+        let data;
+        try {
+          data = await call("schedule-set", { schedule: request, confirm: true });
+        } catch (error) {
+          noteKitRefusal(error);
+          throw error;
+        }
+        requireShape(data.saved === true && isObject(data.schedule), "儲存結果");
+        const ui = state.schedule;
+        ui.data = { ...ui.data, schedule: data.schedule, next_runs: list(data.next_runs),
+          timezone: isObject(data.timezone) ? data.timezone : ui.data.timezone };
+        ui.draft = draftFrom(data.schedule);
+        ui.touched = false;
+        ui.kitStep = null;
+        ui.notice = savedNotice(data);
+        announce(ui.notice);
+        render();
+        loadSchedule({ quiet: true });
+        loadStatus({ quiet: true });
+      }
+    });
+  }
+
+  function savedNotice(data) {
+    const next = list(data.next_runs).find(run => isObject(run) && isString(run.local));
+    if (data.schedule.enabled !== true) return "已儲存：排程備份已關閉，不會再自動建立備份。";
+    return `已儲存：排程備份會在${timeText(data.schedule)} 自動執行${next ? `，下一次在 ${deviceTime(next.local)}` : ""}。`;
+  }
+
+  // 「立即執行一次」: one run of the saved settings now (`schedule-run-now`, not kit-gated, like a manual backup); the
+  // page follows its job. A retry of the same click reuses the request id.
+  async function runScheduleNow() {
+    const ui = state.schedule;
+    if (ui.runBusy || !ui.data?.schedule?.saved || scheduleChanged() || activeJob()) return;
+    ui.runRequest ||= requestId();
+    ui.runBusy = true;
+    ui.runError = null;
+    ui.notice = null;
+    render();
+    try {
+      const data = await call("schedule-run-now", { request_id: ui.runRequest });
+      requireShape(isString(data.job_id) && JOB_ID_RE.test(data.job_id), "作業資訊");
+      ui.runRequest = null;
+      announce(data.deduplicated ? "這個要求先前已送出，正在顯示同一個作業。" : "已開始排程備份作業。");
+      watchJob(data.job_id);
+      go(["jobs", data.job_id]);
+      loadStatus({ quiet: true });
+    } catch (error) {
+      ui.runError = unsupported(error) ? new HelperError(`${SCHEDULE_UNSUPPORTED}。${UNSUPPORTED}`, { code: error.code }) : error;
+    } finally {
+      ui.runBusy = false;
+      render();
+    }
   }
 
   // ------------------------------------------------------------------ 應用設定 (catalog drafts)
@@ -4692,30 +5583,65 @@
 
   // ------------------------------------------------------------------ activity
 
+  // Jobs and, next to them, the scheduled slots that did not run (`jobs.schedule_events` with `not_run`: 未執行),
+  // newest first. A scheduled job is a backup job with `params.schedule` (CONTRACT §11).
   function viewActivity() {
-    const head = viewTitle("活動紀錄", "最近 50 筆備份、還原與驗證作業。作業在背景執行，可隨時回來查看。", [
+    const head = viewTitle("活動紀錄", "最近 50 筆備份、還原與驗證作業，以及沒有執行的排程備份。作業在背景執行，可隨時回來查看。", [
       button("更新紀錄", () => loadJobs(), { icon: "refresh", focus: "activity-refresh", disabled: state.loading.has("jobs") })]);
     if (!state.jobs) return [head, pendingCard("jobs", "正在載入活動紀錄…")];
-    if (!state.jobs.length) return [head, h("section", { class: "card" }, emptyState("clipboard-text-outline", "尚無活動紀錄", "建立備份或還原後，作業會顯示在這裡。"))];
-    const rows = state.jobs.map(job => {
-      const params = isObject(job.params) ? job.params : {};
-      const summary = [
-        list(params.apps).length ? list(params.apps).map(id => appName(str(id))).join("、") : null,
-        isString(params.backup_id) ? `備份 ${params.backup_id}` : null
-      ].filter(Boolean).join(" · ");
-      return h("tr", null,
-        h("th", { scope: "row", "data-label": "時間" }, link(date(job.created), ["jobs", job.id], {
-          class: "row-title", dataset: { focus: `job-${job.id}` }, "aria-label": `查看 ${date(job.created)} 的${jobTitle(job.type)}`
-        }), h("span", { class: "secondary mono", text: job.id })),
-        h("td", { "data-label": "作業", text: `${JOB_TYPES[job.type]}` }),
-        h("td", { "data-label": "狀態" }, jobStateChip(job.state)),
-        h("td", { "data-label": "內容", text: summary || "—" }),
-        h("td", { "data-label": "結果", text: isObject(job.error) ? str(job.error.message) : ACTIVE.has(job.state) ? `${clamp(Number(job.progress?.percent) || 0, 0, 100)}% · ${str(job.progress?.message)}` : JOB_STATES[job.state] || "" }));
-    });
+    const events = state.scheduleEvents.filter(event => event.not_run === true);
+    if (!state.jobs.length && !events.length) {
+      return [head, h("section", { class: "card" }, emptyState("clipboard-text-outline", "尚無活動紀錄", "建立備份或還原後，作業會顯示在這裡。"))];
+    }
+    const items = [
+      ...state.jobs.map(job => ({ at: str(job.created), row: () => jobRow(job) })),
+      ...events.map(event => ({ at: str(event.slot || event.at), row: () => eventRow(event) }))
+    ].sort((a, b) => (Date.parse(b.at) || 0) - (Date.parse(a.at) || 0));
     return [head, h("section", { class: "card list-card" }, h("table", { class: "data jobs-table" },
       h("caption", { class: "sr-only", text: "活動紀錄" }),
       h("thead", null, h("tr", null, ["時間", "作業", "狀態", "內容", "結果"].map(label => h("th", { scope: "col", text: label })))),
-      h("tbody", null, rows)))];
+      h("tbody", null, items.map(item => item.row()))))];
+  }
+
+  function jobRow(job) {
+    const params = isObject(job.params) ? job.params : {};
+    const schedule = scheduleOf(job);
+    const skipped = partialRun(job) ? skippedApps(job.result) : [];
+    const summary = [
+      list(params.apps).length ? list(params.apps).map(id => appName(str(id))).join("、") : null,
+      isString(params.backup_id) ? `備份 ${params.backup_id}` : null,
+      schedule ? TRIGGER_TEXT[schedule.trigger] || null : null
+    ].filter(Boolean).join(" · ");
+    const outcome = isObject(job.error) ? str(job.error.message)
+      : ACTIVE.has(job.state) ? `${clamp(Number(job.progress?.percent) || 0, 0, 100)}% · ${str(job.progress?.message)}`
+        : skipped.length ? `部分完成：沒有包含${quoted(skipped.map(item => item.name))}` : JOB_STATES[job.state] || "";
+    return h("tr", { dataset: { job: job.id } },
+      h("th", { scope: "row", "data-label": "時間" }, link(date(job.created), ["jobs", job.id], {
+        class: "row-title", dataset: { focus: `job-${job.id}` }, "aria-label": `查看 ${date(job.created)} 的${jobLabel(job)}`
+      }), h("span", { class: "secondary mono", text: job.id })),
+      h("td", { "data-label": "作業", text: schedule ? "排程備份" : `${JOB_TYPES[job.type]}` }),
+      h("td", { "data-label": "狀態" }, runStateChip(job)),
+      h("td", { "data-label": "內容", text: summary || "—" }),
+      h("td", { "data-label": "結果", text: outcome }));
+  }
+
+  // A scheduled slot that did not run (missed, skipped, no key, no apps, or a job that could not be launched); the
+  // engine's message says why. Its times are the device's like the message (CONTRACT §7 ScheduleEvent `local`,
+  // `first_local`), marked 設備時間 when this computer keeps another time than the jobs' rows.
+  function eventRow(event) {
+    const several = Number.isInteger(event.count) && event.count > 1 && isString(event.first);
+    const kind = EVENT_KINDS[event.kind] || "排程備份";
+    const instant = event.slot || event.at;
+    const clock = scheduleClock(instant, event.slot ? event.local : null, { weekday: false });
+    const where = clockLabel(clock, instant);
+    const first = several ? scheduleClock(event.first, event.first_local, { weekday: false }).text : "";
+    return h("tr", { dataset: { event: event.kind } },
+      h("th", { scope: "row", "data-label": "時間" }, h("span", { class: "row-title", text: clock.text }),
+        h("span", { class: "secondary", text: `${event.slot ? "排程時間" : "記錄時間"}${where ? `（${where}）` : ""}` })),
+      h("td", { "data-label": "作業", text: "排程備份" }),
+      h("td", { "data-label": "狀態" }, chip("未執行", "warn", "calendar-remove-outline")),
+      h("td", { "data-label": "內容", text: several ? `${kind}（共 ${event.count} 次，從 ${first} 起）` : kind }),
+      h("td", { "data-label": "結果", text: str(event.message) }));
   }
 
   // ------------------------------------------------------------------ backup actions
@@ -4985,6 +5911,8 @@
       loadStatus({ quiet: true });
       const route = currentRoute();
       if (["overview", "backups"].includes(route.page)) loadBackups();
+      // The schedule's last run, waiting slot and checks change on their own (the timer); the draft is kept.
+      if (route.page === "schedule" && state.schedule.data) loadSchedule({ quiet: true });
     }
   }
 

@@ -867,6 +867,18 @@ class QuadletPostgresAdapter(Adapter):
         raise BackupError('incompatible', f'應用「{self.app.name}」的 Quadlet 設定檔不完整或含有符號連結，'
                                           '無法判斷還原方式；請先修復部署。', app=self.app.id)
 
+    def unavailable(self, info):
+        """A backup dumps each `postgres` database with pg_dump, so their units must run (backup() refuses
+        otherwise, and the size estimate cannot read them): None while they run, else the zh-TW reason a scheduled
+        backup gives for leaving the app out. An app with nothing to dump (volumes, host directories, a cold database
+        copied as files) is backed up while it is stopped."""
+        active = {unit['name']: unit['active'] for unit in info.get('units') or []}
+        if all(active.get(pg['unit']) for pg in self.app.postgres):
+            return None
+        if info.get('state') == 'stopped':
+            return f'應用「{self.app.name}」已停止，無法備份：備份時它的資料庫必須在執行中。'
+        return f'應用「{self.app.name}」的資料庫沒有在執行，無法備份：備份時它的資料庫必須在執行中。'
+
     def ensure_databases_running(self):
         """Start inactive database units (needed to dump a pre-restore safety backup); raises if they cannot run."""
         states = self.unit_states(self.app.units)

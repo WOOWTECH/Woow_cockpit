@@ -81,6 +81,7 @@ tests/e2e/lab/deploy-src.sh a && tests/e2e/lab/deploy-src.sh b   # 安裝目前�
 python3 -I tests/e2e/lab/cli_e2e.py all                     # 以頁面相同的方式呼叫已安裝的 helper
 node tests/e2e/lab/ui_e2e.mjs all                            # 以 Playwright 操作真正的 Cockpit 362 頁面
 python3 -I tests/e2e/lab/hardening.py all                    # 強化測試 H1–H7、sec1、fidelity、fresh 與洩漏檢查
+python3 -I tests/e2e/lab/schedule_e2e.py all                 # 排程備份：真正的計時器與檢查服務、時段、等待、保留、相容性
 python3 -I tests/e2e/lab/race_probe.py a                     # 作業紀錄競態探測（b 同理）
 node tests/e2e/lab/upload_window.mjs                         # H8：上傳視窗與分段大小的評估（只在測試瀏覽器內修改）
 ```
@@ -103,13 +104,35 @@ node tests/e2e/lab/upload_window.mjs                         # H8：上傳視窗
 | 洩漏掃描 | 各執行器的 leaks 情境都通過；主機上這一輪 622 個證據檔不含實驗室密碼、dev-a 緊急金鑰或 age 私鑰格式 |
 | 設備最後的狀態 | 兩台都是最後一版（28 個檔案與工作樹相同），目錄項目換回夾具（只有 http-json 核對），woowbk-inst 已移除，預設加密備份開啟、保留原則為全部保留、沒有作業、暫存與未加密副本都是空的；dev-a 保留 34 份各執行器仍參照的備份，dev-b 1 份 |
 
+排程備份（2026-11-17，`feat/backup-schedule`）。第一輪（c455a07 加上 `schedule_e2e.py`）找到兩個產品問題：已停止的應用讓整次排程備份失敗（應略過並標示部分完成），以及安裝後第一次檢查前、開機已久的設備會誤報「排程檢查沒有在執行」；兩者都在 ad7858e 修正（引擎另改以 PID 1 啟動後的秒數為開機時間，並加上設備時間的 `local` 文字、`schedule.defaults`、tick 服務的 `StandardError=journal` 與對遮蔽計時器的處理）。第二輪在 ad7858e 上：dev-a 先以安裝程式的回退回到 2026.11.15.2 再部署（新增單元的交易），dev-b 從第一輪的工作樹升級，排程情境全部通過，接著跑完整的實驗室回歸。systemd 255 在 `LogLevelMax=notice` 時連 PID 1 對 tick 服務的 Starting／Finished 都不寫（兩輪各 5 次檢查 0 行；沒有這個設定的對照單元每次 3 行）。實驗室設備的 `/proc/uptime` 與 `CLOCK_BOOTTIME` 是主機的開機時間，引擎改用 PID 1 的啟動時間後，`reboot` 以真正的 `labpodman restart` 證明 PID 1 未滿 10 分鐘的檢查都不補做、滿 10 分鐘後第一次檢查才補做。證據在 `~/.woowbk-lab/evidence/schedule/` 與各執行器的目錄。
+
+| 項目（2026-11-17 第二輪，ad7858e） | 結果 |
+| --- | --- |
+| `schedule_e2e.py` | install 29、timer 17、fast 20、busy 15、timezone 15、run-now 19、retention 11、partial 19、kit-gate 20、compat 31、noise 7、reboot 24、cleanup 13，全部通過 |
+| `hardening.py h7`（`H7_FULL=0`，新增單元的交易） | 23／23 |
+| `verify-device.sh a`、`b` | 各 10 項通過 |
+| `cli_e2e.py all` | 122／122：s1 29、s2 22、faults 11、s3 8、s2-again 22、f8 10、f9 9、cancel 6、leaks 5 |
+| `hardening.py all`（`H7_FULL=0`） | 588／588：h1 327、h2 13、space 25、h3 28、h4 48、h5 15、h6 12、h7 23、sec1 26、fidelity 21、fresh 43、leaks 7 |
+| `format_e2e.py all` | 105／105：v1 7、encrypted 21、plain 27、export 20、deep 6、partial 7、cleanup 17 |
+| `dirs_e2e.py all` | 257／257：prep 20、d1 29、d3 18、d4 29、d5 107、d6 11、d7 16、d2 22、leaks 5 |
+| `ui_e2e.mjs all` | 29／29（admin、s1、s2） |
+| `race_probe.py a`、`b` | 各 11／11（各 110 個作業，0 個被誤判） |
+| `digest_sql_probe.py` | 9／9 |
+| `strengthen_ui.mjs` | catalog 16／16；cleanup 9／10、backups 26／26、devb 9／9、cleanup-lab 45／45；cleanup 重跑 11／11（見下） |
+| `strengthen_e2e.py` | 205／205：catalog-apply 28、digests 38、mismatch 22、deep 19、instance 53、keyless 19、retention 16、tampered-json 10；cleanup 197／197 |
+| `upload_window.mjs`（H8） | 18 次上傳、0 個錯誤（6 種視窗／分段設定各 3 次，到 dev-b、停在金鑰步驟後刪除）；預設的 4 MiB／512 KiB 中位數 15.1 MB/s，主機 CPU 約 97% 忙碌 |
+| 離線夾具測試（`tests/e2e`） | 35／35 |
+
+`strengthen_ui.mjs cleanup` 第一次 9／10 是執行順序的問題，不是引擎：`ui_e2e.mjs s1` 在建立頁保留預設的全選，dev-a 上的備份含 woowbk-demo、woowbk-dirs、woowbk-inst，另外兩個應用保留全部，所以它不是 woowbk-demo「保留最新 5 份」的候選（CONTRACT §8：多個應用的備份在任一應用仍需要時保留），而這項檢查假設 woowbk-demo 的手動備份都只含它（候選數 = 手動份數 − 5）。刪除那份測試備份、補 6 份只含 woowbk-demo 的備份後重跑 11／11，之後刪除補的備份。
+
 `ui_e2e.mjs` 與 `upload_window.mjs` 需要 `PLAYWRIGHT_CHROMIUM_EXECUTABLE` 或 `~/.cache/ms-playwright/chromium-1248`。每個執行器也可只跑單一情境：
 
 | 執行器 | 情境 |
 | --- | --- |
 | `cli_e2e.py` | `s1` 同機含映像備份、去重與 `busy`、原位還原；`s2` A 下載 → B 上傳、需要金鑰、錯誤金鑰、緊急金鑰、全新部署；`faults` 截斷、翻轉位元組、非備份檔、新版格式、非 root；`s3` 缺映像時預檢失敗；`s2-again`；`f8` 自動回復；`f9` 強制終止還原後以還原前備份恢復；`cancel`；`leaks` |
 | `ui_e2e.mjs` | `admin` 需要管理員權限；`s1` 頁面備份、關閉分頁後回到作業、下載核對 SHA-256、原位還原；`s2` 頁面上傳到 dev-b、金鑰步驟、全新部署 |
-| `hardening.py` | `h1` 惡意或不一致的備份檔（28 種加 1 個對照組，經真正的上傳流程）；`h2` 空間不足；`h3` 資料庫匯出失敗；`h4` 備份各階段強制終止；`h5` 還原中重新啟動設備；`h6` 約 600 MiB 資料卷的備份、下載、還原與記憶體峰值；`h7` 安裝器回退與重新安裝；`sec1` 資料卷與映像封存內植入符號連結（含對照組：證明直接用 podman 匯入時，檔案會被寫到目標以外）；`fidelity` 27 個檔案項目（各種符號連結、硬連結、長檔名與長路徑、非 UTF-8 檔名、FIFO、延伸屬性、setgid／sticky 目錄、不同擁有者）在原位與跨設備還原後的保真度；`fresh` 全新部署遇到同名殘留、被強制終止與程序內回復；`leaks` |
+| `hardening.py` | `h1` 惡意或不一致的備份檔（28 種加 1 個對照組，經真正的上傳流程）；`h2` 空間不足；`h3` 資料庫匯出失敗；`h4` 備份各階段強制終止；`h5` 還原中重新啟動設備；`h6` 約 600 MiB 資料卷的備份、下載、還原與記憶體峰值；`h7` 安裝器回退與重新安裝（含排程備份的計時器：安裝後啟用並執行、回退時停止、停用並移除單元、重新安裝後再啟用）；`sec1` 資料卷與映像封存內植入符號連結（含對照組：證明直接用 podman 匯入時，檔案會被寫到目標以外）；`fidelity` 27 個檔案項目（各種符號連結、硬連結、長檔名與長路徑、非 UTF-8 檔名、FIFO、延伸屬性、setgid／sticky 目錄、不同擁有者）在原位與跨設備還原後的保真度；`fresh` 全新部署遇到同名殘留、被強制終止與程序內回復；`leaks` |
+| `schedule_e2e.py` | 排程備份（2026.11.17.1）：`install` 單元與計時器（`systemctl show`／`cat`、verify）；`timer` 由計時器在 5 分鐘整點啟動的真實執行；`fast` 立即到期的時段、兩次啟動只有一個作業、檢查鎖、「排程」標示、備註「排程備份」、journal 每個時段一次；`busy` 先有驗證作業 → 等待 → 之後開始（late）；`timezone` 改連 `/etc/localtime` 後下一次檢查就用新時區；`run-now` 立即執行一次（未儲存、設定檔有問題、去重、busy）；`retention` 排程與手動兩個保留範圍互不影響；`partial` 已停止的應用、不在目錄中的應用；`kit-gate` 沒有金鑰或緊急金鑰未保存時不能開啟（dev-b 實驗室金鑰）；`compat` dev-b 以安裝程式回退到 2026.11.15.2，讀取新檔案與作業紀錄、上傳並還原 dev-a 的排程備份，再回到工作樹；`noise` LogLevelMax=notice 時 PID 1 每次檢查寫的行數；`reboot` 錯過的時段、逾期、開機 10 分鐘內不執行（時間命名空間）、重新開機後補做；`cleanup` |
 | `race_probe.py` | 連續執行 110 個短作業，同時不停讀取作業狀態，確認剛結束的作業不會被誤判為「已中斷」，並檢查作業紀錄保留 |
 | `dirs_e2e.py` | 主機資料夾示範應用 `woowbk-dirs`（PostgreSQL 16 資料目錄與應用資料都在主機資料夾）：`prep` 前置條件；`d1` 原位還原；`d2` 跨設備全新部署（不同 UID 與 subuid 範圍）；`d3` 對調後失敗的自動回復（直接移回原內容）；`d4` 在解壓、兩次改名之間、對調之後強制終止與復原；`d5` 惡意的資料夾封存；`d6` 全新部署遇到既有非空資料夾；`d7` 資料夾之下有掛載、資料夾本身被 bind mount、其他容器唯讀／可寫入掛載；`leaks`。前置需求見檔案開頭（`deploy-dirs.sh`、`dirs-catalog.sh`、`subids.sh`） |
 

@@ -360,6 +360,10 @@ class World:
         self.data = {'woowbk-demo': b'notes-v1', 'woowbk-two': b'two-v1'}
         self.mode = {'woowbk-demo': 'inplace', 'woowbk-two': 'inplace'}
         self.deployed = {'woowbk-demo': True, 'woowbk-two': True}
+        # Stopped apps (every unit inactive); `cold`: those whose backup works while stopped (nothing to dump). Like
+        # the real adapter, the size of a stopped app with a database cannot be read.
+        self.stopped = set()
+        self.cold = set()
         self.estimate = 1000
         self.events = []
         self.fail_backup = set()
@@ -424,8 +428,14 @@ class FakeAdapter:
 
     def probe(self):
         deployed = self.world.deployed[self.app.id]
-        return {'deployed': deployed, 'state': 'running' if deployed else 'not-deployed',
-                'units': [{'name': u, 'active': deployed} for u in self.app.units], 'problems': []}
+        running = deployed and self.app.id not in self.world.stopped
+        return {'deployed': deployed, 'state': 'running' if running else 'stopped' if deployed else 'not-deployed',
+                'units': [{'name': u, 'active': running} for u in self.app.units], 'problems': []}
+
+    def unavailable(self, info):
+        if info['state'] == 'running' or self.app.id in self.world.cold:
+            return None
+        return f'應用「{self.app.name}」已停止，無法備份：備份時它的資料庫必須在執行中。'
 
     def detect_mode(self):
         return self.world.mode[self.app.id]
@@ -437,6 +447,8 @@ class FakeAdapter:
         return []
 
     def estimate_bytes(self, *, include_images=False):
+        if self.app.id in self.world.stopped and self.app.id not in self.world.cold:
+            raise BackupError('job-failed', '無法讀取資料庫 main 的大小；請確認資料庫服務正在執行。', app=self.app.id)
         return self.world.estimate
 
     def backup(self, staging_dir, *, include_images, keep_stopped=False):
@@ -2527,6 +2539,43 @@ class CompareTests(unittest.TestCase):
 
     def test_created_from_id(self):
         self.assertEqual(flows.created_from_id('20261113T020000Z-a1b2c3d4'), '2026-11-13T02:00:00Z')
+
+
+class ScheduledBackupFlowTests(FlowCase):
+    """排程備份 (CONTRACT section 8): the scheduled mode of the backup job."""
+
+    def scheduled(self, apps=('woowbk-demo', 'woowbk-two'), keep_last=7):
+        from woowbackup import schedule
+        settings = dict(schedule.defaults(), keep_last=keep_last)
+        params = schedule.job_params(settings, list(apps), True, slot=None, trigger='run-now')
+        return flows.run_backup(self.ctx(), params)
+
+    def test_scheduled_mode_lists_its_backup_first_skips_unready_apps_and_notes_it(self):
+        from woowbackup import schedule
+        self.world.deployed['woowbk-two'] = False
+        seen = []
+        original = schedule.register_run
+
+        def spy(*args):
+            seen.append((list(self.world.events), self.reporter.phases()))
+            return original(*args)
+
+        with mock.patch.object(schedule, 'register_run', spy):
+            result = self.scheduled()
+        self.assertEqual(seen, [([], ['prepare'])], 'listed before any app was probed or paused')
+        self.assertEqual((result['partial'], result['apps'], result['trigger']), (True, ['woowbk-demo'], 'run-now'))
+        self.assertEqual(result['skipped_apps'][0]['id'], 'woowbk-two')
+        meta = self.storage.index[result['backup_id']]
+        self.assertEqual((meta['type'], meta['note']), ('manual', '排程備份'))
+        self.assertEqual(schedule.scheduled_ids(self.paths), (frozenset({result['backup_id']}), None))
+        self.assert_staging_clean()
+
+    def test_a_manual_backup_still_fails_for_an_app_that_is_not_ready(self):
+        self.world.deployed['woowbk-two'] = False
+        with self.assertRaises(BackupError) as caught:
+            self.backup(apps=('woowbk-demo', 'woowbk-two'))
+        self.assertEqual(caught.exception.code, 'not-deployed', 'skipping is for scheduled backups only')
+        self.assertEqual(self.world.events, [])
 
 
 if __name__ == '__main__':

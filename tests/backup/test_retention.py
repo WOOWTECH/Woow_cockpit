@@ -9,7 +9,7 @@ import types
 import unittest
 from pathlib import Path
 
-from woowbackup import jobs, retention
+from woowbackup import jobs, retention, schedule
 from woowbackup.errors import BackupError
 from woowbackup.paths import Paths
 from woowbackup.storage import Storage
@@ -132,13 +132,14 @@ class UsageTests(unittest.TestCase):
         self.assertEqual(rows['odoo']['bytes'], 500 + 300 + 800)
         self.assertEqual(rows['n8n']['bytes'], 501 + 100)
         self.assertTrue(rows['n8n']['estimated'] and rows['n8n']['shared'])
-        self.assertEqual(rows['odoo']['types'], {'manual': 2, 'safety': 1, 'uploaded': 0})
+        self.assertEqual(rows['odoo']['types'], {'manual': 2, 'safety': 1, 'uploaded': 0, 'scheduled': 0})
         self.assertEqual((rows['odoo']['newest'], rows['odoo']['oldest']),
                          ('2026-11-13T02:00:00Z', '2026-11-11T02:00:00Z'))
         self.assertEqual((rows['odoo']['keep_last'], rows['n8n']['keep_last']), (None, 4))
         self.assertEqual(rows['odoo']['name'], 'Odoo 18')
         self.assertEqual(rows['litellm'], {'id': 'litellm', 'name': 'LiteLLM', 'in_catalog': True, 'backups': 0,
-                                           'types': {'manual': 0, 'safety': 0, 'uploaded': 0}, 'bytes': 0,
+                                           'types': {'manual': 0, 'safety': 0, 'uploaded': 0, 'scheduled': 0},
+                                           'bytes': 0,
                                            'estimated': False, 'shared': False, 'newest': None, 'oldest': None,
                                            'keep_last': 4})
         self.assertFalse(rows['n8n']['in_catalog'])
@@ -302,7 +303,8 @@ class CommandTests(RetentionCase):
         self.assertEqual([c['id'] for c in result['candidates']], [backup_id(2)])
         self.assertEqual([b['id'] for b in result['blocked']], [backup_id(1)])
         self.assertEqual({p['id'] for p in result['protected']}, {backup_id(1), pinned})
-        self.assertEqual(result['usage']['apps'][0]['types'], {'manual': 3, 'safety': 1, 'uploaded': 0})
+        self.assertEqual(result['usage']['apps'][0]['types'], {'manual': 3, 'safety': 1, 'uploaded': 0,
+                                                               'scheduled': 0})
         saved = retention.plan_command(self.paths, self.storage, None, trusted_uid=self.uid)
         self.assertEqual((saved['proposed'], saved['candidates']), (False, []))
         with self.assertRaises(BackupError):
@@ -354,6 +356,47 @@ class CommandTests(RetentionCase):
         self.assertEqual(retention.enforce_after_backup(self.paths, self.storage, ['n8n'], log=self.logs.append,
                                                         audit=self.audit.append, trusted_uid=self.uid), [])
         self.assertTrue(self.logs[-1].startswith('警告：'))
+
+
+class ScheduledPoolTests(RetentionCase):
+    """排程備份: scheduled backups (manual index type, listed in the schedule's registry) are a pool of their own, read
+    from real index sidecars like the other retention tests."""
+
+    def scheduled(self, n, apps):
+        backup_id = self.make(n, apps)
+        schedule.register_run(self.paths, backup_id, f'j2026110{n % 10}T000000Z-0000000{n % 10}', None, 'run-now')
+        return backup_id
+
+    def test_each_rule_counts_and_deletes_only_its_own_pool(self):
+        manual = [self.make(n, ['odoo']) for n in (1, 2)]
+        scheduled = [self.scheduled(n, ['odoo']) for n in (3, 4)]
+        self.save({'default_keep_last': 1, 'apps': {}})
+        deleted = retention.enforce_after_backup(self.paths, self.storage, ['odoo'], exclude=[manual[1]],
+                                                 log=self.logs.append, audit=self.audit.append, trusted_uid=self.uid)
+        self.assertEqual(deleted, [manual[0]], 'two newer scheduled backups do not push the manual one out')
+        self.assertEqual(retention.enforce_schedule(self.paths, self.storage, ['odoo'], 1, exclude=[scheduled[1]],
+                                                    log=self.logs.append, audit=self.audit.append), [scheduled[0]])
+        self.assertEqual(self.ids(), {manual[1], scheduled[1]})
+        self.assertTrue(self.audit[-1].endswith('reason=schedule'))
+        plan = retention.plan_command(self.paths, self.storage, None, trusted_uid=self.uid)
+        self.assertEqual(plan['usage']['apps'][0]['types'], {'manual': 1, 'safety': 0, 'uploaded': 0, 'scheduled': 1})
+        self.assertEqual({item['id']: item['scheduled'] for item in plan['protected']}, {})
+        applied = retention.apply_command(self.paths, self.storage, [scheduled[1]], trusted_uid=self.uid,
+                                          audit=self.audit.append)
+        self.assertEqual([(item['id'], item['scheduled']) for item in applied['deleted']], [(scheduled[1], True)],
+                         'an explicit selection may delete a scheduled backup')
+
+    def test_while_the_registry_cannot_be_read_nothing_manual_is_deleted_automatically(self):
+        first, second = self.make(1, ['odoo']), self.make(2, ['odoo'])
+        schedule.state_path(self.paths).write_text('not json')
+        self.save({'default_keep_last': 1, 'apps': {}})
+        self.assertEqual(retention.enforce_after_backup(self.paths, self.storage, ['odoo'], exclude=[second],
+                                                        log=self.logs.append, audit=self.audit.append,
+                                                        trusted_uid=self.uid), [])
+        plan = retention.plan_command(self.paths, self.storage, None, trusted_uid=self.uid)
+        self.assertEqual([item['id'] for item in plan['blocked']], [first])
+        self.assertIn('排程備份的紀錄檔無法讀取', plan['blocked'][0]['reason'])
+        self.assertEqual(self.ids(), {first, second})
 
 
 if __name__ == '__main__':

@@ -41,6 +41,12 @@ class Adapter:
         """Start stopped database units so a safety backup can be dumped; returns the units started."""
         return []
 
+    def unavailable(self, info):
+        """Why backup() cannot run in the app's current state (`info` from probe()), as zh-TW text, or None (e.g. a
+        database it must dump is stopped). A scheduled backup leaves such an app out (部分完成); a manual backup is not
+        asked and fails with the adapter's own error, as before."""
+        return None
+
     def estimate_bytes(self, *, include_images=False):
         raise NotImplementedError
 

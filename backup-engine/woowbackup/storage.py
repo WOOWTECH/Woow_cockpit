@@ -236,6 +236,14 @@ class Storage:
             return False
         return True
 
+    def present(self, backup_id):
+        """True while the backup's sidecar or an archive file of it exists, readable or not (the schedule keeps its
+        registry entry that long: a sidecar that cannot be read for a moment must not turn a scheduled backup into a
+        manual one)."""
+        if not valid_backup_id(backup_id):
+            return False
+        return os.path.lexists(self.index_path(backup_id)) or bool(self._archive_files(backup_id))
+
     def _normalize(self, backup_id, meta, st):
         rec = dict(meta)
         rec.pop('key_available', None)

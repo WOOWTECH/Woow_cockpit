@@ -19,6 +19,11 @@ Owner: catalog + retention engineer.
   exactly the backup ids the administrator confirmed that are still not protected, under the start lock (like
   `delete`); `enforce_after_backup` applies the saved policy to the apps of a manual backup that just succeeded.
   Every deletion and policy change is written to the system journal (audit).
+* Two pools (排程備份, 2026.11.17.1): a scheduled backup is a `manual` backup whose id the schedule's registry lists
+  (schedule.py). The keep-last policy above never counts or deletes one; the schedule's own `keep_last` keeps the newest
+  N scheduled backups per app (`enforce_schedule`, after a successful or partial scheduled run, with the same
+  protections; `schedule_plan` previews it). While the registry cannot be read nothing tells the pools apart, so every
+  manual backup is protected.
 """
 import json
 import os
@@ -26,6 +31,7 @@ import re
 
 from . import catalog
 from . import jobs
+from . import schedule
 from .catalog_admin import audit_log, login_uid, open_trusted_dir, pretty, read_trusted_file, write_trusted_file
 from .errors import BackupError
 
@@ -142,18 +148,20 @@ def _shares(backup, items):
     return shares, len(items) > 1
 
 
-def app_usage(backups, catalog_apps=None, policy=None):
+def app_usage(backups, catalog_apps=None, policy=None, scheduled=frozenset()):
     """Per-app storage: `apps` (largest first; catalog apps without backups included), `unassigned` (uploaded
     backups not inspected yet, whose apps are unknown) and `total`. A backup of several apps is split between them
-    (by per-app size when the index has it, else evenly: `estimated`)."""
+    (by per-app size when the index has it, else evenly: `estimated`). `types.scheduled` counts the manual backups in
+    `scheduled` (the schedule's registry); `types.manual` the other manual ones."""
     policy = policy or default_policy()
     rows = {}
 
     def row(app_id, name):
         if app_id not in rows:
             rows[app_id] = {'id': app_id, 'name': name or app_id, 'in_catalog': False, 'backups': 0,
-                            'types': {'manual': 0, 'safety': 0, 'uploaded': 0}, 'bytes': 0, 'estimated': False,
-                            'shared': False, 'newest': None, 'oldest': None, 'keep_last': keep_last(policy, app_id)}
+                            'types': {'manual': 0, 'safety': 0, 'uploaded': 0, 'scheduled': 0}, 'bytes': 0,
+                            'estimated': False, 'shared': False, 'newest': None, 'oldest': None,
+                            'keep_last': keep_last(policy, app_id)}
         return rows[app_id]
 
     for app in (catalog_apps or {}).values():
@@ -175,6 +183,8 @@ def app_usage(backups, catalog_apps=None, policy=None):
             entry = row(item['id'], item.get('name'))
             entry['backups'] += 1
             kind = backup.get('type')
+            if kind == 'manual' and backup.get('id') in scheduled:
+                kind = 'scheduled'
             if kind in entry['types']:
                 entry['types'][kind] += 1
             entry['bytes'] += share
@@ -228,13 +238,22 @@ def protected_backups(paths, backups=()):
         for backup in backups:
             if backup.get('type') == 'safety' and isinstance(backup.get('id'), str):
                 reasons.setdefault(backup['id'], '還原作業進行中時不刪除還原前備份（失敗時可能需要它自動回復）。')
+    _registry, problem = schedule.scheduled_ids(paths)
+    if problem:
+        # Without the registry a scheduled backup looks like a manual one: neither pool can be counted.
+        for backup in backups:
+            if backup.get('type') == 'manual' and isinstance(backup.get('id'), str):
+                reasons.setdefault(backup['id'], '排程備份的紀錄檔無法讀取（無法分辨手動與排程備份），暫不自動刪除。')
     return reasons
 
 
-def brief(backup, reason=None):
+def brief(backup, reason=None, scheduled=None):
+    """BackupBrief; with `scheduled` (the registry ids) it also says whether the backup is a scheduled one."""
     view = {'id': backup.get('id'), 'type': backup.get('type'), 'created': backup.get('created'),
             'size': int(backup.get('size') or 0), 'note': backup.get('note') or '',
             'apps': [{'id': a['id'], 'name': a.get('name') or a['id']} for a in _apps_of(backup)]}
+    if scheduled is not None:
+        view['scheduled'] = backup.get('type') == 'manual' and backup.get('id') in scheduled
     if reason is not None:
         view['reason'] = reason
     return view
@@ -250,15 +269,25 @@ def failed_verification(backup):
     return isinstance(verified, dict) and verified.get('ok') is False
 
 
-def plan(backups, policy, protected, *, only_apps=None):
+def plan(backups, policy, protected, *, only_apps=None, scheduled=None, pool='manual', label='保留份數', ahead=()):
     """Manual backups the policy would delete (`candidates`, oldest last), with zh-TW reasons, and the candidates
     that are protected (`blocked`). `only_apps`: only backups holding one of these apps are considered.
 
     A backup whose verification failed does not count toward an app's newest N (it cannot be restored): it is a
-    candidate itself, and the N kept are the newest backups that did not fail (review M1)."""
-    manual = sorted((b for b in backups if b.get('type') == 'manual' and isinstance(b.get('id'), str)),
-                    key=_sort_key, reverse=True)
-    rank, positions = {}, {}
+    candidate itself, and the N kept are the newest backups that did not fail (review M1).
+
+    `scheduled` (the registry ids) splits the manual backups into two pools: `pool` 'manual' leaves the scheduled
+    ones out, 'scheduled' takes only them. `ahead`: apps that get one newer backup first (the preview of a run that has
+    not happened yet); `label` names the rule in the reasons."""
+    def chosen(backup):
+        if backup.get('type') != 'manual' or not isinstance(backup.get('id'), str):
+            return False
+        if scheduled is None:
+            return pool == 'manual'
+        return (backup['id'] in scheduled) == (pool == 'scheduled')
+
+    manual = sorted((b for b in backups if chosen(b)), key=_sort_key, reverse=True)
+    rank, positions = {app_id: 1 for app_id in ahead}, {}
     for backup in manual:
         positions[backup['id']] = {}
         if failed_verification(backup):
@@ -282,13 +311,13 @@ def plan(backups, policy, protected, *, only_apps=None):
             place = positions[backup['id']]
             if not all(place[app_id] > limit for app_id, limit in limits.items()):
                 continue
-            reason = '超出保留份數：' + '、'.join(
+            reason = f'超出{label}：' + '、'.join(
                 f'「{item.get("name") or item["id"]}」第 {place[item["id"]]} 新（保留最新 {limits[item["id"]]} 份）'
                 for item in items)
         if backup['id'] in protected:
-            blocked.append(brief(backup, protected[backup['id']]))
+            blocked.append(brief(backup, protected[backup['id']], scheduled))
         else:
-            candidates.append(brief(backup, reason))
+            candidates.append(brief(backup, reason, scheduled))
     return {'candidates': candidates, 'blocked': blocked,
             'freed_bytes': sum(item['size'] for item in candidates)}
 
@@ -299,12 +328,13 @@ def plan_command(paths, storage, catalog_apps=None, proposed=None, *, trusted_ui
     policy = validate_policy(proposed) if proposed is not None else saved
     backups = storage.list_backups()
     protected = protected_backups(paths, backups)
-    result = plan(backups, policy, protected)
+    scheduled, _registry_problem = schedule.scheduled_ids(paths)  # a problem protects every manual backup (above)
+    result = plan(backups, policy, protected, scheduled=scheduled)
     listed = {b['id']: b for b in backups if isinstance(b.get('id'), str)}
     return {'policy': policy, 'saved_policy': saved, 'proposed': proposed is not None, 'policy_problem': problem,
-            'usage': app_usage(backups, catalog_apps, policy), 'candidates': result['candidates'],
+            'usage': app_usage(backups, catalog_apps, policy, scheduled), 'candidates': result['candidates'],
             'blocked': result['blocked'], 'freed_bytes': result['freed_bytes'],
-            'protected': [brief(listed[backup_id], reason) for backup_id, reason in sorted(protected.items())
+            'protected': [brief(listed[backup_id], reason, scheduled) for backup_id, reason in sorted(protected.items())
                           if backup_id in listed]}
 
 
@@ -335,6 +365,7 @@ def apply_command(paths, storage, backup_ids, *, policy=None, trusted_uid=0, aud
                   f'loginuid={"-" if user is None else user}')
         backups = {b['id']: b for b in storage.list_backups() if isinstance(b.get('id'), str)}
         protected = protected_backups(paths, list(backups.values()))
+        scheduled, _registry_problem = schedule.scheduled_ids(paths)
         for backup_id in backup_ids:
             backup = backups.get(backup_id)
             if backup is None:
@@ -348,7 +379,7 @@ def apply_command(paths, storage, backup_ids, *, policy=None, trusted_uid=0, aud
             except BackupError as error:
                 skipped.append({'id': backup_id, 'reason': error.message})
                 continue
-            deleted.append(brief(backup))
+            deleted.append(brief(backup, scheduled=scheduled))
             freed += int(backup.get('size') or 0)
             audit(f'retention-delete backup={backup_id} type={backup.get("type")} size={int(backup.get("size") or 0)} '
                   f'apps={",".join(a["id"] for a in _apps_of(backup)) or "-"} loginuid={"-" if user is None else user}')
@@ -359,7 +390,9 @@ def apply_command(paths, storage, backup_ids, *, policy=None, trusted_uid=0, aud
 def enforce_after_backup(paths, storage, app_ids, *, exclude=(), log=None, audit=None, trusted_uid=0):
     """Apply the saved policy to the manual backups of `app_ids` after a manual backup of them succeeded (called
     by the backup job, which holds the engine lock; no other job can run). Returns the deleted backup ids; never
-    raises for a deletion problem (it is logged) and deletes nothing when the policy cannot be read."""
+    raises for a deletion problem (it is logged) and deletes nothing when the policy cannot be read. Scheduled
+    backups are not counted (their own rule is `enforce_schedule`); nothing is deleted while the registry cannot be
+    read."""
     log = log or (lambda _message: None)
     audit = audit or audit_log
     policy, problem = load_policy(paths, trusted_uid=trusted_uid)
@@ -368,12 +401,16 @@ def enforce_after_backup(paths, storage, app_ids, *, exclude=(), log=None, audit
         return []
     if not any(keep_last(policy, app_id) is not None for app_id in app_ids):
         return []
+    scheduled, registry_problem = schedule.scheduled_ids(paths)
+    if registry_problem:
+        log(f'警告：{registry_problem}')
+        return []
     backups = storage.list_backups()
     protected = protected_backups(paths, backups)
     for backup_id in exclude or ():
         protected.setdefault(backup_id, '剛建立的備份。')
     deleted = []
-    for item in plan(backups, policy, protected, only_apps=set(app_ids))['candidates']:
+    for item in plan(backups, policy, protected, only_apps=set(app_ids), scheduled=scheduled)['candidates']:
         try:
             storage.delete(item['id'])
         except BackupError as error:
@@ -383,4 +420,59 @@ def enforce_after_backup(paths, storage, app_ids, *, exclude=(), log=None, audit
         log(f'已依保留原則刪除較舊的手動備份 {item["id"]}（{item["reason"]}）')
         audit(f'retention-delete backup={item["id"]} type=manual size={item["size"]} '
               f'apps={",".join(a["id"] for a in item["apps"])} reason=policy')
+    return deleted
+
+
+# ---------------------------------------------------------------- scheduled backups (排程備份)
+
+SCHEDULE_LABEL = '排程備份的保留份數'
+
+
+def _schedule_policy(keep):
+    return {'schema': SCHEMA, 'default_keep_last': keep, 'apps': {}}
+
+
+def schedule_plan(paths, storage, app_ids, keep):
+    """What the next successful scheduled run of `app_ids` would delete with `keep_last` `keep` (the preview of
+    `schedule-set`): the run's new backup counts as the newest one of each app. {candidates, blocked, freed_bytes}."""
+    if keep is None or not app_ids:
+        return {'candidates': [], 'blocked': [], 'freed_bytes': 0}
+    scheduled, problem = schedule.scheduled_ids(paths)
+    backups = storage.list_backups()
+    protected = protected_backups(paths, backups)
+    if problem:
+        scheduled = frozenset()
+    return plan(backups, _schedule_policy(keep), protected, only_apps=set(app_ids), scheduled=scheduled,
+                pool='scheduled', label=SCHEDULE_LABEL, ahead=set(app_ids))
+
+
+def enforce_schedule(paths, storage, app_ids, keep, *, exclude=(), log=None, audit=None):
+    """Keep the newest `keep` scheduled backups of each app of `app_ids` after a successful (or partial) scheduled run
+    of them (called by the job, which holds the engine lock). The manual policy never counts these; the same
+    protections apply, a backup that failed verification does not count, and nothing is deleted when the registry
+    cannot be read. Returns the deleted ids; a deletion problem is logged, never raised."""
+    log = log or (lambda _message: None)
+    audit = audit or audit_log
+    if keep is None or not app_ids:
+        return []
+    scheduled, problem = schedule.scheduled_ids(paths)
+    if problem:
+        log(f'警告：{problem}')
+        return []
+    backups = storage.list_backups()
+    protected = protected_backups(paths, backups)
+    for backup_id in exclude or ():
+        protected.setdefault(backup_id, '剛建立的備份。')
+    deleted = []
+    for item in plan(backups, _schedule_policy(keep), protected, only_apps=set(app_ids), scheduled=scheduled,
+                     pool='scheduled', label=SCHEDULE_LABEL)['candidates']:
+        try:
+            storage.delete(item['id'])
+        except BackupError as error:
+            log(f'警告：無法依排程備份的保留份數刪除備份 {item["id"]}（{error.message}）')
+            continue
+        deleted.append(item['id'])
+        log(f'已依排程備份的保留份數刪除較舊的排程備份 {item["id"]}（{item["reason"]}）')
+        audit(f'retention-delete backup={item["id"]} type=manual size={item["size"]} '
+              f'apps={",".join(a["id"] for a in item["apps"])} reason=schedule')
     return deleted

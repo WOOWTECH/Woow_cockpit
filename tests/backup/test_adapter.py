@@ -3,6 +3,7 @@
 Asserts the exact argv of every owner command, that secrets never reach argv/env/logs, that
 writers are restarted whatever fails, when restores become destructive, and the preflight rules.
 """
+import dataclasses
 import http.server
 import io
 import json
@@ -806,6 +807,23 @@ class ProbeTests(AdapterCase):
                          {'deployed': False, 'state': 'not-deployed', 'problems': [],
                           'units': [{'name': 'woowbk-demo-db.service', 'active': False},
                                     {'name': 'woowbk-demo-app.service', 'active': False}]})
+
+    def test_a_backup_needs_the_databases_it_dumps_running(self):
+        # A scheduled backup leaves out an app the adapter cannot back up as it is (lab 2026-11-17: a stopped app
+        # failed the whole run in the size estimate); the app's own units decide, not a fixed state.
+        def reason():
+            return self.adapter.unavailable(self.adapter.probe())
+        self.assertIsNone(reason())
+        self.owner.units['woowbk-demo-app.service'] = 'inactive'
+        self.assertIsNone(reason(), 'the database runs: it can be dumped while the app is stopped')
+        self.owner.units['woowbk-demo-db.service'] = 'failed'
+        self.assertEqual(reason(), '應用「示範筆記應用」已停止，無法備份：備份時它的資料庫必須在執行中。')
+        self.owner.units['woowbk-demo-app.service'] = 'active'
+        self.assertEqual(reason(), '應用「示範筆記應用」的資料庫沒有在執行，無法備份：備份時它的資料庫必須在執行中。')
+        self.owner.units['woowbk-demo-app.service'] = 'inactive'
+        self.app = dataclasses.replace(self.app, postgres=())  # nothing to dump (volumes, files, a cold database)
+        adapter = self.make_adapter()
+        self.assertIsNone(adapter.unavailable(adapter.probe()))
 
     def test_symlinked_quadlet_is_a_problem(self):
         self.owner.links.add(Q + 'woowbk-demo-app.container')
