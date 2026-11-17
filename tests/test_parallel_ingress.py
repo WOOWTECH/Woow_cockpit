@@ -45,6 +45,15 @@ class ParallelIngress(unittest.TestCase):
         self.assertNotIn('__PUBLIC_ORIGIN__',js)
         self.assertIn('https://apporo.example.test',js)
         self.assertIn('http://127.0.0.1:29092',js)
+        css=(self.out/'public/packages/woowpiweb/style.css').read_text()
+        self.assertNotIn('#6183fc',css.lower())
+        self.assertNotIn('#3f63e8',css.lower())
+        self.assertIn('--brand-primary: #C49E53',css)
+        self.assertIn('font-family: var(--brand-font)',css)
+        css=(self.out/'public/branding/branding.css').read_text()
+        self.assertIn('html:root.pf-v6-theme-dark',css)
+        self.assertIn('--pf-t--global--font--family--body: var(--brand-font)',css)
+        self.assertIn('/favicon.ico?v=',(self.out/'public/pwa/assets/brand-ui.js').read_text())
         for name in ('index.html','layout-review.html'):
             html=(self.out/'public/packages/woowtechpreview'/name).read_text()
             self.assertNotIn('src="screenshots/',html)
@@ -84,6 +93,9 @@ class ParallelIngress(unittest.TestCase):
         self.assertNotIn('cockpit-openclaw',nginx)
         self.assertIn('auth_request /__parallel_auth;',nginx)
         self.assertIn("add_header Cache-Control 'no-store'",nginx)
+        for path in ('favicon.ico','apple-touch-icon.png','brand.json','mobile-navigation.js'):
+            self.assertIn('location = /cockpit/static/'+path,nginx)
+        self.assertIn('/branding/assets/logo-symbol-blue.svg',nginx)
 
     def test_separate_private_pi_services_and_public_static_root(self):
         c=r.config(fixture_config())

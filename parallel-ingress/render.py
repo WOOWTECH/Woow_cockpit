@@ -81,6 +81,8 @@ def backend_hashes(root=Path('/')):
 
 def nginx(c):
     host = urlsplit(c['public_origin']).netloc
+    profile=brand_profile.load_profile(c['brand'])
+    icon_hash=digest(brand_profile.branding_assets(profile)['favicon.ico'])[:12]
     local = f"127.0.0.1:{c['listen_port']}"
     alias = f"listen 127.0.0.1:{c['compatibility_port']};" if c['compatibility_port'] else ''
     return f'''worker_processes 1;
@@ -88,6 +90,7 @@ pid /tmp/nginx.pid;
 error_log /dev/stderr warn;
 events {{ worker_connections 1024; }}
 http {{
+ map_hash_bucket_size 128;
  include /etc/nginx/mime.types;
  access_log /dev/stdout;
  client_body_temp_path /tmp/client_temp;
@@ -127,6 +130,12 @@ http {{
    add_header Cache-Control 'no-store';
   }}
   location = /favicon.ico {{ alias /opt/parallel/public/branding/favicon.ico; add_header Cache-Control 'no-store'; }}
+  location = /cockpit/static/favicon.ico {{ alias /opt/parallel/public/branding/favicon.ico; add_header Cache-Control 'no-store'; }}
+  location = /favicon.svg {{ alias /opt/parallel/public/branding/assets/logo-symbol-blue.svg; add_header Cache-Control 'no-store'; }}
+  location = /apple-touch-icon.png {{ alias /opt/parallel/public/branding/apple-touch-icon.png; add_header Cache-Control 'no-store'; }}
+  location = /cockpit/static/apple-touch-icon.png {{ alias /opt/parallel/public/branding/apple-touch-icon.png; add_header Cache-Control 'no-store'; }}
+  location = /cockpit/static/brand.json {{ alias /opt/parallel/public/branding/brand.json; default_type application/json; add_header Cache-Control 'no-store'; }}
+  location = /cockpit/static/mobile-navigation.js {{ alias /opt/parallel/public/branding/mobile-navigation.js; default_type application/javascript; add_header Cache-Control 'no-store'; }}
   location = /cockpit/static/branding.css {{
    alias /opt/parallel/public/branding/branding.css; default_type text/css; add_header Cache-Control 'no-store';
   }}
@@ -151,7 +160,7 @@ http {{
    proxy_set_header Accept-Encoding '';
    proxy_read_timeout 3600s;
    sub_filter_once on;
-   sub_filter '</head>' '<link rel="manifest" href="/woow-pwa/manifest.webmanifest"><meta name="theme-color" content="{brand_profile.load_profile(c['brand'])['colors']['light']['primary']}"><link rel="apple-touch-icon" href="/woow-pwa/icon-192.png"></head>';
+   sub_filter '</head>' '<link rel="icon" type="image/x-icon" href="/favicon.ico?v={icon_hash}"><link rel="manifest" href="/woow-pwa/manifest.webmanifest"><meta name="theme-color" content="{profile['colors']['light']['primary']}"><link rel="apple-touch-icon" href="/apple-touch-icon.png?v={icon_hash}"><script defer src="/woow-pwa/brand-ui.js"></script></head>';
   }}
   location @piweb {{
    rewrite ^/pi-web/?(.*)$ /$1 break;
@@ -261,7 +270,8 @@ def render(c, out, root=Path('/')):
         ' if(!allowedOrigins.includes(gatewayOrigin)){frame.hidden=true;document.getElementById("unavailable").hidden=false;return;}\n'
         ' const publicEntry=true;\n') + js[end:]
     for name in ('index.html','style.css'):
-        files['public/packages/woowpiweb/'+name] = (SOURCE/'pi-web-integration/package'/name).read_bytes()
+        files['public/packages/woowpiweb/'+name] = brand_profile.render_file('pi-web-integration/package/'+name,
+            (SOURCE/'pi-web-integration/package'/name).read_bytes(),brand_profile.load_profile(c['brand']))
     files['public/packages/woowpiweb/app.js'] = js.encode()
     manifest = json.loads((SOURCE/'pi-web-integration/package/manifest.json').read_text())
     manifest['content-security-policy'] = "default-src 'self'; frame-src 'self'; base-uri 'none'; form-action 'self'; object-src 'none'"
@@ -277,4 +287,16 @@ def render(c, out, root=Path('/')):
     spec = importlib.util.spec_from_file_location('parallel_pwa', SOURCE/'pwa-gateway/render.py')
     pwa = importlib.util.module_from_spec(spec); spec.loader.exec_module(pwa)
     pwa.render(c['brand'], out/'public/pwa')
+    profile=brand_profile.load_profile(c['brand'])
+    icon_hash=digest(brand_profile.branding_assets(profile)['favicon.ico'])[:12]
+    # Cockpit can reassign its favicon after login; keep this entrance's icon
+    # without replacing host titles, account names, service IDs or API data.
+    script='''(()=>{'use strict';const expected=ICON;const title=TITLE;let loaded=document.readyState==='complete';
+function update(){for(const link of document.querySelectorAll('link[rel="icon"],link[rel="shortcut icon"]')){
+if(link.getAttribute('href')!==expected)link.setAttribute('href',expected)}
+if(loaded&&document.body?.classList.contains('login-pf')&&document.title!==title)document.title=title}
+update();document.addEventListener('DOMContentLoaded',update);window.addEventListener('load',()=>{loaded=true;update()});
+new MutationObserver(update).observe(document.head,{subtree:true,childList:true,attributes:true,attributeFilter:['href']});})();'''
+    script=script.replace('ICON',json.dumps('/favicon.ico?v='+icon_hash)).replace('TITLE',json.dumps(profile['display_name']))
+    (out/'public/pwa/assets/brand-ui.js').write_text(script)
     return hashes
