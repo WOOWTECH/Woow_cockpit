@@ -2,6 +2,25 @@
 # Install this integration separately from Cockpit's shared backup installer.
 set -euo pipefail
 [ "$(id -u)" = 0 ] || { echo 'Run with sudo.' >&2; exit 1; }
+python3 - "${BRAND:-}" <<'PY'
+import json
+import re
+import sys
+from pathlib import Path
+p = Path('/etc/cockpit/branding/brand.json')
+profile = json.loads(p.read_text()) if p.exists() else None
+installed = profile['id'] if profile else 'woowtech'
+requested = sys.argv[1] or installed
+if requested not in ('woowtech', 'apporo') or requested != installed:
+    raise SystemExit('Install the matching Cockpit brand profile before installing its Pi Web gateway.')
+if profile:
+    if profile.get('schema') != 1:
+        raise SystemExit('Invalid installed brand profile schema.')
+    for mode in ('light', 'dark'):
+        for key in ('primary', 'hover', 'on_primary'):
+            if not re.fullmatch(r'#[0-9a-fA-F]{6}', profile.get('colors', {}).get(mode, {}).get(key, '')):
+                raise SystemExit('Invalid installed brand colors.')
+PY
 pi_host=${1:-}; pi_port=${2:-19094}; pi_vpn=${3:-}; pi_public=${4:-}
 pi_vpn_userspace=${PI_GATEWAY_VPN_USERSPACE:-0}
 [[ "$pi_vpn_userspace" = 0 || "$pi_vpn_userspace" = 1 ]] || { echo 'PI_GATEWAY_VPN_USERSPACE must be 0 or 1.' >&2; exit 1; }

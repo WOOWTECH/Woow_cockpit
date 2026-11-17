@@ -11,3 +11,23 @@ For Pi Web in the sidebar over the public HTTPS origin, also install `pi-web-int
 Run `npm ci`, then `PLAYWRIGHT_CHROMIUM_EXECUTABLE=/path/to/chrome node pwa-gateway/test.mjs` for a local browser installability check. Set `COCKPIT_URL` to the public HTTPS origin and `COCKPIT_PASSWORD` in the environment to additionally check authenticated navigation and the WebSocket. A Chromium check does not replace an Android device installation test.
 
 For an optional installation and standalone-window test, run `xvfb-run -a env PWA_HEADFUL=1 PLAYWRIGHT_CHROMIUM_EXECUTABLE=/path/to/chrome COCKPIT_URL=https://your-host.example node pwa-gateway/install-test.mjs`. It installs into an isolated profile, selects the browser's standalone-window preference, launches the app, checks its display mode, and removes the test installation. `COCKPIT_PASSWORD` also enables a real login inside the installed app. See [the public deployment validation](VALIDATION.md) for the tested configuration and remaining boundaries.
+# 品牌選擇
+
+PWA 與 Cockpit 共用 `brands/woowtech/brand.json`、`brands/apporo/brand.json`。
+先以 `scripts/manage.py install --brand apporo` 安裝品牌，再執行本目錄的
+`install.sh`；安裝器會讀取 `/etc/cockpit/branding/brand.json`，不會因省略
+`BRAND` 而將 Apporo 換回 WOOW。若明確提供不同的 `BRAND`，會在寫入前拒絕。
+
+名稱、主色與原始圖示依品牌產生；PWA 的 `id`、scope、start_url、服務名稱
+及 Cockpit／Pi Web 代理路由相同。既有已安裝 PWA 由瀏覽器重新讀取 manifest
+後更新顯示名稱／圖示，更新時間由瀏覽器決定。
+
+不啟動服務的產物驗證：
+
+```bash
+python3 pwa-gateway/render.py --brand apporo --output /tmp/apporo-pwa-preview
+node tests/pwa-brands.mjs
+```
+
+後者用隔離 HTTP loopback fixture 驗證兩品牌的瀏覽器安裝及獨立視窗啟動，
+不會登入或變更正式 Cockpit。

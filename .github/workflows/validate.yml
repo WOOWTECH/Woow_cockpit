@@ -8,7 +8,7 @@ permissions:
 jobs:
   validate:
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -44,9 +44,9 @@ jobs:
           node --test pi-web-integration/tests/*.mjs
       - run: npm ci
       - run: npx playwright-core install --with-deps chromium
-      - name: Gallery, service management and backup browser tests
-        run: npm test
-      - name: Application catalogue browser tests
-        run: node tests/apps-catalog.mjs
-      - name: Pi Web embedded theme browser tests
-        run: node tests/embedded-theme.mjs
+      - name: Shared ownership and reference gallery tests
+        run: node --test tests/managed-owners.mjs && node tests/preview.mjs
+      - name: Both installed brands - applications, services, backup and Pi themes
+        run: node tests/brand-browser.mjs
+      - name: Both brands - PWA browser installation fixtures
+        run: node tests/pwa-brands.mjs

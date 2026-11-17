@@ -76,4 +76,15 @@ PYTHONDONTWRITEBYTECODE=1 python3 scripts/check_source.py
 
 Brand tests install only into temporary roots. They cover default/preserved selection, explicit switching, missing assets, invalid schemas/colors/paths, symlinks, exact official asset bytes, backend/app byte parity, idempotency, permissions, drift, rollback, and preservation of device settings/data. Also run the separate browser, PWA and Pi suites for both brands when changing presentation or the runtime contract. Use the transaction ID reported by install with the existing `rollback` command; it refuses to overwrite newer operator changes.
 
+`manage.py rollback` restores only its managed files. The Pi process caches its
+palette at startup, and the PWA has a separate installation. For an appliance
+managed by `Woow_ubuntu_version_control`, use its coordinated
+`woow-release.py brand --brand woowtech` with the same approved dual-brand material
+lock to switch the complete management entry back. It refreshes the PWA and
+restarts active Pi gateways while preserving their LAN/VPN/public origins.
+For a standalone Cockpit deployment, after restoring managed files, run
+`env -u BRAND bash pwa-gateway/install.sh` as the PWA service owner and restart
+only the already active Pi gateway services. Do not run the fresh Pi installer
+with empty VPN/public arguments to perform a brand rollback.
+
 This branch starts at main `c393dfb` (2026.11.15.2). The separate dirty checkout's backup-schedule branch is not merged or replaced by this work. Reconcile that feature separately and rerun its timer/retention tests when integrating; this profile implementation does not assert that its schedule functionality is included in main.
