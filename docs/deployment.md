@@ -69,16 +69,17 @@ systemctl --user status podman.socket
 - 安裝器**從不**規劃、寫入、備份、驗證或回退執行資料：備份檔（`/var/lib/woowtech-backup/`）、加密金鑰（`/etc/woowtech-cockpit/backup/keys/`）與 `/run/woowtech-backup/`。這些由引擎在第一次使用時建立；重新安裝或回退介面不會刪除備份與金鑰。資料位置與清理見 [operations.md](operations.md)。
 - 應用擁有者帳號需能執行 rootless Podman（subuid／subgid），並啟用 linger（`sudo loginctl enable-linger <應用擁有者>`），讓使用者服務管理器在沒有登入時也執行；否則頁面會提示「使用者服務管理器未啟動」。
 - 安裝後第一次使用，請到「加密金鑰」建立金鑰並保存緊急金鑰，見 [backup.md](backup.md)。
-- 「排程備份」預設關閉。安裝器一律安裝並啟用排程檢查的計時器；排程關閉時它每 5 分鐘只做檢查，不會建立備份。開啟排程的方式見 [backup.md](backup.md)，維護見 [operations.md](operations.md)。
+- 「排程備份」預設關閉。安裝器一律安裝並啟用排程檢查的計時器（管理者用 `systemctl mask` 遮蔽它時除外，見下方）；排程關閉時它每 5 分鐘只做檢查，不會建立備份。開啟排程的方式見 [backup.md](backup.md)，維護見 [operations.md](operations.md)。
 
 ### 排程備份的系統單元
 
-`woowtech-cockpit-backup-schedule.timer`（`OnCalendar=*:0/5`，沒有 `Persistent=`）啟動 `woowtech-cockpit-backup-schedule.service`（`Type=oneshot`，固定執行 `/usr/local/libexec/woowtech-cockpit-backup schedule-tick`，不讀任何輸入，helper 不存在時不執行）。兩者的名稱刻意不符合作業單元的 `woowtech-backup-*`。helper 從不寫入單元檔，也不執行 `daemon-reload`；單元檔只由安裝器管理：
+`woowtech-cockpit-backup-schedule.timer`（`OnCalendar=*:0/5`，沒有 `Persistent=`）啟動 `woowtech-cockpit-backup-schedule.service`（`Type=oneshot`，固定執行 `/usr/local/libexec/woowtech-cockpit-backup schedule-tick`，不讀任何輸入，helper 不存在時不執行；錯誤輸出（stderr，例如程式錯誤或無法啟動備份作業）以 warning 等級記入系統日誌）。兩者的名稱刻意不符合作業單元的 `woowtech-backup-*`。helper 從不寫入單元檔，也不執行 `daemon-reload`；單元檔只由安裝器管理：
 
 - **只在實際系統（`/`）上**執行 `systemctl`，且只用固定參數、只指名這個計時器。安裝前把計時器原本的狀態（是否已啟用、是否在執行）記在安裝交易裡；寫入備份元件前若計時器在執行就先停止，寫完後若有單元檔變更就執行 `systemctl daemon-reload`，最後 `systemctl enable --now woowtech-cockpit-backup-schedule.timer`。沒有任何檔案需要更新時，若計時器被手動停用，安裝也會重新啟用它。安裝中途失敗時，檔案與計時器都恢復到安裝前的狀態。
-- **回退**會先停止計時器（回退單元檔時也先停用它），還原或移除檔案，執行 `systemctl daemon-reload`；若安裝前計時器已啟用或在執行，回退後恢復原狀。回退第一次加入排程備份的安裝，計時器就會停用並移除。
+- 計時器被管理者遮蔽（`systemctl mask`）時，安裝器把它當成管理者的決定：不啟用也不啟動它，安裝照常完成，輸出的 `notices` 說明排程備份因此不會開始；要恢復時先 `systemctl unmask woowtech-cockpit-backup-schedule.timer` 再重新安裝。其他 `systemctl` 失敗仍會讓安裝失敗並恢復原狀。
+- **回退**只在那次安裝更動了備份元件（包含這兩個單元檔）時處理計時器：還原檔案期間先停止執行中的計時器（回退單元檔時也先停用它），還原或移除檔案，有單元檔變更時執行 `systemctl daemon-reload`。那次安裝曾停止計時器或更動了單元檔時，回退後計時器恢復到安裝前的狀態（安裝前已啟用或在執行就恢復原狀）；否則回退前在執行的計時器會再啟動。回退第一次加入排程備份的安裝，計時器就會停用並移除。沒有更動備份元件的安裝交易（例如 `--no-backup`），回退時完全不執行 `systemctl`。
 - `verify` 會在輸出中列出計時器狀態（`timer`），但不算成差異（drift）；`plan` 會列出安裝將執行的 `systemctl` 步驟。
-- `--no-backup` 不更動這兩個單元與計時器；`--root` 只寫入檔案、不執行 `systemctl`。
+- `--no-backup` 不更動這兩個單元與計時器；`--root` 只寫入檔案、不執行 `systemctl`。在 `/` 上但系統不是由 systemd 啟動（沒有 `/run/systemd/system`，例如 chroot 或建置映像時）也一樣：只寫入檔案，並提示 systemd 執行後要執行的指令。
 - 單元檔只以解析檢查（`scripts/check_source.py` 與單元測試）；**不要對實際系統或實驗室設備執行 `systemd-analyze verify`**（曾因 `--user` 驗證取代執行中管理程式的私有 socket，造成 Podman 健康檢查故障）。需要確認時用 `systemctl show woowtech-cockpit-backup-schedule.timer`。
 
 **不要在備份、還原或驗證作業進行中安裝、更新或回退。** 安裝器不會自行檢查進行中的作業，替換或移除引擎與 helper 可能讓作業中途失敗。先到「備份與還原」的「活動紀錄」確認沒有「等待開始」或「執行中」的作業；也可在主機執行 `systemctl list-units 'woowtech-backup-*'`，沒有列出單元表示沒有作業在執行（排程檢查的計時器 `woowtech-cockpit-backup-schedule.*` 不在這個名稱範圍內）。開啟了排程備份時，避開排程時間前後安裝；安裝期間計時器會被暫停，但已開始的排程備份作業不會等安裝結束。

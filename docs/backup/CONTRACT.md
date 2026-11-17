@@ -131,7 +131,7 @@ root). No `sudo`. Do not write user-supplied credentials anywhere.
 | `/usr/local/share/woowtech-cockpit-backup/catalog/<id>/` | root 0755/0644 | trusted templates (quadlet files, app assets) |
 | `/etc/woowtech-cockpit/backup/keys/` | root 0700 | `device-<KEYID>.key`, `imported-<KEYID>.key` (0600), `keys.json` |
 | `/etc/woowtech-cockpit/backup/settings.json` | root 0644 | `{"schema": 1, "encrypt_by_default": bool, "updated": "…Z"}` (預設加密備份); missing, not root-owned, group/world-writable, a symlink or invalid → ignored: **encrypted** (with a `problem` in `status.settings`) |
-| `/var/lib/woowtech-backup/` | root 0700 | `archives/<id>.tar` (format 2, every new backup) or `archives/<id>.woowbackup` (format 1) + `archives/<id>.json` (index), `uploads/<upload_id>.{part,json,done}` (`.done` names the backup of a finished upload for 24 h), `staging/<job>/`, `pending/<job>/` (an in-place restore's pre-restore copy: `pending.json` + `data/apps/<id>/…`, plaintext like staging, kept until it is packaged into the safety backup and removed only by that packaging or before the restore changed anything; §8, §9), `exports/<export_id>.tar` + `.json` (unencrypted download copies, 0600, deleted after `EXPORT_TTL` = 15 min; §8), `jobs/<job>.json` + `.log` + `.lock` (record lock, empty, 0600) + `.cancel` (pending cancel request), `requests.json`, `schedule-state.json` (0600, ≤ 4 MiB: the schedule's registry `{backup id: {job, slot, trigger}}`, last handled slot, waiting slot, last run, events ≤ 50; §8) |
+| `/var/lib/woowtech-backup/` | root 0700 | `archives/<id>.tar` (format 2, every new backup) or `archives/<id>.woowbackup` (format 1) + `archives/<id>.json` (index), `uploads/<upload_id>.{part,json,done}` (`.done` names the backup of a finished upload for 24 h), `staging/<job>/`, `pending/<job>/` (an in-place restore's pre-restore copy: `pending.json` + `data/apps/<id>/…`, plaintext like staging, kept until it is packaged into the safety backup and removed only by that packaging or before the restore changed anything; §8, §9), `exports/<export_id>.tar` + `.json` (unencrypted download copies, 0600, deleted after `EXPORT_TTL` = 15 min; §8), `jobs/<job>.json` + `.log` + `.lock` (record lock, empty, 0600) + `.cancel` (pending cancel request), `requests.json`, `schedule-state.json` (0600, ≤ 4 MiB: the schedule's registry `{backup id: {job, slot, trigger}}`, last handled slot, the handled slot a clock reset put aside (`handled_before_reset`), the floor kept while the clock is below `armed_at` (`armed_floor{armed_at, floor}`), waiting slot, last run, events ≤ 50; §8) |
 | `/run/woowtech-backup/` | root 0700 (tmpfs) | `engine.lock`, `jobs.lock` (start lock), `index.lock` (index sidecar writes), transient key files `key-<random>` (0600, deleted in `finally`), `schedule-tick` (empty, 0600; its mtime is the last tick), `schedule-tick.lock` (one tick at a time), `schedule.lock` (state file writes), `schedule-state.reported` (an unreadable state file was journaled this boot) |
 
 `woowbackup.paths.Paths` holds these. Tests construct `Paths(base=tmpdir)`; real paths are used
@@ -1122,7 +1122,8 @@ no key); `busy` (`details.job_id`). `schedule-get` and `schedule-tick` take no i
   * Trigger: the static `woowtech-cockpit-backup-schedule.timer` (`OnCalendar=*:0/5`, `AccuracySec=15s`, no `Persistent=`,
     `WantedBy=timers.target`) starts `woowtech-cockpit-backup-schedule.service` (`Type=oneshot`,
     `ExecStart=/usr/local/libexec/woowtech-cockpit-backup schedule-tick`, `ConditionPathExists=` that helper,
-    `StandardInput=null`, `StandardOutput=null`, `SyslogLevel=warning` (a traceback on stderr is a warning),
+    `StandardInput=null`, `StandardOutput=null` (the JSON reply), `StandardError=journal` with `SyslogLevel=warning` (a
+    traceback or a job that could not be launched is a warning; unset, stderr would follow stdout to /dev/null),
     `LogLevelMax=notice`, `TimeoutStartSec=15min`). Both live in `/usr/local/lib/systemd/system/`, outside the
     `woowtech-backup-*` job units; the timer only ticks: no unit config is generated, the helper never writes units or runs
     `daemon-reload`. Never run `systemd-analyze verify` against a live system or a lab device's runtime directories (a
@@ -1131,15 +1132,21 @@ no key); `busy` (`details.job_id`). `schedule-get` and `schedule-tick` take no i
   * Time: the engine unsets `TZ` and calls `tzset()`; slots are in the device's zone (`/etc/localtime`, read per tick, so a
     change applies at the next tick). A slot is a local date and `time` on a scheduled weekday as a UTC instant; a time a
     DST change skips is the moment the clock jumps past it (02:30 on a 02:00→03:00 day runs at 03:00), a repeated time
-    runs at its first occurrence. Slots before `armed_at` never run (`armed_at` above the clock — it went back — counts as
-    now). A slot is handled once: run, recorded as missed/skipped/no-key/no-apps, or a launch failure.
+    runs at its first occurrence. Slots before `armed_at` never run. While `armed_at` lies above the clock (it went back
+    after the schedule was armed) the slots start at a floor instead: the time of the first tick that saw it, kept in the
+    state (`armed_floor`, lowered when the clock goes back further, never moved forward by later ticks, dropped once the
+    clock is past `armed_at` or unused once the schedule is armed again); so the slots after it run and an unhandled
+    one becomes `overdue`. A slot is handled once: run, recorded as missed/skipped/no-key/no-apps, or a launch failure.
   * Each tick: touches `/run/woowtech-backup/schedule-tick`; holds `schedule-tick.lock` (a second tick returns
     `tick-running`); when the last scheduled job is still recorded queued/running, runs the recovery first (it never judges
     a job that runs; a dead one becomes `interrupted`); records the last run's outcome once its job ended
-    (`schedule-result`, events `failed`/`partial`/`cancelled`); drops registry entries whose backup is gone (neither its
-    index nor its archive exists) and whose job is not running; resets the handled slot when it lies more than a day ahead
-    (the clock went back: everything up to now counts as handled, `schedule-clock` once); then decides (`schedule.decide`,
-    pure: settings, state, clock, zone, uptime):
+    (`schedule-result`, events `failed`/`partial`/`cancelled`); drops registry entries whose job ended (its record is
+    readable and finished, or gone; an unreadable record keeps the entry) and whose backup is then gone (neither its index
+    nor its archive exists; the job is read first, so a job that publishes and ends between the two reads keeps its
+    entry); resets the handled slot when it lies more than a day ahead (the clock went back: everything up to now counts
+    as handled, `schedule-clock` once) and puts the old one aside (`handled_before_reset`): once the clock is past it again
+    (it came back, e.g. NTP after a lost RTC) it counts as handled, so the slots that ran are not reported missed; then
+    decides (`schedule.decide`, pure: settings, state, clock, zone, uptime):
     * off → nothing (a waiting slot is dropped); a bad settings file → nothing, one `settings-problem` event per problem;
     * the latest due slot that is not handled: less than 15 minutes late → start (`on-time`); a slot that waits for
       another job → start as soon as no job is queued/running (`late`, any delay), and recorded `skipped` (busy) when the
@@ -1147,6 +1154,9 @@ no key); `busy` (`details.job_id`). `schedule-get` and `schedule-tick` take no i
       recorded `missed`, else it is caught up once (`catch-up`); several missed slots → one run of the latest, the others
       one collapsed `missed` event (`first`, `count`);
     * no run starts before 10 minutes of uptime (`settle`: nothing recorded; the slot is judged again by the next tick).
+      Uptime is the time since PID 1 started (`CLOCK_BOOTTIME` minus PID 1's start time, field 22 of `/proc/1/stat`):
+      a restarted container without a time namespace counts from its own start, not from the host's boot; when the
+      stat cannot be read or compared, `CLOCK_BOOTTIME`.
   * Starting: apps = the catalog's apps for `"all"`, else the saved list; none of them in the catalog → `no-apps` event;
     預設加密備份 on and no device key → `no-key` event (no job, no retry). Otherwise `start_job('backup', params,
     "schedule-<slot as YYYYMMDDTHHMMSSZ>")` — the request id makes two ticks of one slot start one job (dedup 24 h, and the
@@ -1189,11 +1199,17 @@ no key); `busy` (`details.job_id`). `schedule-get` and `schedule-tick` take no i
     records the timer's state (`systemctl show`: load, unit file and active state) in the transaction journal
     (`systemd{timer, before, stopped}`), stops the timer before it writes backup files when it is active, runs
     `daemon-reload` when a unit file changed and `enable --now` the timer when it is not enabled and active (also on an
-    install with nothing to change). A failed install restores the files and the earlier timer state. Rollback stops the
-    timer, disables it while its unit file still exists when the units are rolled back, restores or removes the files,
-    runs `daemon-reload` and enables/starts it again when it was enabled/active before. `verify` reports `timer` (or
-    `not-checked`), never as drift. `--no-backup` leaves the units and the timer alone; `--root` writes the files below that
-    root, prints what to run there and runs no systemctl.
+    install with nothing to change). A masked timer (`systemctl mask`) is the administrator's decision: never enabled or
+    started, reported in the output's `notices`, and the install completes; any other systemctl failure fails the install.
+    A failed install restores the files and the earlier timer state. Rollback concerns the timer only when the transaction
+    changed backup files (the units are some): it stops a running timer while the files go back, disables it while its
+    unit file still exists when the units are rolled back, restores or removes the files and runs `daemon-reload` when a
+    unit file changed; it enables/starts the timer again when it was enabled/active before the install if the install
+    stopped it or changed a unit file, else it starts it again when this rollback stopped it. A transaction that changed
+    no backup file (e.g. `--no-backup`) is rolled back without any systemctl. `verify` reports `timer` (or
+    `not-checked`), never as drift. `--no-backup` leaves the units and the timer alone; `--root`, and a live root where
+    systemd is not PID 1 (no `/run/systemd/system`: a chroot, an image build), write the files, print what to run once
+    systemd runs there and run no systemctl.
 
 ## 9. Backup and restore algorithms (adapter `quadlet-postgres`)
 

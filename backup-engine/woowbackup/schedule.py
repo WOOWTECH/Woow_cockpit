@@ -9,23 +9,26 @@
 * Slots: a slot is a local date and `time` on a scheduled weekday in the device's time zone (`/etc/localtime`; the
   caller's `TZ` is ignored, so a change of the zone applies at the next tick), as a UTC instant. A time that a DST
   change skips runs when the clock jumps past it; a time it repeats runs at its first occurrence. Slots before
-  `armed_at` (the schedule was turned on, or its time or days changed) never run.
+  `armed_at` (the schedule was turned on, or its time or days changed) never run; while the clock is below
+  `armed_at` (it went back) they start at the time of the first tick that saw that, kept as a floor.
 * The tick (`schedule-tick`, run by woowtech-cockpit-backup-schedule.timer every 5 minutes) touches
   `/run/woowtech-backup/schedule-tick` and decides with `decide`, a pure function of the settings, the state, the clock,
-  the zone and the uptime: the latest due slot that is not handled yet starts a job when it is less than 15 minutes late
-  (`on-time`); a slot that waited for another job starts as soon as that job ended (`late`) and is recorded
-  `skipped` when the next slot arrives first; a slot no tick saw in time (the device was off, the timer stopped) is
-  caught up once, only the latest one, after 10 minutes of uptime (`catch-up`), unless the next slot is less than 3
-  hours away: then it is recorded `missed`. No run starts before 10 minutes of uptime. There is no automatic retry:
-  a problem before the job starts (no device key while 預設加密備份 is on, no app) is an event, a problem inside it a
+  the zone and the uptime (since PID 1 started): the latest due slot that is not handled yet starts a job when it is
+  less than 15 minutes late (`on-time`); a slot that waited for another job starts as soon as that job ended (`late`)
+  and is recorded `skipped` when the next slot arrives first; a slot no tick saw in time (the device was off, the timer
+  stopped) is caught up once, only the latest one, after 10 minutes of uptime (`catch-up`), unless the next slot is less
+  than 3 hours away: then it is recorded `missed`. No run starts before 10 minutes of uptime. There is no automatic
+  retry: a problem before the job starts (no device key while 預設加密備份 is on, no app) is an event, a problem inside it a
   failed job.
   `request_id` `schedule-<slot UTC>` keeps two ticks from starting two jobs for one slot; a tick lock serialises ticks.
 * State: `/var/lib/woowtech-backup/schedule-state.json` (root 0600): the registry `{backup id: {job, slot, trigger}}`
   (a backup is a scheduled one only when its index type is `manual` and its id is listed: the archive and index
-  formats are those of 2026.11.15.2), the last handled slot, the slot waiting for another job, the last run and the
-  recent events (newest first, at most 50). The job writes its registry entry before any app pauses; an entry goes
-  once its backup is gone and its job is not running. A state file that cannot be read stops the schedule and every
-  automatic deletion of manual and scheduled backups (retention cannot tell them apart then); it is never overwritten.
+  formats are those of 2026.11.15.2), the last handled slot (and the one a clock reset put aside until the clock is
+  past it again), the floor kept while the clock is below `armed_at`, the slot waiting for another job, the last run
+  and the recent events (newest first, at most 50). The job writes its registry entry before any app pauses; an
+  entry goes once its job ended (its record is readable and finished, or gone) and then its backup is gone (an
+  unreadable record keeps it). A state file that cannot be read stops the schedule and every automatic deletion of
+  manual and scheduled backups (retention cannot tell them apart then); it is never overwritten.
 * Journal (syslog ident woowtech-cockpit-backup, authpriv; notice, warning for failures), once per slot:
   `schedule-set`, `schedule-run`, `schedule-wait`, `schedule-skip`, `schedule-missed`, `schedule-result`,
   `schedule-clock` (the clock went back) and the scheduled retention's `retention-delete … reason=schedule`.
@@ -258,7 +261,8 @@ def request_id(slot):
 
 @dataclass(frozen=True)
 class Env:
-    """What a tick knows about time: `now` (UTC, aware), the device's zone and its name, seconds since boot."""
+    """What a tick knows about time: `now` (UTC, aware), the device's zone and its name, seconds since PID 1 started
+    (`uptime`)."""
     now: datetime.datetime
     zone: datetime.tzinfo
     zone_name: str
@@ -293,11 +297,23 @@ def local_zone():
         return UTC, 'UTC'
 
 
-def uptime():
+def uptime(stat_path='/proc/1/stat', boottime=None):
+    """Seconds since PID 1 started: the device's uptime, or the container's since it (re)started. CLOCK_BOOTTIME
+    alone is the host's uptime inside a container without a time namespace, so a restarted container would never
+    wait its 10 minutes; PID 1's start (field 22 of /proc/1/stat, clock ticks since boot) is subtracted. A stat that
+    cannot be read or compared gives CLOCK_BOOTTIME (monotonic time without it)."""
+    if boottime is None:
+        try:
+            boottime = time.clock_gettime(time.CLOCK_BOOTTIME)
+        except (AttributeError, OSError):
+            return time.monotonic()
     try:
-        return time.clock_gettime(time.CLOCK_BOOTTIME)
-    except (AttributeError, OSError):
-        return time.monotonic()
+        data = util.read_file_limited(stat_path, 4096)
+        fields = data[data.rindex(b')') + 1:].split()  # the command name before it may hold spaces and parentheses
+        started = int(fields[19]) / os.sysconf('SC_CLK_TCK')
+    except (OSError, ValueError, IndexError):
+        return boottime
+    return boottime - started if 0 <= started <= boottime else boottime
 
 
 def system_env():
@@ -417,18 +433,39 @@ def _range(slots):
     return {'slot': slots[-1], 'first': slots[0], 'count': len(slots)}
 
 
+def _armed(settings, state, now):
+    """Where the slots start: `armed_at`; while the clock is below it (it went back after the schedule was armed),
+    the floor a tick kept for that `armed_at` (`_check_armed`), so the slots after it run instead of waiting until the
+    clock passes `armed_at` again."""
+    armed = parse_time(settings.get('armed_at'))
+    if armed is None or now >= armed:
+        return armed
+    kept = (state or {}).get('armed_floor') or {}
+    floor = parse_time(kept.get('floor')) if kept.get('armed_at') == settings.get('armed_at') else None
+    return armed if floor is None else min(armed, floor)
+
+
+def _handled(state, now):
+    """The last handled slot; the one a clock reset put aside (`_check_clock`) counts again once the clock is past it
+    (the clock came back: those slots ran)."""
+    handled = parse_time(state.get('handled'))
+    kept = parse_time(state.get('handled_before_reset'))
+    if kept is not None and kept <= now and (handled is None or kept > handled):
+        return kept
+    return handled
+
+
 def decide(settings, state, env):
-    """The pure tick decision (module docstring). `state` holds `handled` and `pending` (ISO texts); nothing is
-    written here."""
+    """The pure tick decision (module docstring). `state` holds `handled`, `pending`, `handled_before_reset` and
+    `armed_floor` (ISO texts); nothing is written here."""
     now, zone = env.now, env.zone
     out = Decision()
     pending = parse_time((state.get('pending') or {}).get('slot'))
     if not settings['enabled']:
         out.clear_pending = pending is not None
         return out
-    armed = parse_time(settings.get('armed_at')) or now
-    armed = min(armed, now)  # a clock set back below armed_at must not block every slot until it catches up
-    handled = parse_time(state.get('handled'))
+    armed = _armed(settings, state, now) or now
+    handled = _handled(state, now)
     if pending is not None and (pending < armed or (handled is not None and pending <= handled) or pending > now):
         out.clear_pending, pending = True, None
     latest = latest_slot(settings, zone, now)
@@ -491,7 +528,7 @@ def tick_path(paths):
 
 def empty_state():
     return {'schema': SCHEMA, 'registry': {}, 'handled': None, 'pending': None, 'last_run': None, 'events': [],
-            'logged': {}}
+            'logged': {}, 'handled_before_reset': None, 'armed_floor': None}
 
 
 def _iso_or_none(value):
@@ -545,6 +582,11 @@ def _check_state(data):
     state['registry'] = _check_registry(data.get('registry', {}))
     handled = data.get('handled')
     state['handled'] = handled if util.is_iso_utc(handled) else None
+    kept = data.get('handled_before_reset')
+    state['handled_before_reset'] = kept if util.is_iso_utc(kept) else None
+    floor = data.get('armed_floor')
+    if isinstance(floor, dict) and util.is_iso_utc(floor.get('armed_at')) and util.is_iso_utc(floor.get('floor')):
+        state['armed_floor'] = {'armed_at': floor['armed_at'], 'floor': floor['floor']}
     pending = data.get('pending')
     if isinstance(pending, dict) and util.is_iso_utc(pending.get('slot')) and util.is_iso_utc(pending.get('since')):
         state['pending'] = {'slot': pending['slot'], 'since': pending['since'],
@@ -726,16 +768,15 @@ def settle_last_run(state, job_lookup, env, journal):
         journal(f'schedule-result {where} result={result} code={code or "-"}', True)
 
 
-def prune_registry(state, job_lookup, backup_present):
-    """Drop entries whose backup is gone (neither listed nor on disk) and whose job is not running."""
+def prune_registry(state, job_ended, backup_present):
+    """Drop entries whose job ended (`job_ended`: its record is readable and finished, or there is none) and whose
+    backup is gone (neither listed nor on disk). The job is read first: a job that publishes and ends between the two
+    reads has ended before its backup is looked for, so the backup is found. Anything unknown keeps the entry."""
     for backup_id, entry in list(state['registry'].items()):
         try:
-            if backup_present(backup_id):
+            if not job_ended(entry['job']) or backup_present(backup_id):
                 continue
         except Exception:  # noqa: BLE001 - unknown: keep the entry (it decides how retention counts the backup)
-            continue
-        record = job_lookup(entry['job'])
-        if record is not None and record.get('state') in jobs.ACTIVE:
             continue
         del state['registry'][backup_id]
 
@@ -846,20 +887,45 @@ def _report_state_problem(paths, journal):
 
 
 def _check_clock(state, settings, env, journal):
-    """A handled slot more than a day ahead means the clock went back: start over from now (logged once)."""
+    """A handled slot more than a day ahead means the clock went back: start over from now (logged once). The handled
+    slot is put aside (`handled_before_reset`, the latest of several resets) and counts as handled again once the clock
+    is past it: when the clock comes back (a lost RTC that NTP fixes) the slots that ran are not reported missed."""
     handled = parse_time(state.get('handled'))
+    kept = parse_time(state.get('handled_before_reset'))
+    if kept is not None and kept <= env.now:
+        if handled is None or handled < kept:
+            handled = kept
+            state['handled'] = util.iso_utc(kept)
+        state['handled_before_reset'] = kept = None
     if handled is None or (handled - env.now).total_seconds() <= CLOCK_BACK_SECONDS:
         return
     latest = latest_slot(settings, env.zone, env.now) if settings.get('days') else None
     state['handled'] = None if latest is None else util.iso_utc(latest)
+    state['handled_before_reset'] = util.iso_utc(handled if kept is None else max(handled, kept))
     state['pending'] = None
     journal(f'schedule-clock reset handled={util.iso_utc(handled)} now={util.iso_utc(env.now)}', True)
 
 
+def _check_armed(state, settings, env):
+    """`armed_at` above the clock (it went back after the schedule was armed): the first tick that sees it keeps its
+    time as the floor of that `armed_at`, lowered when the clock goes back further and kept as the clock moves on, so
+    the slots after the floor run (`_armed`). Dropped once the clock is past `armed_at`, and unused for another
+    `armed_at` (saved again)."""
+    armed_at = settings.get('armed_at') if settings.get('enabled') else None
+    armed = parse_time(armed_at)
+    if armed is None or env.now >= armed:
+        state['armed_floor'] = None
+        return
+    kept = state.get('armed_floor') or {}
+    floor = parse_time(kept.get('floor')) if kept.get('armed_at') == armed_at else None
+    if floor is None or env.now < floor:
+        state['armed_floor'] = {'armed_at': armed_at, 'floor': util.iso_utc(env.now)}
+
+
 def run_tick(host):
     """One tick: `host` is the helper's Services (paths, env, schedule_settings, catalog, encrypt_by_default, keys,
-    start, job_record, recover, backup_present, journal). Returns {decision, slot?, job_id?} (stdout of the unit is
-    discarded; a manual run of `schedule-tick` prints it)."""
+    start, job_record, job_ended, recover, backup_present, journal). Returns {decision, slot?, job_id?} (stdout of the
+    unit is discarded; a manual run of `schedule-tick` prints it)."""
     paths = host.paths
     env = host.env()
     touch_tick(paths, env.now)
@@ -893,7 +959,7 @@ def _tick(host, env):
             return {'decision': 'state-problem'}
         before = json.dumps(state, sort_keys=True)
         settle_last_run(state, host.job_record, env, log)
-        prune_registry(state, host.job_record, host.backup_present)
+        prune_registry(state, host.job_ended, host.backup_present)
         _check_clock(state, settings, env, log)
         if problem:
             if state['logged'].get('settings') != problem:
@@ -906,6 +972,7 @@ def _tick(host, env):
             _emit(journal, lines)
             return {'decision': 'settings-problem'}
         state['logged'].pop('settings', None)
+        _check_armed(state, settings, env)
         decision = decide(settings, state, env)
         if decision.clear_pending:
             state['pending'] = None
@@ -1039,15 +1106,15 @@ def timer_inactive(timer, env):
 
 
 def _overdue(settings, state, env):
-    """The newest slot that should have started 30 minutes ago is neither handled nor waiting."""
-    armed = parse_time(settings.get('armed_at'))
+    """The newest slot that should have started 30 minutes ago is neither handled nor waiting (the slots start where
+    the tick's do: `_armed`, `_handled`)."""
+    armed = _armed(settings, state, env.now)
     if armed is None:
         return None
-    armed = min(armed, env.now)
     latest = latest_slot(settings, env.zone, env.now - datetime.timedelta(seconds=OVERDUE_SECONDS))
     if latest is None or latest < armed:
         return None
-    handled = parse_time(state.get('handled'))
+    handled = _handled(state, env.now)
     pending = parse_time((state.get('pending') or {}).get('slot'))
     if (handled is not None and latest <= handled) or (pending is not None and pending >= latest):
         return None

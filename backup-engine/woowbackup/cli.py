@@ -410,6 +410,19 @@ class Services:
         except BackupError:
             return None
 
+    def job_ended(self, job_id):
+        """True when the job's record is readable and finished, or there is none (deleted with the oldest finished
+        records); False while it is queued or running and when the record cannot be read (unknown is never ended)."""
+        store = jobmod.JobStore(self.paths)
+        try:
+            return store.get(job_id).get('state') in jobmod.TERMINAL
+        except BackupError:
+            try:
+                os.lstat(store.path(job_id))
+            except FileNotFoundError:
+                return True
+            return False
+
     def backup_present(self, backup_id):
         """True while the backup's index or archive exists (listed or not): a registry entry stays that long."""
         present = getattr(self.storage, 'present', None)

@@ -44,6 +44,10 @@ SCHEDULE_SERVICE = 'woowtech-cockpit-backup-schedule.service'
 UNIT_FILES = (f'{UNIT_DIR}/{SCHEDULE_SERVICE}', f'{UNIT_DIR}/{SCHEDULE_TIMER}')
 TIMER_FILE = f'{UNIT_DIR}/{SCHEDULE_TIMER}'
 SYSTEMCTL = '/usr/bin/systemctl'
+# Exists only while systemd runs as PID 1 (what sd_booted checks): not in a chroot or an image build.
+SYSTEMD_RUNNING = Path('/run/systemd/system')
+MASKED_NOTICE = (f'{SCHEDULE_TIMER} is masked (systemctl mask): left as it is, so scheduled backups do not start; run '
+                 f'"systemctl unmask {SCHEDULE_TIMER}" and install again to turn the schedule checks on.')
 SAFE_ENV = {'PATH': '/usr/sbin:/usr/bin:/sbin:/bin', 'LANG': 'C.UTF-8', 'LC_ALL': 'C.UTF-8'}
 DEMO_APP = 'woowbk-demo'
 DEMO_CATALOG = f'{BACKUP_CATALOG}/{DEMO_APP}.json'
@@ -581,12 +585,14 @@ def run_systemctl(argv):
 
 class Systemd:
     """systemctl steps for the scheduled-backup timer through an injectable `runner(argv) -> (code, stdout, stderr)`.
-    Only the fixed unit name is ever passed; `steps` records the changing calls in order."""
+    Only the fixed unit name is ever passed; `steps` records the changing calls in order, `notices` what was left to
+    the administrator (a masked timer)."""
 
     def __init__(self, runner=run_systemctl):
         self.runner = runner
         self.steps = []
         self.warnings = []
+        self.notices = []
 
     def run(self, *args, check=True):
         code, _out, err = self.runner([SYSTEMCTL, *args])
@@ -609,21 +615,34 @@ class Systemd:
                 'enabled': unit_file in ('enabled', 'enabled-runtime'), 'active': active == 'active'}
 
 
-def live_systemd(root):
-    """systemctl only for the running system; with --root nothing is run (a notice says what to do there)."""
-    return Systemd() if root == Path('/') else None
+def systemd_running():
+    return SYSTEMD_RUNNING.is_dir()
+
+
+def live_systemd(root, running=None):
+    """systemctl only for the running system: with --root, or on a live root whose PID 1 is not systemd (a chroot, an
+    image build), nothing is run (a notice says what to do there)."""
+    running = systemd_running if running is None else running
+    return Systemd() if root == Path('/') and running() else None
+
+
+def masked(state):
+    """`systemctl mask`: the administrator's decision; the installer never enables or starts such a timer."""
+    return state.get('load_state') == 'masked' or state.get('unit_file_state') in ('masked', 'masked-runtime')
 
 
 def timer_plan(names, state, before):
     """systemctl steps an install runs: stop the timer before backup files change, reload when a unit file changed,
     and enable --now the timer when it is installed and not enabled and running (a timer whose units this source does
-    not ship is only started again)."""
+    not ship is only started again; a masked one never)."""
     steps = []
     stop = bool(before and before['active']) and any(backup_path(name) for name in names)
     if stop:
         steps.append(f'stop {SCHEDULE_TIMER}')
     if any(name in UNIT_FILES for name in names):
         steps.append('daemon-reload')
+    if before and masked(before):
+        return steps
     if TIMER_FILE in state.get('files', {}):
         if stop or not before or not before['enabled'] or not before['active']:
             steps.append(f'enable --now {SCHEDULE_TIMER}')
@@ -634,13 +653,17 @@ def timer_plan(names, state, before):
 
 def _ensure_timer(systemd, state, stopped=False):
     """After the files: the installed timer runs (enabled and active); one this source does not ship (kept from an
-    earlier install) only starts again when this install stopped it."""
-    if TIMER_FILE not in state.get('files', {}):
-        if stopped:
-            systemd.run('start', SCHEDULE_TIMER)
+    earlier install) only starts again when this install stopped it. A masked timer is the administrator's decision:
+    it stays as it is and `notices` says so (never a failure; any other systemctl failure fails the install)."""
+    shipped = TIMER_FILE in state.get('files', {})
+    if not shipped and not stopped:
         return
     current = systemd.timer_state()
-    if not current['enabled'] or not current['active']:
+    if masked(current):
+        systemd.notices.append(MASKED_NOTICE)
+    elif not shipped:
+        systemd.run('start', SCHEDULE_TIMER)
+    elif not current['enabled'] or not current['active']:
         systemd.run('enable', '--now', SCHEDULE_TIMER)
 
 
@@ -667,6 +690,8 @@ def install(root, desired, state, systemd=None):
             result['timer'] = timer_view(systemd.timer_state())
             if systemd.steps:
                 result['systemctl'] = list(systemd.steps)
+            if systemd.notices:
+                result['notices'] = list(systemd.notices)
         return result
     before = systemd.timer_state() if systemd is not None else None
     stop = bool(before and before['active']) and any(backup_path(name) for name in names)
@@ -728,6 +753,8 @@ def install(root, desired, state, systemd=None):
     if systemd is not None:
         result['systemctl'] = list(systemd.steps)
         result['timer'] = timer_view(systemd.timer_state())
+        if systemd.notices:
+            result['notices'] = list(systemd.notices)
     return result
 
 
@@ -806,7 +833,12 @@ def rollback(root, backup_id, systemd=None):
     record = journal.get('systemd')
     if record is not None and not valid_systemd_record(record):
         raise ValueError('Backup contains an invalid systemd record; nothing restored.')
-    timer = systemd is not None and (record is not None or unit_touched)
+    # Only a transaction that changed backup files (the units are some) concerns the timer; one that did not (e.g.
+    # --no-backup) leaves it alone. A running timer is stopped while the files go back, as during the install. Its
+    # state before the install comes back only when the install stopped it or changed a unit file; otherwise it runs
+    # again as this rollback found it.
+    timer = systemd is not None and any(backup_path(rec['path']) for rec in records)
+    restore = unit_touched or (record is not None and record['stopped'])
     timer_present = lambda: safe_path(root, TIMER_FILE).is_file()  # noqa: E731
     if timer:
         current = systemd.timer_state()
@@ -816,10 +848,12 @@ def rollback(root, backup_id, systemd=None):
             systemd.run('disable', SCHEDULE_TIMER, check=False)  # while its unit file still exists
     restore_records(root, backup, records)
     kept = undo_directories(root, directories)
-    if timer:
+    if timer and restore:
         # The state before the install (a transaction of an installer without the timer: not installed).
         before = record['before'] if record is not None else {'enabled': False, 'active': False}
         _timer_back(systemd, before, unit_touched, timer_present)
+    elif timer and current['active']:
+        systemd.run('start', SCHEDULE_TIMER, check=False)
     journal['status'] = 'rolled-back'
     atomic_write(manifest, json.dumps(journal, indent=2).encode(), 0o600)
     result = {'status': 'rolled-back', 'restored': len(records), 'backup_id': backup_id}
@@ -895,23 +929,34 @@ def main():
                 print(f'Note: --root: the scheduled-backup units are written below {root} but no systemctl command '
                       'runs; on that system run "systemctl daemon-reload" and '
                       f'"systemctl enable --now {SCHEDULE_TIMER}".', file=sys.stderr)
+            elif not systemd_running() and TIMER_FILE in state['files']:
+                print(f'Note: systemd is not running here ({SYSTEMD_RUNNING} is missing: a chroot or an image build): '
+                      'the scheduled-backup units are written but no systemctl command runs; once the system runs '
+                      f'systemd, run "systemctl daemon-reload" and "systemctl enable --now {SCHEDULE_TIMER}".',
+                      file=sys.stderr)
             for notice in notices:
                 print(f'Note: {notice}', file=sys.stderr)
             if args.command == 'plan':
                 names = changes(root, desired)
                 systemd = live_systemd(root)
+                before = systemd.timer_state() if systemd else None
+                if before and masked(before) and TIMER_FILE in state['files']:
+                    notices.append(MASKED_NOTICE)
                 result = {'source_version': state['source_version'], 'cockpit_version': state['cockpit_version'],
                           'changed': names,
                           'remove': [name for name, (data, _) in desired.items() if data is None],
                           'directories': [f'{rec["path"]}/' for rec in directory_plan(root, state)],
                           'managed_files': len(state['files']), 'notices': notices,
-                          'systemctl': timer_plan(names, state, systemd.timer_state()) if systemd else []}
+                          'systemctl': timer_plan(names, state, before) if systemd else []}
             else:
                 result = install(root, desired, state)
                 print('After installation, sign out/in and force-refresh the browser. No Cockpit service restart was requested.', file=sys.stderr)
         elif args.command == 'rollback':
             if root != Path('/'):
                 print('Note: --root: no systemctl command runs for the scheduled-backup timer.', file=sys.stderr)
+            elif not systemd_running():
+                print(f'Note: systemd is not running here ({SYSTEMD_RUNNING} is missing): no systemctl command runs '
+                      'for the scheduled-backup timer.', file=sys.stderr)
             result = rollback(root, args.backup_id)
         else:
             result = verify(root)

@@ -33,9 +33,10 @@ UNITS = {
     },
     manage.SCHEDULE_SERVICE: {
         'Unit': {'Description': None, 'ConditionPathExists': HELPER_PATH},
+        # StandardError= must be set: unset it follows StandardOutput=null and tracebacks would be lost.
         'Service': {'Type': 'oneshot', 'ExecStart': f'{HELPER_PATH} schedule-tick', 'StandardInput': 'null',
-                    'StandardOutput': 'null', 'SyslogLevel': 'warning', 'LogLevelMax': 'notice',
-                    'TimeoutStartSec': '15min'},
+                    'StandardOutput': 'null', 'StandardError': 'journal', 'SyslogLevel': 'warning',
+                    'LogLevelMax': 'notice', 'TimeoutStartSec': '15min'},
     },
 }
 CATALOG_REQUIRED = ('schema', 'id', 'name', 'owner', 'adapter', 'quadlet', 'units')

@@ -1,8 +1,8 @@
 """排程備份 (scheduled backups, CONTRACT sections 3, 7, 8): settings and their validation, slots in Asia/Taipei and
 America/New_York (DST gaps and overlaps), every tick decision (on time, late, catch-up, boot settling, busy,
-superseded, dedup, disabled, bad file, clock back, time zone change, armed_at), the registry written before the backup,
-partial runs, the two retention pools, the frozen 2026.11.15.2 format lists, the strict new commands and the status
-shapes.
+superseded, dedup, disabled, bad file, clock back and forward again, a clock below armed_at, time zone change,
+armed_at), the uptime since PID 1 started, the registry written before the backup and pruned job first, partial runs,
+the two retention pools, the frozen 2026.11.15.2 format lists, the strict new commands and the status shapes.
 
 The tick runs through the helper (`cli.main(['schedule-tick'])`) with the fakes of test_flows and a fixed clock; jobs
 are real JobStore records and the started job runs with `run-job` like on a device.
@@ -236,6 +236,32 @@ class SlotTests(unittest.TestCase):
         self.assertEqual(env.now.tzinfo, UTC)
         self.assertGreater(env.uptime, 0)
 
+    def test_uptime_counts_from_the_start_of_pid_1(self):
+        # Inside a container without a time namespace CLOCK_BOOTTIME is the host's uptime: a restarted container would
+        # never wait its 10 minutes (review). PID 1's start (field 22 of /proc/1/stat, clock ticks since boot) counts.
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        path = Path(tmp.name) / 'stat'
+        hz = os.sysconf('SC_CLK_TCK')
+
+        def stat(starttime, comm='systemd'):
+            path.write_text(f'1 ({comm}) S 0 1 1 0 -1 4194560 100 200 0 0 10 20 0 0 20 0 1 0 {starttime} 24133632 '
+                            '3318 18446744073709551615 1 1 0 0 0 0 671173123 4096 1260 0 0 0 17 1 0 0 0 0 0\n')
+
+        host = 3 * 86400.0 + 120  # the host is up 3 days; the container's init started 2 minutes ago
+        stat(3 * 86400 * hz, comm='my init (x) S 9')  # the command name may hold spaces and parentheses
+        self.assertAlmostEqual(schedule.uptime(stat_path=path, boottime=host), 120.0, places=3)
+        stat(14)  # a device: PID 1 starts with the kernel
+        self.assertAlmostEqual(schedule.uptime(stat_path=path, boottime=host), host - 14 / hz, places=3)
+        for text in ('', 'garbage', '1 (systemd) S 0 1', f'1 (systemd) S {"x " * 30}'):
+            with self.subTest(text=text[:30]):
+                path.write_text(text)
+                self.assertEqual(schedule.uptime(stat_path=path, boottime=host), host, 'unreadable: boot time')
+        stat(int((host + 60) * hz))  # starts after "now": a clock it cannot compare with
+        self.assertEqual(schedule.uptime(stat_path=path, boottime=host), host)
+        self.assertEqual(schedule.uptime(stat_path=Path(tmp.name) / 'missing', boottime=host), host)
+        self.assertGreater(schedule.uptime(), 0)
+
 
 # ---------------------------------------------------------------- the decision
 
@@ -262,6 +288,35 @@ class DecideTests(unittest.TestCase):
         future = on(armed_at='2027-01-01T00:00:00Z')  # the clock went back below armed_at
         self.assertEqual(self.decide('2026-11-16T19:05:00Z', future).action, 'idle', 'past slots stay ignored')
         self.assertEqual(self.decide('2026-11-16T19:05:00Z', future, handled=None).action, 'idle')
+
+    def test_a_clock_below_armed_at_counts_from_the_floor_a_tick_kept_for_it(self):
+        ahead = on(armed_at='2026-11-20T00:00:00Z')  # armed while the clock was 4 days ahead; NTP set it back
+        floor = {'armed_at': '2026-11-20T00:00:00Z', 'floor': '2026-11-16T00:00:07Z'}
+        decision = self.decide('2026-11-16T19:02:00Z', ahead, armed_floor=floor)
+        self.assertEqual((decision.action, decision.slot, decision.trigger), ('start', at(SLOT), 'on-time'))
+        self.assertEqual(self.decide('2026-11-17T01:00:00Z', ahead, armed_floor=floor, handled=PREVIOUS).trigger,
+                         'catch-up')
+        self.assertEqual(self.decide('2026-11-16T19:02:00Z', ahead).action, 'idle', 'no floor kept: armed_at counts')
+        self.assertEqual(self.decide('2026-11-16T19:02:00Z', ahead, armed_floor=dict(floor, armed_at=PREVIOUS)).action,
+                         'idle', 'a floor of an earlier armed_at')
+        self.assertEqual(self.decide('2026-11-16T19:05:00Z', ahead,
+                                     armed_floor=dict(floor, floor='2026-11-16T19:01:00Z')).action,
+                         'idle', 'slots before the floor never run')
+        # Past armed_at again the floor no longer counts: the slots before armed_at stay ignored.
+        decision = self.decide('2026-11-20T19:02:00Z', ahead, armed_floor=floor, handled=SLOT)
+        self.assertEqual((decision.slot, decision.trigger, decision.missed), (at('2026-11-20T19:00:00Z'), 'on-time',
+                                                                             None))
+
+    def test_the_handled_slot_kept_by_a_clock_reset_counts_again_once_the_clock_is_past_it(self):
+        # The clock went back to 2020 (handled reset) and came back: SLOT and the slots before it ran.
+        kept = {'handled': '2019-12-31T19:00:00Z', 'handled_before_reset': SLOT,
+                'armed_floor': {'armed_at': '2026-11-01T00:00:00Z', 'floor': '2020-01-01T00:00:00Z'}}
+        self.assertEqual(self.decide('2026-11-16T20:00:00Z', **kept).action, 'idle')
+        early = self.decide('2020-01-01T19:02:00Z', **kept)  # still behind: the slots of that time run
+        self.assertEqual((early.action, early.slot, early.trigger), ('start', at('2020-01-01T19:00:00Z'), 'on-time'))
+        self.assertEqual(self.decide('2026-11-17T19:02:00Z', **kept).slot, at(NEXT), 'the next slot runs')
+        self.assertIsNone(schedule._overdue(on(), state(**kept), env_at('2026-11-16T19:40:00Z')),
+                          'not overdue either, also before a tick merged it')
 
     def test_boot_settling_waits_for_10_minutes_of_uptime(self):
         decision = self.decide('2026-11-16T19:03:00Z', uptime=299, handled=PREVIOUS)
@@ -563,10 +618,114 @@ class TickTests(ScheduleCase):
         self.set_state(handled='2027-01-01T19:00:00Z')
         self.assertEqual(self.tick('2026-11-16T19:20:00Z')['decision'], 'idle')
         self.assertEqual(self.state()['handled'], SLOT, 'the latest slot up to now counts as handled')
+        self.assertEqual(self.state()['handled_before_reset'], '2027-01-01T19:00:00Z', 'kept until the clock is back')
         self.assertEqual(self.lines('schedule-clock'),
                          [('schedule-clock reset handled=2027-01-01T19:00:00Z now=2026-11-16T19:20:00Z', True)])
         self.assertEqual(self.tick('2026-11-17T19:02:00Z')['trigger'], 'on-time')
         self.assertEqual(len(self.lines('schedule-clock')), 1)
+
+    def test_slots_that_ran_before_a_temporary_clock_back_are_not_reported_missed(self):
+        # A boot with a lost RTC (2020) and NTP fixing the clock 30 minutes later: the reset handled slot is kept and
+        # counts again once the clock is past it (review: the slots that ran were reported missed, and the latest one
+        # was "caught up" again).
+        self.write_schedule(armed_at='2026-11-14T00:00:00Z')
+        for now in ('2026-11-14T19:02:00Z', '2026-11-15T19:02:00Z', '2026-11-16T19:02:00Z'):
+            out = self.tick(now)
+            self.assertEqual(out['decision'], 'started', out)
+            self.assertEqual(self.ok(['run-job', out['job_id']])['state'], 'succeeded')
+        self.tick('2026-11-16T19:30:00Z')
+        launched = list(self.launched)
+        self.assertEqual(self.tick('2020-01-01T00:00:00Z')['decision'], 'idle')
+        current = self.state()
+        self.assertEqual((current['handled'], current['handled_before_reset']), ('2019-12-31T19:00:00Z', SLOT))
+        self.assertEqual(len(self.lines('schedule-clock')), 1)
+        out = self.tick('2026-11-16T20:00:00Z')
+        self.assertEqual(out['decision'], 'idle', out)
+        current = self.state()
+        self.assertEqual((current['handled'], current['handled_before_reset'], current['armed_floor']),
+                         (SLOT, None, None))
+        self.assertEqual([e['kind'] for e in current['events'] if e['kind'] == 'missed'], [])
+        self.assertEqual(self.lines('schedule-missed'), [])
+        self.assertFalse(any(e['not_run'] for e in self.ok(['jobs'])['schedule_events']))
+        self.assertEqual(self.launched, launched)
+        self.assertIsNone(self.ok(['status'])['schedule']['attention'])
+        self.assertEqual(self.tick('2026-11-17T19:02:00Z')['trigger'], 'on-time', 'the next slot runs as usual')
+
+    def test_a_clock_below_armed_at_keeps_the_first_ticks_time_as_the_floor(self):
+        # Armed while the clock was 4 days ahead; NTP set it back. The first tick below armed_at keeps its time: the
+        # slots after it run, and one no tick saw is overdue (review: armed_at was recomputed as each tick's clock, so
+        # every slot was skipped and nothing was overdue until the clock passed armed_at again).
+        self.write_schedule(armed_at='2026-11-20T00:00:00Z')
+        self.assertEqual(self.tick('2026-11-16T00:00:07Z')['decision'], 'idle')
+        floor = {'armed_at': '2026-11-20T00:00:00Z', 'floor': '2026-11-16T00:00:07Z'}
+        self.assertEqual(self.state()['armed_floor'], floor)
+        self.tick('2026-11-16T05:00:07Z')
+        self.assertEqual(self.state()['armed_floor'], floor, 'kept once, not moved by the next ticks')
+        self.tick('2026-11-15T23:00:07Z')  # the clock steps back once more: the floor follows it down
+        self.assertEqual(self.state()['armed_floor']['floor'], '2026-11-15T23:00:07Z')
+        out = self.tick('2026-11-16T19:00:07Z')
+        self.assertEqual((out['decision'], out['slot'], out['trigger']), ('started', SLOT, 'on-time'))
+        self.assertEqual(self.ok(['run-job', out['job_id']])['state'], 'succeeded')
+        self.tick('2026-11-16T19:10:07Z')
+        self.env = env_at('2026-11-17T19:40:00Z', name='Asia/Taipei')  # no tick saw 2026-11-18 03:00
+        schedule.touch_tick(self.paths, at('2026-11-17T19:39:00Z'))
+        attention = self.ok(['status'])['schedule']['attention']
+        self.assertEqual((attention['code'], attention['slot']), ('overdue', NEXT))
+        self.assertEqual(self.tick('2026-11-17T19:45:00Z')['trigger'], 'catch-up')
+        self.tick('2026-11-20T00:05:00Z')  # past armed_at again: the floor is dropped
+        self.assertIsNone(self.state()['armed_floor'])
+
+    def test_a_job_that_publishes_and_ends_while_the_registry_is_pruned_keeps_its_entry(self):
+        # The job is read before the backup: a job that publishes and ends between the two reads has ended before its
+        # backup is looked for, which then is found (review: the backup was read first, the entry dropped and the
+        # backup became a manual one for good).
+        self.write_schedule(armed_at='2026-11-16T18:00:00Z')
+        job_id = self.tick()['job_id']
+        self.assertEqual(self.ok(['run-job', job_id])['state'], 'succeeded')
+        finished = self.store().get(job_id)
+        backup_id = finished['result']['backup_id']
+        running = dict(finished, state='running', finished=None, result=None)  # just before it publishes
+        self.store().save(running)
+        self.active_units.add(running['unit'])
+        published = self.storage.index.pop(backup_id)
+
+        def publish_and_end():
+            self.storage.index[backup_id] = published
+            self.store().save(finished)
+            self.active_units.discard(running['unit'])
+
+        def present(other):
+            if other != backup_id:
+                return other in self.storage.index
+            answer = backup_id in self.storage.index
+            if not answer:
+                publish_and_end()  # ... right after the tick looked for the backup
+            return answer
+
+        self.storage.present = present
+        self.tick('2026-11-16T19:10:00Z')
+        if backup_id not in self.storage.index:  # the tick saw the job running: it publishes and ends afterwards
+            publish_and_end()
+        self.tick('2026-11-16T19:15:00Z')
+        del self.storage.present
+        self.assertEqual(self.state()['registry'], {backup_id: {'job': job_id, 'slot': SLOT, 'trigger': 'on-time'}})
+        listed = {item['id']: item for item in self.ok(['list'])['backups']}
+        self.assertIs(listed[backup_id]['scheduled'], True)
+
+    def test_an_unreadable_job_record_keeps_a_registry_entry_and_a_deleted_one_lets_it_go(self):
+        self.write_schedule(armed_at='2026-11-16T18:00:00Z')
+        job_id = self.tick()['job_id']
+        self.ok(['run-job', job_id])
+        backup_id = self.store().get(job_id)['result']['backup_id']
+        self.tick('2026-11-16T19:10:00Z')
+        self.ok(['delete'], {'backup_id': backup_id})
+        record = self.store().path(job_id)
+        record.write_text('{"id": ')  # cannot be read: whether the job still runs is unknown
+        self.tick('2026-11-16T19:15:00Z')
+        self.assertIn(backup_id, self.state()['registry'])
+        record.unlink()  # gone (the oldest finished records are deleted): the job has ended
+        self.tick('2026-11-16T19:20:00Z')
+        self.assertEqual(self.state()['registry'], {})
 
     def test_a_second_tick_while_one_runs_does_nothing(self):
         self.write_schedule(armed_at='2026-11-16T18:00:00Z')

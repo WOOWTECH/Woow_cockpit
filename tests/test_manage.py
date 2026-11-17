@@ -778,11 +778,12 @@ class BackupPackageContract(HostFixture):
 
 class FakeSystemctl:
     """systemctl of a fixture root (the runner `manage.Systemd` takes): keeps the timer's enabled/active state the way
-    PID 1 would, needs the unit file below the root for enable/disable/start, records every changing call."""
+    PID 1 would, needs the unit file below the root for enable/disable/start, records every changing call. `masked`:
+    `systemctl mask` was run (show says so; enable and start refuse, stop and disable work)."""
 
-    def __init__(self, root, *, enabled=False, active=False, fail=()):
+    def __init__(self, root, *, enabled=False, active=False, fail=(), masked=False):
         self.root = root
-        self.enabled, self.active = enabled, active
+        self.enabled, self.active, self.masked = enabled, active, masked
         self.fail = set(fail)
         self.calls = []
 
@@ -796,7 +797,10 @@ class FakeSystemctl:
             assert args[-2:] == ['--', manage.SCHEDULE_TIMER], args
             loaded = self.unit_file()
             unit_file = ('enabled' if self.enabled else 'disabled') if loaded else ''
-            return 0, (f'LoadState={"loaded" if loaded else "not-found"}\nUnitFileState={unit_file}\n'
+            load = 'loaded' if loaded else 'not-found'
+            if self.masked:
+                load = unit_file = 'masked'
+            return 0, (f'LoadState={load}\nUnitFileState={unit_file}\n'
                        f'ActiveState={"active" if self.active else "inactive"}\n'), ''
         command = ' '.join(args)
         self.calls.append(command)
@@ -805,6 +809,8 @@ class FakeSystemctl:
         if args == ['daemon-reload']:
             return 0, '', ''
         assert args[0] in ('enable', 'disable', 'start', 'stop') and args[-1] == manage.SCHEDULE_TIMER, args
+        if self.masked and args[0] in ('enable', 'start'):
+            return 1, '', f'Failed to {args[0]} unit: Unit file /etc/systemd/system/{manage.SCHEDULE_TIMER} is masked.'
         if args[0] in ('enable', 'disable', 'start') and not self.unit_file():
             return 1, '', 'Unit file does not exist.'
         if args[0] == 'enable':
@@ -827,8 +833,9 @@ def load_check_source():
 
 class ScheduleTimerContract(HostFixture):
     """排程備份: the timer and its tick service ship with the engine; on the live root the installer stops the timer while
-    it writes, reloads systemd when a unit changed and enables the timer; the journal keeps its earlier state for the
-    rollback; --no-backup and --root run no systemctl (docs/backup/CONTRACT.md section 8, docs/deployment.md)."""
+    it writes, reloads systemd when a unit changed and enables the timer (never a masked one); the journal keeps its
+    earlier state for the rollback, which touches the timer only for backup files; --no-backup, --root and a live root
+    without a running systemd run no systemctl (docs/backup/CONTRACT.md section 8, docs/deployment.md)."""
 
     TIMER = manage.SCHEDULE_TIMER
     # The backup package's helpers, without running its tests a second time.
@@ -1000,7 +1007,103 @@ class ScheduleTimerContract(HostFixture):
             self.assertEqual(manage.verify(self.root)['timer'], 'not-checked')
             self.assertNotIn('systemctl', manage.rollback(self.root, result['backup_id']))
         self.assertIsNone(manage.live_systemd(self.root))
-        self.assertIsInstance(manage.live_systemd(Path('/')), manage.Systemd)
+        self.assertIsNone(manage.live_systemd(self.root, running=lambda: True))
+        self.assertIsInstance(manage.live_systemd(Path('/'), running=lambda: True), manage.Systemd)
+
+    def test_a_live_root_without_a_running_systemd_runs_no_systemctl(self):
+        # "/" in a chroot or an image build: systemd is not PID 1 (no /run/systemd/system, what sd_booted checks). Like
+        # --root the files install and no systemctl runs (review: daemon-reload failed and rolled the install back).
+        marker = Path(self.temp.name) / 'run/systemd/system'
+        with patch.object(manage, 'SYSTEMD_RUNNING', marker):
+            self.assertFalse(manage.systemd_running())
+            self.assertIsNone(manage.live_systemd(Path('/')))
+            marker.mkdir(parents=True)
+            self.assertTrue(manage.systemd_running())
+            self.assertIsInstance(manage.live_systemd(Path('/')), manage.Systemd)
+        self.assertIsNone(manage.live_systemd(Path('/'), running=lambda: False))
+        self.assertEqual(manage.SYSTEMD_RUNNING, Path('/run/systemd/system'))
+
+    def test_a_masked_timer_is_the_administrators_decision(self):
+        # systemctl mask: no install enables or starts it (nothing to change, a theme or an engine update); the files
+        # install as usual and `notices` says why the schedule checks do not run (review: every install failed and
+        # rolled back). Other systemctl failures still fail the install (test_a_failed_install_restores_...).
+        self.add_backup_source()
+        runner = FakeSystemctl(self.root)
+        self.live(runner)
+        runner.masked, runner.enabled, runner.active = True, False, False  # systemctl mask --now
+        runner.calls.clear()
+        result = self.live(runner)
+        self.assertEqual((result['status'], runner.calls), ('already-current', []))
+        self.assertEqual(result['timer']['unit_file_state'], 'masked')
+        self.assertEqual(result['notices'], [manage.MASKED_NOTICE])
+        self.assertIn(f'systemctl unmask {self.TIMER}', manage.MASKED_NOTICE)
+        self.add_source({'branding/branding.css': 'newer theme',
+                         'backup-engine/woowbackup/cli.py': 'def main(argv):\n    return 6\n'})
+        result = self.live(runner)
+        self.assertEqual((result['status'], result['systemctl'], result['notices']),
+                         ('installed', [], [manage.MASKED_NOTICE]))
+        self.assertEqual((self.root / manage.BACKUP_ENGINE / 'cli.py').read_text(), 'def main(argv):\n    return 6\n')
+        self.assertEqual(self.journal(result['backup_id'])['status'], 'installed')
+        before = manage.Systemd(runner).timer_state()
+        self.assertEqual(manage.timer_plan([manage.TIMER_FILE], self.state(), before), ['daemon-reload'])
+        # Masked while it still runs (mask without --now): stopped while the files change, not started again.
+        runner.active = True
+        self.add_source({'backup-engine/woowbackup/cli.py': 'def main(argv):\n    return 5\n'})
+        result = self.live(runner)
+        self.assertEqual((runner.calls, result['notices']), ([f'stop {self.TIMER}'], [manage.MASKED_NOTICE]))
+        self.assertEqual((runner.enabled, runner.active), (False, False))
+        # Unmasked: the next install turns the schedule checks on again.
+        runner.masked = False
+        runner.calls.clear()
+        result = self.live(runner)
+        self.assertEqual((runner.calls, runner.enabled, runner.active), ([f'enable --now {self.TIMER}'], True, True))
+        self.assertNotIn('notices', result)
+
+    def test_rolling_back_a_no_backup_install_leaves_the_timer_alone(self):
+        # A --no-backup (theme-only) transaction never touched the timer; its rollback neither stops it nor puts back
+        # the state it had then (review: it stopped a timer the administrator had turned on again since).
+        self.add_backup_source()
+        runner = FakeSystemctl(self.root)
+        self.live(runner)
+        runner.enabled = runner.active = False  # paused by hand: systemctl disable --now
+        self.add_source({'branding/branding.css': 'newer theme'})
+        theme = self.live(runner, include_backup=False)
+        self.assertEqual(theme['systemctl'], [])
+        runner.enabled = runner.active = True  # resumed by hand
+        runner.calls.clear()
+        result = manage.rollback(self.root, theme['backup_id'], systemd=manage.Systemd(runner))
+        self.assertEqual((result['status'], runner.calls, runner.enabled, runner.active),
+                         ('rolled-back', [], True, True))
+        self.assertNotIn('systemctl', result)
+        self.assertEqual((self.root / manage.BRAND / 'branding.css').read_text(), 'new theme')
+
+    def test_rolling_back_an_install_that_found_the_timer_off_pauses_it_and_leaves_it_as_found(self):
+        # The install neither stopped the timer (it was off) nor changed a unit; it turned it on. Its rollback pauses
+        # the running timer while the engine files go back (as the install does) and starts it again: the snapshot
+        # taken before that install is not applied.
+        self.add_backup_source()
+        runner = FakeSystemctl(self.root)
+        self.live(runner)
+        runner.enabled = runner.active = False
+        self.add_source({'backup-engine/woowbackup/cli.py': 'def main(argv):\n    return 4\n'})
+        upgrade = self.live(runner)
+        self.assertEqual((upgrade['systemctl'], self.journal(upgrade['backup_id'])['systemd']['stopped']),
+                         ([f'enable --now {self.TIMER}'], False))
+        runner.calls.clear()
+        seen = []
+        original = manage.atomic_write
+
+        def spy(path, data, mode=0o644):
+            if '/woowbackup/' in str(path) and manage.BACKUPS not in str(path):  # the installed copies
+                seen.append(runner.active)
+            return original(path, data, mode)
+
+        with patch.object(manage, 'atomic_write', spy):
+            result = manage.rollback(self.root, upgrade['backup_id'], systemd=manage.Systemd(runner))
+        self.assertEqual((runner.calls, result['systemctl']), ([f'stop {self.TIMER}', f'start {self.TIMER}'],) * 2)
+        self.assertTrue(seen and not any(seen), 'no tick runs while the engine files go back')
+        self.assertEqual((runner.enabled, runner.active), (True, True))
+        self.assertEqual((self.root / manage.BACKUP_ENGINE / 'cli.py').read_text(), 'def main(argv):\n    return 0\n')
 
     def test_rollback_refuses_a_journal_with_a_foreign_unit(self):
         self.add_backup_source()
@@ -1065,6 +1168,10 @@ class ScheduleTimerContract(HostFixture):
             'OnCalendar': (manage.SCHEDULE_TIMER, lambda text: text.replace('*:0/5', 'daily')),
             'Install': (manage.SCHEDULE_SERVICE, lambda text: text + '\n[Install]\nWantedBy=multi-user.target\n'),
             'LogLevelMax': (manage.SCHEDULE_SERVICE, lambda text: text.replace('LogLevelMax=notice\n', '')),
+            # stderr follows StandardOutput=null unless set: tracebacks and launch errors would be lost.
+            'StandardError': (manage.SCHEDULE_SERVICE, lambda text: text.replace('StandardError=journal\n', '')),
+            'stderr discarded': (manage.SCHEDULE_SERVICE,
+                                 lambda text: text.replace('StandardError=journal', 'StandardError=null')),
             'ExecStart': (manage.SCHEDULE_SERVICE, lambda text: text.replace('schedule-tick', 'schedule-tick --x')),
             'repeated': (manage.SCHEDULE_SERVICE,
                          lambda text: text.replace('Type=oneshot', 'Type=oneshot\nType=simple')),
@@ -1084,6 +1191,9 @@ class ScheduleTimerContract(HostFixture):
                     check.check_units(units)
         parsed = check.parse_unit((REPO / 'backup-engine/systemd' / manage.SCHEDULE_SERVICE).read_text(), 'service')
         self.assertEqual(parsed['Service']['ExecStart'], '/usr/local/libexec/woowtech-cockpit-backup schedule-tick')
+        output = {key: parsed['Service'].get(key) for key in ('StandardOutput', 'StandardError', 'SyslogLevel')}
+        self.assertEqual(output, {'StandardOutput': 'null', 'StandardError': 'journal', 'SyslogLevel': 'warning'},
+                         'stdout (the JSON reply) is dropped, stderr reaches the journal as warnings')
         self.assertFalse(manage.SCHEDULE_TIMER.startswith('woowtech-backup-'), 'outside the job units glob')
 
     def test_root_installs_print_what_to_run_on_the_target(self):
