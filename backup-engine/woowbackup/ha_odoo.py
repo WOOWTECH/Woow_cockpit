@@ -49,7 +49,8 @@ MODULE_SOURCES = ('data/addons', 'data/odoo/addons/18.0')
 SHARE_MODULES = 'odoo_addons'
 EXTENSIONS_OK = ('plpgsql', 'pg_trgm', 'unaccent', 'vector')
 EXTENSIONS_CREATED = ('pg_trgm', 'vector')  # what the tenant install creates (odoo-helpers.sh)
-PG16_IMAGES = ('docker.io/library/postgres:16.15-alpine', 'docker.io/pgvector/pgvector:0.8.6-pg16')
+# pgvector first: it opens every PostgreSQL 16 cluster and also reads vector columns (review C-13).
+PG16_IMAGES = ('docker.io/pgvector/pgvector:0.8.6-pg16', 'docker.io/library/postgres:16.15-alpine')
 SERIES = '18.0'
 DB_NAME_RE = re.compile(r'[A-Za-z0-9_][A-Za-z0-9_.-]{0,62}\Z')
 MODULE_RE = re.compile(r'[A-Za-z0-9_]{1,128}\Z')
@@ -67,8 +68,32 @@ PG_READY_TIMEOUT = 300
 DUMP_TIMEOUT = 3 * 3600
 SQL_OUTPUT = 16 * 1024 * 1024
 TOC_OUTPUT = 128 * 1024 * 1024
+WAL_ALLOWANCE = 1024 * 1024 * 1024  # the new cluster's WAL while the dump is restored (max_wal_size)
 PG_HBA = b'# woowbk: throwaway copy, unix socket only\nlocal all all trust\n'
-SKIPPED_PG_FILES = ('postmaster.pid', 'postmaster.opts')
+# HA's cluster is untrusted (review HA-SEC-01): its configuration and recovery files never reach the throwaway server.
+# The configuration files are replaced by known ones, the recovery/standby files and the old server's pid files are
+# dropped, and start_ha_cluster overrides every setting that loads a library or runs a command.
+PG_CONF = (b"# woowbk: throwaway copy of a Home Assistant cluster; HA's own settings are not used\n"
+           b"listen_addresses = ''\nmax_connections = 20\nshared_buffers = 128MB\ndynamic_shared_memory_type = posix\n"
+           b"unix_socket_directories = '/var/run/postgresql'\ntimezone = 'UTC'\nlog_timezone = 'UTC'\n"
+           b"datestyle = 'iso, mdy'\nlc_messages = 'C'\ndefault_text_search_config = 'pg_catalog.english'\n")
+REPLACED_PG_FILES = {'pg_hba.conf': PG_HBA, 'postgresql.conf': PG_CONF,
+                     'postgresql.auto.conf': b'# woowbk: HA settings are not used\n', 'pg_ident.conf': b''}
+SKIPPED_PG_FILES = ('postmaster.pid', 'postmaster.opts', 'recovery.signal', 'standby.signal', 'recovery.conf',
+                    'recovery.done')
+HA_DATA = '/var/lib/postgresql/data'
+# Command-line settings win over every configuration file: nothing of HA's cluster can load a library, run a command
+# or listen anywhere.
+HA_SERVER_SETTINGS = ('listen_addresses=', 'max_connections=20', 'shared_preload_libraries=',
+                      'session_preload_libraries=', 'local_preload_libraries=', 'dynamic_library_path=$libdir',
+                      'archive_mode=off', 'archive_command=', 'archive_library=', 'restore_command=',
+                      'archive_cleanup_command=', 'recovery_end_command=', 'primary_conninfo=', 'primary_slot_name=',
+                      'ssl=off', 'jit=off', 'logging_collector=off', f'hba_file={HA_DATA}/pg_hba.conf',
+                      f'ident_file={HA_DATA}/pg_ident.conf', 'unix_socket_directories=/var/run/postgresql')
+# Objects only a database superuser can create: an HA dump holding one is refused (it is restored as the role odoo).
+SUPERUSER_KINDS = ('EVENT TRIGGER', 'FOREIGN DATA WRAPPER', 'SERVER', 'USER MAPPING', 'SUBSCRIPTION', 'PUBLICATION',
+                   'ACCESS METHOD', 'TEXT SEARCH PARSER', 'TEXT SEARCH TEMPLATE', 'PROCEDURAL LANGUAGE', 'CAST',
+                   'TRANSFORM', 'OPERATOR CLASS', 'OPERATOR FAMILY', 'FOREIGN TABLE')
 SETTINGS_SKIPPED = frozenset({'config_file', 'data_directory', 'hba_file', 'ident_file', 'external_pid_file',
                               'unix_socket_directories', 'listen_addresses', 'port', 'ssl_cert_file', 'ssl_key_file',
                               'ssl_ca_file', 'ssl_crl_file', 'ssl_crl_dir', 'ssl_passphrase_command',
@@ -80,6 +105,9 @@ SETTINGS_SKIPPED = frozenset({'config_file', 'data_directory', 'hba_file', 'iden
                               'server_version_num', 'debug_assertions', 'ssl_library', 'in_hot_standby'})
 SETTING_NAME_RE = re.compile(r'[a-z_][a-z0-9_.]{0,62}\Z')
 SETTING_VALUE_RE = re.compile(r'[^\x00-\x1f\x7f\']{0,1024}\Z')
+# Settings whose value is a list of quoted names (GUC_LIST_QUOTE): ALTER SYSTEM takes them as one literal per element,
+# a single literal of the whole text would become ONE quoted name (review C-06).
+LIST_SETTINGS = frozenset({'search_path', 'temp_tablespaces', 'session_preload_libraries', 'local_preload_libraries'})
 
 MSG_NOT_ODOO = '這不是 Odoo 資料庫。'
 MSG_HINT_SHARE = '如果模組放在 HA 的 /share/odoo_addons，做 HA 備份時要把 share 資料夾也勾進去。'
@@ -184,27 +212,36 @@ class Source:
 
 class PgSink:
     """The HA cluster as a tar for `podman volume import` (names relative to the data dir, the helper image's
-    postgres uid/gid, dirs 0700, files 0600; pg_hba.conf replaced by socket-only trust; postmaster.pid dropped)."""
+    postgres uid/gid, dirs 0700, files 0600). HA's configuration files are replaced by known ones (REPLACED_PG_FILES:
+    socket-only trust, no library, no command), its recovery/standby and pid files dropped (review HA-SEC-01)."""
 
     def __init__(self, out, uid, gid, guard=None):
         self.tar = tarfile.open(fileobj=out, mode='w|', format=tarfile.PAX_FORMAT, encoding=habackup.ENCODING,
                                 errors=habackup.ERRORS)
         self.uid, self.gid, self.guard = uid, gid, guard
         self.root_written = False
+        self.replaced = set()
+
+    def _file(self, rel, data, mtime):
+        self.tar.addfile(_info(rel, 'file', mode=0o600, uid=self.uid, gid=self.gid, mtime=mtime, size=len(data)),
+                         io.BytesIO(data))
 
     def add(self, rel, entry, data=None):
-        if rel in SKIPPED_PG_FILES:
+        top = rel.split('/', 1)[0]
+        if top in SKIPPED_PG_FILES:
+            return
+        if top in REPLACED_PG_FILES:  # whatever HA has there (a file, a folder): the known file, once
+            if top not in self.replaced:
+                self.replaced.add(top)
+                self._file(top, REPLACED_PG_FILES[top], entry.mtime)
             return
         if rel == '.':
             self.root_written = True
         if entry.kind == 'dir':
             self.tar.addfile(_info(rel, 'dir', mode=0o700, uid=self.uid, gid=self.gid, mtime=entry.mtime))
         elif entry.kind == 'file':
-            if rel == 'pg_hba.conf':
-                data = PG_HBA
             if data is not None:
-                self.tar.addfile(_info(rel, 'file', mode=0o600, uid=self.uid, gid=self.gid, mtime=entry.mtime,
-                                       size=len(data)), io.BytesIO(data))
+                self._file(rel, data, entry.mtime)
             else:
                 self.tar.addfile(_info(rel, 'file', mode=0o600, uid=self.uid, gid=self.gid, mtime=entry.mtime,
                                        size=entry.size), _Exact(entry, self.guard))
@@ -212,6 +249,8 @@ class PgSink:
     def close(self):
         if not self.root_written:
             self.tar.addfile(_info('.', 'dir', mode=0o700, uid=self.uid, gid=self.gid, mtime=time.time()))
+        for name in sorted(set(REPLACED_PG_FILES) - self.replaced):
+            self._file(name, REPLACED_PG_FILES[name], time.time())
         self.tar.close()
 
 
@@ -450,6 +489,11 @@ class Live:
             raise BackupError('incompatible', f'{self.db_file} 沒有資料卷設定。')
         self.db_volume, self.db_target = db_mounts[0][0], db_mounts[0][1]
         self.db_user = self.db_env.get('POSTGRES_USER', 'postgres')
+        # The cluster lives in PGDATA when the Quadlet sets it (a folder of the volume), else at the mount point.
+        self.pgdata = self.db_env.get('PGDATA') or self.db_target
+        if not (tempctr.TARGET_RE.fullmatch(self.pgdata) and '..' not in self.pgdata.split('/')
+                and (self.pgdata == self.db_target or self.pgdata.startswith(self.db_target.rstrip('/') + '/'))):
+            raise BackupError('incompatible', f'{self.db_file} 的 PGDATA 設定不在資料卷裡，不受支援。')
         web_text = quadlets[self.web_file]
         self.web_image = tempctr.quadlet_image(web_text)
         self.web_secrets = tempctr.quadlet_secrets(web_text)
@@ -529,9 +573,19 @@ class Cluster:
             raise BackupError('job-failed', '暫用 PostgreSQL 的回應格式不正確。') from None
 
     def script(self, sql, database='postgres', *, timeout=600):
-        """Run SQL from stdin (`psql -v ON_ERROR_STOP=1 -1`): values never appear in argv."""
+        """Run SQL from stdin in ONE transaction (`psql -v ON_ERROR_STOP=1 -1`): values never appear in argv. Never
+        for a statement PostgreSQL refuses inside a transaction block (ALTER SYSTEM, VACUUM...): `statement`."""
         self.tmp.exec(self.role, ['psql', '-X', '-q', '-v', 'ON_ERROR_STOP=1', '-1', '-U', self.superuser, '-d',
                                   database, '-f', '-'], user='postgres', input=sql.encode('utf-8'), timeout=timeout,
+                      max_output=1024 * 1024)
+
+    def statement(self, sql, database='postgres', *, timeout=600):
+        """Run exactly one SQL statement from stdin outside any transaction block (no `-1`; review C-19: ALTER SYSTEM
+        cannot run inside one): values never appear in argv."""
+        if not isinstance(sql, str) or not sql.strip() or ';' in re.sub(r"'(?:[^']|'')*'", '', sql.strip().rstrip(';')):
+            raise BackupError('internal-error', '一次只能執行一個資料庫指令。')
+        self.tmp.exec(self.role, ['psql', '-X', '-q', '-v', 'ON_ERROR_STOP=1', '-U', self.superuser, '-d', database,
+                                  '-f', '-'], user='postgres', input=sql.encode('utf-8'), timeout=timeout,
                       max_output=1024 * 1024)
 
     def write_file(self, path, source, *, timeout=DUMP_TIMEOUT):
@@ -562,6 +616,42 @@ DETAIL_SQL = """SELECT json_build_object(
  'extensions', (SELECT coalesce(json_agg(json_build_array(extname, extversion) ORDER BY extname), '[]'::json)
                 FROM pg_extension),
  'base_url', (SELECT value FROM ir_config_parameter WHERE key = 'web.base.url'))"""
+def _not_extension(catalog, alias):
+    return (f"NOT EXISTS (SELECT 1 FROM pg_depend d WHERE d.classid = '{catalog}'::regclass "
+            f"AND d.objid = {alias}.oid AND d.deptype = 'e')")
+
+
+# Objects of HA's database that only a superuser can create (the restore runs as the role odoo and would refuse them;
+# the check says so first). Extension members (pg_trgm, unaccent, vector) are created by the extensions here.
+SUPERUSER_SQL = ("SELECT coalesce(json_agg(kind), '[]'::json) FROM ("
+                 "SELECT 'EVENT TRIGGER' AS kind WHERE EXISTS (SELECT 1 FROM pg_event_trigger e WHERE "
+                 + _not_extension('pg_event_trigger', 'e') + ") "
+                 "UNION ALL SELECT 'FOREIGN DATA WRAPPER' WHERE EXISTS (SELECT 1 FROM pg_foreign_data_wrapper w WHERE "
+                 + _not_extension('pg_foreign_data_wrapper', 'w') + ") "
+                 "UNION ALL SELECT 'SERVER' WHERE EXISTS (SELECT 1 FROM pg_foreign_server) "
+                 "UNION ALL SELECT 'SUBSCRIPTION' WHERE EXISTS (SELECT 1 FROM pg_subscription WHERE subdbid = "
+                 "(SELECT oid FROM pg_database WHERE datname = current_database())) "
+                 "UNION ALL SELECT 'PROCEDURAL LANGUAGE' WHERE EXISTS (SELECT 1 FROM pg_language l WHERE l.oid >= 16384 "
+                 "AND " + _not_extension('pg_language', 'l') + ") "
+                 "UNION ALL SELECT 'FUNCTION (LANGUAGE C)' WHERE EXISTS (SELECT 1 FROM pg_proc p WHERE p.oid >= 16384 "
+                 "AND p.prolang IN (SELECT oid FROM pg_language WHERE lanname IN ('c', 'internal')) AND "
+                 + _not_extension('pg_proc', 'p') + ") "
+                 "UNION ALL SELECT 'ACCESS METHOD' WHERE EXISTS (SELECT 1 FROM pg_am a WHERE a.oid >= 16384 AND "
+                 + _not_extension('pg_am', 'a') + ") "
+                 "UNION ALL SELECT 'CAST' WHERE EXISTS (SELECT 1 FROM pg_cast c WHERE c.oid >= 16384 AND "
+                 + _not_extension('pg_cast', 'c') + ") "
+                 "UNION ALL SELECT 'OPERATOR CLASS' WHERE EXISTS (SELECT 1 FROM pg_opclass o WHERE o.oid >= 16384 AND "
+                 + _not_extension('pg_opclass', 'o') + ") "
+                 "UNION ALL SELECT 'TEXT SEARCH PARSER' WHERE EXISTS (SELECT 1 FROM pg_ts_parser t WHERE t.oid >= 16384 "
+                 "AND " + _not_extension('pg_ts_parser', 't') + ") "
+                 "UNION ALL SELECT 'TEXT SEARCH TEMPLATE' WHERE EXISTS (SELECT 1 FROM pg_ts_template t WHERE "
+                 "t.oid >= 16384 AND " + _not_extension('pg_ts_template', 't') + ")) k")
+HAS_WEBSITE_SQL = "SELECT to_json(to_regclass('public.website') IS NOT NULL)"
+WEBSITE_DOMAINS_SQL = ("SELECT coalesce(json_agg(DISTINCT domain ORDER BY domain), '[]'::json) FROM website "
+                       "WHERE coalesce(domain, '') <> ''")
+# The converted database keeps no website address of HA: the target's own address (web.base.url) is used (review C-02).
+CLEAR_WEBSITE_DOMAINS_SQL = ("DO $$ BEGIN IF to_regclass('public.website') IS NOT NULL THEN "
+                             "UPDATE website SET domain = NULL WHERE domain IS NOT NULL; END IF; END $$;\n")
 VERIFY_SQL = """SELECT json_build_object(
  'modules', (SELECT coalesce(json_agg(json_build_array(name, coalesce(latest_version, ''), state) ORDER BY name),
              '[]'::json) FROM ir_module_module WHERE state IN ('installed', 'to upgrade', 'to install', 'to remove')),
@@ -580,6 +670,9 @@ LIVE_ROLE_SQL = ("SELECT json_build_object('password', rolpassword, 'super', rol
                  "'bypassrls', rolbypassrls, 'connlimit', rolconnlimit) FROM pg_authid WHERE rolname = 'odoo'")
 SETTINGS_SQL = ("SELECT coalesce(json_agg(json_build_array(name, setting, source, context) ORDER BY name), '[]'::json) "
                 "FROM pg_settings WHERE source NOT IN ('default', 'override', 'client', 'session')")
+# What the new cluster's postgresql.auto.conf holds after ALTER SYSTEM (every carried setting must be there, valid).
+FILE_SETTINGS_SQL = ("SELECT coalesce(json_agg(json_build_array(name, setting, coalesce(error, '')) ORDER BY seqno), "
+                     "'[]'::json) FROM pg_file_settings WHERE sourcefile LIKE '%/postgresql.auto.conf'")
 
 
 def _int(value):
@@ -609,7 +702,12 @@ def database_details(cluster, name):
         raise BackupError('job-failed', '無法讀取 HA 資料庫的內容。')
     extensions = doc.get('extensions') if isinstance(doc.get('extensions'), list) else []
     base_url = doc.get('base_url') if isinstance(doc.get('base_url'), str) else None
+    kinds = cluster.query_json(SUPERUSER_SQL, name)
+    domains = cluster.query_json(WEBSITE_DOMAINS_SQL, name) if cluster.query_json(HAS_WEBSITE_SQL, name) is True else []
     return {
+        'superuser_objects': [str(k)[:40] for k in kinds[:20] if isinstance(k, str)] if isinstance(kinds, list) else [],
+        'website_domains': ([str(d)[:200] for d in domains[:20] if isinstance(d, str)] if isinstance(domains, list)
+                            else []),
         'modules': parse_modules(doc.get('modules')),
         'partners': _int(doc.get('partners')), 'users': _int(doc.get('users')),
         'attachments': _int(doc.get('attachments')), 'attachment_bytes': _int(doc.get('attachment_bytes')),
@@ -693,7 +791,8 @@ def target_inventory(tmp, live, *, python=(), binaries=(), role='scan'):
 
 # ====================================================================== the verdict
 
-def database_verdict(details, target, candidates, *, ha_major, target_major, extra_target='/mnt/extra-addons'):
+def database_verdict(details, target, candidates, *, ha_major, target_major, extra_target='/mnt/extra-addons',
+                     vector_ok=True):
     """(ok, blockers[], warnings[], copy {module: candidate}) of one HA database against the target.
 
     A module installed in the HA database must be on the target with the identical version -- Odoo's own copy (the
@@ -730,6 +829,12 @@ def database_verdict(details, target, candidates, *, ha_major, target_major, ext
     unknown = [ext for ext in details['extensions'] if ext not in EXTENSIONS_OK]
     if unknown:
         blockers.append(f'HA 的資料庫使用了這台不支援的 PostgreSQL 擴充功能：{_names(unknown)}。')
+    if 'vector' in details['extensions'] and not vector_ok:
+        blockers.append('HA 的資料庫使用了 vector 擴充功能，這台沒有含 pgvector 的 PostgreSQL 16 映像'
+                        f'（{PG16_IMAGES[0]}），無法讀出它的資料。')
+    if details.get('superuser_objects'):
+        blockers.append('HA 的資料庫含有只有資料庫超級使用者才能建立的物件'
+                        f'（{_names(details["superuser_objects"])}），無法安全地搬過來。')
     if ha_major is None or target_major is None or ha_major > target_major:
         blockers.append(f'HA 的 PostgreSQL 是 {ha_major or "未知"} 版，這台是 {target_major or "未知"} 版；'
                         '只能從相同或較舊的版本搬過來。')
@@ -750,6 +855,8 @@ def database_verdict(details, target, candidates, *, ha_major, target_major, ext
         warnings.append(f'HA 的資料庫有 {details["mail_servers_active"]} 個啟用中的外寄郵件伺服器，搬過來後會開始寄信。')
     if details['crons_active']:
         warnings.append(f'HA 的資料庫有 {details["crons_active"]} 個啟用中的排程工作，搬過來後會在這台執行。')
+    if details.get('website_domains'):
+        warnings.append(f'網站原本使用的網域 {_names(details["website_domains"], 5)} 會改成這台的網址。')
     return not blockers, blockers, warnings, copy
 
 
@@ -808,6 +915,86 @@ def settings_to_carry(live_rows, new_rows):
             continue
         carry.append((name, value))
     return carry[:100]
+
+
+def split_list_setting(text):
+    """The elements of a list setting as PostgreSQL prints it (`"$user", public`: comma separated, double quotes around
+    an element, `""` inside them); None when the text is not such a list."""
+    items, current, quoted, was_quoted, i = [], [], False, False, 0
+    while i < len(text):
+        char = text[i]
+        if quoted:
+            if char == '"' and text[i + 1:i + 2] == '"':
+                current.append('"')
+                i += 1
+            elif char == '"':
+                quoted = False
+            else:
+                current.append(char)
+        elif char == '"':
+            if ''.join(current).strip():
+                return None
+            current, quoted, was_quoted = [], True, True
+        elif char == ',':
+            item = ''.join(current) if was_quoted else ''.join(current).strip()
+            if not item:
+                return None
+            items.append(item)
+            current, was_quoted = [], False
+        elif was_quoted and not char.isspace():
+            return None
+        else:
+            current.append(char)
+        i += 1
+    if quoted:
+        return None
+    item = ''.join(current) if was_quoted else ''.join(current).strip()
+    if item or was_quoted:
+        items.append(item)
+    return items if items and all(items) else None
+
+
+def alter_system_sql(name, value):
+    """`ALTER SYSTEM SET <name> TO <value>;` for one carried setting (list settings: one literal per element); None
+    when a list setting's text cannot be split."""
+    if not SETTING_NAME_RE.fullmatch(name):
+        raise BackupError('internal-error', '資料庫設定名稱格式不正確。')
+    if name in LIST_SETTINGS:
+        items = split_list_setting(value)
+        if items is None:
+            return None
+        return f'ALTER SYSTEM SET {name} TO {", ".join(sql_literal(item) for item in items)};'
+    return f'ALTER SYSTEM SET {name} TO {sql_literal(value)};'
+
+
+def carry_settings(work, app, live, cluster):
+    """Write the PostgreSQL settings the live cluster sets in its configuration (settings_to_carry) into the new
+    cluster's postgresql.auto.conf: one ALTER SYSTEM per psql call, outside any transaction block (review C-19), then
+    a reload and a read-back of pg_file_settings (every carried setting there, without an error). Returns the names."""
+    live_rows = _read_live_json(work, app, live, SETTINGS_SQL, 'postgres')
+    carried, skipped = [], []
+    for name, value in settings_to_carry(live_rows, cluster.query_json(SETTINGS_SQL)):
+        sql = alter_system_sql(name, value)
+        if sql is None:
+            skipped.append(name)
+            continue
+        cluster.statement(sql)
+        carried.append(name)
+    if skipped:
+        work.log(f'這些 PostgreSQL 設定的格式無法沿用，維持新叢集的預設值：{"、".join(skipped)}')
+    if not carried:
+        return []
+    cluster.statement('SELECT pg_reload_conf();')
+    rows = cluster.query_json(FILE_SETTINGS_SQL)
+    written = {}
+    for row in rows if isinstance(rows, list) else []:
+        if isinstance(row, list) and len(row) == 3 and all(isinstance(x, str) for x in row):
+            written[row[0].lower()] = row[2]
+    bad = [name for name in carried if name not in written or written[name]]
+    if bad:
+        raise BackupError('job-failed', f'沿用這台 PostgreSQL 的設定失敗：{"、".join(bad[:10])}。')
+    work.log(f'沿用這台 PostgreSQL 的設定：{"、".join(carried)}')
+    return carried
 
 
 def marker_ok(value, image_id):
@@ -958,7 +1145,7 @@ def pick_pg16(work, app):
         if runner.podman('image', 'exists', ref, timeout=60, check=False).returncode == 0:
             return ref
     work.log('這台沒有 PostgreSQL 16 映像，下載固定版本的 postgres:16.15-alpine')
-    runner.podman('pull', '--quiet', PG16_PINNED, timeout=1800, max_output=64 * 1024)
+    runner.podman('pull', '--quiet', PG16_PINNED, timeout=1800, max_output=64 * 1024, abort=work.abort)
     return PG16_PINNED
 
 
@@ -1044,12 +1231,33 @@ def _mib(n):
     return f'{n / 1048576:.1f} MiB'
 
 
+def ha_server_args():
+    args = ['postgres']
+    for setting in HA_SERVER_SETTINGS:
+        args += ['-c', setting]
+    return args
+
+
 def start_ha_cluster(work, tmp, image):
-    tmp.run('hapg', image, ['postgres', '-c', 'listen_addresses=', '-c', 'max_connections=20'], detach=True,
-            volumes=[(tmp.name('hapg'), '/var/lib/postgresql/data', None)])
+    """PostgreSQL 16 on HA's (untrusted) cluster: every library/command setting overridden on the command line, the
+    data volume mounted noexec/nosuid/nodev (no library of HA's can be loaded from it), a read-only root file system,
+    no network (review HA-SEC-01). What it answers is still HA's data only: the dump is restored as the role odoo."""
+    tmp.run('hapg', image, ha_server_args(), detach=True, read_only_root=True,
+            volumes=[(tmp.name('hapg'), HA_DATA, 'rw,noexec,nosuid,nodev')])
     cluster = Cluster(tmp, 'hapg', log=work.log)
     cluster.wait_ready(checkpoint=work.checkpoint)
     return cluster
+
+
+def superuser_kinds(toc):
+    """The object kinds of a pg_restore list that only a database superuser can create (SUPERUSER_KINDS)."""
+    found = []
+    pattern = re.compile(r'\s*\d+;\s+\d+\s+\d+\s+(' + '|'.join(re.escape(k) for k in SUPERUSER_KINDS) + r')\s')
+    for line in toc.splitlines():
+        match = pattern.match(line)
+        if match and match.group(1) not in found:
+            found.append(match.group(1))
+    return found
 
 
 def ha_databases(cluster):
@@ -1091,7 +1299,8 @@ def analyse(work, app, tmp, src, candidates, cluster, live, *, image16):
             continue
         ok, blockers, warnings, copy = database_verdict(details, target, candidates, ha_major=ha_major,
                                                         target_major=target_major,
-                                                        extra_target=extra_target or '/mnt/extra-addons')
+                                                        extra_target=extra_target or '/mnt/extra-addons',
+                                                        vector_ok='pgvector' in image16)
         files, size = src.filestore.get(db['name'], [0, 0])
         if details['attachments'] and not files:
             warnings.append('HA 備份裡沒有這個資料庫的附件檔案（filestore）；搬過來後附件會打不開。')
@@ -1111,11 +1320,21 @@ def public_database(entry):
     return {key: value for key, value in entry.items() if not key.startswith('_')}
 
 
+def live_image_id(work, app, live):
+    info = work.adapter(app).image_inspect(live.web_image)
+    if not info or not DIGEST_RE.fullmatch(info.get('id') or ''):
+        raise BackupError('incompatible', '找不到這台 Odoo 使用的映像。', app=app.id)
+    return info['id']
+
+
 def check(work, app):
-    """The check job's Odoo part: (app result fields, internal notes)."""
+    """The check job's Odoo part: (app result fields, internal notes). The live upgrade-gate marker and the role odoo
+    are checked first, exactly as the conversion checks them (review C-05)."""
     tmp = work.temp(app)
     target_items = Target(work, app)
     live = target_items.live
+    live_settings(work, app, live, live_image_id(work, app, live))
+    live_role(work, app, live)
     image16 = pick_pg16(work, app)
     pg_ids = tmp.user_ids('ids-pg', image16, 'postgres')
     src, candidates = member_pass(work, app, tmp, pg_ids)
@@ -1136,8 +1355,14 @@ def check(work, app):
 def _read_live_json(work, app, live, sql, database):
     """One JSON cell from the LIVE database container (read only; as its superuser over its socket)."""
     runner = work.runner(app)
-    out = runner.podman('exec', live.db_container, 'psql', '-X', '-A', '-t', '-q', '-v', 'ON_ERROR_STOP=1', '-U',
-                        live.db_user, '-d', database, '-c', sql, timeout=120, max_output=1024 * 1024).stdout or b''
+    try:
+        out = runner.podman('exec', live.db_container, 'psql', '-X', '-A', '-t', '-q', '-v', 'ON_ERROR_STOP=1', '-U',
+                            live.db_user, '-d', database, '-c', sql, timeout=120,
+                            max_output=1024 * 1024).stdout or b''
+    except BackupError as error:
+        if error.code != 'job-failed':
+            raise
+        raise BackupError('job-failed', '無法讀取這台 Odoo 資料庫的設定，請確認這台的 Odoo 正在執行。') from None
     try:
         return util.loads_strict(out.strip() or b'null', max_bytes=1024 * 1024)
     except ValueError:
@@ -1242,6 +1467,8 @@ def verify_converted(doc, details, target, copy, live_values, *, test_mode, old_
         problems.append('升級標記沒有設定好')
     if doc.get('base_url') != live_values['base_url']:
         problems.append('網址沒有設定成這台的網址')
+    if doc.get('website_domains'):
+        problems.append('網站的網域沒有清除（仍是 HA 的網址）')
     if test_mode and (not isinstance(doc.get('uuid'), str) or doc.get('uuid') == old_uuid):
         problems.append('測試匯入沒有換上新的資料庫識別碼')
     return problems[:20]
@@ -1260,20 +1487,17 @@ def convert(work, app, database, test_mode, out_dir):
     staging.mkdir(mode=0o700)
     (out_dir / 'volumes').mkdir(mode=0o700, parents=True, exist_ok=True)
     (out_dir / 'dirs').mkdir(mode=0o700, parents=True, exist_ok=True)
+    live_values = live_settings(work, app, live, live_image_id(work, app, live))
     image16 = pick_pg16(work, app)
     pg_ids = tmp.user_ids('ids-pg', image16, 'postgres')
     odoo_ids = tmp.user_ids('ids-odoo', live.web_image, 'odoo')
-    web_info = adapter.image_inspect(live.web_image)
-    if not web_info or not DIGEST_RE.fullmatch(web_info.get('id') or ''):
-        raise BackupError('incompatible', '找不到這台 Odoo 使用的映像。', app=app.id)
-    live_values = live_settings(work, app, live, web_info['id'])
 
     # The live data dir and custom modules folder, read while Odoo runs (only what the import keeps of them).
     live_web = staging / 'live-web.tar'
     with open(live_web, 'xb') as handle:
         os.fchmod(handle.fileno(), 0o600)
         runner.relay(['volume', 'export', items.web_volume], stdout=handle, timeout=3 * 3600,
-                     max_output=work.guard.budget())
+                     max_output=work.guard.budget(), abort=work.abort)
     web_path = out_dir / 'volumes' / f'{items.web_volume}.tar'
     web = FileTar(web_path, work.guard)
     web.ids = odoo_ids
@@ -1284,7 +1508,8 @@ def convert(work, app, database, test_mode, out_dir):
         live_dir = staging / 'live-addons.tar'
         with open(live_dir, 'xb') as handle:
             os.fchmod(handle.fileno(), 0o600)
-            runner.dir_pack(items.addons_rel, stdout=handle, timeout=3600, max_output=work.guard.budget())
+            runner.dir_pack(items.addons_rel, stdout=handle, timeout=3600, max_output=work.guard.budget(),
+                            abort=work.abort)
     modules_tar = FileTar(staging / 'ha-modules.tar', work.guard)
     try:
         src, candidates = member_pass(work, app, tmp, pg_ids, filestore_db=database, filestore=web,
@@ -1301,6 +1526,11 @@ def convert(work, app, database, test_mode, out_dir):
     if not entry['ok']:
         raise BackupError('incompatible', f'資料庫 {database} 不能搬過來：{entry["blockers"][0]}', database=database)
     details, copy = entry['_details'], entry['_copy']
+    if copy and items.addons_rel is None:
+        raise BackupError('incompatible', '這台的 Odoo 沒有自訂模組資料夾，無法放進 HA 的自訂模組。', app=app.id)
+    # What is still to be written (review C-01): the dump, the new cluster (about the size of HA's) with its WAL and
+    # its export; HA's cluster and the filestore are already on disk.
+    work.guard.check(2 * src.pg_bytes + WAL_ALLOWANCE)
     old_uuid = cluster.query_json("SELECT to_json((SELECT value FROM ir_config_parameter WHERE key = 'database.uuid'))",
                                   database)
     dump = staging / 'odoo.dump'
@@ -1314,6 +1544,22 @@ def convert(work, app, database, test_mode, out_dir):
     tmp.remove('hapg')
     tmp.remove_volume('hapg')
     work.checkpoint()
+
+    # The custom modules folder as it will be after the import (the live folder plus HA's custom modules).
+    dirs = {}
+    dir_path = None
+    if items.addons_rel is not None:
+        dir_path = out_dir / 'dirs' / f'{items.addons_index}.tar'
+        out = FileTar(dir_path, work.guard)
+        try:
+            addons_dir_tar(live_dir, staging / 'ha-modules.tar', out,
+                           copy={name: cand['from'] for name, cand in copy.items()})
+        finally:
+            out.close()
+        os.unlink(live_dir)
+        os.unlink(staging / 'ha-modules.tar')
+        check_dir_tar(dir_path, ids)
+        dirs[items.addons_rel] = dir_path
 
     # A new PostgreSQL 17 cluster exactly like the live one.
     work.log('建立新的 PostgreSQL 資料庫叢集（與這台相同的映像與設定）')
@@ -1331,42 +1577,27 @@ def convert(work, app, database, test_mode, out_dir):
                                              if ext not in EXTENSIONS_CREATED and ext != 'plpgsql']
     pg17.script(''.join(f'CREATE EXTENSION IF NOT EXISTS {pg_ident(ext)};\n' for ext in extensions)
                 + 'ALTER EXTENSION vector UPDATE;\n', 'odoo')
-    with open(dump, 'rb') as handle:
-        pg17.write_file('/tmp/woowbk-odoo.dump', handle)
+    restore_dump(work, tmp, dump, database)
     os.unlink(dump)
-    toc = tmp.exec('odoo-db', ['pg_restore', '-l', '/tmp/woowbk-odoo.dump'], user='postgres', timeout=DUMP_TIMEOUT,
-                   max_output=TOC_OUTPUT).stdout or b''
-    pg17.write_file('/tmp/woowbk-odoo.toc', filter_toc(toc.decode('utf-8', 'surrogateescape'))
-                    .encode('utf-8', 'surrogateescape'))
-    work.log(f'把資料庫 {database} 還原到新的叢集（資料庫名稱 odoo）')
-    tmp.exec('odoo-db', ['pg_restore', '-U', live.db_user, '--role=odoo', '--no-owner', '--no-acl', '--exit-on-error',
-                         '--single-transaction', '-L', '/tmp/woowbk-odoo.toc', '-d', 'odoo', '/tmp/woowbk-odoo.dump'],
-             user='postgres', timeout=DUMP_TIMEOUT, max_output=1024 * 1024)
-    tmp.exec('odoo-db', ['rm', '-f', '/tmp/woowbk-odoo.dump', '/tmp/woowbk-odoo.toc'], user='postgres', timeout=120)
-    pg17.script(settings_sql(live_values), 'odoo')
+    pg17.script(settings_sql(live_values) + CLEAR_WEBSITE_DOMAINS_SQL, 'odoo')
     if test_mode:
         work.log('測試匯入：停用寄信與排程（odoo neutralize），並換上新的資料庫識別碼')
-        mounts = [(source, target_, opts) for source, target_, opts in live.web_mounts if target_ != '/var/lib/odoo']
-        tmp.run('neutralize', live.web_image, ['neutralize', '-c', '/etc/odoo/odoo.conf', '-d', 'odoo', '--db_host',
-                                               tmp.name('odoo-db'), '--db_port', '5432'],
-                entrypoint='odoo', network=network, secrets=[live.conf_secret], volumes=mounts, timeout=1800,
-                max_output=4 * 1024 * 1024)
+        neutralize(work, tmp, live, items, network, dir_path)
         pg17.script(NEW_UUID_SQL, 'odoo')
     doc = pg17.query_json(VERIFY_SQL, 'odoo')
+    if isinstance(doc, dict):
+        doc['website_domains'] = (pg17.query_json(WEBSITE_DOMAINS_SQL, 'odoo')
+                                  if pg17.query_json(HAS_WEBSITE_SQL, 'odoo') is True else [])
     problems = verify_converted(doc, details, target, copy, live_values, test_mode=test_mode, old_uuid=old_uuid)
     if problems:
         raise BackupError('job-failed', f'轉換後的 Odoo 資料庫檢查沒有通過：{"；".join(problems)}。')
-    live_rows = _read_live_json(work, app, live, SETTINGS_SQL, 'postgres')
-    carry = settings_to_carry(live_rows, pg17.query_json(SETTINGS_SQL))
-    if carry:
-        pg17.script(''.join(f'ALTER SYSTEM SET {name} TO {sql_literal(value)};\n' for name, value in carry))
-        work.log(f'沿用這台 PostgreSQL 的設定：{"、".join(name for name, _v in carry)}')
-    pg17.script('CHECKPOINT;\n')
+    carry_settings(work, app, live, pg17)
+    pg17.statement('CHECKPOINT;')
     code = tmp.stop('odoo-db', timeout=300)
     if code != 0:
         raise BackupError('job-failed', f'新的 PostgreSQL 叢集沒有正常關閉（結束碼 {code}）。')
-    state = tmp.run('controldata', live.db_image, ['pg_controldata', live.db_target], user='postgres',
-                    volumes=[(tmp.name('odoo-db'), live.db_target, 'ro')], timeout=300,
+    state = tmp.run('controldata', live.db_image, ['pg_controldata', live.pgdata], user='postgres',
+                    volumes=[(tmp.name('odoo-db'), live.db_target, 'ro')], timeout=300, read_only_root=True,
                     max_output=1024 * 1024).stdout or b''
     if not re.search(rb'Database cluster state:\s+shut down\s*$', state, re.M):
         raise BackupError('job-failed', '新的 PostgreSQL 叢集沒有正常關閉。')
@@ -1378,21 +1609,62 @@ def convert(work, app, database, test_mode, out_dir):
         handle.flush()
         os.fsync(handle.fileno())
     tmp.remove_volume('odoo-db')
-    dirs = {}
-    if items.addons_rel is not None:
-        dir_path = out_dir / 'dirs' / f'{items.addons_index}.tar'
-        out = FileTar(dir_path, work.guard)
-        try:
-            addons_dir_tar(live_dir, staging / 'ha-modules.tar', out,
-                           copy={name: cand['from'] for name, cand in copy.items()})
-        finally:
-            out.close()
-        os.unlink(live_dir)
-        check_dir_tar(dir_path, ids)
-        dirs[items.addons_rel] = dir_path
     check_volume_tar(web_path, ids)
     check_volume_tar(db_path, ids)
-    os.unlink(staging / 'ha-modules.tar')
     return {'volumes': {items.db_volume: db_path, items.web_volume: web_path}, 'dirs': dirs, 'database': database,
-            'custom_modules': entry['custom_modules'],
+            'custom_modules': entry['custom_modules'], 'website_domains': list(details.get('website_domains') or []),
             'counts': {key: entry[key] for key in ('partners', 'users', 'attachments', 'modules')}}
+
+
+def restore_dump(work, tmp, dump, database):
+    """Restore HA's dump into the new cluster's database odoo AS THE ROLE odoo (review HA-SEC-01: HA's server is
+    untrusted, so what its dump says runs without superuser rights): the list without the EXTENSION entries (created
+    by postgres before), refused when it holds objects only a superuser can create; the dump is streamed on stdin
+    (no copy of it inside the container)."""
+    with open(dump, 'rb') as handle:
+        toc = tmp.exec('odoo-db', ['pg_restore', '-l'], user='postgres', input=handle, timeout=DUMP_TIMEOUT,
+                       max_output=TOC_OUTPUT).stdout or b''
+    text = toc.decode('utf-8', 'surrogateescape')
+    kinds = superuser_kinds(text)
+    if kinds:
+        raise BackupError('incompatible', f'HA 的資料庫 {database} 含有只有資料庫超級使用者才能建立的物件'
+                                          f'（{_names(kinds)}），無法安全地搬過來。', database=database)
+    Cluster(tmp, 'odoo-db').write_file('/tmp/woowbk-odoo.toc', filter_toc(text).encode('utf-8', 'surrogateescape'))
+    work.log(f'把資料庫 {database} 還原到新的叢集（資料庫名稱 odoo，以 odoo 角色還原）')
+    with open(dump, 'rb') as handle:
+        try:
+            tmp.exec('odoo-db', ['pg_restore', '-U', 'odoo', '--no-owner', '--no-acl', '--exit-on-error',
+                                 '--single-transaction', '-L', '/tmp/woowbk-odoo.toc', '-d', 'odoo'],
+                     user='postgres', input=handle, timeout=DUMP_TIMEOUT, max_output=1024 * 1024)
+        except BackupError as error:
+            if error.code != 'job-failed':
+                raise
+            raise BackupError('job-failed', f'無法把 HA 的資料庫 {database} 還原到新的叢集（可能含有這台不支援、'
+                                            '或需要資料庫超級使用者權限的內容）。', database=database) from None
+    tmp.exec('odoo-db', ['rm', '-f', '/tmp/woowbk-odoo.toc'], user='postgres', timeout=120)
+
+
+def neutralize(work, tmp, live, items, network, dir_path):
+    """`odoo neutralize` of the converted database with the custom modules folder AS IT WILL BE after the import
+    (review C-12: a module copied from HA only there has its own neutralize.sql), in a throwaway volume."""
+    mounts = [(source, target, opts) for source, target, opts in live.web_mounts
+              if target not in ('/var/lib/odoo', items.addons_target)]
+    if dir_path is not None:
+        tmp.volume('odoo-addons')
+
+        def produce(out):
+            with open(dir_path, 'rb') as handle:
+                while True:
+                    data = handle.read(habackup.CHUNK)
+                    if not data:
+                        break
+                    out.write(data)
+
+        tmp.volume_import('odoo-addons', produce)
+        mounts.append((tmp.name('odoo-addons'), items.addons_target, 'ro'))
+    tmp.run('neutralize', live.web_image, ['neutralize', '-c', '/etc/odoo/odoo.conf', '-d', 'odoo', '--db_host',
+                                           tmp.name('odoo-db'), '--db_port', '5432'],
+            entrypoint='odoo', network=network, secrets=[live.conf_secret], volumes=mounts, timeout=1800,
+            max_output=4 * 1024 * 1024)
+    if dir_path is not None:
+        tmp.remove_volume('odoo-addons')

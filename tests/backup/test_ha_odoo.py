@@ -8,9 +8,12 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from woowbackup import ha_odoo, habackup
+import types
+
+from woowbackup import ha_odoo, habackup, tempctr
 from woowbackup.errors import BackupError
 
+from . import hafakes
 from . import hafixtures as hx
 
 ADDON_JSON = json.dumps({'user': {'version': '0.4.12', 'image': 'ghcr.io/woowtech/woow-ha-odoo-amd64',
@@ -344,6 +347,245 @@ class LiveTests(unittest.TestCase):
         broken['odoo.container'] = broken['odoo.container'].replace(b'%h/.local', b'/etc/../root')
         with self.assertRaises(BackupError):
             ha_odoo.Live(broken, '/home/appowner')
+
+
+class EntryStub:
+    def __init__(self, kind='file', data=b'', mtime=0):
+        self.kind, self.data, self.mtime, self.size = kind, data, mtime, len(data)
+        self.pos = 0
+
+    def read(self, n):
+        chunk = self.data[self.pos:self.pos + n]
+        self.pos += len(chunk)
+        return chunk
+
+
+class HaClusterTests(unittest.TestCase):
+    """HA's PostgreSQL is untrusted (review HA-SEC-01)."""
+
+    def test_the_configuration_and_recovery_files_never_reach_the_server(self):
+        out = io.BytesIO()
+        sink = ha_odoo.PgSink(out, 70, 70)
+        sink.add('.', EntryStub('dir'))
+        sink.add('PG_VERSION', EntryStub(data=b'16\n'), b'16\n')
+        sink.add('postgresql.conf', EntryStub(data=b"shared_preload_libraries = '/var/lib/postgresql/data/evil.so'\n"))
+        sink.add('postgresql.auto.conf', EntryStub(data=b'restore_command = \'sh -c "id > /tmp/pwned"\'\n'))
+        sink.add('recovery.signal', EntryStub())
+        sink.add('standby.signal', EntryStub())
+        sink.add('pg_ident.conf', EntryStub('dir'))           # whatever kind HA has there
+        sink.add('pg_ident.conf/x', EntryStub(data=b'x'))
+        sink.add('postmaster.pid', EntryStub(data=b'1\n'))
+        sink.add('evil.so', EntryStub(data=b'\x7fELF'))
+        sink.close()
+        out.seek(0)
+        with tarfile.open(fileobj=out, mode='r') as tar:
+            files = {m.name: (tar.extractfile(m).read() if m.isfile() else None) for m in tar}
+        self.assertNotIn('recovery.signal', files)
+        self.assertNotIn('standby.signal', files)
+        self.assertNotIn('postmaster.pid', files)
+        self.assertNotIn('pg_ident.conf/x', files)
+        self.assertEqual(files['postgresql.conf'], ha_odoo.PG_CONF)
+        self.assertNotIn(b'restore_command', files['postgresql.auto.conf'])
+        self.assertEqual(files['pg_hba.conf'], ha_odoo.PG_HBA)   # added when HA has none
+        self.assertEqual(files['pg_ident.conf'], b'')
+        self.assertEqual(files['evil.so'], b'\x7fELF')         # data stays data: the volume is mounted noexec
+
+    def test_the_server_starts_with_every_library_and_command_setting_overridden(self):
+        args = ha_odoo.ha_server_args()
+        settings = dict(arg.split('=', 1) for arg in args[2::2])
+        for name in ('shared_preload_libraries', 'session_preload_libraries', 'local_preload_libraries',
+                     'archive_command', 'restore_command', 'archive_library', 'primary_conninfo', 'listen_addresses'):
+            self.assertEqual(settings[name], '', name)
+        self.assertEqual((settings['archive_mode'], settings['ssl'], settings['jit']), ('off', 'off', 'off'))
+        self.assertEqual(settings['dynamic_library_path'], '$libdir')
+        self.assertEqual(settings['hba_file'], '/var/lib/postgresql/data/pg_hba.conf')
+        runner_calls = []
+
+        class Runner:
+            uid = None
+
+            def podman(self, *args, **kwargs):
+                runner_calls.append(args)
+                return hafakes.Result(0, b'', b'')
+
+        tmp = tempctr.TempObjects(Runner(), 'j20261118T120000Z-0123abcd', cpus=None)
+        tmp.volume('hapg')
+        work = types.SimpleNamespace(log=lambda _t: None, checkpoint=lambda: None)
+        ha_odoo.start_ha_cluster(work, tmp, 'docker.io/library/postgres:16.15-alpine')
+        run = next(call for call in runner_calls if call[0] == 'run')
+        self.assertIn('--read-only', run)
+        self.assertIn(f'{tmp.name("hapg")}:/var/lib/postgresql/data:rw,noexec,nosuid,nodev', run)
+        self.assertEqual(run[run.index('--network') + 1], 'none')
+
+    def test_a_dump_needing_a_superuser_is_refused_and_the_rest_restored_as_odoo(self):
+        toc = (b';\n; Archive created\n;\n'
+               b'5; 2615 2200 SCHEMA - public pg_database_owner\n'
+               b'2; 3079 16385 EXTENSION - pg_trgm \n'
+               b'3456; 1259 16400 TABLE public res_partner odoo\n'
+               b'3457; 0 16400 TABLE DATA public res_partner odoo\n')
+        bad = toc + b'3500; 3466 16500 EVENT TRIGGER - grab postgres\n3501; 1255 16501 FUNCTION public f() odoo\n'
+        self.assertEqual(ha_odoo.superuser_kinds(bad.decode()), ['EVENT TRIGGER'])
+        self.assertEqual(ha_odoo.superuser_kinds(toc.decode()), [])
+
+        def run(listing):
+            def pg_restore(role, argv, data, stdout):
+                if argv[:2] == ['pg_restore', '-l']:
+                    return hafakes.Result(0, listing, b'')
+                return hafakes.Result(0, b'', b'')
+            tmp = hafakes.FakeTmp(handlers={'pg_restore': pg_restore})
+            with tempfile.TemporaryDirectory() as folder:
+                dump = Path(folder) / 'odoo.dump'
+                dump.write_bytes(b'PGDMP-data')
+                ha_odoo.restore_dump(types.SimpleNamespace(log=lambda _t: None), tmp, dump, 'woowtest')
+            return tmp
+
+        with self.assertRaises(BackupError) as caught:
+            run(bad)
+        self.assertEqual(caught.exception.code, 'incompatible')
+        self.assertIn('EVENT TRIGGER', caught.exception.message)
+        tmp = run(toc)
+        restore = next(argv for _role, argv, _data in tmp.calls if argv[0] == 'pg_restore' and '-d' in argv)
+        self.assertEqual(restore[:3], ['pg_restore', '-U', 'odoo'])
+        self.assertNotIn('--role=odoo', restore)
+        self.assertIn('--single-transaction', restore)
+        self.assertEqual(next(data for _r, argv, data in tmp.calls if argv is restore), b'PGDMP-data')  # on stdin
+        toc_written = next(data for _r, argv, data in tmp.calls if argv[0] == 'sh')
+        self.assertNotIn(b'EXTENSION', toc_written)
+
+
+class SettingsCarryTests(unittest.TestCase):
+    """The live cluster's own settings reach the new cluster with ALTER SYSTEM, outside any transaction (C-19), list
+    settings element by element (C-06)."""
+
+    LIVE = [['work_mem', '8192', 'configuration file', 'user'],
+            ['search_path', '"$user", public, extra', 'configuration file', 'user'],
+            ['log_line_prefix', '%m [%p]; ', 'configuration file', 'sighup'],
+            ['port', '5433', 'configuration file', 'postmaster']]
+    NEW = [['work_mem', '4096', 'default', 'user']]
+
+    def carry(self):
+        psql = hafakes.Psql()
+
+        def answer(sql, _database):
+            if sql.startswith('SELECT coalesce(json_agg(json_build_array(name, setting, source'):
+                return self.NEW
+            if 'pg_file_settings' in sql:
+                return [[name, value, ''] for name, value in psql.auto_conf.items()]
+            return None
+
+        psql.answer = answer
+        live_calls = []
+
+        class Runner:
+            def podman(self, *args, **kwargs):
+                live_calls.append(args)
+                return hafakes.Result(0, json.dumps(SettingsCarryTests.LIVE).encode(), b'')
+
+        work = types.SimpleNamespace(runner=lambda _app: Runner(), log=lambda _text: None)
+        live = types.SimpleNamespace(db_container='odoo18-db', db_user='postgres')
+        tmp = hafakes.FakeTmp(psql)
+        cluster = ha_odoo.Cluster(tmp, 'odoo-db')
+        carried = ha_odoo.carry_settings(work, types.SimpleNamespace(id='odoo'), live, cluster)
+        return carried, psql, tmp, live_calls
+
+    def test_alter_system_runs_one_statement_per_psql_call_outside_a_transaction(self):
+        carried, psql, tmp, live_calls = self.carry()
+        self.assertEqual(carried, ['log_line_prefix', 'search_path', 'work_mem'])
+        alters = [(statement, in_tx) for _db, statement, in_tx in psql.executed if statement.startswith('ALTER SYSTEM')]
+        self.assertEqual(len(alters), 3)
+        self.assertFalse(any(in_tx for _s, in_tx in alters))
+        for _role, argv, data in tmp.calls:
+            if data and b'ALTER SYSTEM' in data:
+                self.assertNotIn('-1', argv)
+                self.assertEqual(len(hafakes.split_sql(data.decode())), 1)
+        self.assertEqual(psql.auto_conf['search_path'], "'$user', 'public', 'extra'")
+        self.assertEqual(psql.auto_conf['log_line_prefix'], "'%m [%p]; '")
+        self.assertTrue(any('pg_reload_conf' in statement for _db, statement, _tx in psql.executed))
+        self.assertEqual(live_calls[0][:2], ('exec', 'odoo18-db'))  # read from the live cluster, read only
+
+    def test_the_emulator_refuses_the_old_single_transaction_shape(self):
+        cluster = ha_odoo.Cluster(hafakes.FakeTmp(), 'odoo-db')
+        with self.assertRaises(BackupError):
+            cluster.script("ALTER SYSTEM SET work_mem TO '8192';\n")
+        with self.assertRaises(BackupError):
+            cluster.statement("ALTER SYSTEM SET work_mem TO '1'; ALTER SYSTEM SET x TO '2';")
+
+    def test_a_setting_that_did_not_land_fails_the_job(self):
+        psql = hafakes.Psql(lambda sql, _db: self.NEW if 'source' in sql else [['work_mem', '8192', 'invalid value']]
+                            if 'pg_file_settings' in sql else None)
+        tmp = hafakes.FakeTmp(psql)
+
+        class Runner:
+            def podman(self, *args, **kwargs):
+                return hafakes.Result(0, json.dumps([['work_mem', '8192', 'configuration file', 'user']]).encode(), b'')
+
+        work = types.SimpleNamespace(runner=lambda _app: Runner(), log=lambda _text: None)
+        live = types.SimpleNamespace(db_container='odoo18-db', db_user='postgres')
+        with self.assertRaises(BackupError) as caught:
+            ha_odoo.carry_settings(work, None, live, ha_odoo.Cluster(tmp, 'odoo-db'))
+        self.assertIn('work_mem', caught.exception.message)
+
+    def test_list_settings_are_split_like_postgresql_prints_them(self):
+        self.assertEqual(ha_odoo.split_list_setting('"$user", public'), ['$user', 'public'])
+        self.assertEqual(ha_odoo.split_list_setting('"a ""b"", c",d'), ['a "b", c', 'd'])
+        self.assertEqual(ha_odoo.split_list_setting('public'), ['public'])
+        for bad in ('', '"open', 'a,,b', '"a"b'):
+            self.assertIsNone(ha_odoo.split_list_setting(bad), bad)
+        self.assertIsNone(ha_odoo.alter_system_sql('search_path', '"open'))
+        self.assertEqual(ha_odoo.alter_system_sql('work_mem', "8'MB"), "ALTER SYSTEM SET work_mem TO '8''MB';")
+
+
+class PgdataTests(unittest.TestCase):
+    def test_a_pgdata_folder_of_the_volume_is_where_the_cluster_lives(self):
+        quadlets = dict(QUADLETS)
+        quadlets['odoo-db.container'] += b'Environment=PGDATA=/var/lib/postgresql/data/pgdata\n'
+        live = ha_odoo.Live(quadlets, '/home/appowner')
+        self.assertEqual((live.pgdata, live.db_target), ('/var/lib/postgresql/data/pgdata', '/var/lib/postgresql/data'))
+        self.assertEqual(ha_odoo.Live(QUADLETS, '/home/appowner').pgdata, '/var/lib/postgresql/data')
+        quadlets['odoo-db.container'] = QUADLETS['odoo-db.container'] + b'Environment=PGDATA=/srv/pg\n'
+        with self.assertRaises(BackupError):
+            ha_odoo.Live(quadlets, '/home/appowner')
+
+
+class DatabaseVerdictExtraTests(unittest.TestCase):
+    def test_superuser_objects_vector_and_website_domains(self):
+        details = details_base(superuser_objects=['EVENT TRIGGER'])
+        ok, blockers, _w, _c = ha_odoo.database_verdict(details, target({'base': ('18.0.1.3', True, CORE)}), {}, ha_major=16,
+                                                        target_major=17)
+        self.assertFalse(ok)
+        self.assertIn('EVENT TRIGGER', blockers[0])
+        details = details_base(extensions=['plpgsql', 'vector'])
+        ok, blockers, _w, _c = ha_odoo.database_verdict(details, target({'base': ('18.0.1.3', True, CORE)}), {}, ha_major=16,
+                                                        target_major=17, vector_ok=False)
+        self.assertFalse(ok)
+        self.assertIn('pgvector', blockers[0])
+        self.assertTrue(ha_odoo.database_verdict(details, target({'base': ('18.0.1.3', True, CORE)}), {}, ha_major=16,
+                                                 target_major=17, vector_ok=True)[0])
+        details = details_base(website_domains=['https://ha.example.com'])
+        ok, _b, warnings, _c = ha_odoo.database_verdict(details, target({'base': ('18.0.1.3', True, CORE)}), {}, ha_major=16,
+                                                        target_major=17)
+        self.assertTrue(ok)
+        self.assertIn('網站原本使用的網域 https://ha.example.com 會改成這台的網址。', warnings)
+        self.assertEqual(ha_odoo.PG16_IMAGES[0], 'docker.io/pgvector/pgvector:0.8.6-pg16')
+
+    def test_the_converted_database_keeps_no_website_domain(self):
+        marker = 'm'
+        live_values = {'base_url': 'https://cockpit.example', 'marker': marker}
+        doc = {'modules': [['base', '18.0.1.3', 'installed']], 'partners': 1, 'attachments': 0, 'marker': marker,
+               'attempt': 0, 'base_url': 'https://cockpit.example', 'uuid': 'u', 'website_domains': []}
+        details = details_base(partners=1)
+        args = dict(test_mode=False, old_uuid='u')
+        self.assertEqual(ha_odoo.verify_converted(doc, details, target({'base': ('18.0.1.3', True, CORE)}), {}, live_values, **args), [])
+        doc['website_domains'] = ['https://ha.example.com']
+        self.assertEqual(ha_odoo.verify_converted(doc, details, target({'base': ('18.0.1.3', True, CORE)}), {}, live_values, **args),
+                         ['網站的網域沒有清除（仍是 HA 的網址）'])
+        self.assertIn('UPDATE website SET domain = NULL', ha_odoo.CLEAR_WEBSITE_DOMAINS_SQL)
+
+
+def details_base(**extra):
+    base = details([('base', '18.0.1.3', 'installed')])
+    base.update(extra)
+    return base
 
 
 if __name__ == '__main__':
