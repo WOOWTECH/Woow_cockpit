@@ -4998,6 +4998,29 @@ try {
       assert.equal(origin['HA 備份'], `${HA_NAME}（HA 備份檔已從這台刪除）`);
     });
 
+  await check('從 HA 備份匯入, engine whose inspect does not name the import: a converted backup restored from 備份列表 keeps its HA notice; 檢視內容 keeps 由 HA 轉換 (review P-01)',
+    haFixture({ legacy: true, extra: { backups: [convertedMeta({}, { legacy: true }), ...fixture().backups] } }), async page => {
+      await ready(page);
+      await page.locator('[data-nav="backups"]').click();
+      await page.locator(`[data-focus="restore-${B_HA}"]`).click();
+      await page.locator('.app-preflight').first().waitFor();
+      assert.deepEqual(requestOf((await calls(page, 'inspect')).at(-1)), { backup_id: B_HA });
+      assert.equal(await page.locator('.stepper .step-label').first().textContent(), '從 HA 轉換');
+      assert.match(await page.locator('.ha-banner').textContent(), new RegExp(`這份備份由 HA 備份「${HA_NAME}」（2026/11/18 05:00）轉換而來。`));
+      await page.locator('[data-focus="pf-next"]').click();
+      await page.locator('#confirm-restore').waitFor();
+      assert.equal(await page.locator('.ha-banner').count(), 1, 'the notice stays on 確認');
+      // The details: 檢視內容 (inspect) keeps where the backup came from.
+      await page.locator('[data-nav="backups"]').click();
+      await page.locator(`[data-focus="open-${B_HA}"]`).click();
+      await page.locator('section[aria-labelledby="detail-ha"]').waitFor();
+      await page.locator(`[data-focus="inspect-${B_HA}"]`).click();
+      await page.locator(`[data-focus="inspect-${B_HA}"]`).waitFor({ state: 'detached' });
+      assert.equal((await calls(page, 'inspect')).length, 2);
+      assert.equal(await page.locator('section[aria-labelledby="detail-ha"]').count(), 1, '由 HA 備份轉換 stays');
+      assert.match(await page.locator('section[aria-labelledby="detail-info"] .chips').textContent(), /由 HA 轉換/);
+    });
+
   const haJobs = (() => {
     const data = haFixture({ extra: { backups: [convertedMeta(), ...fixture().backups] } });
     const checked = haCheck({ n8n: { ok: false, blockers: ['HA 的 n8n 還沒建立管理者帳號，沒有可搬的資料。'] } });

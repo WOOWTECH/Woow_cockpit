@@ -682,11 +682,15 @@
   // The schedule is on and runs (a problem stops it; CONTRACT §7 ScheduleSummary.enabled).
   const scheduleOn = () => statusSchedule()?.enabled === true;
 
+  // An inspect reply replaces the listed backup. An engine whose inspect does not name the HA import yet (before
+  // FIXPLAN §19a) sends no `from_ha`: the listed one is kept, or a converted backup lost its HA notice (review P-01).
   function upsertBackup(backup) {
     if (!validBackup(backup) || !state.backups) return;
     const index = state.backups.findIndex(item => item.id === backup.id);
-    if (index >= 0) state.backups[index] = backup;
-    else state.backups.unshift(backup);
+    const before = index >= 0 ? state.backups[index] : null;
+    const kept = before && !Object.hasOwn(backup, "from_ha") && isObject(before.from_ha) ? { ...backup, from_ha: before.from_ha } : backup;
+    if (index >= 0) state.backups[index] = kept;
+    else state.backups.unshift(kept);
   }
 
   // An upload-finish reply names an HA backup before the next list does; an engine that sent one supports them.
@@ -2245,7 +2249,8 @@
     };
   }
 
-  // A restore of a backup converted from an HA backup: from the hand-over, the list (BackupMeta.from_ha) or inspect.
+  // A restore of a backup converted from an HA backup: from the hand-over, the list (BackupMeta.from_ha) or inspect
+  // (its backup carries from_ha since FIXPLAN §19a).
   const wizardFromHa = wizard => (wizard?.source === "local"
     ? wizard.fromHa || fromHaOf(state.backups?.find(item => item.id === wizard.backupId)) || fromHaOf(wizard.backup) : null);
 
