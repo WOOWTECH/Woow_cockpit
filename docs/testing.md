@@ -55,7 +55,7 @@ $LP run --rm --memory 384m --user 1000:1000 -e HOME=/tmp -e PYTHONDONTWRITEBYTEC
 
 `scripts/check_source.py` 另檢查備份頁的 manifest、CSP 與 DOM 寫入方式、每個引擎原始檔（shebang、語法、不使用 shell），並以引擎的驗證程式檢查示範目錄項目。
 
-Home Assistant 備份（`tests/backup/test_ha_*.py`）讀取 `tests/backup/fixtures/ha/` 的小型 HA 備份：它們由真正的 securetar 函式庫產生（v1、v2、v3、未加密、HA「下載」得到的解密副本；產生方式見該資料夾的 README），測試解密結果與函式庫逐位元組相同、錯誤金鑰、截斷與竄改、惡意的外層與內層 tar，以及上傳、`list`、`ha-delete` 與作業日誌遮蔽 HA 金鑰。需要 `python3-nacl` 與 `python3-cryptography`（測試映像與 CI 都有；CI 設定 `WOOWBK_REQUIRE_HA_CRYPTO=1`，缺少時不會略過而是失敗）；主機沒有時這些測試會略過。為這個功能建立的真實 HA 備份從不提交；要對它們測試，設定 `WOOWBK_HA_FIXTURES`（三個備份所在的資料夾）與 `WOOWBK_HA_KEY`（它們的金鑰），`RealBackupTests` 會完整串流讀取每個項目。
+Home Assistant 備份（`tests/backup/test_ha_*.py`）讀取 `tests/backup/fixtures/ha/` 的小型 HA 備份：它們由真正的 securetar 函式庫產生（v1、v2、v3、未加密、HA「下載」得到的解密副本；產生方式見該資料夾的 README），測試解密結果與函式庫逐位元組相同、錯誤金鑰、截斷與竄改、惡意的外層與內層 tar，以及上傳、`list`、`ha-delete` 與作業日誌遮蔽 HA 金鑰。需要 `python3-nacl` 與 `python3-cryptography`（測試映像與 CI 都有；CI 設定 `WOOWBK_REQUIRE_HA_CRYPTO=1`，缺少時不會略過而是失敗）；主機沒有時這些測試會略過。為這個功能建立的真實 HA 備份從不提交；要對它們測試，設定 `WOOWBK_HA_FIXTURES`（三個備份所在的資料夾）與 `WOOWBK_HA_KEY`（它們的金鑰），`RealBackupTests` 會完整串流讀取每個項目。HA 匯入的檢查與轉換作業（`test_ha_tempctr.py`、`test_ha_odoo.py`、`test_ha_n8n.py`、`test_ha_import.py`，以及 `test_ha_cli.py` 的新指令）用假的執行器與小型 tar／SQLite 夾具：暫用容器的完整命令列、Quadlet 的機密與環境變數解析、清理與中斷後的清除、Odoo 模組版本判斷與各種擋下的原因、附加元件 tar 的單次讀取（資料庫叢集、附件、自訂模組，HA 密碼檔從不讀取）、n8n 的 SQLite 讀取（擁有者、筆數、檢視表從不執行）、需要修正的工作流程、原生模組檢查、作業紀錄的階段名稱、HA 金鑰原樣保存並在第一行日誌前遮蔽、`ha-imports.json`，以及檢查／轉換流程（容器步驟以替身代替）。容器步驟本身在實驗室設備 dev-c 上實測（見下方「HA 匯入」）。
 
 2026-11-13 最終回歸：主機（已安裝 age）471 項通過、0 項略過；測試映像以 root 執行 471 項通過、3 項略過（只適用非 root），以 uid 1000 執行 471 項通過、0 項略過。`check_source.py` 通過（32 個資源參照、17 個引擎原始檔、示範目錄的 3 個 Quadlet 範本）。較早的整合輪為 317 項，當時主機沒有 age，50 項略過。
 
@@ -157,6 +157,23 @@ H8（`upload_window.mjs`）在最終回歸前跑過兩批，每種設定共 6 �
 只有單元測試、未在設備上重現的情況：全新部署在資料匯入剛完成的瞬間被終止、只部分執行的應用在備份時確認核對快照、資料庫執行個體無法列出時的拒絕、索引檔無法讀取時不被覆寫、核對快照在備份期間改變時不保存（例如有新的寫入，或未套用的設定在重新啟動時生效），以及「不建立還原前備份，直接還原」選項。
 
 頁面上的「建立加密金鑰」已於 2026-11-13 在實驗室設備 dev-b 以真正的 Cockpit 362 與已安裝引擎實測：建立後金鑰只顯示一次、緊急金鑰檔含金鑰與編號、未勾選確認不能完成、確認後畫面上不再有金鑰，引擎回報已確認（金鑰檔 root 0600、資料夾 0700）；測完已移除 dev-b 的測試金鑰。此流程尚未納入可重跑的 `ui_e2e.mjs`。dev-a 的金鑰仍是較早由 helper（`key-init`）建立。實驗室中 Cockpit 自身的框架程式在切換管理員權限與換頁時會記錄一個縮寫錯誤（`ne`），開原生「服務」頁也會出現，與備份頁無關。
+
+### HA 匯入（dev-c）
+
+`tests/e2e/lab/ha_import_e2e.py` 在實驗室設備 dev-c（正式主機 Odoo tenant 與 n8n 佇列模式的複本，密鑰全新產生；見 lab README 的 dev-c 一節）上，用為這個功能做的三份真實 HA 備份（加密、未加密、加密未壓縮；金鑰與測試密碼從檔案讀取，從不顯示）走完整流程：上傳 → 檢查作業 → 轉換作業 → 用既有的還原作業匯入 → 在設備內驗證。情境：`baseline`（選用，`--baseline <odoo 備份>,<n8n 備份>`：先還原 dev-c 匯入前的備份）、`upload`、`keys`（沒有金鑰 key-required、錯誤金鑰 wrong-key，檢查與轉換都在作業開始前拒絕）、`check`（三份備份，兩個應用；資料庫 woowtest／woowtest2、聯絡人與附件數、自訂模組 woow_import_probe 要從備份複製或這台已經有、n8n 擁有者、工作流程、憑證、執行紀錄、要修正的工作流程、版本；結束後沒有暫用容器）、`convert`（woowtest＋n8n；`ha_import` 形狀、列表中的 `from_ha` 與備註、`inspect` 預檢全部通過且兩個應用的設定都是 same）、`restore`、`verify`（5 位測試聯絡人、附件 ha-probe.txt 可讀、模組與它的資料、自訂模組資料夾、web.base.url 與升級標記是這台的、odoo.service 啟動即通過升級閘道、四個健康網址 200、Odoo admin 與 ha-probe 能登入、n8n 擁有者能登入、憑證「HA probe header」以 n8n 自己的 `export:credentials --decrypted` 在設備內比對解密值、3 個工作流程且「WOOW 匯入測試 - 排程」啟用、有執行紀錄）、`db2`（未加密備份的 woowtest2，只匯入 Odoo）、`testmode`（加密未壓縮備份、「這只是測試」：Odoo 已 neutralize（只剩 Odoo 自己加的 `invalid` 郵件伺服器）且 database.uuid 換新、n8n 工作流程全部停用，其餘同 verify）、`cleanup`（沒有暫用容器、資料卷、網路、暫存資料夾或金鑰檔）、`leaks`（測試密碼、HA 金鑰與憑證值不在作業紀錄、日誌、索引、`ha-imports.json`、上傳資料夾與設備的 journal 中）。證據寫到 `~/.woowbk-lab/evidence/ha-import/<時間>/`（`run.log`、`results.json`、每個作業的紀錄與日誌，全部遮蔽）。
+
+2026-11-18（feat/ha-import-engine，部署後從匯入前的狀態開始）：74／74 通過，證據 `~/.woowbk-lab/evidence/ha-import/20261118T194230/`。
+
+| 步驟 | 時間 |
+| --- | --- |
+| 匯入前的狀態（還原 dev-c 基準備份：Odoo、n8n） | 43 秒、113 秒 |
+| 檢查作業（兩個應用；加密／未加密／加密未壓縮） | 25／19／15 秒 |
+| 轉換 woowtest＋n8n（加密備份，10 MB 的加密備份） | 102 秒 |
+| 還原轉換後的備份（含還原前備份、健康檢查） | 155 秒 |
+| 轉換 woowtest2（只有 Odoo）／還原 | 48／42 秒 |
+| 測試匯入：轉換／還原 | 137／156 秒 |
+
+洩漏掃描 145 個檔案與 5.4 MB 的 journal，0 命中。前一輪（同一天、設備已有先前匯入的自訂模組）68／71：3 項是執行器假設設備是全新的（引擎正確地不再列出要複製的模組），修正執行器後即為上表。開發時在 dev-c 發現並修正：n8n 的 SQLite 複本關閉時把 WAL 寫回主檔（-wal 檔消失）；測試匯入時兩個應用用了同名的暫用網路。
 
 尚未實測：多 GB 備份與超過 8 GiB 的單一項目、不同 CPU 架構、兩台實體設備之間的還原（兩台實驗室設備在同一台實體主機上）。正式應用（含沒有 PostgreSQL 的 EMQX、OpenDesign、Headscale，以及使用主機資料夾的 Odoo、Home Assistant、Nextcloud）已在參考主機實測備份與原位還原，見 [production-onboarding.md](backup/production-onboarding.md)；正式應用沒有做跨設備還原。
 
