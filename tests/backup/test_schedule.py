@@ -999,7 +999,8 @@ class PoolTests(ScheduleCase):
         command = retention.plan_command(self.paths, self.storage, None, trusted_uid=os.geteuid())
         self.assertEqual([c['id'] for c in command['candidates']], [manual[1], manual[0]])
         usage = {row['id']: row for row in command['usage']['apps']}
-        self.assertEqual(usage['woowbk-demo']['types'], {'manual': 3, 'safety': 0, 'uploaded': 0, 'scheduled': 3})
+        self.assertEqual(usage['woowbk-demo']['types'], {'manual': 3, 'safety': 0, 'uploaded': 0, 'scheduled': 3,
+                                                       'converted': 0})
         # A manual backup job applies its policy to its pool only.
         deleted = retention.enforce_after_backup(self.paths, self.storage, ['woowbk-demo'], exclude=[manual[2]],
                                                  log=lambda _m: None, audit=self.audit.append,

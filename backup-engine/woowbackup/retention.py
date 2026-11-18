@@ -24,6 +24,10 @@ Owner: catalog + retention engineer.
   N scheduled backups per app (`enforce_schedule`, after a successful or partial scheduled run, with the same
   protections; `schedule_plan` previews it). While the registry cannot be read nothing tells the pools apart, so every
   manual backup is protected.
+* Backups converted from a Home Assistant backup (manual backups that ha-imports.json lists; haimport.py, review C-04)
+  are a pool of their own: no keep-last rule counts or deletes them (they hold HA's data, not this device's; the
+  administrator deletes them). While that registry cannot be read, the manual backups whose note says they were
+  converted are protected.
 """
 import json
 import os
@@ -148,18 +152,20 @@ def _shares(backup, items):
     return shares, len(items) > 1
 
 
-def app_usage(backups, catalog_apps=None, policy=None, scheduled=frozenset()):
+def app_usage(backups, catalog_apps=None, policy=None, scheduled=frozenset(), converted=frozenset()):
     """Per-app storage: `apps` (largest first; catalog apps without backups included), `unassigned` (uploaded
     backups not inspected yet, whose apps are unknown) and `total`. A backup of several apps is split between them
     (by per-app size when the index has it, else evenly: `estimated`). `types.scheduled` counts the manual backups in
-    `scheduled` (the schedule's registry); `types.manual` the other manual ones."""
+    `scheduled` (the schedule's registry), `types.converted` those converted from an HA backup (`converted`,
+    ha-imports.json); `types.manual` the other manual ones."""
     policy = policy or default_policy()
     rows = {}
 
     def row(app_id, name):
         if app_id not in rows:
             rows[app_id] = {'id': app_id, 'name': name or app_id, 'in_catalog': False, 'backups': 0,
-                            'types': {'manual': 0, 'safety': 0, 'uploaded': 0, 'scheduled': 0}, 'bytes': 0,
+                            'types': {'manual': 0, 'safety': 0, 'uploaded': 0, 'scheduled': 0, 'converted': 0},
+                            'bytes': 0,
                             'estimated': False, 'shared': False, 'newest': None, 'oldest': None,
                             'keep_last': keep_last(policy, app_id)}
         return rows[app_id]
@@ -183,7 +189,9 @@ def app_usage(backups, catalog_apps=None, policy=None, scheduled=frozenset()):
             entry = row(item['id'], item.get('name'))
             entry['backups'] += 1
             kind = backup.get('type')
-            if kind == 'manual' and backup.get('id') in scheduled:
+            if kind == 'manual' and backup.get('id') in converted:
+                kind = 'converted'
+            elif kind == 'manual' and backup.get('id') in scheduled:
                 kind = 'scheduled'
             if kind in entry['types']:
                 entry['types'][kind] += 1
@@ -244,7 +252,21 @@ def protected_backups(paths, backups=()):
         for backup in backups:
             if backup.get('type') == 'manual' and isinstance(backup.get('id'), str):
                 reasons.setdefault(backup['id'], '排程備份的紀錄檔無法讀取（無法分辨手動與排程備份），暫不自動刪除。')
+    _converted, readable = converted_ids(paths)
+    if not readable:
+        from .haimport import NOTE_PREFIX
+        for backup in backups:
+            if (backup.get('type') == 'manual' and isinstance(backup.get('id'), str)
+                    and str(backup.get('note') or '').startswith(NOTE_PREFIX)):
+                reasons.setdefault(backup['id'], 'HA 匯入的紀錄檔無法讀取（無法確認這份是不是由 HA 轉換的備份），暫不自動刪除。')
     return reasons
+
+
+def converted_ids(paths):
+    """(ids of the backups converted from an HA backup, readable): ha-imports.json's rows (review C-04)."""
+    from . import haimport
+    rows = haimport.load_registry(paths)
+    return (frozenset(), False) if rows is None else (frozenset(rows), True)
 
 
 def brief(backup, reason=None, scheduled=None):
@@ -269,7 +291,8 @@ def failed_verification(backup):
     return isinstance(verified, dict) and verified.get('ok') is False
 
 
-def plan(backups, policy, protected, *, only_apps=None, scheduled=None, pool='manual', label='保留份數', ahead=()):
+def plan(backups, policy, protected, *, only_apps=None, scheduled=None, pool='manual', label='保留份數', ahead=(),
+         converted=frozenset()):
     """Manual backups the policy would delete (`candidates`, oldest last), with zh-TW reasons, and the candidates
     that are protected (`blocked`). `only_apps`: only backups holding one of these apps are considered.
 
@@ -278,9 +301,10 @@ def plan(backups, policy, protected, *, only_apps=None, scheduled=None, pool='ma
 
     `scheduled` (the registry ids) splits the manual backups into two pools: `pool` 'manual' leaves the scheduled
     ones out, 'scheduled' takes only them. `ahead`: apps that get one newer backup first (the preview of a run that has
-    not happened yet); `label` names the rule in the reasons."""
+    not happened yet); `label` names the rule in the reasons. `converted` (ha-imports.json's ids) are in neither pool.
+    """
     def chosen(backup):
-        if backup.get('type') != 'manual' or not isinstance(backup.get('id'), str):
+        if backup.get('type') != 'manual' or not isinstance(backup.get('id'), str) or backup['id'] in converted:
             return False
         if scheduled is None:
             return pool == 'manual'
@@ -329,10 +353,11 @@ def plan_command(paths, storage, catalog_apps=None, proposed=None, *, trusted_ui
     backups = storage.list_backups()
     protected = protected_backups(paths, backups)
     scheduled, _registry_problem = schedule.scheduled_ids(paths)  # a problem protects every manual backup (above)
-    result = plan(backups, policy, protected, scheduled=scheduled)
+    converted, _readable = converted_ids(paths)
+    result = plan(backups, policy, protected, scheduled=scheduled, converted=converted)
     listed = {b['id']: b for b in backups if isinstance(b.get('id'), str)}
     return {'policy': policy, 'saved_policy': saved, 'proposed': proposed is not None, 'policy_problem': problem,
-            'usage': app_usage(backups, catalog_apps, policy, scheduled), 'candidates': result['candidates'],
+            'usage': app_usage(backups, catalog_apps, policy, scheduled, converted), 'candidates': result['candidates'],
             'blocked': result['blocked'], 'freed_bytes': result['freed_bytes'],
             'protected': [brief(listed[backup_id], reason, scheduled) for backup_id, reason in sorted(protected.items())
                           if backup_id in listed]}
@@ -410,7 +435,9 @@ def enforce_after_backup(paths, storage, app_ids, *, exclude=(), log=None, audit
     for backup_id in exclude or ():
         protected.setdefault(backup_id, '剛建立的備份。')
     deleted = []
-    for item in plan(backups, policy, protected, only_apps=set(app_ids), scheduled=scheduled)['candidates']:
+    converted, _readable = converted_ids(paths)
+    for item in plan(backups, policy, protected, only_apps=set(app_ids), scheduled=scheduled,
+                     converted=converted)['candidates']:
         try:
             storage.delete(item['id'])
         except BackupError as error:

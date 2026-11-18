@@ -33,6 +33,19 @@ sudo python3 scripts/manage.py rollback <安裝輸出的 backup_id>
 
 **回退到 2026.11.17.1 之前的版本時（排程備份）：** 回退加入排程備份的那次安裝交易，會停用並移除排程檢查的計時器（`woowtech-cockpit-backup-schedule.timer`）；不要用安裝較舊來源的方式降版，較舊的安裝器不認得這兩個單元，計時器會留下來，之後每 5 分鐘都會失敗一次（此時以 root 執行 `systemctl disable --now woowtech-cockpit-backup-schedule.timer`，再刪除 `/usr/local/lib/systemd/system/woowtech-cockpit-backup-schedule.timer` 與 `.service` 並執行 `systemctl daemon-reload`）。較舊的版本把排程備份顯示為「手動」備份，舊版的手動保留原則也會把它們算進去：回退前先在「排程備份」關閉排程，並確認「清理備份」的保留份數在把排程備份當成手動備份時仍是你要的（或改成「全部保留」）。排程備份的紀錄檔 `/var/lib/woowtech-backup/schedule-state.json` 會留著，更新回 2026.11.17.1 或更新版本後，它們會再被認出是排程備份。
 
+**回退到加入「從 Home Assistant 匯入」之前的版本時：** 回退前先確認沒有進行中的「檢查 HA 備份」或「轉換 HA 備份」作業，並開啟或重新整理「備份與還原」頁一次：新版會在這時清除中斷的 HA 作業留下的暫用容器、資料卷與網路（裡面可能有解密後的 HA 資料與 n8n 加密金鑰），清不掉的會在作業紀錄寫「無法清除暫用容器」。舊版不認得這些紀錄，不會清除它們。回退後若仍有殘留，以 root 對每個應用擁有者（Odoo、n8n 的帳號）執行：
+
+```bash
+owner=<應用擁有者帳號>
+pm() { runuser -u "$owner" -- env XDG_RUNTIME_DIR=/run/user/$(id -u "$owner") podman "$@"; }
+pm ps -a --filter label=io.woowtech.backup.job --format '{{.Names}}'     # 先看：只會是 woowbk-<作業 ID>-<角色>
+for n in $(pm ps -a --filter label=io.woowtech.backup.job --format '{{.Names}}'); do pm rm -f "$n"; done
+for n in $(pm volume ls --filter label=io.woowtech.backup.job --format '{{.Name}}'); do pm volume rm -f "$n"; done
+for n in $(pm network ls --filter label=io.woowtech.backup.job --format '{{.Name}}'); do pm network rm -f "$n"; done
+```
+
+只刪除名稱以 `woowbk-` 開頭、帶有 `io.woowtech.backup.job` 標籤的物件；應用自己的容器與資料卷不會有這個標籤。其他差異：舊版把中斷的 HA 作業說成「備份作業意外中斷…請確認應用已恢復執行後再重新備份」（應用其實沒有變更，不必處理）；舊版重試 HA 備份的上傳會回答找不到，重新上傳即可；由 HA 轉換的備份在舊版顯示為一般手動備份，會被當成應用的「最近備份」，舊版的手動保留原則也會計算並可能刪除它們（新版不會）：回退前把需要的轉換備份下載保存，或先把「清理備份」的保留份數改成「全部保留」。`ha-backups/` 與 `ha-imports.json` 會留著，更新回新版後一切照舊。
+
 ## 常見問題
 
 | 現象 | 檢查方式 |
@@ -56,6 +69,7 @@ sudo python3 scripts/manage.py rollback <安裝輸出的 backup_id>
 | 還原被拒絕：備份中的資料卷或容器映像含有不安全或不支援的內容 | 設備沒有任何變更；不要再用這份備份，改用其他備份，並保留檔案回報工程人員 |
 | 備份失敗：資料卷含有還原時無法匯入的內容 | 依訊息處理該資料卷中的項目（例如指向資料卷外的相對符號連結、擁有者不在應用擁有者的 UID 對應範圍內）；應用已恢復執行 |
 | 錯誤 `internal-error`，訊息提到 age 或 zstd | 安裝 `age`、`zstd`（`bootstrap-ubuntu.sh --apply` 會安裝） |
+| 錯誤 `internal-error`，訊息提到 python3-nacl 或 python3-cryptography | 讀取 Home Assistant 加密備份需要這兩個套件：安裝 `python3-nacl`、`python3-cryptography`（`bootstrap-ubuntu.sh --apply` 會安裝） |
 
 不要為了讓圖集出現而重新啟動所有容器；圖集只是 Cockpit 套件。此安裝器不主動中斷 Cockpit 或既有應用服務。
 
@@ -69,6 +83,8 @@ sudo python3 scripts/manage.py rollback <安裝輸出的 backup_id>
 | --- | --- | --- |
 | `/var/lib/woowtech-backup/archives/<備份 ID>.woowbackup` | 加密的備份檔 | 整個 `/var/lib/woowtech-backup/` 只有 root 可存取（0700） |
 | `/var/lib/woowtech-backup/archives/<備份 ID>.json` | 列表索引：類型、應用、大小、SHA-256、驗證結果 | 從頁面刪除時與備份檔一起刪除 |
+| `/var/lib/woowtech-backup/ha-backups/<HA 備份 ID>.tar`、`.json` | 上傳的 Home Assistant 備份（原檔，未解密）與它的資訊（名稱、日期、附加元件） | 只有 root 可存取；保留到在頁面刪除為止，清理備份與排程備份不會刪除它們。裡面有整個 HA 的設定，常常也有 HA 的密碼與權杖：匯入完成後建議刪除 |
+| `/var/lib/woowtech-backup/ha-imports.json` | 哪些備份是由 HA 備份轉換的（HA 備份名稱、日期、匯入說明與提醒；0600） | **不要刪除或修改。** 刪除後轉換的備份會變成一般手動備份：失去 HA 說明、被算成應用的「最近備份」，手動保留原則也會計算它們；檔案無法讀取時，備註為「由 HA 備份轉換」的手動備份不會被自動刪除 |
 | `/var/lib/woowtech-backup/uploads/` | 上傳中的檔案 | 取消上傳時刪除；未完成的上傳超過 24 小時，會在下一次開始上傳時清除 |
 | `/var/lib/woowtech-backup/staging/<作業 ID>/` | 作業期間的**明文**暫存：資料庫匯出、資料卷內容、應用機密 | 作業結束或被判定中斷時刪除 |
 | `/var/lib/woowtech-backup/jobs/<作業 ID>.json`、`.log`、`.lock`、`.cancel` | 作業紀錄、日誌、紀錄鎖（空檔案）與尚未處理的取消要求，不含金鑰與應用機密內容 | 自動保留最近 200 筆已結束的作業（含日誌），更舊的會被刪除；進行中的作業、仍需復原處理的作業，以及還原前備份仍被釘選的失敗或中斷還原，一律保留。頁面顯示最近 50 筆 |
@@ -89,6 +105,7 @@ sudo python3 scripts/manage.py rollback <安裝輸出的 backup_id>
 
 - 從頁面刪除不需要的手動與上傳備份；需要保留的先下載。手動與上傳的備份不會自動刪除。
 - 「還原前自動備份」（列表類型「還原前備份」）每個應用保留最近 3 份，較舊的會在之後的原位還原成功後自動刪除；失敗或中斷的還原仍需要的還原前備份不會被自動刪除。不需要時可從頁面手動刪除，但還原作業進行中時不能刪除。
+- 由 HA 備份轉換的備份（備註「由 HA 備份轉換：…」）自成一類：「清理備份」的手動保留原則與排程備份都不會計算或刪除它們，總覽的「最近備份」也不會是它們（它們裝的是 HA 的資料，不是這台的）；不需要時從頁面刪除。
 - 「排程備份」依「保留最新幾份排程備份」（預設 7 份）每個應用保留最新的排程備份，較舊的在下一次排程備份成功（或部分完成）後自動刪除，系統日誌記為 `retention-delete … reason=schedule`。手動備份、還原前自動備份與上傳的備份不會被排程刪除；「清理備份」的手動保留原則也不會計算排程備份。驗證未通過的排程備份不算在保留份數內，正被作業使用或失敗的還原仍需要的備份不會被刪除。
 - 不要直接在檔案系統刪除或搬動 `archives/` 內的檔案，索引與備份檔會不一致；請用頁面刪除。
 - 暫存資料夾在作業結束時刪除；被強制終止的作業在判定中斷時刪除。頁面讀取狀態或活動紀錄時，也會清除不屬於進行中作業的暫存資料夾。

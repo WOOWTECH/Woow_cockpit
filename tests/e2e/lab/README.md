@@ -1,6 +1,7 @@
 # 備份與還原實驗室設備（team L）
 
-兩台彼此隔離、接近實機的 Ubuntu 24.04「設備」，供備份與還原端到端測試使用。每台設備是一個以
+兩台彼此隔離、接近實機的 Ubuntu 24.04「設備」（dev-a、dev-b），供備份與還原端到端測試使用；第三台 dev-c 跑本主機
+Odoo 與 n8n 的複本，供 HA 匯入測試（見「[dev-c：正式主機 Odoo 與 n8n 的複本](#dev-c正式主機-odoo-與-n8n-的複本ha-匯入測試)」）。每台設備是一個以
 systemd 為 PID 1 的 rootless 容器，內含 Cockpit 362、rootless Podman（巢狀）、age、zstd 與 python3。
 **所有容器操作只透過 `~/.woowbk-lab/bin/labpodman`**（獨立儲存根目錄 `~/.woowbk-lab/storage`），
 正式主機的容器、資料卷、映像與服務在這裡完全看不到，也不會被影響。不使用 sudo。
@@ -45,21 +46,23 @@ systemd 為 PID 1 的 rootless 容器，內含 Cockpit 362、rootless Podman（�
 | 指令 | 作用 |
 | --- | --- |
 | `build.sh [--no-cache]` | 以 labpodman 建置映像（`--memory 768m`），並列出套件版本 |
-| `up.sh <a\|b>` | 建立或啟動設備，等到 systemd 開機完成、`cockpit.socket` 監聽 9090、`user@<uid>.service` 啟用；設定 devadmin 密碼、appowner、subuid/subgid、linger。啟動前檢查主機可用記憶體 ≥ 1200 MB |
-| `down.sh <a\|b\|all> [--rm]` | 停止設備（保留容器與資料卷）；`--rm` 另移除容器但保留資料卷 |
-| `reset.sh <a\|b> [--up]` | 刪除設備**與其所有資料卷**（含巢狀映像、應用資料、備份）；`--up` 隨即重建 |
-| `exec.sh <a\|b> [cmd…]` | 以 root 在設備內執行（預設互動 shell） |
-| `owner.sh <a\|b> cmd…` | 以 appowner 執行，方式與引擎相同（`runuser -u appowner -- env -i … XDG_RUNTIME_DIR=/run/user/<uid> DBUS_SESSION_BUS_ADDRESS=…`） |
-| `engine.sh <a\|b> <command> [json\|-]` | 以 root 呼叫 `/usr/local/libexec/woowtech-cockpit-backup`，輸出單一 JSON 並遮蔽 `key`／`content` 字串；帶金鑰的請求用 `-` 由標準輸入提供 |
-| `deploy-src.sh <a\|b> [--fallback]` | 把**目前工作樹**（排除 `.git node_modules .local design __pycache__`）複製到設備 `/opt/woow-cockpit-src`（root 擁有、不可群組／其他人寫入），安裝程式支援時執行 `manage.py install --backup-demo-catalog`；尚不支援時結束碼 3，`--fallback` 執行檔頭記載的實驗室專用手動安裝 |
+| `up.sh <a\|b\|c>` | 建立或啟動設備，等到 systemd 開機完成、`cockpit.socket` 監聽 9090、`user@<uid>.service` 啟用且有 memory 控制器（沒有時重新啟動它一次；否則巢狀容器的 `--memory` 會以 `crun: opening file memory.max` 失敗）；設定 devadmin 密碼、appowner、subuid/subgid、linger。啟動前檢查主機可用記憶體 ≥ 1200 MB |
+| `down.sh <a\|b\|c\|all> [--rm]` | 停止設備（保留容器與資料卷）；`--rm` 另移除容器但保留資料卷 |
+| `reset.sh <a\|b\|c> [--up]` | 刪除設備**與其所有資料卷**（含巢狀映像、應用資料、備份）；`--up` 隨即重建 |
+| `exec.sh <a\|b\|c> [cmd…]` | 以 root 在設備內執行（預設互動 shell） |
+| `owner.sh <a\|b\|c> cmd…` | 以 appowner 執行，方式與引擎相同（`runuser -u appowner -- env -i … XDG_RUNTIME_DIR=/run/user/<uid> DBUS_SESSION_BUS_ADDRESS=…`） |
+| `engine.sh <a\|b\|c> <command> [json\|-]` | 以 root 呼叫 `/usr/local/libexec/woowtech-cockpit-backup`，輸出單一 JSON 並遮蔽 `key`／`content` 字串；帶金鑰的請求用 `-` 由標準輸入提供 |
+| `deploy-src.sh <a\|b\|c> [--src 工作樹] [--demo-catalog\|--no-demo-catalog] [--fallback]` | 把**目前工作樹**（或 `--src` 指定的 Woow_cockpit 工作樹；排除 `.git node_modules .local design __pycache__`）複製到設備 `/opt/woow-cockpit-src`（root 擁有、不可群組／其他人寫入），安裝程式支援時執行 `manage.py install --backup-demo-catalog`；`--no-demo-catalog`（dev-c 的預設）只執行 `manage.py install`，不加 woowbk-demo 目錄項目；尚不支援時結束碼 3，`--fallback` 執行檔頭記載的實驗室專用手動安裝 |
+| `deploy-prodlike.sh c --odoo-repo D --n8n-repo D [--cockpit-src D] [階段…]` | 只用於 dev-c：`packages images odoo n8n cockpit check`（見 dev-c 一節），每個階段都可以重跑 |
+| `prodlike_baseline.py [odoo] [n8n]` | dev-c 的基準：每個應用一份加密備份與原位還原，前後的標記資料列證明資料真的還原（見 dev-c 一節） |
 | `deploy-demo.sh <a\|b> [--notes N] [--files M] [--title T] [--no-seed]` | 不經引擎、以 appowner 手動部署 woowbk-demo（拉取 postgres、建置應用映像、安裝 Quadlet、daemon-reload、seed） |
 | `deploy-dirs.sh <a\|b> [--items N] [--delete K] [--title T] [--owner-note T] [--seed S] [--no-seed]` | 同上，部署主機資料夾示範應用 woowbk-dirs（`catalog-examples/woowbk-dirs/README.md`）：複製到 `/opt/woowbk-dirs`、拉取 postgres（已有則略過）、建置 `localhost/woowbk-dirs-app:1`、安裝 Quadlet、seed（密鑰、設定檔、主機資料夾與容器帳號擁有者、資料庫角色與第二個資料庫、項目） |
 | `dirs-catalog.sh <a\|b> install\|remove\|status` | 以 root 安裝或移除 woowbk-dirs 的受信任目錄項目（`/etc/woowtech-cockpit/backup/apps/woowbk-dirs.json`）與 Quadlet 範本，並列出已安裝引擎對它的判斷（沒有主機資料夾支援的引擎回報「不支援的欄位：data_dirs」並略過此應用） |
 | `teardown-dirs.sh <a\|b> [--keep-image]` | 以擁有者身分移除整個 woowbk-dirs 部署（停止並解除遮蔽服務、測試 drop-in、Quadlet、容器、密鑰、網路、設定檔、兩個主機資料夾與其 `.woowbk-new-*`／`.woowbk-old-*`、應用映像），列出剩下的東西（必須是空的）；備份與目錄項目不動 |
 | `subids.sh <a\|b> [START:COUNT --reset-storage]` | 顯示 appowner 的 subuid／subgid 與實際 `uid_map`；給範圍時先拆除兩個示範應用、確認家目錄沒有其他 ID 的檔案，再以舊對應 `podman system reset`、改寫 `/etc/subuid`／`/etc/subgid`、`podman system migrate` 並核對新對應（之後映像要重新取得或由備份還原）。`woowbk-provision` 會保留設備上有效的範圍 |
-| `verify-device.sh <a\|b> [--no-browser]` | 實測：systemd `running`、Cockpit socket、user manager、巢狀 podman（alpine、uid map 等於設備 `/etc/subuid` 的範圍、`--memory`）、Quadlet 產生器、Playwright 登入並開啟管理員存取 |
-| `cockpit-login.mjs <a\|b>` | Playwright：HTTPS 登入 devadmin → 開啟管理員存取 → `cockpit.spawn(['id','-u'], {superuser:'require'})` 必須為 0；截圖存於 `~/.woowbk-lab/evidence/lab/`（只在未輸入密碼或密碼欄消失後截圖） |
-| `status.sh` | 兩台設備的狀態、systemd、記憶體、subuid 範圍、兩個示範應用的 `/healthz`（`demo-healthz` 18090、`dirs-healthz` 18091；000 為未部署或停止） |
+| `verify-device.sh <a\|b\|c> [--no-browser]` | 實測：systemd `running`、Cockpit socket、user manager、巢狀 podman（alpine、uid map 等於設備 `/etc/subuid` 的範圍、`--memory`）、Quadlet 產生器、Playwright 登入並開啟管理員存取 |
+| `cockpit-login.mjs <a\|b\|c>` | Playwright：HTTPS 登入 devadmin → 開啟管理員存取 → `cockpit.spawn(['id','-u'], {superuser:'require'})` 必須為 0；截圖存於 `~/.woowbk-lab/evidence/lab/`（只在未輸入密碼或密碼欄消失後截圖） |
+| `status.sh` | 各設備的狀態、systemd、記憶體、subuid 範圍、兩個示範應用的 `/healthz`（`demo-healthz` 18090、`dirs-healthz` 18091；000 為未部署或停止）；dev-c（存在時）改列目錄項目的健康網址：`odoo=`18069／18080、`n8n=`15678 readiness／15679 |
 
 離線夾具測試：`python3 -B -m unittest discover -s tests/e2e -p 'test_*.py' -v`。
 
@@ -73,6 +76,95 @@ tests/e2e/lab/deploy-demo.sh a --notes 12 --files 4          # 只在 dev-a
 tests/e2e/lab/deploy-src.sh a && tests/e2e/lab/deploy-src.sh b  # 安裝引擎、介面與 woowbk-demo 受信任設定
 tests/e2e/lab/owner.sh a python3 /opt/woowbk-demo/tools/check.py --stop-start
 ```
+
+## dev-c：正式主機 Odoo 與 n8n 的複本（HA 匯入測試）
+
+**用途**：測試「把 Home Assistant 附加元件的備份匯入 Podman 的 Odoo 與 n8n」。dev-c 跑本主機這兩個應用的真實複本：映像 ID
+相同、同樣的套件安裝程式、同樣的單元／容器／資料卷／密鑰／網路名稱與連接埠，所以正式主機的目錄項目 `odoo.json`、`n8n.json`
+只改 `owner` 就能用。密鑰全部在設備內重新產生；沒有複製正式主機的任何密鑰或應用資料。2026-11-18 建置。
+
+| 項目 | woowbk-dev-c |
+| --- | --- |
+| Cockpit／appowner | https://127.0.0.1:19093；appowner UID 1013，subuid／subgid `10000:55000` |
+| 資源上限 | `--memory 3g --cpus 2`（10 個巢狀容器；閒置約 0.95 GB） |
+| 私有 registry | `--add-host jcr-prod.woowtech.io:127.0.0.1`：設備內不可能從它拉映像 |
+| 額外套件 | python3-nacl 1.5.0-4build1、python3-cryptography 41.0.7-4ubuntu0.4（只在 dev-c） |
+| Odoo 18（tenant） | `odoo-db`／`odoo`／`odoo-gateway`，127.0.0.1:18069 與 :18080；套件 `~/migration-w2/Woow_podman_odoo`（138d10c） |
+| n8n（佇列模式） | 7 個單元＋`n8n.target`，0.0.0.0:15678 與 :15679（只在設備的網路命名空間內）；套件 `~/quadlet-w1/Woow_podman_n8n`（2ac1ae2） |
+| 備份引擎 | feat/ha-import 工作樹 03f60ee（2026.11.17.1），只有 `odoo`、`n8n` 兩個目錄項目；設備金鑰已建立，緊急金鑰 `~/.woowbk-lab/secrets/dev-c-kit.txt`（0600，實驗室拋棄式） |
+
+**建置**（重設後照做即可）：
+
+```bash
+tests/e2e/lab/up.sh c && tests/e2e/lab/verify-device.sh c --no-browser
+tests/e2e/lab/deploy-prodlike.sh c --odoo-repo <Woow_podman_odoo，含 138d10c> --n8n-repo <Woow_podman_n8n> \
+    --cockpit-src <要測的 Woow_cockpit 工作樹>
+python3 -I tests/e2e/lab/prodlike_baseline.py
+```
+
+* `packages`：設備內 `apt-get install python3-nacl python3-cryptography`。
+* `images`：7 個映像從本主機自己的儲存以 `podman save … | labpodman exec -i woowbk-dev-c woowbk-owner podman load` 串流進去
+  （約 6 分鐘、4.9 GB；剩餘空間要保持 ≥ 20 GiB）。主機上只執行 `podman image inspect` 與 `podman save`，從不拉取。預設的
+  docker-archive 帶不了 zstd 層（n8n：`zstd compression is not supported for docker images`），所以 n8n 與 tenant-ha 用
+  `--format oci-archive`（podman 存檔時會在 /var/tmp 暫存一份）。映像 ID 與主機相同，manifest 摘要則會改變，所以 3 個以摘要固定的參照要改成載入後的摘要。
+* `odoo`：`git archive` 複製套件；設備內的副本把 gateway 映像的摘要改成載入後的（`quadlet/optional/odoo-gateway.container`、
+  `scripts/common.sh` 各一行）；`odoo18.env` 由 `config/profiles/tenant-cloud.profile` 產生（映像參照、`DEFAULT_DB=odoo`、
+  實驗室登入帳號 `labadmin@woowbk-dev-c.lab`）；`scripts/install.sh`：產生密鑰、tenant 初始化（角色 odoo NOCREATEDB、資料庫
+  odoo 為 C 定序、pg_trgm 1.6＋vector 0.8.6、`-i base`、第一位管理員）、`upgrade-gate.sh --adopt-fresh`（標記和正式主機的值相同：
+  digest＝映像 ID dd0982f3…、core_date 18.0.20260926）、關閉資料庫管理員（`LIST_DB=False`、`^odoo$`）；smoke 26 通過、0 失敗、
+  1 警告（A7，tenant 模式本來就略過）。
+* `n8n`：`n8n.env` 是主機的 18 個鍵（queue、webhook 處理程序、`N8N_QUEUE_DISABLE_MAIN_WEBHOOKS=true`、`HOST_BIND=0.0.0.0`），
+  主機的區網位址換成 127.0.0.1；`scripts/install.sh`；smoke 全部通過。和正式主機一樣**沒有**建立 n8n 擁有者帳號
+  （`isInstanceOwnerSetUp=false`）；加密金鑰由 n8n 第一次啟動時自己產生。
+* `cockpit`：`deploy-src.sh c --src …`（不加示範目錄項目）、主機的 `/etc/woowtech-cockpit/backup/apps/{odoo,n8n}.json` 只把
+  `owner` 改成 appowner、設備金鑰（key-init → key-kit → key-confirm）；`check`：`engine.sh c status` 兩個應用 running、沒有問題，
+  四個健康網址 200。
+
+**映像**（ID 兩邊相同，tenant-ha 的 ID 正是升級閘道標記用的值）：
+
+| 正式主機 | dev-c 使用的參照 | 映像 ID |
+| --- | --- | --- |
+| `localhost/woow-odoo-tenant-ha:20261101.1152-51856b0@sha256:f259166a…` | `…@sha256:b128b97d99ab2cc83d16eba984eb6e603fef622c5b655a55d0984727fd5b51a6` | `dd0982f37ae8…` |
+| `jcr-prod.woowtech.io/woow-paas-docker-local/paas-postgres:17.11-20260928.1549@sha256:dbd1fed8…` | `…@sha256:7a474eaf7bf2ccb167430ae1e30152f72d004d66efd671812ebaee0486511e90` | `f4fb9dc1e341` |
+| `docker.io/nginxinc/nginx-unprivileged@sha256:65e3e85d…`（沒有標籤） | `docker.io/nginxinc/nginx-unprivileged:1.27-alpine@sha256:7b40c8ed6a73bda24d7510e3be1db31a19878acf65062271302a8a7aafd1682e` | `47ce8258a10e` |
+| `docker.io/n8nio/n8n:2.43.6`、`runners:2.43.6` | 相同 | `c8d7cd6bf08e`、`28c5a510d762` |
+| `docker.io/library/postgres:16.15-alpine`、`docker.io/valkey/valkey:8.1.11-alpine` | 相同 | `4278d7b1e3de`、`650ff8153447` |
+
+**產生的密鑰**（dev-c 自己的，值從不顯示）：Odoo `odoo18-postgres-password`、`odoo18-admin-password`、
+`odoo18-postgres-super-password`、`odoo18-odoo-admin-password`（各 44 個英數字）、`odoo18-odoo-conf`（含前兩個的設定檔）、
+`odoo18-gateway-conf`；n8n `n8n-db-password`（32）、`n8n-runners-auth-token`（64）、`n8n-valkey-password`（48）與
+`n8n_n8n_data/config` 的加密金鑰；另有上述設備金鑰。devadmin 密碼和其他設備共用。
+
+**和正式主機的差異**（逐檔比對的結果）：
+
+1. 帳號：appowner UID 1013、subuid `10000:55000`（主機的應用擁有者 UID 1000、`100000:65536`）。
+2. 目錄項目：只有 `owner`。
+3. Quadlet：17 個檔案、`n8n.target`、`n8n-task-runners.json`、`start-valkey.sh` 逐位元組相同，只有 3 個摘要不同：`odoo.container`
+   的 `Image=` 與 `ExecStartPre=… --image`、`odoo-db.container` 與 `odoo-gateway.container` 的 `Image=`（見映像表）。
+4. 套件：主機的 `~/migration-w2/Woow_podman_odoo` 是 c578b8a，缺 #10 的 `ODOO_TENANT_FRESH` 修正，無法全新安裝 tenant；dev-c 用
+   138d10c（產生的單元相同），再加上 gateway 摘要那兩行。n8n 與主機同為 2ac1ae2。
+5. `odoo18.env`：`WOOW_ODOO_IMAGE`、`WOOW_ODOO_DB_IMAGE`（摘要）、`WOOW_ODOO_ADMIN_LOGIN`（實驗室帳號），其餘 23 個鍵相同。
+   `n8n.env`：`N8N_HOST`、`N8N_WEBHOOK_URL`、`N8N_EDITOR_BASE_URL` 用 127.0.0.1（主機用自己的區網位址），其餘 15 個鍵相同（行序不同）。
+6. 資料：全新安裝。Odoo 資料庫 odoo 只安裝 12 個模組（主機 26 個，含 awesome_clicker、mail_fetchmail_durable，22 個附件）；
+   n8n 和主機一樣是空的（1 個空殼使用者、沒有工作流程與憑證）。
+7. dev-c 沒有的：主機的其他應用、接在 `odoo18-network`／`n8n-network` 上的 odoo-mcp-admin／n8n-mcp-admin、舊的 `odoo18-db-data`
+   資料卷、`odoo18-odoo_{auto,fresh,parity}_20261110-admin-password` 這些舊密鑰、套件的每日 `odoo18-backup.timer`。
+8. 網路：n8n 的 0.0.0.0 只在設備內；主機只連得到 Cockpit（127.0.0.1:19093）。
+
+**基準**（`prodlike_baseline.py`，2026-11-18，20／20 通過，證據 `~/.woowbk-lab/evidence/prodlike/20261118T175223-baseline/`）：
+
+| 應用 | 加密備份（不含映像） | 大小 | 備份／停機 | 原位還原 | 還原前備份 |
+| --- | --- | --- | --- | --- | --- |
+| odoo | `20261118T095247Z-388c9bd7` | 12.6 MB | 25.8 秒／11 秒 | 33.5 秒 | `20261118T095320Z-5d8a82bb` |
+| n8n | `20261118T095520Z-33eb7474` | 133 KB | 98.0 秒／49 秒 | 147.3 秒 | `20261118T095609Z-fc898f42` |
+
+備份前寫入的標記資料列在還原後仍在、備份後寫入的消失；健康檢查全部通過；之後兩個套件自己的 smoke 也都通過，Odoo 的升級閘道
+回報 already completed（和正式主機每天的紀錄一樣）。這 4 份備份留在 dev-c，是實驗室資料。設備重新啟動（`down.sh c`、
+`up.sh c`）後，兩個應用由 linger 自動啟動，約 1 分鐘內健康檢查全部 200。
+
+**重設**：`tests/e2e/lab/reset.sh c --up` 刪除容器與三個資料卷（映像、應用、備份、設備金鑰全部消失），再照「建置」重跑
+（`deploy-prodlike.sh` 約 10 分鐘，其中映像約 6 分鐘、Odoo 與 n8n 的安裝各約 2 分鐘）。新的設備金鑰會覆寫 `dev-c-kit.txt`，之前下載的 dev-c 備份就打不開了。只更新引擎與頁面：
+`deploy-src.sh c --src <工作樹>`。dev-c 不用時以 `down.sh c` 停止（約 1 GB 記憶體）。
 
 ## 端到端測試（整合）
 

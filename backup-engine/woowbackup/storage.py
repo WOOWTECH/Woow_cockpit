@@ -15,6 +15,11 @@ read (e.g. written by a newer engine) is never replaced by an `uploaded` one (re
 `upload-finish` hashes the whole file before it answers. Once it started it runs to its end even when the page
 times out and cockpit-bridge terminates it (SIGTERM is ignored meanwhile), and a second `upload-finish` of the
 same upload waits for the first and then returns its result (review finding HD-08).
+
+A Home Assistant backup (habackup.looks_like_ha: a member backup.json with `supervisor_version`) is recognised before
+the Cockpit formats would answer not-a-backup, checked strictly (habackup.describe), hashed and moved into its own
+store `ha-backups/` (hastore.py) with the same safety as a Cockpit upload; it never enters archives/ or the index
+(CONTRACT sections 3 and 7, branch feat/ha-import).
 """
 import contextlib
 import datetime
@@ -28,7 +33,7 @@ import stat
 import time
 from pathlib import Path
 
-from . import archive, util
+from . import archive, habackup, hastore, util
 from .errors import BackupError
 
 BACKUP_ID_RE = re.compile(r'^[0-9]{8}T[0-9]{6}Z-[0-9a-f]{8}\Z')
@@ -149,6 +154,11 @@ class Storage:
     @property
     def exports(self):
         return Path(self.paths.data) / 'exports'
+
+    @property
+    def ha_store(self):
+        """The store of uploaded Home Assistant backups (`ha-backups/`, hastore.py)."""
+        return hastore.HaStore(self.paths)
 
     def ensure_layout(self):
         """Create data/run dirs with mode 0700 (root-owned in production)."""
@@ -473,19 +483,25 @@ class Storage:
         return Path(self.paths.uploads) / f'{upload_id}.done'
 
     def _finished(self, upload_id):
-        """BackupMeta of an upload that already finished (a retry after the page timed out), else None."""
+        """BackupMeta (or the HA record) of an upload that already finished (a retry after the page timed out), else
+        None."""
         try:
             done = util.load_json_file(self._done_path(upload_id), max_bytes=4096)
         except FileNotFoundError:
             return None
         except (OSError, ValueError):
             return None
-        backup_id = done.get('backup_id') if isinstance(done, dict) else None
+        if not isinstance(done, dict):
+            return None
+        if hastore.valid_id(done.get('ha_backup_id')):
+            return self.ha_store.get(done['ha_backup_id'])
+        backup_id = done.get('backup_id')
         return self.get(backup_id) if valid_backup_id(backup_id) else None
 
-    def _mark_done(self, upload_id, backup_id):
+    def _mark_done(self, upload_id, backup_id=None, *, ha_backup_id=None):
+        record = {'ha_backup_id': ha_backup_id} if ha_backup_id is not None else {'backup_id': backup_id}
         with contextlib.suppress(OSError):
-            util.atomic_write_json(self._done_path(upload_id), {'backup_id': backup_id, 'at': util.iso_utc()}, 0o600)
+            util.atomic_write_json(self._done_path(upload_id), dict(record, at=util.iso_utc()), 0o600)
 
     def _register_uploaded(self, backup_id, header, sha256, filename, *, exclusive=False):
         """Index an uploaded (or adopted) file as type `uploaded`. Its apps stay empty until `inspect` read the
@@ -515,7 +531,8 @@ class Storage:
             os.close(fd)
 
     def finish_upload(self, upload_id):
-        """Validate the written file and register it as type 'uploaded'; returns BackupMeta.
+        """Validate the written file and register it as type 'uploaded'; returns BackupMeta -- or, for a Home
+        Assistant backup, its HA record (hastore sidecar, id `ha-…`; hastore.is_record tells them apart).
 
         Idempotent: a retry after success returns the same backup (the page may time out while a large
         file is hashed). A failure after the file was moved puts it back, so nothing is left unlisted.
@@ -550,6 +567,8 @@ class Storage:
             if st.st_size != info['size']:
                 raise BackupError('invalid-request', '上傳的檔案大小與宣告不符，上傳可能未完成。',
                                   expected=info['size'], actual=st.st_size)
+            if habackup.looks_like_ha(fd):
+                return self._finish_ha_upload(upload_id, part, info_path, info, fd, st)
             # Format 1: the outer header, then the file's sha256. Format 2: one pass over every byte checks the outer
             # tar strictly (backup.json, README.txt, each application archive against backup.json's sha256, the end
             # of the archive) and hashes the file. Neither needs a key; the content is checked by inspect/restore.
@@ -606,6 +625,24 @@ class Storage:
         self._mark_done(upload_id, backup_id)
         with contextlib.suppress(FileNotFoundError):
             os.unlink(info_path)
+        return rec
+
+    def _finish_ha_upload(self, upload_id, part, info_path, info, fd, st):
+        """A Home Assistant backup: strict outer check (no key needed; the members are read by the HA jobs), sha256 of
+        every byte, then into ha-backups/ (hastore.publish: sidecar, rename, (dev, ino) re-check). The same file again
+        returns its record and drops the upload."""
+        summary = habackup.describe(fd).summary()
+        os.lseek(fd, 0, os.SEEK_SET)
+        sha256, size = util.sha256_fd(fd)
+        if size != st.st_size:
+            raise BackupError('invalid-request', '上傳的檔案在驗證期間被更換，已拒絕。')
+        rec, created = self.ha_store.publish(fd, st, part, summary, sha256, info['filename'])
+        if not created:
+            self.abort_upload(upload_id)
+        self._mark_done(upload_id, ha_backup_id=rec['id'])
+        if created:
+            with contextlib.suppress(FileNotFoundError):
+                os.unlink(info_path)
         return rec
 
     def adopt_orphans(self, min_age=ORPHAN_MIN_AGE, now=None):

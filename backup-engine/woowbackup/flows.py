@@ -88,6 +88,9 @@ class Deps:
     # (app_ids, keep_last, *, exclude, log) -> [deleted backup ids]: the schedule's keep-last after a scheduled run
     # (default: retention.enforce_schedule)
     enforce_schedule_retention: object = None
+    # (job_id, log) -> None: removes throwaway containers of jobs that no longer run, at every run-job start
+    # (tempctr.py; default_deps: haimport.sweep_finished; absent: nothing is swept)
+    sweep_temp: object = None
 
 
 def human(n, up=False, down=False):
@@ -159,10 +162,11 @@ def default_adapter_factory(app, *, log, phase=None, checkpoint=None, writers_ho
 
 
 def default_deps(paths):
-    from . import archive, catalog, keys, storage
+    from . import archive, catalog, haimport, keys, storage
     return Deps(storage=storage.Storage(paths), keys=keys.KeyStore(paths), archive=archive,
                 load_catalog=lambda: catalog.load_catalog(paths), adapter_factory=default_adapter_factory,
-                host_info=host_info, system_stopping=system_stopping)
+                host_info=host_info, system_stopping=system_stopping,
+                sweep_temp=lambda job_id, log: haimport.sweep_finished(paths, log=log, current=job_id))
 
 
 def _noop(*_args, **_kwargs):
@@ -178,6 +182,7 @@ class FlowContext:
         self.deps = deps
         self.reporter = reporter
         self.key_file = Path(key_file) if key_file else None
+        self.ha_key = None  # an HA import job's key text (run-job reads and masks it; haimport.py)
         self._catalog = None
         self._stopped_writers = {}
         self._unfinished_fresh = []
@@ -202,8 +207,13 @@ class FlowContext:
             self._catalog = self.deps.load_catalog()
         return self._catalog
 
-    def phase(self, phase_id):
-        self.reporter.phase(phase_id)
+    def phase(self, phase_id, *, percent=None, message=None):
+        """Start a phase; `percent`/`message` replace the progress the phase's position gives (a job whose apps go
+        through the same phases one after the other keeps its overall progress going forward)."""
+        if percent is None and message is None:
+            self.reporter.phase(phase_id)
+        else:
+            self.reporter.phase(phase_id, percent=percent, message=message)
 
     def skip(self, phase_id):
         self.reporter.skip(phase_id)
@@ -648,6 +658,9 @@ def settle_dirs(deps, job_id, app_ids, *, log=None):
 # ---------------------------------------------------------------- backup
 
 def run_backup(ctx, params):
+    if params.get('source') == 'ha':
+        from .haimport import run_ha_convert
+        return run_ha_convert(ctx, params)  # an HA import: convert an uploaded HA backup (branch feat/ha-import)
     if isinstance(params.get('schedule'), dict):
         return run_scheduled_backup(ctx, params)
     ctx.cancellable(True)
@@ -1001,6 +1014,9 @@ def run_verify(ctx, params):
     entry at a time in a private scratch directory. 已驗證 (`verified.ok` with `deep`) then means a restore of this
     backup would accept its content; the device-specific checks stay with the restore preflight."""
     from .deepcheck import DeepCheck
+    if params.get('source') == 'ha':
+        from .haimport import run_ha_check
+        return run_ha_check(ctx, params)  # an HA import: check an uploaded HA backup (branch feat/ha-import)
     ctx.cancellable(True)
     ctx.phase('prepare')
     backup_id = params['backup_id']

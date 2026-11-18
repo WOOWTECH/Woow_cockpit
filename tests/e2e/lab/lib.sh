@@ -12,8 +12,6 @@ PASS_FILE=$SECRETS_DIR/devadmin.pass
 EVIDENCE_DIR=$LAB_HOME/evidence/lab
 # Host memory is tight: refuse to start containers below this much MemAvailable.
 MIN_AVAIL_MB=${WOOWBK_MIN_AVAIL_MB:-1200}
-DEVICE_MEMORY=768m
-DEVICE_CPUS=1.5
 OWNER=appowner
 
 die() { echo "lab: $*" >&2; exit 1; }
@@ -21,12 +19,21 @@ log() { echo "lab: $*" >&2; }
 
 [ -x "$LP" ] || die "missing $LP"
 
-# device_vars <a|b>: sets DEV NAME PORT OWNER_UID VOLUMES
+# device_vars <a|b|c>: sets DEV NAME PORT OWNER_UID VOLUMES DEVICE_MEMORY DEVICE_CPUS DEVICE_RUN_ARGS
+# dev-c runs production-like copies of the host's Odoo (tenant) and n8n (queue) stacks, about ten containers,
+# so it gets more memory and CPU. Its images come from the host by `podman save` only (deploy-prodlike.sh); the
+# private registry name resolves to a dead address inside it, so nothing there can pull from that registry.
 device_vars() {
+    DEVICE_MEMORY=768m
+    DEVICE_CPUS=1.5
+    DEVICE_RUN_ARGS=()
     case "${1:-}" in
         a | dev-a | woowbk-dev-a) DEV=a; PORT=19091; OWNER_UID=1001 ;;
         b | dev-b | woowbk-dev-b) DEV=b; PORT=19092; OWNER_UID=1007 ;;
-        *) die "device must be 'a' or 'b' (got '${1:-}')" ;;
+        c | dev-c | woowbk-dev-c)
+            DEV=c; PORT=19093; OWNER_UID=1013; DEVICE_MEMORY=3g; DEVICE_CPUS=2
+            DEVICE_RUN_ARGS=(--add-host jcr-prod.woowtech.io:127.0.0.1) ;;
+        *) die "device must be 'a', 'b' or 'c' (got '${1:-}')" ;;
     esac
     NAME=woowbk-dev-$DEV
     # /home holds appowner's nested container storage: a volume (host ext4), so nested rootless

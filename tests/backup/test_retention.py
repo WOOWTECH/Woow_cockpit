@@ -132,13 +132,13 @@ class UsageTests(unittest.TestCase):
         self.assertEqual(rows['odoo']['bytes'], 500 + 300 + 800)
         self.assertEqual(rows['n8n']['bytes'], 501 + 100)
         self.assertTrue(rows['n8n']['estimated'] and rows['n8n']['shared'])
-        self.assertEqual(rows['odoo']['types'], {'manual': 2, 'safety': 1, 'uploaded': 0, 'scheduled': 0})
+        self.assertEqual(rows['odoo']['types'], {'manual': 2, 'safety': 1, 'uploaded': 0, 'scheduled': 0, 'converted': 0})
         self.assertEqual((rows['odoo']['newest'], rows['odoo']['oldest']),
                          ('2026-11-13T02:00:00Z', '2026-11-11T02:00:00Z'))
         self.assertEqual((rows['odoo']['keep_last'], rows['n8n']['keep_last']), (None, 4))
         self.assertEqual(rows['odoo']['name'], 'Odoo 18')
         self.assertEqual(rows['litellm'], {'id': 'litellm', 'name': 'LiteLLM', 'in_catalog': True, 'backups': 0,
-                                           'types': {'manual': 0, 'safety': 0, 'uploaded': 0, 'scheduled': 0},
+                                           'types': {'manual': 0, 'safety': 0, 'uploaded': 0, 'scheduled': 0, 'converted': 0},
                                            'bytes': 0,
                                            'estimated': False, 'shared': False, 'newest': None, 'oldest': None,
                                            'keep_last': 4})
@@ -304,7 +304,7 @@ class CommandTests(RetentionCase):
         self.assertEqual([b['id'] for b in result['blocked']], [backup_id(1)])
         self.assertEqual({p['id'] for p in result['protected']}, {backup_id(1), pinned})
         self.assertEqual(result['usage']['apps'][0]['types'], {'manual': 3, 'safety': 1, 'uploaded': 0,
-                                                               'scheduled': 0})
+                                                               'scheduled': 0, 'converted': 0})
         saved = retention.plan_command(self.paths, self.storage, None, trusted_uid=self.uid)
         self.assertEqual((saved['proposed'], saved['candidates']), (False, []))
         with self.assertRaises(BackupError):
@@ -379,7 +379,7 @@ class ScheduledPoolTests(RetentionCase):
         self.assertEqual(self.ids(), {manual[1], scheduled[1]})
         self.assertTrue(self.audit[-1].endswith('reason=schedule'))
         plan = retention.plan_command(self.paths, self.storage, None, trusted_uid=self.uid)
-        self.assertEqual(plan['usage']['apps'][0]['types'], {'manual': 1, 'safety': 0, 'uploaded': 0, 'scheduled': 1})
+        self.assertEqual(plan['usage']['apps'][0]['types'], {'manual': 1, 'safety': 0, 'uploaded': 0, 'scheduled': 1, 'converted': 0})
         self.assertEqual({item['id']: item['scheduled'] for item in plan['protected']}, {})
         applied = retention.apply_command(self.paths, self.storage, [scheduled[1]], trusted_uid=self.uid,
                                           audit=self.audit.append)

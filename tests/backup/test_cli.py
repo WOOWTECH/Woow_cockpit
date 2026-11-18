@@ -169,8 +169,10 @@ class StatusTests(CliCase):
         self.assertEqual(set(response['settings']), {'encrypt_by_default', 'problem', 'plaintext_warning'})
         self.assertIs(response['settings']['encrypt_by_default'], True)
         self.assertEqual(response['host'], {k: HOST[k] for k in ('hostname', 'arch', 'os', 'podman')})
+        # ha_backups_bytes / ha_backup_count: uploaded HA backups (branch feat/ha-import), not in backups_bytes.
         self.assertEqual(set(response['storage']), {'path', 'free_bytes', 'total_bytes', 'backups_bytes', 'backup_count',
-                                                    'apps'})
+                                                    'apps', 'ha_backups_bytes', 'ha_backup_count'})
+        self.assertEqual((response['storage']['ha_backups_bytes'], response['storage']['ha_backup_count']), (0, 0))
         usage = {row['id']: row for row in response['storage']['apps']}
         self.assertEqual(set(usage), {'woowbk-demo', 'woowbk-two'})
         self.assertEqual((usage['woowbk-demo']['backups'], usage['woowbk-demo']['types']['manual']), (1, 1))
@@ -614,7 +616,7 @@ class ScheduleCliShapeTests(CliCase):
         schedule.register_run(self.paths, manual, 'j20261113T010000Z-00000001', None, 'run-now')
         self.assertIs(self.call(['list'])['backups'][0]['scheduled'], True)
         usage = {row['id']: row for row in self.call(['status'])['storage']['apps']}
-        self.assertEqual(usage['woowbk-demo']['types'], {'manual': 0, 'safety': 0, 'uploaded': 0, 'scheduled': 1})
+        self.assertEqual(usage['woowbk-demo']['types'], {'manual': 0, 'safety': 0, 'uploaded': 0, 'scheduled': 1, 'converted': 0})
         self.assertEqual(self.call(['jobs'])['schedule_events'], [])
         self.assertTrue(self.call(['schedule-get'])['ok'])
 

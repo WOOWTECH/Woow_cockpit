@@ -1,9 +1,11 @@
 #!/bin/bash
 # Start (or create) a lab device and wait until it is usable.
-#   tests/e2e/lab/up.sh <a|b>
-# dev-a: 127.0.0.1:19091 -> Cockpit, appowner uid 1001; dev-b: 127.0.0.1:19092, appowner uid 1007.
+#   tests/e2e/lab/up.sh <a|b|c>
+# dev-a: 127.0.0.1:19091 -> Cockpit, appowner uid 1001; dev-b: 127.0.0.1:19092, appowner uid 1007;
+# dev-c: 127.0.0.1:19093, appowner uid 1013 (production-like Odoo + n8n, see deploy-prodlike.sh).
 # Ready means: systemd finished booting, cockpit.socket listens on 9090, appowner's user manager
-# (user@<uid>.service) is active with its D-Bus socket.
+# (user@<uid>.service) is active with its D-Bus socket and has the memory controller (nested containers
+# with --memory fail with "crun: opening file memory.max" without it; restarting the manager fixes that).
 source "$(dirname "$0")/lib.sh"
 
 device_vars "${1:-}"
@@ -26,7 +28,7 @@ case "$state" in
         "$LP" run -d --name "$NAME" --hostname "$NAME" \
             --label woowbk.lab=device \
             --systemd=always --privileged --device /dev/fuse \
-            --memory "$DEVICE_MEMORY" --cpus "$DEVICE_CPUS" \
+            --memory "$DEVICE_MEMORY" --cpus "$DEVICE_CPUS" "${DEVICE_RUN_ARGS[@]}" \
             -p "127.0.0.1:$PORT:9090" \
             -v "$NAME-home:/home" \
             -v "$NAME-varlib:/var/lib/woowtech-backup" \
@@ -64,6 +66,16 @@ wait_for 60 "cockpit.socket on 9090" \
     "$LP" exec "$NAME" sh -c 'systemctl is-active --quiet cockpit.socket && ss -Hltn "sport = :9090" | grep -q 9090'
 wait_for 60 "user@$OWNER_UID.service" \
     "$LP" exec "$NAME" sh -c "systemctl is-active --quiet user@$OWNER_UID.service && test -S /run/user/$OWNER_UID/bus"
+# The user manager sometimes comes up before the memory controller is delegated to it and then never enables it
+# for its units (their containers' --memory fails); the controllers it enabled for its children say so.
+controllers=/sys/fs/cgroup/user.slice/user-$OWNER_UID.slice/user@$OWNER_UID.service/cgroup.subtree_control
+if ! "$LP" exec "$NAME" grep -qw memory "$controllers"; then
+    log "user@$OWNER_UID.service has not enabled the memory controller ($("$LP" exec "$NAME" cat "$controllers" 2>/dev/null || true)); restarting it"
+    "$LP" exec "$NAME" systemctl restart "user@$OWNER_UID.service"
+    wait_for 60 "user@$OWNER_UID.service after the restart" \
+        "$LP" exec "$NAME" sh -c "systemctl is-active --quiet user@$OWNER_UID.service && test -S /run/user/$OWNER_UID/bus"
+    "$LP" exec "$NAME" grep -qw memory "$controllers" || die "user@$OWNER_UID.service still has not enabled the memory controller"
+fi
 
 machine_id=$("$LP" exec "$NAME" cat /etc/machine-id)
 log "$NAME ready: systemd=$system_state cockpit=https://127.0.0.1:$PORT appowner=$OWNER_UID machine-id=${machine_id:0:8}…"

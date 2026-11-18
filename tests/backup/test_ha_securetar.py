@@ -1,0 +1,260 @@
+"""SecureTar v1/v2/v3 decryption (hasecuretar.py, team E1) against fixtures written by the real securetar library.
+
+Byte-identical plaintext (fixtures.json records what securetar 2026.10.0 returns), wrong keys (v1/v2 heuristic, v3
+exact, always before any plaintext), truncation, tampering, header/size consistency, v3 chunk and tag rules (test-side
+writer, hafixtures.v3_encrypt) and the zh-TW errors for missing Ubuntu packages.
+"""
+import hashlib
+import io
+import sys
+import unittest
+from unittest import mock
+
+from woowbackup import hasecuretar
+from woowbackup.errors import BackupError
+
+from . import hafixtures as hx
+
+MiB = 1024 * 1024
+
+
+def decrypt(data, password=hx.PASSWORD, *, keys=None, size=None, chunk=MiB):
+    reader = hasecuretar.DecryptReader(io.BytesIO(data), len(data) if size is None else size,
+                                       keys or hasecuretar.Keys(password))
+    parts = []
+    while True:
+        part = reader.read(chunk)
+        if not part:
+            break
+        parts.append(part)
+    reader.finish()
+    return b''.join(parts)
+
+
+def code_of(callable_, *args, **kwargs):
+    try:
+        callable_(*args, **kwargs)
+    except BackupError as error:
+        return error.code, error
+    raise AssertionError('no BackupError')
+
+
+class SniffTests(unittest.TestCase):
+    def test_kinds(self):
+        self.assertEqual(hasecuretar.sniff(b'SecureTar\x03' + bytes(6) + b'x' * 30), 'v3')
+        self.assertEqual(hasecuretar.sniff(b'SecureTar\x02' + bytes(6)), 'v2')
+        self.assertEqual(hasecuretar.sniff(b'SecureTar\x04' + bytes(6)), 'unsupported')
+        self.assertEqual(hasecuretar.sniff(b'SecureTar\x03' + b'\x01' + bytes(5)), 'unsupported')
+        self.assertEqual(hasecuretar.sniff(b'\x1f\x8b\x08\x00rest'), 'gzip')
+        self.assertEqual(hasecuretar.sniff(bytes(257) + b'ustar\x0000' + bytes(250)), 'tar')
+        self.assertEqual(hasecuretar.sniff(bytes(512)), 'tar')
+        self.assertEqual(hasecuretar.sniff(b'\x7f' * 512), 'unknown')
+
+    def test_ciphertext_sizes(self):
+        import struct
+        head = lambda version, size: b'SecureTar' + bytes([version]) + bytes(6) + struct.pack('!Q8x', size)  # noqa: E731
+        self.assertTrue(hasecuretar.ciphertext_ok('v2', 48 + 16, head(2, 0)))
+        self.assertTrue(hasecuretar.ciphertext_ok('v2', 48 + 32, head(2, 16)))   # PKCS7 always pads
+        self.assertFalse(hasecuretar.ciphertext_ok('v2', 48 + 16, head(2, 16)))
+        self.assertTrue(hasecuretar.ciphertext_ok('v3', 136 + 17, head(3, 0)))
+        self.assertTrue(hasecuretar.ciphertext_ok('v3', 136 + MiB + 17, head(3, MiB)))
+        self.assertTrue(hasecuretar.ciphertext_ok('v3', 136 + MiB + 1 + 34, head(3, MiB + 1)))
+        self.assertFalse(hasecuretar.ciphertext_ok('v3', 136 + MiB + 1 + 17, head(3, MiB + 1)))
+        self.assertTrue(hasecuretar.ciphertext_ok('v1', 16 + 32, b''))
+        self.assertFalse(hasecuretar.ciphertext_ok('v1', 16 + 33, b''))
+        self.assertFalse(hasecuretar.ciphertext_ok('v1', 16, b''))
+
+
+class KeysTests(unittest.TestCase):
+    def test_invalid_keys_and_privacy(self):
+        for bad in ('', None, 5, 'x' * 5000, 'a\x00b', '\ud800abc'):
+            with self.subTest(bad=repr(bad)[:20]):
+                code, error = code_of(hasecuretar.Keys, bad)
+                self.assertEqual(code, 'invalid-request')
+        keys = hasecuretar.Keys(hx.PASSWORD)
+        self.assertNotIn(hx.PASSWORD, repr(keys))
+        self.assertFalse(hasattr(keys, '__dict__'), 'no attribute dump can show the key')
+
+    def test_key_required_without_keys(self):
+        data, _info = hx.member_bytes(hx.fixture('v3_gzip.tar'), f'{hx.ODOO}.tar.gz')
+        code, error = code_of(hasecuretar.DecryptReader, io.BytesIO(data), len(data), None, name='x')
+        self.assertEqual(code, 'key-required')
+        self.assertIn('HA 備份金鑰', error.message)
+
+
+@hx.needs_crypto
+class RealLibraryFixtureTests(unittest.TestCase):
+    """Every encrypted member of every fixture: the plaintext securetar 2026.10.0 returns, byte for byte."""
+
+    def test_plaintext_is_byte_identical_to_securetar(self):
+        checked = {'v1': 0, 'v2': 0, 'v3': 0}
+        for name, fixture in hx.META['fixtures'].items():
+            keys = hasecuretar.Keys(hx.PASSWORD)  # one Keys per backup, like the jobs
+            for member, info in fixture['members'].items():
+                if info['encryption'] == 'none':
+                    continue
+                data, _tarinfo = hx.member_bytes(hx.fixture(name), member)
+                with self.subTest(fixture=name, member=member):
+                    plaintext = decrypt(data, keys=keys, chunk=4096)
+                    if info.get('library_truncates'):
+                        # securetar 2026.10.0 drops the last read buffer of an unpadded v1 stream; this reader
+                        # returns the whole tar (the entries are checked in test_ha_backup).
+                        self.assertEqual(len(plaintext) % 10240, 0)
+                        self.assertEqual(plaintext[-1024:], bytes(1024))
+                    else:
+                        self.assertEqual((hashlib.sha256(plaintext).hexdigest(), len(plaintext)),
+                                         (info['plaintext_sha256'], info['plaintext_length']))
+                    checked[info['encryption']] += 1
+        self.assertEqual(checked, {'v1': 6, 'v2': 8, 'v3': 7})
+
+    def test_wrong_key_before_any_plaintext(self):
+        for name in ('v1_gzip.tar', 'v1_plain.tar', 'v2_gzip.tar', 'v2_2025_gzip.tar', 'v3_gzip.tar', 'v3_plain.tar'):
+            for member, info in hx.fixture_members(name).items():
+                data, _tarinfo = hx.member_bytes(hx.fixture(name), member)
+                with self.subTest(fixture=name, member=member):
+                    code, error = code_of(hasecuretar.DecryptReader, io.BytesIO(data), len(data),
+                                          hasecuretar.Keys(hx.WRONG_PASSWORD))
+                    self.assertEqual(code, 'wrong-key')
+                    self.assertEqual(error.message, 'HA 備份金鑰不正確，請確認後再試一次。')
+                    self.assertNotIn(hx.WRONG_PASSWORD, repr(error.details))
+
+    def test_one_argon2id_per_backup(self):
+        from nacl.pwhash import argon2id
+        keys = hasecuretar.Keys(hx.PASSWORD)
+        real = argon2id.kdf
+        with mock.patch.object(argon2id, 'kdf', side_effect=real) as kdf:
+            for member in hx.fixture_members('v3_gzip.tar'):
+                data, _tarinfo = hx.member_bytes(hx.fixture('v3_gzip.tar'), member)
+                decrypt(data, keys=keys)
+        self.assertEqual(kdf.call_count, 1, 'every member of a backup shares the root salt')
+
+    def test_truncated_members(self):
+        for name, member in (('v3_gzip.tar', f'{hx.ODOO}.tar.gz'), ('v2_gzip.tar', f'{hx.ODOO}.tar.gz'),
+                             ('v1_gzip.tar', f'{hx.ODOO}.tar.gz'), ('v3_plain.tar', 'supervisor.tar')):
+            data, _tarinfo = hx.member_bytes(hx.fixture(name), member)
+            with self.subTest(fixture=name, kind='size declared, data shorter'):
+                code, _error = code_of(decrypt, data[:-1000], size=len(data))
+                self.assertEqual(code, 'corrupt-archive')
+            with self.subTest(fixture=name, kind='member itself shorter'):
+                if name.startswith('v1'):
+                    # v1 has no header, size or MAC: a whole block less still decrypts, and the gzip layer (CRC,
+                    # ISIZE) is what refuses it.
+                    from woowbackup import habackup
+                    reader = hasecuretar.DecryptReader(io.BytesIO(data[:-16]), len(data) - 16,
+                                                       hasecuretar.Keys(hx.PASSWORD))
+                    code, _error = code_of(habackup._Gunzip(reader, legacy=True).finish)
+                else:
+                    code, _error = code_of(decrypt, data[:-16])
+                self.assertEqual(code, 'corrupt-archive')
+            with self.subTest(fixture=name, kind='header only'):
+                code, _error = code_of(decrypt, data[:40])
+                self.assertEqual(code, 'corrupt-archive')
+
+    def test_tampered_v3_is_detected(self):
+        data, _tarinfo = hx.member_bytes(hx.fixture('v3_gzip.tar'), f'{hx.ODOO}.tar.gz')
+        for offset in (136, len(data) // 2, len(data) - 1):
+            tampered = bytearray(data)
+            tampered[offset] ^= 0x01
+            with self.subTest(offset=offset):
+                code, error = code_of(decrypt, bytes(tampered))
+                self.assertEqual(code, 'corrupt-archive')
+                self.assertIn('authentication', error.details['reason'])
+        tampered = bytearray(data)
+        tampered[16 + 16 + 16 + 16] ^= 0x01  # the stored validation key
+        self.assertEqual(code_of(decrypt, bytes(tampered))[0], 'wrong-key')
+        tampered = bytearray(data)
+        tampered[16] ^= 0x01  # plaintext size: no longer fits the member size
+        self.assertEqual(code_of(decrypt, bytes(tampered))[0], 'corrupt-archive')
+
+    def test_tampered_v2_padding_and_size(self):
+        data, _tarinfo = hx.member_bytes(hx.fixture('v2_gzip.tar'), f'{hx.ODOO}.tar.gz')
+        tampered = bytearray(data)
+        tampered[-17] ^= 0x55  # the second to last block garbles the last block's padding
+        code, error = code_of(decrypt, bytes(tampered))
+        self.assertEqual(code, 'corrupt-archive')
+        self.assertIn(error.details['reason'], ('invalid PKCS7 padding', 'plaintext size differs from the SecureTar header'))
+
+    def test_unsupported_version(self):
+        data, _tarinfo = hx.member_bytes(hx.fixture('v3_gzip.tar'), 'supervisor.tar.gz')
+        code, error = code_of(decrypt, data[:9] + b'\x04' + data[10:])
+        self.assertEqual((code, error.details['version']), ('unsupported-format', 4))
+
+
+@hx.needs_nacl
+class V3StreamRuleTests(unittest.TestCase):
+    """Chunk boundaries and tags with the test-side writer (real files of several MiB would be too large)."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.salts = (b'r' * 16, b'v' * 16, b'd' * 16)
+        cls.keys = hasecuretar.Keys(hx.PASSWORD)
+
+    def make(self, plaintext, **kwargs):
+        return hx.v3_encrypt(plaintext, salts=self.salts, **kwargs)
+
+    def test_chunk_boundaries_round_trip(self):
+        for size in (0, 1, MiB - 1, MiB, MiB + 1, 2 * MiB + 17):
+            payload = hashlib.sha256(str(size).encode()).digest() * (size // 32 + 1)
+            payload = payload[:size]
+            with self.subTest(size=size):
+                self.assertEqual(decrypt(self.make(payload), keys=self.keys, chunk=700_000), payload)
+
+    def test_tag_and_chunk_rules(self):
+        from nacl import bindings
+        final = bindings.crypto_secretstream_xchacha20poly1305_TAG_FINAL
+        message = bindings.crypto_secretstream_xchacha20poly1305_TAG_MESSAGE
+        rekey = bindings.crypto_secretstream_xchacha20poly1305_TAG_REKEY
+        payload = b'x' * (MiB + 10)
+        cases = {
+            'early final tag': self.make(payload, tags=[final, final]),
+            'no final tag': self.make(payload, tags=[message, message]),
+            'rekey tag': self.make(payload, tags=[rekey, final]),
+            'short inner chunk': self.make(payload, chunks=[payload[:10], payload[10:]], declared_size=len(payload)),
+        }
+        for label, data in cases.items():
+            with self.subTest(case=label):
+                code, error = code_of(decrypt, data, keys=self.keys)
+                self.assertEqual(code, 'corrupt-archive', label)
+        good = self.make(payload)
+        self.assertEqual(decrypt(good, keys=self.keys), payload)
+        reordered = good[:136] + good[136 + MiB + 17:] + good[136:136 + MiB + 17]
+        self.assertEqual(code_of(decrypt, reordered, keys=self.keys)[0], 'corrupt-archive')
+
+    def test_reads_are_bounded(self):
+        reader = hasecuretar.DecryptReader(io.BytesIO(self.make(b'y' * (3 * MiB))), 3 * MiB + 3 * 17 + 136, self.keys)
+        self.assertLessEqual(len(reader.read(10 * MiB)), MiB)
+        reader.close()
+
+
+class MissingPackageTests(unittest.TestCase):
+    """The Ubuntu packages are imported only when a member of that kind is read; their absence names the package."""
+
+    def blocked(self, *names):
+        modules = {name: None for name in names}
+        return mock.patch.dict(sys.modules, modules)
+
+    def test_without_nacl(self):
+        data, _tarinfo = hx.member_bytes(hx.fixture('v3_gzip.tar'), 'supervisor.tar.gz')
+        with self.blocked('nacl', 'nacl.bindings', 'nacl.exceptions', 'nacl.pwhash', 'nacl.pwhash.argon2id'):
+            code, error = code_of(decrypt, data)
+        self.assertEqual(code, 'internal-error')
+        self.assertEqual(error.message, '系統缺少 python3-nacl，無法解開 2026 年 3 月以後的 HA 加密備份。請重新執行安裝程式。')
+
+    def test_without_cryptography(self):
+        data, _tarinfo = hx.member_bytes(hx.fixture('v2_gzip.tar'), 'supervisor.tar.gz')
+        names = [name for name in list(sys.modules) if name == 'cryptography' or name.startswith('cryptography.')]
+        with self.blocked('cryptography', 'cryptography.hazmat', 'cryptography.hazmat.primitives',
+                          'cryptography.hazmat.primitives.ciphers', *names):
+            code, error = code_of(decrypt, data)
+        self.assertEqual(code, 'internal-error')
+        self.assertIn('python3-cryptography', error.message)
+
+    def test_plain_members_need_neither(self):
+        from woowbackup import habackup
+        with self.blocked('nacl', 'cryptography'), habackup.open_backup(hx.fixture('plain_gzip.tar')) as ha:
+            with ha.open_member(f'{hx.ODOO}.tar.gz') as stream:
+                self.assertTrue(list(habackup.iter_entries(stream)))
+
+
+if __name__ == '__main__':
+    unittest.main()

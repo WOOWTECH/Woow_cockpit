@@ -4,7 +4,7 @@
 
 - Ubuntu 24.04、Python 3、Git、可使用 sudo 的 Linux 帳號。
 - APT 已配置 Ubuntu backports。`bootstrap-ubuntu.sh --plan` 不變更設備，只列出各套件是否已安裝；`--apply` 更新套件索引、安裝 Cockpit 與管理擴充、安裝備份工具、啟用 `cockpit.socket`。
-- 套件包括 cockpit、cockpit-podman、cockpit-storaged、cockpit-networkmanager、cockpit-packagekit（來自 backports），以及「備份與還原」需要的 `age`（加密）與 `zstd`（壓縮），這兩個來自一般套件庫，`age` 位於 universe。套件庫找不到它們時，`--apply` 會在安裝任何套件前停止並提示啟用 universe。依賴由 APT 處理。實驗室驗證使用 age 1.1.1、zstd 1.5.5。
+- 套件包括 cockpit、cockpit-podman、cockpit-storaged、cockpit-networkmanager、cockpit-packagekit（來自 backports），以及「備份與還原」需要的 `age`（加密）、`zstd`（壓縮），和讀取上傳的 Home Assistant 備份需要的 `python3-nacl`（解開 2026 年 3 月以後的 HA 加密備份）與 `python3-cryptography`（解開較舊的 HA 加密備份）。這些都來自一般套件庫，`age` 位於 universe。套件庫找不到它們時，`--apply` 會在安裝任何套件前停止並提示啟用 universe。依賴由 APT 處理。實驗室驗證使用 age 1.1.1、zstd 1.5.5、python3-nacl 1.5.0、python3-cryptography 41.0.7。
 - 不自動切換既有網路管理方式、安裝 firewalld、啟用 PCP、重啟應用服務或更新容器。
 
 依 README 執行後，用 `systemctl status cockpit.socket` 確認入口。允許的管理網段需能連到 TCP 9090；防火牆規則應限制到實際管理網段。瀏覽器第一次可能遇到自簽憑證提示，可依 [Cockpit TLS 文件](https://cockpit-project.org/guide/latest/https.html) 安裝設備的可信憑證。

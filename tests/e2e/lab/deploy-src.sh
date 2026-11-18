@@ -1,13 +1,19 @@
 #!/bin/bash
 # Copy the CURRENT working tree (uncommitted changes included) into a lab device and install it
 # there as root, the way a customer device would be installed from a checkout.
-#   tests/e2e/lab/deploy-src.sh <a|b> [--fallback]
+#   tests/e2e/lab/deploy-src.sh <a|b|c> [--src CHECKOUT] [--demo-catalog|--no-demo-catalog] [--fallback]
+#
+#   --src CHECKOUT      copy that Woow_cockpit checkout instead of the one holding this script (e.g. the
+#                       integration worktree of a feature, while the lab scripts come from another branch)
+#   --no-demo-catalog   install without the woowbk-demo fixture: only the catalog entries put there on
+#                       purpose stay (default on dev-c, which mirrors the production host's apps)
 #
 # 1. Tree minus .git node_modules .local design (and __pycache__) -> /opt/woow-cockpit-src,
 #    root-owned and not group/world-writable (a low-privilege checkout is never the trust root).
 # 2. If the installer supports it (team I):
 #        python3 /opt/woow-cockpit-src/scripts/manage.py install --backup-demo-catalog
-#    which installs the backup engine, UI and the woowbk-demo trusted catalog + templates.
+#    which installs the backup engine, UI and the woowbk-demo trusted catalog + templates
+#    (without the demo catalog: `manage.py install`, which installs the backup package by default).
 # 3. Otherwise the script stops with exit 3 and prints the MANUAL FALLBACK below; pass
 #    --fallback to execute it. It is lab-only and mirrors CONTRACT section 3; once the installer
 #    has the flag, the fallback must not be used any more.
@@ -29,18 +35,39 @@
 source "$(dirname "$0")/lib.sh"
 
 device_vars "${1:-}"
+shift || true
 fallback=no
-[ "${2:-}" = --fallback ] && fallback=yes
+tree=$REPO_ROOT
+demo_catalog=yes
+[ "$DEV" != c ] || demo_catalog=no
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --fallback) fallback=yes ;;
+        --src) [ $# -ge 2 ] || die "--src needs a checkout"; tree=$(cd "$2" && pwd) || die "no such directory: $2"; shift ;;
+        --demo-catalog) demo_catalog=yes ;;
+        --no-demo-catalog) demo_catalog=no ;;
+        *) die "unknown option: $1" ;;
+    esac
+    shift
+done
+[ -f "$tree/scripts/manage.py" ] && [ -f "$tree/VERSION" ] || die "$tree is not a Woow_cockpit checkout"
 [ "$(container_state "$NAME")" = running ] || die "$NAME is not running (tests/e2e/lab/up.sh $DEV)"
 SRC=/opt/woow-cockpit-src
 
-log "copying $REPO_ROOT (working tree) to $NAME:$SRC"
+log "copying $tree (working tree) to $NAME:$SRC"
 tar --anchored --exclude=./.git --exclude=./node_modules --exclude=./.local --exclude=./design \
-    --no-anchored --exclude=__pycache__ -C "$REPO_ROOT" -cf - . |
+    --no-anchored --exclude=__pycache__ -C "$tree" -cf - . |
     dexec "$NAME" sh -c "set -e; rm -rf $SRC.new; mkdir -p $SRC.new; tar -C $SRC.new --no-same-owner -xf -;
         chown -R root:root $SRC.new; chmod -R u+rwX,go+rX,go-w $SRC.new; rm -rf $SRC; mv $SRC.new $SRC"
 log "copied: $("$LP" exec "$NAME" sh -c "find $SRC -type f | wc -l") files, VERSION $("$LP" exec "$NAME" cat $SRC/VERSION)"
 
+if [ "$demo_catalog" = no ]; then
+    "$LP" exec "$NAME" python3 "$SRC/scripts/manage.py" install --help 2>/dev/null | grep -q -- '--no-backup' ||
+        die "this tree's installer does not manage the backup package; deploy it with the demo catalog (--fallback)"
+    log "running manage.py install (no demo catalog)"
+    dexec "$NAME" sh -c "cd $SRC && python3 scripts/manage.py install"
+    exit 0
+fi
 if "$LP" exec "$NAME" python3 "$SRC/scripts/manage.py" install --help 2>/dev/null | grep -q -- '--backup-demo-catalog'; then
     log "running manage.py install --backup-demo-catalog"
     dexec "$NAME" sh -c "cd $SRC && python3 scripts/manage.py install --backup-demo-catalog"

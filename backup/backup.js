@@ -14,6 +14,10 @@
  *   preview's own values (expected_sha256, the kept backup ids); docs/backup/CONTRACT.md sections 4, 7, 8.
  * - 排程備份 (#/schedule, 2026.11.17.1) saves its settings only after a preview of the next runs and of what the next
  *   successful run would delete (`schedule-set` without, then with `confirm`); CONTRACT §7, §8, §11.
+ * - 從 Home Assistant 備份匯入 (#/ha/<id>): an uploaded HA OS backup is checked (`ha-check-start`, a `verify` job) and
+ *   converted (`ha-convert-start`, a `backup` job, both with params.source "ha") into a normal backup that the existing
+ *   restore wizard then restores. The HA key lives only in the import wizard's memory and travels only in the stdin
+ *   field `key` of those two job starts; closing the wizard or leaving its page drops it (CONTRACT §7, DESIGN §0, §6).
  * Icons: Material Design Icons path data (Pictogrammers, Apache-2.0), built with DOM APIs; lock-open-variant-outline
  * is the lock-outline path with its shackle opened.
  */
@@ -73,7 +77,8 @@
     "catalog-suggest": 300000, "catalog-install": 180000, "catalog-remove": 180000, "retention-plan": 180000,
     "retention-apply": 600000,
     // A schedule preview plans the scheduled pool's retention over the backup list, like retention-plan.
-    "schedule-set": 180000, "schedule-run-now": 120000
+    "schedule-set": 180000, "schedule-run-now": 120000,
+    "ha-check-start": 120000, "ha-convert-start": 120000, "ha-delete": 120000
   };
   // upload-finish hashes the whole file before it answers: allow 20 MB/s plus two minutes, at least 15 minutes.
   const finishTimeout = size => Math.max(TIMEOUTS["upload-finish"], 120000 + Math.ceil((Number(size) || 0) / (20 * 1000 * 1000)) * 1000);
@@ -83,11 +88,11 @@
   const UPLOAD_PENDING = new Set([...UPLOADING, "unconfirmed"]);
   const WRONG_KEY = "這把金鑰無法解開這份備份（金鑰 ID 不符）。請確認是建立這份備份的設備所產生的緊急金鑰。";
   const VERIFY_FAILED = "這份備份上次驗證未通過。還原時會先完整驗證整份備份，驗證不通過就不會變更任何資料，但這份備份很可能無法使用。";
-  const ROUTES = new Set(["overview", "backups", "create", "restore", "jobs", "keys", "activity", "catalog", "cleanup", "schedule"]);
-  // 排程備份 lives under 總覽 (no seventh tab; CONTRACT §11).
+  const ROUTES = new Set(["overview", "backups", "create", "restore", "jobs", "keys", "activity", "catalog", "cleanup", "schedule", "ha"]);
+  // 排程備份 lives under 總覽 and an uploaded HA backup under 備份列表 (no seventh tab; CONTRACT §11).
   const NAV_FOR = {
     overview: "overview", backups: "backups", create: "overview", restore: "restore", jobs: "activity", keys: "keys",
-    activity: "activity", catalog: "catalog", cleanup: "backups", schedule: "overview"
+    activity: "activity", catalog: "catalog", cleanup: "backups", schedule: "overview", ha: "backups"
   };
   // The engine's text (settings.PLAINTEXT_WARNING); the status reply carries the authoritative copy.
   const PLAINTEXT_FALLBACK = "未加密的備份會以明文儲存與下載資料庫密碼、API 金鑰與存取權杖等應用機密；任何取得備份檔的人都能讀取，也無法確認檔案在設備以外是否被修改過。";
@@ -112,6 +117,28 @@
   const SCHEDULE_UNSUPPORTED = "這台設備的備份元件不支援排程";
   // Kinds of schedule events the activity list names in a word (the engine's message says the rest).
   const EVENT_KINDS = { missed: "錯過的排程", skipped: "其他作業一直在進行", "no-key": "沒有加密金鑰", "no-apps": "沒有可以備份的應用", failed: "作業沒有開始" };
+  // 從 Home Assistant 備份匯入 (DESIGN §0, §6): an uploaded HA backup is `ha-` + 20 hex digits; HA's own backup
+  // encryption key looks like ABCD-EFGH-…-YZ12 (seven groups of four), older manual backups may use any password.
+  const HA_ID_RE = /^ha-[0-9a-f]{20}$/;
+  const HA_KEY_RE = /^[A-Z0-9]{4}(?:-[A-Z0-9]{4}){6}$/;
+  const HA_KEY_MAX = 4096;
+  const HA_UNSUPPORTED = "這台設備的備份元件版本還不能匯入 Home Assistant 的備份。請先把備份元件更新到與這個頁面相同的版本，再試一次。";
+  const HA_UPLOAD_HINT = "如果這是 Home Assistant 的備份檔：這台設備的備份元件版本還不能匯入 HA 備份，請先更新備份元件，再上傳一次。";
+  const HA_KEY_WHERE = "HA 備份金鑰是 Home Assistant 的「備份加密金鑰」，在 HA 的「設定 → 系統 → 備份」的備份設定裡可以看到，格式像 ABCD-EFGH-IJKL-MNOP-QRST-UVWX-YZ12。"
+    + "較舊的 HA 備份如果是用自己設定的密碼加密，請輸入當時設定的密碼。";
+  // Where a custom module of an HA Odoo database comes from, in words (ha_odoo.py MODULE_SOURCES, share/odoo_addons).
+  const HA_MODULE_FROM = { "data/addons": "HA 附加元件的模組資料夾", "data/odoo/addons/18.0": "HA 附加元件的模組資料夾",
+    "share/odoo_addons": "HA 的 /share/odoo_addons 資料夾" };
+  // Odoo's custom modules and n8n's community nodes are code that runs on this device (FIXPLAN, review security).
+  const HA_TRUST = "Odoo 的自訂模組和 n8n 的社群節點是會在這台執行的程式，只匯入你信任的備份。";
+  // This device's app for each add-on it can take, when the engine names none (Odoo and n8n only).
+  const HA_APP_NAMES = { odoo: "Odoo 18", n8n: "n8n 工作流程" };
+  // Catalog entries that keep their own login to the imported app: it changes with the imported users (DESIGN §0). The
+  // page is named as this device's catalog names it; `page` only when the entry has no name.
+  const HA_MCP_ADMIN = { odoo: { id: "odoo-mcp-admin", page: "Odoo MCP 管理", app: "Odoo" }, n8n: { id: "n8n-mcp-admin", page: "n8n MCP 管理", app: "n8n" } };
+  // The uploaded HA file holds all of HA, its passwords and tokens too, and stays until deleted (review HA-SEC-06).
+  const HA_DELETE_REMINDER = "匯入完成後，建議刪除這份 HA 備份檔（裡面可能有 HA 的密碼與權杖）。";
+  const HA_JOB_TITLES = { check: "檢查 HA 備份", convert: "轉換 HA 備份" };
 
   // A scheduled backup is a manual backup the schedule's registry lists (BackupMeta.scheduled): 「排程」.
   const TYPE_LABELS = { manual: "手動", scheduled: "排程", safety: "還原前備份", uploaded: "上傳" };
@@ -151,6 +178,7 @@
     "file-document-outline": "M6,2A2,2 0 0,0 4,4V20A2,2 0 0,0 6,22H18A2,2 0 0,0 20,20V8L14,2H6M6,4H13V9H18V20H6V4M8,12V14H16V12H8M8,16V18H13V16H8Z",
     "file-key-outline": "M14 2H6A2 2 0 0 0 4 4V20A2 2 0 0 0 6 22H18A2 2 0 0 0 20 20V8L14 2M18 20H6V4H13V9H18M12.83 15A3 3 0 1 0 12.83 17H14V19H16V17H17V15M10 17A1 1 0 1 1 11 16A1 1 0 0 1 10 17Z",
     "harddisk": "M6,2H18A2,2 0 0,1 20,4V20A2,2 0 0,1 18,22H6A2,2 0 0,1 4,20V4A2,2 0 0,1 6,2M12,4A6,6 0 0,0 6,10C6,13.31 8.69,16 12.1,16L11.22,13.77C10.95,13.29 11.11,12.68 11.59,12.4L12.45,11.9C12.93,11.63 13.54,11.79 13.82,12.27L15.74,14.69C17.12,13.59 18,11.9 18,10A6,6 0 0,0 12,4M12,9A1,1 0 0,1 13,10A1,1 0 0,1 12,11A1,1 0 0,1 11,10A1,1 0 0,1 12,9M7,18A1,1 0 0,0 6,19A1,1 0 0,0 7,20A1,1 0 0,0 8,19A1,1 0 0,0 7,18M12.09,13.27L14.58,19.58L17.17,18.08L12.95,12.77L12.09,13.27Z",
+    "home-outline": "M12 5.69L17 10.19V18H15V12H9V18H7V10.19L12 5.69M12 3L2 12H5V20H11V14H13V20H19V12H22L12 3Z",
     "information-outline": "M11,9H13V7H11M12,20C7.59,20 4,16.41 4,12C4,7.59 7.59,4 12,4C16.41,4 20,7.59 20,12C20,16.41 16.41,20 12,20M12,2A10,10 0 0,0 2,12A10,10 0 0,0 12,22A10,10 0 0,0 22,12A10,10 0 0,0 12,2M11,17H13V11H11V17Z",
     "key-outline": "M21 18H15V15H13.3C12.2 17.4 9.7 19 7 19C3.1 19 0 15.9 0 12S3.1 5 7 5C9.7 5 12.2 6.6 13.3 9H24V15H21V18M17 16H19V13H22V11H11.9L11.7 10.3C11 8.3 9.1 7 7 7C4.2 7 2 9.2 2 12S4.2 17 7 17C9.1 17 11 15.7 11.7 13.7L11.9 13H17V16M7 15C5.3 15 4 13.7 4 12S5.3 9 7 9 10 10.3 10 12 8.7 15 7 15M7 11C6.4 11 6 11.4 6 12S6.4 13 7 13 8 12.6 8 12 7.6 11 7 11Z",
     "key-variant": "M22,18V22H18V19H15V16H12L9.74,13.74C9.19,13.91 8.61,14 8,14A6,6 0 0,1 2,8A6,6 0 0,1 8,2A6,6 0 0,1 14,8C14,8.61 13.91,9.19 13.74,9.74L22,18M7,5A2,2 0 0,0 5,7A2,2 0 0,0 7,9A2,2 0 0,0 9,7A2,2 0 0,0 7,5Z",
@@ -330,7 +358,10 @@
   const backupTitle = backup => `${TITLE_LABELS[backupKind(backup)] || "其他備份"} · ${date(backup.created || backup.uploaded_at)}`;
   // A scheduled backup job carries `params.schedule` {slot, trigger, keep_last} (CONTRACT §7 Job params).
   const scheduleOf = job => (job?.type === "backup" && isObject(job.params?.schedule) ? job.params.schedule : null);
-  const jobLabel = job => (scheduleOf(job) ? "排程備份作業" : jobTitle(job?.type));
+  // The HA import jobs reuse known types, so every page accepts their records (DESIGN §1): a check is a `verify` job
+  // and a conversion a `backup` job, both with `params.source` "ha".
+  const haJobKind = job => (job?.params?.source !== "ha" ? null : job.type === "verify" ? "check" : job.type === "backup" ? "convert" : null);
+  const jobLabel = job => (scheduleOf(job) ? "排程備份作業" : HA_JOB_TITLES[haJobKind(job)] || jobTitle(job?.type));
   const partialRun = job => Boolean(scheduleOf(job)) && job.state === "succeeded" && job.result?.partial === true;
   const skippedApps = result => list(result?.skipped_apps).filter(item => isObject(item) && isString(item.id))
     .map(item => ({ id: item.id, name: str(item.name || item.id), reason: str(item.reason) }));
@@ -487,6 +518,8 @@
     job.phases.every(phase => isObject(phase) && isString(phase.id) && isString(phase.label) && isString(phase.state));
   const validBackup = backup => isObject(backup) && isString(backup.id) && BACKUP_ID_RE.test(backup.id) &&
     isString(backup.type) && Array.isArray(backup.apps);
+  // HaBackupMeta (CONTRACT §7): the id decides; every other field is display data, read defensively.
+  const validHaBackup = item => isObject(item) && isString(item.id) && HA_ID_RE.test(item.id);
   const validApp = app => isObject(app) && isString(app.id) && isString(app.name) && isString(app.state);
   const validExport = item => isObject(item) && isString(item.export_id) && EXPORT_ID_RE.test(item.export_id) &&
     isString(item.backup_id) && BACKUP_ID_RE.test(item.backup_id) && isNumber(item.expires);
@@ -521,6 +554,9 @@
       runBusy: false, runError: null, runRequest: null, kitStep: null, fromSchedule: false
     },
     scheduleEvents: [],
+    // Uploaded Home Assistant backups (`list.ha_backups`, null until listed); `haSupported` is false for an engine
+    // without them. The import wizard, with the HA key, lives only here (DESIGN §0).
+    haBackups: null, haSupported: null, haWizard: null,
     catalog: {
       owners: null, ownersBusy: false, ownersError: null, owner: null, scan: null, scanBusy: false, scanError: null,
       drafts: new Map(), notice: null, busy: false
@@ -585,6 +621,8 @@
       requireShape(Array.isArray(data.backups) && data.backups.every(validBackup), "備份清單");
       state.backups = data.backups;
       state.exports = list(data.exports).filter(validExport);
+      state.haSupported = Object.hasOwn(data, "ha_backups");
+      state.haBackups = list(data.ha_backups).filter(validHaBackup).sort((a, b) => haTime(b) - haTime(a));
       state.backupsAt = Date.now();
       if (state.pageError?.source === "backups") state.pageError = null;
       if (!quiet) announce(`已更新備份清單，共 ${data.backups.length} 份。`);
@@ -652,18 +690,31 @@
   // The schedule is on and runs (a problem stops it; CONTRACT §7 ScheduleSummary.enabled).
   const scheduleOn = () => statusSchedule()?.enabled === true;
 
+  // An inspect reply replaces the listed backup. An engine whose inspect does not name the HA import yet (before
+  // FIXPLAN §19a) sends no `from_ha`: the listed one is kept, or a converted backup lost its HA notice (review P-01).
   function upsertBackup(backup) {
     if (!validBackup(backup) || !state.backups) return;
     const index = state.backups.findIndex(item => item.id === backup.id);
-    if (index >= 0) state.backups[index] = backup;
-    else state.backups.unshift(backup);
+    const before = index >= 0 ? state.backups[index] : null;
+    const kept = before && !Object.hasOwn(backup, "from_ha") && isObject(before.from_ha) ? { ...backup, from_ha: before.from_ha } : backup;
+    if (index >= 0) state.backups[index] = kept;
+    else state.backups.unshift(kept);
+  }
+
+  // An upload-finish reply names an HA backup before the next list does; an engine that sent one supports them.
+  function upsertHaBackup(ha) {
+    state.haSupported = true;
+    state.haBackups = [ha, ...list(state.haBackups).filter(item => item.id !== ha.id)].sort((a, b) => haTime(b) - haTime(a));
   }
 
   function ensureData(route, force = false) {
     if (state.accessDenied || state.disconnected || state.helperMissing) return;
     const stale = (at, age) => force || !at || Date.now() - at > age;
     if (!state.status || stale(state.statusAt, 15000)) loadStatus({ quiet: true });
-    if (["overview", "backups", "cleanup"].includes(route.page) && (!state.backups || stale(state.backupsAt, 10000))) loadBackups();
+    if (["overview", "backups", "cleanup", "ha"].includes(route.page) && (!state.backups || stale(state.backupsAt, 10000))) loadBackups();
+    // The restore wizard names a converted HA backup and an upload that needs a newer engine from the list; 活動紀錄
+    // names the HA backup of an HA job.
+    if (["restore", "activity"].includes(route.page) && !state.backups) loadBackups();
     if (route.page === "jobs" && route.arg && JOB_ID_RE.test(route.arg) && !state.backups) loadBackups();
     if (route.page === "activity" && (!state.jobs || stale(state.jobsAt, 5000))) loadJobs();
     if (route.page === "cleanup" && (!state.cleanup.plan || force) && !state.cleanup.loading) loadPlan();
@@ -749,11 +800,24 @@
       const exported = exportOf(job);
       if (job.state === "succeeded" && exported) downloadExport(exported);
     }
+    // The HA import wizard follows its own check and conversion on its page.
+    haJobFinished(job);
   }
 
   function jobChanged(id) {
     renderBanners();
     const route = currentRoute();
+    const wizard = state.haWizard;
+    if (route.page === "ha" && wizard?.jobId === id && wizard.ui?.id === id) {
+      updateHaJobUi(wizard);
+      // The wizard's job reads its phases out as they change, as the job view does (review P-11).
+      const job = state.jobCache.get(id)?.job;
+      const label = job && ACTIVE.has(job.state) ? job.phases.find(item => item.id === job.phase)?.label : null;
+      if (label && wizard.announced !== `${job.state}:${label}`) {
+        wizard.announced = `${job.state}:${label}`;
+        announce(`${jobLabel(job)}：${label}`);
+      }
+    }
     if (route.page === "jobs" && route.arg === id && state.jobUi.id === id) {
       const job = state.jobCache.get(id)?.job;
       const label = job && ACTIVE.has(job.state) ? job.phases.find(item => item.id === job.phase)?.label : null;
@@ -804,6 +868,8 @@
     state.lastPage = `${route.page}/${route.arg || ""}`;
     state.actionError = null;
     state.menu = null;
+    // The HA key is kept only while its import wizard is on screen (DESIGN §0).
+    if (state.haWizard && !(route.page === "ha" && route.arg === state.haWizard.haId)) closeHaWizard();
     if (route.page !== "keys") {
       // The emergency kit secret is shown once: leaving the page drops it (review finding F11).
       state.keys.kit = null;
@@ -978,7 +1044,9 @@
 
     const job = activeJob();
     const jobBanner = $("job-banner");
-    if (job && !(route.page === "jobs" && route.arg === job.id)) {
+    // The HA import wizard shows its own job's progress; leaving its page to see it would drop the HA key.
+    const inWizard = Boolean(job) && route.page === "ha" && state.haWizard?.jobId === job.id;
+    if (job && !(route.page === "jobs" && route.arg === job.id) && !inWizard) {
       const percent = clamp(Number(job.progress?.percent) || 0, 0, 100);
       const phase = job.phases.find(item => item.id === job.phase)?.label || str(job.progress?.message);
       jobBanner.hidden = false;
@@ -1057,6 +1125,7 @@
       case "cleanup": return viewCleanup();
       case "schedule": return viewSchedule();
       case "catalog": return route.arg ? viewDraft(route.arg) : viewCatalog();
+      case "ha": return viewHa(route.arg);
       default: return viewOverview();
     }
   }
@@ -1115,6 +1184,11 @@
     const icons = { manual: "database-outline", scheduled: "calendar-clock-outline", safety: "shield-check-outline", uploaded: "tray-arrow-up" };
     return chip(TYPE_LABELS[type] || str(type) || "未知", type === "safety" ? "info" : "neutral", icons[type] || null);
   }
+
+  // A backup's kind, and 「由 HA 轉換」 for one converted from an HA backup (BackupMeta.from_ha).
+  const kindChips = backup => [typeChip(backupKind(backup)), fromHaOf(backup) ? chip("由 HA 轉換", "info", "home-outline") : null];
+  const haChip = () => chip("HA 備份", "info", "home-outline");
+  const haEncryptionChip = ha => (haEncrypted(ha) ? chip("已加密", "ok", "lock-outline") : chip("未加密", "warn", "lock-open-variant-outline"));
 
   function jobStateChip(jobState) {
     const tones = { succeeded: "ok", failed: "fail", "rolled-back": "warn", interrupted: "warn", cancelled: "neutral", queued: "info", running: "info" };
@@ -1247,6 +1321,9 @@
         h("div", { class: "stat-main" }, h("p", { class: "stat-label", text: "本機儲存空間" }),
           h("p", { class: "stat-value", text: `${bytes(storage.free_bytes)} 可用` }),
           h("p", { class: "secondary", text: `共 ${bytes(storage.total_bytes)} · 備份 ${Number(storage.backup_count) || 0} 份，佔用 ${bytes(storage.backups_bytes)}` }),
+          // Uploaded HA backups (status.storage.ha_*, review P-11): often several GiB, kept until deleted.
+          Number(storage.ha_backup_count) > 0
+            ? h("p", { class: "secondary", text: `上傳的 HA 備份 ${Number(storage.ha_backup_count)} 份，佔用 ${bytes(storage.ha_backups_bytes)}` }) : null,
           meter, storage.path ? h("p", { class: "secondary mono", text: storage.path }) : null,
           link("依應用查看與清理", ["cleanup"], { class: "text-link", dataset: { focus: "stat-cleanup" } }))),
       h("section", { class: "card stat", "aria-label": "加密金鑰" }, tile("key-outline"),
@@ -1277,7 +1354,7 @@
           h("div", { class: "item-main" },
             link(backupTitle(backup), ["backups", backup.id], { class: "item-title", dataset: { focus: `recent-${backup.id}` } }),
             h("span", { class: "secondary", text: [appsText(backup), bytes(backup.size), backup.note].filter(Boolean).join(" · ") })),
-          h("div", { class: "item-side" }, h("span", { class: "chips" }, typeChip(backupKind(backup)), backupChips(backup, { key: !backup.key_available }))))))
+          h("div", { class: "item-side" }, h("span", { class: "chips" }, kindChips(backup), backupChips(backup, { key: !backup.key_available }))))))
         : h("section", { class: "card" }, emptyState("database-outline", "還沒有備份", "建立第一份備份後，會顯示在這裡。", apps.length ? [
           link("建立備份", ["create"], { class: "button primary", dataset: { focus: "overview-first-backup" } })] : [])));
 
@@ -1409,16 +1486,38 @@
 
   // ------------------------------------------------------------------ backup list
 
+  const matches = (values, query) => !query || values.some(value => str(value).toLocaleLowerCase().includes(query));
+
   function filteredBackups() {
     const query = state.list.query.trim().toLocaleLowerCase();
     return (state.backups || []).filter(backup => {
-      // 「手動」 lists the manual backups the schedule did not make; 「排程」 the ones it made.
-      if (state.list.type !== "all" && backupKind(backup) !== state.list.type) return false;
-      if (!query) return true;
-      const values = [backup.id, backup.note, backup.filename, backup.key_id, backup.source?.hostname, TYPE_LABELS[backupKind(backup)],
-        ...list(backup.apps).flatMap(app => [app?.id, app?.name])];
-      return values.some(value => str(value).toLocaleLowerCase().includes(query));
+      const fromHa = fromHaOf(backup);
+      // 「手動」 lists the manual backups the schedule did not make; 「排程」 the ones it made; 「HA 備份」 the uploaded HA
+      // backups and the backups converted from them.
+      if (state.list.type === "ha" ? !fromHa : state.list.type !== "all" && backupKind(backup) !== state.list.type) return false;
+      return matches([backup.id, backup.note, backup.filename, backup.key_id, backup.source?.hostname, TYPE_LABELS[backupKind(backup)],
+        ...list(backup.apps).flatMap(app => [app?.id, app?.name]), fromHa ? "由 HA 轉換" : null, fromHa?.name], query);
     });
+  }
+
+  function filteredHa() {
+    if (!["all", "ha"].includes(state.list.type)) return [];
+    const query = state.list.query.trim().toLocaleLowerCase();
+    return list(state.haBackups).filter(ha => matches([ha.id, ha.name, ha.filename, "HA 備份", "Home Assistant",
+      ...haAddons(ha).flatMap(item => [item.name, item.slug]), ...haApps(ha).map(app => app.name)], query));
+  }
+
+  // Both lists are newest first: each HA backup goes in before the first backup made before it (by HA's date, like an
+  // upload by its original creation time); the backups keep the engine's order.
+  function listRows(backups, has) {
+    const rows = [];
+    let next = 0;
+    for (const backup of backups) {
+      const at = Date.parse(backup.created || backup.uploaded_at) || 0;
+      while (next < has.length && haTime(has[next]) > at) rows.push(haRow(has[next++]));
+      rows.push(backupRow(backup));
+    }
+    return [...rows, ...has.slice(next).map(haRow)];
   }
 
   function viewBackups() {
@@ -1428,7 +1527,7 @@
       link([icon("tray-arrow-up"), h("span", { text: "上傳備份檔" })], ["restore"], { class: "button", dataset: { focus: "list-upload" } }),
       link([icon("plus"), h("span", { text: "建立備份" })], ["create"], { class: "button primary", dataset: { focus: "list-create" } })]);
     if (!state.backups) return [head, pendingCard("backups", "正在載入備份清單…")];
-    if (!state.backups.length) {
+    if (!state.backups.length && !list(state.haBackups).length) {
       return [head, h("section", { class: "card" }, emptyState("database-outline", "還沒有備份",
         "建立第一份備份，或上傳從其他設備下載的備份檔（.tar 或舊格式 .woowbackup）。", [
           link("建立備份", ["create"], { class: "button primary", dataset: { focus: "empty-create" } }),
@@ -1441,8 +1540,11 @@
     });
     // 「排程」 appears once this device can schedule backups (or holds a scheduled backup).
     const scheduled = scheduleSupported() || state.backups.some(backup => backupKind(backup) === "scheduled");
+    // 「HA 備份」 appears once the device holds an uploaded HA backup or a backup converted from one.
+    const ha = list(state.haBackups).length > 0 || state.backups.some(backup => fromHaOf(backup));
     const filters = h("div", { class: "filter-group", role: "group", "aria-label": "依類型篩選" },
-      [["all", "全部"], ["manual", "手動"], scheduled ? ["scheduled", "排程"] : null, ["safety", "還原前備份"], ["uploaded", "上傳"]].filter(Boolean).map(([value, label]) =>
+      [["all", "全部"], ["manual", "手動"], scheduled ? ["scheduled", "排程"] : null, ["safety", "還原前備份"], ["uploaded", "上傳"],
+        ha ? ["ha", "HA 備份"] : null].filter(Boolean).map(([value, label]) =>
         h("button", {
           type: "button", class: "filter", "aria-pressed": String(state.list.type === value), dataset: { focus: `filter-${value}` },
           on: { click: () => { state.list.type = value; render(); } }
@@ -1465,9 +1567,11 @@
 
   function fillBackupResults(card) {
     const results = card.querySelector("#backup-results");
-    const rows = filteredBackups();
-    text(card.querySelector("#backup-count"), `顯示 ${rows.length} / ${state.backups.length} 份備份`);
-    if (!rows.length) {
+    const backups = filteredBackups();
+    const has = filteredHa();
+    const total = state.backups.length + list(state.haBackups).length;
+    text(card.querySelector("#backup-count"), `顯示 ${backups.length + has.length} / ${total} 份備份`);
+    if (!backups.length && !has.length) {
       fill(results, emptyState("magnify", "沒有符合條件的備份", "請調整搜尋文字或類型篩選。", [
         button("顯示全部", () => { state.list = { query: "", type: "all" }; render(); $("backup-search")?.focus(); }, { focus: "clear-filters" })]));
       return;
@@ -1475,7 +1579,7 @@
     fill(results, h("table", { class: "data backups-table" },
       h("caption", { class: "sr-only", text: "備份清單" }),
       h("thead", null, h("tr", null, ["備份", "類型", "應用", "大小", "加密與驗證", "操作"].map(label => h("th", { scope: "col", text: label })))),
-      h("tbody", null, rows.map(backupRow))));
+      h("tbody", null, listRows(backups, has))));
   }
 
   function backupRow(backup) {
@@ -1486,7 +1590,7 @@
         }),
         backup.note ? h("span", { class: "secondary note", text: backup.note }) : null,
         h("span", { class: "secondary mono", text: backup.id })),
-      h("td", { "data-label": "類型" }, typeChip(backupKind(backup))),
+      h("td", { "data-label": "類型" }, h("span", { class: "chips" }, kindChips(backup))),
       h("td", { "data-label": "應用", text: appsText(backup) }),
       h("td", { "data-label": "大小" }, h("span", { text: bytes(backup.size) }),
         backup.include_images ? h("span", { class: "secondary", text: "含容器映像" }) : null,
@@ -1750,7 +1854,7 @@
     const encrypted = isEncrypted(backup);
     const verified = isObject(backup.verified) && backup.verified.ok === true;
     const info = h("section", { class: "card", "aria-labelledby": "detail-info" },
-      h("div", { class: "card-head" }, h("h3", { id: "detail-info", text: "備份資訊" }), h("span", { class: "chips" }, typeChip(backupKind(backup)), backupChips(backup, { key: false }))),
+      h("div", { class: "card-head" }, h("h3", { id: "detail-info", text: "備份資訊" }), h("span", { class: "chips" }, kindChips(backup), backupChips(backup, { key: false }))),
       h("div", { class: "card-body" }, metadata([
         ["備份 ID", backup.id, "mono"],
         ["類型", backupKind(backup) === "scheduled" ? "排程（由排程備份自動建立，依排程的保留份數清理）" : TYPE_LABELS[backup.type] || backup.type],
@@ -1780,8 +1884,29 @@
         : h("div", { class: "card-body" }, h("p", { class: "muted", text: backup.inspected === false
           ? "這份上傳的備份尚未檢查內容。檢視內容或開始還原時，會先讀取它包含的應用。"
           : "沒有應用資料。" })));
-    return [back, head, h("div", { class: "detail-grid" }, h("div", { class: "stack" }, info, exportCard(exportsFor(backup.id))),
+    return [back, head, h("div", { class: "detail-grid" }, h("div", { class: "stack" }, info, haSourceCard(backup), exportCard(exportsFor(backup.id))),
       h("div", { class: "stack" }, apps, contentCard(backup)))];
+  }
+
+  // Where a converted backup came from (BackupMeta.from_ha); 還原 imports it like any backup.
+  function haSourceCard(backup) {
+    const info = fromHaOf(backup);
+    if (!info) return null;
+    const ha = info.haId ? list(state.haBackups).find(item => item.id === info.haId) : null;
+    return h("section", { class: "card", "aria-labelledby": "detail-ha" },
+      h("div", { class: "card-head" }, h("div", { class: "result-title" }, tile("home-outline", true), h("h3", { id: "detail-ha", text: "由 HA 備份轉換" })),
+        info.testMode ? chip("測試匯入", "warn", "alert-outline") : null),
+      h("div", { class: "card-body" },
+        h("p", { text: "這份備份是從 Home Assistant 的備份轉換來的，還沒有變更這台的應用。按「還原」就會把資料匯入這台；開始前會先自動保存一份這台目前的資料，失敗會自動回復。" }),
+        metadata([
+          ["HA 備份", ha ? link(haName(ha), ["ha", ha.id], { dataset: { focus: "detail-ha-link" } }) : `${info.name || "（沒有名稱）"}（HA 備份檔已從這台刪除）`],
+          info.date ? ["HA 建立時間", date(info.date)] : null,
+          ["應用", info.apps.map(appName).join("、") || "—"],
+          info.odooDatabase ? ["Odoo 資料庫", info.odooDatabase] : null,
+          ["這只是測試", info.testMode ? "是：工作流程、排程和寄信都已先關掉" : "否"]
+        ]),
+        info.workflows.length ? [h("p", { text: "下列 n8n 工作流程用到 HA 那邊的位置或功能，匯入後可能需要修改：" }),
+          workflowList(info.workflows, "可能需要修改的 n8n 工作流程")] : null));
   }
 
   function contentCard(backup) {
@@ -2138,20 +2263,27 @@
       keySaved: false, saveKey: false, keyError: null, inspect: null, inspectError: null, selected: new Set(),
       confirmed: false, requestId: null, signature: "", busy: false, error: null, jobId: null, notice: null,
       allowNoSafety: Boolean(pending?.allowNoSafety), confirmedNoSafety: false, preselect: pending ? list(pending.apps) : null,
-      acceptUnauthenticated: false
+      acceptUnauthenticated: false,
+      // The HA import wizard hands its converted backup over with what it knows about the import.
+      fromHa: pending?.fromHa || null
     };
   }
 
+  // A restore of a backup converted from an HA backup: from the hand-over, the list (BackupMeta.from_ha) or inspect
+  // (its backup carries from_ha since FIXPLAN §19a).
+  const wizardFromHa = wizard => (wizard?.source === "local"
+    ? wizard.fromHa || fromHaOf(state.backups?.find(item => item.id === wizard.backupId)) || fromHaOf(wizard.backup) : null);
+
   function wizardSteps(wizard) {
-    const steps = wizard.source === "upload" ? [["file", "選擇檔案"], ["upload", "上傳"]] : [["source", "選擇備份"]];
+    const steps = wizard.source === "upload" ? [["file", "選擇檔案"], ["upload", "上傳"]] : [["source", wizardFromHa(wizard) ? "從 HA 轉換" : "選擇備份"]];
     if (wizard.keyNeeded) steps.push(["key", "金鑰"]);
     steps.push(["preflight", "預檢"], ["confirm", "確認"], ["progress", "進度"], ["result", "結果"]);
     return steps;
   }
 
-  function stepper(steps, current) {
+  function stepper(steps, current, name = "還原步驟") {
     const index = steps.findIndex(([id]) => id === current);
-    return h("ol", { class: "stepper", "aria-label": "還原步驟" }, steps.map(([id, label], position) => {
+    return h("ol", { class: "stepper", "aria-label": name }, steps.map(([id, label], position) => {
       const done = position < index;
       const active = position === index;
       return h("li", { class: done ? "step done" : active ? "step active" : "step", "aria-current": active ? "step" : null, dataset: { step: id } },
@@ -2200,9 +2332,11 @@
         "應用設定有資料核對時，資料回到原處後、應用啟動前，先比對資料表筆數與內容、檔案清單與雜湊；不一致就不啟動應用並自動回復。",
         "還原後會做健康檢查，並比對備份時與還原後的業務資料。"
       ].map(item => h("li", { text: item }))));
+    const fromHa = wizardFromHa(wizard);
     return [
       local ? backLink("返回備份列表", ["backups"]) : backLink("返回總覽", ["overview"]),
       head, stepper(wizardSteps(wizard), current),
+      fromHa ? haRestoreBanner(fromHa) : null,
       h("div", { class: "form-layout" }, h("section", { class: "card form-card wizard-card" }, body), side)
     ];
   }
@@ -2241,13 +2375,16 @@
     }, tile("file-document-outline"),
     h("p", { class: "dropzone-label", text: "把備份檔（.tar 或舊格式 .woowbackup）拖放到這裡，或選擇檔案" }),
     picker,
-    h("p", { id: "restore-file-hint", class: "hint", text: "檔案會先上傳到這台設備的私有暫存區；上傳本身不會變更任何應用。" }));
+    h("p", { id: "restore-file-hint", class: "hint", text: "檔案會先上傳到這台設備的私有暫存區；上傳本身不會變更任何應用。" }),
+    state.haSupported === true ? h("p", { class: "hint", text: "也可以上傳 Home Assistant 的備份檔（.tar），把其中的 Odoo、n8n 匯入這台。" }) : null);
     const nameWarning = file && !/\.(tar|woowbackup)$/i.test(file.name)
       ? infoNotice("檔名不是 .tar 或 .woowbackup。仍可上傳，系統會檢查檔案格式；若不是備份檔會被拒絕。", "warn", "alert-outline") : null;
     return [
       h("h3", { class: "step-title", text: "選擇備份檔" }),
       wizard.notice ? infoNotice(wizard.notice, "info") : null,
       wizardError(wizard),
+      // An engine older than HA imports refuses an HA backup as not a backup (CONTRACT §7).
+      wizard.error?.code === "not-a-backup" && state.haSupported === false ? infoNotice(HA_UPLOAD_HINT, "info", "home-outline") : null,
       zone,
       file ? metadata([["檔名", file.name], ["大小", bytes(file.size)]]) : null,
       wizard.fileError ? h("p", { class: "hint hint-error", role: "alert", text: wizard.fileError }) : null,
@@ -2363,6 +2500,28 @@
 
   async function finishUpload(wizard, upload) {
     const finished = await call("upload-finish", { upload_id: upload.id }, { timeout: finishTimeout(upload.size) });
+    // A Home Assistant backup (CONTRACT §7): it gets its own page and is never inspected like a backup.
+    if (isObject(finished.ha_backup)) {
+      requireShape(validHaBackup(finished.ha_backup), "HA 備份資訊");
+      const ha = finished.ha_backup;
+      upload.phase = "done";
+      upsertHaBackup(ha);
+      loadBackups();
+      wizard.busy = false;
+      if (state.wizard !== wizard) return;
+      const route = currentRoute();
+      announce(`上傳完成：這是 Home Assistant 的備份「${haName(ha)}」。`);
+      if (route.page === "restore" && !route.arg) {
+        state.wizard = null;
+        go(["ha", ha.id]);
+      } else {
+        // The administrator is on another page: the upload view says where the HA backup is when it is opened again.
+        state.wizard = newWizard("upload");
+        state.wizard.notice = `已上傳 Home Assistant 的備份「${haName(ha)}」。請到「備份列表」找到它，再按「檢查並匯入…」。`;
+        render();
+      }
+      return;
+    }
     requireShape(validBackup(finished.backup), "備份資訊");
     upload.phase = "done";
     wizard.backup = finished.backup;
@@ -3023,6 +3182,889 @@
     }
   }
 
+  // ------------------------------------------------------------------ Home Assistant backups
+
+  // HaBackupMeta (CONTRACT §7): the sidecar of an uploaded HA backup plus what this device can do with its add-ons.
+  // Everything but the id is display data from the HA file.
+  const haTime = ha => Date.parse(ha?.date || ha?.uploaded_at) || 0;
+  const haName = ha => str(ha?.name).trim() || "（沒有名稱）";
+  const haFind = id => list(state.haBackups).find(item => item.id === id) || null;
+  const haAddons = ha => list(ha?.addons).filter(item => isObject(item) && isString(item.slug));
+  const haAddonsText = ha => haAddons(ha).map(item => str(item.name) || item.slug).join("、") || "沒有附加元件";
+  const haOtherAddons = ha => list(ha?.other_addons).filter(item => isObject(item) && (isString(item.slug) || isString(item.name)));
+  const num = value => (isNumber(value) ? value.toLocaleString("zh-TW") : "—");
+
+  // `importable_apps`: this device's app for each add-on it can take (Odoo, n8n) and whether that app is installed.
+  function haApps(ha) {
+    return list(ha?.importable_apps).filter(item => isObject(item) && isString(item.app_id) && APP_ID_RE.test(item.app_id)).map(item => {
+      const addon = haAddons(ha).find(entry => entry.slug === item.slug);
+      return { id: item.app_id, slug: str(item.slug), name: str(item.app_name) || HA_APP_NAMES[item.app_id] || item.app_id,
+        installed: item.installed === true, addon: str(addon?.name) || str(item.slug) || item.app_id, version: str(addon?.version) };
+    });
+  }
+  const haReady = ha => haApps(ha).filter(app => app.installed);
+
+  // HA encrypts each add-on of a backup on its own, and the engine asks for the key by the chosen add-ons' `encrypted`:
+  // a decrypted download says protected:false yet may keep an encrypted member (review P-04). An engine that sends no
+  // `encrypted` leaves HA's `protected`.
+  function haAddonEncrypted(ha, slug) {
+    const addon = haAddons(ha).find(item => item.slug === slug);
+    return typeof addon?.encrypted === "boolean" ? addon.encrypted : ha?.protected === true;
+  }
+  const haEncrypted = ha => (haAddons(ha).length ? haAddons(ha).some(item => haAddonEncrypted(ha, item.slug)) : ha?.protected === true);
+  // Importing these apps (all this backup can bring) needs HA's key.
+  const haNeedsKey = (ha, ids = null) => haApps(ha).some(app => (!ids || ids.includes(app.id)) && haAddonEncrypted(ha, app.slug));
+
+  // Workflows the check found to use HA-side hosts, paths or nodes (`workflows_to_fix`).
+  const haWorkflows = value => list(value).filter(item => isObject(item) && isString(item.name))
+    .map(item => ({ name: item.name, active: item.active === true, reasons: list(item.reasons).filter(isString) }));
+
+  function workflowList(workflows, label) {
+    return h("ul", { class: "path-list workflow-list", "aria-label": label }, workflows.map(item => h("li", null,
+      h("span", { class: "path-app", text: item.name }), item.active ? chip("啟用中", "info") : chip("未啟用", "neutral"),
+      item.reasons.length ? h("span", { class: "secondary", text: item.reasons.join(" ") }) : null)));
+  }
+
+  // Where a converted backup came from (`BackupMeta.from_ha`) or a conversion's `result.ha_import`; `fallback` fills in
+  // what the reply leaves out from what this page knows (the import wizard, the job's params). The engine's words:
+  // `notes` explain the import before the restore, `reminders_by_app` and `reminders` are the to-dos afterwards of each
+  // app and of none (FIXPLAN §19b, UI-3; an engine before that sent all its lines in `reminders`); `addons` names the
+  // HA add-ons even after the HA file is deleted (review P-06).
+  function haInfo(value, fallback = {}) {
+    const info = isObject(value) ? value : {};
+    const pick = (key, other) => (info[key] === undefined || info[key] === null ? other : info[key]);
+    const lines = items => list(items).filter(item => isString(item) && item.trim());
+    const haId = [info.ha_backup_id, fallback.haId].find(item => isString(item) && HA_ID_RE.test(item)) || null;
+    const ha = haId ? haFind(haId) : null;
+    return {
+      haId, name: str(pick("name", fallback.name ?? ha?.name)).trim(), date: str(pick("date", fallback.date ?? ha?.date)) || null,
+      apps: list(pick("apps", fallback.apps)).filter(item => isString(item) && APP_ID_RE.test(item)),
+      odooDatabase: str(pick("odoo_database", fallback.odooDatabase)) || null, testMode: pick("test_mode", fallback.testMode) === true,
+      workflows: Array.isArray(info.workflows_to_fix) ? haWorkflows(info.workflows_to_fix) : list(fallback.workflows),
+      notes: lines(info.notes),
+      reminders: lines(info.reminders),
+      remindersByApp: isObject(info.reminders_by_app) ? Object.fromEntries(Object.entries(info.reminders_by_app)
+        .filter(([id]) => APP_ID_RE.test(id)).map(([id, items]) => [id, lines(items)])) : null,
+      addons: list(info.addons).filter(item => isObject(item) && isString(item.app_id) && isString(item.name) && item.name.trim())
+        .map(item => ({ appId: item.app_id, name: item.name.trim() }))
+    };
+  }
+  const fromHaOf = backup => (isObject(backup?.from_ha) ? haInfo(backup.from_ha) : null);
+
+  // The HA add-on an imported app came from: as the import recorded it, else as its HA backup names it while that is
+  // still on this device.
+  function haAddonFor(info, appId) {
+    const recorded = info.addons.find(item => item.appId === appId)?.name;
+    const app = recorded || !info.haId ? null : haApps(haFind(info.haId)).find(item => item.id === appId);
+    return recorded || app?.addon || HA_APP_NAMES[appId] || appName(appId);
+  }
+
+  function haTestText(apps) {
+    const parts = [apps.includes("n8n") ? "搬過來的 n8n 工作流程都已停用" : null, apps.includes("odoo") ? "Odoo 不會寄信，也不會執行排程" : null].filter(Boolean);
+    return `這是測試匯入：${parts.join("，") || "會自動執行的功能都已先關掉"}，HA 那邊可以照常使用。要正式搬過來時，請重新匯入一次，並且不要勾「這只是測試」。`;
+  }
+
+  // After an import (DESIGN §0): stop the HA add-on so nothing runs twice (a test import already turned that off), log
+  // the MCP admin apps in again (the logins moved with the data; the page as this device's catalog names it, review
+  // P-11), then the engine's to-dos of the restored apps and of none (review P-05).
+  function haReminderLines(info, apps) {
+    const lines = info.testMode ? [haTestText(apps)]
+      : apps.map(id => `請把 HA 那邊的「${haAddonFor(info, id)}」附加元件停掉，避免同一件事兩邊各做一次。`);
+    const catalog = list(state.status?.apps).filter(isObject);
+    for (const id of apps) {
+      const mcp = HA_MCP_ADMIN[id];
+      const entry = mcp ? catalog.find(app => app.id === mcp.id) : null;
+      if (entry) lines.push(`請到「${str(entry.name).trim() || mcp.page}」重新設定 ${mcp.app} 的登入資料。`);
+    }
+    const engine = info.remindersByApp ? [...apps.flatMap(id => info.remindersByApp[id] || []), ...info.reminders] : info.reminders;
+    return [...lines, ...engine.filter((line, index) => !lines.includes(line) && engine.indexOf(line) === index)];
+  }
+
+  // The restore wizard of a converted backup: what the import replaces and keeps, and what to do afterwards.
+  function haRestoreBanner(info) {
+    const apps = info.apps.map(id => `「${appName(id)}」`).join("、") || "所選應用";
+    const addons = info.apps.map(id => `「${haAddonFor(info, id)}」`).join("、");
+    return h("section", { class: "notice notice-info ha-banner", "aria-labelledby": "ha-banner-title" }, icon("home-outline"),
+      h("div", { class: "notice-body" },
+        h("p", null, h("strong", { id: "ha-banner-title", text: "從 Home Assistant 匯入" }),
+          ` · 這份備份由 HA 備份「${info.name || "（沒有名稱）"}」${info.date ? `（${date(info.date)}）` : ""}轉換而來。`),
+        h("ul", { class: "bullet-list" },
+          h("li", { text: `還原會用 HA 的資料（包含登入帳號）取代這台${apps}目前的資料；這台的網址、連接埠、資料庫密碼和設定檔都保持不變。` }),
+          // What the engine says about this import, e.g. the custom modules that come along (UI-3).
+          info.notes.map(note => h("li", { text: note })),
+          h("li", { text: "開始前會先自動保存一份這台目前的資料（還原前備份）；還原失敗會自動回復。" }),
+          h("li", { text: info.testMode ? haTestText(info.apps)
+            : `還原完成後，請把 HA 那邊的${addons || "對應"}附加元件停掉，避免同一件事兩邊各做一次。` }))));
+  }
+
+  // The origin of a restore job's backup: the wizard that started it, else the backup list.
+  function restoreFromHa(job) {
+    const wizard = state.wizard?.jobId === job.id ? state.wizard : null;
+    return (wizard && wizardFromHa(wizard)) || fromHaOf(state.backups?.find(item => item.id === job.params?.backup_id));
+  }
+
+  function haAfterImport(info, restored) {
+    const apps = info.apps.length ? restored.filter(id => info.apps.includes(id)) : restored;
+    const workflows = apps.includes("n8n") ? info.workflows : [];
+    const ha = info.haId ? haFind(info.haId) : null;
+    // The page says to delete the HA file itself, with its link; the engine is not to send that line (FIXPLAN).
+    const own = line => ha && line.replace(/。$/, "") === HA_DELETE_REMINDER.replace(/。$/, "");
+    return [
+      h("h4", { class: "subheading", text: "匯入之後請做" }),
+      h("ul", { class: "bullet-list ha-reminders", "aria-label": "匯入之後請做" },
+        haReminderLines(info, apps).filter(line => !own(line)).map(line => h("li", { text: line })),
+        ha ? h("li", { class: "ha-delete-reminder" }, `${HA_DELETE_REMINDER} `,
+          link(`前往 HA 備份「${haName(ha)}」`, ["ha", ha.id], { class: "text-link", dataset: { focus: "result-ha-delete" } })) : null),
+      workflows.length ? [h("p", { text: "下列 n8n 工作流程用到 HA 那邊的位置或功能，可能需要修改：" }),
+        workflowList(workflows, "可能需要修改的 n8n 工作流程")] : null
+    ];
+  }
+
+  function haBackupText(id) {
+    const ha = haFind(id);
+    return ha ? `HA 備份「${haName(ha)}」` : isString(id) && HA_ID_RE.test(id) ? `HA 備份 ${id}` : "HA 備份";
+  }
+
+  function haJobParams(job, params) {
+    const haId = isString(params.ha_backup_id) && HA_ID_RE.test(params.ha_backup_id) ? params.ha_backup_id : null;
+    const ha = haFind(haId);
+    return [
+      ["作業類型", jobLabel(job)],
+      ["HA 備份", ha ? link(haName(ha), ["ha", haId], { dataset: { focus: "job-param-ha" } }) : haId ? h("span", { class: "mono", text: haId }) : "—"],
+      list(params.apps).length ? ["應用", list(params.apps).map(id => appName(str(id))).join("、")] : null,
+      isString(params.odoo_database) && params.odoo_database ? ["Odoo 資料庫", params.odoo_database] : null,
+      typeof params.test_mode === "boolean" ? ["這只是測試", params.test_mode ? "是（先關掉排程、寄信和工作流程）" : "否"] : null,
+      params.key_provided ? ["金鑰", "使用你輸入的 HA 備份金鑰（作業結束後即刪除）"] : null
+    ];
+  }
+
+  function haBackAction(job, primary) {
+    const ha = haFind(job.params?.ha_backup_id);
+    return ha ? link("回到 HA 備份", ["ha", ha.id], { class: primary ? "button primary" : "button", dataset: { focus: "result-ha" } }) : null;
+  }
+
+  // result.ha_check (CONTRACT §7): the verdict per app; Odoo per database (what keeps a database from moving and what
+  // to know before moving it: Odoo's warnings are only there, review P-02), n8n with its counts.
+  function haCheckOf(result) {
+    const check = isObject(result?.ha_check) ? result.ha_check : null;
+    if (!check || !Array.isArray(check.apps)) return null;
+    return check.apps.filter(item => isObject(item) && isString(item.app_id)).map(item => ({
+      ...item, ok: item.ok === true, blockers: list(item.blockers).filter(isString), warnings: list(item.warnings).filter(isString),
+      databases: list(item.odoo?.databases).filter(db => isObject(db) && isString(db.name))
+        .map(db => ({ ...db, ok: db.ok === true, blockers: list(db.blockers).filter(isString), warnings: list(db.warnings).filter(isString) })),
+      n8n: isObject(item.n8n) ? item.n8n : null
+    }));
+  }
+  // Blockers, then warnings, of an app or an Odoo database.
+  const haIssues = (item, prefix = "") => [...item.blockers.map((message, index) => ({ id: `${prefix}blocker-${index}`, status: "fail", message })),
+    ...item.warnings.map((message, index) => ({ id: `${prefix}warning-${index}`, status: "warn", message }))];
+  // An app can be imported when its check passed and, for Odoo, at least one database did.
+  const haImportable = app => app.ok && (app.app_id !== "odoo" || app.databases.some(db => db.ok));
+
+  // A finished check in the job view (the wizard shows the same verdicts with its choices).
+  function haCheckResult(job, result) {
+    const apps = haCheckOf(result);
+    if (!apps) return [h("p", { text: "檢查已完成。" })];
+    const ok = apps.length > 0 && apps.every(haImportable);
+    return [
+      h("p", { text: ok ? "所選的應用都可以匯入這台。檢查沒有變更任何資料。" : "有應用沒有通過檢查，要先處理下列問題才能匯入。檢查沒有變更任何資料。" }),
+      ...apps.map(app => h("article", { class: "app-content", dataset: { haApp: app.app_id } },
+        h("h4", null, h("span", { text: appName(app.app_id) }), " ",
+          haImportable(app) ? chip("可以匯入", "ok", "check-circle-outline") : chip("無法匯入", "fail", "close-circle-outline")),
+        haIssues(app).length ? checkList(haIssues(app), `${appName(app.app_id)} 的檢查結果`) : h("p", { class: "muted", text: "沒有發現問題。" }),
+        haDatabaseSummary(app))),
+      h("p", { class: "muted", text: `要匯入，請回到 HA 備份按「檢查並匯入…」${job.params?.key_provided ? "，並重新輸入 HA 備份金鑰" : ""}。` })
+    ];
+  }
+
+  // The Odoo databases of a finished check in the job view (read only): the app's blocker sends there (review P-03).
+  function haDatabaseSummary(app) {
+    if (app.app_id !== "odoo" || !app.databases.length) return null;
+    return h("ul", { class: "ha-database-list", "aria-label": "HA 的 Odoo 資料庫" }, app.databases.map((db, index) => h("li", { dataset: { database: db.name } },
+      h("p", { class: "ha-database-name" }, h("strong", { text: db.name }), " ",
+        db.ok ? chip("可以搬", "ok", "check-circle-outline") : chip("不能搬", "fail", "close-circle-outline")),
+      haIssues(db).length ? checkList(haIssues(db, `db-${index}-`), `資料庫 ${db.name} 的檢查結果`) : null)));
+  }
+
+  // A finished conversion in the job view: the new backup, and the way on to restoring it.
+  function haConverted(job, result) {
+    const params = isObject(job.params) ? job.params : {};
+    const backupId = isString(result.backup_id) && BACKUP_ID_RE.test(result.backup_id) ? result.backup_id : null;
+    const info = fromHaOf(state.backups?.find(item => item.id === backupId)) || haInfo(result.ha_import,
+      { haId: params.ha_backup_id, apps: params.apps, odooDatabase: params.odoo_database, testMode: params.test_mode === true });
+    return {
+      body: [
+        h("p", { text: "HA 備份已轉換成這台的備份並驗證過，這台的應用還沒有任何變更。要把資料匯入，請還原這份備份。" }),
+        metadata([
+          ["備份", backupId ? link(backupId, ["backups", backupId], { class: "mono", dataset: { focus: "result-backup" } }) : "—"],
+          ["應用", info.apps.map(appName).join("、") || "—"],
+          info.odooDatabase ? ["Odoo 資料庫", info.odooDatabase] : null,
+          ["這只是測試", info.testMode ? "是（排程、寄信和工作流程已先關掉）" : "否"]
+        ])
+      ],
+      actions: backupId ? [
+        button("還原到這台…", () => haRestore(backupId, info), { primary: true, icon: "backup-restore", focus: "result-ha-restore" }),
+        link("查看備份", ["backups", backupId], { class: "button", dataset: { focus: "result-open" } })] : []
+    };
+  }
+
+  // The existing restore wizard takes a converted backup over at its preflight, with what is known about the import.
+  function haRestore(backupId, info) {
+    state.pendingWizard = { backupId, apps: info.apps, fromHa: info };
+    go(["restore", backupId]);
+  }
+
+  // An uploaded HA backup in 備份列表: HA's date and the backup's name, add-ons and whether HA encrypted it.
+  function haRow(ha) {
+    return h("tr", { dataset: { ha: ha.id } },
+      h("th", { scope: "row", "data-label": "備份" },
+        link(date(ha.date || ha.uploaded_at), ["ha", ha.id], {
+          class: "row-title", dataset: { focus: `open-${ha.id}` }, "aria-label": `查看 HA 備份「${haName(ha)}」的詳細資料`
+        }),
+        h("span", { class: "secondary note", text: haName(ha) }),
+        h("span", { class: "secondary mono", text: ha.id })),
+      h("td", { "data-label": "類型" }, h("span", { class: "chips" }, haChip())),
+      h("td", { "data-label": "應用", text: haAddonsText(ha) }),
+      h("td", { "data-label": "大小" }, h("span", { text: bytes(ha.size) })),
+      h("td", { "data-label": "加密與驗證" }, h("span", { class: "chips" }, haEncryptionChip(ha)),
+        h("span", { class: "secondary", text: haNeedsKey(ha) ? "匯入時需要 HA 備份金鑰" : "從 Home Assistant 上傳" })),
+      h("td", { "data-label": "操作" }, haActions(ha, true)));
+  }
+
+  function haActions(ha, compact) {
+    const active = activeJob();
+    const inUse = Boolean(active) && active.params?.ha_backup_id === ha.id;
+    const ready = haReady(ha).length > 0;
+    return h("div", { class: compact ? "row-actions" : "button-group" },
+      button("檢查並匯入…", () => openHaWizard(ha), {
+        small: compact, primary: !compact, icon: "backup-restore", disabled: !ready, focus: `ha-import-${ha.id}`,
+        label: `檢查並匯入 HA 備份「${haName(ha)}」`, title: ready ? undefined : "這份 HA 備份沒有這台已安裝、可以匯入的應用。"
+      }),
+      button(compact ? "刪除" : "刪除這份 HA 備份", () => deleteHaBackup(ha), {
+        small: compact, icon: "delete-outline", danger: true, disabled: inUse, focus: `ha-delete-${ha.id}`,
+        label: `刪除 HA 備份「${haName(ha)}」`, title: inUse ? "這份 HA 備份正被進行中的作業使用。" : undefined
+      }));
+  }
+
+  function viewHa(id) {
+    const back = backLink("返回備份列表", ["backups"]);
+    const title = viewTitle("HA 備份");
+    if (!HA_ID_RE.test(str(id))) return [back, title, notFound("找不到這份 HA 備份", "網址中的 HA 備份 ID 格式不正確。")];
+    if (state.haSupported === false) {
+      return [back, title, h("section", { class: "card" }, emptyState("alert-circle-outline", "這台設備還不能匯入 HA 備份", HA_UNSUPPORTED))];
+    }
+    if (!state.haBackups) return [back, title, pendingCard("backups", "正在載入 HA 備份…")];
+    const ha = haFind(id);
+    if (!ha) {
+      if (state.haWizard?.haId === id) closeHaWizard();
+      return [back, title, notFound("找不到這份 HA 備份", "它可能已被刪除，或不是這台設備上的 HA 備份。")];
+    }
+    if (state.haWizard?.haId === id) return haWizardView(ha, state.haWizard);
+    const head = viewTitle(haName(ha), "從 Home Assistant 上傳的備份。可以把其中的 Odoo、n8n 匯入這台的應用；匯入前會先檢查內容與版本。");
+    const info = h("section", { class: "card", "aria-labelledby": "ha-info" },
+      h("div", { class: "card-head" }, h("h3", { id: "ha-info", text: "備份資訊" }), h("span", { class: "chips" }, haChip(), haEncryptionChip(ha))),
+      h("div", { class: "card-body" }, metadata([
+        ["名稱", haName(ha)],
+        ["HA 建立時間", date(ha.date)],
+        ["加密", haNeedsKey(ha) ? "已加密：匯入時需要 HA 備份金鑰" : haEncrypted(ha) ? "部分加密：匯入時不需要 HA 備份金鑰" : "未加密"],
+        ["大小", bytes(ha.size)],
+        ["上傳時間", date(ha.uploaded_at)],
+        list(ha.folders).length ? ["資料夾", list(ha.folders).map(str).join("、")] : null,
+        isString(ha.filename) && ha.filename ? ["檔名", ha.filename, "mono"] : null,
+        ["HA 備份 ID", ha.id, "mono"]
+      ]),
+      haNeedsKey(ha) ? h("p", { class: "muted", text: HA_KEY_WHERE }) : null,
+      h("div", { class: "card-actions" }, haActions(ha, false))));
+    return [back, head, h("div", { class: "detail-grid" }, h("div", { class: "stack" }, info), h("div", { class: "stack" }, haAddonCard(ha)))];
+  }
+
+  // Each add-on and what this device does with it: import it into its app, wait for that app, or nothing.
+  function haAddonCard(ha) {
+    const apps = haApps(ha);
+    const row = (name, slug, version, target) => h("tr", { dataset: { addon: slug } },
+      h("th", { scope: "row", "data-label": "HA 附加元件" }, h("span", { text: name }),
+        slug && slug !== name ? h("span", { class: "secondary mono", text: slug }) : null),
+      h("td", { "data-label": "版本", text: version || "—" }),
+      h("td", { "data-label": "匯入到這台" }, target));
+    const rows = [
+      ...apps.map(app => row(app.addon, app.slug, app.version, app.installed
+        ? [h("span", { class: "chips" }, chip("可以匯入", "ok", "check-circle-outline")), h("span", { class: "secondary", text: `這台的「${app.name}」` })]
+        : [h("span", { class: "chips" }, chip("還沒安裝", "warn", "alert-outline")),
+          h("span", { class: "secondary", text: `「${app.name}」：這台還沒安裝，請先到「應用軟體」安裝同版本` })])),
+      ...haOtherAddons(ha).map(item => row(str(item.name) || str(item.slug), str(item.slug), str(item.version),
+        h("span", { class: "secondary", text: "這台沒有對應的應用" })))
+    ];
+    return h("section", { class: "card list-card", "aria-labelledby": "ha-addons" },
+      h("div", { class: "card-head" }, h("h3", { id: "ha-addons", text: "附加元件" })),
+      rows.length ? h("table", { class: "data ha-addons-table" }, h("caption", { class: "sr-only", text: "HA 備份中的附加元件" }),
+        h("thead", null, h("tr", null, ["HA 附加元件", "版本", "匯入到這台"].map(label => h("th", { scope: "col", text: label })))),
+        h("tbody", null, rows)) : null,
+      h("div", { class: "card-body" },
+        h("p", { class: "muted", text: "只有支援的 Odoo 與 n8n 附加元件能匯入這台；Home Assistant 本身和其他附加元件不會匯入。" }),
+        !apps.length ? infoNotice("這份 HA 備份沒有這台可以匯入的應用。")
+          : !apps.some(app => app.installed)
+            ? infoNotice("要匯入，請先到「應用軟體」安裝這台還沒有的應用（版本要和 HA 那邊相同），再回來按「檢查並匯入…」。", "warn", "alert-outline") : null));
+  }
+
+  function deleteHaBackup(ha) {
+    confirmDialog({
+      title: "刪除這份 HA 備份？",
+      body: [
+        h("p", { text: "只會刪除上傳到這台的 HA 備份檔；Home Assistant 那邊的備份不受影響，已經轉換好的備份也會保留。刪除後無法復原。" }),
+        metadata([["名稱", haName(ha)], ["HA 建立時間", date(ha.date)], ["附加元件", haAddonsText(ha)], ["大小", bytes(ha.size)], ["HA 備份 ID", ha.id, "mono"]])
+      ],
+      confirmLabel: "刪除 HA 備份", danger: true,
+      action: async () => {
+        try {
+          await call("ha-delete", { ha_backup_id: ha.id, confirm: true });
+        } catch (error) {
+          throw unsupported(error) ? new HelperError(HA_UNSUPPORTED, { code: "unsupported" }) : error;
+        }
+        state.haBackups = list(state.haBackups).filter(item => item.id !== ha.id);
+        if (state.haWizard?.haId === ha.id) closeHaWizard();
+        announce(`已刪除 HA 備份「${haName(ha)}」。`);
+        const route = currentRoute();
+        if (route.page === "ha" && route.arg === ha.id) go(["backups"]);
+        else render();
+        loadBackups();
+        loadStatus({ quiet: true });
+      }
+    });
+  }
+
+  // ------------------------------------------------------------------ HA import wizard
+
+  // 選擇應用 → 金鑰 (a chosen add-on is encrypted) → 檢查 (job) → 結果與選項 → 轉換 (job) → the restore wizard. The HA
+  // key is only `keyText` here and is sent only in the stdin field `key` of the two job starts (DESIGN §0, §6).
+  // `keyForced`: the engine asked for the key although the add-ons did not say so.
+  function newHaWizard(ha) {
+    const selected = new Set(haReady(ha).map(app => app.id));
+    return {
+      haId: ha.id, step: "apps", selected, keyNeeded: haNeedsKey(ha, [...selected]), keyForced: false, keyText: "",
+      keyError: null, check: null, odooDatabase: null, testMode: false, jobId: null, finishedJob: null, ui: null, cancelBusy: false,
+      requestId: null, signature: "", busy: false, error: null, notice: null, announced: ""
+    };
+  }
+
+  function openHaWizard(ha) {
+    state.haWizard = newHaWizard(ha);
+    const route = currentRoute();
+    if (route.page === "ha" && route.arg === ha.id) {
+      render();
+      $("view-heading")?.focus({ preventScroll: true });
+    } else go(["ha", ha.id]);
+  }
+
+  function closeHaWizard({ rerender = false } = {}) {
+    if (state.haWizard) state.haWizard.keyText = "";
+    state.haWizard = null;
+    if (rerender) {
+      render();
+      $("view-heading")?.focus({ preventScroll: true });
+    }
+  }
+
+  const haSteps = wizard => [["apps", "選擇應用"], wizard.keyNeeded ? ["key", "金鑰"] : null, ["check", "檢查"], ["options", "結果與選項"],
+    ["convert", "轉換"], ["restore", "還原"]].filter(Boolean);
+
+  function haWizardView(ha, wizard) {
+    const body = { apps: haStepApps, key: haStepKey, check: haStepJob, options: haStepOptions, convert: haStepJob }[wizard.step]?.(ha, wizard) || [];
+    const side = h("aside", { class: "card side-card", "aria-labelledby": "ha-side" },
+      h("h3", { id: "ha-side", text: "匯入怎麼進行" }),
+      h("ul", { class: "bullet-list" }, [
+        "檢查和轉換都不會停止或變更這台的應用，HA 備份檔本身也不會被改動。",
+        "會搬過來的有：資料、資料本身的金鑰（例如 n8n 的加密金鑰）和登入帳號。這台的網址、連接埠、資料庫密碼和設定檔保持不變。",
+        "兩邊的版本必須相同：Odoo 的每個模組、n8n 本身都要同一個版本，而且 HA 那台要是 x86（amd64）的設備。",
+        "HA 備份金鑰只留在這個頁面，交給檢查和轉換作業使用，用完就刪除，不會存到這台設備。",
+        "轉換完成後，要在還原步驟確認才會取代這台的資料；開始前會先自動保存一份還原前備份，失敗會自動回復。"
+      ].map(item => h("li", { text: item }))));
+    return [
+      backLink("返回備份列表", ["backups"]),
+      viewTitle("從 Home Assistant 匯入", `HA 備份「${haName(ha)}」（${date(ha.date)}）。`),
+      stepper(haSteps(wizard), wizard.step, "匯入步驟"),
+      h("div", { class: "form-layout" }, h("section", { class: "card form-card wizard-card" }, body), side)
+    ];
+  }
+
+  // 預設加密 is on and this device has no key yet: the engine refuses the conversion (no-device-key). Setting the key up
+  // leaves this page, and with it the HA key and the check (review P-07).
+  const haNoDeviceKey = () => Boolean(state.status) && !state.status.key && encryptByDefault();
+  const haDeviceKeyNotice = () => infoNotice("尚未建立加密金鑰。轉換好的備份會依「預設加密備份」用這台設備的金鑰加密，所以要先完成金鑰設定才能轉換。"
+    + "設定好後，請回到這份 HA 備份重新開始匯入。", "warn", "key-outline",
+    link("設定加密金鑰", ["keys"], { class: "button small", dataset: { focus: "ha-keys" } }));
+
+  const haActiveNotice = active => infoNotice(`目前有作業正在進行（${jobLabel(active)}），要等它完成後才能開始。`, "info", "progress-clock",
+    link("查看進度", ["jobs", active.id], { class: "button small", dataset: { focus: "ha-active-job" } }));
+
+  function haBack(wizard, step) {
+    if (wizard.busy) return;
+    Object.assign(wizard, { step, error: null, keyError: null });
+    render();
+    $("view-heading")?.focus({ preventScroll: true });
+  }
+
+  function haStepApps(ha, wizard) {
+    const apps = haApps(ha);
+    const others = haOtherAddons(ha);
+    const active = activeJob();
+    return [
+      h("h3", { class: "step-title", text: "選擇要匯入的應用" }),
+      h("p", { class: "muted", text: "勾選要搬到這台的應用。下一步會先檢查內容和版本，不會變更任何資料。" }),
+      wizard.notice ? infoNotice(wizard.notice) : null,
+      apps.length ? h("div", { class: "choices" }, apps.map(app => {
+        const id = `ha-app-${app.id}`;
+        return h("label", { class: app.installed ? "choice" : "choice is-disabled", htmlFor: id },
+          h("input", {
+            type: "checkbox", id, checked: app.installed && wizard.selected.has(app.id), disabled: !app.installed || wizard.busy,
+            "aria-describedby": `${id}-help`, dataset: { focus: id },
+            on: { change: event => {
+              if (event.target.checked) wizard.selected.add(app.id);
+              else wizard.selected.delete(app.id);
+              wizard.keyNeeded = wizard.keyForced || haNeedsKey(ha, [...wizard.selected]);
+              render();
+            } }
+          }),
+          h("span", { class: "choice-body" }, h("strong", { text: `這台的「${app.name}」` }),
+            h("small", { id: `${id}-help`, text: app.installed
+              ? `資料來自 HA 附加元件「${app.addon}」${app.version ? `（版本 ${app.version}）` : ""}。`
+              : "這台還沒安裝，請先到「應用軟體」安裝同版本。" })));
+      })) : infoNotice("這份 HA 備份沒有這台可以匯入的應用。", "warn", "alert-outline"),
+      others.length ? h("p", { class: "muted", text: `其他附加元件（${others.map(item => str(item.name) || str(item.slug)).join("、")}）這台沒有對應的應用，不會匯入。` }) : null,
+      haNoDeviceKey() ? haDeviceKeyNotice() : null,
+      active && !wizard.keyNeeded ? haActiveNotice(active) : null,
+      wizardError(wizard),
+      h("div", { class: "form-footer button-group" },
+        button("取消", () => closeHaWizard({ rerender: true }), { focus: "ha-cancel", disabled: wizard.busy }),
+        button(wizard.busy ? "正在開始…" : wizard.keyNeeded ? "下一步：金鑰" : "下一步：開始檢查", () => haAppsNext(wizard), {
+          primary: true, disabled: !wizard.selected.size || wizard.busy || (!wizard.keyNeeded && Boolean(active)), focus: "ha-apps-next"
+        }))
+    ];
+  }
+
+  function haAppsNext(wizard) {
+    if (!wizard.selected.size || wizard.busy) return;
+    Object.assign(wizard, { error: null, notice: null });
+    if (!wizard.keyNeeded) {
+      startHaCheck(wizard);
+      return;
+    }
+    wizard.step = "key";
+    render();
+    $("ha-key")?.focus();
+  }
+
+  function haStepKey(ha, wizard) {
+    const input = h("input", {
+      id: "ha-key", type: "text", class: "mono", autocomplete: "off", autocapitalize: "off", spellcheck: "false", maxLength: HA_KEY_MAX,
+      placeholder: "ABCD-EFGH-IJKL-MNOP-QRST-UVWX-YZ12", "aria-describedby": "ha-key-hint", disabled: wizard.busy, dataset: { focus: "ha-key" },
+      on: {
+        input: event => { wizard.keyText = event.target.value; },
+        keydown: event => {
+          if (event.key !== "Enter" || event.isComposing) return;
+          event.preventDefault();
+          haSubmitKey(wizard);
+        }
+      }
+    });
+    input.value = wizard.keyText;
+    const active = activeJob();
+    return [
+      h("h3", { class: "step-title", text: "輸入 HA 備份金鑰" }),
+      h("p", { class: "muted", text: "這份 HA 備份有加密，檢查和轉換都要用 HA 備份金鑰把它解開。" }),
+      h("div", { class: "field" }, h("label", { htmlFor: "ha-key", text: "HA 備份金鑰" }), input,
+        h("p", { id: "ha-key-hint", class: "hint", text: HA_KEY_WHERE })),
+      h("p", { class: "hint", text: "金鑰只留在這個頁面，交給這次的檢查和轉換使用，不會存到這台設備；離開這一頁或結束這次匯入後，就要重新輸入。" }),
+      wizard.keyError ? h("div", { class: "notice notice-error", role: "alert" }, icon("alert-circle-outline"), h("p", { text: wizard.keyError })) : null,
+      active ? haActiveNotice(active) : null,
+      wizardError(wizard),
+      h("div", { class: "form-footer button-group" },
+        button("上一步", () => haBack(wizard, "apps"), { focus: "ha-key-back", disabled: wizard.busy }),
+        button(wizard.busy ? "正在開始…" : "下一步：開始檢查", () => haSubmitKey(wizard), {
+          primary: true, icon: "key-outline", disabled: wizard.busy || Boolean(active), focus: "ha-key-next"
+        }))
+    ];
+  }
+
+  function haKeyProblem(text) {
+    const value = str(text);
+    if (!value.trim()) return "請輸入 HA 備份金鑰。";
+    if (value.length > HA_KEY_MAX) return "內容太長，不像是 HA 備份金鑰。";
+    if (CONTROL_RE.test(value)) return "金鑰不能包含換行或其他控制字元。";
+    return null;
+  }
+
+  // HA uses the key exactly as typed (HA-FACTS §1.8): spaces around a key in HA's own format can only come from copying
+  // it, any other password is sent as it is.
+  const haKeyValue = text => (HA_KEY_RE.test(str(text).trim()) ? str(text).trim() : str(text));
+  const haKey = wizard => (wizard.keyNeeded && str(wizard.keyText).trim() ? haKeyValue(wizard.keyText) : null);
+
+  function haSubmitKey(wizard) {
+    if (wizard.busy) return;
+    wizard.keyError = haKeyProblem(wizard.keyText);
+    if (wizard.keyError) {
+      render();
+      $("ha-key")?.focus();
+      return;
+    }
+    startHaCheck(wizard);
+  }
+
+  // A retry of the same start reuses its request id, so the helper answers with the job it already started (CONTRACT §7).
+  function haRequestId(wizard, intent) {
+    const signature = JSON.stringify(intent);
+    if (!wizard.requestId || wizard.signature !== signature) Object.assign(wizard, { requestId: requestId(), signature });
+    return wizard.requestId;
+  }
+
+  // A refusal of a job start: a key problem goes back to the key step, an engine without HA imports says so.
+  function haStartFailed(wizard, error) {
+    if (["key-required", "wrong-key"].includes(error.code)) Object.assign(wizard, { keyNeeded: true, keyForced: true, step: "key", keyError: error.message });
+    else wizard.error = unsupported(error) ? new HelperError(HA_UNSUPPORTED, { code: "unsupported" }) : error;
+  }
+
+  async function startHaCheck(wizard) {
+    if (wizard.busy || state.haWizard !== wizard) return;
+    const active = activeJob();
+    if (active) {
+      wizard.error = new HelperError("已有作業正在進行，請等它完成後再檢查。", { code: "busy", details: { job_id: active.id } });
+      render();
+      return;
+    }
+    const apps = [...wizard.selected];
+    const key = haKey(wizard);
+    const request = { ha_backup_id: wizard.haId, apps, request_id: haRequestId(wizard, ["check", wizard.haId, apps, Boolean(key)]) };
+    if (key) request.key = key;
+    Object.assign(wizard, { busy: true, error: null, notice: null, keyError: null });
+    render();
+    try {
+      const data = await call("ha-check-start", request);
+      requireShape(isString(data.job_id) && JOB_ID_RE.test(data.job_id), "作業資訊");
+      if (state.haWizard !== wizard) return;
+      Object.assign(wizard, { requestId: null, signature: "", step: "check", jobId: data.job_id, check: null });
+      announce(data.deduplicated ? "這個檢查要求先前已送出，正在顯示同一個作業。" : "已開始檢查 HA 備份。");
+      watchJob(data.job_id);
+      loadStatus({ quiet: true });
+    } catch (error) {
+      if (state.haWizard === wizard) haStartFailed(wizard, error);
+    } finally {
+      if (state.haWizard === wizard) {
+        wizard.busy = false;
+        render();
+        if (wizard.step === "key" && wizard.keyError) $("ha-key")?.focus();
+        else $("view-heading")?.focus({ preventScroll: true });
+      }
+    }
+  }
+
+  // 檢查 and 轉換 follow their job on the wizard's own page: leaving it would drop the HA key.
+  function haStepJob(ha, wizard) {
+    const convert = wizard.step === "convert";
+    const entry = wizard.jobId ? state.jobCache.get(wizard.jobId) : null;
+    const job = entry?.job || null;
+    const ended = !job || TERMINAL.has(job.state);
+    return [
+      h("h3", { class: "step-title", text: convert ? "轉換成這台的備份" : "檢查 HA 備份" }),
+      h("p", { class: "muted", text: convert
+        ? "正在把 HA 的資料轉成這台的備份格式，完成並驗證後會帶你到還原步驟。這台的應用照常運作。"
+        : "正在解開 HA 備份，檢查內容、設備架構和版本是否和這台相符。這台的應用照常運作。" }),
+      wizard.jobId ? haJobBlock(wizard) : null,
+      entry?.error && !job ? stableNotice(`ha-job-${wizard.jobId}`, entry.error, { live: false }) : null,
+      wizardError(wizard),
+      ended && (wizard.error || !wizard.jobId) ? h("div", { class: "form-footer button-group" },
+        button("上一步", () => haBack(wizard, convert ? "options" : "apps"), { focus: "ha-job-back", disabled: wizard.busy }),
+        button(convert ? "重新轉換…" : "重新檢查", () => (convert ? confirmHaConvert(ha, wizard) : startHaCheck(wizard)), {
+          primary: true, icon: "refresh", disabled: wizard.busy, focus: "ha-job-retry"
+        })) : null
+    ];
+  }
+
+  // The job's phases (labels from its record) and progress; built once per job and updated on every poll.
+  function haJobBlock(wizard) {
+    if (!wizard.ui || wizard.ui.id !== wizard.jobId) {
+      const nodes = {
+        phases: h("ol", { class: "phases", "aria-label": "作業階段" }),
+        percent: h("span", { class: "progress-percent" }),
+        message: h("span", { class: "progress-message" }),
+        progress: h("progress", { id: "ha-job-progress", max: 100, value: 0, "aria-labelledby": "ha-job-progress-label" }),
+        cancel: button("取消作業", () => cancelHaJob(wizard), { icon: "stop-circle-outline", focus: "ha-job-cancel" })
+      };
+      wizard.ui = { id: wizard.jobId, nodes, root: h("div", { class: "ha-job" }, nodes.phases,
+        h("div", { class: "progress-block" },
+          h("p", { id: "ha-job-progress-label", class: "progress-label" }, nodes.percent, nodes.message), nodes.progress),
+        h("div", { class: "button-group job-actions" }, nodes.cancel)) };
+    }
+    updateHaJobUi(wizard);
+    return wizard.ui.root;
+  }
+
+  function updateHaJobUi(wizard) {
+    const ui = wizard.ui;
+    if (!ui) return;
+    const job = state.jobCache.get(ui.id)?.job;
+    const percent = job ? clamp(Math.round(Number(job.progress?.percent) || 0), 0, 100) : 0;
+    fill(ui.nodes.phases, ...(job ? job.phases.map(phaseItem) : []));
+    ui.nodes.progress.value = percent;
+    text(ui.nodes.percent, `${percent}%`);
+    text(ui.nodes.message, job ? str(job.progress?.message) || JOB_STATES[job.state] || "" : "正在載入作業狀態…");
+    ui.nodes.cancel.hidden = !job || !ACTIVE.has(job.state) || !job.cancellable;
+    ui.nodes.cancel.disabled = wizard.cancelBusy;
+  }
+
+  function cancelHaJob(wizard) {
+    const id = wizard.jobId;
+    if (!id) return;
+    confirmDialog({
+      title: wizard.step === "convert" ? "取消轉換？" : "取消檢查？",
+      body: [h("p", { text: "作業會在下一個安全的檢查點停止。這台的應用不受影響，也不會建立備份。" })],
+      confirmLabel: "取消作業", cancelLabel: "繼續執行",
+      action: async () => {
+        wizard.cancelBusy = true;
+        updateHaJobUi(wizard);
+        try {
+          await call("job-cancel", { job_id: id });
+        } finally {
+          wizard.cancelBusy = false;
+          try {
+            const entry = await fetchJob(id);
+            if (TERMINAL.has(entry.job.state)) {
+              if (state.watch.id === id) stopWatch();
+              jobFinished(entry.job);
+            } else watchJob(id);
+          } catch { /* the next poll shows it */ }
+          updateHaJobUi(wizard);
+        }
+      }
+    });
+  }
+
+  // The wizard's job ended (from jobFinished): a check leads to its results, a conversion to the restore wizard; a key
+  // problem goes back to the key step with the engine's words.
+  function haJobFinished(job) {
+    const wizard = state.haWizard;
+    if (!wizard || wizard.jobId !== job.id || wizard.finishedJob === job.id) return;
+    wizard.finishedJob = job.id;
+    const convert = wizard.step === "convert";
+    if (job.state === "succeeded" && convert) {
+      haHandOver(wizard, job);
+      return;
+    }
+    const error = isObject(job.error)
+      ? new HelperError(str(job.error.message) || "作業沒有完成。", { code: str(job.error.code), details: job.error.details }) : null;
+    if (job.state === "succeeded") {
+      const check = haCheckOf(job.result);
+      if (check) applyHaCheck(wizard, check);
+      else wizard.error = new HelperError("檢查結果的格式不正確，請重新檢查。", { code: "bad-output" });
+    } else if (job.state === "cancelled") {
+      Object.assign(wizard, { step: convert ? "options" : "apps", jobId: null, notice: convert ? "已取消轉換，沒有建立備份。" : "已取消檢查。" });
+    } else if (error && ["key-required", "wrong-key"].includes(error.code)) {
+      Object.assign(wizard, { keyNeeded: true, keyForced: true, step: "key", jobId: null, keyError: error.message });
+    } else {
+      wizard.error = error || new HelperError(`${convert ? "轉換" : "檢查"}沒有完成（${JOB_STATES[job.state] || str(job.state)}）。`, { code: str(job.state) });
+    }
+    render();
+    if (wizard.step === "key") $("ha-key")?.focus();
+    else $("view-heading")?.focus({ preventScroll: true });
+  }
+
+  // A new check replaces the last one; a chosen Odoo database stays chosen while it still passes, and the only one that
+  // passes is chosen for the administrator.
+  function applyHaCheck(wizard, apps) {
+    const odoo = apps.find(app => app.app_id === "odoo");
+    const usable = odoo?.ok ? odoo.databases.filter(db => db.ok) : [];
+    Object.assign(wizard, { check: apps, step: "options",
+      odooDatabase: usable.some(db => db.name === wizard.odooDatabase) ? wizard.odooDatabase : usable.length === 1 ? usable[0].name : null });
+  }
+
+  const haChosen = wizard => [...wizard.selected].filter(id => list(wizard.check).some(app => app.app_id === id && haImportable(app)));
+
+  function haStepOptions(ha, wizard) {
+    const apps = list(wizard.check).filter(app => wizard.selected.has(app.app_id));
+    const unanswered = [...wizard.selected].filter(id => !apps.some(app => app.app_id === id));
+    const blocked = !apps.length || unanswered.length > 0 || !apps.every(haImportable);
+    const needDatabase = !blocked && apps.some(app => app.app_id === "odoo") && !wizard.odooDatabase;
+    const active = activeJob();
+    return [
+      h("h3", { class: "step-title", text: "檢查結果與選項" }),
+      h("p", { class: "muted", text: "以下是剛才檢查的結果，沒有變更任何資料。" }),
+      wizard.notice ? infoNotice(wizard.notice) : null,
+      h("div", { class: "app-preflight-list" }, apps.map(app => haAppCard(ha, wizard, app))),
+      unanswered.length ? infoNotice(`檢查結果沒有包含${quoted(unanswered.map(appName))}，請重新檢查。`, "fail", "close-circle-outline") : null,
+      infoNotice(HA_TRUST, "info", "shield-check-outline"),
+      h("label", { class: "choice confirm-choice", htmlFor: "ha-test-mode" },
+        h("input", {
+          type: "checkbox", id: "ha-test-mode", checked: wizard.testMode, disabled: wizard.busy, "aria-describedby": "ha-test-mode-help",
+          dataset: { focus: "ha-test-mode" }, on: { change: event => { wizard.testMode = event.target.checked; render(); } }
+        }),
+        h("span", { class: "choice-body" }, h("strong", { text: "這只是測試（先關掉排程、寄信和工作流程）" }),
+          h("small", { id: "ha-test-mode-help", text: "勾選時，搬過來的 n8n 工作流程都先停用，Odoo 不寄信也不跑排程，HA 那邊可以照常使用；正式搬家請不要勾。" }))),
+      blocked ? infoNotice(`有應用沒有通過檢查，無法轉換。請依上面的說明處理後按「重新檢查」${apps.some(haImportable)
+        ? "，或按「上一步」取消勾選沒有通過的應用，只匯入其他應用" : ""}。`, "fail", "close-circle-outline") : null,
+      needDatabase ? h("p", { class: "hint", text: "請先選擇要搬過來的 Odoo 資料庫。" }) : null,
+      haNoDeviceKey() ? haDeviceKeyNotice() : null,
+      active ? haActiveNotice(active) : null,
+      wizardError(wizard),
+      h("div", { class: "form-footer button-group" },
+        button("上一步", () => haBack(wizard, "apps"), { focus: "ha-options-back", disabled: wizard.busy }),
+        button("重新檢查", () => startHaCheck(wizard), { icon: "refresh", focus: "ha-recheck", disabled: wizard.busy || Boolean(active) }),
+        button("下一步：轉換…", () => confirmHaConvert(ha, wizard), {
+          primary: true, disabled: blocked || needDatabase || haNoDeviceKey() || wizard.busy || Boolean(active), focus: "ha-convert"
+        }))
+    ];
+  }
+
+  function haAppCard(ha, wizard, app) {
+    const name = haApps(ha).find(item => item.id === app.app_id)?.name || appName(app.app_id);
+    const importable = haImportable(app);
+    return h("article", { class: importable ? "app-preflight" : "app-preflight is-blocked", "aria-labelledby": `ha-check-${app.app_id}`,
+      dataset: { haApp: app.app_id } },
+    h("div", { class: "app-preflight-head" },
+      h("strong", { id: `ha-check-${app.app_id}`, class: "app-select-name", text: name }),
+      h("span", { class: "chips" }, importable ? chip("可以匯入", "ok", "check-circle-outline") : chip("無法匯入", "fail", "close-circle-outline"))),
+    h("p", { class: "muted", text: haVersionText(app) }),
+    haIssues(app).length ? checkList(haIssues(app), `${name} 的檢查結果`) : h("p", { class: "muted", text: "沒有發現問題。" }),
+    app.app_id === "odoo" ? haOdooDatabases(wizard, app) : null,
+    app.n8n ? haN8nFacts(app.n8n) : null);
+  }
+
+  const moduleText = item => {
+    const from = str(item.from);
+    const extra = [item.version ? `版本 ${str(item.version)}` : null, from ? `來自 ${HA_MODULE_FROM[from] || from}` : null].filter(Boolean).join("，");
+    return extra ? `${item.name}（${extra}）` : item.name;
+  };
+
+  // n8n compares its own version; Odoo compares every installed module, so its add-on version and this device's Odoo
+  // release are different kinds of numbers and are not compared (review P-09, UI-1).
+  function haVersionText(app) {
+    const ha = str(app.version) || "—";
+    const here = str(app.target_version) || "—";
+    if (app.app_id !== "odoo") return `HA 的版本 ${ha}，這台的版本 ${here}。`;
+    const verdict = haImportable(app) ? "，模組版本相同" : app.databases.length ? "，結果見下方各資料庫" : "的版本";
+    return `HA 附加元件版本 ${ha}，這台的 Odoo ${here}；Odoo 逐一比對每個模組${verdict}。`;
+  }
+
+  // Odoo: one database moves and replaces this device's (DESIGN §0); its counts help to pick the right one.
+  function haOdooDatabases(wizard, app) {
+    const databases = app.databases;
+    if (!databases.length) return h("p", { class: "muted", text: "HA 的 Odoo 裡沒有找到可以搬的資料庫。" });
+    return h("fieldset", { class: "form-section ha-databases" },
+      h("legend", { text: "要搬過來的 Odoo 資料庫" }),
+      h("p", { class: "muted", text: databases.length > 1
+        ? "HA 的 Odoo 有多個資料庫，一次只能搬一個；選好的資料庫會取代這台 Odoo 的資料庫。"
+        : "這個資料庫會取代這台 Odoo 的資料庫。" }),
+      h("div", { class: "choices" }, databases.map((db, index) => {
+        const id = `ha-db-${index}`;
+        const usable = db.ok && app.ok;
+        const modules = list(db.custom_modules).filter(item => isObject(item) && isString(item.name));
+        return h("div", { class: "ha-database", dataset: { database: db.name } },
+          h("label", { class: usable ? "choice" : "choice is-disabled", htmlFor: id },
+            h("input", {
+              type: "radio", id, name: "ha-odoo-database", value: db.name, checked: wizard.odooDatabase === db.name,
+              disabled: !usable || wizard.busy, "aria-describedby": `${id}-help`, dataset: { focus: id },
+              on: { change: event => { if (event.target.checked) { wizard.odooDatabase = db.name; render(); } } }
+            }),
+            h("span", { class: "choice-body" }, h("strong", { text: db.name }),
+              h("small", { id: `${id}-help`, text: `聯絡人 ${num(db.partners)} · 可登入的使用者 ${num(db.users)} · 附件 ${num(db.attachments)}（${bytes(db.attachment_bytes)}）`
+                + ` · 已安裝模組 ${num(db.modules)} · 大小 ${bytes(db.size)}` }),
+              h("small", { text: `啟用中的排程動作 ${num(db.crons_active)} 個 · 寄信伺服器 ${num(db.mail_servers_active)} 個` }),
+              h("small", { text: modules.length ? `會一起複製的自訂模組：${modules.map(moduleText).join("、")}` : "沒有要另外複製的自訂模組。" }))),
+          haIssues(db).length ? checkList(haIssues(db, `db-${index}-`), `資料庫 ${db.name} 的檢查結果`) : null);
+      })));
+  }
+
+  // n8n: everything moves together (DESIGN §0); its owner account logs in on this device afterwards.
+  function haN8nFacts(n8n) {
+    const packages = list(n8n.community_packages).map(item => (isString(item) ? item
+      : isObject(item) ? [str(item.name), str(item.version)].filter(Boolean).join(" ") : "")).filter(Boolean);
+    const workflows = haWorkflows(n8n.workflows_to_fix);
+    return [
+      metadata([
+        ["管理者帳號", str(n8n.owner_email) || "—"],
+        ["工作流程", `${num(n8n.workflows)} 個（啟用中 ${num(n8n.workflows_active)} 個）`],
+        ["憑證", `${num(n8n.credentials)} 個`],
+        ["執行紀錄", `${num(n8n.executions)} 筆`],
+        ["使用者", `${num(n8n.users)} 位`],
+        ["社群節點", packages.length ? packages.join("、") : "沒有"]
+      ]),
+      h("p", { class: "muted", text: "匯入後，用 HA 那邊 n8n 的帳號和密碼登入這台的 n8n。" }),
+      workflows.length ? [h("p", { text: `有 ${workflows.length} 個工作流程用到 HA 那邊的位置或功能，搬過來後可能需要修改：` }),
+        workflowList(workflows, "可能需要修改的 n8n 工作流程")] : null
+    ];
+  }
+
+  function confirmHaConvert(ha, wizard) {
+    const apps = haChosen(wizard);
+    if (!apps.length || wizard.busy) return;
+    const database = apps.includes("odoo") ? wizard.odooDatabase : null;
+    const names = apps.map(id => `「${haApps(ha).find(app => app.id === id)?.name || appName(id)}」`).join("、");
+    confirmDialog({
+      title: "開始轉換 HA 備份？",
+      body: [
+        h("p", { text: `會把 HA 備份「${haName(ha)}」中 ${names} 的資料轉成這台的備份格式，存成一份新的備份。` }),
+        h("ul", { class: "bullet-list" },
+          h("li", { text: "轉換時這台的應用照常運作，不會停機，也不會變更任何資料。" }),
+          h("li", { text: encryptByDefault() ? "新的備份會以這台設備的金鑰加密（依「預設加密備份」）。" : "依「預設加密備份」的設定，新的備份不會加密。" }),
+          h("li", { text: "轉換完成後會帶你到還原步驟；要真的取代這台的資料，還要在那裡再確認一次。" })),
+        metadata([["應用", names], database ? ["Odoo 資料庫", database] : null, ["這只是測試", wizard.testMode ? "是：排程、寄信和工作流程會先關掉" : "否"]])
+      ],
+      confirmLabel: "開始轉換",
+      action: () => startHaConvert(wizard)
+    });
+  }
+
+  // Runs inside the confirmation: a refusal stays in the dialog, a key problem closes it for the key step.
+  async function startHaConvert(wizard) {
+    if (state.haWizard !== wizard) return;
+    const active = activeJob();
+    if (active) throw new HelperError("已有作業正在進行，請等它完成後再轉換。", { code: "busy", details: { job_id: active.id } });
+    const apps = haChosen(wizard);
+    const odoo = apps.includes("odoo");
+    const key = haKey(wizard);
+    const request = {
+      ha_backup_id: wizard.haId, apps, test_mode: wizard.testMode, confirm: true,
+      request_id: haRequestId(wizard, ["convert", wizard.haId, apps, odoo ? wizard.odooDatabase : null, wizard.testMode, Boolean(key)])
+    };
+    if (odoo) request.odoo_database = wizard.odooDatabase;
+    if (key) request.key = key;
+    let data;
+    try {
+      data = await call("ha-convert-start", request);
+    } catch (error) {
+      if (unsupported(error)) throw new HelperError(HA_UNSUPPORTED, { code: "unsupported" });
+      if (!["key-required", "wrong-key"].includes(error.code) || state.haWizard !== wizard) throw error;
+      haStartFailed(wizard, error);
+      render();
+      // The dialog closes on return: the focus goes to the key field, not to the button that went away (review P-08).
+      returnFocusTo($("ha-key"));
+      return;
+    }
+    requireShape(isString(data.job_id) && JOB_ID_RE.test(data.job_id), "作業資訊");
+    if (state.haWizard !== wizard) return;
+    Object.assign(wizard, { requestId: null, signature: "", step: "convert", jobId: data.job_id, error: null, notice: null });
+    announce(data.deduplicated ? "這個轉換要求先前已送出，正在顯示同一個作業。" : "已開始轉換 HA 備份。");
+    watchJob(data.job_id);
+    loadStatus({ quiet: true });
+    render();
+  }
+
+  // The converted backup goes to the existing restore wizard at its preflight, with the import's facts for its HA
+  // notice and result; the wizard, and with it the HA key, is closed.
+  function haHandOver(wizard, job) {
+    const result = isObject(job.result) ? job.result : {};
+    const backupId = isString(result.backup_id) && BACKUP_ID_RE.test(result.backup_id) ? result.backup_id : null;
+    if (!backupId) {
+      wizard.error = new HelperError("轉換已完成，但作業沒有回報新的備份。請到「備份列表」找標示「由 HA 轉換」的備份，再按「還原」。", { code: "bad-output" });
+      render();
+      return;
+    }
+    const apps = haChosen(wizard);
+    const n8n = list(wizard.check).find(app => app.app_id === "n8n");
+    const info = haInfo(result.ha_import, { haId: wizard.haId, apps, odooDatabase: apps.includes("odoo") ? wizard.odooDatabase : null,
+      testMode: wizard.testMode, workflows: haWorkflows(n8n?.n8n?.workflows_to_fix) });
+    closeHaWizard();
+    announce("HA 備份已轉換成這台的備份，接著檢查能否還原。");
+    haRestore(backupId, info);
+  }
+
   // ------------------------------------------------------------------ job progress & result
 
   function viewJob(id) {
@@ -3121,8 +4163,8 @@
     let steps;
     if (wizard) steps = wizardSteps(wizard);
     else {
-      const uploaded = state.backups?.find(item => item.id === job.params?.backup_id)?.type === "uploaded";
-      steps = uploaded ? [["file", "選擇檔案"], ["upload", "上傳"]] : [["source", "選擇備份"]];
+      const listed = state.backups?.find(item => item.id === job.params?.backup_id);
+      steps = listed?.type === "uploaded" ? [["file", "選擇檔案"], ["upload", "上傳"]] : [["source", fromHaOf(listed) ? "從 HA 轉換" : "選擇備份"]];
       if (job.params?.key_provided) steps.push(["key", "金鑰"]);
       steps.push(["preflight", "預檢"], ["confirm", "確認"], ["progress", "進度"], ["result", "結果"]);
     }
@@ -3140,6 +4182,7 @@
 
   function jobParams(job) {
     const params = isObject(job.params) ? job.params : {};
+    if (haJobKind(job)) return metadata(haJobParams(job, params));
     const backupId = isString(params.backup_id) && BACKUP_ID_RE.test(params.backup_id) ? params.backup_id : null;
     const schedule = scheduleOf(job);
     // A scheduled run follows 預設加密備份 as it was when the run started; nobody chose it for this backup.
@@ -3202,6 +4245,8 @@
     // 排程備份: the apps a scheduled run left out (not deployed, reporting problems or gone from the catalog).
     const scheduled = Boolean(scheduleOf(job));
     const skipped = scheduled ? skippedApps(result) : [];
+    // A check or conversion of an HA backup (`params.source` "ha"): it never stops or changes this device's apps.
+    const ha = haJobKind(job);
     const body = [];
     const actions = [];
     let title = "作業結束";
@@ -3214,7 +4259,8 @@
     } else if (job.state === "succeeded") {
       tone = "ok";
       glyph = "check-circle";
-      title = scheduled ? "排程備份完成" : { backup: "備份完成", restore: "還原完成", verify: "驗證完成", export: "未加密副本已建立" }[job.type];
+      title = scheduled ? "排程備份完成" : ha ? { check: "HA 備份檢查完成", convert: "HA 備份已轉換" }[ha]
+        : { backup: "備份完成", restore: "還原完成", verify: "驗證完成", export: "未加密副本已建立" }[job.type];
     } else if (job.state === "rolled-back") {
       tone = "warn";
       glyph = "backup-restore";
@@ -3222,7 +4268,7 @@
     } else if (job.state === "failed") {
       tone = "fail";
       glyph = "close-circle-outline";
-      title = job.type === "export" ? "建立未加密副本失敗" : scheduled ? "排程備份失敗" : `${JOB_TYPES[job.type]}失敗`;
+      title = job.type === "export" ? "建立未加密副本失敗" : scheduled ? "排程備份失敗" : ha ? `${HA_JOB_TITLES[ha]}失敗` : `${JOB_TYPES[job.type]}失敗`;
     } else if (job.state === "interrupted") {
       tone = "warn";
       glyph = "alert-outline";
@@ -3232,7 +4278,13 @@
       title = "作業已取消";
     }
 
-    if (job.type === "backup" && job.state === "succeeded" && result) {
+    if (ha === "check" && job.state === "succeeded" && result) {
+      body.push(...haCheckResult(job, result));
+    } else if (ha === "convert" && job.state === "succeeded" && result) {
+      const converted = haConverted(job, result);
+      body.push(...converted.body);
+      actions.push(...converted.actions);
+    } else if (job.type === "backup" && job.state === "succeeded" && result) {
       const createdId = isString(result.backup_id) && BACKUP_ID_RE.test(result.backup_id) ? result.backup_id : null;
       const encrypted = result.encrypted !== false;
       const deleted = list(result.retention_deleted).filter(isString);
@@ -3274,6 +4326,9 @@
       }
     } else if (restore && job.state === "succeeded") {
       body.push(h("p", { text: "所選應用已還原並啟動，健康檢查與資料核對結果如下。" }));
+      // 從 HA 匯入: what to do next comes first (DESIGN §0: stop the HA add-on, MCP logins, workflows to fix).
+      const fromHa = restoreFromHa(job);
+      if (fromHa) body.push(...haAfterImport(fromHa, list(params.apps).filter(isString)));
       if (result?.safety_skipped) {
         body.push(infoNotice("這次還原沒有建立還原前備份（無法建立，而你還原的是還原前備份，或已選擇直接還原）。", "warn", "alert-outline"));
       }
@@ -3327,8 +4382,10 @@
       }
     }
     if (job.state === "interrupted") {
-      const steps = [h("li", { text: "到「總覽」確認各應用的狀態是否為「執行中」。" })];
-      if (restore) {
+      const steps = ha ? [] : [h("li", { text: "到「總覽」確認各應用的狀態是否為「執行中」。" })];
+      if (ha) {
+        steps.push(h("li", { text: "檢查與轉換 HA 備份都不會停止或變更這台的應用，應用不受影響；中斷的轉換也不會留下備份。請回到 HA 備份，重新「檢查並匯入」。" }));
+      } else if (restore) {
         steps.push(h("li", { text: finished
           ? "還原已完成並通過檢查，作業在最後的整理步驟中斷；應用不需要再次還原。若應用仍無法正常運作，再聯絡系統管理員。"
           : safetyId && touched
@@ -3358,8 +4415,12 @@
       body.push(h("h4", { class: "subheading", text: "接下來怎麼做" }), h("ol", { class: "guidance" }, steps));
     }
     if (job.state === "cancelled") {
-      body.push(h("p", { text: job.type === "backup" ? "沒有建立備份；應用的寫入服務已恢復。" : restore ? "還原在變更任何資料前已取消。" : "驗證已取消。" }));
+      body.push(h("p", { text: ha ? "已取消；沒有建立備份，也沒有變更這台的任何資料。"
+        : job.type === "backup" ? "沒有建立備份；應用的寫入服務已恢復。" : restore ? "還原在變更任何資料前已取消。" : "驗證已取消。" }));
     }
+    // Every HA job result leads back to its HA backup (a new check and import start there).
+    const haBack = ha ? haBackAction(job, job.state !== "succeeded" || ha === "check") : null;
+    if (haBack) actions.push(haBack);
     if (restore && result) {
       if (safetyId) {
         body.push(metadata([["還原前備份", link(safetyId, ["backups", safetyId], { class: "mono", dataset: { focus: "result-safety" } })]]));
@@ -3402,7 +4463,7 @@
       const primary = !actions.some(item => item.classList?.contains("primary"));
       actions.push(link("查看總覽", ["overview"], { class: primary ? "button primary" : "button", dataset: { focus: "result-overview" } }));
     }
-    if (job.state === "interrupted" && job.type === "backup") {
+    if (job.state === "interrupted" && job.type === "backup" && !ha) {
       actions.push(scheduled ? link("前往排程備份", ["schedule"], { class: "button", dataset: { focus: "result-schedule" } })
         : link("重新建立備份", ["create"], { class: "button", dataset: { focus: "result-create" } }));
     }
@@ -5606,10 +6667,11 @@
   function jobRow(job) {
     const params = isObject(job.params) ? job.params : {};
     const schedule = scheduleOf(job);
+    const ha = haJobKind(job);
     const skipped = partialRun(job) ? skippedApps(job.result) : [];
     const summary = [
       list(params.apps).length ? list(params.apps).map(id => appName(str(id))).join("、") : null,
-      isString(params.backup_id) ? `備份 ${params.backup_id}` : null,
+      ha ? haBackupText(params.ha_backup_id) : isString(params.backup_id) ? `備份 ${params.backup_id}` : null,
       schedule ? TRIGGER_TEXT[schedule.trigger] || null : null
     ].filter(Boolean).join(" · ");
     const outcome = isObject(job.error) ? str(job.error.message)
@@ -5619,7 +6681,7 @@
       h("th", { scope: "row", "data-label": "時間" }, link(date(job.created), ["jobs", job.id], {
         class: "row-title", dataset: { focus: `job-${job.id}` }, "aria-label": `查看 ${date(job.created)} 的${jobLabel(job)}`
       }), h("span", { class: "secondary mono", text: job.id })),
-      h("td", { "data-label": "作業", text: schedule ? "排程備份" : `${JOB_TYPES[job.type]}` }),
+      h("td", { "data-label": "作業", text: schedule ? "排程備份" : HA_JOB_TITLES[ha] || `${JOB_TYPES[job.type]}` }),
       h("td", { "data-label": "狀態" }, runStateChip(job)),
       h("td", { "data-label": "內容", text: summary || "—" }),
       h("td", { "data-label": "結果", text: outcome }));
@@ -5782,14 +6844,19 @@
     box.hidden = !message;
     text($(`${prefix}-error-message`), message);
     box.querySelector(".dialog-error-actions")?.remove();
-    // A busy refusal links to the blocking job, as errorNotice does elsewhere (review finding F12).
+    // A busy refusal links to the blocking job, as errorNotice does elsewhere (review finding F12); a refusal for want
+    // of this device's key links to 加密金鑰 (review P-07).
+    const close = () => { const dialog = box.closest("dialog"); if (dialog?.open) dialog.close(); };
     const jobId = error?.details?.job_id;
-    if (error?.code === "busy" && isString(jobId) && JOB_ID_RE.test(jobId)) {
-      box.append(h("div", { class: "button-group dialog-error-actions" }, link("查看進行中的作業", ["jobs", jobId], {
-        class: "button small", dataset: { focus: "dialog-busy-job" },
-        on: { click: () => { const dialog = box.closest("dialog"); if (dialog?.open) dialog.close(); } }
-      })));
-    }
+    const action = error?.code === "busy" && isString(jobId) && JOB_ID_RE.test(jobId)
+      ? link("查看進行中的作業", ["jobs", jobId], { class: "button small", dataset: { focus: "dialog-busy-job" }, on: { click: close } })
+      : error?.code === "no-device-key" ? link("前往設定加密金鑰", ["keys"], { class: "button small", dataset: { focus: "dialog-keys" }, on: { click: close } }) : null;
+    if (action) box.append(h("div", { class: "button-group dialog-error-actions" }, action));
+  }
+
+  // Where the open confirmation puts the focus when it closes, instead of the control that opened it (review P-08).
+  function returnFocusTo(element) {
+    if (confirmState && element) confirmState.trigger = element;
   }
 
   // `acknowledge`: the text of a checkbox the confirm button waits for (an explicit decision, e.g. plain text).
@@ -5910,7 +6977,7 @@
     if (Date.now() - Math.max(state.statusAt, state.statusTried) >= STATUS_POLL_MS) {
       loadStatus({ quiet: true });
       const route = currentRoute();
-      if (["overview", "backups"].includes(route.page)) loadBackups();
+      if (["overview", "backups", "ha"].includes(route.page)) loadBackups();
       // The schedule's last run, waiting slot and checks change on their own (the timer); the draft is kept.
       if (route.page === "schedule" && state.schedule.data) loadSchedule({ quiet: true });
     }
@@ -5966,9 +7033,12 @@
           keyDialogState = null;
         } else confirmState = null;
         const trigger = current?.trigger;
-        if (trigger?.isConnected && !trigger.disabled) trigger.focus({ preventScroll: true });
-        else if (trigger?.dataset?.focus) document.querySelector(`[data-focus="${CSS.escape(trigger.dataset.focus)}"]`)?.focus({ preventScroll: true });
-        else $("view-heading")?.focus({ preventScroll: true });
+        const target = trigger?.isConnected ? trigger
+          : trigger?.dataset?.focus ? document.querySelector(`[data-focus="${CSS.escape(trigger.dataset.focus)}"]`) : null;
+        const active = document.activeElement;
+        if (target && !target.disabled) target.focus({ preventScroll: true });
+        // The close event can arrive after the action's next step already focused its control (a fast reply): keep it.
+        else if (!active || active === document.body || $(id).contains(active)) $("view-heading")?.focus({ preventScroll: true });
       });
     }
     // An open download menu closes on a click elsewhere or Escape, and stays inside the viewport when it resizes.

@@ -12,8 +12,9 @@ if [[ "$ID" != ubuntu || "${VERSION_ID:-}" != 24.04 ]]; then
   exit 1
 fi
 packages=(cockpit cockpit-podman cockpit-storaged cockpit-networkmanager cockpit-packagekit)
-# Backup & restore engine tools from the regular archive: age encrypts (universe), zstd compresses.
-backup_packages=(age zstd)
+# Backup & restore engine tools from the regular archive: age encrypts (universe), zstd compresses; python3-nacl and
+# python3-cryptography decrypt uploaded Home Assistant backups (securetar v3 / v1-v2).
+backup_packages=(age zstd python3-nacl python3-cryptography)
 printf 'Install from %s-backports: %s\n' "$VERSION_CODENAME" "${packages[*]}"
 printf 'Install from %s (universe, updates): %s\n' "$VERSION_CODENAME" "${backup_packages[*]}"
 printf 'Enable: cockpit.socket\n'
