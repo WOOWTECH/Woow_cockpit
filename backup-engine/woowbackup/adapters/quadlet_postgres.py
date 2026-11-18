@@ -1777,6 +1777,79 @@ class QuadletPostgresAdapter(Adapter):
             manifest['images'].append(item)
         return manifest, entries
 
+    def read_quadlets(self):
+        """{file name: bytes} of the app's Quadlet files as the owner has them (the HA import reads the live setup)."""
+        return self._read_owner_quadlets()
+
+    def import_manifest(self, staging_dir, *, postgres=None, volumes=None, dirs=None):
+        """The app section and entries of a backup whose data items were made elsewhere -- a Home Assistant import
+        (haimport.py, CONTRACT section 9): images, secrets, config files and Quadlet files are read from the live app
+        as the owner, without stopping anything, exactly like backup() reads them; the data items are `postgres`
+        {id: {database, server_version, major, file}}, `volumes` {name: file} and `dirs` {path: file}, exactly one
+        for every item the catalog declares. No http-json snapshot and no digests are recorded (nothing to compare
+        them with on this device); the installed settings are carried like in every backup."""
+        app = self.app
+        staging = Path(staging_dir)
+        postgres, volumes, dirs = dict(postgres or {}), dict(volumes or {}), dict(dirs or {})
+        wanted = ({p['id'] for p in app.postgres}, {v['name'] for v in app.volumes}, {d['path'] for d in app.data_dirs})
+        if (set(postgres), set(volumes), set(dirs)) != wanted:
+            raise BackupError('internal-error', f'轉換後的資料項目和應用「{app.name}」的設定不一致。', app=app.id)
+        for sub in ('postgres', 'volumes', 'dirs', 'secrets', 'config', 'quadlet'):
+            (staging / sub).mkdir(mode=0o700, exist_ok=True)
+        quadlets = self._read_owner_quadlets()
+        images = []
+        for ref in dict.fromkeys(self.container_images(quadlets).values()):
+            image = self.image_inspect(ref)
+            if image is None:
+                raise BackupError('job-failed', f'找不到應用使用的映像 {ref}。', app=app.id)
+            images.append({'ref': ref, **image})
+        secrets_ = [self._read_secret(s['name'], staging) for s in app.secrets]
+        configs = [self._read_config(i, c, staging) for i, c in enumerate(app.config_files)]
+        for name in app.quadlet_files:
+            _write_private(staging / 'quadlet' / name, quadlets[name])
+        entries = []
+
+        def entry(kind, name, path):
+            size, digest = file_digest(path)
+            item = Entry(path=f'apps/{app.id}/{kind}/{name}', source=Path(path), size=size, sha256=digest)
+            entries.append(item)
+            return item.path
+
+        manifest = {
+            'id': app.id, 'name': app.name, 'adapter': self.name, 'adapter_version': self.version,
+            'catalog_sha256': app.sha256, 'owner': {'name': self.runner.owner, 'uid': self.runner.uid},
+            'images': [], 'postgres': [], 'volumes': [], 'secrets': [], 'config_files': [], 'quadlet_files': [],
+            'verify_snapshot': {},
+        }
+        if isinstance(app.raw, dict) and app.raw:
+            problem = carried_settings_problem(app.raw, app.id)
+            if problem is None:
+                manifest['catalog_entry'] = copy.deepcopy(app.raw)
+            else:
+                self.log(f'注意：這個應用的設定檔含有備份無法保存的內容（{problem}），這份備份不附上應用設定。')
+        for pg in app.postgres:
+            dump = postgres[pg['id']]
+            manifest['postgres'].append({'id': pg['id'], 'database': dump['database'],
+                                         'server_version': dump['server_version'], 'major': dump['major'],
+                                         'entry': entry('postgres', f'{pg["id"]}.dump', dump['file'])})
+        for volume in app.volumes:
+            manifest['volumes'].append({'name': volume['name'],
+                                        'entry': entry('volumes', f'{volume["name"]}.tar', volumes[volume['name']])})
+        if app.data_dirs:
+            manifest['data_dirs'] = [{'path': item['path'], 'entry': entry('dirs', f'{index}.tar', dirs[item['path']])}
+                                     for index, item in enumerate(app.data_dirs)]
+        for secret in secrets_:
+            manifest['secrets'].append({'name': secret['name'], 'entry': entry('secrets', secret['name'], secret['file'])})
+        for i, config in enumerate(configs):
+            manifest['config_files'].append({'path': config['path'], 'mode': config['mode'],
+                                             'entry': entry('config', str(i), config['file'])})
+        for name in app.quadlet_files:
+            manifest['quadlet_files'].append({'name': name, 'entry': entry('quadlet', name, staging / 'quadlet' / name)})
+        for image in images:
+            manifest['images'].append({'ref': image['ref'], 'id': image['id'], 'digest': image['digest'],
+                                       'arch': image['arch']})
+        return manifest, entries
+
     def _snapshot_for_backup(self):
         if not self.http_specs():
             return {}
