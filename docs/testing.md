@@ -55,7 +55,7 @@ $LP run --rm --memory 384m --user 1000:1000 -e HOME=/tmp -e PYTHONDONTWRITEBYTEC
 
 `scripts/check_source.py` 另檢查備份頁的 manifest、CSP 與 DOM 寫入方式、每個引擎原始檔（shebang、語法、不使用 shell），並以引擎的驗證程式檢查示範目錄項目。
 
-Home Assistant 備份（`tests/backup/test_ha_*.py`）讀取 `tests/backup/fixtures/ha/` 的小型 HA 備份：它們由真正的 securetar 函式庫產生（v1、v2、v3、未加密、HA「下載」得到的解密副本；產生方式見該資料夾的 README），測試解密結果與函式庫逐位元組相同、錯誤金鑰、截斷與竄改、惡意的外層與內層 tar，以及上傳、`list`、`ha-delete` 與作業日誌遮蔽 HA 金鑰。需要 `python3-nacl` 與 `python3-cryptography`（測試映像與 CI 都有；CI 設定 `WOOWBK_REQUIRE_HA_CRYPTO=1`，缺少時不會略過而是失敗）；主機沒有時這些測試會略過。為這個功能建立的真實 HA 備份從不提交；要對它們測試，設定 `WOOWBK_HA_FIXTURES`（三個備份所在的資料夾）與 `WOOWBK_HA_KEY`（它們的金鑰），`RealBackupTests` 會完整串流讀取每個項目。HA 匯入的檢查與轉換作業（`test_ha_tempctr.py`、`test_ha_odoo.py`、`test_ha_n8n.py`、`test_ha_import.py`，以及 `test_ha_cli.py` 的新指令）用假的執行器與小型 tar／SQLite 夾具：暫用容器的完整命令列、Quadlet 的機密與環境變數解析、清理與中斷後的清除、Odoo 模組版本判斷與各種擋下的原因、附加元件 tar 的單次讀取（資料庫叢集、附件、自訂模組，HA 密碼檔從不讀取）、n8n 的 SQLite 讀取（擁有者、筆數、檢視表從不執行）、需要修正的工作流程、原生模組檢查、作業紀錄的階段名稱、HA 金鑰原樣保存並在第一行日誌前遮蔽、`ha-imports.json`，以及檢查／轉換流程（容器步驟以替身代替）。容器步驟本身在實驗室設備 dev-c 上實測（見下方「HA 匯入」）。
+Home Assistant 備份（`tests/backup/test_ha_*.py`）讀取 `tests/backup/fixtures/ha/` 的小型 HA 備份：它們由真正的 securetar 函式庫產生（v1、v2、v3、未加密、HA「下載」得到的解密副本；產生方式見該資料夾的 README），測試解密結果與函式庫逐位元組相同、錯誤金鑰、截斷與竄改、惡意的外層與內層 tar，以及上傳、`list`、`ha-delete` 與作業日誌遮蔽 HA 金鑰。需要 `python3-nacl` 與 `python3-cryptography`（測試映像與 CI 都有；CI 設定 `WOOWBK_REQUIRE_HA_CRYPTO=1`，缺少時不會略過而是失敗）；主機沒有時這些測試會略過。為這個功能建立的真實 HA 備份從不提交；要對它們測試，設定 `WOOWBK_HA_FIXTURES`（三個備份所在的資料夾）與 `WOOWBK_HA_KEY`（它們的金鑰），`RealBackupTests` 會完整串流讀取每個項目。HA 匯入的檢查與轉換作業（`test_ha_tempctr.py`、`test_ha_odoo.py`、`test_ha_n8n.py`、`test_ha_import.py`，以及 `test_ha_cli.py` 的新指令）用假的執行器與小型 tar／SQLite 夾具：暫用容器的完整命令列、Quadlet 的機密與環境變數解析、清理與中斷後的清除、Odoo 模組版本判斷與各種擋下的原因、附加元件 tar 的單次讀取（資料庫叢集、附件、自訂模組，HA 密碼檔從不讀取）、n8n 的 SQLite 讀取（擁有者、筆數、檢視表從不執行）、需要修正的工作流程、原生模組檢查、作業紀錄的階段名稱、HA 金鑰原樣保存並在第一行日誌前遮蔽、`ha-imports.json`，以及檢查／轉換流程（容器步驟以替身代替）。審查修正（2026-11-18）之後另有：`test_ha_flows.py` 用模擬應用擁有者 podman 的替身跑完整的 Odoo 與 n8n 轉換（真正的 `ha_odoo.convert`／`ha_n8n.convert`、`TempObjects`、`Cluster`；psql 替身照 PostgreSQL 的規則拒絕交易區塊中的 ALTER SYSTEM，n8n 筆數查詢拒絕超過 100 個函式參數），驗證 HA 的 PostgreSQL 不可信的處理（設定檔換成已知的、停用的設定、noexec 資料卷、唯讀根目錄、以 odoo 角色從標準輸入還原、需要超級使用者的物件被拒絕）、沿用設定、網站網域、neutralize 掛載的模組資料夾與 `verify_converted` 的每一項；`test_ha_space.py` 測空間與取消的監看（低於下限時立刻終止暫用容器、取消要求、執行中的命令在一秒內停止、`--cpus`）；n8n 的 SQLite 由降權的子程序在自己的複本上讀取（虛擬表不讀、-shm 不用、過大的工作流程不分析、取消時子程序被終止）；符號連結鏈不能往上爬；`ha-imports.json` 接受轉換產生的任何內容；轉換備份不算在保留份數與「最近備份」裡。容器步驟本身在實驗室設備 dev-c 上實測（見下方「HA 匯入」）。
 
 2026-11-13 最終回歸：主機（已安裝 age）471 項通過、0 項略過；測試映像以 root 執行 471 項通過、3 項略過（只適用非 root），以 uid 1000 執行 471 項通過、0 項略過。`check_source.py` 通過（32 個資源參照、17 個引擎原始檔、示範目錄的 3 個 Quadlet 範本）。較早的整合輪為 317 項，當時主機沒有 age，50 項略過。
 
@@ -174,6 +174,21 @@ H8（`upload_window.mjs`）在最終回歸前跑過兩批，每種設定共 6 �
 | 測試匯入：轉換／還原 | 137／156 秒 |
 
 洩漏掃描 145 個檔案與 5.4 MB 的 journal，0 命中。前一輪（同一天、設備已有先前匯入的自訂模組）68／71：3 項是執行器假設設備是全新的（引擎正確地不再列出要複製的模組），修正執行器後即為上表。開發時在 dev-c 發現並修正：n8n 的 SQLite 複本關閉時把 WAL 寫回主檔（-wal 檔消失）；測試匯入時兩個應用用了同名的暫用網路。
+
+**審查修正（fix/ha-import-review-engine，2026-11-18）** 另加選用情境（都要先 `upload`）：`kill`（轉換在容器步驟中被 SIGKILL：暫用容器活得比作業久，下一次 `status` 的復原把作業標成「轉換 HA 備份的作業意外中斷」並清掉所有暫用容器、資料卷、網路，沒有暫存、金鑰檔、`ha-imports.json` 紀錄或新備份，應用健康）、`cancel`（在新 PostgreSQL 17 的步驟中按取消）、`space`（在 dev-c 裡用大小受限的 tmpfs 蓋住暫存資料夾，主機磁碟從不寫滿：開始前就拒絕、轉換到一半依量到的大小停止，兩次都沒有殘留且應用沒被動到）、`pull`（暫時移除 n8n 的 PostgreSQL 16 標籤：檢查用摘要下載固定的 postgres:16.15-alpine 並用同一個參照執行，之後標回原映像）、`c19`（在這台的 Odoo 叢集用 ALTER SYSTEM 設定 work_mem 與 search_path 清單，轉換沿用兩者、還原後的叢集以它們執行，最後重設）、`rollback`（還原轉換備份時讓資料庫第一次啟動失敗：自動回復到還原前的資料）。`--evidence ha-import-fix` 把證據寫到 `~/.woowbk-lab/evidence/ha-import-fix/<時間>/`。
+
+| 情境 | 結果 |
+| --- | --- |
+| kill | 4／4，作業在 hapg 步驟被終止，復原後全部清除 |
+| cancel | 4／4，取消要求後 13 秒作業結束為「已取消」 |
+| space | 7／7：開始前拒絕（需要 10.6 GiB，只有 10.5 GiB）；解開後依量到的叢集大小（134.9 MiB）停止 |
+| pull | 3／3，固定摘要即 dev-c 原有的映像；n8n 的映像標回 |
+| c19 | 6／6，沿用 search_path、work_mem；還原後 `SHOW` 為 8MB 與 `"$user", public, woowlab` |
+| rollback | 4／4，134 秒後「已回復」，還原前寫入的標記仍在 |
+
+同一天以修正後的引擎重跑整個情境（`baseline upload keys check convert restore verify db2 testmode cleanup leaks baseline`）：81／81 通過，證據 `~/.woowbk-lab/evidence/ha-import-fix/20261118T224054/`；檢查 20／24／24 秒、轉換 woowtest＋n8n 103 秒、還原 126 秒、woowtest2 轉換／還原 40／37 秒、測試匯入轉換／還原 114／131 秒；洩漏掃描 287 個檔案與 12.8 MB 的 journal，0 命中。前一次重跑 41／46：n8n 的 SQLite 子程序降成 nobody 後打不開複本（SQLite 以完整路徑開檔，而作業暫存資料夾的上層只有 root 能進入；單元測試不以 root 執行，看不到），改成先 chroot 到複本所在的資料夾再降權後即為上表；那一次也發現執行器在轉換失敗時沿用了先前留下的轉換備份 ID，已修正。結束後 dev-c 還原到匯入前的狀態，並刪除這次測試建立的備份。
+
+第一輪的 `c19` 在執行器自己的 SQL 失敗：執行器把整個 search_path 寫成一個字串常值，PostgreSQL 把它當成「一個」結構描述，Odoo 就找不到 `public` 的資料表（審查 C-06 說的正是這種寫法；`finally` 立即重設，設備沒有受影響）。改成每個元素一個常值後即為上表。
 
 `tests/e2e/lab/ha_import_ui.mjs` 用真正的頁面（dev-c 的 Cockpit，管理員存取）走一次同樣的匯入：「上傳備份檔」（同一個 HA 檔再上傳一次，引擎回覆既有的紀錄，頁面仍開啟 HA 備份頁）→「檢查並匯入…」→ 兩個應用 → 先輸入錯誤金鑰（回到金鑰步驟並顯示引擎的訊息）→ 正確金鑰 → 檢查作業 → 選資料庫、不勾「這只是測試」→ 轉換作業 → 還原精靈（HA 說明、預檢、確認）→ 還原作業 → 結果頁的 HA 提醒，再核對「備份列表」的「HA 備份」「由 HA 轉換」標籤與「活動紀錄」的「檢查 HA 備份」「轉換 HA 備份」。轉換前先執行 `ha_import_e2e.py live`，記錄這台當時的 web.base.url 與升級標記；`--verify` 之後執行 `ha_import_e2e.py verify cleanup leaks`；`--baseline <odoo 備份>,<n8n 備份>` 再還原 dev-c 匯入前的備份（`baseline` 也核對 prodlike_baseline.py 的標記資料列與四個健康網址）。截圖有 1440 與 390 像素寬兩種，頁面的指令碼錯誤必須是 0；HA 金鑰與密碼從不顯示，輸入欄含金鑰時不截圖。證據寫到 `~/.woowbk-lab/evidence/ha-import-ui/<時間>/`。
 
