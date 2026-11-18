@@ -127,6 +127,23 @@ node tests/e2e/lab/upload_window.mjs                         # H8：上傳視窗
 
 `strengthen_ui.mjs cleanup` 第一次 9／10 是執行順序的問題，不是引擎：`ui_e2e.mjs s1` 在建立頁保留預設的全選，dev-a 上的備份含 woowbk-demo、woowbk-dirs、woowbk-inst，另外兩個應用保留全部，所以它不是 woowbk-demo「保留最新 5 份」的候選（CONTRACT §8：多個應用的備份在任一應用仍需要時保留），而這項檢查假設 woowbk-demo 的手動備份都只含它（候選數 = 手動份數 − 5）。刪除那份測試備份、補 6 份只含 woowbk-demo 的備份後重跑 11／11，之後刪除補的備份。
 
+HA 匯入（2026-11-18～19，`feat/ha-import` 177c8c6，2026.11.19.1 的產品程式）。先在 dev-c 以真正的頁面匯入一次（見下方「HA 匯入（dev-c）」），再在 dev-a、dev-b 部署同一個工作樹跑原有功能的完整回歸，兩台各 36 個已安裝檔案與工作樹 sha256 相同。這次 strengthen 排在 schedule 之前，和 11-17 的順序不同。證據在 `~/.woowbk-lab/evidence/final-ha-import/20261118T151246Z/`。
+
+| 項目（2026-11-19，177c8c6） | 結果 |
+| --- | --- |
+| `cli_e2e.py all` | 122／122：s1 29、s2 22、faults 11、s3 8、s2-again 22、f8 10、f9 9、cancel 6、leaks 5 |
+| `dirs_e2e.py all` | 255／255：prep 18、d1 29、d3 18、d4 29、d5 107、d6 11、d7 16、d2 22、leaks 5 |
+| `hardening.py all`（`H7_FULL=0`） | 584／584：h1 327、h2 13、space 25、h3 28、h4 48、h5 15、h6 12、h7 19、sec1 26、fidelity 21、fresh 43、leaks 7 |
+| `format_e2e.py all` | 105／105：v1 7、encrypted 21、plain 27、export 20、deep 6、partial 7、cleanup 17 |
+| `strengthen_ui.mjs` | catalog 16／16（在 catalog-apply 之前）；cleanup 10／10、backups 26／26、devb 9／9、cleanup-lab 7／7 |
+| `strengthen_e2e.py` | 205／205：catalog-apply 28、digests 38、mismatch 22、deep 19、instance 53、keyless 19、retention 16、tampered-json 10；cleanup 34／34 |
+| `ui_e2e.mjs all` | 29／29 |
+| `schedule_e2e.py all` | 12 個情境第一次就通過；`compat` 第一次在 13／14 中止（見下），重跑 `kit-gate compat cleanup` 20／20、32／32、13／13 |
+
+和 11-17 不同的數字：h7 少 4 項（最新一筆安裝紀錄只更新了套件、計時器原本就在，走的是另一條檢查）；dirs prep 少 2 項（目錄項目已存在，不必再安裝）；compat 多 1 項（要回退的安裝紀錄多一筆）。
+
+`compat` 第一次中止也是執行順序造成的，不是產品問題：`strengthen_e2e.py catalog-apply` 以「應用設定」改了 dev-b 的示範目錄檔，schedule 的 `install` 重新部署時把它改回原本的版本，多了一筆安裝紀錄；`compat` 依序回退時，較早的那筆紀錄發現檔案在安裝後被改過，依設計拒絕覆寫（`Changed since installation: … refusing to overwrite newer work.`）。以 schedule 自己的 `cleanup` 與 `deploy-src.sh b` 恢復後重跑即通過。照這個順序跑時，請先把目錄檔放回原本的版本，或把 schedule 排在 strengthen 之前。另外，`ui_e2e.mjs s2` 拆除 dev-b 時以 `podman rmi -f` 移除 postgres:16-alpine，woowbk-dirs 的資料庫容器（同一個映像）也會一起被移除；之後要跑用到 woowbk-dirs 的情境前，以應用擁有者身分 `systemctl --user start woowbk-dirs-db.service`。
+
 `ui_e2e.mjs` 與 `upload_window.mjs` 需要 `PLAYWRIGHT_CHROMIUM_EXECUTABLE` 或 `~/.cache/ms-playwright/chromium-1248`。每個執行器也可只跑單一情境：
 
 | 執行器 | 情境 |
@@ -193,6 +210,8 @@ H8（`upload_window.mjs`）在最終回歸前跑過兩批，每種設定共 6 �
 `tests/e2e/lab/ha_import_ui.mjs` 用真正的頁面（dev-c 的 Cockpit，管理員存取）走一次同樣的匯入：「上傳備份檔」（同一個 HA 檔再上傳一次，引擎回覆既有的紀錄，頁面仍開啟 HA 備份頁）→「檢查並匯入…」→ 兩個應用 → 先輸入錯誤金鑰（回到金鑰步驟並顯示引擎的訊息）→ 正確金鑰 → 檢查作業 → 選資料庫、不勾「這只是測試」→ 轉換作業 → 還原精靈（HA 說明、預檢、確認）→ 還原作業 → 結果頁的 HA 提醒，再核對「備份列表」的「HA 備份」「由 HA 轉換」標籤與「活動紀錄」的「檢查 HA 備份」「轉換 HA 備份」。轉換前先執行 `ha_import_e2e.py live`，記錄這台當時的 web.base.url 與升級標記；`--verify` 之後執行 `ha_import_e2e.py verify cleanup leaks`；`--baseline <odoo 備份>,<n8n 備份>` 再還原 dev-c 匯入前的備份（`baseline` 也核對 prodlike_baseline.py 的標記資料列與四個健康網址）。截圖有 1440 與 390 像素寬兩種，頁面的指令碼錯誤必須是 0；HA 金鑰與密碼從不顯示，輸入欄含金鑰時不截圖。證據寫到 `~/.woowbk-lab/evidence/ha-import-ui/<時間>/`。
 
 2026-11-18（feat/ha-import 2569298）：49／49 通過（其中 verify cleanup leaks 15／15），頁面錯誤 0；檢查 29 秒、轉換 125 秒、還原 162 秒；之後 `baseline cleanup` 7／7，資料與匯入前逐項相同。證據 `~/.woowbk-lab/evidence/ha-import-ui/20261118T204850/`。
+
+2026-11-19（最終版本 177c8c6，部署後 36 個已安裝檔案與工作樹 sha256 相同）：50／50 通過（其中 `live` 1／1、`verify cleanup leaks` 15／15），頁面的指令碼與 console 錯誤 0；上傳 6.2 秒、檢查 28.8 秒、轉換 128.3 秒、還原 158.0 秒；之後 `baseline cleanup` 7／7：基準標記資料列都在、匯入的模組、聯絡人與工作流程都不在、四個健康網址 200，沒有暫用容器、資料卷、網路、暫存資料夾或金鑰檔。證據 `~/.woowbk-lab/evidence/ha-import-ui/20261118T231340/`。
 
 尚未實測：多 GB 備份與超過 8 GiB 的單一項目、不同 CPU 架構、兩台實體設備之間的還原（兩台實驗室設備在同一台實體主機上）。正式應用（含沒有 PostgreSQL 的 EMQX、OpenDesign、Headscale，以及使用主機資料夾的 Odoo、Home Assistant、Nextcloud）已在參考主機實測備份與原位還原，見 [production-onboarding.md](backup/production-onboarding.md)；正式應用沒有做跨設備還原。
 
