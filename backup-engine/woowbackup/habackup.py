@@ -1194,9 +1194,21 @@ def normalize(name):
 
 
 def _symlink_ok(name, target, root):
-    """A relative target that, resolved from the link's directory, stays inside `root` ('.': the whole tar)."""
+    """A relative target that, resolved from the link's directory, stays inside `root` ('.': the whole tar), and whose
+    `..` components all come before its names (review HA-SEC-03). A `..` after a name could climb through another link
+    of the archive (`a -> .`, then `b -> a/..` is lexically inside but really one folder up, and so on, in any order
+    of the entries). The link's own folders are real directories (nothing may lie below a link), so leading `..`
+    resolve exactly, and the names after them only go down: a chain of such links never leaves `root`."""
     if not target or '\x00' in target or target.startswith('/') or len(target) > MAX_NAME:
         return False
+    named = False
+    for part in target.split('/'):
+        if part in ('', '.'):
+            continue
+        if part != '..':
+            named = True
+        elif named:
+            return False
     resolved = posixpath.normpath(posixpath.join(posixpath.dirname(name) or '.', target))
     if root == '.':
         return not (resolved == '..' or resolved.startswith('../'))

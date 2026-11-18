@@ -507,6 +507,24 @@ class EntryTests(unittest.TestCase):
         self.assertEqual(sorted(row[0] for row in out if row[1] == 'symlink'),
                          ['nodes/.bin/tool', 'nodes/escape', 'other'])  # '.': anything that stays inside the tar
 
+    def test_link_chains_cannot_climb_out_in_any_order(self):
+        """Review HA-SEC-03 (probe P1): each link is lexically inside `nodes`, the kernel resolves the chain upwards."""
+        chain = [{'name': 'nodes/a', 'type': 'symlink', 'linkname': '.'},
+                 {'name': 'nodes/b', 'type': 'symlink', 'linkname': 'a/..'},
+                 {'name': 'nodes/c', 'type': 'symlink', 'linkname': 'b/..'},
+                 {'name': 'nodes/d', 'type': 'symlink', 'linkname': 'c/../x'}]
+        base = [{'name': 'nodes', 'type': 'dir'}, {'name': 'nodes/pkg', 'type': 'dir'},
+                {'name': 'nodes/pkg/bin', 'type': 'dir'}]
+        good = [{'name': 'nodes/pkg/bin/tool', 'type': 'symlink', 'linkname': '../../pkg/./index.js'},
+                {'name': 'nodes/pkg/sub', 'type': 'symlink', 'linkname': 'bin'}]
+        for order in (chain, list(reversed(chain))):
+            out, report = self.walk(base + order + good, habackup.Select(symlinks=('nodes',)))
+            links = sorted(row[0] for row in out if row[1] == 'symlink')
+            self.assertEqual(links, ['nodes/a', 'nodes/pkg/bin/tool', 'nodes/pkg/sub'])
+            self.assertEqual(report.skipped_symlinks, 3)
+        self.assertFalse(habackup._symlink_ok('nodes/x', 'pkg/../..', 'nodes'))
+        self.assertTrue(habackup._symlink_ok('nodes/x/y', '../../nodes/pkg', '.'))
+
     def test_hardlink_policy(self):
         entries = [{'name': 'a', 'data': b'1'}, {'name': 'b', 'type': 'hardlink', 'linkname': 'a'}]
         self.assertEqual(self.refused(entries), ('corrupt-archive', 'hard link to an entry outside the selection'))
