@@ -539,7 +539,7 @@ def storage_usage(storage, backups):
             'backups_bytes': sum(b.get('size', 0) for b in backups), 'backup_count': len(backups)}
 
 
-def app_view(svc, app, backups):
+def app_view(svc, app, backups, converted=frozenset()):
     try:
         adapter = svc.adapter(app)
         info = adapter.probe()
@@ -555,9 +555,11 @@ def app_view(svc, app, backups):
         traceback.print_exc(file=sys.stderr)
         info = {'deployed': False, 'state': 'error', 'units': [{'name': u, 'active': False} for u in app.units],
                 'problems': ['無法讀取應用狀態。']}
+    # A backup converted from an HA backup holds HA's data, not this device's: never this app's "latest backup"
+    # (review C-04).
     last = next(({'id': b['id'], 'created': b.get('created')} for b in backups
-                 if b.get('type') in ('manual', 'safety') and app.id in {a.get('id') for a in b.get('apps') or []}),
-                None)
+                 if b.get('type') in ('manual', 'safety') and b.get('id') not in converted
+                 and app.id in {a.get('id') for a in b.get('apps') or []}), None)
     return {'id': app.id, 'name': app.name, 'description': app.description, 'owner': app.owner,
             'adapter': app.adapter, 'deployed': bool(info['deployed']), 'state': info['state'],
             'units': info['units'], 'last_backup': last, 'problems': list(info['problems'])}
@@ -567,10 +569,11 @@ def app_views(svc, apps, backups):
     """app_view of every app, several at a time: each quick health request is bounded (review finding HD-07), and
     running them side by side keeps `status` within the page's timeout with many apps."""
     apps = list(apps)
+    converted = frozenset(ha_import_views(svc))
     if len(apps) <= 1:
-        return [app_view(svc, app, backups) for app in apps]
+        return [app_view(svc, app, backups, converted) for app in apps]
     with ThreadPoolExecutor(max_workers=min(STATUS_WORKERS, len(apps)), thread_name_prefix='woowbackup-status') as pool:
-        return list(pool.map(lambda app: app_view(svc, app, backups), apps))
+        return list(pool.map(lambda app: app_view(svc, app, backups, converted), apps))
 
 
 def _postgres_summary(item):
@@ -695,7 +698,8 @@ def apps_usage(svc, backups, catalog):
     from . import retention
     try:
         policy, _problem = retention.load_policy(svc.paths, trusted_uid=svc.trusted_uid)
-        return retention.app_usage(backups, catalog, policy, svc.scheduled_ids())['apps']
+        converted, _readable = retention.converted_ids(svc.paths)
+        return retention.app_usage(backups, catalog, policy, svc.scheduled_ids(), converted)['apps']
     except Exception:  # noqa: BLE001 - the overview simply falls back to its own computation
         traceback.print_exc(file=sys.stderr)
         return []
@@ -831,7 +835,8 @@ def cmd_inspect(svc, req):
               for a in manifest['apps']],
         include_images=any('entry' in img for a in manifest['apps'] for img in a.get('images') or []),
         source={'hostname': manifest['source']['hostname']}, inspected=True)
-    return {'backup': backup_view(meta, svc.key_ids(), svc.scheduled_ids()), 'manifest': summary,
+    # `from_ha` exactly like `list` (review P-01): the page replaces the listed backup with this one.
+    return {'backup': backup_view(meta, svc.key_ids(), svc.scheduled_ids(), ha_import_views(svc)), 'manifest': summary,
             'preflight': preflight}
 
 

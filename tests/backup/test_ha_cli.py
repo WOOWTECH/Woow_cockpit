@@ -238,6 +238,48 @@ class FromHaTests(HaCliCase):
         self.assertEqual(self.call(['delete'], {'backup_id': backup_id}), {'ok': True})
         self.assertEqual(haimport.load_registry(self.paths), {})
 
+    def register(self, backup_id):
+        _begin, reply = self.upload(hx.simple_backup())
+        row = {'ha_backup_id': reply['ha_backup']['id'], 'name': 'WOOW', 'date': '2026-11-18T09:01:20Z',
+               'apps': ['odoo'], 'odoo_database': 'woowtest', 'test_mode': False, 'workflows_to_fix': [],
+               'reminders': [], 'addons': [], 'job_id': 'j20261118T120000Z-0123abcd',
+               'created': '2026-11-18T12:00:00Z'}
+        haimport.register(self.paths, backup_id, row)
+        return haimport.view_row(haimport.clean_row(haimport._upgrade(row)))
+
+    def test_inspect_carries_from_ha_like_list(self):
+        backup_id = self.make_backup()
+        view = self.register(backup_id)
+        reply = self.call(['inspect'], {'backup_id': backup_id})
+        self.assertEqual(reply['backup']['from_ha'], view, 'review P-01')
+        self.assertEqual(reply['backup']['from_ha'], self.call(['list'])['backups'][0]['from_ha'])
+
+    def test_a_converted_backup_is_no_apps_latest_backup_and_its_own_pool(self):
+        """Review C-04: it holds HA's data, not this device's."""
+        from woowbackup import retention
+        converted = self.make_backup()
+        before = {app['id']: app['last_backup'] for app in self.call(['status'])['apps']}
+        self.register(converted)
+        status = self.call(['status'])
+        after = {app['id']: app['last_backup'] for app in status['apps']}
+        self.assertTrue(any(value and value['id'] == converted for value in before.values()))
+        self.assertFalse(any(value and value['id'] == converted for value in after.values()))
+        usage = {row['id']: row['types'] for row in status['storage']['apps']}
+        self.assertTrue(any(types['converted'] == 1 and types['manual'] == 0 for types in usage.values()))
+        newer = self.make_backup()
+        backups = self.storage.list_backups()
+        ids, readable = retention.converted_ids(self.paths)
+        self.assertEqual((ids, readable), (frozenset({converted}), True))
+        policy = {'default_keep_last': 1, 'apps': {}}
+        self.assertEqual(len(retention.plan(backups, policy, {}, scheduled=frozenset())['candidates']), 1,
+                         'counted as manual, one of the two would be deleted')
+        self.assertEqual(retention.plan(backups, policy, {}, scheduled=frozenset(), converted=ids)['candidates'], [])
+        self.assertTrue(newer)
+        haimport.registry_path(self.paths).write_text('not json')
+        listed = [{'id': '20261118T120001Z-0123abcd', 'type': 'manual', 'note': haimport.NOTE_PREFIX + 'WOOW'},
+                  {'id': '20261118T120002Z-0123abcd', 'type': 'manual', 'note': ''}]
+        self.assertEqual(sorted(retention.protected_backups(self.paths, listed)), ['20261118T120001Z-0123abcd'])
+
     def test_status_counts_ha_backups(self):
         data = hx.simple_backup()
         self.upload(data)

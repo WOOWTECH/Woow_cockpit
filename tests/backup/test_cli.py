@@ -616,7 +616,7 @@ class ScheduleCliShapeTests(CliCase):
         schedule.register_run(self.paths, manual, 'j20261113T010000Z-00000001', None, 'run-now')
         self.assertIs(self.call(['list'])['backups'][0]['scheduled'], True)
         usage = {row['id']: row for row in self.call(['status'])['storage']['apps']}
-        self.assertEqual(usage['woowbk-demo']['types'], {'manual': 0, 'safety': 0, 'uploaded': 0, 'scheduled': 1})
+        self.assertEqual(usage['woowbk-demo']['types'], {'manual': 0, 'safety': 0, 'uploaded': 0, 'scheduled': 1, 'converted': 0})
         self.assertEqual(self.call(['jobs'])['schedule_events'], [])
         self.assertTrue(self.call(['schedule-get'])['ok'])
 
