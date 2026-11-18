@@ -11,12 +11,14 @@ never printed: every evidence line is redacted.
 
   python3 -I tests/e2e/lab/ha_import_e2e.py [--deploy LAB_DIR --src TREE] [scenario ...]
   scenarios: upload keys check convert restore verify db2 testmode cleanup leaks  (default: all, in that order);
+  review fixes (opt-in, FIXPLAN item 21): kill cancel space pull c19 rollback (they need `upload` first);
   `baseline` (with --baseline ODOO_ID,N8N_ID) first restores dev-c's own backups made before any import, so the custom
   module is copied again and the result shows the import from a clean device; `live` only records the target's
   web.base.url and upgrade marker for a later `verify`, when the import itself runs elsewhere (ha_import_ui.mjs).
 
 Options: --fixtures DIR (default ~/.woowbk-lab/ha-fixtures/20261118), --creds FILE (haimport testdata creds.env),
---n8n-data FILE (the test-data script holding the credential value). Evidence: ~/.woowbk-lab/evidence/ha-import/<ts>/.
+--n8n-data FILE (the test-data script holding the credential value), --evidence NAME (default ha-import). Evidence:
+~/.woowbk-lab/evidence/<NAME>/<ts>/.
 Only ~/.woowbk-lab/bin/labpodman is used; nothing on the host itself is touched.
 """
 import argparse
@@ -43,7 +45,12 @@ OWNER_EMAIL = 'ha-probe@probe.invalid'
 SCHEDULED = 'WOOW 匯入測試 - 排程'
 CREDENTIAL = 'HA probe header'
 ALL = ('upload', 'keys', 'check', 'convert', 'restore', 'verify', 'db2', 'testmode', 'cleanup', 'leaks')
-EXTRA = ('baseline', 'live')  # opt-in: restore dev-c's pre-import backups (--baseline IDS); record live facts
+# opt-in: restore dev-c's pre-import backups (--baseline IDS); record live facts; the review-fix scenarios
+# (FIXPLAN item 21): a job killed mid-convert, a cancel mid-convert, too little space (refused and aborted), the
+# PostgreSQL 16 download, live PostgreSQL settings carried over (C-19), a failed restore of a converted backup.
+EXTRA = ('baseline', 'live', 'kill', 'cancel', 'space', 'pull', 'c19', 'rollback')
+STAGING = '/var/lib/woowtech-backup/staging'
+JOB_LABEL = 'label=io.woowtech.backup.job'
 
 
 class Failed(Exception):
@@ -77,9 +84,9 @@ class Secrets:
 
 
 class Evidence:
-    def __init__(self, secrets):
+    def __init__(self, secrets, area='ha-import'):
         stamp = time.strftime('%Y%m%dT%H%M%S')
-        self.dir = LAB / 'evidence' / 'ha-import' / stamp
+        self.dir = LAB / 'evidence' / area / stamp
         self.dir.mkdir(parents=True, exist_ok=False)
         os.chmod(self.dir, 0o700)
         self.secrets = secrets
@@ -621,6 +628,272 @@ def scenario_leaks(ev, args):
                                  f'hits {report["hits"]}')
 
 
+# ---------------------------------------------------------------- review-fix scenarios (FIXPLAN item 21)
+
+def labelled():
+    """The owner's throwaway containers, volumes and networks (the job label)."""
+    found = {}
+    for kind, argv, fmt in (('containers', ('ps', '-a'), '{{.Names}}'), ('volumes', ('volume', 'ls'), '{{.Name}}'),
+                            ('networks', ('network', 'ls'), '{{.Name}}')):
+        found[kind] = owner('podman', *argv, '--filter', JOB_LABEL, '--format', fmt).stdout.decode().split()
+    return found
+
+
+def registry_rows(job_id):
+    proc = root('cat', '/var/lib/woowtech-backup/ha-imports.json')
+    try:
+        rows = json.loads(proc.stdout.decode('utf-8') or '{}').get('imports') or {}
+    except ValueError:
+        return ['unreadable']
+    return [bid for bid, row in rows.items() if row.get('job_id') == job_id]
+
+
+def job_record(job_id):
+    proc = root('cat', f'/var/lib/woowtech-backup/jobs/{job_id}.json')
+    return json.loads(proc.stdout.decode('utf-8') or '{}')
+
+
+def nothing_left(ev, label, job_id, backups_before):
+    objects = labelled()
+    staging = root('ls', '-A', STAGING).stdout.decode().split()
+    keys = root('sh', '-c', 'ls -A /run/woowtech-backup | grep "^key-" || true').stdout.decode().split()
+    rows = registry_rows(job_id)
+    backups = [b['id'] for b in ok('list', ev=ev)['backups']]
+    record = job_record(job_id)
+    ev.check(f'{label}: nothing left (throwaway objects, staging, key file, ha-imports.json row, new backup, '
+             f'temp_owners)', not any(objects.values()) and not staging and not keys and not rows
+             and sorted(backups) == sorted(backups_before) and not record.get('temp_owners'),
+             {**objects, 'staging': staging, 'keys': keys, 'rows': rows,
+              'new_backups': sorted(set(backups) - set(backups_before)), 'temp_owners': record.get('temp_owners')})
+
+
+def apps_healthy(ev, label):
+    codes = {url: http_code(url) for url in ('http://127.0.0.1:18069/web/health', 'http://127.0.0.1:18080/web/health',
+                                             'http://127.0.0.1:15678/healthz/readiness', 'http://127.0.0.1:15679/healthz')}
+    ev.check(f'{label}: the live apps were never touched (health 200 everywhere)',
+             all(code == '200' for code in codes.values()), codes)
+
+
+def start_convert(args, *, ev, tag, apps=('odoo', 'n8n')):
+    request = {'ha_backup_id': STATE['ha_enc'], 'apps': list(apps), 'test_mode': False, 'confirm': True,
+               'request_id': request_id(tag), 'key': args.secrets['HA_BACKUP_KEY']}
+    if 'odoo' in apps:
+        request['odoo_database'] = 'woowtest'
+    return ok('ha-convert-start', request, ev=ev, timeout=300)['job_id']
+
+
+def wait_for_container(job_id, *, ev, roles=('hapg', 'odoo-db', 'n8n-pg', 'n8n-export', 'n8n-import'), timeout=900):
+    """Until the job runs one of these throwaway containers (a long container step); returns its name."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        names = owner('podman', 'ps', '--filter', JOB_LABEL, '--format', '{{.Names}}').stdout.decode().split()
+        hit = next((n for n in names if n.startswith(f'woowbk-{job_id}-') and n.rsplit(f'{job_id}-', 1)[1] in roles),
+                   None)
+        if hit:
+            return hit
+        job = ok('job-status', {'job_id': job_id}, ev=ev)['job']
+        if job['state'] not in ('queued', 'running'):
+            raise Failed(f'job {job_id} ended ({job["state"]}) before a container step: {job.get("error")}')
+        time.sleep(0.5)
+    raise Failed(f'job {job_id} ran no container step in {timeout} s')
+
+
+def scenario_kill(ev, args):
+    """A conversion killed in the middle of a container step: the recovery marks it interrupted and its throwaway
+    containers, volumes and networks (they outlive the job's process) are removed."""
+    before = [b['id'] for b in ok('list', ev=ev)['backups']]
+    job_id = start_convert(args, ev=ev, tag='kill')
+    name = wait_for_container(job_id, ev=ev)
+    unit = f'woowtech-backup-{job_id}.service'
+    root('systemctl', 'kill', '--signal=SIGKILL', unit)
+    for _ in range(60):
+        if root('systemctl', 'is-active', unit).stdout.decode().strip() != 'active':
+            break
+        time.sleep(1)
+    left = labelled()
+    ev.check('kill: the throwaway objects outlive the killed job process', any(left.values()),
+             {'killed during': name, **left})
+    ok('status', ev=ev)  # the recovery runs here
+    job = ok('job-status', {'job_id': job_id}, ev=ev)['job']
+    ev.save(f'job-{job_id}.json', job)
+    ev.check('kill: the job is interrupted with the HA message', job['state'] == 'interrupted' and
+             '轉換 HA 備份的作業意外中斷' in ((job.get('error') or {}).get('message') or ''), job.get('error'))
+    nothing_left(ev, 'kill', job_id, before)
+    apps_healthy(ev, 'kill')
+
+
+def scenario_cancel(ev, args):
+    """A cancel in the middle of a long container step stops the conversion within seconds (review C-15)."""
+    before = [b['id'] for b in ok('list', ev=ev)['backups']]
+    job_id = start_convert(args, ev=ev, tag='cancel')
+    name = wait_for_container(job_id, ev=ev)
+    started = time.monotonic()
+    rc, reply = helper('job-cancel', {'job_id': job_id})
+    ev.check('cancel: job-cancel accepted during a container step', rc == 0, f'{name} {reply}')
+    job = wait_job(job_id, ev=ev, timeout=600)
+    took = time.monotonic() - started
+    ev.check('cancel: the job ends cancelled within 30 s', job['state'] == 'cancelled' and took < 30,
+             f'{took:.1f} s after the request, during {name.rsplit(job_id + "-", 1)[1]}: {job["state"]}')
+    nothing_left(ev, 'cancel', job_id, before)
+    apps_healthy(ev, 'cancel')
+
+
+def device_free(path):
+    out = root('python3', '-I', '-c', 'import os, sys; s = os.statvfs(sys.argv[1]); print(s.f_bavail * s.f_frsize, '
+               's.f_blocks * s.f_frsize)', path).stdout.decode().split()
+    return int(out[0]), int(out[1])
+
+
+def scenario_space(ev, args):
+    """Too little space, simulated with a size-limited tmpfs over the staging folder (inside dev-c only; the device
+    disk is the host's and is never filled): refused before any work, and stopped in the middle of the conversion
+    (the space watchdog / the measured estimate), each time with nothing left and the apps untouched."""
+    _free, total = device_free('/var/lib/woowtech-backup')
+    floor = max(512 << 20, min(max(2 << 30, total // 20), 10 << 30)) + (512 << 20)  # running reserve + margin
+    member = 26503359  # the Odoo member of the encrypted test backup
+    up_front = 3 * member
+    for label, size, words in (('refused', floor + up_front - (64 << 20), '空間不足'),
+                               ('aborted', floor + up_front + (24 << 20), '空間不足')):
+        before = [b['id'] for b in ok('list', ev=ev)['backups']]
+        if root('mount', '-t', 'tmpfs', '-o', f'size={size},mode=0700,uid=0,gid=0', 'tmpfs', STAGING).returncode:
+            raise Failed('mounting the size-limited staging failed')
+        try:
+            job_id = start_convert(args, ev=ev, tag=f'space-{label}', apps=('odoo',))
+            job = wait_job(job_id, ev=ev, timeout=900)
+        finally:
+            root('umount', STAGING)
+        log = ok('job-status', {'job_id': job_id}, ev=ev).get('log') or []
+        error = job.get('error') or {}
+        phases = [p['id'] for p in job['phases'] if p['state'] in ('done', 'active', 'failed')]
+        ev.check(f'space {label}: the conversion fails with insufficient-space',
+                 job['state'] == 'failed' and error.get('code') == 'insufficient-space' and words in error.get('message', ''),
+                 f'{error} phases reached {phases}')
+        if label == 'aborted':
+            ev.check('space aborted: stopped after the work had started (not by the first estimate)',
+                     any(p in phases for p in ('decrypt', 'convert')), {'phases': phases, 'log': log[-6:]})
+        nothing_left(ev, f'space {label}', job_id, before)
+        apps_healthy(ev, f'space {label}')
+
+
+def scenario_pull(ev, args):
+    """The device has no PostgreSQL 16 image of its own: the check downloads the pinned postgres:16.15-alpine by its
+    Docker Hub digest and runs HA's cluster from that very reference. dev-c's only PG16 image (n8n's) is untagged for
+    the check and tagged again afterwards (the running n8n-postgres container keeps its image)."""
+    ref = 'docker.io/library/postgres:16.15-alpine'
+    image_id = owner('podman', 'image', 'inspect', '--format', '{{.Id}}', ref).stdout.decode().strip()
+    if not image_id:
+        raise Failed(f'{ref} is not on dev-c')
+    owner('podman', 'untag', image_id, ref, check=True)
+    try:
+        job = run_check(STATE['ha_enc'], ['odoo'], ev=ev, key=args.secrets['HA_BACKUP_KEY'], tag='pull')
+        log = ok('job-status', {'job_id': job['id']}, ev=ev).get('log') or []
+        pulled = owner('podman', 'image', 'inspect', '--format', '{{.Id}} {{.RepoDigests}}',
+                       'docker.io/library/postgres:16.15-alpine@sha256:'
+                       'aa6cb33cf4c19c765cefcf48d96176258800870a9a1e930ad126200f9d825139').stdout.decode().strip()
+        apps = (job.get('result') or {}).get('ha_check', {}).get('apps') or [{}]
+        ev.check('pull: the check downloaded the pinned image and succeeded with it',
+                 job['state'] == 'succeeded' and apps[0].get('ok') is True and any('下載固定版本' in l for l in log)
+                 and bool(pulled), {'state': job['state'], 'error': job.get('error'), 'pulled': pulled[:120],
+                                    'log': [l for l in log if '下載' in l]})
+    finally:
+        owner('podman', 'tag', image_id, ref)
+    again = owner('podman', 'image', 'inspect', '--format', '{{.Id}}', ref).stdout.decode().strip()
+    ev.check('pull: n8n\'s PostgreSQL image is tagged as before', again == image_id, again)
+    apps_healthy(ev, 'pull')
+
+
+# search_path is a list: one literal per element (a single literal of the whole text would be ONE schema name and
+# leave Odoo without `public` -- the very mistake review C-06 is about).
+C19_SETTINGS = (('work_mem', "'8MB'", '8MB'), ('search_path', "'$user', 'public', 'woowlab'", '"$user", public, woowlab'))
+
+
+def live_settings_rows():
+    return psql('odoo18-db', 'postgres', 'postgres',
+                "SELECT name || '|' || setting || '|' || source FROM pg_settings WHERE name IN ('work_mem', 'search_path') "
+                "ORDER BY name;")
+
+
+def scenario_c19(ev, args):
+    """Review C-19 proof: settings set on the live cluster (ALTER SYSTEM) reach the converted cluster -- the old
+    single-transaction ALTER SYSTEM made every such conversion fail at its last step -- and the restored database
+    runs with them; then dev-c's own settings are reset."""
+    for name, literal, _shown in C19_SETTINGS:
+        psql('odoo18-db', 'postgres', 'postgres', f'ALTER SYSTEM SET {name} = {literal};')
+    psql('odoo18-db', 'postgres', 'postgres', 'SELECT pg_reload_conf();')
+    rows = live_settings_rows()
+    ev.check('c19: the live cluster sets work_mem and search_path in its configuration',
+             rows.count('configuration file') == 2, rows)
+    try:
+        job, took = convert(STATE['ha_enc'], ['odoo'], 'woowtest', False, ev=ev, key=args.secrets['HA_BACKUP_KEY'],
+                            tag='c19')
+        log = ok('job-status', {'job_id': job['id']}, ev=ev).get('log') or []
+        carried = [line for line in log if '沿用這台 PostgreSQL 的設定' in line]
+        ev.check('c19: the conversion succeeds and carries both settings', job['state'] == 'succeeded'
+                 and any('search_path' in l and 'work_mem' in l for l in carried),
+                 f'{took:.0f} s {job.get("error")} {carried}')
+        if job['state'] != 'succeeded':
+            return
+        STATE['converted_c19'] = job['result']['backup_id']
+        restored, took = restore(job['result']['backup_id'], ['odoo'], ev=ev, tag='c19-restore')
+        ev.check('c19: the converted backup restores', restored['state'] == 'succeeded',
+                 f'{took:.0f} s {restored.get("error")}')
+        shown = {name: psql('odoo18-db', 'postgres', 'odoo', f'SHOW {name};') for name, _l, _s in C19_SETTINGS}
+        ev.check('c19: the restored cluster runs with the carried settings (list setting element by element)',
+                 all(shown[name] == expected for name, _l, expected in C19_SETTINGS), shown)
+        apps_healthy(ev, 'c19')
+    finally:
+        for name, _literal, _shown in C19_SETTINGS:
+            psql('odoo18-db', 'postgres', 'postgres', f'ALTER SYSTEM RESET {name};')
+        psql('odoo18-db', 'postgres', 'postgres', 'SELECT pg_reload_conf();')
+    rows = live_settings_rows()
+    ev.check('c19: dev-c\'s own settings are reset', 'configuration file' not in rows, rows)
+
+
+F8_DROPIN = '.config/systemd/user/odoo-db.service.d/woowbk-f8.conf'
+F8_MARKER = '.woowbk-f8-fail-once'
+
+
+def f8_inject(enable):
+    """The next start of odoo-db.service fails once (an ExecStartPost= that consumes a marker file); the rollback's
+    start then succeeds (cli_e2e.py's F8 for the demo app)."""
+    if enable:
+        script = (f'mkdir -p "$HOME/{Path(F8_DROPIN).parent}" && touch "$HOME/{F8_MARKER}" && '
+                  f'printf "%s\\n" "[Service]" '
+                  f'"ExecStartPost=/bin/sh -c \'test ! -e $HOME/{F8_MARKER} || {{ rm -f $HOME/{F8_MARKER}; exit 1; }}\'" '
+                  f'> "$HOME/{F8_DROPIN}" && systemctl --user daemon-reload')
+    else:
+        script = (f'rm -f "$HOME/{F8_DROPIN}" "$HOME/{F8_MARKER}"; rmdir "$HOME/{Path(F8_DROPIN).parent}" 2>/dev/null; '
+                  'systemctl --user daemon-reload')
+    owner('sh', '-c', script, check=True)
+
+
+def scenario_rollback(ev, args):
+    """A restore of a converted backup that fails after the destructive step (injected: the database's first start
+    fails) rolls back automatically: Odoo has exactly the data from before the restore."""
+    backup_id = STATE.get('converted_c19') or STATE.get('converted')
+    if not backup_id:
+        raise Failed('rollback needs a converted backup (run c19 or convert first)')
+    marker = f'before-rollback-{int(time.time())}'
+    psql('odoo18-db', 'postgres', 'odoo',
+         "INSERT INTO ir_config_parameter (key, value, create_uid, create_date, write_uid, write_date) VALUES "
+         f"('woowbk.lab.rollback', '{marker}', 1, now(), 1, now()) ON CONFLICT (key) DO UPDATE SET value = "
+         "EXCLUDED.value;")
+    f8_inject(True)
+    try:
+        job, took = restore(backup_id, ['odoo'], ev=ev, tag='rollback')
+    finally:
+        f8_inject(False)
+    result = job.get('result') or {}
+    ev.check('rollback: the failed restore rolled back', job['state'] == 'rolled-back' and result.get('rolled_back')
+             is True, f'{took:.0f} s {job["state"]} {job.get("error")} safety={result.get("safety_backup_id")}')
+    value = psql('odoo18-db', 'postgres', 'odoo', "SELECT value FROM ir_config_parameter WHERE key = 'woowbk.lab.rollback';")
+    ev.check('rollback: Odoo has the data from before the restore', value == marker, value)
+    psql('odoo18-db', 'postgres', 'odoo', "DELETE FROM ir_config_parameter WHERE key = 'woowbk.lab.rollback';")
+    gate = owner('systemctl', '--user', 'show', 'odoo.service', '-p', 'ActiveState').stdout.decode().strip()
+    ev.check('rollback: odoo.service active again', gate == 'ActiveState=active', gate)
+    apps_healthy(ev, 'rollback')
+
+
 def scenario_baseline(ev, args):
     """dev-c back to its own data from before any import (prodlike_baseline.py's encrypted backups)."""
     if not args.baseline:
@@ -675,9 +948,10 @@ def main():
     parser.add_argument('--creds', default=str(SCRATCH / 'testdata' / 'creds.env'))
     parser.add_argument('--n8n-data', default=str(SCRATCH / 'testha-scripts' / 'n8n-testdata.filled.sh'))
     parser.add_argument('--baseline', help='ODOO_BACKUP_ID,N8N_BACKUP_ID of dev-c backups from before any import')
+    parser.add_argument('--evidence', default='ha-import', help='evidence folder below ~/.woowbk-lab/evidence')
     args = parser.parse_args()
     args.secrets = Secrets(args.creds, args.n8n_data)
-    ev = Evidence(args.secrets)
+    ev = Evidence(args.secrets, re.sub(r'[^A-Za-z0-9_.-]', '', args.evidence) or 'ha-import')
     load_state()
     scenarios = args.scenarios or list(ALL)
     try:
@@ -689,6 +963,8 @@ def main():
             ev.log(f'== {name}')
             if name == 'verify':
                 scenario_verify(ev, args)
+            elif name in ('kill', 'cancel', 'space', 'pull', 'rollback') and not STATE.get('ha_enc'):
+                raise Failed(f'{name} needs the uploads (run upload first)')
             else:
                 globals()[f'scenario_{name}'](ev, args)
     except Failed as error:
