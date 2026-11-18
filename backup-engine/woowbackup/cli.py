@@ -72,6 +72,23 @@ def v_ha_backup_id(value, field):
     return value
 
 
+HA_APP_IDS = ('odoo', 'n8n')
+HA_DB_RE = re.compile(r'[A-Za-z0-9_][A-Za-z0-9_.-]{0,62}\Z')
+
+
+def v_ha_apps(value, field):
+    if (not isinstance(value, list) or not 1 <= len(value) <= len(HA_APP_IDS) or len(set(map(str, value))) != len(value)
+            or not all(isinstance(item, str) and item in HA_APP_IDS for item in value)):
+        raise _bad(field, '必須是 1 到 2 個不重複的應用 ID（odoo、n8n）的陣列。')
+    return value
+
+
+def v_ha_database(value, field):
+    if not isinstance(value, str) or not HA_DB_RE.fullmatch(value):
+        raise _bad(field, '不是有效的資料庫名稱。')
+    return value
+
+
 def v_key(value, field):
     if not isinstance(value, str) or not value.strip() or len(value) > 4096 or '\x00' in value:
         raise _bad(field, '不是有效的金鑰。')
@@ -206,6 +223,13 @@ SPECS = {
     'schedule-run-now': {'request_id': (REQUIRED, v_request_id)},
     # Home Assistant backups (CONTRACT section 7, branch feat/ha-import): uploaded HA files live in ha-backups/.
     'ha-delete': {'ha_backup_id': (REQUIRED, v_ha_backup_id), 'confirm': (REQUIRED, v_true)},
+    # The HA import jobs (part B): `key` is the HA key exactly as typed (never trimmed or normalised).
+    'ha-check-start': {'ha_backup_id': (REQUIRED, v_ha_backup_id), 'apps': (REQUIRED, v_ha_apps),
+                       'request_id': (REQUIRED, v_request_id), 'key': (OPTIONAL, v_key)},
+    'ha-convert-start': {'ha_backup_id': (REQUIRED, v_ha_backup_id), 'apps': (REQUIRED, v_ha_apps),
+                         'test_mode': (REQUIRED, v_bool), 'request_id': (REQUIRED, v_request_id),
+                         'confirm': (REQUIRED, v_true), 'odoo_database': (OPTIONAL, v_ha_database),
+                         'key': (OPTIONAL, v_key)},
 }
 NO_INPUT = frozenset({'status', 'list', 'key-init', 'key-kit', 'jobs', 'settings-get', 'schedule-get'})
 
@@ -281,8 +305,10 @@ def validate(command, data):
 class Services:
     """Dependencies of the commands; tests replace `deps`, `launcher`, `unit_active`, `clock` and `timer`."""
 
-    def __init__(self, paths, *, deps=None, launcher=None, unit_active=None, trusted_uid=0, clock=None, timer=None):
+    def __init__(self, paths, *, deps=None, launcher=None, unit_active=None, trusted_uid=0, clock=None, timer=None,
+                 sweep_temp=None):
         self.paths = paths
+        self.sweep_temp = sweep_temp  # (job_id, owners) -> [problems]; None: haimport.sweep_job (recovery)
         self._deps = deps
         self.launcher = launcher
         self.unit_active = unit_active
@@ -345,7 +371,8 @@ class Services:
     def recover(self):
         changed = jobmod.recover_interrupted(self.paths, unit_active=self.unit_active,
                                              restart_writers=self.restart_writers, cleanup_fresh=self.cleanup_fresh,
-                                             settle_dirs=self.settle_dirs, package_safety=self.package_safety)
+                                             settle_dirs=self.settle_dirs, package_safety=self.package_safety,
+                                             sweep_temp=self.sweep_temp)
         # Every recovery pass also deletes expired unencrypted copies (after a reboot the transient timer is gone;
         # review L1).
         self.cleanup_exports()
@@ -355,7 +382,7 @@ class Services:
         return jobmod.start_job(self.paths, job_type, params, request_id, launcher=self.launcher,
                                 unit_active=self.unit_active, restart_writers=self.restart_writers,
                                 cleanup_fresh=self.cleanup_fresh, settle_dirs=self.settle_dirs,
-                                package_safety=self.package_safety, **kwargs)
+                                package_safety=self.package_safety, sweep_temp=self.sweep_temp, **kwargs)
 
     def key_ids(self):
         return {info.key_id for info in self.keys.identities()}
@@ -472,10 +499,11 @@ def key_view(info):
     return {'key_id': info.key_id, 'created': info.created, 'kit_confirmed': bool(info.kit_confirmed)}
 
 
-def backup_view(meta, key_ids, scheduled=frozenset()):
+def backup_view(meta, key_ids, scheduled=frozenset(), from_ha=None):
     """BackupMeta for the page: `format` (1|2), `encrypted`, `key_available` (always true without encryption),
     `unauthenticated` (an unencrypted upload: a restore needs `accept_unauthenticated`) and `scheduled` (a manual backup
-    the schedule's registry lists: 排程備份; the index itself is unchanged)."""
+    the schedule's registry lists: 排程備份; the index itself is unchanged); `from_ha` only for a manual backup converted
+    from a Home Assistant backup (ha-imports.json; branch feat/ha-import)."""
     from .storage import unauthenticated
     view = dict(meta)
     view.setdefault('format', 1)
@@ -483,7 +511,20 @@ def backup_view(meta, key_ids, scheduled=frozenset()):
     view['key_available'] = (not view['encrypted']) or meta.get('key_id') in key_ids
     view['unauthenticated'] = unauthenticated(view)
     view['scheduled'] = view.get('type') == 'manual' and view.get('id') in scheduled
+    origin = (from_ha or {}).get(view.get('id')) if view.get('type') == 'manual' else None
+    if origin is not None:
+        view['from_ha'] = origin
     return view
+
+
+def ha_import_views(svc):
+    """{backup id: from_ha} of converted backups ({} when ha-imports.json cannot be read)."""
+    from . import haimport
+    try:
+        return haimport.from_ha_views(svc.paths)
+    except Exception:  # noqa: BLE001 - never breaks the list
+        traceback.print_exc(file=sys.stderr)
+        return {}
 
 
 def tool_version(paths):
@@ -674,6 +715,17 @@ def schedule_summary(svc):
         return None
 
 
+def ha_usage(svc):
+    """`status.storage.ha_backups_bytes` / `ha_backup_count`: uploaded HA backups (ha-backups/, branch feat/ha-import;
+    not part of `backups_bytes`)."""
+    try:
+        records = svc.ha_store.list()
+    except Exception:  # noqa: BLE001 - the overview still works
+        traceback.print_exc(file=sys.stderr)
+        records = []
+    return {'ha_backups_bytes': sum(int(rec['size']) for rec in records), 'ha_backup_count': len(records)}
+
+
 def cmd_status(svc, _req):
     svc.recover()
     svc.cleanup_exports()
@@ -684,6 +736,7 @@ def cmd_status(svc, _req):
     active = jobmod.active_job(svc.paths)
     storage = storage_usage(svc.storage, backups)
     storage['apps'] = apps_usage(svc, backups, catalog)
+    storage.update(ha_usage(svc))
     return {
         'version': tool_version(svc.paths),
         'host': {key: host.get(key) for key in ('hostname', 'arch', 'os', 'podman')},
@@ -722,7 +775,8 @@ def cmd_list(svc, _req):
     ids = svc.key_ids()
     scheduled = svc.scheduled_ids()
     exports = getattr(svc.storage, 'list_exports', lambda: [])()
-    return {'backups': [backup_view(meta, ids, scheduled) for meta in svc.storage.list_backups()],
+    origins = ha_import_views(svc)
+    return {'backups': [backup_view(meta, ids, scheduled, origins) for meta in svc.storage.list_backups()],
             'exports': [{key: rec[key] for key in ('export_id', 'backup_id', 'filename', 'size', 'expires')}
                         for rec in exports],
             'ha_backups': ha_backups_view(svc)}
@@ -896,6 +950,10 @@ def cmd_delete(svc, req):
                 raise BackupError('busy', '還原作業進行中時不能刪除還原前備份（還原失敗時可能需要它來自動回復），'
                                           '請等作業完成後再刪除。', job_id=record['id'])
         svc.storage.delete(backup_id)
+    if meta.get('type') == 'manual':
+        from . import haimport
+        with contextlib.suppress(Exception):  # a converted backup's origin row goes with it (ha-imports.json)
+            haimport.forget(svc.paths, backup_id)
     # Every deletion is journaled, like retention's (review L6).
     svc.audit(f'backup-delete backup={backup_id} type={meta.get("type")} '
               f'encrypted={"false" if meta.get("encrypted") is False else "true"} loginuid={_login_uid()}')
@@ -928,6 +986,64 @@ def cmd_ha_delete(svc, req):
         svc.ha_store.delete(ha_id)
     svc.audit(f'ha-backup-delete ha_backup={ha_id} loginuid={_login_uid()}')
     return {}
+
+
+def _ha_selection(svc, req):
+    """(record, members of the selected add-ons) of an HA import request; the key is checked against every encrypted
+    member before a job starts (key-required / wrong-key, before any plaintext)."""
+    from . import habackup, haimport, hasecuretar
+    rec = svc.ha_store.get(req['ha_backup_id'])
+    by_suffix = {hastore.addon_suffix(addon['slug']): addon for addon in rec['addons']}
+    selected = []
+    for app_id in req['apps']:
+        addon = by_suffix.get(haimport.APPS[app_id])
+        if addon is None:
+            raise BackupError('invalid-request', f'這份 HA 備份沒有可以匯入「{app_id}」的附加元件。', field='apps',
+                              app=app_id)
+        selected.append(addon)
+    key = req.get('key')
+    if any(addon['encrypted'] for addon in selected):
+        if key is None:
+            raise hasecuretar.key_required(ha_backup_id=rec['id'])
+        keys = hasecuretar.Keys(key)
+        with habackup.open_backup(svc.ha_store.file_path(rec['id'])) as backup:
+            for addon in selected:
+                member = backup.layout.addon(addon['slug'])
+                if member.encrypted:
+                    with backup.open_member(member.name, keys):
+                        pass
+    else:
+        key = None  # nothing to decrypt: the key is not kept
+    return rec, key
+
+
+def cmd_ha_check_start(svc, req):
+    """An HA check job (type verify, params.source 'ha'; CONTRACT section 7)."""
+    rec, key = _ha_selection(svc, req)
+    params = {'source': 'ha', 'ha_backup_id': rec['id'], 'apps': list(req['apps']), 'key_provided': key is not None}
+    return svc.start('verify', params, req['request_id'], key_text=key, key_kind='ha')
+
+
+def cmd_ha_convert_start(svc, req):
+    """An HA convert job (type backup, params.source 'ha'; CONTRACT section 7)."""
+    from .haimport import INSTALL_HINT, _app_label
+    apps = list(req['apps'])
+    database = req.get('odoo_database')
+    if 'odoo' in apps and database is None:
+        raise _bad('odoo_database', '為必填（選擇要匯入的 Odoo 資料庫）。')
+    if 'odoo' not in apps:
+        database = None
+    catalog = svc.catalog()
+    for app_id in apps:
+        if catalog.get(app_id) is None:
+            raise BackupError('app-not-in-catalog', INSTALL_HINT.format(name=_app_label(app_id)), app=app_id)
+    encrypt = svc.encrypt_by_default()
+    if encrypt and svc.keys.device_key() is None:
+        raise BackupError('no-device-key', '這台設備尚未建立加密金鑰，請先完成金鑰設定。')
+    rec, key = _ha_selection(svc, req)
+    params = {'source': 'ha', 'ha_backup_id': rec['id'], 'apps': apps, 'odoo_database': database,
+              'test_mode': bool(req['test_mode']), 'encrypt': bool(encrypt), 'key_provided': key is not None}
+    return svc.start('backup', params, req['request_id'], key_text=key, key_kind='ha')
 
 
 def cmd_upload_abort(svc, req):
@@ -1154,7 +1270,7 @@ COMMANDS = {
     'catalog-suggest': cmd_catalog_suggest, 'catalog-install': cmd_catalog_install,
     'catalog-remove': cmd_catalog_remove, 'retention-plan': cmd_retention_plan, 'retention-apply': cmd_retention_apply,
     'schedule-get': cmd_schedule_get, 'schedule-set': cmd_schedule_set, 'schedule-run-now': cmd_schedule_run_now,
-    'ha-delete': cmd_ha_delete,
+    'ha-delete': cmd_ha_delete, 'ha-check-start': cmd_ha_check_start, 'ha-convert-start': cmd_ha_convert_start,
 }
 
 

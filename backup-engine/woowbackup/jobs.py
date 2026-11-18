@@ -61,6 +61,15 @@ PHASES = {
     'export': (('prepare', '準備'), ('decrypt', '解密並驗證檔案'), ('package', '封裝未加密副本'), ('verify', '驗證副本')),
 }
 PLAIN_PACKAGE_LABEL = '封裝（未加密）'  # the package phase of a backup made with 加密此備份 off encrypts nothing
+# Home Assistant import jobs (branch feat/ha-import; haimport.py): a `verify` / `backup` job with params.source 'ha'
+# checks / converts an uploaded HA backup; known types keep older pages' job validation happy, the labels live in
+# the records like every job's.
+HA_PHASES = {
+    'verify': (('prepare', '準備'), ('decrypt', '解開 HA 備份'), ('check', '檢查內容與版本')),
+    'backup': (('prepare', '準備'), ('decrypt', '解開 HA 備份'), ('convert', '轉換資料'), ('package', '封裝備份'),
+               ('verify', '驗證備份')),
+}
+KEY_KINDS = ('age', 'ha')
 ACTIVE = ('queued', 'running')
 TERMINAL = ('succeeded', 'failed', 'rolled-back', 'interrupted', 'cancelled')
 PUBLIC_KEYS = ('id', 'type', 'state', 'phase', 'phases', 'progress', 'created', 'started', 'finished', 'params',
@@ -247,6 +256,11 @@ def read_json(path, max_bytes=MAX_RECORD_BYTES):
         os.close(fd)
 
 
+def is_ha_job(job_type, params):
+    """A Home Assistant import job (check or convert): params.source 'ha'."""
+    return job_type in HA_PHASES and isinstance(params, dict) and params.get('source') == 'ha'
+
+
 def public_job(record):
     return {key: record.get(key) for key in PUBLIC_KEYS}
 
@@ -257,8 +271,10 @@ def unit_name(job_id):
 
 def has_leftovers(record):
     """The record still lists writers a dead job left stopped, an unfinished fresh deployment, apps whose host
-    directories a dead restore may have left siblings of, or a restore's pre-restore copy that is not packaged yet."""
+    directories a dead restore may have left siblings of, owners whose throwaway containers a dead job may have left
+    (`temp_owners`, tempctr.py), or a restore's pre-restore copy that is not packaged yet."""
     return bool(record.get('stopped_writers') or record.get('fresh_apps') or record.get('dir_apps')
+                or record.get('temp_owners')
                 or (record.get('type') == 'restore' and record.get('safety_pending')))
 
 
@@ -338,10 +354,11 @@ class JobStore:
         self.ensure()
         job_id = new_job_id(now)
         plain = job_type == 'backup' and isinstance(params, dict) and params.get('encrypt') is False
+        phases = (HA_PHASES[job_type] if is_ha_job(job_type, params) else PHASES[job_type])
         record = {
-            'id': job_id, 'type': job_type, 'state': 'queued', 'phase': PHASES[job_type][0][0],
+            'id': job_id, 'type': job_type, 'state': 'queued', 'phase': phases[0][0],
             'phases': [{'id': pid, 'label': PLAIN_PACKAGE_LABEL if plain and pid == 'package' else label,
-                        'state': 'pending'} for pid, label in PHASES[job_type]],
+                        'state': 'pending'} for pid, label in phases],
             'progress': {'percent': 0, 'message': '等待開始'}, 'created': utc_iso(now), 'started': None,
             'finished': None, 'params': params, 'result': None, 'error': None, 'cancellable': True,
             'request_id': request_id, 'unit': unit_name(job_id),
@@ -715,13 +732,25 @@ def _save_requests(paths, entries):
     atomic_write_json(paths.requests, {'version': 1, 'requests': entries})
 
 
-def _write_key_file(path, key_text):
+def _check_key(key_text, key_kind):
+    """Validate a job key before anything is written: an age identity (keys.normalize_secret) or a Home Assistant
+    backup key (any text HA accepts: hasecuretar.Keys, never trimmed or normalised)."""
+    if key_kind not in KEY_KINDS:
+        raise BackupError('invalid-request', '不支援的金鑰種類。')
+    if key_kind == 'ha':
+        from .hasecuretar import Keys
+        Keys(key_text)
+        return key_text.encode('utf-8')
     from .keys import normalize_secret
-    secret = normalize_secret(key_text)
+    return (normalize_secret(key_text) + '\n').encode('ascii')
+
+
+def _write_key_file(path, key_text, key_kind='age'):
+    data = _check_key(key_text, key_kind)
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
     try:
         os.fchmod(fd, 0o600)
-        data = memoryview((secret + '\n').encode('ascii'))
+        data = memoryview(data)
         while data:
             data = data[os.write(fd, data):]
         os.fsync(fd)
@@ -736,16 +765,18 @@ def _remove_key_file(store, job_id):
 
 # ---------------------------------------------------------------- public API
 
-def start_job(paths, job_type, params, request_id, *, key_text=None, launcher=None, unit_active=None, now=None,
-              restart_writers=None, cleanup_fresh=None, settle_dirs=None, package_safety=None):
-    """Create and launch a job; returns {'job_id', 'deduplicated'}."""
+def start_job(paths, job_type, params, request_id, *, key_text=None, key_kind='age', launcher=None, unit_active=None,
+              now=None, restart_writers=None, cleanup_fresh=None, settle_dirs=None, package_safety=None,
+              sweep_temp=None):
+    """Create and launch a job; returns {'job_id', 'deduplicated'}. `key_kind`: 'age' (an emergency key, normalised
+    and written as an age identity file) or 'ha' (a Home Assistant backup key, written as the raw UTF-8 text; the job
+    masks it in its logs before it writes the first line)."""
     if job_type not in PHASES:
         raise BackupError('invalid-request', '不支援的作業類型。')
     if not isinstance(request_id, str) or not REQUEST_ID_RE.fullmatch(request_id):
         raise BackupError('invalid-request', '請求識別碼格式不正確。')
     if key_text is not None:
-        from .keys import normalize_secret
-        normalize_secret(key_text)  # validate before anything is written
+        _check_key(key_text, key_kind)  # validate before anything is written
     store = JobStore(paths)
     store.ensure()
     launcher = launcher or systemd_run_launcher(paths)
@@ -762,7 +793,7 @@ def start_job(paths, job_type, params, request_id, *, key_text=None, launcher=No
             except BackupError:
                 pass
         _recover_locked(paths, store, unit_active or systemd_unit_active, now, restart_writers, cleanup_fresh,
-                        settle_dirs, package_safety)
+                        settle_dirs, package_safety, sweep_temp)
         active = [r for r in store.list(limit=None) if r.get('state') in ACTIVE]
         if active:
             raise BackupError('busy', '已有備份或還原作業正在進行，請等它完成後再試。', job_id=active[0]['id'])
@@ -770,7 +801,7 @@ def start_job(paths, job_type, params, request_id, *, key_text=None, launcher=No
         job_id = record['id']
         try:
             if key_text is not None:
-                _write_key_file(store.key_path(job_id), key_text)
+                _write_key_file(store.key_path(job_id), key_text, key_kind)
             requests[request_id] = {'job_id': job_id, 'type': job_type, 'created': now}
             _save_requests(paths, requests)
             launcher(job_id)
@@ -815,6 +846,9 @@ def _destructive_phase_reached(record):
 def interrupted_details(record):
     """(zh-TW guidance, result|None) for a job that stopped without finishing."""
     message = INTERRUPTED_MESSAGE.get(record.get('type'), INTERRUPTED_MESSAGE['verify'])
+    if is_ha_job(record.get('type'), record.get('params')):
+        from .haimport import interrupted_message
+        return interrupted_message(record.get('type')), None
     if record.get('type') != 'restore':
         return message, None
     safety = record.get('safety_backup_id')
@@ -1080,7 +1114,29 @@ def _package_pending_copy(store, record, package_safety):
     return note
 
 
-def _finish_leftovers(store, record, restart_writers, cleanup_fresh, settle_dirs=None, package_safety=None):
+def _sweep_temp(store, record, sweep_temp):
+    """Remove the throwaway containers, volumes and networks a dead (or finished) job may have left for the owners
+    its record lists (`temp_owners`); forgotten once podman removed them (or the owner no longer exists)."""
+    owners = [o for o in record.get('temp_owners') or [] if isinstance(o, str)]
+    if not owners:
+        return ''
+    if sweep_temp is None:
+        from .haimport import sweep_job as sweep_temp
+    try:
+        problems = list(sweep_temp(record['id'], owners) or [])
+    except Exception:  # noqa: BLE001 - retried on the next recovery pass
+        traceback.print_exc(file=sys.stderr)
+        return ''
+    if problems:
+        store.append_log(record['id'], f'無法清除暫用容器：{"；".join(problems)[:300]}')
+        return ''
+    record['temp_owners'] = []
+    store.append_log(record['id'], '已清除這個作業留下的暫用容器與資料卷')
+    return ''
+
+
+def _finish_leftovers(store, record, restart_writers, cleanup_fresh, settle_dirs=None, package_safety=None,
+                      sweep_temp=None):
     """Restart writers / settle host directories / remove the unfinished fresh deployment / package the pre-restore
     copy that a finished record still lists (writers a terminated backup left stopped, review CR-14; a restore cut by
     a shutdown, CR-05). The directories come first: a missing one gets its moved-aside copy back before a fresh
@@ -1092,6 +1148,7 @@ def _finish_leftovers(store, record, restart_writers, cleanup_fresh, settle_dirs
     extra = _restart_stopped_writers(store, record, restart_writers)
     extra += _settle_dirs(store, record, settle_dirs)
     extra += _remove_unfinished_fresh(store, record, cleanup_fresh)
+    extra += _sweep_temp(store, record, sweep_temp)
     if extra and isinstance(record.get('error'), dict):
         record['error']['message'] = (record['error'].get('message') or '') + extra
     if json.dumps(record, sort_keys=True, default=str) != before:
@@ -1100,7 +1157,7 @@ def _finish_leftovers(store, record, restart_writers, cleanup_fresh, settle_dirs
 
 
 def _mark_interrupted(paths, store, record, now, restart_writers, cleanup_fresh, settle_dirs=None,
-                      package_safety=None):
+                      package_safety=None, sweep_temp=None):
     """Finish a dead job's fresh record as `interrupted`; the state is committed before any clean-up runs, so a
     helper killed during the clean-up leaves a finished record whose leftovers the next pass completes."""
     message, result = interrupted_details(record)
@@ -1115,14 +1172,14 @@ def _mark_interrupted(paths, store, record, now, restart_writers, cleanup_fresh,
     store.save(record)
     store.append_log(record['id'], f'作業被判定為已中斷：{message}')
     if has_leftovers(record):
-        _finish_leftovers(store, record, restart_writers, cleanup_fresh, settle_dirs, package_safety)
+        _finish_leftovers(store, record, restart_writers, cleanup_fresh, settle_dirs, package_safety, sweep_temp)
     _remove_key_file(store, record['id'])
     if _remove_dead_staging(paths, record['id']):
         store.append_log(record['id'], '已清除中斷作業留下的暫存資料')
 
 
 def _recover_one(paths, store, job_id, unit, unit_active, now, restart_writers, cleanup_fresh, settle_dirs=None,
-                 package_safety=None):
+                 package_safety=None, sweep_temp=None):
     """Decide one candidate while the start and engine locks are held; True when it was marked interrupted.
 
     With the engine lock held no run-job is between taking and releasing it, and a run-job writes its final
@@ -1139,11 +1196,13 @@ def _recover_one(paths, store, job_id, unit, unit_active, now, restart_writers, 
             return False
         if record.get('state') in TERMINAL:
             if has_leftovers(record):
-                _finish_leftovers(store, record, restart_writers, cleanup_fresh, settle_dirs, package_safety)
+                _finish_leftovers(store, record, restart_writers, cleanup_fresh, settle_dirs, package_safety,
+                                  sweep_temp)
             return False
         if record.get('state') not in ACTIVE or _queued_grace(record, now):
             return False
-        _mark_interrupted(paths, store, record, now, restart_writers, cleanup_fresh, settle_dirs, package_safety)
+        _mark_interrupted(paths, store, record, now, restart_writers, cleanup_fresh, settle_dirs, package_safety,
+                          sweep_temp)
     return True
 
 
@@ -1223,7 +1282,7 @@ def _retain(store, records, now, keep=KEEP_TERMINAL):
 
 
 def _recover_locked(paths, store, unit_active, now, restart_writers=None, cleanup_fresh=None, settle_dirs=None,
-                    package_safety=None):
+                    package_safety=None, sweep_temp=None):
     """One recovery pass (the caller holds the start lock); returns the ids marked interrupted.
 
     The listing only picks candidates: records queued/running (past the queued grace) and finished records
@@ -1241,7 +1300,7 @@ def _recover_locked(paths, store, unit_active, now, restart_writers=None, cleanu
             try:
                 for job_id, unit in candidates:
                     if _recover_one(paths, store, job_id, unit, unit_active, now, restart_writers, cleanup_fresh,
-                                    settle_dirs, package_safety):
+                                    settle_dirs, package_safety, sweep_temp):
                         changed.append(job_id)
             finally:
                 os.close(engine_fd)
@@ -1256,20 +1315,21 @@ def _recover_locked(paths, store, unit_active, now, restart_writers=None, cleanu
 
 
 def recover_interrupted(paths, *, unit_active=None, now=None, restart_writers=None, cleanup_fresh=None,
-                        settle_dirs=None, package_safety=None):
+                        settle_dirs=None, package_safety=None, sweep_temp=None):
     """Mark dead queued/running jobs as interrupted; returns the affected job ids.
 
     `restart_writers({app_id: [units]}) -> [failed units]` restarts writers a dead backup left stopped;
     `cleanup_fresh([app_id]) -> [problems]` removes an unfinished fresh deployment;
     `settle_dirs(job_id, [app_id]) -> [notes]` settles the host-directory siblings a dead restore left;
-    `package_safety(job_id) -> (backup id | None, problem | None)` packages a restore's pre-restore copy.
+    `package_safety(job_id) -> (backup id | None, problem | None)` packages a restore's pre-restore copy;
+    `sweep_temp(job_id, owners) -> [problems]` removes a job's throwaway containers (default haimport.sweep_job).
     """
     if not Path(paths.jobs).is_dir():
         return []
     store = JobStore(paths)
     with start_lock(paths):
         return _recover_locked(paths, store, unit_active or systemd_unit_active, time.time() if now is None else now,
-                               restart_writers, cleanup_fresh, settle_dirs, package_safety)
+                               restart_writers, cleanup_fresh, settle_dirs, package_safety, sweep_temp)
 
 
 def active_job(paths):
@@ -1320,6 +1380,29 @@ def _adopt_orphans(ctx):
         traceback.print_exc(file=sys.stderr)
 
 
+def _ha_key(record, key_file):
+    """The raw HA key text of an HA import job's key file (None for other jobs or without a key)."""
+    if key_file is None or not is_ha_job(record.get('type'), record.get('params')):
+        return None
+    from .haimport import read_key_file
+    try:
+        return read_key_file(key_file)
+    except (BackupError, OSError):
+        return None  # the job itself reports the unusable key
+
+
+def _sweep_finished_temp(ctx):
+    """Throwaway objects of jobs that are not running any more (tempctr.py) are removed at every job start; never
+    blocks the job (`deps.sweep_temp`, absent in tests)."""
+    sweep = getattr(ctx.deps, 'sweep_temp', None)
+    if sweep is None:
+        return
+    try:
+        sweep(ctx.job_id, ctx.log)
+    except Exception:  # noqa: BLE001 - housekeeping only; details go to the journal
+        traceback.print_exc(file=sys.stderr)
+
+
 def _restart_after_termination(ctx):
     """A termination signal ended the job: start writers that are still recorded as stopped (review CR-14),
     unless the machine is shutting down (they start with the user manager at boot)."""
@@ -1359,6 +1442,7 @@ def run_job(paths, job_id, *, deps=None, lock_timeout=LOCK_WAIT_SECONDS, handler
     from . import flows
     store = JobStore(paths)
     lock_fd = None
+    masks = contextlib.ExitStack()
     try:
         store.ensure()
         store.get(job_id)  # not-found before waiting for the engine lock
@@ -1380,7 +1464,13 @@ def run_job(paths, job_id, *, deps=None, lock_timeout=LOCK_WAIT_SECONDS, handler
         key_file = store.key_path(job_id)
         ctx = flows.FlowContext(paths, job_id, deps or flows.default_deps(paths), reporter,
                                 key_file=key_file if os.path.lexists(key_file) else None)
+        # The HA key of an import job is masked before the job writes its first log line (haimport.py).
+        ha_key = _ha_key(reporter.record, ctx.key_file)
+        if ha_key is not None:
+            masks.enter_context(masked(ha_key))
+            ctx.ha_key = ha_key
         _adopt_orphans(ctx)
+        _sweep_finished_temp(ctx)
         table = handlers or {'backup': flows.run_backup, 'restore': flows.run_restore, 'verify': flows.run_verify,
                              'export': flows.run_export}
         handler = table[reporter.record['type']]
@@ -1411,6 +1501,7 @@ def run_job(paths, job_id, *, deps=None, lock_timeout=LOCK_WAIT_SECONDS, handler
             with contextlib.suppress(OSError):
                 os.ftruncate(lock_fd, 0)
             os.close(lock_fd)
+        masks.close()
 
 
 # Old private names, kept for callers and tests written against them.
