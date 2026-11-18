@@ -129,8 +129,11 @@
   const HA_TYPES = { full: "完整備份", partial: "部分備份" };
   // This device's app for each add-on it can take, when the engine names none (Odoo and n8n only).
   const HA_APP_NAMES = { odoo: "Odoo 18", n8n: "n8n 工作流程" };
-  // Catalog entries that keep their own login to the imported app: it changes with the imported users (DESIGN §0).
+  // Catalog entries that keep their own login to the imported app: it changes with the imported users (DESIGN §0). The
+  // page is named as this device's catalog names it; `page` only when the entry has no name.
   const HA_MCP_ADMIN = { odoo: { id: "odoo-mcp-admin", page: "Odoo MCP 管理", app: "Odoo" }, n8n: { id: "n8n-mcp-admin", page: "n8n MCP 管理", app: "n8n" } };
+  // The uploaded HA file holds all of HA, its passwords and tokens too, and stays until deleted (review HA-SEC-06).
+  const HA_DELETE_REMINDER = "匯入完成後，建議刪除這份 HA 備份檔（裡面可能有 HA 的密碼與權杖）。";
   const HA_JOB_TITLES = { check: "檢查 HA 備份", convert: "轉換 HA 備份" };
 
   // A scheduled backup is a manual backup the schedule's registry lists (BackupMeta.scheduled): 「排程」.
@@ -3207,10 +3210,14 @@
   }
 
   // Where a converted backup came from (`BackupMeta.from_ha`) or a conversion's `result.ha_import`; `fallback` fills in
-  // what the reply leaves out from what this page knows (the import wizard, the job's params).
+  // what the reply leaves out from what this page knows (the import wizard, the job's params). The engine's words:
+  // `notes` explain the import before the restore, `reminders_by_app` and `reminders` are the to-dos afterwards of each
+  // app and of none (FIXPLAN §19b, UI-3; an engine before that sent all its lines in `reminders`); `addons` names the
+  // HA add-ons even after the HA file is deleted (review P-06).
   function haInfo(value, fallback = {}) {
     const info = isObject(value) ? value : {};
     const pick = (key, other) => (info[key] === undefined || info[key] === null ? other : info[key]);
+    const lines = items => list(items).filter(item => isString(item) && item.trim());
     const haId = [info.ha_backup_id, fallback.haId].find(item => isString(item) && HA_ID_RE.test(item)) || null;
     const ha = haId ? haFind(haId) : null;
     return {
@@ -3218,15 +3225,22 @@
       apps: list(pick("apps", fallback.apps)).filter(item => isString(item) && APP_ID_RE.test(item)),
       odooDatabase: str(pick("odoo_database", fallback.odooDatabase)) || null, testMode: pick("test_mode", fallback.testMode) === true,
       workflows: Array.isArray(info.workflows_to_fix) ? haWorkflows(info.workflows_to_fix) : list(fallback.workflows),
-      reminders: list(info.reminders).filter(item => isString(item) && item.trim())
+      notes: lines(info.notes),
+      reminders: lines(info.reminders),
+      remindersByApp: isObject(info.reminders_by_app) ? Object.fromEntries(Object.entries(info.reminders_by_app)
+        .filter(([id]) => APP_ID_RE.test(id)).map(([id, items]) => [id, lines(items)])) : null,
+      addons: list(info.addons).filter(item => isObject(item) && isString(item.app_id) && isString(item.name) && item.name.trim())
+        .map(item => ({ appId: item.app_id, name: item.name.trim() }))
     };
   }
   const fromHaOf = backup => (isObject(backup?.from_ha) ? haInfo(backup.from_ha) : null);
 
-  // The HA add-on an imported app came from, named by its HA backup while that is still on this device.
+  // The HA add-on an imported app came from: as the import recorded it, else as its HA backup names it while that is
+  // still on this device.
   function haAddonFor(info, appId) {
-    const app = info.haId ? haApps(haFind(info.haId)).find(item => item.id === appId) : null;
-    return app?.addon || HA_APP_NAMES[appId] || appName(appId);
+    const recorded = info.addons.find(item => item.appId === appId)?.name;
+    const app = recorded || !info.haId ? null : haApps(haFind(info.haId)).find(item => item.id === appId);
+    return recorded || app?.addon || HA_APP_NAMES[appId] || appName(appId);
   }
 
   function haTestText(apps) {
@@ -3235,16 +3249,19 @@
   }
 
   // After an import (DESIGN §0): stop the HA add-on so nothing runs twice (a test import already turned that off), log
-  // the MCP admin apps in again (the logins moved with the data), then the engine's own reminders.
+  // the MCP admin apps in again (the logins moved with the data; the page as this device's catalog names it, review
+  // P-11), then the engine's to-dos of the restored apps and of none (review P-05).
   function haReminderLines(info, apps) {
     const lines = info.testMode ? [haTestText(apps)]
       : apps.map(id => `請把 HA 那邊的「${haAddonFor(info, id)}」附加元件停掉，避免同一件事兩邊各做一次。`);
-    const catalog = new Set(list(state.status?.apps).map(app => app?.id));
+    const catalog = list(state.status?.apps).filter(isObject);
     for (const id of apps) {
       const mcp = HA_MCP_ADMIN[id];
-      if (mcp && catalog.has(mcp.id)) lines.push(`請到「${mcp.page}」重新設定 ${mcp.app} 的登入資料。`);
+      const entry = mcp ? catalog.find(app => app.id === mcp.id) : null;
+      if (entry) lines.push(`請到「${str(entry.name).trim() || mcp.page}」重新設定 ${mcp.app} 的登入資料。`);
     }
-    return [...lines, ...info.reminders.filter(line => !lines.includes(line))];
+    const engine = info.remindersByApp ? [...apps.flatMap(id => info.remindersByApp[id] || []), ...info.reminders] : info.reminders;
+    return [...lines, ...engine.filter((line, index) => !lines.includes(line) && engine.indexOf(line) === index)];
   }
 
   // The restore wizard of a converted backup: what the import replaces and keeps, and what to do afterwards.
@@ -3257,6 +3274,8 @@
           ` · 這份備份由 HA 備份「${info.name || "（沒有名稱）"}」${info.date ? `（${date(info.date)}）` : ""}轉換而來。`),
         h("ul", { class: "bullet-list" },
           h("li", { text: `還原會用 HA 的資料（包含登入帳號）取代這台${apps}目前的資料；這台的網址、連接埠、資料庫密碼和設定檔都保持不變。` }),
+          // What the engine says about this import, e.g. the custom modules that come along (UI-3).
+          info.notes.map(note => h("li", { text: note })),
           h("li", { text: "開始前會先自動保存一份這台目前的資料（還原前備份）；還原失敗會自動回復。" }),
           h("li", { text: info.testMode ? haTestText(info.apps)
             : `還原完成後，請把 HA 那邊的${addons || "對應"}附加元件停掉，避免同一件事兩邊各做一次。` }))));
@@ -3271,9 +3290,12 @@
   function haAfterImport(info, restored) {
     const apps = info.apps.length ? restored.filter(id => info.apps.includes(id)) : restored;
     const workflows = apps.includes("n8n") ? info.workflows : [];
+    const ha = info.haId ? haFind(info.haId) : null;
     return [
       h("h4", { class: "subheading", text: "匯入之後請做" }),
-      h("ul", { class: "bullet-list ha-reminders", "aria-label": "匯入之後請做" }, haReminderLines(info, apps).map(line => h("li", { text: line }))),
+      h("ul", { class: "bullet-list ha-reminders", "aria-label": "匯入之後請做" }, haReminderLines(info, apps).map(line => h("li", { text: line })),
+        ha ? h("li", { class: "ha-delete-reminder" }, `${HA_DELETE_REMINDER} `,
+          link(`前往 HA 備份「${haName(ha)}」`, ["ha", ha.id], { class: "text-link", dataset: { focus: "result-ha-delete" } })) : null),
       workflows.length ? [h("p", { text: "下列 n8n 工作流程用到 HA 那邊的位置或功能，可能需要修改：" }),
         workflowList(workflows, "可能需要修改的 n8n 工作流程")] : null
     ];

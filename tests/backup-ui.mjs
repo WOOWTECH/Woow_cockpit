@@ -917,8 +917,11 @@ function installCockpitFixture() {
           if (haParams && record.job.result?.ha_check) {
             record.job.result.ha_check.apps = record.job.result.ha_check.apps.filter(app => haParams.apps.includes(app.app_id));
           }
-          const choices = haParams && { apps: haParams.apps, odoo_database: haParams.odoo_database, test_mode: haParams.test_mode };
-          // The record of a conversion is the one of its own apps (haimport.py view_row), with its database and test mode.
+          const source = haParams && data.ha?.backups.find(item => item.id === haParams.ha_backup_id);
+          const choices = haParams && { ...(source ? { ha_backup_id: source.id, name: source.name, date: source.date } : {}),
+            apps: haParams.apps, odoo_database: haParams.odoo_database, test_mode: haParams.test_mode };
+          // The record of a conversion is the one of its HA backup and its own apps (haimport.py view_row), with its
+          // database and test mode.
           const imported = choices && data.ha?.imports?.[choices.apps.join()];
           const importOf = base => ({ ...structuredClone(imported || base), ...choices });
           if (choices && record.job.result?.ha_import) record.job.result.ha_import = importOf(record.job.result.ha_import);
@@ -1535,6 +1538,8 @@ const VERSION_BLOCKER = '這些模組的版本和這台不同：sale（HA 18.0.1
 const ODOO_ALL_BLOCKED = 'HA 的 Odoo 資料庫都不能搬過來（原因見各資料庫）。';
 const NO_FILESTORE = 'HA 備份裡沒有這個資料庫的附件檔案（filestore）；搬過來後附件會打不開。';
 const KEY_REQUIRED = { code: 'key-required', message: '這份 HA 備份已加密，請輸入 HA 備份金鑰。' };
+// The page's own reminder after an import, with a link to the HA file (review HA-SEC-06).
+const HA_DELETE_LINE = `匯入完成後，建議刪除這份 HA 備份檔（裡面可能有 HA 的密碼與權杖）。 前往 HA 備份「${HA_NAME}」`;
 const WRONG_HA_KEY = { code: 'wrong-key', message: 'HA 備份金鑰不正確，請確認後再試一次。' };
 
 // HaBackupMeta: the sidecar plus `importable_apps` / `other_addons` (CONTRACT §7). Whether an add-on needs HA's key is
@@ -4982,6 +4987,8 @@ try {
       assert.match(await banner.textContent(), new RegExp(`這份備份由 HA 備份「${HA_NAME}」（2026/11/18 05:00）轉換而來。`));
       assert.match(await banner.textContent(), /取代這台「Odoo 18」、「n8n 工作流程」目前的資料；這台的網址、連接埠、資料庫密碼和設定檔都保持不變。/);
       assert.match(await banner.textContent(), /還原完成後，請把 HA 那邊的「Odoo 18 CE」、「WOOW n8n」附加元件停掉，避免同一件事兩邊各做一次。/);
+      // The engine's explanations come before the restore, after what it replaces and keeps (UI-3).
+      assert.deepEqual((await banner.locator('li').allTextContents()).slice(1, 4), [...HA_NOTES.odoo, ...HA_NOTES.n8n]);
       assert.equal(await page.locator('[data-focus="pf-select-odoo"]').isChecked(), true);
       assert.equal(await page.locator('[data-focus="pf-select-n8n"]').isChecked(), true);
       assert.deepEqual(requestOf((await calls(page, 'inspect')).at(-1)), { backup_id: B_HA }, 'the converted backup needs no HA key');
@@ -4995,11 +5002,14 @@ try {
       assert.deepEqual(Object.keys(restore).sort(), ['apps', 'backup_id', 'confirm', 'request_id'], 'the restore gets no key');
       assert.deepEqual([restore.backup_id, restore.apps], [B_HA, ['odoo', 'n8n']]);
       await page.locator('#result-heading').filter({ hasText: '還原完成' }).waitFor();
+      // To-dos only: the page's, the engine's of each restored app, and deleting the HA file (UI-3, review P-05, HA-SEC-06).
       assert.deepEqual(await page.locator('.ha-reminders li').allTextContents(), [
         '請把 HA 那邊的「Odoo 18 CE」附加元件停掉，避免同一件事兩邊各做一次。',
         '請把 HA 那邊的「WOOW n8n」附加元件停掉，避免同一件事兩邊各做一次。',
         '請到「Odoo MCP 管理」重新設定 Odoo 的登入資料。',
-        '請到「n8n MCP 管理」重新設定 n8n 的登入資料。']);
+        '請到「n8n MCP 管理」重新設定 n8n 的登入資料。',
+        ...HA_TODO.odoo, ...HA_TODO.n8n, HA_DELETE_LINE]);
+      assert.equal(await page.locator('.ha-reminders [data-focus="result-ha-delete"]').getAttribute('href'), `#/ha/${HA_ID}`);
       assert.deepEqual(await page.locator('.job-result .workflow-list .path-app').allTextContents(), ['開門通知', '每日報表']);
       await shot(page, 'ha-restore-result-1440.png');
       // The converted backup: 「由 HA 轉換」 in the list, where it came from in its details.
@@ -5053,12 +5063,14 @@ try {
       const banner = await page.locator('.ha-banner').textContent();
       assert.match(banner, /這是測試匯入：搬過來的 n8n 工作流程都已停用，HA 那邊可以照常使用。/);
       assert.doesNotMatch(banner, /停掉/);
+      assert(banner.includes(HA_NOTES.n8n[0]) && !banner.includes(HA_NOTES.odoo[0]), 'the notes of the converted app');
       await page.locator('[data-focus="pf-next"]').click();
       await page.locator('#confirm-restore').check();
       await page.locator('[data-focus="confirm-start"]').click();
       await page.locator('#result-heading').filter({ hasText: '還原完成' }).waitFor();
       assert.deepEqual(await page.locator('.ha-reminders li').allTextContents(), [
-        '這是測試匯入：搬過來的 n8n 工作流程都已停用，HA 那邊可以照常使用。要正式搬過來時，請重新匯入一次，並且不要勾「這只是測試」。']);
+        '這是測試匯入：搬過來的 n8n 工作流程都已停用，HA 那邊可以照常使用。要正式搬過來時，請重新匯入一次，並且不要勾「這只是測試」。',
+        ...HA_TODO.n8n, HA_DELETE_LINE]);
       await page.locator('[data-nav="backups"]').click();
       await page.locator(`[data-focus="open-${B_HA}"]`).click();
       const [origin] = await metadataOf(page.locator('section[aria-labelledby="detail-ha"]'));
@@ -5093,6 +5105,19 @@ try {
       await page.locator(`[data-focus="open-${B_HA}"]`).click();
       const [origin] = await metadataOf(page.locator('section[aria-labelledby="detail-ha"]'));
       assert.equal(origin['HA 備份'], `${HA_NAME}（HA 備份檔已從這台刪除）`);
+      // Restoring it still names HA's add-ons (the import recorded them, review P-06); only n8n is restored, so only
+      // n8n's to-dos are listed (review P-05); the HA file is gone, so there is nothing more to delete.
+      await page.locator(`[data-focus="restore-${B_HA}"]`).click();
+      await page.locator('.app-preflight').first().waitFor();
+      assert.match(await page.locator('.ha-banner').textContent(), /請把 HA 那邊的「Odoo 18 CE」、「WOOW n8n」附加元件停掉/);
+      await page.locator('[data-focus="pf-select-odoo"]').uncheck();
+      await page.locator('[data-focus="pf-next"]').click();
+      await page.locator('#confirm-restore').check();
+      await page.locator('[data-focus="confirm-start"]').click();
+      await page.locator('#result-heading').filter({ hasText: '還原完成' }).waitFor();
+      assert.deepEqual(requestOf((await calls(page, 'restore-start')).at(-1)).apps, ['n8n']);
+      assert.deepEqual(await page.locator('.ha-reminders li').allTextContents(), [
+        '請把 HA 那邊的「WOOW n8n」附加元件停掉，避免同一件事兩邊各做一次。', '請到「n8n MCP 管理」重新設定 n8n 的登入資料。', ...HA_TODO.n8n]);
     });
 
   await check('從 HA 備份匯入, engine whose inspect does not name the import: a converted backup restored from 備份列表 keeps its HA notice; 檢視內容 keeps 由 HA 轉換 (review P-01)',
@@ -5104,9 +5129,20 @@ try {
       assert.deepEqual(requestOf((await calls(page, 'inspect')).at(-1)), { backup_id: B_HA });
       assert.equal(await page.locator('.stepper .step-label').first().textContent(), '從 HA 轉換');
       assert.match(await page.locator('.ha-banner').textContent(), new RegExp(`這份備份由 HA 備份「${HA_NAME}」（2026/11/18 05:00）轉換而來。`));
+      assert.equal(await page.locator('.ha-banner li').count(), 3, 'that engine sends no notes');
       await page.locator('[data-focus="pf-next"]').click();
       await page.locator('#confirm-restore').waitFor();
       assert.equal(await page.locator('.ha-banner').count(), 1, 'the notice stays on 確認');
+      // That engine's `reminders` hold all its lines, of every converted app: they all follow the page's.
+      await page.locator('#confirm-restore').check();
+      await page.locator('[data-focus="confirm-start"]').click();
+      await page.locator('#result-heading').filter({ hasText: '還原完成' }).waitFor();
+      assert.deepEqual(await page.locator('.ha-reminders li').allTextContents(), [
+        '請把 HA 那邊的「Odoo 18 CE」附加元件停掉，避免同一件事兩邊各做一次。',
+        '請把 HA 那邊的「WOOW n8n」附加元件停掉，避免同一件事兩邊各做一次。',
+        '請到「Odoo MCP 管理」重新設定 Odoo 的登入資料。',
+        '請到「n8n MCP 管理」重新設定 n8n 的登入資料。',
+        ...HA_LEGACY_REMINDERS.odoo, ...HA_LEGACY_REMINDERS.n8n, HA_DELETE_LINE]);
       // The details: 檢視內容 (inspect) keeps where the backup came from.
       await page.locator('[data-nav="backups"]').click();
       await page.locator(`[data-focus="open-${B_HA}"]`).click();
@@ -5139,6 +5175,8 @@ try {
         result: haRestoreScript().at(-1).job.result, error: null }, log: [], steps: [] },
     };
     data.status.active_job = structuredClone(data.jobs[J_HA_RUN].job);
+    // The MCP admin page as this device's catalog names it (review P-11).
+    data.status.apps.find(entry => entry.id === 'odoo-mcp-admin').name = 'Odoo MCP 管理（woowtech）';
     return data;
   })();
   await check('從 HA 備份匯入 jobs: 檢查 HA 備份 and 轉換 HA 備份 are named in the banner, the job view and 活動紀錄; their results render; an active HA job is accepted',
@@ -5174,8 +5212,9 @@ try {
       assert.deepEqual(await page.locator('.ha-reminders li').allTextContents(), [
         '請把 HA 那邊的「Odoo 18 CE」附加元件停掉，避免同一件事兩邊各做一次。',
         '請把 HA 那邊的「WOOW n8n」附加元件停掉，避免同一件事兩邊各做一次。',
-        '請到「Odoo MCP 管理」重新設定 Odoo 的登入資料。',
-        '請到「n8n MCP 管理」重新設定 n8n 的登入資料。']);
+        '請到「Odoo MCP 管理（woowtech）」重新設定 Odoo 的登入資料。',
+        '請到「n8n MCP 管理」重新設定 n8n 的登入資料。',
+        ...HA_TODO.odoo, ...HA_TODO.n8n, HA_DELETE_LINE]);
       await page.locator('[data-focus="back-activity"]').click();
       // A check with a blocker.
       await page.locator(`[data-focus="job-${J_HA_CHECK}"]`).click();
