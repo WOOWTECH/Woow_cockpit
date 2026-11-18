@@ -237,14 +237,28 @@ class SweepTests(unittest.TestCase):
     def test_only_objects_of_jobs_that_no_longer_run(self):
         runner = self.runner()
         notes = []
-        removed = tempctr.sweep(runner, lambda job: job == JOB, log=notes.append)
+        removed, left = tempctr.sweep(runner, lambda job: job == JOB, log=notes.append)
         self.assertEqual(removed, [f'woowbk-{OTHER}-n8n-pg', f'woowbk-{OTHER}-n8nsrc', f'woowbk-{OTHER}-n8n-net'])
+        self.assertEqual(left, [])
         self.assertNotIn(('rm', '--force', '--time', '10', 'odoo18-db'), runner.calls)
         self.assertTrue(notes)
 
     def test_one_dead_job(self):
         runner = self.runner()
-        self.assertEqual(tempctr.sweep(runner, lambda _job: False, only_job=JOB), [f'woowbk-{JOB}-hapg'])
+        self.assertEqual(tempctr.sweep(runner, lambda _job: False, only_job=JOB), ([f'woowbk-{JOB}-hapg'], []))
+
+    def test_an_object_that_cannot_be_removed_is_reported_not_forgotten(self):
+        """Review C-07: a volume still in use, a storage lock timeout."""
+        runner = self.runner()
+        runner.answers[('volume', 'rm')] = Result(2, b'', b'volume is being used')
+        runner.answers[('volume', 'exists')] = Result(0, b'', b'')
+        notes = []
+        removed, left = tempctr.sweep(runner, lambda _job: False, only_job=OTHER, log=notes.append)
+        self.assertEqual(left, [f'woowbk-{OTHER}-n8nsrc'])
+        self.assertIn(f'woowbk-{OTHER}-n8n-pg', removed)
+        self.assertTrue(any('無法移除' in note for note in notes))
+        runner.answers[('volume', 'exists')] = Result(1, b'', b'')  # gone meanwhile: removed after all
+        self.assertEqual(tempctr.sweep(runner, lambda _job: False, only_job=OTHER)[1], [])
 
     def test_an_unreadable_listing_raises(self):
         runner = FakeRunner({('ps',): Result(0, b'not json', b'')})

@@ -4,6 +4,7 @@ container steps themselves are covered by test_ha_odoo/test_ha_n8n/test_ha_tempc
 import json
 import os
 import tempfile
+import time
 import types
 import unittest
 from pathlib import Path
@@ -508,9 +509,31 @@ class HaJobTests(JobCase):
         record.update(state='failed', temp_owners=['appowner'])
         self.store.save(record)
         jobs.recover_interrupted(self.paths, unit_active=lambda _u: False, sweep_temp=lambda _j, _o: ['podman 沒回應'])
-        self.assertEqual(self.store.get(record['id'])['temp_owners'], ['appowner'])
+        after = self.store.get(record['id'])
+        self.assertEqual(after['temp_owners'], ['appowner'])
+        self.assertGreater(after['temp_retry_at'], time.time() + jobs.TEMP_RETRY_SECONDS - 60)
+        calls = []
+        jobs.recover_interrupted(self.paths, unit_active=lambda _u: False,
+                                 sweep_temp=lambda _j, _o: calls.append(1) or [])
+        self.assertEqual(calls, [], 'review C-08: not again before the retry time')
+        after['temp_retry_at'] = time.time() - 1
+        self.store.save(after)
         jobs.recover_interrupted(self.paths, unit_active=lambda _u: False, sweep_temp=lambda _j, _o: [])
-        self.assertEqual(self.store.get(record['id'])['temp_owners'], [])
+        after = self.store.get(record['id'])
+        self.assertEqual(after['temp_owners'], [])
+        self.assertNotIn('temp_retry_at', after)
+        self.assertFalse(jobs.has_leftovers(after))
+
+    def test_only_ha_jobs_sweep_at_their_start(self):
+        """Review C-08: backups, restores and scheduled runs never wait for podman listings."""
+        swept = []
+        deps = types.SimpleNamespace(sweep_temp=lambda job_id, log: swept.append(job_id))
+        for job_type, params in (('backup', {'apps': ['odoo']}), ('backup', dict(self.params, test_mode=False)),
+                                 ('verify', dict(self.params))):
+            ctx = types.SimpleNamespace(deps=deps, job_id='j1', log=lambda _t: None,
+                                        reporter=types.SimpleNamespace(record={'type': job_type, 'params': params}))
+            jobs._sweep_finished_temp(ctx)
+        self.assertEqual(swept, ['j1', 'j1'])
 
 
 if __name__ == '__main__':

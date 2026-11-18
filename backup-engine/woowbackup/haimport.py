@@ -874,22 +874,27 @@ def _importable_owners(paths):
 
 
 def sweep_job(job_id, owners, *, log=None):
-    """Remove every throwaway object of the (dead) job `job_id` for these owners; returns zh-TW problems."""
+    """Remove every throwaway object of the (dead) job `job_id` for these owners; returns zh-TW problems (an object
+    that could not be removed is one: the record keeps the owners for the next pass; review C-07)."""
     from .podman import OwnerRunner
     problems = []
     for owner in owners:
         try:
-            tempctr.sweep(OwnerRunner(owner), lambda _job: False, log=log, only_job=job_id)
+            _removed, left = tempctr.sweep(OwnerRunner(owner), lambda _job: False, log=log, only_job=job_id)
         except BackupError as error:
             if error.code == 'owner-missing':
                 continue
             problems.append(f'{owner}：{error.message}')
+            continue
+        if left:
+            problems.append(f'{owner}：{len(left)} 個暫用容器或資料卷無法移除（{"、".join(left[:3])}）')
     return problems
 
 
 def sweep_finished(paths, *, log=None, current=None):
-    """At run-job start: remove the throwaway objects of every job that is not queued/running (the importable apps'
-    owners only). Never fails the job."""
+    """At the start of an HA job (review C-08: no other job pays for it): remove the throwaway objects of every job
+    that is not queued/running, for the importable apps' owners and the owners a job record still lists. Never fails
+    the job."""
     from . import jobs
     from .podman import OwnerRunner
     store = jobs.JobStore(paths)
@@ -902,7 +907,11 @@ def sweep_finished(paths, *, log=None, current=None):
         except BackupError:
             return False
 
-    for owner in _importable_owners(paths):
+    owners = set(_importable_owners(paths))
+    with contextlib.suppress(Exception):
+        for record in store.list():
+            owners.update(o for o in record.get('temp_owners') or [] if isinstance(o, str))
+    for owner in sorted(owners):
         with contextlib.suppress(Exception):
             tempctr.sweep(OwnerRunner(owner), alive, log=log)
 

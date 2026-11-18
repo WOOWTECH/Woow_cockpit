@@ -464,7 +464,7 @@ def _labelled(runner, kind):
     args = {'container': ('ps', '--all', '--filter', f'label={LABEL}', '--format', 'json'),
             'volume': ('volume', 'ls', '--filter', f'label={LABEL}', '--format', 'json'),
             'network': ('network', 'ls', '--filter', f'label={LABEL}', '--format', 'json')}[kind]
-    out = runner.podman(*args, timeout=SHORT_TIMEOUT, max_output=LIST_OUTPUT).stdout or b'[]'
+    out = runner.podman(*args, timeout=LIST_TIMEOUT, max_output=LIST_OUTPUT).stdout or b'[]'
     try:
         rows = json.loads(out.decode('utf-8'))
     except ValueError:
@@ -496,8 +496,10 @@ def _labelled(runner, kind):
 def sweep(runner, alive, *, log=None, only_job=None):
     """Remove the throwaway objects of jobs that no longer run: every labelled, `woowbk-<job>-…`-named container,
     volume and network of the owner whose job `alive(job_id)` says is not queued/running (`only_job`: just that
-    job's). Returns the names removed; raises BackupError when podman cannot list them (the caller retries)."""
-    removed = []
+    job's). Returns (names removed, names that could not be removed: they are still there, the caller keeps them for
+    the next sweep; review C-07); raises BackupError when podman cannot list them (the caller retries). One quick
+    listing per kind (LIST_TIMEOUT)."""
+    removed, left = [], []
     for kind in ('container', 'volume', 'network'):
         for name, job in _labelled(runner, kind):
             if (only_job is not None and job != only_job) or alive(job):
@@ -505,8 +507,13 @@ def sweep(runner, alive, *, log=None, only_job=None):
             args = {'container': ('rm', '--force', '--time', '10', name), 'volume': ('volume', 'rm', '--force', name),
                     'network': ('network', 'rm', '--force', name)}[kind]
             result = _quiet(runner, *args)
-            if result is not None and result.returncode == 0:
+            if result is not None and result.returncode == 0 or not _exists(runner, kind, name):
                 removed.append(name)
-    if removed and log is not None:
-        log(f'已清除 {len(removed)} 個先前作業留下的暫用容器或資料卷')
-    return removed
+            else:
+                left.append(name)
+    if log is not None:
+        if removed:
+            log(f'已清除 {len(removed)} 個先前作業留下的暫用容器或資料卷')
+        if left:
+            log(f'警告：有 {len(left)} 個先前作業留下的暫用容器或資料卷無法移除，下次會再清除。')
+    return removed, left

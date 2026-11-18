@@ -1116,23 +1116,34 @@ def _package_pending_copy(store, record, package_safety):
     return note
 
 
-def _sweep_temp(store, record, sweep_temp):
+TEMP_RETRY_SECONDS = 600
+
+
+def _sweep_temp(store, record, sweep_temp, *, now=None):
     """Remove the throwaway containers, volumes and networks a dead (or finished) job may have left for the owners
-    its record lists (`temp_owners`); forgotten once podman removed them (or the owner no longer exists)."""
+    its record lists (`temp_owners`); forgotten once podman removed them (or the owner no longer exists). After a
+    pass that could not remove everything the next try waits TEMP_RETRY_SECONDS (`temp_retry_at`): a podman that hangs
+    must not slow down every status request (review C-08)."""
     owners = [o for o in record.get('temp_owners') or [] if isinstance(o, str)]
     if not owners:
+        return ''
+    now = time.time() if now is None else now
+    retry_at = record.get('temp_retry_at')
+    if isinstance(retry_at, (int, float)) and not isinstance(retry_at, bool) and now < retry_at:
         return ''
     if sweep_temp is None:
         from .haimport import sweep_job as sweep_temp
     try:
         problems = list(sweep_temp(record['id'], owners) or [])
-    except Exception:  # noqa: BLE001 - retried on the next recovery pass
+    except Exception:  # noqa: BLE001 - retried on a later recovery pass
         traceback.print_exc(file=sys.stderr)
-        return ''
+        problems = ['清除時發生未預期的錯誤']
     if problems:
+        record['temp_retry_at'] = now + TEMP_RETRY_SECONDS
         store.append_log(record['id'], f'無法清除暫用容器：{"；".join(problems)[:300]}')
         return ''
     record['temp_owners'] = []
+    record.pop('temp_retry_at', None)
     store.append_log(record['id'], '已清除這個作業留下的暫用容器與資料卷')
     return ''
 
@@ -1394,10 +1405,12 @@ def _ha_key(record, key_file):
 
 
 def _sweep_finished_temp(ctx):
-    """Throwaway objects of jobs that are not running any more (tempctr.py) are removed at every job start; never
-    blocks the job (`deps.sweep_temp`, absent in tests)."""
+    """Throwaway objects of jobs that are not running any more (tempctr.py) are removed when an HA job starts (the
+    only jobs that make them; other jobs never wait for podman listings: review C-08); never blocks the job
+    (`deps.sweep_temp`, absent in tests). What a dead job left is the recovery's (`temp_owners`)."""
     sweep = getattr(ctx.deps, 'sweep_temp', None)
-    if sweep is None:
+    record = ctx.reporter.record
+    if sweep is None or not is_ha_job(record.get('type'), record.get('params')):
         return
     try:
         sweep(ctx.job_id, ctx.log)
