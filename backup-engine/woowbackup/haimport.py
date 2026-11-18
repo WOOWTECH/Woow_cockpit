@@ -25,7 +25,10 @@ import contextlib
 import fcntl
 import os
 import re
+import sys
+import threading
 import time
+import traceback
 from pathlib import Path
 
 from . import habackup, hasecuretar, hastore, tempctr, util
@@ -40,6 +43,9 @@ ROW_KEYS = ('ha_backup_id', 'name', 'date', 'apps', 'odoo_database', 'test_mode'
 STALE_ROW_SECONDS = 24 * 3600
 MAX_KEY_BYTES = 4096
 GUARD_STEP = 64 * 1024 * 1024
+# Free space the watchdog keeps on top of the running reserve: what containers may write between two of its looks.
+WATCH_MARGIN = 512 * 1024 * 1024
+WATCH_INTERVAL = 2.0
 NOTE_PREFIX = '由 HA 備份轉換：'
 FAILURE_CODES = frozenset({'incompatible', 'job-failed', 'not-found', 'unsupported-format', 'app-not-in-catalog',
                            'owner-missing', 'not-deployed', 'limit-exceeded'})
@@ -49,9 +55,11 @@ INSTALL_HINT = '請先到「應用軟體」安裝同版本的 {name}，再匯入
 # ====================================================================== space
 
 class SpaceGuard:
-    """Free space while a conversion writes (staging on the data disk, throwaway volumes in the owner's storage):
-    every GUARD_STEP bytes written the free space of each watched folder must stay above `floor`, else
-    insufficient-space (the apps run meanwhile: their own writes must still fit)."""
+    """Free space while a job writes (staging on the data disk, throwaway volumes in the owner's Podman storage):
+    every GUARD_STEP bytes the engine writes, before each large step (`check(need)`) and, for what containers
+    write, every WATCH_INTERVAL seconds (Watchdog) the free space of every watched folder must stay above `floor`
+    (the running reserve plus WATCH_MARGIN), else insufficient-space: the apps run meanwhile and their own writes
+    (a database's WAL) must still fit (review HA-SEC-04, C-01)."""
 
     def __init__(self, folders, floor, *, statvfs=os.statvfs):
         self.folders = [str(f) for f in folders]
@@ -89,6 +97,61 @@ class SpaceGuard:
         return None if free is None else max(0, free - self.floor)
 
 
+class Watchdog:
+    """A thread that looks every WATCH_INTERVAL seconds at the free space (the guard's folders) and at the job's
+    cancel request while the job runs. Space below the floor: every throwaway container of the job is killed at once
+    (their writes stop) and the job fails with insufficient-space; a cancel request: the job stops (`cancelled`). The
+    job's blocked podman call asks `abort()` every second and stops; the job's `finally` removes the objects (review
+    HA-SEC-04, C-01, C-15)."""
+
+    def __init__(self, work, *, interval=WATCH_INTERVAL):
+        self.work = work
+        self.interval = interval
+        self.error = None
+        self._stop = threading.Event()
+        self._thread = None
+
+    def start(self):
+        if self._thread is None:
+            self._thread = threading.Thread(target=self._loop, name='woowbackup-ha-watchdog', daemon=True)
+            self._thread.start()
+
+    def stop(self):
+        self._stop.set()
+        if self._thread is not None:
+            self._thread.join(timeout=10)
+            self._thread = None
+
+    def _loop(self):
+        while not self._stop.wait(self.interval):
+            try:
+                self.poll()
+            except Exception:  # noqa: BLE001 - a broken look never stops the job; details go to the journal
+                traceback.print_exc(file=sys.stderr)
+
+    def poll(self):
+        if self.error is not None:
+            return
+        guard = self.work.guard
+        free = guard.free()
+        if free is not None and free < guard.floor:
+            from .flows import human
+            self.error = BackupError('insufficient-space', f'空間不足：可用空間降到 {human(free, down=True)}，低於執行中的應用需要保留的 '
+                                                           f'{human(guard.floor, up=True)}，已停止轉換並清除暫用資料。這台的應用沒有任何變更。',
+                                     required=guard.floor, free=free)
+            for tmp in list(self.work._temps.values()):
+                tmp.kill_all()
+            return
+        reporter = self.work.ctx.reporter
+        if getattr(reporter, 'cancellable', False) and reporter.cancel_requested():
+            from .flows import Cancelled
+            self.error = Cancelled()
+
+    def abort(self):
+        """The exception the job must stop with now, or None."""
+        return self.error
+
+
 # ====================================================================== the job's working set
 
 class Work:
@@ -107,8 +170,9 @@ class Work:
         self._temps = {}
         self._addons = {}
         from .flows import running_reserve
-        self.floor = running_reserve(ctx)
+        self.floor = running_reserve(ctx) + WATCH_MARGIN
         self.guard = SpaceGuard([self.staging], self.floor)
+        self.watchdog = Watchdog(self)
 
     # ---------------------------------------------------------- job record
     def log(self, text):
@@ -116,6 +180,31 @@ class Work:
 
     def checkpoint(self):
         self.ctx.checkpoint()
+        error = self.watchdog.abort()
+        if error is not None:
+            raise error
+
+    def abort(self):
+        """The runner's abort hook for long commands (the watchdog's verdict)."""
+        return self.watchdog.abort()
+
+    def watch(self, apps):
+        """Watch the owners' Podman storage from the start (not only once the first container exists) and start the
+        watchdog."""
+        for app in apps:
+            try:
+                folders = self.storage_folders(app)
+            except BackupError:
+                continue  # the app's own check reports it (owner missing, not deployed)
+            for folder in folders:
+                if folder not in self.guard.folders:
+                    self.guard.folders.append(folder)
+        self.watchdog.start()
+
+    def storage_folders(self, app):
+        home = self.runner(app).home
+        storage = os.path.join(home, '.local/share/containers/storage')
+        return [home] + ([storage] if os.path.isdir(storage) else [])
 
     def phase(self, phase_id):
         self.ctx.phase(phase_id)
@@ -165,14 +254,16 @@ class Work:
         if owner not in self._temps:
             owners = sorted(set(self._temps) | {owner})
             self.ctx.reporter.set_partial(temp_owners=owners)
-            self._temps[owner] = tempctr.TempObjects(self.runner(app), self.job_id, log=self.log)
-            home = self.runner(app).home
-            if home not in self.guard.folders:
-                self.guard.folders.append(home)
+            self._temps[owner] = tempctr.TempObjects(self.runner(app), self.job_id, log=self.log,
+                                                     abort=self.watchdog.abort)
+            for folder in self.storage_folders(app):
+                if folder not in self.guard.folders:
+                    self.guard.folders.append(folder)
         return self._temps[owner]
 
     def close(self):
         """Remove every throwaway object; the record forgets the owners once nothing is left."""
+        self.watchdog.stop()
         left = []
         for tmp in self._temps.values():
             left += tmp.cleanup()
@@ -278,8 +369,14 @@ def _require_key(work, members):
 
 
 def _check_space(work, members):
+    """Up front: three times the add-ons' members (a first, low estimate; the app steps check again with the sizes
+    they measured while streaming, and the watchdog looks every few seconds)."""
     need = 3 * sum(m.size for m in members.values())
     work.guard.check(need)
+
+
+def _watched_apps(ctx, app_ids):
+    return [app for app in (_catalog_app(ctx, app_id) for app_id in app_ids) if app is not None]
 
 
 # ====================================================================== check
@@ -300,6 +397,7 @@ def run_ha_check(ctx, params):
         members = _members(work, app_ids)
         _require_key(work, members)
         ctx.log(f'檢查 HA 備份「{work.record["name"]}」：{"、".join(app_ids)}')
+        work.watch(_watched_apps(ctx, app_ids))
         for app_id in app_ids:
             member = members[app_id]
             ctx.phase('decrypt')
@@ -423,6 +521,7 @@ def run_ha_convert(ctx, params):
             blocker = _arch_blocker(addon) or next(iter(_deployed_blockers(work, app)), None)
             if blocker:
                 raise BackupError('incompatible', blocker, app=app.id)
+        work.watch(apps)
         _check_space(work, members)
         converted, manifest_apps, entries = {}, [], []
         addons = []
@@ -447,6 +546,8 @@ def run_ha_convert(ctx, params):
             manifest_apps.append(app_manifest)
             entries.extend(app_entries)
         work.close()  # no throwaway object is needed for the packaging
+        plain = sum(int(entry.size) for entry in entries)
+        work.guard.check(plain + plain // 100)  # the archive (at most the data plus 1 % for tar and age; review C-01)
         fix = converted.get('n8n', {}).get('workflows_to_fix') or []
         row = {'ha_backup_id': record['id'], 'name': record['name'], 'date': record['date'], 'apps': app_ids,
                'odoo_database': database if 'odoo' in app_ids else None, 'test_mode': test_mode,

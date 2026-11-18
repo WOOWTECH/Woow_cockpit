@@ -10,8 +10,11 @@ containers of their own, made from images that are already on the device, and re
   killed job left is found again (`sweep`, from the recovery and at every run-job start);
 * containers run with `--network none` unless two of them must talk, then on an internal network made for the job
   (`podman network create --internal`: no route out); no published ports; `--security-opt no-new-privileges`, a pids
-  and a memory limit, `--pull=never` (nothing is downloaded) and `--log-driver none` (nothing they print reaches the
-  owner's journal; what a job needs it captures with the runner's budgets);
+  and a memory limit, half the CPUs (`--cpus`, when the owner's user manager has the cpu controller), `--pull=never`
+  (nothing is downloaded) and `--log-driver none` (nothing they print reaches the owner's journal; what a job needs it
+  captures with the runner's budgets);
+* `abort` (set by the job: its watchdog) is handed to every long podman call: a cancel or a disk running full stops
+  the call within a second (the caller then removes the containers);
 * an app secret is mounted exactly as the live Quadlet file mounts it (`--secret <its Secret= value>`); its value is
   never read into Python;
 * `TempObjects` removes every object it created in `finally` (containers, then volumes, then networks), also when the
@@ -43,8 +46,24 @@ SECRET_OPTION_RE = re.compile(r'(?:type=(?:mount|env)|target=[A-Za-z0-9_./-]{1,2
 MEMORY = '2g'
 PIDS = 1024
 SHORT_TIMEOUT = 120
+LIST_TIMEOUT = 30
 LIST_OUTPUT = 4 * 1024 * 1024
 STOP_TIMEOUT = 120
+CONTROLLERS = '/sys/fs/cgroup/user.slice/user-{uid}.slice/user@{uid}.service/cgroup.controllers'
+
+
+def default_cpus(uid, *, controllers=CONTROLLERS, cpu_count=os.cpu_count):
+    """Half the CPUs (at least 1) when the owner's user manager can limit CPU (cgroup v2 `cpu` delegated), else None
+    (`--cpus` would make every run fail)."""
+    if not isinstance(uid, int) or isinstance(uid, bool) or uid <= 0:
+        return None
+    try:
+        with open(controllers.format(uid=uid), encoding='ascii') as handle:
+            if 'cpu' not in handle.read(4096).split():
+                return None
+    except (OSError, ValueError):
+        return None
+    return str(max(1, (cpu_count() or 2) // 2))
 
 
 def valid_role(role):
@@ -131,16 +150,32 @@ class TempObjects:
     """The throwaway objects of one job for one owner (`runner`, an OwnerRunner). Use as a context manager: every
     container, volume and network it created is removed on exit. `log(text)` receives short zh-TW notes."""
 
-    def __init__(self, runner, job_id, *, log=None, memory=MEMORY, pids=PIDS):
+    def __init__(self, runner, job_id, *, log=None, memory=MEMORY, pids=PIDS, cpus='auto', abort=None):
         object_name(job_id, 'x')  # checks the job id
         self.runner = runner
         self.job_id = job_id
         self.log = log or (lambda _text: None)
         self.memory = memory
         self.pids = int(pids)
+        self.cpus = default_cpus(getattr(runner, 'uid', None)) if cpus == 'auto' else cpus
+        if self.cpus is not None and not re.fullmatch(r'[0-9]{1,3}(?:\.[0-9]{1,2})?', str(self.cpus)):
+            raise BackupError('internal-error', 'CPU 限制格式不正確。')
+        self.abort = abort     # None, or the job's watchdog (see the module notes)
         self.containers = []   # names, in creation order
         self.volumes = []
         self.networks = []
+
+    def _long(self, kwargs):
+        """kwargs of a long podman call: the job's abort hook when there is one."""
+        if self.abort is not None:
+            kwargs['abort'] = self.abort
+        return kwargs
+
+    def _stopped(self):
+        """Never start anything new once the job's watchdog said stop."""
+        error = self.abort() if self.abort is not None else None
+        if error is not None:
+            raise error
 
     def name(self, role):
         return object_name(self.job_id, role)
@@ -182,6 +217,8 @@ class TempObjects:
         argv = ['run', '--name', name, '--label', self.label, '--pull=never', '--log-driver', 'none',
                 '--network', network or 'none', '--security-opt', 'no-new-privileges',
                 '--pids-limit', str(self.pids), '--memory', self.memory]
+        if self.cpus is not None:
+            argv += ['--cpus', str(self.cpus)]
         if network is not None and network not in self.networks:
             raise BackupError('internal-error', '暫用容器只能連到這個作業建立的內部網路。')
         if detach:
@@ -235,13 +272,14 @@ class TempObjects:
         name = self.name(role)
         if name in self.containers:
             raise BackupError('internal-error', '暫用容器名稱重複。')
+        self._stopped()
         remove = (not detach) if remove is None else remove
-        self.containers.append(name)
         argv = self.run_argv(role, image, args, detach=detach, interactive=input is not None, remove=remove,
                              **options)
+        self.containers.append(name)
         result = self.runner.podman(*argv, input=input, stdout=stdout, timeout=timeout,
                                     max_output=max_output if max_output is not None else (64 * 1024 if detach else None),
-                                    check=check)
+                                    check=check, **self._long({}))
         if remove and not detach and result.returncode == 0:
             self.containers.remove(name)  # gone with --rm; the role can be used again
         return result
@@ -272,8 +310,9 @@ class TempObjects:
             if not isinstance(arg, str) or '\x00' in arg:
                 raise BackupError('internal-error', '容器命令格式不正確。')
             command.append(arg)
+        self._stopped()
         return self.runner.podman(*command, input=input, stdout=stdout, timeout=timeout, max_output=max_output,
-                                  check=check)
+                                  check=check, **self._long({}))
 
     def stop(self, role, timeout=STOP_TIMEOUT):
         """Stop a container (its image's stop signal, then SIGKILL after `timeout` seconds); returns its exit code."""
@@ -339,12 +378,14 @@ class TempObjects:
             except BaseException as exc:  # noqa: BLE001 - handed to the caller below
                 failure.append(exc)
 
+        self._stopped()
         writer = threading.Thread(target=feed, name='woowbackup-volume-import', daemon=True)
         reader = os.fdopen(read_fd, 'rb', buffering=0)
         writer.start()
         try:
             try:
-                self.runner.podman('volume', 'import', name, '-', input=reader, timeout=timeout, max_output=64 * 1024)
+                self.runner.podman('volume', 'import', name, '-', input=reader, timeout=timeout, max_output=64 * 1024,
+                                   **self._long({}))
             finally:
                 reader.close()  # a producer still writing gets EPIPE and stops
                 writer.join()
@@ -363,7 +404,15 @@ class TempObjects:
         name = self.name(role)
         if name not in self.volumes:
             raise BackupError('internal-error', '只能匯出這個作業建立的資料卷。')
-        self.runner.relay(['volume', 'export', name], stdout=handle, timeout=timeout, max_output=max_output)
+        self._stopped()
+        self.runner.relay(['volume', 'export', name], stdout=handle, timeout=timeout, max_output=max_output,
+                          **self._long({}))
+
+    def kill_all(self):
+        """SIGKILL every container of this job now (the job's watchdog: the disk is running full); never raises."""
+        names = list(self.containers)
+        if names:
+            _quiet(self.runner, 'kill', '--signal', 'KILL', *names)
 
     # ------------------------------------------------------------ clean-up
     def cleanup(self):

@@ -714,13 +714,18 @@ def _write_out(target, data):
             view = view[os.write(target, view):]
 
 
-def default_runner(argv, *, input=None, stdout=None, timeout=None, cwd=None, env=None, max_output=None):
+ABORT_POLL = 1.0
+
+
+def default_runner(argv, *, input=None, stdout=None, timeout=None, cwd=None, env=None, max_output=None, abort=None):
     """Subprocess executor: no shell, own process group (killed as a whole on timeout or overflow).
 
     `stdout`: None captures (at most `max_output`, default MAX_CAPTURE bytes), DEVNULL discards, a
     writable file receives the output through a pipe copied here, so `max_output` (when given) is a
     byte budget for that file. stderr keeps only its last STDERR_TAIL bytes. Nothing the child
     prints can grow this process without bound (CONTRACT section 10, review finding SEC-3).
+    `abort`: a callable asked about every second; when it returns an exception, the child's process group is
+    killed and that exception raised (a job's watchdog: cancel, no space left; review C-15, HA-SEC-04).
     """
     if input is not None and not isinstance(input, (bytes, bytearray)):
         try:
@@ -751,6 +756,11 @@ def default_runner(argv, *, input=None, stdout=None, timeout=None, cwd=None, env
             remaining = None if deadline is None else deadline - time.monotonic()
             if remaining is not None and remaining <= 0:
                 raise subprocess.TimeoutExpired(argv, timeout)
+            if abort is not None:
+                stop = abort()
+                if stop is not None:
+                    raise stop
+                remaining = ABORT_POLL if remaining is None else min(remaining, ABORT_POLL)
             for key, _events in selector.select(remaining):
                 if key.fileobj is proc.stdin:
                     try:
@@ -779,8 +789,20 @@ def default_runner(argv, *, input=None, stdout=None, timeout=None, cwd=None, env
                     _write_out(stdout, data)
                 else:
                     chunks.append(data)
-        remaining = None if deadline is None else max(0.0, deadline - time.monotonic())
-        proc.wait(timeout=remaining)
+        while True:
+            remaining = None if deadline is None else max(0.0, deadline - time.monotonic())
+            if abort is None:
+                proc.wait(timeout=remaining)
+                break
+            stop = abort()
+            if stop is not None:
+                raise stop
+            try:
+                proc.wait(timeout=ABORT_POLL if remaining is None else min(remaining, ABORT_POLL))
+                break
+            except subprocess.TimeoutExpired:
+                if remaining is not None and remaining <= ABORT_POLL:
+                    raise
     except BaseException:
         _kill_group(proc)
         proc.wait()
@@ -863,16 +885,18 @@ class OwnerRunner:
                 f'XDG_RUNTIME_DIR=/run/user/{self.uid}',
                 f'DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/{self.uid}/bus']
 
-    def run(self, argv, *, input=None, stdout=None, timeout=300, check=True, max_output=None):
+    def run(self, argv, *, input=None, stdout=None, timeout=300, check=True, max_output=None, abort=None):
         """Run fixed `argv` as the owner. `input`: bytes or a readable file; `stdout`: None (capture),
         a writable file, or DEVNULL. `max_output` caps captured bytes or, with a file, is its byte
-        budget (the child is killed when it is exceeded). Returns Result; raises CommandError when
-        `check` and exit != 0."""
+        budget (the child is killed when it is exceeded). `abort`: see default_runner. Returns Result; raises
+        CommandError when `check` and exit != 0."""
         argv = [str(arg) for arg in argv]
         if not argv or any('\0' in arg for arg in argv):
             raise BackupError('internal-error', '內部命令格式不正確。')
         what = describe(argv)
         extra = {} if max_output is None else {'max_output': int(max_output)}
+        if abort is not None:
+            extra['abort'] = abort
         try:
             result = self._runner(self.prefix() + argv, input=input, stdout=stdout, timeout=timeout,
                                   cwd=self.home, env=dict(ROOT_ENV), **extra)
@@ -899,10 +923,10 @@ class OwnerRunner:
     def systemctl(self, *args, **kwargs):
         return self.run([SYSTEMCTL, '--user', *args], **kwargs)
 
-    def relay(self, podman_args, *, stdout, timeout=3600, check=True, max_output=None):
+    def relay(self, podman_args, *, stdout, timeout=3600, check=True, max_output=None, abort=None):
         """`podman <args>` whose stdout is an owner-created pipe, copied to `stdout` by the helper."""
         return self.run([PYTHON, '-I', '-c', FILE_HELPER, 'relay', PODMAN, *podman_args], stdout=stdout,
-                        timeout=timeout, check=check, max_output=max_output)
+                        timeout=timeout, check=check, max_output=max_output, abort=abort)
 
     def _helper(self, args, **kwargs):
         result = self.run([PYTHON, '-I', '-c', FILE_HELPER, *args], check=False, **kwargs)
@@ -997,11 +1021,11 @@ class OwnerRunner:
             raise BackupError('job-failed', f'主機資料夾 ~/{rel} 的{what}結果格式不正確，已停止。', path=rel)
         return value
 
-    def dir_pack(self, rel_path, *, stdout, timeout=3 * 3600, max_output=None):
+    def dir_pack(self, rel_path, *, stdout, timeout=3 * 3600, max_output=None, abort=None):
         """GNU tar of ~/<rel_path>, read as the owner inside his user namespace, through the owner-side relay."""
         validate_rel_path(rel_path)
         result = self.run([PYTHON, '-I', '-c', FILE_HELPER, 'relay', *self._dir_argv('pack', rel_path)],
-                          stdout=stdout, timeout=timeout, check=False, max_output=max_output)
+                          stdout=stdout, timeout=timeout, check=False, max_output=max_output, abort=abort)
         if result.returncode:
             raise self._dir_failure(result, rel_path, '讀取')
 

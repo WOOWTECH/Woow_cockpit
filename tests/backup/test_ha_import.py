@@ -47,7 +47,12 @@ class FakeHaAdapter:
         size, digest = file_digest(path)
         manifest = {'id': self.app.id, 'name': self.app.name, 'adapter': 'quadlet-postgres', 'adapter_version': 1,
                     'items': sorted(items)}
-        return manifest, [Entry(path=f'apps/{self.app.id}/quadlet/q', source=path, size=size, sha256=digest)]
+        entries = [Entry(path=f'apps/{self.app.id}/quadlet/q', source=path, size=size, sha256=digest)]
+        for name, source in sorted((items.get('volumes') or {}).items()):
+            size, digest = file_digest(source)
+            entries.append(Entry(path=f'apps/{self.app.id}/volumes/{name}.tar', source=Path(source), size=size,
+                                 sha256=digest))
+        return manifest, entries
 
 
 class HaWorld:
@@ -222,6 +227,24 @@ class ConvertFlowTests(FlowCase):
                 self.convert(ha_id, ['odoo'])
         self.assertEqual(haimport.load_registry(self.paths), {})
         self.assertEqual(self.storage.list_backups(), [])
+
+    def test_the_archive_must_fit_before_packaging(self):
+        ha_id = self.upload(two_addons())
+
+        def big_odoo(work, app_, database, test_mode, out_dir):
+            result = self.stub_odoo(work, app_, database, test_mode, out_dir)
+            result['volumes']['odoo18-web-data'].write_bytes(b'x' * (4 * 1024 * 1024))
+            return result
+
+        floor = haimport.WATCH_MARGIN
+        free = {'value': floor + 2 * 1024 * 1024}  # the up-front 3 x members fits, a 4 MiB archive does not
+        with mock.patch.object(ha_odoo, 'convert', big_odoo), \
+                mock.patch.object(haimport.SpaceGuard, 'free', lambda guard: free['value']):
+            with self.assertRaises(BackupError) as caught:
+                self.convert(ha_id, ['odoo'])
+        self.assertEqual(caught.exception.code, 'insufficient-space')
+        self.assertEqual(self.storage.list_backups(), [])
+        self.assertEqual(haimport.load_registry(self.paths), {})
 
     def test_refusals_before_any_work(self):
         ha_id = self.upload(two_addons())

@@ -553,6 +553,9 @@ def convert(work, app, test_mode, out_dir):
     finally:
         files.close()
     work.phase('convert')
+    # Still to be written (review C-01): the copy in the throwaway volume, n8n's export, the new database and its
+    # dump -- about three times the SQLite files (already staged).
+    work.guard.check(3 * sum(os.path.getsize(p) for p in src.sqlite.values()))
     info = inspect_sqlite(src.sqlite['database.sqlite']) if 'database.sqlite' in src.sqlite else None
     # Closing the copy may have checkpointed its WAL into the main file (and removed -wal/-shm): keep what is left.
     src.sqlite = {name: path for name, path in src.sqlite.items() if os.path.lexists(path)}
