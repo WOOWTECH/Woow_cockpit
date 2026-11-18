@@ -7035,8 +7035,10 @@
         const trigger = current?.trigger;
         const target = trigger?.isConnected ? trigger
           : trigger?.dataset?.focus ? document.querySelector(`[data-focus="${CSS.escape(trigger.dataset.focus)}"]`) : null;
+        const active = document.activeElement;
         if (target && !target.disabled) target.focus({ preventScroll: true });
-        else $("view-heading")?.focus({ preventScroll: true });
+        // The close event can arrive after the action's next step already focused its control (a fast reply): keep it.
+        else if (!active || active === document.body || $(id).contains(active)) $("view-heading")?.focus({ preventScroll: true });
       });
     }
     // An open download menu closes on a click elsewhere or Escape, and stays inside the viewport when it resizes.

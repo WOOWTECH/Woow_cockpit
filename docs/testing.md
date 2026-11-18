@@ -127,7 +127,7 @@ node tests/e2e/lab/upload_window.mjs                         # H8：上傳視窗
 
 `strengthen_ui.mjs cleanup` 第一次 9／10 是執行順序的問題，不是引擎：`ui_e2e.mjs s1` 在建立頁保留預設的全選，dev-a 上的備份含 woowbk-demo、woowbk-dirs、woowbk-inst，另外兩個應用保留全部，所以它不是 woowbk-demo「保留最新 5 份」的候選（CONTRACT §8：多個應用的備份在任一應用仍需要時保留），而這項檢查假設 woowbk-demo 的手動備份都只含它（候選數 = 手動份數 − 5）。刪除那份測試備份、補 6 份只含 woowbk-demo 的備份後重跑 11／11，之後刪除補的備份。
 
-HA 匯入（2026-11-18～19，`feat/ha-import` 177c8c6，2026.11.19.1 的產品程式）。先在 dev-c 以真正的頁面匯入一次（見下方「HA 匯入（dev-c）」），再在 dev-a、dev-b 部署同一個工作樹跑原有功能的完整回歸，兩台各 36 個已安裝檔案與工作樹 sha256 相同。這次 strengthen 排在 schedule 之前，和 11-17 的順序不同。證據在 `~/.woowbk-lab/evidence/final-ha-import/20261118T151246Z/`。
+HA 匯入（2026-11-18～19，`feat/ha-import` 177c8c6；2026.11.19.1 在這之後只再修正對話框關閉後的焦點，由頁面測試涵蓋）。先在 dev-c 以真正的頁面匯入一次（見下方「HA 匯入（dev-c）」），再在 dev-a、dev-b 部署同一個工作樹跑原有功能的完整回歸，兩台各 36 個已安裝檔案與工作樹 sha256 相同。這次 strengthen 排在 schedule 之前，和 11-17 的順序不同。證據在 `~/.woowbk-lab/evidence/final-ha-import/20261118T151246Z/`。
 
 | 項目（2026-11-19，177c8c6） | 結果 |
 | --- | --- |
@@ -211,7 +211,7 @@ H8（`upload_window.mjs`）在最終回歸前跑過兩批，每種設定共 6 �
 
 2026-11-18（feat/ha-import 2569298）：49／49 通過（其中 verify cleanup leaks 15／15），頁面錯誤 0；檢查 29 秒、轉換 125 秒、還原 162 秒；之後 `baseline cleanup` 7／7，資料與匯入前逐項相同。證據 `~/.woowbk-lab/evidence/ha-import-ui/20261118T204850/`。
 
-2026-11-19（最終版本 177c8c6，部署後 36 個已安裝檔案與工作樹 sha256 相同）：50／50 通過（其中 `live` 1／1、`verify cleanup leaks` 15／15），頁面的指令碼與 console 錯誤 0；上傳 6.2 秒、檢查 28.8 秒、轉換 128.3 秒、還原 158.0 秒；之後 `baseline cleanup` 7／7：基準標記資料列都在、匯入的模組、聯絡人與工作流程都不在、四個健康網址 200，沒有暫用容器、資料卷、網路、暫存資料夾或金鑰檔。證據 `~/.woowbk-lab/evidence/ha-import-ui/20261118T231340/`。
+2026-11-19（177c8c6，部署後 36 個已安裝檔案與工作樹 sha256 相同）：50／50 通過（其中 `live` 1／1、`verify cleanup leaks` 15／15），頁面的指令碼與 console 錯誤 0；上傳 6.2 秒、檢查 28.8 秒、轉換 128.3 秒、還原 158.0 秒；之後 `baseline cleanup` 7／7：基準標記資料列都在、匯入的模組、聯絡人與工作流程都不在、四個健康網址 200，沒有暫用容器、資料卷、網路、暫存資料夾或金鑰檔。證據 `~/.woowbk-lab/evidence/ha-import-ui/20261118T231340/`。
 
 尚未實測：多 GB 備份與超過 8 GiB 的單一項目、不同 CPU 架構、兩台實體設備之間的還原（兩台實驗室設備在同一台實體主機上）。正式應用（含沒有 PostgreSQL 的 EMQX、OpenDesign、Headscale，以及使用主機資料夾的 Odoo、Home Assistant、Nextcloud）已在參考主機實測備份與原位還原，見 [production-onboarding.md](backup/production-onboarding.md)；正式應用沒有做跨設備還原。
 

@@ -2568,6 +2568,32 @@ try {
     await shot(page, 'restore-settings-installed-1440.png');
   });
 
+  // A loaded browser can deliver the dialog's close event after a fast reply already rendered the new preflight and
+  // focused the app: the close handler must not move that focus to the heading (it did, the button that opened the
+  // dialog being gone). Here every dialog close listener runs 300 ms late.
+  const lateClose = fixture({ catalogData: catalogData() });
+  carrySettings(lateClose, B_MANUAL, { wiki: structuredClone(wikiEntry) });
+  await check('installed settings: a late dialog close event leaves the focus on the app the new preflight focused', lateClose, async (page) => {
+    await ready(page);
+    await page.evaluate(id => { window.location.hash = `#/restore/${id}`; }, B_MANUAL);
+    await page.locator('[data-focus="pf-settings-woowbk-wiki"]').press('Enter');
+    await page.getByText('檢查通過：可以安裝這份應用設定。').waitFor();
+    await page.locator('[data-focus="pf-settings-install-woowbk-wiki"]').click();
+    await page.locator('#confirm-ack').check();
+    await page.locator('#confirm-ok').click();
+    await page.waitForFunction(() => window.lateCloses === 1
+      && window.testcalls.filter(call => call.argv[1] === 'inspect').length === 2
+      && document.querySelector('[data-focus="pf-select-woowbk-wiki"]')?.disabled === false);
+    assert.equal(await focused(page), 'pf-select-woowbk-wiki', 'the late close event did not take the focus away');
+  }, { beforeGoto: page => page.addInitScript(() => {
+    window.lateCloses = 0;
+    const add = EventTarget.prototype.addEventListener;
+    EventTarget.prototype.addEventListener = function (type, listener, options) {
+      if (type !== 'close' || !(this instanceof HTMLDialogElement)) return add.call(this, type, listener, options);
+      return add.call(this, type, event => setTimeout(() => { listener.call(this, event); window.lateCloses += 1; }, 300), options);
+    };
+  }) });
+
   // 改用: the installed digest goes with the install; settings changed after the review are never installed blind.
   const replaced = fixture({ catalogData: catalogData() });
   const backupDemo = { ...structuredClone(replaced.catalogData.installed['woowbk-demo'].entry), description: '備份時的說明' };
