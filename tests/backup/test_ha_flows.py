@@ -326,8 +326,8 @@ class OdooConversionTests(ConversionCase):
         result = self.convert(self.upload_odoo(), ['odoo'], test_mode=True)
         imp = result['ha_import']
         self.assertEqual(imp['apps'], ['odoo'])
-        self.assertTrue(any('woow_import_probe' in line for line in imp['notes_by_app']['odoo']))
-        self.assertTrue(any('https://shop.ha.example' in line for line in imp['notes_by_app']['odoo']), 'C-02')
+        self.assertTrue(any('woow_import_probe' in line for line in imp['notes']))
+        self.assertTrue(any('https://shop.ha.example' in line for line in imp['notes']), 'C-02')
         # HA's cluster: read only root, data volume noexec, every library/command setting overridden (HA-SEC-01).
         _role, image, args, argv = self.runs('hapg')[0]
         self.assertEqual(image, 'docker.io/library/postgres:16.15-alpine')

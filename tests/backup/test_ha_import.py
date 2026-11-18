@@ -237,8 +237,7 @@ class ConvertFlowTests(FlowCase):
         self.assertEqual(sorted(self.world.imported['n8n']), ['postgres', 'volumes'])
         imp = result['ha_import']
         self.assertEqual(set(imp), {'ha_backup_id', 'name', 'date', 'apps', 'odoo_database', 'test_mode',
-                                    'workflows_to_fix', 'reminders', 'reminders_by_app', 'notes', 'notes_by_app',
-                                    'addons'})
+                                    'workflows_to_fix', 'reminders', 'reminders_by_app', 'notes', 'addons'})
         self.assertEqual((imp['ha_backup_id'], imp['apps'], imp['odoo_database'], imp['test_mode']),
                          (ha_id, ['odoo', 'n8n'], 'woowtest', False))
         self.assertEqual([a['app_id'] for a in imp['addons']], ['odoo', 'n8n'])
@@ -247,8 +246,8 @@ class ConvertFlowTests(FlowCase):
         self.assertEqual(imp['reminders'], [])
         self.assertEqual(sorted(imp['reminders_by_app']), ['n8n', 'odoo'])
         self.assertIn('ha-probe@probe.invalid', imp['reminders_by_app']['n8n'][0])
-        self.assertTrue(any('woow_import_probe' in line for line in imp['notes_by_app']['odoo']))
-        self.assertEqual(imp['notes'], imp['notes_by_app']['odoo'] + imp['notes_by_app']['n8n'])
+        self.assertTrue(any('woow_import_probe' in line for line in imp['notes']))
+        self.assertTrue(imp['notes'][0].startswith('Odoo') and imp['notes'][-1].startswith('n8n'), imp['notes'])
         everything = imp['notes'] + [line for lines in imp['reminders_by_app'].values() for line in lines]
         self.assertFalse(any('停掉' in r or 'MCP' in r or '刪除' in r for r in everything), 'the page writes those')
         self.assertEqual(haimport.from_ha_views(self.paths)[backup_id], imp)
@@ -302,7 +301,7 @@ class ConvertFlowTests(FlowCase):
         self.assertTrue(item['name'].startswith('a b ') and len(item['name']) == 200)
         self.assertEqual(len(item['reasons']), 10)
         self.assertTrue(all('\n' not in reason for reason in item['reasons']))
-        self.assertTrue(any('等 20 個' in line for line in row['notes_by_app']['odoo']), 'review C-03')
+        self.assertTrue(any('等 20 個' in line for line in row['notes']), 'review C-03')
 
     def test_a_failed_conversion_leaves_no_row(self):
         ha_id = self.upload(two_addons())
@@ -381,11 +380,11 @@ class RegistryTests(unittest.TestCase):
         # What a conversion writes is cleaned instead of refused (review C-03).
         haimport.register(self.paths, '20261118T120001Z-0123abcd',
                           self.row(workflows_to_fix=[{'name': 'x'}], name='a\nb', reminders=['r'] * 30,
-                                   notes_by_app={'odoo': ['n\x00'], 'nextcloud': ['x']}))
+                                   reminders_by_app={'odoo': ['n\x00'], 'nextcloud': ['x']}))
         row = haimport.load_registry(self.paths)['20261118T120001Z-0123abcd']
         self.assertEqual((row['name'], row['workflows_to_fix']), ('a b', [{'name': 'x', 'active': False,
                                                                              'reasons': []}]))
-        self.assertEqual((len(row['reminders']), row['notes_by_app']), (20, {'odoo': ['n ']}))
+        self.assertEqual((len(row['reminders']), row['reminders_by_app']), (20, {'odoo': ['n ']}))
         haimport.forget(self.paths, '20261118T120001Z-0123abcd')
         path = haimport.registry_path(self.paths)
         path.write_text('{"schema": 2}')
@@ -400,11 +399,11 @@ class RegistryTests(unittest.TestCase):
         haimport.register(self.paths, bid, self.row())
         path = haimport.registry_path(self.paths)
         doc = json.loads(path.read_text())
-        for key in ('reminders_by_app', 'notes', 'notes_by_app'):
+        for key in ('reminders_by_app', 'notes'):
             del doc['imports'][bid][key]
         path.write_text(json.dumps(doc))
         view = haimport.from_ha_views(self.paths)[bid]
-        self.assertEqual((view['reminders_by_app'], view['notes'], view['notes_by_app']), ({}, [], {}))
+        self.assertEqual((view['reminders_by_app'], view['notes']), ({}, []))
 
     def test_rows_of_missing_backups_are_pruned_after_a_day(self):
         old = '20261101T000000Z-00000001'

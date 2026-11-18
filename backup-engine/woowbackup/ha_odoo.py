@@ -854,7 +854,7 @@ def database_verdict(details, target, candidates, *, ha_major, target_major, ext
     if details['mail_servers_active']:
         warnings.append(f'HA 的資料庫有 {details["mail_servers_active"]} 個啟用中的外寄郵件伺服器，搬過來後會開始寄信。')
     if details['crons_active']:
-        warnings.append(f'HA 的資料庫有 {details["crons_active"]} 個啟用中的排程工作，搬過來後會在這台執行。')
+        warnings.append(f'HA 的資料庫有 {details["crons_active"]} 個啟用中的排程動作，搬過來後會在這台執行。')
     if details.get('website_domains'):
         warnings.append(f'網站原本使用的網域 {_names(details["website_domains"], 5)} 會改成這台的網址。')
     return not blockers, blockers, warnings, copy

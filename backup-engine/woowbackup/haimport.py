@@ -17,8 +17,8 @@ masks it in every log line before the job starts and hands it over as `ctx.ha_ke
 
 `ha-imports.json` (`<data>/ha-imports.json`, root 0600, strict; written under the index lock): `{schema: 1, imports:
 {<backup id>: ImportRow}}`, ImportRow = `{ha_backup_id, name, date, apps, odoo_database, test_mode, workflows_to_fix,
-reminders, reminders_by_app, notes, notes_by_app, addons, job_id, created}` (rows written before reminders_by_app,
-notes and notes_by_app existed get them empty). Every text is cleaned and cut when the row is written, so whatever a
+reminders, reminders_by_app, notes, addons, job_id, created}` (rows written before reminders_by_app and notes existed
+get them empty). Every text is cleaned and cut when the row is written, so whatever a
 conversion found is accepted (review C-03). A row is written before the backup is packaged (its id is chosen first)
 and dropped when the job fails before the backup is in the index, when the backup is deleted, or later when its
 backup no longer exists. Deleting the HA file never touches it: a converted backup keeps its origin.
@@ -43,9 +43,9 @@ REGISTRY_MAX = 1000
 ROW_KEYS = ('ha_backup_id', 'name', 'date', 'apps', 'odoo_database', 'test_mode', 'workflows_to_fix', 'reminders',
             'addons', 'job_id', 'created')
 # Keys added after the first rows were written (a row without them gets the empty value; review UI-3, P-05).
-ROW_EXTRA = {'reminders_by_app': dict, 'notes': list, 'notes_by_app': dict}
+ROW_EXTRA = {'reminders_by_app': dict, 'notes': list}
 VIEW_KEYS = ('ha_backup_id', 'name', 'date', 'apps', 'odoo_database', 'test_mode', 'workflows_to_fix', 'reminders',
-             'reminders_by_app', 'notes', 'notes_by_app', 'addons')
+             'reminders_by_app', 'notes', 'addons')
 MAX_LINES = 20
 STALE_ROW_SECONDS = 24 * 3600
 MAX_KEY_BYTES = 4096
@@ -543,35 +543,32 @@ def _names(items, limit=10):
 
 
 def import_texts(converted):
-    """(notes, notes_by_app, reminders, reminders_by_app) of a conversion (review UI-3, P-05). `notes`: what the
-    import moves or changes, shown before the restore (every line; `notes_by_app` the same lines per app);
+    """(notes, reminders, reminders_by_app) of a conversion (review UI-3, P-05). `notes`: ONE list describing the
+    whole converted backup, what the import moves or changes (shown before the restore; each line names its app);
     `reminders`: what to do afterwards that belongs to no app (none so far: the page writes the lines about stopping
     the HA add-on, the MCP admin apps, a test import and deleting the HA file); `reminders_by_app`: per app."""
-    notes_by_app, reminders_by_app = {}, {}
+    notes, reminders_by_app = [], {}
     if 'odoo' in converted:
         odoo = converted['odoo']
-        notes = ['Odoo 的使用者帳號和密碼會換成 HA 那邊的，這台原本的 Odoo 管理者密碼不再適用。']
+        notes.append('Odoo 的使用者帳號和密碼會換成 HA 那邊的，這台原本的 Odoo 管理者密碼不再適用。')
         copied = [m['name'] for m in odoo.get('custom_modules') or []]
         if copied:
-            notes.append(f'HA 的自訂模組 {_names(copied)} 會一起放進這台的自訂模組資料夾。')
+            notes.append(f'HA 的 Odoo 自訂模組 {_names(copied)} 會一起放進這台 Odoo 的自訂模組資料夾。')
         domains = odoo.get('website_domains') or []
         if domains:
-            notes.append(f'網站原本使用的網域 {_names(domains, 5)} 會改成這台的網址。')
-        notes_by_app['odoo'] = notes
+            notes.append(f'Odoo 網站原本使用的網域 {_names(domains, 5)} 會改成這台的網址。')
         reminders_by_app['odoo'] = ['匯入後請用 HA 那邊的 Odoo 帳號和密碼登入。']
     if 'n8n' in converted:
         n8n = converted['n8n']
         email = n8n.get('owner_email')
         shown = f'（{email}）' if email else ''
-        notes = [f'n8n 的登入帳號會換成 HA 的管理者帳號{shown}。']
+        notes.append(f'n8n 的登入帳號會換成 HA 的管理者帳號{shown}。')
         reminders = [f'匯入後請用 HA 的 n8n 管理者帳號{shown}登入。']
         if n8n.get('packages'):
             notes.append('HA 的 n8n 社群節點會一起搬過來。')
             reminders.append('請確認 HA 的 n8n 社群節點能正常使用（必要時重新安裝）。')
-        notes_by_app['n8n'] = notes
         reminders_by_app['n8n'] = reminders
-    notes = [line for app_id in APPS for line in notes_by_app.get(app_id, [])]
-    return notes, notes_by_app, [], reminders_by_app
+    return notes, [], reminders_by_app
 
 
 def run_ha_convert(ctx, params):
@@ -639,13 +636,13 @@ def run_ha_convert(ctx, params):
         work.close()  # no throwaway object is needed for the packaging
         plain = sum(int(entry.size) for entry in entries)
         work.guard.check(plain + plain // 100)  # the archive (at most the data plus 1 % for tar and age; review C-01)
-        notes, notes_by_app, reminders, reminders_by_app = import_texts(converted)
+        notes, reminders, reminders_by_app = import_texts(converted)
         row = clean_row({'ha_backup_id': record['id'], 'name': record['name'], 'date': record['date'],
                          'apps': app_ids, 'odoo_database': database if 'odoo' in app_ids else None,
                          'test_mode': test_mode,
                          'workflows_to_fix': converted.get('n8n', {}).get('workflows_to_fix') or [],
                          'reminders': reminders, 'reminders_by_app': reminders_by_app, 'notes': notes,
-                         'notes_by_app': notes_by_app, 'addons': addons, 'job_id': ctx.job_id,
+                         'addons': addons, 'job_id': ctx.job_id,
                          'created': util.iso_utc()})
         backup_id = ctx.storage.new_backup_id()
         try:
@@ -728,8 +725,8 @@ def clean_row(row):
                    odoo_database=_clean(database, 63) if database is not None else None,
                    workflows_to_fix=fix, addons=addons, reminders=_lines(row.get('reminders')),
                    notes=_lines(row.get('notes')))
-    for key in ('reminders_by_app', 'notes_by_app'):
-        cleaned[key] = {app_id: _lines(lines) for app_id, lines in (row.get(key) or {}).items() if app_id in APPS}
+    cleaned['reminders_by_app'] = {app_id: _lines(lines) for app_id, lines in (row.get('reminders_by_app') or {}).items()
+                                   if app_id in APPS}
     return cleaned
 
 
@@ -749,10 +746,9 @@ def _valid_lines(lines):
 def valid_row(row):
     if not isinstance(row, dict) or set(row) != set(ROW_KEYS) | set(ROW_EXTRA):
         return False
-    for key in ('reminders_by_app', 'notes_by_app'):
-        value = row[key]
-        if not isinstance(value, dict) or not all(app in APPS and _valid_lines(lines) for app, lines in value.items()):
-            return False
+    value = row['reminders_by_app']
+    if not isinstance(value, dict) or not all(app in APPS and _valid_lines(lines) for app, lines in value.items()):
+        return False
     if not _valid_lines(row['notes']):
         return False
     if not hastore.valid_id(row['ha_backup_id']) or not _text(row['name'], 200) or not util.is_iso_utc(row['date']):
