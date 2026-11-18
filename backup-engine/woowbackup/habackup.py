@@ -71,6 +71,13 @@ MAX_NAME = 4096
 MAX_ADDON_JSON = 4 * 1024 * 1024
 DEFAULT_MAX_MEMBERS = 2_000_000
 DEFAULT_MAX_BYTES = 2 * 1024 ** 4
+# A member's tar may inflate to at most INFLATE_RATIO times its stored size (at least INFLATE_FLOOR): deflate's
+# ~1000:1 would turn 1 GB into 1 TB of work (review HA-SEC-05). Every CHECK_BYTES read and CHECK_ENTRIES headers the
+# walk calls its `checkpoint` (a cancel stops it also while it skips what is not selected).
+INFLATE_RATIO = 100
+INFLATE_FLOOR = 32 * 1024 ** 3
+CHECK_BYTES = 64 * 1024 * 1024
+CHECK_ENTRIES = 1024
 MAX_GZIP_FIELD = 64 * 1024
 MAX_GZIP_TRAILER = 64
 SAMPLES = 5
@@ -1012,11 +1019,15 @@ class _Reader:
     """Buffered sequential reads of a plaintext tar stream (any object with read(n)); an offset into the current
     buffer instead of deleting from its front keeps every read proportional to its own size."""
 
-    def __init__(self, stream):
+    def __init__(self, stream, *, checkpoint=None, max_bytes=None):
         self.stream = stream
         self.buf = b''
         self.off = 0
         self.eof = False
+        self.checkpoint = checkpoint
+        self.max_bytes = max_bytes
+        self.consumed = 0
+        self._next_check = CHECK_BYTES
 
     def _avail(self):
         return len(self.buf) - self.off
@@ -1033,6 +1044,13 @@ class _Reader:
                 break
             parts.append(data)
             have += len(data)
+            self.consumed += len(data)
+            if self.max_bytes is not None and self.consumed > self.max_bytes:
+                raise _limit('the add-on archive inflates too much', limit=self.max_bytes)
+            if self.consumed >= self._next_check:
+                self._next_check = self.consumed + CHECK_BYTES
+                if self.checkpoint is not None:
+                    self.checkpoint()
         self.buf, self.off = b''.join(parts), 0
 
     def read_exact(self, n):
@@ -1214,20 +1232,30 @@ class _Names:
         return key
 
 
-def iter_entries(stream, select=None, report=None, *, addon=None, until_addon=False):
+def inflate_budget(stream):
+    """Bytes the tar of a MemberStream may inflate to (None for other streams)."""
+    member = getattr(stream, 'member', None)
+    size = getattr(member, 'size', None)
+    if not isinstance(size, int) or isinstance(size, bool):
+        return None
+    return max(INFLATE_FLOOR, INFLATE_RATIO * size)
+
+
+def iter_entries(stream, select=None, report=None, *, addon=None, until_addon=False, checkpoint=None):
     """Walk the plaintext tar `stream` (a MemberStream or any object with read(n)) strictly and yield the selected
     entries (Entry) in order; see Select for symlinks, hard links and budgets and the module notes for what is never
     handed out. After the last entry the end-of-archive marker, the zero trailer and `stream.finish()` (when it has
     one) are checked; `report.complete` is True only then. A caller that stops early skips those checks.
     `addon`: the tar is an add-on's (its top-level addon.json is metadata, parsed into `report.addon`, never handed
     out); None = a MemberStream's member role, True for other streams. `until_addon`: stop as soon as addon.json was
-    read (read_addon_info)."""
+    read (read_addon_info). `checkpoint`: called every CHECK_ENTRIES headers and CHECK_BYTES read (a cancel stops the
+    walk also where nothing is selected); a MemberStream may inflate to inflate_budget() bytes (HA-SEC-05)."""
     select = select or Select()
     report = report if report is not None else Report()
     if addon is None:
         member = getattr(stream, 'member', None)
         addon = getattr(member, 'role', 'addon') == 'addon'
-    reader = _Reader(stream)
+    reader = _Reader(stream, checkpoint=checkpoint, max_bytes=inflate_budget(stream))
     names = _Names()
     selected_files = set()
     try:
@@ -1238,6 +1266,8 @@ def iter_entries(stream, select=None, report=None, *, addon=None, until_addon=Fa
             report.entries += 1
             if report.entries > select.max_members:
                 raise _limit('too many entries in an inner tar', limit=select.max_members)
+            if checkpoint is not None and report.entries % CHECK_ENTRIES == 0:
+                checkpoint()
             name = normalize(header.name)
             kind = KINDS.get(header.typeflag)
             if kind is None:

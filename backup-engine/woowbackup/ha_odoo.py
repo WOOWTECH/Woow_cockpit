@@ -314,7 +314,7 @@ def scan_member(stream, report, *, pg=None, filestore_db=None, filestore=None, m
                                            for name in ('__pycache__',)), symlinks=(), hardlinks=False)
     src = Source()
     count = 0
-    for entry in habackup.iter_entries(stream, select, report):
+    for entry in habackup.iter_entries(stream, select, report, checkpoint=checkpoint):
         count += 1
         if checkpoint is not None and count % 256 == 0:
             checkpoint()
@@ -385,7 +385,7 @@ def scan_share(stream, report, *, modules=None, checkpoint=None):
     select = habackup.Select(include=(SHARE_MODULES,), symlinks=(), hardlinks=False)
     found = {}
     count = 0
-    for entry in habackup.iter_entries(stream, select, report, addon=False):
+    for entry in habackup.iter_entries(stream, select, report, addon=False, checkpoint=checkpoint):
         count += 1
         if checkpoint is not None and count % 256 == 0:
             checkpoint()

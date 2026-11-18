@@ -6,11 +6,14 @@ storage/}`; caches, Redis data, runner files, logs and `data/` are not moved. Th
 PostgreSQL 16 with the same n8n version (the import's migration check requires it); its key lives only in the volume
 `n8n_n8n_data` (`config`).
 
-check: the SQLite files are copied into the job's root staging and read with the standard library (`PRAGMA
-trusted_schema=OFF`, explicit columns of tables only): the owner account (email and password set, else nothing can be
-moved), counts, the workflows that may need changes here (shell commands, SSH, local files, Home Assistant, HA-internal
-addresses, Redis/MQTT, webhooks), and community packages (native `.node` files must be x86-64 for musl, like the n8n
-image); the version must equal `n8n --version` of the live image.
+check: the SQLite files (database and WAL; never HA's `-shm` wal-index) are copied into the job's root staging and
+read by a child process that drops to the account nobody (no supplementary groups, its own network namespace, CPU,
+memory, file size and process limits) on a copy of its own, with `SQLITE_DBCONFIG_DEFENSIVE`, `trusted_schema=OFF`
+and only ordinary tables (no virtual table or its shadow tables; explicit columns): the owner account (email and
+password set, else nothing can be moved), counts, and the workflows one per line, whose reasons (shell commands, SSH,
+local files, Home Assistant, HA-internal addresses, Redis/MQTT, webhooks) this process works out row by row within a
+size budget (review HA-SEC-02, HA-SEC-05); community packages (native `.node` files must be x86-64 for musl, like the
+n8n image); the version must equal `n8n --version` of the live image.
 
 convert: a throwaway volume holds the SQLite copy and HA's key; a throwaway n8n (live image, network none) runs
 `export:entities --includeExecutionHistoryDataTables=true`; a throwaway PostgreSQL (the live n8n-postgres image, user
@@ -20,15 +23,23 @@ unpublishes every workflow; `pg_dump -Fc` becomes the archive's database `main`.
 `config` with HA's key (0600, the container's node uid/gid), HA's `nodes/` and `storage/`; `n8n_valkey_data` is empty
 (queued jobs of HA never run here).
 """
+import contextlib
 import io
 import json
 import os
+import pwd
 import re
 import secrets
-import sqlite3
+import selectors
+import shutil
+import signal
 import struct
+import subprocess
+import sys
 import tarfile
 import time
+
+from pathlib import Path
 
 from . import habackup, tempctr, util
 from .errors import BackupError
@@ -37,13 +48,20 @@ from .ha_odoo import FileTar, _info, _int, check_volume_tar, quadlet_mounts
 SLUG = 'woow-n8n'
 APP_ID = 'n8n'
 N8N_DIR = 'config/.n8n'
-SQLITE_FILES = ('database.sqlite', 'database.sqlite-wal', 'database.sqlite-shm')
+# HA's `-shm` (the WAL index) is never staged: SQLite rebuilds it from the WAL, whose frames it checks (HA-SEC-02).
+SQLITE_FILES = ('database.sqlite', 'database.sqlite-wal')
 KEY_FILE = 'config'
 MOVED_DIRS = ('nodes', 'storage')
 MAX_KEY_FILE = 64 * 1024
 MAX_PACKAGE_JSON = 1024 * 1024
-MAX_NODES_JSON = 16 * 1024 * 1024
+MAX_NODES_JSON = 16 * 1024 * 1024       # one workflow's nodes; a larger one is "too large to analyse"
+MAX_NODES_TOTAL = 256 * 1024 * 1024     # all workflows' nodes read; the rest are "too large to analyse"
 MAX_WORKFLOWS = 5000
+SQLITE_TIMEOUT = 1800
+SQLITE_MEMORY = 2 * 1024 * 1024 * 1024
+MAX_LINE = 2 * MAX_NODES_JSON + 1024 * 1024  # one line of the SQLite child (bytes)
+TOO_LARGE = '這個工作流程太大，無法自動分析，匯入後請自行確認它的節點設定。'
+COUNT_CHUNK = 40  # tables per json_build_object call: 2 arguments each, PostgreSQL allows 100 (review C-11)
 MAX_NATIVE = 64 * 1024 * 1024
 TABLE_RE = re.compile(r'[A-Za-z_][A-Za-z0-9_]{0,62}\Z')
 VERSION_RE = re.compile(r'[0-9]{1,4}\.[0-9]{1,4}\.[0-9]{1,4}(?:[-+][A-Za-z0-9.-]{1,40})?\Z')
@@ -164,10 +182,11 @@ def scan_member(stream, report, staging, *, files=None, guard=None, checkpoint=N
     package.json and native files of nodes/ checked; with `files` (a FileTar) nodes/** and storage/** are staged as
     `nodes/…` and `storage/…` (original modes). Returns a Source."""
     select = habackup.Select(include=tuple(f'{N8N_DIR}/{name}' for name in SQLITE_FILES + (KEY_FILE,) + MOVED_DIRS),
-                             symlinks=(f'{N8N_DIR}/nodes',), hardlinks=False)
+                             exclude=(f'{N8N_DIR}/database.sqlite-shm',), symlinks=(f'{N8N_DIR}/nodes',),
+                             hardlinks=False)
     src = Source()
     count = 0
-    for entry in habackup.iter_entries(stream, select, report):
+    for entry in habackup.iter_entries(stream, select, report, checkpoint=checkpoint):
         count += 1
         if checkpoint is not None and count % 256 == 0:
             checkpoint()
@@ -244,66 +263,209 @@ class _Counted:
 COUNTED = {'workflows': 'workflow_entity', 'credentials': 'credentials_entity', 'executions': 'execution_entity',
            'users': 'user', 'projects': 'project', 'variables': 'variables', 'data_tables': 'data_table'}
 
-
-def inspect_sqlite(path):
-    """{owner_email, owner_ok, counts, workflows [(name, active, nodes json)], tables {name: rows}, migration} of
-    the staged SQLite copy. Only tables are read, with explicit columns; views and triggers never run
-    (`trusted_schema=OFF`)."""
+# The child that reads HA's SQLite file: it drops its privileges before it opens the file and writes JSON lines (a
+# header, then one line per workflow, then {"end": true}). argv: uid gid max_row max_total max_rows file_size max_line.
+SQLITE_CHILD = r"""
+import json, os, re, resource, sqlite3, sys
+uid, gid, max_row, max_total, max_rows, fsize, max_line = (int(x) for x in sys.argv[1:8])
+if os.geteuid() == 0:
     try:
-        conn = sqlite3.connect(f'file:{path}?mode=rw', uri=True, isolation_level=None)
-    except sqlite3.Error:
-        raise BackupError('corrupt-archive', 'HA 備份中 n8n 的資料庫無法開啟。') from None
+        os.unshare(os.CLONE_NEWNET)
+    except (AttributeError, OSError):
+        pass
+    os.setgroups([])
+    os.setgid(gid)
+    os.setuid(uid)
+for limit, value in ((resource.RLIMIT_AS, %(memory)d), (resource.RLIMIT_CPU, %(cpu)d), (resource.RLIMIT_NOFILE, 64),
+                     (resource.RLIMIT_FSIZE, fsize), (resource.RLIMIT_CORE, 0), (resource.RLIMIT_NPROC, 0)):
     try:
-        conn.execute('PRAGMA trusted_schema=OFF')
-        conn.execute('PRAGMA cell_size_check=ON')
-        conn.execute('PRAGMA mmap_size=0')
-        kinds = dict(conn.execute("SELECT name, type FROM sqlite_master WHERE type IN ('table', 'view')").fetchall())
-        conn.execute('PRAGMA query_only=ON')
+        resource.setrlimit(limit, (value, value))
+    except (ValueError, OSError):
+        if limit != resource.RLIMIT_NPROC:
+            raise
+out = sys.stdout
+def emit(doc):
+    line = json.dumps(doc, ensure_ascii=False)
+    if len(line.encode("utf-8")) > max_line:
+        line = json.dumps({"n": doc.get("n", ""), "a": doc.get("a", False), "big": True}, ensure_ascii=False)
+    out.write(line + "\n")
+name_re = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,62}\Z")
+conn = sqlite3.connect("file:database.sqlite?mode=rw", uri=True, isolation_level=None)
+conn.text_factory = lambda data: data.decode("utf-8", "replace")
+try:
+    if hasattr(conn, "setconfig"):
+        conn.setconfig(sqlite3.SQLITE_DBCONFIG_DEFENSIVE, True)
+    conn.execute("PRAGMA trusted_schema=OFF")
+    conn.execute("PRAGMA cell_size_check=ON")
+    conn.execute("PRAGMA mmap_size=0")
+    schema = conn.execute("SELECT name, type, sql FROM sqlite_master WHERE type IN ('table', 'view')").fetchall()
+    conn.execute("PRAGMA query_only=ON")
+    virtual = [n for n, k, q in schema if k == "table" and isinstance(q, str) and q.lstrip()[:20].upper().replace(" ", "").startswith("CREATEVIRTUAL")]
+    kinds = {}
+    for n, k, q in schema:
+        if not isinstance(n, str) or n in virtual or any(n.startswith(v + "_") for v in virtual):
+            continue
+        kinds[n] = k
+    def table(n):
+        return kinds.get(n) == "table"
+    def columns(n):
+        return {r[1] for r in conn.execute('PRAGMA table_info("%%s")' %% n)} if table(n) and name_re.match(n) else set()
+    tables = {}
+    for n, k in sorted(kinds.items()):
+        if k == "table" and name_re.match(n):
+            tables[n] = conn.execute('SELECT count(*) FROM "%%s"' %% n).fetchone()[0]
+    user_cols = columns("user")
+    role_col = "roleSlug" if "roleSlug" in user_cols else "role" if "role" in user_cols else None
+    owner = None
+    if role_col and {"email", "password"} <= user_cols:
+        row = conn.execute('SELECT email, password FROM "user" WHERE "%%s" = ? ORDER BY createdAt LIMIT 1' %% role_col,
+                           ("global:owner",)).fetchone()
+        if row is not None:
+            owner = [row[0] if isinstance(row[0], str) else None, isinstance(row[1], str) and len(row[1]) > 0]
+    migration = None
+    if {"name", "timestamp"} <= columns("migrations"):
+        row = conn.execute("SELECT name FROM migrations ORDER BY timestamp DESC LIMIT 1").fetchone()
+        migration = str(row[0])[:200] if row else None
+    wf_cols = columns("workflow_entity")
+    readable = {"name", "active", "nodes"} <= wf_cols
+    emit({"tables": tables, "owner": owner, "migration": migration, "workflows": readable})
+    if readable:
+        archived = "isArchived" in wf_cols
+        sql = ("SELECT name, active, length(CAST(nodes AS BLOB))" + (", isArchived" if archived else "") +
+               ", rowid FROM workflow_entity ORDER BY name LIMIT ?")
+        total = 0
+        for row in conn.execute(sql, (max_rows,)).fetchall():
+            if archived and row[3]:
+                continue
+            name = row[0] if isinstance(row[0], str) else ""
+            size = row[2] if isinstance(row[2], int) else 0
+            doc = {"n": name[:200], "a": bool(row[1])}
+            if size > max_row or total + size > max_total:
+                doc["big"] = True
+            else:
+                total += size
+                nodes = conn.execute("SELECT nodes FROM workflow_entity WHERE rowid = ?", (row[-1],)).fetchone()
+                doc["j"] = nodes[0] if nodes and isinstance(nodes[0], str) else "[]"
+            emit(doc)
+    emit({"end": True})
+finally:
+    conn.close()
+""" % {'memory': SQLITE_MEMORY, 'cpu': SQLITE_TIMEOUT}
 
-        def table(name):
-            return kinds.get(name) == 'table'
 
-        def columns(name):
-            return {row[1] for row in conn.execute(f'PRAGMA table_info("{name}")')} if table(name) else set()
+def _nobody():
+    try:
+        account = pwd.getpwnam('nobody')
+        return account.pw_uid, account.pw_gid
+    except KeyError:
+        return 65534, 65534
 
-        tables = {}
-        for name, kind in sorted(kinds.items()):
-            if kind == 'table' and TABLE_RE.fullmatch(name):
-                tables[name] = conn.execute(f'SELECT count(*) FROM "{name}"').fetchone()[0]
-        counts = {key: tables.get(name, 0) for key, name in COUNTED.items()}
-        user_cols = columns('user')
-        role_col = 'roleSlug' if 'roleSlug' in user_cols else 'role' if 'role' in user_cols else None
-        owner_email, owner_ok = None, False
-        if role_col and {'email', 'password'} <= user_cols:
-            row = conn.execute(f'SELECT email, password FROM "user" WHERE "{role_col}" = ? ORDER BY createdAt LIMIT 1',
-                               ('global:owner',)).fetchone()
-            if row is not None:
-                email = row[0] if isinstance(row[0], str) and 0 < len(row[0]) <= 254 else None
-                owner_email = email
-                owner_ok = email is not None and isinstance(row[1], str) and len(row[1]) > 0
-        workflows = []
-        wf_cols = columns('workflow_entity')
-        if {'name', 'active', 'nodes'} <= wf_cols:
-            archived = 'isArchived' in wf_cols
-            sql = ('SELECT name, active, nodes' + (', isArchived' if archived else '') + ' FROM workflow_entity '
-                   'ORDER BY name LIMIT ?')
-            for row in conn.execute(sql, (MAX_WORKFLOWS,)):
-                if archived and row[3]:
-                    continue
-                name = row[0] if isinstance(row[0], str) else ''
-                nodes = row[2] if isinstance(row[2], str) and len(row[2]) <= MAX_NODES_JSON else '[]'
-                workflows.append((name[:200], bool(row[1]), nodes))
-        active = sum(1 for _n, flag, _nodes in workflows if flag)
-        migration = None
-        if {'name', 'timestamp'} <= columns('migrations'):
-            row = conn.execute('SELECT name FROM migrations ORDER BY timestamp DESC LIMIT 1').fetchone()
-            migration = str(row[0])[:200] if row else None
-        return {'owner_email': owner_email, 'owner_ok': owner_ok, 'counts': counts, 'workflows_active': active,
-                'workflows': workflows, 'tables': tables, 'migration': migration}
-    except sqlite3.Error:
-        raise BackupError('corrupt-archive', 'HA 備份中 n8n 的資料庫內容無法讀取。') from None
+
+def _child_lines(proc, *, deadline, checkpoint=None, max_line):
+    """The child's stdout, line by line (each at most `max_line` bytes), until it ends; `checkpoint` is called while
+    waiting (a cancel or the job's watchdog stops it)."""
+    selector = selectors.DefaultSelector()
+    selector.register(proc.stdout, selectors.EVENT_READ)
+    buf = bytearray()
+    try:
+        while True:
+            if checkpoint is not None:
+                checkpoint()
+            if time.monotonic() > deadline:
+                raise BackupError('job-failed', 'HA 的 n8n 資料庫讀取逾時。')
+            if not selector.select(1.0):
+                continue
+            data = os.read(proc.stdout.fileno(), 1024 * 1024)
+            if not data:
+                if buf:
+                    raise BackupError('corrupt-archive', 'HA 備份中 n8n 的資料庫內容無法讀取。')
+                return
+            buf += data
+            start = 0
+            while True:
+                end = buf.find(b'\n', start)
+                if end < 0:
+                    break
+                yield bytes(buf[start:end])
+                start = end + 1
+            del buf[:start]
+            if len(buf) > max_line:
+                raise BackupError('corrupt-archive', 'HA 備份中 n8n 的資料庫內容無法讀取。')
     finally:
-        conn.close()
+        selector.close()
+
+
+def inspect_sqlite(path, *, checkpoint=None):
+    """{owner_email, owner_ok, counts, workflows [(name, active, reasons)], workflows_active, tables {name: rows},
+    migration} of the staged SQLite copy at `path` (database.sqlite; its -wal beside it is used too). The file is
+    read by SQLITE_CHILD as the account nobody, on a copy of its own (this process never opens it, and never uses
+    anything the child touched); the workflows' reasons are worked out here, one row at a time."""
+    path = Path(path)
+    work_dir = path.parent / 'inspect'
+    work_dir.mkdir(mode=0o700)
+    try:
+        size = 0
+        for name in SQLITE_FILES:
+            source = path.parent / name if name != 'database.sqlite' else path
+            if os.path.lexists(source):
+                shutil.copyfile(source, work_dir / name, follow_symlinks=False)
+                size += os.path.getsize(work_dir / name)
+        uid, gid = _nobody()
+        if os.geteuid() == 0:
+            for item in [work_dir] + sorted(work_dir.iterdir()):
+                os.lchown(item, uid, gid)
+        argv = [sys.executable, '-I', '-S', '-c', SQLITE_CHILD, str(uid), str(gid), str(MAX_NODES_JSON),
+                str(MAX_NODES_TOTAL), str(MAX_WORKFLOWS), str(2 * size + 64 * 1024 * 1024), str(MAX_LINE)]
+        proc = subprocess.Popen(argv, cwd=work_dir, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                                stderr=subprocess.DEVNULL, close_fds=True, start_new_session=True,
+                                env={'PATH': '/usr/bin:/bin', 'LANG': 'C.UTF-8'})
+        try:
+            return _read_child(proc, checkpoint)
+        finally:
+            with contextlib.suppress(ProcessLookupError, PermissionError):
+                os.killpg(proc.pid, signal.SIGKILL)
+            proc.wait()
+            proc.stdout.close()
+    finally:
+        shutil.rmtree(work_dir, ignore_errors=True)
+
+
+def _read_child(proc, checkpoint):
+    header, workflows, ended = None, [], False
+    lines = _child_lines(proc, deadline=time.monotonic() + SQLITE_TIMEOUT, checkpoint=checkpoint, max_line=MAX_LINE)
+    for line in lines:
+        try:
+            doc = json.loads(line)
+        except (ValueError, RecursionError):
+            doc = None
+        if not isinstance(doc, dict) or ended:
+            raise BackupError('corrupt-archive', 'HA 備份中 n8n 的資料庫內容無法讀取。')
+        if header is None:
+            header = doc
+            continue
+        if doc.get('end') is True:
+            ended = True
+            continue
+        if len(workflows) >= MAX_WORKFLOWS or not isinstance(doc.get('n'), str):
+            raise BackupError('corrupt-archive', 'HA 備份中 n8n 的資料庫內容無法讀取。')
+        if doc.get('big') is True or not isinstance(doc.get('j'), str):
+            reasons = [TOO_LARGE]
+        else:
+            reasons = workflow_reasons(doc['j'])
+        workflows.append((doc['n'][:200], doc.get('a') is True, reasons))
+        if checkpoint is not None:
+            checkpoint()
+    if proc.wait(timeout=60) != 0 or header is None or not ended:
+        raise BackupError('corrupt-archive', 'HA 備份中 n8n 的資料庫無法開啟或內容無法讀取。')
+    tables = {name: rows for name, rows in (header.get('tables') or {}).items()
+              if isinstance(name, str) and TABLE_RE.fullmatch(name) and isinstance(rows, int) and rows >= 0}
+    owner = header.get('owner') if isinstance(header.get('owner'), list) and len(header['owner']) == 2 else None
+    email = owner[0] if owner and isinstance(owner[0], str) and 0 < len(owner[0]) <= 254 else None
+    migration = header.get('migration') if isinstance(header.get('migration'), str) else None
+    return {'owner_email': email, 'owner_ok': email is not None and owner[1] is True,
+            'counts': {key: tables.get(name, 0) for key, name in COUNTED.items()},
+            'workflows_active': sum(1 for _n, active, _r in workflows if active), 'workflows': workflows,
+            'tables': tables, 'migration': migration[:200] if migration else None}
 
 
 def _strings(value, depth=0):
@@ -360,11 +522,11 @@ def workflow_reasons(nodes_json):
 
 
 def workflows_to_fix(workflows, limit=200):
+    """[{name, active, reasons}] of the workflows (name, active, reasons) that have reasons."""
     found = []
-    for name, active, nodes in workflows:
-        reasons = workflow_reasons(nodes)
+    for name, active, reasons in workflows:
         if reasons:
-            found.append({'name': name, 'active': active, 'reasons': reasons})
+            found.append({'name': name, 'active': active, 'reasons': list(reasons)})
         if len(found) >= limit:
             break
     return found
@@ -476,7 +638,8 @@ def check(work, app):
     src = member_pass(work, app, staging)
     sqlite_bytes = sum(os.path.getsize(p) for p in src.sqlite.values())
     work.phase('check')
-    info = inspect_sqlite(src.sqlite['database.sqlite']) if 'database.sqlite' in src.sqlite else None
+    info = (inspect_sqlite(src.sqlite['database.sqlite'], checkpoint=work.checkpoint) if 'database.sqlite' in src.sqlite
+            else None)
     version = target_version(tmp, items.n8n_image)
     blockers, warnings = analyse(src, info, addon.version if addon else '', version)
     fix = workflows_to_fix(info['workflows']) if info else []
@@ -521,16 +684,20 @@ def _n8n_env(extra):
 
 
 def count_rows(pg, tables):
-    """{table: rows} in the throwaway PostgreSQL for the tables that exist there."""
+    """{table: rows} in the throwaway PostgreSQL for the tables that exist there (COUNT_CHUNK tables per query: a
+    function takes at most 100 arguments; review C-11)."""
     present = pg.query_json("SELECT coalesce(json_agg(tablename), '[]'::json) FROM pg_tables "
                             "WHERE schemaname = 'public'", 'n8n')
     present = {name for name in present if isinstance(name, str)} if isinstance(present, list) else set()
     names = [name for name in tables if name in present and TABLE_RE.fullmatch(name)]
-    if not names:
-        return {}
-    parts = ', '.join(f"'{name}', (SELECT count(*) FROM \"{name}\")" for name in names)
-    doc = pg.query_json(f'SELECT json_build_object({parts})', 'n8n')
-    return {name: _int(doc.get(name)) for name in names} if isinstance(doc, dict) else {}
+    found = {}
+    for start in range(0, len(names), COUNT_CHUNK):
+        chunk = names[start:start + COUNT_CHUNK]
+        parts = ', '.join(f"'{name}', (SELECT count(*) FROM \"{name}\")" for name in chunk)
+        doc = pg.query_json(f'SELECT json_build_object({parts})', 'n8n')
+        if isinstance(doc, dict):
+            found.update({name: _int(doc.get(name)) for name in chunk if name in doc})
+    return found
 
 
 def convert(work, app, test_mode, out_dir):
@@ -555,10 +722,9 @@ def convert(work, app, test_mode, out_dir):
     work.phase('convert')
     # Still to be written (review C-01): the copy in the throwaway volume, n8n's export, the new database and its
     # dump -- about three times the SQLite files (already staged).
-    work.guard.check(3 * sum(os.path.getsize(p) for p in src.sqlite.values()))
-    info = inspect_sqlite(src.sqlite['database.sqlite']) if 'database.sqlite' in src.sqlite else None
-    # Closing the copy may have checkpointed its WAL into the main file (and removed -wal/-shm): keep what is left.
-    src.sqlite = {name: path for name, path in src.sqlite.items() if os.path.lexists(path)}
+    work.guard.check(4 * sum(os.path.getsize(p) for p in src.sqlite.values()))
+    info = (inspect_sqlite(src.sqlite['database.sqlite'], checkpoint=work.checkpoint) if 'database.sqlite' in src.sqlite
+            else None)
     version = target_version(tmp, items.n8n_image)
     blockers, _warnings = analyse(src, info, addon.version if addon else '', version)
     if blockers:

@@ -387,6 +387,37 @@ class EntryTests(unittest.TestCase):
             return error.code, error.details.get('reason')
         raise AssertionError('accepted')
 
+    def test_a_walk_is_cancellable_where_nothing_is_selected_and_bounded(self):
+        entries = [{'name': '.', 'type': 'dir'}, {'name': 'big.bin', 'data': b'\0' * (256 * 1024)}]
+        entries += [{'name': f'f{i}', 'data': b''} for i in range(40)]
+        data = hx.tar_bytes(entries)
+        calls = []
+        old = (habackup.CHECK_BYTES, habackup.CHECK_ENTRIES)
+        habackup.CHECK_BYTES, habackup.CHECK_ENTRIES = 32 * 1024, 16
+        try:
+            for _entry in habackup.iter_entries(io.BytesIO(data), habackup.Select(include=()), habackup.Report(),
+                                                addon=False, checkpoint=lambda: calls.append(1)):
+                pass
+        finally:
+            habackup.CHECK_BYTES, habackup.CHECK_ENTRIES = old
+        self.assertGreaterEqual(len(calls), 2, 'called while unselected data is skipped and every few headers')
+
+        class Stream(io.BytesIO):
+            member = type('M', (), {'size': 1000})()
+
+        old = (habackup.INFLATE_FLOOR, habackup.INFLATE_RATIO)
+        habackup.INFLATE_FLOOR, habackup.INFLATE_RATIO = 64 * 1024, 2
+        try:
+            with self.assertRaises(BackupError) as caught:
+                for _entry in habackup.iter_entries(Stream(data), habackup.Select(include=()), habackup.Report(),
+                                                    addon=False):
+                    pass
+        finally:
+            habackup.INFLATE_FLOOR, habackup.INFLATE_RATIO = old
+        self.assertEqual(caught.exception.code, 'limit-exceeded')
+        self.assertEqual(habackup.inflate_budget(Stream(b'')), habackup.INFLATE_FLOOR)
+        self.assertIsNone(habackup.inflate_budget(io.BytesIO(b'')))
+
     def test_names_are_normalised(self):
         out, report = self.walk([{'name': '.', 'type': 'dir'}, {'name': './data/', 'type': 'dir'},
                                  {'name': './data/a.txt', 'data': b'a'}, {'name': 'data/b.txt', 'data': b'b'}])

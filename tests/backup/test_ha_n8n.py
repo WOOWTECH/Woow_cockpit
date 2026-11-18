@@ -3,12 +3,14 @@ SQLite copy (owner, counts, no views), the workflows to fix, community packages 
 source volume. Team E2."""
 import io
 import json
+import re
 import sqlite3
 import struct
 import tarfile
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from woowbackup import ha_n8n, habackup, jobs
 from woowbackup.errors import BackupError
@@ -101,6 +103,82 @@ class SqliteTests(unittest.TestCase):
         with self.assertRaises(BackupError) as caught:
             ha_n8n.inspect_sqlite(self.path)
         self.assertEqual(caught.exception.code, 'corrupt-archive')
+        self.assertFalse((self.path.parent / 'inspect').exists())
+
+    def test_virtual_tables_and_their_shadow_tables_are_never_read(self):
+        sqlite_db(self.path)
+        conn = sqlite3.connect(self.path)
+        conn.execute('CREATE VIRTUAL TABLE workflow_fts USING fts5(name)')
+        conn.execute('CREATE VIRTUAL TABLE geo USING rtree(id, x0, x1)')
+        conn.execute("INSERT INTO workflow_fts VALUES ('x')")
+        conn.commit()
+        conn.close()
+        info = ha_n8n.inspect_sqlite(self.path)
+        self.assertFalse([name for name in info['tables'] if name.startswith(('workflow_fts', 'geo'))])
+        self.assertIn('workflow_entity', info['tables'])
+
+    def test_the_file_is_read_by_a_child_on_a_copy_of_its_own(self):
+        conn = sqlite3.connect(self.path)
+        conn.execute('PRAGMA journal_mode=WAL')
+        conn.close()
+        sqlite_db(self.path)
+        conn = sqlite3.connect(self.path)
+        conn.execute('PRAGMA wal_autocheckpoint=0')
+        conn.execute("INSERT INTO project VALUES ('p2')")
+        conn.commit()
+        wal = self.path.parent / 'database.sqlite-wal'
+        before = (self.path.read_bytes(), wal.read_bytes())
+        # The WAL must survive the close below: copy it aside like the member pass stages it.
+        staged = Path(self.tmp.name) / 'staged'
+        staged.mkdir()
+        (staged / 'database.sqlite').write_bytes(before[0])
+        (staged / 'database.sqlite-wal').write_bytes(before[1])
+        conn.close()
+        with mock.patch.object(ha_n8n.subprocess, 'Popen', wraps=ha_n8n.subprocess.Popen) as popen:
+            info = ha_n8n.inspect_sqlite(staged / 'database.sqlite')
+        self.assertEqual(info['counts']['projects'], 2, 'the WAL is read')
+        argv = popen.call_args.args[0]
+        self.assertEqual(argv[:4], [ha_n8n.sys.executable, '-I', '-S', '-c'])
+        self.assertEqual(popen.call_args.kwargs['cwd'], staged / 'inspect')
+        self.assertEqual(((staged / 'database.sqlite').read_bytes(), (staged / 'database.sqlite-wal').read_bytes()),
+                         before, 'the staged files stay as they came from the backup')
+        self.assertFalse((staged / 'inspect').exists())
+        self.assertIn('os.setuid(uid)', ha_n8n.SQLITE_CHILD)
+        self.assertIn('SQLITE_DBCONFIG_DEFENSIVE', ha_n8n.SQLITE_CHILD)
+
+    def test_workflow_rows_are_bounded_and_analysed_one_by_one(self):
+        sqlite_db(self.path)
+        conn = sqlite3.connect(self.path)
+        big = json.dumps([{'type': 'n8n-nodes-base.set', 'parameters': {'v': 'x' * 2000}}])
+        conn.execute("INSERT INTO workflow_entity VALUES ('w9', 'huge', 0, ?, 0)", (big,))
+        conn.execute("INSERT INTO workflow_entity VALUES ('w8', 'ha', 0, ?, 0)",
+                     (json.dumps([{'type': 'n8n-nodes-base.homeAssistant'}]),))
+        conn.commit()
+        conn.close()
+        seen = []
+        with mock.patch.object(ha_n8n, 'MAX_NODES_JSON', 1000):
+            info = ha_n8n.inspect_sqlite(self.path, checkpoint=lambda: seen.append(1))
+        by_name = {name: reasons for name, _active, reasons in info['workflows']}
+        self.assertEqual(by_name['huge'], [ha_n8n.TOO_LARGE])
+        self.assertTrue(any('Home Assistant' in r for r in by_name['ha']))
+        self.assertEqual(by_name['manual'], [])
+        self.assertGreaterEqual(len(seen), len(info['workflows']))
+        with mock.patch.object(ha_n8n, 'MAX_NODES_TOTAL', 10):
+            info = ha_n8n.inspect_sqlite(self.path)
+        self.assertEqual({name: reasons for name, _a, reasons in info['workflows']}['ha'], [ha_n8n.TOO_LARGE])
+
+    def test_a_cancel_while_reading_stops_the_child(self):
+        sqlite_db(self.path)
+
+        class Stop(Exception):
+            pass
+
+        def checkpoint():
+            raise Stop()
+
+        with self.assertRaises(Stop):
+            ha_n8n.inspect_sqlite(self.path, checkpoint=checkpoint)
+        self.assertFalse((self.path.parent / 'inspect').exists())
 
 
 def _source(**fields):
@@ -158,7 +236,8 @@ class WorkflowScanTests(unittest.TestCase):
         self.assertNotIn('api.example.com', joined)
         self.assertLessEqual(len(reasons), 10)
         self.assertEqual(ha_n8n.workflow_reasons('{not json'), ['無法讀取工作流程的節點設定。'])
-        fix = ha_n8n.workflows_to_fix([('ok', True, '[]'), ('fix me', False, json.dumps(nodes[:1]))])
+        fix = ha_n8n.workflows_to_fix([('ok', True, []),
+                                       ('fix me', False, ha_n8n.workflow_reasons(json.dumps(nodes[:1])))])
         self.assertEqual([(w['name'], w['active']) for w in fix], [('fix me', False)])
 
 
@@ -169,6 +248,7 @@ def n8n_tar(extra=()):
                {'name': 'config', 'type': 'dir'}, {'name': 'config/.n8n', 'type': 'dir'},
                {'name': 'config/.n8n/database.sqlite', 'data': b'SQLITE'},
                {'name': 'config/.n8n/database.sqlite-wal', 'data': b'WAL'},
+               {'name': 'config/.n8n/database.sqlite-shm', 'data': b'SHM'},
                {'name': 'config/.n8n/config', 'data': json.dumps({'encryptionKey': KEY}).encode(), 'mode': 0o600},
                {'name': 'config/.n8n/n8nEventLog.log', 'data': b'log'},
                {'name': 'config/.n8n/nodes', 'type': 'dir'},
@@ -234,6 +314,24 @@ class ScanTests(unittest.TestCase):
 
 
 class CountTests(unittest.TestCase):
+    def test_many_tables_stay_within_postgresqls_argument_limit(self):
+        tables = {f'data_table_user_{i}': i + 1 for i in range(130)}
+        calls = []
+
+        class Pg:
+            def query_json(self, sql, database):
+                if 'pg_tables' in sql:
+                    return list(tables)
+                arguments = sql.count("(SELECT count(*)") * 2
+                if arguments > 100:
+                    raise BackupError('job-failed', 'cannot pass more than 100 arguments to a function')
+                calls.append(arguments)
+                return {name: tables[name] for name in re.findall(r"'([a-z0-9_]+)', \(SELECT", sql)}
+
+        self.assertEqual(ha_n8n.count_rows(Pg(), tables), tables)
+        self.assertEqual(len(calls), 4)
+        self.assertLessEqual(max(calls), 100)
+
     def test_rows_counted_only_for_tables_that_exist(self):
         asked = []
 
