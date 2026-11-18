@@ -192,7 +192,7 @@ env = pathlib.Path.home() / '.config/n8n/n8n.env'
 if env.exists():
     print(f'{env} exists (kept)')
     sys.exit(0)
-# The host's settings (same 18 keys); its LAN address 192.168.2.46 becomes the device's loopback.
+# The host's settings (same 18 keys); its LAN address becomes the device's loopback.
 values = {'HOST_BIND': '0.0.0.0', 'HOST_PORT': '15678', 'WEBHOOK_PORT': '15679', 'N8N_HOST': '127.0.0.1',
           'N8N_PROTOCOL': 'http', 'GENERIC_TIMEZONE': 'Asia/Taipei', 'TZ': 'Asia/Taipei', 'N8N_RUNNERS_MODE': 'external',
           'EXECUTIONS_MODE': 'queue', 'WORKER_CONCURRENCY': '5', 'N8N_QUEUE_WEBHOOK_PROCESSOR': 'true',

@@ -11,7 +11,7 @@
 // --verify (`ha_import_e2e.py verify cleanup leaks`: the data checks from inside the device) compares with them;
 // --baseline then puts dev-c back to its data from before any import (`ha_import_e2e.py baseline`).
 // Secrets: the devadmin password (~/.woowbk-lab/secrets/devadmin.pass) and the HA key (HA_BACKUP_KEY in the creds file,
-// default the haimport testdata creds.env) are never printed: every log line is scrubbed and no screenshot is taken
+// default ~/.woowbk-lab/secrets/ha-import-creds.env) are never printed: every log line is scrubbed and no screenshot is taken
 // while an input holds a key. Evidence: ~/.woowbk-lab/evidence/ha-import-ui/<time>/ (driver.log, results.json,
 // page-errors.json, screenshots). Only ~/.woowbk-lab/bin/labpodman is used; nothing on the host itself is touched.
 import { chromium } from 'playwright-core';
@@ -27,7 +27,6 @@ const LP = join(LAB, 'bin', 'labpodman');
 const DEVICE = 'woowbk-dev-c';
 const BASE = 'https://127.0.0.1:19093';
 const HELPER = '/usr/local/libexec/woowtech-cockpit-backup';
-const SCRATCH = '/tmp/claude-1000/-home-woowtechopenclaw/fbefdf50-77b9-4f2f-a609-4d7d82a72cee/scratchpad/haimport';
 const WRONG_KEY = 'AAAA-BBBB-CCCC-DDDD-EEEE-FFFF-GGGG';  // HA's key format, not this backup's key
 const KEY_SOURCE = '[A-Z0-9]{4}(?:-[A-Z0-9]{4}){6}';
 const DESKTOP = { width: 1440, height: 900 };
@@ -43,7 +42,7 @@ function usage(message) {
 function options(argv) {
   const opts = {
     fixture: join(LAB, 'ha-fixtures', '20261118', 'woow-import-test-enc', 'woow-import-test-enc.tar'),
-    database: 'woowtest', creds: join(SCRATCH, 'testdata', 'creds.env'), evidence: null, verify: false, baseline: null
+    database: 'woowtest', creds: join(LAB, 'secrets', 'ha-import-creds.env'), evidence: null, verify: false, baseline: null
   };
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];

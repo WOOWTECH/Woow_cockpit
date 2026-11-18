@@ -91,7 +91,7 @@ tests/e2e/lab/owner.sh a python3 /opt/woowbk-demo/tools/check.py --stop-start
 | 額外套件 | python3-nacl 1.5.0-4build1、python3-cryptography 41.0.7-4ubuntu0.4（只在 dev-c） |
 | Odoo 18（tenant） | `odoo-db`／`odoo`／`odoo-gateway`，127.0.0.1:18069 與 :18080；套件 `~/migration-w2/Woow_podman_odoo`（138d10c） |
 | n8n（佇列模式） | 7 個單元＋`n8n.target`，0.0.0.0:15678 與 :15679（只在設備的網路命名空間內）；套件 `~/quadlet-w1/Woow_podman_n8n`（2ac1ae2） |
-| 備份引擎 | feat/ha-import 工作樹 03f60ee（2026.11.17.1），只有 `odoo`、`n8n` 兩個目錄項目；設備金鑰 `8FBF-DAA3-A8D6-98D1`，緊急金鑰 `~/.woowbk-lab/secrets/dev-c-kit.txt`（0600，實驗室拋棄式） |
+| 備份引擎 | feat/ha-import 工作樹 03f60ee（2026.11.17.1），只有 `odoo`、`n8n` 兩個目錄項目；設備金鑰已建立，緊急金鑰 `~/.woowbk-lab/secrets/dev-c-kit.txt`（0600，實驗室拋棄式） |
 
 **建置**（重設後照做即可）：
 
@@ -137,14 +137,14 @@ python3 -I tests/e2e/lab/prodlike_baseline.py
 
 **和正式主機的差異**（逐檔比對的結果）：
 
-1. 帳號：appowner UID 1013、subuid `10000:55000`（主機 woowtechopenclaw UID 1000、`100000:65536`）。
+1. 帳號：appowner UID 1013、subuid `10000:55000`（主機的應用擁有者 UID 1000、`100000:65536`）。
 2. 目錄項目：只有 `owner`。
 3. Quadlet：17 個檔案、`n8n.target`、`n8n-task-runners.json`、`start-valkey.sh` 逐位元組相同，只有 3 個摘要不同：`odoo.container`
    的 `Image=` 與 `ExecStartPre=… --image`、`odoo-db.container` 與 `odoo-gateway.container` 的 `Image=`（見映像表）。
 4. 套件：主機的 `~/migration-w2/Woow_podman_odoo` 是 c578b8a，缺 #10 的 `ODOO_TENANT_FRESH` 修正，無法全新安裝 tenant；dev-c 用
    138d10c（產生的單元相同），再加上 gateway 摘要那兩行。n8n 與主機同為 2ac1ae2。
 5. `odoo18.env`：`WOOW_ODOO_IMAGE`、`WOOW_ODOO_DB_IMAGE`（摘要）、`WOOW_ODOO_ADMIN_LOGIN`（實驗室帳號），其餘 23 個鍵相同。
-   `n8n.env`：`N8N_HOST`、`N8N_WEBHOOK_URL`、`N8N_EDITOR_BASE_URL` 用 127.0.0.1（主機是 192.168.2.46），其餘 15 個鍵相同（行序不同）。
+   `n8n.env`：`N8N_HOST`、`N8N_WEBHOOK_URL`、`N8N_EDITOR_BASE_URL` 用 127.0.0.1（主機用自己的區網位址），其餘 15 個鍵相同（行序不同）。
 6. 資料：全新安裝。Odoo 資料庫 odoo 只安裝 12 個模組（主機 26 個，含 awesome_clicker、mail_fetchmail_durable，22 個附件）；
    n8n 和主機一樣是空的（1 個空殼使用者、沒有工作流程與憑證）。
 7. dev-c 沒有的：主機的其他應用、接在 `odoo18-network`／`n8n-network` 上的 odoo-mcp-admin／n8n-mcp-admin、舊的 `odoo18-db-data`

@@ -16,9 +16,10 @@ never printed: every evidence line is redacted.
   module is copied again and the result shows the import from a clean device; `live` only records the target's
   web.base.url and upgrade marker for a later `verify`, when the import itself runs elsewhere (ha_import_ui.mjs).
 
-Options: --fixtures DIR (default ~/.woowbk-lab/ha-fixtures/20261118), --creds FILE (haimport testdata creds.env),
---n8n-data FILE (the test-data script holding the credential value), --evidence NAME (default ha-import). Evidence:
-~/.woowbk-lab/evidence/<NAME>/<ts>/.
+Options: --fixtures DIR (default ~/.woowbk-lab/ha-fixtures/20261118),
+--creds FILE (default ~/.woowbk-lab/secrets/ha-import-creds.env), --n8n-data FILE (the test-data script holding the
+credential value, default ~/.woowbk-lab/secrets/ha-import-n8n-testdata.sh), --evidence NAME (default ha-import).
+Evidence: ~/.woowbk-lab/evidence/<NAME>/<ts>/.
 Only ~/.woowbk-lab/bin/labpodman is used; nothing on the host itself is touched.
 """
 import argparse
@@ -35,7 +36,7 @@ LP = str(LAB / 'bin' / 'labpodman')
 DEVICE = 'woowbk-dev-c'
 HELPER = '/usr/local/libexec/woowtech-cockpit-backup'
 OWNER = '/usr/local/bin/woowbk-owner'
-SCRATCH = Path('/tmp/claude-1000/-home-woowtechopenclaw/fbefdf50-77b9-4f2f-a609-4d7d82a72cee/scratchpad/haimport')
+SECRET_DIR = LAB / 'secrets'
 FIXTURES = LAB / 'ha-fixtures' / '20261118'
 NAMES = {'enc': 'woow-import-test-enc', 'plain': 'woow-import-test-plain',
          'unc': 'woow-import-test-enc-uncompressed'}
@@ -948,8 +949,8 @@ def main():
     parser.add_argument('--deploy', help='lab script directory with deploy-src.sh (deploys --src first)')
     parser.add_argument('--src', help='the Woow_cockpit tree to deploy')
     parser.add_argument('--fixtures', default=str(FIXTURES))
-    parser.add_argument('--creds', default=str(SCRATCH / 'testdata' / 'creds.env'))
-    parser.add_argument('--n8n-data', default=str(SCRATCH / 'testha-scripts' / 'n8n-testdata.filled.sh'))
+    parser.add_argument('--creds', default=str(SECRET_DIR / 'ha-import-creds.env'))
+    parser.add_argument('--n8n-data', default=str(SECRET_DIR / 'ha-import-n8n-testdata.sh'))
     parser.add_argument('--baseline', help='ODOO_BACKUP_ID,N8N_BACKUP_ID of dev-c backups from before any import')
     parser.add_argument('--evidence', default='ha-import', help='evidence folder below ~/.woowbk-lab/evidence')
     args = parser.parse_args()
