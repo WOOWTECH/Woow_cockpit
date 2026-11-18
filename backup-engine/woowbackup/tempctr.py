@@ -354,7 +354,7 @@ class TempObjects:
         if not re.fullmatch(r'[a-z_][a-z0-9_-]{0,31}', user):
             raise BackupError('internal-error', '容器使用者格式不正確。')
         out = self.run(role, image, ['-c', f'id -u {user} && id -g {user}'], entrypoint='sh', timeout=SHORT_TIMEOUT,
-                       max_output=64 * 1024).stdout or b''
+                       max_output=64 * 1024, read_only_root=True).stdout or b''
         parts = out.decode('ascii', 'replace').split()
         if len(parts) != 2 or not all(p.isdigit() and int(p) < 2 ** 31 for p in parts):
             raise BackupError('job-failed', f'無法讀取映像 {image[:80]} 中 {user} 帳號的 ID。')

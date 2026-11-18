@@ -770,7 +770,7 @@ def target_inventory(tmp, live, *, python=(), binaries=(), role='scan'):
             raise BackupError('internal-error', '程式名稱格式不正確。')
     result = tmp.run(role, live.web_image, ['-I', '-', json.dumps(request)], entrypoint='python3',
                      input=SCANNER.encode('utf-8'), volumes=live.web_mounts, secrets=[live.conf_secret],
-                     timeout=600, max_output=8 * 1024 * 1024)
+                     timeout=600, max_output=8 * 1024 * 1024, read_only_root=True)
     try:
         doc = util.loads_strict((result.stdout or b'').strip(), max_bytes=8 * 1024 * 1024)
     except ValueError:
