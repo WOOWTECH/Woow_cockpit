@@ -69,7 +69,7 @@ Cockpit 套件升級可能覆寫第三及第五部分；重新執行安裝可針
 | `backup-engine/` | 備份引擎 `woowbackup/` 與 root helper 入口 |
 | `catalog-examples/woowbk-demo/` | 實驗室示範應用的目錄項目、Quadlet 範本與工具 |
 | `scripts/manage.py` | 安裝、SHA-256 檢查及回退 |
-| `scripts/bootstrap-ubuntu.sh` | Ubuntu backports 套件與備份工具（age、zstd）安裝 |
+| `scripts/bootstrap-ubuntu.sh` | Ubuntu backports 套件與備份工具（age、zstd；讀取 Home Assistant 備份用的 python3-nacl、python3-cryptography）安裝 |
 | `scripts/capture.mjs` | 使用環境變數登入目標主機、擷取本機畫面 |
 | `tests/` | 暫存根目錄交易測試、備份引擎單元測試、圖集／服務／備份頁瀏覽器測試 |
 | `tests/e2e/lab/` | 實驗室設備工具與備份還原端到端測試 |

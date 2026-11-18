@@ -55,6 +55,8 @@ $LP run --rm --memory 384m --user 1000:1000 -e HOME=/tmp -e PYTHONDONTWRITEBYTEC
 
 `scripts/check_source.py` 另檢查備份頁的 manifest、CSP 與 DOM 寫入方式、每個引擎原始檔（shebang、語法、不使用 shell），並以引擎的驗證程式檢查示範目錄項目。
 
+Home Assistant 備份（`tests/backup/test_ha_*.py`）讀取 `tests/backup/fixtures/ha/` 的小型 HA 備份：它們由真正的 securetar 函式庫產生（v1、v2、v3、未加密、HA「下載」得到的解密副本；產生方式見該資料夾的 README），測試解密結果與函式庫逐位元組相同、錯誤金鑰、截斷與竄改、惡意的外層與內層 tar，以及上傳、`list`、`ha-delete` 與作業日誌遮蔽 HA 金鑰。需要 `python3-nacl` 與 `python3-cryptography`（測試映像與 CI 都有；CI 設定 `WOOWBK_REQUIRE_HA_CRYPTO=1`，缺少時不會略過而是失敗）；主機沒有時這些測試會略過。為這個功能建立的真實 HA 備份從不提交；要對它們測試，設定 `WOOWBK_HA_FIXTURES`（三個備份所在的資料夾）與 `WOOWBK_HA_KEY`（它們的金鑰），`RealBackupTests` 會完整串流讀取每個項目。
+
 2026-11-13 最終回歸：主機（已安裝 age）471 項通過、0 項略過；測試映像以 root 執行 471 項通過、3 項略過（只適用非 root），以 uid 1000 執行 471 項通過、0 項略過。`check_source.py` 通過（32 個資源參照、17 個引擎原始檔、示範目錄的 3 個 Quadlet 範本）。較早的整合輪為 317 項，當時主機沒有 age，50 項略過。
 
 ### 頁面 fixture 測試

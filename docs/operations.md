@@ -56,6 +56,7 @@ sudo python3 scripts/manage.py rollback <安裝輸出的 backup_id>
 | 還原被拒絕：備份中的資料卷或容器映像含有不安全或不支援的內容 | 設備沒有任何變更；不要再用這份備份，改用其他備份，並保留檔案回報工程人員 |
 | 備份失敗：資料卷含有還原時無法匯入的內容 | 依訊息處理該資料卷中的項目（例如指向資料卷外的相對符號連結、擁有者不在應用擁有者的 UID 對應範圍內）；應用已恢復執行 |
 | 錯誤 `internal-error`，訊息提到 age 或 zstd | 安裝 `age`、`zstd`（`bootstrap-ubuntu.sh --apply` 會安裝） |
+| 錯誤 `internal-error`，訊息提到 python3-nacl 或 python3-cryptography | 讀取 Home Assistant 加密備份需要這兩個套件：安裝 `python3-nacl`、`python3-cryptography`（`bootstrap-ubuntu.sh --apply` 會安裝） |
 
 不要為了讓圖集出現而重新啟動所有容器；圖集只是 Cockpit 套件。此安裝器不主動中斷 Cockpit 或既有應用服務。
 
@@ -69,6 +70,7 @@ sudo python3 scripts/manage.py rollback <安裝輸出的 backup_id>
 | --- | --- | --- |
 | `/var/lib/woowtech-backup/archives/<備份 ID>.woowbackup` | 加密的備份檔 | 整個 `/var/lib/woowtech-backup/` 只有 root 可存取（0700） |
 | `/var/lib/woowtech-backup/archives/<備份 ID>.json` | 列表索引：類型、應用、大小、SHA-256、驗證結果 | 從頁面刪除時與備份檔一起刪除 |
+| `/var/lib/woowtech-backup/ha-backups/<HA 備份 ID>.tar`、`.json` | 上傳的 Home Assistant 備份（原檔，未解密）與它的資訊（名稱、日期、附加元件） | 只有 root 可存取；保留到在頁面刪除為止，清理備份與排程備份不會刪除它們 |
 | `/var/lib/woowtech-backup/uploads/` | 上傳中的檔案 | 取消上傳時刪除；未完成的上傳超過 24 小時，會在下一次開始上傳時清除 |
 | `/var/lib/woowtech-backup/staging/<作業 ID>/` | 作業期間的**明文**暫存：資料庫匯出、資料卷內容、應用機密 | 作業結束或被判定中斷時刪除 |
 | `/var/lib/woowtech-backup/jobs/<作業 ID>.json`、`.log`、`.lock`、`.cancel` | 作業紀錄、日誌、紀錄鎖（空檔案）與尚未處理的取消要求，不含金鑰與應用機密內容 | 自動保留最近 200 筆已結束的作業（含日誌），更舊的會被刪除；進行中的作業、仍需復原處理的作業，以及還原前備份仍被釘選的失敗或中斷還原，一律保留。頁面顯示最近 50 筆 |

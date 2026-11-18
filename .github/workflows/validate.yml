@@ -18,13 +18,18 @@ jobs:
         with:
           node-version: '22'
           cache: npm
-      - name: Backup engine tools (age, zstd)
+      - name: Backup engine tools (age, zstd) and Home Assistant backup crypto (PyNaCl, cryptography)
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends age zstd
+          sudo apt-get install -y --no-install-recommends age zstd python3-nacl python3-cryptography
           age --version
           zstd --version
+          # setup-python's interpreter cannot see apt packages: the versions Ubuntu 24.04 ships, from PyPI.
+          python3 -m pip install pynacl==1.5.0 cryptography==41.0.7
+          python3 -c 'import nacl, cryptography; print("PyNaCl", nacl.__version__, "cryptography", cryptography.__version__)'
       - name: Installer and source contracts
+        env:
+          WOOWBK_REQUIRE_HA_CRYPTO: '1'
         run: |
           python3 -m unittest discover -s tests -t . -v
           python3 scripts/check_source.py

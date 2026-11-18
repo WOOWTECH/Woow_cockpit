@@ -20,7 +20,8 @@ BACKUP_PAGE = ('manifest.json', 'index.html', 'backup.css', 'backup.js')
 PACKAGE_MANIFESTS = ('apps-catalog/manifest.json', 'backup/manifest.json', 'pi-web-integration/package/manifest.json',
                      'preview/manifest.json', 'services/manifest.json')
 ENGINE_MODULES = ('__init__', 'errors', 'paths', 'archive', 'keys', 'storage', 'util', 'catalog', 'podman',
-                  'flows', 'jobs', 'cli', 'schedule', 'adapters/__init__', 'adapters/base', 'adapters/quadlet_postgres')
+                  'flows', 'jobs', 'cli', 'schedule', 'hasecuretar', 'habackup', 'hastore', 'adapters/__init__',
+                  'adapters/base', 'adapters/quadlet_postgres')
 # 排程備份 (docs/backup/CONTRACT.md section 8): the static timer and its tick service, exactly these settings. Unit files
 # are parsed here and in the unit tests; `systemd-analyze verify` is never run (it touched a live manager's sockets).
 UNIT_SOURCE = 'backup-engine/systemd'
