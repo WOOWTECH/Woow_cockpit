@@ -18,7 +18,7 @@ import traceback
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import ExitStack
 
-from . import flows
+from . import flows, hastore
 from . import jobs as jobmod
 from . import version as engine_version
 from .errors import BackupError
@@ -62,6 +62,12 @@ def v_upload_id(value, field):
 
 def v_export_id(value, field):
     if not isinstance(value, str) or not EXPORT_ID_RE.fullmatch(value):
+        raise _bad(field, '格式不正確。')
+    return value
+
+
+def v_ha_backup_id(value, field):
+    if not hastore.valid_id(value):
         raise _bad(field, '格式不正確。')
     return value
 
@@ -198,6 +204,8 @@ SPECS = {
     # 排程備份 (CONTRACT sections 7, 8 "Scheduled backups"); `schedule` is validated deeply by schedule.validate.
     'schedule-set': {'schedule': (REQUIRED, v_object), 'confirm': (OPTIONAL, v_bool)},
     'schedule-run-now': {'request_id': (REQUIRED, v_request_id)},
+    # Home Assistant backups (CONTRACT section 7, branch feat/ha-import): uploaded HA files live in ha-backups/.
+    'ha-delete': {'ha_backup_id': (REQUIRED, v_ha_backup_id), 'confirm': (REQUIRED, v_true)},
 }
 NO_INPUT = frozenset({'status', 'list', 'key-init', 'key-kit', 'jobs', 'settings-get', 'schedule-get'})
 
@@ -296,6 +304,12 @@ class Services:
     @property
     def keys(self):
         return self.deps.keys
+
+    @property
+    def ha_store(self):
+        """Uploaded Home Assistant backups (hastore.HaStore of the storage, or of `paths` for a storage without one)."""
+        store = getattr(self.storage, 'ha_store', None)
+        return store if store is not None else hastore.HaStore(self.paths)
 
     @property
     def archive(self):
@@ -684,6 +698,25 @@ def cmd_status(svc, _req):
     }
 
 
+def ha_backup_view(svc, rec):
+    """HaBackupMeta: the HA record plus `importable_apps` / `other_addons` against this device's catalog."""
+    try:
+        catalog = svc.catalog()
+    except Exception:  # noqa: BLE001 - the apps then show as not installed; never a broken listing
+        traceback.print_exc(file=sys.stderr)
+        catalog = None
+    return hastore.view(rec, catalog)
+
+
+def ha_backups_view(svc):
+    """`list.ha_backups` (newest first); [] when the HA store cannot be read (the backups list still works)."""
+    try:
+        return [ha_backup_view(svc, rec) for rec in svc.ha_store.list()]
+    except Exception:  # noqa: BLE001 - one unreadable store never breaks the backup list
+        traceback.print_exc(file=sys.stderr)
+        return []
+
+
 def cmd_list(svc, _req):
     svc.cleanup_exports()
     ids = svc.key_ids()
@@ -691,7 +724,8 @@ def cmd_list(svc, _req):
     exports = getattr(svc.storage, 'list_exports', lambda: [])()
     return {'backups': [backup_view(meta, ids, scheduled) for meta in svc.storage.list_backups()],
             'exports': [{key: rec[key] for key in ('export_id', 'backup_id', 'filename', 'size', 'expires')}
-                        for rec in exports]}
+                        for rec in exports],
+            'ha_backups': ha_backups_view(svc)}
 
 
 def _refuse_key_for_plain(header, req):
@@ -874,8 +908,26 @@ def cmd_upload_begin(svc, req):
 
 
 def cmd_upload_finish(svc, req):
+    """`{backup}` for a Cockpit backup, `{ha_backup}` for a Home Assistant backup (stored in ha-backups/)."""
     meta = svc.storage.finish_upload(req['upload_id'])
+    if hastore.is_record(meta):
+        return {'ha_backup': ha_backup_view(svc, meta)}
     return {'backup': backup_view(meta, svc.key_ids(), svc.scheduled_ids())}
+
+
+def cmd_ha_delete(svc, req):
+    """Delete an uploaded HA backup. Refuses (busy) while a queued or running job reads it (`params.ha_backup_id`),
+    checked under the start lock like `delete`; journaled."""
+    ha_id = req['ha_backup_id']
+    svc.recover()
+    with jobmod.start_lock(svc.paths):
+        svc.ha_store.get(ha_id)
+        for record in jobmod.JobStore(svc.paths).list(limit=None):
+            if record.get('state') in jobmod.ACTIVE and (record.get('params') or {}).get('ha_backup_id') == ha_id:
+                raise BackupError('busy', '這份 HA 備份正被進行中的作業使用，請等作業完成後再刪除。', job_id=record['id'])
+        svc.ha_store.delete(ha_id)
+    svc.audit(f'ha-backup-delete ha_backup={ha_id} loginuid={_login_uid()}')
+    return {}
 
 
 def cmd_upload_abort(svc, req):
@@ -1102,6 +1154,7 @@ COMMANDS = {
     'catalog-suggest': cmd_catalog_suggest, 'catalog-install': cmd_catalog_install,
     'catalog-remove': cmd_catalog_remove, 'retention-plan': cmd_retention_plan, 'retention-apply': cmd_retention_apply,
     'schedule-get': cmd_schedule_get, 'schedule-set': cmd_schedule_set, 'schedule-run-now': cmd_schedule_run_now,
+    'ha-delete': cmd_ha_delete,
 }
 
 
