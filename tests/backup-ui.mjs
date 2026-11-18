@@ -5116,7 +5116,9 @@ try {
         ...HA_TODO.n8n, HA_DELETE_LINE]);
       await page.locator('[data-nav="backups"]').click();
       await page.locator(`[data-focus="open-${B_HA}"]`).click();
-      const [origin] = await metadataOf(page.locator('section[aria-labelledby="detail-ha"]'));
+      const haCard = page.locator('section[aria-labelledby="detail-ha"]');
+      await haCard.locator('dl.metadata').first().waitFor();  // the detail renders on the hash change, after the click
+      const [origin] = await metadataOf(haCard);
       assert.equal(origin['這只是測試'], '是：工作流程、排程和寄信都已先關掉');
       assert.equal(await page.locator('section[aria-labelledby="detail-ha"] .card-head .chip').textContent(), '測試匯入');
     });
@@ -5146,7 +5148,9 @@ try {
       await page.locator(`tr[data-ha="${HA_ID}"]`).waitFor({ state: 'detached' });
       assert.equal(await page.locator(`tr[data-backup="${B_HA}"]`).count(), 1, 'the converted backup stays');
       await page.locator(`[data-focus="open-${B_HA}"]`).click();
-      const [origin] = await metadataOf(page.locator('section[aria-labelledby="detail-ha"]'));
+      const haCard = page.locator('section[aria-labelledby="detail-ha"]');
+      await haCard.locator('dl.metadata').first().waitFor();  // the detail renders on the hash change, after the click
+      const [origin] = await metadataOf(haCard);
       assert.equal(origin['HA 備份'], `${HA_NAME}（HA 備份檔已從這台刪除）`);
       // Restoring it still names HA's add-ons (the import recorded them, review P-06); only n8n is restored, so only
       // n8n's to-dos are listed (review P-05); the HA file is gone, so there is nothing more to delete.
