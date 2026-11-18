@@ -81,6 +81,14 @@ TEMP_FILE_RE = re.compile(r'\.j[0-9]{8}T[0-9]{6}Z-[0-9a-f]{8}\.json\.[0-9a-f]+\.
 UNIT_LIMITS = ('--property=MemoryMax=50%', '--property=TasksMax=512')
 SAFE_ENV = {'PATH': '/usr/sbin:/usr/bin:/sbin:/bin', 'LANG': 'C.UTF-8', 'LC_ALL': 'C.UTF-8'}
 SECRET_PATTERN = re.compile(r'AGE-SECRET-KEY-1[0-9A-Za-z]+')
+# A Home Assistant backup encryption key as HA shows it (7 groups of 4 of A-Z0-9): masked wherever it appears, also in
+# processes that never saw the key (job-status reads the log); the exact key of a running job is masked as well
+# (mask_secret).
+HA_KEY_PATTERN = re.compile(r'[A-Z0-9]{4}(?:-[A-Z0-9]{4}){6}')
+REDACTED = '[已遮蔽]'
+_MASKED = ()  # exact secret texts of this process, longest first (mask_secret); replaced whole, never mutated
+_MASK_COUNTS = {}  # text -> how many mask_secret calls hold it (nested users of the same key)
+_MASK_LOCK = threading.Lock()
 
 INTERRUPTED_MESSAGE = {
     'backup': '備份作業意外中斷（例如系統重新開機或程序被終止）。請確認應用已恢復執行後再重新備份。',
@@ -126,7 +134,48 @@ def valid_job_id(job_id):
 
 
 def redact(text):
-    return SECRET_PATTERN.sub('[已遮蔽]', str(text))
+    """`text` with every secret masked: the exact values registered by mask_secret (first, so a pattern cannot cut
+    one apart), age secret keys and anything shaped like a Home Assistant backup key."""
+    text = str(text)
+    for secret in _MASKED:
+        text = text.replace(secret, REDACTED)
+    return HA_KEY_PATTERN.sub(REDACTED, SECRET_PATTERN.sub(REDACTED, text))
+
+
+def mask_secret(value):
+    """Mask this exact text (and its stripped form) in every log line, progress message and error this process writes
+    through redact(): a job reading a Home Assistant backup calls it with the key it uses (an HA key need not have the
+    usual shape: older backups may use any password)."""
+    _change_masks(value, 1)
+
+
+def unmask_secret(value):
+    """Undo one mask_secret(value)."""
+    _change_masks(value, -1)
+
+
+def _change_masks(value, step):
+    global _MASKED
+    if not isinstance(value, str):
+        return
+    with _MASK_LOCK:
+        for item in {value, value.strip()} - {''}:
+            count = _MASK_COUNTS.get(item, 0) + step
+            if count > 0:
+                _MASK_COUNTS[item] = count
+            else:
+                _MASK_COUNTS.pop(item, None)
+        _MASKED = tuple(sorted(_MASK_COUNTS, key=len, reverse=True))
+
+
+@contextlib.contextmanager
+def masked(value):
+    """mask_secret(value) for the duration of the block."""
+    mask_secret(value)
+    try:
+        yield
+    finally:
+        unmask_secret(value)
 
 
 def _ensure_private_dir(path):
