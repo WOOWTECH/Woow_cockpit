@@ -4828,7 +4828,8 @@ try {
         '每日報表未啟用讀寫檔案的路徑 /share/reports 在這台不存在。 用到 http://supervisor/core/api。']);
       // Fixed on the device: check again. Two databases pass, so one has to be chosen.
       await setScript(page, 'ha-check', haScripts({ check: haCheck({ databases: [odooDb('woowtest'),
-        odooDb('archive-2025', { partners: 800, size: 200 * MiB, custom_modules: [] }), blockedDb()] }) })['ha-check']);
+        odooDb('archive-2025', { partners: 800, size: 200 * MiB, custom_modules: [], crons_active: 0, mail_servers_active: 0, filestore_files: 0,
+          filestore_bytes: 0 }), blockedDb()] }) })['ha-check']);
       await page.locator('[data-focus="ha-recheck"]').click();
       await page.locator('[data-ha-app="odoo"]:not(.is-blocked)').waitFor();
       assert.equal(await page.locator('[data-focus="ha-convert"]').isDisabled(), true, 'two databases passed: one must be chosen');
@@ -4843,6 +4844,13 @@ try {
       assert.match(await databases.nth(0).textContent(), /會一起複製的自訂模組：woow_paas_platform（版本 18\.0\.1\.2\.0，來自 share\/odoo_addons）/);
       assert.match(await databases.nth(1).textContent(), /沒有要另外複製的自訂模組。/);
       assert.equal(await databases.nth(2).locator('.check-fail .check-message').textContent(), MISSING_MODULE);
+      // What to know before moving a database: the engine says it per database only (review P-02).
+      const issues = db => databases.nth(db).locator('.check').evaluateAll(items => items.map(item => [item.className.replace('check check-', ''),
+        item.querySelector('.check-message').textContent]));
+      assert.deepEqual(await issues(0), [['warn', 'HA 的資料庫有 1 個啟用中的外寄郵件伺服器，搬過來後會開始寄信。'],
+        ['warn', 'HA 的資料庫有 12 個啟用中的排程工作，搬過來後會在這台執行。']]);
+      assert.deepEqual(await issues(1), [['warn', NO_FILESTORE]]);
+      assert.deepEqual(await issues(2), [['fail', MISSING_MODULE], ['warn', 'HA 的資料庫有 3 個啟用中的排程工作，搬過來後會在這台執行。']]);
       await page.locator('#ha-db-1').check();
       await enabled(page, '[data-focus="ha-convert"]');
       assert.equal(await page.locator('#ha-db-1').isChecked(), true);
@@ -5085,6 +5093,12 @@ try {
       await page.locator('#result-heading').filter({ hasText: 'HA 備份檢查完成' }).waitFor();
       assert.match(await page.locator('.job-result').textContent(), /有應用沒有通過檢查，要先處理下列問題才能匯入。/);
       assert.equal(await page.locator('.job-result [data-ha-app="n8n"] .check-fail .check-message').textContent(), 'HA 的 n8n 還沒建立管理者帳號，沒有可搬的資料。');
+      // Each Odoo database with its verdict, blockers and warnings (review P-02, P-03).
+      const jobDatabases = await page.locator('.job-result .ha-database-list > li').evaluateAll(items => items.map(item => [item.dataset.database,
+        item.querySelector('.chip').textContent, [...item.querySelectorAll('.check-message')].map(message => message.textContent)]));
+      assert.deepEqual(jobDatabases, [
+        ['woowtest', '可以搬', ['HA 的資料庫有 1 個啟用中的外寄郵件伺服器，搬過來後會開始寄信。', 'HA 的資料庫有 12 個啟用中的排程工作，搬過來後會在這台執行。']],
+        ['demo-old', '不能搬', [MISSING_MODULE, 'HA 的資料庫有 3 個啟用中的排程工作，搬過來後會在這台執行。']]]);
       assert.match(await page.locator('.job-result').textContent(), /要匯入，請回到 HA 備份按「檢查並匯入…」，並重新輸入 HA 的備份加密金鑰。/);
       // A failed check shows the engine's words.
       await page.locator('[data-focus="back-activity"]').click();

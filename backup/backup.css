@@ -639,6 +639,9 @@ input.switch[type="checkbox"]:disabled { cursor: default; opacity: .6; }
 .ha-database { display: grid; gap: 8px; min-inline-size: 0; }
 .ha-databases input[type="radio"] { inline-size: 18px; block-size: 18px; margin: 3px 0 0; accent-color: var(--ww-blue); flex: none; }
 .app-preflight > .metadata, .app-preflight > .workflow-list { margin-block-start: 2px; }
+.ha-database-list { list-style: none; padding: 0; margin: 10px 0 0; display: grid; gap: 12px; min-inline-size: 0; }
+.ha-database-list > li { display: grid; gap: 6px; min-inline-size: 0; }
+.ha-database-name { overflow-wrap: anywhere; }
 
 /* ---------------------------------------------------------------- responsive */
 @media (max-width: 1280px) {

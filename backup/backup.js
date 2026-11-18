@@ -3290,19 +3290,21 @@
     return ha ? link("回到 HA 備份", ["ha", ha.id], { class: primary ? "button primary" : "button", dataset: { focus: "result-ha" } }) : null;
   }
 
-  // result.ha_check (CONTRACT §7): the verdict per app; Odoo per database, n8n with its counts.
+  // result.ha_check (CONTRACT §7): the verdict per app; Odoo per database (what keeps a database from moving and what
+  // to know before moving it: Odoo's warnings are only there, review P-02), n8n with its counts.
   function haCheckOf(result) {
     const check = isObject(result?.ha_check) ? result.ha_check : null;
     if (!check || !Array.isArray(check.apps)) return null;
     return check.apps.filter(item => isObject(item) && isString(item.app_id)).map(item => ({
       ...item, ok: item.ok === true, blockers: list(item.blockers).filter(isString), warnings: list(item.warnings).filter(isString),
       databases: list(item.odoo?.databases).filter(db => isObject(db) && isString(db.name))
-        .map(db => ({ ...db, ok: db.ok === true, blockers: list(db.blockers).filter(isString) })),
+        .map(db => ({ ...db, ok: db.ok === true, blockers: list(db.blockers).filter(isString), warnings: list(db.warnings).filter(isString) })),
       n8n: isObject(item.n8n) ? item.n8n : null
     }));
   }
-  const haIssues = app => [...app.blockers.map((message, index) => ({ id: `blocker-${index}`, status: "fail", message })),
-    ...app.warnings.map((message, index) => ({ id: `warning-${index}`, status: "warn", message }))];
+  // Blockers, then warnings, of an app or an Odoo database.
+  const haIssues = (item, prefix = "") => [...item.blockers.map((message, index) => ({ id: `${prefix}blocker-${index}`, status: "fail", message })),
+    ...item.warnings.map((message, index) => ({ id: `${prefix}warning-${index}`, status: "warn", message }))];
   // An app can be imported when its check passed and, for Odoo, at least one database did.
   const haImportable = app => app.ok && (app.app_id !== "odoo" || app.databases.some(db => db.ok));
 
@@ -3316,9 +3318,19 @@
       ...apps.map(app => h("article", { class: "app-content", dataset: { haApp: app.app_id } },
         h("h4", null, h("span", { text: appName(app.app_id) }), " ",
           haImportable(app) ? chip("可以匯入", "ok", "check-circle-outline") : chip("無法匯入", "fail", "close-circle-outline")),
-        haIssues(app).length ? checkList(haIssues(app), `${appName(app.app_id)} 的檢查結果`) : h("p", { class: "muted", text: "沒有發現問題。" }))),
+        haIssues(app).length ? checkList(haIssues(app), `${appName(app.app_id)} 的檢查結果`) : h("p", { class: "muted", text: "沒有發現問題。" }),
+        haDatabaseSummary(app))),
       h("p", { class: "muted", text: `要匯入，請回到 HA 備份按「檢查並匯入…」${job.params?.key_provided ? "，並重新輸入 HA 的備份加密金鑰" : ""}。` })
     ];
+  }
+
+  // The Odoo databases of a finished check in the job view (read only): the app's blocker sends there (review P-03).
+  function haDatabaseSummary(app) {
+    if (app.app_id !== "odoo" || !app.databases.length) return null;
+    return h("ul", { class: "ha-database-list", "aria-label": "HA 的 Odoo 資料庫" }, app.databases.map((db, index) => h("li", { dataset: { database: db.name } },
+      h("p", { class: "ha-database-name" }, h("strong", { text: db.name }), " ",
+        db.ok ? chip("可以搬", "ok", "check-circle-outline") : chip("不能搬", "fail", "close-circle-outline")),
+      haIssues(db).length ? checkList(haIssues(db, `db-${index}-`), `資料庫 ${db.name} 的檢查結果`) : null)));
   }
 
   // A finished conversion in the job view: the new backup, and the way on to restoring it.
@@ -3874,8 +3886,7 @@
                 + ` · 已安裝模組 ${num(db.modules)} · 大小 ${bytes(db.size)}` }),
               h("small", { text: `啟用中的排程動作 ${num(db.crons_active)} 個 · 寄信伺服器 ${num(db.mail_servers_active)} 個` }),
               h("small", { text: modules.length ? `會一起複製的自訂模組：${modules.map(moduleText).join("、")}` : "沒有要另外複製的自訂模組。" }))),
-          db.blockers.length ? checkList(db.blockers.map((message, item) => ({ id: `db-${index}-${item}`, status: "fail", message })),
-            `資料庫 ${db.name} 的問題`) : null);
+          haIssues(db).length ? checkList(haIssues(db, `db-${index}-`), `資料庫 ${db.name} 的檢查結果`) : null);
       })));
   }
 
