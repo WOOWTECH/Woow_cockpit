@@ -8,7 +8,7 @@
 #   5. the Quadlet user generator turns ~/.config/containers/systemd/*.container into a user
 #      service that starts and stops (probe unit removed afterwards)
 #   6. Cockpit HTTPS login + administrative access via Playwright (skip with --no-browser)
-#   tests/e2e/lab/verify-device.sh <a|b> [--no-browser]
+#   tests/e2e/lab/verify-device.sh <a|b|c> [--no-browser]
 source "$(dirname "$0")/lib.sh"
 
 device_vars "${1:-}"
