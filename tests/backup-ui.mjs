@@ -721,10 +721,10 @@ function installCockpitFixture() {
   }
 
   // 從 HA 備份匯入 in miniature (DESIGN §6, cli.py): a start opens every selected encrypted add-on (`addons[].encrypted`)
-  // with the key before any job exists, so key-required and wrong-key refuse the start (review F-03, F-04); a key for
-  // add-ons that need none is dropped (key_provided false). ha-convert-start first refuses an app this device lacks and,
-  // with 預設加密 on, a device without its key (F-05). `jobKeyFailure` ('key-required' | 'wrong-key') runs the rare key
-  // failure inside the job instead (HA's older formats).
+  // with the key before any job exists, so key-required and wrong-key refuse the start (review F-03, F-04). The engine
+  // drops a key the chosen add-ons do not need (key_provided false); the page never sends one (a fixture error).
+  // ha-convert-start first refuses an app this device lacks and, with 預設加密 on, a device without its key (F-05).
+  // `jobKeyFailure` ('key-required' | 'wrong-key') runs the rare key failure inside the job instead (HA's older formats).
   function haCommand(command, request) {
     const ha = data.ha;
     if (!ha) throw new Refusal('invalid-request', '不支援的指令。');

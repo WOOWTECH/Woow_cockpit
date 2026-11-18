@@ -3539,7 +3539,7 @@
     return {
       haId: ha.id, step: "apps", selected, keyNeeded: haNeedsKey(ha, [...selected]), keyForced: false, keyText: "",
       keyError: null, check: null, odooDatabase: null, testMode: false, jobId: null, finishedJob: null, ui: null, cancelBusy: false,
-      requestId: null, signature: "", busy: false, error: null, notice: null
+      requestId: null, signature: "", busy: false, error: null, notice: null, announced: ""
     };
   }
 
@@ -3588,7 +3588,7 @@
   const haNoDeviceKey = () => Boolean(state.status) && !state.status.key && encryptByDefault();
   const haDeviceKeyNotice = () => infoNotice("尚未建立加密金鑰。轉換好的備份會依「預設加密備份」用這台設備的金鑰加密，所以要先完成金鑰設定才能轉換。"
     + "設定好後，請回到這份 HA 備份重新開始匯入。", "warn", "key-outline",
-  link("設定加密金鑰", ["keys"], { class: "button small", dataset: { focus: "ha-keys" } }));
+    link("設定加密金鑰", ["keys"], { class: "button small", dataset: { focus: "ha-keys" } }));
 
   const haActiveNotice = active => infoNotice(`目前有作業正在進行（${jobLabel(active)}），要等它完成後才能開始。`, "info", "progress-clock",
     link("查看進度", ["jobs", active.id], { class: "button small", dataset: { focus: "ha-active-job" } }));
