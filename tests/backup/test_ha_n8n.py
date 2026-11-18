@@ -146,6 +146,11 @@ class SqliteTests(unittest.TestCase):
         self.assertFalse((staged / 'inspect').exists())
         self.assertIn('os.setuid(uid)', ha_n8n.SQLITE_CHILD)
         self.assertIn('SQLITE_DBCONFIG_DEFENSIVE', ha_n8n.SQLITE_CHILD)
+        # As root the child chroots into its folder before it drops to nobody: SQLite opens the file by its full path,
+        # and nobody may not pass the job's 0700 staging folders above it (found on dev-c, 2026-11-18).
+        child = ha_n8n.SQLITE_CHILD
+        self.assertLess(child.index('os.chroot(".")'), child.index('os.setuid(uid)'))
+        self.assertLess(child.index('os.setuid(uid)'), child.index('sqlite3.connect('))
 
     def test_workflow_rows_are_bounded_and_analysed_one_by_one(self):
         sqlite_db(self.path)

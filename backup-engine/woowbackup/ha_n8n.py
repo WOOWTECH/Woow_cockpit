@@ -7,8 +7,8 @@ PostgreSQL 16 with the same n8n version (the import's migration check requires i
 `n8n_n8n_data` (`config`).
 
 check: the SQLite files (database and WAL; never HA's `-shm` wal-index) are copied into the job's root staging and
-read by a child process that drops to the account nobody (no supplementary groups, its own network namespace, CPU,
-memory, file size and process limits) on a copy of its own, with `SQLITE_DBCONFIG_DEFENSIVE`, `trusted_schema=OFF`
+read by a child process that drops to the account nobody (chrooted into the folder of its copy, no supplementary
+groups, its own network namespace, CPU, memory, file size and process limits) on a copy of its own, with `SQLITE_DBCONFIG_DEFENSIVE`, `trusted_schema=OFF`
 and only ordinary tables (no virtual table or its shadow tables; explicit columns): the owner account (email and
 password set, else nothing can be moved), counts, and the workflows one per line, whose reasons (shell commands, SSH,
 local files, Home Assistant, HA-internal addresses, Redis/MQTT, webhooks) this process works out row by row within a
@@ -273,6 +273,10 @@ if os.geteuid() == 0:
         os.unshare(os.CLONE_NEWNET)
     except (AttributeError, OSError):
         pass
+    # The folder of the copy becomes the whole file system: SQLite opens it by its full path, and the job's staging
+    # folders above it are root's alone (0700).
+    os.chroot(".")
+    os.chdir("/")
     os.setgroups([])
     os.setgid(gid)
     os.setuid(uid)
