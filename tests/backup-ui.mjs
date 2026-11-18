@@ -5194,6 +5194,8 @@ try {
     data.status.active_job = structuredClone(data.jobs[J_HA_RUN].job);
     // The MCP admin page as this device's catalog names it (review P-11).
     data.status.apps.find(entry => entry.id === 'odoo-mcp-admin').name = 'Odoo MCP 管理（woowtech）';
+    // An engine that also sent the page's own line about deleting the HA file: it is listed once, with its link.
+    data.backups[0].from_ha.reminders = ['匯入完成後，建議刪除這份 HA 備份檔（裡面可能有 HA 的密碼與權杖）'];
     return data;
   })();
   await check('從 HA 備份匯入 jobs: 檢查 HA 備份 and 轉換 HA 備份 are named in the banner, the job view and 活動紀錄; their results render; an active HA job is accepted',

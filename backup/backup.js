@@ -3307,9 +3307,12 @@
     const apps = info.apps.length ? restored.filter(id => info.apps.includes(id)) : restored;
     const workflows = apps.includes("n8n") ? info.workflows : [];
     const ha = info.haId ? haFind(info.haId) : null;
+    // The page says to delete the HA file itself, with its link; the engine is not to send that line (FIXPLAN).
+    const own = line => ha && line.replace(/。$/, "") === HA_DELETE_REMINDER.replace(/。$/, "");
     return [
       h("h4", { class: "subheading", text: "匯入之後請做" }),
-      h("ul", { class: "bullet-list ha-reminders", "aria-label": "匯入之後請做" }, haReminderLines(info, apps).map(line => h("li", { text: line })),
+      h("ul", { class: "bullet-list ha-reminders", "aria-label": "匯入之後請做" },
+        haReminderLines(info, apps).filter(line => !own(line)).map(line => h("li", { text: line })),
         ha ? h("li", { class: "ha-delete-reminder" }, `${HA_DELETE_REMINDER} `,
           link(`前往 HA 備份「${haName(ha)}」`, ["ha", ha.id], { class: "text-link", dataset: { focus: "result-ha-delete" } })) : null),
       workflows.length ? [h("p", { text: "下列 n8n 工作流程用到 HA 那邊的位置或功能，可能需要修改：" }),
