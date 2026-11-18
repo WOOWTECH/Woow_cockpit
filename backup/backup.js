@@ -126,7 +126,11 @@
   const HA_UPLOAD_HINT = "如果這是 Home Assistant 的備份檔：這台設備的備份元件版本還不能匯入 HA 備份，請先更新備份元件，再上傳一次。";
   const HA_KEY_WHERE = "HA 備份金鑰是 Home Assistant 的「備份加密金鑰」，在 HA 的「設定 → 系統 → 備份」的備份設定裡可以看到，格式像 ABCD-EFGH-IJKL-MNOP-QRST-UVWX-YZ12。"
     + "較舊的 HA 備份如果是用自己設定的密碼加密，請輸入當時設定的密碼。";
-  const HA_TYPES = { full: "完整備份", partial: "部分備份" };
+  // Where a custom module of an HA Odoo database comes from, in words (ha_odoo.py MODULE_SOURCES, share/odoo_addons).
+  const HA_MODULE_FROM = { "data/addons": "HA 附加元件的模組資料夾", "data/odoo/addons/18.0": "HA 附加元件的模組資料夾",
+    "share/odoo_addons": "HA 的 /share/odoo_addons 資料夾" };
+  // Odoo's custom modules and n8n's community nodes are code that runs on this device (FIXPLAN, review security).
+  const HA_TRUST = "Odoo 的自訂模組和 n8n 的社群節點是會在這台執行的程式，只匯入你信任的備份。";
   // This device's app for each add-on it can take, when the engine names none (Odoo and n8n only).
   const HA_APP_NAMES = { odoo: "Odoo 18", n8n: "n8n 工作流程" };
   // Catalog entries that keep their own login to the imported app: it changes with the imported users (DESIGN §0). The
@@ -804,7 +808,16 @@
     renderBanners();
     const route = currentRoute();
     const wizard = state.haWizard;
-    if (route.page === "ha" && wizard?.jobId === id && wizard.ui?.id === id) updateHaJobUi(wizard);
+    if (route.page === "ha" && wizard?.jobId === id && wizard.ui?.id === id) {
+      updateHaJobUi(wizard);
+      // The wizard's job reads its phases out as they change, as the job view does (review P-11).
+      const job = state.jobCache.get(id)?.job;
+      const label = job && ACTIVE.has(job.state) ? job.phases.find(item => item.id === job.phase)?.label : null;
+      if (label && wizard.announced !== `${job.state}:${label}`) {
+        wizard.announced = `${job.state}:${label}`;
+        announce(`${jobLabel(job)}：${label}`);
+      }
+    }
     if (route.page === "jobs" && route.arg === id && state.jobUi.id === id) {
       const job = state.jobCache.get(id)?.job;
       const label = job && ACTIVE.has(job.state) ? job.phases.find(item => item.id === job.phase)?.label : null;
@@ -1308,6 +1321,9 @@
         h("div", { class: "stat-main" }, h("p", { class: "stat-label", text: "本機儲存空間" }),
           h("p", { class: "stat-value", text: `${bytes(storage.free_bytes)} 可用` }),
           h("p", { class: "secondary", text: `共 ${bytes(storage.total_bytes)} · 備份 ${Number(storage.backup_count) || 0} 份，佔用 ${bytes(storage.backups_bytes)}` }),
+          // Uploaded HA backups (status.storage.ha_*, review P-11): often several GiB, kept until deleted.
+          Number(storage.ha_backup_count) > 0
+            ? h("p", { class: "secondary", text: `上傳的 HA 備份 ${Number(storage.ha_backup_count)} 份，佔用 ${bytes(storage.ha_backups_bytes)}` }) : null,
           meter, storage.path ? h("p", { class: "secondary mono", text: storage.path }) : null,
           link("依應用查看與清理", ["cleanup"], { class: "text-link", dataset: { focus: "stat-cleanup" } }))),
       h("section", { class: "card stat", "aria-label": "加密金鑰" }, tile("key-outline"),
@@ -3447,7 +3463,6 @@
       h("div", { class: "card-body" }, metadata([
         ["名稱", haName(ha)],
         ["HA 建立時間", date(ha.date)],
-        ["類型", HA_TYPES[ha.type] || "—"],
         ["加密", haNeedsKey(ha) ? "已加密：匯入時需要 HA 備份金鑰" : haEncrypted(ha) ? "部分加密：匯入時不需要 HA 備份金鑰" : "未加密"],
         ["大小", bytes(ha.size)],
         ["上傳時間", date(ha.uploaded_at)],
@@ -3871,6 +3886,7 @@
       wizard.notice ? infoNotice(wizard.notice) : null,
       h("div", { class: "app-preflight-list" }, apps.map(app => haAppCard(ha, wizard, app))),
       unanswered.length ? infoNotice(`檢查結果沒有包含${quoted(unanswered.map(appName))}，請重新檢查。`, "fail", "close-circle-outline") : null,
+      infoNotice(HA_TRUST, "info", "shield-check-outline"),
       h("label", { class: "choice confirm-choice", htmlFor: "ha-test-mode" },
         h("input", {
           type: "checkbox", id: "ha-test-mode", checked: wizard.testMode, disabled: wizard.busy, "aria-describedby": "ha-test-mode-help",
@@ -3878,7 +3894,8 @@
         }),
         h("span", { class: "choice-body" }, h("strong", { text: "這只是測試（先關掉排程、寄信和工作流程）" }),
           h("small", { id: "ha-test-mode-help", text: "勾選時，搬過來的 n8n 工作流程都先停用，Odoo 不寄信也不跑排程，HA 那邊可以照常使用；正式搬家請不要勾。" }))),
-      blocked ? infoNotice("有應用沒有通過檢查，無法轉換。請依上面的說明處理後按「重新檢查」。", "fail", "close-circle-outline") : null,
+      blocked ? infoNotice(`有應用沒有通過檢查，無法轉換。請依上面的說明處理後按「重新檢查」${apps.some(haImportable)
+        ? "，或按「上一步」取消勾選沒有通過的應用，只匯入其他應用" : ""}。`, "fail", "close-circle-outline") : null,
       needDatabase ? h("p", { class: "hint", text: "請先選擇要搬過來的 Odoo 資料庫。" }) : null,
       haNoDeviceKey() ? haDeviceKeyNotice() : null,
       active ? haActiveNotice(active) : null,
@@ -3900,16 +3917,27 @@
     h("div", { class: "app-preflight-head" },
       h("strong", { id: `ha-check-${app.app_id}`, class: "app-select-name", text: name }),
       h("span", { class: "chips" }, importable ? chip("可以匯入", "ok", "check-circle-outline") : chip("無法匯入", "fail", "close-circle-outline"))),
-    h("p", { class: "muted", text: `HA 的版本 ${str(app.version) || "—"}，這台的版本 ${str(app.target_version) || "—"}。` }),
+    h("p", { class: "muted", text: haVersionText(app) }),
     haIssues(app).length ? checkList(haIssues(app), `${name} 的檢查結果`) : h("p", { class: "muted", text: "沒有發現問題。" }),
     app.app_id === "odoo" ? haOdooDatabases(wizard, app) : null,
     app.n8n ? haN8nFacts(app.n8n) : null);
   }
 
   const moduleText = item => {
-    const extra = [item.version ? `版本 ${str(item.version)}` : null, item.from ? `來自 ${str(item.from)}` : null].filter(Boolean).join("，");
+    const from = str(item.from);
+    const extra = [item.version ? `版本 ${str(item.version)}` : null, from ? `來自 ${HA_MODULE_FROM[from] || from}` : null].filter(Boolean).join("，");
     return extra ? `${item.name}（${extra}）` : item.name;
   };
+
+  // n8n compares its own version; Odoo compares every installed module, so its add-on version and this device's Odoo
+  // release are different kinds of numbers and are not compared (review P-09, UI-1).
+  function haVersionText(app) {
+    const ha = str(app.version) || "—";
+    const here = str(app.target_version) || "—";
+    if (app.app_id !== "odoo") return `HA 的版本 ${ha}，這台的版本 ${here}。`;
+    const verdict = haImportable(app) ? "，模組版本相同" : app.databases.length ? "，結果見下方各資料庫" : "的版本";
+    return `HA 附加元件版本 ${ha}，這台的 Odoo ${here}；Odoo 逐一比對每個模組${verdict}。`;
+  }
 
   // Odoo: one database moves and replaces this device's (DESIGN §0); its counts help to pick the right one.
   function haOdooDatabases(wizard, app) {

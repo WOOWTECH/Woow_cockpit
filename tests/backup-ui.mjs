@@ -4691,7 +4691,7 @@ try {
 
   // ------------------------------------------------------------------ 從 HA 備份匯入 (2026-11-18, DESIGN §6, §7)
 
-  await check('從 HA 備份匯入: an uploaded HA backup opens its own page, never inspect; 備份列表 lists it with its chip, filter, search and count',
+  await check('從 HA 備份匯入: an uploaded HA backup opens its own page, never inspect; 備份列表 lists it with its chip, filter, search and count; 總覽 counts its space',
     haFixture({ ha: { backups: [] }, extra: { upload: { begin: { upload_id: UPLOAD_ID, path: UPLOAD_PATH, max_size: 20 * GiB }, finishHa: haMeta(HA_ID) } } }),
     async page => {
       await ready(page);
@@ -4708,7 +4708,7 @@ try {
       const [info] = await metadataOf(page.locator('section[aria-labelledby="ha-info"]'));
       assert.equal(info['名稱'], HA_NAME);
       assert.match(info['HA 建立時間'], /2026\/11\/18 05:00/);
-      assert.equal(info['類型'], '部分備份');
+      assert.equal(info['類型'], undefined, 'HA Core makes every backup partial: its type says nothing (review P-10)');
       assert.equal(info['加密'], '已加密：匯入時需要 HA 備份金鑰');
       assert.equal(info['大小'], '1.5 GiB');
       assert.match(info['上傳時間'], /2026\/11\/18 09:00/);
@@ -4744,6 +4744,10 @@ try {
       await page.locator('[data-nav="restore"]').click();
       await page.locator('[data-focus="restore-upload"]').waitFor();
       assert.equal(await page.locator('[data-focus="restore-upload"]').isDisabled(), true);
+      // 總覽 counts the uploaded HA backups apart from the backups (status.storage.ha_*, review P-11).
+      await page.locator('[data-nav="overview"]').click();
+      await page.locator('#refresh').click();
+      await page.locator('section[aria-label="本機儲存空間"]').getByText('上傳的 HA 備份 1 份，佔用 1.5 GiB').waitFor();
     });
 
   await check('從 HA 備份匯入: a wrong HA key goes back to the key step with the engine\'s words; the right one checks; the key is dropped when the wizard closes or the page changes',
@@ -4908,10 +4912,14 @@ try {
       assert.equal(await odoo.locator('.chip').first().textContent(), '無法匯入');
       assert.equal(await odoo.locator('.check-fail .check-message').first().textContent(), ODOO_ALL_BLOCKED);
       assert.equal(await odoo.locator('.ha-database[data-database="woowtest"] .check-fail .check-message').textContent(), VERSION_BLOCKER);
-      assert.equal(await odoo.locator('.muted').first().textContent(), 'HA 的版本 0.4.12，這台的版本 18.0-20260926。');
+      // The add-on version and this device's Odoo release are not compared: Odoo compares its modules (review P-09, UI-1).
+      assert.equal(await odoo.locator('.muted').first().textContent(), 'HA 附加元件版本 0.4.12，這台的 Odoo 18.0-20260926；Odoo 逐一比對每個模組，結果見下方各資料庫。');
+      assert.equal(await page.locator('[data-ha-app="n8n"] .muted').first().textContent(), 'HA 的版本 2.43.6，這台的版本 2.43.6。');
       assert.equal(await page.locator('#ha-db-0').isDisabled(), true, 'no database can be chosen while Odoo is blocked');
       assert.equal(await page.locator('[data-focus="ha-convert"]').isDisabled(), true, 'a blocker disables 下一步');
-      await page.getByText('有應用沒有通過檢查，無法轉換。').waitFor();
+      await page.getByText('有應用沒有通過檢查，無法轉換。請依上面的說明處理後按「重新檢查」，或按「上一步」取消勾選沒有通過的應用，只匯入其他應用。').waitFor();
+      // Odoo's custom modules and n8n's community nodes run here: import only a trusted backup.
+      await page.locator('.wizard-card .notice-info').getByText('Odoo 的自訂模組和 n8n 的社群節點是會在這台執行的程式，只匯入你信任的備份。').waitFor();
       const n8n = page.locator('[data-ha-app="n8n"]');
       assert.deepEqual((await metadataOf(n8n))[0], { 管理者帳號: 'owner@example.com', 工作流程: '14 個（啟用中 6 個）', 憑證: '9 個', 執行紀錄: '1,520 筆',
         使用者: '2 位', 社群節點: 'n8n-nodes-mqtt-x 1.4.2' });
@@ -4927,6 +4935,7 @@ try {
       await page.locator('[data-focus="ha-recheck"]').click();
       await page.locator('[data-ha-app="odoo"]:not(.is-blocked)').waitFor();
       assert.equal(await page.locator('[data-focus="ha-convert"]').isDisabled(), true, 'two databases passed: one must be chosen');
+      assert.equal(await page.locator('[data-ha-app="odoo"] .muted').first().textContent(), 'HA 附加元件版本 0.4.12，這台的 Odoo 18.0-20260926；Odoo 逐一比對每個模組，模組版本相同。');
       await page.getByText('請先選擇要搬過來的 Odoo 資料庫。').waitFor();
       const databases = page.locator('.ha-database');
       assert.equal(await databases.count(), 3);
@@ -4935,7 +4944,7 @@ try {
       assert.equal(await databases.nth(0).locator('small').first().textContent(),
         '聯絡人 1,234 · 可登入的使用者 5 · 附件 3,210（120 MiB） · 已安裝模組 87 · 大小 310 MiB');
       assert.match(await databases.nth(0).textContent(), /啟用中的排程動作 12 個 · 寄信伺服器 1 個/);
-      assert.match(await databases.nth(0).textContent(), /會一起複製的自訂模組：woow_paas_platform（版本 18\.0\.1\.2\.0，來自 share\/odoo_addons）/);
+      assert.match(await databases.nth(0).textContent(), /會一起複製的自訂模組：woow_paas_platform（版本 18\.0\.1\.2\.0，來自 HA 的 \/share\/odoo_addons 資料夾）/);
       assert.match(await databases.nth(1).textContent(), /沒有要另外複製的自訂模組。/);
       assert.equal(await databases.nth(2).locator('.check-fail .check-message').textContent(), MISSING_MODULE);
       // What to know before moving a database: the engine says it per database only (review P-02).
@@ -4972,6 +4981,11 @@ try {
       assert.equal(await page.locator('#confirm-title').textContent(), '開始轉換 HA 備份？');
       assert.match(await page.locator('#confirm-body').textContent(), /轉換時這台的應用照常運作，不會停機，也不會變更任何資料。/);
       assert.deepEqual((await metadataOf(page.locator('#confirm-body')))[0], { 應用: '「Odoo 18」、「n8n 工作流程」', 'Odoo 資料庫': 'woowtest', 這只是測試: '否' });
+      await page.evaluate(() => {
+        window.__announced = [];
+        const status = document.querySelector('#status');
+        new MutationObserver(() => window.__announced.push(status.textContent)).observe(status, { childList: true, characterData: true, subtree: true });
+      });
       await page.locator('#confirm-ok').click();
       await page.locator('.phase-label').filter({ hasText: '轉換資料' }).waitFor();
       assert.equal(await activeStep(page), '轉換');
@@ -4982,6 +4996,9 @@ try {
         odoo_database: 'woowtest', key: HA_KEY });
       await page.waitForFunction(id => window.location.hash === `#/restore/${id}`, B_HA, { timeout: 15000 });
       await page.locator('.app-preflight').first().waitFor();
+      // A screen reader hears the conversion's phases as they change, not only its start and end (review P-11).
+      const announced = await page.evaluate(() => window.__announced);
+      for (const line of ['轉換 HA 備份：轉換資料', '轉換 HA 備份：封裝備份']) assert(announced.includes(line), `announced ${line}: ${announced}`);
       assert.equal(await page.locator('.stepper .step-label').first().textContent(), '從 HA 轉換');
       const banner = page.locator('.ha-banner');
       assert.match(await banner.textContent(), new RegExp(`這份備份由 HA 備份「${HA_NAME}」（2026/11/18 05:00）轉換而來。`));
