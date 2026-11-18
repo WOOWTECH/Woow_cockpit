@@ -175,6 +175,10 @@ H8（`upload_window.mjs`）在最終回歸前跑過兩批，每種設定共 6 �
 
 洩漏掃描 145 個檔案與 5.4 MB 的 journal，0 命中。前一輪（同一天、設備已有先前匯入的自訂模組）68／71：3 項是執行器假設設備是全新的（引擎正確地不再列出要複製的模組），修正執行器後即為上表。開發時在 dev-c 發現並修正：n8n 的 SQLite 複本關閉時把 WAL 寫回主檔（-wal 檔消失）；測試匯入時兩個應用用了同名的暫用網路。
 
+`tests/e2e/lab/ha_import_ui.mjs` 用真正的頁面（dev-c 的 Cockpit，管理員存取）走一次同樣的匯入：「上傳備份檔」（同一個 HA 檔再上傳一次，引擎回覆既有的紀錄，頁面仍開啟 HA 備份頁）→「檢查並匯入…」→ 兩個應用 → 先輸入錯誤金鑰（回到金鑰步驟並顯示引擎的訊息）→ 正確金鑰 → 檢查作業 → 選資料庫、不勾「這只是測試」→ 轉換作業 → 還原精靈（HA 說明、預檢、確認）→ 還原作業 → 結果頁的 HA 提醒，再核對「備份列表」的「HA 備份」「由 HA 轉換」標籤與「活動紀錄」的「檢查 HA 備份」「轉換 HA 備份」。轉換前先執行 `ha_import_e2e.py live`，記錄這台當時的 web.base.url 與升級標記；`--verify` 之後執行 `ha_import_e2e.py verify cleanup leaks`；`--baseline <odoo 備份>,<n8n 備份>` 再還原 dev-c 匯入前的備份（`baseline` 也核對 prodlike_baseline.py 的標記資料列與四個健康網址）。截圖有 1440 與 390 像素寬兩種，頁面的指令碼錯誤必須是 0；HA 金鑰與密碼從不顯示，輸入欄含金鑰時不截圖。證據寫到 `~/.woowbk-lab/evidence/ha-import-ui/<時間>/`。
+
+2026-11-18（feat/ha-import 2569298）：49／49 通過（其中 verify cleanup leaks 15／15），頁面錯誤 0；檢查 29 秒、轉換 125 秒、還原 162 秒；之後 `baseline cleanup` 7／7，資料與匯入前逐項相同。證據 `~/.woowbk-lab/evidence/ha-import-ui/20261118T204850/`。
+
 尚未實測：多 GB 備份與超過 8 GiB 的單一項目、不同 CPU 架構、兩台實體設備之間的還原（兩台實驗室設備在同一台實體主機上）。正式應用（含沒有 PostgreSQL 的 EMQX、OpenDesign、Headscale，以及使用主機資料夾的 Odoo、Home Assistant、Nextcloud）已在參考主機實測備份與原位還原，見 [production-onboarding.md](backup/production-onboarding.md)；正式應用沒有做跨設備還原。
 
 ## 從本機 Cockpit 擷取畫面

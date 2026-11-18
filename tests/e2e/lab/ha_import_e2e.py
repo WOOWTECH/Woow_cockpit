@@ -12,7 +12,8 @@ never printed: every evidence line is redacted.
   python3 -I tests/e2e/lab/ha_import_e2e.py [--deploy LAB_DIR --src TREE] [scenario ...]
   scenarios: upload keys check convert restore verify db2 testmode cleanup leaks  (default: all, in that order);
   `baseline` (with --baseline ODOO_ID,N8N_ID) first restores dev-c's own backups made before any import, so the custom
-  module is copied again and the result shows the import from a clean device.
+  module is copied again and the result shows the import from a clean device; `live` only records the target's
+  web.base.url and upgrade marker for a later `verify`, when the import itself runs elsewhere (ha_import_ui.mjs).
 
 Options: --fixtures DIR (default ~/.woowbk-lab/ha-fixtures/20261118), --creds FILE (haimport testdata creds.env),
 --n8n-data FILE (the test-data script holding the credential value). Evidence: ~/.woowbk-lab/evidence/ha-import/<ts>/.
@@ -42,7 +43,7 @@ OWNER_EMAIL = 'ha-probe@probe.invalid'
 SCHEDULED = 'WOOW 匯入測試 - 排程'
 CREDENTIAL = 'HA probe header'
 ALL = ('upload', 'keys', 'check', 'convert', 'restore', 'verify', 'db2', 'testmode', 'cleanup', 'leaks')
-EXTRA = ('baseline',)  # opt-in: restore dev-c's pre-import backups (--baseline IDS) first
+EXTRA = ('baseline', 'live')  # opt-in: restore dev-c's pre-import backups (--baseline IDS); record live facts
 
 
 class Failed(Exception):
@@ -634,6 +635,24 @@ def scenario_baseline(ev, args):
     ev.check('baseline: no imported data left (no custom module, no test partner, no workflow)',
              'woow_import_probe' not in files and partners == '0' and workflows == '0',
              {'files': files, 'partners': partners, 'workflows': workflows})
+    # prodlike_baseline.py wrote these rows right before it made the two backups: they prove dev-c's own data is back.
+    markers = {'odoo': psql('odoo18-db', 'postgres', 'odoo',
+                            "SELECT value FROM ir_config_parameter WHERE key = 'woowbk.lab.baseline.before';"),
+               'n8n': psql('n8n-postgres', 'n8n', 'n8n', "SELECT value FROM settings WHERE key = 'woowbk.lab.baseline.before';")}
+    ev.check('baseline: the lab data is back (prodlike_baseline.py markers in Odoo and n8n)',
+             all(value.startswith('before-backup-') for value in markers.values()), markers)
+    codes = {url: http_code(url) for url in ('http://127.0.0.1:18069/web/health', 'http://127.0.0.1:18080/web/health',
+                                             'http://127.0.0.1:15678/healthz/readiness', 'http://127.0.0.1:15679/healthz')}
+    ev.check('baseline: health 200 everywhere', all(code == '200' for code in codes.values()), codes)
+
+
+def scenario_live(ev, args):
+    """The target's web.base.url and upgrade marker right before an import started elsewhere (ha_import_ui.mjs drives
+    it through the page), so that `verify` afterwards compares with them like after `convert`."""
+    STATE['live_before'] = live_odoo_facts()
+    ev.check('live: recorded web.base.url and the upgrade marker of this device', all(STATE['live_before'].values()),
+             STATE['live_before'])
+    save_state()
 
 
 def deploy(args, ev):
