@@ -124,7 +124,8 @@
   const HA_KEY_MAX = 4096;
   const HA_UNSUPPORTED = "這台設備的備份元件版本還不能匯入 Home Assistant 的備份。請先把備份元件更新到與這個頁面相同的版本，再試一次。";
   const HA_UPLOAD_HINT = "如果這是 Home Assistant 的備份檔：這台設備的備份元件版本還不能匯入 HA 備份，請先更新備份元件，再上傳一次。";
-  const HA_KEY_WHERE = "這是 Home Assistant 的「備份加密金鑰」，在 HA 的「設定 → 系統 → 備份」的備份設定裡可以看到，格式像 ABCD-EFGH-IJKL-MNOP-QRST-UVWX-YZ12。";
+  const HA_KEY_WHERE = "HA 備份金鑰是 Home Assistant 的「備份加密金鑰」，在 HA 的「設定 → 系統 → 備份」的備份設定裡可以看到，格式像 ABCD-EFGH-IJKL-MNOP-QRST-UVWX-YZ12。"
+    + "較舊的 HA 備份如果是用自己設定的密碼加密，請輸入當時設定的密碼。";
   const HA_TYPES = { full: "完整備份", partial: "部分備份" };
   // This device's app for each add-on it can take, when the engine names none (Odoo and n8n only).
   const HA_APP_NAMES = { odoo: "Odoo 18", n8n: "n8n 工作流程" };
@@ -1171,7 +1172,7 @@
   // A backup's kind, and 「由 HA 轉換」 for one converted from an HA backup (BackupMeta.from_ha).
   const kindChips = backup => [typeChip(backupKind(backup)), fromHaOf(backup) ? chip("由 HA 轉換", "info", "home-outline") : null];
   const haChip = () => chip("HA 備份", "info", "home-outline");
-  const haEncryptionChip = ha => (ha.protected === true ? chip("已加密", "ok", "lock-outline") : chip("未加密", "warn", "lock-open-variant-outline"));
+  const haEncryptionChip = ha => (haEncrypted(ha) ? chip("已加密", "ok", "lock-outline") : chip("未加密", "warn", "lock-open-variant-outline"));
 
   function jobStateChip(jobState) {
     const tones = { succeeded: "ok", failed: "fail", "rolled-back": "warn", interrupted: "warn", cancelled: "neutral", queued: "info", running: "info" };
@@ -3184,6 +3185,17 @@
   }
   const haReady = ha => haApps(ha).filter(app => app.installed);
 
+  // HA encrypts each add-on of a backup on its own, and the engine asks for the key by the chosen add-ons' `encrypted`:
+  // a decrypted download says protected:false yet may keep an encrypted member (review P-04). An engine that sends no
+  // `encrypted` leaves HA's `protected`.
+  function haAddonEncrypted(ha, slug) {
+    const addon = haAddons(ha).find(item => item.slug === slug);
+    return typeof addon?.encrypted === "boolean" ? addon.encrypted : ha?.protected === true;
+  }
+  const haEncrypted = ha => (haAddons(ha).length ? haAddons(ha).some(item => haAddonEncrypted(ha, item.slug)) : ha?.protected === true);
+  // Importing these apps (all this backup can bring) needs HA's key.
+  const haNeedsKey = (ha, ids = null) => haApps(ha).some(app => (!ids || ids.includes(app.id)) && haAddonEncrypted(ha, app.slug));
+
   // Workflows the check found to use HA-side hosts, paths or nodes (`workflows_to_fix`).
   const haWorkflows = value => list(value).filter(item => isObject(item) && isString(item.name))
     .map(item => ({ name: item.name, active: item.active === true, reasons: list(item.reasons).filter(isString) }));
@@ -3281,7 +3293,7 @@
       list(params.apps).length ? ["應用", list(params.apps).map(id => appName(str(id))).join("、")] : null,
       isString(params.odoo_database) && params.odoo_database ? ["Odoo 資料庫", params.odoo_database] : null,
       typeof params.test_mode === "boolean" ? ["這只是測試", params.test_mode ? "是（先關掉排程、寄信和工作流程）" : "否"] : null,
-      params.key_provided ? ["金鑰", "使用你輸入的 HA 備份加密金鑰（作業結束後即刪除）"] : null
+      params.key_provided ? ["金鑰", "使用你輸入的 HA 備份金鑰（作業結束後即刪除）"] : null
     ];
   }
 
@@ -3320,7 +3332,7 @@
           haImportable(app) ? chip("可以匯入", "ok", "check-circle-outline") : chip("無法匯入", "fail", "close-circle-outline")),
         haIssues(app).length ? checkList(haIssues(app), `${appName(app.app_id)} 的檢查結果`) : h("p", { class: "muted", text: "沒有發現問題。" }),
         haDatabaseSummary(app))),
-      h("p", { class: "muted", text: `要匯入，請回到 HA 備份按「檢查並匯入…」${job.params?.key_provided ? "，並重新輸入 HA 的備份加密金鑰" : ""}。` })
+      h("p", { class: "muted", text: `要匯入，請回到 HA 備份按「檢查並匯入…」${job.params?.key_provided ? "，並重新輸入 HA 備份金鑰" : ""}。` })
     ];
   }
 
@@ -3374,7 +3386,7 @@
       h("td", { "data-label": "應用", text: haAddonsText(ha) }),
       h("td", { "data-label": "大小" }, h("span", { text: bytes(ha.size) })),
       h("td", { "data-label": "加密與驗證" }, h("span", { class: "chips" }, haEncryptionChip(ha)),
-        h("span", { class: "secondary", text: ha.protected === true ? "匯入時需要 HA 的備份加密金鑰" : "從 Home Assistant 上傳" })),
+        h("span", { class: "secondary", text: haNeedsKey(ha) ? "匯入時需要 HA 備份金鑰" : "從 Home Assistant 上傳" })),
       h("td", { "data-label": "操作" }, haActions(ha, true)));
   }
 
@@ -3414,14 +3426,14 @@
         ["名稱", haName(ha)],
         ["HA 建立時間", date(ha.date)],
         ["類型", HA_TYPES[ha.type] || "—"],
-        ["加密", ha.protected === true ? "已加密：匯入時需要 HA 的備份加密金鑰" : "未加密"],
+        ["加密", haNeedsKey(ha) ? "已加密：匯入時需要 HA 備份金鑰" : haEncrypted(ha) ? "部分加密：匯入時不需要 HA 備份金鑰" : "未加密"],
         ["大小", bytes(ha.size)],
         ["上傳時間", date(ha.uploaded_at)],
         list(ha.folders).length ? ["資料夾", list(ha.folders).map(str).join("、")] : null,
         isString(ha.filename) && ha.filename ? ["檔名", ha.filename, "mono"] : null,
         ["HA 備份 ID", ha.id, "mono"]
       ]),
-      ha.protected === true ? h("p", { class: "muted", text: HA_KEY_WHERE }) : null,
+      haNeedsKey(ha) ? h("p", { class: "muted", text: HA_KEY_WHERE }) : null,
       h("div", { class: "card-actions" }, haActions(ha, false))));
     return [back, head, h("div", { class: "detail-grid" }, h("div", { class: "stack" }, info), h("div", { class: "stack" }, haAddonCard(ha)))];
   }
@@ -3482,11 +3494,13 @@
 
   // ------------------------------------------------------------------ HA import wizard
 
-  // 選擇應用 → 金鑰 (an encrypted HA backup) → 檢查 (job) → 結果與選項 → 轉換 (job) → the restore wizard. The HA key is
-  // only `keyText` here and is sent only in the stdin field `key` of the two job starts (DESIGN §0, §6).
+  // 選擇應用 → 金鑰 (a chosen add-on is encrypted) → 檢查 (job) → 結果與選項 → 轉換 (job) → the restore wizard. The HA
+  // key is only `keyText` here and is sent only in the stdin field `key` of the two job starts (DESIGN §0, §6).
+  // `keyForced`: the engine asked for the key although the add-ons did not say so.
   function newHaWizard(ha) {
+    const selected = new Set(haReady(ha).map(app => app.id));
     return {
-      haId: ha.id, step: "apps", selected: new Set(haReady(ha).map(app => app.id)), keyNeeded: ha.protected === true, keyText: "",
+      haId: ha.id, step: "apps", selected, keyNeeded: haNeedsKey(ha, [...selected]), keyForced: false, keyText: "",
       keyError: null, check: null, odooDatabase: null, testMode: false, jobId: null, finishedJob: null, ui: null, cancelBusy: false,
       requestId: null, signature: "", busy: false, error: null, notice: null
     };
@@ -3521,7 +3535,7 @@
         "檢查和轉換都不會停止或變更這台的應用，HA 備份檔本身也不會被改動。",
         "會搬過來的有：資料、資料本身的金鑰（例如 n8n 的加密金鑰）和登入帳號。這台的網址、連接埠、資料庫密碼和設定檔保持不變。",
         "兩邊的版本必須相同：Odoo 的每個模組、n8n 本身都要同一個版本，而且 HA 那台要是 x86（amd64）的設備。",
-        "HA 的備份加密金鑰只留在這個頁面，交給檢查和轉換作業使用，用完就刪除，不會存到這台設備。",
+        "HA 備份金鑰只留在這個頁面，交給檢查和轉換作業使用，用完就刪除，不會存到這台設備。",
         "轉換完成後，要在還原步驟確認才會取代這台的資料；開始前會先自動保存一份還原前備份，失敗會自動回復。"
       ].map(item => h("li", { text: item }))));
     return [
@@ -3531,6 +3545,13 @@
       h("div", { class: "form-layout" }, h("section", { class: "card form-card wizard-card" }, body), side)
     ];
   }
+
+  // 預設加密 is on and this device has no key yet: the engine refuses the conversion (no-device-key). Setting the key up
+  // leaves this page, and with it the HA key and the check (review P-07).
+  const haNoDeviceKey = () => Boolean(state.status) && !state.status.key && encryptByDefault();
+  const haDeviceKeyNotice = () => infoNotice("尚未建立加密金鑰。轉換好的備份會依「預設加密備份」用這台設備的金鑰加密，所以要先完成金鑰設定才能轉換。"
+    + "設定好後，請回到這份 HA 備份重新開始匯入。", "warn", "key-outline",
+  link("設定加密金鑰", ["keys"], { class: "button small", dataset: { focus: "ha-keys" } }));
 
   const haActiveNotice = active => infoNotice(`目前有作業正在進行（${jobLabel(active)}），要等它完成後才能開始。`, "info", "progress-clock",
     link("查看進度", ["jobs", active.id], { class: "button small", dataset: { focus: "ha-active-job" } }));
@@ -3556,7 +3577,12 @@
           h("input", {
             type: "checkbox", id, checked: app.installed && wizard.selected.has(app.id), disabled: !app.installed || wizard.busy,
             "aria-describedby": `${id}-help`, dataset: { focus: id },
-            on: { change: event => { if (event.target.checked) wizard.selected.add(app.id); else wizard.selected.delete(app.id); render(); } }
+            on: { change: event => {
+              if (event.target.checked) wizard.selected.add(app.id);
+              else wizard.selected.delete(app.id);
+              wizard.keyNeeded = wizard.keyForced || haNeedsKey(ha, [...wizard.selected]);
+              render();
+            } }
           }),
           h("span", { class: "choice-body" }, h("strong", { text: `這台的「${app.name}」` }),
             h("small", { id: `${id}-help`, text: app.installed
@@ -3564,6 +3590,7 @@
               : "這台還沒安裝，請先到「應用軟體」安裝同版本。" })));
       })) : infoNotice("這份 HA 備份沒有這台可以匯入的應用。", "warn", "alert-outline"),
       others.length ? h("p", { class: "muted", text: `其他附加元件（${others.map(item => str(item.name) || str(item.slug)).join("、")}）這台沒有對應的應用，不會匯入。` }) : null,
+      haNoDeviceKey() ? haDeviceKeyNotice() : null,
       active && !wizard.keyNeeded ? haActiveNotice(active) : null,
       wizardError(wizard),
       h("div", { class: "form-footer button-group" },
@@ -3602,11 +3629,11 @@
     input.value = wizard.keyText;
     const active = activeJob();
     return [
-      h("h3", { class: "step-title", text: "輸入 HA 的備份加密金鑰" }),
-      h("p", { class: "muted", text: "這份 HA 備份有加密，檢查和轉換都要用 Home Assistant 的備份加密金鑰把它解開。" }),
-      h("div", { class: "field" }, h("label", { htmlFor: "ha-key", text: "HA 備份加密金鑰" }), input,
+      h("h3", { class: "step-title", text: "輸入 HA 備份金鑰" }),
+      h("p", { class: "muted", text: "這份 HA 備份有加密，檢查和轉換都要用 HA 備份金鑰把它解開。" }),
+      h("div", { class: "field" }, h("label", { htmlFor: "ha-key", text: "HA 備份金鑰" }), input,
         h("p", { id: "ha-key-hint", class: "hint", text: HA_KEY_WHERE })),
-      h("p", { class: "hint", text: "金鑰只留在這個頁面，交給這次的檢查和轉換使用，不會存到這台設備；取消匯入或離開這一頁後就要重新輸入。" }),
+      h("p", { class: "hint", text: "金鑰只留在這個頁面，交給這次的檢查和轉換使用，不會存到這台設備；離開這一頁或結束這次匯入後，就要重新輸入。" }),
       wizard.keyError ? h("div", { class: "notice notice-error", role: "alert" }, icon("alert-circle-outline"), h("p", { text: wizard.keyError })) : null,
       active ? haActiveNotice(active) : null,
       wizardError(wizard),
@@ -3620,8 +3647,8 @@
 
   function haKeyProblem(text) {
     const value = str(text);
-    if (!value.trim()) return "請輸入 HA 的備份加密金鑰。";
-    if (value.length > HA_KEY_MAX) return "內容太長，不像是 HA 的備份加密金鑰。";
+    if (!value.trim()) return "請輸入 HA 備份金鑰。";
+    if (value.length > HA_KEY_MAX) return "內容太長，不像是 HA 備份金鑰。";
     if (CONTROL_RE.test(value)) return "金鑰不能包含換行或其他控制字元。";
     return null;
   }
@@ -3651,7 +3678,7 @@
 
   // A refusal of a job start: a key problem goes back to the key step, an engine without HA imports says so.
   function haStartFailed(wizard, error) {
-    if (["key-required", "wrong-key"].includes(error.code)) Object.assign(wizard, { keyNeeded: true, step: "key", keyError: error.message });
+    if (["key-required", "wrong-key"].includes(error.code)) Object.assign(wizard, { keyNeeded: true, keyForced: true, step: "key", keyError: error.message });
     else wizard.error = unsupported(error) ? new HelperError(HA_UNSUPPORTED, { code: "unsupported" }) : error;
   }
 
@@ -3790,7 +3817,7 @@
     } else if (job.state === "cancelled") {
       Object.assign(wizard, { step: convert ? "options" : "apps", jobId: null, notice: convert ? "已取消轉換，沒有建立備份。" : "已取消檢查。" });
     } else if (error && ["key-required", "wrong-key"].includes(error.code)) {
-      Object.assign(wizard, { keyNeeded: true, step: "key", jobId: null, keyError: error.message });
+      Object.assign(wizard, { keyNeeded: true, keyForced: true, step: "key", jobId: null, keyError: error.message });
     } else {
       wizard.error = error || new HelperError(`${convert ? "轉換" : "檢查"}沒有完成（${JOB_STATES[job.state] || str(job.state)}）。`, { code: str(job.state) });
     }
@@ -3831,13 +3858,14 @@
           h("small", { id: "ha-test-mode-help", text: "勾選時，搬過來的 n8n 工作流程都先停用，Odoo 不寄信也不跑排程，HA 那邊可以照常使用；正式搬家請不要勾。" }))),
       blocked ? infoNotice("有應用沒有通過檢查，無法轉換。請依上面的說明處理後按「重新檢查」。", "fail", "close-circle-outline") : null,
       needDatabase ? h("p", { class: "hint", text: "請先選擇要搬過來的 Odoo 資料庫。" }) : null,
+      haNoDeviceKey() ? haDeviceKeyNotice() : null,
       active ? haActiveNotice(active) : null,
       wizardError(wizard),
       h("div", { class: "form-footer button-group" },
         button("上一步", () => haBack(wizard, "apps"), { focus: "ha-options-back", disabled: wizard.busy }),
         button("重新檢查", () => startHaCheck(wizard), { icon: "refresh", focus: "ha-recheck", disabled: wizard.busy || Boolean(active) }),
         button("下一步：轉換…", () => confirmHaConvert(ha, wizard), {
-          primary: true, disabled: blocked || needDatabase || wizard.busy || Boolean(active), focus: "ha-convert"
+          primary: true, disabled: blocked || needDatabase || haNoDeviceKey() || wizard.busy || Boolean(active), focus: "ha-convert"
         }))
     ];
   }
@@ -3952,6 +3980,8 @@
       if (!["key-required", "wrong-key"].includes(error.code) || state.haWizard !== wizard) throw error;
       haStartFailed(wizard, error);
       render();
+      // The dialog closes on return: the focus goes to the key field, not to the button that went away (review P-08).
+      returnFocusTo($("ha-key"));
       return;
     }
     requireShape(isString(data.job_id) && JOB_ID_RE.test(data.job_id), "作業資訊");
@@ -6761,14 +6791,19 @@
     box.hidden = !message;
     text($(`${prefix}-error-message`), message);
     box.querySelector(".dialog-error-actions")?.remove();
-    // A busy refusal links to the blocking job, as errorNotice does elsewhere (review finding F12).
+    // A busy refusal links to the blocking job, as errorNotice does elsewhere (review finding F12); a refusal for want
+    // of this device's key links to 加密金鑰 (review P-07).
+    const close = () => { const dialog = box.closest("dialog"); if (dialog?.open) dialog.close(); };
     const jobId = error?.details?.job_id;
-    if (error?.code === "busy" && isString(jobId) && JOB_ID_RE.test(jobId)) {
-      box.append(h("div", { class: "button-group dialog-error-actions" }, link("查看進行中的作業", ["jobs", jobId], {
-        class: "button small", dataset: { focus: "dialog-busy-job" },
-        on: { click: () => { const dialog = box.closest("dialog"); if (dialog?.open) dialog.close(); } }
-      })));
-    }
+    const action = error?.code === "busy" && isString(jobId) && JOB_ID_RE.test(jobId)
+      ? link("查看進行中的作業", ["jobs", jobId], { class: "button small", dataset: { focus: "dialog-busy-job" }, on: { click: close } })
+      : error?.code === "no-device-key" ? link("前往設定加密金鑰", ["keys"], { class: "button small", dataset: { focus: "dialog-keys" }, on: { click: close } }) : null;
+    if (action) box.append(h("div", { class: "button-group dialog-error-actions" }, action));
+  }
+
+  // Where the open confirmation puts the focus when it closes, instead of the control that opened it (review P-08).
+  function returnFocusTo(element) {
+    if (confirmState && element) confirmState.trigger = element;
   }
 
   // `acknowledge`: the text of a checkbox the confirm button waits for (an explicit decision, e.g. plain text).
@@ -6945,8 +6980,9 @@
           keyDialogState = null;
         } else confirmState = null;
         const trigger = current?.trigger;
-        if (trigger?.isConnected && !trigger.disabled) trigger.focus({ preventScroll: true });
-        else if (trigger?.dataset?.focus) document.querySelector(`[data-focus="${CSS.escape(trigger.dataset.focus)}"]`)?.focus({ preventScroll: true });
+        const target = trigger?.isConnected ? trigger
+          : trigger?.dataset?.focus ? document.querySelector(`[data-focus="${CSS.escape(trigger.dataset.focus)}"]`) : null;
+        if (target && !target.disabled) target.focus({ preventScroll: true });
         else $("view-heading")?.focus({ preventScroll: true });
       });
     }

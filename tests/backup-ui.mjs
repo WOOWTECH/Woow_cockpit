@@ -4704,7 +4704,7 @@ try {
       assert.equal(info['名稱'], HA_NAME);
       assert.match(info['HA 建立時間'], /2026\/11\/18 05:00/);
       assert.equal(info['類型'], '部分備份');
-      assert.equal(info['加密'], '已加密：匯入時需要 HA 的備份加密金鑰');
+      assert.equal(info['加密'], '已加密：匯入時需要 HA 備份金鑰');
       assert.equal(info['大小'], '1.5 GiB');
       assert.match(info['上傳時間'], /2026\/11\/18 09:00/);
       assert.equal(info['資料夾'], 'share、ssl');
@@ -4722,7 +4722,7 @@ try {
       assert.equal(await first.getAttribute('data-ha'), HA_ID, 'the HA backup is listed by its own date, the newest here');
       assert.equal(await first.locator('td[data-label="類型"]').textContent(), 'HA 備份');
       assert.equal(await first.locator('td[data-label="應用"]').textContent(), 'Odoo 18 CE、WOOW n8n、Mosquitto broker');
-      assert.equal(await first.locator('td[data-label="加密與驗證"]').textContent(), '已加密匯入時需要 HA 的備份加密金鑰');
+      assert.equal(await first.locator('td[data-label="加密與驗證"]').textContent(), '已加密匯入時需要 HA 備份金鑰');
       assert.equal(await first.locator('.note').textContent(), HA_NAME);
       assert.equal(await page.locator('#backup-count').textContent(), '顯示 4 / 4 份備份');
       await page.locator('[data-focus="filter-ha"]').click();
@@ -4755,7 +4755,7 @@ try {
       assert.equal(await page.locator('#ha-key').getAttribute('type'), 'text');
       assert.equal(await page.locator('#ha-key').getAttribute('autocomplete'), 'off');
       await page.locator('[data-focus="ha-key-next"]').click();
-      await page.getByText('請輸入 HA 的備份加密金鑰。').waitFor();
+      await page.getByText('請輸入 HA 備份金鑰。').waitFor();
       assert.equal((await calls(page, 'ha-check-start')).length, 0, 'an empty key never reaches the helper');
       await page.locator('#ha-key').fill(HA_WRONG_KEY);
       await page.locator('[data-focus="ha-key-next"]').click();
@@ -4796,6 +4796,95 @@ try {
       await page.locator('[data-focus="ha-apps-next"]').click();
       assert.equal(await page.locator('#ha-key').inputValue(), '');
       assert.equal((await calls(page, 'ha-check-start')).length, 2, 'nothing was started again on its own');
+      // HA's older formats tell a wrong key only inside the job: the check fails with wrong-key and the key step is back.
+      await page.evaluate(() => { window.__fixture.ha.jobKeyFailure = 'wrong-key'; });
+      await page.locator('#ha-key').fill(HA_KEY);
+      await page.locator('[data-focus="ha-key-next"]').click();
+      await page.locator('.wizard-card .notice-error').getByText(WRONG_HA_KEY.message).waitFor();
+      assert.equal(await activeStep(page), '金鑰');
+      assert.equal(await page.evaluate(() => document.activeElement?.id), 'ha-key');
+      assert.equal((await calls(page, 'ha-check-start')).length, 3);
+    });
+
+  await check('從 HA 備份匯入: HA\'s key is asked for when a chosen add-on is encrypted, whatever `protected` says (review P-04)',
+    haFixture({ ha: { backups: [
+      haMeta(HA_ID, { other_addons: [], addons: [{ slug: ODOO_SLUG, name: 'Odoo 18 CE', version: ODOO_ADDON_VERSION, encrypted: true },
+        { slug: N8N_SLUG, name: 'WOOW n8n', version: '2.43.6', encrypted: false }] }),
+      haMeta(HA_PLAIN, { protected: false, name: '從 HA 解密下載的備份', other_addons: [], addons: [
+        { slug: ODOO_SLUG, name: 'Odoo 18 CE', version: ODOO_ADDON_VERSION, encrypted: true },
+        { slug: N8N_SLUG, name: 'WOOW n8n', version: '2.43.6', encrypted: false }] })] } }), async page => {
+      await ready(page);
+      const steps = () => page.locator('.stepper[aria-label="匯入步驟"] .step-label').allTextContents();
+      await openHa(page);
+      assert.deepEqual(await steps(), ['選擇應用', '金鑰', '檢查', '結果與選項', '轉換', '還原'], 'the Odoo add-on is encrypted');
+      await page.locator('#ha-app-odoo').uncheck();
+      assert.deepEqual(await steps(), ['選擇應用', '檢查', '結果與選項', '轉換', '還原'], 'n8n alone needs no key');
+      assert.equal(await page.locator('[data-focus="ha-apps-next"]').textContent(), '下一步：開始檢查');
+      await page.locator('[data-focus="ha-apps-next"]').click();
+      await page.locator('[data-ha-app="n8n"]').waitFor();
+      const start = requestOf((await calls(page, 'ha-check-start')).at(-1));
+      assert.deepEqual([start.apps, 'key' in start], [['n8n'], false], 'no key for an add-on HA did not encrypt');
+      // A download HA decrypted says protected:false and may keep an encrypted member: the key is asked for anyway.
+      await page.locator('[data-nav="backups"]').click();
+      const row = page.locator(`tr[data-ha="${HA_PLAIN}"]`);
+      assert.equal(await row.locator('td[data-label="加密與驗證"]').textContent(), '已加密匯入時需要 HA 備份金鑰');
+      await row.locator(`[data-focus="ha-import-${HA_PLAIN}"]`).click();
+      await page.locator('.stepper[aria-label="匯入步驟"]').waitFor();
+      assert.deepEqual(await steps(), ['選擇應用', '金鑰', '檢查', '結果與選項', '轉換', '還原']);
+      await page.locator('[data-focus="ha-apps-next"]').click();
+      await page.locator('#ha-key').fill(HA_KEY);
+      await page.locator('[data-focus="ha-key-next"]').click();
+      await page.locator('[data-ha-app="odoo"]').waitFor();
+      assert.equal(requestOf((await calls(page, 'ha-check-start')).at(-1)).key, HA_KEY);
+    });
+
+  const haNoDeviceKey = (() => {
+    const data = haFixture({ ha: { backups: [haMeta(HA_PLAIN, { protected: false })] } });
+    data.status.key = null;
+    return data;
+  })();
+  await check('從 HA 備份匯入 without this device\'s key while 預設加密 is on: the wizard says so with a link from the start and keeps 轉換 off; a refusal in the dialog links to 加密金鑰 (review P-07, F-05)',
+    haNoDeviceKey, async page => {
+      await ready(page);
+      await openHa(page, HA_PLAIN);
+      const notice = page.locator('.wizard-card .notice-warn').filter({ hasText: '尚未建立加密金鑰。轉換好的備份會依「預設加密備份」用這台設備的金鑰加密' });
+      await notice.waitFor();
+      assert.equal(await notice.locator('[data-focus="ha-keys"]').getAttribute('href'), '#/keys');
+      // The check needs no device key; the conversion does.
+      await page.locator('[data-focus="ha-apps-next"]').click();
+      await page.locator('[data-ha-app="odoo"]').waitFor();
+      await notice.waitFor();
+      assert.equal(await page.locator('#ha-db-0').isChecked(), true);
+      assert.equal(await page.locator('[data-focus="ha-convert"]').isDisabled(), true, 'no conversion without the device key');
+      // Set up meanwhile: the page hears of the key on its next status.
+      await page.evaluate(key => { window.__fixture.status.key = key; }, { key_id: KEY_ID, created: '2026-11-01T08:00:00Z', kit_confirmed: true });
+      await page.locator('#refresh').click();
+      await enabled(page, '[data-focus="ha-convert"]');
+      assert.equal(await notice.count(), 0);
+      // A refusal the page could not foresee shows the engine's words and links to 加密金鑰.
+      await page.evaluate(() => { window.__fixture.status.key = null; });
+      await page.locator('[data-focus="ha-convert"]').click();
+      await page.locator('#confirm-ok').click();
+      await page.locator('#confirm-error').getByText('這台設備尚未建立加密金鑰，請先完成金鑰設定。').waitFor();
+      assert.equal((await calls(page, 'ha-convert-start')).length, 1);
+      await page.locator('[data-focus="dialog-keys"]').click();
+      await page.waitForFunction(() => window.location.hash === '#/keys');
+      assert.equal(await page.locator('#confirm-dialog').evaluate(dialog => dialog.open), false);
+    });
+
+  await check('從 HA 備份匯入: a key refusal when the conversion starts closes the dialog on the key field (review P-08)',
+    haFixture({ ha: { backups: [haMeta(HA_PLAIN, { protected: false })] } }), async page => {
+      await ready(page);
+      await openHa(page, HA_PLAIN);
+      await page.locator('[data-focus="ha-apps-next"]').click();
+      await page.locator('[data-ha-app="odoo"]').waitFor();
+      await page.evaluate(message => window.__fixture.failures.push({ command: 'ha-convert-start', code: 'key-required', message }), KEY_REQUIRED.message);
+      await page.locator('[data-focus="ha-convert"]').click();
+      await page.locator('#confirm-ok').click();
+      await page.locator('#confirm-dialog').waitFor({ state: 'hidden' });
+      await page.waitForFunction(() => document.activeElement?.id === 'ha-key');
+      assert.equal(await activeStep(page), '金鑰');
+      assert.equal(await page.locator('.wizard-card .notice-error').textContent(), KEY_REQUIRED.message);
     });
 
   await check('從 HA 備份匯入: check results — a blocker disables 下一步; the Odoo database picker with its counts; n8n facts and workflows to fix; 「這只是測試」 starts unchecked',
@@ -5064,7 +5153,7 @@ try {
       assert.match(await page.locator('[data-focus="result-ha"]').getAttribute('class'), /primary/);
       await page.waitForFunction(name => document.querySelector('section[aria-labelledby="job-params-heading"]')?.textContent.includes(name), HA_NAME);
       assert.deepEqual((await metadataOf(page.locator('section[aria-labelledby="job-params-heading"]')))[0], {
-        作業類型: '檢查 HA 備份', 'HA 備份': HA_NAME, 應用: 'Odoo 18、n8n 工作流程', 金鑰: '使用你輸入的 HA 備份加密金鑰（作業結束後即刪除）' });
+        作業類型: '檢查 HA 備份', 'HA 備份': HA_NAME, 應用: 'Odoo 18、n8n 工作流程', 金鑰: '使用你輸入的 HA 備份金鑰（作業結束後即刪除）' });
       // 活動紀錄
       await page.locator('[data-nav="activity"]').click();
       await page.locator('.jobs-table').waitFor();
@@ -5099,7 +5188,7 @@ try {
       assert.deepEqual(jobDatabases, [
         ['woowtest', '可以搬', ['HA 的資料庫有 1 個啟用中的外寄郵件伺服器，搬過來後會開始寄信。', 'HA 的資料庫有 12 個啟用中的排程工作，搬過來後會在這台執行。']],
         ['demo-old', '不能搬', [MISSING_MODULE, 'HA 的資料庫有 3 個啟用中的排程工作，搬過來後會在這台執行。']]]);
-      assert.match(await page.locator('.job-result').textContent(), /要匯入，請回到 HA 備份按「檢查並匯入…」，並重新輸入 HA 的備份加密金鑰。/);
+      assert.match(await page.locator('.job-result').textContent(), /要匯入，請回到 HA 備份按「檢查並匯入…」，並重新輸入 HA 備份金鑰。/);
       // A failed check shows the engine's words.
       await page.locator('[data-focus="back-activity"]').click();
       await page.locator(`[data-focus="job-${J_HA_FAILED}"]`).click();
@@ -5115,7 +5204,7 @@ try {
       assert.deepEqual(converted, { 備份: B_HA, 應用: 'Odoo 18、n8n 工作流程', 'Odoo 資料庫': 'woowtest', 這只是測試: '否' });
       assert.deepEqual((await metadataOf(page.locator('section[aria-labelledby="job-params-heading"]')))[0], {
         作業類型: '轉換 HA 備份', 'HA 備份': HA_NAME, 應用: 'Odoo 18、n8n 工作流程', 'Odoo 資料庫': 'woowtest', 這只是測試: '否',
-        金鑰: '使用你輸入的 HA 備份加密金鑰（作業結束後即刪除）' });
+        金鑰: '使用你輸入的 HA 備份金鑰（作業結束後即刪除）' });
       assert.deepEqual(await page.locator('.result-actions > *').evaluateAll(items => items.map(item => item.textContent)),
         ['還原到這台…', '查看備份', '回到 HA 備份']);
       await page.locator('[data-focus="result-ha-restore"]').click();
