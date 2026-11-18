@@ -428,6 +428,7 @@ def convert(ha, apps, database, test_mode, *, ev, key, tag):
 
 
 def scenario_convert(ev, args):
+    STATE.pop('converted', None)  # a failed conversion must not leave an earlier run's backup for `restore`
     job, took = convert(STATE['ha_enc'], ['odoo', 'n8n'], 'woowtest', False, ev=ev, key=args.secrets['HA_BACKUP_KEY'],
                         tag='convert')
     ok_ = job['state'] == 'succeeded' and isinstance((job.get('result') or {}).get('backup_id'), str)
@@ -468,6 +469,8 @@ def restore(backup_id, apps, *, ev, tag):
 
 
 def scenario_restore(ev, args):
+    if not STATE.get('converted'):
+        raise Failed('restore needs the converted backup of this run (convert failed or did not run)')
     job, took = restore(STATE['converted'], ['odoo', 'n8n'], ev=ev, tag='restore')
     ev.check('restore of the converted backup succeeded', job['state'] == 'succeeded',
              f'{took:.0f} s {job.get("error")} safety={(job.get("result") or {}).get("safety_backup_id")}')
