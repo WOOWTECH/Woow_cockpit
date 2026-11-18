@@ -38,6 +38,18 @@ const J_ACTIVE = 'j20261113T015000Z-00a1b2c3';
 const J_OTHER = 'j20261113T014500Z-0b0b0b0b';
 const UPLOAD_ID = 'u3f9a0c1d2e';
 const UPLOAD_PATH = `/var/lib/woowtech-backup/uploads/${UPLOAD_ID}.part`;
+// 從 HA 備份匯入: uploaded HA backups, HA's backup key (test-only values) and the converted backup.
+const HA_ID = 'ha-0123456789abcdef0123';
+const HA_PLAIN = 'ha-fedcba9876543210fedc';
+const HA_KEY = 'WOOW-TEST-KEY0-ABCD-1234-5678-9XYZ';
+const HA_WRONG_KEY = 'AAAA-BBBB-CCCC-DDDD-EEEE-FFFF-0000';
+const HA_KEYS = [HA_KEY, HA_WRONG_KEY];
+const B_HA = '20261118T030500Z-4a4b4c4d';
+const J_HA_CHECK = 'j20261118T020000Z-0aa00001';
+const J_HA_CONVERT = 'j20261118T021000Z-0aa00002';
+const J_HA_FAILED = 'j20261118T015000Z-0aa00003';
+const J_HA_RUN = 'j20261118T022000Z-0aa00004';
+const J_HA_RESTORE = 'j20261118T023000Z-0aa00005';
 
 function kitText(secret, keyId, host = 'dev-a') {
   return ['WOOWTECH Cockpit 備份緊急金鑰', '================================', '',
@@ -54,6 +66,9 @@ const PHASES = {
     ['safety', '建立還原前備份'], ['stop', '停止應用'], ['restore', '還原資料'], ['start', '啟動應用'], ['check', '健康與資料核對']],
   verify: [['prepare', '準備'], ['decrypt', '解密並驗證檔案'], ['check', '核對結果']],
   export: [['prepare', '準備'], ['decrypt', '解密並驗證檔案'], ['package', '封裝未加密副本'], ['verify', '驗證副本']],
+  // 從 HA 備份匯入 (DESIGN §6): a `verify` and a `backup` job with params.source "ha"; labels come from the records.
+  'ha-check': [['prepare', '準備'], ['decrypt', '解開 HA 備份'], ['check', '檢查內容與版本']],
+  'ha-convert': [['prepare', '準備'], ['decrypt', '解開 HA 備份'], ['convert', '轉換資料'], ['package', '封裝備份'], ['verify', '驗證備份']],
 };
 const labelOf = (type, id) => [...PHASES[type], ['rollback', '自動回復']].find(([phase]) => phase === id)?.[1] || id;
 
@@ -338,6 +353,10 @@ function installCockpitFixture() {
     delete: { required: ['backup_id'], optional: [] }, 'upload-begin': { required: ['filename', 'size'], optional: [] },
     'upload-finish': { required: ['upload_id'], optional: [] }, 'upload-abort': { required: ['upload_id'], optional: [] },
     'download-info': { required: ['backup_id'], optional: [] },
+    // 從 HA 備份匯入 (DESIGN §6, CONTRACT §7).
+    'ha-check-start': { required: ['ha_backup_id', 'apps', 'request_id'], optional: ['key'] },
+    'ha-convert-start': { required: ['ha_backup_id', 'apps', 'test_mode', 'request_id', 'confirm'], optional: ['odoo_database', 'key'] },
+    'ha-delete': { required: ['ha_backup_id', 'confirm'], optional: [] },
   };
   const NO_INPUT = ['status', 'list', 'key-init', 'key-kit', 'jobs', 'settings-get', 'schedule-get'];
   const PHASE_LABELS = {
@@ -347,6 +366,8 @@ function installCockpitFixture() {
       ['safety', '建立還原前備份'], ['stop', '停止應用'], ['restore', '還原資料'], ['start', '啟動應用'], ['check', '健康與資料核對']],
     verify: [['prepare', '準備'], ['decrypt', '解密並驗證檔案'], ['check', '核對結果']],
     export: [['prepare', '準備'], ['decrypt', '解密並驗證檔案'], ['package', '封裝未加密副本'], ['verify', '驗證副本']],
+    'ha-check': [['prepare', '準備'], ['decrypt', '解開 HA 備份'], ['check', '檢查內容與版本']],
+    'ha-convert': [['prepare', '準備'], ['decrypt', '解開 HA 備份'], ['convert', '轉換資料'], ['package', '封裝備份'], ['verify', '驗證備份']],
   };
   // A stable stand-in for a sha256 (the page only compares and shortens it).
   const fakeSha = text => {
@@ -387,17 +408,18 @@ function installCockpitFixture() {
   const keyKnown = keyId => keyId === data.status.key?.key_id || data.status.imported_keys.some(item => item.key_id === keyId);
   const refreshKeys = () => data.backups.forEach(item => { item.key_available = item.encrypted === false || keyKnown(item.key_id); });
 
-  function startJob(type, params, requestId) {
+  // `phases` and `script` name the phase list and the steps when a job type has more than one kind (the HA jobs).
+  function startJob(type, params, requestId, { phases = type, script = type } = {}) {
     if (typeof requestId !== 'string' || requestId.length < 8) throw new Refusal('invalid-request', '請求識別碼格式不正確。');
     if (requests[requestId]) return { job_id: requests[requestId], deduplicated: true };
     const running = active();
     if (running) throw new Refusal('busy', '已有備份或還原作業正在進行，請等它完成後再試。', { job_id: running.job.id });
     jobSeq += 1;
     const id = `j20261113T0200${String(10 + jobSeq).padStart(2, '0')}Z-${(0xabc000 + jobSeq).toString(16).padStart(8, '0')}`;
-    const job = { id, type, state: 'queued', phase: 'prepare', phases: PHASE_LABELS[type].map(([phase, label]) => ({ id: phase, label, state: 'pending' })),
+    const job = { id, type, state: 'queued', phase: 'prepare', phases: PHASE_LABELS[phases].map(([phase, label]) => ({ id: phase, label, state: 'pending' })),
       progress: { percent: 0, message: '等待開始' }, created: `2026-11-13T02:00:${String(10 + jobSeq).padStart(2, '0')}Z`, started: null,
       finished: null, params, result: null, error: null, cancellable: true };
-    data.jobs[id] = { job, log: [`${job.created} 作業已排入背景執行`], steps: structuredClone(data.scripts[type] || []) };
+    data.jobs[id] = { job, log: [`${job.created} 作業已排入背景執行`], steps: structuredClone(data.scripts[script] || []) };
     data.status.active_job = structuredClone(job);
     requests[requestId] = id;
     return { job_id: id, deduplicated: false };
@@ -698,8 +720,49 @@ function installCockpitFixture() {
     return started;
   }
 
+  // 從 HA 備份匯入 in miniature (DESIGN §6): the engine checks the key only inside the job (securetar), so the key picks
+  // the script: `<kind>` with the right key or none needed, `<kind>-key-required`, `<kind>-wrong-key`.
+  function haCommand(command, request) {
+    const ha = data.ha;
+    if (!ha) throw new Refusal('invalid-request', '不支援的指令。');
+    const meta = ha.backups.find(item => item.id === request.ha_backup_id);
+    if (!meta) throw new Refusal('not-found', '找不到這份 HA 備份。');
+    if (command === 'ha-delete') {
+      if (request.confirm !== true) throw new Refusal('invalid-request', '欄位 confirm 必須為 true（需要明確確認）。');
+      const running = active();
+      if (running?.job.params?.ha_backup_id === meta.id) {
+        throw new Refusal('busy', '這份 HA 備份正被進行中的作業使用，請等它完成後再刪除。', { job_id: running.job.id });
+      }
+      ha.backups = ha.backups.filter(item => item.id !== meta.id);
+      return {};
+    }
+    const ready = (meta.importable_apps || []).filter(item => item.installed).map(item => item.app_id);
+    if (!Array.isArray(request.apps) || !request.apps.length || request.apps.some(id => !ready.includes(id))) {
+      window.fixtureErrors.push(`${command}: apps ${JSON.stringify(request.apps)}`);
+      throw new Refusal('invalid-request', '欄位 apps 不正確。', { field: 'apps' });
+    }
+    const keyProvided = request.key !== undefined;
+    const encrypted = meta.protected || ha.encryptedMembers === true;
+    if (keyProvided && !encrypted) window.fixtureErrors.push(`${command}: a key for an HA backup that needs none`);
+    const kind = command === 'ha-check-start' ? 'ha-check' : 'ha-convert';
+    const script = !encrypted || request.key === ha.key ? kind : keyProvided ? `${kind}-wrong-key` : `${kind}-key-required`;
+    const params = { source: 'ha', ha_backup_id: meta.id, apps: [...request.apps], key_provided: keyProvided };
+    if (command === 'ha-check-start') return startJob('verify', params, request.request_id, { phases: kind, script });
+    if (request.confirm !== true) throw new Refusal('invalid-request', '欄位 confirm 必須為 true（需要明確確認）。');
+    if (typeof request.test_mode !== 'boolean') window.fixtureErrors.push('ha-convert-start: test_mode must be a boolean');
+    if (request.apps.includes('odoo') !== (typeof request.odoo_database === 'string')) {
+      window.fixtureErrors.push(`ha-convert-start: odoo_database ${request.odoo_database} for ${request.apps}`);
+    }
+    return startJob('backup', { ...params, odoo_database: request.odoo_database ?? null, test_mode: request.test_mode },
+      request.request_id, { phases: kind, script });
+  }
+
   function handle(command, request) {
     switch (command) {
+      case 'ha-check-start':
+      case 'ha-convert-start':
+      case 'ha-delete':
+        return haCommand(command, request);
       case 'status': {
         data.status.storage.backup_count = data.backups.length;
         const result = structuredClone(data.status);
@@ -711,7 +774,9 @@ function installCockpitFixture() {
       case 'schedule-run-now':
         return scheduleCommand(command, request);
       case 'list':
-        return { backups: structuredClone(data.backups), exports: structuredClone(data.exports || []) };
+        // An engine without HA imports (data.ha null) sends no ha_backups.
+        return { backups: structuredClone(data.backups), exports: structuredClone(data.exports || []),
+          ...(data.ha ? { ha_backups: structuredClone(data.ha.backups) } : {}) };
       case 'settings-set': {
         if (!request.encrypt_by_default && request.acknowledge_plaintext !== true) {
           throw new Refusal('invalid-request', `關閉預設加密前必須確認風險：${data.status.settings.plaintext_warning}`, { field: 'acknowledge_plaintext' });
@@ -767,8 +832,14 @@ function installCockpitFixture() {
       }
       case 'inspect': {
         const meta = backup(request.backup_id);
-        const result = data.inspect[request.backup_id];
+        let result = data.inspect[request.backup_id];
         if (!meta || !result) throw new Refusal('not-found', '找不到指定的備份。');
+        // A backup converted from an HA backup holds only the apps that were converted.
+        if (meta.from_ha) {
+          const ids = meta.apps.map(app => app.id);
+          result = structuredClone(result);
+          for (const part of [result.backup.apps, result.manifest.apps, result.preflight.apps]) part.splice(0, part.length, ...part.filter(app => ids.includes(app.id)));
+        }
         if (meta.encrypted === false && request.key !== undefined) throw new Refusal('invalid-request', '這份備份沒有加密，不需要金鑰。', { field: 'key' });
         if (meta.encrypted !== false && !keyKnown(meta.key_id)) {
           if (request.key === undefined) throw new Refusal('key-required', '此備份使用的金鑰不在本設備，請輸入緊急金鑰。', { key_id: meta.key_id });
@@ -809,7 +880,21 @@ function installCockpitFixture() {
         if (step) {
           Object.assign(record.job, step.job);
           record.log.push(...(step.log || []));
-          if (step.addBackup) data.backups.unshift(structuredClone(step.addBackup));
+          // An HA job answers for the apps (and the choices) of its own request.
+          const haParams = record.job.params?.source === 'ha' ? record.job.params : null;
+          if (haParams && record.job.result?.ha_check) {
+            record.job.result.ha_check.apps = record.job.result.ha_check.apps.filter(app => haParams.apps.includes(app.app_id));
+          }
+          const choices = haParams && { apps: haParams.apps, odoo_database: haParams.odoo_database, test_mode: haParams.test_mode };
+          if (choices && record.job.result?.ha_import) Object.assign(record.job.result.ha_import, choices);
+          if (step.addBackup) {
+            const added = structuredClone(step.addBackup);
+            if (choices && added.from_ha) {
+              Object.assign(added.from_ha, choices);
+              added.apps = added.apps.filter(app => choices.apps.includes(app.id));
+            }
+            data.backups.unshift(added);
+          }
           if (step.removeBackups) data.backups = data.backups.filter(item => !step.removeBackups.includes(item.id));
           if (step.addExport) data.exports = [...(data.exports || []), structuredClone(step.addExport)];
           if (step.verified && record.job.params?.backup_id) {
@@ -846,6 +931,12 @@ function installCockpitFixture() {
         if (request.upload_id !== data.upload.begin.upload_id) throw new Refusal('not-found', '找不到上傳工作。');
         const channel = window.testchannels.at(-1);
         if (!channel?.done || channel.sent !== channel.options.size) throw new Refusal('invalid-request', '上傳的檔案大小與宣告不符，上傳可能未完成。');
+        // An HA OS backup goes to the HA store and is answered as `ha_backup` (DESIGN §6).
+        if (data.upload.finishHa) {
+          const ha = structuredClone(data.upload.finishHa);
+          if (!data.ha.backups.some(item => item.id === ha.id)) data.ha.backups.unshift(ha);
+          return { ha_backup: structuredClone(ha) };
+        }
         const meta = structuredClone(data.upload.finish);
         if (!backup(meta.id)) data.backups.unshift(meta);
         return { backup: structuredClone(backup(meta.id)) };
@@ -1167,7 +1258,19 @@ async function check(name, data, body, { allowHttpErrors = [], beforeGoto = null
         assert.equal(call.options.err, 'message');
         assert(!JSON.stringify(call.argv).includes('AGE-SECRET-KEY'), 'key material never travels in argv');
         if (call.stdin.includes('AGE-SECRET-KEY')) assert.match(call.stdin, /^\{.*"key":"AGE-SECRET-KEY-1[0-9A-Z]{58}".*\}$/, 'keys only in the stdin field "key"');
+        // The HA backup key (DESIGN §0): only in the stdin field "key" of the two HA job starts.
+        for (const key of HA_KEYS) {
+          assert(!JSON.stringify(call.argv).includes(key), 'the HA key never travels in argv');
+          if (!call.stdin.includes(key)) continue;
+          const { key: sent, ...rest } = JSON.parse(call.stdin);
+          assert(['ha-check-start', 'ha-convert-start'].includes(call.argv[1]), `the HA key is sent only to start an HA job, not ${call.argv[1]}`);
+          assert.equal(sent, key, 'the HA key travels as the stdin field "key"');
+          assert(!JSON.stringify(rest).includes(key), 'the HA key is in no other field');
+        }
       }
+      const kept = await page.evaluate(() => JSON.stringify([Object.entries(localStorage), Object.entries(sessionStorage), window.location.href,
+        document.cookie, document.title]));
+      for (const key of HA_KEYS) assert(!kept.includes(key), 'the HA key is never stored in the browser or put in the URL');
       for (const channel of await channels(page)) assert.equal(channel.options.superuser, 'require');
     } finally {
       await context.close();
@@ -1375,6 +1478,153 @@ function retentionFixture(extra = {}) {
   };
   return data;
 }
+
+// ------------------------------------------------------------------ 從 HA 備份匯入 data (2026-11-18, DESIGN §6)
+
+const ODOO_SLUG = '1b7b4ce7_odoo18ce';
+const N8N_SLUG = '1b7b4ce7_woow-n8n';
+const HA_NAME = '每日完整備份 2026-11-17';
+const WORKFLOWS_TO_FIX = [
+  { name: '開門通知', active: true, reasons: ['用到 Home Assistant 節點，網址要改成這台連得到的 HA。'] },
+  { name: '每日報表', active: false, reasons: ['讀寫檔案的路徑 /share/reports 在這台不存在。', '用到 http://supervisor/core/api。'] },
+];
+const NACL_MISSING = '系統缺少 python3-nacl，無法解開 2026 年 3 月以後的 HA 加密備份。請重新執行安裝程式。';
+const MISSING_MODULE = '資料庫 demo-old 有這台沒有的模組：website_sale_extra（18.0.1.0）。如果模組放在 HA 的 /share/odoo_addons，做 HA 備份時要把 share 資料夾也勾進去。';
+const VERSION_BLOCKER = 'HA 的 Odoo 模組 sale 是 18.0.1.3，這台是 18.0.1.2；兩邊的版本必須相同，請先把這台的 Odoo 更新到相同版本。';
+const KEY_REQUIRED = { code: 'key-required', message: '這份 HA 備份有加密，請輸入 HA 的備份加密金鑰。' };
+const WRONG_HA_KEY = { code: 'wrong-key', message: 'HA 備份金鑰不正確，請確認後再試一次。' };
+
+// HaBackupMeta: the sidecar plus `importable_apps` / `other_addons` (CONTRACT §7).
+function haMeta(id, extra = {}) {
+  return {
+    id, ha_slug: 'a1b2c3d4', name: HA_NAME, date: '2026-11-17T21:00:00Z', type: 'partial', supervisor_version: '2026.11.1',
+    protected: true, compressed: true,
+    addons: [{ slug: ODOO_SLUG, name: 'Odoo 18 CE', version: '18.0.20260926' }, { slug: N8N_SLUG, name: 'WOOW n8n', version: '2.43.6' },
+      { slug: 'core_mosquitto', name: 'Mosquitto broker', version: '6.5.1' }],
+    folders: ['share', 'ssl'], size: 1536 * MiB, sha256: 'd'.repeat(64), uploaded_at: '2026-11-18T01:00:00Z', filename: 'woow_import_test.tar',
+    importable_apps: [{ slug: ODOO_SLUG, app_id: 'odoo', app_name: 'Odoo 18', installed: true },
+      { slug: N8N_SLUG, app_id: 'n8n', app_name: 'n8n 工作流程', installed: true }],
+    other_addons: [{ slug: 'core_mosquitto', name: 'Mosquitto broker', version: '6.5.1' }],
+    ...extra,
+  };
+}
+
+const odooDb = (name, extra = {}) => ({ name, ok: true, blockers: [], partners: 1234, users: 5, attachments: 3210, attachment_bytes: 120 * MiB,
+  modules: 87, custom_modules: [{ name: 'woow_paas_platform', version: '18.0.1.2.0', from: 'share/odoo_addons' }], crons_active: 12,
+  mail_servers_active: 1, size: 310 * MiB, ...extra });
+const blockedDb = () => odooDb('demo-old', { ok: false, blockers: [MISSING_MODULE], partners: 40, users: 2, attachments: 9,
+  attachment_bytes: 2 * MiB, modules: 45, custom_modules: [], crons_active: 3, mail_servers_active: 0, size: 25 * MiB });
+
+// result.ha_check of a check job; `odoo` / `n8n` replace fields of each app's verdict.
+function haCheck({ odoo = {}, n8n = {}, databases = null } = {}) {
+  return { ha_check: { ha_backup_id: HA_ID, apps: [
+    { app_id: 'odoo', slug: ODOO_SLUG, arch: 'amd64', version: '18.0.20260926', target_version: '18.0.20260926', ok: true, blockers: [],
+      warnings: [], odoo: { databases: databases || [odooDb('woowtest'), blockedDb()] }, ...odoo },
+    { app_id: 'n8n', slug: N8N_SLUG, arch: 'amd64', version: '2.43.6', target_version: '2.43.6', ok: true, blockers: [],
+      warnings: ['社群節點 n8n-nodes-mqtt-x 含有與這台不相容的程式，搬過來後需要重新安裝。'],
+      n8n: { owner_email: 'owner@example.com', workflows: 14, workflows_active: 6, credentials: 9, executions: 1520, users: 2,
+        community_packages: ['n8n-nodes-mqtt-x'], workflows_to_fix: WORKFLOWS_TO_FIX }, ...n8n },
+  ] } };
+}
+
+const haStep = (kind, phase, percent, extra = {}) => runningStep(kind, phase, percent, { started: '2026-11-18T03:00:05Z', ...extra });
+function haFailedStep(kind, phase, error) {
+  return { job: { state: 'failed', phase, phases: phasesAt(kind, phase, { failedAt: phase }), progress: { percent: 40, message: labelOf(kind, phase) },
+    finished: '2026-11-18T03:00:40Z', cancellable: false, error, result: null }, log: [`2026-11-18T03:00:40Z 作業失敗：${error.message}`] };
+}
+
+// The backup a conversion registers (BackupMeta.from_ha from ha-imports.json).
+function convertedMeta(extra = {}) {
+  return backupMeta(B_HA, {
+    note: `由 HA 備份轉換：${HA_NAME}（2026-11-17 21:00）`, apps: [{ id: 'odoo', name: 'Odoo 18' }, { id: 'n8n', name: 'n8n 工作流程' }],
+    size: 420 * MiB,
+    from_ha: { ha_backup_id: HA_ID, name: HA_NAME, date: '2026-11-17T21:00:00Z', apps: ['odoo', 'n8n'], odoo_database: 'woowtest',
+      test_mode: false, workflows_to_fix: WORKFLOWS_TO_FIX, reminders: [] },
+    ...extra,
+  });
+}
+
+function haScripts({ check = haCheck(), converted = convertedMeta() } = {}) {
+  return {
+    'ha-check': [haStep('ha-check', 'decrypt', 30, { cancellable: true }),
+      { job: { state: 'succeeded', phase: 'check', phases: phasesAt('ha-check', null), progress: { percent: 100, message: '已完成' },
+        finished: '2026-11-18T03:01:00Z', cancellable: false, result: structuredClone(check) }, log: ['2026-11-18T03:01:00Z 檢查完成'] }],
+    'ha-check-key-required': [haFailedStep('ha-check', 'decrypt', KEY_REQUIRED)],
+    'ha-check-wrong-key': [haFailedStep('ha-check', 'decrypt', WRONG_HA_KEY)],
+    'ha-convert': [haStep('ha-convert', 'convert', 45), haStep('ha-convert', 'package', 80),
+      { job: { state: 'succeeded', phase: 'verify', phases: phasesAt('ha-convert', null), progress: { percent: 100, message: '已完成' },
+        finished: '2026-11-18T03:05:30Z', cancellable: false,
+        // The fixture fills apps, odoo_database and test_mode from the job's params.
+        result: { backup_id: converted.id, ha_import: { ha_backup_id: HA_ID, name: HA_NAME, date: '2026-11-17T21:00:00Z', apps: [],
+          odoo_database: null, test_mode: false, workflows_to_fix: WORKFLOWS_TO_FIX, reminders: [] } } },
+      log: [`2026-11-18T03:05:30Z 已轉換成備份 ${converted.id} 並通過驗證`], addBackup: converted }],
+    'ha-convert-key-required': [haFailedStep('ha-convert', 'decrypt', KEY_REQUIRED)],
+    'ha-convert-wrong-key': [haFailedStep('ha-convert', 'decrypt', WRONG_HA_KEY)],
+  };
+}
+
+function haRestoreScript() {
+  return [
+    runningStep('restore', 'restore', 60, { safety_backup_id: B_SAFETY_NEW }),
+    { job: { state: 'succeeded', phase: 'check', phases: phasesAt('restore', null), progress: { percent: 100, message: '已完成' },
+      finished: '2026-11-18T03:12:00Z', cancellable: false,
+      result: { apps: ['odoo', 'n8n'], safety_backup_id: B_SAFETY_NEW, rolled_back: false, changed: true, verification: [], warnings: [],
+        health: [{ id: 'odoo/health/0', status: 'ok', message: '健康檢查通過：http://127.0.0.1:18069/web/health 回應 200。' }] } },
+    log: ['2026-11-18T03:12:00Z 作業結束：已完成'] },
+  ];
+}
+
+// What inspect says about the converted backup (the fixture keeps only the apps that were converted).
+function haInspect() {
+  const meta = convertedMeta();
+  const content = (id, name, extra) => ({ id, name, adapter: 'quadlet-postgres', owner: { name: 'appowner', uid: 1001 }, images: [], postgres: [],
+    volumes: [], secrets_count: 3, config_files_count: 0, verify_snapshot: {}, settings_included: true, ...extra });
+  const planned = (id, name) => ({ id, name, restorable: true, mode: 'inplace', checks: [{ id: `${id}/quadlet`, status: 'ok', message: '服務定義完整。' }] });
+  return {
+    backup: structuredClone(meta),
+    manifest: { backup_id: B_HA, created: meta.created, type: 'manual', note: meta.note, tool: { name: 'woowtech-cockpit-backup', version: '2026.11.18.1' },
+      source: { hostname: 'dev-a', arch: 'x86_64', os: 'Ubuntu 24.04.3 LTS', podman: '4.9.3', machine_id_sha256: 'b'.repeat(64) },
+      consistency: { method: 'writers-stopped', downtime_seconds: 0 }, total_size: 400 * MiB, format: 2, encryption: 'age-x25519',
+      apps: [content('odoo', 'Odoo 18', { volumes: [{ name: 'odoo18-db-data-isolated' }, { name: 'odoo18-web-data' }],
+        data_dirs: [{ path: '.local/share/odoo18/addons', label: '自訂模組' }] }),
+      content('n8n', 'n8n 工作流程', { postgres: [{ id: 'main', database: 'n8n', major: 16 }], volumes: [{ name: 'n8n_n8n_data' }, { name: 'n8n_valkey_data' }] })] },
+    preflight: { ok: true, checks: [{ id: 'archive', status: 'ok', message: '備份檔格式與金鑰檢查通過；還原前會再完整驗證全部內容。' }],
+      apps: [planned('odoo', 'Odoo 18'), planned('n8n', 'n8n 工作流程')] },
+  };
+}
+
+// A device with Odoo and n8n (and, unless `mcp` is false, their MCP admin apps) holding uploaded HA backups.
+function haFixture({ ha = {}, mcp = true, extra = {} } = {}) {
+  const data = fixture(extra);
+  data.status.apps.push(app('odoo', 'Odoo 18'), app('n8n', 'n8n 工作流程'),
+    ...(mcp ? [app('odoo-mcp-admin', 'Odoo MCP 管理'), app('n8n-mcp-admin', 'n8n MCP 管理')] : []));
+  data.ha = { backups: [haMeta(HA_ID)], key: HA_KEY, encryptedMembers: false, ...ha };
+  Object.assign(data.scripts, haScripts(), { restore: haRestoreScript() });
+  data.inspect[B_HA] = haInspect();
+  return data;
+}
+
+// A finished or running HA job record as `jobs` and `job-status` return it.
+function haJob(id, kind, state, created, extra = {}) {
+  const type = kind === 'ha-check' ? 'verify' : 'backup';
+  const running = state === 'running';
+  return {
+    id, type, state, phase: running ? 'decrypt' : PHASES[kind].at(-1)[0], phases: phasesAt(kind, running ? 'decrypt' : null),
+    progress: { percent: running ? 30 : 100, message: running ? '解開 HA 備份' : JOB_STATE_TEXT[state] }, created, started: created,
+    finished: running ? null : created.replace(/:00Z$/, ':40Z'), cancellable: false,
+    params: { source: 'ha', ha_backup_id: HA_ID, apps: ['odoo', 'n8n'], key_provided: true,
+      ...(type === 'backup' ? { odoo_database: 'woowtest', test_mode: false } : {}) },
+    result: null, error: null, ...extra,
+  };
+}
+const JOB_STATE_TEXT = { succeeded: '已完成', failed: '失敗' };
+const openHa = async (page, id = HA_ID) => {
+  await page.locator('[data-nav="backups"]').click();
+  await page.locator(`[data-focus="ha-import-${id}"]`).click();
+  await page.locator('.stepper[aria-label="匯入步驟"]').waitFor();
+};
+const setScript = (page, name, steps) => page.evaluate(([key, value]) => { window.__fixture.scripts[key] = value; }, [name, steps]);
+const activeStep = page => page.locator('.stepper .step.active .step-label').textContent();
 
 try {
   await new Promise((done, fail) => { server.once('error', fail); server.listen(0, '127.0.0.1', done); });
@@ -4347,6 +4597,567 @@ try {
     }
     assert(!on.shot.equals(off.shot), 'on and off are told apart');
   });
+
+  // ------------------------------------------------------------------ 從 HA 備份匯入 (2026-11-18, DESIGN §6, §7)
+
+  await check('從 HA 備份匯入: an uploaded HA backup opens its own page, never inspect; 備份列表 lists it with its chip, filter, search and count',
+    haFixture({ ha: { backups: [] }, extra: { upload: { begin: { upload_id: UPLOAD_ID, path: UPLOAD_PATH, max_size: 20 * GiB }, finishHa: haMeta(HA_ID) } } }),
+    async page => {
+      await ready(page);
+      await page.locator('[data-nav="restore"]').click();
+      await page.getByText('也可以上傳 Home Assistant 的備份檔（.tar），把其中的 Odoo、n8n 匯入這台。').waitFor();
+      await page.locator('#restore-file').setInputFiles({ name: 'woow_import_test.tar', mimeType: 'application/x-tar', buffer: Buffer.alloc(256 * KiB, 5) });
+      await page.locator('[data-focus="restore-upload"]').click();
+      await page.waitForFunction(id => window.location.hash === `#/ha/${id}`, HA_ID);
+      await page.locator('#view-heading').filter({ hasText: HA_NAME }).waitFor();
+      assert.deepEqual((await calls(page, 'upload-finish')).map(requestOf), [{ upload_id: UPLOAD_ID }]);
+      assert.equal((await calls(page, 'inspect')).length, 0, 'an HA backup is never inspected like a backup');
+      assert.equal((await calls(page, 'upload-abort')).length, 0, 'the upload is kept');
+      assert.equal(await page.locator('[data-nav="backups"]').getAttribute('aria-current'), 'page', '#/ha/<id> sits under 備份列表');
+      const [info] = await metadataOf(page.locator('section[aria-labelledby="ha-info"]'));
+      assert.equal(info['名稱'], HA_NAME);
+      assert.match(info['HA 建立時間'], /2026\/11\/18 05:00/);
+      assert.equal(info['類型'], '部分備份');
+      assert.equal(info['加密'], '已加密：匯入時需要 HA 的備份加密金鑰');
+      assert.equal(info['大小'], '1.5 GiB');
+      assert.match(info['上傳時間'], /2026\/11\/18 09:00/);
+      assert.equal(info['資料夾'], 'share、ssl');
+      assert.equal(info['HA 備份 ID'], HA_ID);
+      assert.match(await page.locator('section[aria-labelledby="ha-info"]').textContent(), /設定 → 系統 → 備份/, 'where HA shows its key');
+      const rows = await page.locator('.ha-addons-table tbody tr').evaluateAll(items => items.map(row => [...row.children].map(cell => cell.textContent.trim())));
+      assert.deepEqual(rows, [
+        [`Odoo 18 CE${ODOO_SLUG}`, '18.0.20260926', '可以匯入這台的「Odoo 18」'],
+        [`WOOW n8n${N8N_SLUG}`, '2.43.6', '可以匯入這台的「n8n 工作流程」'],
+        ['Mosquitto brokercore_mosquitto', '6.5.1', '這台沒有對應的應用']]);
+      await shot(page, 'ha-backup-1440.png');
+      await page.locator('[data-focus="back-backups"]').click();
+      await page.locator('.backups-table').waitFor();
+      const first = page.locator('.backups-table tbody tr').first();
+      assert.equal(await first.getAttribute('data-ha'), HA_ID, 'the HA backup is listed by its own date, the newest here');
+      assert.equal(await first.locator('td[data-label="類型"]').textContent(), 'HA 備份');
+      assert.equal(await first.locator('td[data-label="應用"]').textContent(), 'Odoo 18 CE、WOOW n8n、Mosquitto broker');
+      assert.equal(await first.locator('td[data-label="加密與驗證"]').textContent(), '已加密匯入時需要 HA 的備份加密金鑰');
+      assert.equal(await first.locator('.note').textContent(), HA_NAME);
+      assert.equal(await page.locator('#backup-count').textContent(), '顯示 4 / 4 份備份');
+      await page.locator('[data-focus="filter-ha"]').click();
+      await page.waitForFunction(() => document.querySelector('#backup-count')?.textContent === '顯示 1 / 4 份備份');
+      await page.locator('[data-focus="filter-manual"]').click();
+      await page.waitForFunction(() => document.querySelector('#backup-count')?.textContent === '顯示 1 / 4 份備份');
+      assert.equal(await page.locator('tr[data-ha]').count(), 0, '手動 lists no HA backup');
+      await page.locator('[data-focus="filter-all"]').click();
+      await page.locator('#backup-search').fill('mosquitto');
+      await page.waitForFunction(() => document.querySelector('#backup-count')?.textContent === '顯示 1 / 4 份備份');
+      assert.equal(await page.locator('tr[data-ha]').count(), 1, 'an add-on name finds its HA backup');
+      await page.locator('#backup-search').fill('');
+      // The upload view is ready for another file.
+      await page.locator('[data-nav="restore"]').click();
+      await page.locator('[data-focus="restore-upload"]').waitFor();
+      assert.equal(await page.locator('[data-focus="restore-upload"]').isDisabled(), true);
+    });
+
+  await check('從 HA 備份匯入: a wrong HA key goes back to the key step with the engine\'s words; the right one checks; the key is dropped when the wizard closes or the page changes',
+    haFixture(), async page => {
+      await ready(page);
+      await openHa(page);
+      assert.deepEqual(await page.locator('.stepper[aria-label="匯入步驟"] .step-label').allTextContents(), ['選擇應用', '金鑰', '檢查', '結果與選項', '轉換', '還原']);
+      assert.equal(await page.locator('#ha-app-odoo').isChecked(), true);
+      assert.equal(await page.locator('#ha-app-n8n').isChecked(), true);
+      assert.match(await page.locator('#ha-app-odoo-help').textContent(), /資料來自 HA 附加元件「Odoo 18 CE」（版本 18\.0\.20260926）/);
+      await page.locator('[data-focus="ha-apps-next"]').click();
+      await page.locator('#ha-key').waitFor();
+      assert.equal(await page.evaluate(() => document.activeElement?.id), 'ha-key', 'the key field takes the focus');
+      assert.equal(await page.locator('#ha-key').getAttribute('type'), 'text');
+      assert.equal(await page.locator('#ha-key').getAttribute('autocomplete'), 'off');
+      await page.locator('[data-focus="ha-key-next"]').click();
+      await page.getByText('請輸入 HA 的備份加密金鑰。').waitFor();
+      assert.equal((await calls(page, 'ha-check-start')).length, 0, 'an empty key never reaches the helper');
+      await page.locator('#ha-key').fill(HA_WRONG_KEY);
+      await page.locator('[data-focus="ha-key-next"]').click();
+      await page.locator('.wizard-card .notice-error').getByText(WRONG_HA_KEY.message).waitFor();
+      const wrong = requestOf((await calls(page, 'ha-check-start')).at(-1));
+      assert.match(wrong.request_id, UUID_RE);
+      assert.deepEqual(wrong, { ha_backup_id: HA_ID, apps: ['odoo', 'n8n'], request_id: wrong.request_id, key: HA_WRONG_KEY });
+      assert.equal(await activeStep(page), '金鑰');
+      assert.equal(await page.locator('#ha-key').inputValue(), HA_WRONG_KEY, 'the typed key stays to be corrected');
+      assert.equal(await page.evaluate(() => document.activeElement?.id), 'ha-key');
+      // Spaces around a key in HA's own format come from copying it; Enter submits.
+      await page.locator('#ha-key').fill(`  ${HA_KEY} `);
+      await page.locator('#ha-key').press('Enter');
+      await page.locator('.phase-label').filter({ hasText: '解開 HA 備份' }).waitFor();
+      assert.equal(await activeStep(page), '檢查');
+      assert.equal(await page.locator('#job-banner').isHidden(), true, 'no banner leads away from the wizard (and its key)');
+      await page.locator('[data-ha-app="n8n"]').waitFor();
+      const right = requestOf((await calls(page, 'ha-check-start')).at(-1));
+      assert.equal(right.key, HA_KEY);
+      assert.notEqual(right.request_id, wrong.request_id, 'a new check is a new request');
+      assert.equal(await activeStep(page), '結果與選項');
+      // Closing the wizard drops the key.
+      await page.locator('[data-focus="ha-options-back"]').click();
+      await page.locator('[data-focus="ha-cancel"]').click();
+      await page.locator('section[aria-labelledby="ha-info"]').waitFor();
+      assert(!(await page.content()).includes(HA_KEY), 'the key is gone from the page');
+      await page.locator(`[data-focus="ha-import-${HA_ID}"]`).click();
+      await page.locator('[data-focus="ha-apps-next"]').click();
+      assert.equal(await page.locator('#ha-key').inputValue(), '', 'a new wizard asks for the key again');
+      // So does leaving the page.
+      await page.locator('#ha-key').fill(HA_KEY);
+      await page.locator('[data-nav="overview"]').click();
+      await page.locator('.stat').first().waitFor();
+      await page.goBack();
+      await page.locator('section[aria-labelledby="ha-info"]').waitFor();
+      await page.locator(`[data-focus="ha-import-${HA_ID}"]`).click();
+      await page.locator('[data-focus="ha-apps-next"]').click();
+      assert.equal(await page.locator('#ha-key').inputValue(), '');
+      assert.equal((await calls(page, 'ha-check-start')).length, 2, 'nothing was started again on its own');
+    });
+
+  await check('從 HA 備份匯入: check results — a blocker disables 下一步; the Odoo database picker with its counts; n8n facts and workflows to fix; 「這只是測試」 starts unchecked',
+    haFixture({ ha: { backups: [haMeta(HA_PLAIN, { protected: false, name: '未加密的 HA 備份' })] } }), async page => {
+      await ready(page);
+      await setScript(page, 'ha-check', haScripts({ check: haCheck({ odoo: { ok: false, blockers: [VERSION_BLOCKER] } }) })['ha-check']);
+      await openHa(page, HA_PLAIN);
+      assert.deepEqual(await page.locator('.stepper[aria-label="匯入步驟"] .step-label').allTextContents(), ['選擇應用', '檢查', '結果與選項', '轉換', '還原'],
+        'an unencrypted HA backup has no key step');
+      await page.locator('[data-focus="ha-apps-next"]').click();
+      await page.locator('[data-ha-app="odoo"]').waitFor();
+      const odoo = page.locator('[data-ha-app="odoo"]');
+      assert.match(await odoo.getAttribute('class'), /is-blocked/);
+      assert.equal(await odoo.locator('.chip').first().textContent(), '無法匯入');
+      assert.equal(await odoo.locator('.check-fail .check-message').first().textContent(), VERSION_BLOCKER);
+      assert.equal(await odoo.locator('.muted').first().textContent(), 'HA 的版本 18.0.20260926，這台的版本 18.0.20260926。');
+      assert.equal(await page.locator('#ha-db-0').isDisabled(), true, 'no database can be chosen while Odoo is blocked');
+      assert.equal(await page.locator('[data-focus="ha-convert"]').isDisabled(), true, 'a blocker disables 下一步');
+      await page.getByText('有應用沒有通過檢查，無法轉換。').waitFor();
+      const n8n = page.locator('[data-ha-app="n8n"]');
+      assert.deepEqual((await metadataOf(n8n))[0], { 管理者帳號: 'owner@example.com', 工作流程: '14 個（啟用中 6 個）', 憑證: '9 個', 執行紀錄: '1,520 筆',
+        使用者: '2 位', 社群節點: 'n8n-nodes-mqtt-x' });
+      assert.match(await n8n.locator('.check-warn').textContent(), /社群節點 n8n-nodes-mqtt-x 含有與這台不相容的程式/);
+      assert.deepEqual(await n8n.locator('.workflow-list li').evaluateAll(items => items.map(item => item.textContent)), [
+        '開門通知啟用中用到 Home Assistant 節點，網址要改成這台連得到的 HA。',
+        '每日報表未啟用讀寫檔案的路徑 /share/reports 在這台不存在。 用到 http://supervisor/core/api。']);
+      // Fixed on the device: check again. Two databases pass, so one has to be chosen.
+      await setScript(page, 'ha-check', haScripts({ check: haCheck({ databases: [odooDb('woowtest'),
+        odooDb('archive-2025', { partners: 800, size: 200 * MiB, custom_modules: [] }), blockedDb()] }) })['ha-check']);
+      await page.locator('[data-focus="ha-recheck"]').click();
+      await page.locator('[data-ha-app="odoo"]:not(.is-blocked)').waitFor();
+      assert.equal(await page.locator('[data-focus="ha-convert"]').isDisabled(), true, 'two databases passed: one must be chosen');
+      await page.getByText('請先選擇要搬過來的 Odoo 資料庫。').waitFor();
+      const databases = page.locator('.ha-database');
+      assert.equal(await databases.count(), 3);
+      assert.deepEqual(await page.locator('.ha-database input[type="radio"]').evaluateAll(items => items.map(item => [item.value, item.checked, item.disabled])),
+        [['woowtest', false, false], ['archive-2025', false, false], ['demo-old', false, true]]);
+      assert.equal(await databases.nth(0).locator('small').first().textContent(),
+        '聯絡人 1,234 · 可登入的使用者 5 · 附件 3,210（120 MiB） · 已安裝模組 87 · 大小 310 MiB');
+      assert.match(await databases.nth(0).textContent(), /啟用中的排程動作 12 個 · 寄信伺服器 1 個/);
+      assert.match(await databases.nth(0).textContent(), /會一起複製的自訂模組：woow_paas_platform（版本 18\.0\.1\.2\.0，來自 share\/odoo_addons）/);
+      assert.match(await databases.nth(1).textContent(), /沒有要另外複製的自訂模組。/);
+      assert.equal(await databases.nth(2).locator('.check-fail .check-message').textContent(), MISSING_MODULE);
+      await page.locator('#ha-db-1').check();
+      await enabled(page, '[data-focus="ha-convert"]');
+      assert.equal(await page.locator('#ha-db-1').isChecked(), true);
+      assert.equal(await page.locator('#ha-test-mode').isChecked(), false, '「這只是測試」 is off until ticked');
+      assert.equal(await page.locator('label[for="ha-test-mode"] strong').textContent(), '這只是測試（先關掉排程、寄信和工作流程）');
+      assert.match(await page.locator('#ha-test-mode-help').textContent(), /正式搬家請不要勾/);
+      const starts = (await calls(page, 'ha-check-start')).map(requestOf);
+      assert.equal(starts.length, 2);
+      assert(starts.every(item => !('key' in item)), 'no key for an unencrypted HA backup');
+      assert.notEqual(starts[0].request_id, starts[1].request_id);
+      await shot(page, 'ha-import-options-1440.png');
+    });
+
+  await check('從 HA 備份匯入: convert, then the restore wizard takes over at its preflight with an HA notice; the result says what to do next',
+    haFixture(), async page => {
+      await ready(page);
+      await openHa(page);
+      await page.locator('[data-focus="ha-apps-next"]').click();
+      await page.locator('#ha-key').fill(HA_KEY);
+      await page.locator('[data-focus="ha-key-next"]').click();
+      await page.locator('[data-ha-app="n8n"]').waitFor();
+      assert.equal(await page.locator('#ha-db-0').isChecked(), true, 'the only database that passed is chosen');
+      await page.locator('[data-focus="ha-convert"]').click();
+      await page.locator('#confirm-dialog').waitFor();
+      assert.equal(await page.locator('#confirm-title').textContent(), '開始轉換 HA 備份？');
+      assert.match(await page.locator('#confirm-body').textContent(), /轉換時這台的應用照常運作，不會停機，也不會變更任何資料。/);
+      assert.deepEqual((await metadataOf(page.locator('#confirm-body')))[0], { 應用: '「Odoo 18」、「n8n 工作流程」', 'Odoo 資料庫': 'woowtest', 這只是測試: '否' });
+      await page.locator('#confirm-ok').click();
+      await page.locator('.phase-label').filter({ hasText: '轉換資料' }).waitFor();
+      assert.equal(await activeStep(page), '轉換');
+      assert.equal(await page.locator('#job-banner').isHidden(), true);
+      const convert = requestOf((await calls(page, 'ha-convert-start')).at(-1));
+      assert.match(convert.request_id, UUID_RE);
+      assert.deepEqual(convert, { ha_backup_id: HA_ID, apps: ['odoo', 'n8n'], test_mode: false, confirm: true, request_id: convert.request_id,
+        odoo_database: 'woowtest', key: HA_KEY });
+      await page.waitForFunction(id => window.location.hash === `#/restore/${id}`, B_HA, { timeout: 15000 });
+      await page.locator('.app-preflight').first().waitFor();
+      assert.equal(await page.locator('.stepper .step-label').first().textContent(), '從 HA 轉換');
+      const banner = page.locator('.ha-banner');
+      assert.match(await banner.textContent(), new RegExp(`這份備份由 HA 備份「${HA_NAME}」（2026/11/18 05:00）轉換而來。`));
+      assert.match(await banner.textContent(), /取代這台「Odoo 18」、「n8n 工作流程」目前的資料；這台的網址、連接埠、資料庫密碼和設定檔都保持不變。/);
+      assert.match(await banner.textContent(), /還原完成後，請把 HA 那邊的「Odoo 18 CE」、「WOOW n8n」附加元件停掉，避免同一件事兩邊各做一次。/);
+      assert.equal(await page.locator('[data-focus="pf-select-odoo"]').isChecked(), true);
+      assert.equal(await page.locator('[data-focus="pf-select-n8n"]').isChecked(), true);
+      assert.deepEqual(requestOf((await calls(page, 'inspect')).at(-1)), { backup_id: B_HA }, 'the converted backup needs no HA key');
+      await shot(page, 'ha-restore-preflight-1440.png');
+      await page.locator('[data-focus="pf-next"]').click();
+      await page.locator('#confirm-restore').check();
+      assert.equal(await page.locator('.ha-banner').count(), 1, 'the notice stays on 確認');
+      await page.locator('[data-focus="confirm-start"]').click();
+      await page.waitForFunction(() => window.location.hash.startsWith('#/jobs/'));
+      const restore = requestOf((await calls(page, 'restore-start')).at(-1));
+      assert.deepEqual(Object.keys(restore).sort(), ['apps', 'backup_id', 'confirm', 'request_id'], 'the restore gets no key');
+      assert.deepEqual([restore.backup_id, restore.apps], [B_HA, ['odoo', 'n8n']]);
+      await page.locator('#result-heading').filter({ hasText: '還原完成' }).waitFor();
+      assert.deepEqual(await page.locator('.ha-reminders li').allTextContents(), [
+        '請把 HA 那邊的「Odoo 18 CE」附加元件停掉，避免同一件事兩邊各做一次。',
+        '請把 HA 那邊的「WOOW n8n」附加元件停掉，避免同一件事兩邊各做一次。',
+        '請到「Odoo MCP 管理」重新設定 Odoo 的登入資料。',
+        '請到「n8n MCP 管理」重新設定 n8n 的登入資料。']);
+      assert.deepEqual(await page.locator('.job-result .workflow-list .path-app').allTextContents(), ['開門通知', '每日報表']);
+      await shot(page, 'ha-restore-result-1440.png');
+      // The converted backup: 「由 HA 轉換」 in the list, where it came from in its details.
+      await page.locator('[data-nav="backups"]').click();
+      const row = page.locator(`tr[data-backup="${B_HA}"]`);
+      await row.waitFor();
+      assert.equal(await row.locator('td[data-label="類型"]').textContent(), '手動由 HA 轉換');
+      await page.locator('[data-focus="filter-ha"]').click();
+      await page.waitForFunction(() => document.querySelector('#backup-count')?.textContent === '顯示 2 / 5 份備份');
+      await page.locator(`[data-focus="open-${B_HA}"]`).click();
+      const source = page.locator('section[aria-labelledby="detail-ha"]');
+      await source.waitFor();
+      assert.match(await page.locator('section[aria-labelledby="detail-info"] .chips').textContent(), /由 HA 轉換/);
+      const [origin] = await metadataOf(source);
+      assert.deepEqual([origin['HA 備份'], origin['應用'], origin['Odoo 資料庫'], origin['這只是測試']], [HA_NAME, 'Odoo 18、n8n 工作流程', 'woowtest', '否']);
+      assert.deepEqual(await source.locator('.workflow-list .path-app').allTextContents(), ['開門通知', '每日報表']);
+      await source.locator('[data-focus="detail-ha-link"]').click();
+      await page.waitForFunction(id => window.location.hash === `#/ha/${id}`, HA_ID);
+    });
+
+  await check('從 HA 備份匯入: an app this device lacks cannot be chosen; a test import sends test_mode and says so on the restore and its result; no MCP lines without the MCP apps',
+    haFixture({ mcp: false, ha: { backups: [haMeta(HA_PLAIN, { protected: false, importable_apps: [
+      { slug: ODOO_SLUG, app_id: 'odoo', app_name: 'Odoo 18', installed: false },
+      { slug: N8N_SLUG, app_id: 'n8n', app_name: 'n8n 工作流程', installed: true }] })] } }), async page => {
+      await ready(page);
+      await page.locator('[data-nav="backups"]').click();
+      await page.locator(`[data-focus="open-${HA_PLAIN}"]`).click();
+      const odooRow = page.locator(`.ha-addons-table tr[data-addon="${ODOO_SLUG}"]`);
+      assert.equal(await odooRow.locator('td[data-label="匯入到這台"]').textContent(), '還沒安裝「Odoo 18」：這台還沒安裝，請先到「應用軟體」安裝同版本');
+      await page.locator(`[data-focus="ha-import-${HA_PLAIN}"]`).click();
+      assert.equal(await page.locator('#ha-app-odoo').isDisabled(), true);
+      assert.equal(await page.locator('#ha-app-odoo').isChecked(), false);
+      assert.equal(await page.locator('#ha-app-odoo-help').textContent(), '這台還沒安裝，請先到「應用軟體」安裝同版本。');
+      assert.equal(await page.locator('#ha-app-n8n').isChecked(), true);
+      assert.match(await page.locator('.wizard-card').textContent(), /其他附加元件（Mosquitto broker）這台沒有對應的應用，不會匯入。/);
+      await page.locator('[data-focus="ha-apps-next"]').click();
+      await page.locator('[data-ha-app="n8n"]').waitFor();
+      assert.deepEqual(requestOf((await calls(page, 'ha-check-start')).at(-1)).apps, ['n8n']);
+      assert.equal(await page.locator('[data-ha-app="odoo"]').count(), 0, 'only the chosen app is shown');
+      assert.equal(await page.locator('.ha-databases').count(), 0);
+      await page.locator('#ha-test-mode').check();
+      await page.locator('[data-focus="ha-convert"]').click();
+      assert.equal((await metadataOf(page.locator('#confirm-body')))[0]['這只是測試'], '是：排程、寄信和工作流程會先關掉');
+      await page.locator('#confirm-ok').click();
+      await page.waitForFunction(id => window.location.hash === `#/restore/${id}`, B_HA, { timeout: 15000 });
+      const convert = requestOf((await calls(page, 'ha-convert-start')).at(-1));
+      assert.deepEqual(Object.keys(convert).sort(), ['apps', 'confirm', 'ha_backup_id', 'request_id', 'test_mode'], 'no Odoo database and no key');
+      assert.deepEqual([convert.apps, convert.test_mode], [['n8n'], true]);
+      await page.locator('.app-preflight').first().waitFor();
+      assert.equal(await page.locator('.app-preflight').count(), 1, 'the converted backup holds n8n only');
+      const banner = await page.locator('.ha-banner').textContent();
+      assert.match(banner, /這是測試匯入：搬過來的 n8n 工作流程都已停用，HA 那邊可以照常使用。/);
+      assert.doesNotMatch(banner, /停掉/);
+      await page.locator('[data-focus="pf-next"]').click();
+      await page.locator('#confirm-restore').check();
+      await page.locator('[data-focus="confirm-start"]').click();
+      await page.locator('#result-heading').filter({ hasText: '還原完成' }).waitFor();
+      assert.deepEqual(await page.locator('.ha-reminders li').allTextContents(), [
+        '這是測試匯入：搬過來的 n8n 工作流程都已停用，HA 那邊可以照常使用。要正式搬過來時，請重新匯入一次，並且不要勾「這只是測試」。']);
+      await page.locator('[data-nav="backups"]').click();
+      await page.locator(`[data-focus="open-${B_HA}"]`).click();
+      const [origin] = await metadataOf(page.locator('section[aria-labelledby="detail-ha"]'));
+      assert.equal(origin['這只是測試'], '是：工作流程、排程和寄信都已先關掉');
+      assert.equal(await page.locator('section[aria-labelledby="detail-ha"] .card-head .chip').textContent(), '測試匯入');
+    });
+
+  await check('從 HA 備份匯入: deleting an HA backup asks first; cancel never deletes; a busy refusal links to the job; the HA file goes, the converted backup stays',
+    haFixture({ extra: { backups: [convertedMeta(), ...fixture().backups] } }), async page => {
+      await ready(page);
+      await page.locator('[data-nav="backups"]').click();
+      await page.locator(`[data-focus="ha-delete-${HA_ID}"]`).click();
+      await page.locator('#confirm-dialog').waitFor();
+      assert.equal(await page.locator('#confirm-title').textContent(), '刪除這份 HA 備份？');
+      assert.match(await page.locator('#confirm-body').textContent(), /Home Assistant 那邊的備份不受影響，已經轉換好的備份也會保留/);
+      assert.equal(await page.evaluate(() => document.activeElement.id), 'confirm-cancel', 'the safe choice has the focus');
+      await page.locator('#confirm-cancel').click();
+      assert.equal((await calls(page, 'ha-delete')).length, 0, 'cancel never deletes');
+      await page.evaluate(job => window.__fixture.failures.push({ command: 'ha-delete', code: 'busy',
+        message: '這份 HA 備份正被進行中的作業使用，請等它完成後再刪除。', details: { job_id: job } }), J_OTHER);
+      await page.locator(`[data-focus="open-${HA_ID}"]`).click();
+      await page.locator(`[data-focus="ha-delete-${HA_ID}"]`).click();
+      await page.locator('#confirm-ok').click();
+      await page.locator('#confirm-error').getByText('正被進行中的作業使用').waitFor();
+      assert.equal(await page.locator('[data-focus="dialog-busy-job"]').getAttribute('href'), `#/jobs/${J_OTHER}`);
+      await page.locator('#confirm-ok').click();
+      await page.locator('#confirm-dialog').waitFor({ state: 'hidden' });
+      await page.waitForFunction(() => window.location.hash === '#/backups');
+      assert.deepEqual((await calls(page, 'ha-delete')).map(requestOf), [{ ha_backup_id: HA_ID, confirm: true }, { ha_backup_id: HA_ID, confirm: true }]);
+      await page.locator(`tr[data-ha="${HA_ID}"]`).waitFor({ state: 'detached' });
+      assert.equal(await page.locator(`tr[data-backup="${B_HA}"]`).count(), 1, 'the converted backup stays');
+      await page.locator(`[data-focus="open-${B_HA}"]`).click();
+      const [origin] = await metadataOf(page.locator('section[aria-labelledby="detail-ha"]'));
+      assert.equal(origin['HA 備份'], `${HA_NAME}（HA 備份檔已從這台刪除）`);
+    });
+
+  const haJobs = (() => {
+    const data = haFixture({ extra: { backups: [convertedMeta(), ...fixture().backups] } });
+    const checked = haCheck({ n8n: { ok: false, blockers: ['HA 的 n8n 還沒建立管理者帳號，沒有可搬的資料。'] } });
+    data.jobs = {
+      [J_HA_FAILED]: { job: haJob(J_HA_FAILED, 'ha-check', 'failed', '2026-11-18T01:50:00Z', {
+        phases: phasesAt('ha-check', 'decrypt', { failedAt: 'decrypt' }), error: { code: 'internal-error', message: NACL_MISSING } }), log: [], steps: [] },
+      [J_HA_CHECK]: { job: haJob(J_HA_CHECK, 'ha-check', 'succeeded', '2026-11-18T02:00:00Z', { result: checked }), log: [], steps: [] },
+      [J_HA_CONVERT]: { job: haJob(J_HA_CONVERT, 'ha-convert', 'succeeded', '2026-11-18T02:10:00Z', {
+        result: { backup_id: B_HA, ha_import: { ha_backup_id: HA_ID, name: HA_NAME, apps: ['odoo', 'n8n'], odoo_database: 'woowtest', test_mode: false,
+          workflows_to_fix: WORKFLOWS_TO_FIX, reminders: [] } } }), log: [], steps: [] },
+      [J_HA_RUN]: { job: haJob(J_HA_RUN, 'ha-check', 'running', '2026-11-18T02:20:00Z'), log: ['2026-11-18T02:20:01Z 階段：解開 HA 備份'], steps: [
+        haStep('ha-check', 'decrypt', 30), haStep('ha-check', 'check', 70),
+        { job: { state: 'succeeded', phase: 'check', phases: phasesAt('ha-check', null), progress: { percent: 100, message: '已完成' },
+          finished: '2026-11-18T02:21:00Z', cancellable: false, result: haCheck() }, log: ['2026-11-18T02:21:00Z 檢查完成'] }] },
+      // A restore of the converted backup this page did not start (e.g. after a reload): the list's from_ha speaks.
+      [J_HA_RESTORE]: { job: { id: J_HA_RESTORE, type: 'restore', state: 'succeeded', phase: 'check', phases: phasesAt('restore', null),
+        progress: { percent: 100, message: '已完成' }, created: '2026-11-18T02:30:00Z', started: '2026-11-18T02:30:00Z',
+        finished: '2026-11-18T02:35:00Z', cancellable: false, params: { backup_id: B_HA, apps: ['odoo', 'n8n'], key_provided: false },
+        result: haRestoreScript().at(-1).job.result, error: null }, log: [], steps: [] },
+    };
+    data.status.active_job = structuredClone(data.jobs[J_HA_RUN].job);
+    return data;
+  })();
+  await check('從 HA 備份匯入 jobs: 檢查 HA 備份 and 轉換 HA 備份 are named in the banner, the job view and 活動紀錄; their results render; an active HA job is accepted',
+    haJobs, async page => {
+      // The running check resumes in the job view (status.active_job passes validJob: it is a `verify` job).
+      await page.waitForFunction(id => window.location.hash === `#/jobs/${id}`, J_HA_RUN);
+      await page.locator('#view-heading').filter({ hasText: '檢查 HA 備份' }).waitFor();
+      assert.match(await page.locator('.phases').textContent(), /解開 HA 備份.*檢查內容與版本/);
+      await page.locator('#result-heading').filter({ hasText: 'HA 備份檢查完成' }).waitFor();
+      assert.match(await page.locator('.job-result').textContent(), /所選的應用都可以匯入這台。/);
+      assert.equal(await page.locator('[data-focus="result-ha"]').getAttribute('href'), `#/ha/${HA_ID}`);
+      assert.match(await page.locator('[data-focus="result-ha"]').getAttribute('class'), /primary/);
+      await page.waitForFunction(name => document.querySelector('section[aria-labelledby="job-params-heading"]')?.textContent.includes(name), HA_NAME);
+      assert.deepEqual((await metadataOf(page.locator('section[aria-labelledby="job-params-heading"]')))[0], {
+        作業類型: '檢查 HA 備份', 'HA 備份': HA_NAME, 應用: 'Odoo 18、n8n 工作流程', 金鑰: '使用你輸入的 HA 備份加密金鑰（作業結束後即刪除）' });
+      // 活動紀錄
+      await page.locator('[data-nav="activity"]').click();
+      await page.locator('.jobs-table').waitFor();
+      await page.waitForFunction(name => document.querySelector('.jobs-table')?.textContent.includes(name), HA_NAME);
+      const rows = await page.locator('.jobs-table tbody tr').evaluateAll(items => items.map(row => [row.dataset.job,
+        row.querySelector('[data-label="作業"]').textContent, row.querySelector('[data-label="內容"]').textContent, row.querySelector('[data-label="結果"]').textContent]));
+      assert.deepEqual(rows, [
+        [J_HA_RESTORE, '還原', `Odoo 18、n8n 工作流程 · 備份 ${B_HA}`, '已完成'],
+        [J_HA_RUN, '檢查 HA 備份', `Odoo 18、n8n 工作流程 · HA 備份「${HA_NAME}」`, '已完成'],
+        [J_HA_CONVERT, '轉換 HA 備份', `Odoo 18、n8n 工作流程 · HA 備份「${HA_NAME}」`, '已完成'],
+        [J_HA_CHECK, '檢查 HA 備份', `Odoo 18、n8n 工作流程 · HA 備份「${HA_NAME}」`, '已完成'],
+        [J_HA_FAILED, '檢查 HA 備份', `Odoo 18、n8n 工作流程 · HA 備份「${HA_NAME}」`, NACL_MISSING]]);
+      await allWidths(page, 'activity with HA jobs');
+      // A restore of a converted backup that no wizard of this page started still names the import and its reminders.
+      await page.locator(`[data-focus="job-${J_HA_RESTORE}"]`).click();
+      await page.locator('#result-heading').filter({ hasText: '還原完成' }).waitFor();
+      assert.equal(await page.locator('.job-stepper .step-label').first().textContent(), '從 HA 轉換');
+      assert.deepEqual(await page.locator('.ha-reminders li').allTextContents(), [
+        '請把 HA 那邊的「Odoo 18 CE」附加元件停掉，避免同一件事兩邊各做一次。',
+        '請把 HA 那邊的「WOOW n8n」附加元件停掉，避免同一件事兩邊各做一次。',
+        '請到「Odoo MCP 管理」重新設定 Odoo 的登入資料。',
+        '請到「n8n MCP 管理」重新設定 n8n 的登入資料。']);
+      await page.locator('[data-focus="back-activity"]').click();
+      // A check with a blocker.
+      await page.locator(`[data-focus="job-${J_HA_CHECK}"]`).click();
+      await page.locator('#result-heading').filter({ hasText: 'HA 備份檢查完成' }).waitFor();
+      assert.match(await page.locator('.job-result').textContent(), /有應用沒有通過檢查，要先處理下列問題才能匯入。/);
+      assert.equal(await page.locator('.job-result [data-ha-app="n8n"] .check-fail .check-message').textContent(), 'HA 的 n8n 還沒建立管理者帳號，沒有可搬的資料。');
+      assert.match(await page.locator('.job-result').textContent(), /要匯入，請回到 HA 備份按「檢查並匯入…」，並重新輸入 HA 的備份加密金鑰。/);
+      // A failed check shows the engine's words.
+      await page.locator('[data-focus="back-activity"]').click();
+      await page.locator(`[data-focus="job-${J_HA_FAILED}"]`).click();
+      await page.locator('#result-heading').filter({ hasText: '檢查 HA 備份失敗' }).waitFor();
+      assert.equal(await page.locator('.job-result .notice-error p').textContent(), NACL_MISSING);
+      assert.match(await page.locator('[data-focus="result-ha"]').getAttribute('class'), /primary/);
+      // A conversion leads on to restoring its backup.
+      await page.locator('[data-focus="back-activity"]').click();
+      await page.locator(`[data-focus="job-${J_HA_CONVERT}"]`).click();
+      await page.locator('#result-heading').filter({ hasText: 'HA 備份已轉換' }).waitFor();
+      assert.equal(await page.locator('#view-heading').textContent(), '轉換 HA 備份');
+      const [converted] = await metadataOf(page.locator('.job-result'));
+      assert.deepEqual(converted, { 備份: B_HA, 應用: 'Odoo 18、n8n 工作流程', 'Odoo 資料庫': 'woowtest', 這只是測試: '否' });
+      assert.deepEqual((await metadataOf(page.locator('section[aria-labelledby="job-params-heading"]')))[0], {
+        作業類型: '轉換 HA 備份', 'HA 備份': HA_NAME, 應用: 'Odoo 18、n8n 工作流程', 'Odoo 資料庫': 'woowtest', 這只是測試: '否',
+        金鑰: '使用你輸入的 HA 備份加密金鑰（作業結束後即刪除）' });
+      assert.deepEqual(await page.locator('.result-actions > *').evaluateAll(items => items.map(item => item.textContent)),
+        ['還原到這台…', '查看備份', '回到 HA 備份']);
+      await page.locator('[data-focus="result-ha-restore"]').click();
+      await page.waitForFunction(id => window.location.hash === `#/restore/${id}`, B_HA);
+      await page.locator('.app-preflight').first().waitFor();
+      assert.match(await page.locator('.ha-banner').textContent(), new RegExp(`這份備份由 HA 備份「${HA_NAME}」`));
+    });
+
+  await check('從 HA 備份匯入 errors: a busy start links to the running job; an engine without the HA commands asks for an update; python3-nacl and space in the engine\'s words; a cancelled check',
+    haFixture({ ha: { backups: [haMeta(HA_PLAIN, { protected: false })] } }), async page => {
+      await ready(page);
+      await openHa(page, HA_PLAIN);
+      await page.evaluate(job => window.__fixture.failures.push({ command: 'ha-check-start', code: 'busy',
+        message: '已有備份或還原作業正在進行，請等它完成後再試。', details: { job_id: job } }), J_OTHER);
+      await page.locator('[data-focus="ha-apps-next"]').click();
+      await page.locator('.wizard-card .notice-error').getByText('已有備份或還原作業正在進行').waitFor();
+      assert.equal(await page.locator('.wizard-card [data-focus="error-busy-job"]').getAttribute('href'), `#/jobs/${J_OTHER}`);
+      assert.equal(await activeStep(page), '選擇應用');
+      await page.evaluate(() => window.__fixture.failures.push({ command: 'ha-check-start', code: 'invalid-request', message: '不支援的指令。' }));
+      await page.locator('[data-focus="ha-apps-next"]').click();
+      await page.locator('.wizard-card .notice-error').getByText('這台設備的備份元件版本還不能匯入 Home Assistant 的備份。請先把備份元件更新到與這個頁面相同的版本，再試一次。').waitFor();
+      // The check job fails without python3-nacl: the engine's sentence as it is.
+      await setScript(page, 'ha-check', [haFailedStep('ha-check', 'decrypt', { code: 'internal-error', message: NACL_MISSING })]);
+      await page.locator('[data-focus="ha-apps-next"]').click();
+      await page.locator('.wizard-card .notice-error').getByText(NACL_MISSING).waitFor();
+      assert.equal(await page.locator('.phase-failed .phase-label').textContent(), '解開 HA 備份');
+      assert.equal(await activeStep(page), '檢查');
+      // A check can be cancelled while it may be.
+      await setScript(page, 'ha-check', Array.from({ length: 8 }, () => haStep('ha-check', 'decrypt', 30, { cancellable: true })));
+      await page.locator('[data-focus="ha-job-retry"]').click();
+      await page.locator('[data-focus="ha-job-cancel"]').click();
+      await page.locator('#confirm-dialog').waitFor();
+      assert.equal(await page.locator('#confirm-title').textContent(), '取消檢查？');
+      await page.locator('#confirm-ok').click();
+      await page.locator('.wizard-card').getByText('已取消檢查。').waitFor();
+      assert.equal(await activeStep(page), '選擇應用');
+      assert.equal((await calls(page, 'job-cancel')).length, 1);
+      // Too little space for the conversion.
+      await setScript(page, 'ha-check', haScripts()['ha-check']);
+      await setScript(page, 'ha-convert', [haFailedStep('ha-convert', 'convert', { code: 'insufficient-space', message: '可用空間不足：轉換需要約 2.4 GiB，這台目前可用 1.1 GiB。' })]);
+      await page.locator('[data-focus="ha-apps-next"]').click();
+      await page.locator('[data-ha-app="odoo"]').waitFor();
+      await page.locator('[data-focus="ha-convert"]').click();
+      await page.locator('#confirm-ok').click();
+      await page.locator('.wizard-card .notice-error').getByText('可用空間不足：轉換需要約 2.4 GiB，這台目前可用 1.1 GiB。').waitFor();
+      await page.locator('.wizard-card').getByText('可刪除不需要的備份後再試。').waitFor();
+      assert.equal(await activeStep(page), '轉換');
+      await page.locator('[data-focus="ha-job-back"]').click();
+      assert.equal(await activeStep(page), '結果與選項');
+      assert.equal(await page.locator('#ha-db-0').isChecked(), true, 'the choices stay');
+      // ha-delete on an engine without it.
+      await page.locator('[data-focus="back-backups"]').click();
+      await page.evaluate(() => window.__fixture.failures.push({ command: 'ha-delete', code: 'invalid-request', message: '不支援的指令。' }));
+      await page.locator(`[data-focus="ha-delete-${HA_PLAIN}"]`).click();
+      await page.locator('#confirm-ok').click();
+      await page.locator('#confirm-error').getByText('這台設備的備份元件版本還不能匯入 Home Assistant 的備份。').waitFor();
+      await page.locator('#confirm-cancel').click();
+    });
+
+  await check('從 HA 備份匯入 on an engine without it: no HA filter; an HA file is refused with a hint to update the 備份元件; #/ha/<id> says so',
+    fixture({ failures: [{ command: 'upload-finish', code: 'not-a-backup', message: '這不是 woowtech 備份檔（.tar 或 .woowbackup）。' }] }), async page => {
+      await ready(page);
+      await page.locator('[data-nav="backups"]').click();
+      await page.locator('.backups-table').waitFor();
+      assert.equal(await page.locator('[data-focus="filter-ha"]').count(), 0);
+      await page.locator('[data-nav="restore"]').click();
+      await page.locator('[data-focus="restore-file-button"]').waitFor();
+      assert.equal(await page.getByText('也可以上傳 Home Assistant 的備份檔').count(), 0, 'an engine without HA imports is not offered them');
+      await page.locator('#restore-file').setInputFiles({ name: 'woow_import_test.tar', mimeType: 'application/x-tar', buffer: Buffer.alloc(64 * KiB, 5) });
+      await page.locator('[data-focus="restore-upload"]').click();
+      await page.getByText('這不是 woowtech 備份檔（.tar 或 .woowbackup）。').waitFor();
+      await page.getByText('如果這是 Home Assistant 的備份檔：這台設備的備份元件版本還不能匯入 HA 備份，請先更新備份元件，再上傳一次。').waitFor();
+      await page.waitForFunction(() => window.testcalls.some(call => call.argv[1] === 'upload-abort'));
+      assert.deepEqual((await calls(page, 'upload-abort')).map(requestOf), [{ upload_id: UPLOAD_ID }]);
+      await page.evaluate(id => { window.location.hash = `#/ha/${id}`; }, HA_ID);
+      await page.getByText('這台設備還不能匯入 HA 備份').waitFor();
+      assert.equal((await calls(page, 'ha-check-start')).length, 0);
+    });
+
+  const haLong = (() => {
+    const slug = `local_${'x'.repeat(70)}`;
+    const addon = { slug, name: 'Very Long Add-on Name '.repeat(6).trim(), version: `1.0.0-${'9'.repeat(48)}` };
+    const meta = haMeta(HA_ID, { name: `<img src=x onerror=alert(1)> ${'很長的 HA 備份名稱'.repeat(10)}`,
+      filename: `${'very-long-home-assistant-backup-file-name-'.repeat(5)}.tar`, folders: ['share', 'ssl', 'media', 'addons_local'] });
+    meta.addons.push(addon);
+    meta.other_addons.push(addon);
+    const data = haFixture({ ha: { backups: [meta] } });
+    const long = haCheck({ databases: [odooDb(`woowtest_${'x'.repeat(64)}`), odooDb('archive'), blockedDb()],
+      n8n: { n8n: { owner_email: `${'owner'.repeat(12)}@example.com`, workflows: 14, workflows_active: 6, credentials: 9, executions: 1520, users: 2,
+        community_packages: ['n8n-nodes-mqtt-x', `n8n-nodes-${'long'.repeat(20)}`],
+        workflows_to_fix: [...WORKFLOWS_TO_FIX, { name: '很長的工作流程名稱'.repeat(8), active: true, reasons: ['https://homeassistant.local:8123/api/states/'.repeat(4)] }] } } });
+    Object.assign(data.scripts, haScripts({ check: long }));
+    return data;
+  })();
+  await check('從 HA 備份匯入 screens fit 1440 to 320 px without horizontal scrolling, render HA text literally and keep WCAG AA contrast', haLong, async page => {
+    await ready(page);
+    await page.locator('[data-nav="backups"]').click();
+    await page.locator(`tr[data-ha="${HA_ID}"]`).waitFor();
+    await allWidths(page, 'list with an HA backup');
+    await page.locator(`[data-focus="open-${HA_ID}"]`).click();
+    await page.locator('.ha-addons-table').waitFor();
+    assert.equal(await page.locator('#view img').count(), 0, 'HA text never becomes markup');
+    assert.match(await page.locator('#view-heading').textContent(), /^<img src=x onerror=alert\(1\)> 很長的 HA 備份名稱/);
+    await allWidths(page, 'HA backup page');
+    await page.setViewportSize({ width: 390, height: 900 });
+    await shot(page, 'ha-backup-390.png');
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.locator(`[data-focus="ha-import-${HA_ID}"]`).click();
+    await allWidths(page, 'import: choose apps');
+    await page.locator('[data-focus="ha-apps-next"]').click();
+    await page.locator('#ha-key').fill(HA_KEY);
+    await allWidths(page, 'import: key');
+    await page.setViewportSize({ width: 390, height: 900 });
+    await shot(page, 'ha-import-key-390.png');
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.locator('[data-focus="ha-key-next"]').click();
+    await page.locator('.phase-label').first().waitFor();
+    await allWidths(page, 'import: check');
+    await page.locator('[data-ha-app="n8n"]').waitFor();
+    await allWidths(page, 'import: results and options');
+    assert.deepEqual((await contrastOf(page)).failures, [], 'results and options keep WCAG AA contrast');
+    await page.setViewportSize({ width: 390, height: 900 });
+    await shot(page, 'ha-import-options-390.png');
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.locator('#ha-db-1').check();
+    await page.locator('[data-focus="ha-convert"]').click();
+    await page.locator('#confirm-dialog').waitFor();
+    await allWidths(page, 'import: convert dialog');
+    await page.locator('#confirm-ok').click();
+    await page.waitForFunction(id => window.location.hash === `#/restore/${id}`, B_HA, { timeout: 15000 });
+    await page.locator('.app-preflight').first().waitFor();
+    await allWidths(page, 'restore with the HA notice');
+    assert.deepEqual((await contrastOf(page)).failures, [], 'the HA notice keeps WCAG AA contrast');
+    await page.locator('[data-focus="pf-next"]').click();
+    await page.locator('#confirm-restore').check();
+    await page.locator('[data-focus="confirm-start"]').click();
+    await page.locator('#result-heading').filter({ hasText: '還原完成' }).waitFor();
+    await allWidths(page, 'restore result with the HA reminders');
+    await page.setViewportSize({ width: 390, height: 900 });
+    await shot(page, 'ha-restore-result-390.png');
+    await page.setViewportSize({ width: 1440, height: 900 });
+  });
+
+  await check('從 HA 備份匯入 in the dark theme: the HA page, the results and options, the restore notice and its result keep WCAG AA contrast', haFixture(), async page => {
+    await ready(page);
+    assert.equal(await page.evaluate(() => document.documentElement.classList.contains('pf-v6-theme-dark')), true);
+    await page.locator('[data-nav="backups"]').click();
+    await page.locator(`[data-focus="open-${HA_ID}"]`).click();
+    await page.locator('.ha-addons-table').waitFor();
+    assert.deepEqual((await contrastOf(page)).failures, [], 'HA backup page');
+    await page.locator(`[data-focus="ha-import-${HA_ID}"]`).click();
+    await page.locator('[data-focus="ha-apps-next"]').click();
+    await page.locator('#ha-key').fill(HA_KEY);
+    await page.locator('[data-focus="ha-key-next"]').click();
+    await page.locator('[data-ha-app="n8n"]').waitFor();
+    assert.deepEqual((await contrastOf(page)).failures, [], 'results and options');
+    await page.locator('#ha-test-mode').check();
+    assert.deepEqual((await contrastOf(page)).failures, [], 'a ticked choice');
+    await page.locator('[data-focus="ha-convert"]').click();
+    await page.locator('#confirm-ok').click();
+    await page.waitForFunction(id => window.location.hash === `#/restore/${id}`, B_HA, { timeout: 15000 });
+    await page.locator('.app-preflight').first().waitFor();
+    assert.deepEqual((await contrastOf(page)).failures, [], 'restore with the HA notice');
+    await page.locator('[data-focus="pf-next"]').click();
+    await page.locator('#confirm-restore').check();
+    await page.locator('[data-focus="confirm-start"]').click();
+    await page.locator('#result-heading').filter({ hasText: '還原完成' }).waitFor();
+    assert.deepEqual((await contrastOf(page)).failures, [], 'restore result with the HA reminders');
+    await shot(page, 'ha-restore-result-dark-1440.png');
+  }, { beforeGoto: page => page.addInitScript(() => localStorage.setItem('shell:style', 'dark')) });
 
 } finally {
   try { await browser?.close(); } finally { if (server.listening) await new Promise(done => server.close(done)); }

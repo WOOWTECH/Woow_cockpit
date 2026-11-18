@@ -631,6 +631,15 @@ input.switch[type="checkbox"]:disabled { cursor: default; opacity: .6; }
 .last-run-links { margin-block-start: 6px; gap: 4px 14px; font-size: 14px; }
 .schedule-keep-note a { font-weight: 500; }
 
+/* ---------------------------------------------------------------- Home Assistant backups (#/ha/<id>, import wizard) */
+.ha-addons-table th:nth-child(1) { inline-size: 42%; }
+.ha-addons-table th:nth-child(2) { inline-size: 24%; }
+.ha-addons-table td .chips + .secondary { margin-block-start: 6px; }
+.ha-databases .choices { margin-block-start: 10px; }
+.ha-database { display: grid; gap: 8px; min-inline-size: 0; }
+.ha-databases input[type="radio"] { inline-size: 18px; block-size: 18px; margin: 3px 0 0; accent-color: var(--ww-blue); flex: none; }
+.app-preflight > .metadata, .app-preflight > .workflow-list { margin-block-start: 2px; }
+
 /* ---------------------------------------------------------------- responsive */
 @media (max-width: 1280px) {
   .grid.stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
