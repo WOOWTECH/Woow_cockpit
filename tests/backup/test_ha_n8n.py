@@ -8,6 +8,7 @@ import sqlite3
 import struct
 import tarfile
 import tempfile
+import types
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -311,6 +312,36 @@ class ScanTests(unittest.TestCase):
         self.assertEqual({(m.uid, m.gid) for m in members.values()}, {(1000, 1000)})
         self.assertEqual(members['pgpass'].mode, 0o444)
         self.assertEqual(members['out'].mode, 0o755)
+
+
+class FixedKeyTests(unittest.TestCase):
+    """Review C-18: a live n8n with its own N8N_ENCRYPTION_KEY could not use HA's key."""
+
+    def work(self, quadlets, files=None):
+        class Runner:
+            def read_file(self, rel, max_bytes=None):
+                if rel not in (files or {}):
+                    raise BackupError('not-found', 'x')
+                return files[rel]
+
+        return types.SimpleNamespace(quadlets=lambda _app: quadlets, runner=lambda _app: Runner())
+
+    def test_environment_secret_and_env_file_are_found_by_name(self):
+        base = b'[Container]\nImage=docker.io/n8nio/n8n:2.43.6\n'
+        self.assertEqual(ha_n8n.fixed_key_settings(self.work({'n8n.container': base}), None), [])
+        cases = {
+            'n8n.container': base + b'Environment=N8N_ENCRYPTION_KEY=abc\n',
+            'worker.container': base + b'Secret=n8n-key,type=env,target=N8N_ENCRYPTION_KEY\n',
+            'other.container': base + b'EnvironmentFile=%h/.config/n8n/n8n.env\n',
+        }
+        files = {'.config/n8n/n8n.env': b'# comment\nDB_TYPE=postgresdb\nexport N8N_ENCRYPTION_KEY_FILE=/run/k\n'}
+        found = ha_n8n.fixed_key_settings(self.work(cases, files), None)
+        self.assertEqual(found, ['n8n.container', 'worker.container', '~/.config/n8n/n8n.env'])
+        quiet = {'n8n.container': base + b'Environment=N8N_HOST=x\nEnvironmentFile=%h/missing.env\n'
+                                         b'Secret=n8n-key,type=mount,target=N8N_ENCRYPTION_KEY\n'}
+        self.assertEqual(ha_n8n.fixed_key_settings(self.work(quiet), None), [])
+        blockers, _w = ha_n8n.analyse(_source(), {'owner_ok': True}, '2.43.6', '2.43.6', fixed_key=found)
+        self.assertIn('N8N_ENCRYPTION_KEY', blockers[0])
 
 
 class CountTests(unittest.TestCase):

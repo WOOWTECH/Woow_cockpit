@@ -612,8 +612,45 @@ def member_pass(work, app, staging, *, files=None):
     return src
 
 
-def analyse(src, info, version, target):
+KEY_SETTINGS = ('N8N_ENCRYPTION_KEY', 'N8N_ENCRYPTION_KEY_FILE')
+ENV_LINE_RE = re.compile(r'\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=')
+
+
+def fixed_key_settings(work, app):
+    """Where the live n8n sets its own encryption key (Environment=, Secret=…,type=env, an EnvironmentFile= in the
+    owner's home: names only, values are never kept): HA's key could not be used there (review C-18)."""
+    quadlets = work.quadlets(app)
+    runner = work.runner(app)
+    found = []
+    for name, text in sorted(quadlets.items()):
+        if not name.endswith('.container'):
+            continue
+        body = text.decode('utf-8', 'replace') if isinstance(text, bytes) else str(text)
+        entries = tempctr.parse_unit(body).get('Container', [])
+        for key, value in entries:
+            if key == 'Environment' and any(re.search(rf'(?:^|\s|"){k}=', value) for k in KEY_SETTINGS):
+                found.append(name)
+            elif key == 'Secret' and any(f'target={k}' in value.split(',') for k in KEY_SETTINGS) \
+                    and 'type=env' in value.split(','):
+                found.append(name)
+            elif key == 'EnvironmentFile' and value.lstrip('-').startswith('%h/'):
+                rel = value.lstrip('-')[3:]
+                try:
+                    data = runner.read_file(rel, max_bytes=256 * 1024)
+                except BackupError:
+                    continue
+                names = {m.group(1) for m in map(ENV_LINE_RE.match, data.decode('utf-8', 'replace').splitlines())
+                         if m}
+                if names & set(KEY_SETTINGS):
+                    found.append(f'~/{rel}')
+    return sorted(set(found))
+
+
+def analyse(src, info, version, target, *, fixed_key=()):
     blockers, warnings = [], []
+    if fixed_key:
+        blockers.append(f'這台的 n8n 設定了固定的加密金鑰（N8N_ENCRYPTION_KEY，在 {"、".join(fixed_key[:3])}）；匯入後 n8n 會因'
+                        '金鑰和 HA 的資料不同而無法啟動。請先移除這個設定再匯入。')
     if 'database.sqlite' not in src.sqlite:
         blockers.append('HA 備份裡沒有 n8n 的資料庫。')
     if src.key is None:
@@ -641,7 +678,8 @@ def check(work, app):
     info = (inspect_sqlite(src.sqlite['database.sqlite'], checkpoint=work.checkpoint) if 'database.sqlite' in src.sqlite
             else None)
     version = target_version(tmp, items.n8n_image)
-    blockers, warnings = analyse(src, info, addon.version if addon else '', version)
+    blockers, warnings = analyse(src, info, addon.version if addon else '', version,
+                                 fixed_key=fixed_key_settings(work, app))
     fix = workflows_to_fix(info['workflows']) if info else []
     counts = info['counts'] if info else {}
     return {'target_version': version, 'blockers': blockers, 'warnings': warnings,
@@ -726,7 +764,8 @@ def convert(work, app, test_mode, out_dir):
     info = (inspect_sqlite(src.sqlite['database.sqlite'], checkpoint=work.checkpoint) if 'database.sqlite' in src.sqlite
             else None)
     version = target_version(tmp, items.n8n_image)
-    blockers, _warnings = analyse(src, info, addon.version if addon else '', version)
+    blockers, _warnings = analyse(src, info, addon.version if addon else '', version,
+                                  fixed_key=fixed_key_settings(work, app))
     if blockers:
         raise BackupError('incompatible', f'n8n 不能搬過來：{blockers[0]}', app=app.id)
     node_ids = tmp.user_ids('ids-node', items.n8n_image, 'node')
