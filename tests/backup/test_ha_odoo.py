@@ -228,6 +228,17 @@ class RewriteTests(unittest.TestCase):
         self.assertEqual((names['sessions'][0].uid, names['sessions'][0].gid, names['sessions'][0].mode),
                          (100, 101, 0o700))
 
+    def test_an_unreadable_live_export_fails_the_job(self):
+        garbage = self.root / 'garbage.tar'
+        garbage.write_bytes(b'\x1f\x8b' + b'not a tar' * 100)
+        for call in (lambda out: ha_odoo.web_data_tar(garbage, out, sessions_ids=(100, 101)),
+                     lambda out: ha_odoo.addons_dir_tar(garbage, garbage, out, copy={})):
+            out = ha_odoo.FileTar(self.root / f'out-{id(call)}.tar')
+            with self.subTest(call=call), self.assertRaises(BackupError) as caught:
+                call(out)
+            out.close()
+            self.assertEqual(caught.exception.code, 'job-failed')
+
     def test_custom_modules_folder(self):
         live = self.write('live-dir.tar', [
             {'name': './', 'type': 'dir', 'mode': 0o755},

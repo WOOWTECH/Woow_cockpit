@@ -819,12 +819,28 @@ def marker_ok(value, image_id):
     return isinstance(doc, dict) and doc.get('digest') == image_id and isinstance(doc.get('core_date'), str)
 
 
+def _live_tar(path, what):
+    """A tar the owner's side wrote (a volume export, a folder pack): read in stream mode; a parse error is the job's
+    failure, never an internal error (nested.check_volume / check_dir then check every member of the result)."""
+    try:
+        return tarfile.open(path, 'r|', encoding=habackup.ENCODING, errors=habackup.ERRORS)
+    except tarfile.TarError:
+        raise BackupError('job-failed', f'{what}的匯出內容無法讀取。') from None
+
+
 def web_data_tar(live_tar, out, *, sessions_ids, sessions_mode=0o700):
     """Copy the live data dir export (`podman volume export`) into the FileTar `out` without `filestore/odoo/**` and
     `sessions/**`; adds an empty `sessions/` owned like the live one (or `sessions_ids`). Returns the owner of the live
     root entry."""
+    try:
+        return _web_data_tar(live_tar, out, sessions_ids=sessions_ids, sessions_mode=sessions_mode)
+    except tarfile.TarError:
+        raise BackupError('job-failed', '這台 Odoo 資料卷的匯出內容無法讀取。') from None
+
+
+def _web_data_tar(live_tar, out, *, sessions_ids, sessions_mode):
     root_ids = None
-    with tarfile.open(live_tar, 'r|', encoding=habackup.ENCODING, errors=habackup.ERRORS) as tar:
+    with _live_tar(live_tar, '這台 Odoo 資料卷') as tar:
         for member in tar:
             name = _norm(member.name)
             if name is None:
@@ -867,8 +883,15 @@ def addons_dir_tar(live_tar, modules_tar, out, *, copy, mtime=None):
     """The custom modules folder: the live folder (DIR_HELPER pack, names `./…`) without the modules `copy` replaces,
     plus those modules from `modules_tar` (`<source>/<module>/**`) as `./<module>/**`, owned by the app owner (0:0 in
     his namespace), dirs 0755, files 0644 (0755 when executable). `copy`: {module: source label}."""
+    try:
+        _addons_dir_tar(live_tar, modules_tar, out, copy=copy, mtime=mtime)
+    except tarfile.TarError:
+        raise BackupError('job-failed', '自訂模組資料夾的匯出內容無法讀取。') from None
+
+
+def _addons_dir_tar(live_tar, modules_tar, out, *, copy, mtime):
     sources = {module: source for module, source in copy.items()}
-    with tarfile.open(live_tar, 'r|', encoding=habackup.ENCODING, errors=habackup.ERRORS) as tar:
+    with _live_tar(live_tar, '自訂模組資料夾') as tar:
         for member in tar:
             name = _norm(member.name)
             if name is None:
