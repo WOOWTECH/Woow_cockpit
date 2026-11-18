@@ -2,17 +2,19 @@
 -> `ha_backups`, `ha-delete`. Teams E1/E2."""
 import contextlib
 import io
+import json
 import os
 import types
 import unittest
 from pathlib import Path
 
-from woowbackup import cli, flows, hastore, jobs
+from woowbackup import cli, flows, haimport, hastore, jobs
 from woowbackup.storage import Storage
 
 from . import hafixtures as hx
 from .test_archive import fake_archive_bytes
 from .test_cli import CliCase
+from .test_flows import FakeKeys
 
 HA_META_KEYS = set(hastore.SIDECAR_KEYS) | {'importable_apps', 'other_addons'}
 GIB = 1024 ** 3
@@ -118,6 +120,129 @@ class HaDeleteTests(HaCliCase):
     def test_the_command_is_in_the_specs(self):
         self.assertIn('ha-delete', cli.COMMANDS)
         self.assertEqual(set(cli.SPECS['ha-delete']), {'ha_backup_id', 'confirm'})
+
+
+
+class HaJobStartTests(HaCliCase):
+    """ha-check-start / ha-convert-start (part B): validation, keys before a job starts, job params."""
+
+    def setUp(self):
+        super().setUp()
+        self.catalog['odoo'] = types.SimpleNamespace(id='odoo', name='Odoo 18')
+        self.catalog['n8n'] = types.SimpleNamespace(id='n8n', name='n8n 工作流程')
+
+    def two_addons(self):
+        n8n = hx.addon_member('woow-n8n', image='ghcr.io/woowtech/woow-ha-n8n-amd64')
+        _begin, reply = self.upload(hx.outer_bytes([(f'{hx.ODOO}.tar.gz', hx.addon_member()),
+                                                    (f'{hx.N8N}.tar.gz', n8n)], hx.ha_doc(addons=(hx.ODOO, hx.N8N))))
+        return reply['ha_backup']['id']
+
+    def record(self, job_id):
+        return jobs.JobStore(self.paths).get(job_id)
+
+    def test_specs_and_validation(self):
+        self.assertEqual(set(cli.SPECS['ha-check-start']), {'ha_backup_id', 'apps', 'request_id', 'key'})
+        self.assertEqual(set(cli.SPECS['ha-convert-start']), {'ha_backup_id', 'apps', 'test_mode', 'request_id',
+                                                              'confirm', 'odoo_database', 'key'})
+        valid = 'ha-' + '0' * 20
+        base = {'ha_backup_id': valid, 'apps': ['odoo'], 'request_id': 'req-ha-check-1'}
+        for request in ({**base, 'apps': ['nextcloud']}, {**base, 'apps': ['odoo', 'odoo']}, {**base, 'apps': []},
+                        {**base, 'extra': 1}, {'ha_backup_id': valid, 'apps': ['odoo']}, {**base, 'key': ''}):
+            with self.subTest(request=request):
+                self.assertEqual(self.error_code(['ha-check-start'], request), 'invalid-request')
+        self.assertEqual(self.error_code(['ha-check-start'], base), 'not-found')
+        convert = {**base, 'test_mode': False, 'confirm': True}
+        for request in ({**convert, 'confirm': False}, {k: v for k, v in convert.items() if k != 'test_mode'},
+                        {**convert, 'odoo_database': '../x'}, {**convert, 'test_mode': 'no'}):
+            with self.subTest(request=request):
+                self.assertEqual(self.error_code(['ha-convert-start'], request), 'invalid-request')
+
+    def test_check_start_params_and_the_selected_addons(self):
+        _begin, reply = self.upload(hx.simple_backup())
+        ha_id = reply['ha_backup']['id']
+        response = self.call(['ha-check-start'], {'ha_backup_id': ha_id, 'apps': ['odoo'],
+                                                  'request_id': 'req-ha-check-2', 'key': 'NOT-NEEDED'})
+        record = self.record(response['job_id'])
+        self.assertEqual((record['type'], record['params']), ('verify', {
+            'source': 'ha', 'ha_backup_id': ha_id, 'apps': ['odoo'], 'key_provided': False}))
+        self.assertEqual([p['label'] for p in record['phases']], ['準備', '解開 HA 備份', '檢查內容與版本'])
+        self.assertFalse(jobs.JobStore(self.paths).key_path(response['job_id']).exists(), 'nothing to decrypt')
+        self.assertEqual(self.launched, [response['job_id']])
+        reply = self.call(['ha-check-start'], {'ha_backup_id': ha_id, 'apps': ['n8n'], 'request_id': 'req-ha-check-3'})
+        self.assertEqual(reply['error']['code'], 'invalid-request')
+
+    @hx.needs_crypto
+    def test_keys_are_checked_before_a_job_starts(self):
+        _begin, reply = self.upload(hx.fixture('v3_gzip.tar').read_bytes())
+        ha_id = reply['ha_backup']['id']
+        request = {'ha_backup_id': ha_id, 'apps': ['odoo', 'n8n'], 'request_id': 'req-ha-check-4'}
+        self.assertEqual(self.error_code(['ha-check-start'], request), 'key-required')
+        wrong = self.call(['ha-check-start'], {**request, 'key': hx.WRONG_PASSWORD})
+        self.assertEqual((wrong['error']['code'], wrong['error']['message']),
+                         ('wrong-key', 'HA 備份金鑰不正確，請確認後再試一次。'))
+        self.assertEqual(self.launched, [])
+        response = self.call(['ha-check-start'], {**request, 'key': hx.PASSWORD})
+        path = jobs.JobStore(self.paths).key_path(response['job_id'])
+        self.assertEqual(path.read_bytes(), hx.PASSWORD.encode('utf-8'))
+        self.assertTrue(self.record(response['job_id'])['params']['key_provided'])
+        self.assertNotIn(hx.PASSWORD, json.dumps(self.record(response['job_id'])))
+
+    def test_convert_start(self):
+        ha_id = self.two_addons()
+        base = {'ha_backup_id': ha_id, 'request_id': 'req-ha-conv-1', 'test_mode': True, 'confirm': True}
+        reply = self.call(['ha-convert-start'], {**base, 'apps': ['odoo']})
+        self.assertEqual((reply['error']['code'], reply['error']['details']['field']),
+                         ('invalid-request', 'odoo_database'))
+        response = self.call(['ha-convert-start'], {**base, 'apps': ['odoo', 'n8n'], 'odoo_database': 'woowtest'})
+        record = self.record(response['job_id'])
+        self.assertEqual((record['type'], record['params']), ('backup', {
+            'source': 'ha', 'ha_backup_id': ha_id, 'apps': ['odoo', 'n8n'], 'odoo_database': 'woowtest',
+            'test_mode': True, 'encrypt': True, 'key_provided': False}))
+        self.assertEqual([p['id'] for p in record['phases']], ['prepare', 'decrypt', 'convert', 'package', 'verify'])
+        again = self.call(['ha-convert-start'], {**base, 'apps': ['odoo', 'n8n'], 'odoo_database': 'woowtest'})
+        self.assertEqual((again['job_id'], again['deduplicated']), (response['job_id'], True))
+
+    def test_convert_start_refusals(self):
+        ha_id = self.two_addons()
+        request = {'ha_backup_id': ha_id, 'apps': ['n8n'], 'request_id': 'req-ha-conv-2', 'test_mode': False,
+                   'confirm': True, 'odoo_database': 'ignored'}
+        del self.catalog['n8n']
+        reply = self.call(['ha-convert-start'], request)
+        self.assertEqual((reply['error']['code'], reply['error']['message']),
+                         ('app-not-in-catalog', '請先到「應用軟體」安裝同版本的 n8n 工作流程，再匯入。'))
+        self.catalog['n8n'] = types.SimpleNamespace(id='n8n', name='n8n 工作流程')
+        self.keys.device = None
+        self.assertEqual(self.error_code(['ha-convert-start'], request), 'no-device-key')
+        self.keys.device = FakeKeys(self.root).device
+        response = self.call(['ha-convert-start'], request)
+        self.assertIsNone(self.record(response['job_id'])['params']['odoo_database'])
+
+
+class FromHaTests(HaCliCase):
+    def test_list_from_ha_survives_the_ha_file_and_goes_with_the_backup(self):
+        backup_id = self.make_backup()
+        meta = self.storage.get(backup_id)
+        self.assertNotIn('from_ha', self.call(['list'])['backups'][0])
+        _begin, reply = self.upload(hx.simple_backup())
+        ha_id = reply['ha_backup']['id']
+        row = {'ha_backup_id': ha_id, 'name': 'WOOW', 'date': '2026-11-18T09:01:20Z', 'apps': ['odoo'],
+               'odoo_database': 'woowtest', 'test_mode': False, 'workflows_to_fix': [], 'reminders': ['x'],
+               'addons': [{'app_id': 'odoo', 'slug': hx.ODOO, 'name': 'Woow Odoo 18'}],
+               'job_id': 'j20261118T120000Z-0123abcd', 'created': '2026-11-18T12:00:00Z'}
+        haimport.register(self.paths, backup_id, row)
+        listed = self.call(['list'])['backups'][0]
+        self.assertEqual(listed['from_ha'], haimport.view_row(row))
+        self.assertEqual(meta['type'], 'manual')
+        self.assertEqual(self.call(['ha-delete'], {'ha_backup_id': ha_id, 'confirm': True}), {'ok': True})
+        self.assertEqual(self.call(['list'])['backups'][0]['from_ha']['name'], 'WOOW', 'kept without the HA file')
+        self.assertEqual(self.call(['delete'], {'backup_id': backup_id}), {'ok': True})
+        self.assertEqual(haimport.load_registry(self.paths), {})
+
+    def test_status_counts_ha_backups(self):
+        data = hx.simple_backup()
+        self.upload(data)
+        storage = self.call(['status'])['storage']
+        self.assertEqual((storage['ha_backup_count'], storage['ha_backups_bytes']), (1, len(data)))
 
 
 if __name__ == '__main__':
