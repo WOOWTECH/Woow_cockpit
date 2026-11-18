@@ -17,9 +17,11 @@ masks it in every log line before the job starts and hands it over as `ctx.ha_ke
 
 `ha-imports.json` (`<data>/ha-imports.json`, root 0600, strict; written under the index lock): `{schema: 1, imports:
 {<backup id>: ImportRow}}`, ImportRow = `{ha_backup_id, name, date, apps, odoo_database, test_mode, workflows_to_fix,
-reminders, addons, job_id, created}`. A row is written before the backup is packaged (its id is chosen first) and
-dropped when the job fails, when the backup is deleted, or later when its backup no longer exists. Deleting the HA file
-never touches it: a converted backup keeps its origin.
+reminders, reminders_by_app, notes, notes_by_app, addons, job_id, created}` (rows written before reminders_by_app,
+notes and notes_by_app existed get them empty). Every text is cleaned and cut when the row is written, so whatever a
+conversion found is accepted (review C-03). A row is written before the backup is packaged (its id is chosen first)
+and dropped when the job fails before the backup is in the index, when the backup is deleted, or later when its
+backup no longer exists. Deleting the HA file never touches it: a converted backup keeps its origin.
 """
 import contextlib
 import fcntl
@@ -40,6 +42,11 @@ REGISTRY_SCHEMA = 1
 REGISTRY_MAX = 1000
 ROW_KEYS = ('ha_backup_id', 'name', 'date', 'apps', 'odoo_database', 'test_mode', 'workflows_to_fix', 'reminders',
             'addons', 'job_id', 'created')
+# Keys added after the first rows were written (a row without them gets the empty value; review UI-3, P-05).
+ROW_EXTRA = {'reminders_by_app': dict, 'notes': list, 'notes_by_app': dict}
+VIEW_KEYS = ('ha_backup_id', 'name', 'date', 'apps', 'odoo_database', 'test_mode', 'workflows_to_fix', 'reminders',
+             'reminders_by_app', 'notes', 'notes_by_app', 'addons')
+MAX_LINES = 20
 STALE_ROW_SECONDS = 24 * 3600
 MAX_KEY_BYTES = 4096
 GUARD_STEP = 64 * 1024 * 1024
@@ -159,9 +166,12 @@ class Work:
     app, its adapter (live reads as the owner), runner and throwaway objects (registered in the job record as
     `temp_owners` before the first one exists, so a killed job's objects are swept by the recovery)."""
 
-    def __init__(self, ctx, record, key, staging):
+    def __init__(self, ctx, record, key, staging, *, phases=None):
         self.ctx = ctx
         self.job_id = ctx.job_id
+        self.phases = phases          # (all phase ids, the ids each app goes through, {id: label}) or None
+        self._app = None              # (index, count, label) of the app being worked on
+        self._percent = 0
         self.record = record
         self.keys = hasecuretar.Keys(key) if key is not None else None
         self.staging = Path(staging)
@@ -206,8 +216,31 @@ class Work:
         storage = os.path.join(home, '.local/share/containers/storage')
         return [home] + ([storage] if os.path.isdir(storage) else [])
 
+    def begin_app(self, index, count, label):
+        self._app = (index, count, label)
+
+    def end_apps(self):
+        self._app = None
+
     def phase(self, phase_id):
-        self.ctx.phase(phase_id)
+        """The job's phase, with an overall progress that never goes back while the apps go through the same phases
+        one after the other (review UI-2) and the app's name in the progress message."""
+        if self.phases is None:
+            self.ctx.phase(phase_id)
+            return
+        ids, per_app, labels = self.phases
+        total = len(ids)
+        message = None
+        if self._app is not None and phase_id in per_app:
+            index, count, label = self._app
+            first = ids.index(per_app[0])
+            step = len(per_app) * index + per_app.index(phase_id)
+            percent = int(100 * (first + step / count) / total)
+            message = f'{label}：{labels[phase_id]}' + (f'（{index + 1}/{count}）' if count > 1 else '')
+        else:
+            percent = int(100 * ids.index(phase_id) / total)
+        self._percent = max(self._percent, min(99, percent))
+        self.ctx.phase(phase_id, percent=self._percent, message=message)
 
     # ---------------------------------------------------------- the HA backup
     def open(self, member):
@@ -274,6 +307,15 @@ class Work:
             self.ha.close()
             self.ha = None
         return left
+
+
+def _phases(job_type, per_app):
+    from .jobs import HA_PHASES
+    return [pid for pid, _label in HA_PHASES[job_type]], list(per_app), dict(HA_PHASES[job_type])
+
+
+CHECK_PHASES = _phases('verify', ('decrypt', 'check'))
+CONVERT_PHASES = _phases('backup', ('decrypt', 'convert'))
 
 
 def job_key(ctx):
@@ -382,7 +424,9 @@ def _watched_apps(ctx, app_ids):
 # ====================================================================== check
 
 def run_ha_check(ctx, params):
-    """`verify` job with source ha: {ha_check: {ha_backup_id, apps[AppCheck]}} (CONTRACT section 7)."""
+    """`verify` job with source ha: {ha_check: {ha_backup_id, apps[AppCheck]}} (CONTRACT section 7). An app that
+    cannot move is a blocker of its own result, never a failed job (an add-on missing twice or not WOOWTECH's, an
+    owner that is gone, an app not deployed; review C-09); a wrong or missing key fails the job."""
     from . import ha_n8n, ha_odoo
     ctx.cancellable(True)
     ctx.phase('prepare')
@@ -390,34 +434,37 @@ def run_ha_check(ctx, params):
     ctx.storage.ensure_layout()
     staging = Path(ctx.storage.staging_dir(ctx.job_id))
     key = job_key(ctx)
-    work = Work(ctx, None, key, staging)
+    work = Work(ctx, None, key, staging, phases=CHECK_PHASES)
     results = []
     try:
         work.record = _open(work, ctx, params)
-        members = _members(work, app_ids)
+        members, problems = _members_or_problems(work, app_ids)
         _require_key(work, members)
         ctx.log(f'檢查 HA 備份「{work.record["name"]}」：{"、".join(app_ids)}')
         work.watch(_watched_apps(ctx, app_ids))
-        for app_id in app_ids:
-            member = members[app_id]
-            ctx.phase('decrypt')
-            addon = work.addon_info(APPS[app_id])
-            result = _base_result(app_id, member, addon)
-            result['name'] = addon.name or next((a['name'] for a in work.record['addons'] if a['slug'] == member.slug),
-                                                '')
-            results.append(result)
+        for index, app_id in enumerate(app_ids):
+            member = members.get(app_id)
             app = _catalog_app(ctx, app_id)
-            blocker = _arch_blocker(addon)
-            if blocker:
-                result['blockers'].append(blocker)
-            if app is None:
-                result['blockers'].append(INSTALL_HINT.format(name=_app_label(app_id)))
-            elif not blocker:
-                result['blockers'] += _deployed_blockers(work, app)
-            if result['blockers']:
-                ctx.log(f'「{result["name"] or app_id}」不能匯入：{result["blockers"][0]}')
-                continue
+            result = _base_result(app_id, member, None)
+            result['name'] = _record_addon_name(work.record, member)
+            results.append(result)
+            work.begin_app(index, len(app_ids), result['name'] or _app_label(app_id, app))
+            work.phase('decrypt')
             try:
+                if app_id in problems:
+                    raise problems[app_id]
+                addon = work.addon_info(APPS[app_id])
+                result.update(arch=addon.arch, version=addon.version, name=addon.name or result['name'])
+                blocker = _arch_blocker(addon)
+                if blocker:
+                    result['blockers'].append(blocker)
+                if app is None:
+                    result['blockers'].append(INSTALL_HINT.format(name=_app_label(app_id)))
+                elif not blocker:
+                    result['blockers'] += _deployed_blockers(work, app)
+                if result['blockers']:
+                    ctx.log(f'「{result["name"] or app_id}」不能匯入：{result["blockers"][0]}')
+                    continue
                 work.guard.check(3 * member.size)
                 module = ha_odoo if app_id == 'odoo' else ha_n8n
                 found = module.check(work, app)
@@ -441,12 +488,34 @@ def run_ha_check(ctx, params):
                 result['warnings'] += found['warnings']
             result['ok'] = not result['blockers']
             ctx.log(f'「{result["name"] or app_id}」檢查完成：{"可以匯入" if result["ok"] else "不能匯入"}')
-            ctx.checkpoint()
-        ctx.phase('check')
+            work.checkpoint()
+        work.end_apps()
+        work.phase('check')
         return {'ha_check': {'ha_backup_id': work.record['id'], 'apps': results}}
     finally:
         work.close()
         _cleanup(ctx)
+
+
+def _record_addon_name(record, member):
+    if member is None:
+        return ''
+    return next((a['name'] for a in record['addons'] if a['slug'] == member.slug), '')
+
+
+def _members_or_problems(work, app_ids):
+    """({app id: member}, {app id: BackupError}) -- an add-on that is missing or there twice is that app's blocker."""
+    members, problems = {}, {}
+    for app_id in app_ids:
+        if app_id not in APPS:
+            raise BackupError('invalid-request', '這個應用不能從 HA 備份匯入。', app=app_id)
+        try:
+            members[app_id] = work.addon_member(APPS[app_id])
+        except BackupError as error:
+            if error.code not in FAILURE_CODES:
+                raise
+            problems[app_id] = error
+    return members, problems
 
 
 def _cleanup(ctx):
@@ -468,21 +537,41 @@ def note_for(record):
     return f'{NOTE_PREFIX}{name[:200]}（{when}）'
 
 
-def _reminders(app_ids, converted):
-    """Extra reminders the page does not write itself (it writes: stop the HA add-on, log the MCP admin apps in
-    again, the test import line)."""
-    lines = []
+def _names(items, limit=10):
+    items = [str(item)[:60] for item in items]
+    return '、'.join(items[:limit]) + (f' 等 {len(items)} 個' if len(items) > limit else '')
+
+
+def import_texts(converted):
+    """(notes, notes_by_app, reminders, reminders_by_app) of a conversion (review UI-3, P-05). `notes`: what the
+    import moves or changes, shown before the restore (every line; `notes_by_app` the same lines per app);
+    `reminders`: what to do afterwards that belongs to no app (none so far: the page writes the lines about stopping
+    the HA add-on, the MCP admin apps, a test import and deleting the HA file); `reminders_by_app`: per app."""
+    notes_by_app, reminders_by_app = {}, {}
     if 'odoo' in converted:
-        lines.append('Odoo 的使用者帳號和密碼會換成 HA 那邊的：這台原本的 Odoo 管理者密碼不再適用，請用 HA 的帳號登入。')
-        copied = converted['odoo'].get('custom_modules') or []
+        odoo = converted['odoo']
+        notes = ['Odoo 的使用者帳號和密碼會換成 HA 那邊的，這台原本的 Odoo 管理者密碼不再適用。']
+        copied = [m['name'] for m in odoo.get('custom_modules') or []]
         if copied:
-            lines.append(f'HA 的自訂模組 {"、".join(m["name"] for m in copied[:20])} 會一起放進這台的自訂模組資料夾。')
+            notes.append(f'HA 的自訂模組 {_names(copied)} 會一起放進這台的自訂模組資料夾。')
+        domains = odoo.get('website_domains') or []
+        if domains:
+            notes.append(f'網站原本使用的網域 {_names(domains, 5)} 會改成這台的網址。')
+        notes_by_app['odoo'] = notes
+        reminders_by_app['odoo'] = ['匯入後請用 HA 那邊的 Odoo 帳號和密碼登入。']
     if 'n8n' in converted:
-        email = converted['n8n'].get('owner_email')
-        lines.append(f'n8n 的登入帳號會換成 HA 的管理者帳號{f"（{email}）" if email else ""}。')
-        if converted['n8n'].get('packages'):
-            lines.append('HA 的 n8n 社群節點會一起搬過來，請在匯入後確認它們能正常使用。')
-    return lines
+        n8n = converted['n8n']
+        email = n8n.get('owner_email')
+        shown = f'（{email}）' if email else ''
+        notes = [f'n8n 的登入帳號會換成 HA 的管理者帳號{shown}。']
+        reminders = [f'匯入後請用 HA 的 n8n 管理者帳號{shown}登入。']
+        if n8n.get('packages'):
+            notes.append('HA 的 n8n 社群節點會一起搬過來。')
+            reminders.append('請確認 HA 的 n8n 社群節點能正常使用（必要時重新安裝）。')
+        notes_by_app['n8n'] = notes
+        reminders_by_app['n8n'] = reminders
+    notes = [line for app_id in APPS for line in notes_by_app.get(app_id, [])]
+    return notes, notes_by_app, [], reminders_by_app
 
 
 def run_ha_convert(ctx, params):
@@ -504,7 +593,7 @@ def run_ha_convert(ctx, params):
     ctx.storage.ensure_layout()
     staging = Path(ctx.storage.staging_dir(ctx.job_id))
     key = job_key(ctx)
-    work = Work(ctx, None, key, staging)
+    work = Work(ctx, None, key, staging, phases=CONVERT_PHASES)
     backup_id = None
     registered = False
     try:
@@ -525,12 +614,13 @@ def run_ha_convert(ctx, params):
         _check_space(work, members)
         converted, manifest_apps, entries = {}, [], []
         addons = []
-        for app in apps:
-            ctx.phase('decrypt')
+        for index, app in enumerate(apps):
             member = members[app.id]
             addon = work.addon_info(APPS[app.id])
-            addons.append({'app_id': app.id, 'slug': member.slug, 'name': addon.name or next(
-                (a['name'] for a in record['addons'] if a['slug'] == member.slug), '')})
+            name = addon.name or _record_addon_name(record, member)
+            work.begin_app(index, len(apps), app.name or name)
+            work.phase('decrypt')
+            addons.append({'app_id': app.id, 'slug': member.slug, 'name': name})
             out_dir = staging / 'apps' / app.id
             out_dir.mkdir(mode=0o700, parents=True)
             if app.id == 'odoo':
@@ -541,18 +631,22 @@ def run_ha_convert(ctx, params):
                 data = ha_n8n.convert(work, app, test_mode, out_dir)
                 converted['n8n'] = data
                 item_args = {'volumes': data['volumes'], 'postgres': data['postgres']}
-            ctx.checkpoint()
+            work.checkpoint()
             app_manifest, app_entries = work.adapter(app).import_manifest(out_dir, **item_args)
             manifest_apps.append(app_manifest)
             entries.extend(app_entries)
+        work.end_apps()
         work.close()  # no throwaway object is needed for the packaging
         plain = sum(int(entry.size) for entry in entries)
         work.guard.check(plain + plain // 100)  # the archive (at most the data plus 1 % for tar and age; review C-01)
-        fix = converted.get('n8n', {}).get('workflows_to_fix') or []
-        row = {'ha_backup_id': record['id'], 'name': record['name'], 'date': record['date'], 'apps': app_ids,
-               'odoo_database': database if 'odoo' in app_ids else None, 'test_mode': test_mode,
-               'workflows_to_fix': fix[:200], 'reminders': _reminders(app_ids, converted), 'addons': addons,
-               'job_id': ctx.job_id, 'created': util.iso_utc()}
+        notes, notes_by_app, reminders, reminders_by_app = import_texts(converted)
+        row = clean_row({'ha_backup_id': record['id'], 'name': record['name'], 'date': record['date'],
+                         'apps': app_ids, 'odoo_database': database if 'odoo' in app_ids else None,
+                         'test_mode': test_mode,
+                         'workflows_to_fix': converted.get('n8n', {}).get('workflows_to_fix') or [],
+                         'reminders': reminders, 'reminders_by_app': reminders_by_app, 'notes': notes,
+                         'notes_by_app': notes_by_app, 'addons': addons, 'job_id': ctx.job_id,
+                         'created': util.iso_utc()})
         backup_id = ctx.storage.new_backup_id()
         try:
             register(ctx.paths, backup_id, row)
@@ -562,15 +656,26 @@ def run_ha_convert(ctx, params):
         result = _package(ctx, apps, staging, include_images=False, note=note_for(record), backup_type='manual',
                           key=device_key, phases=True, manifest_apps=manifest_apps, entries=entries, downtime=0,
                           backup_id=backup_id)
-        registered = False  # the row now belongs to a listed backup
         return {'backup_id': result['backup_id'], 'size': result['size'], 'apps': result['apps'],
                 'encrypted': result['encrypted'], 'ha_import': view_row(row)}
     finally:
-        if registered and backup_id is not None:
+        # The row goes only with a backup that was not made: once the backup is in the index (also when something
+        # failed after its registration: a log line, a termination), it keeps its origin (review C-10).
+        if registered and backup_id is not None and not _listed(ctx, backup_id):
             with contextlib.suppress(Exception):
                 forget(ctx.paths, backup_id)
         work.close()
         _cleanup(ctx)
+
+
+def _listed(ctx, backup_id):
+    try:
+        ctx.storage.get(backup_id)
+        return True
+    except BackupError as error:
+        return error.code != 'not-found'  # an index that cannot be read: keep the row (a day later it is pruned)
+    except Exception:  # noqa: BLE001 - same
+        return True
 
 
 # ====================================================================== ha-imports.json
@@ -594,8 +699,61 @@ def _text(value, max_len):
     return isinstance(value, str) and len(value) <= max_len and not re.search(r'[\x00-\x1f\x7f]', value)
 
 
+def _clean(value, max_len):
+    """Text as a row keeps it: control characters as spaces, at most `max_len` characters (review C-03)."""
+    text = value if isinstance(value, str) else '' if value is None else str(value)
+    text = text.encode('utf-8', 'replace').decode('utf-8')
+    return re.sub(r'[\x00-\x1f\x7f]', ' ', text)[:max_len]
+
+
+def _lines(values):
+    return [_clean(line, 500) for line in (values if isinstance(values, list) else [])][:MAX_LINES]
+
+
+def clean_row(row):
+    """The row as the registry keeps it: every text cleaned and cut, every list cut, so a row made from whatever a
+    conversion found (long module or workflow names, names with line breaks...) is always accepted (review C-03)."""
+    fix = []
+    for item in (row.get('workflows_to_fix') or [])[:200]:
+        if isinstance(item, dict):
+            fix.append({'name': _clean(item.get('name'), 200), 'active': item.get('active') is True,
+                        'reasons': [_clean(r, 300) for r in (item.get('reasons') or [])][:10]})
+    addons = []
+    for item in (row.get('addons') or [])[:len(APPS)]:
+        if isinstance(item, dict) and item.get('app_id') in APPS:
+            addons.append({'app_id': item['app_id'], 'slug': _clean(item.get('slug'), 100),
+                           'name': _clean(item.get('name'), 200)})
+    database = row.get('odoo_database')
+    cleaned = dict(row, name=_clean(row.get('name'), 200),
+                   odoo_database=_clean(database, 63) if database is not None else None,
+                   workflows_to_fix=fix, addons=addons, reminders=_lines(row.get('reminders')),
+                   notes=_lines(row.get('notes')))
+    for key in ('reminders_by_app', 'notes_by_app'):
+        cleaned[key] = {app_id: _lines(lines) for app_id, lines in (row.get(key) or {}).items() if app_id in APPS}
+    return cleaned
+
+
+def _upgrade(row):
+    """A row of an earlier version of this file, with the keys added since (empty)."""
+    if isinstance(row, dict):
+        row = dict(row)
+        for key, kind in ROW_EXTRA.items():
+            row.setdefault(key, kind())
+    return row
+
+
+def _valid_lines(lines):
+    return isinstance(lines, list) and len(lines) <= MAX_LINES and all(_text(line, 500) for line in lines)
+
+
 def valid_row(row):
-    if not isinstance(row, dict) or set(row) != set(ROW_KEYS):
+    if not isinstance(row, dict) or set(row) != set(ROW_KEYS) | set(ROW_EXTRA):
+        return False
+    for key in ('reminders_by_app', 'notes_by_app'):
+        value = row[key]
+        if not isinstance(value, dict) or not all(app in APPS and _valid_lines(lines) for app, lines in value.items()):
+            return False
+    if not _valid_lines(row['notes']):
         return False
     if not hastore.valid_id(row['ha_backup_id']) or not _text(row['name'], 200) or not util.is_iso_utc(row['date']):
         return False
@@ -641,7 +799,8 @@ def load_registry(paths):
     if not isinstance(doc, dict) or doc.get('schema') != REGISTRY_SCHEMA or not isinstance(doc.get('imports'), dict):
         return None
     from .storage import valid_backup_id
-    return {bid: row for bid, row in doc['imports'].items() if valid_backup_id(bid) and valid_row(row)}
+    rows = {bid: _upgrade(row) for bid, row in doc['imports'].items()}
+    return {bid: row for bid, row in rows.items() if valid_backup_id(bid) and valid_row(row)}
 
 
 def _save_registry(paths, rows):
@@ -664,6 +823,7 @@ def _prune(paths, rows, now):
 
 
 def register(paths, backup_id, row, *, now=None):
+    row = clean_row(_upgrade(row))
     if not valid_row(row):
         raise BackupError('internal-error', 'HA 匯入紀錄的格式不正確。')
     with _index_lock(paths):
@@ -692,8 +852,8 @@ def forget(paths, backup_id):
 
 def view_row(row):
     """BackupMeta.from_ha / result.ha_import (CONTRACT section 7)."""
-    return {key: row[key] for key in ('ha_backup_id', 'name', 'date', 'apps', 'odoo_database', 'test_mode',
-                                      'workflows_to_fix', 'reminders', 'addons')}
+    row = _upgrade(row)
+    return {key: row[key] for key in VIEW_KEYS}
 
 
 def from_ha_views(paths):

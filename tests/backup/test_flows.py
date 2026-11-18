@@ -45,8 +45,10 @@ class FakeReporter:
         self.cancellable = True
         self.cancel = False
 
-    def phase(self, phase_id):
+    def phase(self, phase_id, *, percent=None, message=None):
         self.events.append(('phase', phase_id))
+        if percent is not None or message is not None:
+            self.events.append(('phase-progress', phase_id, percent, message))
 
     def skip(self, phase_id):
         self.events.append(('skip', phase_id))

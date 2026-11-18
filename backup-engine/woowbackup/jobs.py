@@ -489,7 +489,7 @@ class JobReporter:
     def _ids(self):
         return [p['id'] for p in self.record['phases']]
 
-    def phase(self, phase_id):
+    def phase(self, phase_id, *, percent=None, message=None):
         ids = self._ids()
         if phase_id not in ids:
             return
@@ -504,9 +504,11 @@ class JobReporter:
         self._phase_index = index
         self.record['phase'] = phase_id
         label = self.record['phases'][index]['label']
-        self.record['progress'] = {'percent': min(99, int(100 * index / len(ids))), 'message': label}
+        value = int(100 * index / len(ids)) if percent is None else int(percent)
+        self.record['progress'] = {'percent': max(0, min(99, value)),
+                                   'message': label if message is None else redact(message)[:200]}
         self._save()
-        self.log(f'階段：{label}')
+        self.log(f'階段：{label if message is None else redact(message)[:200]}')
 
     def skip(self, phase_id):
         for item in self.record['phases']:

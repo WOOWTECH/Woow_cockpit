@@ -207,8 +207,13 @@ class FlowContext:
             self._catalog = self.deps.load_catalog()
         return self._catalog
 
-    def phase(self, phase_id):
-        self.reporter.phase(phase_id)
+    def phase(self, phase_id, *, percent=None, message=None):
+        """Start a phase; `percent`/`message` replace the progress the phase's position gives (a job whose apps go
+        through the same phases one after the other keeps its overall progress going forward)."""
+        if percent is None and message is None:
+            self.reporter.phase(phase_id)
+        else:
+            self.reporter.phase(phase_id, percent=percent, message=message)
 
     def skip(self, phase_id):
         self.reporter.skip(phase_id)

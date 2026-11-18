@@ -163,6 +163,27 @@ class CheckFlowTests(FlowCase):
         self.assertIn('還沒有部署完成', odoo_result['blockers'][0])
         self.assertEqual(n8n_result['blockers'], ['這台的 n8n 設定不同。'])
 
+    def test_an_odd_add_on_is_a_blocker_and_the_other_app_is_still_checked(self):
+        """Review C-09: addon.json that is not WOOWTECH's, the same add-on twice, an owner that is gone."""
+        mismatched = hx.outer_bytes([(f'{hx.ODOO}.tar.gz', hx.addon_member('something_else')),
+                                     (f'{hx.N8N}.tar.gz', N8N_MEMBER)], hx.ha_doc(addons=(hx.ODOO, hx.N8N)))
+        twice = hx.outer_bytes([(f'{hx.ODOO}.tar.gz', hx.addon_member()), ('aaaa1111_odoo18ce.tar.gz',
+                                                                         hx.addon_member()),
+                                (f'{hx.N8N}.tar.gz', N8N_MEMBER)],
+                               hx.ha_doc(addons=(hx.ODOO, 'aaaa1111_odoo18ce', hx.N8N)))
+        for data, words in ((mismatched, 'addon.json 不符'), (twice, '兩個相同的附加元件')):
+            ha_id = self.upload(data)
+            with mock.patch.object(ha_n8n, 'check', return_value=n8n_found()) as n8n:
+                result = self.run_check(ha_id, ['odoo', 'n8n'])
+            odoo_result, n8n_result = result['ha_check']['apps']
+            self.assertFalse(odoo_result['ok'])
+            self.assertIn(words, odoo_result['blockers'][0])
+            self.assertTrue(n8n.called and n8n_result['ok'])
+        ha_id = self.upload(two_addons())
+        with mock.patch.object(FakeHaAdapter, 'probe', side_effect=BackupError('owner-missing', '找不到應用擁有者帳號 odoo。')):
+            result = self.run_check(ha_id, ['odoo'])
+        self.assertEqual(result['ha_check']['apps'][0]['blockers'], ['找不到應用擁有者帳號 odoo。'])
+
     def test_no_movable_database(self):
         ha_id = self.upload(two_addons())
         with mock.patch.object(ha_odoo, 'check', return_value=odoo_found(ok=False)):
@@ -188,6 +209,7 @@ class ConvertFlowTests(FlowCase):
         return flows.run_backup(self.ctx(), base)
 
     def stub_odoo(self, work, app_, database, test_mode, out_dir):
+        work.phase('convert')
         (out_dir / 'volumes').mkdir(parents=True)
         path = out_dir / 'volumes' / 'odoo18-web-data.tar'
         path.write_bytes(b'volume')
@@ -195,6 +217,7 @@ class ConvertFlowTests(FlowCase):
                 'custom_modules': [{'name': 'woow_import_probe', 'version': '18.0.1.0.0', 'from': 'data/addons'}]}
 
     def stub_n8n(self, work, app_, test_mode, out_dir):
+        work.phase('convert')
         return {'volumes': {}, 'postgres': {}, 'owner_email': 'ha-probe@probe.invalid', 'packages': [],
                 'workflows_to_fix': [{'name': 'fix', 'active': False, 'reasons': ['x']}], 'counts': {}}
 
@@ -207,18 +230,78 @@ class ConvertFlowTests(FlowCase):
         self.assertEqual((meta['type'], meta['encrypted'], [a['id'] for a in meta['apps']]), ('manual', True,
                                                                                            ['odoo', 'n8n']))
         self.assertTrue(meta['note'].startswith('由 HA 備份轉換：WOOW匯入測試（2026-11-18 '), meta['note'])
-        self.assertEqual(self.reporter.phases(), ['prepare', 'decrypt', 'decrypt', 'package', 'verify'])
+        self.assertEqual(self.reporter.phases(), ['prepare', 'decrypt', 'convert', 'decrypt', 'convert', 'package',
+                                                  'verify'])
         self.assertEqual(sorted(self.world.imported['odoo']), ['dirs', 'volumes'])
         self.assertEqual(sorted(self.world.imported['n8n']), ['postgres', 'volumes'])
         imp = result['ha_import']
         self.assertEqual(set(imp), {'ha_backup_id', 'name', 'date', 'apps', 'odoo_database', 'test_mode',
-                                    'workflows_to_fix', 'reminders', 'addons'})
+                                    'workflows_to_fix', 'reminders', 'reminders_by_app', 'notes', 'notes_by_app',
+                                    'addons'})
         self.assertEqual((imp['ha_backup_id'], imp['apps'], imp['odoo_database'], imp['test_mode']),
                          (ha_id, ['odoo', 'n8n'], 'woowtest', False))
         self.assertEqual([a['app_id'] for a in imp['addons']], ['odoo', 'n8n'])
-        self.assertFalse(any('停掉' in r or 'MCP' in r for r in imp['reminders']), 'the page writes those')
+        # To-dos per app, explanations apart (review P-05, UI-3); the page writes the HA add-on, MCP, test import and
+        # delete-the-HA-file lines itself.
+        self.assertEqual(imp['reminders'], [])
+        self.assertEqual(sorted(imp['reminders_by_app']), ['n8n', 'odoo'])
+        self.assertIn('ha-probe@probe.invalid', imp['reminders_by_app']['n8n'][0])
+        self.assertTrue(any('woow_import_probe' in line for line in imp['notes_by_app']['odoo']))
+        self.assertEqual(imp['notes'], imp['notes_by_app']['odoo'] + imp['notes_by_app']['n8n'])
+        everything = imp['notes'] + [line for lines in imp['reminders_by_app'].values() for line in lines]
+        self.assertFalse(any('停掉' in r or 'MCP' in r or '刪除' in r for r in everything), 'the page writes those')
         self.assertEqual(haimport.from_ha_views(self.paths)[backup_id], imp)
         self.assertEqual(self.reporter.partial.get('temp_owners', []), [])
+        # One overall progress that never goes back while both apps go through 解開/轉換 (review UI-2).
+        steps = [(event[2], event[3]) for event in self.reporter.events if event[0] == 'phase-progress']
+        percents = [percent for percent, _message in steps]
+        self.assertEqual(percents, sorted(percents))
+        self.assertEqual(percents[:4], [20, 30, 40, 50])
+        self.assertIn('（1/2）', steps[1][1])
+        self.assertIn('（2/2）', steps[2][1])
+
+    def test_a_failure_after_the_backup_is_listed_keeps_its_origin(self):
+        ha_id = self.upload(two_addons())
+        real = flows._package
+
+        def package_then_fail(*args, **kwargs):
+            real(*args, **kwargs)
+            raise BackupError('job-failed', '寫入紀錄失敗。')
+
+        with mock.patch.object(ha_odoo, 'convert', self.stub_odoo), \
+                mock.patch.object(flows, '_package', package_then_fail):
+            with self.assertRaises(BackupError):
+                self.convert(ha_id, ['odoo'])
+        listed = [b['id'] for b in self.storage.list_backups()]
+        self.assertEqual(len(listed), 1)
+        self.assertEqual(list(haimport.from_ha_views(self.paths)), listed, 'review C-10')
+
+    def test_long_names_and_line_breaks_never_lose_the_origin(self):
+        ha_id = self.upload(two_addons(name='WOOW 匯入'))
+        modules = [{'name': f'odoo_ai_assistant_chatgpt_connector_{i:02d}', 'version': '18.0.1.0.0',
+                    'from': 'data/addons'} for i in range(20)]
+
+        def odoo(work, app_, database, test_mode, out_dir):
+            result = self.stub_odoo(work, app_, database, test_mode, out_dir)
+            result['custom_modules'] = modules
+            return result
+
+        def n8n(work, app_, test_mode, out_dir):
+            result = self.stub_n8n(work, app_, test_mode, out_dir)
+            result['workflows_to_fix'] = [{'name': 'a\nb\t' + 'x' * 400, 'active': True,
+                                           'reasons': [f'讀寫本機檔案（/share/{"y" * 90}\n）：這台的資料夾和 HA 不同。'] * 12}]
+            return result
+
+        with mock.patch.object(ha_odoo, 'convert', odoo), mock.patch.object(ha_n8n, 'convert', n8n):
+            result = self.convert(ha_id, ['odoo', 'n8n'])
+        row = haimport.from_ha_views(self.paths)[result['backup_id']]
+        self.assertEqual(row, result['ha_import'])
+        self.assertEqual(row['name'], 'WOOW 匯入')
+        item = row['workflows_to_fix'][0]
+        self.assertTrue(item['name'].startswith('a b ') and len(item['name']) == 200)
+        self.assertEqual(len(item['reasons']), 10)
+        self.assertTrue(all('\n' not in reason for reason in item['reasons']))
+        self.assertTrue(any('等 20 個' in line for line in row['notes_by_app']['odoo']), 'review C-03')
 
     def test_a_failed_conversion_leaves_no_row(self):
         ha_id = self.upload(two_addons())
@@ -291,10 +374,18 @@ class RegistryTests(unittest.TestCase):
         self.assertEqual(haimport.load_registry(self.paths), {})
 
     def test_strict_rows_and_an_unreadable_file_is_kept(self):
-        for bad in (self.row(extra=1), self.row(apps=['nextcloud']), self.row(test_mode='no'),
-                    self.row(workflows_to_fix=[{'name': 'x'}]), self.row(name='a\nb')):
+        for bad in (self.row(extra=1), self.row(apps=['nextcloud']), self.row(test_mode='no')):
             with self.subTest(bad=bad), self.assertRaises(BackupError):
                 haimport.register(self.paths, '20261118T120001Z-0123abcd', bad)
+        # What a conversion writes is cleaned instead of refused (review C-03).
+        haimport.register(self.paths, '20261118T120001Z-0123abcd',
+                          self.row(workflows_to_fix=[{'name': 'x'}], name='a\nb', reminders=['r'] * 30,
+                                   notes_by_app={'odoo': ['n\x00'], 'nextcloud': ['x']}))
+        row = haimport.load_registry(self.paths)['20261118T120001Z-0123abcd']
+        self.assertEqual((row['name'], row['workflows_to_fix']), ('a b', [{'name': 'x', 'active': False,
+                                                                             'reasons': []}]))
+        self.assertEqual((len(row['reminders']), row['notes_by_app']), (20, {'odoo': ['n ']}))
+        haimport.forget(self.paths, '20261118T120001Z-0123abcd')
         path = haimport.registry_path(self.paths)
         path.write_text('{"schema": 2}')
         self.assertIsNone(haimport.load_registry(self.paths))
@@ -302,6 +393,17 @@ class RegistryTests(unittest.TestCase):
         with self.assertRaises(BackupError):
             haimport.register(self.paths, '20261118T120001Z-0123abcd', self.row())
         self.assertEqual(path.read_text(), '{"schema": 2}', 'never replaced')
+
+    def test_rows_written_before_the_per_app_texts_still_count(self):
+        bid = '20261118T120001Z-0123abcd'
+        haimport.register(self.paths, bid, self.row())
+        path = haimport.registry_path(self.paths)
+        doc = json.loads(path.read_text())
+        for key in ('reminders_by_app', 'notes', 'notes_by_app'):
+            del doc['imports'][bid][key]
+        path.write_text(json.dumps(doc))
+        view = haimport.from_ha_views(self.paths)[bid]
+        self.assertEqual((view['reminders_by_app'], view['notes'], view['notes_by_app']), ({}, [], {}))
 
     def test_rows_of_missing_backups_are_pruned_after_a_day(self):
         old = '20261101T000000Z-00000001'
