@@ -859,12 +859,15 @@ class AddonInfo:
     """What Cockpit uses of an add-on's addon.json: `slug` = system.slug (e.g. odoo18ce, woow-n8n; identifies the app
     whatever repository prefix the backup slug has), `version` (installed add-on version), `image` (user.image, e.g.
     ghcr.io/woowtech/woow-ha-odoo-amd64; None when the add-on was built locally), `arch` (amd64 | aarch64 | unknown,
-    from the image name) and `name` (system.name). Options, passwords and tokens are never kept."""
+    from the image name), `name` (system.name) and `state` (the add-on's state when the backup began, e.g. `started`:
+    with a hot backup mode its files were copied while it ran; '' when absent). Options, passwords and tokens are never
+    kept."""
     slug: str
     version: str
     image: str | None
     arch: str
     name: str
+    state: str = ''
 
     def as_dict(self):
         return dataclasses.asdict(self)
@@ -901,7 +904,9 @@ def parse_addon_json(data):
         _need(isinstance(image, str) and IMAGE_RE.fullmatch(image), 'addon.json user.image is invalid')
     name = system.get('name', '')
     name = name if isinstance(name, str) and len(name) <= 200 and not CONTROL_RE.search(name) else ''
-    return AddonInfo(slug=slug, version=version, image=image, arch=image_arch(image), name=name)
+    state = doc.get('state')
+    state = state if isinstance(state, str) and re.fullmatch(r'[a-z]{1,20}', state) else ''
+    return AddonInfo(slug=slug, version=version, image=image, arch=image_arch(image), name=name, state=state)
 
 
 # ====================================================================== inner tar entries

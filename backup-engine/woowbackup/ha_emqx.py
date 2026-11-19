@@ -53,6 +53,10 @@ DATA_ROOTS = ('authentication', 'authorization', 'rule_engine', 'connectors', 'a
 TABLE_SETS = ('builtin_authn', 'builtin_authz', 'banned', 'dashboard_users', 'api_keys', 'psk', 'builtin_retainer')
 TABLES = ('emqx_authn_mnesia', 'emqx_authn_scram_mnesia', 'emqx_acl', 'emqx_banned', 'emqx_banned_rules', 'emqx_admin',
           'emqx_app', 'emqx_psk', 'emqx_retainer_message')
+# Tables a running EMQX 5.8.9 always has: one missing in HA's broker means its database did not load completely.
+REQUIRED_TABLES = ('emqx_authn_mnesia', 'emqx_acl', 'emqx_banned', 'emqx_admin', 'emqx_app')
+HOT_HINT = ('這份備份是在 EMQX 執行中製作的，內建資料庫可能只寫了一半；請先在 HA 停止 EMQX 附加元件，再重新製作備份後匯入'
+            '（附加元件停止時製作的備份最可靠）。')
 NODE_RE = re.compile(r'([A-Za-z][A-Za-z0-9_-]{0,63})@([A-Za-z0-9](?:[A-Za-z0-9.-]{0,251}[A-Za-z0-9])?)\Z')
 IPV4_RE = re.compile(r'(?:[0-9]{1,3}\.){3}[0-9]{1,3}\Z')
 EXPORT_RE = re.compile(rb'exported to (/work/out/emqx-export-[0-9.-]{10,40}\.tar\.gz)')
@@ -205,7 +209,7 @@ def evaluate(tmp, role, expression):
     return out.decode('utf-8', 'replace')
 
 
-def wait_ready(tmp, role, *, checkpoint, sleep=time.sleep, clock=time.monotonic, timeout=READY_TIMEOUT):
+def wait_ready(tmp, role, *, checkpoint, hint='', sleep=time.sleep, clock=time.monotonic, timeout=READY_TIMEOUT):
     deadline = clock() + timeout
     while True:
         if checkpoint is not None:
@@ -214,10 +218,15 @@ def wait_ready(tmp, role, *, checkpoint, sleep=time.sleep, clock=time.monotonic,
         if result.returncode == 0 and b'is started' in (result.stdout or b''):
             return
         if not tmp.running(role):
-            raise BackupError('incompatible', '暫用的 EMQX 無法開啟 HA 的資料（版本、設定或資料可能不相容）。')
+            raise BackupError('incompatible', '暫用的 EMQX 無法開啟這份資料（設定或資料可能不完整或不相容）。' + hint)
         if clock() > deadline:
-            raise BackupError('incompatible', f'暫用的 EMQX 在 {timeout} 秒內沒有就緒。')
+            raise BackupError('incompatible', f'暫用的 EMQX 在 {timeout} 秒內沒有就緒。' + hint)
         sleep(2)
+
+
+def hint_for(addon):
+    """The advice for a failure on HA's data: a backup made while EMQX ran may hold a half-written database."""
+    return HOT_HINT if addon is None or addon.state != 'stopped' else ''
 
 
 def parse_counts(text):
@@ -237,7 +246,10 @@ def parse_strict(text):
 
 def ha_broker(work, tmp, target, src, node, *, out_dir=None):
     """Start HA's broker on its staged data; returns its readings (and, with `out_dir`, the export file's path in
-    `out_dir`). The caller removes the objects."""
+    `out_dir`). The caller removes the objects. Anything that shows HA's database did not load completely -- the broker
+    does not start, a table every 5.8.9 broker has is missing, EMQX's own export fails -- refuses the import with the
+    advice to back up again with the add-on stopped: a result is never silently incomplete."""
+    hint = hint_for(src.addon)
     host = node.split('@', 1)[1]
     hosts = [] if IPV4_RE.fullmatch(host) else [(host, '127.0.0.1')]
     # No cookie is set: the image's default only guards the distribution port inside a container without a network.
@@ -254,21 +266,24 @@ def ha_broker(work, tmp, target, src, node, *, out_dir=None):
         if error.code != 'job-failed':
             raise
         raise BackupError('incompatible', f'無法以 HA 的 EMQX 節點名稱 {node} 啟動暫用的 EMQX。') from None
-    wait_ready(tmp, 'emqx-ha', checkpoint=work.checkpoint)
+    wait_ready(tmp, 'emqx-ha', checkpoint=work.checkpoint, hint=hint)
     readings = {'default_admin': 'default' in evaluate(tmp, 'emqx-ha', DEFAULT_ADMIN_EXPR).split(),
                 'counts': parse_counts(evaluate(tmp, 'emqx-ha', COUNT_EXPR)),
                 'roots': set(re.findall(r'<<"([a-z_]+)">>', evaluate(tmp, 'emqx-ha', ROOTS_EXPR))),
                 'authn': parse_authn(evaluate(tmp, 'emqx-ha', AUTHN_EXPR)),
                 'strict': parse_strict(evaluate(tmp, 'emqx-ha', STRICT_EXPR))}
     if len(readings['counts']) != len(TABLES):
-        raise BackupError('job-failed', '無法讀取 HA 的 EMQX 資料筆數。')
+        raise BackupError('incompatible', '無法讀取 HA 的 EMQX 資料筆數。' + hint)
+    missing = [t for t in REQUIRED_TABLES if readings['counts'].get(t, -1) < 0]
+    if missing:
+        raise BackupError('incompatible', f'HA 的 EMQX 內建資料庫沒有完整載入（缺少 {hacommon.names(missing)}）。' + hint)
     if out_dir is not None:
         roots = [root for root in DATA_ROOTS if root in readings['roots']]
         out = ctl(tmp, 'emqx-ha', ['data', 'export', '--root-keys', ','.join(roots), '--table-sets',
                                    ','.join(TABLE_SETS), '--dir', f'{WORK}/out'], timeout=1800).stdout or b''
         match = EXPORT_RE.search(out)
         if not match:
-            raise BackupError('job-failed', 'HA 的 EMQX 資料匯出失敗。')
+            raise BackupError('incompatible', 'EMQX 無法匯出 HA 的資料。' + hint)
         readings['export'] = match.group(1).decode('ascii')
     return readings
 
@@ -316,7 +331,7 @@ def take_export(work, tmp, path, staging):
     return dest
 
 
-def target_broker(work, tmp, target, export, ids):
+def target_broker(work, tmp, target, export, ids, *, hint=''):
     """This device's broker on an empty volume: import HA's export, load the strict settings back, verify."""
     name = os.path.basename(export)
     tmp.volume('emqx-in')
@@ -335,7 +350,7 @@ def target_broker(work, tmp, target, export, ids):
     work.log('把 HA 的 EMQX 資料匯入暫用的 EMQX（這台的映像與設定）')
     out = ctl(tmp, 'emqx-new', ['data', 'import', f'{WORK}/in/{name}'], timeout=1800).stdout or b''
     if b'imported successfully' not in out:
-        raise BackupError('job-failed', 'HA 的 EMQX 資料匯入時發生錯誤，已停止。')
+        raise BackupError('incompatible', 'HA 的 EMQX 資料匯入時發生錯誤（部分資料無法匯入），已停止。' + hint)
     snippet = f'authorization {{\n  no_match = {strict[0]}\n  deny_action = {strict[1]}\n  sources = []\n}}\n'.encode()
     tmp.exec('emqx-new', ['sh', '-c', f'cat > {WORK}/in/strict.hocon'], input=snippet, timeout=120,
              max_output=64 * 1024)
@@ -391,7 +406,9 @@ def analyse(src, readings, *, addon_version, version, live_authn=None):
     warnings += hocon_notes(src.hocon)
     if src.plugins:
         warnings.append(f'HA 的 EMQX 外掛（{hacommon.names(sorted(src.plugins))}）不會搬過來，需要時請在這台重新安裝。')
-    warnings.append('HA 的 EMQX 備份是在執行中製作的；如果匯入失敗，請先停掉 HA 的 EMQX 再重新備份。')
+    if hint_for(src.addon):
+        warnings.append('這份 HA 備份是在 EMQX 執行中製作的；最近的變更可能還沒寫進內建資料庫。最可靠的做法是先在 HA 停止 EMQX '
+                        '附加元件再製作備份。')
     return blockers, warnings
 
 
@@ -419,7 +436,8 @@ def section(src, node, readings, *, version):
             'retained_messages': rows('emqx_retainer_message'),
             'default_dashboard_password': bool((readings or {}).get('default_admin')),
             'anonymous': readings is not None and not any(a['enable'] for a in readings['authn']),
-            'plugins': sorted(src.plugins), 'ha_hosts': hacommon.ha_hosts(src.hocon)[:20]}
+            'hot_backup': bool(hint_for(src.addon)), 'plugins': sorted(src.plugins),
+            'ha_hosts': hacommon.ha_hosts(src.hocon)[:20]}
 
 
 # ====================================================================== the job steps
@@ -520,7 +538,7 @@ def convert(work, app, test_mode, out_dir):
     export = take_export(work, tmp, readings['export'], staging)
     _clean(tmp, volumes=('emqx-src', 'emqx-xfer', 'emqx-ha-log'))
     emqx_ids = tmp.user_ids('ids-emqx', target.image, 'emqx')
-    seeded, counts, strict, live_authn = target_broker(work, tmp, target, export, emqx_ids)
+    seeded, counts, strict, live_authn = target_broker(work, tmp, target, export, emqx_ids, hint=hint_for(src.addon))
     problems = check_counts(readings['counts'], seeded, counts)
     if problems:
         raise BackupError('job-failed', f'EMQX 匯入後的資料筆數和 HA 不同，已停止：{"、".join(problems[:10])}。')

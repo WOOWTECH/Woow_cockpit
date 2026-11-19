@@ -46,10 +46,10 @@ SEED = {'emqx_authn_mnesia': 1, 'emqx_authn_scram_mnesia': 0, 'emqx_acl': 0, 'em
         'emqx_admin': 1, 'emqx_app': 0, 'emqx_psk': 0, 'emqx_retainer_message': 0}
 
 
-def addon_tar(*, version='5.9.1', node_file=NODE, nodes=(NODE,)):
+def addon_tar(*, version='5.9.1', node_file=NODE, nodes=(NODE,), state='started'):
     addon = {'user': {'version': version, 'image': '1b7b4ce7/amd64-addon-woow-emqx',
                       'options': {'ngrok_authtoken': 'ha-ngrok-secret'}},
-             'system': {'slug': 'woow-emqx', 'name': 'Woow EMQX'}, 'version': version}
+             'system': {'slug': 'woow-emqx', 'name': 'Woow EMQX'}, 'version': version, 'state': state}
     entries = [{'name': '.', 'type': 'dir'}, {'name': './addon.json', 'data': json.dumps(addon).encode()},
                {'name': './image.tar', 'data': b'docker save' * 50},
                {'name': 'data', 'type': 'dir'}, {'name': 'data/options.json', 'data': b'{}'},
@@ -230,6 +230,52 @@ class CheckTests(EmqxCase):
         result = self.check(self.upload_emqx(), ['emqx'])[0]
         self.assertIn('HA 的 EMQX 是 5.8.9', result['blockers'][0])
 
+    def test_a_hot_backup_is_tried_and_named(self):
+        result = self.check(self.upload_emqx(), ['emqx'])[0]
+        self.assertTrue(result['ok'])
+        self.assertTrue(result['emqx']['hot_backup'])
+        self.assertTrue(any('執行中製作' in w for w in result['warnings']))
+        result = self.check(self.upload_emqx(state='stopped'), ['emqx'])[0]
+        self.assertFalse(result['emqx']['hot_backup'])
+        self.assertFalse(any('執行中製作' in w for w in result['warnings']))
+
+    def test_a_half_loaded_database_is_refused_with_the_advice(self):
+        real = self.world.evaluate
+
+        def evaluate(role, expression):
+            if role == 'emqx-ha' and expression == ha_emqx.COUNT_EXPR:
+                return counts_text(dict(HA_COUNTS, emqx_acl=-1))
+            return real(role, expression)
+
+        self.world.evaluate = evaluate
+        result = self.check(self.upload_emqx(), ['emqx'])[0]
+        self.assertFalse(result['ok'])
+        self.assertIn('沒有完整載入（缺少 emqx_acl）', result['blockers'][0])
+        self.assertIn('停止 EMQX 附加元件', result['blockers'][0])
+
+    def test_a_broker_that_does_not_start_is_refused_with_the_advice(self):
+        real = self.world.exec
+
+        def exec_(role, command, data, stdout):
+            if role == 'emqx-ha' and command[:3] == ['emqx', 'ctl', 'status']:
+                return Result(1, b'Node is not running!\n', b'')
+            return real(role, command, data, stdout)
+
+        self.world.exec = exec_
+        real_podman = self.world.podman
+
+        def podman(args, data, stdout):
+            if args[:2] == ['container', 'inspect'] and args[-1].endswith('emqx-ha') and 'Running' in args[3]:
+                return Result(0, b'false\n', b'')
+            return real_podman(args, data, stdout)
+
+        self.world.podman = podman
+        result = self.check(self.upload_emqx(state='stopped'), ['emqx'])[0]
+        self.assertIn('暫用的 EMQX 無法開啟這份資料', result['blockers'][0])
+        self.assertNotIn('執行中製作', result['blockers'][0], 'a cold backup gets no hot-backup advice')
+        result = self.check(self.upload_emqx(), ['emqx'])[0]
+        self.assertIn('停止 EMQX 附加元件', result['blockers'][0])
+
     def test_an_ip_node_name_needs_no_host_line(self):
         result = self.check(self.upload_emqx(node_file='emqx@127.0.0.1', nodes=('emqx@127.0.0.1',)), ['emqx'])[0]
         self.assertTrue(result['ok'])
@@ -267,6 +313,36 @@ class ConvertTests(EmqxCase):
         reminders = result['ha_import']['reminders_by_app']['emqx']
         self.assertTrue(any('Woow EMQX MCP Server' in line for line in reminders))
         self.assertTrue(any('homeassistant' in line for line in reminders))
+
+    def test_a_failed_export_stops_the_conversion_with_the_advice(self):
+        real = self.world.exec
+
+        def exec_(role, command, data, stdout):
+            if command[:4] == ['emqx', 'ctl', 'data', 'export']:
+                return Result(0, b'[error] Data export failed, reason: badmatch.\n', b'')
+            return real(role, command, data, stdout)
+
+        self.world.exec = exec_
+        with self.assertRaises(BackupError) as caught:
+            self.convert(self.upload_emqx(), ['emqx'])
+        self.assertEqual(caught.exception.code, 'incompatible')
+        self.assertIn('EMQX 無法匯出 HA 的資料', caught.exception.message)
+        self.assertIn('停止 EMQX 附加元件', caught.exception.message)
+        self.assertFalse(self.runs('emqx-new'), 'nothing is imported from a failed export')
+        self.assertEqual(self.storage.list_backups(), [])
+
+    def test_a_partial_import_stops_the_conversion(self):
+        real = self.world.exec
+
+        def exec_(role, command, data, stdout):
+            if command[:4] == ['emqx', 'ctl', 'data', 'import']:
+                return Result(0, b'Data has been imported, but some errors occurred, see the log above.\n', b'')
+            return real(role, command, data, stdout)
+
+        self.world.exec = exec_
+        with self.assertRaises(BackupError) as caught:
+            self.convert(self.upload_emqx(), ['emqx'])
+        self.assertIn('部分資料無法匯入', caught.exception.message)
 
     def test_lost_rows_stop_the_conversion(self):
         self.world.import_lost = 'emqx_acl'

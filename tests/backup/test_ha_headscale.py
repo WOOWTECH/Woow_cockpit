@@ -40,48 +40,71 @@ HA_CONFIG = (b'server_url: "http://homeassistant.local:28080"\nprefixes:\n  v4: 
              b'  extra_records_path: /etc/headscale/dns_records.json\npolicy:\n  mode: file\n  path: ""\n')
 
 
-def database(*, prefixes, version='v0.29.4', ips=('100.64.0.1', 'fd7a:115c:a1e0::1'), migrations=None, trigger=False):
+def populate(conn, *, prefixes, version='v0.29.4', ips=('100.64.0.1', 'fd7a:115c:a1e0::1'), migrations=None,
+             trigger=False):
+    conn.executescript("""
+        CREATE TABLE migrations(id text, PRIMARY KEY(id));
+        CREATE TABLE users(id integer PRIMARY KEY AUTOINCREMENT, name text, deleted_at datetime);
+        CREATE TABLE pre_auth_keys(id integer PRIMARY KEY AUTOINCREMENT, prefix text, hash blob, user_id integer);
+        CREATE TABLE api_keys(id integer PRIMARY KEY AUTOINCREMENT, prefix text, hash blob, expiration datetime,
+                              last_seen datetime, created_at datetime);
+        CREATE UNIQUE INDEX idx_api_keys_prefix ON api_keys(prefix);
+        CREATE TABLE nodes(id integer PRIMARY KEY AUTOINCREMENT, ipv4 text, ipv6 text, user_id integer);
+        CREATE TABLE policies(id integer PRIMARY KEY AUTOINCREMENT, data text);
+        CREATE TABLE database_versions(id integer PRIMARY KEY, version text NOT NULL, updated_at datetime);
+        INSERT INTO users(name) VALUES ('alice');
+        INSERT INTO pre_auth_keys(prefix, hash, user_id) VALUES ('pak', x'00', 1);
+    """)
+    conn.execute('INSERT INTO nodes(ipv4, ipv6, user_id) VALUES (?, ?, 1)', ips)
+    conn.execute('INSERT INTO database_versions VALUES (1, ?, ?)', (version, '2026-11-01'))
+    conn.executemany('INSERT INTO migrations VALUES (?)',
+                     [(m,) for m in (migrations or sorted(ha_headscale.MIGRATIONS['0.29.4']))])
+    conn.executemany('INSERT INTO api_keys(prefix, hash, created_at) VALUES (?, ?, ?)',
+                     [(p, b'hash-of-' + p.encode(), '2026-11-01') for p in prefixes])
+    if trigger:
+        conn.execute('CREATE TRIGGER t AFTER DELETE ON api_keys BEGIN SELECT 1; END')
+    conn.commit()
+
+
+def database(**kwargs):
     tmp = tempfile.TemporaryDirectory()
     try:
         path = Path(tmp.name) / 'db.sqlite'
         conn = sqlite3.connect(path)
-        conn.executescript("""
-            CREATE TABLE migrations(id text, PRIMARY KEY(id));
-            CREATE TABLE users(id integer PRIMARY KEY AUTOINCREMENT, name text, deleted_at datetime);
-            CREATE TABLE pre_auth_keys(id integer PRIMARY KEY AUTOINCREMENT, prefix text, hash blob, user_id integer);
-            CREATE TABLE api_keys(id integer PRIMARY KEY AUTOINCREMENT, prefix text, hash blob, expiration datetime,
-                                  last_seen datetime, created_at datetime);
-            CREATE UNIQUE INDEX idx_api_keys_prefix ON api_keys(prefix);
-            CREATE TABLE nodes(id integer PRIMARY KEY AUTOINCREMENT, ipv4 text, ipv6 text, user_id integer);
-            CREATE TABLE policies(id integer PRIMARY KEY AUTOINCREMENT, data text);
-            CREATE TABLE database_versions(id integer PRIMARY KEY, version text NOT NULL, updated_at datetime);
-            INSERT INTO users(name) VALUES ('alice');
-            INSERT INTO pre_auth_keys(prefix, hash, user_id) VALUES ('pak', x'00', 1);
-        """)
-        conn.execute('INSERT INTO nodes(ipv4, ipv6, user_id) VALUES (?, ?, 1)', ips)
-        conn.execute('INSERT INTO database_versions VALUES (1, ?, ?)', (version, '2026-11-01'))
-        conn.executemany('INSERT INTO migrations VALUES (?)',
-                         [(m,) for m in (migrations or sorted(ha_headscale.MIGRATIONS['0.29.4']))])
-        conn.executemany('INSERT INTO api_keys(prefix, hash, created_at) VALUES (?, ?, ?)',
-                         [(p, b'hash-of-' + p.encode(), '2026-11-01') for p in prefixes])
-        if trigger:
-            conn.execute('CREATE TRIGGER t AFTER DELETE ON api_keys BEGIN SELECT 1; END')
-        conn.commit()
+        populate(conn, **kwargs)
         conn.close()
         return path.read_bytes()
     finally:
         tmp.cleanup()
 
 
-def addon_tar(*, version='0.1.3', db=None, noise=NOISE, records=RECORDS, config=HA_CONFIG):
+def wal_only_database(**kwargs):
+    """(db, wal) like the RPi5's backup after Docker killed the add-on: a 4 KiB db.sqlite (the header page only) and
+    every table and row in the -wal, never checkpointed."""
+    tmp = tempfile.TemporaryDirectory()
+    try:
+        path = Path(tmp.name) / 'db.sqlite'
+        conn = sqlite3.connect(path)
+        conn.execute('PRAGMA journal_mode=WAL')
+        conn.execute('PRAGMA wal_autocheckpoint=0')
+        populate(conn, **kwargs)
+        data = path.read_bytes(), (Path(tmp.name) / 'db.sqlite-wal').read_bytes()
+        conn.close()
+        return data
+    finally:
+        tmp.cleanup()
+
+
+def addon_tar(*, version='0.1.3', db=None, noise=NOISE, records=RECORDS, config=HA_CONFIG, wal=None):
     addon = {'user': {'version': version, 'image': '1b7b4ce7/amd64-addon-woow-headscale',
                       'options': {'ngrok_authtoken': 'ha-ngrok-secret'}},
              'system': {'slug': 'woow-headscale', 'name': 'Woow Headscale VPN'}, 'version': version}
     entries = [{'name': '.', 'type': 'dir'}, {'name': './addon.json', 'data': json.dumps(addon).encode()},
                {'name': './image.tar', 'data': b'docker save' * 100},
                {'name': 'data', 'type': 'dir'}, {'name': 'data/options.json', 'data': b'{}'},
+               *([{'name': 'data/db.sqlite-wal', 'data': wal}] if wal is not None else []),
                {'name': 'data/db.sqlite', 'data': db if db is not None else database(prefixes=['ha-key-1', 'ha-key-2'])},
-               {'name': 'data/db.sqlite-shm', 'data': b'shm'},
+               {'name': 'data/db.sqlite-shm', 'data': b'shm-of-a-killed-server' * 100},
                {'name': 'data/.headplane_api_key', 'data': b'hskey-api-ha-secret'},
                {'name': 'data/.headplane_cookie_secret', 'data': b'ha-cookie-secret'},
                {'name': 'data/headplane', 'type': 'dir'}, {'name': 'data/headplane/hp_persist.db', 'data': b'hp'},
@@ -206,6 +229,24 @@ class ConvertTests(HeadscaleCase):
         self.assertTrue(any('Woow Headscale MCP Server' in line for line in reminders))
         self.assertNotIn(NOISE, '\n'.join(self.reporter.logs))
         self.assertNotIn(NOISE, jobs.redact(f'a {NOISE} b'))
+
+    def test_a_database_whose_data_is_only_in_the_wal(self):
+        """The RPi5 add-on was killed before it checkpointed: db.sqlite is the header page, all data in the -wal. The
+        WAL is carried and applied in the sandboxed child (never HA's -shm) and one checkpointed file moves."""
+        db, wal = wal_only_database(prefixes=['ha-key-1'])
+        self.assertLessEqual(len(db), 4096)
+        self.assertGreater(len(wal), 8 * 4096)
+        result = self.check(self.upload_headscale(db=db, wal=wal), ['headscale'])[0]
+        self.assertEqual((result['ok'], result['headscale']['users'], result['headscale']['nodes']), (True, 1, 1))
+        self.convert(self.upload_headscale(db=db, wal=wal), ['headscale'])
+        data = self.volume('headscale-data')
+        self.assertNotIn('db.sqlite-wal', data)
+        self.assertNotIn('db.sqlite-shm', data)
+        self.assertGreater(len(data['db.sqlite'][1]), len(db), 'the WAL was checkpointed into the file')
+        keys, users = self.keys_of(data['db.sqlite'][1])
+        self.assertEqual((keys, users), (['live-headplane', 'live-mcp'], ['alice']))
+        without = self.check(self.upload_headscale(db=db), ['headscale'])[0]
+        self.assertFalse(without['ok'], 'the header page alone is no Headscale database')
 
     def test_a_failed_configtest_changes_nothing(self):
         self.world.configtest = 1
