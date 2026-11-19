@@ -11,7 +11,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from woowbackup import habackup, hacommon, ha_hermes, nested
+from woowbackup import habackup, hacommon, ha_hermes, jobs, nested
 from woowbackup.errors import BackupError
 from woowbackup.podman import Result
 
@@ -113,6 +113,8 @@ class HermesCase(fk.ConversionCase):
 
     def setUp(self):
         super().setUp()
+        for value in ('ha-openrouter', 'http://a0d7b954-litellm:4000/v1'):
+            self.addCleanup(jobs.unmask_secret, value)
         patcher = mock.patch.object(hacommon, 'host_elf_machine', lambda: 0x3E)
         patcher.start()
         self.addCleanup(patcher.stop)
@@ -183,6 +185,7 @@ class ConvertTests(HermesCase):
         for managed in (b'API_SERVER_KEY', b'WEBHOOK_SECRET', b'HERMES_DASHBOARD_BASIC_AUTH_PASSWORD'):
             self.assertNotIn(managed, env)
         self.assertEqual(data['.env'][0].mode, 0o600)
+        self.assertNotIn('ha-openrouter', jobs.redact('key ha-openrouter'), 'kept provider keys are masked')
         link = data['omnigent-plugin/venv/lib.so'][0]
         self.assertEqual((link.islnk(), link.linkname), (True, 'omnigent-plugin/uv/lib.so'))
         venv = data['omnigent-plugin/venv/python'][0]
@@ -215,9 +218,9 @@ class ConvertTests(HermesCase):
 
 class EnvTests(unittest.TestCase):
     def test_strip(self):
-        data, keys = ha_hermes.strip_env(b'A=1\n  export HERMES_PASEO_ORIGIN=x\nHERMES_BASE_URL=y\n# c\nB=2')
-        self.assertEqual(data, b'A=1\n# c\nB=2')
-        self.assertEqual(keys, ['A', 'B'])
+        data, keys, values = ha_hermes.strip_env(b'A=1\n  export HERMES_PASEO_ORIGIN=x\nHERMES_BASE_URL=y\n# c\nB="2"')
+        self.assertEqual(data, b'A=1\n# c\nB="2"')
+        self.assertEqual((keys, values), (['A', 'B'], ['1', '2']))
 
     def test_names(self):
         self.assertEqual(ha_hermes.flat('cron/executions.db-wal'), 'cron.executions.db-wal')

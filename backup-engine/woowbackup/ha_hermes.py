@@ -52,6 +52,7 @@ MANAGED_ENV_RE = re.compile(rb'\s*(?:export\s+)?(?:API_SERVER_KEY|WEBHOOK_SECRET
 ENV_KEY_RE = re.compile(rb'\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]{0,100})\s*=')
 CONFIG_VERSION_RE = re.compile(r'^_config_version:\s*([0-9]{1,6})\s*$', re.M)
 MAX_ENV = 1024 * 1024
+MASK_MIN = 12
 MAX_TEXT = 8 * 1024 * 1024
 MAX_SKILL = 4 * 1024 * 1024
 UID_RE = re.compile(r'[0-9]{1,9}\Z')
@@ -132,16 +133,20 @@ class _Tee:
 
 
 def strip_env(data):
-    """(HA's .env without the lines this device's secrets and URLs own, the key names it holds)."""
-    kept, keys = [], []
+    """(HA's .env without the lines this device's secrets and URLs own, the key names it holds, the values of the
+    kept keys -- the caller masks them)."""
+    kept, keys, values = [], [], []
     for line in data.splitlines(keepends=True):
         if MANAGED_ENV_RE.match(line):
             continue
         match = ENV_KEY_RE.match(line)
         if match:
             keys.append(match.group(1).decode('ascii'))
+            value = line[match.end():].strip().strip(b'"\'').decode('utf-8', 'replace')
+            if value:
+                values.append(value)
         kept.append(line)
-    return b''.join(kept), sorted(set(keys))
+    return b''.join(kept), sorted(set(keys)), values
 
 
 def _known_db(rel):
@@ -194,7 +199,11 @@ def scan_member(stream, report, staging, out, *, machine=None, guard=None, check
             src.foreign.append(rel)
         mode = entry.mode
         if rel == '.env':
-            data, src.env_keys = strip_env(entry.read_all(MAX_ENV))
+            data, src.env_keys, values = strip_env(entry.read_all(MAX_ENV))
+            from . import jobs
+            for value in values:
+                if len(value) >= MASK_MIN:  # provider keys and tokens: masked in every log line of this job
+                    jobs.mask_secret(value)
             src.ha_urls.update(f'.env：{host}' for host in hacommon.ha_hosts(data.decode('utf-8', 'replace')))
             out.data(rel, data, mode, entry.mtime)
             continue
