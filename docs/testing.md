@@ -213,7 +213,20 @@ H8（`upload_window.mjs`）在最終回歸前跑過兩批，每種設定共 6 �
 
 2026-11-19（177c8c6，部署後 36 個已安裝檔案與工作樹 sha256 相同）：50／50 通過（其中 `live` 1／1、`verify cleanup leaks` 15／15），頁面的指令碼與 console 錯誤 0；上傳 6.2 秒、檢查 28.8 秒、轉換 128.3 秒、還原 158.0 秒；之後 `baseline cleanup` 7／7：基準標記資料列都在、匯入的模組、聯絡人與工作流程都不在、四個健康網址 200，沒有暫用容器、資料卷、網路、暫存資料夾或金鑰檔。證據 `~/.woowbk-lab/evidence/ha-import-ui/20261118T231340/`。
 
-尚未實測：多 GB 備份與超過 8 GiB 的單一項目、不同 CPU 架構、兩台實體設備之間的還原（兩台實驗室設備在同一台實體主機上）。正式應用（含沒有 PostgreSQL 的 EMQX、OpenDesign、Headscale，以及使用主機資料夾的 Odoo、Home Assistant、Nextcloud）已在參考主機實測備份與原位還原，見 [production-onboarding.md](backup/production-onboarding.md)；正式應用沒有做跨設備還原。
+**ARM 機器做的 HA 備份（2026-11-19，`feat/ha-import-arm`）。** 來源是一台真的 Raspberry Pi 5（`raspberrypi5-64`、HAOS 17.2、Supervisor 2026.11.0、4 GB 記憶體），Odoo add-on 0.4.13 與 n8n 2.43.6 從 WOOW App Store 安裝，測試資料和 x86 那份相同，另加 300 位中文與表情符號名稱的聯絡人、一個 `pg_trgm` 索引、一個純 JavaScript 的社群節點（`n8n-nodes-globals`）。驅動程式的選項：`--fixtures <資料夾> --prefix woow-arm --odoo-addon-version 0.4.13 --arch aarch64`；情境 `armcompare`（用 `--fingerprint` 的來源指紋逐表比對列數與內容摘要）、`armdownload`、`armnative`、`armcrash`。
+
+| 備份形式 | 測了什麼 | 結果 |
+| --- | --- | --- |
+| 加密（securetar v3） | 檢查、轉換、還原、驗證 | 通過；轉換 111 秒、還原 140 秒 |
+| 未加密 | 檢查，第二個資料庫 woowtest2 轉換與還原 | 通過 |
+| 加密、未壓縮 | 檢查，「這只是測試」匯入 | 通過 |
+| HA 網頁下載的解密副本 | 不用金鑰檢查、轉換、還原、驗證 | 通過 |
+| 含 ARM 專用程式 | Odoo 自訂模組的 aarch64 `.so`：寫出模組名稱並擋下，轉換也不會進行；另一個資料庫仍可匯入。n8n 社群節點的 aarch64 `.node`：提醒後匯入，n8n 正常啟動，其他社群節點照常載入 | 通過 |
+| PostgreSQL 非正常關機（`docker kill`，`pg_control` 為 in production） | x86 的 PostgreSQL 16 重播 ARM 的 WAL，最後提交的資料列還在 | 通過 |
+
+`run2`：117／117（`baseline upload keys check convert restore armcompare verify db2 testmode armdownload armnative armcrash cleanup leaks baseline`），證據 `~/.woowbk-lab/evidence/arm-ha-import-run2/20261119T091730/`。`armcompare`：Odoo 205 個資料表有 204 個的列數與內容摘要和 RPi5 上完全相同，只有 `ir_config_parameter` 不同（這台的網址與升級標記）。`run3`（`armnative baseline`）14／14。真實頁面（`ha_import_ui.mjs --fixture <ARM 加密備份> --verify --baseline`）59／59，頁面錯誤 0，證據 `~/.woowbk-lab/evidence/arm-ha-import-ui/`。第一次的 `run1` 54／55：測試資料的附件是用錯誤的 Odoo 設定建立的，檔案沒有進到 add-on 的檔案庫，來源本身就讀不到；改正測試資料、重做全部備份後即為上表。n8n 自己安裝社群節點時不執行安裝腳本，含原生程式的套件（例如 `n8n-nodes-sqlite`）在 RPi5 上就裝不起來，所以 `armnative` 的社群節點是手動放進 `nodes/` 的。
+
+尚未實測：多 GB 備份與超過 8 GiB 的單一項目、Cockpit 本身裝在 ARM 設備上、兩台實體設備之間的還原（兩台實驗室設備在同一台實體主機上）。正式應用（含沒有 PostgreSQL 的 EMQX、OpenDesign、Headscale，以及使用主機資料夾的 Odoo、Home Assistant、Nextcloud）已在參考主機實測備份與原位還原，見 [production-onboarding.md](backup/production-onboarding.md)；正式應用沒有做跨設備還原。
 
 ## 從本機 Cockpit 擷取畫面
 

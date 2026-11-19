@@ -56,6 +56,8 @@ are not ready are skipped and the run is 部分完成): the settings and state f
 shapes (§7), the timer, the tick decision, the registry and the two retention pools (§8), security rule 17 (§10), the
 page (§11) and the lab scenarios (§13). The archive and index formats are unchanged: a scheduled backup is a `manual`
 backup with the note 排程備份 that the schedule's registry lists, readable by 2026.11.15.2.
+Revised 2026-11-19 (branch `feat/ha-import-arm`): HA backups made on **ARM (aarch64)** are imported like x86 ones, after tests with
+a real Raspberry Pi 5; an Odoo custom module that would be copied and holds an ELF file for another processor is a blocker (§7, §9).
 Revised 2026-11-18 (branch `feat/ha-import`, part A: engine) for **importing Home Assistant backups** (owner decisions
 2026-11-18: Cockpit reads a Home Assistant OS backup file itself; only the WOOWTECH Odoo and n8n add-ons; x86 only; the
 HA key is pasted for each import and never stored): an uploaded HA backup is recognised by `upload-finish` and kept in
@@ -954,9 +956,10 @@ Shapes:
   "data/odoo/addons/18.0" or "share/odoo_addons")}], crons_active, mail_servers_active, size (bytes), filestore_files,
   filestore_bytes}]}, n8n?{owner_email|null, workflows, workflows_active, credentials, executions, users, projects,
   variables, data_tables, community_packages[{name, version}], workflows_to_fix[{name, active, reasons[]}]}}]` — an app
-  is `ok` only without blockers (Odoo: and at least one database `ok`); a blocker is a plain sentence (ARM backup, app
+  is `ok` only without blockers (Odoo: and at least one database `ok`); a blocker is a plain sentence (unknown processor, app
   not installed or not deployed here, no owner account in HA's n8n, different versions, missing modules with the
-  share-folder hint, missing Python packages or programs of custom modules, newer PostgreSQL, unsupported extensions,
+  share-folder hint, missing Python packages or programs of custom modules, a custom module to copy with an ELF file for
+  another processor, newer PostgreSQL, unsupported extensions,
   pending module operations, not enough space).
 * `HaImport` (part B; `result.ha_import` and `BackupMeta.from_ha`): `ha_backup_id, name, date, apps[app_id],
   odoo_database|null, test_mode(bool), workflows_to_fix[{name, active, reasons[]}], reminders[zh-TW],

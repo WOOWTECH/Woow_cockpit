@@ -19,15 +19,11 @@
 
 「排程備份」在選定的日子與時間自動建立備份（預設關閉；開啟前要先保存緊急金鑰），每個應用保留最新幾份排程備份，手動、還原前與上傳的備份不會被排程刪除；錯過的排程補做一次，尚未就緒的應用略過並標示「部分完成」。使用方式見 [backup.md](backup.md)「排程備份」，現況見 [current-state.md](current-state.md)。
 
-## 備份與還原：從 Home Assistant 備份匯入（2026.11.19.1，第一階段完成）
+## 備份與還原：從 Home Assistant 備份匯入（2026.11.19.2，已完成）
 
-把 Home Assistant OS 上 WOOWTECH 的 Odoo、n8n add-on 備份上傳到這台，轉成這台的備份後用原本的還原流程匯入（還原前自動備份、失敗自動退回）。使用方式見 [backup.md](backup.md)「從 Home Assistant 備份匯入」，現況見 [current-state.md](current-state.md)。
+把 Home Assistant OS 上 WOOWTECH 的 Odoo、n8n add-on 備份上傳到這台，轉成這台的備份後用原本的還原流程匯入（還原前自動備份、失敗自動退回）。x86 和 ARM（例如樹莓派、HA Green）的 HA 做的備份都能匯入。使用方式見 [backup.md](backup.md)「從 Home Assistant 備份匯入」，現況見 [current-state.md](current-state.md)。
 
-接下來的階段：
-
-1. **這台 → HA（只做 n8n）**：在 HA 裝一個新的「WOOW 備份匯入」add-on，上傳這台的備份，由它整理成 HA 的格式後交給 HA 自己的還原。測試通過、負責人同意後才上架 WOOW App Store。開始前會再確認細節。
-2. **HA 的 Odoo add-on 跟上這台**：資料庫從 PostgreSQL 16 升到 17、加上搜尋擴充功能與 WOOWTECH 模組；之後再做 Odoo 的「這台 → HA」。這會影響所有使用 HA Odoo add-on 的客戶，要另外規劃與測試。
-3. **ARM 機器做的 HA 備份**：第一階段只接受 x86 機器做的備份；ARM（例如樹莓派、HA Green）等實機測試過再開放。
+方向只有「HA → 這台」：改用 Podman 代表設備升級，負責人決定（2026-11-19）不做「這台 → HA」，也不為此調整 HA 的 Odoo add-on。
 
 ## 備份與還原：尚未涵蓋
 
