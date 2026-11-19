@@ -1959,10 +1959,11 @@ PostgreSQL 15).
 3. The sandboxed child reads HA's database (integrity, only Headscale's tables, no trigger or view, counts, version,
    migrations, node addresses) and, for the conversion, replaces HA's `api_keys` rows by the rows of an
    integrity-checked copy of the live database (taken from the live volume's export while it runs), in one transaction,
-   then checkpoints the WAL into the file: the live Headplane and MCP admin keys keep working, HA's keys do not exist
+   then requires a completed WAL checkpoint and independently reopens the output, original and live copies to verify integrity, table counts and API key prefixes: the live Headplane and MCP admin keys keep working, HA's keys do not exist
    here.
-4. `headscale-data` from scratch, owned like the live top folder: the converted `db.sqlite` 0644, HA's
-   `noise_private.key` 0600, HA's records at the live config's `dns.extra_records_path` when it lies in the volume
+   A live database-mode ACL policy blocks import, because HA's database policies replace it; file-mode policy remains configured.
+4. `headscale-data` from scratch, owned like the live top folder: the converted database 0644 and HA's
+   Noise key 0600 at the live config's paths (which must be within `/var/lib/headscale/`), HA's records at the live config's `dns.extra_records_path` when it lies in the volume
    (`[]` when HA has none; a warning when it lies elsewhere). Before packaging, `headscale configtest` of the live image
    (network none, read-only root, the live configuration read-only) opens a throwaway copy of that volume: version path,
    migrations and schema as the server will check them; failing it fails the job. `headplane-data`: the live export
@@ -2063,7 +2064,7 @@ the restore's settings check says `same`; then `flows._package` (§8 "Home Assis
    a child that dropped to the account nobody on a copy of its own, never by the job process; symlinks below `nodes/`
    may climb (`..`) only before their names; a disk running full or a cancel stops a container step within seconds.
    Batch 1: every SQLite file of an HA backup (and the copy of the live Headscale database) is opened only by
-   `hasqlite`'s child (nobody, chroot, no network, limits, defensive, ordinary tables, fixed statements), whose only
+   `hasqlite`'s child (nobody, chroot, no network, limits, defensive, ordinary tables, fixed statements; databases containing virtual tables are refused before integrity checks), whose only
    write is Headscale's `api_keys` on a database without triggers or views, and what it wrote is copied out with
    O_NOFOLLOW as a regular file with one link; HA's Omnigent dump is restored by a role without privileges and refused
    when its list holds a kind of object Omnigent never creates; HA's EMQX data is opened by the live image without a

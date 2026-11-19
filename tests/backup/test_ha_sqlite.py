@@ -55,7 +55,6 @@ class ChildTests(unittest.TestCase):
             INSERT INTO schema_version VALUES (31); INSERT INTO schema_version VALUES (32);
             INSERT INTO sessions VALUES ('s1'); INSERT INTO messages VALUES ('m1'), ('m2');
             CREATE VIEW recent AS SELECT * FROM messages;
-            CREATE VIRTUAL TABLE msg_fts USING fts5(body);
         """)
         conn.commit()
         conn.close()
@@ -68,9 +67,24 @@ class ChildTests(unittest.TestCase):
         self.assertEqual(answer['counts'], {'sessions': 1, 'messages': 2})
         self.assertEqual(answer['values'], {'hermes.schema_version': 32})
         self.assertEqual(answer['schema']['views'], 1)
-        self.assertEqual(answer['schema']['virtual'], ['msg_fts'])
+        self.assertEqual(answer['schema']['virtual'], [])
         self.assertNotIn('msg_fts_data', answer['schema']['tables'])
         self.assertFalse((self.root / 'work').exists(), 'the folder goes')
+
+    def test_disguised_virtual_table_is_refused_before_integrity_check(self):
+        for i, gap in enumerate(('\t', '\n', ' /* comment */ ')):
+            path = self.root / ('virtual%d.db' % i)
+            conn = sqlite3.connect(path)
+            conn.execute('CREATE' + gap + 'VIRTUAL TABLE sessions USING fts5(body)')
+            conn.execute("INSERT INTO sessions VALUES ('hello')")
+            conn.execute("UPDATE sessions_config SET v=99 WHERE k='version'")
+            conn.commit()
+            conn.close()
+            answer = hasqlite.run([{'db': 'x.db', 'check': 'quick', 'counts': ['sessions']}],
+                                  {'x.db': path}, self.root / ('work%d' % i))['x.db']
+            self.assertIn('virtual tables', answer.get('error', ''))
+            self.assertNotIn('check', answer)
+            self.assertNotIn('counts', answer)
 
     def test_a_wal_is_applied_on_the_childs_copy_only(self):
         conn = headscale_db(self.root / 'db.sqlite', prefixes=['aaaa'], wal=True)
@@ -162,6 +176,15 @@ class ApiKeyTests(unittest.TestCase):
         self.assertEqual(rows, [('live-headplane', b'hash-of-live-headplane'), ('live-mcp', b'hash-of-live-mcp')])
         self.assertEqual(users, [('alice',)], "HA's other data is kept")
         self.assertNotIn('hash-of', repr(answers), 'no hash ever leaves the child')
+
+    def test_busy_checkpoint_is_rejected(self):
+        headscale_db(self.root / 'ha', prefixes=['ha-key'])
+        headscale_db(self.root / 'live', prefixes=['live'])
+        child = hasqlite.CHILD.replace('conn.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()', '(1, 5, 2)')
+        with mock.patch.object(hasqlite, 'CHILD', child):
+            answers = self.replace(self.root / 'ha', self.root / 'live')
+        self.assertIn('checkpoint did not complete', answers['ha.sqlite']['error'])
+        self.assertNotIn('replaced', answers['ha.sqlite'])
 
     def test_a_trigger_that_would_keep_has_keys_is_refused(self):
         headscale_db(self.root / 'ha', prefixes=['ha-key'], triggers=True)

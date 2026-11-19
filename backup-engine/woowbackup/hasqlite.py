@@ -95,8 +95,9 @@ def connect(name):
     return conn
 def layout(conn):
     rows = conn.execute("SELECT name, type, sql FROM sqlite_master").fetchall()
+    gap = r"(?:\s|--[^\n]*(?:\n|$)|/\*[\s\S]*?\*/)+"
     virtual = [n for n, k, q in rows if k == "table" and isinstance(q, str)
-               and q.lstrip()[:20].upper().replace(" ", "").startswith("CREATEVIRTUAL")]
+               and re.match(r"^\s*CREATE" + gap + r"VIRTUAL" + gap + r"TABLE\b", q, re.I)]
     tables = sorted(n for n, k, q in rows if k == "table" and isinstance(n, str) and n not in virtual
                     and not any(n.startswith(v + "_") for v in virtual))
     return {"tables": tables, "virtual": sorted(str(v)[:64] for v in virtual)[:50],
@@ -121,6 +122,8 @@ for spec in request["dbs"]:
     try:
         conn = connect(name)
         info = layout(conn)
+        if info["virtual"]:
+            raise ValueError("virtual tables are not supported")
         if spec.get("check"):
             doc["check"] = checked(conn, spec["check"])
         if spec.get("schema"):
@@ -155,9 +158,12 @@ for spec in request["dbs"]:
                 raise ValueError("the database has triggers or views")
             other = connect(source)
             try:
+                other_info = layout(other)
+                if other_info["virtual"]:
+                    raise ValueError("virtual tables are not supported")
                 if checked(other, "integrity") != ["ok"]:
                     raise ValueError("the source database is damaged")
-                rows = api_keys(other, layout(other))
+                rows = api_keys(other, other_info)
             finally:
                 other.close()
             if len(rows) > 1000:
@@ -171,7 +177,9 @@ for spec in request["dbs"]:
             written = [r[0] for r in conn.execute("SELECT prefix FROM api_keys ORDER BY id").fetchall()]
             if written != [r[0] for r in rows]:
                 raise ValueError("the API keys were not written")
-            conn.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchall()
+            checkpoint = conn.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
+            if checkpoint is None or checkpoint[0] != 0 or checkpoint[1] != checkpoint[2]:
+                raise ValueError("WAL checkpoint did not complete")
             doc["replaced"] = {"api_keys": len(rows), "prefixes": [str(p)[:64] for p in written]}
     except Exception as exc:
         doc["error"] = (type(exc).__name__ + ": " + str(exc))[:300]

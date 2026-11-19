@@ -21,7 +21,7 @@ converted `db.sqlite` (0644), HA's noise key (0600, masked in every log) and HA'
 (network none, the live configuration read-only) on a throwaway copy of that volume: it opens the database, checks
 the version path, applies migrations and validates the schema exactly as the server will. `headplane-data` is the live
 export as it is (this device's Headplane logins and roles stay). The target keeps its `server_url`, prefixes, DNS and
-policy settings, every config file and secret.
+policy configuration, every config file and secret. Database policies are replaced by HA policies; a live database policy blocks the import.
 """
 import os
 import re
@@ -160,6 +160,25 @@ def live_config(work, app, target):
     return hacommon.scalars(data.decode('utf-8', 'replace'))
 
 
+def data_paths(config):
+    """Resolve configured identity files strictly inside the data volume."""
+    paths = []
+    for key, default in (('database.sqlite.path', '/var/lib/headscale/db.sqlite'),
+                         ('noise.private_key_path', '/var/lib/headscale/noise_private.key')):
+        path = config.get(key, default)
+        if not isinstance(path, str) or not path.startswith(DATA_TARGET + '/'):
+            raise BackupError('incompatible', f'Headscale 設定 {key} 必須位於 {DATA_TARGET}/ 內。')
+        rel = path[len(DATA_TARGET) + 1:]
+        if not rel or any(not re.fullmatch(r'[A-Za-z0-9_.-]{1,100}', part) or part in ('.', '..')
+                          for part in rel.split('/')):
+            raise BackupError('incompatible', f'Headscale 設定 {key} 的路徑不安全。')
+        paths.append(rel)
+    if (paths[1] in (paths[0], paths[0] + '-wal', paths[0] + '-shm')
+            or paths[0].startswith(paths[1] + '/') or paths[1].startswith(paths[0] + '/')):
+        raise BackupError('incompatible', 'Headscale 資料庫與身分金鑰的路徑衝突。')
+    return tuple(paths)
+
+
 def records_rel(config):
     """The extra-records file's path inside the data volume (None when the live config keeps it elsewhere)."""
     path = config.get('dns.extra_records_path') or ''
@@ -173,11 +192,11 @@ def records_rel(config):
 # ====================================================================== analysis
 
 def _specs(*, replace):
-    ha = {'db': 'ha.sqlite', 'check': 'integrity', 'schema': True, 'counts': list(COUNTED),
+    ha = {'db': 'ha.sqlite', 'check': 'integrity', 'schema': True, 'counts': sorted(TABLES),
           'queries': ['headscale.version', 'headscale.migrations', 'headscale.node_ips', 'headscale.api_key_prefixes']}
     if replace:
         ha['replace_api_keys_from'] = 'live.sqlite'
-        return [{'db': 'live.sqlite', 'check': 'integrity', 'queries': ['headscale.api_key_prefixes']}, ha]
+        return [{'db': 'live.sqlite', 'check': 'integrity', 'queries': ['headscale.api_key_prefixes'], 'counts': ['policies']}, ha]
     return [ha]
 
 
@@ -285,7 +304,9 @@ def _pass(work, staging):
 def _prepare(work, app):
     target = Target(work, app)
     version = hacommon.semver(hacommon.image_labels(work, app, target.image).get('org.opencontainers.image.version'))
-    return target, version, live_config(work, app, target)
+    config = live_config(work, app, target)
+    data_paths(config)
+    return target, version, config
 
 
 def check(work, app):
@@ -299,24 +320,39 @@ def check(work, app):
         files = {'ha.sqlite': src.db, **({'ha.sqlite-wal': src.wal} if src.wal else {})}
         answer = hasqlite.run(_specs(replace=False), files, staging / 'sqlite', checkpoint=work.checkpoint,
                               what='Headscale 資料庫')['ha.sqlite']
+    live = _live_db(work, app, target, staging, config)
+    live_answer = hasqlite.run([{'db': 'live.sqlite', 'check': 'integrity', 'counts': ['policies']}], live,
+                               staging / 'sqlite-live', checkpoint=work.checkpoint, what='這台 Headscale 資料庫')['live.sqlite']
     addon = work.addon_info(SLUG)
     blockers, warnings, details = analyse(src, answer, addon_version=addon.version, version=version,
                                           ha_config=src.config, config=config)
+    policy_blocker = live_policy_blocker(live_answer, config)
+    if policy_blocker:
+        blockers.append(policy_blocker)
     return {'target_version': version or '', 'blockers': blockers, 'warnings': warnings,
             'headscale': section(src, details, version=version, ha_config=src.config, config=config)}
 
 
-def _live_db(work, app, target, staging):
+def live_policy_blocker(answer, config):
+    if hasqlite.problem(answer) or 'policies' not in (answer.get('counts') or {}):
+        return '無法確認這台 Headscale 的資料庫存取政策，已停止匯入。'
+    if config.get('policy.mode', 'file') == 'database' and answer['counts']['policies']:
+        return '這台 Headscale 有資料庫存取政策；匯入會以 HA 的政策取代，為避免放寬存取權限已停止。'
+    return None
+
+
+def _live_db(work, app, target, staging, config):
     """The live database (+ WAL) copied out of the live volume's export (read while Headscale runs; the child checks
     its integrity before it uses a row of it)."""
+    db_rel, _key_rel = data_paths(config)
     export = hacommon.live_export(work, app, target.data_volume, staging / 'live-data.tar')
     found = {}
     try:
         with ha_odoo._live_tar(export, '這台 Headscale 的資料卷') as tar:
             for member in tar:
                 name = ha_odoo._norm(member.name)
-                if name in ('db.sqlite', 'db.sqlite-wal') and member.isfile() and member.size <= MAX_DB:
-                    dest = staging / ('live.sqlite' if name == 'db.sqlite' else 'live.sqlite-wal')
+                if name in (db_rel, db_rel + '-wal') and member.isfile() and member.size <= MAX_DB:
+                    dest = staging / ('live.sqlite' if name == db_rel else 'live.sqlite-wal')
                     fd = os.open(dest, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
                     with os.fdopen(fd, 'wb') as handle:
                         source = tar.extractfile(member)
@@ -349,7 +385,7 @@ def convert(work, app, test_mode, out_dir):
     if src.db is None:
         raise BackupError('incompatible', 'Headscale 不能搬過來：HA 備份裡沒有 Headscale 的資料庫。', app=app.id)
     files = {'ha.sqlite': src.db, **({'ha.sqlite-wal': src.wal} if src.wal else {}),
-             **_live_db(work, app, target, staging)}
+             **_live_db(work, app, target, staging, config)}
     converted = staging / 'converted'
     converted.mkdir(mode=0o700)
     answers = hasqlite.run(_specs(replace=True), files, staging / 'sqlite', outputs=('ha.sqlite',),
@@ -357,6 +393,9 @@ def convert(work, app, test_mode, out_dir):
     live_problem = hasqlite.problem(answers['live.sqlite'])
     if live_problem:
         raise BackupError('job-failed', f'這台 Headscale 資料庫的複本無法讀取（{live_problem}），請稍後再試一次。', app=app.id)
+    policy_blocker = live_policy_blocker(answers['live.sqlite'], config)
+    if policy_blocker:
+        raise BackupError('incompatible', policy_blocker, app=app.id)
     addon = work.addon_info(SLUG)
     blockers, _warnings, details = analyse(src, answers['ha.sqlite'], addon_version=addon.version, version=version,
                                            ha_config=src.config, config=config)
@@ -366,6 +405,24 @@ def convert(work, app, test_mode, out_dir):
     live_keys = (answers['live.sqlite'].get('values') or {}).get('headscale.api_key_prefixes') or []
     if replaced.get('prefixes') != live_keys:
         raise BackupError('job-failed', 'Headscale 的 API 金鑰沒有換成這台的，已停止。', app=app.id)
+    db_file = answers[None]['ha.sqlite']
+    verify_specs = _specs(replace=False)
+    verify_specs += [{'db': 'original.sqlite', 'check': 'integrity', 'counts': sorted(TABLES)},
+                     {'db': 'live.sqlite', 'check': 'integrity', 'counts': ['policies'],
+                      'queries': ['headscale.api_key_prefixes']}]
+    verify_files = {'ha.sqlite': db_file, 'original.sqlite': src.db,
+                    **({'original.sqlite-wal': src.wal} if src.wal else {}),
+                    **{name: path for name, path in files.items() if name.startswith('live.sqlite')}}
+    verified = hasqlite.run(verify_specs, verify_files, staging / 'sqlite-verify',
+                            checkpoint=work.checkpoint, what='轉換後 Headscale 資料庫')
+    expected_counts = dict(verified['original.sqlite'].get('counts') or {})
+    fresh_keys = (verified['live.sqlite'].get('values') or {}).get('headscale.api_key_prefixes')
+    expected_counts['api_keys'] = len(live_keys)
+    if (any(hasqlite.problem(verified[name]) for name in ('ha.sqlite', 'original.sqlite', 'live.sqlite'))
+            or live_policy_blocker(verified['live.sqlite'], config)
+            or fresh_keys != live_keys or verified['ha.sqlite'].get('counts') != expected_counts
+            or (verified['ha.sqlite'].get('values') or {}).get('headscale.api_key_prefixes') != fresh_keys):
+        raise BackupError('job-failed', '轉換後的 Headscale 資料庫驗證失敗，已停止。', app=app.id)
     work.log(f'Headscale：HA 的 {details["api_keys"]} 把 API 金鑰換成這台的 {len(live_keys)} 把')
 
     root = ha_n8n.volume_root(work, app, target.data_volume)
@@ -374,12 +431,24 @@ def convert(work, app, test_mode, out_dir):
     out = hacommon.FileTar(data_path, work.guard)
     try:
         hacommon.top_only(out, root)
-        db_file = answers[None]['ha.sqlite']
+        db_rel, key_rel = data_paths(config)
+        rel = records_rel(config)
+        if rel and any(rel == x or x.startswith(rel + '/') or rel.startswith(x + '/')
+                       for x in (db_rel, key_rel, db_rel + '-wal', db_rel + '-shm')):
+            raise BackupError('incompatible', 'Headscale DNS 記錄與資料庫或身分金鑰路徑衝突。', app=app.id)
+        dirs = set()
+        for name in (db_rel, key_rel):
+            parts = name.split('/')[:-1]
+            for i in range(1, len(parts) + 1):
+                directory = '/'.join(parts[:i])
+                if directory not in dirs:
+                    out.add_member(hacommon.info(directory, 'dir', mode=0o755, uid=uid, gid=gid, mtime=time.time()))
+                    dirs.add(directory)
         with open(db_file, 'rb') as handle:
-            out.add_member(hacommon.info('db.sqlite', 'file', mode=0o644, uid=uid, gid=gid, mtime=time.time(),
+            out.add_member(hacommon.info(db_rel, 'file', mode=0o644, uid=uid, gid=gid, mtime=time.time(),
                                          size=os.fstat(handle.fileno()).st_size), handle)
         key = (src.noise + '\n').encode('ascii')
-        out.add_member(hacommon.info('noise_private.key', 'file', mode=0o600, uid=uid, gid=gid, mtime=time.time(),
+        out.add_member(hacommon.info(key_rel, 'file', mode=0o600, uid=uid, gid=gid, mtime=time.time(),
                                      size=len(key)), _Bytes(key))
         rel = records_rel(config)
         if rel is not None:
@@ -443,7 +512,7 @@ def configtest(work, tmp, target, data_path):
 
 def import_texts(data):
     notes = ['Headscale 的使用者、裝置、預先授權金鑰與 DNS 額外記錄會換成 HA 的，HA 的伺服器身分金鑰（noise）也一起搬過來；'
-             '這台的伺服器網址、IP 位址範圍、存取政策與 API 金鑰保持不變。']
+             '這台的伺服器網址、IP 位址範圍與 API 金鑰保持不變；資料庫存取政策會換成 HA 的政策。']
     if data.get('api_keys_removed'):
         notes.append(f'HA 的 {data["api_keys_removed"]} 把 Headscale API 金鑰不會搬過來，這台的 {data.get("api_keys_kept", 0)} 把'
                      '（Headplane、MCP 管理）保持有效。')

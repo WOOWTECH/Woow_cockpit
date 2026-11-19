@@ -7,6 +7,7 @@ import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from woowbackup import ha_headscale, jobs
 from woowbackup.errors import BackupError
@@ -123,6 +124,7 @@ class World(fk.World):
         self.files = {'.config/headscale/headscale/config.yaml': LIVE_CONFIG}
         self.version = '0.29.4'
         self.live_db = database(prefixes=['live-headplane', 'live-mcp'])
+        self.live_db_path = 'db.sqlite'
         self.configtest = 0
         self.checked_volume = None
 
@@ -137,7 +139,7 @@ class World(fk.World):
 
     def export(self, volume):
         if volume == 'headscale-data':
-            return fk.tar_of([{'name': '.', 'type': 'dir'}, {'name': 'db.sqlite', 'data': self.live_db},
+            return fk.tar_of([{'name': '.', 'type': 'dir'}, {'name': self.live_db_path, 'data': self.live_db},
                               {'name': 'noise_private.key', 'data': LIVE_NOISE.encode(), 'mode': 0o600},
                               {'name': 'extra_records.json', 'data': b'[]'}])
         return fk.tar_of([{'name': '.', 'type': 'dir'}, {'name': 'hp_persist.db', 'data': b'live headplane'}])
@@ -248,6 +250,51 @@ class ConvertTests(HeadscaleCase):
         without = self.check(self.upload_headscale(db=db), ['headscale'])[0]
         self.assertFalse(without['ok'], 'the header page alone is no Headscale database')
 
+    def test_nondefault_identity_paths_are_used(self):
+        self.world.live_db_path = 'nested/custom.db'
+        self.world.files['.config/headscale/headscale/config.yaml'] = LIVE_CONFIG + (
+            b'database:\n  sqlite:\n    path: /var/lib/headscale/nested/custom.db\n'
+            b'noise:\n  private_key_path: /var/lib/headscale/keys/noise.key\n')
+        self.convert(self.upload_headscale(), ['headscale'])
+        data = self.volume('headscale-data')
+        self.assertEqual(self.keys_of(data['nested/custom.db'][1])[0], ['live-headplane', 'live-mcp'])
+        self.assertEqual(data['keys/noise.key'][1], (NOISE + '\n').encode())
+        self.assertNotIn('db.sqlite', data)
+
+    def test_live_policy_blocks_check_and_convert(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / 'db'
+            path.write_bytes(self.world.live_db)
+            conn = sqlite3.connect(path)
+            conn.execute("INSERT INTO policies(data) VALUES ('restricted')")
+            conn.commit()
+            conn.close()
+            self.world.live_db = path.read_bytes()
+        result = self.check(self.upload_headscale(), ['headscale'])[0]
+        self.assertFalse(result['ok'])
+        self.assertTrue(any('存取政策' in b for b in result['blockers']))
+        with self.assertRaises(BackupError):
+            self.convert(self.upload_headscale(), ['headscale'])
+        self.assertEqual(self.storage.list_backups(), [])
+
+    def test_tampered_output_is_rejected_by_fresh_reader(self):
+        run = ha_headscale.hasqlite.run
+
+        def tamper(*args, **kwargs):
+            answers = run(*args, **kwargs)
+            if kwargs.get('outputs'):
+                conn = sqlite3.connect(answers[None]['ha.sqlite'])
+                conn.execute("UPDATE api_keys SET prefix='attacker' WHERE id=(SELECT min(id) FROM api_keys)")
+                conn.commit()
+                conn.close()
+            return answers
+
+        with mock.patch.object(ha_headscale.hasqlite, 'run', side_effect=tamper):
+            with self.assertRaises(BackupError) as caught:
+                self.convert(self.upload_headscale(), ['headscale'])
+        self.assertIn('驗證失敗', caught.exception.message)
+        self.assertEqual(self.storage.list_backups(), [])
+
     def test_a_failed_configtest_changes_nothing(self):
         self.world.configtest = 1
         with self.assertRaises(BackupError) as caught:
@@ -272,6 +319,13 @@ class ConvertTests(HeadscaleCase):
 
 
 class RecordTests(unittest.TestCase):
+    def test_identity_paths_reject_escapes_and_collisions(self):
+        for value in ('/etc/headscale/db', '/var/lib/headscale/../db', '/var/lib/headscale/a//b'):
+            with self.subTest(value=value), self.assertRaises(BackupError):
+                ha_headscale.data_paths({'database.sqlite.path': value})
+        with self.assertRaises(BackupError):
+            ha_headscale.data_paths({'database.sqlite.path': '/var/lib/headscale/noise_private.key'})
+
     def test_valid_records(self):
         self.assertEqual(ha_headscale.valid_records(RECORDS), 1)
         self.assertEqual(ha_headscale.valid_records(b'[]'), 0)
