@@ -831,7 +831,8 @@ Home Assistant OS backups (Supervisor) are uploaded like any backup and **read**
   only after every final check; `Select(include=None|(), exclude=(), symlinks=(), hardlinks=False, max_members,
   max_bytes, absolute_symlinks=())`; `Report` (`entries, files, dirs, symlinks, hardlinks, bytes, skipped_symlinks,
   skipped_symlink_samples, absolute_symlinks, skipped_other, secret_files, addon, complete`, `warnings()` zh-TW); `read_addon_info(stream) -> AddonInfo|None`,
-  `parse_addon_json(data) -> AddonInfo(slug, version, image, arch, name)`, `image_arch(image)`, `normalize(name)`,
+  `parse_addon_json(data) -> AddonInfo(slug, version, image, arch, name, state)` (`state`: addon.json `state`, the
+  add-on's state when the backup began, '' when absent; batch 1), `image_arch(image)`, `normalize(name)`,
   `NEVER_READ`.
 * `hastore`: `HaStore(paths)` (`root`, `ensure()`, `file_path(id)`, `list()`, `get(id)`, `exists(id)`, `delete(id)`,
   `publish(fd, st, part, summary, sha256, filename) -> (record, created)`), `view(record, catalog) -> HaBackupMeta`,
@@ -999,7 +1000,8 @@ Shapes:
   hardlinks, databases, sessions, messages, schema_version|null, config_version|null, skills, cron_jobs, plugins[],
   env_keys (a count; names and values are never sent), ha_urls[("config.yaml：<host>"|".env：<host>")], media_refs,
   skipped[]}, emqx?{emqx_version, target_version, node_name, files, bytes, mqtt_users, acl_rules, dashboard_users,
-  api_keys, banned, psk, retained_messages, default_dashboard_password(bool), anonymous(bool), plugins[], ha_hosts[]},
+  api_keys, banned, psk, retained_messages, default_dashboard_password(bool), anonymous(bool), hot_backup(bool: the
+  backup was made while EMQX ran, or its state is unknown), plugins[], ha_hosts[]},
   headscale?{headscale_version, target_version, db_version, users, nodes, pre_auth_keys, api_keys (HA's, not moved),
   policies, prefixes{v4, v6} (HA's), server_url (HA's), target_server_url, dns_records}}]` (batch 1: `target_version` is
   the live server's `/v1/info` version for Omnigent, the live image's Hermes base tag, the live image's version label
@@ -1921,7 +1923,8 @@ PostgreSQL 15).
    <host>:127.0.0.1` when its host is not an IPv4 literal), the staged volume at `/data/emqx/data` mounted
    `rw,noexec,nosuid,nodev` (`EMQX_NODE__DATA_DIR`), an empty `EMQX_DASHBOARD__DEFAULT_PASSWORD` (nothing is created at
    boot), no file log; ready when `emqx ctl status` says "is started" (300 s). `emqx eval` of fixed expressions answers
-   whether admin/public still logs in (a blocker), the table counts, root names, authenticators and authorization
+   whether admin/public still logs in (a blocker), the table counts (a table every 5.8.9 broker has missing: HA's
+   database did not load completely, refused), root names, authenticators and authorization
    policy; then `emqx ctl data export --root-keys <DATA_ROOTS present> --table-sets builtin_authn,builtin_authz,banned,
    dashboard_users,api_keys,psk,builtin_retainer --dir /work/out` (settings such as listeners, dashboard, node, log,
    mqtt, zones are never exported).
@@ -1932,15 +1935,20 @@ PostgreSQL 15).
    loaded back (`emqx ctl conf load --merge`, `sources = []` keeps every source) and must read back equal; when this
    device has an enabled authenticator one must remain (else `incompatible`: no anonymous login); every table holds at
    least HA's rows and at most HA's plus what the empty broker seeded. HA's API keys replace this device's.
+   Hot backups (addon.json `state` `started`: the add-on has no cold backup mode) are tried; when HA's broker does not
+   start, a table is missing, EMQX's own export fails or the import reports errors, the job refuses (`incompatible`) with
+   the advice to make a new backup with the add-on stopped -- never a silently incomplete result.
 5. `woow_emqx_data`: that broker's volume export without `configs/app.*.config`, `configs/vm.*.args` (the cookie),
    `configs/*.bak`, `backup/**`, `trace/**`; `woow_emqx_log`: its top folder only, owned like the live one.
 
 **Headscale** (`woow-headscale` → `headscale`: volumes `headscale-data`, `headplane-data`).
 1. Versions: add-on 0.1.1–0.1.3 → Headscale 0.29.4 (0.1.0 → 0.29.3) must equal the live image's
    `org.opencontainers.image.version`; HA's `database_versions` row must name it and every applied migration must be one
-   0.29.4 knows. HA's prefixes (`config/config.yaml`) must equal this device's and every node address must lie inside
+   0.29.4 knows (gormigrate's `SCHEMA_INIT` mark included). HA's prefixes (`config/config.yaml`) must equal this
+   device's and every node address must lie inside
    them.
-2. One pass: `data/db.sqlite` (+ `-wal`, never `-shm`) staged, `data/noise_private.key` (`privkey:<64 hex>`, masked),
+2. One pass: `data/db.sqlite` (+ `-wal`, never `-shm`: an add-on killed before it checkpointed leaves all data in the
+   WAL, seen on the RPi5, and the child applies it) staged, `data/noise_private.key` (`privkey:<64 hex>`, masked),
    `config/dns_records.json` (a JSON array of `{name, type, value}` strings, else a blocker), `config/config.yaml`
    (plain keys only, for the checks); never Headplane's data, API key, cookie secret, options or the image.
 3. The sandboxed child reads HA's database (integrity, only Headscale's tables, no trigger or view, counts, version,
