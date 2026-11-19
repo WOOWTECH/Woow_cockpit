@@ -5,7 +5,8 @@ feat/ha-import, part B). Owner: E2.
   decrypts only the selected add-ons' members, rebuilds what it must read in throwaway containers (tempctr.py), compares
   with this device's apps and returns `{ha_check}`. Nothing of the apps changes; they keep running.
 * `run_ha_convert(ctx, params)` -- job type `backup` with `params.source == 'ha'` (phases 準備, 解開 HA 備份, 轉換資料,
-  封裝備份, 驗證備份): rebuilds the selected apps' data in their own format (ha_odoo.py, ha_n8n.py) and writes a normal
+  封裝備份, 驗證備份): rebuilds the selected apps' data in their own format (the importer modules of haapps.py:
+  ha_odoo.py, ha_n8n.py, ...) and writes a normal
   format 2 backup of them -- the data items converted, everything else (secrets, config files, Quadlet files, images list,
   the installed settings) read live as the owner without stopping anything, exactly like a backup reads it -- of type
   `manual` with the note 「由 HA 備份轉換：<HA name>（<HA date>）」, encrypted with the device key when 預設加密備份 is on,
@@ -33,10 +34,12 @@ import time
 import traceback
 from pathlib import Path
 
-from . import habackup, hasecuretar, hastore, tempctr, util
+from . import haapps, habackup, hasecuretar, hastore, tempctr, util
 from .errors import BackupError
 
-APPS = {'odoo': 'odoo18ce', 'n8n': 'woow-n8n'}  # catalog id -> add-on slug (after the repository prefix)
+# catalog id -> add-on slug (after the repository prefix), from the one registry of importers (haapps.IMPORTERS)
+APPS = {importer.app_id: importer.slug for importer in haapps.IMPORTERS}
+ITEM_KEYS = ('volumes', 'postgres', 'dirs')  # what a module's convert hands to adapter.import_manifest
 REGISTRY = 'ha-imports.json'
 REGISTRY_SCHEMA = 1
 REGISTRY_MAX = 1000
@@ -162,7 +165,7 @@ class Watchdog:
 # ====================================================================== the job's working set
 
 class Work:
-    """What the app modules (ha_odoo, ha_n8n) use: the open HA backup and its key, staging, a space guard and, per
+    """What the app modules (haapps.IMPORTERS) use: the open HA backup and its key, staging, a space guard and, per
     app, its adapter (live reads as the owner), runner and throwaway objects (registered in the job record as
     `temp_owners` before the first one exists, so a killed job's objects are swept by the recovery)."""
 
@@ -353,7 +356,7 @@ def _catalog_app(ctx, app_id):
 
 
 def _app_label(app_id, app=None):
-    return getattr(app, 'name', None) or hastore.IMPORTABLE[APPS[app_id]][1]
+    return getattr(app, 'name', None) or haapps.get(app_id).name
 
 
 def _base_result(app_id, member, addon):
@@ -425,7 +428,6 @@ def run_ha_check(ctx, params):
     """`verify` job with source ha: {ha_check: {ha_backup_id, apps[AppCheck]}} (CONTRACT section 7). An app that
     cannot move is a blocker of its own result, never a failed job (an add-on missing twice or not WOOWTECH's, an
     owner that is gone, an app not deployed; review C-09); a wrong or missing key fails the job."""
-    from . import ha_n8n, ha_odoo
     ctx.cancellable(True)
     ctx.phase('prepare')
     app_ids = list(params.get('apps') or [])
@@ -464,7 +466,7 @@ def run_ha_check(ctx, params):
                     ctx.log(f'「{result["name"] or app_id}」不能匯入：{result["blockers"][0]}')
                     continue
                 work.guard.check(3 * member.size)
-                module = ha_odoo if app_id == 'odoo' else ha_n8n
+                module = haapps.get(app_id).load()
                 found = module.check(work, app)
             except BackupError as error:
                 if error.code not in FAILURE_CODES:
@@ -473,17 +475,12 @@ def run_ha_check(ctx, params):
                 ctx.log(f'「{result["name"] or app_id}」不能匯入：{error.message}')
                 continue
             result['target_version'] = found.get('target_version') or ''
-            if app_id == 'odoo':
-                result['odoo'] = found['odoo']
-                databases = found['odoo']['databases']
-                if not databases:
-                    result['blockers'].append('HA 的 Odoo 沒有任何資料庫。')
-                elif not any(db['ok'] for db in databases):
-                    result['blockers'].append('HA 的 Odoo 資料庫都不能搬過來（原因見各資料庫）。')
-            else:
-                result['n8n'] = found['n8n']
-                result['blockers'] += found['blockers']
-                result['warnings'] += found['warnings']
+            result[app_id] = found[app_id]  # the app's own section (CONTRACT section 7 HaCheck)
+            result['blockers'] += list(found.get('blockers') or [])
+            result['warnings'] += list(found.get('warnings') or [])
+            derived = getattr(module, 'check_blockers', None)
+            if derived is not None:
+                result['blockers'] += derived(found)
             result['ok'] = not result['blockers']
             ctx.log(f'「{result["name"] or app_id}」檢查完成：{"可以匯入" if result["ok"] else "不能匯入"}')
             work.checkpoint()
@@ -535,43 +532,49 @@ def note_for(record):
     return f'{NOTE_PREFIX}{name[:200]}（{when}）'
 
 
-def _names(items, limit=10):
-    items = [str(item)[:60] for item in items]
-    return '、'.join(items[:limit]) + (f' 等 {len(items)} 個' if len(items) > limit else '')
+def mcp_lines(importer, catalog=None):
+    """The MCP reminder lines the engine writes for an importer with `engine_mcp_lines` (haapps): log this device's MCP
+    admin app in again when the catalog has it (its catalog name), and stop HA's MCP add-on of the product and
+    re-create the MCP connectors (claude.ai and other clients) with this device's MCP address. The admin apps' state is
+    never imported (facts mcp-admin.md, decision D1)."""
+    if not importer.engine_mcp_lines:
+        return []
+    lines = []
+    if importer.mcp_admin:
+        entry = None
+        if catalog is not None:
+            with contextlib.suppress(Exception):  # an unreadable catalog only drops this line
+                entry = catalog.get(importer.mcp_admin)
+        if entry is not None:
+            name = str(getattr(entry, 'name', '') or '').strip() or importer.mcp_admin
+            lines.append(f'請到「{name}」確認或重新設定 {importer.name} 的連線資料（MCP 管理工具的設定不會從 HA 搬過來）。')
+    if importer.mcp_addon:
+        lines.append(f'如果 HA 上有「{importer.mcp_addon}」，請把它停掉，並把指向它的 MCP 連接器（例如 claude.ai）刪掉，'
+                     '改用這台的 MCP 網址重新建立。')
+    return lines
 
 
-def import_texts(converted):
-    """(notes, reminders, reminders_by_app) of a conversion (review UI-3, P-05). `notes`: ONE list describing the
-    whole converted backup, what the import moves or changes (shown before the restore; each line names its app);
-    `reminders`: what to do afterwards that belongs to no app (none so far: the page writes the lines about stopping
-    the HA add-on, the MCP admin apps, a test import and deleting the HA file); `reminders_by_app`: per app."""
+def import_texts(converted, catalog=None):
+    """(notes, reminders, reminders_by_app) of a conversion (review UI-3, P-05), in the registry's order. `notes`: ONE
+    list describing the whole converted backup, what the import moves or changes (shown before the restore; each line
+    names its app); `reminders`: what to do afterwards that belongs to no app (none so far: the page writes the lines
+    about stopping the HA add-on, the Odoo/n8n MCP admin apps, a test import and deleting the HA file);
+    `reminders_by_app`: per app (each module's `import_texts`, then the MCP lines of `mcp_lines`)."""
     notes, reminders_by_app = [], {}
-    if 'odoo' in converted:
-        odoo = converted['odoo']
-        notes.append('Odoo 的使用者帳號和密碼會換成 HA 那邊的，這台原本的 Odoo 管理者密碼不再適用。')
-        copied = [m['name'] for m in odoo.get('custom_modules') or []]
-        if copied:
-            notes.append(f'HA 的 Odoo 自訂模組 {_names(copied)} 會一起放進這台 Odoo 的自訂模組資料夾。')
-        domains = odoo.get('website_domains') or []
-        if domains:
-            notes.append(f'Odoo 網站原本使用的網域 {_names(domains, 5)} 會改成這台的網址。')
-        reminders_by_app['odoo'] = ['匯入後請用 HA 那邊的 Odoo 帳號和密碼登入。']
-    if 'n8n' in converted:
-        n8n = converted['n8n']
-        email = n8n.get('owner_email')
-        shown = f'（{email}）' if email else ''
-        notes.append(f'n8n 的登入帳號會換成 HA 的管理者帳號{shown}。')
-        reminders = [f'匯入後請用 HA 的 n8n 管理者帳號{shown}登入。']
-        if n8n.get('packages'):
-            notes.append('HA 的 n8n 社群節點會一起搬過來。')
-            reminders.append('請確認 HA 的 n8n 社群節點能正常使用（必要時重新安裝）。')
-        reminders_by_app['n8n'] = reminders
+    for importer in haapps.IMPORTERS:
+        if importer.app_id not in converted:
+            continue
+        app_notes, reminders = importer.load().import_texts(converted[importer.app_id])
+        notes += list(app_notes)
+        reminders = list(reminders) + mcp_lines(importer, catalog)
+        if reminders:
+            reminders_by_app[importer.app_id] = reminders
     return notes, [], reminders_by_app
 
 
 def run_ha_convert(ctx, params):
     """`backup` job with source ha: {backup_id, size, apps, encrypted, ha_import} (CONTRACT section 7)."""
-    from . import ha_n8n, ha_odoo
+    from . import ha_odoo
     from .flows import _package, resolve_apps
     ctx.cancellable(True)
     ctx.phase('prepare')
@@ -618,14 +621,11 @@ def run_ha_convert(ctx, params):
             addons.append({'app_id': app.id, 'slug': member.slug, 'name': name})
             out_dir = staging / 'apps' / app.id
             out_dir.mkdir(mode=0o700, parents=True)
-            if app.id == 'odoo':
-                data = ha_odoo.convert(work, app, database, test_mode, out_dir)
-                converted['odoo'] = data
-                item_args = {'volumes': data['volumes'], 'dirs': data['dirs']}
-            else:
-                data = ha_n8n.convert(work, app, test_mode, out_dir)
-                converted['n8n'] = data
-                item_args = {'volumes': data['volumes'], 'postgres': data['postgres']}
+            importer = haapps.get(app.id)
+            values = {'odoo_database': database, 'test_mode': test_mode}
+            data = importer.load().convert(work, app, *[values[name] for name in importer.convert_args], out_dir)
+            converted[app.id] = data
+            item_args = {key: data[key] for key in ITEM_KEYS if key in data}
             work.checkpoint()
             app_manifest, app_entries = work.adapter(app).import_manifest(out_dir, **item_args)
             manifest_apps.append(app_manifest)
@@ -634,7 +634,7 @@ def run_ha_convert(ctx, params):
         work.close()  # no throwaway object is needed for the packaging
         plain = sum(int(entry.size) for entry in entries)
         work.guard.check(plain + plain // 100)  # the archive (at most the data plus 1 % for tar and age; review C-01)
-        notes, reminders, reminders_by_app = import_texts(converted)
+        notes, reminders, reminders_by_app = import_texts(converted, _catalog_or_none(ctx))
         row = clean_row({'ha_backup_id': record['id'], 'name': record['name'], 'date': record['date'],
                          'apps': app_ids, 'odoo_database': database if 'odoo' in app_ids else None,
                          'test_mode': test_mode,
@@ -661,6 +661,13 @@ def run_ha_convert(ctx, params):
                 forget(ctx.paths, backup_id)
         work.close()
         _cleanup(ctx)
+
+
+def _catalog_or_none(ctx):
+    try:
+        return ctx.catalog()
+    except Exception:  # noqa: BLE001 - the texts only lose the MCP admin app's line
+        return None
 
 
 def _listed(ctx, backup_id):

@@ -1370,6 +1370,33 @@ def check(work, app):
             'odoo': {'databases': [public_database(entry) for entry in databases]}}
 
 
+def check_blockers(found):
+    """Blockers of the app's check result derived from its databases: none at all, or none that can move."""
+    databases = found['odoo']['databases']
+    if not databases:
+        return ['HA 的 Odoo 沒有任何資料庫。']
+    if not any(db['ok'] for db in databases):
+        return ['HA 的 Odoo 資料庫都不能搬過來（原因見各資料庫）。']
+    return []
+
+
+def _text_names(items, limit=10):
+    items = [str(item)[:60] for item in items]
+    return '、'.join(items[:limit]) + (f' 等 {len(items)} 個' if len(items) > limit else '')
+
+
+def import_texts(data):
+    """(notes, reminders) of a conversion (haimport.import_texts; CONTRACT section 7 HaImport)."""
+    notes = ['Odoo 的使用者帳號和密碼會換成 HA 那邊的，這台原本的 Odoo 管理者密碼不再適用。']
+    copied = [m['name'] for m in data.get('custom_modules') or []]
+    if copied:
+        notes.append(f'HA 的 Odoo 自訂模組 {_text_names(copied)} 會一起放進這台 Odoo 的自訂模組資料夾。')
+    domains = data.get('website_domains') or []
+    if domains:
+        notes.append(f'Odoo 網站原本使用的網域 {_text_names(domains, 5)} 會改成這台的網址。')
+    return notes, ['匯入後請用 HA 那邊的 Odoo 帳號和密碼登入。']
+
+
 # -------------------------------------------------------------------- convert
 
 def _read_live_json(work, app, live, sql, database):

@@ -18,7 +18,7 @@ import traceback
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import ExitStack
 
-from . import flows, hastore
+from . import flows, haapps, hastore
 from . import jobs as jobmod
 from . import version as engine_version
 from .errors import BackupError
@@ -72,14 +72,14 @@ def v_ha_backup_id(value, field):
     return value
 
 
-HA_APP_IDS = ('odoo', 'n8n')
+HA_APP_IDS = haapps.APP_IDS  # the importers' catalog ids (haapps.IMPORTERS, in order)
 HA_DB_RE = re.compile(r'[A-Za-z0-9_][A-Za-z0-9_.-]{0,62}\Z')
 
 
 def v_ha_apps(value, field):
     if (not isinstance(value, list) or not 1 <= len(value) <= len(HA_APP_IDS) or len(set(map(str, value))) != len(value)
             or not all(isinstance(item, str) and item in HA_APP_IDS for item in value)):
-        raise _bad(field, '必須是 1 到 2 個不重複的應用 ID（odoo、n8n）的陣列。')
+        raise _bad(field, f'必須是 1 到 {len(HA_APP_IDS)} 個不重複的應用 ID（{"、".join(HA_APP_IDS)}）的陣列。')
     return value
 
 

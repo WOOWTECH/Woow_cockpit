@@ -696,6 +696,18 @@ def check(work, app):
                     'community_packages': list(src.packages), 'workflows_to_fix': fix}}
 
 
+def import_texts(data):
+    """(notes, reminders) of a conversion (haimport.import_texts; CONTRACT section 7 HaImport)."""
+    email = data.get('owner_email')
+    shown = f'（{email}）' if email else ''
+    notes = [f'n8n 的登入帳號會換成 HA 的管理者帳號{shown}。']
+    reminders = [f'匯入後請用 HA 的 n8n 管理者帳號{shown}登入。']
+    if data.get('packages'):
+        notes.append('HA 的 n8n 社群節點會一起搬過來。')
+        reminders.append('請確認 HA 的 n8n 社群節點能正常使用（必要時重新安裝）。')
+    return notes, reminders
+
+
 def _source_tar(out, src, password, *, node_ids):
     """The throwaway volume `n8nsrc`: home/.n8n/{database.sqlite*, config} owned by the image's node user, an
     empty writable out/ and the temporary database password (pgpass, readable by both containers)."""

@@ -26,7 +26,7 @@ import stat
 import time
 from pathlib import Path
 
-from . import util
+from . import haapps, util
 from .errors import BackupError
 
 DIRNAME = 'ha-backups'
@@ -45,8 +45,8 @@ MAX_SIDECAR = 256 * 1024
 STALE_SIDECAR_AGE = 3600
 
 # WOOWTECH add-ons Cockpit can import (owner decision Q1): the add-on slug after the first `_` (any repository prefix)
-# -> this device's catalog id and the name shown when that app is not installed here.
-IMPORTABLE = {'odoo18ce': ('odoo', 'Odoo 18'), 'woow-n8n': ('n8n', 'n8n 工作流程')}
+# -> this device's catalog id and the name shown when that app is not installed here (haapps.IMPORTERS, in order).
+IMPORTABLE = {importer.slug: (importer.app_id, importer.name) for importer in haapps.IMPORTERS}
 
 MSG_BAD_ID = 'HA 備份 ID 格式不正確。'
 MSG_NOT_FOUND = '找不到指定的 HA 備份。'
