@@ -1357,13 +1357,15 @@ def check(work, app):
     live_role(work, app, live)
     image16 = pick_pg16(work, app)
     pg_ids = tmp.user_ids('ids-pg', image16, 'postgres')
-    src, candidates = member_pass(work, app, tmp, pg_ids)
-    work.phase('check')
-    cluster = start_ha_cluster(work, tmp, image16)
-    databases, target, _target_major, _ha_major_ = analyse(work, app, tmp, src, candidates, cluster, live,
-                                                           image16=image16)
-    tmp.remove('hapg')
-    tmp.remove_volume('hapg')
+    try:
+        src, candidates = member_pass(work, app, tmp, pg_ids)
+        work.phase('check')
+        cluster = start_ha_cluster(work, tmp, image16)
+        databases, target, _target_major, _ha_major_ = analyse(work, app, tmp, src, candidates, cluster, live,
+                                                               image16=image16)
+    finally:
+        tmp.remove('hapg')
+        tmp.remove_volume('hapg')
     return {'target_version': target['version'], 'pg_bytes': src.pg_bytes,
             'filestore_bytes': sum(size for _files, size in src.filestore.values()),
             'module_bytes': src.module_bytes,

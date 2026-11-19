@@ -7,6 +7,7 @@ import tarfile
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import types
 
@@ -399,6 +400,24 @@ class EntryStub:
         chunk = self.data[self.pos:self.pos + n]
         self.pos += len(chunk)
         return chunk
+
+
+class CheckCleanupTests(unittest.TestCase):
+    def test_failure_in_member_pass_cleans_temporary_cluster(self):
+        temp = mock.Mock()
+        work = mock.Mock()
+        work.temp.return_value = temp
+        target = types.SimpleNamespace(live=object())
+        with mock.patch.object(ha_odoo, 'Target', return_value=target), \
+             mock.patch.object(ha_odoo, 'live_image_id'), \
+             mock.patch.object(ha_odoo, 'live_settings'), \
+             mock.patch.object(ha_odoo, 'live_role'), \
+             mock.patch.object(ha_odoo, 'pick_pg16', return_value='image'), \
+             mock.patch.object(ha_odoo, 'member_pass', side_effect=ValueError('invalid backup')):
+            with self.assertRaisesRegex(ValueError, 'invalid backup'):
+                ha_odoo.check(work, object())
+        temp.remove.assert_called_once_with('hapg')
+        temp.remove_volume.assert_called_once_with('hapg')
 
 
 class HaClusterTests(unittest.TestCase):
