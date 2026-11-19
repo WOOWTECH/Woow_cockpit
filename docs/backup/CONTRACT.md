@@ -1888,6 +1888,10 @@ emqx,headscale,mcp-admin}.md` of the design notes.
    folder (dirs 0755, files 0644, `accounts-cookie-secret` 0600: HA's session key replaces this device's, so HA's grants
    and tokens keep working and this device's browser sessions end); `omnigent-pi-data`: the live export as it is (the
    runner's identity, provider logins and pairings never move; the server's telemetry id never moves either).
+   These live exports run while writers are active, even for a cold-mode catalog: they are not a consistent cold backup.
+   Concurrent writes can produce torn or mutually inconsistent files; Headscale similarly exports headplane-data live
+   and does not integrity-check hp_persist.db. B1-11 remains open: use a coordinated cold snapshot or pause all writers
+   and verify the SQLite copy before claiming consistency; do not treat the converted archive as a cold backup.
 
 **Hermes** (`woow-hermes` → `hermes`: volumes `hermes-data`, `hermes-redis-data`, database `main` of an unused
 PostgreSQL 15).
@@ -1903,7 +1907,8 @@ PostgreSQL 15).
    `-shm`, `browser-profile(s)/`, `browser_profiles/`. HA's `.env` loses the lines of `API_SERVER_KEY`,
    `WEBHOOK_SECRET`, `HERMES_DASHBOARD_BASIC_AUTH_*`, `HERMES_DASHBOARD_PUBLIC_URL`, `HERMES_BASE_URL`, `HERMES_PASEO_*`
    (its other values are masked in the job's logs); the first start applies this device's hermes.env (no
-   `.woow-dotenv`), whose keys win. A `.env` that is a symlink, programs for another processor than this device's, a
+   `.woow-dotenv`), whose keys win. Special configuration files and known SQLite files and sidecars must be regular
+   files; cron must be a directory. An unknown state.db schema version is a blocker. Programs for another processor than this device's, a
    damaged known SQLite file are blockers. The known databases (`state.db`, `kanban.db`, `response_store.db`,
    `runs_idempotency.db`, `shared-state.db`, `projects.db`, `cron/{executions,notepad}.db`) move unchanged with their WAL
    and are checked by the sandboxed child (`quick_check`; `state.db`: sessions, messages, schema version).

@@ -47,9 +47,9 @@ ABSOLUTE_LINKS = ('/opt/data', '/opt/hermes', '/usr')
 KNOWN_DBS = ('state.db', 'kanban.db', 'response_store.db', 'runs_idempotency.db', 'shared-state.db', 'projects.db',
              'cron/executions.db', 'cron/notepad.db')
 SIDECARS = ('-wal', '-journal')
-MANAGED_ENV_RE = re.compile(rb'\s*(?:export\s+)?(?:API_SERVER_KEY|WEBHOOK_SECRET|HERMES_DASHBOARD_BASIC_AUTH_[A-Z_]*'
-                            rb'|HERMES_DASHBOARD_PUBLIC_URL|HERMES_BASE_URL|HERMES_PASEO_[A-Z_]*)\s*=')
-ENV_KEY_RE = re.compile(rb'\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]{0,100})\s*=')
+MANAGED_ENV_RE = re.compile(rb'\s*(?:export\s+)?(?:\x27)?(?:API_SERVER_KEY|WEBHOOK_SECRET|HERMES_DASHBOARD_BASIC_AUTH_[A-Z_]*'
+                            rb'|HERMES_DASHBOARD_PUBLIC_URL|HERMES_BASE_URL|HERMES_PASEO_[A-Z_]*)(?:\x27)?\s*=')
+ENV_KEY_RE = re.compile(rb'\s*(?:export\s+)?(?:\x27)?([A-Za-z_][A-Za-z0-9_]{0,100})(?:\x27)?\s*=')
 CONFIG_VERSION_RE = re.compile(r'^_config_version:\s*([0-9]{1,6})\s*$', re.M)
 MAX_ENV = 1024 * 1024
 MASK_MIN = 12
@@ -175,6 +175,9 @@ def scan_member(stream, report, staging, out, *, machine=None, guard=None, check
         top, _, rest = rel.partition('/')
         if top == 'plugins' and rest and '/' not in rest and entry.kind == 'dir':
             src.plugins.add(rest[:100])
+        special = rel in ('.env', 'config.yaml', 'cron/jobs.json', '.woow-image-version') or _known_db(rel) is not None
+        if (special and entry.kind != 'file') or (rel == 'cron' and entry.kind != 'dir'):
+            raise BackupError('incompatible', f'HA 的 Hermes 資料 {rel} 不是一般檔案或目錄，無法安全匯入。', member=rel)
         if entry.kind == 'dir':
             out.dir(rel, entry.mode, entry.mtime)
             continue
@@ -312,7 +315,9 @@ def analyse(src, answers, *, addon_version, release, digest):
             details['messages'] = ha_odoo._int(counts.get('messages'))
             details['schema_version'] = (answer.get('values') or {}).get('hermes.schema_version')
     schema = details['schema_version']
-    if isinstance(schema, int) and schema > SCHEMA_VERSION:
+    if 'state.db' in answers and not hasqlite.problem(answers['state.db']) and (type(schema) is not int or schema < 0):
+        blockers.append('HA 的 Hermes 資料庫結構版本無法判讀，無法安全匯入。')
+    if type(schema) is int and schema > SCHEMA_VERSION:
         blockers.append(f'HA 的 Hermes 資料庫結構（{schema}）比這台的 Hermes 新（{SCHEMA_VERSION}），無法搬過來。')
     if src.config_version is not None and src.config_version > CONFIG_VERSION:
         blockers.append(f'HA 的 Hermes 設定檔版本（{src.config_version}）比這台的 Hermes 新（{CONFIG_VERSION}），無法搬過來。')

@@ -222,6 +222,33 @@ class EnvTests(unittest.TestCase):
         self.assertEqual(data, b'A=1\n# c\nB="2"')
         self.assertEqual((keys, values), (['A', 'B'], ['1', '2']))
 
+    def test_quoted_keys_are_filtered_and_maskable(self):
+        data, keys, values = ha_hermes.strip_env(b"'API_SERVER_KEY'=secret\nexport 'WEBHOOK_SECRET'=x\n'PROVIDER_KEY'=provider-secret\n")
+        self.assertEqual(data, b"'PROVIDER_KEY'=provider-secret\n")
+        self.assertEqual(keys, ['PROVIDER_KEY'])
+        self.assertEqual(values, ['provider-secret'])
+
+    def test_special_links_are_rejected(self):
+        for name in ('.env', 'config.yaml', 'cron/jobs.json', 'state.db', 'state.db-wal', 'cron'):
+            for kind in ('hardlink', 'symlink'):
+                with self.subTest(name=name, kind=kind), tempfile.TemporaryDirectory() as tmp:
+                    entries = [{'name': 'config', 'type': 'dir'},
+                               {'name': 'config/target', 'data': b'content'},
+                               {'name': 'config/' + name, 'type': kind,
+                                'linkname': 'config/target' if kind == 'hardlink' else '/opt/data/target'}]
+                    with self.assertRaises(BackupError):
+                        ha_hermes.scan_member(io.BytesIO(hx.tar_bytes(entries)), habackup.Report(), Path(tmp),
+                                              ha_hermes._Count())
+
+    def test_unknown_schema_blocks(self):
+        src = ha_hermes.Source()
+        src.dbs['state.db'] = 'placeholder'
+        for value in (None, '32', True, -1):
+            with self.subTest(value=value):
+                answers = {'state.db': {'ok': True, 'values': {'hermes.schema_version': value}}}
+                blockers, _, _ = ha_hermes.analyse(src, answers, addon_version='0.1.14', release='0.22.5', digest=None)
+                self.assertTrue(any('無法判讀' in b for b in blockers), blockers)
+
     def test_names(self):
         self.assertEqual(ha_hermes.flat('cron/executions.db-wal'), 'cron.executions.db-wal')
         self.assertEqual(ha_hermes._known_db('cron/notepad.db-journal'), 'cron/notepad.db')
