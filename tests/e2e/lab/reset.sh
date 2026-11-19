@@ -1,6 +1,6 @@
 #!/bin/bash
 # Destroy a lab device AND its volumes (home incl. nested images/containers, backup data).
-#   tests/e2e/lab/reset.sh <a|b|c> [--up]     --up recreates it fresh afterwards
+#   tests/e2e/lab/reset.sh <a|b|c|d> [--up]     --up recreates it fresh afterwards
 source "$(dirname "$0")/lib.sh"
 
 device_vars "${1:-}"

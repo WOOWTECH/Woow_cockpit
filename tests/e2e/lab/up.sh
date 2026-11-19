@@ -1,8 +1,10 @@
 #!/bin/bash
 # Start (or create) a lab device and wait until it is usable.
-#   tests/e2e/lab/up.sh <a|b|c>
+#   tests/e2e/lab/up.sh <a|b|c|d>
 # dev-a: 127.0.0.1:19091 -> Cockpit, appowner uid 1001; dev-b: 127.0.0.1:19092, appowner uid 1007;
-# dev-c: 127.0.0.1:19093, appowner uid 1013 (production-like Odoo + n8n, see deploy-prodlike.sh).
+# dev-c: 127.0.0.1:19093, appowner uid 1013 (production-like Odoo + n8n, see deploy-prodlike.sh);
+# dev-d: 127.0.0.1:19094, appowner uid 1019 (production-like Omnigent, Hermes, EMQX, Headscale, see
+# deploy-batch1.sh).
 # Ready means: systemd finished booting, cockpit.socket listens on 9090, appowner's user manager
 # (user@<uid>.service) is active with its D-Bus socket and has the memory controller (nested containers
 # with --memory fail with "crun: opening file memory.max" without it; restarting the manager fixes that).

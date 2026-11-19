@@ -19,10 +19,13 @@ log() { echo "lab: $*" >&2; }
 
 [ -x "$LP" ] || die "missing $LP"
 
-# device_vars <a|b|c>: sets DEV NAME PORT OWNER_UID VOLUMES DEVICE_MEMORY DEVICE_CPUS DEVICE_RUN_ARGS
+# device_vars <a|b|c|d>: sets DEV NAME PORT OWNER_UID VOLUMES DEVICE_MEMORY DEVICE_CPUS DEVICE_RUN_ARGS
 # dev-c runs production-like copies of the host's Odoo (tenant) and n8n (queue) stacks, about ten containers,
 # so it gets more memory and CPU. Its images come from the host by `podman save` only (deploy-prodlike.sh); the
 # private registry name resolves to a dead address inside it, so nothing there can pull from that registry.
+# dev-d runs production-like copies of Omnigent, Hermes, EMQX and Headscale (HA import batch 1, eleven
+# containers; deploy-batch1.sh). Its images come from the host the same way; none of them is from the private
+# registry, and the digest pins point at the loaded images, so a missing image fails instead of being pulled.
 device_vars() {
     DEVICE_MEMORY=768m
     DEVICE_CPUS=1.5
@@ -33,7 +36,9 @@ device_vars() {
         c | dev-c | woowbk-dev-c)
             DEV=c; PORT=19093; OWNER_UID=1013; DEVICE_MEMORY=3g; DEVICE_CPUS=2
             DEVICE_RUN_ARGS=(--add-host jcr-prod.woowtech.io:127.0.0.1) ;;
-        *) die "device must be 'a', 'b' or 'c' (got '${1:-}')" ;;
+        d | dev-d | woowbk-dev-d)
+            DEV=d; PORT=19094; OWNER_UID=1019; DEVICE_MEMORY=4g; DEVICE_CPUS=2 ;;
+        *) die "device must be 'a', 'b', 'c' or 'd' (got '${1:-}')" ;;
     esac
     NAME=woowbk-dev-$DEV
     # /home holds appowner's nested container storage: a volume (host ext4), so nested rootless

@@ -1,7 +1,7 @@
 #!/bin/bash
 # Call the installed backup helper inside a lab device as root (what Cockpit does with
 # superuser: "require") and print its single JSON reply with key material redacted.
-#   tests/e2e/lab/engine.sh <a|b|c> <command> [request-json]
+#   tests/e2e/lab/engine.sh <a|b|c|d> <command> [request-json]
 #   tests/e2e/lab/engine.sh a status
 #   tests/e2e/lab/engine.sh a backup-start '{"apps":["woowbk-demo"],"include_images":false,"note":"","request_id":"lab00000001"}'
 #   tests/e2e/lab/engine.sh a job-status '{"job_id":"j20261113T020000Z-0123abcd"}'
@@ -12,7 +12,7 @@ source "$(dirname "$0")/lib.sh"
 
 device_vars "${1:-}"
 command=${2:-}
-[ -n "$command" ] || die "usage: engine.sh <a|b|c> <command> [request-json|-]"
+[ -n "$command" ] || die "usage: engine.sh <a|b|c|d> <command> [request-json|-]"
 request=${3:-'{}'}
 if [ "$request" = - ]; then request=$(cat); fi
 set +e

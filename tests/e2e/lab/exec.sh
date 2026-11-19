@@ -1,6 +1,6 @@
 #!/bin/bash
 # Run a command as root inside a lab device (interactive shell by default).
-#   tests/e2e/lab/exec.sh <a|b|c> [cmd...]
+#   tests/e2e/lab/exec.sh <a|b|c|d> [cmd...]
 source "$(dirname "$0")/lib.sh"
 
 device_vars "${1:-}"
