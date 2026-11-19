@@ -8,7 +8,8 @@ account nobody and starts CHILD (`python3 -I -S`): as root it leaves the network
 ids, then sets CPU, memory, file size, open-file and process limits before it opens anything. Every database is
 opened read-write on its own copy (a WAL or hot journal is applied there, never in staging) with
 `SQLITE_DBCONFIG_DEFENSIVE`, `trusted_schema=OFF`, `cell_size_check=ON` and no mmap; only ordinary tables are ever
-read (never a view, a virtual table or its shadow tables), with explicit columns, and a database that is only read is
+read (never a view, a virtual table or its shadow tables), with explicit columns. The Hermes state.db quick check
+accepts only known FTS5 declarations; it does not query those tables or validate their search index contents. A database that is only read is
 `query_only`. The child answers one JSON line per database and `{"end": true}`; this process never opens a database
 itself.
 
@@ -100,9 +101,41 @@ def layout(conn):
                and re.match(r"^\s*CREATE" + gap + r"VIRTUAL" + gap + r"TABLE\b", q, re.I)]
     tables = sorted(n for n, k, q in rows if k == "table" and isinstance(n, str) and n not in virtual
                     and not any(n.startswith(v + "_") for v in virtual))
-    return {"tables": tables, "virtual": sorted(str(v)[:64] for v in virtual)[:50],
+    return {"tables": tables, "virtual": sorted(str(v) for v in virtual),
             "views": sum(1 for _n, k, _q in rows if k == "view"),
             "triggers": sum(1 for _n, k, _q in rows if k == "trigger")}
+# Exact upstream Hermes FTS5 layouts; no tokenizer or content source is supplied by the archive.
+HERMES_FTS = {
+    "messages_fts": {
+        "content", "content,content=messages,content_rowid=id",
+        "content,tool_name,tool_calls,content='messages',content_rowid='id'",
+        "content,tool_name,tool_calls,content='messages_fts_src',content_rowid='id'",
+    },
+    "messages_fts_trigram": {
+        "content,tokenize='trigram'", "content,content=messages,content_rowid=id,tokenize='trigram'",
+        "content,tool_name,tool_calls,content='messages_fts_trigram_src',content_rowid='id',tokenize='trigram'",
+        "content,tool_name,content='messages_fts_trigram_src',content_rowid='id',tokenize='trigram'",
+    },
+}
+def hermes_fts_ok(conn, info):
+    # Only whitespace is ignored; comments, quoting changes, extra arguments and modules are rejected.
+    rows = conn.execute("SELECT name, sql FROM sqlite_master WHERE type='table'").fetchall()
+    definitions = {n: q for n, q in rows if n in info["virtual"]}
+    if len(definitions) != len(info["virtual"]):
+        return False
+    for name, sql in definitions.items():
+        if name not in HERMES_FTS or not isinstance(sql, str):
+            return False
+        match = re.fullmatch(r"CREATE\s+VIRTUAL\s+TABLE\s+" + name + r"\s+USING\s+fts5\s*\(([^()]*)\)", sql, re.I)
+        if not match:
+            return False
+        parts = re.split(r"('[^']*')", match.group(1))
+        normalized = "".join(part if i % 2 else re.sub(r"\s+", "", part)
+                             for i, part in enumerate(parts))
+        if normalized not in HERMES_FTS[name]:
+            return False
+    return True
+
 def columns(conn, table, info):
     if table not in info["tables"] or not IDENT.match(table):
         return set()
@@ -122,7 +155,7 @@ for spec in request["dbs"]:
     try:
         conn = connect(name)
         info = layout(conn)
-        if info["virtual"]:
+        if info["virtual"] and not (spec.get("hermes_fts") and hermes_fts_ok(conn, info)):
             raise ValueError("virtual tables are not supported")
         if spec.get("check"):
             doc["check"] = checked(conn, spec["check"])
@@ -210,10 +243,13 @@ def _spec(spec, names):
     queries = list(spec.get('queries') or [])
     if (check not in (None, 'quick', 'integrity') or (source is not None and source not in names)
             or not all(isinstance(t, str) and IDENT_RE.fullmatch(t) for t in counts)
-            or not all(q in QUERIES for q in queries)):
+            or not all(q in QUERIES for q in queries)
+            or (spec.get('hermes_fts', False) is not False and
+                (spec.get('hermes_fts') is not True or spec['db'] != 'state.db' or source is not None
+                 or check != 'quick'))):
         raise BackupError('internal-error', 'SQLite 讀取要求的格式不正確。')
     return {'db': spec['db'], 'check': check, 'schema': spec.get('schema') is True, 'counts': counts,
-            'queries': queries, 'replace_api_keys_from': source}
+            'queries': queries, 'replace_api_keys_from': source, 'hermes_fts': spec.get('hermes_fts') is True}
 
 
 def run(specs, files, work_dir, *, outputs=(), out_dir=None, checkpoint=None, timeout=TIMEOUT, what='資料庫'):

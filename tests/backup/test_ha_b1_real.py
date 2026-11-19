@@ -104,7 +104,7 @@ class RealBatch1Tests(unittest.TestCase):
         self.assertEqual(src.foreign, [])
         self.assertEqual((src.counts['symlinks'], src.counts['hardlinks']), (0, 0))
         answers = hasqlite.run([{'db': n, 'check': 'quick', **({'counts': ['sessions', 'messages'],
-                                                                 'queries': ['hermes.schema_version']}
+                                                                 'queries': ['hermes.schema_version'], 'hermes_fts': True}
                                                                 if n == 'state.db' else {})}
                                 for n in sorted(src.dbs) if not n.endswith(ha_hermes.SIDECARS)],
                                dict(src.dbs), self.staging / 'sqlite')

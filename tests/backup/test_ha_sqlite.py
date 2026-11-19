@@ -86,6 +86,34 @@ class ChildTests(unittest.TestCase):
             self.assertNotIn('check', answer)
             self.assertNotIn('counts', answer)
 
+    def test_hermes_fts_is_strictly_scoped_and_still_checked(self):
+        definitions = [
+            ("messages_fts USING fts5(content)", True),
+            ("messages_fts_trigram USING fts5(content, tokenize='trigram')", True),
+            ("messages_fts USING fts5(content, tokenize='porter')", False),
+            ("other USING fts5(content)", False),
+        ]
+        for i, (definition, allowed) in enumerate(definitions):
+            path = self.root / ('fts%d.db' % i)
+            conn = sqlite3.connect(path)
+            conn.execute('CREATE TABLE messages(id INTEGER)')
+            conn.execute('CREATE VIRTUAL TABLE ' + definition)
+            conn.close()
+            def run(spec, suffix):
+                return hasqlite.run([spec], {'state.db': path}, self.root / ('work%d%s' % (i, suffix)))['state.db']
+            spec = {'db': 'state.db', 'check': 'quick', 'counts': ['messages', 'messages_fts_data'], 'hermes_fts': True}
+            answer = run(spec, 'a')
+            if allowed:
+                self.assertEqual(answer.get('check'), ['ok'])
+                self.assertEqual(answer['counts'], {'messages': 0})
+            else:
+                self.assertIn('virtual tables', answer.get('error', ''))
+                self.assertNotIn('check', answer)
+            self.assertIn('virtual tables', run({'db': 'state.db', 'check': 'quick'}, 'b').get('error', ''))
+        with self.assertRaises(BackupError):
+            hasqlite.run([{'db': 'state.db', 'check': 'integrity', 'hermes_fts': True}],
+                         {'state.db': path}, self.root / 'invalid')
+
     def test_a_wal_is_applied_on_the_childs_copy_only(self):
         conn = headscale_db(self.root / 'db.sqlite', prefixes=['aaaa'], wal=True)
         conn.execute('PRAGMA wal_autocheckpoint=0')
