@@ -253,15 +253,19 @@ def ha_broker(work, tmp, target, src, node, *, out_dir=None):
     host = node.split('@', 1)[1]
     hosts = [] if IPV4_RE.fullmatch(host) else [(host, '127.0.0.1')]
     # No cookie is set: the image's default only guards the distribution port inside a container without a network.
-    env = {'EMQX_NODE__NAME': node, 'EMQX_NODE__DATA_DIR': HA_DATA_DIR, 'EMQX_DASHBOARD__DEFAULT_PASSWORD': '',
-           'EMQX_LOG__FILE__DEFAULT__ENABLE': 'false'}
-    tmp.volume('emqx-xfer')
-    tmp.volume_import('emqx-xfer', lambda out: _folder_tar(out, 'out', 0, 0))
+    # An empty default password: no Dashboard user is created at boot (emqx_dashboard_admin:add_default_user), so the
+    # export holds HA's users only.
+    env = {'EMQX_NODE__NAME': node, 'EMQX_NODE__DATA_DIR': HA_DATA_DIR, 'EMQX_DASHBOARD__DEFAULT_PASSWORD': ''}
+    volumes = [(tmp.name('emqx-src'), HA_DATA_DIR, 'rw,noexec,nosuid,nodev')]
+    if out_dir is not None:
+        tmp.volume('emqx-xfer')
+        tmp.volume_import('emqx-xfer', lambda out: _folder_tar(out, 'out', 0, 0))
+        volumes.append((tmp.name('emqx-xfer'), WORK, None))
     tmp.volume('emqx-ha-log')
+    volumes.append((tmp.name('emqx-ha-log'), LOG_TARGET, None))
     try:
         tmp.run('emqx-ha', target.image, [], detach=True, user='0', read_only_root=True, add_hosts=hosts, env=env,
-                volumes=[(tmp.name('emqx-src'), HA_DATA_DIR, 'rw,noexec,nosuid,nodev'),
-                         (tmp.name('emqx-xfer'), WORK, None), (tmp.name('emqx-ha-log'), LOG_TARGET, None)])
+                volumes=volumes)
     except BackupError as error:
         if error.code != 'job-failed':
             raise
@@ -504,7 +508,7 @@ def check(work, app):
     readings = None
     if blocker is None:
         readings = ha_broker(work, tmp, target, src, node)
-        _clean(tmp, 'emqx-ha', volumes=('emqx-src', 'emqx-xfer', 'emqx-ha-log'))
+        _clean(tmp, 'emqx-ha', volumes=('emqx-src', 'emqx-ha-log'))
     blockers, warnings = analyse(src, readings, addon_version=work.addon_info(SLUG).version, version=version)
     if blocker:
         blockers.insert(0, blocker)

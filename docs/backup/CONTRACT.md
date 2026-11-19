@@ -1922,7 +1922,7 @@ PostgreSQL 15).
 3. HA's broker: the live image, `--network none`, a read-only root, user 0 (as on HA), HA's node name (`--add-host
    <host>:127.0.0.1` when its host is not an IPv4 literal), the staged volume at `/data/emqx/data` mounted
    `rw,noexec,nosuid,nodev` (`EMQX_NODE__DATA_DIR`), an empty `EMQX_DASHBOARD__DEFAULT_PASSWORD` (nothing is created at
-   boot), no file log; ready when `emqx ctl status` says "is started" (300 s). `emqx eval` of fixed expressions answers
+   boot); ready when `emqx ctl status` says "is started" (300 s). `emqx eval` of fixed expressions answers
    whether admin/public still logs in (a blocker), the table counts (a table every 5.8.9 broker has missing: HA's
    database did not load completely, refused), root names, authenticators and authorization
    policy; then `emqx ctl data export --root-keys <DATA_ROOTS present> --table-sets builtin_authn,builtin_authz,banned,
