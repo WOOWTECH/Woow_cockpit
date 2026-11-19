@@ -366,7 +366,8 @@ def verdict(src, found, *, live_alembic_value, ha_major, target_major):
                         '無法安全地搬過來。')
     extensions = [str(e) for e in objects.get('extensions') or []]
     if any(e not in EXTENSIONS_OK for e in extensions):
-        blockers.append(f'HA 的 Omnigent 資料庫使用了這台不支援的擴充功能：{hacommon.names([e for e in extensions if e not in EXTENSIONS_OK])}。')
+        odd_extensions = [e for e in extensions if e not in EXTENSIONS_OK]
+        blockers.append(f'HA 的 Omnigent 資料庫使用了這台不支援的擴充功能：{hacommon.names(odd_extensions)}。')
     if objects.get('encoding') != 'UTF8':
         blockers.append('HA 的 Omnigent 資料庫不是 UTF8 編碼。')
     if ha_major is None or target_major is None or ha_major > target_major:
@@ -485,7 +486,8 @@ def check(work, app):
         warnings.append(f'HA 也有和這台相同名稱的帳號（{hacommon.names(conflicts)}），匯入後以 HA 的帳號為準，這台的'
                         '管理者或 runner 密碼對它不再適用。')
     return {'target_version': version or '', 'blockers': blockers, 'warnings': warnings,
-            'omnigent': section(src, found, version=VERSIONS.upstream(work.addon_info(SLUG).version), conflicts=conflicts)}
+            'omnigent': section(src, found, version=VERSIONS.upstream(work.addon_info(SLUG).version),
+                                conflicts=conflicts)}
 
 
 def toc_kinds(text):

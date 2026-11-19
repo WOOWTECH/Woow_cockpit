@@ -23,7 +23,6 @@ the version path, applies migrations and validates the schema exactly as the ser
 export as it is (this device's Headplane logins and roles stay). The target keeps its `server_url`, prefixes, DNS and
 policy settings, every config file and secret.
 """
-import json
 import os
 import re
 import tarfile

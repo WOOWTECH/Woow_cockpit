@@ -335,7 +335,8 @@ def analyse(src, answers, *, addon_version, release, digest):
 
 
 def section(src, details, *, release):
-    return {'hermes_version': VERSIONS.upstream(src.addon.version) if src.addon else '', 'target_release': release or '',
+    return {'hermes_version': VERSIONS.upstream(src.addon.version) if src.addon else '',
+            'target_release': release or '',
             'files': src.counts.get('files', 0), 'bytes': src.counts.get('bytes', 0), 'dirs': src.counts.get('dirs', 0),
             'symlinks': src.counts.get('symlinks', 0), 'absolute_symlinks': src.counts.get('absolute_symlinks', 0),
             'hardlinks': src.counts.get('hardlinks', 0), 'databases': details['databases'],

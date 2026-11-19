@@ -235,7 +235,8 @@ def parse_counts(text):
 
 
 def parse_authn(text):
-    rows = re.findall(r'\{\s*([a-z_]+)\s*,\s*([a-z_]+)\s*,\s*(true|false)\s*,\s*([a-z0-9_]+)\s*,\s*([a-z_]+)\s*\}', text)
+    rows = re.findall(r'\{\s*([a-z_]+)\s*,\s*([a-z_]+)\s*,\s*(true|false)\s*,\s*([a-z0-9_]+)\s*,'
+                      r'\s*([a-z_]+)\s*\}', text)
     return [{'mechanism': m, 'backend': b, 'enable': e == 'true', 'algorithm': a, 'salt': s} for m, b, e, a, s in rows]
 
 

@@ -112,7 +112,8 @@ def checked(conn, how):
 def api_keys(conn, info):
     if not {"prefix", "hash", "expiration", "last_seen", "created_at"} <= columns(conn, "api_keys", info):
         raise ValueError("api_keys table missing")
-    return conn.execute("SELECT prefix, hash, expiration, last_seen, created_at FROM api_keys ORDER BY id LIMIT 1001").fetchall()
+    return conn.execute("SELECT prefix, hash, expiration, last_seen, created_at FROM api_keys "
+                        "ORDER BY id LIMIT 1001").fetchall()
 for spec in request["dbs"]:
     name = spec["db"]
     doc = {"db": name}
