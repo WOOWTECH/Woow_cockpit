@@ -513,6 +513,9 @@ def restore_dump(work, tmp, dump, superuser, role='omni-db'):
     """Restore HA's dump into the new cluster's database AS A ROLE WITHOUT ANY PRIVILEGE (RESTORE_ROLE), then hand
     every object to the app role and drop the restore role; refused before anything when the list holds a kind of
     object Omnigent never creates."""
+    # This helper also must fail closed if a future caller bypasses convert().
+    raise BackupError('incompatible', SECURITY_BLOCKER)
+
     cluster = ha_odoo.Cluster(tmp, role, superuser=superuser, log=work.log)
     with open(dump, 'rb') as handle:
         toc = tmp.exec(role, ['pg_restore', '-l'], user='postgres', input=handle, timeout=DUMP_TIMEOUT,

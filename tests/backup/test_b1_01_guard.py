@@ -7,6 +7,15 @@ from woowbackup.errors import BackupError
 
 
 class OmnigentSecurityHoldTest(unittest.TestCase):
+    def test_restore_helper_also_fails_before_any_work(self):
+        work, tmp, dump = Mock(), Mock(), Mock()
+        with self.assertRaises(BackupError) as caught:
+            ha_omnigent.restore_dump(work, tmp, dump, 'omnigent')
+        self.assertEqual(caught.exception.code, 'incompatible')
+        self.assertEqual(work.mock_calls, [])
+        self.assertEqual(tmp.mock_calls, [])
+        self.assertEqual(dump.mock_calls, [])
+
     def test_convert_fails_before_any_work_for_both_modes(self):
         for test_mode in (False, True):
             with self.subTest(test_mode=test_mode):
