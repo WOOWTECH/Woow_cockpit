@@ -63,6 +63,8 @@ VERIFIER_RE = re.compile(r'(?:SCRAM-SHA-256\$[0-9]{1,7}:[A-Za-z0-9+/=]{1,200}\$[
 DIGEST_RE = re.compile(r'sha256:[0-9a-f]{64}\Z')
 MAX_MANIFEST = 256 * 1024
 MAX_MODULE_ROWS = 20000
+ELF_HEAD = 20         # bytes of an ELF header up to and including e_machine
+EM_X86_64 = 0x3E
 MAX_SMALL_FILE = 64 * 1024
 PG_READY_TIMEOUT = 300
 DUMP_TIMEOUT = 3 * 3600
@@ -293,6 +295,18 @@ class FileTar:
             self.handle.close()
 
 
+def foreign_native(head):
+    """True when `head` (a file's first bytes) starts a Linux program or library for a processor other than x86-64."""
+    if len(head) < ELF_HEAD or head[:4] != b'\x7fELF':
+        return False
+    return head[4:6] != b'\x02\x01' or int.from_bytes(head[18:20], 'little') != EM_X86_64
+
+
+def _note_native(info, tail, entry):
+    if foreign_native(entry.peek(ELF_HEAD)):
+        info['foreign'] = [*info.get('foreign', []), tail][:5]
+
+
 def _module_of(name):
     """(source label, module name, rest) of a custom module candidate entry, else None."""
     for prefix in MODULE_SOURCES:
@@ -360,6 +374,7 @@ def scan_member(stream, report, *, pg=None, filestore_db=None, filestore=None, m
             info['files'] += 1
             info['bytes'] += entry.size
             src.module_bytes += entry.size
+            _note_native(info, tail, entry)
             if tail == '__manifest__.py':
                 data = entry.read_all(MAX_MANIFEST)
                 info['manifest'] = parse_manifest(data)
@@ -399,6 +414,7 @@ def scan_share(stream, report, *, modules=None, checkpoint=None):
         if entry.kind == 'file':
             info['files'] += 1
             info['bytes'] += entry.size
+            _note_native(info, tail, entry)
             if tail == '__manifest__.py':
                 data = entry.read_all(MAX_MANIFEST)
                 info['manifest'] = parse_manifest(data)
@@ -851,6 +867,10 @@ def database_verdict(details, target, candidates, *, ha_major, target_major, ext
                 lacking.append(f'程式 {dep}（模組 {name}）')
     if lacking:
         blockers.append(f'要一起搬過來的自訂模組需要這台沒有的東西：{_names(lacking)}。')
+    foreign = sorted(name for name, candidate in copy.items() if candidate.get('foreign'))
+    if foreign:
+        blockers.append(f'要一起搬過來的自訂模組含有只能在其他處理器（例如 ARM）上執行的程式：{_names(foreign)}。'
+                        '請先在 HA 換成不含這類程式的版本，再做一次備份。')
     if details['mail_servers_active']:
         warnings.append(f'HA 的資料庫有 {details["mail_servers_active"]} 個啟用中的外寄郵件伺服器，搬過來後會開始寄信。')
     if details['crons_active']:

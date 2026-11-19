@@ -93,6 +93,37 @@ CORE = '/usr/lib/python3/dist-packages/odoo/addons'
 EXTRA = '/mnt/extra-addons'
 
 
+def elf(machine, ident=b'\x7fELF\x02\x01\x01'):
+    return ident + bytes(16 - len(ident)) + b'\x03\0' + machine.to_bytes(2, 'little') + bytes(40)
+
+
+class NativeFileTests(unittest.TestCase):
+    def test_foreign_native(self):
+        self.assertTrue(ha_odoo.foreign_native(elf(0xB7)), 'aarch64')
+        self.assertTrue(ha_odoo.foreign_native(elf(0x3E, b'\x7fELF\x01\x01\x01')), '32-bit')
+        self.assertFalse(ha_odoo.foreign_native(elf(0x3E)), 'x86-64')
+        for head in (b'', b'\x7fELF', b'#!/bin/sh\n' + bytes(40), b'import os\n' * 5):
+            self.assertFalse(ha_odoo.foreign_native(head), head[:8])
+
+    def test_the_scan_names_the_file_and_still_copies_it_whole(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        modules = ha_odoo.FileTar(Path(tmp.name) / 'modules.tar')
+        native = elf(0xB7) + b'payload' * 100
+        extra = [{'name': 'data/addons/woow_import_probe/lib', 'type': 'dir'},
+                 {'name': 'data/addons/woow_import_probe/lib/arm.so', 'data': native},
+                 {'name': 'data/addons/woow_import_probe/lib/x86.so', 'data': elf(0x3E)}]
+        src = ha_odoo.scan_member(io.BytesIO(odoo_tar(extra)), habackup.Report(), modules=modules)
+        modules.close()
+        self.assertEqual(src.modules['woow_import_probe']['foreign'], ['lib/arm.so'])
+        copied = members_of((Path(tmp.name) / 'modules.tar').read_bytes())
+        self.assertEqual(copied['data/addons/woow_import_probe/lib/arm.so'][1], native)
+
+    def test_a_module_without_native_code_is_not_marked(self):
+        src = ha_odoo.scan_member(io.BytesIO(odoo_tar()), habackup.Report())
+        self.assertNotIn('foreign', src.modules['woow_import_probe'])
+
+
 class VerdictTests(unittest.TestCase):
     def verdict(self, det, tgt, candidates=None, ha_major=16, target_major=17):
         return ha_odoo.database_verdict(det, tgt, candidates or {}, ha_major=ha_major, target_major=target_major)
@@ -120,6 +151,16 @@ class VerdictTests(unittest.TestCase):
                                               target({}, python={'lxml': True}),
                                               {'woow_import_probe': self.candidate(python=['lxml'])})
         self.assertEqual((ok, blockers, list(copy)), (True, [], ['woow_import_probe']))
+
+    def test_a_custom_module_built_for_another_processor_is_refused_only_when_it_would_be_copied(self):
+        cand = {'probe': {**self.candidate(), 'foreign': ['lib/native.so']}}
+        ok, blockers, _w, _c = self.verdict(details([('probe', '18.0.1.0.0', 'installed')]), target({}), cand)
+        self.assertFalse(ok)
+        self.assertIn('只能在其他處理器（例如 ARM）上執行', blockers[0])
+        self.assertIn('probe', blockers[0])
+        ok, blockers, _w, copy = self.verdict(details([('probe', '18.0.1.0.0', 'installed')]),
+                                              target({'probe': ('18.0.1.0.0', True, CORE)}), cand)
+        self.assertEqual((ok, blockers, copy), (True, [], {}), 'this device has its own copy: nothing moves')
 
     def test_a_custom_copy_replaces_another_version_only_in_the_custom_folder(self):
         cand = {'probe': self.candidate('18.0.2.0')}

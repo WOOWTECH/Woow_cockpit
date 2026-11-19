@@ -142,9 +142,14 @@ class CheckFlowTests(FlowCase):
         self.assertEqual(self.reporter.phases(), ['prepare', 'decrypt', 'decrypt', 'check'])
         self.assertFalse((Path(self.paths.staging) / self.job_id).exists(), 'staging is removed')
 
+    def test_x86_and_arm_backups_are_both_accepted(self):
+        for arch in ('amd64', 'aarch64'):
+            self.assertIsNone(haimport._arch_blocker(mock.Mock(arch=arch)), arch)
+        self.assertIn('無法判斷', haimport._arch_blocker(mock.Mock(arch='unknown')))
+
     def test_blockers_without_running_anything(self):
         ha_id = self.upload(hx.outer_bytes([(f'{hx.ODOO}.tar.gz', hx.addon_member(
-            image='ghcr.io/woowtech/woow-ha-odoo-aarch64')), (f'{hx.N8N}.tar.gz', N8N_MEMBER)],
+            image='ghcr.io/woowtech/woow-ha-odoo-riscv64')), (f'{hx.N8N}.tar.gz', N8N_MEMBER)],
             hx.ha_doc(addons=(hx.ODOO, hx.N8N))))
         del self.catalog['n8n']
         with mock.patch.object(ha_odoo, 'check') as odoo, mock.patch.object(ha_n8n, 'check') as n8n:
@@ -152,7 +157,7 @@ class CheckFlowTests(FlowCase):
         self.assertFalse(odoo.called or n8n.called)
         odoo_result, n8n_result = result['ha_check']['apps']
         self.assertFalse(odoo_result['ok'])
-        self.assertIn('ARM', odoo_result['blockers'][0])
+        self.assertIn('無法判斷這份 HA 備份來自哪一種處理器', odoo_result['blockers'][0])
         self.assertEqual(n8n_result['blockers'], ['請先到「應用軟體」安裝同版本的 n8n 工作流程，再匯入。'])
 
     def test_not_deployed_and_a_failing_app_step_are_blockers(self):
