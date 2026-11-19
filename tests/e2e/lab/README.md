@@ -1,7 +1,8 @@
 # 備份與還原實驗室設備（team L）
 
 兩台彼此隔離、接近實機的 Ubuntu 24.04「設備」（dev-a、dev-b），供備份與還原端到端測試使用；第三台 dev-c 跑本主機
-Odoo 與 n8n 的複本，供 HA 匯入測試（見「[dev-c：正式主機 Odoo 與 n8n 的複本](#dev-c正式主機-odoo-與-n8n-的複本ha-匯入測試)」）。每台設備是一個以
+Odoo 與 n8n 的複本，供 HA 匯入測試（見「[dev-c：正式主機 Odoo 與 n8n 的複本](#dev-c正式主機-odoo-與-n8n-的複本ha-匯入測試)」）；第四台 dev-d 跑本主機
+Omnigent、Hermes、EMQX 與 Headscale 的複本，供 HA 匯入第一批的測試（見「[dev-d](#dev-d正式主機-omnigenthermesemqx-與-headscale-的複本ha-匯入第一批)」）。每台設備是一個以
 systemd 為 PID 1 的 rootless 容器，內含 Cockpit 362、rootless Podman（巢狀）、age、zstd 與 python3。
 **所有容器操作只透過 `~/.woowbk-lab/bin/labpodman`**（獨立儲存根目錄 `~/.woowbk-lab/storage`），
 正式主機的容器、資料卷、映像與服務在這裡完全看不到，也不會被影響。不使用 sudo。
@@ -46,23 +47,25 @@ systemd 為 PID 1 的 rootless 容器，內含 Cockpit 362、rootless Podman（�
 | 指令 | 作用 |
 | --- | --- |
 | `build.sh [--no-cache]` | 以 labpodman 建置映像（`--memory 768m`），並列出套件版本 |
-| `up.sh <a\|b\|c>` | 建立或啟動設備，等到 systemd 開機完成、`cockpit.socket` 監聽 9090、`user@<uid>.service` 啟用且有 memory 控制器（沒有時重新啟動它一次；否則巢狀容器的 `--memory` 會以 `crun: opening file memory.max` 失敗）；設定 devadmin 密碼、appowner、subuid/subgid、linger。啟動前檢查主機可用記憶體 ≥ 1200 MB |
-| `down.sh <a\|b\|c\|all> [--rm]` | 停止設備（保留容器與資料卷）；`--rm` 另移除容器但保留資料卷 |
-| `reset.sh <a\|b\|c> [--up]` | 刪除設備**與其所有資料卷**（含巢狀映像、應用資料、備份）；`--up` 隨即重建 |
-| `exec.sh <a\|b\|c> [cmd…]` | 以 root 在設備內執行（預設互動 shell） |
-| `owner.sh <a\|b\|c> cmd…` | 以 appowner 執行，方式與引擎相同（`runuser -u appowner -- env -i … XDG_RUNTIME_DIR=/run/user/<uid> DBUS_SESSION_BUS_ADDRESS=…`） |
-| `engine.sh <a\|b\|c> <command> [json\|-]` | 以 root 呼叫 `/usr/local/libexec/woowtech-cockpit-backup`，輸出單一 JSON 並遮蔽 `key`／`content` 字串；帶金鑰的請求用 `-` 由標準輸入提供 |
-| `deploy-src.sh <a\|b\|c> [--src 工作樹] [--demo-catalog\|--no-demo-catalog] [--fallback]` | 把**目前工作樹**（或 `--src` 指定的 Woow_cockpit 工作樹；排除 `.git node_modules .local design __pycache__`）複製到設備 `/opt/woow-cockpit-src`（root 擁有、不可群組／其他人寫入），安裝程式支援時執行 `manage.py install --backup-demo-catalog`；`--no-demo-catalog`（dev-c 的預設）只執行 `manage.py install`，不加 woowbk-demo 目錄項目；尚不支援時結束碼 3，`--fallback` 執行檔頭記載的實驗室專用手動安裝 |
+| `up.sh <a\|b\|c\|d>` | 建立或啟動設備，等到 systemd 開機完成、`cockpit.socket` 監聽 9090、`user@<uid>.service` 啟用且有 memory 控制器（沒有時重新啟動它一次；否則巢狀容器的 `--memory` 會以 `crun: opening file memory.max` 失敗）；設定 devadmin 密碼、appowner、subuid/subgid、linger。啟動前檢查主機可用記憶體 ≥ 1200 MB |
+| `down.sh <a\|b\|c\|d\|all> [--rm]` | 停止設備（保留容器與資料卷）；`--rm` 另移除容器但保留資料卷 |
+| `reset.sh <a\|b\|c\|d> [--up]` | 刪除設備**與其所有資料卷**（含巢狀映像、應用資料、備份）；`--up` 隨即重建 |
+| `exec.sh <a\|b\|c\|d> [cmd…]` | 以 root 在設備內執行（預設互動 shell） |
+| `owner.sh <a\|b\|c\|d> cmd…` | 以 appowner 執行，方式與引擎相同（`runuser -u appowner -- env -i … XDG_RUNTIME_DIR=/run/user/<uid> DBUS_SESSION_BUS_ADDRESS=…`） |
+| `engine.sh <a\|b\|c\|d> <command> [json\|-]` | 以 root 呼叫 `/usr/local/libexec/woowtech-cockpit-backup`，輸出單一 JSON 並遮蔽 `key`／`content` 字串；帶金鑰的請求用 `-` 由標準輸入提供 |
+| `deploy-src.sh <a\|b\|c\|d> [--src 工作樹] [--demo-catalog\|--no-demo-catalog] [--fallback]` | 把**目前工作樹**（或 `--src` 指定的 Woow_cockpit 工作樹；排除 `.git node_modules .local design __pycache__`）複製到設備 `/opt/woow-cockpit-src`（root 擁有、不可群組／其他人寫入），安裝程式支援時執行 `manage.py install --backup-demo-catalog`；`--no-demo-catalog`（dev-c 與 dev-d 的預設）只執行 `manage.py install`，不加 woowbk-demo 目錄項目；尚不支援時結束碼 3，`--fallback` 執行檔頭記載的實驗室專用手動安裝 |
 | `deploy-prodlike.sh c --odoo-repo D --n8n-repo D [--cockpit-src D] [階段…]` | 只用於 dev-c：`packages images odoo n8n cockpit check`（見 dev-c 一節），每個階段都可以重跑 |
 | `prodlike_baseline.py [odoo] [n8n]` | dev-c 的基準：每個應用一份加密備份與原位還原，前後的標記資料列證明資料真的還原（見 dev-c 一節） |
+| `deploy-batch1.sh d --omnigent-repo D --hermes-repo D --emqx-repo D --headscale-repo D [--<應用>-rev R] [--cockpit-src D] [階段…]` | 只用於 dev-d：`packages images omnigent hermes emqx headscale cockpit check`（見 dev-d 一節），每個階段都可以重跑 |
+| `batch1_baseline.py [omnigent] [hermes] [emqx] [headscale]` | dev-d 的基準：在每個應用放入標記資料（`batch1_markers.py`，在設備內以應用自己的 API、CLI 或程式碼建立與讀取），每個應用一份加密備份，再以原位還原證明它能還原（見 dev-d 一節） |
 | `deploy-demo.sh <a\|b> [--notes N] [--files M] [--title T] [--no-seed]` | 不經引擎、以 appowner 手動部署 woowbk-demo（拉取 postgres、建置應用映像、安裝 Quadlet、daemon-reload、seed） |
 | `deploy-dirs.sh <a\|b> [--items N] [--delete K] [--title T] [--owner-note T] [--seed S] [--no-seed]` | 同上，部署主機資料夾示範應用 woowbk-dirs（`catalog-examples/woowbk-dirs/README.md`）：複製到 `/opt/woowbk-dirs`、拉取 postgres（已有則略過）、建置 `localhost/woowbk-dirs-app:1`、安裝 Quadlet、seed（密鑰、設定檔、主機資料夾與容器帳號擁有者、資料庫角色與第二個資料庫、項目） |
 | `dirs-catalog.sh <a\|b> install\|remove\|status` | 以 root 安裝或移除 woowbk-dirs 的受信任目錄項目（`/etc/woowtech-cockpit/backup/apps/woowbk-dirs.json`）與 Quadlet 範本，並列出已安裝引擎對它的判斷（沒有主機資料夾支援的引擎回報「不支援的欄位：data_dirs」並略過此應用） |
 | `teardown-dirs.sh <a\|b> [--keep-image]` | 以擁有者身分移除整個 woowbk-dirs 部署（停止並解除遮蔽服務、測試 drop-in、Quadlet、容器、密鑰、網路、設定檔、兩個主機資料夾與其 `.woowbk-new-*`／`.woowbk-old-*`、應用映像），列出剩下的東西（必須是空的）；備份與目錄項目不動 |
 | `subids.sh <a\|b> [START:COUNT --reset-storage]` | 顯示 appowner 的 subuid／subgid 與實際 `uid_map`；給範圍時先拆除兩個示範應用、確認家目錄沒有其他 ID 的檔案，再以舊對應 `podman system reset`、改寫 `/etc/subuid`／`/etc/subgid`、`podman system migrate` 並核對新對應（之後映像要重新取得或由備份還原）。`woowbk-provision` 會保留設備上有效的範圍 |
-| `verify-device.sh <a\|b\|c> [--no-browser]` | 實測：systemd `running`、Cockpit socket、user manager、巢狀 podman（alpine、uid map 等於設備 `/etc/subuid` 的範圍、`--memory`）、Quadlet 產生器、Playwright 登入並開啟管理員存取 |
-| `cockpit-login.mjs <a\|b\|c>` | Playwright：HTTPS 登入 devadmin → 開啟管理員存取 → `cockpit.spawn(['id','-u'], {superuser:'require'})` 必須為 0；截圖存於 `~/.woowbk-lab/evidence/lab/`（只在未輸入密碼或密碼欄消失後截圖） |
-| `status.sh` | 各設備的狀態、systemd、記憶體、subuid 範圍、兩個示範應用的 `/healthz`（`demo-healthz` 18090、`dirs-healthz` 18091；000 為未部署或停止）；dev-c（存在時）改列目錄項目的健康網址：`odoo=`18069／18080、`n8n=`15678 readiness／15679 |
+| `verify-device.sh <a\|b\|c\|d> [--no-browser]` | 實測：systemd `running`、Cockpit socket、user manager、巢狀 podman（alpine、uid map 等於設備 `/etc/subuid` 的範圍、`--memory`）、Quadlet 產生器、Playwright 登入並開啟管理員存取 |
+| `cockpit-login.mjs <a\|b\|c\|d>` | Playwright：HTTPS 登入 devadmin → 開啟管理員存取 → `cockpit.spawn(['id','-u'], {superuser:'require'})` 必須為 0；截圖存於 `~/.woowbk-lab/evidence/lab/`（只在未輸入密碼或密碼欄消失後截圖） |
+| `status.sh` | 各設備的狀態、systemd、記憶體、subuid 範圍、兩個示範應用的 `/healthz`（`demo-healthz` 18090、`dirs-healthz` 18091；000 為未部署或停止）；dev-c（存在時）改列目錄項目的健康網址：`odoo=`18069／18080、`n8n=`15678 readiness／15679；dev-d 列 `omnigent=`8000、`hermes=`18642／18644、`headscale=`29090／23000（302）與 `emqx-dashboard=`18083 |
 
 離線夾具測試：`python3 -B -m unittest discover -s tests/e2e -p 'test_*.py' -v`。
 
@@ -165,6 +168,140 @@ python3 -I tests/e2e/lab/prodlike_baseline.py
 **重設**：`tests/e2e/lab/reset.sh c --up` 刪除容器與三個資料卷（映像、應用、備份、設備金鑰全部消失），再照「建置」重跑
 （`deploy-prodlike.sh` 約 10 分鐘，其中映像約 6 分鐘、Odoo 與 n8n 的安裝各約 2 分鐘）。新的設備金鑰會覆寫 `dev-c-kit.txt`，之前下載的 dev-c 備份就打不開了。只更新引擎與頁面：
 `deploy-src.sh c --src <工作樹>`。dev-c 不用時以 `down.sh c` 停止（約 1 GB 記憶體）。
+
+## dev-d：正式主機 Omnigent、Hermes、EMQX 與 Headscale 的複本（HA 匯入第一批）
+
+**用途**：測試「把 Home Assistant 附加元件的備份匯入 Podman 的 Omnigent、Hermes、EMQX 與 Headscale」（HA 匯入第一批）。dev-d 跑本主機
+這四個應用的真實複本：映像 ID 相同、同樣的套件安裝程式與版本（正式主機實際執行的提交）、同樣的單元／容器／資料卷／密鑰／網路名稱與
+連接埠，所以正式主機的目錄項目幾乎只改 `owner` 就能用（Headscale 另外拿掉 ngrok 的部分，見差異 2）。密鑰全部在設備內重新產生；
+沒有複製正式主機的任何密鑰、權杖或應用資料。2026-11-19 建置。
+
+| 項目 | woowbk-dev-d |
+| --- | --- |
+| Cockpit／appowner | https://127.0.0.1:19094；appowner UID 1019，subuid／subgid `10000:55000` |
+| 資源上限 | `--memory 4g --cpus 2`（11 個巢狀容器；實測見下） |
+| 額外套件 | jq 1.7.1-3ubuntu0.24.04.2（Omnigent 的安裝程式需要）、python3-nacl 1.5.0-4build1、python3-cryptography 41.0.7-4ubuntu0.4（HA 備份） |
+| Omnigent 0.21.0 | `omnigent-postgres`／`omnigent-server`／`omnigent-runner`＋`omnigent-server-health.timer`，127.0.0.1:8000；套件 `~/Woow_podman_omnigent_package`（6e4f0c0，0.21.0-2） |
+| Hermes v0.22.5 | `hermes-postgres`（容器 `hermes-postgresql`）／`hermes-redis`／`hermes-agent`＋`hermes-provision.service`，127.0.0.1:18642、:19119、:18644；套件 `~/Woow_podman_hermes`（63c8be1） |
+| EMQX 5.8.9 | `emqx`（容器 `woow-emqx`）／`emqx-entrance`，127.0.0.1:1883、:8883、:8083、:8084、:18083；套件 `~/Woow_podman_emqx`（ea5886c） |
+| Headscale 0.29.4＋Headplane 0.7.1 | `headscale`／`headplane`／`headscale-entrance`（沒有 `headscale-ngrok`），127.0.0.1:28080、:29090（metrics）、:23000（Headplane 入口）；套件 `~/Woow_podman_vpn_headscale_package`（0afdfa4） |
+| 備份引擎 | main bb23531（2026.11.19.2，與正式主機安裝的相同），只有這四個目錄項目；設備金鑰已建立，緊急金鑰 `~/.woowbk-lab/secrets/dev-d-kit.txt`（0600，實驗室拋棄式） |
+
+**建置**（重設後照做即可）：
+
+```bash
+tests/e2e/lab/up.sh d && tests/e2e/lab/verify-device.sh d --no-browser
+tests/e2e/lab/deploy-batch1.sh d --omnigent-repo <Woow_podman_omnigent_package> --hermes-repo <Woow_podman_hermes> \
+    --emqx-repo <Woow_podman_emqx> --headscale-repo <Woow_podman_vpn_headscale_package> \
+    --cockpit-src <要測的 Woow_cockpit 樹，例如 git archive 的 main>
+python3 -I tests/e2e/lab/batch1_baseline.py
+```
+
+* 每個套件複製的是正式主機實際執行的提交（`deploy-batch1.sh` 的 `REV`，可用 `--<應用>-rev` 改），不是 checkout 的 HEAD：正式主機已安裝的
+  Quadlet、單元與設定檔逐一以範本比對（`@@變數@@` 視為任意值）。Omnigent 6e4f0c0 與 EMQX ea5886c 是主機 checkout 的 HEAD（EMQX 的樹與
+  main 937ab4b 相同）；Hermes 63c8be1（main）安裝出來的檔案與 0.23.1（f4d0757，11-06 22:28 提交，正式主機的安裝清單寫於 22:31）相同，之後只改了文件；
+  Headscale 0afdfa4 是 origin/main，主機的 checkout 停在舊分支 d0c795d，正式主機的檔案是由 0afdfa4 產生的。
+* `packages`：設備內 `apt-get install jq python3-nacl python3-cryptography`。
+* `images`：10 個映像從本主機自己的儲存以 `podman save … | labpodman exec -i woowbk-dev-d woowbk-owner podman load` 串流進去
+  （約 10 分鐘、6.7 GB；剩餘空間要保持 ≥ 20 GiB）。主機上只執行 `podman image inspect` 與 `podman save`，從不拉取。都沒有 zstd 層，
+  一律用 docker-archive。以摘要固定的 6 個映像（7 個參照）在套件副本中改成載入後的摘要（各應用階段的 `repin`，只改 `quadlet/*.container`
+  的 `Image=`）。Headplane 映像有一個項目 `/home/nonroot`（distroless 的目錄）屬於 65532:65532，超出 appowner 的巢狀範圍（容器 ID 1–55000；
+  設備本身只有 65536 個 ID），所以只有這一次 load 加上 `--storage-opt ignore_chown_errors=true`：該目錄改屬容器的 root，映像 ID 仍與主機相同
+  （ID 是設定的摘要），Headplane 以 root 執行、不使用這個目錄。
+* `omnigent`：套件的 `scripts/install.sh --no-build`；`omnigent.env` 由套件範例產生（值與主機相同）；產生 4 個密鑰、管理員 `admin`、非管理員
+  `operator`（runner 以它登入）；smoke 17 通過、0 失敗。
+* `hermes`：`scripts/install.sh --no-llm --no-build --set HERMES_PASEO_EXTRA_ORIGIN=http://127.0.0.1:19119 --set WOOW_HERMES_MEMORY=6144m`
+  （這兩個是主機的值）；`hermes.env` 其餘照範例：沒有任何模型供應商金鑰、公開網址是範例的 `http://localhost:19119`；產生 5 個密鑰；
+  provisioning 完成；smoke 27 通過、0 失敗、2 個警告（儀表板改用登入表單、`podman inspect` 看得到 env 型密鑰，兩者都是套件本身的行為）。
+* `emqx`：`scripts/install.sh --accept-defaults`（`emqx.env` 即範例，只有 `WOOW_EMQX_BIND` 與主機不同）；產生 4 個密鑰（含 MQTT 使用者
+  `woow` 的 bootstrap CSV）；smoke 16 通過、0 失敗、1 個警告（同上的 podman 行為）。smoke 會以摘要拉取 `eclipse-mosquitto:2.0.22@sha256:212f89e1…`
+  （MQTT 測試用戶端，不是應用映像，設備內留有一份）。
+* `headscale`：`scripts/install.sh --accept-defaults --no-build`（`headscale.env` 即範例：`HEADSCALE_NGROK_ENABLED=false`，所以不安裝
+  `headscale-ngrok.container`，也不需要 ngrok 權杖）；產生 Headplane cookie 與入口密碼（htpasswd 只有雜湊）、由 Headscale 發出 Headplane 的
+  API 金鑰、建立使用者 `default`；smoke 28 通過、0 失敗、1 個警告（server_url 是回送位址）。
+* `cockpit`：`deploy-src.sh d --src …`（不加示範目錄項目）、主機的 `/etc/woowtech-cockpit/backup/apps/{omnigent,hermes,emqx,headscale}.json`
+  只把 `owner` 改成 appowner（Headscale 見差異 2）、設備金鑰（key-init → key-kit → key-confirm）；`check`：`engine.sh d status` 四個應用
+  running、沒有問題、單元全部 active，目錄項目的五個健康網址都是預期的 200／302，13 個使用者單元 active，沒有失敗的使用者單元。
+
+**映像**（ID 兩邊相同）：
+
+| 正式主機 Quadlet 的參照 | dev-d 使用的參照 | 映像 ID |
+| --- | --- | --- |
+| `docker.io/library/postgres:16.15-alpine3.24@sha256:aa6cb33c…`（Omnigent） | `…@sha256:8d16e6f18cc33ffb153211c40b45056a3589d49c245530469843b368d6786069` | `4278d7b1e3de` |
+| `ghcr.io/omnigent-ai/omnigent-server:v0.21.0@sha256:9bba2964…` | `…@sha256:289b90a748664c46f049b7545f651bbc86c27ce7f6f9f2c0a16f9b37eb6f12d5` | `545fa9ea7c19` |
+| `localhost/woow-omnigent-runner:0.21.0-2` | 相同 | `68794c7302df` |
+| `localhost/woow-hermes-agent:v0.22.5-woow4` | 相同 | `9a40b79b6149` |
+| `docker.io/library/postgres:15.19@sha256:9b1d34ad…`（Hermes） | `…@sha256:c414d6b9e7afb0cbb26e67a351266b2c32056d010a42b4b4940cdc8c385afafb` | `40710ae20139` |
+| `docker.io/library/redis:7.4.11-alpine@sha256:ff02b58f…` | `…@sha256:f69f4c190a0dbdb3877abe028f13a6a9568a978a49514dd09bd3c0a2c8224914` | `5509c0097c60` |
+| `docker.io/emqx/emqx:5.8.9@sha256:35b46f7a…` | `…@sha256:d4ec63c4065c745507e7652d9c0213134697dc1317d8a431b167ae7651c4e937` | `3f60addfad2b` |
+| `docker.io/nginxinc/nginx-unprivileged:1.27-alpine@sha256:65e3e85d…`（EMQX 與 Headscale 的入口） | `…@sha256:7b40c8ed6a73bda24d7510e3be1db31a19878acf65062271302a8a7aafd1682e`（與 dev-c 的 gateway 相同） | `47ce8258a10e` |
+| `localhost/woow-headscale:0.29.4-r1` | 相同 | `a5f7b9715dea` |
+| `localhost/woow-headplane:0.7.1-woow2` | 相同（`/home/nonroot` 屬於容器 root，見上） | `0b4481f9ad05` |
+
+**產生的密鑰**（dev-d 自己的，值從不顯示）：Omnigent `omnigent-postgres-password`（32）、`omnigent-admin-password`（24）、
+`omnigent-runner-password`（24）、`omnigent-database-url`；Hermes `hermes-api-server-key`、`hermes-webhook-secret`、
+`hermes-dashboard-session-secret`（各 64）、`hermes-dashboard-password`（32）、`hermes-postgres-password`（44）；EMQX
+`woow-emqx-dashboard-password`、`woow-emqx-node-cookie`、`woow-emqx-mqtt-password`（各 32）、`woow-emqx-mqtt-bootstrap`；Headscale
+`headscale-headplane-cookie`、`headscale-entrance-password`（各 32）、`headscale-headplane-api-key`（Headscale 發出）與資料卷內 Headscale 自己的
+`noise_private.key`；另有上述設備金鑰，以及基準標記帳號的密碼 `~/.woowbk-lab/secrets/dev-d-markers.json`（0600）。devadmin 密碼和其他設備共用。
+
+**和正式主機的差異**（`python3 -I tests/e2e/lab/compare_batch1.py` 逐檔比對兩邊已安裝的 Quadlet、單元、設定檔、env 檔與目錄項目，
+只讀；2026-11-19 的結果在 `~/.woowbk-lab/evidence/batch1-lab/deploy/compare-prod.txt`）：
+
+1. 帳號：appowner UID 1019、subuid `10000:55000`（主機的應用擁有者 UID 1000、`100000:65536`）。
+2. 目錄項目：Omnigent、Hermes、EMQX 只有 `owner`；Headscale 另外沒有 `headscale-ngrok.container`、`headscale-ngrok.service` 與密鑰
+   `headscale-ngrok-authtoken`（實驗室沒有 ngrok 權杖，這個單元就不存在；留著的話狀態會是「部分 Quadlet 設定檔不存在」）。描述文字未改。
+3. Quadlet 與單元：Omnigent 7＋2、Hermes 7＋1、EMQX 5、Headscale 7 個檔案中，除了下列各行之外逐位元組相同：7 個 `Image=` 摘要
+   （`omnigent-postgres`、`omnigent-server`、`hermes-postgres`、`hermes-redis`、`emqx`、`emqx-entrance`、`headscale-entrance`，見映像表）；
+   `emqx.container` 的 5 個 `PublishPort=` 與 `headscale.container` 的 28080 綁 127.0.0.1（主機綁自己的區網位址，設備裡沒有這個位址）；
+   沒有 `headscale-ngrok.container`。
+4. 設定檔：EMQX 的 `base.hocon`、`acl.conf`、`entrance.conf`，Headscale 的 `policy.json`、`extra_records.json`、`nginx.conf`、`ngrok-sync.py` 相同；
+   `headscale/config.yaml` 的 `server_url` 與 `headplane/config.yaml` 的 `public_url` 是 `http://localhost:28080`（主機是它的 ngrok
+   公開網址）；`htpasswd` 是另一個產生的密碼的雜湊。
+5. env 檔（比對只列不同的鍵，祕密只說有沒有值）：`omnigent.env` 的值相同（主機的檔案來自較舊的範例，有一行註解不同）；
+   `hermes.env` 的鍵相同、行序不同，`HERMES_DASHBOARD_PUBLIC_URL`／`HERMES_BASE_URL` 是範例的 `http://localhost:19119`（主機是
+   它的 Cloudflare 公開網址），`OPENROUTER_API_KEY`、`GITHUB_TOKEN`、`LITELLM_API_KEY` 是空的（主機有值；因此以 `--no-llm` 安裝）；
+   `emqx.env` 只有 `WOOW_EMQX_BIND=127.0.0.1`；`headscale.env` 的鍵相同、行序不同，`WOOW_HEADSCALE_BIND=127.0.0.1`、
+   `HEADSCALE_SERVER_URL=http://localhost:28080`、`HEADSCALE_NGROK_ENABLED=false`、`HEADSCALE_NGROK_DOMAIN` 空白。
+6. 套件：見上（Headscale 用 origin/main 0afdfa4，不是主機 checkout 的 HEAD）。套件副本只改了第 3 點的 `Image=` 摘要。
+7. 映像：ID 全部相同；Headplane 映像內 `/home/nonroot` 的擁有者不同（見 `images`）。設備內多一個 smoke 拉取的 `eclipse-mosquitto` 測試用戶端。
+8. 資料：全新安裝，加上基準標記（見下）。Omnigent 只有 `admin`、`operator` 與標記，runner 的 pi 沒有登入任何供應商（主機的擁有者登入過）；
+   Hermes 沒有供應商金鑰、沒有 Omnigent／Paseo 外掛配對，資料卷只有種子技能與設定（主機的 `hermes-data` 約 2.3 GB，其中 `omnigent-plugin`
+   1.2 GB、`plugin-data` 0.75 GB）；EMQX 是新的 Mnesia（`admin`、`woow`）；Headscale 有使用者 `default`，除了基準標記沒有節點（主機目前也是 0 個節點）。
+9. dev-d 沒有的：主機的其他應用；接在這四個應用上的 `hermes-mcp-admin`、`emqx-mcp-admin`、`headscale-mcp-admin` 與 `woow-mcp-edge`；Hermes 的
+   Cloudflare 公開網址與它使用的 LiteLLM；Headscale 的 ngrok 公開網址；EMQX 在主機上的 MQTT 用戶端（Podman 的 Home Assistant）；主機上另外加的
+   `hermes-local-health.timer`（11-08 手動建立，不屬於套件）、`podman-hc-watchdog`，以及舊的 Headscale soak／closeout／`woow_headscale*` 單元。
+10. 網路：所有應用埠只綁在設備內的 127.0.0.1；主機只連得到 Cockpit（127.0.0.1:19094）。
+11. 套件安裝程式內建的 Quadlet 驗證（quadlet-lib `ql_dryrun --verify`）在設備內以暫時的 `XDG_RUNTIME_DIR` 執行 `systemd-analyze --user verify`，
+    和正式主機安裝時一樣；這不碰設備或主機的 user manager socket。
+
+**基準**（`batch1_baseline.py`，2026-11-19，44／44 通過，證據 `~/.woowbk-lab/evidence/batch1-lab/20261119T152014-baseline/`）：
+
+| 應用 | 標記（都叫 `woowbk-lab-baseline`） | 加密備份（不含映像） | 大小 | 備份／停機 | 原位還原／無法使用 | 還原前備份 |
+| --- | --- | --- | --- | --- | --- | --- |
+| omnigent | 非管理員使用者（受邀註冊）、專案、暫停的每年排程工作（REST API） | `20261119T072103Z-ea792b52` | 6.3 MiB | 47.8 秒／13 秒 | 75.7 秒／55.3 秒 | `20261119T072159Z-1c5f2680` |
+| hermes | `state.db` 的工作階段（1 則訊息）、`MEMORY.md` 項目、暫停的 cron 工作（容器內 Hermes 自己的程式碼，hermes 使用者） | `20261119T072434Z-45b29e52` | 1.1 MiB | 97.6 秒／32 秒 | 142.5 秒／107.4 秒 | `20261119T072615Z-48515a01` |
+| emqx | 內建資料庫認證器的 MQTT 使用者、保留訊息 `woowbk-lab/baseline`、封鎖的 client ID（REST API） | `20261119T072831Z-168aaa02` | 30 KiB | 34.2 秒／17 秒 | 22.4 秒／14.8 秒 | `20261119T072904Z-9026af1d` |
+| headscale | 使用者、可重複使用的預先授權金鑰、節點、MagicDNS 額外紀錄（headscale CLI） | `20261119T072939Z-d52b60b2` | 30 KiB | 15.7 秒／7 秒 | 36.2 秒／26.9 秒 | `20261119T073006Z-4343b4b5` |
+
+備份前建立的標記在還原後仍在、備份後寫入的 `woowbk-lab-after` 消失；Omnigent 的資料核對（資料庫與兩個資料卷）一致；目錄項目的健康檢查
+全部通過；四個應用 running、沒有問題。基準標記留在應用裡，所以目前的資料等於這四份基準備份：之後的測試（例如匯入 HA 備份）結束時還原
+它們就回到這個狀態，可用 `woowbk-owner python3 -I -c "$(cat tests/e2e/lab/batch1_markers.py)" <應用> read` 核對（標記帳號的密碼在
+`~/.woowbk-lab/secrets/dev-d-markers.json`）。這 8 份備份留在 dev-d，是實驗室資料（較早幾輪試跑的備份已刪除）。
+
+* EMQX 的目錄項目沒有健康網址（正式主機也一樣），所以備份與還原作業在單元啟動後就結束，EMQX 的 API 還要十幾秒才就緒：入口先回 502，
+  接著內建資料庫認證器回 400 `not_initialized`。`batch1_markers.py` 對這兩種回應與拒絕連線會重試（最多 180 秒）。
+* Hermes 的備份與還原時間主要是等健康檢查：代理重新啟動後約 60–90 秒 `/health` 才回 200（`HealthStartPeriod=90s`）。
+
+**記憶體與磁碟（實測）**：主機端每 2 秒讀設備 cgroup 的 `memory.stat`。anon＋kernel＋shmem 最高：串流映像時 0.3 GiB（其餘是 page cache）、
+四個安裝時 1.6 GiB、基準備份與還原時 1.8 GiB，閒置約 1.5 GiB（`labpodman stats` 約 1.1 GB；最大的是 hermes-agent 約 430 MB，其次
+omnigent-runner、omnigent-server、woow-emqx、headplane 各 120–180 MB）。含 page cache 的 cgroup 用量最高 2.9 GiB，`memory.events` 的
+max、oom、oom_kill 都是 0。上限 4g 為 HA 匯入時的拋棄式容器（tempctr 每個上限 2 GiB）留空間；這段期間主機可用記憶體最低約 4.7 GB。
+設備的 home 資料卷 8.0 GB（其中映像 6.7 GB），備份目錄 15 MB。
+
+**重設**：`tests/e2e/lab/reset.sh d --up` 刪除容器與三個資料卷（映像、應用、備份、設備金鑰全部消失），再照「建置」重跑（`deploy-batch1.sh`
+約 15 分鐘，其中映像約 10 分鐘、四個安裝合計約 5 分鐘）。新的設備金鑰會覆寫 `dev-d-kit.txt`，之前下載的 dev-d 備份就打不開了；
+`dev-d-markers.json` 保留，下一次基準會沿用。只更新引擎與頁面：`deploy-src.sh d --src <工作樹>`。dev-d 不用時以 `down.sh d` 停止。
 
 ## 端到端測試（整合）
 
