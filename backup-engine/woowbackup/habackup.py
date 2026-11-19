@@ -31,7 +31,14 @@ Everything is hostile until checked, and parsed by readers written for exactly w
   end-of-archive marker and only zeros after it, then the stream's `finish()`. Two kinds of files are never handed
   out: `addon.json` (it holds the add-on's options with passwords and tokens) is parsed into `report.addon`
   (AddonInfo: slug, version, image, arch, name -- never options or tokens), and NEVER_READ (`data/options.json`,
-  `data/odoo.conf` with HA passwords, `data/n8n-runners-auth-token`) is skipped unread.
+  `data/odoo.conf` with HA passwords, `data/n8n-runners-auth-token`, the HA-side secrets of the batch 1 add-ons) is
+  skipped unread.
+
+Symlinks are only ever handed out as link entries (names and targets), never followed: a later entry may not lie
+below one. A relative target must stay inside the caller's area; an absolute one is handed out only when the caller
+names allowed target prefixes (`Select.absolute_symlinks`, e.g. a Python venv's `/opt/data/...` interpreter link)
+and it is clean (no empty, `.` or `..` component), so joined below the link's own folder -- the way the restore and
+podman's import resolve it (nested.py) -- it can never leave the volume either.
 
 backup.json schema subset (Supervisor SCHEMA_BACKUP; unknown keys tolerated and ignored): `version` 2 (1: too old,
 unsupported-format), `slug`, `name` (<= 200), `date` (ISO 8601, normalised to UTC `...Z`), `type` full|partial,
@@ -85,8 +92,14 @@ ENCODING, ERRORS = 'utf-8', 'surrogateescape'
 
 BACKUP_JSON = 'backup.json'
 ADDON_JSON = 'addon.json'
-# Files of an add-on's data that hold Home Assistant passwords or tokens: never read, extracted or kept.
-NEVER_READ = frozenset({'data/options.json', 'data/odoo.conf', 'data/n8n-runners-auth-token'})
+# Files of an add-on's data that hold Home Assistant passwords or tokens: never read, extracted or kept (batch 1:
+# Hermes's generated secrets and the hashes of its applied provider keys, EMQX's Erlang cookie, Headscale's
+# Headplane API key and cookie secret; facts hermes.md, emqx.md, headscale.md section 1).
+NEVER_READ = frozenset({'data/options.json', 'data/odoo.conf', 'data/n8n-runners-auth-token',
+                        'data/secrets/dashboard_password', 'data/secrets/api_server_key', 'data/secrets/webhook_secret',
+                        'data/secrets/basic_auth_secret', 'data/applied/minimax_api_key',
+                        'data/applied/openrouter_api_key', 'data/applied/github_token', 'data/emqx/node.cookie',
+                        'data/.headplane_api_key', 'data/.headplane_cookie_secret'})
 OUTER_PAX_KEYS = frozenset({'path', 'size', 'mtime', 'atime', 'ctime', 'uid', 'gid', 'uname', 'gname', 'hdrcharset'})
 LEGACY_APPS_FOLDERS = ('apps/local', 'addons/local')
 
@@ -898,16 +911,19 @@ class Select:
     """Which entries of an inner tar a caller wants (normalised names, e.g. `data/postgres`; a prefix selects itself
     and everything below it). `include` None = everything, () = nothing; `exclude` wins over `include`. `symlinks`:
     prefixes below which a selected symlink is handed out when its target is relative and, resolved from the link's
-    directory, stays inside that prefix (other symlinks are skipped and counted). `hardlinks`: a selected hard link is
-    handed out when it names an earlier selected regular file; otherwise (or when False) it is refused
-    (corrupt-archive), so a second name of a file is never lost silently. Budgets: `max_members` entries in the whole
-    tar, `max_bytes` bytes of selected regular files."""
+    directory, stays inside that prefix (other symlinks are skipped and counted). `absolute_symlinks`: absolute
+    target prefixes (e.g. `/opt/data`) for which a symlink below a `symlinks` area is handed out too, when its target
+    is clean (`_absolute_ok`); () = never. `hardlinks`: a selected hard link is handed out when it names an earlier
+    selected regular file; otherwise (or when False) it is refused (corrupt-archive), so a second name of a file is
+    never lost silently. Budgets: `max_members` entries in the whole tar, `max_bytes` bytes of selected regular
+    files."""
     include: tuple | None = None
     exclude: tuple = ()
     symlinks: tuple = ()
     hardlinks: bool = False
     max_members: int = DEFAULT_MAX_MEMBERS
     max_bytes: int = DEFAULT_MAX_BYTES
+    absolute_symlinks: tuple = ()
 
     def wants(self, name):
         if any(_under(name, prefix) for prefix in self.exclude):
@@ -932,6 +948,7 @@ class Report:
         self.bytes = 0              # bytes of the regular files handed out
         self.skipped_symlinks = 0
         self.skipped_symlink_samples = []
+        self.absolute_symlinks = 0  # handed out with an absolute target (Select.absolute_symlinks)
         self.skipped_other = 0      # FIFOs (no data)
         self.secret_files = 0       # NEVER_READ entries skipped unread
         self.addon = None           # AddonInfo
@@ -1233,6 +1250,20 @@ def _symlink_ok(name, target, root):
     return resolved == root or resolved.startswith(root + '/')
 
 
+def _absolute_ok(target, prefixes):
+    """An absolute target below one of `prefixes` without an empty, `.` or `..` component and without control
+    characters (at most MAX_NAME bytes). Joined below any folder of the volume it stays inside (nested._escapes), and
+    nothing on this device ever follows it: inside the app's container it names the container's own path."""
+    if not prefixes or not isinstance(target, str) or not target.startswith('/') or CONTROL_RE.search(target):
+        return False
+    if len(target.encode(ENCODING, ERRORS)) > MAX_NAME:
+        return False
+    parts = target.split('/')[1:]
+    if not parts or any(part in ('', '.', '..') for part in parts):
+        return False
+    return any(target == prefix or target.startswith(prefix.rstrip('/') + '/') for prefix in prefixes)
+
+
 class _Names:
     """Order-aware structure rules for every entry: no duplicates, nothing below a non-directory, no non-directory
     where a directory was implied. Names are kept as keyed 128-bit digests (bounded memory, like nested.py)."""
@@ -1331,11 +1362,14 @@ def iter_entries(stream, select=None, report=None, *, addon=None, until_addon=Fa
             linkname = None
             if kind == 'symlink':
                 root = select.symlink_root(name)
-                if root is None or not _symlink_ok(name, header.linkname, root):
+                absolute = root is not None and _absolute_ok(header.linkname, select.absolute_symlinks)
+                if root is None or not (absolute or _symlink_ok(name, header.linkname, root)):
                     report.skipped_symlinks += 1
                     if len(report.skipped_symlink_samples) < SAMPLES:
                         report.skipped_symlink_samples.append(name[:200])
                     continue
+                if absolute:
+                    report.absolute_symlinks += 1
                 linkname = header.linkname
             elif kind == 'hardlink':
                 target = normalize(header.linkname)
