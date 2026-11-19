@@ -45,6 +45,8 @@ IMPORTERS = (
     Importer('omnigent', 'woow-omnigent', 'Omnigent 協作平台', 'ha_omnigent', engine_mcp_lines=True),
     Importer('hermes', 'woow-hermes', 'Hermes 代理', 'ha_hermes', mcp_admin='hermes-mcp-admin',
              mcp_addon='Woow Hermes MCP Server', engine_mcp_lines=True),
+    Importer('emqx', 'woow-emqx', 'EMQX MQTT 代理', 'ha_emqx', mcp_admin='emqx-mcp-admin',
+             mcp_addon='Woow EMQX MCP Server', engine_mcp_lines=True),
     Importer('headscale', 'woow-headscale', 'Headscale VPN 控制伺服器', 'ha_headscale', mcp_admin='headscale-mcp-admin',
              mcp_addon='Woow Headscale MCP Server', engine_mcp_lines=True),
 )
