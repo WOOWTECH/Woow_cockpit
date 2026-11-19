@@ -43,8 +43,10 @@ DATA_TARGET = '/var/lib/headscale'
 # Add-on version -> Headscale version (Woow_ha_vpn_headscale_package CHANGELOG.md, Dockerfile).
 VERSIONS = hacommon.VersionTable('Headscale', {'0.1.0': '0.29.3', '0.1.1': '0.29.4', '0.1.2': '0.29.4',
                                                '0.1.3': '0.29.4'})
-# The migrations Headscale 0.29.4 knows (hscontrol/db/db.go); a database with any other one is not this release's.
-MIGRATIONS = {'0.29.4': frozenset({
+# The migrations Headscale 0.29.4 knows (hscontrol/db/db.go; `SCHEMA_INIT` is gormigrate's mark of a database its
+# InitSchema created -- every fresh 0.29.x database has it, seen in the real backups); any other one is not this
+# release's.
+MIGRATIONS = {'0.29.4': frozenset({'SCHEMA_INIT',
     '202501221827', '202501311657', '202502070949', '202502131714', '202502171819', '202505091439', '202505141324',
     '202507021200', '202510311551', '202511101554-drop-old-idx', '202511011637-preauthkey-bcrypt',
     '202511122344-remove-newline-index', '202511131445-node-forced-tags-to-tags',
