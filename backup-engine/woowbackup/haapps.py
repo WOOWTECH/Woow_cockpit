@@ -42,6 +42,7 @@ IMPORTERS = (
     Importer('odoo', 'odoo18ce', 'Odoo 18', 'ha_odoo', convert_args=('odoo_database', 'test_mode'),
              mcp_admin='odoo-mcp-admin', mcp_addon='Woow Odoo MCP Server'),
     Importer('n8n', 'woow-n8n', 'n8n 工作流程', 'ha_n8n', mcp_admin='n8n-mcp-admin', mcp_addon='Woow n8n MCP Server'),
+    Importer('omnigent', 'woow-omnigent', 'Omnigent 協作平台', 'ha_omnigent', engine_mcp_lines=True),
 )
 
 BY_APP = {importer.app_id: importer for importer in IMPORTERS}
