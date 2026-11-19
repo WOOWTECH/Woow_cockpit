@@ -39,6 +39,9 @@ ENV_KEY_RE = re.compile(r'[A-Za-z_][A-Za-z0-9_]{0,63}\Z')
 ENV_VALUE_RE = re.compile(r'[^\x00-\x1f\x7f]{0,1024}\Z')
 TARGET_RE = re.compile(r'/[A-Za-z0-9_./-]{0,254}\Z')
 USER_RE = re.compile(r'[A-Za-z0-9_][A-Za-z0-9_.-]{0,31}(?::[A-Za-z0-9_][A-Za-z0-9_.-]{0,31})?\Z')
+# `--add-host <name>:<IPv4>` (EMQX's node name of an HA backup must resolve inside a network-less container).
+HOSTNAME_RE = re.compile(r'[A-Za-z0-9](?:[A-Za-z0-9.-]{0,251}[A-Za-z0-9])?\Z')
+IPV4_RE = re.compile(r'(?:[0-9]{1,3}\.){3}[0-9]{1,3}\Z')
 # A Quadlet `Secret=` value as podman's --secret takes it: the secret's name, then type/target/uid/gid/mode options.
 SECRET_NAME_RE = re.compile(r'[A-Za-z0-9][A-Za-z0-9_.-]{0,252}\Z')
 SECRET_OPTION_RE = re.compile(r'(?:type=(?:mount|env)|target=[A-Za-z0-9_./-]{1,255}|uid=[0-9]{1,10}|gid=[0-9]{1,10}'
@@ -206,11 +209,13 @@ class TempObjects:
         return name
 
     def run_argv(self, role, image, args=(), *, detach=False, network=None, volumes=(), secrets=(), env=None,
-                 entrypoint=None, user=None, workdir=None, interactive=False, remove=False, read_only_root=False):
+                 entrypoint=None, user=None, workdir=None, interactive=False, remove=False, read_only_root=False,
+                 add_hosts=()):
         """The `podman run` argument list (without `podman`) of a throwaway container; every value is checked.
         `volumes`: (source, target, options|None); a source is a volume name or an absolute host path. `secrets`:
         Quadlet `Secret=` values (quadlet_secrets). `env`: {key: value} (never a secret value: it would be visible
-        in the process list)."""
+        in the process list). `add_hosts`: (name, IPv4) lines for the container's /etc/hosts (no network is
+        opened by them)."""
         name = self.name(role)
         if not isinstance(image, str) or not IMAGE_RE.fullmatch(image):
             raise BackupError('internal-error', '映像名稱格式不正確。')
@@ -237,6 +242,11 @@ class TempObjects:
             if not TARGET_RE.fullmatch(workdir):
                 raise BackupError('internal-error', '容器工作目錄格式不正確。')
             argv += ['--workdir', workdir]
+        for host, address in add_hosts:
+            if not isinstance(host, str) or not HOSTNAME_RE.fullmatch(host) or not isinstance(address, str) \
+                    or not IPV4_RE.fullmatch(address):
+                raise BackupError('internal-error', '容器主機名稱對應格式不正確。')
+            argv += ['--add-host', f'{host}:{address}']
         if entrypoint is not None:
             if not isinstance(entrypoint, str) or not re.fullmatch(r'[A-Za-z0-9_./-]{1,255}', entrypoint):
                 raise BackupError('internal-error', '容器進入點格式不正確。')
