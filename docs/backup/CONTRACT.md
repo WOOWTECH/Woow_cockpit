@@ -1874,7 +1874,7 @@ emqx,headscale,mcp-admin}.md` of the design notes.
    trigger, view, rule, policy or other schema, an object only a superuser can create, extensions beyond plpgsql and
    pg_trgm, not UTF8, a missing `accounts-cookie-secret`, an agent bundle or file blob the database names that is not
    in the staged store, a malformed artifact key.
-3. Conversion: `pg_dump -Fc omnigent`; a new cluster from the live image, environment and secret mount; pg_trgm created
+3. **Security hold (B1-01): Omnigent HA conversion is disabled.** HA-written defaults and constraints could execute as the application superuser after restore. The following describes the disabled implementation, not a security guarantee. Conversion: `pg_dump -Fc omnigent`; a new cluster from the live image, environment and secret mount; pg_trgm created
    first; the dump's list must hold only TABLE, TABLE DATA, INDEX, (FK/CHECK) CONSTRAINT, SEQUENCE (SET, OWNED BY),
    DEFAULT, COMMENT, TYPE, DOMAIN, EXTENSION (filtered out), SCHEMA and ACL entries (else `incompatible`, naming the
    kinds); it is restored by a role without any privilege (`woowbk_restore`: `pg_restore --no-owner --no-acl
@@ -2066,7 +2066,7 @@ the restore's settings check says `same`; then `flows._package` (§8 "Home Assis
    Batch 1: every SQLite file of an HA backup (and the copy of the live Headscale database) is opened only by
    `hasqlite`'s child (nobody, chroot, no network, limits, defensive, ordinary tables, fixed statements; databases containing virtual tables are refused before integrity checks), whose only
    write is Headscale's `api_keys` on a database without triggers or views, and what it wrote is copied out with
-   O_NOFOLLOW as a regular file with one link; HA's Omnigent dump is restored by a role without privileges and refused
+   O_NOFOLLOW as a regular file with one link; Omnigent HA conversion is disabled pending a trusted-schema fix (B1-01); its previous dump restore used a role without privileges and refused
    when its list holds a kind of object Omnigent never creates; HA's EMQX data is opened by the live image without a
    network, with a read-only root and a `noexec` data volume, its cookie, generated configs, plugins and patches never
    staged; an absolute symlink is handed out only below an allowed prefix with a clean target and stays a link entry;

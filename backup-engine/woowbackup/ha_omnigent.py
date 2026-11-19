@@ -23,7 +23,7 @@ convert: `pg_dump -Fc omnigent`; a NEW cluster from the live image, environment 
 live app role with the live password); pg_trgm created first; the dump's list must hold only the kinds of objects
 Omnigent creates (TOC_ALLOWED) and is restored by a separate role without any privilege
 (`pg_restore --no-owner --no-acl --exit-on-error --single-transaction`, then REASSIGN OWNED to the app role and the
-role dropped): nothing HA's server wrote runs with superuser rights. This device's own admin and runner accounts
+role dropped). This does not prevent stored expressions from running with superuser rights; conversion is disabled (B1-01). This device's own admin and runner accounts
 (the Quadlet's OMNIGENT_ACCOUNTS_INIT_ADMIN_USERNAME / OMNIGENT_RUNNER_USERNAME) are read from the live database as
 the app owner and added back unless HA has a user of the same name (HA's wins, with a warning): without them the
 runner could not log in while every health check stays green. Test mode pauses every active scheduled task. Counts
@@ -79,6 +79,9 @@ ALEMBIC_RE = re.compile(r'[0-9a-z_]{1,64}\Z')
 SERVER_VERSION_RE = re.compile(r'[0-9]{1,4}\.[0-9]{1,4}\.[0-9]{1,4}\Z')
 MAX_KEYS = 1_000_000
 DUMP_TIMEOUT = ha_odoo.DUMP_TIMEOUT
+
+# Fail closed until HA data is loaded into a trusted live-derived schema (B1-01).
+SECURITY_BLOCKER = 'Omnigent HA 匯入暫時停用：資料庫結構的安全驗證尚未完成。'
 
 
 # ====================================================================== the add-on member
@@ -481,6 +484,7 @@ def check(work, app):
                                  target_major=ha_odoo.target_pg_major(work, app, target.db_image))
     if blocker:
         blockers.insert(0, blocker)
+    blockers.insert(0, SECURITY_BLOCKER)
     conflicts = account_conflicts(found, target)
     if conflicts:
         warnings.append(f'HA 也有和這台相同名稱的帳號（{hacommon.names(conflicts)}），匯入後以 HA 的帳號為準，這台的'
@@ -563,6 +567,8 @@ ACTIVE_SQL = 'SELECT to_json(count(*)) FROM scheduled_tasks WHERE state = 1'
 def convert(work, app, test_mode, out_dir):
     """Build the app's volumes in `out_dir/volumes`; returns {volumes {name: path}, counts, kept_accounts,
     conflicts, ...}."""
+    raise BackupError('incompatible', SECURITY_BLOCKER, app=app.id)
+
     adapter = work.adapter(app)
     tmp = work.temp(app)
     target, version, alembic, addon, blocker = _prepare(work, app)
