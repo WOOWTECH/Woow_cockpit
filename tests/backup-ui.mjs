@@ -1523,6 +1523,21 @@ function retentionFixture(extra = {}) {
 const ODOO_SLUG = '1b7b4ce7_odoo18ce';
 const N8N_SLUG = '1b7b4ce7_woow-n8n';
 const HA_NAME = '每日完整備份 2026-11-17';
+// Batch 1 (2026-11-19, CONTRACT §5 "Apps"): the WOOWTECH Omnigent, Hermes, EMQX and Headscale add-ons as the engine's
+// tests name and version them (tests/backup/test_ha_*.py), this device's catalog names (haapps.IMPORTERS) and the product
+// version each add-on version maps to, which this device runs too.
+const B1_APPS = ['omnigent', 'hermes', 'emqx', 'headscale'];
+const B1 = {
+  omnigent: { slug: '1b7b4ce7_woow-omnigent', addon: 'Woow Omnigent', version: '0.1.23', app: 'Omnigent 協作平台', product: '0.21.0' },
+  hermes: { slug: '1b7b4ce7_woow-hermes', addon: 'Woow Hermes Agent', version: '0.1.14', app: 'Hermes 代理', product: '0.22.5' },
+  emqx: { slug: '1b7b4ce7_woow-emqx', addon: 'Woow EMQX', version: '5.9.1', app: 'EMQX MQTT 代理', product: '5.8.9' },
+  headscale: { slug: '1b7b4ce7_woow-headscale', addon: 'Woow Headscale VPN', version: '0.1.3', app: 'Headscale VPN 控制伺服器', product: '0.29.4' },
+};
+const HA_B1 = 'ha-b1b1b1b1b1b1b1b1b1b1';
+const B1_NAME = '樹莓派每週備份 2026-11-18';
+const B_B1 = '20261119T040500Z-b1b1b1b1';
+const HA_SOURCE = { id: HA_ID, name: HA_NAME, date: '2026-11-17T21:00:00Z' };
+const B1_SOURCE = { id: HA_B1, name: B1_NAME, date: '2026-11-18T20:00:00Z' };
 // An HA add-on has its own version; the check compares Odoo module by module, and reports this device's Odoo release
 // (CONTRACT §7: `18.0-YYYYMMDD`) as `target_version` (review F-07).
 const ODOO_ADDON_VERSION = '0.4.12';
@@ -1598,27 +1613,54 @@ function haFailedStep(kind, phase, error) {
 // What a conversion records (haimport.py view_row; FIXPLAN §19, UI-3): `notes` explain the import before the restore,
 // `reminders_by_app` are the to-dos of each app and `reminders` those of no app; `addons` names HA's add-ons. The engine
 // before that split (`legacy`) sent its explanations and to-dos together in `reminders`.
-const HA_ADDON_OF = { odoo: [ODOO_SLUG, 'Odoo 18 CE'], n8n: [N8N_SLUG, 'WOOW n8n'] };
+const HA_ADDON_OF = { odoo: [ODOO_SLUG, 'Odoo 18 CE'], n8n: [N8N_SLUG, 'WOOW n8n'],
+  ...Object.fromEntries(B1_APPS.map(id => [id, [B1[id].slug, B1[id].addon]])) };
+// Batch 1: each module's import_texts (ha_omnigent.py, ha_hermes.py, ha_emqx.py, ha_headscale.py) followed by the MCP lines
+// the engine writes itself (haimport.mcp_lines: this device has the Hermes, EMQX and Headscale MCP admin apps).
 const HA_NOTES = {
   odoo: ['Odoo 的使用者帳號和密碼會換成 HA 那邊的，這台原本的 Odoo 管理者密碼不再適用。', 'HA 的自訂模組 woow_paas_platform 會一起放進這台的自訂模組資料夾。'],
   n8n: ['n8n 的登入帳號會換成 HA 的管理者帳號（owner@example.com）。'],
+  omnigent: ['Omnigent 的使用者帳號、工作階段、代理程式與排程會換成 HA 的；HA 的登入金鑰（accounts-cookie-secret）一起搬過來，這台目前登入的瀏覽器與裝置需要重新登入。',
+    '這台 Omnigent 的管理者與 runner 帳號（admin、operator）會保留，密碼不變。', 'HA 的 Omnigent 分享與管理者執行期設定不會搬過來，這台維持自己的設定。'],
+  hermes: ['Hermes 的對話、記憶、技能、排程、外掛與 HA 的設定檔（config.yaml）會換成 HA 的；這台的 Dashboard 密碼、API 金鑰、Webhook 與工作階段金鑰以及 hermes.env 保持不變，hermes.env 中的金鑰會蓋過 HA 的同名金鑰。',
+    'HA 的 Hermes 外掛（omnigent、paseo）會取代這台的外掛與配對（例如 Omnigent、Paseo）。'],
+  emqx: ['EMQX 的 MQTT 帳號、ACL 規則、Dashboard 帳號、API 金鑰、封鎖名單、PSK、保留訊息與規則、連接器設定會換成 HA 的；這台的節點名稱、連接埠、匿名登入限制與「未符合規則的主題拒絕」設定保持不變。'],
+  headscale: ['Headscale 的使用者、裝置、預先授權金鑰與 DNS 額外記錄會換成 HA 的，HA 的伺服器身分金鑰（noise）也一起搬過來；這台的伺服器網址、IP 位址範圍、存取政策與 API 金鑰保持不變。',
+    'HA 的 2 把 Headscale API 金鑰不會搬過來，這台的 2 把（Headplane、MCP 管理）保持有效。'],
 };
+const mcpLines = (id, admin, server) => [`請到「${admin}」確認或重新設定 ${B1[id].app} 的連線資料（MCP 管理工具的設定不會從 HA 搬過來）。`,
+  `如果 HA 上有「${server}」，請把它停掉，並把指向它的 MCP 連接器（例如 claude.ai）刪掉，改用這台的 MCP 網址重新建立。`];
+const HERMES_REPAIR = '請重新配對 Hermes 的 Omnigent 與 Paseo 外掛，HA 上的配對不會沿用。';
+const HEADSCALE_REPOINT = '請把每一台裝置的登入伺服器改成 https://hs.example.com（例如 tailscale up --login-server=https://hs.example.com），不再使用 HA 的 https://ha-hs.example.com。';
 const HA_TODO = {
   odoo: ['請用 HA 那邊 Odoo 的帳號和密碼登入這台的 Odoo。'],
   n8n: ['請用 HA 的管理者帳號（owner@example.com）登入這台的 n8n。', '請確認 HA 搬過來的 n8n 社群節點能正常使用。'],
+  omnigent: ['匯入後請用 HA 那邊的 Omnigent 帳號和密碼登入。',
+    '請把每一台 runner（例如 HA 的 Pi Agent、其他電腦上的 omnigent host）改連到這台的 Omnigent 網址並重新登入；在那之前 HA 的 runner 會顯示離線。',
+    'HA 的 1 個啟用中的排程會在這台執行，請確認它們有可用的 runner。'],
+  hermes: ['匯入後請用這台的 Hermes Dashboard 密碼登入（不是 HA 的）。',
+    '呼叫 Hermes API 或 Webhook 的地方請改用這台的網址與 API 金鑰；沒有自己金鑰的 Webhook 路由要改用這台的全域金鑰。', HERMES_REPAIR,
+    'HA 的 Hermes 設定連到 HA 內部的位址（config.yaml：9c1a67eb-woow-hermes、.env：a0d7b954-litellm），請改成這台連得到的位址（例如這台的 LiteLLM：http://litellm:4000/v1）。',
+    'HA 的 1 個 Hermes 排程會在這台執行，請先停掉 HA 的 Hermes，避免重複執行。', ...mcpLines('hermes', 'Hermes MCP 管理', 'Woow Hermes MCP Server')],
+  emqx: ['請把 MQTT 裝置與服務（例如 Home Assistant 的 MQTT 整合、Zigbee2MQTT）改連到這台的 EMQX。', '匯入後請用 HA 那邊的 EMQX Dashboard 帳號和密碼登入。',
+    'HA 的 EMQX API 金鑰已取代這台的，使用這台 EMQX API 的工具需要換成新的金鑰。', ...mcpLines('emqx', 'EMQX MCP 管理', 'Woow EMQX MCP Server')],
+  headscale: [HEADSCALE_REPOINT, '請把 HA 的 Headscale 附加元件永久停用（關掉開機自動啟動）：兩台伺服器使用同一個身分金鑰卻有不同的資料，會讓裝置連線錯亂。',
+    ...mcpLines('headscale', 'Headscale MCP 管理', 'Woow Headscale MCP Server')],
 };
+// A test import pauses Omnigent's active scheduled tasks; the engine says so instead of the line about running them.
+const HA_TODO_TEST = { omnigent: [...HA_TODO.omnigent.slice(0, 2), '測試匯入已暫停 1 個排程，確認無誤後再到 Omnigent 重新啟用。'] };
 const HA_LEGACY_REMINDERS = {
   odoo: ['Odoo 的使用者帳號和密碼會換成 HA 那邊的：這台原本的 Odoo 管理者密碼不再適用，請用 HA 的帳號登入。',
     'HA 的自訂模組 woow_paas_platform 會一起放進這台的自訂模組資料夾。'],
   n8n: ['n8n 的登入帳號會換成 HA 的管理者帳號（owner@example.com）。', 'HA 的 n8n 社群節點會一起搬過來，請在匯入後確認它們能正常使用。'],
 };
-function haImportView(apps, { legacy = false, database = 'woowtest', testMode = false } = {}) {
-  const view = { ha_backup_id: HA_ID, name: HA_NAME, date: '2026-11-17T21:00:00Z', apps: [...apps],
+function haImportView(apps, { legacy = false, database = 'woowtest', testMode = false, source = HA_SOURCE } = {}) {
+  const view = { ha_backup_id: source.id, name: source.name, date: source.date, apps: [...apps],
     odoo_database: apps.includes('odoo') ? database : null, test_mode: testMode,
     workflows_to_fix: apps.includes('n8n') ? structuredClone(WORKFLOWS_TO_FIX) : [],
     addons: apps.map(id => ({ app_id: id, slug: HA_ADDON_OF[id][0], name: HA_ADDON_OF[id][1] })) };
   if (legacy) return { ...view, reminders: apps.flatMap(id => HA_LEGACY_REMINDERS[id]) };
-  return { ...view, reminders: [], reminders_by_app: Object.fromEntries(apps.map(id => [id, [...HA_TODO[id]]])),
+  return { ...view, reminders: [], reminders_by_app: Object.fromEntries(apps.map(id => [id, [...((testMode && HA_TODO_TEST[id]) || HA_TODO[id])]])),
     notes: apps.flatMap(id => HA_NOTES[id]) };
 }
 // The record of each conversion the tests make, by its apps (the fixture fills in the database and test mode).
@@ -1716,6 +1758,121 @@ const openHa = async (page, id = HA_ID) => {
 };
 const setScript = (page, name, steps) => page.evaluate(([key, value]) => { window.__fixture.scripts[key] = value; }, [name, steps]);
 const activeStep = page => page.locator('.stepper .step.active .step-label').textContent();
+
+// ------------------------------------------------------------------ 從 HA 備份匯入, batch 1 data (2026-11-19, CONTRACT §7, §9)
+
+// An HA backup of a Raspberry Pi with the four batch 1 add-ons (HA did not encrypt it) and, unless `odoo` is false, the
+// Odoo and n8n add-ons this device has not installed.
+function haMetaB1(extra = {}, { odoo = true } = {}) {
+  const addons = B1_APPS.map(id => ({ slug: B1[id].slug, name: B1[id].addon, version: B1[id].version, encrypted: false }));
+  const legacy = odoo ? [{ slug: ODOO_SLUG, name: 'Odoo 18 CE', version: ODOO_ADDON_VERSION, encrypted: false },
+    { slug: N8N_SLUG, name: 'WOOW n8n', version: '2.43.6', encrypted: false }] : [];
+  return haMeta(HA_B1, {
+    name: B1_NAME, date: B1_SOURCE.date, protected: false, size: 2 * GiB, filename: 'rpi5_weekly.tar',
+    addons: [...legacy, ...addons, { slug: 'core_mosquitto', name: 'Mosquitto broker', version: '6.5.1', encrypted: false }],
+    importable_apps: [...(odoo ? [{ slug: ODOO_SLUG, app_id: 'odoo', app_name: 'Odoo 18', installed: false },
+      { slug: N8N_SLUG, app_id: 'n8n', app_name: 'n8n 工作流程', installed: false }] : []),
+    ...B1_APPS.map(id => ({ slug: B1[id].slug, app_id: id, app_name: B1[id].app, installed: true }))],
+    ...extra,
+  });
+}
+
+// The engine's words (ha_emqx.py HOT_HINT, analyse; ha_hermes.py analyse; ha_omnigent.py verdict; ha_headscale.py analyse).
+const EMQX_HOT_HINT = '這份備份是在 EMQX 執行中製作的，內建資料庫可能只寫了一半；請先在 HA 停止 EMQX 附加元件，再重新製作備份後匯入（附加元件停止時製作的備份最可靠）。';
+const EMQX_HOT_WARNING = '這份 HA 備份是在 EMQX 執行中製作的；最近的變更可能還沒寫進內建資料庫。最可靠的做法是先在 HA 停止 EMQX 附加元件再製作備份。';
+const EMQX_HALF_LOADED = `HA 的 EMQX 內建資料庫沒有完整載入（缺少 emqx_acl）。${EMQX_HOT_HINT}`;
+const EMQX_IMPORT_FAILED = `HA 的 EMQX 資料匯入時發生錯誤（部分資料無法匯入），已停止。${EMQX_HOT_HINT}`;
+const HERMES_PLUGINS = 'HA 的 Hermes 外掛（omnigent、paseo）會一起搬過來並取代這台的外掛；Omnigent、Paseo 等配對需要重新設定。';
+const B1_WARNINGS = {
+  omnigent: ['HA 的 Omnigent 執行期設定檔（sharing.json、admins.json）不會搬過來，這台維持自己的分享與管理者設定。',
+    'HA 的 Omnigent 有 1 個啟用中的排程，搬過來後會在這台執行（測試匯入會先全部暫停）。'],
+  hermes: ['HA 的 Hermes 設定連到 HA 內部的位址（config.yaml：9c1a67eb-woow-hermes、.env：a0d7b954-litellm），這台連不到，搬過來後請改成實際位址。',
+    HERMES_PLUGINS],
+  emqx: ['HA 的 EMQX API 金鑰會取代這台的，EMQX MCP 管理需要重新登入。', EMQX_HOT_WARNING],
+  headscale: ['HA 的 2 把 Headscale API 金鑰不會搬過來，這台的 API 金鑰（Headplane、MCP 管理）保持有效。'],
+};
+// Each app's section of HaCheck (CONTRACT §7) as the engine's tests on the real backups found them.
+const B1_SECTIONS = {
+  omnigent: { omnigent_version: '0.21.0', alembic: 'd0a1f879a01d', users: 2, admins: 1, conversations: 3, scheduled_tasks: 2,
+    scheduled_tasks_active: 1, hosts: 1, agents: 1, files: 1, public_sessions: 0, artifact_files: 4, artifact_bytes: 3 * MiB,
+    override_files: ['sharing.json', 'admins.json'], account_conflicts: [] },
+  hermes: { hermes_version: '0.22.5', target_release: '0.22.5', files: 412, bytes: 96 * MiB, dirs: 57, symlinks: 0, absolute_symlinks: 0,
+    hardlinks: 0, databases: 6, sessions: 5, messages: 15, schema_version: 32, config_version: 51, skills: 64, cron_jobs: 1,
+    plugins: ['omnigent', 'paseo'], env_keys: 12, ha_urls: ['config.yaml：9c1a67eb-woow-hermes', '.env：a0d7b954-litellm'], media_refs: 0,
+    skipped: ['gateway.pid', 'state.db-shm', '.woow-image-version'] },
+  emqx: { emqx_version: '5.8.9', target_version: '5.8.9', node_name: 'emqx@127.0.0.1', files: 38, bytes: 2 * MiB, mqtt_users: 3, acl_rules: 4,
+    dashboard_users: 2, api_keys: 1, banned: 1, psk: 0, retained_messages: 2, default_dashboard_password: false, anonymous: false,
+    hot_backup: true, plugins: [], ha_hosts: [] },
+  headscale: { headscale_version: '0.29.4', target_version: '0.29.4', db_version: 'v0.29.4', users: 3, nodes: 2, pre_auth_keys: 2, api_keys: 2,
+    policies: 0, prefixes: { v4: '100.64.0.0/10', v6: 'fd7a:115c:a1e0::/48' }, server_url: 'https://ha-hs.example.com',
+    target_server_url: 'https://hs.example.com', dns_records: 1 },
+};
+// result.ha_check of a batch 1 check (haimport.run_ha_check); `apps` replaces whole app results.
+function b1Check(apps = {}) {
+  const result = id => ({ app_id: id, slug: B1[id].slug, name: B1[id].addon, arch: 'aarch64', version: B1[id].version,
+    target_version: B1[id].product, ok: true, blockers: [], warnings: [...B1_WARNINGS[id]], [id]: structuredClone(B1_SECTIONS[id]) });
+  return { ha_check: { ha_backup_id: HA_B1, apps: B1_APPS.map(id => apps[id] || result(id)) } };
+}
+// A hot backup whose database did not load: the check stops at HA's broker (ha_emqx.ha_broker raises, haimport makes it
+// the app's blocker), so the app has the advice and no section.
+const emqxHalfLoaded = () => ({ app_id: 'emqx', slug: B1.emqx.slug, name: B1.emqx.addon, arch: 'aarch64', version: B1.emqx.version,
+  target_version: '', ok: false, blockers: [EMQX_HALF_LOADED], warnings: [] });
+
+// The record of each conversion of the batch 1 backup, by its apps in the engine's order.
+function b1Imports({ testMode = false } = {}) {
+  const sets = [];
+  for (let mask = 1; mask < 1 << B1_APPS.length; mask += 1) sets.push(B1_APPS.filter((_id, index) => mask & (1 << index)));
+  return Object.fromEntries(sets.map(apps => [apps.join(), haImportView(apps, { source: B1_SOURCE, testMode })]));
+}
+function convertedB1(apps = B1_APPS, { testMode = false } = {}) {
+  return backupMeta(B_B1, {
+    note: `由 HA 備份轉換：${B1_NAME}（2026-11-19 04:00）`, apps: apps.map(id => ({ id, name: B1[id].app })), size: 900 * MiB,
+    from_ha: haImportView(apps, { source: B1_SOURCE, testMode }),
+  });
+}
+function b1RestoreScript() {
+  return [
+    runningStep('restore', 'restore', 60, { safety_backup_id: B_SAFETY_NEW }),
+    { job: { state: 'succeeded', phase: 'check', phases: phasesAt('restore', null), progress: { percent: 100, message: '已完成' },
+      finished: '2026-11-19T04:12:00Z', cancellable: false,
+      result: { apps: [...B1_APPS], safety_backup_id: B_SAFETY_NEW, rolled_back: false, changed: true, verification: [], warnings: [],
+        health: [{ id: 'headscale/health/0', status: 'ok', message: '健康檢查通過：http://127.0.0.1:18080/health 回應 200。' }] } },
+    log: ['2026-11-19T04:12:00Z 作業結束：已完成'] },
+  ];
+}
+function b1Inspect() {
+  const meta = convertedB1();
+  const content = id => ({ id, name: B1[id].app, adapter: 'quadlet-postgres', owner: { name: 'appowner', uid: 1001 }, images: [], postgres: [],
+    volumes: [{ name: `${id}-data` }], secrets_count: 2, config_files_count: 1, verify_snapshot: {}, settings_included: true });
+  return {
+    backup: structuredClone(meta),
+    manifest: { backup_id: B_B1, created: meta.created, type: 'manual', note: meta.note, tool: { name: 'woowtech-cockpit-backup', version: '2026.11.19.3' },
+      source: { hostname: 'dev-a', arch: 'x86_64', os: 'Ubuntu 24.04.3 LTS', podman: '4.9.3', machine_id_sha256: 'b'.repeat(64) },
+      consistency: { method: 'writers-stopped', downtime_seconds: 0 }, total_size: 880 * MiB, format: 2, encryption: 'age-x25519',
+      apps: B1_APPS.map(content) },
+    preflight: { ok: true, checks: [{ id: 'archive', status: 'ok', message: '備份檔格式與金鑰檢查通過；還原前會再完整驗證全部內容。' }],
+      apps: B1_APPS.map(id => ({ id, name: B1[id].app, restorable: true, mode: 'inplace', checks: [{ id: `${id}/quadlet`, status: 'ok', message: '服務定義完整。' }] })) },
+  };
+}
+// A device with the four batch 1 apps and the MCP admin apps of Hermes, EMQX and Headscale (Omnigent has none), holding
+// the batch 1 HA backup; `check` is the check job's result.
+function b1Fixture({ check = b1Check(), testMode = false, extra = {} } = {}) {
+  const data = fixture(extra);
+  data.status.apps.push(...B1_APPS.map(id => app(id, B1[id].app)), app('hermes-mcp-admin', 'Hermes MCP 管理'),
+    app('emqx-mcp-admin', 'EMQX MCP 管理'), app('headscale-mcp-admin', 'Headscale MCP 管理'));
+  data.ha = { backups: [haMetaB1()], key: HA_KEY, jobKeyFailure: null, legacy: false, imports: b1Imports({ testMode }) };
+  Object.assign(data.scripts, haScripts({ check, converted: convertedB1() }), { restore: b1RestoreScript() });
+  data.inspect[B_B1] = b1Inspect();
+  return data;
+}
+// The page's own reminder for the batch 1 HA file.
+const B1_DELETE_LINE = `匯入完成後，建議刪除這份 HA 備份檔（裡面可能有 HA 的密碼與權杖）。 前往 HA 備份「${B1_NAME}」`;
+const B1_STOP_LINES = B1_APPS.map(id => `請把 HA 那邊的「${B1[id].addon}」附加元件停掉，避免同一件事兩邊各做一次。`);
+const openB1 = async page => {
+  await page.locator('[data-nav="backups"]').click();
+  await page.locator(`[data-focus="ha-import-${HA_B1}"]`).click();
+  await page.locator('.stepper[aria-label="匯入步驟"]').waitFor();
+};
 
 try {
   await new Promise((done, fail) => { server.once('error', fail); server.listen(0, '127.0.0.1', done); });
@@ -5370,6 +5527,248 @@ try {
       await page.evaluate(id => { window.location.hash = `#/ha/${id}`; }, HA_ID);
       await page.getByText('這台設備還不能匯入 HA 備份').waitFor();
       assert.equal((await calls(page, 'ha-check-start')).length, 0);
+    });
+
+  // ------------------------------------------------------------------ 從 HA 備份匯入, batch 1 (2026-11-19, CONTRACT §7, §9)
+
+  await check('從 HA 備份匯入, batch 1: the HA page offers Omnigent, Hermes, EMQX and Headscale; the check shows each app\'s versions, facts and warnings; the trust notice and the test choice say what applies',
+    b1Fixture(), async page => {
+      await ready(page);
+      await page.locator('[data-nav="backups"]').click();
+      await page.locator(`[data-focus="open-${HA_B1}"]`).click();
+      await page.locator('.ha-addons-table').waitFor();
+      assert.equal(await page.locator('.view-title-text p.muted').textContent(),
+        '從 Home Assistant 上傳的備份。可以把其中的 Odoo、n8n、Omnigent、Hermes、EMQX、Headscale 匯入這台的應用；匯入前會先檢查內容與版本。');
+      const rows = await page.locator('.ha-addons-table tbody tr').evaluateAll(items => items.map(row => [...row.children].map(cell => cell.textContent.trim())));
+      assert.deepEqual(rows, [
+        [`Odoo 18 CE${ODOO_SLUG}`, ODOO_ADDON_VERSION, '還沒安裝「Odoo 18」：這台還沒安裝，請先到「應用軟體」安裝同版本'],
+        [`WOOW n8n${N8N_SLUG}`, '2.43.6', '還沒安裝「n8n 工作流程」：這台還沒安裝，請先到「應用軟體」安裝同版本'],
+        ...B1_APPS.map(id => [`${B1[id].addon}${B1[id].slug}`, B1[id].version, `可以匯入這台的「${B1[id].app}」`]),
+        ['Mosquitto brokercore_mosquitto', '6.5.1', '這台沒有對應的應用']]);
+      await page.getByText('只有支援的 Odoo、n8n、Omnigent、Hermes、EMQX、Headscale 附加元件能匯入這台；Home Assistant 本身和其他附加元件不會匯入。').waitFor();
+      await page.locator(`[data-focus="ha-import-${HA_B1}"]`).click();
+      assert.deepEqual(await page.locator('.stepper[aria-label="匯入步驟"] .step-label').allTextContents(), ['選擇應用', '檢查', '結果與選項', '轉換', '還原'],
+        'HA did not encrypt these add-ons: no key step');
+      assert.deepEqual(await page.locator('.wizard-card input[type="checkbox"]').evaluateAll(items => items.map(item => [item.id, item.checked, item.disabled])),
+        [['ha-app-odoo', false, true], ['ha-app-n8n', false, true], ...B1_APPS.map(id => [`ha-app-${id}`, true, false])]);
+      assert.equal(await page.locator('#ha-app-hermes-help').textContent(), '資料來自 HA 附加元件「Woow Hermes Agent」（版本 0.1.14）。');
+      // What an import moves and needs: Odoo compares its modules, the other apps their own versions (CONTRACT §9).
+      const side = await page.locator('aside[aria-labelledby="ha-side"] li').allTextContents();
+      assert.deepEqual(side.slice(1, 3), [
+        '會搬過來的有：資料、資料本身的金鑰，以及大多數應用的登入帳號；每個應用搬什麼、留什麼，檢查結果和還原前都會寫出來。這台的網址、連接埠、資料庫密碼和應用機密保持不變。',
+        '兩邊的版本必須相同：Odoo 的每個模組，以及 n8n、Omnigent、Hermes、EMQX、Headscale 本身都要同一個版本。']);
+      // The large members take longer (HA's own image in every EMQX and Headscale member, a Hermes home of several GB).
+      assert.equal(await page.locator('.ha-slow').textContent(), 'Hermes、EMQX、Headscale 的附加元件檔案比較大，檢查和轉換會花比較久的時間。');
+      for (const id of ['hermes', 'emqx', 'headscale']) await page.locator(`#ha-app-${id}`).uncheck();
+      assert.equal(await page.locator('.ha-slow').count(), 0, 'Omnigent alone is quick');
+      for (const id of ['hermes', 'emqx', 'headscale']) await page.locator(`#ha-app-${id}`).check();
+      await page.locator('[data-focus="ha-apps-next"]').click();
+      await page.locator('[data-ha-app="headscale"]').waitFor();
+      const start = requestOf((await calls(page, 'ha-check-start')).at(-1));
+      assert.deepEqual(start, { ha_backup_id: HA_B1, apps: B1_APPS, request_id: start.request_id });
+      const card = id => page.locator(`[data-ha-app="${id}"]`);
+      // The add-on's own version, the product version it maps to, and this device's (the section's `<app>_version`).
+      assert.deepEqual(await Promise.all(B1_APPS.map(id => card(id).locator('.muted').first().textContent())), [
+        'HA 附加元件版本 0.1.23（Omnigent 0.21.0），這台的 Omnigent 0.21.0。',
+        'HA 附加元件版本 0.1.14（Hermes 0.22.5），這台的 Hermes 0.22.5。',
+        'HA 附加元件版本 5.9.1（EMQX 5.8.9），這台的 EMQX 5.8.9。',
+        'HA 附加元件版本 0.1.3（Headscale 0.29.4），這台的 Headscale 0.29.4。']);
+      for (const id of B1_APPS) {
+        assert.equal(await card(id).locator('.chip').first().textContent(), '可以匯入', id);
+        // The warnings to know before moving, as the engine words them: Hermes's HA addresses and plugins to pair again,
+        // EMQX's API keys and hot backup, Headscale's API keys, Omnigent's settings that stay.
+        assert.deepEqual(await card(id).locator('.check-warn .check-message').allTextContents(), B1_WARNINGS[id], id);
+      }
+      assert.deepEqual((await metadataOf(card('omnigent')))[0], { 使用者: '2 位（管理者 1 位）', 工作階段: '3 個', 代理程式: '1 個',
+        排程: '2 個（啟用中 1 個）', 'Runner 主機': '1 台', 檔案: '1 個', 檔案區: '4 個檔案（3.0 MiB）' });
+      assert.deepEqual((await metadataOf(card('hermes')))[0], { 對話: '5 個工作階段，15 則訊息', 技能: '64 個', 排程: '1 個', 外掛: 'omnigent、paseo',
+        資料: '412 個檔案（96.0 MiB）', 'HA 的 .env': '12 項設定（這台 hermes.env 的同名設定優先）' });
+      assert.deepEqual((await metadataOf(card('emqx')))[0], { 'MQTT 帳號': '3 個', 'ACL 規則': '4 條', 'Dashboard 帳號': '2 個', 'API 金鑰': '1 把',
+        封鎖名單: '1 筆', 保留訊息: '2 則', 匿名連線: '不允許', 製作備份時: 'EMQX 正在執行或狀態不明' });
+      assert.deepEqual((await metadataOf(card('headscale')))[0], { 使用者: '3 位', 裝置: '2 台', 預先授權金鑰: '2 把', 'API 金鑰': '2 把（不會搬過來）',
+        'DNS 額外記錄': '1 筆', 'IP 位址範圍': '100.64.0.0/10、fd7a:115c:a1e0::/48', 'HA 的伺服器網址': 'https://ha-hs.example.com',
+        這台的伺服器網址: 'https://hs.example.com' });
+      // How to log in afterwards: Hermes keeps this device's password, Headscale's devices move to this device's server.
+      assert.deepEqual(await Promise.all(B1_APPS.map(id => card(id).locator('p.muted').last().textContent())), [
+        '匯入後，用 HA 那邊 Omnigent 的帳號和密碼登入；這台的管理者與 runner 帳號會保留（和 HA 同名的帳號以 HA 的為準）。',
+        '匯入後，用這台的 Hermes Dashboard 密碼登入（不是 HA 的）。',
+        '匯入後，用 HA 那邊 EMQX Dashboard 的帳號和密碼登入；MQTT 裝置與服務要改連到這台。',
+        '匯入後，每一台裝置的登入伺服器都要改成這台的 https://hs.example.com。']);
+      assert.equal(await page.locator('.ha-databases').count(), 0);
+      // What runs here, and what a test import really does for these apps: only Omnigent pauses anything.
+      await page.locator('.wizard-card .notice-info').getByText('Omnigent 的代理程式和 Hermes 的技能與外掛是會在這台執行的程式，只匯入你信任的備份。').waitFor();
+      assert.equal(await page.locator('label[for="ha-test-mode"] strong').textContent(), '這只是測試');
+      assert.equal(await page.locator('#ha-test-mode-help').textContent(), '勾選時，Omnigent 的排程都先暫停；Hermes 的排程和訊息機器人不會暫停，'
+        + '測試時請停掉 HA 那邊的 Hermes 附加元件，避免兩邊各做一次；EMQX、Headscale 不會先關掉任何功能，還原後會照常運作；正式搬家請不要勾。');
+      await enabled(page, '[data-focus="ha-convert"]');
+      await allWidths(page, 'batch 1 results and options');
+      assert.deepEqual((await contrastOf(page)).failures, [], 'batch 1 results and options keep WCAG AA contrast');
+      await shot(page, 'ha-b1-options-1440.png');
+      await page.locator('[data-focus="ha-convert"]').click();
+      await page.locator('#confirm-dialog').waitFor();
+      assert.deepEqual((await metadataOf(page.locator('#confirm-body')))[0], {
+        應用: '「Omnigent 協作平台」、「Hermes 代理」、「EMQX MQTT 代理」、「Headscale VPN 控制伺服器」', 這只是測試: '否' });
+      assert.match(await page.locator('#confirm-body').textContent(), /Hermes、EMQX、Headscale 的附加元件檔案比較大，檢查和轉換會花比較久的時間。/);
+      await page.locator('#confirm-cancel').click();
+      assert.equal((await calls(page, 'ha-convert-start')).length, 0);
+    });
+
+  await check('從 HA 備份匯入, batch 1: convert and restore; the notice says what each app replaces and keeps; the result lists each app\'s to-dos (Headscale\'s devices, Hermes\'s Omnigent and Paseo pairing, the engine\'s MCP lines) and no MCP line of the page; 由 HA 轉換 and 活動紀錄',
+    b1Fixture(), async page => {
+      await ready(page);
+      await openB1(page);
+      await page.locator('[data-focus="ha-apps-next"]').click();
+      await page.locator('[data-ha-app="headscale"]').waitFor();
+      await page.locator('[data-focus="ha-convert"]').click();
+      await page.locator('#confirm-ok').click();
+      await page.waitForFunction(id => window.location.hash === `#/restore/${id}`, B_B1, { timeout: 15000 });
+      await page.locator('.app-preflight').first().waitFor();
+      const convert = requestOf((await calls(page, 'ha-convert-start')).at(-1));
+      assert.deepEqual(convert, { ha_backup_id: HA_B1, apps: B1_APPS, test_mode: false, confirm: true, request_id: convert.request_id },
+        'no Odoo database, no key, no new option');
+      // What is replaced and what stays: the engine's line per app, never 「登入帳號」 or 「設定檔」 for all of them.
+      assert.deepEqual(await page.locator('.ha-banner li').allTextContents(), [
+        '還原會用 HA 的資料取代這台「Omnigent 協作平台」、「Hermes 代理」、「EMQX MQTT 代理」、「Headscale VPN 控制伺服器」目前的資料；'
+          + '這台的網址、連接埠、資料庫密碼和應用機密都保持不變，各應用換掉和保留的內容如下。',
+        ...B1_APPS.flatMap(id => HA_NOTES[id]),
+        '開始前會先自動保存一份這台目前的資料（還原前備份）；還原失敗會自動回復。',
+        '還原完成後，請把 HA 那邊的「Woow Omnigent」、「Woow Hermes Agent」、「Woow EMQX」、「Woow Headscale VPN」附加元件停掉，避免同一件事兩邊各做一次。']);
+      assert.equal(await page.locator('.app-preflight').count(), 4);
+      await shot(page, 'ha-b1-restore-preflight-1440.png');
+      await page.locator('[data-focus="pf-next"]').click();
+      await page.locator('#confirm-restore').check();
+      await page.locator('[data-focus="confirm-start"]').click();
+      await page.locator('#result-heading').filter({ hasText: '還原完成' }).waitFor();
+      // The page's stop lines, then the engine's to-dos of each app (its MCP lines included), then the HA file.
+      const reminders = await page.locator('.ha-reminders li').allTextContents();
+      assert.deepEqual(reminders, [...B1_STOP_LINES, ...B1_APPS.flatMap(id => HA_TODO[id]), B1_DELETE_LINE]);
+      assert(reminders.includes(HEADSCALE_REPOINT), 'Headscale: every device moves to this device\'s server');
+      assert(reminders.includes(HERMES_REPAIR), 'Hermes: Omnigent and Paseo are paired again');
+      assert(!reminders.some(line => line.endsWith('的登入資料。')), 'no MCP line of the page\'s own: the engine writes them for these apps');
+      assert.equal(await page.locator('.job-result .workflow-list').count(), 0);
+      await allWidths(page, 'batch 1 restore result');
+      await shot(page, 'ha-b1-restore-result-1440.png');
+      // The converted backup.
+      await page.locator('[data-nav="backups"]').click();
+      const row = page.locator(`tr[data-backup="${B_B1}"]`);
+      await row.waitFor();
+      assert.equal(await row.locator('td[data-label="類型"]').textContent(), '手動由 HA 轉換');
+      await page.locator(`[data-focus="open-${B_B1}"]`).click();
+      const source = page.locator('section[aria-labelledby="detail-ha"]');
+      await source.locator('dl.metadata').first().waitFor();
+      const names = B1_APPS.map(id => B1[id].app).join('、');
+      const [origin] = await metadataOf(source);
+      assert.deepEqual([origin['HA 備份'], origin['應用'], origin['Odoo 資料庫'], origin['這只是測試']], [B1_NAME, names, undefined, '否']);
+      assert.equal(await source.locator('.card-head .chip').count(), 0, 'not a test import');
+      // 活動紀錄 names the jobs and their apps; the conversion's job view says what it made.
+      await page.locator('[data-nav="activity"]').click();
+      await page.waitForFunction(name => document.querySelector('.jobs-table')?.textContent.includes(name), B1_NAME);
+      const jobs = await page.locator('.jobs-table tbody tr').evaluateAll(items => items.map(item => [item.querySelector('[data-label="作業"]').textContent,
+        item.querySelector('[data-label="內容"]').textContent, item.querySelector('[data-label="結果"]').textContent]));
+      assert.deepEqual(jobs, [['還原', `${names} · 備份 ${B_B1}`, '已完成'], ['轉換 HA 備份', `${names} · HA 備份「${B1_NAME}」`, '已完成'],
+        ['檢查 HA 備份', `${names} · HA 備份「${B1_NAME}」`, '已完成']]);
+      await page.locator('.jobs-table tbody tr').filter({ hasText: '轉換 HA 備份' }).locator('a.row-title').click();
+      await page.locator('#result-heading').filter({ hasText: 'HA 備份已轉換' }).waitFor();
+      assert.deepEqual((await metadataOf(page.locator('.job-result')))[0], { 備份: B_B1, 應用: names, 這只是測試: '否' });
+      await page.waitForFunction(name => document.querySelector('section[aria-labelledby="job-params-heading"]')?.textContent.includes(name), B1_NAME);
+      assert.deepEqual((await metadataOf(page.locator('section[aria-labelledby="job-params-heading"]')))[0],
+        { 作業類型: '轉換 HA 備份', 'HA 備份': B1_NAME, 應用: names, 這只是測試: '否' });
+    });
+
+  await check('從 HA 備份匯入, batch 1 test import: Omnigent\'s schedules pause and Hermes keeps running (HA\'s add-on is stopped instead); the choice, the confirmation, the restore notice, the result, the converted backup and its job never say everything is off',
+    b1Fixture({ testMode: true }), async page => {
+      await ready(page);
+      await openB1(page);
+      for (const id of ['emqx', 'headscale']) await page.locator(`#ha-app-${id}`).uncheck();
+      await page.locator('[data-focus="ha-apps-next"]').click();
+      await page.locator('[data-ha-app="hermes"]').waitFor();
+      assert.deepEqual(requestOf((await calls(page, 'ha-check-start')).at(-1)).apps, ['omnigent', 'hermes']);
+      assert.equal(await page.locator('[data-ha-app="emqx"]').count(), 0, 'only the chosen apps are shown');
+      assert.equal(await page.locator('label[for="ha-test-mode"] strong').textContent(), '這只是測試');
+      assert.equal(await page.locator('#ha-test-mode-help').textContent(), '勾選時，Omnigent 的排程都先暫停；Hermes 的排程和訊息機器人不會暫停，'
+        + '測試時請停掉 HA 那邊的 Hermes 附加元件，避免兩邊各做一次；正式搬家請不要勾。');
+      await page.locator('#ha-test-mode').check();
+      await page.locator('[data-focus="ha-convert"]').click();
+      assert.equal((await metadataOf(page.locator('#confirm-body')))[0]['這只是測試'], '是：Omnigent 的排程會先關掉；Hermes 不會關掉任何功能');
+      await page.locator('#confirm-ok').click();
+      await page.waitForFunction(id => window.location.hash === `#/restore/${id}`, B_B1, { timeout: 15000 });
+      await page.locator('.app-preflight').first().waitFor();
+      const convert = requestOf((await calls(page, 'ha-convert-start')).at(-1));
+      assert.deepEqual([convert.apps, convert.test_mode], [['omnigent', 'hermes'], true]);
+      assert.equal(await page.locator('.app-preflight').count(), 2, 'the converted backup holds the two apps');
+      const testLine = '這是測試匯入：Omnigent 的排程都已暫停；Hermes 的排程和訊息機器人不會暫停，測試時請停掉 HA 那邊的 Hermes 附加元件，'
+        + '避免兩邊各做一次。要正式搬過來時，請重新匯入一次，並且不要勾「這只是測試」。';
+      const banner = await page.locator('.ha-banner').textContent();
+      assert(banner.includes(testLine), banner);
+      for (const claim of ['會自動執行的功能都已先關掉', 'HA 那邊可以照常使用', '排程、寄信和工作流程']) assert(!banner.includes(claim), `never claims ${claim}`);
+      assert(banner.includes(HA_NOTES.hermes[1]), 'the engine\'s notes of the converted apps');
+      await page.locator('[data-focus="pf-next"]').click();
+      await page.locator('#confirm-restore').check();
+      await page.locator('[data-focus="confirm-start"]').click();
+      await page.locator('#result-heading').filter({ hasText: '還原完成' }).waitFor();
+      // The engine says how many schedules the test paused; Hermes's to-dos still ask for the pairing again.
+      assert.deepEqual(await page.locator('.ha-reminders li').allTextContents(), [testLine, ...HA_TODO_TEST.omnigent, ...HA_TODO.hermes, B1_DELETE_LINE]);
+      await page.locator('[data-nav="backups"]').click();
+      await page.locator(`[data-focus="open-${B_B1}"]`).click();
+      const card = page.locator('section[aria-labelledby="detail-ha"]');
+      await card.locator('dl.metadata').first().waitFor();
+      assert.equal((await metadataOf(card))[0]['這只是測試'], '是：Omnigent 的排程已先關掉；Hermes 不會關掉任何功能');
+      assert.equal(await card.locator('.card-head .chip').textContent(), '測試匯入');
+      await page.locator('[data-nav="activity"]').click();
+      await page.locator('.jobs-table tbody tr').filter({ hasText: '轉換 HA 備份' }).locator('a.row-title').click();
+      await page.locator('#result-heading').filter({ hasText: 'HA 備份已轉換' }).waitFor();
+      assert.equal((await metadataOf(page.locator('.job-result')))[0]['這只是測試'], '是（Omnigent 的排程已先關掉；Hermes 不會關掉任何功能）');
+      await page.waitForFunction(name => document.querySelector('section[aria-labelledby="job-params-heading"]')?.textContent.includes(name), B1_NAME);
+      assert.equal((await metadataOf(page.locator('section[aria-labelledby="job-params-heading"]')))[0]['這只是測試'],
+        '是（Omnigent 的排程會先關掉；Hermes 不會關掉任何功能）');
+    });
+
+  await check('從 HA 備份匯入, batch 1: a hot EMQX backup whose database did not load is refused with the engine\'s advice to stop the add-on and back up again; a conversion refused the same way keeps the choices',
+    b1Fixture({ check: b1Check({ emqx: emqxHalfLoaded() }) }), async page => {
+      await ready(page);
+      await openB1(page);
+      for (const id of ['omnigent', 'hermes', 'headscale']) await page.locator(`#ha-app-${id}`).uncheck();
+      assert.equal(await page.locator('.ha-slow').textContent(), 'EMQX 的附加元件檔案比較大，檢查和轉換會花比較久的時間。');
+      await page.locator('[data-focus="ha-apps-next"]').click();
+      const emqx = page.locator('[data-ha-app="emqx"]');
+      await emqx.waitFor();
+      assert.match(await emqx.getAttribute('class'), /is-blocked/);
+      assert.equal(await emqx.locator('.chip').first().textContent(), '無法匯入');
+      assert.deepEqual(await emqx.locator('.check-fail .check-message').allTextContents(), [EMQX_HALF_LOADED]);
+      assert.match(await emqx.textContent(), /請先在 HA 停止 EMQX 附加元件，再重新製作備份後匯入/, 'the engine\'s advice, as it is');
+      // The check stopped at HA's broker: no section, so neither this device's version nor facts.
+      assert.equal(await emqx.locator('.muted').first().textContent(), 'HA 附加元件版本 5.9.1。');
+      assert.equal(await emqx.locator('dl.metadata').count(), 0);
+      assert.equal(await page.locator('[data-focus="ha-convert"]').isDisabled(), true);
+      await page.getByText('有應用沒有通過檢查，無法轉換。請依上面的說明處理後按「重新檢查」。').waitFor();
+      // EMQX alone brings no code, and a test import turns nothing of it off.
+      await page.locator('.wizard-card .notice-info').getByText('搬過來的帳號、金鑰和設定都來自這份 HA 備份，只匯入你信任的備份。').waitFor();
+      assert.equal(await page.locator('#ha-test-mode-help').textContent(), '勾選時，EMQX 不會先關掉任何功能，還原後會照常運作；正式搬家請不要勾。');
+      // Backed up again: HA's database loads, so the check passes with the hot-backup warning; EMQX's own import still
+      // fails, and the conversion is refused with the same advice.
+      await setScript(page, 'ha-check', haScripts({ check: b1Check() })['ha-check']);
+      await setScript(page, 'ha-convert', [haFailedStep('ha-convert', 'convert', { code: 'incompatible', message: EMQX_IMPORT_FAILED })]);
+      await page.locator('[data-focus="ha-recheck"]').click();
+      await page.locator('[data-ha-app="emqx"]:not(.is-blocked)').waitFor();
+      assert.deepEqual(await page.locator('[data-ha-app="emqx"] .check-warn .check-message').allTextContents(), B1_WARNINGS.emqx);
+      assert.equal((await metadataOf(page.locator('[data-ha-app="emqx"]')))[0]['製作備份時'], 'EMQX 正在執行或狀態不明');
+      await page.locator('[data-focus="ha-convert"]').click();
+      await page.locator('#confirm-ok').click();
+      await page.locator('.wizard-card .notice-error').getByText(EMQX_IMPORT_FAILED).waitFor();
+      assert.equal(await activeStep(page), '轉換');
+      await page.locator('[data-focus="ha-job-back"]').click();
+      assert.equal(await activeStep(page), '結果與選項');
+      await enabled(page, '[data-focus="ha-convert"]');
+      // 活動紀錄 keeps both: the refused check with its blocker, the failed conversion with the engine's words.
+      await page.locator('[data-nav="activity"]').click();
+      await page.waitForFunction(name => document.querySelector('.jobs-table')?.textContent.includes(name), B1_NAME);
+      const failed = page.locator('.jobs-table tbody tr').filter({ hasText: '轉換 HA 備份' });
+      assert.equal(await failed.locator('[data-label="結果"]').textContent(), EMQX_IMPORT_FAILED);
+      await page.locator('.jobs-table tbody tr').filter({ hasText: '檢查 HA 備份' }).last().locator('a.row-title').click();
+      await page.locator('#result-heading').filter({ hasText: 'HA 備份檢查完成' }).waitFor();
+      assert.match(await page.locator('.job-result').textContent(), /有應用沒有通過檢查，要先處理下列問題才能匯入。/);
+      assert.equal(await page.locator('.job-result [data-ha-app="emqx"] h4').textContent(), 'EMQX MQTT 代理 無法匯入');
+      assert.equal(await page.locator('.job-result [data-ha-app="emqx"] .check-fail .check-message').textContent(), EMQX_HALF_LOADED);
     });
 
   const haLong = (() => {
