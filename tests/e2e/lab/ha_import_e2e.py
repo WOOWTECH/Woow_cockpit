@@ -40,6 +40,7 @@ SECRET_DIR = LAB / 'secrets'
 FIXTURES = LAB / 'ha-fixtures' / '20261118'
 NAMES = {'enc': 'woow-import-test-enc', 'plain': 'woow-import-test-plain',
          'unc': 'woow-import-test-enc-uncompressed'}
+EXPECT = {'odoo_addon': '0.4.12', 'arch': 'amd64'}  # of the backups under test (--odoo-addon-version, --arch)
 PARTNER = 'HA 匯入測試聯絡人'
 PROBE_RECORD = '來自 HA 的測試紀錄'
 OWNER_EMAIL = 'ha-probe@probe.invalid'
@@ -49,7 +50,10 @@ ALL = ('upload', 'keys', 'check', 'convert', 'restore', 'verify', 'db2', 'testmo
 # opt-in: restore dev-c's pre-import backups (--baseline IDS); record live facts; the review-fix scenarios
 # (FIXPLAN item 21): a job killed mid-convert, a cancel mid-convert, too little space (refused and aborted), the
 # PostgreSQL 16 download, live PostgreSQL settings carried over (C-19), a failed restore of a converted backup.
-EXTRA = ('baseline', 'live', 'kill', 'cancel', 'space', 'pull', 'c19', 'rollback')
+# Backups from a real ARM HA (--arch aarch64, opt-in): the decrypted copy HA's page downloads, ARM-only code in a custom
+# module and a community node, PostgreSQL stopped uncleanly, and the imported tables against the source's fingerprint.
+EXTRA = ('baseline', 'live', 'kill', 'cancel', 'space', 'pull', 'c19', 'rollback', 'armdownload', 'armnative', 'armcrash',
+         'armcompare')
 STAGING = '/var/lib/woowtech-backup/staging'
 JOB_LABEL = 'label=io.woowtech.backup.job'
 
@@ -230,6 +234,9 @@ if req.get("n8n"):
         status, body = get(opener, "http://127.0.0.1:15678/rest/credentials", headers)
         creds = [c for c in (body or {}).get("data", []) if c.get("name") == req["n8n"]["credential"]]
         out["n8n_credential_found"] = bool(creds)
+        status, body = get(opener, "http://127.0.0.1:15678/rest/community-packages", headers)
+        out["n8n_packages"] = [[p.get("packageName"), p.get("installedVersion"), bool(p.get("failedLoading"))]
+                               for p in (body or {}).get("data", [])]
     except Exception as exc:
         out["n8n_login"] = out.get("n8n_login", False)
         out["n8n_error"] = type(exc).__name__
@@ -391,9 +398,12 @@ def scenario_check(ev, args):
                  {k: info.get(k) for k in ('owner_email', 'workflows', 'workflows_active', 'credentials',
                                            'executions', 'users')} | {'blockers': n8n.get('blockers')})
         ev.check(f'check {tag}: the workflow that needs fixing is listed', 'WOOW 匯入測試 - 需修正' in names, names)
-        ev.check(f'check {tag}: versions shown', odoo.get('version') == '0.4.12' and n8n.get('version') == '2.43.6'
-                 and n8n.get('target_version') == '2.43.6',
+        ev.check(f'check {tag}: versions shown', odoo.get('version') == EXPECT['odoo_addon']
+                 and n8n.get('version') == '2.43.6' and n8n.get('target_version') == '2.43.6',
                  {a: (apps[a].get('version'), apps[a].get('target_version')) for a in apps})
+        ev.check(f'check {tag}: the source processor is {EXPECT["arch"]}',
+                 odoo.get('arch') == EXPECT['arch'] and n8n.get('arch') == EXPECT['arch'],
+                 {a: apps[a].get('arch') for a in apps})
         STATE[f'check_{tag}'] = job['result']
         leftovers = owner('podman', 'ps', '-a', '--filter', 'label=io.woowtech.backup.job', '--format',
                           '{{.Names}}').stdout.decode().split()
@@ -515,6 +525,9 @@ def scenario_verify(ev, args, *, database='woowtest', test_mode=False, label='im
                  probe.get('odoo_login_ha-probe'), probe)
         ev.check(f'{label}: attachment ha-probe.txt readable', probe.get('odoo_attachment') is True, probe)
     ev.check(f'{label}: n8n owner can log in', probe.get('n8n_login') is True, probe)
+    if EXPECT['arch'] == 'aarch64':
+        ev.check(f'{label}: the JavaScript community node moved and loads here',
+                 ['n8n-nodes-globals', '1.1.0', False] in (probe.get('n8n_packages') or []), probe.get('n8n_packages'))
     decrypted = credential_probe(CREDENTIAL, secrets['N8N_CREDENTIAL_VALUE'])
     ev.check(f'{label}: credential "{CREDENTIAL}" decrypts to the expected value', decrypted.get('match') is True,
              decrypted)
@@ -630,6 +643,106 @@ def scenario_leaks(ev, args):
     ev.check('no test secret in the engine\'s records, logs, index, registry or the device journal',
              not report['hits'], f'{report["scanned"]} files, journal {report["journal_bytes"]} bytes, '
                                  f'hits {report["hits"]}')
+
+
+# ---------------------------------------------------------------- backups from a real ARM HA
+
+def arm_upload(args, name, ev):
+    rc, reply = upload(Path(args.fixtures) / name / f'{name}.tar', ev=ev)
+    meta = reply.get('ha_backup') or {}
+    if rc != 0 or not meta.get('id'):
+        raise Failed(f'upload of {name} refused: {ev.secrets.redact(reply.get("error"))}')
+    return meta['id']
+
+
+def arm_import(ev, ha, apps, label, tag):
+    job, took = convert(ha, apps, 'woowtest', False, ev=ev, key=None, tag=tag)
+    if not ev.check(f'{label}: conversion succeeded', job['state'] == 'succeeded', f'{took:.0f} s {job.get("error")}'):
+        return False
+    job, took = restore(job['result']['backup_id'], apps, ev=ev, tag=f'{tag}-restore')
+    return ev.check(f'{label}: import succeeded', job['state'] == 'succeeded', f'{took:.0f} s {job.get("error")}')
+
+
+def scenario_armdownload(ev, args):
+    ha = arm_upload(args, 'woow-arm-downloaded', ev)
+    job = run_check(ha, ['odoo', 'n8n'], ev=ev, tag='arm-downloaded')
+    ev.check('downloaded copy: the check passes without a key', job['state'] == 'succeeded'
+             and all(a['ok'] for a in job['result']['ha_check']['apps']), job.get('error'))
+    if arm_import(ev, ha, ['odoo', 'n8n'], 'downloaded copy', 'arm-downloaded'):
+        scenario_verify(ev, args, label='downloaded copy')
+
+
+def scenario_armnative(ev, args):
+    ha = arm_upload(args, 'woow-arm-native', ev)
+    job = run_check(ha, ['odoo', 'n8n'], ev=ev, tag='arm-native')
+    if not ev.check('ARM-only code: the check job ran', job['state'] == 'succeeded', job.get('error')):
+        return
+    apps = {a['app_id']: a for a in job['result']['ha_check']['apps']}
+    dbs = {d['name']: d for d in apps['odoo']['odoo']['databases']}
+    ev.check('ARM-only code: the database using the module is refused, naming it',
+             not dbs['woowtest']['ok'] and any('woow_arm_native_probe' in b and 'ARM' in b for b in dbs['woowtest']['blockers']),
+             dbs['woowtest']['blockers'])
+    ev.check('ARM-only code: the other database can still move', dbs['woowtest2']['ok'], dbs['woowtest2']['blockers'])
+    ev.check('ARM-only code: n8n moves with a warning naming the community node',
+             apps['n8n']['ok'] and any('n8n-nodes-woow-native-probe' in w for w in apps['n8n']['warnings']),
+             apps['n8n']['warnings'])
+    rc, reply = helper('ha-convert-start', {'ha_backup_id': ha, 'apps': ['odoo'], 'odoo_database': 'woowtest',
+                                            'test_mode': False, 'confirm': True, 'request_id': request_id('arm-native')},
+                       timeout=300)
+    state = wait_job(reply['job_id'], ev=ev)['state'] if rc == 0 else 'refused'
+    ev.check('ARM-only code: the conversion does not go through', state != 'succeeded', state)
+    if arm_import(ev, ha, ['n8n'], 'ARM-only community node', 'arm-native-n8n'):
+        codes = {url: http_code(url) for url in ('http://127.0.0.1:15678/healthz/readiness', 'http://127.0.0.1:15679/healthz')}
+        ev.check('ARM-only community node: n8n starts and answers', all(code == '200' for code in codes.values()), codes)
+        probe = device_probe({'odoo': None, 'n8n': {'email': OWNER_EMAIL, 'password': args.secrets['N8N_OWNER_PW'],
+                                                    'credential': CREDENTIAL, 'value': args.secrets['N8N_CREDENTIAL_VALUE']}})
+        ev.check('ARM-only community node: the owner logs in and the JavaScript node still loads',
+                 probe.get('n8n_login') is True and ['n8n-nodes-globals', '1.1.0', False] in (probe.get('n8n_packages') or []), probe)
+
+
+def scenario_armcrash(ev, args):
+    ha = arm_upload(args, 'woow-arm-crash', ev)
+    if not arm_import(ev, ha, ['odoo'], 'unclean stop', 'arm-crash'):
+        return
+    marker = psql('odoo18-db', 'postgres', 'odoo', "SELECT value FROM ir_config_parameter WHERE key = 'woow.arm.crash.marker';")
+    ev.check('unclean stop: the last committed row survived (ARM WAL replayed here)', marker.startswith('arm-crash-'), marker)
+    count = psql('odoo18-db', 'postgres', 'odoo', f"SELECT count(*) FROM res_partner WHERE name LIKE '{PARTNER}%';")
+    ev.check('unclean stop: the data is complete', count == '5', count)
+    codes = {url: http_code(url) for url in ('http://127.0.0.1:18069/web/health', 'http://127.0.0.1:18080/web/health')}
+    ev.check('unclean stop: Odoo health 200', all(code == '200' for code in codes.values()), codes)
+
+
+FINGERPRINT_SQL = (r"SELECT format('%s.%s %s %s', schemaname, relname, (xpath('/row/c/text()', query_to_xml(format("
+                   r"'select count(*) as c from %I.%I', schemaname, relname), false, true, '')))[1]::text, (xpath('/row/m/"
+                   r"text()', query_to_xml(format('select md5(coalesce(string_agg(t::text, %L order by t::text), %L)) as m "
+                   r"from %I.%I t', E'\n', '', schemaname, relname), false, true, '')))[1]::text) FROM pg_stat_user_tables "
+                   r"ORDER BY schemaname, relname;")
+
+
+def scenario_armcompare(ev, args):
+    source, current = {}, None
+    for line in Path(args.fingerprint).read_text(encoding='utf-8').splitlines():
+        if line.startswith('#DB '):
+            current = line.split()[1]
+        elif current == 'woowtest' and len(line.split()) == 3:
+            table, rows, digest = line.split()
+            source[table] = (rows, digest)
+    here = {}
+    for line in psql('odoo18-db', 'postgres', 'odoo', FINGERPRINT_SQL).splitlines():
+        if len(line.split()) == 3:
+            table, rows, digest = line.split()
+            here[table] = (rows, digest)
+    same = sorted(t for t in source if here.get(t) == source[t])
+    rows_differ = sorted(t for t in source if t in here and here[t][0] != source[t][0])
+    content_differs = sorted(t for t in source if t in here and here[t][0] == source[t][0] and here[t][1] != source[t][1])
+    missing, added = sorted(set(source) - set(here)), sorted(set(here) - set(source))
+    ev.save('arm-compare.json', {'identical': len(same), 'rows_differ': {t: (source[t][0], here[t][0]) for t in rows_differ},
+                                 'content_differs': content_differs, 'missing': missing, 'added': added})
+    ev.log(f'compare: {len(same)}/{len(source)} tables identical; rows differ {rows_differ}; content differs '
+           f'{content_differs}; missing {missing}; added {added}')
+    for table in ('public.res_partner', 'public.woow_import_probe', 'public.res_partner_category', 'public.res_country'):
+        ev.check(f'ARM source and x86 copy: {table} identical row by row', here.get(table) == source.get(table), (source.get(table), here.get(table)))
+    ev.check('ARM source and x86 copy: no table lost', not missing, missing)
 
 
 # ---------------------------------------------------------------- review-fix scenarios (FIXPLAN item 21)
@@ -949,11 +1062,18 @@ def main():
     parser.add_argument('--deploy', help='lab script directory with deploy-src.sh (deploys --src first)')
     parser.add_argument('--src', help='the Woow_cockpit tree to deploy')
     parser.add_argument('--fixtures', default=str(FIXTURES))
+    parser.add_argument('--prefix', default='woow-import-test', help='file name prefix of the three HA backups')
+    parser.add_argument('--odoo-addon-version', default=EXPECT['odoo_addon'], help='the Odoo add-on version in the backups')
+    parser.add_argument('--arch', default=EXPECT['arch'], choices=('amd64', 'aarch64'), help='the processor of the source HA')
+    parser.add_argument('--fingerprint', default=str(LAB / 'evidence' / 'arm-ha-import' / 'source-fingerprint.txt'),
+                        help='armcompare: the table fingerprints taken on the source HA before its backups')
     parser.add_argument('--creds', default=str(SECRET_DIR / 'ha-import-creds.env'))
     parser.add_argument('--n8n-data', default=str(SECRET_DIR / 'ha-import-n8n-testdata.sh'))
     parser.add_argument('--baseline', help='ODOO_BACKUP_ID,N8N_BACKUP_ID of dev-c backups from before any import')
     parser.add_argument('--evidence', default='ha-import', help='evidence folder below ~/.woowbk-lab/evidence')
     args = parser.parse_args()
+    EXPECT.update(odoo_addon=args.odoo_addon_version, arch=args.arch)
+    NAMES.update({tag: name.replace('woow-import-test', args.prefix) for tag, name in NAMES.items()})
     args.secrets = Secrets(args.creds, args.n8n_data)
     ev = Evidence(args.secrets, re.sub(r'[^A-Za-z0-9_.-]', '', args.evidence) or 'ha-import')
     load_state()
