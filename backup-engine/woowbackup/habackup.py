@@ -952,15 +952,16 @@ class Entry:
     """One entry of an inner tar handed out by iter_entries: `name` (normalised), `kind` (file | dir | symlink |
     hardlink), `mode` (permission bits), `uid`, `gid`, `size` (regular files), `mtime`, `linkname` (symlink target as
     stored / hard link target normalised) and `fileobj` (itself for a regular file, else None). A file's data can be
-    read only until the walk moves on (`read`, `readinto`, `read_all`, `copy_to`)."""
+    read only until the walk moves on (`peek`, `read`, `readinto`, `read_all`, `copy_to`)."""
 
-    __slots__ = ('name', 'kind', 'mode', 'uid', 'gid', 'size', 'mtime', 'linkname', '_reader', '_left')
+    __slots__ = ('name', 'kind', 'mode', 'uid', 'gid', 'size', 'mtime', 'linkname', '_reader', '_left', '_head')
 
     def __init__(self, name, kind, mode, uid, gid, size, mtime, linkname, reader):
         self.name, self.kind, self.mode, self.uid, self.gid = name, kind, mode, uid, gid
         self.size, self.mtime, self.linkname = size, mtime, linkname
         self._reader = reader if kind == 'file' else None
         self._left = size if kind == 'file' else 0
+        self._head = b''
 
     @property
     def fileobj(self):
@@ -972,6 +973,12 @@ class Entry:
                 raise ValueError('the entry data is no longer available (the walk moved on)')
             return b''
         n = CHUNK if n is None or n < 0 else n
+        if self._head:
+            data, self._head = self._head[:n], self._head[n:]
+            return data
+        return self._next(n)
+
+    def _next(self, n):
         n = min(n, self._left, CHUNK)
         if n <= 0:
             return b''
@@ -981,6 +988,17 @@ class Entry:
             raise _corrupt('the inner tar is truncated', member=self.name[:200]) from None
         self._left -= len(data)
         return data
+
+    def peek(self, n):
+        """The first `n` bytes of a regular file (fewer when it is shorter); `read` still starts at the beginning."""
+        if self._reader is None:
+            return b''
+        while len(self._head) < n:
+            data = self._next(n - len(self._head))
+            if not data:
+                break
+            self._head += data
+        return self._head[:n]
 
     def readinto(self, buffer):
         data = self.read(len(buffer))

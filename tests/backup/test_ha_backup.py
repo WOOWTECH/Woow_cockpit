@@ -387,6 +387,12 @@ class EntryTests(unittest.TestCase):
             return error.code, error.details.get('reason')
         raise AssertionError('accepted')
 
+    def test_peek_leaves_the_file_to_be_read_from_its_start(self):
+        data = hx.tar_bytes([{'name': 'a.bin', 'data': b'0123456789'}, {'name': 'short', 'data': b'xy'}])
+        seen = [(entry.name, entry.peek(4), entry.peek(2), entry.read_all(1 << 20))
+                for entry in habackup.iter_entries(io.BytesIO(data), None, habackup.Report(), addon=False)]
+        self.assertEqual(seen, [('a.bin', b'0123', b'01', b'0123456789'), ('short', b'xy', b'xy', b'xy')])
+
     def test_a_walk_is_cancellable_where_nothing_is_selected_and_bounded(self):
         entries = [{'name': '.', 'type': 'dir'}, {'name': 'big.bin', 'data': b'\0' * (256 * 1024)}]
         entries += [{'name': f'f{i}', 'data': b''} for i in range(40)]

@@ -363,11 +363,9 @@ def _base_result(app_id, member, addon):
 
 
 def _arch_blocker(addon):
-    if addon.arch == 'amd64':
+    if addon.arch in ('amd64', 'aarch64'):
         return None
-    if addon.arch == 'aarch64':
-        return '這份 HA 備份來自 ARM（aarch64）設備；目前只能匯入 x86（amd64）設備的 HA 備份。'
-    return '無法判斷這份 HA 備份來自哪一種處理器；目前只能匯入 x86（amd64）設備的 HA 備份。'
+    return '無法判斷這份 HA 備份來自哪一種處理器（只支援 x86 和 ARM 的 64 位元設備），所以無法匯入。'
 
 
 def _deployed_blockers(work, app):
