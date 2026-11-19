@@ -4722,7 +4722,7 @@ try {
     async page => {
       await ready(page);
       await page.locator('[data-nav="restore"]').click();
-      await page.getByText('也可以上傳 Home Assistant 的備份檔（.tar），把其中的 Odoo、n8n 匯入這台。').waitFor();
+      await page.getByText('也可以上傳 Home Assistant 的備份檔（.tar），把其中的 Odoo、n8n、Omnigent、Hermes、EMQX、Headscale 匯入這台。').waitFor();
       await page.locator('#restore-file').setInputFiles({ name: 'woow_import_test.tar', mimeType: 'application/x-tar', buffer: Buffer.alloc(256 * KiB, 5) });
       await page.locator('[data-focus="restore-upload"]').click();
       await page.waitForFunction(id => window.location.hash === `#/ha/${id}`, HA_ID);

@@ -131,10 +131,27 @@
     "share/odoo_addons": "HA 的 /share/odoo_addons 資料夾" };
   // Odoo's custom modules and n8n's community nodes are code that runs on this device (FIXPLAN, review security).
   const HA_TRUST = "Odoo 的自訂模組和 n8n 的社群節點是會在這台執行的程式，只匯入你信任的備份。";
-  // This device's app for each add-on it can take, when the engine names none (Odoo and n8n only).
-  const HA_APP_NAMES = { odoo: "Odoo 18", n8n: "n8n 工作流程" };
+  // This device's app for each add-on it can take, when neither the engine nor the catalog names it (haapps.IMPORTERS).
+  const HA_APP_NAMES = { odoo: "Odoo 18", n8n: "n8n 工作流程", omnigent: "Omnigent 協作平台", hermes: "Hermes 代理",
+    emqx: "EMQX MQTT 代理", headscale: "Headscale VPN 控制伺服器" };
+  // The product of each importable add-on in a sentence (「Odoo、n8n」), in the engine's order (CONTRACT §5 "Apps").
+  const HA_SHORT = { odoo: "Odoo", n8n: "n8n", omnigent: "Omnigent", hermes: "Hermes", emqx: "EMQX", headscale: "Headscale" };
+  // Odoo and n8n keep the sentences written and tested for them; with any other app (batch 1: Omnigent, Hermes, EMQX,
+  // Headscale) a sentence says only what applies to each app.
+  const HA_LEGACY = new Set(["odoo", "n8n"]);
+  // What of an add-on runs here as code (Hermes's skills and plugins, Omnigent's agents); EMQX and Headscale bring
+  // accounts, keys and settings only (CONTRACT §9 "Batch 1").
+  const HA_CODE = { odoo: "Odoo 的自訂模組", n8n: "n8n 的社群節點", omnigent: "Omnigent 的代理程式", hermes: "Hermes 的技能與外掛" };
+  // A test import pauses these apps' automatic work (CONTRACT §7 HaImport): Odoo is neutralized, n8n's workflows are
+  // unpublished, Omnigent's active scheduled tasks paused. It changes nothing of the others (Hermes, EMQX, Headscale).
+  const HA_TEST_PAUSES = new Set(["odoo", "n8n", "omnigent"]);
+  // The add-ons whose members are large (a Hermes home of several GB; HA's own image in every EMQX and Headscale
+  // member, decrypted and skipped): their check and conversion take longer than Odoo's and n8n's.
+  const HA_LARGE = new Set(["hermes", "emqx", "headscale"]);
   // Catalog entries that keep their own login to the imported app: it changes with the imported users (DESIGN §0). The
-  // page is named as this device's catalog names it; `page` only when the entry has no name.
+  // page is named as this device's catalog names it; `page` only when the entry has no name. Odoo and n8n only: for
+  // the batch 1 apps the engine writes the MCP lines itself (`reminders_by_app`, CONTRACT §7 HaImport), so adding them
+  // here would say the same twice in other words.
   const HA_MCP_ADMIN = { odoo: { id: "odoo-mcp-admin", page: "Odoo MCP 管理", app: "Odoo" }, n8n: { id: "n8n-mcp-admin", page: "n8n MCP 管理", app: "n8n" } };
   // The uploaded HA file holds all of HA, its passwords and tokens too, and stays until deleted (review HA-SEC-06).
   const HA_DELETE_REMINDER = "匯入完成後，建議刪除這份 HA 備份檔（裡面可能有 HA 的密碼與權杖）。";
@@ -1901,9 +1918,9 @@
         metadata([
           ["HA 備份", ha ? link(haName(ha), ["ha", ha.id], { dataset: { focus: "detail-ha-link" } }) : `${info.name || "（沒有名稱）"}（HA 備份檔已從這台刪除）`],
           info.date ? ["HA 建立時間", date(info.date)] : null,
-          ["應用", info.apps.map(appName).join("、") || "—"],
+          ["應用", info.apps.map(haAppName).join("、") || "—"],
           info.odooDatabase ? ["Odoo 資料庫", info.odooDatabase] : null,
-          ["這只是測試", info.testMode ? "是：工作流程、排程和寄信都已先關掉" : "否"]
+          ["這只是測試", info.testMode ? `是：${haTestValue(info.apps, "工作流程、排程和寄信都已先關掉", "已先")}` : "否"]
         ]),
         info.workflows.length ? [h("p", { text: "下列 n8n 工作流程用到 HA 那邊的位置或功能，匯入後可能需要修改：" }),
           workflowList(info.workflows, "可能需要修改的 n8n 工作流程")] : null));
@@ -2376,7 +2393,7 @@
     h("p", { class: "dropzone-label", text: "把備份檔（.tar 或舊格式 .woowbackup）拖放到這裡，或選擇檔案" }),
     picker,
     h("p", { id: "restore-file-hint", class: "hint", text: "檔案會先上傳到這台設備的私有暫存區；上傳本身不會變更任何應用。" }),
-    state.haSupported === true ? h("p", { class: "hint", text: "也可以上傳 Home Assistant 的備份檔（.tar），把其中的 Odoo、n8n 匯入這台。" }) : null);
+    state.haSupported === true ? h("p", { class: "hint", text: `也可以上傳 Home Assistant 的備份檔（.tar），把其中的 ${Object.values(HA_SHORT).join("、")} 匯入這台。` }) : null);
     const nameWarning = file && !/\.(tar|woowbackup)$/i.test(file.name)
       ? infoNotice("檔名不是 .tar 或 .woowbackup。仍可上傳，系統會檢查檔案格式；若不是備份檔會被拒絕。", "warn", "alert-outline") : null;
     return [
@@ -3193,8 +3210,16 @@
   const haAddonsText = ha => haAddons(ha).map(item => str(item.name) || item.slug).join("、") || "沒有附加元件";
   const haOtherAddons = ha => list(ha?.other_addons).filter(item => isObject(item) && (isString(item.slug) || isString(item.name)));
   const num = value => (isNumber(value) ? value.toLocaleString("zh-TW") : "—");
+  // An imported app as this device's catalog names it, else as the engine's registry does (also after it was removed).
+  const haAppName = id => state.status?.apps?.find(app => app.id === id)?.name || (Object.hasOwn(HA_APP_NAMES, id) ? HA_APP_NAMES[id] : id);
+  const haShort = id => (Object.hasOwn(HA_SHORT, id) ? HA_SHORT[id] : haAppName(id));
+  const haLegacy = ids => ids.every(id => HA_LEGACY.has(id));
+  // 「A」, 「A和B」, 「A、B和C」, with a space before a Latin word (「…模組和 n8n 的…」).
+  const joinAnd = items => (items.length > 1
+    ? `${items.slice(0, -1).join("、")}和${/^[A-Za-z0-9]/.test(items.at(-1)) ? " " : ""}${items.at(-1)}` : items.join(""));
 
-  // `importable_apps`: this device's app for each add-on it can take (Odoo, n8n) and whether that app is installed.
+  // `importable_apps`: this device's app for each add-on it can take (CONTRACT §7 HaBackupMeta) and whether that app is
+  // installed.
   function haApps(ha) {
     return list(ha?.importable_apps).filter(item => isObject(item) && isString(item.app_id) && APP_ID_RE.test(item.app_id)).map(item => {
       const addon = haAddons(ha).find(entry => entry.slug === item.slug);
@@ -3259,9 +3284,71 @@
     return recorded || app?.addon || HA_APP_NAMES[appId] || appName(appId);
   }
 
+  // A test import (CONTRACT §7 HaImport) never claims more than it did: what it left running, by app. Hermes's
+  // scheduled jobs and messaging bots keep running, so HA's add-on is stopped while testing; EMQX and Headscale (and an
+  // app this page does not know) have nothing turned off.
+  function haTestKept(apps) {
+    const idle = apps.filter(id => !HA_TEST_PAUSES.has(id) && id !== "hermes").map(haShort);
+    return [apps.includes("hermes") ? "Hermes 的排程和訊息機器人不會暫停，測試時請停掉 HA 那邊的 Hermes 附加元件，避免兩邊各做一次" : null,
+      idle.length ? `${idle.join("、")} 不會先關掉任何功能，還原後會照常運作` : null].filter(Boolean);
+  }
+
+  // The test import after the conversion (the restore's notice and result); Odoo and n8n keep their sentence.
   function haTestText(apps) {
-    const parts = [apps.includes("n8n") ? "搬過來的 n8n 工作流程都已停用" : null, apps.includes("odoo") ? "Odoo 不會寄信，也不會執行排程" : null].filter(Boolean);
-    return `這是測試匯入：${parts.join("，") || "會自動執行的功能都已先關掉"}，HA 那邊可以照常使用。要正式搬過來時，請重新匯入一次，並且不要勾「這只是測試」。`;
+    const parts = [apps.includes("n8n") ? "搬過來的 n8n 工作流程都已停用" : null, apps.includes("odoo") ? "Odoo 不會寄信，也不會執行排程" : null,
+      apps.includes("omnigent") ? "Omnigent 的排程都已暫停" : null].filter(Boolean);
+    const kept = haTestKept(apps);
+    const what = kept.length ? [parts.join("，"), ...kept].filter(Boolean).join("；")
+      : `${parts.join("，") || "會自動執行的功能都已先關掉"}，HA 那邊可以照常使用`;
+    return `這是測試匯入：${what}。要正式搬過來時，請重新匯入一次，並且不要勾「這只是測試」。`;
+  }
+
+  // The choice before the conversion (結果與選項).
+  const haTestLabel = apps => (haLegacy(apps) ? "這只是測試（先關掉排程、寄信和工作流程）" : "這只是測試");
+  function haTestHelp(apps) {
+    if (haLegacy(apps)) return "勾選時，搬過來的 n8n 工作流程都先停用，Odoo 不寄信也不跑排程，HA 那邊可以照常使用；正式搬家請不要勾。";
+    const parts = [apps.includes("n8n") ? "搬過來的 n8n 工作流程都先停用" : null, apps.includes("odoo") ? "Odoo 不寄信也不跑排程" : null,
+      apps.includes("omnigent") ? "Omnigent 的排程都先暫停" : null].filter(Boolean);
+    const kept = haTestKept(apps);
+    const what = kept.length ? [parts.join("，"), ...kept].filter(Boolean).join("；") : `${parts.join("，")}，HA 那邊可以照常使用`;
+    return `勾選時，${what}；正式搬家請不要勾。`;
+  }
+
+  // A test import as a value (the confirmation, the job's choices, the converted backup): `legacy` is Odoo's and n8n's
+  // own wording; `when` the tense (會先, 已先).
+  function haTestValue(apps, legacy, when) {
+    if (haLegacy(apps)) return legacy;
+    const off = [apps.includes("odoo") ? "Odoo 的排程和寄信" : null, apps.includes("n8n") ? "n8n 的工作流程" : null,
+      apps.includes("omnigent") ? "Omnigent 的排程" : null].filter(Boolean);
+    const kept = apps.filter(id => !HA_TEST_PAUSES.has(id)).map(haShort);
+    return [off.length ? `${off.join("、")}${when}關掉` : null, kept.length ? `${kept.join("、")} 不會關掉任何功能` : null].filter(Boolean).join("；");
+  }
+
+  // What a backup brings that runs here (FIXPLAN, review security): only import a trusted backup.
+  function haTrustText(apps) {
+    if (haLegacy(apps)) return HA_TRUST;
+    const code = apps.filter(id => Object.hasOwn(HA_CODE, id)).map(id => HA_CODE[id]);
+    return code.length ? `${joinAnd(code)}是會在這台執行的程式，只匯入你信任的備份。` : "搬過來的帳號、金鑰和設定都來自這份 HA 備份，只匯入你信任的備份。";
+  }
+
+  // What an import moves and needs (CONTRACT §9: the data, its keys and the accounts move; the device keeps its URL,
+  // ports, database passwords, secrets and settings; the versions are identical). Odoo and n8n keep their words; each
+  // batch 1 app says what it moves and keeps in its own notes before the restore.
+  function haRules(ids) {
+    if (haLegacy(ids)) {
+      return ["會搬過來的有：資料、資料本身的金鑰（例如 n8n 的加密金鑰）和登入帳號。這台的網址、連接埠、資料庫密碼和設定檔保持不變。",
+        "兩邊的版本必須相同：Odoo 的每個模組、n8n 本身都要同一個版本。"];
+    }
+    const others = ids.filter(id => id !== "odoo").map(haShort);
+    return ["會搬過來的有：資料、資料本身的金鑰，以及大多數應用的登入帳號；每個應用搬什麼、留什麼，檢查結果和還原前都會寫出來。"
+      + "這台的網址、連接埠、資料庫密碼和應用機密保持不變。",
+    `兩邊的版本必須相同：${ids.includes("odoo") ? "Odoo 的每個模組，以及 " : ""}${others.join("、")} 本身都要同一個版本。`];
+  }
+
+  // Large add-ons take longer to check and convert (HA_LARGE).
+  function haSlowText(ids) {
+    const large = ids.filter(id => HA_LARGE.has(id)).map(haShort);
+    return large.length ? `${large.join("、")} 的附加元件檔案比較大，檢查和轉換會花比較久的時間。` : null;
   }
 
   // After an import (DESIGN §0): stop the HA add-on so nothing runs twice (a test import already turned that off), log
@@ -3282,14 +3369,19 @@
 
   // The restore wizard of a converted backup: what the import replaces and keeps, and what to do afterwards.
   function haRestoreBanner(info) {
-    const apps = info.apps.map(id => `「${appName(id)}」`).join("、") || "所選應用";
+    const apps = info.apps.map(id => `「${haAppName(id)}」`).join("、") || "所選應用";
     const addons = info.apps.map(id => `「${haAddonFor(info, id)}」`).join("、");
+    // Batch 1 apps differ in what moves (Hermes keeps this device's Dashboard login, EMQX its node, Headscale its API
+    // keys): the engine's notes below say it per app.
+    const replaces = haLegacy(info.apps)
+      ? `還原會用 HA 的資料（包含登入帳號）取代這台${apps}目前的資料；這台的網址、連接埠、資料庫密碼和設定檔都保持不變。`
+      : `還原會用 HA 的資料取代這台${apps}目前的資料；這台的網址、連接埠、資料庫密碼和應用機密都保持不變${info.notes.length ? "，各應用換掉和保留的內容如下" : ""}。`;
     return h("section", { class: "notice notice-info ha-banner", "aria-labelledby": "ha-banner-title" }, icon("home-outline"),
       h("div", { class: "notice-body" },
         h("p", null, h("strong", { id: "ha-banner-title", text: "從 Home Assistant 匯入" }),
           ` · 這份備份由 HA 備份「${info.name || "（沒有名稱）"}」${info.date ? `（${date(info.date)}）` : ""}轉換而來。`),
         h("ul", { class: "bullet-list" },
-          h("li", { text: `還原會用 HA 的資料（包含登入帳號）取代這台${apps}目前的資料；這台的網址、連接埠、資料庫密碼和設定檔都保持不變。` }),
+          h("li", { text: replaces }),
           // What the engine says about this import, e.g. the custom modules that come along (UI-3).
           info.notes.map(note => h("li", { text: note })),
           h("li", { text: "開始前會先自動保存一份這台目前的資料（還原前備份）；還原失敗會自動回復。" }),
@@ -3328,12 +3420,14 @@
   function haJobParams(job, params) {
     const haId = isString(params.ha_backup_id) && HA_ID_RE.test(params.ha_backup_id) ? params.ha_backup_id : null;
     const ha = haFind(haId);
+    const apps = list(params.apps).filter(isString);
     return [
       ["作業類型", jobLabel(job)],
       ["HA 備份", ha ? link(haName(ha), ["ha", haId], { dataset: { focus: "job-param-ha" } }) : haId ? h("span", { class: "mono", text: haId }) : "—"],
-      list(params.apps).length ? ["應用", list(params.apps).map(id => appName(str(id))).join("、")] : null,
+      apps.length ? ["應用", apps.map(haAppName).join("、")] : null,
       isString(params.odoo_database) && params.odoo_database ? ["Odoo 資料庫", params.odoo_database] : null,
-      typeof params.test_mode === "boolean" ? ["這只是測試", params.test_mode ? "是（先關掉排程、寄信和工作流程）" : "否"] : null,
+      typeof params.test_mode === "boolean"
+        ? ["這只是測試", params.test_mode ? `是（${haTestValue(apps, "先關掉排程、寄信和工作流程", "會先")}）` : "否"] : null,
       params.key_provided ? ["金鑰", "使用你輸入的 HA 備份金鑰（作業結束後即刪除）"] : null
     ];
   }
@@ -3344,7 +3438,9 @@
   }
 
   // result.ha_check (CONTRACT §7): the verdict per app; Odoo per database (what keeps a database from moving and what
-  // to know before moving it: Odoo's warnings are only there, review P-02), n8n with its counts.
+  // to know before moving it: Odoo's warnings are only there, review P-02), n8n with its counts; `section` is the app's
+  // own part, keyed by its id (batch 1: omnigent, hermes, emqx, headscale). An app the check could not open (e.g. a hot
+  // EMQX backup whose database did not load) has blockers and no section.
   function haCheckOf(result) {
     const check = isObject(result?.ha_check) ? result.ha_check : null;
     if (!check || !Array.isArray(check.apps)) return null;
@@ -3352,7 +3448,8 @@
       ...item, ok: item.ok === true, blockers: list(item.blockers).filter(isString), warnings: list(item.warnings).filter(isString),
       databases: list(item.odoo?.databases).filter(db => isObject(db) && isString(db.name))
         .map(db => ({ ...db, ok: db.ok === true, blockers: list(db.blockers).filter(isString), warnings: list(db.warnings).filter(isString) })),
-      n8n: isObject(item.n8n) ? item.n8n : null
+      n8n: isObject(item.n8n) ? item.n8n : null,
+      section: Object.hasOwn(item, item.app_id) && isObject(item[item.app_id]) ? item[item.app_id] : null
     }));
   }
   // Blockers, then warnings, of an app or an Odoo database.
@@ -3369,9 +3466,9 @@
     return [
       h("p", { text: ok ? "所選的應用都可以匯入這台。檢查沒有變更任何資料。" : "有應用沒有通過檢查，要先處理下列問題才能匯入。檢查沒有變更任何資料。" }),
       ...apps.map(app => h("article", { class: "app-content", dataset: { haApp: app.app_id } },
-        h("h4", null, h("span", { text: appName(app.app_id) }), " ",
+        h("h4", null, h("span", { text: haAppName(app.app_id) }), " ",
           haImportable(app) ? chip("可以匯入", "ok", "check-circle-outline") : chip("無法匯入", "fail", "close-circle-outline")),
-        haIssues(app).length ? checkList(haIssues(app), `${appName(app.app_id)} 的檢查結果`) : h("p", { class: "muted", text: "沒有發現問題。" }),
+        haIssues(app).length ? checkList(haIssues(app), `${haAppName(app.app_id)} 的檢查結果`) : h("p", { class: "muted", text: "沒有發現問題。" }),
         haDatabaseSummary(app))),
       h("p", { class: "muted", text: `要匯入，請回到 HA 備份按「檢查並匯入…」${job.params?.key_provided ? "，並重新輸入 HA 備份金鑰" : ""}。` })
     ];
@@ -3397,9 +3494,9 @@
         h("p", { text: "HA 備份已轉換成這台的備份並驗證過，這台的應用還沒有任何變更。要把資料匯入，請還原這份備份。" }),
         metadata([
           ["備份", backupId ? link(backupId, ["backups", backupId], { class: "mono", dataset: { focus: "result-backup" } }) : "—"],
-          ["應用", info.apps.map(appName).join("、") || "—"],
+          ["應用", info.apps.map(haAppName).join("、") || "—"],
           info.odooDatabase ? ["Odoo 資料庫", info.odooDatabase] : null,
-          ["這只是測試", info.testMode ? "是（排程、寄信和工作流程已先關掉）" : "否"]
+          ["這只是測試", info.testMode ? `是（${haTestValue(info.apps, "排程、寄信和工作流程已先關掉", "已先")}）` : "否"]
         ])
       ],
       actions: backupId ? [
@@ -3460,7 +3557,10 @@
       return [back, title, notFound("找不到這份 HA 備份", "它可能已被刪除，或不是這台設備上的 HA 備份。")];
     }
     if (state.haWizard?.haId === id) return haWizardView(ha, state.haWizard);
-    const head = viewTitle(haName(ha), "從 Home Assistant 上傳的備份。可以把其中的 Odoo、n8n 匯入這台的應用；匯入前會先檢查內容與版本。");
+    // The apps this backup can bring, installed here or not, in the engine's order.
+    const brings = [...new Set(haApps(ha).map(app => haShort(app.id)))];
+    const head = viewTitle(haName(ha), brings.length
+      ? `從 Home Assistant 上傳的備份。可以把其中的 ${brings.join("、")} 匯入這台的應用；匯入前會先檢查內容與版本。` : "從 Home Assistant 上傳的備份。");
     const info = h("section", { class: "card", "aria-labelledby": "ha-info" },
       h("div", { class: "card-head" }, h("h3", { id: "ha-info", text: "備份資訊" }), h("span", { class: "chips" }, haChip(), haEncryptionChip(ha))),
       h("div", { class: "card-body" }, metadata([
@@ -3500,7 +3600,7 @@
         h("thead", null, h("tr", null, ["HA 附加元件", "版本", "匯入到這台"].map(label => h("th", { scope: "col", text: label })))),
         h("tbody", null, rows)) : null,
       h("div", { class: "card-body" },
-        h("p", { class: "muted", text: "只有支援的 Odoo 與 n8n 附加元件能匯入這台；Home Assistant 本身和其他附加元件不會匯入。" }),
+        h("p", { class: "muted", text: `只有支援的 ${Object.values(HA_SHORT).join("、")} 附加元件能匯入這台；Home Assistant 本身和其他附加元件不會匯入。` }),
         !apps.length ? infoNotice("這份 HA 備份沒有這台可以匯入的應用。")
           : !apps.some(app => app.installed)
             ? infoNotice("要匯入，請先到「應用軟體」安裝這台還沒有的應用（版本要和 HA 那邊相同），再回來按「檢查並匯入…」。", "warn", "alert-outline") : null));
@@ -3573,8 +3673,7 @@
       h("h3", { id: "ha-side", text: "匯入怎麼進行" }),
       h("ul", { class: "bullet-list" }, [
         "檢查和轉換都不會停止或變更這台的應用，HA 備份檔本身也不會被改動。",
-        "會搬過來的有：資料、資料本身的金鑰（例如 n8n 的加密金鑰）和登入帳號。這台的網址、連接埠、資料庫密碼和設定檔保持不變。",
-        "兩邊的版本必須相同：Odoo 的每個模組、n8n 本身都要同一個版本。",
+        ...haRules(haApps(ha).map(app => app.id)),
         "HA 備份金鑰只留在這個頁面，交給檢查和轉換作業使用，用完就刪除，不會存到這台設備。",
         "轉換完成後，要在還原步驟確認才會取代這台的資料；開始前會先自動保存一份還原前備份，失敗會自動回復。"
       ].map(item => h("li", { text: item }))));
@@ -3607,6 +3706,7 @@
     const apps = haApps(ha);
     const others = haOtherAddons(ha);
     const active = activeJob();
+    const slow = haSlowText([...wizard.selected]);
     return [
       h("h3", { class: "step-title", text: "選擇要匯入的應用" }),
       h("p", { class: "muted", text: "勾選要搬到這台的應用。下一步會先檢查內容和版本，不會變更任何資料。" }),
@@ -3630,6 +3730,7 @@
               : "這台還沒安裝，請先到「應用軟體」安裝同版本。" })));
       })) : infoNotice("這份 HA 備份沒有這台可以匯入的應用。", "warn", "alert-outline"),
       others.length ? h("p", { class: "muted", text: `其他附加元件（${others.map(item => str(item.name) || str(item.slug)).join("、")}）這台沒有對應的應用，不會匯入。` }) : null,
+      slow ? h("p", { class: "hint ha-slow", text: slow }) : null,
       haNoDeviceKey() ? haDeviceKeyNotice() : null,
       active && !wizard.keyNeeded ? haActiveNotice(active) : null,
       wizardError(wizard),
@@ -3883,20 +3984,21 @@
     const blocked = !apps.length || unanswered.length > 0 || !apps.every(haImportable);
     const needDatabase = !blocked && apps.some(app => app.app_id === "odoo") && !wizard.odooDatabase;
     const active = activeJob();
+    const ids = apps.map(app => app.app_id);
     return [
       h("h3", { class: "step-title", text: "檢查結果與選項" }),
       h("p", { class: "muted", text: "以下是剛才檢查的結果，沒有變更任何資料。" }),
       wizard.notice ? infoNotice(wizard.notice) : null,
       h("div", { class: "app-preflight-list" }, apps.map(app => haAppCard(ha, wizard, app))),
-      unanswered.length ? infoNotice(`檢查結果沒有包含${quoted(unanswered.map(appName))}，請重新檢查。`, "fail", "close-circle-outline") : null,
-      infoNotice(HA_TRUST, "info", "shield-check-outline"),
+      unanswered.length ? infoNotice(`檢查結果沒有包含${quoted(unanswered.map(haAppName))}，請重新檢查。`, "fail", "close-circle-outline") : null,
+      infoNotice(haTrustText(ids), "info", "shield-check-outline"),
       h("label", { class: "choice confirm-choice", htmlFor: "ha-test-mode" },
         h("input", {
           type: "checkbox", id: "ha-test-mode", checked: wizard.testMode, disabled: wizard.busy, "aria-describedby": "ha-test-mode-help",
           dataset: { focus: "ha-test-mode" }, on: { change: event => { wizard.testMode = event.target.checked; render(); } }
         }),
-        h("span", { class: "choice-body" }, h("strong", { text: "這只是測試（先關掉排程、寄信和工作流程）" }),
-          h("small", { id: "ha-test-mode-help", text: "勾選時，搬過來的 n8n 工作流程都先停用，Odoo 不寄信也不跑排程，HA 那邊可以照常使用；正式搬家請不要勾。" }))),
+        h("span", { class: "choice-body" }, h("strong", { text: haTestLabel(ids) }),
+          h("small", { id: "ha-test-mode-help", text: haTestHelp(ids) }))),
       blocked ? infoNotice(`有應用沒有通過檢查，無法轉換。請依上面的說明處理後按「重新檢查」${apps.some(haImportable)
         ? "，或按「上一步」取消勾選沒有通過的應用，只匯入其他應用" : ""}。`, "fail", "close-circle-outline") : null,
       needDatabase ? h("p", { class: "hint", text: "請先選擇要搬過來的 Odoo 資料庫。" }) : null,
@@ -3913,8 +4015,9 @@
   }
 
   function haAppCard(ha, wizard, app) {
-    const name = haApps(ha).find(item => item.id === app.app_id)?.name || appName(app.app_id);
+    const name = haApps(ha).find(item => item.id === app.app_id)?.name || haAppName(app.app_id);
     const importable = haImportable(app);
+    const facts = Object.hasOwn(HA_FACTS, app.app_id) ? HA_FACTS[app.app_id] : null;
     return h("article", { class: importable ? "app-preflight" : "app-preflight is-blocked", "aria-labelledby": `ha-check-${app.app_id}`,
       dataset: { haApp: app.app_id } },
     h("div", { class: "app-preflight-head" },
@@ -3923,7 +4026,8 @@
     h("p", { class: "muted", text: haVersionText(app) }),
     haIssues(app).length ? checkList(haIssues(app), `${name} 的檢查結果`) : h("p", { class: "muted", text: "沒有發現問題。" }),
     app.app_id === "odoo" ? haOdooDatabases(wizard, app) : null,
-    app.n8n ? haN8nFacts(app.n8n) : null);
+    app.n8n ? haN8nFacts(app.n8n) : null,
+    facts && app.section ? facts(app.section) : null);
   }
 
   const moduleText = item => {
@@ -3933,11 +4037,18 @@
   };
 
   // n8n compares its own version; Odoo compares every installed module, so its add-on version and this device's Odoo
-  // release are different kinds of numbers and are not compared (review P-09, UI-1).
+  // release are different kinds of numbers and are not compared (review P-09, UI-1). The other add-ons have versions of
+  // their own that the engine maps to the product's (`<app>_version` of its section) and compares with this device's.
   function haVersionText(app) {
     const ha = str(app.version) || "—";
     const here = str(app.target_version) || "—";
-    if (app.app_id !== "odoo") return `HA 的版本 ${ha}，這台的版本 ${here}。`;
+    if (app.app_id === "n8n") return `HA 的版本 ${ha}，這台的版本 ${here}。`;
+    if (app.app_id !== "odoo") {
+      const short = haShort(app.app_id);
+      const product = str(app.section?.[`${app.app_id}_version`]);
+      // A check cut short (e.g. HA's EMQX database did not load) has no section and no version of this device.
+      return `HA 附加元件版本 ${ha}${product ? `（${short} ${product}）` : ""}${app.target_version ? `，這台的 ${short} ${here}` : ""}。`;
+    }
     const verdict = haImportable(app) ? "，模組版本相同" : app.databases.length ? "，結果見下方各資料庫" : "的版本";
     return `HA 附加元件版本 ${ha}，這台的 Odoo ${here}；Odoo 逐一比對每個模組${verdict}。`;
   }
@@ -3991,20 +4102,96 @@
     ];
   }
 
+  // Batch 1 (CONTRACT §7 HaCheck): what each app's check found, in counts, and how to log in afterwards. What needs
+  // attention (HA-only addresses, plugins to pair again, a hot EMQX backup, keys that do not move) is in the engine's
+  // warnings above, as the engine words it.
+  function haOmnigentFacts(omnigent) {
+    const shared = isNumber(omnigent.public_sessions) && omnigent.public_sessions > 0 ? `（公開分享 ${num(omnigent.public_sessions)} 個）` : "";
+    return [
+      metadata([
+        ["使用者", `${num(omnigent.users)} 位（管理者 ${num(omnigent.admins)} 位）`],
+        ["工作階段", `${num(omnigent.conversations)} 個${shared}`],
+        ["代理程式", `${num(omnigent.agents)} 個`],
+        ["排程", `${num(omnigent.scheduled_tasks)} 個（啟用中 ${num(omnigent.scheduled_tasks_active)} 個）`],
+        ["Runner 主機", `${num(omnigent.hosts)} 台`],
+        ["檔案", `${num(omnigent.files)} 個`],
+        ["檔案區", `${num(omnigent.artifact_files)} 個檔案（${bytes(omnigent.artifact_bytes)}）`]
+      ]),
+      h("p", { class: "muted", text: "匯入後，用 HA 那邊 Omnigent 的帳號和密碼登入；這台的管理者與 runner 帳號會保留（和 HA 同名的帳號以 HA 的為準）。" })
+    ];
+  }
+
+  function haHermesFacts(hermes) {
+    const plugins = list(hermes.plugins).filter(isString);
+    return [
+      metadata([
+        ["對話", `${num(hermes.sessions)} 個工作階段，${num(hermes.messages)} 則訊息`],
+        ["技能", `${num(hermes.skills)} 個`],
+        ["排程", `${num(hermes.cron_jobs)} 個`],
+        ["外掛", plugins.length ? plugins.join("、") : "沒有"],
+        ["資料", `${num(hermes.files)} 個檔案（${bytes(hermes.bytes)}）`],
+        ["HA 的 .env", `${num(hermes.env_keys)} 項設定（這台 hermes.env 的同名設定優先）`]
+      ]),
+      h("p", { class: "muted", text: "匯入後，用這台的 Hermes Dashboard 密碼登入（不是 HA 的）。" })
+    ];
+  }
+
+  function haEmqxFacts(emqx) {
+    return [
+      metadata([
+        ["MQTT 帳號", `${num(emqx.mqtt_users)} 個`],
+        ["ACL 規則", `${num(emqx.acl_rules)} 條`],
+        ["Dashboard 帳號", `${num(emqx.dashboard_users)} 個`],
+        ["API 金鑰", `${num(emqx.api_keys)} 把`],
+        ["封鎖名單", `${num(emqx.banned)} 筆`],
+        ["保留訊息", `${num(emqx.retained_messages)} 則`],
+        isNumber(emqx.psk) && emqx.psk > 0 ? ["PSK 金鑰", `${num(emqx.psk)} 個`] : null,
+        ["匿名連線", emqx.anonymous === true ? "HA 允許，這台不允許" : "不允許"],
+        // The add-on has no cold backup mode: a backup made while EMQX ran may hold a half-written database.
+        ["製作備份時", emqx.hot_backup === true ? "EMQX 正在執行或狀態不明" : "EMQX 已停止"]
+      ]),
+      h("p", { class: "muted", text: "匯入後，用 HA 那邊 EMQX Dashboard 的帳號和密碼登入；MQTT 裝置與服務要改連到這台。" })
+    ];
+  }
+
+  function haHeadscaleFacts(headscale) {
+    const prefixes = isObject(headscale.prefixes) ? [str(headscale.prefixes.v4), str(headscale.prefixes.v6)].filter(Boolean) : [];
+    const url = str(headscale.target_server_url);
+    return [
+      metadata([
+        ["使用者", `${num(headscale.users)} 位`],
+        ["裝置", `${num(headscale.nodes)} 台`],
+        ["預先授權金鑰", `${num(headscale.pre_auth_keys)} 把`],
+        ["API 金鑰", `${num(headscale.api_keys)} 把（不會搬過來）`],
+        ["DNS 額外記錄", `${num(headscale.dns_records)} 筆`],
+        ["IP 位址範圍", prefixes.join("、") || "—"],
+        ["HA 的伺服器網址", str(headscale.server_url) || "—", "mono"],
+        ["這台的伺服器網址", url || "—", "mono"]
+      ]),
+      // Every device has to use this device's server URL afterwards (`target_server_url`).
+      h("p", { class: "muted", text: `匯入後，每一台裝置的登入伺服器都要改成這台的 ${url || "Headscale 網址"}。` })
+    ];
+  }
+
+  const HA_FACTS = { omnigent: haOmnigentFacts, hermes: haHermesFacts, emqx: haEmqxFacts, headscale: haHeadscaleFacts };
+
   function confirmHaConvert(ha, wizard) {
     const apps = haChosen(wizard);
     if (!apps.length || wizard.busy) return;
     const database = apps.includes("odoo") ? wizard.odooDatabase : null;
-    const names = apps.map(id => `「${haApps(ha).find(app => app.id === id)?.name || appName(id)}」`).join("、");
+    const names = apps.map(id => `「${haApps(ha).find(app => app.id === id)?.name || haAppName(id)}」`).join("、");
+    const slow = haSlowText(apps);
     confirmDialog({
       title: "開始轉換 HA 備份？",
       body: [
         h("p", { text: `會把 HA 備份「${haName(ha)}」中 ${names} 的資料轉成這台的備份格式，存成一份新的備份。` }),
         h("ul", { class: "bullet-list" },
           h("li", { text: "轉換時這台的應用照常運作，不會停機，也不會變更任何資料。" }),
+          slow ? h("li", { text: slow }) : null,
           h("li", { text: encryptByDefault() ? "新的備份會以這台設備的金鑰加密（依「預設加密備份」）。" : "依「預設加密備份」的設定，新的備份不會加密。" }),
           h("li", { text: "轉換完成後會帶你到還原步驟；要真的取代這台的資料，還要在那裡再確認一次。" })),
-        metadata([["應用", names], database ? ["Odoo 資料庫", database] : null, ["這只是測試", wizard.testMode ? "是：排程、寄信和工作流程會先關掉" : "否"]])
+        metadata([["應用", names], database ? ["Odoo 資料庫", database] : null,
+          ["這只是測試", wizard.testMode ? `是：${haTestValue(apps, "排程、寄信和工作流程會先關掉", "會先")}` : "否"]])
       ],
       confirmLabel: "開始轉換",
       action: () => startHaConvert(wizard)
@@ -6669,8 +6856,10 @@
     const schedule = scheduleOf(job);
     const ha = haJobKind(job);
     const skipped = partialRun(job) ? skippedApps(job.result) : [];
+    // An HA job names its apps as the engine's registry does when this device's catalog no longer has them.
+    const named = ha ? haAppName : appName;
     const summary = [
-      list(params.apps).length ? list(params.apps).map(id => appName(str(id))).join("、") : null,
+      list(params.apps).length ? list(params.apps).map(id => named(str(id))).join("、") : null,
       ha ? haBackupText(params.ha_backup_id) : isString(params.backup_id) ? `備份 ${params.backup_id}` : null,
       schedule ? TRIGGER_TEXT[schedule.trigger] || null : null
     ].filter(Boolean).join(" · ");
