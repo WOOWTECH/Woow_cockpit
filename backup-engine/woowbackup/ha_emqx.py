@@ -55,6 +55,7 @@ TABLES = ('emqx_authn_mnesia', 'emqx_authn_scram_mnesia', 'emqx_acl', 'emqx_bann
           'emqx_app', 'emqx_psk', 'emqx_retainer_message')
 # Tables a running EMQX 5.8.9 always has: one missing in HA's broker means its database did not load completely.
 REQUIRED_TABLES = ('emqx_authn_mnesia', 'emqx_acl', 'emqx_banned', 'emqx_admin', 'emqx_app')
+PRESERVATION_BLOCKER = ('目前無法確認匯入後仍保留這台 EMQX 的授權規則與叢集設定，為避免變更存取權限或遺失設定，已停止匯入。')
 HOT_HINT = ('這份備份是在 EMQX 執行中製作的，內建資料庫可能只寫了一半；請先在 HA 停止 EMQX 附加元件，再重新製作備份後匯入'
             '（附加元件停止時製作的備份最可靠）。')
 NODE_RE = re.compile(r'([A-Za-z][A-Za-z0-9_-]{0,63})@([A-Za-z0-9](?:[A-Za-z0-9.-]{0,251}[A-Za-z0-9])?)\Z')
@@ -392,7 +393,7 @@ def data_volume(src_path, out):
 # ====================================================================== analysis
 
 def analyse(src, readings, *, addon_version, version, live_authn=None):
-    blockers, warnings = [], []
+    blockers, warnings = [PRESERVATION_BLOCKER], []
     blocker = VERSIONS.blocker(addon_version, version)
     if blocker:
         blockers.append(blocker)
@@ -518,7 +519,8 @@ def check(work, app):
 
 
 def convert(work, app, test_mode, out_dir):
-    """Build `out_dir/volumes/<woow_emqx_data>.tar` and `<woow_emqx_log>.tar`."""
+    """Build target volumes only when target ACL and settings preservation is verified."""
+    raise BackupError('incompatible', PRESERVATION_BLOCKER, app=app.id)
     adapter = work.adapter(app)
     tmp = work.temp(app)
     target, version = _prepare(work, app)
