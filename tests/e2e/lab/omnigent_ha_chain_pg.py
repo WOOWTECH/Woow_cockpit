@@ -33,7 +33,7 @@ def event(stage, **values):
     print(json.dumps({'stage': stage, **values}, sort_keys=True), flush=True)
 
 
-from omnigent_lab_runner import Runner
+from omnigent_lab_runner import Runner, require_names_absent
 
 def add(tar, name, data=None, *, kind='file', mode=0o755):
     info = tarfile.TarInfo(name)
@@ -88,18 +88,22 @@ def main():
     event('preflight', image_id=IMAGE, outer_network='none', max_pg_containers=2, each_memory_mib=128)
     created_volumes, containers = [], []
     tmp = tempctr.TempObjects(runner, 'j20261120T120000Z-' + secrets.token_hex(4), memory='128m', pids=96, cpus=None)
+    require_names_absent(runner, (
+        ('container', (SOURCE, TARGET, RESTORED, *(tmp.name(role) for role in ('ids-pg', 'hapg', 'omni-db', 'controldata')))),
+        ('volume', (PGVOL, TARGETVOL, SERVERVOL, PIVOL, RESTOREDVOL, *(tmp.name(role) for role in ('hapg', 'omni-db')))),
+    ))
     try:
         for volume in (PGVOL, TARGETVOL, SERVERVOL, PIVOL, RESTOREDVOL):
-            runner.podman('volume', 'create', volume)
             created_volumes.append(volume)
+            runner.podman('volume', 'create', volume)
         def start(name, volume):
+            containers.append(name)
             runner.podman('run', '-d', '--name', name, '--network', 'none', '--pull=never', '--read-only',
                           '--memory', '128m', '--pids-limit', '96',
                           '--tmpfs', '/run/postgresql:rw,nosuid,nodev', '--tmpfs', '/tmp:rw,noexec,nosuid,nodev',
                           '-v', volume + ':/var/lib/postgresql/data:rw,noexec,nosuid,nodev',
                           '-e', 'POSTGRES_USER=postgres', '-e', 'POSTGRES_DB=omnigent',
                           '-e', 'POSTGRES_HOST_AUTH_METHOD=trust', IMAGE)
-            containers.append(name)
             for _ in range(60):
                 if runner.podman('exec', name, 'pg_isready', '-q', '-h', '127.0.0.1', '-U', 'postgres', check=False).returncode == 0:
                     return

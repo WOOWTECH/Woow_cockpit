@@ -37,7 +37,7 @@ def event(stage, **values):
     print(json.dumps({'stage': stage, **values}, sort_keys=True), flush=True)
 
 
-from omnigent_lab_runner import Runner
+from omnigent_lab_runner import Runner, require_names_absent
 
 def add(tar, name, data=None, *, kind='file', mode=0o755):
     info = tarfile.TarInfo(name)
@@ -112,6 +112,14 @@ def main():
     source_password = secrets.token_urlsafe(32)
     target_password = secrets.token_urlsafe(32)
     tmp = tempctr.TempObjects(runner, 'j20261120T120000Z-' + secrets.token_hex(4), memory='128m', pids=96, cpus=None)
+    # Prove every intended random name absent before tracking anything for cleanup.
+    require_names_absent(runner, (
+        ('container', (SOURCE, TARGET, RESTORED, SOURCE_APP, TARGET_APP, RESTORED_APP,
+                       *(tmp.name(role) for role in ('ids-pg', 'hapg', 'omni-db', 'controldata')))),
+        ('volume', (PGVOL, TARGETVOL, SERVERVOL, PIVOL, RESTOREDVOL, SOURCE_APPVOL, RESTORED_APPVOL,
+                    *(tmp.name(role) for role in ('hapg', 'omni-db')))),
+        ('secret', (SOURCE_SECRET, TARGET_SECRET)),
+    ))
     try:
         for volume in (PGVOL, TARGETVOL, SERVERVOL, PIVOL, RESTOREDVOL, SOURCE_APPVOL, RESTORED_APPVOL):
             created_volumes.append(volume)
@@ -177,6 +185,10 @@ except urllib.error.HTTPError as e:
         start(SOURCE, PGVOL)
         start_app(SOURCE_APP, SOURCE, SOURCE_APPVOL, SOURCE_SECRET, 'source-admin')
         source_token = login(SOURCE_APP, 'source-admin', source_password)
+        source_me = api(SOURCE_APP, {'method':'GET', 'path':'/auth/me', 'body':None, 'token':source_token})
+        source_user = source_me.get('body', {}).get('user', source_me.get('body', {}))
+        source_id = source_user.get('id') if isinstance(source_user, dict) else None
+        assert source_me.get('status') == 200 and source_id == 'source-admin'
         event('real_source_bootstrap', app_image=APP_IMAGE, login=True)
         runner.podman('stop', '--time', '30', SOURCE_APP)
         runner.podman('rm', SOURCE_APP)
@@ -252,8 +264,10 @@ except urllib.error.HTTPError as e:
                 converted = omni._convert_candidate(work, app, True, out, schema_ddl_quiesced=True)
             assert converted['kept_accounts'] == ['target-admin']
             assert all(path.exists() and path.stat().st_size > 0 for path in converted['volumes'].values())
+            with tarfile.open(addon) as tar:
+                source_cookie = tar.extractfile('data/omnigent-home/.omnigent/artifacts/accounts-cookie-secret').read()
             with tarfile.open(converted['volumes'][SERVERVOL]) as tar:
-                assert tar.extractfile('artifacts/accounts-cookie-secret').read()
+                assert source_cookie and tar.extractfile('artifacts/accounts-cookie-secret').read() == source_cookie
             with tarfile.open(converted['volumes'][PIVOL]) as tar:
                 assert tar.extractfile('auth.json').read() == b'synthetic-pi'
             with tarfile.open(converted['volumes'][TARGETVOL]) as tar:
@@ -268,14 +282,23 @@ except urllib.error.HTTPError as e:
             login(RESTORED_APP, 'target-admin', target_password)
             prior = api(RESTORED_APP, {'method':'GET', 'path':'/auth/me', 'body':None, 'token':source_token})
             current = api(RESTORED_APP, {'method':'GET', 'path':'/auth/me', 'body':None, 'token':source_new_token})
+            invalid = api(RESTORED_APP, {'method':'GET', 'path':'/auth/me', 'body':None, 'token':'invalid-synthetic-token'})
+            prior_user = prior.get('body', {}).get('user', prior.get('body', {}))
+            current_user = current.get('body', {}).get('user', current.get('body', {}))
             assert prior.get('status') == 200 and current.get('status') == 200
-            event('restored_real_app', health=True, source_login=True, target_login=True, previous_token_valid=True)
+            assert isinstance(prior_user, dict) and isinstance(current_user, dict)
+            assert prior_user.get('id') == current_user.get('id') == source_id
+            assert invalid.get('status') in (401, 403)
+            event('restored_real_app', health=True, source_login=True, target_login=True,
+                  previous_token_same_user=True, invalid_token_denied=True, cookie_bytes_match=True)
             event('cold_ha_to_candidate', actual_app_schema=True, real_member_pass=True, real_ha_cluster=True,
                   real_provider=True, real_new_cluster=True, real_output_volumes=True, carried_account=True)
     finally:
         leftovers = tmp.cleanup()
         for name in reversed(containers):
             runner.podman('rm', '--force', '--time', '10', name, check=False)
+        for name in reversed(secrets_created):
+            runner.podman('secret', 'rm', name, check=False)
         for name in reversed(created_volumes):
             runner.podman('volume', 'rm', '--force', name, check=False)
         remaining = any(runner.podman('container', 'exists', n, check=False).returncode != 1 for n in (SOURCE, TARGET, RESTORED, SOURCE_APP, TARGET_APP, RESTORED_APP))

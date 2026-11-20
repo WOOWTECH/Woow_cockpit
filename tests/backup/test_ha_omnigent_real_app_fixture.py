@@ -55,3 +55,23 @@ class BoundedRunnerTests(unittest.TestCase):
             with self.assertRaises(lab.CommandError) as caught:
                 runner.podman('ps')
             self.assertNotIn('secret', str(caught.exception))
+
+
+class ResourcePreflightTests(unittest.TestCase):
+    def test_only_proven_absent_names_allow_creation(self):
+        from types import SimpleNamespace
+        class Runner:
+            def __init__(self, status):
+                self.status = status
+                self.calls = []
+            def podman(self, *args, **kwargs):
+                self.calls.append(args)
+                return SimpleNamespace(returncode=self.status)
+        for status in (0, 125):
+            runner = Runner(status)
+            with self.assertRaisesRegex(RuntimeError, 'not_proven_absent'):
+                probe.require_names_absent(runner, [('secret', ['collision'])])
+            self.assertEqual(runner.calls, [('secret', 'exists', 'collision')])
+        runner = Runner(1)
+        probe.require_names_absent(runner, [('container', ['c']), ('volume', ['v']), ('secret', ['s'])])
+        self.assertEqual(len(runner.calls), 3)

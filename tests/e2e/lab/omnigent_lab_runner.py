@@ -22,3 +22,11 @@ class Runner:
 
     def relay(self, args, **kwargs):
         return self.podman(*args, **kwargs)
+
+
+def require_names_absent(runner, resources):
+    """Refuse before any creation or cleanup unless every reserved name is absent."""
+    for kind, names in resources:
+        for name in names:
+            if runner.podman(kind, 'exists', name, check=False).returncode != 1:
+                raise RuntimeError('synthetic_name_not_proven_absent')
