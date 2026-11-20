@@ -20,8 +20,8 @@ class Fixture:
     def __post_init__(self):
         if not NAMESPACE.fullmatch(self.prefix):
             raise ValueError('invalid synthetic namespace')
-        if self.owner != self.prefix:
-            raise ValueError('the synthetic owner must match the namespace')
+        if self.owner != 'appowner':
+            raise ValueError('the fixture requires the dev-d appowner')
         if not re.fullmatch(r'3f60addfad2b[0-9a-f]{52}', self.image_id):
             raise ValueError('a full pinned EMQX image id is required')
 
@@ -44,8 +44,8 @@ class Fixture:
                 'units': [self.unit], 'writer_units': [self.unit],
                 'volumes': [{'name': name, 'label': 'synthetic'} for name in self.volumes],
                 'secrets': [{'name': self.secret}],
-                'config_files': [{'path': '.config/' + self.prefix + '/base.hocon', 'mode': '0600'},
-                                 {'path': '.config/' + self.prefix + '/acl.conf', 'mode': '0600'}]}
+                'config_files': [{'path': '.config/' + self.prefix + '/base.hocon', 'mode': '0644'},
+                                 {'path': '.config/' + self.prefix + '/acl.conf', 'mode': '0644'}]}
 
     def container_unit(self):
         data, log = self.volumes

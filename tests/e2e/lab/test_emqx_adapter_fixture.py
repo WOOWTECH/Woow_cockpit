@@ -18,7 +18,7 @@ spec.loader.exec_module(fixture)
 
 class FixtureTests(unittest.TestCase):
     def setUp(self):
-        self.f = fixture.Fixture('woowbk-emqxlab-aabb0011', 'woowbk-emqxlab-aabb0011',
+        self.f = fixture.Fixture('woowbk-emqxlab-aabb0011', 'appowner',
                                  fixture.IMAGE_ID_PREFIX + '0' * 52)
         self.inspection = {'Name': '/' + self.f.prefix,
                            'Image': 'sha256:' + self.f.image_id,
@@ -37,7 +37,7 @@ class FixtureTests(unittest.TestCase):
         self.assertNotIn('PublishPort=', unit)
 
     def test_rejects_non_synthetic_owner_and_namespace(self):
-        for prefix, owner in [('emqx', 'appowner'), (self.f.prefix, 'appowner'),
+        for prefix, owner in [('emqx', 'appowner'), (self.f.prefix, 'root'),
                               ('woowbk-emqxlab-../../x', 'woowbk-emqxlab-../../x')]:
             with self.subTest(prefix=prefix), self.assertRaises(ValueError):
                 fixture.Fixture(prefix, owner, self.f.image_id)
