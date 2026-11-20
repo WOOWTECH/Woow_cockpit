@@ -91,7 +91,7 @@ def run_events(argv, request, register, expected_auth, timeout=600):
                 if any(not isinstance(k, str) or not isinstance(v, str) or len(v) < 6
                        for k, v in values.items()):
                     raise ValueError()
-                if 200 <= status < 300 and any(field not in values for field in fields):
+                if 200 <= status < 300 and set(values) != set(fields):
                     raise ValueError()
                 auth_count += 1
             elif kind == 'summary':

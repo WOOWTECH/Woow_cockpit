@@ -37,3 +37,78 @@ This attempt **did not pass as a whole**: cleanup reported false because the syn
 The revised harness wraps the cold add-on in a synthetic Supervisor outer tar and uses `habackup.open_backup` to locate and stream it. Synthetic Quadlet and catalog data now exercise the real `Target` and `_prepare`; only the loopback HTTP transport is replaced with the target app's actual `/v1/info` response captured before that app is stopped for schema-DDL quiescence. The intended marker is a session created and read through the real application API, then read again after restoration. These changes have offline fixture coverage only and have not yet been run against dev-d.
 
 All four synthetic login operations are required to register both `token` and `refresh_token` using the acknowledged event transport copied from the main branch. The expected list is source, target, restored-source, and restored-target login, each with both fields; an extra or missing issued field stops the probe. Source, target, and restored cookie values are privately registered before login. Private fixture archives and readable app-log output are scanned without printing values; the application containers use `--log-driver=none`, so log-read availability is reported rather than assumed. Event/evidence output is checked against raw and JSON-escaped registered values. No runner, model, workspace, real credential or public guard is changed.
+
+
+## Slot handoff — 2026-11-20, implementation only
+
+Prepared from worktree base `9abec06`. Headscale retains the slot. This revision
+has **not** run in dev-d and is **not commercial acceptance**. No Hermes review
+was performed, reassigned, or bypassed. Public product files and their guards are
+unchanged. Existing historical JSONL records above do not validate this revision.
+
+Every device command now uses `tests/e2e/lab/owner.sh d`; the probe has no direct
+host Podman or labpodman call. Because that wrapper cannot inspect outer container
+configuration, the slot owner must first verify dev-d is running with outer
+`network=none` and no published ports. Only then use the explicit confirmation
+flag below. The probe independently checks that the device namespace has only
+loopback and at least 1400 MiB of finite cgroup headroom; this is not a substitute
+for the outer configuration verification. Do not change network settings, stop
+existing services, or remove existing data to satisfy this preflight.
+
+After Headscale releases the slot and the slot is assigned to this probe, run
+exactly from the assigned worktree (plain Python, never `-O`, because this existing
+harness includes assertions):
+
+```bash
+cd /tmp/omnigent-trusted-work
+umask 077
+run_dir=$(mktemp -d "$PWD/tests/e2e/lab/evidence/omnigent-real-app-chain/slot-XXXXXXXX")
+PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=backup-engine:. python3 tests/e2e/lab/omnigent_real_app_chain.py --run --outer-isolation-confirmed >"$run_dir/run.jsonl" 2>"$run_dir/stderr.private"
+run_status=$?
+printf '%s\n' "$run_status" >"$run_dir/exit-status"
+```
+
+Keep stderr private; do not publish raw app logs, archives, HTTP responses, tokens,
+passwords, cookies, hashes of credentials, or SQL data. Generated test passwords,
+login tokens/refresh tokens and cookies are synthetic. No original grant/login
+attempt is repeated. Session creation occurs only in the newly created synthetic
+application; no conversation runner, model or workspace is configured or invoked.
+Do not blindly retry a failed run or remove unknown leftovers.
+
+Required evidence contract for a successful isolated run:
+
+- Exit status 0, no `failed` event, and final `cleanup.synthetic_objects_removed=true`.
+- `preflight`: operator confirmation is separate from observed loopback-only state;
+  pinned PostgreSQL image and actual app image are recorded by the harness.
+- `source_session_marker`: real API create/read; `supervisor_envelope`: actual
+  `habackup.open_backup` parser and streamed add-on member.
+- `real_target_bootstrap`: independent real-app initialization and login.
+  `target_discovery` is emitted only after conversion returns, with real `Target`
+  and `_prepare`, **synthetic catalog/Quadlets**, replayed captured `/v1/info`, and
+  stopped target app for schema-DDL quiescence. This does not prove production
+  discovery or live loopback HTTP transport.
+- Both `snapshot_failure` events report removed captures and zero snapshot holders.
+- `credential_coverage`: exactly eight field sources (token and refresh_token for
+  source, target, restored-source and restored-target logins), three cookie sources,
+  eight private files scanned, zero evidence/readable-log hits. Log driver is `none`;
+  available log reads are reported and do not prove unavailable logs were scanned.
+  Each complete credential event is registered before validation/acknowledgement;
+  unexpected issued fields fail before ACK. Missing end, truncation, or timeout
+  cannot produce accepted evidence.
+- `restored_session_marker`: same real API session ID **and** title;
+  `restored_real_app`: health, both logins, old/new source token identity, invalid
+  token rejection and cookie-byte continuity; `cold_ha_to_candidate`: actual
+  PostgreSQL snapshot/restore and output volumes. No model generation is requested.
+
+Offline verification command (no device commands or commercial claims):
+
+```bash
+PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=backup-engine:. python3 -m unittest tests.backup.test_ha_omnigent_real_app_fixture tests.backup.test_ha_omnigent_candidate tests.backup.test_ha_omnigent_trusted tests.backup.test_ha_omnigent_server_volume
+```
+
+Result: **31 tests passed**. Includes public guard retention, real Supervisor parser
+with synthetic archives, Target resolution with synthetic Quadlets, marker identity
+checks, owner-only namespace/memory preflight, actual credential producer code
+against an offline HTTP fixture, extra/missing credential rejection, stream failure,
+and escaped-secret evidence suppression. These local fixtures are implementation
+checks, not proof of the unexecuted real-app chain. `git diff --check` also passes.

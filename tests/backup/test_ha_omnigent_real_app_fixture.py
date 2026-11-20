@@ -227,3 +227,90 @@ sys.stdin.readline()
         with self.assertRaises(Incomplete):
             probe.run_events([sys.executable, '-I', '-c', child], {}, probe.register_private,
                              [('/auth/login', ('token','refresh_token'), True)], timeout=5)
+
+
+class SlotPreflightTests(unittest.TestCase):
+    def test_only_owner_d_is_used_and_memory_and_network_fail_closed(self):
+        from types import SimpleNamespace
+        from unittest import mock
+        for payload, good in (
+            (b'headers\n lo: 0\n0\n4294967296\n', True),
+            (b'headers\n lo: 0\n eth0: 0\n0\n4294967296\n', False),
+            (b'headers\n lo: 0\n0\nmax\n', False),
+            (b'headers\n lo: 0\n4294967296\n4294967296\n', False),
+        ):
+            with self.subTest(payload=payload), mock.patch.object(probe, 'default_runner',
+                    return_value=SimpleNamespace(returncode=0, stdout=payload)) as run:
+                if good:
+                    probe.isolated_preflight()
+                else:
+                    with self.assertRaises(RuntimeError): probe.isolated_preflight()
+                self.assertEqual(run.call_args.args[0][:3], [str(probe.OWNER), 'd', 'sh'])
+
+
+class MarkerContractTests(unittest.TestCase):
+    def test_marker_requires_same_id_and_title_and_correct_status(self):
+        valid = {'status':200, 'body':{'id':'synthetic-id', 'title':'synthetic-title'}}
+        self.assertEqual(probe.require_session_marker(valid, 'synthetic-title', 'synthetic-id'), 'synthetic-id')
+        for response in ({'status':401}, {'status':200, 'body':None},
+                         {'status':201, 'body':valid['body']},
+                         {'status':200, 'body':{'id':'different', 'title':'synthetic-title'}},
+                         {'status':200, 'body':{'id':'synthetic-id', 'title':'different'}}):
+            with self.subTest(response=response), self.assertRaises(RuntimeError):
+                probe.require_session_marker(response, 'synthetic-title', 'synthetic-id')
+
+
+class ProducerContractTests(unittest.TestCase):
+    def setUp(self):
+        probe.SECRET_VALUES.clear()
+        probe.EVENT_RECORDS.clear()
+        self.addCleanup(probe.SECRET_VALUES.clear)
+        self.addCleanup(probe.EVENT_RECORDS.clear)
+
+    def test_real_producer_code_registers_tokens_and_rejects_extra_field_before_ack(self):
+        import json
+        from b1_event_transport import Incomplete
+        # Offline HTTP fixture runs the actual producer code, never a lab command.
+        for extra in (False, True):
+            credentials = {'token':'synthetic-token', 'refresh_token':'synthetic-refresh'}
+            if extra: credentials['access_token'] = 'synthetic-access'
+            setup = """import io,json,urllib.request
+class Response(io.BytesIO): status=200
+class Opener:
+ def open(self,req,timeout): return Response(PAYLOAD)
+urllib.request.build_opener=lambda *args: Opener()
+""".replace('PAYLOAD', repr(json.dumps(credentials).encode()))
+            argv = [sys.executable, '-I', '-c', setup + probe.LOGIN_PRODUCER]
+            args = (argv, {'username':'synthetic-user','password':'synthetic-password'},
+                    probe.register_private, [('/auth/login', ('token','refresh_token'), True)])
+            if extra:
+                with self.assertRaises(Incomplete): probe.run_events(*args, timeout=5)
+                self.assertIn(b'synthetic-access', probe.SECRET_VALUES)
+            else:
+                self.assertEqual(probe.run_events(*args, timeout=5), {'complete':True})
+            for value in credentials.values(): self.assertIn(value.encode(), probe.SECRET_VALUES)
+
+    def test_escaped_credentials_are_suppressed_without_stdout(self):
+        from contextlib import redirect_stdout
+        value = 'synthetic-"secret\\value'
+        probe.register_private(value)
+        output = io.StringIO()
+        with redirect_stdout(output), self.assertRaisesRegex(RuntimeError, 'sensitive_evidence_suppressed'):
+            probe.event('test', value=value)
+        self.assertEqual(output.getvalue(), '')
+        self.assertEqual(probe.EVENT_RECORDS, [])
+
+    def test_missing_end_truncation_and_timeout_are_not_evidence(self):
+        from b1_event_transport import Incomplete
+        auth = r"""import json,sys
+sys.stdin.readline()
+print(json.dumps({'type':'auth','sequence':0,'source':'/auth/login','status':200,
+ 'credentials':{'token':'synthetic-token','refresh_token':'synthetic-refresh'}}),flush=True)
+if sys.stdin.readline() != 'OK\n': raise SystemExit(2)
+"""
+        for ending in ("raise SystemExit(0)", "print('{',end='',flush=True)",
+                       "import time; time.sleep(10)"):
+            with self.subTest(ending=ending), self.assertRaises(Incomplete):
+                probe.run_events([sys.executable, '-I', '-c', auth + ending], {},
+                    probe.register_private, [('/auth/login', ('token','refresh_token'), True)], timeout=0.3)
+            self.assertIn(b'synthetic-token', probe.SECRET_VALUES)

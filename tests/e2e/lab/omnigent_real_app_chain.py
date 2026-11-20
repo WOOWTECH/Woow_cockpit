@@ -22,7 +22,6 @@ from woowbackup.podman import default_runner
 APP_IMAGE = '545fa9ea7c1946bbca7df95448b8d2d172777ad861b41599ef69a81b3b32e6d5'
 IMAGE = '4278d7b1e3deb3193ddc803158f6532963f059fc25a2eefaee4b5a9e71741873'
 OWNER = ROOT / 'tests/e2e/lab/owner.sh'
-LAB = Path.home() / '.woowbk-lab/bin/labpodman'
 PREFIX = 'woowbk-omni-appchain-' + secrets.token_hex(5)
 SOURCE, TARGET, RESTORED = PREFIX + '-source', PREFIX + '-target', PREFIX + '-restored'
 SOURCE_APP, TARGET_APP, RESTORED_APP = PREFIX + '-sourceapp', PREFIX + '-targetapp', PREFIX + '-restoredapp'
@@ -236,26 +235,49 @@ def private_scan(paths, secrets_to_find):
     return {'files':len(paths), 'matches':count}
 
 
+def isolated_preflight():
+    """Check the device namespace via owner.sh only; outer config is operator-attested."""
+    result = default_runner([str(OWNER), 'd', 'sh', '-c',
+        'cat /proc/net/dev; cat /sys/fs/cgroup/memory.current /sys/fs/cgroup/memory.max'],
+        timeout=30, max_output=4096)
+    if result.returncode != 0:
+        raise RuntimeError('isolated_lab_preflight_failed')
+    lines = result.stdout.splitlines()
+    interfaces = [line.split(b':', 1)[0].strip() for line in lines if b':' in line]
+    if interfaces != [b'lo']:
+        raise RuntimeError('dev_d_not_loopback_only')
+    try:
+        current, limit = map(int, lines[-2:])
+    except (ValueError, TypeError):
+        raise RuntimeError('isolated_lab_memory_check_failed') from None
+    if current < 0 or limit - current < 1400 * 1024 * 1024:
+        raise RuntimeError('insufficient_isolated_lab_memory')
+
+
+def require_session_marker(response, title, expected_id=None):
+    body = response.get('body')
+    if (response.get('status') not in ((201,) if expected_id is None else (200,))
+            or not isinstance(body, dict) or body.get('title') != title
+            or not isinstance(body.get('id'), str)
+            or not re.fullmatch(r'[A-Za-z0-9_-]{1,128}', body['id'])
+            or (expected_id is not None and body['id'] != expected_id)):
+        raise RuntimeError('synthetic_session_marker_mismatch')
+    return body['id']
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--run', action='store_true')
-    if not parser.parse_args().run:
-        parser.error('explicit --run required')
-    result = default_runner([str(LAB), 'inspect', '--format', '{{.State.Status}} {{.HostConfig.NetworkMode}} {{json .NetworkSettings.Ports}}',
-                             'woowbk-dev-d'], timeout=30, max_output=4096)
-    if result.returncode != 0 or result.stdout.strip() != b'running none {}':
-        raise RuntimeError('dev_d_not_isolated')
+    parser.add_argument('--outer-isolation-confirmed', action='store_true',
+        help='slot owner has verified dev-d running, outer network=none, and no published ports')
+    args = parser.parse_args()
+    if not args.run or not args.outer_isolation_confirmed:
+        parser.error('explicit --run and --outer-isolation-confirmed required after slot allocation')
+    isolated_preflight()
     runner = Runner()
     for image in (IMAGE, APP_IMAGE):
         assert runner.podman('image', 'inspect', '--format', '{{.Id}}', image).stdout.decode().strip().removeprefix('sha256:') == image
-    memory_result = default_runner([str(LAB), 'exec', 'woowbk-dev-d', 'sh', '-c',
-        'cat /sys/fs/cgroup/memory.current /sys/fs/cgroup/memory.max'], timeout=30, max_output=4096)
-    if memory_result.returncode != 0:
-        raise RuntimeError('isolated_lab_memory_check_failed')
-    memory = memory_result.stdout.split()
-    if len(memory) != 2 or int(memory[1]) - int(memory[0]) < 1400 * 1024 * 1024:
-        raise RuntimeError('insufficient_isolated_lab_memory')
-    event('preflight', image_id=IMAGE, outer_network='none', max_pg_containers=2, each_memory_mib=128)
+    event('preflight', image_id=IMAGE, outer_isolation_operator_confirmed=True, device_loopback_only=True, max_pg_containers=2, each_memory_mib=128)
     created_volumes, containers, secrets_created, open_backups = [], [], [], []
     os.umask(0o077)
     source_password = secrets.token_urlsafe(32)
@@ -322,9 +344,13 @@ r=json.load(sys.stdin); data=json.dumps(r['body']).encode() if r.get('body') is 
 headers={'Content-Type':'application/json'}
 if r.get('token'): headers['Authorization']='Bearer '+r['token']
 q=urllib.request.Request('http://127.0.0.1:8000'+r['path'],data=data,headers=headers,method=r['method'])
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+ def redirect_request(self,*args,**kwargs): return None
 try:
- with urllib.request.urlopen(q,timeout=30) as response:
-  print(json.dumps({'status':response.status,'body':json.load(response)}))
+ with urllib.request.build_opener(urllib.request.ProxyHandler({}),NoRedirect()).open(q,timeout=30) as response:
+  data=response.read(1048577)
+  if len(data)>1048576: raise SystemExit(1)
+  print(json.dumps({'status':response.status,'body':json.loads(data)}))
 except urllib.error.HTTPError as e:
  print(json.dumps({'status':e.code}))
 """
@@ -338,21 +364,16 @@ except urllib.error.HTTPError as e:
         source_token = login_registered(SOURCE_APP, 'source-admin', source_password, 'source_login', observed_sources)
         agents = api(SOURCE_APP, {'method':'GET', 'path':'/v1/agents', 'body':None, 'token':source_token})
         body = agents.get('body')
-        entries = body if isinstance(body, list) else (body.get('agents') or body.get('data') or body.get('items') or [])
-        if agents.get('status') != 200 or not entries or not entries[0].get('id'):
+        entries = body if isinstance(body, list) else ((body.get('agents') or body.get('data') or body.get('items') or []) if isinstance(body, dict) else [])
+        if agents.get('status') != 200 or not isinstance(entries, list) or not entries or not isinstance(entries[0], dict) or not entries[0].get('id'):
             raise RuntimeError('synthetic_agent_missing')
         marker_title = 'woowbk-synthetic-' + secrets.token_hex(8)
         session = api(SOURCE_APP, {'method':'POST', 'path':'/v1/sessions', 'token':source_token,
                                   'body':{'agent_id':entries[0]['id'], 'title':marker_title}})
-        if session.get('status') != 201 or not session.get('body', {}).get('id'):
-            raise RuntimeError('synthetic_session_create_failed')
-        marker_id = session['body']['id']
-        if not isinstance(marker_id, str) or not re.fullmatch(r'[A-Za-z0-9_-]{1,128}', marker_id):
-            raise RuntimeError('synthetic_session_id_invalid')
+        marker_id = require_session_marker(session, marker_title)
         original = api(SOURCE_APP, {'method':'GET', 'path':'/v1/sessions/' + marker_id,
                                     'body':None, 'token':source_token})
-        if original.get('status') != 200 or original.get('body', {}).get('title') != marker_title:
-            raise RuntimeError('synthetic_session_read_failed')
+        require_session_marker(original, marker_title, marker_id)
         event('source_session_marker', created_and_read=True)
         source_me = api(SOURCE_APP, {'method':'GET', 'path':'/auth/me', 'body':None, 'token':source_token})
         source_user = source_me.get('body', {}).get('user', source_me.get('body', {}))
@@ -458,6 +479,8 @@ except urllib.error.HTTPError as e:
             info_payload = json.dumps(target_info['body']).encode()
             with mock.patch('woowbackup.adapters.quadlet_postgres.loopback_get', return_value=(200, info_payload)):
                 converted = omni._convert_candidate(work, app, True, out, schema_ddl_quiesced=True)
+            event('target_discovery', real_target_resolver=True, real_prepare=True, synthetic_catalog=True,
+                  synthetic_quadlets=True, info_response_replayed=True, schema_ddl_quiesced=True)
             assert converted['kept_accounts'] == ['target-admin']
             assert all(path.exists() and path.stat().st_size > 0 for path in converted['volumes'].values())
             with tarfile.open(addon) as tar:
@@ -490,8 +513,7 @@ except urllib.error.HTTPError as e:
             assert invalid.get('status') in (401, 403)
             restored_marker = api(RESTORED_APP, {'method':'GET', 'path':'/v1/sessions/' + marker_id,
                                                 'body':None, 'token':source_new_token})
-            if restored_marker.get('status') != 200 or restored_marker.get('body', {}).get('title') != marker_title:
-                raise RuntimeError('synthetic_session_restore_failed')
+            require_session_marker(restored_marker, marker_title, marker_id)
             collect_logs(RESTORED_APP)
             expected_sources = [prefix + '.' + field for prefix in
                 ('source_login', 'target_login', 'restored_source_login', 'restored_target_login')
