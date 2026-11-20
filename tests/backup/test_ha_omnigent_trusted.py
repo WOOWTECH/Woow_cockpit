@@ -36,11 +36,15 @@ class TrustedDataTests(unittest.TestCase):
         tmp.exec.return_value.stdout = (b'1; 0 0 TABLE DATA public users owner\n'
                                         b'2; 0 0 CHECK CONSTRAINT public users evil owner\n')
         work = SimpleNamespace(log=Mock())
+        columns = [['users', 'id', 'text', True, '', '']]
+        tmp.exec.side_effect = lambda role, argv, **kw: SimpleNamespace(stdout=(
+            b'[["users","id","text",true,"",""]]' if argv[0] == 'psql' and '-c' in argv else
+            b'1; 0 0 TABLE DATA public users owner\n2; 0 0 CHECK CONSTRAINT public users evil owner\n'))
         with tempfile.TemporaryDirectory() as directory:
             schema, data = Path(directory) / 's', Path(directory) / 'd'
             schema.write_bytes(b'trusted-schema')
             data.write_bytes(b'untrusted-data')
-            omni.restore_trusted_data(work, tmp, schema, data, 'omnigent')
+            omni.restore_trusted_data(work, tmp, schema, data, 'omnigent', source_columns=columns)
         calls = tmp.exec.call_args_list
         restores = [c for c in calls if c.args[1][0] == 'pg_restore']
         self.assertEqual(len(restores), 4)  # listing, pre-data, data, post-data
@@ -50,7 +54,7 @@ class TrustedDataTests(unittest.TestCase):
         self.assertIn('--section=post-data', restores[3].args[1])
         writes = [c for c in calls if c.args[1][:2] == ['sh', '-c']]
         self.assertEqual(writes[0].kwargs['input'], b'1; 0 0 TABLE DATA public users owner\n')
-        scripts = [c.kwargs['input'] for c in calls if c.args[1][0] == 'psql']
+        scripts = [c.kwargs['input'] for c in calls if c.args[1][0] == 'psql' and 'input' in c.kwargs]
         grant = b''.join(scripts)
         self.assertIn(b'NOSUPERUSER', grant)
         self.assertNotIn(b'GRANT CREATE', grant)
