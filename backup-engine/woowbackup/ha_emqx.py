@@ -1007,22 +1007,9 @@ def _build_candidate(work, app, tmp, target, staging, *, version):
     return src, node, readings, export, counts, strict, live_authn
 
 
-def convert(work, app, test_mode, out_dir):
-    """Build target volumes only when target ACL and settings preservation is verified."""
-    raise BackupError('incompatible', PRESERVATION_BLOCKER, app=app.id)
-    adapter = work.adapter(app)
-    tmp = work.temp(app)
-    target, version = _prepare(work, app)
-    ids = adapter.owner_ids()
-    staging = work.staging / 'emqx-work'
-    staging.mkdir(mode=0o700)
+def _package_candidate(work, tmp, target, staging, out_dir, export, *, ids, log_root):
+    """Package isolated candidate volumes; does not install or modify target volumes."""
     (out_dir / 'volumes').mkdir(mode=0o700, parents=True, exist_ok=True)
-    blocker = VERSIONS.blocker(work.addon_info(SLUG).version, version)
-    if blocker:
-        raise BackupError('incompatible', f'EMQX 不能搬過來：{blocker}', app=app.id)
-    src, node, readings, export, counts, strict, live_authn = _build_candidate(
-        work, app, tmp, target, staging, version=version)
-    work.log(f'EMQX 資料匯入完成：{len(TABLES)} 個資料表的筆數都符合 HA；未符合規則的主題維持「{strict[0]}」')
     code = tmp.stop('emqx-new', timeout=120)
     if code not in (0, 143):
         raise BackupError('job-failed', f'暫用的 EMQX 沒有正常關閉（結束碼 {code}）。')
@@ -1039,16 +1026,37 @@ def convert(work, app, test_mode, out_dir):
         out.close()
     os.unlink(raw)
     os.unlink(export)
-    _clean(tmp, volumes=('emqx-new', 'emqx-new-log', 'emqx-in'))
     log_path = out_dir / 'volumes' / f'{target.log_volume}.tar'
     tar = hacommon.FileTar(log_path, work.guard)
     try:
-        hacommon.top_only(tar, ha_n8n.volume_root(work, app, target.log_volume))
+        hacommon.top_only(tar, log_root)
     finally:
         tar.close()
     for path in (data_path, log_path):
         ha_odoo.check_volume_tar(path, ids)
-    return {'volumes': {target.data_volume: data_path, target.log_volume: log_path}, 'node': node,
+    _clean(tmp, volumes=('emqx-new', 'emqx-new-log', 'emqx-in'))
+    return {target.data_volume: data_path, target.log_volume: log_path}
+
+
+def convert(work, app, test_mode, out_dir):
+    """Build target volumes only when target ACL and settings preservation is verified."""
+    raise BackupError('incompatible', PRESERVATION_BLOCKER, app=app.id)
+    adapter = work.adapter(app)
+    tmp = work.temp(app)
+    target, version = _prepare(work, app)
+    ids = adapter.owner_ids()
+    staging = work.staging / 'emqx-work'
+    staging.mkdir(mode=0o700)
+    (out_dir / 'volumes').mkdir(mode=0o700, parents=True, exist_ok=True)
+    blocker = VERSIONS.blocker(work.addon_info(SLUG).version, version)
+    if blocker:
+        raise BackupError('incompatible', f'EMQX 不能搬過來：{blocker}', app=app.id)
+    src, node, readings, export, counts, strict, live_authn = _build_candidate(
+        work, app, tmp, target, staging, version=version)
+    work.log(f'EMQX 資料匯入完成：{len(TABLES)} 個資料表的筆數都符合 HA；未符合規則的主題維持「{strict[0]}」')
+    volumes = _package_candidate(work, tmp, target, staging, out_dir, export, ids=ids,
+                                 log_root=ha_n8n.volume_root(work, app, target.log_volume))
+    return {'volumes': volumes, 'node': node,
             'ha_hosts': hacommon.ha_hosts(src.hocon), 'plugins': sorted(src.plugins),
             'anonymous': not any(a['enable'] for a in readings['authn']),
             'hash_differs': hash_differs(readings['authn'], live_authn),

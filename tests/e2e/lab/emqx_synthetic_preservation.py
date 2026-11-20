@@ -13,6 +13,7 @@ import sys
 import io
 import tarfile
 import gzip
+import shutil
 from types import SimpleNamespace
 import time
 
@@ -99,7 +100,7 @@ def denied_subscription(password):
 
 def candidate_backup_probe(root, original, base, acl, password):
     global CONTAINER
-    from woowbackup import habackup, ha_emqx, hacommon, tempctr
+    from woowbackup import habackup, ha_emqx, hacommon, tempctr, nested
     from woowbackup.errors import BackupError
     class Runner:
         def podman(self, *args, **kwargs):
@@ -110,6 +111,16 @@ def candidate_backup_probe(root, original, base, acl, password):
                 stdin=incoming if streaming else None, input=None if streaming else incoming,
                 stdout=output if output is not None else subprocess.PIPE,
                 stderr=subprocess.PIPE, timeout=kwargs.get('timeout', 120))
+            if len(args) >= 5 and args[0] == 'exec' and args[-1] == ha_emqx.COUNT_EXPR:
+                probe = subprocess.run(['podman', 'exec', args[1], 'emqx', 'eval',
+                    '{mnesia:table_info(emqx_retainer_message,size), '
+                    'length([K || K <- mnesia:dirty_all_keys(emqx_retainer_message), '
+                    'is_list(K), hd(K) =:= <<"$SYS">>])}.'],
+                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=120)
+                match = re.fullmatch(rb'\s*\{(\d+),(\d+)\}\s*', probe.stdout)
+                if match:
+                    print(json.dumps({'stage': 'retainer_count_diagnostic',
+                        'total': int(match[1]), 'system_topic_count': int(match[2])}), flush=True)
             if kwargs.get('max_output') is not None and len(result.stdout or b'') > kwargs['max_output']:
                 raise RuntimeError('lab_output_budget_exceeded')
             if result.returncode and kwargs.get('check', True):
@@ -128,7 +139,7 @@ def candidate_backup_probe(root, original, base, acl, password):
     work = SimpleNamespace(runner=lambda app: Runner(), guard=Budget(), abort=None,
         checkpoint=lambda: None, phase=lambda name: record('product_phase_' + name),
         log=lambda message: None)
-    target = SimpleNamespace(container=CONTAINER, data_volume=VOLUME,
+    target = SimpleNamespace(container=CONTAINER, data_volume=VOLUME, log_volume=VOLUME + "-log",
         image=IMAGE, env={'EMQX_NODE__NAME': 'emqx@127.0.0.1', 'EMQX_DASHBOARD__DEFAULT_PASSWORD': password}, files=[(str(base), '/opt/emqx/etc/base.hocon', 'ro'), (str(acl), '/opt/emqx/etc/lab-acl.conf', 'ro')],
         secrets=[SECRET + ',type=mount,target=/opt/emqx/etc/lab-bootstrap.csv,uid=1000,gid=1000,mode=0400'])
     # First call the product's bounded structured reader against the real broker.
@@ -244,6 +255,11 @@ def candidate_backup_probe(root, original, base, acl, password):
             print(json.dumps({'stage': 'retained_table_counts', 'source': built[2]['counts']['emqx_retainer_message'],
                               'candidate': built[4]['emqx_retainer_message']}), flush=True)
         record('product_ha_parse_snapshot_import_restore_counts')
+        actual = json.loads(command(['container', 'inspect', tmp.name('emqx-new')]).stdout)[0]
+        assert actual['HostConfig']['NetworkMode'] == 'none'
+        assert not actual['HostConfig'].get('PortBindings')
+        assert actual['HostConfig']['ReadonlyRootfs']
+        record('actual_candidate_isolation_before_cleanup')
         # Actual client probes now address the candidate, never the source container.
         old_container = CONTAINER
         CONTAINER = tmp.name('emqx-new')
@@ -251,7 +267,8 @@ def candidate_backup_probe(root, original, base, acl, password):
             receive_retained(password, 'lab/from-ha-backup')
             record('ha_only_retained_message_restored')
             allowed, denied = mqtt(password, 'lab/product'), mqtt(password, 'outside/product')
-            assert allowed.returncode == 0 and b'RC:135' in denied.stdout
+            assert allowed.returncode == 0 and re.search(rb'RC:(?:0|16)\b', allowed.stdout)
+            assert b'RC:135' in denied.stdout
             receive_retained(password, 'lab/product')
             denied_subscription(password)
             before = config()
@@ -262,6 +279,52 @@ def candidate_backup_probe(root, original, base, acl, password):
             receive_retained(password, 'lab/from-ha-backup')
             denied_subscription(password)
             record('product_candidate_restart_mqtt_allow_deny')
+            # Exercise the product output packager, then install into fresh synthetic volumes.
+            log_root = ha_emqx.ha_n8n.volume_root(work, SimpleNamespace(id='emqx'), tmp.name('emqx-new-log'))
+            ids = tuple(nested.IdMap(command(['unshare', 'cat', '/proc/self/' + name]).stdout.decode())
+                        for name in ('uid_map', 'gid_map'))
+            assert all(item.ranges for item in ids)
+            volumes = ha_emqx._package_candidate(work, tmp, target, root, root / 'output', built[3],
+                                                 ids=ids, log_root=log_root)
+            assert set(volumes) == {target.data_volume, target.log_volume}
+            for path in volumes.values():
+                assert path.stat().st_mode & 0o077 == 0
+            record('product_output_volume_packaging')
+            for role, name in (('installed-data', target.data_volume), ('installed-log', target.log_volume)):
+                tmp.volume(role)
+                with open(volumes[name], 'rb') as source:
+                    tmp.volume_import(role, lambda out: shutil.copyfileobj(source, out))
+            tmp.run('installed', target.image, [], detach=True, read_only_root=True,
+                    env=target.env, secrets=target.secrets,
+                    volumes=[(tmp.name('installed-data'), ha_emqx.DATA_TARGET, None),
+                             (tmp.name('installed-log'), ha_emqx.LOG_TARGET, None)] + target.files)
+            CONTAINER = tmp.name('installed')
+            ready()
+            assert config() == before
+            receive_retained(password, 'lab/from-ha-backup')
+            receive_retained(password, 'lab/product')
+            installed_publish = mqtt(password, 'lab/installed')
+            assert installed_publish.returncode == 0 and re.search(rb'RC:(?:0|16)\b', installed_publish.stdout)
+            assert b'RC:135' in mqtt(password, 'outside/installed').stdout
+            denied_subscription(password)
+            record('packaged_volume_install_config_data_mqtt')
+            command(['restart', CONTAINER], timeout=120)
+            ready()
+            assert config() == before
+            receive_retained(password, 'lab/installed')
+            denied_subscription(password)
+            record('installed_volume_restart_persistence')
+            # Recovery boundary: switch back to the untouched synthetic source target.
+            # This is lab rollback, not a claim that the application's install/rollback UI ran.
+            tmp.stop('installed', timeout=120)
+            CONTAINER = old_container
+            ready()
+            assert config() == original
+            recovered_publish = mqtt(password, 'lab/recovered')
+            assert recovered_publish.returncode == 0 and re.search(rb'RC:(?:0|16)\b', recovered_publish.stdout)
+            denied_subscription(password)
+            receive_retained(password, 'lab/recovered')
+            record('switch_back_to_existing_synthetic_broker')
         finally:
             CONTAINER = old_container
     except BackupError as error:
@@ -306,6 +369,10 @@ def record(stage):
 
 if len(sys.argv) > 1:
     sys.path.insert(0, sys.argv[1])
+
+class ProductChainDone(Exception):
+    pass
+
 
 phase = 'setup'
 try:
@@ -353,10 +420,10 @@ retainer.backend.storage_type = disc
         assert original['authentication'][0]['bootstrap_file'] == '/opt/emqx/etc/lab-bootstrap.csv'
         command(['exec', CONTAINER, 'test', '-r', '/opt/emqx/etc/lab-bootstrap.csv'])
         record('effective_config_and_bootstrap_mount')
-        if len(sys.argv) > 2 and sys.argv[2] == '--preflight-only':
+        if len(sys.argv) > 2 and sys.argv[2] in ('--product-chain', '--preflight-only'):
             phase = 'product_candidate_backup_probe'
             candidate_backup_probe(root, original, base, acl, password)
-            raise SystemExit(1 if any(item['result'] != 'pass' for item in results) else 0)
+            raise ProductChainDone()
 
         phase = 'mqtt_allowed'
         allowed = mqtt(password, 'lab/allowed')
@@ -407,6 +474,8 @@ retainer.backend.storage_type = disc
         if len(sys.argv) > 1:
             phase = 'product_candidate_backup_probe'
             candidate_backup_probe(root, after, base, acl, password)
+except ProductChainDone:
+    pass
 except Exception as error:
     results.append({'stage': phase, 'result': 'fail', 'error_type': type(error).__name__})
     print(json.dumps(results[-1]), flush=True)
