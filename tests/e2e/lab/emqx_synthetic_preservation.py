@@ -75,8 +75,12 @@ def receive_retained(password, topic):
     result = command(['run', '--rm', '--pull=never', '--network=container:' + CONTAINER,
                       '--entrypoint=mosquitto_sub', CLIENT, '-h', '127.0.0.1', '-p', '1883',
                       '-V', 'mqttv5', '-q', '1', '-t', topic, '-C', '1', '-W', '5',
-                      '-u', 'lab', '-P', password])
-    if result.stdout.strip() != b'synthetic-marker':
+                      '-u', 'lab', '-P', password], accept=True)
+    print(json.dumps({'stage': 'retained_message_transport', 'exit_code': result.returncode,
+                      'payload_matches': result.stdout.strip() == b'synthetic-marker',
+                      'not_authorized': b'not authorized' in result.stderr.lower(),
+                      'timed_out': b'timed out' in result.stderr.lower()}), flush=True)
+    if result.returncode or result.stdout.strip() != b'synthetic-marker':
         raise RuntimeError('subscriber_payload_mismatch')
 
 
@@ -171,7 +175,7 @@ def candidate_backup_probe(root, original, base, acl, password):
     source_authn = [{key: value for key, value in row.items() if key not in ('bootstrap_file', 'bootstrap_type')}
                    for row in original['authentication']]
     source_config = {'authentication': source_authn, 'authorization': {'no_match': 'allow',
-                     'deny_action': 'ignore', 'sources': []}}
+                     'deny_action': 'ignore', 'sources': []}, 'retainer': original['retainer']}
     Runner().podman('exec', '-i', CONTAINER, 'sh', '-c',
                    'umask 077; cat > /tmp/lab-source.json', input=json.dumps(source_config).encode())
     ctl('conf', 'load', '--replace', '/tmp/lab-source.json')
@@ -234,7 +238,11 @@ def candidate_backup_probe(root, original, base, acl, password):
             work.addon_member = lambda wanted: slug
             work.open = lambda member: opened.open_addon(member)
             work.addon_info = lambda wanted: SimpleNamespace(version='5.9.1')
-            ha_emqx._build_candidate(work, SimpleNamespace(id='emqx'), tmp, target, root, version='5.8.9')
+            built = ha_emqx._build_candidate(work, SimpleNamespace(id='emqx'), tmp, target, root, version='5.8.9')
+            assert built[2]['counts']['emqx_retainer_message'] >= 1
+            assert built[4]['emqx_retainer_message'] >= built[2]['counts']['emqx_retainer_message']
+            print(json.dumps({'stage': 'retained_table_counts', 'source': built[2]['counts']['emqx_retainer_message'],
+                              'candidate': built[4]['emqx_retainer_message']}), flush=True)
         record('product_ha_parse_snapshot_import_restore_counts')
         # Actual client probes now address the candidate, never the source container.
         old_container = CONTAINER
@@ -313,6 +321,7 @@ authorization {no_match = deny, deny_action = ignore,
 sources = [{type = file, enable = true, path = "/opt/emqx/etc/lab-acl.conf"}]}
 listeners.tcp.default.bind = "127.0.0.1:1883"
 mqtt.max_packet_size = "1MB"
+retainer.backend.storage_type = disc
 ''')
         acl = root / 'acl.conf'
         acl.write_text('{allow, {username, "lab"}, all, ["lab/#"]}.\n{deny, all}.\n')
