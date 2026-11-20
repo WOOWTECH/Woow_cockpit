@@ -1,4 +1,4 @@
-"""Run as root inside dev-d against synthetic volumes only; invoke the unmodified product converter."""
+"""Run as appowner inside dev-d against synthetic volumes only; invoke the unmodified product converter."""
 import gzip
 import io
 import json
@@ -17,8 +17,8 @@ root = Path(sys.argv[2])
 source_volume, target_volume, plane_volume = sys.argv[3:6]
 image = 'localhost/woow-headscale:0.29.4-r1'
 slug = '1b7b4ce7_woow-headscale'
-prefix = ['runuser', '-u', 'appowner', '--', 'env', 'XDG_RUNTIME_DIR=/run/user/1019',
-          'DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1019/bus', 'podman']
+assert os.getuid() == 1019, 'requires lab appowner'
+prefix = ['podman']
 
 class Runner:
     home = str(root)
@@ -28,7 +28,6 @@ class Runner:
         incoming = kwargs.get('input')
         stream = hasattr(incoming, 'read')
         with tempfile.TemporaryFile() as capture:
-            os.fchown(capture.fileno(), 1019, 1019)
             result = subprocess.run(prefix + list(args), stdin=incoming if stream else None,
                                     input=None if stream else incoming, stdout=capture,
                                     stderr=subprocess.PIPE, timeout=kwargs.get('timeout', 120))

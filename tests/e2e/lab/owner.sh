@@ -7,6 +7,14 @@ source "$(dirname "$0")/lib.sh"
 
 device_vars "${1:-}"
 shift
+# Read-only outer isolation assertion; never enters the host Podman store.
+if [ "${1:-}" = --verify-isolation ]; then
+    [ "$DEV" = d ] && [ "$#" = 1 ] || die "isolation assertion is dev-d only"
+    state=$("$LP" inspect "$NAME" --format '{{.State.Running}} {{.HostConfig.NetworkMode}} {{json .HostConfig.PortBindings}}')
+    [ "$state" = 'true none {}' ] || die "dev-d isolation assertion failed"
+    echo 'dev-d isolation: true none {}'
+    exit 0
+fi
 tty_flag=()
 [ -t 0 ] && [ -t 1 ] && tty_flag=(-t)
 exec "$LP" exec -i "${tty_flag[@]}" "$NAME" /usr/local/bin/woowbk-owner "$@"

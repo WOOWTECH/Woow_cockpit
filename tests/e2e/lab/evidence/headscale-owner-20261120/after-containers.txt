@@ -1,0 +1,8 @@
+f41d7eb4868e omnigent-postgres
+2787bd3201de hermes-postgresql
+9c9d1c28cfeb woow-emqx
+901cb0ea76c0 hermes-redis
+fc7c2002f8f4 woow-emqx-entrance
+cb52ad96339c hermes-agent
+f7a13b0a4e48 omnigent-server
+5cd78197e463 omnigent-runner

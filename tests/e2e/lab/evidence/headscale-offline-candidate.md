@@ -149,3 +149,10 @@ inside the product's disposable `configtest` volume. Empty submitted log
 snapshots remain possible. These are synthetic fixtures; no real HA or existing
 service is covered. The new extractor and persistence assumptions have only
 local unit-test evidence, and await a scheduled dev-d run.
+
+## Owner-only real acceptance completed (2026-11-20)
+
+The previously pending private-source and automatic-reconnect checks now pass
+in the real isolated lab. See [the exact run report](headscale-owner-20261120/README.md)
+for 55-second automatic recovery, full redacted evidence, scope limits and
+independent before/after cleanup inventories. Public import guards remain unchanged.

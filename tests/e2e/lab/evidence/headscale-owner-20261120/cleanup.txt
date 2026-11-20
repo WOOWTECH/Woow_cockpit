@@ -1,0 +1,13 @@
+containers: exact before/after inventory match (8 entries)
+volumes: exact before/after inventory match (54 entries)
+networks: exact before/after inventory match (5 entries)
+dev-d isolation: true none {}
+700 appowner /tmp/headscale-internal.cLKHZNGm
+omnigent-postgres Up 14 hours (healthy)
+hermes-postgresql Up 14 hours (healthy)
+woow-emqx Up 14 hours (healthy)
+hermes-redis Up 14 hours (healthy)
+woow-emqx-entrance Up 14 hours (healthy)
+hermes-agent Up 14 hours (healthy)
+omnigent-server Up 14 hours (healthy)
+omnigent-runner Up 14 hours

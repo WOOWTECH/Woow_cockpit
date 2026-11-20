@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# Run inside dev-d as root; all Podman operations run as the lab appowner.
+# Run inside dev-d as appowner via owner.sh d.
 # Uses only new disposable containers and generated test credentials.
 set -Eeuo pipefail
 product_files=$1
-podman() { runuser -u appowner -- env XDG_RUNTIME_DIR=/run/user/1019 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1019/bus podman "$@"; }
-podman_timeout() { timeout 5s runuser -u appowner -- env XDG_RUNTIME_DIR=/run/user/1019 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1019/bus podman "$@"; }
+[[ $(id -u) == 1019 ]] || exit 1
+podman_timeout() { timeout 5s podman "$@"; }
 umask 077
 test_dir=$(mktemp -d /tmp/headscale-internal.XXXXXXXX)
 suffix=${test_dir##*.}
@@ -96,7 +96,7 @@ unix_socket: /var/run/headscale/headscale.sock
 logtail:
   enabled: false
 EOF
-chown -R appowner:appowner "$test_dir"
+
 podman network create --internal --label io.woowtech.test=headscale-derp "$net" >/dev/null
 [[ $(podman network inspect "$net" --format '{{.Internal}}') == true ]]
 probe=$(podman run --rm --pull=never --memory=64m --network "$net" --entrypoint sh docker.io/tailscale/tailscale:stable -c \
@@ -172,7 +172,7 @@ podman logs "$server" 2>&1 | python3 "$product_files/tests/e2e/lab/headscale-cre
 podman rm "$server" >/dev/null
 python3 "$product_files/tests/e2e/lab/headscale-product-convert.py" "$product_files/backup-engine" \
   "$test_dir" "$source_volume" "$target_volume" "$plane_volume"
-chown -R appowner:appowner "$test_dir/converted-output"
+
 podman volume import "$converted_volume" "$test_dir/converted-output/volumes/$target_volume.tar" >/dev/null
 podman run -d --name "$target_server" --pull=never --memory=384m --network "$net" --network-alias headscale.lab --ip "$source_ip" \
   -v "$test_dir/config:/etc/headscale:ro" -v "$converted_volume:/var/lib/headscale" \
