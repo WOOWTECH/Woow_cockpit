@@ -62,6 +62,35 @@
       "scope": "synthetic adapter backup->restore failure->automatic rollback",
       "result": "agent reported real run exit0 and cleanup verified; raw evidence requested",
       "ha_converter_joined": false
+    },
+    {
+      "service": "Omnigent real application",
+      "commit": "8243b54",
+      "evidence": "omnigent-real-app-chain/run-independent-verified.jsonl",
+      "scope": "independently initialized real source/target app schemas, cold candidate installation and app authentication",
+      "results": [
+        "source and preserved target login accepted",
+        "old source token and new token identify same user",
+        "invalid token rejected",
+        "cookie bytes preserved",
+        "cleanup verified"
+      ],
+      "limitations": [
+        "synthetic Target preparation",
+        "outer Supervisor envelope not yet verified",
+        "login/cookie secret registration incomplete"
+      ]
+    },
+    {
+      "service": "LiteLLM PG18 experiments",
+      "commit": "ad0cbfb",
+      "evidence": "litellm-candidate/pg18-synthetic-compat.json",
+      "scope": "PG18.7 salt SQL plus fixed single-table PG18-to-PG17 experiment",
+      "salt_cases_passed": 9,
+      "fixed_data_cases_passed": 4,
+      "cleanup_verified": true,
+      "full_litellm_migration_tested": false,
+      "ha_source_minor": "18.6"
     }
   ],
   "explicit_failed_suite": {
@@ -76,9 +105,9 @@
   },
   "remaining": [
     "EMQX HA converter output joined to real adapter installation and rollback",
-    "Omnigent complete real application schema and restored application/client acceptance",
+    "Omnigent outer Supervisor envelope, real Target discovery, application data markers and complete secret coverage",
     "Headscale issued-secret registration and scan completeness",
-    "LiteLLM PG18 and true salt/key migration, decryptability and rollback",
+    "LiteLLM full application schema and true salt/key migration, decryptability and rollback",
     "all required dynamic credential sources across autonomous service operation",
     "real original HA backups, architecture/archive variants and final-version acceptance",
     "Odoo/n8n final-version evidence (older acceptance is not automatically current)",
@@ -87,5 +116,22 @@
   "external_restrictions": [
     "Do not retry Hermes independent FTS/SQLite review via another route after prior auto-review rejection.",
     "Host production Podman inventory/image access was rejected; no alternative host entry used. Lab-only tools remain permitted."
+  ],
+  "prepared_not_real_verified": [
+    {
+      "service": "Headscale",
+      "commits": [
+        "a36d23d",
+        "b719e3e"
+      ],
+      "scope": "four credential registrations, bounded cleanup and automatic reconnect candidate",
+      "real_run_pending": true
+    },
+    {
+      "service": "LiteLLM image",
+      "public_base_digest": "sha256:37066242e6b8327fdd627682a66a9ae2a599553b4d5a84c905c6d8b9eb35c01e",
+      "loaded_dev_d_image_id": "bfbade18821e5fcf7291e148fddf4013711c50f347def2cf9128534de2443cde",
+      "scope": "anonymous public download and offline lab load completed; custom app build pending"
+    }
   ]
 }
