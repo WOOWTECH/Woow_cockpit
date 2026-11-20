@@ -37,13 +37,17 @@ class Fixture:
     def secret(self):
         return self.prefix + '-bootstrap'
 
+    @property
+    def dashboard_secret(self):
+        return self.prefix + '-dashboard'
+
     def catalog(self):
         return {'schema': 1, 'id': self.prefix, 'name': 'Synthetic EMQX adapter test',
                 'owner': self.owner, 'adapter': 'quadlet-postgres',
                 'quadlet': {'files': [self.prefix + '.container']},
                 'units': [self.unit], 'writer_units': [self.unit],
                 'volumes': [{'name': name, 'label': 'synthetic'} for name in self.volumes],
-                'secrets': [{'name': self.secret}],
+                'secrets': [{'name': self.secret}, {'name': self.dashboard_secret}],
                 'config_files': [{'path': '.config/' + self.prefix + '/base.hocon', 'mode': '0644'},
                                  {'path': '.config/' + self.prefix + '/acl.conf', 'mode': '0644'}]}
 
@@ -54,6 +58,7 @@ class Fixture:
                 '[Container]\nImage=sha256:' + self.image_id + '\nContainerName=' + self.prefix + '\n'
                 'Network=none\nPull=never\n'
                 'Environment=EMQX_NODE__NAME=emqx@127.0.0.1\n'
+                'Secret=' + self.dashboard_secret + ',type=env,target=EMQX_DASHBOARD__DEFAULT_PASSWORD\n'
                 'Secret=' + self.secret + ',type=mount,target=/opt/emqx/etc/lab-bootstrap.csv,uid=1000,gid=1000,mode=0400\n'
                 'Volume=' + data + ':/opt/emqx/data\nVolume=' + log + ':/opt/emqx/log\n'
                 'Volume=' + config + '/base.hocon:/opt/emqx/etc/base.hocon:ro\n'
@@ -92,7 +97,7 @@ def prepare_adapter_inputs(fixture, app, runner, inspection, version, candidate_
         raise ValueError('unexpected owner runner')
     if (app.id != fixture.prefix or app.owner != fixture.owner or tuple(app.units) != (fixture.unit,)
             or {v['name'] for v in app.volumes} != set(fixture.volumes)
-            or {s['name'] for s in app.secrets} != {fixture.secret} or app.postgres or app.data_dirs
+            or {s['name'] for s in app.secrets} != {fixture.secret, fixture.dashboard_secret} or app.postgres or app.data_dirs
             or app.raw != fixture.catalog()):
         raise ValueError('unexpected catalog')
     if version != EMQX_VERSION:

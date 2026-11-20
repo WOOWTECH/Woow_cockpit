@@ -7,13 +7,8 @@ does not turn a direct adapter restore into a claim of a successful flows rollba
 from pathlib import Path
 
 
-def package_candidate_and_restore(ctx, app, volumes, staging, *, before_restore):
-    """Package adapter-produced candidate data and invoke the actual restore flow.
-
-    `before_restore` prepares a one-shot failure on the synthetic unit only; it
-    must leave the unit healthy for the flow's safety backup. The caller must
-    catch flows.RolledBack and independently verify the recovered broker.
-    """
+def package_candidate(ctx, app, volumes, staging):
+    """Package product-converted candidate volumes with the actual adapter."""
     from woowbackup import flows
 
     staging = Path(staging)
@@ -26,8 +21,10 @@ def package_candidate_and_restore(ctx, app, volumes, staging, *, before_restore)
     packaged = flows._package(ctx, [app], staging, include_images=False,
                               note='synthetic EMQX candidate', backup_type='manual', key=None,
                               phases=False, manifest_apps=[manifest], entries=entries, downtime=0)
-    before_restore()
-    # run_restore takes its own real safety backup, calls adapter.restore and,
-    # on a destructive failure, invokes flows._rollback and a fresh adapter.
-    return flows.run_restore(ctx, {'backup_id': packaged['backup_id'], 'apps': [app.id],
-                                   'accept_unauthenticated': True})
+    return packaged['backup_id']
+
+
+def restore_candidate(ctx, app, backup_id):
+    """Run the product restore and its automatic rollback on a destructive failure."""
+    from woowbackup import flows
+    return flows.run_restore(ctx, {'backup_id': backup_id, 'apps': [app.id], 'accept_unauthenticated': True})

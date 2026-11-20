@@ -15,7 +15,8 @@ import shutil
 import time
 
 from emqx_adapter_provision import Provision
-from emqx_adapter_flow import package_candidate_and_restore
+from emqx_adapter_flow import package_candidate, restore_candidate
+from emqx_ha_candidate import backup_from_volume, build_candidate
 from woowbackup import catalog, flows
 from woowbackup.paths import Paths
 
@@ -48,6 +49,7 @@ def main():
     provision = Provision(args.image_id)
     f, runner = provision.fixture, provision.runner
     password = secrets.token_hex(16)
+    source_password = secrets.token_hex(16)
     base = b'''authentication = [{mechanism = password_based, backend = built_in_database,
 password_hash_algorithm {name = sha256, salt_position = suffix},
 bootstrap_file = "/opt/emqx/etc/lab-bootstrap.csv", bootstrap_type = plain}]
@@ -56,14 +58,16 @@ sources = [{type = file, enable = true, path = "/opt/emqx/etc/lab-acl.conf"}]}
 listeners.tcp.default.bind = "127.0.0.1:1883"
 retainer.backend.storage_type = disc
 '''
-    acl = b'{allow, {username, "lab"}, all, ["lab/#"]}.\n{deny, all}.\n'
+    acl = (b'{allow, {username, "lab"}, all, ["lab/#"]}.\n'
+           b'{allow, {username, "source-only"}, all, ["lab/#"]}.\n{deny, all}.\n')
     dropin = '.config/systemd/user/' + f.unit + '.d/woowbk-inject.conf'
     marker = '.config/' + f.prefix + '/fail-once'
     dropin_created = False
     dropin_dir_created = False
     work_created = False
     try:
-        provision.create(base, acl, ('user_id,password,is_superuser\nlab,' + password + ',false\n').encode())
+        provision.create(base, acl, ('user_id,password,is_superuser\nlab,' + password + ',false\n').encode(),
+                         secrets.token_hex(24).encode())
         runner.systemctl('start', '--', f.unit, timeout=180)
         def ready():
             deadline = time.monotonic() + 120
@@ -86,11 +90,11 @@ retainer.backend.storage_type = disc
                 raise RuntimeError('cannot read synthetic effective config')
             return json.loads(base64.b64decode(raw[8:].split(b':END', 1)[0], validate=True))
 
-        def mqtt(program, topic, payload=None):
+        def mqtt(program, topic, payload=None, *, username='lab', credential=None):
             argv = ['run', '--rm', '--pull=never', '--network=container:' + f.prefix,
                     '--memory=64m', '--cpus=1', '--entrypoint=' + program, CLIENT,
                     '-h', '127.0.0.1', '-p', '1883', '-V', 'mqttv5', '-q', '1',
-                    '-u', 'lab', '-P', password, '-t', topic]
+                    '-u', username, '-P', password if credential is None else credential, '-t', topic]
             argv += ['-r', '-m', payload, '-d'] if payload is not None else ['-C', '1', '-W', '10']
             return runner.podman(*argv, timeout=60, check=False)
 
@@ -104,8 +108,25 @@ retainer.backend.storage_type = disc
             if result.returncode or result.stdout.strip() != payload.encode():
                 raise RuntimeError('synthetic retained marker mismatch')
 
-        publish('lab/candidate', 'candidate-marker')
-        receive('lab/candidate', 'candidate-marker')
+        def user_command(operation):
+            chain = "'mqtt:global', <<\"password_based:built_in_database\">>, <<\"source-only\">>"
+            if operation == 'add':
+                runner.podman('exec', '-i', f.prefix, 'sh', '-c', 'umask 077; cat > /tmp/source-password',
+                              input=source_password.encode())
+                expr = ("{ok,P}=file:read_file(\"/tmp/source-password\"), {ok,_}="
+                        "emqx_authn_chains:add_user('mqtt:global', <<\"password_based:built_in_database\">>, "
+                        "#{user_id => <<\"source-only\">>, password => P}), added.")
+                expected = b'added'
+            elif operation == 'delete':
+                expr = 'ok = emqx_authn_chains:delete_user(' + chain + '), deleted.'
+                expected = b'deleted'
+            else:
+                expr = ('case emqx_authn_chains:lookup_user(' + chain + ') of '
+                        '{ok,_} -> present; {error,not_found} -> absent; _ -> error end.')
+                expected = b'absent'
+            if runner.podman('exec', f.prefix, 'emqx', 'eval', expr).stdout.strip() != expected:
+                raise RuntimeError('synthetic source user operation failed')
+
         args.work.mkdir(mode=0o700)
         work_created = True
         paths = Paths(base=args.work / 'engine')
@@ -131,10 +152,65 @@ retainer.backend.storage_type = disc
         job = 'j' + time.strftime('%Y%m%dT%H%M%SZ', time.gmtime()) + '-' + secrets.token_hex(4)
         ctx = flows.FlowContext(paths, job, deps, Reporter())
         candidate_adapter = ctx.adapter(app)
-        manifest, entries = candidate_adapter.backup(args.work / 'candidate', include_images=False)
+
+        # Build a cold synthetic HA backup with a marker absent from the target.
+        original_config = configuration()
+        source_authn = [{key: value for key, value in row.items() if key not in ('bootstrap_file', 'bootstrap_type')}
+                        for row in original_config['authentication']]
+        source_config = {'authentication': source_authn,
+                         'authorization': {'no_match': 'allow', 'deny_action': 'ignore', 'sources': []},
+                         'retainer': original_config['retainer']}
+        def load_config(value):
+            runner.podman('exec', '-i', f.prefix, 'sh', '-c', 'umask 077; cat > /tmp/synthetic-settings.json',
+                          input=json.dumps(value).encode())
+            result = runner.podman('exec', f.prefix, 'emqx', 'ctl', 'conf', 'load', '--replace',
+                                   '/tmp/synthetic-settings.json')
+            if b'error' in (result.stdout + result.stderr).lower():
+                raise RuntimeError('synthetic config load failed')
+        load_config(source_config)
+        user_command('add')
+        publish('lab/from-ha', 'ha-marker')
+        receive('lab/from-ha', 'ha-marker')
+        runner.systemctl('stop', '--', f.unit, timeout=180)
+        backup = backup_from_volume(runner, f, args.work)
+        runner.systemctl('start', '--', f.unit, timeout=180)
         ready()
-        entry_sources = {e.path: e.source for e in entries}
-        volumes = {row['name']: entry_sources[row['entry']] for row in manifest['volumes']}
+        load_config({key: original_config[key] for key in ('authentication', 'authorization')})
+        user_command('delete')
+        user_command('absent')
+        # Remove the source marker on the target; the candidate must restore it.
+        clear = runner.podman('run', '--rm', '--pull=never', '--network=container:' + f.prefix,
+            '--memory=64m', '--cpus=1', '--entrypoint=mosquitto_pub', CLIENT,
+            '-h', '127.0.0.1', '-p', '1883', '-V', 'mqttv5', '-q', '1', '-u', 'lab', '-P', password,
+            '-t', 'lab/from-ha', '-r', '-n', '-d', check=False, timeout=60)
+        if clear.returncode or not re.search(rb'RC:(?:0|16)\b', clear.stdout):
+            raise RuntimeError('cannot clear target source marker')
+        absent = mqtt('mosquitto_sub', 'lab/from-ha')
+        if absent.returncode == 0 or absent.stdout.strip():
+            raise RuntimeError('source-only marker still exists on target')
+        print(json.dumps({'stage': 'source_absent_from_target', 'result': 'pass'}), flush=True)
+        publish('lab/target-only', 'target-marker')
+        receive('lab/target-only', 'target-marker')
+        before_config = configuration()
+        candidate_root = args.work / 'ha-candidate'
+        candidate_root.mkdir(mode=0o700)
+        volumes = build_candidate(runner, f, app, candidate_adapter, backup, candidate_root, job)
+        print(json.dumps({'stage': 'ha_build_and_package', 'result': 'pass'}), flush=True)
+        print(json.dumps({'stage': 'temporary_objects_cleanup', 'result': 'pass'}), flush=True)
+        backup_id = package_candidate(ctx, app, volumes, args.work / 'package')
+        result = restore_candidate(ctx, app, backup_id)
+        if result.get('rolled_back') or not result.get('changed'):
+            raise RuntimeError('candidate install was not successful')
+        ready()
+        receive('lab/from-ha', 'ha-marker')
+        receive('lab/target-only', 'target-marker')
+        source_auth = mqtt('mosquitto_pub', 'lab/source-login', 'source-authenticated',
+                           username='source-only', credential=source_password)
+        if source_auth.returncode or not re.search(rb'RC:(?:0|16)\b', source_auth.stdout):
+            raise RuntimeError('source-only MQTT user did not authenticate')
+        if configuration() != before_config:
+            raise RuntimeError('synthetic target configuration was not preserved')
+        print(json.dumps({'stage': 'candidate_installed', 'result': 'pass'}), flush=True)
         publish('lab/before-rollback', 'rollback-marker')
         receive('lab/before-rollback', 'rollback-marker')
         before_config = configuration()
@@ -145,10 +221,9 @@ retainer.backend.storage_type = disc
         runner.write_file(dropin, command.encode(), 0o600)
         dropin_created = True
         runner.systemctl('daemon-reload')
-        def arm():
-            state['arm'] = True
+        state['arm'] = True
         try:
-            package_candidate_and_restore(ctx, app, volumes, args.work / 'package', before_restore=arm)
+            restore_candidate(ctx, app, backup_id)
             raise RuntimeError('restore unexpectedly succeeded')
         except flows.RolledBack as outcome:
             if not outcome.result.get('rolled_back') or not state['injected']:
@@ -159,7 +234,8 @@ retainer.backend.storage_type = disc
         if configuration() != before_config:
             raise RuntimeError('synthetic configuration did not roll back')
         receive('lab/before-rollback', 'rollback-marker')
-        receive('lab/candidate', 'candidate-marker')
+        receive('lab/from-ha', 'ha-marker')
+        receive('lab/target-only', 'target-marker')
         denied = mqtt('mosquitto_pub', 'outside/denied', 'should-not-publish')
         if not re.search(rb'RC:135\b', denied.stdout + denied.stderr):
             raise RuntimeError('synthetic ACL denial was not observed')
@@ -169,6 +245,7 @@ retainer.backend.storage_type = disc
         if configuration() != before_config:
             raise RuntimeError('synthetic configuration changed on restart')
         receive('lab/before-rollback', 'rollback-marker')
+        print(json.dumps({'stage': 'automatic_rollback_verified', 'result': 'pass'}), flush=True)
     finally:
         errors = []
         if dropin_created:

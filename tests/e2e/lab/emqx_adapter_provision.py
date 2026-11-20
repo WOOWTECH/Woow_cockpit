@@ -16,7 +16,7 @@ class Provision:
         self.runner = OwnerRunner('appowner')
         self.created = []
 
-    def create(self, base, acl, bootstrap):
+    def create(self, base, acl, bootstrap, dashboard):
         """Create unique resources; record each immediately for fail-closed cleanup."""
         f, r = self.fixture, self.runner
         image = json.loads(r.podman('image', 'inspect', 'sha256:' + f.image_id).stdout)[0]
@@ -36,10 +36,11 @@ class Provision:
             r.podman('volume', 'create', name)
             self.created.append(('volume', name))
         existing = r.podman('secret', 'ls', '--format', '{{.Name}}').stdout.decode().splitlines()
-        if f.secret in existing:
+        if f.secret in existing or f.dashboard_secret in existing:
             raise RuntimeError('secret namespace collision')
-        r.podman('secret', 'create', f.secret, '-', input=bootstrap)
-        self.created.append(('secret', f.secret))
+        for name, value in ((f.secret, bootstrap), (f.dashboard_secret, dashboard)):
+            r.podman('secret', 'create', name, '-', input=value)
+            self.created.append(('secret', name))
         unit = '.config/containers/systemd/' + f.prefix + '.container'
         if r.stat_files([unit])[unit]['type'] != 'missing':
             raise RuntimeError('unit namespace collision')
