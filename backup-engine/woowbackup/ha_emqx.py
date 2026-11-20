@@ -523,6 +523,9 @@ FILELESS_ROOT_FIELDS = {
     'alarm': {'actions', 'size_limit', 'validity_period'},
     'slow_subs': {'enable', 'threshold', 'expire_interval', 'top_k_num', 'stats_type'},
     'trace': {'payload_encode'},
+    'telemetry': {'enable'},
+    'delayed': {'enable', 'max_delayed_messages'},
+    'overload_protection': {'enable', 'backoff_delay', 'backoff_gc', 'backoff_hibernation', 'backoff_new_conn'},
 }
 
 
@@ -541,18 +544,21 @@ def validate_fileless_roots(config):
                 raise BackupError('incompatible', 'EMQX 無檔案設定欄位格式不受支援。')
 
 
+SUPPORTED_CONFIGURATION_ROOTS = frozenset({
+    'authorization', 'authentication', 'listeners', 'dashboard', 'mqtt', 'zones',
+    'flapping_detect', 'force_shutdown', 'force_gc', 'conn_congestion', 'stats',
+    'sys_topics', 'broker', 'retainer', *FILELESS_ROOT_FIELDS,
+})
+
+
 def configuration_references(config, mounts, secrets=()):
     """Resolve file ACL and explicit TLS file fields in supported configuration roots.
 
     Unknown roots are rejected until their schema/file dependencies have been reviewed.
     This intentionally restrictive candidate is not a universal EMQX schema parser.
     """
-    allowed = {'authorization', 'authentication', 'listeners', 'dashboard', 'mqtt', 'zones',
-               'flapping_detect', 'force_shutdown', 'force_gc', 'conn_congestion', 'stats',
-               'sys_topics', 'broker', 'retainer'}
-    allowed.update(FILELESS_ROOT_FIELDS)
     validate_fileless_roots(config)
-    if set(config) - allowed:
+    if set(config) - SUPPORTED_CONFIGURATION_ROOTS:
         raise BackupError('incompatible', 'EMQX 含有尚未完成檔案參照審查的設定類型。')
     bootstrap_references(config, mounts, secrets)
     required = authorization_file_references(config['authorization'], mounts)

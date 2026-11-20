@@ -9,6 +9,11 @@ from pathlib import Path
 import secrets
 import subprocess
 import tempfile
+import sys
+import io
+import tarfile
+import gzip
+from types import SimpleNamespace
 import time
 
 IMAGE = '3f60addfad2b'
@@ -88,10 +93,83 @@ def denied_subscription(password):
         raise RuntimeError('subscription_denial_not_proven')
 
 
+def candidate_backup_probe(root, original, base, acl):
+    from woowbackup import habackup, ha_emqx, hacommon
+    from woowbackup.errors import BackupError
+    class Runner:
+        def podman(self, *args, **kwargs):
+            return command(list(args), timeout=kwargs.get('timeout', 60), accept=not kwargs.get('check', True))
+    work = SimpleNamespace(runner=lambda app: Runner())
+    target = SimpleNamespace(container=CONTAINER, data_volume=VOLUME,
+        files=[(str(base), '/opt/emqx/etc/base.hocon', 'ro'), (str(acl), '/opt/emqx/etc/lab-acl.conf', 'ro')],
+        secrets=[SECRET + ',type=mount,target=/opt/emqx/etc/lab-bootstrap.csv,uid=1000,gid=1000,mode=0400'])
+    # First call the product's bounded structured reader against the real broker.
+    read = ha_emqx.read_effective_config(lambda argv: Runner().podman('exec', CONTAINER, *argv,
+                                          timeout=120, check=False))
+    assert read == original
+    record('product_structured_config_reader')
+    # Preserve the actual rejection from the candidate entry, without patching the guard or source.
+    try:
+        ha_emqx.candidate_from_target(work, 'synthetic', None, target, root, root / 'unused-export', (1000, 1000))
+    except BackupError as error:
+        candidate_result = {'stage': 'product_candidate_entry', 'result': 'blocked', 'code': error.code,
+                            'reason': error.message}
+    else:
+        raise RuntimeError('unexpected_candidate_completion')
+    command(['stop', CONTAINER], timeout=120)
+    raw = command(['volume', 'export', VOLUME], timeout=120).stdout
+    inner = io.BytesIO()
+    def add(archive, name, data):
+        info = tarfile.TarInfo(name)
+        info.size = len(data)
+        archive.addfile(info, io.BytesIO(data))
+    with tarfile.open(fileobj=inner, mode='w', format=tarfile.PAX_FORMAT) as archive:
+        addon = {'user': {'version': '5.9.1', 'image': '1b7b4ce7/amd64-addon-woow-emqx'},
+                 'system': {'slug': 'woow-emqx', 'name': 'Synthetic EMQX'}, 'version': '5.9.1', 'state': 'stopped'}
+        add(archive, 'addon.json', json.dumps(addon).encode())
+        add(archive, 'data/emqx/node.name', b'emqx@127.0.0.1')
+        with tarfile.open(fileobj=io.BytesIO(raw), mode='r:') as source:
+            for member in source:
+                normalized = ha_emqx.ha_odoo._norm(member.name)
+                if normalized == '.':
+                    continue
+                if normalized is None or not (member.isfile() or member.isdir()):
+                    raise RuntimeError('unexpected_synthetic_volume_entry')
+                info = ha_emqx.ha_odoo._copy_info(member, 'data/emqx/data/' + normalized)
+                archive.addfile(info, source.extractfile(member) if member.isfile() else None)
+    backup = root / 'synthetic-ha.tar'
+    slug = '1b7b4ce7_woow-emqx'
+    doc = {'slug': 'c0ffee00', 'version': 2, 'name': 'synthetic-emqx', 'date': '2026-11-20T08:36:08+00:00',
+           'type': 'partial', 'supervisor_version': '2026.11.0', 'compressed': True, 'protected': False,
+           'homeassistant': None, 'folders': [], 'repositories': [],
+           'addons': [{'slug': slug, 'name': 'Synthetic EMQX', 'version': '5.9.1', 'size': 0.0}]}
+    with open(backup, 'xb') as handle:
+        os.fchmod(handle.fileno(), 0o600)
+        with tarfile.open(fileobj=handle, mode='w') as archive:
+            add(archive, slug + '.tar.gz', gzip.compress(inner.getvalue()))
+            add(archive, 'backup.json', json.dumps(doc).encode())
+    staged = root / 'parsed-emqx.tar'
+    sink = hacommon.FileTar(staged)
+    try:
+        with habackup.open_backup(backup) as opened:
+            with opened.open_addon(slug) as stream:
+                source = ha_emqx.scan_member(stream, habackup.Report(), sink)
+    finally:
+        sink.close()
+    node, blocker = ha_emqx.node_name(source)
+    assert blocker is None and node == 'emqx@127.0.0.1' and source.files > 0
+    record('synthetic_ha_backup_product_parser_and_staging')
+    results.append(candidate_result)
+    print(json.dumps(candidate_result), flush=True)
+
+
 def record(stage):
     results.append({'stage': stage, 'result': 'pass'})
     print(json.dumps({'stage': stage, 'result': 'pass'}), flush=True)
 
+
+if len(sys.argv) > 1:
+    sys.path.insert(0, sys.argv[1])
 
 phase = 'setup'
 try:
@@ -183,6 +261,9 @@ mqtt.max_packet_size = "1MB"
         receive_retained(password, 'lab/after-restart')
         denied_subscription(password)
         record('restart_config_and_mqtt_policy')
+        if len(sys.argv) > 1:
+            phase = 'product_candidate_backup_probe'
+            candidate_backup_probe(root, after, base, acl)
 except Exception as error:
     results.append({'stage': phase, 'result': 'fail', 'error_type': type(error).__name__})
     print(json.dumps(results[-1]), flush=True)
@@ -193,5 +274,5 @@ finally:
         if result.returncode:
             results.append({'stage': 'cleanup_' + kind, 'result': 'fail'})
     print(json.dumps({'image': IMAGE, 'client_image': CLIENT, 'results': results}), flush=True)
-if any(item['result'] == 'fail' for item in results):
+if any(item['result'] != 'pass' for item in results):
     raise SystemExit(1)

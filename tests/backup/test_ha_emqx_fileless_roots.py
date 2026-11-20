@@ -44,3 +44,29 @@ class FilelessRootsTests(unittest.TestCase):
                 with self.assertRaises(BackupError):
                     self.invoke(transport)
                 self.assertNotIn('export', transport.events)
+
+    def test_additional_default_roots_are_restored(self):
+        class ChangedDefault(flow.Transport):
+            def exec(self, role, command, **kwargs):
+                result = super().exec(role, command, **kwargs)
+                if command[:4] == ['emqx', 'ctl', 'data', 'import']:
+                    self.running_config['delayed']['max_delayed_messages'] = 999
+                return result
+        transport = ChangedDefault()
+        roots = {'telemetry': {'enable': False}, 'delayed': {'enable': True, 'max_delayed_messages': 10},
+                 'overload_protection': {'enable': False, 'backoff_delay': 1, 'backoff_gc': False,
+                                         'backoff_hibernation': True, 'backoff_new_conn': True}}
+        transport.config.update(roots)
+        transport.running_config = copy.deepcopy(transport.config)
+        self.invoke(transport)
+        for key, value in roots.items():
+            self.assertEqual(transport.running_config[key], value)
+
+    def test_new_roots_reject_unreviewed_reference_fields(self):
+        for root in ('telemetry', 'delayed', 'overload_protection'):
+            with self.subTest(root=root):
+                transport = flow.Transport()
+                transport.config[root] = {'file': '/outside/unreviewed'}
+                with self.assertRaises(BackupError):
+                    self.invoke(transport)
+                self.assertNotIn('export', transport.events)

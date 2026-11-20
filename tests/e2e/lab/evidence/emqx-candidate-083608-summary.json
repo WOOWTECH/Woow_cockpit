@@ -1,0 +1,37 @@
+{
+  "candidate_exit": 1,
+  "pass_stages": 11,
+  "blocked_stages": 1,
+  "unsupported_roots": [
+    "actions",
+    "api_key",
+    "auto_subscribe",
+    "banned",
+    "bridges",
+    "cluster",
+    "connectors",
+    "crl_cache",
+    "durable_sessions",
+    "durable_storage",
+    "exhook",
+    "gateway",
+    "limiter",
+    "log",
+    "node",
+    "plugins",
+    "prometheus",
+    "psk_authentication",
+    "rewrite",
+    "rpc",
+    "rule_engine",
+    "sources",
+    "sysmon",
+    "topic_metrics"
+  ],
+  "cleanup_remaining": {
+    "containers": 0,
+    "volumes": 0,
+    "secrets": 0
+  },
+  "limitation": "Product HA parser and candidate preflight ran separately. No complete HA conversion ran."
+}
