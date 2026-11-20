@@ -103,6 +103,7 @@ for _ in {1..30}; do podman exec "$server" headscale health >/dev/null 2>&1 && b
 podman exec "$server" headscale health >/dev/null
 podman exec "$server" headscale users create lab -o json >/dev/null
 source_api_key=$(podman exec "$server" headscale apikeys create --expiration 1h)
+printf '%s' "$source_api_key" | python3 "$product_files/tests/e2e/lab/headscale-credential-events.py" --register source_api
 for client in "$client_a" "$client_b"; do
   podman run -d --name "$client" --hostname "$client" --pull=never --memory=192m --network "$net" \
     -e SSL_CERT_FILE=/lab/ca.crt -e TS_DEBUG_LOG_DISABLE=true -e TS_DEBUG_ALWAYS_USE_DERP=true \
@@ -110,6 +111,8 @@ for client in "$client_a" "$client_b"; do
     --entrypoint tailscaled docker.io/tailscale/tailscale:stable \
     --tun=userspace-networking --state=mem: --socket=/tmp/tailscaled.sock >/dev/null
   key=$(podman exec "$server" headscale preauthkeys create --user 1 --expiration 10m)
+  if [[ "$client" == "$client_a" ]]; then source=client_a_preauth; else source=client_b_preauth; fi
+  printf '%s' "$key" | python3 "$product_files/tests/e2e/lab/headscale-credential-events.py" --register "$source"
   podman exec -e TS_AUTHKEY="$key" "$client" sh -c 'tailscale --socket=/tmp/tailscaled.sock up --login-server=https://headscale.lab:8080 --authkey="$TS_AUTHKEY" --accept-dns=false --timeout=60s'
   unset key
   podman exec "$client" tailscale --socket=/tmp/tailscaled.sock status --json | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["BackendState"]=="Running"; print("Registered:", d["Self"]["HostName"], d["Self"]["TailscaleIPs"])'
@@ -130,10 +133,13 @@ podman run -d --name "$target_server" --pull=never --memory=384m --network=none 
 for _ in {1..30}; do podman exec "$target_server" headscale health >/dev/null 2>&1 && break; sleep 1; done
 podman exec "$target_server" headscale health >/dev/null
 target_api_key=$(podman exec "$target_server" headscale apikeys create --expiration 1h)
+printf '%s' "$target_api_key" | python3 "$product_files/tests/e2e/lab/headscale-credential-events.py" --register target_api
 podman stop "$target_server" >/dev/null
+podman logs "$target_server" 2>&1 | python3 "$product_files/tests/e2e/lab/headscale-credential-events.py" --scan-log target_initial
 podman rm "$target_server" >/dev/null
 # Keep the original client processes alive while stopping the source and converting its cold volume.
 podman stop "$server" >/dev/null
+podman logs "$server" 2>&1 | python3 "$product_files/tests/e2e/lab/headscale-credential-events.py" --scan-log source_server
 podman rm "$server" >/dev/null
 python3 "$product_files/tests/e2e/lab/headscale-product-convert.py" "$product_files/backup-engine" \
   "$test_dir" "$source_volume" "$target_volume" "$plane_volume"
@@ -189,4 +195,8 @@ for which in target source; do
   [[ "$response" =~ HTTP/[0-9.]+[[:space:]]$expected([[:space:]]|$) ]] || { echo "API $which credential: expected HTTP $expected" >&2; exit 1; }
   echo "API $which credential: HTTP $expected PASS"
 done
+podman stop "$client_a" "$client_b" "$target_server" >/dev/null
+podman logs "$target_server" 2>&1 | python3 "$product_files/tests/e2e/lab/headscale-credential-events.py" --scan-log target_converted
+podman logs "$client_a" 2>&1 | python3 "$product_files/tests/e2e/lab/headscale-credential-events.py" --scan-log client_a
+podman logs "$client_b" 2>&1 | python3 "$product_files/tests/e2e/lab/headscale-credential-events.py" --scan-log client_b
 unset source_api_key target_api_key

@@ -16,8 +16,10 @@ if grep -Eq '^(woowbk-emqx-synthetic-|woowbk-j.*-emqx-(new|ha)$)' <<< "$active";
 fi
 echo "dev-d memory current=$current limit=$max; headroom >= 2 GiB"
 stage=$($lp exec woowbk-dev-d mktemp -d /tmp/headscale-product-engine.XXXXXXXX)
-tar -C "$repo" --exclude=__pycache__ -cf - backup-engine tests/e2e/lab/headscale-product-convert.py | \
+tar -C "$repo" --exclude=__pycache__ -cf - backup-engine tests/e2e/lab/headscale-product-convert.py \
+  tests/e2e/lab/headscale-product-runner.sh tests/e2e/lab/headscale-credential-events.py | \
   "$lp" exec -i woowbk-dev-d tar -xf - -C "$stage"
-"$lp" exec -i woowbk-dev-d bash -s -- "$stage" < "$here/headscale-product-runner.sh"
+"$lp" exec woowbk-dev-d python3 "$stage/tests/e2e/lab/headscale-credential-events.py" --controller -- \
+  bash "$stage/tests/e2e/lab/headscale-product-runner.sh" "$stage"
 state=$($lp inspect woowbk-dev-d --format '{{.State.Running}} {{.HostConfig.NetworkMode}} {{json .HostConfig.PortBindings}}')
 [[ "$state" == 'true none {}' ]] || { echo "dev-d isolation changed: $state" >&2; exit 1; }
