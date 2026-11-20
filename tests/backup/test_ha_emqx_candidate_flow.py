@@ -107,7 +107,7 @@ class CandidateFlowTests(unittest.TestCase):
                 guard=SimpleNamespace(budget=lambda: 1000000), checkpoint=lambda: None,
                 log=transport.logs.append)
             target = SimpleNamespace(container='lab-target', data_volume='fixture-data', image='fixture',
-                env={}, secrets=[], files=[('/fixture/acl.conf', '/opt/emqx/etc/acl.conf', 'ro')])
+                env={}, secrets=getattr(transport, 'secret_specs', []), files=[('/fixture/acl.conf', '/opt/emqx/etc/acl.conf', 'ro')])
             return emqx.candidate_from_target(work, 'app', transport, target, staging, export, (1000, 1000))
 
     def test_acquisition_snapshot_seed_import_restore_readback(self):

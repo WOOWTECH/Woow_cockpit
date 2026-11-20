@@ -467,7 +467,56 @@ def read_effective_config(execute):
         raise BackupError('incompatible', '無法安全取得 EMQX 有效設定，已停止。') from None
 
 
-def configuration_references(config, mounts):
+def bootstrap_references(config, mounts, secrets):
+    """Only built-in password database bootstrap files from existing explicit mounts.
+
+    Podman mounts secret payloads directly. Never export them into staging or evidence.
+    Relative paths and environment interpolation are intentionally unsupported here.
+    """
+    authn = config.get('authentication', [])
+    if not isinstance(authn, list):
+        raise BackupError('incompatible', 'EMQX 帳號驗證設定格式不受支援。')
+    paths = set()
+    for authenticator in authn:
+        if not isinstance(authenticator, dict):
+            raise BackupError('incompatible', 'EMQX 帳號驗證設定格式不受支援。')
+        path = authenticator.get('bootstrap_file', '')
+        if path == '':
+            continue
+        if (authenticator.get('mechanism') != 'password_based' or
+                authenticator.get('backend') != 'built_in_database' or
+                authenticator.get('bootstrap_type', 'plain') not in ('plain', 'hash') or
+                not isinstance(path, str) or not path.startswith('/') or
+                ha_odoo._norm(path[1:]) != path[1:] or '$' in path):
+            raise BackupError('incompatible', 'EMQX bootstrap 類型或路徑不受支援。')
+        matches = 0
+        for source, target, options in mounts:
+            if target == path:
+                if options != 'ro' or not source.startswith('/'):
+                    raise BackupError('incompatible', 'EMQX bootstrap 必須使用既有唯讀掛載。')
+                matches += 1
+        for spec in secrets:
+            parts = spec.split(',')
+            if not tempctr.SECRET_NAME_RE.fullmatch(parts[0]):
+                raise BackupError('incompatible', 'EMQX secret 宣告無效。')
+            options = {}
+            for part in parts[1:]:
+                key, sep, value = part.partition('=')
+                if not sep or key in options or not tempctr.SECRET_OPTION_RE.fullmatch(part):
+                    raise BackupError('incompatible', 'EMQX secret 宣告無效或重複。')
+                options[key] = value
+            if options.get('target') != path:
+                continue
+            if options.get('type', 'mount') != 'mount' or options.get('mode') not in ('0400', '0440', '400', '440'):
+                raise BackupError('incompatible', 'EMQX bootstrap secret 必須是限權檔案掛載。')
+            matches += 1
+        if matches != 1:
+            raise BackupError('incompatible', 'EMQX bootstrap 未對應唯一的既有掛載。')
+        paths.add(path)
+    return paths
+
+
+def configuration_references(config, mounts, secrets=()):
     """Resolve file ACL and explicit TLS file fields in supported configuration roots.
 
     Unknown roots are rejected until their schema/file dependencies have been reviewed.
@@ -478,6 +527,7 @@ def configuration_references(config, mounts):
                'sys_topics', 'broker', 'retainer'}
     if set(config) - allowed:
         raise BackupError('incompatible', 'EMQX 含有尚未完成檔案參照審查的設定類型。')
+    bootstrap_references(config, mounts, secrets)
     required = authorization_file_references(config['authorization'], mounts)
     def visit(value, depth=0):
         if depth > 32:
@@ -487,7 +537,10 @@ def configuration_references(config, mounts):
                 if key in ('certfile', 'keyfile', 'cacertfile', 'dhfile') and item:
                     required.update(authorization_file_references(
                         {'sources': [{'type': 'file', 'path': item}]}, mounts))
-                elif key in ('filename', 'file', 'bootstrap_file', 'path'):
+                elif key == 'bootstrap_file':
+                    if not any(value is entry for entry in config.get('authentication', [])):
+                        raise BackupError('incompatible', 'EMQX bootstrap 出現在不支援的設定位置。')
+                elif key in ('filename', 'file', 'path'):
                     # ACL paths are already resolved, but resolving again keeps this walk uniform.
                     if key != 'path' or value.get('type') != 'file':
                         raise BackupError('incompatible', 'EMQX 含有尚未支援的檔案參照。')
@@ -508,7 +561,7 @@ def candidate_from_target(work, app, tmp, target, staging, export, ids, *, hint=
         return work.runner(app).podman('exec', target.container, *command, timeout=120,
                                       max_output=MAX_HOCON, check=False)
     original = read_effective_config(execute)
-    required = configuration_references(original, target.files)
+    required = configuration_references(original, target.files, target.secrets)
     snapshot = snapshot_target_volume(work, app, target.data_volume, staging, required)
     # Reject a moving configuration rather than mixing two generations of files/settings.
     if read_effective_config(execute) != original:
@@ -563,6 +616,14 @@ def restore_target_settings(tmp, original, read_candidate):
         raise BackupError('incompatible', 'EMQX 匯入後未能保留目標有效設定，已停止。')
 
 
+def check_candidate_bootstrap(tmp, target, config):
+    for path in sorted(bootstrap_references(config, target.files, target.secrets)):
+        checked = tmp.exec('emqx-new', ['test', '-f', path, '-a', '-r', path],
+                           timeout=30, max_output=1024, check=False)
+        if checked.returncode:
+            raise BackupError('incompatible', 'EMQX 候選無法讀取 bootstrap 掛載，已停止。')
+
+
 def target_broker(work, tmp, target, export, ids, *, hint='', target_snapshot=None, target_config=None):
     """This device's broker on an empty volume: import HA's export, load the strict settings back, verify."""
     name = os.path.basename(export)
@@ -580,6 +641,8 @@ def target_broker(work, tmp, target, export, ids, *, hint='', target_snapshot=No
                                                max_output=MAX_HOCON, check=False)
     if target_config is not None and read_effective_config(read_candidate) != target_config:
         raise BackupError('incompatible', 'EMQX 候選啟動後設定與目標不一致，已停止。')
+    if target_config is not None:
+        check_candidate_bootstrap(tmp, target, target_config)
     seeded = parse_counts(evaluate(tmp, 'emqx-new', COUNT_EXPR))
     strict = parse_strict(evaluate(tmp, 'emqx-new', STRICT_EXPR))
     authn = parse_authn(evaluate(tmp, 'emqx-new', AUTHN_EXPR))
@@ -591,6 +654,7 @@ def target_broker(work, tmp, target, export, ids, *, hint='', target_snapshot=No
         raise BackupError('incompatible', 'HA 的 EMQX 資料匯入時發生錯誤（部分資料無法匯入），已停止。' + hint)
     if target_config is not None:
         restore_target_settings(tmp, target_config, read_candidate)
+        check_candidate_bootstrap(tmp, target, read_effective_config(read_candidate))
     else:
         # Legacy internal test path only; public convert remains blocked.
         snippet = f'authorization {{\n  no_match = {strict[0]}\n  deny_action = {strict[1]}\n  sources = []\n}}\n'.encode()
