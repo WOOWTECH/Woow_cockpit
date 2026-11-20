@@ -184,7 +184,13 @@ class Secrets:
         if isinstance(value, str):
             return self.redact(value)
         if isinstance(value, dict):
-            return {self.redact(str(k)): self.redact_structure(v) for k, v in value.items()}
+            result = {}
+            for key, item in value.items():
+                masked = self.redact(str(key))
+                if masked in result:
+                    raise Failed('evidence key collision after redaction')
+                result[masked] = self.redact_structure(item)
+            return result
         if isinstance(value, (list, tuple)):
             return [self.redact_structure(v) for v in value]
         return value

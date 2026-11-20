@@ -45,6 +45,14 @@ class Boundaries(unittest.TestCase):
             self.assertNotIn(self.special, (ev.dir / 'run.log').read_text())
             self.assertEqual(os.stat(ev.dir / 'case.json').st_mode & 0o777, 0o600)
 
+    def test_redacted_key_collision_stops_before_evidence_write(self):
+        with patch.object(b1, 'LAB', self.root), contextlib.redirect_stdout(io.StringIO()) as printed:
+            ev = b1.Evidence(self.secrets, 'collision')
+            with self.assertRaisesRegex(b1.Failed, 'key collision'):
+                ev.save('case.json', {self.special: 'first', '<SPECIAL>': 'second'})
+            self.assertFalse((ev.dir / 'case.json').exists())
+            self.assertNotIn(self.special, printed.getvalue())
+
     def test_device_scan_missing_root_and_walk_error_fail(self):
         code = b1.LEAK_SCAN
         start = code.index('roots = ['); end = code.index('\nfor root in roots:', start)
