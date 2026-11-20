@@ -118,3 +118,26 @@ output, abort, and stderr sanitization. The PG17 synthetic SQL test was subseque
 commit `7e63c6c`: 9/9 passed, with independent container and volume cleanup checks.
 See `tests/e2e/lab/evidence/litellm-candidate/pg17-bounded-runner.json`; this is not
 PG18, HA-backup, or migration acceptance.
+
+## Prepared PG18 lab experiments (not run)
+
+The salt SQL test now requires `--expected-pg-major 17` or `18` and checks the
+running server major before creating fixture tables. Its separate PG18 run is not
+part of the earlier PG17 9/9 evidence. The PostgreSQL 18 image digest reported by
+the coordinating agent is an external observation, not independently verified by
+this worktree; the lab requires the full image ID after its offline load.
+
+`tests/e2e/lab/litellm_pg18_pg17_candidate.py` prepares an independent, entirely
+synthetic experiment. It starts two isolated temporary clusters at 128 MiB each,
+checks the actual PG18 and PG17 majors, creates a fixed source sample and a separate
+fixed target schema, and uses PG18's `pg_dump --data-only --inserts --column-inserts`
+for one synthetic table. An unprivileged target role loads the dump; the script
+compares the fixture rows and target column schema. It uses no HA backup or real
+credentials. The small dump shape check is only an experiment assertion, **not** an
+untrusted SQL sanitizer, and this script is not connected to the import engine.
+
+The experiments have not been run. They need an approved shared-lab time slot, enough
+memory headroom for both clusters, an offline-loaded PG18 image, and independent
+cleanup verification. Even a pass would establish only the fixed fixture's behavior,
+not general PG18-to-PG17 compatibility, LiteLLM Prisma schemas, arbitrary DDL safety,
+sequences, encrypted credential transfer, or rollback. Conversion remains disabled.

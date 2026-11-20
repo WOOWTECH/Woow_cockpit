@@ -1,4 +1,4 @@
-"""Opt-in dev-d PG17 synthetic SQL contract test; never uses host production.
+"""Opt-in dev-d PG17/PG18 synthetic SQL contract test; never uses host production.
 
 Run only after coordination with other dev-d users. The image must already be in dev-d.
 No network, production mounts, credentials or services are used.
@@ -16,6 +16,7 @@ from litellm_version_candidate import DevDRunner
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--db-image-id', required=True)
+    parser.add_argument('--expected-pg-major', required=True, type=int, choices=(17, 18))
     args = parser.parse_args()
     if not candidate._IMAGE_ID.fullmatch(args.db_image_id):
         raise SystemExit('A full already-loaded image ID is required')
@@ -32,9 +33,13 @@ def main():
                 ['postgres', '-c', 'shared_buffers=16MB', '-c', 'max_connections=20'],
                 detach=True, read_only_root=True,
                 volumes=[(tmp.name('litellm-sql-data'), '/var/lib/postgresql/data', 'rw,noexec,nosuid,nodev')],
-                env={'POSTGRES_HOST_AUTH_METHOD': 'trust', 'POSTGRES_DB': 'litellm'})
+                env={'POSTGRES_HOST_AUTH_METHOD': 'trust', 'POSTGRES_DB': 'litellm',
+                     'PGDATA': '/var/lib/postgresql/data/pgdata'})
         cluster = ha_odoo.Cluster(tmp, 'litellm-sql-pg')
         cluster.wait_ready(tcp=True, timeout=120)
+        major = cluster.query_json("SELECT to_json(current_setting('server_version_num')::int / 10000)", 'litellm')
+        if type(major) is not int or major != args.expected_pg_major:
+            raise RuntimeError('The PostgreSQL major differs from the requested test')
         cluster.script("CREATE ROLE woowbk_litellm_reader LOGIN;\n"
                        "CREATE SCHEMA woow; CREATE SCHEMA woow_platform;\n"
                        "CREATE TABLE woow.meta (key text, value text);\n"
@@ -71,7 +76,7 @@ def main():
                        "'" + fingerprint + "'::text AS value;\n"
                        "GRANT SELECT ON woow.meta TO woowbk_litellm_reader;", 'litellm')
         probe('view_refused', 'unknown')
-    output = {'scope': 'synthetic PG17 SQL query contract only', 'cases': results,
+    output = {'scope': f'synthetic PG{major} SQL query contract only', 'postgres_major': major, 'cases': results,
               'cleanup_notes': len(cleanup_notes), 'conversion': 'disabled'}
     print(json.dumps(output, sort_keys=True))
     return 0 if results and all(results.values()) and not cleanup_notes else 1
