@@ -57,10 +57,18 @@ def run_events(argv, request, register, expected_auth, timeout=600):
                     raise Incomplete('credential event stream incomplete')
                 data = data[count:]
 
+    def unique_object(pairs):
+        result = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError('duplicate event field')
+            result[key] = value
+        return result
+
     def consume(line, acknowledge):
         nonlocal sequence, auth_count, summary, ended
         try:
-            event = json.loads(line)
+            event = json.loads(line, object_pairs_hook=unique_object)
             if not isinstance(event, dict):
                 raise ValueError()
             # Preserve complete credentials even if the frame sequence is bad.

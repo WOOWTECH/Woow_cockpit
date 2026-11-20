@@ -77,6 +77,27 @@ class EventTests(unittest.TestCase):
                     self.secrets.register_observed, [('/auth/login', ('token',), True)], 2)
         self.assertIn('synthetic-bad-seq', self.secrets.secret_values())
 
+    def test_duplicate_event_fields_cannot_hide_issued_credentials(self):
+        script = """import json, sys
+frame = '{"type":"auth","sequence":0,"source":"/auth/login","status":200,"credentials":{"token":"synthetic-hidden-secret","token":"synthetic-last-secret"}}'
+print(frame, flush=True)
+sys.stdin.readline()
+sys.stdin.readline()
+print(json.dumps({"type":"summary","sequence":1,"data":{"ok":True}}), flush=True)
+sys.stdin.readline()
+print(json.dumps({"type":"end","sequence":2}), flush=True)
+sys.stdin.readline()
+"""
+        with self.assertRaises(b1._transport.Incomplete):
+            b1._transport.run_events([sys.executable, '-I', '-c', script], {},
+                self.secrets.register_observed, [('/auth/login', ('token',), True)], 3)
+        # Isolated mutation: old permissive decoding accepts this exact stream.
+        original_loads = json.loads
+        with patch.object(b1._transport.json, 'loads', side_effect=lambda value, **_kw: original_loads(value)):
+            accepted = b1._transport.run_events([sys.executable, '-I', '-c', script], {},
+                self.secrets.register_observed, [('/auth/login', ('token',), True)], 3)
+        self.assertEqual(accepted, {'ok': True})
+
     def test_wrong_source_is_rejected_after_registration(self):
         script = ('import json; print(json.dumps({"type":"auth","sequence":0,"source":"/wrong",'
                   '"status":200,"credentials":{"token":"synthetic-wrong-source"}}),flush=True)')
