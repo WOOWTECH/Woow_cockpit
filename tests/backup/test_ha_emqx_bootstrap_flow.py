@@ -76,7 +76,7 @@ class BootstrapFlowTests(unittest.TestCase):
         with self.assertRaises(BackupError):
             emqx.bootstrap_references(config, mounts, [SPEC])
 
-    def test_ha_import_cannot_leave_unresolved_bootstrap_for_restart(self):
+    def test_ha_import_restores_target_bootstrap_before_restart(self):
         class ChangedBootstrap(BootstrapTransport):
             def exec(self, role, command, **kwargs):
                 result = super().exec(role, command, **kwargs)
@@ -84,7 +84,58 @@ class BootstrapFlowTests(unittest.TestCase):
                     self.running_config['authentication'][0]['bootstrap_file'] = '/data/ha-only.csv'
                 return result
         transport = ChangedBootstrap()
-        with self.assertRaises(BackupError):
-            self.invoke(transport)
+        self.invoke(transport)
+        self.assertEqual(transport.running_config['authentication'][0]['bootstrap_file'], PATH)
         self.assertIn('import', transport.events)
         self.assertIn('restore', transport.events)
+
+    def test_plain_bootstrap_keeps_source_password_algorithm(self):
+        class Changed(BootstrapTransport):
+            def exec(self, role, command, **kwargs):
+                result = super().exec(role, command, **kwargs)
+                if command[:4] == ['emqx', 'ctl', 'data', 'import']:
+                    row = self.running_config['authentication'][0]
+                    row['bootstrap_file'] = '${EMQX_ETC_DIR}/auth-built-in-db-bootstrap.csv'
+                    row['password_hash_algorithm'] = {'name': 'bcrypt'}
+                return result
+        transport = Changed()
+        self.invoke(transport)
+        row = transport.running_config['authentication'][0]
+        self.assertEqual(row['bootstrap_file'], PATH)
+        self.assertEqual(row['password_hash_algorithm'], {'name': 'bcrypt'})
+
+    def test_hash_bootstrap_algorithm_conflict_blocks_restore(self):
+        class Changed(BootstrapTransport):
+            def exec(self, role, command, **kwargs):
+                result = super().exec(role, command, **kwargs)
+                if command[:4] == ['emqx', 'ctl', 'data', 'import']:
+                    self.running_config['authentication'][0]['password_hash_algorithm'] = {'name': 'bcrypt'}
+                return result
+        transport = Changed()
+        transport.config['authentication'][0].update(bootstrap_type='hash', password_hash_algorithm={'name': 'sha256'})
+        transport.running_config = copy.deepcopy(transport.config)
+        with self.assertRaises(BackupError):
+            self.invoke(transport)
+        self.assertNotIn('restore', transport.events)
+
+    def test_bootstrap_readback_mismatch_is_rejected(self):
+        class Changed(BootstrapTransport):
+            def exec(self, role, command, **kwargs):
+                result = super().exec(role, command, **kwargs)
+                if command[:4] in (['emqx', 'ctl', 'data', 'import'], ['emqx', 'ctl', 'conf', 'load']):
+                    self.running_config['authentication'][0]['bootstrap_file'] = '/unresolved/bootstrap.csv'
+                return result
+        with self.assertRaises(BackupError):
+            self.invoke(Changed())
+
+    def test_changed_authenticator_identity_is_rejected(self):
+        class Changed(BootstrapTransport):
+            def exec(self, role, command, **kwargs):
+                result = super().exec(role, command, **kwargs)
+                if command[:4] == ['emqx', 'ctl', 'data', 'import']:
+                    self.running_config['authentication'][0]['user_id_type'] = 'clientid'
+                return result
+        transport = Changed()
+        with self.assertRaises(BackupError):
+            self.invoke(transport)
+        self.assertNotIn('restore', transport.events)

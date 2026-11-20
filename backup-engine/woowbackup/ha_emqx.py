@@ -693,6 +693,33 @@ def preserved_settings(config):
             if key not in DATA_ROOTS or key == 'authorization'}
 
 
+def preserved_bootstrap_authn(original, imported):
+    """Retain only target bootstrap metadata; HA authenticator/hash and users remain authoritative."""
+    targets = [row for row in original.get('authentication', []) if row.get('bootstrap_file')]
+    if not targets:
+        return None
+    rows = imported.get('authentication')
+    if not isinstance(rows, list) or any(not isinstance(row, dict) for row in rows):
+        raise BackupError('incompatible', 'EMQX 匯入後的認證器格式無法保留 bootstrap。')
+    rows = [dict(row) for row in rows]
+    def identity(row):
+        return row.get('mechanism'), row.get('backend'), row.get('user_id_type', 'username')
+    seen = set()
+    for target in targets:
+        key = identity(target)
+        matches = [row for row in rows if identity(row) == key]
+        if key in seen or len(matches) != 1 or matches[0].get('enable', True) is not True:
+            raise BackupError('incompatible', 'EMQX 來源認證器無法唯一對應目標 bootstrap。')
+        seen.add(key)
+        row = matches[0]
+        if (target.get('bootstrap_type', 'plain') == 'hash' and
+                row.get('password_hash_algorithm') != target.get('password_hash_algorithm')):
+            raise BackupError('incompatible', 'EMQX 來源雜湊設定與目標 bootstrap hash 不相容。')
+        row['bootstrap_file'] = target['bootstrap_file']
+        row['bootstrap_type'] = target.get('bootstrap_type', 'plain')
+    return rows
+
+
 def restore_target_settings(tmp, original, read_candidate):
     """Replace changed target setting roots, not merge stale/imported fields into them.
 
@@ -705,6 +732,9 @@ def restore_target_settings(tmp, original, read_candidate):
     if set(actual) - set(expected):
         raise BackupError('incompatible', 'EMQX 匯入新增了無法安全移除的目標設定，已停止。')
     changed = {key: value for key, value in expected.items() if key not in actual or actual[key] != value}
+    authn = preserved_bootstrap_authn(original, before)
+    if authn is not None and authn != before.get('authentication'):
+        changed['authentication'] = authn
     if set(changed) & ha_emqx_settings.IMMUTABLE_ROOTS:
         raise BackupError('incompatible', 'EMQX 唯讀啟動設定在匯入後改變，已停止。')
     if changed:
@@ -720,7 +750,8 @@ def restore_target_settings(tmp, original, read_candidate):
                 raise ValueError()
         except (BackupError, ValueError):
             raise BackupError('incompatible', '無法恢復 EMQX 目標設定，已停止。') from None
-    if preserved_settings(read_effective_config(read_candidate)) != expected:
+    after = read_effective_config(read_candidate)
+    if preserved_settings(after) != expected or (authn is not None and after.get('authentication') != authn):
         raise BackupError('incompatible', 'EMQX 匯入後未能保留目標有效設定，已停止。')
 
 
