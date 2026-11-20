@@ -71,3 +71,21 @@ class PackageTests(unittest.TestCase):
             self.run_package(uid=999999)
         self.assertIn('export', self.events)
         self.assertFalse(any(e.startswith('clean:') for e in self.events))
+
+
+class CountReadTests(unittest.TestCase):
+    def test_unstable_retainer_observation_refused(self):
+        with self.assertRaises(BackupError):
+            ha_emqx.parse_counts('{emqx_retainer_message,-2}')
+
+    def test_absent_optional_table_not_confused_with_unstable(self):
+        self.assertEqual(ha_emqx.parse_counts('{emqx_psk,-1}'), {'emqx_psk': -1})
+
+    def test_ticker_pause_refuses_non_job_role(self):
+        with self.assertRaises(BackupError):
+            ha_emqx.quiesce_system_ticker(None, 'production')
+
+    def test_ticker_pause_missing_ack_refused(self):
+        tmp = SimpleNamespace(exec=lambda *args, **kwargs: SimpleNamespace(stdout=b'ok'))
+        with self.assertRaises(BackupError):
+            ha_emqx.quiesce_system_ticker(tmp, 'emqx-new')

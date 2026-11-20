@@ -111,16 +111,6 @@ def candidate_backup_probe(root, original, base, acl, password):
                 stdin=incoming if streaming else None, input=None if streaming else incoming,
                 stdout=output if output is not None else subprocess.PIPE,
                 stderr=subprocess.PIPE, timeout=kwargs.get('timeout', 120))
-            if len(args) >= 5 and args[0] == 'exec' and args[-1] == ha_emqx.COUNT_EXPR:
-                probe = subprocess.run(['podman', 'exec', args[1], 'emqx', 'eval',
-                    '{mnesia:table_info(emqx_retainer_message,size), '
-                    'length([K || K <- mnesia:dirty_all_keys(emqx_retainer_message), '
-                    'is_list(K), hd(K) =:= <<"$SYS">>])}.'],
-                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=120)
-                match = re.fullmatch(rb'\s*\{(\d+),(\d+)\}\s*', probe.stdout)
-                if match:
-                    print(json.dumps({'stage': 'retainer_count_diagnostic',
-                        'total': int(match[1]), 'system_topic_count': int(match[2])}), flush=True)
             if kwargs.get('max_output') is not None and len(result.stdout or b'') > kwargs['max_output']:
                 raise RuntimeError('lab_output_budget_exceeded')
             if result.returncode and kwargs.get('check', True):
@@ -242,6 +232,7 @@ def candidate_backup_probe(root, original, base, acl, password):
     Runner().podman('exec', '-i', CONTAINER, 'sh', '-c',
                    'umask 077; cat > /tmp/lab-target.json', input=json.dumps(restore).encode())
     ctl('conf', 'load', '--replace', '/tmp/lab-target.json')
+    target_baseline = config()
     tmp = tempctr.TempObjects(Runner(), 'j20261120T090608Z-' + secrets.token_hex(4),
                               memory='768m', pids=512, cpus='1')
     try:
@@ -319,7 +310,7 @@ def candidate_backup_probe(root, original, base, acl, password):
             tmp.stop('installed', timeout=120)
             CONTAINER = old_container
             ready()
-            assert config() == original
+            assert config() == target_baseline
             recovered_publish = mqtt(password, 'lab/recovered')
             assert recovered_publish.returncode == 0 and re.search(rb'RC:(?:0|16)\b', recovered_publish.stdout)
             denied_subscription(password)
@@ -420,6 +411,39 @@ retainer.backend.storage_type = disc
         assert original['authentication'][0]['bootstrap_file'] == '/opt/emqx/etc/lab-bootstrap.csv'
         command(['exec', CONTAINER, 'test', '-r', '/opt/emqx/etc/lab-bootstrap.csv'])
         record('effective_config_and_bootstrap_mount')
+        if len(sys.argv) > 2 and sys.argv[2] == '--retainer-regression':
+            from woowbackup import ha_emqx
+            class TemporaryBroker:
+                def exec(self, role, argv, **kwargs):
+                    assert role == 'emqx-new'
+                    return command(['exec', CONTAINER, *argv])
+            ticker_pid = ha_emqx.quiesce_system_ticker(TemporaryBroker(), 'emqx-new')
+            ha_emqx.assert_system_ticker(TemporaryBroker(), 'emqx-new', ticker_pid)
+            assert mqtt(password, 'lab/ticker-regression').returncode == 0
+            def counts():
+                return ha_emqx.parse_counts(command(['exec', CONTAINER, 'emqx', 'eval', ha_emqx.COUNT_EXPR]).stdout.decode())
+            before = counts()
+            command(['exec', CONTAINER, 'emqx', 'eval',
+                     'S = sys:get_state(emqx_sys), whereis(emqx_sys) ! {timeout, element(3,S), tick}, ok.'])
+            paused = counts()
+            ha_emqx.assert_system_ticker(TemporaryBroker(), 'emqx-new', ticker_pid)
+            assert before == paused
+            command(['exec', CONTAINER, 'emqx', 'eval', 'sys:resume(emqx_sys).'])
+            deadline = time.monotonic() + 20
+            while time.monotonic() < deadline:
+                resumed = counts()
+                if resumed['emqx_retainer_message'] >= 4:
+                    break
+                time.sleep(1)
+            assert resumed['emqx_retainer_message'] >= 4
+            assert before['emqx_retainer_message'] == paused['emqx_retainer_message'] == 1
+            receive_retained(password, 'lab/ticker-regression')
+            print(json.dumps({'stage': 'system_ticker_pause_resume',
+                              'before': before['emqx_retainer_message'],
+                              'paused': paused['emqx_retainer_message'],
+                              'resumed': resumed['emqx_retainer_message']}), flush=True)
+            record('temporary_system_ticker_quiescence_and_resume')
+            raise ProductChainDone()
         if len(sys.argv) > 2 and sys.argv[2] in ('--product-chain', '--preflight-only'):
             phase = 'product_candidate_backup_probe'
             candidate_backup_probe(root, original, base, acl, password)

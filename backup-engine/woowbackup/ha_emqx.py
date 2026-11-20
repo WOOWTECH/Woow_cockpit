@@ -72,6 +72,11 @@ DEFAULT_ADMIN_EXPR = ('case emqx_dashboard_admin:check(<<"admin">>, <<"public">>
                       '_ -> changed end.')
 COUNT_EXPR = ('[{T, case catch mnesia:table_info(T, size) of N when is_integer(N) -> N; _ -> -1 end} || T <- ['
               + ', '.join(TABLES) + ']].')
+SUSPEND_SYS_EXPR = ('P = whereis(emqx_sys), ok = sys:suspend(P, 5000), '
+                    '{status, P, _, [_, suspended | _]} = sys:get_status(P, 5000), '
+                    'P = whereis(emqx_sys), io:format("WOOWSYS:~s:suspended~n", [pid_to_list(P)]).')
+TICKER_STATUS_EXPR = ('P = whereis(emqx_sys), true = (pid_to_list(P) =:= "{pid}"), '
+                     '{status, P, _, [_, suspended | _]} = sys:get_status(P, 5000), ticker_unchanged.')
 ROOTS_EXPR = 'emqx_config:get_root_names().'
 AUTHN_EXPR = ('[{maps:get(mechanism, A, none), maps:get(backend, A, none), maps:get(enable, A, true), '
               'maps:get(name, maps:get(password_hash_algorithm, A, #{}), none), '
@@ -213,6 +218,29 @@ def evaluate(tmp, role, expression):
     return out.decode('utf-8', 'replace')
 
 
+def quiesce_system_ticker(tmp, role):
+    """Freeze status publication only in isolated job brokers during row validation.
+
+    EMQX's ticker adds three retained $SYS records asynchronously. Suspending this
+    process keeps all rows counted and imported without rewriting settings or
+    ignoring any topic. Stopping/restarting the temporary broker ends the pause.
+    """
+    if role not in ('emqx-ha', 'emqx-new'):
+        raise BackupError('internal-error', '只能暫停隔離匯入容器的系統訊息。')
+    value = evaluate(tmp, role, SUSPEND_SYS_EXPR)
+    match = re.fullmatch(r'WOOWSYS:(<[0-9]+\.[0-9]+\.[0-9]+>):suspended\s*(?:ok\s*)?', value)
+    if not match:
+        raise BackupError('job-failed', '無法暫停暫用 EMQX 的系統訊息，已停止。')
+    return match.group(1)
+
+
+def assert_system_ticker(tmp, role, pid):
+    if role not in ('emqx-ha', 'emqx-new') or not re.fullmatch(r'<[0-9]+\.[0-9]+\.[0-9]+>', pid):
+        raise BackupError('internal-error', '暫用 EMQX 的系統程序識別不正確。')
+    if evaluate(tmp, role, TICKER_STATUS_EXPR.replace('{pid}', pid)).strip() != 'ticker_unchanged':
+        raise BackupError('job-failed', '暫用 EMQX 的系統程序已改變，已停止。')
+
+
 def wait_ready(tmp, role, *, checkpoint, hint='', sleep=time.sleep, clock=time.monotonic, timeout=READY_TIMEOUT):
     deadline = clock() + timeout
     while True:
@@ -234,8 +262,11 @@ def hint_for(addon):
 
 
 def parse_counts(text):
-    return {name: int(value) for name, value in re.findall(r'\{\s*([a-z_]+)\s*,\s*(-?[0-9]{1,12})\s*\}', text)
-            if name in TABLES}
+    counts = {name: int(value) for name, value in re.findall(r'\{\s*([a-z_]+)\s*,\s*(-?[0-9]{1,12})\s*\}', text)
+              if name in TABLES}
+    if any(value < -1 for value in counts.values()):
+        raise BackupError('job-failed', 'EMQX 資料筆數無法穩定讀取，已停止。')
+    return counts
 
 
 def parse_authn(text):
@@ -276,6 +307,7 @@ def ha_broker(work, tmp, target, src, node, *, out_dir=None):
             raise
         raise BackupError('incompatible', f'無法以 HA 的 EMQX 節點名稱 {node} 啟動暫用的 EMQX。') from None
     wait_ready(tmp, 'emqx-ha', checkpoint=work.checkpoint, hint=hint)
+    ticker_pid = quiesce_system_ticker(tmp, 'emqx-ha')
     readings = {'default_admin': 'default' in evaluate(tmp, 'emqx-ha', DEFAULT_ADMIN_EXPR).split(),
                 'counts': parse_counts(evaluate(tmp, 'emqx-ha', COUNT_EXPR)),
                 'roots': set(re.findall(r'<<"([a-z_]+)">>', evaluate(tmp, 'emqx-ha', ROOTS_EXPR))),
@@ -286,6 +318,7 @@ def ha_broker(work, tmp, target, src, node, *, out_dir=None):
     missing = [t for t in REQUIRED_TABLES if readings['counts'].get(t, -1) < 0]
     if missing:
         raise BackupError('incompatible', f'HA 的 EMQX 內建資料庫沒有完整載入（缺少 {hacommon.names(missing)}）。' + hint)
+    assert_system_ticker(tmp, 'emqx-ha', ticker_pid)
     if out_dir is not None:
         roots = [root for root in DATA_ROOTS if root in readings['roots']]
         out = ctl(tmp, 'emqx-ha', ['data', 'export', '--root-keys', ','.join(roots), '--table-sets',
@@ -294,6 +327,7 @@ def ha_broker(work, tmp, target, src, node, *, out_dir=None):
         if not match:
             raise BackupError('incompatible', 'EMQX 無法匯出 HA 的資料。' + hint)
         readings['export'] = match.group(1).decode('ascii')
+    assert_system_ticker(tmp, 'emqx-ha', ticker_pid)
     return readings
 
 
@@ -783,6 +817,7 @@ def target_broker(work, tmp, target, export, ids, *, hint='', target_snapshot=No
             volumes=[(tmp.name('emqx-new'), DATA_TARGET, None), (tmp.name('emqx-new-log'), LOG_TARGET, None),
                      (tmp.name('emqx-in'), WORK, None)] + target.files)
     wait_ready(tmp, 'emqx-new', checkpoint=work.checkpoint)
+    ticker_pid = quiesce_system_ticker(tmp, 'emqx-new')
     read_candidate = lambda command: tmp.exec('emqx-new', command, timeout=120,
                                                max_output=MAX_HOCON, check=False)
     if image_fingerprints is not None and tls_fingerprints(read_candidate, image_fingerprints) != image_fingerprints:
@@ -796,6 +831,7 @@ def target_broker(work, tmp, target, export, ids, *, hint='', target_snapshot=No
     authn = parse_authn(evaluate(tmp, 'emqx-new', AUTHN_EXPR))
     if strict is None or len(seeded) != len(TABLES) or not authn:
         raise BackupError('job-failed', '無法讀取這台 EMQX 的設定。')
+    assert_system_ticker(tmp, 'emqx-new', ticker_pid)
     work.log('把 HA 的 EMQX 資料匯入暫用的 EMQX（這台的映像與設定）')
     out = ctl(tmp, 'emqx-new', ['data', 'import', f'{WORK}/in/{name}'], timeout=1800).stdout or b''
     if b'imported successfully' not in out:
@@ -821,6 +857,7 @@ def target_broker(work, tmp, target, export, ids, *, hint='', target_snapshot=No
     if any(a['enable'] for a in authn) and not enabled:
         raise BackupError('incompatible', 'HA 的 EMQX 設定會停用這台的帳號驗證（允許匿名登入），已停止；請先在 HA 啟用帳號驗證再備份。')
     counts = parse_counts(evaluate(tmp, 'emqx-new', COUNT_EXPR))
+    assert_system_ticker(tmp, 'emqx-new', ticker_pid)
     return seeded, counts, strict, authn
 
 

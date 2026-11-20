@@ -123,6 +123,10 @@ class World(fk.World):
         return Result(0, b'', b'')
 
     def evaluate(self, role, expression):
+        if expression == ha_emqx.SUSPEND_SYS_EXPR:
+            return b'WOOWSYS:<0.1.0>:suspended\nok\n'
+        if expression == ha_emqx.TICKER_STATUS_EXPR.replace('{pid}', '<0.1.0>'):
+            return b'ticker_unchanged\n'
         if expression == ha_emqx.DEFAULT_ADMIN_EXPR:
             return b'default\n' if self.default_admin else b'changed\n'
         if expression == ha_emqx.ROOTS_EXPR:

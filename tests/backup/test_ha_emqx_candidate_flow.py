@@ -75,7 +75,8 @@ class Transport:
             return response(self.running_config)
         if command[:2] == ['emqx', 'eval']:
             expression = command[2]
-            value = {emqx.COUNT_EXPR: '[' + ','.join('{%s,0}' % t for t in emqx.TABLES) + ']',
+            value = {emqx.SUSPEND_SYS_EXPR: 'WOOWSYS:<0.1.0>:suspended\nok',
+                     emqx.TICKER_STATUS_EXPR.replace('{pid}', '<0.1.0>'): 'ticker_unchanged', emqx.COUNT_EXPR: '[' + ','.join('{%s,0}' % t for t in emqx.TABLES) + ']',
                      emqx.STRICT_EXPR: '{deny,ignore}',
                      emqx.AUTHN_EXPR: '[{password_based,built_in_database,true,sha256,suffix}]'}[expression]
             return Result(0, value.encode(), b'')

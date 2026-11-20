@@ -14,7 +14,7 @@ class TargetAuthenticationGuardTests(unittest.TestCase):
         counts = counts_text({name: 0 for name in ha_emqx.TABLES}).decode()
         self.assertEqual(len(ha_emqx.parse_counts(counts)), len(ha_emqx.TABLES))
         self.assertEqual(ha_emqx.parse_strict("{deny,ignore}"), ("deny", "ignore"))
-        values = [counts, "{deny,ignore}", initial, "{deny,ignore}", after, counts]
+        values = ["WOOWSYS:<0.1.0>:suspended\nok", counts, "{deny,ignore}", initial, "ticker_unchanged", "{deny,ignore}", after, counts, "ticker_unchanged"]
         ctl = mock.Mock(return_value=Result(0, b"data imported successfully", b""))
         with mock.patch.object(ha_emqx, "wait_ready"), mock.patch.object(ha_emqx, "evaluate", side_effect=values), mock.patch.object(ha_emqx, "ctl", ctl):
             try:
