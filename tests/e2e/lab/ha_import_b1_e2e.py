@@ -157,13 +157,22 @@ class Secrets:
                     name += '_'
                 self.register(name, value)
 
+    def register_observed(self, value):
+        """Keep even malformed short issued strings for redaction and scanning."""
+        if not isinstance(value, str) or not value or value in self.secret_values():
+            return
+        name = f'ISSUED_TOKEN_{len(self.values)}'
+        while name in self.values:
+            name += '_'
+        self.values[name] = value
+
     def secret_values(self):
-        return [v for k, v in self.values.items() if k not in self.names and len(v) >= 6]
+        return [v for k, v in self.values.items() if k not in self.names and isinstance(v, str) and v]
 
     def redact(self, value):
         text = value if isinstance(value, str) else json.dumps(self.redact_structure(value), ensure_ascii=False)
         for name, secret in sorted(self.values.items(), key=lambda kv: -len(kv[1])):
-            if secret and name not in self.names and len(secret) >= 6:
+            if secret and name not in self.names:
                 text = text.replace(secret, f'<{name}>')
         text = re.sub(r'hskey-(auth|api)-[A-Za-z0-9_-]{20,}', r'hskey-\1-<redacted>', text)
         text = re.sub(r'(privkey|nodekey|machinekey|discokey):[0-9a-f]{64}',
@@ -311,7 +320,7 @@ def event_device_python(script, request, secrets, expected_auth, *, timeout=600)
     request = dict(request, __events=True)
     argv = [LP, 'exec', '-i', DEVICE, OWNER, 'python3', '-I', '-c', script]
     try:
-        return _transport.run_events(argv, request, lambda value: secrets.register_issued([value]), expected_auth, timeout)
+        return _transport.run_events(argv, request, secrets.register_observed, expected_auth, timeout)
     except (_transport.Incomplete, OSError):
         CREDENTIAL_COVERAGE_BROKEN = True
         raise Failed('credential event coverage incomplete; further restore blocked') from None
@@ -424,12 +433,12 @@ def call(base, method, path, body=None, token=None, headers=None, raw=False, wai
         except ValueError:
             parsed = None
         if EVENTS and method == "POST" and path in ("/auth/login", "/api/v5/login"):
-            fields = [parsed[k] for k in ("token", "access_token", "refresh_token")
-                      if isinstance(parsed, dict) and k in parsed and parsed[k] is not None]
+            fields = {k: parsed[k] for k in ("token", "access_token", "refresh_token")
+                      if isinstance(parsed, dict) and k in parsed}
             token = parsed.get("token") if isinstance(parsed, dict) else None
             # Emit all observed fields before checking completeness, including an
             # unexpected successful negative login or malformed sibling field.
-            emit("auth", status=code, credentials=fields)
+            emit("auth", source=path, status=code, credentials=fields)
             if 200 <= code < 300 and (not isinstance(token, str) or len(token) < 6):
                 raise SystemExit("authentication response missing token")
         return code, parsed
@@ -1127,7 +1136,7 @@ def app_health(ev, app, label):
 
 
 def omnigent_probe(secrets, request):
-    return event_device_python(OMNI_PROBE, request, secrets, 5)
+    return event_device_python(OMNI_PROBE, request, secrets, [('/auth/login', ('token',), False)] * 5)
 
 
 def verify_omnigent(ev, args, machine, label, test_mode=False, upload=None):
@@ -1273,7 +1282,7 @@ def verify_emqx(ev, args, machine, label, test_mode=False, upload=None):
                                        'user2_password': s['B1_EMQX_USER2_PW'], 'mqtt': users,
                                        'sensor': users[0], 'gateway': users[1],
                                        'api_key': s[f'{prefix}_EMQX_API_KEY'], 'api_secret': s[f'{prefix}_EMQX_API_SECRET']},
-                          s, 3, timeout=900)
+                          s, [('/api/v5/login', ('token',), False)] * 3, timeout=900)
     ev.save(f'probe-emqx-{machine}-{int(time.time())}.json', probe)
     ev.log(f'  EMQX API answered {probe.get("api_ready_after_s")} s after the restore job ended')
     ev.check(f'{label}: the dashboard takes HA\'s admin password and HA\'s second user',
@@ -1514,7 +1523,7 @@ CREDENTIAL_HTTP = PROBE_COMMON + r'''
 import urllib.parse
 B = "http://127.0.0.1:8000"
 code, login = call(B, "POST", "/auth/login", {"username": REQ["username"], "password": REQ["password"], "issue_refresh": True})
-if code != 200 or not isinstance(login, dict) or not isinstance(login.get("refresh_token"), str):
+if code != 200 or not isinstance(login, dict) or not isinstance(login.get("refresh_token"), str) or len(login["refresh_token"]) < 6:
     raise SystemExit("fresh login grant unavailable")
 body = urllib.parse.urlencode({"grant_type": "refresh_token", "refresh_token": login["refresh_token"]}).encode()
 request = urllib.request.Request(B + "/oauth/token", data=body, headers={"Content-Type": "application/x-www-form-urlencoded"})
@@ -1527,16 +1536,19 @@ try:
         refresh = json.load(response)
 except (urllib.error.URLError, OSError, ValueError):
     raise SystemExit("refresh request failed") from None
-values = [refresh[k] for k in ("access_token", "refresh_token") if k in refresh and refresh[k] is not None] if isinstance(refresh, dict) else []
-emit("auth", status=status, credentials=values)
-if status != 200 or not isinstance(refresh, dict) or not isinstance(refresh.get("access_token"), str):
+values = {k: refresh[k] for k in ("access_token", "refresh_token") if k in refresh} if isinstance(refresh, dict) else {}
+emit("auth", source="/oauth/token", status=status, credentials=values)
+if status != 200 or not isinstance(refresh, dict) or any(
+        not isinstance(refresh.get(k), str) or len(refresh[k]) < 6 for k in ("access_token", "refresh_token")):
     raise SystemExit("refresh response invalid")
 finish({"probe": "direct-login-refresh", "runner_coverage": False})
 '''
 
 
 def direct_credential_probe(secrets, username, password):
-    return event_device_python(CREDENTIAL_HTTP, {'username': username, 'password': password}, secrets, 2)
+    return event_device_python(CREDENTIAL_HTTP, {'username': username, 'password': password}, secrets,
+                               [('/auth/login', ('token', 'refresh_token'), True),
+                                ('/oauth/token', ('access_token', 'refresh_token'), True)])
 
 
 def scenario_credentials(ev, args):
@@ -1906,7 +1918,7 @@ print(json.dumps({"scanned": scanned, "journal_bytes": len(journal), "names": le
 
 def leak_scan_request(args):
     names = [n for n in args.secrets.values if n not in args.secrets.names]
-    request = {'secrets': {n: args.secrets[n] for n in names if len(args.secrets[n]) >= 6},
+    request = {'secrets': {n: args.secrets[n] for n in names if args.secrets[n]},
                'podman_secrets': ['omnigent-postgres-password', 'omnigent-admin-password', 'omnigent-runner-password',
                                   'hermes-api-server-key', 'hermes-webhook-secret', 'hermes-dashboard-session-secret',
                                   'hermes-dashboard-password', 'hermes-postgres-password', 'woow-emqx-dashboard-password',

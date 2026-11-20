@@ -17,13 +17,13 @@ spec.loader.exec_module(b1)
 
 class Handler(BaseHTTPRequestHandler):
     calls = []
+    login_reply = {'token': 'synthetic-access-first', 'refresh_token': 'synthetic-refresh-first'}
     refresh_reply = {'access_token': 'synthetic-access-new', 'refresh_token': 'synthetic-refresh-new'}
 
     def do_POST(self):
         payload = self.rfile.read(int(self.headers['Content-Length']))
         type(self).calls.append((self.path, payload))
-        body = ({'token': 'synthetic-access-first', 'refresh_token': 'synthetic-refresh-first'}
-                if self.path == '/auth/login' else type(self).refresh_reply)
+        body = (type(self).login_reply if self.path == '/auth/login' else type(self).refresh_reply)
         data = json.dumps(body).encode()
         self.send_response(200)
         self.send_header('Content-Type', 'application/json')
@@ -44,6 +44,7 @@ class IntegrationTests(unittest.TestCase):
         self.secrets = b1.Secrets([env], markers)
         self.server = HTTPServer(('127.0.0.1', 0), Handler)
         Handler.calls = []
+        Handler.login_reply = {'token': 'synthetic-access-first', 'refresh_token': 'synthetic-refresh-first'}
         Handler.refresh_reply = {'access_token': 'synthetic-access-new', 'refresh_token': 'synthetic-refresh-new'}
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         self.thread.start()
@@ -74,7 +75,7 @@ class IntegrationTests(unittest.TestCase):
             script = script.replace('http://127.0.0.1:8000', 'http://127.0.0.1:%d' % self.server.server_port)
             request = dict(request, __events=True)
             return b1._transport.run_events([sys.executable, '-I', '-c', script], request,
-                                           lambda v: secrets.register_issued([v]), expected, 8)
+                                           secrets.register_observed, expected, 8)
         with patch.object(b1, 'event_device_python', side_effect=execute):
             b1.scenario_credentials(ev, args)
         self.assertEqual([p for p, _ in Handler.calls], ['/auth/login', '/oauth/token'])
@@ -84,6 +85,37 @@ class IntegrationTests(unittest.TestCase):
             self.assertIn(value, scanned)
             self.assertNotIn(value, str(ev.results))
         self.assertFalse(ev.results[0][2]['runner_coverage'])
+
+    def test_real_child_rejects_missing_empty_and_short_grants(self):
+        schema = [('/auth/login', ('token', 'refresh_token'), True),
+                  ('/oauth/token', ('access_token', 'refresh_token'), True)]
+        def invoke():
+            code = b1.CREDENTIAL_HTTP.replace('http://127.0.0.1:8000',
+                                               'http://127.0.0.1:%d' % self.server.server_port)
+            return b1._transport.run_events([sys.executable, '-I', '-c', code],
+                {'__events': True, 'username': 'synthetic-user', 'password': 'synthetic-password'},
+                self.secrets.register_observed, schema, 8)
+        for stage in ('login', 'refresh'):
+            for bad in ('missing', '', 'tiny'):
+                with self.subTest(stage=stage, bad=bad):
+                    Handler.calls = []
+                    Handler.login_reply = {'token': 'synthetic-login-token', 'refresh_token': 'synthetic-login-grant'}
+                    Handler.refresh_reply = {'access_token': 'synthetic-new-token', 'refresh_token': 'synthetic-new-grant'}
+                    target = Handler.login_reply if stage == 'login' else Handler.refresh_reply
+                    if bad == 'missing': target.pop('refresh_token')
+                    else: target['refresh_token'] = bad
+                    with self.assertRaises(b1._transport.Incomplete) as caught:
+                        invoke()
+                    self.assertNotIn('synthetic-', str(caught.exception))
+                    self.assertIn('synthetic-login-token', self.secrets.secret_values())
+                    if stage == 'refresh':
+                        self.assertIn('synthetic-new-token', self.secrets.secret_values())
+                        self.assertEqual(len(Handler.calls), 2)
+                    else:
+                        self.assertEqual(len(Handler.calls), 1)
+                    if bad == 'tiny':
+                        self.assertIn('tiny', self.secrets.secret_values())
+                        self.assertNotIn('tiny', self.secrets.redact('tiny'))
 
     def test_arm_and_other_imports_are_preflight_blocked(self):
         with patch.object(b1, 'import_once', side_effect=AssertionError('import started')):

@@ -37,10 +37,11 @@ class EventTests(unittest.TestCase):
         self.url = 'http://127.0.0.1:%d' % self.server.server_port
         b1.CREDENTIAL_COVERAGE_BROKEN = False
 
-    def run_child(self, suffix, timeout=3, expected=1):
+    def run_child(self, suffix, timeout=3, expected=None):
+        expected = expected or [("/auth/login", ("token",), True)]
         script = b1.PROBE_COMMON + suffix
         return b1._transport.run_events([sys.executable, '-I', '-c', script],
-                   {'__events': True, 'url': self.url}, lambda v: self.secrets.register_issued([v]), expected, timeout)
+                   {'__events': True, 'url': self.url}, self.secrets.register_observed, expected, timeout)
 
     def test_http_event_before_summary_and_masked_evidence_scan(self):
         result = self.run_child('''\ncode, body = call(REQ["url"], "POST", "/auth/login", {"user":"synthetic"})\nfinish({"code": code, "detail": body["token"]})\n''')
@@ -66,12 +67,32 @@ class EventTests(unittest.TestCase):
 
     def test_missing_truncated_and_out_of_order_events_fail(self):
         for script in ("print('{\\\"type\\\":', flush=True)",
-                       'import json; print(json.dumps({"type":"auth","sequence":1,"status":200,"credentials":["synthetic-bad-seq"]}),flush=True)',
+                       'import json; print(json.dumps({"type":"auth","sequence":1,"status":200,"source":"/auth/login","credentials":{"token":"synthetic-bad-seq"}}),flush=True)',
                        'import json; print(json.dumps({"type":"summary","sequence":0,"data":{}}),flush=True)'):
             with self.subTest(script=script), self.assertRaises(b1._transport.Incomplete):
                 b1._transport.run_events([sys.executable, '-I', '-c', script], {},
-                    lambda v: self.secrets.register_issued([v]), 1, 2)
+                    self.secrets.register_observed, [('/auth/login', ('token',), True)], 2)
         self.assertIn('synthetic-bad-seq', self.secrets.secret_values())
+
+    def test_wrong_source_is_rejected_after_registration(self):
+        script = ('import json; print(json.dumps({"type":"auth","sequence":0,"source":"/wrong",'
+                  '"status":200,"credentials":{"token":"synthetic-wrong-source"}}),flush=True)')
+        with self.assertRaises(b1._transport.Incomplete):
+            b1._transport.run_events([sys.executable, '-I', '-c', script], {}, self.secrets.register_observed,
+                                     [('/auth/login', ('token',), True)], 3)
+        self.assertIn('synthetic-wrong-source', self.secrets.secret_values())
+
+    def test_request_size_and_blocked_stdin_fail_with_deadline(self):
+        import time
+        script = 'import time; time.sleep(10)'
+        argv = [sys.executable, '-I', '-c', script]
+        with self.assertRaisesRegex(b1._transport.Incomplete, 'too large'):
+            b1._transport.run_events(argv, {'input': 'x' * (b1._transport.MAX_REQUEST + 1)},
+                                     self.secrets.register_observed, [], 1)
+        start = time.monotonic()
+        with self.assertRaises(b1._transport.Incomplete):
+            b1._transport.run_events(argv, {'input': 'x' * 60000}, self.secrets.register_observed, [], 1)
+        self.assertLess(time.monotonic() - start, 4)
 
     def test_failure_latches_and_blocks_restore_before_device(self):
         with patch.object(b1._transport, 'run_events', side_effect=b1._transport.Incomplete('private')):

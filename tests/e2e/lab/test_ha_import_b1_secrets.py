@@ -37,7 +37,7 @@ class SecretTests(unittest.TestCase):
         from unittest.mock import patch
         with patch.object(b1, 'event_device_python', return_value={'status': 'ok'}) as transport:
             self.assertEqual(b1.omnigent_probe('registry', {}), {'status': 'ok'})
-            transport.assert_called_once_with(b1.OMNI_PROBE, {}, 'registry', 5)
+            transport.assert_called_once_with(b1.OMNI_PROBE, {}, 'registry', [('/auth/login', ('token',), False)] * 5)
 
     def test_runner_consumer_rejects_missing_credentials_before_evidence(self):
         with tempfile.TemporaryDirectory() as tmp:

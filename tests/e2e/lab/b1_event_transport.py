@@ -11,6 +11,11 @@ class Incomplete(RuntimeError):
     """The producer did not establish a complete event stream."""
 
 
+MAX_REQUEST = 64 * 1024
+MAX_FRAME = 1024 * 1024
+MAX_STREAM = 8 * 1024 * 1024
+
+
 def run_events(argv, request, register, expected_auth, timeout=600):
     """Register each complete credential event before acknowledging the producer.
 
@@ -18,6 +23,13 @@ def run_events(argv, request, register, expected_auth, timeout=600):
     contiguous stream, the expected number of auth outcomes, an end frame, EOF,
     and successful process exit. The producer must wait for each acknowledgement.
     """
+    try:
+        request_bytes = json.dumps(request, ensure_ascii=False).encode('utf-8') + b'\n'
+    except (TypeError, ValueError, UnicodeError):
+        raise Incomplete('invalid credential request') from None
+    if len(request_bytes) > MAX_REQUEST:
+        raise Incomplete('credential request too large')
+    deadline = time.monotonic() + timeout
     proc = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                             stderr=subprocess.DEVNULL, start_new_session=True, bufsize=0)
     selector = selectors.DefaultSelector()
@@ -26,8 +38,24 @@ def run_events(argv, request, register, expected_auth, timeout=600):
     sequence = auth_count = 0
     summary = None
     ended = False
-    deadline = time.monotonic() + timeout
+    total = 0
     error = None
+    os.set_blocking(proc.stdin.fileno(), False)
+
+    def write_deadline(data):
+        with selectors.DefaultSelector() as writer:
+            writer.register(proc.stdin, selectors.EVENT_WRITE)
+            while data:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0 or not writer.select(remaining):
+                    raise Incomplete('credential event stream timed out')
+                try:
+                    count = os.write(proc.stdin.fileno(), data)
+                except BlockingIOError:
+                    continue
+                if count <= 0:
+                    raise Incomplete('credential event stream incomplete')
+                data = data[count:]
 
     def consume(line, acknowledge):
         nonlocal sequence, auth_count, summary, ended
@@ -36,9 +64,9 @@ def run_events(argv, request, register, expected_auth, timeout=600):
             if not isinstance(event, dict):
                 raise ValueError()
             # Preserve complete credentials even if the frame sequence is bad.
-            if event.get('type') == 'auth' and isinstance(event.get('credentials'), list):
-                for value in event['credentials']:
-                    if isinstance(value, str) and len(value) >= 6:
+            if event.get('type') == 'auth' and isinstance(event.get('credentials'), dict):
+                for value in event['credentials'].values():
+                    if isinstance(value, str) and value:
                         register(value)
             if type(event.get('sequence')) is not int or event['sequence'] != sequence or ended:
                 raise ValueError()
@@ -46,13 +74,20 @@ def run_events(argv, request, register, expected_auth, timeout=600):
             kind = event.get('type')
             if kind == 'auth':
                 values, status = event.get('credentials'), event.get('status')
-                if (summary is not None or not isinstance(values, list) or type(status) is not int or
-                    not 100 <= status <= 599 or any(not isinstance(v, str) or len(v) < 6 for v in values) or
-                    (200 <= status < 300 and not values)):
+                if (summary is not None or auth_count >= len(expected_auth) or not isinstance(values, dict)
+                        or type(status) is not int or not 100 <= status <= 599):
+                    raise ValueError()
+                source, fields, must_succeed = expected_auth[auth_count]
+                if event.get('source') != source or (must_succeed and not 200 <= status < 300):
+                    raise ValueError()
+                if any(not isinstance(k, str) or not isinstance(v, str) or len(v) < 6
+                       for k, v in values.items()):
+                    raise ValueError()
+                if 200 <= status < 300 and any(field not in values for field in fields):
                     raise ValueError()
                 auth_count += 1
             elif kind == 'summary':
-                if summary is not None or auth_count != expected_auth or not isinstance(event.get('data'), dict):
+                if summary is not None or auth_count != len(expected_auth) or not isinstance(event.get('data'), dict):
                     raise ValueError()
                 summary = event['data']
             elif kind == 'end':
@@ -62,14 +97,12 @@ def run_events(argv, request, register, expected_auth, timeout=600):
             else:
                 raise ValueError()
             if acknowledge:
-                proc.stdin.write(b'OK\n')
-                proc.stdin.flush()
+                write_deadline(b'OK\n')
         except Exception:
             raise Incomplete('credential event stream incomplete') from None
 
     try:
-        proc.stdin.write(json.dumps(request, ensure_ascii=False).encode('utf-8') + b'\n')
-        proc.stdin.flush()
+        write_deadline(request_bytes)
         while True:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
@@ -82,13 +115,16 @@ def run_events(argv, request, register, expected_auth, timeout=600):
                 if buffer:
                     raise Incomplete('credential event stream truncated')
                 break
+            total += len(chunk)
             buffer += chunk
-            if len(buffer) > 4 * 1024 * 1024:
+            if total > MAX_STREAM or len(buffer) > MAX_FRAME:
                 raise Incomplete('credential event frame too large')
             while b'\n' in buffer:
                 line, buffer = buffer.split(b'\n', 1)
+                if len(line) > MAX_FRAME:
+                    raise Incomplete('credential event frame too large')
                 consume(line, True)
-        if not ended or auth_count != expected_auth or proc.wait(timeout=max(0.01, deadline - time.monotonic())) != 0:
+        if not ended or auth_count != len(expected_auth) or proc.wait(timeout=max(0.01, deadline - time.monotonic())) != 0:
             raise Incomplete('credential event stream incomplete')
         return summary
     except (Incomplete, OSError, subprocess.TimeoutExpired) as exc:
@@ -107,6 +143,8 @@ def run_events(argv, request, register, expected_auth, timeout=600):
             except BlockingIOError:
                 break
             if not chunk:
+                break
+            if len(buffer) + len(chunk) > MAX_FRAME:
                 break
             buffer += chunk
         for line in buffer.split(b'\n')[:-1]:
