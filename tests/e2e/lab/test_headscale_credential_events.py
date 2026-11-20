@@ -20,23 +20,24 @@ import json,os,sys
 fd=int(os.environ['HEADSCALE_EVENT_FD'])
 def emit(obj):
  os.write(fd,(json.dumps(obj)+'\n').encode()); assert os.read(fd,3)==b'OK\n'
-names=['source_api','client_a_preauth','client_b_preauth','target_api']
-values=['source-secret-123','first-secret-123','second-secret-123','target-secret-123']
+names=__import__('json').loads(os.environ['TEST_HEADSCALE_SOURCES'])
+auth=['source_api','client_a_preauth','client_b_preauth','target_api']
+values=['synthetic-secret-'+n for n in names]
 for name,value in zip(names,values):
  if os.environ.get('OMIT')==name: continue
  if os.environ.get('EMPTY')==name: value=''
- emit({'source':name,'credential':value})
+ emit({'source':name, 'credential' if name in auth else 'credentials': value if name in auth else [value]})
  if name == 'source_api': print('before evidence: '+value,flush=True)
 for name in ['source_server','target_initial','target_converted','client_a','client_b']:
  if os.environ.get('OMIT_LOG')==name: continue
  emit({'source':name,'log': 'issued '+values[1] if os.environ.get('LEAK_LOG')==name else 'safe log'})
-print(json.dumps({'evidence':values[-1]}),flush=True)
+print(json.dumps({'evidence':values[names.index('target_api')]}),flush=True)
 '''
 
 
 class CredentialEventsTest(unittest.TestCase):
     def run_with(self, **overrides):
-        env = dict(os.environ, **overrides)
+        env = dict(os.environ, TEST_HEADSCALE_SOURCES=json.dumps(events.EXPECTED), **overrides)
         with mock.patch.dict(os.environ, env, clear=True):
             return events.run([sys.executable, '-c', PRODUCER], timeout=5)
 
@@ -44,8 +45,8 @@ class CredentialEventsTest(unittest.TestCase):
         output = self.run_with()
         self.assertIn('<source_api>', output)
         self.assertIn('<target_api>', output)
-        self.assertNotIn('source-secret-123', output)
-        self.assertNotIn('target-secret-123', output)
+        self.assertNotIn('synthetic-secret-source_api', output)
+        self.assertNotIn('synthetic-secret-target_api', output)
 
     def test_each_missing_or_empty_source_fails(self):
         for source in events.EXPECTED:
@@ -61,12 +62,12 @@ class CredentialEventsTest(unittest.TestCase):
             self.run_with(LEAK_LOG='source_server')
 
     def test_controller_suppresses_failure_output(self):
-        env = dict(os.environ, OMIT='target_api')
+        env = dict(os.environ, OMIT='target_api', TEST_HEADSCALE_SOURCES=json.dumps(events.EXPECTED))
         result = subprocess.run([sys.executable, str(PATH), '--controller', '--', sys.executable, '-c', PRODUCER],
                                 env=env, capture_output=True, timeout=10)
         self.assertNotEqual(result.returncode, 0)
         self.assertEqual(result.stdout, b'')
-        self.assertNotIn(b'source-secret-123', result.stderr)
+        self.assertNotIn(b'synthetic-secret-source_api', result.stderr)
 
     def test_raw_and_json_escaped_forms_are_scanned(self):
         values = ['synthetic-"\\\n-key']
@@ -78,24 +79,28 @@ class CredentialEventsTest(unittest.TestCase):
         producer = r'''
 import os,subprocess,sys
 path=sys.argv[1]
-for source,value in [('source_api','source-api-123'),('client_a_preauth','preauth-a-123'),
-                     ('client_b_preauth','preauth-b-123'),('target_api','target-api-123')]:
- subprocess.run([sys.executable,path,'--register',source], input=value.encode(),
+import json
+for source in json.loads(os.environ['TEST_HEADSCALE_SOURCES']):
+ value='synthetic-secret-'+source
+ private=source not in ['source_api','client_a_preauth','client_b_preauth','target_api']
+ subprocess.run([sys.executable,path,'--register-private' if private else '--register',source], input=(json.dumps([value]) if private else value).encode(),
                 pass_fds=(int(os.environ['HEADSCALE_EVENT_FD']),),check=True)
 for source in ['source_server','target_initial','target_converted','client_a','client_b']:
  subprocess.run([sys.executable,path,'--scan-log',source],input=b'safe log',
                 pass_fds=(int(os.environ['HEADSCALE_EVENT_FD']),),check=True)
-print('checked source-api-123')
+print('checked synthetic-secret-source_api')
 '''
-        output = events.run([sys.executable, '-c', producer, str(PATH)], timeout=10)
+        with mock.patch.dict(os.environ, TEST_HEADSCALE_SOURCES=json.dumps(events.EXPECTED)):
+            output = events.run([sys.executable, '-c', producer, str(PATH)], timeout=10)
         self.assertIn('<source_api>', output)
-        self.assertNotIn('source-api-123', output)
+        self.assertNotIn('synthetic-secret-source_api', output)
 
     def test_bash_pipeline_inherits_private_event_channel(self):
         commands = ['set -euo pipefail']
         for name in events.EXPECTED:
-            commands.append("printf '%s' synthetic-secret-" + name +
-                            ' | python3 "$1" --register ' + name)
+            flag = '--register' if name in events.AUTH_SOURCES else '--register-private'
+            value = 'synthetic-secret-' + name if name in events.AUTH_SOURCES else '["synthetic-secret-' + name + '"]'
+            commands.append("printf '%s' '" + value + "' | python3 \"$1\" " + flag + ' ' + name)
         for name in events.LOGS:
             commands.append("printf '%s' safe-log | python3 \"$1\" --scan-log " + name)
         output = events.run(['bash', '-c', '\n'.join(commands), 'test', str(PATH)], timeout=10)
@@ -103,17 +108,18 @@ print('checked source-api-123')
 
     def test_producer_failure_and_timeout_suppress_partial_secret(self):
         for suffix in ('raise RuntimeError("private data")', 'import time; time.sleep(5)'):
-            script = PRODUCER.replace("print(json.dumps({'evidence':values[-1]}),flush=True)", suffix)
+            script = PRODUCER.replace("print(json.dumps({'evidence':values[names.index('target_api')]}),flush=True)", suffix)
             with self.subTest(suffix=suffix):
                 result = subprocess.run([sys.executable, str(PATH), '--controller', '--', sys.executable, '-c', script],
-                    env=dict(os.environ), capture_output=True, timeout=8) if 'sleep' not in suffix else None
+                    env=dict(os.environ, TEST_HEADSCALE_SOURCES=json.dumps(events.EXPECTED)), capture_output=True, timeout=8) if 'sleep' not in suffix else None
                 if result:
                     self.assertNotEqual(result.returncode, 0)
                     self.assertEqual(result.stdout, b'')
                     self.assertNotIn(b'private data', result.stderr)
                 else:
-                    with self.assertRaises(Exception):
-                        events.run([sys.executable, '-c', script], timeout=0.5)
+                    with mock.patch.dict(os.environ, TEST_HEADSCALE_SOURCES=json.dumps(events.EXPECTED)):
+                        with self.assertRaises(Exception):
+                            events.run([sys.executable, '-c', script], timeout=0.5)
 
     def test_real_bash_exit_cleanup_runs_on_timeout_and_protocol_error(self):
         for mode in ('timeout', 'protocol'):

@@ -125,3 +125,27 @@ exit is not proof that detached resources are gone. Local tests exercise real
 Bash EXIT traps on timeout and invalid events. The four synthetic API/preauth
 producers are checked, and five submitted container log snapshots are scanned;
 the snapshots may be empty and this is not a global secret-coverage claim.
+
+## Private-source candidate: local tests only
+
+The pending harness registers the synthetic CA and TLS PEM private keys;
+the initial source, initial target and converted target Noise and DERP private
+keys; both clients' machine and node private keys before and after conversion;
+and the four API/preauth keys. Each named source must be present and
+acknowledged before evidence is released. The client's synthetic state is now
+written to a per-client directory inside the retained 0700 fixture directory,
+rather than `mem:`. Source and converted volume snapshots likewise remain
+private test fixtures and intentionally contain test secrets; they are not
+public evidence and are not treated as leak-free output.
+
+The extractor requires explicit machine/node private-key fields and recognizes
+specified textual private-key formats, including bounded nested base64 JSON;
+unrecognized state formats fail closed. It scans registered text and one JSON
+escaping layer in the withheld output and five submitted container log
+snapshots, plus PEM body and line forms. It does not register hashes as
+credentials. It does not establish coverage of binary or arbitrary encodings,
+transient in-memory keys, every historical rotated identity, or keys generated
+inside the product's disposable `configtest` volume. Empty submitted log
+snapshots remain possible. These are synthetic fixtures; no real HA or existing
+service is covered. The new extractor and persistence assumptions have only
+local unit-test evidence, and await a scheduled dev-d run.

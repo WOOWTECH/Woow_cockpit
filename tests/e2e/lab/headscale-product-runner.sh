@@ -39,7 +39,7 @@ trap cleanup EXIT
 trap 'exit 143' TERM
 trap 'exit 130' INT
 trap 'exit 129' HUP
-mkdir -p "$test_dir"/{config,data,run,target-run}
+mkdir -p "$test_dir"/{config,data,run,target-run,client-a,client-b}
 openssl req -x509 -newkey rsa:2048 -nodes -days 1 -subj /CN=Headscale-Lab-CA \
   -keyout "$test_dir/ca.key" -out "$test_dir/ca.crt" >/dev/null 2>&1
 openssl req -newkey rsa:2048 -nodes -subj /CN=headscale.lab -addext subjectAltName=DNS:headscale.lab \
@@ -47,6 +47,13 @@ openssl req -newkey rsa:2048 -nodes -subj /CN=headscale.lab -addext subjectAltNa
 printf 'subjectAltName=DNS:headscale.lab\nextendedKeyUsage=serverAuth\n' > "$test_dir/extensions"
 openssl x509 -req -in "$test_dir/server.csr" -CA "$test_dir/ca.crt" -CAkey "$test_dir/ca.key" \
   -CAcreateserial -days 1 -extfile "$test_dir/extensions" -out "$test_dir/config/server.crt" >/dev/null 2>&1
+private_source() {
+  local source=$1; shift
+  python3 "$product_files/tests/e2e/lab/headscale-private-sources.py" "$@" | \
+    python3 "$product_files/tests/e2e/lab/headscale-credential-events.py" --register-private "$source"
+}
+private_source ca_private pem "$test_dir/ca.key"
+private_source tls_private pem "$test_dir/config/server.key"
 cat > "$test_dir/config/config.yaml" <<'EOF'
 server_url: https://headscale.lab:8080
 listen_addr: 0.0.0.0:8080
@@ -117,16 +124,19 @@ podman exec "$server" headscale users create lab -o json >/dev/null
 source_api_key=$(podman exec "$server" headscale apikeys create --expiration 1h)
 printf '%s' "$source_api_key" | python3 "$product_files/tests/e2e/lab/headscale-credential-events.py" --register source_api
 for client in "$client_a" "$client_b"; do
+  if [[ "$client" == "$client_a" ]]; then state_dir=client-a; source=client_a_preauth; identity=client_a_identity_before
+  else state_dir=client-b; source=client_b_preauth; identity=client_b_identity_before; fi
   podman run -d --name "$client" --hostname "$client" --pull=never --memory=192m --network "$net" \
     -e SSL_CERT_FILE=/lab/ca.crt -e TS_DEBUG_LOG_DISABLE=true -e TS_DEBUG_ALWAYS_USE_DERP=true \
     -v "$test_dir/ca.crt:/lab/ca.crt:ro" -v "$test_dir/ca.crt:/etc/ssl/certs/ca-certificates.crt:ro" \
+    -v "$test_dir/$state_dir:/state" \
     --entrypoint tailscaled docker.io/tailscale/tailscale:stable \
-    --tun=userspace-networking --state=mem: --socket=/tmp/tailscaled.sock >/dev/null
+    --tun=userspace-networking --state=/state/tailscaled.state --socket=/tmp/tailscaled.sock >/dev/null
   key=$(podman exec "$server" headscale preauthkeys create --user 1 --expiration 10m)
-  if [[ "$client" == "$client_a" ]]; then source=client_a_preauth; else source=client_b_preauth; fi
   printf '%s' "$key" | python3 "$product_files/tests/e2e/lab/headscale-credential-events.py" --register "$source"
   podman exec -e TS_AUTHKEY="$key" "$client" sh -c 'tailscale --socket=/tmp/tailscaled.sock up --login-server=https://headscale.lab:8080 --authkey="$TS_AUTHKEY" --accept-dns=false --timeout=60s'
   unset key
+  private_source "$identity" client "$test_dir/$state_dir/tailscaled.state"
   podman exec "$client" tailscale --socket=/tmp/tailscaled.sock status --json | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["BackendState"]=="Running"; print("Registered:", d["Self"]["HostName"], d["Self"]["TailscaleIPs"])'
 done
 addr=$(podman exec "$client_b" tailscale --socket=/tmp/tailscaled.sock ip -4)
@@ -147,11 +157,17 @@ podman exec "$target_server" headscale health >/dev/null
 target_api_key=$(podman exec "$target_server" headscale apikeys create --expiration 1h)
 printf '%s' "$target_api_key" | python3 "$product_files/tests/e2e/lab/headscale-credential-events.py" --register target_api
 podman stop "$target_server" >/dev/null
+podman volume export --output "$test_dir/target-initial-private.tar" "$target_volume"
+private_source target_noise volume "$test_dir/target-initial-private.tar" noise.key
+private_source target_derp volume "$test_dir/target-initial-private.tar" derp.key
 podman logs "$target_server" 2>&1 | python3 "$product_files/tests/e2e/lab/headscale-credential-events.py" --scan-log target_initial
 podman rm "$target_server" >/dev/null
 # Keep the original client processes alive while stopping the source and converting its cold volume.
 outage_start=$SECONDS
 podman stop "$server" >/dev/null
+podman volume export --output "$test_dir/source-private.tar" "$source_volume"
+private_source source_noise volume "$test_dir/source-private.tar" noise.key
+private_source source_derp volume "$test_dir/source-private.tar" derp.key
 podman logs "$server" 2>&1 | python3 "$product_files/tests/e2e/lab/headscale-credential-events.py" --scan-log source_server
 podman rm "$server" >/dev/null
 python3 "$product_files/tests/e2e/lab/headscale-product-convert.py" "$product_files/backup-engine" \
@@ -237,6 +253,11 @@ for which in target source; do
   echo "API $which credential: HTTP $expected PASS"
 done
 podman stop "$client_a" "$client_b" "$target_server" >/dev/null
+podman volume export --output "$test_dir/target-converted-private.tar" "$converted_volume"
+private_source converted_noise volume "$test_dir/target-converted-private.tar" noise.key
+private_source converted_derp volume "$test_dir/target-converted-private.tar" derp.key
+private_source client_a_identity_after client "$test_dir/client-a/tailscaled.state"
+private_source client_b_identity_after client "$test_dir/client-b/tailscaled.state"
 podman logs "$target_server" 2>&1 | python3 "$product_files/tests/e2e/lab/headscale-credential-events.py" --scan-log target_converted
 podman logs "$client_a" 2>&1 | python3 "$product_files/tests/e2e/lab/headscale-credential-events.py" --scan-log client_a
 podman logs "$client_b" 2>&1 | python3 "$product_files/tests/e2e/lab/headscale-credential-events.py" --scan-log client_b

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Private acknowledged synthetic Headscale credential events and evidence boundary.
 
-Only the four named producers in this harness are covered. On any incomplete
+Only explicitly named synthetic sources are covered. On any incomplete
 stream or failed probe, suppress all child output; never print credentials.
 """
 import json
@@ -14,7 +14,11 @@ import subprocess
 import sys
 import time
 
-EXPECTED = ('source_api', 'client_a_preauth', 'client_b_preauth', 'target_api')
+EXPECTED = ('ca_private', 'tls_private', 'source_api', 'client_a_preauth', 'client_a_identity_before',
+            'client_b_preauth', 'client_b_identity_before', 'target_api', 'target_noise', 'target_derp',
+            'source_noise', 'source_derp', 'converted_noise', 'converted_derp',
+            'client_a_identity_after', 'client_b_identity_after')
+AUTH_SOURCES = frozenset(('source_api', 'client_a_preauth', 'client_b_preauth', 'target_api'))
 LOGS = ('source_server', 'target_initial', 'target_converted', 'client_a', 'client_b')
 MAX_SECRET = 16384
 MAX_OUTPUT = 8 * 1024 * 1024
@@ -77,16 +81,20 @@ def terminate_and_drain(proc, selector, grace=CLEANUP_GRACE):
     return forced
 
 
-def register(source, *, log=False):
+def register(source, *, log=False, private=False):
     limit = MAX_LOG if log else MAX_SECRET
     data = sys.stdin.buffer.read(limit + 1)
     if len(data) > limit or (log and source not in LOGS) or (not log and (source not in EXPECTED or len(data) < 6)):
         raise ValueError('invalid source credential')
     value = data.decode('utf-8')
-    if not log and ('\n' in value or '\r' in value or '\x00' in value):
+    if not log and not private and ('\n' in value or '\r' in value or '\x00' in value):
         raise ValueError('invalid source credential')
+    if private:
+        value = json.loads(value, object_pairs_hook=unique)
+        if not isinstance(value, list) or not value:
+            raise ValueError('invalid private source')
     sock = socket.socket(fileno=int(os.environ['HEADSCALE_EVENT_FD']))
-    frame = json.dumps({'source': source, 'log' if log else 'credential': value}, ensure_ascii=True).encode() + b'\n'
+    frame = json.dumps({'source': source, 'log' if log else 'credentials' if private else 'credential': value}, ensure_ascii=True).encode() + b'\n'
     sock.sendall(frame)
     ack = b''
     while len(ack) < 3:
@@ -161,15 +169,19 @@ def run(argv, timeout=TIMEOUT):
                         logs[source] = value
                         parent.sendall(b'OK\n')
                         continue
-                    if set(event) != {'source', 'credential'}:
+                    if set(event) not in ({'source', 'credential'}, {'source', 'credentials'}):
                         raise ValueError('invalid event')
-                    source, value = event['source'], event['credential']
-                    if (source not in EXPECTED or source in credentials or not isinstance(value, str)
-                            or not 6 <= len(value) <= MAX_SECRET or any(c in value for c in '\r\n\x00')):
+                    source = event['source']
+                    if (source in AUTH_SOURCES) != ('credential' in event):
+                        raise ValueError('incorrect credential event type')
+                    values = event.get('credentials') if 'credentials' in event else [event['credential']]
+                    if (source not in EXPECTED or source in credentials or not isinstance(values, list) or not values
+                            or len(values) > 200 or any(not isinstance(value, str) or not 6 <= len(value) <= MAX_SECRET
+                                                       or '\x00' in value for value in values)):
                         raise ValueError('invalid credential')
-                    if source != EXPECTED[len(credentials)] or value in credentials.values():
+                    if source != EXPECTED[len(credentials)] or len(set(values)) != len(values):
                         raise ValueError('unexpected credential source')
-                    credentials[source] = value  # register BEFORE acknowledging the producer
+                    credentials[source] = values  # register BEFORE acknowledging the producer
                     parent.sendall(b'OK\n')
         if pending or proc.wait(timeout=max(0.01, deadline - time.monotonic())) != 0:
             raise ValueError('incomplete producer')
@@ -177,12 +189,13 @@ def run(argv, timeout=TIMEOUT):
             raise ValueError('credential coverage incomplete')
         if set(logs) != set(LOGS):
             raise ValueError('log coverage incomplete')
-        needles = scan_needles(credentials.values())
+        registered = [(source, value) for source, values in credentials.items() for value in values]
+        needles = scan_needles(value for _source, value in registered)
         if any(needle in log.encode('utf-8') for log in logs.values() for needle in needles):
             raise ValueError('synthetic container log leak')
         # All output is withheld until every required producer has registered.
         text = output.decode('utf-8', 'replace')
-        for source, value in sorted(credentials.items(), key=lambda item: -len(item[1])):
+        for source, value in sorted(registered, key=lambda item: -len(item[1])):
             text = text.replace(value, '<' + source + '>')
             for ascii_only in (False, True):
                 text = text.replace(json.dumps(value, ensure_ascii=ascii_only)[1:-1], '<' + source + '>')
@@ -204,12 +217,14 @@ def main():
     try:
         if len(sys.argv) == 3 and sys.argv[1] == '--register':
             register(sys.argv[2])
+        elif len(sys.argv) == 3 and sys.argv[1] == '--register-private':
+            register(sys.argv[2], private=True)
         elif len(sys.argv) == 3 and sys.argv[1] == '--scan-log':
             register(sys.argv[2], log=True)
         elif len(sys.argv) >= 4 and sys.argv[1:3] == ['--controller', '--']:
             result = run(sys.argv[3:])
             sys.stdout.write(result)
-            print('Synthetic credential coverage: four sources acknowledged; five submitted log snapshots (possibly empty) and redacted output scanned')
+            print('Synthetic credential coverage: named authorization and private-key sources acknowledged; submitted log snapshots (possibly empty) and redacted output scanned')
         else:
             raise ValueError('invalid invocation')
     except Exception as error:
