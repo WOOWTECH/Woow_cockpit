@@ -176,3 +176,44 @@ class CandidateFlowTests(unittest.TestCase):
             self.invoke(transport)
         self.assertNotIn('secret', str(caught.exception))
         self.assertNotIn('export', transport.events)
+
+    def test_non_acl_settings_restored_without_erasing_ha_data_roots(self):
+        class ImportChangesSettings(Transport):
+            def exec(self, role, command, **kwargs):
+                result = super().exec(role, command, **kwargs)
+                if command[:4] == ['emqx', 'ctl', 'data', 'import']:
+                    self.running_config['mqtt'] = {'max_packet_size': '9MB', 'injected_field': True}
+                    self.running_config['rule_engine'] = {'rules': {'ha-rule': {'enable': True}}}
+                if command[:4] == ['emqx', 'ctl', 'conf', 'load']:
+                    self.load_mode = command[4]
+                return result
+        transport = ImportChangesSettings()
+        transport.config['mqtt'] = {'max_packet_size': '1MB'}
+        transport.running_config = copy.deepcopy(transport.config)
+        self.invoke(transport)
+        self.assertEqual(transport.load_mode, '--replace')
+        self.assertEqual(transport.running_config['mqtt'], {'max_packet_size': '1MB'})
+        self.assertIn('ha-rule', transport.running_config['rule_engine']['rules'])
+        self.assertNotIn('rule_engine', transport.restore)
+
+    def test_unexpected_operational_root_refused_without_guessing_defaults(self):
+        class ExtraRoot(Transport):
+            def exec(self, role, command, **kwargs):
+                result = super().exec(role, command, **kwargs)
+                if command[:4] == ['emqx', 'ctl', 'data', 'import']:
+                    self.running_config['unknown_operational_root'] = {'enabled': True}
+                return result
+        transport = ExtraRoot()
+        with self.assertRaises(BackupError):
+            self.invoke(transport)
+        self.assertNotIn('restore', transport.events)
+
+    def test_restore_command_failure_suppresses_sensitive_error_body(self):
+        class FailedLoad(Transport):
+            def exec(self, role, command, **kwargs):
+                if command[:4] == ['emqx', 'ctl', 'conf', 'load']:
+                    return Result(1, b'secret-config', b'secret-error')
+                return super().exec(role, command, **kwargs)
+        with self.assertRaises(BackupError) as caught:
+            self.invoke(FailedLoad())
+        self.assertNotIn('secret', str(caught.exception))

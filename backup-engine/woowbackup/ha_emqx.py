@@ -528,6 +528,41 @@ def candidate_with_effective_acl(work, app, tmp, target, staging, export, ids, a
     return target_broker(work, tmp, target, export, ids, hint=hint, target_snapshot=snapshot)
 
 
+def preserved_settings(config):
+    """Target operational settings stay; HA data roots migrate, except target authorization policy."""
+    return {key: value for key, value in config.items()
+            if key not in DATA_ROOTS or key == 'authorization'}
+
+
+def restore_target_settings(tmp, original, read_candidate):
+    """Replace changed target setting roots, not merge stale/imported fields into them.
+
+    Roots absent on the target cannot be restored by guessing an empty/default value.
+    Any such extra operational root remains a failure until removal is implemented.
+    """
+    before = read_effective_config(read_candidate)
+    expected = preserved_settings(original)
+    actual = preserved_settings(before)
+    if set(actual) - set(expected):
+        raise BackupError('incompatible', 'EMQX 匯入新增了無法安全移除的目標設定，已停止。')
+    changed = {key: value for key, value in expected.items() if key not in actual or actual[key] != value}
+    if changed:
+        snippet = json.dumps(changed, ensure_ascii=True).encode()
+        try:
+            written = tmp.exec('emqx-new', ['sh', '-c', f'umask 077; cat > {WORK}/in/target-settings.hocon'],
+                               input=snippet, timeout=120, max_output=64 * 1024, check=False)
+            if written.returncode:
+                raise ValueError()
+            loaded = ctl(tmp, 'emqx-new', ['conf', 'load', '--replace', f'{WORK}/in/target-settings.hocon'],
+                         timeout=600, check=False)
+            if loaded.returncode:
+                raise ValueError()
+        except (BackupError, ValueError):
+            raise BackupError('incompatible', '無法恢復 EMQX 目標設定，已停止。') from None
+    if preserved_settings(read_effective_config(read_candidate)) != expected:
+        raise BackupError('incompatible', 'EMQX 匯入後未能保留目標有效設定，已停止。')
+
+
 def target_broker(work, tmp, target, export, ids, *, hint='', target_snapshot=None, target_config=None):
     """This device's broker on an empty volume: import HA's export, load the strict settings back, verify."""
     name = os.path.basename(export)
@@ -554,18 +589,14 @@ def target_broker(work, tmp, target, export, ids, *, hint='', target_snapshot=No
     out = ctl(tmp, 'emqx-new', ['data', 'import', f'{WORK}/in/{name}'], timeout=1800).stdout or b''
     if b'imported successfully' not in out:
         raise BackupError('incompatible', 'HA 的 EMQX 資料匯入時發生錯誤（部分資料無法匯入），已停止。' + hint)
-    snippet = f'authorization {{\n  no_match = {strict[0]}\n  deny_action = {strict[1]}\n  sources = []\n}}\n'.encode()
     if target_config is not None:
-        snippet = json.dumps({'authorization': target_config['authorization']}, ensure_ascii=True).encode()
-    tmp.exec('emqx-new', ['sh', '-c', f'umask 077; cat > {WORK}/in/strict.hocon'], input=snippet, timeout=120,
-             max_output=64 * 1024)
-    ctl(tmp, 'emqx-new', ['conf', 'load', '--merge', f'{WORK}/in/strict.hocon'], timeout=600)
-    if target_config is not None:
-        restored = read_effective_config(read_candidate)
-        # Authentication intentionally comes from HA. All other roots must be unchanged.
-        keep = lambda conf: {k: v for k, v in conf.items() if k != 'authentication'}
-        if keep(restored) != keep(target_config):
-            raise BackupError('incompatible', 'EMQX 匯入後未能保留目標有效設定，已停止。')
+        restore_target_settings(tmp, target_config, read_candidate)
+    else:
+        # Legacy internal test path only; public convert remains blocked.
+        snippet = f'authorization {{\n  no_match = {strict[0]}\n  deny_action = {strict[1]}\n  sources = []\n}}\n'.encode()
+        tmp.exec('emqx-new', ['sh', '-c', f'umask 077; cat > {WORK}/in/strict.hocon'], input=snippet,
+                 timeout=120, max_output=64 * 1024)
+        ctl(tmp, 'emqx-new', ['conf', 'load', '--merge', f'{WORK}/in/strict.hocon'], timeout=600)
     after = parse_strict(evaluate(tmp, 'emqx-new', STRICT_EXPR))
     if after != strict:
         raise BackupError('job-failed', '無法恢復這台 EMQX 的存取政策（未符合規則的主題拒絕），已停止。')
