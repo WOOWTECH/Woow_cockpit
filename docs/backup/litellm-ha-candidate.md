@@ -119,7 +119,7 @@ commit `7e63c6c`: 9/9 passed, with independent container and volume cleanup chec
 See `tests/e2e/lab/evidence/litellm-candidate/pg17-bounded-runner.json`; this is not
 PG18, HA-backup, or migration acceptance.
 
-## Prepared PG18 lab experiments (not run)
+## PG18 lab experiments
 
 The salt SQL test now requires `--expected-pg-major 17` or `18` and checks the
 running server major before creating fixture tables. Its separate PG18 run is not
@@ -136,8 +136,10 @@ compares the fixture rows and target column schema. It uses no HA backup or real
 credentials. The small dump shape check is only an experiment assertion, **not** an
 untrusted SQL sanitizer, and this script is not connected to the import engine.
 
-The experiments have not been run. They need an approved shared-lab time slot, enough
-memory headroom for both clusters, an offline-loaded PG18 image, and independent
-cleanup verification. Even a pass would establish only the fixed fixture's behavior,
-not general PG18-to-PG17 compatibility, LiteLLM Prisma schemas, arbitrary DDL safety,
-sequences, encrypted credential transfer, or rollback. Conversion remains disabled.
+The isolated runs passed: PG18 salt SQL 9/9 and the fixed single-table PG18-to-PG17
+plain SQL data-only fixture 4/4. Independent checks found no test containers or
+volumes; see `tests/e2e/lab/evidence/litellm-candidate/pg18-synthetic-compat.json`.
+The lab source image is PostgreSQL 18.7 as reported by the coordinator; the HA package
+uses 18.6. The fixed fixture found no incompatibility; it does not test general
+PG18-to-PG17 compatibility, LiteLLM Prisma schemas, arbitrary DDL safety, sequences,
+encrypted credential transfer, or rollback. Conversion remains disabled.
