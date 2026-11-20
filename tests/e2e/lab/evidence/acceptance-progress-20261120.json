@@ -58,10 +58,12 @@
     },
     {
       "service": "EMQX adapter",
-      "commit": "c689668",
-      "scope": "synthetic adapter backup->restore failure->automatic rollback",
-      "result": "agent reported real run exit0 and cleanup verified; raw evidence requested",
-      "ha_converter_joined": false
+      "commit": "c8aa16f",
+      "scope": "synthetic HA backup through internal candidate builder and packager to real adapter install and automatic rollback",
+      "result": "source worktree real run exit0; independent container/volume/secret/unit cleanup passed; main integration fixture tests 5/5",
+      "ha_converter_joined": true,
+      "evidence": "emqx-ha-adapter-joined/run-20261120T114554Z-1475341.jsonl",
+      "real_test_source_commit": "288a808975a973d54a09a71f7decc8ca216ca676"
     },
     {
       "service": "Omnigent real application",
@@ -104,7 +106,7 @@
     "classification": "legacy public-entry contracts conflict with retained preservation guard; not all-green"
   },
   "remaining": [
-    "EMQX HA converter output joined to real adapter installation and rollback",
+    "EMQX real original HA backup and supported configuration variants; public guard retained",
     "Omnigent outer Supervisor envelope, real Target discovery, application data markers and complete secret coverage",
     "Headscale issued-secret registration and scan completeness",
     "LiteLLM full application schema and true salt/key migration, decryptability and rollback",
