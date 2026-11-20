@@ -337,12 +337,86 @@ def take_export(work, tmp, path, staging):
     return dest
 
 
-def target_broker(work, tmp, target, export, ids, *, hint=''):
+def target_config_snapshot(volume_tar, snapshot_path, required, *, limit=MAX_HOCON):
+    """Stage named target config/ACL files from a volume export. Callers must enumerate effective references.
+
+    This deliberately does not discover HOCON references or merge HA settings: the public import stays blocked until
+    those operations and effective read-back are implemented. Missing, duplicate, linked or unsafe paths fail closed.
+    """
+    names = set(required)
+    if not names or 'configs/cluster.hocon' not in names:
+        raise BackupError('incompatible', '缺少目標 EMQX 設定快照所需的檔案清單。')
+    for name in names:
+        if (not isinstance(name, str) or ha_odoo._norm(name) != name or
+                not name.startswith(('configs/', 'authz/', 'certs/'))):
+            raise BackupError('incompatible', '目標 EMQX 設定參照了不允許的路徑。')
+    found, total = set(), 0
+    out = hacommon.FileTar(snapshot_path)
+    try:
+        with ha_odoo._live_tar(volume_tar, '目標 EMQX 設定') as source:
+            for member in source:
+                name = ha_odoo._norm(member.name)
+                if name is None:
+                    raise BackupError('incompatible', '目標 EMQX 資料卷含有不安全的路徑。')
+                if name in names:
+                    if name in found or not member.isfile() or member.size < 0:
+                        raise BackupError('incompatible', '目標 EMQX 設定檔重複或不是一般檔案。')
+                    total += member.size
+                    if total > limit:
+                        raise BackupError('incompatible', '目標 EMQX 設定檔超過大小限制。')
+                    info = ha_odoo._copy_info(member, name)
+                    info.mode = 0o600
+                    out.add_member(info, source.extractfile(member))
+                    found.add(name)
+                source.members.clear()
+        if found != names:
+            raise BackupError('incompatible', '目標 EMQX 設定參照的檔案不存在，已停止。')
+    except Exception:
+        out.close()
+        os.unlink(snapshot_path)
+        raise
+    else:
+        out.close()
+    return found
+
+
+def snapshot_target_volume(work, app, volume, staging, required):
+    """Export the target volume and stage only explicitly enumerated configuration references.
+
+    A caller must first establish the complete effective reference list. This helper is not an
+    authorization to import: the public preservation blocker remains in place.
+    """
+    raw = staging / 'emqx-target-config-source.tar'
+    snapshot = staging / 'emqx-target-config-snapshot.tar'
+    try:
+        hacommon.live_export(work, app, volume, raw)
+        target_config_snapshot(raw, snapshot, required)
+    finally:
+        if raw.exists():
+            raw.unlink()
+    return snapshot
+
+
+def import_target_snapshot(tmp, snapshot_path):
+    """Populate the candidate volume before it starts; the source is a validated private snapshot."""
+    def produce(out):
+        with open(snapshot_path, 'rb') as source:
+            while True:
+                chunk = source.read(habackup.CHUNK)
+                if not chunk:
+                    break
+                out.write(chunk)
+    tmp.volume_import('emqx-new', produce)
+
+
+def target_broker(work, tmp, target, export, ids, *, hint='', target_snapshot=None):
     """This device's broker on an empty volume: import HA's export, load the strict settings back, verify."""
     name = os.path.basename(export)
     tmp.volume('emqx-in')
     tmp.volume_import('emqx-in', lambda out: _folder_tar(out, 'in', ids[0], ids[1], [(name, export)]))
     tmp.volume('emqx-new')
+    if target_snapshot is not None:
+        import_target_snapshot(tmp, target_snapshot)
     tmp.volume('emqx-new-log')
     tmp.run('emqx-new', target.image, [], detach=True, read_only_root=True, env=target.env, secrets=target.secrets,
             volumes=[(tmp.name('emqx-new'), DATA_TARGET, None), (tmp.name('emqx-new-log'), LOG_TARGET, None),
