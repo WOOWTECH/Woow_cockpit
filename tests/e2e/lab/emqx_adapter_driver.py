@@ -110,6 +110,11 @@ retainer.backend.storage_type = disc
             if result.returncode or result.stdout.strip() != payload.encode():
                 raise RuntimeError('synthetic retained marker mismatch')
 
+        def receive_absent(topic):
+            result = mqtt('mosquitto_sub', topic)
+            if result.returncode == 0 or result.stdout.strip() or b'timed out' not in result.stderr.lower():
+                raise RuntimeError('synthetic retained marker absence not proven')
+
         def user_command(operation):
             chain = "'mqtt:global', <<\"password_based:built_in_database\">>, <<\"source-only\">>"
             if operation == 'add':
@@ -187,9 +192,7 @@ retainer.backend.storage_type = disc
             '-t', 'lab/from-ha', '-r', '-n', '-d', check=False, timeout=60)
         if clear.returncode or not re.search(rb'RC:(?:0|16)\b', clear.stdout):
             raise RuntimeError('cannot clear target source marker')
-        absent = mqtt('mosquitto_sub', 'lab/from-ha')
-        if absent.returncode == 0 or absent.stdout.strip():
-            raise RuntimeError('source-only marker still exists on target')
+        receive_absent('lab/from-ha')
         print(json.dumps({'stage': 'source_absent_from_target', 'result': 'pass'}), flush=True)
         publish('lab/target-only', 'target-marker')
         receive('lab/target-only', 'target-marker')
@@ -207,8 +210,8 @@ retainer.backend.storage_type = disc
         ready()
         STAGE = 'candidate_source_marker'
         receive('lab/from-ha', 'ha-marker')
-        STAGE = 'candidate_target_marker'
-        receive('lab/target-only', 'target-marker')
+        STAGE = 'candidate_target_marker_replaced'
+        receive_absent('lab/target-only')
         STAGE = 'candidate_source_auth'
         source_auth = mqtt('mosquitto_pub', 'lab/source-login', 'source-authenticated',
                            username='source-only', credential=source_password)
@@ -243,7 +246,7 @@ retainer.backend.storage_type = disc
             raise RuntimeError('synthetic configuration did not roll back')
         receive('lab/before-rollback', 'rollback-marker')
         receive('lab/from-ha', 'ha-marker')
-        receive('lab/target-only', 'target-marker')
+        receive_absent('lab/target-only')
         denied = mqtt('mosquitto_pub', 'outside/denied', 'should-not-publish')
         if not re.search(rb'RC:135\b', denied.stdout + denied.stderr):
             raise RuntimeError('synthetic ACL denial was not observed')

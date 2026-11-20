@@ -1,0 +1,8 @@
+{"stage":"source","commit":"0009c8cb4b8fe4dcdfea30911e1132fae1cdd9e6"}
+{"stage":"images","emqx":"3f60addfad2bfc6c09400aa48cfbc1b2b2aab04fb6a64d6392c016e02d7fb57b","emqx_version":"5.8.9","client":"93a0bdfcbd9b7a86b36127cb81f54e1afd2019f12f39033458df405a027c03e3"}
+{"stage": "source_absent_from_target", "result": "pass"}
+{"stage": "ha_build_and_package", "result": "pass"}
+{"stage": "temporary_objects_cleanup", "result": "pass"}
+{"stage": "candidate_target_marker", "result": "fail", "error_type": "RuntimeError"}
+{"stage":"wrapper_cleanup","result":"pass"}
+{"stage":"independent_cleanup","result":"pass","checked":["container","volume","secret","unit"]}
