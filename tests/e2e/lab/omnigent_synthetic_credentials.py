@@ -18,6 +18,7 @@ HERE = Path(__file__).resolve().parent
 OWNER = HERE / 'owner.sh'
 LP = Path.home() / '.woowbk-lab/bin/labpodman'
 PG = '4278d7b1e3deb3193ddc803158f6532963f059fc25a2eefaee4b5a9e71741873'
+RUNNER = '68794c7302df51c24539009635483e9300ff00e353192d7b7bb656ddf1eef373'
 STAGE = 'preflight'
 APP = '545fa9ea7c1946bbca7df95448b8d2d172777ad861b41599ef69a81b3b32e6d5'
 
@@ -33,7 +34,9 @@ def main():
     global STAGE
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--run', action='store_true')
-    if not parser.parse_args().run:
+    parser.add_argument('--runner-ensure', action='store_true')
+    args = parser.parse_args()
+    if not args.run:
         parser.error('--run is required')
     state = subprocess.run([str(LP), 'container', 'inspect', 'woowbk-dev-d', '--format',
                             '{{.State.Running}} {{.HostConfig.NetworkMode}} {{json .HostConfig.PortBindings}}'],
@@ -44,7 +47,7 @@ def main():
         'cat /sys/fs/cgroup/memory.current /sys/fs/cgroup/memory.max'], capture_output=True, check=True).stdout.split()
     if len(memory) != 2 or int(memory[1]) - int(memory[0]) < 1400 * 1024 * 1024:
         raise RuntimeError('insufficient isolated lab memory')
-    for image in (PG, APP):
+    for image in ((PG, APP, RUNNER) if args.runner_ensure else (PG, APP)):
         assert pod('image', 'inspect', image, '--format', '{{.Id}}').stdout.decode().strip().removeprefix('sha256:') == image
     prefix = 'woowbk-auth-' + secrets.token_hex(5)
     db, server, secret = prefix + '-pg', prefix + '-api', prefix + '-password'
@@ -103,6 +106,19 @@ def main():
                 'python3', '-I', '-c', b1.CREDENTIAL_HTTP],
                 {'__events': True, 'username': 'synthetic-admin', 'password': password},
                 registry.register_observed, expected, 90)
+            runner_result = None
+            if args.runner_ensure:
+                STAGE = 'runner_ensure_events'
+                runner_name = prefix + '-runner-probe'
+                # Track before launch so timeout/failure still cleans the named object.
+                created_containers.append(runner_name)
+                runner_code = b1.PROBE_COMMON + (HERE / 'omnigent_runner_ensure_probe.py').read_text()
+                runner_result = b1._transport.run_events([str(OWNER), 'd', 'podman', 'run', '--rm', '-i',
+                    '--name', runner_name, '--pull=never', '--log-driver=none', '--network=container:' + db,
+                    '--memory=256m', '--pids-limit=128', '--cap-drop=ALL', '--security-opt=no-new-privileges',
+                    '--entrypoint=python3', RUNNER, '-I', '-c', runner_code],
+                    {'__events':True, 'username':'synthetic-admin', 'password':password},
+                    registry.register_observed, expected, 90)
             ev = b1.Evidence(registry, 'synthetic-omnigent-credentials')
             ev.save('consumer.json', result)
             # Exercise actual live issued values at the real evidence redaction boundary.
@@ -115,7 +131,8 @@ def main():
                 raise RuntimeError('secret leak detected; contents suppressed')
             summary = {'scope':'fresh-synthetic-direct-api', 'app_image':APP, 'pg_image':PG,
                 'source_fields':['login.token','login.refresh_token','refresh.access_token','refresh.refresh_token'],
-                'events_validated':2, 'consumer':result, 'evidence_scan':scan,
+                'events_validated':4 if args.runner_ensure else 2, 'consumer':result,
+                'runner_ensure':runner_result, 'runner_image':RUNNER if args.runner_ensure else None, 'evidence_scan':scan,
                 'app_log_hits':log_hits, 'outer_network':'none', 'app_external_errno':101,
                 'original_identity_used':False, 'full_runner_coverage':False}
             ev.save('coverage.json', summary)
