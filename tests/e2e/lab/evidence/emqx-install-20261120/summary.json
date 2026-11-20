@@ -1,0 +1,56 @@
+{
+  "code_commit": "fd9387a",
+  "scope": "synthetic HA archive; actual EMQX 5.8.9, Podman, Mosquitto; internal product build/packaging and manual volume installation",
+  "emqx_image": "3f60addfad2bfc6c09400aa48cfbc1b2b2aab04fb6a64d6392c016e02d7fb57b",
+  "emqx_version": "5.8.9",
+  "emqx_source": "a8319fe2390169e1f2483e3ec80dd01a6cdb233d",
+  "passed_stages": 14,
+  "failed_stages": 0,
+  "exit_code": 0,
+  "source_retained_rows": 1,
+  "candidate_retained_rows": 1,
+  "public_guard_enabled": true,
+  "commercial_acceptance_complete": false,
+  "cleanup": {
+    "containers": 0,
+    "volumes": 0,
+    "secrets": 0,
+    "temporary_code_removed": true
+  },
+  "dev_d": {
+    "network": "none",
+    "ports": {},
+    "running": true
+  },
+  "attempts": {
+    "r1": "blocked: asynchronous system ticker added three retained status rows",
+    "r2": "installation/restart passed; switch-back assertion used pre-fixture instead of pre-conversion baseline",
+    "r3": "14 stages passed"
+  },
+  "ticker_regression": {
+    "old_total_before": 1,
+    "old_total_after_tick": 4,
+    "fixed_total_paused": 1,
+    "fixed_total_after_resume": 4,
+    "payload_readback": true
+  },
+  "superseded_experiment": [
+    "ticker-after",
+    "ticker-boundaries",
+    "ticker-node: exact status-row exclusion passed local boundaries but was replaced by temporary ticker suspension; no row exclusions in final code"
+  ],
+  "limitations": [
+    "Not the full product adapter install/automatic rollback path",
+    "Not a real deployed HA backup",
+    "Additional active setting variants remain refused",
+    "Ticker pause is not a general database snapshot; expiry and other internal writers remain separate verification work",
+    "Other service end-to-end and credential/manual review gates remain"
+  ],
+  "cleanup_probe_note": "First independent JSON cleanup probe failed on empty CLI output; retried with explicit name formatter and verified all zero. No success claimed for the failed probe.",
+  "mqtt_client_image": "93a0bdfcbd9b7a86b36127cb81f54e1afd2019f12f39033458df405a027c03e3",
+  "source_sha256": {
+    "backup-engine/woowbackup/ha_emqx.py": "00b90c3a97bd7832cd7bd455e71da0dc6536d77493bec36c1dd0eac3343f770f",
+    "backup-engine/woowbackup/tempctr.py": "21a6baa2c72feb59cf0a3cc3ee7b25c13da1bbd3066a094a0a1ebbaf309c35cd",
+    "tests/e2e/lab/emqx_synthetic_preservation.py": "b3eb8d510529e1b38ce3c403bba2901aa4f3ceb3608a9367bf5f18aece1ebe64"
+  }
+}
