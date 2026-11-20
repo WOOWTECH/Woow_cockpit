@@ -1,14 +1,17 @@
 """Synthetic fixtures only; tests never read a real device or service."""
 import base64
+from contextlib import contextmanager, redirect_stderr, redirect_stdout
 import importlib.util
 import io
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
 import tarfile
 import tempfile
 import unittest
+from unittest import mock
 
 spec = importlib.util.spec_from_file_location('private_sources', Path(__file__).with_name('headscale-private-sources.py'))
 private = importlib.util.module_from_spec(spec)
@@ -54,6 +57,62 @@ class PrivateSourceTest(unittest.TestCase):
             private.private_key(b'')
         with self.assertRaises(ValueError):
             private.private_key(b'privkey:' + b'0' * 64)
+
+    def test_source_size_boundary_uses_bounded_read(self):
+        # A tiny substituted limit exercises the exact boundary without large
+        # allocations. Observe the read request as well as its return value.
+        fdopen = os.fdopen
+        reads = []
+
+        @contextmanager
+        def tracked_open(*args, **kwargs):
+            with fdopen(*args, **kwargs) as source:
+                reader = mock.Mock(wraps=source)
+                reads.append(reader.read)
+                yield reader
+
+        with tempfile.TemporaryDirectory() as directory, \
+                mock.patch.object(private, 'MAX_FILE', 32), \
+                mock.patch.object(private.os, 'fdopen', side_effect=tracked_open):
+            path = Path(directory) / 'source'
+            for size in (0, 31, 32, 33):
+                with self.subTest(size=size):
+                    path.write_bytes(b'x' * size)
+                    if 0 < size <= 32:
+                        self.assertEqual(private.read_source(path), b'x' * size)
+                    else:
+                        with self.assertRaises(ValueError):
+                            private.read_source(path)
+                    reads[-1].assert_called_once_with(33)
+
+    def test_source_policy_and_oversize_errors_are_generic(self):
+        with tempfile.TemporaryDirectory() as directory, mock.patch.object(private, 'MAX_FILE', 32):
+            root = Path(directory)
+            source = root / 'private-source'
+            source.write_bytes(b'synthetic-secret-content-' + b'x' * 9)
+            link = root / 'link'
+            link.symlink_to(source)
+            fifo = root / 'fifo'
+            os.mkfifo(fifo)
+            for path in (source, link, fifo, root, root / 'missing'):
+                for kind in ('client', 'pem'):
+                    with self.subTest(path=path.name, kind=kind), \
+                            mock.patch.object(sys, 'argv', [private.__file__, kind, str(path)]), \
+                            mock.patch.object(private, 'client_keys') as client_parser, \
+                            mock.patch.object(private, 'pem_values') as pem_parser, \
+                            redirect_stdout(io.StringIO()) as out, redirect_stderr(io.StringIO()) as err:
+                        with self.assertRaises(SystemExit) as raised:
+                            private.main()
+                        self.assertEqual(raised.exception.code, 1)
+                        self.assertEqual(out.getvalue(), '')
+                        self.assertEqual(err.getvalue(),
+                                         'Synthetic private source missing, invalid or unsupported\n')
+                        client_parser.assert_not_called()
+                        pem_parser.assert_not_called()
+            # A symlink to even an otherwise valid-size regular file is rejected.
+            source.write_bytes(b'x')
+            with self.assertRaises(OSError):
+                private.read_source(link)
 
     def test_failed_extractor_suppresses_source_contents(self):
         with tempfile.TemporaryDirectory() as directory:

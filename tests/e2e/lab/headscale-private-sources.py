@@ -7,10 +7,11 @@ helper. Unknown Tailscale state formats fail closed instead of counting hashes.
 import base64
 import binascii
 import json
+import os
 import re
+import stat
 import sys
 import tarfile
-from pathlib import Path
 
 MAX_FILE = 4 * 1024 * 1024
 PRIVATE = re.compile(r'(?<![A-Za-z0-9_])(?:privkey|nodepriv|machinepriv|discpriv):([0-9a-fA-F]{64})(?![0-9a-fA-F])')
@@ -89,15 +90,31 @@ def volume_key(path, name):
     return private_key(matches[0])
 
 
+def read_source(path):
+    # Synthetic fixtures live under the runner's private directory. Reject a
+    # symlink at the leaf and inspect the opened descriptor, avoiding a
+    # check/open race. NONBLOCK lets us reject FIFOs without waiting on a writer.
+    # Parent directories are trusted; this is not a general path sandbox.
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            raise ValueError('source is not a regular file')
+        with os.fdopen(fd, 'rb', closefd=False) as source:
+            data = source.read(MAX_FILE + 1)
+        if not data or len(data) > MAX_FILE:
+            raise ValueError('source missing or too large')
+        return data
+    finally:
+        os.close(fd)
+
+
 def main():
     try:
         kind, path = sys.argv[1:3]
         if kind == 'volume':
             values = volume_key(path, sys.argv[3])
         else:
-            data = Path(path).read_bytes()
-            if not data or len(data) > MAX_FILE:
-                raise ValueError('source missing or too large')
+            data = read_source(path)
             values = {'pem': pem_values, 'client': client_keys}[kind](data)
         sys.stdout.write(json.dumps(values, ensure_ascii=True))
     except Exception:
