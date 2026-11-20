@@ -1,0 +1,29 @@
+{"stage": "isolated_startup", "result": "pass"}
+{"stage": "effective_root_inventory", "roots": ["actions", "alarm", "api_key", "authentication", "authorization", "auto_subscribe", "banned", "bridges", "broker", "cluster", "conn_congestion", "connectors", "crl_cache", "dashboard", "delayed", "durable_sessions", "durable_storage", "exhook", "flapping_detect", "force_gc", "force_shutdown", "gateway", "limiter", "listeners", "log", "mqtt", "node", "overload_protection", "plugins", "prometheus", "psk_authentication", "retainer", "rewrite", "rpc", "rule_engine", "slow_subs", "sources", "stats", "sys_topics", "sysmon", "telemetry", "topic_metrics", "trace", "zones"]}
+{"stage": "effective_config_and_bootstrap_mount", "result": "pass"}
+{"stage": "product_structured_config_reader", "result": "pass"}
+{"stage": "operational_root", "root": "api_key", "result": "pass"}
+{"stage": "operational_root", "root": "banned", "result": "pass"}
+{"stage": "operational_root", "root": "cluster", "result": "pass"}
+{"stage": "operational_root", "root": "log", "result": "pass"}
+{"stage": "operational_root", "root": "node", "result": "pass"}
+{"stage": "operational_root", "root": "rpc", "result": "pass"}
+{"stage": "restricted_root", "root": "actions", "result": "pass"}
+{"stage": "restricted_root", "root": "auto_subscribe", "result": "pass"}
+{"stage": "restricted_root", "root": "bridges", "result": "pass"}
+{"stage": "restricted_root", "root": "connectors", "result": "pass"}
+{"stage": "restricted_root", "root": "exhook", "result": "pass"}
+{"stage": "restricted_root", "root": "gateway", "result": "pass"}
+{"stage": "restricted_root", "root": "plugins", "result": "pass"}
+{"stage": "restricted_root", "root": "psk_authentication", "result": "pass"}
+{"stage": "restricted_root", "root": "rewrite", "result": "pass"}
+{"stage": "restricted_root", "root": "rule_engine", "result": "pass"}
+{"stage": "restricted_root", "root": "sources", "result": "pass"}
+{"stage": "restricted_root", "root": "topic_metrics", "result": "pass"}
+{"stage": "restricted_root", "root": "durable_sessions", "result": "pass"}
+{"stage": "restricted_root", "root": "durable_storage", "result": "pass"}
+{"stage": "restricted_root", "root": "limiter", "result": "pass"}
+{"stage": "restricted_root", "root": "prometheus", "result": "pass"}
+{"stage": "restricted_root", "root": "sysmon", "result": "pass"}
+{"stage": "product_candidate_backup_probe", "result": "fail", "error_type": "BackupError"}
+{"image": "3f60addfad2b", "client_image": "93a0bdfcbd9b", "results": [{"stage": "isolated_startup", "result": "pass"}, {"stage": "effective_config_and_bootstrap_mount", "result": "pass"}, {"stage": "product_structured_config_reader", "result": "pass"}, {"stage": "product_candidate_backup_probe", "result": "fail", "error_type": "BackupError"}]}

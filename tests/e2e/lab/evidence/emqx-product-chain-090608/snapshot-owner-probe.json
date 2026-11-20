@@ -1,0 +1,23 @@
+{
+  "kind": "real_podman_volume_import_and_emqx_image_uid_probe",
+  "before": {
+    "directory": "configs",
+    "uid": 0,
+    "gid": 0,
+    "mode": "0755"
+  },
+  "after": {
+    "directory": "configs",
+    "uid": 1000,
+    "gid": 1000,
+    "mode": "0700"
+  },
+  "file_after": {
+    "path": "configs/cluster.hocon",
+    "uid": 1000,
+    "gid": 1000,
+    "mode": "0600"
+  },
+  "image_user_can_write_directory_and_read_file": true,
+  "temporary_volume_removed": true
+}
