@@ -3,6 +3,8 @@ import importlib.util
 from pathlib import Path
 from types import SimpleNamespace
 import unittest
+import tempfile
+from unittest.mock import patch
 
 from woowbackup import catalog
 from woowbackup.paths import Paths
@@ -56,6 +58,29 @@ class FixtureTests(unittest.TestCase):
             mutate(candidate)
             with self.assertRaises(ValueError):
                 self.f.validate_inspection(candidate)
+
+    def test_real_adapter_entry_points_are_ordered_after_isolation_checks(self):
+        from woowbackup.podman import OwnerRunner
+        user = SimpleNamespace(pw_uid=1019, pw_gid=1019, pw_dir='/home/' + self.f.owner)
+        app = catalog.validate_entry(self.f.catalog(), paths=Paths(base=Path('/tmp/fixture')),
+                                     user_lookup=lambda name: user)
+        runner = OwnerRunner(self.f.owner, user_lookup=lambda name: user)
+        volumes = {name: Path('/tmp') / (name + '.tar') for name in self.f.volumes}
+        with tempfile.TemporaryDirectory() as directory, patch(
+                'woowbackup.adapters.quadlet_postgres.QuadletPostgresAdapter') as adapter_type:
+            adapter = adapter_type.return_value
+            candidate, safety = object(), object()
+            adapter.import_manifest.return_value = candidate
+            adapter.backup.return_value = safety
+            stage = Path(directory) / 'staging'
+            with self.assertRaises(ValueError):
+                fixture.prepare_adapter_inputs(self.f, app, runner, self.inspection, 'wrong', volumes, stage)
+            adapter_type.assert_not_called()
+            self.assertFalse(stage.exists())
+            actual = fixture.prepare_adapter_inputs(self.f, app, runner, self.inspection, '5.8.9', volumes, stage)
+            self.assertEqual(actual, (adapter, candidate, safety))
+            adapter.import_manifest.assert_called_once_with(stage / 'candidate', volumes=volumes)
+            adapter.backup.assert_called_once_with(stage / 'safety', include_images=False)
 
 
 if __name__ == '__main__':

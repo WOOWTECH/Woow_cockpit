@@ -77,3 +77,32 @@ class Fixture:
         if volumes != set(self.volumes):
             raise ValueError('unexpected mounted volumes')
 
+
+def prepare_adapter_inputs(fixture, app, runner, inspection, version, candidate_volumes, staging):
+    """Stage product import and a pre-restore backup for a verified synthetic app.
+
+    The caller must have independently created and verified the dedicated owner,
+    unit and volumes before reaching this function. No service is installed here.
+    This is not the rollback flow or an acceptance result.
+    """
+    from woowbackup.adapters.quadlet_postgres import QuadletPostgresAdapter
+    from woowbackup.podman import OwnerRunner
+
+    if not isinstance(runner, OwnerRunner) or runner.owner != fixture.owner:
+        raise ValueError('unexpected owner runner')
+    if (app.id != fixture.prefix or app.owner != fixture.owner or tuple(app.units) != (fixture.unit,)
+            or {v['name'] for v in app.volumes} != set(fixture.volumes)
+            or {s['name'] for s in app.secrets} != {fixture.secret} or app.postgres or app.data_dirs
+            or app.raw != fixture.catalog()):
+        raise ValueError('unexpected catalog')
+    if version != EMQX_VERSION:
+        raise ValueError('unexpected EMQX version')
+    fixture.validate_inspection(inspection)
+    if set(candidate_volumes) != set(fixture.volumes):
+        raise ValueError('unexpected candidate volumes')
+    staging.mkdir(mode=0o700, parents=True, exist_ok=False)
+    adapter = QuadletPostgresAdapter(app, runner, lambda _message: None)
+    imported = adapter.import_manifest(staging / 'candidate', volumes=candidate_volumes)
+    backup = adapter.backup(staging / 'safety', include_images=False)
+    return adapter, imported, backup
+
