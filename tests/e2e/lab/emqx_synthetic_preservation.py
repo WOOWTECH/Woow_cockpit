@@ -93,29 +93,91 @@ def denied_subscription(password):
         raise RuntimeError('subscription_denial_not_proven')
 
 
-def candidate_backup_probe(root, original, base, acl):
-    from woowbackup import habackup, ha_emqx, hacommon
+def candidate_backup_probe(root, original, base, acl, password):
+    global CONTAINER
+    from woowbackup import habackup, ha_emqx, hacommon, tempctr
     from woowbackup.errors import BackupError
     class Runner:
         def podman(self, *args, **kwargs):
-            return command(list(args), timeout=kwargs.get('timeout', 60), accept=not kwargs.get('check', True))
-    work = SimpleNamespace(runner=lambda app: Runner())
+            incoming = kwargs.get('input')
+            streaming = hasattr(incoming, 'read')
+            output = kwargs.get('stdout')
+            result = subprocess.run(['podman', *args],
+                stdin=incoming if streaming else None, input=None if streaming else incoming,
+                stdout=output if output is not None else subprocess.PIPE,
+                stderr=subprocess.PIPE, timeout=kwargs.get('timeout', 120))
+            if kwargs.get('max_output') is not None and len(result.stdout or b'') > kwargs['max_output']:
+                raise RuntimeError('lab_output_budget_exceeded')
+            if result.returncode and kwargs.get('check', True):
+                raise RuntimeError('lab_podman_failed')
+            return result
+        def relay(self, args, **kwargs):
+            return self.podman(*args, **kwargs)
+    class Budget:
+        used = 0
+        def budget(self):
+            return 256 * 1024 * 1024 - self.used
+        def wrote(self, size):
+            self.used += size
+            if self.budget() < 0:
+                raise RuntimeError('lab_staging_budget_exceeded')
+    work = SimpleNamespace(runner=lambda app: Runner(), guard=Budget(), abort=None,
+        checkpoint=lambda: None, phase=lambda name: record('product_phase_' + name),
+        log=lambda message: None)
     target = SimpleNamespace(container=CONTAINER, data_volume=VOLUME,
-        files=[(str(base), '/opt/emqx/etc/base.hocon', 'ro'), (str(acl), '/opt/emqx/etc/lab-acl.conf', 'ro')],
+        image=IMAGE, env={'EMQX_NODE__NAME': 'emqx@127.0.0.1', 'EMQX_DASHBOARD__DEFAULT_PASSWORD': password}, files=[(str(base), '/opt/emqx/etc/base.hocon', 'ro'), (str(acl), '/opt/emqx/etc/lab-acl.conf', 'ro')],
         secrets=[SECRET + ',type=mount,target=/opt/emqx/etc/lab-bootstrap.csv,uid=1000,gid=1000,mode=0400'])
     # First call the product's bounded structured reader against the real broker.
     read = ha_emqx.read_effective_config(lambda argv: Runner().podman('exec', CONTAINER, *argv,
                                           timeout=120, check=False))
     assert read == original
     record('product_structured_config_reader')
-    # Preserve the actual rejection from the candidate entry, without patching the guard or source.
-    try:
-        ha_emqx.candidate_from_target(work, 'synthetic', None, target, root, root / 'unused-export', (1000, 1000))
-    except BackupError as error:
-        candidate_result = {'stage': 'product_candidate_entry', 'result': 'blocked', 'code': error.code,
-                            'reason': error.message}
-    else:
-        raise RuntimeError('unexpected_candidate_completion')
+    for key in sorted(ha_emqx.ha_emqx_settings.ROOTS & set(read)):
+        try:
+            ha_emqx.ha_emqx_settings.validate({key: read[key]}, target.files)
+        except BackupError:
+            print(json.dumps({'stage': 'operational_root', 'root': key, 'result': 'fail',
+                              'field_names': sorted(read[key])}), flush=True)
+            raise
+        print(json.dumps({'stage': 'operational_root', 'root': key, 'result': 'pass'}), flush=True)
+
+    for roots, validate in ((ha_emqx.ha_emqx_settings.PASSIVE_ROOTS, ha_emqx.ha_emqx_settings.validate_passive),
+                            (ha_emqx.ha_emqx_settings.MONITOR_ROOTS, ha_emqx.ha_emqx_settings.validate_monitoring)):
+        for key in sorted(roots & set(read)):
+            selected = {key: read[key]}
+            if key == 'durable_storage':
+                selected['durable_sessions'] = read['durable_sessions']
+            try:
+                validate(selected)
+            except BackupError:
+                fields = sorted(read[key]) if isinstance(read[key], dict) else []
+                print(json.dumps({'stage': 'restricted_root', 'root': key, 'result': 'fail',
+                                  'field_names': fields}), flush=True)
+                raise
+            print(json.dumps({'stage': 'restricted_root', 'root': key, 'result': 'pass'}), flush=True)
+    for key in sorted(read):
+        selected = {'authorization': read['authorization'], key: read[key]}
+        if key == 'durable_storage':
+            selected['durable_sessions'] = read['durable_sessions']
+        try:
+            ha_emqx.configuration_references(selected, target.files, target.secrets)
+        except BackupError as error:
+            print(json.dumps({'stage': 'root_reference_failure', 'root': key,
+                              'code': error.code, 'reason': error.message}), flush=True)
+            raise
+    ha_emqx.configuration_references(read, target.files, target.secrets)
+    record('product_complete_reference_validation')
+    # Persist synthetic HA data settings without target-only bootstrap/ACL mounts.
+    source_authn = [{key: value for key, value in row.items() if key not in ('bootstrap_file', 'bootstrap_type')}
+                   for row in original['authentication']]
+    source_config = {'authentication': source_authn, 'authorization': {'no_match': 'allow',
+                     'deny_action': 'ignore', 'sources': []}}
+    Runner().podman('exec', '-i', CONTAINER, 'sh', '-c',
+                   'umask 077; cat > /tmp/lab-source.json', input=json.dumps(source_config).encode())
+    ctl('conf', 'load', '--replace', '/tmp/lab-source.json')
+    published = mqtt(password, 'lab/from-ha-backup')
+    assert published.returncode == 0
+    receive_retained(password, 'lab/from-ha-backup')
     command(['stop', CONTAINER], timeout=120)
     raw = command(['volume', 'export', VOLUME], timeout=120).stdout
     inner = io.BytesIO()
@@ -159,8 +221,74 @@ def candidate_backup_probe(root, original, base, acl):
     node, blocker = ha_emqx.node_name(source)
     assert blocker is None and node == 'emqx@127.0.0.1' and source.files > 0
     record('synthetic_ha_backup_product_parser_and_staging')
-    results.append(candidate_result)
-    print(json.dumps(candidate_result), flush=True)
+    command(['start', CONTAINER])
+    ready()
+    restore = {key: original[key] for key in ('authentication', 'authorization')}
+    Runner().podman('exec', '-i', CONTAINER, 'sh', '-c',
+                   'umask 077; cat > /tmp/lab-target.json', input=json.dumps(restore).encode())
+    ctl('conf', 'load', '--replace', '/tmp/lab-target.json')
+    tmp = tempctr.TempObjects(Runner(), 'j20261120T090608Z-' + secrets.token_hex(4),
+                              memory='768m', pids=512, cpus='1')
+    try:
+        with habackup.open_backup(backup) as opened:
+            work.addon_member = lambda wanted: slug
+            work.open = lambda member: opened.open_addon(member)
+            work.addon_info = lambda wanted: SimpleNamespace(version='5.9.1')
+            ha_emqx._build_candidate(work, SimpleNamespace(id='emqx'), tmp, target, root, version='5.8.9')
+        record('product_ha_parse_snapshot_import_restore_counts')
+        # Actual client probes now address the candidate, never the source container.
+        old_container = CONTAINER
+        CONTAINER = tmp.name('emqx-new')
+        try:
+            receive_retained(password, 'lab/from-ha-backup')
+            record('ha_only_retained_message_restored')
+            allowed, denied = mqtt(password, 'lab/product'), mqtt(password, 'outside/product')
+            assert allowed.returncode == 0 and b'RC:135' in denied.stdout
+            receive_retained(password, 'lab/product')
+            denied_subscription(password)
+            before = config()
+            command(['restart', CONTAINER], timeout=120)
+            ready()
+            assert config() == before
+            receive_retained(password, 'lab/product')
+            receive_retained(password, 'lab/from-ha-backup')
+            denied_subscription(password)
+            record('product_candidate_restart_mqtt_allow_deny')
+        finally:
+            CONTAINER = old_container
+    except BackupError as error:
+        markers = (b'permission denied', b'eacces', b'enoent', b'read-only file system',
+                   b'failed_to_load', b'failed_to_read', b'badmatch', b'bootstrap', b'cluster.hocon')
+        for name in tmp.containers:
+            info = command(['container', 'inspect', name], accept=True)
+            if info.returncode == 0:
+                state = json.loads(info.stdout)[0]['State']
+                print(json.dumps({'stage': 'candidate_container_state',
+                    'role': name.rsplit(tmp.job_id + '-', 1)[-1],
+                    'exit_code': state.get('ExitCode'), 'running': state.get('Running')}), flush=True)
+        for role in ('emqx-new', 'emqx-new-log', 'emqx-ha-log'):
+            if tmp.name(role) not in tmp.volumes:
+                continue
+            exported = command(['volume', 'export', tmp.name(role)], accept=True)
+            if exported.returncode:
+                continue
+            with tarfile.open(fileobj=io.BytesIO(exported.stdout)) as archive:
+                for member in archive:
+                    if member.name.lstrip('./') == 'configs/cluster.hocon':
+                        print(json.dumps({'stage': 'snapshot_file_metadata', 'role': role,
+                            'uid': member.uid, 'gid': member.gid, 'mode': oct(member.mode)}), flush=True)
+                    if role.endswith('-log') and member.isfile() and member.size <= 8 * 1024 * 1024:
+                        body = archive.extractfile(member).read().lower()
+                        print(json.dumps({'stage': 'candidate_log_markers', 'role': role,
+                            'markers': [m.decode() for m in markers if m in body]}), flush=True)
+        results.append({'stage': 'product_candidate_entry', 'result': 'blocked',
+                        'code': error.code, 'reason': error.message})
+        print(json.dumps(results[-1]), flush=True)
+    finally:
+        remaining = tmp.cleanup()
+        print(json.dumps({'stage': 'product_cleanup', 'remaining': len(remaining)}), flush=True)
+        if remaining:
+            raise RuntimeError('product_cleanup_incomplete')
 
 
 def record(stage):
@@ -197,6 +325,7 @@ mqtt.max_packet_size = "1MB"
         command(['run', '-d', '--name', CONTAINER, '--pull=never', '--network=none',
                  '--memory=768m', '--pids-limit=512', '--cpus=1',
                  '-e', 'EMQX_NODE__NAME=emqx@127.0.0.1',
+                 '-e', 'EMQX_DASHBOARD__DEFAULT_PASSWORD=' + password,
                  '-v', VOLUME + ':/opt/emqx/data',
                  '-v', str(base) + ':/opt/emqx/etc/base.hocon:ro',
                  '-v', str(acl) + ':/opt/emqx/etc/lab-acl.conf:ro',
@@ -215,6 +344,11 @@ mqtt.max_packet_size = "1MB"
         assert original['authentication'][0]['bootstrap_file'] == '/opt/emqx/etc/lab-bootstrap.csv'
         command(['exec', CONTAINER, 'test', '-r', '/opt/emqx/etc/lab-bootstrap.csv'])
         record('effective_config_and_bootstrap_mount')
+        if len(sys.argv) > 2 and sys.argv[2] == '--preflight-only':
+            phase = 'product_candidate_backup_probe'
+            candidate_backup_probe(root, original, base, acl, password)
+            raise SystemExit(1 if any(item['result'] != 'pass' for item in results) else 0)
+
         phase = 'mqtt_allowed'
         allowed = mqtt(password, 'lab/allowed')
         assert allowed.returncode == 0 and any(code in allowed.stdout for code in (b'RC:0', b'RC:16'))
@@ -263,7 +397,7 @@ mqtt.max_packet_size = "1MB"
         record('restart_config_and_mqtt_policy')
         if len(sys.argv) > 1:
             phase = 'product_candidate_backup_probe'
-            candidate_backup_probe(root, after, base, acl)
+            candidate_backup_probe(root, after, base, acl, password)
 except Exception as error:
     results.append({'stage': phase, 'result': 'fail', 'error_type': type(error).__name__})
     print(json.dumps(results[-1]), flush=True)

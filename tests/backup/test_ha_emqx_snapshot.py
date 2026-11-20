@@ -47,10 +47,15 @@ class SnapshotTests(unittest.TestCase):
                 producer(out)
                 self.data = out.getvalue()
         candidate = Candidate()
-        ha_emqx.import_target_snapshot(candidate, self.snapshot)
+        ha_emqx.import_target_snapshot(candidate, self.snapshot, (1000, 1000))
         self.assertEqual(candidate.role, 'emqx-new')
         with tarfile.open(fileobj=io.BytesIO(candidate.data)) as tar:
-            self.assertEqual(set(tar.getnames()), self.required)
+            self.assertEqual({m.name for m in tar if m.isfile()}, self.required)
+            self.assertEqual({m.name for m in tar if m.isdir()}, {'.', 'configs', 'authz', 'certs'})
+            for member in tar:
+                self.assertEqual((member.uid, member.gid), (1000, 1000))
+                if member.isdir():
+                    self.assertEqual(member.mode, 0o700)
             for name, data in self.files.items():
                 self.assertEqual(tar.extractfile(name).read(), data)
                 self.assertEqual(tar.getmember(name).mode, 0o600)
