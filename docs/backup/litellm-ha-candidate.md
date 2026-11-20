@@ -114,5 +114,7 @@ The earlier PG17 9/9 run used a lab subprocess wrapper that did not enforce
 a bounded capture. The harness now delegates to `default_runner`, forwards input,
 stdout, timeout, max_output and abort, and discards the bounded stderr tail. Local
 real-child tests exercise the 4096-byte capture boundary, overflow, timeout, file
-output, abort, and stderr sanitization. The PG17 lab test was not rerun with this
-updated wrapper, so no new lab acceptance is implied.
+output, abort, and stderr sanitization. The PG17 synthetic SQL test was subsequently rerun with this wrapper at source
+commit `7e63c6c`: 9/9 passed, with independent container and volume cleanup checks.
+See `tests/e2e/lab/evidence/litellm-candidate/pg17-bounded-runner.json`; this is not
+PG18, HA-backup, or migration acceptance.
