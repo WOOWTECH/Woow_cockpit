@@ -1,0 +1,8 @@
+{
+  "scope": "isolated dev-d; real TempObjects and PG17 image, no network or mounted data",
+  "postgres_image_id": "sha256:094ecc9ca4ea66931822a93f1d814e059deda57f355d9416fa72f85170871cb7",
+  "result": {"target_pg_major": 17, "target_version": null},
+  "app_image_supplied": false,
+  "probe_objects_clean": true,
+  "complete_litellm_acceptance": false
+}

@@ -128,6 +128,37 @@ def target_evidence(*, running_db_image_id, inspected_db_image):
     return {'target_version': product, 'target_pg_major': pg_major}
 
 
+def probe_target_images(tmp, *, running_app_image_id, running_db_image_id):
+    """Probe caller-supplied running image IDs in short-lived, isolated containers.
+
+    The caller must bind IDs to the intended running containers and authorize this
+    inspection. No volumes, environment overrides, network, or secrets are passed.
+    Failure or malformed output is unknown; a tag is never accepted as an ID.
+    The source database and credential compatibility are not inspected here.
+    """
+    result = {'target_version': None, 'target_pg_major': None}
+    if isinstance(running_app_image_id, str) and _IMAGE_ID.fullmatch(running_app_image_id):
+        try:
+            out = tmp.run('litellm-version-app', running_app_image_id,
+                          ['-I', '-c', 'import importlib.metadata; print(importlib.metadata.version("litellm"))'],
+                          entrypoint='python', read_only_root=True, timeout=120, max_output=4096).stdout or b''
+            value = out.decode('ascii', 'strict').strip()
+            if _VERSION.fullmatch(value):
+                result['target_version'] = value
+        except (BackupError, UnicodeError):
+            pass
+    if isinstance(running_db_image_id, str) and _IMAGE_ID.fullmatch(running_db_image_id):
+        try:
+            out = tmp.run('litellm-version-pg', running_db_image_id, ['--version'],
+                          entrypoint='postgres', read_only_root=True, timeout=120, max_output=4096).stdout or b''
+            match = re.fullmatch(rb'postgres \(PostgreSQL\) ([1-9][0-9]?)\.[0-9]+(?:\.[0-9]+)?\s*', out)
+            if match:
+                result['target_pg_major'] = int(match.group(1))
+        except (BackupError, UnicodeError):
+            pass
+    return result
+
+
 def assess_target(source, evidence):
     """Use only the non-secret target facts produced by target_evidence."""
     if not isinstance(evidence, dict):

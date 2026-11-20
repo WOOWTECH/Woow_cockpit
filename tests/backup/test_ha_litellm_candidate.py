@@ -78,6 +78,36 @@ class LiteLLMCandidateTests(unittest.TestCase):
                 self.assertTrue(any('目標 PostgreSQL' in item for item in
                                     candidate.assess_target(source, facts)['blockers']))
 
+    def test_probe_caller_accepts_only_ids_and_feeds_assessment(self):
+        app_id = 'sha256:' + 'a' * 64
+        pg_id = 'sha256:' + 'b' * 64
+        tmp = Mock()
+        tmp.run.side_effect = [Mock(stdout=b'1.104.0\n'), Mock(stdout=b'postgres (PostgreSQL) 17.11\n')]
+        evidence = candidate.probe_target_images(tmp, running_app_image_id=app_id, running_db_image_id=pg_id)
+        self.assertEqual(evidence, {'target_version': '1.104.0', 'target_pg_major': 17})
+        for call in tmp.run.call_args_list:
+            self.assertTrue(call.kwargs['read_only_root'])
+            self.assertNotIn('volumes', call.kwargs)
+            self.assertNotIn('secrets', call.kwargs)
+            self.assertNotIn('env', call.kwargs)
+            self.assertNotIn('network', call.kwargs)
+        source = candidate.scan_member(self.member())
+        blockers = candidate.assess_target(source, evidence)['blockers']
+        self.assertTrue(any('降版' in item for item in blockers))
+        self.assertIn(candidate.GUARD, blockers)
+        tmp.reset_mock()
+        evidence = candidate.probe_target_images(tmp, running_app_image_id='localhost/mutable:tag',
+                                                 running_db_image_id=None)
+        self.assertEqual(evidence, {'target_version': None, 'target_pg_major': None})
+        tmp.run.assert_not_called()
+
+    def test_probe_failures_and_malformed_output_are_unknown(self):
+        image_id = 'sha256:' + 'a' * 64
+        tmp = Mock()
+        tmp.run.side_effect = [BackupError('job-failed', 'fail'), Mock(stdout=b'postgres 17.11')]
+        facts = candidate.probe_target_images(tmp, running_app_image_id=image_id, running_db_image_id=image_id)
+        self.assertEqual(facts, {'target_version': None, 'target_pg_major': None})
+
     def test_preservation_contract_is_disabled_and_transfers_no_secrets(self):
         plan = candidate.preservation_contract()
         self.assertEqual(plan['source_salt'], 'unverified_database_binding')

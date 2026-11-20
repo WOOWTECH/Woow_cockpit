@@ -53,3 +53,19 @@ stores were not inspected. No image was downloaded, no other device was started,
 production secret was used. A genuine PG18 database, valid and mismatched source salt,
 and safe inspection through the real restricted parser remain external test prerequisites.
 Synthetic tests of this contract are not PostgreSQL or end-to-end acceptance.
+
+## Target image version probe candidate
+
+`probe_target_images` accepts full immutable image IDs from a caller that has separately
+established their relationship to the intended running services. Using `TempObjects`, it
+runs `postgres --version` and Python's installed LiteLLM package metadata probe in
+short-lived containers with no network, read-only root, no supplied environment, secrets
+or volumes, and no image pull. Unparseable output or failed execution produces unknown;
+`assess_target` feeds those facts to the existing blocked assessment. The caller has not
+been wired to production or the public UI, and image identity alone does not establish
+schema, migrations, credentials, or deployment provenance.
+
+In dev-d only, the candidate caller was executed through the real `TempObjects` against
+an already loaded PG17 image: major 17, LiteLLM version unknown, and no probe objects
+remained. See `tests/e2e/lab/evidence/litellm-candidate/pg17-probe.json`. This is a
+version-probe test, not a LiteLLM restore or migration acceptance.
