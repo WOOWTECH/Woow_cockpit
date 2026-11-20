@@ -81,11 +81,30 @@ class Secrets:
         return self.values[name]
 
     def redact(self, value):
-        text = value if isinstance(value, str) else json.dumps(value, ensure_ascii=False)
+        safe = self.redact_tree(value)
+        return safe if isinstance(safe, str) else json.dumps(safe, ensure_ascii=False)
+
+    def _redact_text(self, text):
         for name, secret in sorted(self.values.items(), key=lambda kv: -len(kv[1])):
             if secret:
                 text = text.replace(secret, f'<{name}>')
         return re.sub(r'[A-Z0-9]{4}(?:-[A-Z0-9]{4}){6}', '<HA-KEY>', text)
+
+    def redact_tree(self, value):
+        """Redact strings and object keys before JSON or Python string escaping."""
+        if isinstance(value, str):
+            return self._redact_text(value)
+        if isinstance(value, dict):
+            result = {}
+            for key, item in value.items():
+                safe_key = self._redact_text(key) if isinstance(key, str) else key
+                if safe_key in result:
+                    raise ValueError('redacted evidence contains duplicate keys')
+                result[safe_key] = self.redact_tree(item)
+            return result
+        if isinstance(value, (list, tuple)):
+            return [self.redact_tree(item) for item in value]
+        return value
 
 
 class Evidence:
@@ -105,14 +124,17 @@ class Evidence:
             handle.write(line + '\n')
 
     def check(self, name, ok, detail=''):
-        self.results.append({'check': name, 'ok': bool(ok), 'detail': self.secrets.redact(str(detail))[:500]})
-        self.log(f'{"PASS" if ok else "FAIL"} {name}{": " + str(detail)[:300] if detail else ""}')
+        safe_name = self.secrets.redact(str(name))
+        safe_detail = self.secrets.redact(detail)
+        self.results.append({'check': safe_name, 'ok': bool(ok), 'detail': safe_detail[:500]})
+        self.log(f'{"PASS" if ok else "FAIL"} {safe_name}{": " + safe_detail[:300] if detail else ""}')
         return bool(ok)
 
     def save(self, name, value):
         path = self.dir / name
-        path.write_text(self.secrets.redact(value if isinstance(value, str) else
-                                            json.dumps(value, ensure_ascii=False, indent=1)), encoding='utf-8')
+        safe = self.secrets.redact_tree(value)
+        path.write_text(safe if isinstance(safe, str) else json.dumps(safe, ensure_ascii=False, indent=1),
+                        encoding='utf-8')
         os.chmod(path, 0o600)
 
     def finish(self):
