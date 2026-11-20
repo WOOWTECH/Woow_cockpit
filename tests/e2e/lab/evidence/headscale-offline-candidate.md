@@ -107,3 +107,21 @@ Limits: synthetic HA-shaped backup, fixture workload/catalog and transport
 adapter, real product conversion and real services/clients. Not a real customer
 backup, product installer/automatic rollback, original service recovery,
 Headplane UI acceptance, or zero-downtime proof. Public import guards unchanged.
+
+## Later harness changes: not yet lab verified
+
+The original successful attempt explicitly ran `tailscale down` and `up`, so
+it proves identity-preserving manual reconnection, not automatic recovery.
+The candidate harness now reuses the stopped source's internal address for the
+converted server and, before any manual action, checks both original processes,
+matching node identities and IPs, two online nodes and one DERP pong. It records
+bounded convergence separately; a failure remains a failure even if the later
+manual recovery passes. This new check has not yet run in dev-d.
+
+The credential event controller now gives the runner a bounded TERM cleanup
+window on timeout or protocol failure while discarding output. It reports
+cleanup as unverified on failure, including after forced termination; process
+exit is not proof that detached resources are gone. Local tests exercise real
+Bash EXIT traps on timeout and invalid events. The four synthetic API/preauth
+producers are checked, and five submitted container log snapshots are scanned;
+the snapshots may be empty and this is not a global secret-coverage claim.

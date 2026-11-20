@@ -4,6 +4,7 @@
 set -Eeuo pipefail
 product_files=$1
 podman() { runuser -u appowner -- env XDG_RUNTIME_DIR=/run/user/1019 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1019/bus podman "$@"; }
+podman_timeout() { timeout 5s runuser -u appowner -- env XDG_RUNTIME_DIR=/run/user/1019 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1019/bus podman "$@"; }
 umask 077
 test_dir=$(mktemp -d /tmp/headscale-internal.XXXXXXXX)
 suffix=${test_dir##*.}
@@ -35,6 +36,9 @@ cleanup() {
   exit "$original"
 }
 trap cleanup EXIT
+trap 'exit 143' TERM
+trap 'exit 130' INT
+trap 'exit 129' HUP
 mkdir -p "$test_dir"/{config,data,run,target-run}
 openssl req -x509 -newkey rsa:2048 -nodes -days 1 -subj /CN=Headscale-Lab-CA \
   -keyout "$test_dir/ca.key" -out "$test_dir/ca.crt" >/dev/null 2>&1
@@ -101,6 +105,14 @@ podman run -d --name "$server" --pull=never --memory=384m --network "$net" --net
   -v "$test_dir/run:/var/run/headscale" localhost/woow-headscale:0.29.4-r1 serve >/dev/null
 for _ in {1..30}; do podman exec "$server" headscale health >/dev/null 2>&1 && break; sleep 1; done
 podman exec "$server" headscale health >/dev/null
+source_ip=$(podman inspect --format '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$server")
+subnet=$(podman network inspect "$net" --format '{{(index .Subnets 0).Subnet}}')
+python3 - "$source_ip" "$subnet" <<'PY'
+import ipaddress,sys
+address, network = ipaddress.ip_address(sys.argv[1]), ipaddress.ip_network(sys.argv[2])
+assert address in network and address != network.network_address and address != network.broadcast_address
+PY
+echo "Synthetic source internal IP reserved for restored server: $source_ip"
 podman exec "$server" headscale users create lab -o json >/dev/null
 source_api_key=$(podman exec "$server" headscale apikeys create --expiration 1h)
 printf '%s' "$source_api_key" | python3 "$product_files/tests/e2e/lab/headscale-credential-events.py" --register source_api
@@ -138,6 +150,7 @@ podman stop "$target_server" >/dev/null
 podman logs "$target_server" 2>&1 | python3 "$product_files/tests/e2e/lab/headscale-credential-events.py" --scan-log target_initial
 podman rm "$target_server" >/dev/null
 # Keep the original client processes alive while stopping the source and converting its cold volume.
+outage_start=$SECONDS
 podman stop "$server" >/dev/null
 podman logs "$server" 2>&1 | python3 "$product_files/tests/e2e/lab/headscale-credential-events.py" --scan-log source_server
 podman rm "$server" >/dev/null
@@ -145,14 +158,39 @@ python3 "$product_files/tests/e2e/lab/headscale-product-convert.py" "$product_fi
   "$test_dir" "$source_volume" "$target_volume" "$plane_volume"
 chown -R appowner:appowner "$test_dir/converted-output"
 podman volume import "$converted_volume" "$test_dir/converted-output/volumes/$target_volume.tar" >/dev/null
-podman run -d --name "$target_server" --pull=never --memory=384m --network "$net" --network-alias headscale.lab \
+podman run -d --name "$target_server" --pull=never --memory=384m --network "$net" --network-alias headscale.lab --ip "$source_ip" \
   -v "$test_dir/config:/etc/headscale:ro" -v "$converted_volume:/var/lib/headscale" \
   -v "$test_dir/run:/var/run/headscale" localhost/woow-headscale:0.29.4-r1 serve >/dev/null
 for _ in {1..30}; do podman exec "$target_server" headscale health >/dev/null 2>&1 && break; sleep 1; done
 podman exec "$target_server" headscale health >/dev/null
 echo 'Converted target started: PASS'
+# Before any manual down/up, require both original client processes to reconnect
+# to the restored control server and relay a packet with their original identity.
+auto=FAIL
+auto_start=$SECONDS
+auto_attempts=0
+while (( SECONDS - auto_start < 60 )); do
+  auto_attempts=$((auto_attempts + 1))
+  if podman_timeout exec "$client_a" tailscale --socket=/tmp/tailscaled.sock status --json > "$test_dir/$client_a.auto.json" 2>/dev/null && \
+     podman_timeout exec "$client_b" tailscale --socket=/tmp/tailscaled.sock status --json > "$test_dir/$client_b.auto.json" 2>/dev/null && \
+     podman_timeout exec "$target_server" headscale nodes list -o json > "$test_dir/auto-nodes.json" 2>/dev/null && \
+     python3 "$product_files/tests/e2e/lab/headscale-auto-reconnect-check.py" "$test_dir/auto-nodes.json" \
+       "$test_dir/$client_a.before.json" "$test_dir/$client_a.auto.json" \
+       "$test_dir/$client_b.before.json" "$test_dir/$client_b.auto.json" && \
+     auto_ping=$(podman_timeout exec "$client_a" tailscale --socket=/tmp/tailscaled.sock ping --c=1 --timeout=3s --until-direct=false "$addr" 2>&1) && \
+     [[ "$auto_ping" =~ ^pong\ from\ .*\ via\ DERP\(lab\)\ in\ [0-9.]+(ms|s)$ ]]; then
+    auto=PASS
+    break
+  fi
+  sleep 1
+done
+echo "AUTO_RECONNECT=$auto"
+echo "AUTO_ELAPSED_SECONDS=$((SECONDS-outage_start))"
+echo "AUTO_ATTEMPTS=$auto_attempts"
+echo "Automatic reconnect: attempts=$auto_attempts elapsed_since_source_stop=$((SECONDS-outage_start))s (bounded observation; not zero downtime)"
 # The two client containers keep the same in-memory state; explicitly reconnect
 # without a new auth key and compare their public node identity and addresses.
+trap 'echo MANUAL_RECOVERY=FAIL' ERR
 for client in "$client_a" "$client_b"; do
   podman exec "$client" tailscale --socket=/tmp/tailscaled.sock down
   podman exec "$client" tailscale --socket=/tmp/tailscaled.sock up --login-server=https://headscale.lab:8080 --accept-dns=false --timeout=60s
@@ -178,6 +216,7 @@ while true; do
   fi
   if (( SECONDS - convergence_start >= 60 )); then
     echo "Post-conversion DERP convergence failed: attempts=$convergence_attempts elapsed=$((SECONDS-convergence_start))s" >&2
+    echo 'MANUAL_RECOVERY=FAIL'
     exit 1
   fi
   sleep 1
@@ -186,6 +225,8 @@ echo "Post-conversion DERP convergence: attempts=$convergence_attempts elapsed=$
 result=$(podman exec "$client_a" tailscale --socket=/tmp/tailscaled.sock ping --timeout=15s --until-direct=false "$addr" 2>&1)
 printf '%s\n' "$result"
 printf '%s\n' "$result" | python3 -c 'import re,sys; lines=sys.stdin.read().splitlines(); assert len(lines)==10 and all(re.fullmatch(r"pong from .+ via DERP\(lab\) in [0-9.]+(?:ms|s)",x) for x in lines), "expected ten successful post-conversion DERP pongs"; print("Post-conversion DERP pongs verified: 10/10")'
+echo 'MANUAL_RECOVERY=PASS'
+trap - ERR
 # Query the real target API, with the test CA and each synthetic credential.
 for which in target source; do
   if [[ $which == target ]]; then key=$target_api_key; expected=200; else key=$source_api_key; expected=401; fi
@@ -200,3 +241,4 @@ podman logs "$target_server" 2>&1 | python3 "$product_files/tests/e2e/lab/headsc
 podman logs "$client_a" 2>&1 | python3 "$product_files/tests/e2e/lab/headscale-credential-events.py" --scan-log client_a
 podman logs "$client_b" 2>&1 | python3 "$product_files/tests/e2e/lab/headscale-credential-events.py" --scan-log client_b
 unset source_api_key target_api_key
+[[ "$auto" == PASS ]] || exit 1

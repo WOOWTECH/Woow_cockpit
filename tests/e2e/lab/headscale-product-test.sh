@@ -17,7 +17,8 @@ fi
 echo "dev-d memory current=$current limit=$max; headroom >= 2 GiB"
 stage=$($lp exec woowbk-dev-d mktemp -d /tmp/headscale-product-engine.XXXXXXXX)
 tar -C "$repo" --exclude=__pycache__ -cf - backup-engine tests/e2e/lab/headscale-product-convert.py \
-  tests/e2e/lab/headscale-product-runner.sh tests/e2e/lab/headscale-credential-events.py | \
+  tests/e2e/lab/headscale-product-runner.sh tests/e2e/lab/headscale-credential-events.py \
+  tests/e2e/lab/headscale-auto-reconnect-check.py | \
   "$lp" exec -i woowbk-dev-d tar -xf - -C "$stage"
 "$lp" exec woowbk-dev-d python3 "$stage/tests/e2e/lab/headscale-credential-events.py" --controller -- \
   bash "$stage/tests/e2e/lab/headscale-product-runner.sh" "$stage"

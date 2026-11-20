@@ -5,6 +5,8 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+import tempfile
+import time
 import unittest
 from unittest import mock
 
@@ -112,6 +114,44 @@ print('checked source-api-123')
                 else:
                     with self.assertRaises(Exception):
                         events.run([sys.executable, '-c', script], timeout=0.5)
+
+    def test_real_bash_exit_cleanup_runs_on_timeout_and_protocol_error(self):
+        for mode in ('timeout', 'protocol'):
+            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as directory:
+                marker = Path(directory) / 'cleaned'
+                # Flood the pipe in EXIT: controller must drain and discard it,
+                # or the shell blocks before it can create the marker.
+                script = r'''
+trap 'python3 -c "print(\"private-output\" * 20000)"; : > "$1"' EXIT
+trap 'exit 143' TERM
+trap 'exit 130' INT
+trap 'exit 129' HUP
+if [[ "$2" == protocol ]]; then printf 'not-json\n' >&"$HEADSCALE_EVENT_FD"; fi
+while :; do sleep 5; done
+'''
+                with self.assertRaisesRegex(events.CleanupUnverified, 'cleanup unverified'):
+                    events.run(['bash', '-c', script, 'test', str(marker), mode], timeout=1)
+                self.assertTrue(marker.is_file(), 'Bash EXIT cleanup did not complete')
+
+    def test_forced_kill_reports_cleanup_unverified(self):
+        script = "trap '' TERM; while :; do sleep 5; done"
+        start = time.monotonic()
+        with mock.patch.object(events, 'CLEANUP_GRACE', 0.3):
+            with self.assertRaisesRegex(events.CleanupUnverified, 'forced termination'):
+                events.run(['bash', '-c', script], timeout=0.5)
+        self.assertLess(time.monotonic() - start, 5)
+
+    def test_failed_acceptance_reports_only_fixed_outcomes_not_raw_output(self):
+        script = "printf 'AUTO_RECONNECT=FAIL\\nAUTO_ELAPSED_SECONDS=71\\nAUTO_ATTEMPTS=3\\nMANUAL_RECOVERY=PASS\\nprivate-secret-value\\n'; exit 1"
+        result = subprocess.run([sys.executable, str(PATH), '--controller', '--', 'bash', '-c', script],
+                                capture_output=True, timeout=5)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(result.stdout, b'')
+        self.assertIn(b'AUTO_RECONNECT=FAIL', result.stderr)
+        self.assertIn(b'MANUAL_RECOVERY=PASS', result.stderr)
+        self.assertIn(b'AUTO_ELAPSED_SECONDS=71', result.stderr)
+        self.assertIn(b'cleanup unverified', result.stderr)
+        self.assertNotIn(b'private-secret-value', result.stderr)
 
 
 if __name__ == '__main__':

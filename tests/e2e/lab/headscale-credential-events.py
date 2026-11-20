@@ -21,7 +21,60 @@ MAX_OUTPUT = 8 * 1024 * 1024
 MAX_LOG = 1024 * 1024
 MAX_FRAME = 8 * 1024 * 1024
 TIMEOUT = 900
+CLEANUP_GRACE = 90
 KEY = re.compile(r'hskey-(?:auth|api)-[A-Za-z0-9_-]{12,}')
+
+
+class CleanupUnverified(RuntimeError):
+    """Failure occurred; independent verification of cleanup is required."""
+
+    def __init__(self, forced=False, output=b''):
+        self.forced = forced
+        lines = output.splitlines()
+        self.outcomes = {}
+        for name in ('AUTO_RECONNECT', 'MANUAL_RECOVERY'):
+            matches = [line for line in lines if line in (f'{name}=PASS'.encode(), f'{name}=FAIL'.encode())]
+            if len(matches) == 1:
+                self.outcomes[name] = matches[0].decode().split('=', 1)[1]
+        for name in ('AUTO_ELAPSED_SECONDS', 'AUTO_ATTEMPTS'):
+            prefix = (name + '=').encode()
+            matches = [line[len(prefix):] for line in lines if line.startswith(prefix)]
+            if len(matches) == 1 and re.fullmatch(rb'[0-9]{1,6}', matches[0]):
+                self.outcomes[name] = matches[0].decode()
+        super().__init__('cleanup unverified' + ('; forced termination' if forced else ''))
+
+
+def terminate_and_drain(proc, selector, grace=CLEANUP_GRACE):
+    """Allow the runner's EXIT trap to run while discarding all private output.
+
+    A process exit alone does not establish that detached Podman objects were
+    removed. The caller must always report cleanup as unverified on failure.
+    """
+    if proc.poll() is None:
+        try:
+            os.killpg(proc.pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+    deadline = time.monotonic() + grace
+    while proc.poll() is None and time.monotonic() < deadline:
+        for selected, _ in selector.select(min(0.25, max(0, deadline - time.monotonic()))):
+            try:
+                data = os.read(selected.fileobj.fileno(), 65536)
+            except OSError:
+                data = b''
+            if not data:
+                selector.unregister(selected.fileobj)
+    forced = proc.poll() is None
+    if forced:
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+    try:
+        proc.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        forced = True
+    return forced
 
 
 def register(source, *, log=False):
@@ -138,13 +191,10 @@ def run(argv, timeout=TIMEOUT):
         if any(needle in safe for needle in needles):
             raise ValueError('evidence scan failed')
         return text
+    except Exception:
+        forced = terminate_and_drain(proc, selector, CLEANUP_GRACE)
+        raise CleanupUnverified(forced, bytes(output)) from None
     finally:
-        if proc.poll() is None:
-            try:
-                os.killpg(proc.pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
-        proc.wait()
         selector.close()
         proc.stdout.close()
         parent.close()
@@ -159,11 +209,17 @@ def main():
         elif len(sys.argv) >= 4 and sys.argv[1:3] == ['--controller', '--']:
             result = run(sys.argv[3:])
             sys.stdout.write(result)
-            print('Synthetic credential coverage: four sources acknowledged; five container logs and redacted output scanned')
+            print('Synthetic credential coverage: four sources acknowledged; five submitted log snapshots (possibly empty) and redacted output scanned')
         else:
             raise ValueError('invalid invocation')
-    except Exception:
-        print('Synthetic credential coverage incomplete; raw output suppressed', file=sys.stderr)
+    except Exception as error:
+        detail = '; cleanup unverified' if isinstance(error, CleanupUnverified) else ''
+        if isinstance(error, CleanupUnverified) and 'forced termination' in str(error):
+            detail += '; cleanup deadline exceeded, forced termination'
+        print('Synthetic credential coverage incomplete; raw output suppressed' + detail, file=sys.stderr)
+        if isinstance(error, CleanupUnverified):
+            for name, value in error.outcomes.items():
+                print(f'{name}={value} (preliminary; credential coverage incomplete)', file=sys.stderr)
         raise SystemExit(1) from None
 
 
