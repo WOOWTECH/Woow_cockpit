@@ -10,15 +10,22 @@
   "verified_increments": [
     {
       "service": "Headscale",
-      "commit": "701d0a8",
-      "evidence": "headscale-offline-candidate.md",
-      "scope": "synthetic HA envelope through real converter, real clients and API",
+      "commit": "c972720",
+      "evidence": "headscale-owner-20261120/README.md",
+      "scope": "synthetic HA conversion with original-client automatic reconnect and private-source registration",
       "results": [
-        "two node identities preserved",
-        "Noise key preserved",
+        "automatic reconnect: 55 seconds / 23 attempts",
+        "node identities and Noise key preserved",
         "target API200/source API401",
-        "DERP convergence6s then10/10",
-        "cleanup verified"
+        "16 acknowledged authorization/private-source events",
+        "original 8 container IDs / 54 volumes / 5 networks unchanged",
+        "outer network none and no ports"
+      ],
+      "limitations": [
+        "synthetic client shutdown SIGKILL warning retained",
+        "private synthetic fixtures retained mode0700",
+        "not original HA backup, installer or rollback acceptance",
+        "submitted logs may be empty; configtest-generated private keys not covered"
       ]
     },
     {
@@ -108,7 +115,7 @@
   "remaining": [
     "EMQX real original HA backup and supported configuration variants; public guard retained",
     "Omnigent outer Supervisor envelope, real Target discovery, application data markers and complete secret coverage",
-    "Headscale issued-secret registration and scan completeness",
+    "Headscale original-backup/installer/rollback acceptance and remaining scan limits (configtest keys and unavailable logs)",
     "LiteLLM full application schema and true salt/key migration, decryptability and rollback",
     "all required dynamic credential sources across autonomous service operation",
     "real original HA backups, architecture/archive variants and final-version acceptance",
@@ -120,15 +127,6 @@
     "Host production Podman inventory/image access was rejected; no alternative host entry used. Lab-only tools remain permitted."
   ],
   "prepared_not_real_verified": [
-    {
-      "service": "Headscale",
-      "commits": [
-        "a36d23d",
-        "b719e3e"
-      ],
-      "scope": "four credential registrations, bounded cleanup and automatic reconnect candidate",
-      "real_run_pending": true
-    },
     {
       "service": "LiteLLM image",
       "public_base_digest": "sha256:37066242e6b8327fdd627682a66a9ae2a599553b4d5a84c905c6d8b9eb35c01e",
