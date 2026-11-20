@@ -42,7 +42,7 @@ import re
 import time
 import urllib.parse
 
-from . import habackup, hacommon, ha_odoo, tempctr
+from . import habackup, hacommon, ha_n8n, ha_odoo, tempctr
 from .errors import BackupError
 
 SLUG = 'woow-omnigent'
@@ -601,6 +601,7 @@ pid=$!
 exec 3> "$snapdir/in"
 cat >&3 <<SQL
 BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY;
+SET LOCAL application_name = 'woowbk-schema-snapshot';
 SET LOCAL lock_timeout = '15s';
 SET LOCAL idle_in_transaction_session_timeout = '10920s';
 LOCK TABLE public.alembic_version IN ACCESS SHARE MODE;
@@ -642,8 +643,10 @@ def capture_consistent_target_schema(work, app, target, path, expected_alembic):
     script = SNAPSHOT_SCRIPT.replace('__REVISION__', revision.replace("'", "''"))
     script = script.replace('__COLUMNS__', ' '.join(SCHEMA_COLUMNS_SQL.split()))
     capture = path.with_name(path.name + '.capture')
+    capture_created = output_created = False
     try:
         with open(capture, 'xb') as handle:
+            capture_created = True
             os.fchmod(handle.fileno(), 0o600)
             work.runner(app).podman('exec', '-i', target.db_container, 'sh', '-s', '--', target.db_user, DATABASE,
                                     input=script.encode('utf-8'), stdout=handle, timeout=DUMP_TIMEOUT,
@@ -660,15 +663,20 @@ def capture_consistent_target_schema(work, app, target, path, expected_alembic):
             if not isinstance(columns, list) or not columns or any(not isinstance(v, list) or len(v) != 6 for v in columns):
                 raise BackupError('incompatible', '目標 Omnigent 的結構快照格式不正確。', app=app.id)
             with open(path, 'xb') as dest:
+                output_created = True
                 os.fchmod(dest.fileno(), 0o600)
                 import shutil
                 shutil.copyfileobj(source, dest, 1024 * 1024)
                 dest.flush()
                 os.fsync(dest.fileno())
         return columns
+    except BaseException:
+        if output_created:
+            path.unlink(missing_ok=True)
+        raise
     finally:
-        if capture.exists():
-            capture.unlink()
+        if capture_created:
+            capture.unlink(missing_ok=True)
 
 
 def restore_trusted_data(work, tmp, schema_dump, data_dump, superuser, *, source_columns, role='omni-db'):
@@ -868,13 +876,17 @@ def server_volume(work, app, target, staging, out_dir):
     import tarfile
     live = hacommon.live_export(work, app, target.server_volume, staging / 'live-server.tar')
     path = out_dir / 'volumes' / f'{target.server_volume}.tar'
+    root = ha_n8n.volume_root(work, app, target.server_volume)
     out = hacommon.FileTar(path, work.guard)
     try:
-        dirs = hacommon.copy_live(live, out, drop=lambda name: ha_odoo._under(name, 'artifacts'),
+        hacommon.top_only(out, root)
+        dirs = hacommon.copy_live(live, out, drop=lambda name: name == '.' or ha_odoo._under(name, 'artifacts'),
                                   what='這台 Omnigent 的伺服器資料卷')
-        uid, gid, _mode = dirs.get('artifacts') or dirs.get('.') or (0, 0, 0o755)
-        if '.' not in dirs:
-            raise BackupError('job-failed', '這台 Omnigent 伺服器資料卷的匯出內容不完整。', app=app.id)
+        # Podman exports may omit the root directory. Preserve its actual
+        # namespace metadata through the existing bounded owner interface.
+        if '.' in dirs and dirs['.'] != root:
+            raise BackupError('job-failed', '這台 Omnigent 伺服器資料卷的根目錄權限已改變。', app=app.id)
+        uid, gid, _mode = dirs.get('artifacts') or root
         with tarfile.open(staging / 'ha-artifacts.tar', 'r|', encoding=habackup.ENCODING,
                           errors=habackup.ERRORS) as tar:
             seen_root = False

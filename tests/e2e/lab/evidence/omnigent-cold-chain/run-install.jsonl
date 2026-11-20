@@ -1,0 +1,12 @@
+{"each_memory_mib": 128, "image_id": "4278d7b1e3deb3193ddc803158f6532963f059fc25a2eefaee4b5a9e71741873", "max_pg_containers": 2, "outer_network": "none", "stage": "preflight"}
+{"stage": "source_started"}
+{"stage": "source_cold"}
+{"stage": "addon_tar_built"}
+{"stage": "target_started"}
+{"capture_removed": true, "holders": 0, "kind": "statement_timeout", "stage": "snapshot_failure"}
+{"capture_removed": true, "holders": 0, "kind": "invalid_metadata", "stage": "snapshot_failure"}
+{"stage": "candidate_started"}
+{"active_tasks": 0, "admin": 1, "conversations": 1, "loader_roles": 0, "stage": "installed_postgres_readback", "users": 2}
+{"persisted": true, "stage": "installed_postgres_restart"}
+{"carried_account": true, "paused_task": true, "real_ha_cluster": true, "real_member_pass": true, "real_new_cluster": true, "real_output_volumes": true, "real_provider": true, "stage": "cold_ha_to_candidate"}
+{"stage": "cleanup", "synthetic_objects_removed": true}
