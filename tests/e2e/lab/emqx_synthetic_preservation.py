@@ -75,6 +75,19 @@ def receive_retained(password, topic):
         raise RuntimeError('subscriber_payload_mismatch')
 
 
+def denied_subscription(password):
+    result = command(['run', '--rm', '--pull=never', '--network=container:' + CONTAINER,
+                      '--entrypoint=mosquitto_sub', CLIENT, '-h', '127.0.0.1', '-p', '1883',
+                      '-V', 'mqttv5', '-q', '1', '-t', 'outside/denied', '-E', '-W', '5', '-d',
+                      '-u', 'lab', '-P', password], accept=True)
+    output = result.stdout + result.stderr
+    rejected = bool(re.search(rb'Subscribed[^\n]*:\s*135\b', output)) or b'Not authorized' in output
+    print(json.dumps({'stage': 'mqtt_subscribe_transport', 'exit_code': result.returncode,
+                      'suback_seen': b'SUBACK' in output, 'authorization_rejected': rejected}), flush=True)
+    if b'SUBACK' not in output or not rejected:
+        raise RuntimeError('subscription_denial_not_proven')
+
+
 def record(stage):
     results.append({'stage': stage, 'result': 'pass'})
     print(json.dumps({'stage': stage, 'result': 'pass'}), flush=True)
@@ -119,6 +132,7 @@ mqtt.max_packet_size = "1MB"
         record('isolated_startup')
         phase = 'effective_config'
         original = config()
+        print(json.dumps({'stage': 'effective_root_inventory', 'roots': sorted(original)}), flush=True)
         assert original['authorization']['no_match'] == 'deny'
         assert original['authentication'][0]['bootstrap_file'] == '/opt/emqx/etc/lab-bootstrap.csv'
         command(['exec', CONTAINER, 'test', '-r', '/opt/emqx/etc/lab-bootstrap.csv'])
@@ -132,6 +146,9 @@ mqtt.max_packet_size = "1MB"
         denied = mqtt(password, 'outside/denied')
         assert b'RC:135' in denied.stdout or b'Not authorized' in denied.stderr
         record('mqtt_publish_denied')
+        phase = 'mqtt_subscribe_denied'
+        denied_subscription(password)
+        record('mqtt_subscribe_denied')
         phase = 'export'
         exported = ctl('data', 'export', '--root-keys', 'authorization,mqtt', '--table-sets', 'builtin_authn', '--dir', '/opt/emqx/data/backup')
         # Enumerate files; no arbitrary path from a log is executed.
@@ -164,6 +181,7 @@ mqtt.max_packet_size = "1MB"
         assert allowed.returncode == 0 and any(code in allowed.stdout for code in (b'RC:0', b'RC:16'))
         assert b'RC:135' in denied.stdout or b'Not authorized' in denied.stderr
         receive_retained(password, 'lab/after-restart')
+        denied_subscription(password)
         record('restart_config_and_mqtt_policy')
 except Exception as error:
     results.append({'stage': phase, 'result': 'fail', 'error_type': type(error).__name__})

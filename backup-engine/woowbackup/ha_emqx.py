@@ -516,6 +516,31 @@ def bootstrap_references(config, mounts, secrets):
     return paths
 
 
+# EMQX v5.8.9: emqx_schema fields(alarm/trace), emqx_slow_subs_schema fields(slow_subs).
+# These roots have no file dependencies. Reject additional fields rather than assuming that
+# a future schema version shares that property.
+FILELESS_ROOT_FIELDS = {
+    'alarm': {'actions', 'size_limit', 'validity_period'},
+    'slow_subs': {'enable', 'threshold', 'expire_interval', 'top_k_num', 'stats_type'},
+    'trace': {'payload_encode'},
+}
+
+
+def validate_fileless_roots(config):
+    for root, fields in FILELESS_ROOT_FIELDS.items():
+        if root not in config:
+            continue
+        value = config[root]
+        if not isinstance(value, dict) or set(value) - fields:
+            raise BackupError('incompatible', 'EMQX 設定超出已核對版本的欄位範圍。')
+        for key, item in value.items():
+            if root == 'alarm' and key == 'actions':
+                if not isinstance(item, list) or any(action not in ('log', 'publish') for action in item):
+                    raise BackupError('incompatible', 'EMQX alarm actions 格式不受支援。')
+            elif type(item) not in (str, int, bool):
+                raise BackupError('incompatible', 'EMQX 無檔案設定欄位格式不受支援。')
+
+
 def configuration_references(config, mounts, secrets=()):
     """Resolve file ACL and explicit TLS file fields in supported configuration roots.
 
@@ -525,6 +550,8 @@ def configuration_references(config, mounts, secrets=()):
     allowed = {'authorization', 'authentication', 'listeners', 'dashboard', 'mqtt', 'zones',
                'flapping_detect', 'force_shutdown', 'force_gc', 'conn_congestion', 'stats',
                'sys_topics', 'broker', 'retainer'}
+    allowed.update(FILELESS_ROOT_FIELDS)
+    validate_fileless_roots(config)
     if set(config) - allowed:
         raise BackupError('incompatible', 'EMQX 含有尚未完成檔案參照審查的設定類型。')
     bootstrap_references(config, mounts, secrets)

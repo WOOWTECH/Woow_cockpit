@@ -1,0 +1,17 @@
+{"stage": "isolated_startup", "result": "pass"}
+{"stage": "effective_root_inventory", "roots": ["actions", "alarm", "api_key", "authentication", "authorization", "auto_subscribe", "banned", "bridges", "broker", "cluster", "conn_congestion", "connectors", "crl_cache", "dashboard", "delayed", "durable_sessions", "durable_storage", "exhook", "flapping_detect", "force_gc", "force_shutdown", "gateway", "limiter", "listeners", "log", "mqtt", "node", "overload_protection", "plugins", "prometheus", "psk_authentication", "retainer", "rewrite", "rpc", "rule_engine", "slow_subs", "sources", "stats", "sys_topics", "sysmon", "telemetry", "topic_metrics", "trace", "zones"]}
+{"stage": "effective_config_and_bootstrap_mount", "result": "pass"}
+{"stage": "mqtt_transport", "exit_code": 0, "reason_codes": ["16"], "flags": {"not_authorized": false, "connection_refused": false, "permission_denied": false, "missing_executable": false, "missing_file": false, "puback": true, "connack": true, "not_found": false, "entrypoint": false, "error": false}}
+{"stage": "mqtt_publish_subscribe_allowed", "result": "pass"}
+{"stage": "mqtt_transport", "exit_code": 0, "reason_codes": ["135"], "flags": {"not_authorized": true, "connection_refused": false, "permission_denied": false, "missing_executable": false, "missing_file": false, "puback": true, "connack": true, "not_found": false, "entrypoint": false, "error": false}}
+{"stage": "mqtt_publish_denied", "result": "pass"}
+{"stage": "mqtt_subscribe_transport", "exit_code": 0, "suback_seen": true, "authorization_rejected": true}
+{"stage": "mqtt_subscribe_denied", "result": "pass"}
+{"stage": "synthetic_export", "result": "pass"}
+{"stage": "synthetic_import", "result": "pass"}
+{"stage": "restore_and_effective_readback", "result": "pass"}
+{"stage": "mqtt_transport", "exit_code": 0, "reason_codes": ["16"], "flags": {"not_authorized": false, "connection_refused": false, "permission_denied": false, "missing_executable": false, "missing_file": false, "puback": true, "connack": true, "not_found": false, "entrypoint": false, "error": false}}
+{"stage": "mqtt_transport", "exit_code": 0, "reason_codes": ["135"], "flags": {"not_authorized": true, "connection_refused": false, "permission_denied": false, "missing_executable": false, "missing_file": false, "puback": true, "connack": true, "not_found": false, "entrypoint": false, "error": false}}
+{"stage": "mqtt_subscribe_transport", "exit_code": 0, "suback_seen": true, "authorization_rejected": true}
+{"stage": "restart_config_and_mqtt_policy", "result": "pass"}
+{"image": "3f60addfad2b", "client_image": "93a0bdfcbd9b", "results": [{"stage": "isolated_startup", "result": "pass"}, {"stage": "effective_config_and_bootstrap_mount", "result": "pass"}, {"stage": "mqtt_publish_subscribe_allowed", "result": "pass"}, {"stage": "mqtt_publish_denied", "result": "pass"}, {"stage": "mqtt_subscribe_denied", "result": "pass"}, {"stage": "synthetic_export", "result": "pass"}, {"stage": "synthetic_import", "result": "pass"}, {"stage": "restore_and_effective_readback", "result": "pass"}, {"stage": "restart_config_and_mqtt_policy", "result": "pass"}]}
