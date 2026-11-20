@@ -1,0 +1,91 @@
+{
+  "date": "2026-11-20",
+  "commercial_acceptance": false,
+  "public_import_guards": "retained",
+  "scope": {
+    "direction": "HA to Podman",
+    "pi_agent": "excluded",
+    "production_changes": false
+  },
+  "verified_increments": [
+    {
+      "service": "Headscale",
+      "commit": "701d0a8",
+      "evidence": "headscale-offline-candidate.md",
+      "scope": "synthetic HA envelope through real converter, real clients and API",
+      "results": [
+        "two node identities preserved",
+        "Noise key preserved",
+        "target API200/source API401",
+        "DERP convergence6s then10/10",
+        "cleanup verified"
+      ]
+    },
+    {
+      "service": "Omnigent",
+      "commit": "a4b83c5",
+      "evidence": "omnigent-cold-chain/run-install.jsonl",
+      "scope": "synthetic schema, real cold PG archive/candidate/output installation/restart",
+      "results": [
+        "users2/admin1/conversations1",
+        "active tasks0",
+        "loader roles0",
+        "snapshot error holders0",
+        "cleanup verified"
+      ]
+    },
+    {
+      "service": "Omnigent credentials",
+      "commit": "3c8bd4b",
+      "evidence": "omnigent-credentials/run-ensure.jsonl",
+      "scope": "fresh real app identity and one real controlled runner ensure cycle",
+      "results": [
+        "four auth events registered",
+        "valid token makes no request",
+        "expired cached token refreshed without fallback login",
+        "evidence/log hits0",
+        "cleanup verified"
+      ],
+      "autonomous_runner_coverage": false
+    },
+    {
+      "service": "LiteLLM",
+      "commit": "fdaaaa9",
+      "evidence": "litellm-candidate/pg17-bounded-runner.json",
+      "scope": "synthetic PG17 salt query contract with bounded process capture",
+      "cases_passed": 9,
+      "migration_tested": false
+    },
+    {
+      "service": "EMQX adapter",
+      "commit": "c689668",
+      "scope": "synthetic adapter backup->restore failure->automatic rollback",
+      "result": "agent reported real run exit0 and cleanup verified; raw evidence requested",
+      "ha_converter_joined": false
+    }
+  ],
+  "explicit_failed_suite": {
+    "source_commit": "fdaaaa9",
+    "evidence": "emqx-legacy-contract/current.txt",
+    "run": 13,
+    "passed": 3,
+    "failures": 9,
+    "errors": 1,
+    "skipped": 0,
+    "classification": "legacy public-entry contracts conflict with retained preservation guard; not all-green"
+  },
+  "remaining": [
+    "EMQX HA converter output joined to real adapter installation and rollback",
+    "Omnigent complete real application schema and restored application/client acceptance",
+    "Headscale issued-secret registration and scan completeness",
+    "LiteLLM PG18 and true salt/key migration, decryptability and rollback",
+    "all required dynamic credential sources across autonomous service operation",
+    "real original HA backups, architecture/archive variants and final-version acceptance",
+    "Odoo/n8n final-version evidence (older acceptance is not automatically current)",
+    "Hermes independent manual safety review remains unverified"
+  ],
+  "external_restrictions": [
+    "Do not retry Hermes independent FTS/SQLite review via another route after prior auto-review rejection.",
+    "Host production Podman inventory/image access was rejected; no alternative host entry used. Lab-only tools remain permitted."
+  ]
+}
