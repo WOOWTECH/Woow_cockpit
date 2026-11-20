@@ -53,6 +53,11 @@ def main():
     db, server, secret = prefix + '-pg', prefix + '-api', prefix + '-password'
     volumes = [prefix + '-pgdata', prefix + '-appdata']
     created_volumes, created_containers, secret_created = [], [], False
+    for kind, names in (('container', [db, server, prefix + '-runner-probe']),
+                        ('volume', volumes), ('secret', [secret])):
+        for name in names:
+            if pod(kind, 'exists', name, check=False).returncode != 1:
+                raise RuntimeError('synthetic namespace not proven empty')
     try:
         with tempfile.TemporaryDirectory(prefix='woowbk-synthetic-auth-') as directory:
             root = Path(directory)
@@ -61,16 +66,17 @@ def main():
             registry = b1.Secrets([env], markers)
             password = secrets.token_urlsafe(32)
             registry.register('SYNTHETIC_PASSWORD', password)
-            pod('secret', 'create', secret, '-', input=password.encode())
             secret_created = True
+            pod('secret', 'create', secret, '-', input=password.encode())
             for volume in volumes:
-                pod('volume', 'create', volume); created_volumes.append(volume)
+                created_volumes.append(volume)
+                pod('volume', 'create', volume)
             STAGE = 'postgres_start'
+            created_containers.append(db)
             pod('run', '-d', '--name', db, '--pull=never', '--network=none', '--read-only',
                 '--memory=192m', '--pids-limit=128', '--tmpfs', '/run/postgresql:rw,nosuid,nodev',
                 '--tmpfs', '/tmp:rw,noexec,nosuid,nodev', '-v', volumes[0] + ':/var/lib/postgresql/data',
                 '-e', 'POSTGRES_USER=omnigent', '-e', 'POSTGRES_DB=omnigent', '-e', 'POSTGRES_HOST_AUTH_METHOD=trust', PG)
-            created_containers.append(db)
             for _ in range(60):
                 if pod('exec', db, 'pg_isready', '-h', '127.0.0.1', '-U', 'omnigent', check=False).returncode == 0:
                     break
@@ -78,6 +84,7 @@ def main():
             else:
                 raise RuntimeError('synthetic postgres not ready')
             STAGE = 'api_start'
+            created_containers.append(server)
             pod('run', '-d', '--name', server, '--pull=never', '--network=container:' + db,
                 '--memory=768m', '--cpus=1', '--pids-limit=256', '--cap-drop=ALL',
                 '--security-opt=no-new-privileges', '-v', volumes[1] + ':/data',
@@ -87,7 +94,6 @@ def main():
                 '-e', 'OMNIGENT_AUTH_ENABLED=1', '-e', 'OMNIGENT_AUTH_PROVIDER=accounts',
                 '-e', 'OMNIGENT_PUBLIC_SHARING=0', '-e', 'OMNIGENT_ADMIN_CREDENTIALS_PATH=/data/admin-credentials',
                 '-e', 'OMNIGENT_ACCOUNTS_INIT_ADMIN_USERNAME=synthetic-admin', APP)
-            created_containers.append(server)
             for _ in range(90):
                 if pod('exec', server, 'curl', '-fsS', '-o', '/dev/null', 'http://127.0.0.1:8000/health', check=False).returncode == 0:
                     break
