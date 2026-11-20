@@ -133,5 +133,33 @@
       "loaded_dev_d_image_id": "bfbade18821e5fcf7291e148fddf4013711c50f347def2cf9128534de2443cde",
       "scope": "anonymous public download and offline lab load completed; custom app build pending"
     }
-  ]
+  ],
+  "odoo_n8n_revalidation_20261121": {
+    "status": "blocked_before_restore_pending_lab_isolation",
+    "driver_commit": "f37716b",
+    "local_boundary_tests": {
+      "run": 3,
+      "passed": 3
+    },
+    "actual_entry_result": "exit2 before credentials and jobs",
+    "dev_c_observed": {
+      "state": "exited",
+      "network": "slirp4netns",
+      "published_port": 19093
+    },
+    "historical_arm_evidence": {
+      "path": "~/.woowbk-lab/evidence/arm-ha-import-run2/20261119T091730/results.json",
+      "run": 117,
+      "passed": 117,
+      "failed": 0,
+      "current_version_revalidation": false
+    },
+    "remaining_scope": [
+      "latest code deployed and fingerprinted",
+      "isolated restore and application verification",
+      "multi-GB and >8GiB member limits",
+      "ARM target device",
+      "cross-physical-device restore"
+    ]
+  }
 }
