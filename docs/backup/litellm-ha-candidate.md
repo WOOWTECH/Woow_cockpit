@@ -107,3 +107,12 @@ reader; see `tests/e2e/lab/evidence/litellm-candidate/pg17-salt-sql.json`. It us
 real source or target secrets and demonstrates this query contract only. It cannot
 prove PG18 compatibility, arbitrary untrusted-schema safety, actual HA backup integrity,
 encrypted credential usability, or a safe salt transfer and rollback.
+
+
+The earlier PG17 9/9 run used a lab subprocess wrapper that did not enforce
+`max_output`; those results establish only the synthetic SQL cases and cleanup, not
+a bounded capture. The harness now delegates to `default_runner`, forwards input,
+stdout, timeout, max_output and abort, and discards the bounded stderr tail. Local
+real-child tests exercise the 4096-byte capture boundary, overflow, timeout, file
+output, abort, and stderr sanitization. The PG17 lab test was not rerun with this
+updated wrapper, so no new lab acceptance is implied.

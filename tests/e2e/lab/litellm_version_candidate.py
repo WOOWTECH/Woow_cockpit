@@ -8,7 +8,7 @@ from pathlib import Path
 
 from woowbackup import ha_litellm_candidate as candidate, tempctr
 from woowbackup.errors import BackupError
-from woowbackup.podman import Result
+from woowbackup.podman import Result, OutputLimitExceeded, default_runner
 
 LABPODMAN = str(Path.home() / '.woowbk-lab/bin/labpodman')
 
@@ -16,13 +16,22 @@ LABPODMAN = str(Path.home() / '.woowbk-lab/bin/labpodman')
 class DevDRunner:
     uid = None
 
-    def podman(self, *args, timeout=120, check=True, **kwargs):
-        proc = subprocess.run([LABPODMAN, 'exec', '-i', 'woowbk-dev-d', 'woowbk-owner', 'podman', *args],
-                              input=kwargs.get('input'), stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                              timeout=timeout, check=False)
-        if check and proc.returncode:
+    def podman(self, *args, input=None, stdout=None, timeout=120, check=True, max_output=None, abort=None):
+        argv = [LABPODMAN, 'exec', '-i', 'woowbk-dev-d', 'woowbk-owner', 'podman', *args]
+        try:
+            result = default_runner(argv, input=input, stdout=stdout, timeout=timeout,
+                                    max_output=max_output, abort=abort)
+        except OutputLimitExceeded:
+            raise BackupError('limit-exceeded', '隔離實驗室命令輸出超過上限。') from None
+        except subprocess.TimeoutExpired:
+            raise BackupError('job-failed', '隔離實驗室命令執行逾時。') from None
+        except OSError:
+            raise BackupError('job-failed', '無法執行隔離實驗室命令。') from None
+        if check and result.returncode:
             raise BackupError('job-failed', '隔離實驗室映像探測失敗。')
-        return Result(proc.returncode, proc.stdout, b'')
+        # default_runner keeps a bounded stderr tail; it may contain sensitive data.
+        return Result(result.returncode, result.stdout, b'')
+
 
 
 def main():
