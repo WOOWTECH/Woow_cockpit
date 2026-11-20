@@ -1860,7 +1860,30 @@ def scenario_cleanup(ev, args):
     save_state()
 
 
-LEAK_SCAN = r'''
+def secret_scan_needles(values):
+    """Cover raw bytes and JSON string escaping used by evidence and journals.
+
+    This covers one JSON encoding layer, in both Unicode modes. It does not
+    claim coverage for arbitrary encodings, encryption, or nested serialization.
+    """
+    needles = set()
+    for value in values:
+        raw = value if isinstance(value, bytes) else value.encode('utf-8')
+        if not raw:
+            continue
+        needles.add(raw)
+        try:
+            decoded = raw.decode('utf-8')
+        except UnicodeDecodeError:
+            continue
+        for ascii_only in (False, True):
+            needles.add(json.dumps(decoded, ensure_ascii=ascii_only)[1:-1].encode('utf-8'))
+    return needles
+
+
+# Embed the identical scanner in the isolated device program.
+import inspect
+LEAK_SCAN = 'import json\n' + inspect.getsource(secret_scan_needles) + r'''
 import json, os, subprocess, sys
 req = json.loads(sys.stdin.read())
 secrets = {name: value.encode() for name, value in req["secrets"].items() if value}
@@ -1873,6 +1896,7 @@ for name in req["podman_secrets"]:
     if p.returncode != 0 or len(value) < 8:
         raise RuntimeError("cannot inspect required device secret: " + name)
     secrets["device:" + name] = value
+needles = secret_scan_needles(secrets.values())
 hits, scanned = 0, 0
 roots = ["/var/lib/woowtech-backup/jobs", "/var/lib/woowtech-backup/ha-backups", "/var/lib/woowtech-backup/ha-imports.json",
          "/var/lib/woowtech-backup/index.json", "/var/lib/woowtech-backup/archives", "/run/woowtech-backup",
@@ -1902,12 +1926,12 @@ for root in roots:
         except OSError as error:
             raise RuntimeError("cannot scan required file") from error
         scanned += 1
-        for name, secret in secrets.items():
+        for secret in needles:
             if secret in data:
                 hits += data.count(secret)
 journal = subprocess.run(["journalctl", "-o", "cat", "--no-pager"], capture_output=True, check=True).stdout
 helper = subprocess.run(["journalctl", "-o", "cat", "--no-pager", "_COMM=woowtech-cockp", "+", "SYSLOG_IDENTIFIER=woowtech-cockpit-backup"], capture_output=True, check=True).stdout
-for name, secret in secrets.items():
+for secret in needles:
     if secret in journal:
         hits += journal.count(secret)
     if secret in helper:
@@ -1932,7 +1956,7 @@ def scan_host_evidence(directory, secrets):
     """Scan every file in this evidence tree, failing on missing or unreadable paths."""
     if not directory.is_dir() or directory.is_symlink():
         raise Failed('evidence scan root missing or unsafe')
-    needles = [s.encode('utf-8') for s in secrets.secret_values()]
+    needles = secret_scan_needles(secrets.secret_values())
     scanned = hits = 0
     def onerror(_error):
         raise Failed('evidence scan enumeration failed')

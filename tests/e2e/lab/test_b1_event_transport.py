@@ -49,7 +49,10 @@ class EventTests(unittest.TestCase):
         self.assertIn(token, self.secrets.secret_values())
         with patch.object(b1, 'LAB', self.root), contextlib.redirect_stdout(io.StringIO()):
             ev = b1.Evidence(self.secrets, 'case'); ev.save('summary.json', result)
-        self.assertNotIn(token, json.dumps(json.loads((ev.dir / 'summary.json').read_text())))
+        saved = json.loads((ev.dir / 'summary.json').read_text())
+        self.assertNotEqual(saved['detail'], token)
+        self.assertEqual(saved['detail'], self.secrets.redact(token))
+        self.assertNotIn(token, saved['detail'])
         self.assertEqual(b1.scan_host_evidence(ev.dir, self.secrets)['hits'], 0)
         class Args: pass
         args = Args(); args.secrets = self.secrets
