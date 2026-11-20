@@ -216,6 +216,21 @@ sys.stdin.readline()
         with self.assertRaisesRegex(RuntimeError, 'synthetic_cookie_invalid'):
             probe.cookie_from_container(Runner(b'bad'), 'synthetic')
 
+    def test_live_and_exported_cookie_preserve_application_newline(self):
+        from types import SimpleNamespace
+        cookie = b'0123456789abcdef' * 4 + b'\n'
+        class Runner:
+            def podman(self, *args, **kwargs): return SimpleNamespace(stdout=cookie)
+        with tempfile.TemporaryDirectory() as directory:
+            archive = Path(directory) / 'app.tar'
+            with tarfile.open(archive, 'w') as tar:
+                probe.add(tar, 'artifacts/accounts-cookie-secret', cookie, mode=0o600)
+            live = probe.cookie_from_container(Runner(), 'synthetic')
+            self.assertEqual(live, probe.cookie_from_tar(archive))
+            self.assertEqual(live, cookie)
+            self.assertIn(cookie, probe.SECRET_VALUES)
+            self.assertIn(cookie.strip(), probe.SECRET_VALUES)
+
     def test_duplicate_event_fields_are_rejected(self):
         import sys
         from b1_event_transport import Incomplete

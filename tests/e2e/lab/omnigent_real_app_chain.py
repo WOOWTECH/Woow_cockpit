@@ -193,10 +193,12 @@ def login_registered(container, username, password, source, observed):
 def cookie_from_container(runner, container):
     """Read only this fresh app's private cookie and register it before further calls."""
     value = runner.podman('exec', container, 'cat', '/data/artifacts/accounts-cookie-secret',
-                          max_output=4096).stdout.strip()
-    if not re.fullmatch(rb'[0-9a-f]{64}', value):
+                          max_output=4096).stdout
+    if not re.fullmatch(rb'[0-9a-f]{64}\n?', value):
         raise RuntimeError('synthetic_cookie_invalid')
+    # Preserve file bytes for archive continuity; mask the app's trimmed key too.
     register_private(value)
+    register_private(value.strip())
     return value
 
 
