@@ -29,12 +29,14 @@ def main():
     with tempctr.TempObjects(DevDRunner(), job, memory='128m', pids=128, cpus=None,
                              log=cleanup_notes.append) as tmp:
         tmp.volume('litellm-sql-data')
+        mount = '/var/lib/postgresql' if args.expected_pg_major == 18 else '/var/lib/postgresql/data'
+        pgdata = '/var/lib/postgresql/18/docker' if args.expected_pg_major == 18 else '/var/lib/postgresql/data/pgdata'
         tmp.run('litellm-sql-pg', args.db_image_id,
                 ['postgres', '-c', 'shared_buffers=16MB', '-c', 'max_connections=20'],
                 detach=True, read_only_root=True,
-                volumes=[(tmp.name('litellm-sql-data'), '/var/lib/postgresql/data', 'rw,noexec,nosuid,nodev')],
+                volumes=[(tmp.name('litellm-sql-data'), mount, 'rw,noexec,nosuid,nodev')],
                 env={'POSTGRES_HOST_AUTH_METHOD': 'trust', 'POSTGRES_DB': 'litellm',
-                     'PGDATA': '/var/lib/postgresql/data/pgdata'})
+                     'PGDATA': pgdata})
         cluster = ha_odoo.Cluster(tmp, 'litellm-sql-pg')
         cluster.wait_ready(tcp=True, timeout=120)
         major = cluster.query_json("SELECT to_json(current_setting('server_version_num')::int / 10000)", 'litellm')

@@ -36,13 +36,15 @@ def checked_major(cluster, expected):
     return major
 
 
-def start_cluster(tmp, role, volume, image):
+def start_cluster(tmp, role, volume, image, major):
     tmp.volume(volume)
+    mount = '/var/lib/postgresql' if major == 18 else '/var/lib/postgresql/data'
+    pgdata = '/var/lib/postgresql/18/docker' if major == 18 else '/var/lib/postgresql/data/pgdata'
     tmp.run(role, image, ['postgres', '-c', 'shared_buffers=16MB', '-c', 'max_connections=20'],
             detach=True, read_only_root=True,
-            volumes=[(tmp.name(volume), '/var/lib/postgresql/data', 'rw,noexec,nosuid,nodev')],
+            volumes=[(tmp.name(volume), mount, 'rw,noexec,nosuid,nodev')],
             env={'POSTGRES_HOST_AUTH_METHOD': 'trust', 'POSTGRES_DB': 'litellm',
-                 'PGDATA': '/var/lib/postgresql/data/pgdata'})
+                 'PGDATA': pgdata})
     cluster = ha_odoo.Cluster(tmp, role)
     cluster.wait_ready(tcp=True, timeout=120)
     return cluster
@@ -60,8 +62,8 @@ def main():
     notes = []
     cases = {}
     with tempctr.TempObjects(DevDRunner(), job, memory='128m', pids=128, cpus=None, log=notes.append) as tmp:
-        source = start_cluster(tmp, 'litellm-pg18', 'litellm-pg18-data', args.pg18_image_id)
-        target = start_cluster(tmp, 'litellm-pg17', 'litellm-pg17-data', args.pg17_image_id)
+        source = start_cluster(tmp, 'litellm-pg18', 'litellm-pg18-data', args.pg18_image_id, 18)
+        target = start_cluster(tmp, 'litellm-pg17', 'litellm-pg17-data', args.pg17_image_id, 17)
         checked_major(source, 18)
         checked_major(target, 17)
         source.script(SCHEMA + "INSERT INTO public.synthetic_rows VALUES (1, 'fixture alpha'), (2, 'fixture beta');\n",
