@@ -157,7 +157,7 @@ class Secrets:
         return [v for k, v in self.values.items() if k not in self.names and len(v) >= 6]
 
     def redact(self, value):
-        text = value if isinstance(value, str) else json.dumps(value, ensure_ascii=False)
+        text = value if isinstance(value, str) else json.dumps(self.redact_structure(value), ensure_ascii=False)
         for name, secret in sorted(self.values.items(), key=lambda kv: -len(kv[1])):
             if secret and name not in self.names and len(secret) >= 6:
                 text = text.replace(secret, f'<{name}>')
@@ -165,6 +165,16 @@ class Secrets:
         text = re.sub(r'(privkey|nodekey|machinekey|discokey):[0-9a-f]{64}',
                       lambda m: m.group(0) if m.group(1) != 'privkey' else 'privkey:<redacted>', text)
         return re.sub(r'[A-Z0-9]{4}(?:-[A-Z0-9]{4}){6}', '<HA-KEY>', text)
+
+    def redact_structure(self, value):
+        """Redact raw strings, including mapping keys, before JSON encoding."""
+        if isinstance(value, str):
+            return self.redact(value)
+        if isinstance(value, dict):
+            return {self.redact(str(k)): self.redact_structure(v) for k, v in value.items()}
+        if isinstance(value, (list, tuple)):
+            return [self.redact_structure(v) for v in value]
+        return value
 
 
 class Evidence:
@@ -185,7 +195,9 @@ class Evidence:
             handle.write(line + '\n')
 
     def check(self, name, ok, detail=''):
-        detail = self.secrets.redact(detail if isinstance(detail, str) else json.dumps(detail, ensure_ascii=False))
+        name = self.secrets.redact(str(name))
+        detail = self.secrets.redact(detail) if isinstance(detail, str) else json.dumps(
+            self.secrets.redact_structure(detail), ensure_ascii=False)
         self.results.append({'check': name, 'ok': bool(ok), 'detail': detail[:1500]})
         self.log(f'{"PASS" if ok else "FAIL"} {name}{": " + detail[:400] if detail else ""}')
         return bool(ok)
@@ -201,8 +213,9 @@ class Evidence:
 
     def save(self, name, value):
         path = self.dir / name
-        path.write_text(self.secrets.redact(value if isinstance(value, str) else
-                                            json.dumps(value, ensure_ascii=False, indent=1)), encoding='utf-8')
+        text = self.secrets.redact(value) if isinstance(value, str) else json.dumps(
+            self.secrets.redact_structure(value), ensure_ascii=False, indent=1)
+        path.write_text(text, encoding='utf-8')
         os.chmod(path, 0o600)
 
     def finish(self):
@@ -274,6 +287,8 @@ def wait_job(job_id, *, ev, timeout=5400):
 def device_python(script, request=None, *, as_owner=True, timeout=600):
     """Run a Python script inside dev-d (as appowner by default); the request (with secrets) goes on stdin, one JSON
     object comes back on the last stdout line."""
+    if script in (OMNI_PROBE, EMQX_PROBE, CREDENTIAL_HTTP, RUNNER_TOKEN, RUNNER_HOST):
+        raise Failed('credential producer disabled: issuance cannot be captured on failure')
     argv = ([OWNER] if as_owner else []) + ['python3', '-I', '-c', script]
     proc = run([LP, 'exec', '-i', DEVICE, *argv], input=json.dumps(request or {}).encode('utf-8'), timeout=timeout)
     if proc.returncode != 0:
@@ -336,6 +351,7 @@ def secret(name):
                           capture_output=True, text=True, timeout=60).stdout.rstrip("\n")
 def call(base, method, path, body=None, token=None, headers=None, raw=False, wait=0, basic=None):
     deadline = time.monotonic() + wait
+    auth_request = path.startswith("/auth/") or path in ("/oauth/token", "/api/v5/login")
     while True:
         data = body if isinstance(body, bytes) else (None if body is None else json.dumps(body).encode())
         r = urllib.request.Request(base + path, data=data, method=method)
@@ -353,12 +369,12 @@ def call(base, method, path, body=None, token=None, headers=None, raw=False, wai
         except urllib.error.HTTPError as e:
             code, content = e.code, e.read()
         except (urllib.error.URLError, OSError):
-            if time.monotonic() < deadline:
+            if not auth_request and time.monotonic() < deadline:
                 time.sleep(2)
                 continue
             return 0, None
-        starting = code in (502, 503, 504) or (code == 400 and b"not_initialized" in (content or b""))
-        if starting and time.monotonic() < deadline:
+        starting = code in (502, 503, 504) or (code == 400 and method == "GET" and b"not_initialized" in (content or b""))
+        if not auth_request and starting and time.monotonic() < deadline:
             time.sleep(2)
             continue
         if raw:
@@ -409,7 +425,8 @@ for role, (user, password) in (("ha_admin", REQ["ha_admin"]), ("ha_member", REQ[
     tokens[role], out["login_" + role] = login(user, password)
     out["login_" + role]["user"] = user
 # HA's admin with this device's admin password must not work (the account is HA's now)
-out["login_ha_admin_with_dev_password"] = login(REQ["ha_admin"][0], secret("omnigent-admin-password"))[1]["code"]
+tokens["negative"], negative = login(REQ["ha_admin"][0], secret("omnigent-admin-password"))
+out["login_ha_admin_with_dev_password"] = negative["code"]
 t = tokens.get("ha_admin")
 e = REQ["expect"]
 if t:
@@ -963,6 +980,8 @@ def restore(backup_id, apps, *, ev, tag):
 
 def import_once(ev, args, upload_tag, apps, *, test_mode=False, label=None, verify=True):
     """Convert `apps` of one upload in one job, restore them in one job, verify each. Returns the convert job."""
+    if set(apps) & {'omnigent', 'emqx'}:
+        raise Failed('import preflight: credential issuance events unavailable')
     machine, _name, needs_key, _all, hot = UPLOADS[upload_tag]
     label = label or f'import {upload_tag}/{"+".join(apps)}{" (test mode)" if test_mode else ""}'
     timing_app = apps[0] if len(apps) == 1 else '+'.join(apps)
@@ -1057,12 +1076,14 @@ def app_health(ev, app, label):
 
 
 def omnigent_probe(secrets, request):
+    raise Failed('Omnigent probe disabled: credential issuance events unavailable')
     result = device_python(OMNI_PROBE, request)
     secrets.register_issued(result.pop('_issued_credentials'))
     return result
 
 
 def verify_omnigent(ev, args, machine, label, test_mode=False, upload=None):
+    raise Failed('Omnigent probe disabled: credential issuance events unavailable')
     src = source(machine)['omnigent']
     s = args.secrets
     expect = {'agent_id': src['agent']['id'], 'task_id': src['scheduled_task']['id'],
@@ -1197,6 +1218,7 @@ def verify_hermes(ev, args, machine, label, test_mode=False, upload=None):
 
 
 def verify_emqx(ev, args, machine, label, test_mode=False, upload=None):
+    raise Failed('EMQX probe disabled: credential issuance events unavailable')
     src = source(machine)['emqx']
     s = args.secrets
     prefix = 'B1_ARM' if machine == 'arm' else 'B1_X86'
@@ -1303,6 +1325,7 @@ def hermes_owner_baseline(ev):
 
 
 def scenario_x86(ev, args):
+    raise Failed('x86 preflight: credential issuance events unavailable')
     hermes_owner_baseline(ev)
     for app in ('omnigent', 'hermes', 'headscale', 'emqx'):
         import_once(ev, args, 'x86-enc', [app])
@@ -1310,6 +1333,7 @@ def scenario_x86(ev, args):
 
 
 def scenario_arm(ev, args):
+    raise Failed('arm preflight: runner credential events unavailable')
     import_once(ev, args, 'arm-enc', ['omnigent'])
     scenario_runner(ev, args)
     import_once(ev, args, 'arm-enc', ['headscale'], label='import arm-enc/headscale (WAL-only database)')
@@ -1321,6 +1345,7 @@ def scenario_arm(ev, args):
 def scenario_forms(ev, args):
     """The unencrypted and the uncompressed backups of both machines: the apps other than EMQX in ONE conversion and
     ONE restore (multi-app jobs), EMQX (hot in these files) on its own so that a refusal cannot hide the others."""
+    raise Failed('forms preflight: credential issuance events unavailable')
     hermes_owner_baseline(ev)
     for tag in ('x86-plain', 'x86-unc', 'arm-plain', 'arm-unc'):
         import_once(ev, args, tag, [a for a in UPLOADS[tag][3] if a != 'emqx'])
@@ -1331,6 +1356,7 @@ def scenario_testmode(ev, args):
     """Test mode on real data: HA's backups hold only a PAUSED task, so a lab-made copy of the x86 unencrypted file
     with one more, ACTIVE task (tm_build.py) is imported twice: in test mode every task ends paused; without it the
     active task stays active (so it is test mode that pauses it). The real x86 file in test mode as well."""
+    raise Failed('testmode preflight: credential issuance events unavailable')
     if not STATE.get('ha_x86-active'):
         rc, reply = upload(ACTIVE_FIXTURE, ev=ev)
         meta = reply.get('ha_backup') or {}
@@ -1475,6 +1501,7 @@ print(json.dumps(result))
 
 def direct_credential_probe(secrets, username, password):
     """Collect one fresh lab login and refresh; proves only this probe's events."""
+    raise Failed('credential probe disabled: response capture on producer failure unavailable')
     login = device_python(CREDENTIAL_HTTP, {'stage': 'login', 'username': username, 'password': password})
     # Preserve valid returned values even if another required field is missing.
     for key in ('token', 'refresh_token'):
@@ -1718,6 +1745,7 @@ def marker_names(found):
 
 
 def scenario_baseline(ev, args):
+    raise Failed('baseline preflight: marker credential issuance events unavailable')
     for app in APPS:
         job, took = restore(BASELINE_IDS[app], [app], ev=ev, tag=f'baseline-{app}')
         ev.time('restore-baseline', '-', app, took, job)
@@ -1826,32 +1854,45 @@ for name in req["podman_secrets"]:
     if p.returncode != 0 or len(value) < 8:
         raise RuntimeError("cannot inspect required device secret: " + name)
     secrets["device:" + name] = value
-hits, scanned = {}, 0
+hits, scanned = 0, 0
 roots = ["/var/lib/woowtech-backup/jobs", "/var/lib/woowtech-backup/ha-backups", "/var/lib/woowtech-backup/ha-imports.json",
          "/var/lib/woowtech-backup/index.json", "/var/lib/woowtech-backup/archives", "/run/woowtech-backup",
          "/var/lib/woowtech-backup/uploads", "/var/lib/woowtech-backup/staging"]
 for root in roots:
-    if not os.path.exists(root):
-        continue
-    paths = [root] if os.path.isfile(root) else [os.path.join(d, f) for d, _s, fs in os.walk(root) for f in fs]
+    if not os.path.exists(root) or os.path.islink(root):
+        raise RuntimeError("required scan root missing or unsafe")
+    def walk_error(error):
+        raise RuntimeError("scan enumeration failed") from error
+    paths = []
+    if os.path.isfile(root):
+        paths.append(root)
+    elif os.path.isdir(root):
+        for d, dirs, files in os.walk(root, onerror=walk_error, followlinks=False):
+            if any(os.path.islink(os.path.join(d, name)) for name in dirs):
+                raise RuntimeError("unsafe scan path")
+            paths.extend(os.path.join(d, f) for f in files)
+    else:
+        raise RuntimeError("invalid scan root")
     for path in paths:
         if path.endswith(".tar") and ("/ha-backups/" in path or "/archives/" in path):
             continue  # the uploaded HA files (encrypted or the test data) and the encrypted backups themselves
+        if os.path.islink(path):
+            raise RuntimeError("unsafe scan path")
         try:
             data = open(path, "rb").read()
         except OSError as error:
-            raise RuntimeError("cannot scan " + path) from error
+            raise RuntimeError("cannot scan required file") from error
         scanned += 1
         for name, secret in secrets.items():
             if secret in data:
-                hits[path + " " + name] = data.count(secret)
+                hits += data.count(secret)
 journal = subprocess.run(["journalctl", "-o", "cat", "--no-pager"], capture_output=True, check=True).stdout
 helper = subprocess.run(["journalctl", "-o", "cat", "--no-pager", "_COMM=woowtech-cockp", "+", "SYSLOG_IDENTIFIER=woowtech-cockpit-backup"], capture_output=True, check=True).stdout
 for name, secret in secrets.items():
     if secret in journal:
-        hits["journal " + name] = journal.count(secret)
+        hits += journal.count(secret)
     if secret in helper:
-        hits["helper journal " + name] = helper.count(secret)
+        hits += helper.count(secret)
 print(json.dumps({"scanned": scanned, "journal_bytes": len(journal), "names": len(secrets), "hits": hits}))
 '''
 
@@ -1868,12 +1909,39 @@ def leak_scan_request(args):
     return request
 
 
+def scan_host_evidence(directory, secrets):
+    """Scan every file in this evidence tree, failing on missing or unreadable paths."""
+    if not directory.is_dir() or directory.is_symlink():
+        raise Failed('evidence scan root missing or unsafe')
+    needles = [s.encode('utf-8') for s in secrets.secret_values()]
+    scanned = hits = 0
+    def onerror(_error):
+        raise Failed('evidence scan enumeration failed')
+    try:
+        for root, dirs, files in os.walk(directory, onerror=onerror, followlinks=False):
+            for name in dirs + files:
+                if (Path(root) / name).is_symlink():
+                    raise Failed('evidence scan encountered unsafe path')
+            for name in files:
+                data = (Path(root) / name).read_bytes()
+                scanned += 1
+                hits += sum(data.count(secret) for secret in needles)
+    except OSError:
+        raise Failed('evidence scan failed') from None
+    return {'files': scanned, 'hits': hits}
+
+
 def scenario_leaks(ev, args):
     request = leak_scan_request(args)
     # Direct probe events cover only that probe; independently running services
     # and the old runner remain unobserved, so a zero-hit scan cannot pass.
     report = device_python(LEAK_SCAN, request, as_owner=False, timeout=900)
-    ev.save('leaks-partial.json', report)
+    if not isinstance(report, dict) or any(type(report.get(k)) is not int or report[k] < 0
+                                           for k in ('scanned', 'journal_bytes', 'names', 'hits')):
+        raise Failed('device scan returned invalid summary')
+    report = {k: report[k] for k in ('scanned', 'journal_bytes', 'names', 'hits')}
+    host_report = scan_host_evidence(ev.dir, args.secrets)
+    ev.save('leaks-partial.json', {'device': report, 'host': host_report})
     raise Failed('credential coverage incomplete: runner and other service events unavailable')
 
 

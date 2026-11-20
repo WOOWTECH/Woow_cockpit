@@ -63,43 +63,24 @@ class IntegrationTests(unittest.TestCase):
         self.scan_request = request
         return {'hits': {}, 'scanned': 0, 'names': len(request['secrets']), 'journal_bytes': 0}
 
-    def test_caller_http_producer_registry_and_scan_boundary(self):
-        class Evidence:
-            def __init__(self): self.records = []
-            def check(self, *a): self.records.append(a)
-            def save(self, *a): self.records.append(a)
+    def test_credential_scenario_is_blocked_before_producer(self):
         class Args: pass
         args = Args(); args.secrets = self.secrets
-        evidence = Evidence()
-        with patch.object(b1, 'device_python', side_effect=self.device):
-            b1.scenario_credentials(evidence, args)
-            with self.assertRaisesRegex(b1.Failed, 'coverage incomplete'):
-                b1.scenario_leaks(evidence, args)
-        self.assertEqual([p for p, _ in Handler.calls], ['/auth/login', '/oauth/token'])
-        self.assertTrue(json.loads(Handler.calls[0][1])['issue_refresh'])
-        expected = {'synthetic-access-first', 'synthetic-refresh-first',
-                    'synthetic-access-new', 'synthetic-refresh-new'}
-        self.assertTrue(expected <= set(self.scan_request['secrets'].values()))
-        for value in expected:
-            self.assertNotIn(value, self.secrets.redact(value))
-            self.assertNotIn(value, str(evidence.records))
-        self.assertFalse(evidence.records[0][2]['runner_coverage'])
+        with patch.object(b1, 'device_python', side_effect=AssertionError('device touched')):
+            with self.assertRaisesRegex(b1.Failed, 'response capture'):
+                b1.scenario_credentials(None, args)
+        self.assertEqual(Handler.calls, [])
 
-    def test_missing_refresh_event_fails_and_preserves_first_generation(self):
-        Handler.refresh_reply = {'refresh_token': 'synthetic-refresh-new'}
-        with patch.object(b1, 'device_python', side_effect=self.device):
-            with self.assertRaisesRegex(b1.Failed, 'refresh event missing'):
-                b1.direct_credential_probe(self.secrets, 'lab-user', 'synthetic-password')
-        self.assertIn('synthetic-access-first', self.secrets.secret_values())
-        self.assertIn('synthetic-refresh-new', self.secrets.secret_values())
-        self.assertEqual(len(Handler.calls), 2)
-
-    def test_missing_login_grant_prevents_refresh(self):
-        with patch.object(b1, 'device_python', return_value={'token': 'synthetic-access-first'} ) as device:
-            with self.assertRaisesRegex(b1.Failed, 'login event missing'):
-                b1.direct_credential_probe(self.secrets, 'lab-user', 'synthetic-password')
-        self.assertEqual(device.call_count, 1)
-        self.assertIn('synthetic-access-first', self.secrets.secret_values())
+    def test_arm_and_other_imports_are_preflight_blocked(self):
+        with patch.object(b1, 'import_once', side_effect=AssertionError('import started')):
+            with self.assertRaisesRegex(b1.Failed, 'arm preflight'):
+                b1.scenario_arm(None, None)
+        with patch.object(b1, 'ok', side_effect=AssertionError('device touched')):
+            with self.assertRaisesRegex(b1.Failed, 'import preflight'):
+                b1.import_once(None, None, 'arm-enc', ['omnigent'])
+        with patch.object(b1, 'device_python', side_effect=AssertionError('device touched')):
+            with self.assertRaisesRegex(b1.Failed, 'EMQX probe disabled'):
+                b1.verify_emqx(None, None, None, None)
 
     def test_runner_fails_before_any_action(self):
         with patch.object(b1, 'owner', side_effect=AssertionError('unexpected action')):

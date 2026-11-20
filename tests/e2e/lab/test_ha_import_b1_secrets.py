@@ -33,28 +33,11 @@ class SecretTests(unittest.TestCase):
                 secrets.register('SESSION_TOKEN', 'replacement-token-456')
             self.assertIn('generated-token-123', secrets.secret_values())
 
-    def test_probe_registers_each_issued_token_before_returning_evidence(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            env = Path(tmp) / 'env'
-            env.write_text('PASSWORD=abcdefgh\n')
-            markers = Path(tmp) / 'markers'
-            markers.write_text('{}')
-            secrets = b1.Secrets([env], markers)
-            original = b1.device_python
-            responses = iter([
-                {'_issued_credentials': ['first-token-123', 'first-token-123'], 'status': 'first-token-123'},
-                {'_issued_credentials': ['second-token-456'], 'status': 'ok'},
-            ])
-            try:
-                b1.device_python = lambda *args, **kwargs: next(responses)
-                result = b1.omnigent_probe(secrets, {})
-                b1.omnigent_probe(secrets, {})
-            finally:
-                b1.device_python = original
-            self.assertNotIn('_issued_credentials', result)
-            self.assertNotIn('first-token-123', secrets.redact(result))
-            self.assertIn('second-token-456', secrets.secret_values())
-            self.assertEqual(secrets.secret_values().count('first-token-123'), 1)
+    def test_omnigent_probe_blocks_before_device_access(self):
+        from unittest.mock import patch
+        with patch.object(b1, 'device_python', side_effect=AssertionError('device touched')):
+            with self.assertRaisesRegex(b1.Failed, 'issuance events unavailable'):
+                b1.omnigent_probe(None, {})
 
     def test_runner_consumer_rejects_missing_credentials_before_evidence(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -93,6 +76,7 @@ class SecretTests(unittest.TestCase):
             secrets.register('SESSION_TOKEN', 'generated-token-123')
             captured = {}
             class Evidence:
+                dir = Path(tmp)
                 def save(self, *args): pass
                 def check(self, *args): pass
             class Args:
@@ -102,7 +86,7 @@ class SecretTests(unittest.TestCase):
             original = b1.device_python
             def fake_scan(code, request, **kwargs):
                 captured.update(request)
-                return {'hits': {}, 'scanned': 0, 'names': len(request['secrets']), 'journal_bytes': 0}
+                return {'hits': 0, 'scanned': 0, 'names': len(request['secrets']), 'journal_bytes': 0}
             try:
                 b1.device_python = fake_scan
                 with self.assertRaisesRegex(b1.Failed, "coverage incomplete"):
@@ -131,7 +115,7 @@ class SecretTests(unittest.TestCase):
             run = lambda: subprocess.run([sys.executable, '-I', '-c', code], input=request, text=True, capture_output=True, env=env)
             result = run()
             self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertEqual(json.loads(result.stdout)['hits'][str(jobs / 'large') + ' dynamic'], 1)
+            self.assertEqual(json.loads(result.stdout)['hits'], 1)
             journal.write_text('#!/bin/sh\nexit 1\n')
             self.assertNotEqual(run().returncode, 0)
 
