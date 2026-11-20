@@ -27,12 +27,14 @@ cluster.hocon, data exports and traces; `woow_emqx_log` is only its top folder. 
 the EMQX version it pins (VERSIONS), which must equal the live image's `org.opencontainers.image.version`.
 """
 import io
+import base64
+import json
 import os
 import re
 import tarfile
 import time
 
-from . import habackup, hacommon, ha_n8n, ha_odoo, tempctr
+from . import habackup, hacommon, ha_n8n, ha_odoo, tempctr, util
 from .errors import BackupError
 
 SLUG = 'woow-emqx'
@@ -185,6 +187,7 @@ class Target:
                 or app.postgres or app.data_dirs):
             raise BackupError('incompatible', '這台的 EMQX 應用設定和 Quadlet 檔不一致，無法匯入。', app=app.id)
         text = quadlets[broker]
+        self.container = hacommon.quadlet_container_name(quadlets, broker)
         self.data_volume, self.log_volume = data_volume, log_volume
         self.image = tempctr.quadlet_image(text)
         if not self.image:
@@ -438,6 +441,82 @@ def import_target_snapshot(tmp, snapshot_path):
     tmp.volume_import('emqx-new', produce)
 
 
+# Fixed expression: no configuration or credential is interpolated into argv.
+CONFIG_EXPR = ('io:format("WOOWCFG:~s:END~n", '
+               '[base64:encode(emqx_utils_json:encode(emqx:get_raw_config([])))]).')
+
+
+def read_effective_config(execute):
+    """Read merged broker configuration with bounded output; never expose its body in errors."""
+    try:
+        result = execute(['emqx', 'eval', CONFIG_EXPR])
+        body = result.stdout or b''
+        if result.returncode or len(body) > MAX_HOCON or not body.startswith(b'WOOWCFG:'):
+            raise ValueError()
+        encoded, tail = body[8:].split(b':END', 1)
+        if tail.strip() not in (b'', b'ok'):
+            raise ValueError()
+        config = util.loads_strict(base64.b64decode(encoded, validate=True), max_bytes=MAX_HOCON)
+        if not isinstance(config, dict) or not config or not isinstance(config.get('authorization'), dict):
+            raise ValueError()
+        auth = config['authorization']
+        if auth.get('no_match') not in ('allow', 'deny') or auth.get('deny_action') not in ('ignore', 'disconnect'):
+            raise ValueError()
+        return config
+    except (BackupError, ValueError, TypeError, RecursionError):
+        raise BackupError('incompatible', '無法安全取得 EMQX 有效設定，已停止。') from None
+
+
+def configuration_references(config, mounts):
+    """Resolve file ACL and explicit TLS file fields in supported configuration roots.
+
+    Unknown roots are rejected until their schema/file dependencies have been reviewed.
+    This intentionally restrictive candidate is not a universal EMQX schema parser.
+    """
+    allowed = {'authorization', 'authentication', 'listeners', 'dashboard', 'mqtt', 'zones',
+               'flapping_detect', 'force_shutdown', 'force_gc', 'conn_congestion', 'stats',
+               'sys_topics', 'broker', 'retainer'}
+    if set(config) - allowed:
+        raise BackupError('incompatible', 'EMQX 含有尚未完成檔案參照審查的設定類型。')
+    required = authorization_file_references(config['authorization'], mounts)
+    def visit(value, depth=0):
+        if depth > 32:
+            raise BackupError('incompatible', 'EMQX 設定巢狀層級超過限制。')
+        if isinstance(value, dict):
+            for key, item in value.items():
+                if key in ('certfile', 'keyfile', 'cacertfile', 'dhfile') and item:
+                    required.update(authorization_file_references(
+                        {'sources': [{'type': 'file', 'path': item}]}, mounts))
+                elif key in ('filename', 'file', 'bootstrap_file', 'path'):
+                    # ACL paths are already resolved, but resolving again keeps this walk uniform.
+                    if key != 'path' or value.get('type') != 'file':
+                        raise BackupError('incompatible', 'EMQX 含有尚未支援的檔案參照。')
+                visit(item, depth + 1)
+        elif isinstance(value, list):
+            for item in value:
+                visit(item, depth + 1)
+    visit(config)
+    return required
+
+
+def candidate_from_target(work, app, tmp, target, staging, export, ids, *, hint=''):
+    """Internal candidate entry: live structured read -> validated snapshot -> broker.
+
+    The public convert guard still prevents this candidate from performing a real import.
+    """
+    def execute(command):
+        return work.runner(app).podman('exec', target.container, *command, timeout=120,
+                                      max_output=MAX_HOCON, check=False)
+    original = read_effective_config(execute)
+    required = configuration_references(original, target.files)
+    snapshot = snapshot_target_volume(work, app, target.data_volume, staging, required)
+    # Reject a moving configuration rather than mixing two generations of files/settings.
+    if read_effective_config(execute) != original:
+        raise BackupError('incompatible', 'EMQX 設定於快照期間改變，已停止。')
+    return target_broker(work, tmp, target, export, ids, hint=hint,
+                         target_snapshot=snapshot, target_config=original)
+
+
 def candidate_with_effective_acl(work, app, tmp, target, staging, export, ids, authorization, *, hint=''):
     """Stage known file ACL references and seed a candidate; not a complete preservation check.
 
@@ -449,7 +528,7 @@ def candidate_with_effective_acl(work, app, tmp, target, staging, export, ids, a
     return target_broker(work, tmp, target, export, ids, hint=hint, target_snapshot=snapshot)
 
 
-def target_broker(work, tmp, target, export, ids, *, hint='', target_snapshot=None):
+def target_broker(work, tmp, target, export, ids, *, hint='', target_snapshot=None, target_config=None):
     """This device's broker on an empty volume: import HA's export, load the strict settings back, verify."""
     name = os.path.basename(export)
     tmp.volume('emqx-in')
@@ -462,6 +541,10 @@ def target_broker(work, tmp, target, export, ids, *, hint='', target_snapshot=No
             volumes=[(tmp.name('emqx-new'), DATA_TARGET, None), (tmp.name('emqx-new-log'), LOG_TARGET, None),
                      (tmp.name('emqx-in'), WORK, None)] + target.files)
     wait_ready(tmp, 'emqx-new', checkpoint=work.checkpoint)
+    read_candidate = lambda command: tmp.exec('emqx-new', command, timeout=120,
+                                               max_output=MAX_HOCON, check=False)
+    if target_config is not None and read_effective_config(read_candidate) != target_config:
+        raise BackupError('incompatible', 'EMQX 候選啟動後設定與目標不一致，已停止。')
     seeded = parse_counts(evaluate(tmp, 'emqx-new', COUNT_EXPR))
     strict = parse_strict(evaluate(tmp, 'emqx-new', STRICT_EXPR))
     authn = parse_authn(evaluate(tmp, 'emqx-new', AUTHN_EXPR))
@@ -472,9 +555,17 @@ def target_broker(work, tmp, target, export, ids, *, hint='', target_snapshot=No
     if b'imported successfully' not in out:
         raise BackupError('incompatible', 'HA 的 EMQX 資料匯入時發生錯誤（部分資料無法匯入），已停止。' + hint)
     snippet = f'authorization {{\n  no_match = {strict[0]}\n  deny_action = {strict[1]}\n  sources = []\n}}\n'.encode()
-    tmp.exec('emqx-new', ['sh', '-c', f'cat > {WORK}/in/strict.hocon'], input=snippet, timeout=120,
+    if target_config is not None:
+        snippet = json.dumps({'authorization': target_config['authorization']}, ensure_ascii=True).encode()
+    tmp.exec('emqx-new', ['sh', '-c', f'umask 077; cat > {WORK}/in/strict.hocon'], input=snippet, timeout=120,
              max_output=64 * 1024)
     ctl(tmp, 'emqx-new', ['conf', 'load', '--merge', f'{WORK}/in/strict.hocon'], timeout=600)
+    if target_config is not None:
+        restored = read_effective_config(read_candidate)
+        # Authentication intentionally comes from HA. All other roots must be unchanged.
+        keep = lambda conf: {k: v for k, v in conf.items() if k != 'authentication'}
+        if keep(restored) != keep(target_config):
+            raise BackupError('incompatible', 'EMQX 匯入後未能保留目標有效設定，已停止。')
     after = parse_strict(evaluate(tmp, 'emqx-new', STRICT_EXPR))
     if after != strict:
         raise BackupError('job-failed', '無法恢復這台 EMQX 的存取政策（未符合規則的主題拒絕），已停止。')
@@ -662,7 +753,8 @@ def convert(work, app, test_mode, out_dir):
     export = take_export(work, tmp, readings['export'], staging)
     _clean(tmp, volumes=('emqx-src', 'emqx-xfer', 'emqx-ha-log'))
     emqx_ids = tmp.user_ids('ids-emqx', target.image, 'emqx')
-    seeded, counts, strict, live_authn = target_broker(work, tmp, target, export, emqx_ids, hint=hint_for(src.addon))
+    seeded, counts, strict, live_authn = candidate_from_target(
+        work, app, tmp, target, staging, export, emqx_ids, hint=hint_for(src.addon))
     problems = check_counts(readings['counts'], seeded, counts)
     if problems:
         raise BackupError('job-failed', f'EMQX 匯入後的資料筆數和 HA 不同，已停止：{"、".join(problems[:10])}。')
