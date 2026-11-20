@@ -380,6 +380,35 @@ def target_config_snapshot(volume_tar, snapshot_path, required, *, limit=MAX_HOC
     return found
 
 
+def authorization_file_references(authorization, mounts):
+    """Resolve an already-decoded effective authorization object; reject unsupported sources.
+
+    This covers file ACL sources only, not other EMQX configuration roots. Host paths are
+    never read here. Exact existing read-only file mounts may satisfy an external reference.
+    """
+    if not isinstance(authorization, dict) or not isinstance(authorization.get('sources'), list):
+        raise BackupError('incompatible', '無法取得目標 EMQX 的有效授權來源。')
+    references = {'configs/cluster.hocon'}
+    for source in authorization['sources']:
+        if not isinstance(source, dict) or source.get('type') != 'file':
+            raise BackupError('incompatible', '目標 EMQX 使用尚未支援的授權來源。')
+        path = source.get('path')
+        if not isinstance(path, str) or not path or '\x00' in path:
+            raise BackupError('incompatible', '目標 EMQX 的 ACL 路徑無效。')
+        prefix = DATA_TARGET + '/'
+        if path.startswith(prefix):
+            relative = path[len(prefix):]
+            if ha_odoo._norm(relative) != relative or not relative.startswith(('authz/', 'configs/', 'certs/')):
+                raise BackupError('incompatible', '目標 EMQX 的 ACL 路徑不受支援。')
+            references.add(relative)
+        else:
+            matches = [m for m in mounts if len(m) == 3 and m[1] == path and m[2] == 'ro']
+            if (not path.startswith('/') or ha_odoo._norm(path[1:]) != path[1:] or len(matches) != 1
+                    or not isinstance(matches[0][0], str) or not matches[0][0].startswith('/')):
+                raise BackupError('incompatible', '目標 EMQX 的 ACL 未對應至唯一的唯讀掛載。')
+    return references
+
+
 def snapshot_target_volume(work, app, volume, staging, required):
     """Export the target volume and stage only explicitly enumerated configuration references.
 
@@ -407,6 +436,17 @@ def import_target_snapshot(tmp, snapshot_path):
                     break
                 out.write(chunk)
     tmp.volume_import('emqx-new', produce)
+
+
+def candidate_with_effective_acl(work, app, tmp, target, staging, export, ids, authorization, *, hint=''):
+    """Stage known file ACL references and seed a candidate; not a complete preservation check.
+
+    The caller must obtain a trusted effective authorization object and independently account
+    for references in every other configuration root before using this in a conversion.
+    """
+    required = authorization_file_references(authorization, target.files)
+    snapshot = snapshot_target_volume(work, app, target.data_volume, staging, required)
+    return target_broker(work, tmp, target, export, ids, hint=hint, target_snapshot=snapshot)
 
 
 def target_broker(work, tmp, target, export, ids, *, hint='', target_snapshot=None):
