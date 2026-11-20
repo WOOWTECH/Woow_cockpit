@@ -62,6 +62,19 @@ class Failed(Exception):
     pass
 
 
+def require_isolated_device():
+    """Fail before credentials, deployment or jobs; inspect the lab store only."""
+    try:
+        result = subprocess.run(
+            [LP, 'container', 'inspect', DEVICE, '--format',
+             '{{.State.Running}} {{.HostConfig.NetworkMode}} {{json .HostConfig.PortBindings}}'],
+            capture_output=True, timeout=30, check=False)
+    except (OSError, subprocess.TimeoutExpired):
+        raise Failed('lab isolation inspection unavailable') from None
+    if result.returncode != 0 or result.stdout.strip() != b'true none {}':
+        raise Failed('lab must be running with network=none and no published ports')
+
+
 class Secrets:
     """Test secrets from files; `redact` replaces every value (and the HA key pattern) in evidence text."""
 
@@ -1094,6 +1107,10 @@ def main():
     parser.add_argument('--baseline', help='ODOO_BACKUP_ID,N8N_BACKUP_ID of dev-c backups from before any import')
     parser.add_argument('--evidence', default='ha-import', help='evidence folder below ~/.woowbk-lab/evidence')
     args = parser.parse_args()
+    try:
+        require_isolated_device()
+    except Failed as error:
+        parser.exit(2, str(error) + '\n')
     EXPECT.update(odoo_addon=args.odoo_addon_version, arch=args.arch)
     NAMES.update({tag: name.replace('woow-import-test', args.prefix) for tag, name in NAMES.items()})
     args.secrets = Secrets(args.creds, args.n8n_data)
