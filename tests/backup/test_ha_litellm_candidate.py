@@ -1,4 +1,5 @@
 """Restricted LiteLLM preflight: real tar parser, synthetic data only."""
+import hashlib
 import io
 import json
 import unittest
@@ -107,6 +108,54 @@ class LiteLLMCandidateTests(unittest.TestCase):
         tmp.run.side_effect = [BackupError('job-failed', 'fail'), Mock(stdout=b'postgres 17.11')]
         facts = candidate.probe_target_images(tmp, running_app_image_id=image_id, running_db_image_id=image_id)
         self.assertEqual(facts, {'target_version': None, 'target_pg_major': None})
+
+    def test_fixture_binding_matches_actual_ha_format_and_preservation(self):
+        salt = b'sk-' + b'a' * 64
+        fingerprint = hashlib.sha256(b'woow-litellm-salt-v1:' + salt).hexdigest()[:16].encode()
+        good = candidate.fixture_salt_binding(source_salt=b'  ' + salt + b'\n', platform_rows=[salt],
+                                               fingerprint_rows=[fingerprint], target_salt=salt)
+        self.assertEqual(good, {'source_binding': 'matches_fixture', 'target_relation': 'same_fixture',
+                                'scope': 'synthetic_only', 'conversion': 'disabled'})
+        other = b'sk-' + b'b' * 64
+        different = candidate.fixture_salt_binding(source_salt=salt, platform_rows=[salt],
+                                                    fingerprint_rows=[fingerprint], target_salt=other)
+        self.assertEqual(different['target_relation'], 'different_fixture')
+        for item in (salt, other, fingerprint):
+            self.assertNotIn(item.decode(), repr((good, different)))
+        self.assertEqual(candidate.preservation_contract()['conversion'], 'disabled')
+
+    def test_fixture_binding_fails_closed_on_mismatch_or_bad_rows(self):
+        salt = b'sk-' + b'a' * 64
+        other = b'sk-' + b'b' * 64
+        fp = hashlib.sha256(b'woow-litellm-salt-v1:' + salt).hexdigest()[:16].encode()
+        def check(source=salt, rows=None, fps=None, target=None):
+            return candidate.fixture_salt_binding(source_salt=source, platform_rows=rows,
+                                                   fingerprint_rows=fps, target_salt=target)
+        for result in (check(rows=[other], fps=[fp]), check(rows=[salt], fps=[b'0' * 16])):
+            self.assertEqual(result['source_binding'], 'mismatch')
+            self.assertEqual(result['target_relation'], 'unknown')
+        for rows, fps in (([], [fp]), ([salt, salt], [fp]), ([salt], []), ([salt], [fp, fp]),
+                          ([b''], [fp]), ([salt + b' '], [fp]), ([salt], [fp.upper()]),
+                          ([salt], [b'a' * 100000]), ('wrong', [fp])):
+            with self.subTest(rows_type=type(rows), count=len(rows), fp_count=len(fps)):
+                self.assertEqual(check(rows=rows, fps=fps)['source_binding'], 'invalid_rows')
+        for bad in (None, b'short', b'a' * 1025, 'not bytes'):
+            self.assertEqual(check(source=bad, rows=[salt], fps=[fp])['source_binding'], 'invalid_source')
+        self.assertEqual(check(rows=[salt], fps=[fp], target=b'bad')['target_relation'], 'invalid_target')
+
+    def test_fixture_target_binding_detects_mismatch_and_missing_data(self):
+        target = b'sk-' + b'c' * 64
+        other = b'sk-' + b'd' * 64
+        def verify(value, rows):
+            return candidate.fixture_target_binding(target_salt=value, target_platform_rows=rows)
+        ok = verify(target, [target])
+        self.assertEqual(ok['target_binding'], 'matches_fixture')
+        self.assertEqual(ok['conversion'], 'disabled')
+        self.assertNotIn(target.decode(), repr(ok))
+        self.assertEqual(verify(target, [other])['target_binding'], 'mismatch')
+        for rows in ([], [target, target], [None], [b''], [b'x' * 257]):
+            self.assertEqual(verify(target, rows)['target_binding'], 'invalid_rows')
+        self.assertEqual(verify(b'bad', [target])['target_binding'], 'invalid_target')
 
     def test_preservation_contract_is_disabled_and_transfers_no_secrets(self):
         plan = candidate.preservation_contract()

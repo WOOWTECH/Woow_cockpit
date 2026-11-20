@@ -69,3 +69,21 @@ In dev-d only, the candidate caller was executed through the real `TempObjects` 
 an already loaded PG17 image: major 17, LiteLLM version unknown, and no probe objects
 remained. See `tests/e2e/lab/evidence/litellm-candidate/pg17-probe.json`. This is a
 version-probe test, not a LiteLLM restore or migration acceptance.
+
+## Synthetic salt binding model
+
+`fixture_salt_binding` is a bounded in-memory comparison for synthetic values only.
+It models the HA source contract: exactly one `woow_platform.settings` value must
+match the stripped source salt, and one `woow.meta` fingerprint must match the first
+16 lowercase hex digits of SHA-256 over `woow-litellm-salt-v1:` plus the salt.
+Optional synthetic target input reports only same/different, not a key or digest.
+`fixture_target_binding` models the target `db_prepare.py` equality check. It uses
+the HA salt character and length limits as a conservative candidate restriction;
+the target source itself checks nonempty equality, not that format.
+
+Both functions require caller-provided fixture values. They do not run SQL, validate
+source row provenance or integrity, perform a target-secret read, move a salt, verify
+encrypted credentials, or authorize conversion. Results are explicitly labelled
+`synthetic_only`. Missing, duplicate, oversized, malformed and mismatched fixture
+values are covered by negative tests. The existing conversion guard remains mandatory;
+never treat an in-memory match as a trusted database observation.

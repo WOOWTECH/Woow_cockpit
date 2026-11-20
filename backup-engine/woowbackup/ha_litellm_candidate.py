@@ -5,6 +5,8 @@ service or target secret, does not open PostgreSQL, and never returns the HA sal
 source salt file is not evidence that the database contains the same key. Conversion is
 unconditionally disabled until a trusted schema, secret transfer and real tests exist.
 """
+import hashlib
+import hmac
 import re
 from dataclasses import dataclass
 
@@ -165,6 +167,78 @@ def assess_target(source, evidence):
         evidence = {}
     return assess(source, target_version=evidence.get('target_version'),
                   target_pg_major=evidence.get('target_pg_major'))
+
+
+_FINGERPRINT = re.compile(rb'[0-9a-f]{16}\Z')
+
+
+def _fixture_secret(value):
+    """Apply the HA read_secret strip and format rule to a bounded byte string."""
+    if not isinstance(value, bytes) or len(value) > 1024:
+        return None
+    clean = value.strip()
+    return clean if _SALT.fullmatch(clean) else None
+
+
+def fixture_salt_binding(*, source_salt, platform_rows, fingerprint_rows, target_salt=None):
+    """Compare synthetic inputs with HA's actual salt contracts; never query a DB.
+
+    `platform_rows` and `fingerprint_rows` are bounded query-result fixtures: exactly
+    one bytes value each for the fixed HA keys. `target_salt` is optional synthetic
+    data. The caller must not pass production secrets. Only static statuses are
+    returned; neither source nor target data, digests, nor exception text is emitted.
+    These statuses do not prove the authenticity, integrity or origin of a database.
+    """
+    result = {'source_binding': 'unknown', 'target_relation': 'unknown',
+              'scope': 'synthetic_only', 'conversion': 'disabled'}
+    source = _fixture_secret(source_salt)
+    if source is None:
+        result['source_binding'] = 'invalid_source'
+        return result
+    if (not isinstance(platform_rows, (list, tuple)) or len(platform_rows) != 1
+            or not isinstance(fingerprint_rows, (list, tuple)) or len(fingerprint_rows) != 1):
+        result['source_binding'] = 'invalid_rows'
+        return result
+    db_salt, stored_fp = platform_rows[0], fingerprint_rows[0]
+    if (not isinstance(db_salt, bytes) or len(db_salt) > 256 or not _SALT.fullmatch(db_salt)
+            or not isinstance(stored_fp, bytes) or len(stored_fp) != 16 or not _FINGERPRINT.fullmatch(stored_fp)):
+        result['source_binding'] = 'invalid_rows'
+        return result
+    expected = hashlib.sha256(b'woow-litellm-salt-v1:' + source).hexdigest()[:16].encode('ascii')
+    if not (hmac.compare_digest(source, db_salt) and hmac.compare_digest(expected, stored_fp)):
+        result['source_binding'] = 'mismatch'
+        return result
+    result['source_binding'] = 'matches_fixture'
+    if target_salt is not None:
+        target = _fixture_secret(target_salt)
+        if target is None:
+            result['target_relation'] = 'invalid_target'
+        elif hmac.compare_digest(source, target):
+            result['target_relation'] = 'same_fixture'
+        else:
+            result['target_relation'] = 'different_fixture'
+    return result
+
+
+def fixture_target_binding(*, target_salt, target_platform_rows):
+    """Synthetic-only check of Podman's existing DB-to-secret requirement.
+
+    The real target secret and database must not be passed here. This performs no
+    preservation, extraction, writes, or production validation.
+    """
+    result = {'target_binding': 'unknown', 'scope': 'synthetic_only', 'conversion': 'disabled'}
+    target = _fixture_secret(target_salt)
+    if target is None:
+        result['target_binding'] = 'invalid_target'
+    elif (not isinstance(target_platform_rows, (list, tuple)) or len(target_platform_rows) != 1
+          or not isinstance(target_platform_rows[0], bytes) or len(target_platform_rows[0]) > 256
+          or not _SALT.fullmatch(target_platform_rows[0])):
+        result['target_binding'] = 'invalid_rows'
+    elif hmac.compare_digest(target, target_platform_rows[0]):
+        result['target_binding'] = 'matches_fixture'
+    else:
+        result['target_binding'] = 'mismatch'
+    return result
 
 
 def preservation_contract():
