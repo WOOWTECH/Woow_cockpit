@@ -262,3 +262,74 @@ def preservation_contract():
 def convert(work, app, test_mode, out_dir):
     """Defense in depth if a caller incorrectly attempts to invoke conversion."""
     raise BackupError('incompatible', GUARD, app=app.id)
+
+# Internal candidate only: the caller must supply a hardened, isolated PostgreSQL
+# cluster and an already provisioned restricted reader. Never use against a live DB.
+_SALT_READER_ROLE = 'woowbk_litellm_reader'
+_SALT_QUERY = r'''SET LOCAL search_path = pg_catalog;
+SET LOCAL transaction_read_only = on;
+SET LOCAL statement_timeout = '5s';
+SET LOCAL lock_timeout = '2s';
+SET LOCAL enable_indexscan = off;
+SET LOCAL enable_indexonlyscan = off;
+SET LOCAL enable_bitmapscan = off;
+SET LOCAL max_parallel_workers_per_gather = 0;
+SELECT CASE WHEN
+  NOT EXISTS (SELECT 1 FROM pg_roles r WHERE r.rolsuper AND pg_has_role(current_user, r.oid, 'MEMBER'))
+  AND NOT EXISTS (SELECT 1 FROM pg_roles r WHERE r.rolname = current_user AND (r.rolsuper OR r.rolbypassrls))
+  AND (SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+       WHERE (n.nspname, c.relname) IN (('woow_platform', 'settings'), ('woow', 'meta'))
+       AND c.relkind = 'r' AND NOT c.relrowsecurity AND NOT c.relforcerowsecurity
+       AND NOT EXISTS (SELECT 1 FROM pg_inherits i WHERE i.inhrelid = c.oid OR i.inhparent = c.oid)
+       AND (SELECT count(*) FROM pg_attribute a WHERE a.attrelid = c.oid AND a.attname IN ('key','value')
+            AND a.atttypid = 'pg_catalog.text'::regtype AND a.attnum > 0 AND NOT a.attisdropped) = 2) = 2
+  THEN 'true' ELSE 'false' END AS schema_safe \gset
+\if :schema_safe
+SELECT json_build_object(
+ 'platform', (SELECT coalesce(json_agg(v), '[]'::json) FROM
+   (SELECT CASE WHEN octet_length(value) <= 256 THEN value ELSE NULL END AS v
+    FROM woow_platform.settings WHERE key OPERATOR(pg_catalog.=) 'litellm_salt_key'::text LIMIT 2) s),
+ 'fingerprint', (SELECT coalesce(json_agg(v), '[]'::json) FROM
+   (SELECT CASE WHEN octet_length(value) <= 16 THEN value ELSE NULL END AS v
+    FROM woow.meta WHERE key OPERATOR(pg_catalog.=) 'salt_fingerprint_v1'::text LIMIT 2) s));
+\else
+SELECT 1 / 0;
+\endif
+'''
+
+
+def read_source_salt_binding(cluster, source_salt):
+    """Read fixed HA salt fields from an isolated DB; return a fixed safe status.
+
+    This is not wired to any import path. The caller must provision a non-superuser
+    reader with SELECT on the two ordinary tables in an isolated hardened cluster,
+    prevent concurrent DDL, and pass only a bounded in-memory salt. The SQL and argv
+    contain no salt. DB values travel only in bounded captured stdout and are never
+    returned or logged here. A match proves neither backup integrity nor decryptability.
+    """
+    source = _fixture_secret(source_salt)
+    if source is None:
+        return 'invalid_source'
+    try:
+        response = cluster.tmp.exec(cluster.role,
+            ['psql', '-X', '-A', '-t', '-q', '-v', 'ON_ERROR_STOP=1', '-1',
+             '-U', _SALT_READER_ROLE, '-d', 'litellm', '-f', '-'],
+            user='postgres', input=_SALT_QUERY.encode('ascii'), timeout=15, max_output=4096, check=False)
+        if response.returncode != 0 or not isinstance(response.stdout, bytes) or len(response.stdout) > 4096:
+            return 'unknown'
+        value = hacommon.strict_json(response.stdout.strip(), 4096)
+        if not isinstance(value, dict) or set(value) != {'platform', 'fingerprint'}:
+            return 'invalid_rows'
+        platform, fingerprint = value['platform'], value['fingerprint']
+        if (not isinstance(platform, list) or len(platform) != 1 or not isinstance(platform[0], str)
+                or not isinstance(fingerprint, list) or len(fingerprint) != 1 or not isinstance(fingerprint[0], str)):
+            return 'invalid_rows'
+        db_salt, db_fp = platform[0].encode('ascii'), fingerprint[0].encode('ascii')
+        if len(db_salt) > 256 or not _SALT.fullmatch(db_salt) or len(db_fp) != 16 or not _FINGERPRINT.fullmatch(db_fp):
+            return 'invalid_rows'
+        expected = hashlib.sha256(b'woow-litellm-salt-v1:' + source).hexdigest()[:16].encode('ascii')
+        if hmac.compare_digest(source, db_salt) and hmac.compare_digest(expected, db_fp):
+            return 'match'
+        return 'mismatch'
+    except (BackupError, UnicodeError, ValueError, TypeError):
+        return 'unknown'

@@ -87,3 +87,23 @@ encrypted credentials, or authorize conversion. Results are explicitly labelled
 `synthetic_only`. Missing, duplicate, oversized, malformed and mismatched fixture
 values are covered by negative tests. The existing conversion guard remains mandatory;
 never treat an in-memory match as a trusted database observation.
+
+## Internal SQL reader awaiting isolated PG validation
+
+`read_source_salt_binding` sends a fixed SQL script through psql stdin to a separately
+provisioned `woowbk_litellm_reader` role in an isolated throwaway cluster. The script
+checks for ordinary `woow_platform.settings` and `woow.meta` tables with text key/value
+columns, rejects RLS and inheritance and a superuser or superuser member, sets read-only
+transaction and timeouts, and limits each fixed key to two bounded rows. Only `match`,
+`mismatch`, `invalid_source`, `invalid_rows`, or `unknown` is returned. SQL, argv and
+return values do not contain the input salt; source DB values appear in captured,
+bounded stdout only and must not be logged. It is not connected to scan, conversion,
+registry, UI, or target-secret reads. The caller must ensure cluster isolation, reader
+privileges and no concurrent DDL; these are not established by the reader itself.
+
+As of this commit it has only mock-based interface tests, not a real database run. In
+particular its SQL, privilege/schema checks and PostgreSQL behavior remain unverified.
+The planned dev-d PG17 synthetic test needs coordination with the EMQX agent first,
+uses no real source or target secrets, and demonstrates the query contract only. It
+cannot prove PG18 compatibility, arbitrary untrusted-schema safety, actual HA backup
+integrity, encrypted credential usability, or a safe salt transfer and rollback.

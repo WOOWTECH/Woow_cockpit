@@ -143,6 +143,49 @@ class LiteLLMCandidateTests(unittest.TestCase):
             self.assertEqual(check(source=bad, rows=[salt], fps=[fp])['source_binding'], 'invalid_source')
         self.assertEqual(check(rows=[salt], fps=[fp], target=b'bad')['target_relation'], 'invalid_target')
 
+    def test_sql_reader_uses_fixed_query_and_returns_only_binding_status(self):
+        salt = b'sk-' + b'a' * 64
+        fingerprint = hashlib.sha256(b'woow-litellm-salt-v1:' + salt).hexdigest()[:16]
+        def payload(values, fps):
+            return json.dumps({'platform': values, 'fingerprint': fps}).encode()
+        cluster = Mock(role='synthetic-pg')
+        cluster.tmp.exec.return_value = Mock(returncode=0, stdout=payload([salt.decode()], [fingerprint]))
+        self.assertEqual(candidate.read_source_salt_binding(cluster, salt), 'match')
+        args, kwargs = cluster.tmp.exec.call_args
+        self.assertEqual(args[0], 'synthetic-pg')
+        self.assertIn('woowbk_litellm_reader', args[1])
+        self.assertEqual(kwargs['input'], candidate._SALT_QUERY.encode('ascii'))
+        self.assertNotIn(salt, kwargs['input'])
+        self.assertNotIn(salt.decode(), repr(args))
+        self.assertEqual(kwargs['max_output'], 4096)
+        self.assertFalse(kwargs['check'])
+        self.assertEqual(kwargs['timeout'], 15)
+        for values, fps, expected in ((['sk-' + 'b' * 64], [fingerprint], 'mismatch'),
+                                       ([salt.decode()], ['0' * 16], 'mismatch'),
+                                       ([], [fingerprint], 'invalid_rows'),
+                                       ([salt.decode(), salt.decode()], [fingerprint], 'invalid_rows'),
+                                       ([None], [fingerprint], 'invalid_rows'),
+                                       ([salt.decode()], [None], 'invalid_rows'),
+                                       ([salt.decode()], [fingerprint, fingerprint], 'invalid_rows')):
+            cluster.tmp.exec.return_value.stdout = payload(values, fps)
+            self.assertEqual(candidate.read_source_salt_binding(cluster, salt), expected)
+
+    def test_sql_reader_failure_is_unknown_and_never_leaks(self):
+        salt = b'sk-' + b'a' * 64
+        cluster = Mock(role='synthetic-pg')
+        for response in (Mock(returncode=1, stdout=b'password=' + salt),
+                         Mock(returncode=0, stdout=b'x' * 4097),
+                         Mock(returncode=0, stdout=b'{"platform":["\\u00e9"],"fingerprint":["0000000000000000"]}')):
+            cluster.tmp.exec.return_value = response
+            self.assertEqual(candidate.read_source_salt_binding(cluster, salt), 'unknown')
+        cluster.tmp.exec.return_value = Mock(returncode=0, stdout=b'{"platform":')
+        self.assertEqual(candidate.read_source_salt_binding(cluster, salt), 'invalid_rows')
+        cluster.tmp.exec.side_effect = BackupError('job-failed', 'sensitive error')
+        self.assertEqual(candidate.read_source_salt_binding(cluster, salt), 'unknown')
+        cluster.tmp.exec.reset_mock()
+        self.assertEqual(candidate.read_source_salt_binding(cluster, b'bad'), 'invalid_source')
+        cluster.tmp.exec.assert_not_called()
+
     def test_fixture_target_binding_detects_mismatch_and_missing_data(self):
         target = b'sk-' + b'c' * 64
         other = b'sk-' + b'd' * 64
