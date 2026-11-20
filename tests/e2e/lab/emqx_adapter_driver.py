@@ -21,6 +21,7 @@ from woowbackup import catalog, flows
 from woowbackup.paths import Paths
 
 CLIENT = 'sha256:93a0bdfcbd9b7a86b36127cb81f54e1afd2019f12f39033458df405a027c03e3'
+STAGE = 'startup'
 
 
 class Reporter:
@@ -39,6 +40,7 @@ class Reporter:
 
 
 def main():
+    global STAGE
     parser = argparse.ArgumentParser()
     parser.add_argument('--image-id', required=True)
     parser.add_argument('--work', type=Path, required=True)
@@ -198,19 +200,25 @@ retainer.backend.storage_type = disc
         print(json.dumps({'stage': 'ha_build_and_package', 'result': 'pass'}), flush=True)
         print(json.dumps({'stage': 'temporary_objects_cleanup', 'result': 'pass'}), flush=True)
         backup_id = package_candidate(ctx, app, volumes, args.work / 'package')
+        STAGE = 'candidate_restore'
         result = restore_candidate(ctx, app, backup_id)
         if result.get('rolled_back') or not result.get('changed'):
             raise RuntimeError('candidate install was not successful')
         ready()
+        STAGE = 'candidate_source_marker'
         receive('lab/from-ha', 'ha-marker')
+        STAGE = 'candidate_target_marker'
         receive('lab/target-only', 'target-marker')
+        STAGE = 'candidate_source_auth'
         source_auth = mqtt('mosquitto_pub', 'lab/source-login', 'source-authenticated',
                            username='source-only', credential=source_password)
         if source_auth.returncode or not re.search(rb'RC:(?:0|16)\b', source_auth.stdout):
             raise RuntimeError('source-only MQTT user did not authenticate')
+        STAGE = 'candidate_target_config'
         if configuration() != before_config:
             raise RuntimeError('synthetic target configuration was not preserved')
         print(json.dumps({'stage': 'candidate_installed', 'result': 'pass'}), flush=True)
+        STAGE = 'rollback_injection'
         publish('lab/before-rollback', 'rollback-marker')
         receive('lab/before-rollback', 'rollback-marker')
         before_config = configuration()
@@ -278,5 +286,5 @@ if __name__ == '__main__':
     try:
         main()
     except Exception as error:
-        print(json.dumps({'stage': 'adapter_test', 'result': 'fail', 'error_type': type(error).__name__}), flush=True)
+        print(json.dumps({'stage': STAGE, 'result': 'fail', 'error_type': type(error).__name__}), flush=True)
         raise SystemExit(1) from None
