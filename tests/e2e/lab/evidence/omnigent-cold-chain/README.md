@@ -33,3 +33,9 @@ not the full Omnigent application schema. No original HA backup, real Omnigent
 HTTP login/refresh, browser session, application startup, product installer or
 automatic rollback acceptance is claimed. Public security guard remains. Test
 runner data preservation does not include Pi-agent migration (excluded).
+
+The recorded run above used an earlier test-only `subprocess.run` Podman wrapper
+without the product's output budget/abort handling, so its proof is limited to
+controlled synthetic data. The harness has since been switched to the shared
+bounded `default_runner` bridge; that revised wrapper has not yet been rerun in
+this cold-chain test.

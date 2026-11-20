@@ -33,28 +33,7 @@ def event(stage, **values):
     print(json.dumps({'stage': stage, **values}, sort_keys=True), flush=True)
 
 
-class Runner:
-    uid = None
-    home = '/home/appowner'
-    def podman(self, *args, input=None, stdout=None, timeout=120, max_output=None, check=True, abort=None):
-        stream, data = None, input
-        if hasattr(input, 'read'):
-            try:
-                input.fileno()
-            except (io.UnsupportedOperation, AttributeError):
-                data = input.read()
-            else:
-                stream, data = input, None
-        proc = subprocess.run([str(OWNER), 'd', 'podman', *args], input=data,
-                              stdin=stream,
-                              stdout=stdout if stdout is not None else subprocess.PIPE,
-                              stderr=subprocess.PIPE, timeout=timeout)
-        if check and proc.returncode:
-            raise CommandError('synthetic podman failure', returncode=proc.returncode)
-        return SimpleNamespace(stdout=proc.stdout, returncode=proc.returncode)
-    def relay(self, args, **kwargs):
-        return self.podman(*args, **kwargs)
-
+from omnigent_lab_runner import Runner
 
 def add(tar, name, data=None, *, kind='file', mode=0o755):
     info = tarfile.TarInfo(name)
@@ -122,7 +101,7 @@ def main():
                           '-e', 'POSTGRES_HOST_AUTH_METHOD=trust', IMAGE)
             containers.append(name)
             for _ in range(60):
-                if runner.podman('exec', name, 'pg_isready', '-q', '-U', 'postgres', check=False).returncode == 0:
+                if runner.podman('exec', name, 'pg_isready', '-q', '-h', '127.0.0.1', '-U', 'postgres', check=False).returncode == 0:
                     return
                 time.sleep(1)
             raise RuntimeError('fixture_pg_not_ready')
@@ -224,7 +203,7 @@ def main():
             event('installed_postgres_readback', users=2, admin=1, conversations=1, active_tasks=0, loader_roles=0)
             runner.podman('restart', RESTORED)
             for _ in range(30):
-                if runner.podman('exec', RESTORED, 'pg_isready', '-q', '-U', 'postgres', check=False).returncode == 0:
+                if runner.podman('exec', RESTORED, 'pg_isready', '-q', '-h', '127.0.0.1', '-U', 'postgres', check=False).returncode == 0:
                     break
                 time.sleep(1)
             sql(RESTORED, "DO $$ BEGIN IF (SELECT count(*) FROM users) != 2 THEN RAISE EXCEPTION 'count'; END IF; END $$;")
