@@ -101,9 +101,9 @@ bounded stdout only and must not be logged. It is not connected to scan, convers
 registry, UI, or target-secret reads. The caller must ensure cluster isolation, reader
 privileges and no concurrent DDL; these are not established by the reader itself.
 
-As of this commit it has only mock-based interface tests, not a real database run. In
-particular its SQL, privilege/schema checks and PostgreSQL behavior remain unverified.
-The planned dev-d PG17 synthetic test needs coordination with the EMQX agent first,
-uses no real source or target secrets, and demonstrates the query contract only. It
-cannot prove PG18 compatibility, arbitrary untrusted-schema safety, actual HA backup
-integrity, encrypted credential usability, or a safe salt transfer and rollback.
+An isolated dev-d PostgreSQL 17 synthetic run exercised matching and mismatched rows,
+missing, duplicate and oversized rows, and rejection of a view, RLS, and a superuser
+reader; see `tests/e2e/lab/evidence/litellm-candidate/pg17-salt-sql.json`. It used no
+real source or target secrets and demonstrates this query contract only. It cannot
+prove PG18 compatibility, arbitrary untrusted-schema safety, actual HA backup integrity,
+encrypted credential usability, or a safe salt transfer and rollback.

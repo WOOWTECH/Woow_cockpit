@@ -48,6 +48,12 @@ def main():
             observed = candidate.read_source_salt_binding(cluster, salt)
             results[name] = observed == expected
         probe('matching_rows', 'match')
+        cluster.script("ALTER TABLE woow.meta ENABLE ROW LEVEL SECURITY;", 'litellm')
+        probe('rls_refused', 'unknown')
+        cluster.script("ALTER TABLE woow.meta DISABLE ROW LEVEL SECURITY;\n"
+                       "ALTER ROLE woowbk_litellm_reader SUPERUSER;", 'litellm')
+        probe('superuser_refused', 'unknown')
+        cluster.script("ALTER ROLE woowbk_litellm_reader NOSUPERUSER;", 'litellm')
         cluster.script("UPDATE woow_platform.settings SET value = repeat('b', 64);", 'litellm')
         probe('salt_mismatch', 'mismatch')
         cluster.script("UPDATE woow_platform.settings SET value = '" + salt.decode() + "';\n"
