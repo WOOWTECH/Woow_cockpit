@@ -347,15 +347,18 @@ class TempObjects:
     def remove(self, role):
         """Remove one container now (it is no longer needed)."""
         name = self.name(role)
-        self.runner.podman('rm', '--force', '--time', '10', name, timeout=SHORT_TIMEOUT, max_output=64 * 1024,
-                           check=False)
+        result = _quiet(self.runner, 'rm', '--force', '--time', '10', name)
+        if (result is None or result.returncode != 0) and _exists(self.runner, 'container', name):
+            raise BackupError('job-failed', '無法移除暫用容器，將在清理時重試。')
         with contextlib.suppress(ValueError):
             self.containers.remove(name)
 
     def remove_volume(self, role):
         """Remove one volume now (frees its space before the job goes on)."""
         name = self.name(role)
-        self.runner.podman('volume', 'rm', '--force', name, timeout=SHORT_TIMEOUT, max_output=64 * 1024, check=False)
+        result = _quiet(self.runner, 'volume', 'rm', '--force', name)
+        if (result is None or result.returncode != 0) and _exists(self.runner, 'volume', name):
+            raise BackupError('job-failed', '無法移除暫用資料卷，將在清理時重試。')
         with contextlib.suppress(ValueError):
             self.volumes.remove(name)
 
@@ -432,17 +435,21 @@ class TempObjects:
             result = _quiet(self.runner, 'rm', '--force', '--time', '10', name)
             if result is None or (result.returncode != 0 and _exists(self.runner, 'container', name)):
                 left.append(name)
-        self.containers = []
+        self.containers = list(reversed(left))
+        volume_left = []
         for name in reversed(self.volumes):
             result = _quiet(self.runner, 'volume', 'rm', '--force', name)
             if result is None or (result.returncode != 0 and _exists(self.runner, 'volume', name)):
-                left.append(name)
-        self.volumes = []
+                volume_left.append(name)
+        self.volumes = list(reversed(volume_left))
+        left.extend(volume_left)
+        network_left = []
         for name in reversed(self.networks):
             result = _quiet(self.runner, 'network', 'rm', '--force', name)
             if result is None or (result.returncode != 0 and _exists(self.runner, 'network', name)):
-                left.append(name)
-        self.networks = []
+                network_left.append(name)
+        self.networks = list(reversed(network_left))
+        left.extend(network_left)
         if left:
             self.log(f'警告：有 {len(left)} 個暫用容器或資料卷沒有移除，下次作業開始時會再清除。')
         return left

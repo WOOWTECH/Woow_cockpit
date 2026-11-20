@@ -151,6 +151,59 @@ Secret=odoo18-postgres-super-password,type=mount,target=postgres_password,uid=99
 
 
 class CleanupTests(unittest.TestCase):
+    def test_cleanup_tracks_only_failed_kind_for_same_name(self):
+        runner = FakeRunner({('volume', 'rm'): Result(125, b'', b'in use'),
+                             ('volume', 'exists'): Result(0, b'', b'')})
+        tmp = tempctr.TempObjects(runner, JOB)
+        tmp.run('same', 'img:1', detach=True)
+        tmp.volume('same')
+        tmp.network('same')
+        self.assertEqual(tmp.cleanup(), [tmp.name('same')])
+        self.assertEqual((tmp.containers, tmp.volumes, tmp.networks), ([], [tmp.name('same')], []))
+
+    def test_explicit_remove_failure_is_tracked_and_cleanup_retries(self):
+        for kind in ('container', 'volume'):
+            with self.subTest(kind=kind):
+                remove_cmd = ('rm',) if kind == 'container' else ('volume', 'rm')
+                runner = FakeRunner({remove_cmd: Result(125, b'', b'failure'),
+                                     (kind, 'exists'): Result(0, b'', b'')})
+                tmp = tempctr.TempObjects(runner, JOB)
+                if kind == 'container':
+                    tmp.run('item', 'img:1', detach=True)
+                    tracked, remove = tmp.containers, tmp.remove
+                else:
+                    tmp.volume('item')
+                    tracked, remove = tmp.volumes, tmp.remove_volume
+                name = tmp.name('item')
+                with self.assertRaises(BackupError):
+                    remove('item')
+                self.assertIn(name, tracked)
+                self.assertEqual(tmp.cleanup(), [name])
+                self.assertIn(name, getattr(tmp, kind + 's'))
+                runner.answers[remove_cmd] = Result(0, b'', b'')
+                self.assertEqual(tmp.cleanup(), [])
+                self.assertNotIn(name, getattr(tmp, kind + 's'))
+
+    def test_explicit_remove_accepts_only_confirmed_absence(self):
+        for kind in ('container', 'volume'):
+            with self.subTest(kind=kind):
+                remove_cmd = ('rm',) if kind == 'container' else ('volume', 'rm')
+                runner = FakeRunner({remove_cmd: Result(125, b'', b'failure'),
+                                     (kind, 'exists'): Result(125, b'', b'unknown')})
+                tmp = tempctr.TempObjects(runner, JOB)
+                if kind == 'container':
+                    tmp.run('item', 'img:1', detach=True)
+                    remove = tmp.remove
+                else:
+                    tmp.volume('item')
+                    remove = tmp.remove_volume
+                with self.assertRaises(BackupError):
+                    remove('item')
+                self.assertIn(tmp.name('item'), getattr(tmp, kind + 's'))
+                runner.answers[(kind, 'exists')] = Result(1, b'', b'')
+                remove('item')
+                self.assertNotIn(tmp.name('item'), getattr(tmp, kind + 's'))
+
     def test_everything_is_removed_containers_first(self):
         runner = FakeRunner()
         with tempctr.TempObjects(runner, JOB) as tmp:
