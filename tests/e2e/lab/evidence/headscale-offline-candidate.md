@@ -50,3 +50,60 @@ This demonstrates local TLS, two real clients and relay under the isolated
 test conditions. It does not demonstrate HA backup conversion, imported node
 identity or the original Headscale service's recovery. The server, CA and
 client state are synthetic; the test flag forces the relay path.
+
+## Product-chain development and cleanup correction
+
+The first product-chain attempt reached two client registrations and ten DERP
+pongs but failed before conversion: the test adapter's root-owned stdout pipe
+could not be opened by appowner's Podman volume export. That attempt used the
+old cleanup implementation and left its two clients and private network
+running. They were explicitly removed and verified absent. The adapter now
+captures output in an appowner-owned temporary file; cleanup now checks each
+test object after removal and fails if anything remains or cannot be checked.
+
+A second attempt, with checked cleanup, reached the product `Target` parser
+but was rejected because the synthetic Quadlet used an absolute bind source;
+the fixture now uses the supported `%h/config` form. That run verified cleanup
+and did not reach conversion. The extended conversion, API key and original
+client reconnection checks remain unverified pending a further run.
+
+While another synthetic EMQX job is active, the runners do not start: each
+Headscale container is capped at 384 MiB, each client at 192 MiB, the route
+probe at 64 MiB, and the product configtest container at 768 MiB. The host
+wrapper requires at least 2 GiB of dev-d cgroup headroom and refuses concurrent
+synthetic EMQX containers. No existing service is stopped to obtain memory.
+
+## Product-chain attempt 3 (2026-11-20)
+
+Real product conversion succeeded: two nodes, source API key removed and one target
+API key retained; Noise key bytes matched. Both original real clients reconnected
+with identical node ID, public key and IP addresses. Post-conversion ping failed
+the strict check: two timeouts followed by eight successful DERP pongs. This run
+is FAILED, not complete acceptance. API authorization checks were not reached.
+The next harness revision measures bounded reconnection convergence separately
+from ten consecutive successful relay pings; it does not claim zero downtime.
+
+## Product-chain attempt 4 (2026-11-20, exit 0)
+
+Executed `bash tests/e2e/lab/headscale-product-test.sh` in the isolated dev-d.
+Headscale image ID: `a5f7b9715dea9116f435ff7892e6925895d1c92d4a265cc02eff1a2abadb227d`.
+Tailscale image ID: `62dc2e673073db15c940b08320bc15303dce144ccb4fdf40b88a3c09dbbf027f`.
+The outer device remained running with network none and ports {}. The new internal
+network had no default route; the external probe returned Network unreachable.
+
+The synthetic HA tar passed the real `habackup.open_backup` and
+`ha_headscale.convert` path, including live target-volume export and real
+Headscale configtest. Two source nodes and Noise identity were retained; one
+source API key was removed and one target API key retained. A fresh target
+started from the actual converted volume tar. Both existing clients reconnected
+without a new registration grant and retained ID, public key and IP addresses.
+DERP convergence took two attempts / 6 seconds, followed by ten consecutive
+successful relay pongs. The real API accepted the target key (HTTP 200) and
+rejected the source key (HTTP 401). Cleanup independently checked absence of
+all four test containers, four named volumes and the internal network.
+Synthetic private files remain under `/tmp/headscale-internal.JwQv9eFA` (0700).
+
+Limits: synthetic HA-shaped backup, fixture workload/catalog and transport
+adapter, real product conversion and real services/clients. Not a real customer
+backup, product installer/automatic rollback, original service recovery,
+Headplane UI acceptance, or zero-downtime proof. Public import guards unchanged.

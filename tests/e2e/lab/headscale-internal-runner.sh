@@ -10,9 +10,18 @@ server="hs-server-$suffix"
 client_a="hs-a-$suffix"
 client_b="hs-b-$suffix"
 cleanup() {
-  podman rm -f "$client_a" "$client_b" "$server" >/dev/null 2>&1 || true
-  podman network rm "$net" >/dev/null 2>&1 || true
+  local original=$? bad=0 name status
+  trap - EXIT
+  for name in "$client_a" "$client_b" "$server"; do
+    podman container exists "$name" && podman rm -f "$name" >/dev/null 2>&1 || true
+    if podman container exists "$name"; then echo "cleanup: container remains: $name" >&2; bad=1; else status=$?; (( status == 1 )) || bad=1; fi
+  done
+  podman network exists "$net" && podman network rm "$net" >/dev/null 2>&1 || true
+  if podman network exists "$net"; then echo "cleanup: network remains: $net" >&2; bad=1; else status=$?; (( status == 1 )) || bad=1; fi
   echo "Synthetic files retained: $test_dir"
+  if (( bad )); then echo 'cleanup: FAILED' >&2; exit 1; fi
+  echo 'cleanup: verified no test objects remain'
+  exit "$original"
 }
 trap cleanup EXIT
 mkdir -p "$test_dir"/{config,data,run}
@@ -67,19 +76,21 @@ logtail:
 EOF
 podman network create --internal --label io.woowtech.test=headscale-derp "$net" >/dev/null
 [[ $(podman network inspect "$net" --format '{{.Internal}}') == true ]]
-probe=$(podman run --rm --pull=never --network "$net" --entrypoint sh docker.io/tailscale/tailscale:stable -c \
+probe=$(podman run --rm --pull=never --memory=64m --network "$net" --entrypoint sh docker.io/tailscale/tailscale:stable -c \
   'ip -4 route; ip -6 route; if ip route get 192.0.2.1 >/dev/null 2>&1; then exit 42; fi; if timeout 3 wget -q -O /dev/null http://192.0.2.1:9; then exit 42; fi')
 printf 'Routes:\n%s\n' "$probe"
 if grep -Eq '(^|[[:space:]])default([[:space:]]|$)' <<< "$probe"; then echo 'Unexpected default route' >&2; exit 1; fi
 echo 'Internal flag, no default route, external probe rejected: PASS'
-podman run -d --name "$server" --pull=never --network "$net" --network-alias headscale.lab \
+podman image inspect --format 'headscale image id={{.Id}}' localhost/woow-headscale:0.29.4-r1
+podman image inspect --format 'tailscale image id={{.Id}}' docker.io/tailscale/tailscale:stable
+podman run -d --name "$server" --pull=never --memory=384m --network "$net" --network-alias headscale.lab \
   -v "$test_dir/config:/etc/headscale:ro" -v "$test_dir/data:/var/lib/headscale" \
   -v "$test_dir/run:/var/run/headscale" localhost/woow-headscale:0.29.4-r1 serve >/dev/null
 for _ in {1..30}; do podman exec "$server" headscale health >/dev/null 2>&1 && break; sleep 1; done
 podman exec "$server" headscale health >/dev/null
 podman exec "$server" headscale users create lab -o json >/dev/null
 for client in "$client_a" "$client_b"; do
-  podman run -d --name "$client" --hostname "$client" --pull=never --network "$net" \
+  podman run -d --name "$client" --hostname "$client" --pull=never --memory=192m --network "$net" \
     -e SSL_CERT_FILE=/lab/ca.crt -e TS_DEBUG_LOG_DISABLE=true -e TS_DEBUG_ALWAYS_USE_DERP=true \
     -v "$test_dir/ca.crt:/lab/ca.crt:ro" \
     --entrypoint tailscaled docker.io/tailscale/tailscale:stable \
@@ -90,7 +101,7 @@ for client in "$client_a" "$client_b"; do
   podman exec "$client" tailscale --socket=/tmp/tailscaled.sock status --json | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["BackendState"]=="Running"; print("Registered:", d["Self"]["HostName"], d["Self"]["TailscaleIPs"])'
 done
 addr=$(podman exec "$client_b" tailscale --socket=/tmp/tailscaled.sock ip -4)
-result=$(podman exec "$client_a" tailscale --socket=/tmp/tailscaled.sock ping --timeout=15s --until-direct=false "$addr")
+result=$(podman exec "$client_a" tailscale --socket=/tmp/tailscaled.sock ping --timeout=15s --until-direct=false "$addr" 2>&1)
 printf '%s\n' "$result"
-grep -Eiq 'derp|relay' <<< "$result" || { echo 'No DERP relay proof' >&2; exit 1; }
+printf '%s\n' "$result" | python3 -c 'import re,sys; lines=sys.stdin.read().splitlines(); ok=[x for x in lines if re.fullmatch(r"pong from .+ via DERP\(lab\) in [0-9.]+(?:ms|s)",x)]; assert len(lines)==10 and len(ok)==10, "expected exactly ten successful DERP pongs, with no errors"; print("DERP pongs verified: 10/10")'
 echo 'Two real clients registered and DERP relay proven: PASS'
