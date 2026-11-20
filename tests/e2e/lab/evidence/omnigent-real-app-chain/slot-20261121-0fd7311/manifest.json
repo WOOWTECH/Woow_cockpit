@@ -1,0 +1,13 @@
+{
+  "command": "PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=backup-engine:. python3 tests/e2e/lab/omnigent_real_app_chain.py --run --outer-isolation-confirmed",
+  "local_tests_passed": 32,
+  "run_sha256": "41f161e4ca70c935f76fe84f156c6b52b4f31798c8043744e846bde9ae8b361b",
+  "sha256": {
+    "backup-engine/woowbackup/ha_omnigent.py": "01e74f8e14fc1aaafe37abfb3fc896970af55b39f88f3457903b2d7170a58384",
+    "tests/backup/test_ha_omnigent_real_app_fixture.py": "0775dc1c4cda5d22f99c9288a1916bdbf60f9c175a4fd29bdbf9490522fd795d",
+    "tests/e2e/lab/b1_event_transport.py": "f1fee27e31c7c559ad173f88151a15bf8bf076c107c8a229778653e241ea3955",
+    "tests/e2e/lab/omnigent_lab_runner.py": "96d9d2ff087aa15621d37257f28d732dd659008fad0ed7be5f32bc0bf55a2946",
+    "tests/e2e/lab/omnigent_real_app_chain.py": "383827a9c25ecc8bf042c0c0f3b094f42f3ab8d08f6060a2c42115bf74aaa0cf"
+  },
+  "tested_commit": "0fd7311b35ffee2ff49cfacf8dad7791ef9eda81"
+}

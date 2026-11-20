@@ -1,0 +1,16 @@
+{"device_loopback_only": true, "each_memory_mib": 128, "image_id": "4278d7b1e3deb3193ddc803158f6532963f059fc25a2eefaee4b5a9e71741873", "max_pg_containers": 2, "outer_isolation_operator_confirmed": true, "stage": "preflight"}
+{"created_and_read": true, "stage": "source_session_marker"}
+{"app_image": "545fa9ea7c1946bbca7df95448b8d2d172777ad861b41599ef69a81b3b32e6d5", "login": true, "stage": "real_source_bootstrap"}
+{"stage": "source_cold"}
+{"member_found": true, "real_parser": true, "stage": "supervisor_envelope"}
+{"stage": "target_started"}
+{"independently_initialized": true, "login": true, "stage": "real_target_bootstrap"}
+{"capture_removed": true, "holders": 0, "kind": "statement_timeout", "stage": "snapshot_failure"}
+{"capture_removed": true, "holders": 0, "kind": "invalid_metadata", "stage": "snapshot_failure"}
+{"stage": "candidate_started"}
+{"info_response_replayed": true, "real_prepare": true, "real_target_resolver": true, "schema_ddl_quiesced": true, "stage": "target_discovery", "synthetic_catalog": true, "synthetic_quadlets": true}
+{"app_log_driver": "none", "app_log_reads_available": 0, "cookie_sources": ["source_cookie", "target_cookie", "restored_cookie"], "credential_sources": ["source_login.token", "source_login.refresh_token", "target_login.token", "target_login.refresh_token", "restored_source_login.token", "restored_source_login.refresh_token", "restored_target_login.token", "restored_target_login.refresh_token"], "evidence_scan_hits": 0, "private_files_scanned": 8, "readable_log_hits": 0, "stage": "credential_coverage"}
+{"same_id_and_title": true, "stage": "restored_session_marker"}
+{"cookie_bytes_match": true, "health": true, "invalid_token_denied": true, "previous_token_same_user": true, "source_login": true, "stage": "restored_real_app", "target_login": true}
+{"actual_app_schema": true, "carried_account": true, "real_ha_cluster": true, "real_member_pass": true, "real_new_cluster": true, "real_output_volumes": true, "real_provider": true, "stage": "cold_ha_to_candidate"}
+{"stage": "cleanup", "synthetic_objects_removed": true}

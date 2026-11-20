@@ -1,5 +1,63 @@
 # Isolated real-Omnigent cold chain — verified scope
 
+## Latest real run — 2026-11-21: isolated chain passed; slot released
+
+Executed the prepared `d8998cf` chain after Headscale's reported `dbcd6c` pass and
+exclusive slot handoff. Actual read-only outer lab inspection returned
+`running none {}` before execution; owner-only loopback/memory preflight passed.
+All nested device operations used `tests/e2e/lab/owner.sh d`; outer configuration
+verification used only the isolated lab wrapper's read-only `inspect`, never host
+Podman. No original service was stopped or original volume written by this probe.
+
+The first attempt at `d8998cf` exited 1 at line 400 after `source_cold`:
+`cookie_from_container` stripped a newline that `cookie_from_tar` preserved.
+The pinned image's `omnigent.server.accounts_secret` source confirms the writer
+stores `fresh.encode("ascii") + b"\n"`. A focused synthetic live-reader/archive-reader
+regression failed before the fix. Commit `0fd7311` preserves exact cookie-file
+bytes while registering both raw and trimmed forms for masking. All **32 focused
+local tests passed** after the fix, including retained public guards.
+
+The justified real rerun at **`0fd7311` exited 0**. Evidence:
+
+- [Successful masked JSONL](slot-20261121-0fd7311/run.jsonl),
+  [exact tested commit, command and source hashes](slot-20261121-0fd7311/manifest.json),
+  [exit status](slot-20261121-0fd7311/exit-status),
+  [sanitized postcheck](slot-20261121-0fd7311/postcheck.json).
+- [Preserved failed-attempt JSONL](slot-20261121-d8998cf/run.jsonl),
+  [failure manifest](slot-20261121-d8998cf/manifest.json),
+  [failed-attempt postcheck](slot-20261121-d8998cf/postcheck.json).
+
+The successful run exercised the real Supervisor parser and streamed member,
+independent source/target app initialization, real `Target`/`_prepare`, exported
+PostgreSQL snapshot, restricted restore, account carry and output-volume boot.
+Both snapshot failure probes removed captures and left zero holders. The restored
+app passed health, both synthetic logins, prior-token identity and invalid-token
+rejection, exact cookie-file continuity, and API session marker ID/title continuity.
+
+Acknowledged producer/consumer coverage includes all eight required login fields,
+three cookie sources, and eight private archive scans. Registered raw and escaped
+values produced zero evidence hits. App logging was disabled; **zero log reads
+were available**, so this is not a claim that app logs were scanned. Both attempts'
+stderr was empty. Private inventory and empty stderr capture files were removed
+only after comparison; no private credentials or raw responses are published.
+
+Final cleanup reported all synthetic objects removed. Separate postchecks after
+both attempts found exactly unchanged container IDs/names/states, volume names,
+and secret IDs/names against the pre-run inventory. This also covers the disposable
+read-only image-source diagnostic processes. Outer isolation remained
+`running none {}`. These inventory comparisons are not content hashes of original
+volumes; their contents were not inspected. The heavyweight slot is released.
+
+Scope remains explicit: the catalog and Quadlets are synthetic, and the target's
+actual `/v1/info` payload is replayed while its synthetic app is stopped for DDL
+quiescence. This is a passing **real synthetic chain**, not blanket commercial
+acceptance, real-HA-backup provenance, production discovery, encryption/installer/
+rollback acceptance, or a general live-DDL guarantee. Public security guards stay
+closed. No Hermes review was performed, reassigned or bypassed; no original
+credential replay, conversation runner/model/workspace operation or omnigent stop
+was performed. Historical/preparation sections below retain their original scope.
+
+
 ## Independent target and authenticated continuity — verified
 
 Command: `python3 tests/e2e/lab/omnigent_real_app_chain.py --run`. Actual masked stdout is [run-independent-verified.jsonl](run-independent-verified.jsonl); exit 0. The source and target are separate fresh PostgreSQL volumes and are independently initialized by the actual app image with separately generated synthetic credentials. The source's PostgreSQL volume was exported cold and its actual app artifacts were placed in a synthetic HA add-on tar. Product `member_pass`, hardened HA cluster, target exported-snapshot provider, restricted restore, target account carry, output-volume creation and tar validation ran. The target application was stopped before schema capture, satisfying this fixture's `schema_ddl_quiesced=True` precondition.
