@@ -30,10 +30,11 @@ class CandidateFlowTests(OmnigentCase):
     def synthetic_snapshot(self, work, app, target, path, expected_alembic):
         self.assertEqual(expected_alembic, self.world.live_alembic)
         path.write_bytes(b'synthetic-trusted-schema-archive')
+        return COLUMNS
 
     def run_candidate(self, **kwargs):
         # Test-only routing to the private candidate; no application guard is changed.
-        with mock.patch.object(omni, 'convert', omni._convert_candidate), \
+        with mock.patch.object(omni, 'convert', lambda *args: omni._convert_candidate(*args, schema_ddl_quiesced=True)), \
              mock.patch.object(omni, 'capture_consistent_target_schema', self.synthetic_snapshot):
             return self.convert(self.upload_omnigent(), ['omnigent'], **kwargs)
 
@@ -64,16 +65,11 @@ class CandidateFlowTests(OmnigentCase):
                              for role, cmd, _data in self.world.execs))
         self.assertEqual(self.storage.list_backups(), [])
 
-    def test_snapshot_capability_refuses_without_ddl_protocol(self):
-        with self.assertRaises(BackupError) as caught:
-            omni.capture_consistent_target_schema(mock.Mock(), self.catalog['omnigent'], None, None, ['revision'])
-        self.assertIn('一致', caught.exception.message)
+    def test_invalid_revision_rejected_before_capture(self):
+        with self.assertRaises(BackupError):
+            omni.capture_consistent_target_schema(mock.Mock(), self.catalog['omnigent'], None, None, ['bad;sql'])
 
-    def test_candidate_refuses_without_snapshot_provider(self):
-        with mock.patch.object(omni, 'convert', omni._convert_candidate):
-            with self.assertRaises(BackupError) as caught:
-                self.convert(self.upload_omnigent(), ['omnigent'])
-        self.assertIn('一致', caught.exception.message)
-        self.assertFalse(any(role == 'omni-db' and cmd[0] == 'pg_restore'
-                             for role, cmd, _data in self.world.execs))
-        self.assertEqual(self.storage.list_backups(), [])
+    def test_candidate_requires_ddl_quiescence(self):
+        with self.assertRaises(BackupError) as caught:
+            omni._convert_candidate(mock.Mock(), self.catalog['omnigent'], False, None, schema_ddl_quiesced=False)
+        self.assertIn('結構變更', caught.exception.message)

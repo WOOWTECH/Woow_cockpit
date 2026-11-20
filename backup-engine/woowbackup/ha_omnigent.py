@@ -581,14 +581,94 @@ def schema_columns(cluster):
     return value
 
 
-def capture_consistent_target_schema(work, app, target, path, expected_alembic):
-    """Fail closed until a snapshot and DDL-lock protocol is implemented and authorized.
+# This script runs in the trusted target's PostgreSQL container. psql owns the
+# exported snapshot until pg_dump finishes; stdout contains one JSON line and
+# then the custom archive. All temporary paths are private and cleaned on exit.
+SNAPSHOT_SCRIPT = r'''set -eu
+umask 077
+snapdir=$(mktemp -d /tmp/woowbk-schema.XXXXXXXX)
+pid=
+cleanup() {
+    exec 3>&- || :
+    if [ -n "$pid" ]; then kill "$pid" 2>/dev/null || :; wait "$pid" 2>/dev/null || :; fi
+    rm -rf -- "$snapdir"
+}
+trap cleanup EXIT
+trap 'exit 1' HUP INT TERM
+mkfifo "$snapdir/in"
+psql -X -q -A -t -v ON_ERROR_STOP=1 -U "$1" -d "$2" < "$snapdir/in" > "$snapdir/out" 2> "$snapdir/err" &
+pid=$!
+exec 3> "$snapdir/in"
+cat >&3 <<SQL
+BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY;
+SET LOCAL lock_timeout = '15s';
+SET LOCAL idle_in_transaction_session_timeout = '10920s';
+LOCK TABLE public.alembic_version IN ACCESS SHARE MODE;
+\\o $snapdir/snapshot
+SELECT pg_export_snapshot();
+\\o $snapdir/revision
+SELECT CASE WHEN (SELECT coalesce(json_agg(version_num ORDER BY version_num), '[]'::json)::text FROM public.alembic_version) = '__REVISION__' THEN 'ok' ELSE 'mismatch' END;
+\\o $snapdir/columns
+__COLUMNS__;
+\\o
+SQL
+for n in $(seq 1 60); do
+    [ -s "$snapdir/columns" ] && break
+    kill -0 "$pid" 2>/dev/null || exit 21
+    sleep 1
+done
+[ -s "$snapdir/columns" ] && [ "$(cat "$snapdir/revision")" = ok ] || exit 22
+snapshot=$(cat "$snapdir/snapshot")
+printf '%s' "$snapshot" | grep -Eq '^[0-9A-Fa-f-]+$' || exit 23
+cat "$snapdir/columns"
+pg_dump -U "$1" -d "$2" -Fc --schema-only --no-owner --no-acl --lock-wait-timeout=15s --snapshot="$snapshot"
+printf '%s\n' 'COMMIT;' '\q' >&3
+exec 3>&-
+wait "$pid"
+pid=
+'''
 
-    Before/after revision reads do not establish a schema snapshot. In particular,
-    taking locks on an existing target can block DDL and other work; the public
-    guard remains and the internal candidate must not silently run an unsafe dump.
+
+def capture_consistent_target_schema(work, app, target, path, expected_alembic):
+    """Capture schema, revision and column signature from one exported snapshot.
+
+    Contract: the caller must prevent concurrent target schema DDL for the
+    duration of capture; PostgreSQL table locks do not cover every DDL object.
+    The public import remains guarded until that precondition is established.
     """
-    raise BackupError('incompatible', '尚無法安全取得一致的目標資料庫結構快照。', app=app.id)
+    if not expected_alembic or any(not isinstance(v, str) or not ALEMBIC_RE.fullmatch(v) for v in expected_alembic):
+        raise BackupError('incompatible', '目標 Omnigent 的結構版本不明。', app=app.id)
+    revision = json.dumps(sorted(expected_alembic), ensure_ascii=True)
+    script = SNAPSHOT_SCRIPT.replace('__REVISION__', revision.replace("'", "''"))
+    script = script.replace('__COLUMNS__', ' '.join(SCHEMA_COLUMNS_SQL.split()))
+    capture = path.with_name(path.name + '.capture')
+    try:
+        with open(capture, 'xb') as handle:
+            os.fchmod(handle.fileno(), 0o600)
+            work.runner(app).podman('exec', '-i', target.db_container, 'sh', '-s', '--', target.db_user, DATABASE,
+                                    input=script.encode('utf-8'), stdout=handle, timeout=DUMP_TIMEOUT,
+                                    max_output=work.guard.budget(), abort=work.abort)
+            handle.flush()
+            os.fsync(handle.fileno())
+        work.guard.check(os.path.getsize(capture))
+        with open(capture, 'rb') as source:
+            from . import util
+            try:
+                columns = util.loads_strict(source.readline(4 * 1024 * 1024 + 1), max_bytes=4 * 1024 * 1024)
+            except ValueError:
+                raise BackupError('incompatible', '目標 Omnigent 的結構快照格式不正確。', app=app.id) from None
+            if not isinstance(columns, list) or not columns or any(not isinstance(v, list) or len(v) != 6 for v in columns):
+                raise BackupError('incompatible', '目標 Omnigent 的結構快照格式不正確。', app=app.id)
+            with open(path, 'xb') as dest:
+                os.fchmod(dest.fileno(), 0o600)
+                import shutil
+                shutil.copyfileobj(source, dest, 1024 * 1024)
+                dest.flush()
+                os.fsync(dest.fileno())
+        return columns
+    finally:
+        if capture.exists():
+            capture.unlink()
 
 
 def restore_trusted_data(work, tmp, schema_dump, data_dump, superuser, *, source_columns, role='omni-db'):
@@ -680,8 +760,10 @@ def convert(work, app, test_mode, out_dir):
     raise BackupError('incompatible', SECURITY_BLOCKER, app=app.id)
 
 
-def _convert_candidate(work, app, test_mode, out_dir):
-    """Internal evaluation only; public convert remains blocked."""
+def _convert_candidate(work, app, test_mode, out_dir, *, schema_ddl_quiesced):
+    """Internal only: caller must guarantee no target schema DDL during capture."""
+    if schema_ddl_quiesced is not True:
+        raise BackupError('incompatible', '目標資料庫結構變更未暫停，無法擷取安全快照。', app=app.id)
     adapter = work.adapter(app)
     tmp = work.temp(app)
     target, version, alembic, addon, blocker = _prepare(work, app)
@@ -725,7 +807,9 @@ def _convert_candidate(work, app, test_mode, out_dir):
     pg = ha_odoo.Cluster(tmp, 'omni-db', superuser=target.db_user, log=work.log)
     pg.wait_ready(tcp=True, checkpoint=work.checkpoint)
     schema_dump = staging / 'target-schema.dump'
-    capture_consistent_target_schema(work, app, target, schema_dump, alembic)
+    target_columns = capture_consistent_target_schema(work, app, target, schema_dump, alembic)
+    if target_columns != source_columns:
+        raise BackupError('incompatible', 'HA 與目標 Omnigent 的資料表欄位結構不同。', app=app.id)
     restore_trusted_data(work, tmp, schema_dump, dump, target.db_user, source_columns=source_columns)
     os.unlink(dump)
     os.unlink(schema_dump)
