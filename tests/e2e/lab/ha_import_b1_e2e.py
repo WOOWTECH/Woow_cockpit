@@ -111,6 +111,10 @@ import importlib.util as _importlib_util
 _event_spec = _importlib_util.spec_from_file_location('b1_credential_events', Path(__file__).with_name('b1_credential_events.py'))
 _event_module = _importlib_util.module_from_spec(_event_spec)
 _event_spec.loader.exec_module(_event_module)
+_transport_spec = _importlib_util.spec_from_file_location('b1_event_transport', Path(__file__).with_name('b1_event_transport.py'))
+_transport = _importlib_util.module_from_spec(_transport_spec)
+_transport_spec.loader.exec_module(_transport)
+CREDENTIAL_COVERAGE_BROKEN = False
 
 
 class Secrets:
@@ -300,6 +304,24 @@ def device_python(script, request=None, *, as_owner=True, timeout=600):
             from None
 
 
+def event_device_python(script, request, secrets, expected_auth, *, timeout=600):
+    global CREDENTIAL_COVERAGE_BROKEN
+    if CREDENTIAL_COVERAGE_BROKEN:
+        raise Failed('credential coverage incomplete; further actions blocked')
+    request = dict(request, __events=True)
+    argv = [LP, 'exec', '-i', DEVICE, OWNER, 'python3', '-I', '-c', script]
+    try:
+        return _transport.run_events(argv, request, lambda value: secrets.register_issued([value]), expected_auth, timeout)
+    except (_transport.Incomplete, OSError):
+        CREDENTIAL_COVERAGE_BROKEN = True
+        raise Failed('credential event coverage incomplete; further restore blocked') from None
+
+
+def require_credential_coverage():
+    if CREDENTIAL_COVERAGE_BROKEN:
+        raise Failed('credential coverage incomplete; further restore blocked')
+
+
 def http_code(url):
     proc = root('curl', '-s', '-o', '/dev/null', '-w', '%{http_code}', '--max-time', '20', url, timeout=60)
     return out(proc).strip()
@@ -345,7 +367,23 @@ def created_backup(backup_id):
 
 PROBE_COMMON = r'''
 import hashlib, json, os, subprocess, sys, time, urllib.error, urllib.request
-REQ = json.loads(sys.stdin.read() or "{}")
+REQ = json.loads(sys.stdin.readline() or "{}")
+EVENTS = REQ.pop("__events", False)
+EVENT_SEQ = 0
+def emit(kind, **fields):
+    global EVENT_SEQ
+    if not EVENTS:
+        return
+    print(json.dumps(dict(type=kind, sequence=EVENT_SEQ, **fields)), flush=True)
+    EVENT_SEQ += 1
+    if sys.stdin.readline() != "OK\n":
+        raise SystemExit("event acknowledgement missing")
+def finish(data):
+    if EVENTS:
+        emit("summary", data=data)
+        emit("end")
+    else:
+        print(json.dumps(data))
 def secret(name):
     return subprocess.run(["podman", "secret", "inspect", "--showsecret", "--format", "{{.SecretData}}", name],
                           capture_output=True, text=True, timeout=60).stdout.rstrip("\n")
@@ -372,6 +410,8 @@ def call(base, method, path, body=None, token=None, headers=None, raw=False, wai
             if not auth_request and time.monotonic() < deadline:
                 time.sleep(2)
                 continue
+            if EVENTS and auth_request:
+                raise SystemExit("authentication request failed")
             return 0, None
         starting = code in (502, 503, 504) or (code == 400 and method == "GET" and b"not_initialized" in (content or b""))
         if not auth_request and starting and time.monotonic() < deadline:
@@ -380,9 +420,19 @@ def call(base, method, path, body=None, token=None, headers=None, raw=False, wai
         if raw:
             return code, content
         try:
-            return code, json.loads(content) if content else None
+            parsed = json.loads(content) if content else None
         except ValueError:
-            return code, None
+            parsed = None
+        if EVENTS and method == "POST" and path in ("/auth/login", "/api/v5/login"):
+            fields = [parsed[k] for k in ("token", "access_token", "refresh_token")
+                      if isinstance(parsed, dict) and k in parsed and parsed[k] is not None]
+            token = parsed.get("token") if isinstance(parsed, dict) else None
+            # Emit all observed fields before checking completeness, including an
+            # unexpected successful negative login or malformed sibling field.
+            emit("auth", status=code, credentials=fields)
+            if 200 <= code < 300 and (not isinstance(token, str) or len(token) < 6):
+                raise SystemExit("authentication response missing token")
+        return code, parsed
 def items(body, *keys):
     if isinstance(body, list):
         return body
@@ -473,8 +523,7 @@ out["counts"] = counts
 out["db_users"] = sql("SELECT string_agg(id || ':' || is_admin, ',' ORDER BY id) FROM users")
 out["db_tasks"] = sql("SELECT string_agg(encode(id, 'hex') || ':' || state::text, ',' ORDER BY id) FROM scheduled_tasks")
 out["db_hosts"] = sql("SELECT string_agg(encode(host_id, 'hex') || ':' || user_id || ':' || name || ':' || status::text, ',' ORDER BY host_id) FROM hosts")
-out["_issued_credentials"] = [v for v in tokens.values() if v]
-print(json.dumps(out))
+finish(out)
 '''
 
 HERMES_PROBE = PROBE_COMMON + r'''
@@ -763,8 +812,7 @@ if s:
 out["mqtt"] = mq
 rc, so, se = pexec("woow-emqx", "emqx", "ctl", "status")
 out["ctl_status"] = so.strip().splitlines()[:2]
-out["_issued_credentials"] = [v for v in (token, (body2 or {}).get("token"), (body3 or {}).get("token")) if v]
-print(json.dumps(out))
+finish(out)
 '''
 
 HEADSCALE_PROBE = PROBE_COMMON + r'''
@@ -862,6 +910,7 @@ def scenario_upload(ev, args):
 
 
 def run_check(ha, apps, *, ev, key=None, tag='check'):
+    require_credential_coverage()
     request = {'ha_backup_id': ha, 'apps': list(apps), 'request_id': request_id(tag)}
     if key is not None:
         request['key'] = key
@@ -960,6 +1009,7 @@ def scenario_check(ev, args):
 # ---------------------------------------------------------------- convert, restore, verify
 
 def convert(ha, apps, test_mode, *, ev, key, tag):
+    require_credential_coverage()
     request = {'ha_backup_id': ha, 'apps': list(apps), 'test_mode': test_mode, 'confirm': True,
                'request_id': request_id(tag)}
     if key:
@@ -971,6 +1021,7 @@ def convert(ha, apps, test_mode, *, ev, key, tag):
 
 
 def restore(backup_id, apps, *, ev, tag):
+    require_credential_coverage()
     started = time.monotonic()
     reply = ok('restore-start', {'backup_id': backup_id, 'apps': list(apps), 'confirm': True,
                                  'request_id': request_id(tag)}, ev=ev, timeout=300)
@@ -1076,14 +1127,10 @@ def app_health(ev, app, label):
 
 
 def omnigent_probe(secrets, request):
-    raise Failed('Omnigent probe disabled: credential issuance events unavailable')
-    result = device_python(OMNI_PROBE, request)
-    secrets.register_issued(result.pop('_issued_credentials'))
-    return result
+    return event_device_python(OMNI_PROBE, request, secrets, 5)
 
 
 def verify_omnigent(ev, args, machine, label, test_mode=False, upload=None):
-    raise Failed('Omnigent probe disabled: credential issuance events unavailable')
     src = source(machine)['omnigent']
     s = args.secrets
     expect = {'agent_id': src['agent']['id'], 'task_id': src['scheduled_task']['id'],
@@ -1218,17 +1265,15 @@ def verify_hermes(ev, args, machine, label, test_mode=False, upload=None):
 
 
 def verify_emqx(ev, args, machine, label, test_mode=False, upload=None):
-    raise Failed('EMQX probe disabled: credential issuance events unavailable')
     src = source(machine)['emqx']
     s = args.secrets
     prefix = 'B1_ARM' if machine == 'arm' else 'B1_X86'
     users = [(s[f'B1_MQTT_USER{i}'], s[f'B1_MQTT_PW{i}']) for i in (1, 2, 3)]
-    probe = device_python(EMQX_PROBE, {'ha_admin_password': s['B1_EMQX_ADMIN_PW'], 'user2': s['B1_EMQX_USER2'],
+    probe = event_device_python(EMQX_PROBE, {'ha_admin_password': s['B1_EMQX_ADMIN_PW'], 'user2': s['B1_EMQX_USER2'],
                                        'user2_password': s['B1_EMQX_USER2_PW'], 'mqtt': users,
                                        'sensor': users[0], 'gateway': users[1],
                                        'api_key': s[f'{prefix}_EMQX_API_KEY'], 'api_secret': s[f'{prefix}_EMQX_API_SECRET']},
-                          timeout=900)
-    s.register_issued(probe.pop('_issued_credentials'))
+                          s, 3, timeout=900)
     ev.save(f'probe-emqx-{machine}-{int(time.time())}.json', probe)
     ev.log(f'  EMQX API answered {probe.get("api_ready_after_s")} s after the restore job ended')
     ev.check(f'{label}: the dashboard takes HA\'s admin password and HA\'s second user',
@@ -1465,71 +1510,33 @@ def runner_probe(secrets, script, request, expected, *, timeout=600):
 
 # These programs contact only the device-local Omnigent API, with no proxy or
 # redirects. Each response reaches the registry before any next request.
-CREDENTIAL_HTTP = r'''
-import json, sys, urllib.error, urllib.request
-req = json.loads(sys.stdin.read())
+CREDENTIAL_HTTP = PROBE_COMMON + r'''
+import urllib.parse
+B = "http://127.0.0.1:8000"
+code, login = call(B, "POST", "/auth/login", {"username": REQ["username"], "password": REQ["password"], "issue_refresh": True})
+if code != 200 or not isinstance(login, dict) or not isinstance(login.get("refresh_token"), str):
+    raise SystemExit("fresh login grant unavailable")
+body = urllib.parse.urlencode({"grant_type": "refresh_token", "refresh_token": login["refresh_token"]}).encode()
+request = urllib.request.Request(B + "/oauth/token", data=body, headers={"Content-Type": "application/x-www-form-urlencoded"})
 class NoRedirect(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, *args, **kwargs):
         return None
-opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect())
-if req["stage"] == "login":
-    path = "/auth/login"
-    body = json.dumps({"username": req["username"], "password": req["password"], "issue_refresh": True}).encode()
-    content_type = "application/json"
-elif req["stage"] == "refresh":
-    import urllib.parse
-    path = "/oauth/token"
-    body = urllib.parse.urlencode({"grant_type": "refresh_token", "refresh_token": req["refresh_token"]}).encode()
-    content_type = "application/x-www-form-urlencoded"
-else:
-    raise SystemExit("invalid stage")
 try:
-    request = urllib.request.Request("http://127.0.0.1:8000" + path, data=body, headers={"Content-Type": content_type})
-    with opener.open(request, timeout=15) as response:
-        result = json.load(response)
-        if response.status != 200 or not isinstance(result, dict):
-            raise ValueError("invalid response")
+    with urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect()).open(request, timeout=15) as response:
+        status = response.status
+        refresh = json.load(response)
 except (urllib.error.URLError, OSError, ValueError):
-    raise SystemExit("credential request failed") from None
-if req["stage"] == "login":
-    result = {"token": result.get("token"), "refresh_token": result.get("refresh_token")}
-else:
-    result = {k: result[k] for k in ("access_token", "refresh_token") if k in result}
-print(json.dumps(result))
+    raise SystemExit("refresh request failed") from None
+values = [refresh[k] for k in ("access_token", "refresh_token") if k in refresh and refresh[k] is not None] if isinstance(refresh, dict) else []
+emit("auth", status=status, credentials=values)
+if status != 200 or not isinstance(refresh, dict) or not isinstance(refresh.get("access_token"), str):
+    raise SystemExit("refresh response invalid")
+finish({"probe": "direct-login-refresh", "runner_coverage": False})
 '''
 
 
 def direct_credential_probe(secrets, username, password):
-    """Collect one fresh lab login and refresh; proves only this probe's events."""
-    raise Failed('credential probe disabled: response capture on producer failure unavailable')
-    login = device_python(CREDENTIAL_HTTP, {'stage': 'login', 'username': username, 'password': password})
-    # Preserve valid returned values even if another required field is missing.
-    for key in ('token', 'refresh_token'):
-        value = login.get(key)
-        if isinstance(value, str) and len(value) >= 6:
-            secrets.register_issued([value])
-    login_event = {'sequence': 0, 'kind': 'login', 'issue_refresh': True,
-                   'token': login.get('token'), 'refresh_token': login.get('refresh_token')}
-    # Validate the login before using the grant; no automatic retries.
-    try:
-        _event_module.register_runner_events([login_event, {'sequence': 1, 'kind': 'end'}],
-                                             lambda name, value: secrets.register_issued([value]))
-    except _event_module.CredentialCoverageError:
-        raise Failed('credential login event missing or invalid') from None
-    refresh = device_python(CREDENTIAL_HTTP, {'stage': 'refresh', 'refresh_token': login['refresh_token']})
-    for key in ('access_token', 'refresh_token'):
-        value = refresh.get(key)
-        if isinstance(value, str) and len(value) >= 6:
-            secrets.register_issued([value])
-    refresh_event = {'sequence': 1, 'kind': 'refresh', 'access_token': refresh.get('access_token')}
-    if 'refresh_token' in refresh:
-        refresh_event['refresh_token'] = refresh['refresh_token']
-    events = [login_event, refresh_event, {'sequence': 2, 'kind': 'end'}]
-    try:
-        count = _event_module.register_runner_events(events, lambda name, value: secrets.register_issued([value]))
-    except _event_module.CredentialCoverageError:
-        raise Failed('credential refresh event missing or invalid') from None
-    return {'probe': 'direct-login-refresh', 'credential_count': count, 'runner_coverage': False}
+    return event_device_python(CREDENTIAL_HTTP, {'username': username, 'password': password}, secrets, 2)
 
 
 def scenario_credentials(ev, args):

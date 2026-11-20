@@ -33,11 +33,11 @@ class SecretTests(unittest.TestCase):
                 secrets.register('SESSION_TOKEN', 'replacement-token-456')
             self.assertIn('generated-token-123', secrets.secret_values())
 
-    def test_omnigent_probe_blocks_before_device_access(self):
+    def test_omnigent_probe_uses_event_transport(self):
         from unittest.mock import patch
-        with patch.object(b1, 'device_python', side_effect=AssertionError('device touched')):
-            with self.assertRaisesRegex(b1.Failed, 'issuance events unavailable'):
-                b1.omnigent_probe(None, {})
+        with patch.object(b1, 'event_device_python', return_value={'status': 'ok'}) as transport:
+            self.assertEqual(b1.omnigent_probe('registry', {}), {'status': 'ok'})
+            transport.assert_called_once_with(b1.OMNI_PROBE, {}, 'registry', 5)
 
     def test_runner_consumer_rejects_missing_credentials_before_evidence(self):
         with tempfile.TemporaryDirectory() as tmp:

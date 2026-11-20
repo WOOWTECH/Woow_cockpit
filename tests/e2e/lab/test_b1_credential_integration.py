@@ -63,13 +63,27 @@ class IntegrationTests(unittest.TestCase):
         self.scan_request = request
         return {'hits': {}, 'scanned': 0, 'names': len(request['secrets']), 'journal_bytes': 0}
 
-    def test_credential_scenario_is_blocked_before_producer(self):
+    def test_credential_scenario_uses_real_event_transport(self):
         class Args: pass
+        class Evidence:
+            def __init__(self): self.results = []
+            def check(self, *args): self.results.append(args)
         args = Args(); args.secrets = self.secrets
-        with patch.object(b1, 'device_python', side_effect=AssertionError('device touched')):
-            with self.assertRaisesRegex(b1.Failed, 'response capture'):
-                b1.scenario_credentials(None, args)
-        self.assertEqual(Handler.calls, [])
+        ev = Evidence()
+        def execute(script, request, secrets, expected, **kwargs):
+            script = script.replace('http://127.0.0.1:8000', 'http://127.0.0.1:%d' % self.server.server_port)
+            request = dict(request, __events=True)
+            return b1._transport.run_events([sys.executable, '-I', '-c', script], request,
+                                           lambda v: secrets.register_issued([v]), expected, 8)
+        with patch.object(b1, 'event_device_python', side_effect=execute):
+            b1.scenario_credentials(ev, args)
+        self.assertEqual([p for p, _ in Handler.calls], ['/auth/login', '/oauth/token'])
+        scanned = b1.leak_scan_request(args)['secrets'].values()
+        for value in ('synthetic-access-first', 'synthetic-refresh-first',
+                      'synthetic-access-new', 'synthetic-refresh-new'):
+            self.assertIn(value, scanned)
+            self.assertNotIn(value, str(ev.results))
+        self.assertFalse(ev.results[0][2]['runner_coverage'])
 
     def test_arm_and_other_imports_are_preflight_blocked(self):
         with patch.object(b1, 'import_once', side_effect=AssertionError('import started')):
@@ -78,9 +92,6 @@ class IntegrationTests(unittest.TestCase):
         with patch.object(b1, 'ok', side_effect=AssertionError('device touched')):
             with self.assertRaisesRegex(b1.Failed, 'import preflight'):
                 b1.import_once(None, None, 'arm-enc', ['omnigent'])
-        with patch.object(b1, 'device_python', side_effect=AssertionError('device touched')):
-            with self.assertRaisesRegex(b1.Failed, 'EMQX probe disabled'):
-                b1.verify_emqx(None, None, None, None)
 
     def test_runner_fails_before_any_action(self):
         with patch.object(b1, 'owner', side_effect=AssertionError('unexpected action')):
