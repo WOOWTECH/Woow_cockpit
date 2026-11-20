@@ -99,6 +99,61 @@ def assess(source, *, target_version, target_pg_major):
                         'salt_file_valid': source.salt_valid}}
 
 
+_IMAGE_ID = re.compile(r"sha256:[0-9a-f]{64}\Z")
+_PG_ENV = re.compile(r"PG_MAJOR=([1-9][0-9]?)\Z")
+
+
+def target_evidence(*, running_db_image_id, inspected_db_image):
+    """Build non-secret target facts from caller-supplied image inspection.
+
+    The caller must obtain the ID of the running DB container and inspect the exact
+    same image. A tag or an image's environment without this binding is insufficient.
+    This helper performs no container operation and cannot authenticate its caller.
+    LiteLLM's version remains unknown: the available package has no verified runtime
+    version probe in this candidate. Neither secret material nor env is returned.
+    """
+    product = None
+    pg_major = None
+    if isinstance(inspected_db_image, dict):
+        image_id = inspected_db_image.get('id')
+        env = inspected_db_image.get('env')
+        if (isinstance(running_db_image_id, str) and _IMAGE_ID.fullmatch(running_db_image_id)
+                and image_id == running_db_image_id and isinstance(env, list)):
+            # Conflicting or malformed PG_MAJOR entries cannot establish a version.
+            versions = [item for item in env if isinstance(item, str) and item.startswith('PG_MAJOR=')]
+            if len(versions) == 1:
+                match = _PG_ENV.fullmatch(versions[0])
+                if match:
+                    pg_major = int(match.group(1))
+    return {'target_version': product, 'target_pg_major': pg_major}
+
+
+def assess_target(source, evidence):
+    """Use only the non-secret target facts produced by target_evidence."""
+    if not isinstance(evidence, dict):
+        evidence = {}
+    return assess(source, target_version=evidence.get('target_version'),
+                  target_pg_major=evidence.get('target_pg_major'))
+
+
+def preservation_contract():
+    """Unimplemented proposal: declarations only; never accepts or returns secrets.
+
+    Existing import_manifest copies all live secrets. That cannot carry HA's salt,
+    and no caller may apply this proposal until secure transfer and rollback exist.
+    """
+    return {
+        'source_data': 'unverified',
+        'source_salt': 'unverified_database_binding',
+        'target_salt': 'preserve_until_verified_secret_transfer_exists',
+        'target_credentials': 'preserve',
+        'target_configuration': 'preserve',
+        'conversion': 'disabled',
+        'secret_transfer': 'not_implemented',
+        'rollback': 'not_implemented',
+    }
+
+
 def convert(work, app, test_mode, out_dir):
     """Defense in depth if a caller incorrectly attempts to invoke conversion."""
     raise BackupError('incompatible', GUARD, app=app.id)

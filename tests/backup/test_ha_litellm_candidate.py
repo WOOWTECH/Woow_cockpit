@@ -56,6 +56,37 @@ class LiteLLMCandidateTests(unittest.TestCase):
                 messages = candidate.assess(source, target_version='1.104.0', target_pg_major=18)['blockers']
                 self.assertGreater(len(messages), 1)
 
+    def test_target_evidence_requires_exact_running_image_identity(self):
+        image_id = 'sha256:' + 'a' * 64
+        secret = 'SOME_SECRET=never-return-this-value'
+        info = {'id': image_id, 'env': ['PG_MAJOR=17', secret]}
+        evidence = candidate.target_evidence(running_db_image_id=image_id, inspected_db_image=info)
+        self.assertEqual(evidence, {'target_version': None, 'target_pg_major': 17})
+        self.assertNotIn(secret, repr(evidence))
+        source = candidate.scan_member(self.member())
+        messages = candidate.assess_target(source, evidence)['blockers']
+        self.assertTrue(any('降版' in item for item in messages))
+        self.assertTrue(any('目標 LiteLLM 版本' in item for item in messages))
+        self.assertIn(candidate.GUARD, messages)
+        for running, image in ((None, info), ('sha256:' + 'b' * 64, info),
+                               (image_id, {'id': image_id, 'env': ['PG_MAJOR=17', 'PG_MAJOR=18']}),
+                               (image_id, {'id': image_id, 'env': ['PG_MAJOR=17.11']}),
+                               (image_id, {'id': image_id, 'env': 'PG_MAJOR=17'})):
+            with self.subTest(running=running, image=image):
+                facts = candidate.target_evidence(running_db_image_id=running, inspected_db_image=image)
+                self.assertIsNone(facts['target_pg_major'])
+                self.assertTrue(any('目標 PostgreSQL' in item for item in
+                                    candidate.assess_target(source, facts)['blockers']))
+
+    def test_preservation_contract_is_disabled_and_transfers_no_secrets(self):
+        plan = candidate.preservation_contract()
+        self.assertEqual(plan['source_salt'], 'unverified_database_binding')
+        self.assertEqual(plan['target_credentials'], 'preserve')
+        self.assertEqual(plan['target_salt'], 'preserve_until_verified_secret_transfer_exists')
+        self.assertEqual(plan['secret_transfer'], 'not_implemented')
+        self.assertEqual(plan['rollback'], 'not_implemented')
+        self.assertEqual(plan['conversion'], 'disabled')
+
     def test_no_registry_advertisement_and_conversion_is_guarded(self):
         self.assertNotIn('litellm', haapps.APP_IDS)
         for mode in (False, True):

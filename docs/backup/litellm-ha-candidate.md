@@ -29,3 +29,27 @@ and compare its salt without exposing it; decide and implement encrypted secret 
 trusted-schema handling, downgrade policy, rollback, and target credential preservation;
 then demonstrate the complete chain and negative cases with isolated real services. The
 format check and synthetic tests do not establish any of these properties.
+
+## Offline target and preservation contract (follow-up)
+
+`target_evidence` is a pure helper, not a collector: a future trusted caller must obtain
+both the running PostgreSQL container image ID and the image inspection for that ID.
+Only matching full SHA-256 IDs and exactly one well-formed `PG_MAJOR` entry yield a
+candidate major. The helper does not verify the caller's provenance, prove the server's
+actual version, or derive LiteLLM's runtime version. An image tag is not proof of either.
+`assess_target` connects these non-secret fields to the existing fail-closed assessment;
+the product version is unknown and conversion stays blocked.
+
+`preservation_contract` declares that existing target credentials, configuration and
+salt remain untouched while the source data and salt/database binding are unverified.
+It implements no transfer or rollback. In particular, the present adapter's
+`import_manifest` copies live secrets and cannot transfer the source salt; using it for
+LiteLLM would not preserve decryptability if the keys differ.
+
+On 2026-11-20, read-only inspection of the running isolated dev-d image store found
+PostgreSQL 15 and 16, but no PG18, PG17, or LiteLLM image. The lab's outer image store
+also had no PG18, PG17, or LiteLLM image; dev-a/b/c were stopped, so their nested image
+stores were not inspected. No image was downloaded, no other device was started, and no
+production secret was used. A genuine PG18 database, valid and mismatched source salt,
+and safe inspection through the real restricted parser remain external test prerequisites.
+Synthetic tests of this contract are not PostgreSQL or end-to-end acceptance.
