@@ -351,7 +351,7 @@ def target_broker(work, tmp, target, export, ids, *, hint=''):
     seeded = parse_counts(evaluate(tmp, 'emqx-new', COUNT_EXPR))
     strict = parse_strict(evaluate(tmp, 'emqx-new', STRICT_EXPR))
     authn = parse_authn(evaluate(tmp, 'emqx-new', AUTHN_EXPR))
-    if strict is None or len(seeded) != len(TABLES):
+    if strict is None or len(seeded) != len(TABLES) or not authn:
         raise BackupError('job-failed', '無法讀取這台 EMQX 的設定。')
     work.log('把 HA 的 EMQX 資料匯入暫用的 EMQX（這台的映像與設定）')
     out = ctl(tmp, 'emqx-new', ['data', 'import', f'{WORK}/in/{name}'], timeout=1800).stdout or b''
@@ -364,7 +364,10 @@ def target_broker(work, tmp, target, export, ids, *, hint=''):
     after = parse_strict(evaluate(tmp, 'emqx-new', STRICT_EXPR))
     if after != strict:
         raise BackupError('job-failed', '無法恢復這台 EMQX 的存取政策（未符合規則的主題拒絕），已停止。')
-    enabled = [a for a in parse_authn(evaluate(tmp, 'emqx-new', AUTHN_EXPR)) if a['enable']]
+    after_authn = parse_authn(evaluate(tmp, 'emqx-new', AUTHN_EXPR))
+    if not after_authn:
+        raise BackupError('job-failed', '無法確認匯入後的 EMQX 帳號驗證設定，已停止。')
+    enabled = [a for a in after_authn if a['enable']]
     if any(a['enable'] for a in authn) and not enabled:
         raise BackupError('incompatible', 'HA 的 EMQX 設定會停用這台的帳號驗證（允許匿名登入），已停止；請先在 HA 啟用帳號驗證再備份。')
     counts = parse_counts(evaluate(tmp, 'emqx-new', COUNT_EXPR))

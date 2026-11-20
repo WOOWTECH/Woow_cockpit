@@ -371,6 +371,20 @@ class ConvertTests(EmqxCase):
         self.assertIn('存取政策', caught.exception.message)
 
 
+class TargetAuthenticationGuardTests(unittest.TestCase):
+    def test_empty_target_authentication_is_refused_before_import(self):
+        from unittest import mock
+        work = mock.Mock(); tmp = mock.Mock()
+        target = mock.Mock(); target.files = []; target.env = {}; target.secrets = []
+        values = [str([(name, 0) for name in ha_emqx.TABLES]), '{deny,ignore}', '[]']
+        with mock.patch.object(ha_emqx, 'wait_ready'), \
+             mock.patch.object(ha_emqx, 'evaluate', side_effect=values), \
+             mock.patch.object(ha_emqx, 'ctl') as ctl:
+            with self.assertRaises(BackupError):
+                ha_emqx.target_broker(work, tmp, target, '/tmp/input.tar.gz', (1000, 1000))
+            ctl.assert_not_called()
+
+
 class ParseTests(unittest.TestCase):
     def test_eval_answers(self):
         text = '[{emqx_authn_mnesia,3},\n {emqx_acl, -1},\n {other,9}]'
