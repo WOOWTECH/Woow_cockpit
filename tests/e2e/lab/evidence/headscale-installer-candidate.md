@@ -1,7 +1,8 @@
 # Headscale synthetic installer/automatic rollback candidate
 
-Status: **NOT EXECUTED ON DEV-D**. Local fixtures only; no real installer,
-automatic rollback or commercial acceptance claim. Public product guards unchanged.
+Status: **Synthetic dev-d installer/automatic rollback PASS** at source ad9ccb3.
+See `headscale-installer-live/README.md` for the real run and independent cleanup.
+This is not real customer HA backup or complete commercial acceptance. Public guards unchanged.
 Base: d0d5a20. This increment does not incorporate mainline EMQX/LiteLLM changes.
 
 ## Implemented path
@@ -51,7 +52,7 @@ Fixtures cover orchestration/failure classification, single arming, host-identit
 refusal, synthetic path/permission/missing/symlink rejection, exact identity,
 Noise and content/ownership comparisons. They do not execute adapter subprocesses.
 
-## Pending real command — requires allocated exclusive heavy slot
+## Real command — executed in allocated exclusive slot
 
 ```bash
 cd /home/woowtechopenclaw/work/headscale-isolated-derp
@@ -70,8 +71,8 @@ Requirements:
 - `age`, `age-keygen`, `zstd`, Python3, OpenSSL, rootless Podman/Quadlet inside dev-d.
 - No pulling images, publishing ports, original data, original secrets, or real HA backup.
 
-Live unknowns: actual node schema compatibility; tar ownership normalization;
-archive/key tools in dev-d; adapter/preflight and systemd restore behavior;
-cleanup on injected real failures. SQLite summary rejects nonempty WAL rather
+The first real run confirmed the tested node schema, tar ownership normalization,
+archive/key tools, adapter/preflight, systemd rollback and cleanup for this synthetic
+fixture. Other schemas/settings and other failure modes remain untested. SQLite summary rejects nonempty WAL rather
 than silently reading a stale DB. It is narrowly for generated synthetic archives,
 not a replacement for product untrusted-backup validators or Hermes review.
