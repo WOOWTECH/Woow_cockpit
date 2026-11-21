@@ -114,7 +114,7 @@ def specification():
             " pg_isready -q -h 127.0.0.1 -U postgres; do sleep 1; done'\n"),
         files[2]: ('[Container]\nImage=sha256:' + chain.IMAGE + '\nContainerName=' + runner +
             '\nNetwork=none\nPull=never\nLogDriver=none\nVolume=' + chain.PIVOL + ':/data/pi-agent\n'
-            'Exec=infinity\nPodmanArgs=--entrypoint=/bin/sleep --memory=32m --pids-limit=32\n' + common),
+            'Exec=infinity\nPodmanArgs=--entrypoint=/bin/sleep --image-volume=ignore --memory=32m --pids-limit=32\n' + common),
     }
     raw = {'schema': 1, 'id': 'omnigent', 'name': 'Synthetic Omnigent installer',
            'owner': 'appowner', 'adapter': 'quadlet-postgres', 'quadlet': {'files': files},

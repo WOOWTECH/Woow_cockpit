@@ -88,6 +88,7 @@ class TransportTests(unittest.TestCase):
             self.assertNotIn('Restart=always', value)
             self.assertNotIn('Entrypoint=', value)
         self.assertIn('--entrypoint=/bin/sleep', list(quadlets.values())[2])
+        self.assertIn('--image-volume=ignore', list(quadlets.values())[2])
 
     def test_runtime_mount_or_network_escape_refused(self):
         chain = harness.chain
