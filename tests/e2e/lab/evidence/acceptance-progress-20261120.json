@@ -245,16 +245,16 @@
   },
   "current_parallel_work_20261121": [
     {
-      "agent": "Boole",
-      "id": "01a1fd81-e91b-7233-8676-dacecaba49c8",
-      "task": "Headscale installer/automatic rollback executable harness",
-      "mode": "local implementation; no lab slot granted"
+      "agent": "Linnaeus",
+      "id": "01a1fea0-4acd-7a41-b092-2474eafdfd2b",
+      "task": "EMQX private key CLI boundary verification",
+      "mode": "local only"
     },
     {
-      "agent": "Dewey",
-      "id": "01a1fd81-f6a2-7b53-84d6-3bdc511cc834",
-      "task": "LiteLLM diagnostic candidate strict rejection parser",
-      "mode": "local implementation; no lab slot granted"
+      "agent": "Cicero",
+      "id": "01a1fea0-745b-7d73-ac2c-e269385748d0",
+      "task": "Headscale installer-phase client continuity",
+      "mode": "implementation; lab slot not yet granted"
     }
   ],
   "litellm_default_uid_gate": {
@@ -266,7 +266,7 @@
   "headscale_installer_current": {
     "candidate_main_commit": "f26abcc",
     "tested_source_commit": "ad9ccb389a56bfd55918dad1bc788fc473835a8c",
-    "status": "real_test_running_no_result_yet",
+    "status": "real_synthetic_install_rollback_passed",
     "command": "bash tests/e2e/lab/headscale-product-test.sh --installer",
     "lab": "dev-d",
     "isolation": "true none {}",
@@ -276,6 +276,16 @@
     "local_initial_launch_error": "PYTHONPATH omitted; corrected invocation passed",
     "evidence_worktree": "/home/woowtechopenclaw/work/headscale-isolated-derp/tests/e2e/lab/evidence/headscale-installer-live",
     "agent": "01a1fd81-e91b-7233-8676-dacecaba49c8",
-    "commercial_acceptance": false
+    "commercial_acceptance": false,
+    "evidence_commit": "e66a82a",
+    "real_exit": 0,
+    "independent_inventory_equal": true,
+    "limits": [
+      "clients stopped before installer: installer-phase continuity untested",
+      "customer HA backup untested",
+      "Headplane UI untested",
+      "synthetic fixture and staged engine retained privately",
+      "two client SIGKILL teardown warnings preserved"
+    ]
   }
 }
