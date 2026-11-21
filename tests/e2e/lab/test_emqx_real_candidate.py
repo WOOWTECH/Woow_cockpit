@@ -195,6 +195,7 @@ class RealCallerTests(unittest.TestCase):
         self.runtime.cleanup_failed = True
         with self.assertRaisesRegex(RuntimeError, 'real-fixture temporary objects remain'):
             self.invoke()
+        self.assertEqual(set(self.root.iterdir()), {self.path})
 
     def test_source_change_during_build_refuses_result_after_cleanup(self):
         self.fixture()
@@ -209,6 +210,7 @@ class RealCallerTests(unittest.TestCase):
             self.invoke()
         self.assertEqual(self.runtime.events[-1], ('cleanup',))
         self.assertEqual(self.work.open, 'original-open')
+        self.assertEqual(set(self.root.iterdir()), {self.path})
 
     def test_wrong_app_and_malformed_digest_refused_before_transport(self):
         self.fixture()
@@ -220,3 +222,85 @@ class RealCallerTests(unittest.TestCase):
         with self.assertRaisesRegex(gate.Refused, 'invalid-source-digest'):
             self.invoke()
         self.assertEqual(self.runtime.events, [])
+
+    def test_private_staging_required_before_transport(self):
+        self.fixture()
+        for mode in (0o755, 0o770, 0o1700):
+            self.root.chmod(mode)
+            try:
+                with self.assertRaisesRegex(gate.Refused, 'unsafe-staging'):
+                    self.invoke()
+            finally:
+                self.root.chmod(0o700)
+        real = self.root
+        link = real / 'link'
+        link.symlink_to(real, target_is_directory=True)
+        self.root = link
+        try:
+            with self.assertRaisesRegex(gate.Refused, 'unsafe-staging'):
+                self.invoke()
+            nested = real / 'nested'
+            nested.mkdir(mode=0o700)
+            self.root = link / 'nested'
+            with self.assertRaisesRegex(gate.Refused, 'unsafe-staging'):
+                self.invoke()
+        finally:
+            self.root = real
+        self.assertEqual(self.runtime.events, [])
+
+    def test_volume_path_escape_and_alias_refused_before_transport(self):
+        self.fixture()
+        for volume in ('../escape', '/tmp/escape', 'bad/name', 'reviewed-log', ''):
+            self.target.data_volume = volume
+            with self.assertRaisesRegex(gate.Refused, 'invalid-target-volumes'):
+                self.invoke()
+        self.assertEqual(self.runtime.events, [])
+
+    def test_exclusive_work_directory_ignores_preexisting_output_links(self):
+        self.fixture()
+        outside = self.root / 'sentinel'
+        outside.write_bytes(b'unchanged')
+        (self.root / 'candidate-output').symlink_to(outside)
+        result = self.invoke()
+        self.assertEqual(outside.read_bytes(), b'unchanged')
+        for path in result.values():
+            private = path.parents[2]
+            self.assertEqual(private.parent, self.root)
+            self.assertEqual(private.stat().st_mode & 0o777, 0o700)
+            self.assertFalse(private.is_symlink())
+
+    def test_temp_factory_failure_removes_private_directory(self):
+        self.fixture()
+        with patch.object(caller.tempctr, 'TempObjects', side_effect=RuntimeError('factory failed')):
+            with self.assertRaisesRegex(RuntimeError, 'factory failed'):
+                caller.build_verified_candidate(
+                    self.work, self.app, self.adapter, self.target, self.path, self.root,
+                    'j20261121T000000Z-12345678', expected_sha256=self.digest, keys=self.keys)
+        self.assertEqual(set(self.root.iterdir()), {self.path})
+
+    def test_invalid_job_refused_before_transport(self):
+        self.fixture()
+        with self.assertRaisesRegex(gate.Refused, 'invalid-job-id'):
+            caller.build_verified_candidate(
+                self.work, self.app, self.adapter, self.target, self.path, self.root,
+                '../escape', expected_sha256=self.digest, keys=self.keys)
+        self.assertEqual(self.runtime.events, [])
+
+    def test_packaging_failure_and_cancellation_remove_partial_files(self):
+        self.fixture()
+        for failure in (RuntimeError('package failed'), KeyboardInterrupt()):
+            def failed_package(work, tmp, target, staging, *args, **kwargs):
+                (staging / 'partial-private').write_bytes(b'fixture-private')
+                raise failure
+            with patch.object(ha_emqx, '_package_candidate', side_effect=failed_package):
+                with self.assertRaises(type(failure)):
+                    self.invoke()
+            self.assertEqual(set(self.root.iterdir()), {self.path})
+            self.assertEqual(self.runtime.events[-1], ('cleanup',))
+
+    def test_private_cleanup_error_is_fixed_field_and_does_not_return_result(self):
+        self.fixture()
+        self.runtime.cleanup_failed = True
+        with patch.object(caller.shutil, 'rmtree', side_effect=OSError('PRIVATE-PATH-MARKER')):
+            with self.assertRaisesRegex(RuntimeError, '^real-fixture private cleanup failed$'):
+                self.invoke()

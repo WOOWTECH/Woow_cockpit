@@ -24,7 +24,8 @@ import API, and does not install a result. A future authorized owner supplies:
   plus an in-memory `hasecuretar.Keys` object. Private stdin can be parsed with
   the existing bounded `read_private_keys`; no key argument/env/file is added.
 - Private, quota-bounded staging and an authorized job ID. The caller owns
-  staging cleanup and must discard all outputs whenever this function raises.
+  successful-output cleanup and any failed cleanup recovery; see the independent
+  local review below for enforced staging isolation and failure cleanup.
 
 The existing `source_binding` now optionally requires a specific encryption
 format; its default remains unchanged for prior callers. This caller requires
@@ -42,10 +43,9 @@ Key material is neither returned nor saved by the adapter. Decrypted source
 bytes pass through the existing product staging stream rather than a new
 plaintext source archive. Product temporary volumes, broker exports and
 packaged candidates can contain source/target secrets: they remain private
-artifacts, not publishable evidence. A cleanup failure or late source-change
-failure can leave candidate files in staging even though no result is returned.
-The owner must discard them; this function does not delete arbitrary caller
-staging. Python memory is not claimed to be securely zeroized.
+artifacts, not publishable evidence. Failures, including late source-change failures, trigger deletion of the
+exclusively created per-call directory. If that deletion fails, the caller must
+recover the private residue. This function never deletes arbitrary caller staging. Python memory is not claimed to be securely zeroized.
 
 ## Local evidence and exact limitations
 
@@ -117,3 +117,54 @@ git diff --check
 
 The temporary directory was inside the owned checkout and removed after the
 run. No generated archive, key or candidate output is committed.
+
+## Independent local review — 2026-11-22 (base `38f5a8c`)
+
+Scope: this candidate checkout only. No lab slot, real archive, production
+access, restore, network operation or Hermes review was used. Public product
+files and preservation guards remain unchanged.
+
+Found and fixed boundaries:
+
+- Validate job IDs and distinct, filename-safe target volume names before
+  transport. This prevents target volume names escaping the package directory.
+- Require an existing 0700 staging directory owned by the effective user;
+  reject symlink components, including ancestors, without chmodding caller paths.
+- Create a fresh, unpredictable 0700 directory per call. Existing staging
+  output links/files are never reused. Successful returned paths now live in
+  that private child; callers must dispose of the entire child after use.
+- Delete only that owned child on build/package failure, cancellation, temporary
+  object cleanup failure, constructor failure or final source-change rejection.
+  A filesystem cleanup error refuses with a fixed message and suppressed cause;
+  residue still needs private owner recovery. Container cleanup failure remains
+  a failed result even when filesystem cleanup succeeds.
+
+This is not protection against concurrent mutation by the same local user or
+an attacker with control over staging ancestors. Existing ownership/isolation
+and quota requirements still apply. No new quota enforcement or secret-source
+registration/scanner is implemented. Runtime/product exceptions and private log
+hooks are not globally sanitized by this entry point; arbitrary exception text
+must not become publishable evidence. Real execution remains blocked on the
+registration, sanitized-reporting, effective-target, exclusive-slot and workload
+verification gates listed above. A passing local test is no runtime authorization.
+
+Exact final commands (exit 0 each):
+
+```sh
+mkdir -p .cli-test-tmp
+TMPDIR="$PWD/.cli-test-tmp" PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=backup-engine:.:tests/e2e/lab python3 -m unittest test_emqx_real_candidate test_emqx_ha_candidate test_ha_real_fixture tests.backup.test_ha_emqx_preservation_guard tests.backup.test_ha_emqx_candidate_flow tests.backup.test_ha_emqx_package tests.backup.test_ha_headscale
+git diff --check
+rmdir .cli-test-tmp
+```
+
+Result: **74 tests passed in 10.543 s**, no skips/failures. Initial smaller
+suite: **60 tests passed in 7.176 s**. Fourteen caller tests are included in the
+final run (seven original, seven added). Generated ciphertext only, fake owner
+transport and broker boundaries; no Podman command executed. The first attempt
+to start a read-only shell failed with `bwrap: loopback: Failed RTM_NEWADDR:
+Operation not permitted`; subsequent local commands used reviewed escalation.
+
+Not tested: real ciphertext/data/keys, Mnesia semantics, actual quotas/disk-full
+recovery, hostile concurrent path mutation, actual Podman/container removal,
+MQTT/ACL/TLS/bootstrap behavior, source/target secret coverage, installer/rollback,
+service preservation and live lab cleanup. No end-to-end acceptance is claimed.
