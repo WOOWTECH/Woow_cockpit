@@ -288,3 +288,78 @@ conversion PG in those local regressions remain fixtures. The previously flaky
 credential-event timeout test passed in this run without changing its timeout or
 contract. These results do not prove the new live Quadlets or transport flow on
 dev-d; the concrete command above is now ready for that scheduled validation.
+
+## Scheduled real adapter acceptance — omni-install-20261121
+
+The user assigned an exclusive dev-d slot after LiteLLM actual14 cleanup. The
+harness was then run against **synthetic data only**. Final successful tested SHA:
+
+`ea48f32b1c67195a992c400eeaf0da11817605f3`
+
+The unchanged scheduled command above was used for all three attempts. Evidence
+is committed under
+`tests/e2e/lab/evidence/omnigent-install-rollback/omni-install-20261121/`.
+Each attempt records its exact tested revision, relevant source SHA-256 values,
+run SHA-256, exit status, before/after inventories and outer configuration.
+Private stderr files and private engine/key trees are not committed.
+
+| Attempt | Tested SHA | Result |
+| --- | --- | --- |
+| 01 | `f6931b1293730a599cf026a7c5aa05e05dea06bb` | Failed before packaging: dev-d Quadlet generator rejects `Entrypoint=`; synthetic cleanup complete, inventory unchanged. |
+| 02 | `554074de3bb9bc14825323b784483098471389cd` | Failed at exact runtime mount guard before packaging: PG image declared an extra anonymous volume on the sleep-only runner; cleanup complete, inventory unchanged. |
+| 03 | `ea48f32b1c67195a992c400eeaf0da11817605f3` | **Exit 0**: real adapter install, induced one-shot systemd failure, automatic rollback and cleanup passed; stderr 0 bytes. |
+
+The first issue was reproduced without starting services: the installed generator
+produced only two services and exit 1. Moving the sleep entrypoint to supported
+`PodmanArgs=--entrypoint=/bin/sleep` yielded three services and exit 0. The second
+issue was reproduced with a single 32 MiB, network-none synthetic sleep container:
+its PG image produced two mounts; `--image-volume=ignore` produced exactly the
+one declared pi mount. The strict mount guard stayed unchanged. Both fixes are
+harness fixture compatibility changes; no product restore/rollback code, public
+route or isolation rule was relaxed.
+
+### Acceptance actually observed
+
+Attempt 03 records `adapter_candidate_installed`: real adapter and real age/zstd
+archive installation, decryptable safety backup, the carried source session and
+both synthetic account logins. It then records `adapter_automatic_rollback` after
+exactly one systemd startup failure armed by the imported hook. The real flow
+restored DB/server/pi markers, marker mode/UID/GID, exact synthetic secret output,
+cookie and old-token continuity, pi auth, both logins, and active/unmasked writer
+units. The rollback safety archive was decrypted. The final success path records
+installer cleanup, app-chain cleanup and unchanged inventory, with exit 0.
+
+The outer device was checked read-only before running: `running`, network `none`,
+ports `{}`, only loopback in its network namespace; host MemAvailable about
+4.5 GiB and dev-d about 2.0 GiB free within its 4 GiB cgroup limit. Approximately
+24 GiB disk space was available. No competing heavy harness was found. Existing
+Headscale/Headplane pending/restarting services were identified before execution
+and never targeted by stop/restart commands. The harness necessarily performs
+user-manager daemon-reload for its own unique Quadlets. Headscale's pre-existing
+state varied between `running` and `auto-restart`; evidence records that variation
+rather than claiming all service states were identical. Existing services were
+not repaired or stopped, and no Hermes review was retried.
+
+Per-attempt inventories match. The separate minimal mount reproduction left its
+recorded anonymous volume behind after container removal; the final slot audit
+found it. After proving no container used that exact recorded volume, it was
+removed **without force**, documented in `probe-cleanup.json`. `final.json` now
+matches the complete initial slot inventory: **8 containers, 54 volumes and 16
+secrets**, no additions or removals. Outer remains `running / none / {}` and no
+synthetic unit/drop-in/installer-lock paths remain. Failed-attempt private engine
+directories were retained as requested; these failures occurred before packaging.
+The successful attempt removed its own private staging and key material.
+
+Final local verification: **108 tests passed**, source check passed, and diff
+whitespace check passed. The scheduled slot is released after this audit; no
+further heavy job is running from this work.
+
+### Limits retained
+
+This is real isolated Podman/systemd/age/adapter install-and-rollback evidence for
+the pinned images and synthetic cold Supervisor backup. The runner is a sleep-only
+volume writer, not an AI/model execution test. It does not establish production
+migration, commercial acceptance, general-schema conversion, public-route release,
+arbitrary image/version compatibility, crash/power-loss recovery, or a failed
+rollback device case. The captured-info replay and the restricted DDL-quiescence
+assumption of the reused app-chain remain explicitly documented above.

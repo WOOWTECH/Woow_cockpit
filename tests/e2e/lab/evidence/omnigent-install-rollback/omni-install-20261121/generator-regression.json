@@ -1,0 +1,12 @@
+{
+  "before": {
+    "exit": 1,
+    "generated_services": 2,
+    "unsupported_key": "Entrypoint"
+  },
+  "after": {
+    "exit": 0,
+    "generated_services": 3,
+    "unsupported_key": false
+  }
+}
