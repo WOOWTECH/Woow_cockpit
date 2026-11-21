@@ -1,0 +1,8 @@
+dev-d isolation: true none {}
+dev-d memory current=2112835584 limit=4294967296; headroom >= 2 GiB
+Synthetic credential coverage incomplete; raw output suppressed; cleanup unverified
+AUTO_RECONNECT=PASS (preliminary; credential coverage incomplete)
+MANUAL_RECOVERY=PASS (preliminary; credential coverage incomplete)
+AUTO_ELAPSED_SECONDS=49 (preliminary; credential coverage incomplete)
+AUTO_ATTEMPTS=27 (preliminary; credential coverage incomplete)
+dev-d isolation: true none {}

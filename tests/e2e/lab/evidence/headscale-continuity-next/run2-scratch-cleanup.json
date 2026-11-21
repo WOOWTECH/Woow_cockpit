@@ -1,0 +1,6 @@
+{
+  "run2_fixture_removed": true,
+  "run2_stage_removed": true,
+  "installer_private_dirs_absent_before_scratch_removal": true,
+  "staged_source_hash_matched": true
+}

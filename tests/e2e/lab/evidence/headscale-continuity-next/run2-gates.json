@@ -1,0 +1,10 @@
+{
+  "epoch": 1795276192.8056676,
+  "cgroup_current": 2129039360,
+  "cgroup_max": 4294967296,
+  "cgroup_headroom": 2165927936,
+  "host_MemAvailable": 4426792960,
+  "isolation_pass": true,
+  "no_competing_jobs": true,
+  "memory_pass": true
+}

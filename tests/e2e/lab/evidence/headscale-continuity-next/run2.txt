@@ -1,0 +1,63 @@
+dev-d isolation: true none {}
+dev-d memory current=2129309696 limit=4294967296; headroom >= 2 GiB
+wget: can't connect to remote host (192.0.2.1): Network unreachable
+Routes:
+10.89.4.0/24 dev eth0 proto kernel scope link src 10.89.4.2 
+fe80::/64 dev eth0 proto kernel metric 256 pref medium
+Internal flag, no default route, external probe rejected: PASS
+headscale image id=a5f7b9715dea9116f435ff7892e6925895d1c92d4a265cc02eff1a2abadb227d
+tailscale image id=62dc2e673073db15c940b08320bc15303dce144ccb4fdf40b88a3c09dbbf027f
+Synthetic source internal IP reserved for restored server: 10.89.4.3
+Registered: hs-a-8x7I7s8R ['100.64.0.1', 'fd7a:115c:a1e0::1']
+Registered: hs-b-8x7I7s8R ['100.64.0.2', 'fd7a:115c:a1e0::2']
+pong from hs-b-8x7i7s8r (100.64.0.2) via DERP(lab) in 2ms
+pong from hs-b-8x7i7s8r (100.64.0.2) via DERP(lab) in 2ms
+pong from hs-b-8x7i7s8r (100.64.0.2) via DERP(lab) in 2ms
+pong from hs-b-8x7i7s8r (100.64.0.2) via DERP(lab) in 2ms
+pong from hs-b-8x7i7s8r (100.64.0.2) via DERP(lab) in 1ms
+pong from hs-b-8x7i7s8r (100.64.0.2) via DERP(lab) in 2ms
+pong from hs-b-8x7i7s8r (100.64.0.2) via DERP(lab) in 1ms
+pong from hs-b-8x7i7s8r (100.64.0.2) via DERP(lab) in 0s
+pong from hs-b-8x7i7s8r (100.64.0.2) via DERP(lab) in 2ms
+pong from hs-b-8x7i7s8r (100.64.0.2) via DERP(lab) in 1ms
+DERP pongs verified: 10/10
+Two real clients registered and DERP relay proven: PASS
+product phase: convert
+product: Headscale：HA 的 1 把 API 金鑰換成這台的 1 把
+product: 這台的 Headscale 已確認可以開啟轉換後的資料庫（configtest）
+source Noise key matches converted volume: PASS
+product convert: PASS nodes=2 source_keys_removed=1 target_keys_kept=1
+converted tar: /tmp/headscale-internal.8x7I7s8R/converted-output/volumes/hs-target-8x7I7s8R.tar
+Converted target started: PASS
+AUTO_RECONNECT=PASS
+AUTO_ELAPSED_SECONDS=37
+AUTO_ATTEMPTS=21
+Automatic reconnect: attempts=21 elapsed_since_source_stop=37s (bounded observation; not zero downtime)
+Original client reconnected with unchanged node ID, public key and IPs: PASS
+Original client reconnected with unchanged node ID, public key and IPs: PASS
+Post-conversion DERP convergence: attempts=1 elapsed=2s (not zero-downtime proof)
+pong from hs-b-8x7i7s8r (100.64.0.2) via DERP(lab) in 1ms
+pong from hs-b-8x7i7s8r (100.64.0.2) via DERP(lab) in 1ms
+pong from hs-b-8x7i7s8r (100.64.0.2) via DERP(lab) in 1ms
+pong from hs-b-8x7i7s8r (100.64.0.2) via DERP(lab) in 3ms
+pong from hs-b-8x7i7s8r (100.64.0.2) via DERP(lab) in 1ms
+pong from hs-b-8x7i7s8r (100.64.0.2) via DERP(lab) in 3ms
+pong from hs-b-8x7i7s8r (100.64.0.2) via DERP(lab) in 1ms
+pong from hs-b-8x7i7s8r (100.64.0.2) via DERP(lab) in 1ms
+pong from hs-b-8x7i7s8r (100.64.0.2) via DERP(lab) in 1ms
+pong from hs-b-8x7i7s8r (100.64.0.2) via DERP(lab) in 1ms
+Post-conversion DERP pongs verified: 10/10
+MANUAL_RECOVERY=PASS
+API target credential: HTTP 200 PASS
+API source credential: HTTP 401 PASS
+HEADSCALE_CLIENT_CONTINUITY=installed:PASS attempts=14 elapsed=29.8s
+HEADSCALE_CLIENT_CONTINUITY=rolled_back:PASS attempts=15 elapsed=28.1s
+HEADSCALE_CLIENT_CONTINUITY=restarted:PASS attempts=19 elapsed=34.8s
+HEADSCALE_INSTALL_ROLLBACK=PASS
+HEADSCALE_INSTALL_CLEANUP=PASS
+time="2026-11-21T15:53:19Z" level=warning msg="StopSignal SIGTERM failed to stop container hs-b-8x7I7s8R in 10 seconds, resorting to SIGKILL"
+time="2026-11-21T15:53:19Z" level=warning msg="StopSignal SIGTERM failed to stop container hs-a-8x7I7s8R in 10 seconds, resorting to SIGKILL"
+Synthetic files retained: /tmp/headscale-internal.8x7I7s8R
+cleanup: verified no test objects remain
+Synthetic credential coverage: named authorization and private-key sources acknowledged; submitted log snapshots (possibly empty) and redacted output scanned
+dev-d isolation: true none {}

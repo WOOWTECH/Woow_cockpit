@@ -1,5 +1,11 @@
 # Headscale synthetic installer/automatic rollback candidate
 
+Latest slot result: [headscale-continuity-next/README.md](headscale-continuity-next/README.md).
+The d11f9bb live run failed on unsupported Quadlet NetworkAlias. Corrected source
+91758a2 passed 48 local tests, generator dry-run, then real installer/rollback/restart
+client continuity in one gated retry. Independent cleanup verified; slot released.
+The candidate description below is historical; see the linked live evidence.
+
 Historical evidence below describes source ad9ccb3. The subsequent locally tested,
 not lab-executed continuity increment is documented in
 [headscale-installer-continuity-candidate.md](headscale-installer-continuity-candidate.md).

@@ -1,0 +1,18 @@
+{
+  "original": {
+    "exit": 1,
+    "service_generated": false,
+    "unsupported_NetworkAlias": true,
+    "podman_alias_present": false,
+    "podman_ip_present": false,
+    "published_ports": false
+  },
+  "patched": {
+    "exit": 0,
+    "service_generated": true,
+    "unsupported_NetworkAlias": false,
+    "podman_alias_present": true,
+    "podman_ip_present": true,
+    "published_ports": false
+  }
+}

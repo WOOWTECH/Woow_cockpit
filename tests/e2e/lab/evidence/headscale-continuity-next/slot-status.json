@@ -1,0 +1,13 @@
+{
+  "slot": "headscale-continuity-next",
+  "status": "released",
+  "epoch": 1795276546.0678742,
+  "cleanup_verified": true,
+  "real_runs": 2,
+  "run1_source": "d11f9bbdaaee73bc1dc4e7a2905aacdf2c2207a3",
+  "run1_exit": 1,
+  "run2_source": "91758a2d53b5924e9bb8bf010be4c74418b6f866",
+  "run2_exit": 0,
+  "synthetic_installer_continuity": "pass",
+  "commercial_complete": false
+}
