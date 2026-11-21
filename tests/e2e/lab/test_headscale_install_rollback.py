@@ -78,6 +78,17 @@ class RestoreTests(unittest.TestCase):
             owner.assert_not_called()
 
 
+class QuadletTests(unittest.TestCase):
+    def test_endpoint_uses_supported_podman_arguments(self):
+        source = '[Container]\nNetwork=none\nPodmanArgs=--memory=384m --cpus=1 --pids-limit=256\n'
+        connected = hs.connected_quadlet(source, 'hs-test-abcd1234', '10.89.0.10')
+        self.assertIn('Network=hs-test-abcd1234\n', connected)
+        self.assertIn('PodmanArgs=--network-alias=headscale.lab --ip=10.89.0.10 --memory=384m --cpus=1 --pids-limit=256\n', connected)
+        self.assertNotIn('\nNetworkAlias=', connected)
+        self.assertNotIn('\nIP=', connected)
+        self.assertNotIn('PublishPort=', connected)
+
+
 class InputTests(unittest.TestCase):
     def setUp(self):
         # Fixed-shape random synthetic path; never contains production credentials.

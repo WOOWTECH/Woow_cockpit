@@ -151,6 +151,14 @@ def restore_pair(restore, backup_id, state, verify, verify_safety, mutate):
     verify('rolled_back')
 
 
+def connected_quadlet(text, network, address):
+    # dev-d's Quadlet generator rejects NetworkAlias=. Use the same Podman
+    # flags already exercised by the converted-server harness. Inputs have
+    # been validated by Continuity before constructing this synthetic unit.
+    return text.replace('Network=none\n', 'Network=' + network + '\n').replace(
+        'PodmanArgs=', 'PodmanArgs=--network-alias=headscale.lab --ip=' + address + ' ')
+
+
 def run(root, target, plane, client_address):
     seed, config, candidate, plane_tar = inputs(root, target, plane)
     r = local_owner()
@@ -289,8 +297,7 @@ def run(root, target, plane, client_address):
         r.systemctl('start', unit)
         # Seed runtime remains disconnected. The packaged Quadlet takes over only
         # when the real restore stops/recreates it; no unrelated identity is advertised.
-        connected_text = text.replace('Network=none\n', 'Network=' + continuity.network +
-                                      '\nNetworkAlias=headscale.lab\nIP=' + continuity.address + '\n')
+        connected_text = connected_quadlet(text, continuity.network, continuity.address)
         r.write_file(rel, connected_text.encode(), 0o600)
         r.systemctl('daemon-reload')
         deps.storage.ensure_layout()
