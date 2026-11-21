@@ -177,3 +177,45 @@ class InstallTests(OmnigentCase):
         self.assertEqual({name: contents(data) for name, data in self.owner.volumes.items()}, self.original_volumes)
         self.assertFalse(any(call['argv'][:3] == [podman.SYSTEMCTL, '--user', 'stop']
                              for call in self.owner.calls))
+
+    def test_other_app_origin_refuses_before_owner_commands(self):
+        result = self.run_candidate()
+        row = haimport.load_registry(self.paths)[result['backup_id']]
+        row['apps'] = ['emqx']
+        haimport.register(self.paths, result['backup_id'], row)
+        self.owner.calls.clear()
+        with self.assertRaises(BackupError) as caught:
+            haimport._install_omnigent_candidate(self.ctx(), result['backup_id'])
+        self.assertEqual(caught.exception.code, 'incompatible')
+        self.assertEqual(self.owner.calls, [])
+
+    def test_missing_images_refuses_before_stopping_writers(self):
+        result = self.run_candidate()
+        self.owner.images.clear()
+        self.owner.known_ids.clear()
+        self.owner.calls.clear()
+        with self.assertRaises(BackupError):
+            haimport._install_omnigent_candidate(self.ctx(), result['backup_id'])
+        self.assertEqual({name: contents(data) for name, data in self.owner.volumes.items()}, self.original_volumes)
+        self.assertEqual(self.owner.secrets, self.original_secrets)
+        self.assertFalse(self.owner.masked)
+        self.assertTrue(all(self.owner.units[u] == 'active' for u in self.app.units))
+        self.assertFalse(any(call['argv'][:3] == [podman.SYSTEMCTL, '--user', 'stop']
+                             for call in self.owner.calls))
+        self.assertNotIn('safety', self.reporter.phases())
+
+    def test_failed_safety_export_restarts_writers_without_candidate_import(self):
+        result = self.run_candidate()
+        self.owner.calls.clear()
+        self.owner.fail = [('volume export omnigent-pi-data', 1)]
+        with self.assertRaises(BackupError) as caught:
+            haimport._install_omnigent_candidate(self.ctx(), result['backup_id'])
+        self.assertTrue(caught.exception.result['safety_failed'])
+        self.assertFalse(caught.exception.result['changed'])
+        self.assertEqual({name: contents(data) for name, data in self.owner.volumes.items()}, self.original_volumes)
+        self.assertEqual(self.owner.secrets, self.original_secrets)
+        self.assertFalse(self.owner.masked)
+        self.assertTrue(all(self.owner.units[u] == 'active' for u in self.app.units))
+        self.assertFalse(any(call['argv'][:3] == [podman.PODMAN, 'volume', 'import']
+                             for call in self.owner.calls))
+        self.assertNotIn('rollback', self.reporter.phases())

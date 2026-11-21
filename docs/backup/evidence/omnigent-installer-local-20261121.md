@@ -117,3 +117,71 @@ run only the missing installer/rollback portion as dependencies permit.
 
 No production data, conversation runner/model/workspace settings, `omnigent stop`,
 public guard release, or Hermes review was touched or performed.
+
+## Follow-up candidate review — 2026-11-21, base 91c9762
+
+The worktree was clean at `91c976208d4a1bf36b7806efb4faaa55a5602b35`.
+This follow-up adds three local installer regressions, without changing runtime
+code or public guards:
+
+- A registry row naming another app refuses before any owner command.
+- Missing target images fail preflight before stopping writers; volumes, secrets,
+  active units and masks remain unchanged.
+- Failure exporting the pi volume for the safety copy reports `safety_failed=True`
+  and `changed=False`, restarts all writers, clears masks, and never imports a
+  candidate volume or enters rollback. The result is carried by the raised
+  exception, not by the reporter's partial-result dictionary.
+
+The same seven-module command above now passes **74 tests**. Source check and
+`git diff --check` pass. During test development the safety-failure assertion
+initially read the reporter dictionary and raised KeyError; it was corrected to
+check the actual exception result. No runtime defect was established by this
+review, so no speculative runtime change was made. The earlier intermittent
+real-app-fixture timeout test was not changed or rerun by this follow-up.
+
+Historical evidence was checked directly in
+`tests/e2e/lab/evidence/omnigent-real-app-chain/slot-20261121-0fd7311/`:
+`exit-status` is 0; postcheck records unchanged container, volume and secret
+inventories, outer `running none {}`, and zero stderr bytes. The recorded
+`run.jsonl` SHA-256 and all five source SHA-256 values match the manifest at
+`0fd7311b35ffee2ff49cfacf8dad7791ef9eda81`. This establishes consistency of the
+committed historical evidence, not a new device run or the present device state.
+That run proves the recorded synthetic app-chain scope, not installer/rollback.
+
+### Scheduling handoff (not executed)
+
+The existing runnable heavy command, from the reviewed checkout, is:
+
+```sh
+PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=backup-engine:. python3 \
+  tests/e2e/lab/omnigent_real_app_chain.py --run --outer-isolation-confirmed
+```
+
+**This is app-chain only. Do not schedule it as an installer/rollback test or
+repeat the historical pass merely to fill that gap.** The script has no
+installer/rollback mode; there is currently no reviewed executable command for
+that missing acceptance. Before scheduling the missing work, implement and review
+a harness that uses the private conversion/install Python entries shown above,
+separate job contexts with ordinary job serialization, real archive encryption
+and a real adapter transport restricted to synthetic lab resources. Do not
+substitute the local FakeOwner/FakeArchive suite for device acceptance.
+
+The slot owner must first allocate dev-d exclusively (old slot ownership notes
+are historical, not a current reservation), verify its outer network is `none`
+and published ports empty, verify the pinned images already exist, and establish
+sufficient disk/memory/time budgets. The new transport must support systemd
+writers and the owner file helper as well as Podman; the existing app-chain
+Runner only bridges Podman and its Quadlets are synthetic, not installed units.
+Catalog every referenced synthetic secret and every writer, exclude all target
+DDL actors throughout conversion, register issued credentials before ACK, keep
+private evidence masked, and prove random resource names absent before creation.
+No production owners, secrets or resources may be used.
+
+Required device cases: successful install with readable encrypted safety backup;
+late import failure and post-import health failure with automatic rollback;
+verification of original DB/application markers, cookie/auth continuity, exact
+synthetic secret bytes, volume metadata and writer states after recovery; and
+synthetic-only cleanup with before/after inventories. Retain safety evidence on
+failed rollback and report incomplete recovery. A future concrete harness command
+and reviewed revision must be supplied before that slot starts. No dev-d command,
+Hermes re-review, conversation setting change, or `omnigent stop` was performed.
