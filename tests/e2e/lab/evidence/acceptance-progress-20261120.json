@@ -262,5 +262,20 @@
     "observed_nested_uid_gid_max": 55000,
     "status": "execution environment unsuitable; no mapping changes made",
     "actual14_scope": "UID1000 synthetic rehearsal only, not default product identity"
+  },
+  "headscale_installer_current": {
+    "candidate_main_commit": "f26abcc",
+    "tested_source_commit": "ad9ccb389a56bfd55918dad1bc788fc473835a8c",
+    "status": "real_test_running_no_result_yet",
+    "command": "bash tests/e2e/lab/headscale-product-test.sh --installer",
+    "lab": "dev-d",
+    "isolation": "true none {}",
+    "observed_memory_current": 1997647872,
+    "memory_max": 4294967296,
+    "postintegration_local_tests": 15,
+    "local_initial_launch_error": "PYTHONPATH omitted; corrected invocation passed",
+    "evidence_worktree": "/home/woowtechopenclaw/work/headscale-isolated-derp/tests/e2e/lab/evidence/headscale-installer-live",
+    "agent": "01a1fd81-e91b-7233-8676-dacecaba49c8",
+    "commercial_acceptance": false
   }
 }
