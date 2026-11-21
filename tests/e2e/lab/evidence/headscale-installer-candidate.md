@@ -1,5 +1,9 @@
 # Headscale synthetic installer/automatic rollback candidate
 
+Historical evidence below describes source ad9ccb3. The subsequent locally tested,
+not lab-executed continuity increment is documented in
+[headscale-installer-continuity-candidate.md](headscale-installer-continuity-candidate.md).
+
 Status: **Synthetic dev-d installer/automatic rollback PASS** at source ad9ccb3.
 See `headscale-installer-live/README.md` for the real run and independent cleanup.
 This is not real customer HA backup or complete commercial acceptance. Public guards unchanged.

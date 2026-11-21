@@ -27,7 +27,7 @@ class RestoreTests(unittest.TestCase):
                 if mode != 'success_instead':
                     raise hs.flows.RolledBack(hs.flows.BackupError('job-failed', 'synthetic'), {'rolled_back': True, 'safety_backup_id': 'second'})
             return {'changed': True, 'rolled_back': False, 'safety_backup_id': 'first'}
-        verify = lambda: calls.append('verify')
+        verify = lambda phase: calls.append(('verify', phase))
         safety = lambda bid: calls.append(('safety', bid))
         mutate = lambda: calls.append('mutate')
         hs.restore_pair(restore, 'candidate', state, verify, safety, mutate)
@@ -35,9 +35,21 @@ class RestoreTests(unittest.TestCase):
 
     def test_real_flow_orchestration_contract_fixture(self):
         calls, runner = self.exercise('rollback')
-        self.assertEqual(calls, [('restore', 'candidate'), ('safety', 'first'), 'verify', 'mutate',
-                                 ('restore', 'candidate'), ('safety', 'second'), 'verify'])
+        self.assertEqual(calls, [('restore', 'candidate'), ('safety', 'first'), ('verify', 'installed'), 'mutate',
+                                 ('restore', 'candidate'), ('safety', 'second'), ('verify', 'rolled_back')])
         runner.write_file.assert_called_once_with('marker', b'fail-once\n', 0o600)
+
+    def test_failed_install_continuity_prevents_rollback_exercise(self):
+        state = {'enabled': False, 'count': 0}
+        restore = Mock(return_value={'changed': True, 'rolled_back': False, 'safety_backup_id': 'first'})
+        verify = Mock(side_effect=RuntimeError('continuity_deadline'))
+        mutate = Mock()
+        with self.assertRaisesRegex(RuntimeError, 'continuity_deadline'):
+            hs.restore_pair(restore, 'candidate', state, verify, Mock(), mutate)
+        verify.assert_called_once_with('installed')
+        mutate.assert_not_called()
+        self.assertFalse(state['enabled'])
+        restore.assert_called_once()
 
     def test_success_without_injected_failure_is_not_rollback(self):
         with self.assertRaisesRegex(RuntimeError, 'injected_failure_not_observed'):

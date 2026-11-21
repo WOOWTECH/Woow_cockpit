@@ -19,6 +19,8 @@ import sys
 import tempfile
 import time
 
+from headscale_client_continuity import Continuity
+
 from woowbackup import archive, catalog, flows, keys, podman, storage, util
 from woowbackup.adapters.quadlet_postgres import QuadletPostgresAdapter
 from woowbackup.paths import Paths
@@ -136,7 +138,7 @@ def restore_pair(restore, backup_id, state, verify, verify_safety, mutate):
     result = restore(backup_id)
     require(result['changed'] and not result['rolled_back'], 'install_not_successful')
     verify_safety(result['safety_backup_id'])
-    verify()
+    verify('installed')
     mutate()
     state['enabled'] = True
     try:
@@ -146,12 +148,13 @@ def restore_pair(restore, backup_id, state, verify, verify_safety, mutate):
         verify_safety(outcome.result['safety_backup_id'])
     else:
         raise RuntimeError('injected_failure_not_observed')
-    verify()
+    verify('rolled_back')
 
 
-def run(root, target, plane):
+def run(root, target, plane, client_address):
     seed, config, candidate, plane_tar = inputs(root, target, plane)
     r = local_owner()
+    continuity = Continuity(r, root, client_address)
     prefix = 'hs-install-' + secrets.token_hex(4)
     volumes = [prefix + '-data', prefix + '-plane']
     unit = prefix + '.service'
@@ -194,7 +197,7 @@ def run(root, target, plane):
     def users():
         return json.loads(r.podman('exec', prefix, 'headscale', 'users', 'list', '-o', 'json',
                                   max_output=65536).stdout)
-    def verify():
+    def verify(phase):
         deadline = time.monotonic() + 60
         while r.podman('exec', prefix, 'headscale', 'health', check=False,
                        timeout=5, max_output=4096).returncode != 0:
@@ -202,10 +205,13 @@ def run(root, target, plane):
             time.sleep(1)
         data = json.loads(r.podman('container', 'inspect', prefix, max_output=1024*1024).stdout)[0]
         require(data['Image'].removeprefix('sha256:') == IMAGE and
-                data['HostConfig']['NetworkMode'] == 'none' and not data['HostConfig'].get('PortBindings'),
+                set(data['NetworkSettings']['Networks']) == {continuity.network} and
+                data['NetworkSettings']['Networks'][continuity.network]['IPAddress'] == continuity.address and
+                not data['HostConfig'].get('PortBindings'),
                 'installed_runtime_mismatch')
         nodes = json.loads(r.podman('exec', prefix, 'headscale', 'nodes', 'list', '-o', 'json', max_output=65536).stdout)
         require(len(nodes) == 2, 'installed_nodes_missing')
+        continuity.verify(prefix, phase)
         # Cold exports compare exact candidate node identities/Noise and all plane
         # paths/content/mode/UID/GID; counts alone cannot establish preservation.
         r.systemctl('stop', unit)
@@ -281,6 +287,12 @@ def run(root, target, plane):
                             '; then rm -f %h/' + marker + '; exit 1; fi\'\n').encode(), 0o600)
         r.systemctl('daemon-reload')
         r.systemctl('start', unit)
+        # Seed runtime remains disconnected. The packaged Quadlet takes over only
+        # when the real restore stops/recreates it; no unrelated identity is advertised.
+        connected_text = text.replace('Network=none\n', 'Network=' + continuity.network +
+                                      '\nNetworkAlias=headscale.lab\nIP=' + continuity.address + '\n')
+        r.write_file(rel, connected_text.encode(), 0o600)
+        r.systemctl('daemon-reload')
         deps.storage.ensure_layout()
         key, _ = deps.keys.ensure_device_key()
         ctx = context()
@@ -294,7 +306,7 @@ def run(root, target, plane):
         restore_pair(lambda bid: flows.run_restore(context(), {'backup_id': bid, 'apps': ['headscale']}),
                      packaged['backup_id'], state, verify, safety, mutate)
         r.systemctl('restart', unit)
-        verify()
+        verify('restarted')
         print('HEADSCALE_INSTALL_ROLLBACK=PASS', flush=True)
         success = True
     finally:
@@ -334,12 +346,13 @@ def run(root, target, plane):
 def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument('--run', action='store_true')
+    p.add_argument('--client-address', required=True)
     p.add_argument('root')
     p.add_argument('target')
     p.add_argument('plane')
     args = p.parse_args()
     require(args.run, 'explicit_run_required')
-    run(args.root, args.target, args.plane)
+    run(args.root, args.target, args.plane, args.client_address)
 
 
 if __name__ == '__main__':

@@ -21,7 +21,7 @@ trap 'owner --verify-isolation' EXIT
 tar -C "$repo" --exclude=__pycache__ -cf - backup-engine tests/e2e/lab/headscale-product-convert.py \
   tests/e2e/lab/headscale-product-runner.sh tests/e2e/lab/headscale-credential-events.py \
   tests/e2e/lab/headscale-auto-reconnect-check.py tests/e2e/lab/headscale-private-sources.py \
-  tests/e2e/lab/headscale_install_rollback.py | \
+  tests/e2e/lab/headscale_client_continuity.py tests/e2e/lab/headscale_install_rollback.py | \
   owner tar -xf - -C "$stage"
 owner python3 "$stage/tests/e2e/lab/headscale-credential-events.py" --controller -- \
   bash "$stage/tests/e2e/lab/headscale-product-runner.sh" "$stage" "$installer"

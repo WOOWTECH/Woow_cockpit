@@ -257,18 +257,22 @@ for which in target source; do
   [[ "$response" =~ HTTP/[0-9.]+[[:space:]]$expected([[:space:]]|$) ]] || { echo "API $which credential: expected HTTP $expected" >&2; exit 1; }
   echo "API $which credential: HTTP $expected PASS"
 done
-podman stop "$client_a" "$client_b" "$target_server" >/dev/null
+# Release the converted endpoint, keeping both existing clients alive for the
+# real installer and its automatic rollback. Only disposable objects are moved.
+podman stop "$target_server" >/dev/null
 podman volume export --output "$test_dir/target-converted-private.tar" "$converted_volume"
 private_source converted_noise volume "$test_dir/target-converted-private.tar" noise.key
 private_source converted_derp volume "$test_dir/target-converted-private.tar" derp.key
-private_source client_a_identity_after client "$test_dir/client-a/tailscaled.state"
-private_source client_b_identity_after client "$test_dir/client-b/tailscaled.state"
 podman logs "$target_server" 2>&1 | python3 "$product_files/tests/e2e/lab/headscale-credential-events.py" --scan-log target_converted
-podman logs "$client_a" 2>&1 | python3 "$product_files/tests/e2e/lab/headscale-credential-events.py" --scan-log client_a
-podman logs "$client_b" 2>&1 | python3 "$product_files/tests/e2e/lab/headscale-credential-events.py" --scan-log client_b
+podman rm "$target_server" >/dev/null
 if [[ $installer == 1 ]]; then
   PYTHONPATH="$product_files/backup-engine" python3 "$product_files/tests/e2e/lab/headscale_install_rollback.py" \
-    --run "$test_dir" "$target_volume" "$plane_volume"
+    --run --client-address "$source_ip" "$test_dir" "$target_volume" "$plane_volume"
 fi
+podman stop "$client_a" "$client_b" >/dev/null
+private_source client_a_identity_after client "$test_dir/client-a/tailscaled.state"
+private_source client_b_identity_after client "$test_dir/client-b/tailscaled.state"
+podman logs "$client_a" 2>&1 | python3 "$product_files/tests/e2e/lab/headscale-credential-events.py" --scan-log client_a
+podman logs "$client_b" 2>&1 | python3 "$product_files/tests/e2e/lab/headscale-credential-events.py" --scan-log client_b
 unset source_api_key target_api_key
 [[ "$auto" == PASS ]] || exit 1
