@@ -267,7 +267,7 @@ def require_session_marker(response, title, expected_id=None):
     return body['id']
 
 
-def main():
+def main(*, installer=None):
     parser = argparse.ArgumentParser()
     parser.add_argument('--run', action='store_true')
     parser.add_argument('--outer-isolation-confirmed', action='store_true',
@@ -494,6 +494,12 @@ except urllib.error.HTTPError as e:
                 assert tar.extractfile('auth.json').read() == b'synthetic-pi'
             with tarfile.open(converted['volumes'][TARGETVOL]) as tar:
                 assert any(m.name.removeprefix('./') == 'PG_VERSION' for m in tar)
+            if installer is not None:
+                installer(converted=converted, source_cookie=source_cookie_registered,
+                          source_token=source_token, source_password=source_password,
+                          target_password=target_password, marker_id=marker_id,
+                          marker_title=marker_title, api=api, containers=containers)
+                return
             with open(converted['volumes'][TARGETVOL], 'rb') as handle:
                 runner.podman('volume', 'import', RESTOREDVOL, '-', input=handle, timeout=300)
             start(RESTORED, RESTOREDVOL)
