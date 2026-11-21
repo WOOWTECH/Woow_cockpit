@@ -227,5 +227,40 @@
       "DDL quiescence caller requirement",
       "no general crash recovery acceptance"
     ]
+  },
+  "emqx_real_cold_source_20261121": {
+    "commit": "79dfbc0",
+    "evidence": "emqx-cold-encrypted-preflight-20261121.json",
+    "actual_fixture_architectures": [
+      "amd64",
+      "aarch64"
+    ],
+    "inner_state": "stopped",
+    "addon_version": "5.9.1",
+    "upstream_version": "5.8.9",
+    "local_tests_passed": 24,
+    "scope": "full streaming decryption and selected header validation; no service or restore",
+    "restore_allowed": false,
+    "semantic_validation": "pending"
+  },
+  "current_parallel_work_20261121": [
+    {
+      "agent": "Boole",
+      "id": "01a1fd81-e91b-7233-8676-dacecaba49c8",
+      "task": "Headscale installer/automatic rollback executable harness",
+      "mode": "local implementation; no lab slot granted"
+    },
+    {
+      "agent": "Dewey",
+      "id": "01a1fd81-f6a2-7b53-84d6-3bdc511cc834",
+      "task": "LiteLLM diagnostic candidate strict rejection parser",
+      "mode": "local implementation; no lab slot granted"
+    }
+  ],
+  "litellm_default_uid_gate": {
+    "required_uid": 65534,
+    "observed_nested_uid_gid_max": 55000,
+    "status": "execution environment unsuitable; no mapping changes made",
+    "actual14_scope": "UID1000 synthetic rehearsal only, not default product identity"
   }
 }
