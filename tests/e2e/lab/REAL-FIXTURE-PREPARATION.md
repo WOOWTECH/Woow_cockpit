@@ -1,3 +1,38 @@
+## 2026-11-21 bounded CLI negative-test increment
+
+Incremental tests on candidate `6b34dba`; no implementation or public-guard
+changes. The coordinator reports the earlier two commits integrated on main as
+`6ab87c2` / `79dfbc0`; those objects are not present in this checkout. This
+increment does not replay either earlier patch.
+
+Three new subprocess tests use locally generated SecureTar v3 ciphertext and
+test-only passwords, with the real CLI and streaming decryptor (no decrypt
+mock). Six negative cases cover missing `--key-stdin`, empty stdin, wrong key,
+oversize key, non-ASCII input and multiline input. Each requires exit 2, exact
+fixed-field refusal JSON, empty stderr, no key/payload/private-path markers,
+no prepared directory and unchanged source bytes. A valid-key subprocess
+control requires exit 0 and the expected v3 metadata with restore disallowed.
+The third test leaves stdin open after 1025 bytes and requires refusal within
+10 seconds, proving the CLI does not wait for EOF or read beyond the bound.
+Every subprocess has a 10-second timeout; the open-pipe child is killed and
+reaped on failure. Output checks avoid echoing unexpected secrets in assertion
+failures. These fixtures prove encryption and metadata boundaries, not valid
+broker data or service acceptance.
+
+Exact local results (no skips or failures):
+
+- Fixture suite: **27 tests passed in 3.478 s** (24 existing + 3 new).
+- Existing EMQX preservation guard / candidate / Headscale suites:
+  **25 tests passed in 3.942 s**.
+- `git diff --check`: passed.
+
+Commands used the existing interpreter and dependencies, with
+`PYTHONDONTWRITEBYTECODE=1`, `PYTHONPATH=backup-engine:.` and `TMPDIR` set to
+`.cli-test-tmp` inside this checkout. Test temporary files were cleaned up.
+Only generated archives were opened in this increment. No real restore, lab
+command, production credential access, Hermes review, runner/model/workspace
+change or omnigent stop was performed. Public preservation guards remain intact.
+
 ## 2026-11-21 encrypted cold-source increment
 
 The older unsupported-encryption note below is superseded for the private key path.
