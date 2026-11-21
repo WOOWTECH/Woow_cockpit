@@ -225,7 +225,99 @@ def http_code(url):
 
 
 # Runs inside the device (python3 of Ubuntu); the secrets come on stdin, only verdicts go to stdout.
-DEVICE_PROBE = r'''
+LOCAL_COMMUNITY_PROBE = r"""
+import json
+import subprocess
+import urllib.request
+
+PACKAGE = 'n8n-nodes-globals'
+VERSION = '1.1.0'
+OWNER = '/usr/local/bin/woowbk-owner'
+SQL = '''BEGIN READ ONLY; SET LOCAL statement_timeout = '5s';
+SELECT json_build_object('package', "packageName", 'version', "installedVersion", 'nodes',
+ (SELECT coalesce(json_agg(json_build_object('type', type, 'version', "latestVersion")), '[]'::json)
+ FROM installed_nodes WHERE package = 'n8n-nodes-globals'))
+FROM installed_packages WHERE "packageName" = 'n8n-nodes-globals'; ROLLBACK;'''
+MANIFEST_JS = r'''
+const fs=require('fs'),path=require('path');
+const base='/home/node/.n8n/nodes/node_modules/n8n-nodes-globals';
+const file=base+'/package.json';
+if(!fs.existsSync(file)){console.log('{}');process.exit(0)}
+const p=JSON.parse(fs.readFileSync(file,'utf8'));const nodes=p.n8n?.nodes;
+const valid=Array.isArray(nodes)&&nodes.length>0&&nodes.length<=32&&nodes.every(n=>{
+ if(typeof n!=='string')return false;
+ const f=path.resolve(base,n);if(!f.startsWith(base+'/')||!fs.existsSync(f))return false;
+ return fs.realpathSync(f).startsWith(fs.realpathSync(base)+'/')&&fs.statSync(f).isFile();
+});
+console.log(JSON.stringify({name:p.name,version:p.version,node_files_valid:valid,node_count:Array.isArray(nodes)?nodes.length:0}));
+'''
+
+def local_inventory():
+    def command(args):
+        p = subprocess.run([OWNER, 'podman', 'exec', *args], capture_output=True, timeout=12)
+        if p.returncode:
+            raise RuntimeError('local_inventory_command_failed')
+        return p.stdout.decode()
+    rows = command(['n8n-postgres','psql','-X','-qAt','-U','n8n','-d','n8n','-c',SQL]).strip().splitlines()
+    if len(rows) > 1:
+        raise ValueError('ambiguous_package_rows')
+    db = json.loads(rows[0]) if rows else {}
+    manifest = json.loads(command(['n8n','node','-e',MANIFEST_JS]))
+    return db, manifest
+
+def assess_inventory(db, manifest):
+    if db.get('package') != PACKAGE or db.get('version') != VERSION:
+        raise ValueError('package_db_missing_or_version_mismatch')
+    if manifest.get('name') != PACKAGE or manifest.get('version') != VERSION or manifest.get('node_files_valid') is not True:
+        raise ValueError('package_manifest_or_files_invalid')
+    nodes = db.get('nodes')
+    if not isinstance(nodes,list) or not 0 < len(nodes) <= 32:
+        raise ValueError('installed_nodes_missing')
+    if len({n.get('type') for n in nodes}) != len(nodes):
+        raise ValueError('duplicate_node_types')
+    for n in nodes:
+        if not isinstance(n.get('type'),str) or not n['type'].startswith(PACKAGE+'.') or not n['type'][len(PACKAGE)+1:]:
+            raise ValueError('unexpected_node_type')
+        if type(n.get('version')) not in (float,int) or n['version'] <= 0:
+            raise ValueError('invalid_node_version')
+    return nodes
+
+def local_community_probe(opener, headers, inventory=local_inventory):
+    result = {'n8n_packages': [], 'n8n_community_probe': 'local-db-manifest-authenticated-node-types'}
+    try:
+        db, manifest = inventory()
+        nodes = assess_inventory(db, manifest)
+        for node in nodes:
+            request = urllib.request.Request('http://127.0.0.1:15678/rest/node-types',
+                data=json.dumps({'nodeInfos':[{'name':node['type'],'version':node['version']}]}).encode(),
+                headers={'Content-Type':'application/json',**headers}, method='POST')
+            with opener.open(request, timeout=5) as response:
+                if response.status != 200:
+                    raise ValueError('node_types_http_failure')
+                body=json.load(response)
+            descriptions=body.get('data') if isinstance(body,dict) else None
+            if not isinstance(descriptions,list) or len(descriptions)!=1:
+                raise ValueError('node_type_not_loaded')
+            desc=descriptions[0]
+            names=(node['type'],node['type'][len(PACKAGE)+1:])
+            if not isinstance(desc,dict) or desc.get('name') not in names:
+                raise ValueError('node_type_identity_mismatch')
+            versions=desc.get('version');versions=versions if isinstance(versions,list) else [versions]
+            if node['version'] not in versions:
+                raise ValueError('node_type_version_mismatch')
+        result['n8n_packages']=[[PACKAGE,VERSION,False]]
+        result['n8n_community_nodes_checked']=len(nodes)
+    except Exception as exc:
+        # Never expose HTTP bodies, subprocess stderr, auth headers or exception messages.
+        result['n8n_community_error_type']=type(exc).__name__
+        if isinstance(exc,ValueError) and str(exc) in {
+            'package_db_missing_or_version_mismatch','package_manifest_or_files_invalid',
+            'installed_nodes_missing','duplicate_node_types','unexpected_node_type','invalid_node_version',
+            'node_types_http_failure','node_type_not_loaded','node_type_identity_mismatch','node_type_version_mismatch'}:
+            result['n8n_community_error_code']=str(exc)
+    return result"""
+
+DEVICE_PROBE = LOCAL_COMMUNITY_PROBE + r'''
 import http.cookiejar, json, sys, urllib.request
 req = json.loads(sys.stdin.read())
 out = {}
@@ -269,9 +361,12 @@ if req.get("n8n"):
         status, body = get(opener, "http://127.0.0.1:15678/rest/credentials", headers)
         creds = [c for c in (body or {}).get("data", []) if c.get("name") == req["n8n"]["credential"]]
         out["n8n_credential_found"] = bool(creds)
-        status, body = get(opener, "http://127.0.0.1:15678/rest/community-packages", headers)
-        out["n8n_packages"] = [[p.get("packageName"), p.get("installedVersion"), bool(p.get("failedLoading"))]
-                               for p in (body or {}).get("data", [])]
+        if req.get("local_community_probe"):
+            out.update(local_community_probe(opener, headers))
+        else:
+            status, body = get(opener, "http://127.0.0.1:15678/rest/community-packages", headers)
+            out["n8n_packages"] = [[p.get("packageName"), p.get("installedVersion"), bool(p.get("failedLoading"))]
+                                   for p in (body or {}).get("data", [])]
     except Exception as exc:
         out["n8n_login"] = out.get("n8n_login", False)
         out["n8n_error"] = type(exc).__name__
@@ -307,6 +402,8 @@ def credential_probe(name, value):
 
 
 def device_probe(request):
+    require_isolated_device()
+    request = dict(request, local_community_probe=EXPECT['arch'] == 'aarch64')
     proc = root('python3', '-I', '-c', DEVICE_PROBE, input=json.dumps(request).encode('utf-8'), timeout=300)
     try:
         return json.loads(proc.stdout.decode('utf-8', 'replace').strip().splitlines()[-1])
@@ -754,30 +851,78 @@ FINGERPRINT_SQL = (r"SELECT format('%s.%s %s %s', schemaname, relname, (xpath('/
                    r"ORDER BY schemaname, relname;")
 
 
+def parse_arm_fingerprint(text, *, source=False):
+    """Strict metadata-only parsing for the fixed 205-table ARM woowtest fixture."""
+    result, current, sections = {}, None, 0
+    for line in text.splitlines():
+        line = line.strip()
+        if source and line.startswith('#DB '):
+            parts = line.split()
+            if len(parts) != 2:
+                raise Failed('invalid fingerprint database header')
+            current = parts[1]
+            sections += current == 'woowtest'
+            continue
+        if not line:
+            continue
+        if line.startswith('#'):
+            if not source:
+                raise Failed('unexpected target fingerprint comment')
+            continue
+        if source and current != 'woowtest':
+            continue
+        fields = line.split()
+        if (len(fields) != 3 or not re.fullmatch(r'public\.[A-Za-z_][A-Za-z_0-9]*', fields[0])
+                or not re.fullmatch(r'0|[1-9][0-9]*', fields[1])
+                or not re.fullmatch(r'[0-9a-f]{32}', fields[2])):
+            raise Failed('invalid fingerprint row (contents withheld)')
+        table, count, digest = fields
+        if table in result:
+            raise Failed('duplicate fingerprint table')
+        result[table] = (count, digest)
+    if source and sections != 1:
+        raise Failed('expected exactly one woowtest fingerprint section')
+    if not result:
+        raise Failed('empty fingerprint')
+    return result
+
+
 def scenario_armcompare(ev, args):
-    source, current = {}, None
-    for line in Path(args.fingerprint).read_text(encoding='utf-8').splitlines():
-        if line.startswith('#DB '):
-            current = line.split()[1]
-        elif current == 'woowtest' and len(line.split()) == 3:
-            table, rows, digest = line.split()
-            source[table] = (rows, digest)
-    here = {}
-    for line in psql('odoo18-db', 'postgres', 'odoo', FINGERPRINT_SQL).splitlines():
-        if len(line.split()) == 3:
-            table, rows, digest = line.split()
-            here[table] = (rows, digest)
+    try:
+        source = parse_arm_fingerprint(Path(args.fingerprint).read_text(encoding='utf-8'), source=True)
+        if len(source) != 205:
+            raise Failed('expected 205 source tables for the fixed ARM fixture')
+        required = {'public.res_partner', 'public.woow_import_probe',
+                    'public.res_partner_category', 'public.res_country'}
+        if not required <= source.keys():
+            raise Failed('required source fingerprint tables missing')
+        here = parse_arm_fingerprint(psql('odoo18-db', 'postgres', 'odoo', FINGERPRINT_SQL))
+    except (Failed, OSError, UnicodeError) as error:
+        ev.save('arm-compare.json', {'schema_version': 1, 'status': 'invalid_input',
+                                   'error_type': type(error).__name__})
+        ev.check('ARM fingerprint input valid', False, type(error).__name__)
+        return
     same = sorted(t for t in source if here.get(t) == source[t])
     rows_differ = sorted(t for t in source if t in here and here[t][0] != source[t][0])
     content_differs = sorted(t for t in source if t in here and here[t][0] == source[t][0] and here[t][1] != source[t][1])
     missing, added = sorted(set(source) - set(here)), sorted(set(here) - set(source))
-    ev.save('arm-compare.json', {'identical': len(same), 'rows_differ': {t: (source[t][0], here[t][0]) for t in rows_differ},
-                                 'content_differs': content_differs, 'missing': missing, 'added': added})
-    ev.log(f'compare: {len(same)}/{len(source)} tables identical; rows differ {rows_differ}; content differs '
-           f'{content_differs}; missing {missing}; added {added}')
-    for table in ('public.res_partner', 'public.woow_import_probe', 'public.res_partner_category', 'public.res_country'):
-        ev.check(f'ARM source and x86 copy: {table} identical row by row', here.get(table) == source.get(table), (source.get(table), here.get(table)))
-    ev.check('ARM source and x86 copy: no table lost', not missing, missing)
+    # Every changed table needs evidence. No table name grants an exemption.
+    changed = sorted(set(rows_differ) | set(content_differs))
+    unresolved = sorted(set(changed) | set(missing) | set(added))
+    ev.save('arm-compare.json', {'schema_version': 1,
+            'status': 'unverified_differences' if unresolved else 'equal_fingerprints',
+            'source_tables': len(source), 'target_tables': len(here),
+            'unverified_tables': unresolved, 'identical': len(same),
+            'rows_differ': {t: (source[t][0], here[t][0]) for t in rows_differ},
+            'content_differs': content_differs, 'missing': missing, 'added': added,
+            'requires_row_evidence': changed})
+    ev.check('ARM source and x86 copy: exact table inventory', not missing and not added,
+             {'missing': missing, 'added': added})
+    ev.check('ARM source and x86 copy: all table row counts identical', not rows_differ, rows_differ)
+    ev.check('ARM source and x86 copy: all equal-count table contents identical',
+             not content_differs, content_differs)
+    if unresolved:
+        ev.log('Unverified table differences; no automatic exemption: ' + ', '.join(unresolved))
 
 
 # ---------------------------------------------------------------- review-fix scenarios (FIXPLAN item 21)
