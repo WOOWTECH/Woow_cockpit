@@ -1,0 +1,60 @@
+{
+  "scope": "Executable independent lab harness; no device execution this turn",
+  "entry": "tests/e2e/lab/odoo_capture.py",
+  "sql": "tests/e2e/lab/odoo_capture.sql",
+  "source_precision": {
+    "existing_file": "~/.woowbk-lab/evidence/arm-ha-import/source-fingerprint.txt",
+    "existing": "205 woowtest table row counts and sorted composite-row-text MD5; no schema, primary-key/field hashes or restore-stage provenance. Cannot explain the four table differences.",
+    "new": "Same conversion job opens the selected real HA archive through the installed engine's hardened member_pass/start_ha_cluster. Source capture runs SELECTs on its ephemeral PG16 clone before dump/transform, not on HA live or target baseline. PG16 may replay WAL in the clone; no Odoo executes there."
+  },
+  "stage_chain": [
+    "target_before: target settings context only, never source",
+    "source_cold: actual archive-derived PG16 woowtest, no other client sessions",
+    "restored_cold: that same dump in temporary PG17 odoo, before settings_sql",
+    "converted_cold: after conversion and carry_settings, before packaging/app startup",
+    "runtime: restore the returned converted backup ID, then capture live DB",
+    "quiescent: stop odoo.service, require inactive and zero other DB clients, capture again",
+    "finally: restore specified Odoo baseline using existing engine, restart service; failed recovery prevents complete manifest"
+  ],
+  "capture_contract": [
+    "Read-only repeatable-read transaction; UTC/ISO/float canonicalization; statement and lock timeouts",
+    "All four tables, all columns including unknown future fields, id primary key, column type/ordinal/nullability/default hash/collation/generated/identity, per-row and per-cell SHA256, zero-inclusive counts",
+    "Duplicate JSON keys, rows, columns, counts; missing columns/tables; wrong database; partial output; stage reorder; cross-run/archive/job; active clients in cold/quiescent stages all fail closed",
+    "Binds actual archive SHA256 before/after, installed engine module manifest hash before/after, SQL hash, conversion job, converted backup ID, restore job, run ID and chained capture hashes",
+    "0600 files and 0700 run directories. Journal and digests remain private. No raw row values or secrets in console output",
+    "Every field/schema/row difference fails. Settings transformations and runtime events are NOT automatically approved; no table allowlist or supplied approval file"
+  ],
+  "commands": {
+    "local_test": "python3 -B -I -m unittest discover -s tests/e2e/lab -p test_odoo_capture.py -v",
+    "run_only_after_slot": "python3 -B -I tests/e2e/lab/odoo_capture.py run --slot-granted --request /PRIVATE/odoo-capture-request.json",
+    "fetch_after_run": "python3 -B -I tests/e2e/lab/odoo_capture.py fetch --run-id RUN_ID_FROM_DIRECTORY --output /PRIVATE/new-empty-capture-dir",
+    "offline_compare": "python3 -B -I tests/e2e/lab/odoo_capture.py compare /PRIVATE/new-empty-capture-dir"
+  },
+  "request_file": {
+    "permissions": "0600, regular file; existing uploaded exact test archive and lab-only credentials",
+    "fields": {
+      "ha_backup_id": "HA upload ID of exact intended archive",
+      "archive_sha256": "64 lowercase hex: SHA256 of the exact uploaded archive bytes, not plaintext/decrypted variant",
+      "database": "woowtest",
+      "baseline": "Odoo baseline backup ID approved for this allocated run",
+      "key": "optional HA test backup key (omit for unencrypted archive); never put in command argv"
+    }
+  },
+  "exit_codes": {"0": "equal four-table cells only", "1": "complete capture with unverified differences", "2": "invalid, incomplete or execution failed"},
+  "local_validation": {
+    "new_harness_tests": 14,
+    "existing_HA_tests": 40,
+    "logs": ["/tmp/odoo-capture-tests.log", "/tmp/odoo-capture-ha-regression.log"],
+    "fault_injection": ["candidate restore failure", "runtime capture failure", "baseline restore failure", "cross-run/archive/job", "tampered/partial captures", "unknown field changes", "host isolation rejection"]
+  },
+  "not_yet_validated": [
+    "No dev-c slot allocated; no device queries, deployment or restore this turn. Omnigent dev-d shared-host work is unaffected.",
+    "No local PostgreSQL server or SQL parser available. SQL has not executed on PostgreSQL; actual installed engine hooks and runtime command chain await allocated lab run.",
+    "Quiescence is stopped Odoo plus zero other client sessions at snapshot, not a global scheduler/DDL lease. Exclusive slot and no external DB writers must be maintained throughout.",
+    "Runtime journal may lack sufficient producer/cron/GC causality. Such differences remain unverified; all transformations currently remain strict differences as well.",
+    "Only these four tables and column schema/cells are compared. Indexes, non-PK constraints, triggers, sequences, filestore and full application parity still require existing acceptance checks.",
+    "No signing/attestation of artifacts. Hash chain detects inconsistency, not a malicious actor rewriting all files.",
+    "SIGKILL/host failure cannot execute finally recovery; outcome/complete markers must be checked and engine recovery used before any acceptance claim."
+  ],
+  "historical_results": "Original 31/32 and previous candidate 23/23, 61/61 remain historical; no new real acceptance pass claimed."
+}
