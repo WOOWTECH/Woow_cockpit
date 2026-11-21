@@ -1,6 +1,7 @@
 """Synthetic full conversion exercises the internal candidate; public guard stays intact."""
 from unittest import mock
 
+from woowbackup import haimport
 from woowbackup import ha_omnigent as omni
 from woowbackup.errors import BackupError
 from .test_ha_omnigent import OmnigentCase, World, HASH, BUNDLE
@@ -33,10 +34,12 @@ class CandidateFlowTests(OmnigentCase):
         return COLUMNS
 
     def run_candidate(self, **kwargs):
-        # Test-only routing to the private candidate; no application guard is changed.
-        with mock.patch.object(omni, 'convert', lambda *args: omni._convert_candidate(*args, schema_ddl_quiesced=True)), \
-             mock.patch.object(omni, 'capture_consistent_target_schema', self.synthetic_snapshot):
-            return self.convert(self.upload_omnigent(), ['omnigent'], **kwargs)
+        self.catalog['omnigent'].secrets = [{'name': 'omnigent-postgres-password'},
+                                             {'name': 'omnigent-database-url'}]
+        params = {'source': 'ha', 'ha_backup_id': self.upload_omnigent(), 'apps': ['omnigent'],
+                  'encrypt': True, 'test_mode': False, **kwargs}
+        with mock.patch.object(omni, 'capture_consistent_target_schema', self.synthetic_snapshot):
+            return haimport._run_omnigent_candidate(self.ctx(), params, schema_ddl_quiesced=True)
 
     def test_full_synthetic_backup_candidate(self):
         result = self.run_candidate(test_mode=True)
@@ -73,3 +76,31 @@ class CandidateFlowTests(OmnigentCase):
         with self.assertRaises(BackupError) as caught:
             omni._convert_candidate(mock.Mock(), self.catalog['omnigent'], False, None, schema_ddl_quiesced=False)
         self.assertIn('結構變更', caught.exception.message)
+
+    def test_private_entry_rejects_truthy_quiescence_and_mixed_apps(self):
+        for apps, guarantee in [(['omnigent'], False), (['omnigent'], 1),
+                                (['omnigent'], 'yes'), (['omnigent', 'emqx'], True)]:
+            with self.subTest(apps=apps, guarantee=guarantee), self.assertRaises(BackupError):
+                haimport._run_omnigent_candidate(self.ctx(), {'apps': apps},
+                                                 schema_ddl_quiesced=guarantee)
+        self.assertEqual(self.world.runs, [])
+        self.assertEqual(self.storage.list_backups(), [])
+
+    def test_unregistered_quadlet_secret_refuses_before_conversion(self):
+        for declarations in [[], [{'name': 'omnigent-postgres-password'}],
+                             [{'name': 'omnigent-postgres-password'}] * 2]:
+            self.catalog['omnigent'].secrets = declarations
+            with self.subTest(declarations=declarations), self.assertRaises(BackupError) as caught:
+                haimport._run_omnigent_candidate(self.ctx(), {
+                    'apps': ['omnigent'], 'ha_backup_id': self.upload_omnigent()},
+                    schema_ddl_quiesced=True)
+            self.assertIn('機密未完整登記', caught.exception.message)
+        self.assertEqual(self.world.runs, [])
+        self.assertEqual(self.storage.list_backups(), [])
+
+    def test_request_fields_cannot_enable_public_conversion(self):
+        with self.assertRaises(BackupError) as caught:
+            self.convert(self.upload_omnigent(), ['omnigent'], schema_ddl_quiesced=True,
+                         omnigent_candidate=True)
+        self.assertEqual(caught.exception.message, omni.SECURITY_BLOCKER)
+        self.assertEqual(self.storage.list_backups(), [])

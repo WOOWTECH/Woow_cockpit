@@ -768,6 +768,20 @@ def convert(work, app, test_mode, out_dir):
     raise BackupError('incompatible', SECURITY_BLOCKER, app=app.id)
 
 
+def require_registered_secrets(work, app):
+    """Every target Quadlet secret must be carried by the real import adapter.
+
+    This registers names, not values; cookie/artifact and pi credentials are carried
+    inside their volumes. Never read credentials merely to enumerate dependencies.
+    """
+    declared = [item['name'] for item in app.secrets]
+    referenced = {spec.split(',', 1)[0] for text in work.quadlets(app).values()
+                  for spec in tempctr.quadlet_secrets(text)}
+    if len(declared) != len(set(declared)) or not referenced <= set(declared):
+        raise BackupError('incompatible', 'Omnigent 的 Quadlet 機密未完整登記於應用設定，無法建立可回復候選。',
+                          app=app.id)
+
+
 def _convert_candidate(work, app, test_mode, out_dir, *, schema_ddl_quiesced):
     """Internal only: caller must guarantee no target schema DDL during capture."""
     if schema_ddl_quiesced is not True:
