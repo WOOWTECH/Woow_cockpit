@@ -1,0 +1,37 @@
+{
+  "scope": "real test backup decrypted header validation only; no restore",
+  "results": [
+    {
+      "fixture_arch": "x86",
+      "schema": 1,
+      "app": "emqx",
+      "archive_bytes": 137943040,
+      "member_bytes": 137936119,
+      "encryption": "v3",
+      "restore_allowed": false,
+      "semantic_validation": "pending",
+      "status": "metadata-contract-passed",
+      "addon_version": "5.9.1",
+      "upstream_version": "5.8.9",
+      "source_arch": "amd64",
+      "source_state": "stopped",
+      "sha256": "0a53e93888209316040af505484bba3ee3891c2ad2df7ae689bc0d4fd02690f9"
+    },
+    {
+      "fixture_arch": "arm",
+      "schema": 1,
+      "app": "emqx",
+      "archive_bytes": 117207040,
+      "member_bytes": 117195765,
+      "encryption": "v3",
+      "restore_allowed": false,
+      "semantic_validation": "pending",
+      "status": "metadata-contract-passed",
+      "addon_version": "5.9.1",
+      "upstream_version": "5.8.9",
+      "source_arch": "aarch64",
+      "source_state": "stopped",
+      "sha256": "b6eb257cc5790bee30500f929d51ade66bfa8354dbe5bb61ba7c4bc08582f664"
+    }
+  ]
+}

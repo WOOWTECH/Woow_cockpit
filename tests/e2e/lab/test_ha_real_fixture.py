@@ -157,6 +157,47 @@ class FixtureGateTests(unittest.TestCase):
                 summary, _, _ = gate.inspect_open(opened, 'headscale', '0.29.4', metadata_only=True)
                 self.assertEqual(summary['encryption'], 'v3')
 
+    def encrypted_fixture(self, *, state='stopped'):
+        import tarfile
+        path = self.fixture('emqx', state=state)
+        with tarfile.open(path) as tar:
+            member = next(m for m in tar if m.name.endswith('.tar.gz'))
+            payload = tar.extractfile(member).read()
+            doc = json.load(tar.extractfile('./backup.json'))
+        doc['protected'] = True
+        path.write_bytes(hx.outer_bytes([(member.name, hx.v3_encrypt(payload))], doc))
+        return path
+
+    def test_real_v3_decrypt_stream_and_binding(self):
+        path = self.encrypted_fixture()
+        keys = gate.read_private_keys(io.BytesIO((hx.PASSWORD + '\n').encode()))
+        report = self.check(path, 'emqx', keys=keys)
+        self.assertEqual(report['source_state'], 'stopped')
+        self.assertEqual(report['encryption'], 'v3')
+        self.assertFalse(report['restore_allowed'])
+        self.assertNotIn(hx.PASSWORD, json.dumps(report))
+        with gate.source_binding(path, 'emqx', '5.8.9', report['sha256'], keys=keys) as bindings:
+            slug = bindings['addon_member']('woow-emqx')
+            with bindings['open'](slug) as stream:
+                self.assertTrue(stream.read(1))
+
+    def test_v3_wrong_key_and_hot_state_still_refused(self):
+        path = self.encrypted_fixture()
+        with self.assertRaises(Exception):
+            self.check(path, 'emqx', keys=gate.hasecuretar.Keys(hx.WRONG_PASSWORD))
+        path = self.encrypted_fixture(state='started')
+        with self.assertRaisesRegex(gate.Refused, 'cold-backup-required'):
+            self.check(path, 'emqx', keys=gate.hasecuretar.Keys(hx.PASSWORD))
+
+    def test_private_key_input_bounded_and_invalid_refused(self):
+        for value in (b'', b'x'*1025, b'\xff', b'one\ntwo'):
+            with self.subTest(size=len(value)), self.assertRaises(gate.Refused):
+                gate.read_private_keys(io.BytesIO(value))
+        stream = io.BytesIO(b'x'*2000)
+        with self.assertRaises(gate.Refused):
+            gate.read_private_keys(stream)
+        self.assertEqual(stream.tell(), 1025)
+
     def test_changed_source_refused(self):
         path = self.fixture()
         real_stamp = gate.stamp

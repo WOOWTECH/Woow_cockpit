@@ -1,3 +1,26 @@
+## 2026-11-21 encrypted cold-source increment
+
+The older unsupported-encryption note below is superseded for the private key path.
+`--key-stdin` reads at most 1025 bytes, refuses input over 1024 bytes, and passes
+an in-memory `hasecuretar.Keys` into the existing product streaming decryptor.
+Keys are never argv values or written to the report. Missing keys still refuse
+before opening encrypted members. `source_binding(..., keys=...)` uses the same
+validated context. Private preparation copies the original encrypted archive,
+not a plaintext export. `restore_allowed` remains false.
+
+24 local tests passed, including real generated SecureTar v3 decryption and
+binding, wrong-key refusal, hot-source refusal and bounded invalid stdin. The
+first run had two fixture construction errors (`./backup.json` spelling), fixed
+before the passing run. These tests are not service acceptance.
+
+Using only existing lab fixture credentials in memory, both actual stopped-enc
+archives were fully streamed and their selected member headers checked. x86 is
+amd64, ARM is aarch64; both inner states are stopped, addon 5.9.1 and upstream
+5.8.9. Sanitized evidence is `evidence/emqx-cold-encrypted-preflight-20261121.json`.
+No plaintext files were created, no containers started and no restore ran.
+This does not validate Mnesia contents, workload canaries, ACL behavior or grant
+permission to restore original data. All existing restore/guard restrictions remain.
+
 # EMQX / Headscale real HA fixture preparation — 2026-11-21
 
 Base: `d06e1668006a351f14339335e08b4781892c8214`. Candidate only. No lab,

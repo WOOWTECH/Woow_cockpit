@@ -12,7 +12,7 @@ from pathlib import Path
 import shutil
 import sys
 
-from woowbackup import habackup, ha_emqx, ha_headscale
+from woowbackup import habackup, ha_emqx, ha_headscale, hasecuretar
 
 MODULES = {'emqx': ha_emqx, 'headscale': ha_headscale}
 MAX_ARCHIVE = 16 * 1024 ** 3
@@ -44,7 +44,7 @@ def digest(fd):
         require(offset <= MAX_ARCHIVE, 'archive-too-large')
 
 
-def inspect_open(opened, app, target_version, *, metadata_only=False):
+def inspect_open(opened, app, target_version, *, metadata_only=False, keys=None):
     module = MODULES[app]
     layout = opened.layout
     require(layout.size <= MAX_ARCHIVE, 'archive-too-large')
@@ -60,13 +60,13 @@ def inspect_open(opened, app, target_version, *, metadata_only=False):
     if metadata_only:
         summary['status'] = 'outer-metadata-only'
         return summary, member, None
-    require(not member.encrypted, 'encrypted-fixture-unsupported')
+    require(not member.encrypted or keys is not None, 'encrypted-fixture-unsupported')
     report = habackup.Report()
     required = ({'data/emqx/node.name', 'data/emqx/data/configs/cluster.hocon'} if app == 'emqx'
                 else {ha_headscale.DB, ha_headscale.NOISE, ha_headscale.CONFIG})
     include = tuple(required) + (('data/emqx/data/mnesia',) if app == 'emqx' else (ha_headscale.WAL, ha_headscale.DNS))
     found, mnesia = set(), set()
-    with opened.open_addon(member.slug) as stream:
+    with opened.open_addon(member.slug, keys=keys) as stream:
         for entry in habackup.iter_entries(stream, habackup.Select(include=include), report):
             if entry.name in required:
                 require(entry.kind == 'file' and entry.size > 0, 'invalid-required-member')
@@ -95,7 +95,7 @@ def inspect_open(opened, app, target_version, *, metadata_only=False):
 
 
 @contextlib.contextmanager
-def source_binding(path, app, target_version, expected_sha256):
+def source_binding(path, app, target_version, expected_sha256, *, keys=None):
     """Bind product work.open/addon_member/addon_info to the REAL selected member.
 
     Caller owns the isolated lab work/target and runtime checks. No converter is
@@ -104,7 +104,7 @@ def source_binding(path, app, target_version, expected_sha256):
     with habackup.open_backup(path) as opened:
         before = stamp(opened.fd)
         require(digest(opened.fd) == expected_sha256, 'digest-mismatch')
-        summary, member, addon = inspect_open(opened, app, target_version)
+        summary, member, addon = inspect_open(opened, app, target_version, keys=keys)
         require(stamp(opened.fd) == before, 'source-changed')
 
         def addon_member(slug):
@@ -117,18 +117,18 @@ def source_binding(path, app, target_version, expected_sha256):
 
         def open_member(slug):
             require(slug == member.slug, 'wrong-member-binding')
-            return opened.open_addon(slug)
+            return opened.open_addon(slug, keys=keys)
 
         yield {'open': open_member, 'addon_member': addon_member,
                'addon_info': addon_info}
         require(stamp(opened.fd) == before, 'source-changed')
 
 
-def preflight(path, app, target_version, *, metadata_only=False, prepare=None):
+def preflight(path, app, target_version, *, metadata_only=False, prepare=None, keys=None):
     require(not (metadata_only and prepare), 'metadata-only-cannot-prepare')
     with habackup.open_backup(path) as opened:
         before = stamp(opened.fd)
-        summary, _, _ = inspect_open(opened, app, target_version, metadata_only=metadata_only)
+        summary, _, _ = inspect_open(opened, app, target_version, metadata_only=metadata_only, keys=keys)
         if metadata_only:
             return summary
         summary['sha256'] = digest(opened.fd)
@@ -160,17 +160,33 @@ def preflight(path, app, target_version, *, metadata_only=False, prepare=None):
         return summary
 
 
+def read_private_keys(stream):
+    """Read bounded key text from private stdin, never argv/environment or output."""
+    raw = stream.read(1025)
+    require(isinstance(raw, bytes) and 0 < len(raw) <= 1024, 'invalid-private-key-input')
+    try:
+        password = raw.decode('ascii').rstrip('\r\n')
+        require(bool(password) and '\n' not in password and '\r' not in password,
+                'invalid-private-key-input')
+        return hasecuretar.Keys(password)
+    except Exception:
+        raise Refused('invalid-private-key-input') from None
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('backup', type=Path)
     parser.add_argument('--app', choices=sorted(MODULES), required=True)
     parser.add_argument('--target-version', required=True)
     parser.add_argument('--metadata-only', action='store_true')
+    parser.add_argument('--key-stdin', action='store_true', help='bounded private key input; never saved')
     parser.add_argument('--prepare', type=Path, help='new private directory; copies original archive, no restore')
     args = parser.parse_args(argv)
     try:
+        require(not (args.key_stdin and args.metadata_only), 'metadata-does-not-need-key')
+        keys = read_private_keys(sys.stdin.buffer) if args.key_stdin else None
         result = preflight(args.backup, args.app, args.target_version,
-                           metadata_only=args.metadata_only, prepare=args.prepare)
+                           metadata_only=args.metadata_only, prepare=args.prepare, keys=keys)
     except Exception as exc:
         # Parser errors may contain secret-bearing archive paths: fixed codes only.
         result = {'status': 'refused', 'reason': str(exc) if isinstance(exc, Refused) else 'archive-or-io-error',
