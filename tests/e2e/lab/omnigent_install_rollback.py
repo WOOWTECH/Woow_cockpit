@@ -16,6 +16,7 @@ import shutil
 import sys
 import tempfile
 import time
+import traceback
 from types import SimpleNamespace
 
 import omnigent_real_app_chain as chain
@@ -113,7 +114,7 @@ def specification():
             " pg_isready -q -h 127.0.0.1 -U postgres; do sleep 1; done'\n"),
         files[2]: ('[Container]\nImage=sha256:' + chain.IMAGE + '\nContainerName=' + runner +
             '\nNetwork=none\nPull=never\nLogDriver=none\nVolume=' + chain.PIVOL + ':/data/pi-agent\n'
-            'Entrypoint=/bin/sleep\nExec=infinity\nPodmanArgs=--memory=32m --pids-limit=32\n' + common),
+            'Exec=infinity\nPodmanArgs=--entrypoint=/bin/sleep --memory=32m --pids-limit=32\n' + common),
     }
     raw = {'schema': 1, 'id': 'omnigent', 'name': 'Synthetic Omnigent installer',
            'owner': 'appowner', 'adapter': 'quadlet-postgres', 'quadlet': {'files': files},
@@ -421,5 +422,7 @@ if __name__ == '__main__':
         main()
     except Exception as error:
         # Exception messages and command stderr may contain synthetic secrets.
-        chain.event('installer_failed', error_type=type(error).__name__)
+        chain.event('installer_failed', error_type=type(error).__name__,
+                    frames=[{'file': Path(frame.filename).name, 'line': frame.lineno, 'function': frame.name}
+                            for frame in traceback.extract_tb(error.__traceback__)])
         sys.exit(1)
