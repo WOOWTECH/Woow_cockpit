@@ -4,6 +4,8 @@ import json
 import os
 from pathlib import Path
 import tempfile
+import subprocess
+import sys
 import unittest
 from unittest.mock import patch
 
@@ -197,6 +199,76 @@ class FixtureGateTests(unittest.TestCase):
         with self.assertRaises(gate.Refused):
             gate.read_private_keys(stream)
         self.assertEqual(stream.tell(), 1025)
+
+    def cli_command(self, path, *args):
+        return [sys.executable, str(Path(gate.__file__).resolve()), str(path),
+                '--app', 'emqx', '--target-version', '5.8.9', *args]
+
+    def assert_cli_output(self, result, expected):
+        # Boolean assertions keep even unexpected secret output out of test logs.
+        output = result.stdout + result.stderr
+        for secret in (hx.PASSWORD.encode(), hx.WRONG_PASSWORD.encode(),
+                       b'DO-NOT-PRINT-SECRET', str(self.root).encode()):
+            self.assertFalse(secret in output, 'CLI exposed a private marker')
+        self.assertTrue(result.stderr == b'', 'CLI emitted unexpected stderr')
+        self.assertTrue(result.stdout == (json.dumps(expected, sort_keys=True) + '\n').encode(),
+                        'CLI output differs from the sanitized contract')
+
+    def test_v3_cli_private_key_failures(self):
+        path = self.encrypted_fixture()
+        original = path.read_bytes()
+        cases = (
+            ('missing-option', (), b'', 'encrypted-fixture-unsupported'),
+            ('empty-stdin', ('--key-stdin',), b'', 'invalid-private-key-input'),
+            ('wrong-key', ('--key-stdin',), hx.WRONG_PASSWORD.encode(), 'archive-or-io-error'),
+            ('oversize', ('--key-stdin',), b'DO-NOT-PRINT-SECRET' + b'x' * 1025,
+             'invalid-private-key-input'),
+            ('non-ascii', ('--key-stdin',), b'DO-NOT-PRINT-SECRET\xff', 'invalid-private-key-input'),
+            ('multiline', ('--key-stdin',), b'DO-NOT-PRINT-SECRET\nsecond', 'invalid-private-key-input'),
+        )
+        for name, args, value, reason in cases:
+            with self.subTest(case=name):
+                dest = self.root / name
+                result = subprocess.run(self.cli_command(path, *args, '--prepare', str(dest)),
+                                        input=value, capture_output=True, timeout=10)
+                self.assertEqual(result.returncode, 2)
+                self.assert_cli_output(result, {'status': 'refused', 'reason': reason,
+                                                'restore_allowed': False})
+                self.assertFalse(dest.exists())
+                self.assertTrue(path.read_bytes() == original, 'CLI changed the source')
+        self.assertEqual(list(self.root.iterdir()), [path])
+
+    def test_v3_cli_valid_key_control(self):
+        path = self.encrypted_fixture()
+        expected = self.check(path, 'emqx', keys=gate.hasecuretar.Keys(hx.PASSWORD))
+        result = subprocess.run(self.cli_command(path, '--key-stdin'),
+                                input=(hx.PASSWORD + '\n').encode(), capture_output=True, timeout=10)
+        self.assertEqual(result.returncode, 0)
+        self.assert_cli_output(result, expected)
+        self.assertFalse(expected['restore_allowed'])
+        self.assertEqual(expected['encryption'], 'v3')
+        self.assertEqual(list(self.root.iterdir()), [path])
+
+    def test_v3_cli_oversize_refuses_without_waiting_for_eof(self):
+        path = self.encrypted_fixture()
+        dest = self.root / 'prepared'
+        process = subprocess.Popen(self.cli_command(path, '--key-stdin', '--prepare', str(dest)),
+                                   stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        try:
+            # Keep the pipe open: reading beyond the 1025-byte bound would hang.
+            process.stdin.write(b'DO-NOT-PRINT-SECRET'.ljust(1025, b'x'))
+            process.stdin.flush()
+            self.assertEqual(process.wait(timeout=10), 2)
+            stdout, stderr = process.communicate(timeout=10)
+            self.assert_cli_output(subprocess.CompletedProcess(process.args, process.returncode,
+                                                               stdout, stderr),
+                                   {'status': 'refused', 'reason': 'invalid-private-key-input',
+                                    'restore_allowed': False})
+            self.assertFalse(dest.exists())
+        finally:
+            if process.poll() is None:
+                process.kill()
+            process.communicate(timeout=10)
 
     def test_changed_source_refused(self):
         path = self.fixture()
