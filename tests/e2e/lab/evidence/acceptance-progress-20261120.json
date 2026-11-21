@@ -1,5 +1,5 @@
 {
-  "date": "2026-11-20",
+  "date": "2026-11-21",
   "commercial_acceptance": false,
   "public_import_guards": "retained",
   "scope": {
@@ -135,17 +135,17 @@
     }
   ],
   "odoo_n8n_revalidation_20261121": {
-    "status": "blocked_before_restore_pending_lab_isolation",
+    "status": "restore_completed_acceptance_failed",
     "driver_commit": "f37716b",
     "local_boundary_tests": {
       "run": 3,
       "passed": 3
     },
-    "actual_entry_result": "exit2 before credentials and jobs",
+    "actual_entry_result": "31/32; n8n community node probe timeout; baseline restored",
     "dev_c_observed": {
-      "state": "exited",
-      "network": "slirp4netns",
-      "published_port": 19093
+      "state": "running",
+      "network": "none",
+      "ports": {}
     },
     "historical_arm_evidence": {
       "path": "~/.woowbk-lab/evidence/arm-ha-import-run2/20261119T091730/results.json",
@@ -155,11 +155,47 @@
       "current_version_revalidation": false
     },
     "remaining_scope": [
-      "latest code deployed and fingerprinted",
-      "isolated restore and application verification",
+      "n8n community node timeout",
+      "strict Odoo four-table difference verification",
+      "remaining archive scenarios on final version",
       "multi-GB and >8GiB member limits",
       "ARM target device",
       "cross-physical-device restore"
-    ]
-  }
+    ],
+    "tested_source_commit": "aaa37480be48814aa3fe3c17e78162555233e872",
+    "installed_engine_hash_matches": 39,
+    "actual_result_path": "/home/woowtechopenclaw/.woowbk-lab/evidence/arm-restore-revalidation-20261121/20261121T083157/results.json",
+    "passed": 31,
+    "failed": 1,
+    "table_comparison": {
+      "identical": 201,
+      "total": 205,
+      "unverified_differences": [
+        "bus_bus",
+        "ir_cron_progress",
+        "ir_config_parameter",
+        "ir_cron"
+      ]
+    }
+  },
+  "latest_external_worktree_results": [
+    {
+      "service": "Omnigent",
+      "commit": "c7b7bb4",
+      "result": "synthetic Supervisor real-app chain pass; main integration pending",
+      "limits": [
+        "replayed target info",
+        "logs unavailable",
+        "installer rollback pending"
+      ]
+    },
+    {
+      "service": "LiteLLM",
+      "commit": "7a1b67c",
+      "result": "offline build succeeded; actual app OOM exit137 at768MiB; cleanup verified",
+      "limits": [
+        "API decrypt migration and rollback untested"
+      ]
+    }
+  ]
 }

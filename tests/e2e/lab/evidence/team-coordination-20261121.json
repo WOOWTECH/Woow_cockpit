@@ -1,0 +1,45 @@
+{
+  "date": "2026-11-21",
+  "objective": "complete remaining HA-to-Podman acceptance with evidence; no deadline-based waiver",
+  "commercial_acceptance": false,
+  "owners": [
+    {
+      "name": "Kuhn",
+      "task": "LiteLLM OOM and actual app chain",
+      "agent": "01a1fbb0-8ee8-7330-b2f0-f38699a0b00c",
+      "lab": "dev-d exclusive"
+    },
+    {
+      "name": "Linnaeus",
+      "task": "n8n community node failure and ARM rerun",
+      "agent": "01a1fb4a-2e7e-7692-8a29-5e3ef2c77a1b",
+      "lab": "dev-c exclusive"
+    },
+    {
+      "name": "Copernicus",
+      "task": "Odoo strict data difference validation",
+      "agent": "01a1fb47-f48a-7a73-acb8-1d3d56138340",
+      "lab": "none; coordinate with dev-c owner"
+    },
+    {
+      "name": "Mencius",
+      "task": "Omnigent installer rollback candidate",
+      "agent": "01a1fbc1-5596-7470-8167-f6742d3c2a25",
+      "lab": "none; queued after dev-d release"
+    },
+    {
+      "name": "Plato",
+      "task": "EMQX Headscale true fixture preparation and contracts",
+      "agent": "01a1fbc1-649f-71f2-af19-f882c03c3e46",
+      "lab": "none; queued"
+    }
+  ],
+  "coordinator": "main agent: integration, evidence, lab scheduling",
+  "rules": [
+    "one heavyweight owner per device; check host and cgroup headroom before any run",
+    "private secrets never in evidence",
+    "preserve guards and existing services; no production changes",
+    "Pi excluded; Hermes rejected independent review remains manual; no bypass",
+    "report commit, command result, cleanup and untested scope"
+  ]
+}
