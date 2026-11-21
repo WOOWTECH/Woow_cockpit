@@ -95,7 +95,7 @@ def inspect_open(opened, app, target_version, *, metadata_only=False, keys=None)
 
 
 @contextlib.contextmanager
-def source_binding(path, app, target_version, expected_sha256, *, keys=None):
+def source_binding(path, app, target_version, expected_sha256, *, keys=None, required_encryption=None):
     """Bind product work.open/addon_member/addon_info to the REAL selected member.
 
     Caller owns the isolated lab work/target and runtime checks. No converter is
@@ -105,6 +105,8 @@ def source_binding(path, app, target_version, expected_sha256, *, keys=None):
         before = stamp(opened.fd)
         require(digest(opened.fd) == expected_sha256, 'digest-mismatch')
         summary, member, addon = inspect_open(opened, app, target_version, keys=keys)
+        require(required_encryption is None or summary['encryption'] == required_encryption,
+                'unexpected-encryption')
         require(stamp(opened.fd) == before, 'source-changed')
 
         def addon_member(slug):
