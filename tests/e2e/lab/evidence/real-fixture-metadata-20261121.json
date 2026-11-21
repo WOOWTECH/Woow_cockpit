@@ -1,0 +1,211 @@
+{
+  "base_commit": "d06e166",
+  "source_root": "/home/woowtechopenclaw/.woowbk-lab/ha-fixtures/20261119-b1",
+  "scope": "metadata only; no extraction, decryption, lab or restore",
+  "fixtures": [
+    {
+      "fixture": "arm/woow-b1-arm-emqx-stopped-enc/woow-b1-arm-emqx-stopped-enc.tar",
+      "app": "emqx",
+      "schema": 1,
+      "archive_bytes": 117207040,
+      "member_bytes": 117195765,
+      "encryption": "v3",
+      "restore_allowed": false,
+      "semantic_validation": "pending",
+      "status": "outer-metadata-only"
+    },
+    {
+      "fixture": "arm/woow-b1-arm-emqx-stopped-enc/woow-b1-arm-emqx-stopped-enc.tar",
+      "app": "headscale",
+      "status": "refused",
+      "reason": "missing-or-ambiguous-addon"
+    },
+    {
+      "fixture": "arm/woow-b1-arm-enc/woow-b1-arm-enc.tar",
+      "app": "emqx",
+      "schema": 1,
+      "archive_bytes": 278835200,
+      "member_bytes": 117194591,
+      "encryption": "v3",
+      "restore_allowed": false,
+      "semantic_validation": "pending",
+      "status": "outer-metadata-only"
+    },
+    {
+      "fixture": "arm/woow-b1-arm-enc/woow-b1-arm-enc.tar",
+      "app": "headscale",
+      "schema": 1,
+      "archive_bytes": 278835200,
+      "member_bytes": 152700162,
+      "encryption": "v3",
+      "restore_allowed": false,
+      "semantic_validation": "pending",
+      "status": "outer-metadata-only"
+    },
+    {
+      "fixture": "arm/woow-b1-arm-enc-uncompressed/woow-b1-arm-enc-uncompressed.tar",
+      "app": "emqx",
+      "schema": 1,
+      "archive_bytes": 341800960,
+      "member_bytes": 117762057,
+      "encryption": "v3",
+      "restore_allowed": false,
+      "semantic_validation": "pending",
+      "status": "outer-metadata-only"
+    },
+    {
+      "fixture": "arm/woow-b1-arm-enc-uncompressed/woow-b1-arm-enc-uncompressed.tar",
+      "app": "headscale",
+      "schema": 1,
+      "archive_bytes": 341800960,
+      "member_bytes": 153950795,
+      "encryption": "v3",
+      "restore_allowed": false,
+      "semantic_validation": "pending",
+      "status": "outer-metadata-only"
+    },
+    {
+      "fixture": "arm/woow-b1-arm-plain/woow-b1-arm-plain.tar",
+      "app": "emqx",
+      "schema": 1,
+      "archive_bytes": 278937600,
+      "member_bytes": 117166664,
+      "encryption": "none",
+      "restore_allowed": false,
+      "semantic_validation": "pending",
+      "status": "outer-metadata-only",
+      "preflight": {
+        "status": "refused",
+        "reason": "cold-backup-required"
+      }
+    },
+    {
+      "fixture": "arm/woow-b1-arm-plain/woow-b1-arm-plain.tar",
+      "app": "headscale",
+      "schema": 1,
+      "archive_bytes": 278937600,
+      "member_bytes": 152654947,
+      "encryption": "none",
+      "restore_allowed": false,
+      "semantic_validation": "pending",
+      "status": "outer-metadata-only",
+      "preflight": {
+        "schema": 1,
+        "app": "headscale",
+        "archive_bytes": 278937600,
+        "member_bytes": 152654947,
+        "encryption": "none",
+        "restore_allowed": false,
+        "semantic_validation": "pending",
+        "status": "metadata-contract-passed",
+        "addon_version": "0.1.3",
+        "upstream_version": "0.29.4",
+        "source_arch": "aarch64",
+        "source_state": "stopped",
+        "sha256": "1e6a4665315bc69fd114f8d43f7d429aecab53f07d07793ecf8c2c057a92c5d4"
+      }
+    },
+    {
+      "fixture": "x86/woow-b1-x86-emqx-stopped-enc/woow-b1-x86-emqx-stopped-enc.tar",
+      "app": "emqx",
+      "schema": 1,
+      "archive_bytes": 137943040,
+      "member_bytes": 137936119,
+      "encryption": "v3",
+      "restore_allowed": false,
+      "semantic_validation": "pending",
+      "status": "outer-metadata-only"
+    },
+    {
+      "fixture": "x86/woow-b1-x86-emqx-stopped-enc/woow-b1-x86-emqx-stopped-enc.tar",
+      "app": "headscale",
+      "status": "refused",
+      "reason": "missing-or-ambiguous-addon"
+    },
+    {
+      "fixture": "x86/woow-b1-x86-enc/woow-b1-x86-enc.tar",
+      "app": "emqx",
+      "schema": 1,
+      "archive_bytes": 331694080,
+      "member_bytes": 137934643,
+      "encryption": "v3",
+      "restore_allowed": false,
+      "semantic_validation": "pending",
+      "status": "outer-metadata-only"
+    },
+    {
+      "fixture": "x86/woow-b1-x86-enc/woow-b1-x86-enc.tar",
+      "app": "headscale",
+      "schema": 1,
+      "archive_bytes": 331694080,
+      "member_bytes": 183267363,
+      "encryption": "v3",
+      "restore_allowed": false,
+      "semantic_validation": "pending",
+      "status": "outer-metadata-only"
+    },
+    {
+      "fixture": "x86/woow-b1-x86-enc-uncompressed/woow-b1-x86-enc-uncompressed.tar",
+      "app": "emqx",
+      "schema": 1,
+      "archive_bytes": 875878400,
+      "member_bytes": 290790142,
+      "encryption": "v3",
+      "restore_allowed": false,
+      "semantic_validation": "pending",
+      "status": "outer-metadata-only"
+    },
+    {
+      "fixture": "x86/woow-b1-x86-enc-uncompressed/woow-b1-x86-enc-uncompressed.tar",
+      "app": "headscale",
+      "schema": 1,
+      "archive_bytes": 875878400,
+      "member_bytes": 508946638,
+      "encryption": "v3",
+      "restore_allowed": false,
+      "semantic_validation": "pending",
+      "status": "outer-metadata-only"
+    },
+    {
+      "fixture": "x86/woow-b1-x86-plain/woow-b1-x86-plain.tar",
+      "app": "emqx",
+      "schema": 1,
+      "archive_bytes": 336343040,
+      "member_bytes": 139300246,
+      "encryption": "none",
+      "restore_allowed": false,
+      "semantic_validation": "pending",
+      "status": "outer-metadata-only",
+      "preflight": {
+        "status": "refused",
+        "reason": "cold-backup-required"
+      }
+    },
+    {
+      "fixture": "x86/woow-b1-x86-plain/woow-b1-x86-plain.tar",
+      "app": "headscale",
+      "schema": 1,
+      "archive_bytes": 336343040,
+      "member_bytes": 186463801,
+      "encryption": "none",
+      "restore_allowed": false,
+      "semantic_validation": "pending",
+      "status": "outer-metadata-only",
+      "preflight": {
+        "schema": 1,
+        "app": "headscale",
+        "archive_bytes": 336343040,
+        "member_bytes": 186463801,
+        "encryption": "none",
+        "restore_allowed": false,
+        "semantic_validation": "pending",
+        "status": "metadata-contract-passed",
+        "addon_version": "0.1.3",
+        "upstream_version": "0.29.4",
+        "source_arch": "amd64",
+        "source_state": "stopped",
+        "sha256": "3871a468e2f3a11488df7c6a00a4a8ed7c5b89c3ba2dbc2903ec3bd677013516"
+      }
+    }
+  ]
+}
