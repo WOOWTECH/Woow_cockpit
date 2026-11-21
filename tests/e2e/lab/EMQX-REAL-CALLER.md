@@ -168,3 +168,61 @@ Not tested: real ciphertext/data/keys, Mnesia semantics, actual quotas/disk-full
 recovery, hostile concurrent path mutation, actual Podman/container removal,
 MQTT/ACL/TLS/bootstrap behavior, source/target secret coverage, installer/rollback,
 service preservation and live lab cleanup. No end-to-end acceptance is claimed.
+
+## Producer/error minimum candidate — 2026-11-22 (base `61773ec`)
+
+New internal opt-in entry: `emqx_private_boundary.build_registered_candidate`.
+It acknowledges producer-supplied source material before calling the existing
+builder. `Producer(readers)` requires an exact mapping of reviewed readers for
+backup-key, source-options, source-cookie, mqtt-auth, api-keys, tls,
+target-bootstrap and connectors. Each reader returns actual raw byte values in
+memory; empty explicitly declares absence, except backup-key cannot be empty.
+Unknown references/formats must make the reader raise. There are no filesystem,
+environment, CLI or production-secret readers/defaults in this increment.
+The same callable protocol permits an existing owner producer to register at
+its own capture boundary. No lab or service integration is activated.
+
+Registry limits: 64 KiB/value, 4096 distinct values, 1 MiB total; atomic refusal,
+no repeated categories, no mutation after complete-source sealing. Diagnostic
+snapshot scans cap input at 1 MiB and check raw, base64, hex, URL-percent and
+UTF-8 JSON escaped forms. Unsupported encoding declarations refuse. This is
+bounded exact-value scanning, not a universal decoder or artifact scanner.
+
+The new wrapper discards product `work.log` payloads and maps producer/product/
+transport/filesystem errors to `PrivateFailure('candidate-refused')`; interrupts
+and SystemExit map to `candidate-cancelled`. Exception chaining is suppressed.
+Do not publish tracebacks with locals, private package paths, process output or
+raw owner transport logs. Successful results remain private artifact paths.
+The older low-level builder retains its interface/error behavior; this new
+boundary must be explicitly selected by a future reviewed owner.
+
+Coverage is producer-bound registration, not proof of exhaustive extraction:
+real HA options/HOCON/Mnesia/TLS/connector reader implementations, real owner
+secret transport and dynamically issued/derived credentials are not wired.
+No automatic registration of decrypted/export artifacts is claimed; they remain
+private and require a separately reviewed coverage implementation. The registry
+is not a runtime attestation. Neither wrapper nor scanner grants lab access,
+restore approval or public guard removal.
+
+Incremental generated-fixture tests inject ENOSPC at private directory creation,
+build and package, plus cancellation during build and role cleanup. They check
+fixed errors and absence of per-call filesystem artifacts where cleanup works.
+ENOSPC combined with failed rmtree refuses and deliberately demonstrates private
+residue; the fixture teardown later removes it. Interrupted role cleanup cannot
+prove container removal. No actual disk filling or container operation occurred.
+
+Exact final commands:
+
+```sh
+TMPDIR="$PWD/.cli-test-tmp" PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=backup-engine:.:tests/e2e/lab python3 -m unittest test_emqx_private_boundary -v
+git diff --check
+git diff --exit-code 61773ec -- backup-engine/woowbackup/ha_emqx.py
+rmdir .cli-test-tmp
+```
+
+**10 new targeted tests passed in 0.591 s**, exit 0, no skips/failures.
+Earlier initial eight-case increment passed in 0.705 s; this is the same
+increment under development, not additional acceptance credit. The previously
+passed 74-test suite was not rerun. Diff/guard checks exit 0. No production
+secrets read, real archive opened, lab slot used, restore run or Hermes review
+retried. No real-source or service acceptance is claimed.
