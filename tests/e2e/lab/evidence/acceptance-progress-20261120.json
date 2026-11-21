@@ -197,5 +197,17 @@
         "API decrypt migration and rollback untested"
       ]
     }
-  ]
+  ],
+  "resumed_work_20261121": {
+    "main_commit": "092a92e",
+    "omnigent_internal_installer_local_checks": {
+      "run": 17,
+      "passed": 17,
+      "scope": "local fixture boundary tests; not real installation acceptance"
+    },
+    "litellm_test_source": "66eab5c",
+    "litellm_attempt13": "no final report at observation; not accepted",
+    "public_guards": "retained",
+    "manual_hermes_review": "still pending; not retried"
+  }
 }
