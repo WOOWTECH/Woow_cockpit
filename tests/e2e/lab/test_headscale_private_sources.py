@@ -58,6 +58,45 @@ class PrivateSourceTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             private.private_key(b'privkey:' + b'0' * 64)
 
+    def test_volume_source_policy_and_valid_archive(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            path = root / 'volume.tar'
+            value = b'privkey:' + b'1' * 64
+            with tarfile.open(path, 'w') as archive:
+                info = tarfile.TarInfo('noise.key')
+                info.size = len(value)
+                archive.addfile(info, io.BytesIO(value))
+            self.assertEqual(private.volume_key(path, 'noise.key'),
+                             [value.decode(), '1' * 64])
+            compressed = root / 'compressed.tar.gz'
+            import gzip
+            compressed.write_bytes(gzip.compress(path.read_bytes()))
+            with self.assertRaises(tarfile.ReadError):
+                private.volume_key(compressed, 'noise.key')
+            link = root / 'link'
+            link.symlink_to(path)
+            fifo = root / 'fifo'
+            os.mkfifo(fifo)
+            # Exercise the real CLI with a deadline: a FIFO must never block.
+            cases = [(link, None), (fifo, None), (root, None),
+                     (root / 'missing', None), (path, 32)]
+            for source, limit in cases:
+                with self.subTest(source=source.name, limit=limit):
+                    code = (
+                        "import importlib.util; "
+                        "s=importlib.util.spec_from_file_location('p', __import__('sys').argv[1]); "
+                        "m=importlib.util.module_from_spec(s); s.loader.exec_module(m); "
+                        + (f"m.MAX_FILE={limit}; " if limit else "") +
+                        "__import__('sys').argv=['helper','volume',__import__('sys').argv[2],'noise.key']; m.main()"
+                    )
+                    result = subprocess.run([sys.executable, '-c', code, private.__file__, str(source)],
+                                            capture_output=True, timeout=2)
+                    self.assertEqual(result.returncode, 1)
+                    self.assertEqual(result.stdout, b'')
+                    self.assertEqual(result.stderr,
+                                     b'Synthetic private source missing, invalid or unsupported\n')
+
     def test_source_size_boundary_uses_bounded_read(self):
         # A tiny substituted limit exercises the exact boundary without large
         # allocations. Observe the read request as well as its return value.

@@ -7,6 +7,7 @@ helper. Unknown Tailscale state formats fail closed instead of counting hashes.
 import base64
 import binascii
 import json
+import io
 import os
 import re
 import stat
@@ -78,8 +79,10 @@ def client_keys(data):
 
 
 def volume_key(path, name):
+    # Podman volume export produces plain tar. Use the same bounded, no-follow
+    # descriptor reader as other sources; reject compressed input as unsupported.
     matches = []
-    with tarfile.open(path, 'r:*') as archive:
+    with tarfile.open(fileobj=io.BytesIO(read_source(path)), mode='r:') as archive:
         for member in archive:
             if member.name.removeprefix('./') == name:
                 if not member.isfile() or member.size > 4096:
