@@ -3,6 +3,11 @@
 # Uses only new disposable containers and generated test credentials.
 set -Eeuo pipefail
 product_files=$1
+installer=${2:-0}
+[[ $installer == 0 || $installer == 1 ]] || exit 2
+if [[ $installer == 1 ]]; then
+  for tool in age age-keygen zstd; do command -v "$tool" >/dev/null || exit 1; done
+fi
 [[ $(id -u) == 1019 ]] || exit 1
 podman_timeout() { timeout 5s podman "$@"; }
 umask 077
@@ -261,5 +266,9 @@ private_source client_b_identity_after client "$test_dir/client-b/tailscaled.sta
 podman logs "$target_server" 2>&1 | python3 "$product_files/tests/e2e/lab/headscale-credential-events.py" --scan-log target_converted
 podman logs "$client_a" 2>&1 | python3 "$product_files/tests/e2e/lab/headscale-credential-events.py" --scan-log client_a
 podman logs "$client_b" 2>&1 | python3 "$product_files/tests/e2e/lab/headscale-credential-events.py" --scan-log client_b
+if [[ $installer == 1 ]]; then
+  PYTHONPATH="$product_files/backup-engine" python3 "$product_files/tests/e2e/lab/headscale_install_rollback.py" \
+    --run "$test_dir" "$target_volume" "$plane_volume"
+fi
 unset source_api_key target_api_key
 [[ "$auto" == PASS ]] || exit 1
