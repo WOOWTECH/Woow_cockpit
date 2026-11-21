@@ -209,5 +209,23 @@
     "litellm_attempt13": "no final report at observation; not accepted",
     "public_guards": "retained",
     "manual_hermes_review": "still pending; not retried"
+  },
+  "latest_integrated_omnigent": {
+    "commit": "31d6806",
+    "real_test_source": "ea48f32b1c67195a992c400eeaf0da11817605f3",
+    "evidence": "omnigent-install-rollback/omni-install-20261121/03/run.jsonl",
+    "real_synthetic_install_and_rollback": "passed",
+    "prior_failed_attempts_preserved": 2,
+    "postintegration_tests": {
+      "harness_install_app": 44,
+      "event_transport": 8
+    },
+    "commercial_acceptance": false,
+    "limits": [
+      "synthetic backup",
+      "captured info replay",
+      "DDL quiescence caller requirement",
+      "no general crash recovery acceptance"
+    ]
   }
 }
