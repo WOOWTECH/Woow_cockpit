@@ -1,0 +1,15 @@
+{
+  "source_commit": "fa27ad8bd1e4204fadc2c88c6b0cc80732d2b518",
+  "scope": "real encrypted ARM HA joined preflight fixed-stage diagnosis; no restore",
+  "exit": 1,
+  "elapsed_seconds": 105.75362169812433,
+  "stdout_sha256": "0d3388d102d8e51ebfffeb21339027dbd3a041b2647e52d86e665afa56381bc8",
+  "fixed_status": [
+    "PREFLIGHT STAGE REFUSED target_capture",
+    "ARM TRANSFER REFUSED",
+    "ARM POSTFLIGHT PASSED"
+  ],
+  "stdout_bytes": 82,
+  "stderr_bytes_not_published": 0,
+  "restore_executed": false
+}

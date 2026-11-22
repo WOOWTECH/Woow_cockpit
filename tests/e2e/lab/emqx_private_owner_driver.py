@@ -25,7 +25,7 @@ import re
 from emqx_captured_candidate import build_captured_candidate
 from emqx_owner_preflight import owner_preflight
 from emqx_owner_source_capture import capture_owner_source
-from emqx_owner_target import owner_target_readers, MAX_WIRE
+from emqx_owner_target import owner_target_readers, MAX_WIRE, OwnerCaptureRefused
 from emqx_private_boundary import PrivateFailure, MAX_VALUE
 from emqx_target_vendor_policy import bounded_vendor_callbacks, vendor_observer
 
@@ -107,6 +107,8 @@ def _held_vendor_observer(*, runner, broker):
                 or type(docs[0].get('Name')) is not str
                 or docs[0]['Name'].lstrip('/') != broker):
             raise ValueError()
+        from emqx_preflight_stage import mark
+        mark('target_vendor')
         with vendor_observer(broker=broker, owned_container_id=docs[0]['Id'],
                 private_eval=private_eval, private_inspect=private_inspect)(
                     generation=generation, private_values=private_values) as observed:
@@ -127,6 +129,8 @@ def _joined_owner_preflight(target, backup, *, source_password, expected_sha256,
     transport = curl_login_transport(runner=runner, broker=broker, login_url=login_url)
 
     def evaluate(expression):
+        from emqx_preflight_stage import mark
+        mark('target_native')
         response = runner.podman('exec', broker, 'emqx', 'eval', expression,
                                 timeout=30, max_output=MAX_WIRE, check=False)
         if (response.returncode or type(response.stdout) is not bytes
@@ -144,14 +148,18 @@ def _joined_owner_preflight(target, backup, *, source_password, expected_sha256,
             validate_source_capture(captured, binding, expected_source_profile)
         mark('source_validated')
         mark('target_capture')
-        with owner_target_readers(private_eval=evaluate, quiesce=quiesce,
-                vendor_observer=_held_vendor_observer(runner=runner, broker=broker)) as readers:
-            session = owner_preflight(captured=captured, target_readers=readers,
-                target_generation=readers.generation, private_transport=transport,
-                username=username, password=password, evidence_directory=evidence_directory,
-                evidence_name=evidence_name)
-            mark('joined_ready')
-            yield captured, binding, session
+        try:
+            with owner_target_readers(private_eval=evaluate, quiesce=quiesce,
+                    vendor_observer=_held_vendor_observer(runner=runner, broker=broker)) as readers:
+                session = owner_preflight(captured=captured, target_readers=readers,
+                    target_generation=readers.generation, private_transport=transport,
+                    username=username, password=password, evidence_directory=evidence_directory,
+                    evidence_name=evidence_name)
+                mark('joined_ready')
+                yield captured, binding, session
+        except OwnerCaptureRefused as failure:
+            mark('target_native_'+failure.phase)
+            raise
 
 
 def build_owner_candidate(work, app, adapter, target, backup, staging, job_id, *,

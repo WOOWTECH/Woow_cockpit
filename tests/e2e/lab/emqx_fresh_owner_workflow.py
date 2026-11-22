@@ -152,6 +152,8 @@ class FreshTarget:
         writers are not universally frozen; no completeness claim is added.
         The suspended ticker ends with this fixture's scoped container removal.
         """
+        from emqx_preflight_stage import mark
+        mark('target_quiescence')
         if not self.active or self.leased: raise ValueError()
         def empty():
             self.identity()
