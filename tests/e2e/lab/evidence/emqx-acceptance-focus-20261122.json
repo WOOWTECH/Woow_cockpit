@@ -1,0 +1,53 @@
+{
+  "scope": "HA EMQX backup to isolated Podman",
+  "commercial_acceptance": false,
+  "public_guard": "retained",
+  "candidate_commit": "5cff165",
+  "passed": [
+    {
+      "check": "native HOCON strict parsing + spool consumer integration",
+      "commit": "c49acc4",
+      "tests": 53,
+      "limit": "generated fixtures/native parser; cold Mnesia refused"
+    },
+    {
+      "check": "actual137936119byte generated private spool",
+      "commit": "23323dd",
+      "evidence": "emqx-private-spool-20261122/generated-large-source.json",
+      "limit": "capacity/hash only; not HA source"
+    },
+    {
+      "check": "actual registration counts bound before login/evidence",
+      "commit": "a8cbf5b",
+      "tests": 24,
+      "limit": "local regression; no broker claim"
+    }
+  ],
+  "running": [
+    {
+      "owner": "Turing",
+      "id": "01a2025f-4294-7301-a4b9-4d624f51ab0e",
+      "scope": "sole dev-d owner; actual runtime login producer evidence packaging",
+      "observation": "attempt5 scoped runtime login passed; not yet integrated; attempts1-4 retained"
+    },
+    {
+      "owner": "Mencius",
+      "id": "01a2025f-7206-7f43-8259-f058033f3889",
+      "scope": "bounded native Mnesia read-only exporter; real cold files gate retained"
+    }
+  ],
+  "remaining": [
+    "cold Mnesia DAT/DCD/DCL complete safe semantic extraction",
+    "all source secrets registered before workload/evidence",
+    "real HA cold backup candidate restore",
+    "target settings/ACL/data readback and MQTT allowed/denied probes",
+    "restart/rollback and cleanup on final integrated source",
+    "both actual source and issued credentials covered by exact evidence scans"
+  ],
+  "historical_preflight": "real x86/ARM encrypted HA metadata/full-stream read passed; not restore",
+  "notes": [
+    "spool consumes already decrypted/decompressed open_addon stream",
+    "c7a7cd0 incorrect compressed-input change fully reverted by5cff165; affected24 tests passed after revert",
+    "no Hermes review retry; no public guard bypass; no original production mutation"
+  ]
+}
