@@ -27,8 +27,10 @@ MASK='******'  # pinned emqx_utils:redact/1 secret marker, never equality proof.
 
 CATEGORIES=('rules','actions','connectors')
 REASONS=('type','missing','value','secret_wrapper')
+ACTION_FIELDS=('created_at','last_modified_at','parameters','connector','resource_opts','enable','description','other')
 OBJECT_STAGES=frozenset(('identity','registry','order','collector',
-    *(category+'_'+reason for category in CATEGORIES for reason in REASONS)))
+    *(category+'_'+reason for category in CATEGORIES for reason in REASONS),
+    *('actions_'+field+'_'+reason for field in ACTION_FIELDS for reason in REASONS)))
 OBJECT_PHASES=frozenset('object_integrity_'+stage for stage in OBJECT_STAGES)
 
 class NativeObjectPhaseRefused(PrivateFailure):
@@ -180,6 +182,19 @@ def _same_rule(expected,actual,path,secrets,config):
         _same(value,actual[key],path+(key,),secrets)
 
 
+def _same_action(expected,actual,path,secrets):
+    """Classify only a fixed action field name; no private value escapes."""
+    if type(expected) is not dict or type(actual) is not dict:
+        raise _Difference('type')
+    for key,value in expected.items():
+        field=key if key in ACTION_FIELDS else 'other'
+        if key not in actual:
+            raise NativeObjectPhaseRefused('actions_'+field+'_missing')
+        try:_same(value,actual[key],path+(key,),secrets)
+        except _Difference as error:
+            raise NativeObjectPhaseRefused('actions_'+field+'_'+error.reason) from None
+
+
 def compare_b1_objects_native(*,expected,source_api,native_values):
     """Keep nonsecret API comparison; resolve ONLY validated native secret paths.
 
@@ -231,6 +246,7 @@ def compare_b1_objects_native(*,expected,source_api,native_values):
                 observed=actual[key]
                 try:
                     if category=='rules':_same_rule(obj,observed,path,native['secrets'],native['config'])
+                    elif category=='actions':_same_action(obj,observed,path,native['secrets'])
                     else:_same(obj,observed,path,native['secrets'])
                 except _Difference as error:
                     raise NativeObjectPhaseRefused(category+'_'+error.reason) from None

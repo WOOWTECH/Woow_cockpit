@@ -171,7 +171,7 @@ class NativeObjectTests(unittest.TestCase):
         self.compare(self.native())
         row['created_at']='2023-11-14T22:13:20.123+00:00'
         self.refresh_api()
-        self.workflow_refuse(self.native(),'actions_type')
+        self.workflow_refuse(self.native(),'actions_created_at_type')
 
     def test_metadata_epoch_bounds_and_integer_exact_offsets(self):
         self.assertEqual(m._timestamp_ms('1970-01-01T00:00:00.000+00:00'),0)
@@ -191,7 +191,15 @@ class NativeObjectTests(unittest.TestCase):
                     elif reason=='missing':del rows[0][field]
                     else:rows[0][field]+=' generated-difference'
                     self.api_mode=True;self.observed=self.run_api();self.api_mode=False
-                    self.workflow_refuse(self.native(),category+'_'+reason)
+                    phase=(category+'_'+field+'_'+reason if category=='actions' else category+'_'+reason)
+                    self.workflow_refuse(self.native(),phase)
+
+    def test_action_field_diagnostic_is_fixed_and_does_not_echo_unknown_key(self):
+        self.documents['actions'][0]['generated_private_field']='generated-secret-value'
+        self.source_side.config['actions']['http']['b1_http_action']['generated_private_field']='other-secret-value'
+        self.expected=self.source_side.mint(self.captured,self.session)
+        self.api_mode=True;self.observed=self.run_api();self.api_mode=False
+        self.workflow_refuse(self.native(),'actions_other_value')
 
     def test_actual_collectors_to_workflow_secret_wrapper_and_success(self):
         import emqx_real_owner_workflow as workflow
