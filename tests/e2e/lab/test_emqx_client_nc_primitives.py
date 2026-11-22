@@ -35,7 +35,10 @@ class NCTests(unittest.TestCase):
                 '--memory=32m','--cpus=0.25','--pids-limit=16','--timeout=20'):
             self.assertIn(option,args)
         self.assertEqual(args[args.index('--tmpfs')+1],m.TMPFS)
-        self.assertIn('size=1048576,mode=0700,uid=1000,gid=1000',m.TMPFS)
+        self.assertIn('size=1048576,mode=1777',m.TMPFS)
+        self.assertNotIn('uid=',m.TMPFS);self.assertNotIn('gid=',m.TMPFS)
+        self.assertIn('--user=1000:1000',args)
+        self.assertIn('/bin/busybox mkdir -m 700 /work/private || setup_refused script_setup',m.SCRIPT)
         self.assertEqual(args[-5:],('--entrypoint=/bin/busybox',m.CLIENT,'sh','-c',m.SCRIPT))
         for forbidden in ('-v','--volume','-e','--env','-p','--publish'):self.assertNotIn(forbidden,args)
         self.assertEqual(kwargs,dict(timeout=25,max_output=65536,check=False))
@@ -83,9 +86,9 @@ class NCTests(unittest.TestCase):
             result=subprocess.run(['/bin/sh','-n'],input=script.encode(),capture_output=True,timeout=3)
             self.assertEqual(result.returncode,0,result.stderr.decode())
         self.assertIn('for n in 1 2 3',inner)
-        self.assertIn('[ ! -s /work/request.1 ]',inner)
-        self.assertIn('/bin/busybox cmp -s /work/send.$n /work/request.$n',inner)
-        self.assertIn('/bin/busybox cmp -s /work/response /work/received.$n',inner)
+        self.assertIn('[ ! -s /work/private/request.1 ]',inner)
+        self.assertIn('/bin/busybox cmp -s /work/private/send.$n /work/private/request.$n',inner)
+        self.assertIn('/bin/busybox cmp -s /work/private/response /work/private/received.$n',inner)
         self.assertIn('/bin/busybox timeout 18',m.SCRIPT)
         self.assertNotIn('httpd',m.SCRIPT)
 
@@ -122,8 +125,9 @@ class NCTests(unittest.TestCase):
             with self.subTest(phase=phase),tempfile.TemporaryDirectory() as directory:
                 root=Path(directory);fake=root/'public-busybox';work=root/'work';work.mkdir()
                 fake.write_text("#!/bin/sh\ncase \"$1\" in\n"
-                    + "--list) " + ("exit 1" if phase=='inventory' else "printf 'nc\\nsh\\ntimeout\\ncmp\\n'") + ";;\n"
+                    + "--list) " + ("exit 1" if phase=='inventory' else "printf 'nc\\nsh\\ntimeout\\ncmp\\nmkdir\\n'") + ";;\n"
                     + "sh) " + ("exit 1" if phase=='script_setup' else "shift; exec /bin/sh \"$@\"") + ";;\n"
+                    + "mkdir) shift; exec /bin/mkdir \"$@\";;\n"
                     + "timeout) exit 127;;\n*) exit 99;;\nesac\n")
                 fake.chmod(0o700)
                 script=m.SCRIPT.replace('/bin/busybox',str(fake)).replace('/work/',str(work)+'/')
@@ -132,6 +136,10 @@ class NCTests(unittest.TestCase):
                 self.assertTrue(result.stdout.endswith(b'NCPRIMITIVE-REFUSED:'+phase.encode()+b'\n'))
                 with self.assertRaises(m.ClientNCRefused) as caught:m._validate(result)
                 self.assertEqual(caught.exception.phase,phase)
+                if phase=='script_exec':
+                    self.assertEqual((work/'private').stat().st_mode & 0o777,0o700)
+                    for name in ('empty','probe.sh'):
+                        self.assertEqual((work/'private'/name).stat().st_mode & 0o777,0o600)
 
     def test_existing_host_consumer_accepts_only_new_fixed_nc_failure_frames(self):
         import emqx_real_owner_transport as transport

@@ -1,0 +1,14 @@
+{
+  "source_commit": "b31aacbe53488ce8901c5ce7a8f9709712a472b0",
+  "scope": "pinned public NC primitive behavior only",
+  "exit": 1,
+  "elapsed_seconds": 3.231,
+  "stdout_sha256": "b6c35638263ca7d27b7f51e9f6780bd812c29d2562912c00042fd34c46ee525b",
+  "fixed_status": [
+    "REAL OWNER NC_LAUNCH_TMPFS_UID_GID REFUSED",
+    "REAL OWNER POSTFLIGHT PASSED"
+  ],
+  "preflight_reason": "none",
+  "stderr_bytes_not_published": 0,
+  "commercial_acceptance": "not-complete"
+}

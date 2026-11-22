@@ -13,7 +13,7 @@ from emqx_native_runtime import IMAGE
 from emqx_owned_client import owned_client
 
 RECEIPT=b'CLIENT NC PRIMITIVES PASSED\n'
-REQUIRED=('nc','sh','timeout','cmp')  # No head/cat/mkfifo or assumed applets used.
+REQUIRED=('nc','sh','timeout','cmp','mkdir')  # No head/cat/mkfifo or assumed applets used.
 LIMIT=65536
 BEGIN=b'NCPRIMITIVE-APPLETS-BEGIN\n'
 END=b'NCPRIMITIVE-APPLETS-END\n'
@@ -26,7 +26,9 @@ BEHAVIOR=('listener','health','empty','repeat_one','repeat_two','requests','resp
 PHASES=frozenset(('realm','input','owner','run','applets','timeout','cleanup','runner','stderr','output','exit_other',
     *('launch_'+str(code) for code in LAUNCH_CODES),*LAUNCH_125_PHASES,*SETUP,
     *('missing_'+name for name in REQUIRED),*BEHAVIOR))
-TMPFS='/work:rw,noexec,nosuid,nodev,size=1048576,mode=0700,uid=1000,gid=1000'
+# Rootless Podman rejects tmpfs uid/gid options. Only this fresh sidecar sees
+# the sticky scratch root; all work happens in its atomically created 0700 child.
+TMPFS='/work:rw,noexec,nosuid,nodev,size=1048576,mode=1777'
 
 # All script/HTTP bytes are compiled public synthetic inputs. No args, source
 # fields, host mounts, secret environment or arbitrary executable are accepted.
@@ -34,16 +36,17 @@ SCRIPT=r'''umask 077
 setup_refused() { printf 'NCPRIMITIVE-REFUSED:%s\n' "$1"; exit 1; }
 applets=$(/bin/busybox --list) || setup_refused inventory
 printf 'NCPRIMITIVE-APPLETS-BEGIN\n%s\nNCPRIMITIVE-APPLETS-END\n' "$applets"
-for applet in nc sh timeout cmp; do
+for applet in nc sh timeout cmp mkdir; do
  case "
 $applets
 " in *"
 $applet
 "*) ;; *) printf 'NCPRIMITIVE-REFUSED:missing_%s\n' "$applet"; exit 1;; esac
 done
+/bin/busybox mkdir -m 700 /work/private || setup_refused script_setup
 # noexec tmpfs is intentional: the fixed interpreter reads this private script.
-printf '%s' '' > /work/empty || setup_refused script_setup
-/bin/busybox sh -c 'printf "%s\n" "$1" > /work/probe.sh' sh '
+printf '%s' '' > /work/private/empty || setup_refused script_setup
+/bin/busybox sh -c 'printf "%s\n" "$1" > /work/private/probe.sh' sh '
 phase=listener
 loop=
 finish() {
@@ -54,16 +57,16 @@ finish() {
  exit "$code"
 }
 trap finish EXIT
-printf "HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nOK" > /work/response
-for n in 2 3; do printf "GET /public-probe/%s HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n" "$n" > /work/send.$n; done
+printf "HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nOK" > /work/private/response
+for n in 2 3; do printf "GET /public-probe/%s HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n" "$n" > /work/private/send.$n; done
 listen_loop() {
  for n in 1 2 3; do
-  /bin/busybox nc -l -p 19089 -s 127.0.0.1 -w 2 < /work/response > /work/request.$n 2>/work/listen.err || return 1
-  [ ! -s /work/listen.err ] || return 1
-  printf done > /work/done.$n
+  /bin/busybox nc -l -p 19089 -s 127.0.0.1 -w 2 < /work/private/response > /work/private/request.$n 2>/work/private/listen.err || return 1
+  [ ! -s /work/private/listen.err ] || return 1
+  printf done > /work/private/done.$n
  done
 }
-listen_loop > /work/loop.out 2>/work/loop.err &
+listen_loop > /work/private/loop.out 2>/work/private/loop.err &
 loop=$!
 ready() {
  attempt=0
@@ -79,7 +82,7 @@ ready() {
 done_connection() {
  attempt=0
  while [ "$attempt" -lt 20000 ]; do
-  [ -f "/work/done.$1" ] && return 0
+  [ -f "/work/private/done.$1" ] && return 0
   kill -0 "$loop" 2>/dev/null || return 1
   attempt=$((attempt+1))
  done
@@ -87,28 +90,28 @@ done_connection() {
 }
 ready || exit 1
 phase=health
-/bin/busybox nc -w 2 127.0.0.1 19089 < /work/empty > /work/received.1 2>/work/client.err || exit 1
-[ ! -s /work/client.err ] || exit 1
+/bin/busybox nc -w 2 127.0.0.1 19089 < /work/private/empty > /work/private/received.1 2>/work/private/client.err || exit 1
+[ ! -s /work/private/client.err ] || exit 1
 done_connection 1 || exit 1
 phase=empty
-[ ! -s /work/request.1 ] || exit 1
+[ ! -s /work/private/request.1 ] || exit 1
 for n in 2 3; do
  if [ "$n" = 2 ]; then phase=repeat_one; else phase=repeat_two; fi
  ready || exit 1
- /bin/busybox nc -w 2 127.0.0.1 19089 < /work/send.$n > /work/received.$n 2>/work/client.err || exit 1
- [ ! -s /work/client.err ] || exit 1
+ /bin/busybox nc -w 2 127.0.0.1 19089 < /work/private/send.$n > /work/private/received.$n 2>/work/private/client.err || exit 1
+ [ ! -s /work/private/client.err ] || exit 1
  done_connection "$n" || exit 1
 done
 phase=requests
-for n in 2 3; do /bin/busybox cmp -s /work/send.$n /work/request.$n || exit 1; done
+for n in 2 3; do /bin/busybox cmp -s /work/private/send.$n /work/private/request.$n || exit 1; done
 phase=responses
-for n in 1 2 3; do /bin/busybox cmp -s /work/response /work/received.$n || exit 1; done
+for n in 1 2 3; do /bin/busybox cmp -s /work/private/response /work/private/received.$n || exit 1; done
 wait "$loop" || exit 1
 loop=
 printf "NCPRIMITIVE-BEHAVIOR-PASSED\n"
 ' || setup_refused script_setup
 # Preserve a fixed exec failure if the timeout/interpreter cannot be invoked.
-/bin/busybox timeout 18 /bin/busybox sh /work/probe.sh
+/bin/busybox timeout 18 /bin/busybox sh /work/private/probe.sh
 code=$?
 case "$code" in 126|127) setup_refused script_exec;; esac
 exit "$code"
