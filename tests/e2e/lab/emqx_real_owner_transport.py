@@ -416,6 +416,24 @@ def read_result(child,*,timeout=900):
     return bytes(result)
 
 
+def _broken_pipe_refusal(child):
+    """A failed upload may recover only a complete, fixed child refusal.
+
+    Never admit, retry, retain evidence or accept a success frame after EPIPE.
+    Closing input gives an incomplete consumer EOF, not the host admission token.
+    stderr remains discarded; read_result bounds stdout, EOF, deadline and exit.
+    """
+    from emqx_real_owner_workflow import PHASES
+    try:child.stdin.close()
+    except BaseException:pass
+    try:
+        read_result(child,timeout=30)
+    except TransportRefused as error:
+        if error.phase in PHASES:return error.phase
+    except BaseException:pass
+    return None
+
+
 def main(argv=None):
     child=None;phase='profile'
     try:
@@ -478,6 +496,9 @@ def main(argv=None):
             print('REAL OWNER RESTORE ROLLBACK PASSED',flush=True)
         return 0
     except BaseException as error:
+        if isinstance(error,BrokenPipeError) and child is not None:
+            refused=_broken_pipe_refusal(child)
+            if refused is not None:phase=refused
         if type(error) is TransportRefused:phase=error.phase
         if child is not None:
             try:

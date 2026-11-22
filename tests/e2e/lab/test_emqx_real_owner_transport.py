@@ -120,6 +120,26 @@ class TransportTests(unittest.TestCase):
                 self.assertEqual(caught.exception.phase,expected)
             finally:child.wait();child.stdout.close()
 
+    def test_broken_pipe_reader_only_propagates_complete_allowlisted_nonzero_refusal(self):
+        import emqx_real_owner_transport as m
+        import subprocess,sys
+        from types import SimpleNamespace
+        from unittest.mock import Mock
+        for raw,code,expected in ((b'REALOWNER-REFUSED:budget\n',1,'budget'),
+                (b'REALOWNER-REFUSED:realm\n',1,'realm'),
+                (b'REALOWNER-REFUSED:budget\n',0,None),
+                (b'REALOWNER-REFUSED:budget',1,None),
+                (b'REALOWNER-REFUSED:private-generated-value\n',1,None),
+                (b'REALOWNER-REFUSED:budget\nextra-generated-output',1,None),
+                (b'generated-success',0,None)):
+            process=subprocess.Popen([sys.executable,'-c','import sys;sys.stdout.buffer.write('+repr(raw)+');sys.exit('+str(code)+')'],
+                stdout=subprocess.PIPE,stderr=subprocess.DEVNULL)
+            stdin=Mock();stdin.close.side_effect=BrokenPipeError()
+            child=SimpleNamespace(stdin=stdin,stdout=process.stdout,wait=process.wait)
+            try:self.assertEqual(m._broken_pipe_refusal(child),expected)
+            finally:process.wait();process.stdout.close()
+            stdin.close.assert_called_once()
+
     def test_fixed_imported_mode_dispatch_preserves_independent_source_frame(self):
         import emqx_real_owner_transport as m
         import emqx_real_owner_workflow as workflow

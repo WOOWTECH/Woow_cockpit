@@ -725,6 +725,60 @@ class FoundationTests(unittest.TestCase):
         for operation in (create,cleanup,history,build):operation.assert_not_called()
         self.assertEqual(list(self.root.glob('emqx-framed-private-*')),[])
 
+    def test_partial_upload_recovers_fixed_budget_refusal_without_admitting_actual_consumer(self):
+        import contextlib,hashlib,struct,subprocess,sys
+        from dataclasses import replace
+        import emqx_real_owner_transport as transport
+        from emqx_source_profiles import source_profile
+        key=b'generated-key';cipher=b'generated-cipher-bytes-not-authenticated'
+        archive=self.root/'generated-source.tar';archive.write_bytes(cipher)
+        profile=replace(source_profile(m.SOURCE_MODES[0]),archive=archive,sha256=hashlib.sha256(cipher).hexdigest())
+        class Sink(io.BytesIO):
+            def close(self):pass
+            def write(self,raw):
+                if raw==cipher:
+                    super().write(raw[:len(raw)//2]);raise BrokenPipeError()
+                return super().write(raw)
+        from emqx_framed_preflight import evidence_frame
+        for reply,status,expected in ((b'REALOWNER-REFUSED:budget\n',1,'BUDGET'),
+                (evidence_frame(transport.canonical_receipt()),0,'TRANSFER'),
+                (b'generated-private-output-not-an-enum',1,'TRANSFER')):
+            process=subprocess.Popen([sys.executable,'-c','import sys;sys.stdout.buffer.write('+repr(reply)+');sys.exit('+str(status)+')'],
+                stdout=subprocess.PIPE,stderr=subprocess.DEVNULL)
+            sink=Sink();child=SimpleNamespace(stdin=sink,stdout=process.stdout,wait=process.wait,terminate=Mock(wraps=process.terminate))
+            out=io.StringIO()
+            try:
+                with patch.object(transport,'bundle_code',return_value=b'code'),patch.object(transport,'dependencies',return_value=b'deps'), \
+                     patch.object(transport,'client_prefix',return_value=self.owner_prefix()),patch.object(transport,'read_fixed_fields',return_value=[key]), \
+                     patch.object(transport,'source_profile',return_value=profile),patch.object(transport.subprocess,'Popen',return_value=child), \
+                     patch.object(transport,'retain_restore_evidence') as retain,contextlib.redirect_stdout(out):
+                    self.assertEqual(transport.main(['--real-restore']),1)
+                self.assertEqual(out.getvalue(),'REAL OWNER '+expected+' REFUSED\n');retain.assert_not_called();child.terminate.assert_not_called()
+                self.assertNotIn(transport.ADMISSION,sink.getvalue())
+            finally:process.wait();process.stdout.close()
+        frame=sink.getvalue();self.assertNotIn(transport.ADMISSION,frame)
+        raw=io.BytesIO(frame)
+        for expected in (b'code',b'deps'):self.assertEqual(raw.read(struct.unpack('!Q',raw.read(8))[0]),expected)
+        self.assertEqual(raw.read(1),b'G');stream=transport.AdmittedStream(raw)
+        with patch.object(m,'OwnerProvision',return_value=self.provision),patch.object(m,'_full_restore_budget'), \
+             patch('emqx_fresh_owner_workflow.source_profile',return_value=profile), \
+             patch('emqx_fresh_owner_workflow.socket.gethostname',return_value='woowbk-dev-d'), \
+             patch.object(self.provision,'create') as create,patch.object(self.provision,'cleanup') as cleanup, \
+             patch.object(m,'_payload_history') as history,patch.object(m,'build_captured_candidate') as build:
+            with self.assertRaises(m.RealOwnerRefused) as caught:
+                m.run_real_framed_owner(stream,private_parent=self.root,source_mode=m.SOURCE_MODES[0],no_live=False)
+        self.assertEqual(caught.exception.phase,'frame')
+        for operation in (create,cleanup,history,build):operation.assert_not_called()
+        self.assertEqual(list(self.root.glob('emqx-framed-private-*')),[])
+
+    def test_budget_refusal_precedes_frame_and_has_fixed_phase_without_provision(self):
+        with patch.object(m,'OwnerProvision',return_value=self.provision), \
+             patch.object(m,'_full_restore_budget',side_effect=ValueError('generated-private-budget-error')), \
+             patch.object(m,'read_source_api_credentials') as frame,patch.object(self.provision,'create') as create:
+            with self.assertRaises(m.RealOwnerRefused) as caught:
+                m.run_real_framed_owner(io.BytesIO(b''),private_parent=self.root,source_mode=m.SOURCE_MODES[0],no_live=False)
+        self.assertEqual(caught.exception.phase,'budget');frame.assert_not_called();create.assert_not_called()
+
     def test_api_credential_prefix_is_versioned_profile_bound_and_private(self):
         import struct
         fields=(b'admin',b'generated-admin-password',b'b1ops',b'generated-ops-password',b'generated-api-key',b'generated-api-secret')

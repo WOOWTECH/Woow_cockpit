@@ -36,7 +36,7 @@ from woowbackup import catalog, flows
 from woowbackup.adapters.quadlet_postgres import QuadletPostgresAdapter
 from woowbackup.paths import Paths
 
-PHASES = frozenset(('profile','observer_dependency','realm','frame','provision',
+PHASES = frozenset(('profile','observer_dependency','realm','budget','frame','provision',
     'ready','source','target','preflight','build','package','restore',
     'rollback','restart','cleanup','client_frame','no_live','mqtt','post_capture','post_capture_identity','payload_history','build_adapter','source_api','source_negative','object_integrity','api_frame'))
 from emqx_candidate_stage import STAGES as BUILD_STAGES, KINDS as BUILD_KINDS
@@ -750,7 +750,7 @@ def run_real_framed_owner(stream,*,private_parent,source_mode,no_live=True,targe
         phase='realm'
         provision=OwnerProvision(IMAGE.removeprefix('sha256:'))
         r,f=provision.runner,provision.fixture
-        _full_restore_budget()
+        phase='budget';_full_restore_budget()
         phase='api_frame'
         api_credentials=read_source_api_credentials(stream,source_mode)
         phase='client_frame'
