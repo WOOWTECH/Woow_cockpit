@@ -160,9 +160,9 @@ def main():
                                                         stage='HOCON_FILE_AUTHORIZER'
                                                         dependency=item.get('path')
                                                         if dependency is None:stage='HOCON_IMPLICIT_ACL'
-                                                        elif dependency in ('etc/acl.conf','/opt/emqx/etc/acl.conf'):
+                                                        elif dependency in ('etc/acl.conf','/opt/emqx/etc/acl.conf','${EMQX_ETC_DIR}/acl.conf'):
                                                             stage='HOCON_VENDOR_ACL'
-                                                        elif dependency in ('data/authz/acl.conf','/opt/emqx/data/authz/acl.conf'):
+                                                        elif dependency in ('data/authz/acl.conf','/opt/emqx/data/authz/acl.conf','/data/emqx/data/authz/acl.conf','${EMQX_DATA_DIR}/authz/acl.conf'):
                                                             stage='HOCON_STAGED_ACL'
                                                         break
                                                     pending.extend(item.values())
