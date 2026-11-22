@@ -1,0 +1,13 @@
+{
+  "source_commit": "b7ba33b2e40c3366d2eec53bc39cd051eda9b211",
+  "scope": "real ARM restore with fixed row-table diagnostics and negative MQTT wiring",
+  "exit": 1,
+  "elapsed_seconds": 276.7486143161077,
+  "stdout_sha256": "38f4c4e6e2ab6a528df4742ce8edfb8ed1183856f7881377f8b1508199d25b30",
+  "fixed_status": [
+    "REAL OWNER BUILD_TEMP_CLEANUP_PRODUCT REFUSED",
+    "REAL OWNER POSTFLIGHT PASSED"
+  ],
+  "stderr_bytes_not_published": 0,
+  "commercial_acceptance": "not-complete"
+}

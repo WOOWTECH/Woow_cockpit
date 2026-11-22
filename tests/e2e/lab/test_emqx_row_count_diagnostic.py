@@ -57,6 +57,16 @@ class RowCountDiagnosticTests(unittest.TestCase):
         self.assertEqual(stages.row_count_diagnostics(),(('emqx_acl','underflow'),('emqx_app','overflow')))
         self.assertNotIn('generated-private',repr(stages.row_count_diagnostics()))
 
+    def test_successful_cleanup_restores_first_recorded_count_failure(self):
+        stages.mark('product_row_counts')
+        stages.mark('product_row_counts_emqx_acl_underflow')
+        stages.mark('product_row_counts_emqx_app_overflow')
+        failure=stages.current()
+        stages.mark('temp_cleanup')
+        stages.mark(failure)
+        self.assertEqual(stages.current(),'product_row_counts_emqx_acl_underflow')
+        self.assertEqual(stages.row_count_diagnostics(),(('emqx_acl','underflow'),('emqx_app','overflow')))
+
     def test_context_reset_isolation_and_enum_rejection(self):
         stages.mark('product_row_counts')
         stages.mark('product_row_counts_emqx_app_overflow')

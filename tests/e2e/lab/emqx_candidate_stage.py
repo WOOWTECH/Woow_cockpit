@@ -19,7 +19,12 @@ def mark(stage):
         previous=_ROW_COUNTS.get()
         pair=ROW_COUNT_STAGES[stage]
         if pair not in previous:_ROW_COUNTS.set(previous+(pair,))
-        if previous:return  # Failure phase identifies the first fixed mismatch.
+        if previous:
+            # Cleanup temporarily changes _STAGE. Restoring an already recorded
+            # mismatch must restore the first diagnostic, not leave cleanup set.
+            first=previous[0]
+            _STAGE.set('product_row_counts_'+first[0]+'_'+first[1])
+            return
     _STAGE.set(stage)
 def row_count_diagnostics():
     return _ROW_COUNTS.get()
