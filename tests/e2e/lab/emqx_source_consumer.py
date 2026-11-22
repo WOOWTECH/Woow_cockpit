@@ -171,11 +171,13 @@ def cold_kind(name, size):
 
 
 class Capture:
-    """Consume once to EOF, validate, register, seal, then replay identical bytes.
+    """Consume once to EOF, validate and register identical replay bytes.
 
-    Target inputs are exact category -> JSON bytes snapshots from an owner;
-    no missing categories or implicit empty acknowledgements are accepted.
-    JSON readers are for self-contained data only, never HOCON or Mnesia.
+    Normal mode requires exact category -> JSON bytes owner target snapshots
+    and seals after source registration. source_only() defers target documents
+    and refuses scan/summary/replay until supply_target_documents() succeeds.
+    No missing categories or implicit empty acknowledgements are accepted.
+    Native HOCON/cold-history adapters remain explicit opt-ins.
     """
     def __init__(self, password, target_documents, *, hocon_parser=None, spool_directory=None, product_selection=False, cold_decoder=None, source_only=False):
         if type(source_only) is not bool or (source_only and target_documents is not None):
