@@ -58,6 +58,36 @@ class EvidenceTests(unittest.TestCase):
         with self.assertRaises(PrivateFailure):
             registry.scan(b'1')  # No short secret exemption or scanner weakening.
 
+    def test_names_encoding_avoids_formatting_secrets_but_content_still_fails_closed(self):
+        registry = Registry()
+        for source in SOURCES:
+            registry.register(source, [b' ', b'\n'] if source == 'backup-key' else [])
+        registry.seal()
+        with self.assertRaises(PrivateFailure):
+            self.write(registry=registry)
+        self.assertEqual(list(self.root.iterdir()), [])
+        seen = []
+        scan = registry.scan
+        def checked(raw):
+            self.assertFalse((self.root / 'mqtt.json').exists())
+            scan(raw)
+            seen.append(raw)
+        with patch.object(registry, 'scan', side_effect=checked):
+            self.write(registry=registry, coverage_mode='names')
+        raw = (self.root / 'mqtt.json').read_bytes()
+        self.assertEqual(seen, [raw])
+        self.assertEqual(json.loads(raw)['result'], 'passed')
+        self.assertNotIn(b' ', raw)
+        self.assertNotIn(b'\n', raw)
+        (self.root / 'mqtt.json').unlink()
+        content = Registry()
+        for source in SOURCES:
+            content.register(source, [b'passed'] if source == 'backup-key' else [])
+        content.seal()
+        with self.assertRaises(PrivateFailure):
+            self.write(registry=content, coverage_mode='names')
+        self.assertEqual(list(self.root.iterdir()), [])
+
     def test_leak_or_missing_registration_creates_no_evidence(self):
         for registry in (Registry(), self.registry):
             if registry is self.registry:

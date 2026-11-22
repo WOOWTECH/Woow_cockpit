@@ -63,7 +63,7 @@ def retain_evidence(frame):
     from emqx_private_evidence import SOURCE_NAMES
     expected = (json.dumps({'phase':'preflight','result':'passed',
         'coverage':[SOURCE_NAMES[key] for key in sorted(SOURCE_NAMES)]},
-        sort_keys=True,ensure_ascii=False)+'\n').encode()
+        sort_keys=True,ensure_ascii=False,separators=(',', ':'))).encode()
     if raw != expected: raise ValueError()
     parent = PRIVATE_PARENT
     info = parent.stat()

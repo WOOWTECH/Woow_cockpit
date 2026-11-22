@@ -208,7 +208,7 @@ def run_owner_target(root, broker, clients, report, *, owned_container_id):
             # Target-only evidence: no fake source registry/counts, no numeric JSON.
             raw = (json.dumps({'階段':'目標擷取','結果':'passed',
                 '涵蓋':['MQTT認證','API金鑰','連接器憑證','TLS憑證','目標初始憑證']},
-                ensure_ascii=False,sort_keys=True)+'\n').encode()
+                ensure_ascii=False,sort_keys=True,separators=(',', ':'))).encode()
             scan.scan(raw)
             evidence = root / 'owner-target-evidence.json'
             fd = os.open(evidence, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)

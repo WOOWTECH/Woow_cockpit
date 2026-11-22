@@ -18,7 +18,7 @@ from emqx_private_evidence import SOURCE_NAMES
 def artifact():
     return (json.dumps({'phase':'preflight','result':'passed',
         'coverage':[SOURCE_NAMES[k] for k in sorted(SOURCE_NAMES)]},
-        sort_keys=True,ensure_ascii=False)+'\n').encode()
+        sort_keys=True,ensure_ascii=False,separators=(',', ':'))).encode()
 
 
 class FrameTests(unittest.TestCase):
@@ -38,7 +38,9 @@ class FrameTests(unittest.TestCase):
     def test_wrong_digest_trailing_short_unscanned_payload_and_symlink_parent_refuse(self):
         good = framed.evidence_frame(artifact())
         bad = (good[:-1],good+b'x',good[:-1]+bytes([good[-1]^1]),
-               framed.evidence_frame(b'private arbitrary response'),b'')
+               framed.evidence_frame(b'private arbitrary response'),
+               framed.evidence_frame(artifact()+b'\n'),
+               framed.evidence_frame(artifact().replace(b':', b': ', 1)),b'')
         with tempfile.TemporaryDirectory() as directory:
             root=Path(directory)
             with patch.object(framed,'PRIVATE_PARENT',root):

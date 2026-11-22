@@ -41,7 +41,9 @@ def publish(directory, name, *, registry, phase, result, coverage, coverage_mode
         raw = (json.dumps({'phase': phase, 'result': result,
                            'coverage': coverage if coverage_mode == 'counts' else
                            [SOURCE_NAMES[source] for source in sorted(coverage)]},
-                          sort_keys=True, ensure_ascii=coverage_mode == 'counts') + '\n').encode()
+                          sort_keys=True, ensure_ascii=coverage_mode == 'counts',
+                          separators=(',', ':') if coverage_mode == 'names' else None)
+               + ('\n' if coverage_mode == 'counts' else '')).encode()
         # No file is created until the actual consumer registry accepts bytes.
         registry.scan(raw)
         path = Path(directory).absolute()
