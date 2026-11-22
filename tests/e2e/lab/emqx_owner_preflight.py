@@ -56,6 +56,8 @@ def owner_preflight(*, captured, target_readers, target_generation,
             companion.scan(b'')
 
         generation_matches()
+        from emqx_preflight_stage import mark
+        mark('target_documents')
         documents, total = {}, 0
         for category in sorted(TARGET_CATEGORIES):
             stream = target_readers[category]()
@@ -75,9 +77,11 @@ def owner_preflight(*, captured, target_readers, target_generation,
         frozen.persisted_values = companion
         frozen.generation = target_generation
         register_target_snapshots(RuntimeRegistry(), frozen)
+        mark('source_completion')
         captured.supply_target_documents(documents)
         summary = captured.registry.summary()
         counts = {category: summary[category] for category in SOURCE_CATEGORIES}
+        mark('login_scan')
         session = login_preflight(source_registry=captured.registry, source_counts=counts,
             target_readers=frozen, private_transport=private_transport,
             username=username, password=password, evidence_directory=evidence_directory,

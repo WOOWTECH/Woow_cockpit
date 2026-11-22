@@ -278,6 +278,8 @@ def preflight_fresh_frame(stream, *, runner, private_parent, source_mode):
     """
     try:
         from emqx_private_owner_driver import preflight_owner
+        from emqx_preflight_stage import mark
+        mark('frame')
         if source_mode not in ('--source-vendor-acl-sql-aliases',
                                '--x86-source-vendor-acl-sql-aliases'):
             raise ValueError()
@@ -285,6 +287,7 @@ def preflight_fresh_frame(stream, *, runner, private_parent, source_mode):
                 source_mode=source_mode) as (source, password, spool, profile, root):
             evidence = root/'evidence'
             evidence.mkdir(mode=0o700)
+            mark('fresh_target')
             with fresh_target(runner=runner, private_parent=root) as fixture:
                 raw = preflight_owner(fixture.target, source, source_password=password,
                     expected_sha256=profile.sha256, spool_directory=spool,

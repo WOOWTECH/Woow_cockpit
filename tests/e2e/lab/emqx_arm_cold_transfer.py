@@ -121,7 +121,7 @@ def main(argv=None):
         files=['backup-engine/woowbackup','tests/e2e/lab/emqx_arm_cold_owner.py','tests/e2e/lab/emqx_cold_history.py','tests/e2e/lab/emqx_cold_terms.escript','tests/e2e/lab/emqx_native_runtime.py','tests/e2e/lab/emqx_semantic_readers.py','tests/e2e/lab/emqx_private_spool.py','tests/e2e/lab/ha_real_fixture.py','tests/e2e/lab/emqx_broker_workload.py','tests/e2e/lab/emqx_runtime_live.py','tests/e2e/lab/emqx_runtime_credentials.py','tests/e2e/lab/emqx_private_boundary.py','tests/e2e/lab/emqx_real_candidate.py','tests/e2e/lab/emqx_source_consumer.py','tests/e2e/lab/emqx_native_hocon.py','tests/e2e/lab/emqx_hocon_native.escript','tests/e2e/lab/emqx_arm_source_owner.py','tests/e2e/lab/emqx_owner_source_capture.py','tests/e2e/lab/emqx_source_profiles.py','tests/e2e/lab/emqx_owner_file_hocon.py','tests/e2e/lab/emqx_vendor_acl.escript','tests/e2e/lab/emqx_hocon_context.py','tests/e2e/lab/emqx_hocon_context_native.escript','tests/e2e/lab/emqx_republish_templates.py','tests/e2e/lab/emqx_captured_candidate.py','tests/e2e/lab/emqx_sql_aliases.py']
         if preflight:
             files += ['tests/e2e/lab/'+name for name in (
-                'emqx_framed_preflight.py','emqx_fresh_owner_workflow.py',
+                'emqx_framed_preflight.py','emqx_preflight_stage.py','emqx_fresh_owner_workflow.py',
                 'emqx_private_owner_driver.py','emqx_owner_preflight.py','emqx_owner_target.py',
                 'emqx_owner_target.expr','emqx_owner_target_parse.escript',
                 'emqx_target_vendor_policy.py','emqx_owner_vendor_files.py','emqx_bootstrap_csv.py',
@@ -158,6 +158,10 @@ def main(argv=None):
         if child is not None:
             try:child.stdin.close();child.wait(timeout=30)
             except BaseException:child.terminate()
+        from emqx_preflight_stage import PreflightStageRefused
+        failure=sys.exception()
+        if isinstance(failure,PreflightStageRefused):
+            print('PREFLIGHT STAGE REFUSED '+failure.stage,flush=True)
         print('ARM TRANSFER REFUSED',flush=True)
         return 1
 

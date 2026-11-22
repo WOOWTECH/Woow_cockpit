@@ -134,18 +134,23 @@ def _joined_owner_preflight(target, backup, *, source_password, expected_sha256,
             raise ValueError()
         return response.stdout
 
+    from emqx_preflight_stage import mark
+    mark('source_capture')
     with capture_owner_source(backup, password=source_password,
             expected_sha256=expected_sha256, spool_directory=spool_directory,
             required_encryption='v3', **dict(source_options)) as (captured, binding):
         if expected_source_profile is not None:
             from emqx_arm_source_owner import validate_source_capture
             validate_source_capture(captured, binding, expected_source_profile)
+        mark('source_validated')
+        mark('target_capture')
         with owner_target_readers(private_eval=evaluate, quiesce=quiesce,
                 vendor_observer=_held_vendor_observer(runner=runner, broker=broker)) as readers:
             session = owner_preflight(captured=captured, target_readers=readers,
                 target_generation=readers.generation, private_transport=transport,
                 username=username, password=password, evidence_directory=evidence_directory,
                 evidence_name=evidence_name)
+            mark('joined_ready')
             yield captured, binding, session
 
 

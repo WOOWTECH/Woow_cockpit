@@ -67,6 +67,17 @@ class FrameTests(unittest.TestCase):
             with self.subTest(code=code):
                 with self.assertRaises(ValueError): framed.read_child_frame(self.child(code),timeout=0.1)
 
+    def test_only_fixed_failure_stage_is_released_on_child_failure(self):
+        from emqx_preflight_stage import PreflightStageRefused
+        child=self.child("import sys;sys.stdout.buffer.write(b'PREFLIGHT-REFUSED:target_capture\\n');sys.exit(1)")
+        with self.assertRaises(PreflightStageRefused) as failure:
+            framed.read_child_frame(child,timeout=3)
+        self.assertEqual(failure.exception.stage,'target_capture')
+        child=self.child("import sys;sys.stdout.buffer.write(b'PREFLIGHT-REFUSED:private-value\\n');sys.exit(1)")
+        with self.assertRaises(ValueError) as failure:
+            framed.read_child_frame(child,timeout=3)
+        self.assertNotIsInstance(failure.exception,PreflightStageRefused)
+
     def test_cli_fixed_mode_and_realm_refuse_before_consuming_stdin_or_runner(self):
         with patch('emqx_arm_source_owner._owner_realm',return_value=False), \
              patch('emqx_adapter_owner.LabOwnerRunner') as runner:

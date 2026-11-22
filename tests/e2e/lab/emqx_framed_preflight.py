@@ -17,6 +17,7 @@ import tempfile
 import time
 
 from emqx_private_boundary import PrivateFailure
+from emqx_preflight_stage import STAGES, PreflightStageRefused, current, mark
 
 MODES = {
     '--preflight': ('--source-vendor-acl-sql-aliases', b'E'),
@@ -47,7 +48,11 @@ def read_child_frame(child, *, timeout=900):
             if not raw: break
             result.extend(raw)
             if len(result) > MAX_FRAME: raise ValueError()
-    if child.wait(timeout=max(0.01,deadline-time.monotonic())) != 0: raise ValueError()
+    if child.wait(timeout=max(0.01,deadline-time.monotonic())) != 0:
+        for stage in STAGES:
+            if bytes(result) == b'PREFLIGHT-REFUSED:'+stage.encode()+b'\n':
+                raise PreflightStageRefused(stage)
+        raise ValueError()
     return bytes(result)
 
 
@@ -99,6 +104,7 @@ def main(argv=None):
     if not _owner_realm(): return 1
     def deadline(*_): raise PrivateFailure('private-preflight-deadline')
     previous = signal.signal(signal.SIGALRM,deadline)
+    mark('initial')
     try:
         signal.setitimer(signal.ITIMER_REAL,360)
         from emqx_adapter_owner import LabOwnerRunner
@@ -112,6 +118,8 @@ def main(argv=None):
         sys.stdout.buffer.write(evidence_frame(raw));sys.stdout.buffer.flush()
         return 0
     except BaseException:
+        sys.stdout.buffer.write(b'PREFLIGHT-REFUSED:'+current().encode()+b'\n')
+        sys.stdout.buffer.flush()
         return 1
     finally:
         signal.setitimer(signal.ITIMER_REAL,0)
