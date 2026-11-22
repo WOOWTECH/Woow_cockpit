@@ -101,16 +101,18 @@ class FixtureFilesTests(unittest.TestCase):
             'State': {'Running': True}, 'HostConfig': {'NetworkMode': 'none',
                 'PortBindings': {}, 'Memory': 768*1024*1024, 'NanoCpus': 1000000000, 'PidsLimit': 512},
             'Config': {'Env': ['EMQX_NODE__NAME=emqx@127.0.0.1'],
-                       'Secrets': [{'Name': self.f.secret, 'ID': 'd'*25}]},
+                       'Secrets': [{'Name': self.f.secret, 'ID': 'd'*25, 'UID': 1000, 'GID': 1000, 'Mode': 0o400}],
+                       'CreateCommand': ['/usr/bin/podman', 'run', '--name', self.f.prefix,
+                           '--secret', self.f.secret + ',type=mount,target=' + m.BOOTSTRAP + ',uid=1000,gid=1000,mode=0400',
+                           '--secret=' + self.f.dashboard_secret + ',type=env,target=EMQX_DASHBOARD__DEFAULT_PASSWORD',
+                           m.IMAGE]},
             'Mounts': [
                 {'Type': 'volume', 'Name': name, 'Destination': destination, 'RW': True}
                 for name, destination in zip(self.f.volumes, ('/opt/emqx/data', '/opt/emqx/log'))] + [
                 {'Type': 'bind', 'Destination': m.BASE, 'RW': False,
                  'Source': self.runner.home + '/.config/' + self.f.prefix + '/base.hocon'},
                 {'Type': 'bind', 'Destination': m.ACL, 'RW': False,
-                 'Source': self.runner.home + '/.config/' + self.f.prefix + '/acl.conf'},
-                {'Type': 'bind', 'Destination': m.BOOTSTRAP, 'RW': False,
-                 'Source': '/generated/podman/secret/mount'}]}]
+                 'Source': self.runner.home + '/.config/' + self.f.prefix + '/acl.conf'}]}]
         self.files = {'contract': m.CONTRACT, 'complete': True, 'files': []}
         for path, raw in sorted(((m.BASE, BASE), (m.ACL, ACL), (m.BOOTSTRAP, CSV))):
             terms = ([binary(b'generated-config-secret'), binary(b'dashboard.default_password')]
@@ -398,12 +400,12 @@ class FixtureFilesTests(unittest.TestCase):
         self.assertEqual(before, self.values.values)
         return caught.exception
 
-    def test_missing_secret_mount_still_refuses_with_safe_actual_shape(self):
-        self.doc[0]['Mounts'] = [x for x in self.doc[0]['Mounts'] if x['Destination'] != m.BOOTSTRAP]
+    def test_missing_mapping_still_refuses_with_safe_actual_shape(self):
+        self.doc[0]['Config'].pop('CreateCommand')
         self.doc[0]['Config']['Env'].append('PRIVATE=generated-shape-secret')
         error = self.diagnosed_failure()
         metadata = m.failure_metadata(error)
-        self.assertEqual(metadata['file_stage'], 'bootstrap_mount')
+        self.assertEqual(metadata['file_stage'], 'secret_mapping')
         self.assertEqual(metadata['file_reason'], 'missing')
         self.assertFalse(metadata['inspection_shape']['bootstrap_mount_present'])
         self.assertTrue(metadata['inspection_shape']['base_mount_present'])
@@ -449,12 +451,12 @@ class FixtureFilesTests(unittest.TestCase):
 
     def test_driver_report_publishes_only_whitelisted_fixed_metadata(self):
         import emqx_adapter_driver as driver
-        self.doc[0]['Mounts'] = [x for x in self.doc[0]['Mounts'] if x['Destination'] != m.BOOTSTRAP]
+        self.doc[0]['Config'].pop('CreateCommand')
         error = self.diagnosed_failure()
         with patch.object(driver, 'STAGE', 'actual_owned_mount_capture'):
             report = driver.failure_report(error)
         self.assertEqual(report['stage'], 'actual_owned_mount_capture')
-        self.assertEqual(report['file_stage'], 'bootstrap_mount')
+        self.assertEqual(report['file_stage'], 'secret_mapping')
         self.assertEqual(report['file_reason'], 'missing')
         self.assertEqual(report['result'], 'fail')
         # Even a corrupted exception cannot inject arbitrary diagnostics/values.
@@ -469,6 +471,97 @@ class FixtureFilesTests(unittest.TestCase):
         ordinary = RuntimeError('generated-private-exception')
         self.assertNotIn('generated-private', json.dumps(driver.failure_report(ordinary)))
         self.assertEqual(m.failure_metadata(ordinary), {})
+
+    def test_podman49_issued_secret_without_ordinary_mount_succeeds(self):
+        self.assertFalse(any(x['Destination'] == m.BOOTSTRAP for x in self.doc[0]['Mounts']))
+        receipts = self.observe()
+        self.assertIn(CSV, self.values.values)
+        self.assertIn(b'generated,password', self.values.values)
+        secret = next(x for x in receipts if x['path'] == m.BOOTSTRAP)
+        self.assertEqual(secret['identity'][6], stat.S_IFREG | 0o400)
+        self.assertEqual(secret['identity'][8:], (1000, 1000))
+
+    def test_fake_bootstrap_bind_and_parent_mount_shadows_refuse_before_eval(self):
+        original = copy.deepcopy(self.doc)
+        for destination in (m.BOOTSTRAP, '/opt/emqx/etc', '/opt', '/'):
+            self.doc = copy.deepcopy(original)
+            self.doc[0]['Mounts'].append({'Type': 'bind', 'Destination': destination,
+                'Source': '/generated/other-file', 'RW': False})
+            self.refuse()
+        self.assertNotIn('eval', self.events)
+
+    def test_issued_secret_id_uid_gid_mode_and_optional_target_must_match(self):
+        original = copy.deepcopy(self.doc)
+        for field, value in (('ID', 'e'*25), ('UID', 0), ('GID', 0), ('Mode', 0o644),
+                             ('UID', '1000'), ('Mode', '0400'), ('Mode', True),
+                             ('Target', '/opt/emqx/etc/not-bootstrap.csv')):
+            self.doc = copy.deepcopy(original)
+            self.doc[0]['Config']['Secrets'][0][field] = value
+            error = self.diagnosed_failure()
+            self.assertEqual((error.stage, error.reason), ('secret_identity', 'identity'))
+        self.assertNotIn('eval', self.events)
+
+    def test_mapping_target_uid_mode_type_name_duplicate_and_unknown_options_refuse(self):
+        original = copy.deepcopy(self.doc)
+        command = original[0]['Config']['CreateCommand']
+        spec = command[5]
+        for changed in (spec.replace(m.BOOTSTRAP, '/opt/emqx/etc/other.csv'),
+                        spec.replace('uid=1000', 'uid=0'), spec.replace('gid=1000', 'gid=0'),
+                        spec.replace('mode=0400', 'mode=0644'), spec.replace('type=mount', 'type=env'),
+                        spec.replace(self.f.secret, self.f.secret+'-other'),
+                        spec + ',target=' + m.BOOTSTRAP):
+            self.doc = copy.deepcopy(original)
+            self.doc[0]['Config']['CreateCommand'][5] = changed
+            error = self.diagnosed_failure()
+            self.assertEqual(error.stage, 'secret_mapping')
+        for extra in (['--unknown-flag=generated'], ['--secret', spec], ['--name', self.f.prefix]):
+            self.doc = copy.deepcopy(original)
+            self.doc[0]['Config']['CreateCommand'][-1:-1] = extra
+            self.assertEqual(self.diagnosed_failure().stage, 'secret_mapping')
+        self.assertNotIn('eval', self.events)
+
+    def test_label_or_env_value_cannot_spoof_secret_mapping(self):
+        original = copy.deepcopy(self.doc)
+        spec = original[0]['Config']['CreateCommand'][5]
+        for arguments in (['--label', '--secret='+spec], ['--env', '--secret='+spec],
+                          ['--label=--secret='+spec], ['--label', '--secret', spec]):
+            self.doc = copy.deepcopy(original)
+            # Replace the actual mount-secret option with inert option values.
+            self.doc[0]['Config']['CreateCommand'][4:6] = arguments
+            self.assertEqual(self.diagnosed_failure().stage, 'secret_mapping')
+        self.assertNotIn('eval', self.events)
+
+    def test_mapping_must_be_actual_argv_and_pinned_owned_container(self):
+        original = copy.deepcopy(self.doc)
+        for command in (None, [], 'podman run --secret private', ['sh', '-c', 'private'],
+                        original[0]['Config']['CreateCommand'][:-1] + ['other-image']):
+            self.doc = copy.deepcopy(original)
+            self.doc[0]['Config']['CreateCommand'] = command
+            self.assertEqual(self.diagnosed_failure().stage, 'secret_mapping')
+        self.assertNotIn('eval', self.events)
+
+    def test_native_secret_owner_mode_and_full_content_proof_are_required(self):
+        original = copy.deepcopy(self.files)
+        for index, value in ((6, stat.S_IFREG | 0o644), (8, 0), (9, 0)):
+            self.files = copy.deepcopy(original)
+            item = next(x for x in self.files['files'] if x['path'] == m.BOOTSTRAP)
+            item['identity'][index] = value
+            error = self.diagnosed_failure()
+            self.assertEqual((error.stage, error.reason), ('native_secret_identity', 'identity'))
+        self.files = copy.deepcopy(original)
+        item = next(x for x in self.files['files'] if x['path'] == m.BOOTSTRAP)
+        raw = CSV.replace(b'generated,password', b'different,password')
+        item.update(bytes=len(raw), content_b64=base64.b64encode(raw).decode(),
+                    sha256=hashlib.sha256(raw).hexdigest())
+        item['identity'][3] = len(raw)
+        self.assertEqual(self.diagnosed_failure().stage, 'compare')
+
+    def test_runtime_secret_mapping_change_after_native_read_refuses(self):
+        def evaluate(expr):
+            result = self.evaluate(expr)
+            self.doc[0]['Config']['CreateCommand'][5] = self.doc[0]['Config']['CreateCommand'][5].replace('mode=0400', 'mode=0644')
+            return result
+        self.assertEqual(self.diagnosed_failure(private_eval=evaluate).stage, 'secret_mapping')
 
     def test_fixed_native_source_keeps_full_parse_and_single_line(self):
         expression = m.public_expression()

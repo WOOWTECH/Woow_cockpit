@@ -2,7 +2,9 @@
 
 No policy bypass or restore/manifest rebinding. Caller holds SAME target writer
 exclusion throughout. Bootstrap is a freshly issued Podman secret, not a host
-file. The actual fixture mounts base.hocon; emqx.conf aliases are unsupported.
+file. Podman 4.9 secret provenance requires Config.Secrets plus the exact
+CreateCommand mapping and native UID/GID/mode/bytes; ordinary shadows refuse.
+The actual fixture mounts base.hocon; emqx.conf aliases are unsupported.
 Trusted callbacks execute bounded eval/inspect against the capability's broker:
 10s/MAX_WIRE and 5s/64KiB respectively, stderr discarded, process-group timeout
 cleanup. No caller-selected host paths, default credentials, CLI or stdout.
@@ -37,7 +39,7 @@ class FixtureFiles:
 
 STAGES = frozenset(('unknown', 'issuance', 'capability', 'callbacks',
     'inspect_wire', 'inspect_shape', 'fixture_identity', 'container_identity',
-    'base_mount', 'acl_mount', 'bootstrap_mount', 'secret_identity',
+    'base_mount', 'acl_mount', 'bootstrap_mount', 'secret_identity', 'secret_mapping', 'native_secret_identity',
     'source_before', 'secret_before', 'eval', 'wire', 'decode',
     'inspect_after', 'source_after', 'secret_after', 'compare', 'parse',
     'lifetime', 'registration'))
@@ -81,7 +83,7 @@ def _inspection_shape(doc):
     """Observed representation only, never an authorization acknowledgment.
 
     No field values, names, paths, IDs, env, content, hashes or exceptions escape.
-    A missing Secret mount remains a refusal until its representation is proven.
+    Secret mapping is authorized only by the separate issued-ID/argv/native proof.
     """
     mounts = doc.get('Mounts')
     mounts = mounts if type(mounts) is list else []
@@ -288,6 +290,66 @@ def _decode_files(raw):
     return decoded
 
 
+# Parse argv tokens, never substring-search or shell-split private CreateCommand.
+# Unknown options refuse: otherwise a label/env value could impersonate --secret.
+_COMMAND_VALUES = frozenset(('--name', '--cidfile', '--conmon-pidfile', '--cgroups',
+    '--sdnotify', '--network', '--memory', '--cpus', '--pids-limit', '--secret',
+    '--env', '-e', '--volume', '-v', '--env-file', '--label', '-l', '--log-driver',
+    '--user', '--userns', '--hostname', '--timeout', '--stop-timeout', '--pull'))
+_COMMAND_FLAGS = frozenset(('--rm', '--replace', '--detach', '-d', '--init',
+    '--read-only', '--no-hosts'))
+
+
+def _secret_mapping(command, fixture):
+    stage = 'secret_mapping'
+    if command is None:
+        _fail(stage, 'missing')
+    if (type(command) is not list or not 4 <= len(command) <= 512 or
+            any(type(x) is not str or not 0 < len(x.encode('utf-8')) <= 4096 for x in command) or
+            command[:2] not in (['podman', 'run'], ['/usr/bin/podman', 'run']) or
+            command[-1] not in (IMAGE, IMAGE.removeprefix('sha256:'))):
+        _fail(stage, 'shape')
+    specs, names = [], []
+    i = 2
+    while i < len(command)-1:
+        token = command[i]
+        key, separator, value = token.partition('=')
+        if key in _COMMAND_FLAGS:
+            if separator and value not in ('true', 'false'):
+                _fail(stage, 'shape')
+            i += 1
+            continue
+        if key not in _COMMAND_VALUES:
+            _fail(stage, 'shape')
+        if not separator:
+            i += 1
+            if i >= len(command)-1:
+                _fail(stage, 'shape')
+            value = command[i]
+        if not value:
+            _fail(stage, 'shape')
+        if key == '--secret':
+            parts = value.split(',')
+            spec = {'name': parts[0]}
+            for part in parts[1:]:
+                k, sep, v = part.partition('=')
+                if not sep or not k or not v or k in spec:
+                    _fail(stage, 'shape')
+                spec[k] = v
+            specs.append(spec)
+        elif key == '--name':
+            names.append(value)
+        i += 1
+    if names != [fixture.prefix]:
+        _fail(stage, 'identity')
+    expected = [{'name': fixture.secret, 'type': 'mount', 'target': BOOTSTRAP,
+                 'uid': '1000', 'gid': '1000', 'mode': '0400'},
+                {'name': fixture.dashboard_secret, 'type': 'env',
+                 'target': 'EMQX_DASHBOARD__DEFAULT_PASSWORD'}]
+    if len(specs) != 2 or any(specs.count(x) != 1 for x in expected):
+        _fail(stage, 'mismatch')
+
+
 def _inspect(callback, record, provision):
     stage, shape = 'inspect_wire', {}
     try:
@@ -327,6 +389,12 @@ def _inspect(callback, record, provision):
                     _fail(stage, 'shape')
                 if dest == '/' or dest == path or path.startswith(dest + '/'):
                     matches.append(mount)
+            if path == BOOTSTRAP:
+                # Podman 4.9.3 reports secret mounts in Config.Secrets, not Mounts.
+                # No bind/volume/parent shadow may substitute for the issued secret.
+                if matches:
+                    _fail(stage, 'ambiguous')
+                continue
             if not matches:
                 _fail(stage, 'missing')
             if len(matches) != 1 or matches[0]['Destination'] != path:
@@ -346,8 +414,14 @@ def _inspect(callback, record, provision):
             _fail(stage, 'missing')
         if len(bootstrap) != 1:
             _fail(stage, 'ambiguous')
-        if bootstrap[0].get('ID') != record['secret'][0]:
+        secret = bootstrap[0]
+        if (secret.get('ID') != record['secret'][0] or
+                any(type(secret.get(k)) is not int or secret[k] != v
+                    for k, v in (('UID', 1000), ('GID', 1000), ('Mode', 0o400))) or
+                ('Target' in secret and secret['Target'] != BOOTSTRAP)):
             _fail(stage, 'identity')
+        stage = 'secret_mapping'
+        _secret_mapping(doc['Config'].get('CreateCommand'), f)
         record['cid'] = doc['Id']
         return (doc['Id'], IMAGE, doc['Config'], doc['HostConfig'], mounts)
     except FixtureFilesFailure as error:
@@ -401,6 +475,11 @@ def observe_fixture_files(token, *, private_eval, private_inspect, private_value
             expected = record['secret'][1] if item['path'] == BOOTSTRAP else record['files'][item['path']][0]
             if content != expected:
                 _fail(stage, 'mismatch')
+            if item['path'] == BOOTSTRAP:
+                stage = 'native_secret_identity'
+                identity = item['identity']
+                if identity[6] != (stat.S_IFREG | 0o400) or identity[8:] != [1000, 1000]:
+                    _fail(stage, 'identity')
             stage = 'parse'
             pending.add(content)
             if item['path'] == BOOTSTRAP:
