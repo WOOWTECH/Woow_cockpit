@@ -226,3 +226,22 @@ class OwnerProducerTests(unittest.TestCase):
                 self.assertTrue(all(type(count) is int for count in session.coverage.values()))
                 with self.assertRaises(PrivateFailure):
                     session.registry.scan(b'fixture-private-emqx_admin_jwt')
+
+    def test_consumer_phase_is_fixed_and_private_values_do_not_escape(self):
+        from emqx_owner_target import OwnerCaptureRefused
+        for kind in ('references','connectors'):
+            config=cooked_config()
+            if kind=='references':config['node']['cookie']='env:generated-private-value'
+            else:config['connectors']={'mqtt':{'generated-private-name':{}}}
+            events=[]
+            with self.subTest(kind=kind),self.assertRaises(OwnerCaptureRefused) as caught:
+                with owner_target_readers(private_eval=self.transport(events,config=config),
+                                          quiesce=lambda:self.lock(events)):
+                    pass
+            self.assertEqual(caught.exception.phase,kind)
+            self.assertEqual(str(caught.exception),'target-capture-unsupported')
+            self.assertNotIn('generated-private',repr(caught.exception))
+            self.assertEqual(events[-1],'unlocked')
+        failure=OwnerCaptureRefused('generated-private-error-text')
+        self.assertEqual(failure.phase,'wire')
+        self.assertEqual(str(failure),'target-capture-unsupported')

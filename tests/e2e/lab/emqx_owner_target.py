@@ -23,6 +23,16 @@ from emqx_private_boundary import PrivateFailure
 EXPRESSION = Path(__file__).with_suffix('.expr')
 MAX_WIRE = 4 * ((MAX_OUTPUT + 2) // 3) + 64
 
+CONSUMER_PHASES=frozenset(('wire','config_terms','provider_terms','schema_terms',
+    'inventory','tables','roots','references','connectors','cluster','api_bootstrap',
+    'authentication','listeners','dashboard','provider','mqtt_projection','readers'))
+
+class OwnerCaptureRefused(TargetCaptureUnsupported):
+    def __init__(self,phase):
+        super().__init__()
+        self.phase=phase if phase in CONSUMER_PHASES else 'wire'
+
+
 
 def _decode(term, values, depth=0):
     """Bounded native-data terms only; retain ALL numeric and atom values too."""
@@ -101,24 +111,30 @@ def _no_refs(value, key=''):
             unsupported()
 
 
-def _absence_profile(config, provider):
+def _absence_profile(config, provider, mark=lambda _:None):
     """Derive absence from native cooked roots, retaining all full-tree values."""
+    mark('roots')
     required = {'connectors', 'bridges', 'actions', 'sources', 'gateway', 'exhook',
         'authentication', 'listeners', 'dashboard', 'api_key', 'cluster', 'rpc', 'node'}
     if type(config) is not dict or not required <= set(config):
         unsupported()
+    mark('references')
     _no_refs(config)
+    mark('connectors')
     for root in ('connectors', 'bridges', 'actions', 'sources', 'gateway'):
         if type(config[root]) is not dict or config[root]:
             unsupported()
     if config['exhook'].get('servers') != []:
         unsupported()
+    mark('cluster')
     if _text(config['cluster']['discovery_strategy']) != 'manual':
         unsupported()
     if _text(config['rpc']['driver']) != 'tcp' or _text(config['node']['dist_proto']) != 'inet_tcp':
         unsupported()
+    mark('api_bootstrap')
     if config['api_key'].get('bootstrap_file') not in (b'', ''):
         unsupported()
+    mark('authentication')
     auth = config['authentication']
     if type(auth) is not list or len(auth) != 1 or type(auth[0]) is not dict:
         unsupported()
@@ -128,6 +144,7 @@ def _absence_profile(config, provider):
             or auth[0]['enable'] != 'true'):
         unsupported()
     # Local chains are separate scopes; do not drop them from the global proof.
+    mark('listeners')
     listeners = config['listeners']
     if type(listeners) is not dict or set(listeners) != {'tcp', 'ssl', 'ws', 'wss'}:
         unsupported()
@@ -144,6 +161,7 @@ def _absence_profile(config, provider):
             enabled = listener.get('enable')
             if enabled not in ('true', 'false') or (kind != 'tcp' and enabled != 'false'):
                 unsupported()
+    mark('dashboard')
     dashboard = config['dashboard']
     https = dashboard['listeners']['https']
     if type(https) is not dict or type(https.get('bind')) is not int or https['bind'] != 0:
@@ -152,6 +170,7 @@ def _absence_profile(config, provider):
     bootstrap = {'username': _text(dashboard['default_username']),
                  'password': _text(dashboard['default_password'])}
     inline(bootstrap['username']); inline(bootstrap['password'])
+    mark('provider')
     if (type(provider) is not list or len(provider) != 1 or type(provider[0]) is not dict
             or _text(provider[0]['id']) != 'password_based:built_in_database'
             or provider[0]['provider'] != 'emqx_authn_mnesia'
@@ -186,12 +205,17 @@ def _read_reply(wire, generation):
     return raw, doc
 
 
-def _build(wire, generation):
+def _build_checked(wire, generation, mark):
+    mark('wire')
     raw, doc = _read_reply(wire, generation)
     values = Values()
+    mark('config_terms')
     config = _decode(doc['config'], values)
+    mark('provider_terms')
     providers = _decode(doc['providers'], values)
+    mark('schema_terms')
     schema = _decode(doc['schema_metadata'], values)
+    mark('inventory')
     names = doc['table_names']
     if (type(names) is not list or not names or len(names) > 64
             or not all(native_name(name) for name in names)
@@ -205,6 +229,7 @@ def _build(wire, generation):
         unsupported()
     if type(doc['tables']) is not list or len(doc['tables']) != len(names) - 1:
         unsupported()
+    mark('tables')
     tables, row_total = {}, 0
     for table in doc['tables']:
         if (type(table) is not dict or set(table) != {'table', 'record_name', 'attributes', 'row_count', 'rows'}
@@ -228,7 +253,8 @@ def _build(wire, generation):
         tables[table['table']] = table
     if set(tables) != set(names) - {'schema'}:
         unsupported()
-    bootstrap, group = _absence_profile(config, providers)
+    bootstrap, group = _absence_profile(config, providers, mark)
+    mark('mqtt_projection')
     for name in ('emqx_authn_mnesia', 'emqx_app'):
         record, attrs = TABLES[name]
         if tables[name]['record_name'] != record or tables[name]['attributes'] != list(attrs):
@@ -256,6 +282,7 @@ def _build(wire, generation):
     bindings = {name: {'input_sha256': hashlib.sha256(raw).hexdigest(), 'input_bytes': len(raw)}
                 for name in names}
     companion = PersistedValues(generation, 'target', bindings, values.values)
+    mark('readers')
     docs = {name: {'schema': 1, 'complete': True, 'records': []}
             for name in ('mqtt-auth', 'api-keys', 'connectors', 'tls', 'target-bootstrap')}
     docs['mqtt-auth']['records'] = mqtt
@@ -263,6 +290,16 @@ def _build(wire, generation):
     readers = {name: (lambda data=json.dumps(document).encode(): io.BytesIO(data))
                for name, document in docs.items()}
     return bind_target_persisted(readers, persisted_values=companion, generation=generation)
+
+
+def _build(wire,generation):
+    phase=['wire']
+    def mark(value):
+        phase[0]=value if value in CONSUMER_PHASES else 'wire'
+    try:
+        return _build_checked(wire,generation,mark)
+    except Exception:
+        raise OwnerCaptureRefused(phase[0]) from None
 
 
 @contextmanager
@@ -285,6 +322,8 @@ def owner_target_readers(*, private_eval, quiesce):
             expression = expression.replace('__OWNER_NONCE__', generation)
             readers = _build(private_eval(expression), generation)
             yield readers
+    except OwnerCaptureRefused:
+        raise
     except (KeyboardInterrupt, SystemExit):
         raise PrivateFailure('runtime-private-cancelled') from None
     except Exception:

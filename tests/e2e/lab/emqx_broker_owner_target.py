@@ -4,7 +4,7 @@ import json
 import os
 import re
 
-from emqx_owner_target import broker_target_readers
+from emqx_owner_target import broker_target_readers,OwnerCaptureRefused
 from emqx_runtime_live import checked, podman
 from emqx_runtime_credentials import RuntimeRegistry
 from emqx_target_snapshots import register_target_snapshots
@@ -115,35 +115,39 @@ def run_owner_target(root, broker, clients, report, *, owned_container_id):
                 report['native_fixed_reason'] = 'transport_refused'
             raise RuntimeError('owner-target-private-eval-refused')
         return result.stdout
-    with broker_target_readers(broker=broker, checked=private_checked, quiesce=quiesce) as readers:
-        checks['actual_native_expression_and_projection'] = True
-        runtime = RuntimeRegistry()
-        counts = register_target_snapshots(runtime, readers)
-        assert set(counts) == {'mqtt-auth','api-keys','connectors','tls','target-bootstrap'}
-        checks['all_five_target_categories_registered'] = True
-        assert 'emqx_admin' in readers.persisted_values.tables
-        checks['native_full_inventory_not_two_table_subset'] = True
-        class FullScan:
-            def scan(self, payload):
-                runtime.scan(payload)
-                readers.persisted_values.scan(payload)
-        scan = FullScan()
-        # Target-only evidence: no fake source registry/counts, no numeric JSON.
-        raw = (json.dumps({'階段':'目標擷取','結果':'passed',
-            '涵蓋':['MQTT認證','API金鑰','連接器憑證','TLS憑證','目標初始憑證']},
-            ensure_ascii=False,sort_keys=True)+'\n').encode()
-        scan.scan(raw)
-        evidence = root / 'owner-target-evidence.json'
-        fd = os.open(evidence, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
-        with os.fdopen(fd,'wb') as stream:
-            stream.write(raw)
-        assert evidence.read_bytes() == raw
-        checks['actual_exact_names_only_target_evidence_scanned'] = True
-        report['target_completeness'] = 'synthetic-stable-observed'
-        report['quiescence_scope'] = 'clients-and-system-ticker'
-        report['other_background_writers'] = 'not-excluded'
-        # Keep diagnostics independent from raw configs/rows/counts. No source or
-        # restore/startup/restart/MQTT acceptance is asserted by this mode.
+    try:
+        with broker_target_readers(broker=broker, checked=private_checked, quiesce=quiesce) as readers:
+            checks['actual_native_expression_and_projection'] = True
+            runtime = RuntimeRegistry()
+            counts = register_target_snapshots(runtime, readers)
+            assert set(counts) == {'mqtt-auth','api-keys','connectors','tls','target-bootstrap'}
+            checks['all_five_target_categories_registered'] = True
+            assert 'emqx_admin' in readers.persisted_values.tables
+            checks['native_full_inventory_not_two_table_subset'] = True
+            class FullScan:
+                def scan(self, payload):
+                    runtime.scan(payload)
+                    readers.persisted_values.scan(payload)
+            scan = FullScan()
+            # Target-only evidence: no fake source registry/counts, no numeric JSON.
+            raw = (json.dumps({'階段':'目標擷取','結果':'passed',
+                '涵蓋':['MQTT認證','API金鑰','連接器憑證','TLS憑證','目標初始憑證']},
+                ensure_ascii=False,sort_keys=True)+'\n').encode()
+            scan.scan(raw)
+            evidence = root / 'owner-target-evidence.json'
+            fd = os.open(evidence, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+            with os.fdopen(fd,'wb') as stream:
+                stream.write(raw)
+            assert evidence.read_bytes() == raw
+            checks['actual_exact_names_only_target_evidence_scanned'] = True
+            report['target_completeness'] = 'synthetic-stable-observed'
+            report['quiescence_scope'] = 'clients-and-system-ticker'
+            report['other_background_writers'] = 'not-excluded'
+            # Keep diagnostics independent from raw configs/rows/counts. No source or
+            # restore/startup/restart/MQTT acceptance is asserted by this mode.
+    except OwnerCaptureRefused as failure:
+        report['consumer_fixed_stage']=failure.phase
+        raise
 
 
 def parse_fixed_expression(root, broker_name, report):
