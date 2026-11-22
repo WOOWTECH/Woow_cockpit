@@ -54,3 +54,27 @@ still requires log driver none; caller fixture must meet this actual inspection
 policy, or refuse. No default/fake quiescence or global log policy waiver exists.
 Turing owns the full-product driver and must test this composition on the same
 fixture/unit/volumes/secrets after main's public target profile acceptance.
+
+## Direct provision-bound caller API
+
+Turing's driver can use this instead of constructing `_held_vendor_observer`:
+
+```python
+from emqx_target_fixture_policy import issued_fixture_observer
+
+observer = issued_fixture_observer(provision)  # lazy, no inspect at construction
+with owner_target_readers(private_eval=owner_native_eval,
+        quiesce=owner_actual_writer_exclusion, vendor_observer=observer) as readers:
+    # existing held source + exact owner_preflight/session consumer
+    ...
+```
+
+No caller cid/runner/paths/receipts are accepted by this factory. Original issued
+provision identity must match the WeakKey token owner. Actual cid discovery is
+inside the owner's writer exclusion with inspect 5s/64KiB; full fixture proof
+binds that cid independently before vendor access. Eval uses 10s/MAX_WIRE.
+Initial inspect cannot authorize a mount or substitute for native content proof.
+Changed initial cid vs independent actual fixture proof refuses before vendor
+baseline read. A token transplanted into another provision-like object refuses
+before transport. Factory performs no lab work until its owner-held context is
+entered. Driver remains responsible for actual writer/client/ticker exclusion.

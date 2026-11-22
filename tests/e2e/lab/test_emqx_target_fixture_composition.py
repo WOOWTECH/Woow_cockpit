@@ -115,3 +115,59 @@ class FixtureCompositionTests(unittest.TestCase):
             with self.assertRaises(Exception):
                 vendor.observe_vendor_files(REFERENCES,fixture_capability=self.issued.cap,**kwargs)
             baseline.assert_called_once()
+
+    def test_direct_provision_api_is_lazy_and_uses_its_bounded_runner(self):
+        import json
+        from emqx_target_fixture_policy import issued_fixture_observer
+        original=self.issued.runner.podman
+        calls=[]
+        def run(*args,**kwargs):
+            if args[0]=='inspect':
+                self.assertEqual(args,('inspect',self.issued.f.prefix))
+                self.assertEqual(kwargs,{'timeout':5,'max_output':65536})
+                calls.append('inspect')
+                return SimpleNamespace(returncode=0,stdout=json.dumps(self.issued.doc).encode())
+            if args[0]=='exec':
+                self.assertEqual(args[:4],('exec',self.issued.f.prefix,'emqx','eval'))
+                self.assertEqual(kwargs,{'timeout':10,'max_output':vendor.MAX_WIRE})
+                calls.append('eval')
+                return SimpleNamespace(returncode=0,stdout=self.issued.evaluate(args[4]))
+            return original(*args,**kwargs)
+        observer=issued_fixture_observer(self.issued.provision)
+        self.assertEqual(calls,[])
+        with patch.object(self.issued.runner,'podman',side_effect=run),patch.object(vendor,'observe_vendor_files',self.vendor_capture):
+            with owner_target_readers(private_eval=fixtures.OwnerProducerTests().transport([],config=self.config()),
+                    quiesce=self.quiet,vendor_observer=observer) as readers:
+                self.assertEqual(len(readers),5)
+                with self.assertRaises(Exception): readers.persisted_values.scan(b'generated,password')
+        self.assertEqual(calls,['inspect','inspect','eval','inspect','inspect','eval','inspect'])
+
+    def test_direct_api_rejects_transplanted_provision_before_transport(self):
+        from emqx_target_fixture_policy import issued_fixture_observer
+        from emqx_semantic_readers import Values
+        fake=SimpleNamespace(file_capability=self.issued.cap)
+        with patch.object(self.issued.runner,'podman') as run:
+            with self.assertRaises(Exception):
+                with issued_fixture_observer(fake)(generation='a'*32,private_values=Values()): pass
+            run.assert_not_called()
+
+    def test_direct_api_initial_cid_drift_refuses_after_independent_fixture_proof(self):
+        import json
+        from emqx_target_fixture_policy import issued_fixture_observer
+        from emqx_semantic_readers import Values
+        original=self.issued.runner.podman
+        calls=[]
+        def run(*args,**kwargs):
+            if args[0]=='inspect':
+                doc=copy.deepcopy(self.issued.doc)
+                if not calls: doc[0]['Id']='b'*64
+                calls.append('inspect')
+                return SimpleNamespace(returncode=0,stdout=json.dumps(doc).encode())
+            if args[0]=='exec':
+                return SimpleNamespace(returncode=0,stdout=self.issued.evaluate(args[4]))
+            return original(*args,**kwargs)
+        with patch.object(self.issued.runner,'podman',side_effect=run):
+            with patch.object(vendor,'_image_files') as baseline:
+                with self.assertRaises(Exception):
+                    with issued_fixture_observer(self.issued.provision)(generation='a'*32,private_values=Values()): pass
+                baseline.assert_not_called()

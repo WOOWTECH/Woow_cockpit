@@ -77,3 +77,55 @@ class FixtureFilePolicy(DisabledVendorTLS):
             unsupported()
         self.acl_literals += (ACL,)
         self.bootstrap_literals += (BOOTSTRAP,)
+
+
+def issued_fixture_observer(provision):
+    """Lazy owner_target_readers observer, bound to the original provision only.
+
+    Enter inside actual writer exclusion. Discover cid using bounded owner
+    inspect; the issued fixture observer independently proves/binds it before
+    vendor reads. Caller supplies no cid, runner, paths or JSON receipts.
+    """
+    from contextlib import contextmanager
+
+    @contextmanager
+    def observe(*, generation, private_values):
+        import json
+        from emqx_owner_fixture_files import _record
+        from emqx_owner_vendor_files import LIMIT
+        from emqx_private_boundary import PrivateFailure
+        from emqx_semantic_readers import Values, _pairs
+        from emqx_target_vendor_policy import bounded_vendor_callbacks, vendor_observer
+        try:
+            if (type(generation) is not str or re.fullmatch('[0-9a-f]{32}',generation) is None
+                    or type(private_values) is not Values):
+                raise ValueError()
+            token=provision.file_capability
+            record,owner=_record(token)
+            if owner is not provision:
+                raise ValueError()
+            broker=record['fixture'].prefix
+            evaluate,inspect=bounded_vendor_callbacks(broker=broker,runner=record['runner'])
+            raw=inspect()
+            if type(raw) is not bytes or not 0 < len(raw) <= LIMIT:
+                raise ValueError()
+            def invalid_constant(_):
+                raise ValueError()
+            docs=json.loads(raw,object_pairs_hook=_pairs,parse_constant=invalid_constant)
+            if (type(docs) is not list or len(docs) != 1 or type(docs[0]) is not dict
+                    or type(docs[0].get('Id')) is not str
+                    or re.fullmatch('[0-9a-f]{64}',docs[0]['Id']) is None
+                    or type(docs[0].get('Name')) is not str
+                    or docs[0]['Name'].lstrip('/') != broker):
+                raise ValueError()
+            # Initial inspect is discovery only; full helper checks remain the
+            # sole authority for actual identity/mount/content/secret binding.
+            with vendor_observer(broker=broker,owned_container_id=docs[0]['Id'],
+                    private_eval=evaluate,private_inspect=inspect,fixture_capability=token)(
+                        generation=generation,private_values=private_values) as observed:
+                yield observed
+        except PrivateFailure:
+            raise
+        except Exception:
+            raise PrivateFailure('private-fixture-target-refused') from None
+    return observe
