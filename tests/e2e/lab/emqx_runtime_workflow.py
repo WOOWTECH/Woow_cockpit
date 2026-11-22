@@ -54,6 +54,9 @@ def login_preflight(*, source_registry, source_counts, target_readers,
             refused()
         # Existing Registry.scan enforces sealing; do this before owner callbacks.
         source_registry.scan(b'')
+        actual = source_registry.summary()
+        if any(source_counts[name] != actual[name] for name in SOURCE_CATEGORIES):
+            refused()
         runtime = RuntimeRegistry()
         register_target_snapshots(runtime, target_readers)
         credential = login_registered(runtime, private_transport,

@@ -24,6 +24,7 @@ class PrivateFailure(Exception):
 class Registry:
     def __init__(self):
         self._sources = set()
+        self._counts = {}
         self._values = set()
         self._total = 0
         self._sealed = False
@@ -52,11 +53,18 @@ class Registry:
         self._values.update(new)
         self._total += sum(map(len, new))
         self._sources.add(source)
+        self._counts[source] = len(pending)
 
     def seal(self):
         if self._sources != SOURCES:
             raise PrivateFailure('private-registration-incomplete')
         self._sealed = True
+
+    def summary(self):
+        """Counts of actual unique registrations; no secret values exposed."""
+        if not self._sealed:
+            raise PrivateFailure('private-registration-incomplete')
+        return dict(self._counts)
 
     def scan(self, payload):
         """Bounded diagnostic snapshot scan; never use to publish private artifacts."""

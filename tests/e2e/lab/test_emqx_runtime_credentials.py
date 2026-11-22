@@ -194,6 +194,18 @@ class WorkflowTests(unittest.TestCase):
                            username=b'fixture-admin', password=PASSWORD,
                            evidence_directory=self.path)
 
+    def test_false_source_counts_stop_before_transport_and_publication(self):
+        for name in workflow.SOURCE_CATEGORIES:
+            counts = dict(self.kwargs['source_counts'])
+            counts[name] += 1
+            with self.subTest(source=name), patch.object(workflow, 'login_registered') as login, \
+                 patch.object(workflow, 'publish') as publish:
+                with self.assertRaisesRegex(PrivateFailure, '^runtime-private-refused$'):
+                    workflow.login_preflight(**dict(self.kwargs, source_counts=counts))
+                login.assert_not_called()
+                publish.assert_not_called()
+        self.assertEqual(list(self.path.iterdir()), [])
+
     def test_actual_parent_publish_consumes_combined_registry_exact_bytes(self):
         payloads = []
         original = workflow.CombinedRegistry.scan
