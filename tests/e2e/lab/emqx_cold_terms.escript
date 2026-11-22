@@ -99,16 +99,22 @@ schema_dependencies(Props) ->
                   [external_copies,frag_properties,snmp]),
     put(phase,<<"SCHEMA_USER_DEPENDENCIES">>),
     User=proplists:get_value(user_properties,Props,[]),
+    put(phase,<<"SCHEMA_USER_LIST">>),
     true=is_list(User),
+    put(phase,<<"SCHEMA_USER_KEY_SHAPES">>),
     UserKeys=[K || {K,_} <- User,is_atom(K)],
     true=length(UserKeys)=:=length(User),
+    put(phase,<<"SCHEMA_USER_DUPLICATE_KEYS">>),
     true=length(UserKeys)=:=length(lists:usort(UserKeys)),
     %% Fixed image's public mnesia_rocksdb:default_alias/0 and register/1.
     %% Enumerate this known built-in metadata only; never call its module here.
+    put(phase,<<"SCHEMA_BACKEND_METADATA">>),
     case proplists:get_value(mnesia_backend_types,User,[]) of
         [] -> ok;
         [{rocksdb_copies,mnesia_rocksdb}] -> ok;
-        _ -> throw(unapproved_schema_backend)
+        [{_,mnesia_rocksdb}] -> put(phase,<<"SCHEMA_BACKEND_UNREVIEWED_ALIAS">>),throw(unapproved_schema_backend);
+        [{_,_}] -> put(phase,<<"SCHEMA_BACKEND_UNREVIEWED_MODULE">>),throw(unapproved_schema_backend);
+        _ -> put(phase,<<"SCHEMA_BACKEND_METADATA_SHAPE">>),throw(unapproved_schema_backend)
     end,
     put(phase,<<"SCHEMA_INDEX_DEPENDENCIES">>),
     []=proplists:get_value(mnesia_index_plugins,User,[]),
