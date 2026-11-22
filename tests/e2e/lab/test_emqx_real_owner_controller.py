@@ -24,7 +24,7 @@ class ControllerTests(unittest.TestCase):
             return result
 
     def test_fixed_arm_x86_modes_keep_full_budget_and_readonly_lock_identity(self):
-        for mode in ('--real-restore','--x86-real-restore','--real-restore-staged','--x86-real-restore-staged','--real-restore-dependencies'):
+        for mode in ('--real-restore','--x86-real-restore','--real-restore-staged','--x86-real-restore-staged','--real-restore-dependencies','--issued-target-probe'):
             self.assertEqual(self.run_case(args=(mode,),headroom=1800*1024**2).returncode,0)
             self.assertEqual(self.run_case(args=(mode,),headroom=1800*1024**2-1).returncode,1)
         self.assertEqual(self.run_case(alias=True).returncode,1)

@@ -2,7 +2,7 @@
 # Sole main lab owner only. Fixed ARM/x86 encrypted profiles; no host Podman.
 set -euo pipefail
 case "${1:-}" in
-    --real-restore|--x86-real-restore|--real-restore-staged|--x86-real-restore-staged|--real-restore-dependencies) ;;
+    --real-restore|--x86-real-restore|--real-restore-staged|--x86-real-restore-staged|--real-restore-dependencies|--issued-target-probe) ;;
     *) exit 2 ;;
 esac
 [[ $# = 1 ]] || exit 2

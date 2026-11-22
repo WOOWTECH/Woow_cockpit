@@ -46,7 +46,7 @@ class TransportRefused(ValueError):
 # Reuse the original bounded, private extraction/dependency loader, including its
 # finally cleanup. No independent tar parser or key/archive frame implementation.
 _dispatch="""
- if mode in (b'G',b'I',b'g',b'i',b'T'):
+ if mode in (b'G',b'I',b'g',b'i',b'T',b'U'):
   from emqx_real_owner_transport import owner_main
   raise SystemExit(owner_main(mode))
 """
@@ -116,7 +116,7 @@ def bundle_code():
     selected=[p for p in paths if (Path(p).name.startswith('emqx_') and Path(p).suffix in ('.py','.escript','.expr'))
               or Path(p).name=='ha_real_fixture.py']
     required={'emqx_real_owner_transport.py','emqx_real_owner_workflow.py','emqx_post_restore_values.py',
-              'emqx_owner_fixture_files.py','emqx_target_fixture_policy.py','emqx_adapter_mqtt.py'}
+              'emqx_owner_fixture_files.py','emqx_target_fixture_policy.py','emqx_adapter_mqtt.py','emqx_issued_target_probe.py'}
     if not required<={Path(p).name for p in selected}:raise ValueError()
     raw=subprocess.check_output(['git','archive','HEAD','backup-engine/woowbackup',*selected],cwd=ROOT)
     if not 0<len(raw)<=16*1024*1024:raise ValueError()
@@ -129,18 +129,22 @@ def canonical_receipt():
 
 
 def retain_restore_evidence(frame):
+    return _retain_evidence(frame,canonical_receipt(),'emqx-real-owner-evidence-','owner-restore.txt')
+
+
+def _retain_evidence(frame,expected,prefix,name):
     from emqx_framed_preflight import MAGIC,MAX_FRAME
     if type(frame) is not bytes or not len(MAGIC)+4<len(frame)<=MAX_FRAME or not frame.startswith(MAGIC):raise ValueError()
     start=len(MAGIC)+4
     size=struct.unpack('!I',frame[len(MAGIC):start])[0]
     if not 0<size<=65536 or len(frame)!=start+size+32:raise ValueError()
     raw=frame[start:start+size]
-    if hashlib.sha256(raw).digest()!=frame[-32:] or raw!=canonical_receipt():raise ValueError()
+    if hashlib.sha256(raw).digest()!=frame[-32:] or raw!=expected:raise ValueError()
     parent=PRIVATE_PARENT;info=parent.stat()
     if (not stat.S_ISDIR(info.st_mode) or info.st_uid!=os.geteuid() or stat.S_IMODE(info.st_mode)!=0o700
             or any(p.is_symlink() for p in (parent,*parent.parents))):raise ValueError()
-    root=Path(tempfile.mkdtemp(prefix='emqx-real-owner-evidence-',dir=parent))
-    path=root/'owner-restore.txt';created=False
+    root=Path(tempfile.mkdtemp(prefix=prefix,dir=parent))
+    path=root/name;created=False
     try:
         fd=os.open(path,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o600)
         created=True
@@ -159,15 +163,17 @@ def dependency_check():
     from emqx_real_owner_workflow import run_real_framed_owner,_composite_observer_factory,final_private_receipt
     from emqx_post_restore_values import collect_post_restore_values
     from emqx_adapter_mqtt import CLIENT
+    from emqx_issued_target_probe import run_issued_target_probe,TARGET_RECEIPT
     from woowbackup.adapters.quadlet_postgres import QuadletPostgresAdapter
     from woowbackup import flows
     if not all(callable(x) for x in (run_real_framed_owner,_composite_observer_factory(),
-            final_private_receipt,collect_post_restore_values,QuadletPostgresAdapter,flows.run_restore)):
+            final_private_receipt,collect_post_restore_values,run_issued_target_probe,QuadletPostgresAdapter,flows.run_restore)):
         raise ValueError()
-    if type(CLIENT) is not str:raise ValueError()
+    if type(CLIENT) is not str or type(TARGET_RECEIPT) is not bytes or not 0<len(TARGET_RECEIPT)<=65536:raise ValueError()
 
 
 def owner_main(mode):
+    if mode==b'U':return owner_probe()
     if mode==b'T':
         dependency_check()
         if sys.stdin.buffer.read(1):return 1
@@ -206,8 +212,31 @@ def owner_main(mode):
         signal.signal(signal.SIGALRM,previous)
 
 
+def owner_probe():
+    from emqx_arm_source_owner import _owner_realm
+    from emqx_issued_target_probe import run_issued_target_probe,TARGET_RECEIPT,IssuedProbeRefused,PHASES
+    if not _owner_realm():return 1
+    def deadline(*_):raise ValueError()
+    previous=signal.signal(signal.SIGALRM,deadline)
+    try:
+        signal.setitimer(signal.ITIMER_REAL,840)
+        if sys.stdin.buffer.read(1):raise ValueError()
+        raw=run_issued_target_probe()
+        if type(raw) is not bytes or raw!=TARGET_RECEIPT:raise ValueError()
+        from emqx_framed_preflight import evidence_frame
+        sys.stdout.buffer.write(evidence_frame(raw));sys.stdout.buffer.flush();return 0
+    except BaseException as error:
+        phase=error.phase if type(error) is IssuedProbeRefused and error.phase in PHASES else 'realm'
+        sys.stdout.buffer.write(b'ISSUEDPROBE-REFUSED:'+phase.encode('ascii')+b'\n')
+        sys.stdout.buffer.flush();return 1
+    finally:
+        signal.setitimer(signal.ITIMER_REAL,0)
+        signal.signal(signal.SIGALRM,previous)
+
+
 def read_result(child,*,timeout=900):
     from emqx_real_owner_workflow import PHASES
+    from emqx_issued_target_probe import PHASES as PROBE_PHASES
     from emqx_framed_preflight import MAX_FRAME
     deadline=time.monotonic()+timeout;result=bytearray()
     with selectors.DefaultSelector() as selector:
@@ -223,6 +252,9 @@ def read_result(child,*,timeout=900):
         for phase in PHASES:
             if bytes(result)==b'REALOWNER-REFUSED:'+phase.encode('ascii')+b'\n':
                 raise TransportRefused(phase)
+        for phase in PROBE_PHASES:
+            if bytes(result)==b'ISSUEDPROBE-REFUSED:'+phase.encode('ascii')+b'\n':
+                raise TransportRefused('probe_'+phase)
         raise TransportRefused('child')
     return bytes(result)
 
@@ -232,16 +264,25 @@ def main(argv=None):
     try:
         args=sys.argv[1:] if argv is None else argv
         dependency_only=args==['--real-restore-dependencies']
-        if not dependency_only and (len(args)!=1 or args[0] not in MODES):raise ValueError()
+        probe_only=args==['--issued-target-probe']
+        if not dependency_only and not probe_only and (len(args)!=1 or args[0] not in MODES):raise ValueError()
         phase='bundle';code=bundle_code()
         phase='dependencies';deps=dependencies()
-        if dependency_only:
+        if dependency_only or probe_only:
             child=subprocess.Popen([str(ROOT/'tests/e2e/lab/owner.sh'),'d','/usr/bin/python3','-c',BOOTSTRAP],
                 stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.DEVNULL)
-            child.stdin.write(struct.pack('!Q',len(code))+code+struct.pack('!Q',len(deps))+deps+b'T')
+            child.stdin.write(struct.pack('!Q',len(code))+code+struct.pack('!Q',len(deps))+deps+(b'U' if probe_only else b'T'))
             child.stdin.close()
-            if read_result(child,timeout=60)!=DEPENDENCIES:raise ValueError()
-            print('REAL OWNER DEPENDENCIES PASSED',flush=True);return 0
+            phase='child';frame=read_result(child,timeout=900 if probe_only else 60)
+            if probe_only:
+                from emqx_issued_target_probe import TARGET_RECEIPT
+                phase='receipt'
+                _retain_evidence(frame,TARGET_RECEIPT,'emqx-issued-target-evidence-','issued-target.txt')
+                print('ISSUED TARGET PROBE PASSED',flush=True)
+            else:
+                if frame!=DEPENDENCIES:raise ValueError()
+                print('REAL OWNER DEPENDENCIES PASSED',flush=True)
+            return 0
         source_mode,mode,no_live=MODES[args[0]]
         profile=source_profile(source_mode)
         phase='client_credentials';prefix=client_prefix(source_mode)
@@ -284,7 +325,8 @@ def main(argv=None):
                 try:child.wait(timeout=30)
                 except BaseException:pass
         from emqx_real_owner_workflow import PHASES
-        if phase not in HOST_PHASES|PHASES:phase='profile'
+        from emqx_issued_target_probe import PHASES as PROBE_PHASES
+        if phase not in HOST_PHASES|PHASES|{'probe_'+p for p in PROBE_PHASES}:phase='profile'
         print('REAL OWNER '+phase.upper()+' REFUSED',flush=True);return 1
 
 

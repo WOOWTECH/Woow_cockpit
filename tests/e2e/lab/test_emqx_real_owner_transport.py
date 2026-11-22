@@ -110,3 +110,99 @@ class TransportTests(unittest.TestCase):
                 self.assertEqual(m.main(args),1)
                 bundle.assert_not_called()
             self.assertEqual(out.getvalue(),'REAL OWNER PROFILE REFUSED\n')
+
+    def test_host_actual_controller_frames_only_fixed_profile_and_exact_cipher_eof(self):
+        import emqx_real_owner_transport as m
+        from emqx_source_profiles import source_profile
+        from emqx_framed_preflight import evidence_frame
+        from emqx_real_owner_workflow import read_source_clients
+        from dataclasses import replace
+        import contextlib,hashlib,struct
+        from unittest.mock import Mock
+        class Sink(io.BytesIO):
+            def close(self):pass
+        for mode in ('--real-restore','--x86-real-restore'):
+            with tempfile.TemporaryDirectory() as d:
+                root=Path(d);cipher=b'generated-cipher-only';archive=root/'cipher.tar';archive.write_bytes(cipher)
+                creds=root/'clients';creds.write_bytes(b'B1_MQTT_USER1=b1-sensor\nB1_MQTT_PW1=generated-one\nB1_MQTT_USER2=b1-gateway\nB1_MQTT_PW2=generated-two\nB1_MQTT_USER3=generated-third\nB1_MQTT_PW3=generated-three\n');creds.chmod(0o600)
+                key=root/'key';key.write_bytes(b'HA_BACKUP_KEY=generated-private-key\n');key.chmod(0o600)
+                source_mode,wire_mode,_=m.MODES[mode]
+                profile=replace(source_profile(source_mode),archive=archive,sha256=hashlib.sha256(cipher).hexdigest())
+                sink=Sink();child=Mock(stdin=sink);out=io.StringIO()
+                with patch.object(m,'CLIENT_CREDS',creds),patch.object(m,'KEY_CREDS',key), \
+                     patch.object(m,'retained_expectations',return_value=[b'b1/retained/one',b'generated-first',b'b1/retained/two',b'generated-second']), \
+                     patch.object(m,'source_profile',return_value=profile),patch.object(m,'bundle_code',return_value=b'generated-code'), \
+                     patch.object(m,'dependencies',return_value=b'generated-public-deps'),patch.object(m.subprocess,'Popen',return_value=child) as spawn, \
+                     patch.object(m,'read_result',return_value=evidence_frame(m.canonical_receipt())),patch.object(m,'retain_restore_evidence') as retain, \
+                     contextlib.redirect_stdout(out):
+                    self.assertEqual(m.main([mode]),0)
+                stream=io.BytesIO(sink.getvalue())
+                def part():return stream.read(struct.unpack('!Q',stream.read(8))[0])
+                self.assertEqual(part(),b'generated-code');self.assertEqual(part(),b'generated-public-deps')
+                self.assertEqual(stream.read(1),wire_mode)
+                clients=read_source_clients(stream,source_mode)
+                self.assertEqual(clients.fields['sensor_password'],b'generated-one')
+                self.assertEqual(stream.read(struct.unpack('!I',stream.read(4))[0]),b'generated-private-key')
+                self.assertEqual(part(),cipher);self.assertEqual(stream.read(),b'')
+                self.assertNotIn('env',spawn.call_args.kwargs)
+                self.assertEqual(spawn.call_args.args[0][:3],[str(m.ROOT/'tests/e2e/lab/owner.sh'),'d','/usr/bin/python3'])
+                retain.assert_called_once_with(evidence_frame(m.canonical_receipt()))
+                self.assertEqual(out.getvalue(),'REAL OWNER RESTORE ROLLBACK PASSED\n')
+                self.assertNotIn('generated-private-key',repr(spawn.call_args))
+
+    def test_missing_retained_binding_refuses_before_key_or_child(self):
+        import emqx_real_owner_transport as m
+        import contextlib
+        out=io.StringIO()
+        with patch.object(m,'bundle_code',return_value=b'code'),patch.object(m,'dependencies',return_value=b'deps'), \
+             patch.object(m,'read_client_credentials',return_value=[b'b1-sensor',b'a',b'b1-gateway',b'b',b'third',b'c']), \
+             patch.object(m,'read_fixed_fields') as read,patch.object(m.subprocess,'Popen') as spawn,contextlib.redirect_stdout(out):
+            self.assertEqual(m.main(['--real-restore']),1)
+        read.assert_not_called();spawn.assert_not_called()
+        self.assertEqual(out.getvalue(),'REAL OWNER RETAINED_BINDING REFUSED\n')
+
+    def test_probe_host_dispatch_has_no_source_inputs_and_retains_exact_scanned_target_bytes(self):
+        import emqx_real_owner_transport as m
+        from emqx_issued_target_probe import TARGET_RECEIPT
+        from emqx_framed_preflight import evidence_frame
+        import contextlib,struct
+        from unittest.mock import Mock
+        class Sink(io.BytesIO):
+            def close(self):pass
+        sink=Sink();child=Mock(stdin=sink);out=io.StringIO()
+        with patch.object(m,'bundle_code',return_value=b'generated-code'),patch.object(m,'dependencies',return_value=b'generated-deps'), \
+             patch.object(m.subprocess,'Popen',return_value=child) as spawn,patch.object(m,'read_result',return_value=evidence_frame(TARGET_RECEIPT)), \
+             patch.object(m,'read_fixed_fields') as creds,patch.object(m,'client_prefix') as prefix,patch.object(m,'source_profile') as profile, \
+             patch.object(m,'_retain_evidence') as retain,contextlib.redirect_stdout(out):
+            self.assertEqual(m.main(['--issued-target-probe']),0)
+        self.assertEqual(sink.getvalue(),struct.pack('!Q',14)+b'generated-code'+struct.pack('!Q',14)+b'generated-deps'+b'U')
+        creds.assert_not_called();prefix.assert_not_called();profile.assert_not_called()
+        retain.assert_called_once_with(evidence_frame(TARGET_RECEIPT),TARGET_RECEIPT,'emqx-issued-target-evidence-','issued-target.txt')
+        self.assertNotIn('env',spawn.call_args.kwargs)
+        self.assertEqual(out.getvalue(),'ISSUED TARGET PROBE PASSED\n')
+
+    def test_probe_child_calls_actual_helper_contract_and_refuses_trailing_or_foreign_receipt(self):
+        import emqx_real_owner_transport as m
+        import emqx_arm_source_owner as realm
+        import emqx_issued_target_probe as probe
+        import contextlib
+        from types import SimpleNamespace
+        from emqx_framed_preflight import evidence_frame
+        for extra,returned,code in ((b'',probe.TARGET_RECEIPT,0),(b'x',probe.TARGET_RECEIPT,1),(b'',b'private-foreign-result',1)):
+            out=io.BytesIO()
+            with patch.object(realm,'_owner_realm',return_value=True), \
+                 patch.object(probe,'run_issued_target_probe',return_value=returned) as run, \
+                 patch.object(m.sys,'stdin',SimpleNamespace(buffer=io.BytesIO(extra))), \
+                 patch.object(m.sys,'stdout',SimpleNamespace(buffer=out)):
+                self.assertEqual(m.owner_main(b'U'),code)
+            if extra:run.assert_not_called()
+            else:run.assert_called_once_with()
+            if code==0:self.assertEqual(out.getvalue(),evidence_frame(probe.TARGET_RECEIPT))
+            else:self.assertEqual(out.getvalue(),b'ISSUEDPROBE-REFUSED:realm\n')
+        for phase in probe.PHASES:
+            out=io.BytesIO()
+            with patch.object(realm,'_owner_realm',return_value=True), \
+                 patch.object(probe,'run_issued_target_probe',side_effect=probe.IssuedProbeRefused(phase)), \
+                 patch.object(m.sys,'stdin',SimpleNamespace(buffer=io.BytesIO())),patch.object(m.sys,'stdout',SimpleNamespace(buffer=out)):
+                self.assertEqual(m.owner_main(b'U'),1)
+            self.assertEqual(out.getvalue(),b'ISSUEDPROBE-REFUSED:'+phase.encode()+b'\n')
