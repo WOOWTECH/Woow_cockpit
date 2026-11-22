@@ -37,6 +37,8 @@ MODES={
  '--x86-real-restore-staged':('--x86-source-vendor-acl-sql-aliases',b'i',True),
 }
 CLIENT_KEYS=tuple(k for i in (1,2,3) for k in (f'B1_MQTT_USER{i}',f'B1_MQTT_PW{i}'))
+ADMISSION=b'WOOWREALOWNER-ADMITTED1:'
+MAX_BODY=512*1024*1024+16384
 STAGED=b'REAL OWNER STAGED ONLY PASSED\n'
 DEPENDENCIES=b'REAL OWNER DEPENDENCIES PASSED\n'
 HOST_PHASES=frozenset(('profile','bundle','dependencies','client_credentials','retained_binding','key','archive','archive_binding','transfer','child','receipt'))
@@ -255,6 +257,44 @@ def dependency_check():
     if type(CLIENT) is not str or type(TARGET_RECEIPT) is not bytes or not 0<len(TARGET_RECEIPT)<=65536:raise ValueError()
 
 
+class AdmittedStream:
+    """Expose logical EOF only after host's post-SHA/stamp commit and real EOF.
+
+    The outer length covers the unchanged ten-field/key/cipher inner frame.
+    No admission/EOF means staged_owner_frame never yields a source, so no cold
+    collection or target mutation is possible, even with otherwise valid bytes.
+    """
+    def __init__(self,stream):
+        self._stream=stream;self._admitted=False
+        self._remaining=struct.unpack('!Q',self._exact(8))[0]
+        if not 0<self._remaining<=MAX_BODY:raise ValueError()
+
+    def _exact(self,n):
+        chunks=[]
+        while n:
+            raw=self._stream.read(min(n,65536))
+            if type(raw) is not bytes or not raw or len(raw)>n:raise ValueError()
+            chunks.append(raw);n-=len(raw)
+        return b''.join(chunks)
+
+    def read(self,size):
+        if type(size) is not int or not 0<=size<=65536:raise ValueError()
+        if size==0:return b''
+        if self._remaining:
+            raw=self._stream.read(min(size,self._remaining))
+            if type(raw) is not bytes or not raw or len(raw)>min(size,self._remaining):raise ValueError()
+            self._remaining-=len(raw)
+            return raw
+        if not self._admitted:
+            if self._exact(len(ADMISSION))!=ADMISSION or self._stream.read(1)!=b'':raise ValueError()
+            if hasattr(self._stream,'finish'):self._stream.finish()
+            self._admitted=True
+        return b''
+
+    def finish(self):
+        if self._remaining or not self._admitted:raise ValueError()
+
+
 def owner_main(mode):
     if mode==b'U':return owner_probe()
     if mode==b'T':
@@ -274,7 +314,8 @@ def owner_main(mode):
         from emqx_framed_preflight import evidence_frame
         with tempfile.TemporaryDirectory(prefix='emqx-real-owner-private-',dir=Path.home()) as d:
             parent=Path(d);parent.chmod(0o700)
-            result=run_real_framed_owner(sys.stdin.buffer,private_parent=parent,source_mode=source_mode,no_live=no_live)
+            admitted=AdmittedStream(sys.stdin.buffer)
+            result=run_real_framed_owner(admitted,private_parent=parent,source_mode=source_mode,no_live=no_live)
         if no_live:
             if result!={'scope':'sha-bound-ciphertext-and-client-frame-only','runtime':'not-run',
                     'source_authentication':'not-performed','restore':'not-performed'}:raise ValueError()
@@ -380,7 +421,9 @@ def main(argv=None):
             child=subprocess.Popen([str(ROOT/'tests/e2e/lab/owner.sh'),'d','/usr/bin/python3','-c',BOOTSTRAP],
                 stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.DEVNULL)
             phase='transfer'
-            child.stdin.write(struct.pack('!Q',len(code))+code+struct.pack('!Q',len(deps))+deps+mode+prefix)
+            body_size=len(prefix)+4+len(key)+8+before.st_size
+            if not 0<body_size<=MAX_BODY:raise ValueError()
+            child.stdin.write(struct.pack('!Q',len(code))+code+struct.pack('!Q',len(deps))+deps+mode+struct.pack('!Q',body_size)+prefix)
             child.stdin.write(struct.pack('!I',len(key))+key+struct.pack('!Q',before.st_size))
             digest=hashlib.sha256();total=0
             while total<before.st_size:
@@ -390,6 +433,8 @@ def main(argv=None):
             phase='archive_binding'
             if archive.read(1) or _snapshot(before)!=_snapshot(os.fstat(archive.fileno())) or digest.hexdigest()!=profile.sha256:
                 raise ValueError()
+            # Sole admission point. An exceptional close is NOT a commit.
+            child.stdin.write(ADMISSION)
             child.stdin.close()
         phase='child';frame=read_result(child,timeout=900)
         if no_live:

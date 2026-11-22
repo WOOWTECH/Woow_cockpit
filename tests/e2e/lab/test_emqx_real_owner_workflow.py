@@ -536,3 +536,64 @@ class FoundationTests(unittest.TestCase):
                 provision.assert_not_called();cleanup.assert_not_called()
             build.assert_not_called();capture.assert_not_called()
             self.assertEqual(list(self.root.glob('emqx-framed-private-*')),[])
+
+    def test_missing_or_invalid_host_admission_cannot_reach_history_or_provision(self):
+        from dataclasses import replace
+        import hashlib,struct
+        import emqx_real_owner_transport as transport
+        from emqx_source_profiles import ARM_SQL_ALIASES
+        cipher=b'generated-cipher-valid-sha';key=b'generated-only-key'
+        body=self.client_frame()+struct.pack('!I',len(key))+key+struct.pack('!Q',len(cipher))+cipher
+        profile=replace(ARM_SQL_ALIASES,sha256=hashlib.sha256(cipher).hexdigest())
+        for trailer in (b'',transport.ADMISSION[:-1],b'x'*len(transport.ADMISSION),transport.ADMISSION+b'private-trailing'):
+            stream=transport.AdmittedStream(io.BytesIO(struct.pack('!Q',len(body))+body+trailer))
+            with patch.object(m,'OwnerProvision',return_value=self.provision), \
+                 patch('emqx_fresh_owner_workflow.source_profile',return_value=profile), \
+                 patch.object(Path,'read_text',side_effect=['0',str(4*1024**3)]), \
+                 patch('emqx_fresh_owner_workflow.socket.gethostname',return_value='woowbk-dev-d'), \
+                 patch.object(self.provision,'create') as create,patch.object(self.provision,'cleanup') as cleanup, \
+                 patch.object(m,'_payload_history') as history,patch.object(m,'capture_owner_source') as capture, \
+                 patch.object(m,'build_captured_candidate') as build:
+                with self.assertRaises(m.RealOwnerRefused) as caught:
+                    m.run_real_framed_owner(stream,private_parent=self.root,source_mode=m.SOURCE_MODES[0],no_live=False)
+            self.assertEqual(caught.exception.phase,'frame')
+            for operation in (create,cleanup,history,capture,build):operation.assert_not_called()
+            self.assertEqual(list(self.root.glob('emqx-framed-private-*')),[])
+
+    def test_host_metadata_refusal_closes_valid_cipher_without_admitting_actual_child(self):
+        from dataclasses import replace
+        import contextlib,hashlib,struct
+        import emqx_real_owner_transport as transport
+        from emqx_source_profiles import ARM_SQL_ALIASES
+        cipher=b'generated-cipher-same-bytes';key=b'generated-key'
+        archive=self.root/'generated-cipher';archive.write_bytes(cipher)
+        profile=replace(ARM_SQL_ALIASES,archive=archive,sha256=hashlib.sha256(cipher).hexdigest())
+        class Sink(io.BytesIO):
+            def close(self):pass
+            def write(self,raw):
+                n=super().write(raw)
+                if raw==cipher:
+                    st=archive.stat();os.utime(archive,ns=(st.st_atime_ns,st.st_mtime_ns+1000000))
+                return n
+        sink=Sink();child=Mock(stdin=sink);out=io.StringIO()
+        with patch.object(transport,'bundle_code',return_value=b'code'),patch.object(transport,'dependencies',return_value=b'deps'), \
+             patch.object(transport,'client_prefix',return_value=self.client_frame()), \
+             patch.object(transport,'read_fixed_fields',return_value=[key]),patch.object(transport,'source_profile',return_value=profile), \
+             patch.object(transport.subprocess,'Popen',return_value=child),patch.object(transport,'read_result') as result,contextlib.redirect_stdout(out):
+            self.assertEqual(transport.main(['--real-restore']),1)
+        self.assertEqual(out.getvalue(),'REAL OWNER ARCHIVE_BINDING REFUSED\n');result.assert_not_called()
+        raw=io.BytesIO(sink.getvalue())
+        for expected in (b'code',b'deps'):self.assertEqual(raw.read(struct.unpack('!Q',raw.read(8))[0]),expected)
+        self.assertEqual(raw.read(1),b'G')
+        stream=transport.AdmittedStream(raw)
+        with patch.object(m,'OwnerProvision',return_value=self.provision), \
+             patch('emqx_fresh_owner_workflow.source_profile',return_value=profile), \
+             patch.object(Path,'read_text',side_effect=['0',str(4*1024**3)]), \
+             patch('emqx_fresh_owner_workflow.socket.gethostname',return_value='woowbk-dev-d'), \
+             patch.object(self.provision,'create') as create,patch.object(self.provision,'cleanup') as cleanup, \
+             patch.object(m,'_payload_history') as history,patch.object(m,'build_captured_candidate') as build:
+            with self.assertRaises(m.RealOwnerRefused) as caught:
+                m.run_real_framed_owner(stream,private_parent=self.root,source_mode=m.SOURCE_MODES[0],no_live=False)
+        self.assertEqual(caught.exception.phase,'frame')
+        for operation in (create,cleanup,history,build):operation.assert_not_called()
+        self.assertEqual(list(self.root.glob('emqx-framed-private-*')),[])
