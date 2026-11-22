@@ -69,6 +69,20 @@ class ConsumerTests(unittest.TestCase):
         with self.assertRaises(consumer.PrivateFailure):
             consumer.Capture('fixture-key', documents(), product_selection='true')
 
+    def test_addon_metadata_urls_are_literal_but_active_options_keep_refusal(self):
+        raw = b'{"system":{"url":"https://example.invalid/docs","webui":"http://[HOST]:[PORT:18083]"},"user":{"options":{"password":"generated-source-password"}}}'
+        values = consumer.addon_values(raw)
+        self.assertIn(b'generated-source-password', values)
+        self.assertIn(b'https://example.invalid/docs', values)
+        values = consumer.addon_values(b'{"system":{"url":"https://user:p%40ss@example.invalid/"}}')
+        self.assertIn(b'p@ss', values)
+        with self.assertRaises(Exception):
+            consumer.addon_values(b'{"user":{"options":{"password":"file:/private"}}}')
+        with self.assertRaises(Exception):
+            consumer.addon_values(b'{"user":{"options":{"url":"https://unsupported.invalid/"}}}')
+        with self.assertRaises(Exception):
+            consumer.addon_values(b'{"system":{"url":"one","url":"two"}}')
+
     def test_missing_unknown_binary_and_trailing_sources_refuse(self):
         for raw in (payload()[:3072], payload() + b'nonzero-trailer',
                     payload([{'name': 'data/emqx/data/mnesia/schema.DAT', 'data': b'binary'}]),

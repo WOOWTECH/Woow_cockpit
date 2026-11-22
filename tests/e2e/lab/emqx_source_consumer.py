@@ -8,6 +8,7 @@ import contextlib
 import io
 import json
 import tarfile
+from urllib.parse import unquote_to_bytes
 
 from woowbackup import habackup, hasecuretar, ha_emqx
 from emqx_private_boundary import Registry, PrivateFailure, SOURCES, MAX_VALUE, MAX_TOTAL
@@ -17,7 +18,7 @@ from emqx_semantic_readers import read_hocon, MAX_INPUT, SemanticRefused
 MAX_STREAM = 8 * 1024 * 1024
 
 
-def json_values(raw):
+def json_values(raw, *, metadata_urls=False):
     """Read every string leaf; reject references, duplicate keys and complex input."""
     if not isinstance(raw, bytes) or len(raw) > MAX_VALUE:
         refuse()
@@ -42,12 +43,38 @@ def json_values(raw):
             pending.extend((v, depth + 1) for v in value)
         elif isinstance(value, str):
             # No implicit file/env/vault/URL dereference support.
-            if any(token in value for token in ('${', 'file:', 'env:', 'vault:', '://')):
+            if any(token in value for token in ('${', 'file:', 'env:', 'vault:')) or ('://' in value and not metadata_urls):
                 refuse()
             if value:
                 values.append(value.encode('utf-8'))
+                if metadata_urls and '://' in value:
+                    # Literal metadata only: never resolve/fetch. Capture any
+                    # URL userinfo components in raw and percent-decoded forms.
+                    authority = value.split('://', 1)[1].split('/', 1)[0]
+                    if '@' in authority:
+                        userinfo = authority.rsplit('@', 1)[0]
+                        for part in userinfo.split(':', 1):
+                            if part:
+                                values.extend((part.encode(), unquote_to_bytes(part)))
         elif value is not None and not isinstance(value, (bool, int, float)):
             refuse()
+    return values
+
+
+def addon_values(raw):
+    """Strict JSON metadata URLs are literals; active user options keep ref gates.
+
+    No metadata string is executed or dereferenced. All private string leaves
+    remain registered, including raw/decoded URL credential components.
+    """
+    from woowbackup import util
+    doc = util.loads_strict(raw, max_bytes=MAX_VALUE)
+    if not isinstance(doc, dict):
+        refuse()
+    values = []
+    for key, value in doc.items():
+        encoded = json.dumps(value, ensure_ascii=False).encode()
+        values.extend(json_values(encoded, metadata_urls=key != 'user'))
     return values
 
 
@@ -160,7 +187,7 @@ class Capture:
                 found.add(name)
                 raw = archive.extractfile(entry).read(limit + 1)
                 if name == 'addon.json':
-                    source_options.extend(json_values(raw))
+                    source_options.extend(addon_values(raw))
                 elif name == 'data/emqx/node.cookie':
                     if not raw.strip():
                         refuse()
