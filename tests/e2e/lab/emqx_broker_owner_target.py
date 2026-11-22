@@ -11,6 +11,29 @@ from emqx_target_snapshots import register_target_snapshots
 from emqx_private_boundary import PrivateFailure
 
 
+NATIVE_STAGES = frozenset(('typed_setup','effective_config','provider_state','native_inventory',
+    'native_tables','table_storage','table_fragments','table_type','table_lock',
+    'schema_metadata','table_size','table_schema','table_fold','table_row_terms',
+    'schema_terms','serialize_config','serialize_provider','encode_reply'))
+NATIVE_REASONS = frozenset(('undef','badmatch','bad_argument','function_clause',
+    'no_exists','bad_type','not_active','node_not_running','no_transaction','system_limit',
+    'storage_null_copies','storage_external','storage_unknown','storage_unsupported',
+    'fragments_unsupported','table_type_unsupported','table_row_limit',
+    'unsupported_term','native_refused'))
+
+
+def fixed_native_diagnostic(wire):
+    """Only fixed stage/reason enums; never accept a table/abort/value token."""
+    if type(wire) is not bytes or len(wire) > 160:
+        return None
+    match = re.fullmatch(rb'WOOWTARGETFAIL:([a-z_]+):([a-z_]+):ENDok', wire.strip())
+    if not match:
+        return None
+    stage, reason = (part.decode('ascii') for part in match.groups())
+    return {'native_fixed_stage': stage if stage in NATIVE_STAGES else 'native_tables',
+            'native_fixed_reason': reason if reason in NATIVE_REASONS else 'native_refused'}
+
+
 def run_owner_target(root, broker, clients, report):
     checks = report['checks']
     def empty_clients():
@@ -31,11 +54,9 @@ def run_owner_target(root, broker, clients, report):
         result = podman(*args)
         report['native_transport'] = 'passed' if result.returncode == 0 else 'failed'
         wire = result.stdout.strip()
-        match = re.fullmatch(rb'WOOWTARGETFAIL:([a-z_]+):([a-z_]+):ENDok', wire)
-        if match:
-            # All text is fixed producer diagnostic enums, not native values.
-            report['native_fixed_stage'] = match[1].decode()
-            report['native_fixed_reason'] = match[2].decode()
+        diagnostic_fields = fixed_native_diagnostic(wire)
+        if diagnostic_fields is not None:
+            report.update(diagnostic_fields)
         if result.returncode:
             diagnostic = result.stdout + result.stderr
             for marker, code in ((b'unsafe', 'unsafe_variable'), (b'unbound', 'unbound_variable'),
@@ -47,13 +68,6 @@ def run_owner_target(root, broker, clients, report):
                     break
             else:
                 report['native_fixed_reason'] = 'transport_refused'
-            # Only names already present in the fixed source, never arbitrary
-            # server text, may refine an unbound/unsafe variable diagnostic.
-            variables = set(re.findall(rb'\b[A-Z][A-Za-z0-9_]*\b', args[-1].encode()))
-            for variable in variables:
-                if b"'" + variable + b"'" in diagnostic:
-                    report['native_fixed_variable'] = variable.decode()
-                    break
             raise RuntimeError('owner-target-private-eval-refused')
         return result.stdout
     with broker_target_readers(broker=broker, checked=private_checked, quiesce=quiesce) as readers:

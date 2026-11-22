@@ -1,3 +1,38 @@
+%% Diagnostics are fixed enums only. Never serialize abort terms or table names.
+ReasonCode = fun F(R,D) when D < 5 ->
+    case R of
+        {aborted,Nested} -> F(Nested,D+1);
+        {'EXIT',Nested} -> F(Nested,D+1);
+        {badmatch,{aborted,Nested}} -> F(Nested,D+1);
+        {badmatch,_} -> badmatch;
+        {no_exists,_} -> no_exists; {no_exists,_,_} -> no_exists;
+        {bad_type,_} -> bad_type; {bad_type,_,_} -> bad_type; {bad_type,_,_,_} -> bad_type;
+        {not_active,_} -> not_active; {not_active,_,_} -> not_active;
+        {node_not_running,_} -> node_not_running;
+        undef -> undef; badarg -> bad_argument; function_clause -> function_clause;
+        no_exists -> no_exists; bad_type -> bad_type; not_active -> not_active;
+        node_not_running -> node_not_running;
+        no_transaction -> no_transaction; system_limit -> system_limit;
+        storage_null_copies -> storage_null_copies;
+        storage_external -> storage_external; storage_unknown -> storage_unknown;
+        storage_unsupported -> storage_unsupported;
+        fragments_unsupported -> fragments_unsupported;
+        table_type_unsupported -> table_type_unsupported;
+        table_row_limit -> table_row_limit;
+        owner_target_unsupported_term -> unsupported_term;
+        {Nested,Stack} when is_list(Stack) -> F(Nested,D+1);
+        _ -> native_refused
+    end;
+    F(_,_) -> native_refused
+end,
+SafeStage = fun(S) ->
+    case lists:member(S,[typed_setup,effective_config,provider_state,native_inventory,
+        native_tables,table_storage,table_fragments,table_type,table_lock,
+        schema_metadata,table_size,table_schema,table_fold,table_row_terms,
+        schema_terms,serialize_config,serialize_provider,encode_reply]) of
+        true -> S; false -> native_tables
+    end
+end,
 put(woow_target_stage, typed_setup),
 try
 %% Owner-selected fixed read-only expression. No archive/user-selected code.
@@ -28,29 +63,73 @@ true = length(All) =< 64,
 true = lists:member(schema,All),
 Tabs = lists:delete(schema,All),
 put(woow_target_stage, native_tables),
-{atomic,{Definitions,Rows}} = mnesia:transaction(fun() ->
-    lists:foreach(fun(T) ->
-        Storage = mnesia:table_info(T,storage_type),
-        true = lists:member(Storage,[ram_copies,disc_copies,disc_only_copies]),
-        [] = mnesia:table_info(T,frag_properties),
-        Type = mnesia:table_info(T,type),
-        true = lists:member(Type,[set,ordered_set,bag]),
-        mnesia:read_lock_table(T)
-    end,Tabs),
-    Defs = [{T,mnesia:table_info(T,all)} || T <- All],
-    Data = [begin
-        Count = mnesia:table_info(T,size), true = Count =< 4096,
-        Record = mnesia:table_info(T,record_name),
-        Attrs = mnesia:table_info(T,attributes),
-        {N,Rs} = mnesia:foldl(fun(R,{C,A}) -> true = C < 4096,
-            {C+1,[Typed(R,0)|A]} end,{0,[]},T),
-        #{table => atom_to_binary(T,utf8),record_name => atom_to_binary(Record,utf8),
-          attributes => [atom_to_binary(A,utf8) || A <- Attrs],
-          row_count => N,rows => lists:reverse(Rs)}
-    end || T <- Tabs],
-    put(woow_target_stage, schema_terms),
-    {Typed(Defs,0),Data}
+Transaction = mnesia:transaction(fun() ->
+    erase(woow_target_failure),
+    try
+        lists:foreach(fun(T) ->
+            put(woow_target_stage, table_storage),
+            Storage = mnesia:table_info(T,storage_type),
+            case Storage of
+                ram_copies -> ok; disc_copies -> ok; disc_only_copies -> ok;
+                null_copies -> error(storage_null_copies);
+                {ext,_,_} -> error(storage_external);
+                unknown -> error(storage_unknown);
+                _ -> error(storage_unsupported)
+            end,
+            put(woow_target_stage, table_fragments),
+            case mnesia:table_info(T,frag_properties) of
+                [] -> ok; _ -> error(fragments_unsupported)
+            end,
+            put(woow_target_stage, table_type),
+            Type = mnesia:table_info(T,type),
+            case lists:member(Type,[set,ordered_set,bag]) of
+                true -> ok; false -> error(table_type_unsupported)
+            end,
+            put(woow_target_stage, table_lock),
+            mnesia:read_lock_table(T)
+        end,Tabs),
+        put(woow_target_stage, schema_metadata),
+        Defs = [{T,mnesia:table_info(T,all)} || T <- All],
+        Data = [begin
+            put(woow_target_stage, table_size),
+            Count = mnesia:table_info(T,size),
+            case Count =< 4096 of true -> ok; false -> error(table_row_limit) end,
+            put(woow_target_stage, table_schema),
+            Record = mnesia:table_info(T,record_name),
+            Attrs = mnesia:table_info(T,attributes),
+            put(woow_target_stage, table_fold),
+            {N,Rs} = mnesia:foldl(fun(R,{C,A}) ->
+                case C < 4096 of true -> ok; false -> error(table_row_limit) end,
+                put(woow_target_stage, table_row_terms),
+                Row = Typed(R,0),
+                put(woow_target_stage, table_fold),
+                {C+1,[Row|A]}
+            end,{0,[]},T),
+            #{table => atom_to_binary(T,utf8),record_name => atom_to_binary(Record,utf8),
+              attributes => [atom_to_binary(A,utf8) || A <- Attrs],
+              row_count => N,rows => lists:reverse(Rs)}
+        end || T <- Tabs],
+        put(woow_target_stage, schema_terms),
+        {Typed(Defs,0),Data}
+    catch InnerClass:InnerReason:InnerStack ->
+        %% Retain only sanitized enums for diagnostics. Rethrow privately so
+        %% Mnesia retains its original abort/retry behavior; never print terms.
+        put(woow_target_failure,{SafeStage(get(woow_target_stage)),ReasonCode(InnerReason,0)}),
+        erlang:raise(InnerClass,InnerReason,InnerStack)
+    end
 end),
+{Definitions,Rows} = case Transaction of
+    {atomic,Collected} -> Collected;
+    {aborted,AbortReason} ->
+        {InnerStage,InnerCode} = case get(woow_target_failure) of
+            {FailedStage,FailedCode} -> {SafeStage(FailedStage),FailedCode};
+            _ -> {SafeStage(get(woow_target_stage)),ReasonCode(AbortReason,0)}
+        end,
+        put(woow_target_stage, InnerStage),
+        %% InnerCode was produced by ReasonCode; outer catch revalidates it.
+        error({owner_target_fixed,InnerCode});
+    _ -> error({owner_target_fixed,native_refused})
+end,
 All = lists:sort(mnesia:system_info(tables)),
 Before = emqx:get_config([]),
 ProvidersAfter = case emqx_authn_chains:list_authenticators('mqtt:global') of
@@ -70,8 +149,16 @@ Encoded = emqx_utils_json:encode(#{contract => <<"emqx-owner-live-target-v1">>,
 true = byte_size(Encoded) =< 1048576,
 io:format("WOOWTARGET:~s:END",[base64:encode(Encoded)])
 catch _:Reason:_ ->
-    Code = case Reason of
-        undef -> undef; {badmatch,_} -> badmatch; function_clause -> function_clause;
-        owner_target_unsupported_term -> unsupported_term; _ -> native_refused end,
-    io:format("WOOWTARGETFAIL:~s:~s:END",[atom_to_binary(get(woow_target_stage)),atom_to_binary(Code)])
+    Code0 = case Reason of
+        {owner_target_fixed,FixedCode} -> FixedCode;
+        _ -> ReasonCode(Reason,0)
+    end,
+    Code = case lists:member(Code0,[undef,badmatch,bad_argument,function_clause,
+        no_exists,bad_type,not_active,node_not_running,no_transaction,system_limit,
+        storage_null_copies,storage_external,storage_unknown,storage_unsupported,
+        fragments_unsupported,table_type_unsupported,table_row_limit,
+        unsupported_term,native_refused]) of
+        true -> Code0; false -> native_refused
+    end,
+    io:format("WOOWTARGETFAIL:~s:~s:END",[atom_to_binary(SafeStage(get(woow_target_stage))),atom_to_binary(Code)])
 end.
