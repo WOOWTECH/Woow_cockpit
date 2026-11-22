@@ -16,6 +16,8 @@ import emqx_fresh_owner_workflow as workflow
 import emqx_private_owner_driver as driver
 import emqx_owner_source_capture as source_owner
 import emqx_real_candidate as real
+import emqx_owner_vendor_files as vendor_files
+from emqx_target_vendor_policy import FILES
 from emqx_private_boundary import PrivateFailure
 from emqx_source_profiles import ARM_SOURCE
 from test_emqx_source_cold_capture import decoder
@@ -26,6 +28,12 @@ class FixtureRunner:
     uid = os.geteuid()
     def __init__(self):
         self.calls, self.events, self.volumes, self.containers = [], [], {}, {}
+        from test_emqx_owner_vendor_files import VendorFilesTests
+        self.vendor = VendorFilesTests()
+        self.vendor.setUp()
+        self.vendor.paths = sorted(p for p in vendor_files.PATHS if p != '/opt/emqx/etc/acl.conf')
+        for doc in (self.vendor.image, self.vendor.actual):
+            doc['files'] = [f for f in doc['files'] if f['path'] in self.vendor.paths]
         self.failure = None
         self.target_edit = None
         self.login_status = 200
@@ -70,7 +78,7 @@ class FixtureRunner:
             assert '--log-driver=none' in args and '--image-volume=ignore' in args
             assert not any('publish' in a for a in args)
             self.containers[name] = {'Id':'a'*64,'Name':'/'+name,'Image':'sha256:'+workflow.IMAGE,
-                'Config':{'Labels':{workflow.LABEL:nonce}},'State':{'Running':True},
+                'Config':{'Labels':{workflow.LABEL:nonce},'Env':[]},'State':{'Running':True},
                 'HostConfig':{'NetworkMode':'none','PortBindings':{},'LogConfig':{'Type':'none'},
                     'Memory':768*1024**2,'PidsLimit':256,'NanoCpus':750000000},
                 'Mounts':[{'Type':'volume','Name':mounts[0].split(':')[0],'Destination':'/opt/emqx/data'},
@@ -81,6 +89,10 @@ class FixtureRunner:
         if args[0] in ('container','volume') and args[1]=='inspect':
             objects = self.containers if args[0]=='container' else self.volumes
             return self.result(json.dumps([objects[args[2]]]).encode())
+        if args[0]=='inspect':
+            assert 'ticker-suspended' in self.events
+            self.events.append('held-vendor-inspect')
+            return self.result(json.dumps([self.containers[args[1]]]).encode())
         if args[0]=='rm':
             self.events.append('target-removed')
             self.containers.pop(args[-1])
@@ -110,10 +122,17 @@ class FixtureRunner:
                 return self.result(b'ticker_unchanged')
             if 'OWNERNOCLIENTS' in expression:
                 return self.result(b'OWNERNOCLIENTSok')
+            if kwargs.get('timeout') == 10:
+                assert 'ticker-suspended' in self.events
+                self.events.append('held-vendor-observed')
+                return self.result(self.vendor.eval_callback(expression))
             from test_emqx_owner_target import reply_document,cooked_config
             generation = re.search(r'generation => <<"([0-9a-f]{32})">>',expression)[1]
             user,password = self.credentials[-1]
             config = cooked_config()
+            for kind in ('ssl','wss'):
+                config['listeners'][kind]['default']['ssl_options'] = {
+                    key:'${EMQX_ETC_DIR}/certs/'+name for key,name in FILES.items()}
             config['dashboard']['default_username']=user
             config['dashboard']['default_password']=password
             doc = reply_document(generation,config)
@@ -143,6 +162,9 @@ class WorkflowTests(unittest.TestCase):
         self.app = SimpleNamespace(id='emqx')
         self.realm = patch.object(workflow.socket,'gethostname',return_value='woowbk-dev-d')
         self.realm.start(); self.addCleanup(self.realm.stop)
+        native = patch.object(vendor_files, 'run_native',
+            side_effect=lambda *args,**kwargs:self.runner.vendor.native(*args,**kwargs))
+        native.start(); self.addCleanup(native.stop)
 
     def frame(self,**changes):
         raw = self.path.read_bytes()
@@ -188,6 +210,12 @@ class WorkflowTests(unittest.TestCase):
             self.assertEqual(callsite.call_args.kwargs['username'].decode(),self.runner.credentials[-1][0])
             self.assertEqual(callsite.call_args.kwargs['password'].decode(),self.runner.credentials[-1][1])
         self.assertEqual(observed,[self.raw])
+        self.assertIn('held-vendor-inspect',self.runner.events)
+        self.assertEqual(self.runner.events.count('held-vendor-observed'), 1)
+        # The deliberate inner-byte failure still unwinds the held observer;
+        # after-observation only runs on normal return by its existing contract.
+        self.assertLess(self.runner.events.index('held-vendor-observed'),
+                        self.runner.events.index('actual-target-consumer'))
         for args,kwargs in self.runner.calls:
             self.assertNotIn(self.password,repr(args))
             self.assertNotIn('env',kwargs)
@@ -272,3 +300,17 @@ class WorkflowTests(unittest.TestCase):
         with patch.object(workflow.socket,'gethostname',return_value='not-dev-d'):
             with self.assertRaises(PrivateFailure): self.invoke(io.BytesIO(b''))
         self.assertEqual(self.runner.calls,[])
+
+    def test_missing_or_forged_vendor_file_contract_prevents_bridge(self):
+        for case in ('missing','forged'):
+            self.runner = FixtureRunner()
+            if case == 'missing': self.runner.vendor.actual['files'].pop()
+            else: self.runner.vendor.actual['files'][0]['sha256'] = '0'*64
+            with self.subTest(case=case), patch.object(workflow,'source_profile',return_value=self.profile), \
+                 patch.object(source_owner,'native_hocon',self.parser), \
+                 patch.object(source_owner,'native_cold_history',decoder), \
+                 patch.object(driver,'build_captured_candidate') as bridge:
+                with self.assertRaises(PrivateFailure): self.invoke()
+                bridge.assert_not_called()
+            self.assertNotIn('actual-target-consumer',self.runner.events)
+            self.assert_owned_cleanup()

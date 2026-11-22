@@ -116,9 +116,9 @@ class DriverTests(unittest.TestCase):
         self.vendor.setUp()
         self.vendor.broker = BROKER
         self.vendor.inspect[0]['Name'] = '/' + BROKER
-        self.vendor.paths = sorted(p for p in vendor_files.PATHS if '/certs/' in p)
+        self.vendor.paths = sorted(p for p in vendor_files.PATHS if '/certs/' in p or p == vendor_files.BOOTSTRAP)
         for doc in (self.vendor.image, self.vendor.actual):
-            doc['files'] = [f for f in doc['files'] if '/certs/' in f['path']]
+            doc['files'] = [f for f in doc['files'] if '/certs/' in f['path'] or f['path'] == vendor_files.BOOTSTRAP]
         self.inspect_override = None
         self.parser = OwnerHarnessTests.hocon
         self.evidence = self.root/'evidence'
