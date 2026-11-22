@@ -19,7 +19,7 @@ postflight() {
     set +e
     "$LAB_DIR/owner.sh" d --verify-isolation >/dev/null
     isolated=$?
-    "$LAB_DIR/owner.sh" d python3 -c 'import pathlib,subprocess,sys; p=subprocess.run(["podman","ps","-aq","--filter","name=emqx-native-"],capture_output=True,text=True); ok=p.returncode==0 and not p.stdout.strip() and not list(pathlib.Path("/tmp").glob("woowbk-arm-code-*")) and not list(pathlib.Path.home().glob("woowbk-arm-cold-private-*")); sys.exit(0 if ok else 1)'
+    "$LAB_DIR/owner.sh" d python3 -c 'import pathlib,subprocess,sys; p=subprocess.run(["podman","ps","-aq","--filter","name=emqx-native-"],capture_output=True,text=True); ok=p.returncode==0 and not p.stdout.strip() and not list(pathlib.Path("/tmp").glob("woowbk-arm-code-*")) and not list(pathlib.Path.home().glob("woowbk-arm-cold-private-*")) and not any(list(pathlib.Path("/tmp").glob(pattern)) for pattern in ("emqx-hocon-private-*","emqx-cold-private-*","emqx-cold-diagnostic-private-*")); sys.exit(0 if ok else 1)'
     clean=$?
     if [ "$isolated" -ne 0 ] || [ "$clean" -ne 0 ]; then
         echo 'ARM POSTFLIGHT REFUSED'
