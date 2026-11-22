@@ -1,4 +1,6 @@
 import contextlib
+import hashlib
+import tarfile
 import io
 import json
 import os
@@ -11,6 +13,7 @@ from unittest.mock import patch
 
 import ha_real_fixture as gate
 from tests.backup import hafixtures as hx
+from woowbackup.errors import BackupError
 
 
 class FixtureGateTests(unittest.TestCase):
@@ -119,7 +122,11 @@ class FixtureGateTests(unittest.TestCase):
             self.assertEqual(binding['addon_member']('woow-headscale'), 'fedcba98_woow-headscale')
             self.assertEqual(binding['addon_info']('woow-headscale').version, '0.1.3')
             with binding['open']('fedcba98_woow-headscale') as stream:
-                self.assertTrue(stream.read(512))
+                consumed = gate.habackup.Report()
+                names = [entry.name for entry in gate.habackup.iter_entries(stream, report=consumed)]
+                self.assertTrue(consumed.complete)
+                self.assertIn('data/db.sqlite', names)
+                self.assertEqual(consumed.addon.slug, 'woow-headscale')
             with self.assertRaises(gate.Refused):
                 binding['addon_member']('woow-emqx')
         with self.assertRaisesRegex(gate.Refused, 'digest-mismatch'):
@@ -181,7 +188,79 @@ class FixtureGateTests(unittest.TestCase):
         with gate.source_binding(path, 'emqx', '5.8.9', report['sha256'], keys=keys) as bindings:
             slug = bindings['addon_member']('woow-emqx')
             with bindings['open'](slug) as stream:
-                self.assertTrue(stream.read(1))
+                consumed = gate.habackup.Report()
+                bodies = {entry.name: entry.read_all(1024)
+                          for entry in gate.habackup.iter_entries(stream, report=consumed)}
+                self.assertTrue(consumed.complete)
+                self.assertEqual(consumed.addon.slug, 'woow-emqx')
+                self.assertEqual(set(bodies), {'data/emqx/node.name',
+                    'data/emqx/data/configs/cluster.hocon',
+                    'data/emqx/data/mnesia/emqx@127.0.0.1/schema.DAT'})
+                self.assertTrue(all(body == b'DO-NOT-PRINT-SECRET' for body in bodies.values()))
+
+    def test_late_v3_authentication_failure_is_not_a_prefix_read_pass(self):
+        # Two real secretstream chunks: a readable prefix cannot certify the tail.
+        path = self.fixture('emqx', extra=({'name': 'data/padding', 'data': b'x' * (1024 * 1024)},))
+        with tarfile.open(path) as outer:
+            member = next(m for m in outer if m.name.endswith('.tar.gz'))
+            import gzip
+            plain = gzip.decompress(outer.extractfile(member).read())
+            doc = json.load(outer.extractfile('./backup.json'))
+        self.assertGreater(len(plain), hx.V3_CHUNK)
+        encrypted = hx.v3_encrypt(plain)
+        doc.update(protected=True, compressed=False)
+        slug = doc['addons'][0]['slug']
+        payload = encrypted[:-1] + bytes([encrypted[-1] ^ 1])
+        path.write_bytes(hx.outer_bytes([(slug + '.tar', payload)], doc))
+        keys = gate.hasecuretar.Keys(hx.PASSWORD)
+        with gate.habackup.open_backup(path) as opened:
+            with opened.open_addon(slug, keys=keys) as stream:
+                self.assertEqual(len(stream.read(512)), 512)
+            consumed = gate.habackup.Report()
+            with opened.open_addon(slug, keys=keys) as stream:
+                with self.assertRaises(BackupError) as caught:
+                    list(gate.habackup.iter_entries(stream, report=consumed))
+            self.assertEqual(caught.exception.code, 'corrupt-archive')
+            self.assertFalse(consumed.complete)
+        with self.assertRaises(BackupError) as caught:
+            with gate.source_binding(path, 'emqx', '5.8.9',
+                                     hashlib.sha256(path.read_bytes()).hexdigest(), keys=keys):
+                self.fail('a tail-corrupt source must not yield bindings')
+        self.assertEqual(caught.exception.code, 'corrupt-archive')
+
+    def test_truncated_v3_member_refused_before_binding(self):
+        path = self.encrypted_fixture()
+        with tarfile.open(path) as outer:
+            member = next(m for m in outer if m.name.endswith('.tar.gz'))
+            payload = outer.extractfile(member).read()
+            doc = json.load(outer.extractfile('./backup.json'))
+        path.write_bytes(hx.outer_bytes([(member.name, payload[:-1])], doc))
+        # Header/ciphertext length mismatch is rejected even before decryption.
+        with self.assertRaises(BackupError) as caught:
+            with gate.habackup.open_backup(path):
+                self.fail('truncated ciphertext must not open')
+        self.assertEqual(caught.exception.code, 'corrupt-archive')
+        with self.assertRaises(BackupError) as caught:
+            with gate.source_binding(path, 'emqx', '5.8.9',
+                                     hashlib.sha256(path.read_bytes()).hexdigest(),
+                                     keys=gate.hasecuretar.Keys(hx.PASSWORD)):
+                self.fail('truncated ciphertext must not yield bindings')
+        self.assertEqual(caught.exception.code, 'corrupt-archive')
+
+    def test_gzip_trailer_corruption_refuses_source_binding(self):
+        path = self.fixture()
+        with tarfile.open(path) as outer:
+            member = next(m for m in outer if m.name.endswith('.tar.gz'))
+            payload = outer.extractfile(member).read()
+            doc = json.load(outer.extractfile('./backup.json'))
+        corrupted = bytearray(payload)
+        corrupted[-8] ^= 1  # gzip CRC, leaving tar metadata and payload intact
+        path.write_bytes(hx.outer_bytes([(member.name, bytes(corrupted))], doc))
+        with self.assertRaises(BackupError) as caught:
+            with gate.source_binding(path, 'headscale', '0.29.4',
+                                     hashlib.sha256(path.read_bytes()).hexdigest()):
+                self.fail('a bad trailer must not yield bindings')
+        self.assertEqual(caught.exception.code, 'corrupt-archive')
 
     def test_v3_wrong_key_and_hot_state_still_refused(self):
         path = self.encrypted_fixture()

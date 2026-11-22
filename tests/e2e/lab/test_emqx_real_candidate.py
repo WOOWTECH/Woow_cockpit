@@ -149,6 +149,38 @@ class RealCallerTests(unittest.TestCase):
                 for path in result.values():
                     path.unlink()
 
+    def test_builder_completes_its_own_source_stream_after_preflight(self):
+        self.fixture()
+        consumed = []
+        original = gate.habackup.iter_entries
+
+        def observed(stream, select=None, report=None, **kwargs):
+            # Spy only: every byte/parser/final-tag check is the real reader.
+            yield from original(stream, select, report, **kwargs)
+            if report is not None:
+                consumed.append((stream, report))
+
+        with patch.object(gate.habackup, 'iter_entries', side_effect=observed):
+            self.invoke()
+        self.assertEqual(len(consumed), 2, 'one preflight and one builder pass required')
+        self.assertIsNot(consumed[0][0], consumed[1][0])
+        self.assertIsNot(consumed[0][1], consumed[1][1])
+        for stream, report in consumed:
+            self.assertTrue(stream.closed)
+            self.assertTrue(report.complete)
+            self.assertEqual(report.addon.slug, 'woow-emqx')
+
+    def test_public_conversion_stays_blocked_after_private_candidate_build(self):
+        self.fixture()
+        self.invoke()
+        before = list(self.runtime.events)
+        with self.assertRaises(BackupError) as caught:
+            ha_emqx.convert(self.work, self.app, True, self.root / 'public-output')
+        self.assertEqual(caught.exception.code, 'incompatible')
+        self.assertEqual(caught.exception.message, ha_emqx.PRESERVATION_BLOCKER)
+        self.assertEqual(self.runtime.events, before)
+        self.assertFalse((self.root / 'public-output').exists())
+
     def test_invalid_sources_refused_before_temp_objects(self):
         cases = [('hot', {'state': 'started'}), ('plain', {'encrypted': False}),
                  ('version', {'version': '99.0.0'}), ('digest', {}), ('wrong-key', {}), ('missing-key', {})]
@@ -187,7 +219,7 @@ class RealCallerTests(unittest.TestCase):
             self.invoke()
         self.assertIn(b'SOURCE-DATA-MARKER', self.runtime.imported)
         self.assertEqual(self.runtime.events[-1], ('cleanup',))
-        self.assertFalse((self.root / 'candidate-output').exists())
+        self.assertEqual(set(self.root.iterdir()), {self.path})
         self.assertEqual(self.work.open, 'original-open')
 
     def test_cleanup_failure_refuses_result(self):

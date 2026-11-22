@@ -100,6 +100,9 @@ def source_binding(path, app, target_version, expected_sha256, *, keys=None, req
 
     Caller owns the isolated lab work/target and runtime checks. No converter is
     called here. Revalidates staged bytes; never trusts a JSON plan as approval.
+    Each reopened consumer must exhaust habackup.iter_entries and require its
+    report.complete. A prefix read/close does not verify that consumer's trailer
+    or final encryption tag; preflight completion is not consumer completion.
     """
     with habackup.open_backup(path) as opened:
         before = stamp(opened.fd)

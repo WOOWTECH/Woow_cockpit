@@ -99,8 +99,17 @@ class CandidateFlowTests(OmnigentCase):
         self.assertEqual(self.storage.list_backups(), [])
 
     def test_request_fields_cannot_enable_public_conversion(self):
-        with self.assertRaises(BackupError) as caught:
-            self.convert(self.upload_omnigent(), ['omnigent'], schema_ddl_quiesced=True,
-                         omnigent_candidate=True)
-        self.assertEqual(caught.exception.message, omni.SECURITY_BLOCKER)
+        backup_id = self.upload_omnigent()
+        with mock.patch.object(omni, '_convert_candidate',
+                               side_effect=AssertionError('private converter reached')) as private:
+            for test_mode in (False, True):
+                for selector in (True, 'omnigent', {'enabled': True}):
+                    with self.subTest(test_mode=test_mode, selector=selector):
+                        with self.assertRaises(BackupError) as caught:
+                            self.convert(backup_id, ['omnigent'], test_mode=test_mode,
+                                         schema_ddl_quiesced=True, omnigent_candidate=selector)
+                        self.assertEqual(caught.exception.code, 'incompatible')
+                        self.assertEqual(caught.exception.message, omni.SECURITY_BLOCKER)
+            private.assert_not_called()
+        self.assertEqual(self.world.runs, [])
         self.assertEqual(self.storage.list_backups(), [])
