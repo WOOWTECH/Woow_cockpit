@@ -2,6 +2,9 @@
 import io
 import shlex
 import subprocess
+import tempfile
+import sys
+from pathlib import Path
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
@@ -83,8 +86,66 @@ class NCTests(unittest.TestCase):
         self.assertIn('[ ! -s /work/request.1 ]',inner)
         self.assertIn('/bin/busybox cmp -s /work/send.$n /work/request.$n',inner)
         self.assertIn('/bin/busybox cmp -s /work/response /work/received.$n',inner)
-        self.assertIn('exec /bin/busybox timeout 18',m.SCRIPT)
+        self.assertIn('/bin/busybox timeout 18',m.SCRIPT)
         self.assertNotIn('httpd',m.SCRIPT)
+
+    def test_launch_codes_stderr_shape_and_runner_have_fixed_diagnostics(self):
+        for code in m.LAUNCH_CODES:
+            self.output=b'';self.error=b'generated-private-launch-error';self.code=code
+            with self.assertRaises(m.ClientNCRefused) as caught:m.run_client_nc_primitives()
+            self.assertEqual(caught.exception.phase,'launch_'+str(code))
+            self.assertEqual(str(caught.exception),'client-nc-refused')
+            self.assertIsNone(self.fixture.doc)
+        for code,raw,error,phase in ((0,wire(),b'generated-private-stderr','stderr'),
+                (1,b'',b'generated-private-stderr','stderr'),(19,b'',b'','exit_other'),
+                (0,b'',b'','output'),(0,wire(),b'x'*(m.LIMIT+1),'output')):
+            self.code,self.output,self.error=code,raw,error
+            with self.assertRaises(m.ClientNCRefused) as caught:m.run_client_nc_primitives()
+            self.assertEqual(caught.exception.phase,phase)
+            self.assertIsNone(self.fixture.doc)
+        self.code=0;self.output=wire();self.error=b'';self.timeout=True
+        with self.assertRaises(m.ClientNCRefused) as caught:m.run_client_nc_primitives()
+        self.assertEqual(caught.exception.phase,'timeout')
+        self.timeout=False
+        original=self.podman
+        def failed(*args,**kwargs):
+            if args[0]=='run':raise ValueError('generated-private-runner-error')
+            return original(*args,**kwargs)
+        self.fixture.runner.podman=failed
+        with self.assertRaises(m.ClientNCRefused) as caught:m.run_client_nc_primitives()
+        self.assertEqual(caught.exception.phase,'runner')
+
+    def test_actual_outer_shell_setup_failures_are_framed_without_running_network(self):
+        # Execute only generated outer setup against an inert fake executable.
+        # The fake never invokes nc, sockets, containers or any actual image.
+        for phase in m.SETUP:
+            with self.subTest(phase=phase),tempfile.TemporaryDirectory() as directory:
+                root=Path(directory);fake=root/'public-busybox';work=root/'work';work.mkdir()
+                fake.write_text("#!/bin/sh\ncase \"$1\" in\n"
+                    + "--list) " + ("exit 1" if phase=='inventory' else "printf 'nc\\nsh\\ntimeout\\ncmp\\n'") + ";;\n"
+                    + "sh) " + ("exit 1" if phase=='script_setup' else "shift; exec /bin/sh \"$@\"") + ";;\n"
+                    + "timeout) exit 127;;\n*) exit 99;;\nesac\n")
+                fake.chmod(0o700)
+                script=m.SCRIPT.replace('/bin/busybox',str(fake)).replace('/work/',str(work)+'/')
+                result=subprocess.run(['/bin/sh','-c',script],capture_output=True,timeout=3)
+                self.assertNotEqual(result.returncode,0)
+                self.assertTrue(result.stdout.endswith(b'NCPRIMITIVE-REFUSED:'+phase.encode()+b'\n'))
+                with self.assertRaises(m.ClientNCRefused) as caught:m._validate(result)
+                self.assertEqual(caught.exception.phase,phase)
+
+    def test_existing_host_consumer_accepts_only_new_fixed_nc_failure_frames(self):
+        import emqx_real_owner_transport as transport
+        for phase in ('launch_125','runner','script_setup','script_exec','stderr'):
+            frame=b'CLIENTNC-REFUSED:'+phase.encode()+b'\n'
+            with subprocess.Popen([sys.executable,'-c','import sys;sys.stdout.buffer.write('+repr(frame)+');sys.exit(1)'],
+                    stdout=subprocess.PIPE,stderr=subprocess.DEVNULL) as child:
+                with self.assertRaises(transport.TransportRefused) as caught:transport.read_result(child,timeout=5)
+            self.assertEqual(caught.exception.phase,'nc_'+phase)
+        frame=b'CLIENTNC-REFUSED:generated-private-unknown\n'
+        with subprocess.Popen([sys.executable,'-c','import sys;sys.stdout.buffer.write('+repr(frame)+');sys.exit(1)'],
+                stdout=subprocess.PIPE,stderr=subprocess.DEVNULL) as child:
+            with self.assertRaises(transport.TransportRefused) as caught:transport.read_result(child,timeout=5)
+        self.assertEqual(caught.exception.phase,'child')
 
     def test_actual_child_mode_keeps_source_input_forbidden_and_existing_httpd_mode(self):
         import emqx_real_owner_transport as transport

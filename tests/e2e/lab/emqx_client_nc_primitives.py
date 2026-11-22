@@ -5,6 +5,7 @@ one no-network sidecar. These primitives do NOT attest HTTP fixture delivery.
 """
 import re
 import secrets
+import subprocess
 
 from emqx_adapter_owner import OwnerProvision,LabOwnerRunner
 from emqx_adapter_mqtt import CLIENT
@@ -17,15 +18,19 @@ LIMIT=65536
 BEGIN=b'NCPRIMITIVE-APPLETS-BEGIN\n'
 END=b'NCPRIMITIVE-APPLETS-END\n'
 PASS=b'NCPRIMITIVE-BEHAVIOR-PASSED\n'
+SETUP=('inventory','script_setup','script_exec')
+LAUNCH_CODES=frozenset((125,126,127,137))
 BEHAVIOR=('listener','health','empty','repeat_one','repeat_two','requests','responses')
-PHASES=frozenset(('realm','input','owner','run','applets','timeout','cleanup',
+PHASES=frozenset(('realm','input','owner','run','applets','timeout','cleanup','runner','stderr','output','exit_other',
+    *('launch_'+str(code) for code in LAUNCH_CODES),*SETUP,
     *('missing_'+name for name in REQUIRED),*BEHAVIOR))
 TMPFS='/work:rw,noexec,nosuid,nodev,size=1048576,mode=0700,uid=1000,gid=1000'
 
 # All script/HTTP bytes are compiled public synthetic inputs. No args, source
 # fields, host mounts, secret environment or arbitrary executable are accepted.
 SCRIPT=r'''umask 077
-applets=$(/bin/busybox --list) || exit 1
+setup_refused() { printf 'NCPRIMITIVE-REFUSED:%s\n' "$1"; exit 1; }
+applets=$(/bin/busybox --list) || setup_refused inventory
 printf 'NCPRIMITIVE-APPLETS-BEGIN\n%s\nNCPRIMITIVE-APPLETS-END\n' "$applets"
 for applet in nc sh timeout cmp; do
  case "
@@ -35,7 +40,7 @@ $applet
 "*) ;; *) printf 'NCPRIMITIVE-REFUSED:missing_%s\n' "$applet"; exit 1;; esac
 done
 # noexec tmpfs is intentional: the fixed interpreter reads this private script.
-printf '%s' '' > /work/empty
+printf '%s' '' > /work/empty || setup_refused script_setup
 /bin/busybox sh -c 'printf "%s\n" "$1" > /work/probe.sh' sh '
 phase=listener
 loop=
@@ -99,8 +104,12 @@ for n in 1 2 3; do /bin/busybox cmp -s /work/response /work/received.$n || exit 
 wait "$loop" || exit 1
 loop=
 printf "NCPRIMITIVE-BEHAVIOR-PASSED\n"
-' || exit 1
-exec /bin/busybox timeout 18 /bin/busybox sh /work/probe.sh
+' || setup_refused script_setup
+# Preserve a fixed exec failure if the timeout/interpreter cannot be invoked.
+/bin/busybox timeout 18 /bin/busybox sh /work/probe.sh
+code=$?
+case "$code" in 126|127) setup_refused script_exec;; esac
+exit "$code"
 '''
 
 
@@ -110,9 +119,19 @@ class ClientNCRefused(ValueError):
 
 
 def _validate(result):
+    # Only compiled exit classes and framed phases escape. Never copy/parse
+    # stderr content, and never accept a success carrying any stderr bytes.
     if (type(result.returncode) is not int or type(result.stdout) is not bytes
-            or not 0<len(result.stdout)<=LIMIT or type(result.stderr) is not bytes or result.stderr):raise ClientNCRefused('run')
+            or len(result.stdout)>LIMIT or type(result.stderr) is not bytes
+            or len(result.stderr)>LIMIT):raise ClientNCRefused('output')
     raw=result.stdout
+    if not raw:
+        if result.returncode in LAUNCH_CODES:raise ClientNCRefused('launch_'+str(result.returncode))
+        if result.returncode==124:raise ClientNCRefused('timeout')
+        if result.stderr:raise ClientNCRefused('stderr')
+        raise ClientNCRefused('exit_other' if result.returncode else 'output')
+    if raw==b'NCPRIMITIVE-REFUSED:inventory\n' and result.returncode!=0:
+        raise ClientNCRefused('inventory')
     if not raw.isascii() or not raw.startswith(BEGIN):raise ClientNCRefused('applets')
     inventory,separator,tail=raw[len(BEGIN):].partition(END)
     if not separator or not inventory.endswith(b'\n'):raise ClientNCRefused('applets')
@@ -124,11 +143,12 @@ def _validate(result):
         phase='missing_'+missing
         if result.returncode!=0 and tail==b'NCPRIMITIVE-REFUSED:'+phase.encode()+b'\n':raise ClientNCRefused(phase)
         raise ClientNCRefused('applets')
-    if result.returncode==0 and tail==PASS:return
     if result.returncode!=0:
-        for phase in BEHAVIOR:
+        for phase in (*SETUP,*BEHAVIOR):
             if tail==b'NCPRIMITIVE-REFUSED:'+phase.encode()+b'\n':raise ClientNCRefused(phase)
         if result.returncode==124 and not tail:raise ClientNCRefused('timeout')
+    if result.stderr:raise ClientNCRefused('stderr')
+    if result.returncode==0 and tail==PASS:return
     raise ClientNCRefused('run')
 
 
@@ -141,10 +161,12 @@ def run_client_nc_primitives():
         name=provision.fixture.prefix+'-mqtt-'+secrets.token_hex(6)
         with owned_client(provision.runner,name) as args:
             phase='run'
-            result=provision.runner.podman('run','--rm',*args,'--pull=never','--read-only','--network=none',
+            try:result=provision.runner.podman('run','--rm',*args,'--pull=never','--read-only','--network=none',
                 '--image-volume=ignore','--log-driver=none','--memory=32m','--cpus=0.25','--pids-limit=16',
                 '--timeout=20','--stop-timeout=1','--user=1000:1000','--tmpfs',TMPFS,
                 '--entrypoint=/bin/busybox',CLIENT,'sh','-c',SCRIPT,timeout=25,max_output=LIMIT,check=False)
+            except (TimeoutError,subprocess.TimeoutExpired):raise ClientNCRefused('timeout') from None
+            except Exception:raise ClientNCRefused('runner') from None
             _validate(result);phase='cleanup'
         return RECEIPT
     except ClientNCRefused:raise
