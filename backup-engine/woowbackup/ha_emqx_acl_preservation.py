@@ -5,16 +5,23 @@ source skips destroy; builtin update is identity, while destroy clears emqx_acl.
 Keep native receipts private: they contain counts and hashes of private data.
 """
 import copy
+import posixpath
 import re
 from .errors import BackupError
 from .ha_emqx_authorizers import builtin_database_references, builtin_database_shape, BUILTIN_SHAPES
 
 ACL_PROFILE_STAGES = frozenset(('acl_profile','acl_profile_builtin_absent')) | frozenset(
     'acl_profile_builtin_'+shape for shape in BUILTIN_SHAPES)
+# Schema default, and exact release-installed relative name. Imported-only;
+# these strings are preserved, never expanded/read/resolved by this module.
+IMPORTED_DEFAULT_ACL_PATHS = frozenset(('${EMQX_ETC_DIR}/acl.conf','etc/acl.conf'))
+ACL_PATH_CLASSES = frozenset(('nontext','control','traversal','unknown_variable','uri',
+    'relative_other','absolute_noncanonical','default_template','default_relative','absolute'))
 ACL_PROFILE_REASONS = frozenset(('auth_shape','auth_unknownfields','auth_no_match','auth_deny_action',
     'sources_shape','builtin_duplicate','builtin_shape','cache_shape','cache_unknownfields',
     'cache_enable','cache_max_size','cache_ttl','cache_excludes','source_shape',
     'source_duplicate','source_type','file_fields','file_enable','file_path'))
+ACL_PROFILE_REASONS = ACL_PROFILE_REASONS | frozenset('file_path_'+kind for kind in ACL_PATH_CLASSES)
 ACL_PROFILE_STAGES = ACL_PROFILE_STAGES | frozenset('acl_profile_'+reason for reason in ACL_PROFILE_REASONS)
 ACL_REMOVAL_STAGES = ACL_PROFILE_STAGES | frozenset(('acl_baseline','acl_disable','acl_afterdisable','acl_restore','acl_final'))
 
@@ -112,6 +119,20 @@ def imported_acl_profile_stage(imported):
     return 'acl_profile_builtin_'+builtin_database_shape(builtin[0])
 
 
+def acl_path_class(path):
+    """Fixed classification only; never emit a path or expand any variable."""
+    if type(path) is not str: return 'nontext'
+    if any(ord(char)<32 or ord(char)==127 for char in path): return 'control'
+    if '..' in path.split('/') or '\\' in path: return 'traversal'
+    if path=='${EMQX_ETC_DIR}/acl.conf': return 'default_template'
+    if path=='etc/acl.conf': return 'default_relative'
+    if '$' in path: return 'unknown_variable'
+    if '://' in path or path.startswith(('file:','env:','vault:')): return 'uri'
+    if not path.startswith('/'): return 'relative_other'
+    if path.startswith('//') or posixpath.normpath(path)!=path: return 'absolute_noncanonical'
+    return 'absolute'
+
+
 def disabled_intermediate(original, imported, *, observe=None):
     """FILE-only removal: preserve raw omissions and every value except enable.
 
@@ -142,7 +163,7 @@ def disabled_intermediate(original, imported, *, observe=None):
     builtin(builtins[0])
     if not builtins[0]['enable']:
         return None
-    for auth in (original['authorization'],imported['authorization']):
+    for auth, imported_side in ((original['authorization'],False),(imported['authorization'],True)):
         if set(auth)-{'sources','no_match','deny_action','cache'}:
             fail('auth_unknownfields')
         for key,allowed in (('no_match',('allow','deny')),('deny_action',('ignore','disconnect'))):
@@ -172,8 +193,11 @@ def disabled_intermediate(original, imported, *, observe=None):
             elif kind=='file':
                 if set(source)-{'type','enable','path'} or not {'type','path'}<=set(source): fail('file_fields')
                 if 'enable' in source and type(source['enable']) is not bool: fail('file_enable')
-                if (type(source['path']) is not str or not source['path'].startswith('/')
-                        or '\x00' in source['path'] or '$' in source['path']): fail('file_path')
+                path_kind=acl_path_class(source['path'])
+                imported_default=(imported_side and type(source['path']) is str
+                                  and source['path'] in IMPORTED_DEFAULT_ACL_PATHS)
+                if path_kind!='absolute' and not imported_default:
+                    fail('file_path_'+path_kind)
             else:
                 fail('source_type')
             seen.add(kind)

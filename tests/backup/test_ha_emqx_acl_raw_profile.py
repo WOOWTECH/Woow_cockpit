@@ -74,7 +74,7 @@ class RawAclProfileTests(unittest.TestCase):
                 ([builtin,{'type':'http'}],'source_type'),
                 ([builtin,{'type':'file','path':'/a','unknown':True}],'file_fields'),
                 ([builtin,{'type':'file','path':'/a','enable':1}],'file_enable'),
-                ([builtin,{'type':'file','path':'${EMQX_ETC_DIR}/acl.conf'}],'file_path')]:
+                ([builtin,{'type':'file','path':'${UNKNOWN_DIR}/acl.conf'}],'file_path_unknown_variable')]:
             cases.append((put_auth('sources',sources),reason))
         for imported,reason in cases:
             observed=[]
