@@ -10,18 +10,19 @@
     "host_free_approx_gib": 25,
     "minimum_reserve_gib": 12,
     "worker": "01a200bc-f470-7471-b021-d7966700900b",
-    "status": "plain/gzip and age-X25519/zstd actual8193MiB roundtrips passed; late corruption/cancellation negatives assigned",
+    "status": "actual8193MiB plain and encrypted roundtrips passed; actual2GiB encrypted late corruption, truncation and mid-extract cancellation passed",
     "actual_single_file_bytes": 8590983168,
     "compressed_archive_bytes": 111493120,
     "evidence": "tests/backup/evidence/large-single-file-8193mib.json",
     "integration_commit": "53ac6dc",
     "not_covered": [
       "incompressible outer archive above8GiB",
-      "large-stream late corruption and cancellation acceptance",
-      "service restore"
+      "ARM large service restore"
     ],
     "encrypted_evidence": "tests/backup/evidence/large-encrypted-8193mib.json",
-    "encrypted_integration_commit": "36d13a9"
+    "encrypted_integration_commit": "36d13a9",
+    "negative_evidence": "tests/backup/evidence/large-failure-2gib.json",
+    "negative_integration_commit": "28e1572"
   },
   "final_version": {
     "worker": "01a200bc-fdfc-7813-b6d3-10d8413281a7",
@@ -34,12 +35,12 @@
   },
   "cross_physical_restore": {
     "archive_roundtrip": "passed x86 to native ARM to x86, entry and nested payload hashes equal",
-    "service_restore": "Not passed across physical devices. New synthetic HA converter/private import/startup/gRPC success used source and target on the same ARM host; VPN registration still failed.",
+    "service_restore": "Physical service migration still unproved. SameARM syntheticHA converter restore and actualVPN control reconnect passed; x86/ARM archive transfer is separately proved.",
     "payload_bytes": 8396860,
     "synthetic_only": true
   },
   "commercial_acceptance": false,
-  "integrated_version": "c8471ed8bf1582ccea8d626da102cdd4b045da8f",
+  "integrated_version": "32090a0",
   "previous_arm_probe": {
     "host": "192.168.2.34:22",
     "architecture": "aarch64",
@@ -62,8 +63,8 @@
     "original_inventory_preserved": true,
     "integration_commit": "3fe2ff3",
     "evidence": "tests/e2e/lab/evidence/arm54-native-20261122/README.md",
-    "service_blocker": "Version gate resolved with unchanged official package recipe local ARM build; VPN Tailscale registration still fails, root cause under investigation",
-    "next": "Resolve VPN source registration before identity/IP/reconnect assertions; production OwnerRunner/rootless and real network cleanup/transport-failure coverage remain unproved. Passed converter and six lifecycle checks need no repeat.",
+    "service_blocker": null,
+    "next": "Two-client actual VPN data plane; production OwnerRunner/rootless; physical HA-source to independentARM service restore and installer rollback remain unproved",
     "service_evidence": "tests/e2e/lab/evidence/arm54-service-20261122/README.md",
     "service_integration_commit": "fe30094",
     "service_passed": [
@@ -71,17 +72,24 @@
       "private volume restoration",
       "native service startup",
       "gRPC CLI source-user data check",
-      "real TempObjects lifecycle with explicitly injected removal refusal"
+      "real TempObjects lifecycle with explicitly injected removal refusal",
+      "realVPN control registration",
+      "restored sameVPN ID/IPv4/IPv6",
+      "fresh authorized control/netmap after restart without authkey"
     ],
     "service_not_covered": [
-      "VPN node identity/IP recovery and reconnect",
+      "two-client VPN payload/DERP traffic",
       "public installer/rollback",
       "rootless OwnerRunner deployment",
       "real original backups",
-      "Headplane UI"
+      "Headplane UI",
+      "host reboot persistence"
     ],
     "image_provenance": "locally built unmodified official package recipe, binary equals pinned upstream; not shipped image",
     "lifecycle_provenance": "Initial exit1/ValueError after three checks; completion exit0 inherits those three and executes three more. Removal failure is an injected return125 before transport; residue check and retry use real Podman.",
-    "runner_scope": "RootfulRunner direct namespace reads/stat on owned paths, otherwise real private-store Podman; not production OwnerRunner."
+    "runner_scope": "RootfulRunner direct namespace reads/stat on owned paths, otherwise real private-store Podman; not production OwnerRunner.",
+    "vpn_integration_commit": "32090a0",
+    "vpn_evidence": "tests/e2e/lab/evidence/arm54-vpn-20261122/README.md",
+    "vpn_test_condition": "TS_ASSUME_NETWORK_UP_FOR_TEST=true in harness only because networknone has no active non-loopback interface; no external runtime connectivity"
   }
 }
