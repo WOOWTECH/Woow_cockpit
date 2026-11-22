@@ -1,0 +1,17 @@
+{
+  "scope": "public pinned native builtin registration; no private source values",
+  "image_id": "sha256:3f60addfad2bfc6c09400aa48cfbc1b2b2aab04fb6a64d6392c016e02d7fb57b",
+  "emqx_version": "5.8.9",
+  "module": "mnesia_rocksdb",
+  "exact_allowed_registration": [
+    "rocksdb_copies",
+    "mnesia_rocksdb"
+  ],
+  "public_abstract_source_sha256": "8d574ddf082aabc31cff0ba8ade64529cc6e9bc1b31e8756c3e7b4bb0400fe44",
+  "public_register_and_default_alias": "register() ->\n    register(default_alias()).\nregister(Alias) ->\n    Module = mnesia_rocksdb,\n    case mnesia:add_backend_type(Alias, Module) of\n        {atomic, ok} ->\n            {ok, Alias};\n        {aborted, {backend_type_already_exists, _}} ->\n            {ok, Alias};\n        {aborted, Reason} ->\n            {error, Reason}\n    end.\ndefault_alias() ->\n    rocksdb_copies.\n",
+  "backend_executed": false,
+  "unknown_registrations": "refused",
+  "external_copies": "refused",
+  "index_plugins": "refused",
+  "duplicate_user_properties": "refused"
+}

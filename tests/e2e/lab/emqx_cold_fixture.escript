@@ -54,6 +54,15 @@ main([]) ->
     ok=dets:insert(R3,{schema,schema,[{user_properties,
         [{mnesia_backend_types,[{synthetic_alias,never_load_this_backend}]}]}]}),
     ok=dets:close(R3),
+    lists:foreach(fun({Name,BackendProps}) ->
+        R=make_ref(),P=Root++"/"++Name,
+        {ok,R}=dets:open_file(R,[{file,P},{version,9},{type,set},{keypos,2}]),
+        ok=dets:insert(R,{schema,schema,[{user_properties,BackendProps}]}),
+        ok=dets:close(R)
+    end,[{"builtin-backend-schema.DAT",[{mnesia_backend_types,[{rocksdb_copies,mnesia_rocksdb}]}]},
+         {"wrong-builtin-backend-schema.DAT",[{mnesia_backend_types,[{rocksdb_copies,erlang}]}]},
+         {"duplicate-backend-schema.DAT",[{mnesia_backend_types,[]},
+             {mnesia_backend_types,[{synthetic_alias,never_load_this_backend}]}]}]),
     log(Root++"/wrong-header.DCD",mnesia_log:dcl_log_header(),[{row,<<"private">>}]),
     log(Root++"/unknown-version.DCD",setelement(3,mnesia_log:dcd_log_header(),"9.9"),[]),
     lists:foreach(fun(Base) ->

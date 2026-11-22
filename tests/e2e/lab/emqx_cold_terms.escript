@@ -100,8 +100,18 @@ schema_dependencies(Props) ->
     put(phase,<<"SCHEMA_USER_DEPENDENCIES">>),
     User=proplists:get_value(user_properties,Props,[]),
     true=is_list(User),
-    lists:foreach(fun(Key) -> []=proplists:get_value(Key,User,[]) end,
-                  [mnesia_backend_types,mnesia_index_plugins]),
+    UserKeys=[K || {K,_} <- User,is_atom(K)],
+    true=length(UserKeys)=:=length(User),
+    true=length(UserKeys)=:=length(lists:usort(UserKeys)),
+    %% Fixed image's public mnesia_rocksdb:default_alias/0 and register/1.
+    %% Enumerate this known built-in metadata only; never call its module here.
+    case proplists:get_value(mnesia_backend_types,User,[]) of
+        [] -> ok;
+        [{rocksdb_copies,mnesia_rocksdb}] -> ok;
+        _ -> throw(unapproved_schema_backend)
+    end,
+    put(phase,<<"SCHEMA_INDEX_DEPENDENCIES">>),
+    []=proplists:get_value(mnesia_index_plugins,User,[]),
     ok.
 
 %% Empty native log is a separate coverage-only kind: no Mnesia header claim.
