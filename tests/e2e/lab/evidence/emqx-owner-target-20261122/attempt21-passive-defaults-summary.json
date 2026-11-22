@@ -1,0 +1,32 @@
+{
+  "source_commit": "f7224226db22768a1fce43e4b6c13b413018320a",
+  "scope": "actual fresh pinned broker complete supported passive default references; no real source restore",
+  "exit": 1,
+  "elapsed_seconds": 48.34516687504947,
+  "stdout_sha256": "3622b4767aa1bf3bb39ff86cd02d4350c4e0a4e97296e127186b016f4cc05812",
+  "stderr_bytes_not_published": 0,
+  "reports": [
+    {
+      "checks": {
+        "broker_cleanup": "passed",
+        "broker_ready": "passed",
+        "clients_cleanup": "passed",
+        "fresh_ticker_identity_suspended_after": "passed",
+        "fresh_ticker_identity_suspended_before": "passed",
+        "native_fixed_expression_parsed": "passed",
+        "no_clients_after_capture": "passed",
+        "no_clients_before_capture": "passed",
+        "private_files_cleanup": "passed"
+      },
+      "consumer_fixed_reason": "private_refused",
+      "consumer_fixed_stage": "cluster",
+      "ha_commercial_acceptance": "not-claimed",
+      "native_transport": "passed",
+      "result": "failed",
+      "scope": "synthetic-broker-owner-target",
+      "target_completeness": "not-assessed"
+    }
+  ],
+  "postflight_passed": true,
+  "restore_executed": false
+}

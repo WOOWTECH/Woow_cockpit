@@ -1,0 +1,47 @@
+{
+  "scope": "authorized named dev-d owned cgroup file-cache reclaim only",
+  "requested_bytes": 201326592,
+  "swappiness": 0,
+  "result": "complete",
+  "errno": 0,
+  "before": {
+    "current": 2512408576,
+    "maximum": "4294967296",
+    "anon": 1079558144,
+    "file": 1252155392,
+    "shmem": 886788096,
+    "inactive_file": 320602112,
+    "file_dirty": 417792,
+    "events": {
+      "low": "0",
+      "high": "0",
+      "max": "6708",
+      "oom": "5",
+      "oom_kill": "4",
+      "oom_group_kill": "0",
+      "sock_throttled": "65"
+    }
+  },
+  "after": {
+    "current": 2201743360,
+    "maximum": "4294967296",
+    "anon": 1091031040,
+    "file": 1058353152,
+    "shmem": 886788096,
+    "inactive_file": 131764224,
+    "file_dirty": 81920,
+    "events": {
+      "low": "0",
+      "high": "0",
+      "max": "6708",
+      "oom": "5",
+      "oom_kill": "4",
+      "oom_group_kill": "0",
+      "sock_throttled": "65"
+    }
+  },
+  "limits_unchanged": true,
+  "isolation_unchanged": true,
+  "service_stop_requested": false,
+  "shared_locks_opened_readonly": true
+}
