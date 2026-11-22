@@ -1,0 +1,26 @@
+{
+  "native_depth": {
+    "source_commit": "af89ca5",
+    "run": 6,
+    "passed": 6,
+    "failed": 0,
+    "errors": 0,
+    "skipped": 0,
+    "elapsed_seconds": 61.516,
+    "scope": "actual pinned native parser on generated configuration; no real source compatibility claim"
+  },
+  "x86_profile": {
+    "source_commit": "3e56c1e",
+    "run": 27,
+    "passed": 27,
+    "failed": 0,
+    "errors": 0,
+    "skipped": 0,
+    "elapsed_seconds": 6.903,
+    "scope": "generated filesystem and binding/consumer cases, including inherited baseline tests; not real x86 traversal"
+  },
+  "real_arm_configuration": "pending fixed-parser rerun after lab owner handoff",
+  "restore_executed": false,
+  "public_guard_enabled": true,
+  "commercial_acceptance_complete": false
+}
