@@ -30,7 +30,7 @@ printf '{"stage":"source","commit":"%s"}\n' "$(git -C "$REPO_ROOT" rev-parse HEA
 tar -cf - -C "$REPO_ROOT" backup-engine/woowbackup -C "$LAB_DIR" \
     emqx_public_function_catalog.json emqx_broker_workload.py emqx_broker_owner_target.py emqx_owner_target.py emqx_owner_target.expr emqx_owner_target_parse.escript \
     emqx_adapter_owner.py emqx_adapter_fixture.py emqx_adapter_provision.py \
-    emqx_target_vendor_policy.py emqx_owner_vendor_files.py emqx_native_runtime.py \
+    emqx_target_vendor_policy.py emqx_owner_vendor_files.py emqx_bootstrap_csv.py emqx_native_runtime.py \
     emqx_target_capture.py emqx_target_snapshots.py emqx_persisted_values.py emqx_semantic_readers.py \
     ha_real_fixture.py emqx_runtime_live.py emqx_runtime_credentials.py emqx_private_boundary.py \
     emqx_private_evidence.py emqx_real_candidate.py |
