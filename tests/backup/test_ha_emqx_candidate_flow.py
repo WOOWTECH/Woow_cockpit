@@ -128,6 +128,34 @@ class CandidateFlowTests(unittest.TestCase):
             self.assertLess(transport.events.index(first), transport.events.index(second))
         self.assertEqual(transport.events[-1], 'read-candidate')
 
+    def test_imported_retainer_storage_and_expiry_survive_operational_restore(self):
+        source = {'backend': {'type': 'built_in_database', 'storage_type': 'disc'},
+                  'msg_expiry_interval': '2h', 'msg_clear_interval': '1m'}
+        class RetainerTransport(Transport):
+            def exec(self, role, command, **kwargs):
+                result = super().exec(role, command, **kwargs)
+                if command[:4] == ['emqx', 'ctl', 'data', 'import']:
+                    self.running_config['retainer'] = copy.deepcopy(source)
+                return result
+        transport = RetainerTransport()
+        transport.config.update({'retainer': {'backend': {'storage_type': 'ram'}},
+                                 'node': {'name': 'target@localhost', 'data_dir': '/opt/emqx/data'},
+                                 'listeners': {**transport.config['listeners'], 'tcp': {'default': {'bind': 1883}}}})
+        transport.running_config = copy.deepcopy(transport.config)
+        self.invoke(transport)
+        self.assertIn('retainer', emqx.DATA_ROOTS)
+        self.assertNotIn('retainer', transport.restore)
+        self.assertEqual(transport.running_config['retainer'], source)
+        for root in ('authorization', 'node', 'listeners'):
+            self.assertEqual(transport.running_config[root], transport.config[root])
+
+    def test_retainer_raw_omissions_and_ram_are_not_rewritten_as_disc(self):
+        for source in ({}, {'backend': {'storage_type': 'ram'}},
+                       {'msg_expiry_interval': '0s'}):
+            config = {'retainer': source, 'node': {'name': 'target@localhost'}}
+            self.assertEqual(emqx.preserved_settings(config), {'node': config['node']})
+            self.assertEqual(config['retainer'], source)
+
     def test_actual_entry_preserves_known_mount_config_when_override_is_absent(self):
         transport=Transport();transport.override_absent=True;transport.override_states=['absent']
         self.assertEqual(len(self.invoke(transport)),4)
