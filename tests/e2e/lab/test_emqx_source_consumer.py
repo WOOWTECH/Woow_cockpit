@@ -43,6 +43,19 @@ class ConsumerTests(unittest.TestCase):
         with self.assertRaises(consumer.PrivateFailure):
             capture(binding(raw))
 
+    def test_gzip_source_complete_spool_replay(self):
+        import gzip
+        import tempfile
+        from pathlib import Path
+        raw = gzip.compress(payload())
+        with tempfile.TemporaryDirectory() as directory:
+            with consumer.Capture('fixture-key', documents(), spool_directory=directory) as captured:
+                bound = captured(binding(raw))
+                with bound['open']('repo_woow-emqx') as replay:
+                    self.assertEqual(replay.read(), raw)
+                self.assertTrue(captured.registry._sealed)
+            self.assertEqual(list(Path(directory).iterdir()), [])
+
     def test_missing_unknown_binary_and_trailing_sources_refuse(self):
         for raw in (payload()[:3072], payload() + b'nonzero-trailer',
                     payload([{'name': 'data/emqx/data/mnesia/schema.DAT', 'data': b'binary'}]),

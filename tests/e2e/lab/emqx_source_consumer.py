@@ -129,7 +129,7 @@ class Capture:
         captured.seek(0)
         found = set()
         source_options = []
-        with tarfile.open(fileobj=captured, mode='r:') as archive:
+        with tarfile.open(fileobj=captured, mode='r:*') as archive:
             for entry in archive:
                 name = entry.name.removeprefix('./')
                 if entry.isdir():
