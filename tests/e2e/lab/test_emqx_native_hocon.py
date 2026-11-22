@@ -64,7 +64,7 @@ class NativeTests(unittest.TestCase):
                     with self.assertRaises(consumer.PrivateFailure):
                         capture.registry.scan(b'spool-native-private')
                 self.assertEqual(list(root.iterdir()), [])
-                with self.assertRaises(ValueError):
+                with self.assertRaisesRegex(consumer.PrivateFailure, '^private-source-refused$'):
                     with bound['open']('repo_woow-emqx'):
                         pass
             class Broken(io.BytesIO):
