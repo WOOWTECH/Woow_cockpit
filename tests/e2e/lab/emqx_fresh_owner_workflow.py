@@ -61,7 +61,7 @@ class FreshTarget:
             'dashboard.default_username="'+self.username.decode()+'"\n'
             'dashboard.default_password="'+self.password.decode()+'"\n'
             'dashboard.listeners.http.bind="127.0.0.1:18083"\n'
-            'dashboard.listeners.https.bind=0\nlisteners.tcp.default.bind="127.0.0.1:1883"\n'
+            'listeners.tcp.default.bind="127.0.0.1:1883"\n'
             'listeners.ssl.default.enable=false\nlisteners.ws.default.enable=false\n'
             'listeners.wss.default.enable=false\n'
             'authentication=[{mechanism=password_based,backend=built_in_database,\n'

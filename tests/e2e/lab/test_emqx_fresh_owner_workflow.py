@@ -232,6 +232,9 @@ class WorkflowTests(unittest.TestCase):
                                                 'env','secrets','files','node'})
             config = fixture.config.read_text()
             self.assertNotIn('authorization',config)
+            self.assertNotIn('dashboard.listeners.https',config)
+            for listener in ('ssl','ws','wss'):
+                self.assertIn('listeners.'+listener+'.default.enable=false',config)
             self.assertIn('node.name="'+target.node+'"',config)
             self.assertEqual(target.env['EMQX_NODE__NAME'],target.node)
             self.assertEqual(target.secrets,[])

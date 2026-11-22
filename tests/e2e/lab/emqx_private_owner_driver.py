@@ -136,6 +136,11 @@ def _joined_owner_preflight(target, backup, *, source_password, expected_sha256,
         if (response.returncode or type(response.stdout) is not bytes
                 or len(response.stdout) > MAX_WIRE):
             raise ValueError()
+        from emqx_preflight_stage import native_refusal_stage
+        stage=native_refusal_stage(response.stdout)
+        if stage is not None:
+            mark(stage)
+            raise PrivateFailure('private-native-target-refused')
         return response.stdout
 
     from emqx_preflight_stage import mark

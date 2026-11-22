@@ -67,6 +67,17 @@ class FrameTests(unittest.TestCase):
             with self.subTest(code=code):
                 with self.assertRaises(ValueError): framed.read_child_frame(self.child(code),timeout=0.1)
 
+    def test_native_failure_protocol_only_accepts_fixed_stage_reason(self):
+        from emqx_preflight_stage import native_refusal_stage, STAGES
+        raw=b'WOOWFUN:private-body-not-released:END\nWOOWTARGETFAIL:serialize_config:unsupported_function:ENDok\n'
+        stage=native_refusal_stage(raw)
+        self.assertEqual(stage,'native_serialize_config_unsupported_function')
+        self.assertIn(stage,STAGES)
+        for bad in (b'WOOWTARGETFAIL:private:unsupported_function:ENDok',
+                    b'WOOWTARGETFAIL:serialize_config:private:ENDok',
+                    b'WOOWTARGETFAIL:serialize_config:unsupported_function:ENDok secret'):
+            self.assertIsNone(native_refusal_stage(bad))
+
     def test_only_fixed_failure_stage_is_released_on_child_failure(self):
         from emqx_preflight_stage import PreflightStageRefused
         child=self.child("import sys;sys.stdout.buffer.write(b'PREFLIGHT-REFUSED:target_capture\\n');sys.exit(1)")
