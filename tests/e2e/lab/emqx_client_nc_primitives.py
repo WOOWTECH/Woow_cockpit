@@ -20,9 +20,11 @@ END=b'NCPRIMITIVE-APPLETS-END\n'
 PASS=b'NCPRIMITIVE-BEHAVIOR-PASSED\n'
 SETUP=('inventory','script_setup','script_exec')
 LAUNCH_CODES=frozenset((125,126,127,137))
+LAUNCH_125_PHASES=frozenset(('launch_tmpfs_uid_gid','launch_tmpfs_option',
+    'launch_tmpfs_permission','launch_user_mapping','launch_resource','launch_option','launch_oci'))
 BEHAVIOR=('listener','health','empty','repeat_one','repeat_two','requests','responses')
 PHASES=frozenset(('realm','input','owner','run','applets','timeout','cleanup','runner','stderr','output','exit_other',
-    *('launch_'+str(code) for code in LAUNCH_CODES),*SETUP,
+    *('launch_'+str(code) for code in LAUNCH_CODES),*LAUNCH_125_PHASES,*SETUP,
     *('missing_'+name for name in REQUIRED),*BEHAVIOR))
 TMPFS='/work:rw,noexec,nosuid,nodev,size=1048576,mode=0700,uid=1000,gid=1000'
 
@@ -118,14 +120,44 @@ class ClientNCRefused(ValueError):
         super().__init__('client-nc-refused');self.phase=phase if phase in PHASES else 'run'
 
 
+def _launch_125_phase(stderr):
+    """Lossy classification of bounded PRIVATE launch stderr, never a receipt.
+
+    Only compiled public error phrases and compiled tmpfs options are tested;
+    no captures, path extraction, raw text, exception hints or fallback output.
+    This changes refusal diagnostics only, never authorizes a launch/retry.
+    """
+    if type(stderr) is not bytes or not stderr or len(stderr)>LIMIT:return 'launch_125'
+    raw=stderr.lower()
+    invalid_mount=any(phrase in raw for phrase in
+        (b'invalid mount option',b'invalid tmpfs option',b'invalid tmpfs mount option',
+         b'unsupported mount option',b'unsupported tmpfs option'))
+    if invalid_mount and any(option in raw for option in (b'uid=1000',b'gid=1000')):
+        return 'launch_tmpfs_uid_gid'
+    if invalid_mount and b'tmpfs' in raw:return 'launch_tmpfs_option'
+    if b'tmpfs' in raw and any(phrase in raw for phrase in (b'operation not permitted',b'permission denied')):
+        return 'launch_tmpfs_permission'
+    if any(phrase in raw for phrase in (b'not enough ids available',b'insufficient uids or gids',
+                                       b'cannot set uid',b'cannot set gid',b'invalid uid mapping',b'invalid gid mapping')):
+        return 'launch_user_mapping'
+    if any(phrase in raw for phrase in (b'cannot allocate memory',b'pids limit exceeded',b'too many open files')):
+        return 'launch_resource'
+    if any(phrase in raw for phrase in (b'unknown flag:',b'unknown shorthand flag:',b'flag provided but not defined:')):
+        return 'launch_option'
+    if b'oci runtime' in raw:return 'launch_oci'
+    return 'launch_125'
+
+
 def _validate(result):
     # Only compiled exit classes and framed phases escape. Never copy/parse
-    # stderr content, and never accept a success carrying any stderr bytes.
+    # stderr content outside the bounded 125 classifier, and never accept a
+    # success carrying any stderr bytes.
     if (type(result.returncode) is not int or type(result.stdout) is not bytes
             or len(result.stdout)>LIMIT or type(result.stderr) is not bytes
             or len(result.stderr)>LIMIT):raise ClientNCRefused('output')
     raw=result.stdout
     if not raw:
+        if result.returncode==125:raise ClientNCRefused(_launch_125_phase(result.stderr))
         if result.returncode in LAUNCH_CODES:raise ClientNCRefused('launch_'+str(result.returncode))
         if result.returncode==124:raise ClientNCRefused('timeout')
         if result.stderr:raise ClientNCRefused('stderr')

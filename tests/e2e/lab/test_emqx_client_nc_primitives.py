@@ -147,6 +147,56 @@ class NCTests(unittest.TestCase):
             with self.assertRaises(transport.TransportRefused) as caught:transport.read_result(child,timeout=5)
         self.assertEqual(caught.exception.phase,'child')
 
+    def test_125_private_stderr_is_reduced_to_fixed_categories_and_cleanup(self):
+        samples=(
+            (b'Error: invalid mount option "uid=1000"','launch_tmpfs_uid_gid'),
+            (b'Error: invalid mount option "gid=1000"','launch_tmpfs_uid_gid'),
+            (b'Error: unsupported tmpfs option "generated-private-option"','launch_tmpfs_option'),
+            (b'crun: mounting tmpfs: Operation not permitted','launch_tmpfs_permission'),
+            (b'Error: not enough IDs available','launch_user_mapping'),
+            (b'Error: cannot allocate memory','launch_resource'),
+            (b'Error: unknown flag: --generated-private-flag','launch_option'),
+            (b'Error: OCI runtime error: generated-private-reason','launch_oci'),
+            (b'generated-private-unclassified-reason','launch_125'),
+            (b'uid=1000 gid=1000 tmpfs generated-private-reason','launch_125'),
+            (b'Error: permission denied','launch_125'),
+        )
+        for raw,phase in samples:
+            with self.subTest(phase=phase):
+                self.output=b'';self.error=raw+b' generated-private-path-and-value';self.code=125
+                with self.assertRaises(m.ClientNCRefused) as caught:m.run_client_nc_primitives()
+                self.assertEqual(caught.exception.phase,phase)
+                self.assertEqual(str(caught.exception),'client-nc-refused')
+                self.assertIsNone(self.fixture.doc)
+        # The classifier cannot turn non-125 failures or a partial script result
+        # into a launch diagnosis, and never accepts success with stderr.
+        self.output=wire();self.code=0;self.error=b'Error: invalid mount option "uid=1000"'
+        with self.assertRaises(m.ClientNCRefused) as caught:m.run_client_nc_primitives()
+        self.assertEqual(caught.exception.phase,'stderr')
+        self.output=b'';self.code=127
+        with self.assertRaises(m.ClientNCRefused) as caught:m.run_client_nc_primitives()
+        self.assertEqual(caught.exception.phase,'launch_127')
+        self.assertEqual(m._launch_125_phase(b'x'*(m.LIMIT+1)),'launch_125')
+        self.assertEqual(m._launch_125_phase(None),'launch_125')
+
+    def test_actual_child_and_host_forward_only_fixed_125_category(self):
+        import emqx_real_owner_transport as transport
+        self.output=b'';self.code=125
+        self.error=b'Error: invalid mount option "uid=1000": generated-private-value'
+        output=io.BytesIO()
+        with patch('emqx_arm_source_owner._owner_realm',return_value=True), \
+             patch.object(transport.sys,'stdin',SimpleNamespace(buffer=io.BytesIO())), \
+             patch.object(transport.sys,'stdout',SimpleNamespace(buffer=output)):
+            self.assertEqual(transport.owner_main(b'L'),1)
+        frame=output.getvalue()
+        self.assertEqual(frame,b'CLIENTNC-REFUSED:launch_tmpfs_uid_gid\n')
+        self.assertNotIn(b'generated-private-value',frame)
+        self.assertIsNone(self.fixture.doc)
+        with subprocess.Popen([sys.executable,'-c','import sys;sys.stdout.buffer.write('+repr(frame)+');sys.exit(1)'],
+                stdout=subprocess.PIPE,stderr=subprocess.DEVNULL) as child:
+            with self.assertRaises(transport.TransportRefused) as caught:transport.read_result(child,timeout=5)
+        self.assertEqual(caught.exception.phase,'nc_launch_tmpfs_uid_gid')
+
     def test_actual_child_mode_keeps_source_input_forbidden_and_existing_httpd_mode(self):
         import emqx_real_owner_transport as transport
         import emqx_client_sink_capabilities as old
