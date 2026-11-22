@@ -8,9 +8,7 @@ Trusted callbacks execute bounded eval/inspect against the capability's broker:
 cleanup. No caller-selected host paths, default credentials, CLI or stdout.
 """
 import base64
-import csv
 import hashlib
-import io
 import json
 import os
 import re
@@ -18,6 +16,7 @@ import stat
 import weakref
 
 from emqx_native_runtime import IMAGE
+from emqx_bootstrap_csv import collect_bootstrap_csv
 from emqx_owner_vendor_files import _BODY, _decode, LIMIT, MAX_OUTPUT, MAX_WIRE, CONTRACT
 from emqx_private_boundary import PrivateFailure
 from emqx_semantic_readers import Values, _pairs, _term
@@ -163,22 +162,9 @@ def _record(token):
 
 
 def _csv(raw, values):
-    text = raw.decode('utf-8')
-    if '\x00' in text or text.startswith('\ufeff'):
-        raise ValueError()
-    rows = list(csv.reader(io.StringIO(text, newline=''), strict=True))
-    if not 2 <= len(rows) <= 257 or rows[0] != ['user_id', 'password', 'is_superuser']:
-        raise ValueError()
-    users = set()
-    for row in rows[1:]:
-        if (len(row) != 3 or not row[0] or not row[1] or row[2] not in ('true', 'false') or
-                row[0] in users or any('\n' in x or '\r' in x for x in row)):
-            raise ValueError()
-        users.add(row[0])
-    values.add(raw)
-    for row in rows:
-        for field in row:
-            values.add(field.encode('utf-8'))
+    # Custom invocation fixture remains seeded; vendor header-only allowance is
+    # never selected for this capability.
+    return collect_bootstrap_csv(raw, values)
 
 
 def public_expression():

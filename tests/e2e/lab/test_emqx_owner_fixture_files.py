@@ -321,7 +321,8 @@ class FixtureFilesTests(unittest.TestCase):
         values = Values()
         m._csv(CSV, values)
         self.assertIn(b'generated,password', values.values)
-        for raw in (b'username,password,is_superuser\na,b,false\n',
+        for raw in (b'user_id,password,is_superuser\n',
+                    b'username,password,is_superuser\na,b,false\n',
                     b'user_id,password,is_superuser\na,b,false,extra\n',
                     b'user_id,password,is_superuser\na,b,False\n',
                     b'user_id,password,is_superuser\na,b,false\na,c,true\n',
