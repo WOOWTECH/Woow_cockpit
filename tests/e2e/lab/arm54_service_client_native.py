@@ -116,6 +116,8 @@ def start(role,volume,config):
 def start_client(role):
     r.podman('exec','--detach','--env','SSL_CERT_FILE=/etc/headscale/server.crt',
         '--env','TS_DEBUG_LOG_DISABLE=true',
+        # network-none has no active non-loopback interface; client pauses control.
+        '--env','TS_ASSUME_NETWORK_UP_FOR_TEST=true',
         '--env','HTTP_PROXY=','--env','HTTPS_PROXY=','--env','ALL_PROXY=',
         '--env','http_proxy=','--env','https_proxy=','--env','all_proxy=',
         '--env','NO_PROXY=*','--env','no_proxy=*',objects.name(role),'sh','-c',

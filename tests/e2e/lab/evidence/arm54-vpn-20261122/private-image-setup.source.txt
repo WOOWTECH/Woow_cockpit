@@ -1,0 +1,49 @@
+"""Native local build of exact Woow package recipe; not a shipped image."""
+import hashlib,json,sys
+from pathlib import Path
+root=Path(sys.argv[1]); sys.path.insert(0,str(root/'source/tests/e2e/lab'))
+from arm54_owned_runtime import ROOT,Runner,report
+from woowbackup import hacommon,ha_headscale
+from types import SimpleNamespace
+r=Runner(); result={'kind':'native-local-package-build','package_commit':'0afdfa464a5ae55c85145c242f5b38ac88eea969','product_base':'3fe2ff3','status':'failed'}
+try:
+    evidence=ROOT/'source/tests/e2e/lab/evidence/arm54-service-20261122'
+    recipe=evidence/'package.Containerfile'
+    inputs=json.loads((evidence/'arm-platform-inputs.json').read_text())
+    assert all(i['architecture']=='arm64' for i in inputs)
+    assert sum(i['compressed_bytes'] for i in inputs)<128*1024**2
+    r.capacity()
+    tag='localhost/woow-headscale:0.29.4-arm54-local'
+    result['build_executed']=r.podman('image','exists',tag,check=False).returncode!=0
+    if result['build_executed']:
+        for ref in ('ghcr.io/juanfont/headscale:v0.29.4@sha256:8833f828b414c0907b7e5c71da76473216fe17cce0818a166b536ec552c0903f',
+                    'docker.io/library/debian:12.11-slim@sha256:b1a741487078b369e78119849663d7f1a5341ef2768798f7b7406c4240f86aef'):
+            r.podman('pull','--arch','arm64','--authfile',str(ROOT/'empty-auth.json'),ref,timeout=180)
+        r.podman('build','--network=none','--pull=never','--layers=false','--no-cache','--memory=512m',
+                 '--tag',tag,'--file',str(recipe),str(ROOT/'build'),timeout=300)
+    info=json.loads(r.podman('image','inspect',tag).stdout)[0]
+    assert info['Architecture']=='arm64' and info['Size']<256*1024**2
+    image=info['Id']
+    labels=hacommon.image_labels(SimpleNamespace(runner=lambda app:r),SimpleNamespace(id='headscale'),image)
+    version=hacommon.semver(labels.get('org.opencontainers.image.version'))
+    assert ha_headscale.VERSIONS.blocker('0.1.3',version) is None
+    assert labels['io.woowtech.headscale.source-image'].endswith('sha256:8833f828b414c0907b7e5c71da76473216fe17cce0818a166b536ec552c0903f')
+    from woowbackup import tempctr
+    tmp=tempctr.TempObjects(r,'j20261122T120000Z-a54b0001',memory='256m',pids=128,cpus='0.5')
+    try:
+        banner=tmp.run('version',image,['version'],read_only_root=True).stdout.decode()
+        assert banner.splitlines()[0]=='headscale version v0.29.4'
+        # Armbian creates unconfigured sit0/ip6tnl0 even in a fresh none namespace.
+        isolated=tmp.run('isolation',image,['-c','test "$(wc -l < /proc/net/route)" -eq 1'],entrypoint='sh',read_only_root=True,check=False)
+        assert isolated.returncode==0
+    finally: assert not tmp.cleanup()
+    result.update(status='passed',image_id=image,image_arch=info['Architecture'],image_bytes=info['Size'],
+                  labels=labels,product_version=version,recipe_sha256=hashlib.sha256(recipe.read_bytes()).hexdigest(),
+                  service_restore_acceptance=False)
+except Exception as e:
+    result['error_code']=type(e).__name__
+finally:
+    result.update(commands=r.commands,free_bytes_samples=r.free)
+    report(ROOT/'build-result.json',result)
+    print(json.dumps(result,sort_keys=True))
+    sys.exit(0 if result['status']=='passed' else 1)

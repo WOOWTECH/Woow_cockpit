@@ -1,0 +1,9 @@
+{
+  "syntax_files": 7,
+  "json_files": 21,
+  "min_sampled_free_bytes": 17504976896,
+  "min_sampled_free_gib": 16.302780151367188,
+  "final_free_bytes": 18531127296,
+  "engine_changed": false,
+  "broad_tests_rerun": false
+}

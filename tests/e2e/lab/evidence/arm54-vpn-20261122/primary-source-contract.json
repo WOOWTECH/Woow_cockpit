@@ -1,0 +1,21 @@
+{
+  "local.go": {
+    "url": "https://raw.githubusercontent.com/tailscale/tailscale/cbc74fe48ef1b1649f69a4d9a602319427e25102/ipn/ipnlocal/local.go",
+    "sha256": "310817f64f784df2e5189c2764a88ba4f22663823bc21b72b8888806ad3ea840"
+  },
+  "envknob.go": {
+    "url": "https://raw.githubusercontent.com/tailscale/tailscale/cbc74fe48ef1b1649f69a4d9a602319427e25102/envknob/envknob.go",
+    "sha256": "260e52b6ecca6bc00cffd4e5cb5e68dfa1968cf0517419e1f92a14991fb49c89"
+  },
+  "netns_linux.go": {
+    "url": "https://raw.githubusercontent.com/tailscale/tailscale/cbc74fe48ef1b1649f69a4d9a602319427e25102/net/netns/netns_linux.go"
+  },
+  "headscale_contract": {
+    "source_revision": "8106636c7f8d0cf8c9d4fb0beae94415069b768b",
+    "minimum_capability": 113,
+    "minimum_tailscale": "v1.80",
+    "version_mapping_file": "hscontrol/capver/capver_generated.go",
+    "local_backend_pause_lines": "1157-1160",
+    "envknob_definition_lines": "429-430"
+  }
+}
