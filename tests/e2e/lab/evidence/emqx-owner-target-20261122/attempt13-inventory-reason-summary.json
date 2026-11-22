@@ -1,0 +1,32 @@
+{
+  "source_commit": "1a6a0529f2eb594a3f231d1f87e3b8122841c733",
+  "scope": "actual fresh pinned broker full target producer fixed inventory diagnosis; no real source restore",
+  "exit": 1,
+  "elapsed_seconds": 43.753247218206525,
+  "stdout_sha256": "cc7e2e3f61f4924812cbe5e8581a02fb2b089377c8692ed95054f6f35029d2c5",
+  "stderr_bytes_not_published": 0,
+  "reports": [
+    {
+      "checks": {
+        "broker_cleanup": "passed",
+        "broker_ready": "passed",
+        "clients_cleanup": "passed",
+        "fresh_ticker_identity_suspended_after": "passed",
+        "fresh_ticker_identity_suspended_before": "passed",
+        "native_fixed_expression_parsed": "passed",
+        "no_clients_after_capture": "passed",
+        "no_clients_before_capture": "passed",
+        "private_files_cleanup": "passed"
+      },
+      "consumer_fixed_reason": "inventory_name_shape",
+      "consumer_fixed_stage": "inventory",
+      "ha_commercial_acceptance": "not-claimed",
+      "native_transport": "passed",
+      "result": "failed",
+      "scope": "synthetic-broker-owner-target",
+      "target_completeness": "not-assessed"
+    }
+  ],
+  "postflight_passed": true,
+  "restore_executed": false
+}
