@@ -424,7 +424,7 @@ def target_config_snapshot(volume_tar, snapshot_path, required, *, limit=MAX_HOC
     return found
 
 
-def authorization_file_references(authorization, mounts, *, include_cluster=True):
+def authorization_file_references(authorization, mounts, *, include_cluster=True, observe=None):
     """Resolve an already-decoded effective authorization object; reject unsupported sources.
 
     This covers file ACL sources and exact raw builtin database source objects,
@@ -437,8 +437,11 @@ def authorization_file_references(authorization, mounts, *, include_cluster=True
     references = {'configs/cluster.hocon'} if include_cluster else set()
     for source in authorization['sources']:
         if type(source) is dict and source.get('type') == 'built_in_database':
-            from .ha_emqx_authorizers import builtin_database_references
+            from .ha_emqx_authorizers import builtin_database_references, builtin_database_shape
+            if observe is not None:
+                observe('target_references_builtin_'+builtin_database_shape(source))
             references.update(builtin_database_references(source))
+            if observe is not None: observe('target_references')
             continue
         if not isinstance(source, dict) or source.get('type') != 'file':
             raise BackupError('incompatible', '目標 EMQX 使用尚未支援的授權來源。')
@@ -662,7 +665,7 @@ def tls_fingerprints(execute, paths):
     return result
 
 
-def configuration_references(config, mounts, secrets=(), *, include_cluster=True):
+def configuration_references(config, mounts, secrets=(), *, include_cluster=True, observe=None):
     """Resolve file ACL and explicit TLS file fields in supported configuration roots.
 
     Unknown roots are rejected until their schema/file dependencies have been reviewed.
@@ -675,7 +678,7 @@ def configuration_references(config, mounts, secrets=(), *, include_cluster=True
     if set(config) - SUPPORTED_CONFIGURATION_ROOTS:
         raise BackupError('incompatible', 'EMQX 含有尚未完成檔案參照審查的設定類型。')
     bootstrap_references(config, mounts, secrets)
-    required = authorization_file_references(config['authorization'], mounts, include_cluster=False)
+    required = authorization_file_references(config['authorization'], mounts, include_cluster=False, observe=observe)
     for key in ('banned', 'api_key'):
         bootstrap_path = config.get(key, {}).get('bootstrap_file')
         if bootstrap_path:
@@ -744,7 +747,7 @@ def capture_target_seed(work, app, target, staging):
         raise BackupError('incompatible', 'EMQX 自訂日誌目錄尚未支援。')
     stage('target_config');original=read_effective_config(execute)
     stage('target_references')
-    explicit=configuration_references(original,target.files,target.secrets,include_cluster=False)
+    explicit=configuration_references(original,target.files,target.secrets,include_cluster=False,observe=observe)
     state=target_override_state(execute)
     absent=({'configs/cluster.hocon'} if state in ('absent','parent-absent')
             and 'configs/cluster.hocon' not in explicit else set())

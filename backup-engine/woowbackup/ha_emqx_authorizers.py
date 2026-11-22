@@ -7,6 +7,23 @@ Pinned native schema proof: emqx_builtin_authorizer_schema_fixture.escript.
 from .errors import BackupError
 
 
+BUILTIN_SHAPES = frozenset(('exact_type_enable','exact_type_enable_maxrules100','unknown'))
+
+
+def builtin_database_shape(source):
+    """Diagnostic only, never admission: no values/keys are returned or logged."""
+    if (type(source) is not dict or type(source.get('type')) is not str
+            or source.get('type') != 'built_in_database'
+            or type(source.get('enable')) is not bool):
+        return 'unknown'
+    if set(source) == {'type','enable'}:
+        return 'exact_type_enable'
+    if (set(source) == {'type','enable','max_rules'}
+            and type(source['max_rules']) is int and source['max_rules'] == 100):
+        return 'exact_type_enable_maxrules100'
+    return 'unknown'
+
+
 def builtin_database_references(source):
     """Validate exactly {type: built_in_database, enable: bool}; no file refs.
 

@@ -2,12 +2,13 @@
 from contextvars import ContextVar
 from woowbackup.ha_emqx import TABLES
 from woowbackup.ha_emqx_acl_preservation import ACL_REMOVAL_STAGES
+from woowbackup.ha_emqx_authorizers import BUILTIN_SHAPES
 STAGES=frozenset(('authorization','input_contract','image_version','archive_verify','source_reuse',
     'temp_objects','product_build','product_package','temp_cleanup','archive_final','private_cleanup'))
 PRODUCT_STAGES=frozenset(('version','member_pass','node_name','source_broker','source_analysis','source_export','target_candidate','target_config','target_references','target_tls','target_snapshot','target_consistency','target_runtime','row_counts'))
 ROW_COUNT_STAGES = {'product_row_counts_'+table+'_'+direction:(table,direction)
                     for table in TABLES for direction in ('underflow','overflow')}
-PRODUCT_STAGES=PRODUCT_STAGES | ACL_REMOVAL_STAGES
+PRODUCT_STAGES=PRODUCT_STAGES | ACL_REMOVAL_STAGES | frozenset('target_references_builtin_'+shape for shape in BUILTIN_SHAPES)
 PRODUCT_STAGES=PRODUCT_STAGES | frozenset(stage.removeprefix('product_') for stage in ROW_COUNT_STAGES)
 STAGES=STAGES | frozenset('product_'+s for s in PRODUCT_STAGES)
 KINDS=frozenset(('attribute','value','product','io','runtime','other'))
