@@ -1,0 +1,32 @@
+{
+  "scope": "real ARM readonly product-consumption metadata classes; no secret content",
+  "tar_complete": true,
+  "groups": {
+    "unclassified": {
+      "files": 3,
+      "bytes": 117560391,
+      "max_file_bytes": 117560320
+    },
+    "staged-mnesia": {
+      "files": 28,
+      "bytes": 57502,
+      "max_file_bytes": 33593
+    },
+    "generated-config-product-excludes": {
+      "files": 10,
+      "bytes": 26442,
+      "max_file_bytes": 5573
+    },
+    "staged-hocon": {
+      "files": 1,
+      "bytes": 2695,
+      "max_file_bytes": 2695
+    },
+    "identity/options": {
+      "files": 1,
+      "bytes": 14,
+      "max_file_bytes": 14
+    }
+  },
+  "restore_executed": false
+}
