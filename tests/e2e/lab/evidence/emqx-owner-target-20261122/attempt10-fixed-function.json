@@ -1,0 +1,43 @@
+{
+  "acceptance_policy": "unchanged; no stateless function accepted",
+  "active_invocation": "none",
+  "checks": {
+    "broker_cleanup": "passed",
+    "broker_ready": "passed",
+    "clients_cleanup": "passed",
+    "fresh_ticker_identity_suspended_after": "passed",
+    "fresh_ticker_identity_suspended_before": "passed",
+    "native_fixed_expression_parsed": "passed",
+    "no_clients_after_capture": "passed",
+    "no_clients_before_capture": "passed",
+    "private_files_cleanup": "passed"
+  },
+  "consumer_fixed_stage": "wire",
+  "exit": 1,
+  "ha_commercial_acceptance": "not-claimed",
+  "identity_limit": "not verified by fixed seven-module pinned public catalogue; no module/name/arity claim",
+  "locks": "released",
+  "native_config_function": {
+    "arity": "unknown",
+    "env_kind": "empty",
+    "md5": "unknown",
+    "module": "unknown",
+    "name": "unknown",
+    "path": "listeners",
+    "profile": "unverified",
+    "type": "external"
+  },
+  "native_fixed_reason": "unsupported_function",
+  "native_fixed_stage": "serialize_config",
+  "ownership": "returned-to-main",
+  "postflight": {
+    "network": "none",
+    "owned": "zero",
+    "ports": "empty"
+  },
+  "scope": "one actual fresh synthetic fixed config-function metadata diagnostic; no source or restore",
+  "source_commit": "9d661e26a79b438aaae69140ecc108f5aaf87c4f",
+  "stderr_bytes_not_published": 0,
+  "stdout_sha256": "cd2cbeb9652c3eb916e63770fffcfb9810b425c682cba890a46f29c00bf4cbc1",
+  "target_completeness": "not-assessed"
+}

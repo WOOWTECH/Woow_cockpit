@@ -1,0 +1,15 @@
+{
+  "complete": true,
+  "matches": [
+    {
+      "arity": 3,
+      "descriptor_sha256": "DE702B30F75648B1435B584233503E51347F769A39B94DC5A2237781179633D6",
+      "md5": "F2653DFD1072A73E2E6FEC1D77865D1F",
+      "module": "emqx_tls_psk",
+      "name": "lookup",
+      "public_beam": "/opt/emqx/lib/emqx-5.5.5/ebin/emqx_tls_psk.beam",
+      "type": "external"
+    }
+  ],
+  "source": "fixed pinned image BEAM exports; no target module loading/execution"
+}

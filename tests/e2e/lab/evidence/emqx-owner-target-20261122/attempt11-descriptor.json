@@ -1,0 +1,43 @@
+{
+  "active_invocation": "none",
+  "candidate_live_executed": false,
+  "checks": {
+    "broker_cleanup": "passed",
+    "broker_ready": "passed",
+    "clients_cleanup": "passed",
+    "fresh_ticker_identity_suspended_after": "passed",
+    "fresh_ticker_identity_suspended_before": "passed",
+    "native_fixed_expression_parsed": "passed",
+    "no_clients_after_capture": "passed",
+    "no_clients_before_capture": "passed",
+    "private_files_cleanup": "passed"
+  },
+  "consumer_fixed_stage": "wire",
+  "exit": 1,
+  "ha_commercial_acceptance": "not-claimed",
+  "locks": "released",
+  "native_config_function": {
+    "arity": "unknown",
+    "descriptor_sha256": "DE702B30F75648B1435B584233503E51347F769A39B94DC5A2237781179633D6",
+    "env_kind": "empty",
+    "md5": "unknown",
+    "module": "unknown",
+    "name": "unknown",
+    "path": "ssl_default_user_lookup_fun",
+    "profile": "unverified",
+    "type": "external"
+  },
+  "native_fixed_reason": "unsupported_function",
+  "native_fixed_stage": "serialize_config",
+  "ownership": "returned-to-main",
+  "postflight": {
+    "network": "none",
+    "owned": "zero",
+    "ports": "empty"
+  },
+  "scope": "actual single fresh synthetic descriptor-hash diagnostic; no customer/source/restore",
+  "source_commit": "f278ba652e49da75652d1fc72e38e2655375a4c2",
+  "stderr_bytes_not_published": 0,
+  "stdout_sha256": "b567054fa1d73517a3e1a37607e5503ccddbb94acc3cf84796687f64b0f24404",
+  "target_completeness": "not-assessed"
+}

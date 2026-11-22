@@ -1,6 +1,8 @@
 """Fresh synthetic native owner-target mode; invoked only by locked owner wrapper."""
 from contextlib import contextmanager
 import json
+import base64
+from pathlib import Path
 import os
 import re
 
@@ -24,16 +26,85 @@ NATIVE_REASONS = frozenset(('undef','badmatch','bad_argument','function_clause',
     'ticker_not_suspended','ticker_changed','schema_record_invalid','unsupported_pid','unsupported_reference','unsupported_port','unsupported_function','unsupported_bitstring','unsupported_term','native_refused'))
 
 
+
+FUNCTION_PATHS = frozenset(('log_console_time_offset','log_file_time_offset','log_other',
+    'dashboard','node','authentication','authorization','listeners','other_config',
+    'ssl_default_user_lookup_fun','wss_default_user_lookup_fun'))
+FUNCTION_ENV_KINDS = frozenset(('empty','binary','atom','integer','float','tuple','list',
+    'map','function','pid','reference','port','other','multiple'))
+
+
+def fixed_function_diagnostic(encoded):
+    """Public BEAM identities only; catalogue is fixed trusted source, not input."""
+    try:
+        if len(encoded) > 1024:
+            return None
+        raw = base64.b64decode(encoded,validate=True)
+        if base64.b64encode(raw) != encoded:
+            return None
+        def pairs(items):
+            result = dict(items)
+            if len(result) != len(items):
+                raise ValueError()
+            return result
+        item = json.loads(raw,object_pairs_hook=pairs)
+        if (type(item) is not dict or set(item) != {'module','name','arity','md5','type','path','env_kind','profile','descriptor_sha256'}
+                or item['type'] not in ('local','external','unknown')
+                or item['path'] not in FUNCTION_PATHS or item['env_kind'] not in FUNCTION_ENV_KINDS
+                or item['profile'] not in ('public_code','unverified','secret_wrap_identity_or_env','secret_loader_refused')):
+            return None
+        descriptor = item['descriptor_sha256']
+        if descriptor != 'not-emitted' and (type(descriptor) is not str or
+                not re.fullmatch(r'[0-9A-F]{64}',descriptor) or item['type'] != 'external' or item['env_kind'] != 'empty'):
+            return None
+        identity = (item['module'],item['name'],item['arity'],item['md5'])
+        if identity == ('unknown','unknown','unknown','unknown'):
+            return item if item['profile'] != 'public_code' else None
+        catalog = json.loads(Path(__file__).with_name('emqx_public_function_catalog.json').read_text())
+        module = next((m for m in catalog if m['module'] == item['module'] and m['md5'] == item['md5']),None)
+        if module is None or type(item['arity']) is not int or not 0 <= item['arity'] <= 255:
+            return None
+        symbols = module['locals'] if item['type'] == 'local' else module['exports']
+        if not any(n == item['name'] and (a >= item['arity'] if item['type'] == 'local' else a == item['arity'])
+                   for n,a in symbols):
+            return None
+        if item['profile'] == 'unverified':
+            return None
+        if item['profile'] == 'secret_wrap_identity_or_env' and (item['module'],item['name']) != ('emqx_secret','-wrap/1-fun-0-'):
+            return None
+        if item['profile'] == 'secret_loader_refused' and (item['module'],item['name']) != ('emqx_secret','-wrap_load/1-fun-0-'):
+            return None
+        return item
+    except (ValueError,TypeError,KeyError,OSError):
+        return None
+
+
 def fixed_native_diagnostic(wire):
     """Only fixed stage/reason enums; never accept a table/abort/value token."""
-    if type(wire) is not bytes or len(wire) > 160:
+    if type(wire) is not bytes or len(wire) > 1536:
+        return None
+    function = None
+    if wire.startswith(b'WOOWFUN:'):
+        framed = re.fullmatch(rb'WOOWFUN:([A-Za-z0-9+/=]+):END\n(WOOWTARGETFAIL:[a-z_]+:[a-z_]+:ENDok)\s*',wire)
+        if not framed:
+            return None
+        function = fixed_function_diagnostic(framed[1])
+        if function is None:
+            return None
+        wire = framed[2]
+    if len(wire) > 160:
         return None
     match = re.fullmatch(rb'WOOWTARGETFAIL:([a-z_]+):([a-z_]+):ENDok', wire.strip())
     if not match:
         return None
     stage, reason = (part.decode('ascii') for part in match.groups())
-    return {'native_fixed_stage': stage if stage in NATIVE_STAGES else 'native_tables',
-            'native_fixed_reason': reason if reason in NATIVE_REASONS else 'native_refused'}
+    result = {'native_fixed_stage': stage if stage in NATIVE_STAGES else 'native_tables',
+              'native_fixed_reason': reason if reason in NATIVE_REASONS else 'native_refused'}
+    if function is not None:
+        if stage != 'serialize_config' or reason != 'unsupported_function':
+            return None
+        result['native_config_function'] = function
+    return result
 
 
 @contextmanager

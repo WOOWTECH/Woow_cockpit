@@ -79,6 +79,7 @@ StorageReceipt = fun(Storage,Count,N,N2,CountAfter) ->
         _ -> ok
     end
 end,
+erase(woow_target_function_diag),
 put(woow_target_stage, typed_setup),
 try
 %% Owner-selected fixed read-only expression. No archive/user-selected code.
@@ -100,19 +101,126 @@ Typed = fun F(V,D) when D =< 16 ->
         _ -> error(owner_target_unsupported_term)
     end
 end,
+%% Metadata-only config diagnostics. Only names present in hash-pinned PUBLIC
+%% BEAM symbols may leave this function. Never call the observed function.
+ConfigFunctionDiagnostic = fun(Fun,ReversePath) ->
+    Env = element(2,erlang:fun_info(Fun,env)),
+    Kind = fun(X) ->
+        case X of
+            B when is_binary(B) -> binary;
+            A when is_atom(A) -> atom;
+            I when is_integer(I) -> integer;
+            N when is_float(N) -> float;
+            T when is_tuple(T) -> tuple;
+            L when is_list(L) -> list;
+            M when is_map(M) -> map;
+            F0 when is_function(F0) -> function;
+            P when is_pid(P) -> pid;
+            R when is_reference(R) -> reference;
+            P when is_port(P) -> port;
+            _ -> other
+        end
+    end,
+    EnvKind = case Env of [] -> empty; [Only] -> Kind(Only); _ -> multiple end,
+    PathClass = case lists:reverse(ReversePath) of
+        [{map,log},{map,console},{map,time_offset}] -> log_console_time_offset;
+        [{map,log},{map,file},{map,_},{map,time_offset}] -> log_file_time_offset;
+        [{map,log}|_] -> log_other;
+        [{map,dashboard}|_] -> dashboard;
+        [{map,node}|_] -> node;
+        [{map,authentication}|_] -> authentication;
+        [{map,authorization}|_] -> authorization;
+        [{map,listeners},{map,ssl},{map,default},{map,ssl_options},{map,user_lookup_fun},{tuple,0}] -> ssl_default_user_lookup_fun;
+        [{map,listeners},{map,wss},{map,default},{map,ssl_options},{map,user_lookup_fun},{tuple,0}] -> wss_default_user_lookup_fun;
+        [{map,listeners}|_] -> listeners;
+        _ -> other_config
+    end,
+    Mod = element(2,erlang:fun_info(Fun,module)),
+    Name = element(2,erlang:fun_info(Fun,name)),
+    Arity = element(2,erlang:fun_info(Fun,arity)),
+    Type = element(2,erlang:fun_info(Fun,type)),
+    SafeType = case Type of local -> local; external -> external; _ -> unknown end,
+    Profile = case {Mod,Name} of
+        {emqx_secret,'-wrap/1-fun-0-'} -> secret_wrap_identity_or_env;
+        {emqx_secret,'-wrap_load/1-fun-0-'} -> secret_loader_refused;
+        _ -> unverified
+    end,
+    DescriptorHash = case {Type,Env} of
+        {external,[]} -> binary:encode_hex(crypto:hash(sha256,term_to_binary({Mod,Name,Arity,Type})));
+        _ -> <<"not-emitted">>
+    end,
+    Base = #{descriptor_sha256 => DescriptorHash,module => unknown,name => unknown,arity => unknown,md5 => unknown,
+        type => SafeType,path => PathClass,env_kind => EnvKind,profile => Profile},
+    try
+        PublicHashes = [{emqx_secret,<<"A27D8A4F73E7689F1F8B78E0DCB7C91B">>},{emqx_conf_schema,<<"47407C70442C15C84DCAF0157F58624B">>},{emqx_schema,<<"B1F415D121502FA65EC8E6BD1C5E0050">>},{emqx_config_logger,<<"A8E0E3D3A9E1A0B84BD35A8E527FBBA5">>},{emqx_schema_secret,<<"E3C6061A327AC7306B499E96F37DB478">>},{hocon_tconf,<<"76C974DAEFA9AF02CE84663448CCCCD8">>},{emqx_logger_textfmt,<<"7A51D59C06A00F53673478CDAAE3B515">>}],
+        {Mod,ExpectedHash} = lists:keyfind(Mod,1,PublicHashes),
+        BeamPath = code:which(Mod),
+        true = is_list(BeamPath) andalso lists:prefix("/opt/emqx/lib/",BeamPath),
+        {ok,Beam} = file:read_file(BeamPath),
+        {ok,{Mod,Hash}} = beam_lib:md5(Beam),
+        ExpectedHash = binary:encode_hex(Hash),
+        Hash = erlang:get_module_info(Mod,md5),
+        {ok,{Mod,[{locals,Locals},{exports,Exports}]}} = beam_lib:chunks(Beam,[locals,exports]),
+        case Type of
+            local ->
+                {new_uniq,Hash} = erlang:fun_info(Fun,new_uniq),
+                true = length(Env) =< 128,
+                true = lists:member({Name,Arity+length(Env)},Locals);
+            external -> [] = Env, true = lists:member({Name,Arity},Exports)
+        end,
+        PublicProfile = case Profile of unverified -> public_code; _ -> Profile end,
+        Base#{module => Mod,name => Name,arity => Arity,md5 => ExpectedHash,profile => PublicProfile}
+    catch _:_ -> Base
+    end
+end,
+RejectConfigFunction = fun(Fun,Path) ->
+    put(woow_target_function_diag,ConfigFunctionDiagnostic(Fun,Path)),
+    error(unsupported_function)
+end,
+%% Proven by attempt11 descriptor hash and offline immutable-image export scan.
+%% Exact disabled default TLS paths only. Read public BEAM metadata; never load
+%% its module, invoke lookup/3 or resolve hooks/PSK values.
+InertTlsCallback = fun(Callback,Path) ->
+    Info = [erlang:fun_info(Callback,K) || K <- [module,name,arity,type,env]],
+    Exact = [{module,emqx_tls_psk},{name,lookup},{arity,3},{type,external},{env,[]}],
+    AllowedPaths = [[{map,listeners},{map,ssl},{map,default},{map,ssl_options},{map,user_lookup_fun},{tuple,0}],
+                    [{map,listeners},{map,wss},{map,default},{map,ssl_options},{map,user_lookup_fun},{tuple,0}]],
+    case Info =:= Exact andalso lists:member(Path,AllowedPaths) of
+        false -> unsupported;
+        true ->
+            %% Fixed public path from pinned image export catalogue, no input path.
+            {ok,Beam} = file:read_file("/opt/emqx/lib/emqx-5.5.5/ebin/emqx_tls_psk.beam"),
+            {ok,{emqx_tls_psk,Md5}} = beam_lib:md5(Beam),
+            <<"F2653DFD1072A73E2E6FEC1D77865D1F">> = binary:encode_hex(Md5),
+            {ok,{emqx_tls_psk,[{exports,Exports}]}} = beam_lib:chunks(Beam,[exports]),
+            true = lists:member({lookup,3},Exports),
+            case code:is_loaded(emqx_tls_psk) of
+                false -> ok;
+                {file,_} -> Md5 = erlang:get_module_info(emqx_tls_psk,md5)
+            end,
+            {ok,#{owner_fixed_public_callback => #{module => emqx_tls_psk,
+                name => lookup,arity => 3,type => external,env => [],
+                profile => default_tls_user_lookup_fun,
+                beam_md5 => <<"F2653DFD1072A73E2E6FEC1D77865D1F">>,
+                descriptor_sha256 => <<"DE702B30F75648B1435B584233503E51347F769A39B94DC5A2237781179633D6">>}}}
+    end
+end,
 %% Config-only capability. Never call a fun, unwrap/1, loader or external source.
 %% Identity measured from the pinned public emqx_secret BEAM; environment limited
 %% to the single binary captured by wrap/1. wrap_load/1 is deliberately refused.
 ConfigSecrets = fun F(V,D,Path,Acc) when D =< 16 ->
     case V of
         SecretFun when is_function(SecretFun) ->
+            case InertTlsCallback(SecretFun,lists:reverse(Path)) of
+                {ok,PublicIdentity} -> {PublicIdentity,Acc};
+                unsupported ->
             Expected = [{module,emqx_secret},{name,'-wrap/1-fun-0-'},
                 {arity,0},{type,local},{index,0},{new_index,0},{uniq,85191762},
                 {new_uniq,<<162,125,138,79,115,231,104,159,31,139,120,224,220,183,201,27>>}],
             Info = [erlang:fun_info(SecretFun,K) || K <-
                 [module,name,arity,type,index,new_index,uniq,new_uniq]],
             case Info =:= Expected andalso length(Acc) < 128 of
-                true -> ok; false -> error(unsupported_function)
+                true -> ok; false -> RejectConfigFunction(SecretFun,Path)
             end,
             {env,Env} = erlang:fun_info(SecretFun,env),
             case Env of
@@ -122,7 +230,8 @@ ConfigSecrets = fun F(V,D,Path,Acc) when D =< 16 ->
                         index => 0,new_index => 0,uniq => 85191762,
                         new_uniq => <<"A27D8A4F73E7689F1F8B78E0DCB7C91B">>,env => Env},
                     {Secret,[Metadata|Acc]};
-                _ -> error(unsupported_function)
+                _ -> RejectConfigFunction(SecretFun,Path)
+            end
             end;
         M when is_map(M), map_size(M) =< 4096 ->
             {Pairs,Next} = lists:mapfoldl(fun({K,Child},A) ->
@@ -306,6 +415,11 @@ catch _:Reason:_ ->
         table_count_mismatch,table_receipt_changed,config_changed,provider_changed,
         ticker_not_suspended,ticker_changed,schema_record_invalid,unsupported_pid,unsupported_reference,unsupported_port,unsupported_function,unsupported_bitstring,unsupported_term,native_refused]) of
         true -> Code0; false -> native_refused
+    end,
+    case {get(woow_target_stage),get(woow_target_function_diag)} of
+        {serialize_config,FunctionDiag} when is_map(FunctionDiag) ->
+            io:format("WOOWFUN:~s:END~n",[base64:encode(emqx_utils_json:encode(FunctionDiag))]);
+        _ -> ok
     end,
     io:format("WOOWTARGETFAIL:~s:~s:END",[atom_to_binary(SafeStage(get(woow_target_stage))),atom_to_binary(Code)])
 end.
