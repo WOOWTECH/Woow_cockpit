@@ -84,6 +84,69 @@ class SourceAPITests(unittest.TestCase):
     def refuse(self,**changes):
         with self.assertRaisesRegex(PrivateFailure,'^source-api-refused$'):self.run_api(**changes)
 
+    def test_fixed_endpoint_status_diagnostics_without_retry_or_private_text(self):
+        cases=[('login_admin',1),('login_second',2),('second_nodes',3),('api_key_nodes',4)]
+        cases += [(name,5+i) for i,name in enumerate(m.PATHS)]
+        for endpoint,ordinal in cases:
+            for status in (401,403,404,429,500):
+                with self.subTest(endpoint=endpoint,status=status):
+                    self.http.clear()
+                    self.edit_http=lambda url,raw,n=ordinal,code=status:raw[:-3]+str(code).encode() if len(self.http)==n else raw
+                    with self.assertRaises(m.SourceAPIPhaseRefused) as caught:self.run_api()
+                    expected='http_'+str(status) if status!=500 else 'http_other'
+                    self.assertEqual(caught.exception.phase,'source_api_'+endpoint+'_'+expected)
+                    self.assertEqual(str(caught.exception),'source-api-refused')
+                    self.assertEqual(len(self.http),ordinal)
+
+    def test_parse_contract_timeout_identity_and_facts_are_fixed(self):
+        for raw,reason in ((b'not-json\napplication/json\n200','parse'),
+                           (b'{}\ntext/plain\n200','contract'),
+                           (b'broken-frame','parse'),
+                           (b'{}\napplication/json\n200','contract')):
+            self.edit_http=lambda url,body,raw=raw:raw
+            with self.assertRaises(m.SourceAPIPhaseRefused) as caught:self.run_api()
+            self.assertEqual(caught.exception.phase,'source_api_login_admin_'+reason)
+        self.edit_http=None;self.fail='timeout'
+        with self.assertRaises(m.SourceAPIPhaseRefused) as caught:self.run_api()
+        self.assertEqual(caught.exception.phase,'source_api_login_admin_timeout')
+        self.fail=None;self.documents['rules']['data'][0]['id']='generated-unrelated'
+        with self.assertRaises(m.SourceAPIPhaseRefused) as caught:self.run_api()
+        self.assertEqual(caught.exception.phase,'source_api_facts_contract')
+        self.doc[0]['HostConfig']['NetworkMode']='host'
+        with self.assertRaises(m.SourceAPIPhaseRefused) as caught:self.run_api()
+        self.assertEqual(caught.exception.phase,'source_api_identity_identity')
+
+    def test_curl_timeout_exit_and_failed_login_body_registration_are_retained(self):
+        original=self.podman
+        def timeout(*args,**kwargs):
+            result=original(*args,**kwargs)
+            if args[0]=='exec':result.returncode=28
+            return result
+        self.runner.podman=timeout
+        with self.assertRaises(m.SourceAPIPhaseRefused) as caught:self.run_api()
+        self.assertEqual(caught.exception.phase,'source_api_login_admin_timeout')
+        self.runner.podman=original
+        self.edit_http=lambda url,raw:b'{"message":"generated-private-denied-body"}\napplication/json\n401'
+        with self.assertRaises(m.SourceAPIPhaseRefused):self.run_api()
+        with self.assertRaises(PrivateFailure):self.prior.scan(b'generated-private-denied-body')
+
+    def test_actual_workflow_consumer_preserves_fixed_phase_and_never_binds_failure(self):
+        import emqx_real_owner_workflow as workflow
+        from emqx_runtime_workflow import PrivateSession
+        session=PrivateSession(object(),self.prior,{},None)
+        credentials=workflow.SourceAPICredentials(tuple(self.credentials[k] for k in workflow.API_FIELDS))
+        clients=workflow.SourceClients(dict(retained_topic1=self.topics[0],retained_topic2=self.topics[1]))
+        self.edit_http=lambda url,raw:raw[:-3]+b'403'
+        before=dict(workflow._SOURCE_API_CIDS)
+        with patch.object(workflow,'_inspect',return_value=self.doc[0]),patch.object(workflow,'fixture_quiescence',side_effect=lambda p:self.quiesce()):
+            with self.assertRaises(workflow.RealOwnerRefused) as caught:
+                workflow._source_api_activity(self.provision,self.prior,session,clients,credentials)
+        self.assertEqual(caught.exception.phase,'source_api_login_admin_http_403')
+        self.assertIn(caught.exception.phase,workflow.PHASES)
+        self.assertEqual(len(self.http),1)
+        self.assertEqual(dict(workflow._SOURCE_API_CIDS),before)
+
+
     def test_actual_issuance_current_identity_and_private_http_contract(self):
         old=files._record(self.cap)[0]['cid']
         result=self.run_api()

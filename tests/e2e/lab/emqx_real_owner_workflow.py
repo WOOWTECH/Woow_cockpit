@@ -40,6 +40,8 @@ from woowbackup.paths import Paths
 PHASES = frozenset(('profile','observer_dependency','realm','budget','frame','provision',
     'ready','source','target','preflight','build','package','restore',
     'rollback','restart','cleanup','client_frame','no_live','mqtt','post_capture','post_capture_identity','payload_history','build_adapter','source_api','source_negative','object_integrity','api_frame'))
+from emqx_source_api_validator import SOURCE_API_PHASES, SourceAPIPhaseRefused
+PHASES=PHASES | SOURCE_API_PHASES
 from emqx_candidate_stage import STAGES as BUILD_STAGES, KINDS as BUILD_KINDS
 from emqx_captured_candidate import CandidatePhaseRefused
 PHASES=PHASES | frozenset('build_'+s+'_'+k for s in BUILD_STAGES for k in BUILD_KINDS)
@@ -443,6 +445,8 @@ def _source_api_activity(provision,prior_registry,session,clients,credentials):
         if result in _SOURCE_API_CIDS:raise ValueError()
         _SOURCE_API_CIDS[result]=(provision,cid,session.registry._runtime)
         return result
+    except SourceAPIPhaseRefused as error:
+        raise RealOwnerRefused(error.phase) from None
     except BaseException:
         raise RealOwnerRefused('source_api') from None
 

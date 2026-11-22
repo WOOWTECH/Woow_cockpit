@@ -12,6 +12,7 @@ import io
 import json
 import re
 import time
+from types import SimpleNamespace
 
 from emqx_adapter_owner import OwnerProvision, LabOwnerRunner
 from emqx_owner_fixture_files import _record
@@ -33,6 +34,24 @@ PATHS = {
  'dashboard_users':'/users', 'api_keys':'/api_key', 'nodes':'/nodes',
 }
 PAGED = {'mqtt_users','acl_users','acl_clients','banned','rules','retainer'}
+
+
+ENDPOINTS = frozenset(('input','identity','facts','proof','login_admin','login_second',
+                       'second_nodes','api_key_nodes',*PATHS))
+REASONS = frozenset(('http_401','http_403','http_404','http_429','http_other',
+                     'parse','contract','identity','timeout'))
+SOURCE_API_PHASES = frozenset('source_api_'+e+'_'+r for e in ENDPOINTS for r in REASONS)
+
+class SourceAPIPhaseRefused(PrivateFailure):
+    """Only compiled endpoint/reason labels escape; original fixed text retained."""
+    def __init__(self, endpoint, reason):
+        phase='source_api_'+endpoint+'_'+reason
+        self.phase=phase if phase in SOURCE_API_PHASES else 'source_api_input_contract'
+        super().__init__('source-api-refused')
+
+
+def _http_reason(status):
+    return 'http_'+str(status) if type(status) is int and status in (401,403,404,429) else 'http_other'
 
 
 class SourceAPIResult:
@@ -151,6 +170,7 @@ def validate_source_api(*, prior_registry, provision, expected_container_id, qui
     Returned result is private; caller MUST scan evidence through it. No evidence
     is emitted even on success, and failures disclose only a fixed code.
     """
+    endpoint,reason='input','contract'
     try:
         prior=prior_registry.registry if type(prior_registry) is PrivateSession else prior_registry
         root=prior
@@ -177,8 +197,21 @@ def validate_source_api(*, prior_registry, provision, expected_container_id, qui
         if owner is not provision: raise ValueError()
         old_cid=record['cid']; deadline=time.monotonic()+120
         def timely():
-            if time.monotonic()>=deadline: raise ValueError()
+            nonlocal reason
+            if time.monotonic()>=deadline:
+                reason='timeout';raise ValueError()
+        def request(*args,**kwargs):
+            nonlocal reason
+            try: response=provision.runner.podman(*args,**kwargs)
+            except TimeoutError:
+                reason='timeout';raise
+            if response.returncode == 28: reason='timeout'
+            elif response.returncode == 0: reason='parse'
+            return response
         def get(name, authorization):
+            nonlocal endpoint,reason
+            endpoint='api_key_nodes' if name=='nodes' and authorization==basic else ('second_nodes' if endpoint=='login_second' else name)
+            reason='contract'
             timely()
             if name not in PATHS or type(authorization) is not bytes or any(c in authorization for c in (b'\r',b'\n',b'\x00')): raise ValueError()
             config=['url = '+json.dumps('http://127.0.0.1:'+str(port)+'/api/v5'+PATHS[name]),
@@ -186,39 +219,59 @@ def validate_source_api(*, prior_registry, provision, expected_container_id, qui
                 'proto = "=http"','max-redirs = 0','request = "GET"',
                 'header = '+json.dumps('Authorization: '+authorization.decode('ascii')),
                 'write-out = "\\n%{content_type}\\n%{http_code}"']
-            response=provision.runner.podman('exec','-i',expected_container_id,'curl','-q','--config','-',
+            response=request('exec','-i',expected_container_id,'curl','-q','--config','-',
                 input=('\n'.join(config)+'\n').encode(),timeout=10,max_output=HTTP_OUTPUT,check=False)
             timely()
             if response.returncode or type(response.stdout) is not bytes or len(response.stdout)>HTTP_OUTPUT: raise ValueError()
+            reason='parse'
             body,ctype,status=response.stdout.rsplit(b'\n',2)
+            reason='contract'
+            if status!=b'200':
+                reason=_http_reason(int(status) if re.fullmatch(rb'[1-5][0-9]{2}',status) else None);raise ValueError()
             if len(body)>MAX_VALUE or ctype.split(b';',1)[0].strip().lower()!=b'application/json' or status!=b'200': raise ValueError()
-            return _register_document(runtime,body)
+            reason='parse'
+            document=_register_document(runtime,body)
+            reason='contract'
+            return document
         with quiesce():
+            endpoint,reason='identity','identity'
             timely(); before=_runtime_identity(provision,expected_container_id)
             if before[3].get('NetworkMode')!='none': raise ValueError()
-            transport=curl_login_transport(runner=provision.runner,broker=expected_container_id,
+            transport=curl_login_transport(runner=SimpleNamespace(podman=request),broker=expected_container_id,
                 login_url='http://127.0.0.1:'+str(port)+'/api/v5/login')
             # Register full login response as well as login_registered's JWT/Bearer.
             def observed_login(username,password):
+                nonlocal reason
                 timely();status,ctype,stream=transport(username,password)
                 try: raw=stream.read(MAX_VALUE+1)
                 finally: stream.close()
-                timely();_register_document(runtime,raw)
+                timely()
+                reason='parse' if status==200 else _http_reason(status)
+                _register_document(runtime,raw)
+                if status!=200:raise ValueError()
+                reason='contract'
+                if ctype!='application/json':raise ValueError()
                 return status,ctype,io.BytesIO(raw)
+            endpoint,reason='login_admin','contract'
             admin=login_registered(runtime,observed_login,username=admin_username,password=admin_password)
+            endpoint,reason='login_second','contract'
             second=login_registered(runtime,observed_login,username=second_username,password=second_password)
             if not _rows(second.with_bearer(lambda bearer:get('nodes',bearer)),'nodes'): raise ValueError()
             if not _rows(get('nodes',basic),'nodes'): raise ValueError()
             documents={name:admin.with_bearer(lambda bearer,name=name:get(name,bearer)) for name in PATHS}
+            endpoint,reason='facts','contract'
             facts=_facts(documents,admin_username,second_username,retained_topics)
             _register_document(runtime,json.dumps(facts,separators=(',',':')).encode())
+            endpoint,reason='identity','identity'
             if _runtime_identity(provision,expected_container_id)!=before or record['cid']!=old_cid: raise ValueError()
+        endpoint,reason='identity','identity'
         if _record(provision.file_capability)[1] is not provision or record['cid']!=old_cid: raise ValueError()
         timely();prior.scan(b'')
+        endpoint,reason='proof','contract'
         from emqx_native_object_integrity import _record_api
         return _record_api(SourceAPIResult(prior,runtime,documents,facts),
                            provision,expected_container_id,before)
     except (KeyboardInterrupt,SystemExit):
         raise PrivateFailure('source-api-cancelled') from None
     except Exception:
-        raise PrivateFailure('source-api-refused') from None
+        raise SourceAPIPhaseRefused(endpoint,reason) from None
