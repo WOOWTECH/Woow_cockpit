@@ -61,7 +61,7 @@ class BridgeTests(unittest.TestCase):
                 with binding['open']('fedcba98_woow-emqx'):
                     self.fail('unsealed replay')
             session = self.join(captured)
-            self.assertTrue((self.evidence/'joined-preflight.json').is_file())
+            self.assertTrue((self.evidence/'joined-preflight.txt').is_file())
             with patch.object(real.hacommon,'image_labels',return_value={'org.opencontainers.image.version':'5.8.9'}), \
                  patch.object(real.tempctr,'TempObjects') as objects, \
                  patch.object(real.ha_emqx,'_build_candidate',side_effect=inspect) as inner, \
@@ -112,7 +112,7 @@ class BridgeTests(unittest.TestCase):
         with self.source() as (first,one):
             session1 = self.join(first)
             with self.source() as (second,two):
-                session2 = self.join(second,evidence_name='second-preflight.json')
+                session2 = self.join(second,evidence_name='second-preflight.txt')
                 with patch.object(bridge,'build_verified_candidate') as build:
                     for capture,binding,session in ((first,one,session2), (second,two,session1),
                                                     (first,two,session1)):

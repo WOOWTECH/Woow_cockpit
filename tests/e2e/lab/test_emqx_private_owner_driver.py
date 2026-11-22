@@ -204,7 +204,7 @@ class DriverTests(unittest.TestCase):
         def scanned(registry,raw):
             scan(registry,raw)
             if raw:
-                self.assertFalse((self.evidence/'driver-preflight.json').exists())
+                self.assertFalse((self.evidence/'driver-preflight.txt').exists())
                 self.events.append('combined-scanned')
         with patch.object(source_owner,'native_hocon',self.parser), \
              patch.object(source_owner,'native_cold_history',decoder), \
@@ -218,7 +218,7 @@ class DriverTests(unittest.TestCase):
         args = dict(source_password=self.password,expected_sha256=self.digest,
             spool_directory=self.spool,source_options={},runner=self.runner,quiesce=self.quiesce,
             login_url=URL,username=USER,password=PASSWORD,evidence_directory=self.evidence,
-            evidence_name='driver-preflight.json')
+            evidence_name='driver-preflight.txt')
         args.update(changes)
         return driver.build_owner_candidate(self.work,self.app,object(),self.target,self.path,
                                             self.staging,'j20261122T000000Z-12345678',**args)
@@ -229,7 +229,7 @@ class DriverTests(unittest.TestCase):
             self.assertTrue(self.live)
             self.assertFalse(self.capture._closed)
             self.assertIn('combined-scanned',self.events)
-            self.assertTrue((self.evidence/'driver-preflight.json').is_file())
+            self.assertTrue((self.evidence/'driver-preflight.txt').is_file())
             with work.open('fedcba98_woow-emqx') as replay:
                 self.assertFalse(replay.writable())
                 inspected.append(replay.read())
@@ -252,12 +252,10 @@ class DriverTests(unittest.TestCase):
         self.assertTrue(self.capture._closed)
         self.assertEqual(list(self.spool.iterdir()),[])
         self.assertEqual(list(self.staging.iterdir()),[])
-        raw = (self.evidence/'driver-preflight.json').read_bytes()
-        doc = json.loads(raw)
-        self.assertEqual(set(doc),{'phase','result','coverage'})
-        self.assertEqual(doc['phase'],'preflight')
-        self.assertIsInstance(doc['coverage'],list)
-        self.assertEqual((self.evidence/'driver-preflight.json').stat().st_mode&0o777,0o600)
+        raw = (self.evidence/'driver-preflight.txt').read_bytes()
+        from emqx_private_evidence import names_receipt, SOURCE_NAMES
+        self.assertEqual(raw,names_receipt('preflight','passed',SOURCE_NAMES))
+        self.assertEqual((self.evidence/'driver-preflight.txt').stat().st_mode&0o777,0o600)
         for value in (USER,PASSWORD,TOKEN,b'fixture-private-emqx_admin_jwt'):
             self.assertNotIn(value,raw)
         self.work.log.assert_not_called()
@@ -297,7 +295,7 @@ class DriverTests(unittest.TestCase):
             if case == 'scan':
                 def collide(doc):
                     from test_emqx_owner_target import typed, cooked_config
-                    config = cooked_config(); config['additional_native_root']['opaque'] = 'preflight'
+                    config = cooked_config(); config['additional_native_root']['opaque'] = '前置檢查'
                     doc['config'] = typed(config)
                 self.target_edit = collide
             with self.subTest(case=case), self.producers(), \
