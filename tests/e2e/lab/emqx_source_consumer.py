@@ -9,7 +9,7 @@ import io
 import json
 import tarfile
 
-from woowbackup import habackup, hasecuretar
+from woowbackup import habackup, hasecuretar, ha_emqx
 from emqx_private_boundary import Registry, PrivateFailure, SOURCES, MAX_VALUE, MAX_TOTAL
 from emqx_real_candidate import build_verified_candidate
 from emqx_semantic_readers import read_hocon, MAX_INPUT, SemanticRefused
@@ -62,7 +62,11 @@ class Capture:
     no missing categories or implicit empty acknowledgements are accepted.
     JSON readers are for self-contained data only, never HOCON or Mnesia.
     """
-    def __init__(self, password, target_documents, *, hocon_parser=None, spool_directory=None):
+    def __init__(self, password, target_documents, *, hocon_parser=None, spool_directory=None, product_selection=False):
+        if type(product_selection) is not bool:
+            refuse()
+        self._product_selection = product_selection
+        self.discarded = {"files": 0, "bytes": 0}
         self._hocon_parser = hocon_parser
         self._spool_directory = spool_directory
         self._stack = None
@@ -134,6 +138,17 @@ class Capture:
                 name = entry.name.removeprefix('./')
                 if entry.isdir():
                     continue
+                # The product never opens/copies files outside its STAGED roots.
+                # Whole tar safety and EOF have already been verified above.
+                staged = any(name == ha_emqx.DATA + '/' + item or
+                             name.startswith(ha_emqx.DATA + '/' + item + '/')
+                             for item in ha_emqx.STAGED)
+                identity = name in ('addon.json', ha_emqx.NODE_FILE,
+                                    'data/emqx/node.cookie')
+                if self._product_selection and not (staged or identity):
+                    self.discarded['files'] += 1
+                    self.discarded['bytes'] += entry.size
+                    continue
                 is_hocon = name in ('data/emqx/data/configs/cluster.hocon',
                                     'data/emqx/etc/emqx.conf',
                                     'data/emqx/etc/base.hocon')
@@ -162,7 +177,13 @@ class Capture:
                         raise PrivateFailure('private-source-hocon-unsupported') from None
                 else:
                     raise PrivateFailure('private-source-format-unsupported')
-        if not {'addon.json', 'data/emqx/node.cookie', 'data/emqx/node.name'} <= found:
+        required = {'addon.json', 'data/emqx/node.name'}
+        if not self._product_selection:
+            required.add('data/emqx/node.cookie')
+        elif 'data/emqx/node.cookie' not in found:
+            # Exhaustive tar inventory observed absence; the product never uses it.
+            self.registry.register('source-cookie', [])
+        if not required <= found:
             refuse()
         self.registry.register('source-options', source_options)
         self.registry.seal()
@@ -175,13 +196,13 @@ class Capture:
         return dict(source, open=replay)
 
 
-def build_consumed_candidate(*args, password, target_documents, hocon_parser=None, spool_directory=None, **kwargs):
+def build_consumed_candidate(*args, password, target_documents, hocon_parser=None, spool_directory=None, product_selection=False, **kwargs):
     """Callable private candidate path; fixed errors only, no secret diagnostics."""
     try:
         if 'keys' in kwargs or 'private_capture' in kwargs:
             refuse()
         capture = Capture(password, target_documents, hocon_parser=hocon_parser,
-                          spool_directory=spool_directory)
+                          spool_directory=spool_directory, product_selection=product_selection)
         import copy
         work = copy.copy(args[0])
         work.log = lambda *a, **k: None

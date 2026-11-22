@@ -43,6 +43,32 @@ class ConsumerTests(unittest.TestCase):
         with self.assertRaises(consumer.PrivateFailure):
             capture(binding(raw))
 
+    def test_opt_in_selection_matches_product_and_observes_unused_cookie_absence(self):
+        raw = hx.tar_bytes([
+            {'name': 'addon.json', 'data': b'{"system":{"slug":"woow-emqx"},"version":"5.9.0"}'},
+            {'name': 'data/emqx/node.name', 'data': b'emqx@fixture'},
+            {'name': 'data/emqx/data/configs/generated.conf', 'data': b'x' * 131072}])
+        capture = consumer.Capture('fixture-key', documents(), product_selection=True)
+        bound = capture(binding(raw))
+        self.assertEqual(capture.registry.summary()['source-cookie'], 0)
+        self.assertEqual(capture.discarded, {'files': 1, 'bytes': 131072})
+        with bound['open']('repo_woow-emqx') as replay:
+            self.assertEqual(replay.read(), raw)
+        with self.assertRaises(consumer.PrivateFailure):
+            consumer.Capture('fixture-key', documents())(binding(raw))
+
+    def test_selection_never_discards_unknown_staged_secrets_or_unsafe_tar(self):
+        for name in ('data/emqx/data/mnesia/schema.DAT',
+                     'data/emqx/data/certs/key.pem', 'data/emqx/data/authz/acl.conf'):
+            with self.subTest(name=name), self.assertRaises(consumer.PrivateFailure):
+                consumer.Capture('fixture-key', documents(), product_selection=True)(
+                    binding(payload([{'name': name, 'data': b'unsupported-private'}])))
+        with self.assertRaises(Exception):
+            consumer.Capture('fixture-key', documents(), product_selection=True)(
+                binding(payload() + b'unsafe-trailer'))
+        with self.assertRaises(consumer.PrivateFailure):
+            consumer.Capture('fixture-key', documents(), product_selection='true')
+
     def test_missing_unknown_binary_and_trailing_sources_refuse(self):
         for raw in (payload()[:3072], payload() + b'nonzero-trailer',
                     payload([{'name': 'data/emqx/data/mnesia/schema.DAT', 'data': b'binary'}]),
