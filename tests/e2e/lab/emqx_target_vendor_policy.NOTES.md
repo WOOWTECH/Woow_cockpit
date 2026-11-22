@@ -156,3 +156,29 @@ before a separate runtime fact contract is implemented. Pinned launcher does use
 -proto_dist ekka, so treating that flag as direct inet_tcp would be incorrect.
 56 tests passed, including native public schema metadata fixture, canonical
 five-reader fixture and nine typed/missing/unsupported failures. No lab access.
+
+Dashboard schema correction and diagnostics:
+Cached pinned native schema probe showed default_username binary(), generated
+username cooked as binary, and absent HTTPS when not explicitly configured.
+Public emqx_dashboard_schema:https_converter(undefined,_) returns undefined;
+emqx_dashboard:listeners/1 traverses only actual maps:to_list entries, excluding
+present bind=0. Thus complete dashboard.listeners with no HTTPS entry proves no
+configured dashboard HTTPS listener; it is not a fabricated bind/default.
+Missing dashboard.listeners still refuses. Present HTTPS must remain a map with
+observed integer bind exactly zero; malformed/missing bind/nonzero still refuse.
+Unknown dashboard listener protocols refuse. Credential missing/type/charlist/
+invalid and HTTPS cases have fixed sanitized consumer reasons.
+
+No marker-map unwrap or charlist decoder was introduced: ConfigSecrets already
+normalizes the exact known secret closure to binary and _config_secret_metadata
+requires path/env/full-identity binding before projection. Existing adversarial
+secret tests retain forged/unmatched metadata refusal. Actual public schema did
+not support the hypothesized username charlist shape, so it remains unsupported
+with a fixed reason, without changing global _text/native-name rules.
+
+62 tests passed. New native fixture generates credentials through actual pinned
+schema, omits HTTPS naturally, normalizes captured secret provenance with the
+fixed producer, and sends the generated native typed config to exact five-reader
+consumer. Username/password values match and remain privately scanned. These are
+synthetic public-image inputs, not a live target run; target22 dashboard reason
+was coarse and main must retry actual target. No lab operations were performed.

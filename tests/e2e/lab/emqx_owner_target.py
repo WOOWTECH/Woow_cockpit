@@ -35,7 +35,13 @@ CONSUMER_REASONS = frozenset(('private_refused','inventory_names_type','inventor
     'reference_env','reference_vault','reference_file_uri','reference_url','reference_file_setting',
     'cluster_discovery_missing','cluster_discovery_type','cluster_discovery_unsupported',
     'cluster_rpc_protocol_missing','cluster_rpc_protocol_type','cluster_rpc_protocol_unsupported',
-    'cluster_proto_dist_missing','cluster_proto_dist_type','cluster_proto_dist_unsupported'))
+    'cluster_proto_dist_missing','cluster_proto_dist_type','cluster_proto_dist_unsupported',
+    'dashboard_root_type','dashboard_listeners_missing','dashboard_listeners_type',
+    'dashboard_listener_unknown','dashboard_https_type','dashboard_https_bind_missing',
+    'dashboard_https_bind_type','dashboard_https_enabled','dashboard_username_missing',
+    'dashboard_username_type','dashboard_username_charlist','dashboard_username_invalid',
+    'dashboard_password_missing','dashboard_password_type','dashboard_password_charlist',
+    'dashboard_password_invalid'))
 
 
 # Extracted from hocon_schema:roots(emqx_conf_schema) in pinned IMAGE, metadata
@@ -333,13 +339,45 @@ def _absence_profile(config, provider, mark=lambda _:None, vendor_policy=None):
                 unsupported()
     mark('dashboard')
     dashboard = config['dashboard']
-    https = dashboard['listeners']['https']
-    if type(https) is not dict or type(https.get('bind')) is not int or https['bind'] != 0:
-        unsupported()
-    # Real native config values, never hand-filled bootstrap acknowledgement.
-    bootstrap = {'username': _text(dashboard['default_username']),
-                 'password': _text(dashboard['default_password'])}
-    inline(bootstrap['username']); inline(bootstrap['password'])
+    def dashboard_refuse(code):
+        raise OwnerCaptureRefused('dashboard','dashboard_'+code)
+    if type(dashboard) is not dict:
+        dashboard_refuse('root_type')
+    if 'listeners' not in dashboard:
+        dashboard_refuse('listeners_missing')
+    dashboard_listeners=dashboard['listeners']
+    if type(dashboard_listeners) is not dict:
+        dashboard_refuse('listeners_type')
+    if not set(dashboard_listeners) <= {'http','https'}:
+        dashboard_refuse('listener_unknown')
+    # Public https_converter(undefined) preserves absence; dashboard startup
+    # traverses only present listener-map entries. Do not invent bind=0.
+    if 'https' in dashboard_listeners:
+        https=dashboard_listeners['https']
+        if type(https) is not dict:
+            dashboard_refuse('https_type')
+        if 'bind' not in https:
+            dashboard_refuse('https_bind_missing')
+        if type(https['bind']) is not int:
+            dashboard_refuse('https_bind_type')
+        if https['bind'] != 0:
+            dashboard_refuse('https_enabled')
+    def credential(key,label):
+        if key not in dashboard:
+            dashboard_refuse(label+'_missing')
+        value=dashboard[key]
+        if type(value) not in (str,bytes):
+            dashboard_refuse(label+('_charlist' if type(value) is list else '_type'))
+        try:
+            text=_text(value)
+            inline(text)
+        except Exception:
+            dashboard_refuse(label+'_invalid')
+        return text
+    # ConfigSecrets already normalized exact known closures to binary; complete
+    # metadata/env binding was validated before this projection. No function call.
+    bootstrap = {'username': credential('default_username','username'),
+                 'password': credential('default_password','password')}
     mark('provider')
     if (type(provider) is not list or len(provider) != 1 or type(provider[0]) is not dict
             or _text(provider[0]['id']) != 'password_based:built_in_database'
