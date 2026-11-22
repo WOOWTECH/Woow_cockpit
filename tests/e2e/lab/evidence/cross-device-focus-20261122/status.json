@@ -1,0 +1,31 @@
+{
+  "scope": [
+    "large backups",
+    "single member above 8GiB",
+    "native ARM Podman target",
+    "cross-physical-device restore",
+    "final integrated-version acceptance"
+  ],
+  "large_data": {
+    "host_free_approx_gib": 25,
+    "minimum_reserve_gib": 12,
+    "worker": "01a200bc-f470-7471-b021-d7966700900b",
+    "status": "implementing bounded real stream probe; not completed"
+  },
+  "final_version": {
+    "worker": "01a200bc-fdfc-7813-b6d3-10d8413281a7",
+    "status": "evidence/source audit in progress"
+  },
+  "arm_target_probe": {
+    "host": "192.168.2.34:22",
+    "architecture": "aarch64",
+    "ssh_environment": "Alpine 3.24.2 with ha CLI",
+    "podman_in_path": false,
+    "free_gib": 8.6,
+    "read_only": true,
+    "limitation": "SSH add-on environment is not proof of host Podman absence; no native Podman target currently available",
+    "required": "authorized ARM Linux test target with Podman-compatible OS and sufficient storage"
+  },
+  "cross_physical_restore": "pending eligible target; prior same-host containers do not satisfy",
+  "commercial_acceptance": false
+}
