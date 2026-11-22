@@ -27,21 +27,27 @@ class NegativeTests(unittest.TestCase):
         self.api_mode=False
         self.clients=m.SourceClients({'gateway_user':b'b1-gateway','gateway_password':b'generated-gateway-password'})
         self.runtime.register_bundle({'runtime-login-input':list(self.clients.fields.values())})
-        self.active=set();self.config_roots=[];self.probes=[];self.reasons=[134,138]
+        self.active=set();self.client_docs={};self.config_roots=[];self.probes=[];self.reasons=[134,138]
         self.run_error=False;self.remove_failure=False;self.output_override=None;self.name_collision=False
 
     def podman(self,*args,**kwargs):
         if getattr(self,'api_mode',True): return api_tests.SourceAPITests.podman(self,*args,**kwargs)
         self.commands.append((args,kwargs))
         if args[:2]==('container','inspect'):
-            return SimpleNamespace(returncode=0,stdout=json.dumps(self.doc).encode())
+            doc=self.doc if args[2]==self.cid else [self.client_docs[args[2]]]
+            return SimpleNamespace(returncode=0,stdout=json.dumps(doc).encode(),stderr=b'')
         if args[:2]==('container','exists'):
-            return SimpleNamespace(returncode=0 if args[2] in self.active or self.name_collision else 1,stdout=b'',stderr=b'')
+            return SimpleNamespace(returncode=0 if args[2] in self.active or any(d['Id']==args[2] and name in self.active for name,d in self.client_docs.items()) or self.name_collision else 1,stdout=b'',stderr=b'')
         if args[0]=='rm':
-            self.active.discard(args[-1])
+            self.assertRegex(args[-1],r'^[0-9a-f]{64}$')
+            self.assertNotIn(args[-1],self.active)
+            for name,doc in self.client_docs.items():
+                if doc['Id']==args[-1]:self.active.discard(name)
             return SimpleNamespace(returncode=1 if self.remove_failure else 0,stdout=b'',stderr=b'')
         self.assertEqual(args[0],'run')
         name=args[args.index('--name')+1];self.active.add(name);self.probes.append(name)
+        label=args[args.index('--label')+1].split('=',1)
+        self.client_docs[name]={'Id':format(len(self.probes),'064x'),'Name':'/'+name,'Image':m.CLIENT,'Config':{'Labels':{label[0]:label[1]}}}
         self.assertIn('--network=container:'+self.cid,args)
         self.assertIn(m.CLIENT,args);self.assertIn('--pull=never',args);self.assertIn('--log-driver=none',args)
         self.assertIn('--timeout=15',args);self.assertIn('mqttv5',args)
@@ -129,6 +135,20 @@ class NegativeTests(unittest.TestCase):
     def test_collision_does_not_delete_someone_elses_client(self):
         self.name_collision=True;self.refuse()
         self.assertFalse(any(args[0]=='rm' for args,kwargs in self.commands))
+
+    def test_post_prepare_foreign_client_refuses_without_delete_and_cleans_config(self):
+        original=self.podman
+        def foreign(*args,**kwargs):
+            result=original(*args,**kwargs)
+            if args[0]=='run':
+                name=args[args.index('--name')+1]
+                self.client_docs[name]['Config']['Labels']={}
+            return result
+        self.runner.podman=foreign
+        with self.assertRaisesRegex(PrivateFailure,'^source-negative-refused$'):self.run_negative()
+        self.assertTrue(self.active)
+        self.assertFalse(any(args[0]=='rm' for args,kwargs in self.commands))
+        self.assertTrue(all(not p.exists() for p in self.config_roots))
 
     def test_late_identity_change_and_overall_deadline_refuse(self):
         original=self.podman

@@ -14,6 +14,7 @@ import time
 
 from emqx_adapter_owner import OwnerProvision, LabOwnerRunner
 from emqx_adapter_mqtt import CLIENT
+from emqx_owned_client import owned_client
 from emqx_owner_fixture_files import _record
 from emqx_post_restore_values import _runtime_identity
 from emqx_private_boundary import PrivateFailure
@@ -53,7 +54,6 @@ def _ban_deadline(observed):
 def _probe(provision,cid,runtime,*,username=None,password=None):
     r=provision.runner
     name=provision.fixture.prefix+'-negative-'+secrets.token_hex(6)
-    owned=False
     with tempfile.TemporaryDirectory(prefix=name+'-',dir=_ram_client_parent()) as directory:
         root=Path(directory);root.chmod(0o700)
         info=root.lstat()
@@ -65,10 +65,8 @@ def _probe(provision,cid,runtime,*,username=None,password=None):
             os.fchmod(handle.fileno(),0o600);handle.write(config);handle.flush()
             st=os.fstat(handle.fileno())
             if not stat.S_ISREG(st.st_mode) or st.st_uid!=os.geteuid() or st.st_nlink!=1 or stat.S_IMODE(st.st_mode)!=0o600: raise ValueError()
-        try:
-            if r.podman('container','exists',name,timeout=5,max_output=4096,check=False).returncode!=1: raise ValueError()
-            owned=True
-            result=r.podman('run','--rm','--name',name,'--pull=never','--log-driver=none','--image-volume=ignore',
+        with owned_client(r,name) as ownership:
+            result=r.podman('run','--rm',*ownership,'--pull=never','--log-driver=none','--image-volume=ignore',
                 '--network=container:'+cid,'--userns=keep-id:uid=1000,gid=1000','--user=1000:1000',
                 '--memory=64m','--cpus=0.25','--pids-limit=32','--timeout=15','--stop-timeout=1',
                 '-e','HOME=/work','-e','XDG_CONFIG_HOME=/work','-v',str(root)+':/work:ro',
@@ -81,12 +79,7 @@ def _probe(provision,cid,runtime,*,username=None,password=None):
             expected=(138,) if username is not None else (134,135)
             if len(reasons)!=1 or int(reasons[0]) not in expected or result.returncode!=int(reasons[0]): raise ValueError()
             return int(reasons[0])
-        finally:
-            if owned:
-                removed=absent=False
-                try: removed=r.podman('rm','--force','--ignore',name,timeout=5,max_output=4096,check=False).returncode==0
-                finally: absent=r.podman('container','exists',name,timeout=5,max_output=4096,check=False).returncode==1
-                if not removed or not absent: raise ValueError()
+
 
 
 def validate_source_mqtt_negative(*,provision,expected_container_id,clients,source_api,quiesce):
