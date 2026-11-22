@@ -1,0 +1,291 @@
+"""Fixed host transport for sole-owner ARM/x86 restore; no arbitrary inputs.
+
+Secrets are data read into RAM from compiled private paths, never shell sourced.
+The owner child emits only exact private receipt bytes after cleanup. This module
+is invoked by run_emqx_real_owner.sh; direct entry does not acquire lab ownership.
+"""
+import hashlib
+import io
+import os
+from pathlib import Path
+import re
+import selectors
+import shlex
+import signal
+import stat
+import struct
+import subprocess
+import sys
+import tempfile
+import time
+
+ROOT=Path(__file__).resolve().parents[3]
+sys.path.insert(0,str(ROOT/'backup-engine'))
+from emqx_arm_cold_transfer import BOOTSTRAP as SOURCE_BOOTSTRAP, dependencies
+from emqx_source_profiles import source_profile
+
+CLIENT_CREDS=Path('/home/woowtechopenclaw/.woowbk-lab/secrets/b1-creds.env')
+KEY_CREDS=Path('/home/woowtechopenclaw/.woowbk-lab/secrets/ha-import-creds.env')
+PRIVATE_PARENT=Path('/home/woowtechopenclaw/.woowbk-lab')
+MODES={
+ '--real-restore':('--source-vendor-acl-sql-aliases',b'G',False),
+ '--x86-real-restore':('--x86-source-vendor-acl-sql-aliases',b'I',False),
+ '--real-restore-staged':('--source-vendor-acl-sql-aliases',b'g',True),
+ '--x86-real-restore-staged':('--x86-source-vendor-acl-sql-aliases',b'i',True),
+}
+CLIENT_KEYS=tuple(k for i in (1,2,3) for k in (f'B1_MQTT_USER{i}',f'B1_MQTT_PW{i}'))
+STAGED=b'REAL OWNER STAGED ONLY PASSED\n'
+DEPENDENCIES=b'REAL OWNER DEPENDENCIES PASSED\n'
+HOST_PHASES=frozenset(('profile','bundle','dependencies','client_credentials','retained_binding','key','archive','transfer','child','receipt'))
+
+class TransportRefused(ValueError):
+    def __init__(self,phase):
+        self.phase=phase
+
+
+# Reuse the original bounded, private extraction/dependency loader, including its
+# finally cleanup. No independent tar parser or key/archive frame implementation.
+_dispatch="""
+ if mode in (b'G',b'I',b'g',b'i',b'T'):
+  from emqx_real_owner_transport import owner_main
+  raise SystemExit(owner_main(mode))
+"""
+_anchor=" if mode in (b'E',b'F'):\n"
+if SOURCE_BOOTSTRAP.count(_anchor)!=1:raise RuntimeError('fixed-bootstrap-contract')
+BOOTSTRAP=SOURCE_BOOTSTRAP.replace(_anchor,_dispatch+_anchor)
+
+
+def _snapshot(info):
+    return (info.st_dev,info.st_ino,info.st_size,info.st_mtime_ns,info.st_ctime_ns)
+
+
+def read_fixed_fields(path,names):
+    """Bounded EOF/stability + regular owner600/no alias; parse only named data."""
+    if any(p.is_symlink() for p in (path,*path.parents)):raise ValueError()
+    fd=os.open(path,os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK)
+    with os.fdopen(fd,'rb') as stream:
+        before=os.fstat(stream.fileno())
+        if (not stat.S_ISREG(before.st_mode) or before.st_uid!=os.geteuid()
+                or stat.S_IMODE(before.st_mode)!=0o600 or before.st_nlink!=1
+                or not 0<before.st_size<=1024*1024):raise ValueError()
+        raw=stream.read(1024*1024+1)
+        if len(raw)!=before.st_size or stream.read(1) or _snapshot(before)!=_snapshot(os.fstat(stream.fileno())):
+            raise ValueError()
+    fields={}
+    for line in raw.splitlines():
+        if len(line)>8192:raise ValueError()
+        name,sep,value=line.partition(b'=')
+        if name not in {n.encode('ascii') for n in names}:continue
+        key=name.decode('ascii')
+        if key in fields or not sep:raise ValueError()
+        parsed=shlex.split(value.decode('ascii'),comments=False,posix=True)
+        if len(parsed)!=1:raise ValueError()
+        fields[key]=parsed[0].encode('ascii')
+    if set(fields)!=set(names):raise ValueError()
+    return [fields[n] for n in names]
+
+
+def read_client_credentials():
+    fields=read_fixed_fields(CLIENT_CREDS,CLIENT_KEYS)
+    if any(re.fullmatch(rb'[A-Za-z0-9_-]{1,128}',v) is None for v in fields):raise ValueError()
+    if fields[0]!=b'b1-sensor' or fields[2]!=b'b1-gateway' or fields[4]==b'lab':raise ValueError()
+    if len(set(fields[::2]))!=3:raise ValueError()
+    return fields
+
+
+def retained_expectations(source_mode):
+    # No published fixed payload binding has been supplied. Do not substitute
+    # generated payloads, a target observation, hashes, or topic-only equivalence.
+    raise TransportRefused('retained_binding')
+
+
+def client_prefix(source_mode):
+    from emqx_real_owner_workflow import CLIENT_MAGIC,CLIENT_MODES,read_source_clients
+    fields=read_client_credentials()+retained_expectations(source_mode)
+    if len(fields)!=10 or any(type(v) is not bytes or not 0<len(v)<=4096 for v in fields):raise ValueError()
+    raw=CLIENT_MAGIC+CLIENT_MODES[source_mode]+b''.join(struct.pack('!H',len(v))+v for v in fields)
+    stream=io.BytesIO(raw)
+    read_source_clients(stream,source_mode)
+    if stream.read(1):raise ValueError()
+    return raw
+
+
+def bundle_code():
+    """Immutable tracked public code closure, no host private files or test data."""
+    paths=subprocess.check_output(['git','ls-tree','-r','--name-only','HEAD','tests/e2e/lab'],cwd=ROOT).decode('ascii').splitlines()
+    selected=[p for p in paths if (Path(p).name.startswith('emqx_') and Path(p).suffix in ('.py','.escript','.expr'))
+              or Path(p).name=='ha_real_fixture.py']
+    required={'emqx_real_owner_transport.py','emqx_real_owner_workflow.py','emqx_post_restore_values.py',
+              'emqx_owner_fixture_files.py','emqx_target_fixture_policy.py','emqx_adapter_mqtt.py'}
+    if not required<={Path(p).name for p in selected}:raise ValueError()
+    raw=subprocess.check_output(['git','archive','HEAD','backup-engine/woowbackup',*selected],cwd=ROOT)
+    if not 0<len(raw)<=16*1024*1024:raise ValueError()
+    return raw
+
+
+def canonical_receipt():
+    from emqx_private_evidence import names_receipt,SOURCE_NAMES
+    return names_receipt('restore','passed',SOURCE_NAMES)
+
+
+def retain_restore_evidence(frame):
+    from emqx_framed_preflight import MAGIC,MAX_FRAME
+    if type(frame) is not bytes or not len(MAGIC)+4<len(frame)<=MAX_FRAME or not frame.startswith(MAGIC):raise ValueError()
+    start=len(MAGIC)+4
+    size=struct.unpack('!I',frame[len(MAGIC):start])[0]
+    if not 0<size<=65536 or len(frame)!=start+size+32:raise ValueError()
+    raw=frame[start:start+size]
+    if hashlib.sha256(raw).digest()!=frame[-32:] or raw!=canonical_receipt():raise ValueError()
+    parent=PRIVATE_PARENT;info=parent.stat()
+    if (not stat.S_ISDIR(info.st_mode) or info.st_uid!=os.geteuid() or stat.S_IMODE(info.st_mode)!=0o700
+            or any(p.is_symlink() for p in (parent,*parent.parents))):raise ValueError()
+    root=Path(tempfile.mkdtemp(prefix='emqx-real-owner-evidence-',dir=parent))
+    path=root/'owner-restore.txt';created=False
+    try:
+        fd=os.open(path,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o600)
+        created=True
+        with os.fdopen(fd,'wb') as out:
+            os.fchmod(out.fileno(),0o600)
+            out.write(raw);out.flush();os.fsync(out.fileno())
+        return path
+    except BaseException:
+        if created:path.unlink()
+        root.rmdir()
+        raise
+
+
+def dependency_check():
+    # Invoke real API imports after extraction, not a list-membership assertion.
+    from emqx_real_owner_workflow import run_real_framed_owner,_composite_observer_factory,final_private_receipt
+    from emqx_post_restore_values import collect_post_restore_values
+    from emqx_adapter_mqtt import CLIENT
+    from woowbackup.adapters.quadlet_postgres import QuadletPostgresAdapter
+    from woowbackup import flows
+    if not all(callable(x) for x in (run_real_framed_owner,_composite_observer_factory(),
+            final_private_receipt,collect_post_restore_values,QuadletPostgresAdapter,flows.run_restore)):
+        raise ValueError()
+    if type(CLIENT) is not str:raise ValueError()
+
+
+def owner_main(mode):
+    if mode==b'T':
+        dependency_check()
+        if sys.stdin.buffer.read(1):return 1
+        sys.stdout.buffer.write(DEPENDENCIES);sys.stdout.buffer.flush();return 0
+    selected=[v for v in MODES.values() if v[1]==mode]
+    if len(selected)!=1:return 2
+    source_mode,_,no_live=selected[0]
+    from emqx_arm_source_owner import _owner_realm
+    if not _owner_realm():return 1
+    def deadline(*_):raise ValueError()
+    previous=signal.signal(signal.SIGALRM,deadline)
+    try:
+        signal.setitimer(signal.ITIMER_REAL,840)
+        from emqx_real_owner_workflow import run_real_framed_owner
+        from emqx_framed_preflight import evidence_frame
+        with tempfile.TemporaryDirectory(prefix='emqx-real-owner-private-',dir=Path.home()) as d:
+            parent=Path(d);parent.chmod(0o700)
+            result=run_real_framed_owner(sys.stdin.buffer,private_parent=parent,source_mode=source_mode,no_live=no_live)
+        if no_live:
+            if result!={'scope':'sha-bound-ciphertext-and-client-frame-only','runtime':'not-run',
+                    'source_authentication':'not-performed','restore':'not-performed'}:raise ValueError()
+            raw=STAGED
+        else:
+            if type(result) is not dict or result.get('evidence_bytes')!=canonical_receipt():raise ValueError()
+            raw=evidence_frame(result['evidence_bytes'])
+        # Both workflow cleanup and outer temporary-directory cleanup completed.
+        sys.stdout.buffer.write(raw);sys.stdout.buffer.flush();return 0
+    except BaseException as error:
+        from emqx_real_owner_workflow import RealOwnerRefused,PHASES
+        phase=error.phase if type(error) is RealOwnerRefused and error.phase in PHASES else 'profile'
+        sys.stdout.buffer.write(b'REALOWNER-REFUSED:'+phase.encode('ascii')+b'\n')
+        sys.stdout.buffer.flush()
+        return 1
+    finally:
+        signal.setitimer(signal.ITIMER_REAL,0)
+        signal.signal(signal.SIGALRM,previous)
+
+
+def read_result(child,*,timeout=900):
+    from emqx_real_owner_workflow import PHASES
+    from emqx_framed_preflight import MAX_FRAME
+    deadline=time.monotonic()+timeout;result=bytearray()
+    with selectors.DefaultSelector() as selector:
+        selector.register(child.stdout,selectors.EVENT_READ)
+        while True:
+            remaining=deadline-time.monotonic()
+            if remaining<=0 or not selector.select(remaining):raise TransportRefused('child')
+            raw=os.read(child.stdout.fileno(),min(65536,MAX_FRAME+1-len(result)))
+            if not raw:break
+            result.extend(raw)
+            if len(result)>MAX_FRAME:raise TransportRefused('child')
+    if child.wait(timeout=max(.01,deadline-time.monotonic()))!=0:
+        for phase in PHASES:
+            if bytes(result)==b'REALOWNER-REFUSED:'+phase.encode('ascii')+b'\n':
+                raise TransportRefused(phase)
+        raise TransportRefused('child')
+    return bytes(result)
+
+
+def main(argv=None):
+    child=None;phase='profile'
+    try:
+        args=sys.argv[1:] if argv is None else argv
+        dependency_only=args==['--real-restore-dependencies']
+        if not dependency_only and (len(args)!=1 or args[0] not in MODES):raise ValueError()
+        phase='bundle';code=bundle_code()
+        phase='dependencies';deps=dependencies()
+        if dependency_only:
+            child=subprocess.Popen([str(ROOT/'tests/e2e/lab/owner.sh'),'d','/usr/bin/python3','-c',BOOTSTRAP],
+                stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.DEVNULL)
+            child.stdin.write(struct.pack('!Q',len(code))+code+struct.pack('!Q',len(deps))+deps+b'T')
+            child.stdin.close()
+            if read_result(child,timeout=60)!=DEPENDENCIES:raise ValueError()
+            print('REAL OWNER DEPENDENCIES PASSED',flush=True);return 0
+        source_mode,mode,no_live=MODES[args[0]]
+        profile=source_profile(source_mode)
+        phase='client_credentials';prefix=client_prefix(source_mode)
+        phase='key'
+        key,=read_fixed_fields(KEY_CREDS,('HA_BACKUP_KEY',))
+        if not 1<=len(key)<=1024 or b'\n' in key or b'\r' in key:raise ValueError()
+        phase='archive'
+        fd=os.open(profile.archive,os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK)
+        with os.fdopen(fd,'rb') as archive:
+            before=os.fstat(archive.fileno())
+            if not stat.S_ISREG(before.st_mode) or not 0<before.st_size<=512*1024*1024:raise ValueError()
+            child=subprocess.Popen([str(ROOT/'tests/e2e/lab/owner.sh'),'d','/usr/bin/python3','-c',BOOTSTRAP],
+                stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.DEVNULL)
+            phase='transfer'
+            child.stdin.write(struct.pack('!Q',len(code))+code+struct.pack('!Q',len(deps))+deps+mode+prefix)
+            child.stdin.write(struct.pack('!I',len(key))+key+struct.pack('!Q',before.st_size))
+            digest=hashlib.sha256();total=0
+            while total<before.st_size:
+                raw=archive.read(min(65536,before.st_size-total))
+                if not raw:raise ValueError()
+                total+=len(raw);digest.update(raw);child.stdin.write(raw)
+            if archive.read(1) or _snapshot(before)!=_snapshot(os.fstat(archive.fileno())) or digest.hexdigest()!=profile.sha256:
+                raise ValueError()
+            child.stdin.close()
+        phase='child';frame=read_result(child,timeout=900)
+        if no_live:
+            if frame!=STAGED:raise ValueError()
+            print('REAL OWNER STAGED ONLY PASSED',flush=True)
+        else:
+            phase='receipt';retain_restore_evidence(frame)
+            print('REAL OWNER RESTORE ROLLBACK PASSED',flush=True)
+        return 0
+    except BaseException as error:
+        if type(error) is TransportRefused:phase=error.phase
+        if child is not None:
+            try:
+                child.stdin.close();child.wait(timeout=30)
+            except BaseException:
+                child.terminate()
+                try:child.wait(timeout=30)
+                except BaseException:pass
+        from emqx_real_owner_workflow import PHASES
+        if phase not in HOST_PHASES|PHASES:phase='profile'
+        print('REAL OWNER '+phase.upper()+' REFUSED',flush=True);return 1
+
+
+if __name__=='__main__':raise SystemExit(main())
