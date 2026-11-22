@@ -49,7 +49,8 @@ class NativeDiagnosticTests(unittest.TestCase):
         with patch.object(adapter, 'podman', return_value=response), \
              patch.object(adapter, 'broker_target_readers', fake_capture):
             with self.assertRaisesRegex(RuntimeError, '^fixture-stop-before-registration$'):
-                adapter.run_owner_target(Path('/fixture-not-opened'), 'fixture-broker', [], report)
+                adapter.run_owner_target(Path('/fixture-not-opened'), 'fixture-broker', [], report,
+                                         owned_container_id='a' * 64)
         self.assertEqual(report['native_fixed_stage'], 'table_storage')
         self.assertEqual(report['native_fixed_reason'], 'storage_external')
         self.assertNotIn('private', json.dumps(report))

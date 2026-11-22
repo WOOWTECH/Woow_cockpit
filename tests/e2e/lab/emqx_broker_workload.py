@@ -193,7 +193,7 @@ password_hash_algorithm {name = sha256, salt_position = suffix}}]
             elif mode == 'owner-target':
                 stage = 'owner-target-observation'
                 from emqx_broker_owner_target import run_owner_target
-                run_owner_target(root, name, clients, report)
+                run_owner_target(root, name, clients, report, owned_container_id=inspect['Id'])
             else:
                 stage = 'owner-data-export-checkpoint'
                 from emqx_broker_export import run_export

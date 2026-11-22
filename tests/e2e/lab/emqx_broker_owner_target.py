@@ -14,12 +14,14 @@ from emqx_private_boundary import PrivateFailure
 NATIVE_STAGES = frozenset(('typed_setup','effective_config','provider_state','native_inventory',
     'native_tables','table_storage','table_fragments','table_type','table_lock',
     'schema_metadata','table_size','table_schema','table_fold','table_row_terms',
-    'schema_terms','serialize_config','serialize_provider','encode_reply'))
+    'schema_terms','ticker_state','table_receipts','stable_config','stable_provider',
+    'serialize_config','serialize_provider','encode_reply'))
 NATIVE_REASONS = frozenset(('undef','badmatch','bad_argument','function_clause',
     'no_exists','bad_type','not_active','node_not_running','no_transaction','system_limit',
     'storage_null_copies','storage_external','storage_unknown','storage_unsupported',
     'fragments_unsupported','table_type_unsupported','table_row_limit',
-    'unsupported_term','native_refused'))
+    'table_count_mismatch','table_receipt_changed','config_changed','provider_changed',
+    'ticker_not_suspended','ticker_changed','unsupported_term','native_refused'))
 
 
 def fixed_native_diagnostic(wire):
@@ -34,22 +36,65 @@ def fixed_native_diagnostic(wire):
             'native_fixed_reason': reason if reason in NATIVE_REASONS else 'native_refused'}
 
 
-def run_owner_target(root, broker, clients, report):
-    checks = report['checks']
+@contextmanager
+def fresh_target_quiescence(*, broker, owned_container_id, clients, checks):
+    """Only this invocation's fresh fixture; never production/system services.
+
+    Suspension ends when the workload's finally removes this exact broker. It
+    does not freeze expiry/other background tasks; stable native receipts are
+    additionally required and are not a universal writer exclusion barrier.
+    """
+    from woowbackup.ha_emqx import SUSPEND_SYS_EXPR, TICKER_STATUS_EXPR
+    from emqx_runtime_live import IMAGE
+    if (type(broker) is not str or type(owned_container_id) is not str
+            or not re.fullmatch(r'woowbk-emqx-workload-[0-9a-f]{12}', broker)
+            or not re.fullmatch(r'[0-9a-f]{64}', owned_container_id)):
+        raise RuntimeError('fresh-target-identity-required')
+    def identity():
+        info = json.loads(checked('inspect', broker))[0]
+        if (info['Id'] != owned_container_id or not info['State']['Running']
+                or info['Image'].removeprefix('sha256:') != IMAGE
+                or info['HostConfig']['NetworkMode'] != 'none'
+                or info['HostConfig'].get('PortBindings') not in (None, {})
+                or info['HostConfig']['LogConfig']['Type'] != 'none'
+                or any(m['Type'] == 'volume' for m in info['Mounts'])):
+            raise RuntimeError('fresh-target-identity-changed')
     def empty_clients():
-        assert not clients  # This mode never starts any MQTT client or ticker.
+        if clients:
+            raise RuntimeError('fixture-writer-not-quiesced')
         raw = checked('exec', broker, 'emqx', 'eval',
             '[] = emqx_cm:all_channels(), io:format("OWNERNOCLIENTS").')
-        assert raw.strip() == b'OWNERNOCLIENTSok'
-    @contextmanager
-    def quiesce():
+        if raw.strip() != b'OWNERNOCLIENTSok':
+            raise RuntimeError('target-clients-not-empty')
+    identity()
+    empty_clients()
+    checks['no_clients_before_capture'] = True
+    wire = checked('exec', broker, 'emqx', 'eval', SUSPEND_SYS_EXPR)
+    match = re.fullmatch(rb'WOOWSYS:(<[0-9]+\.[0-9]+\.[0-9]+>):suspended\s*(?:ok\s*)?', wire)
+    if not match:
+        raise RuntimeError('fresh-target-ticker-suspend-refused')
+    pid = match[1].decode('ascii')  # Private identity only, never a report field.
+    def ticker_status():
+        identity()
+        raw = checked('exec', broker, 'emqx', 'eval', TICKER_STATUS_EXPR.replace('{pid}', pid))
+        if raw.strip() != b'ticker_unchanged':
+            raise RuntimeError('fresh-target-ticker-changed')
+    ticker_status()
+    checks['fresh_ticker_identity_suspended_before'] = True
+    try:
+        yield
+    finally:
+        ticker_status()
+        checks['fresh_ticker_identity_suspended_after'] = True
         empty_clients()
-        checks['no_clients_before_capture'] = True
-        try:
-            yield
-        finally:
-            empty_clients()
-            checks['no_clients_after_capture'] = True
+        checks['no_clients_after_capture'] = True
+
+
+def run_owner_target(root, broker, clients, report, *, owned_container_id):
+    checks = report['checks']
+    def quiesce():
+        return fresh_target_quiescence(broker=broker, owned_container_id=owned_container_id,
+                                       clients=clients, checks=checks)
     def private_checked(*args):
         result = podman(*args)
         report['native_transport'] = 'passed' if result.returncode == 0 else 'failed'
@@ -94,7 +139,9 @@ def run_owner_target(root, broker, clients, report):
             stream.write(raw)
         assert evidence.read_bytes() == raw
         checks['actual_exact_names_only_target_evidence_scanned'] = True
-        report['target_completeness'] = 'synthetic-live-observed'
+        report['target_completeness'] = 'synthetic-stable-observed'
+        report['quiescence_scope'] = 'clients-and-system-ticker'
+        report['other_background_writers'] = 'not-excluded'
         # Keep diagnostics independent from raw configs/rows/counts. No source or
         # restore/startup/restart/MQTT acceptance is asserted by this mode.
 

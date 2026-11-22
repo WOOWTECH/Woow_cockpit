@@ -19,6 +19,9 @@ ReasonCode = fun F(R,D) when D < 5 ->
         fragments_unsupported -> fragments_unsupported;
         table_type_unsupported -> table_type_unsupported;
         table_row_limit -> table_row_limit;
+        table_count_mismatch -> table_count_mismatch; table_receipt_changed -> table_receipt_changed;
+        config_changed -> config_changed; provider_changed -> provider_changed;
+        ticker_not_suspended -> ticker_not_suspended; ticker_changed -> ticker_changed;
         owner_target_unsupported_term -> unsupported_term;
         {Nested,Stack} when is_list(Stack) -> F(Nested,D+1);
         _ -> native_refused
@@ -29,7 +32,8 @@ SafeStage = fun(S) ->
     case lists:member(S,[typed_setup,effective_config,provider_state,native_inventory,
         native_tables,table_storage,table_fragments,table_type,table_lock,
         schema_metadata,table_size,table_schema,table_fold,table_row_terms,
-        schema_terms,serialize_config,serialize_provider,encode_reply]) of
+        schema_terms,ticker_state,table_receipts,stable_config,stable_provider,
+        serialize_config,serialize_provider,encode_reply]) of
         true -> S; false -> native_tables
     end
 end,
@@ -52,6 +56,14 @@ end,
 <<"5.8.9">> = iolist_to_binary(emqx_release:version()),
 "26" = erlang:system_info(otp_release),
 "14.2.5.11" = erlang:system_info(version),
+Fingerprint = fun(V) -> binary:encode_hex(crypto:hash(sha256,term_to_binary(V))) end,
+put(woow_target_stage, ticker_state),
+TickerPid = whereis(emqx_sys),
+case is_pid(TickerPid) of true -> ok; false -> error(ticker_changed) end,
+case sys:get_status(TickerPid,5000) of
+    {status,TickerPid,_,[_,suspended|_]} -> ok; _ -> error(ticker_not_suspended)
+end,
+[] = emqx_cm:all_channels(),
 put(woow_target_stage, effective_config),
 Before = emqx:get_config([]),
 put(woow_target_stage, provider_state),
@@ -105,12 +117,31 @@ Transaction = mnesia:transaction(fun() ->
                 put(woow_target_stage, table_fold),
                 {C+1,[Row|A]}
             end,{0,[]},T),
+            put(woow_target_stage, table_receipts),
+            case Count =:= N of true -> ok; false -> error(table_count_mismatch) end,
+            {N2,Rs2} = mnesia:foldl(fun(R,{C,A}) ->
+                case C < 4096 of true -> ok; false -> error(table_row_limit) end,
+                {C+1,[Typed(R,0)|A]}
+            end,{0,[]},T),
+            CountAfter = mnesia:table_info(T,size),
+            case N2 =:= N andalso CountAfter =:= N of
+                true -> ok; false -> error(table_count_mismatch)
+            end,
+            ReceiptBefore = Fingerprint(lists:sort(Rs)),
+            ReceiptAfter = Fingerprint(lists:sort(Rs2)),
+            case ReceiptBefore =:= ReceiptAfter of
+                true -> ok; false -> error(table_receipt_changed)
+            end,
             #{table => atom_to_binary(T,utf8),record_name => atom_to_binary(Record,utf8),
               attributes => [atom_to_binary(A,utf8) || A <- Attrs],
               row_count => N,rows => lists:reverse(Rs)}
         end || T <- Tabs],
+        put(woow_target_stage, table_receipts),
+        DefsAfter = [{T,mnesia:table_info(T,all)} || T <- All],
+        SchemaBefore = Fingerprint(Defs), SchemaAfter = Fingerprint(DefsAfter),
+        case SchemaBefore =:= SchemaAfter of true -> ok; false -> error(table_receipt_changed) end,
         put(woow_target_stage, schema_terms),
-        {Typed(Defs,0),Data}
+        {Typed(Defs,0),Data,SchemaBefore,SchemaAfter}
     catch InnerClass:InnerReason:InnerStack ->
         %% Retain only sanitized enums for diagnostics. Rethrow privately so
         %% Mnesia retains its original abort/retry behavior; never print terms.
@@ -118,7 +149,7 @@ Transaction = mnesia:transaction(fun() ->
         erlang:raise(InnerClass,InnerReason,InnerStack)
     end
 end),
-{Definitions,Rows} = case Transaction of
+{Definitions,Rows,_SchemaReceiptBefore,_SchemaReceiptAfter} = case Transaction of
     {atomic,Collected} -> Collected;
     {aborted,AbortReason} ->
         {InnerStage,InnerCode} = case get(woow_target_failure) of
@@ -130,11 +161,23 @@ end),
         error({owner_target_fixed,InnerCode});
     _ -> error({owner_target_fixed,native_refused})
 end,
-All = lists:sort(mnesia:system_info(tables)),
-Before = emqx:get_config([]),
+put(woow_target_stage, table_receipts),
+case All =:= lists:sort(mnesia:system_info(tables)) of
+    true -> ok; false -> error(table_receipt_changed)
+end,
+put(woow_target_stage, stable_config),
+After = emqx:get_config([]),
+case Before =:= After of true -> ok; false -> error(config_changed) end,
+put(woow_target_stage, stable_provider),
 ProvidersAfter = case emqx_authn_chains:list_authenticators('mqtt:global') of
     {ok,L2} -> L2; _ -> {ok,L3}=emqx_authn_chains:list_authenticators(<<"mqtt:global">>), L3 end,
-Providers = ProvidersAfter,
+case Providers =:= ProvidersAfter of true -> ok; false -> error(provider_changed) end,
+put(woow_target_stage, ticker_state),
+case whereis(emqx_sys) =:= TickerPid of true -> ok; false -> error(ticker_changed) end,
+case sys:get_status(TickerPid,5000) of
+    {status,TickerPid,_,[_,suspended|_]} -> ok; _ -> error(ticker_not_suspended)
+end,
+[] = emqx_cm:all_channels(),
 put(woow_target_stage, serialize_config),
 ConfigTyped = Typed(Before,0),
 put(woow_target_stage, serialize_provider),
@@ -157,7 +200,8 @@ catch _:Reason:_ ->
         no_exists,bad_type,not_active,node_not_running,no_transaction,system_limit,
         storage_null_copies,storage_external,storage_unknown,storage_unsupported,
         fragments_unsupported,table_type_unsupported,table_row_limit,
-        unsupported_term,native_refused]) of
+        table_count_mismatch,table_receipt_changed,config_changed,provider_changed,
+        ticker_not_suspended,ticker_changed,unsupported_term,native_refused]) of
         true -> Code0; false -> native_refused
     end,
     io:format("WOOWTARGETFAIL:~s:~s:END",[atom_to_binary(SafeStage(get(woow_target_stage))),atom_to_binary(Code)])
