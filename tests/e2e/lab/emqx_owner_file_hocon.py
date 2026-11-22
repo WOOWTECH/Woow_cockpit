@@ -16,10 +16,12 @@ from emqx_semantic_readers import (
     _text, _term, _pairs, refuse,
 )
 
+_SUBSTITUTION_ROOTS=frozenset(('authorization','authentication','node','log','mqtt','dashboard','retainer','rule_engine','connectors','actions','sources','bridges','gateway','exhook','zones','cluster','rpc'))
+
 class OwnerFileRefused(SemanticRefused):
     def __init__(self,phase):
         super().__init__()
-        self.phase=phase if phase in ('profile','contract','document','walk','file_location','file_path','file_key','scalar','scalar_substitution','scalar_substitution_authorization','scalar_substitution_authentication','scalar_substitution_node','scalar_substitution_log','scalar_substitution_mqtt','scalar_substitution_dashboard','scalar_substitution_retainer','scalar_file_scheme','scalar_env_scheme','scalar_vault_scheme','scalar_depth','syntax','vendor_observer','receipt','register') else 'contract'
+        self.phase=phase if (phase.startswith('scalar_substitution_') and phase.removeprefix('scalar_substitution_') in _SUBSTITUTION_ROOTS) or phase in ('profile','contract','document','walk','file_location','file_path','file_key','scalar','scalar_substitution','scalar_substitution_authorization','scalar_substitution_authentication','scalar_substitution_node','scalar_substitution_log','scalar_substitution_mqtt','scalar_substitution_dashboard','scalar_substitution_retainer','scalar_file_scheme','scalar_env_scheme','scalar_vault_scheme','scalar_depth','syntax','vendor_observer','receipt','register') else 'contract'
 
 PROFILE = 'owner-pinned-image-vendor-acl-v1'
 LITERAL = '${EMQX_ETC_DIR}/acl.conf'
@@ -112,7 +114,7 @@ def read_owner_file_hocon(raw, parser=None, *, profile, product_image):
                 elif type(value) is str:
                     if '${' in value:
                         stage='scalar_substitution'
-                        if location and location[0] in ('authorization','authentication','node','log','mqtt','dashboard','retainer'):
+                        if location and location[0] in _SUBSTITUTION_ROOTS:
                             stage+='_'+location[0]
                     elif 'file:' in value:stage='scalar_file_scheme'
                     elif 'env:' in value:stage='scalar_env_scheme'
