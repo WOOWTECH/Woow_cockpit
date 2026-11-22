@@ -105,3 +105,17 @@ No sources are deleted or rewritten. Public emqx_authz_file_schema fields(file)
 requires path; emqx_authz_file reads complete rules with file:consult and uses
 explicit path. 46 tests passed, synthetic helper provenance only in this worktree;
 main actual target18 already proved bootstrap capture, not this new ACL caller.
+
+Batched reference diagnostics: refusal now includes consumer_fixed_references,
+a sorted deduplicated bounded set of {reason,root,key,context}, plus fixed
+consumer_fixed_references_truncated boolean. Original first failure/reference
+remains unchanged. Max 128 distinct classifications; traversal continues on
+truncation and never authorizes anything. No dynamic names, paths, values,
+backend aliases or counts are emitted. Approved policy leaves are excluded.
+
+All 44 root names were extracted from the cached immutable image using only
+hocon_schema:roots(emqx_conf_schema) public metadata, then frozen as enums. A
+native offline fixture verifies exact catalog equality (50 total tests passed).
+Known fixed directory/root keys and fixed root enable/builtin-storage contexts
+were added. Unknown roots/keys stay other_root/other_key. This increment adds no
+output-directory/inactive profile before actual classification. No lab used.

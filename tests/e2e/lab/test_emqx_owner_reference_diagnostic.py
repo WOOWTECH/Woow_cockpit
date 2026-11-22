@@ -80,3 +80,81 @@ class ListenerKnownURLDiagnosticTests(unittest.TestCase):
                 self.assertEqual(caught.exception.reference,
                     {'root':'listeners','key':key,'context':kind+'_disabled'})
                 self.assertEqual(caught.exception.reason,'reference_url')
+
+
+class BatchedReferenceDiagnosticTests(unittest.TestCase):
+    def test_one_capture_reports_all_fixed_categories_without_values(self):
+        config=cooked_config()
+        config['durable_storage']={'messages':{'backend':fixtures.Atom('builtin_local'),
+            'data_dir':'${PRIVATE}/private-directory'}}
+        config['plugins']={'enable':False,'root_dir':'${PRIVATE}/plugins'}
+        config['node']['config_files']=['${PRIVATE}/a','${PRIVATE}/b']
+        config['unknown-private-root']={'private-setting':'vault:private-value'}
+        config['authorization']={'sources':[{'type':fixtures.Atom('file'),'enable':True,
+            'path':'${PRIVATE}/acl.conf'}]}
+        with self.assertRaises(OwnerCaptureRefused) as caught:
+            ReferenceDiagnosticTests().capture(config)
+        failure=caught.exception
+        self.assertEqual(failure.phase,'references')
+        self.assertEqual(len(failure.reference_batch),6)
+        roots={item['root'] for item in failure.reference_batch}
+        self.assertEqual(roots,{'durable_storage','plugins','node','other_root','authorization'})
+        storage=next(item for item in failure.reference_batch if item['root']=='durable_storage')
+        self.assertEqual(storage['key'],'data_dir')
+        self.assertEqual(storage['context'],'durable_storage_builtin_local')
+        self.assertFalse(failure.reference_batch_truncated)
+        encoded=json.dumps(failure.reference_batch)
+        for private in ('PRIVATE','private-value','private-setting','private-directory','unknown-private-root'):
+            self.assertNotIn(private,encoded)
+        @contextmanager
+        def refused(**kwargs):
+            raise failure
+            yield
+        report={'checks':{}}
+        with patch.object(harness,'broker_target_readers',refused),self.assertRaises(OwnerCaptureRefused):
+            harness.run_owner_target(Path('/not-opened'),'fixture',[],report,owned_container_id='a'*64)
+        self.assertEqual(report['consumer_fixed_references'],failure.reference_batch)
+        self.assertFalse(report['consumer_fixed_references_truncated'])
+
+    def test_approved_profiles_excluded_unknown_neighbor_still_refuses(self):
+        import test_emqx_target_vendor_policy as policy_fixtures
+        from emqx_target_vendor_policy import DisabledVendorTLS, DEFAULT_ORIGINS
+        from emqx_owner_target import _reference_failure_batch
+        config=policy_fixtures.VendorACLPolicyTests().config()
+        config['listeners']={'ws':{'default':{'enable':'false','websocket':{
+            'check_origin_enable':'false','check_origins':list(DEFAULT_ORIGINS)}}}}
+        config['node']={'data_dir':b'${PRIVATE}/unknown'}
+        policy=DisabledVendorTLS(policy_fixtures.VendorACLPolicyTests().observed())
+        batch,truncated=_reference_failure_batch(config,policy)
+        self.assertEqual(batch,[{'reason':'reference_template','root':'node','key':'data_dir','context':'not_assessed'}])
+        self.assertFalse(truncated)
+        with self.assertRaises(OwnerCaptureRefused): _no_refs(config,vendor_policy=policy)
+
+    def test_bounded_set_truncation_and_forged_fields(self):
+        from emqx_owner_target import _reference_failure_batch
+        config={'node':{'data_dir':'${PRIVATE}/a','config_files':['vault:private']}}
+        with patch('emqx_owner_target.MAX_REFERENCE_DIAGNOSTICS',1):
+            batch,truncated=_reference_failure_batch(config)
+        self.assertEqual(len(batch),1)
+        self.assertTrue(truncated)
+        forged=OwnerCaptureRefused('references',reference_batch=[{
+            'reason':'reference_template','root':'private-root','key':'data_dir','context':'not_assessed'}])
+        self.assertEqual(forged.reference_batch,[])
+
+    def test_pinned_public_root_catalog(self):
+        import tempfile
+        from emqx_native_runtime import run_native
+        from emqx_owner_target import PINNED_REFERENCE_ROOTS
+        with tempfile.TemporaryDirectory(prefix='emqx-public-roots-fixture-') as directory:
+            root=Path(directory)
+            script=root/'roots.escript'
+            script.write_text('#!/usr/bin/env escript\n%%! +S 1:1 +A 1 -noshell\n'
+                'main([]) -> try code:add_paths(filelib:wildcard("/opt/emqx/lib/*/ebin")), '
+                'Roots=lists:sort([N || {N,_} <- hocon_schema:roots(emqx_conf_schema)]), '
+                'io:put_chars(jsone:encode(Roots)) catch _:_ -> halt(2) end.\n')
+            with tempfile.TemporaryFile() as output:
+                self.assertEqual(run_native(root,script.name,output=output),0)
+                output.seek(0)
+                actual=json.loads(output.read(16384))
+        self.assertEqual(len(actual),44)
+        self.assertEqual(set(actual),set(PINNED_REFERENCE_ROOTS))

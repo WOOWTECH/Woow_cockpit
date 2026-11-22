@@ -226,6 +226,9 @@ def run_owner_target(root, broker, clients, report, *, owned_container_id):
         report['consumer_fixed_reason']=failure.reason
         if failure.reference is not None:
             report['consumer_fixed_reference']=failure.reference
+        if failure.reference_batch is not None:
+            report['consumer_fixed_references']=failure.reference_batch
+            report['consumer_fixed_references_truncated']=failure.reference_batch_truncated
         raise
 
 

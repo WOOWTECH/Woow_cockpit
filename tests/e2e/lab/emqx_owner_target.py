@@ -35,19 +35,31 @@ CONSUMER_REASONS = frozenset(('private_refused','inventory_names_type','inventor
     'reference_env','reference_vault','reference_file_uri','reference_url','reference_file_setting'))
 
 
-REFERENCE_ROOTS = frozenset(('listeners','dashboard','authorization','authentication','node','cluster',
-    'rpc','api_key','connectors','bridges','actions','sources','gateway','exhook','log','other_root'))
+# Extracted from hocon_schema:roots(emqx_conf_schema) in pinned IMAGE, metadata
+# only. Never derive public enum members from runtime configuration keys.
+PINNED_REFERENCE_ROOTS = frozenset(('actions','alarm','api_key','authentication','authorization',
+    'auto_subscribe','banned','bridges','broker','cluster','conn_congestion','connectors',
+    'crl_cache','dashboard','delayed','durable_sessions','durable_storage','exhook',
+    'flapping_detect','force_gc','force_shutdown','gateway','limiter','listeners','log','mqtt',
+    'node','overload_protection','plugins','prometheus','psk_authentication','retainer','rewrite',
+    'rpc','rule_engine','slow_subs','sources','stats','sys_topics','sysmon','telemetry',
+    'topic_metrics','trace','zones'))
+REFERENCE_ROOTS = PINNED_REFERENCE_ROOTS | {'other_root'}
+MAX_REFERENCE_DIAGNOSTICS = 128
 REFERENCE_KEYS = frozenset(('certfile','keyfile','cacertfile','bootstrap_file','init_file','config_files',
     'crash_dump_file','cookie','path','type','check_origins','origins','responder_url',
+    'root','root_dir','install_dir','data_dir','directory','dir','base_dir','work_dir','log_dir','backup_dir',
+    'output_dir','file','filename','url','server','servers','endpoint','bucket',
     'other_file_key','other_key'))
 REFERENCE_CONTEXTS = frozenset(('ssl_disabled','ssl_enabled','wss_disabled','wss_enabled',
     'ws_disabled','ws_enabled','tcp_disabled','tcp_enabled',
     'dashboard_https_disabled','dashboard_https_enabled','log_console_disabled','log_console_enabled',
-    'log_file_disabled','log_file_enabled','not_assessed'))
+    'log_file_disabled','log_file_enabled','root_disabled','root_enabled',
+    'durable_storage_builtin_local','durable_storage_builtin_raft','not_assessed'))
 
 
 class OwnerCaptureRefused(TargetCaptureUnsupported):
-    def __init__(self,phase,reason='private_refused',reference=None):
+    def __init__(self,phase,reason='private_refused',reference=None,reference_batch=None,reference_batch_truncated=False):
         super().__init__()
         self.phase=phase if type(phase) is str and phase in CONSUMER_PHASES else 'wire'
         self.reason=reason if type(reason) is str and reason in CONSUMER_REASONS else 'private_refused'
@@ -57,6 +69,20 @@ class OwnerCaptureRefused(TargetCaptureUnsupported):
                 and type(reference['key']) is str and reference['key'] in REFERENCE_KEYS
                 and type(reference['context']) is str and reference['context'] in REFERENCE_CONTEXTS):
             self.reference = dict(reference)
+        self.reference_batch = None
+        self.reference_batch_truncated = False
+        if self.phase == 'references' and type(reference_batch) is list:
+            safe = []
+            for item in reference_batch[:MAX_REFERENCE_DIAGNOSTICS]:
+                if (type(item) is not dict or set(item) != {'reason','root','key','context'}
+                        or type(item['reason']) is not str or item['reason'] not in CONSUMER_REASONS
+                        or type(item['root']) is not str or item['root'] not in REFERENCE_ROOTS
+                        or type(item['key']) is not str or item['key'] not in REFERENCE_KEYS
+                        or type(item['context']) is not str or item['context'] not in REFERENCE_CONTEXTS):
+                    continue
+                safe.append(dict(item))
+            self.reference_batch = safe
+            self.reference_batch_truncated = reference_batch_truncated is True or len(reference_batch) > MAX_REFERENCE_DIAGNOSTICS
 
 
 
@@ -147,6 +173,17 @@ def _reference_diagnostic(path,key,config):
             kind='file'
         if type(handler) is dict and handler.get('enable') in ('false','true'):
             context='log_'+kind+('_disabled' if handler['enable']=='false' else '_enabled')
+    if context == 'not_assessed' and root in PINNED_REFERENCE_ROOTS:
+        subtree=config.get(root,{})
+        if type(subtree) is dict and subtree.get('enable') in ('true','false'):
+            context='root_enabled' if subtree['enable']=='true' else 'root_disabled'
+        elif root == 'durable_storage' and len(path) >= 2:
+            store=subtree.get(path[1],{}) if type(subtree) is dict else {}
+            backend=store.get('backend') if type(store) is dict else None
+            if backend in ('builtin_local',b'builtin_local'):
+                context='durable_storage_builtin_local'
+            elif backend in ('builtin_raft',b'builtin_raft'):
+                context='durable_storage_builtin_raft'
     return {'root':root,'key':safe_key,'context':context}
 
 
@@ -183,6 +220,44 @@ def _no_refs(value, key='', path=(), config=None, vendor_policy=None):
             refuse('reference_file_setting')
 
 
+def _reference_failure_batch(config, vendor_policy=None):
+    """Collect fixed categories only; the original reference guard still rejects.
+
+    No dynamic path component/value is retained. Bound the distinct public set,
+    continue traversal on overflow, and report truncation rather than full proof.
+    """
+    from emqx_target_vendor_policy import inactive_default_origins
+    found, truncated = set(), False
+    def record(failure):
+        nonlocal truncated
+        if failure.reference is None:
+            return
+        item=(failure.reason, failure.reference['root'], failure.reference['key'],
+              failure.reference['context'])
+        if item not in found:
+            if len(found) < MAX_REFERENCE_DIAGNOSTICS:
+                found.add(item)
+            else:
+                truncated=True
+    def walk(value, key='', path=()):
+        if inactive_default_origins(config,path,value):
+            return
+        if vendor_policy is not None and vendor_policy.allows_acl_path(config,path,value):
+            return
+        if type(value) is dict:
+            if value.get('type') in ('file',b'file'):
+                try: _no_refs(value,key,path,config,vendor_policy)
+                except OwnerCaptureRefused as failure: record(failure)
+            for name,child in value.items(): walk(child,name,path+(name,))
+        elif type(value) in (list,tuple):
+            for index,child in enumerate(value): walk(child,key,path+(index,))
+        else:
+            try: _no_refs(value,key,path,config,vendor_policy)
+            except OwnerCaptureRefused as failure: record(failure)
+    walk(config)
+    return [dict(zip(('reason','root','key','context'),item)) for item in sorted(found)], truncated
+
+
 def _absence_profile(config, provider, mark=lambda _:None, vendor_policy=None):
     """Derive absence from native cooked roots, retaining all full-tree values."""
     mark('roots')
@@ -191,7 +266,11 @@ def _absence_profile(config, provider, mark=lambda _:None, vendor_policy=None):
     if type(config) is not dict or not required <= set(config):
         unsupported()
     mark('references')
-    _no_refs(config, vendor_policy=vendor_policy)
+    try:
+        _no_refs(config, vendor_policy=vendor_policy)
+    except OwnerCaptureRefused as failure:
+        batch,truncated = _reference_failure_batch(config,vendor_policy)
+        raise OwnerCaptureRefused(failure.phase,failure.reason,failure.reference,batch,truncated) from None
     mark('connectors')
     for root in ('connectors', 'bridges', 'actions', 'sources', 'gateway'):
         if type(config[root]) is not dict or config[root]:
