@@ -188,7 +188,8 @@ def collect_post_restore_values(*, prior_registry, provision, expected_container
             result = PostRestoreValues(prior_registry, companion, generations+(generation,), previous)
         if _record(provision.file_capability)[0] is not record or record['cid'] != old_cid:
             raise ValueError()
-        return result
+        from emqx_native_object_integrity import _record_native
+        return _record_native(result,output.stdout,generation,provision,expected_container_id,before)
     except (KeyboardInterrupt, SystemExit):
         raise PrivateFailure('post-native-values-cancelled') from None
     except Exception:

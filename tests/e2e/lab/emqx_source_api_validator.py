@@ -215,7 +215,9 @@ def validate_source_api(*, prior_registry, provision, expected_container_id, qui
             if _runtime_identity(provision,expected_container_id)!=before or record['cid']!=old_cid: raise ValueError()
         if _record(provision.file_capability)[1] is not provision or record['cid']!=old_cid: raise ValueError()
         timely();prior.scan(b'')
-        return SourceAPIResult(prior,runtime,documents,facts)
+        from emqx_native_object_integrity import _record_api
+        return _record_api(SourceAPIResult(prior,runtime,documents,facts),
+                           provision,expected_container_id,before)
     except (KeyboardInterrupt,SystemExit):
         raise PrivateFailure('source-api-cancelled') from None
     except Exception:
