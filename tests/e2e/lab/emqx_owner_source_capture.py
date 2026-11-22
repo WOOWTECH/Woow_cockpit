@@ -66,6 +66,9 @@ def capture_owner_source(path, *, password, expected_sha256, spool_directory,
                 private_binding = captured(source, fixture_profile=fixture_profile,
                     verified_sha256=expected_sha256 if fixture_profile is not None else None,
                     file_dependency_profile=file_dependency_profile, product_image=product_image)
+            # Additive capability hook: only after final source_binding stamp.
+            from emqx_captured_candidate import _verify_owner_binding
+            _verify_owner_binding(captured, private_binding, expected_sha256)
             yield captured, private_binding
     except (KeyboardInterrupt, SystemExit):
         raise PrivateFailure('private-owner-source-cancelled') from None

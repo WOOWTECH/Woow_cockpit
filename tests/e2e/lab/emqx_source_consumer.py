@@ -186,6 +186,8 @@ class Capture:
         self._source_ready = False
         self._closed = False
         self._target_attempted = False
+        self._private_binding = None
+        self._owner_source_proof = None
         if type(product_selection) is not bool:
             refuse()
         if cold_decoder is not None and (not callable(cold_decoder) or not product_selection):
@@ -379,7 +381,9 @@ class Capture:
             self.registry.summary()  # A source-only registry cannot authorize replay.
             with readonly_replay(captured) as reader:
                 yield reader
-        return dict(source, open=replay)
+        from emqx_captured_candidate import CapturedBinding
+        self._private_binding = CapturedBinding(self, dict(source, open=replay))
+        return self._private_binding
 
 
 def build_consumed_candidate(*args, password, target_documents, hocon_parser=None, spool_directory=None, product_selection=False, cold_decoder=None, **kwargs):

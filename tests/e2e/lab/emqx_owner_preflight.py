@@ -78,10 +78,12 @@ def owner_preflight(*, captured, target_readers, target_generation,
         captured.supply_target_documents(documents)
         summary = captured.registry.summary()
         counts = {category: summary[category] for category in SOURCE_CATEGORIES}
-        return login_preflight(source_registry=captured.registry, source_counts=counts,
+        session = login_preflight(source_registry=captured.registry, source_counts=counts,
             target_readers=frozen, private_transport=private_transport,
             username=username, password=password, evidence_directory=evidence_directory,
             evidence_name=evidence_name)
+        from emqx_captured_candidate import _record_joined_session
+        return _record_joined_session(captured, session)
     except (KeyboardInterrupt, SystemExit):
         raise PrivateFailure('private-preflight-cancelled') from None
     except Exception:
