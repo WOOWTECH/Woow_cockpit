@@ -1,0 +1,43 @@
+"""Controller failure-path integration only; fake child/owner, no real backup."""
+import os
+from pathlib import Path
+import subprocess
+import tempfile
+import unittest
+
+SCRIPT=Path(__file__).with_name('run_emqx_arm_cold.sh')
+
+class ControllerTests(unittest.TestCase):
+    def run_case(self,child=0,post=0):
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory)
+            (root/'lib.sh').write_text('LAB_DIR="'+directory+'"\nREPO_ROOT="'+directory+'"\nLP="'+directory+'/lp"\nNAME=fixture\ndevice_vars() { :; }\ndie() { exit 1; }\n')
+            files={
+                'git':'exit 0',
+                'lp':'echo "0 1073741824"',
+                'owner.sh':'if [ "$2" = --verify-isolation ]; then exit 0; fi\nexit "$POST_STATUS"',
+                'python3':'exit "$CHILD_STATUS"',
+            }
+            for name,body in files.items():
+                p=root/name;p.write_text('#!/bin/bash\n'+body+'\n');p.chmod(0o700)
+            source=SCRIPT.read_text().replace('/tmp/woowbk-dev-d-mutation.lock',directory+'/owner.lock').replace('/tmp/headscale-dev-d-private-volume.lock',directory+'/volume.lock')
+            (root/'run.sh').write_text(source)
+            env=dict(os.environ,PATH=directory+':'+os.environ['PATH'],CHILD_STATUS=str(child),POST_STATUS=str(post))
+            return subprocess.run(['bash',str(root/'run.sh')],env=env,capture_output=True,text=True)
+
+    def test_success_requires_postflight(self):
+        result=self.run_case()
+        self.assertEqual(result.returncode,0,result.stderr)
+        self.assertEqual(result.stdout,'ARM POSTFLIGHT PASSED\n')
+
+    def test_child_failure_still_runs_postflight_and_preserves_exit(self):
+        result=self.run_case(child=7)
+        self.assertEqual(result.returncode,7,result.stderr)
+        self.assertEqual(result.stdout,'ARM POSTFLIGHT PASSED\n')
+
+    def test_postflight_failure_overrides_success_and_failure(self):
+        for child in (0,7):
+            with self.subTest(child=child):
+                result=self.run_case(child=child,post=1)
+                self.assertEqual(result.returncode,1,result.stderr)
+                self.assertEqual(result.stdout,'ARM POSTFLIGHT REFUSED\n')
