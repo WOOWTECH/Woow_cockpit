@@ -156,7 +156,7 @@ def read_hocon(raw, parser=None):
         raise SemanticRefused() from None
 
 
-def _term(term, values, depth=0):
+def _term(term, values, depth=0, *, historical=False):
     """Strict typed JSON terms; never ETF, pickle, eval, atom creation or code."""
     values.tick(depth)
     if type(term) is not dict or set(term) != {'type', 'value'}:
@@ -174,11 +174,17 @@ def _term(term, values, depth=0):
     elif kind == 'integer':
         if type(value) is not int or not -(2 ** 63) <= value < 2 ** 63:
             refuse()
+        if historical:
+            values.add(str(value).encode('ascii'))
+    elif kind == 'float' and historical:
+        if type(value) is not float or not math.isfinite(value):
+            refuse()
+        values.add(repr(value).encode('ascii'))
     elif kind in ('tuple', 'list'):
         if type(value) is not list:
             refuse()
         for child in value:
-            _term(child, values, depth + 1)
+            _term(child, values, depth + 1, historical=historical)
         # Erlang charlists can carry secrets too, including byte-oriented lists.
         if kind == 'list' and value and all(type(x) is dict and x.get('type') == 'integer'
                                            and type(x.get('value')) is int for x in value):
@@ -198,7 +204,7 @@ def _term(term, values, depth=0):
                 refuse()
             seen.add(key)
             for child in pair:
-                _term(child, values, depth + 1)
+                _term(child, values, depth + 1, historical=historical)
     else:
         refuse()
 

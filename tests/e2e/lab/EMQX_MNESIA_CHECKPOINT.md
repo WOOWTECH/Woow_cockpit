@@ -109,10 +109,13 @@ private-source-native-mnesia-unsupported. No default exporter is installed into
 read_mnesia. Unknown original source files still refuse. This commit therefore
 does NOT solve HA cold-source ingestion or establish commercial completion.
 
-Read-only DETS/disk_log dumps alone are insufficient: schema.DAT supplies table
-metadata, DCD is a dump and DCL contains change logs whose replay can change the
-final records. Safe term enumeration does not prove transaction ordering, dump/log
-coverage, or the consistent final view. No cold-file conversion is implemented.
+Read-only enumeration can establish a historical-value SECRET SUPERSET without
+proving final rows. See EMQX_COLD_HISTORY.md for the subsequent bounded offline
+DETS9/disk_log adapter, full-container EOF/hash receipts and selected-file
+inventory. Unknown table names are not skipped. Capturing every historical
+primitive/binary/charlist is sufficient for this private-value stage; it does
+not calculate transaction ordering, dump/log replay or final business state.
+No cold-to-checkpoint conversion is implemented by this checkpoint module.
 
 A future owner conversion requires (a) authenticated open_addon EOF+finish and a
 complete immutable cold-file inventory, (b) exact version/storage/schema recovery
