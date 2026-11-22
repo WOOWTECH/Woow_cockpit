@@ -1,0 +1,13 @@
+{
+  "source_commit": "46d0972191294a336d666707050ee263b13b8073",
+  "scope": "real ARM whole product entry with corrected native ACL receipt and source object integration",
+  "exit": 1,
+  "elapsed_seconds": 3.489504026947543,
+  "stdout_sha256": "263f99e8b19413cdd6cc5c3b7556258a008b0033c4c0e3f260625bda69fdc2cc",
+  "fixed_status": [
+    "REAL OWNER TRANSFER REFUSED",
+    "REAL OWNER POSTFLIGHT PASSED"
+  ],
+  "stderr_bytes_not_published": 0,
+  "commercial_acceptance": "not-complete"
+}
