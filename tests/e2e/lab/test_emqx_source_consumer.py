@@ -69,13 +69,29 @@ class ConsumerTests(unittest.TestCase):
         with self.assertRaises(consumer.PrivateFailure):
             consumer.Capture('fixture-key', documents(), product_selection='true')
 
+    def test_product_selection_does_not_extract_never_read_source_cookie(self):
+        import tarfile
+        calls = []
+        original = tarfile.TarFile.extractfile
+        def tracked(archive, member):
+            calls.append(member.name)
+            return original(archive, member)
+        capture = consumer.Capture('fixture-key', documents(), product_selection=True)
+        with patch.object(tarfile.TarFile, 'extractfile', tracked):
+            capture(binding(payload()))
+        self.assertNotIn('data/emqx/node.cookie', calls)
+        self.assertEqual(capture.registry.summary()['source-cookie'], 0)
+        self.assertEqual(capture.discarded['files'], 1)
+        with self.assertRaises(consumer.PrivateFailure):
+            consumer.Capture('fixture-key', documents(), cold_decoder=lambda *args: None)
+
     def test_selection_uses_same_normalized_paths_as_product(self):
         capture = consumer.Capture('fixture-key', documents(), product_selection=True)
         raw = payload([{'name': '././data/emqx/data/mnesia/schema.DAT',
                         'data': b'unknown-private-native-data'}])
         with self.assertRaisesRegex(consumer.PrivateFailure, '^private-source-native-mnesia-unsupported$'):
             capture(binding(raw))
-        self.assertEqual(capture.discarded['files'], 0)
+        self.assertEqual(capture.discarded['files'], 1)  # unused source cookie
         self.assertFalse(capture.registry._sealed)
 
     def test_addon_metadata_urls_are_literal_but_active_options_keep_refusal(self):

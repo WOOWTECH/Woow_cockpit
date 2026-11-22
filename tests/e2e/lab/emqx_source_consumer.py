@@ -115,7 +115,7 @@ class Capture:
     def __init__(self, password, target_documents, *, hocon_parser=None, spool_directory=None, product_selection=False, cold_decoder=None):
         if type(product_selection) is not bool:
             refuse()
-        if cold_decoder is not None and not callable(cold_decoder):
+        if cold_decoder is not None and (not callable(cold_decoder) or not product_selection):
             refuse()
         self._cold_decoder = cold_decoder
         self.cold_receipt = None
@@ -201,7 +201,7 @@ class Capture:
                              for item in ha_emqx.STAGED)
                 identity = name in ('addon.json', ha_emqx.NODE_FILE,
                                     'data/emqx/node.cookie')
-                if self._product_selection and not (staged or identity):
+                if self._product_selection and (name in habackup.NEVER_READ or not (staged or identity)):
                     self.discarded['files'] += 1
                     self.discarded['bytes'] += entry.size
                     continue
