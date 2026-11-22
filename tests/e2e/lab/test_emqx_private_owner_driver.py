@@ -12,12 +12,14 @@ from unittest.mock import Mock, patch
 import emqx_private_owner_driver as driver
 import emqx_owner_source_capture as source_owner
 import emqx_real_candidate as real
+import emqx_owner_vendor_files as vendor_files
+from emqx_target_vendor_policy import FILES
 from emqx_private_boundary import PrivateFailure
 from emqx_runtime_credentials import RuntimeRegistry, login_registered
 from emqx_runtime_workflow import CombinedRegistry
 from test_emqx_source_cold_capture import decoder
 
-BROKER = 'invocation-owned-broker'
+BROKER = 'woowbk-emqx-fresh-012345abcdef'
 URL = 'http://127.0.0.1:18083/api/v5/login'
 USER, PASSWORD = b'generated-owner-user', b'generated-owner-password'
 TOKEN = b'generated-owner-private-token'
@@ -109,6 +111,15 @@ class DriverTests(unittest.TestCase):
     def setUp(self):
         from test_emqx_owner_source_capture import OwnerHarnessTests
         OwnerHarnessTests.fixture(self)
+        from test_emqx_owner_vendor_files import VendorFilesTests
+        self.vendor = VendorFilesTests()
+        self.vendor.setUp()
+        self.vendor.broker = BROKER
+        self.vendor.inspect[0]['Name'] = '/' + BROKER
+        self.vendor.paths = sorted(p for p in vendor_files.PATHS if '/certs/' in p)
+        for doc in (self.vendor.image, self.vendor.actual):
+            doc['files'] = [f for f in doc['files'] if '/certs/' in f['path']]
+        self.inspect_override = None
         self.parser = OwnerHarnessTests.hocon
         self.evidence = self.root/'evidence'
         self.evidence.mkdir(mode=0o700)
@@ -140,12 +151,27 @@ class DriverTests(unittest.TestCase):
     def podman(self,*args,**kwargs):
         self.assertTrue(self.live)
         self.assertFalse(self.capture._closed)
+        if args == ('inspect', BROKER):
+            self.events.append('vendor-inspect')
+            self.assertEqual(kwargs, {'timeout':5, 'max_output':vendor_files.LIMIT})
+            raw = self.vendor.inspect_callback()
+            if self.inspect_override: raw = self.inspect_override(raw)
+            return SimpleNamespace(returncode=0, stdout=raw)
+        if args[:4] == ('exec',BROKER,'emqx','eval') and kwargs['timeout'] == 10:
+            self.events.append('vendor-observed')
+            self.assertEqual(kwargs, {'timeout':10, 'max_output':vendor_files.MAX_WIRE})
+            return SimpleNamespace(returncode=0, stdout=self.vendor.eval_callback(args[4]))
         if args[:4] == ('exec',BROKER,'emqx','eval'):
             from test_emqx_owner_target import reply_document
             self.events.append('target-observed')
             self.assertEqual(kwargs,{'timeout':30,'max_output':driver.MAX_WIRE,'check':False})
             generation = re.search(r'generation => <<"([0-9a-f]{32})">>',args[4])[1]
-            document = reply_document(generation)
+            from test_emqx_owner_target import cooked_config
+            config = cooked_config()
+            for kind in ('ssl', 'wss'):
+                config['listeners'][kind]['default']['ssl_options'] = {
+                    key:'${EMQX_ETC_DIR}/certs/' + name for key,name in FILES.items()}
+            document = reply_document(generation, config=config)
             if self.target_edit: self.target_edit(document)
             wire = b'WOOWTARGET:'+base64.b64encode(json.dumps(document).encode())+b':ENDok\n'
             return SimpleNamespace(returncode=0,stdout=wire,stderr=b'private-target-diagnostic')
@@ -182,6 +208,7 @@ class DriverTests(unittest.TestCase):
                 self.events.append('combined-scanned')
         with patch.object(source_owner,'native_hocon',self.parser), \
              patch.object(source_owner,'native_cold_history',decoder), \
+             patch.object(vendor_files,'run_native',self.vendor.native), \
              patch.object(driver,'capture_owner_source',held), \
              patch.object(RuntimeRegistry,'register_bundle',registered), \
              patch.object(CombinedRegistry,'scan',scanned):
@@ -251,6 +278,11 @@ class DriverTests(unittest.TestCase):
             self.assertIs(self.invoke(),sentinel)
         self.assertLess(self.events.index('combined-scanned'),self.events.index('authorized-handoff'))
         self.assertLess(self.events.index('authorized-handoff'),self.events.index('unlocked'))
+        self.assertEqual(self.events.count('vendor-observed'), 2)
+        self.assertLess(self.events.index('locked'), self.events.index('vendor-inspect'))
+        self.assertGreater(self.events.index('vendor-observed', self.events.index('authorized-handoff')),
+                           self.events.index('authorized-handoff'))
+        self.assertTrue(all(not d.exists() for d in self.vendor.directories))
         self.assertFalse(self.live)
         self.assertTrue(self.capture._closed)
         self.assertEqual(list(self.spool.iterdir()),[])
@@ -281,3 +313,63 @@ class DriverTests(unittest.TestCase):
                 self.assertIn('unlocked',self.events)
                 self.assertTrue(self.capture._closed)
             self.runner.podman.reset_mock()
+
+    def test_invalid_private_inspect_and_provenance_never_reach_builder(self):
+        cases = ('malformed', 'duplicate', 'cid', 'name', 'image', 'mount', 'changed-cid')
+        import copy
+        original = copy.deepcopy(self.vendor.inspect)
+        for case in cases:
+            self.vendor.inspect = copy.deepcopy(original)
+            self.events.clear()
+            self.inspect_override = None
+            if case == 'malformed': self.inspect_override = lambda raw:b'private-not-json'
+            if case == 'duplicate':
+                self.inspect_override = lambda raw:raw.replace(b'"Id":', b'"Id":"' + b'b'*64 + b'","Id":', 1)
+            if case == 'cid': self.vendor.inspect[0]['Id'] = 'invalid'
+            if case == 'name': self.vendor.inspect[0]['Name'] = '/different-owner'
+            if case == 'image': self.vendor.inspect[0]['Image'] = 'sha256:'+'0'*64
+            if case == 'mount': self.vendor.inspect[0]['Mounts'].append({'Type':'bind','Destination':'/opt/emqx/etc/certs'})
+            if case == 'changed-cid':
+                def changed(raw):
+                    if self.events.count('vendor-inspect') > 1:
+                        raw = raw.replace(b'a'*64, b'b'*64)
+                    return raw
+                self.inspect_override = changed
+            with self.subTest(case=case), self.producers(), patch.object(driver,'build_captured_candidate') as bridge:
+                with self.assertRaisesRegex(PrivateFailure, '^private-owner-driver-refused$'): self.invoke()
+                bridge.assert_not_called()
+            self.assertNotIn('target-observed',self.events)
+            self.assertNotIn('curl-login',self.events)
+            self.assertTrue(self.capture._closed)
+            self.assertFalse(self.live)
+            self.assertEqual(list(self.spool.iterdir()), [])
+            self.assertEqual(list(self.evidence.iterdir()), [])
+
+    def test_vendor_change_on_lease_exit_refuses_return_and_cleans_up(self):
+        def handoff(*args, **kwargs):
+            self.vendor.actual['files'][0]['identity'][2] += 1
+            return object()
+        with self.producers(), patch.object(driver,'build_captured_candidate',side_effect=handoff) as bridge:
+            with self.assertRaisesRegex(PrivateFailure, '^private-owner-driver-refused$'): self.invoke()
+            bridge.assert_called_once()  # late recheck refuses result, not an earlier handoff
+        self.assertTrue(self.capture._closed)
+        self.assertFalse(self.live)
+        self.assertEqual(list(self.spool.iterdir()), [])
+
+    def test_enabled_tls_and_unknown_reference_still_prevent_builder(self):
+        for case in ('enabled', 'unknown'):
+            def edit(doc):
+                from test_emqx_owner_target import cooked_config, typed
+                config = cooked_config()
+                listener = config['listeners']['ssl']['default']
+                listener['enable'] = case == 'enabled'
+                listener['ssl_options'] = {'certfile': '${EMQX_ETC_DIR}/certs/' +
+                    ('cert.pem' if case == 'enabled' else 'unknown.pem')}
+                doc['config'] = typed(config)
+            self.target_edit = edit
+            with self.subTest(case=case), self.producers(), patch.object(driver,'build_captured_candidate') as bridge:
+                with self.assertRaisesRegex(PrivateFailure, '^private-owner-driver-refused$'): self.invoke()
+                bridge.assert_not_called()
+            self.assertTrue(self.capture._closed)
+            self.assertFalse(self.live)
+            self.assertEqual(list(self.evidence.iterdir()), [])

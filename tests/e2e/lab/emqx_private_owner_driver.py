@@ -6,12 +6,19 @@ supplies a bounded owner runner and actual target writer/issuance exclusion
 context. Target observation necessarily reads the held target; source data reaches
 candidate brokers only after successful combined-scanned preflight publication.
 
+The vendor observer binds CID from bounded private inspect inside target exclusion
+and the source hold. Its pinned-image file proof runs before target capture and
+again before releasing exclusion. Early refusal prevents build; a late recheck
+refuses the returned result but cannot undo an already attempted build. Published
+preflight evidence is not a restore result or commercial acceptance.
+
 Source-only credential references: ha_import_b1_e2e.py uses B1_EMQX_ADMIN_PW,
 B1_EMQX_USER2 and B1_EMQX_USER2_PW from its merged b1-creds.env/ha-import-creds.env
 mapping. That does NOT identify target login credentials. This module accepts
 explicit RAM bytes and never opens either file or assumes an admin username.
 """
 import io
+from contextlib import contextmanager
 import json
 import re
 
@@ -20,6 +27,7 @@ from emqx_owner_preflight import owner_preflight
 from emqx_owner_source_capture import capture_owner_source
 from emqx_owner_target import owner_target_readers, MAX_WIRE
 from emqx_private_boundary import PrivateFailure, MAX_VALUE
+from emqx_target_vendor_policy import bounded_vendor_callbacks, vendor_observer
 
 HTTP_OUTPUT = MAX_VALUE + 512
 
@@ -74,6 +82,38 @@ def curl_login_transport(*, runner, broker, login_url):
     return transport
 
 
+def _held_vendor_observer(*, runner, broker):
+    """Lazy actual CID binding: owner_target_readers invokes INSIDE quiescence.
+
+    The real policy observer performs full repeated image/target/file provenance
+    checks. This initial private inspect only pins its actual container identity;
+    it is not a receipt, caller acknowledgement or alternative authorization.
+    """
+    private_eval, private_inspect = bounded_vendor_callbacks(runner=runner, broker=broker)
+
+    @contextmanager
+    def observe(*, generation, private_values):
+        from emqx_owner_vendor_files import LIMIT
+        from emqx_semantic_readers import _pairs
+        def invalid_constant(_):
+            raise ValueError()
+        raw = private_inspect()
+        if type(raw) is not bytes or not 0 < len(raw) <= LIMIT:
+            raise ValueError()
+        docs = json.loads(raw, object_pairs_hook=_pairs, parse_constant=invalid_constant)
+        if (type(docs) is not list or len(docs) != 1 or type(docs[0]) is not dict
+                or type(docs[0].get('Id')) is not str
+                or re.fullmatch(r'[0-9a-f]{64}', docs[0]['Id']) is None
+                or type(docs[0].get('Name')) is not str
+                or docs[0]['Name'].lstrip('/') != broker):
+            raise ValueError()
+        with vendor_observer(broker=broker, owned_container_id=docs[0]['Id'],
+                private_eval=private_eval, private_inspect=private_inspect)(
+                    generation=generation, private_values=private_values) as observed:
+            yield observed
+    return observe
+
+
 def build_owner_candidate(work, app, adapter, target, backup, staging, job_id, *,
                           source_password, expected_sha256, spool_directory,
                           source_options, runner, quiesce, login_url,
@@ -109,7 +149,8 @@ def build_owner_candidate(work, app, adapter, target, backup, staging, job_id, *
         with capture_owner_source(backup, password=source_password,
                 expected_sha256=expected_sha256, spool_directory=spool_directory,
                 required_encryption='v3', **dict(source_options)) as (captured, binding):
-            with owner_target_readers(private_eval=evaluate, quiesce=quiesce) as readers:
+            with owner_target_readers(private_eval=evaluate, quiesce=quiesce,
+                    vendor_observer=_held_vendor_observer(runner=runner, broker=broker)) as readers:
                 session = owner_preflight(captured=captured, target_readers=readers,
                     target_generation=readers.generation, private_transport=transport,
                     username=username, password=password, evidence_directory=evidence_directory,
