@@ -23,7 +23,7 @@ def decoder(raw, kind):
     return json.dumps(dict(contract='emqx-cold-history-json-v1', version='5.8.9',
         otp_release='26', erts_version='14.2.5.11', input_sha256=hashlib.sha256(raw).hexdigest(),
         input_bytes=len(raw), complete=True, kind=kind, container=container,
-        traversal=traversal, semantics='historical-value-superset', final_state=False,
+        traversal=traversal, semantics='historical-value-superset', final_state=False, empty_container=False,
         term_count=1, terms=[dict(type='binary', value=base64.b64encode(SECRET).decode())])).encode()
 
 
