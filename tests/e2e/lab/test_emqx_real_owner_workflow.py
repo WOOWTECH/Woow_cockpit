@@ -89,19 +89,18 @@ class FoundationTests(unittest.TestCase):
         files.revoke(self.provision.file_capability)
         with self.assertRaises(ValueError):m.bound_target(self.provision,app)
 
-    def test_missing_composite_observer_refuses_before_frame_reads_or_provision(self):
-        class Unreadable:
-            def read(self,*args):raise AssertionError('frame must remain unread')
-        with patch.object(m,'OwnerProvision') as provision:
-            with self.assertRaises(m.RealOwnerRefused) as caught:
-                m.run_real_framed_owner(Unreadable(),private_parent=self.root,
-                    source_mode='--source-vendor-acl-sql-aliases')
-            self.assertEqual(caught.exception.phase,'observer_dependency')
-            provision.assert_not_called()
+    def test_fixed_composite_api_binding_and_invalid_modes_before_mutation(self):
+        from emqx_target_fixture_policy import issued_fixture_observer
+        self.assertIs(m._composite_observer_factory(),issued_fixture_observer)
+        callback=m._composite_observer_factory()(self.provision)
+        self.assertTrue(callable(callback))
+        # Factory is lazy: actual issued observer will inspect under quiescence.
         for mode in ('--source','--x86-source','--source=/tmp/other'):
-            with self.assertRaises(m.RealOwnerRefused) as caught:
-                m.run_real_framed_owner(Unreadable(),private_parent=self.root,source_mode=mode)
-            self.assertEqual(caught.exception.phase,'profile')
+            with patch.object(m,'OwnerProvision') as provision:
+                with self.assertRaises(m.RealOwnerRefused) as caught:
+                    m.run_real_framed_owner(io.BytesIO(b''),private_parent=self.root,source_mode=mode)
+                self.assertEqual(caught.exception.phase,'profile')
+                provision.assert_not_called()
 
     def test_product_package_boundary_uses_same_logical_catalog_and_fixture_volumes(self):
         ctx,app,_=self.context()
@@ -174,8 +173,8 @@ class FoundationTests(unittest.TestCase):
         self.assertEqual(app.config_files,tuple(self.fixture.catalog()['config_files']))
 
     def test_noncallable_observer_ack_refuses_before_mutation(self):
-        import emqx_target_vendor_policy as policy
-        with patch.object(policy,'fixture_vendor_observer',True,create=True), \
+        import emqx_target_fixture_policy as policy
+        with patch.object(policy,'issued_fixture_observer',True), \
              patch.object(m,'OwnerProvision') as provision:
             with self.assertRaises(m.RealOwnerRefused) as caught:
                 m.run_real_framed_owner(io.BytesIO(b''),private_parent=self.root,
@@ -216,5 +215,243 @@ class FoundationTests(unittest.TestCase):
             with self.assertRaises(m.RealOwnerRefused) as caught:
                 m.run_real_framed_owner(io.BytesIO(b'bad'),private_parent=self.root,
                     source_mode='--source-vendor-acl-sql-aliases')
-            self.assertEqual(caught.exception.phase,'frame')
+            self.assertEqual(caught.exception.phase,'client_frame')
             create.assert_not_called();cleanup.assert_not_called()
+
+    def client_values(self):
+        return [b'b1-sensor',b'generated-sensor-password',b'b1-gateway',b'generated-gateway-password',
+                b'generated-third',b'generated-third-password',b'b1/retained/one',b'generated-payload-one',
+                b'b1/retained/two',b'\x00generated\xffpayload-two']
+
+    def client_frame(self,values=None,mode=b'A'):
+        import struct
+        return m.CLIENT_MAGIC+mode+b''.join(struct.pack('!H',len(raw))+raw
+            for raw in (self.client_values() if values is None else values))
+
+    def clients(self):return m.read_source_clients(io.BytesIO(self.client_frame()),m.SOURCE_MODES[0])
+
+    def test_fixed_client_prefix_is_bounded_private_profile_bound_and_leaves_cipher_frame(self):
+        frame=self.client_frame()+b'unchanged-key-ciphertext-frame'
+        stream=io.BytesIO(frame)
+        clients=m.read_source_clients(stream,m.SOURCE_MODES[0])
+        self.assertEqual(repr(clients),'<SourceClients private>')
+        self.assertEqual(stream.read(),b'unchanged-key-ciphertext-frame')
+        self.assertEqual([clients.fields[name] for name in m.CLIENT_FIELDS],self.client_values())
+        self.assertNotIn(clients.fields['negative_password'],self.client_values())
+        m.read_source_clients(io.BytesIO(self.client_frame(mode=b'B')),m.SOURCE_MODES[1])
+        cases=[self.client_frame(mode=b'B'),self.client_frame()[:-1],m.CLIENT_MAGIC+b'A'+b'\x10\x01']
+        for index,value in ((1,b'bad\n-P injected'),(6,b'b1/retained/#'),(8,b'b1/retained/one'),
+                            (4,b'b1-gateway'),(4,b'lab'),(0,b'arbitrary-role'),(9,b'x'*4097)):
+            values=self.client_values();values[index]=value;cases.append(self.client_frame(values))
+        for raw in cases:
+            with self.assertRaises(ValueError):m.read_source_clients(io.BytesIO(raw),m.SOURCE_MODES[0])
+
+    def test_default_no_live_reads_actual_staged_frame_without_any_provision_or_capture(self):
+        from dataclasses import replace
+        import hashlib,struct
+        from emqx_source_profiles import ARM_SQL_ALIASES
+        cipher=b'generated-encrypted-ciphertext-only'
+        key=b'generated-ram-key'
+        framed=self.client_frame()+struct.pack('!I',len(key))+key+struct.pack('!Q',len(cipher))+cipher
+        profile=replace(ARM_SQL_ALIASES,sha256=hashlib.sha256(cipher).hexdigest())
+        with patch.object(m,'OwnerProvision',return_value=self.provision), \
+             patch('emqx_fresh_owner_workflow.source_profile',return_value=profile), \
+             patch.object(Path,'read_text',side_effect=['0',str(4*1024**3)]), \
+             patch('emqx_fresh_owner_workflow.socket.gethostname',return_value='woowbk-dev-d'), \
+             patch.object(self.provision,'create') as create, \
+             patch.object(self.provision,'cleanup') as cleanup, \
+             patch.object(m,'capture_owner_source') as capture, \
+             patch.object(m,'build_captured_candidate') as build:
+            receipt=m.run_real_framed_owner(io.BytesIO(framed),private_parent=self.root,source_mode=m.SOURCE_MODES[0])
+        self.assertEqual(receipt['scope'],'sha-bound-ciphertext-and-client-frame-only')
+        self.assertEqual(receipt['source_authentication'],'not-performed')
+        for operation in (create,cleanup,capture,build):operation.assert_not_called()
+        self.assertEqual(list(self.root.glob('emqx-framed-private-*')),[])
+
+    def test_target_base_uses_canonical_pinned_fields_and_disabled_alternate_listeners(self):
+        raw=m._target_base()
+        for leaf in (b'node.name="emqx@127.0.0.1"',b'node.data_dir="/opt/emqx/data"',
+            b'cluster.discovery_strategy=manual',b'cluster.proto_dist=inet_tcp',b'rpc.protocol=tcp',
+            b'listeners.ssl.default.enable=false',b'listeners.ws.default.enable=false',
+            b'listeners.wss.default.enable=false',b'dashboard.listeners.https.bind=0'):
+            self.assertIn(leaf+b'\n',raw)
+        self.assertNotIn(b'node.dist_proto',raw);self.assertNotIn(b'rpc.driver',raw)
+
+    def test_logging_opt_in_changes_only_exact_issued_unit_and_preserves_global_fixture(self):
+        self.runner.read_file=lambda rel,**kwargs:(self.root/rel).read_bytes()
+        original=self.fixture.container_unit()
+        other=self.root/'.config/containers/systemd/unrelated.container';other.write_bytes(b'preserved')
+        m._opt_in_private_unit(self.provision)
+        path=self.root/'.config/containers/systemd'/(self.fixture.prefix+'.container')
+        self.assertIn(b'--log-driver=none --image-volume=ignore',path.read_bytes())
+        self.assertEqual(path.stat().st_mode&0o777,0o600)
+        self.assertEqual(self.fixture.container_unit(),original)
+        self.assertEqual(other.read_bytes(),b'preserved')
+        self.assertIs(files._record(self.provision.file_capability)[1],self.provision)
+        path.write_bytes(b'unexpected unit')
+        with self.assertRaises(ValueError):m._opt_in_private_unit(self.provision)
+        self.assertEqual(path.read_bytes(),b'unexpected unit')
+
+    def mqtt_reply(self,code=0,suback=1,connack=0):
+        return SimpleNamespace(returncode=code,stdout=(
+            'Client generated received CONNACK ('+str(connack)+')\nSubscribed (mid: 1): '+str(suback)+'\n').encode(),stderr=b'')
+
+    def test_source_mqtt_readiness_distinguishes_connack_allow_deny_wrong_password_and_retained(self):
+        clients=self.clients()
+        def call(provision,values,role,**kwargs):
+            self.assertIs(provision,self.provision);self.assertIs(values,clients)
+            if kwargs.get('wrong_password'):
+                return self.mqtt_reply(code=134,connack=134)
+            if kwargs.get('retained'):
+                index=1 if kwargs['topic'].endswith('/one') else 2
+                topic=clients.fields['retained_topic'+str(index)]
+                payload=clients.fields['retained_payload'+str(index)]
+                return SimpleNamespace(returncode=0,stdout=b'1:'+topic+b':'+payload.hex().encode()+b'\n',stderr=b'')
+            return self.mqtt_reply(suback=135 if kwargs['topic']=='b1/secret/#' else 1)
+        with patch.object(m,'_mqtt_private',side_effect=call) as mqtt:
+            m.validate_source_mqtt(self.provision,clients)
+            self.assertEqual(mqtt.call_count,7)
+        # Timeout, absent reason, allowed denial and wrong retained flag refuse.
+        for reply in (SimpleNamespace(returncode=27,stdout=b'',stderr=b'timed out'),
+                      self.mqtt_reply(suback=135), self.mqtt_reply(connack=135)):
+            with patch.object(m,'_mqtt_private',return_value=reply):
+                with self.assertRaises(ValueError):m.validate_source_mqtt(self.provision,clients)
+        def wrong_retain(*args,**kwargs):
+            result=call(*args,**kwargs)
+            if kwargs.get('retained'):result.stdout=b'0'+result.stdout[1:]
+            return result
+        with patch.object(m,'_mqtt_private',side_effect=wrong_retain):
+            with self.assertRaises(ValueError):m.validate_source_mqtt(self.provision,clients)
+
+    def test_mqtt_transport_keeps_inputs_out_of_argv_env_and_cleans_timeout_and_bad_reply(self):
+        clients=self.clients()
+        configs=[];running=[]
+        def podman(*args,**kwargs):
+            if args[:2]==('container','exists'):
+                return SimpleNamespace(returncode=0 if args[2] in running else 1,stdout=b'',stderr=b'')
+            if args[0]=='rm':
+                running.remove(args[-1]);return SimpleNamespace(returncode=0,stdout=b'',stderr=b'')
+            self.assertEqual(args[0],'run')
+            name=args[args.index('--name')+1];running.append(name)
+            config=Path(args[args.index('-v')+1].removesuffix(':/work:ro'))/'mosquitto_sub'
+            configs.append(config)
+            self.assertEqual(config.stat().st_mode&0o777,0o600)
+            self.assertEqual(config.parent.stat().st_mode&0o777,0o700)
+            self.assertEqual(config.read_bytes(),b'-u '+clients.fields['gateway_user']+
+                b'\n-P '+clients.fields['gateway_password']+b'\n-t b1/retained/one\n')
+            self.assertNotIn('env',kwargs)
+            for private in (clients.fields['gateway_user'],clients.fields['gateway_password'],b'b1/retained/one'):
+                self.assertNotIn(private.decode(),repr(args))
+            self.assertIn('--network=container:'+self.fixture.prefix,args)
+            self.assertIn('--log-driver=none',args);self.assertIn('--image-volume=ignore',args)
+            self.assertEqual(kwargs['max_output'],65536)
+            self.assertEqual(args[-2:],('-F','%r:%t:%x'))
+            if fail[0]=='timeout':
+                import subprocess
+                raise subprocess.TimeoutExpired('generated',20)
+            return SimpleNamespace(returncode=0,stdout=b'x'*65537 if fail[0]=='oversize' else b'generated-private-reply',stderr=b'')
+        for case in ('pass','timeout','oversize'):
+            fail=[case]
+            with patch.object(self.runner,'podman',side_effect=podman), \
+                 patch.object(m,'_ram_client_parent',return_value=self.root):
+                if case=='pass':m._mqtt_private(self.provision,clients,'gateway',topic='b1/retained/one',retained=True)
+                else:
+                    with self.assertRaises(Exception):m._mqtt_private(self.provision,clients,'gateway',topic='b1/retained/one',retained=True)
+            self.assertEqual(running,[])
+            self.assertTrue(all(not path.parent.exists() for path in configs))
+
+    def test_client_registration_requires_complete_real_runtime_and_keeps_scanner_strict(self):
+        from emqx_runtime_workflow import PrivateSession,CombinedRegistry
+        from emqx_runtime_credentials import RuntimeRegistry
+        from emqx_private_boundary import Registry
+        # Incomplete runtime must refuse, even though the client prefix is valid.
+        runtime=RuntimeRegistry()
+        session=PrivateSession(object(),CombinedRegistry(Registry(),runtime),{},None)
+        with self.assertRaises(Exception):m._register_client_inputs(session,self.clients(),self.root/'not-created.txt')
+        self.assertEqual(runtime._categories,{})
+
+    def test_actual_joined_registry_registers_clients_then_rescans_identical_publication_bytes(self):
+        from test_emqx_owner_preflight import JoinTests
+        from emqx_private_boundary import PrivateFailure
+        joined=JoinTests();joined.setUp();self.addCleanup(joined.doCleanups)
+        clients=self.clients()
+        with joined.source() as (captured,binding):
+            session=joined.join(captured)
+            artifacts=list(joined.evidence.iterdir())
+            self.assertEqual(len(artifacts),1)
+            path=artifacts[0]  # scan the actual publisher artifact without assuming its encoding or suffix
+            before=path.read_bytes()
+            m._register_client_inputs(session,clients,path)
+            self.assertEqual(path.read_bytes(),before)
+            actual=session.registry._runtime.summary()
+            self.assertEqual(session.coverage['target-bootstrap'],actual['target-bootstrap']+
+                actual['runtime-login-input']+actual['runtime-login-token'])
+            for name in (*m.CLIENT_FIELDS[:6],'negative_password'):
+                with self.subTest(name=name), self.assertRaises(PrivateFailure):
+                    session.registry.scan(clients.fields[name])
+            self.assertFalse(captured._closed)
+
+    def test_last_client_activity_precedes_phase_validation_at_restore_rollback_and_restart(self):
+        ctx,app,state=self.context()
+        (self.root/'.config/systemd/user').mkdir(parents=True)
+        clients=self.clients();events=[]
+        def restore(context,request):
+            events.append('restore')
+            if events.count('restore')==1:return {'changed':True}
+            ctx.adapter(app).imported_hook()
+            (self.root/'.config'/self.fixture.prefix/'fail-once').unlink()
+            raise flows.RolledBack(BackupError('job-failed','generated'),{'rolled_back':True})
+        with patch.object(flows,'run_restore',side_effect=restore), patch.object(m,'_ready'), \
+             patch.object(m,'validate_source_mqtt',side_effect=lambda p,c:events.append('mqtt')) as mqtt:
+            m._restore_and_rollback(ctx,app,self.provision,'generated-package',state,clients=clients)
+        self.assertEqual(events,['restore','mqtt','restore','mqtt','mqtt'])
+        self.assertEqual(mqtt.call_count,3)
+
+    def test_changed_postrestore_cid_never_clears_or_rebinds_original_issued_cap(self):
+        from test_emqx_owner_fixture_files import FixtureFilesTests
+        import emqx_post_restore_values as post
+        issued=FixtureFilesTests();issued.setUp();self.addCleanup(issued.doCleanups)
+        issued.observe()  # actual issued observer over generated full native contracts binds old CID
+        before=files._record(issued.cap)[0]['cid']
+        current=dict(issued.doc[0]);current['Id']='b'*64
+        with patch.object(m,'_inspect',return_value=current), \
+             patch.object(post,'collect_post_restore_values') as collect:
+            with self.assertRaises(m.RealOwnerRefused) as caught:
+                m._post_activity_capture(issued.provision,object())
+            self.assertEqual(caught.exception.phase,'post_capture_identity')
+            collect.assert_not_called()
+        self.assertEqual(files._record(issued.cap)[0]['cid'],before)
+        self.assertEqual(before,'a'*64)
+
+    def test_each_last_client_activity_is_followed_by_accumulation_preserving_prior_registry(self):
+        ctx,app,state=self.context()
+        (self.root/'.config/systemd/user').mkdir(parents=True)
+        clients=self.clients();events=[]
+        original=object();scanners=[original,object(),object(),object()]
+        session=SimpleNamespace(registry=original)
+        def restore(context,request):
+            events.append('restore')
+            if events.count('restore')==1:return {'changed':True}
+            ctx.adapter(app).imported_hook()
+            (self.root/'.config'/self.fixture.prefix/'fail-once').unlink()
+            raise flows.RolledBack(BackupError('job-failed','generated'),{'rolled_back':True})
+        def capture(provision,prior):
+            index=events.count('capture')
+            self.assertIs(prior,scanners[index]);events.append('capture')
+            return scanners[index+1]
+        with patch.object(flows,'run_restore',side_effect=restore), patch.object(m,'_ready'), \
+             patch.object(m,'validate_source_mqtt',side_effect=lambda p,c:events.append('mqtt')), \
+             patch.object(m,'_post_activity_capture',side_effect=capture):
+            result=m._restore_and_rollback(ctx,app,self.provision,'generated-package',state,
+                clients=clients,session=session)
+        self.assertEqual(events,['restore','mqtt','capture','restore','mqtt','capture','mqtt','capture'])
+        self.assertIs(result,scanners[-1])
+        self.assertIs(session.registry,original)  # no session capability overwrite
+
+    def test_target_file_acl_has_only_explicit_fixture_readiness_permissions(self):
+        acl=m._target_acl()
+        self.assertEqual(acl,(b'{allow, {username, "lab"}, all, ["lab/#"]}.\n'
+            b'{allow, {username, "b1-gateway"}, subscribe, ["b1/retained/#"]}.\n'
+            b'{deny, {username, "b1-sensor"}, subscribe, ["b1/secret/#"]}.\n'
+            b'{deny, all}.\n'))
+        self.assertNotIn(b'{allow, all}',acl)
