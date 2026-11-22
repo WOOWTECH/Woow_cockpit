@@ -83,6 +83,26 @@ retainer.backend.storage_type = disc
         inspection = json.loads(runner.podman('container', 'inspect', f.prefix).stdout)[0]
         f.validate_inspection(inspection)
 
+        # Actual fixed files/secret of this new fixture, before any client or
+        # source data. Readonly mounts and complete before/after identities are
+        # checked by the issued capability; this is not full target coverage.
+        STAGE = 'actual_owned_mount_capture'
+        from emqx_owner_fixture_files import observe_fixture_files, PATHS, MAX_WIRE, LIMIT
+        from emqx_semantic_readers import Values
+        private_files = Values()
+        file_receipts = observe_fixture_files(provision.file_capability,
+            private_eval=lambda expr: runner.podman('exec', f.prefix, 'emqx', 'eval', expr,
+                timeout=10, max_output=MAX_WIRE).stdout,
+            private_inspect=lambda: runner.podman('inspect', f.prefix,
+                timeout=5, max_output=LIMIT).stdout,
+            private_values=private_files)
+        if ({row['path'] for row in file_receipts} != set(PATHS)
+                or password.encode() not in private_files.values
+                or base not in private_files.values or acl not in private_files.values):
+            raise RuntimeError('synthetic owned file capture incomplete')
+        print(json.dumps({'stage': STAGE, 'result': 'pass',
+                          'scope': 'issued-fixture-files-only'}), flush=True)
+
         def configuration():
             expr = ('io:format("WOOWCFG:~s:END~n", '
                     '[base64:encode(emqx_utils_json:encode(emqx:get_raw_config([])))]).')
