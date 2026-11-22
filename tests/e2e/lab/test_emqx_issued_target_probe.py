@@ -27,18 +27,28 @@ class ProbeTests(unittest.TestCase):
         self.provision=owner.OwnerProvision.__new__(owner.OwnerProvision)
         self.provision.runner=runner;self.provision.fixture=Fixture('woowbk-emqxlab-12345678','appowner',m.IMAGE.removeprefix('sha256:'))
         self.provision.created=[];self.provision.file_capability=None
-        self.events=[]; self.leak=False
+        self.events=[]; self.leak=False; self.file_failure=False
     def observer(self,provision):
         self.assertIs(provision,self.provision)
         self.assertIs(_record(provision.file_capability)[1],provision)
-        return object()
+        @contextmanager
+        def observed(**kwargs):
+            from emqx_owner_fixture_files import FixtureFilesFailure
+            self.events.append('observed-enter')
+            if self.file_failure:raise FixtureFilesFailure('secret_mapping','shape')
+            try:yield object()
+            finally:self.events.append('observed-exit')
+        return observed
     @contextmanager
     def readers(self,**kwargs):
         self.events.append('enter')
         generation='a'*32; doc=reply_document(generation,cooked_config())
         readers=_build(b'WOOWTARGET:'+base64.b64encode(json.dumps(doc).encode())+b':ENDok',generation)
         if self.leak:readers.persisted_values._values+=('通過'.encode(),)
-        try:yield readers
+        try:
+            from emqx_semantic_readers import Values
+            with kwargs['vendor_observer'](generation=generation,private_values=Values()):
+                yield readers
         finally:self.events.append('exit')
     def cleanup(self):
         self.events.append('cleanup');revoke(self.provision.file_capability)
@@ -51,12 +61,18 @@ class ProbeTests(unittest.TestCase):
             return m.run_issued_target_probe()
     def test_actual_issuance_registration_and_exact_scan_return_after_lease_and_cleanup(self):
         self.assertEqual(self.invoke(),m.TARGET_RECEIPT)
-        self.assertEqual(self.events,['enter','exit','cleanup'])
+        self.assertEqual(self.events,['enter','observed-enter','observed-exit','exit','cleanup'])
     def test_actual_persisted_collision_refuses_and_still_exits_and_cleans(self):
         self.leak=True
         with self.assertRaises(m.IssuedProbeRefused) as failure:self.invoke()
         self.assertEqual(failure.exception.phase,'scan')
-        self.assertEqual(self.events,['enter','exit','cleanup'])
+        self.assertEqual(self.events,['enter','observed-enter','observed-exit','exit','cleanup'])
+    def test_actual_issued_file_fixed_failure_survives_masking_without_private_details(self):
+        self.file_failure=True
+        with self.assertRaises(m.IssuedProbeRefused) as failure:self.invoke()
+        self.assertEqual(failure.exception.phase,'files_secret_mapping_shape')
+        self.assertEqual(self.events,['enter','observed-enter','exit','cleanup'])
+
     def test_cleanup_failure_never_returns_scanned_evidence(self):
         def cleanup():
             revoke(self.provision.file_capability)
