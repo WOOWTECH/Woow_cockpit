@@ -1,0 +1,13 @@
+{
+  "source_commit": "365e651b022d71e99e9b1b3191035074dd1147d1",
+  "scope": "real ARM exact row-table refusal diagnosis after cleanup-stage fix",
+  "exit": 1,
+  "elapsed_seconds": 286.62100243312307,
+  "stdout_sha256": "f8ec4ed8c7484b703d0bf8c4498e646dc192d51b20fd25862a3d65d604af0ae7",
+  "fixed_status": [
+    "REAL OWNER BUILD_PRODUCT_ROW_COUNTS_EMQX_ACL_UNDERFLOW_PRODUCT REFUSED",
+    "REAL OWNER POSTFLIGHT PASSED"
+  ],
+  "stderr_bytes_not_published": 0,
+  "commercial_acceptance": "not-complete"
+}
