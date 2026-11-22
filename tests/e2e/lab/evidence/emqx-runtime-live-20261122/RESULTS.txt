@@ -1,0 +1,68 @@
+Scope: synthetic credentials on real isolated EMQX 5.8.9, runtime login producer only.
+Authoritative run: final.jsonl, source 688d4b2c320ea2cb9153699621fd07f658b4bcc0.
+Base: f5099c4. Implementation commits: f791157, 688d4b2.
+Command: tests/e2e/lab/run_emqx_runtime_live.sh (reviewed shell escalation).
+Default shell sandbox failed before execution: bwrap loopback RTM_NEWADDR permission.
+No auto-review rejection was bypassed. All Podman access used lab wrapper/owner.sh.
+
+Final: PASS, 12 checks true. Real /login issuance -> runtime registration ->
+authenticated /nodes, reported broker version 5.8.9. Invalid Bearer /nodes 401,
+wrong-password /login 401, failed-login publication refused. Actual token,
+Bearer token, base64 token, hex token and password leaks refused by scanner.
+Exact fixed private evidence bytes scanned before exclusive 0600 write and
+read-back; SHA256 c42ec483ef31fc13279ea289142a324038881b5f578f179c3f9ab4658beaf0d9.
+Private evidence and generated config deleted at cleanup; no token retained.
+The final fixed JSON summary was itself scanned by the runtime registry.
+last_login_status=401/login_has_token=false reflect intentional last negative test.
+
+Source/target completeness NOT ASSESSED. No source registry/counts supplied;
+no invented empty source categories. Full registry scan still refuses missing
+target capture. No login_preflight/full evidence publisher acceptance claimed.
+No real HA restore, Mnesia/cold DAT, MQTT, restart or commercial acceptance.
+Public product guards untouched. No original production secrets imported.
+
+Preflight: outer network none, ports {}, 4 GiB / 2 CPUs. Initial memory.current
+2251280384; final run memory.current 2351349760, maximum 4294967296.
+Initial /home disk available 24735884 KiB. Loaded image:
+sha256:3f60addfad2bfc6c09400aa48cfbc1b2b2aab04fb6a64d6392c016e02d7fb57b.
+Final nested broker: network none, log-driver none, image-volume ignore,
+768 MiB, 0.75 CPU, 256 pids, no implicit volume mounts, pull never.
+Host mutation lock plus preexisting Headscale lock held for wrapper runs.
+No competing human owner command observed; preexisting Headscale service was
+already Created/starting and events later showed autonomous restarts. It was
+not stopped. Thus exclusive operator does not mean all background services quiescent.
+
+Retained failed attempts:
+1: host-inner network collided with existing broker (eaddrinuse); cleanup of
+container/private files passed but initial cleanup omitted anonymous volumes.
+2: nested network none, base.hocon ignored, dashboard stayed default 18083;
+login not reached on selected port. Same early anonymous-volume omission.
+3: fixed diagnostics confirmed broker running, curl exit7, base config ineffective.
+4: effective emqx.conf lacked mandatory node.cookie/node.data_dir: exit127;
+log-driver none, no implicit volumes, cleanup passed. Separate foreground
+memory-only diagnostic confirmed schema/cookie/data_dir errors.
+5: added mandatory synthetic node config; PASS, all 12 checks true.
+1-5 ran evolving uncommitted source; their exact staged snapshots were not
+retained. Do not infer exact source hash for them. final.jsonl is the rerun on
+an exact committed source hash and is the authoritative acceptance evidence.
+
+Early default log driver/implicit volumes were mistakes, fixed before final.
+First cleanup recovery conservatively refused before mutation because a broad
+window included Headscale auto-restarts. Recorded in cleanup-refusal JSON.
+Four volumes from attempts1/2 were then matched to unique same-second runtime
+container creates and volume events, confirmed anonymous/unmounted, removed and
+absence checked (early-volume-cleanup.json). Attempt3's two volumes were directly
+captured in its live Mounts inspect, removed, and all six absence checks repeated
+in postflight.json. Unrelated old dangling volumes untouched; no volume prune.
+Only fixed summaries retained here; no raw broker logs/HTTP bodies/config/token.
+
+Verification: 19 tests passed (runtime_live, runtime_credentials, public EMQX
+preservation guard), git diff --check passed. Unit results are boundary regression,
+not a substitute for the final live broker evidence.
+
+Next integration: Mencius worktree /tmp/emqx-native-adapter-20261122, observed
+7e89816 with uncommitted emqx_mnesia_checkpoint.erl and emqx_mnesia_export.escript.
+Do not copy changing files or assume cold DAT support. Runtime owner must stage
+an immutable reviewed exporter commit for a separate synthetic checkpoint run.
+Original cold source DAT remains refused. No agent send_input tool available
+in this session; handoff is through the main agent/user thread.

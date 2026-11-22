@@ -1,0 +1,1 @@
+{"checks": {"diagnostic_containers_absent": true, "early_six_volumes_absent": true, "private_code_directories_absent": true, "private_runtime_directories_absent": true, "runtime_containers_absent": true}, "result": "passed", "scope": "synthetic-runtime-postflight"}
