@@ -4,6 +4,10 @@ Only the existing isolated owner may call this. Exact private evidence is return
 AFTER lease exit and scoped cleanup. Five target categories are not HA acceptance.
 """
 import secrets
+import tempfile
+import time
+from pathlib import Path
+from types import SimpleNamespace
 from contextlib import contextmanager
 from emqx_adapter_owner import OwnerProvision
 from emqx_native_runtime import IMAGE
@@ -18,7 +22,7 @@ from emqx_runtime_credentials import RuntimeRegistry, TARGET_CATEGORIES
 from emqx_target_snapshots import register_target_snapshots
 
 TARGET_RECEIPT = '階段：目標擷取；結果：通過；涵蓋：訊息認證、介面金鑰、連接器憑證、傳輸憑證、目標初始憑證'.encode()
-PHASES = (frozenset(('realm','budget','provision','start','quiescence','target','register','scan','cleanup'))
+PHASES = (frozenset(('realm','budget','provision','start','quiescence','target','register','scan','cleanup','target_config','target_references','target_tls','target_snapshot','target_consistency'))
     | frozenset('files_'+s+'_'+r for s in FILE_STAGES for r in FILE_REASONS)
     | frozenset('target_'+s for s in CONSUMER_PHASES)
     | frozenset(s for s in TRACE_STAGES if s.startswith(('native_','function_'))))
@@ -26,6 +30,27 @@ class IssuedProbeRefused(PrivateFailure):
     def __init__(self, phase):
         self.phase=phase if phase in PHASES else 'realm'
         super().__init__('private-issued-target-probe-refused')
+
+def _snapshot_preflight(provision,stage):
+    """Read-only product target-seed prerequisites on generated issued data only."""
+    from emqx_real_owner_workflow import flow_context,bound_target,CandidateBudget
+    from woowbackup import ha_emqx
+    with tempfile.TemporaryDirectory(prefix='emqx-issued-snapshot-private-',dir=Path.home()) as directory:
+        root=Path(directory);root.chmod(0o700)
+        job='j'+time.strftime('%Y%m%dT%H%M%SZ',time.gmtime())+'-'+secrets.token_hex(4)
+        ctx,app,_=flow_context(provision,root,job)
+        target=bound_target(provision,app)
+        def execute(command):
+            return provision.runner.podman('exec',provision.fixture.prefix,*command,
+                timeout=120,max_output=ha_emqx.MAX_HOCON,check=False)
+        stage('target_config');original=ha_emqx.read_effective_config(execute)
+        stage('target_references');required=ha_emqx.configuration_references(original,target.files,target.secrets)
+        stage('target_tls');ha_emqx.tls_fingerprints(execute,ha_emqx.image_tls_references(original))
+        work=SimpleNamespace(runner=lambda _:provision.runner,guard=CandidateBudget(),abort=None,checkpoint=lambda:None)
+        stage('target_snapshot');ha_emqx.snapshot_target_volume(work,app,target.data_volume,root,required)
+        stage('target_consistency')
+        if ha_emqx.read_effective_config(execute)!=original:raise ValueError()
+
 
 def run_issued_target_probe():
     phase='realm'; provision=None; attempted=False; result=None
@@ -77,6 +102,11 @@ def run_issued_target_probe():
             phase='scan'
             runtime.scan(TARGET_RECEIPT)
             readers.persisted_values.scan(TARGET_RECEIPT)
+            def snapshot_stage(value):
+                nonlocal phase
+                if value not in PHASES:raise ValueError()
+                phase=value
+            _snapshot_preflight(provision,snapshot_stage)
             result=TARGET_RECEIPT
     except OwnerCaptureRefused as failure:
         raise IssuedProbeRefused('target_'+failure.phase) from None

@@ -693,19 +693,28 @@ def candidate_from_target(work, app, tmp, target, staging, export, ids, *, hint=
 
     The public convert guard still prevents this candidate from performing a real import.
     """
+    observe=getattr(work,'_emqx_build_stage',None)
+    def stage(name):
+        if observe is not None:observe(name)
     def execute(command):
         return work.runner(app).podman('exec', target.container, *command, timeout=120,
                                       max_output=MAX_HOCON, check=False)
     if (target.env.get('EMQX_LOG_DIR', LOG_TARGET) != LOG_TARGET or
             target.env.get('EMQX_ETC_DIR', '/opt/emqx/etc') != '/opt/emqx/etc'):
         raise BackupError('incompatible', 'EMQX 自訂日誌目錄尚未支援。')
+    stage('target_config')
     original = read_effective_config(execute)
+    stage('target_references')
     required = configuration_references(original, target.files, target.secrets)
+    stage('target_tls')
     fingerprints = tls_fingerprints(execute, image_tls_references(original))
+    stage('target_snapshot')
     snapshot = snapshot_target_volume(work, app, target.data_volume, staging, required)
     # Reject a moving configuration rather than mixing two generations of files/settings.
+    stage('target_consistency')
     if read_effective_config(execute) != original:
         raise BackupError('incompatible', 'EMQX 設定於快照期間改變，已停止。')
+    stage('target_runtime')
     return target_broker(work, tmp, target, export, ids, hint=hint,
                          target_snapshot=snapshot, target_config=original, image_fingerprints=fingerprints)
 

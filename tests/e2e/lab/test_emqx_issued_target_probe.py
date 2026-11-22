@@ -55,7 +55,7 @@ class ProbeTests(unittest.TestCase):
     def invoke(self):
         with patch.object(m,'OwnerProvision',return_value=self.provision), \
              patch.object(m,'_full_restore_budget'),patch.object(m,'_opt_in_private_unit'), \
-             patch.object(m,'_ready'),patch.object(m,'issued_fixture_observer',side_effect=self.observer), \
+             patch.object(m,'_ready'),patch.object(m,'_snapshot_preflight'),patch.object(m,'issued_fixture_observer',side_effect=self.observer), \
              patch.object(m,'owner_target_readers',side_effect=self.readers), \
              patch.object(self.provision,'cleanup',side_effect=self.cleanup):
             return m.run_issued_target_probe()
