@@ -19,7 +19,7 @@ from emqx_semantic_readers import (
 class OwnerFileRefused(SemanticRefused):
     def __init__(self,phase):
         super().__init__()
-        self.phase=phase if phase in ('profile','contract','document','walk','file_location','file_path','file_key','scalar','syntax','vendor_observer','receipt','register') else 'contract'
+        self.phase=phase if phase in ('profile','contract','document','walk','file_location','file_path','file_key','scalar','scalar_substitution','scalar_file_scheme','scalar_env_scheme','scalar_vault_scheme','scalar_depth','syntax','vendor_observer','receipt','register') else 'contract'
 
 PROFILE = 'owner-pinned-image-vendor-acl-v1'
 LITERAL = '${EMQX_ETC_DIR}/acl.conf'
@@ -108,6 +108,12 @@ def read_owner_file_hocon(raw, parser=None, *, profile, product_image):
             stage='walk'
             if type(value) not in (dict, list):
                 stage='scalar'
+                if depth>16:stage='scalar_depth'
+                elif type(value) is str:
+                    if '${' in value:stage='scalar_substitution'
+                    elif 'file:' in value:stage='scalar_file_scheme'
+                    elif 'env:' in value:stage='scalar_env_scheme'
+                    elif 'vault:' in value:stage='scalar_vault_scheme'
                 _json_walk(value, result, depth)
                 return
             result.tick(depth)
