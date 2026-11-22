@@ -48,8 +48,8 @@ try:
  mode=exact(1)
  if mode==b'P':
   print('ARM DEPENDENCIES PASSED',flush=True);raise SystemExit(0)
- if mode!=b'R':raise ValueError()
- runpy.run_path(str(work/'tests/e2e/lab/emqx_arm_cold_owner.py'),run_name='__main__')
+ if mode not in (b'R',b'C'):raise ValueError()
+ runpy.run_path(str(work/'tests/e2e/lab/emqx_arm_cold_owner.py'),run_name='__main__',init_globals={'CONFIGURATION_ONLY':mode==b'C'})
 finally:
  if work is not None:shutil.rmtree(work)
 '''
@@ -74,7 +74,8 @@ def main():
     try:
         deps=dependencies()
         probe=sys.argv[1:]==['--probe']
-        if sys.argv[1:] and not probe:raise ValueError()
+        configuration=sys.argv[1:]==['--configuration']
+        if sys.argv[1:] and not (probe or configuration):raise ValueError()
         if probe:
             files=['backup-engine/woowbackup','tests/e2e/lab/emqx_arm_cold_owner.py']
             code=subprocess.check_output(['git','archive','HEAD',*files],cwd=ROOT)
@@ -96,7 +97,7 @@ def main():
                     if len(values)!=1:raise ValueError()
                     key=values[0].encode('ascii');break
             if key is None or not 1<=len(key)<=1024 or b'\n' in key or b'\r' in key:raise ValueError()
-        files=['backup-engine/woowbackup','tests/e2e/lab/emqx_arm_cold_owner.py','tests/e2e/lab/emqx_cold_history.py','tests/e2e/lab/emqx_cold_terms.escript','tests/e2e/lab/emqx_native_runtime.py','tests/e2e/lab/emqx_semantic_readers.py','tests/e2e/lab/emqx_private_spool.py','tests/e2e/lab/ha_real_fixture.py','tests/e2e/lab/emqx_broker_workload.py','tests/e2e/lab/emqx_runtime_live.py','tests/e2e/lab/emqx_runtime_credentials.py','tests/e2e/lab/emqx_private_boundary.py','tests/e2e/lab/emqx_real_candidate.py']
+        files=['backup-engine/woowbackup','tests/e2e/lab/emqx_arm_cold_owner.py','tests/e2e/lab/emqx_cold_history.py','tests/e2e/lab/emqx_cold_terms.escript','tests/e2e/lab/emqx_native_runtime.py','tests/e2e/lab/emqx_semantic_readers.py','tests/e2e/lab/emqx_private_spool.py','tests/e2e/lab/ha_real_fixture.py','tests/e2e/lab/emqx_broker_workload.py','tests/e2e/lab/emqx_runtime_live.py','tests/e2e/lab/emqx_runtime_credentials.py','tests/e2e/lab/emqx_private_boundary.py','tests/e2e/lab/emqx_real_candidate.py','tests/e2e/lab/emqx_source_consumer.py','tests/e2e/lab/emqx_native_hocon.py','tests/e2e/lab/emqx_hocon_native.escript']
         code=subprocess.check_output(['git','archive','HEAD',*files],cwd=ROOT)
         fd=os.open(ARCHIVE,os.O_RDONLY|os.O_NOFOLLOW)
         with os.fdopen(fd,'rb') as archive:
@@ -104,7 +105,7 @@ def main():
             if not stat.S_ISREG(before.st_mode) or not 0<before.st_size<=512*1024*1024:raise ValueError()
             child=subprocess.Popen([str(ROOT/'tests/e2e/lab/owner.sh'),'d','/usr/bin/python3','-c',BOOTSTRAP],stdin=subprocess.PIPE,stderr=subprocess.DEVNULL)
             child.stdin.write(struct.pack('!Q',len(code)));child.stdin.write(code)
-            child.stdin.write(struct.pack('!Q',len(deps)));child.stdin.write(deps);child.stdin.write(b'R')
+            child.stdin.write(struct.pack('!Q',len(deps)));child.stdin.write(deps);child.stdin.write(b'C' if configuration else b'R')
             child.stdin.write(struct.pack('!I',len(key)));child.stdin.write(key)
             child.stdin.write(struct.pack('!Q',before.st_size))
             digest=hashlib.sha256()

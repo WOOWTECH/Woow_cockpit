@@ -122,6 +122,30 @@ def main():
                         if sum(kind=='schema-dat' for raw,kind in cold.values())!=1:
                             raise RuntimeError('inventory-refused')
                         emit(scan,'SELECT','PASSED')
+                        if globals().get('CONFIGURATION_ONLY',False):
+                            from emqx_native_hocon import native_hocon
+                            from emqx_semantic_readers import read_hocon
+                            from emqx_source_consumer import addon_values
+                            stage='CONFIGURATION'
+                            spool.seek(0)
+                            config_count=0
+                            with tarfile.open(fileobj=spool,mode='r:') as archive:
+                                for member in archive:
+                                    if not member.isfile():continue
+                                    name=habackup.normalize(member.name)
+                                    if name not in ('addon.json',ha_emqx.DATA+'/configs/cluster.hocon'):
+                                        continue
+                                    if not 0<member.size<=8388608:raise RuntimeError('config-size-refused')
+                                    with archive.extractfile(member) as content:
+                                        raw=content.read(member.size+1)
+                                    if len(raw)!=member.size:raise RuntimeError('config-eof-refused')
+                                    values=addon_values(raw) if name=='addon.json' else read_hocon(raw,native_hocon).values
+                                    scan.add(values)
+                                    config_count+=1
+                            if config_count!=2:raise RuntimeError('config-inventory-refused')
+                            # Deliberately partial: no target acknowledgement or replay authorization.
+                            emit(scan,'CONFIGURATION','PASSED')
+                            return 0
                         receipts={name:{'kind':kind,'bytes':len(raw),'sha256':hashlib.sha256(raw).hexdigest()}
                                   for name,(raw,kind) in cold.items()}
                         def decode(raw,kind):

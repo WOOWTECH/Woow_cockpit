@@ -29,4 +29,4 @@ postflight() {
     exit "$original"
 }
 trap postflight EXIT
-python3 "$LAB_DIR/emqx_arm_cold_transfer.py"
+python3 "$LAB_DIR/emqx_arm_cold_transfer.py" "$@"
