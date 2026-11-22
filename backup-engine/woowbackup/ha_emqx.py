@@ -827,8 +827,10 @@ def restore_target_settings(tmp, original, read_candidate):
         changed['authentication'] = authn
     if set(changed) & ha_emqx_settings.IMMUTABLE_ROOTS:
         raise BackupError('incompatible', 'EMQX 唯讀啟動設定在匯入後改變，已停止。')
-    if changed:
-        snippet = json.dumps(changed, ensure_ascii=True).encode()
+    from .ha_emqx_acl_preservation import disabled_intermediate, acl_receipt, refuse
+    intermediate = disabled_intermediate(original, before)
+    def load_settings(settings):
+        snippet = json.dumps(settings, ensure_ascii=True).encode()
         try:
             written = tmp.exec('emqx-new', ['sh', '-c', f'umask 077; cat > {WORK}/in/target-settings.hocon'],
                                input=snippet, timeout=120, max_output=64 * 1024, check=False)
@@ -840,7 +842,27 @@ def restore_target_settings(tmp, original, read_candidate):
                 raise ValueError()
         except (BackupError, ValueError):
             raise BackupError('incompatible', '無法恢復 EMQX 目標設定，已停止。') from None
+    baseline = None
+    if intermediate is not None:
+        receipt_read = lambda command: tmp.exec('emqx-new', command, timeout=10,
+                                                max_output=256, check=False)
+        baseline = acl_receipt(receipt_read)
+        if read_effective_config(read_candidate) != before:
+            refuse()
+        load_settings({'authorization': intermediate['authorization']})
+        if (read_effective_config(read_candidate) != intermediate
+                or acl_receipt(receipt_read) != baseline
+                or read_effective_config(read_candidate) != intermediate):
+            refuse()
+    if changed:
+        load_settings(changed)
     after = read_effective_config(read_candidate)
+    if intermediate is not None:
+        final_expected = dict(intermediate)
+        final_expected.update(changed)
+        if (after != final_expected or acl_receipt(receipt_read) != baseline
+                or read_effective_config(read_candidate) != final_expected):
+            refuse()
     if preserved_settings(after) != expected or (authn is not None and after.get('authentication') != authn):
         raise BackupError('incompatible', 'EMQX 匯入後未能保留目標有效設定，已停止。')
 
