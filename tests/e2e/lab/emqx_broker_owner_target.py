@@ -208,8 +208,8 @@ def run_owner_target(root, broker, clients, report, *, owned_container_id):
                     checks['exact_evidence_persisted_scan'] = True
             scan = FullScan()
             # Target-only evidence: no fake source registry/counts, no numeric JSON.
-            raw = (json.dumps({'階段':'目標擷取','結果':'passed',
-                '涵蓋':['MQTT認證','API金鑰','連接器憑證','TLS憑證','目標初始憑證']},
+            raw = (json.dumps({'階段':'目標擷取','結果':'通過',
+                '涵蓋':['訊息認證','介面金鑰','連接器憑證','傳輸憑證','目標初始憑證']},
                 ensure_ascii=False,sort_keys=True,separators=(',', ':'))).encode()
             scan.scan(raw)
             evidence = root / 'owner-target-evidence.json'
