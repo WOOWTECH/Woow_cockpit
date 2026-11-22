@@ -139,7 +139,14 @@ def main():
                                     with archive.extractfile(member) as content:
                                         raw=content.read(member.size+1)
                                     if len(raw)!=member.size:raise RuntimeError('config-eof-refused')
-                                    values=addon_values(raw) if name=='addon.json' else read_hocon(raw,native_hocon).values
+                                    if name=='addon.json':
+                                        stage='ADDON_METADATA'
+                                        values=addon_values(raw)
+                                    else:
+                                        stage='HOCON_NATIVE'
+                                        encoded=native_hocon(raw)
+                                        stage='HOCON_CONTRACT'
+                                        values=read_hocon(raw,lambda source:encoded).values
                                     scan.add(values)
                                     config_count+=1
                             if config_count!=2:raise RuntimeError('config-inventory-refused')

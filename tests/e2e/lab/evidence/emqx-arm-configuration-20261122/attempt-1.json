@@ -1,0 +1,16 @@
+{
+  "source_commit": "7f8d4024131dec28acc30bc3409e59f0c825007c",
+  "scope": "real ARM addon metadata and native HOCON only; no cold traversal or broker",
+  "exit": 1,
+  "elapsed_seconds": 6.702041684882715,
+  "fixed_phases": [
+    "ARM TRANSFER PASSED",
+    "ARM SELECT PASSED",
+    "ARM CONFIGURATION REFUSED",
+    "ARM POSTFLIGHT PASSED"
+  ],
+  "unpublished_stdout_lines": 0,
+  "stderr_bytes_not_published": 0,
+  "stdout_sha256": "52b79b398ce91246316964ab200e67a430d57e97810a1a3dcdf5c8f4579fa6f7",
+  "restore_executed": false
+}
