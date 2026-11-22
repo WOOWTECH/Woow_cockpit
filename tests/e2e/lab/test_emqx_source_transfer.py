@@ -82,7 +82,7 @@ class TransferTests(unittest.TestCase):
                 files = archive.call_args.args[0]
                 for name in ('emqx_source_profiles.py', 'emqx_owner_file_hocon.py',
                              'emqx_vendor_acl.escript', 'emqx_owner_source_capture.py',
-                             'emqx_hocon_context.py','emqx_hocon_context_native.escript','emqx_republish_templates.py'):
+                             'emqx_hocon_context.py','emqx_hocon_context_native.escript','emqx_republish_templates.py','emqx_captured_candidate.py'):
                     self.assertIn('tests/e2e/lab/' + name, files)
                 command = spawn.call_args.args[0]
                 self.assertEqual(command[1:3], ['d', '/usr/bin/python3'])
