@@ -427,13 +427,19 @@ def target_config_snapshot(volume_tar, snapshot_path, required, *, limit=MAX_HOC
 def authorization_file_references(authorization, mounts, *, include_cluster=True):
     """Resolve an already-decoded effective authorization object; reject unsupported sources.
 
-    This covers file ACL sources only, not other EMQX configuration roots. Host paths are
-    never read here. Exact existing read-only file mounts may satisfy an external reference.
+    This covers file ACL sources and exact raw builtin database source objects,
+    not other EMQX configuration roots. Host paths are never read here. Exact
+    existing read-only file mounts may satisfy an external reference. Builtin
+    objects are checked without default expansion or unknown-field stripping.
     """
     if not isinstance(authorization, dict) or not isinstance(authorization.get('sources'), list):
         raise BackupError('incompatible', '無法取得目標 EMQX 的有效授權來源。')
     references = {'configs/cluster.hocon'} if include_cluster else set()
     for source in authorization['sources']:
+        if type(source) is dict and source.get('type') == 'built_in_database':
+            from .ha_emqx_authorizers import builtin_database_references
+            references.update(builtin_database_references(source))
+            continue
         if not isinstance(source, dict) or source.get('type') != 'file':
             raise BackupError('incompatible', '目標 EMQX 使用尚未支援的授權來源。')
         path = source.get('path')
@@ -507,7 +513,12 @@ CONFIG_EXPR = ('io:format("WOOWCFG:~s:END~n", '
 
 
 def read_effective_config(execute):
-    """Read merged broker configuration with bounded output; never expose its body in errors."""
+    """Read merged RAW broker config, not cooked schema-expanded defaults.
+
+    CONFIG_EXPR calls get_raw_config; retain every returned field unchanged so
+    restricted source validators can reject unknown/expanded shapes. Never expose
+    the body in errors.
+    """
     try:
         result = execute(['emqx', 'eval', CONFIG_EXPR])
         body = result.stdout or b''
