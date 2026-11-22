@@ -1,0 +1,14 @@
+{
+  "controller_exit": 0,
+  "stderr_bytes_not_published": 0,
+  "reports": [
+    {
+      "elapsed_seconds": 50.86757610295899,
+      "isolation_cleanup": "passed",
+      "restore_executed": false,
+      "result": "passed",
+      "scope": "actual-issued-target-only",
+      "source_commit": "906ec36541e35f097bb17ae656343163c1f2579f"
+    }
+  ]
+}
