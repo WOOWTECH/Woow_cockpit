@@ -119,3 +119,24 @@ native offline fixture verifies exact catalog equality (50 total tests passed).
 Known fixed directory/root keys and fixed root enable/builtin-storage contexts
 were added. Unknown roots/keys stay other_root/other_key. This increment adds no
 output-directory/inactive profile before actual classification. No lab used.
+
+Prometheus exact inactive job-name increment:
+Public pinned emqx_prometheus_schema:fields(push_gateway) and
+fields(legacy_deprecated_setting) both define job_name binary default
+${name}/instance/${name}~${host} and enable=false. emqx_prometheus:join_url
+renders using only node name/host and cluster_name map. emqx_prometheus_sup:init
+and emqx_prometheus_config:update_push_gateway use the exported enable predicate
+to create/update/stop the exporter. No environment/file lookup is authorized.
+
+Only prometheus.job_name with root enable typed false (no push_gateway), or
+prometheus.push_gateway.job_name with nested enable typed false (no root legacy
+enable/job_name), accepts that exact binary literal. Mixed layouts/active/missing
+flags/custom templates refuse. Existing URL and all other reference guards remain.
+No rendering or execution is done by policy; full native config was decoded into
+Values first. Batch collector uses identical exemption and fixed job_name key /
+prometheus_push_disabled|enabled context, retaining diagnostics for unknowns.
+53 tests passed: includes actual cached pinned public schema/default/enable/
+fixed-context rendering fixture, synthetic five-reader/private scanner integration,
+and active/custom/env/wrong-path/mixed-layout negatives. This is not a live target
+capture; actual target20 only identified the Prometheus template category. Main
+must verify actual exact match in next fresh target attempt. No lab was run.

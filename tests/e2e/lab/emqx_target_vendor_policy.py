@@ -191,3 +191,27 @@ def inactive_default_origins(config, path, value):
                 and listener['websocket'].get('check_origin_enable') == 'false')
     except (KeyError, TypeError, AttributeError):
         return False
+
+
+PROMETHEUS_DEFAULT_JOB = b'${name}/instance/${name}~${host}'
+
+
+def inactive_default_prometheus_job(config, path, value):
+    """Exact pinned node-label template, disabled exporter only; never render it.
+
+    Public emqx_prometheus:join_url renders only name/host/cluster_name. The
+    supervisor/config handler gates creation on the push exporter enable flag.
+    Mixed legacy/new layouts are deliberately unsupported here.
+    """
+    if type(value) is not bytes or value != PROMETHEUS_DEFAULT_JOB:
+        return False
+    prometheus = config.get('prometheus')
+    if type(prometheus) is not dict:
+        return False
+    if path == ('prometheus', 'job_name'):
+        return prometheus.get('enable') == 'false' and 'push_gateway' not in prometheus
+    if path == ('prometheus', 'push_gateway', 'job_name'):
+        gateway = prometheus.get('push_gateway')
+        return (type(gateway) is dict and gateway.get('enable') == 'false'
+                and 'enable' not in prometheus and 'job_name' not in prometheus)
+    return False

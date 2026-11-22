@@ -47,7 +47,7 @@ PINNED_REFERENCE_ROOTS = frozenset(('actions','alarm','api_key','authentication'
 REFERENCE_ROOTS = PINNED_REFERENCE_ROOTS | {'other_root'}
 MAX_REFERENCE_DIAGNOSTICS = 128
 REFERENCE_KEYS = frozenset(('certfile','keyfile','cacertfile','bootstrap_file','init_file','config_files',
-    'crash_dump_file','cookie','path','type','check_origins','origins','responder_url',
+    'crash_dump_file','cookie','path','type','job_name','check_origins','origins','responder_url',
     'root','root_dir','install_dir','data_dir','directory','dir','base_dir','work_dir','log_dir','backup_dir',
     'output_dir','file','filename','url','server','servers','endpoint','bucket',
     'other_file_key','other_key'))
@@ -55,7 +55,8 @@ REFERENCE_CONTEXTS = frozenset(('ssl_disabled','ssl_enabled','wss_disabled','wss
     'ws_disabled','ws_enabled','tcp_disabled','tcp_enabled',
     'dashboard_https_disabled','dashboard_https_enabled','log_console_disabled','log_console_enabled',
     'log_file_disabled','log_file_enabled','root_disabled','root_enabled',
-    'durable_storage_builtin_local','durable_storage_builtin_raft','not_assessed'))
+    'durable_storage_builtin_local','durable_storage_builtin_raft',
+    'prometheus_push_disabled','prometheus_push_enabled','not_assessed'))
 
 
 class OwnerCaptureRefused(TargetCaptureUnsupported):
@@ -173,6 +174,11 @@ def _reference_diagnostic(path,key,config):
             kind='file'
         if type(handler) is dict and handler.get('enable') in ('false','true'):
             context='log_'+kind+('_disabled' if handler['enable']=='false' else '_enabled')
+    if root == 'prometheus' and path[:2] == ('prometheus','push_gateway'):
+        prometheus=config.get('prometheus',{})
+        gateway=prometheus.get('push_gateway',{}) if type(prometheus) is dict else {}
+        if type(gateway) is dict and gateway.get('enable') in ('true','false'):
+            context='prometheus_push_enabled' if gateway['enable']=='true' else 'prometheus_push_disabled'
     if context == 'not_assessed' and root in PINNED_REFERENCE_ROOTS:
         subtree=config.get(root,{})
         if type(subtree) is dict and subtree.get('enable') in ('true','false'):
@@ -190,10 +196,10 @@ def _reference_diagnostic(path,key,config):
 def _no_refs(value, key='', path=(), config=None, vendor_policy=None):
     if config is None:
         config=value
-    from emqx_target_vendor_policy import inactive_default_origins
+    from emqx_target_vendor_policy import inactive_default_origins, inactive_default_prometheus_job
     if vendor_policy is not None and vendor_policy.allows_acl_path(config, path, value):
         return
-    if inactive_default_origins(config, path, value):
+    if inactive_default_origins(config, path, value) or inactive_default_prometheus_job(config,path,value):
         return
     def refuse(reason):
         raise OwnerCaptureRefused('references',reason,_reference_diagnostic(path,key,config))
@@ -226,7 +232,7 @@ def _reference_failure_batch(config, vendor_policy=None):
     No dynamic path component/value is retained. Bound the distinct public set,
     continue traversal on overflow, and report truncation rather than full proof.
     """
-    from emqx_target_vendor_policy import inactive_default_origins
+    from emqx_target_vendor_policy import inactive_default_origins, inactive_default_prometheus_job
     found, truncated = set(), False
     def record(failure):
         nonlocal truncated
@@ -240,7 +246,7 @@ def _reference_failure_batch(config, vendor_policy=None):
             else:
                 truncated=True
     def walk(value, key='', path=()):
-        if inactive_default_origins(config,path,value):
+        if inactive_default_origins(config,path,value) or inactive_default_prometheus_job(config,path,value):
             return
         if vendor_policy is not None and vendor_policy.allows_acl_path(config,path,value):
             return
