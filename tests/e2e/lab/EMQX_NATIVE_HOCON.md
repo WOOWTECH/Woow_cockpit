@@ -83,3 +83,29 @@ VOLUME creation with `--image-volume=ignore`, use the immutable image ID, and
 clean/check only their invocation-random container name. No container/volume
 inventory or production mount is consulted. Native VM atom cap is 65536 and
 default process max heap 8388608 words (64MiB on this amd64 image).
+
+## AST depth accounting follow-up (base f951eab)
+
+`leaves/2` charged depth for every `$hcVal` box, field tuple, keypath and list
+as well as objects and arrays. hocon 0.44.0's public boxed AST represents each
+configuration container with multiple such wrappers, so the old depth32 measured
+parser representation rather than configuration nesting. The fix counts object
+and array containers only; it still walks all overwritten/concatenated components
+and applies the existing reference/file-key checks. The numeric depth32, tokens,
+input/output, Python semantic bounds and runtime resource limits are unchanged.
+The io_lib string predicate is unchanged; no claim that it caused the refusal.
+
+Two generated native regressions add realistic nested authentication/body/
+credentials, overwritten passwords, concatenation, Unicode and arrays, plus
+40-level refusal and nested file/variable/include refusal. These native cases
+are NOT yet executed here: host erl/escript are absent, and the authorized
+isolated wrapper reports the exact pinned public image as unknown. No pull,
+production Podman fallback, dev-d operation or real source read occurred.
+The patch addresses the static traversal overcount; confirmation that it resolves
+main's real SYNTAX refusal remains pending its authorized owner execution.
+
+Code-only verification: 26/26 generated semantic/source/cold-consumer regressions
+passed; Python test syntax compilation and git diff --check passed. No native
+PASS is inferred from these results. In an already authorized native test
+context, run the two added NativeTests methods in test_emqx_native_hocon before
+accepting the runtime behavior; retain all current real-source gates meanwhile.

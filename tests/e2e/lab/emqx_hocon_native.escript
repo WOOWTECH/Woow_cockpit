@@ -48,10 +48,15 @@ main(Args) ->
 %% Reject reference nodes again on the parsed AST; no file/env resolution APIs.
 leaves(_, D) when D > 32 -> throw(depth);
 leaves(#{'$hcTyp' := T}, _) when T =:= include; T =:= variable -> throw(reference);
-leaves(#{'$hcVal' := V}, D) -> leaves(V, D+1);
-leaves({keypath, V}, D) -> leaves(V, D+1);
+%% Count configuration containers, not the parser's boxes/list/field plumbing.
+%% A single nested object includes a box, a field tuple and often concat lists.
+%% Charging each wrapper rejects ordinary auth/connector nesting as depth >32.
+leaves(#{'$hcTyp' := T, '$hcVal' := V}, D) when T =:= object; T =:= array ->
+    leaves(V, D+1);
+leaves(#{'$hcVal' := V}, D) -> leaves(V, D);
+leaves({keypath, V}, D) -> leaves(V, D);
 leaves({#{'$hcTyp' := key} = K,V}, D) ->
-    Keys = leaves(K,D+1),
+    Keys = leaves(K,D),
     lists:foreach(fun(Key) ->
         Parts = binary:split(Key, <<".">>, [global]),
         lists:foreach(fun(Part) ->
@@ -62,12 +67,12 @@ leaves({#{'$hcTyp' := key} = K,V}, D) ->
             end
         end, Parts)
     end, Keys),
-    Keys ++ leaves(V,D+1);
-leaves({K,V}, D) -> leaves(K,D+1) ++ leaves(V,D+1);
+    Keys ++ leaves(V,D);
+leaves({K,V}, D) -> leaves(K,D) ++ leaves(V,D);
 leaves(V, _) when is_binary(V) -> [V];
 leaves(V, D) when is_list(V) ->
     case io_lib:printable_unicode_list(V) andalso V =/= [] of
         true -> [unicode:characters_to_binary(V)];
-        false -> lists:append([leaves(X,D+1) || X <- V])
+        false -> lists:append([leaves(X,D) || X <- V])
     end;
 leaves(_, _) -> [].

@@ -23,6 +23,40 @@ class NativeTests(unittest.TestCase):
                        b'abcdef', '測試'.encode(), b'array-private'):
             self.assertIn(secret, values)
 
+    def test_native_nested_authentication_keeps_overwritten_and_concat_secrets(self):
+        # Six semantic container levels; hocon's boxed/list/field wrappers must
+        # not exhaust the native depth limit before Python's semantic checks.
+        raw = '''authentication = [{
+            mechanism = password_based
+            backend = http
+            body { credentials { primary {
+                password = "nested-old-private"
+                password = "nested-new-private"
+                token = "nested-left-" "right-private"
+                labels = ["nested-array-private", "unicode-測試"]
+            } } }
+        }]
+        '''.encode()
+        values = read_hocon(raw, native_hocon).values
+        for secret in (b'nested-old-private', b'nested-new-private',
+                       b'nested-left-', b'right-private',
+                       b'nested-left-right-private', b'nested-array-private',
+                       'unicode-測試'.encode()):
+            self.assertIn(secret, values)
+
+    def test_native_semantic_depth_and_nested_dependencies_remain_gated(self):
+        from emqx_native_hocon import native_hocon_diagnostic
+        deep = b'level {' * 40 + b'password="generated-depth-private"' + b'}' * 40
+        self.assertEqual(native_hocon_diagnostic(deep), 'syntax')
+        with self.assertRaises(SemanticRefused):
+            read_hocon(deep, native_hocon)
+        for leaf in (b'keyfile="/private/generated"\nkeyfile=""',
+                     b'password=${?GENERATED_ONLY}',
+                     b'include "generated-missing.conf"'):
+            raw = b'authentication=[{body {credentials {primary {' + leaf + b'}}}}]'
+            with self.subTest(leaf=leaf), self.assertRaises(SemanticRefused):
+                read_hocon(raw, native_hocon)
+
     def test_native_references_syntax_and_external_files_refuse(self):
         for raw in (b'include "missing-private-file"',
                     b'include required("missing-private-file")',
