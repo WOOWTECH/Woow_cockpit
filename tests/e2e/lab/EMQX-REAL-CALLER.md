@@ -226,3 +226,73 @@ increment under development, not additional acceptance credit. The previously
 passed 74-test suite was not rerun. Diff/guard checks exit 0. No production
 secrets read, real archive opened, lab slot used, restore run or Hermes review
 retried. No real-source or service acceptance is claimed.
+
+## Complete-stream consumer minimum — 2026-11-22 (base `dea3e13`)
+
+Callable entry: `emqx_source_consumer.build_consumed_candidate(work, app,
+adapter, target, backup, staging, job_id, password=..., target_documents=...,
+expected_sha256=...)`. Call from an authorized private owner in memory only;
+never put the password or documents in argv, environment, evidence or logs.
+The entry constructs the same Keys used for decrypting from the registered
+password, discards work.log and emits only fixed refusal/cancellation codes.
+No CLI or public API is registered.
+
+The new optional `private_capture` hook on the internal verified builder runs
+inside source_binding before private directory creation or TempObjects. Capture
+reads the actual decrypted selected source to EOF (8 MiB maximum), calls finish,
+strictly validates the complete plaintext tar through habackup, then parses only
+a small supported set: addon.json string leaves, raw/trimmed node cookie, and
+node name. Required members cannot be absent. All source reads subsequently
+replay those same immutable bytes in memory, under the original member identity;
+there is no second archive read that can silently substitute unregistered data.
+The original binding's final source-change check remains active. No plaintext
+archive is saved. Unknown members, links, oversized files and unsupported
+formats refuse before broker execution. The stream limit bounds this minimum
+reader, not a claim that arbitrary broker datasets fit in memory.
+
+Target documents must explicitly supply all five other categories (mqtt-auth,
+api-keys, tls, target-bootstrap, connectors) as bounded self-contained JSON bytes.
+Every nonempty string leaf is registered, including nested leaves. Duplicate
+keys, excessive depth/node counts, non-finite numbers and common external
+reference forms refuse. These are actual JSON readers, not discovery of target
+Podman secrets: the owner still must capture authoritative complete documents.
+An explicit JSON [] means empty; missing categories refuse. No HOCON parser,
+Mnesia decoder, PEM/DER reader, arbitrary reference resolver or owner secret
+transport is claimed. Registry and capture objects remain private.
+
+**Exact real-source blocker:** every currently supported product EMQX source
+requires cluster.hocon and Mnesia. This minimum consumer deliberately rejects
+those formats, so it cannot build a real broker candidate yet. It supplies the
+missing callable complete-stream/registration boundary independently rather
+than acknowledging unknown binary secrets as empty. Future semantic readers
+must integrate here before this private path can admit an actual source.
+Derived broker/export credential registration also remains outstanding.
+The existing acknowledgement-only wrapper is unchanged and gains no coverage
+claim from this new entry.
+
+Generated tests prove complete supported-stream replay and secret registration,
+missing/unknown/truncated/nonzero-trailer refusal, reader/stream bounds,
+reference/duplicate-key rejection and late finish failure before sealing.
+The encrypted integration uses generated SecureTar v3 and the real source_binding,
+decryption and strict archive reader; it explicitly verifies the unsupported
+format refusal and proves no TempObjects creation or private staging residue.
+It is not an actual cold-v3 broker run; no Podman command executes (only fake
+image-label transport in the builder integration).
+
+No current exclusive dev-d slot/headroom authorization was established; the
+existing recorded gate assigns it to Headscale. No lab access was attempted.
+The integrity checkout bd1d7e3 was inspected only; its fallback was not repeated.
+No askpass read, Hermes retry, production Podman, .54, Pi, original modification,
+runner/model change or omnigent stop occurred. Public preservation guard remains.
+
+Final local verification: 49 tests passed in 4.687 s, no skips/failures:
+
+```sh
+TMPDIR="$PWD/.cli-test-tmp" PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=backup-engine:.:tests/e2e/lab python3 -m unittest test_emqx_source_consumer test_emqx_private_boundary test_emqx_real_candidate tests.backup.test_ha_emqx_preservation_guard tests.backup.test_ha_emqx_candidate_flow tests.backup.test_ha_emqx_package
+git diff --check
+git diff --exit-code dea3e13 -- backup-engine/woowbackup/ha_emqx.py
+```
+
+Both diff checks passed; empty local test temp directory removed. Earlier test
+development corrected a truncation fixture that removed only optional tar zero
+padding and corrected a test version argument to use the product semver type.

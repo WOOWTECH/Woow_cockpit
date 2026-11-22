@@ -17,7 +17,7 @@ from ha_real_fixture import require, source_binding
 
 
 def build_verified_candidate(work, app, adapter, target, backup, staging, job_id, *,
-                             expected_sha256, keys):
+                             expected_sha256, keys, private_capture=None):
     """Build/package only; keys and archive bindings live in this call's memory.
 
     `target` must describe the reviewed disposable target with a pinned local
@@ -52,6 +52,8 @@ def build_verified_candidate(work, app, adapter, target, backup, staging, job_id
         # Keep final source validation and role cleanup inside the failure scope.
         with source_binding(backup, app.id, version, expected_sha256, keys=keys,
                             required_encryption='v3') as source:
+            if private_capture is not None:
+                source = private_capture(source)
             for name, function in source.items():
                 setattr(bound, name, function)
             private = Path(tempfile.mkdtemp(prefix=job_id + '-', dir=staging))
