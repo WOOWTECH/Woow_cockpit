@@ -204,7 +204,22 @@ def run_owner_target(root, broker, clients, report, *, owned_container_id):
                 def scan(self, payload):
                     runtime.scan(payload)
                     checks['exact_evidence_runtime_scan'] = True
-                    readers.persisted_values.scan(payload)
+                    try:
+                        readers.persisted_values.scan(payload)
+                    except Exception:
+                        # Fixed public encoding probes only; never inspect or emit
+                        # matched values, lengths, paths, config or table contents.
+                        for label, probe in (
+                            ('structure', b'{"":[],:}'),
+                            ('localized_text', '目標擷取通過訊息認證介面金鑰連接器憑證傳輸憑證'.encode()),
+                        ):
+                            try:
+                                readers.persisted_values.scan(probe)
+                            except Exception:
+                                checks['fixed_encoding_probe_' + label] = False
+                            else:
+                                checks['fixed_encoding_probe_' + label] = True
+                        raise
                     checks['exact_evidence_persisted_scan'] = True
             scan = FullScan()
             # Target-only evidence: no fake source registry/counts, no numeric JSON.
