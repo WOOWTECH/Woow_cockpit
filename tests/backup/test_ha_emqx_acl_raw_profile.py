@@ -69,7 +69,7 @@ class RawAclProfileTests(unittest.TestCase):
             cases.append((put_auth('cache',cache),reason))
         builtin=base['authorization']['sources'][0]
         for sources,reason in [([builtin,builtin],'builtin_duplicate'),
-                ([dict(builtin,max_rules=100)],'builtin_shape'),([builtin,None],'source_shape'),
+                ([dict(builtin,max_rules=99)],'builtin_shape'),([builtin,None],'source_shape'),
                 ([builtin,{'type':'file','path':'/a'},{'type':'file','path':'/b'}],'source_duplicate'),
                 ([builtin,{'type':'http'}],'source_type'),
                 ([builtin,{'type':'file','path':'/a','unknown':True}],'file_fields'),

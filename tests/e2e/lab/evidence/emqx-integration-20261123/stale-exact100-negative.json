@@ -1,0 +1,10 @@
+{
+  "source_commit": "1817e82",
+  "scope": "generated host integration regression; no broker or commercial acceptance",
+  "tests_run": 34,
+  "failures": 2,
+  "failed_method": "RawAclProfileTests.test_every_supported_refusal_class_has_fixed_stage",
+  "cause": "legacy negative fixture still expected exact max_rules integer100 to refuse after observed target compatibility was implemented",
+  "correction": "use unsupported integer99 for the negative fixture; existing exact100 positive and other negative coverage retained",
+  "public_guard_enabled": true
+}
