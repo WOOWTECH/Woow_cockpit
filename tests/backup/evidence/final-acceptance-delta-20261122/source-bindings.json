@@ -1,0 +1,1627 @@
+{
+  "audited_main": "c8471ed8bf1582ccea8d626da102cdd4b045da8f",
+  "bindings": [
+    {
+      "manifest": "tests/e2e/lab/evidence/arm54-service-20261122/source-hashes.json",
+      "field": "files",
+      "source": "backup-engine/systemd/woowtech-cockpit-backup-schedule.service",
+      "recorded_sha256": "302b2003d724ea05b40ec1fe7705c7e9ea52d08a989432cb00c319b9de39a134",
+      "main_sha256": "302b2003d724ea05b40ec1fe7705c7e9ea52d08a989432cb00c319b9de39a134",
+      "matches_main": true,
+      "matching_execution_snapshots": []
+    },
+    {
+      "manifest": "tests/e2e/lab/evidence/arm54-service-20261122/source-hashes.json",
+      "field": "files",
+      "source": "backup-engine/systemd/woowtech-cockpit-backup-schedule.timer",
+      "recorded_sha256": "8120834f5f7969f6e8915fa9f56a9a9755412bdf4714b81db4854caf6a08005e",
+      "main_sha256": "8120834f5f7969f6e8915fa9f56a9a9755412bdf4714b81db4854caf6a08005e",
+      "matches_main": true,
+      "matching_execution_snapshots": []
+    },
+    {
+      "manifest": "tests/e2e/lab/evidence/arm54-service-20261122/source-hashes.json",
+      "field": "files",
+      "source": "backup-engine/woowbackup/__init__.py",
+      "recorded_sha256": "8d53348f729a9c49e0c6a36ce2ac8925599321b6bd83b271a08fc75d54b0fc01",
+      "main_sha256": "8d53348f729a9c49e0c6a36ce2ac8925599321b6bd83b271a08fc75d54b0fc01",
+      "matches_main": true,
+      "matching_execution_snapshots": []
+    },
+    {
+      "manifest": "tests/e2e/lab/evidence/arm54-service-20261122/source-hashes.json",
+      "field": "files",
+      "source": "backup-engine/woowbackup/adapters/__init__.py",
+      "recorded_sha256": "01e63131886127202a5fd33f89bc0264d06b42f268df3960d8f261bd329da3fe",
+      "main_sha256": "01e63131886127202a5fd33f89bc0264d06b42f268df3960d8f261bd329da3fe",
+      "matches_main": true,
+      "matching_execution_snapshots": []
+    },
+    {
+      "manifest": "tests/e2e/lab/evidence/arm54-service-20261122/source-hashes.json",
+      "field": "files",
+      "source": "backup-engine/woowbackup/adapters/base.py",
+      "recorded_sha256": "6c78557a6612faf73f8f1a6b1f98476d401aed173c674c57a8a22f5dcde6b567",
+      "main_sha256": "6c78557a6612faf73f8f1a6b1f98476d401aed173c674c57a8a22f5dcde6b567",
+      "matches_main": true,
+      "matching_execution_snapshots": []
+    },
+    {
+      "manifest": "tests/e2e/lab/evidence/arm54-service-20261122/source-hashes.json",
+      "field": "files",
+      "source": "backup-engine/woowbackup/adapters/quadlet_postgres.py",
+      "recorded_sha256": "8ef2154f073eeba89cdabad38827edda5e34b4abf9e7d2c89f5ca79d7f0a225c",
+      "main_sha256": "8ef2154f073eeba89cdabad38827edda5e34b4abf9e7d2c89f5ca79d7f0a225c",
+      "matches_main": true,
+      "matching_execution_snapshots": []
+    },
+    {
+      "manifest": "tests/e2e/lab/evidence/arm54-service-20261122/source-hashes.json",
+      "field": "files",
+      "source": "backup-engine/woowbackup/archive.py",
+      "recorded_sha256": "85b58635a23a552cbe446ceab6dee9fc914d245c708bc86d2211fc69c39e9d49",
+      "main_sha256": "85b58635a23a552cbe446ceab6dee9fc914d245c708bc86d2211fc69c39e9d49",
+      "matches_main": true,
+      "matching_execution_snapshots": []
+    },
+    {
+      "manifest": "tests/e2e/lab/evidence/arm54-service-20261122/source-hashes.json",
+      "field": "files",
+      "source": "backup-engine/woowbackup/catalog.py",
+      "recorded_sha256": "38d30ed7db8a7e1c903b4096e2f55cff11a191a85bf43cde60808e55b8e5a72c",
+      "main_sha256": "38d30ed7db8a7e1c903b4096e2f55cff11a191a85bf43cde60808e55b8e5a72c",
+      "matches_main": true,
+      "matching_execution_snapshots": []
+    },
+    {
+      "manifest": "tests/e2e/lab/evidence/arm54-service-20261122/source-hashes.json",
+      "field": "files",
+      "source": "backup-engine/woowbackup/catalog_admin.py",
+      "recorded_sha256": "f83d54b81d44dcace1ad774270ee25091149485d896beed7d25a8ca58f046127",
+      "main_sha256": "f83d54b81d44dcace1ad774270ee25091149485d896beed7d25a8ca58f046127",
+      "matches_main": true,
+      "matching_execution_snapshots": []
+    },
+    {
+      "manifest": "tests/e2e/lab/evidence/arm54-service-20261122/source-hashes.json",
+      "field": "files",
+      "source": "backup-engine/woowbackup/cli.py",
+      "recorded_sha256": "ea01da61518a299982ccfdd2e6e9e676c9b4ad06a7384bd89cf85e07a4f96e40",
+      "main_sha256": "ea01da61518a299982ccfdd2e6e9e676c9b4ad06a7384bd89cf85e07a4f96e40",
+      "matches_main": true,
+      "matching_execution_snapshots": []
+    },
+    {
+      "manifest": "tests/e2e/lab/evidence/arm54-service-20261122/source-hashes.json",
+      "field": "files",
+      "source": "backup-engine/woowbackup/deepcheck.py",
+      "recorded_sha256": "949a57f4cf3829fe7f40c57d2a9042e06acc94d786965b0578900f6fbac97ef3",
+      "main_sha256": "949a57f4cf3829fe7f40c57d2a9042e06acc94d786965b0578900f6fbac97ef3",
+      "matches_main": true,
+      "matching_execution_snapshots": []
+    },
+    {
+      "manifest": "tests/e2e/lab/evidence/arm54-service-20261122/source-hashes.json",
+      "field": "files",
+      "source": "backup-engine/woowbackup/digests.py",
+      "recorded_sha256": "89d0b2048c8b2c499e787c5d18f8ea6d1755e0a645b522a1e7837bb7458f10d9",
+      "main_sha256": "89d0b2048c8b2c499e787c5d18f8ea6d1755e0a645b522a1e7837bb7458f10d9",
+      "matches_main": true,
+      "matching_execution_snapshots": []
+    },
+    {
+      "manifest": "tests/e2e/lab/evidence/arm54-service-20261122/source-hashes.json",
+      "field": "files",
+      "source": "backup-engine/woowbackup/errors.py",
+      "recorded_sha256": "c3b66b1c53505c784d697bf0b1a52c55b302cf9081dc7db9eb3ac57e8f2c5e73",
+      "main_sha256": "c3b66b1c53505c784d697bf0b1a52c55b302cf9081dc7db9eb3ac57e8f2c5e73",
+      "matches_main": true,
+      "matching_execution_snapshots": []
+    },
+    {
+      "manifest": "tests/e2e/lab/evidence/arm54-service-20261122/source-hashes.json",
+      "field": "files",
+      "source": "backup-engine/woowbackup/flows.py",
+      "recorded_sha256": "0549b1918760048a8981dcff2755fd9ee74742cb28e3df2a43a88dad74885210",
+      "main_sha256": "0549b1918760048a8981dcff2755fd9ee74742cb28e3df2a43a88dad74885210",
+      "matches_main": true,
+      "matching_execution_snapshots": []
+    },
+    {
+      "manifest": "tests/e2e/lab/evidence/arm54-service-20261122/source-hashes.json",
+      "field": "files",
+      "source": "backup-engine/woowbackup/ha_emqx.py",
+      "recorded_sha256": "00b90c3a97bd7832cd7bd455e71da0dc6536d77493bec36c1dd0eac3343f770f",
+      "main_sha256": "00b90c3a97bd7832cd7bd455e71da0dc6536d77493bec36c1dd0eac3343f770f",
+      "matches_main": true,
+      "matching_execution_snapshots": []
+    },
+    {
+      "manifest": "tests/e2e/lab/evidence/arm54-service-20261122/source-hashes.json",
+      "field": "files",
+      "source": "backup-engine/woowbackup/ha_emqx_settings.py",
+      "recorded_sha256": "97fa19a37b2e63249cd34e7c8261014ae3c55ef1fc1c3046281a626761a73ceb",
+      "main_sha256": "97fa19a37b2e63249cd34e7c8261014ae3c55ef1fc1c3046281a626761a73ceb",
+      "matches_main": true,
+      "matching_execution_snapshots": []
+    },
+    {
+      "manifest": "tests/e2e/lab/evidence/arm54-service-20261122/source-hashes.json",
+      "field": "files",
+      "source": "backup-engine/woowbackup/ha_headscale.py",
+      "recorded_sha256": "ca834c2b99e39783a33c3d363f6647822c2fa99befdff3b2ce2b241ec971a9b8",
+      "main_sha256": "ca834c2b99e39783a33c3d363f6647822c2fa99befdff3b2ce2b241ec971a9b8",
+      "matches_main": true,
+      "matching_execution_snapshots": []
+    },
+    {
+      "manifest": "tests/e2e/lab/evidence/arm54-service-20261122/source-hashes.json",
+      "field": "files",
+      "source": "backup-engine/woowbackup/ha_hermes.py",
+      "recorded_sha256": "066d44ac4a42aac013f1287a6a0714e0484fa98b9b635e8cff4a5b1322f070c6",
+      "main_sha256": "066d44ac4a42aac013f1287a6a0714e0484fa98b9b635e8cff4a5b1322f070c6",
+      "matches_main": true,
+      "matching_execution_snapshots": []
+    },
+    {
+      "manifest": "tests/e2e/lab/evidence/arm54-service-20261122/source-hashes.json",
+      "field": "files",
+      "source": "backup-engine/woowbackup/ha_litellm_candidate.py",
+      "recorded_sha256": "0faa5630c5bcf9293c01e830aaa3f3658818a321412da247f800925d64261449",
+      "main_sha256": "0faa5630c5bcf9293c01e830aaa3f3658818a321412da247f800925d64261449",
+      "matches_main": true,
+      "matching_execution_snapshots": []
+    },
+    {
+      "manifest": "tests/e2e/lab/evidence/arm54-service-20261122/source-hashes.json",
+      "field": "files",
+      "source": "backup-engine/woowbackup/ha_n8n.py",
+      "recorded_sha256": "4c143f314ea36d04b54cb4d7de6fc17d2f04baf46402d4f079e1becd3d5e4c86",
+      "main_sha256": "4c143f314ea36d04b54cb4d7de6fc17d2f04baf46402d4f079e1becd3d5e4c86",
+      "matches_main": true,
+      "matching_execution_snapshots": []
+    },
+    {
+      "manifest": "tests/e2e/lab/evidence/arm54-service-20261122/source-hashes.json",
+      "field": "files",
+      "source": "backup-engine/woowbackup/ha_odoo.py",
+      "recorded_sha256": "f2b5d0fadf8486f1c5b62c3eff509fb79c5f7aafaa99f582f549863cca214e37",
+      "main_sha256": "f2b5d0fadf8486f1c5b62c3eff509fb79c5f7aafaa99f582f549863cca214e37",
+      "matches_main": true,
+      "matching_execution_snapshots": []
+    },
+    {
+      "manifest": "tests/e2e/lab/evidence/arm54-service-20261122/source-hashes.json",
+      "field": "files",
+      "source": "backup-engine/woowbackup/ha_omnigent.py",
+      "recorded_sha256": "cd16ee496fdb71139a5f8f96be15309370e4b1b5951d9319ff9487e8b20bc278",
+      "main_sha256": "cd16ee496fdb71139a5f8f96be15309370e4b1b5951d9319ff9487e8b20bc278",
+      "matches_main": true,
+      "matching_execution_snapshots": []
+    },
+    {
+      "manifest": "tests/e2e/lab/evidence/arm54-service-20261122/source-hashes.json",
+      "field": "files",
+      "source": "backup-engine/woowbackup/haapps.py",
+      "recorded_sha256": "298a2f634084fc130701abe3c3ef1da9713ca112128c551fc635714c0015f98e",
+      "main_sha256": "298a2f634084fc130701abe3c3ef1da9713ca112128c551fc635714c0015f98e",
+      "matches_main": true,
+      "matching_execution_snapshots": []
+    },
+    {
+      "manifest": "tests/e2e/lab/evidence/arm54-service-20261122/source-hashes.json",
+      "field": "files",
+      "source": "backup-engine/woowbackup/habackup.py",
+      "recorded_sha256": "d07cc1ad26558e1638c622c7175dafb72dc0bca555778f502e493470d6171545",
+      "main_sha256": "d07cc1ad26558e1638c622c7175dafb72dc0bca555778f502e493470d6171545",
+      "matches_main": true,
+      "matching_execution_snapshots": []
+    },
+    {
+      "manifest": "tests/e2e/lab/evidence/arm54-service-20261122/source-hashes.json",
+      "field": "files",
+      "source": "backup-engine/woowbackup/hacommon.py",
+      "recorded_sha256": "ec5073c8af67e18a293c2669627bf0ef3b0bfbeef833db64c1d3415de6246652",
+      "main_sha256": "ec5073c8af67e18a293c2669627bf0ef3b0bfbeef833db64c1d3415de6246652",
+      "matches_main": true,
+      "matching_execution_snapshots": []
+    },
+    {
+      "manifest": "tests/e2e/lab/evidence/arm54-service-20261122/source-hashes.json",
+      "field": "files",
+      "source": "backup-engine/woowbackup/haimport.py",
+      "recorded_sha256": "27a32eb950bddc322a4c47313a48ed91fa7f2ada82d70cfef08bfcc503710cec",
+      "main_sha256": "27a32eb950bddc322a4c47313a48ed91fa7f2ada82d70cfef08bfcc503710cec",
+      "matches_main": true,
+      "matching_execution_snapshots": []
+    },
+    {
+      "manifest": "tests/e2e/lab/evidence/arm54-service-20261122/source-hashes.json",
+      "field": "files",
+      "source": "backup-engine/woowbackup/hasecuretar.py",
+      "recorded_sha256": "bc68328893ac4130a2f3e670464fab5cfc596962f305ab01529dda73c337b1cc",
+      "main_sha256": "bc68328893ac4130a2f3e670464fab5cfc596962f305ab01529dda73c337b1cc",
+      "matches_main": true,
+      "matching_execution_snapshots": []
+    },
+    {
+      "manifest": "tests/e2e/lab/evidence/arm54-service-20261122/source-hashes.json",
+      "field": "files",
+      "source": "backup-engine/woowbackup/hasqlite.py",
+      "recorded_sha256": "f6e6aef2e142608e0ac911b0a6105b8c85f9f2a659dc4991180f70773a4ed7d4",
+      "main_sha256": "f6e6aef2e142608e0ac911b0a6105b8c85f9f2a659dc4991180f70773a4ed7d4",
+      "matches_main": true,
+      "matching_execution_snapshots": []
+    },
+    {
+      "manifest": "tests/e2e/lab/evidence/arm54-service-20261122/source-hashes.json",
+      "field": "files",
+      "source": "backup-engine/woowbackup/hastore.py",
+      "recorded_sha256": "68d2936ac71335482d4f9d4868cd64e4aee48d4417bd90ec48a5d54f0bb07de5",
+      "main_sha256": "68d2936ac71335482d4f9d4868cd64e4aee48d4417bd90ec48a5d54f0bb07de5",
+      "matches_main": true,
+      "matching_execution_snapshots": []
+    },
+    {
+      "manifest": "tests/e2e/lab/evidence/arm54-service-20261122/source-hashes.json",
+      "field": "files",
+      "source": "backup-engine/woowbackup/jobs.py",
+      "recorded_sha256": "77c56e70e3ff0bbea2066a3c42aa360fe219f1329b0e54c4063efd6fb140c492",
+      "main_sha256": "77c56e70e3ff0bbea2066a3c42aa360fe219f1329b0e54c4063efd6fb140c492",
+      "matches_main": true,
+      "matching_execution_snapshots": []
+    },
+    {
+      "manifest": "tests/e2e/lab/evidence/arm54-service-20261122/source-hashes.json",
+      "field": "files",
+      "source": "backup-engine/woowbackup/keys.py",
+      "recorded_sha256": "9ab11bb4c11b36e3589c069af43ad9b7500d6596bf39932612d384a40c28379e",
+      "main_sha256": "9ab11bb4c11b36e3589c069af43ad9b7500d6596bf39932612d384a40c28379e",
+      "matches_main": true,
+      "matching_execution_snapshots": []
+    },
+    {
+      "manifest": "tests/e2e/lab/evidence/arm54-service-20261122/source-hashes.json",
+      "field": "files",
+      "source": "backup-engine/woowbackup/nested.py",
+      "recorded_sha256": "7b00f09fd0d8e5ba116fccc09233411c6ee7946092daf711df1c72f43db86ee4",
+      "main_sha256": "7b00f09fd0d8e5ba116fccc09233411c6ee7946092daf711df1c72f43db86ee4",
+      "matches_main": true,
+      "matching_execution_snapshots": []
+    },
+    {
+      "manifest": "tests/e2e/lab/evidence/arm54-service-20261122/source-hashes.json",
+      "field": "files",
+      "source": "backup-engine/woowbackup/paths.py",
+      "recorded_sha256": "4ff2b0556ef53ecc6c231d66ea2650189f6af8e13b16d616cdeabc2c4ee8e4b0",
+      "main_sha256": "4ff2b0556ef53ecc6c231d66ea2650189f6af8e13b16d616cdeabc2c4ee8e4b0",
+      "matches_main": true,
+      "matching_execution_snapshots": []
+    },
+    {
+      "manifest": "tests/e2e/lab/evidence/arm54-service-20261122/source-hashes.json",
+      "field": "files",
+      "source": "backup-engine/woowbackup/podman.py",
+      "recorded_sha256": "ee7568ba0fcd49644641afa24a2aac7309faaa008f21effbf79c4d4854038d9f",
+      "main_sha256": "ee7568ba0fcd49644641afa24a2aac7309faaa008f21effbf79c4d4854038d9f",
+      "matches_main": true,
+      "matching_execution_snapshots": []
+    },
+    {
+      "manifest": "tests/e2e/lab/evidence/arm54-service-20261122/source-hashes.json",
+      "field": "files",
+      "source": "backup-engine/woowbackup/retention.py",
+      "recorded_sha256": "57b37110d13b514c3c50aaa9b70632622b457bde6faf4108684404785afee3d8",
+      "main_sha256": "57b37110d13b514c3c50aaa9b70632622b457bde6faf4108684404785afee3d8",
+      "matches_main": true,
+      "matching_execution_snapshots": []
+    },
+    {
+      "manifest": "tests/e2e/lab/evidence/arm54-service-20261122/source-hashes.json",
+      "field": "files",
+      "source": "backup-engine/woowbackup/schedule.py",
+      "recorded_sha256": "284ee61926c411a81b5ee6e1fa5741d29f2e93e1ce1e5c497c9fe4dda9f21f05",
+      "main_sha256": "284ee61926c411a81b5ee6e1fa5741d29f2e93e1ce1e5c497c9fe4dda9f21f05",
+      "matches_main": true,
+      "matching_execution_snapshots": []
+    },
+    {
+      "manifest": "tests/e2e/lab/evidence/arm54-service-20261122/source-hashes.json",
+      "field": "files",
+      "source": "backup-engine/woowbackup/settings.py",
+      "recorded_sha256": "fe4426b9c8facebef65e9a109835f0a4657dac9a58e14da8704db0301fd9f6a1",
+      "main_sha256": "fe4426b9c8facebef65e9a109835f0a4657dac9a58e14da8704db0301fd9f6a1",
+      "matches_main": true,
+      "matching_execution_snapshots": []
+    },
+    {
+      "manifest": "tests/e2e/lab/evidence/arm54-service-20261122/source-hashes.json",
+      "field": "files",
+      "source": "backup-engine/woowbackup/storage.py",
+      "recorded_sha256": "2a0db85627e0fea7ec2b1bd7a4234313b79ece6fc646bd1506bc4bf1a0773ccd",
+      "main_sha256": "2a0db85627e0fea7ec2b1bd7a4234313b79ece6fc646bd1506bc4bf1a0773ccd",
+      "matches_main": true,
+      "matching_execution_snapshots": []
+    },
+    {
+      "manifest": "tests/e2e/lab/evidence/arm54-service-20261122/source-hashes.json",
+      "field": "files",
+      "source": "backup-engine/woowbackup/suggest.py",
+      "recorded_sha256": "6a61c3094680a72442e7b37a15d4709b2590dfd946047c2025641412f79f2a1c",
+      "main_sha256": "6a61c3094680a72442e7b37a15d4709b2590dfd946047c2025641412f79f2a1c",
+      "matches_main": true,
+      "matching_execution_snapshots": []
+    },
+    {
+      "manifest": "tests/e2e/lab/evidence/arm54-service-20261122/source-hashes.json",
+      "field": "files",
+      "source": "backup-engine/woowbackup/tempctr.py",
+      "recorded_sha256": "21a6baa2c72feb59cf0a3cc3ee7b25c13da1bbd3066a094a0a1ebbaf309c35cd",
+      "main_sha256": "21a6baa2c72feb59cf0a3cc3ee7b25c13da1bbd3066a094a0a1ebbaf309c35cd",
+      "matches_main": true,
+      "matching_execution_snapshots": []
+    },
+    {
+      "manifest": "tests/e2e/lab/evidence/arm54-service-20261122/source-hashes.json",
+      "field": "files",
+      "source": "backup-engine/woowbackup/util.py",
+      "recorded_sha256": "4b82e496e594d25ef6c80cf2937b1d78df7e6a5ecda249e6f166146ee4d76279",
+      "main_sha256": "4b82e496e594d25ef6c80cf2937b1d78df7e6a5ecda249e6f166146ee4d76279",
+      "matches_main": true,
+      "matching_execution_snapshots": []
+    },
+    {
+      "manifest": "tests/e2e/lab/evidence/arm54-service-20261122/source-hashes.json",
+      "field": "files",
+      "source": "backup-engine/woowtech-cockpit-backup",
+      "recorded_sha256": "539c32a6a0c7689797f2d571f2ea56a038a79a647955df42f4cfb97a6bc03678",
+      "main_sha256": "539c32a6a0c7689797f2d571f2ea56a038a79a647955df42f4cfb97a6bc03678",
+      "matches_main": true,
+      "matching_execution_snapshots": []
+    },
+    {
+      "manifest": "tests/e2e/lab/evidence/arm54-service-20261122/source-hashes.json",
+      "field": "files",
+      "source": "tests/e2e/lab/arm54_build_native.py",
+      "recorded_sha256": "e11d25537ef3063a7c1882ef9ac4bb99965bf52e7926fe9b2c916bfd14b4d40e",
+      "main_sha256": "2fe64604bdddd1e76b0555c6fb649d356064eda9716940628b9cb3ff69ccee54",
+      "matches_main": false,
+      "matching_execution_snapshots": [
+        "tests/e2e/lab/evidence/arm54-service-20261122/native-package-build.source.txt"
+      ]
+    },
+    {
+      "manifest": "tests/e2e/lab/evidence/arm54-service-20261122/source-hashes.json",
+      "field": "files",
+      "source": "tests/e2e/lab/arm54_native_transfer.py",
+      "recorded_sha256": "89e709678bcc3a0f87902c363f020a94e6eb9343879b344f92ef6e8035f50283",
+      "main_sha256": "89e709678bcc3a0f87902c363f020a94e6eb9343879b344f92ef6e8035f50283",
+      "matches_main": true,
+      "matching_execution_snapshots": []
+    },
+    {
+      "manifest": "tests/e2e/lab/evidence/arm54-service-20261122/source-hashes.json",
+      "field": "files",
+      "source": "tests/e2e/lab/arm54_owned_runtime.py",
+      "recorded_sha256": "c74ed266cbc01a12a5fb3d12fb4f8ea7106a29a4de7a2a6674784a206b27b818",
+      "main_sha256": "c74ed266cbc01a12a5fb3d12fb4f8ea7106a29a4de7a2a6674784a206b27b818",
+      "matches_main": true,
+      "matching_execution_snapshots": []
+    },
+    {
+      "manifest": "tests/e2e/lab/evidence/arm54-service-20261122/source-hashes.json",
+      "field": "files",
+      "source": "tests/e2e/lab/evidence/arm54-service-20261122/arm-platform-inputs.json",
+      "recorded_sha256": "d9c2456a1acce9fb468c3492d39ba54876549868770d2aca8edd0a4ff3aac701",
+      "main_sha256": "d9c2456a1acce9fb468c3492d39ba54876549868770d2aca8edd0a4ff3aac701",
+      "matches_main": true,
+      "matching_execution_snapshots": []
+    },
+    {
+      "manifest": "tests/e2e/lab/evidence/arm54-service-20261122/source-hashes.json",
+      "field": "files",
+      "source": "tests/e2e/lab/evidence/arm54-service-20261122/package.Containerfile",
+      "recorded_sha256": "02f850bfe625cec627d8da94c3b61bd802990b75b0fd55d6ef164c8c2b7f403d",
+      "main_sha256": "02f850bfe625cec627d8da94c3b61bd802990b75b0fd55d6ef164c8c2b7f403d",
+      "matches_main": true,
+      "matching_execution_snapshots": []
+    },
+    {
+      "manifest": "tests/e2e/lab/evidence/arm54-service-20261122/final-harness-hashes.json",
+      "field": null,
+      "source": "tests/e2e/lab/arm54_binary_provenance_native.py",
+      "recorded_sha256": "edc05e3306b16e13925331c103110c0c3e81edd380dc2c1e4478edb25339c62d",
+      "main_sha256": "edc05e3306b16e13925331c103110c0c3e81edd380dc2c1e4478edb25339c62d",
+      "matches_main": true,
+      "matching_execution_snapshots": [
+        "tests/e2e/lab/evidence/arm54-service-20261122/package-binary-provenance.source.txt"
+      ]
+    },
+    {
+      "manifest": "tests/e2e/lab/evidence/arm54-service-20261122/final-harness-hashes.json",
+      "field": null,
+      "source": "tests/e2e/lab/arm54_build_native.py",
+      "recorded_sha256": "2fe64604bdddd1e76b0555c6fb649d356064eda9716940628b9cb3ff69ccee54",
+      "main_sha256": "2fe64604bdddd1e76b0555c6fb649d356064eda9716940628b9cb3ff69ccee54",
+      "matches_main": true,
+      "matching_execution_snapshots": []
+    },
+    {
+      "manifest": "tests/e2e/lab/evidence/arm54-service-20261122/final-harness-hashes.json",
+      "field": null,
+      "source": "tests/e2e/lab/arm54_client_diagnostic_native.py",
+      "recorded_sha256": "f0a7dcac8e29da1cf1d2a474d48096805d80cb040a8e3a3c8156412c1cf442b6",
+      "main_sha256": "f0a7dcac8e29da1cf1d2a474d48096805d80cb040a8e3a3c8156412c1cf442b6",
+      "matches_main": true,
+      "matching_execution_snapshots": [
+        "tests/e2e/lab/evidence/arm54-service-20261122/private-client-log-predicates.source.txt"
+      ]
+    },
+    {
+      "manifest": "tests/e2e/lab/evidence/arm54-service-20261122/final-harness-hashes.json",
+      "field": null,
+      "source": "tests/e2e/lab/arm54_client_observe_native.py",
+      "recorded_sha256": "42a4c45fd5146b083c8d39fbf6197f71466c9b7a49b296a50dfbb2cf8c78d5c6",
+      "main_sha256": "42a4c45fd5146b083c8d39fbf6197f71466c9b7a49b296a50dfbb2cf8c78d5c6",
+      "matches_main": true,
+      "matching_execution_snapshots": [
+        "tests/e2e/lab/evidence/arm54-service-20261122/client-live-observation.source.txt"
+      ]
+    },
+    {
+      "manifest": "tests/e2e/lab/evidence/arm54-service-20261122/final-harness-hashes.json",
+      "field": null,
+      "source": "tests/e2e/lab/arm54_client_words_native.py",
+      "recorded_sha256": "4b68a9db4427d85ad7d52d7efbb56f2f4493cd0bf3127e03110d83ed5e1b3e4c",
+      "main_sha256": "4b68a9db4427d85ad7d52d7efbb56f2f4493cd0bf3127e03110d83ed5e1b3e4c",
+      "matches_main": true,
+      "matching_execution_snapshots": [
+        "tests/e2e/lab/evidence/arm54-service-20261122/client-control-fixed-vocabulary.source.txt"
+      ]
+    },
+    {
+      "manifest": "tests/e2e/lab/evidence/arm54-service-20261122/final-harness-hashes.json",
+      "field": null,
+      "source": "tests/e2e/lab/arm54_image_sources.py",
+      "recorded_sha256": "a8f0332a7eb446fda714aafd01d7e78f59fe71d910165e0dba5f2390bb7232ab",
+      "main_sha256": "a8f0332a7eb446fda714aafd01d7e78f59fe71d910165e0dba5f2390bb7232ab",
+      "matches_main": true,
+      "matching_execution_snapshots": []
+    },
+    {
+      "manifest": "tests/e2e/lab/evidence/arm54-service-20261122/final-harness-hashes.json",
+      "field": null,
+      "source": "tests/e2e/lab/arm54_lifecycle_native.py",
+      "recorded_sha256": "5eeefe118e7cc5a8f2e448f10d198152599e776b1c64a13b8653a3f3f93aeffb",
+      "main_sha256": "5eeefe118e7cc5a8f2e448f10d198152599e776b1c64a13b8653a3f3f93aeffb",
+      "matches_main": true,
+      "matching_execution_snapshots": []
+    },
+    {
+      "manifest": "tests/e2e/lab/evidence/arm54-service-20261122/final-harness-hashes.json",
+      "field": null,
+      "source": "tests/e2e/lab/arm54_namespace_native.py",
+      "recorded_sha256": "53c54f95442f9f98d61a176f6a62edf079996891729d4b68fdc800ad7478904c",
+      "main_sha256": "53c54f95442f9f98d61a176f6a62edf079996891729d4b68fdc800ad7478904c",
+      "matches_main": true,
+      "matching_execution_snapshots": [
+        "tests/e2e/lab/evidence/arm54-service-20261122/namespace-and-product-version.source.txt"
+      ]
+    },
+    {
+      "manifest": "tests/e2e/lab/evidence/arm54-service-20261122/final-harness-hashes.json",
+      "field": null,
+      "source": "tests/e2e/lab/arm54_owned_runtime.py",
+      "recorded_sha256": "c74ed266cbc01a12a5fb3d12fb4f8ea7106a29a4de7a2a6674784a206b27b818",
+      "main_sha256": "c74ed266cbc01a12a5fb3d12fb4f8ea7106a29a4de7a2a6674784a206b27b818",
+      "matches_main": true,
+      "matching_execution_snapshots": []
+    },
+    {
+      "manifest": "tests/e2e/lab/evidence/arm54-service-20261122/final-harness-hashes.json",
+      "field": null,
+      "source": "tests/e2e/lab/arm54_remote_control.py",
+      "recorded_sha256": "f72fcb8d67bd1b0cc8d769c2dcd2a7eb1744fee20c39c97fc4f3031882fb4cf0",
+      "main_sha256": "f72fcb8d67bd1b0cc8d769c2dcd2a7eb1744fee20c39c97fc4f3031882fb4cf0",
+      "matches_main": true,
+      "matching_execution_snapshots": []
+    },
+    {
+      "manifest": "tests/e2e/lab/evidence/arm54-service-20261122/final-harness-hashes.json",
+      "field": null,
+      "source": "tests/e2e/lab/arm54_service_client_native.py",
+      "recorded_sha256": "883fc2831842cf6b19eed85f520fd3f0889dbe97025eb59114ea73eaf89294ed",
+      "main_sha256": "883fc2831842cf6b19eed85f520fd3f0889dbe97025eb59114ea73eaf89294ed",
+      "matches_main": true,
+      "matching_execution_snapshots": [
+        "tests/e2e/lab/evidence/arm54-service-20261122/tailscale-direct-loopback-verified.source.txt"
+      ]
+    },
+    {
+      "manifest": "tests/e2e/lab/evidence/arm54-service-20261122/final-harness-hashes.json",
+      "field": null,
+      "source": "tests/e2e/lab/arm54_service_native.py",
+      "recorded_sha256": "b235200f7b09e56b120d9b309d4b5074cfab9736288b7c4b8e58c11f19e157d4",
+      "main_sha256": "b235200f7b09e56b120d9b309d4b5074cfab9736288b7c4b8e58c11f19e157d4",
+      "matches_main": true,
+      "matching_execution_snapshots": [
+        "tests/e2e/lab/evidence/arm54-service-20261122/synthetic-service-converter-restore.source.txt"
+      ]
+    },
+    {
+      "manifest": "tests/e2e/lab/evidence/arm54-service-20261122/final-harness-hashes.json",
+      "field": null,
+      "source": "tests/e2e/lab/arm54_transport_probe_native.py",
+      "recorded_sha256": "e13e8acc60763128f4ae21d9d67482c43e00414c52540b06812fcada008d9089",
+      "main_sha256": "e13e8acc60763128f4ae21d9d67482c43e00414c52540b06812fcada008d9089",
+      "matches_main": true,
+      "matching_execution_snapshots": [
+        "tests/e2e/lab/evidence/arm54-service-20261122/rootful-unshare-transport.source.txt"
+      ]
+    },
+    {
+      "manifest": "tests/e2e/lab/evidence/arm54-service-20261122/final-harness-hashes.json",
+      "field": null,
+      "source": "tests/e2e/lab/test_arm54_rootful_boundary.py",
+      "recorded_sha256": "ed2b6ff1d0e21455da9674189fd01876a883729c92d44ea530ba68f369039bae",
+      "main_sha256": "ed2b6ff1d0e21455da9674189fd01876a883729c92d44ea530ba68f369039bae",
+      "matches_main": true,
+      "matching_execution_snapshots": []
+    },
+    {
+      "manifest": "tests/backup/evidence/large-encrypted-provenance.json",
+      "field": "sha256",
+      "source": "backup-engine/woowbackup/archive.py",
+      "recorded_sha256": "85b58635a23a552cbe446ceab6dee9fc914d245c708bc86d2211fc69c39e9d49",
+      "main_sha256": "85b58635a23a552cbe446ceab6dee9fc914d245c708bc86d2211fc69c39e9d49",
+      "matches_main": true,
+      "matching_execution_snapshots": []
+    },
+    {
+      "manifest": "tests/backup/evidence/large-encrypted-provenance.json",
+      "field": "sha256",
+      "source": "backup-engine/woowbackup/haimport.py",
+      "recorded_sha256": "27a32eb950bddc322a4c47313a48ed91fa7f2ada82d70cfef08bfcc503710cec",
+      "main_sha256": "27a32eb950bddc322a4c47313a48ed91fa7f2ada82d70cfef08bfcc503710cec",
+      "matches_main": true,
+      "matching_execution_snapshots": []
+    },
+    {
+      "manifest": "tests/backup/evidence/large-encrypted-provenance.json",
+      "field": "sha256",
+      "source": "backup-engine/woowbackup/keys.py",
+      "recorded_sha256": "9ab11bb4c11b36e3589c069af43ad9b7500d6596bf39932612d384a40c28379e",
+      "main_sha256": "9ab11bb4c11b36e3589c069af43ad9b7500d6596bf39932612d384a40c28379e",
+      "matches_main": true,
+      "matching_execution_snapshots": []
+    },
+    {
+      "manifest": "tests/backup/evidence/large-encrypted-provenance.json",
+      "field": "sha256",
+      "source": "tests/backup/bounded_large_archive.py",
+      "recorded_sha256": "9049d930d7ba99c6dd32500cde3d3289214ca329eff83175d521fb95eebf208a",
+      "main_sha256": "9049d930d7ba99c6dd32500cde3d3289214ca329eff83175d521fb95eebf208a",
+      "matches_main": true,
+      "matching_execution_snapshots": []
+    },
+    {
+      "manifest": "tests/backup/evidence/final-private-dispatch-20261122/results.json",
+      "field": "source_sha256_before",
+      "source": "backup-engine/woowbackup/__init__.py",
+      "recorded_sha256": "8d53348f729a9c49e0c6a36ce2ac8925599321b6bd83b271a08fc75d54b0fc01",
+      "main_sha256": "8d53348f729a9c49e0c6a36ce2ac8925599321b6bd83b271a08fc75d54b0fc01",
+      "matches_main": true,
+      "matching_execution_snapshots": []
+    },
+    {
+      "manifest": "tests/backup/evidence/final-private-dispatch-20261122/results.json",
+      "field": "source_sha256_before",
+      "source": "backup-engine/woowbackup/adapters/__init__.py",
+      "recorded_sha256": "01e63131886127202a5fd33f89bc0264d06b42f268df3960d8f261bd329da3fe",
+      "main_sha256": "01e63131886127202a5fd33f89bc0264d06b42f268df3960d8f261bd329da3fe",
+      "matches_main": true,
+      "matching_execution_snapshots": []
+    },
+    {
+      "manifest": "tests/backup/evidence/final-private-dispatch-20261122/results.json",
+      "field": "source_sha256_before",
+      "source": "backup-engine/woowbackup/adapters/base.py",
+      "recorded_sha256": "6c78557a6612faf73f8f1a6b1f98476d401aed173c674c57a8a22f5dcde6b567",
+      "main_sha256": "6c78557a6612faf73f8f1a6b1f98476d401aed173c674c57a8a22f5dcde6b567",
+      "matches_main": true,
+      "matching_execution_snapshots": []
+    },
+    {
+      "manifest": "tests/backup/evidence/final-private-dispatch-20261122/results.json",
+      "field": "source_sha256_before",
+      "source": "backup-engine/woowbackup/adapters/quadlet_postgres.py",
+      "recorded_sha256": "8ef2154f073eeba89cdabad38827edda5e34b4abf9e7d2c89f5ca79d7f0a225c",
+      "main_sha256": "8ef2154f073eeba89cdabad38827edda5e34b4abf9e7d2c89f5ca79d7f0a225c",
+      "matches_main": true,
+      "matching_execution_snapshots": []
+    },
+    {
+      "manifest": "tests/backup/evidence/final-private-dispatch-20261122/results.json",
+      "field": "source_sha256_before",
+      "source": "backup-engine/woowbackup/archive.py",
+      "recorded_sha256": "85b58635a23a552cbe446ceab6dee9fc914d245c708bc86d2211fc69c39e9d49",
+      "main_sha256": "85b58635a23a552cbe446ceab6dee9fc914d245c708bc86d2211fc69c39e9d49",
+      "matches_main": true,
+      "matching_execution_snapshots": []
+    },
+    {
+      "manifest": "tests/backup/evidence/final-private-dispatch-20261122/results.json",
+      "field": "source_sha256_before",
+      "source": "backup-engine/woowbackup/catalog.py",
+      "recorded_sha256": "38d30ed7db8a7e1c903b4096e2f55cff11a191a85bf43cde60808e55b8e5a72c",
+      "main_sha256": "38d30ed7db8a7e1c903b4096e2f55cff11a191a85bf43cde60808e55b8e5a72c",
+      "matches_main": true,
+      "matching_execution_snapshots": []
+    },
+    {
+      "manifest": "tests/backup/evidence/final-private-dispatch-20261122/results.json",
+      "field": "source_sha256_before",
+      "source": "backup-engine/woowbackup/digests.py",
+      "recorded_sha256": "89d0b2048c8b2c499e787c5d18f8ea6d1755e0a645b522a1e7837bb7458f10d9",
+      "main_sha256": "89d0b2048c8b2c499e787c5d18f8ea6d1755e0a645b522a1e7837bb7458f10d9",
+      "matches_main": true,
+      "matching_execution_snapshots": []
+    },
+    {
+      "manifest": "tests/backup/evidence/final-private-dispatch-20261122/results.json",
+      "field": "source_sha256_before",
+      "source": "backup-engine/woowbackup/errors.py",
+      "recorded_sha256": "c3b66b1c53505c784d697bf0b1a52c55b302cf9081dc7db9eb3ac57e8f2c5e73",
+      "main_sha256": "c3b66b1c53505c784d697bf0b1a52c55b302cf9081dc7db9eb3ac57e8f2c5e73",
+      "matches_main": true,
+      "matching_execution_snapshots": []
+    },
+    {
+      "manifest": "tests/backup/evidence/final-private-dispatch-20261122/results.json",
+      "field": "source_sha256_before",
+      "source": "backup-engine/woowbackup/flows.py",
+      "recorded_sha256": "0549b1918760048a8981dcff2755fd9ee74742cb28e3df2a43a88dad74885210",
+      "main_sha256": "0549b1918760048a8981dcff2755fd9ee74742cb28e3df2a43a88dad74885210",
+      "matches_main": true,
+      "matching_execution_snapshots": []
+    },
+    {
+      "manifest": "tests/backup/evidence/final-private-dispatch-20261122/results.json",
+      "field": "source_sha256_before",
+      "source": "backup-engine/woowbackup/ha_emqx.py",
+      "recorded_sha256": "00b90c3a97bd7832cd7bd455e71da0dc6536d77493bec36c1dd0eac3343f770f",
+      "main_sha256": "00b90c3a97bd7832cd7bd455e71da0dc6536d77493bec36c1dd0eac3343f770f",
+      "matches_main": true,
+      "matching_execution_snapshots": []
+    },
+    {
+      "manifest": "tests/backup/evidence/final-private-dispatch-20261122/results.json",
+      "field": "source_sha256_before",
+      "source": "backup-engine/woowbackup/ha_emqx_settings.py",
+      "recorded_sha256": "97fa19a37b2e63249cd34e7c8261014ae3c55ef1fc1c3046281a626761a73ceb",
+      "main_sha256": "97fa19a37b2e63249cd34e7c8261014ae3c55ef1fc1c3046281a626761a73ceb",
+      "matches_main": true,
+      "matching_execution_snapshots": []
+    },
+    {
+      "manifest": "tests/backup/evidence/final-private-dispatch-20261122/results.json",
+      "field": "source_sha256_before",
+      "source": "backup-engine/woowbackup/ha_headscale.py",
+      "recorded_sha256": "ca834c2b99e39783a33c3d363f6647822c2fa99befdff3b2ce2b241ec971a9b8",
+      "main_sha256": "ca834c2b99e39783a33c3d363f6647822c2fa99befdff3b2ce2b241ec971a9b8",
+      "matches_main": true,
+      "matching_execution_snapshots": []
+    },
+    {
+      "manifest": "tests/backup/evidence/final-private-dispatch-20261122/results.json",
+      "field": "source_sha256_before",
+      "source": "backup-engine/woowbackup/ha_n8n.py",
+      "recorded_sha256": "4c143f314ea36d04b54cb4d7de6fc17d2f04baf46402d4f079e1becd3d5e4c86",
+      "main_sha256": "4c143f314ea36d04b54cb4d7de6fc17d2f04baf46402d4f079e1becd3d5e4c86",
+      "matches_main": true,
+      "matching_execution_snapshots": []
+    },
+    {
+      "manifest": "tests/backup/evidence/final-private-dispatch-20261122/results.json",
+      "field": "source_sha256_before",
+      "source": "backup-engine/woowbackup/ha_odoo.py",
+      "recorded_sha256": "f2b5d0fadf8486f1c5b62c3eff509fb79c5f7aafaa99f582f549863cca214e37",
+      "main_sha256": "f2b5d0fadf8486f1c5b62c3eff509fb79c5f7aafaa99f582f549863cca214e37",
+      "matches_main": true,
+      "matching_execution_snapshots": []
+    },
+    {
+      "manifest": "tests/backup/evidence/final-private-dispatch-20261122/results.json",
+      "field": "source_sha256_before",
+      "source": "backup-engine/woowbackup/ha_omnigent.py",
+      "recorded_sha256": "cd16ee496fdb71139a5f8f96be15309370e4b1b5951d9319ff9487e8b20bc278",
+      "main_sha256": "cd16ee496fdb71139a5f8f96be15309370e4b1b5951d9319ff9487e8b20bc278",
+      "matches_main": true,
+      "matching_execution_snapshots": []
+    },
+    {
+      "manifest": "tests/backup/evidence/final-private-dispatch-20261122/results.json",
+      "field": "source_sha256_before",
+      "source": "backup-engine/woowbackup/haapps.py",
+      "recorded_sha256": "298a2f634084fc130701abe3c3ef1da9713ca112128c551fc635714c0015f98e",
+      "main_sha256": "298a2f634084fc130701abe3c3ef1da9713ca112128c551fc635714c0015f98e",
+      "matches_main": true,
+      "matching_execution_snapshots": []
+    },
+    {
+      "manifest": "tests/backup/evidence/final-private-dispatch-20261122/results.json",
+      "field": "source_sha256_before",
+      "source": "backup-engine/woowbackup/habackup.py",
+      "recorded_sha256": "d07cc1ad26558e1638c622c7175dafb72dc0bca555778f502e493470d6171545",
+      "main_sha256": "d07cc1ad26558e1638c622c7175dafb72dc0bca555778f502e493470d6171545",
+      "matches_main": true,
+      "matching_execution_snapshots": []
+    },
+    {
+      "manifest": "tests/backup/evidence/final-private-dispatch-20261122/results.json",
+      "field": "source_sha256_before",
+      "source": "backup-engine/woowbackup/hacommon.py",
+      "recorded_sha256": "ec5073c8af67e18a293c2669627bf0ef3b0bfbeef833db64c1d3415de6246652",
+      "main_sha256": "ec5073c8af67e18a293c2669627bf0ef3b0bfbeef833db64c1d3415de6246652",
+      "matches_main": true,
+      "matching_execution_snapshots": []
+    },
+    {
+      "manifest": "tests/backup/evidence/final-private-dispatch-20261122/results.json",
+      "field": "source_sha256_before",
+      "source": "backup-engine/woowbackup/haimport.py",
+      "recorded_sha256": "27a32eb950bddc322a4c47313a48ed91fa7f2ada82d70cfef08bfcc503710cec",
+      "main_sha256": "27a32eb950bddc322a4c47313a48ed91fa7f2ada82d70cfef08bfcc503710cec",
+      "matches_main": true,
+      "matching_execution_snapshots": []
+    },
+    {
+      "manifest": "tests/backup/evidence/final-private-dispatch-20261122/results.json",
+      "field": "source_sha256_before",
+      "source": "backup-engine/woowbackup/hasecuretar.py",
+      "recorded_sha256": "bc68328893ac4130a2f3e670464fab5cfc596962f305ab01529dda73c337b1cc",
+      "main_sha256": "bc68328893ac4130a2f3e670464fab5cfc596962f305ab01529dda73c337b1cc",
+      "matches_main": true,
+      "matching_execution_snapshots": []
+    },
+    {
+      "manifest": "tests/backup/evidence/final-private-dispatch-20261122/results.json",
+      "field": "source_sha256_before",
+      "source": "backup-engine/woowbackup/hasqlite.py",
+      "recorded_sha256": "f6e6aef2e142608e0ac911b0a6105b8c85f9f2a659dc4991180f70773a4ed7d4",
+      "main_sha256": "f6e6aef2e142608e0ac911b0a6105b8c85f9f2a659dc4991180f70773a4ed7d4",
+      "matches_main": true,
+      "matching_execution_snapshots": []
+    },
+    {
+      "manifest": "tests/backup/evidence/final-private-dispatch-20261122/results.json",
+      "field": "source_sha256_before",
+      "source": "backup-engine/woowbackup/hastore.py",
+      "recorded_sha256": "68d2936ac71335482d4f9d4868cd64e4aee48d4417bd90ec48a5d54f0bb07de5",
+      "main_sha256": "68d2936ac71335482d4f9d4868cd64e4aee48d4417bd90ec48a5d54f0bb07de5",
+      "matches_main": true,
+      "matching_execution_snapshots": []
+    },
+    {
+      "manifest": "tests/backup/evidence/final-private-dispatch-20261122/results.json",
+      "field": "source_sha256_before",
+      "source": "backup-engine/woowbackup/jobs.py",
+      "recorded_sha256": "77c56e70e3ff0bbea2066a3c42aa360fe219f1329b0e54c4063efd6fb140c492",
+      "main_sha256": "77c56e70e3ff0bbea2066a3c42aa360fe219f1329b0e54c4063efd6fb140c492",
+      "matches_main": true,
+      "matching_execution_snapshots": []
+    },
+    {
+      "manifest": "tests/backup/evidence/final-private-dispatch-20261122/results.json",
+      "field": "source_sha256_before",
+      "source": "backup-engine/woowbackup/keys.py",
+      "recorded_sha256": "9ab11bb4c11b36e3589c069af43ad9b7500d6596bf39932612d384a40c28379e",
+      "main_sha256": "9ab11bb4c11b36e3589c069af43ad9b7500d6596bf39932612d384a40c28379e",
+      "matches_main": true,
+      "matching_execution_snapshots": []
+    },
+    {
+      "manifest": "tests/backup/evidence/final-private-dispatch-20261122/results.json",
+      "field": "source_sha256_before",
+      "source": "backup-engine/woowbackup/nested.py",
+      "recorded_sha256": "7b00f09fd0d8e5ba116fccc09233411c6ee7946092daf711df1c72f43db86ee4",
+      "main_sha256": "7b00f09fd0d8e5ba116fccc09233411c6ee7946092daf711df1c72f43db86ee4",
+      "matches_main": true,
+      "matching_execution_snapshots": []
+    },
+    {
+      "manifest": "tests/backup/evidence/final-private-dispatch-20261122/results.json",
+      "field": "source_sha256_before",
+      "source": "backup-engine/woowbackup/paths.py",
+      "recorded_sha256": "4ff2b0556ef53ecc6c231d66ea2650189f6af8e13b16d616cdeabc2c4ee8e4b0",
+      "main_sha256": "4ff2b0556ef53ecc6c231d66ea2650189f6af8e13b16d616cdeabc2c4ee8e4b0",
+      "matches_main": true,
+      "matching_execution_snapshots": []
+    },
+    {
+      "manifest": "tests/backup/evidence/final-private-dispatch-20261122/results.json",
+      "field": "source_sha256_before",
+      "source": "backup-engine/woowbackup/podman.py",
+      "recorded_sha256": "ee7568ba0fcd49644641afa24a2aac7309faaa008f21effbf79c4d4854038d9f",
+      "main_sha256": "ee7568ba0fcd49644641afa24a2aac7309faaa008f21effbf79c4d4854038d9f",
+      "matches_main": true,
+      "matching_execution_snapshots": []
+    },
+    {
+      "manifest": "tests/backup/evidence/final-private-dispatch-20261122/results.json",
+      "field": "source_sha256_before",
+      "source": "backup-engine/woowbackup/storage.py",
+      "recorded_sha256": "2a0db85627e0fea7ec2b1bd7a4234313b79ece6fc646bd1506bc4bf1a0773ccd",
+      "main_sha256": "2a0db85627e0fea7ec2b1bd7a4234313b79ece6fc646bd1506bc4bf1a0773ccd",
+      "matches_main": true,
+      "matching_execution_snapshots": []
+    },
+    {
+      "manifest": "tests/backup/evidence/final-private-dispatch-20261122/results.json",
+      "field": "source_sha256_before",
+      "source": "backup-engine/woowbackup/tempctr.py",
+      "recorded_sha256": "21a6baa2c72feb59cf0a3cc3ee7b25c13da1bbd3066a094a0a1ebbaf309c35cd",
+      "main_sha256": "21a6baa2c72feb59cf0a3cc3ee7b25c13da1bbd3066a094a0a1ebbaf309c35cd",
+      "matches_main": true,
+      "matching_execution_snapshots": []
+    },
+    {
+      "manifest": "tests/backup/evidence/final-private-dispatch-20261122/results.json",
+      "field": "source_sha256_before",
+      "source": "backup-engine/woowbackup/util.py",
+      "recorded_sha256": "4b82e496e594d25ef6c80cf2937b1d78df7e6a5ecda249e6f166146ee4d76279",
+      "main_sha256": "4b82e496e594d25ef6c80cf2937b1d78df7e6a5ecda249e6f166146ee4d76279",
+      "matches_main": true,
+      "matching_execution_snapshots": []
+    },
+    {
+      "manifest": "tests/backup/evidence/final-private-dispatch-20261122/results.json",
+      "field": "source_sha256_before",
+      "source": "tests/__init__.py",
+      "recorded_sha256": "a522069d2ddf9e0abdca2c86cc0720c8d81bbcac34d592d348c7906871f41a42",
+      "main_sha256": "a522069d2ddf9e0abdca2c86cc0720c8d81bbcac34d592d348c7906871f41a42",
+      "matches_main": true,
+      "matching_execution_snapshots": []
+    },
+    {
+      "manifest": "tests/backup/evidence/final-private-dispatch-20261122/results.json",
+      "field": "source_sha256_before",
+      "source": "tests/backup/__init__.py",
+      "recorded_sha256": "9ae7d73d9ef3ebdd7a1f4425f25307f65443bdc0bc2db06e33ad826243ca5812",
+      "main_sha256": "9ae7d73d9ef3ebdd7a1f4425f25307f65443bdc0bc2db06e33ad826243ca5812",
+      "matches_main": true,
+      "matching_execution_snapshots": []
+    },
+    {
+      "manifest": "tests/backup/evidence/final-private-dispatch-20261122/results.json",
+      "field": "source_sha256_before",
+      "source": "tests/backup/hab1fakes.py",
+      "recorded_sha256": "9c9dfa92ac161b1b459ab09c5e1c7d4859f55517dda587bbcc065a04716646f4",
+      "main_sha256": "9c9dfa92ac161b1b459ab09c5e1c7d4859f55517dda587bbcc065a04716646f4",
+      "matches_main": true,
+      "matching_execution_snapshots": []
+    },
+    {
+      "manifest": "tests/backup/evidence/final-private-dispatch-20261122/results.json",
+      "field": "source_sha256_before",
+      "source": "tests/backup/hafakes.py",
+      "recorded_sha256": "81a22b742ec77df46e4cb24ab19951ef455c9066e95d474dce713349d9e1b2fb",
+      "main_sha256": "81a22b742ec77df46e4cb24ab19951ef455c9066e95d474dce713349d9e1b2fb",
+      "matches_main": true,
+      "matching_execution_snapshots": []
+    },
+    {
+      "manifest": "tests/backup/evidence/final-private-dispatch-20261122/results.json",
+      "field": "source_sha256_before",
+      "source": "tests/backup/hafixtures.py",
+      "recorded_sha256": "ad831de1fcbbdacfbc6168cbeff1283e5e7d913af3f51c00c232095fd3c47a61",
+      "main_sha256": "ad831de1fcbbdacfbc6168cbeff1283e5e7d913af3f51c00c232095fd3c47a61",
+      "matches_main": true,
+      "matching_execution_snapshots": []
+    },
+    {
+      "manifest": "tests/backup/evidence/final-private-dispatch-20261122/results.json",
+      "field": "source_sha256_before",
+      "source": "tests/backup/run_final_private_dispatch.py",
+      "recorded_sha256": "b24fd0069efb016272d737149e3177ca3d1bd0dc6233faec46c4ca12cd5f5d43",
+      "main_sha256": "b24fd0069efb016272d737149e3177ca3d1bd0dc6233faec46c4ca12cd5f5d43",
+      "matches_main": true,
+      "matching_execution_snapshots": []
+    },
+    {
+      "manifest": "tests/backup/evidence/final-private-dispatch-20261122/results.json",
+      "field": "source_sha256_before",
+      "source": "tests/backup/tarfixtures.py",
+      "recorded_sha256": "78c1cd50370589279bcc7b8aecbd452641d4b63d8796a2863d6b77edbe66cd49",
+      "main_sha256": "78c1cd50370589279bcc7b8aecbd452641d4b63d8796a2863d6b77edbe66cd49",
+      "matches_main": true,
+      "matching_execution_snapshots": []
+    },
+    {
+      "manifest": "tests/backup/evidence/final-private-dispatch-20261122/results.json",
+      "field": "source_sha256_before",
+      "source": "tests/backup/test_adapter.py",
+      "recorded_sha256": "219577ddfdc7a0f65f8039c8af315c0aa3f868b36764ed81fe6ad330646e1541",
+      "main_sha256": "219577ddfdc7a0f65f8039c8af315c0aa3f868b36764ed81fe6ad330646e1541",
+      "matches_main": true,
+      "matching_execution_snapshots": []
+    },
+    {
+      "manifest": "tests/backup/evidence/final-private-dispatch-20261122/results.json",
+      "field": "source_sha256_before",
+      "source": "tests/backup/test_catalog.py",
+      "recorded_sha256": "4fe3eee9d0a73502255859d995780ef26ac0fa0c6222a6e8e95658841988d61b",
+      "main_sha256": "4fe3eee9d0a73502255859d995780ef26ac0fa0c6222a6e8e95658841988d61b",
+      "matches_main": true,
+      "matching_execution_snapshots": []
+    },
+    {
+      "manifest": "tests/backup/evidence/final-private-dispatch-20261122/results.json",
+      "field": "source_sha256_before",
+      "source": "tests/backup/test_flows.py",
+      "recorded_sha256": "bca3c74135fd49ab7f6cf8fc4e903a5a2d498e0abdc8e5d7c8fa2877dfd77747",
+      "main_sha256": "bca3c74135fd49ab7f6cf8fc4e903a5a2d498e0abdc8e5d7c8fa2877dfd77747",
+      "matches_main": true,
+      "matching_execution_snapshots": []
+    },
+    {
+      "manifest": "tests/backup/evidence/final-private-dispatch-20261122/results.json",
+      "field": "source_sha256_before",
+      "source": "tests/backup/test_ha_import.py",
+      "recorded_sha256": "fd35ab57b8334a6e5babb8c97fa243e11b2ecda4b836be40efce976ef27b53e1",
+      "main_sha256": "fd35ab57b8334a6e5babb8c97fa243e11b2ecda4b836be40efce976ef27b53e1",
+      "matches_main": true,
+      "matching_execution_snapshots": []
+    },
+    {
+      "manifest": "tests/backup/evidence/final-private-dispatch-20261122/results.json",
+      "field": "source_sha256_before",
+      "source": "tests/backup/test_ha_omnigent.py",
+      "recorded_sha256": "cd8effdb2f3e50ae921bb7be35c4c9474eeeab44167c309a50f78503ab70ef8b",
+      "main_sha256": "cd8effdb2f3e50ae921bb7be35c4c9474eeeab44167c309a50f78503ab70ef8b",
+      "matches_main": true,
+      "matching_execution_snapshots": []
+    },
+    {
+      "manifest": "tests/backup/evidence/final-private-dispatch-20261122/results.json",
+      "field": "source_sha256_before",
+      "source": "tests/backup/test_ha_omnigent_candidate.py",
+      "recorded_sha256": "54eeab48426fde5a46ce99c7e41eddaa495a389a79ecbdef80df561932cc1b90",
+      "main_sha256": "54eeab48426fde5a46ce99c7e41eddaa495a389a79ecbdef80df561932cc1b90",
+      "matches_main": true,
+      "matching_execution_snapshots": []
+    },
+    {
+      "manifest": "tests/backup/evidence/final-private-dispatch-20261122/results.json",
+      "field": "source_sha256_before",
+      "source": "tests/backup/test_ha_omnigent_install.py",
+      "recorded_sha256": "7da1e066393690e3e559dfc417ab155324c4850ea117d3dbe7ebfca4bb08f377",
+      "main_sha256": "7da1e066393690e3e559dfc417ab155324c4850ea117d3dbe7ebfca4bb08f377",
+      "matches_main": true,
+      "matching_execution_snapshots": []
+    },
+    {
+      "manifest": "tests/backup/evidence/final-private-dispatch-20261122/results.json",
+      "field": "source_sha256_before",
+      "source": "tests/backup/test_jobs.py",
+      "recorded_sha256": "93f15334b43b4d4c47fbb3e6cae4810041883adfeeaca9a4023805207f663d3d",
+      "main_sha256": "93f15334b43b4d4c47fbb3e6cae4810041883adfeeaca9a4023805207f663d3d",
+      "matches_main": true,
+      "matching_execution_snapshots": []
+    },
+    {
+      "manifest": "tests/backup/evidence/final-private-dispatch-20261122/results.json",
+      "field": "source_sha256_before",
+      "source": "tests/e2e/lab/emqx_ha_candidate.py",
+      "recorded_sha256": "cb6b78716d488186bc3973c8ba29b01d8d2f70c2c446cb6c6dca45f6a558a61b",
+      "main_sha256": "cb6b78716d488186bc3973c8ba29b01d8d2f70c2c446cb6c6dca45f6a558a61b",
+      "matches_main": true,
+      "matching_execution_snapshots": []
+    },
+    {
+      "manifest": "tests/backup/evidence/final-private-dispatch-20261122/results.json",
+      "field": "source_sha256_before",
+      "source": "tests/e2e/lab/emqx_real_candidate.py",
+      "recorded_sha256": "6a3db3c6f647dc83adb464f98cc87247021dd10344368c1334114ec177fa99a9",
+      "main_sha256": "6a3db3c6f647dc83adb464f98cc87247021dd10344368c1334114ec177fa99a9",
+      "matches_main": true,
+      "matching_execution_snapshots": []
+    },
+    {
+      "manifest": "tests/backup/evidence/final-private-dispatch-20261122/results.json",
+      "field": "source_sha256_before",
+      "source": "tests/e2e/lab/ha_real_fixture.py",
+      "recorded_sha256": "c5d4289232c90bfca629db631aa463a0926a6ab45b24064729b98a279b06070b",
+      "main_sha256": "c5d4289232c90bfca629db631aa463a0926a6ab45b24064729b98a279b06070b",
+      "matches_main": true,
+      "matching_execution_snapshots": []
+    },
+    {
+      "manifest": "tests/backup/evidence/final-private-dispatch-20261122/results.json",
+      "field": "source_sha256_before",
+      "source": "tests/e2e/lab/test_emqx_real_candidate.py",
+      "recorded_sha256": "7e871893660b48bd0330ed74c70852756b95fa182ed39a094595222682079d5b",
+      "main_sha256": "7e871893660b48bd0330ed74c70852756b95fa182ed39a094595222682079d5b",
+      "matches_main": true,
+      "matching_execution_snapshots": []
+    },
+    {
+      "manifest": "tests/backup/evidence/final-private-dispatch-20261122/results.json",
+      "field": "source_sha256_before",
+      "source": "tests/e2e/lab/test_ha_real_fixture.py",
+      "recorded_sha256": "e7e8c0b0939888f879634e6ffbadc8b580bf111cdd77c54f4cbf4359e1cad8ad",
+      "main_sha256": "e7e8c0b0939888f879634e6ffbadc8b580bf111cdd77c54f4cbf4359e1cad8ad",
+      "matches_main": true,
+      "matching_execution_snapshots": []
+    },
+    {
+      "manifest": "tests/backup/evidence/final-private-dispatch-20261122/results.json",
+      "field": "source_sha256_after",
+      "source": "backup-engine/woowbackup/__init__.py",
+      "recorded_sha256": "8d53348f729a9c49e0c6a36ce2ac8925599321b6bd83b271a08fc75d54b0fc01",
+      "main_sha256": "8d53348f729a9c49e0c6a36ce2ac8925599321b6bd83b271a08fc75d54b0fc01",
+      "matches_main": true,
+      "matching_execution_snapshots": []
+    },
+    {
+      "manifest": "tests/backup/evidence/final-private-dispatch-20261122/results.json",
+      "field": "source_sha256_after",
+      "source": "backup-engine/woowbackup/adapters/__init__.py",
+      "recorded_sha256": "01e63131886127202a5fd33f89bc0264d06b42f268df3960d8f261bd329da3fe",
+      "main_sha256": "01e63131886127202a5fd33f89bc0264d06b42f268df3960d8f261bd329da3fe",
+      "matches_main": true,
+      "matching_execution_snapshots": []
+    },
+    {
+      "manifest": "tests/backup/evidence/final-private-dispatch-20261122/results.json",
+      "field": "source_sha256_after",
+      "source": "backup-engine/woowbackup/adapters/base.py",
+      "recorded_sha256": "6c78557a6612faf73f8f1a6b1f98476d401aed173c674c57a8a22f5dcde6b567",
+      "main_sha256": "6c78557a6612faf73f8f1a6b1f98476d401aed173c674c57a8a22f5dcde6b567",
+      "matches_main": true,
+      "matching_execution_snapshots": []
+    },
+    {
+      "manifest": "tests/backup/evidence/final-private-dispatch-20261122/results.json",
+      "field": "source_sha256_after",
+      "source": "backup-engine/woowbackup/adapters/quadlet_postgres.py",
+      "recorded_sha256": "8ef2154f073eeba89cdabad38827edda5e34b4abf9e7d2c89f5ca79d7f0a225c",
+      "main_sha256": "8ef2154f073eeba89cdabad38827edda5e34b4abf9e7d2c89f5ca79d7f0a225c",
+      "matches_main": true,
+      "matching_execution_snapshots": []
+    },
+    {
+      "manifest": "tests/backup/evidence/final-private-dispatch-20261122/results.json",
+      "field": "source_sha256_after",
+      "source": "backup-engine/woowbackup/archive.py",
+      "recorded_sha256": "85b58635a23a552cbe446ceab6dee9fc914d245c708bc86d2211fc69c39e9d49",
+      "main_sha256": "85b58635a23a552cbe446ceab6dee9fc914d245c708bc86d2211fc69c39e9d49",
+      "matches_main": true,
+      "matching_execution_snapshots": []
+    },
+    {
+      "manifest": "tests/backup/evidence/final-private-dispatch-20261122/results.json",
+      "field": "source_sha256_after",
+      "source": "backup-engine/woowbackup/catalog.py",
+      "recorded_sha256": "38d30ed7db8a7e1c903b4096e2f55cff11a191a85bf43cde60808e55b8e5a72c",
+      "main_sha256": "38d30ed7db8a7e1c903b4096e2f55cff11a191a85bf43cde60808e55b8e5a72c",
+      "matches_main": true,
+      "matching_execution_snapshots": []
+    },
+    {
+      "manifest": "tests/backup/evidence/final-private-dispatch-20261122/results.json",
+      "field": "source_sha256_after",
+      "source": "backup-engine/woowbackup/digests.py",
+      "recorded_sha256": "89d0b2048c8b2c499e787c5d18f8ea6d1755e0a645b522a1e7837bb7458f10d9",
+      "main_sha256": "89d0b2048c8b2c499e787c5d18f8ea6d1755e0a645b522a1e7837bb7458f10d9",
+      "matches_main": true,
+      "matching_execution_snapshots": []
+    },
+    {
+      "manifest": "tests/backup/evidence/final-private-dispatch-20261122/results.json",
+      "field": "source_sha256_after",
+      "source": "backup-engine/woowbackup/errors.py",
+      "recorded_sha256": "c3b66b1c53505c784d697bf0b1a52c55b302cf9081dc7db9eb3ac57e8f2c5e73",
+      "main_sha256": "c3b66b1c53505c784d697bf0b1a52c55b302cf9081dc7db9eb3ac57e8f2c5e73",
+      "matches_main": true,
+      "matching_execution_snapshots": []
+    },
+    {
+      "manifest": "tests/backup/evidence/final-private-dispatch-20261122/results.json",
+      "field": "source_sha256_after",
+      "source": "backup-engine/woowbackup/flows.py",
+      "recorded_sha256": "0549b1918760048a8981dcff2755fd9ee74742cb28e3df2a43a88dad74885210",
+      "main_sha256": "0549b1918760048a8981dcff2755fd9ee74742cb28e3df2a43a88dad74885210",
+      "matches_main": true,
+      "matching_execution_snapshots": []
+    },
+    {
+      "manifest": "tests/backup/evidence/final-private-dispatch-20261122/results.json",
+      "field": "source_sha256_after",
+      "source": "backup-engine/woowbackup/ha_emqx.py",
+      "recorded_sha256": "00b90c3a97bd7832cd7bd455e71da0dc6536d77493bec36c1dd0eac3343f770f",
+      "main_sha256": "00b90c3a97bd7832cd7bd455e71da0dc6536d77493bec36c1dd0eac3343f770f",
+      "matches_main": true,
+      "matching_execution_snapshots": []
+    },
+    {
+      "manifest": "tests/backup/evidence/final-private-dispatch-20261122/results.json",
+      "field": "source_sha256_after",
+      "source": "backup-engine/woowbackup/ha_emqx_settings.py",
+      "recorded_sha256": "97fa19a37b2e63249cd34e7c8261014ae3c55ef1fc1c3046281a626761a73ceb",
+      "main_sha256": "97fa19a37b2e63249cd34e7c8261014ae3c55ef1fc1c3046281a626761a73ceb",
+      "matches_main": true,
+      "matching_execution_snapshots": []
+    },
+    {
+      "manifest": "tests/backup/evidence/final-private-dispatch-20261122/results.json",
+      "field": "source_sha256_after",
+      "source": "backup-engine/woowbackup/ha_headscale.py",
+      "recorded_sha256": "ca834c2b99e39783a33c3d363f6647822c2fa99befdff3b2ce2b241ec971a9b8",
+      "main_sha256": "ca834c2b99e39783a33c3d363f6647822c2fa99befdff3b2ce2b241ec971a9b8",
+      "matches_main": true,
+      "matching_execution_snapshots": []
+    },
+    {
+      "manifest": "tests/backup/evidence/final-private-dispatch-20261122/results.json",
+      "field": "source_sha256_after",
+      "source": "backup-engine/woowbackup/ha_n8n.py",
+      "recorded_sha256": "4c143f314ea36d04b54cb4d7de6fc17d2f04baf46402d4f079e1becd3d5e4c86",
+      "main_sha256": "4c143f314ea36d04b54cb4d7de6fc17d2f04baf46402d4f079e1becd3d5e4c86",
+      "matches_main": true,
+      "matching_execution_snapshots": []
+    },
+    {
+      "manifest": "tests/backup/evidence/final-private-dispatch-20261122/results.json",
+      "field": "source_sha256_after",
+      "source": "backup-engine/woowbackup/ha_odoo.py",
+      "recorded_sha256": "f2b5d0fadf8486f1c5b62c3eff509fb79c5f7aafaa99f582f549863cca214e37",
+      "main_sha256": "f2b5d0fadf8486f1c5b62c3eff509fb79c5f7aafaa99f582f549863cca214e37",
+      "matches_main": true,
+      "matching_execution_snapshots": []
+    },
+    {
+      "manifest": "tests/backup/evidence/final-private-dispatch-20261122/results.json",
+      "field": "source_sha256_after",
+      "source": "backup-engine/woowbackup/ha_omnigent.py",
+      "recorded_sha256": "cd16ee496fdb71139a5f8f96be15309370e4b1b5951d9319ff9487e8b20bc278",
+      "main_sha256": "cd16ee496fdb71139a5f8f96be15309370e4b1b5951d9319ff9487e8b20bc278",
+      "matches_main": true,
+      "matching_execution_snapshots": []
+    },
+    {
+      "manifest": "tests/backup/evidence/final-private-dispatch-20261122/results.json",
+      "field": "source_sha256_after",
+      "source": "backup-engine/woowbackup/haapps.py",
+      "recorded_sha256": "298a2f634084fc130701abe3c3ef1da9713ca112128c551fc635714c0015f98e",
+      "main_sha256": "298a2f634084fc130701abe3c3ef1da9713ca112128c551fc635714c0015f98e",
+      "matches_main": true,
+      "matching_execution_snapshots": []
+    },
+    {
+      "manifest": "tests/backup/evidence/final-private-dispatch-20261122/results.json",
+      "field": "source_sha256_after",
+      "source": "backup-engine/woowbackup/habackup.py",
+      "recorded_sha256": "d07cc1ad26558e1638c622c7175dafb72dc0bca555778f502e493470d6171545",
+      "main_sha256": "d07cc1ad26558e1638c622c7175dafb72dc0bca555778f502e493470d6171545",
+      "matches_main": true,
+      "matching_execution_snapshots": []
+    },
+    {
+      "manifest": "tests/backup/evidence/final-private-dispatch-20261122/results.json",
+      "field": "source_sha256_after",
+      "source": "backup-engine/woowbackup/hacommon.py",
+      "recorded_sha256": "ec5073c8af67e18a293c2669627bf0ef3b0bfbeef833db64c1d3415de6246652",
+      "main_sha256": "ec5073c8af67e18a293c2669627bf0ef3b0bfbeef833db64c1d3415de6246652",
+      "matches_main": true,
+      "matching_execution_snapshots": []
+    },
+    {
+      "manifest": "tests/backup/evidence/final-private-dispatch-20261122/results.json",
+      "field": "source_sha256_after",
+      "source": "backup-engine/woowbackup/haimport.py",
+      "recorded_sha256": "27a32eb950bddc322a4c47313a48ed91fa7f2ada82d70cfef08bfcc503710cec",
+      "main_sha256": "27a32eb950bddc322a4c47313a48ed91fa7f2ada82d70cfef08bfcc503710cec",
+      "matches_main": true,
+      "matching_execution_snapshots": []
+    },
+    {
+      "manifest": "tests/backup/evidence/final-private-dispatch-20261122/results.json",
+      "field": "source_sha256_after",
+      "source": "backup-engine/woowbackup/hasecuretar.py",
+      "recorded_sha256": "bc68328893ac4130a2f3e670464fab5cfc596962f305ab01529dda73c337b1cc",
+      "main_sha256": "bc68328893ac4130a2f3e670464fab5cfc596962f305ab01529dda73c337b1cc",
+      "matches_main": true,
+      "matching_execution_snapshots": []
+    },
+    {
+      "manifest": "tests/backup/evidence/final-private-dispatch-20261122/results.json",
+      "field": "source_sha256_after",
+      "source": "backup-engine/woowbackup/hasqlite.py",
+      "recorded_sha256": "f6e6aef2e142608e0ac911b0a6105b8c85f9f2a659dc4991180f70773a4ed7d4",
+      "main_sha256": "f6e6aef2e142608e0ac911b0a6105b8c85f9f2a659dc4991180f70773a4ed7d4",
+      "matches_main": true,
+      "matching_execution_snapshots": []
+    },
+    {
+      "manifest": "tests/backup/evidence/final-private-dispatch-20261122/results.json",
+      "field": "source_sha256_after",
+      "source": "backup-engine/woowbackup/hastore.py",
+      "recorded_sha256": "68d2936ac71335482d4f9d4868cd64e4aee48d4417bd90ec48a5d54f0bb07de5",
+      "main_sha256": "68d2936ac71335482d4f9d4868cd64e4aee48d4417bd90ec48a5d54f0bb07de5",
+      "matches_main": true,
+      "matching_execution_snapshots": []
+    },
+    {
+      "manifest": "tests/backup/evidence/final-private-dispatch-20261122/results.json",
+      "field": "source_sha256_after",
+      "source": "backup-engine/woowbackup/jobs.py",
+      "recorded_sha256": "77c56e70e3ff0bbea2066a3c42aa360fe219f1329b0e54c4063efd6fb140c492",
+      "main_sha256": "77c56e70e3ff0bbea2066a3c42aa360fe219f1329b0e54c4063efd6fb140c492",
+      "matches_main": true,
+      "matching_execution_snapshots": []
+    },
+    {
+      "manifest": "tests/backup/evidence/final-private-dispatch-20261122/results.json",
+      "field": "source_sha256_after",
+      "source": "backup-engine/woowbackup/keys.py",
+      "recorded_sha256": "9ab11bb4c11b36e3589c069af43ad9b7500d6596bf39932612d384a40c28379e",
+      "main_sha256": "9ab11bb4c11b36e3589c069af43ad9b7500d6596bf39932612d384a40c28379e",
+      "matches_main": true,
+      "matching_execution_snapshots": []
+    },
+    {
+      "manifest": "tests/backup/evidence/final-private-dispatch-20261122/results.json",
+      "field": "source_sha256_after",
+      "source": "backup-engine/woowbackup/nested.py",
+      "recorded_sha256": "7b00f09fd0d8e5ba116fccc09233411c6ee7946092daf711df1c72f43db86ee4",
+      "main_sha256": "7b00f09fd0d8e5ba116fccc09233411c6ee7946092daf711df1c72f43db86ee4",
+      "matches_main": true,
+      "matching_execution_snapshots": []
+    },
+    {
+      "manifest": "tests/backup/evidence/final-private-dispatch-20261122/results.json",
+      "field": "source_sha256_after",
+      "source": "backup-engine/woowbackup/paths.py",
+      "recorded_sha256": "4ff2b0556ef53ecc6c231d66ea2650189f6af8e13b16d616cdeabc2c4ee8e4b0",
+      "main_sha256": "4ff2b0556ef53ecc6c231d66ea2650189f6af8e13b16d616cdeabc2c4ee8e4b0",
+      "matches_main": true,
+      "matching_execution_snapshots": []
+    },
+    {
+      "manifest": "tests/backup/evidence/final-private-dispatch-20261122/results.json",
+      "field": "source_sha256_after",
+      "source": "backup-engine/woowbackup/podman.py",
+      "recorded_sha256": "ee7568ba0fcd49644641afa24a2aac7309faaa008f21effbf79c4d4854038d9f",
+      "main_sha256": "ee7568ba0fcd49644641afa24a2aac7309faaa008f21effbf79c4d4854038d9f",
+      "matches_main": true,
+      "matching_execution_snapshots": []
+    },
+    {
+      "manifest": "tests/backup/evidence/final-private-dispatch-20261122/results.json",
+      "field": "source_sha256_after",
+      "source": "backup-engine/woowbackup/storage.py",
+      "recorded_sha256": "2a0db85627e0fea7ec2b1bd7a4234313b79ece6fc646bd1506bc4bf1a0773ccd",
+      "main_sha256": "2a0db85627e0fea7ec2b1bd7a4234313b79ece6fc646bd1506bc4bf1a0773ccd",
+      "matches_main": true,
+      "matching_execution_snapshots": []
+    },
+    {
+      "manifest": "tests/backup/evidence/final-private-dispatch-20261122/results.json",
+      "field": "source_sha256_after",
+      "source": "backup-engine/woowbackup/tempctr.py",
+      "recorded_sha256": "21a6baa2c72feb59cf0a3cc3ee7b25c13da1bbd3066a094a0a1ebbaf309c35cd",
+      "main_sha256": "21a6baa2c72feb59cf0a3cc3ee7b25c13da1bbd3066a094a0a1ebbaf309c35cd",
+      "matches_main": true,
+      "matching_execution_snapshots": []
+    },
+    {
+      "manifest": "tests/backup/evidence/final-private-dispatch-20261122/results.json",
+      "field": "source_sha256_after",
+      "source": "backup-engine/woowbackup/util.py",
+      "recorded_sha256": "4b82e496e594d25ef6c80cf2937b1d78df7e6a5ecda249e6f166146ee4d76279",
+      "main_sha256": "4b82e496e594d25ef6c80cf2937b1d78df7e6a5ecda249e6f166146ee4d76279",
+      "matches_main": true,
+      "matching_execution_snapshots": []
+    },
+    {
+      "manifest": "tests/backup/evidence/final-private-dispatch-20261122/results.json",
+      "field": "source_sha256_after",
+      "source": "tests/__init__.py",
+      "recorded_sha256": "a522069d2ddf9e0abdca2c86cc0720c8d81bbcac34d592d348c7906871f41a42",
+      "main_sha256": "a522069d2ddf9e0abdca2c86cc0720c8d81bbcac34d592d348c7906871f41a42",
+      "matches_main": true,
+      "matching_execution_snapshots": []
+    },
+    {
+      "manifest": "tests/backup/evidence/final-private-dispatch-20261122/results.json",
+      "field": "source_sha256_after",
+      "source": "tests/backup/__init__.py",
+      "recorded_sha256": "9ae7d73d9ef3ebdd7a1f4425f25307f65443bdc0bc2db06e33ad826243ca5812",
+      "main_sha256": "9ae7d73d9ef3ebdd7a1f4425f25307f65443bdc0bc2db06e33ad826243ca5812",
+      "matches_main": true,
+      "matching_execution_snapshots": []
+    },
+    {
+      "manifest": "tests/backup/evidence/final-private-dispatch-20261122/results.json",
+      "field": "source_sha256_after",
+      "source": "tests/backup/hab1fakes.py",
+      "recorded_sha256": "9c9dfa92ac161b1b459ab09c5e1c7d4859f55517dda587bbcc065a04716646f4",
+      "main_sha256": "9c9dfa92ac161b1b459ab09c5e1c7d4859f55517dda587bbcc065a04716646f4",
+      "matches_main": true,
+      "matching_execution_snapshots": []
+    },
+    {
+      "manifest": "tests/backup/evidence/final-private-dispatch-20261122/results.json",
+      "field": "source_sha256_after",
+      "source": "tests/backup/hafakes.py",
+      "recorded_sha256": "81a22b742ec77df46e4cb24ab19951ef455c9066e95d474dce713349d9e1b2fb",
+      "main_sha256": "81a22b742ec77df46e4cb24ab19951ef455c9066e95d474dce713349d9e1b2fb",
+      "matches_main": true,
+      "matching_execution_snapshots": []
+    },
+    {
+      "manifest": "tests/backup/evidence/final-private-dispatch-20261122/results.json",
+      "field": "source_sha256_after",
+      "source": "tests/backup/hafixtures.py",
+      "recorded_sha256": "ad831de1fcbbdacfbc6168cbeff1283e5e7d913af3f51c00c232095fd3c47a61",
+      "main_sha256": "ad831de1fcbbdacfbc6168cbeff1283e5e7d913af3f51c00c232095fd3c47a61",
+      "matches_main": true,
+      "matching_execution_snapshots": []
+    },
+    {
+      "manifest": "tests/backup/evidence/final-private-dispatch-20261122/results.json",
+      "field": "source_sha256_after",
+      "source": "tests/backup/run_final_private_dispatch.py",
+      "recorded_sha256": "b24fd0069efb016272d737149e3177ca3d1bd0dc6233faec46c4ca12cd5f5d43",
+      "main_sha256": "b24fd0069efb016272d737149e3177ca3d1bd0dc6233faec46c4ca12cd5f5d43",
+      "matches_main": true,
+      "matching_execution_snapshots": []
+    },
+    {
+      "manifest": "tests/backup/evidence/final-private-dispatch-20261122/results.json",
+      "field": "source_sha256_after",
+      "source": "tests/backup/tarfixtures.py",
+      "recorded_sha256": "78c1cd50370589279bcc7b8aecbd452641d4b63d8796a2863d6b77edbe66cd49",
+      "main_sha256": "78c1cd50370589279bcc7b8aecbd452641d4b63d8796a2863d6b77edbe66cd49",
+      "matches_main": true,
+      "matching_execution_snapshots": []
+    },
+    {
+      "manifest": "tests/backup/evidence/final-private-dispatch-20261122/results.json",
+      "field": "source_sha256_after",
+      "source": "tests/backup/test_adapter.py",
+      "recorded_sha256": "219577ddfdc7a0f65f8039c8af315c0aa3f868b36764ed81fe6ad330646e1541",
+      "main_sha256": "219577ddfdc7a0f65f8039c8af315c0aa3f868b36764ed81fe6ad330646e1541",
+      "matches_main": true,
+      "matching_execution_snapshots": []
+    },
+    {
+      "manifest": "tests/backup/evidence/final-private-dispatch-20261122/results.json",
+      "field": "source_sha256_after",
+      "source": "tests/backup/test_catalog.py",
+      "recorded_sha256": "4fe3eee9d0a73502255859d995780ef26ac0fa0c6222a6e8e95658841988d61b",
+      "main_sha256": "4fe3eee9d0a73502255859d995780ef26ac0fa0c6222a6e8e95658841988d61b",
+      "matches_main": true,
+      "matching_execution_snapshots": []
+    },
+    {
+      "manifest": "tests/backup/evidence/final-private-dispatch-20261122/results.json",
+      "field": "source_sha256_after",
+      "source": "tests/backup/test_flows.py",
+      "recorded_sha256": "bca3c74135fd49ab7f6cf8fc4e903a5a2d498e0abdc8e5d7c8fa2877dfd77747",
+      "main_sha256": "bca3c74135fd49ab7f6cf8fc4e903a5a2d498e0abdc8e5d7c8fa2877dfd77747",
+      "matches_main": true,
+      "matching_execution_snapshots": []
+    },
+    {
+      "manifest": "tests/backup/evidence/final-private-dispatch-20261122/results.json",
+      "field": "source_sha256_after",
+      "source": "tests/backup/test_ha_import.py",
+      "recorded_sha256": "fd35ab57b8334a6e5babb8c97fa243e11b2ecda4b836be40efce976ef27b53e1",
+      "main_sha256": "fd35ab57b8334a6e5babb8c97fa243e11b2ecda4b836be40efce976ef27b53e1",
+      "matches_main": true,
+      "matching_execution_snapshots": []
+    },
+    {
+      "manifest": "tests/backup/evidence/final-private-dispatch-20261122/results.json",
+      "field": "source_sha256_after",
+      "source": "tests/backup/test_ha_omnigent.py",
+      "recorded_sha256": "cd8effdb2f3e50ae921bb7be35c4c9474eeeab44167c309a50f78503ab70ef8b",
+      "main_sha256": "cd8effdb2f3e50ae921bb7be35c4c9474eeeab44167c309a50f78503ab70ef8b",
+      "matches_main": true,
+      "matching_execution_snapshots": []
+    },
+    {
+      "manifest": "tests/backup/evidence/final-private-dispatch-20261122/results.json",
+      "field": "source_sha256_after",
+      "source": "tests/backup/test_ha_omnigent_candidate.py",
+      "recorded_sha256": "54eeab48426fde5a46ce99c7e41eddaa495a389a79ecbdef80df561932cc1b90",
+      "main_sha256": "54eeab48426fde5a46ce99c7e41eddaa495a389a79ecbdef80df561932cc1b90",
+      "matches_main": true,
+      "matching_execution_snapshots": []
+    },
+    {
+      "manifest": "tests/backup/evidence/final-private-dispatch-20261122/results.json",
+      "field": "source_sha256_after",
+      "source": "tests/backup/test_ha_omnigent_install.py",
+      "recorded_sha256": "7da1e066393690e3e559dfc417ab155324c4850ea117d3dbe7ebfca4bb08f377",
+      "main_sha256": "7da1e066393690e3e559dfc417ab155324c4850ea117d3dbe7ebfca4bb08f377",
+      "matches_main": true,
+      "matching_execution_snapshots": []
+    },
+    {
+      "manifest": "tests/backup/evidence/final-private-dispatch-20261122/results.json",
+      "field": "source_sha256_after",
+      "source": "tests/backup/test_jobs.py",
+      "recorded_sha256": "93f15334b43b4d4c47fbb3e6cae4810041883adfeeaca9a4023805207f663d3d",
+      "main_sha256": "93f15334b43b4d4c47fbb3e6cae4810041883adfeeaca9a4023805207f663d3d",
+      "matches_main": true,
+      "matching_execution_snapshots": []
+    },
+    {
+      "manifest": "tests/backup/evidence/final-private-dispatch-20261122/results.json",
+      "field": "source_sha256_after",
+      "source": "tests/e2e/lab/emqx_ha_candidate.py",
+      "recorded_sha256": "cb6b78716d488186bc3973c8ba29b01d8d2f70c2c446cb6c6dca45f6a558a61b",
+      "main_sha256": "cb6b78716d488186bc3973c8ba29b01d8d2f70c2c446cb6c6dca45f6a558a61b",
+      "matches_main": true,
+      "matching_execution_snapshots": []
+    },
+    {
+      "manifest": "tests/backup/evidence/final-private-dispatch-20261122/results.json",
+      "field": "source_sha256_after",
+      "source": "tests/e2e/lab/emqx_real_candidate.py",
+      "recorded_sha256": "6a3db3c6f647dc83adb464f98cc87247021dd10344368c1334114ec177fa99a9",
+      "main_sha256": "6a3db3c6f647dc83adb464f98cc87247021dd10344368c1334114ec177fa99a9",
+      "matches_main": true,
+      "matching_execution_snapshots": []
+    },
+    {
+      "manifest": "tests/backup/evidence/final-private-dispatch-20261122/results.json",
+      "field": "source_sha256_after",
+      "source": "tests/e2e/lab/ha_real_fixture.py",
+      "recorded_sha256": "c5d4289232c90bfca629db631aa463a0926a6ab45b24064729b98a279b06070b",
+      "main_sha256": "c5d4289232c90bfca629db631aa463a0926a6ab45b24064729b98a279b06070b",
+      "matches_main": true,
+      "matching_execution_snapshots": []
+    },
+    {
+      "manifest": "tests/backup/evidence/final-private-dispatch-20261122/results.json",
+      "field": "source_sha256_after",
+      "source": "tests/e2e/lab/test_emqx_real_candidate.py",
+      "recorded_sha256": "7e871893660b48bd0330ed74c70852756b95fa182ed39a094595222682079d5b",
+      "main_sha256": "7e871893660b48bd0330ed74c70852756b95fa182ed39a094595222682079d5b",
+      "matches_main": true,
+      "matching_execution_snapshots": []
+    },
+    {
+      "manifest": "tests/backup/evidence/final-private-dispatch-20261122/results.json",
+      "field": "source_sha256_after",
+      "source": "tests/e2e/lab/test_ha_real_fixture.py",
+      "recorded_sha256": "e7e8c0b0939888f879634e6ffbadc8b580bf111cdd77c54f4cbf4359e1cad8ad",
+      "main_sha256": "e7e8c0b0939888f879634e6ffbadc8b580bf111cdd77c54f4cbf4359e1cad8ad",
+      "matches_main": true,
+      "matching_execution_snapshots": []
+    }
+  ],
+  "execution_snapshots": [
+    {
+      "snapshot": "tests/e2e/lab/evidence/arm54-service-20261122/cleanup.source.txt",
+      "sha256": "61d80625bf8b9f059a4904e3687022355bf08b60790fe3cf89c8765c950b9105",
+      "exact_final_harness_matches": []
+    },
+    {
+      "snapshot": "tests/e2e/lab/evidence/arm54-service-20261122/client-control-fixed-vocabulary.source.txt",
+      "sha256": "4b68a9db4427d85ad7d52d7efbb56f2f4493cd0bf3127e03110d83ed5e1b3e4c",
+      "exact_final_harness_matches": [
+        "tests/e2e/lab/arm54_client_words_native.py"
+      ]
+    },
+    {
+      "snapshot": "tests/e2e/lab/evidence/arm54-service-20261122/client-live-observation.source.txt",
+      "sha256": "42a4c45fd5146b083c8d39fbf6197f71466c9b7a49b296a50dfbb2cf8c78d5c6",
+      "exact_final_harness_matches": [
+        "tests/e2e/lab/arm54_client_observe_native.py"
+      ]
+    },
+    {
+      "snapshot": "tests/e2e/lab/evidence/arm54-service-20261122/namespace-and-product-version.source.txt",
+      "sha256": "53c54f95442f9f98d61a176f6a62edf079996891729d4b68fdc800ad7478904c",
+      "exact_final_harness_matches": [
+        "tests/e2e/lab/arm54_namespace_native.py"
+      ]
+    },
+    {
+      "snapshot": "tests/e2e/lab/evidence/arm54-service-20261122/native-package-build.source.txt",
+      "sha256": "e11d25537ef3063a7c1882ef9ac4bb99965bf52e7926fe9b2c916bfd14b4d40e",
+      "exact_final_harness_matches": []
+    },
+    {
+      "snapshot": "tests/e2e/lab/evidence/arm54-service-20261122/native-package-verified.source.txt",
+      "sha256": "94fecac868a044b08855a2cdf466f9fbb33ff1e6c85aaac732d4c7714d8675bc",
+      "exact_final_harness_matches": []
+    },
+    {
+      "snapshot": "tests/e2e/lab/evidence/arm54-service-20261122/native-tempobjects-completion.source.txt",
+      "sha256": "ff9224a9b6bde090e16c2bc36ea8d5d542cbd5e5d2ed75f8eb755ec1ea34dd87",
+      "exact_final_harness_matches": []
+    },
+    {
+      "snapshot": "tests/e2e/lab/evidence/arm54-service-20261122/native-tempobjects-lifecycle.source.txt",
+      "sha256": "99bcd4932f9e1fef7324ead9634550ebb534064fa55bef8b1ca00235a357d66d",
+      "exact_final_harness_matches": []
+    },
+    {
+      "snapshot": "tests/e2e/lab/evidence/arm54-service-20261122/package-binary-provenance.source.txt",
+      "sha256": "edc05e3306b16e13925331c103110c0c3e81edd380dc2c1e4478edb25339c62d",
+      "exact_final_harness_matches": [
+        "tests/e2e/lab/arm54_binary_provenance_native.py"
+      ]
+    },
+    {
+      "snapshot": "tests/e2e/lab/evidence/arm54-service-20261122/private-client-log-predicates.source.txt",
+      "sha256": "f0a7dcac8e29da1cf1d2a474d48096805d80cb040a8e3a3c8156412c1cf442b6",
+      "exact_final_harness_matches": [
+        "tests/e2e/lab/arm54_client_diagnostic_native.py"
+      ]
+    },
+    {
+      "snapshot": "tests/e2e/lab/evidence/arm54-service-20261122/rootful-unshare-transport.source.txt",
+      "sha256": "e13e8acc60763128f4ae21d9d67482c43e00414c52540b06812fcada008d9089",
+      "exact_final_harness_matches": [
+        "tests/e2e/lab/arm54_transport_probe_native.py"
+      ]
+    },
+    {
+      "snapshot": "tests/e2e/lab/evidence/arm54-service-20261122/synthetic-ha-tailscale-client.source.txt",
+      "sha256": "03d1ec734bf5523ebe1de5c5f6b19aa62b4f0a0301f0e3460e17bcb94b419e76",
+      "exact_final_harness_matches": []
+    },
+    {
+      "snapshot": "tests/e2e/lab/evidence/arm54-service-20261122/synthetic-service-chain-attempt1.source.txt",
+      "sha256": "68d606f6f02d99024c29bbd96a8c1d606e937c1baa8779f88c331da28216b730",
+      "exact_final_harness_matches": []
+    },
+    {
+      "snapshot": "tests/e2e/lab/evidence/arm54-service-20261122/synthetic-service-chain.source.txt",
+      "sha256": "68d606f6f02d99024c29bbd96a8c1d606e937c1baa8779f88c331da28216b730",
+      "exact_final_harness_matches": []
+    },
+    {
+      "snapshot": "tests/e2e/lab/evidence/arm54-service-20261122/synthetic-service-converter-restore.source.txt",
+      "sha256": "b235200f7b09e56b120d9b309d4b5074cfab9736288b7c4b8e58c11f19e157d4",
+      "exact_final_harness_matches": [
+        "tests/e2e/lab/arm54_service_native.py"
+      ]
+    },
+    {
+      "snapshot": "tests/e2e/lab/evidence/arm54-service-20261122/synthetic-service-rootful-adapter.source.txt",
+      "sha256": "ed72df446008a730c22ee4fa7036cb7e77fabc11494d691eec3dae892eaf0f55",
+      "exact_final_harness_matches": []
+    },
+    {
+      "snapshot": "tests/e2e/lab/evidence/arm54-service-20261122/tailscale-client-diagnosis.source.txt",
+      "sha256": "6be503b03b064b5b8554c99459fc30638fff39bac007e9fc846c685da194b44b",
+      "exact_final_harness_matches": []
+    },
+    {
+      "snapshot": "tests/e2e/lab/evidence/arm54-service-20261122/tailscale-direct-loopback-client.source.txt",
+      "sha256": "ad536341b4d92dea20b699d36a1e77eabe48f18ac8ba37eddf4a0b3a88fdf44c",
+      "exact_final_harness_matches": []
+    },
+    {
+      "snapshot": "tests/e2e/lab/evidence/arm54-service-20261122/tailscale-direct-loopback-verified.source.txt",
+      "sha256": "883fc2831842cf6b19eed85f520fd3f0889dbe97025eb59114ea73eaf89294ed",
+      "exact_final_harness_matches": [
+        "tests/e2e/lab/arm54_service_client_native.py"
+      ]
+    }
+  ],
+  "mismatch_interpretation": "Initial build source matches its failed execution snapshot. Final build hash matches main; do not relabel the initial run as final-source execution.",
+  "limits": [
+    "SHA equality binds committed bytes, not authenticated remote execution.",
+    "Uploaded bundle and removed payload/image/key artifacts unavailable for independent rehash.",
+    "Initial R2 failure is historical, not the accepted final-source run."
+  ]
+}

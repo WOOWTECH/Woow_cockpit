@@ -1,0 +1,49 @@
+{
+  "reason": "Direct harness imports and archive/key utility dependencies omitted from original four-file manifest.",
+  "binding_kind": "retrospective repository identity; not runtime attestation",
+  "producer_commit": "0168078a45e99d31f37d423dcf6fb693aa0160a7",
+  "audited_main": "c8471ed8bf1582ccea8d626da102cdd4b045da8f",
+  "dependencies": [
+    {
+      "source": "backup-engine/woowbackup/util.py",
+      "sha256_by_commit": {
+        "ff4ec7e8423089a19a6997463f9338dbe084612a": "4b82e496e594d25ef6c80cf2937b1d78df7e6a5ecda249e6f166146ee4d76279",
+        "0168078a45e99d31f37d423dcf6fb693aa0160a7": "4b82e496e594d25ef6c80cf2937b1d78df7e6a5ecda249e6f166146ee4d76279",
+        "c8471ed8bf1582ccea8d626da102cdd4b045da8f": "4b82e496e594d25ef6c80cf2937b1d78df7e6a5ecda249e6f166146ee4d76279"
+      }
+    },
+    {
+      "source": "backup-engine/woowbackup/errors.py",
+      "sha256_by_commit": {
+        "ff4ec7e8423089a19a6997463f9338dbe084612a": "c3b66b1c53505c784d697bf0b1a52c55b302cf9081dc7db9eb3ac57e8f2c5e73",
+        "0168078a45e99d31f37d423dcf6fb693aa0160a7": "c3b66b1c53505c784d697bf0b1a52c55b302cf9081dc7db9eb3ac57e8f2c5e73",
+        "c8471ed8bf1582ccea8d626da102cdd4b045da8f": "c3b66b1c53505c784d697bf0b1a52c55b302cf9081dc7db9eb3ac57e8f2c5e73"
+      }
+    },
+    {
+      "source": "backup-engine/woowbackup/paths.py",
+      "sha256_by_commit": {
+        "ff4ec7e8423089a19a6997463f9338dbe084612a": "4ff2b0556ef53ecc6c231d66ea2650189f6af8e13b16d616cdeabc2c4ee8e4b0",
+        "0168078a45e99d31f37d423dcf6fb693aa0160a7": "4ff2b0556ef53ecc6c231d66ea2650189f6af8e13b16d616cdeabc2c4ee8e4b0",
+        "c8471ed8bf1582ccea8d626da102cdd4b045da8f": "4ff2b0556ef53ecc6c231d66ea2650189f6af8e13b16d616cdeabc2c4ee8e4b0"
+      }
+    },
+    {
+      "source": "tests/backup/test_archive.py",
+      "sha256_by_commit": {
+        "ff4ec7e8423089a19a6997463f9338dbe084612a": "f521765cc535278230f42fd1ae2c1cc74d4758f6fc283e4ad59db9f06a6e2f83",
+        "0168078a45e99d31f37d423dcf6fb693aa0160a7": "f521765cc535278230f42fd1ae2c1cc74d4758f6fc283e4ad59db9f06a6e2f83",
+        "c8471ed8bf1582ccea8d626da102cdd4b045da8f": "f521765cc535278230f42fd1ae2c1cc74d4758f6fc283e4ad59db9f06a6e2f83"
+      }
+    },
+    {
+      "source": "tests/backup/test_archive_v2.py",
+      "sha256_by_commit": {
+        "ff4ec7e8423089a19a6997463f9338dbe084612a": "6de3280168591cf81022c7a8d356744ff038b35fd14564cce93a7d01ff25abe9",
+        "0168078a45e99d31f37d423dcf6fb693aa0160a7": "6de3280168591cf81022c7a8d356744ff038b35fd14564cce93a7d01ff25abe9",
+        "c8471ed8bf1582ccea8d626da102cdd4b045da8f": "6de3280168591cf81022c7a8d356744ff038b35fd14564cce93a7d01ff25abe9"
+      }
+    }
+  ],
+  "limits": "Does not establish a complete dynamic dependency closure or runtime environment identity."
+}

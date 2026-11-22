@@ -1,0 +1,664 @@
+{
+  "mode": "independent local git-blob validation; no test-suite rerun",
+  "base": "3fe2ff3d8dba1ac1eb18e5c23aa00475d70bd6e2",
+  "audited_main": "c8471ed8bf1582ccea8d626da102cdd4b045da8f",
+  "new_evidence_files": 80,
+  "json_parsed": 53,
+  "source_binding_entries": 165,
+  "source_binding_matches": 164,
+  "explained_historical_mismatches": 1,
+  "checks": [
+    {
+      "name": "R2 final log hash",
+      "passed": true
+    },
+    {
+      "name": "R2 initial failed log hash preserved",
+      "passed": true
+    },
+    {
+      "name": "R2 32 actual methods, zero skip/error/failure/xfail",
+      "passed": true
+    },
+    {
+      "name": "R2 sources unchanged during run",
+      "passed": true
+    },
+    {
+      "name": "encrypted real 8193MiB member internal consistency",
+      "passed": true
+    },
+    {
+      "name": "encrypted cleanup/key rejection recorded",
+      "passed": true
+    },
+    {
+      "name": "encrypted outer archive is below 8GiB",
+      "passed": true
+    },
+    {
+      "name": "lifecycle six across two attempts, three inherited",
+      "passed": true
+    },
+    {
+      "name": "completion source imports earlier checks",
+      "passed": true
+    },
+    {
+      "name": "cleanup failure explicitly injected",
+      "passed": true
+    },
+    {
+      "name": "service success bounded to CLI with zero nodes",
+      "passed": true
+    },
+    {
+      "name": "exit agrees with status: cleanup.json",
+      "passed": true
+    },
+    {
+      "name": "exit agrees with status: namespace-and-product-version.json",
+      "passed": true
+    },
+    {
+      "name": "exit agrees with status: native-package-build.json",
+      "passed": true
+    },
+    {
+      "name": "exit agrees with status: native-package-verified.json",
+      "passed": true
+    },
+    {
+      "name": "exit agrees with status: native-tempobjects-completion.json",
+      "passed": true
+    },
+    {
+      "name": "exit agrees with status: native-tempobjects-lifecycle.json",
+      "passed": true
+    },
+    {
+      "name": "exit agrees with status: synthetic-ha-tailscale-client.json",
+      "passed": true
+    },
+    {
+      "name": "exit agrees with status: synthetic-service-chain.json",
+      "passed": true
+    },
+    {
+      "name": "exit agrees with status: synthetic-service-converter-restore.json",
+      "passed": true
+    },
+    {
+      "name": "exit agrees with status: synthetic-service-rootful-adapter.json",
+      "passed": true
+    },
+    {
+      "name": "exit agrees with status: tailscale-client-diagnosis.json",
+      "passed": true
+    },
+    {
+      "name": "exit agrees with status: tailscale-direct-loopback-verified.json",
+      "passed": true
+    },
+    {
+      "name": "VPN latest verified registration attempt failed",
+      "passed": true
+    },
+    {
+      "name": "original evidence preserved: 0168078",
+      "passed": true
+    },
+    {
+      "name": "original evidence preserved: 25d5cf2",
+      "passed": true
+    },
+    {
+      "name": "original evidence preserved: cd84940",
+      "passed": true
+    },
+    {
+      "name": "encrypted omitted direct dependency unchanged: backup-engine/woowbackup/util.py",
+      "passed": true
+    },
+    {
+      "name": "encrypted omitted direct dependency unchanged: backup-engine/woowbackup/errors.py",
+      "passed": true
+    },
+    {
+      "name": "encrypted omitted direct dependency unchanged: backup-engine/woowbackup/paths.py",
+      "passed": true
+    },
+    {
+      "name": "encrypted omitted direct dependency unchanged: tests/backup/test_archive.py",
+      "passed": true
+    },
+    {
+      "name": "encrypted omitted direct dependency unchanged: tests/backup/test_archive_v2.py",
+      "passed": true
+    },
+    {
+      "name": "no engine changes since R2/ARM base",
+      "passed": true
+    }
+  ],
+  "integration": [
+    {
+      "original": "0168078a45e99d31f37d423dcf6fb693aa0160a7",
+      "integrated": "36d13a9f422beaa545cf9d0cde13f8517a6ed177",
+      "evidence_files": 5,
+      "all_equal_to_main": true
+    },
+    {
+      "original": "25d5cf2bf90be89ac1e3f94ca253034f12d59bab",
+      "integrated": "7566d4416cd2de1f60c231224cf9596ed62e6b9a",
+      "evidence_files": 5,
+      "all_equal_to_main": true
+    },
+    {
+      "original": "cd849408cb227fb648a94534c3964e670564cffa",
+      "integrated": "fe30094d15d3445a2b5b7589633dcdb86ee9dafe",
+      "evidence_files": 69,
+      "all_equal_to_main": true
+    }
+  ],
+  "recorded_remote_exits": [
+    {
+      "result": "tests/e2e/lab/evidence/arm54-service-20261122/cleanup.json",
+      "ssh_exit": 0,
+      "status": "passed"
+    },
+    {
+      "result": "tests/e2e/lab/evidence/arm54-service-20261122/client-control-fixed-vocabulary.json",
+      "ssh_exit": 0,
+      "status": null
+    },
+    {
+      "result": "tests/e2e/lab/evidence/arm54-service-20261122/client-live-observation.json",
+      "ssh_exit": 0,
+      "status": null
+    },
+    {
+      "result": "tests/e2e/lab/evidence/arm54-service-20261122/namespace-and-product-version.json",
+      "ssh_exit": 0,
+      "status": "passed"
+    },
+    {
+      "result": "tests/e2e/lab/evidence/arm54-service-20261122/native-package-build.json",
+      "ssh_exit": 1,
+      "status": "failed"
+    },
+    {
+      "result": "tests/e2e/lab/evidence/arm54-service-20261122/native-package-verified.json",
+      "ssh_exit": 1,
+      "status": "failed"
+    },
+    {
+      "result": "tests/e2e/lab/evidence/arm54-service-20261122/native-tempobjects-completion.json",
+      "ssh_exit": 0,
+      "status": "passed"
+    },
+    {
+      "result": "tests/e2e/lab/evidence/arm54-service-20261122/native-tempobjects-lifecycle.json",
+      "ssh_exit": 1,
+      "status": "failed"
+    },
+    {
+      "result": "tests/e2e/lab/evidence/arm54-service-20261122/package-binary-provenance.json",
+      "ssh_exit": 0,
+      "status": null
+    },
+    {
+      "result": "tests/e2e/lab/evidence/arm54-service-20261122/private-client-log-predicates.json",
+      "ssh_exit": 0,
+      "status": null
+    },
+    {
+      "result": "tests/e2e/lab/evidence/arm54-service-20261122/rootful-unshare-transport.json",
+      "ssh_exit": 0,
+      "status": null
+    },
+    {
+      "result": "tests/e2e/lab/evidence/arm54-service-20261122/synthetic-ha-tailscale-client.json",
+      "ssh_exit": 1,
+      "status": "failed"
+    },
+    {
+      "result": "tests/e2e/lab/evidence/arm54-service-20261122/synthetic-service-chain-attempt1.json",
+      "ssh_exit": 1,
+      "status": null
+    },
+    {
+      "result": "tests/e2e/lab/evidence/arm54-service-20261122/synthetic-service-chain.json",
+      "ssh_exit": 1,
+      "status": "failed"
+    },
+    {
+      "result": "tests/e2e/lab/evidence/arm54-service-20261122/synthetic-service-converter-restore.json",
+      "ssh_exit": 0,
+      "status": "passed"
+    },
+    {
+      "result": "tests/e2e/lab/evidence/arm54-service-20261122/synthetic-service-rootful-adapter.json",
+      "ssh_exit": 1,
+      "status": "failed"
+    },
+    {
+      "result": "tests/e2e/lab/evidence/arm54-service-20261122/tailscale-client-diagnosis.json",
+      "ssh_exit": 1,
+      "status": "failed"
+    },
+    {
+      "result": "tests/e2e/lab/evidence/arm54-service-20261122/tailscale-direct-loopback-client.json",
+      "ssh_exit": 1,
+      "status": null
+    },
+    {
+      "result": "tests/e2e/lab/evidence/arm54-service-20261122/tailscale-direct-loopback-verified.json",
+      "ssh_exit": 1,
+      "status": "failed"
+    }
+  ],
+  "artifacts": [
+    {
+      "path": "tests/backup/evidence/final-private-dispatch-20261122/initial-results.json",
+      "bytes": 34721,
+      "sha256": "9ca535a25808287900417149a9b9d45e32ba6fa6df26c6d4410cf012bc98e6bf"
+    },
+    {
+      "path": "tests/backup/evidence/final-private-dispatch-20261122/initial-unittest.txt",
+      "bytes": 6851,
+      "sha256": "62599538bd9a8e162e8a037b698946f68148e50cb27a6c8359ba3449783c7908"
+    },
+    {
+      "path": "tests/backup/evidence/final-private-dispatch-20261122/results.json",
+      "bytes": 34335,
+      "sha256": "a137329d0491be3646c2026d91414d2c678681d95797fa2e390dc8d81d643beb"
+    },
+    {
+      "path": "tests/backup/evidence/final-private-dispatch-20261122/summary.json",
+      "bytes": 3966,
+      "sha256": "5c7eacb20a3c81738fcaf0d9859192100381d1d2df253e5b7a9d6d9a12f181a5"
+    },
+    {
+      "path": "tests/backup/evidence/final-private-dispatch-20261122/unittest.txt",
+      "bytes": 5198,
+      "sha256": "18024e4385d0574bf67d8bb11ccb7519ba803eb4fad2607c8a7dfc9191e28d96"
+    },
+    {
+      "path": "tests/backup/evidence/large-encrypted-8193mib.json",
+      "bytes": 3023,
+      "sha256": "ac1c2cecbff0fd1bfb2339970f7c2342ee3dd1bf9745e5559ab16287021f4744"
+    },
+    {
+      "path": "tests/backup/evidence/large-encrypted-README.txt",
+      "bytes": 4285,
+      "sha256": "330720d8a14835eab6143ddc2e3f0184b9b148983aa852f3ed4356b576df70b0"
+    },
+    {
+      "path": "tests/backup/evidence/large-encrypted-provenance.json",
+      "bytes": 649,
+      "sha256": "97c3f9ce65d76f619e94bd6beb35369d15909ef96a75e5ebe816febd8711cd79"
+    },
+    {
+      "path": "tests/backup/evidence/large-encrypted-safety-tests.txt",
+      "bytes": 107,
+      "sha256": "3d230828a3b1fbe7fad69ea08a85f1050dfd39e4ee5fd048578f3e8432baf369"
+    },
+    {
+      "path": "tests/backup/evidence/large-encrypted-smoke.json",
+      "bytes": 2976,
+      "sha256": "099ef8371c658e12f38ff058764652e6f2beef2a7aaa538fd537994878593987"
+    },
+    {
+      "path": "tests/e2e/lab/evidence/arm54-service-20261122/README.md",
+      "bytes": 10647,
+      "sha256": "f1a4b608fa05ab3949ced17d59bc6865e14dca9daeb2e8969d2164d7c883e664"
+    },
+    {
+      "path": "tests/e2e/lab/evidence/arm54-service-20261122/arm-platform-inputs.json",
+      "bytes": 874,
+      "sha256": "d9c2456a1acce9fb468c3492d39ba54876549868770d2aca8edd0a4ff3aac701"
+    },
+    {
+      "path": "tests/e2e/lab/evidence/arm54-service-20261122/before.json",
+      "bytes": 1249,
+      "sha256": "17aca38dc30475c186bdeefe62a4f0f45ff62cc5b36f7c089ca0550d29b3bd85"
+    },
+    {
+      "path": "tests/e2e/lab/evidence/arm54-service-20261122/cleanup.exit.json",
+      "bytes": 16,
+      "sha256": "e8cfe601a7e2762e17f7bf533044f84e714ac09a5af0186ccd93a58eb88f5ba8"
+    },
+    {
+      "path": "tests/e2e/lab/evidence/arm54-service-20261122/cleanup.json",
+      "bytes": 2624,
+      "sha256": "87525811560690b5797ff57b4bf5fd9c31fdb9aad35a4e117a02787ce9c5d3bb"
+    },
+    {
+      "path": "tests/e2e/lab/evidence/arm54-service-20261122/cleanup.source.txt",
+      "bytes": 4204,
+      "sha256": "61d80625bf8b9f059a4904e3687022355bf08b60790fe3cf89c8765c950b9105"
+    },
+    {
+      "path": "tests/e2e/lab/evidence/arm54-service-20261122/client-control-fixed-vocabulary.exit.json",
+      "bytes": 16,
+      "sha256": "e8cfe601a7e2762e17f7bf533044f84e714ac09a5af0186ccd93a58eb88f5ba8"
+    },
+    {
+      "path": "tests/e2e/lab/evidence/arm54-service-20261122/client-control-fixed-vocabulary.json",
+      "bytes": 199,
+      "sha256": "b0eef892b663ce925ee0073b0a5853c9aa269eaf5209628969b6dd9d92ba7e5b"
+    },
+    {
+      "path": "tests/e2e/lab/evidence/arm54-service-20261122/client-control-fixed-vocabulary.source.txt",
+      "bytes": 1485,
+      "sha256": "4b68a9db4427d85ad7d52d7efbb56f2f4493cd0bf3127e03110d83ed5e1b3e4c"
+    },
+    {
+      "path": "tests/e2e/lab/evidence/arm54-service-20261122/client-live-observation.exit.json",
+      "bytes": 16,
+      "sha256": "e8cfe601a7e2762e17f7bf533044f84e714ac09a5af0186ccd93a58eb88f5ba8"
+    },
+    {
+      "path": "tests/e2e/lab/evidence/arm54-service-20261122/client-live-observation.json",
+      "bytes": 25,
+      "sha256": "57deaac0696d699f86a5cbde103099a4273ecbcb87b0c07aa6fb6c2981132f9f"
+    },
+    {
+      "path": "tests/e2e/lab/evidence/arm54-service-20261122/client-live-observation.source.txt",
+      "bytes": 782,
+      "sha256": "42a4c45fd5146b083c8d39fbf6197f71466c9b7a49b296a50dfbb2cf8c78d5c6"
+    },
+    {
+      "path": "tests/e2e/lab/evidence/arm54-service-20261122/final-harness-hashes.json",
+      "bytes": 1611,
+      "sha256": "a96b989bb020552c0f47f99094a7abcd1dc61a0a7739dc4a99586ab832e73539"
+    },
+    {
+      "path": "tests/e2e/lab/evidence/arm54-service-20261122/namespace-and-product-version.exit.json",
+      "bytes": 16,
+      "sha256": "e8cfe601a7e2762e17f7bf533044f84e714ac09a5af0186ccd93a58eb88f5ba8"
+    },
+    {
+      "path": "tests/e2e/lab/evidence/arm54-service-20261122/namespace-and-product-version.json",
+      "bytes": 1469,
+      "sha256": "7f88e64955160d3a701ceab80fa3e34cba9b97597ccb830aa90aef3bb1e6a436"
+    },
+    {
+      "path": "tests/e2e/lab/evidence/arm54-service-20261122/namespace-and-product-version.source.txt",
+      "bytes": 1501,
+      "sha256": "53c54f95442f9f98d61a176f6a62edf079996891729d4b68fdc800ad7478904c"
+    },
+    {
+      "path": "tests/e2e/lab/evidence/arm54-service-20261122/native-package-build.exit.json",
+      "bytes": 16,
+      "sha256": "523c4ab67cfaa119cec274423ccbaaebb8ee00b5189b3c45ac351069806b4110"
+    },
+    {
+      "path": "tests/e2e/lab/evidence/arm54-service-20261122/native-package-build.json",
+      "bytes": 2359,
+      "sha256": "59bd462e329feccc07fb5b8d26eda0fa82d835ba921accbdc390481c6b13b9b4"
+    },
+    {
+      "path": "tests/e2e/lab/evidence/arm54-service-20261122/native-package-build.source.txt",
+      "bytes": 3064,
+      "sha256": "e11d25537ef3063a7c1882ef9ac4bb99965bf52e7926fe9b2c916bfd14b4d40e"
+    },
+    {
+      "path": "tests/e2e/lab/evidence/arm54-service-20261122/native-package-verified.exit.json",
+      "bytes": 16,
+      "sha256": "523c4ab67cfaa119cec274423ccbaaebb8ee00b5189b3c45ac351069806b4110"
+    },
+    {
+      "path": "tests/e2e/lab/evidence/arm54-service-20261122/native-package-verified.json",
+      "bytes": 1677,
+      "sha256": "c097c4a509438634f277d033635188bdf8d9cce77afdf55b84e1927be13ea9e6"
+    },
+    {
+      "path": "tests/e2e/lab/evidence/arm54-service-20261122/native-package-verified.source.txt",
+      "bytes": 3236,
+      "sha256": "94fecac868a044b08855a2cdf466f9fbb33ff1e6c85aaac732d4c7714d8675bc"
+    },
+    {
+      "path": "tests/e2e/lab/evidence/arm54-service-20261122/native-tempobjects-completion.exit.json",
+      "bytes": 16,
+      "sha256": "e8cfe601a7e2762e17f7bf533044f84e714ac09a5af0186ccd93a58eb88f5ba8"
+    },
+    {
+      "path": "tests/e2e/lab/evidence/arm54-service-20261122/native-tempobjects-completion.json",
+      "bytes": 3396,
+      "sha256": "16e644b0e1251a5ac3cae242f55aecf9f2360d152de93abb904cdc7eae800b67"
+    },
+    {
+      "path": "tests/e2e/lab/evidence/arm54-service-20261122/native-tempobjects-completion.source.txt",
+      "bytes": 3249,
+      "sha256": "ff9224a9b6bde090e16c2bc36ea8d5d542cbd5e5d2ed75f8eb755ec1ea34dd87"
+    },
+    {
+      "path": "tests/e2e/lab/evidence/arm54-service-20261122/native-tempobjects-lifecycle.exit.json",
+      "bytes": 16,
+      "sha256": "523c4ab67cfaa119cec274423ccbaaebb8ee00b5189b3c45ac351069806b4110"
+    },
+    {
+      "path": "tests/e2e/lab/evidence/arm54-service-20261122/native-tempobjects-lifecycle.json",
+      "bytes": 2717,
+      "sha256": "a1c27f8f85be87de348a0b2ce0073da559ceb9a7aa14d196339de5dd12745d0e"
+    },
+    {
+      "path": "tests/e2e/lab/evidence/arm54-service-20261122/native-tempobjects-lifecycle.source.txt",
+      "bytes": 4393,
+      "sha256": "99bcd4932f9e1fef7324ead9634550ebb534064fa55bef8b1ca00235a357d66d"
+    },
+    {
+      "path": "tests/e2e/lab/evidence/arm54-service-20261122/package-binary-provenance.exit.json",
+      "bytes": 16,
+      "sha256": "e8cfe601a7e2762e17f7bf533044f84e714ac09a5af0186ccd93a58eb88f5ba8"
+    },
+    {
+      "path": "tests/e2e/lab/evidence/arm54-service-20261122/package-binary-provenance.json",
+      "bytes": 1833,
+      "sha256": "f35dd2e7361c000840d4868c0ace04649a67f1c104965e8e0b40b8cca89a1e0b"
+    },
+    {
+      "path": "tests/e2e/lab/evidence/arm54-service-20261122/package-binary-provenance.source.txt",
+      "bytes": 1338,
+      "sha256": "edc05e3306b16e13925331c103110c0c3e81edd380dc2c1e4478edb25339c62d"
+    },
+    {
+      "path": "tests/e2e/lab/evidence/arm54-service-20261122/package-provenance.json",
+      "bytes": 456,
+      "sha256": "6acea77ffe1088d02f7244eb36fa7e7b73023f00cb25f1557b5094fcfae6a16c"
+    },
+    {
+      "path": "tests/e2e/lab/evidence/arm54-service-20261122/package.Containerfile",
+      "bytes": 2041,
+      "sha256": "02f850bfe625cec627d8da94c3b61bd802990b75b0fd55d6ef164c8c2b7f403d"
+    },
+    {
+      "path": "tests/e2e/lab/evidence/arm54-service-20261122/private-client-log-predicates.exit.json",
+      "bytes": 16,
+      "sha256": "e8cfe601a7e2762e17f7bf533044f84e714ac09a5af0186ccd93a58eb88f5ba8"
+    },
+    {
+      "path": "tests/e2e/lab/evidence/arm54-service-20261122/private-client-log-predicates.json",
+      "bytes": 385,
+      "sha256": "a3ab067407d8bf222c4defc956d24953f3dc5229ac9cc19313ffd12c42be3bd6"
+    },
+    {
+      "path": "tests/e2e/lab/evidence/arm54-service-20261122/private-client-log-predicates.source.txt",
+      "bytes": 788,
+      "sha256": "f0a7dcac8e29da1cf1d2a474d48096805d80cb040a8e3a3c8156412c1cf442b6"
+    },
+    {
+      "path": "tests/e2e/lab/evidence/arm54-service-20261122/public-image-metadata.json",
+      "bytes": 4982,
+      "sha256": "16f72c6249b1853723bb3616ca52a7b1f906652604b3342db4dc448f8d0a2c2b"
+    },
+    {
+      "path": "tests/e2e/lab/evidence/arm54-service-20261122/rootful-unshare-transport.exit.json",
+      "bytes": 16,
+      "sha256": "e8cfe601a7e2762e17f7bf533044f84e714ac09a5af0186ccd93a58eb88f5ba8"
+    },
+    {
+      "path": "tests/e2e/lab/evidence/arm54-service-20261122/rootful-unshare-transport.json",
+      "bytes": 260,
+      "sha256": "726120eb45f91cec10545e7f273863f18254b094b456c27b736de8601d91d033"
+    },
+    {
+      "path": "tests/e2e/lab/evidence/arm54-service-20261122/rootful-unshare-transport.source.txt",
+      "bytes": 634,
+      "sha256": "e13e8acc60763128f4ae21d9d67482c43e00414c52540b06812fcada008d9089"
+    },
+    {
+      "path": "tests/e2e/lab/evidence/arm54-service-20261122/source-hashes.json",
+      "bytes": 5536,
+      "sha256": "4c3223e0681bd509dd1574f7a43d46cd249c383c9917cd05cec6d3ef2d6c425a"
+    },
+    {
+      "path": "tests/e2e/lab/evidence/arm54-service-20261122/summary.json",
+      "bytes": 1554,
+      "sha256": "f537bf300850bd711234f504b64264f05d7dd718403ef416901a34fae8b7c477"
+    },
+    {
+      "path": "tests/e2e/lab/evidence/arm54-service-20261122/synthetic-ha-tailscale-client.exit.json",
+      "bytes": 16,
+      "sha256": "523c4ab67cfaa119cec274423ccbaaebb8ee00b5189b3c45ac351069806b4110"
+    },
+    {
+      "path": "tests/e2e/lab/evidence/arm54-service-20261122/synthetic-ha-tailscale-client.json",
+      "bytes": 4980,
+      "sha256": "f5896e107fd8d5cf4d835ed0b19fecf6cbcae7c0369f6fe259b60e6a7c8084f2"
+    },
+    {
+      "path": "tests/e2e/lab/evidence/arm54-service-20261122/synthetic-ha-tailscale-client.source.txt",
+      "bytes": 13865,
+      "sha256": "03d1ec734bf5523ebe1de5c5f6b19aa62b4f0a0301f0e3460e17bcb94b419e76"
+    },
+    {
+      "path": "tests/e2e/lab/evidence/arm54-service-20261122/synthetic-service-chain-attempt1.exit.json",
+      "bytes": 16,
+      "sha256": "523c4ab67cfaa119cec274423ccbaaebb8ee00b5189b3c45ac351069806b4110"
+    },
+    {
+      "path": "tests/e2e/lab/evidence/arm54-service-20261122/synthetic-service-chain-attempt1.json",
+      "bytes": 38,
+      "sha256": "5f6c2600b09b1bca035ed0253596f0d622fb26ae31959973cbf13f002c85d94e"
+    },
+    {
+      "path": "tests/e2e/lab/evidence/arm54-service-20261122/synthetic-service-chain-attempt1.source.txt",
+      "bytes": 9764,
+      "sha256": "68d606f6f02d99024c29bbd96a8c1d606e937c1baa8779f88c331da28216b730"
+    },
+    {
+      "path": "tests/e2e/lab/evidence/arm54-service-20261122/synthetic-service-chain-attempt1.stdout.txt",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "tests/e2e/lab/evidence/arm54-service-20261122/synthetic-service-chain.exit.json",
+      "bytes": 16,
+      "sha256": "523c4ab67cfaa119cec274423ccbaaebb8ee00b5189b3c45ac351069806b4110"
+    },
+    {
+      "path": "tests/e2e/lab/evidence/arm54-service-20261122/synthetic-service-chain.json",
+      "bytes": 4583,
+      "sha256": "3afe9ada2efbfc4a2f61358b46db69233b2e499c6cfb1693bc58e23a65b42888"
+    },
+    {
+      "path": "tests/e2e/lab/evidence/arm54-service-20261122/synthetic-service-chain.source.txt",
+      "bytes": 9764,
+      "sha256": "68d606f6f02d99024c29bbd96a8c1d606e937c1baa8779f88c331da28216b730"
+    },
+    {
+      "path": "tests/e2e/lab/evidence/arm54-service-20261122/synthetic-service-converter-restore.exit.json",
+      "bytes": 16,
+      "sha256": "e8cfe601a7e2762e17f7bf533044f84e714ac09a5af0186ccd93a58eb88f5ba8"
+    },
+    {
+      "path": "tests/e2e/lab/evidence/arm54-service-20261122/synthetic-service-converter-restore.json",
+      "bytes": 7774,
+      "sha256": "35053bfa5a1e336598635db910859d3bae15080bb984e9e2c0aa9f384a94e0b1"
+    },
+    {
+      "path": "tests/e2e/lab/evidence/arm54-service-20261122/synthetic-service-converter-restore.source.txt",
+      "bytes": 10677,
+      "sha256": "b235200f7b09e56b120d9b309d4b5074cfab9736288b7c4b8e58c11f19e157d4"
+    },
+    {
+      "path": "tests/e2e/lab/evidence/arm54-service-20261122/synthetic-service-rootful-adapter.exit.json",
+      "bytes": 16,
+      "sha256": "523c4ab67cfaa119cec274423ccbaaebb8ee00b5189b3c45ac351069806b4110"
+    },
+    {
+      "path": "tests/e2e/lab/evidence/arm54-service-20261122/synthetic-service-rootful-adapter.json",
+      "bytes": 4694,
+      "sha256": "1564dac20e66df2041339e7f44d228fb7f2249bc27772368591e530f5233f215"
+    },
+    {
+      "path": "tests/e2e/lab/evidence/arm54-service-20261122/synthetic-service-rootful-adapter.source.txt",
+      "bytes": 10663,
+      "sha256": "ed72df446008a730c22ee4fa7036cb7e77fabc11494d691eec3dae892eaf0f55"
+    },
+    {
+      "path": "tests/e2e/lab/evidence/arm54-service-20261122/tailscale-client-diagnosis.exit.json",
+      "bytes": 16,
+      "sha256": "523c4ab67cfaa119cec274423ccbaaebb8ee00b5189b3c45ac351069806b4110"
+    },
+    {
+      "path": "tests/e2e/lab/evidence/arm54-service-20261122/tailscale-client-diagnosis.json",
+      "bytes": 4996,
+      "sha256": "285dc53e34d4c6fbd353a601686b564e4f3687f735e91867fc519f03b2e32152"
+    },
+    {
+      "path": "tests/e2e/lab/evidence/arm54-service-20261122/tailscale-client-diagnosis.source.txt",
+      "bytes": 14521,
+      "sha256": "6be503b03b064b5b8554c99459fc30638fff39bac007e9fc846c685da194b44b"
+    },
+    {
+      "path": "tests/e2e/lab/evidence/arm54-service-20261122/tailscale-client-source.json",
+      "bytes": 1591,
+      "sha256": "64a7724e97eb8921d22f90b2ac2060579ee1e89ac1f4dc173e35bb7696e474fa"
+    },
+    {
+      "path": "tests/e2e/lab/evidence/arm54-service-20261122/tailscale-direct-loopback-client.exit.json",
+      "bytes": 16,
+      "sha256": "523c4ab67cfaa119cec274423ccbaaebb8ee00b5189b3c45ac351069806b4110"
+    },
+    {
+      "path": "tests/e2e/lab/evidence/arm54-service-20261122/tailscale-direct-loopback-client.json",
+      "bytes": 38,
+      "sha256": "5f6c2600b09b1bca035ed0253596f0d622fb26ae31959973cbf13f002c85d94e"
+    },
+    {
+      "path": "tests/e2e/lab/evidence/arm54-service-20261122/tailscale-direct-loopback-client.source.txt",
+      "bytes": 14917,
+      "sha256": "ad536341b4d92dea20b699d36a1e77eabe48f18ac8ba37eddf4a0b3a88fdf44c"
+    },
+    {
+      "path": "tests/e2e/lab/evidence/arm54-service-20261122/tailscale-direct-loopback-client.stdout.txt",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "tests/e2e/lab/evidence/arm54-service-20261122/tailscale-direct-loopback-verified.exit.json",
+      "bytes": 16,
+      "sha256": "523c4ab67cfaa119cec274423ccbaaebb8ee00b5189b3c45ac351069806b4110"
+    },
+    {
+      "path": "tests/e2e/lab/evidence/arm54-service-20261122/tailscale-direct-loopback-verified.json",
+      "bytes": 5364,
+      "sha256": "12af2740487a5817355dee131537bca96669b72f9b29089f2dc8ebb47710df64"
+    },
+    {
+      "path": "tests/e2e/lab/evidence/arm54-service-20261122/tailscale-direct-loopback-verified.source.txt",
+      "bytes": 14917,
+      "sha256": "883fc2831842cf6b19eed85f520fd3f0889dbe97025eb59114ea73eaf89294ed"
+    },
+    {
+      "path": "tests/e2e/lab/evidence/cross-device-focus-20261122/status.json",
+      "bytes": 3651,
+      "sha256": "11aba191c698eb2262ea043ab2afd8b6018b19ac4e1d7e39cf0f55dc8249f9ab"
+    }
+  ],
+  "limits": "Internal consistency and exact committed byte identity only; removed runtime artifacts and actual remote execution were not revalidated."
+}

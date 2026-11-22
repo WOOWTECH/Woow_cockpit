@@ -25,19 +25,21 @@
   },
   "final_version": {
     "worker": "01a200bc-fdfc-7813-b6d3-10d8413281a7",
-    "status": "32/32 focused private dispatch tests passed;50 hashes bound; real ARM TempObjects lifecycle recorded; evidence integration audit assigned",
+    "status": "32/32 focused local private dispatch methods passed; final source bindings independently audited; ARM lifecycle six checks across initial and completion attempts",
     "integration_commit": "5e6f965",
     "dispatch_integration_commit": "7566d44",
-    "transport_limits": "service/PG/owner simulated in32 tests; real ARM lifecycle separately evidenced"
+    "transport_limits": "service/PG/owner simulated in32 tests; real ARM lifecycle separately evidenced",
+    "evidence_audit": "tests/backup/evidence/final-acceptance-delta-20261122/README.md",
+    "audit_scope": "local committed-artifact integrity and secret-pattern scan only; no remote rerun or commercial acceptance"
   },
   "cross_physical_restore": {
     "archive_roundtrip": "passed x86 to native ARM to x86, entry and nested payload hashes equal",
-    "service_restore": "ARM internal synthetic HA converter/private-volume restore/startup/gRPC passed; VPN and end-to-end physical HA source/install/rollback not passed",
+    "service_restore": "Not passed across physical devices. New synthetic HA converter/private import/startup/gRPC success used source and target on the same ARM host; VPN registration still failed.",
     "payload_bytes": 8396860,
     "synthetic_only": true
   },
   "commercial_acceptance": false,
-  "integrated_version": "fe30094",
+  "integrated_version": "c8471ed8bf1582ccea8d626da102cdd4b045da8f",
   "previous_arm_probe": {
     "host": "192.168.2.34:22",
     "architecture": "aarch64",
@@ -61,7 +63,7 @@
     "integration_commit": "3fe2ff3",
     "evidence": "tests/e2e/lab/evidence/arm54-native-20261122/README.md",
     "service_blocker": "Version gate resolved with unchanged official package recipe local ARM build; VPN Tailscale registration still fails, root cause under investigation",
-    "next": "supported ARM service image and synthetic HA conversion/restore; actual TempObjects cleanup lifecycle",
+    "next": "Resolve VPN source registration before identity/IP/reconnect assertions; production OwnerRunner/rootless and real network cleanup/transport-failure coverage remain unproved. Passed converter and six lifecycle checks need no repeat.",
     "service_evidence": "tests/e2e/lab/evidence/arm54-service-20261122/README.md",
     "service_integration_commit": "fe30094",
     "service_passed": [
@@ -78,6 +80,8 @@
       "real original backups",
       "Headplane UI"
     ],
-    "image_provenance": "locally built unmodified official package recipe, binary equals pinned upstream; not shipped image"
+    "image_provenance": "locally built unmodified official package recipe, binary equals pinned upstream; not shipped image",
+    "lifecycle_provenance": "Initial exit1/ValueError after three checks; completion exit0 inherits those three and executes three more. Removal failure is an injected return125 before transport; residue check and retry use real Podman.",
+    "runner_scope": "RootfulRunner direct namespace reads/stat on owned paths, otherwise real private-store Podman; not production OwnerRunner."
   }
 }
