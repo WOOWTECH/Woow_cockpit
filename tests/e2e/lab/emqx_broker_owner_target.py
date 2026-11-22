@@ -187,7 +187,12 @@ def run_owner_target(root, broker, clients, report, *, owned_container_id):
             raise RuntimeError('owner-target-private-eval-refused')
         return result.stdout
     try:
-        with broker_target_readers(broker=broker, checked=private_checked, quiesce=quiesce) as readers:
+        from emqx_target_vendor_policy import vendor_observer
+        observer = vendor_observer(broker=broker, owned_container_id=owned_container_id,
+            private_eval=lambda expression: private_checked('exec', broker, 'emqx', 'eval', expression),
+            private_inspect=lambda: private_checked('inspect', broker))
+        with broker_target_readers(broker=broker, checked=private_checked, quiesce=quiesce,
+                vendor_observer=observer) as readers:
             checks['actual_native_expression_and_projection'] = True
             runtime = RuntimeRegistry()
             counts = register_target_snapshots(runtime, readers)

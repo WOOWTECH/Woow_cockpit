@@ -38,7 +38,7 @@ class NativeDiagnosticTests(unittest.TestCase):
 
     def test_abort_frame_reaches_report_without_leaking_stderr_or_table(self):
         @contextmanager
-        def fake_capture(*, broker, checked, quiesce):
+        def fake_capture(*, broker, checked, quiesce, vendor_observer=None):
             checked('exec', broker, 'emqx', 'eval', 'FixedPublicExpression')
             raise RuntimeError('fixture-stop-before-registration')
             yield

@@ -4,7 +4,7 @@ Reads actual cooked config/provider state and current native table inventory.
 Native read transaction/fold is not a checkpoint or historical cold-file replay.
 """
 import base64
-from contextlib import contextmanager
+from contextlib import contextmanager, ExitStack
 import hashlib
 import io
 import json
@@ -148,7 +148,7 @@ def _reference_diagnostic(path,key,config):
     return {'root':root,'key':safe_key,'context':context}
 
 
-def _no_refs(value, key='', path=(), config=None):
+def _no_refs(value, key='', path=(), config=None, vendor_policy=None):
     if config is None:
         config=value
     def refuse(reason):
@@ -158,12 +158,14 @@ def _no_refs(value, key='', path=(), config=None):
         if value.get('type') in ('file', b'file'):
             refuse('reference_file_authorizer')
         for name, child in value.items():
-            _no_refs(child,name,path+(name,),config)
+            _no_refs(child,name,path+(name,),config,vendor_policy)
     elif type(value) in (tuple, list):
         for index,child in enumerate(value):
-            _no_refs(child,key,path+(index,),config)
+            _no_refs(child,key,path+(index,),config,vendor_policy)
     elif type(value) in (bytes, str):
         text = _text(value)
+        if vendor_policy is not None and vendor_policy.allows(config, path, text):
+            return
         for marker,reason in (('${','reference_template'),('env:','reference_env'),
                 ('vault:','reference_vault'),('file:','reference_file_uri'),('://','reference_url')):
             if marker in text.lower():
@@ -173,7 +175,7 @@ def _no_refs(value, key='', path=(), config=None):
             refuse('reference_file_setting')
 
 
-def _absence_profile(config, provider, mark=lambda _:None):
+def _absence_profile(config, provider, mark=lambda _:None, vendor_policy=None):
     """Derive absence from native cooked roots, retaining all full-tree values."""
     mark('roots')
     required = {'connectors', 'bridges', 'actions', 'sources', 'gateway', 'exhook',
@@ -181,7 +183,7 @@ def _absence_profile(config, provider, mark=lambda _:None):
     if type(config) is not dict or not required <= set(config):
         unsupported()
     mark('references')
-    _no_refs(config)
+    _no_refs(config, vendor_policy=vendor_policy)
     mark('connectors')
     for root in ('connectors', 'bridges', 'actions', 'sources', 'gateway'):
         if type(config[root]) is not dict or config[root]:
@@ -386,10 +388,10 @@ def _validate_inventory(names,schema,tables):
         _validate_sync_builtin(schema,tables)
 
 
-def _build_checked(wire, generation, mark):
+def _build_checked(wire, generation, mark, vendor_policy=None, private_values=None):
     mark('wire')
     raw, doc = _read_reply(wire, generation)
-    values = Values()
+    values = private_values if private_values is not None else Values()
     mark('config_terms')
     config = _decode(doc['config'], values)
     mark('config_secret_wrappers')
@@ -427,7 +429,7 @@ def _build_checked(wire, generation, mark):
         tables[table['table']] = table
     if set(tables) != set(names) - {'schema'}:
         unsupported()
-    bootstrap, group = _absence_profile(config, providers, mark)
+    bootstrap, group = _absence_profile(config, providers, mark, vendor_policy)
     mark('mqtt_projection')
     for name in ('emqx_authn_mnesia', 'emqx_app'):
         record, attrs = TABLES[name]
@@ -466,12 +468,12 @@ def _build_checked(wire, generation, mark):
     return bind_target_persisted(readers, persisted_values=companion, generation=generation)
 
 
-def _build(wire,generation):
+def _build(wire,generation,vendor_policy=None,private_values=None):
     phase=['wire']
     def mark(value):
         phase[0]=value if value in CONSUMER_PHASES else 'wire'
     try:
-        return _build_checked(wire,generation,mark)
+        return _build_checked(wire,generation,mark,vendor_policy,private_values)
     except OwnerCaptureRefused:
         raise
     except Exception:
@@ -479,7 +481,7 @@ def _build(wire,generation):
 
 
 @contextmanager
-def owner_target_readers(*, private_eval, quiesce):
+def owner_target_readers(*, private_eval, quiesce, vendor_observer=None):
     """Hold owner's actual quiescence context through capture AND consumer use.
 
     private_eval(expression)->bounded private bytes (same owner emqx eval transport
@@ -488,7 +490,7 @@ def owner_target_readers(*, private_eval, quiesce):
     Never invoke this on production or an unowned broker. No default transport.
     """
     try:
-        with quiesce():
+        with quiesce(), ExitStack() as lease:
             generation = uuid.uuid4().hex
             # emqx's CLI transport does not preserve a multiline expression in
             # the same form as erl_scan. Only this fixed public source is folded;
@@ -496,7 +498,12 @@ def owner_target_readers(*, private_eval, quiesce):
             expression = ' '.join(line.strip() for line in EXPRESSION.read_text().splitlines()
                                   if line.strip() and not line.lstrip().startswith('%'))
             expression = expression.replace('__OWNER_NONCE__', generation)
-            readers = _build(private_eval(expression), generation)
+            values, policy = Values(), None
+            if vendor_observer is not None:
+                from emqx_target_vendor_policy import DisabledVendorTLS
+                policy = DisabledVendorTLS(lease.enter_context(
+                    vendor_observer(generation=generation, private_values=values)))
+            readers = _build(private_eval(expression), generation, policy, values)
             yield readers
     except OwnerCaptureRefused:
         raise
@@ -506,11 +513,11 @@ def owner_target_readers(*, private_eval, quiesce):
         raise TargetCaptureUnsupported() from None
 
 
-def broker_target_readers(*, broker, checked, quiesce):
+def broker_target_readers(*, broker, checked, quiesce, vendor_observer=None):
     """Practical adapter to emqx_broker_export's owner checked transport.
 
     Creating this context does not execute commands; entering it does. Broker
     identity/authorization and invocation budget are exclusively the owner's.
     """
     return owner_target_readers(private_eval=lambda expression:
-        checked('exec', broker, 'emqx', 'eval', expression), quiesce=quiesce)
+        checked('exec', broker, 'emqx', 'eval', expression), quiesce=quiesce, vendor_observer=vendor_observer)
