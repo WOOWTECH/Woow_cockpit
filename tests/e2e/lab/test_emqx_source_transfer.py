@@ -165,3 +165,23 @@ class TransferTests(unittest.TestCase):
         code, _, _, _, out, err = self.invoke('--preflight',preflight_error=True)
         self.assertEqual(code,1)
         self.assertEqual((out,err),('ARM TRANSFER REFUSED\n',''))
+
+    def test_extracted_direct_host_script_without_pythonpath_has_fixed_refusal(self):
+        # Code-only extraction, executed by the actual python script command.
+        # Invalid mode refuses before dependencies/key/archive/owner IO.
+        import shutil
+        import subprocess
+        import sys
+        extracted=self.root/'extracted';lab=extracted/'tests/e2e/lab';lab.mkdir(parents=True)
+        source=Path(transfer.__file__).parent
+        for path in source.iterdir():
+            if path.suffix in ('.py','.escript','.expr','.json'):
+                shutil.copyfile(path,lab/path.name)
+        shutil.copytree(transfer.ROOT/'backup-engine/woowbackup',extracted/'backup-engine/woowbackup',
+                        ignore=shutil.ignore_patterns('__pycache__','*.pyc'))
+        env=dict(os.environ);env.pop('PYTHONPATH',None);env['PYTHONDONTWRITEBYTECODE']='1'
+        result=subprocess.run([sys.executable,str(lab/'emqx_arm_cold_transfer.py'),'--invalid-mode'],
+            cwd=self.root,env=env,capture_output=True,timeout=10)
+        self.assertEqual(result.returncode,1)
+        self.assertEqual(result.stdout,b'ARM TRANSFER REFUSED\n')
+        self.assertEqual(result.stderr,b'')

@@ -19,7 +19,7 @@ read -r current maximum < <("$LP" exec "$NAME" sh -c 'echo "$(cat /sys/fs/cgroup
 preflight_mode=false
 [[ "${1:-}" != --preflight && "${1:-}" != --x86-preflight ]] || preflight_mode=true
 if "$preflight_mode"; then
-    (( maximum - current >= 1073741824 )) || die 'less than 1 GiB preflight headroom'
+    (( maximum - current >= 1610612736 )) || die 'less than1536MiB preflight headroom'
 fi
 (( maximum - current >= 536870912 )) || die 'less than512MiB headroom'
 # Recheck on both successful and failed owner execution. Do not delete anything

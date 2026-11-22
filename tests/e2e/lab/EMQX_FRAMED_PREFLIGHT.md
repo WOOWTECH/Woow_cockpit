@@ -17,7 +17,7 @@ These fixed modes use the existing ARM/x86 SQL alias profiles, archive identitie
 256 MiB ARM / fixed expanded x86 spool profiles, and key/ciphertext stdin frame.
 No path, digest, key, parser or target override is accepted. Source-only modes
 retain their previous behavior. Both mutation locks, owner.sh realm/isolation,
-and an extra 1 GiB available-memory check apply before a preflight run. Cleanup
+and an extra 1536 MiB available-memory check apply before a preflight run. Cleanup
 and postflight run on refusal too. No production owner/Podman operation is added.
 
 `staged_owner_frame` is shared with the existing fresh build workflow: bounded
@@ -42,6 +42,13 @@ length/hash/EOF/child exit and the fixed evidence schema are checked. The host
 stores these exact bytes as a mode-0600 `owner-preflight.json` under an invocation
 mode-0700 `/home/woowtechopenclaw/.woowbk-lab/emqx-preflight-evidence-*` directory.
 The host private parent must already be owner-owned mode 0700 without symlinks.
+Retention uses an exclusively created final directory and an O_EXCL file;
+existing artifacts are never replaced. Write/flush/fsync failure removes only the
+created payload and directory. This is not atomic publication to other readers;
+no artifact is returned until writing and fsync complete. The shared private
+parent is checked without chmod. Direct host entry prepends the known repository
+backup-engine path before importing consumers; no inherited PYTHONPATH is needed.
+
 No source replay, source values, target docs, key, token, capability or raw errors
 are returned. The payload, hash and private path are never printed publicly.
 

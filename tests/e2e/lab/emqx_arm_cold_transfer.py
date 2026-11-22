@@ -14,10 +14,13 @@ import struct
 import subprocess
 import sys
 
+# Direct shell/script entry must not depend on an inherited PYTHONPATH.
+ROOT=Path(__file__).resolve().parents[3]
+sys.path.insert(0,str(ROOT/'backup-engine'))
+
 from emqx_source_profiles import SOURCE_MODES, source_profile
 from emqx_framed_preflight import MODES as PREFLIGHT_MODES, read_child_frame, retain_evidence
 
-ROOT=Path(__file__).resolve().parents[3]
 CREDS=Path('/home/woowtechopenclaw/.woowbk-lab/secrets/ha-import-creds.env')
 BOOTSTRAP=r'''
 import ctypes,io,os,pathlib,runpy,shutil,struct,sys,tarfile,tempfile

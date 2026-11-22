@@ -70,18 +70,28 @@ def retain_evidence(frame):
     if (not stat.S_ISDIR(info.st_mode) or info.st_uid != os.geteuid()
             or stat.S_IMODE(info.st_mode) != 0o700
             or any(p.is_symlink() for p in (parent,*parent.parents))): raise ValueError()
-    with tempfile.TemporaryDirectory(prefix='emqx-preflight-pending-',dir=parent) as directory:
-        root = Path(directory)
-        root.chmod(0o700)
-        path = root/'owner-preflight.json'
+    # mkdtemp exclusively creates the FINAL directory; collisions are retried.
+    # No rename/replacement and no claim of atomic publication to other readers.
+    root = Path(tempfile.mkdtemp(prefix='emqx-preflight-evidence-',dir=parent))
+    path = root/'owner-preflight.json'
+    fd, created = None, False
+    try:
+        info = root.stat()
+        if info.st_uid != os.geteuid() or stat.S_IMODE(info.st_mode) != 0o700:
+            raise ValueError()
         fd = os.open(path,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o600)
-        with os.fdopen(fd,'wb') as out:
+        created = True
+        stream = os.fdopen(fd,'wb')
+        fd = None
+        with stream as out:
             os.fchmod(out.fileno(),0o600)
             out.write(raw);out.flush();os.fsync(out.fileno())
-        # Atomic, invocation-unique retained artifact; staging cleans on failure.
-        final = parent/('emqx-preflight-evidence-'+root.name.removeprefix('emqx-preflight-pending-'))
-        os.rename(root,final)
-    return final/'owner-preflight.json'
+        return path  # Only a fully written/fsynced artifact is returned.
+    except BaseException:
+        if fd is not None: os.close(fd)
+        if created: path.unlink()
+        root.rmdir()
+        raise
 
 
 def main(argv=None):

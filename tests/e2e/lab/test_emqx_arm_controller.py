@@ -8,7 +8,7 @@ import unittest
 SCRIPT=Path(__file__).with_name('run_emqx_arm_cold.sh')
 
 class ControllerTests(unittest.TestCase):
-    def run_case(self,child=0,post=0,lock_kind=None,args=()):
+    def run_case(self,child=0,post=0,lock_kind=None,args=(),headroom=2147483648):
         with tempfile.TemporaryDirectory() as directory:
             root=Path(directory)
             (root/'owner.lock').write_bytes(b'preserve-main-lock')
@@ -22,7 +22,7 @@ class ControllerTests(unittest.TestCase):
             (root/'lib.sh').write_text('LAB_DIR="'+directory+'"\nREPO_ROOT="'+directory+'"\nLP="'+directory+'/lp"\nNAME=fixture\ndevice_vars() { :; }\ndie() { exit 1; }\n')
             files={
                 'git':'exit 0',
-                'lp':'echo "0 1073741824"',
+                'lp':'echo "0 '+str(headroom)+'"',
                 'owner.sh':'if [ "$2" = --verify-isolation ]; then exit 0; fi\nexit "$POST_STATUS"',
                 'python3':'exit "$CHILD_STATUS"',
             }
@@ -67,3 +67,12 @@ class ControllerTests(unittest.TestCase):
                     result=self.run_case(post=post,args=(mode,))
                     self.assertEqual(result.returncode,expected,result.stderr)
                     self.assertEqual(result.stdout,'ARM POSTFLIGHT '+('PASSED' if post==0 else 'REFUSED')+'\n')
+
+    def test_preflight_1536mib_budget_and_source_only_512mib_gate(self):
+        self.assertEqual(self.run_case(headroom=768*1024**2).returncode,0)
+        for mode in ('--preflight','--x86-preflight'):
+            with self.subTest(mode=mode):
+                self.assertEqual(self.run_case(args=(mode,),headroom=1536*1024**2).returncode,0)
+                result=self.run_case(args=(mode,),headroom=1536*1024**2-1)
+                self.assertEqual(result.returncode,1)
+                self.assertEqual(result.stdout,'')  # refusal before owner execution/trap

@@ -73,3 +73,38 @@ class FrameTests(unittest.TestCase):
                 (['--preflight','--sha','override'],2),(['--source'],2)):
                 self.assertEqual(framed.main(args),expected)
             runner.assert_not_called()
+
+    def test_final_directory_collisions_preserve_existing_empty_and_nonempty_artifacts(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory)
+            empty=root/'emqx-preflight-evidence-collision-empty';empty.mkdir(mode=0o700)
+            occupied=root/'emqx-preflight-evidence-collision-full';occupied.mkdir(mode=0o700)
+            marker=occupied/'owner-preflight.json';marker.write_bytes(b'preserve-existing')
+            with patch.object(framed,'PRIVATE_PARENT',root), \
+                 patch.object(framed.tempfile,'_get_candidate_names',return_value=iter([
+                     'collision-empty','collision-full','fresh'])):
+                path=framed.retain_evidence(framed.evidence_frame(artifact()))
+            self.assertEqual(path.parent.name,'emqx-preflight-evidence-fresh')
+            self.assertTrue(empty.is_dir())
+            self.assertEqual(list(empty.iterdir()),[])
+            self.assertEqual(marker.read_bytes(),b'preserve-existing')
+            self.assertEqual(path.read_bytes(),artifact())
+
+    def test_write_or_fsync_failure_removes_only_created_artifact(self):
+        for boundary in ('fdopen','fsync'):
+            with self.subTest(boundary=boundary), tempfile.TemporaryDirectory() as directory:
+                root=Path(directory)
+                existing=root/'preserved.json';existing.write_bytes(b'existing')
+                with patch.object(framed,'PRIVATE_PARENT',root), \
+                     patch.object(framed.os,boundary,side_effect=OSError('generated-failure')):
+                    with self.assertRaises(OSError): framed.retain_evidence(framed.evidence_frame(artifact()))
+                self.assertEqual(list(root.iterdir()),[existing])
+                self.assertEqual(existing.read_bytes(),b'existing')
+
+    def test_bad_parent_mode_refuses_without_chmod(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory);root.chmod(0o755)
+            with patch.object(framed,'PRIVATE_PARENT',root):
+                with self.assertRaises(ValueError): framed.retain_evidence(framed.evidence_frame(artifact()))
+            self.assertEqual(root.stat().st_mode&0o777,0o755)
+            self.assertEqual(list(root.iterdir()),[])
