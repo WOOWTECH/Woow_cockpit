@@ -1,0 +1,73 @@
+{
+  "schema": 1,
+  "status": "passed",
+  "payload_bytes": 2147483648,
+  "reserve_bytes": 12884901888,
+  "sparse": false,
+  "encryption": "none",
+  "compression": "gzip",
+  "service_restore": false,
+  "hermes_attempts": 0,
+  "headers_only_over_8gib": true,
+  "phases": {
+    "generate_seconds": 22.30930729303509,
+    "write_seconds": 132.7511425090488,
+    "verify_seconds": 18.846829844871536,
+    "extract_hash_seconds": 49.149615633068606
+  },
+  "free_before": 26320982016,
+  "minimum_free_observed": 19875467264,
+  "header_probes": [
+    {
+      "declared_bytes": 8589934591,
+      "actual_header_bytes": 512,
+      "parser_size_supported": true,
+      "missing_payload_rejected": true
+    },
+    {
+      "declared_bytes": 8589934592,
+      "actual_header_bytes": 1536,
+      "parser_size_supported": true,
+      "missing_payload_rejected": true
+    },
+    {
+      "declared_bytes": 8589934593,
+      "actual_header_bytes": 1536,
+      "parser_size_supported": true,
+      "missing_payload_rejected": true
+    },
+    {
+      "case": "oversized backup.json",
+      "actual_header_bytes": 1536,
+      "error": {
+        "code": "not-a-backup",
+        "message": "這不是 woowtech 備份檔（.tar 或 .woowbackup）。",
+        "details": {}
+      }
+    },
+    {
+      "case": "metadata limit",
+      "actual_header_bytes": 512,
+      "error": {
+        "code": "limit-exceeded",
+        "message": "備份檔超出安全限制（檔案數量或大小），已拒絕處理。",
+        "details": {
+          "reason": "backup.json too large",
+          "size": 1048577
+        }
+      }
+    }
+  ],
+  "source_allocated_bytes": 2147512320,
+  "source_sha256": "ac39dbd64c4a87060701e9d3e8b3178f5f361263824ba575a3f94c62159f7d95",
+  "archive_bytes": 2148167680,
+  "archive_allocated_bytes": 2148220928,
+  "archive_sha256": "4c34091fd82985428ff35960e625cec816848cb226b0dcfd0831199c6c407c8e",
+  "verified_bytes": 2147483648,
+  "extracted_sha256": "ac39dbd64c4a87060701e9d3e8b3178f5f361263824ba575a3f94c62159f7d95",
+  "extracted_bytes": 2147483648,
+  "temporary_payloads_removed": true,
+  "elapsed_seconds": 228.72356210509315,
+  "max_rss_kib": 58216,
+  "free_after_cleanup": 26318802944
+}
