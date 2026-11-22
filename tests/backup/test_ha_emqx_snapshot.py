@@ -85,7 +85,10 @@ class SnapshotTests(unittest.TestCase):
                         {'configs/cluster.hocon', 'authz/custom.acl'}, limit=limit)
                 self.assertFalse(self.snapshot.exists())
 
-class ProvenAbsenceSnapshotTests(SnapshotTests):
+class ProvenAbsenceSnapshotTests(unittest.TestCase):
+    setUp=SnapshotTests.setUp
+    archive=SnapshotTests.archive
+
     def test_absent_override_does_not_invent_file_or_skip_other_dependencies(self):
         self.archive([(k,v) for k,v in self.files.items() if k!='configs/cluster.hocon'])
         found=ha_emqx.target_config_snapshot(self.source,self.snapshot,self.required,absent={'configs/cluster.hocon'})
