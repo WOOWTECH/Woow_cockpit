@@ -9,9 +9,11 @@ from emqx_republish_templates import _template, validate_action_reference
 
 PROFILE = 'owner-pinned-image-vendor-acl-republish-context-v1'
 CONTRACT = 'emqx-hocon-context-json-v1'
+HTTP_PROFILE = 'owner-pinned-image-vendor-acl-http-body-context-v1'
+HTTP_CONTRACT = 'emqx-hocon-http-context-json-v1'
 
 
-def register_syntax(document, result, literal):
+def register_syntax(document, result, literal, *, profile=PROFILE):
     bindings = document['string_bindings']
     strings = document['syntax_strings']
     if type(bindings) is not list or len(bindings) > 8192:
@@ -23,13 +25,16 @@ def register_syntax(document, result, literal):
         path, role, value = item['path'], item['role'], item['value']
         if (type(value) is not str or type(path) is not list or not 0 < len(path) <= 32
                 or any(type(p) not in (str, int) or (type(p) is int and p < 0) for p in path)
-                or role not in ('key', 'value', 'republish-value', 'vendor-path', 'action-reference')):
+                or role not in (('key', 'value', 'republish-value', 'vendor-path', 'action-reference')
+                                + (('http-body-value',) if profile == HTTP_PROFILE else ()))):
             refuse()
         ledger[value] -= 1
         if ledger[value] < 0:
             refuse()
         result.tick(1)
-        if role == 'action-reference':
+        if role == 'http-body-value':
+            validate_http_body(path, value, document['parsed'], result)
+        elif role == 'action-reference':
             if (len(path) != 5 or path[:2] != ['rule_engine','rules']
                     or type(path[2]) is not str or not path[2]
                     or path[3] != 'actions' or type(path[4]) is not int):
@@ -58,3 +63,14 @@ def register_syntax(document, result, literal):
         refuse()
     for value in joined:
         _json_walk(value, result, 1)
+
+
+def validate_http_body(path, value, document, result):
+    if (len(path) != 5 or list(path[:2]) != ['actions','http']
+            or type(path[2]) is not str or not path[2]
+            or list(path[3:]) != ['parameters','body'] or type(value) is not str):
+        refuse()
+    validate_action_reference('http:' + path[2], document)
+    # HTTP's pinned formatter uses emqx_template + emqx_jsonish, as republish
+    # payload does. This conservative common subset never renders/resolves.
+    _template(value, 'payload', result)

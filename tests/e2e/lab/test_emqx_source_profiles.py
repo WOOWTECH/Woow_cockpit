@@ -36,6 +36,16 @@ class ProfileTests(unittest.TestCase):
             self.assertEqual(contextual.frame_mode,byte)
             self.assertEqual(contextual.file_dependency_profile,
                              'owner-pinned-image-vendor-acl-republish-context-v1')
+        for mode, base, byte in (('--source-vendor-acl-http-body',arm,b'H'),
+                                 ('--x86-source-vendor-acl-http-body',x86,b'J')):
+            http = source_profile(mode)
+            self.assertEqual(http.sha256,base.sha256)
+            self.assertEqual(http.archive,base.archive)
+            self.assertEqual(http.cold_receipt,base.cold_receipt)
+            self.assertEqual(http.fixture_profile,base.fixture_profile)
+            self.assertEqual(http.frame_mode,byte)
+            self.assertEqual(http.file_dependency_profile,
+                             'owner-pinned-image-vendor-acl-http-body-context-v1')
         with self.assertRaises(AttributeError):
             x86.sha256 = arm.sha256
         for unknown in ('', '--source=/tmp/other', '--x86-source=bad', 'owner-x86-20261121'):

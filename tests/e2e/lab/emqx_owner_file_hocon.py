@@ -86,12 +86,12 @@ def read_owner_file_hocon(raw, parser=None, *, profile, product_image):
     """
     stage='profile'
     try:
-        from emqx_hocon_context import PROFILE as CONTEXT_PROFILE, CONTRACT, register_syntax
-        contextual = profile == CONTEXT_PROFILE
-        if profile not in (PROFILE, CONTEXT_PROFILE) or product_image != IMAGE:
+        from emqx_hocon_context import PROFILE as CONTEXT_PROFILE, CONTRACT, HTTP_PROFILE, HTTP_CONTRACT, register_syntax, validate_http_body
+        contextual = profile in (CONTEXT_PROFILE, HTTP_PROFILE)
+        if profile not in (PROFILE, CONTEXT_PROFILE, HTTP_PROFILE) or product_image != IMAGE:
             refuse()
         stage='contract'
-        doc = _contract(raw, parser, CONTRACT if contextual else 'emqx-hocon-json-v1')
+        doc = _contract(raw, parser, HTTP_CONTRACT if profile == HTTP_PROFILE else CONTRACT if contextual else 'emqx-hocon-json-v1')
         if (set(doc) != {'contract', 'version', 'input_sha256', 'input_bytes',
                          'complete', 'resolution', 'references', 'document'}
                 or doc['resolution'] != 'disabled' or doc['references'] != []):
@@ -108,11 +108,16 @@ def read_owner_file_hocon(raw, parser=None, *, profile, product_image):
         dependencies = []
         if contextual:
             stage='syntax'
-            register_syntax(document, result, LITERAL)
+            register_syntax(document, result, LITERAL, profile=profile)
 
         def walk(value, location=(), depth=0):
             nonlocal stage
             stage='walk'
+            if (profile == HTTP_PROFILE and len(location) == 5
+                    and location[:2] == ('actions','http')
+                    and location[3:] == ('parameters','body')):
+                validate_http_body(location, value, document['parsed'], result)
+                return
             if contextual and location == ('rule_engine',):
                 from emqx_republish_templates import collect_rule_engine_values, PROFILE as RULE_PROFILE
                 for private_value in collect_rule_engine_values(value, profile=RULE_PROFILE, document=document['parsed']).values:

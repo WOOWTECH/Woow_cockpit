@@ -18,15 +18,21 @@ main(Args) ->
         Tree = hocon_token:parse(hocon_token:trans_key(hocon_token:rm_trailing_comma(Tokens)), #{}),
         put(phase, syntax),
         Strings = leaves(Tree, 0),
+        Http = Args =:= ["--http-body"],
+        put(http_body, Http),
+        %% Effective connector inventory is validation only; occurrences below
+        %% still come from the ORIGINAL tree, not expanded/merged syntax.
+        Doc = hocon:transform(hocon:concat(hocon:expand(Tree)), #{format => map}),
+        put(document, Doc),
         put(concat_strings, []),
         Bindings = bindings(Tree, [], false, 0),
         true = length(Bindings) =< 8192,
         %% Explicit pipeline omits include and resolve entirely.
         put(phase, transform),
-        Doc = hocon:transform(hocon:concat(hocon:expand(Tree)), #{format => map}),
         put(phase, encode),
+        Contract = case Http of true -> <<"emqx-hocon-http-context-json-v1">>; false -> <<"emqx-hocon-context-json-v1">> end,
         Hash = binary:encode_hex(crypto:hash(sha256, Raw), lowercase),
-        Out = jsone:encode(#{contract => <<"emqx-hocon-context-json-v1">>, version => <<"5.8.9">>,
+        Out = jsone:encode(#{contract => Contract, version => <<"5.8.9">>,
             input_sha256 => Hash, input_bytes => byte_size(Raw), complete => true,
             resolution => <<"disabled">>, references => [],
             document => #{parsed => Doc, syntax_strings => Strings, string_bindings => Bindings, concat_strings => lists:reverse(get(concat_strings))}}),
@@ -87,18 +93,30 @@ bindings(#{'$hcTyp' := object, '$hcVal' := Fields}, P, Parent, D) ->
     Action = case P of
         [<<"rule_engine">>,<<"rules">>,R,<<"actions">>,I] when is_binary(R), byte_size(R)>0, is_integer(I) ->
             field(Fields, <<"function">>) =:= [<<"republish">>];
-        _ -> case Parent of {A,_} -> A; _ -> false end
+        _ -> case Parent of {A,_,_} -> A; _ -> false end
     end,
     File = case P of
         [<<"authorization">>,<<"sources">>,I2] when is_integer(I2) ->
             field(Fields, <<"type">>) =:= [<<"file">>];
         _ -> false
     end,
+    Http = case {get(http_body), P} of
+        {true, [<<"actions">>,<<"http">>,Id]} when is_binary(Id), byte_size(Id)>0 ->
+            case field(Fields, <<"connector">>) of
+                [Name] when is_binary(Name) ->
+                    Connectors = maps:get(<<"http">>,maps:get(<<"connectors">>,get(document),#{}),#{}),
+                    Connector = maps:get(Name,Connectors,#{}),
+                    re:run(Name,<<"^[A-Za-z0-9_-]+$">>,[{capture,none}]) =:= match
+                        andalso is_map(Connector) andalso map_size(Connector)>0;
+                _ -> false
+            end;
+        _ -> case Parent of {_,_,H} -> H; _ -> false end
+    end,
     lists:append([begin
         Parts = keyparts(K),
         Q = P ++ Parts,
         Keys = [#{path=>Q, role=><<"key">>, value=>X} || X <- leaves(K,0)],
-        Keys ++ bindings(V,Q,{Action,File},D+1)
+        Keys ++ bindings(V,Q,{Action,File,Http},D+1)
     end || {K,V} <- Fields]);
 bindings(#{'$hcTyp' := array, '$hcVal' := Items}, P, _, D) ->
     lists:append([bindings(V,P++[I],false,D+1) || {I,V} <- lists:zip(lists:seq(0,length(Items)-1),Items)]);
@@ -123,11 +141,13 @@ bindings(#{'$hcTyp' := concat, '$hcVal' := Items} = Concat, P, C, D) ->
 bindings(#{'$hcVal' := V}, P, C, D) -> bindings(V,P,C,D);
 bindings(V, P, C, _) when is_binary(V) ->
     Role = case {P,C} of
+        {[<<"actions">>,<<"http">>,Id,<<"parameters">>,<<"body">>], {_,_,true}}
+          when is_binary(Id), byte_size(Id)>0 -> <<"http-body-value">>;
         {[<<"rule_engine">>,<<"rules">>,R,<<"actions">>,I], _}
           when is_binary(R), byte_size(R)>0, is_integer(I) -> <<"action-reference">>;
-        {[<<"rule_engine">>,<<"rules">>,R,<<"actions">>,I,<<"args">>,F], {true,_}}
+        {[<<"rule_engine">>,<<"rules">>,R,<<"actions">>,I,<<"args">>,F], {true,_,_}}
           when is_binary(R), is_integer(I), (F=:=<<"payload">> orelse F=:=<<"topic">> orelse F=:=<<"qos">> orelse F=:=<<"retain">>) -> <<"republish-value">>;
-        {[<<"authorization">>,<<"sources">>,I,<<"path">>], {_,true}} when is_integer(I) -> <<"vendor-path">>;
+        {[<<"authorization">>,<<"sources">>,I,<<"path">>], {_,true,_}} when is_integer(I) -> <<"vendor-path">>;
         _ -> <<"value">>
     end,
     [#{path=>P,role=>Role,value=>V}];

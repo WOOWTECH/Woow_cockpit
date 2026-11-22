@@ -48,7 +48,7 @@ try:
  mode=exact(1)
  if mode==b'P':
   print('ARM DEPENDENCIES PASSED',flush=True);raise SystemExit(0)
- source_modes={b'S':'--source',b'X':'--x86-source',b'V':'--source-vendor-acl',b'W':'--x86-source-vendor-acl',b'Y':'--source-vendor-acl-republish',b'Z':'--x86-source-vendor-acl-republish'}
+ source_modes={b'S':'--source',b'X':'--x86-source',b'V':'--source-vendor-acl',b'W':'--x86-source-vendor-acl',b'Y':'--source-vendor-acl-republish',b'Z':'--x86-source-vendor-acl-republish',b'H':'--source-vendor-acl-http-body',b'J':'--x86-source-vendor-acl-http-body'}
  if mode not in (b'R',b'C',b'D',*source_modes):raise ValueError()
  if mode in source_modes:
   from emqx_arm_source_owner import main

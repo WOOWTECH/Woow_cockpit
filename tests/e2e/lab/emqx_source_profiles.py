@@ -31,7 +31,10 @@ X86_VENDOR_ACL = replace(X86_SOURCE, frame_mode=b'W', file_dependency_profile=VE
 CONTEXT_PROFILE = 'owner-pinned-image-vendor-acl-republish-context-v1'
 ARM_CONTEXT = replace(ARM_SOURCE, frame_mode=b'Y', file_dependency_profile=CONTEXT_PROFILE)
 X86_CONTEXT = replace(X86_SOURCE, frame_mode=b'Z', file_dependency_profile=CONTEXT_PROFILE)
-SOURCE_MODES = ('--source', '--x86-source', '--source-vendor-acl', '--x86-source-vendor-acl', '--source-vendor-acl-republish', '--x86-source-vendor-acl-republish')
+HTTP_CONTEXT_PROFILE = 'owner-pinned-image-vendor-acl-http-body-context-v1'
+ARM_HTTP_CONTEXT = replace(ARM_SOURCE, frame_mode=b'H', file_dependency_profile=HTTP_CONTEXT_PROFILE)
+X86_HTTP_CONTEXT = replace(X86_SOURCE, frame_mode=b'J', file_dependency_profile=HTTP_CONTEXT_PROFILE)
+SOURCE_MODES = ('--source', '--x86-source', '--source-vendor-acl', '--x86-source-vendor-acl', '--source-vendor-acl-republish', '--x86-source-vendor-acl-republish', '--source-vendor-acl-http-body', '--x86-source-vendor-acl-http-body')
 
 
 def source_profile(mode):
@@ -47,4 +50,8 @@ def source_profile(mode):
         return ARM_CONTEXT
     if mode == '--x86-source-vendor-acl-republish':
         return X86_CONTEXT
+    if mode == '--source-vendor-acl-http-body':
+        return ARM_HTTP_CONTEXT
+    if mode == '--x86-source-vendor-acl-http-body':
+        return X86_HTTP_CONTEXT
     raise ValueError('fixed-source-mode-required')

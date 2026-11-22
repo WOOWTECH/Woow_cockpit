@@ -17,7 +17,13 @@ def native_hocon_context(raw):
     return _native_hocon(raw, SCRIPT.with_name('emqx_hocon_context_native.escript'))
 
 
-def _native_hocon(raw, script):
+def native_hocon_http_context(raw):
+    """Separate fixed HTTP-body profile; never render or issue HTTP requests."""
+    return _native_hocon(raw, SCRIPT.with_name('emqx_hocon_context_native.escript'),
+                         args=('--http-body',))
+
+
+def _native_hocon(raw, script, args=()):
     """Owner-selected code only. Bounded per-file input/output, 20s client wall limit.
 
     Requires cached pinned image and rootless podman; never pulls an image.
@@ -34,7 +40,7 @@ def _native_hocon(raw, script):
             # Output is a bounded private regular file, never a pipe accumulated
             # without a limit. Container itself has an output/file size limit.
             with tempfile.TemporaryFile() as output:
-                code = run_native(directory, 'parser.escript', output=output)
+                code = run_native(directory, 'parser.escript', args=args, output=output)
                 output.seek(0)
                 encoded = output.read(MAX_OUTPUT + 1)
                 if code or len(encoded) > MAX_OUTPUT:
