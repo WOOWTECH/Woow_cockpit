@@ -830,7 +830,10 @@ def restore_target_settings(tmp, original, read_candidate, *, observe=None):
         changed['authentication'] = authn
     if set(changed) & ha_emqx_settings.IMMUTABLE_ROOTS:
         raise BackupError('incompatible', 'EMQX 唯讀啟動設定在匯入後改變，已停止。')
-    from .ha_emqx_acl_preservation import disabled_intermediate, candidate_acl_receipt, refuse
+    from .ha_emqx_acl_preservation import disabled_intermediate, candidate_acl_receipt, refuse, imported_acl_profile_stage
+    if observe is not None:
+        observe('acl_profile')
+        observe(imported_acl_profile_stage(before))
     intermediate = disabled_intermediate(original, before)
     def load_settings(settings):
         snippet = json.dumps(settings, ensure_ascii=True).encode()

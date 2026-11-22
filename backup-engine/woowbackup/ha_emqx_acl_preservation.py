@@ -7,9 +7,11 @@ Keep native receipts private: they contain counts and hashes of private data.
 import copy
 import re
 from .errors import BackupError
-from .ha_emqx_authorizers import builtin_database_references
+from .ha_emqx_authorizers import builtin_database_references, builtin_database_shape, BUILTIN_SHAPES
 
-ACL_REMOVAL_STAGES = frozenset(('acl_baseline','acl_disable','acl_afterdisable','acl_restore','acl_final'))
+ACL_PROFILE_STAGES = frozenset(('acl_profile','acl_profile_builtin_absent')) | frozenset(
+    'acl_profile_builtin_'+shape for shape in BUILTIN_SHAPES)
+ACL_REMOVAL_STAGES = ACL_PROFILE_STAGES | frozenset(('acl_baseline','acl_disable','acl_afterdisable','acl_restore','acl_final'))
 
 # Fixed table/code only. Whole bounded rows and persistent schema are hashed,
 # never emitted. Each receipt uses one native transaction and no automatic retry.
@@ -88,6 +90,21 @@ def candidate_acl_receipt(tmp):
     """Only the invocation-owned emqx-new candidate; fixed time/output bounds."""
     return acl_receipt(lambda command: tmp.exec('emqx-new', command, timeout=10,
                                                max_output=256, check=False))
+
+
+def imported_acl_profile_stage(imported):
+    """Fixed diagnostic from this same raw capture; never admission/defaulting."""
+    if type(imported) is not dict or type(imported.get('authorization')) is not dict:
+        return 'acl_profile_builtin_unknown'
+    sources=imported['authorization'].get('sources')
+    if type(sources) is not list or any(type(source) is not dict for source in sources):
+        return 'acl_profile_builtin_unknown'
+    builtin=[source for source in sources if source.get('type')=='built_in_database']
+    if not builtin:
+        return 'acl_profile_builtin_absent'
+    if len(builtin)!=1:
+        return 'acl_profile_builtin_unknown'
+    return 'acl_profile_builtin_'+builtin_database_shape(builtin[0])
 
 
 def disabled_intermediate(original, imported):

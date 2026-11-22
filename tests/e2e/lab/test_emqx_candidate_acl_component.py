@@ -30,7 +30,8 @@ class CandidateAclComponentTests(unittest.TestCase):
             observed.append(name);stages.mark('product_'+name)
         def read(command):return t.exec('emqx-new',command,timeout=120,max_output=ha_emqx.MAX_HOCON,check=False)
         ha_emqx.restore_target_settings(t,t.config,read,observe=observe)
-        self.assertEqual(observed,['acl_baseline','acl_disable','acl_afterdisable','acl_restore','acl_final'])
+        self.assertEqual(observed,['acl_profile','acl_profile_builtin_exact_type_enable',
+            'acl_baseline','acl_disable','acl_afterdisable','acl_restore','acl_final'])
         self.assertEqual(stages.current(),'product_acl_final')
 
     def test_failure_stage_is_bounded_and_precise(self):
@@ -43,3 +44,36 @@ class CandidateAclComponentTests(unittest.TestCase):
             with self.subTest(fault=fault),self.assertRaises(BackupError):
                 ha_emqx.restore_target_settings(t,t.config,read,observe=observed.append)
             self.assertEqual(observed[-1],expected)
+
+    def test_imported_profile_refusal_has_exact_stage_before_native_receipt(self):
+        cases=[({'type':'built_in_database','enable':True,'max_rules':100},'exact_type_enable_maxrules100'),
+               ({'type':'built_in_database','enable':True,'max_rules':101},'unknown'),
+               ({'type':'built_in_database','enable':True,'max_rules':100.0},'unknown'),
+               ({'type':'built_in_database','enable':'true'},'unknown'),
+               ({'type':'built_in_database','enable':True,'private_unknown':'not-output'},'unknown')]
+        for source,shape in cases:
+            t=NativeRemovalTransport()
+            t.running_config['authorization']['sources']=[source]
+            captured=copy.deepcopy(t.running_config)
+            observed=[]
+            def read(command):return t.exec('emqx-new',command,timeout=120,max_output=ha_emqx.MAX_HOCON,check=False)
+            def observe(name):
+                observed.append(name);stages.mark('product_'+name)
+            with self.subTest(shape=shape),self.assertRaises(BackupError):
+                ha_emqx.restore_target_settings(t,t.config,read,observe=observe)
+            self.assertEqual(observed,['acl_profile','acl_profile_builtin_'+shape])
+            self.assertEqual(stages.current(),'product_acl_profile_builtin_'+shape)
+            self.assertEqual(t.receipts,0)
+            self.assertEqual(t.loads,[])
+            self.assertEqual(t.running_config,captured)
+
+    def test_profile_duplicate_absent_and_malformed_are_fixed_only(self):
+        from woowbackup.ha_emqx_acl_preservation import imported_acl_profile_stage
+        builtin={'type':'built_in_database','enable':True}
+        self.assertEqual(imported_acl_profile_stage({'authorization':{'sources':[builtin]}}),
+            'acl_profile_builtin_exact_type_enable')
+        self.assertEqual(imported_acl_profile_stage({'authorization':{'sources':[]}}),
+            'acl_profile_builtin_absent')
+        for value in (None,{}, {'authorization':{'sources':[None]}},
+                      {'authorization':{'sources':[builtin,builtin]}}):
+            self.assertEqual(imported_acl_profile_stage(value),'acl_profile_builtin_unknown')
