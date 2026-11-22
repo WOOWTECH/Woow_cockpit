@@ -23,6 +23,12 @@ def native_hocon_http_context(raw):
                          args=('--http-body',))
 
 
+def native_hocon_sql_context(raw):
+    """Parse-only, original-rule SQL alias authority; never query/evaluate SQL."""
+    return _native_hocon(raw, SCRIPT.with_name('emqx_hocon_context_native.escript'),
+                         args=('--sql-aliases',))
+
+
 def _native_hocon(raw, script, args=()):
     """Owner-selected code only. Bounded per-file input/output, 20s client wall limit.
 

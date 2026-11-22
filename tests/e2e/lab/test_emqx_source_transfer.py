@@ -39,7 +39,9 @@ class TransferTests(unittest.TestCase):
             '--source-vendor-acl-republish':'ARM_CONTEXT',
             '--x86-source-vendor-acl-republish':'X86_CONTEXT',
             '--source-vendor-acl-http-body':'ARM_HTTP_CONTEXT',
-            '--x86-source-vendor-acl-http-body':'X86_HTTP_CONTEXT'}[mode]
+            '--x86-source-vendor-acl-http-body':'X86_HTTP_CONTEXT',
+            '--source-vendor-acl-sql-aliases':'ARM_SQL_ALIASES',
+            '--x86-source-vendor-acl-sql-aliases':'X86_SQL_ALIASES'}[mode]
         chosen = replace(getattr(profiles, profile_name), archive=self.archive,
                          sha256=self.digest if digest is None else digest)
         sink = Buffer()
@@ -68,7 +70,8 @@ class TransferTests(unittest.TestCase):
         for mode, expected_byte in (('--source', b'S'), ('--x86-source', b'X'),
                 ('--source-vendor-acl', b'V'), ('--x86-source-vendor-acl', b'W'),
                 ('--source-vendor-acl-republish', b'Y'), ('--x86-source-vendor-acl-republish', b'Z'),
-                ('--source-vendor-acl-http-body', b'H'), ('--x86-source-vendor-acl-http-body', b'J')):
+                ('--source-vendor-acl-http-body', b'H'), ('--x86-source-vendor-acl-http-body', b'J'),
+                ('--source-vendor-acl-sql-aliases', b'A'), ('--x86-source-vendor-acl-sql-aliases', b'B')):
             with self.subTest(mode=mode):
                 status, framed, archive, spawn, out, err = self.invoke(mode)
                 self.assertEqual(status, 0)
@@ -86,7 +89,7 @@ class TransferTests(unittest.TestCase):
                 for name in ('emqx_source_profiles.py', 'emqx_owner_file_hocon.py',
                              'emqx_vendor_acl.escript', 'emqx_owner_source_capture.py',
                              'emqx_hocon_context.py','emqx_hocon_context_native.escript','emqx_republish_templates.py',
-                             'emqx_captured_candidate.py'):
+                             'emqx_captured_candidate.py','emqx_sql_aliases.py'):
                     self.assertIn('tests/e2e/lab/' + name, files)
                 command = spawn.call_args.args[0]
                 self.assertEqual(command[1:3], ['d', '/usr/bin/python3'])
@@ -95,12 +98,12 @@ class TransferTests(unittest.TestCase):
                 self.assertEqual((out, err), ('', ''))
 
     def test_fixed_diagnostic_prefix_before_source_mode_and_bootstrap_syntax(self):
-        status, framed, _, _, out, err = self.invoke('--source-vendor-acl-http-body',diagnostic=True)
+        status, framed, _, _, out, err = self.invoke('--source-vendor-acl-sql-aliases',diagnostic=True)
         self.assertEqual(status,0)
         stream=io.BytesIO(framed)
         for _ in range(2):
             size=struct.unpack('!Q',stream.read(8))[0];stream.read(size)
-        self.assertEqual(stream.read(2),b'QH')
+        self.assertEqual(stream.read(2),b'QA')
         self.assertEqual((out,err),('',''))
         compile(transfer.BOOTSTRAP,'<fixed-bootstrap>','exec')
 

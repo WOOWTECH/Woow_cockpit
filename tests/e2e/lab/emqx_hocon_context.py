@@ -11,6 +11,8 @@ PROFILE = 'owner-pinned-image-vendor-acl-republish-context-v1'
 CONTRACT = 'emqx-hocon-context-json-v1'
 HTTP_PROFILE = 'owner-pinned-image-vendor-acl-http-body-context-v1'
 HTTP_CONTRACT = 'emqx-hocon-http-context-json-v1'
+SQL_PROFILE = 'owner-pinned-image-vendor-acl-sql-alias-context-v1'
+SQL_CONTRACT = 'emqx-hocon-sql-context-json-v1'
 
 SYNTAX_PHASES = frozenset(('syntax_bindings','syntax_shape','syntax_multiplicity',
     'syntax_budget','syntax_http_binding','syntax_http_template','syntax_action_reference',
@@ -31,11 +33,20 @@ def register_syntax(document, result, literal, *, profile=PROFILE):
     stage='syntax_bindings'
     try:
         bindings = document['string_bindings']
+        per_binding, per_rule = {}, {}
+        if profile == SQL_PROFILE:
+            from emqx_sql_aliases import bound_aliases
+            per_binding, per_rule = bound_aliases(document)
+            for aliases in per_binding.values():
+                for alias, source in aliases.items():
+                    result.add(_text(alias))
+                    for part in source:
+                        result.add(_text(part))
         strings = document['syntax_strings']
         if type(bindings) is not list or len(bindings) > 8192:
             refuse()
         ledger = Counter(strings)
-        for item in bindings:
+        for binding_index, item in enumerate(bindings):
             stage='syntax_shape'
             if type(item) is not dict or set(item) != {'path', 'role', 'value'}:
                 refuse()
@@ -43,7 +54,7 @@ def register_syntax(document, result, literal, *, profile=PROFILE):
             if (type(value) is not str or type(path) is not list or not 0 < len(path) <= 32
                     or any(type(p) not in (str, int) or (type(p) is int and p < 0) for p in path)
                     or role not in (('key', 'value', 'republish-value', 'vendor-path', 'action-reference')
-                                    + (('http-body-value',) if profile == HTTP_PROFILE else ()))):
+                                    + (('http-body-value',) if profile in (HTTP_PROFILE, SQL_PROFILE) else ()))):
                 refuse()
             stage='syntax_multiplicity'
             ledger[value] -= 1
@@ -73,7 +84,7 @@ def register_syntax(document, result, literal, *, profile=PROFILE):
                     refuse()
                 # Plain qos/retain strings are rejected too, matching effective contract.
                 stage='syntax_republish_'+path[6]
-                _template(value, path[6], result)
+                _template(value, path[6], result, _aliases=per_binding.get(binding_index))
             elif role == 'vendor-path':
                 stage='syntax_vendor_path'
                 if (len(path) != 4 or path[:2] != ['authorization', 'sources']
@@ -93,6 +104,7 @@ def register_syntax(document, result, literal, *, profile=PROFILE):
         for value in joined:
             stage='syntax_concat_literal'
             _json_walk(value, result, 1)
+        return per_rule
     except TemplateRefused as error:
         if stage == 'syntax_republish_payload':
             stage += '_'+error.reason

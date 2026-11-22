@@ -48,10 +48,10 @@ try:
  mode=exact(1)
  diagnostic=mode==b'Q'
  if diagnostic:mode=exact(1)
- if diagnostic and mode not in (b'S',b'X',b'V',b'W',b'Y',b'Z',b'H',b'J'):raise ValueError()
+ if diagnostic and mode not in (b'S',b'X',b'V',b'W',b'Y',b'Z',b'H',b'J',b'A',b'B'):raise ValueError()
  if mode==b'P':
   print('ARM DEPENDENCIES PASSED',flush=True);raise SystemExit(0)
- source_modes={b'S':'--source',b'X':'--x86-source',b'V':'--source-vendor-acl',b'W':'--x86-source-vendor-acl',b'Y':'--source-vendor-acl-republish',b'Z':'--x86-source-vendor-acl-republish',b'H':'--source-vendor-acl-http-body',b'J':'--x86-source-vendor-acl-http-body'}
+ source_modes={b'S':'--source',b'X':'--x86-source',b'V':'--source-vendor-acl',b'W':'--x86-source-vendor-acl',b'Y':'--source-vendor-acl-republish',b'Z':'--x86-source-vendor-acl-republish',b'H':'--source-vendor-acl-http-body',b'J':'--x86-source-vendor-acl-http-body',b'A':'--source-vendor-acl-sql-aliases',b'B':'--x86-source-vendor-acl-sql-aliases'}
  if mode not in (b'R',b'C',b'D',*source_modes):raise ValueError()
  if mode in source_modes:
   from emqx_arm_source_owner import main
@@ -110,7 +110,7 @@ def main(argv=None):
                     if len(values)!=1:raise ValueError()
                     key=values[0].encode('ascii');break
             if key is None or not 1<=len(key)<=1024 or b'\n' in key or b'\r' in key:raise ValueError()
-        files=['backup-engine/woowbackup','tests/e2e/lab/emqx_arm_cold_owner.py','tests/e2e/lab/emqx_cold_history.py','tests/e2e/lab/emqx_cold_terms.escript','tests/e2e/lab/emqx_native_runtime.py','tests/e2e/lab/emqx_semantic_readers.py','tests/e2e/lab/emqx_private_spool.py','tests/e2e/lab/ha_real_fixture.py','tests/e2e/lab/emqx_broker_workload.py','tests/e2e/lab/emqx_runtime_live.py','tests/e2e/lab/emqx_runtime_credentials.py','tests/e2e/lab/emqx_private_boundary.py','tests/e2e/lab/emqx_real_candidate.py','tests/e2e/lab/emqx_source_consumer.py','tests/e2e/lab/emqx_native_hocon.py','tests/e2e/lab/emqx_hocon_native.escript','tests/e2e/lab/emqx_arm_source_owner.py','tests/e2e/lab/emqx_owner_source_capture.py','tests/e2e/lab/emqx_source_profiles.py','tests/e2e/lab/emqx_owner_file_hocon.py','tests/e2e/lab/emqx_vendor_acl.escript','tests/e2e/lab/emqx_hocon_context.py','tests/e2e/lab/emqx_hocon_context_native.escript','tests/e2e/lab/emqx_republish_templates.py','tests/e2e/lab/emqx_captured_candidate.py']
+        files=['backup-engine/woowbackup','tests/e2e/lab/emqx_arm_cold_owner.py','tests/e2e/lab/emqx_cold_history.py','tests/e2e/lab/emqx_cold_terms.escript','tests/e2e/lab/emqx_native_runtime.py','tests/e2e/lab/emqx_semantic_readers.py','tests/e2e/lab/emqx_private_spool.py','tests/e2e/lab/ha_real_fixture.py','tests/e2e/lab/emqx_broker_workload.py','tests/e2e/lab/emqx_runtime_live.py','tests/e2e/lab/emqx_runtime_credentials.py','tests/e2e/lab/emqx_private_boundary.py','tests/e2e/lab/emqx_real_candidate.py','tests/e2e/lab/emqx_source_consumer.py','tests/e2e/lab/emqx_native_hocon.py','tests/e2e/lab/emqx_hocon_native.escript','tests/e2e/lab/emqx_arm_source_owner.py','tests/e2e/lab/emqx_owner_source_capture.py','tests/e2e/lab/emqx_source_profiles.py','tests/e2e/lab/emqx_owner_file_hocon.py','tests/e2e/lab/emqx_vendor_acl.escript','tests/e2e/lab/emqx_hocon_context.py','tests/e2e/lab/emqx_hocon_context_native.escript','tests/e2e/lab/emqx_republish_templates.py','tests/e2e/lab/emqx_captured_candidate.py','tests/e2e/lab/emqx_sql_aliases.py']
         code=subprocess.check_output(['git','archive','HEAD',*files],cwd=ROOT)
         fd=os.open(profile.archive,os.O_RDONLY|os.O_NOFOLLOW)
         with os.fdopen(fd,'rb') as archive:

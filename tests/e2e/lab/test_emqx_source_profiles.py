@@ -46,6 +46,16 @@ class ProfileTests(unittest.TestCase):
             self.assertEqual(http.frame_mode,byte)
             self.assertEqual(http.file_dependency_profile,
                              'owner-pinned-image-vendor-acl-http-body-context-v1')
+        for mode, base, byte in (('--source-vendor-acl-sql-aliases',arm,b'A'),
+                                 ('--x86-source-vendor-acl-sql-aliases',x86,b'B')):
+            sql = source_profile(mode)
+            self.assertEqual(sql.sha256,base.sha256)
+            self.assertEqual(sql.archive,base.archive)
+            self.assertEqual(sql.cold_receipt,base.cold_receipt)
+            self.assertEqual(sql.fixture_profile,base.fixture_profile)
+            self.assertEqual(sql.frame_mode,byte)
+            self.assertEqual(sql.file_dependency_profile,
+                             'owner-pinned-image-vendor-acl-sql-alias-context-v1')
         with self.assertRaises(AttributeError):
             x86.sha256 = arm.sha256
         for unknown in ('', '--source=/tmp/other', '--x86-source=bad', 'owner-x86-20261121'):

@@ -36,7 +36,19 @@ class TemplateRefused(SemanticRefused):
         self.reason = reason if type(reason) is str and reason in TEMPLATE_REASONS else 'grammar'
 
 
-def _template(value, field, result):
+_ALIAS_RESERVED = frozenset(('env','file','vault','include','home','emqx_etc_dir','os','system'))
+_ALIAS_NAME = re.compile(r'[A-Za-z_][A-Za-z0-9_]*\Z')
+
+
+def _alias_source(source):
+    if (type(source) is not list or not 0 < len(source) <= MAX_DEPTH
+            or any(type(part) is not str or not _ALIAS_NAME.fullmatch(part) for part in source)
+            or not (source[0] in _MAP_ROOTS or '.'.join(source) in _SCALARS)):
+        refuse()
+    return source
+
+
+def _template(value, field, result, *, _aliases=None):
     stage='size'
     try:
         raw = _text(value)
@@ -66,7 +78,16 @@ def _template(value, field, result):
                 if len(parts) > MAX_DEPTH:
                     raise TemplateRefused('depth')
                 if not (parts[0] in _MAP_ROOTS or '.'.join(parts) in _SCALARS):
-                    raise TemplateRefused('field_contract' if parts[0] in _SCALAR_ROOTS else 'unknown_root')
+                    aliases = _aliases if type(_aliases) is dict else {}
+                    source = aliases.get(parts[0])
+                    if (source is None or parts[0].lower() in _ALIAS_RESERVED
+                            or not _ALIAS_NAME.fullmatch(parts[0])):
+                        raise TemplateRefused('field_contract' if parts[0] in _SCALAR_ROOTS else 'unknown_root')
+                    source = _alias_source(source)
+                    if len(parts)>1 and source[0] not in _MAP_ROOTS:
+                        raise TemplateRefused('field_contract')
+                    if len(source)+len(parts)-1>MAX_DEPTH:
+                        raise TemplateRefused('depth')
             result.add(match.group().encode())
             result.add(name.encode())
             for part in parts:
@@ -101,7 +122,7 @@ def validate_action_reference(value, document):
         refuse()
 
 
-def collect_rule_engine_values(rule_engine, *, profile=None, document=None):
+def collect_rule_engine_values(rule_engine, *, profile=None, document=None, _rule_aliases=None):
     """Collect a native parsed rule_engine subtree, with exact action context.
 
     Known pinned message roots include payload/flags/headers/pub_props/client_attrs
@@ -175,10 +196,10 @@ def collect_rule_engine_values(rule_engine, *, profile=None, document=None):
                 if field is not None:
                     result.tick(depth)
                     if field in ('payload', 'topic') and type(value) is str:
-                        _template(value, field, result)
+                        _template(value, field, result, _aliases=(_rule_aliases or {}).get(location[2]))
                         return
                     if field in ('qos', 'retain') and type(value) is str:
-                        _template(value, field, result)
+                        _template(value, field, result, _aliases=(_rule_aliases or {}).get(location[2]))
                         return
                     if field == 'qos' and type(value) is int and value in (0, 1, 2):
                         result.add(str(value).encode())

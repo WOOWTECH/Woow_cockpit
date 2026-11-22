@@ -34,7 +34,10 @@ X86_CONTEXT = replace(X86_SOURCE, frame_mode=b'Z', file_dependency_profile=CONTE
 HTTP_CONTEXT_PROFILE = 'owner-pinned-image-vendor-acl-http-body-context-v1'
 ARM_HTTP_CONTEXT = replace(ARM_SOURCE, frame_mode=b'H', file_dependency_profile=HTTP_CONTEXT_PROFILE)
 X86_HTTP_CONTEXT = replace(X86_SOURCE, frame_mode=b'J', file_dependency_profile=HTTP_CONTEXT_PROFILE)
-SOURCE_MODES = ('--source', '--x86-source', '--source-vendor-acl', '--x86-source-vendor-acl', '--source-vendor-acl-republish', '--x86-source-vendor-acl-republish', '--source-vendor-acl-http-body', '--x86-source-vendor-acl-http-body')
+SQL_ALIAS_PROFILE = 'owner-pinned-image-vendor-acl-sql-alias-context-v1'
+ARM_SQL_ALIASES = replace(ARM_SOURCE, frame_mode=b'A', file_dependency_profile=SQL_ALIAS_PROFILE)
+X86_SQL_ALIASES = replace(X86_SOURCE, frame_mode=b'B', file_dependency_profile=SQL_ALIAS_PROFILE)
+SOURCE_MODES = ('--source', '--x86-source', '--source-vendor-acl', '--x86-source-vendor-acl', '--source-vendor-acl-republish', '--x86-source-vendor-acl-republish', '--source-vendor-acl-http-body', '--x86-source-vendor-acl-http-body', '--source-vendor-acl-sql-aliases', '--x86-source-vendor-acl-sql-aliases')
 
 
 def source_profile(mode):
@@ -54,4 +57,8 @@ def source_profile(mode):
         return ARM_HTTP_CONTEXT
     if mode == '--x86-source-vendor-acl-http-body':
         return X86_HTTP_CONTEXT
+    if mode == '--source-vendor-acl-sql-aliases':
+        return ARM_SQL_ALIASES
+    if mode == '--x86-source-vendor-acl-sql-aliases':
+        return X86_SQL_ALIASES
     raise ValueError('fixed-source-mode-required')
