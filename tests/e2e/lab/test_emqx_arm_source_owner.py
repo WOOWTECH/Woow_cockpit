@@ -1,4 +1,6 @@
 """Generated framed encrypted source only; no lab/native process/real data."""
+from dataclasses import replace
+import emqx_source_profiles as profiles
 import contextlib
 import io
 import struct
@@ -14,6 +16,10 @@ class SourceFrameTests(unittest.TestCase):
     def setUp(self):
         fixtures.OwnerHarnessTests.fixture(self)
 
+    def profile(self, *, measured=False):
+        return replace(profiles.ARM_SOURCE, sha256=self.digest,
+                       cold_receipt=(2, 29) if measured else (28, 57502))
+
     def frame(self, *, tail=b''):
         key = self.password.encode('ascii')
         archive = self.path.read_bytes()
@@ -27,9 +33,7 @@ class SourceFrameTests(unittest.TestCase):
             calls.append(kind)
             return decoder(raw, kind)
         output, errors = io.StringIO(), io.StringIO()
-        with patch.object(owner, 'ARCHIVE_SHA256', self.digest), \
-             patch.object(owner, 'EXPECTED_COLD_FILES', 2), \
-             patch.object(owner, 'EXPECTED_COLD_BYTES', 29), \
+        with patch.object(profiles, 'ARM_SOURCE', self.profile(measured=True)), \
              patch.object(capture_module, 'native_hocon', fixtures.OwnerHarnessTests.hocon), \
              patch.object(capture_module, 'native_cold_history', cold), \
              contextlib.redirect_stdout(output), contextlib.redirect_stderr(errors):
@@ -55,7 +59,7 @@ class SourceFrameTests(unittest.TestCase):
                  good[:-1], good + b'late-frame-data']
         for frame in cases:
             with self.subTest(frame_bytes=len(frame)), \
-                 patch.object(owner, 'ARCHIVE_SHA256', self.digest), \
+                 patch.object(profiles, 'ARM_SOURCE', self.profile()), \
                  patch.object(owner, 'capture_owner_source') as capture:
                 with self.assertRaisesRegex(PrivateFailure, '^private-source-frame-refused$'):
                     owner.consume_source_frame(io.BytesIO(frame), staging_parent=self.spool)
@@ -81,7 +85,7 @@ class SourceFrameTests(unittest.TestCase):
                     raise SemanticRefused()
                 return decoder(raw, kind)
             with self.subTest(wrong_key=wrong_key), \
-                 patch.object(owner, 'ARCHIVE_SHA256', self.digest), \
+                 patch.object(profiles, 'ARM_SOURCE', self.profile()), \
                  patch.object(capture_module, 'native_hocon', fixtures.OwnerHarnessTests.hocon), \
                  patch.object(capture_module, 'native_cold_history', late):
                 if wrong_key:
@@ -99,7 +103,7 @@ class SourceFrameTests(unittest.TestCase):
         import emqx_arm_source_owner as owner
         from emqx_private_boundary import PrivateFailure
         # Generated inventory is 2 files/29 bytes; production policy stays28/57502.
-        with patch.object(owner, 'ARCHIVE_SHA256', self.digest), \
+        with patch.object(profiles, 'ARM_SOURCE', self.profile()), \
              patch.object(capture_module, 'native_hocon', fixtures.OwnerHarnessTests.hocon), \
              patch.object(capture_module, 'native_cold_history', decoder):
             with self.assertRaisesRegex(PrivateFailure, '^private-source-frame-refused$'):
@@ -130,9 +134,7 @@ class SourceFrameTests(unittest.TestCase):
                  patch.object(owner.Path, 'home', return_value=self.spool), \
                  patch.object(owner.sys, 'stdin', SimpleNamespace(buffer=frame)), \
                  patch.object(owner.signal, 'signal'), patch.object(owner.signal, 'setitimer'), \
-                 patch.object(owner, 'ARCHIVE_SHA256', self.digest), \
-                 patch.object(owner, 'EXPECTED_COLD_FILES', 2), \
-                 patch.object(owner, 'EXPECTED_COLD_BYTES', 29), \
+                 patch.object(profiles, 'ARM_SOURCE', self.profile(measured=True)), \
                  patch.object(capture_module, 'native_hocon', fixtures.OwnerHarnessTests.hocon), \
                  patch.object(capture_module, 'native_cold_history', decoder), \
                  contextlib.redirect_stdout(output), contextlib.redirect_stderr(errors):
@@ -153,3 +155,107 @@ class SourceFrameTests(unittest.TestCase):
             self.assertEqual(owner.main(['--source', '--sha', 'untrusted']), 2)
             self.assertEqual(owner.main(['--source']), 1)
         stream.read.assert_not_called()
+
+    def amd64_fixture(self):
+        import gzip
+        import hashlib
+        import json
+        import tarfile
+        from tests.backup import hafixtures as hx
+        entries = []
+        with tarfile.open(fileobj=io.BytesIO(self.raw), mode='r:') as archive:
+            for member in archive:
+                data = archive.extractfile(member).read()
+                if member.name == 'addon.json':
+                    addon = json.loads(data)
+                    addon['user']['image'] = 'test/amd64-addon-woow-emqx'
+                    data = json.dumps(addon).encode()
+                entries.append({'name': member.name, 'data': data})
+        self.raw = hx.tar_bytes(entries)
+        slug = 'fedcba98_woow-emqx'
+        outer = hx.ha_doc((slug,), protected=True)
+        outer['addons'][0]['version'] = '5.9.0'
+        self.path.write_bytes(hx.outer_bytes([
+            (slug + '.tar.gz', hx.v3_encrypt(gzip.compress(self.raw)))], outer))
+        self.digest = hashlib.sha256(self.path.read_bytes()).hexdigest()
+
+    def test_x86_actual_capture_profile_and_amd64_without_guessing_cold_counts(self):
+        import emqx_arm_source_owner as owner
+        import emqx_private_spool as spool
+        self.amd64_fixture()
+        calls = []
+        def cold(raw, kind):
+            calls.append(kind)
+            return decoder(raw, kind)
+        output, errors = io.StringIO(), io.StringIO()
+        with patch.object(profiles, 'X86_SOURCE', replace(profiles.X86_SOURCE, sha256=self.digest)), \
+             patch.object(spool, 'X86_SHA256', self.digest), \
+             patch.object(spool, 'X86_SIZE', len(self.raw)), \
+             patch.object(capture_module, 'native_hocon', fixtures.OwnerHarnessTests.hocon), \
+             patch.object(capture_module, 'native_cold_history', cold), \
+             patch.object(spool, 'fixture_limits', wraps=spool.fixture_limits) as limits, \
+             contextlib.redirect_stdout(output), contextlib.redirect_stderr(errors):
+            receipt = owner.consume_source_frame(self.frame(), staging_parent=self.spool, mode='--x86-source')
+        # This generated inventory is2/29, not ARM28/57502, and comes from actual Capture.
+        self.assertEqual(calls, ['schema-dat', 'dcd'])
+        self.assertEqual(limits.call_count, 2)
+        limits.assert_called_with('owner-x86-20261121', self.digest)
+        self.assertEqual(receipt['registry'], 'unsealed')
+        self.assertEqual(receipt['full_scan'], 'not-performed')
+        self.assertEqual(receipt['restore'], 'not-performed')
+        self.assertEqual(output.getvalue(), '')
+        self.assertEqual(errors.getvalue(), '')
+        self.assertEqual(list(self.spool.iterdir()), [])
+        self.assertEqual(spool.MAX_SOURCE, 256 * 1024**2)
+        self.assertEqual(spool.X86_SIZE, 290785280)
+
+    def test_x86_wrong_digest_and_mode_refuse_before_capture(self):
+        import emqx_arm_source_owner as owner
+        from emqx_private_boundary import PrivateFailure
+        for mode in ('--x86-source', '--unknown', '--x86-source=/tmp/override'):
+            with self.subTest(mode=mode), patch.object(owner, 'capture_owner_source') as capture:
+                with self.assertRaisesRegex(PrivateFailure, '^private-source-frame-refused$'):
+                    owner.consume_source_frame(self.frame(), staging_parent=self.spool, mode=mode)
+                capture.assert_not_called()
+            self.assertEqual(list(self.spool.iterdir()), [])
+
+    def test_x86_wrong_spool_profile_or_non_amd64_source_refuses_and_cleans(self):
+        import emqx_arm_source_owner as owner
+        import emqx_private_spool as spool
+        from emqx_private_boundary import PrivateFailure
+        # Keep the generated archive aarch64 to prove mode alone cannot attest amd64.
+        for fixture_profile in ('owner-x86-20261121', 'unknown-owner-profile'):
+            chosen = replace(profiles.X86_SOURCE, sha256=self.digest, fixture_profile=fixture_profile)
+            with self.subTest(profile=fixture_profile), \
+                 patch.object(profiles, 'X86_SOURCE', chosen), \
+                 patch.object(spool, 'X86_SHA256', self.digest), \
+                 patch.object(spool, 'X86_SIZE', len(self.raw)), \
+                 patch.object(capture_module, 'native_hocon', fixtures.OwnerHarnessTests.hocon), \
+                 patch.object(capture_module, 'native_cold_history', decoder):
+                with self.assertRaisesRegex(PrivateFailure, '^private-source-frame-refused$'):
+                    owner.consume_source_frame(self.frame(), staging_parent=self.spool, mode='--x86-source')
+            self.assertEqual(list(self.spool.iterdir()), [])
+
+    def test_x86_receipt_requires_exact_historical_nonempty_bounded_typed_shape(self):
+        from types import SimpleNamespace
+        from emqx_private_boundary import PrivateFailure, Registry
+        import emqx_arm_source_owner as owner
+        valid = {'scope': 'historical-values-only', 'files': 2, 'bytes': 29, 'final_state': False}
+        malformed = [None, {}, dict(valid, unknown='private'),
+                     dict(valid, scope='final-state'), dict(valid, final_state=True),
+                     dict(valid, final_state=0), dict(valid, files=True),
+                     dict(valid, files=0), dict(valid, files=65),
+                     dict(valid, bytes=True), dict(valid, bytes=0),
+                     dict(valid, bytes=1), dict(valid, bytes=32*1024**2+1),
+                     dict(valid, files=1, bytes=8388609)]
+        for bad in malformed:
+            @contextlib.contextmanager
+            def malformed_capture(*args, **kwargs):
+                yield SimpleNamespace(cold_receipt=bad, registry=Registry()), {
+                    'addon_info': lambda slug: SimpleNamespace(arch='amd64')}
+            with self.subTest(receipt=bad), \
+                 patch.object(profiles, 'X86_SOURCE', replace(profiles.X86_SOURCE, sha256=self.digest)), \
+                 patch.object(owner, 'capture_owner_source', malformed_capture):
+                with self.assertRaisesRegex(PrivateFailure, '^private-source-frame-refused$'):
+                    owner.consume_source_frame(self.frame(), staging_parent=self.spool, mode='--x86-source')
+            self.assertEqual(list(self.spool.iterdir()), [])

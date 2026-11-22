@@ -14,10 +14,10 @@ import struct
 import subprocess
 import sys
 
+from emqx_source_profiles import source_profile
+
 ROOT=Path(__file__).resolve().parents[3]
-ARCHIVE=Path('/home/woowtechopenclaw/.woowbk-lab/ha-fixtures/20261119-b1/arm/woow-b1-arm-emqx-stopped-enc/woow-b1-arm-emqx-stopped-enc.tar')
 CREDS=Path('/home/woowtechopenclaw/.woowbk-lab/secrets/ha-import-creds.env')
-SHA='b6eb257cc5790bee30500f929d51ade66bfa8354dbe5bb61ba7c4bc08582f664'
 BOOTSTRAP=r'''
 import ctypes,io,os,pathlib,runpy,shutil,struct,sys,tarfile,tempfile
 sys.dont_write_bytecode=True
@@ -48,10 +48,10 @@ try:
  mode=exact(1)
  if mode==b'P':
   print('ARM DEPENDENCIES PASSED',flush=True);raise SystemExit(0)
- if mode not in (b'R',b'C',b'S'):raise ValueError()
- if mode==b'S':
+ if mode not in (b'R',b'C',b'S',b'X'):raise ValueError()
+ if mode in (b'S',b'X'):
   from emqx_arm_source_owner import main
-  raise SystemExit(main(['--source']))
+  raise SystemExit(main(['--source' if mode==b'S' else '--x86-source']))
  runpy.run_path(str(work/'tests/e2e/lab/emqx_arm_cold_owner.py'),run_name='__main__',init_globals={'CONFIGURATION_ONLY':mode==b'C'})
 finally:
  if work is not None:shutil.rmtree(work)
@@ -72,14 +72,16 @@ def dependencies():
     return result.getvalue()
 
 
-def main():
+def main(argv=None):
     child=None
     try:
+        args=sys.argv[1:] if argv is None else argv
+        if args not in ([],['--probe'],['--configuration'],['--source'],['--x86-source']):raise ValueError()
+        profile=source_profile('--x86-source' if args==['--x86-source'] else '--source')
+        probe=args==['--probe']
+        configuration=args==['--configuration']
+        source_only=args in (['--source'],['--x86-source'])
         deps=dependencies()
-        probe=sys.argv[1:]==['--probe']
-        configuration=sys.argv[1:]==['--configuration']
-        source_only=sys.argv[1:]==['--source']
-        if sys.argv[1:] and not (probe or configuration or source_only):raise ValueError()
         if probe:
             files=['backup-engine/woowbackup','tests/e2e/lab/emqx_arm_cold_owner.py']
             code=subprocess.check_output(['git','archive','HEAD',*files],cwd=ROOT)
@@ -101,15 +103,15 @@ def main():
                     if len(values)!=1:raise ValueError()
                     key=values[0].encode('ascii');break
             if key is None or not 1<=len(key)<=1024 or b'\n' in key or b'\r' in key:raise ValueError()
-        files=['backup-engine/woowbackup','tests/e2e/lab/emqx_arm_cold_owner.py','tests/e2e/lab/emqx_cold_history.py','tests/e2e/lab/emqx_cold_terms.escript','tests/e2e/lab/emqx_native_runtime.py','tests/e2e/lab/emqx_semantic_readers.py','tests/e2e/lab/emqx_private_spool.py','tests/e2e/lab/ha_real_fixture.py','tests/e2e/lab/emqx_broker_workload.py','tests/e2e/lab/emqx_runtime_live.py','tests/e2e/lab/emqx_runtime_credentials.py','tests/e2e/lab/emqx_private_boundary.py','tests/e2e/lab/emqx_real_candidate.py','tests/e2e/lab/emqx_source_consumer.py','tests/e2e/lab/emqx_native_hocon.py','tests/e2e/lab/emqx_hocon_native.escript','tests/e2e/lab/emqx_arm_source_owner.py','tests/e2e/lab/emqx_owner_source_capture.py']
+        files=['backup-engine/woowbackup','tests/e2e/lab/emqx_arm_cold_owner.py','tests/e2e/lab/emqx_cold_history.py','tests/e2e/lab/emqx_cold_terms.escript','tests/e2e/lab/emqx_native_runtime.py','tests/e2e/lab/emqx_semantic_readers.py','tests/e2e/lab/emqx_private_spool.py','tests/e2e/lab/ha_real_fixture.py','tests/e2e/lab/emqx_broker_workload.py','tests/e2e/lab/emqx_runtime_live.py','tests/e2e/lab/emqx_runtime_credentials.py','tests/e2e/lab/emqx_private_boundary.py','tests/e2e/lab/emqx_real_candidate.py','tests/e2e/lab/emqx_source_consumer.py','tests/e2e/lab/emqx_native_hocon.py','tests/e2e/lab/emqx_hocon_native.escript','tests/e2e/lab/emqx_arm_source_owner.py','tests/e2e/lab/emqx_owner_source_capture.py','tests/e2e/lab/emqx_source_profiles.py']
         code=subprocess.check_output(['git','archive','HEAD',*files],cwd=ROOT)
-        fd=os.open(ARCHIVE,os.O_RDONLY|os.O_NOFOLLOW)
+        fd=os.open(profile.archive,os.O_RDONLY|os.O_NOFOLLOW)
         with os.fdopen(fd,'rb') as archive:
             before=os.fstat(archive.fileno())
             if not stat.S_ISREG(before.st_mode) or not 0<before.st_size<=512*1024*1024:raise ValueError()
             child=subprocess.Popen([str(ROOT/'tests/e2e/lab/owner.sh'),'d','/usr/bin/python3','-c',BOOTSTRAP],stdin=subprocess.PIPE,stderr=subprocess.DEVNULL)
             child.stdin.write(struct.pack('!Q',len(code)));child.stdin.write(code)
-            child.stdin.write(struct.pack('!Q',len(deps)));child.stdin.write(deps);child.stdin.write(b'S' if source_only else b'C' if configuration else b'R')
+            child.stdin.write(struct.pack('!Q',len(deps)));child.stdin.write(deps);child.stdin.write(profile.frame_mode if source_only else b'C' if configuration else b'R')
             child.stdin.write(struct.pack('!I',len(key)));child.stdin.write(key)
             child.stdin.write(struct.pack('!Q',before.st_size))
             digest=hashlib.sha256()
@@ -118,7 +120,7 @@ def main():
                 if not chunk:break
                 digest.update(chunk);child.stdin.write(chunk)
             after=os.fstat(archive.fileno())
-            if (before.st_dev,before.st_ino,before.st_size,before.st_mtime_ns,before.st_ctime_ns)!=(after.st_dev,after.st_ino,after.st_size,after.st_mtime_ns,after.st_ctime_ns) or digest.hexdigest()!=SHA:raise ValueError()
+            if (before.st_dev,before.st_ino,before.st_size,before.st_mtime_ns,before.st_ctime_ns)!=(after.st_dev,after.st_ino,after.st_size,after.st_mtime_ns,after.st_ctime_ns) or digest.hexdigest()!=profile.sha256:raise ValueError()
             child.stdin.close()
             return child.wait(timeout=900)
     except BaseException:

@@ -1,4 +1,4 @@
-"""Private ARM --source subcase; no lab entry, target docs or evidence stdout.
+"""Private fixed ARM/x86 source subcases; no lab entry, target docs or evidence stdout.
 
 The authorized controller supplies the existing owner frame after stripping its
 code/dependency bootstrap: uint32 key length, ASCII key, uint64 ciphertext size,
@@ -17,11 +17,9 @@ import hashlib
 
 from emqx_owner_source_capture import capture_owner_source
 from emqx_private_boundary import PrivateFailure
+from emqx_source_profiles import source_profile
 
-ARCHIVE_SHA256 = 'b6eb257cc5790bee30500f929d51ade66bfa8354dbe5bb61ba7c4bc08582f664'
 MAX_ARCHIVE = 512 * 1024 * 1024
-EXPECTED_COLD_FILES = 28
-EXPECTED_COLD_BYTES = 57502
 
 
 def _exact(stream, size):
@@ -35,7 +33,7 @@ def _exact(stream, size):
     return b''.join(pieces)
 
 
-def consume_source_frame(stream, *, staging_parent):
+def consume_source_frame(stream, *, staging_parent, mode='--source'):
     """Actual framed transfer -> authenticated Capture; return static scope only.
 
     Trusted in-process owner callable. CLI additionally checks its dev-d realm.
@@ -44,6 +42,7 @@ def consume_source_frame(stream, *, staging_parent):
     Target categories are not acknowledged, and the registry must be unsealed.
     """
     try:
+        profile = source_profile(mode)
         key_size = struct.unpack('!I', _exact(stream, 4))[0]
         if not 1 <= key_size <= 1024:
             raise ValueError()
@@ -72,14 +71,24 @@ def consume_source_frame(stream, *, staging_parent):
                     left -= len(chunk)
                 output.flush()
                 os.fsync(output.fileno())
-            if stream.read(1) != b'' or digest.hexdigest() != ARCHIVE_SHA256:
+            if stream.read(1) != b'' or digest.hexdigest() != profile.sha256:
                 raise ValueError()
             with capture_owner_source(source, password=password,
-                    expected_sha256=ARCHIVE_SHA256, spool_directory=root) as (captured, _):
-                if captured.cold_receipt != {
-                    'scope': 'historical-values-only', 'files': EXPECTED_COLD_FILES,
-                    'bytes': EXPECTED_COLD_BYTES, 'final_state': False,
-                }:
+                    expected_sha256=profile.sha256, spool_directory=root,
+                    fixture_profile=profile.fixture_profile) as (captured, binding):
+                receipt = captured.cold_receipt
+                if (type(receipt) is not dict
+                        or set(receipt) != {'scope', 'files', 'bytes', 'final_state'}
+                        or receipt['scope'] != 'historical-values-only'
+                        or receipt['final_state'] is not False
+                        or type(receipt['files']) is not int or not 1 <= receipt['files'] <= 64
+                        or type(receipt['bytes']) is not int
+                        or not receipt['files'] <= receipt['bytes'] <= min(32*1024**2, receipt['files']*8388608)):
+                    raise ValueError()
+                if (profile.cold_receipt is not None
+                        and (receipt['files'], receipt['bytes']) != profile.cold_receipt):
+                    raise ValueError()
+                if binding['addon_info']('woow-emqx').arch != profile.arch:
                     raise ValueError()
                 try:
                     captured.registry.summary()
@@ -103,7 +112,8 @@ def _owner_realm():
 
 
 def main(argv=None):
-    if (sys.argv[1:] if argv is None else argv) != ['--source']:
+    args = sys.argv[1:] if argv is None else argv
+    if len(args) != 1 or args[0] not in ('--source', '--x86-source'):
         return 2
     if not _owner_realm():
         return 1
@@ -112,7 +122,7 @@ def main(argv=None):
     previous = signal.signal(signal.SIGALRM, deadline)
     try:
         signal.setitimer(signal.ITIMER_REAL, 180)
-        consume_source_frame(sys.stdin.buffer, staging_parent=Path.home())
+        consume_source_frame(sys.stdin.buffer, staging_parent=Path.home(), mode=args[0])
         return 0
     except BaseException:
         return 1
