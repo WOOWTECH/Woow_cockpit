@@ -1,0 +1,15 @@
+test_context_exit_preserves_primary_failure_and_later_retry (tests.backup.test_tempctr_cleanup_dependency.CleanupDependencyTests.test_context_exit_preserves_primary_failure_and_later_retry) ... ok
+test_explicit_transport_failure_keeps_objects_until_successful_retry (tests.backup.test_tempctr_cleanup_dependency.CleanupDependencyTests.test_explicit_transport_failure_keeps_objects_until_successful_retry) ... ok
+test_failed_remove_with_confirmed_absence_does_not_leave_phantom (tests.backup.test_tempctr_cleanup_dependency.CleanupDependencyTests.test_failed_remove_with_confirmed_absence_does_not_leave_phantom) ... ok
+test_partial_cleanup_retries_only_survivors_in_dependency_order (tests.backup.test_tempctr_cleanup_dependency.CleanupDependencyTests.test_partial_cleanup_retries_only_survivors_in_dependency_order) ... ok
+test_transport_failure_and_unknown_inventory_remain_retryable (tests.backup.test_tempctr_cleanup_dependency.CleanupDependencyTests.test_transport_failure_and_unknown_inventory_remain_retryable) ... ok
+test_cleanup_tracks_only_failed_kind_for_same_name (tests.backup.test_ha_tempctr.CleanupTests.test_cleanup_tracks_only_failed_kind_for_same_name) ... ok
+test_everything_is_removed_containers_first (tests.backup.test_ha_tempctr.CleanupTests.test_everything_is_removed_containers_first) ... ok
+test_explicit_remove_accepts_only_confirmed_absence (tests.backup.test_ha_tempctr.CleanupTests.test_explicit_remove_accepts_only_confirmed_absence) ... ok
+test_explicit_remove_failure_is_tracked_and_cleanup_retries (tests.backup.test_ha_tempctr.CleanupTests.test_explicit_remove_failure_is_tracked_and_cleanup_retries) ... ok
+test_leftovers_are_reported_but_never_raise (tests.backup.test_ha_tempctr.CleanupTests.test_leftovers_are_reported_but_never_raise) ... ok
+
+----------------------------------------------------------------------
+Ran 10 tests in 0.004s
+
+OK

@@ -1,0 +1,105 @@
+{
+  "schema": 1,
+  "date": "2026-11-22",
+  "base_commit": "5c99b00682241abfce9e3e4fb6d02d4601af38f5",
+  "branch": "test/final-version-cleanup-20261122",
+  "scope": "Focused local regression for omitted shared tempctr cleanup dependency",
+  "commercial_acceptance": false,
+  "product_fix_required": false,
+  "product_files_changed": [],
+  "restrictions_observed": {
+    "labs_accessed": false,
+    "target_54_accessed": false,
+    "hermes_review_performed_or_retried": false,
+    "old_full_suite_rerun": false,
+    "main_worktree_modified": false
+  },
+  "result": {
+    "tests_run": 10,
+    "passed": 10,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0,
+    "new_test_methods": 5,
+    "existing_cleanup_methods": 5,
+    "command": "PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=backup-engine:. python3 -m unittest tests.backup.test_tempctr_cleanup_dependency tests.backup.test_ha_tempctr.CleanupTests -v",
+    "log": "tests/backup/evidence/cleanup-final-version-local.txt",
+    "log_sha256": "1311f9e30fc4f1194eef8c18d2489af3e237578c0a76e47e06e804303e0f9883"
+  },
+  "initial_fixture_correction": {
+    "tests_run": 10,
+    "passes": 9,
+    "errors": 1,
+    "cause": "New fixture attempted unsupported BackupError code cancelled; corrected to supported wrong-key. No product code changed.",
+    "final_result": "10/10 passed"
+  },
+  "source_hashes": {
+    "backup-engine/woowbackup/tempctr.py": "21a6baa2c72feb59cf0a3cc3ee7b25c13da1bbd3066a094a0a1ebbaf309c35cd",
+    "backup-engine/woowbackup/podman.py": "ee7568ba0fcd49644641afa24a2aac7309faaa008f21effbf79c4d4854038d9f",
+    "backup-engine/woowbackup/errors.py": "c3b66b1c53505c784d697bf0b1a52c55b302cf9081dc7db9eb3ac57e8f2c5e73",
+    "backup-engine/woowbackup/ha_odoo.py": "f2b5d0fadf8486f1c5b62c3eff509fb79c5f7aafaa99f582f549863cca214e37",
+    "tests/backup/test_tempctr_cleanup_dependency.py": "4d4271f98dd5e6cadb56ddb0526688d9238c3989ab1502b511c61c60ac7bd525",
+    "tests/backup/test_ha_tempctr.py": "e8aebbc18ff2658ff40794e53336e74724335fc53c84cffd83a593a0334b96c3"
+  },
+  "assertions": [
+    "Partial cleanup retains typed survivors even when container/volume/network names overlap.",
+    "Retries only retained objects, containers before volumes before networks, reverse creation order within kind.",
+    "Removal exit125 or BackupError plus unknown existence retains retry state; no false success.",
+    "Confirmed absence clears phantom tracking; successful cleanup is idempotent.",
+    "Explicit container/volume removal transport failure remains retryable.",
+    "Context exit preserves the primary import failure while retaining failed network cleanup for a later retry."
+  ],
+  "historical_sensitivity": [
+    {
+      "kind": "historical_source_sensitivity_check",
+      "source_commit": "ea48f32b1c67195a992c400eeaf0da11817605f3",
+      "tempctr_sha256": "27d900756dc4444e5150f5e65935ba3f7ab4a87e77a965c2683e6a25e32d9456",
+      "run": 5,
+      "failures": 6,
+      "errors": 0,
+      "expected_failure": true,
+      "expectation_met": true,
+      "log": "tests/backup/evidence/cleanup-historical-ea48f32.txt",
+      "captured_output_sha256": "76beade6d076024fd1aa94d9e6e7d4f6eddd37482cb31e751de4f289a7ac7887",
+      "stored_log_sha256": "102e97aea763d686c068525fa68f65ebe10ab32a5900164bc52eedf2f170d624",
+      "log_normalization": "Trailing whitespace removed from unittest subtest status lines only; no result or traceback content omitted."
+    },
+    {
+      "kind": "historical_source_sensitivity_check",
+      "source_commit": "91758a2d53b5924e9bb8bf010be4c74418b6f866",
+      "tempctr_sha256": "27d900756dc4444e5150f5e65935ba3f7ab4a87e77a965c2683e6a25e32d9456",
+      "run": 5,
+      "failures": 6,
+      "errors": 0,
+      "expected_failure": true,
+      "expectation_met": true,
+      "log": "tests/backup/evidence/cleanup-historical-91758a2.txt",
+      "captured_output_sha256": "76beade6d076024fd1aa94d9e6e7d4f6eddd37482cb31e751de4f289a7ac7887",
+      "stored_log_sha256": "102e97aea763d686c068525fa68f65ebe10ab32a5900164bc52eedf2f170d624",
+      "log_normalization": "Trailing whitespace removed from unittest subtest status lines only; no result or traceback content omitted."
+    }
+  ],
+  "historical_sensitivity_method": "In isolated Python process, git show each historical tempctr.py, compile into an in-memory woowbackup module, patch only the new test module reference, run its five methods. No engine file replacement. Failure count includes failing subtests; it is not a count of failing methods.",
+  "sidecar_manifests": [
+    "tests/e2e/lab/evidence/omnigent-install-rollback/omni-install-20261121/03/cleanup-dependency-audit-20261122.json",
+    "tests/e2e/lab/evidence/headscale-continuity-next/cleanup-dependency-audit-20261122.json"
+  ],
+  "next_minimal_real_rerun": {
+    "required_for": "Real-runtime corroboration of the shared cleanup dependency on the final integrated source; not commercial HA acceptance.",
+    "scope": "One disposable rootless TempObjects lifecycle: one container, one volume, one internal network with unique job labels and already available image.",
+    "precondition": "Target owner schedules and authorizes the probe after integrating this test commit; this lane neither contacts nor reserves .54 or any lab.",
+    "checks": [
+      "Record exact final commit plus tempctr/podman/errors and probe hashes before execution.",
+      "Use a controlled one-shot runner fault for an owned object removal while actual inventory confirms it still exists; verify failure remains tracked.",
+      "Retry through real owner-side Podman removal, verify containers before volumes before network and final empty tracking.",
+      "Independently verify exact owned IDs/names/labels absent and pre-existing inventory unchanged; record bounded command exit/error and cleanup output."
+    ],
+    "not_required_for_this_delta": [
+      "Full Omnigent install/rollback replay",
+      "Full Headscale installer/client continuity replay",
+      "Historical full suite"
+    ],
+    "limits": "A controlled fault verifies retry plumbing, not every genuine storage/namespace failure. If final engine has further cleanup/runner changes, rebind and rerun the focused local tests first. Native ARM/cross-physical restore and >8GiB payload remain separate acceptance gaps."
+  },
+  "created_utc": "2026-11-22T01:20:16.991713+00:00"
+}

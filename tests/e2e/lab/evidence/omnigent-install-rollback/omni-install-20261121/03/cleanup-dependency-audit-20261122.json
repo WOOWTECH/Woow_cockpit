@@ -1,0 +1,135 @@
+{
+  "schema": 1,
+  "service": "omnigent",
+  "scope": "additive local source audit; not a replacement live-run manifest",
+  "commercial_acceptance": false,
+  "live_run_performed": false,
+  "historical_tested_commit": "ea48f32b1c67195a992c400eeaf0da11817605f3",
+  "historical_manifest": {
+    "path": "tests/e2e/lab/evidence/omnigent-install-rollback/omni-install-20261121/03/manifest.json",
+    "sha256": "e2ce477c030f51ce3e72d4eafeb9751524799306abaf0b235bf99c23afd3eca7",
+    "unchanged_from_base": true
+  },
+  "historical_provenance_limit": "Historical dependency hashes are reconstructed from Git commit blobs, not newly attested hashes of the remote installed files. Do not append them to the original runtime source_hashes as if recorded at execution.",
+  "base_commit": "5c99b00682241abfce9e3e4fb6d02d4601af38f5",
+  "original_bindings": [
+    {
+      "path": "tests/e2e/lab/omnigent_install_rollback.py",
+      "recorded_sha256": "3640451de2763d87bbc800e9ba4b19881f13676002d44082434c64319a570efc",
+      "local_sha256": "3640451de2763d87bbc800e9ba4b19881f13676002d44082434c64319a570efc",
+      "equal": true
+    },
+    {
+      "path": "tests/e2e/lab/omnigent_real_app_chain.py",
+      "recorded_sha256": "b0ef5e8d17740301d37fddd3f6e3816c10e577c884678d64bf8c3faf930ca1d5",
+      "local_sha256": "b0ef5e8d17740301d37fddd3f6e3816c10e577c884678d64bf8c3faf930ca1d5",
+      "equal": true
+    },
+    {
+      "path": "backup-engine/woowbackup/flows.py",
+      "recorded_sha256": "0549b1918760048a8981dcff2755fd9ee74742cb28e3df2a43a88dad74885210",
+      "local_sha256": "0549b1918760048a8981dcff2755fd9ee74742cb28e3df2a43a88dad74885210",
+      "equal": true
+    },
+    {
+      "path": "backup-engine/woowbackup/adapters/quadlet_postgres.py",
+      "recorded_sha256": "8ef2154f073eeba89cdabad38827edda5e34b4abf9e7d2c89f5ca79d7f0a225c",
+      "local_sha256": "8ef2154f073eeba89cdabad38827edda5e34b4abf9e7d2c89f5ca79d7f0a225c",
+      "equal": true
+    },
+    {
+      "path": "backup-engine/woowbackup/archive.py",
+      "recorded_sha256": "85b58635a23a552cbe446ceab6dee9fc914d245c708bc86d2211fc69c39e9d49",
+      "local_sha256": "85b58635a23a552cbe446ceab6dee9fc914d245c708bc86d2211fc69c39e9d49",
+      "equal": true
+    },
+    {
+      "path": "backup-engine/woowbackup/ha_omnigent.py",
+      "recorded_sha256": "cd16ee496fdb71139a5f8f96be15309370e4b1b5951d9319ff9487e8b20bc278",
+      "local_sha256": "cd16ee496fdb71139a5f8f96be15309370e4b1b5951d9319ff9487e8b20bc278",
+      "equal": true
+    },
+    {
+      "path": "tests/e2e/lab/omnigent_lab_runner.py",
+      "recorded_sha256": "96d9d2ff087aa15621d37257f28d732dd659008fad0ed7be5f32bc0bf55a2946",
+      "local_sha256": "96d9d2ff087aa15621d37257f28d732dd659008fad0ed7be5f32bc0bf55a2946",
+      "equal": true
+    },
+    {
+      "path": "tests/e2e/lab/b1_event_transport.py",
+      "recorded_sha256": "f1fee27e31c7c559ad173f88151a15bf8bf076c107c8a229778653e241ea3955",
+      "local_sha256": "f1fee27e31c7c559ad173f88151a15bf8bf076c107c8a229778653e241ea3955",
+      "equal": true
+    }
+  ],
+  "additional_dependencies": [
+    {
+      "path": "backup-engine/woowbackup/tempctr.py",
+      "historical_commit_blob_sha256": "27d900756dc4444e5150f5e65935ba3f7ab4a87e77a965c2683e6a25e32d9456",
+      "local_regression_sha256": "21a6baa2c72feb59cf0a3cc3ee7b25c13da1bbd3066a094a0a1ebbaf309c35cd",
+      "equal": false,
+      "omitted_from_original_manifest": true
+    },
+    {
+      "path": "backup-engine/woowbackup/podman.py",
+      "historical_commit_blob_sha256": "ee7568ba0fcd49644641afa24a2aac7309faaa008f21effbf79c4d4854038d9f",
+      "local_regression_sha256": "ee7568ba0fcd49644641afa24a2aac7309faaa008f21effbf79c4d4854038d9f",
+      "equal": true,
+      "omitted_from_original_manifest": true
+    },
+    {
+      "path": "backup-engine/woowbackup/errors.py",
+      "historical_commit_blob_sha256": "c3b66b1c53505c784d697bf0b1a52c55b302cf9081dc7db9eb3ac57e8f2c5e73",
+      "local_regression_sha256": "c3b66b1c53505c784d697bf0b1a52c55b302cf9081dc7db9eb3ac57e8f2c5e73",
+      "equal": true,
+      "omitted_from_original_manifest": true
+    },
+    {
+      "path": "backup-engine/woowbackup/ha_odoo.py",
+      "historical_commit_blob_sha256": "f2b5d0fadf8486f1c5b62c3eff509fb79c5f7aafaa99f582f549863cca214e37",
+      "local_regression_sha256": "f2b5d0fadf8486f1c5b62c3eff509fb79c5f7aafaa99f582f549863cca214e37",
+      "equal": true,
+      "omitted_from_original_manifest": true
+    },
+    {
+      "path": "backup-engine/woowbackup/ha_omnigent.py",
+      "historical_commit_blob_sha256": "cd16ee496fdb71139a5f8f96be15309370e4b1b5951d9319ff9487e8b20bc278",
+      "local_regression_sha256": "cd16ee496fdb71139a5f8f96be15309370e4b1b5951d9319ff9487e8b20bc278",
+      "equal": true,
+      "omitted_from_original_manifest": false
+    },
+    {
+      "path": "backup-engine/woowbackup/haimport.py",
+      "historical_commit_blob_sha256": "27a32eb950bddc322a4c47313a48ed91fa7f2ada82d70cfef08bfcc503710cec",
+      "local_regression_sha256": "27a32eb950bddc322a4c47313a48ed91fa7f2ada82d70cfef08bfcc503710cec",
+      "equal": true,
+      "omitted_from_original_manifest": true
+    }
+  ],
+  "dependency_justification": {
+    "tempctr.py": "Shared temporary container/volume/network lifecycle reached by conversion and HA database helpers.",
+    "podman.py": "Runner Result/BackupError boundary consumed by tempctr; local tests instantiate Result and use a simulated runner, not OwnerRunner execution.",
+    "errors.py": "Actual BackupError type caught by _quiet and propagated by explicit removal.",
+    "ha_odoo.py": "Shared HA database helper using temporary objects.",
+    "service_files": "Service conversion and candidate dispatch source context; hashed, not executed by the focused cleanup tests.",
+    "consumer_paths": [
+      "tests/e2e/lab/omnigent_real_app_chain.py",
+      "tests/e2e/lab/omnigent_install_rollback.py"
+    ]
+  },
+  "coverage_limit": "Selected dependency binding, not a complete transitive import/runtime/image/environment closure. Matching hashes alone do not establish runtime acceptance.",
+  "local_regression": {
+    "report": "tests/backup/evidence/final-version-cleanup-20261122.json",
+    "command": "PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=backup-engine:. python3 -m unittest tests.backup.test_tempctr_cleanup_dependency tests.backup.test_ha_tempctr.CleanupTests -v",
+    "tests_run": 10,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0,
+    "test_source_sha256": {
+      "tests/backup/test_tempctr_cleanup_dependency.py": "4d4271f98dd5e6cadb56ddb0526688d9238c3989ab1502b511c61c60ac7bd525",
+      "tests/backup/test_ha_tempctr.py": "e8aebbc18ff2658ff40794e53336e74724335fc53c84cffd83a593a0334b96c3"
+    },
+    "runtime_backend": "in-memory simulated object inventory; no Podman subprocess or remote transport"
+  },
+  "next_real_rerun": "One shared disposable rootless cleanup/retry probe on the final integrated engine; see report. No full service replay required solely for this cleanup delta."
+}

@@ -1,0 +1,30 @@
+[
+  {
+    "kind": "historical_source_sensitivity_check",
+    "source_commit": "ea48f32b1c67195a992c400eeaf0da11817605f3",
+    "tempctr_sha256": "27d900756dc4444e5150f5e65935ba3f7ab4a87e77a965c2683e6a25e32d9456",
+    "run": 5,
+    "failures": 6,
+    "errors": 0,
+    "expected_failure": true,
+    "expectation_met": true,
+    "log": "tests/backup/evidence/cleanup-historical-ea48f32.txt",
+    "captured_output_sha256": "76beade6d076024fd1aa94d9e6e7d4f6eddd37482cb31e751de4f289a7ac7887",
+    "stored_log_sha256": "102e97aea763d686c068525fa68f65ebe10ab32a5900164bc52eedf2f170d624",
+    "log_normalization": "Trailing whitespace removed from unittest subtest status lines only; no result or traceback content omitted."
+  },
+  {
+    "kind": "historical_source_sensitivity_check",
+    "source_commit": "91758a2d53b5924e9bb8bf010be4c74418b6f866",
+    "tempctr_sha256": "27d900756dc4444e5150f5e65935ba3f7ab4a87e77a965c2683e6a25e32d9456",
+    "run": 5,
+    "failures": 6,
+    "errors": 0,
+    "expected_failure": true,
+    "expectation_met": true,
+    "log": "tests/backup/evidence/cleanup-historical-91758a2.txt",
+    "captured_output_sha256": "76beade6d076024fd1aa94d9e6e7d4f6eddd37482cb31e751de4f289a7ac7887",
+    "stored_log_sha256": "102e97aea763d686c068525fa68f65ebe10ab32a5900164bc52eedf2f170d624",
+    "log_normalization": "Trailing whitespace removed from unittest subtest status lines only; no result or traceback content omitted."
+  }
+]

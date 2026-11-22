@@ -1,0 +1,90 @@
+test_context_exit_preserves_primary_failure_and_later_retry (tests.backup.test_tempctr_cleanup_dependency.CleanupDependencyTests.test_context_exit_preserves_primary_failure_and_later_retry) ... FAIL
+test_explicit_transport_failure_keeps_objects_until_successful_retry (tests.backup.test_tempctr_cleanup_dependency.CleanupDependencyTests.test_explicit_transport_failure_keeps_objects_until_successful_retry) ...
+  test_explicit_transport_failure_keeps_objects_until_successful_retry (tests.backup.test_tempctr_cleanup_dependency.CleanupDependencyTests.test_explicit_transport_failure_keeps_objects_until_successful_retry) (kind='container') ... FAIL
+  test_explicit_transport_failure_keeps_objects_until_successful_retry (tests.backup.test_tempctr_cleanup_dependency.CleanupDependencyTests.test_explicit_transport_failure_keeps_objects_until_successful_retry) (kind='volume') ... FAIL
+test_failed_remove_with_confirmed_absence_does_not_leave_phantom (tests.backup.test_tempctr_cleanup_dependency.CleanupDependencyTests.test_failed_remove_with_confirmed_absence_does_not_leave_phantom) ... ok
+test_partial_cleanup_retries_only_survivors_in_dependency_order (tests.backup.test_tempctr_cleanup_dependency.CleanupDependencyTests.test_partial_cleanup_retries_only_survivors_in_dependency_order) ... FAIL
+test_transport_failure_and_unknown_inventory_remain_retryable (tests.backup.test_tempctr_cleanup_dependency.CleanupDependencyTests.test_transport_failure_and_unknown_inventory_remain_retryable) ...
+  test_transport_failure_and_unknown_inventory_remain_retryable (tests.backup.test_tempctr_cleanup_dependency.CleanupDependencyTests.test_transport_failure_and_unknown_inventory_remain_retryable) (failure='exception') ... FAIL
+  test_transport_failure_and_unknown_inventory_remain_retryable (tests.backup.test_tempctr_cleanup_dependency.CleanupDependencyTests.test_transport_failure_and_unknown_inventory_remain_retryable) (failure='exit125') ... FAIL
+
+======================================================================
+FAIL: test_context_exit_preserves_primary_failure_and_later_retry (tests.backup.test_tempctr_cleanup_dependency.CleanupDependencyTests.test_context_exit_preserves_primary_failure_and_later_retry)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/woowtechopenclaw/work/final-version-cleanup/tests/backup/test_tempctr_cleanup_dependency.py", line 133, in test_context_exit_preserves_primary_failure_and_later_retry
+    self.assertEqual((tmp.containers, tmp.volumes, tmp.networks),
+AssertionError: Tuples differ: ([], [], []) != ([], [], ['woowbk-j20261118T110400Z-c6bd8629-first'])
+
+First differing element 2:
+[]
+['woowbk-j20261118T110400Z-c6bd8629-first']
+
+- ([], [], [])
++ ([], [], ['woowbk-j20261118T110400Z-c6bd8629-first'])
+
+======================================================================
+FAIL: test_explicit_transport_failure_keeps_objects_until_successful_retry (tests.backup.test_tempctr_cleanup_dependency.CleanupDependencyTests.test_explicit_transport_failure_keeps_objects_until_successful_retry) (kind='container')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/woowtechopenclaw/work/final-version-cleanup/tests/backup/test_tempctr_cleanup_dependency.py", line 122, in test_explicit_transport_failure_keeps_objects_until_successful_retry
+    self.assertEqual(runner.removals, [key])
+AssertionError: Lists differ: [] != [('container', 'woowbk-j20261118T110400Z-c6bd8629-first')]
+
+Second list contains 1 additional elements.
+First extra element 0:
+('container', 'woowbk-j20261118T110400Z-c6bd8629-first')
+
+- []
++ [('container', 'woowbk-j20261118T110400Z-c6bd8629-first')]
+
+======================================================================
+FAIL: test_explicit_transport_failure_keeps_objects_until_successful_retry (tests.backup.test_tempctr_cleanup_dependency.CleanupDependencyTests.test_explicit_transport_failure_keeps_objects_until_successful_retry) (kind='volume')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/woowtechopenclaw/work/final-version-cleanup/tests/backup/test_tempctr_cleanup_dependency.py", line 122, in test_explicit_transport_failure_keeps_objects_until_successful_retry
+    self.assertEqual(runner.removals, [key])
+AssertionError: Lists differ: [] != [('volume', 'woowbk-j20261118T110400Z-c6bd8629-first')]
+
+Second list contains 1 additional elements.
+First extra element 0:
+('volume', 'woowbk-j20261118T110400Z-c6bd8629-first')
+
+- []
++ [('volume', 'woowbk-j20261118T110400Z-c6bd8629-first')]
+
+======================================================================
+FAIL: test_partial_cleanup_retries_only_survivors_in_dependency_order (tests.backup.test_tempctr_cleanup_dependency.CleanupDependencyTests.test_partial_cleanup_retries_only_survivors_in_dependency_order)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/woowtechopenclaw/work/final-version-cleanup/tests/backup/test_tempctr_cleanup_dependency.py", line 65, in test_partial_cleanup_retries_only_survivors_in_dependency_order
+    self.assertEqual(getattr(tmp, kind + 's'), [tmp.name('first')])
+AssertionError: Lists differ: [] != ['woowbk-j20261118T110400Z-c6bd8629-first']
+
+Second list contains 1 additional elements.
+First extra element 0:
+'woowbk-j20261118T110400Z-c6bd8629-first'
+
+- []
++ ['woowbk-j20261118T110400Z-c6bd8629-first']
+
+======================================================================
+FAIL: test_transport_failure_and_unknown_inventory_remain_retryable (tests.backup.test_tempctr_cleanup_dependency.CleanupDependencyTests.test_transport_failure_and_unknown_inventory_remain_retryable) (failure='exception')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/woowtechopenclaw/work/final-version-cleanup/tests/backup/test_tempctr_cleanup_dependency.py", line 84, in test_transport_failure_and_unknown_inventory_remain_retryable
+    self.assertEqual(len(tmp.cleanup()), 6)
+AssertionError: 0 != 6
+
+======================================================================
+FAIL: test_transport_failure_and_unknown_inventory_remain_retryable (tests.backup.test_tempctr_cleanup_dependency.CleanupDependencyTests.test_transport_failure_and_unknown_inventory_remain_retryable) (failure='exit125')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/woowtechopenclaw/work/final-version-cleanup/tests/backup/test_tempctr_cleanup_dependency.py", line 84, in test_transport_failure_and_unknown_inventory_remain_retryable
+    self.assertEqual(len(tmp.cleanup()), 6)
+AssertionError: 0 != 6
+
+----------------------------------------------------------------------
+Ran 5 tests in 0.004s
+
+FAILED (failures=6)
