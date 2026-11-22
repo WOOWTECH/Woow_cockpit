@@ -53,8 +53,8 @@ def cooked_config():
             'ws': {'default': {'enable': False}}, 'wss': {'default': {'enable': False}}},
         'dashboard': {'listeners': {'http': {'bind': ((127,0,0,1),18083)}, 'https': {'bind': 0}},
             'default_username': 'fixture-admin', 'default_password': 'fixture-bootstrap-private'},
-        'api_key': {'bootstrap_file': ''}, 'cluster': {'discovery_strategy': Atom('manual')},
-        'rpc': {'driver': Atom('tcp')}, 'node': {'dist_proto': Atom('inet_tcp'),
+        'api_key': {'bootstrap_file': ''}, 'cluster': {'discovery_strategy': Atom('manual'), 'proto_dist': Atom('inet_tcp')},
+        'rpc': {'protocol': Atom('tcp')}, 'node': {
             'cookie': Atom('fixture-private-cookie')},
         'mqtt': {'max_inflight': 32}, 'additional_native_root': {'opaque': 'fixture-other-config-private'}}
 

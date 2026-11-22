@@ -32,7 +32,10 @@ CONSUMER_REASONS = frozenset(('private_refused','inventory_names_type','inventor
     'inventory_schema_type','inventory_schema_count','inventory_schema_entry_shape',
     'inventory_schema_name_kind','inventory_schema_duplicate','inventory_schema_binding',
     'inventory_tables_type','inventory_tables_count','inventory_builtin_profile','reference_file_authorizer','reference_template',
-    'reference_env','reference_vault','reference_file_uri','reference_url','reference_file_setting'))
+    'reference_env','reference_vault','reference_file_uri','reference_url','reference_file_setting',
+    'cluster_discovery_missing','cluster_discovery_type','cluster_discovery_unsupported',
+    'cluster_rpc_protocol_missing','cluster_rpc_protocol_type','cluster_rpc_protocol_unsupported',
+    'cluster_proto_dist_missing','cluster_proto_dist_type','cluster_proto_dist_unsupported'))
 
 
 # Extracted from hocon_schema:roots(emqx_conf_schema) in pinned IMAGE, metadata
@@ -284,10 +287,20 @@ def _absence_profile(config, provider, mark=lambda _:None, vendor_policy=None):
     if config['exhook'].get('servers') != []:
         unsupported()
     mark('cluster')
-    if _text(config['cluster']['discovery_strategy']) != 'manual':
-        unsupported()
-    if _text(config['rpc']['driver']) != 'tcp' or _text(config['node']['dist_proto']) != 'inet_tcp':
-        unsupported()
+    def exact_cluster_field(root, key, expected, code):
+        section=config[root]
+        if type(section) is not dict or key not in section:
+            raise OwnerCaptureRefused('cluster',code+'_missing')
+        value=section[key]
+        if type(value) not in (str,bytes):
+            raise OwnerCaptureRefused('cluster',code+'_type')
+        if value not in (expected,expected.encode()):
+            raise OwnerCaptureRefused('cluster',code+'_unsupported')
+    exact_cluster_field('cluster','discovery_strategy','manual','cluster_discovery')
+    # Pinned cooked schema uses rpc.protocol; driver is an input alias only.
+    exact_cluster_field('rpc','protocol','tcp','cluster_rpc_protocol')
+    # Public distribution setting lives under cluster, never node.dist_proto.
+    exact_cluster_field('cluster','proto_dist','inet_tcp','cluster_proto_dist')
     mark('api_bootstrap')
     if config['api_key'].get('bootstrap_file') not in (b'', ''):
         unsupported()

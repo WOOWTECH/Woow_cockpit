@@ -140,3 +140,19 @@ fixed-context rendering fixture, synthetic five-reader/private scanner integrati
 and active/custom/env/wrong-path/mixed-layout negatives. This is not a live target
 capture; actual target20 only identified the Prometheus template category. Main
 must verify actual exact match in next fresh target attempt. No lab was run.
+
+Canonical cluster field correction: old hand-built fixture invented rpc.driver
+and node.dist_proto as cooked fields. Actual pinned public schema declares
+rpc.protocol (driver input alias), cluster.discovery_strategy and
+cluster.proto_dist. Native offline schema fixture verifies those declarations,
+default metadata and absence of either dist_proto/proto_dist under node. Checks
+now require observed canonical fields exactly manual/tcp/inet_tcp. Fixtures use
+canonical keys; alias-only/invented fields cannot substitute. Missing/type/wrong
+value produces fixed per-field consumer reason, never raw value output.
+No runtime wire v3, boot argument fallback, schema default insertion or disable
+was introduced. Actual target21 cluster failure remains to be retried by main;
+if observed canonical fields are missing, the fixed reason supplies that evidence
+before a separate runtime fact contract is implemented. Pinned launcher does use
+-proto_dist ekka, so treating that flag as direct inet_tcp would be incorrect.
+56 tests passed, including native public schema metadata fixture, canonical
+five-reader fixture and nine typed/missing/unsupported failures. No lab access.
