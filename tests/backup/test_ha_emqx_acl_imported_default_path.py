@@ -3,7 +3,7 @@ import copy
 import unittest
 from woowbackup import ha_emqx
 from woowbackup.errors import BackupError
-from woowbackup.ha_emqx_acl_preservation import disabled_intermediate,acl_path_class
+from woowbackup.ha_emqx_acl_preservation import disabled_intermediate,acl_path_class,file_path_type_reason
 from .test_ha_emqx_acl_preservation import NativeRemovalTransport
 from . import test_ha_emqx_candidate_flow as flow
 
@@ -50,7 +50,8 @@ class ImportedDefaultAclPathTests(unittest.TestCase):
             original,imported=self.configs(path);before=copy.deepcopy(imported);observed=[]
             with self.subTest(kind=kind),self.assertRaises(BackupError):
                 disabled_intermediate(original,imported,observe=observed.append)
-            self.assertEqual(observed,['acl_profile_file_path_'+kind])
+            self.assertEqual(observed,['acl_profile_'+(file_path_type_reason({'path':path,'enable':True},True)
+                if kind=='nontext' else 'file_path_'+kind)])
             self.assertEqual(imported,before)
 
     def test_original_target_does_not_get_relative_or_template_waiver(self):

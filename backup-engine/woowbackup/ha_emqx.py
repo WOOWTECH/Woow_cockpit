@@ -835,7 +835,8 @@ def restore_target_settings(tmp, original, read_candidate, *, observe=None):
         changed['authentication'] = authn
     if set(changed) & ha_emqx_settings.IMMUTABLE_ROOTS:
         raise BackupError('incompatible', 'EMQX 唯讀啟動設定在匯入後改變，已停止。')
-    from .ha_emqx_acl_preservation import disabled_intermediate, candidate_acl_receipt, refuse, imported_acl_profile_stage
+    from .ha_emqx_acl_preservation import (disabled_intermediate, candidate_acl_receipt, refuse,
+        imported_acl_profile_stage, uses_generated_acl_charlist, disable_generated_acl_builtin)
     if observe is not None:
         observe('acl_profile')
         observe(imported_acl_profile_stage(before))
@@ -860,7 +861,10 @@ def restore_target_settings(tmp, original, read_candidate, *, observe=None):
         if read_effective_config(read_candidate, allow_authz_omission=True) != before:
             refuse()
         if observe is not None: observe('acl_disable')
-        load_settings({'authorization': intermediate['authorization']})
+        if uses_generated_acl_charlist(before):
+            disable_generated_acl_builtin(tmp)
+        else:
+            load_settings({'authorization': intermediate['authorization']})
         if observe is not None: observe('acl_afterdisable')
         if (read_effective_config(read_candidate, allow_authz_omission=True) != intermediate
                 or candidate_acl_receipt(tmp) != baseline
