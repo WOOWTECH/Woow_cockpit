@@ -134,3 +134,39 @@ class HistoryInventory:
             raise SemanticRefused() from None
         self._finished = True
         return self._values
+
+
+def native_cold_diagnostic(raw, kind):
+    """Fixed-phase refusal diagnosis only; never return native terms/exception text.
+
+    Independent diagnostic mode cannot satisfy read_cold_history's contract or
+    authorize registry sealing/recovery. Same bounded offline runtime as decode.
+    """
+    import json
+    phases = {'BOOT','VERSION','INPUT','HASH','VERIFY','OUTPUT','COMPLETE',
+              'SCHEMA_OPEN','SCHEMA_INFO','SCHEMA_PROPERTIES','SCHEMA_TYPED','SCHEMA_EOF',
+              'SCHEMA_EXTERNAL_DEPENDENCIES','SCHEMA_USER_DEPENDENCIES',
+              'LOG_OPEN','LOG_HEADER','TYPED','UNSUPPORTED_PID','UNSUPPORTED_REF',
+              'UNSUPPORTED_PORT','UNSUPPORTED_FUN','UNSUPPORTED_TERM'}
+    try:
+        if type(raw) is not bytes or not 0 < len(raw) <= MAX_INPUT or kind not in CONTAINERS:
+            raise ValueError()
+        with tempfile.TemporaryDirectory(prefix='emqx-cold-diagnostic-private-') as directory:
+            root = Path(directory)
+            (root / 'source.native').write_bytes(raw)
+            (root / 'source.native').chmod(0o600)
+            (root / SCRIPT.name).write_bytes(SCRIPT.read_bytes())
+            with tempfile.TemporaryFile() as output:
+                code = run_native(root, SCRIPT.name, (kind, '--diagnose'), output=output)
+                output.seek(0)
+                encoded = output.read(4097)
+            if len(encoded) > 4096:
+                raise ValueError()
+            doc = json.loads(encoded)
+            if (type(doc) is not dict or set(doc) != {'phase','result'}
+                    or doc['phase'] not in phases
+                    or (code, doc['result']) not in ((0,'PASSED'),(2,'REFUSED'))):
+                raise ValueError()
+            return doc
+    except Exception:
+        return {'phase':'PROTOCOL','result':'REFUSED'}

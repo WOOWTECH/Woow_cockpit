@@ -4,16 +4,24 @@
 -mode(compile).
 -record(file_info,{size,type,access,atime,mtime,ctime,mode,links,
                    major_device,minor_device,inode,uid,gid}).
-main([Kind]) ->
+main([Kind]) -> run(Kind,false);
+main([Kind,"--diagnose"]) -> run(Kind,true);
+main(_) -> halt(2).
+
+run(Kind,Diagnose) ->
+    put(phase,<<"BOOT">>),
     code:add_paths(filelib:wildcard("/opt/emqx/lib/*/ebin")),
     try
+        put(phase,<<"VERSION">>),
         "26" = erlang:system_info(otp_release),
         "14.2.5.11" = erlang:system_info(version),
+        put(phase,<<"INPUT">>),
         Input = "/input/source.native",
         {ok, Before} = file:read_link_info(Input),
         #file_info{type=regular,links=1,mode=Mode,size=Size} = Before,
         true = Mode band 8#777 =:= 8#600,
         true = Size > 0 andalso Size =< 8388608,
+        put(phase,<<"HASH">>),
         Hash = hash_file(Input),
         Init = #{terms => [], count => 0, nodes => 0, encoded => 0},
         {Container,Traversal,Acc} = case Kind of
@@ -26,9 +34,11 @@ main([Kind]) ->
             "decision-tab" -> {<<"disk-log-internal-halt">>,<<"disk-log-eof">>,log(Input,decision_tab,"1.0",Init)};
             _ -> throw(unsupported_container)
         end,
+        put(phase,<<"VERIFY">>),
         Hash = hash_file(Input),
         {ok,After} = file:read_link_info(Input),
         true = Before#file_info{atime=undefined} =:= After#file_info{atime=undefined},
+        put(phase,<<"OUTPUT">>),
         Output = jsone:encode(#{contract => <<"emqx-cold-history-json-v1">>,
             version => <<"5.8.9">>, otp_release => <<"26">>, erts_version => <<"14.2.5.11">>,
             input_sha256 => Hash, input_bytes => Size, complete => true,
@@ -38,16 +48,26 @@ main([Kind]) ->
             term_count => maps:get(count,Acc),
             terms => lists:reverse(maps:get(terms,Acc))}),
         true = byte_size(Output) =< 1048576,
-        io:put_chars(Output)
-    catch _:_ -> halt(2) end;
-main(_) -> halt(2).
+        case Diagnose of
+            true -> io:put_chars(<<"{\"phase\":\"COMPLETE\",\"result\":\"PASSED\"}">>);
+            false -> io:put_chars(Output)
+        end
+    catch _:_ ->
+        case Diagnose of
+            true -> io:format("{\"phase\":\"~s\",\"result\":\"REFUSED\"}",[get(phase)]);
+            false -> ok
+        end,
+        halt(2)
+    end.
 
 %% Native DETS traverses data only; never mnesia_schema:list2cs or backend lookup.
 schema(Input, Init) ->
     Ref = make_ref(),
+    put(phase,<<"SCHEMA_OPEN">>),
     {ok,Ref} = dets:open_file(Ref,[{file,Input},{version,9},{type,set},{keypos,2},
                                   {access,read},{repair,false}]),
     try
+        put(phase,<<"SCHEMA_INFO">>),
         read = dets:info(Ref,access),
         9 = dets:info(Ref,version),
         Count = dets:info(Ref,no_objects),
@@ -55,14 +75,17 @@ schema(Input, Init) ->
         Acc = dets:foldl(fun(Item,State) ->
             case Item of
                 {schema,Table,Props} when is_atom(Table), is_list(Props) ->
+                    put(phase,<<"SCHEMA_PROPERTIES">>),
                     Keys = [K || {K,_} <- Props, is_atom(K)],
                     true = length(Keys) =:= length(Props),
                     true = length(Keys) =:= length(lists:usort(Keys)),
                     schema_dependencies(Props),
+                    put(phase,<<"SCHEMA_TYPED">>),
                     add(Item,State);
                 _ -> throw(unsupported_schema_container)
             end
         end, Init, Ref),
+        put(phase,<<"SCHEMA_EOF">>),
         Count = maps:get(count,Acc),
         Count = dets:info(Ref,no_objects),
         Acc
@@ -71,8 +94,10 @@ schema(Input, Init) ->
 %% Primitive schema metadata is DATA, but custom execution dependencies remain
 %% gated before a later COPY recovery can be authorized by any caller.
 schema_dependencies(Props) ->
+    put(phase,<<"SCHEMA_EXTERNAL_DEPENDENCIES">>),
     lists:foreach(fun(Key) -> []=proplists:get_value(Key,Props,[]) end,
                   [external_copies,frag_properties,snmp]),
+    put(phase,<<"SCHEMA_USER_DEPENDENCIES">>),
     User=proplists:get_value(user_properties,Props,[]),
     true=is_list(User),
     lists:foreach(fun(Key) -> []=proplists:get_value(Key,User,[]) end,
@@ -97,6 +122,7 @@ closed_log(Input) ->
                            {mode,read_only},{repair,false},{linkto,self()}]),
     Ref.
 log(Input,Kind,Version,Init) ->
+    put(phase,<<"LOG_OPEN">>),
     Ref = make_ref(),
     {ok,Ref} = disk_log:open([{file,Input},{name,Ref},{type,halt},{format,internal},
                              {mode,read_only},{repair,false},{linkto,self()}]),
@@ -107,6 +133,7 @@ chunks(Ref,Cont,Kind,Version,First,Acc) ->
         eof when First =:= false -> Acc;
         {Next,[]} -> chunks(Ref,Next,Kind,Version,First,Acc);
         {Next,[Header|Tail]} when First =:= true ->
+            put(phase,<<"LOG_HEADER">>),
             {log_header,Kind,Version,Mnesia,Node,Now} = Header,
             "4.23.1.2" = Mnesia,
             true = is_atom(Node) andalso is_tuple(Now) andalso tuple_size(Now) =:= 3,
@@ -118,6 +145,7 @@ chunks(Ref,Cont,Kind,Version,First,Acc) ->
         _ -> throw(incomplete_log)
     end.
 add(Term,Acc) ->
+    put(phase,<<"TYPED">>),
     {Typed,Nodes} = typed(Term,0),
     Count = maps:get(count,Acc)+1,
     TotalNodes = maps:get(nodes,Acc)+Nodes,
@@ -140,7 +168,11 @@ typed(V,D) when is_map(V) ->
         true = Count+KN+VN =< 8192, {[KT,VT],Count+KN+VN}
     end,1,maps:to_list(V)),
     {#{type => <<"map">>,value => Pairs},N};
-typed(_,_) -> throw(unsupported_term).
+typed(V,_) when is_pid(V) -> put(phase,<<"UNSUPPORTED_PID">>),throw(unsupported_term);
+typed(V,_) when is_reference(V) -> put(phase,<<"UNSUPPORTED_REF">>),throw(unsupported_term);
+typed(V,_) when is_port(V) -> put(phase,<<"UNSUPPORTED_PORT">>),throw(unsupported_term);
+typed(V,_) when is_function(V) -> put(phase,<<"UNSUPPORTED_FUN">>),throw(unsupported_term);
+typed(_,_) -> put(phase,<<"UNSUPPORTED_TERM">>),throw(unsupported_term).
 collection(Type,Items,D) ->
     true = length(Items) =< 8192,
     {Values,N} = lists:mapfoldl(fun(X,Count) ->
