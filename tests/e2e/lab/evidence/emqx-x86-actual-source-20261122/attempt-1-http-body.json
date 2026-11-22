@@ -1,0 +1,14 @@
+{
+  "source_commit": "52f5ada1a7a6fe869b3fd6a61f4402a362c79e18",
+  "scope": "actual encrypted x86 source Capture with digest-bound expanded size and HTTP body context; no target or restore",
+  "exit": 1,
+  "elapsed_seconds": 15.682408441090956,
+  "fixed_phases": [
+    "ARM POSTFLIGHT PASSED"
+  ],
+  "unpublished_stdout_lines": 0,
+  "stderr_bytes_not_published": 0,
+  "stdout_sha256": "454e6b69da271338f2cb3c9c7eeca9b40376c66677218f315b2f64e45a8865d7",
+  "restore_executed": false,
+  "full_scan_performed": false
+}

@@ -1,0 +1,15 @@
+{
+  "source_commit": "1a6a0529f2eb594a3f231d1f87e3b8122841c733",
+  "scope": "actual ARM source Capture fixed-stage diagnosis after private cleanup; no target or restore",
+  "exit": 1,
+  "elapsed_seconds": 11.929505879990757,
+  "fixed_phases": [
+    "SOURCE HOCON_SYNTAX REFUSED",
+    "ARM POSTFLIGHT PASSED"
+  ],
+  "unpublished_stdout_lines": 0,
+  "stderr_bytes_not_published": 0,
+  "stdout_sha256": "65a2b69506365dfca75ded06f3a8173713780fcd5f5ffdc1c1c236bb3fc01ce9",
+  "restore_executed": false,
+  "full_scan_performed": false
+}
