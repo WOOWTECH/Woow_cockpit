@@ -1,0 +1,14 @@
+{
+  "scope": "three security fixes historical sensitivity; generated inputs only",
+  "baseline": "b1fc7fc",
+  "tests": 3,
+  "historical_failures": 4,
+  "historical_errors": 0,
+  "historical_exit": 1,
+  "fixed_three_tests_passed": 3,
+  "fixed_adjacent_suite_passed": 29,
+  "real_native_hocon_used": true,
+  "broker_started": false,
+  "public_guard_changed": false,
+  "test_sha256": "00e991c3279048057887caf10897d9d29e197209eaca748ff8b7d4dcf9143f94"
+}

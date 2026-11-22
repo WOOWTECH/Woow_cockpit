@@ -10,6 +10,8 @@ import json
 import tarfile
 import hashlib
 import re
+import os
+import operator
 from urllib.parse import unquote_to_bytes
 
 from woowbackup import habackup, hasecuretar, ha_emqx
@@ -52,7 +54,9 @@ def json_values(raw, *, metadata_urls=False):
                 if metadata_urls and '://' in value:
                     # Literal metadata only: never resolve/fetch. Capture any
                     # URL userinfo components in raw and percent-decoded forms.
-                    authority = value.split('://', 1)[1].split('/', 1)[0]
+                    authority = value.split('://', 1)[1]
+                    for delimiter in ('/', '?', '#'):
+                        authority = authority.split(delimiter, 1)[0]
                     if '@' in authority:
                         userinfo = authority.rsplit('@', 1)[0]
                         for part in userinfo.split(':', 1):
@@ -82,6 +86,68 @@ def addon_values(raw):
 
 def refuse():
     raise PrivateFailure('private-source-refused')
+
+
+class ImmutableReplay(io.RawIOBase):
+    """Read-only immutable memory input; no writable backing object exposed."""
+    def __init__(self, data):
+        super().__init__()
+        self._data, self._position = bytes(data), 0
+
+    def readable(self):
+        return True
+
+    def seekable(self):
+        return True
+
+    def read(self, size=-1):
+        if self.closed:
+            raise ValueError('closed source replay')
+        size = -1 if size is None else operator.index(size)
+        end = len(self._data) if size < 0 else min(len(self._data), self._position + size)
+        result = self._data[self._position:end]
+        self._position = max(self._position, end)
+        return result
+
+    def readinto(self, output):
+        chunk = self.read(len(output))
+        output[:len(chunk)] = chunk
+        return len(chunk)
+
+    def write(self, data):
+        raise io.UnsupportedOperation('source replay is read-only')
+
+    def truncate(self, size=None):
+        raise io.UnsupportedOperation('source replay is read-only')
+
+    def tell(self):
+        if self.closed:
+            raise ValueError('closed source replay')
+        return self._position
+
+    def seek(self, offset, whence=os.SEEK_SET):
+        if self.closed:
+            raise ValueError('closed source replay')
+        bases = {os.SEEK_SET: 0, os.SEEK_CUR: self._position, os.SEEK_END: len(self._data)}
+        if whence not in bases:
+            raise ValueError('invalid source seek')
+        position = bases[whence] + operator.index(offset)
+        if position < 0:
+            raise ValueError('negative source seek')
+        self._position = position
+        return position
+
+
+@contextlib.contextmanager
+def readonly_replay(captured):
+    if isinstance(captured, io.BytesIO):
+        with ImmutableReplay(captured.getvalue()) as reader:
+            yield reader
+    else:
+        # A dup() would preserve O_RDWR: reopen the already-bound inode readonly.
+        descriptor = os.open('/proc/self/fd/' + str(captured.fileno()), os.O_RDONLY)
+        with os.fdopen(descriptor, 'rb') as reader:
+            yield reader
 
 
 def cold_kind(name, size):
@@ -267,8 +333,8 @@ class Capture:
         def replay(requested):
             if requested != slug:
                 refuse()
-            captured.seek(0)
-            yield captured
+            with readonly_replay(captured) as reader:
+                yield reader
         return dict(source, open=replay)
 
 

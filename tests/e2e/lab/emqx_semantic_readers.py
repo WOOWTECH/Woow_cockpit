@@ -93,6 +93,10 @@ def _text(value):
 def _json_walk(value, values, depth=0):
     values.tick(depth)
     if type(value) is dict:
+        # Native file authorizers carry dependencies in `path`, including an
+        # implicit default when omitted. No file reader is supported here.
+        if value.get('type') == 'file':
+            refuse()
         for key, child in value.items():
             values.add(_text(key))
             # File dependency collection is deliberately not implemented here.
