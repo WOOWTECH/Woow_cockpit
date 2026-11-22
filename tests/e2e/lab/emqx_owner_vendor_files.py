@@ -16,6 +16,7 @@ import re
 import tempfile
 
 from emqx_native_runtime import IMAGE, run_native
+from emqx_bootstrap_csv import collect_bootstrap_csv
 from emqx_private_boundary import PrivateFailure
 from emqx_semantic_readers import Values, _pairs, _term
 from emqx_target_snapshots import pem
@@ -24,8 +25,9 @@ LIMIT = 65536
 MAX_OUTPUT = 1048576
 MAX_WIRE = 4 * ((MAX_OUTPUT + 2) // 3) + 64
 CONTRACT = 'emqx-owner-vendor-files-v1'
+BOOTSTRAP = '/opt/emqx/etc/auth-built-in-db-bootstrap.csv'
 PATHS = ('/opt/emqx/etc/acl.conf', '/opt/emqx/etc/certs/cacert.pem',
-         '/opt/emqx/etc/certs/cert.pem', '/opt/emqx/etc/certs/key.pem')
+         '/opt/emqx/etc/certs/cert.pem', '/opt/emqx/etc/certs/key.pem', BOOTSTRAP)
 ALIASES = {p: p for p in PATHS}
 ALIASES.update({p.replace('/opt/emqx/etc', '${EMQX_ETC_DIR}', 1): p for p in PATHS})
 
@@ -145,6 +147,10 @@ def _decode(raw, paths):
             raise ValueError()
         if type(item['terms']) is not list or (path.endswith('acl.conf') != bool(item['terms'])):
             raise ValueError()
+        if path == BOOTSTRAP:
+            # Present, complete actual bytes, including the observed header-only
+            # vendor file. Never manufacture an absent/empty dependency receipt.
+            collect_bootstrap_csv(content, Values(), allow_header_only=True)
         result.append((item, content))
     return result
 
@@ -231,7 +237,10 @@ def observe_vendor_files(references, *, private_eval, private_inspect, broker,
             if raw != content or baseline['terms'] != observed['terms']:
                 raise ValueError()
             pending.add(content)
-            if observed['path'].endswith('acl.conf'):
+            csv_rows = None
+            if observed['path'] == BOOTSTRAP:
+                csv_rows = collect_bootstrap_csv(content, pending, allow_header_only=True)
+            elif observed['path'].endswith('acl.conf'):
                 for term in observed['terms']:
                     _term(term, pending, historical=True)
             else:
@@ -241,6 +250,8 @@ def observe_vendor_files(references, *, private_eval, private_inspect, broker,
                 'container_id': owned_container_id, 'bytes': len(content),
                 'sha256': observed['sha256'], 'image_identity': tuple(baseline['identity']),
                 'target_identity': tuple(observed['identity'])})
+            if csv_rows is not None:
+                receipts[-1]['csv_rows'] = csv_rows
         trial = Values()
         for value in private_values.values + pending.values:
             trial.add(value)

@@ -30,10 +30,11 @@ class VendorFilesTests(unittest.TestCase):
         self.image = {'contract': v.CONTRACT, 'complete': True, 'files': []}
         for path in sorted(self.paths):
             acl = path.endswith('acl.conf')
-            raw = b'{allow, all}.\n' if acl else (
+            raw = (b'user_id,password,is_superuser\n' if path == v.BOOTSTRAP else
+                   b'{allow, all}.\n' if acl else (
                 b'-----BEGIN ' + (b'PRIVATE KEY' if path.endswith('key.pem') else b'CERTIFICATE') +
                 b'-----\nZ2VuZXJhdGVkLWRlci1ieXRlcw==\n-----END ' +
-                (b'PRIVATE KEY' if path.endswith('key.pem') else b'CERTIFICATE') + b'-----\n')
+                (b'PRIVATE KEY' if path.endswith('key.pem') else b'CERTIFICATE') + b'-----\n'))
             self.image['files'].append({'path': path, 'bytes': len(raw),
                 'identity': [1, 0, 123, len(raw), 10, 10, stat.S_IFREG | 0o644, 1, 0, 0],
                 'content_b64': base64.b64encode(raw).decode(), 'sha256': hashlib.sha256(raw).hexdigest(),
@@ -93,7 +94,7 @@ class VendorFilesTests(unittest.TestCase):
         self.assertEqual(output.getvalue(), '')
         self.assertEqual(repr(result), '<VendorFiles private>')
         self.assertEqual(self.events, ['inspect', 'image', 'eval', 'inspect'])
-        self.assertEqual(len(result.receipts), 4)
+        self.assertEqual(len(result.receipts), len(v.PATHS))
         for item in self.image['files']:
             self.assertIn(base64.b64decode(item['content_b64']), self.values.values)
         for value in (b'allow', b'all', b'generated-der-bytes', b'Z2VuZXJhdGVkLWRlci1ieXRlcw=='):
@@ -110,6 +111,79 @@ class VendorFilesTests(unittest.TestCase):
         for marker in (b'generated-der-bytes', b'Z2VuZXJhdGVkLWRlci1ieXRlcw==', b'{allow, all}.'):
             with self.assertRaises(PrivateFailure):
                 registry.scan(marker)
+
+    def bootstrap_only(self):
+        self.paths = ['${EMQX_ETC_DIR}/auth-built-in-db-bootstrap.csv']
+        self.image['files'] = [x for x in self.image['files'] if x['path'] == v.BOOTSTRAP]
+        self.actual['files'] = [x for x in self.actual['files'] if x['path'] == v.BOOTSTRAP]
+
+    def set_bootstrap_content(self, document, raw):
+        item = next(x for x in document['files'] if x['path'] == v.BOOTSTRAP)
+        item.update(bytes=len(raw), content_b64=base64.b64encode(raw).decode(),
+                    sha256=hashlib.sha256(raw).hexdigest())
+        item['identity'][3] = len(raw)
+
+    def test_observed_header_only_vendor_csv_registers_exact_bytes_and_all_cells(self):
+        self.bootstrap_only()
+        raw = b'user_id,password,is_superuser\n'
+        self.assertEqual(len(raw), 30)
+        result = self.observe()
+        self.assertEqual(self.values.values, tuple(sorted((raw, b'user_id', b'password', b'is_superuser'))))
+        self.assertEqual(result.receipts[0]['csv_rows'], 0)
+        self.assertEqual(result.receipts[0]['bytes'], 30)
+        self.assertEqual(result.receipts[0]['path'], v.BOOTSTRAP)
+        self.assertEqual(result.receipts[0]['sha256'], hashlib.sha256(raw).hexdigest())
+        registry = Registry()
+        for source in SOURCES:
+            registry.register(source, self.values.values if source == 'tls' else
+                              [b'generated-test-key'] if source == 'backup-key' else [])
+        registry.seal()
+        for marker in (raw, b'user_id', b'password', b'is_superuser'):
+            with self.assertRaises(PrivateFailure):
+                registry.scan(marker)
+
+    def test_vendor_csv_data_rows_register_decoded_cells_including_plain_password(self):
+        self.bootstrap_only()
+        raw = b'user_id,password,is_superuser\nfixture-user,"generated,password",false\n'
+        self.set_bootstrap_content(self.image, raw)
+        self.set_bootstrap_content(self.actual, raw)
+        result = self.observe()
+        self.assertEqual(result.receipts[0]['csv_rows'], 1)
+        self.assertIn(b'generated,password', self.values.values)
+        self.assertIn(b'fixture-user', self.values.values)
+        self.assertIn(b'false', self.values.values)
+
+    def test_csv_missing_empty_bad_header_or_different_actual_cells_refuse(self):
+        self.bootstrap_only()
+        original = copy.deepcopy(self.actual)
+        for raw in (b'', b'username,password,is_superuser\n',
+                    b'user_id,password,is_superuser\nfixture-user,pw,false\n'):
+            self.actual = copy.deepcopy(original)
+            self.set_bootstrap_content(self.actual, raw)
+            self.refuse()
+        self.actual = copy.deepcopy(original)
+        self.actual['files'] = []
+        self.refuse()
+
+    def test_shared_csv_collector_enforces_file_and_row_bounds(self):
+        header = b'user_id,password,is_superuser\n'
+        rows = b''.join(('user%d,generated-password,false\n' % i).encode() for i in range(256))
+        self.assertEqual(v.collect_bootstrap_csv(header + rows, Values()), 256)
+        for raw in (header + rows + b'extra-user,pw,false\n', b'x'*(v.LIMIT+1), b''):
+            with self.assertRaises(ValueError):
+                v.collect_bootstrap_csv(raw, Values(), allow_header_only=True)
+        with self.assertRaises(ValueError):
+            v.collect_bootstrap_csv(header, Values())
+
+    def test_vendor_csv_covering_mount_and_unknown_alias_refuse_before_native(self):
+        self.bootstrap_only()
+        self.inspect[0]['Mounts'].append({'Type': 'bind', 'Destination': v.BOOTSTRAP})
+        self.refuse()
+        self.assertNotIn('image', self.events)
+        self.inspect[0]['Mounts'].pop()
+        self.paths = ['/opt/emqx/etc/lab-bootstrap.csv']
+        self.refuse()
+        self.assertNotIn('image', self.events)
 
     def test_single_alias_observes_only_requested_fixed_file(self):
         self.paths = ['${EMQX_ETC_DIR}/acl.conf']
@@ -149,7 +223,7 @@ class VendorFilesTests(unittest.TestCase):
             with self.subTest(image=image):
                 self.inspect[0]['Image'] = image
                 result = self.observe()
-                self.assertEqual(len(result.receipts), 4)
+                self.assertEqual(len(result.receipts), len(v.PATHS))
                 self.assertTrue(all(r['image'] == v.IMAGE for r in result.receipts))
         for image in ('0'*64, 'sha256:'+'0'*64, 'sha512:'+v.IMAGE.removeprefix('sha256:'),
                       'sha256:'+v.IMAGE, v.IMAGE.upper(), None, True, [v.IMAGE]):
@@ -162,7 +236,7 @@ class VendorFilesTests(unittest.TestCase):
             result = self.eval_callback(expression)
             self.inspect[0]['Image'] = v.IMAGE.removeprefix('sha256:')
             return result
-        self.assertEqual(len(self.observe(private_eval=evaluate).receipts), 4)
+        self.assertEqual(len(self.observe(private_eval=evaluate).receipts), len(v.PATHS))
 
     def test_invalid_provenance_refuses(self):
         original = copy.deepcopy(self.inspect)
@@ -229,7 +303,8 @@ class VendorFilesTests(unittest.TestCase):
         original = copy.deepcopy(self.image)
         for acl in (False, True):
             docs = copy.deepcopy(original)
-            item = docs['files'][0 if acl else 1]
+            suffix = 'acl.conf' if acl else '.pem'
+            item = next(x for x in docs['files'] if x['path'].endswith(suffix))
             if acl:
                 item['terms'] = [{'type': 'unsupported', 'value': 'private'}]
             else:
