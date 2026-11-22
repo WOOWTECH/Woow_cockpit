@@ -1,0 +1,13 @@
+{
+  "source_commit": "ec7b6085783f9b8fb0417f6457636b20bc3ad457",
+  "scope": "real ARM HA backup Mnesia ACL candidate metadata semantic fix real restore",
+  "exit": 1,
+  "elapsed_seconds": 348.23,
+  "stdout_sha256": "73f6a779676adf88c80d18f6aae32c778a192373e23fe53000aeeaa93c231140",
+  "fixed_status": [
+    "REAL OWNER OBJECT_INTEGRITY_ACTIONS_VALUE REFUSED",
+    "REAL OWNER POSTFLIGHT PASSED"
+  ],
+  "stderr_bytes_not_published": 0,
+  "commercial_acceptance": "not-complete"
+}
