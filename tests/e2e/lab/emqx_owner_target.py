@@ -23,7 +23,7 @@ from emqx_private_boundary import PrivateFailure
 EXPRESSION = Path(__file__).with_suffix('.expr')
 MAX_WIRE = 4 * ((MAX_OUTPUT + 2) // 3) + 64
 
-CONSUMER_PHASES=frozenset(('wire','config_terms','provider_terms','schema_terms',
+CONSUMER_PHASES=frozenset(('wire','config_terms','config_secret_wrappers','provider_terms','schema_terms',
     'inventory','tables','roots','references','connectors','cluster','api_bootstrap',
     'authentication','listeners','dashboard','provider','mqtt_projection','readers'))
 
@@ -194,15 +194,60 @@ def _read_reply(wire, generation):
     if len(raw) > MAX_OUTPUT:
         unsupported()
     doc = json.loads(raw, object_pairs_hook=_pairs, parse_constant=lambda _: unsupported())
-    if (type(doc) is not dict or set(doc) != {'contract', 'version', 'otp_release',
-            'erts_version', 'generation', 'complete', 'config', 'providers',
-            'schema_metadata', 'table_names', 'tables'}
-            or doc['contract'] != 'emqx-owner-live-target-v1'
+    base_keys = {'contract', 'version', 'otp_release', 'erts_version', 'generation',
+                 'complete', 'config', 'providers', 'schema_metadata', 'table_names', 'tables'}
+    if type(doc) is not dict:
+        unsupported()
+    expected_keys = base_keys if doc.get('contract') == 'emqx-owner-live-target-v1' else base_keys | {'config_secret_wrappers'}
+    if (set(doc) != expected_keys
+            or doc['contract'] not in ('emqx-owner-live-target-v1', 'emqx-owner-live-target-v2')
             or doc['version'] != '5.8.9' or doc['otp_release'] != '26'
             or doc['erts_version'] != '14.2.5.11' or doc['generation'] != generation
             or doc['complete'] is not True):
         unsupported()
     return raw, doc
+
+
+def _config_secret_metadata(config, metadata):
+    """v2 config-only provenance, decoded into private Values before validation.
+
+    This is data from the fixed native producer; it is never executable code.
+    Paths bind each complete binary environment to its normalized cooked value.
+    """
+    if type(metadata) is not list or len(metadata) > 128:
+        unsupported()
+    seen = set()
+    fixed = {'module': 'emqx_secret', 'name': '-wrap/1-fun-0-', 'arity': 0,
+             'type': 'local', 'index': 0, 'new_index': 0, 'uniq': 85191762,
+             'new_uniq': b'A27D8A4F73E7689F1F8B78E0DCB7C91B'}
+    for item in metadata:
+        if (type(item) is not dict or set(item) != set(fixed) | {'path', 'env'}
+                or any(type(item[k]) is not type(v) or item[k] != v for k,v in fixed.items())
+                or type(item['env']) is not list or len(item['env']) != 1
+                or type(item['env'][0]) is not bytes or len(item['env'][0]) > 65536
+                or type(item['path']) is not list or len(item['path']) > 16):
+            unsupported()
+        value = config
+        path = []
+        for step in item['path']:
+            if type(step) is not tuple or len(step) != 2:
+                unsupported()
+            kind, key = step
+            if kind == 'map' and type(value) is dict and type(key) in (str, bytes):
+                key = _text(key)
+                if key not in value:
+                    unsupported()
+            elif (kind in ('list', 'tuple') and type(value) is (list if kind == 'list' else tuple)
+                  and type(key) is int and 0 <= key < len(value)):
+                pass
+            else:
+                unsupported()
+            path.append((kind,key))
+            value = value[key]
+        binding = tuple(path)
+        if binding in seen or type(value) is not bytes or value != item['env'][0]:
+            unsupported()
+        seen.add(binding)
 
 
 def _build_checked(wire, generation, mark):
@@ -211,6 +256,9 @@ def _build_checked(wire, generation, mark):
     values = Values()
     mark('config_terms')
     config = _decode(doc['config'], values)
+    mark('config_secret_wrappers')
+    if doc['contract'] == 'emqx-owner-live-target-v2':
+        _config_secret_metadata(config, _decode(doc['config_secret_wrappers'], values))
     mark('provider_terms')
     providers = _decode(doc['providers'], values)
     mark('schema_terms')

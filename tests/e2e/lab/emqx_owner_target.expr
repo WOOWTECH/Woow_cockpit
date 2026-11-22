@@ -100,6 +100,48 @@ Typed = fun F(V,D) when D =< 16 ->
         _ -> error(owner_target_unsupported_term)
     end
 end,
+%% Config-only capability. Never call a fun, unwrap/1, loader or external source.
+%% Identity measured from the pinned public emqx_secret BEAM; environment limited
+%% to the single binary captured by wrap/1. wrap_load/1 is deliberately refused.
+ConfigSecrets = fun F(V,D,Path,Acc) when D =< 16 ->
+    case V of
+        SecretFun when is_function(SecretFun) ->
+            Expected = [{module,emqx_secret},{name,'-wrap/1-fun-0-'},
+                {arity,0},{type,local},{index,0},{new_index,0},{uniq,85191762},
+                {new_uniq,<<162,125,138,79,115,231,104,159,31,139,120,224,220,183,201,27>>}],
+            Info = [erlang:fun_info(SecretFun,K) || K <-
+                [module,name,arity,type,index,new_index,uniq,new_uniq]],
+            case Info =:= Expected andalso length(Acc) < 128 of
+                true -> ok; false -> error(unsupported_function)
+            end,
+            {env,Env} = erlang:fun_info(SecretFun,env),
+            case Env of
+                [Secret] when is_binary(Secret), byte_size(Secret) =< 65536 ->
+                    Metadata = #{path => lists:reverse(Path),module => emqx_secret,
+                        name => '-wrap/1-fun-0-',arity => 0,type => local,
+                        index => 0,new_index => 0,uniq => 85191762,
+                        new_uniq => <<"A27D8A4F73E7689F1F8B78E0DCB7C91B">>,env => Env},
+                    {Secret,[Metadata|Acc]};
+                _ -> error(unsupported_function)
+            end;
+        M when is_map(M), map_size(M) =< 4096 ->
+            {Pairs,Next} = lists:mapfoldl(fun({K,Child},A) ->
+                _ = Typed(K,D+1),
+                {Value,A1} = F(Child,D+1,[{map,K}|Path],A),
+                {{K,Value},A1}
+            end,Acc,maps:to_list(M)),
+            {maps:from_list(Pairs),Next};
+        L when is_list(L), length(L) =< 4096 ->
+            lists:mapfoldl(fun({Child,I},A) -> F(Child,D+1,[{list,I}|Path],A) end,
+                Acc,lists:zip(L,lists:seq(0,length(L)-1)));
+        T when is_tuple(T), tuple_size(T) =< 4096 ->
+            {Items,Next} = lists:mapfoldl(fun({Child,I},A) -> F(Child,D+1,[{tuple,I}|Path],A) end,
+                Acc,lists:zip(tuple_to_list(T),lists:seq(0,tuple_size(T)-1))),
+            {list_to_tuple(Items),Next};
+        _ -> _ = Typed(V,D), {V,Acc}
+    end;
+    F(_,_,_,_) -> error(owner_target_unsupported_term)
+end,
 <<"5.8.9">> = iolist_to_binary(emqx_release:version()),
 "26" = erlang:system_info(otp_release),
 "14.2.5.11" = erlang:system_info(version),
@@ -233,14 +275,21 @@ case sys:get_status(TickerPid,5000) of
 end,
 [] = emqx_cm:all_channels(),
 put(woow_target_stage, serialize_config),
-ConfigTyped = Typed(Before,0),
+{ConfigPlain,ConfigSecretMetadata} = ConfigSecrets(Before,0,[],[]),
+{ConfigPlainAfter,ConfigSecretMetadataAfter} = ConfigSecrets(After,0,[],[]),
+case Fingerprint({ConfigPlain,ConfigSecretMetadata}) =:=
+     Fingerprint({ConfigPlainAfter,ConfigSecretMetadataAfter}) of
+    true -> ok; false -> error(config_changed)
+end,
+ConfigTyped = Typed(ConfigPlain,0),
+ConfigSecretsTyped = Typed(ConfigSecretMetadata,0),
 put(woow_target_stage, serialize_provider),
 ProvidersTyped = Typed(Providers,0),
 put(woow_target_stage, encode_reply),
-Encoded = emqx_utils_json:encode(#{contract => <<"emqx-owner-live-target-v1">>,
+Encoded = emqx_utils_json:encode(#{contract => <<"emqx-owner-live-target-v2">>,
     version => <<"5.8.9">>,otp_release => <<"26">>,erts_version => <<"14.2.5.11">>,
     generation => <<"__OWNER_NONCE__">>,complete => true,
-    config => ConfigTyped,providers => ProvidersTyped,
+    config => ConfigTyped,config_secret_wrappers => ConfigSecretsTyped,providers => ProvidersTyped,
     schema_metadata => Definitions,table_names => [atom_to_binary(T,utf8) || T <- All],
     tables => Rows}),
 true = byte_size(Encoded) =< 1048576,
