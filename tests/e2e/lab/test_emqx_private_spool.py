@@ -50,6 +50,19 @@ class SpoolTests(unittest.TestCase):
                 raise RuntimeError('generated-private-marker')
         self.assertEqual(list(self.root.iterdir()), [])
 
+    def test_midstream_cancellation_removes_partial_before_return(self):
+        class CancelledInput:
+            reads = 0
+            def read(self, maximum):
+                self.reads += 1
+                if self.reads == 2:
+                    raise KeyboardInterrupt('generated-private-marker')
+                return b'x' * min(maximum, 32)
+        with self.assertRaisesRegex(PrivateFailure, '^private-source-cancelled$'):
+            with capture(CancelledInput(), self.root, maximum=64):
+                self.fail('yielded before authenticated EOF')
+        self.assertEqual(list(self.root.iterdir()), [])
+
     def test_symlink_directory_refuses_and_preserves_unrelated_file(self):
         other = self.root / 'original'
         other.write_bytes(b'preserve')
