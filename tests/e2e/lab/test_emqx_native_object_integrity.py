@@ -77,6 +77,63 @@ class NativeObjectTests(unittest.TestCase):
     def refuse(self,native,**changes):
         with self.assertRaisesRegex(PrivateFailure,'^native-object-integrity-refused$'):self.compare(native,**changes)
 
+    def workflow_refuse(self,native,stage,**changes):
+        import emqx_real_owner_workflow as workflow
+        kwargs=dict(expected=self.expected,source_api=self.observed,native_values=native)
+        kwargs.update(changes)
+        with self.assertRaises(workflow.RealOwnerRefused) as caught:
+            workflow._compare_source_objects(**kwargs)
+        self.assertEqual(caught.exception.phase,'object_integrity_'+stage)
+        self.assertIn(caught.exception.phase,workflow.PHASES)
+        with self.assertRaises(m.NativeObjectPhaseRefused) as inner:
+            m.compare_b1_objects_native(**kwargs)
+        self.assertEqual(str(inner.exception),'native-object-integrity-refused')
+
+    def test_actual_collectors_to_workflow_category_type_missing_value_phases(self):
+        baseline=copy.deepcopy(self.documents)
+        for category,field in (('rules','sql'),('actions','connector'),('connectors','url')):
+            for reason in ('type','missing','value'):
+                with self.subTest(category=category,reason=reason):
+                    self.documents=copy.deepcopy(baseline)
+                    rows=self.documents[category]
+                    if category=='rules':rows=rows['data']
+                    if reason=='type':rows[0][field]=17
+                    elif reason=='missing':del rows[0][field]
+                    else:rows[0][field]+=' generated-difference'
+                    self.api_mode=True;self.observed=self.run_api();self.api_mode=False
+                    self.workflow_refuse(self.native(),category+'_'+reason)
+
+    def test_actual_collectors_to_workflow_secret_wrapper_and_success(self):
+        import emqx_real_owner_workflow as workflow
+        native=self.native()
+        result=workflow._compare_source_objects(self.expected,self.observed,native)
+        self.assertIs(type(result),m.NativeObjectComparison)
+        with self.assertRaises(PrivateFailure):result.scan(self.secret.encode())
+        self.config['connectors']['http']['b1_http']['other_password']=self.secret
+        self.wrapper_path[-1]='other_password'
+        self.workflow_refuse(self.native(),'connectors_secret_wrapper')
+
+    def test_actual_collectors_to_workflow_identity_phase(self):
+        self.cid='c'*64;self.doc[0]['Id']=self.cid
+        self.workflow_refuse(self.native(),'identity')
+
+    def test_actual_collectors_to_workflow_registry_phase(self):
+        from emqx_runtime_workflow import CombinedRegistry
+        self.prior=CombinedRegistry(self.prior._source,self.prior._runtime,self.prior._persisted)
+        self.workflow_refuse(self.native(),'registry')
+
+    def test_actual_collectors_to_workflow_order_phase(self):
+        native=self.native()
+        self.api_mode=True;self.observed=self.run_api();self.api_mode=False
+        self.workflow_refuse(native,'order')
+
+    def test_workflow_collector_phase_rejects_handmade_or_mutated_receipts(self):
+        native=self.native()
+        handmade=post.PostRestoreValues(native._previous,native._persisted,native._generations,native._preflight_generations)
+        self.workflow_refuse(handmade,'collector')
+        self.observed._documents['connectors'][0]['password']='generated-post-observation-change'
+        self.workflow_refuse(native,'collector')
+
     def test_api_mask_needs_exact_validated_native_secret_path(self):
         native=self.native()
         result=self.compare(native)

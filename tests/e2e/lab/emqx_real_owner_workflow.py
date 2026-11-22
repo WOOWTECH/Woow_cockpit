@@ -42,6 +42,8 @@ PHASES = frozenset(('profile','observer_dependency','realm','budget','frame','pr
     'rollback','restart','cleanup','client_frame','no_live','mqtt','post_capture','post_capture_identity','payload_history','build_adapter','source_api','source_negative','object_integrity','api_frame'))
 from emqx_source_api_validator import SOURCE_API_PHASES, SourceAPIPhaseRefused
 PHASES=PHASES | SOURCE_API_PHASES
+from emqx_native_object_integrity import OBJECT_PHASES, NativeObjectPhaseRefused
+PHASES=PHASES | OBJECT_PHASES
 from emqx_candidate_stage import STAGES as BUILD_STAGES, KINDS as BUILD_KINDS
 from emqx_captured_candidate import CandidatePhaseRefused
 PHASES=PHASES | frozenset('build_'+s+'_'+k for s in BUILD_STAGES for k in BUILD_KINDS)
@@ -513,6 +515,7 @@ def _compare_source_objects(expected,source_api,native_values):
                 or result._api is not source_api or result._native is not native_values):raise ValueError()
         result.scan(b'')
         return result
+    except NativeObjectPhaseRefused as error:raise RealOwnerRefused(error.phase) from None
     except BaseException:raise RealOwnerRefused('object_integrity') from None
 
 

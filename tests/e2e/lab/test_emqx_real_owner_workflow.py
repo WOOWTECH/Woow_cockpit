@@ -986,7 +986,7 @@ class FoundationTests(unittest.TestCase):
         with self.assertRaises(m.RealOwnerRefused):m._compare_source_objects(expected,apis[-1],results[0]._native)
         apis[0]._documents['rules']['data'][0]['sql']='SELECT altered'
         with self.assertRaises(m.RealOwnerRefused) as caught:m._compare_source_objects(expected,apis[0],results[0]._native)
-        self.assertEqual(caught.exception.phase,'object_integrity')
+        self.assertEqual(caught.exception.phase,'object_integrity_collector')
 
     def test_native_object_callsite_refuses_wrong_cid_and_same_bytes_at_another_path(self):
         from test_emqx_native_object_integrity import NativeObjectTests
@@ -994,13 +994,13 @@ class FoundationTests(unittest.TestCase):
         old=fixture.cid;fixture.cid='c'*64;fixture.doc[0]['Id']=fixture.cid
         native=fixture.native()
         with self.assertRaises(m.RealOwnerRefused) as caught:m._compare_source_objects(fixture.expected,fixture.observed,native)
-        self.assertEqual(caught.exception.phase,'object_integrity')
+        self.assertEqual(caught.exception.phase,'object_integrity_identity')
         fixture.cid=old;fixture.doc[0]['Id']=old
         fixture.config['connectors']['http']['b1_http']['other_password']=fixture.secret
         fixture.wrapper_path[-1]='other_password'
         native=fixture.native()
         with self.assertRaises(m.RealOwnerRefused) as caught:m._compare_source_objects(fixture.expected,fixture.observed,native)
-        self.assertEqual(caught.exception.phase,'object_integrity')
+        self.assertEqual(caught.exception.phase,'object_integrity_connectors_secret_wrapper')
 
     def test_object_dependency_failure_and_boolean_ack_have_only_fixed_phase(self):
         import builtins
