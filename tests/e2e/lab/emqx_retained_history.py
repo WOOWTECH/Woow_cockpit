@@ -81,12 +81,14 @@ def _records(term, matches):
             _records(key,matches);_records(child,matches)
 
 
-def collect_original_retained_payloads(*, source_mode, password, topics, spool_directory):
+def collect_original_retained_payloads(*, source_mode, password, topics, spool_directory, source_path=None):
     """Topics are the TWO source-summary topics, supplied privately by owner.
 
     Does not read summary/credentials or guess topic names. Existing source_mode
-    fixes archive path/SHA/architecture; arbitrary archive/digest/decoder cannot
-    be supplied. Same default256MiB / explicit290785280-byte x86 spool profile,
+    fixes the original SHA/architecture. source_path optionally selects a staged
+    copy of that EXACT cipher; no supplied digest/decoder. source_binding opens
+    read-only/O_NOFOLLOW, requires a regular file, binds all reads to its FD and
+    checks the original full SHA plus before/after identity stamps. Same default256MiB / explicit290785280-byte x86 spool profile,
     12GiB reserve and private700/600 cleanup. <=64 cold files, each8MiB,total32MiB;
     120s cooperative deadline checked around IO/native calls (native wall20s/file).
     This may conservatively refuse divergent history despite a valid final row.
@@ -104,7 +106,7 @@ def collect_original_retained_payloads(*, source_mode, password, topics, spool_d
         keys=hasecuretar.Keys(password)
         values=Values();values.add(password.encode())
         matches={topic:set() for topic in topics}
-        with source_binding(profile.archive,'emqx',hacommon.semver('5.8.9'),profile.sha256,
+        with source_binding(profile.archive if source_path is None else source_path,'emqx',hacommon.semver('5.8.9'),profile.sha256,
                             keys=keys,required_encryption='v3') as source:
             timely()
             if source['addon_info']('woow-emqx').arch != profile.arch:

@@ -63,6 +63,40 @@ class RetainedHistoryTests(unittest.TestCase):
         for raw in (b'generated-original-one',b'generated-original-two',self.password.encode()):
             with self.assertRaises(PrivateFailure):result.scan(raw)
 
+    def test_staged_exact_cipher_uses_compiled_digest_and_architecture(self):
+        staged=self.path.with_name('private-staged-cipher.tar')
+        staged.write_bytes(self.path.read_bytes());staged.chmod(0o600)
+        original=staged.read_bytes()
+        self.profile.archive=self.path.with_name('host-path-unavailable.tar')
+        result=self.collect(source_path=staged)
+        self.assertEqual(result.source_sha256,self.digest)
+        self.assertEqual(len(result.private_pairs()),2)
+        self.assertEqual(staged.read_bytes(),original)
+        self.assertEqual(staged.stat().st_mode & 0o777,0o600)
+        self.profile.arch='amd64'
+        self.calls.clear();self.refuse(source_path=staged);self.assertEqual(self.calls,[])
+
+    def test_staged_wrong_sha_missing_symlink_and_nonregular_refuse_before_native(self):
+        staged=self.path.with_name('wrong-staged-cipher.tar')
+        staged.write_bytes(self.path.read_bytes()+b'wrong-cipher')
+        self.refuse(source_path=staged)
+        self.refuse(source_path=staged.with_name('missing-cipher.tar'))
+        linked=staged.with_name('linked-cipher.tar');linked.symlink_to(self.path)
+        self.refuse(source_path=linked)
+        self.refuse(source_path=self.path.parent)
+        self.assertEqual(self.calls,[])
+
+    def test_staged_cipher_mutation_refuses_final_stamp(self):
+        staged=self.path.with_name('changing-staged-cipher.tar')
+        staged.write_bytes(self.path.read_bytes())
+        original=self.decoder
+        def changed(raw,kind):
+            encoded=original(raw,kind)
+            with staged.open('ab') as handle:handle.write(b'changed')
+            return encoded
+        self.decoder=changed
+        self.refuse(source_path=staged)
+
     def test_repeated_equal_historical_values_are_unambiguous(self):
         self.terms.append(record(self.topics[0],b'generated-original-one'))
         self.assertFalse(self.collect().final_state)
