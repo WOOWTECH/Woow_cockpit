@@ -81,7 +81,7 @@ class CandidateAclRemovalTests(unittest.TestCase):
                 self.assertLessEqual(len(t.loads),1)
 
     def test_unknown_or_expanded_builtin_refused_before_any_load(self):
-        for builtin in ({'type':'built_in_database','enable':True,'max_rules':100},
+        for builtin in ({'type':'built_in_database','enable':True,'max_rules':101},
                         {'type':'built_in_database','enable':'true'}, {'type':'built_in_database'}):
             t=NativeRemovalTransport();t.builtin=builtin
             with self.subTest(keys=sorted(builtin)),self.assertRaises(BackupError):self.invoke(t)
@@ -138,3 +138,25 @@ class CandidateAclRemovalTests(unittest.TestCase):
         self.assertIn('emqx_acl = mnesia:table_info(emqx_acl,record_name)',ACL_RECEIPT_EXPR)
         self.assertIn('[who,rules] = mnesia:table_info(emqx_acl,attributes)',ACL_RECEIPT_EXPR)
         self.assertIn('Count = mnesia:table_info(emqx_acl,size)',ACL_RECEIPT_EXPR)
+
+    def test_three_key_imported_source_is_preserved_while_disabling(self):
+        t=NativeRemovalTransport();t.builtin['max_rules']=100
+        before=copy.deepcopy(t.builtin);rows=copy.deepcopy(t.acl_rows)
+        self.invoke(t)
+        self.assertEqual(t.loads[0],[{'type':'built_in_database','enable':False,'max_rules':100}])
+        self.assertEqual(t.builtin,before)
+        self.assertEqual(t.loads[1],t.config['authorization']['sources'])
+        self.assertEqual(t.acl_rows,rows)
+        self.assertEqual(t.receipts,3)
+
+    def test_dropping_third_key_in_disable_phase_refuses_before_removal(self):
+        class DropIntermediate(NativeRemovalTransport):
+            def exec(self,role,command,**kwargs):
+                result=super().exec(role,command,**kwargs)
+                if command[:4]==['emqx','ctl','conf','load'] and len(self.loads)==1:
+                    self.running_config['authorization']['sources'][0].pop('max_rules',None)
+                return result
+        t=DropIntermediate();t.builtin['max_rules']=100
+        with self.assertRaises(BackupError):self.invoke(t)
+        self.assertEqual(len(t.loads),1)
+        self.assertEqual(t.receipts,1)

@@ -41,7 +41,7 @@ class BuiltinProductFlowTests(unittest.TestCase):
             self.assertEqual(commands,[['emqx','eval',emqx.CONFIG_EXPR]])
 
     def test_expanded_unknown_and_untyped_source_refuse_before_export(self):
-        for source in ({'type':'built_in_database','enable':True,'max_rules':100},
+        for source in ({'type':'built_in_database','enable':True,'max_rules':101},
                 {'type':'built_in_database','enable':False,'path':'/fixture/loader'},
                 {'type':'built_in_database','enable':True,'loader':{}},
                 {'type':'built_in_database'}, {'type':'built_in_database','enable':1},
@@ -71,3 +71,23 @@ class BuiltinProductFlowTests(unittest.TestCase):
         t.running_config=copy.deepcopy(t.config)
         with self.assertRaises(BackupError):self.invoke(t)
         self.assertIn('restore',t.events)
+
+    def test_three_key_target_source_survives_product_restore_and_readback(self):
+        for enabled in (True,False):
+            t=self.fixture({'type':'built_in_database','enable':enabled,'max_rules':100})
+            self.invoke(t)
+            self.assertEqual(t.running_config['authorization'],t.config['authorization'])
+            self.assertEqual(t.restore['authorization']['sources'][-1],
+                {'type':'built_in_database','enable':enabled,'max_rules':100})
+
+    def test_dropping_third_key_during_restore_refuses(self):
+        class DropThird(flow.Transport):
+            def exec(self,role,command,**kwargs):
+                result=super().exec(role,command,**kwargs)
+                if command[:4]==['emqx','ctl','conf','load']:
+                    self.running_config['authorization']['sources'][-1].pop('max_rules',None)
+                return result
+        t=DropThird()
+        t.config['authorization']['sources'].append({'type':'built_in_database','enable':True,'max_rules':100})
+        t.running_config=copy.deepcopy(t.config)
+        with self.assertRaises(BackupError):self.invoke(t)

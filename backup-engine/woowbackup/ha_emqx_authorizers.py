@@ -1,7 +1,7 @@
 """Strict, opt-in EMQX 5.8.9 builtin authorization reference classification.
 
 For an explicitly decoded source object, not an entire authorization root.
-This helper does not admit other sources or alter the main FILE-only guard.
+This helper admits no other source types or reference-bearing fields.
 Pinned native schema proof: emqx_builtin_authorizer_schema_fixture.escript.
 """
 from .errors import BackupError
@@ -25,18 +25,18 @@ def builtin_database_shape(source):
 
 
 def builtin_database_references(source):
-    """Validate exactly {type: built_in_database, enable: bool}; no file refs.
+    """Validate explicit builtin bool enable, with optional typed max_rules=100.
 
-    Require explicit enable even though native schema has defaults. Unknown keys
-    (including native max_rules), cooked-default expansion, loaders and paths are
-    outside this deliberately restricted profile. Disabled sources are checked
-    just as strictly as enabled ones. This proves no source-level file reference,
-    not completeness of persistent ACL rows, global policy or runtime behavior.
-    Caller must preserve source order and check every other source independently.
+    Exact two/three-key profiles only. Pinned 5.8.9 native schema declares 100;
+    other positive integers may be native-valid but are NOT this restricted
+    profile. Never fill defaults, strip fields, mutate the source or accept a
+    custom loader/path. Caller preserves the full observed raw object/order.
     """
-    if (type(source) is not dict or set(source) != {'type', 'enable'}
+    if (type(source) is not dict
+            or set(source) not in ({'type','enable'}, {'type','enable','max_rules'})
             or type(source['type']) is not str
             or source['type'] != 'built_in_database'
-            or type(source['enable']) is not bool):
+            or type(source['enable']) is not bool
+            or ('max_rules' in source and (type(source['max_rules']) is not int or source['max_rules'] != 100))):
         raise BackupError('incompatible', 'EMQX 內建授權來源超出已核對的支援範圍。')
     return frozenset()

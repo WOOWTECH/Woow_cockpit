@@ -46,7 +46,7 @@ class CandidateAclComponentTests(unittest.TestCase):
             self.assertEqual(observed[-1],expected)
 
     def test_imported_profile_refusal_has_exact_stage_before_native_receipt(self):
-        cases=[({'type':'built_in_database','enable':True,'max_rules':100},'exact_type_enable_maxrules100'),
+        cases=[({'type':'built_in_database','enable':True,'max_rules':99},'unknown'),
                ({'type':'built_in_database','enable':True,'max_rules':101},'unknown'),
                ({'type':'built_in_database','enable':True,'max_rules':100.0},'unknown'),
                ({'type':'built_in_database','enable':'true'},'unknown'),

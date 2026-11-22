@@ -8,7 +8,8 @@ from woowbackup.ha_emqx_authorizers import builtin_database_references
 class NativeBuiltinSchemaTests(unittest.TestCase):
     def test_native_schema_accepts_both_exact_python_profiles(self):
         for enabled in (True,False):
-            self.assertEqual(builtin_database_references({'type':'built_in_database','enable':enabled}),frozenset())
+            for extra in ({},{'max_rules':100}):
+                self.assertEqual(builtin_database_references(dict(type='built_in_database',enable=enabled,**extra)),frozenset())
         name='emqx_builtin_authorizer_schema_fixture.escript'
         with tempfile.TemporaryDirectory(prefix='emqx-public-builtin-schema-') as directory,tempfile.TemporaryFile() as output:
             root=Path(directory)

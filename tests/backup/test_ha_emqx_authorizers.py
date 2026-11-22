@@ -15,7 +15,7 @@ class BuiltinAuthorizerTests(unittest.TestCase):
     def test_missing_unknown_and_external_fields_refuse_even_disabled(self):
         for enabled in (True,False):
             for key,value in [('path','/fixture/acl'),('url','https://example.invalid'),
-                    ('loader','custom'),('max_rules',100),('headers',{}),('file','/fixture/acl')]:
+                    ('loader','custom'),('max_rules',101),('headers',{}),('file','/fixture/acl')]:
                 source={'type':'built_in_database','enable':enabled,key:value}
                 with self.subTest(enabled=enabled,key=key),self.assertRaises(BackupError):
                     builtin_database_references(source)
@@ -40,5 +40,16 @@ class BuiltinAuthorizerTests(unittest.TestCase):
         from woowbackup.ha_emqx import authorization_file_references
         self.assertEqual(authorization_file_references(
             {'sources':[{'type':'built_in_database','enable':True}]},[]),{'configs/cluster.hocon'})
-        with self.assertRaises(BackupError):
-            authorization_file_references({'sources':[{'type':'built_in_database','enable':True,'max_rules':100}]},[])
+        self.assertEqual(authorization_file_references(
+            {'sources':[{'type':'built_in_database','enable':True,'max_rules':100}]},[]),{'configs/cluster.hocon'})
+
+    def test_exact_three_keys_preserved_and_only_integer_100_accepted(self):
+        for enabled in (True,False):
+            source={'type':'built_in_database','enable':enabled,'max_rules':100}
+            before=copy.deepcopy(source)
+            self.assertEqual(builtin_database_references(source),frozenset())
+            self.assertEqual(source,before)
+            for value in (99,101,True,False,100.0,'100',None):
+                with self.subTest(enabled=enabled,kind=type(value).__name__),self.assertRaises(BackupError):
+                    builtin_database_references(dict(source,max_rules=value))
+            with self.assertRaises(BackupError):builtin_database_references(dict(source,unknown=True))

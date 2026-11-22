@@ -15,7 +15,7 @@ class BuiltinShapeDiagnosticsTests(unittest.TestCase):
             self.assertEqual(builtin_database_shape(two),'exact_type_enable')
             three=dict(two,max_rules=100)
             self.assertEqual(builtin_database_shape(three),'exact_type_enable_maxrules100')
-            with self.assertRaises(BackupError):builtin_database_references(three)
+            self.assertEqual(builtin_database_references(three),frozenset())
             for value in ('100',100.0,True,101,0,None):
                 self.assertEqual(builtin_database_shape(dict(two,max_rules=value)),'unknown')
             self.assertEqual(builtin_database_shape(dict(three,private_unknown='not-output')),'unknown')
@@ -24,7 +24,7 @@ class BuiltinShapeDiagnosticsTests(unittest.TestCase):
             self.assertEqual(builtin_database_shape(source),'unknown')
 
     def test_real_capture_retains_exact_three_key_failure_stage_before_snapshot(self):
-        for rule,stage in [(100,'exact_type_enable_maxrules100'),('100','unknown')]:
+        for rule,stage in [(101,'unknown'),('100','unknown')]:
             t=Transport()
             t.config['authorization']['sources'].append({'type':'built_in_database','enable':True,'max_rules':rule})
             t.running_config=copy.deepcopy(t.config)
