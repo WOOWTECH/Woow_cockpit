@@ -341,7 +341,7 @@ def _target_base():
         +b'node.cookie="'+secrets.token_hex(24).encode()+b'"\n'
         +b'cluster.discovery_strategy=manual\ncluster.proto_dist=inet_tcp\nrpc.protocol=tcp\n'
         +b'dashboard.default_username="owner"\n'
-        +b'dashboard.listeners.http.bind="127.0.0.1:18083"\ndashboard.listeners.https.bind=0\n'
+        +b'dashboard.listeners.http.bind="127.0.0.1:18083"\n'
         +b'listeners.tcp.default.bind="127.0.0.1:1883"\n'
         +b'listeners.ssl.default.enable=false\nlisteners.ws.default.enable=false\nlisteners.wss.default.enable=false\n'
         +b'authentication=[{mechanism=password_based,backend=built_in_database,'
@@ -516,6 +516,17 @@ def validate_source_mqtt(provision,clients):
         if result.returncode or result.stdout!=b'1:'+topic+b':'+payload.hex().encode()+b'\n':raise ValueError()
 
 
+def final_private_receipt(registry):
+    """Return only exact scanned text after all three post-operation captures."""
+    from emqx_post_restore_values import PostRestoreValues
+    from emqx_private_evidence import names_receipt, SOURCE_NAMES
+    if type(registry) is not PostRestoreValues or len(registry._generations) != 3:
+        raise RealOwnerRefused('post_capture')
+    raw=names_receipt('restore','passed',SOURCE_NAMES)
+    registry.scan(raw)
+    return raw
+
+
 def run_real_framed_owner(stream,*,private_parent,source_mode,no_live=True):
     """Internal fixed-frame operation; NO CLI/host mode or restore right added.
 
@@ -592,7 +603,8 @@ def run_real_framed_owner(stream,*,private_parent,source_mode,no_live=True):
                 post_registry=_restore_and_rollback(ctx,app,provision,backup_id,state,clients=clients,session=session)
                 post_registry.scan(b'')  # retain/check the complete supplemental chain through phase end
             phase='cleanup'
-        return {'scope':'private-same-target-product-flow', 'client_validation':'source-login-target-file-acl-retained-after-restore-rollback-restart',
+        receipt=final_private_receipt(post_registry)
+        return {'evidence_bytes':receipt,'scope':'private-same-target-product-flow', 'client_validation':'source-login-target-file-acl-retained-after-restore-rollback-restart',
                 'source_mnesia_acl_behavior':'not-assessed-target-file-authorizer',
                 'source_final_state':'not-assessed','commercial_acceptance':'not-assessed'}
     except RealOwnerRefused:

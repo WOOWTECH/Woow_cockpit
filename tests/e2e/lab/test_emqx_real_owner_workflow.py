@@ -268,14 +268,35 @@ class FoundationTests(unittest.TestCase):
         for operation in (create,cleanup,capture,build):operation.assert_not_called()
         self.assertEqual(list(self.root.glob('emqx-framed-private-*')),[])
 
+    def test_final_receipt_scans_exact_bytes_with_original_and_post_values(self):
+        from emqx_private_boundary import Registry,SOURCES,PrivateFailure
+        from emqx_persisted_values import PersistedValues
+        from emqx_post_restore_values import PostRestoreValues
+        from emqx_private_evidence import names_receipt,SOURCE_NAMES
+        def scanner(secret,generations=('a','b','c')):
+            prior=Registry()
+            for source in SOURCES:prior.register(source,[b'original-private'] if source=='backup-key' else [])
+            prior.seal()
+            persisted=PersistedValues('a'*32,'target',{},[secret])
+            return PostRestoreValues(prior,persisted,generations,())
+        registry=scanner(b'post-operation-private')
+        raw=m.final_private_receipt(registry)
+        self.assertEqual(raw,names_receipt('restore','passed',SOURCE_NAMES))
+        for secret in (b'original-private',b'post-operation-private'):
+            with self.assertRaises(PrivateFailure):registry.scan(secret)
+        with self.assertRaises(PrivateFailure):m.final_private_receipt(scanner('通過'.encode()))
+        for registry in (object(),scanner(b'private',('a','b'))):
+            with self.assertRaises(m.RealOwnerRefused):m.final_private_receipt(registry)
+
     def test_target_base_uses_canonical_pinned_fields_and_disabled_alternate_listeners(self):
         raw=m._target_base()
         for leaf in (b'node.name="emqx@127.0.0.1"',b'node.data_dir="/opt/emqx/data"',
             b'cluster.discovery_strategy=manual',b'cluster.proto_dist=inet_tcp',b'rpc.protocol=tcp',
             b'listeners.ssl.default.enable=false',b'listeners.ws.default.enable=false',
-            b'listeners.wss.default.enable=false',b'dashboard.listeners.https.bind=0'):
+            b'listeners.wss.default.enable=false'):
             self.assertIn(leaf+b'\n',raw)
         self.assertNotIn(b'node.dist_proto',raw);self.assertNotIn(b'rpc.driver',raw)
+        self.assertNotIn(b'dashboard.listeners.https',raw)
 
     def test_logging_opt_in_changes_only_exact_issued_unit_and_preserves_global_fixture(self):
         self.runner.read_file=lambda rel,**kwargs:(self.root/rel).read_bytes()
