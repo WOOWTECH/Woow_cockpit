@@ -3,6 +3,8 @@
 set -euo pipefail
 source "$(dirname "$0")/lib.sh"
 device_vars d
+git -C "$REPO_ROOT" diff --quiet && git -C "$REPO_ROOT" diff --cached --quiet || die "commit tested code first"
+printf '{"stage":"source","commit":"%s"}\n' "$(git -C "$REPO_ROOT" rev-parse HEAD)"
 exec 9>/tmp/woowbk-dev-d-mutation.lock
 flock -n 9 || die 'dev-d mutation owner busy'
 exec 8>/tmp/headscale-dev-d-private-volume.lock
@@ -21,3 +23,5 @@ cat > "$work/code.tar"
 tar -xf "$work/code.tar" -C "$work"
 PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="$work/backup-engine:$work" python3 "$work/emqx_runtime_live.py"
 '
+
+"$LAB_DIR/owner.sh" d --verify-isolation

@@ -77,7 +77,10 @@ def main():
             sockets.append(sock)
         dashboard, mqtt = [s.getsockname()[1] for s in sockets]
         config = private / 'emqx.conf'
-        config.write_text('dashboard.listeners.http.bind = "127.0.0.1:%d"\n'
+        config.write_text('node.name = "runtime@127.0.0.1"\n'
+                          'node.cookie = "synthetic-runtime-isolated-cookie"\n'
+                          'node.data_dir = "/opt/emqx/data"\n'
+                          'dashboard.listeners.http.bind = "127.0.0.1:%d"\n'
                           'dashboard.default_password = "%s"\n'
                           'listeners.tcp.default.bind = "127.0.0.1:%d"\n'
                           'listeners.ssl.default.enable = false\n'
@@ -88,7 +91,7 @@ def main():
         def http(path, *, data=None, bearer=None):
             # Secrets travel only over stdin to curl inside the network-none broker.
             config = ['url = ' + json.dumps(url + path), 'silent', 'show-error',
-                      'max-time = 5', 'write-out = "\\n%{http_code}"']
+                      'max-time = 5', 'write-out = "\\n%{content_type}\\n%{http_code}"']
             if data is not None:
                 config += ['header = "Content-Type: application/json"',
                            'data = ' + json.dumps(json.dumps(data))]
@@ -99,10 +102,10 @@ def main():
             report['last_curl_returncode'] = response.returncode
             if response.returncode or len(response.stdout) > 65536:
                 raise RuntimeError('private-http-failed')
-            body, code = response.stdout.rsplit(b'\n', 1)
-            return int(code), body
+            body, content_type, code = response.stdout.rsplit(b'\n', 2)
+            return int(code), body, content_type.decode().split(';', 1)[0]
         def transport(user, passwd):
-            status, body = http('login', data={'username': user.decode(), 'password': passwd.decode()})
+            status, body, content_type = http('login', data={'username': user.decode(), 'password': passwd.decode()})
             report['last_login_status'] = status
             try:
                 parsed = json.loads(body)
@@ -110,17 +113,18 @@ def main():
                 report['login_has_unexpected_fields'] = isinstance(parsed, dict) and bool(set(parsed) - {'token', 'username', 'role', 'version', 'license'})
             except ValueError:
                 report['login_json_invalid'] = True
-            return status, 'application/json', io.BytesIO(body)
+            return status, content_type, io.BytesIO(body)
         try:
             for sock in sockets:
                 sock.close()
             # keep-id makes private config readable to EMQX uid 1000, with no public chmod.
+            assert podman('container', 'exists', prefix).returncode == 1
+            created = True
             checked('run', '-d', '--pull=never', '--name', prefix,
                     '--network=none', '--log-driver=none', '--image-volume=ignore', '--userns=keep-id:uid=1000,gid=1000',
                     '--memory=768m', '--cpus=0.75', '--pids-limit=256',
                     '-e', 'ERL_FLAGS=+S 2:2 +SDcpu 1 +SDio 1',
                     '-v', str(config) + ':/opt/emqx/etc/emqx.conf:ro', 'sha256:' + IMAGE)
-            created = True
             container = json.loads(checked('inspect', prefix))[0]
             assert container['HostConfig']['NetworkMode'] == 'none'
             assert container['HostConfig']['LogConfig']['Type'] == 'none'
@@ -133,18 +137,21 @@ def main():
                     credential = login_registered(registry, transport, username=username, password=password)
                     break
                 except PrivateFailure:
+                    state = podman('inspect', '--format', '{{.State.Running}}', prefix)
+                    if state.stdout.strip() != b'true':
+                        raise RuntimeError('broker-exited-before-login') from None
                     if time.monotonic() >= deadline:
                         raise RuntimeError('broker-login-timeout') from None
                     time.sleep(1)
             checks['real_login_registered'] = True
             def authenticate(bearer):
-                status, body = http('nodes', bearer=bearer)
+                status, body, _ = http('nodes', bearer=bearer)
                 assert status == 200
                 doc = json.loads(body)
                 report['broker_version'] = doc[0]['version']
                 return True
             checks['issued_token_authenticated'] = credential.with_bearer(authenticate)
-            status, _ = http('nodes', bearer=b'Bearer ' + secrets.token_urlsafe(32).encode())
+            status, _, _ = http('nodes', bearer=b'Bearer ' + secrets.token_urlsafe(32).encode())
             assert status == 401
             checks['invalid_bearer_denied'] = True
             evidence = publish_login(private, registry)

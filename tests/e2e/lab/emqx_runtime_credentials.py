@@ -93,7 +93,10 @@ class RuntimeRegistry:
         self._scan_values(payload)
 
     def scan_login_evidence(self, payload):
-        """Runtime producer only: no source or target completeness assertion."""
+        """Login producer diagnostics only; never substitutes for scan().
+
+        Does not attest source/target capture or permit full-workflow publication.
+        """
         if (self._categories.get('runtime-login-input', 0) < 2
                 or self._categories.get('runtime-login-token', 0) < 2
                 or not isinstance(payload, bytes) or len(payload) > MAX_TOTAL):
