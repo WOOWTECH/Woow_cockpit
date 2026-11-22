@@ -158,6 +158,12 @@ def main():
                                                 if type(item) is dict:
                                                     if item.get('type')=='file':
                                                         stage='HOCON_FILE_AUTHORIZER'
+                                                        dependency=item.get('path')
+                                                        if dependency is None:stage='HOCON_IMPLICIT_ACL'
+                                                        elif dependency in ('etc/acl.conf','/opt/emqx/etc/acl.conf'):
+                                                            stage='HOCON_VENDOR_ACL'
+                                                        elif dependency in ('data/authz/acl.conf','/opt/emqx/data/authz/acl.conf'):
+                                                            stage='HOCON_STAGED_ACL'
                                                         break
                                                     pending.extend(item.values())
                                                 elif type(item) is list:pending.extend(item)
