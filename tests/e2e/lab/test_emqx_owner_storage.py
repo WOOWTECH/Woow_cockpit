@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 import shutil
 import subprocess
+import tempfile
 import unittest
 
 from emqx_owner_target import owner_target_readers
@@ -27,11 +28,20 @@ class OwnerStorageTests(unittest.TestCase):
         self.assertIn('{0,0,0,0} -> ok; _ -> error(storage_null_nonempty)', source)
         self.assertIn('DefsAfter = [{T,mnesia:table_info(T,all)} || T <- All]', source)
 
-    @unittest.skipUnless(shutil.which('escript'), 'local Erlang absent; fixture supplied for owner offline execution')
     def test_execute_exact_fixed_source_policy_in_erlang(self):
-        result = subprocess.run(['escript', str(ROOT / 'emqx_owner_storage_fixture.escript'),
-                                 str(ROOT / 'emqx_owner_target.expr')], capture_output=True, check=True)
-        self.assertEqual(result.stdout, b'OWNERSTORAGEFIXTUREOK')
+        # Exercise the exact policy in the pinned native runtime even when the
+        # host has no Erlang; absence of a host binary is not a passing skip.
+        from emqx_native_runtime import run_native
+        with tempfile.TemporaryDirectory(prefix='emqx-public-storage-policy-') as directory:
+            root=Path(directory)
+            for name in ('emqx_owner_storage_fixture.escript','emqx_owner_target.expr'):
+                (root/name).write_bytes((ROOT/name).read_bytes())
+                (root/name).chmod(0o600)
+            with tempfile.TemporaryFile() as output:
+                code=run_native(root,'emqx_owner_storage_fixture.escript',
+                    args=('/input/emqx_owner_target.expr',),output=output)
+                output.seek(0)
+                self.assertEqual((code,output.read(128)),(0,b'OWNERSTORAGEFIXTUREOK'))
 
     def test_native_envelope_consumer_preserves_external_metadata(self):
         # Synthetic structured native reply, not execution of storage backends.
