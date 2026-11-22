@@ -1,0 +1,86 @@
+{
+  "schema": 2,
+  "status": "passed",
+  "payload_bytes": 8590983168,
+  "reserve_bytes": 12884901888,
+  "sparse": false,
+  "encryption": "none",
+  "compression": "gzip",
+  "service_restore": false,
+  "hermes_attempts": 0,
+  "headers_only_over_8gib": false,
+  "phases": {
+    "generate_seconds": 155.57515103113838,
+    "write_seconds": 76.6126936308574,
+    "verify_seconds": 28.828449718886986,
+    "extract_hash_seconds": 214.04032898810692
+  },
+  "profile": "compressible-sequential",
+  "archive_cap_bytes": 268435456,
+  "payload_method": "unique-shake256-4KiB-tile-per-MiB",
+  "planned_peak_storage_bytes": 9127854080,
+  "required_free_bytes": 22281191424,
+  "free_before": 26259353600,
+  "minimum_free_observed": 17513103360,
+  "header_probes": [
+    {
+      "declared_bytes": 8589934591,
+      "actual_header_bytes": 512,
+      "parser_size_supported": true,
+      "missing_payload_rejected": true
+    },
+    {
+      "declared_bytes": 8589934592,
+      "actual_header_bytes": 1536,
+      "parser_size_supported": true,
+      "missing_payload_rejected": true
+    },
+    {
+      "declared_bytes": 8589934593,
+      "actual_header_bytes": 1536,
+      "parser_size_supported": true,
+      "missing_payload_rejected": true
+    },
+    {
+      "case": "oversized backup.json",
+      "actual_header_bytes": 1536,
+      "error": {
+        "code": "not-a-backup",
+        "message": "這不是 woowtech 備份檔（.tar 或 .woowbackup）。",
+        "details": {}
+      }
+    },
+    {
+      "case": "metadata limit",
+      "actual_header_bytes": 512,
+      "error": {
+        "code": "limit-exceeded",
+        "message": "備份檔超出安全限制（檔案數量或大小），已拒絕處理。",
+        "details": {
+          "reason": "backup.json too large",
+          "size": 1048577
+        }
+      }
+    }
+  ],
+  "source_allocated_bytes": 8591114240,
+  "source_sha256": "f88436d3200bc34cfa08f7362a377f17398a0cf61dc3467c1ec4554e1ee1e2b7",
+  "archive_bytes": 111493120,
+  "archive_allocated_bytes": 111497216,
+  "archive_sha256": "80b309aab79deca53ce7797cb966fdb51c38e97974f2b5180961276182dfe6d0",
+  "verified_bytes": 8590983168,
+  "actual_inner_member": {
+    "size": 8590983168,
+    "pax": {
+      "size": "8590983168"
+    }
+  },
+  "source_removed_before_extract": true,
+  "extracted_sha256": "f88436d3200bc34cfa08f7362a377f17398a0cf61dc3467c1ec4554e1ee1e2b7",
+  "extracted_bytes": 8590983168,
+  "extracted_allocated_bytes": 8591106048,
+  "temporary_payloads_removed": true,
+  "elapsed_seconds": 475.65977328200825,
+  "max_rss_kib": 40524,
+  "free_after_cleanup": 26288791552
+}
