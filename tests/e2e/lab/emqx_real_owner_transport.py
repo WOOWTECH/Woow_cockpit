@@ -55,7 +55,7 @@ class TransportRefused(ValueError):
 # Reuse the original bounded, private extraction/dependency loader, including its
 # finally cleanup. No independent tar parser or key/archive frame implementation.
 _dispatch="""
- if mode in (b'G',b'I',b'g',b'i',b'M',b'N',b'T',b'U',b'K'):
+ if mode in (b'G',b'I',b'g',b'i',b'M',b'N',b'T',b'U',b'K',b'L'):
   from emqx_real_owner_transport import owner_main
   raise SystemExit(owner_main(mode))
 """
@@ -228,7 +228,7 @@ def bundle_code():
     selected=[p for p in paths if (Path(p).name.startswith('emqx_') and Path(p).suffix in ('.py','.escript','.expr'))
               or Path(p).name=='ha_real_fixture.py']
     required={'emqx_real_owner_transport.py','emqx_real_owner_workflow.py','emqx_post_restore_values.py',
-              'emqx_owner_fixture_files.py','emqx_target_fixture_policy.py','emqx_adapter_mqtt.py','emqx_issued_target_probe.py','emqx_retained_history.py','emqx_source_api_validator.py','emqx_source_mqtt_negative.py','emqx_owned_client.py','emqx_imported_acl_target_mode.py','emqx_mnesia_acl_target_variant.py','emqx_b1_object_integrity.py','emqx_native_object_integrity.py','emqx_client_sink_capabilities.py'}
+              'emqx_owner_fixture_files.py','emqx_target_fixture_policy.py','emqx_adapter_mqtt.py','emqx_issued_target_probe.py','emqx_retained_history.py','emqx_source_api_validator.py','emqx_source_mqtt_negative.py','emqx_owned_client.py','emqx_imported_acl_target_mode.py','emqx_mnesia_acl_target_variant.py','emqx_b1_object_integrity.py','emqx_native_object_integrity.py','emqx_client_sink_capabilities.py','emqx_client_nc_primitives.py'}
     if not required<={Path(p).name for p in selected}:raise ValueError()
     raw=subprocess.check_output(['git','archive','HEAD','backup-engine/woowbackup',*selected],cwd=ROOT)
     if not 0<len(raw)<=16*1024*1024:raise ValueError()
@@ -278,6 +278,7 @@ def dependency_check():
     from emqx_b1_object_integrity import capture_b1_object_expectations
     from emqx_native_object_integrity import compare_b1_objects_native
     from emqx_client_sink_capabilities import run_client_sink_capabilities
+    from emqx_client_nc_primitives import run_client_nc_primitives
     from emqx_source_mqtt_negative import validate_source_mqtt_negative
     from emqx_source_api_validator import validate_source_api
     from emqx_adapter_mqtt import CLIENT
@@ -285,7 +286,7 @@ def dependency_check():
     from woowbackup.adapters.quadlet_postgres import QuadletPostgresAdapter
     from woowbackup import flows
     if not all(callable(x) for x in (run_real_framed_owner,_composite_observer_factory(),
-            final_private_receipt,collect_post_restore_values,collect_original_retained_payloads,validate_source_api,validate_source_mqtt_negative,capture_b1_object_expectations,compare_b1_objects_native,run_client_sink_capabilities,run_issued_target_probe,QuadletPostgresAdapter,flows.run_restore)):
+            final_private_receipt,collect_post_restore_values,collect_original_retained_payloads,validate_source_api,validate_source_mqtt_negative,capture_b1_object_expectations,compare_b1_objects_native,run_client_sink_capabilities,run_client_nc_primitives,run_issued_target_probe,QuadletPostgresAdapter,flows.run_restore)):
         raise ValueError()
     if type(CLIENT) is not str or type(TARGET_RECEIPT) is not bytes or not 0<len(TARGET_RECEIPT)<=65536:raise ValueError()
 
@@ -330,6 +331,7 @@ class AdmittedStream:
 
 def owner_main(mode):
     if mode==b'K':return owner_client_sink()
+    if mode==b'L':return owner_client_nc()
     if mode==b'U':return owner_probe()
     if mode==b'T':
         dependency_check()
@@ -370,6 +372,27 @@ def owner_main(mode):
     finally:
         signal.setitimer(signal.ITIMER_REAL,0)
         signal.signal(signal.SIGALRM,previous)
+
+
+def owner_client_nc():
+    from emqx_arm_source_owner import _owner_realm
+    from emqx_client_nc_primitives import run_client_nc_primitives,RECEIPT,ClientNCRefused,PHASES
+    phase='realm'
+    def deadline(*_):raise ValueError()
+    previous=signal.signal(signal.SIGALRM,deadline)
+    try:
+        signal.setitimer(signal.ITIMER_REAL,60)
+        if not _owner_realm():raise ClientNCRefused('realm')
+        phase='input'
+        if sys.stdin.buffer.read(1):raise ClientNCRefused('input')
+        phase='run';receipt=run_client_nc_primitives()
+        if type(receipt) is not bytes or receipt!=RECEIPT:raise ClientNCRefused('run')
+        sys.stdout.buffer.write(receipt);sys.stdout.buffer.flush();return 0
+    except BaseException as error:
+        phase=error.phase if type(error) is ClientNCRefused and error.phase in PHASES else phase
+        sys.stdout.buffer.write(b'CLIENTNC-REFUSED:'+phase.encode('ascii')+b'\n');sys.stdout.buffer.flush();return 1
+    finally:
+        signal.setitimer(signal.ITIMER_REAL,0);signal.signal(signal.SIGALRM,previous)
 
 
 def owner_client_sink():
@@ -421,6 +444,7 @@ def read_result(child,*,timeout=900):
     from emqx_real_owner_workflow import PHASES
     from emqx_issued_target_probe import PHASES as PROBE_PHASES
     from emqx_client_sink_capabilities import PHASES as SINK_PHASES
+    from emqx_client_nc_primitives import PHASES as NC_PHASES
     from emqx_framed_preflight import MAX_FRAME
     deadline=time.monotonic()+timeout;result=bytearray()
     with selectors.DefaultSelector() as selector:
@@ -442,6 +466,8 @@ def read_result(child,*,timeout=900):
         for phase in SINK_PHASES:
             if bytes(result)==b'CLIENTSINK-REFUSED:'+phase.encode('ascii')+b'\n':
                 raise TransportRefused('sink_'+phase)
+        for phase in NC_PHASES:
+            if bytes(result)==b'CLIENTNC-REFUSED:'+phase.encode('ascii')+b'\n':raise TransportRefused('nc_'+phase)
         raise TransportRefused('child')
     return bytes(result)
 
@@ -471,16 +497,22 @@ def main(argv=None):
         dependency_only=args==['--real-restore-dependencies']
         probe_only=args==['--issued-target-probe']
         sink_only=args==['--client-sink-capabilities']
-        if not dependency_only and not probe_only and not sink_only and (len(args)!=1 or args[0] not in MODES):raise ValueError()
+        nc_only=args==['--client-nc-primitives']
+        if not dependency_only and not probe_only and not sink_only and not nc_only and (len(args)!=1 or args[0] not in MODES):raise ValueError()
         phase='bundle';code=bundle_code()
         phase='dependencies';deps=dependencies()
-        if dependency_only or probe_only or sink_only:
+        if dependency_only or probe_only or sink_only or nc_only:
             child=subprocess.Popen([str(ROOT/'tests/e2e/lab/owner.sh'),'d','/usr/bin/python3','-c',BOOTSTRAP],
                 stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.DEVNULL)
-            child.stdin.write(struct.pack('!Q',len(code))+code+struct.pack('!Q',len(deps))+deps+(b'K' if sink_only else b'U' if probe_only else b'T'))
+            child.stdin.write(struct.pack('!Q',len(code))+code+struct.pack('!Q',len(deps))+deps+(b'L' if nc_only else b'K' if sink_only else b'U' if probe_only else b'T'))
             child.stdin.close()
             phase='child';frame=read_result(child,timeout=900 if probe_only else 60)
-            if sink_only:
+            if nc_only:
+                from emqx_client_nc_primitives import RECEIPT
+                phase='receipt'
+                if frame!=RECEIPT:raise ValueError()
+                print('CLIENT NC PRIMITIVES PASSED',flush=True)
+            elif sink_only:
                 from emqx_client_sink_capabilities import RECEIPT
                 phase='receipt'
                 if frame!=RECEIPT:raise ValueError()
@@ -546,7 +578,8 @@ def main(argv=None):
         from emqx_real_owner_workflow import PHASES
         from emqx_issued_target_probe import PHASES as PROBE_PHASES
         from emqx_client_sink_capabilities import PHASES as SINK_PHASES
-        if phase not in HOST_PHASES|PHASES|{'probe_'+p for p in PROBE_PHASES}|{'sink_'+p for p in SINK_PHASES}:phase='profile'
+        from emqx_client_nc_primitives import PHASES as NC_PHASES
+        if phase not in HOST_PHASES|PHASES|{'probe_'+p for p in PROBE_PHASES}|{'sink_'+p for p in SINK_PHASES}|{'nc_'+p for p in NC_PHASES}:phase='profile'
         print('REAL OWNER '+phase.upper()+' REFUSED',flush=True);return 1
 
 

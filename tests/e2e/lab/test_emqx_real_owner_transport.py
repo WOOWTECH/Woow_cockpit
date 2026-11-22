@@ -200,6 +200,51 @@ class TransportTests(unittest.TestCase):
             self.assertIn(run.stdout,(b'CLIENTSINK-REFUSED:realm\n',b'CLIENTSINK-REFUSED:input\n'))
             self.assertEqual(run.stderr,b'');self.assertEqual(list(Path(d).iterdir()),[])
 
+    def test_fixed_nc_primitive_host_dispatch_never_reads_source_or_credentials(self):
+        import emqx_real_owner_transport as m
+        from emqx_client_nc_primitives import RECEIPT
+        import contextlib,struct
+        from unittest.mock import Mock
+        class Sink(io.BytesIO):
+            def close(self):pass
+        sink=Sink();child=Mock(stdin=sink);out=io.StringIO()
+        with patch.object(m,'bundle_code',return_value=b'code'),patch.object(m,'dependencies',return_value=b'deps'), \
+             patch.object(m.subprocess,'Popen',return_value=child),patch.object(m,'read_result',return_value=RECEIPT), \
+             patch.object(m,'client_prefix') as clients,patch.object(m,'source_profile') as source, \
+             patch.object(m,'read_fixed_fields') as key,patch.object(m,'retain_restore_evidence') as retain, \
+             patch.object(m,'_retain_evidence') as private,contextlib.redirect_stdout(out):
+            self.assertEqual(m.main(['--client-nc-primitives']),0)
+        self.assertEqual(out.getvalue(),RECEIPT.decode())
+        self.assertEqual(sink.getvalue(),struct.pack('!Q',4)+b'code'+struct.pack('!Q',4)+b'deps'+b'L')
+        for call in (clients,source,key,retain,private):call.assert_not_called()
+        self.assertIn("b'L'",m._dispatch)
+
+    def test_nc_refusal_requires_exact_fixed_nonzero_child_frame(self):
+        import emqx_real_owner_transport as m
+        import subprocess,sys
+        for raw,phase in ((b'CLIENTNC-REFUSED:listener\n','nc_listener'),
+                (b'CLIENTNC-REFUSED:missing_cmp\n','nc_missing_cmp'),
+                (b'CLIENTNC-REFUSED:private-generated-value\n','child'),
+                (b'CLIENTNC-REFUSED:listener\nextra','child')):
+            child=subprocess.Popen([sys.executable,'-c','import sys;sys.stdout.buffer.write('+repr(raw)+');sys.exit(1)'],
+                stdout=subprocess.PIPE,stderr=subprocess.DEVNULL)
+            try:
+                with self.assertRaises(m.TransportRefused) as caught:m.read_result(child,timeout=3)
+                self.assertEqual(caught.exception.phase,phase)
+            finally:child.wait();child.stdout.close()
+
+    def test_extracted_nc_dispatch_refuses_input_without_pythonpath_or_runtime(self):
+        import emqx_real_owner_transport as m
+        import struct,subprocess
+        code=m.bundle_code();deps=m.dependencies()
+        frame=struct.pack('!Q',len(code))+code+struct.pack('!Q',len(deps))+deps+b'L'+b'forbidden-input'
+        with tempfile.TemporaryDirectory() as d:
+            env=dict(os.environ);env.pop('PYTHONPATH',None);env['TMPDIR']=d
+            run=subprocess.run(['/usr/bin/python3','-c',m.BOOTSTRAP],input=frame,capture_output=True,cwd=d,env=env,timeout=60)
+            self.assertNotEqual(run.returncode,0)
+            self.assertIn(run.stdout,(b'CLIENTNC-REFUSED:realm\n',b'CLIENTNC-REFUSED:input\n'))
+            self.assertEqual(run.stderr,b'');self.assertEqual(list(Path(d).iterdir()),[])
+
     def test_fixed_imported_mode_dispatch_preserves_independent_source_frame(self):
         import emqx_real_owner_transport as m
         import emqx_real_owner_workflow as workflow
