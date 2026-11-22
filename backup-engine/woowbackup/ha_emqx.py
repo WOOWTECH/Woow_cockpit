@@ -27,6 +27,7 @@ cluster.hocon, data exports and traces; `woow_emqx_log` is only its top folder. 
 the EMQX version it pins (VERSIONS), which must equal the live image's `org.opencontainers.image.version`.
 """
 import io
+import hashlib
 import base64
 import json
 import os
@@ -515,7 +516,7 @@ CONFIG_EXPR = ('io:format("WOOWCFG:~s:END~n", '
                '[base64:encode(emqx_utils_json:encode(emqx:get_raw_config([])))]).')
 
 
-def read_effective_config(execute, *, allow_authz_omission=False):
+def read_effective_config(execute, *, allow_authz_omission=False, _native_digest=None):
     """Read merged RAW broker config, not cooked schema-expanded defaults.
 
     CONFIG_EXPR calls get_raw_config; retain every returned field unchanged so
@@ -530,7 +531,8 @@ def read_effective_config(execute, *, allow_authz_omission=False):
         encoded, tail = body[8:].split(b':END', 1)
         if tail.strip() not in (b'', b'ok'):
             raise ValueError()
-        config = util.loads_strict(base64.b64decode(encoded, validate=True), max_bytes=MAX_HOCON)
+        native_json = base64.b64decode(encoded, validate=True)
+        config = util.loads_strict(native_json, max_bytes=MAX_HOCON)
         if not isinstance(config, dict) or not config or not isinstance(config.get('authorization'), dict):
             raise ValueError()
         auth = config['authorization']
@@ -541,6 +543,9 @@ def read_effective_config(execute, *, allow_authz_omission=False):
                 continue
             if auth.get(key) not in allowed:
                 raise ValueError()
+        if _native_digest is not None:
+            if type(_native_digest) is not list or _native_digest: raise ValueError()
+            _native_digest.append(hashlib.sha256(native_json).hexdigest().upper())
         return config
     except (BackupError, ValueError, TypeError, RecursionError):
         raise BackupError('incompatible', '無法安全取得 EMQX 有效設定，已停止。') from None
@@ -824,7 +829,8 @@ def restore_target_settings(tmp, original, read_candidate, *, observe=None):
     Roots absent on the target cannot be restored by guessing an empty/default value.
     Any such extra operational root remains a failure until removal is implemented.
     """
-    before = read_effective_config(read_candidate, allow_authz_omission=True)
+    before_digest=[]
+    before = read_effective_config(read_candidate, allow_authz_omission=True,_native_digest=before_digest)
     expected = preserved_settings(original)
     actual = preserved_settings(before)
     if set(actual) - set(expected):
@@ -836,11 +842,22 @@ def restore_target_settings(tmp, original, read_candidate, *, observe=None):
     if set(changed) & ha_emqx_settings.IMMUTABLE_ROOTS:
         raise BackupError('incompatible', 'EMQX 唯讀啟動設定在匯入後改變，已停止。')
     from .ha_emqx_acl_preservation import (disabled_intermediate, candidate_acl_receipt, refuse,
-        imported_acl_profile_stage, uses_generated_acl_charlist, disable_generated_acl_builtin)
+        imported_acl_profile_stage, uses_generated_acl_charlist)
+    from .ha_emqx_acl_path_proof import observe_generated_path, verify_generated_path, disable_generated_path
     if observe is not None:
         observe('acl_profile')
         observe(imported_acl_profile_stage(before))
-    intermediate = disabled_intermediate(original, before, observe=observe)
+    path_proof=None
+    original_sources=original['authorization'].get('sources')
+    original_file_only=(type(original_sources) is list and original_sources
+        and all(type(source) is dict and source.get('type')=='file' for source in original_sources))
+    imported_sources=before['authorization'].get('sources')
+    enabled_builtin=(type(imported_sources) is list and any(type(source) is dict
+        and source.get('type')=='built_in_database' and source.get('enable') is True for source in imported_sources))
+    if original_file_only and enabled_builtin and uses_generated_acl_charlist(before):
+        if observe is not None: observe('acl_path_proof')
+        path_proof=observe_generated_path(tmp,before,before_digest[0],observe=observe)
+    intermediate = disabled_intermediate(original, before, observe=observe,path_proof=path_proof)
     def load_settings(settings):
         snippet = json.dumps(settings, ensure_ascii=True).encode()
         try:
@@ -862,7 +879,7 @@ def restore_target_settings(tmp, original, read_candidate, *, observe=None):
             refuse()
         if observe is not None: observe('acl_disable')
         if uses_generated_acl_charlist(before):
-            disable_generated_acl_builtin(tmp)
+            disable_generated_path(tmp,path_proof,observe=observe)
         else:
             load_settings({'authorization': intermediate['authorization']})
         if observe is not None: observe('acl_afterdisable')
@@ -870,17 +887,24 @@ def restore_target_settings(tmp, original, read_candidate, *, observe=None):
                 or candidate_acl_receipt(tmp) != baseline
                 or read_effective_config(read_candidate, allow_authz_omission=True) != intermediate):
             refuse()
+        if path_proof is not None:
+            if observe is not None: observe('acl_path_afterdisable')
+            verify_generated_path(tmp,path_proof,observe=observe)
     if changed:
         if intermediate is not None and observe is not None: observe('acl_restore')
         load_settings(changed)
     if intermediate is not None and observe is not None: observe('acl_final')
-    after = read_effective_config(read_candidate)
+    after_digest=[]
+    after = read_effective_config(read_candidate,_native_digest=after_digest)
     if intermediate is not None:
         final_expected = dict(intermediate)
         final_expected.update(changed)
         if (after != final_expected or candidate_acl_receipt(tmp) != baseline
                 or read_effective_config(read_candidate) != final_expected):
             refuse()
+        if path_proof is not None:
+            if observe is not None: observe('acl_path_final')
+            verify_generated_path(tmp,path_proof,after_digest[0],observe=observe)
     if preserved_settings(after) != expected or (authn is not None and after.get('authentication') != authn):
         raise BackupError('incompatible', 'EMQX 匯入後未能保留目標有效設定，已停止。')
 

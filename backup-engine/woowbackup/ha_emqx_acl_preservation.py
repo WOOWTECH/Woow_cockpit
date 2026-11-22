@@ -9,6 +9,7 @@ import posixpath
 import re
 from .errors import BackupError
 from .ha_emqx_authorizers import builtin_database_references, builtin_database_shape, BUILTIN_SHAPES
+from .ha_emqx_acl_path_proof import PATH_DIAGNOSTIC_STAGES
 
 ACL_PROFILE_STAGES = frozenset(('acl_profile','acl_profile_builtin_absent')) | frozenset(
     'acl_profile_builtin_'+shape for shape in BUILTIN_SHAPES)
@@ -17,7 +18,6 @@ ACL_PROFILE_STAGES = frozenset(('acl_profile','acl_profile_builtin_absent')) | f
 IMPORTED_DEFAULT_ACL_PATHS = frozenset(('${EMQX_ETC_DIR}/acl.conf','etc/acl.conf'))
 ACL_PATH_CLASSES = frozenset(('nontext','control','traversal','unknown_variable','uri',
     'relative_other','absolute_noncanonical','default_template','default_relative','absolute'))
-GENERATED_ACL_PATH = '/opt/emqx/data/authz/acl.conf'
 JSON_PATH_KINDS = frozenset(('null','dict','list_ascii','list_other','str','bool','int','float','other'))
 FILE_ENABLE_KINDS = frozenset(('true','false','missing','invalid'))
 ACL_PROFILE_REASONS = frozenset(('auth_shape','auth_unknownfields','auth_no_match','auth_deny_action',
@@ -29,7 +29,7 @@ ACL_PROFILE_REASONS = ACL_PROFILE_REASONS | {'file_path_generated_context'} | fr
     'file_path_'+side+'_'+kind+'_'+enabled for side in ('original','imported')
     for kind in JSON_PATH_KINDS for enabled in FILE_ENABLE_KINDS)
 ACL_PROFILE_STAGES = ACL_PROFILE_STAGES | frozenset('acl_profile_'+reason for reason in ACL_PROFILE_REASONS)
-ACL_REMOVAL_STAGES = ACL_PROFILE_STAGES | frozenset(('acl_baseline','acl_disable','acl_afterdisable','acl_restore','acl_final'))
+ACL_REMOVAL_STAGES = ACL_PROFILE_STAGES | PATH_DIAGNOSTIC_STAGES | frozenset(('acl_baseline','acl_disable','acl_afterdisable','acl_restore','acl_final','acl_path_proof','acl_path_afterdisable','acl_path_final'))
 
 # Fixed table/code only. Whole bounded rows and persistent schema are hashed,
 # never emitted. Each receipt uses one native transaction and no automatic retry.
@@ -139,11 +139,6 @@ def acl_path_class(path):
     return 'absolute'
 
 
-def generated_acl_charlist(path):
-    return (type(path) is list and len(path)==len(GENERATED_ACL_PATH)
-            and all(type(value) is int and 0<value<128 for value in path)
-            and path==list(GENERATED_ACL_PATH.encode('ascii')))
-
 
 def file_path_type_reason(source, imported_side):
     """Fixed side/type/enable classification only: no lengths/chars/values."""
@@ -156,43 +151,14 @@ def file_path_type_reason(source, imported_side):
     return 'file_path_'+('imported' if imported_side else 'original')+'_'+kind+'_'+enabled
 
 
-# Pinned emqx_authz:import_config uses this same root-level emqx_conf:update API.
-# Read/update existing native raw maps only; no caller terms or code interpolation.
-ACL_DISABLE_GENERATED_EXPR = ' '.join("""
-try
- <<"5.8.9">> = iolist_to_binary(emqx_release:version()),
- <<"/opt/emqx/data">> = emqx:get_raw_config([node,data_dir]),
- <<"/opt/emqx/data">> = iolist_to_binary(emqx:data_dir()),
- Auth = emqx:get_raw_config([authorization]),
- Sources = maps:get(<<"sources">>,Auth),
- true = is_list(Sources) andalso length(Sources) =:= 2,
- [File] = [S || S <- Sources, maps:get(<<"type">>,S) =:= <<"file">>],
- "/opt/emqx/data/authz/acl.conf" = maps:get(<<"path">>,File),
- true = lists:all(fun(K)->lists:member(K,[<<"type">>,<<"enable">>,<<"path">>]) end,maps:keys(File)),
- true = is_boolean(maps:get(<<"enable">>,File,true)),
- [Builtin] = [S || S <- Sources, maps:get(<<"type">>,S) =:= <<"built_in_database">>],
- 2 = map_size(Builtin), true = maps:get(<<"enable">>,Builtin),
- Disabled = [case S of Builtin -> Builtin#{<<"enable">>=>false}; _ -> S end || S <- Sources],
- {ok,_} = emqx_conf:update([authorization],Auth#{<<"sources">>=>Disabled},#{override_to=>cluster}),
- io:put_chars("WOOWACLDISABLED:OK")
-catch _:_ -> io:put_chars("WOOWACLDISABLED:REFUSED") end.
-""".split())
-
-
-def disable_generated_acl_builtin(tmp):
-    result=tmp.exec('emqx-new',['emqx','eval',ACL_DISABLE_GENERATED_EXPR],
-        timeout=10,max_output=256,check=False)
-    raw=result.stdout or b''
-    if result.returncode or len(raw)>256 or not re.fullmatch(rb'WOOWACLDISABLED:OK(?:ok)?\s*',raw):
-        refuse()
-
-
 def uses_generated_acl_charlist(config):
-    return any(type(source) is dict and source.get('type')=='file' and generated_acl_charlist(source.get('path'))
-               for source in config['authorization']['sources'])
+    from .ha_emqx_acl_path_proof import ascii_path
+    sources=config.get('authorization',{}).get('sources')
+    return type(sources) is list and any(type(source) is dict and source.get('type')=='file'
+        and ascii_path(source.get('path')) for source in sources)
 
 
-def disabled_intermediate(original, imported, *, observe=None):
+def disabled_intermediate(original, imported, *, observe=None, path_proof=None):
     """FILE-only removal: preserve raw omissions and every value except enable.
 
     Unknown shapes refuse with fixed reasons. No native defaults are invented;
@@ -255,12 +221,8 @@ def disabled_intermediate(original, imported, *, observe=None):
                 path_kind=acl_path_class(source['path'])
                 imported_default=(imported_side and type(source['path']) is str
                                   and source['path'] in IMPORTED_DEFAULT_ACL_PATHS)
-                imported_charlist=imported_side and generated_acl_charlist(source['path'])
-                if imported_charlist:
-                    for config in (original,imported):
-                        node=config.get('node')
-                        if type(node) is not dict or node.get('data_dir')!='/opt/emqx/data':
-                            fail('file_path_generated_context')
+                from .ha_emqx_acl_path_proof import matches_generated_path
+                imported_charlist=imported_side and matches_generated_path(path_proof,imported,source['path'])
                 if path_kind!='absolute' and not imported_default and not imported_charlist:
                     fail(file_path_type_reason(source,imported_side) if path_kind=='nontext' else 'file_path_'+path_kind)
             else:
