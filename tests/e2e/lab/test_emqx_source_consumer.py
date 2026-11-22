@@ -149,3 +149,15 @@ class ConsumerTests(unittest.TestCase):
         case.temp_factory.assert_not_called()
         self.assertEqual(set(case.root.iterdir()), {case.path})
         self.assertFalse(any(event[0] == 'volume' for event in case.runtime.events))
+
+
+class PersistedJWTGateTests(unittest.TestCase):
+    def test_jwt_dcd_refuses_before_seal_without_native_reader(self):
+        # Synthetic bytes only. No real ARM data/rows are opened.
+        raw = payload([{'name': 'data/emqx/data/mnesia/emqx_admin_jwt.DCD',
+                        'data': b'synthetic-historical-jwt-state'}])
+        capture = consumer.Capture('fixture-key', documents())
+        with self.assertRaisesRegex(consumer.PrivateFailure,
+                                    '^private-source-native-mnesia-unsupported$'):
+            capture(binding(raw))
+        self.assertFalse(capture.registry._sealed)

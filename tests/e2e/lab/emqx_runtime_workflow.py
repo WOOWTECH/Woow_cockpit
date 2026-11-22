@@ -1,7 +1,7 @@
 """Private registration preflight integrated with the parent's evidence publisher.
 
 Runs owner target readers and login transport, then scans actual evidence bytes
-through BOTH sealed source and runtime registries. This is registration/login
+through sealed source, runtime and attached persisted-value registries. This is registration/login
 preflight only; it never declares restore/startup/MQTT/restart acceptance.
 """
 from emqx_private_boundary import PrivateFailure, Registry
@@ -13,8 +13,9 @@ SOURCE_CATEGORIES = frozenset(('backup-key', 'source-options', 'source-cookie'))
 
 
 class CombinedRegistry:
-    def __init__(self, source, runtime):
+    def __init__(self, source, runtime, persisted=()):
         self._source, self._runtime = source, runtime
+        self._persisted = tuple(persisted)
 
     def __repr__(self):
         return '<EMQX combined private registry>'
@@ -22,6 +23,8 @@ class CombinedRegistry:
     def scan(self, payload):
         self._source.scan(payload)
         self._runtime.scan(payload)
+        for companion in self._persisted:
+            companion.scan(payload)
 
 
 class PrivateSession:
@@ -37,13 +40,16 @@ class PrivateSession:
 
 def login_preflight(*, source_registry, source_counts, target_readers,
                     private_transport, username, password, evidence_directory,
-                    evidence_name='credential-preflight.json'):
+                    evidence_name='credential-preflight.json', source_persisted_values=None):
     """Source owner supplies its sealed Registry and actual source reader counts.
 
     Counts cover only the three SOURCE_CATEGORIES; registration counts are not
     semantic completeness proof. Runtime category counts come from the actual
     snapshot registrations, plus login input/token registration in bootstrap.
     Incomplete source/target capture or failed login emits no evidence file.
+    Attached observed-target companions and optional source_persisted_values
+    participate in every published/session scan. Native superset capture is not
+    final-row or restore semantics and cannot bypass source consumer gates.
     No default transport, source discovery, CLI, or product guard change.
     """
     try:
@@ -57,6 +63,15 @@ def login_preflight(*, source_registry, source_counts, target_readers,
         actual = source_registry.summary()
         if any(source_counts[name] != actual[name] for name in SOURCE_CATEGORIES):
             refused()
+        from emqx_persisted_values import PersistedValues
+        companions = []
+        target_persisted = getattr(target_readers, 'persisted_values', None)
+        for companion, scope in ((source_persisted_values, 'source'), (target_persisted, 'target')):
+            if companion is not None:
+                if not isinstance(companion, PersistedValues) or companion.scope != scope:
+                    refused()
+                companion.scan(b'')
+                companions.append(companion)
         runtime = RuntimeRegistry()
         register_target_snapshots(runtime, target_readers)
         credential = login_registered(runtime, private_transport,
@@ -67,7 +82,7 @@ def login_preflight(*, source_registry, source_counts, target_readers,
             coverage[category] = counts[category]
         coverage['target-bootstrap'] += (counts.get('runtime-login-input', 0)
                                          + counts.get('runtime-login-token', 0))
-        combined = CombinedRegistry(source_registry, runtime)
+        combined = CombinedRegistry(source_registry, runtime, companions)
         evidence = publish(evidence_directory, evidence_name, registry=combined,
                            phase='preflight', result='passed', coverage=coverage)
         return PrivateSession(credential, combined, coverage, evidence)
