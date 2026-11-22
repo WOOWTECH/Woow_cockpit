@@ -171,7 +171,9 @@ retainer.backend.storage_type = disc
                 checks['retained_payload_survived_restart'] = True
                 workload('after_restart')
             else:
-                raise RuntimeError('checkpoint-code-not-staged')
+                stage = 'owner-data-export-checkpoint'
+                from emqx_broker_export import run_export
+                run_export(root, name, scan, report)
             report['result'] = 'passed'
         except BaseException:
             report['result'] = 'failed'
@@ -185,6 +187,10 @@ retainer.backend.storage_type = disc
             if not checks['broker_cleanup'] or not checks['clients_cleanup']:
                 report['result'] = 'failed'
     checks['private_files_cleanup'] = not root.exists()
+    if mode == 'export':
+        # Actual Mnesia atoms such as false are registered too; never exempt them.
+        report['ha_commercial_acceptance'] = 'not-claimed'
+        report['checks'] = {key: 'passed' if value else 'failed' for key, value in checks.items()}
     raw = json.dumps(report, sort_keys=True).encode()
     scan.scan(raw)
     print(raw.decode())
@@ -193,5 +199,5 @@ retainer.backend.storage_type = disc
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('--mode', choices=('mqtt', 'checkpoint'), required=True)
+    parser.add_argument('--mode', choices=('mqtt', 'export'), required=True)
     raise SystemExit(run(parser.parse_args().mode))
