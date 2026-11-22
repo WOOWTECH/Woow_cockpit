@@ -127,10 +127,19 @@ future validation requirement, not a claim that broker recovery is already safe.
 
 Capacity correction: preflight member_bytes x86=137936119B, arm=117195765B are
 ENCRYPTED LAYOUT MEMBER sizes, not expanded open_addon tar stream sizes. Parent
-later reports ARM fullEOF+tarcomplete: expanded117760000 bytes, 43 files,
-Mnesia DCD22 / LOG2 / DAT1 / DCL3. This parent-supplied count proves ARM fits the
-256MiB spool bound, but not semantic support for those cold formats. This branch
-has not replayed that real source. x86 remains rejected; no fit claim is made.
+reports ARM fullEOF+tarcomplete+finish: expanded117760000 bytes, 43 files,
+fitting the 256MiB spool bound. Parent's explicitly bounded read-only x86 probe
+(512MiB maximum, 30 seconds) also completed full tarEOF+finish: expanded290785280
+bytes, 43 files. Both inventories contain Mnesia DCD22 / DCL3 / LOG2 / DAT1.
+x86's original 256MiB refusal is precisely capacity, not wrong key. Original
+archive SHA is reported bound by the parent; this branch has not replayed either
+real source or independently verified those counts or hashes. These observations
+prove only stream capacity/integrity completion, not cold-format semantic support.
+Candidate's 256MiB bound is unchanged and still rejects this x86 stream. Future
+x86 support requires an explicit per-source byte/time budget associated with the
+expected archive SHA; the 512MiB/30-second probe does not authorize a global
+increase or automatic fallback. Per-file 8MiB parsing, schema/term checks,
+EOF+finish, resource/private-value limits and cold-source gates remain unchanged.
 No service start or secret output is attributed to that read-only parent probe.
 Hooke e38f996 is reported as MQTT native target-contract capture only; it is not
 integrated or used here to acknowledge other target/source categories. All other

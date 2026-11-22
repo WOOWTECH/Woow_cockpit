@@ -45,14 +45,18 @@ bytes. Legacy callers without spool_directory retain the original 8MiB memory
 path. Spool retains parent's 256MiB maximum and 12GiB free-space reserve.
 Preflight encrypted layout members (x86 137936119B, arm 117195765B) are NOT
 measurements of the expanded open_addon tar stream. Parent subsequently reports
-ARM fullEOF+tarcomplete at 117760000 expanded bytes / 43 files, proving that ARM
-stream fits 256MiB. This branch did not independently replay that real source.
-x86 remains rejected; no expanded-size/fit claim is made for it. Parent ARM
-inventory includes DCD22, LOG2, DAT1, DCL3: those remain unsupported cold Mnesia,
-not native checkpoints. Synthetic tests and per-file parser success do not
-establish real-source semantic coverage or commercial acceptance;
-unknown archive members and Mnesia still gate. Generated fixtures do not establish
-commercial acceptance.
+ARM fullEOF+tarcomplete+finish at 117760000 expanded bytes / 43 files, fitting
+256MiB. Parent also reports x86 full tarEOF+finish under an explicitly bounded
+512MiB / 30-second read-only probe: 290785280 expanded bytes / 43 files. Its
+256MiB rejection is a capacity refusal, not wrong-key evidence. Both inventories
+contain Mnesia DCD22, DCL3, LOG2, DAT1. Parent reports original archive SHA binding;
+this branch did not replay those sources or independently verify their counts/SHA.
+Candidate still uses 256MiB and therefore continues to reject that x86 stream.
+Future x86 consumption requires an explicit per-source byte/time budget bound to
+the expected archive SHA; no global limit increase, automatic retry at a larger
+limit, or weakening of per-file/schema/EOF/finish/private-value checks follows
+from this capacity evidence. Cold Mnesia, unknown files and commercial acceptance
+remain separately gated; successful stream counting is not checkpoint support.
 
 Mnesia gate: any file below data/emqx/data/mnesia/ raises the fixed
 private-source-native-mnesia-unsupported before reading or decoding it, sealing
