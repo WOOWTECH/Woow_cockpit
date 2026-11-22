@@ -13,7 +13,7 @@ only escript, never a broker, in a rootless networkless read-only container with
 no host data mounts beyond a private temporary directory containing this script
 and one synthetic/source HOCON input. Cached image only, no pulls. Bounds: 8MiB
 input per file, 32768 scanner tokens, AST depth 32, 1MiB JSON output, 256MiB
-container RAM, 64 tasks, CPU 8s, container timeout 12s, client timeout 15s.
+container RAM, 64 tasks, CPU 10s, container timeout 15s, client timeout 20s.
 Private input file is 0600 in a 0700 temporary directory; diagnostics discarded.
 Container expiration is independent of the client timeout. No ETF decoding.
 
@@ -43,8 +43,11 @@ member alone is read into bytes (maximum 8MiB). Replay seeks the same open file,
 and context exit cleans it up on success or failure. No entire spool read into
 bytes. Legacy callers without spool_directory retain the original 8MiB memory
 path. Spool retains parent's 256MiB maximum and 12GiB free-space reserve.
-Real encrypted member sizes (x86 137936119B, arm 117195765B) do not establish expanded tar sizes. These sources have NOT been parsed by
-this delivery. Capacity evidence from the parent is not semantic acceptance;
+Preflight encrypted layout members (x86 137936119B, arm 117195765B) are NOT
+measurements of the expanded open_addon tar stream. That true expanded size has
+not been safely counted to EOF here. The 256MiB spool bound may still reject it;
+no real-backup fit claim is made. Synthetic capacity evidence from the parent
+is neither real-stream size evidence nor semantic acceptance;
 unknown archive members and Mnesia still gate. Generated fixtures do not establish
 commercial acceptance.
 
@@ -66,3 +69,10 @@ Mnesia refusal before seal, private evidence and candidate regressions.
 (equivalent to 458031e/f5099c4) and parent spool as 114c422 (e46915d).
 Integrators already containing those dependencies should cherry-pick only the
 native adapter delivery commit.
+
+Runtime hardening follow-up: all native runs require targeted `podman info`
+metadata to report `true crun`, explicitly select `--runtime=crun`, disable image
+VOLUME creation with `--image-volume=ignore`, use the immutable image ID, and
+clean/check only their invocation-random container name. No container/volume
+inventory or production mount is consulted. Native VM atom cap is 65536 and
+default process max heap 8388608 words (64MiB on this amd64 image).

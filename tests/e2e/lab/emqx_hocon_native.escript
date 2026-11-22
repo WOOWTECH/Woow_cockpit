@@ -1,5 +1,5 @@
 #!/usr/bin/env escript
-%%! +S 1:1 +A 1 -noshell
+%%! +S 1:1 +A 1 +t 65536 +hmax 8388608 +hmaxel false -noshell
 %% Trusted EMQX 5.8.9 / hocon 0.44.0 only. Never load archive code/ETF.
 main(_) ->
     code:add_paths(filelib:wildcard("/opt/emqx/lib/*/ebin")),
