@@ -391,6 +391,85 @@ class FixtureFilesTests(unittest.TestCase):
             with self.assertRaises(Exception):
                 m._csv(raw, Values())
 
+    def diagnosed_failure(self, **kwargs):
+        before = self.values.values
+        with self.assertRaises(m.FixtureFilesFailure) as caught:
+            self.observe(**kwargs)
+        self.assertEqual(before, self.values.values)
+        return caught.exception
+
+    def test_missing_secret_mount_still_refuses_with_safe_actual_shape(self):
+        self.doc[0]['Mounts'] = [x for x in self.doc[0]['Mounts'] if x['Destination'] != m.BOOTSTRAP]
+        self.doc[0]['Config']['Env'].append('PRIVATE=generated-shape-secret')
+        error = self.diagnosed_failure()
+        metadata = m.failure_metadata(error)
+        self.assertEqual(metadata['file_stage'], 'bootstrap_mount')
+        self.assertEqual(metadata['file_reason'], 'missing')
+        self.assertFalse(metadata['inspection_shape']['bootstrap_mount_present'])
+        self.assertTrue(metadata['inspection_shape']['base_mount_present'])
+        self.assertTrue(metadata['inspection_shape']['acl_mount_present'])
+        self.assertTrue(metadata['inspection_shape']['config_secrets_list'])
+        self.assertTrue(metadata['inspection_shape']['config_secret_id_field'])
+        self.assertEqual(self.events, ['inspect'])
+        encoded = json.dumps(metadata)
+        for value in ('generated-shape-secret', self.cid, self.f.prefix, self.f.secret, self.runner.home):
+            self.assertNotIn(value, encoded)
+
+    def test_root_secret_shape_observation_does_not_change_secret_policy(self):
+        self.doc[0]['Secrets'] = self.doc[0]['Config'].pop('Secrets')
+        error = self.diagnosed_failure()
+        metadata = m.failure_metadata(error)
+        self.assertEqual(metadata['file_stage'], 'secret_identity')
+        self.assertTrue(metadata['inspection_shape']['root_secrets_list'])
+        self.assertFalse(metadata['inspection_shape']['config_secrets_list'])
+        self.assertEqual(self.events, ['inspect'])
+
+    def test_ordinary_readonly_mount_and_secret_identity_reasons_stay_distinct(self):
+        original = copy.deepcopy(self.doc)
+        cases = [(m.BASE, 'base_mount', 'source'), (m.ACL, 'acl_mount', 'not_readonly')]
+        for path, stage, reason in cases:
+            self.doc = copy.deepcopy(original)
+            mount = next(x for x in self.doc[0]['Mounts'] if x['Destination'] == path)
+            mount.update(Source='/private/generated-other') if path == m.BASE else mount.update(RW=True)
+            error = self.diagnosed_failure()
+            self.assertEqual((error.stage, error.reason), (stage, reason))
+        self.doc = copy.deepcopy(original)
+        self.doc[0]['Config']['Secrets'][0]['ID'] = 'e'*25
+        error = self.diagnosed_failure()
+        self.assertEqual((error.stage, error.reason), ('secret_identity', 'identity'))
+
+    def test_native_callback_and_wire_bound_have_fixed_diagnostics(self):
+        def failed(expression):
+            raise RuntimeError('generated-private-native-error')
+        error = self.diagnosed_failure(private_eval=failed)
+        self.assertEqual((error.stage, error.reason), ('eval', 'contract'))
+        self.assertNotIn('generated-private-native-error', str(error))
+        error = self.diagnosed_failure(private_eval=lambda expr: b'x'*(m.MAX_WIRE+1))
+        self.assertEqual((error.stage, error.reason), ('wire', 'bound'))
+
+    def test_driver_report_publishes_only_whitelisted_fixed_metadata(self):
+        import emqx_adapter_driver as driver
+        self.doc[0]['Mounts'] = [x for x in self.doc[0]['Mounts'] if x['Destination'] != m.BOOTSTRAP]
+        error = self.diagnosed_failure()
+        with patch.object(driver, 'STAGE', 'actual_owned_mount_capture'):
+            report = driver.failure_report(error)
+        self.assertEqual(report['stage'], 'actual_owned_mount_capture')
+        self.assertEqual(report['file_stage'], 'bootstrap_mount')
+        self.assertEqual(report['file_reason'], 'missing')
+        self.assertEqual(report['result'], 'fail')
+        # Even a corrupted exception cannot inject arbitrary diagnostics/values.
+        error.stage = 'generated-private-stage'
+        error.reason = 'generated-private-reason'
+        error.shape = {'generated-private-key': True, 'base_mount_present': 'generated-private-value',
+                       'acl_mount_present': True}
+        encoded = json.dumps(driver.failure_report(error))
+        self.assertNotIn('generated-private', encoded)
+        self.assertEqual(m.failure_metadata(error), {'file_stage': 'unknown', 'file_reason': 'unknown',
+                         'inspection_shape': {'acl_mount_present': True}})
+        ordinary = RuntimeError('generated-private-exception')
+        self.assertNotIn('generated-private', json.dumps(driver.failure_report(ordinary)))
+        self.assertEqual(m.failure_metadata(ordinary), {})
+
     def test_fixed_native_source_keeps_full_parse_and_single_line(self):
         expression = m.public_expression()
         for path in m.PATHS:

@@ -35,8 +35,72 @@ class FixtureFiles:
         return '<FixtureFiles private>'
 
 
-def _fail():
-    raise PrivateFailure('private-fixture-files-refused') from None
+STAGES = frozenset(('unknown', 'issuance', 'capability', 'callbacks',
+    'inspect_wire', 'inspect_shape', 'fixture_identity', 'container_identity',
+    'base_mount', 'acl_mount', 'bootstrap_mount', 'secret_identity',
+    'source_before', 'secret_before', 'eval', 'wire', 'decode',
+    'inspect_after', 'source_after', 'secret_after', 'compare', 'parse',
+    'lifetime', 'registration'))
+REASONS = frozenset(('unknown', 'contract', 'bound', 'shape', 'identity',
+    'missing', 'ambiguous', 'not_readonly', 'source', 'mismatch'))
+SHAPE_KEYS = frozenset(('base_mount_present', 'acl_mount_present',
+    'bootstrap_mount_present', 'config_secrets_list', 'root_secrets_list',
+    'config_secret_name_field', 'config_secret_id_field', 'config_secret_uid_field',
+    'config_secret_gid_field', 'config_secret_mode_field', 'config_secret_target_field',
+    'root_secret_name_field', 'root_secret_id_field', 'root_secret_uid_field',
+    'root_secret_gid_field', 'root_secret_mode_field', 'root_secret_target_field'))
+
+
+class FixtureFilesFailure(PrivateFailure):
+    def __init__(self, stage, reason, shape=None):
+        super().__init__('private-fixture-files-refused')
+        self.stage = stage if type(stage) is str and stage in STAGES else 'unknown'
+        self.reason = reason if type(reason) is str and reason in REASONS else 'unknown'
+        self.shape = _safe_shape(shape)
+
+
+def _safe_shape(shape):
+    if type(shape) is not dict:
+        return {}
+    return {k: shape[k] for k in sorted(SHAPE_KEYS) if type(shape.get(k)) is bool}
+
+
+def failure_metadata(error):
+    """Only fixed enums and fixed-key booleans may cross the report boundary."""
+    if type(error) is not FixtureFilesFailure:
+        return {}
+    result = {'file_stage': error.stage if type(error.stage) is str and error.stage in STAGES else 'unknown',
+              'file_reason': error.reason if type(error.reason) is str and error.reason in REASONS else 'unknown'}
+    shape = _safe_shape(error.shape)
+    if shape:
+        result['inspection_shape'] = shape
+    return result
+
+
+def _inspection_shape(doc):
+    """Observed representation only, never an authorization acknowledgment.
+
+    No field values, names, paths, IDs, env, content, hashes or exceptions escape.
+    A missing Secret mount remains a refusal until its representation is proven.
+    """
+    mounts = doc.get('Mounts')
+    mounts = mounts if type(mounts) is list else []
+    result = {label + '_mount_present': any(type(x) is dict and x.get('Destination') == path
+              for x in mounts) for label, path in (('base', BASE), ('acl', ACL), ('bootstrap', BOOTSTRAP))}
+    config = doc.get('Config')
+    config = config if type(config) is dict else {}
+    for prefix, parent in (('config', config), ('root', doc)):
+        entries = parent.get('Secrets')
+        result[prefix + '_secrets_list'] = type(entries) is list
+        entries = entries if type(entries) is list else []
+        for field in ('Name', 'ID', 'UID', 'GID', 'Mode', 'Target'):
+            result[prefix + '_secret_' + field.lower() + '_field'] = any(
+                type(x) is dict and field in x for x in entries)
+    return _safe_shape(result)
+
+
+def _fail(stage='unknown', reason='contract', shape=None):
+    raise FixtureFilesFailure(stage, reason, shape) from None
 
 
 def _identity(info):
@@ -147,7 +211,7 @@ def _issue(provision, base, acl, bootstrap):
             'home': provision.runner.home}
         return token
     except BaseException:
-        _fail()
+        _fail('issuance', 'contract')
 
 
 def revoke(token):
@@ -225,81 +289,119 @@ def _decode_files(raw):
 
 
 def _inspect(callback, record, provision):
-    raw = callback()
-    if type(raw) is not bytes or not 0 < len(raw) <= LIMIT:
-        raise ValueError()
-    rows = json.loads(raw, object_pairs_hook=_pairs)
-    if type(rows) is not list or len(rows) != 1 or type(rows[0]) is not dict:
-        raise ValueError()
-    doc = rows[0]
-    f = provision.fixture
-    f.validate_inspection(doc)
-    if (type(doc.get('Image')) is not str or doc['Image'] not in (IMAGE, IMAGE.removeprefix('sha256:')) or
-            type(doc.get('Id')) is not str or re.fullmatch('[0-9a-f]{64}', doc['Id']) is None or
-            doc['State']['Running'] is not True or doc['HostConfig'].get('PidsLimit') != 512 or
-            type(doc['Config']['Env']) is not list or
-            any(type(x) is not str for x in doc['Config']['Env']) or
-            [x for x in doc['Config']['Env'] if x.split('=', 1)[0] == 'EMQX_NODE__NAME'] !=
-                ['EMQX_NODE__NAME=emqx@127.0.0.1']):
-        raise ValueError()
-    if record['cid'] is not None and doc['Id'] != record['cid']:
-        raise ValueError()
-    mounts = doc['Mounts']
-    expected = {BASE: provision.runner.home + '/.config/' + f.prefix + '/base.hocon',
-                ACL: provision.runner.home + '/.config/' + f.prefix + '/acl.conf'}
-    for path in PATHS:
-        matches = []
-        for mount in mounts:
-            dest = mount['Destination']
-            if (type(dest) is not str or not dest.startswith('/') or
-                    (dest != '/' and any(p in ('', '.', '..') for p in dest[1:].split('/')))):
-                raise ValueError()
-            if dest == '/' or dest == path or path.startswith(dest + '/'):
-                matches.append(mount)
-        if (len(matches) != 1 or matches[0]['Destination'] != path or
-                matches[0]['Type'] != 'bind' or matches[0]['RW'] is not False or
-                type(matches[0].get('Source')) is not str):
-            raise ValueError()
-        if path in expected and matches[0]['Source'] != expected[path]:
-            raise ValueError()
-    secrets = doc['Config']['Secrets']
-    if type(secrets) is not list:
-        raise ValueError()
-    bootstrap = [x for x in secrets if type(x) is dict and x.get('Name') == f.secret]
-    if len(bootstrap) != 1 or bootstrap[0].get('ID') != record['secret'][0]:
-        raise ValueError()
-    record['cid'] = doc['Id']
-    return (doc['Id'], IMAGE, doc['Config'], doc['HostConfig'], mounts)
+    stage, shape = 'inspect_wire', {}
+    try:
+        raw = callback()
+        if type(raw) is not bytes or not 0 < len(raw) <= LIMIT:
+            _fail(stage, 'bound')
+        stage = 'inspect_shape'
+        rows = json.loads(raw, object_pairs_hook=_pairs)
+        if type(rows) is not list or len(rows) != 1 or type(rows[0]) is not dict:
+            _fail(stage, 'shape')
+        doc = rows[0]
+        shape = _inspection_shape(doc)
+        f = provision.fixture
+        stage = 'fixture_identity'
+        f.validate_inspection(doc)
+        stage = 'container_identity'
+        if (type(doc.get('Image')) is not str or doc['Image'] not in (IMAGE, IMAGE.removeprefix('sha256:')) or
+                type(doc.get('Id')) is not str or re.fullmatch('[0-9a-f]{64}', doc['Id']) is None or
+                doc['State']['Running'] is not True or doc['HostConfig'].get('PidsLimit') != 512 or
+                type(doc['Config']['Env']) is not list or
+                any(type(x) is not str for x in doc['Config']['Env']) or
+                [x for x in doc['Config']['Env'] if x.split('=', 1)[0] == 'EMQX_NODE__NAME'] !=
+                    ['EMQX_NODE__NAME=emqx@127.0.0.1']):
+            _fail(stage, 'identity')
+        if record['cid'] is not None and doc['Id'] != record['cid']:
+            _fail(stage, 'identity')
+        mounts = doc['Mounts']
+        expected = {BASE: provision.runner.home + '/.config/' + f.prefix + '/base.hocon',
+                    ACL: provision.runner.home + '/.config/' + f.prefix + '/acl.conf'}
+        for path in PATHS:
+            stage = {BASE: 'base_mount', ACL: 'acl_mount', BOOTSTRAP: 'bootstrap_mount'}[path]
+            matches = []
+            for mount in mounts:
+                dest = mount['Destination']
+                if (type(dest) is not str or not dest.startswith('/') or
+                        (dest != '/' and any(p in ('', '.', '..') for p in dest[1:].split('/')))):
+                    _fail(stage, 'shape')
+                if dest == '/' or dest == path or path.startswith(dest + '/'):
+                    matches.append(mount)
+            if not matches:
+                _fail(stage, 'missing')
+            if len(matches) != 1 or matches[0]['Destination'] != path:
+                _fail(stage, 'ambiguous')
+            if matches[0]['Type'] != 'bind' or type(matches[0].get('Source')) is not str:
+                _fail(stage, 'shape')
+            if matches[0]['RW'] is not False:
+                _fail(stage, 'not_readonly')
+            if path in expected and matches[0]['Source'] != expected[path]:
+                _fail(stage, 'source')
+        stage = 'secret_identity'
+        secrets = doc['Config']['Secrets']
+        if type(secrets) is not list:
+            _fail(stage, 'shape')
+        bootstrap = [x for x in secrets if type(x) is dict and x.get('Name') == f.secret]
+        if not bootstrap:
+            _fail(stage, 'missing')
+        if len(bootstrap) != 1:
+            _fail(stage, 'ambiguous')
+        if bootstrap[0].get('ID') != record['secret'][0]:
+            _fail(stage, 'identity')
+        record['cid'] = doc['Id']
+        return (doc['Id'], IMAGE, doc['Config'], doc['HostConfig'], mounts)
+    except FixtureFilesFailure as error:
+        error.shape = _safe_shape(shape)
+        raise
+    except BaseException:
+        _fail(stage, 'contract', shape)
 
 
 def observe_fixture_files(token, *, private_eval, private_inspect, private_values):
     """Prove all three fixed dependencies atomically; receipt is NOT policy consent."""
+    stage = 'capability'
     try:
         record, provision = _record(token)
+        stage = 'callbacks'
         if not callable(private_eval) or not callable(private_inspect) or type(private_values) is not Values:
             raise ValueError()
         before = _inspect(private_inspect, record, provision)
-        if _source_files(provision) != record['files'] or _secret(provision) != record['secret']:
-            raise ValueError()
+        stage = 'source_before'
+        if _source_files(provision) != record['files']:
+            _fail(stage, 'mismatch')
+        stage = 'secret_before'
+        if _secret(provision) != record['secret']:
+            _fail(stage, 'mismatch')
+        stage = 'eval'
         wire = private_eval(public_expression())
+        stage = 'wire'
         if type(wire) is not bytes or len(wire) > MAX_WIRE:
-            raise ValueError()
+            _fail(stage, 'bound')
         match = re.fullmatch(rb'WOOWFIXTURE:([A-Za-z0-9+/=]+):ENDok\n?', wire)
         if match is None:
-            raise ValueError()
+            _fail(stage, 'shape')
         raw = base64.b64decode(match[1], validate=True)
         if not 0 < len(raw) <= MAX_OUTPUT:
-            raise ValueError()
+            _fail(stage, 'bound')
+        stage = 'decode'
         decoded = _decode_files(raw)
-        if (before != _inspect(private_inspect, record, provision) or
-                _source_files(provision) != record['files'] or _secret(provision) != record['secret']):
-            raise ValueError()
+        stage = 'inspect_after'
+        if before != _inspect(private_inspect, record, provision):
+            _fail(stage, 'mismatch')
+        stage = 'source_after'
+        if _source_files(provision) != record['files']:
+            _fail(stage, 'mismatch')
+        stage = 'secret_after'
+        if _secret(provision) != record['secret']:
+            _fail(stage, 'mismatch')
         pending = Values()
         receipts = []
         for item, content in decoded:
+            stage = 'compare'
             expected = record['secret'][1] if item['path'] == BOOTSTRAP else record['files'][item['path']][0]
             if content != expected:
-                raise ValueError()
+                _fail(stage, 'mismatch')
+            stage = 'parse'
             pending.add(content)
             if item['path'] == BOOTSTRAP:
                 _csv(content, pending)
@@ -310,13 +412,17 @@ def observe_fixture_files(token, *, private_eval, private_inspect, private_value
                 'image': IMAGE, 'bytes': len(content), 'sha256': hashlib.sha256(content).hexdigest(),
                 'identity': tuple(item['identity'])})
         # Recheck capability lifetime after callbacks; cleanup may have revoked it.
+        stage = 'lifetime'
         if _record(token)[0] is not record:
             raise ValueError()
+        stage = 'registration'
         trial = Values()
         for value in private_values.values + pending.values:
             trial.add(value)
         for value in pending.values:
             private_values.add(value)
         return tuple(receipts)
+    except FixtureFilesFailure:
+        raise
     except BaseException:
-        _fail()
+        _fail(stage, 'contract')

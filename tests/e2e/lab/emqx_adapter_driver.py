@@ -311,9 +311,16 @@ retainer.backend.storage_type = disc
     print(json.dumps({'stage': 'adapter_automatic_rollback', 'result': 'pass', 'cleanup': 'pass'}), flush=True)
 
 
+def failure_report(error):
+    """Fixed fixture diagnostics only; never publish private exception text."""
+    from emqx_owner_fixture_files import failure_metadata
+    return {'stage': STAGE, 'result': 'fail', 'error_type': type(error).__name__,
+            **failure_metadata(error)}
+
+
 if __name__ == '__main__':
     try:
         main()
     except Exception as error:
-        print(json.dumps({'stage': STAGE, 'result': 'fail', 'error_type': type(error).__name__}), flush=True)
+        print(json.dumps(failure_report(error)), flush=True)
         raise SystemExit(1) from None
