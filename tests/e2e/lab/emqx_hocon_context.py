@@ -5,7 +5,7 @@ validator checks the complete multiplicity ledger before any dependency IO.
 """
 from collections import Counter
 from emqx_semantic_readers import _json_walk, _text, refuse
-from emqx_republish_templates import _template, validate_action_reference
+from emqx_republish_templates import _template, validate_action_reference, TemplateRefused, TEMPLATE_REASONS
 
 PROFILE = 'owner-pinned-image-vendor-acl-republish-context-v1'
 CONTRACT = 'emqx-hocon-context-json-v1'
@@ -16,7 +16,8 @@ SYNTAX_PHASES = frozenset(('syntax_bindings','syntax_shape','syntax_multiplicity
     'syntax_budget','syntax_http_binding','syntax_http_template','syntax_action_reference',
     'syntax_republish_context','syntax_republish_payload','syntax_republish_topic',
     'syntax_republish_qos','syntax_republish_retain','syntax_vendor_path',
-    'syntax_key_literal','syntax_value_literal','syntax_concat_shape','syntax_concat_literal'))
+    'syntax_key_literal','syntax_value_literal','syntax_concat_shape','syntax_concat_literal',
+    *('syntax_republish_payload_'+reason for reason in TEMPLATE_REASONS)))
 
 
 class SyntaxRefused(Exception):
@@ -92,6 +93,10 @@ def register_syntax(document, result, literal, *, profile=PROFILE):
         for value in joined:
             stage='syntax_concat_literal'
             _json_walk(value, result, 1)
+    except TemplateRefused as error:
+        if stage == 'syntax_republish_payload':
+            stage += '_'+error.reason
+        raise SyntaxRefused(stage) from None
     except Exception:
         raise SyntaxRefused(stage) from None
 

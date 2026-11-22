@@ -56,7 +56,7 @@ class NativeSyntaxReasonTests(unittest.TestCase):
         cases=(
             (BASE+ACTION.replace(b'qos="${qos}"',b'qos="0"'),'syntax_republish_qos'),
             (BASE+ACTION.replace(b'payload="prefix-${payload.body}"',b'unknown="${payload.body}"'),'syntax_value_literal'),
-            (RAW.replace(b'${payload.body}',b'${HOME}'),'syntax_republish_payload'),
+            (RAW.replace(b'${payload.body}',b'${HOME}'),'syntax_republish_payload_unknown_root'),
         )
         with patch.object(vendor,'observe_vendor_acl') as observer:
             for raw,wanted in cases:

@@ -19,38 +19,60 @@ _SCALARS = frozenset(('topic', 'clientid', 'username', 'qos', 'retain', 'flags.r
 _PLACEHOLDER = re.compile(r'\$\{(\.?[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z0-9_]+)*|\.)\}')
 
 
+TEMPLATE_REASONS = frozenset(('size','budget','escape','loader','grammar',
+                                  'unknown_root','depth','field_contract'))
+
+
+class TemplateRefused(SemanticRefused):
+    def __init__(self, reason):
+        super().__init__()
+        self.reason = reason if type(reason) is str and reason in TEMPLATE_REASONS else 'grammar'
+
+
 def _template(value, field, result):
-    result.add(_text(value))  # Full source literal always remains private.
-    if '$${' in value or any(scheme in value.lower() for scheme in ('file:', 'env:', 'vault:')):
-        refuse()
-    matches = []
-    position = 0
-    while True:
-        start = value.find('${', position)
-        if start < 0:
-            result.add(value[position:].encode())
-            break
-        result.add(value[position:start].encode())
-        match = _PLACEHOLDER.match(value, start)
-        if match is None:
-            refuse()
-        name = match.group(1)
-        parts = name.removeprefix('.').split('.')
-        if name == '.':
-            if field != 'payload':
-                refuse()
-        elif (len(parts) > MAX_DEPTH or
-              not (parts[0] == 'payload' or '.'.join(parts) in _SCALARS)):
-            refuse()
-        result.add(match.group().encode())
-        result.add(name.encode())
-        for part in parts:
-            result.add(part.encode())
-        matches.append(match.span())
-        position = match.end()
-    # Runtime parse_simple_var/render_simple_var expects one placeholder only.
-    if field in ('qos', 'retain') and matches != [(0, len(value))]:
-        refuse()
+    stage='size'
+    try:
+        raw = _text(value)
+        stage='budget'
+        result.add(raw)  # Full source literal always remains private.
+        if '$${' in value:
+            raise TemplateRefused('escape')
+        if any(scheme in value.lower() for scheme in ('file:', 'env:', 'vault:')):
+            raise TemplateRefused('loader')
+        matches = []
+        position = 0
+        while True:
+            start = value.find('${', position)
+            if start < 0:
+                result.add(value[position:].encode())
+                break
+            result.add(value[position:start].encode())
+            match = _PLACEHOLDER.match(value, start)
+            if match is None:
+                raise TemplateRefused('grammar')
+            name = match.group(1)
+            parts = name.removeprefix('.').split('.')
+            if name == '.':
+                if field != 'payload':
+                    raise TemplateRefused('field_contract')
+            else:
+                if len(parts) > MAX_DEPTH:
+                    raise TemplateRefused('depth')
+                if not (parts[0] == 'payload' or '.'.join(parts) in _SCALARS):
+                    raise TemplateRefused('unknown_root')
+            result.add(match.group().encode())
+            result.add(name.encode())
+            for part in parts:
+                result.add(part.encode())
+            matches.append(match.span())
+            position = match.end()
+        # Runtime parse_simple_var/render_simple_var expects one placeholder only.
+        if field in ('qos', 'retain') and matches != [(0, len(value))]:
+            raise TemplateRefused('field_contract')
+    except TemplateRefused:
+        raise
+    except Exception:
+        raise TemplateRefused(stage) from None
 
 
 def validate_action_reference(value, document):
