@@ -36,7 +36,7 @@ from woowbackup.paths import Paths
 
 PHASES = frozenset(('profile','observer_dependency','realm','frame','provision',
     'ready','source','target','preflight','build','package','restore',
-    'rollback','restart','cleanup','client_frame','no_live','mqtt','post_capture','post_capture_identity','payload_history'))
+    'rollback','restart','cleanup','client_frame','no_live','mqtt','post_capture','post_capture_identity','payload_history','build_adapter'))
 from emqx_candidate_stage import STAGES as BUILD_STAGES, KINDS as BUILD_KINDS
 from emqx_captured_candidate import CandidatePhaseRefused
 PHASES=PHASES | frozenset('build_'+s+'_'+k for s in BUILD_STAGES for k in BUILD_KINDS)
@@ -618,8 +618,17 @@ def run_real_framed_owner(stream,*,private_parent,source_mode,no_live=True):
                     phase='build'
                     work=SimpleNamespace(runner=lambda _app:r,guard=CandidateBudget(),abort=None,
                         checkpoint=ctx.checkpoint,phase=ctx.phase,log=ctx.log)
-                    volumes=build_captured_candidate(work,app,ctx.adapter(app),target,source,candidate,job,
-                        captured=captured,private_binding=binding,session=session,expected_sha256=profile.sha256)
+                    phase='build_adapter'
+                    adapter=ctx.adapter(app)
+                    phase='build'
+                    try:
+                        volumes=build_captured_candidate(work,app,adapter,target,source,candidate,job,
+                            captured=captured,private_binding=binding,session=session,expected_sha256=profile.sha256)
+                    except CandidatePhaseRefused as error:
+                        # The held readers intentionally mask body exceptions;
+                        # retain only fixed diagnostics before unwinding them.
+                        phase='build_'+error.stage+'_'+error.kind
+                        raise
                 phase='package'
                 backup_id=_package_same_target(ctx,app,provision,volumes,root)
                 phase='restore'
