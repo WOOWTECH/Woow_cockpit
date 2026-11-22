@@ -310,10 +310,20 @@ def _secret_mapping(command, fixture):
             command[-1] not in (IMAGE, IMAGE.removeprefix('sha256:'))):
         _fail(stage, 'shape')
     specs, names = [], []
+    image_volume_seen = False
     i = 2
     while i < len(command)-1:
         token = command[i]
         key, separator, value = token.partition('=')
+        # Fixed opt-in unit contract (Turing e449056). Do not add this option
+        # to generic value parsing: split forms, other policies and duplicates
+        # have not been authorized by this issued-fixture profile.
+        if key == '--image-volume':
+            if token != '--image-volume=ignore' or image_volume_seen:
+                _fail(stage, 'shape')
+            image_volume_seen = True
+            i += 1
+            continue
         if key in _COMMAND_FLAGS:
             if separator and value not in ('true', 'false'):
                 _fail(stage, 'shape')

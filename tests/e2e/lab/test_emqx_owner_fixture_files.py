@@ -574,6 +574,44 @@ class FixtureFilesTests(unittest.TestCase):
         self.assertNotIn('os:getenv', expression)
         self.assertNotIn('\n', expression)
 
+    def test_exact_opt_in_token_keeps_complete_issued_file_proof(self):
+        command=self.doc[0]['Config']['CreateCommand']
+        command[-1:-1]=['--log-driver=none','--image-volume=ignore']
+        receipts=self.observe()
+        self.assertEqual({item['path'] for item in receipts},set(m.PATHS))
+        self.assertEqual(self.events,['inspect','eval','inspect'])
+        for value in (BASE,ACL,CSV,b'generated,password',b'generated-user'):
+            self.assertIn(value,self.values.values)
+
+    def test_other_split_duplicate_or_unknown_options_refuse_before_native(self):
+        original=copy.deepcopy(self.doc)
+        invalid=(['--image-volume=bind'],['--image-volume=tmpfs'],
+            ['--image-volume='],['--image-volume=IGNORE'],
+            ['--image-volume=ignore=extra'],['--image-volume','ignore'],
+            ['--image-volume=ignore','--image-volume=ignore'],
+            ['--image-volume=ignore','--image-volume=bind'],
+            ['--image-volume=ignore','--unknown-flag=generated'])
+        for extra in invalid:
+            self.doc=copy.deepcopy(original)
+            self.doc[0]['Config']['CreateCommand'][-1:-1]=extra
+            with self.subTest(extra=extra):
+                error=self.diagnosed_failure()
+                self.assertEqual((error.stage,error.reason),('secret_mapping','shape'))
+        self.assertNotIn('eval',self.events)
+
+    def test_opt_in_does_not_waive_secret_mapping_or_shadow_proof(self):
+        original=copy.deepcopy(self.doc)
+        for mode in ('missing_secret','wrong_mode','shadow'):
+            self.doc=copy.deepcopy(original)
+            command=self.doc[0]['Config']['CreateCommand']
+            command[-1:-1]=['--image-volume=ignore']
+            if mode=='missing_secret': del command[4:6]
+            if mode=='wrong_mode': command[5]=command[5].replace('mode=0400','mode=0644')
+            if mode=='shadow': self.doc[0]['Mounts'].append({
+                'Type':'bind','Destination':m.BOOTSTRAP,'Source':'/unowned','RW':False})
+            with self.subTest(mode=mode): self.diagnosed_failure()
+        self.assertNotIn('eval',self.events)
+
 
 if __name__ == '__main__':
     unittest.main()
