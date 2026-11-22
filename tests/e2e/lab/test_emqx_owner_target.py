@@ -164,8 +164,23 @@ class OwnerProducerTests(unittest.TestCase):
             with self.subTest(), self.assertRaises(PrivateFailure):
                 with owner_target_readers(private_eval=self.transport(events, config=config),
                                           quiesce=lambda: self.lock(events)):
-                    self.fail('unsupported configuration returned readers')
+                    pass
             self.assertEqual(events[-1], 'unlocked')
+
+    def test_unobserved_file_authorizer_never_returns_complete_target_readers(self):
+        # All other config/native facts remain valid; only add an unsupported
+        # file source. A missing path is an implicit dependency, not absence.
+        for source in ({'type': Atom('file'), 'path': '/fixture/private-acl'},
+                       {'type': Atom('file'), 'path': '${EMQX_ETC_DIR}/acl.conf'},
+                       {'type': Atom('file')}):
+            config=cooked_config()
+            config['authorization']={'sources':[source]}
+            events=[]
+            with self.subTest(source=source), self.assertRaises(PrivateFailure):
+                with owner_target_readers(private_eval=self.transport(events, config=config),
+                                          quiesce=lambda:self.lock(events)):
+                    pass
+            self.assertEqual(events[-1],'unlocked')
 
     def test_nonempty_api_hash_unknown_native_terms_and_binding_refuse(self):
         def app_rows(doc):
@@ -182,14 +197,14 @@ class OwnerProducerTests(unittest.TestCase):
             with self.subTest(), self.assertRaises(PrivateFailure):
                 with owner_target_readers(private_eval=self.transport(events, edit=edit),
                                           quiesce=lambda: self.lock(events)):
-                    self.fail('unsupported native observation returned readers')
+                    pass
 
     def test_unsupported_raw_eval_output_is_not_exposed_and_lock_released(self):
         events = []
         with self.assertRaisesRegex(PrivateFailure, '^target-capture-unsupported$'):
             with owner_target_readers(private_eval=lambda _: b'private-broker-error',
                                       quiesce=lambda: self.lock(events)):
-                self.fail('raw broker error returned readers')
+                pass
         self.assertEqual(events, ['locked', 'unlocked'])
 
     def test_names_mode_preflight_integration_when_main_dependency_available(self):

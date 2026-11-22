@@ -83,6 +83,10 @@ def _text(value):
 
 def _no_refs(value, key=''):
     if type(value) is dict:
+        # A file authorizer also has a dependency when its path is implicit.
+        # No target file observer is installed in this restricted live profile.
+        if value.get('type') in ('file', b'file'):
+            unsupported()
         for name, child in value.items():
             _no_refs(child, name)
     elif type(value) in (tuple, list):

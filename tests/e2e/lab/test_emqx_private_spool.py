@@ -60,7 +60,7 @@ class SpoolTests(unittest.TestCase):
                 return b'x' * min(maximum, 32)
         with self.assertRaisesRegex(PrivateFailure, '^private-source-cancelled$'):
             with capture(CancelledInput(), self.root, maximum=64):
-                self.fail('yielded before authenticated EOF')
+                pass  # No assertion for a private context to convert into expected failure.
         self.assertEqual(list(self.root.iterdir()), [])
 
     def test_symlink_directory_refuses_and_preserves_unrelated_file(self):
@@ -70,7 +70,7 @@ class SpoolTests(unittest.TestCase):
         link.symlink_to(self.root, target_is_directory=True)
         with self.assertRaises(PrivateFailure):
             with capture(io.BytesIO(b'x'), link, maximum=64):
-                self.fail('yielded')
+                pass  # No assertion for a private context to convert into expected failure.
         self.assertEqual(other.read_bytes(), b'preserve')
         self.assertEqual(set(p.name for p in self.root.iterdir()), {'original', 'link'})
 
@@ -79,12 +79,12 @@ class SpoolTests(unittest.TestCase):
              patch('emqx_private_spool.tempfile.mkstemp') as create:
             with self.assertRaises(PrivateFailure):
                 with capture(io.BytesIO(b'x'), self.root, maximum=64):
-                    self.fail('yielded')
+                    pass  # No assertion for a private context to convert into expected failure.
             create.assert_not_called()
         self.root.chmod(0o755)
         with self.assertRaises(PrivateFailure):
             with capture(io.BytesIO(b'x'), self.root, maximum=64):
-                self.fail('yielded')
+                pass  # No assertion for a private context to convert into expected failure.
         self.assertEqual(list(self.root.iterdir()), [])
 
 class FixtureProfileTests(SpoolTests):
@@ -117,7 +117,7 @@ class FixtureProfileTests(SpoolTests):
                 with self.assertRaises(PrivateFailure):
                     with capture(io.BytesIO(b'x'), self.root,
                                  fixture_profile=profile, verified_sha256=digest):
-                        self.fail('yielded')
+                        pass  # No assertion for a private context to convert into expected failure.
                 create.assert_not_called()
         class Finished(io.BytesIO):
             def finish(self):
@@ -125,12 +125,12 @@ class FixtureProfileTests(SpoolTests):
         with self.assertRaises(PrivateFailure):
             with capture(Finished(b'short'), self.root,
                          fixture_profile=spool.X86_PROFILE, verified_sha256=spool.X86_SHA256):
-                self.fail('short yielded')
+                pass  # No assertion for a private context to convert into expected failure.
         with patch.object(spool.time, 'monotonic', side_effect=[0, 0, 121]):
             with self.assertRaises(PrivateFailure):
                 with capture(Finished(b'x'), self.root,
                              fixture_profile=spool.X86_PROFILE, verified_sha256=spool.X86_SHA256):
-                    self.fail('expired yielded')
+                    pass  # No assertion for a private context to convert into expected failure.
         self.assertEqual(list(self.root.iterdir()), [])
 
     def test_profile_late_finish_and_oversize_refuse(self):
@@ -144,7 +144,7 @@ class FixtureProfileTests(SpoolTests):
                 with self.assertRaises(PrivateFailure):
                     with capture(source, self.root, fixture_profile=spool.X86_PROFILE,
                                  verified_sha256=spool.X86_SHA256):
-                        self.fail('yielded')
+                        pass  # No assertion for a private context to convert into expected failure.
                 self.assertEqual(list(self.root.iterdir()), [])
             clock = [0]
             class SlowFinish(io.BytesIO):
@@ -154,5 +154,5 @@ class FixtureProfileTests(SpoolTests):
                 with self.assertRaises(PrivateFailure):
                     with capture(SlowFinish(b'x' * 64), self.root,
                                  fixture_profile=spool.X86_PROFILE, verified_sha256=spool.X86_SHA256):
-                        self.fail('late finish yielded')
+                        pass  # No assertion for a private context to convert into expected failure.
         self.assertEqual(list(self.root.iterdir()), [])

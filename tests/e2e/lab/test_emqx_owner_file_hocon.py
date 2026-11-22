@@ -160,7 +160,7 @@ class OwnerWiringTests(unittest.TestCase):
                 with capture.capture_owner_source(self.path, password=self.password,
                         expected_sha256='0'*64, spool_directory=self.spool,
                         file_dependency_profile=owner.PROFILE, product_image=owner.IMAGE):
-                    self.fail('digest mismatch yielded')
+                    pass  # No assertion for a private context to convert into expected failure.
             run.assert_not_called()
             with capture.capture_owner_source(self.path, password=self.password,
                     expected_sha256=self.digest, spool_directory=self.spool,
@@ -171,7 +171,7 @@ class OwnerWiringTests(unittest.TestCase):
                     captured.registry.summary()
                 with self.assertRaises(PrivateFailure):
                     with bound['open']('fedcba98_woow-emqx'):
-                        self.fail('unsealed replay')
+                        pass  # No assertion for a private context to convert into expected failure.
                 docs = {name: b'[]' for name in
                         ('mqtt-auth','api-keys','tls','target-bootstrap','connectors')}
                 captured.supply_target_documents(docs)
@@ -186,5 +186,5 @@ class OwnerWiringTests(unittest.TestCase):
                 with capture.capture_owner_source(self.path, password=self.password,
                         expected_sha256=self.digest, spool_directory=self.spool,
                         file_dependency_profile=owner.PROFILE, product_image=owner.IMAGE):
-                    self.fail('missing vendor file yielded')
+                    pass  # No assertion for a private context to convert into expected failure.
         self.assertEqual(list(self.spool.iterdir()), [])
