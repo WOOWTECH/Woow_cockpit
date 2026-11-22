@@ -1,0 +1,13 @@
+{
+  "source_commit": "14031afab98ac2ef6b01353f4b341fe6c21b2371",
+  "scope": "real ARM imported Mnesia ACL complete owner flow with proven exact max_rules100 target profile",
+  "exit": 1,
+  "elapsed_seconds": 291.85833066212945,
+  "stdout_sha256": "cb5fe80cc3ed881d5d53b7dfd5f2c36e5009ce23a1f5ca4e440814215a2417ef",
+  "fixed_status": [
+    "REAL OWNER MQTT REFUSED",
+    "REAL OWNER POSTFLIGHT PASSED"
+  ],
+  "stderr_bytes_not_published": 0,
+  "commercial_acceptance": "not-complete"
+}

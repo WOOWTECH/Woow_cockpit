@@ -371,12 +371,12 @@ class FoundationTests(unittest.TestCase):
         self.assertEqual([(r,k['topic']) for r,k in calls if k.get('publish')],
             [('sensor','b1/sensor/b1-sensor/probe'),('lab','lab/owner-probe')])
         self.assertIn(('sensor',{'topic':'b1/secret/#'}),calls)
-        for raw,code in ((b'received CONNACK (0)',0),(b'received CONNACK (0)\nreceived PUBACK (Mid: 1, RC:135)',0),
-                (b'received CONNACK (0)\nreceived PUBACK (Mid: 2, RC:0)',0),
-                (b'received CONNACK (0)\nreceived PUBACK (Mid: 1, RC:0)',27)):
+        for raw,code,reason in ((b'received CONNACK (0)',0,'puback_shape'),(b'received CONNACK (0)\nreceived PUBACK (Mid: 1, RC:135)',0,'puback_135'),
+                (b'received CONNACK (0)\nreceived PUBACK (Mid: 2, RC:0)',0,'puback_mid'),
+                (b'received CONNACK (0)\nreceived PUBACK (Mid: 1, RC:0)',27,'exit_27')):
             with patch.object(m,'_mqtt_private',return_value=SimpleNamespace(returncode=code,stdout=raw,stderr=b'')):
                 with self.assertRaises(m.RealOwnerRefused) as caught:m._validate_phase_mqtt(self.provision,clients,m.IMPORTED_MNESIA)
-                self.assertEqual(caught.exception.phase,'mqtt')
+                self.assertEqual(caught.exception.phase,'mqtt_publish_sensor_'+reason)
 
     def test_actual_owner_provisions_selected_policy_only_after_original_source_frame_and_history(self):
         from contextlib import contextmanager

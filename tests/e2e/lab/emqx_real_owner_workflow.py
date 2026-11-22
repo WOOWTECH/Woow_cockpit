@@ -18,6 +18,7 @@ import struct
 import tempfile
 import time
 import weakref
+from contextvars import ContextVar
 from types import SimpleNamespace
 
 from emqx_adapter_owner import OwnerProvision, LabOwnerRunner
@@ -42,6 +43,42 @@ PHASES = frozenset(('profile','observer_dependency','realm','budget','frame','pr
 from emqx_candidate_stage import STAGES as BUILD_STAGES, KINDS as BUILD_KINDS
 from emqx_captured_candidate import CandidatePhaseRefused
 PHASES=PHASES | frozenset('build_'+s+'_'+k for s in BUILD_STAGES for k in BUILD_KINDS)
+MQTT_STEPS=frozenset(('input','publish_sensor','publish_lab','login_sensor','login_gateway','login_third',
+    'sensor_secret','wrong_password','retained_one','retained_two'))
+MQTT_CODES=frozenset((0,1,2,16,*range(128,163)))
+MQTT_EXITS=frozenset((0,1,2,3,4,5,6,27,125,126,127,128,134,135,137,138,143,255))
+MQTT_REASONS=frozenset(('input','setup','run','cleanup','protocol','exit_shape','exit_other',
+    'connack_shape','connack_other','suback_shape','suback_other','puback_shape','puback_mid',
+    'puback_other','payload_mismatch')) | frozenset('exit_'+str(c) for c in MQTT_EXITS) | frozenset(
+    kind+'_'+str(c) for kind in ('connack','suback','puback') for c in MQTT_CODES)
+PHASES=PHASES | frozenset('mqtt_'+step+'_'+reason for step in MQTT_STEPS for reason in MQTT_REASONS)
+_MQTT_STATE=ContextVar('emqx_private_mqtt_diagnostic',default=('input','input'))
+
+def _mqtt_step(step):
+    if step not in MQTT_STEPS:raise ValueError()
+    _MQTT_STATE.set((step,'run'))
+
+def _mqtt_kind(reason):
+    if reason not in MQTT_REASONS:raise ValueError()
+    _MQTT_STATE.set((_MQTT_STATE.get()[0],reason))
+
+def _mqtt_fail(reason):
+    _mqtt_kind(reason)
+    raise ValueError()
+
+def _mqtt_exit(result,accepted):
+    _mqtt_kind('exit_shape')
+    code=result.returncode
+    if type(code) is not int:raise ValueError()
+    if code not in accepted:_mqtt_fail('exit_'+str(code) if code in MQTT_EXITS else 'exit_other')
+    _mqtt_kind('protocol')
+
+def _mqtt_wire_reason(output,kind,accepted):
+    if kind not in ('connack','suback'):raise ValueError()
+    _mqtt_kind(kind+'_shape')
+    code=_reason(output,kind)
+    if code not in accepted:_mqtt_fail(kind+'_'+str(code) if code in MQTT_CODES else kind+'_other')
+    return code
 SOURCE_MODES = ('--source-vendor-acl-sql-aliases','--x86-source-vendor-acl-sql-aliases')
 
 
@@ -611,6 +648,7 @@ def _mqtt_private(provision,clients,role,*,topic,retained=False,wrong_password=N
     """
     from emqx_adapter_mqtt import CLIENT
     from emqx_owned_client import owned_client
+    _mqtt_kind('setup')
     r,f=provision.runner,provision.fixture
     user=clients.fields[role+'_user'];password=wrong_password or clients.fields[role+'_password']
     if re.fullmatch(rb'[A-Za-z0-9_-]{1,128}',user) is None or re.fullmatch(rb'[A-Za-z0-9_-]{1,128}',password) is None:
@@ -634,9 +672,11 @@ def _mqtt_private(provision,clients,role,*,topic,retained=False,wrong_password=N
                 '--entrypoint='+program,CLIENT,'-h','127.0.0.1','-p','1883','-V','mqttv5',
                 '-q','1','-i',client]
             command += ['-m','owner-probe','-d'] if publish else (['-C','1','-W','5','-F','%r:%t:%x'] if retained else ['-E','-W','5','-d'])
+            _mqtt_kind('run')
             result=r.podman(*command,timeout=20,check=False,max_output=65536)
             if (type(result.returncode) is not int or any(type(x) is not bytes or len(x)>65536
                     for x in (result.stdout,result.stderr))):raise ValueError()
+            _mqtt_kind('cleanup')
             return result
 
 def _reason(output,kind):
@@ -659,33 +699,55 @@ def validate_source_mqtt(provision,clients,*,target_mode=FILE_BASELINE):
     if type(clients) is not SourceClients or target_mode not in (FILE_BASELINE,IMPORTED_MNESIA):raise ValueError()
     if target_mode==IMPORTED_MNESIA:
         for role,topic in (('sensor','b1/sensor/b1-sensor/probe'),('lab','lab/owner-probe')):
+            _mqtt_step('publish_'+role)
             result=_mqtt_private(provision,clients,role,topic=topic,publish=True)
             output=result.stdout+b'\n'+result.stderr
+            _mqtt_exit(result,(0,))
+            _mqtt_wire_reason(output,'connack',(0,))
+            _mqtt_kind('puback_shape')
             ack=re.findall(rb'received PUBACK \(Mid: ([0-9]{1,5}), RC: ?([0-9]{1,3})\)',output)
-            if result.returncode!=0 or _reason(output,'connack')!=0 or len(ack)!=1 or ack[0][0]!=b'1' or ack[0][1] not in (b'0',b'16'):raise ValueError()
+            if len(ack)!=1:raise ValueError()
+            if ack[0][0]!=b'1':_mqtt_fail('puback_mid')
+            code=int(ack[0][1])
+            if code not in (0,16):_mqtt_fail('puback_'+str(code) if code in MQTT_CODES else 'puback_other')
     for role in ('sensor','gateway','third'):
+        _mqtt_step('login_'+role)
         result=_mqtt_private(provision,clients,role,topic='b1/retained/#')
         output=result.stdout+b'\n'+result.stderr
-        if result.returncode not in (0,135) or _reason(output,'connack')!=0:raise ValueError()
-        if role=='gateway' and (result.returncode!=0 or _reason(output,'suback') not in (0,1)):
-            raise ValueError()
+        _mqtt_exit(result,(0,135))
+        _mqtt_wire_reason(output,'connack',(0,))
+        if role=='gateway':
+            _mqtt_exit(result,(0,))
+            _mqtt_wire_reason(output,'suback',(0,1))
+    _mqtt_step('sensor_secret')
     denied=_mqtt_private(provision,clients,'sensor',topic='b1/secret/#')
     output=denied.stdout+b'\n'+denied.stderr
-    if denied.returncode not in (0,135) or _reason(output,'connack')!=0 or _reason(output,'suback')!=135:raise ValueError()
+    _mqtt_exit(denied,(0,135))
+    _mqtt_wire_reason(output,'connack',(0,))
+    _mqtt_wire_reason(output,'suback',(135,))
+    _mqtt_step('wrong_password')
     refused=_mqtt_private(provision,clients,'gateway',topic='b1/retained/#',
         wrong_password=clients.fields['negative_password'])
-    if refused.returncode not in (134,135) or _reason(refused.stdout+b'\n'+refused.stderr,'connack') not in (134,135):
-        raise ValueError()
+    _mqtt_exit(refused,(134,135))
+    _mqtt_wire_reason(refused.stdout+b'\n'+refused.stderr,'connack',(134,135))
     for index in (1,2):
+        _mqtt_step('retained_one' if index==1 else 'retained_two')
         topic=clients.fields['retained_topic'+str(index)]
         payload=clients.fields['retained_payload'+str(index)]
         result=_mqtt_private(provision,clients,'gateway',topic=topic.decode('ascii'),retained=True)
-        if result.returncode or result.stdout!=b'1:'+topic+b':'+payload.hex().encode()+b'\n':raise ValueError()
+        _mqtt_exit(result,(0,))
+        _mqtt_kind('payload_mismatch')
+        if result.stdout!=b'1:'+topic+b':'+payload.hex().encode()+b'\n':raise ValueError()
 
 
 def _validate_phase_mqtt(provision,clients,target_mode):
+    token=_MQTT_STATE.set(('input','input'))
     try:validate_source_mqtt(provision,clients,target_mode=target_mode)
-    except BaseException:raise RealOwnerRefused('mqtt') from None
+    except BaseException:
+        step,reason=_MQTT_STATE.get()
+        phase='mqtt' if step=='input' else 'mqtt_'+step+'_'+reason
+        raise RealOwnerRefused(phase) from None
+    finally:_MQTT_STATE.reset(token)
 
 
 def _assert_imported_acl_api(result):
