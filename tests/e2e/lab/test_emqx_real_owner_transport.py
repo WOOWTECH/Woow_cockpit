@@ -94,10 +94,26 @@ class TransportTests(unittest.TestCase):
             self.assertNotEqual(run.returncode,0)
             self.assertEqual(run.stdout,b'');self.assertEqual(list(Path(d).iterdir()),[])
 
+    def test_removed_object_integrity_module_fails_actual_extracted_dependencies(self):
+        import emqx_real_owner_transport as m
+        import struct,subprocess,tarfile
+        raw=m.bundle_code();altered=io.BytesIO()
+        with tarfile.open(fileobj=io.BytesIO(raw)) as old,tarfile.open(fileobj=altered,mode='w') as new:
+            for item in old:
+                if Path(item.name).name=='emqx_b1_object_integrity.py':continue
+                new.addfile(item,old.extractfile(item) if item.isfile() else None)
+        code=altered.getvalue();deps=m.dependencies()
+        frame=struct.pack('!Q',len(code))+code+struct.pack('!Q',len(deps))+deps+b'T'
+        with tempfile.TemporaryDirectory() as d:
+            env=dict(os.environ);env.pop('PYTHONPATH',None);env['TMPDIR']=d
+            run=subprocess.run(['/usr/bin/python3','-c',m.BOOTSTRAP],input=frame,capture_output=True,cwd=d,env=env,timeout=60)
+            self.assertNotEqual(run.returncode,0)
+            self.assertEqual(run.stdout,b'');self.assertEqual(list(Path(d).iterdir()),[])
+
     def test_fixed_child_failure_enum_and_private_output_never_escape(self):
         import emqx_real_owner_transport as m
         import subprocess,sys
-        for raw,expected in ((b'REALOWNER-REFUSED:mqtt\n','mqtt'),(b'REALOWNER-REFUSED:private-raw-secret\n','child')):
+        for raw,expected in ((b'REALOWNER-REFUSED:mqtt\n','mqtt'),(b'REALOWNER-REFUSED:object_integrity\n','object_integrity'),(b'REALOWNER-REFUSED:private-raw-secret\n','child')):
             child=subprocess.Popen([sys.executable,'-c','import sys;sys.stdout.buffer.write('+repr(raw)+');sys.exit(1)'],stdout=subprocess.PIPE,stderr=subprocess.DEVNULL)
             try:
                 with self.assertRaises(m.TransportRefused) as caught:m.read_result(child,timeout=3)

@@ -740,6 +740,7 @@ class FoundationTests(unittest.TestCase):
         clients=self.clients();credentials=m.SourceAPICredentials(self.api_values());events=[]
         original=object();scanners=[original,object(),object(),object()]
         session=SimpleNamespace(registry=original);api_results=[];observations=[object(),object(),object()]
+        object_results=[]
         negative_results=[];negative_observations=[object(),object(),object()]
         def restore(context,request):
             events.append('restore')
@@ -759,11 +760,13 @@ class FoundationTests(unittest.TestCase):
              patch.object(m,'validate_source_mqtt',side_effect=lambda *a,**kw:events.append('mqtt')), \
              patch.object(m,'_source_api_activity',side_effect=api),patch.object(m,'_source_negative_activity',side_effect=negative), \
              patch.object(m,'_post_activity_capture',side_effect=native), \
-             patch.object(m,'_assert_imported_acl_api',side_effect=lambda observed:events.append('acl_api')) as acl_api:
+             patch.object(m,'_assert_imported_acl_api',side_effect=lambda observed:events.append('acl_api')) as acl_api, \
+             patch.object(m,'_compare_source_objects',side_effect=lambda expected,observed:events.append('objects') or object()):
             result=m._restore_and_rollback(ctx,app,self.provision,'generated-package',state,clients=clients,
-                session=session,api_credentials=credentials,api_results=api_results,negative_results=negative_results,target_mode=m.IMPORTED_MNESIA)
-        self.assertEqual(events,['restore','mqtt','api','negative','acl_api','capture','restore','mqtt','api','negative','acl_api','capture','mqtt','api','negative','acl_api','capture'])
+                session=session,api_credentials=credentials,api_results=api_results,negative_results=negative_results,target_mode=m.IMPORTED_MNESIA,object_expected=object(),object_results=object_results)
+        self.assertEqual(events,['restore','mqtt','api','objects','negative','acl_api','capture','restore','mqtt','api','objects','negative','acl_api','capture','mqtt','api','objects','negative','acl_api','capture'])
         self.assertEqual(api_results,observations);self.assertEqual(negative_results,negative_observations)
+        self.assertEqual(len(object_results),3);self.assertEqual(len({id(r) for r in object_results}),3)
         self.assertIs(result,scanners[-1]);self.assertIs(session.registry,original)
 
     def test_api_refusal_stops_before_post_native_capture(self):
@@ -773,7 +776,7 @@ class FoundationTests(unittest.TestCase):
              patch.object(m,'_post_activity_capture') as native:
             with self.assertRaises(m.RealOwnerRefused) as caught:
                 m._restore_and_rollback(ctx,app,self.provision,'generated-package',state,clients=self.clients(),
-                    session=session,api_credentials=m.SourceAPICredentials(self.api_values()),api_results=[],negative_results=[])
+                    session=session,api_credentials=m.SourceAPICredentials(self.api_values()),api_results=[],negative_results=[],object_expected=object(),object_results=[])
         self.assertEqual(caught.exception.phase,'source_api');native.assert_not_called()
 
     def test_negative_refusal_stops_native_capture_and_later_restore_phases(self):
@@ -781,12 +784,13 @@ class FoundationTests(unittest.TestCase):
         api_results=[];negative_results=[]
         with patch.object(flows,'run_restore',return_value={'changed':True}) as restore,patch.object(m,'_ready'), \
              patch.object(m,'validate_source_mqtt'),patch.object(m,'_source_api_activity',return_value=object()), \
+             patch.object(m,'_compare_source_objects',return_value=object()), \
              patch.object(m,'_source_negative_activity',side_effect=m.RealOwnerRefused('source_negative')), \
              patch.object(m,'_post_activity_capture') as native:
             with self.assertRaises(m.RealOwnerRefused) as caught:
                 m._restore_and_rollback(ctx,app,self.provision,'generated-package',state,clients=self.clients(),
                     session=session,api_credentials=m.SourceAPICredentials(self.api_values()),
-                    api_results=api_results,negative_results=negative_results)
+                    api_results=api_results,negative_results=negative_results,object_expected=object(),object_results=[])
         self.assertEqual(caught.exception.phase,'source_negative');native.assert_not_called()
         self.assertEqual(restore.call_count,1);self.assertEqual(len(api_results),1);self.assertEqual(negative_results,[])
 
@@ -851,6 +855,104 @@ class FoundationTests(unittest.TestCase):
             with self.assertRaises(m.RealOwnerRefused) as caught:
                 m._scan_source_negative_receipt(raw,rs,observed,session)
             self.assertEqual(caught.exception.phase,'source_negative')
+
+    def test_actual_owner_entry_captures_objects_under_original_hold_before_builder(self):
+        from contextlib import contextmanager
+        from test_emqx_b1_object_integrity import ObjectIntegrityTests
+        import emqx_b1_object_integrity as integrity
+        fixture=ObjectIntegrityTests();fixture.setUp();self.addCleanup(fixture.doCleanups)
+        profile=SimpleNamespace(sha256=fixture.digest,arch='aarch64',fixture_profile='generated-only',file_dependency_profile=None)
+        real_capture=m._capture_source_objects
+        for malformed in (False,True):
+            events=[];held=[False]
+            with tempfile.TemporaryDirectory() as directory:
+                root=Path(directory)
+                @contextmanager
+                def staged(*args,**kw):yield fixture.path,b'generated-key',fixture.spool,profile,root
+                @contextmanager
+                def source(*args,**kw):
+                    with fixture.source() as result:
+                        held[0]=True
+                        try:yield result
+                        finally:held[0]=False
+                @contextmanager
+                def readers(**kw):yield SimpleNamespace(generation='generated-only')
+                def join(**kw):
+                    self.assertTrue(held[0]);events.append('join')
+                    return fixture.join(kw['captured'],evidence_directory=kw['evidence_directory'],evidence_name=kw['evidence_name'])
+                def capture(captured,session,mode):
+                    self.assertTrue(held[0]);events.append('objects')
+                    if malformed:fixture.config['rule_engine']['rules']['b1_rule_http']['sql']=None
+                    return real_capture(captured,session,mode)
+                def build(*args,**kw):
+                    self.assertTrue(held[0]);self.assertEqual(events,['join','objects'])
+                    events.append('build');raise ValueError('generated-stop-before-product')
+                with patch.object(owner,'LabOwnerRunner',return_value=self.runner),patch.object(m,'_full_restore_budget'), \
+                     patch.object(m,'staged_owner_frame',side_effect=staged),patch.object(m,'_payload_history',return_value=object()), \
+                     patch.object(owner.OwnerProvision,'cleanup',autospec=True,side_effect=lambda p:files.revoke(p.file_capability)), \
+                     patch.object(m,'_opt_in_private_unit'),patch.object(m,'_ready'), \
+                     patch.object(m,'capture_owner_source',side_effect=source),patch.object(m,'validate_source_capture'), \
+                     patch.object(m,'owner_target_readers',side_effect=readers),patch.object(m,'owner_preflight',side_effect=join), \
+                     patch.object(m,'_capture_source_objects',side_effect=capture),patch.object(integrity,'source_profile',return_value=profile), \
+                     patch.object(m,'build_captured_candidate',side_effect=build),patch.object(m,'_package_same_target') as package:
+                    with self.assertRaises(m.RealOwnerRefused) as caught:
+                        m.run_real_framed_owner(io.BytesIO(self.owner_prefix()),private_parent=root,
+                            source_mode=m.SOURCE_MODES[0],no_live=False)
+                self.assertFalse(held[0]);package.assert_not_called()
+                self.assertEqual(events,['join','objects'] if malformed else ['join','objects','build'],caught.exception.phase)
+                self.assertEqual(caught.exception.phase,'object_integrity' if malformed else 'build')
+
+    def test_actual_object_capture_comparison_results_survive_close_and_scan_exact_receipt(self):
+        from test_emqx_b1_object_integrity import ObjectIntegrityTests
+        import emqx_b1_object_integrity as integrity
+        from emqx_private_evidence import names_receipt,SOURCE_NAMES
+        fixture=ObjectIntegrityTests();fixture.setUp();self.addCleanup(fixture.doCleanups)
+        with fixture.source() as (captured,_):
+            session=fixture.join(captured)
+            with patch.object(integrity,'source_profile',return_value=fixture.profile):
+                expected=m._capture_source_objects(captured,session,m.SOURCE_MODES[0])
+            apis=[fixture.observed(session) for _ in range(3)]
+            results=[m._compare_source_objects(expected,observed) for observed in apis]
+        receipt=names_receipt('restore','passed',SOURCE_NAMES)
+        m._scan_object_receipt(receipt,expected,results,apis,session)
+        session.registry._runtime.register_bundle({'runtime-login-token':[b'generated-object-late-token']})
+        for raw,compared,observed in ((b'generated-source-header',results,apis),
+                (b'generated-object-late-token',results,apis),(receipt,[results[0]]*3,apis),
+                (receipt,results,list(reversed(apis))),(receipt,results[:2],apis)):
+            with self.assertRaises(m.RealOwnerRefused) as caught:m._scan_object_receipt(raw,expected,compared,observed,session)
+            self.assertEqual(caught.exception.phase,'object_integrity')
+        apis[0]._documents['rules']['data'][0]['sql']='SELECT altered'
+        with self.assertRaises(m.RealOwnerRefused) as caught:m._compare_source_objects(expected,apis[0])
+        self.assertEqual(caught.exception.phase,'object_integrity')
+
+    def test_object_dependency_failure_and_boolean_ack_have_only_fixed_phase(self):
+        import builtins
+        original=builtins.__import__
+        def missing(name,*args,**kwargs):
+            if name=='emqx_b1_object_integrity':raise ImportError('generated-private-error-not-output')
+            return original(name,*args,**kwargs)
+        with patch.object(builtins,'__import__',side_effect=missing):
+            for call in (lambda:m._capture_source_objects(None,None,m.SOURCE_MODES[0]),
+                         lambda:m._compare_source_objects(None,None),
+                         lambda:m._scan_object_receipt(b'',None,[],[],None)):
+                with self.assertRaises(m.RealOwnerRefused) as caught:call()
+                self.assertEqual(caught.exception.phase,'object_integrity')
+        with patch('emqx_b1_object_integrity.compare_b1_objects',return_value=True):
+            with self.assertRaises(m.RealOwnerRefused) as caught:m._compare_source_objects(object(),object())
+            self.assertEqual(caught.exception.phase,'object_integrity')
+
+    def test_object_mismatch_stops_negative_capture_and_later_product_phases(self):
+        ctx,app,state=self.context();session=SimpleNamespace(registry=object());results=[]
+        with patch.object(flows,'run_restore',return_value={'changed':True}) as restore,patch.object(m,'_ready'), \
+             patch.object(m,'validate_source_mqtt'),patch.object(m,'_source_api_activity',return_value=object()), \
+             patch.object(m,'_compare_source_objects',side_effect=m.RealOwnerRefused('object_integrity')), \
+             patch.object(m,'_source_negative_activity') as negative,patch.object(m,'_post_activity_capture') as native:
+            with self.assertRaises(m.RealOwnerRefused) as caught:
+                m._restore_and_rollback(ctx,app,self.provision,'generated-package',state,clients=self.clients(),
+                    session=session,api_credentials=m.SourceAPICredentials(self.api_values()),api_results=[],negative_results=[],
+                    object_expected=object(),object_results=results)
+        self.assertEqual(caught.exception.phase,'object_integrity');self.assertEqual(results,[])
+        negative.assert_not_called();native.assert_not_called();self.assertEqual(restore.call_count,1)
 
     def test_old_complete_cipher_frame_refuses_before_history_or_target(self):
         import struct

@@ -38,7 +38,7 @@ from woowbackup.paths import Paths
 
 PHASES = frozenset(('profile','observer_dependency','realm','frame','provision',
     'ready','source','target','preflight','build','package','restore',
-    'rollback','restart','cleanup','client_frame','no_live','mqtt','post_capture','post_capture_identity','payload_history','build_adapter','source_api','source_negative','api_frame'))
+    'rollback','restart','cleanup','client_frame','no_live','mqtt','post_capture','post_capture_identity','payload_history','build_adapter','source_api','source_negative','object_integrity','api_frame'))
 from emqx_candidate_stage import STAGES as BUILD_STAGES, KINDS as BUILD_KINDS
 from emqx_captured_candidate import CandidatePhaseRefused
 PHASES=PHASES | frozenset('build_'+s+'_'+k for s in BUILD_STAGES for k in BUILD_KINDS)
@@ -217,7 +217,7 @@ def _package_same_target(ctx,app,provision,volumes,root):
     return result['backup_id']
 
 
-def _restore_and_rollback(ctx,app,provision,backup_id,state,*,clients=None,session=None,api_credentials=None,api_results=None,negative_results=None,target_mode=FILE_BASELINE):
+def _restore_and_rollback(ctx,app,provision,backup_id,state,*,clients=None,session=None,api_credentials=None,api_results=None,negative_results=None,target_mode=FILE_BASELINE,object_expected=None,object_results=None):
     """Product restore, destructive one-shot startup failure, automatic rollback.
 
     Live callers supply source clients/API credentials and require positive MQTT,
@@ -231,12 +231,15 @@ def _restore_and_rollback(ctx,app,provision,backup_id,state,*,clients=None,sessi
         raise RealOwnerRefused('source_api')
     if api_credentials is not None and (type(negative_results) is not list or negative_results):
         raise RealOwnerRefused('source_negative')
+    if api_credentials is not None and (object_expected is None or type(object_results) is not list or object_results):
+        raise RealOwnerRefused('object_integrity')
     request={'backup_id':backup_id,'apps':['emqx'],'accept_unauthenticated':True}
     outcome=flows.run_restore(ctx,request)
     if outcome.get('rolled_back') or not outcome.get('changed'):raise ValueError()
     _ready(provision)
     if clients is not None:_validate_phase_mqtt(provision,clients,target_mode)
     if api_credentials is not None:api_results.append(_source_api_activity(provision,post_registry,session,clients,api_credentials))
+    if api_credentials is not None:object_results.append(_compare_source_objects(object_expected,api_results[-1]))
     if api_credentials is not None:negative_results.append(_source_negative_activity(provision,session,clients,api_results[-1]))
     if api_credentials is not None and target_mode==IMPORTED_MNESIA:_assert_imported_acl_api(api_results[-1])
     if session is not None:post_registry=_post_activity_capture(provision,post_registry)
@@ -262,6 +265,7 @@ def _restore_and_rollback(ctx,app,provision,backup_id,state,*,clients=None,sessi
         _ready(provision)
         if clients is not None:_validate_phase_mqtt(provision,clients,target_mode)
         if api_credentials is not None:api_results.append(_source_api_activity(provision,post_registry,session,clients,api_credentials))
+        if api_credentials is not None:object_results.append(_compare_source_objects(object_expected,api_results[-1]))
         if api_credentials is not None:negative_results.append(_source_negative_activity(provision,session,clients,api_results[-1]))
         if api_credentials is not None and target_mode==IMPORTED_MNESIA:_assert_imported_acl_api(api_results[-1])
         if session is not None:post_registry=_post_activity_capture(provision,post_registry)
@@ -276,6 +280,7 @@ def _restore_and_rollback(ctx,app,provision,backup_id,state,*,clients=None,sessi
     _ready(provision)
     if clients is not None:_validate_phase_mqtt(provision,clients,target_mode)
     if api_credentials is not None:api_results.append(_source_api_activity(provision,post_registry,session,clients,api_credentials))
+    if api_credentials is not None:object_results.append(_compare_source_objects(object_expected,api_results[-1]))
     if api_credentials is not None:negative_results.append(_source_negative_activity(provision,session,clients,api_results[-1]))
     if api_credentials is not None and target_mode==IMPORTED_MNESIA:_assert_imported_acl_api(api_results[-1])
     if session is not None:post_registry=_post_activity_capture(provision,post_registry)
@@ -447,6 +452,44 @@ def _scan_source_negative_receipt(receipt,results,api_results,session):
             result.scan(receipt)
     except BaseException:
         raise RealOwnerRefused('source_negative') from None
+
+
+def _capture_source_objects(captured,session,source_mode):
+    try:
+        from emqx_b1_object_integrity import capture_b1_object_expectations,SourceObjects
+        expected=capture_b1_object_expectations(captured=captured,session=session,source_mode=source_mode)
+        if type(expected) is not SourceObjects:raise ValueError()
+        expected.scan(b'')
+        return expected
+    except BaseException:raise RealOwnerRefused('object_integrity') from None
+
+
+def _compare_source_objects(expected,source_api):
+    try:
+        from emqx_b1_object_integrity import compare_b1_objects,ObjectComparison
+        result=compare_b1_objects(expected=expected,source_api=source_api)
+        if (type(result) is not ObjectComparison or result._expected is not expected
+                or result._observed is not source_api):raise ValueError()
+        result.scan(b'')
+        return result
+    except BaseException:raise RealOwnerRefused('object_integrity') from None
+
+
+def _scan_object_receipt(receipt,expected,results,api_results,session):
+    try:
+        from emqx_b1_object_integrity import SourceObjects,ObjectComparison
+        from emqx_source_api_validator import SourceAPIResult
+        if (type(receipt) is not bytes or type(expected) is not SourceObjects
+                or type(results) is not list or len(results)!=3
+                or type(api_results) is not list or len(api_results)!=3
+                or len({id(r) for r in results})!=3 or len({id(r) for r in api_results})!=3):raise ValueError()
+        expected.scan(receipt)
+        for result,observed in zip(results,api_results):
+            if (type(result) is not ObjectComparison or result._expected is not expected
+                    or result._observed is not observed or type(observed) is not SourceAPIResult
+                    or observed._runtime is not session.registry._runtime):raise ValueError()
+            result.scan(receipt)
+    except BaseException:raise RealOwnerRefused('object_integrity') from None
 
 
 def _target_base():
@@ -760,6 +803,8 @@ def run_real_framed_owner(stream,*,private_parent,source_mode,no_live=True,targe
                         username=b'owner',password=dashboard,evidence_directory=evidence,
                         evidence_name='owner-preflight.txt')
                     _register_client_inputs(session,clients,evidence/'owner-preflight.txt',api_credentials=api_credentials)
+                    phase='object_integrity'
+                    object_expected=_capture_source_objects(captured,session,source_mode)
                     phase='build'
                     work=SimpleNamespace(runner=lambda _app:r,guard=CandidateBudget(),abort=None,
                         checkpoint=ctx.checkpoint,phase=ctx.phase,log=ctx.log)
@@ -777,10 +822,11 @@ def run_real_framed_owner(stream,*,private_parent,source_mode,no_live=True,targe
                 phase='package'
                 backup_id=_package_same_target(ctx,app,provision,volumes,root)
                 phase='restore'
-                api_results=[];negative_results=[]
+                api_results=[];negative_results=[];object_results=[]
                 try:
                     post_registry=_restore_and_rollback(ctx,app,provision,backup_id,state,clients=clients,session=session,
-                        api_credentials=api_credentials,api_results=api_results,negative_results=negative_results,target_mode=target_mode)
+                        api_credentials=api_credentials,api_results=api_results,negative_results=negative_results,target_mode=target_mode,
+                        object_expected=object_expected,object_results=object_results)
                 except RealOwnerRefused as error:
                     phase=error.phase
                     raise
@@ -790,6 +836,7 @@ def run_real_framed_owner(stream,*,private_parent,source_mode,no_live=True,targe
         phase='payload_history';retained_history.scan(receipt)
         phase='source_api';_scan_source_api_receipt(receipt,api_results,session)
         phase='source_negative';_scan_source_negative_receipt(receipt,negative_results,api_results,session)
+        phase='object_integrity';_scan_object_receipt(receipt,object_expected,object_results,api_results,session)
         return {'evidence_bytes':receipt,'scope':'private-same-target-product-flow', 'client_validation':('source-login-imported-mnesia-acl-retained-after-restore-rollback-restart' if target_mode==IMPORTED_MNESIA else 'source-login-target-file-acl-retained-after-restore-rollback-restart'),
                 'source_mnesia_acl_behavior':('mqtt-validated-imported-database-with-lab-only-file' if target_mode==IMPORTED_MNESIA else 'not-assessed-target-file-authorizer'),
                 'source_final_state':'not-assessed','commercial_acceptance':'not-assessed'}
