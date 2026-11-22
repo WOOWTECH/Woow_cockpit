@@ -17,7 +17,8 @@ from emqx_private_boundary import PrivateFailure
 
 @contextlib.contextmanager
 def capture_owner_source(path, *, password, expected_sha256, spool_directory,
-                         required_encryption=None, fixture_profile=None):
+                         required_encryption=None, fixture_profile=None,
+                         file_dependency_profile=None, product_image=None):
     """Bind, authenticate, full-finish, parse and register product-used sources.
 
     Uses the default256MiB spool unless the owner explicitly selects the
@@ -27,6 +28,11 @@ def capture_owner_source(path, *, password, expected_sha256, spool_directory,
     UNSEALED. summary/scan/replay refuse until capture.supply_target_documents
     receives the owner's actual complete target-category snapshots. Historical
     values are not final rows, complete target evidence or restore approval.
+
+    file_dependency_profile is an independent explicit opt-in, activated only
+    after real source_binding digest verification. product_image must match the
+    native runner's immutable image pin. Private full-file receipts are retained
+    on captured.hocon_file_receipts; they grant no target acknowledgement.
 
     All use stays inside this context so private spool bytes are cleaned on
     success, failure or cancellation. No candidate builder/broker is invoked.
@@ -44,8 +50,15 @@ def capture_owner_source(path, *, password, expected_sha256, spool_directory,
                 if fixture_profile is not None:
                     from emqx_private_spool import fixture_limits
                     fixture_limits(fixture_profile, expected_sha256)
+                if file_dependency_profile is not None:
+                    from emqx_owner_file_hocon import PROFILE, IMAGE
+                    if file_dependency_profile != PROFILE or product_image != IMAGE:
+                        raise PrivateFailure('private-owner-source-refused')
+                elif product_image is not None:
+                    raise PrivateFailure('private-owner-source-refused')
                 private_binding = captured(source, fixture_profile=fixture_profile,
-                    verified_sha256=expected_sha256 if fixture_profile is not None else None)
+                    verified_sha256=expected_sha256 if fixture_profile is not None else None,
+                    file_dependency_profile=file_dependency_profile, product_image=product_image)
             yield captured, private_binding
     except (KeyboardInterrupt, SystemExit):
         raise PrivateFailure('private-owner-source-cancelled') from None

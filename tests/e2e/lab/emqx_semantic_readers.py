@@ -138,15 +138,23 @@ def _contract(raw, adapter, kind):
     return doc
 
 
-def read_hocon(raw, parser=None):
+def read_hocon(raw, parser=None, *, file_profile=None, product_image=None):
     """Return private string leaves/keys from a complete, nonresolving parse.
 
     Contract keys are exact. `references` lists ALL include/substitution/external
     dependencies encountered before resolution and must be empty. `document` is
     the full binary-key JSON representation, not a redacted/projected subset.
     No adapter is installed or inferred. Ordinary JSON is not treated as HOCON.
+    Default remains strict. An explicit owner file_profile plus immutable
+    product_image delegates to the fixed pinned-image vendor ACL reader.
     """
     try:
+        if file_profile is not None:
+            from emqx_owner_file_hocon import read_owner_file_hocon
+            return read_owner_file_hocon(raw, parser, profile=file_profile,
+                                         product_image=product_image)
+        if product_image is not None:
+            refuse()
         doc = _contract(raw, parser, 'emqx-hocon-json-v1')
         if (set(doc) != {'contract', 'version', 'input_sha256', 'input_bytes', 'complete',
                          'resolution', 'references', 'document'}

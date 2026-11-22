@@ -195,6 +195,7 @@ class Capture:
         self._product_selection = product_selection
         self.discarded = {"files": 0, "bytes": 0}
         self._hocon_parser = hocon_parser
+        self.hocon_file_receipts = ()
         self._spool_directory = spool_directory
         self._stack = None
         if not isinstance(password, str) or not password:
@@ -252,7 +253,8 @@ class Capture:
     def __repr__(self):
         return '<EMQX private capture>'
 
-    def __call__(self, source, *, fixture_profile=None, verified_sha256=None):
+    def __call__(self, source, *, fixture_profile=None, verified_sha256=None,
+                 file_dependency_profile=None, product_image=None):
         if self._used or self._closed:
             refuse()
         self._used = True
@@ -336,7 +338,10 @@ class Capture:
                     if self._hocon_parser is None:
                         raise PrivateFailure('private-source-format-unsupported')
                     try:
-                        source_options.extend(read_hocon(raw, self._hocon_parser).values)
+                        values = read_hocon(raw, self._hocon_parser,
+                            file_profile=file_dependency_profile, product_image=product_image)
+                        source_options.extend(values.values)
+                        self.hocon_file_receipts += getattr(values, 'file_receipts', ())
                     except SemanticRefused:
                         raise PrivateFailure('private-source-hocon-unsupported') from None
                 else:
