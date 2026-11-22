@@ -61,8 +61,8 @@ class CandidateAclComponentTests(unittest.TestCase):
                 observed.append(name);stages.mark('product_'+name)
             with self.subTest(shape=shape),self.assertRaises(BackupError):
                 ha_emqx.restore_target_settings(t,t.config,read,observe=observe)
-            self.assertEqual(observed,['acl_profile','acl_profile_builtin_'+shape])
-            self.assertEqual(stages.current(),'product_acl_profile_builtin_'+shape)
+            self.assertEqual(observed,['acl_profile','acl_profile_builtin_'+shape,'acl_profile_builtin_shape'])
+            self.assertEqual(stages.current(),'product_acl_profile_builtin_shape')
             self.assertEqual(t.receipts,0)
             self.assertEqual(t.loads,[])
             self.assertEqual(t.running_config,captured)

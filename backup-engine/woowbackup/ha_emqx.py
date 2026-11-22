@@ -515,7 +515,7 @@ CONFIG_EXPR = ('io:format("WOOWCFG:~s:END~n", '
                '[base64:encode(emqx_utils_json:encode(emqx:get_raw_config([])))]).')
 
 
-def read_effective_config(execute):
+def read_effective_config(execute, *, allow_authz_omission=False):
     """Read merged RAW broker config, not cooked schema-expanded defaults.
 
     CONFIG_EXPR calls get_raw_config; retain every returned field unchanged so
@@ -534,8 +534,13 @@ def read_effective_config(execute):
         if not isinstance(config, dict) or not config or not isinstance(config.get('authorization'), dict):
             raise ValueError()
         auth = config['authorization']
-        if auth.get('no_match') not in ('allow', 'deny') or auth.get('deny_action') not in ('ignore', 'disconnect'):
+        if type(allow_authz_omission) is not bool:
             raise ValueError()
+        for key, allowed in (('no_match', ('allow','deny')), ('deny_action', ('ignore','disconnect'))):
+            if key not in auth and allow_authz_omission:
+                continue
+            if auth.get(key) not in allowed:
+                raise ValueError()
         return config
     except (BackupError, ValueError, TypeError, RecursionError):
         raise BackupError('incompatible', '無法安全取得 EMQX 有效設定，已停止。') from None
@@ -819,7 +824,7 @@ def restore_target_settings(tmp, original, read_candidate, *, observe=None):
     Roots absent on the target cannot be restored by guessing an empty/default value.
     Any such extra operational root remains a failure until removal is implemented.
     """
-    before = read_effective_config(read_candidate)
+    before = read_effective_config(read_candidate, allow_authz_omission=True)
     expected = preserved_settings(original)
     actual = preserved_settings(before)
     if set(actual) - set(expected):
@@ -834,7 +839,7 @@ def restore_target_settings(tmp, original, read_candidate, *, observe=None):
     if observe is not None:
         observe('acl_profile')
         observe(imported_acl_profile_stage(before))
-    intermediate = disabled_intermediate(original, before)
+    intermediate = disabled_intermediate(original, before, observe=observe)
     def load_settings(settings):
         snippet = json.dumps(settings, ensure_ascii=True).encode()
         try:
@@ -852,14 +857,14 @@ def restore_target_settings(tmp, original, read_candidate, *, observe=None):
     if intermediate is not None:
         if observe is not None: observe('acl_baseline')
         baseline = candidate_acl_receipt(tmp)
-        if read_effective_config(read_candidate) != before:
+        if read_effective_config(read_candidate, allow_authz_omission=True) != before:
             refuse()
         if observe is not None: observe('acl_disable')
         load_settings({'authorization': intermediate['authorization']})
         if observe is not None: observe('acl_afterdisable')
-        if (read_effective_config(read_candidate) != intermediate
+        if (read_effective_config(read_candidate, allow_authz_omission=True) != intermediate
                 or candidate_acl_receipt(tmp) != baseline
-                or read_effective_config(read_candidate) != intermediate):
+                or read_effective_config(read_candidate, allow_authz_omission=True) != intermediate):
             refuse()
     if changed:
         if intermediate is not None and observe is not None: observe('acl_restore')

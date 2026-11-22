@@ -11,6 +11,11 @@ from .ha_emqx_authorizers import builtin_database_references, builtin_database_s
 
 ACL_PROFILE_STAGES = frozenset(('acl_profile','acl_profile_builtin_absent')) | frozenset(
     'acl_profile_builtin_'+shape for shape in BUILTIN_SHAPES)
+ACL_PROFILE_REASONS = frozenset(('auth_shape','auth_unknownfields','auth_no_match','auth_deny_action',
+    'sources_shape','builtin_duplicate','builtin_shape','cache_shape','cache_unknownfields',
+    'cache_enable','cache_max_size','cache_ttl','cache_excludes','source_shape',
+    'source_duplicate','source_type','file_fields','file_enable','file_path'))
+ACL_PROFILE_STAGES = ACL_PROFILE_STAGES | frozenset('acl_profile_'+reason for reason in ACL_PROFILE_REASONS)
 ACL_REMOVAL_STAGES = ACL_PROFILE_STAGES | frozenset(('acl_baseline','acl_disable','acl_afterdisable','acl_restore','acl_final'))
 
 # Fixed table/code only. Whole bounded rows and persistent schema are hashed,
@@ -107,54 +112,70 @@ def imported_acl_profile_stage(imported):
     return 'acl_profile_builtin_'+builtin_database_shape(builtin[0])
 
 
-def disabled_intermediate(original, imported):
-    """Return full copied config only for FILE-only -> removed enabled builtin.
+def disabled_intermediate(original, imported, *, observe=None):
+    """FILE-only removal: preserve raw omissions and every value except enable.
 
-    Exact raw builtin type/enable is required, even when disabled. No custom
-    source/type transition is allowed through this preservation path.
+    Unknown shapes refuse with fixed reasons. No native defaults are invented;
+    the final target restore and strict runtime policy checks remain mandatory.
     """
-    target=original.get('authorization',{}).get('sources')
-    sources=imported.get('authorization',{}).get('sources')
+    def fail(reason):
+        if observe is not None: observe('acl_profile_'+reason)
+        refuse()
+    if (type(original) is not dict or type(imported) is not dict
+            or type(original.get('authorization')) is not dict
+            or type(imported.get('authorization')) is not dict):
+        fail('auth_shape')
+    target=original['authorization'].get('sources')
+    sources=imported['authorization'].get('sources')
     if type(target) is not list or not target or any(type(s) is not dict or s.get('type')!='file' for s in target):
         return None
     if type(sources) is not list:
-        refuse()
+        fail('sources_shape')
     builtins=[s for s in sources if type(s) is dict and s.get('type')=='built_in_database']
     if not builtins:
         return None
     if len(builtins)!=1:
-        refuse()
-    builtin_database_references(builtins[0])
+        fail('builtin_duplicate')
+    def builtin(source):
+        try: builtin_database_references(source)
+        except BackupError: fail('builtin_shape')
+    builtin(builtins[0])
     if not builtins[0]['enable']:
         return None
     for auth in (original['authorization'],imported['authorization']):
-        if (type(auth) is not dict or set(auth)-{'sources','no_match','deny_action','cache'}
-                or auth.get('no_match') not in ('allow','deny')
-                or auth.get('deny_action') not in ('ignore','disconnect')):
-            refuse()
+        if set(auth)-{'sources','no_match','deny_action','cache'}:
+            fail('auth_unknownfields')
+        for key,allowed in (('no_match',('allow','deny')),('deny_action',('ignore','disconnect'))):
+            if key in auth and (type(auth[key]) is not str or auth[key] not in allowed):
+                fail('auth_'+key)
         if 'cache' in auth:
             cache=auth['cache']
-            if (type(cache) is not dict or set(cache)-{'enable','max_size','ttl','excludes'}
-                    or ('enable' in cache and type(cache['enable']) is not bool)
-                    or ('max_size' in cache and (type(cache['max_size']) is not int or cache['max_size']<=0))
-                    or ('ttl' in cache and (type(cache['ttl']) is not str or not re.fullmatch(r'[0-9]+(?:ms|s|m|h|d)',cache['ttl'])))
-                    or ('excludes' in cache and cache['excludes']!=[])):
-                refuse()
+            if type(cache) is not dict: fail('cache_shape')
+            if set(cache)-{'enable','max_size','ttl','excludes'}: fail('cache_unknownfields')
+            if 'enable' in cache and type(cache['enable']) is not bool: fail('cache_enable')
+            if 'max_size' in cache and (type(cache['max_size']) is not int or not 1<=cache['max_size']<=1048576):
+                fail('cache_max_size')
+            if 'ttl' in cache and (type(cache['ttl']) is not str or not re.fullmatch(r'[0-9]+(?:ms|s|m|h|d)',cache['ttl'])):
+                fail('cache_ttl')
+            # Pinned emqx_schema fields(authz_cache) declares array(binary()).
+            # These are passive topic filters, not file/loader references.
+            if 'excludes' in cache and (type(cache['excludes']) is not list or len(cache['excludes'])>4096
+                    or any(type(item) is not str or len(item.encode('utf-8'))>65536 for item in cache['excludes'])):
+                fail('cache_excludes')
         seen=set()
         for source in auth['sources']:
-            if type(source) is not dict or type(source.get('type')) is not str or source['type'] in seen:
-                refuse()
-            kind=source.get('type')
+            if type(source) is not dict or type(source.get('type')) is not str: fail('source_shape')
+            kind=source['type']
+            if kind in seen: fail('source_duplicate')
             if kind=='built_in_database':
-                builtin_database_references(source)
+                builtin(source)
             elif kind=='file':
-                if (set(source)-{'type','enable','path'} or not {'type','path'}<=set(source)
-                        or ('enable' in source and type(source['enable']) is not bool)
-                        or type(source['path']) is not str or not source['path'].startswith('/')
-                        or '\x00' in source['path'] or '$' in source['path']):
-                    refuse()
+                if set(source)-{'type','enable','path'} or not {'type','path'}<=set(source): fail('file_fields')
+                if 'enable' in source and type(source['enable']) is not bool: fail('file_enable')
+                if (type(source['path']) is not str or not source['path'].startswith('/')
+                        or '\x00' in source['path'] or '$' in source['path']): fail('file_path')
             else:
-                refuse()
+                fail('source_type')
             seen.add(kind)
     disabled=copy.deepcopy(imported)
     next(s for s in disabled['authorization']['sources'] if s['type']=='built_in_database')['enable']=False
