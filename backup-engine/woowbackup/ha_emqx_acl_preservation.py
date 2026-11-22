@@ -9,6 +9,8 @@ import re
 from .errors import BackupError
 from .ha_emqx_authorizers import builtin_database_references
 
+ACL_REMOVAL_STAGES = frozenset(('acl_baseline','acl_disable','acl_afterdisable','acl_restore','acl_final'))
+
 # Fixed table/code only. Whole bounded rows and persistent schema are hashed,
 # never emitted. Each receipt uses one native transaction and no automatic retry.
 ACL_RECEIPT_EXPR = ' '.join('''
@@ -80,6 +82,12 @@ def acl_receipt(execute):
         return tuple(match.groups())
     except (ValueError,TypeError,AttributeError):
         refuse()
+
+
+def candidate_acl_receipt(tmp):
+    """Only the invocation-owned emqx-new candidate; fixed time/output bounds."""
+    return acl_receipt(lambda command: tmp.exec('emqx-new', command, timeout=10,
+                                               max_output=256, check=False))
 
 
 def disabled_intermediate(original, imported):

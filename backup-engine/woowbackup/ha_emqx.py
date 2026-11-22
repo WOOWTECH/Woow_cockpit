@@ -810,7 +810,7 @@ def preserved_bootstrap_authn(original, imported):
     return rows
 
 
-def restore_target_settings(tmp, original, read_candidate):
+def restore_target_settings(tmp, original, read_candidate, *, observe=None):
     """Replace changed target setting roots, not merge stale/imported fields into them.
 
     Roots absent on the target cannot be restored by guessing an empty/default value.
@@ -827,7 +827,7 @@ def restore_target_settings(tmp, original, read_candidate):
         changed['authentication'] = authn
     if set(changed) & ha_emqx_settings.IMMUTABLE_ROOTS:
         raise BackupError('incompatible', 'EMQX 唯讀啟動設定在匯入後改變，已停止。')
-    from .ha_emqx_acl_preservation import disabled_intermediate, acl_receipt, refuse
+    from .ha_emqx_acl_preservation import disabled_intermediate, candidate_acl_receipt, refuse
     intermediate = disabled_intermediate(original, before)
     def load_settings(settings):
         snippet = json.dumps(settings, ensure_ascii=True).encode()
@@ -844,23 +844,26 @@ def restore_target_settings(tmp, original, read_candidate):
             raise BackupError('incompatible', '無法恢復 EMQX 目標設定，已停止。') from None
     baseline = None
     if intermediate is not None:
-        receipt_read = lambda command: tmp.exec('emqx-new', command, timeout=10,
-                                                max_output=256, check=False)
-        baseline = acl_receipt(receipt_read)
+        if observe is not None: observe('acl_baseline')
+        baseline = candidate_acl_receipt(tmp)
         if read_effective_config(read_candidate) != before:
             refuse()
+        if observe is not None: observe('acl_disable')
         load_settings({'authorization': intermediate['authorization']})
+        if observe is not None: observe('acl_afterdisable')
         if (read_effective_config(read_candidate) != intermediate
-                or acl_receipt(receipt_read) != baseline
+                or candidate_acl_receipt(tmp) != baseline
                 or read_effective_config(read_candidate) != intermediate):
             refuse()
     if changed:
+        if intermediate is not None and observe is not None: observe('acl_restore')
         load_settings(changed)
+    if intermediate is not None and observe is not None: observe('acl_final')
     after = read_effective_config(read_candidate)
     if intermediate is not None:
         final_expected = dict(intermediate)
         final_expected.update(changed)
-        if (after != final_expected or acl_receipt(receipt_read) != baseline
+        if (after != final_expected or candidate_acl_receipt(tmp) != baseline
                 or read_effective_config(read_candidate) != final_expected):
             refuse()
     if preserved_settings(after) != expected or (authn is not None and after.get('authentication') != authn):
@@ -915,7 +918,8 @@ def target_broker(work, tmp, target, export, ids, *, hint='', target_snapshot=No
     if b'imported successfully' not in out:
         raise BackupError('incompatible', 'HA 的 EMQX 資料匯入時發生錯誤（部分資料無法匯入），已停止。' + hint)
     if target_config is not None:
-        restore_target_settings(tmp, target_config, read_candidate)
+        restore_target_settings(tmp, target_config, read_candidate,
+                                observe=getattr(work, '_emqx_build_stage', None))
         if image_fingerprints is not None and tls_fingerprints(read_candidate, image_fingerprints) != image_fingerprints:
             raise BackupError('incompatible', 'EMQX 匯入後憑證與目標不一致，已停止。')
         check_candidate_bootstrap(tmp, target, read_effective_config(read_candidate))
