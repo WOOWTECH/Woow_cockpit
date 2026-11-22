@@ -47,6 +47,9 @@ class DisabledVendorTLS:
             unsupported()
 
     def allows(self, config, path, text):
+        if (len(path) == 5 and path[:4] == ('dashboard','listeners','https','ssl_options')
+                and path[4] in FILES):
+            return self.dashboard_https_defaults(config) and text == '${EMQX_ETC_DIR}/certs/' + FILES[path[4]]
         if path == ('authentication', 0, 'bootstrap_file'):
             return self.bootstrap_allows(config, text)
         if (len(path) != 5 or path[0] != 'listeners' or path[1] not in ('ssl', 'wss')
@@ -58,6 +61,24 @@ class DisabledVendorTLS:
                 and text == '${EMQX_ETC_DIR}/certs/' + filename
                 and '/opt/emqx/etc/certs/' + filename in self.paths)
 
+
+    def dashboard_https_defaults(self, config):
+        try:
+            https=config['dashboard']['listeners']['https']
+            if type(https) is not dict or type(https.get('bind')) is not int or https['bind'] != 0:
+                return False
+            options=https.get('ssl_options')
+            if type(options) is not dict:
+                return False
+            for key,filename in FILES.items():
+                expected='${EMQX_ETC_DIR}/certs/'+filename
+                if (type(options.get(key)) not in (str,bytes)
+                        or options[key] not in (expected,expected.encode())
+                        or '/opt/emqx/etc/certs/'+filename not in self.paths):
+                    return False
+            return True
+        except (KeyError,TypeError):
+            return False
 
     def acl_source(self, config, path, source):
         if (len(path) != 3 or path[:2] != ('authorization', 'sources')

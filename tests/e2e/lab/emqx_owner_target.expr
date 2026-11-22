@@ -184,7 +184,8 @@ InertTlsCallback = fun(Callback,Path) ->
     Info = [erlang:fun_info(Callback,K) || K <- [module,name,arity,type,env]],
     Exact = [{module,emqx_tls_psk},{name,lookup},{arity,3},{type,external},{env,[]}],
     AllowedPaths = [[{map,listeners},{map,ssl},{map,default},{map,ssl_options},{map,user_lookup_fun},{tuple,0}],
-                    [{map,listeners},{map,wss},{map,default},{map,ssl_options},{map,user_lookup_fun},{tuple,0}]],
+                    [{map,listeners},{map,wss},{map,default},{map,ssl_options},{map,user_lookup_fun},{tuple,0}],
+                    [{map,dashboard},{map,listeners},{map,https},{map,ssl_options},{map,user_lookup_fun},{tuple,0}]],
     case Info =:= Exact andalso lists:member(Path,AllowedPaths) of
         false -> unsupported;
         true ->
