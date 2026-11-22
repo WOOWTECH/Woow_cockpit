@@ -264,12 +264,10 @@ def _restore_and_rollback(ctx,app,provision,backup_id,state,*,clients=None,sessi
 
 
 def _post_activity_capture(provision,prior_registry):
-    """Mandatory supplemental capture after the last phase client/API activity.
+    """Capture values through independently reverified current issued runtime.
 
-    Current 7d12efd collector retains the INITIAL absence/reference profile. It
-    cannot authorize a different post-restore CID or active source roots. Refuse
-    until a separate fixed trusted post-operation read scope is integrated; never
-    clear/rebind the old issued record. No fallback to snapshots or projected hashes.
+    The value-only collector proves current CID/pins inside the exclusion lease;
+    it neither rebinds the original file capability nor issues a build capability.
     """
     from emqx_owner_fixture_files import _record
     from emqx_post_restore_values import collect_post_restore_values
@@ -277,17 +275,11 @@ def _post_activity_capture(provision,prior_registry):
     current=_inspect(provision)
     cid=current.get('Id')
     if (owner is not provision or type(cid) is not str or re.fullmatch('[0-9a-f]{64}',cid) is None
-            or record['cid'] is None or cid!=record['cid']):
+            or record['cid'] is None):
         raise RealOwnerRefused('post_capture_identity')
-    r,f=provision.runner,provision.fixture
-    def evaluate(expr):
-        result=r.podman('exec',f.prefix,'emqx','eval',expr,timeout=30,max_output=MAX_WIRE,check=False)
-        if result.returncode or type(result.stdout) is not bytes or len(result.stdout)>MAX_WIRE:raise ValueError()
-        return result.stdout
     try:
-        return collect_post_restore_values(prior_registry=prior_registry,private_eval=evaluate,
-            quiesce=lambda:fixture_quiescence(provision),
-            vendor_observer=_composite_observer_factory()(provision))
+        return collect_post_restore_values(prior_registry=prior_registry,provision=provision,
+            expected_container_id=cid,quiesce=lambda:fixture_quiescence(provision))
     except BaseException:
         raise RealOwnerRefused('post_capture') from None
 

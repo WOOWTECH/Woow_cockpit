@@ -407,7 +407,7 @@ class FoundationTests(unittest.TestCase):
         self.assertEqual(events,['restore','mqtt','restore','mqtt','mqtt'])
         self.assertEqual(mqtt.call_count,3)
 
-    def test_changed_postrestore_cid_never_clears_or_rebinds_original_issued_cap(self):
+    def test_changed_postrestore_cid_uses_independent_value_proof_without_rebinding(self):
         from test_emqx_owner_fixture_files import FixtureFilesTests
         import emqx_post_restore_values as post
         issued=FixtureFilesTests();issued.setUp();self.addCleanup(issued.doCleanups)
@@ -416,10 +416,21 @@ class FoundationTests(unittest.TestCase):
         current=dict(issued.doc[0]);current['Id']='b'*64
         with patch.object(m,'_inspect',return_value=current), \
              patch.object(post,'collect_post_restore_values') as collect:
+            prior=object()
+            result=m._post_activity_capture(issued.provision,prior)
+            self.assertIs(result,collect.return_value)
+            kwargs=collect.call_args.kwargs
+            self.assertIs(kwargs['prior_registry'],prior)
+            self.assertIs(kwargs['provision'],issued.provision)
+            self.assertEqual(kwargs['expected_container_id'],'b'*64)
+            self.assertEqual(set(kwargs),{'prior_registry','provision','expected_container_id','quiesce'})
+            with patch.object(m,'fixture_quiescence') as lease:
+                kwargs['quiesce']()
+                lease.assert_called_once_with(issued.provision)
+            collect.side_effect=ValueError()
             with self.assertRaises(m.RealOwnerRefused) as caught:
-                m._post_activity_capture(issued.provision,object())
-            self.assertEqual(caught.exception.phase,'post_capture_identity')
-            collect.assert_not_called()
+                m._post_activity_capture(issued.provision,prior)
+            self.assertEqual(caught.exception.phase,'post_capture')
         self.assertEqual(files._record(issued.cap)[0]['cid'],before)
         self.assertEqual(before,'a'*64)
 
