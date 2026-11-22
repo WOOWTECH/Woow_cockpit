@@ -13,7 +13,7 @@ import emqx_private_owner_driver as driver
 import emqx_owner_source_capture as source_owner
 import emqx_real_candidate as real
 import emqx_owner_vendor_files as vendor_files
-from emqx_target_vendor_policy import FILES
+from emqx_target_vendor_policy import FILES, REFERENCES
 from emqx_private_boundary import PrivateFailure
 from emqx_runtime_credentials import RuntimeRegistry, login_registered
 from emqx_runtime_workflow import CombinedRegistry
@@ -116,9 +116,9 @@ class DriverTests(unittest.TestCase):
         self.vendor.setUp()
         self.vendor.broker = BROKER
         self.vendor.inspect[0]['Name'] = '/' + BROKER
-        self.vendor.paths = sorted(p for p in vendor_files.PATHS if '/certs/' in p or p == vendor_files.BOOTSTRAP)
+        self.vendor.paths = sorted(vendor_files.ALIASES[p] for p in REFERENCES)
         for doc in (self.vendor.image, self.vendor.actual):
-            doc['files'] = [f for f in doc['files'] if '/certs/' in f['path'] or f['path'] == vendor_files.BOOTSTRAP]
+            doc['files'] = [f for f in doc['files'] if f['path'] in self.vendor.paths]
         self.inspect_override = None
         self.parser = OwnerHarnessTests.hocon
         self.evidence = self.root/'evidence'

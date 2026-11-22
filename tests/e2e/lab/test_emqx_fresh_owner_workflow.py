@@ -250,7 +250,7 @@ class WorkflowTests(unittest.TestCase):
                     from test_emqx_owner_target import typed,cooked_config,Atom
                     config=cooked_config()
                     config['authorization']={'sources':[{'type':Atom('file'),'enable':True,
-                        'path':'${EMQX_ETC_DIR}/acl.conf'}]}
+                        'path':'/opt/emqx/etc/unobserved-private-acl.conf'}]}
                     doc['config']=typed(config)
                 self.runner.target_edit=file_authorizer
             with patch.object(workflow,'source_profile',return_value=self.profile), \
