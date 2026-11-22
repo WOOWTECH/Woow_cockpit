@@ -57,7 +57,7 @@ class NativeDiagnosticTests(unittest.TestCase):
         self.assertNotIn('native_fixed_variable', report)
         self.assertNotIn('actual_native_expression_and_projection', report['checks'])
 
-    def test_native_source_stage_allowlists_match_and_support_does_not_expand(self):
+    def test_native_source_stage_allowlists_match_and_unknown_storage_still_refuses(self):
         expression = Path(adapter.__file__).with_name('emqx_owner_target.expr').read_text()
         stages = set(re.findall(r'put\(woow_target_stage, ([a-z_]+)\)', expression))
         self.assertEqual(stages, adapter.NATIVE_STAGES)

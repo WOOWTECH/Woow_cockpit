@@ -4,9 +4,15 @@ set -euo pipefail
 source "$(dirname "$0")/lib.sh"
 device_vars d
 git -C "$REPO_ROOT" diff --quiet && git -C "$REPO_ROOT" diff --cached --quiet || die 'commit tested code first'
-exec 9>/tmp/woowbk-dev-d-mutation.lock
+main_lock=/tmp/woowbk-dev-d-mutation.lock
+[[ -f "$main_lock" && ! -L "$main_lock" && -O "$main_lock" ]] || die 'unsafe existing main lock'
+exec 9<"$main_lock"
+[[ /proc/self/fd/9 -ef "$main_lock" && -f /proc/self/fd/9 && -O /proc/self/fd/9 && "$(stat -Lc %h /proc/self/fd/9)" = 1 ]] || die 'main lock identity refused'
 flock -n 9 || die 'dev-d mutation owner busy'
-exec 8>/tmp/headscale-dev-d-private-volume.lock
+volume_lock=/tmp/headscale-dev-d-private-volume.lock
+[[ -f "$volume_lock" && ! -L "$volume_lock" && -O "$volume_lock" ]] || die 'unsafe existing volume lock'
+exec 8<"$volume_lock"
+[[ /proc/self/fd/8 -ef "$volume_lock" && -f /proc/self/fd/8 && -O /proc/self/fd/8 && "$(stat -Lc %h /proc/self/fd/8)" = 1 ]] || die 'volume lock identity refused'
 flock -n 8 || die 'headscale mutation owner busy'
 postflight() {
     "$LAB_DIR/owner.sh" d --verify-isolation

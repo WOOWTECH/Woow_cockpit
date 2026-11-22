@@ -18,7 +18,7 @@ NATIVE_STAGES = frozenset(('typed_setup','effective_config','provider_state','na
     'serialize_config','serialize_provider','encode_reply'))
 NATIVE_REASONS = frozenset(('undef','badmatch','bad_argument','function_clause',
     'no_exists','bad_type','not_active','node_not_running','no_transaction','system_limit',
-    'storage_null_copies','storage_external','storage_unknown','storage_unsupported',
+    'storage_null_copies','storage_null_nonempty','storage_external','storage_unknown','storage_unsupported',
     'fragments_unsupported','table_type_unsupported','table_row_limit',
     'table_count_mismatch','table_receipt_changed','config_changed','provider_changed',
     'ticker_not_suspended','ticker_changed','unsupported_term','native_refused'))
