@@ -5,7 +5,6 @@ controller captures it and retains the exact scanned bytes in a private file.
 Only the two existing immutable SQL source profiles are selectable.
 """
 import hashlib
-import json
 import os
 from pathlib import Path
 import selectors

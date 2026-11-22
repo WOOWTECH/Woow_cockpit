@@ -211,7 +211,6 @@ def preflight_owner(target, backup, *, source_password, expected_sha256,
     try:
         import os
         import stat
-        from emqx_private_evidence import SOURCE_NAMES
         with _joined_owner_preflight(target, backup,
                 source_password=source_password, expected_sha256=expected_sha256,
                 spool_directory=spool_directory, source_options=source_options,

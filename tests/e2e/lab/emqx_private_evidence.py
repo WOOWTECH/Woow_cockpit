@@ -38,7 +38,7 @@ def names_receipt(phase, result, sources):
 
 
 def publish(directory, name, *, registry, phase, result, coverage, coverage_mode='counts'):
-    """Write only names/counts/status, after scanning the identical JSON bytes.
+    """Write only fixed names/counts/status after scanning identical output bytes.
 
     Caller owns a private directory. No overwrite, symlink traversal, arbitrary
     diagnostic text, paths or token bodies are accepted. A failed write unlinks
