@@ -8,7 +8,7 @@ import unittest
 SCRIPT=Path(__file__).with_name('run_emqx_arm_cold.sh')
 
 class ControllerTests(unittest.TestCase):
-    def run_case(self,child=0,post=0,lock_kind=None):
+    def run_case(self,child=0,post=0,lock_kind=None,args=()):
         with tempfile.TemporaryDirectory() as directory:
             root=Path(directory)
             (root/'owner.lock').write_bytes(b'preserve-main-lock')
@@ -31,7 +31,7 @@ class ControllerTests(unittest.TestCase):
             source=SCRIPT.read_text().replace('/tmp/woowbk-dev-d-mutation.lock',directory+'/owner.lock').replace('/tmp/headscale-dev-d-private-volume.lock',directory+'/volume.lock')
             (root/'run.sh').write_text(source)
             env=dict(os.environ,PATH=directory+':'+os.environ['PATH'],CHILD_STATUS=str(child),POST_STATUS=str(post))
-            result=subprocess.run(['bash',str(root/'run.sh')],env=env,capture_output=True,text=True)
+            result=subprocess.run(['bash',str(root/'run.sh'),*args],env=env,capture_output=True,text=True)
             self.assertEqual((root/'owner.lock').read_bytes(),b'preserve-main-lock')
             self.assertEqual((root/'volume.lock').read_bytes(),b'preserve-volume-lock')
             return result
@@ -59,3 +59,11 @@ class ControllerTests(unittest.TestCase):
                 result=self.run_case(lock_kind=kind)
                 self.assertEqual(result.returncode,1,result.stderr)
                 self.assertEqual(result.stdout,'')
+
+    def test_both_fixed_preflight_modes_still_require_successful_postflight(self):
+        for mode in ('--preflight','--x86-preflight'):
+            for post,expected in ((0,0),(1,1)):
+                with self.subTest(mode=mode,post=post):
+                    result=self.run_case(post=post,args=(mode,))
+                    self.assertEqual(result.returncode,expected,result.stderr)
+                    self.assertEqual(result.stdout,'ARM POSTFLIGHT '+('PASSED' if post==0 else 'REFUSED')+'\n')

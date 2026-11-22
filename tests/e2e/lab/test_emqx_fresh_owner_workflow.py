@@ -314,3 +314,110 @@ class WorkflowTests(unittest.TestCase):
                 bridge.assert_not_called()
             self.assertNotIn('actual-target-consumer',self.runner.events)
             self.assert_owned_cleanup()
+
+    def preflight(self, frame=None, mode='--source-vendor-acl-sql-aliases'):
+        return workflow.preflight_fresh_frame(self.frame() if frame is None else frame,
+            runner=self.runner, private_parent=self.root, source_mode=mode)
+
+    def test_preflight_only_actual_capture_join_returns_exact_scanned_bytes_after_cleanup(self):
+        from emqx_runtime_workflow import CombinedRegistry
+        from contextlib import contextmanager
+        scanned, captures = [], []
+        scan = CombinedRegistry.scan
+        capture = driver.capture_owner_source
+        @contextmanager
+        def held(*args, **kwargs):
+            with capture(*args, **kwargs) as result:
+                captures.append(result[0])
+                yield result
+        def check_scan(registry, raw):
+            self.assertFalse(captures[-1]._closed)
+            self.assertIn('ticker-suspended',self.runner.events)
+            scan(registry,raw)
+            if raw: scanned.append(raw)
+        with patch.object(workflow,'source_profile',return_value=self.profile), \
+             patch.object(source_owner,'native_hocon',self.parser), \
+             patch.object(source_owner,'native_cold_history',decoder), \
+             patch.object(driver,'capture_owner_source',held), \
+             patch.object(CombinedRegistry,'scan',check_scan), \
+             patch.object(driver,'build_captured_candidate') as bridge, \
+             patch.object(workflow,'build_owner_candidate') as build:
+            raw = self.preflight()
+            bridge.assert_not_called(); build.assert_not_called()
+        self.assertEqual(scanned,[raw,raw])  # publish AND exact private transport rescan
+        self.assertEqual(json.loads(raw)['phase'],'preflight')
+        self.assertEqual(json.loads(raw)['result'],'passed')
+        self.assertTrue(captures[-1]._closed)
+        self.assertEqual(self.runner.events.count('held-vendor-observed'),2)
+        self.assert_owned_cleanup()
+        self.assertEqual(list(self.evidence.iterdir()),[])
+        self.assertEqual(len(self.runner.credentials),1)  # only invocation-fresh empty target
+
+    def test_preflight_refusals_never_return_evidence_or_enter_candidate(self):
+        for case in ('cold-receipt','arch','target','login','late-vendor'):
+            self.runner = FixtureRunner()
+            profile = self.profile
+            if case == 'cold-receipt': profile = replace(profile,cold_receipt=(28,57502))
+            if case == 'arch': profile = replace(profile,arch='amd64')
+            if case == 'target': self.runner.target_edit = lambda doc:doc.update(generation='wrong')
+            if case == 'login': self.runner.login_status = 401
+            # A real observer exit compares the actual file identity again.
+            if case == 'late-vendor':
+                evaluate = self.runner.vendor.eval_callback
+                def changed(expression):
+                    if self.runner.events.count('held-vendor-observed') == 2:
+                        self.runner.vendor.actual['files'][0]['identity'][2] += 1
+                    return evaluate(expression)
+                self.runner.vendor.eval_callback = changed
+            with self.subTest(case=case), patch.object(workflow,'source_profile',return_value=profile), \
+                 patch.object(source_owner,'native_hocon',self.parser), \
+                 patch.object(source_owner,'native_cold_history',decoder), \
+                 patch.object(driver,'build_captured_candidate') as bridge:
+                with self.assertRaisesRegex(PrivateFailure,'^private-fresh-preflight-refused$'): self.preflight()
+                bridge.assert_not_called()
+            self.assert_owned_cleanup()
+            if case in ('cold-receipt','arch'):
+                self.assertNotIn('actual-target-consumer',self.runner.events)
+            self.assertEqual(list(self.evidence.iterdir()),[])
+
+    def test_preflight_strict_framing_and_fixed_mode_before_any_target_creation(self):
+        class Late(io.BytesIO):
+            def finish(self): raise ValueError('generated-private-late-failure')
+        good = self.frame().getvalue()
+        cases = [io.BytesIO(good[:-1]),io.BytesIO(good+b'x'),io.BytesIO(good[:-1]+b'x'),Late(good),
+                 io.BytesIO(struct.pack('!I',0)),io.BytesIO(struct.pack('!I',1025)),
+                 io.BytesIO(struct.pack('!I',1)+b'x'+struct.pack('!Q',0))]
+        for frame in cases:
+            with self.subTest(frame=type(frame).__name__), patch.object(workflow,'source_profile',return_value=self.profile):
+                with self.assertRaises(PrivateFailure): self.preflight(frame)
+            self.assertEqual(self.runner.calls,[])
+            self.assert_owned_cleanup()
+        with self.assertRaises(PrivateFailure): self.preflight(io.BytesIO(b''),mode='--source')
+        self.assertEqual(self.runner.calls,[])
+
+    def test_private_child_cli_actual_consumer_emits_only_evidence_frame_after_cleanup(self):
+        import emqx_framed_preflight as framed
+        output = io.BytesIO()
+        with patch.object(workflow,'source_profile',return_value=self.profile), \
+             patch.object(source_owner,'native_hocon',self.parser), \
+             patch.object(source_owner,'native_cold_history',decoder), \
+             patch('emqx_arm_source_owner._owner_realm',return_value=True), \
+             patch('emqx_adapter_owner.LabOwnerRunner',return_value=self.runner), \
+             patch.object(framed.Path,'home',return_value=self.root), \
+             patch.object(framed.sys,'stdin',SimpleNamespace(buffer=self.frame())), \
+             patch.object(framed.sys,'stdout',SimpleNamespace(buffer=output)), \
+             patch.object(driver,'build_captured_candidate') as bridge:
+            code = framed.main(['--preflight'])
+            bridge.assert_not_called()
+        self.assertEqual(code,0)
+        wire = output.getvalue()
+        self.assertTrue(wire.startswith(framed.MAGIC))
+        start=len(framed.MAGIC)+4
+        size=struct.unpack('!I',wire[len(framed.MAGIC):start])[0]
+        raw=wire[start:start+size]
+        import hashlib
+        self.assertEqual(wire[start+size:],hashlib.sha256(raw).digest())
+        self.assertEqual(json.loads(raw)['result'],'passed')
+        self.assertNotIn(self.password.encode(),wire)
+        self.assertEqual(list(self.root.glob('emqx-preflight-private-*')),[])
+        self.assert_owned_cleanup()

@@ -114,6 +114,41 @@ def _held_vendor_observer(*, runner, broker):
     return observe
 
 
+@contextmanager
+def _joined_owner_preflight(target, backup, *, source_password, expected_sha256,
+        spool_directory, source_options, runner, quiesce, login_url, username,
+        password, evidence_directory, evidence_name, expected_source_profile=None):
+    """Actual held producers shared by build and preflight-only owner callsites."""
+    if (type(source_options) is not dict or set(source_options) - {
+            'fixture_profile', 'file_dependency_profile', 'product_image'}
+            or not callable(quiesce)):
+        raise ValueError()
+    broker = target.container
+    transport = curl_login_transport(runner=runner, broker=broker, login_url=login_url)
+
+    def evaluate(expression):
+        response = runner.podman('exec', broker, 'emqx', 'eval', expression,
+                                timeout=30, max_output=MAX_WIRE, check=False)
+        if (response.returncode or type(response.stdout) is not bytes
+                or len(response.stdout) > MAX_WIRE):
+            raise ValueError()
+        return response.stdout
+
+    with capture_owner_source(backup, password=source_password,
+            expected_sha256=expected_sha256, spool_directory=spool_directory,
+            required_encryption='v3', **dict(source_options)) as (captured, binding):
+        if expected_source_profile is not None:
+            from emqx_arm_source_owner import validate_source_capture
+            validate_source_capture(captured, binding, expected_source_profile)
+        with owner_target_readers(private_eval=evaluate, quiesce=quiesce,
+                vendor_observer=_held_vendor_observer(runner=runner, broker=broker)) as readers:
+            session = owner_preflight(captured=captured, target_readers=readers,
+                target_generation=readers.generation, private_transport=transport,
+                username=username, password=password, evidence_directory=evidence_directory,
+                evidence_name=evidence_name)
+            yield captured, binding, session
+
+
 def build_owner_candidate(work, app, adapter, target, backup, staging, job_id, *,
                           source_password, expected_sha256, spool_directory,
                           source_options, runner, quiesce, login_url,
@@ -131,34 +166,60 @@ def build_owner_candidate(work, app, adapter, target, backup, staging, job_id, *
     candidate/restore acceptance. Original source/target/core guards are unchanged.
     """
     try:
-        if (type(source_options) is not dict or set(source_options) - {
-                'fixture_profile', 'file_dependency_profile', 'product_image'}
-                or not callable(quiesce)):
-            raise ValueError()
-        broker = target.container
-        transport = curl_login_transport(runner=runner, broker=broker, login_url=login_url)
-
-        def evaluate(expression):
-            response = runner.podman('exec', broker, 'emqx', 'eval', expression,
-                                    timeout=30, max_output=MAX_WIRE, check=False)
-            if (response.returncode or type(response.stdout) is not bytes
-                    or len(response.stdout) > MAX_WIRE):
-                raise ValueError()
-            return response.stdout
-
-        with capture_owner_source(backup, password=source_password,
-                expected_sha256=expected_sha256, spool_directory=spool_directory,
-                required_encryption='v3', **dict(source_options)) as (captured, binding):
-            with owner_target_readers(private_eval=evaluate, quiesce=quiesce,
-                    vendor_observer=_held_vendor_observer(runner=runner, broker=broker)) as readers:
-                session = owner_preflight(captured=captured, target_readers=readers,
-                    target_generation=readers.generation, private_transport=transport,
-                    username=username, password=password, evidence_directory=evidence_directory,
-                    evidence_name=evidence_name)
-                return build_captured_candidate(work, app, adapter, target, backup, staging,
+        with _joined_owner_preflight(target, backup,
+                source_password=source_password, expected_sha256=expected_sha256,
+                spool_directory=spool_directory, source_options=source_options,
+                runner=runner, quiesce=quiesce, login_url=login_url, username=username,
+                password=password, evidence_directory=evidence_directory,
+                evidence_name=evidence_name) as (captured, binding, session):
+            return build_captured_candidate(work, app, adapter, target, backup, staging,
                     job_id, captured=captured, private_binding=binding, session=session,
                     expected_sha256=expected_sha256)
     except (KeyboardInterrupt, SystemExit):
         raise PrivateFailure('private-owner-driver-cancelled') from None
     except Exception:
         raise PrivateFailure('private-owner-driver-refused') from None
+
+
+def preflight_owner(target, backup, *, source_password, expected_sha256,
+        spool_directory, source_options, runner, quiesce, login_url, username,
+        password, evidence_directory, evidence_name, expected_source_profile):
+    """Return exact scanned artifact bytes AFTER both held contexts clean up.
+
+    No replay, source broker, candidate, install or restore call is reachable.
+    Hashing/transport may happen only after this returns. A late lease failure
+    discards the bytes; private temporary evidence is owned by the framed caller.
+    """
+    try:
+        import os
+        import stat
+        from emqx_private_evidence import SOURCE_NAMES
+        with _joined_owner_preflight(target, backup,
+                source_password=source_password, expected_sha256=expected_sha256,
+                spool_directory=spool_directory, source_options=source_options,
+                runner=runner, quiesce=quiesce, login_url=login_url, username=username,
+                password=password, evidence_directory=evidence_directory,
+                evidence_name=evidence_name,
+                expected_source_profile=expected_source_profile) as (_, _, session):
+            from pathlib import Path
+            fd = os.open(Path(evidence_directory)/evidence_name, os.O_RDONLY|os.O_NOFOLLOW)
+            with os.fdopen(fd, 'rb') as stream:
+                info = os.fstat(stream.fileno())
+                if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid()
+                        or stat.S_IMODE(info.st_mode) != 0o600 or not 0 < info.st_size <= 65536):
+                    raise ValueError()
+                raw = stream.read(65537)
+                if len(raw) != info.st_size or stream.read(1) != b'': raise ValueError()
+                after = os.fstat(stream.fileno())
+                fields = ('st_dev','st_ino','st_size','st_mtime_ns','st_ctime_ns')
+                if any(getattr(info,k) != getattr(after,k) for k in fields): raise ValueError()
+            expected = (json.dumps({'phase':'preflight', 'result':'passed',
+                'coverage':[SOURCE_NAMES[key] for key in sorted(session.coverage)]},
+                sort_keys=True, ensure_ascii=False)+'\n').encode()
+            if raw != expected: raise ValueError()
+            session.registry.scan(raw)
+        return raw
+    except (KeyboardInterrupt, SystemExit):
+        raise PrivateFailure('private-owner-preflight-cancelled') from None
+    except Exception:
+        raise PrivateFailure('private-owner-preflight-refused') from None

@@ -34,6 +34,29 @@ def _exact(stream, size):
     return b''.join(pieces)
 
 
+def validate_source_capture(captured, binding, profile):
+    """Fixed profile receipt/architecture checks; never target completeness."""
+    stage = 'RECEIPT'
+    try:
+        receipt = captured.cold_receipt
+        if (type(receipt) is not dict
+                or set(receipt) != {'scope', 'files', 'bytes', 'final_state'}
+                or receipt['scope'] != 'historical-values-only'
+                or receipt['final_state'] is not False
+                or type(receipt['files']) is not int or not 1 <= receipt['files'] <= 64
+                or type(receipt['bytes']) is not int
+                or not receipt['files'] <= receipt['bytes'] <= min(32*1024**2, receipt['files']*8388608)):
+            raise ValueError()
+        if (profile.cold_receipt is not None
+                and (receipt['files'], receipt['bytes']) != profile.cold_receipt):
+            raise ValueError()
+        stage = 'ARCH'
+        if binding['addon_info']('woow-emqx').arch != profile.arch:
+            raise ValueError()
+    except Exception:
+        raise SourcePhaseFailure('private-source-profile-refused', stage) from None
+
+
 def consume_source_frame(stream, *, staging_parent, mode='--source'):
     """Actual framed transfer -> authenticated Capture; return static scope only.
 

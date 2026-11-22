@@ -32,7 +32,7 @@ class TransferTests(unittest.TestCase):
         self.creds.chmod(0o600)
         self.digest = hashlib.sha256(self.cipher).hexdigest()
 
-    def invoke(self, mode, *, digest=None, status=0, mutate=False, diagnostic=False):
+    def invoke(self, mode, *, digest=None, status=0, mutate=False, diagnostic=False, preflight_error=False):
         profile_name = {'--source': 'ARM_SOURCE', '--x86-source': 'X86_SOURCE',
             '--source-vendor-acl': 'ARM_VENDOR_ACL',
             '--x86-source-vendor-acl': 'X86_VENDOR_ACL',
@@ -41,7 +41,8 @@ class TransferTests(unittest.TestCase):
             '--source-vendor-acl-http-body':'ARM_HTTP_CONTEXT',
             '--x86-source-vendor-acl-http-body':'X86_HTTP_CONTEXT',
             '--source-vendor-acl-sql-aliases':'ARM_SQL_ALIASES',
-            '--x86-source-vendor-acl-sql-aliases':'X86_SQL_ALIASES'}[mode]
+            '--x86-source-vendor-acl-sql-aliases':'X86_SQL_ALIASES',
+            '--preflight':'ARM_SQL_ALIASES','--x86-preflight':'X86_SQL_ALIASES'}[mode]
         chosen = replace(getattr(profiles, profile_name), archive=self.archive,
                          sha256=self.digest if digest is None else digest)
         sink = Buffer()
@@ -62,8 +63,16 @@ class TransferTests(unittest.TestCase):
              patch.object(transfer, 'dependencies', return_value=b'public-dependencies'), \
              patch.object(transfer.subprocess, 'check_output', return_value=b'public-code') as archive, \
              patch.object(transfer.subprocess, 'Popen', return_value=child) as spawn, \
+             patch.object(transfer,'read_child_frame',return_value=b'generated-private-evidence-frame',
+                 side_effect=ValueError if preflight_error else None) as reader, \
+             patch.object(transfer,'retain_evidence') as retained, \
              contextlib.redirect_stdout(output), contextlib.redirect_stderr(errors):
             code = transfer.main([mode]+(['--diagnose'] if diagnostic else []))
+        if mode in transfer.PREFLIGHT_MODES and code == 0:
+            reader.assert_called_once_with(child)
+            retained.assert_called_once_with(b'generated-private-evidence-frame')
+        if mode in transfer.PREFLIGHT_MODES and code != 0:
+            retained.assert_not_called()
         return code, sink.getvalue(), archive, spawn, output.getvalue(), errors.getvalue()
 
     def test_fixed_modes_preserve_private_frame_and_bundle_all_required_code(self):
@@ -130,3 +139,29 @@ class TransferTests(unittest.TestCase):
                 self.assertEqual(transfer.main(args), 1)
                 deps.assert_not_called()
                 opened.assert_not_called()
+
+    def test_preflight_modes_have_private_pipe_and_complete_actual_consumer_bundle(self):
+        for mode, expected in (('--preflight',b'E'),('--x86-preflight',b'F')):
+            status, framed, archive, spawn, out, err = self.invoke(mode)
+            self.assertEqual(status,0)
+            stream = io.BytesIO(framed)
+            for _ in range(2):
+                size=struct.unpack('!Q',stream.read(8))[0];stream.read(size)
+            self.assertEqual(stream.read(1),expected)
+            self.assertEqual(spawn.call_args.kwargs['stdout'],transfer.subprocess.PIPE)
+            self.assertEqual(out,'PREFLIGHT REGISTRATION LOGIN PASSED\n')
+            self.assertEqual(err,'')
+            files = archive.call_args.args[0]
+            for name in ('emqx_framed_preflight.py','emqx_fresh_owner_workflow.py',
+                'emqx_private_owner_driver.py','emqx_owner_preflight.py','emqx_owner_target.py',
+                'emqx_owner_target.expr','emqx_target_vendor_policy.py','emqx_owner_vendor_files.py',
+                'emqx_bootstrap_csv.py','emqx_target_capture.py','emqx_target_snapshots.py',
+                'emqx_persisted_values.py','emqx_runtime_workflow.py','emqx_private_evidence.py',
+                'emqx_adapter_owner.py','emqx_captured_candidate.py','emqx_sql_aliases.py'):
+                self.assertIn('tests/e2e/lab/'+name,files)
+        compile(transfer.BOOTSTRAP,'<fixed-bootstrap>','exec')
+
+    def test_refused_child_frame_does_not_retain_or_publish_payload(self):
+        code, _, _, _, out, err = self.invoke('--preflight',preflight_error=True)
+        self.assertEqual(code,1)
+        self.assertEqual((out,err),('ARM TRANSFER REFUSED\n',''))

@@ -4,9 +4,9 @@ Only authorized isolated dev-d appowner callers, under caller-held lab ownership
 No CLI, locks, production lookup, install or restore. The empty target must exist
 for preflight observation; it never receives source bytes. Source-data candidate
 brokers remain behind build_owner_candidate's unchanged combined-scan gates.
-Implicit vendor file authorization is preserved, not verified by this fixture.
-Default-file/mounted-ACL preservation still requires the actual reference observer;
-no empty authorization source list or alternate authorizer is installed here.
+Implicit vendor file authorization is preserved. The actual held driver observer
+must prove every supported vendor dependency; unobserved/mounted custom paths
+still refuse. No empty authorization source list or alternate authorizer is used.
 """
 from contextlib import contextmanager
 import hashlib
@@ -214,44 +214,46 @@ def fresh_target(*, runner, private_parent):
         raise PrivateFailure('private-fresh-refused') from None
 
 
+@contextmanager
+def staged_owner_frame(stream, *, runner, private_parent, source_mode):
+    """Shared bounded key/ciphertext staging. Key remains in RAM, EOF+finish first."""
+    parent = _realm(runner,private_parent)
+    profile = source_profile(source_mode)
+    size = struct.unpack('!I',_exact(stream,4))[0]
+    if not 1 <= size <= 1024: raise ValueError()
+    password = _exact(stream,size).decode('ascii')
+    if not password or '\n' in password or '\r' in password: raise ValueError()
+    remaining = struct.unpack('!Q',_exact(stream,8))[0]
+    if not 0 < remaining <= MAX_ARCHIVE: raise ValueError()
+    with tempfile.TemporaryDirectory(prefix='emqx-framed-private-',dir=parent) as directory:
+        root = Path(directory)
+        root.chmod(0o700)
+        source = root/'encrypted-source.tar'
+        fd = os.open(source,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o600)
+        digest = hashlib.sha256()
+        with os.fdopen(fd,'wb') as output:
+            os.fchmod(output.fileno(),0o600)
+            while remaining:
+                chunk = _exact(stream,min(remaining,65536))
+                output.write(chunk)
+                digest.update(chunk)
+                remaining -= len(chunk)
+            output.flush()
+            os.fsync(output.fileno())
+        if stream.read(1) != b'' or digest.hexdigest() != profile.sha256: raise ValueError()
+        if hasattr(stream,'finish'): stream.finish()
+        spool = root/'spool'
+        spool.mkdir(mode=0o700)
+        yield source, password, spool, profile, root
+
+
 def build_fresh_framed_candidate(work,app,adapter,stream,staging,job_id,*,runner,
                                  private_parent,source_mode,evidence_directory,evidence_name):
-    """Concrete callsite for build_owner_candidate; no frame/target-data fallback.
-
-    Existing owner frame: uint32 ASCII key size, key, uint64 ciphertext size,
-    exact ciphertext, EOF/optional finish. Only existing fixed source profiles.
-    Caller retains the input stream and private candidate/evidence directories.
-    No original fixture archive is opened; only supplied frame bytes are staged.
-    """
+    """Build-only entry; shares strict framed staging with preflight-only entry."""
     try:
-        parent = _realm(runner,private_parent)
-        profile = source_profile(source_mode)
         if app.id != 'emqx': raise ValueError()
-        size = struct.unpack('!I',_exact(stream,4))[0]
-        if not 1 <= size <= 1024: raise ValueError()
-        password = _exact(stream,size).decode('ascii')
-        if not password or '\n' in password or '\r' in password: raise ValueError()
-        remaining = struct.unpack('!Q',_exact(stream,8))[0]
-        if not 0 < remaining <= MAX_ARCHIVE: raise ValueError()
-        with tempfile.TemporaryDirectory(prefix='emqx-framed-private-',dir=parent) as directory:
-            root = Path(directory)
-            root.chmod(0o700)
-            source = root/'encrypted-source.tar'
-            fd = os.open(source,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o600)
-            digest = hashlib.sha256()
-            with os.fdopen(fd,'wb') as output:
-                os.fchmod(output.fileno(),0o600)
-                while remaining:
-                    chunk = _exact(stream,min(remaining,65536))
-                    output.write(chunk)
-                    digest.update(chunk)
-                    remaining -= len(chunk)
-                output.flush()
-                os.fsync(output.fileno())
-            if stream.read(1) != b'' or digest.hexdigest() != profile.sha256: raise ValueError()
-            if hasattr(stream,'finish'): stream.finish()
-            spool = root/'spool'
-            spool.mkdir(mode=0o700)
+        with staged_owner_frame(stream, runner=runner, private_parent=private_parent,
+                source_mode=source_mode) as (source, password, spool, profile, root):
             with fresh_target(runner=runner,private_parent=root) as fixture:
                 return build_owner_candidate(work,app,adapter,fixture.target,source,staging,job_id,
                     source_password=password,expected_sha256=profile.sha256,spool_directory=spool,
@@ -266,3 +268,36 @@ def build_fresh_framed_candidate(work,app,adapter,stream,staging,job_id,*,runner
         raise PrivateFailure('private-fresh-workflow-cancelled') from None
     except Exception:
         raise PrivateFailure('private-fresh-workflow-refused') from None
+
+
+def preflight_fresh_frame(stream, *, runner, private_parent, source_mode):
+    """Actual source + invocation-fresh target + login/scan only; exact bytes out.
+
+    Private evidence and all owned resources are removed before bytes return.
+    This function cannot call build_owner_candidate, replay or product restore.
+    """
+    try:
+        from emqx_private_owner_driver import preflight_owner
+        if source_mode not in ('--source-vendor-acl-sql-aliases',
+                               '--x86-source-vendor-acl-sql-aliases'):
+            raise ValueError()
+        with staged_owner_frame(stream, runner=runner, private_parent=private_parent,
+                source_mode=source_mode) as (source, password, spool, profile, root):
+            evidence = root/'evidence'
+            evidence.mkdir(mode=0o700)
+            with fresh_target(runner=runner, private_parent=root) as fixture:
+                raw = preflight_owner(fixture.target, source, source_password=password,
+                    expected_sha256=profile.sha256, spool_directory=spool,
+                    source_options={'fixture_profile':profile.fixture_profile,
+                        'file_dependency_profile':profile.file_dependency_profile,
+                        'product_image':'sha256:'+IMAGE if profile.file_dependency_profile is not None else None},
+                    runner=runner, quiesce=fixture.quiesce,
+                    login_url='http://127.0.0.1:18083/api/v5/login',
+                    username=fixture.username, password=fixture.password,
+                    evidence_directory=evidence, evidence_name='owner-preflight.json',
+                    expected_source_profile=profile)
+        return raw
+    except (KeyboardInterrupt, SystemExit):
+        raise PrivateFailure('private-fresh-preflight-cancelled') from None
+    except Exception:
+        raise PrivateFailure('private-fresh-preflight-refused') from None

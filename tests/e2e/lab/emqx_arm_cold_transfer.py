@@ -15,6 +15,7 @@ import subprocess
 import sys
 
 from emqx_source_profiles import SOURCE_MODES, source_profile
+from emqx_framed_preflight import MODES as PREFLIGHT_MODES, read_child_frame, retain_evidence
 
 ROOT=Path(__file__).resolve().parents[3]
 CREDS=Path('/home/woowtechopenclaw/.woowbk-lab/secrets/ha-import-creds.env')
@@ -52,6 +53,9 @@ try:
  if mode==b'P':
   print('ARM DEPENDENCIES PASSED',flush=True);raise SystemExit(0)
  source_modes={b'S':'--source',b'X':'--x86-source',b'V':'--source-vendor-acl',b'W':'--x86-source-vendor-acl',b'Y':'--source-vendor-acl-republish',b'Z':'--x86-source-vendor-acl-republish',b'H':'--source-vendor-acl-http-body',b'J':'--x86-source-vendor-acl-http-body',b'A':'--source-vendor-acl-sql-aliases',b'B':'--x86-source-vendor-acl-sql-aliases'}
+ if mode in (b'E',b'F'):
+  from emqx_framed_preflight import main
+  raise SystemExit(main(['--preflight' if mode==b'E' else '--x86-preflight']))
  if mode not in (b'R',b'C',b'D',*source_modes):raise ValueError()
  if mode in source_modes:
   from emqx_arm_source_owner import main
@@ -80,10 +84,11 @@ def main(argv=None):
     child=None
     try:
         args=sys.argv[1:] if argv is None else argv
+        preflight=len(args)==1 and args[0] in PREFLIGHT_MODES
         diagnostic=len(args)==2 and args[0] in SOURCE_MODES and args[1]=='--diagnose'
         if diagnostic:args=args[:1]
-        if args not in ([],['--probe'],['--configuration'],['--configuration-vendor-acl']) and (len(args)!=1 or args[0] not in SOURCE_MODES):raise ValueError()
-        profile=source_profile(args[0] if len(args)==1 and args[0] in SOURCE_MODES else '--source')
+        if args not in ([],['--probe'],['--configuration'],['--configuration-vendor-acl']) and not preflight and (len(args)!=1 or args[0] not in SOURCE_MODES):raise ValueError()
+        profile=source_profile(PREFLIGHT_MODES[args[0]][0] if preflight else args[0] if len(args)==1 and args[0] in SOURCE_MODES else '--source')
         probe=args==['--probe']
         configuration=args in (['--configuration'],['--configuration-vendor-acl'])
         vendor_configuration=args==['--configuration-vendor-acl']
@@ -111,16 +116,25 @@ def main(argv=None):
                     key=values[0].encode('ascii');break
             if key is None or not 1<=len(key)<=1024 or b'\n' in key or b'\r' in key:raise ValueError()
         files=['backup-engine/woowbackup','tests/e2e/lab/emqx_arm_cold_owner.py','tests/e2e/lab/emqx_cold_history.py','tests/e2e/lab/emqx_cold_terms.escript','tests/e2e/lab/emqx_native_runtime.py','tests/e2e/lab/emqx_semantic_readers.py','tests/e2e/lab/emqx_private_spool.py','tests/e2e/lab/ha_real_fixture.py','tests/e2e/lab/emqx_broker_workload.py','tests/e2e/lab/emqx_runtime_live.py','tests/e2e/lab/emqx_runtime_credentials.py','tests/e2e/lab/emqx_private_boundary.py','tests/e2e/lab/emqx_real_candidate.py','tests/e2e/lab/emqx_source_consumer.py','tests/e2e/lab/emqx_native_hocon.py','tests/e2e/lab/emqx_hocon_native.escript','tests/e2e/lab/emqx_arm_source_owner.py','tests/e2e/lab/emqx_owner_source_capture.py','tests/e2e/lab/emqx_source_profiles.py','tests/e2e/lab/emqx_owner_file_hocon.py','tests/e2e/lab/emqx_vendor_acl.escript','tests/e2e/lab/emqx_hocon_context.py','tests/e2e/lab/emqx_hocon_context_native.escript','tests/e2e/lab/emqx_republish_templates.py','tests/e2e/lab/emqx_captured_candidate.py','tests/e2e/lab/emqx_sql_aliases.py']
+        if preflight:
+            files += ['tests/e2e/lab/'+name for name in (
+                'emqx_framed_preflight.py','emqx_fresh_owner_workflow.py',
+                'emqx_private_owner_driver.py','emqx_owner_preflight.py','emqx_owner_target.py',
+                'emqx_owner_target.expr','emqx_owner_target_parse.escript',
+                'emqx_target_vendor_policy.py','emqx_owner_vendor_files.py','emqx_bootstrap_csv.py',
+                'emqx_target_capture.py','emqx_target_snapshots.py','emqx_persisted_values.py',
+                'emqx_runtime_workflow.py','emqx_private_evidence.py','emqx_adapter_owner.py',
+                'emqx_adapter_fixture.py','emqx_adapter_provision.py')]
         code=subprocess.check_output(['git','archive','HEAD',*files],cwd=ROOT)
         fd=os.open(profile.archive,os.O_RDONLY|os.O_NOFOLLOW)
         with os.fdopen(fd,'rb') as archive:
             before=os.fstat(archive.fileno())
             if not stat.S_ISREG(before.st_mode) or not 0<before.st_size<=512*1024*1024:raise ValueError()
-            child=subprocess.Popen([str(ROOT/'tests/e2e/lab/owner.sh'),'d','/usr/bin/python3','-c',BOOTSTRAP],stdin=subprocess.PIPE,stderr=subprocess.DEVNULL)
+            child=subprocess.Popen([str(ROOT/'tests/e2e/lab/owner.sh'),'d','/usr/bin/python3','-c',BOOTSTRAP],stdin=subprocess.PIPE,stderr=subprocess.DEVNULL, **({'stdout':subprocess.PIPE} if preflight else {}))
             child.stdin.write(struct.pack('!Q',len(code)));child.stdin.write(code)
             child.stdin.write(struct.pack('!Q',len(deps)));child.stdin.write(deps);
             if diagnostic:child.stdin.write(b'Q')
-            child.stdin.write(profile.frame_mode if source_only else b'D' if vendor_configuration else b'C' if configuration else b'R')
+            child.stdin.write(PREFLIGHT_MODES[args[0]][1] if preflight else profile.frame_mode if source_only else b'D' if vendor_configuration else b'C' if configuration else b'R')
             child.stdin.write(struct.pack('!I',len(key)));child.stdin.write(key)
             child.stdin.write(struct.pack('!Q',before.st_size))
             digest=hashlib.sha256()
@@ -131,6 +145,11 @@ def main(argv=None):
             after=os.fstat(archive.fileno())
             if (before.st_dev,before.st_ino,before.st_size,before.st_mtime_ns,before.st_ctime_ns)!=(after.st_dev,after.st_ino,after.st_size,after.st_mtime_ns,after.st_ctime_ns) or digest.hexdigest()!=profile.sha256:raise ValueError()
             child.stdin.close()
+            if preflight:
+                frame=read_child_frame(child)
+                retain_evidence(frame)
+                print('PREFLIGHT REGISTRATION LOGIN PASSED',flush=True)
+                return 0
             return child.wait(timeout=900)
     except BaseException:
         if child is not None:
