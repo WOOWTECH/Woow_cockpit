@@ -52,3 +52,19 @@ Reference diagnostics now recognize fixed check_origins/origins/responder_url
 keys and WS/TCP enable contexts; URL policy remains unchanged. Public pinned
 emqx_schema.erl defines check_origins default at lines 953-958, but this change
 does not infer actual cooked shape or waive unknown URLs. 38 tests passed.
+
+Exact inactive websocket-origin profile (code-only): pinned v5.8.9
+apps/emqx/src/emqx_schema.erl lines 936-959 defines check_origin_enable=false
+and check_origins comma_separated_binary default
+http://localhost:18083, http://127.0.0.1:18083. Lines 2759-2760 split tokens and
+convert each to binary. emqx_ws_connection.erl lines 266-284 compare inbound
+Origin with lists:member only when check_origin_enable=true; false returns ok.
+No outbound fetch or userinfo interpretation occurs in that implementation.
+
+Policy requires exact listeners.{ws,wss}.default.websocket.check_origins path,
+exact ordered two-binary default list, listener enable=false and
+check_origin_enable=false. No other URLs/listeners/custom lists qualify. Values
+are decoded and registered before this policy; scanner tests still reject both
+origin strings in public payload. 40 synthetic/regression tests passed. Actual
+cooked target profile match remains unexecuted; main's fixed diagnostic can
+confirm whether this public default is the observed next refusal.

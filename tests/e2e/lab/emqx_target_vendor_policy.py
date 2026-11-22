@@ -107,3 +107,27 @@ def bounded_vendor_callbacks(*, broker, runner=None):
             raise PrivateFailure('private-vendor-files-refused') from None
     return (lambda expression: read(('exec', broker, 'emqx', 'eval', expression), 10, 'eval'),
             lambda: read(('inspect', broker), 5, 'inspect'))
+
+
+DEFAULT_ORIGINS = [b'http://localhost:18083', b'http://127.0.0.1:18083']
+
+
+def inactive_default_origins(config, path, value):
+    """Pinned websocket comparison data, never a fetched URL or file source.
+
+    emqx_schema:fields(websocket), to_comma_separated_binary and
+    emqx_ws_connection:check_origin_header/parse_header_fun_origin define this
+    exact binary list and passive membership semantics. Native decoding already
+    registers every list value before this reference-policy check.
+    """
+    if (len(path) != 5 or path[0] != 'listeners' or path[1] not in ('ws', 'wss')
+            or path[2:] != ('default', 'websocket', 'check_origins')
+            or type(value) is not list or value != DEFAULT_ORIGINS
+            or any(type(item) is not bytes for item in value)):
+        return False
+    try:
+        listener = config['listeners'][path[1]]['default']
+        return (listener.get('enable') == 'false'
+                and listener['websocket'].get('check_origin_enable') == 'false')
+    except (KeyError, TypeError, AttributeError):
+        return False

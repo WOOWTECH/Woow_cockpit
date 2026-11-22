@@ -153,6 +153,9 @@ def _reference_diagnostic(path,key,config):
 def _no_refs(value, key='', path=(), config=None, vendor_policy=None):
     if config is None:
         config=value
+    from emqx_target_vendor_policy import inactive_default_origins
+    if inactive_default_origins(config, path, value):
+        return
     def refuse(reason):
         raise OwnerCaptureRefused('references',reason,_reference_diagnostic(path,key,config))
     if type(value) is dict:

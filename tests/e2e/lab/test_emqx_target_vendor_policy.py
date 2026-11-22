@@ -110,3 +110,43 @@ class VendorPolicyTests(unittest.TestCase):
                     with self.assertRaises(Exception):
                         with observe(generation='d'*32,private_values=Values()): pass
                 self.assertEqual(len(calls),2)
+
+
+class DefaultOriginPolicyTests(unittest.TestCase):
+    def config(self, kind='ws'):
+        from emqx_target_vendor_policy import DEFAULT_ORIGINS
+        return {'listeners':{kind:{'default':{'enable':'false','websocket':{
+            'check_origin_enable':'false','check_origins':list(DEFAULT_ORIGINS)}}}}}
+
+    def test_exact_defaults_are_passive_only(self):
+        for kind in ('ws','wss'):
+            _no_refs(self.config(kind))
+        for case in ('active','checking','missing_flag','custom','userinfo','reorder','wrong_listener','wrong_name','string'):
+            config=self.config()
+            listener=config['listeners']['ws']['default']
+            ws=listener['websocket']
+            if case=='active': listener['enable']='true'
+            if case=='checking': ws['check_origin_enable']='true'
+            if case=='missing_flag': del ws['check_origin_enable']
+            if case=='custom': ws['check_origins'][0]=b'http://example.invalid'
+            if case=='userinfo': ws['check_origins'][0]=b'http://user:private@localhost:18083'
+            if case=='reorder': ws['check_origins'].reverse()
+            if case=='wrong_listener': config['listeners']['tcp']=config['listeners'].pop('ws')
+            if case=='wrong_name': config['listeners']['ws']['custom']=config['listeners']['ws'].pop('default')
+            if case=='string': ws['check_origins']=[item.decode() for item in ws['check_origins']]
+            with self.subTest(case=case),self.assertRaises(Exception): _no_refs(config)
+
+    def test_native_values_remain_registered(self):
+        from emqx_owner_target import _decode
+        from emqx_semantic_readers import Values
+        from emqx_persisted_values import PersistedValues
+        values=Values()
+        config=fixtures.cooked_config()
+        config['listeners']['ws']['default']['websocket']={
+            'check_origin_enable':False,'check_origins':[
+                b'http://localhost:18083',b'http://127.0.0.1:18083']}
+        decoded=_decode(fixtures.typed(config),values)
+        _no_refs(decoded)
+        companion=PersistedValues('generation','target',{},values.values)
+        for origin in (b'http://localhost:18083',b'http://127.0.0.1:18083'):
+            with self.assertRaises(Exception): companion.scan(origin)
