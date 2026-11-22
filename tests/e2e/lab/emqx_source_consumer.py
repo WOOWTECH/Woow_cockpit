@@ -1,8 +1,7 @@
-"""Private, bounded source consumer. No filesystem, environment or runtime access.
+"""Private bounded source registration with opt-in native semantic adapters.
 
-Supported source: strict bounded HA tar with addon JSON, cookie, node name and
-explicitly opted-in native HOCON. Mnesia and all other members remain gated.
-This intentionally cannot attest a real EMQX broker source yet.
+Cold history is a value superset, not restore/replay or final-row semantics.
+Source-only registration cannot authorize diagnostics or candidate replay.
 """
 import contextlib
 import io
@@ -178,7 +177,13 @@ class Capture:
     no missing categories or implicit empty acknowledgements are accepted.
     JSON readers are for self-contained data only, never HOCON or Mnesia.
     """
-    def __init__(self, password, target_documents, *, hocon_parser=None, spool_directory=None, product_selection=False, cold_decoder=None):
+    def __init__(self, password, target_documents, *, hocon_parser=None, spool_directory=None, product_selection=False, cold_decoder=None, source_only=False):
+        if type(source_only) is not bool or (source_only and target_documents is not None):
+            refuse()
+        self._source_only = source_only
+        self._source_ready = False
+        self._closed = False
+        self._target_attempted = False
         if type(product_selection) is not bool:
             refuse()
         if cold_decoder is not None and (not callable(cold_decoder) or not product_selection):
@@ -195,10 +200,21 @@ class Capture:
         self.keys = hasecuretar.Keys(password)
         self.registry = Registry()
         self.registry.register('backup-key', [password.encode('utf-8')])
+        if not source_only:
+            self._register_targets(target_documents)
+        self._used = False
+
+    @classmethod
+    def source_only(cls, password, **kwargs):
+        """Register only source categories; no fabricated target acknowledgement."""
+        return cls(password, None, source_only=True, **kwargs)
+
+    def _register_targets(self, target_documents):
         expected = SOURCES - {'backup-key', 'source-options', 'source-cookie'}
         if not isinstance(target_documents, dict) or set(target_documents) != expected:
             refuse()
         total = 0
+        parsed = {}
         for name in sorted(expected):
             raw = target_documents[name]
             if not isinstance(raw, bytes) or len(raw) > MAX_VALUE:
@@ -206,21 +222,36 @@ class Capture:
             total += len(raw)
             if total > MAX_TOTAL:
                 refuse()
-            self.registry.register(name, json_values(raw))
-        self._used = False
+            parsed[name] = json_values(raw)
+        for name, values in parsed.items():
+            self.registry.register(name, values)
+
+    def supply_target_documents(self, documents):
+        """Complete the registry with explicit owner snapshots, once, in context.
+
+        Presence is an owner acknowledgement, not independent target coverage
+        proof. A failed attempt cannot be retried to upgrade a partial registry.
+        """
+        if (not self._source_only or not self._source_ready or self._closed
+                or self._stack is None or self._target_attempted):
+            refuse()
+        self._target_attempted = True
+        self._register_targets(documents)
+        self.registry.seal()
 
     def __enter__(self):
         self._stack = contextlib.ExitStack()
         return self
 
     def __exit__(self, *exc):
+        self._closed = True
         return self._stack.__exit__(*exc)
 
     def __repr__(self):
         return '<EMQX private capture>'
 
     def __call__(self, source):
-        if self._used:
+        if self._used or self._closed:
             refuse()
         self._used = True
         slug = source['addon_member']('woow-emqx')
@@ -328,11 +359,14 @@ class Capture:
                                  'files': len(receipts), 'bytes': cold_bytes,
                                  'final_state': False}
         self.registry.register('source-options', source_options)
-        self.registry.seal()
+        self._source_ready = True
+        if not self._source_only:
+            self.registry.seal()
         @contextlib.contextmanager
         def replay(requested):
-            if requested != slug:
+            if requested != slug or self._closed:
                 refuse()
+            self.registry.summary()  # A source-only registry cannot authorize replay.
             with readonly_replay(captured) as reader:
                 yield reader
         return dict(source, open=replay)
