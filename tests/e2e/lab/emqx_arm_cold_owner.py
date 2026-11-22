@@ -123,7 +123,7 @@ def main():
                             raise RuntimeError('inventory-refused')
                         emit(scan,'SELECT','PASSED')
                         if globals().get('CONFIGURATION_ONLY',False):
-                            from emqx_native_hocon import native_hocon
+                            from emqx_native_hocon import native_hocon, native_hocon_diagnostic
                             from emqx_semantic_readers import read_hocon
                             from emqx_source_consumer import addon_values
                             stage='CONFIGURATION'
@@ -144,7 +144,10 @@ def main():
                                         values=addon_values(raw)
                                     else:
                                         stage='HOCON_NATIVE'
-                                        encoded=native_hocon(raw)
+                                        try:encoded=native_hocon(raw)
+                                        except Exception:
+                                            stage='HOCON_'+native_hocon_diagnostic(raw).upper()
+                                            raise RuntimeError('private-hocon-refused') from None
                                         stage='HOCON_CONTRACT'
                                         values=read_hocon(raw,lambda source:encoded).values
                                     scan.add(values)

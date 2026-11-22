@@ -33,3 +33,31 @@ def native_hocon(raw):
                 return encoded
     except Exception:
         raise SemanticRefused() from None
+
+
+def native_hocon_diagnostic(raw):
+    """Fixed native parser phase only; never a semantic capture or gate override."""
+    import json
+    try:
+        if type(raw) is not bytes or len(raw)>MAX_INPUT:
+            raise ValueError()
+        with tempfile.TemporaryDirectory(prefix='emqx-hocon-private-') as directory:
+            root=pathlib.Path(directory)
+            (root/'source.hocon').write_bytes(raw)
+            (root/'source.hocon').chmod(0o600)
+            (root/'parser.escript').write_bytes(SCRIPT.read_bytes())
+            with tempfile.TemporaryFile() as output:
+                status=run_native(directory,'parser.escript',args=('--diagnose',),output=output)
+                output.seek(0)
+                data=output.read(1025)
+            doc=json.loads(data)
+            if (status!=2 or len(data)>1024 or type(doc) is not dict
+                or set(doc)!={'contract','phase','result'}
+                or doc['contract']!='emqx-hocon-diagnostic-v1'
+                or doc['result']!='refused'
+                or doc['phase'] not in ('input','tokenize','references','parse','syntax',
+                                        'transform','encode','file_dependency','reference')):
+                raise ValueError()
+            return doc['phase']
+    except Exception:
+        raise SemanticRefused() from None
