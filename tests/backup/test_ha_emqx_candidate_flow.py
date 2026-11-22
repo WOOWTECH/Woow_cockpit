@@ -218,3 +218,32 @@ class CandidateFlowTests(unittest.TestCase):
         with self.assertRaises(BackupError) as caught:
             self.invoke(FailedLoad())
         self.assertNotIn('secret', str(caught.exception))
+
+class FixedBuildStageTests(unittest.TestCase):
+    def test_version_refusal_still_precedes_member_or_broker_with_observer(self):
+        from unittest.mock import patch
+        events=[]
+        work=SimpleNamespace(addon_info=lambda _:SimpleNamespace(version='unsupported'),
+                             _emqx_build_stage=events.append)
+        with patch.object(emqx,'member_pass') as member,patch.object(emqx,'ha_broker') as broker:
+            with self.assertRaises(BackupError):
+                emqx._build_candidate(work,SimpleNamespace(id='emqx'),object(),object(),Path('/unused'),version='5.8.9')
+            member.assert_not_called();broker.assert_not_called()
+        self.assertEqual(events,['version'])
+
+    def test_real_node_guard_refuses_identically_and_observer_never_receives_values(self):
+        from unittest.mock import patch
+        src=emqx.Source();src.node_file='generated-private-invalid-node';src.node_dirs={'emqx@127.0.0.1'}
+        errors=[]
+        for observed in (False,True):
+            events=[]
+            work=SimpleNamespace(addon_info=lambda _:SimpleNamespace(version='5.9.1'),phase=lambda _:None)
+            if observed:work._emqx_build_stage=events.append
+            with patch.object(emqx,'member_pass',return_value=src),patch.object(emqx,'ha_broker') as broker:
+                with self.assertRaises(BackupError) as failure:
+                    emqx._build_candidate(work,SimpleNamespace(id='emqx'),object(),object(),Path('/unused'),version='5.8.9')
+                broker.assert_not_called()
+            errors.append(str(failure.exception))
+            self.assertEqual(events,['version','member_pass','node_name'] if observed else [])
+            self.assertNotIn('generated-private-invalid-node',' '.join(events))
+        self.assertEqual(errors[0],errors[1])

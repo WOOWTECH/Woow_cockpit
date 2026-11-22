@@ -67,6 +67,7 @@ def build_verified_candidate(work, app, adapter, target, backup, staging, job_id
             tmp = tempctr.TempObjects(bound.runner(app), job_id, memory='768m', pids=512, cpus='1')
             try:
                 mark('product_build')
+                bound._emqx_build_stage=lambda stage: mark('product_'+stage)
                 built = ha_emqx._build_candidate(bound, app, tmp, target, private, version=version)
                 mark('product_package')
                 log_root = ha_n8n.volume_root(bound, app, target.log_volume)

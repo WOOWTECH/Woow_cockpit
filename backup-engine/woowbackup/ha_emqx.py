@@ -1019,25 +1019,38 @@ def _build_candidate(work, app, tmp, target, staging, *, version):
 
     Used by the isolated synthetic integration harness and the guarded conversion body.
     """
+    # Internal test-owner diagnostics receive fixed stages only, never source
+    # values or exception text. Ordinary product callers have no observer.
+    observe=getattr(work,'_emqx_build_stage',None)
+    def stage(name):
+        if observe is not None:observe(name)
+    stage('version')
     blocker = VERSIONS.blocker(work.addon_info(SLUG).version, version)
     if blocker:
         raise BackupError('incompatible', blocker, app=app.id)
+    stage('member_pass')
     src = member_pass(work, tmp)
     work.phase('convert')
+    stage('node_name')
     node, blocker = node_name(src)
     if blocker:
         raise BackupError('incompatible', f'EMQX 不能搬過來：{blocker}', app=app.id)
+    stage('source_broker')
     readings = ha_broker(work, tmp, target, src, node, out_dir=staging)
+    stage('source_analysis')
     blockers, _warnings = _source_analysis(src, readings, addon_version=work.addon_info(SLUG).version, version=version)
     if blockers:
         raise BackupError('incompatible', f'EMQX 不能搬過來：{blockers[0]}', app=app.id)
     tmp.stop('emqx-ha', timeout=60)
     tmp.remove('emqx-ha')
+    stage('source_export')
     export = take_export(work, tmp, readings['export'], staging)
     _clean(tmp, volumes=('emqx-src', 'emqx-xfer', 'emqx-ha-log'))
     emqx_ids = tmp.user_ids('ids-emqx', target.image, 'emqx')
+    stage('target_candidate')
     seeded, counts, strict, live_authn = candidate_from_target(
         work, app, tmp, target, staging, export, emqx_ids, hint=hint_for(src.addon))
+    stage('row_counts')
     problems = check_counts(readings['counts'], seeded, counts)
     if problems:
         raise BackupError('job-failed', f'EMQX 匯入後的資料筆數和 HA 不同，已停止：{"、".join(problems[:10])}。')

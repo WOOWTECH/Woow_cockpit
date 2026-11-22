@@ -2,6 +2,8 @@
 from contextvars import ContextVar
 STAGES=frozenset(('authorization','input_contract','image_version','archive_verify','source_reuse',
     'temp_objects','product_build','product_package','temp_cleanup','archive_final','private_cleanup'))
+PRODUCT_STAGES=frozenset(('version','member_pass','node_name','source_broker','source_analysis','source_export','target_candidate','row_counts'))
+STAGES=STAGES | frozenset('product_'+s for s in PRODUCT_STAGES)
 KINDS=frozenset(('attribute','value','product','io','runtime','other'))
 _STAGE=ContextVar('emqx_candidate_stage',default='authorization')
 def mark(stage):
