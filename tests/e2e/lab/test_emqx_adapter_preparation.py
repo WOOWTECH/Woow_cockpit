@@ -16,7 +16,8 @@ BROKER = 'woowbk-emqxlab-aabb0011'
 
 class MQTTTests(unittest.TestCase):
     def invoke(self, *, program='mosquitto_pub', payload='generated-marker',
-               username='lab', failure=None, cleanup_failure=False, collision=False, clear=False, returncode=0):
+               username='lab', failure=None, cleanup_failure=False, collision=False, clear=False, returncode=0,
+               await_suback=False):
         self.calls = []
         self.root = None
         def podman(*args, **kwargs):
@@ -53,7 +54,42 @@ class MQTTTests(unittest.TestCase):
             return Result(returncode, b'generated-output', b'')
         runner = SimpleNamespace(podman=podman)
         return transport.mqtt(runner, BROKER, program, 'lab/generated', payload,
-                              username=username, credential='generated-private-credential', clear=clear)
+                              username=username, credential='generated-private-credential', clear=clear,
+                              await_suback=await_suback)
+
+    def test_subscription_ack_mode_keeps_credentials_private_and_cleans_client(self):
+        self.invoke(program='mosquitto_sub', payload=None, await_suback=True)
+        args = next(args for args, _ in self.calls if args[0] == 'run')
+        self.assertIn('-E', args)
+        self.assertNotIn('-C', args)
+        self.assert_cleaned()
+        with patch.object(transport.tempfile, 'TemporaryDirectory') as create:
+            with self.assertRaises(RuntimeError):
+                transport.mqtt(None, BROKER, 'mosquitto_pub', 'lab/test', 'marker',
+                    username='lab', credential='generated-private', await_suback=True)
+            create.assert_not_called()
+
+    def test_driver_denial_requires_actual_suback_not_timeout_or_success(self):
+        import re
+        tree = ast.parse(Path(__file__).with_name('emqx_adapter_driver.py').read_text())
+        nested = next(n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)
+                      and n.name == 'denied_subscription')
+        module = ast.fix_missing_locations(ast.Module(body=[nested], type_ignores=[]))
+        for output, accepted in ((b'timed out: Not authorized', False),
+                                 (b'received SUBACK\nSubscribed (mid: 1): 0', False),
+                                 (b'received SUBACK\nSubscribed (mid: 1): 135', True)):
+            calls = []
+            def mqtt(*args, **kwargs):
+                calls.append((args, kwargs))
+                return Result(1, output, b'')
+            namespace = {'mqtt':mqtt, 're':re}
+            exec(compile(module, '<driver-suback-boundary>', 'exec'), namespace)
+            if accepted:
+                namespace['denied_subscription']()
+            else:
+                with self.assertRaises(RuntimeError):
+                    namespace['denied_subscription']()
+            self.assertTrue(calls[0][1]['await_suback'])
 
     def assert_cleaned(self):
         self.assertFalse(self.root.exists())

@@ -91,9 +91,17 @@ retainer.backend.storage_type = disc
                 raise RuntimeError('cannot read synthetic effective config')
             return json.loads(base64.b64decode(raw[8:].split(b':END', 1)[0], validate=True))
 
-        def mqtt(program, topic, payload=None, *, username='lab', credential=None, clear=False):
+        def mqtt(program, topic, payload=None, *, username='lab', credential=None, clear=False, await_suback=False):
             return private_mqtt(runner, f.prefix, program, topic, payload,
-                username=username, credential=password if credential is None else credential, clear=clear)
+                username=username, credential=password if credential is None else credential,
+                clear=clear, await_suback=await_suback)
+
+        def denied_subscription():
+            result = mqtt('mosquitto_sub', 'outside/denied', await_suback=True)
+            output = result.stdout + result.stderr
+            if (b'SUBACK' not in output or not (
+                    re.search(rb'Subscribed[^\n]*:\s*135\b', output) or b'Not authorized' in output)):
+                raise RuntimeError('synthetic subscription denial not established by SUBACK')
 
         def publish(topic, payload):
             result = mqtt('mosquitto_pub', topic, payload)
@@ -213,6 +221,9 @@ retainer.backend.storage_type = disc
         if configuration() != before_config:
             raise RuntimeError('synthetic target configuration was not preserved')
         print(json.dumps({'stage': 'candidate_installed', 'result': 'pass'}), flush=True)
+        STAGE = 'candidate_denied_subscription'
+        denied_subscription()
+        print(json.dumps({'stage': STAGE, 'result': 'pass', 'mqtt_reason': 135}), flush=True)
         STAGE = 'rollback_injection'
         publish('lab/before-rollback', 'rollback-marker')
         receive('lab/before-rollback', 'rollback-marker')
@@ -248,6 +259,9 @@ retainer.backend.storage_type = disc
         if configuration() != before_config:
             raise RuntimeError('synthetic configuration changed on restart')
         receive('lab/before-rollback', 'rollback-marker')
+        STAGE = 'restarted_denied_subscription'
+        denied_subscription()
+        print(json.dumps({'stage': STAGE, 'result': 'pass', 'mqtt_reason': 135}), flush=True)
         print(json.dumps({'stage': 'automatic_rollback_verified', 'result': 'pass'}), flush=True)
     finally:
         errors = []

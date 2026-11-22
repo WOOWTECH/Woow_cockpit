@@ -8,7 +8,7 @@ import tempfile
 CLIENT = 'sha256:93a0bdfcbd9b7a86b36127cb81f54e1afd2019f12f39033458df405a027c03e3'
 
 
-def mqtt(runner, broker, program, topic, payload=None, *, username, credential, clear=False):
+def mqtt(runner, broker, program, topic, payload=None, *, username, credential, clear=False, await_suback=False):
     """No credentials in argv/env; one named invocation, cleanup even on timeout.
 
     Config is discovered by Mosquitto via fixed HOME/XDG_CONFIG_HOME, as in the
@@ -19,7 +19,9 @@ def mqtt(runner, broker, program, topic, payload=None, *, username, credential, 
             or program not in ('mosquitto_pub', 'mosquitto_sub')
             or not isinstance(username, str) or not re.fullmatch(r'[A-Za-z0-9_-]{1,128}', username)
             or not isinstance(credential, str) or not re.fullmatch(r'[A-Za-z0-9_-]{1,128}', credential)
-            or type(clear) is not bool or (clear and (payload is not None or program != 'mosquitto_pub'))
+            or type(clear) is not bool or type(await_suback) is not bool
+            or (await_suback and program != 'mosquitto_sub')
+            or (clear and (payload is not None or program != 'mosquitto_pub'))
             or (program == 'mosquitto_sub' and payload is not None)):
         raise RuntimeError('private-mqtt-refused')
     client = broker + '-mqtt-' + secrets.token_hex(6)
@@ -50,6 +52,8 @@ def mqtt(runner, broker, program, topic, payload=None, *, username, credential, 
                 argv += ['-r', '-n', '-d']
             elif payload is not None:
                 argv += ['-r', '-m', payload, '-d']
+            elif await_suback:
+                argv += ['-E', '-W', '5', '-d']
             else:
                 argv += ['-C', '1', '-W', '10']
             return runner.podman(*argv, timeout=20, check=False, max_output=65536)
