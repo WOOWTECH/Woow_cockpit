@@ -170,9 +170,10 @@ def read_hocon(raw, parser=None, *, file_profile=None, product_image=None):
             from emqx_owner_file_hocon import OwnerFileRefused
             if isinstance(error, OwnerFileRefused):
                 # Reader-owned bounded enum only; no message/values/traceback.
+                from emqx_hocon_context import SYNTAX_PHASES
                 phase = error.phase
-                clean.owner_phase = phase if type(phase) is str and phase in (
-                    'syntax','walk','vendor_observer','receipt','register') else 'contract'
+                clean.owner_phase = phase if type(phase) is str and (phase in SYNTAX_PHASES or phase in (
+                    'syntax','walk','vendor_observer','receipt','register')) else 'contract'
         raise clean from None
     except Exception:
         raise SemanticRefused() from None

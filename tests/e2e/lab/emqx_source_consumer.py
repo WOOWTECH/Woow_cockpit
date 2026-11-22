@@ -359,10 +359,12 @@ class Capture:
                         self.hocon_file_receipts += getattr(values, 'file_receipts', ())
                     except SemanticRefused as error:
                         if self._source_phase != 'HOCON_NATIVE':
+                            from emqx_hocon_context import SYNTAX_PHASES
                             self._source_phase = {
                                 'syntax':'HOCON_SYNTAX','walk':'HOCON_WALK',
                                 'vendor_observer':'VENDOR_OBSERVER','receipt':'VENDOR_RECEIPT',
                                 'register':'HOCON_REGISTER',
+                                **{phase:'HOCON_'+phase.upper() for phase in SYNTAX_PHASES},
                             }.get(getattr(error,'owner_phase',None),'HOCON_CONTRACT')
                         raise PrivateFailure('private-source-hocon-unsupported') from None
                 else:

@@ -21,7 +21,8 @@ _SUBSTITUTION_ROOTS=frozenset(('authorization','authentication','node','log','mq
 class OwnerFileRefused(SemanticRefused):
     def __init__(self,phase):
         super().__init__()
-        self.phase=phase if (phase.startswith('scalar_substitution_') and phase.removeprefix('scalar_substitution_') in _SUBSTITUTION_ROOTS) or phase in ('profile','contract','document','walk','file_location','file_path','file_key','scalar','scalar_substitution','scalar_substitution_authorization','scalar_substitution_authentication','scalar_substitution_node','scalar_substitution_log','scalar_substitution_mqtt','scalar_substitution_dashboard','scalar_substitution_retainer','scalar_file_scheme','scalar_env_scheme','scalar_vault_scheme','scalar_depth','syntax','vendor_observer','receipt','register') else 'contract'
+        from emqx_hocon_context import SYNTAX_PHASES
+        self.phase=phase if phase in SYNTAX_PHASES or (phase.startswith('scalar_substitution_') and phase.removeprefix('scalar_substitution_') in _SUBSTITUTION_ROOTS) or phase in ('profile','contract','document','walk','file_location','file_path','file_key','scalar','scalar_substitution','scalar_substitution_authorization','scalar_substitution_authentication','scalar_substitution_node','scalar_substitution_log','scalar_substitution_mqtt','scalar_substitution_dashboard','scalar_substitution_retainer','scalar_file_scheme','scalar_env_scheme','scalar_vault_scheme','scalar_depth','syntax','vendor_observer','receipt','register') else 'contract'
 
 PROFILE = 'owner-pinned-image-vendor-acl-v1'
 LITERAL = '${EMQX_ETC_DIR}/acl.conf'
@@ -108,7 +109,12 @@ def read_owner_file_hocon(raw, parser=None, *, profile, product_image):
         dependencies = []
         if contextual:
             stage='syntax'
-            register_syntax(document, result, LITERAL, profile=profile)
+            from emqx_hocon_context import SyntaxRefused
+            try:
+                register_syntax(document, result, LITERAL, profile=profile)
+            except SyntaxRefused as error:
+                stage=error.phase
+                raise
 
         def walk(value, location=(), depth=0):
             nonlocal stage
