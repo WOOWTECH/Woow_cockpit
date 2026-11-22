@@ -1,0 +1,13 @@
+{
+  "source_commit": "449a58d27a07f16720c1f9b61b8ab21b2720ab40",
+  "scope": "real encrypted x86 HA source target login and combined private scan; no restore",
+  "exit": 0,
+  "elapsed_seconds": 117.30921475007199,
+  "stdout_sha256": "9724fa96147a1acf890a848fb1dace9ab949461e90447468142e0d932890b813",
+  "fixed_status": [
+    "PREFLIGHT REGISTRATION LOGIN PASSED",
+    "ARM POSTFLIGHT PASSED"
+  ],
+  "stderr_bytes_not_published": 0,
+  "restore_executed": false
+}
