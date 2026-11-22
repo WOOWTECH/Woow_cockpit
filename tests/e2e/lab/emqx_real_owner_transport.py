@@ -38,7 +38,8 @@ MODES={
 }
 CLIENT_KEYS=tuple(k for i in (1,2,3) for k in (f'B1_MQTT_USER{i}',f'B1_MQTT_PW{i}'))
 ADMISSION=b'WOOWREALOWNER-ADMITTED1:'
-MAX_BODY=512*1024*1024+16384
+# Extra bounded overhead includes six API fields of at most4096 bytes each.
+MAX_BODY=512*1024*1024+49152
 STAGED=b'REAL OWNER STAGED ONLY PASSED\n'
 DEPENDENCIES=b'REAL OWNER DEPENDENCIES PASSED\n'
 HOST_PHASES=frozenset(('profile','bundle','dependencies','client_credentials','retained_binding','key','archive','archive_binding','transfer','child','receipt'))
@@ -64,7 +65,7 @@ def _snapshot(info):
     return (info.st_dev,info.st_ino,info.st_size,info.st_mtime_ns,info.st_ctime_ns)
 
 
-def read_fixed_fields(path,names):
+def _fixed_fields(path,names):
     """Bounded EOF/stability + regular owner600/no alias; parse only named data."""
     if any(p.is_symlink() for p in (path,*path.parents)):raise ValueError()
     fd=os.open(path,os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK)
@@ -86,6 +87,11 @@ def read_fixed_fields(path,names):
         parsed=shlex.split(value.decode('ascii'),comments=False,posix=True)
         if len(parsed)!=1:raise ValueError()
         fields[key]=parsed[0].encode('ascii')
+    return fields
+
+
+def read_fixed_fields(path,names):
+    fields=_fixed_fields(path,names)
     if set(fields)!=set(names):raise ValueError()
     return [fields[n] for n in names]
 
@@ -183,15 +189,34 @@ def retained_expectations(source_mode):
         raise TransportRefused('retained_binding') from None
 
 
+def read_source_api_credentials(source_mode):
+    if source_mode not in {v[0] for v in MODES.values()}:raise ValueError()
+    arch='ARM' if source_profile(source_mode).arch=='aarch64' else 'X86'
+    names=('B1_EMQX_ADMIN_PW','B1_EMQX_USER2','B1_EMQX_USER2_PW',
+           'B1_'+arch+'_EMQX_API_KEY','B1_'+arch+'_EMQX_API_SECRET')
+    fields={}
+    for path in (CLIENT_CREDS,KEY_CREDS):
+        observed=_fixed_fields(path,names)
+        if set(observed)&set(fields):raise ValueError()
+        fields.update(observed)
+    if set(fields)!=set(names):raise ValueError()
+    from emqx_real_owner_workflow import SourceAPICredentials
+    return SourceAPICredentials((b'admin',*(fields[n] for n in names))).fields
+
+
 def client_prefix(source_mode):
-    from emqx_real_owner_workflow import CLIENT_MAGIC,CLIENT_MODES,read_source_clients
+    from emqx_real_owner_workflow import CLIENT_MAGIC,CLIENT_MODES,read_source_clients,API_MAGIC,read_source_api_credentials as read_api
     fields=read_client_credentials()+retained_expectations(source_mode)
     if len(fields)!=10 or any(type(v) is not bytes or not 0<len(v)<=4096 for v in fields):raise ValueError()
     raw=CLIENT_MAGIC+CLIENT_MODES[source_mode]+b''.join(struct.pack('!H',len(v))+v for v in fields)
     stream=io.BytesIO(raw)
     read_source_clients(stream,source_mode)
     if stream.read(1):raise ValueError()
-    return raw
+    fields=read_source_api_credentials(source_mode)
+    api=API_MAGIC+CLIENT_MODES[source_mode]+b''.join(struct.pack('!H',len(v))+v for v in fields)
+    check=io.BytesIO(api);read_api(check,source_mode)
+    if check.read(1):raise ValueError()
+    return api+raw
 
 
 def bundle_code():
@@ -200,7 +225,7 @@ def bundle_code():
     selected=[p for p in paths if (Path(p).name.startswith('emqx_') and Path(p).suffix in ('.py','.escript','.expr'))
               or Path(p).name=='ha_real_fixture.py']
     required={'emqx_real_owner_transport.py','emqx_real_owner_workflow.py','emqx_post_restore_values.py',
-              'emqx_owner_fixture_files.py','emqx_target_fixture_policy.py','emqx_adapter_mqtt.py','emqx_issued_target_probe.py','emqx_retained_history.py'}
+              'emqx_owner_fixture_files.py','emqx_target_fixture_policy.py','emqx_adapter_mqtt.py','emqx_issued_target_probe.py','emqx_retained_history.py','emqx_source_api_validator.py'}
     if not required<={Path(p).name for p in selected}:raise ValueError()
     raw=subprocess.check_output(['git','archive','HEAD','backup-engine/woowbackup',*selected],cwd=ROOT)
     if not 0<len(raw)<=16*1024*1024:raise ValueError()
@@ -247,12 +272,13 @@ def dependency_check():
     from emqx_real_owner_workflow import run_real_framed_owner,_composite_observer_factory,final_private_receipt
     from emqx_post_restore_values import collect_post_restore_values
     from emqx_retained_history import collect_original_retained_payloads
+    from emqx_source_api_validator import validate_source_api
     from emqx_adapter_mqtt import CLIENT
     from emqx_issued_target_probe import run_issued_target_probe,TARGET_RECEIPT
     from woowbackup.adapters.quadlet_postgres import QuadletPostgresAdapter
     from woowbackup import flows
     if not all(callable(x) for x in (run_real_framed_owner,_composite_observer_factory(),
-            final_private_receipt,collect_post_restore_values,collect_original_retained_payloads,run_issued_target_probe,QuadletPostgresAdapter,flows.run_restore)):
+            final_private_receipt,collect_post_restore_values,collect_original_retained_payloads,validate_source_api,run_issued_target_probe,QuadletPostgresAdapter,flows.run_restore)):
         raise ValueError()
     if type(CLIENT) is not str or type(TARGET_RECEIPT) is not bytes or not 0<len(TARGET_RECEIPT)<=65536:raise ValueError()
 

@@ -215,7 +215,7 @@ class FoundationTests(unittest.TestCase):
             with self.assertRaises(m.RealOwnerRefused) as caught:
                 m.run_real_framed_owner(io.BytesIO(b'bad'),private_parent=self.root,
                     source_mode='--source-vendor-acl-sql-aliases')
-            self.assertEqual(caught.exception.phase,'client_frame')
+            self.assertEqual(caught.exception.phase,'api_frame')
             create.assert_not_called();cleanup.assert_not_called()
 
     def client_values(self):
@@ -227,6 +227,15 @@ class FoundationTests(unittest.TestCase):
         import struct
         return m.CLIENT_MAGIC+mode+b''.join(struct.pack('!H',len(raw))+raw
             for raw in (self.client_values() if values is None else values))
+
+    def api_values(self):
+        return (b'admin',b'generated-admin-password',b'b1ops',b'generated-ops-password',b'generated-api-key',b'generated-api-secret')
+
+    def api_frame(self):
+        import struct
+        return m.API_MAGIC+b'A'+b''.join(struct.pack('!H',len(v))+v for v in self.api_values())
+
+    def owner_prefix(self):return self.api_frame()+self.client_frame()
 
     def clients(self):return m.read_source_clients(io.BytesIO(self.client_frame()),m.SOURCE_MODES[0])
 
@@ -252,7 +261,7 @@ class FoundationTests(unittest.TestCase):
         from emqx_source_profiles import ARM_SQL_ALIASES
         cipher=b'generated-encrypted-ciphertext-only'
         key=b'generated-ram-key'
-        framed=self.client_frame()+struct.pack('!I',len(key))+key+struct.pack('!Q',len(cipher))+cipher
+        framed=self.owner_prefix()+struct.pack('!I',len(key))+key+struct.pack('!Q',len(cipher))+cipher
         profile=replace(ARM_SQL_ALIASES,sha256=hashlib.sha256(cipher).hexdigest())
         with patch.object(m,'OwnerProvision',return_value=self.provision), \
              patch('emqx_fresh_owner_workflow.source_profile',return_value=profile), \
@@ -403,7 +412,8 @@ class FoundationTests(unittest.TestCase):
             self.assertEqual(len(artifacts),1)
             path=artifacts[0]  # scan the actual publisher artifact without assuming its encoding or suffix
             before=path.read_bytes()
-            m._register_client_inputs(session,clients,path)
+            api=m.SourceAPICredentials(self.api_values())
+            m._register_client_inputs(session,clients,path,api_credentials=api)
             self.assertEqual(path.read_bytes(),before)
             actual=session.registry._runtime.summary()
             self.assertEqual(session.coverage['target-bootstrap'],actual['target-bootstrap']+
@@ -411,6 +421,10 @@ class FoundationTests(unittest.TestCase):
             for name in (*m.CLIENT_FIELDS[:6],'negative_password'):
                 with self.subTest(name=name), self.assertRaises(PrivateFailure):
                     session.registry.scan(clients.fields[name])
+            import base64
+            basic=api.fields[4]+b':'+api.fields[5]
+            for value in (*api.fields,basic,b'Basic '+base64.b64encode(basic)):
+                with self.assertRaises(PrivateFailure):session.registry.scan(value)
             self.assertFalse(captured._closed)
 
     def test_last_client_activity_precedes_phase_validation_at_restore_rollback_and_restart(self):
@@ -495,7 +509,7 @@ class FoundationTests(unittest.TestCase):
         from emqx_source_profiles import ARM_SQL_ALIASES
         from emqx_retained_history import RetainedHistory
         cipher=b'generated-encrypted-cipher-only';key=b'generated-key-only'
-        framed=self.client_frame()+struct.pack('!I',len(key))+key+struct.pack('!Q',len(cipher))+cipher
+        framed=self.owner_prefix()+struct.pack('!I',len(key))+key+struct.pack('!Q',len(cipher))+cipher
         profile=replace(ARM_SQL_ALIASES,sha256=hashlib.sha256(cipher).hexdigest())
         clients=self.clients()
         expected=tuple((clients.fields['retained_topic'+str(i)],clients.fields['retained_payload'+str(i)]) for i in (1,2))
@@ -543,7 +557,7 @@ class FoundationTests(unittest.TestCase):
         import emqx_real_owner_transport as transport
         from emqx_source_profiles import ARM_SQL_ALIASES
         cipher=b'generated-cipher-valid-sha';key=b'generated-only-key'
-        body=self.client_frame()+struct.pack('!I',len(key))+key+struct.pack('!Q',len(cipher))+cipher
+        body=self.owner_prefix()+struct.pack('!I',len(key))+key+struct.pack('!Q',len(cipher))+cipher
         profile=replace(ARM_SQL_ALIASES,sha256=hashlib.sha256(cipher).hexdigest())
         for trailer in (b'',transport.ADMISSION[:-1],b'x'*len(transport.ADMISSION),transport.ADMISSION+b'private-trailing'):
             stream=transport.AdmittedStream(io.BytesIO(struct.pack('!Q',len(body))+body+trailer))
@@ -577,7 +591,7 @@ class FoundationTests(unittest.TestCase):
                 return n
         sink=Sink();child=Mock(stdin=sink);out=io.StringIO()
         with patch.object(transport,'bundle_code',return_value=b'code'),patch.object(transport,'dependencies',return_value=b'deps'), \
-             patch.object(transport,'client_prefix',return_value=self.client_frame()), \
+             patch.object(transport,'client_prefix',return_value=self.owner_prefix()), \
              patch.object(transport,'read_fixed_fields',return_value=[key]),patch.object(transport,'source_profile',return_value=profile), \
              patch.object(transport.subprocess,'Popen',return_value=child),patch.object(transport,'read_result') as result,contextlib.redirect_stdout(out):
             self.assertEqual(transport.main(['--real-restore']),1)
@@ -597,3 +611,92 @@ class FoundationTests(unittest.TestCase):
         self.assertEqual(caught.exception.phase,'frame')
         for operation in (create,cleanup,history,build):operation.assert_not_called()
         self.assertEqual(list(self.root.glob('emqx-framed-private-*')),[])
+
+    def test_api_credential_prefix_is_versioned_profile_bound_and_private(self):
+        import struct
+        fields=(b'admin',b'generated-admin-password',b'b1ops',b'generated-ops-password',b'generated-api-key',b'generated-api-secret')
+        raw=b'WOOWREALAPI1:'+b'A'+b''.join(struct.pack('!H',len(v))+v for v in fields)
+        result=m.read_source_api_credentials(io.BytesIO(raw),m.SOURCE_MODES[0])
+        self.assertEqual(result.fields,fields)
+        self.assertEqual(repr(result),'<Source API credentials private>')
+        for invalid in (self.client_frame(),raw[:-1],raw.replace(b'WOOWREALAPI1:',b'WOOWREALAPI0:'),raw[:len(b'WOOWREALAPI1:')]+b'B'+raw[len(b'WOOWREALAPI1:')+1:]):
+            with self.assertRaises(ValueError):m.read_source_api_credentials(io.BytesIO(invalid),m.SOURCE_MODES[0])
+
+    def test_restore_rollback_restart_run_api_after_mqtt_before_each_native_capture(self):
+        ctx,app,state=self.context();(self.root/'.config/systemd/user').mkdir(parents=True)
+        clients=self.clients();credentials=m.SourceAPICredentials(self.api_values());events=[]
+        original=object();scanners=[original,object(),object(),object()]
+        session=SimpleNamespace(registry=original);api_results=[];observations=[object(),object(),object()]
+        def restore(context,request):
+            events.append('restore')
+            if events.count('restore')==1:return {'changed':True}
+            ctx.adapter(app).imported_hook();(self.root/'.config'/self.fixture.prefix/'fail-once').unlink()
+            raise flows.RolledBack(BackupError('job-failed','generated'),{'rolled_back':True})
+        def api(provision,prior,supplied,actual_clients,actual_credentials):
+            i=events.count('api');self.assertIs(prior,scanners[i]);self.assertIs(supplied,session)
+            self.assertIs(actual_clients,clients);self.assertIs(actual_credentials,credentials)
+            events.append('api');return observations[i]
+        def native(provision,prior):
+            i=events.count('capture');self.assertIs(prior,scanners[i]);events.append('capture');return scanners[i+1]
+        with patch.object(flows,'run_restore',side_effect=restore),patch.object(m,'_ready'), \
+             patch.object(m,'validate_source_mqtt',side_effect=lambda *a:events.append('mqtt')), \
+             patch.object(m,'_source_api_activity',side_effect=api),patch.object(m,'_post_activity_capture',side_effect=native):
+            result=m._restore_and_rollback(ctx,app,self.provision,'generated-package',state,clients=clients,
+                session=session,api_credentials=credentials,api_results=api_results)
+        self.assertEqual(events,['restore','mqtt','api','capture','restore','mqtt','api','capture','mqtt','api','capture'])
+        self.assertEqual(api_results,observations);self.assertIs(result,scanners[-1]);self.assertIs(session.registry,original)
+
+    def test_api_refusal_stops_before_post_native_capture(self):
+        ctx,app,state=self.context();session=SimpleNamespace(registry=object())
+        with patch.object(flows,'run_restore',return_value={'changed':True}),patch.object(m,'_ready'), \
+             patch.object(m,'validate_source_mqtt'),patch.object(m,'_source_api_activity',side_effect=m.RealOwnerRefused('source_api')), \
+             patch.object(m,'_post_activity_capture') as native:
+            with self.assertRaises(m.RealOwnerRefused) as caught:
+                m._restore_and_rollback(ctx,app,self.provision,'generated-package',state,clients=self.clients(),
+                    session=session,api_credentials=m.SourceAPICredentials(self.api_values()),api_results=[])
+        self.assertEqual(caught.exception.phase,'source_api');native.assert_not_called()
+
+    def test_real_api_validator_boundary_keeps_original_runtime_and_all_final_scanners(self):
+        from test_emqx_source_api_validator import SourceAPITests
+        from emqx_runtime_workflow import PrivateSession
+        from emqx_private_evidence import names_receipt,SOURCE_NAMES
+        from emqx_private_boundary import PrivateFailure
+        issued=SourceAPITests();issued.setUp();self.addCleanup(issued.doCleanups)
+        session=PrivateSession(object(),issued.prior,{},None)
+        credentials=m.SourceAPICredentials(tuple(issued.credentials[k] for k in m.API_FIELDS))
+        old=files._record(issued.cap)[0]['cid'];results=[]
+        with patch.object(m,'_inspect',return_value=issued.doc[0]),patch.object(m,'fixture_quiescence',side_effect=lambda p:issued.quiesce()):
+            for _ in range(3):results.append(m._source_api_activity(issued.provision,issued.prior,session,self.clients(),credentials))
+        self.assertEqual(len(issued.http),54)
+        self.assertEqual(files._record(issued.cap)[0]['cid'],old)
+        self.assertTrue(all(r._runtime is issued.runtime for r in results));self.assertIs(session.registry,issued.prior)
+        raw=names_receipt('restore','passed',SOURCE_NAMES)
+        m._scan_source_api_receipt(raw,results,session)
+        issued.runtime.register_bundle({'runtime-login-token':[b'generated-late-api-token']})
+        for value in (b'generated-late-api-token',b'generated-jwt-admin',b'generated-jwt-b1ops',b'generated-returned-connector-secret',credentials.fields[-1]):
+            with self.assertRaises(m.RealOwnerRefused):m._scan_source_api_receipt(value,results,session)
+        with self.assertRaises(m.RealOwnerRefused):m._scan_source_api_receipt(raw,results[:2],session)
+        with self.assertRaises(m.RealOwnerRefused):m._scan_source_api_receipt(raw,[results[0]]*3,session)
+        with patch.object(m,'_inspect',return_value=issued.doc[0]),patch('emqx_source_api_validator.validate_source_api',return_value=True):
+            with self.assertRaises(m.RealOwnerRefused):m._source_api_activity(issued.provision,issued.prior,session,self.clients(),credentials)
+
+    def test_old_complete_cipher_frame_refuses_before_history_or_target(self):
+        import struct
+        old=self.client_frame()+struct.pack('!I',3)+b'key'+struct.pack('!Q',6)+b'cipher'
+        with patch.object(m,'OwnerProvision',return_value=self.provision),patch.object(m,'_full_restore_budget'), \
+             patch.object(self.provision,'create') as create,patch.object(m,'_payload_history') as history, \
+             patch.object(m,'staged_owner_frame') as staged:
+            with self.assertRaises(m.RealOwnerRefused) as caught:
+                m.run_real_framed_owner(io.BytesIO(old),private_parent=self.root,source_mode=m.SOURCE_MODES[0],no_live=False)
+        self.assertEqual(caught.exception.phase,'api_frame')
+        for operation in (create,history,staged):operation.assert_not_called()
+
+    def test_api_prefix_rejects_unbounded_lengths_control_fields_and_wrong_fixed_users(self):
+        import struct
+        raw=self.api_frame()
+        for invalid in (m.API_MAGIC+b'A'+b'\x00\x00',m.API_MAGIC+b'A'+struct.pack('!H',4097)+b'x'*4097):
+            with self.assertRaises(ValueError):m.read_source_api_credentials(io.BytesIO(invalid),m.SOURCE_MODES[0])
+        for index,value in ((0,b'owner'),(2,b'arbitrary-user'),(4,b'bad:key'),(5,b'bad\nsecret'),(1,b'bad\x00password'),(1,b'\xff')):
+            fields=list(self.api_values());fields[index]=value
+            invalid=m.API_MAGIC+b'A'+b''.join(struct.pack('!H',len(v))+v for v in fields)
+            with self.assertRaises(ValueError):m.read_source_api_credentials(io.BytesIO(invalid),m.SOURCE_MODES[0])

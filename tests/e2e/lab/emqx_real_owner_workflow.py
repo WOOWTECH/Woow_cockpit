@@ -36,7 +36,7 @@ from woowbackup.paths import Paths
 
 PHASES = frozenset(('profile','observer_dependency','realm','frame','provision',
     'ready','source','target','preflight','build','package','restore',
-    'rollback','restart','cleanup','client_frame','no_live','mqtt','post_capture','post_capture_identity','payload_history','build_adapter'))
+    'rollback','restart','cleanup','client_frame','no_live','mqtt','post_capture','post_capture_identity','payload_history','build_adapter','source_api','api_frame'))
 from emqx_candidate_stage import STAGES as BUILD_STAGES, KINDS as BUILD_KINDS
 from emqx_captured_candidate import CandidatePhaseRefused
 PHASES=PHASES | frozenset('build_'+s+'_'+k for s in BUILD_STAGES for k in BUILD_KINDS)
@@ -215,20 +215,23 @@ def _package_same_target(ctx,app,provision,volumes,root):
     return result['backup_id']
 
 
-def _restore_and_rollback(ctx,app,provision,backup_id,state,*,clients=None,session=None):
+def _restore_and_rollback(ctx,app,provision,backup_id,state,*,clients=None,session=None,api_credentials=None,api_results=None):
     """Product restore, destructive one-shot startup failure, automatic rollback.
 
-    Live callers supply source clients and require MQTT checks plus supplemental
-    capture after every last client activity. File-policy authorization does not
+    Live callers supply source clients/API credentials and require MQTT then API
+    validation before native capture after every last client activity. File-policy authorization does not
     prove source Mnesia ACL behavior. Never report commercial acceptance.
     """
     _assert_binding(provision,app)
     post_registry=session.registry if session is not None else None
+    if api_credentials is not None and (type(api_results) is not list or api_results or clients is None or session is None):
+        raise RealOwnerRefused('source_api')
     request={'backup_id':backup_id,'apps':['emqx'],'accept_unauthenticated':True}
     outcome=flows.run_restore(ctx,request)
     if outcome.get('rolled_back') or not outcome.get('changed'):raise ValueError()
     _ready(provision)
     if clients is not None:validate_source_mqtt(provision,clients)
+    if api_credentials is not None:api_results.append(_source_api_activity(provision,post_registry,session,clients,api_credentials))
     if session is not None:post_registry=_post_activity_capture(provision,post_registry)
     r,f=provision.runner,provision.fixture
     directory='.config/systemd/user/'+f.unit+'.d'
@@ -251,6 +254,7 @@ def _restore_and_rollback(ctx,app,provision,backup_id,state,*,clients=None,sessi
         else:raise ValueError()
         _ready(provision)
         if clients is not None:validate_source_mqtt(provision,clients)
+        if api_credentials is not None:api_results.append(_source_api_activity(provision,post_registry,session,clients,api_credentials))
         if session is not None:post_registry=_post_activity_capture(provision,post_registry)
         if r.stat_files([marker])[marker]['type']!='missing':raise ValueError()
     finally:
@@ -262,6 +266,7 @@ def _restore_and_rollback(ctx,app,provision,backup_id,state,*,clients=None,sessi
     r.systemctl('restart','--',f.unit,timeout=180)
     _ready(provision)
     if clients is not None:validate_source_mqtt(provision,clients)
+    if api_credentials is not None:api_results.append(_source_api_activity(provision,post_registry,session,clients,api_credentials))
     if session is not None:post_registry=_post_activity_capture(provision,post_registry)
     return post_registry
 
@@ -339,6 +344,63 @@ def read_source_clients(stream,source_mode):
     return SourceClients(fields)
 
 
+API_MAGIC=b'WOOWREALAPI1:'
+API_FIELDS=('admin_username','admin_password','second_username','second_password','api_key','api_secret')
+
+class SourceAPICredentials:
+    __slots__=('fields',)
+    def __init__(self,fields):
+        if (type(fields) is not tuple or len(fields)!=6
+                or any(type(v) is not bytes or not 1<=len(v)<=4096 or any(c in v for c in (b'\r',b'\n',b'\x00')) for v in fields)
+                or fields[0]!=b'admin' or fields[2]!=b'b1ops' or b':' in fields[4]):raise ValueError()
+        for value in fields:value.decode('utf-8')
+        self.fields=fields
+    def __repr__(self):return '<Source API credentials private>'
+
+
+def read_source_api_credentials(stream,source_mode):
+    """Versioned six-field prefix before the original MQTT/key/cipher frame."""
+    if source_mode not in CLIENT_MODES:raise ValueError()
+    if _exact(stream,len(API_MAGIC))!=API_MAGIC or _exact(stream,1)!=CLIENT_MODES[source_mode]:raise ValueError()
+    fields=[]
+    for _ in API_FIELDS:
+        size=struct.unpack('!H',_exact(stream,2))[0]
+        if not 1<=size<=4096:raise ValueError()
+        fields.append(_exact(stream,size))
+    return SourceAPICredentials(tuple(fields))
+
+
+def _source_api_activity(provision,prior_registry,session,clients,credentials):
+    from emqx_source_api_validator import validate_source_api,SourceAPIResult
+    from emqx_runtime_workflow import PrivateSession,CombinedRegistry
+    try:
+        if (type(credentials) is not SourceAPICredentials or type(session) is not PrivateSession
+                or type(session.registry) is not CombinedRegistry or type(clients) is not SourceClients):raise ValueError()
+        cid=_inspect(provision).get('Id')
+        if type(cid) is not str or re.fullmatch('[0-9a-f]{64}',cid) is None:raise ValueError()
+        result=validate_source_api(prior_registry=prior_registry,provision=provision,expected_container_id=cid,
+            quiesce=lambda:fixture_quiescence(provision),port=18083,
+            **dict(zip(API_FIELDS,credentials.fields)),
+            retained_topics=tuple(clients.fields['retained_topic'+str(i)] for i in (1,2)))
+        if (type(result) is not SourceAPIResult or result._prior is not prior_registry
+                or result._runtime is not session.registry._runtime):raise ValueError()
+        return result
+    except BaseException:
+        raise RealOwnerRefused('source_api') from None
+
+
+def _scan_source_api_receipt(receipt,results,session):
+    from emqx_source_api_validator import SourceAPIResult
+    try:
+        if (type(receipt) is not bytes or type(results) is not list or len(results)!=3
+                or len({id(r) for r in results})!=3
+                or any(type(r) is not SourceAPIResult or r._runtime is not session.registry._runtime for r in results)):
+            raise ValueError()
+        for result in results:result.scan(receipt)
+    except BaseException:
+        raise RealOwnerRefused('source_api') from None
+
+
 def _target_base():
     return (b'node.name="emqx@127.0.0.1"\nnode.data_dir="/opt/emqx/data"\n'
         +b'node.cookie="'+secrets.token_hex(24).encode()+b'"\n'
@@ -402,7 +464,7 @@ def _ram_client_parent():
     return Path('/dev/shm')
 
 
-def _register_client_inputs(session,clients,evidence):
+def _register_client_inputs(session,clients,evidence,*,api_credentials=None):
     """Add real MQTT login inputs to the already observed complete runtime only.
 
     Does not claim new source/target coverage. Re-scan identical private receipt
@@ -416,8 +478,13 @@ def _register_client_inputs(session,clients,evidence):
         raise ValueError()
     runtime=session.registry._runtime
     runtime.summary()  # still requires actual complete target, never an empty ack
-    runtime.register_bundle({'runtime-login-input':[
-        clients.fields[name] for name in (*CLIENT_FIELDS[:6],'negative_password')]})
+    inputs=[clients.fields[name] for name in (*CLIENT_FIELDS[:6],'negative_password')]
+    if api_credentials is not None:
+        if type(api_credentials) is not SourceAPICredentials:raise ValueError()
+        import base64
+        basic=api_credentials.fields[4]+b':'+api_credentials.fields[5]
+        inputs.extend((*api_credentials.fields,basic,b'Basic '+base64.b64encode(basic)))
+    runtime.register_bundle({'runtime-login-input':inputs})
     fd=os.open(evidence,os.O_RDONLY|os.O_NOFOLLOW)
     with os.fdopen(fd,'rb') as source:
         info=os.fstat(source.fileno())
@@ -567,6 +634,8 @@ def run_real_framed_owner(stream,*,private_parent,source_mode,no_live=True):
         provision=OwnerProvision(IMAGE.removeprefix('sha256:'))
         r,f=provision.runner,provision.fixture
         _full_restore_budget()
+        phase='api_frame'
+        api_credentials=read_source_api_credentials(stream,source_mode)
         phase='client_frame'
         clients=read_source_clients(stream,source_mode)
         phase='frame'
@@ -614,7 +683,7 @@ def run_real_framed_owner(stream,*,private_parent,source_mode,no_live=True):
                             login_url='http://127.0.0.1:18083/api/v5/login'),
                         username=b'owner',password=dashboard,evidence_directory=evidence,
                         evidence_name='owner-preflight.txt')
-                    _register_client_inputs(session,clients,evidence/'owner-preflight.txt')
+                    _register_client_inputs(session,clients,evidence/'owner-preflight.txt',api_credentials=api_credentials)
                     phase='build'
                     work=SimpleNamespace(runner=lambda _app:r,guard=CandidateBudget(),abort=None,
                         checkpoint=ctx.checkpoint,phase=ctx.phase,log=ctx.log)
@@ -632,11 +701,18 @@ def run_real_framed_owner(stream,*,private_parent,source_mode,no_live=True):
                 phase='package'
                 backup_id=_package_same_target(ctx,app,provision,volumes,root)
                 phase='restore'
-                post_registry=_restore_and_rollback(ctx,app,provision,backup_id,state,clients=clients,session=session)
+                api_results=[]
+                try:
+                    post_registry=_restore_and_rollback(ctx,app,provision,backup_id,state,clients=clients,session=session,
+                        api_credentials=api_credentials,api_results=api_results)
+                except RealOwnerRefused as error:
+                    phase=error.phase
+                    raise
                 post_registry.scan(b'')  # retain/check the complete supplemental chain through phase end
             phase='cleanup'
         receipt=final_private_receipt(post_registry)
         phase='payload_history';retained_history.scan(receipt)
+        phase='source_api';_scan_source_api_receipt(receipt,api_results,session)
         return {'evidence_bytes':receipt,'scope':'private-same-target-product-flow', 'client_validation':'source-login-target-file-acl-retained-after-restore-rollback-restart',
                 'source_mnesia_acl_behavior':'not-assessed-target-file-authorizer',
                 'source_final_state':'not-assessed','commercial_acceptance':'not-assessed'}

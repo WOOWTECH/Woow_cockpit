@@ -37,9 +37,12 @@ class TransportTests(unittest.TestCase):
         from emqx_real_owner_workflow import read_source_clients
         credentials=[b'b1-sensor',b'generated-one',b'b1-gateway',b'generated-two',b'generated-third',b'generated-three']
         expectations=[b'b1/retained/one',b'generated-payload-one',b'b1/retained/two',b'\x00generated\xfftwo']
-        with patch.object(m,'read_client_credentials',return_value=credentials),patch.object(m,'retained_expectations',return_value=expectations):
+        with patch.object(m,'read_client_credentials',return_value=credentials),patch.object(m,'retained_expectations',return_value=expectations), \
+             patch.object(m,'read_source_api_credentials',return_value=(b'admin',b'generated-admin',b'b1ops',b'generated-ops',b'generated-key',b'generated-secret')):
             arm=m.client_prefix('--source-vendor-acl-sql-aliases')
-            clients=read_source_clients(io.BytesIO(arm),'--source-vendor-acl-sql-aliases')
+            from emqx_real_owner_workflow import read_source_api_credentials
+            stream=io.BytesIO(arm);read_source_api_credentials(stream,'--source-vendor-acl-sql-aliases')
+            clients=read_source_clients(stream,'--source-vendor-acl-sql-aliases')
             self.assertEqual(clients.fields['retained_payload2'],b'\x00generated\xfftwo')
             with self.assertRaises(Exception):read_source_clients(io.BytesIO(arm),'--x86-source-vendor-acl-sql-aliases')
             with self.assertRaises(Exception):m.client_prefix('--source')
@@ -131,6 +134,7 @@ class TransportTests(unittest.TestCase):
                 sink=Sink();child=Mock(stdin=sink);out=io.StringIO()
                 with patch.object(m,'CLIENT_CREDS',creds),patch.object(m,'KEY_CREDS',key), \
                      patch.object(m,'retained_expectations',return_value=[b'b1/retained/one',b'generated-first',b'b1/retained/two',b'generated-second']), \
+                     patch.object(m,'read_source_api_credentials',return_value=(b'admin',b'generated-admin',b'b1ops',b'generated-ops',b'generated-api-key',b'generated-api-secret')), \
                      patch.object(m,'source_profile',return_value=profile),patch.object(m,'bundle_code',return_value=b'generated-code'), \
                      patch.object(m,'dependencies',return_value=b'generated-public-deps'),patch.object(m.subprocess,'Popen',return_value=child) as spawn, \
                      patch.object(m,'read_result',return_value=evidence_frame(m.canonical_receipt())),patch.object(m,'retain_restore_evidence') as retain, \
@@ -141,6 +145,9 @@ class TransportTests(unittest.TestCase):
                 self.assertEqual(part(),b'generated-code');self.assertEqual(part(),b'generated-public-deps')
                 self.assertEqual(stream.read(1),wire_mode)
                 stream=m.AdmittedStream(stream)
+                from emqx_real_owner_workflow import read_source_api_credentials
+                api=read_source_api_credentials(stream,source_mode)
+                self.assertEqual(api.fields[-1],b'generated-api-secret')
                 clients=read_source_clients(stream,source_mode)
                 self.assertEqual(clients.fields['sensor_password'],b'generated-one')
                 self.assertEqual(stream.read(struct.unpack('!I',stream.read(4))[0]),b'generated-private-key')
@@ -329,3 +336,25 @@ class OriginalProducerTests(unittest.TestCase):
                 (self.seed/'emqx-body.sh').write_bytes(self.script+b'# changed\n')
             return raw
         with patch.object(self.m,'_read_original',side_effect=changed):self.refused()
+
+class APICredentialTransportTests(unittest.TestCase):
+    def test_fixed_api_fields_merge_unambiguously_and_both_profiles_roundtrip(self):
+        import emqx_real_owner_transport as m
+        from emqx_real_owner_workflow import API_MAGIC,CLIENT_MODES,read_source_api_credentials
+        import struct
+        with tempfile.TemporaryDirectory() as d:
+            root=Path(d);client=root/'clients.env';key=root/'ha.env'
+            client.write_bytes(b'UNRELATED=$(never-run)\nB1_EMQX_ADMIN_PW=generated-admin\nB1_EMQX_USER2=b1ops\nB1_EMQX_USER2_PW=generated-ops\n')
+            key.write_bytes(b'HA_BACKUP_KEY=not-api-input\nB1_ARM_EMQX_API_KEY=generated-arm-key\nB1_ARM_EMQX_API_SECRET=generated-arm-secret\nB1_X86_EMQX_API_KEY=generated-x86-key\nB1_X86_EMQX_API_SECRET=generated-x86-secret\n')
+            client.chmod(0o600);key.chmod(0o600)
+            with patch.object(m,'CLIENT_CREDS',client),patch.object(m,'KEY_CREDS',key):
+                for mode,expected in (('--source-vendor-acl-sql-aliases',b'generated-arm-secret'),('--x86-source-vendor-acl-sql-aliases',b'generated-x86-secret')):
+                    fields=m.read_source_api_credentials(mode)
+                    self.assertEqual(fields[:4],(b'admin',b'generated-admin',b'b1ops',b'generated-ops'))
+                    self.assertEqual(fields[-1],expected)
+                    raw=API_MAGIC+CLIENT_MODES[mode]+b''.join(struct.pack('!H',len(v))+v for v in fields)
+                    self.assertEqual(read_source_api_credentials(io.BytesIO(raw),mode).fields,fields)
+                key.write_bytes(key.read_bytes()+b'B1_EMQX_ADMIN_PW=generated-admin\n')
+                with self.assertRaises(Exception):m.read_source_api_credentials('--source-vendor-acl-sql-aliases')
+                key.chmod(0o644)
+                with self.assertRaises(Exception):m.read_source_api_credentials('--source-vendor-acl-sql-aliases')
