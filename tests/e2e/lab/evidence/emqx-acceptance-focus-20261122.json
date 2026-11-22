@@ -2,7 +2,7 @@
   "scope": "HA EMQX backup to isolated Podman",
   "commercial_acceptance": false,
   "public_guard": "retained",
-  "candidate_commit": "5cff165",
+  "candidate_commit": "1497dd3",
   "passed": [
     {
       "check": "native HOCON strict parsing + spool consumer integration",
@@ -21,14 +21,21 @@
       "commit": "a8cbf5b",
       "tests": 24,
       "limit": "local regression; no broker claim"
+    },
+    {
+      "check": "real isolated EMQX5.8.9 login token producer",
+      "commit": "1497dd3",
+      "checks": 12,
+      "evidence": "emqx-runtime-live-20261122/final.jsonl",
+      "limit": "source/target completeness not assessed; no HA restore/MQTT claim"
     }
   ],
   "running": [
     {
       "owner": "Turing",
       "id": "01a2025f-4294-7301-a4b9-4d624f51ab0e",
-      "scope": "sole dev-d owner; actual runtime login producer evidence packaging",
-      "observation": "attempt5 scoped runtime login passed; not yet integrated; attempts1-4 retained"
+      "scope": "sole dev-d owner; nativecheckpoint and MQTT expansion",
+      "observation": "runtime evidence committed and integrated; cleanup confirmed including six early anonymous volumes"
     },
     {
       "owner": "Mencius",
@@ -48,6 +55,7 @@
   "notes": [
     "spool consumes already decrypted/decompressed open_addon stream",
     "c7a7cd0 incorrect compressed-input change fully reverted by5cff165; affected24 tests passed after revert",
-    "no Hermes review retry; no public guard bypass; no original production mutation"
+    "no Hermes review retry; no public guard bypass; no original production mutation",
+    "nativeparser image-volume ignore31f576e passed one affected real native test; broker adjacent18 tests passed after integration"
   ]
 }
