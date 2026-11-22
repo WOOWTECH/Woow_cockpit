@@ -4,6 +4,9 @@ Only authorized isolated dev-d appowner callers, under caller-held lab ownership
 No CLI, locks, production lookup, install or restore. The empty target must exist
 for preflight observation; it never receives source bytes. Source-data candidate
 brokers remain behind build_owner_candidate's unchanged combined-scan gates.
+Implicit vendor file authorization is preserved, not verified by this fixture.
+Default-file/mounted-ACL preservation still requires the actual reference observer;
+no empty authorization source list or alternate authorizer is installed here.
 """
 from contextlib import contextmanager
 import hashlib
@@ -69,7 +72,8 @@ class FreshTarget:
             os.fchmod(out.fileno(),0o600)
             out.write(raw)
         self.target = SimpleNamespace(container=self.name,image='sha256:'+IMAGE,
-            data_volume=self.volumes[0],log_volume=self.volumes[1],env={},secrets=[],
+            data_volume=self.volumes[0],log_volume=self.volumes[1],
+            node='fresh@127.0.0.1',env={'EMQX_NODE__NAME':'fresh@127.0.0.1'},secrets=[],
             files=[(str(self.config),'/opt/emqx/etc/emqx.conf','ro')])
 
     def __repr__(self):
@@ -123,6 +127,7 @@ class FreshTarget:
             '--pull=never','--network=none','--log-driver=none','--image-volume=ignore',
             '--userns=keep-id:uid=1000,gid=1000','--memory=768m','--cpus=0.75','--pids-limit=256',
             '-e','ERL_FLAGS=+S 2:2 +SDcpu 1 +SDio 1',
+            '-e','EMQX_NODE__NAME='+self.target.node,
             '-v',self.volumes[0]+':/opt/emqx/data','-v',self.volumes[1]+':/opt/emqx/log',
             '-v',str(self.config)+':/opt/emqx/etc/emqx.conf:ro','sha256:'+IMAGE).strip().decode('ascii')
         if not re.fullmatch(r'[0-9a-f]{64}',cid): raise ValueError()

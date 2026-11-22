@@ -197,11 +197,34 @@ class WorkflowTests(unittest.TestCase):
         self.assert_owned_cleanup()
         self.assertEqual(json.loads((self.evidence/'fresh-preflight.json').read_bytes())['phase'],'preflight')
 
+    def test_target_matches_product_attribute_contract_and_preserves_implicit_authorization(self):
+        with workflow.fresh_target(runner=self.runner,private_parent=self.root) as fixture:
+            target = fixture.target
+            self.assertEqual(set(vars(target)),{'container','image','data_volume','log_volume',
+                                                'env','secrets','files','node'})
+            config = fixture.config.read_text()
+            self.assertNotIn('authorization',config)
+            self.assertIn('node.name="'+target.node+'"',config)
+            self.assertEqual(target.env['EMQX_NODE__NAME'],target.node)
+            self.assertEqual(target.secrets,[])
+            self.assertEqual(target.files,[(str(fixture.config),'/opt/emqx/etc/emqx.conf','ro')])
+            run = next(args for args,_ in self.runner.calls if args[0]=='run')
+            self.assertIn('EMQX_NODE__NAME='+target.node,run)
+        self.assert_owned_cleanup()
+
     def test_target_or_login_refusal_cleans_fixture_and_never_reaches_candidate_bridge(self):
-        for failure in ('target','login'):
+        for failure in ('target','login','references'):
             self.runner = FixtureRunner()
             if failure=='target': self.runner.target_edit=lambda doc:doc.update(generation='wrong')
             if failure=='login': self.runner.login_status=401
+            if failure=='references':
+                def file_authorizer(doc):
+                    from test_emqx_owner_target import typed,cooked_config,Atom
+                    config=cooked_config()
+                    config['authorization']={'sources':[{'type':Atom('file'),'enable':True,
+                        'path':'${EMQX_ETC_DIR}/acl.conf'}]}
+                    doc['config']=typed(config)
+                self.runner.target_edit=file_authorizer
             with patch.object(workflow,'source_profile',return_value=self.profile), \
                  patch.object(source_owner,'native_hocon',self.parser), \
                  patch.object(source_owner,'native_cold_history',decoder), \
