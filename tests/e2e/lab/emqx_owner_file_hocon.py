@@ -16,6 +16,11 @@ from emqx_semantic_readers import (
     _text, _term, _pairs, refuse,
 )
 
+class OwnerFileRefused(SemanticRefused):
+    def __init__(self,phase):
+        super().__init__()
+        self.phase=phase if phase in ('profile','contract','document','walk','file_location','file_path','file_key','scalar','syntax','vendor_observer','receipt','register') else 'contract'
+
 PROFILE = 'owner-pinned-image-vendor-acl-v1'
 LITERAL = '${EMQX_ETC_DIR}/acl.conf'
 VENDOR_PATH = '/opt/emqx/etc/acl.conf'
@@ -77,14 +82,17 @@ def read_owner_file_hocon(raw, parser=None, *, profile, product_image):
     Native syntax_strings are retained; substitutions/includes still refuse.
     Default read_hocon remains wholly strict. Unknown/missing paths never read IO.
     """
+    stage='profile'
     try:
         if profile != PROFILE or product_image != IMAGE:
             refuse()
+        stage='contract'
         doc = _contract(raw, parser, 'emqx-hocon-json-v1')
         if (set(doc) != {'contract', 'version', 'input_sha256', 'input_bytes',
                          'complete', 'resolution', 'references', 'document'}
                 or doc['resolution'] != 'disabled' or doc['references'] != []):
             refuse()
+        stage='document'
         document = doc['document']
         # Require the actual native adapter's full effective map AND syntax leaves.
         if (type(document) is not dict or set(document) != {'parsed', 'syntax_strings'}
@@ -96,7 +104,10 @@ def read_owner_file_hocon(raw, parser=None, *, profile, product_image):
         dependencies = []
 
         def walk(value, location=(), depth=0):
+            nonlocal stage
+            stage='walk'
             if type(value) not in (dict, list):
+                stage='scalar'
                 _json_walk(value, result, depth)
                 return
             result.tick(depth)
@@ -106,12 +117,14 @@ def read_owner_file_hocon(raw, parser=None, *, profile, product_image):
                 return
             file_source = value.get('type') == 'file'
             if file_source:
+                stage='file_location'
                 if (len(location) != 3 or location[:2] != ('authorization', 'sources')
                         or type(location[2]) is not int or value.get('path') != LITERAL):
                     refuse()
                 dependencies.append(location)
             for key, child in value.items():
                 result.add(_text(key))
+                stage='file_key'
                 if (key in ('certfile', 'keyfile', 'cacertfile', 'bootstrap_file', 'init_file')
                         or key.endswith('_file')) and child:
                     refuse()
@@ -125,23 +138,27 @@ def read_owner_file_hocon(raw, parser=None, *, profile, product_image):
         # No unneeded image reads, and no bare literal exception without a source.
         if not dependencies:
             refuse()
+        stage='syntax'
         for value in document['syntax_strings']:
             if value == LITERAL:
                 result.tick(1)
                 result.add(_text(value))
             else:
                 _json_walk(value, result, 1)
+        stage='vendor_observer'
         content, receipt, acl_values = observe_vendor_acl()
+        stage='receipt'
         if (type(content) is not bytes or not 0 < len(content) <= MAX_VALUE
                 or type(receipt) is not dict or receipt != {
                     'image': IMAGE, 'path': VENDOR_PATH, 'bytes': len(content),
                     'sha256': hashlib.sha256(content).hexdigest(),
                     'complete': True, 'regular': True}):
             refuse()
+        stage='register'
         result.add(content)
         for value in acl_values:
             result.add(value)
         result.file_receipts = (dict(receipt),)
         return result
     except Exception:
-        raise SemanticRefused() from None
+        raise OwnerFileRefused(stage) from None

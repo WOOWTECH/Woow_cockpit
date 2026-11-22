@@ -156,6 +156,13 @@ def main():
                                                     file_profile='owner-pinned-image-vendor-acl-v1',product_image=IMAGE).values
                                             else:values=read_hocon(raw,lambda source:encoded).values
                                         except Exception:
+                                            if globals().get('VENDOR_CONFIGURATION',False):
+                                                from emqx_owner_file_hocon import read_owner_file_hocon,OwnerFileRefused
+                                                try:read_owner_file_hocon(raw,lambda source:encoded,
+                                                    profile='owner-pinned-image-vendor-acl-v1',product_image=IMAGE)
+                                                except OwnerFileRefused as failure:
+                                                    stage='VENDOR_'+failure.phase.upper()
+                                                    raise RuntimeError('private-vendor-profile-refused') from None
                                             # Classification only; complete semantic refusal remains.
                                             pending=[json.loads(encoded).get('document')]
                                             while pending:

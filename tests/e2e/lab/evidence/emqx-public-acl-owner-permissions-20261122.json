@@ -1,0 +1,10 @@
+{
+  "scope": "public pinned image ACL permissions only; no private source or broker",
+  "exit": 0,
+  "native_user": 1019,
+  "acl_owner": 1000,
+  "acl_group": 1000,
+  "acl_mode": "664",
+  "read_result": "ACL_READABLE",
+  "private_output": false
+}
