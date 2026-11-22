@@ -66,6 +66,19 @@ class FrameTests(unittest.TestCase):
             with self.subTest(code=code):
                 with self.assertRaises(ValueError): framed.read_child_frame(self.child(code),timeout=0.1)
 
+    def test_native_function_diagnostic_only_exposes_fixed_path_profile_kind(self):
+        import base64,json
+        from emqx_preflight_stage import native_function_stage,STAGES
+        doc=dict(descriptor_sha256='not-emitted',module='generated-private',name='generated-private',
+            arity='generated-private',md5='generated-private',type='local',path='log_console_time_offset',
+            env_kind='empty',profile='public_code')
+        def wire():return b'WOOWFUN:'+base64.b64encode(json.dumps(doc).encode())+b':END'
+        label=native_function_stage(wire())
+        self.assertEqual(label,'function_log_console_time_offset_public_code_empty')
+        self.assertIn(label,STAGES)
+        self.assertNotIn('generated-private',label)
+        doc['path']='generated-private';self.assertIsNone(native_function_stage(wire()))
+
     def test_native_failure_protocol_only_accepts_fixed_stage_reason(self):
         from emqx_preflight_stage import native_refusal_stage, STAGES
         raw=b'WOOWFUN:private-body-not-released:END\nWOOWTARGETFAIL:serialize_config:unsupported_function:ENDok\n'

@@ -13,7 +13,7 @@ from emqx_real_owner_workflow import (_target_base, _target_acl, _opt_in_private
 from emqx_target_fixture_policy import issued_fixture_observer
 from emqx_owner_target import owner_target_readers, MAX_WIRE, OwnerCaptureRefused, CONSUMER_PHASES
 from emqx_owner_fixture_files import FixtureFilesFailure, STAGES as FILE_STAGES, REASONS as FILE_REASONS
-from emqx_preflight_stage import STAGES as TRACE_STAGES, native_refusal_stage
+from emqx_preflight_stage import STAGES as TRACE_STAGES, native_refusal_stage, native_function_stage
 from emqx_runtime_credentials import RuntimeRegistry, TARGET_CATEGORIES
 from emqx_target_snapshots import register_target_snapshots
 
@@ -21,7 +21,7 @@ TARGET_RECEIPT = '階段：目標擷取；結果：通過；涵蓋：訊息認�
 PHASES = (frozenset(('realm','budget','provision','start','quiescence','target','register','scan','cleanup'))
     | frozenset('files_'+s+'_'+r for s in FILE_STAGES for r in FILE_REASONS)
     | frozenset('target_'+s for s in CONSUMER_PHASES)
-    | frozenset(s for s in TRACE_STAGES if s.startswith('native_')))
+    | frozenset(s for s in TRACE_STAGES if s.startswith(('native_','function_'))))
 class IssuedProbeRefused(PrivateFailure):
     def __init__(self, phase):
         self.phase=phase if phase in PHASES else 'realm'
@@ -48,7 +48,7 @@ def run_issued_target_probe():
                 raise ValueError()
             fixed=native_refusal_stage(response.stdout)
             if fixed is not None:
-                phase=fixed
+                phase=native_function_stage(response.stdout) or fixed
                 raise ValueError()
             return response.stdout
         @contextmanager

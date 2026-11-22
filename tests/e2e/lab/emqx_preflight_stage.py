@@ -24,6 +24,31 @@ def native_refusal_stage(raw):
     phase,reason=(v.decode('ascii') for v in match.groups())
     if phase not in NATIVE_STAGES or reason not in NATIVE_REASONS: return None
     return 'native_'+phase+'_'+reason
+FUNCTION_PATHS=frozenset(('log_console_time_offset','log_file_time_offset','log_other','dashboard','node',
+    'authentication','authorization','ssl_default_user_lookup_fun','wss_default_user_lookup_fun','listeners','other_config'))
+FUNCTION_PROFILES=frozenset(('secret_wrap_identity_or_env','secret_loader_refused','public_code','unverified'))
+FUNCTION_ENVS=frozenset(('empty','binary','atom','integer','float','tuple','list','map','function','pid','reference','port','other','multiple'))
+STAGES=STAGES | frozenset('function_'+p+'_'+f+'_'+e for p in FUNCTION_PATHS for f in FUNCTION_PROFILES for e in FUNCTION_ENVS)
+def native_function_stage(raw):
+    import base64,json,re
+    if type(raw) is not bytes: return None
+    for line in raw.splitlines():
+        match=re.fullmatch(rb'WOOWFUN:([A-Za-z0-9+/=]{1,8192}):END',line)
+        if match is None: continue
+        try:
+            def pairs(items):
+                result={}
+                for k,v in items:
+                    if k in result:raise ValueError()
+                    result[k]=v
+                return result
+            doc=json.loads(base64.b64decode(match[1],validate=True),object_pairs_hook=pairs)
+            if type(doc) is not dict or set(doc)!={'descriptor_sha256','module','name','arity','md5','type','path','env_kind','profile'}:return None
+            p,f,e=doc['path'],doc['profile'],doc['env_kind']
+            if type(p) is str and type(f) is str and type(e) is str and p in FUNCTION_PATHS and f in FUNCTION_PROFILES and e in FUNCTION_ENVS:
+                return 'function_'+p+'_'+f+'_'+e
+        except Exception:return None
+    return None
 _STAGE = ContextVar('emqx_preflight_stage',default='initial')
 def mark(stage):
     if stage not in STAGES: raise ValueError()

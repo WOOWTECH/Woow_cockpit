@@ -1,0 +1,15 @@
+{
+  "controller_exit": 1,
+  "stderr_bytes_not_published": 0,
+  "reports": [
+    {
+      "elapsed_seconds": 46.52044600713998,
+      "fixed_phase": "native_serialize_config_unsupported_function",
+      "isolation_cleanup": "passed",
+      "restore_executed": false,
+      "result": "refused",
+      "scope": "actual-issued-target-only",
+      "source_commit": "37fdbd523a27b003de03dfd5c6da7e0679cdeb1a"
+    }
+  ]
+}
