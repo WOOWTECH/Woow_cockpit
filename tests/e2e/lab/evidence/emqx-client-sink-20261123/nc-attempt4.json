@@ -1,0 +1,14 @@
+{
+  "source_commit": "23b4fa553b8bc129e1389d68ea1a04c8773f2fa3",
+  "scope": "pinned public NC primitive behavior only",
+  "exit": 1,
+  "elapsed_seconds": 3.036,
+  "stdout_sha256": "4881b1d4b0f49c8a0e1c5c0c2a5028c1c13fac9c10d03d5050148e3b47772d8b",
+  "fixed_status": [
+    "REAL OWNER NC_LAUNCH_125 REFUSED",
+    "REAL OWNER POSTFLIGHT PASSED"
+  ],
+  "preflight_reason": "none",
+  "stderr_bytes_not_published": 0,
+  "commercial_acceptance": "not-complete"
+}
