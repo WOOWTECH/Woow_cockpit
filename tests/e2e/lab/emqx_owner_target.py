@@ -27,10 +27,18 @@ CONSUMER_PHASES=frozenset(('wire','config_terms','config_secret_wrappers','provi
     'inventory','tables','roots','references','connectors','cluster','api_bootstrap',
     'authentication','listeners','dashboard','provider','mqtt_projection','readers'))
 
+CONSUMER_REASONS = frozenset(('private_refused','inventory_names_type','inventory_names_bound',
+    'inventory_name_shape','inventory_duplicate_name','inventory_missing_schema',
+    'inventory_schema_type','inventory_schema_count','inventory_schema_entry_shape',
+    'inventory_schema_name_kind','inventory_schema_duplicate','inventory_schema_binding',
+    'inventory_tables_type','inventory_tables_count'))
+
+
 class OwnerCaptureRefused(TargetCaptureUnsupported):
-    def __init__(self,phase):
+    def __init__(self,phase,reason='private_refused'):
         super().__init__()
-        self.phase=phase if phase in CONSUMER_PHASES else 'wire'
+        self.phase=phase if type(phase) is str and phase in CONSUMER_PHASES else 'wire'
+        self.reason=reason if type(reason) is str and reason in CONSUMER_REASONS else 'private_refused'
 
 
 
@@ -250,6 +258,41 @@ def _config_secret_metadata(config, metadata):
         seen.add(binding)
 
 
+
+def _validate_inventory(names,schema,tables):
+    """Same strict inventory contract, split into bounded value-free reasons."""
+    def refuse(reason):
+        raise OwnerCaptureRefused('inventory',reason)
+    if type(names) is not list:
+        refuse('inventory_names_type')
+    if not names or len(names) > 64:
+        refuse('inventory_names_bound')
+    if not all(native_name(name) for name in names):
+        refuse('inventory_name_shape')
+    if len(set(names)) != len(names):
+        refuse('inventory_duplicate_name')
+    if 'schema' not in names:
+        refuse('inventory_missing_schema')
+    if type(schema) is not list:
+        refuse('inventory_schema_type')
+    if len(schema) != len(names):
+        refuse('inventory_schema_count')
+    if any(type(item) is not tuple or len(item) != 2 for item in schema):
+        refuse('inventory_schema_entry_shape')
+    try:
+        schema_names=[_text(item[0]) for item in schema]
+    except (TargetCaptureUnsupported,UnicodeError):
+        refuse('inventory_schema_name_kind')
+    if len(set(schema_names)) != len(names):
+        refuse('inventory_schema_duplicate')
+    if set(schema_names) != set(names):
+        refuse('inventory_schema_binding')
+    if type(tables) is not list:
+        refuse('inventory_tables_type')
+    if len(tables) != len(names)-1:
+        refuse('inventory_tables_count')
+
+
 def _build_checked(wire, generation, mark):
     mark('wire')
     raw, doc = _read_reply(wire, generation)
@@ -265,18 +308,7 @@ def _build_checked(wire, generation, mark):
     schema = _decode(doc['schema_metadata'], values)
     mark('inventory')
     names = doc['table_names']
-    if (type(names) is not list or not names or len(names) > 64
-            or not all(native_name(name) for name in names)
-            or len(set(names)) != len(names) or 'schema' not in names
-            or type(schema) is not list or len(schema) != len(names)):
-        unsupported()
-    # Native metadata must enumerate the exact same schema/table set.
-    if any(type(item) is not tuple or len(item) != 2 for item in schema):
-        unsupported()
-    if len({_text(item[0]) for item in schema}) != len(names) or {_text(item[0]) for item in schema} != set(names):
-        unsupported()
-    if type(doc['tables']) is not list or len(doc['tables']) != len(names) - 1:
-        unsupported()
+    _validate_inventory(names,schema,doc['tables'])
     mark('tables')
     tables, row_total = {}, 0
     for table in doc['tables']:
@@ -346,6 +378,8 @@ def _build(wire,generation):
         phase[0]=value if value in CONSUMER_PHASES else 'wire'
     try:
         return _build_checked(wire,generation,mark)
+    except OwnerCaptureRefused:
+        raise
     except Exception:
         raise OwnerCaptureRefused(phase[0]) from None
 

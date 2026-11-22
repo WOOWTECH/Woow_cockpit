@@ -218,6 +218,7 @@ def run_owner_target(root, broker, clients, report, *, owned_container_id):
             # restore/startup/restart/MQTT acceptance is asserted by this mode.
     except OwnerCaptureRefused as failure:
         report['consumer_fixed_stage']=failure.phase
+        report['consumer_fixed_reason']=failure.reason
         raise
 
 
