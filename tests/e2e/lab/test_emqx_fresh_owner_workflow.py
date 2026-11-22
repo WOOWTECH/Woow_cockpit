@@ -17,7 +17,7 @@ import emqx_private_owner_driver as driver
 import emqx_owner_source_capture as source_owner
 import emqx_real_candidate as real
 import emqx_owner_vendor_files as vendor_files
-from emqx_target_vendor_policy import FILES
+from emqx_target_vendor_policy import FILES, REFERENCES
 from emqx_private_boundary import PrivateFailure
 from emqx_source_profiles import ARM_SOURCE
 from test_emqx_source_cold_capture import decoder
@@ -31,7 +31,7 @@ class FixtureRunner:
         from test_emqx_owner_vendor_files import VendorFilesTests
         self.vendor = VendorFilesTests()
         self.vendor.setUp()
-        self.vendor.paths = sorted(p for p in vendor_files.PATHS if p != '/opt/emqx/etc/acl.conf')
+        self.vendor.paths = sorted(vendor_files.ALIASES[p] for p in REFERENCES)
         for doc in (self.vendor.image, self.vendor.actual):
             doc['files'] = [f for f in doc['files'] if f['path'] in self.vendor.paths]
         self.failure = None
