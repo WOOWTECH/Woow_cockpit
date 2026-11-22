@@ -159,6 +159,10 @@ password_hash_algorithm {name = sha256, salt_position = suffix}}]
             for image in (IMAGE, CLIENT):
                 doc = json.loads(checked('image', 'inspect', 'sha256:' + image))[0]
                 assert doc['Id'].removeprefix('sha256:') == image
+            if mode == 'owner-target':
+                stage = 'fixed-expression-native-parse'
+                from emqx_broker_owner_target import parse_fixed_expression
+                parse_fixed_expression(root, name, report)
             stage = 'broker-start'
             created = True
             checked('run', '-d', '--name', name, '--pull=never', '--network=none',

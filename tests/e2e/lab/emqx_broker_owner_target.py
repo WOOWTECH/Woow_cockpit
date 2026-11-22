@@ -83,3 +83,29 @@ def run_owner_target(root, broker, clients, report):
         report['target_completeness'] = 'synthetic-live-observed'
         # Keep diagnostics independent from raw configs/rows/counts. No source or
         # restore/startup/restart/MQTT acceptance is asserted by this mode.
+
+
+def parse_fixed_expression(root, broker_name, report):
+    """Native parse of fixed PUBLIC source before any broker starts."""
+    from pathlib import Path
+    from emqx_runtime_live import IMAGE
+    here = Path(__file__).parent
+    for filename in ('emqx_owner_target.expr', 'emqx_owner_target_parse.escript'):
+        (root / filename).write_bytes((here / filename).read_bytes())
+        (root / filename).chmod(0o600)
+    name = broker_name + '-parse'
+    try:
+        result = podman('run','--rm','--name',name,'--pull=never','--network=none',
+            '--log-driver=none','--image-volume=ignore','--userns=keep-id:uid=1000,gid=1000',
+            '--memory=128m','--pids-limit=32','-v',str(root)+':/work:ro',
+            '--entrypoint=/opt/emqx/erts-14.2.5.11/bin/escript','sha256:'+IMAGE,
+            '/work/emqx_owner_target_parse.escript','/work/emqx_owner_target.expr')
+        if result.returncode or result.stdout != b'OWNERPARSEOK':
+            # This diagnostic is only from public code parsing, not broker data.
+            if result.stdout.startswith(b'OWNERPARSEFAIL:') and len(result.stdout) <= 256:
+                report['fixed_source_parse'] = result.stdout.decode('utf-8')
+            raise RuntimeError('fixed-expression-parse-refused')
+        report['checks']['native_fixed_expression_parsed'] = True
+    finally:
+        cleanup = podman('rm','-f','--ignore','--volumes',name)
+        assert cleanup.returncode == 0 and podman('container','exists',name).returncode == 1
