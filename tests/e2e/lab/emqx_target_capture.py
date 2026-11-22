@@ -29,11 +29,23 @@ def _binary(term):
     return base64.b64decode(term['value'], validate=True)
 
 
+def _group_matches(term, expected):
+    # Live 5.8.9 global chains use atom groups. Compare the already validated
+    # native atom NAME to an independently owner-verified provider group; no
+    # atom creation, row-derived expected group, coercion of other types or filter.
+    if type(term) is dict and set(term) == {'type', 'value'} and term['type'] == 'atom':
+        if type(term['value']) is not str:
+            unsupported()
+        return term['value'].encode('utf-8') == expected
+    return _binary(term) == expected
+
+
 def mqtt_password_table(raw, *, exporter, username_group):
     """Trusted pinned native exporter(raw) -> complete typed table JSON bytes.
 
     username_group is owner-verified native authentication group bytes, never
-    inferred from data. Every row must belong to that group. Client-id auth,
+    inferred from data. Native binary or UTF-8 atom group names must exactly
+    match it; every row must belong to that group. Client-id auth,
     SCRAM, other tables and non-UTF8 binary hashes remain unsupported. Empty
     salt must be an actual exported empty binary, never a missing-field default.
     This is table coverage only, NOT discovery of every authenticator/listener.
@@ -54,7 +66,7 @@ def mqtt_password_table(raw, *, exporter, username_group):
         for row in doc['rows']:
             _, identity, password_hash, salt, superuser = row['value']
             if (identity['type'] != 'tuple' or len(identity['value']) != 2
-                    or _binary(identity['value'][0]) != username_group
+                    or not _group_matches(identity['value'][0], username_group)
                     or superuser not in ({'type': 'atom', 'value': 'true'},
                                          {'type': 'atom', 'value': 'false'})):
                 unsupported()
