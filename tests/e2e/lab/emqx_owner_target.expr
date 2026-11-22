@@ -23,6 +23,12 @@ ReasonCode = fun F(R,D) when D < 5 ->
         table_count_mismatch -> table_count_mismatch; table_receipt_changed -> table_receipt_changed;
         config_changed -> config_changed; provider_changed -> provider_changed;
         ticker_not_suspended -> ticker_not_suspended; ticker_changed -> ticker_changed;
+        schema_record_invalid -> schema_record_invalid;
+        unsupported_pid -> unsupported_pid;
+        unsupported_reference -> unsupported_reference;
+        unsupported_port -> unsupported_port;
+        unsupported_function -> unsupported_function;
+        unsupported_bitstring -> unsupported_bitstring;
         owner_target_unsupported_term -> unsupported_term;
         {Nested,Stack} when is_list(Stack) -> F(Nested,D+1);
         _ -> native_refused
@@ -36,6 +42,19 @@ SafeStage = fun(S) ->
         schema_terms,ticker_state,table_receipts,stable_config,stable_provider,
         serialize_config,serialize_provider,encode_reply]) of
         true -> S; false -> native_tables
+    end
+end,
+%% Complete persistent schema record, not VM-local table_info(all) handles.
+%% The envelope retains its {Table,CreateList} shape, without projecting fields.
+CanonicalSchema = fun(T,Records) ->
+    case Records of
+        [{schema,T,CreateList}] when is_list(CreateList), length(CreateList) =< 4096 ->
+            Keys = [K || {K,_} <- CreateList, is_atom(K)],
+            case length(Keys) =:= length(CreateList) andalso
+                 length(Keys) =:= length(lists:usort(Keys)) of
+                true -> {T,CreateList}; false -> error(schema_record_invalid)
+            end;
+        _ -> error(schema_record_invalid)
     end
 end,
 %% Fixed builtin policy: evaluated before any table fold; never invoke a module
@@ -73,6 +92,11 @@ Typed = fun F(V,D) when D =< 16 ->
         T when is_tuple(T), tuple_size(T) =< 4096 -> #{type => <<"tuple">>,value => [F(X,D+1) || X <- tuple_to_list(T)]};
         L when is_list(L), length(L) =< 4096 -> #{type => <<"list">>,value => [F(X,D+1) || X <- L]};
         M when is_map(M), map_size(M) =< 4096 -> #{type => <<"map">>,value => [[F(K,D+1),F(X,D+1)] || {K,X} <- maps:to_list(M)]};
+        P when is_pid(P) -> error(unsupported_pid);
+        R when is_reference(R) -> error(unsupported_reference);
+        P when is_port(P) -> error(unsupported_port);
+        F0 when is_function(F0) -> error(unsupported_function);
+        B when is_bitstring(B), not is_binary(B) -> error(unsupported_bitstring);
         _ -> error(owner_target_unsupported_term)
     end
 end,
@@ -117,8 +141,13 @@ Transaction = mnesia:transaction(fun() ->
             put(woow_target_stage, table_lock),
             mnesia:read_lock_table(T)
         end,Tabs),
+        put(woow_target_stage, table_lock),
+        mnesia:read_lock_table(schema),
         put(woow_target_stage, schema_metadata),
-        Defs = [{T,mnesia:table_info(T,all)} || T <- All],
+        %% OTP read/3 forbids schema. Its fixed native ETS table contains the
+        %% complete {schema,T,CreateList} records written by mnesia_schema.
+        true = ets:info(schema,size) =:= length(All),
+        Defs = [CanonicalSchema(T,ets:lookup(schema,T)) || T <- All],
         Data = [begin
             put(woow_target_stage, table_size),
             StorageBefore = mnesia:table_info(T,storage_type),
@@ -161,7 +190,8 @@ Transaction = mnesia:transaction(fun() ->
               row_count => N,rows => lists:reverse(Rs)}
         end || T <- Tabs],
         put(woow_target_stage, table_receipts),
-        DefsAfter = [{T,mnesia:table_info(T,all)} || T <- All],
+        true = ets:info(schema,size) =:= length(All),
+        DefsAfter = [CanonicalSchema(T,ets:lookup(schema,T)) || T <- All],
         SchemaBefore = Fingerprint(Defs), SchemaAfter = Fingerprint(DefsAfter),
         case SchemaBefore =:= SchemaAfter of true -> ok; false -> error(table_receipt_changed) end,
         put(woow_target_stage, schema_terms),
@@ -225,7 +255,7 @@ catch _:Reason:_ ->
         storage_null_copies,storage_null_nonempty,storage_external,storage_unknown,storage_unsupported,
         fragments_unsupported,table_type_unsupported,table_row_limit,
         table_count_mismatch,table_receipt_changed,config_changed,provider_changed,
-        ticker_not_suspended,ticker_changed,unsupported_term,native_refused]) of
+        ticker_not_suspended,ticker_changed,schema_record_invalid,unsupported_pid,unsupported_reference,unsupported_port,unsupported_function,unsupported_bitstring,unsupported_term,native_refused]) of
         true -> Code0; false -> native_refused
     end,
     io:format("WOOWTARGETFAIL:~s:~s:END",[atom_to_binary(SafeStage(get(woow_target_stage))),atom_to_binary(Code)])

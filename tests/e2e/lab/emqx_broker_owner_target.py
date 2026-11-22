@@ -21,7 +21,7 @@ NATIVE_REASONS = frozenset(('undef','badmatch','bad_argument','function_clause',
     'storage_null_copies','storage_null_nonempty','storage_external','storage_unknown','storage_unsupported',
     'fragments_unsupported','table_type_unsupported','table_row_limit',
     'table_count_mismatch','table_receipt_changed','config_changed','provider_changed',
-    'ticker_not_suspended','ticker_changed','unsupported_term','native_refused'))
+    'ticker_not_suspended','ticker_changed','schema_record_invalid','unsupported_pid','unsupported_reference','unsupported_port','unsupported_function','unsupported_bitstring','unsupported_term','native_refused'))
 
 
 def fixed_native_diagnostic(wire):

@@ -26,7 +26,7 @@ class OwnerStorageTests(unittest.TestCase):
         self.assertEqual(source.count('mnesia:foldl('), 2)
         self.assertIn('StorageReceipt(StorageBefore,Count,N,N2,CountAfter)', source)
         self.assertIn('{0,0,0,0} -> ok; _ -> error(storage_null_nonempty)', source)
-        self.assertIn('DefsAfter = [{T,mnesia:table_info(T,all)} || T <- All]', source)
+        self.assertIn('DefsAfter = [CanonicalSchema(T,ets:lookup(schema,T)) || T <- All]', source)
 
     def test_execute_exact_fixed_source_policy_in_erlang(self):
         # Exercise the exact policy in the pinned native runtime even when the
