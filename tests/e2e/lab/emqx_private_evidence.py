@@ -11,6 +11,13 @@ import stat
 
 from emqx_private_boundary import PrivateFailure, SOURCES
 
+SOURCE_NAMES = {
+    'backup-key': '備份解密金鑰', 'source-options': '來源設定與資料',
+    'source-cookie': '來源節點金鑰', 'mqtt-auth': 'MQTT認證',
+    'api-keys': 'API金鑰', 'tls': 'TLS憑證',
+    'target-bootstrap': '目標初始憑證', 'connectors': '連接器憑證',
+}
+
 PHASES = frozenset(('preflight', 'restore', 'startup', 'mqtt', 'restart', 'cleanup'))
 RESULTS = frozenset(('passed', 'failed', 'blocked', 'not-run'))
 
@@ -32,7 +39,9 @@ def publish(directory, name, *, registry, phase, result, coverage, coverage_mode
                 or any(type(v) is not int or not 0 <= v <= 4096 for v in coverage.values())):
             raise ValueError()
         raw = (json.dumps({'phase': phase, 'result': result,
-                           'coverage': coverage if coverage_mode == 'counts' else sorted(coverage)}, sort_keys=True) + '\n').encode()
+                           'coverage': coverage if coverage_mode == 'counts' else
+                           [SOURCE_NAMES[source] for source in sorted(coverage)]},
+                          sort_keys=True, ensure_ascii=coverage_mode == 'counts') + '\n').encode()
         # No file is created until the actual consumer registry accepts bytes.
         registry.scan(raw)
         path = Path(directory).absolute()

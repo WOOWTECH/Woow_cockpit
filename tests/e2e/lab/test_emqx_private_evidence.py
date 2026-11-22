@@ -7,7 +7,7 @@ import unittest
 from unittest.mock import patch
 
 from emqx_private_boundary import Registry, SOURCES, PrivateFailure
-from emqx_private_evidence import publish
+from emqx_private_evidence import publish, SOURCE_NAMES
 
 
 class EvidenceTests(unittest.TestCase):
@@ -44,7 +44,7 @@ class EvidenceTests(unittest.TestCase):
     def test_names_only_evidence_keeps_numeric_secrets_blocked_without_emitting_counts(self):
         registry = Registry()
         for source in SOURCES:
-            registry.register(source, [b'0', b'1', b'true'] if source == 'backup-key' else [])
+            registry.register(source, [b'0', b'1', b'true', b'false', b'cookie', b'source'] if source == 'backup-key' else [])
         registry.seal()
         with self.assertRaises(PrivateFailure):
             self.write(registry=registry)
@@ -52,7 +52,7 @@ class EvidenceTests(unittest.TestCase):
         self.write(registry=registry, coverage_mode='names')
         raw = (self.root / 'mqtt.json').read_bytes()
         registry.scan(raw)
-        self.assertEqual(json.loads(raw)['coverage'], sorted(SOURCES))
+        self.assertEqual(json.loads(raw)['coverage'], [SOURCE_NAMES[source] for source in sorted(SOURCES)])
         self.assertNotIn(b'0', raw)
         self.assertNotIn(b'1', raw)
         with self.assertRaises(PrivateFailure):
