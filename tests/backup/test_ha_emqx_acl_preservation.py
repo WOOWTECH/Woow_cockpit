@@ -128,3 +128,13 @@ class CandidateAclRemovalTests(unittest.TestCase):
             with self.subTest(size=len(body)),self.assertRaises(BackupError) as caught:
                 acl_receipt(lambda command:Result(0,body,b'private-stderr'))
             self.assertNotIn('private',str(caught.exception))
+
+    def test_fixed_native_schema_contract_uses_full_ets_record_under_read_lock(self):
+        self.assertIn('ok = mnesia:read_lock_table(schema)',ACL_RECEIPT_EXPR)
+        self.assertIn('[{schema,emqx_acl,Create}] = ets:lookup(schema,emqx_acl)',ACL_RECEIPT_EXPR)
+        self.assertLess(ACL_RECEIPT_EXPR.index('read_lock_table(schema)'),ACL_RECEIPT_EXPR.index('ets:lookup(schema,emqx_acl)'))
+        self.assertNotIn('mnesia:read(schema',ACL_RECEIPT_EXPR)
+        self.assertIn('Schema = term_to_binary(Create)',ACL_RECEIPT_EXPR)
+        self.assertIn('emqx_acl = mnesia:table_info(emqx_acl,record_name)',ACL_RECEIPT_EXPR)
+        self.assertIn('[who,rules] = mnesia:table_info(emqx_acl,attributes)',ACL_RECEIPT_EXPR)
+        self.assertIn('Count = mnesia:table_info(emqx_acl,size)',ACL_RECEIPT_EXPR)

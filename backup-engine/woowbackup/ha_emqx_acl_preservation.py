@@ -39,7 +39,7 @@ try
    Storage = mnesia:table_info(emqx_acl,storage_type),
    true = lists:member(Storage,[ram_copies,disc_copies,disc_only_copies,
        {ext,rocksdb_copies,mnesia_rocksdb},{ext,null_copies,mria_mnesia_null_storage}]),
-   [{schema,emqx_acl,Create}] = mnesia:read(schema,emqx_acl,read),
+   [{schema,emqx_acl,Create}] = ets:lookup(schema,emqx_acl),
    true = erlang:external_size(Create) =< 65536,
    true = Valid(Create,0),
    Schema = term_to_binary(Create),
