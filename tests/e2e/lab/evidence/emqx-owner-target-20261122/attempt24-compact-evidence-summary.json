@@ -1,0 +1,52 @@
+{
+  "source_commit": "c671b43ea9543b789584b0f871a5647190cd7452",
+  "scope": "actual fresh pinned target; compact exact scanned evidence; no real restore",
+  "exit": 1,
+  "elapsed_seconds": 49.33568504708819,
+  "stdout_sha256": "053257495bdd8b8e8e5e8aafb7d0a49212f6560f0c65810f218feb8661e6c2c5",
+  "stderr_bytes_not_published": 0,
+  "reports": [
+    {
+      "stage": "postflight",
+      "owned": "zero",
+      "network": "none",
+      "ports": "empty"
+    },
+    {
+      "stage": "source",
+      "commit": "c671b43ea9543b789584b0f871a5647190cd7452"
+    },
+    {
+      "checks": {
+        "actual_native_expression_and_projection": "passed",
+        "all_five_target_categories_registered": "passed",
+        "broker_cleanup": "passed",
+        "broker_ready": "passed",
+        "clients_cleanup": "passed",
+        "fresh_ticker_identity_suspended_after": "passed",
+        "fresh_ticker_identity_suspended_before": "passed",
+        "native_fixed_expression_parsed": "passed",
+        "native_full_inventory_not_two_table_subset": "passed",
+        "no_clients_after_capture": "passed",
+        "no_clients_before_capture": "passed",
+        "private_files_cleanup": "passed"
+      },
+      "client_image_id": "93a0bdfcbd9b7a86b36127cb81f54e1afd2019f12f39033458df405a027c03e3",
+      "failure_stage": "owner-target-observation",
+      "ha_commercial_acceptance": "not-claimed",
+      "image_id": "3f60addfad2bfc6c09400aa48cfbc1b2b2aab04fb6a64d6392c016e02d7fb57b",
+      "native_transport": "passed",
+      "result": "failed",
+      "scope": "synthetic-broker-owner-target",
+      "source_completeness": "not-assessed",
+      "target_completeness": "not-assessed"
+    },
+    {
+      "stage": "postflight",
+      "owned": "zero",
+      "network": "none",
+      "ports": "empty"
+    }
+  ],
+  "restore_executed": false
+}

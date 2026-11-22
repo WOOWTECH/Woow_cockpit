@@ -203,7 +203,9 @@ def run_owner_target(root, broker, clients, report, *, owned_container_id):
             class FullScan:
                 def scan(self, payload):
                     runtime.scan(payload)
+                    checks['exact_evidence_runtime_scan'] = True
                     readers.persisted_values.scan(payload)
+                    checks['exact_evidence_persisted_scan'] = True
             scan = FullScan()
             # Target-only evidence: no fake source registry/counts, no numeric JSON.
             raw = (json.dumps({'階段':'目標擷取','結果':'passed',
