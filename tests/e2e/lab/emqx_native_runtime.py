@@ -41,7 +41,7 @@ def run_native(directory, script, args=(), *, writable_directory=None, output):
             '--network=none', '--read-only', '--cap-drop=ALL',
             '--security-opt=no-new-privileges', '--memory=256m', '--memory-swap=256m',
             '--pids-limit=64', '--ulimit=cpu=10:10', '--ulimit=fsize=8388608:8388608',
-            '--log-driver=none', '--timeout=15', '--stop-timeout=1', '--userns=keep-id',
+            '--log-driver=none', '--timeout=15', '--stop-timeout=1', '--userns=keep-id', '--user=' + str(os.getuid()) + ':' + str(os.getgid()),
             '-e', 'EXPORT_OWNER_UID=' + str(os.getuid()),
             '-e', 'ERL_CRASH_DUMP=/dev/null', *mounts,
             '--entrypoint', '/opt/emqx/erts-14.2.5.11/bin/escript', IMAGE,
