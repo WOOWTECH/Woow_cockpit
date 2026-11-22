@@ -6,6 +6,9 @@ import io
 import os
 from pathlib import Path
 import struct
+import shutil
+import subprocess
+import sys
 import tempfile
 import unittest
 from unittest.mock import Mock, patch
@@ -74,6 +77,36 @@ class TransferTests(unittest.TestCase):
         if mode in transfer.PREFLIGHT_MODES and code != 0:
             retained.assert_not_called()
         return code, sink.getvalue(), archive, spawn, output.getvalue(), errors.getvalue()
+
+    def test_staged_preflight_bundle_executes_vendor_policy_without_repository_imports(self):
+        status, _, archive, _, _, _ = self.invoke('--preflight')
+        self.assertEqual(status,0)
+        staged=self.root/'code';staged.mkdir()
+        for relative in archive.call_args.args[0][3:]:
+            source=transfer.ROOT/relative; target=staged/relative
+            target.parent.mkdir(parents=True,exist_ok=True)
+            if source.is_dir(): shutil.copytree(source,target)
+            else: shutil.copy2(source,target)
+        code = """
+import sys
+from pathlib import Path
+root=Path(sys.argv[1]);sys.path[:0]=[str(root/'backup-engine'),str(root/'tests/e2e/lab')]
+from emqx_target_vendor_policy import policy_from_observation, REFERENCES
+from emqx_owner_vendor_files import VendorFiles, _paths
+from emqx_native_runtime import IMAGE
+receipts=[dict(path=p,image=IMAGE,bytes=1,sha256='a'*64,container_id='b'*64,
+               image_identity=(1,),target_identity=(1,)) for p in _paths(REFERENCES)]
+policy_from_observation(VendorFiles(receipts),'c'*32)
+"""
+        result=subprocess.run([sys.executable,'-I','-c',code,str(staged)],
+                              cwd=staged,capture_output=True,timeout=10)
+        self.assertEqual(result.returncode,0,result.stderr.decode(errors='replace')[-1000:])
+        self.assertEqual(result.stdout,b'')
+        (staged/'tests/e2e/lab/emqx_target_fixture_policy.py').unlink()
+        missing=subprocess.run([sys.executable,'-I','-c',code,str(staged)],
+                               cwd=staged,capture_output=True,timeout=10)
+        self.assertNotEqual(missing.returncode,0)
+        self.assertEqual(missing.stdout,b'')
 
     def test_fixed_modes_preserve_private_frame_and_bundle_all_required_code(self):
         for mode, expected_byte in (('--source', b'S'), ('--x86-source', b'X'),

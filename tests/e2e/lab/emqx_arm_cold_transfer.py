@@ -124,7 +124,7 @@ def main(argv=None):
                 'emqx_framed_preflight.py','emqx_preflight_stage.py','emqx_fresh_owner_workflow.py',
                 'emqx_private_owner_driver.py','emqx_owner_preflight.py','emqx_owner_target.py',
                 'emqx_owner_target.expr','emqx_owner_target_parse.escript',
-                'emqx_target_vendor_policy.py','emqx_owner_vendor_files.py','emqx_bootstrap_csv.py',
+                'emqx_target_vendor_policy.py','emqx_target_fixture_policy.py','emqx_owner_vendor_files.py','emqx_bootstrap_csv.py',
                 'emqx_target_capture.py','emqx_target_snapshots.py','emqx_persisted_values.py',
                 'emqx_runtime_workflow.py','emqx_private_evidence.py','emqx_adapter_owner.py',
                 'emqx_adapter_fixture.py','emqx_adapter_provision.py')]
