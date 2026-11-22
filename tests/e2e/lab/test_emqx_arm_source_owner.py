@@ -156,7 +156,7 @@ class SourceFrameTests(unittest.TestCase):
             self.assertEqual(owner.main(['--source']), 1)
         stream.read.assert_not_called()
 
-    def amd64_fixture(self):
+    def amd64_fixture(self, *, arch='amd64', vendor_acl=False):
         import gzip
         import hashlib
         import json
@@ -168,8 +168,10 @@ class SourceFrameTests(unittest.TestCase):
                 data = archive.extractfile(member).read()
                 if member.name == 'addon.json':
                     addon = json.loads(data)
-                    addon['user']['image'] = 'test/amd64-addon-woow-emqx'
+                    addon['user']['image'] = 'test/' + arch + '-addon-woow-emqx'
                     data = json.dumps(addon).encode()
+                if vendor_acl and member.name.endswith('/configs/cluster.hocon'):
+                    data = b'authorization.sources=[{type=file,path="${EMQX_ETC_DIR}/acl.conf"}]'
                 entries.append({'name': member.name, 'data': data})
         self.raw = hx.tar_bytes(entries)
         slug = 'fedcba98_woow-emqx'
@@ -258,4 +260,54 @@ class SourceFrameTests(unittest.TestCase):
                  patch.object(owner, 'capture_owner_source', malformed_capture):
                 with self.assertRaisesRegex(PrivateFailure, '^private-source-frame-refused$'):
                     owner.consume_source_frame(self.frame(), staging_parent=self.spool, mode='--x86-source')
+            self.assertEqual(list(self.spool.iterdir()), [])
+
+    def test_vendor_acl_flags_are_explicit_and_strict_modes_still_refuse(self):
+        import hashlib
+        import json
+        import emqx_arm_source_owner as owner
+        import emqx_private_spool as spool
+        import emqx_owner_file_hocon as vendor
+        import test_emqx_owner_file_hocon as vendor_fixtures
+        from emqx_private_boundary import PrivateFailure
+        def native_contract(raw):
+            doc = vendor_fixtures.document()
+            doc.update(input_sha256=hashlib.sha256(raw).hexdigest(), input_bytes=len(raw))
+            return json.dumps(doc).encode()
+        def observe(directory, script, *, output):
+            self.assertEqual(script, 'emqx_vendor_acl.escript')
+            output.write(vendor_fixtures.observed())
+            return 0
+        for mode, profile_name, arch, allowed in (
+            ('--source', 'ARM_SOURCE', 'aarch64', False),
+            ('--source-vendor-acl', 'ARM_VENDOR_ACL', 'aarch64', True),
+            ('--x86-source', 'X86_SOURCE', 'amd64', False),
+            ('--x86-source-vendor-acl', 'X86_VENDOR_ACL', 'amd64', True),
+        ):
+            self.amd64_fixture(arch=arch, vendor_acl=True)
+            chosen = replace(getattr(profiles, profile_name), sha256=self.digest,
+                             cold_receipt=(2, 29) if arch == 'aarch64' else None)
+            output, errors = io.StringIO(), io.StringIO()
+            with self.subTest(mode=mode), patch.object(profiles, profile_name, chosen), \
+                 patch.object(spool, 'X86_SHA256', self.digest), \
+                 patch.object(spool, 'X86_SIZE', len(self.raw)), \
+                 patch.object(capture_module, 'native_hocon', native_contract), \
+                 patch.object(capture_module, 'native_cold_history', decoder), \
+                 patch.object(vendor, 'run_native', side_effect=observe) as observer, \
+                 patch.object(owner, 'capture_owner_source', wraps=owner.capture_owner_source) as captured, \
+                 contextlib.redirect_stdout(output), contextlib.redirect_stderr(errors):
+                if allowed:
+                    receipt = owner.consume_source_frame(self.frame(), staging_parent=self.spool, mode=mode)
+                    self.assertEqual(receipt['registry'], 'unsealed')
+                    observer.assert_called_once()
+                    self.assertEqual(captured.call_args.kwargs['file_dependency_profile'], vendor.PROFILE)
+                    self.assertEqual(captured.call_args.kwargs['product_image'], vendor.IMAGE)
+                else:
+                    with self.assertRaises(PrivateFailure):
+                        owner.consume_source_frame(self.frame(), staging_parent=self.spool, mode=mode)
+                    observer.assert_not_called()
+                    self.assertIsNone(captured.call_args.kwargs['file_dependency_profile'])
+                    self.assertIsNone(captured.call_args.kwargs['product_image'])
+            self.assertEqual(output.getvalue(), '')
+            self.assertEqual(errors.getvalue(), '')
             self.assertEqual(list(self.spool.iterdir()), [])

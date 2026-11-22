@@ -1,5 +1,5 @@
 """Private fixed source policy; never archive-, argv- or environment-selected paths."""
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 
@@ -11,6 +11,7 @@ class SourceProfile:
     arch: str
     fixture_profile: str | None
     cold_receipt: tuple[int, int] | None
+    file_dependency_profile: str | None = None
 
 
 _BASE = Path('/home/woowtechopenclaw/.woowbk-lab/ha-fixtures/20261119-b1')
@@ -24,9 +25,19 @@ X86_SOURCE = SourceProfile(
     b'X', 'amd64', 'owner-x86-20261121', None)
 
 
+VENDOR_ACL_PROFILE = 'owner-pinned-image-vendor-acl-v1'
+ARM_VENDOR_ACL = replace(ARM_SOURCE, frame_mode=b'V', file_dependency_profile=VENDOR_ACL_PROFILE)
+X86_VENDOR_ACL = replace(X86_SOURCE, frame_mode=b'W', file_dependency_profile=VENDOR_ACL_PROFILE)
+SOURCE_MODES = ('--source', '--x86-source', '--source-vendor-acl', '--x86-source-vendor-acl')
+
+
 def source_profile(mode):
     if mode == '--source':
         return ARM_SOURCE
     if mode == '--x86-source':
         return X86_SOURCE
+    if mode == '--source-vendor-acl':
+        return ARM_VENDOR_ACL
+    if mode == '--x86-source-vendor-acl':
+        return X86_VENDOR_ACL
     raise ValueError('fixed-source-mode-required')

@@ -18,6 +18,14 @@ class ProfileTests(unittest.TestCase):
         self.assertEqual(x86.archive.name, 'woow-b1-x86-emqx-stopped-enc.tar')
         self.assertEqual(x86.archive.parent.parent.name, 'x86')
         self.assertEqual((arm.frame_mode, x86.frame_mode), (b'S', b'X'))
+        for mode, base, byte in (('--source-vendor-acl', arm, b'V'),
+                                 ('--x86-source-vendor-acl', x86, b'W')):
+            vendor = source_profile(mode)
+            self.assertEqual(vendor.sha256, base.sha256)
+            self.assertEqual(vendor.archive, base.archive)
+            self.assertEqual(vendor.cold_receipt, base.cold_receipt)
+            self.assertEqual(vendor.file_dependency_profile, 'owner-pinned-image-vendor-acl-v1')
+            self.assertEqual(vendor.frame_mode, byte)
         with self.assertRaises(AttributeError):
             x86.sha256 = arm.sha256
         for unknown in ('', '--source=/tmp/other', '--x86-source=bad', 'owner-x86-20261121'):

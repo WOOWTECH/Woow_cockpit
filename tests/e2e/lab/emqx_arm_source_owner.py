@@ -17,7 +17,8 @@ import hashlib
 
 from emqx_owner_source_capture import capture_owner_source
 from emqx_private_boundary import PrivateFailure
-from emqx_source_profiles import source_profile
+from emqx_source_profiles import SOURCE_MODES, source_profile
+from emqx_native_runtime import IMAGE
 
 MAX_ARCHIVE = 512 * 1024 * 1024
 
@@ -75,7 +76,9 @@ def consume_source_frame(stream, *, staging_parent, mode='--source'):
                 raise ValueError()
             with capture_owner_source(source, password=password,
                     expected_sha256=profile.sha256, spool_directory=root,
-                    fixture_profile=profile.fixture_profile) as (captured, binding):
+                    fixture_profile=profile.fixture_profile,
+                    file_dependency_profile=profile.file_dependency_profile,
+                    product_image=IMAGE if profile.file_dependency_profile is not None else None) as (captured, binding):
                 receipt = captured.cold_receipt
                 if (type(receipt) is not dict
                         or set(receipt) != {'scope', 'files', 'bytes', 'final_state'}
@@ -113,7 +116,7 @@ def _owner_realm():
 
 def main(argv=None):
     args = sys.argv[1:] if argv is None else argv
-    if len(args) != 1 or args[0] not in ('--source', '--x86-source'):
+    if len(args) != 1 or args[0] not in SOURCE_MODES:
         return 2
     if not _owner_realm():
         return 1

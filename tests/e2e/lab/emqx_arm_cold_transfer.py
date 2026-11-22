@@ -14,7 +14,7 @@ import struct
 import subprocess
 import sys
 
-from emqx_source_profiles import source_profile
+from emqx_source_profiles import SOURCE_MODES, source_profile
 
 ROOT=Path(__file__).resolve().parents[3]
 CREDS=Path('/home/woowtechopenclaw/.woowbk-lab/secrets/ha-import-creds.env')
@@ -48,10 +48,11 @@ try:
  mode=exact(1)
  if mode==b'P':
   print('ARM DEPENDENCIES PASSED',flush=True);raise SystemExit(0)
- if mode not in (b'R',b'C',b'S',b'X'):raise ValueError()
- if mode in (b'S',b'X'):
+ source_modes={b'S':'--source',b'X':'--x86-source',b'V':'--source-vendor-acl',b'W':'--x86-source-vendor-acl'}
+ if mode not in (b'R',b'C',*source_modes):raise ValueError()
+ if mode in source_modes:
   from emqx_arm_source_owner import main
-  raise SystemExit(main(['--source' if mode==b'S' else '--x86-source']))
+  raise SystemExit(main([source_modes[mode]]))
  runpy.run_path(str(work/'tests/e2e/lab/emqx_arm_cold_owner.py'),run_name='__main__',init_globals={'CONFIGURATION_ONLY':mode==b'C'})
 finally:
  if work is not None:shutil.rmtree(work)
@@ -76,11 +77,11 @@ def main(argv=None):
     child=None
     try:
         args=sys.argv[1:] if argv is None else argv
-        if args not in ([],['--probe'],['--configuration'],['--source'],['--x86-source']):raise ValueError()
-        profile=source_profile('--x86-source' if args==['--x86-source'] else '--source')
+        if args not in ([],['--probe'],['--configuration']) and (len(args)!=1 or args[0] not in SOURCE_MODES):raise ValueError()
+        profile=source_profile(args[0] if len(args)==1 and args[0] in SOURCE_MODES else '--source')
         probe=args==['--probe']
         configuration=args==['--configuration']
-        source_only=args in (['--source'],['--x86-source'])
+        source_only=len(args)==1 and args[0] in SOURCE_MODES
         deps=dependencies()
         if probe:
             files=['backup-engine/woowbackup','tests/e2e/lab/emqx_arm_cold_owner.py']
@@ -103,7 +104,7 @@ def main(argv=None):
                     if len(values)!=1:raise ValueError()
                     key=values[0].encode('ascii');break
             if key is None or not 1<=len(key)<=1024 or b'\n' in key or b'\r' in key:raise ValueError()
-        files=['backup-engine/woowbackup','tests/e2e/lab/emqx_arm_cold_owner.py','tests/e2e/lab/emqx_cold_history.py','tests/e2e/lab/emqx_cold_terms.escript','tests/e2e/lab/emqx_native_runtime.py','tests/e2e/lab/emqx_semantic_readers.py','tests/e2e/lab/emqx_private_spool.py','tests/e2e/lab/ha_real_fixture.py','tests/e2e/lab/emqx_broker_workload.py','tests/e2e/lab/emqx_runtime_live.py','tests/e2e/lab/emqx_runtime_credentials.py','tests/e2e/lab/emqx_private_boundary.py','tests/e2e/lab/emqx_real_candidate.py','tests/e2e/lab/emqx_source_consumer.py','tests/e2e/lab/emqx_native_hocon.py','tests/e2e/lab/emqx_hocon_native.escript','tests/e2e/lab/emqx_arm_source_owner.py','tests/e2e/lab/emqx_owner_source_capture.py','tests/e2e/lab/emqx_source_profiles.py']
+        files=['backup-engine/woowbackup','tests/e2e/lab/emqx_arm_cold_owner.py','tests/e2e/lab/emqx_cold_history.py','tests/e2e/lab/emqx_cold_terms.escript','tests/e2e/lab/emqx_native_runtime.py','tests/e2e/lab/emqx_semantic_readers.py','tests/e2e/lab/emqx_private_spool.py','tests/e2e/lab/ha_real_fixture.py','tests/e2e/lab/emqx_broker_workload.py','tests/e2e/lab/emqx_runtime_live.py','tests/e2e/lab/emqx_runtime_credentials.py','tests/e2e/lab/emqx_private_boundary.py','tests/e2e/lab/emqx_real_candidate.py','tests/e2e/lab/emqx_source_consumer.py','tests/e2e/lab/emqx_native_hocon.py','tests/e2e/lab/emqx_hocon_native.escript','tests/e2e/lab/emqx_arm_source_owner.py','tests/e2e/lab/emqx_owner_source_capture.py','tests/e2e/lab/emqx_source_profiles.py','tests/e2e/lab/emqx_owner_file_hocon.py','tests/e2e/lab/emqx_vendor_acl.escript']
         code=subprocess.check_output(['git','archive','HEAD',*files],cwd=ROOT)
         fd=os.open(profile.archive,os.O_RDONLY|os.O_NOFOLLOW)
         with os.fdopen(fd,'rb') as archive:
