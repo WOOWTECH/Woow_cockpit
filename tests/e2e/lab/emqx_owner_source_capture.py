@@ -12,7 +12,7 @@ from ha_real_fixture import source_binding
 from emqx_source_consumer import Capture
 from emqx_native_hocon import native_hocon
 from emqx_cold_history import native_cold_history
-from emqx_private_boundary import PrivateFailure
+from emqx_private_boundary import PrivateFailure, SourcePhaseFailure
 
 
 @contextlib.contextmanager
@@ -37,6 +37,8 @@ def capture_owner_source(path, *, password, expected_sha256, spool_directory,
     All use stays inside this context so private spool bytes are cleaned on
     success, failure or cancellation. No candidate builder/broker is invoked.
     """
+    stage = 'SETUP'
+    captured = None
     try:
         if spool_directory is None:
             raise PrivateFailure('private-owner-source-refused')
@@ -46,9 +48,11 @@ def capture_owner_source(path, *, password, expected_sha256, spool_directory,
         with Capture.source_only(password, hocon_parser=owner_parser,
                 cold_decoder=native_cold_history, product_selection=True,
                 spool_directory=spool_directory) as captured:
+            stage = 'BIND'
             with source_binding(path, 'emqx', hacommon.semver('5.8.9'),
                     expected_sha256, keys=captured.keys,
                     required_encryption=required_encryption) as source:
+                stage = 'PROFILE'
                 # source_binding has verified the actual archive digest here.
                 if fixture_profile is not None:
                     from emqx_private_spool import fixture_limits
@@ -66,14 +70,19 @@ def capture_owner_source(path, *, password, expected_sha256, spool_directory,
                         selected_parser = native_hocon_http_context
                 elif product_image is not None:
                     raise PrivateFailure('private-owner-source-refused')
+                stage = 'CAPTURE'
                 private_binding = captured(source, fixture_profile=fixture_profile,
                     verified_sha256=expected_sha256 if fixture_profile is not None else None,
                     file_dependency_profile=file_dependency_profile, product_image=product_image)
+                stage = 'BIND_FINISH'
+            stage = 'CAPABILITY'
             # Additive capability hook: only after final source_binding stamp.
             from emqx_captured_candidate import _verify_owner_binding
             _verify_owner_binding(captured, private_binding, expected_sha256)
+            stage = 'OWNER_CONTEXT'
             yield captured, private_binding
+            stage = 'CLEANUP'
     except (KeyboardInterrupt, SystemExit):
-        raise PrivateFailure('private-owner-source-cancelled') from None
+        raise SourcePhaseFailure('private-owner-source-cancelled', captured._source_phase if stage == 'CAPTURE' and captured else stage) from None
     except Exception:
-        raise PrivateFailure('private-owner-source-refused') from None
+        raise SourcePhaseFailure('private-owner-source-refused', captured._source_phase if stage == 'CAPTURE' and captured else stage) from None

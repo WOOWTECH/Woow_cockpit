@@ -197,6 +197,7 @@ class Capture:
         self._product_selection = product_selection
         self.discarded = {"files": 0, "bytes": 0}
         self._hocon_parser = hocon_parser
+        self._source_phase = 'SETUP'
         self.hocon_file_receipts = ()
         self._spool_directory = spool_directory
         self._stack = None
@@ -262,7 +263,9 @@ class Capture:
         self._used = True
         if fixture_profile is not None and self._spool_directory is None:
             refuse()
+        self._source_phase = 'SELECT'
         slug = source['addon_member']('woow-emqx')
+        self._source_phase = 'SPOOL'
         with source['open'](slug) as stream:
             if self._spool_directory is not None:
                 if self._stack is None:
@@ -284,6 +287,7 @@ class Capture:
                 if hasattr(stream, 'finish'):
                     stream.finish()
                 captured = io.BytesIO(b''.join(chunks))
+        self._source_phase = 'TAR'
         report = habackup.Report()
         for entry in habackup.iter_entries(captured, report=report, addon=True):
             if entry.kind not in ('dir', 'file'):
@@ -297,6 +301,7 @@ class Capture:
         cold_bytes = 0
         with tarfile.open(fileobj=captured, mode='r:') as archive:
             for entry in archive:
+                self._source_phase = 'SELECT'
                 name = habackup.normalize(entry.name)
                 if entry.isdir():
                     continue
@@ -323,11 +328,13 @@ class Capture:
                 found.add(name)
                 raw = archive.extractfile(entry).read(limit + 1)
                 if is_cold:
+                    self._source_phase = 'COLD_INVENTORY'
                     cold_bytes += len(raw)
                     if len(cold_records) >= 64 or cold_bytes > 32 * 1024 ** 2:
                         refuse()
                     cold_records[name] = (raw, cold_kind(name, len(raw)))
                 elif name == 'addon.json':
+                    self._source_phase = 'ADDON_METADATA'
                     source_options.extend(addon_values(raw))
                 elif name == 'data/emqx/node.cookie':
                     if not raw.strip():
@@ -339,15 +346,28 @@ class Capture:
                 elif is_hocon:
                     if self._hocon_parser is None:
                         raise PrivateFailure('private-source-format-unsupported')
+                    self._source_phase = 'HOCON_CONTRACT'
+                    def observed_parser(data):
+                        self._source_phase = 'HOCON_NATIVE'
+                        encoded = self._hocon_parser(data)
+                        self._source_phase = 'HOCON_CONTRACT'
+                        return encoded
                     try:
-                        values = read_hocon(raw, self._hocon_parser,
+                        values = read_hocon(raw, observed_parser,
                             file_profile=file_dependency_profile, product_image=product_image)
                         source_options.extend(values.values)
                         self.hocon_file_receipts += getattr(values, 'file_receipts', ())
-                    except SemanticRefused:
+                    except SemanticRefused as error:
+                        if self._source_phase != 'HOCON_NATIVE':
+                            self._source_phase = {
+                                'syntax':'HOCON_SYNTAX','walk':'HOCON_WALK',
+                                'vendor_observer':'VENDOR_OBSERVER','receipt':'VENDOR_RECEIPT',
+                                'register':'HOCON_REGISTER',
+                            }.get(getattr(error,'owner_phase',None),'HOCON_CONTRACT')
                         raise PrivateFailure('private-source-hocon-unsupported') from None
                 else:
                     raise PrivateFailure('private-source-format-unsupported')
+        self._source_phase = 'SELECT'
         required = {'addon.json', 'data/emqx/node.name'}
         if not self._product_selection:
             required.add('data/emqx/node.cookie')
@@ -357,19 +377,28 @@ class Capture:
         if not required <= found:
             refuse()
         if self._cold_decoder is not None:
+            self._source_phase = 'COLD_INVENTORY'
             from emqx_cold_history import HistoryInventory
             if not cold_records or sum(kind == 'schema-dat' for _, kind in cold_records.values()) != 1:
                 refuse()
             receipts = {name: {'kind': kind, 'bytes': len(raw),
                               'sha256': hashlib.sha256(raw).hexdigest()}
                         for name, (raw, kind) in cold_records.items()}
-            inventory = HistoryInventory(receipts, self._cold_decoder)
+            def observed_cold(raw, kind):
+                self._source_phase = 'COLD_NATIVE'
+                encoded = self._cold_decoder(raw, kind)
+                self._source_phase = 'COLD_TYPED'
+                return encoded
+            inventory = HistoryInventory(receipts, observed_cold)
             for name, (raw, _) in cold_records.items():
+                self._source_phase = 'COLD_NATIVE'
                 inventory.consume(name, raw)
+            self._source_phase = 'COLD_FINISH'
             source_options.extend(inventory.finish().values)
             self.cold_receipt = {'scope': 'historical-values-only',
                                  'files': len(receipts), 'bytes': cold_bytes,
                                  'final_state': False}
+        self._source_phase = 'REGISTER'
         self.registry.register('source-options', source_options)
         self._source_ready = True
         if not self._source_only:

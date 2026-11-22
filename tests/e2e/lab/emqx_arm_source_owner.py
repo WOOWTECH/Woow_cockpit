@@ -16,7 +16,7 @@ import tempfile
 import hashlib
 
 from emqx_owner_source_capture import capture_owner_source
-from emqx_private_boundary import PrivateFailure
+from emqx_private_boundary import PrivateFailure, SourcePhaseFailure, fixed_source_phase
 from emqx_source_profiles import SOURCE_MODES, source_profile
 from emqx_native_runtime import IMAGE
 
@@ -42,14 +42,17 @@ def consume_source_frame(stream, *, staging_parent, mode='--source'):
     receipt is returned only AFTER all private staging/spool cleanup completes.
     Target categories are not acknowledged, and the registry must be unsealed.
     """
+    stage = 'FRAME_PROFILE'
     try:
         profile = source_profile(mode)
+        stage = 'FRAME_KEY'
         key_size = struct.unpack('!I', _exact(stream, 4))[0]
         if not 1 <= key_size <= 1024:
             raise ValueError()
         password = _exact(stream, key_size).decode('ascii')
         if not password or '\n' in password or '\r' in password:
             raise ValueError()
+        stage = 'FRAME_ARCHIVE'
         size = struct.unpack('!Q', _exact(stream, 8))[0]
         if not 0 < size <= MAX_ARCHIVE:
             raise ValueError()
@@ -72,13 +75,16 @@ def consume_source_frame(stream, *, staging_parent, mode='--source'):
                     left -= len(chunk)
                 output.flush()
                 os.fsync(output.fileno())
+            stage = 'FRAME_DIGEST'
             if stream.read(1) != b'' or digest.hexdigest() != profile.sha256:
                 raise ValueError()
+            stage = 'CAPTURE'
             with capture_owner_source(source, password=password,
                     expected_sha256=profile.sha256, spool_directory=root,
                     fixture_profile=profile.fixture_profile,
                     file_dependency_profile=profile.file_dependency_profile,
                     product_image=IMAGE if profile.file_dependency_profile is not None else None) as (captured, binding):
+                stage = 'RECEIPT'
                 receipt = captured.cold_receipt
                 if (type(receipt) is not dict
                         or set(receipt) != {'scope', 'files', 'bytes', 'final_state'}
@@ -91,8 +97,10 @@ def consume_source_frame(stream, *, staging_parent, mode='--source'):
                 if (profile.cold_receipt is not None
                         and (receipt['files'], receipt['bytes']) != profile.cold_receipt):
                     raise ValueError()
+                stage = 'ARCH'
                 if binding['addon_info']('woow-emqx').arch != profile.arch:
                     raise ValueError()
+                stage = 'UNSEALED'
                 try:
                     captured.registry.summary()
                 except PrivateFailure as failure:
@@ -100,14 +108,17 @@ def consume_source_frame(stream, *, staging_parent, mode='--source'):
                         raise ValueError() from None
                 else:
                     raise ValueError()  # Unexpectedly sealed is not source-only.
+                stage = 'CLEANUP'
         return {'scope': 'source-only-registration', 'registry': 'unsealed',
                 'source_completeness': 'not-assessed',
                 'target_completeness': 'not-assessed',
                 'full_scan': 'not-performed', 'restore': 'not-performed'}
     except (KeyboardInterrupt, SystemExit):
-        raise PrivateFailure('private-source-frame-cancelled') from None
+        raise SourcePhaseFailure('private-source-frame-cancelled', stage) from None
+    except SourcePhaseFailure as error:
+        raise SourcePhaseFailure('private-source-frame-refused', error.phase if stage in ('CAPTURE','CLEANUP') else stage) from None
     except Exception:
-        raise PrivateFailure('private-source-frame-refused') from None
+        raise SourcePhaseFailure('private-source-frame-refused', stage) from None
 
 
 def _owner_realm():
@@ -116,9 +127,14 @@ def _owner_realm():
 
 def main(argv=None):
     args = sys.argv[1:] if argv is None else argv
+    diagnostic = len(args) == 2 and args[1] == '--diagnose'
+    if diagnostic:
+        args = args[:1]
     if len(args) != 1 or args[0] not in SOURCE_MODES:
         return 2
     if not _owner_realm():
+        if diagnostic:
+            print('SOURCE REALM REFUSED', flush=True)
         return 1
     def deadline(*_):
         raise RuntimeError('private-source-deadline')
@@ -126,8 +142,13 @@ def main(argv=None):
     try:
         signal.setitimer(signal.ITIMER_REAL, 180)
         consume_source_frame(sys.stdin.buffer, staging_parent=Path.home(), mode=args[0])
+        if diagnostic:
+            print('SOURCE COMPLETE PASSED', flush=True)
         return 0
-    except BaseException:
+    except BaseException as error:
+        if diagnostic:
+            phase = fixed_source_phase(getattr(error, 'phase', None))
+            print('SOURCE ' + phase + ' REFUSED', flush=True)
         return 1
     finally:
         signal.setitimer(signal.ITIMER_REAL, 0)

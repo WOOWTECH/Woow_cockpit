@@ -21,6 +21,28 @@ class PrivateFailure(Exception):
     """Only fixed codes may cross the public diagnostic boundary."""
 
 
+SOURCE_PHASES = frozenset(('SETUP','FRAME_PROFILE','FRAME_KEY','FRAME_ARCHIVE',
+    'FRAME_DIGEST','BIND','PROFILE','CAPTURE','SPOOL','TAR','SELECT','ADDON_METADATA',
+    'HOCON_NATIVE','HOCON_CONTRACT','HOCON_SYNTAX','HOCON_WALK','VENDOR_OBSERVER',
+    'VENDOR_RECEIPT','HOCON_REGISTER','COLD_INVENTORY','COLD_NATIVE','COLD_TYPED','COLD_FINISH',
+    'REGISTER','BIND_FINISH','CAPABILITY','OWNER_CONTEXT','RECEIPT','ARCH',
+    'UNSEALED','CLEANUP','REALM','COMPLETE'))
+
+
+def fixed_source_phase(phase):
+    return phase if type(phase) is str and phase in SOURCE_PHASES else 'CAPTURE'
+
+
+class SourcePhaseFailure(PrivateFailure):
+    """Fixed private code plus bounded phase; never exception text or values."""
+    def __init__(self, code, phase):
+        if code not in ('private-owner-source-refused','private-owner-source-cancelled',
+                        'private-source-frame-refused','private-source-frame-cancelled'):
+            code = 'private-owner-source-refused'
+        super().__init__(code)
+        self.phase = fixed_source_phase(phase)
+
+
 class Registry:
     def __init__(self):
         self._sources = set()

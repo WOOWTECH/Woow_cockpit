@@ -32,7 +32,7 @@ class TransferTests(unittest.TestCase):
         self.creds.chmod(0o600)
         self.digest = hashlib.sha256(self.cipher).hexdigest()
 
-    def invoke(self, mode, *, digest=None, status=0, mutate=False):
+    def invoke(self, mode, *, digest=None, status=0, mutate=False, diagnostic=False):
         profile_name = {'--source': 'ARM_SOURCE', '--x86-source': 'X86_SOURCE',
             '--source-vendor-acl': 'ARM_VENDOR_ACL',
             '--x86-source-vendor-acl': 'X86_VENDOR_ACL',
@@ -61,7 +61,7 @@ class TransferTests(unittest.TestCase):
              patch.object(transfer.subprocess, 'check_output', return_value=b'public-code') as archive, \
              patch.object(transfer.subprocess, 'Popen', return_value=child) as spawn, \
              contextlib.redirect_stdout(output), contextlib.redirect_stderr(errors):
-            code = transfer.main([mode])
+            code = transfer.main([mode]+(['--diagnose'] if diagnostic else []))
         return code, sink.getvalue(), archive, spawn, output.getvalue(), errors.getvalue()
 
     def test_fixed_modes_preserve_private_frame_and_bundle_all_required_code(self):
@@ -94,6 +94,16 @@ class TransferTests(unittest.TestCase):
                 self.assertNotIn('env', spawn.call_args.kwargs)
                 self.assertEqual((out, err), ('', ''))
 
+    def test_fixed_diagnostic_prefix_before_source_mode_and_bootstrap_syntax(self):
+        status, framed, _, _, out, err = self.invoke('--source-vendor-acl-http-body',diagnostic=True)
+        self.assertEqual(status,0)
+        stream=io.BytesIO(framed)
+        for _ in range(2):
+            size=struct.unpack('!Q',stream.read(8))[0];stream.read(size)
+        self.assertEqual(stream.read(2),b'QH')
+        self.assertEqual((out,err),('',''))
+        compile(transfer.BOOTSTRAP,'<fixed-bootstrap>','exec')
+
     def test_wrong_digest_or_same_bytes_changed_stamp_refuses(self):
         for kwargs in ({'digest': '0' * 64}, {'mutate': True}):
             with self.subTest(case=kwargs):
@@ -108,7 +118,8 @@ class TransferTests(unittest.TestCase):
         self.assertEqual((out, err), ('', ''))
 
     def test_unknown_or_override_args_refuse_before_key_or_archive_reads(self):
-        for args in (['--x86-source', '--sha', 'override'], ['--source', '--vendor-acl'],
+        for args in (['--configuration','--diagnose'], ['--probe','--diagnose'],
+                     ['--x86-source', '--sha', 'override'], ['--source', '--vendor-acl'],
                      ['--x86-source-vendor-acl=/tmp/other'], ['--x86-source', '--key', 'private']):
             with self.subTest(args=args), patch.object(transfer, 'dependencies') as deps, \
                  patch.object(transfer.os, 'open') as opened, \

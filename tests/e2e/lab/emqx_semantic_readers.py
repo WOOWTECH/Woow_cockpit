@@ -164,6 +164,16 @@ def read_hocon(raw, parser=None, *, file_profile=None, product_image=None):
         result = Values()
         _json_walk(doc['document'], result)
         return result
+    except SemanticRefused as error:
+        clean = SemanticRefused()
+        if file_profile is not None:
+            from emqx_owner_file_hocon import OwnerFileRefused
+            if isinstance(error, OwnerFileRefused):
+                # Reader-owned bounded enum only; no message/values/traceback.
+                phase = error.phase
+                clean.owner_phase = phase if type(phase) is str and phase in (
+                    'syntax','walk','vendor_observer','receipt','register') else 'contract'
+        raise clean from None
     except Exception:
         raise SemanticRefused() from None
 
