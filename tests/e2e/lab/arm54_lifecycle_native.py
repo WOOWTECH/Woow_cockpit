@@ -1,0 +1,82 @@
+"""Main3fe2ff3 real TempObjects on ARM; one explicitly injected cleanup transport fault."""
+import hashlib,io,json,sys,tarfile
+from pathlib import Path
+root=Path(sys.argv[1]);sys.path.insert(0,str(root/'source/tests/e2e/lab'))
+from arm54_owned_runtime import ROOT,Runner,report
+from woowbackup import tempctr
+from woowbackup.errors import BackupError
+from woowbackup.flows import Cancelled
+from woowbackup.podman import Result
+r=Runner(); image=json.loads((ROOT/'build-result.json').read_text())['image_id']
+checks={}; current=[]
+
+def new(job,**kwargs):
+    t=tempctr.TempObjects(r,job,memory='256m',pids=128,cpus='0.5',**kwargs);current.append(t);return t
+
+
+def exists(kind,name): return r.podman(kind,'exists',name,check=False).returncode==0
+
+
+try:
+    t=new('j20261122T133000Z-a54d0001')
+    data=b'arm54-native-lifecycle'*4096
+    stream=io.BytesIO()
+    with tarfile.open(fileobj=stream,mode='w') as out:
+        m=tarfile.TarInfo('marker.bin');m.size=len(data);m.mode=0o600;out.addfile(m,io.BytesIO(data))
+    t.volume('same')
+    t.volume_import('same',lambda out:out.write(stream.getvalue()))
+    exported=io.BytesIO();t.volume_export('same',exported,max_output=2*1024**2)
+    with tarfile.open(fileobj=io.BytesIO(exported.getvalue())) as tar:
+        got=next(tar.extractfile(m).read() for m in tar if m.name.removeprefix('./')=='marker.bin')
+    assert hashlib.sha256(got).digest()==hashlib.sha256(data).digest()
+    checks['real_volume_import_export_sha256']=True
+    failure=t.run('same',image,['-c','exit 23'],entrypoint='sh',remove=False,check=False)
+    assert failure.returncode==23 and exists('container',t.name('same')) and exists('volume',t.name('same'))
+    assert not t.cleanup() and not t.cleanup()
+    assert not exists('container',t.name('same')) and not exists('volume',t.name('same'))
+    checks['real_exit23_same_name_container_volume_cleanup_idempotent']=True
+    t.volume('same'); t.run('same',image,['-c','exit 0'],entrypoint='sh',remove=False)
+    assert not t.cleanup()
+    checks['same_job_role_retry_after_failure']=True
+
+    c=new('j20261122T133000Z-a54d0002');c.volume('cancel')
+    def cancelled(out):
+        out.write(b'partial-synthetic-tar');out.flush()
+        raise Cancelled('synthetic producer cancellation')
+    try: c.volume_import('cancel',cancelled,timeout=20)
+    except Cancelled: pass
+    else: raise AssertionError('cancel-not-propagated')
+    assert not c.cleanup() and not exists('volume',c.name('cancel'))
+    checks['real_import_cancel_producer_error_and_cleanup']=True
+
+    dead=new('j20261122T133000Z-a54d0003');dead.volume('orphan')
+    dead.run('orphan',image,['-c','exit 17'],entrypoint='sh',remove=False,check=False)
+    removed,left=tempctr.sweep(r,lambda job:True,only_job=dead.job_id)
+    assert not removed and not left and exists('volume',dead.name('orphan'))
+    removed,left=tempctr.sweep(r,lambda job:False,only_job=dead.job_id)
+    assert not left and len(removed)==2
+    assert not exists('container',dead.name('orphan')) and not exists('volume',dead.name('orphan'))
+    assert not dead.cleanup()
+    checks['real_sweep_retains_alive_then_cleans_dead_job']=True
+
+    class Once(Runner):
+        fail=True
+        def podman(self,*args,**kwargs):
+            if args[:2]==('volume','rm') and self.fail:
+                self.fail=False;self.commands.append(['injected-transport-failure',*args]);return Result(125,b'',b'suppressed')
+            return super().podman(*args,**kwargs)
+    rr=Once(); retry=tempctr.TempObjects(rr,'j20261122T133000Z-a54d0004',memory='256m',pids=128,cpus='0.5');current.append(retry)
+    retry.volume('retry')
+    assert retry.cleanup()==[retry.name('retry')] and exists('volume',retry.name('retry'))
+    assert not retry.cleanup() and not exists('volume',retry.name('retry'))
+    checks['injected_cleanup_transport_failure_real_residue_then_real_retry']=True
+    checks['cleanup_retry_transport_commands']=rr.commands
+    result={'status':'passed','checks':checks,'product_base':'3fe2ff3'}
+except Exception as e:
+    result={'status':'failed','error_code':type(e).__name__,'checks':checks}
+finally:
+    left=[]
+    for t in current: left+=t.cleanup()
+    result.update(cleanup_left=left,commands=r.commands,free_bytes_samples=r.free)
+    report(ROOT/'lifecycle-result.json',result);print(json.dumps(result,sort_keys=True))
+    sys.exit(0 if result['status']=='passed' and not left else 1)

@@ -1,0 +1,51 @@
+{
+  "index": {
+    "registry": "registry-1.docker.io",
+    "repository": "tailscale/tailscale",
+    "reference": "stable",
+    "resolved_digest": "sha256:72c1e19e0aedca96b8533bbb0b4368564410ff20b17e53b804eb6c1f04a31be4",
+    "media_type": "application/vnd.oci.image.index.v1+json",
+    "platforms": [
+      {
+        "digest": "sha256:8934bed5f68e80c5f9c881f62c65909223ee660432946c10ad212d958fc2c2bb",
+        "platform": {
+          "architecture": "arm64",
+          "os": "linux"
+        }
+      },
+      {
+        "digest": "sha256:85b111193de0ea4b02ad759209035d604938868aa0dfa1afe38f37d14b8955eb",
+        "platform": {
+          "architecture": "arm",
+          "os": "linux",
+          "variant": "v7"
+        }
+      },
+      {
+        "digest": "sha256:51d3b98e6b4e7d4ca0888c8f38e710be2744b1f8a38b7e51bbdbfaa97bacc290",
+        "platform": {
+          "architecture": "386",
+          "os": "linux"
+        }
+      },
+      {
+        "digest": "sha256:91b7c58cbce2f1273f1d76046892fcd45b8cdd5efe70a45c8ede53d041e89688",
+        "platform": {
+          "architecture": "amd64",
+          "os": "linux"
+        }
+      }
+    ]
+  },
+  "arm": {
+    "registry": "registry-1.docker.io",
+    "repository": "tailscale/tailscale",
+    "reference": "sha256:8934bed5f68e80c5f9c881f62c65909223ee660432946c10ad212d958fc2c2bb",
+    "resolved_digest": "sha256:8934bed5f68e80c5f9c881f62c65909223ee660432946c10ad212d958fc2c2bb",
+    "media_type": "application/vnd.oci.image.manifest.v1+json",
+    "architecture": "arm64",
+    "os": "linux",
+    "labels": null,
+    "compressed_bytes": 59280179
+  }
+}

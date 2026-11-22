@@ -1,0 +1,1 @@
+{"command": ["unshare", "cat", "/proc/self/uid_map"], "exit": 125, "public_transport_error": "Error: please use unshare with rootless\n", "actual_host_uid_map": "         0          0 4294967295\n", "actual_host_gid_map": "         0          0 4294967295\n"}

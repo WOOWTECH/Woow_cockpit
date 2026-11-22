@@ -1,0 +1,35 @@
+{
+  "base": "3fe2ff3",
+  "target": "192.168.2.54",
+  "sole_remote_owner": true,
+  "image_path_resolved": "native local build of unmodified official Woow package Containerfile",
+  "package_commit": "0afdfa464a5ae55c85145c242f5b38ac88eea969",
+  "local_image_id": "a792d2bd0935634c6889aecda76f8b3303c0ca6cfaf4182f16b32b6a86000ab6",
+  "product_gate": "passed truthful OCI version0.29.4; labels not patched",
+  "service_chain": "passed synthetic HA -> internal converter -> private volume import -> startup -> gRPC CLI data assertions",
+  "users": 1,
+  "vpn_nodes_in_passed_chain": 0,
+  "tailscale_vpn_client": "source registration failed; identity/reconnect unproved; root cause unresolved",
+  "tempobjects_lifecycle": "six scenario checks passed across initial and completion runs; one cleanup transport fault explicitly injected",
+  "minimum_observed_free_bytes": 17358127104,
+  "reserve_bytes": 12884901888,
+  "final_free_bytes": 18531201024,
+  "cleanup": "passed; private workspace/store/image artifacts removed; no mount residue",
+  "original_inventory_and_start_times": "unchanged and running since before probe",
+  "public_engine_and_guards": "unchanged",
+  "local_tests": {
+    "new": 3,
+    "seconds": 0.021,
+    "result": "OK"
+  },
+  "archive_roundtrip_repeated": false,
+  "unproved": [
+    "Tailscale VPN identity/reconnect and relay",
+    "real originals",
+    "public installer/rollback",
+    "rootless OwnerRunner deployment",
+    "Headplane UI/API keys",
+    "credential scanner completeness",
+    "continuous disk reserve / hard quota"
+  ]
+}
