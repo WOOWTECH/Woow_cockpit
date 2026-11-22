@@ -1,0 +1,13 @@
+{
+  "base_commit": "ff4ec7e8423089a19a6997463f9338dbe084612a",
+  "main_comparison": "3fe2ff3",
+  "engine_key_space_identical_to_main": true,
+  "python": "3.12.3",
+  "machine": "x86_64",
+  "sha256": {
+    "tests/backup/bounded_large_archive.py": "9049d930d7ba99c6dd32500cde3d3289214ca329eff83175d521fb95eebf208a",
+    "backup-engine/woowbackup/archive.py": "85b58635a23a552cbe446ceab6dee9fc914d245c708bc86d2211fc69c39e9d49",
+    "backup-engine/woowbackup/keys.py": "9ab11bb4c11b36e3589c069af43ad9b7500d6596bf39932612d384a40c28379e",
+    "backup-engine/woowbackup/haimport.py": "27a32eb950bddc322a4c47313a48ed91fa7f2ada82d70cfef08bfcc503710cec"
+  }
+}

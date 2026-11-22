@@ -1,0 +1,103 @@
+{
+  "schema": 3,
+  "status": "passed",
+  "payload_bytes": 8590983168,
+  "reserve_bytes": 12884901888,
+  "sparse": false,
+  "encryption": "age-x25519",
+  "compression": "zstd",
+  "service_restore": false,
+  "hermes_attempts": 0,
+  "headers_only_over_8gib": false,
+  "phases": {
+    "generate_seconds": 91.70151762384921,
+    "write_seconds": 56.74395313998684,
+    "verify_seconds": 23.017823749920353,
+    "extract_hash_seconds": 201.25891774496995
+  },
+  "profile": "compressible-sequential",
+  "archive_cap_bytes": 268435456,
+  "payload_method": "unique-shake256-4KiB-tile-per-MiB",
+  "planned_peak_storage_bytes": 9127854080,
+  "required_free_bytes": 22281191424,
+  "free_before": 26266882048,
+  "minimum_free_observed": 17631424512,
+  "encryption_dependencies": {
+    "age": "1.1.1",
+    "age-keygen": "1.1.1",
+    "zstd": "*** Zstandard CLI (64-bit) v1.5.5, by Yann Collet ***"
+  },
+  "ephemeral_key": {
+    "created": true,
+    "identity_mode": "0600",
+    "directory_mode": "0700",
+    "secret_logged": false
+  },
+  "header_probes": [
+    {
+      "declared_bytes": 8589934591,
+      "actual_header_bytes": 512,
+      "parser_size_supported": true,
+      "missing_payload_rejected": true
+    },
+    {
+      "declared_bytes": 8589934592,
+      "actual_header_bytes": 1536,
+      "parser_size_supported": true,
+      "missing_payload_rejected": true
+    },
+    {
+      "declared_bytes": 8589934593,
+      "actual_header_bytes": 1536,
+      "parser_size_supported": true,
+      "missing_payload_rejected": true
+    },
+    {
+      "case": "oversized backup.json",
+      "actual_header_bytes": 1536,
+      "error": {
+        "code": "not-a-backup",
+        "message": "這不是 woowtech 備份檔（.tar 或 .woowbackup）。",
+        "details": {}
+      }
+    },
+    {
+      "case": "metadata limit",
+      "actual_header_bytes": 512,
+      "error": {
+        "code": "limit-exceeded",
+        "message": "備份檔超出安全限制（檔案數量或大小），已拒絕處理。",
+        "details": {
+          "reason": "backup.json too large",
+          "size": 1048577
+        }
+      }
+    }
+  ],
+  "source_allocated_bytes": 8591118336,
+  "source_sha256": "f88436d3200bc34cfa08f7362a377f17398a0cf61dc3467c1ec4554e1ee1e2b7",
+  "archive_bytes": 34519040,
+  "archive_allocated_bytes": 34525184,
+  "archive_sha256": "476a958d3c2ed20a6c55df8b7adad19f7262806d0b8562520147bde730cd4a29",
+  "verified_bytes": 8590983168,
+  "key_rejections": {
+    "missing": "key-required",
+    "wrong": "wrong-key"
+  },
+  "actual_inner_member": {
+    "size": 8590983168,
+    "pax": {
+      "size": "8590983168"
+    }
+  },
+  "source_removed_before_extract": true,
+  "extracted_sha256": "f88436d3200bc34cfa08f7362a377f17398a0cf61dc3467c1ec4554e1ee1e2b7",
+  "extracted_bytes": 8590983168,
+  "extracted_allocated_bytes": 8591106048,
+  "temporary_payloads_removed": true,
+  "ephemeral_keys_removed": true,
+  "tool_children_remaining": 0,
+  "elapsed_seconds": 373.59300240594894,
+  "max_rss_kib": 29196,
+  "free_after_cleanup": 26263568384
+}
