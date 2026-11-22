@@ -23,6 +23,21 @@ main([]) ->
         {commit,#{<<"transaction-map-private">> => [<<"unreplayed-history-private">>,1.25]}}]),
     log(Root++"/DECISION.LOG",setelement(3,setelement(2,mnesia_log:trans_log_header(),decision_log),"3.0"),[{decision,<<"decision-private">>}]),
     log(Root++"/DECISION_TAB.LOG",setelement(3,setelement(2,mnesia_log:trans_log_header(),decision_tab),"1.0"),[{decision,<<"decision-tab-private">>}]),
+    %% Native-created headerless internal log, including real unclosed status.
+    Empty=Root++"/empty.DCD", EmptyRef=make_ref(),
+    {ok,EmptyRef}=disk_log:open([{file,Empty},{name,EmptyRef},{type,halt},
+                               {format,internal},{head,none},{repair,false}]),
+    ok=disk_log:sync(EmptyRef), {ok,Unclosed}=file:read_file(Empty),
+    ok=file:write_file(Root++"/empty-unclosed.DCD",Unclosed),
+    ok=disk_log:close(EmptyRef), {ok,EmptyBytes}=file:read_file(Empty),
+    8=byte_size(EmptyBytes),
+    ok=file:write_file(Root++"/empty-truncated.DCD",binary:part(EmptyBytes,0,7)),
+    ok=file:write_file(Root++"/empty-trailing.DCD",<<EmptyBytes/binary,0>>),
+    ok=file:write_file(Root++"/arbitrary-eight.DCD",<<"abcdefgh">>),
+    ok=file:write_file(Root++"/zero-eight.DCD",<<0:64>>),
+    Ext=make_ref(), {ok,Ext}=disk_log:open([{file,Root++"/external-eight.DCD"},
+                                         {name,Ext},{format,external},{repair,false}]),
+    ok=disk_log:blog(Ext,<<"abcdefgh">>), ok=disk_log:close(Ext),
     lists:foreach(fun({Name,Term}) ->
         log(Root++"/"++Name,mnesia_log:dcl_log_header(),[{row,<<"valid-prefix-private">>},Term])
     end,[{"fun.DCL",fun() -> file:write_file("/work/EXECUTED",<<"bad">>) end},

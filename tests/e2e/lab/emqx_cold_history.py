@@ -15,7 +15,7 @@ from emqx_semantic_readers import (
 CONTAINERS = {
     'schema-dat': ('dets9-set-keypos2', 'dets-fold-complete'),
     **{kind: ('disk-log-internal-halt', 'disk-log-eof') for kind in
-       ('dcd', 'dcl', 'transaction-log', 'decision-log', 'decision-tab')},
+       ('empty-dcd', 'dcd', 'dcl', 'transaction-log', 'decision-log', 'decision-tab')},
 }
 SCRIPT = Path(__file__).with_name('emqx_cold_terms.escript')
 
@@ -54,14 +54,19 @@ def read_cold_history(raw, kind, decoder=None):
         doc = _contract(raw, lambda value: decoder(value, kind), 'emqx-cold-history-json-v1')
         expected = {'contract','version','otp_release','erts_version','input_sha256',
                     'input_bytes','complete','kind','container','traversal','semantics',
-                    'final_state','term_count','terms'}
+                    'final_state','empty_container','term_count','terms'}
         container, traversal = CONTAINERS[kind]
         if (set(doc) != expected or doc['kind'] != kind or doc['container'] != container
                 or doc['traversal'] != traversal or doc['otp_release'] != '26'
                 or doc['erts_version'] != '14.2.5.11'
                 or doc['semantics'] != 'historical-value-superset' or doc['final_state'] is not False
                 or type(doc['terms']) is not list or type(doc['term_count']) is not int
-                or not 0 < doc['term_count'] == len(doc['terms']) <= 4096):
+                or not 0 <= doc['term_count'] == len(doc['terms']) <= 4096
+                or type(doc['empty_container']) is not bool
+                or (kind == 'empty-dcd' and not (doc['empty_container'] is True
+                    and doc['term_count'] == 0 and len(raw) == 8))
+                or (kind != 'empty-dcd' and not (doc['empty_container'] is False
+                    and doc['term_count'] > 0))):
             raise ValueError()
         result = Values()
         for term in doc['terms']:

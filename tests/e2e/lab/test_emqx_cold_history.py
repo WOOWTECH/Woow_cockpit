@@ -131,3 +131,32 @@ class ColdTests(unittest.TestCase):
         receipt=self.receipts(); receipt['table.DCD']['bytes']=8*1024*1024+1
         with self.assertRaises(SemanticRefused): HistoryInventory(receipt,callback)
         callback.assert_not_called()
+
+    def test_explicit_empty_dcd_native_container_has_no_header_terms(self):
+        raw=self.raw['empty.DCD']
+        self.assertEqual(len(raw),8)
+        encoded=native_cold_history(raw,'empty-dcd')
+        doc=json.loads(encoded)
+        self.assertEqual(doc['kind'],'empty-dcd')
+        self.assertTrue(doc['empty_container'])
+        self.assertEqual(doc['terms'],[])
+        self.assertEqual(doc['term_count'],0)
+        self.assertFalse(doc['final_state'])
+        self.assertNotIn('log_header',doc)
+        self.assertNotIn('log_version',doc)
+        decoder=lambda value,kind:encoded
+        expected={'empty.DCD':{'kind':'empty-dcd','bytes':8,
+                              'sha256':hashlib.sha256(raw).hexdigest()}}
+        inventory=HistoryInventory(expected,decoder)
+        inventory.consume('empty.DCD',raw)
+        self.assertEqual(inventory.finish().values,())
+
+    def test_explicit_empty_dcd_rejects_wrong_bytes_and_ordinary_dcd_stays_strict(self):
+        for name in ('arbitrary-eight.DCD','zero-eight.DCD','external-eight.DCD',
+                     'empty-truncated.DCD','empty-trailing.DCD','empty-unclosed.DCD',
+                     'table.DCD'):
+            with self.subTest(name=name),self.assertRaises(SemanticRefused):
+                read_cold_history(self.raw[name],'empty-dcd',native_cold_history)
+        for kind in ('dcd','dcl'):
+            with self.subTest(kind=kind),self.assertRaises(SemanticRefused):
+                read_cold_history(self.raw['empty.DCD'],kind,native_cold_history)

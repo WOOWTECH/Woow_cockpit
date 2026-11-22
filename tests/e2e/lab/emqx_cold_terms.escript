@@ -18,6 +18,7 @@ main([Kind]) ->
         Init = #{terms => [], count => 0, nodes => 0, encoded => 0},
         {Container,Traversal,Acc} = case Kind of
             "schema-dat" -> {<<"dets9-set-keypos2">>,<<"dets-fold-complete">>,schema(Input,Init)};
+            "empty-dcd" -> {<<"disk-log-internal-halt">>,<<"disk-log-eof">>,empty_log(Input,Init)};
             "dcd" -> {<<"disk-log-internal-halt">>,<<"disk-log-eof">>,log(Input,dcd_log,"1.0",Init)};
             "dcl" -> {<<"disk-log-internal-halt">>,<<"disk-log-eof">>,log(Input,dcl_log,"1.0",Init)};
             "transaction-log" -> {<<"disk-log-internal-halt">>,<<"disk-log-eof">>,log(Input,trans_log,"4.3",Init)};
@@ -33,7 +34,8 @@ main([Kind]) ->
             input_sha256 => Hash, input_bytes => Size, complete => true,
             kind => unicode:characters_to_binary(Kind), container => Container,
             traversal => Traversal, semantics => <<"historical-value-superset">>,
-            final_state => false, term_count => maps:get(count,Acc),
+            final_state => false, empty_container => maps:get(empty_container,Acc,false),
+            term_count => maps:get(count,Acc),
             terms => lists:reverse(maps:get(terms,Acc))}),
         true = byte_size(Output) =< 1048576,
         io:put_chars(Output)
@@ -77,6 +79,23 @@ schema_dependencies(Props) ->
                   [mnesia_backend_types,mnesia_index_plugins]),
     ok.
 
+%% Empty native log is a separate coverage-only kind: no Mnesia header claim.
+empty_log(Input,Init) ->
+    8=filelib:file_size(Input),
+    Ref=closed_log(Input),
+    try
+        eof=disk_log:chunk(Ref,start),
+        Init#{empty_container => true}
+    after ok=disk_log:close(Ref) end.
+closed_log(Input) ->
+    %% OTP read_only open also accepts dirty logs; require native clean status.
+    {ok,HeadFile}=file:open(Input,[read,binary,raw]),
+    Head=try {ok,H}=file:read(HeadFile,8), H after file:close(HeadFile) end,
+    yes=disk_log_1:is_head(Head),
+    Ref=make_ref(),
+    {ok,Ref}=disk_log:open([{file,Input},{name,Ref},{type,halt},{format,internal},
+                           {mode,read_only},{repair,false},{linkto,self()}]),
+    Ref.
 log(Input,Kind,Version,Init) ->
     Ref = make_ref(),
     {ok,Ref} = disk_log:open([{file,Input},{name,Ref},{type,halt},{format,internal},
