@@ -75,9 +75,11 @@ Other cooked roots are retained in the private superset, never silently dropped.
 
 Bounds: 1MiB native JSON, depth16, 64 inventory tables, <=4096 total data rows,
 existing aggregate private value/node limits; all unknown terms refuse. The
-native expression is source code only in this delivery: it has NOT been compiled
-or run against EMQX here. In particular table_info/fold/config/provider API shapes
-and cooked default/wrapped-secret forms require owner real-broker verification.
+native expression was subsequently tested in a fresh synthetic dev-d fixture:
+native parser and single-line CLI eval passed, but native_tables returned a fixed
+badmatch failure. No complete native observation/registry success is claimed.
+See EMQX-OWNER-TARGET-NATIVE-HANDOFF.md for preserved attempts and ownership
+return. Deeper table_info/fold/schema and cooked secret compatibility is pending.
 This is current live-state coverage, not historical DCD/DCL EOF traversal,
 checkpoint export or source recovery. Existing cold historical companion support
 remains separate and is not marked successful by this live producer.
