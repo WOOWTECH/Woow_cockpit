@@ -225,7 +225,7 @@ def bundle_code():
     selected=[p for p in paths if (Path(p).name.startswith('emqx_') and Path(p).suffix in ('.py','.escript','.expr'))
               or Path(p).name=='ha_real_fixture.py']
     required={'emqx_real_owner_transport.py','emqx_real_owner_workflow.py','emqx_post_restore_values.py',
-              'emqx_owner_fixture_files.py','emqx_target_fixture_policy.py','emqx_adapter_mqtt.py','emqx_issued_target_probe.py','emqx_retained_history.py','emqx_source_api_validator.py'}
+              'emqx_owner_fixture_files.py','emqx_target_fixture_policy.py','emqx_adapter_mqtt.py','emqx_issued_target_probe.py','emqx_retained_history.py','emqx_source_api_validator.py','emqx_source_mqtt_negative.py','emqx_owned_client.py'}
     if not required<={Path(p).name for p in selected}:raise ValueError()
     raw=subprocess.check_output(['git','archive','HEAD','backup-engine/woowbackup',*selected],cwd=ROOT)
     if not 0<len(raw)<=16*1024*1024:raise ValueError()
@@ -272,13 +272,14 @@ def dependency_check():
     from emqx_real_owner_workflow import run_real_framed_owner,_composite_observer_factory,final_private_receipt
     from emqx_post_restore_values import collect_post_restore_values
     from emqx_retained_history import collect_original_retained_payloads
+    from emqx_source_mqtt_negative import validate_source_mqtt_negative
     from emqx_source_api_validator import validate_source_api
     from emqx_adapter_mqtt import CLIENT
     from emqx_issued_target_probe import run_issued_target_probe,TARGET_RECEIPT
     from woowbackup.adapters.quadlet_postgres import QuadletPostgresAdapter
     from woowbackup import flows
     if not all(callable(x) for x in (run_real_framed_owner,_composite_observer_factory(),
-            final_private_receipt,collect_post_restore_values,collect_original_retained_payloads,validate_source_api,run_issued_target_probe,QuadletPostgresAdapter,flows.run_restore)):
+            final_private_receipt,collect_post_restore_values,collect_original_retained_payloads,validate_source_api,validate_source_mqtt_negative,run_issued_target_probe,QuadletPostgresAdapter,flows.run_restore)):
         raise ValueError()
     if type(CLIENT) is not str or type(TARGET_RECEIPT) is not bytes or not 0<len(TARGET_RECEIPT)<=65536:raise ValueError()
 

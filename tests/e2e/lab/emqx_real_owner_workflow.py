@@ -17,6 +17,7 @@ import secrets
 import struct
 import tempfile
 import time
+import weakref
 from types import SimpleNamespace
 
 from emqx_adapter_owner import OwnerProvision, LabOwnerRunner
@@ -36,7 +37,7 @@ from woowbackup.paths import Paths
 
 PHASES = frozenset(('profile','observer_dependency','realm','frame','provision',
     'ready','source','target','preflight','build','package','restore',
-    'rollback','restart','cleanup','client_frame','no_live','mqtt','post_capture','post_capture_identity','payload_history','build_adapter','source_api','api_frame'))
+    'rollback','restart','cleanup','client_frame','no_live','mqtt','post_capture','post_capture_identity','payload_history','build_adapter','source_api','source_negative','api_frame'))
 from emqx_candidate_stage import STAGES as BUILD_STAGES, KINDS as BUILD_KINDS
 from emqx_captured_candidate import CandidatePhaseRefused
 PHASES=PHASES | frozenset('build_'+s+'_'+k for s in BUILD_STAGES for k in BUILD_KINDS)
@@ -215,23 +216,26 @@ def _package_same_target(ctx,app,provision,volumes,root):
     return result['backup_id']
 
 
-def _restore_and_rollback(ctx,app,provision,backup_id,state,*,clients=None,session=None,api_credentials=None,api_results=None):
+def _restore_and_rollback(ctx,app,provision,backup_id,state,*,clients=None,session=None,api_credentials=None,api_results=None,negative_results=None):
     """Product restore, destructive one-shot startup failure, automatic rollback.
 
-    Live callers supply source clients/API credentials and require MQTT then API
-    validation before native capture after every last client activity. File-policy authorization does not
+    Live callers supply source clients/API credentials and require positive MQTT,
+    API and negative MQTT validation before native capture after every last client activity. File-policy authorization does not
     prove source Mnesia ACL behavior. Never report commercial acceptance.
     """
     _assert_binding(provision,app)
     post_registry=session.registry if session is not None else None
     if api_credentials is not None and (type(api_results) is not list or api_results or clients is None or session is None):
         raise RealOwnerRefused('source_api')
+    if api_credentials is not None and (type(negative_results) is not list or negative_results):
+        raise RealOwnerRefused('source_negative')
     request={'backup_id':backup_id,'apps':['emqx'],'accept_unauthenticated':True}
     outcome=flows.run_restore(ctx,request)
     if outcome.get('rolled_back') or not outcome.get('changed'):raise ValueError()
     _ready(provision)
     if clients is not None:validate_source_mqtt(provision,clients)
     if api_credentials is not None:api_results.append(_source_api_activity(provision,post_registry,session,clients,api_credentials))
+    if api_credentials is not None:negative_results.append(_source_negative_activity(provision,session,clients,api_results[-1]))
     if session is not None:post_registry=_post_activity_capture(provision,post_registry)
     r,f=provision.runner,provision.fixture
     directory='.config/systemd/user/'+f.unit+'.d'
@@ -255,6 +259,7 @@ def _restore_and_rollback(ctx,app,provision,backup_id,state,*,clients=None,sessi
         _ready(provision)
         if clients is not None:validate_source_mqtt(provision,clients)
         if api_credentials is not None:api_results.append(_source_api_activity(provision,post_registry,session,clients,api_credentials))
+        if api_credentials is not None:negative_results.append(_source_negative_activity(provision,session,clients,api_results[-1]))
         if session is not None:post_registry=_post_activity_capture(provision,post_registry)
         if r.stat_files([marker])[marker]['type']!='missing':raise ValueError()
     finally:
@@ -267,6 +272,7 @@ def _restore_and_rollback(ctx,app,provision,backup_id,state,*,clients=None,sessi
     _ready(provision)
     if clients is not None:validate_source_mqtt(provision,clients)
     if api_credentials is not None:api_results.append(_source_api_activity(provision,post_registry,session,clients,api_credentials))
+    if api_credentials is not None:negative_results.append(_source_negative_activity(provision,session,clients,api_results[-1]))
     if session is not None:post_registry=_post_activity_capture(provision,post_registry)
     return post_registry
 
@@ -370,6 +376,9 @@ def read_source_api_credentials(stream,source_mode):
     return SourceAPICredentials(tuple(fields))
 
 
+_SOURCE_API_CIDS = weakref.WeakKeyDictionary()
+
+
 def _source_api_activity(provision,prior_registry,session,clients,credentials):
     from emqx_source_api_validator import validate_source_api,SourceAPIResult
     from emqx_runtime_workflow import PrivateSession,CombinedRegistry
@@ -384,6 +393,8 @@ def _source_api_activity(provision,prior_registry,session,clients,credentials):
             retained_topics=tuple(clients.fields['retained_topic'+str(i)] for i in (1,2)))
         if (type(result) is not SourceAPIResult or result._prior is not prior_registry
                 or result._runtime is not session.registry._runtime):raise ValueError()
+        if result in _SOURCE_API_CIDS:raise ValueError()
+        _SOURCE_API_CIDS[result]=(provision,cid,session.registry._runtime)
         return result
     except BaseException:
         raise RealOwnerRefused('source_api') from None
@@ -399,6 +410,38 @@ def _scan_source_api_receipt(receipt,results,session):
         for result in results:result.scan(receipt)
     except BaseException:
         raise RealOwnerRefused('source_api') from None
+
+
+def _source_negative_activity(provision,session,clients,source_api):
+    from emqx_source_api_validator import SourceAPIResult
+    from emqx_source_mqtt_negative import validate_source_mqtt_negative,NegativeMQTTResult
+    from emqx_runtime_workflow import PrivateSession,CombinedRegistry
+    try:
+        if (type(source_api) is not SourceAPIResult or type(session) is not PrivateSession
+                or type(session.registry) is not CombinedRegistry or type(clients) is not SourceClients):raise ValueError()
+        bound=_SOURCE_API_CIDS.get(source_api)
+        if (bound is None or bound[0] is not provision or bound[2] is not session.registry._runtime
+                or source_api._runtime is not bound[2]):raise ValueError()
+        result=validate_source_mqtt_negative(provision=provision,expected_container_id=bound[1],
+            clients=clients,source_api=source_api,quiesce=lambda:fixture_quiescence(provision))
+        if type(result) is not NegativeMQTTResult or result._observed is not source_api:raise ValueError()
+        return result
+    except BaseException:
+        raise RealOwnerRefused('source_negative') from None
+
+
+def _scan_source_negative_receipt(receipt,results,api_results,session):
+    from emqx_source_mqtt_negative import NegativeMQTTResult
+    try:
+        if (type(receipt) is not bytes or type(results) is not list or len(results)!=3
+                or type(api_results) is not list or len(api_results)!=3
+                or len({id(r) for r in results})!=3):raise ValueError()
+        for result,observed in zip(results,api_results):
+            if (type(result) is not NegativeMQTTResult or result._observed is not observed
+                    or observed._runtime is not session.registry._runtime):raise ValueError()
+            result.scan(receipt)
+    except BaseException:
+        raise RealOwnerRefused('source_negative') from None
 
 
 def _target_base():
@@ -690,10 +733,10 @@ def run_real_framed_owner(stream,*,private_parent,source_mode,no_live=True):
                 phase='package'
                 backup_id=_package_same_target(ctx,app,provision,volumes,root)
                 phase='restore'
-                api_results=[]
+                api_results=[];negative_results=[]
                 try:
                     post_registry=_restore_and_rollback(ctx,app,provision,backup_id,state,clients=clients,session=session,
-                        api_credentials=api_credentials,api_results=api_results)
+                        api_credentials=api_credentials,api_results=api_results,negative_results=negative_results)
                 except RealOwnerRefused as error:
                     phase=error.phase
                     raise
@@ -702,6 +745,7 @@ def run_real_framed_owner(stream,*,private_parent,source_mode,no_live=True):
         receipt=final_private_receipt(post_registry)
         phase='payload_history';retained_history.scan(receipt)
         phase='source_api';_scan_source_api_receipt(receipt,api_results,session)
+        phase='source_negative';_scan_source_negative_receipt(receipt,negative_results,api_results,session)
         return {'evidence_bytes':receipt,'scope':'private-same-target-product-flow', 'client_validation':'source-login-target-file-acl-retained-after-restore-rollback-restart',
                 'source_mnesia_acl_behavior':'not-assessed-target-file-authorizer',
                 'source_final_state':'not-assessed','commercial_acceptance':'not-assessed'}

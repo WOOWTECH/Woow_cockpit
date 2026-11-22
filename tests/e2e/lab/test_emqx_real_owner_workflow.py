@@ -634,11 +634,12 @@ class FoundationTests(unittest.TestCase):
         for invalid in (self.client_frame(),raw[:-1],raw.replace(b'WOOWREALAPI1:',b'WOOWREALAPI0:'),raw[:len(b'WOOWREALAPI1:')]+b'B'+raw[len(b'WOOWREALAPI1:')+1:]):
             with self.assertRaises(ValueError):m.read_source_api_credentials(io.BytesIO(invalid),m.SOURCE_MODES[0])
 
-    def test_restore_rollback_restart_run_api_after_mqtt_before_each_native_capture(self):
+    def test_restore_rollback_restart_run_api_and_negative_after_mqtt_before_each_native_capture(self):
         ctx,app,state=self.context();(self.root/'.config/systemd/user').mkdir(parents=True)
         clients=self.clients();credentials=m.SourceAPICredentials(self.api_values());events=[]
         original=object();scanners=[original,object(),object(),object()]
         session=SimpleNamespace(registry=original);api_results=[];observations=[object(),object(),object()]
+        negative_results=[];negative_observations=[object(),object(),object()]
         def restore(context,request):
             events.append('restore')
             if events.count('restore')==1:return {'changed':True}
@@ -648,15 +649,20 @@ class FoundationTests(unittest.TestCase):
             i=events.count('api');self.assertIs(prior,scanners[i]);self.assertIs(supplied,session)
             self.assertIs(actual_clients,clients);self.assertIs(actual_credentials,credentials)
             events.append('api');return observations[i]
+        def negative(provision,supplied,actual_clients,observed):
+            i=events.count('negative');self.assertIs(supplied,session);self.assertIs(actual_clients,clients)
+            self.assertIs(observed,observations[i]);events.append('negative');return negative_observations[i]
         def native(provision,prior):
             i=events.count('capture');self.assertIs(prior,scanners[i]);events.append('capture');return scanners[i+1]
         with patch.object(flows,'run_restore',side_effect=restore),patch.object(m,'_ready'), \
              patch.object(m,'validate_source_mqtt',side_effect=lambda *a:events.append('mqtt')), \
-             patch.object(m,'_source_api_activity',side_effect=api),patch.object(m,'_post_activity_capture',side_effect=native):
+             patch.object(m,'_source_api_activity',side_effect=api),patch.object(m,'_source_negative_activity',side_effect=negative), \
+             patch.object(m,'_post_activity_capture',side_effect=native):
             result=m._restore_and_rollback(ctx,app,self.provision,'generated-package',state,clients=clients,
-                session=session,api_credentials=credentials,api_results=api_results)
-        self.assertEqual(events,['restore','mqtt','api','capture','restore','mqtt','api','capture','mqtt','api','capture'])
-        self.assertEqual(api_results,observations);self.assertIs(result,scanners[-1]);self.assertIs(session.registry,original)
+                session=session,api_credentials=credentials,api_results=api_results,negative_results=negative_results)
+        self.assertEqual(events,['restore','mqtt','api','negative','capture','restore','mqtt','api','negative','capture','mqtt','api','negative','capture'])
+        self.assertEqual(api_results,observations);self.assertEqual(negative_results,negative_observations)
+        self.assertIs(result,scanners[-1]);self.assertIs(session.registry,original)
 
     def test_api_refusal_stops_before_post_native_capture(self):
         ctx,app,state=self.context();session=SimpleNamespace(registry=object())
@@ -665,8 +671,22 @@ class FoundationTests(unittest.TestCase):
              patch.object(m,'_post_activity_capture') as native:
             with self.assertRaises(m.RealOwnerRefused) as caught:
                 m._restore_and_rollback(ctx,app,self.provision,'generated-package',state,clients=self.clients(),
-                    session=session,api_credentials=m.SourceAPICredentials(self.api_values()),api_results=[])
+                    session=session,api_credentials=m.SourceAPICredentials(self.api_values()),api_results=[],negative_results=[])
         self.assertEqual(caught.exception.phase,'source_api');native.assert_not_called()
+
+    def test_negative_refusal_stops_native_capture_and_later_restore_phases(self):
+        ctx,app,state=self.context();session=SimpleNamespace(registry=object())
+        api_results=[];negative_results=[]
+        with patch.object(flows,'run_restore',return_value={'changed':True}) as restore,patch.object(m,'_ready'), \
+             patch.object(m,'validate_source_mqtt'),patch.object(m,'_source_api_activity',return_value=object()), \
+             patch.object(m,'_source_negative_activity',side_effect=m.RealOwnerRefused('source_negative')), \
+             patch.object(m,'_post_activity_capture') as native:
+            with self.assertRaises(m.RealOwnerRefused) as caught:
+                m._restore_and_rollback(ctx,app,self.provision,'generated-package',state,clients=self.clients(),
+                    session=session,api_credentials=m.SourceAPICredentials(self.api_values()),
+                    api_results=api_results,negative_results=negative_results)
+        self.assertEqual(caught.exception.phase,'source_negative');native.assert_not_called()
+        self.assertEqual(restore.call_count,1);self.assertEqual(len(api_results),1);self.assertEqual(negative_results,[])
 
     def test_real_api_validator_boundary_keeps_original_runtime_and_all_final_scanners(self):
         from test_emqx_source_api_validator import SourceAPITests
@@ -691,6 +711,44 @@ class FoundationTests(unittest.TestCase):
         with self.assertRaises(m.RealOwnerRefused):m._scan_source_api_receipt(raw,[results[0]]*3,session)
         with patch.object(m,'_inspect',return_value=issued.doc[0]),patch('emqx_source_api_validator.validate_source_api',return_value=True):
             with self.assertRaises(m.RealOwnerRefused):m._source_api_activity(issued.provision,issued.prior,session,self.clients(),credentials)
+
+    def test_negative_callsite_uses_api_bound_cid_actual_helper_and_final_private_scan(self):
+        from test_emqx_source_mqtt_negative import NegativeTests
+        from emqx_runtime_workflow import PrivateSession
+        from emqx_private_evidence import names_receipt,SOURCE_NAMES
+        import emqx_owner_fixture_files as files
+        issued=NegativeTests();issued.setUp();self.addCleanup(issued.doCleanups)
+        session=PrivateSession(object(),issued.prior,{},None)
+        credentials=m.SourceAPICredentials(tuple(issued.credentials[k] for k in m.API_FIELDS))
+        clients=self.clients();clients.fields['gateway_password']=b'generated-gateway-password'
+        old=files._record(issued.cap)[0]['cid'];results=[];apis=[]
+        with patch.object(m,'_inspect',return_value=issued.doc[0]),patch.object(m,'fixture_quiescence',side_effect=lambda p:issued.quiesce()):
+            # A result not issued through this API callsite cannot authorize a negative probe.
+            with self.assertRaises(m.RealOwnerRefused) as caught:
+                m._source_negative_activity(issued.provision,session,clients,issued.observed)
+            self.assertEqual(caught.exception.phase,'source_negative');self.assertEqual(issued.probes,[])
+            for _ in range(3):
+                issued.api_mode=True
+                observed=m._source_api_activity(issued.provision,issued.prior,session,clients,credentials)
+                issued.api_mode=False;issued.observed=observed;issued.probes.clear()
+                result=m._source_negative_activity(issued.provision,session,clients,observed)
+                self.assertEqual(len(issued.probes),2);self.assertFalse(issued.active)
+                apis.append(observed);results.append(result)
+            # A replacement after the API observation is not adopted by name.
+            issued.probes.clear();issued.doc[0]['Id']='c'*64
+            with self.assertRaises(m.RealOwnerRefused) as caught:
+                m._source_negative_activity(issued.provision,session,clients,apis[-1])
+            self.assertEqual(caught.exception.phase,'source_negative');self.assertEqual(issued.probes,[])
+        self.assertEqual(files._record(issued.cap)[0]['cid'],old)
+        receipt=names_receipt('restore','passed',SOURCE_NAMES)
+        m._scan_source_negative_receipt(receipt,results,apis,session)
+        issued.runtime.register_bundle({'runtime-login-token':[b'generated-final-negative-token']})
+        for raw,rs,observed in ((b'generated-final-negative-token',results,apis),
+                (receipt,[results[0]]*3,apis),(receipt,results,list(reversed(apis))),
+                (receipt,results[:2],apis)):
+            with self.assertRaises(m.RealOwnerRefused) as caught:
+                m._scan_source_negative_receipt(raw,rs,observed,session)
+            self.assertEqual(caught.exception.phase,'source_negative')
 
     def test_old_complete_cipher_frame_refuses_before_history_or_target(self):
         import struct
