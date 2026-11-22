@@ -25,7 +25,7 @@ class DiagnosticTests(unittest.TestCase):
             # Production still emits the full private contract only to its caller.
             self.assertIn(b'emqx-cold-history-json-v1', native_cold_history(valid, 'schema-dat'))
             for filename, kind, phase in (
-                    ('backend-schema.DAT','schema-dat','SCHEMA_USER_DEPENDENCIES'),
+                    ('backend-schema.DAT','schema-dat','SCHEMA_BACKEND_UNREVIEWED_MODULE'),
                     ('pid.DCL','dcl','UNSUPPORTED_PID')):
                 raw = (fixtures / filename).read_bytes()
                 result = native_cold_diagnostic(raw, kind)

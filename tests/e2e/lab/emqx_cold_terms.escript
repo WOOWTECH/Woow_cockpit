@@ -109,9 +109,11 @@ schema_dependencies(Props) ->
     %% Fixed image's public mnesia_rocksdb:default_alias/0 and register/1.
     %% Enumerate this known built-in metadata only; never call its module here.
     put(phase,<<"SCHEMA_BACKEND_METADATA">>),
-    case proplists:get_value(mnesia_backend_types,User,[]) of
+    case lists:sort(proplists:get_value(mnesia_backend_types,User,[])) of
         [] -> ok;
         [{rocksdb_copies,mnesia_rocksdb}] -> ok;
+        [{null_copies,mria_mnesia_null_storage}] -> ok;
+        [{null_copies,mria_mnesia_null_storage},{rocksdb_copies,mnesia_rocksdb}] -> ok;
         [{_,mnesia_rocksdb}] -> put(phase,<<"SCHEMA_BACKEND_UNREVIEWED_ALIAS">>),throw(unapproved_schema_backend);
         [{_,_}] -> put(phase,<<"SCHEMA_BACKEND_UNREVIEWED_MODULE">>),throw(unapproved_schema_backend);
         _ -> put(phase,<<"SCHEMA_BACKEND_METADATA_SHAPE">>),throw(unapproved_schema_backend)

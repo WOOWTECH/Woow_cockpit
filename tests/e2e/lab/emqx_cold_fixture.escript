@@ -59,7 +59,11 @@ main([]) ->
         {ok,R}=dets:open_file(R,[{file,P},{version,9},{type,set},{keypos,2}]),
         ok=dets:insert(R,{schema,schema,[{user_properties,BackendProps}]}),
         ok=dets:close(R)
-    end,[{"builtin-backend-schema.DAT",[{mnesia_backend_types,[{rocksdb_copies,mnesia_rocksdb}]}]},
+    end,[{"builtin-pairset-schema.DAT",[{mnesia_backend_types,
+             [{null_copies,mria_mnesia_null_storage},{rocksdb_copies,mnesia_rocksdb}]}]},
+         {"duplicate-builtin-backend-schema.DAT",[{mnesia_backend_types,
+             [{rocksdb_copies,mnesia_rocksdb},{rocksdb_copies,mnesia_rocksdb}]}]},
+         {"builtin-backend-schema.DAT",[{mnesia_backend_types,[{rocksdb_copies,mnesia_rocksdb}]}]},
          {"wrong-builtin-backend-schema.DAT",[{mnesia_backend_types,[{rocksdb_copies,erlang}]}]},
          {"duplicate-backend-schema.DAT",[{mnesia_backend_types,[]},
              {mnesia_backend_types,[{synthetic_alias,never_load_this_backend}]}]}]),

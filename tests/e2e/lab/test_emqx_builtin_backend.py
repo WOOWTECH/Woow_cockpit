@@ -20,7 +20,10 @@ class BuiltinBackendTests(unittest.TestCase):
                                      'schema-dat',native_cold_history).values
             self.assertIn(b'rocksdb_copies',values)
             self.assertIn(b'mnesia_rocksdb',values)
-            for filename in ('backend-schema.DAT','wrong-builtin-backend-schema.DAT',
+            extra=read_cold_history((fixtures/'builtin-pairset-schema.DAT').read_bytes(),
+                                   'schema-dat',native_cold_history).values
+            self.assertIn(b'mria_mnesia_null_storage',extra)
+            for filename in ('duplicate-builtin-backend-schema.DAT','backend-schema.DAT','wrong-builtin-backend-schema.DAT',
                              'duplicate-backend-schema.DAT'):
                 with self.subTest(filename=filename),self.assertRaises(SemanticRefused):
                     read_cold_history((fixtures/filename).read_bytes(),'schema-dat',native_cold_history)
