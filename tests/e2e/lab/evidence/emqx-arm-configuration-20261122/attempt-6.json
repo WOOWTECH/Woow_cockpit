@@ -1,0 +1,16 @@
+{
+  "source_commit": "43b498a79ade27eaf483c083024edacd59df0d39",
+  "scope": "real ARM fixed known ACL location classification only; semantic gate retained; no broker",
+  "exit": 1,
+  "elapsed_seconds": 6.774972653947771,
+  "fixed_phases": [
+    "ARM TRANSFER PASSED",
+    "ARM SELECT PASSED",
+    "ARM HOCON_FILE_AUTHORIZER REFUSED",
+    "ARM POSTFLIGHT PASSED"
+  ],
+  "unpublished_stdout_lines": 0,
+  "stderr_bytes_not_published": 0,
+  "stdout_sha256": "7d89280a5ecfa1a8cefbc52c20d9560d5f8aa8fe413a475ce9de8165466b2317",
+  "restore_executed": false
+}
