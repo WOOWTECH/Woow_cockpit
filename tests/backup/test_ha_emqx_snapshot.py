@@ -84,3 +84,31 @@ class SnapshotTests(unittest.TestCase):
                     ha_emqx.target_config_snapshot(self.source, self.snapshot,
                         {'configs/cluster.hocon', 'authz/custom.acl'}, limit=limit)
                 self.assertFalse(self.snapshot.exists())
+
+class ProvenAbsenceSnapshotTests(SnapshotTests):
+    def test_absent_override_does_not_invent_file_or_skip_other_dependencies(self):
+        self.archive([(k,v) for k,v in self.files.items() if k!='configs/cluster.hocon'])
+        found=ha_emqx.target_config_snapshot(self.source,self.snapshot,self.required,absent={'configs/cluster.hocon'})
+        self.assertEqual(found,self.required-{'configs/cluster.hocon'})
+        with tarfile.open(self.snapshot) as captured:
+            self.assertNotIn('configs/cluster.hocon',captured.getnames())
+            self.assertEqual(captured.extractfile('authz/custom.acl').read(),self.files['authz/custom.acl'])
+        self.snapshot.unlink()
+        self.archive([('certs/lab.pem',self.files['certs/lab.pem'])])
+        with self.assertRaises(BackupError):
+            ha_emqx.target_config_snapshot(self.source,self.snapshot,self.required,absent={'configs/cluster.hocon'})
+        self.assertFalse(self.snapshot.exists())
+
+    def test_declared_absent_override_appearing_or_symlink_parent_refuses(self):
+        for entries in (list(self.files.items()),[('configs',None)]):
+            with self.subTest(case=len(entries)):
+                self.archive(entries)
+                with self.assertRaises(BackupError):
+                    ha_emqx.target_config_snapshot(self.source,self.snapshot,{'configs/cluster.hocon'},absent={'configs/cluster.hocon'})
+                self.assertFalse(self.snapshot.exists())
+
+    def test_other_paths_cannot_be_declared_absent(self):
+        self.archive(list(self.files.items()))
+        with self.assertRaises(BackupError):
+            ha_emqx.target_config_snapshot(self.source,self.snapshot,self.required,absent={'authz/custom.acl'})
+        self.assertFalse(self.snapshot.exists())

@@ -374,13 +374,16 @@ def take_export(work, tmp, path, staging):
     return dest
 
 
-def target_config_snapshot(volume_tar, snapshot_path, required, *, limit=MAX_HOCON):
+def target_config_snapshot(volume_tar, snapshot_path, required, *, limit=MAX_HOCON, absent=()):
     """Stage named target config/ACL files from a volume export. Callers must enumerate effective references.
 
     This deliberately does not discover HOCON references or merge HA settings: the public import stays blocked until
     those operations and effective read-back are implemented. Missing, duplicate, linked or unsafe paths fail closed.
     """
     names = set(required)
+    absent=set(absent)
+    if absent - {'configs/cluster.hocon'} or absent - names:
+        raise BackupError('incompatible', '不允許略過目標 EMQX 的必要設定參照。')
     if not names or 'configs/cluster.hocon' not in names:
         raise BackupError('incompatible', '缺少目標 EMQX 設定快照所需的檔案清單。')
     for name in names:
@@ -395,6 +398,10 @@ def target_config_snapshot(volume_tar, snapshot_path, required, *, limit=MAX_HOC
                 name = ha_odoo._norm(member.name)
                 if name is None:
                     raise BackupError('incompatible', '目標 EMQX 資料卷含有不安全的路徑。')
+                if name in absent:
+                    raise BackupError('incompatible', 'EMQX 原本不存在的覆寫檔於快照期間出現，已停止。')
+                if any(required.startswith(name + '/') for required in names) and not member.isdir():
+                    raise BackupError('incompatible', 'EMQX 設定檔的上層不是一般目錄，已停止。')
                 if name in names:
                     if name in found or not member.isfile() or member.size < 0:
                         raise BackupError('incompatible', '目標 EMQX 設定檔重複或不是一般檔案。')
@@ -406,7 +413,7 @@ def target_config_snapshot(volume_tar, snapshot_path, required, *, limit=MAX_HOC
                     out.add_member(info, source.extractfile(member))
                     found.add(name)
                 source.members.clear()
-        if found != names:
+        if found != names - absent:
             raise BackupError('incompatible', '目標 EMQX 設定參照的檔案不存在，已停止。')
     except Exception:
         out.close()
@@ -417,7 +424,7 @@ def target_config_snapshot(volume_tar, snapshot_path, required, *, limit=MAX_HOC
     return found
 
 
-def authorization_file_references(authorization, mounts):
+def authorization_file_references(authorization, mounts, *, include_cluster=True):
     """Resolve an already-decoded effective authorization object; reject unsupported sources.
 
     This covers file ACL sources only, not other EMQX configuration roots. Host paths are
@@ -425,7 +432,7 @@ def authorization_file_references(authorization, mounts):
     """
     if not isinstance(authorization, dict) or not isinstance(authorization.get('sources'), list):
         raise BackupError('incompatible', '無法取得目標 EMQX 的有效授權來源。')
-    references = {'configs/cluster.hocon'}
+    references = {'configs/cluster.hocon'} if include_cluster else set()
     for source in authorization['sources']:
         if not isinstance(source, dict) or source.get('type') != 'file':
             raise BackupError('incompatible', '目標 EMQX 使用尚未支援的授權來源。')
@@ -446,7 +453,7 @@ def authorization_file_references(authorization, mounts):
     return references
 
 
-def snapshot_target_volume(work, app, volume, staging, required):
+def snapshot_target_volume(work, app, volume, staging, required, *, absent=()):
     """Export the target volume and stage only explicitly enumerated configuration references.
 
     A caller must first establish the complete effective reference list. This helper is not an
@@ -456,7 +463,7 @@ def snapshot_target_volume(work, app, volume, staging, required):
     snapshot = staging / 'emqx-target-config-snapshot.tar'
     try:
         hacommon.live_export(work, app, volume, raw)
-        target_config_snapshot(raw, snapshot, required)
+        target_config_snapshot(raw, snapshot, required, absent=absent)
     finally:
         if raw.exists():
             raw.unlink()
@@ -644,7 +651,7 @@ def tls_fingerprints(execute, paths):
     return result
 
 
-def configuration_references(config, mounts, secrets=()):
+def configuration_references(config, mounts, secrets=(), *, include_cluster=True):
     """Resolve file ACL and explicit TLS file fields in supported configuration roots.
 
     Unknown roots are rejected until their schema/file dependencies have been reviewed.
@@ -657,12 +664,12 @@ def configuration_references(config, mounts, secrets=()):
     if set(config) - SUPPORTED_CONFIGURATION_ROOTS:
         raise BackupError('incompatible', 'EMQX 含有尚未完成檔案參照審查的設定類型。')
     bootstrap_references(config, mounts, secrets)
-    required = authorization_file_references(config['authorization'], mounts)
+    required = authorization_file_references(config['authorization'], mounts, include_cluster=False)
     for key in ('banned', 'api_key'):
         bootstrap_path = config.get(key, {}).get('bootstrap_file')
         if bootstrap_path:
             required.update(authorization_file_references(
-                {'sources': [{'type': 'file', 'path': bootstrap_path}]}, mounts))
+                {'sources': [{'type': 'file', 'path': bootstrap_path}]}, mounts, include_cluster=False))
     def visit(value, depth=0):
         if depth > 32:
             raise BackupError('incompatible', 'EMQX 設定巢狀層級超過限制。')
@@ -672,7 +679,7 @@ def configuration_references(config, mounts, secrets=()):
                     if isinstance(item, str) and item in IMAGE_TLS_FILES:
                         continue
                     required.update(authorization_file_references(
-                        {'sources': [{'type': 'file', 'path': item}]}, mounts))
+                        {'sources': [{'type': 'file', 'path': item}]}, mounts, include_cluster=False))
                 elif key == 'bootstrap_file':
                     if not any(value is entry for entry in config.get('authentication', [])):
                         raise BackupError('incompatible', 'EMQX bootstrap 出現在不支援的設定位置。')
@@ -685,13 +692,35 @@ def configuration_references(config, mounts, secrets=()):
             for item in value:
                 visit(item, depth + 1)
     visit({key: value for key, value in config.items() if key not in ('node', 'cluster', 'log', 'banned', 'api_key')})
-    return required
+    return required | ({'configs/cluster.hocon'} if include_cluster else set())
 
 
-def candidate_from_target(work, app, tmp, target, staging, export, ids, *, hint=''):
-    """Internal candidate entry: live structured read -> validated snapshot -> broker.
+OVERRIDE_STATE_EXPR = ('D=file:read_link_info("/opt/emqx/data/configs"), '
+    'F=file:read_link_info("/opt/emqx/data/configs/cluster.hocon"), '
+    'S=case {D,F} of {{error,enoent},{error,enoent}} -> <<"parent-absent">>; '
+    '{{ok,Dir},{error,enoent}} when element(3,Dir)=:=directory -> <<"absent">>; '
+    '{{ok,Dir},{ok,File}} when element(3,Dir)=:=directory, element(3,File)=:=regular, '
+    'element(9,File)=:=1, element(2,File)=<8388608 -> <<"present">>; _ -> <<"refused">> end, '
+    'io:format("WOOWOVERRIDE:~s:END",[S]).')
 
-    The public convert guard still prevents this candidate from performing a real import.
+
+def target_override_state(execute):
+    """Fixed no-follow metadata proof; never read or invent override contents."""
+    result=execute(['emqx','eval',OVERRIDE_STATE_EXPR])
+    raw=(result.stdout or b'').strip()
+    if result.returncode==0:
+        for state in ('present','absent','parent-absent'):
+            if raw==b'WOOWOVERRIDE:'+state.encode()+b':ENDok':return state
+    raise BackupError('incompatible', '無法驗證 EMQX 原始覆寫設定檔，已停止。')
+
+
+def capture_target_seed(work, app, target, staging):
+    """Exact product target preflight, including explicitly proven absence.
+
+    A missing cluster override is permitted only when no effective dependency
+    references it and no-follow metadata plus COMPLETE volume traversal prove
+    its absence. No empty override file is fabricated. All other files remain
+    mandatory; effective configuration/state are re-read before candidate boot.
     """
     observe=getattr(work,'_emqx_build_stage',None)
     def stage(name):
@@ -702,22 +731,29 @@ def candidate_from_target(work, app, tmp, target, staging, export, ids, *, hint=
     if (target.env.get('EMQX_LOG_DIR', LOG_TARGET) != LOG_TARGET or
             target.env.get('EMQX_ETC_DIR', '/opt/emqx/etc') != '/opt/emqx/etc'):
         raise BackupError('incompatible', 'EMQX 自訂日誌目錄尚未支援。')
-    stage('target_config')
-    original = read_effective_config(execute)
+    stage('target_config');original=read_effective_config(execute)
     stage('target_references')
-    required = configuration_references(original, target.files, target.secrets)
-    stage('target_tls')
-    fingerprints = tls_fingerprints(execute, image_tls_references(original))
+    explicit=configuration_references(original,target.files,target.secrets,include_cluster=False)
+    state=target_override_state(execute)
+    absent=({'configs/cluster.hocon'} if state in ('absent','parent-absent')
+            and 'configs/cluster.hocon' not in explicit else set())
+    required=explicit | {'configs/cluster.hocon'}
+    stage('target_tls');fingerprints=tls_fingerprints(execute,image_tls_references(original))
     stage('target_snapshot')
-    snapshot = snapshot_target_volume(work, app, target.data_volume, staging, required)
-    # Reject a moving configuration rather than mixing two generations of files/settings.
+    snapshot=snapshot_target_volume(work,app,target.data_volume,staging,required,absent=absent)
     stage('target_consistency')
-    if read_effective_config(execute) != original:
+    if target_override_state(execute)!=state or read_effective_config(execute)!=original:
         raise BackupError('incompatible', 'EMQX 設定於快照期間改變，已停止。')
-    stage('target_runtime')
-    return target_broker(work, tmp, target, export, ids, hint=hint,
-                         target_snapshot=snapshot, target_config=original, image_fingerprints=fingerprints)
+    return original,snapshot,fingerprints
 
+
+def candidate_from_target(work, app, tmp, target, staging, export, ids, *, hint=''):
+    """Internal candidate; public conversion preservation guard remains enabled."""
+    original,snapshot,fingerprints=capture_target_seed(work,app,target,staging)
+    observe=getattr(work,'_emqx_build_stage',None)
+    if observe is not None:observe('target_runtime')
+    return target_broker(work,tmp,target,export,ids,hint=hint,
+        target_snapshot=snapshot,target_config=original,image_fingerprints=fingerprints)
 
 def candidate_with_effective_acl(work, app, tmp, target, staging, export, ids, authorization, *, hint=''):
     """Stage known file ACL references and seed a candidate; not a complete preservation check.

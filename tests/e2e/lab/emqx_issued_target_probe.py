@@ -40,16 +40,9 @@ def _snapshot_preflight(provision,stage):
         job='j'+time.strftime('%Y%m%dT%H%M%SZ',time.gmtime())+'-'+secrets.token_hex(4)
         ctx,app,_=flow_context(provision,root,job)
         target=bound_target(provision,app)
-        def execute(command):
-            return provision.runner.podman('exec',provision.fixture.prefix,*command,
-                timeout=120,max_output=ha_emqx.MAX_HOCON,check=False)
-        stage('target_config');original=ha_emqx.read_effective_config(execute)
-        stage('target_references');required=ha_emqx.configuration_references(original,target.files,target.secrets)
-        stage('target_tls');ha_emqx.tls_fingerprints(execute,ha_emqx.image_tls_references(original))
-        work=SimpleNamespace(runner=lambda _:provision.runner,guard=CandidateBudget(),abort=None,checkpoint=lambda:None)
-        stage('target_snapshot');ha_emqx.snapshot_target_volume(work,app,target.data_volume,root,required)
-        stage('target_consistency')
-        if ha_emqx.read_effective_config(execute)!=original:raise ValueError()
+        work=SimpleNamespace(runner=lambda _:provision.runner,guard=CandidateBudget(),abort=None,checkpoint=lambda:None,
+                             _emqx_build_stage=stage)
+        ha_emqx.capture_target_seed(work,app,target,root)
 
 
 def run_issued_target_probe():

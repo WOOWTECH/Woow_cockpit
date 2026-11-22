@@ -28,10 +28,17 @@ class Transport:
         self.live_response = None
         self.missing = False
         self.restore_bad = False
+        self.override_absent = False
+        self.override_states = ['present']
+        self.override_reads = 0
         self.logs = []
 
     def podman(self, *args, **kwargs):
         assert args[:2] == ('exec', 'lab-target')
+        if args[2:] == ('emqx','eval',emqx.OVERRIDE_STATE_EXPR):
+            state=self.override_states[min(self.override_reads,len(self.override_states)-1)]
+            self.override_reads+=1
+            return Result(0,b'WOOWOVERRIDE:'+state.encode()+b':ENDok\n',b'')
         assert args[2:] == ('emqx', 'eval', emqx.CONFIG_EXPR)
         assert kwargs['max_output'] == emqx.MAX_HOCON
         self.events.append('read-live')
@@ -42,6 +49,7 @@ class Transport:
         self.events.append('export')
         files = {'configs/cluster.hocon': b'custom target configuration',
                  'authz/custom.acl': b'{deny, all}.', 'certs/lab.pem': b'fixture-only'}
+        if self.override_absent:del files['configs/cluster.hocon']
         if self.missing:
             del files['authz/custom.acl']
         with tarfile.open(fileobj=stdout, mode='w|') as archive:
@@ -119,6 +127,24 @@ class CandidateFlowTests(unittest.TestCase):
         for first, second in [('export', 'seed'), ('seed', 'start'), ('start', 'import'), ('import', 'restore')]:
             self.assertLess(transport.events.index(first), transport.events.index(second))
         self.assertEqual(transport.events[-1], 'read-candidate')
+
+    def test_actual_entry_preserves_known_mount_config_when_override_is_absent(self):
+        transport=Transport();transport.override_absent=True;transport.override_states=['absent']
+        self.assertEqual(len(self.invoke(transport)),4)
+        self.assertEqual(transport.running_config,transport.config)
+        self.assertNotIn('configs/cluster.hocon',transport.seed)
+        self.assertEqual(transport.seed['authz/custom.acl'],b'{deny, all}.')
+        self.assertEqual(transport.override_reads,2)
+
+    def test_absence_does_not_skip_explicit_cluster_reference_or_moving_state(self):
+        for changed in ('explicit','moving','missing-acl','unexpected-present'):
+            transport=Transport();transport.override_absent=True;transport.override_states=['absent']
+            if changed=='explicit':transport.config['authorization']['sources'][0]['path']='/opt/emqx/data/configs/cluster.hocon'
+            if changed=='moving':transport.override_states=['absent','present']
+            if changed=='missing-acl':transport.missing=True
+            if changed=='unexpected-present':transport.override_absent=False
+            with self.subTest(changed=changed),self.assertRaises(BackupError):self.invoke(transport)
+            self.assertNotIn('start',transport.events)
 
     def test_missing_reference_stops_before_start(self):
         transport = Transport()
