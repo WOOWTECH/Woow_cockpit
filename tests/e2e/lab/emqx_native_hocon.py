@@ -27,7 +27,7 @@ def native_hocon(raw):
             with tempfile.TemporaryFile() as output:
                 result = subprocess.run([
                     'podman', 'run', '--rm', '--pull=never', '--network=none',
-                    '--read-only', '--cap-drop=ALL', '--security-opt=no-new-privileges',
+                    '--read-only', '--image-volume=ignore', '--cap-drop=ALL', '--security-opt=no-new-privileges',
                     '--memory=256m', '--memory-swap=256m', '--pids-limit=64',
                     '--ulimit=cpu=8:8', '--ulimit=fsize=1048576:1048576',
                     '--log-driver=none', '--timeout=12', '--stop-timeout=1', '--userns=keep-id',
