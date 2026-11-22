@@ -14,8 +14,9 @@ Base: `1b8f338`. Parent evidence commit `b134d5f` is integrated here as
   semantic completeness or supply the outstanding HOCON/Mnesia readers.
 - `source_counts`: exact `backup-key`, `source-options`, `source-cookie` integer
   registration counts (0..4096, backup key nonzero), from that source owner.
-  Counts are caller assertions; scanning actual source values is mandatory and
-  independent of those counts.
+  Counts must equal the sealed source registry actual unique-value registrations;
+  mismatch refuses before target readers/login or evidence publication. Counts
+  attest registration only, not semantic completeness of source discovery.
 - `target_readers`: exact five-category callable mapping described below.
 - `private_transport`: private callable `(username_bytes, password_bytes)`
   returning `(200, 'application/json', response_stream)`. No transport defaults,
@@ -111,3 +112,7 @@ production/.54/Pi access, runner/model changes or omnigent stop occurred.
 Real broker acceptance remains pending source semantic readers, authoritative
 owner capture/transport integration, confirmed lab gate and actual workload
 validation. Public preservation blockers remain unchanged.
+
+## Integration follow-up
+
+`a8cbf5b` binds source counts to actual registry registrations. The affected runtime credential and private boundary regressions passed 24/24, with mismatched counts for each of the three source categories preventing login/publication. `f5099c4` integrates bounded semantic readers; 44 cross-module fixture tests passed, while native parser/exporter wiring and real cold-backup broker acceptance remain outstanding. These local tests do not establish commercial acceptance.
