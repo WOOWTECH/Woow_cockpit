@@ -206,3 +206,33 @@ class TransportTests(unittest.TestCase):
                  patch.object(m.sys,'stdin',SimpleNamespace(buffer=io.BytesIO())),patch.object(m.sys,'stdout',SimpleNamespace(buffer=out)):
                 self.assertEqual(m.owner_main(b'U'),1)
             self.assertEqual(out.getvalue(),b'ISSUEDPROBE-REFUSED:'+phase.encode()+b'\n')
+
+    def test_wrong_digest_or_changed_cipher_never_reads_or_retains_success(self):
+        import emqx_real_owner_transport as m
+        from emqx_source_profiles import source_profile
+        from dataclasses import replace
+        import contextlib,hashlib
+        from unittest.mock import Mock
+        for change in ('digest','metadata','growth'):
+            with tempfile.TemporaryDirectory() as d:
+                root=Path(d);cipher=b'generated-private-cipher';archive=root/'cipher';archive.write_bytes(cipher)
+                profile=replace(source_profile('--source-vendor-acl-sql-aliases'),archive=archive,
+                    sha256='0'*64 if change=='digest' else hashlib.sha256(cipher).hexdigest())
+                class Sink(io.BytesIO):
+                    def close(self):pass
+                    def write(self,raw):
+                        result=super().write(raw)
+                        if raw==cipher:
+                            if change=='metadata':
+                                before=archive.stat();os.utime(archive,ns=(before.st_atime_ns,before.st_mtime_ns+1000000))
+                            if change=='growth':
+                                with archive.open('ab') as out:out.write(b'extra')
+                        return result
+                child=Mock(stdin=Sink());child.wait.return_value=1;out=io.StringIO()
+                with patch.object(m,'bundle_code',return_value=b'code'),patch.object(m,'dependencies',return_value=b'deps'), \
+                     patch.object(m,'client_prefix',return_value=b'generated-prefix'),patch.object(m,'read_fixed_fields',return_value=[b'generated-key']), \
+                     patch.object(m,'source_profile',return_value=profile),patch.object(m.subprocess,'Popen',return_value=child), \
+                     patch.object(m,'read_result') as read,patch.object(m,'retain_restore_evidence') as retain,contextlib.redirect_stdout(out):
+                    self.assertEqual(m.main(['--real-restore']),1)
+                read.assert_not_called();retain.assert_not_called()
+                self.assertEqual(out.getvalue(),'REAL OWNER ARCHIVE_BINDING REFUSED\n')

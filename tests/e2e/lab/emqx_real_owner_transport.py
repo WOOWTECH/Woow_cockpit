@@ -36,7 +36,7 @@ MODES={
 CLIENT_KEYS=tuple(k for i in (1,2,3) for k in (f'B1_MQTT_USER{i}',f'B1_MQTT_PW{i}'))
 STAGED=b'REAL OWNER STAGED ONLY PASSED\n'
 DEPENDENCIES=b'REAL OWNER DEPENDENCIES PASSED\n'
-HOST_PHASES=frozenset(('profile','bundle','dependencies','client_credentials','retained_binding','key','archive','transfer','child','receipt'))
+HOST_PHASES=frozenset(('profile','bundle','dependencies','client_credentials','retained_binding','key','archive','archive_binding','transfer','child','receipt'))
 
 class TransportRefused(ValueError):
     def __init__(self,phase):
@@ -304,6 +304,7 @@ def main(argv=None):
                 raw=archive.read(min(65536,before.st_size-total))
                 if not raw:raise ValueError()
                 total+=len(raw);digest.update(raw);child.stdin.write(raw)
+            phase='archive_binding'
             if archive.read(1) or _snapshot(before)!=_snapshot(os.fstat(archive.fileno())) or digest.hexdigest()!=profile.sha256:
                 raise ValueError()
             child.stdin.close()
