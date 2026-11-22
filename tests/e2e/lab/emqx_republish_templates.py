@@ -13,7 +13,14 @@ from emqx_semantic_readers import Values, MAX_DEPTH, _json_walk, _text, refuse, 
 
 PROFILE = 'owner-rule-engine-republish-message-v1'
 _FIELDS = frozenset(('payload', 'topic', 'qos', 'retain'))
-_SCALARS = frozenset(('topic', 'clientid', 'username', 'qos', 'retain', 'flags.retain'))
+# Pinned emqx_rule_events:eventmsg_publish/1 + with_basic_columns/3.
+# metadata.rule_id is added by emqx_rule_runtime:apply_rule/3; it is not a
+# general metadata/alias permission. None of these names is resolved here.
+_SCALARS = frozenset(('topic', 'clientid', 'username', 'qos', 'retain', 'flags.retain',
+    'id', 'peerhost', 'peername', 'publish_received_at', 'event', 'timestamp', 'node',
+    'metadata.rule_id'))
+_MAP_ROOTS = frozenset(('payload', 'flags', 'headers', 'pub_props', 'client_attrs'))
+_SCALAR_ROOTS = frozenset(name.split('.')[0] for name in _SCALARS) - _MAP_ROOTS
 # Conservative subset of public emqx_template's ASCII dotted map accessor.
 # Numeric segments are map keys, NOT an invented array-index evaluator.
 _PLACEHOLDER = re.compile(r'\$\{(\.?[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z0-9_]+)*|\.)\}')
@@ -58,8 +65,8 @@ def _template(value, field, result):
             else:
                 if len(parts) > MAX_DEPTH:
                     raise TemplateRefused('depth')
-                if not (parts[0] == 'payload' or '.'.join(parts) in _SCALARS):
-                    raise TemplateRefused('unknown_root')
+                if not (parts[0] in _MAP_ROOTS or '.'.join(parts) in _SCALARS):
+                    raise TemplateRefused('field_contract' if parts[0] in _SCALAR_ROOTS else 'unknown_root')
             result.add(match.group().encode())
             result.add(name.encode())
             for part in parts:
@@ -97,8 +104,9 @@ def validate_action_reference(value, document):
 def collect_rule_engine_values(rule_engine, *, profile=None, document=None):
     """Collect a native parsed rule_engine subtree, with exact action context.
 
-    Known message roots: payload (dotted map fields), topic, clientid, username,
-    qos, retain, flags.retain; payload also accepts the whole-message `${.}`.
+    Known pinned message roots include payload/flags/headers/pub_props/client_attrs
+    maps and exact scalar event fields. metadata.rule_id is exact; arbitrary
+    metadata/SQL aliases remain refused. Payload accepts whole-message `${.}`.
     No selected SQL aliases, custom functions, escapes/brackets/calls are inferred.
     This returns private Values only: no Registry seal/coverage/replay capability.
     It covers the effective subtree, not unlocated overwritten/concat syntax.
