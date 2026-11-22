@@ -273,7 +273,12 @@ def owner_target_readers(*, private_eval, quiesce):
     try:
         with quiesce():
             generation = uuid.uuid4().hex
-            expression = EXPRESSION.read_text().replace('__OWNER_NONCE__', generation)
+            # emqx's CLI transport does not preserve a multiline expression in
+            # the same form as erl_scan. Only this fixed public source is folded;
+            # no user/config text is rewritten or interpolated into code.
+            expression = ' '.join(line.strip() for line in EXPRESSION.read_text().splitlines()
+                                  if line.strip() and not line.lstrip().startswith('%'))
+            expression = expression.replace('__OWNER_NONCE__', generation)
             readers = _build(private_eval(expression), generation)
             yield readers
     except (KeyboardInterrupt, SystemExit):

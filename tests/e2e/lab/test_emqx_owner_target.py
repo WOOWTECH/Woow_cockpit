@@ -94,6 +94,8 @@ class OwnerProducerTests(unittest.TestCase):
     def transport(self, events, edit=None, config=None):
         def evaluate(expression):
             events.append('eval')
+            self.assertNotIn('\n', expression)
+            self.assertNotIn('%%', expression)
             self.assertIn('emqx:get_config([])', expression)
             self.assertIn('mnesia:system_info(tables)', expression)
             self.assertIn('mnesia:foldl', expression)
