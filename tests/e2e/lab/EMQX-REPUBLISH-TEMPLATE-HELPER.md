@@ -1,3 +1,5 @@
+The effective helper below is now called by the separately opt-in complete native context reader; see [EMQX-HOCON-CONTEXT.md](EMQX-HOCON-CONTEXT.md). Its original standalone validation and limitations remain recorded below.
+
 # Context-aware republish message values (helper only)
 
 Base: immutable `f11dd76`. Actual source diagnostics establish rule_engine as

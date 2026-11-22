@@ -86,10 +86,12 @@ def read_owner_file_hocon(raw, parser=None, *, profile, product_image):
     """
     stage='profile'
     try:
-        if profile != PROFILE or product_image != IMAGE:
+        from emqx_hocon_context import PROFILE as CONTEXT_PROFILE, CONTRACT, register_syntax
+        contextual = profile == CONTEXT_PROFILE
+        if profile not in (PROFILE, CONTEXT_PROFILE) or product_image != IMAGE:
             refuse()
         stage='contract'
-        doc = _contract(raw, parser, 'emqx-hocon-json-v1')
+        doc = _contract(raw, parser, CONTRACT if contextual else 'emqx-hocon-json-v1')
         if (set(doc) != {'contract', 'version', 'input_sha256', 'input_bytes',
                          'complete', 'resolution', 'references', 'document'}
                 or doc['resolution'] != 'disabled' or doc['references'] != []):
@@ -97,17 +99,25 @@ def read_owner_file_hocon(raw, parser=None, *, profile, product_image):
         stage='document'
         document = doc['document']
         # Require the actual native adapter's full effective map AND syntax leaves.
-        if (type(document) is not dict or set(document) != {'parsed', 'syntax_strings'}
+        if (type(document) is not dict or set(document) != ({'parsed', 'syntax_strings', 'string_bindings', 'concat_strings'} if contextual else {'parsed', 'syntax_strings'})
                 or type(document['parsed']) is not dict
                 or type(document['syntax_strings']) is not list
                 or any(type(s) is not str for s in document['syntax_strings'])):
             refuse()
         result = OwnerFileValues()
         dependencies = []
+        if contextual:
+            stage='syntax'
+            register_syntax(document, result, LITERAL)
 
         def walk(value, location=(), depth=0):
             nonlocal stage
             stage='walk'
+            if contextual and location == ('rule_engine',):
+                from emqx_republish_templates import collect_rule_engine_values, PROFILE as RULE_PROFILE
+                for private_value in collect_rule_engine_values(value, profile=RULE_PROFILE, document=document['parsed']).values:
+                    result.add(private_value)
+                return
             if type(value) not in (dict, list):
                 stage='scalar'
                 if depth>16:stage='scalar_depth'
@@ -150,7 +160,7 @@ def read_owner_file_hocon(raw, parser=None, *, profile, product_image):
         if not dependencies:
             refuse()
         stage='syntax'
-        for value in document['syntax_strings']:
+        for value in ([] if contextual else document['syntax_strings']):
             if value == LITERAL:
                 result.tick(1)
                 result.add(_text(value))

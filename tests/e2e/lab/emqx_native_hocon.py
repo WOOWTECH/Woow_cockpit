@@ -9,6 +9,15 @@ SCRIPT = pathlib.Path(__file__).with_name('emqx_hocon_native.escript')
 
 
 def native_hocon(raw):
+    return _native_hocon(raw, SCRIPT)
+
+
+def native_hocon_context(raw):
+    """Explicit original-AST occurrence adapter; strict adapter is unchanged."""
+    return _native_hocon(raw, SCRIPT.with_name('emqx_hocon_context_native.escript'))
+
+
+def _native_hocon(raw, script):
     """Owner-selected code only. Bounded per-file input/output, 20s client wall limit.
 
     Requires cached pinned image and rootless podman; never pulls an image.
@@ -21,7 +30,7 @@ def native_hocon(raw):
             root = pathlib.Path(directory)
             (root / 'source.hocon').write_bytes(raw)
             (root / 'source.hocon').chmod(0o600)
-            (root / 'parser.escript').write_bytes(SCRIPT.read_bytes())
+            (root / 'parser.escript').write_bytes(script.read_bytes())
             # Output is a bounded private regular file, never a pipe accumulated
             # without a limit. Container itself has an output/file size limit.
             with tempfile.TemporaryFile() as output:

@@ -53,7 +53,26 @@ def _template(value, field, result):
         refuse()
 
 
-def collect_rule_engine_values(rule_engine, *, profile=None):
+def validate_action_reference(value, document):
+    """Literal HTTP action ID bound to the SAME native document, never executed."""
+    if type(value) is not str or not re.fullmatch(r'http:[A-Za-z0-9_-]+', value):
+        refuse()
+    if type(document) is not dict:
+        refuse()
+    actions = document.get('actions')
+    http = actions.get('http') if type(actions) is dict else None
+    action = http.get(value.split(':', 1)[1]) if type(http) is dict else None
+    connector = action.get('connector') if type(action) is dict else None
+    if type(connector) is not str or not re.fullmatch(r'[A-Za-z0-9_-]+', connector):
+        refuse()
+    connectors = document.get('connectors')
+    http_connectors = connectors.get('http') if type(connectors) is dict else None
+    if (type(http_connectors) is not dict or type(http_connectors.get(connector)) is not dict
+            or not http_connectors[connector]):
+        refuse()
+
+
+def collect_rule_engine_values(rule_engine, *, profile=None, document=None):
     """Collect a native parsed rule_engine subtree, with exact action context.
 
     Known message roots: payload (dotted map fields), topic, clientid, username,
@@ -94,6 +113,12 @@ def collect_rule_engine_values(rule_engine, *, profile=None):
                 refuse()
             if (len(location) == 5 and location[:2] == ('rule_engine', 'rules')
                     and location[3] == 'actions'):
+                if type(value) is str:
+                    if type(document) is not dict or document.get('rule_engine') is not rule_engine:
+                        refuse()
+                    validate_action_reference(value, document)
+                    _json_walk(value, result, depth)
+                    return
                 if (type(value) is not dict or value.get('function') != 'republish'
                         or type(value.get('args')) is not dict):
                     refuse()

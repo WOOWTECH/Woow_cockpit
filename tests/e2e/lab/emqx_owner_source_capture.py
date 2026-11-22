@@ -40,7 +40,10 @@ def capture_owner_source(path, *, password, expected_sha256, spool_directory,
     try:
         if spool_directory is None:
             raise PrivateFailure('private-owner-source-refused')
-        with Capture.source_only(password, hocon_parser=native_hocon,
+        selected_parser = native_hocon
+        def owner_parser(raw):
+            return selected_parser(raw)
+        with Capture.source_only(password, hocon_parser=owner_parser,
                 cold_decoder=native_cold_history, product_selection=True,
                 spool_directory=spool_directory) as captured:
             with source_binding(path, 'emqx', hacommon.semver('5.8.9'),
@@ -52,8 +55,12 @@ def capture_owner_source(path, *, password, expected_sha256, spool_directory,
                     fixture_limits(fixture_profile, expected_sha256)
                 if file_dependency_profile is not None:
                     from emqx_owner_file_hocon import PROFILE, IMAGE
-                    if file_dependency_profile != PROFILE or product_image != IMAGE:
+                    from emqx_hocon_context import PROFILE as CONTEXT_PROFILE
+                    if file_dependency_profile not in (PROFILE, CONTEXT_PROFILE) or product_image != IMAGE:
                         raise PrivateFailure('private-owner-source-refused')
+                    if file_dependency_profile == CONTEXT_PROFILE:
+                        from emqx_native_hocon import native_hocon_context
+                        selected_parser = native_hocon_context
                 elif product_image is not None:
                     raise PrivateFailure('private-owner-source-refused')
                 private_binding = captured(source, fixture_profile=fixture_profile,

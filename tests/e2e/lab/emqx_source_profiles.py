@@ -28,7 +28,10 @@ X86_SOURCE = SourceProfile(
 VENDOR_ACL_PROFILE = 'owner-pinned-image-vendor-acl-v1'
 ARM_VENDOR_ACL = replace(ARM_SOURCE, frame_mode=b'V', file_dependency_profile=VENDOR_ACL_PROFILE)
 X86_VENDOR_ACL = replace(X86_SOURCE, frame_mode=b'W', file_dependency_profile=VENDOR_ACL_PROFILE)
-SOURCE_MODES = ('--source', '--x86-source', '--source-vendor-acl', '--x86-source-vendor-acl')
+CONTEXT_PROFILE = 'owner-pinned-image-vendor-acl-republish-context-v1'
+ARM_CONTEXT = replace(ARM_SOURCE, frame_mode=b'Y', file_dependency_profile=CONTEXT_PROFILE)
+X86_CONTEXT = replace(X86_SOURCE, frame_mode=b'Z', file_dependency_profile=CONTEXT_PROFILE)
+SOURCE_MODES = ('--source', '--x86-source', '--source-vendor-acl', '--x86-source-vendor-acl', '--source-vendor-acl-republish', '--x86-source-vendor-acl-republish')
 
 
 def source_profile(mode):
@@ -40,4 +43,8 @@ def source_profile(mode):
         return ARM_VENDOR_ACL
     if mode == '--x86-source-vendor-acl':
         return X86_VENDOR_ACL
+    if mode == '--source-vendor-acl-republish':
+        return ARM_CONTEXT
+    if mode == '--x86-source-vendor-acl-republish':
+        return X86_CONTEXT
     raise ValueError('fixed-source-mode-required')

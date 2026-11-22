@@ -35,7 +35,9 @@ class TransferTests(unittest.TestCase):
     def invoke(self, mode, *, digest=None, status=0, mutate=False):
         profile_name = {'--source': 'ARM_SOURCE', '--x86-source': 'X86_SOURCE',
             '--source-vendor-acl': 'ARM_VENDOR_ACL',
-            '--x86-source-vendor-acl': 'X86_VENDOR_ACL'}[mode]
+            '--x86-source-vendor-acl': 'X86_VENDOR_ACL',
+            '--source-vendor-acl-republish':'ARM_CONTEXT',
+            '--x86-source-vendor-acl-republish':'X86_CONTEXT'}[mode]
         chosen = replace(getattr(profiles, profile_name), archive=self.archive,
                          sha256=self.digest if digest is None else digest)
         sink = Buffer()
@@ -62,7 +64,8 @@ class TransferTests(unittest.TestCase):
 
     def test_fixed_modes_preserve_private_frame_and_bundle_all_required_code(self):
         for mode, expected_byte in (('--source', b'S'), ('--x86-source', b'X'),
-                ('--source-vendor-acl', b'V'), ('--x86-source-vendor-acl', b'W')):
+                ('--source-vendor-acl', b'V'), ('--x86-source-vendor-acl', b'W'),
+                ('--source-vendor-acl-republish', b'Y'), ('--x86-source-vendor-acl-republish', b'Z')):
             with self.subTest(mode=mode):
                 status, framed, archive, spawn, out, err = self.invoke(mode)
                 self.assertEqual(status, 0)
@@ -78,7 +81,8 @@ class TransferTests(unittest.TestCase):
                 self.assertEqual(stream.read(), b'')
                 files = archive.call_args.args[0]
                 for name in ('emqx_source_profiles.py', 'emqx_owner_file_hocon.py',
-                             'emqx_vendor_acl.escript', 'emqx_owner_source_capture.py'):
+                             'emqx_vendor_acl.escript', 'emqx_owner_source_capture.py',
+                             'emqx_hocon_context.py','emqx_hocon_context_native.escript','emqx_republish_templates.py'):
                     self.assertIn('tests/e2e/lab/' + name, files)
                 command = spawn.call_args.args[0]
                 self.assertEqual(command[1:3], ['d', '/usr/bin/python3'])
