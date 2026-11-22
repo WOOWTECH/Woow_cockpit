@@ -31,7 +31,7 @@ CONSUMER_REASONS = frozenset(('private_refused','inventory_names_type','inventor
     'inventory_name_shape','inventory_duplicate_name','inventory_missing_schema',
     'inventory_schema_type','inventory_schema_count','inventory_schema_entry_shape',
     'inventory_schema_name_kind','inventory_schema_duplicate','inventory_schema_binding',
-    'inventory_tables_type','inventory_tables_count'))
+    'inventory_tables_type','inventory_tables_count','inventory_builtin_profile'))
 
 
 class OwnerCaptureRefused(TargetCaptureUnsupported):
@@ -259,6 +259,43 @@ def _config_secret_metadata(config, metadata):
 
 
 
+
+# Exact builtin declaration in pinned MRIA 0.8.18. LIVE producer only: this
+# exception must never reach generic private_table callbacks/filename validators.
+_LIVE_SYNC_TABLE = '$mria_rlog_sync'
+_LIVE_SYNC_ATTRIBUTES = ['reply_to','shard','extra']
+
+
+def _live_table_name(name):
+    return native_name(name) or (type(name) is str and name == _LIVE_SYNC_TABLE)
+
+
+def _validate_sync_builtin(schema,tables):
+    def refuse():
+        raise OwnerCaptureRefused('inventory','inventory_builtin_profile')
+    records=[t for t in tables if type(t) is dict and t.get('table') == _LIVE_SYNC_TABLE]
+    if len(records) != 1:
+        refuse()
+    table=records[0]
+    if (table.get('record_name') != _LIVE_SYNC_TABLE or table.get('attributes') != _LIVE_SYNC_ATTRIBUTES
+            or type(table.get('row_count')) is not int or table['row_count'] != 0
+            or table.get('rows') != []):
+        refuse()
+    properties=next(props for name,props in schema if _text(name) == _LIVE_SYNC_TABLE)
+    if (type(properties) is not list or any(type(p) is not tuple or len(p) != 2 or
+            type(p[0]) is not str for p in properties)):
+        refuse()
+    props=dict(properties)
+    if len(props) != len(properties):
+        refuse()
+    if (props.get('name') != _LIVE_SYNC_TABLE or props.get('record_name') != _LIVE_SYNC_TABLE
+            or props.get('attributes') != _LIVE_SYNC_ATTRIBUTES
+            or any(props.get(k) != [] for k in ('ram_copies','disc_copies','disc_only_copies'))
+            or type(props.get('null_copies')) is not list or not props['null_copies']
+            or not all(type(node) is str and 0 < len(node) <= 255 for node in props['null_copies'])):
+        refuse()
+
+
 def _validate_inventory(names,schema,tables):
     """Same strict inventory contract, split into bounded value-free reasons."""
     def refuse(reason):
@@ -267,7 +304,7 @@ def _validate_inventory(names,schema,tables):
         refuse('inventory_names_type')
     if not names or len(names) > 64:
         refuse('inventory_names_bound')
-    if not all(native_name(name) for name in names):
+    if not all(_live_table_name(name) for name in names):
         refuse('inventory_name_shape')
     if len(set(names)) != len(names):
         refuse('inventory_duplicate_name')
@@ -291,6 +328,8 @@ def _validate_inventory(names,schema,tables):
         refuse('inventory_tables_type')
     if len(tables) != len(names)-1:
         refuse('inventory_tables_count')
+    if _LIVE_SYNC_TABLE in names:
+        _validate_sync_builtin(schema,tables)
 
 
 def _build_checked(wire, generation, mark):
@@ -313,8 +352,9 @@ def _build_checked(wire, generation, mark):
     tables, row_total = {}, 0
     for table in doc['tables']:
         if (type(table) is not dict or set(table) != {'table', 'record_name', 'attributes', 'row_count', 'rows'}
-                or not native_name(table['table']) or table['table'] in tables
-                or not native_name(table['record_name']) or type(table['attributes']) is not list
+                or not _live_table_name(table['table']) or table['table'] in tables
+                or not (table['record_name'] == _LIVE_SYNC_TABLE if table['table'] == _LIVE_SYNC_TABLE
+                        else native_name(table['record_name'])) or type(table['attributes']) is not list
                 or not table['attributes'] or not all(native_name(a) for a in table['attributes'])
                 or len(set(table['attributes'])) != len(table['attributes'])
                 or type(table['rows']) is not list or type(table['row_count']) is not int

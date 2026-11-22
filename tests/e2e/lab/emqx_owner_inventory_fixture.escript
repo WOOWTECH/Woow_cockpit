@@ -30,6 +30,12 @@ main([Path]) ->
                 {user_properties,[{private_property,<<"fixture-native-canonical-private">>}]}]; _ -> [] end,
             {atomic,ok} = mnesia:create_table(T,[{record_name,R},{attributes,A},{ram_copies,[node()]}|Extra])
         end,Specs),
+        {ok,null_copies} = mria_mnesia_null_storage:register(),
+        {atomic,ok} = mnesia:create_table('$mria_rlog_sync',[
+            {record_name,'$mria_rlog_sync'},{attributes,[reply_to,shard,extra]},
+            {null_copies,[node()]}]),
+        {ext,null_copies,mria_mnesia_null_storage} = mnesia:table_info('$mria_rlog_sync',storage_type),
+        0 = mnesia:table_info('$mria_rlog_sync',size),
         ok = mnesia:dirty_write(emqx_authn_mnesia,{user_info,{'mqtt:global',<<"fixture-native-user">>},
             <<"fixture-native-hash">>,<<>>,false}),
         ok = mnesia:dirty_write(emqx_admin_jwt,{emqx_admin_jwt,fixture_id,<<"fixture-native-jwt-private">>}),
@@ -42,6 +48,10 @@ main([Path]) ->
                 Count = mnesia:table_info(T,size),
                 Fold = mnesia:foldl(fun(R,A) -> [Typed(R,0)|A] end,[],T),
                 Count = length(Fold),
+                FoldAgain = mnesia:foldl(fun(R,A) -> [Typed(R,0)|A] end,[],T),
+                Count = length(FoldAgain),
+                Count = mnesia:table_info(T,size),
+                case T of '$mria_rlog_sync' -> 0 = Count, [] = Fold, [] = FoldAgain; _ -> ok end,
                 #{table => atom_to_binary(T,utf8),record_name => atom_to_binary(mnesia:table_info(T,record_name),utf8),
                   attributes => [atom_to_binary(A,utf8) || A <- mnesia:table_info(T,attributes)],
                   row_count => Count,rows => Fold}

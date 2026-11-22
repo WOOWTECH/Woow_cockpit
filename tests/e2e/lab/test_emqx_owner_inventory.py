@@ -90,6 +90,41 @@ class InventoryTests(unittest.TestCase):
             self.assertNotIn('private',str(caught.exception))
             self.assertNotIn('private_',repr(caught.exception))
 
+    def test_only_exact_live_builtin_name_is_supported(self):
+        from emqx_persisted_values import native_name
+        from emqx_owner_target import _live_table_name
+        name='$mria_rlog_sync'
+        self.assertFalse(native_name(name))  # No generic callback/path exception.
+        self.assertTrue(_live_table_name(name))
+        self.assertEqual([n for n in self.native['table_names'] if not native_name(n)],[name])
+        entry=next(t for t in self.native['tables'] if t['table']==name)
+        self.assertEqual((entry['record_name'],entry['attributes'],entry['row_count'],entry['rows']),
+            (name,['reply_to','shard','extra'],0,[]))
+        for value in ('$mria_other','$mria_rlog_sync/../x','mria.rlog_sync','../table','table/path',
+                      '$mria_rlog_sync\x00','$mria_meta_shard','a'*256):
+            self.assertFalse(_live_table_name(value))
+
+    def test_builtin_record_schema_storage_and_empty_binding_refuse(self):
+        def table(doc):
+            return next(t for t in doc['tables'] if t['table']=='$mria_rlog_sync')
+        def property_change(doc,key,value):
+            record=next(t for t in doc['schema_metadata']['value']
+                if t['value'][0]['value']=='$mria_rlog_sync')
+            for prop in record['value'][1]['value']:
+                if prop['value'][0]['value']==key:
+                    from test_emqx_owner_target import typed
+                    prop['value'][1]=typed(value)
+        cases=[lambda d:table(d).update(record_name='unknown'),
+            lambda d:table(d).update(attributes=['reply_to','shard','unknown']),
+            lambda d:table(d).update(row_count=True),
+            lambda d:table(d).update(row_count=1,rows=[term('tuple',[])]),
+            lambda d:property_change(d,'null_copies',[]),
+            lambda d:property_change(d,'ram_copies',['private-node'])]
+        for edit in cases:
+            with self.subTest(edit=edit),self.assertRaises(OwnerCaptureRefused) as caught:
+                with owner_target_readers(private_eval=self.transport(edit),quiesce=self.quiesce):pass
+            self.assertEqual((caught.exception.phase,caught.exception.reason),('inventory','inventory_builtin_profile'))
+
     def test_harness_publishes_fixed_reason_not_exception_or_config(self):
         @contextmanager
         def refused(**kwargs):
