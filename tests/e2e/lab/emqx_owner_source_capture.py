@@ -17,10 +17,11 @@ from emqx_private_boundary import PrivateFailure
 
 @contextlib.contextmanager
 def capture_owner_source(path, *, password, expected_sha256, spool_directory,
-                         required_encryption=None):
+                         required_encryption=None, fixture_profile=None):
     """Bind, authenticate, full-finish, parse and register product-used sources.
 
-    Uses the actual bounded256MiB Capture spool and pinned native adapters.
+    Uses the default256MiB spool unless the owner explicitly selects the
+    digest-bound x86 fixture profile (exact expanded size, 120-second deadline).
     source_binding's final consistency check finishes BEFORE yielding. The
     yielded (capture, private_binding) has no target acknowledgements and is
     UNSEALED. summary/scan/replay refuse until capture.supply_target_documents
@@ -39,7 +40,12 @@ def capture_owner_source(path, *, password, expected_sha256, spool_directory,
             with source_binding(path, 'emqx', hacommon.semver('5.8.9'),
                     expected_sha256, keys=captured.keys,
                     required_encryption=required_encryption) as source:
-                private_binding = captured(source)
+                # source_binding has verified the actual archive digest here.
+                if fixture_profile is not None:
+                    from emqx_private_spool import fixture_limits
+                    fixture_limits(fixture_profile, expected_sha256)
+                private_binding = captured(source, fixture_profile=fixture_profile,
+                    verified_sha256=expected_sha256 if fixture_profile is not None else None)
             yield captured, private_binding
     except (KeyboardInterrupt, SystemExit):
         raise PrivateFailure('private-owner-source-cancelled') from None

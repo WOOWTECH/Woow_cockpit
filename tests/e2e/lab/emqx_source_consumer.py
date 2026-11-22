@@ -252,10 +252,12 @@ class Capture:
     def __repr__(self):
         return '<EMQX private capture>'
 
-    def __call__(self, source):
+    def __call__(self, source, *, fixture_profile=None, verified_sha256=None):
         if self._used or self._closed:
             refuse()
         self._used = True
+        if fixture_profile is not None and self._spool_directory is None:
+            refuse()
         slug = source['addon_member']('woow-emqx')
         with source['open'](slug) as stream:
             if self._spool_directory is not None:
@@ -263,7 +265,8 @@ class Capture:
                     refuse()
                 from emqx_private_spool import capture
                 captured, _, _ = self._stack.enter_context(
-                    capture(stream, self._spool_directory))
+                    capture(stream, self._spool_directory, fixture_profile=fixture_profile,
+                            verified_sha256=verified_sha256))
             else:
                 chunks, size = [], 0
                 while True:

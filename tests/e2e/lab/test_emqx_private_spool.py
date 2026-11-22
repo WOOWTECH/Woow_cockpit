@@ -86,3 +86,73 @@ class SpoolTests(unittest.TestCase):
             with capture(io.BytesIO(b'x'), self.root, maximum=64):
                 self.fail('yielded')
         self.assertEqual(list(self.root.iterdir()), [])
+
+class FixtureProfileTests(SpoolTests):
+    def test_generated_exact_capacity_finish_permissions_cleanup(self):
+        import emqx_private_spool as spool
+        class Generated:
+            remaining = spool.X86_SIZE
+            finished = False
+            def read(self, maximum):
+                count = min(maximum, self.remaining)
+                self.remaining -= count
+                return b'x' * count
+            def finish(self):
+                self.finished = True
+        source = Generated()
+        with capture(source, self.root, fixture_profile=spool.X86_PROFILE,
+                     verified_sha256=spool.X86_SHA256) as (stream, size, digest):
+            self.assertTrue(source.finished)
+            self.assertEqual(size, 290785280)
+            self.assertEqual(stream.seek(0, 2), size)
+            self.assertEqual(next(self.root.iterdir()).stat().st_mode & 0o777, 0o600)
+        self.assertEqual(list(self.root.iterdir()), [])
+        self.assertEqual(spool.MAX_SOURCE, 256 * 1024 ** 2)
+
+    def test_profile_refuses_unknown_digest_profile_short_and_deadline(self):
+        import emqx_private_spool as spool
+        for profile, digest in ((spool.X86_PROFILE, '0' * 64),
+                                ('unknown', spool.X86_SHA256)):
+            with patch.object(spool.tempfile, 'mkstemp') as create:
+                with self.assertRaises(PrivateFailure):
+                    with capture(io.BytesIO(b'x'), self.root,
+                                 fixture_profile=profile, verified_sha256=digest):
+                        self.fail('yielded')
+                create.assert_not_called()
+        class Finished(io.BytesIO):
+            def finish(self):
+                pass
+        with self.assertRaises(PrivateFailure):
+            with capture(Finished(b'short'), self.root,
+                         fixture_profile=spool.X86_PROFILE, verified_sha256=spool.X86_SHA256):
+                self.fail('short yielded')
+        with patch.object(spool.time, 'monotonic', side_effect=[0, 0, 121]):
+            with self.assertRaises(PrivateFailure):
+                with capture(Finished(b'x'), self.root,
+                             fixture_profile=spool.X86_PROFILE, verified_sha256=spool.X86_SHA256):
+                    self.fail('expired yielded')
+        self.assertEqual(list(self.root.iterdir()), [])
+
+    def test_profile_late_finish_and_oversize_refuse(self):
+        import emqx_private_spool as spool
+        class Late(io.BytesIO):
+            def finish(self):
+                raise ValueError('generated finish failure')
+        # Scaled size exercises the same exact-size/overflow contract cheaply.
+        with patch.object(spool, 'X86_SIZE', 64):
+            for source in (Late(b'x' * 64), io.BytesIO(b'x' * 65)):
+                with self.assertRaises(PrivateFailure):
+                    with capture(source, self.root, fixture_profile=spool.X86_PROFILE,
+                                 verified_sha256=spool.X86_SHA256):
+                        self.fail('yielded')
+                self.assertEqual(list(self.root.iterdir()), [])
+            clock = [0]
+            class SlowFinish(io.BytesIO):
+                def finish(self):
+                    clock[0] = 121
+            with patch.object(spool.time, 'monotonic', side_effect=lambda: clock[0]):
+                with self.assertRaises(PrivateFailure):
+                    with capture(SlowFinish(b'x' * 64), self.root,
+                                 fixture_profile=spool.X86_PROFILE, verified_sha256=spool.X86_SHA256):
+                        self.fail('late finish yielded')
+        self.assertEqual(list(self.root.iterdir()), [])

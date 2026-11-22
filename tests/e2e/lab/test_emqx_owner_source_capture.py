@@ -116,6 +116,37 @@ class OwnerHarnessTests(unittest.TestCase):
         self.assertEqual(list(self.spool.iterdir()), [])
         self.assertEqual(set(self.root.iterdir()), {self.path, self.spool})
 
+    def test_explicit_profile_uses_real_binding_before_capacity_selection(self):
+        from unittest.mock import patch
+        import emqx_owner_source_capture as owner
+        import emqx_private_spool as spool
+        self.fixture()
+        # Generated encrypted archive, real source_binding; scale pinned profile
+        # identity/size only, never substitute binding or authentication.
+        with patch.object(spool, 'X86_SHA256', self.digest), \
+             patch.object(spool, 'X86_SIZE', len(self.raw)), \
+             patch.object(owner, 'native_hocon', self.hocon), \
+             patch.object(owner, 'native_cold_history', decoder), \
+             patch.object(spool, 'fixture_limits', wraps=spool.fixture_limits) as limits:
+            with owner.capture_owner_source(self.path, password=self.password,
+                    expected_sha256=self.digest, spool_directory=self.spool,
+                    fixture_profile=spool.X86_PROFILE):
+                self.assertEqual(limits.call_count, 2)
+            self.assertEqual(list(self.spool.iterdir()), [])
+            limits.reset_mock()
+            with self.assertRaises(PrivateFailure):
+                with owner.capture_owner_source(self.path, password=self.password,
+                        expected_sha256='0' * 64, spool_directory=self.spool,
+                        fixture_profile=spool.X86_PROFILE):
+                    self.fail('mismatch yielded')
+            limits.assert_not_called()
+        with self.assertRaises(PrivateFailure):
+            with owner.capture_owner_source(self.path, password=self.password,
+                    expected_sha256=self.digest, spool_directory=self.spool,
+                    fixture_profile=spool.X86_PROFILE):
+                self.fail('unknown digest yielded')
+        self.assertEqual(list(self.spool.iterdir()), [])
+
     def test_late_binding_change_refuses_before_yield_and_cleans_spool(self):
         from unittest.mock import patch
         import emqx_owner_source_capture as owner
