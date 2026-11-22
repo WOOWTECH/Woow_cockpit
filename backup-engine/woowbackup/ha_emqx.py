@@ -917,7 +917,7 @@ def target_broker(work, tmp, target, export, ids, *, hint='', target_snapshot=No
     return seeded, counts, strict, authn
 
 
-def check_counts(ha, seeded, counts):
+def check_counts(ha, seeded, counts, *, observe=None):
     """Tables where the import lost or invented rows (HA's rows must all be there, at most plus the seed)."""
     problems = []
     for table in TABLES:
@@ -925,6 +925,8 @@ def check_counts(ha, seeded, counts):
         if theirs < 0:
             continue
         if not theirs <= mine <= theirs + seed:
+            if observe is not None:
+                observe(table, 'underflow' if mine < theirs else 'overflow')
             problems.append(f'{table}（HA {theirs}，匯入後 {mine}）')
     return problems
 
@@ -1107,7 +1109,8 @@ def _build_candidate(work, app, tmp, target, staging, *, version):
     seeded, counts, strict, live_authn = candidate_from_target(
         work, app, tmp, target, staging, export, emqx_ids, hint=hint_for(src.addon))
     stage('row_counts')
-    problems = check_counts(readings['counts'], seeded, counts)
+    problems = check_counts(readings['counts'], seeded, counts,
+        observe=(lambda table, direction: stage('row_counts_'+table+'_'+direction)) if observe is not None else None)
     if problems:
         raise BackupError('job-failed', f'EMQX 匯入後的資料筆數和 HA 不同，已停止：{"、".join(problems[:10])}。')
     return src, node, readings, export, counts, strict, live_authn
