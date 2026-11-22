@@ -149,7 +149,19 @@ def main():
                                             stage='HOCON_'+native_hocon_diagnostic(raw).upper()
                                             raise RuntimeError('private-hocon-refused') from None
                                         stage='HOCON_CONTRACT'
-                                        values=read_hocon(raw,lambda source:encoded).values
+                                        try:values=read_hocon(raw,lambda source:encoded).values
+                                        except Exception:
+                                            # Classification only; complete semantic refusal remains.
+                                            pending=[json.loads(encoded).get('document')]
+                                            while pending:
+                                                item=pending.pop()
+                                                if type(item) is dict:
+                                                    if item.get('type')=='file':
+                                                        stage='HOCON_FILE_AUTHORIZER'
+                                                        break
+                                                    pending.extend(item.values())
+                                                elif type(item) is list:pending.extend(item)
+                                            raise RuntimeError('private-hocon-contract-refused') from None
                                     scan.add(values)
                                     config_count+=1
                             if config_count!=2:raise RuntimeError('config-inventory-refused')
