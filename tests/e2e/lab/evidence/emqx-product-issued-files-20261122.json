@@ -1,0 +1,11 @@
+{
+  "source_commit": "7e48717097b5cf0a229066bef8ce734a4505dfc1",
+  "scope": "actual synthetic HA product conversion/install/restart/automatic rollback with issued mount and Podman secret collection",
+  "evidence": "emqx-ha-adapter-joined/run-20261122T143949Z-1917442.jsonl",
+  "result": "passed",
+  "mqtt_denied_subscribe_reason": 135,
+  "real_encrypted_ha_restore": false,
+  "commercial_acceptance": "not-complete",
+  "isolation": "dev-d network none / no published ports",
+  "cleanup": "passed"
+}
