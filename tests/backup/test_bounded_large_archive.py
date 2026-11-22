@@ -45,6 +45,8 @@ class HarnessSafetyTests(unittest.TestCase):
                     f'"--scratch-parent", {root!r}]\n' + setup + '\nsys.exit(p.main())\n')
             result = subprocess.run([sys.executable, '-c', code], cwd=probe.ROOT,
                                     capture_output=True, text=True, timeout=60)
+            self.assertTrue('AGE-SECRET-KEY-' not in result.stdout + result.stderr,
+                            'secret material appeared in child output (output suppressed)')
             self.assertEqual(result.returncode, 1, result.stderr)
             report = json.loads(result.stdout)
             self.assertEqual(report['status'], 'failed')
@@ -87,3 +89,33 @@ class HarnessSafetyTests(unittest.TestCase):
             with self.assertRaises(SystemExit) as caught:
                 probe.main()
         self.assertEqual(caught.exception.code, 2)
+
+    def test_encrypted_missing_dependency_fails_before_generation(self):
+        report = self.run_isolated_failure(
+            'sys.argv.append("--encrypted")\n'
+            'p.encryption_dependencies = mock.Mock(side_effect=RuntimeError("dependency missing"))')
+        self.assertNotIn('source_sha256', report)
+        self.assertTrue(report['ephemeral_keys_removed'])
+        self.assertEqual(report['tool_children_remaining'], 0)
+
+    def test_encrypted_real_cap_reaps_children_and_removes_key(self):
+        report = self.run_isolated_failure(
+            'sys.argv.append("--encrypted")\n'
+            'p.ARCHIVE_CAP = 32768\n'
+            'p.payload_block = lambda *args: os.urandom(1024**2)')
+        self.assertTrue(report['ephemeral_key']['created'])
+        self.assertIn('source_sha256', report)
+        self.assertNotIn('archive_sha256', report)
+        self.assertTrue(report['ephemeral_keys_removed'])
+        self.assertEqual(report['tool_children_remaining'], 0)
+
+    def test_encrypted_exception_never_logs_actual_ephemeral_secret(self):
+        report = self.run_isolated_failure(
+            'sys.argv.append("--encrypted")\n'
+            'def fail_verify(path, identities, **kwargs):\n'
+            '    raise RuntimeError(Path(identities[0]).read_text())\n'
+            'p.archive.verify_archive = fail_verify')
+        self.assertEqual(report['error'], 'encrypted probe failed (details suppressed)')
+        self.assertTrue(report['ephemeral_keys_removed'])
+        self.assertEqual(report['tool_children_remaining'], 0)
+        self.assertNotIn('source_removed_before_extract', report)
