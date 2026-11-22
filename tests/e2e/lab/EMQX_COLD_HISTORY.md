@@ -72,7 +72,10 @@ DATA: no mnesia_schema:list2cs, backend resolution, apply/eval, recovery/dumper,
 restore, repair or Mnesia startup. Unknown table names (JWT, retainer, PSK, etc.)
 are traversed as data instead of being filtered by the checkpoint five-table
 layout whitelist. This does not attest those tables' business schema/rows.
-Custom backend/index-plugin registrations, external copies, fragmentation and
+Only the pinned built-in registration pairs `(rocksdb_copies, mnesia_rocksdb)`
+and `(null_copies, mria_mnesia_null_storage)` are accepted as inert metadata,
+with no duplicates or alias/module substitutions. Neither backend is loaded or
+called by the offline reader. Custom backend/index-plugin registrations, external copies, fragmentation and
 SNMP dependencies currently refuse rather than authorize their later execution.
 Native fun/pid/ref/port/improper list/bitstring, oversize or deep terms refuse
 anywhere, including schema property values and the last record of a log.
