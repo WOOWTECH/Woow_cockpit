@@ -58,11 +58,16 @@ def _source_files(provision):
         directories = tuple(_identity(os.fstat(fd)) for fd in descriptors)
         if any(os.fstat(fd).st_uid != os.geteuid() for fd in descriptors):
             raise ValueError()
+        # Container UID mapping requires the existing 0644 leaves. Confidentiality
+        # comes from the invocation prefix, not inherited process umask.
+        if stat.S_IMODE(os.fstat(descriptors[-1]).st_mode) != 0o700:
+            raise ValueError()
         result = {}
         for inside, leaf in ((BASE, 'base.hocon'), (ACL, 'acl.conf')):
             before = os.stat(leaf, dir_fd=parent, follow_symlinks=False)
             if (not stat.S_ISREG(before.st_mode) or before.st_nlink != 1 or
-                    before.st_uid != os.geteuid() or not 0 < before.st_size <= LIMIT):
+                    before.st_uid != os.geteuid() or stat.S_IMODE(before.st_mode) != 0o644 or
+                    not 0 < before.st_size <= LIMIT):
                 raise ValueError()
             fd = os.open(leaf, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=parent)
             try:

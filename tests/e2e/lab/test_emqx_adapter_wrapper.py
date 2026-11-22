@@ -2,10 +2,61 @@
 import fcntl
 import json
 import os
+import re
+import shlex
+import sys
 from pathlib import Path
 import subprocess
 import tempfile
 import unittest
+
+
+def bundle_entries():
+    script = Path(__file__).with_name('run_emqx_adapter_lab.sh').read_text()
+    match = re.search(r'\ntar -C "\$REPO_ROOT" -cf - (.*?)\|', script, re.S)
+    if match is None:
+        raise AssertionError('missing actual wrapper archive command')
+    return shlex.split(match[1].replace('\\\n', ' '))
+
+
+class ExtractedBundleTests(unittest.TestCase):
+    def test_actual_archive_imports_capability_closure_without_checkout_fallback(self):
+        repository = Path(__file__).resolve().parents[3]
+        with tempfile.TemporaryDirectory(prefix='generated-adapter-bundle-') as directory:
+            root = Path(directory)
+            archive = root / 'code.tar'
+            extracted = root / 'extracted'
+            extracted.mkdir(mode=0o700)
+            with archive.open('wb') as output:
+                subprocess.run(['/usr/bin/tar', '-C', str(repository), '-cf', '-', *bundle_entries()],
+                               stdout=output, stderr=subprocess.PIPE, check=True, timeout=15)
+            subprocess.run(['/usr/bin/tar', '-xf', str(archive), '-C', str(extracted)],
+                           check=True, capture_output=True, timeout=15)
+            source = '''
+import importlib, pathlib, sys
+root = pathlib.Path(sys.argv[1]).resolve()
+sys.path[:0] = [str(root / 'backup-engine'), str(root / 'tests/e2e/lab')]
+modules = ('emqx_adapter_owner', 'emqx_adapter_driver', 'emqx_owner_fixture_files',
+           'emqx_owner_vendor_files', 'emqx_bootstrap_csv', 'emqx_native_runtime',
+           'emqx_semantic_readers', 'emqx_target_snapshots', 'emqx_runtime_credentials',
+           'emqx_private_boundary', 'emqx_real_candidate', 'ha_real_fixture')
+for name in modules:
+    module = importlib.import_module(name)
+    assert pathlib.Path(module.__file__).resolve().is_relative_to(root)
+from emqx_owner_fixture_files import _issue, observe_fixture_files
+from emqx_adapter_owner import OwnerProvision
+assert callable(_issue) and callable(observe_fixture_files) and callable(OwnerProvision.create)
+print('extracted-private-imports-pass')
+'''
+            args = [sys.executable, '-I', '-B', '-c', source, str(extracted)]
+            result = subprocess.run(args, cwd=extracted, capture_output=True, timeout=15)
+            self.assertEqual(result.returncode, 0, result.stderr.decode())
+            self.assertEqual(result.stdout, b'extracted-private-imports-pass\n')
+            # Demonstrate no accidental import fallback to the developer checkout.
+            (extracted / 'tests/e2e/lab/emqx_bootstrap_csv.py').unlink()
+            missing = subprocess.run(args, cwd=extracted, capture_output=True, timeout=15)
+            self.assertNotEqual(missing.returncode, 0)
+            self.assertIn(b'No module named', missing.stderr)
 
 
 class WrapperTests(unittest.TestCase):
@@ -64,9 +115,10 @@ if 'memory.current' in args[-1]:
     sys.exit(0)
 sys.exit(subprocess.run(args[1:]).returncode)
 ''')
-        for name in ('emqx_adapter_fixture.py','emqx_adapter_provision.py','emqx_adapter_flow.py',
-                     'emqx_adapter_owner.py','emqx_adapter_mqtt.py','emqx_ha_candidate.py'):
-            (self.lab / name).write_text('# generated stand-in\n')
+        for entry in bundle_entries():
+            path = Path(entry)
+            if path.parent == Path('tests/e2e/lab') and path.name != 'emqx_adapter_driver.py':
+                (self.lab / path.name).write_text('# generated stand-in\n')
         (self.lab / 'emqx_adapter_driver.py').write_text('''import json, os, sys
 from pathlib import Path
 with open(os.environ['ADAPTER_TEST_TRACE'],'a') as f:

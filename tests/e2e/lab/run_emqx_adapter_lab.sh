@@ -59,7 +59,12 @@ suffix=$(od -An -N4 -tx1 /dev/urandom | tr -d ' \n')
 tar -C "$REPO_ROOT" -cf - backup-engine/woowbackup \
     tests/e2e/lab/emqx_adapter_fixture.py tests/e2e/lab/emqx_adapter_provision.py \
     tests/e2e/lab/emqx_adapter_flow.py tests/e2e/lab/emqx_adapter_driver.py \
-    tests/e2e/lab/emqx_adapter_owner.py tests/e2e/lab/emqx_adapter_mqtt.py tests/e2e/lab/emqx_ha_candidate.py |
+    tests/e2e/lab/emqx_adapter_owner.py tests/e2e/lab/emqx_adapter_mqtt.py tests/e2e/lab/emqx_ha_candidate.py \
+    tests/e2e/lab/emqx_owner_fixture_files.py tests/e2e/lab/emqx_owner_vendor_files.py \
+    tests/e2e/lab/emqx_bootstrap_csv.py tests/e2e/lab/emqx_native_runtime.py \
+    tests/e2e/lab/emqx_semantic_readers.py tests/e2e/lab/emqx_target_snapshots.py \
+    tests/e2e/lab/emqx_runtime_credentials.py tests/e2e/lab/emqx_private_boundary.py \
+    tests/e2e/lab/emqx_real_candidate.py tests/e2e/lab/ha_real_fixture.py |
     "$LAB_DIR/owner.sh" d sh -c '
 set -eu
 umask 077

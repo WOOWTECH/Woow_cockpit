@@ -41,7 +41,8 @@ class GeneratedRunner:
     def run(self, args):
         self.calls.append(args)
         if args[0] == '/usr/bin/mkdir':
-            Path(args[-1]).mkdir()
+            mode = int(args[args.index('-m')+1], 8) if '-m' in args else 0o777
+            Path(args[-1]).mkdir(mode=mode)
         elif args[0] == '/usr/bin/rmdir':
             Path(args[-1]).rmdir()
         else:
@@ -196,6 +197,65 @@ class FixtureFilesTests(unittest.TestCase):
             with self.assertRaises(PrivateFailure):
                 other.create(BASE, ACL, CSV, b'generated-dashboard-secret')
         self.assertIsNone(other.file_capability)
+
+    def test_prefix_is_explicitly_private_and_leaves_keep_container_read_modes(self):
+        root = Path(self.runner.home) / '.config' / self.f.prefix
+        self.assertEqual(stat.S_IMODE(root.stat().st_mode), 0o700)
+        self.assertIn(['/usr/bin/mkdir', '-m', '0700', '--', str(root)], self.runner.calls)
+        for leaf in ('base.hocon', 'acl.conf'):
+            self.assertEqual(stat.S_IMODE((root / leaf).stat().st_mode), 0o644)
+
+    def test_creation_under_permissive_umask_still_proves_private_prefix(self):
+        with patch.object(owner, 'LabOwnerRunner', return_value=self.runner):
+            other = owner.OwnerProvision(m.IMAGE.removeprefix('sha256:'))
+        previous = os.umask(0)
+        try:
+            other.create(BASE, ACL, CSV, b'generated-dashboard-secret')
+        finally:
+            os.umask(previous)
+        self.addCleanup(m.revoke, other.file_capability)
+        root = Path(self.runner.home) / '.config' / other.fixture.prefix
+        self.assertEqual(stat.S_IMODE(root.stat().st_mode), 0o700)
+        for leaf in ('base.hocon', 'acl.conf'):
+            self.assertEqual(stat.S_IMODE((root / leaf).stat().st_mode), 0o644)
+
+    def test_issuance_refuses_nonprivate_prefix_even_if_creation_umask_is_permissive(self):
+        with patch.object(owner, 'LabOwnerRunner', return_value=self.runner):
+            other = owner.OwnerProvision(m.IMAGE.removeprefix('sha256:'))
+        run = self.runner.run
+        def nonprivate(args):
+            run(args)
+            if args[0] == '/usr/bin/mkdir':
+                Path(args[-1]).chmod(0o755)
+        with patch.object(self.runner, 'run', side_effect=nonprivate):
+            with self.assertRaises(PrivateFailure):
+                other.create(BASE, ACL, CSV, b'generated-dashboard-secret')
+        self.assertIsNone(other.file_capability)
+
+    def test_changed_prefix_or_leaf_modes_refuse_without_reading_target_values(self):
+        root = Path(self.runner.home) / '.config' / self.f.prefix
+        for mode in (0o755, 0o750, 0o777):
+            root.chmod(mode)
+            self.refuse()
+        root.chmod(0o700)
+        for leaf in ('base.hocon', 'acl.conf'):
+            for mode in (0o600, 0o666, 0o444):
+                (root / leaf).chmod(mode)
+                self.refuse()
+            (root / leaf).chmod(0o644)
+        self.assertNotIn('eval', self.events)
+
+    def test_parent_symlink_and_wrong_owner_refuse(self):
+        root = Path(self.runner.home) / '.config' / self.f.prefix
+        original = root.with_name(root.name + '-original')
+        root.rename(original)
+        root.symlink_to(original, target_is_directory=True)
+        self.refuse()
+        root.unlink()
+        original.rename(root)
+        with patch.object(m.os, 'geteuid', return_value=os.geteuid()+1):
+            self.refuse()
+        self.assertNotIn('eval', self.events)
 
     def test_cleanup_revokes_before_resource_cleanup_even_on_failure(self):
         def failed_cleanup(provision):
