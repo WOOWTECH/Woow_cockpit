@@ -158,7 +158,9 @@ def _provenance(private_inspect, broker, cid, paths):
         raise ValueError()
     doc = docs[0]
     host = doc['HostConfig']
-    if (doc['Id'] != cid or doc['Name'].lstrip('/') != broker or doc['Image'] != IMAGE or
+    image = doc['Image']
+    if (type(image) is not str or image not in (IMAGE, IMAGE.removeprefix('sha256:')) or
+            doc['Id'] != cid or doc['Name'].lstrip('/') != broker or
             doc['State']['Running'] is not True or host['NetworkMode'] != 'none' or
             host['PortBindings'] not in ({}, None) or host['LogConfig']['Type'] != 'none'):
         raise ValueError()
@@ -179,7 +181,7 @@ def _provenance(private_inspect, broker, cid, paths):
         if any(dest == '/' or p == dest or p.startswith(dest + '/') for p in paths):
             raise ValueError()
     # Compare complete provenance fields, including sources/IDs, without printing them.
-    return (doc['Id'], doc['Name'], doc['Image'], env, host, mounts)
+    return (doc['Id'], doc['Name'], IMAGE, env, host, mounts)
 
 
 class VendorFiles:

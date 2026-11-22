@@ -144,6 +144,26 @@ class VendorFilesTests(unittest.TestCase):
             self.refuse()
         self.assertNotIn('image', self.events)
 
+    def test_inspect_accepts_only_two_exact_pinned_image_spellings(self):
+        for image in (v.IMAGE, v.IMAGE.removeprefix('sha256:')):
+            with self.subTest(image=image):
+                self.inspect[0]['Image'] = image
+                result = self.observe()
+                self.assertEqual(len(result.receipts), 4)
+                self.assertTrue(all(r['image'] == v.IMAGE for r in result.receipts))
+        for image in ('0'*64, 'sha256:'+'0'*64, 'sha512:'+v.IMAGE.removeprefix('sha256:'),
+                      'sha256:'+v.IMAGE, v.IMAGE.upper(), None, True, [v.IMAGE]):
+            with self.subTest(image=image):
+                self.inspect[0]['Image'] = image
+                self.refuse()
+
+    def test_equivalent_inspect_spelling_change_preserves_identity(self):
+        def evaluate(expression):
+            result = self.eval_callback(expression)
+            self.inspect[0]['Image'] = v.IMAGE.removeprefix('sha256:')
+            return result
+        self.assertEqual(len(self.observe(private_eval=evaluate).receipts), 4)
+
     def test_invalid_provenance_refuses(self):
         original = copy.deepcopy(self.inspect)
         mutations = [lambda d: d.update(Id='b'*64), lambda d: d.update(Image='sha256:'+'0'*64),
