@@ -1,26 +1,25 @@
 #!/usr/bin/env python3
 """dev-d only; synthetic appowner EMQX restore/rollback integration driver.
 
-Run only via labpodman inside the isolated dev-d device. The caller supplies a
+Run only via owner.sh inside the isolated dev-d device. The caller supplies a
 full already-present image ID and an isolated private staging directory.
 """
 import argparse
 import base64
 import json
-import os
 from pathlib import Path
 import re
 import secrets
 import shutil
 import time
 
-from emqx_adapter_provision import Provision
+from emqx_adapter_owner import OwnerProvision as Provision, adapter_factory as owner_adapter_factory
+from emqx_adapter_mqtt import mqtt as private_mqtt
 from emqx_adapter_flow import package_candidate, restore_candidate
 from emqx_ha_candidate import backup_from_volume, build_candidate
 from woowbackup import catalog, flows
 from woowbackup.paths import Paths
 
-CLIENT = 'sha256:93a0bdfcbd9b7a86b36127cb81f54e1afd2019f12f39033458df405a027c03e3'
 STAGE = 'startup'
 
 
@@ -92,13 +91,9 @@ retainer.backend.storage_type = disc
                 raise RuntimeError('cannot read synthetic effective config')
             return json.loads(base64.b64decode(raw[8:].split(b':END', 1)[0], validate=True))
 
-        def mqtt(program, topic, payload=None, *, username='lab', credential=None):
-            argv = ['run', '--rm', '--pull=never', '--network=container:' + f.prefix,
-                    '--memory=64m', '--cpus=1', '--entrypoint=' + program, CLIENT,
-                    '-h', '127.0.0.1', '-p', '1883', '-V', 'mqttv5', '-q', '1',
-                    '-u', username, '-P', password if credential is None else credential, '-t', topic]
-            argv += ['-r', '-m', payload, '-d'] if payload is not None else ['-C', '1', '-W', '10']
-            return runner.podman(*argv, timeout=60, check=False)
+        def mqtt(program, topic, payload=None, *, username='lab', credential=None, clear=False):
+            return private_mqtt(runner, f.prefix, program, topic, payload,
+                username=username, credential=password if credential is None else credential, clear=clear)
 
         def publish(topic, payload):
             result = mqtt('mosquitto_pub', topic, payload)
@@ -144,7 +139,7 @@ retainer.backend.storage_type = disc
         deps.sweep_temp = None
         deps.audit = lambda _line: None
         state = {'arm': False, 'injected': False}
-        original_factory = deps.adapter_factory
+        original_factory = owner_adapter_factory(f, runner)
         def adapter_factory(app_, **kwargs):
             original_hook = kwargs.get('imported_hook')
             def imported():
@@ -186,10 +181,7 @@ retainer.backend.storage_type = disc
         user_command('delete')
         user_command('absent')
         # Remove the source marker on the target; the candidate must restore it.
-        clear = runner.podman('run', '--rm', '--pull=never', '--network=container:' + f.prefix,
-            '--memory=64m', '--cpus=1', '--entrypoint=mosquitto_pub', CLIENT,
-            '-h', '127.0.0.1', '-p', '1883', '-V', 'mqttv5', '-q', '1', '-u', 'lab', '-P', password,
-            '-t', 'lab/from-ha', '-r', '-n', '-d', check=False, timeout=60)
+        clear = mqtt('mosquitto_pub', 'lab/from-ha', clear=True)
         if clear.returncode or not re.search(rb'RC:(?:0|16)\b', clear.stdout):
             raise RuntimeError('cannot clear target source marker')
         receive_absent('lab/from-ha')
