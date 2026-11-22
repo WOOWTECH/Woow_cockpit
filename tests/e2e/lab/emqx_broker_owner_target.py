@@ -37,6 +37,23 @@ def run_owner_target(root, broker, clients, report):
             report['native_fixed_stage'] = match[1].decode()
             report['native_fixed_reason'] = match[2].decode()
         if result.returncode:
+            diagnostic = result.stdout + result.stderr
+            for marker, code in ((b'unsafe', 'unsafe_variable'), (b'unbound', 'unbound_variable'),
+                    (b'syntax', 'expression_syntax'), (b'illegal_guard', 'illegal_guard'),
+                    (b'badarg', 'bad_argument'), (b'undef', 'undefined_api'),
+                    (b'timeout', 'transport_timeout')):
+                if marker in diagnostic.lower():
+                    report['native_fixed_reason'] = code
+                    break
+            else:
+                report['native_fixed_reason'] = 'transport_refused'
+            # Only names already present in the fixed source, never arbitrary
+            # server text, may refine an unbound/unsafe variable diagnostic.
+            variables = set(re.findall(rb'\b[A-Z][A-Za-z0-9_]*\b', args[-1].encode()))
+            for variable in variables:
+                if b"'" + variable + b"'" in diagnostic:
+                    report['native_fixed_variable'] = variable.decode()
+                    break
             raise RuntimeError('owner-target-private-eval-refused')
         return result.stdout
     with broker_target_readers(broker=broker, checked=private_checked, quiesce=quiesce) as readers:
