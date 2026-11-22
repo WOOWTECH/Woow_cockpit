@@ -36,7 +36,7 @@ from woowbackup.paths import Paths
 
 PHASES = frozenset(('profile','observer_dependency','realm','frame','provision',
     'ready','source','target','preflight','build','package','restore',
-    'rollback','restart','cleanup','client_frame','no_live','mqtt','post_capture','post_capture_identity'))
+    'rollback','restart','cleanup','client_frame','no_live','mqtt','post_capture','post_capture_identity','payload_history'))
 SOURCE_MODES = ('--source-vendor-acl-sql-aliases','--x86-source-vendor-acl-sql-aliases')
 
 
@@ -527,6 +527,24 @@ def final_private_receipt(registry):
     return raw
 
 
+def _payload_history(source_mode,source,key,spool,profile,clients):
+    """Independently bind original producer expectations to authenticated history.
+
+    Runs before any target mutation. Historical consensus does not replay
+    deletion/expiry or prove final presence; later actual retained MQTT must pass.
+    """
+    from emqx_retained_history import collect_original_retained_payloads,RetainedHistory
+    expected=tuple((clients.fields['retained_topic'+str(i)],clients.fields['retained_payload'+str(i)])
+                   for i in (1,2))
+    if type(key) is not str:raise RealOwnerRefused('payload_history')
+    result=collect_original_retained_payloads(source_mode=source_mode,password=key,
+        topics=tuple(t for t,_ in expected),spool_directory=spool,source_path=source)
+    if (type(result) is not RetainedHistory or result.source_sha256!=profile.sha256
+            or result.final_state is not False or result.private_pairs()!=expected):
+        raise RealOwnerRefused('payload_history')
+    return result
+
+
 def run_real_framed_owner(stream,*,private_parent,source_mode,no_live=True):
     """Internal fixed-frame operation; NO CLI/host mode or restore right added.
 
@@ -554,6 +572,8 @@ def run_real_framed_owner(stream,*,private_parent,source_mode,no_live=True):
             if no_live:
                 return {'scope':'sha-bound-ciphertext-and-client-frame-only','runtime':'not-run',
                         'source_authentication':'not-performed','restore':'not-performed'}
+            phase='payload_history'
+            retained_history=_payload_history(source_mode,source,key,spool,profile,clients)
             phase='provision'
             # All bootstrap inputs belong solely to THIS invocation/fixture.
             dashboard=secrets.token_hex(24).encode()
@@ -604,6 +624,7 @@ def run_real_framed_owner(stream,*,private_parent,source_mode,no_live=True):
                 post_registry.scan(b'')  # retain/check the complete supplemental chain through phase end
             phase='cleanup'
         receipt=final_private_receipt(post_registry)
+        phase='payload_history';retained_history.scan(receipt)
         return {'evidence_bytes':receipt,'scope':'private-same-target-product-flow', 'client_validation':'source-login-target-file-acl-retained-after-restore-rollback-restart',
                 'source_mnesia_acl_behavior':'not-assessed-target-file-authorizer',
                 'source_final_state':'not-assessed','commercial_acceptance':'not-assessed'}

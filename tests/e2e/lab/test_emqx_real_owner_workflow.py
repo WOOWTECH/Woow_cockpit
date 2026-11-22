@@ -261,11 +261,12 @@ class FoundationTests(unittest.TestCase):
              patch.object(self.provision,'create') as create, \
              patch.object(self.provision,'cleanup') as cleanup, \
              patch.object(m,'capture_owner_source') as capture, \
+             patch.object(m,'_payload_history') as history, \
              patch.object(m,'build_captured_candidate') as build:
             receipt=m.run_real_framed_owner(io.BytesIO(framed),private_parent=self.root,source_mode=m.SOURCE_MODES[0])
         self.assertEqual(receipt['scope'],'sha-bound-ciphertext-and-client-frame-only')
         self.assertEqual(receipt['source_authentication'],'not-performed')
-        for operation in (create,cleanup,capture,build):operation.assert_not_called()
+        for operation in (create,cleanup,capture,build,history):operation.assert_not_called()
         self.assertEqual(list(self.root.glob('emqx-framed-private-*')),[])
 
     def test_final_receipt_scans_exact_bytes_with_original_and_post_values(self):
@@ -487,3 +488,51 @@ class FoundationTests(unittest.TestCase):
             b'{deny, {username, "b1-sensor"}, subscribe, ["b1/secret/#"]}.\n'
             b'{deny, all}.\n'))
         self.assertNotIn(b'{allow, all}',acl)
+
+    def test_actual_framed_live_gate_requires_history_before_any_target_mutation(self):
+        from dataclasses import replace
+        import hashlib,struct
+        from emqx_source_profiles import ARM_SQL_ALIASES
+        from emqx_retained_history import RetainedHistory
+        cipher=b'generated-encrypted-cipher-only';key=b'generated-key-only'
+        framed=self.client_frame()+struct.pack('!I',len(key))+key+struct.pack('!Q',len(cipher))+cipher
+        profile=replace(ARM_SQL_ALIASES,sha256=hashlib.sha256(cipher).hexdigest())
+        clients=self.clients()
+        expected=tuple((clients.fields['retained_topic'+str(i)],clients.fields['retained_payload'+str(i)]) for i in (1,2))
+        for kind in ('match','different-payload','wrong-sha','boolean','native-failure'):
+            events=[]
+            result=RetainedHistory(expected,Mock(),profile.sha256)
+            if kind=='different-payload':result=RetainedHistory(((expected[0][0],b'foreign-generated'),expected[1]),Mock(),profile.sha256)
+            if kind=='wrong-sha':result=RetainedHistory(expected,Mock(),'0'*64)
+            if kind=='boolean':result=True
+            def collect(**kwargs):
+                events.append('history')
+                self.assertEqual(kwargs['source_mode'],m.SOURCE_MODES[0])
+                self.assertEqual(kwargs['password'],'generated-key-only')
+                self.assertEqual(kwargs['topics'],tuple(t for t,_ in expected))
+                self.assertEqual(kwargs['source_path'].read_bytes(),cipher)
+                self.assertEqual(kwargs['source_path'].parent,kwargs['spool_directory'].parent)
+                if kind=='native-failure':raise ValueError()
+                return result
+            def create(*args):
+                events.append('provision')
+                raise ValueError()  # End this generated boundary before any target IO.
+            with patch.object(m,'OwnerProvision',return_value=self.provision), \
+                 patch('emqx_fresh_owner_workflow.source_profile',return_value=profile), \
+                 patch.object(Path,'read_text',side_effect=['0',str(4*1024**3)]), \
+                 patch('emqx_fresh_owner_workflow.socket.gethostname',return_value='woowbk-dev-d'), \
+                 patch('emqx_retained_history.collect_original_retained_payloads',side_effect=collect) as collector, \
+                 patch.object(self.provision,'create',side_effect=create) as provision, \
+                 patch.object(self.provision,'cleanup') as cleanup,patch.object(m,'build_captured_candidate') as build, \
+                 patch.object(m,'capture_owner_source') as capture:
+                with self.assertRaises(m.RealOwnerRefused) as caught:
+                    m.run_real_framed_owner(io.BytesIO(framed),private_parent=self.root,source_mode=m.SOURCE_MODES[0],no_live=False)
+            self.assertEqual(collector.call_count,1,caught.exception.phase)
+            if kind=='match':
+                self.assertEqual(events,['history','provision']);self.assertEqual(caught.exception.phase,'provision')
+                provision.assert_called_once();cleanup.assert_called_once()
+            else:
+                self.assertEqual(events,['history']);self.assertEqual(caught.exception.phase,'payload_history')
+                provision.assert_not_called();cleanup.assert_not_called()
+            build.assert_not_called();capture.assert_not_called()
+            self.assertEqual(list(self.root.glob('emqx-framed-private-*')),[])
