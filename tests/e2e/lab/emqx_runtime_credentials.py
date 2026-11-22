@@ -90,6 +90,17 @@ class RuntimeRegistry:
     def scan(self, payload):
         if not self._target_complete or not isinstance(payload, bytes) or len(payload) > MAX_TOTAL:
             refused()
+        self._scan_values(payload)
+
+    def scan_login_evidence(self, payload):
+        """Runtime producer only: no source or target completeness assertion."""
+        if (self._categories.get('runtime-login-input', 0) < 2
+                or self._categories.get('runtime-login-token', 0) < 2
+                or not isinstance(payload, bytes) or len(payload) > MAX_TOTAL):
+            refused()
+        self._scan_values(payload)
+
+    def _scan_values(self, payload):
         for value in self._values:
             needles = {value, base64.b64encode(value), value.hex().encode(),
                        quote_from_bytes(value, safe='').encode()}
