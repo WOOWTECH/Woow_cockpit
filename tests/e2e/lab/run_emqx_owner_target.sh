@@ -34,7 +34,7 @@ tar -cf - -C "$REPO_ROOT" backup-engine/woowbackup -C "$LAB_DIR" \
     emqx_target_vendor_policy.py emqx_owner_vendor_files.py emqx_bootstrap_csv.py emqx_native_runtime.py \
     emqx_target_capture.py emqx_target_snapshots.py emqx_persisted_values.py emqx_semantic_readers.py \
     ha_real_fixture.py emqx_runtime_live.py emqx_runtime_credentials.py emqx_private_boundary.py \
-    emqx_private_evidence.py emqx_real_candidate.py |
+    emqx_private_evidence.py emqx_real_candidate.py emqx_candidate_stage.py |
     "$LAB_DIR/owner.sh" d sh -c '
 set -eu
 umask 077

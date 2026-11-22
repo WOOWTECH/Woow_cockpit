@@ -37,6 +37,9 @@ from woowbackup.paths import Paths
 PHASES = frozenset(('profile','observer_dependency','realm','frame','provision',
     'ready','source','target','preflight','build','package','restore',
     'rollback','restart','cleanup','client_frame','no_live','mqtt','post_capture','post_capture_identity','payload_history'))
+from emqx_candidate_stage import STAGES as BUILD_STAGES, KINDS as BUILD_KINDS
+from emqx_captured_candidate import CandidatePhaseRefused
+PHASES=PHASES | frozenset('build_'+s+'_'+k for s in BUILD_STAGES for k in BUILD_KINDS)
 SOURCE_MODES = ('--source-vendor-acl-sql-aliases','--x86-source-vendor-acl-sql-aliases')
 
 
@@ -630,6 +633,8 @@ def run_real_framed_owner(stream,*,private_parent,source_mode,no_live=True):
                 'source_final_state':'not-assessed','commercial_acceptance':'not-assessed'}
     except RealOwnerRefused:
         raise
+    except CandidatePhaseRefused as error:
+        raise RealOwnerRefused('build_'+error.stage+'_'+error.kind) from None
     except BaseException:
         raise RealOwnerRefused(phase) from None
     finally:

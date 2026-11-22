@@ -43,6 +43,19 @@ class BridgeTests(unittest.TestCase):
         return bridge.build_captured_candidate(self.work, self.app, object(), self.target,
             self.path, self.staging, 'j20261122T000000Z-12345678', **kwargs)
 
+    def test_fixed_build_phase_and_exception_kind_mask_original_error(self):
+        from emqx_candidate_stage import current,kind,mark
+        from emqx_captured_candidate import CandidatePhaseRefused
+        mark('product_build')
+        for error,expected in ((AttributeError('generated-private'),'attribute'),
+                               (OSError('generated-private'),'io'),
+                               (ValueError('generated-private'),'value')):
+            refused=CandidatePhaseRefused(current(),kind(error))
+            self.assertEqual((refused.stage,refused.kind),('product_build',expected))
+            self.assertEqual(str(refused),'candidate-refused')
+        with self.assertRaises(ValueError):mark('generated-private')
+        self.assertEqual(CandidatePhaseRefused('generated-private','generated-private').stage,'authorization')
+
     def test_real_frontgates_and_archive_reverification_reach_readonly_bytes_without_recapture(self):
         inspected = []
         def inspect(work, app, tmp, target, private, *, version):

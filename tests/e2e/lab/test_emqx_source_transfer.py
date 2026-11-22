@@ -131,7 +131,7 @@ policy_from_observation(VendorFiles(receipts),'c'*32)
                 for name in ('emqx_source_profiles.py', 'emqx_owner_file_hocon.py',
                              'emqx_vendor_acl.escript', 'emqx_owner_source_capture.py',
                              'emqx_hocon_context.py','emqx_hocon_context_native.escript','emqx_republish_templates.py',
-                             'emqx_captured_candidate.py','emqx_sql_aliases.py'):
+                             'emqx_captured_candidate.py','emqx_candidate_stage.py','emqx_sql_aliases.py'):
                     self.assertIn('tests/e2e/lab/' + name, files)
                 command = spawn.call_args.args[0]
                 self.assertEqual(command[1:3], ['d', '/usr/bin/python3'])
@@ -190,7 +190,7 @@ policy_from_observation(VendorFiles(receipts),'c'*32)
                 'emqx_owner_target.expr','emqx_target_vendor_policy.py','emqx_owner_vendor_files.py',
                 'emqx_bootstrap_csv.py','emqx_target_capture.py','emqx_target_snapshots.py',
                 'emqx_persisted_values.py','emqx_runtime_workflow.py','emqx_private_evidence.py',
-                'emqx_adapter_owner.py','emqx_captured_candidate.py','emqx_sql_aliases.py'):
+                'emqx_adapter_owner.py','emqx_captured_candidate.py','emqx_candidate_stage.py','emqx_sql_aliases.py'):
                 self.assertIn('tests/e2e/lab/'+name,files)
         compile(transfer.BOOTSTRAP,'<fixed-bootstrap>','exec')
 

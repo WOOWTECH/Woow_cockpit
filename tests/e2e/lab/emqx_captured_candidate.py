@@ -11,6 +11,14 @@ import weakref
 
 from emqx_private_boundary import PrivateFailure
 from emqx_real_candidate import build_verified_candidate
+from emqx_candidate_stage import mark, current, kind, STAGES, KINDS
+
+class CandidatePhaseRefused(PrivateFailure):
+    def __init__(self,stage,error_kind):
+        self.stage=stage if stage in STAGES else 'authorization'
+        self.kind=error_kind if error_kind in KINDS else 'other'
+        super().__init__('candidate-refused')
+
 
 # Only a successfully returned owner_preflight session is inserted here. The
 # weak key preserves identity without retaining discarded session capabilities.
@@ -96,6 +104,7 @@ def build_captured_candidate(work, app, adapter, target, backup, staging, job_id
     Original work callbacks/logs are untouched; copied work discards private logs.
     """
     try:
+        mark('authorization')
         proof = _authorized(captured, private_binding, session, expected_sha256)
         bound = copy.copy(work)
         bound.log = lambda *args, **kwargs: None
@@ -112,5 +121,5 @@ def build_captured_candidate(work, app, adapter, target, backup, staging, job_id
             private_capture=reuse)
     except (KeyboardInterrupt, SystemExit):
         raise PrivateFailure('candidate-cancelled') from None
-    except Exception:
-        raise PrivateFailure('candidate-refused') from None
+    except Exception as error:
+        raise CandidatePhaseRefused(current(),kind(error)) from None

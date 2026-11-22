@@ -64,7 +64,7 @@ tar -C "$REPO_ROOT" -cf - backup-engine/woowbackup \
     tests/e2e/lab/emqx_bootstrap_csv.py tests/e2e/lab/emqx_native_runtime.py \
     tests/e2e/lab/emqx_semantic_readers.py tests/e2e/lab/emqx_target_snapshots.py \
     tests/e2e/lab/emqx_runtime_credentials.py tests/e2e/lab/emqx_private_boundary.py \
-    tests/e2e/lab/emqx_real_candidate.py tests/e2e/lab/ha_real_fixture.py |
+    tests/e2e/lab/emqx_real_candidate.py emqx_candidate_stage.py tests/e2e/lab/ha_real_fixture.py |
     "$LAB_DIR/owner.sh" d sh -c '
 set -eu
 umask 077
