@@ -10,22 +10,53 @@
     "host_free_approx_gib": 25,
     "minimum_reserve_gib": 12,
     "worker": "01a200bc-f470-7471-b021-d7966700900b",
-    "status": "implementing bounded real stream probe; not completed"
+    "status": "actual plain/gzip 2GiB and 8193MiB single-file roundtrips passed; encrypted variant assigned",
+    "actual_single_file_bytes": 8590983168,
+    "compressed_archive_bytes": 111493120,
+    "evidence": "tests/backup/evidence/large-single-file-8193mib.json",
+    "integration_commit": "53ac6dc",
+    "not_covered": [
+      "incompressible outer archive above 8GiB",
+      "encrypted large stream",
+      "service restore"
+    ]
   },
   "final_version": {
     "worker": "01a200bc-fdfc-7813-b6d3-10d8413281a7",
-    "status": "evidence/source audit in progress"
+    "status": "cleanup local regression 10/10 integrated; final private dispatch focused regression assigned; real cleanup lifecycle pending",
+    "integration_commit": "5e6f965"
   },
-  "arm_target_probe": {
+  "cross_physical_restore": {
+    "archive_roundtrip": "passed x86 to native ARM to x86, entry and nested payload hashes equal",
+    "service_restore": "not yet passed",
+    "payload_bytes": 8396860,
+    "synthetic_only": true
+  },
+  "commercial_acceptance": false,
+  "integrated_version": "3fe2ff3d8dba1ac1eb18e5c23aa00475d70bd6e2",
+  "previous_arm_probe": {
     "host": "192.168.2.34:22",
     "architecture": "aarch64",
     "ssh_environment": "Alpine 3.24.2 with ha CLI",
     "podman_in_path": false,
     "free_gib": 8.6,
     "read_only": true,
-    "limitation": "SSH add-on environment is not proof of host Podman absence; no native Podman target currently available",
+    "limitation": "Historical .34 SSH add-on probe only; superseded as target by authorized .54",
     "required": "authorized ARM Linux test target with Podman-compatible OS and sufficient storage"
   },
-  "cross_physical_restore": "pending eligible target; prior same-host containers do not satisfy",
-  "commercial_acceptance": false
+  "arm_target_probe": {
+    "host": "192.168.2.54:22",
+    "architecture": "aarch64",
+    "os": "Armbian Debian 12",
+    "podman": "6.1.1",
+    "minimum_free_gib": 16.926,
+    "private_storage": true,
+    "runtime_network": "none",
+    "published_ports": false,
+    "original_inventory_preserved": true,
+    "integration_commit": "3fe2ff3",
+    "evidence": "tests/e2e/lab/evidence/arm54-native-20261122/README.md",
+    "service_blocker": "Pinned upstream Headscale image has no required OCI version label; product gate refused; no bypass",
+    "next": "supported ARM service image and synthetic HA conversion/restore; actual TempObjects cleanup lifecycle"
+  }
 }
