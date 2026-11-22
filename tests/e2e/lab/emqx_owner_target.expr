@@ -1,0 +1,59 @@
+%% Owner-selected fixed read-only expression. No archive/user-selected code.
+%% Substitution is only a producer-generated 32-character lowercase hex nonce.
+Typed = fun F(V,D) when D =< 16 ->
+    case V of
+        B when is_binary(B), byte_size(B) =< 65536 -> #{type => <<"binary">>,value => base64:encode(B)};
+        A when is_atom(A) -> #{type => <<"atom">>,value => atom_to_binary(A,utf8)};
+        I when is_integer(I), I >= -9223372036854775808, I < 9223372036854775808 -> #{type => <<"integer">>,value => I};
+        N when is_float(N) -> #{type => <<"float">>,value => N};
+        T when is_tuple(T), tuple_size(T) =< 4096 -> #{type => <<"tuple">>,value => [F(X,D+1) || X <- tuple_to_list(T)]};
+        L when is_list(L), length(L) =< 4096 -> #{type => <<"list">>,value => [F(X,D+1) || X <- L]};
+        M when is_map(M), map_size(M) =< 4096 -> #{type => <<"map">>,value => [[F(K,D+1),F(X,D+1)] || {K,X} <- maps:to_list(M)]};
+        _ -> error(owner_target_unsupported_term)
+    end
+end,
+<<"5.8.9">> = iolist_to_binary(emqx_release:version()),
+"26" = erlang:system_info(otp_release),
+"14.2.5.11" = erlang:system_info(version),
+Before = emqx:get_config([]),
+Providers = case emqx_authn_chains:list_authenticators('mqtt:global') of
+    {ok,L0} -> L0; _ -> {ok,L1}=emqx_authn_chains:list_authenticators(<<"mqtt:global">>), L1 end,
+All = lists:sort(mnesia:system_info(tables)),
+true = length(All) =< 64,
+true = lists:member(schema,All),
+Tabs = lists:delete(schema,All),
+{atomic,{Definitions,Rows}} = mnesia:transaction(fun() ->
+    lists:foreach(fun(T) ->
+        Storage = mnesia:table_info(T,storage_type),
+        true = lists:member(Storage,[ram_copies,disc_copies,disc_only_copies]),
+        [] = mnesia:table_info(T,frag_properties),
+        Type = mnesia:table_info(T,type),
+        true = lists:member(Type,[set,ordered_set,bag]),
+        mnesia:read_lock_table(T)
+    end,Tabs),
+    Defs = [{T,mnesia:table_info(T,all)} || T <- All],
+    Data = [begin
+        Count = mnesia:table_info(T,size), true = Count =< 4096,
+        Record = mnesia:table_info(T,record_name),
+        Attrs = mnesia:table_info(T,attributes),
+        {N,Rs} = mnesia:foldl(fun(R,{C,A}) -> true = C < 4096,
+            {C+1,[Typed(R,0)|A]} end,{0,[]},T),
+        #{table => atom_to_binary(T,utf8),record_name => atom_to_binary(Record,utf8),
+          attributes => [atom_to_binary(A,utf8) || A <- Attrs],
+          row_count => N,rows => lists:reverse(Rs)}
+    end || T <- Tabs],
+    {Typed(Defs,0),Data}
+end),
+All = lists:sort(mnesia:system_info(tables)),
+Before = emqx:get_config([]),
+ProvidersAfter = case emqx_authn_chains:list_authenticators('mqtt:global') of
+    {ok,L2} -> L2; _ -> {ok,L3}=emqx_authn_chains:list_authenticators(<<"mqtt:global">>), L3 end,
+Providers = ProvidersAfter,
+Encoded = emqx_utils_json:encode(#{contract => <<"emqx-owner-live-target-v1">>,
+    version => <<"5.8.9">>,otp_release => <<"26">>,erts_version => <<"14.2.5.11">>,
+    generation => <<"__OWNER_NONCE__">>,complete => true,
+    config => Typed(Before,0),providers => Typed(Providers,0),
+    schema_metadata => Definitions,table_names => [atom_to_binary(T,utf8) || T <- All],
+    tables => Rows}),
+true = byte_size(Encoded) =< 1048576,
+io:format("WOOWTARGET:~s:END",[base64:encode(Encoded)]).
