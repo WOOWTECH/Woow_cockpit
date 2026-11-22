@@ -54,6 +54,13 @@ class OwnedClientTests(unittest.TestCase):
         self.assertEqual(self.r.calls[-2][0],('container','exists',self.r.cid))
         self.assertEqual(self.r.calls[-1][0],('container','exists',self.r.name))
 
+    def test_exact_name_without_leading_slash_is_owned_podman_spelling(self):
+        with m.owned_client(self.r,self.r.name) as args:
+            self.r.create(args)
+            self.r.doc['Name']=self.r.name
+        self.assertEqual(self.removals(),[('rm','--force','--ignore',self.r.cid)])
+        self.assertIsNone(self.r.doc)
+
     def test_exact_rawhex_image_spelling_and_new_nonce_per_invocation(self):
         nonces=[]
         for _ in range(2):
@@ -83,7 +90,7 @@ class OwnedClientTests(unittest.TestCase):
         self.assertEqual(self.removals(),[])
 
     def test_wrong_name_image_cid_or_labels_never_delete(self):
-        for edit in (lambda d:d.update(Name=self.r.name),lambda d:d.update(Image='0'*64),
+        for edit in (lambda d:d.update(Name='//'+self.r.name),lambda d:d.update(Image='0'*64),
                      lambda d:d.update(Image='other:'+m.CLIENT),lambda d:d.update(Id='short'),
                      lambda d:d['Config'].update(Labels={}),lambda d:d['Config'].update(Labels=[])):
             self.r.calls.clear()

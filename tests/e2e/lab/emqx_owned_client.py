@@ -49,7 +49,7 @@ def _cleanup(runner,name,nonce):
         if type(rows) is not list or len(rows)!=1 or type(rows[0]) is not dict:raise ValueError()
         doc=rows[0];cid=doc.get('Id')
         if (type(cid) is not str or re.fullmatch('[0-9a-f]{64}',cid) is None
-                or doc.get('Name')!='/'+name or type(doc.get('Image')) is not str
+                or doc.get('Name') not in (name,'/'+name) or type(doc.get('Image')) is not str
                 or doc['Image'] not in (CLIENT,CLIENT.removeprefix('sha256:'))
                 or type(doc.get('Config')) is not dict or type(doc['Config'].get('Labels')) is not dict
                 or doc['Config']['Labels'].get(LABEL)!=nonce):raise ValueError()
