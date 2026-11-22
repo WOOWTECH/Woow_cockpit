@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Opt-in, local-only native archive probe; no containers, services, or existing data.
 Run from checkout: python3 tests/backup/bounded_large_archive.py --mib 2048
+Actual >8GiB: add --profile compressible-sequential (defaults to 8193 MiB).
 Payloads are deleted even on failure; JSON evidence is printed to stdout.
 """
 import argparse
@@ -12,6 +13,7 @@ import resource
 import signal
 import sys
 import tempfile
+import tarfile
 import time
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -24,6 +26,19 @@ from tests.backup.test_archive_v2 import small_inner
 GIB = 1024 ** 3
 RESERVE = 12 * GIB
 MARGIN = 256 * 1024 ** 2
+ARCHIVE_CAP = 256 * 1024 ** 2
+
+
+def storage_budget(size, sequential):
+    return size + ARCHIVE_CAP + MARGIN if sequential else 3 * size + 2 * MARGIN
+
+
+def payload_block(index, sequential):
+    # 4096 unique deterministic bytes per MiB, physically written 256 times.
+    # Each block differs; this is compressible real data, never holes or truncate.
+    if sequential:
+        return hashlib.shake_256(f"woow-large-v1:{index}".encode()).digest(4096) * 256
+    return os.urandom(1024 ** 2)
 
 
 def require(condition, message):
@@ -73,9 +88,16 @@ def header_probe(folder):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--mib', type=int, default=2048, choices=range(1, 2049), metavar='1..2048')
+    parser.add_argument('--profile', choices=('random', 'compressible-sequential'), default='random')
+    parser.add_argument('--mib', type=int, default=None)
+
     parser.add_argument('--scratch-parent', type=Path, default=Path('/tmp'))
     args = parser.parse_args()
+    sequential = args.profile == 'compressible-sequential'
+    if args.mib is None:
+        args.mib = 8193 if sequential else 2048
+    if not 1 <= args.mib <= (8193 if sequential else 2048):
+        parser.error('mib must be 1..8193 for compressible-sequential, otherwise 1..2048')
     size = args.mib * 1024 ** 2
     os.umask(0o077)
     # Bound CPU concurrency and any individual file, without changing engine defaults.
@@ -83,17 +105,22 @@ def main():
         os.sched_setaffinity(0, sorted(os.sched_getaffinity(0))[:2])
     resource.setrlimit(resource.RLIMIT_FSIZE, (size + MARGIN, size + MARGIN))
     started = time.monotonic()
-    report = dict(schema=1, status='running', payload_bytes=size, reserve_bytes=RESERVE,
+    report = dict(schema=2, status='running', payload_bytes=size, reserve_bytes=RESERVE,
                   sparse=False, encryption='none', compression='gzip', service_restore=False,
-                  hermes_attempts=0, headers_only_over_8gib=True, phases={})
+                  hermes_attempts=0, headers_only_over_8gib=size <= 8 * GIB, phases={},
+                  profile=args.profile, archive_cap_bytes=ARCHIVE_CAP if sequential else size + MARGIN,
+                  payload_method='unique-shake256-4KiB-tile-per-MiB' if sequential else 'os.urandom',
+                  planned_peak_storage_bytes=storage_budget(size, sequential),
+                  required_free_bytes=RESERVE + MARGIN + storage_budget(size, sequential))
     try:
         with tempfile.TemporaryDirectory(prefix='woow-large-probe-', dir=args.scratch_parent) as tmp:
             folder = Path(tmp)
             guard = SpaceGuard([folder], RESERVE + MARGIN)
             report['free_before'] = guard.free()
             require(report['free_before'] is not None, 'cannot measure free space')
-            # Source + worst-case compressed archive + extracted payload, plus overhead.
-            guard.check(3 * size + 2 * MARGIN)
+            # Sequential: one payload + capped archive; random: three copies.
+            # Include overhead in both cases; the guard floor includes extra margin.
+            guard.check(storage_budget(size, sequential))
             report['minimum_free_observed'] = report['free_before']
 
             def monitor(*_):
@@ -108,6 +135,7 @@ def main():
 
             signal.signal(signal.SIGTERM, interrupted)
             signal.signal(signal.SIGINT, interrupted)
+            signal.signal(signal.SIGXFSZ, interrupted)
             signal.signal(signal.SIGALRM, monitor)
             signal.setitimer(signal.ITIMER_REAL, 0.25, 0.25)
             try:
@@ -116,9 +144,9 @@ def main():
                 digest = hashlib.sha256()
                 mark = time.monotonic()
                 with source.open('xb') as out:
-                    for _ in range(args.mib):
+                    for index in range(args.mib):
                         guard.check(1024 ** 2)
-                        block = os.urandom(1024 ** 2)
+                        block = payload_block(index, sequential)
                         out.write(block)
                         digest.update(block)
                     out.flush()
@@ -137,9 +165,14 @@ def main():
                 def progress(done, total):
                     monitor()
                 mark = time.monotonic()
+                if sequential:
+                    resource.setrlimit(resource.RLIMIT_FSIZE, (ARCHIVE_CAP, size + MARGIN))
                 written = archive.write_archive(dest, None, manifest, entries, None,
                                                 tmp_dir=folder, progress=progress)
                 report['phases']['write_seconds'] = time.monotonic() - mark
+                if sequential:
+                    require(dest.stat().st_size <= ARCHIVE_CAP, 'archive exceeded cap')
+                    resource.setrlimit(resource.RLIMIT_FSIZE, (size + MARGIN, size + MARGIN))
                 report['archive_bytes'] = dest.stat().st_size
                 report['archive_allocated_bytes'] = dest.stat().st_blocks * 512
                 report['archive_sha256'] = written['sha256']
@@ -150,6 +183,20 @@ def main():
                 require(verified['bytes'] == size and verified['entries'] == 1, 'verify counts mismatch')
                 report['verified_bytes'] = verified['bytes']
                 report['phases']['verify_seconds'] = time.monotonic() - mark
+                # Independent header view of the actual generated archive, not a fabricated fixture.
+                with tarfile.open(dest, 'r:') as outer:
+                    with outer.extractfile(written['apps'][0]['file']) as packed:
+                        with tarfile.open(fileobj=packed, mode='r|gz') as inner_tar:
+                            require(inner_tar.next().name == 'manifest.json', 'missing inner manifest')
+                            member = inner_tar.next()
+                            require(member.name == entry_path and member.size == size, 'inner size mismatch')
+                            report['actual_inner_member'] = dict(size=member.size, pax=member.pax_headers)
+                if sequential:
+                    # Only our freshly generated input is removed, after archive integrity passes.
+                    source.unlink()
+                    report['source_removed_before_extract'] = not source.exists()
+                    guard.check(size + MARGIN)
+
                 extracted = folder / 'extracted'
                 extracted.mkdir(mode=0o700)
                 mark = time.monotonic()
@@ -157,6 +204,8 @@ def main():
                 target = extracted / entry_path
                 report['extracted_sha256'] = util.sha256_file(target)
                 report['extracted_bytes'] = target.stat().st_size
+                report['extracted_allocated_bytes'] = target.stat().st_blocks * 512
+                require(target.stat().st_blocks * 512 >= size, 'extracted payload appears sparse')
                 require(target.stat().st_size == size and report['extracted_sha256'] == digest.hexdigest(),
                         'extracted payload mismatch')
                 report['phases']['extract_hash_seconds'] = time.monotonic() - mark
