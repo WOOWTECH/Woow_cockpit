@@ -162,7 +162,7 @@ class Capture:
         source_options = []
         with tarfile.open(fileobj=captured, mode='r:') as archive:
             for entry in archive:
-                name = entry.name.removeprefix('./')
+                name = habackup.normalize(entry.name)
                 if entry.isdir():
                     continue
                 # The product never opens/copies files outside its STAGED roots.

@@ -69,6 +69,15 @@ class ConsumerTests(unittest.TestCase):
         with self.assertRaises(consumer.PrivateFailure):
             consumer.Capture('fixture-key', documents(), product_selection='true')
 
+    def test_selection_uses_same_normalized_paths_as_product(self):
+        capture = consumer.Capture('fixture-key', documents(), product_selection=True)
+        raw = payload([{'name': '././data/emqx/data/mnesia/schema.DAT',
+                        'data': b'unknown-private-native-data'}])
+        with self.assertRaisesRegex(consumer.PrivateFailure, '^private-source-native-mnesia-unsupported$'):
+            capture(binding(raw))
+        self.assertEqual(capture.discarded['files'], 0)
+        self.assertFalse(capture.registry._sealed)
+
     def test_addon_metadata_urls_are_literal_but_active_options_keep_refusal(self):
         raw = b'{"system":{"url":"https://example.invalid/docs","webui":"http://[HOST]:[PORT:18083]"},"user":{"options":{"password":"generated-source-password"}}}'
         values = consumer.addon_values(raw)
