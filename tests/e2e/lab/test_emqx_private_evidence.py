@@ -25,7 +25,7 @@ class EvidenceTests(unittest.TestCase):
     def write(self, **kwargs):
         args = dict(registry=self.registry, phase='mqtt', result='passed', coverage=self.coverage)
         args.update(kwargs)
-        return publish(self.root, 'mqtt.json', **args)
+        return publish(self.root, 'mqtt.txt' if args.get('coverage_mode') == 'names' else 'mqtt.json', **args)
 
     def test_actual_scan_and_written_bytes_match_and_file_private(self):
         seen = []
@@ -50,9 +50,9 @@ class EvidenceTests(unittest.TestCase):
             self.write(registry=registry)
         self.assertEqual(list(self.root.iterdir()), [])
         self.write(registry=registry, coverage_mode='names')
-        raw = (self.root / 'mqtt.json').read_bytes()
+        raw = (self.root / 'mqtt.txt').read_bytes()
         registry.scan(raw)
-        self.assertEqual(json.loads(raw)['coverage'], [SOURCE_NAMES[source] for source in sorted(SOURCES)])
+        self.assertTrue(all(name.encode() in raw for name in SOURCE_NAMES.values()))
         self.assertNotIn(b'0', raw)
         self.assertNotIn(b'1', raw)
         with self.assertRaises(PrivateFailure):
@@ -61,7 +61,7 @@ class EvidenceTests(unittest.TestCase):
     def test_names_encoding_avoids_formatting_secrets_but_content_still_fails_closed(self):
         registry = Registry()
         for source in SOURCES:
-            registry.register(source, [b' ', b'\n'] if source == 'backup-key' else [])
+            registry.register(source, [b' ', b'\n', b':', b'"', b'['] if source == 'backup-key' else [])
         registry.seal()
         with self.assertRaises(PrivateFailure):
             self.write(registry=registry)
@@ -74,15 +74,15 @@ class EvidenceTests(unittest.TestCase):
             seen.append(raw)
         with patch.object(registry, 'scan', side_effect=checked):
             self.write(registry=registry, coverage_mode='names')
-        raw = (self.root / 'mqtt.json').read_bytes()
+        raw = (self.root / 'mqtt.txt').read_bytes()
         self.assertEqual(seen, [raw])
-        self.assertEqual(json.loads(raw)['result'], 'passed')
+        self.assertIn('結果：通過'.encode(), raw)
         self.assertNotIn(b' ', raw)
         self.assertNotIn(b'\n', raw)
-        (self.root / 'mqtt.json').unlink()
+        (self.root / 'mqtt.txt').unlink()
         content = Registry()
         for source in SOURCES:
-            content.register(source, [b'passed'] if source == 'backup-key' else [])
+            content.register(source, ['通過'.encode()] if source == 'backup-key' else [])
         content.seal()
         with self.assertRaises(PrivateFailure):
             self.write(registry=content, coverage_mode='names')

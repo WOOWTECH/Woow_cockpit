@@ -214,10 +214,10 @@ class WorkflowTests(unittest.TestCase):
             return original(registry, payload)
         with patch.object(workflow.CombinedRegistry, 'scan', scanned):
             session = workflow.login_preflight(**self.kwargs)
-        evidence = self.path / 'credential-preflight.json'
+        evidence = self.path / 'credential-preflight.txt'
         self.assertEqual(evidence.read_bytes(), payloads[0])
         self.assertEqual(evidence.stat().st_mode & 0o777, 0o600)
-        self.assertEqual(json.loads(evidence.read_bytes())['phase'], 'preflight')
+        self.assertIn('階段：前置檢查'.encode(), evidence.read_bytes())
         self.assertEqual(set(session.coverage), SOURCES)
         for secret in (TOKEN, PASSWORD, b'fixture-source-cookie', b'fixture-api-secret'):
             with self.assertRaises(PrivateFailure):
@@ -228,9 +228,9 @@ class WorkflowTests(unittest.TestCase):
         for kind in ('source', 'runtime'):
             args = dict(self.kwargs)
             if kind == 'source':
-                args['source_registry'] = source_registry(b'passed')
+                args['source_registry'] = source_registry('通過'.encode())
             else:
-                args['private_transport'] = lambda *a: (200, 'application/json', io.BytesIO(b'{"token":"passed"}'))
+                args['private_transport'] = lambda *a: (200, 'application/json', io.BytesIO(json.dumps({'token':'通過'}).encode()))
             with self.assertRaises(PrivateFailure):
                 workflow.login_preflight(**args)
             self.assertEqual(list(self.path.iterdir()), [])

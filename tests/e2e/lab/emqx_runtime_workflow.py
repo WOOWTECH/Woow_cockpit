@@ -40,7 +40,7 @@ class PrivateSession:
 
 def login_preflight(*, source_registry, source_counts, target_readers,
                     private_transport, username, password, evidence_directory,
-                    evidence_name='credential-preflight.json', source_persisted_values=None,
+                    evidence_name='credential-preflight.txt', source_persisted_values=None,
                     source_generation=None):
     """Source owner supplies its sealed Registry and actual source reader counts.
 

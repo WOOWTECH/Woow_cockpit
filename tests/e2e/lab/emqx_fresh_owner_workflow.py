@@ -294,7 +294,7 @@ def preflight_fresh_frame(stream, *, runner, private_parent, source_mode):
                     runner=runner, quiesce=fixture.quiesce,
                     login_url='http://127.0.0.1:18083/api/v5/login',
                     username=fixture.username, password=fixture.password,
-                    evidence_directory=evidence, evidence_name='owner-preflight.json',
+                    evidence_directory=evidence, evidence_name='owner-preflight.txt',
                     expected_source_profile=profile)
         return raw
     except (KeyboardInterrupt, SystemExit):

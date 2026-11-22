@@ -18,19 +18,19 @@ from emqx_semantic_readers import read_hocon, SemanticRefused
 class AuditRegressionTests(unittest.TestCase):
     def test_url_query_and_fragment_cannot_hide_actual_decoded_password(self):
         for suffix in ('?note=@suffix', '#note@extension', '/path?note=@suffix'):
-            url = 'https://audit-user:p%61ssed@fixture.invalid' + suffix
-            self.assertEqual(unquote_to_bytes(urlsplit(url).password), b'passed')
+            url = 'https://audit-user:%E9%80%9A%E9%81%8E@fixture.invalid' + suffix
+            self.assertEqual(unquote_to_bytes(urlsplit(url).password), '通過'.encode())
             addon = json.dumps({'system': {'slug': 'woow-emqx', 'url': url}, 'version': '5.9.0'}).encode()
-            self.assertIn(b'passed', addon_values(addon))
+            self.assertIn('通過'.encode(), addon_values(addon))
             capture = Capture('audit-key', documents(), product_selection=True)
             capture(binding(hx.tar_bytes([
                 {'name': 'addon.json', 'data': addon},
                 {'name': 'data/emqx/node.name', 'data': b'emqx@fixture'}])))
             with self.assertRaises(PrivateFailure):
-                capture.registry.scan(b'passed')
+                capture.registry.scan('通過'.encode())
             with tempfile.TemporaryDirectory() as directory:
                 with self.assertRaises(PrivateFailure):
-                    publish(directory, 'audit.json', registry=capture.registry,
+                    publish(directory, 'audit.txt', registry=capture.registry,
                             phase='preflight', result='passed', coverage=capture.registry.summary(),
                             coverage_mode='names')
                 self.assertEqual(list(Path(directory).iterdir()), [])

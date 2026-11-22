@@ -213,9 +213,8 @@ def preflight_owner(target, backup, *, source_password, expected_sha256,
                 after = os.fstat(stream.fileno())
                 fields = ('st_dev','st_ino','st_size','st_mtime_ns','st_ctime_ns')
                 if any(getattr(info,k) != getattr(after,k) for k in fields): raise ValueError()
-            expected = (json.dumps({'phase':'preflight', 'result':'passed',
-                'coverage':[SOURCE_NAMES[key] for key in sorted(session.coverage)]},
-                sort_keys=True, ensure_ascii=False)+'\n').encode()
+            from emqx_private_evidence import names_receipt
+            expected = names_receipt('preflight','passed',session.coverage)
             if raw != expected: raise ValueError()
             session.registry.scan(raw)
         return raw

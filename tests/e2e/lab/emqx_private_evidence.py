@@ -13,13 +13,28 @@ from emqx_private_boundary import PrivateFailure, SOURCES
 
 SOURCE_NAMES = {
     'backup-key': '備份解密金鑰', 'source-options': '來源設定與資料',
-    'source-cookie': '來源節點金鑰', 'mqtt-auth': 'MQTT認證',
-    'api-keys': 'API金鑰', 'tls': 'TLS憑證',
+    'source-cookie': '來源節點金鑰', 'mqtt-auth': '訊息認證',
+    'api-keys': '介面金鑰', 'tls': '傳輸憑證',
     'target-bootstrap': '目標初始憑證', 'connectors': '連接器憑證',
 }
 
 PHASES = frozenset(('preflight', 'restore', 'startup', 'mqtt', 'restart', 'cleanup'))
 RESULTS = frozenset(('passed', 'failed', 'blocked', 'not-run'))
+
+
+def names_receipt(phase, result, sources):
+    """Fixed UTF-8 text, not JSON: JSON punctuation can itself be protected.
+
+    No value is exempted from scanning. Exact bytes must still pass every registry.
+    """
+    phases = dict(zip(('preflight','restore','startup','mqtt','restart','cleanup'),
+                     ('前置檢查','還原','啟動','訊息驗證','重啟','清理')))
+    results = dict(zip(('passed','failed','blocked','not-run'),
+                      ('通過','失敗','阻擋','未執行')))
+    if phase not in phases or result not in results or set(sources) != SOURCES:
+        raise PrivateFailure('private-evidence-refused')
+    return ('階段：'+phases[phase]+'；結果：'+results[result]+'；涵蓋：'+
+            '、'.join(SOURCE_NAMES[key] for key in sorted(sources))).encode('utf-8')
 
 
 def publish(directory, name, *, registry, phase, result, coverage, coverage_mode='counts'):
@@ -34,16 +49,13 @@ def publish(directory, name, *, registry, phase, result, coverage, coverage_mode
     try:
         if (coverage_mode not in ('counts', 'names') or phase not in PHASES or result not in RESULTS
                 or not isinstance(name, str)
-                or not re.fullmatch(r'[a-z][a-z0-9-]{0,63}\.json', name)
+                or not re.fullmatch(r'[a-z][a-z0-9-]{0,63}\.' + ('txt' if coverage_mode == 'names' else 'json'), name)
                 or not isinstance(coverage, dict) or set(coverage) != SOURCES
                 or any(type(v) is not int or not 0 <= v <= 4096 for v in coverage.values())):
             raise ValueError()
-        raw = (json.dumps({'phase': phase, 'result': result,
-                           'coverage': coverage if coverage_mode == 'counts' else
-                           [SOURCE_NAMES[source] for source in sorted(coverage)]},
-                          sort_keys=True, ensure_ascii=coverage_mode == 'counts',
-                          separators=(',', ':') if coverage_mode == 'names' else None)
-               + ('\n' if coverage_mode == 'counts' else '')).encode()
+        raw = (names_receipt(phase, result, coverage) if coverage_mode == 'names' else
+               (json.dumps({'phase':phase,'result':result,'coverage':coverage},
+                           sort_keys=True)+'\n').encode())
         # No file is created until the actual consumer registry accepts bytes.
         registry.scan(raw)
         path = Path(directory).absolute()

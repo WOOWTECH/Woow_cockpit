@@ -60,10 +60,8 @@ def retain_evidence(frame):
     if not 0 < size <= MAX_EVIDENCE or len(frame) != start+size+32: raise ValueError()
     raw = frame[start:start+size]
     if hashlib.sha256(raw).digest() != frame[-32:]: raise ValueError()
-    from emqx_private_evidence import SOURCE_NAMES
-    expected = (json.dumps({'phase':'preflight','result':'passed',
-        'coverage':[SOURCE_NAMES[key] for key in sorted(SOURCE_NAMES)]},
-        sort_keys=True,ensure_ascii=False,separators=(',', ':'))).encode()
+    from emqx_private_evidence import names_receipt, SOURCE_NAMES
+    expected = names_receipt('preflight','passed',SOURCE_NAMES)
     if raw != expected: raise ValueError()
     parent = PRIVATE_PARENT
     info = parent.stat()
@@ -73,7 +71,7 @@ def retain_evidence(frame):
     # mkdtemp exclusively creates the FINAL directory; collisions are retried.
     # No rename/replacement and no claim of atomic publication to other readers.
     root = Path(tempfile.mkdtemp(prefix='emqx-preflight-evidence-',dir=parent))
-    path = root/'owner-preflight.json'
+    path = root/'owner-preflight.txt'
     fd, created = None, False
     try:
         info = root.stat()

@@ -223,11 +223,9 @@ def run_owner_target(root, broker, clients, report, *, owned_container_id):
                     checks['exact_evidence_persisted_scan'] = True
             scan = FullScan()
             # Target-only evidence: no fake source registry/counts, no numeric JSON.
-            raw = (json.dumps({'階段':'目標擷取','結果':'通過',
-                '涵蓋':['訊息認證','介面金鑰','連接器憑證','傳輸憑證','目標初始憑證']},
-                ensure_ascii=False,sort_keys=True,separators=(',', ':'))).encode()
+            raw = '階段：目標擷取；結果：通過；涵蓋：訊息認證、介面金鑰、連接器憑證、傳輸憑證、目標初始憑證'.encode()
             scan.scan(raw)
-            evidence = root / 'owner-target-evidence.json'
+            evidence = root / 'owner-target-evidence.txt'
             fd = os.open(evidence, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
             with os.fdopen(fd,'wb') as stream:
                 stream.write(raw)

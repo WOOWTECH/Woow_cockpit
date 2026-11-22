@@ -175,7 +175,7 @@ class WorkflowTests(unittest.TestCase):
         return workflow.build_fresh_framed_candidate(self.work,self.app,object(),
             self.frame() if frame is None else frame,self.staging,'j20261122T000000Z-12345678',
             runner=self.runner,private_parent=self.root,source_mode='--source',
-            evidence_directory=self.evidence,evidence_name='fresh-preflight.json')
+            evidence_directory=self.evidence,evidence_name='fresh-preflight.txt')
 
     def assert_owned_cleanup(self):
         self.assertEqual(self.runner.containers,{})
@@ -188,7 +188,7 @@ class WorkflowTests(unittest.TestCase):
     def test_real_framed_callsite_through_actual_driver_gates_and_bridge_byte_boundary(self):
         observed = []
         def inner(work,app,tmp,target,private,**kwargs):
-            self.assertTrue((self.evidence/'fresh-preflight.json').is_file())
+            self.assertTrue((self.evidence/'fresh-preflight.txt').is_file())
             self.assertIn('registered-login',self.runner.events)
             self.assertTrue(Path(target.files[0][0]).exists())
             with work.open('fedcba98_woow-emqx') as replay:
@@ -223,7 +223,7 @@ class WorkflowTests(unittest.TestCase):
                 self.assertNotIn(password,repr(args))
         self.assertLess(self.runner.events.index('gated-source-byte-boundary'),self.runner.events.index('target-removed'))
         self.assert_owned_cleanup()
-        self.assertEqual(json.loads((self.evidence/'fresh-preflight.json').read_bytes())['phase'],'preflight')
+        self.assertIn('階段：前置檢查'.encode(), (self.evidence/'fresh-preflight.txt').read_bytes())
 
     def test_target_matches_product_attribute_contract_and_preserves_implicit_authorization(self):
         with workflow.fresh_target(runner=self.runner,private_parent=self.root) as fixture:
@@ -345,8 +345,8 @@ class WorkflowTests(unittest.TestCase):
             raw = self.preflight()
             bridge.assert_not_called(); build.assert_not_called()
         self.assertEqual(scanned,[raw,raw])  # publish AND exact private transport rescan
-        self.assertEqual(json.loads(raw)['phase'],'preflight')
-        self.assertEqual(json.loads(raw)['result'],'passed')
+        self.assertIn('階段：前置檢查'.encode(),raw)
+        self.assertIn('結果：通過'.encode(),raw)
         self.assertTrue(captures[-1]._closed)
         self.assertEqual(self.runner.events.count('held-vendor-observed'),2)
         self.assert_owned_cleanup()
@@ -417,7 +417,7 @@ class WorkflowTests(unittest.TestCase):
         raw=wire[start:start+size]
         import hashlib
         self.assertEqual(wire[start+size:],hashlib.sha256(raw).digest())
-        self.assertEqual(json.loads(raw)['result'],'passed')
+        self.assertIn('結果：通過'.encode(),raw)
         self.assertNotIn(self.password.encode(),wire)
         self.assertEqual(list(self.root.glob('emqx-preflight-private-*')),[])
         self.assert_owned_cleanup()

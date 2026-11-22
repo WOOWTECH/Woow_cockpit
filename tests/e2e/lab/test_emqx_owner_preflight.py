@@ -64,7 +64,7 @@ class JoinTests(unittest.TestCase):
         kwargs = dict(captured=captured, target_readers=self.readers,
             target_generation='synthetic-generation', private_transport=self.transport,
             username=b'generated-login-user', password=b'generated-login-password',
-            evidence_directory=self.evidence, evidence_name='joined-preflight.json')
+            evidence_directory=self.evidence, evidence_name='joined-preflight.txt')
         kwargs.update(overrides)
         return owner_preflight(**kwargs)
 
@@ -86,13 +86,10 @@ class JoinTests(unittest.TestCase):
             summary = captured.registry.summary()
             self.assertEqual({key: session.coverage[key] for key in SOURCE_CATEGORIES},
                              {key: summary[key] for key in SOURCE_CATEGORIES})
-            raw = (self.evidence / 'joined-preflight.json').read_bytes()
-            self.assertEqual((self.evidence/'joined-preflight.json').stat().st_mode&0o777, 0o600)
-            doc = json.loads(raw)
-            self.assertEqual(doc['phase'], 'preflight')
-            self.assertEqual(doc['result'], 'passed')
-            self.assertIsInstance(doc['coverage'], list)
-            self.assertEqual(len(doc['coverage']), 8)
+            raw = (self.evidence / 'joined-preflight.txt').read_bytes()
+            self.assertEqual((self.evidence/'joined-preflight.txt').stat().st_mode&0o777, 0o600)
+            from emqx_private_evidence import names_receipt, SOURCE_NAMES
+            self.assertEqual(raw, names_receipt('preflight','passed',SOURCE_NAMES))
             session.registry.scan(raw)
             for secret in (SECRET, b'generated-login-password', b'generated-private-login-token',
                            b'synthetic-private-emqx_admin_jwt', b'synthetic-private-emqx_acl',
@@ -194,7 +191,7 @@ class JoinTests(unittest.TestCase):
         # A native captured string that collides with fixed output must refuse,
         # even though every category and login succeeded. No scanner exemption.
         companion = self.readers.persisted_values
-        companion._values += (b'preflight',)
+        companion._values += ('前置檢查'.encode(),)
         with self.source() as (captured, _):
             with self.assertRaises(PrivateFailure): self.join(captured)
         self.transport.assert_called_once()
@@ -207,4 +204,4 @@ class JoinTests(unittest.TestCase):
         self.calls.clear()
         with self.assertRaises(PrivateFailure): self.join(captured, evidence_name='closed.json')
         self.assertEqual(self.calls, [])
-        self.assertEqual(set(p.name for p in self.evidence.iterdir()), {'joined-preflight.json'})
+        self.assertEqual(set(p.name for p in self.evidence.iterdir()), {'joined-preflight.txt'})

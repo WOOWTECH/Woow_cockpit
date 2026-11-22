@@ -221,8 +221,8 @@ class OwnerProducerTests(unittest.TestCase):
                     source_counts={'backup-key': 1, 'source-options': 0, 'source-cookie': 1},
                     target_readers=readers, private_transport=transport,
                     username=b'fixture-admin', password=PASSWORD, evidence_directory=Path(directory))
-                evidence = json.loads((Path(directory) / 'credential-preflight.json').read_bytes())
-                self.assertIsInstance(evidence['coverage'], list)
+                evidence = (Path(directory) / 'credential-preflight.txt').read_bytes()
+                self.assertIn('涵蓋：'.encode(), evidence)
                 self.assertTrue(all(type(count) is int for count in session.coverage.values()))
                 with self.assertRaises(PrivateFailure):
                     session.registry.scan(b'fixture-private-emqx_admin_jwt')

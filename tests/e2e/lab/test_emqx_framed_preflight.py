@@ -16,9 +16,8 @@ from emqx_private_evidence import SOURCE_NAMES
 
 
 def artifact():
-    return (json.dumps({'phase':'preflight','result':'passed',
-        'coverage':[SOURCE_NAMES[k] for k in sorted(SOURCE_NAMES)]},
-        sort_keys=True,ensure_ascii=False,separators=(',', ':'))).encode()
+    from emqx_private_evidence import names_receipt
+    return names_receipt('preflight','passed',SOURCE_NAMES)
 
 
 class FrameTests(unittest.TestCase):
@@ -40,7 +39,7 @@ class FrameTests(unittest.TestCase):
         bad = (good[:-1],good+b'x',good[:-1]+bytes([good[-1]^1]),
                framed.evidence_frame(b'private arbitrary response'),
                framed.evidence_frame(artifact()+b'\n'),
-               framed.evidence_frame(artifact().replace(b':', b': ', 1)),b'')
+               framed.evidence_frame(b' '+artifact()),b'')
         with tempfile.TemporaryDirectory() as directory:
             root=Path(directory)
             with patch.object(framed,'PRIVATE_PARENT',root):
@@ -81,7 +80,7 @@ class FrameTests(unittest.TestCase):
             root=Path(directory)
             empty=root/'emqx-preflight-evidence-collision-empty';empty.mkdir(mode=0o700)
             occupied=root/'emqx-preflight-evidence-collision-full';occupied.mkdir(mode=0o700)
-            marker=occupied/'owner-preflight.json';marker.write_bytes(b'preserve-existing')
+            marker=occupied/'owner-preflight.txt';marker.write_bytes(b'preserve-existing')
             with patch.object(framed,'PRIVATE_PARENT',root), \
                  patch.object(framed.tempfile,'_get_candidate_names',return_value=iter([
                      'collision-empty','collision-full','fresh'])):
