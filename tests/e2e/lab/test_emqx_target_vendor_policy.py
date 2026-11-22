@@ -206,3 +206,61 @@ class ActiveBootstrapPolicyTests(unittest.TestCase):
         with owner_target_readers(private_eval=transport,quiesce=quiet,vendor_observer=observer) as readers:
             for value in (b'fixture-csv-user',b'fixture-csv-secret'):
                 with self.assertRaises(Exception): readers.persisted_values.scan(value)
+
+
+class VendorACLPolicyTests(unittest.TestCase):
+    def observed(self):
+        from emqx_target_vendor_policy import ACL_PATH
+        observed=ActiveBootstrapPolicyTests().observed()
+        observed.receipts=observed.receipts+(dict(observed.receipts[0],path=ACL_PATH),)
+        return observed
+
+    def config(self, value=None):
+        from emqx_target_vendor_policy import ACL_REFERENCE
+        return {'authorization':{'sources':[{'type':'file','enable':'true',
+            'path':ACL_REFERENCE if value is None else value}]}}
+
+    def test_exact_explicit_path_and_typed_enable(self):
+        from emqx_target_vendor_policy import ACL_REFERENCE,ACL_PATH
+        policy=DisabledVendorTLS(self.observed())
+        for path in (ACL_REFERENCE,ACL_PATH,ACL_REFERENCE.encode(),list(ACL_REFERENCE.encode())):
+            _no_refs(self.config(path),vendor_policy=policy)
+        for change in ('implicit','custom','untyped','unknown_ref','wrong_root','missing_receipt'):
+            config=self.config()
+            source=config['authorization']['sources'][0]
+            if change=='implicit': del source['path']
+            if change=='custom': source['path']='/mounted/custom-acl.conf'
+            if change=='untyped': source['enable']=True
+            if change=='unknown_ref': source['private_extra']='vault:private'
+            if change=='wrong_root': config={'other':source}
+            active_policy=DisabledVendorTLS(receipt()) if change=='missing_receipt' else policy
+            with self.subTest(change=change),self.assertRaises(Exception):
+                _no_refs(config,vendor_policy=active_policy)
+        with self.assertRaises(Exception): _no_refs(self.config())
+
+    def test_root_binds_same_source_object(self):
+        policy=DisabledVendorTLS(self.observed())
+        config=self.config()
+        source=config['authorization']['sources'][0]
+        self.assertTrue(policy.acl_source(config,('authorization','sources',0),source))
+        self.assertFalse(policy.acl_source(config,('authorization','sources',0),dict(source)))
+
+    def test_actual_acl_values_remain_in_private_companion(self):
+        events=[]
+        @contextmanager
+        def quiet(): yield
+        @contextmanager
+        def observer(*,generation,private_values):
+            # Synthetic trusted helper: real helper must parse complete terms EOF.
+            for value in (b'{allow,{username,"fixture-acl-user"},subscribe,["fixture/topic"]}.',
+                          b'fixture-acl-user',b'fixture/topic'):
+                private_values.add(value)
+            yield self.observed()
+        config=fixtures.cooked_config()
+        config.update(self.config())
+        config['authorization']['sources'][0]['type']=fixtures.Atom('file')
+        config['authorization']['sources'][0]['enable']=True
+        transport=fixtures.OwnerProducerTests().transport(events,config=config)
+        with owner_target_readers(private_eval=transport,quiesce=quiet,vendor_observer=observer) as readers:
+            for value in (b'fixture-acl-user',b'fixture/topic'):
+                with self.assertRaises(Exception): readers.persisted_values.scan(value)

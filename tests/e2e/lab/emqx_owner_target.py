@@ -154,6 +154,8 @@ def _no_refs(value, key='', path=(), config=None, vendor_policy=None):
     if config is None:
         config=value
     from emqx_target_vendor_policy import inactive_default_origins
+    if vendor_policy is not None and vendor_policy.allows_acl_path(config, path, value):
+        return
     if inactive_default_origins(config, path, value):
         return
     def refuse(reason):
@@ -161,7 +163,8 @@ def _no_refs(value, key='', path=(), config=None, vendor_policy=None):
     if type(value) is dict:
         # File authorizers retain the original implicit-path refusal.
         if value.get('type') in ('file', b'file'):
-            refuse('reference_file_authorizer')
+            if vendor_policy is None or not vendor_policy.acl_source(config, path, value):
+                refuse('reference_file_authorizer')
         for name, child in value.items():
             _no_refs(child,name,path+(name,),config,vendor_policy)
     elif type(value) in (tuple, list):

@@ -87,3 +87,21 @@ Helper without this fixed path extension will refuse, never silently waive it.
 43 synthetic/regression tests passed, including whole CSV/cell private companion
 scan and missing/empty receipt refusal. Native helper extension and actual target
 caller remain unexecuted in this worktree. No lab commands were issued.
+
+Vendor ACL increment: REFERENCES now contains five fixed files (TLS three, auth
+bootstrap CSV, vendor ACL). Existing helper actual/pinned full ACL byte comparison
+and complete literal-term EOF/all-leaf registration remain mandatory. Receipt
+validation accepts the fixed ACL path; lease recheck still compares target file
+identity/content. No mount exception is added.
+
+The file-authorizer object guard only permits config.authorization.sources[i]
+when the very same object is bound at that index, type=file, enable is a decoded
+typed true/false atom, and explicit path is exactly ${EMQX_ETC_DIR}/acl.conf or
+/opt/emqx/etc/acl.conf. Native string charlist and binary representations of the
+same literals are supported. Scalar/charlist path permission repeats the same
+root/object guard. All other fields recurse normally; unknown refs still refuse.
+Implicit path/custom mount/other roots/no receipt/no policy all retain refusal.
+No sources are deleted or rewritten. Public emqx_authz_file_schema fields(file)
+requires path; emqx_authz_file reads complete rules with file:consult and uses
+explicit path. 46 tests passed, synthetic helper provenance only in this worktree;
+main actual target18 already proved bootstrap capture, not this new ACL caller.

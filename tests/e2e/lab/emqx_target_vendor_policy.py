@@ -12,21 +12,23 @@ FILES = {'certfile': 'cert.pem', 'keyfile': 'key.pem', 'cacertfile': 'cacert.pem
 BOOTSTRAP_PATH = '/opt/emqx/etc/auth-built-in-db-bootstrap.csv'
 BOOTSTRAP_REFERENCE = '${EMQX_ETC_DIR}/auth-built-in-db-bootstrap.csv'
 TLS_REFERENCES = tuple('${EMQX_ETC_DIR}/certs/' + name for name in FILES.values())
-REFERENCES = TLS_REFERENCES + (BOOTSTRAP_REFERENCE,)
+ACL_PATH = '/opt/emqx/etc/acl.conf'
+ACL_REFERENCE = '${EMQX_ETC_DIR}/acl.conf'
+REFERENCES = TLS_REFERENCES + (BOOTSTRAP_REFERENCE, ACL_REFERENCE)
 
 
 class DisabledVendorTLS:
     def __init__(self, observed):
         self.paths = set()
         receipts = observed.receipts
-        if type(receipts) not in (tuple, list) or len(receipts) not in (3, 4):
+        if type(receipts) not in (tuple, list) or len(receipts) not in (3, 4, 5):
             unsupported()
         cid = None
         for item in receipts:
             if type(item) is not dict:
                 unsupported()
             path = item.get('path')
-            if (path not in ({'/opt/emqx/etc/certs/' + name for name in FILES.values()} | {BOOTSTRAP_PATH})
+            if (path not in ({'/opt/emqx/etc/certs/' + name for name in FILES.values()} | {BOOTSTRAP_PATH, ACL_PATH})
                     or path in self.paths or item.get('image') != IMAGE
                     or type(item.get('bytes')) is not int or not 1 <= item['bytes'] <= 65536
                     or type(item.get('sha256')) is not str
@@ -54,6 +56,39 @@ class DisabledVendorTLS:
                 and text == '${EMQX_ETC_DIR}/certs/' + filename
                 and '/opt/emqx/etc/certs/' + filename in self.paths)
 
+
+    def acl_source(self, config, path, source):
+        if (len(path) != 3 or path[:2] != ('authorization', 'sources')
+                or type(path[2]) is not int or path[2] < 0
+                or ACL_PATH not in self.paths or type(source) is not dict
+                or source.get('type') not in ('file', b'file')
+                or type(source.get('enable')) is not str
+                or source['enable'] not in ('true', 'false')):
+            return False
+        try:
+            sources = config['authorization']['sources']
+            if type(sources) is not list or sources[path[2]] is not source:
+                return False
+        except (KeyError, IndexError, TypeError):
+            return False
+        value = source.get('path')
+        if type(value) is list:
+            if not value or any(type(v) is not int or not 0 <= v <= 127 for v in value):
+                return False
+            value = ''.join(chr(v) for v in value)
+        if type(value) is bytes:
+            try: value = value.decode('ascii')
+            except UnicodeDecodeError: return False
+        return type(value) is str and value in (ACL_REFERENCE, ACL_PATH)
+
+    def allows_acl_path(self, config, path, value):
+        if len(path) != 4 or path[-1] != 'path':
+            return False
+        try:
+            source = config['authorization']['sources'][path[2]]
+        except (KeyError, IndexError, TypeError):
+            return False
+        return self.acl_source(config, path[:-1], source) and source['path'] is value
 
     def bootstrap_allows(self, config, text):
         # ACTIVE startup dependency: authorize only complete fixed-file capture.
