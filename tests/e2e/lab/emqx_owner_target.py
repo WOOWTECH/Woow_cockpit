@@ -38,8 +38,10 @@ CONSUMER_REASONS = frozenset(('private_refused','inventory_names_type','inventor
 REFERENCE_ROOTS = frozenset(('listeners','dashboard','authorization','authentication','node','cluster',
     'rpc','api_key','connectors','bridges','actions','sources','gateway','exhook','log','other_root'))
 REFERENCE_KEYS = frozenset(('certfile','keyfile','cacertfile','bootstrap_file','init_file','config_files',
-    'crash_dump_file','cookie','path','type','other_file_key','other_key'))
+    'crash_dump_file','cookie','path','type','check_origins','origins','responder_url',
+    'other_file_key','other_key'))
 REFERENCE_CONTEXTS = frozenset(('ssl_disabled','ssl_enabled','wss_disabled','wss_enabled',
+    'ws_disabled','ws_enabled','tcp_disabled','tcp_enabled',
     'dashboard_https_disabled','dashboard_https_enabled','log_console_disabled','log_console_enabled',
     'log_file_disabled','log_file_enabled','not_assessed'))
 
@@ -121,7 +123,7 @@ def _reference_diagnostic(path,key,config):
     safe_key=key if key in REFERENCE_KEYS else ('other_file_key' if key.endswith('_file') else 'other_key')
     context='not_assessed'
     # These flags are observations for diagnostics only, never reference waivers.
-    if root == 'listeners' and len(path) >= 3 and path[1] in ('ssl','wss'):
+    if root == 'listeners' and len(path) >= 3 and path[1] in ('ssl','wss','ws','tcp'):
         listeners=config.get('listeners',{})
         group=listeners.get(path[1],{}) if type(listeners) is dict else {}
         listener=group.get(path[2]) if type(group) is dict else None

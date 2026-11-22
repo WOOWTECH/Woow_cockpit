@@ -66,3 +66,17 @@ class ReferenceDiagnosticTests(unittest.TestCase):
         self.assertNotIn('private-value',json.dumps(report))
         forged=OwnerCaptureRefused('references','reference_url',{'root':'private-root','key':'cookie','context':'not_assessed'})
         self.assertIsNone(forged.reference)
+
+
+class ListenerKnownURLDiagnosticTests(unittest.TestCase):
+    def test_known_keys_in_disabled_ws_and_tcp_are_still_refused(self):
+        from emqx_owner_target import _no_refs, OwnerCaptureRefused
+        for kind in ('ws','tcp'):
+            for key in ('check_origins','origins','responder_url'):
+                config={'listeners':{kind:{'default':{'enable':'false',
+                    'websocket':{key:[b'http://localhost:18083']}}}}}
+                with self.subTest(kind=kind,key=key), self.assertRaises(OwnerCaptureRefused) as caught:
+                    _no_refs(config)
+                self.assertEqual(caught.exception.reference,
+                    {'root':'listeners','key':key,'context':kind+'_disabled'})
+                self.assertEqual(caught.exception.reason,'reference_url')

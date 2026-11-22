@@ -70,7 +70,15 @@ def vendor_observer(*, broker, owned_container_id, private_eval, private_inspect
         DisabledVendorTLS(before)
         yield before
         after = capture()
-        if before.receipts != after.receipts:
+        DisabledVendorTLS(after)
+        # Ephemeral baseline sidecars may have different overlay inode/device
+        # IDs. Each read validates those internally; only the actual target
+        # identity and pinned content are required to persist across this lease.
+        fields = ('path', 'image', 'container_id', 'bytes', 'sha256', 'target_identity')
+        def stable(observed):
+            return {item['path']: tuple(item[key] for key in fields)
+                    for item in observed.receipts}
+        if stable(before) != stable(after):
             unsupported()
     return observe
 

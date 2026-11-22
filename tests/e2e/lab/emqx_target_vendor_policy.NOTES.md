@@ -43,3 +43,12 @@ Runner initialization is lazy inside the held observation, retaining existing
 host/uid/rootless owner checks. Adapter owner/fixture/provision modules are bundled.
 Native core private_checked is unchanged. 36 tests passed, including local
 synthetic overflow and timeout/fork-child cleanup tests; no lab was run.
+
+Receipt followup: cross-lease comparison uses path/image/container_id/bytes/
+sha256/target_identity. Image-side identity is validated within each helper read
+but can change across ephemeral baseline sidecars. Synthetic image-inode change
+passes; target-inode and content-hash changes refuse. No mount check removed.
+Reference diagnostics now recognize fixed check_origins/origins/responder_url
+keys and WS/TCP enable contexts; URL policy remains unchanged. Public pinned
+emqx_schema.erl defines check_origins default at lines 953-958, but this change
+does not infer actual cooked shape or waive unknown URLs. 38 tests passed.

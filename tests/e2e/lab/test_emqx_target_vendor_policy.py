@@ -86,3 +86,27 @@ class VendorPolicyTests(unittest.TestCase):
                 with observe(generation='d'*32,private_values=Values()):
                     self.assertEqual(events,['read'])
         self.assertEqual(events,['read','read'])
+
+    def test_cross_sidecar_identity_is_not_target_identity(self):
+        import sys
+        from unittest.mock import patch
+        from emqx_semantic_readers import Values
+        from emqx_target_vendor_policy import vendor_observer
+        for changed in ('image_identity','target_identity','sha256'):
+            calls=[]
+            def helper(*args,**kwargs):
+                result=receipt()
+                if calls:
+                    result.receipts[0][changed]='c'*64 if changed=='sha256' else (99,)
+                calls.append(True)
+                return result
+            observe=vendor_observer(broker='fixed-owned-broker',owned_container_id='a'*64,
+                private_eval=lambda _:None,private_inspect=lambda:None)
+            with self.subTest(changed=changed), patch.dict(sys.modules,{
+                    'emqx_owner_vendor_files':SimpleNamespace(observe_vendor_files=helper)}):
+                if changed=='image_identity':
+                    with observe(generation='d'*32,private_values=Values()): pass
+                else:
+                    with self.assertRaises(Exception):
+                        with observe(generation='d'*32,private_values=Values()): pass
+                self.assertEqual(len(calls),2)
