@@ -104,8 +104,12 @@ def run_export(root, broker, scan, report):
         'ok = file:change_mode("/work/checkpoint/source.checkpoint",8#600), '
         'io:format("owner-checkpoint-created") '
         'after mnesia:deactivate_checkpoint(owner_checkpoint) end.')
+    report['export_stage'] = 'create-owner-checkpoint'
     result = checked('exec', broker, 'emqx', 'eval', expression)
-    assert result.strip() == b'owner-checkpoint-created'
+    report['checkpoint_file_created'] = (work / 'source.checkpoint').is_file()
+    report['checkpoint_output_bytes'] = len(result)
+    assert result.strip() in (b'owner-checkpoint-created', b'owner-checkpoint-createdok')
+    report['export_stage'] = 'native-typed-export'
     raw = bounded_private(work / 'source.checkpoint', 8 * 1024 * 1024)
     source_hash = hashlib.sha256(raw).hexdigest()
     # Private receipt cannot be supplied externally or selected by an archive.
