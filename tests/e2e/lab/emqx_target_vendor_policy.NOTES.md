@@ -34,3 +34,12 @@ Policy-session automatic approval rejected a probe extracting/persisting the
 pinned image TLS private key. That probe was not executed or retried. Actual
 key-containing observation remains unexecuted here; explicit authorization must
 resolve that boundary before such a test in this session.
+
+Bounded callback followup: actual vendor eval/inspect now use LabOwnerRunner,
+not runtime_live.podman. Eval has timeout=10/max_output=helper MAX_WIRE;
+inspect timeout=5/max_output=helper LIMIT. Product runner enforces stdout bounds
+while draining pipes, bounded stderr tail, and process-group kill/reap on abort.
+Runner initialization is lazy inside the held observation, retaining existing
+host/uid/rootless owner checks. Adapter owner/fixture/provision modules are bundled.
+Native core private_checked is unchanged. 36 tests passed, including local
+synthetic overflow and timeout/fork-child cleanup tests; no lab was run.

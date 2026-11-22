@@ -73,3 +73,29 @@ def vendor_observer(*, broker, owned_container_id, private_eval, private_inspect
         if before.receipts != after.receipts:
             unsupported()
     return observe
+
+
+def bounded_vendor_callbacks(*, broker, runner=None):
+    """Actual owner transport bounds, enforced while reading, not after capture.
+
+    Product OwnerRunner starts a separate session, caps stdout during pipe reads,
+    retains only a bounded stderr tail and kills/reaps the process group on abort.
+    Do not route these callbacks through runtime_live.podman's 90s PIPE capture.
+    """
+    from emqx_private_boundary import PrivateFailure
+    def read(args, timeout, kind):
+        nonlocal runner
+        try:
+            from emqx_owner_vendor_files import MAX_WIRE, LIMIT
+            limit = MAX_WIRE if kind == 'eval' else LIMIT
+            if runner is None:
+                from emqx_adapter_owner import LabOwnerRunner
+                runner = LabOwnerRunner()
+            result = runner.podman(*args, timeout=timeout, max_output=limit)
+            if result.returncode != 0 or type(result.stdout) is not bytes or len(result.stdout) > limit:
+                raise ValueError()
+            return result.stdout
+        except Exception:
+            raise PrivateFailure('private-vendor-files-refused') from None
+    return (lambda expression: read(('exec', broker, 'emqx', 'eval', expression), 10, 'eval'),
+            lambda: read(('inspect', broker), 5, 'inspect'))
