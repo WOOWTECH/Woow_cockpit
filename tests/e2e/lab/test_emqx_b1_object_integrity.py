@@ -33,7 +33,8 @@ class ObjectIntegrityTests(unittest.TestCase):
     def native(self,raw):
         return json.dumps({'contract':'emqx-hocon-json-v1','version':'5.8.9',
             'input_sha256':hashlib.sha256(raw).hexdigest(),'input_bytes':len(raw),
-            'complete':True,'resolution':'disabled','references':[],'document':copy.deepcopy(self.config)}).encode()
+            'complete':True,'resolution':'disabled','references':[],
+            'document':{'parsed':copy.deepcopy(self.config),'syntax_strings':[]}}).encode()
 
     def mint(self,captured,session,**changes):
         kwargs=dict(captured=captured,session=session,source_mode=m.MODES[0]);kwargs.update(changes)
@@ -116,7 +117,7 @@ class ObjectIntegrityTests(unittest.TestCase):
             session=self.join(captured);original=captured._hocon_parser
             def context(raw):
                 doc=json.loads(original(raw));doc['contract']=m.SQL_CONTRACT
-                doc['document']={'parsed':doc['document'],'syntax_strings':['generated-syntax-private'],
+                doc['document']={'parsed':doc['document']['parsed'],'syntax_strings':['generated-syntax-private'],
                     'string_bindings':[],'concat_strings':[],'alias_bindings':[]}
                 return json.dumps(doc).encode()
             captured._hocon_parser=context
@@ -126,6 +127,41 @@ class ObjectIntegrityTests(unittest.TestCase):
             compared=m.compare_b1_objects(expected=expected,source_api=observed)
             for raw in (b'generated-syntax-private',b'generated-new-native-private'):
                 with self.assertRaises(PrivateFailure):compared.scan(raw)
+
+    def test_flat_or_unknown_native_envelopes_refuse_instead_of_alternate_values(self):
+        with self.source() as (captured,_):
+            session=self.join(captured);original=captured._hocon_parser
+            for edit in (lambda d:d.update(document=d['document']['parsed']),
+                         lambda d:d['document'].update(unrecognized={}),
+                         lambda d:d['document'].update(parsed=[]),
+                         lambda d:d['document'].update(syntax_strings=[123])):
+                def malformed(raw,edit=edit):
+                    doc=json.loads(original(raw));edit(doc);return json.dumps(doc).encode()
+                captured._hocon_parser=malformed
+                with self.assertRaises(PrivateFailure):self.mint(captured,session)
+
+    def test_context_contracts_match_exact_native_wrapper_and_siblings_never_override(self):
+        with self.source() as (captured,_):
+            session=self.join(captured);original=captured._hocon_parser
+            for kind in (m.CONTRACT,m.HTTP_CONTRACT,m.SQL_CONTRACT):
+                def context(raw,kind=kind):
+                    doc=json.loads(original(raw));doc['contract']=kind
+                    doc['document'].update(string_bindings=[],concat_strings=[])
+                    if kind==m.SQL_CONTRACT:doc['document']['alias_bindings']=[]
+                    return json.dumps(doc).encode()
+                captured._hocon_parser=context
+                expected=self.mint(captured,session)
+                self.assertIsInstance(m.compare_b1_objects(expected=expected,source_api=self.observed(session)),m.ObjectComparison)
+
+    def test_normalization_is_not_assumed_for_sql_or_typed_source_fields(self):
+        self.config['connectors']['http']['b1_http']['connect_timeout']='5s'
+        with self.source() as (captured,_):
+            session=self.join(captured);expected=self.mint(captured,session)
+            for edit in (lambda d:d['connectors'][0].update(connect_timeout=5000),
+                         lambda d:d['rules']['data'][0].update(sql='select payload from "generated/#"'),
+                         lambda d:d['connectors'][0].update(headers={'Authorization':'generated-source-header'})):
+                observed=self.observed(session);edit(observed._documents)
+                with self.assertRaises(PrivateFailure):m.compare_b1_objects(expected=expected,source_api=observed)
 
     def test_default_strict_hocon_guard_still_rejects_context_reference(self):
         from emqx_semantic_readers import read_hocon,SemanticRefused

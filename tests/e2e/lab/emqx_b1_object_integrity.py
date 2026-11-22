@@ -123,11 +123,19 @@ def capture_b1_object_expectations(*,captured,session,source_mode):
         doc=_contract(raw,lambda _:encoded,kind)
         if (set(doc)!={'contract','version','input_sha256','input_bytes','complete','resolution','references','document'}
                 or doc['resolution']!='disabled' or doc['references']!=[]):raise ValueError()
-        document=doc['document']
-        if type(document) is not dict:raise ValueError()
-        if 'parsed' in document:document=document['parsed']
-        if type(document) is not dict:raise ValueError()
-        objects=_objects(document)
+        envelope=doc['document']
+        fields={'parsed','syntax_strings'}
+        if kind in (CONTRACT,HTTP_CONTRACT,SQL_CONTRACT):fields|={'string_bindings','concat_strings'}
+        if kind==SQL_CONTRACT:fields.add('alias_bindings')
+        if (type(envelope) is not dict or set(envelope)!=fields
+                or type(envelope.get('parsed')) is not dict
+                or type(envelope.get('syntax_strings')) is not list
+                or any(type(x) is not str for x in envelope['syntax_strings'])
+                or any(type(envelope[key]) is not list for key in fields-{'parsed','syntax_strings'})):
+            raise ValueError()
+        # Both fixed native producers put effective values here. Sibling syntax
+        # ledgers remain registered data, never alternate expected object values.
+        objects=_objects(envelope['parsed'])
         values=Values()
         # Entire native source document stays private, including syntax/template
         # witnesses and secret fields that an API may mask. Never execute refs.
