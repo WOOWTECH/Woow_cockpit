@@ -20,6 +20,8 @@ REFERENCES = TLS_REFERENCES + (BOOTSTRAP_REFERENCE, ACL_REFERENCE)
 class DisabledVendorTLS:
     def __init__(self, observed):
         self.paths = set()
+        self.acl_literals = (ACL_REFERENCE, ACL_PATH)
+        self.bootstrap_literals = (BOOTSTRAP_REFERENCE,)
         receipts = observed.receipts
         if type(receipts) not in (tuple, list) or len(receipts) not in (3, 4, 5):
             unsupported()
@@ -79,7 +81,7 @@ class DisabledVendorTLS:
         if type(value) is bytes:
             try: value = value.decode('ascii')
             except UnicodeDecodeError: return False
-        return type(value) is str and value in (ACL_REFERENCE, ACL_PATH)
+        return type(value) is str and value in self.acl_literals
 
     def allows_acl_path(self, config, path, value):
         if len(path) != 4 or path[-1] != 'path':
@@ -93,7 +95,7 @@ class DisabledVendorTLS:
     def bootstrap_allows(self, config, text):
         # ACTIVE startup dependency: authorize only complete fixed-file capture.
         # Never convert it to empty, omit it or treat default material as absent.
-        if text != BOOTSTRAP_REFERENCE or BOOTSTRAP_PATH not in self.paths:
+        if text not in self.bootstrap_literals or BOOTSTRAP_PATH not in self.paths:
             return False
         auth = config.get('authentication')
         if type(auth) is not list or len(auth) != 1 or type(auth[0]) is not dict:
@@ -108,7 +110,7 @@ class DisabledVendorTLS:
                 and is_text('bootstrap_type', 'plain'))
 
 
-def vendor_observer(*, broker, owned_container_id, private_eval, private_inspect):
+def vendor_observer(*, broker, owned_container_id, private_eval, private_inspect, fixture_capability=None):
     """Bind Bernoulli's actual observer to one owner lease; never accept JSON code.
 
     Immutable IMAGE is the fixed expected public-content authority: helper reads
@@ -123,14 +125,21 @@ def vendor_observer(*, broker, owned_container_id, private_eval, private_inspect
         if type(generation) is not str or re.fullmatch('[0-9a-f]{32}', generation) is None:
             unsupported()
         def capture():
+            if fixture_capability is not None:
+                from emqx_target_fixture_policy import capture_composed_files
+                return capture_composed_files(fixture_capability, generation=generation,
+                    broker=broker, owned_container_id=owned_container_id,
+                    private_eval=private_eval, private_inspect=private_inspect,
+                    private_values=private_values)
             return observe_vendor_files(REFERENCES, private_eval=private_eval,
                 private_inspect=private_inspect, broker=broker,
                 owned_container_id=owned_container_id, private_values=private_values)
         before = capture()
-        DisabledVendorTLS(before)
+        policy_from_observation(before,generation)
         yield before
         after = capture()
-        DisabledVendorTLS(after)
+        policy_from_observation(before,generation)
+        policy_from_observation(after,generation)
         # Ephemeral baseline sidecars may have different overlay inode/device
         # IDs. Each read validates those internally; only the actual target
         # identity and pinned content are required to persist across this lease.
@@ -138,7 +147,8 @@ def vendor_observer(*, broker, owned_container_id, private_eval, private_inspect
         def stable(observed):
             return {item['path']: tuple(item[key] for key in fields)
                     for item in observed.receipts}
-        if stable(before) != stable(after):
+        if (stable(before) != stable(after)
+                or getattr(before,'fixture_receipts',None) != getattr(after,'fixture_receipts',None)):
             unsupported()
     return observe
 
@@ -215,3 +225,10 @@ def inactive_default_prometheus_job(config, path, value):
         return (type(gateway) is dict and gateway.get('enable') == 'false'
                 and 'enable' not in prometheus and 'job_name' not in prometheus)
     return False
+
+
+def policy_from_observation(observed, generation):
+    from emqx_target_fixture_policy import HeldFixtureObservation, FixtureFilePolicy
+    if type(observed) is HeldFixtureObservation:
+        return FixtureFilePolicy(observed,generation)
+    return DisabledVendorTLS(observed)

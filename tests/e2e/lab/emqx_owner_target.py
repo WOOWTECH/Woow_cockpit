@@ -644,9 +644,9 @@ def owner_target_readers(*, private_eval, quiesce, vendor_observer=None):
             expression = expression.replace('__OWNER_NONCE__', generation)
             values, policy = Values(), None
             if vendor_observer is not None:
-                from emqx_target_vendor_policy import DisabledVendorTLS
-                policy = DisabledVendorTLS(lease.enter_context(
-                    vendor_observer(generation=generation, private_values=values)))
+                from emqx_target_vendor_policy import policy_from_observation
+                policy = policy_from_observation(lease.enter_context(
+                    vendor_observer(generation=generation, private_values=values)), generation)
             readers = _build(private_eval(expression), generation, policy, values)
             yield readers
     except OwnerCaptureRefused:

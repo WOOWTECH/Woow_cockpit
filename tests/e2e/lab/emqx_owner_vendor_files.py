@@ -199,8 +199,23 @@ class VendorFiles:
         return '<VendorFiles private>'
 
 
+
+def _authorized_broker(broker, cid, fixture_capability):
+    if (type(broker) is not str or type(cid) is not str
+            or re.fullmatch('[0-9a-f]{64}',cid) is None):
+        return False
+    if re.fullmatch(r'woowbk-emqx-(?:fresh|workload)-[0-9a-f]{12}', broker):
+        return fixture_capability is None
+    if fixture_capability is None or re.fullmatch(r'woowbk-emqxlab-[0-9a-f]{8}',broker) is None:
+        return False
+    # Capability is issued only by actual OwnerProvision.create. Full fixture
+    # observation must already have bound its real container ID before this read.
+    from emqx_owner_fixture_files import _record
+    record,_ = _record(fixture_capability)
+    return record['fixture'].prefix == broker and record['cid'] == cid
+
 def observe_vendor_files(references, *, private_eval, private_inspect, broker,
-                         owned_container_id, private_values):
+                         owned_container_id, private_values, fixture_capability=None):
     """Compare complete stable image/broker reads and register all private values.
 
     Both callbacks must execute against the same held owner target; they cannot
@@ -216,7 +231,7 @@ def observe_vendor_files(references, *, private_eval, private_inspect, broker,
         paths = _paths(references)
         if (not callable(private_eval) or not callable(private_inspect) or
                 type(private_values) is not Values or type(broker) is not str or
-                re.fullmatch(r'woowbk-emqx-(?:fresh|workload)-[0-9a-f]{12}', broker) is None or
+                not _authorized_broker(broker, owned_container_id, fixture_capability) or
                 type(owned_container_id) is not str or
                 re.fullmatch(r'[0-9a-f]{64}', owned_container_id) is None):
             raise ValueError()
@@ -230,6 +245,8 @@ def observe_vendor_files(references, *, private_eval, private_inspect, broker,
             raise ValueError()
         actual = _decode(base64.b64decode(match[1], validate=True), paths)
         if before != _provenance(private_inspect, broker, owned_container_id, paths):
+            raise ValueError()
+        if not _authorized_broker(broker, owned_container_id, fixture_capability):
             raise ValueError()
         pending = Values()
         receipts = []
