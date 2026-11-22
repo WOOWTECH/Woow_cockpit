@@ -68,3 +68,22 @@ are decoded and registered before this policy; scanner tests still reject both
 origin strings in public payload. 40 synthetic/regression tests passed. Actual
 cooked target profile match remains unexecuted; main's fixed diagnostic can
 confirm whether this public default is the observed next refusal.
+
+Active bootstrap extension: pinned emqx_authn_mnesia_schema.erl:76-90 defines
+${EMQX_ETC_DIR}/auth-built-in-db-bootstrap.csv and plain type default.
+emqx_authn_mnesia.erl:556-579 expands that path, reads whole file and calls
+import_users with override=false. This is an active startup dependency, not an
+inactive exemption. Main's fixed public-image presence probe proved REGULAR.
+
+Policy now requests the fixed bootstrap file plus three TLS files. Requires
+Bernoulli helper extension: regular nonempty bounded whole CSV with EOF,
+pinned-image/actual-byte equality, full CSV parse and every cell registered in
+same Values, original parent/mount/identity checks unchanged. Existing receipt
+shape applies. Accept only authentication[0].bootstrap_file with exact literal,
+single enabled password_based/built_in_database username auth and plain type.
+No rewrite of config, no fake absence, no API hash/plaintext substitution.
+Custom/hash/mounted dependencies remain unsupported by this narrow increment.
+Helper without this fixed path extension will refuse, never silently waive it.
+43 synthetic/regression tests passed, including whole CSV/cell private companion
+scan and missing/empty receipt refusal. Native helper extension and actual target
+caller remain unexecuted in this worktree. No lab commands were issued.

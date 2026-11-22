@@ -150,3 +150,59 @@ class DefaultOriginPolicyTests(unittest.TestCase):
         companion=PersistedValues('generation','target',{},values.values)
         for origin in (b'http://localhost:18083',b'http://127.0.0.1:18083'):
             with self.assertRaises(Exception): companion.scan(origin)
+
+
+class ActiveBootstrapPolicyTests(unittest.TestCase):
+    def observed(self):
+        from emqx_target_vendor_policy import BOOTSTRAP_PATH
+        observed=receipt()
+        item=dict(observed.receipts[0],path=BOOTSTRAP_PATH)
+        observed.receipts=observed.receipts+(item,)
+        return observed
+
+    def config(self):
+        from emqx_target_vendor_policy import BOOTSTRAP_REFERENCE
+        return {'authentication':[{'enable':'true','mechanism':b'password_based',
+            'backend':b'built_in_database','user_id_type':b'username',
+            'bootstrap_type':'plain','bootstrap_file':BOOTSTRAP_REFERENCE}]}
+
+    def test_exact_active_dependency_requires_observation(self):
+        policy=DisabledVendorTLS(self.observed())
+        _no_refs(self.config(),vendor_policy=policy)
+        with self.assertRaises(Exception):
+            _no_refs(self.config(),vendor_policy=DisabledVendorTLS(receipt()))
+        for field,value in (('bootstrap_file','${EMQX_ETC_DIR}/custom.csv'),
+                ('bootstrap_type','hash'),('backend',b'http'),('enable','false')):
+            config=self.config()
+            config['authentication'][0][field]=value
+            with self.subTest(field=field),self.assertRaises(Exception):
+                _no_refs(config,vendor_policy=policy)
+
+    def test_wrong_scope_and_missing_file_receipt_refused(self):
+        policy=DisabledVendorTLS(self.observed())
+        config=self.config()
+        config['authentication'].append(dict(config['authentication'][0]))
+        with self.assertRaises(Exception): _no_refs(config,vendor_policy=policy)
+        observed=self.observed()
+        observed.receipts[-1]['bytes']=0
+        with self.assertRaises(Exception): DisabledVendorTLS(observed)
+
+    def test_complete_csv_values_survive_consumer_projection(self):
+        from emqx_target_vendor_policy import BOOTSTRAP_REFERENCE
+        events=[]
+        @contextmanager
+        def quiet(): yield
+        @contextmanager
+        def observer(*,generation,private_values):
+            # Trusted helper contract: whole bytes AND every parsed cell, EOF.
+            for value in (b'user_id,password,is_superuser\nfixture-csv-user,fixture-csv-secret,false\n',
+                    b'fixture-csv-user',b'fixture-csv-secret',b'false'):
+                private_values.add(value)
+            yield self.observed()
+        config=fixtures.cooked_config()
+        config['authentication'][0].update(bootstrap_type=fixtures.Atom('plain'),
+            bootstrap_file=BOOTSTRAP_REFERENCE)
+        transport=fixtures.OwnerProducerTests().transport(events,config=config)
+        with owner_target_readers(private_eval=transport,quiesce=quiet,vendor_observer=observer) as readers:
+            for value in (b'fixture-csv-user',b'fixture-csv-secret'):
+                with self.assertRaises(Exception): readers.persisted_values.scan(value)
