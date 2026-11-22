@@ -239,10 +239,10 @@ def _restore_and_rollback(ctx,app,provision,backup_id,state,*,clients=None,sessi
     _ready(provision)
     if clients is not None:_validate_phase_mqtt(provision,clients,target_mode)
     if api_credentials is not None:api_results.append(_source_api_activity(provision,post_registry,session,clients,api_credentials))
-    if api_credentials is not None:object_results.append(_compare_source_objects(object_expected,api_results[-1]))
     if api_credentials is not None:negative_results.append(_source_negative_activity(provision,session,clients,api_results[-1]))
     if api_credentials is not None and target_mode==IMPORTED_MNESIA:_assert_imported_acl_api(api_results[-1])
     if session is not None:post_registry=_post_activity_capture(provision,post_registry)
+    if api_credentials is not None:object_results.append(_compare_source_objects(object_expected,api_results[-1],post_registry))
     r,f=provision.runner,provision.fixture
     directory='.config/systemd/user/'+f.unit+'.d'
     dropin=directory+'/woowbk-real-owner-fail-once.conf'
@@ -265,10 +265,10 @@ def _restore_and_rollback(ctx,app,provision,backup_id,state,*,clients=None,sessi
         _ready(provision)
         if clients is not None:_validate_phase_mqtt(provision,clients,target_mode)
         if api_credentials is not None:api_results.append(_source_api_activity(provision,post_registry,session,clients,api_credentials))
-        if api_credentials is not None:object_results.append(_compare_source_objects(object_expected,api_results[-1]))
         if api_credentials is not None:negative_results.append(_source_negative_activity(provision,session,clients,api_results[-1]))
         if api_credentials is not None and target_mode==IMPORTED_MNESIA:_assert_imported_acl_api(api_results[-1])
         if session is not None:post_registry=_post_activity_capture(provision,post_registry)
+        if api_credentials is not None:object_results.append(_compare_source_objects(object_expected,api_results[-1],post_registry))
         if r.stat_files([marker])[marker]['type']!='missing':raise ValueError()
     finally:
         state['armed']=False
@@ -280,10 +280,10 @@ def _restore_and_rollback(ctx,app,provision,backup_id,state,*,clients=None,sessi
     _ready(provision)
     if clients is not None:_validate_phase_mqtt(provision,clients,target_mode)
     if api_credentials is not None:api_results.append(_source_api_activity(provision,post_registry,session,clients,api_credentials))
-    if api_credentials is not None:object_results.append(_compare_source_objects(object_expected,api_results[-1]))
     if api_credentials is not None:negative_results.append(_source_negative_activity(provision,session,clients,api_results[-1]))
     if api_credentials is not None and target_mode==IMPORTED_MNESIA:_assert_imported_acl_api(api_results[-1])
     if session is not None:post_registry=_post_activity_capture(provision,post_registry)
+    if api_credentials is not None:object_results.append(_compare_source_objects(object_expected,api_results[-1],post_registry))
     return post_registry
 
 
@@ -464,12 +464,12 @@ def _capture_source_objects(captured,session,source_mode):
     except BaseException:raise RealOwnerRefused('object_integrity') from None
 
 
-def _compare_source_objects(expected,source_api):
+def _compare_source_objects(expected,source_api,native_values):
     try:
-        from emqx_b1_object_integrity import compare_b1_objects,ObjectComparison
-        result=compare_b1_objects(expected=expected,source_api=source_api)
-        if (type(result) is not ObjectComparison or result._expected is not expected
-                or result._observed is not source_api):raise ValueError()
+        from emqx_native_object_integrity import compare_b1_objects_native,NativeObjectComparison
+        result=compare_b1_objects_native(expected=expected,source_api=source_api,native_values=native_values)
+        if (type(result) is not NativeObjectComparison or result._expected is not expected
+                or result._api is not source_api or result._native is not native_values):raise ValueError()
         result.scan(b'')
         return result
     except BaseException:raise RealOwnerRefused('object_integrity') from None
@@ -477,18 +477,24 @@ def _compare_source_objects(expected,source_api):
 
 def _scan_object_receipt(receipt,expected,results,api_results,session):
     try:
-        from emqx_b1_object_integrity import SourceObjects,ObjectComparison
+        from emqx_b1_object_integrity import SourceObjects
+        from emqx_native_object_integrity import NativeObjectComparison
+        from emqx_post_restore_values import PostRestoreValues
         from emqx_source_api_validator import SourceAPIResult
         if (type(receipt) is not bytes or type(expected) is not SourceObjects
                 or type(results) is not list or len(results)!=3
                 or type(api_results) is not list or len(api_results)!=3
                 or len({id(r) for r in results})!=3 or len({id(r) for r in api_results})!=3):raise ValueError()
         expected.scan(receipt)
-        for result,observed in zip(results,api_results):
-            if (type(result) is not ObjectComparison or result._expected is not expected
-                    or result._observed is not observed or type(observed) is not SourceAPIResult
+        previous=session.registry
+        for index,(result,observed) in enumerate(zip(results,api_results),1):
+            if (type(result) is not NativeObjectComparison or result._expected is not expected
+                    or result._api is not observed or type(observed) is not SourceAPIResult
+                    or type(result._native) is not PostRestoreValues
+                    or result._native._previous is not previous or len(result._native._generations)!=index
                     or observed._runtime is not session.registry._runtime):raise ValueError()
             result.scan(receipt)
+            previous=result._native
     except BaseException:raise RealOwnerRefused('object_integrity') from None
 
 
