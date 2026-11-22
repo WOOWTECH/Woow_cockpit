@@ -16,6 +16,10 @@ import tempfile
 from emqx_runtime_live import IMAGE, checked
 from emqx_native_runtime import run_native
 from emqx_checkpoint_json import read_owned_checkpoint_export
+from emqx_target_capture import mqtt_table_reader, exact_target_readers
+from emqx_runtime_credentials import RuntimeRegistry, read_bounded, parse_json
+from emqx_target_snapshots import register_target_snapshots
+from emqx_private_boundary import PrivateFailure
 
 EXPORTER_COMMIT = '545d816b9b1c5ac5a5583aa9b4029ab0e9c0b870'
 TABLE = 'emqx_authn_mnesia'
@@ -113,7 +117,7 @@ def run_export(root, broker, scan, report):
     raw = bounded_private(work / 'source.checkpoint', 8 * 1024 * 1024)
     source_hash = hashlib.sha256(raw).hexdigest()
     # Private receipt cannot be supplied externally or selected by an archive.
-    receipt = {'producer':'fresh-synthetic-live-broker','image':IMAGE,'table':TABLE,
+    receipt = {'container_id':checked('inspect','--format','{{.Id}}',broker).decode().strip(), 'producer':'fresh-synthetic-live-broker','image':IMAGE,'table':TABLE,
                'input_sha256':source_hash,'input_bytes':len(raw),'exporter_commit':EXPORTER_COMMIT}
     receipt_path = root / 'checkpoint-receipt.json'
     with receipt_path.open('x') as output:
@@ -150,3 +154,48 @@ def run_export(root, broker, scan, report):
             continue
         raise RuntimeError('semantic-leak-not-blocked')
     checks['actual_semantic_value_leaks_refused'] = True
+    report['export_stage'] = 'target-mqtt-consumer'
+    # Group is taken from the accepted runtime provider STATE, never inferred
+    # from native row identity or a caller-supplied projection shortcut.
+    group_expression = ('Authenticators = case emqx_authn_chains:list_authenticators(\'mqtt:global\') of '
+        '{ok,L0} -> L0; _ -> {ok,L1}=emqx_authn_chains:list_authenticators(<<"mqtt:global">>),L1 end, '
+        '[#{id := <<"password_based:built_in_database">>, provider := emqx_authn_mnesia, '
+        'enable := true, state := #{user_group := Group,user_id_type := username}}] = Authenticators, '
+        'true = is_binary(Group), io:format("GROUP:~s:END",[base64:encode(Group)]).')
+    group_response = checked('exec',broker,'emqx','eval',group_expression).strip()
+    assert group_response.startswith(b'GROUP:') and group_response.endswith(b':ENDok')
+    import base64
+    group = base64.b64decode(group_response[6:-6],validate=True)
+    checks['username_group_bound_to_native_provider_state'] = True
+    # Already validated immutable bytes; this callback never executes native code
+    # a second time and binds only the same original checkpoint identity.
+    def exporter(source):
+        assert source == raw
+        return encoded
+    reader = mqtt_table_reader(raw,exporter=exporter,username_group=group)
+    stream = reader()
+    try:
+        target_document = parse_json(read_bounded(stream))
+    finally:
+        stream.close()
+    assert target_document['complete'] is True and len(target_document['records']) == 1
+    for record in target_document['records']:
+        assert set(record) == {'username','password_hash','salt'}
+        assert record['username'] == 'workload-user'
+        scan.add([v.encode() for v in record.values() if v])
+    checks['target_mqtt_single_category_consumer'] = True
+    report['target_mqtt_records'] = len(target_document['records'])
+    runtime = RuntimeRegistry()
+    try:
+        register_target_snapshots(runtime,exact_target_readers(raw,exporter=exporter,username_group=group))
+    except PrivateFailure:
+        checks['incomplete_full_target_registration_refused'] = True
+    else:
+        raise RuntimeError('false-target-completeness')
+    try:
+        runtime.summary()
+    except PrivateFailure:
+        checks['full_target_registry_remains_unsealed'] = True
+    else:
+        raise RuntimeError('false-target-summary')
+    report['export_stage'] = 'finished'
