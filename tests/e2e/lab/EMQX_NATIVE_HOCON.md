@@ -43,7 +43,7 @@ member alone is read into bytes (maximum 8MiB). Replay seeks the same open file,
 and context exit cleans it up on success or failure. No entire spool read into
 bytes. Legacy callers without spool_directory retain the original 8MiB memory
 path. Spool retains parent's 256MiB maximum and 12GiB free-space reserve.
-Real decrypted archives (x86 137936119B, arm 117195765B) have NOT been parsed by
+Real encrypted member sizes (x86 137936119B, arm 117195765B) do not establish expanded tar sizes. These sources have NOT been parsed by
 this delivery. Capacity evidence from the parent is not semantic acceptance;
 unknown archive members and Mnesia still gate. Generated fixtures do not establish
 commercial acceptance.
