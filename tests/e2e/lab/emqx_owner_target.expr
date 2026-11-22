@@ -1,3 +1,5 @@
+put(woow_target_stage, typed_setup),
+try
 %% Owner-selected fixed read-only expression. No archive/user-selected code.
 %% Substitution is only a producer-generated 32-character lowercase hex nonce.
 Typed = fun F(V,D) when D =< 16 ->
@@ -15,13 +17,17 @@ end,
 <<"5.8.9">> = iolist_to_binary(emqx_release:version()),
 "26" = erlang:system_info(otp_release),
 "14.2.5.11" = erlang:system_info(version),
+put(woow_target_stage, effective_config),
 Before = emqx:get_config([]),
+put(woow_target_stage, provider_state),
 Providers = case emqx_authn_chains:list_authenticators('mqtt:global') of
     {ok,L0} -> L0; _ -> {ok,L1}=emqx_authn_chains:list_authenticators(<<"mqtt:global">>), L1 end,
+put(woow_target_stage, native_inventory),
 All = lists:sort(mnesia:system_info(tables)),
 true = length(All) =< 64,
 true = lists:member(schema,All),
 Tabs = lists:delete(schema,All),
+put(woow_target_stage, native_tables),
 {atomic,{Definitions,Rows}} = mnesia:transaction(fun() ->
     lists:foreach(fun(T) ->
         Storage = mnesia:table_info(T,storage_type),
@@ -42,6 +48,7 @@ Tabs = lists:delete(schema,All),
           attributes => [atom_to_binary(A,utf8) || A <- Attrs],
           row_count => N,rows => lists:reverse(Rs)}
     end || T <- Tabs],
+    put(woow_target_stage, schema_terms),
     {Typed(Defs,0),Data}
 end),
 All = lists:sort(mnesia:system_info(tables)),
@@ -49,11 +56,22 @@ Before = emqx:get_config([]),
 ProvidersAfter = case emqx_authn_chains:list_authenticators('mqtt:global') of
     {ok,L2} -> L2; _ -> {ok,L3}=emqx_authn_chains:list_authenticators(<<"mqtt:global">>), L3 end,
 Providers = ProvidersAfter,
+put(woow_target_stage, serialize_config),
+ConfigTyped = Typed(Before,0),
+put(woow_target_stage, serialize_provider),
+ProvidersTyped = Typed(Providers,0),
+put(woow_target_stage, encode_reply),
 Encoded = emqx_utils_json:encode(#{contract => <<"emqx-owner-live-target-v1">>,
     version => <<"5.8.9">>,otp_release => <<"26">>,erts_version => <<"14.2.5.11">>,
     generation => <<"__OWNER_NONCE__">>,complete => true,
-    config => Typed(Before,0),providers => Typed(Providers,0),
+    config => ConfigTyped,providers => ProvidersTyped,
     schema_metadata => Definitions,table_names => [atom_to_binary(T,utf8) || T <- All],
     tables => Rows}),
 true = byte_size(Encoded) =< 1048576,
-io:format("WOOWTARGET:~s:END",[base64:encode(Encoded)]).
+io:format("WOOWTARGET:~s:END",[base64:encode(Encoded)])
+catch _:Reason:_ ->
+    Code = case Reason of
+        undef -> undef; {badmatch,_} -> badmatch; function_clause -> function_clause;
+        owner_target_unsupported_term -> unsupported_term; _ -> native_refused end,
+    io:format("WOOWTARGETFAIL:~s:~s:END",[atom_to_binary(get(woow_target_stage)),atom_to_binary(Code)])
+end.

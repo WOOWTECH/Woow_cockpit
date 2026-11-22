@@ -90,6 +90,22 @@ authorization {no_match = deny, deny_action = ignore,
 sources = [{type = file, enable = true, path = "/work/acl.conf"}]}
 retainer.backend.storage_type = disc
 ''')
+        if mode == 'owner-target':
+            # Fresh synthetic profile: no mounted bootstrap/ACL refs and no MQTT
+            # clients/ticker. Credentials are generated privately, never argv.
+            (root / 'emqx.conf').write_text('''node.name = "workload@127.0.0.1"
+node.cookie = "synthetic-workload-isolated-cookie"
+node.data_dir = "/opt/emqx/data"
+dashboard.listeners.http.enable = false
+dashboard.default_password = "''' + password + '''"
+listeners.tcp.default.bind = "127.0.0.1:1883"
+listeners.ssl.default.enable = false
+listeners.ws.default.enable = false
+listeners.wss.default.enable = false
+authentication = [{mechanism = password_based, backend = built_in_database,
+user_id_type = username, enable = true,
+password_hash_algorithm {name = sha256, salt_position = suffix}}]
+''')
         (root / 'emqx.conf').chmod(0o600)
 
         def ready():
@@ -170,6 +186,10 @@ retainer.backend.storage_type = disc
                 assert retained.returncode == 0 and retained.stdout.strip() == b'synthetic-workload-marker'
                 checks['retained_payload_survived_restart'] = True
                 workload('after_restart')
+            elif mode == 'owner-target':
+                stage = 'owner-target-observation'
+                from emqx_broker_owner_target import run_owner_target
+                run_owner_target(root, name, clients, report)
             else:
                 stage = 'owner-data-export-checkpoint'
                 from emqx_broker_export import run_export
@@ -187,7 +207,7 @@ retainer.backend.storage_type = disc
             if not checks['broker_cleanup'] or not checks['clients_cleanup']:
                 report['result'] = 'failed'
     checks['private_files_cleanup'] = not root.exists()
-    if mode == 'export':
+    if mode in ('export', 'owner-target'):
         # Actual Mnesia atoms such as false are registered too; never exempt them.
         report['ha_commercial_acceptance'] = 'not-claimed'
         report['checks'] = {key: 'passed' if value else 'failed' for key, value in checks.items()}
@@ -199,5 +219,5 @@ retainer.backend.storage_type = disc
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('--mode', choices=('mqtt', 'export'), required=True)
+    parser.add_argument('--mode', choices=('mqtt', 'export', 'owner-target'), required=True)
     raise SystemExit(run(parser.parse_args().mode))
