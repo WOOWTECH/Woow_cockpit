@@ -171,7 +171,7 @@ def bind_target_persisted(readers, *, persisted_values, generation):
 
 
 def observed_target_readers(*, private_capture, exporter, username_group,
-                            persisted_values=None):
+                            persisted_values=None, table_exporter=None):
     """Capture one owner-quiesced target generation and build all exact readers.
 
     private_capture is TRUSTED owner code, not an archive-selected callback. It
@@ -272,7 +272,8 @@ def observed_target_readers(*, private_capture, exporter, username_group,
         encoded = None
         def app_export(source):
             nonlocal encoded
-            encoded = exporter(source)
+            encoded = (table_exporter('emqx_app', source)
+                       if table_exporter is not None else exporter(source))
             return encoded
         read_mnesia(app, 'emqx_app', app_export)
         if parse_json(encoded)['rows'] != []:
@@ -289,7 +290,8 @@ def observed_target_readers(*, private_capture, exporter, username_group,
         documents = {category: {'schema': 1, 'complete': True, 'records': []}
                      for category in TARGET_CATEGORIES}
         documents['mqtt-auth'] = parse_json(mqtt_password_table(
-            mqtt_raw, exporter=exporter, username_group=username_group))
+            mqtt_raw, exporter=(lambda raw: table_exporter('emqx_authn_mnesia', raw))
+            if table_exporter is not None else exporter, username_group=username_group))
         documents['target-bootstrap']['records'] = bootstrap['records']
         payloads = {category: json.dumps(doc).encode() for category, doc in documents.items()}
         readers = {category: (lambda data=data: io.BytesIO(data))
@@ -298,6 +300,53 @@ def observed_target_readers(*, private_capture, exporter, username_group,
         # atomic registry; never relax its secret/reference/size rules.
         return bind_target_persisted(readers, persisted_values=persisted_values,
                                      generation=capture['generation'])
+    except (KeyboardInterrupt, SystemExit):
+        raise PrivateFailure('runtime-private-cancelled') from None
+    except Exception:
+        raise TargetCaptureUnsupported() from None
+
+
+
+def capture_observed_target_readers(*, private_capture, private_inventory,
+                                    private_table, exporter, username_group,
+                                    generation):
+    """One-shot native inventory + five-category observed absence-profile capture.
+
+    exporter(table, raw) supports per-table selection even if a single native
+    checkpoint contains multiple tables. Only native-validated MQTT/app outputs
+    are replayed for projection; the native producer is never invoked a second
+    time. No business config fields are dropped to broaden the supported profile.
+    Owner holds one mutation/issuance lock through this call and registration.
+    """
+    try:
+        from emqx_runtime_credentials import read_bounded
+        from emqx_persisted_values import capture_persisted_values
+        stream = private_capture()
+        try:
+            observed = read_bounded(stream)
+            if hasattr(stream, 'finish'):
+                stream.finish()
+        finally:
+            stream.close()
+        document = parse_json(observed)
+        if (type(generation) is not str or not generation
+                or type(document) is not dict or document.get('generation') != generation):
+            unsupported()
+        projections = {}
+        def native(table, raw):
+            encoded = exporter(table, raw)
+            if table in ('emqx_authn_mnesia', 'emqx_app'):
+                projections[table] = encoded
+            return encoded
+        companion = capture_persisted_values(private_inventory=private_inventory,
+            private_table=private_table, exporter=native, generation=generation, scope='target')
+        def replay(table, raw):
+            if table not in projections or not companion.matches(table, raw):
+                unsupported()
+            return projections[table]
+        return observed_target_readers(private_capture=lambda: io.BytesIO(observed),
+            exporter=None, table_exporter=replay, username_group=username_group,
+            persisted_values=companion)
     except (KeyboardInterrupt, SystemExit):
         raise PrivateFailure('runtime-private-cancelled') from None
     except Exception:

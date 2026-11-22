@@ -168,3 +168,34 @@ an untrusted inventory assertion. Existing source_counts are still compared with
 source_registry.summary() BEFORE any companion/transport work (a8cbf5b retained).
 Negative tests verify cross-scope/stale/missing generation produces no login and
 no evidence file; source/target private values still participate in fullscan.
+
+## One-shot observed target producer (no publication changes)
+
+`capture_observed_target_readers(private_capture=owner_effective_observation,
+private_inventory=owner_native_inventory, private_table=owner_checkpoint_stream,
+exporter=owner_native_table_exporter, username_group=independent_provider_group,
+generation=independent_owner_generation)` now composes the full inventory reader
+and existing five-category observed-profile projection. It captures the private
+observation and inventory once and reads/exports each native table once. MQTT/app
+outputs are cached privately and replayed only after the companion validates the
+whole inventory; projection input bytes must match its checkpoint bindings.
+Table-specific dispatch supports one native checkpoint containing multiple tables,
+including when MQTT/app checkpoint bytes are identical. Native atom group matching
+from Turing is retained. Callbacks remain reviewed trusted code, not schema code
+or path handlers selected by arbitrary user input.
+
+This producer supplies all five exact readers for the SUPPORTED absence/disabled
+config profile with actual observed bootstrap inputs. It does not broaden that
+profile by dropping native fields, invent plaintext for existing API hashes, or
+claim unknown/richer configs are supported. Normal broker persistent table names
+are not limited to two; all observed native tables go through companion capture.
+Owner-provided exact business readers for richer supported deployments can still
+use bind_target_persisted independently of this restricted config projector.
+
+No workflow publish line, publisher coverage mode or scanner behavior was changed
+in this follow-up. Main agent owns names-only public evidence integration and
+retains private session counts/source-count validation. Short private values
+`0`, `1`, `true`, `false` are explicitly tested as full-exact scan matches, not
+excluded to make evidence pass. Actual caller/effective config/native complete
+producer execution still awaits Turing; synthetic success is not commercial
+acceptance. Previous native disk_log bridge limitation remains separate.
