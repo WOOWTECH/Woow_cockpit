@@ -49,11 +49,11 @@ try:
  if mode==b'P':
   print('ARM DEPENDENCIES PASSED',flush=True);raise SystemExit(0)
  source_modes={b'S':'--source',b'X':'--x86-source',b'V':'--source-vendor-acl',b'W':'--x86-source-vendor-acl'}
- if mode not in (b'R',b'C',*source_modes):raise ValueError()
+ if mode not in (b'R',b'C',b'D',*source_modes):raise ValueError()
  if mode in source_modes:
   from emqx_arm_source_owner import main
   raise SystemExit(main([source_modes[mode]]))
- runpy.run_path(str(work/'tests/e2e/lab/emqx_arm_cold_owner.py'),run_name='__main__',init_globals={'CONFIGURATION_ONLY':mode==b'C'})
+ runpy.run_path(str(work/'tests/e2e/lab/emqx_arm_cold_owner.py'),run_name='__main__',init_globals={'CONFIGURATION_ONLY':mode in (b'C',b'D'),'VENDOR_CONFIGURATION':mode==b'D'})
 finally:
  if work is not None:shutil.rmtree(work)
 '''
@@ -77,10 +77,11 @@ def main(argv=None):
     child=None
     try:
         args=sys.argv[1:] if argv is None else argv
-        if args not in ([],['--probe'],['--configuration']) and (len(args)!=1 or args[0] not in SOURCE_MODES):raise ValueError()
+        if args not in ([],['--probe'],['--configuration'],['--configuration-vendor-acl']) and (len(args)!=1 or args[0] not in SOURCE_MODES):raise ValueError()
         profile=source_profile(args[0] if len(args)==1 and args[0] in SOURCE_MODES else '--source')
         probe=args==['--probe']
-        configuration=args==['--configuration']
+        configuration=args in (['--configuration'],['--configuration-vendor-acl'])
+        vendor_configuration=args==['--configuration-vendor-acl']
         source_only=len(args)==1 and args[0] in SOURCE_MODES
         deps=dependencies()
         if probe:
@@ -112,7 +113,7 @@ def main(argv=None):
             if not stat.S_ISREG(before.st_mode) or not 0<before.st_size<=512*1024*1024:raise ValueError()
             child=subprocess.Popen([str(ROOT/'tests/e2e/lab/owner.sh'),'d','/usr/bin/python3','-c',BOOTSTRAP],stdin=subprocess.PIPE,stderr=subprocess.DEVNULL)
             child.stdin.write(struct.pack('!Q',len(code)));child.stdin.write(code)
-            child.stdin.write(struct.pack('!Q',len(deps)));child.stdin.write(deps);child.stdin.write(profile.frame_mode if source_only else b'C' if configuration else b'R')
+            child.stdin.write(struct.pack('!Q',len(deps)));child.stdin.write(deps);child.stdin.write(profile.frame_mode if source_only else b'D' if vendor_configuration else b'C' if configuration else b'R')
             child.stdin.write(struct.pack('!I',len(key)));child.stdin.write(key)
             child.stdin.write(struct.pack('!Q',before.st_size))
             digest=hashlib.sha256()

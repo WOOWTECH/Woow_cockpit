@@ -149,7 +149,12 @@ def main():
                                             stage='HOCON_'+native_hocon_diagnostic(raw).upper()
                                             raise RuntimeError('private-hocon-refused') from None
                                         stage='HOCON_CONTRACT'
-                                        try:values=read_hocon(raw,lambda source:encoded).values
+                                        try:
+                                            if globals().get('VENDOR_CONFIGURATION',False):
+                                                from emqx_native_runtime import IMAGE
+                                                values=read_hocon(raw,lambda source:encoded,
+                                                    file_profile='owner-pinned-image-vendor-acl-v1',product_image=IMAGE).values
+                                            else:values=read_hocon(raw,lambda source:encoded).values
                                         except Exception:
                                             # Classification only; complete semantic refusal remains.
                                             pending=[json.loads(encoded).get('document')]
