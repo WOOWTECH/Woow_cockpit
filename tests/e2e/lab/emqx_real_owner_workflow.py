@@ -512,6 +512,7 @@ def _mqtt_private(provision,clients,role,*,topic,retained=False,wrong_password=N
     Raw output never leaves this trusted caller.
     """
     from emqx_adapter_mqtt import CLIENT
+    from emqx_owned_client import owned_client
     r,f=provision.runner,provision.fixture
     user=clients.fields[role+'_user'];password=wrong_password or clients.fields[role+'_password']
     if re.fullmatch(rb'[A-Za-z0-9_-]{1,128}',user) is None or re.fullmatch(rb'[A-Za-z0-9_-]{1,128}',password) is None:
@@ -520,17 +521,13 @@ def _mqtt_private(provision,clients,role,*,topic,retained=False,wrong_password=N
     if topic not in ('b1/retained/#','b1/secret/#') and re.fullmatch(rb'b1/retained/[A-Za-z0-9_/-]{1,110}',topic_raw) is None:
         raise ValueError()
     client=f.prefix+'-mqtt-'+secrets.token_hex(6)
-    owned=False
     with tempfile.TemporaryDirectory(prefix=client+'-',dir=_ram_client_parent()) as directory:
         root=Path(directory);root.chmod(0o700)
         fd=os.open(root/'mosquitto_sub',os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o600)
         with os.fdopen(fd,'wb') as config:
             os.fchmod(config.fileno(),0o600);config.write(b'-u '+user+b'\n-P '+password+b'\n-t '+topic_raw+b'\n')
-        try:
-            if r.podman('container','exists',client,check=False,timeout=10,max_output=4096).returncode!=1:
-                raise ValueError()
-            owned=True
-            command=['run','--rm','--name',client,'--pull=never','--log-driver=none','--image-volume=ignore',
+        with owned_client(r,client) as owned_args:
+            command=['run','--rm',*owned_args,'--pull=never','--log-driver=none','--image-volume=ignore',
                 '--network=container:'+f.prefix,'--userns=keep-id:uid=1000,gid=1000','--user=1000:1000',
                 '--memory=64m','--cpus=0.25','--pids-limit=32','--timeout=15','--stop-timeout=1',
                 '-e','HOME=/work','-e','XDG_CONFIG_HOME=/work','-v',str(root)+':/work:ro',
@@ -541,14 +538,6 @@ def _mqtt_private(provision,clients,role,*,topic,retained=False,wrong_password=N
             if (type(result.returncode) is not int or any(type(x) is not bytes or len(x)>65536
                     for x in (result.stdout,result.stderr))):raise ValueError()
             return result
-        finally:
-            if owned:
-                removed=absent=False
-                try:removed=r.podman('rm','--force','--ignore',client,check=False,timeout=10,max_output=4096).returncode==0
-                finally:
-                    absent=r.podman('container','exists',client,check=False,timeout=10,max_output=4096).returncode==1
-                if not removed or not absent:raise ValueError()
-
 
 def _reason(output,kind):
     pattern=rb'received CONNACK \(([0-9]{1,3})\)' if kind=='connack' else rb'Subscribed[^\n]*:\s*([0-9]{1,3})\b'

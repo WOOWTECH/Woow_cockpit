@@ -356,14 +356,25 @@ class FoundationTests(unittest.TestCase):
 
     def test_mqtt_transport_keeps_inputs_out_of_argv_env_and_cleans_timeout_and_bad_reply(self):
         clients=self.clients()
-        configs=[];running=[]
+        import json
+        from emqx_owned_client import LABEL
+        from emqx_adapter_mqtt import CLIENT
+        configs=[];running={};removals=[]
         def podman(*args,**kwargs):
             if args[:2]==('container','exists'):
-                return SimpleNamespace(returncode=0 if args[2] in running else 1,stdout=b'',stderr=b'')
+                return SimpleNamespace(returncode=0 if any(args[2] in (name,doc['Id']) for name,doc in running.items()) else 1,stdout=b'',stderr=b'')
+            if args[:2]==('container','inspect'):
+                return SimpleNamespace(returncode=0,stdout=json.dumps([running[args[2]]]).encode(),stderr=b'')
             if args[0]=='rm':
-                running.remove(args[-1]);return SimpleNamespace(returncode=0,stdout=b'',stderr=b'')
+                self.assertEqual(args,('rm','--force','--ignore','a'*64));removals.append(args[-1])
+                for name in list(running):
+                    if running[name]['Id']==args[-1]:del running[name]
+                return SimpleNamespace(returncode=0,stdout=b'',stderr=b'')
             self.assertEqual(args[0],'run')
-            name=args[args.index('--name')+1];running.append(name)
+            name=args[args.index('--name')+1]
+            label,nonce=args[args.index('--label')+1].split('=',1)
+            self.assertEqual(label,LABEL);self.assertRegex(nonce,r'^[0-9a-f]{64}$')
+            running[name]={'Id':'a'*64,'Name':'/'+name,'Image':CLIENT,'Config':{'Labels':{label:nonce}}}
             config=Path(args[args.index('-v')+1].removesuffix(':/work:ro'))/'mosquitto_sub'
             configs.append(config)
             self.assertEqual(config.stat().st_mode&0o777,0o600)
@@ -388,7 +399,8 @@ class FoundationTests(unittest.TestCase):
                 if case=='pass':m._mqtt_private(self.provision,clients,'gateway',topic='b1/retained/one',retained=True)
                 else:
                     with self.assertRaises(Exception):m._mqtt_private(self.provision,clients,'gateway',topic='b1/retained/one',retained=True)
-            self.assertEqual(running,[])
+            self.assertEqual(running,{})
+            self.assertEqual(removals[-1],'a'*64)
             self.assertTrue(all(not path.parent.exists() for path in configs))
 
     def test_client_registration_requires_complete_real_runtime_and_keeps_scanner_strict(self):
@@ -700,3 +712,39 @@ class FoundationTests(unittest.TestCase):
             fields=list(self.api_values());fields[index]=value
             invalid=m.API_MAGIC+b'A'+b''.join(struct.pack('!H',len(v))+v for v in fields)
             with self.assertRaises(ValueError):m.read_source_api_credentials(io.BytesIO(invalid),m.SOURCE_MODES[0])
+
+    def test_positive_mqtt_preexisting_collision_never_runs_or_deletes(self):
+        calls=[]
+        def podman(*args,**kwargs):
+            calls.append(args)
+            self.assertEqual(args[:2],('container','exists'))
+            return SimpleNamespace(returncode=0,stdout=b'',stderr=b'')
+        with patch.object(self.runner,'podman',side_effect=podman),patch.object(m,'_ram_client_parent',return_value=self.root):
+            with self.assertRaises(Exception):m._mqtt_private(self.provision,self.clients(),'gateway',topic='b1/retained/one',retained=True)
+        self.assertEqual(len(calls),1)
+        self.assertFalse(list(self.root.glob(self.fixture.prefix+'-mqtt-*')))
+
+    def test_positive_mqtt_late_foreign_or_malformed_ownership_never_deletes_by_name_or_cid(self):
+        import json,subprocess
+        from emqx_owned_client import LABEL
+        from emqx_adapter_mqtt import CLIENT
+        for case in ('foreign','malformed'):
+            calls=[];state={}
+            def podman(*args,**kwargs):
+                calls.append(args)
+                if args[:2]==('container','exists'):
+                    return SimpleNamespace(returncode=0 if state else 1,stdout=b'',stderr=b'')
+                if args[:2]==('container','inspect'):
+                    raw=b'invalid-private-inspect' if case=='malformed' else json.dumps([state]).encode()
+                    return SimpleNamespace(returncode=0,stdout=raw,stderr=b'')
+                self.assertEqual(args[0],'run')
+                name=args[args.index('--name')+1]
+                label,nonce=args[args.index('--label')+1].split('=',1)
+                self.assertEqual(label,LABEL);self.assertRegex(nonce,r'^[0-9a-f]{64}$')
+                state.update(Id='b'*64,Name='/'+name,Image=CLIENT,Config={'Labels':{LABEL:'foreign-label'}})
+                raise subprocess.TimeoutExpired('generated-private-run-failure',20)
+            with patch.object(self.runner,'podman',side_effect=podman),patch.object(m,'_ram_client_parent',return_value=self.root):
+                with self.assertRaises(Exception):m._mqtt_private(self.provision,self.clients(),'gateway',topic='b1/retained/one',retained=True)
+            self.assertFalse(any(a[0]=='rm' for a in calls))
+            self.assertEqual(state['Id'],'b'*64)
+            self.assertFalse(list(self.root.glob(self.fixture.prefix+'-mqtt-*')))
