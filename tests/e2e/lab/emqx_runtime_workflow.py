@@ -40,7 +40,8 @@ class PrivateSession:
 
 def login_preflight(*, source_registry, source_counts, target_readers,
                     private_transport, username, password, evidence_directory,
-                    evidence_name='credential-preflight.json', source_persisted_values=None):
+                    evidence_name='credential-preflight.json', source_persisted_values=None,
+                    source_generation=None):
     """Source owner supplies its sealed Registry and actual source reader counts.
 
     Counts cover only the three SOURCE_CATEGORIES; registration counts are not
@@ -66,9 +67,15 @@ def login_preflight(*, source_registry, source_counts, target_readers,
         from emqx_persisted_values import PersistedValues
         companions = []
         target_persisted = getattr(target_readers, 'persisted_values', None)
-        for companion, scope in ((source_persisted_values, 'source'), (target_persisted, 'target')):
+        if source_persisted_values is None and source_generation is not None:
+            refused()
+        for companion, scope, expected_generation in (
+                (source_persisted_values, 'source', source_generation),
+                (target_persisted, 'target', getattr(target_readers, 'generation', None))):
             if companion is not None:
-                if not isinstance(companion, PersistedValues) or companion.scope != scope:
+                if (not isinstance(companion, PersistedValues) or companion.scope != scope
+                        or type(expected_generation) is not str or not expected_generation
+                        or companion.generation != expected_generation):
                     refused()
                 companion.scan(b'')
                 companions.append(companion)

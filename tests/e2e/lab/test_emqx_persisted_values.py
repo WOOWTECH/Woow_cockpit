@@ -77,6 +77,7 @@ class PersistedValueTests(unittest.TestCase):
         for edit in (lambda inv: inv.update(eof=False),
                      lambda inv: inv.update(complete=False),
                      lambda inv: inv.update(generation='other'),
+                     lambda inv: inv.update(scope='source'),
                      lambda inv: inv['tables'].append(inv['tables'][0]),
                      lambda inv: inv['tables'][0].update(attributes=['other'])):
             with self.assertRaises(PrivateFailure):
@@ -159,7 +160,8 @@ class PersistedValueTests(unittest.TestCase):
                     source_counts={'backup-key': 1, 'source-options': 0, 'source-cookie': 1},
                     target_readers=readers(), private_transport=transport,
                     username=b'fixture-admin', password=PASSWORD,
-                    evidence_directory=Path(directory), source_persisted_values=companion)
+                    evidence_directory=Path(directory), source_persisted_values=companion,
+                    source_generation='synthetic-generation')
             self.assertEqual(list(Path(directory).iterdir()), [])
 
     def test_cold_history_bridge_uses_existing_inventory_contract_and_overall_finish(self):
@@ -217,3 +219,82 @@ class PersistedValueTests(unittest.TestCase):
         self.assertCountEqual(calls, original)
         with self.assertRaises(PrivateFailure):
             bind_target_persisted(readers(), persisted_values=companion, generation='stale')
+
+    def test_native_names_rejected_before_any_table_callback(self):
+        from emqx_persisted_values import capture_persisted_values
+        from unittest.mock import Mock
+        for field in ('table', 'record_name', 'attributes'):
+            for bad in ('', '../secret', 'a/b', '..', 'a\\b', '/tmp/value', 'a\n',
+                        'a\x00b', 'a\tb', 'MixedCase', 'é', '1table', '_table',
+                        'a-b', 'a.' , 'a' * 256):
+                inv = {'contract': 'emqx-persistent-inventory-v1', 'version': '5.8.9',
+                    'generation': 'synthetic-generation', 'scope': 'target',
+                    'complete': True, 'eof': True, 'tables': [
+                        {'table': 'safe_table', 'record_name': 'safe_record',
+                         'attributes': ['safe_attr'], 'input_bytes': 1, 'input_sha256': '0' * 64},
+                        {'table': 'second_table', 'record_name': 'safe_record',
+                         'attributes': ['safe_attr'], 'input_bytes': 1, 'input_sha256': '0' * 64}]}
+                # Bad metadata in the LAST descriptor also prevents opening first.
+                inv['tables'][1][field] = [bad] if field == 'attributes' else bad
+                table, export = Mock(), Mock()
+                with self.subTest(field=field, bad=repr(bad)), self.assertRaises(PrivateFailure):
+                    capture_persisted_values(
+                        private_inventory=lambda: io.BytesIO(json.dumps(inv).encode()),
+                        private_table=table, exporter=export,
+                        generation='synthetic-generation', scope='target')
+                table.assert_not_called(); export.assert_not_called()
+
+    def test_native_atom_name_boundary_and_known_emqx_shapes(self):
+        from emqx_persisted_values import native_name
+        for value in ('a', 'emqx_admin_jwt', 'user_info', 'api_secret_hash',
+                      'a' * 255):
+            self.assertTrue(native_name(value))
+        native = native_documents()
+        name = 'a' * 255
+        doc = copy.deepcopy(native['emqx_admin'][1])
+        doc.update(table=name, record_name=name, attributes=[name],
+                   rows=[term('tuple', [term('atom', name), binary(b'boundary-private')])])
+        native[name] = (b'synthetic-boundary-checkpoint', doc)
+        companion = captured(native)
+        self.assertIn(name, companion.tables)
+        with self.assertRaises(PrivateFailure):
+            companion.scan(b'boundary-private')
+
+    def test_evidence_scope_and_generation_binding_negative_cases(self):
+        from emqx_target_capture import bind_target_persisted, ObservedTargetReaders
+        from emqx_runtime_workflow import login_preflight
+        from test_emqx_runtime_credentials import source_registry, readers, PASSWORD
+        from unittest.mock import Mock
+        from pathlib import Path
+        import tempfile
+        target, source = captured(), captured(scope='source')
+        for companion, generation in ((source, 'synthetic-generation'),
+                                       (target, 'other'), (target, ''), (target, None)):
+            with self.subTest(), self.assertRaises(PrivateFailure):
+                bind_target_persisted(readers(), persisted_values=companion, generation=generation)
+        valid = bind_target_persisted(readers(), persisted_values=target,
+                                     generation='synthetic-generation')
+        invalid_target = []
+        for companion, generation in ((source, 'synthetic-generation'),
+                                       (target, 'other'), (target, None)):
+            mapping = ObservedTargetReaders(valid)
+            mapping.persisted_values = companion
+            if generation is not None:
+                mapping.generation = generation
+            invalid_target.append(mapping)
+        variations = [{'target_readers': mapping} for mapping in invalid_target]
+        variations += [{'source_persisted_values': companion, 'source_generation': generation}
+                       for companion, generation in ((target, 'synthetic-generation'),
+                           (source, 'other'), (source, ''), (source, None))]
+        with tempfile.TemporaryDirectory() as directory:
+            for changes in variations:
+                transport = Mock()
+                kwargs = dict(source_registry=source_registry(),
+                    source_counts={'backup-key': 1, 'source-options': 0, 'source-cookie': 1},
+                    target_readers=valid, private_transport=transport,
+                    username=b'fixture-admin', password=PASSWORD, evidence_directory=Path(directory))
+                kwargs.update(changes)
+                with self.subTest(), self.assertRaises(PrivateFailure):
+                    login_preflight(**kwargs)
+                transport.assert_not_called()
+                self.assertEqual(list(Path(directory).iterdir()), [])

@@ -7,6 +7,7 @@ Every inventoried table must traverse native EOF, including empty JWT tables.
 import base64
 import json
 import hashlib
+import re
 from urllib.parse import quote_from_bytes
 
 from emqx_private_boundary import PrivateFailure, MAX_TOTAL
@@ -14,6 +15,16 @@ from emqx_runtime_credentials import parse_json, read_bounded
 from emqx_semantic_readers import (
     VERSION, MAX_INPUT, Values, _contract, _term,
 )
+
+
+# Supported unquoted native atom names only; never filesystem paths or code.
+MAX_NATIVE_NAME = 255
+_NATIVE_NAME = re.compile(r'[a-z][a-z0-9_]*', re.ASCII)
+
+
+def native_name(value):
+    return (type(value) is str and 1 <= len(value) <= MAX_NATIVE_NAME
+            and _NATIVE_NAME.fullmatch(value) is not None)
 
 
 def refuse():
@@ -88,11 +99,11 @@ def capture_persisted_values(*, private_inventory, private_table, exporter,
         for item in inventory['tables']:
             if (type(item) is not dict or set(item) != {
                     'table', 'input_sha256', 'input_bytes', 'record_name', 'attributes'}
-                    or type(item['table']) is not str or not item['table']
+                    or not native_name(item['table'])
                     or item['table'] in tables
-                    or type(item['record_name']) is not str or not item['record_name']
+                    or not native_name(item['record_name'])
                     or type(item['attributes']) is not list or not item['attributes']
-                    or not all(type(a) is str and a for a in item['attributes'])
+                    or not all(native_name(a) for a in item['attributes'])
                     or len(set(item['attributes'])) != len(item['attributes'])
                     or type(item['input_bytes']) is not int
                     or not 0 <= item['input_bytes'] <= MAX_INPUT

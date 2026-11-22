@@ -146,3 +146,25 @@ that single delivery commit to a mainline containing e38; do not cherry-pick the
 rejected 13b9312 as a prerequisite. Native checkpoint/coldreader dependency files
 are not part of this delivery. Reader binding captures each producer exactly once
 and freezes its validated bytes, avoiding credential re-issuance during preflight.
+
+
+## Inventory name and evidence-binding hardening follow-up
+
+All inventory table, record_name and attribute names must match the supported
+native unquoted atom profile: 1..255 ASCII characters, leading [a-z], subsequent
+[a-z0-9_]. Paths, dots, slashes/backslashes, controls, uppercase, non-ASCII and
+oversized names refuse before ANY private_table/exporter callback, including
+when an invalid descriptor appears after valid descriptors. This is identifier
+validation, not authorization to execute schema/user code; callbacks remain
+trusted code. No Python or native atom creation is introduced.
+
+The target binding carries the independently expected generation on the frozen
+reader mapping; login_preflight rechecks both scope and generation before login
+or publication. For a source companion, callers must additionally pass
+`source_generation=owner_verified_source_generation`; missing/empty/mismatched
+expected generation or a target-scoped companion refuses. The expected source
+generation must derive from the owner's actual captured source binding, not from
+an untrusted inventory assertion. Existing source_counts are still compared with
+source_registry.summary() BEFORE any companion/transport work (a8cbf5b retained).
+Negative tests verify cross-scope/stale/missing generation produces no login and
+no evidence file; source/target private values still participate in fullscan.

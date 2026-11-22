@@ -162,6 +162,7 @@ def bind_target_persisted(readers, *, persisted_values, generation):
         register_target_snapshots(RuntimeRegistry(), frozen)
         result = ObservedTargetReaders(frozen)
         result.persisted_values = persisted_values
+        result.generation = generation
         return result
     except (KeyboardInterrupt, SystemExit):
         raise PrivateFailure('runtime-private-cancelled') from None
