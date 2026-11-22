@@ -6,6 +6,7 @@ is invoked by run_emqx_real_owner.sh; direct entry does not acquire lab ownershi
 """
 import hashlib
 import io
+import json
 import os
 from pathlib import Path
 import re
@@ -27,6 +28,8 @@ from emqx_source_profiles import source_profile
 CLIENT_CREDS=Path('/home/woowtechopenclaw/.woowbk-lab/secrets/b1-creds.env')
 KEY_CREDS=Path('/home/woowtechopenclaw/.woowbk-lab/secrets/ha-import-creds.env')
 PRIVATE_PARENT=Path('/home/woowtechopenclaw/.woowbk-lab')
+SOURCE_SUMMARY=PRIVATE_PARENT/'evidence/b1-source/summary.json'
+SEED_ROOT=Path('/tmp/claude-1000/-home-woowtechopenclaw/fbefdf50-77b9-4f2f-a609-4d7d82a72cee/scratchpad/phase3/testha-b1')
 MODES={
  '--real-restore':('--source-vendor-acl-sql-aliases',b'G',False),
  '--x86-real-restore':('--x86-source-vendor-acl-sql-aliases',b'I',False),
@@ -93,10 +96,89 @@ def read_client_credentials():
     return fields
 
 
+def _read_original(path,limit):
+    # Original producer files are owner664, not credential files. Require owned
+    # regular data, no aliases/world-write, bounded EOF and stable path+fd stamps.
+    if any(p.is_symlink() for p in (path,*path.parents)):raise ValueError()
+    fd=os.open(path,os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK)
+    with os.fdopen(fd,'rb') as stream:
+        before=os.fstat(stream.fileno())
+        if (not stat.S_ISREG(before.st_mode) or before.st_uid!=os.geteuid() or before.st_nlink!=1
+                or before.st_mode&0o002 or not 0<before.st_size<=limit):raise ValueError()
+        raw=stream.read(limit+1)
+        if (len(raw)!=before.st_size or stream.read(1)
+                or _snapshot(before)!=_snapshot(os.fstat(stream.fileno()))
+                or _snapshot(before)!=_snapshot(path.stat(follow_symlinks=False))):raise ValueError()
+    return raw
+
+
+def _json_literal(raw):
+    def pairs(items):
+        result={}
+        for key,value in items:
+            if key in result:raise ValueError()
+            result[key]=value
+        return result
+    def invalid(_):raise ValueError()
+    return json.loads(raw,object_pairs_hook=pairs,parse_constant=invalid)
+
+
+def _publish_literals(raw):
+    result={}
+    for line in raw.splitlines():
+        # Only the original single-line, single-quoted JSON publish literals.
+        # Prefix is inert text; no shell, substitution, env or URL resolution.
+        if re.search(rb'\bPOST[ \t]+/publish\b',line) is None:continue
+        match=re.fullmatch(rb"[^'\r\n;|&`]+[ \t]POST[ \t]+/publish[ \t]+-d[ \t]+'([^'\r\n]+)'[ \t]*",line)
+        if match is None:raise ValueError()
+        tokens=shlex.split(line.decode('utf-8'),comments=False,posix=True)
+        if len(tokens)!=6 or tokens[2:5]!=['POST','/publish','-d']:raise ValueError()
+        doc=_json_literal(match[1].decode('utf-8'))
+        if (type(doc) is not dict or set(doc)!={'topic','payload','qos','retain'}
+                or type(doc['topic']) is not str or type(doc['payload']) is not str
+                or type(doc['qos']) is not int or doc['qos'] not in (0,1,2) or doc['retain'] is not True):raise ValueError()
+        topic=doc['topic'].encode('utf-8');payload=doc['payload'].encode('utf-8')
+        if (re.fullmatch(rb'b1/retained/[A-Za-z0-9_/-]{1,110}',topic) is None
+                or not 0<len(payload)<=4096 or topic in result):raise ValueError()
+        result[topic]=payload
+    if len(result)!=2:raise ValueError()
+    return result
+
+
 def retained_expectations(source_mode):
-    # No published fixed payload binding has been supplied. Do not substitute
-    # generated payloads, a target observation, hashes, or topic-only equivalence.
-    raise TransportRefused('retained_binding')
+    """Independent ORIGINAL producer expectations, NOT a cold/final-row proof.
+
+    Three fixed original scripts must agree on both literal publish bodies. The
+    selected original source-summary topic set and unique protected/local_ok
+    backup must bind the compiled architecture/path/SHA. Only private RAM bytes
+    leave this function. The child independently authenticates the ciphertext;
+    cold consensus (before provision) and final MQTT remain separate obligations.
+    """
+    try:
+        if source_mode not in {v[0] for v in MODES.values()}:raise ValueError()
+        profile=source_profile(source_mode)
+        arch='arm' if profile.arch=='aarch64' else 'x86' if profile.arch=='amd64' else None
+        if arch is None:raise ValueError()
+        names=('emqx-body.sh','emqx-arm.sh','emqx-x86.sh')
+        originals=[*(SEED_ROOT/name for name in names),SOURCE_SUMMARY]
+        stamps={p:_snapshot(p.stat(follow_symlinks=False)) for p in originals}
+        scripts={name:_read_original(SEED_ROOT/name,512*1024) for name in names}
+        maps={name:_publish_literals(raw) for name,raw in scripts.items()}
+        expected=maps['emqx-body.sh']
+        if any(value!=expected for value in maps.values()):raise ValueError()
+        summary=_json_literal(_read_original(SOURCE_SUMMARY,4*1024*1024).decode('utf-8'))
+        topics=summary['machines'][arch]['emqx']['retained_messages']
+        if (type(topics) is not list or len(topics)!=2 or any(type(x) is not str for x in topics)
+                or len(set(topics))!=2 or {x.encode('utf-8') for x in topics}!=set(expected)):raise ValueError()
+        backups=summary['backups'][arch]
+        if type(backups) is not list or not 0<len(backups)<=64 or any(type(r) is not dict for r in backups):raise ValueError()
+        matches=[r for r in backups if r.get('sha256')==profile.sha256]
+        if (len(matches)!=1 or matches[0].get('local_copy')!=str(profile.archive)
+                or matches[0].get('local_ok') is not True or matches[0].get('protected') is not True):raise ValueError()
+        if any(_snapshot(p.stat(follow_symlinks=False))!=stamp for p,stamp in stamps.items()):raise ValueError()
+        return [value for topic in sorted(expected) for value in (topic,expected[topic])]
+    except BaseException:
+        raise TransportRefused('retained_binding') from None
 
 
 def client_prefix(source_mode):

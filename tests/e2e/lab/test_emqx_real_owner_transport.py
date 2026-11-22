@@ -156,6 +156,7 @@ class TransportTests(unittest.TestCase):
         out=io.StringIO()
         with patch.object(m,'bundle_code',return_value=b'code'),patch.object(m,'dependencies',return_value=b'deps'), \
              patch.object(m,'read_client_credentials',return_value=[b'b1-sensor',b'a',b'b1-gateway',b'b',b'third',b'c']), \
+             patch.object(m,'retained_expectations',side_effect=m.TransportRefused('retained_binding')), \
              patch.object(m,'read_fixed_fields') as read,patch.object(m.subprocess,'Popen') as spawn,contextlib.redirect_stdout(out):
             self.assertEqual(m.main(['--real-restore']),1)
         read.assert_not_called();spawn.assert_not_called()
@@ -236,3 +237,94 @@ class TransportTests(unittest.TestCase):
                     self.assertEqual(m.main(['--real-restore']),1)
                 read.assert_not_called();retain.assert_not_called()
                 self.assertEqual(out.getvalue(),'REAL OWNER ARCHIVE_BINDING REFUSED\n')
+
+    def test_original_seed_literals_bind_both_archives_without_execution_or_payload_output(self):
+        import emqx_real_owner_transport as m
+        from emqx_source_profiles import source_profile
+        import contextlib,json
+        with tempfile.TemporaryDirectory() as d:
+            root=Path(d);seed=root/'seed';seed.mkdir(mode=0o700)
+            pairs={'b1/retained/generated-one':'generated-original-α','b1/retained/generated-two':'generated-original-β'}
+            script=b'#!/bin/sh\n# inert: never executed\n'+b''.join(b'fixture "$BASE" POST /publish -d \''+json.dumps({'topic':t,'payload':v,'qos':1,'retain':True},ensure_ascii=False).encode()+b"'\n" for t,v in pairs.items())
+            for name in ('emqx-body.sh','emqx-arm.sh','emqx-x86.sh'):(seed/name).write_bytes(script)
+            summary=root/'summary.json'
+            doc={'machines':{a:{'emqx':{'retained_messages':list(pairs)}} for a in ('arm','x86')},'backups':{}}
+            for arch,mode in (('arm','--source-vendor-acl-sql-aliases'),('x86','--x86-source-vendor-acl-sql-aliases')):
+                profile=source_profile(mode)
+                doc['backups'][arch]=[{'sha256':profile.sha256,'local_copy':str(profile.archive),'local_ok':True,'protected':True}]
+            summary.write_text(json.dumps(doc));summary.chmod(0o600)
+            out=io.StringIO()
+            with patch.object(m,'SEED_ROOT',seed),patch.object(m,'SOURCE_SUMMARY',summary),contextlib.redirect_stdout(out):
+                for mode in ('--source-vendor-acl-sql-aliases','--x86-source-vendor-acl-sql-aliases'):
+                    self.assertEqual(m.retained_expectations(mode),[b'b1/retained/generated-one','generated-original-α'.encode(),b'b1/retained/generated-two','generated-original-β'.encode()])
+            self.assertEqual(out.getvalue(),'')
+
+class OriginalProducerTests(unittest.TestCase):
+    def setUp(self):
+        import emqx_real_owner_transport as m
+        import json
+        from emqx_source_profiles import source_profile
+        self.m=m;self.json=json
+        self.temp=tempfile.TemporaryDirectory();self.addCleanup(self.temp.cleanup)
+        self.root=Path(self.temp.name);self.seed=self.root/'seed';self.seed.mkdir(mode=0o700)
+        self.topics=['b1/retained/generated-one','b1/retained/generated-two']
+        self.script=b'#!/bin/sh\n'+b''.join(b'fixture "$BASE" POST /publish -d \''+json.dumps({'topic':t,'payload':'generated-only-'+str(i),'qos':1,'retain':True}).encode()+b"'\n" for i,t in enumerate(self.topics))
+        for name in ('emqx-body.sh','emqx-arm.sh','emqx-x86.sh'):
+            (self.seed/name).write_bytes(self.script);(self.seed/name).chmod(0o664)
+        self.summary=self.root/'summary.json'
+        self.doc={'machines':{a:{'emqx':{'retained_messages':self.topics[:]}} for a in ('arm','x86')},'backups':{}}
+        for arch,mode in (('arm','--source-vendor-acl-sql-aliases'),('x86','--x86-source-vendor-acl-sql-aliases')):
+            profile=source_profile(mode)
+            self.doc['backups'][arch]=[{'sha256':profile.sha256,'local_copy':str(profile.archive),'local_ok':True,'protected':True}]
+        self.write_summary()
+        for name,value in (('SEED_ROOT',self.seed),('SOURCE_SUMMARY',self.summary)):
+            p=patch.object(m,name,value);p.start();self.addCleanup(p.stop)
+
+    def write_summary(self):
+        self.summary.write_text(self.json.dumps(self.doc));self.summary.chmod(0o600)
+
+    def refused(self):
+        with self.assertRaises(self.m.TransportRefused) as caught:self.m.retained_expectations('--source-vendor-acl-sql-aliases')
+        self.assertEqual(caught.exception.phase,'retained_binding')
+
+    def test_cross_arch_conflict_additional_publish_duplicate_json_and_nonliteral_body_refuse(self):
+        path=self.seed/'emqx-arm.sh'
+        for raw in (self.script.replace(b'generated-only-0',b'conflicting-original'),
+                    self.script+self.script.splitlines(keepends=True)[1],
+                    self.script.replace(b'"qos": 1',b'"qos": 1,"qos": 1'),
+                    self.script.replace(b'"retain": true',b'"retain": false'),
+                    self.script.replace(b"-d '",b'-d "',1),
+                    self.script.replace(b'"payload": "generated-only-0"',b'"payload": NaN'),
+                    self.script+b'fixture "$BASE" POST /publish -d "$BODY"\n'):
+            with self.subTest(case=len(raw)):
+                path.write_bytes(raw);self.refused()
+        path.write_bytes(self.script)
+        self.assertEqual(len(self.m.retained_expectations('--source-vendor-acl-sql-aliases')),4)
+
+    def test_unique_source_sha_exact_original_path_topics_and_case_flags_required(self):
+        import copy
+        original=copy.deepcopy(self.doc)
+        mutations=(lambda d:d['backups']['arm'].append(copy.deepcopy(d['backups']['arm'][0])),
+                   lambda d:d['backups']['arm'][0].update(sha256='0'*64),
+                   lambda d:d['backups']['arm'][0].update(local_copy='/different-case/archive.tar'),
+                   lambda d:d['backups']['arm'][0].update(local_ok=False),
+                   lambda d:d['backups']['arm'][0].update(protected=False),
+                   lambda d:d['machines']['arm']['emqx'].update(retained_messages=['b1/retained/foreign','b1/retained/generated-two']))
+        for mutate in mutations:
+            self.doc=copy.deepcopy(original);mutate(self.doc);self.write_summary();self.refused()
+        self.doc=original;self.write_summary()
+        self.summary.write_bytes(self.summary.read_bytes().replace(b'"backups":',b'"backups":{},"backups":',1));self.refused()
+
+    def test_original_files_refuse_symlink_hardlink_world_write_and_replacement_during_read(self):
+        path=self.seed/'emqx-body.sh';saved=self.root/'original';path.rename(saved);path.symlink_to(saved)
+        self.refused();path.unlink();saved.rename(path)
+        os.link(path,self.root/'alias');self.refused();(self.root/'alias').unlink()
+        path.chmod(0o666);self.refused();path.chmod(0o664)
+        read=self.m._read_original
+        def changed(p,limit):
+            raw=read(p,limit)
+            if p==self.summary:
+                # Rewrite the first producer only after its own bounded read.
+                (self.seed/'emqx-body.sh').write_bytes(self.script+b'# changed\n')
+            return raw
+        with patch.object(self.m,'_read_original',side_effect=changed):self.refused()
