@@ -1,0 +1,15 @@
+{
+  "source_commit": "b01330f8b7f9dc3b8091a61a81102ede9000e3a4",
+  "scope": "actual ARM source Capture with pinned message schema fields; no target or restore",
+  "exit": 1,
+  "elapsed_seconds": 10.28982710186392,
+  "fixed_phases": [
+    "SOURCE HOCON_SYNTAX_REPUBLISH_PAYLOAD_UNKNOWN_ROOT REFUSED",
+    "ARM POSTFLIGHT PASSED"
+  ],
+  "unpublished_stdout_lines": 0,
+  "stderr_bytes_not_published": 0,
+  "stdout_sha256": "310c2d4e6973cfa8eb906811d2c026a542caa9e741290beb488e0c2087415899",
+  "restore_executed": false,
+  "full_scan_performed": false
+}
