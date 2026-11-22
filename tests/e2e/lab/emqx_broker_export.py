@@ -161,11 +161,19 @@ def run_export(root, broker, scan, report):
         '{ok,L0} -> L0; _ -> {ok,L1}=emqx_authn_chains:list_authenticators(<<"mqtt:global">>),L1 end, '
         '[#{id := <<"password_based:built_in_database">>, provider := emqx_authn_mnesia, '
         'enable := true, state := #{user_group := Group,user_id_type := username}}] = Authenticators, '
-        'true = is_binary(Group), io:format("GROUP:~s:END",[base64:encode(Group)]).')
+        '{GroupKind,GroupBytes} = case Group of G when is_binary(G) -> {binary,G}; '
+        'G when is_atom(G) -> {atom,atom_to_binary(G)} end, '
+        'io:format("GROUP:~s:~s:END",[atom_to_binary(GroupKind),base64:encode(GroupBytes)]).')
     group_response = checked('exec',broker,'emqx','eval',group_expression).strip()
     assert group_response.startswith(b'GROUP:') and group_response.endswith(b':ENDok')
     import base64
-    group = base64.b64decode(group_response[6:-6],validate=True)
+    group_kind, group_encoded = group_response[6:-6].split(b':',1)
+    assert group_kind in (b'atom',b'binary')
+    report['native_state_group_type'] = group_kind.decode()
+    row_group_kind = doc['rows'][0]['value'][1]['value'][0]['type']
+    assert row_group_kind in ('atom','binary')
+    report['native_row_group_type'] = row_group_kind
+    group = base64.b64decode(group_encoded,validate=True)
     checks['username_group_bound_to_native_provider_state'] = True
     # Already validated immutable bytes; this callback never executes native code
     # a second time and binds only the same original checkpoint identity.
