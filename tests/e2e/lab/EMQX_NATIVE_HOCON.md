@@ -44,10 +44,13 @@ and context exit cleans it up on success or failure. No entire spool read into
 bytes. Legacy callers without spool_directory retain the original 8MiB memory
 path. Spool retains parent's 256MiB maximum and 12GiB free-space reserve.
 Preflight encrypted layout members (x86 137936119B, arm 117195765B) are NOT
-measurements of the expanded open_addon tar stream. That true expanded size has
-not been safely counted to EOF here. The 256MiB spool bound may still reject it;
-no real-backup fit claim is made. Synthetic capacity evidence from the parent
-is neither real-stream size evidence nor semantic acceptance;
+measurements of the expanded open_addon tar stream. Parent subsequently reports
+ARM fullEOF+tarcomplete at 117760000 expanded bytes / 43 files, proving that ARM
+stream fits 256MiB. This branch did not independently replay that real source.
+x86 remains rejected; no expanded-size/fit claim is made for it. Parent ARM
+inventory includes DCD22, LOG2, DAT1, DCL3: those remain unsupported cold Mnesia,
+not native checkpoints. Synthetic tests and per-file parser success do not
+establish real-source semantic coverage or commercial acceptance;
 unknown archive members and Mnesia still gate. Generated fixtures do not establish
 commercial acceptance.
 
