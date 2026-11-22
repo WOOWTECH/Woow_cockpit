@@ -28,7 +28,23 @@ class OwnerProvision(Provision):
         self.runner = LabOwnerRunner()
         self.fixture = Fixture('woowbk-emqxlab-' + secrets.token_hex(4), 'appowner', image_id)
         self.created = []
-        # Unchanged Provision.create/cleanup own all synthetic resources.
+        self.file_capability = None
+        # Provision still owns all synthetic resources; capability never rebinds them.
+
+    def create(self, base, acl, bootstrap, dashboard):
+        from emqx_owner_fixture_files import _issue
+        if self.file_capability is not None:
+            raise RuntimeError('fixture-files-already-issued')
+        fixture = super().create(base, acl, bootstrap, dashboard)
+        self.file_capability = _issue(self, base, acl, bootstrap)
+        return fixture
+
+    def cleanup(self):
+        from emqx_owner_fixture_files import revoke
+        if self.file_capability is not None:
+            revoke(self.file_capability)
+            self.file_capability = None
+        return super().cleanup()
 
 
 def adapter_factory(fixture, runner):

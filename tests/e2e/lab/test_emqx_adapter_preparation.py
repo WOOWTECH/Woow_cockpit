@@ -191,8 +191,9 @@ class OwnerTests(unittest.TestCase):
         app.raw = {}
         with self.assertRaises(RuntimeError):
             factory(app, log=lambda _:None)
-        self.assertIs(owner.OwnerProvision.create, owner.Provision.create)
-        self.assertIs(owner.OwnerProvision.cleanup, owner.Provision.cleanup)
+        # Capability wrappers now delegate Provision.create/cleanup; their actual
+        # filesystem issuance and revocation are exercised in fixture-files tests.
+        self.assertEqual(owner.OwnerProvision.__bases__, (owner.Provision,))
 
     def test_wrong_host_and_root_refuse(self):
         user = SimpleNamespace(pw_uid=1019,pw_gid=1019,pw_dir='/home/appowner')
