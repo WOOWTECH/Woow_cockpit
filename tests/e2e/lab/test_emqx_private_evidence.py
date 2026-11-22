@@ -41,6 +41,23 @@ class EvidenceTests(unittest.TestCase):
         self.assertEqual(path.stat().st_mode & 0o777, 0o600)
         self.assertEqual(json.loads(path.read_bytes())['coverage'], self.coverage)
 
+    def test_names_only_evidence_keeps_numeric_secrets_blocked_without_emitting_counts(self):
+        registry = Registry()
+        for source in SOURCES:
+            registry.register(source, [b'0', b'1', b'true'] if source == 'backup-key' else [])
+        registry.seal()
+        with self.assertRaises(PrivateFailure):
+            self.write(registry=registry)
+        self.assertEqual(list(self.root.iterdir()), [])
+        self.write(registry=registry, coverage_mode='names')
+        raw = (self.root / 'mqtt.json').read_bytes()
+        registry.scan(raw)
+        self.assertEqual(json.loads(raw)['coverage'], sorted(SOURCES))
+        self.assertNotIn(b'0', raw)
+        self.assertNotIn(b'1', raw)
+        with self.assertRaises(PrivateFailure):
+            registry.scan(b'1')  # No short secret exemption or scanner weakening.
+
     def test_leak_or_missing_registration_creates_no_evidence(self):
         for registry in (Registry(), self.registry):
             if registry is self.registry:

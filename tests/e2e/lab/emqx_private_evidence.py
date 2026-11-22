@@ -15,7 +15,7 @@ PHASES = frozenset(('preflight', 'restore', 'startup', 'mqtt', 'restart', 'clean
 RESULTS = frozenset(('passed', 'failed', 'blocked', 'not-run'))
 
 
-def publish(directory, name, *, registry, phase, result, coverage):
+def publish(directory, name, *, registry, phase, result, coverage, coverage_mode='counts'):
     """Write only names/counts/status, after scanning the identical JSON bytes.
 
     Caller owns a private directory. No overwrite, symlink traversal, arbitrary
@@ -25,14 +25,14 @@ def publish(directory, name, *, registry, phase, result, coverage):
     fd = parent = None
     created = False
     try:
-        if (phase not in PHASES or result not in RESULTS
+        if (coverage_mode not in ('counts', 'names') or phase not in PHASES or result not in RESULTS
                 or not isinstance(name, str)
                 or not re.fullmatch(r'[a-z][a-z0-9-]{0,63}\.json', name)
                 or not isinstance(coverage, dict) or set(coverage) != SOURCES
                 or any(type(v) is not int or not 0 <= v <= 4096 for v in coverage.values())):
             raise ValueError()
         raw = (json.dumps({'phase': phase, 'result': result,
-                           'coverage': coverage}, sort_keys=True) + '\n').encode()
+                           'coverage': coverage if coverage_mode == 'counts' else sorted(coverage)}, sort_keys=True) + '\n').encode()
         # No file is created until the actual consumer registry accepts bytes.
         registry.scan(raw)
         path = Path(directory).absolute()

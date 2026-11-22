@@ -84,7 +84,7 @@ def login_preflight(*, source_registry, source_counts, target_readers,
                                          + counts.get('runtime-login-token', 0))
         combined = CombinedRegistry(source_registry, runtime, companions)
         evidence = publish(evidence_directory, evidence_name, registry=combined,
-                           phase='preflight', result='passed', coverage=coverage)
+                           phase='preflight', result='passed', coverage=coverage, coverage_mode='names')
         return PrivateSession(credential, combined, coverage, evidence)
     except (KeyboardInterrupt, SystemExit):
         raise PrivateFailure('runtime-private-cancelled') from None
