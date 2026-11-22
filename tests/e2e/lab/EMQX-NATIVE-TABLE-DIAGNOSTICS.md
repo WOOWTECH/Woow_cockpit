@@ -1,9 +1,10 @@
 # Code-only native-table diagnostic increment
 
 Base 68e798e; branch codex/emqx-native-table-diagnostics-20261122;
-worktree /tmp/ha-emqx-native-table-diagnostics-20261122. No dev-d, lab wrapper,
-container, native runtime or source/secret operations were run for this change.
-Main retains dev-d ownership. This is implementation, not an independent review.
+worktree /tmp/ha-emqx-native-table-diagnostics-20261122. Initial delivery was
+code-only. A subsequent explicit handoff authorized exactly one fresh synthetic
+run; its result and ownership return are recorded below. This is implementation,
+not an independent review.
 
 The fixed expression now records table_storage, table_fragments, table_type,
 table_lock, schema_metadata, table_size, table_schema, table_fold,
@@ -47,3 +48,40 @@ These are code/local transport tests, NOT native Erlang execution/parse proof.
 Owner's next authorized fresh target run must first use the existing native
 parse preflight, then capture its fixed inner stage/code. No dev-d run was made
 or requested by this branch, and no old failure evidence was rewritten.
+
+
+## Actual follow-up: single authorized fresh attempt5
+
+Tested source: dda74a05c8d1933f719e4655b1d5809bcd8826e7.
+Command: run_emqx_owner_target.sh, holding BOTH required locks and transporting
+only through owner.sh. New synthetic pinned5.8.9 broker, not an old export14 run,
+no production credentials, real HA startup, external MQTT clients or ticker.
+No second attempt was run after the explicit one-attempt handoff.
+
+Actual result: native fixed-expression parse PASSED, native eval transport PASSED,
+broker readiness and actual zero-client checks before/after capture PASSED.
+Capture refused with the precise fixed enums:
+
+    native_fixed_stage: table_storage
+    native_fixed_reason: storage_external
+
+This proves the native storage_type returned an external tuple that the original
+policy rejects. It does NOT distinguish builtin null, RocksDB or an unreviewed
+external backend; no alias/module/table name or raw abort payload was exposed.
+No minimally supported acceptance fix is justified from this class-only evidence.
+Storage/fragment/type rules were left UNCHANGED; arbitrary ext was not allowed,
+ignored, treated as empty, or bypassed. Full target registry remains unaccepted,
+source completeness is not assessed here and commercial acceptance not claimed.
+
+Parser container, broker, clients and private files cleaned up. Wrapper EXIT
+postflight: network none, ports empty, owned workload containers/volumes zero.
+The tool session exited and both lock FDs closed. DEV-D OWNERSHIP RETURNED TO MAIN
+immediately after this postflight; no subsequent dev-d calls were made here.
+
+Evidence retained without alteration of previous failures:
+evidence/emqx-owner-target-20261122/attempt5-inner-stages.jsonl.
+The existing local diagnostic regression already covers this exact stage/reason
+frame and rejects arbitrary table/abort payloads; no native retry or policy change
+was introduced to obtain a green result. Main may determine exact registered
+backend identity through a later explicitly scoped, fixed-enum observation before
+considering any narrow backend implementation. That is not claimed complete.
