@@ -30,7 +30,10 @@ KEY_CREDS=Path('/home/woowtechopenclaw/.woowbk-lab/secrets/ha-import-creds.env')
 PRIVATE_PARENT=Path('/home/woowtechopenclaw/.woowbk-lab')
 SOURCE_SUMMARY=PRIVATE_PARENT/'evidence/b1-source/summary.json'
 SEED_ROOT=Path('/tmp/claude-1000/-home-woowtechopenclaw/fbefdf50-77b9-4f2f-a609-4d7d82a72cee/scratchpad/phase3/testha-b1')
+IMPORTED_MODES=frozenset((b'M',b'N'))
 MODES={
+ '--real-restore-mnesia-acl':('--source-vendor-acl-sql-aliases',b'M',False),
+ '--x86-real-restore-mnesia-acl':('--x86-source-vendor-acl-sql-aliases',b'N',False),
  '--real-restore':('--source-vendor-acl-sql-aliases',b'G',False),
  '--x86-real-restore':('--x86-source-vendor-acl-sql-aliases',b'I',False),
  '--real-restore-staged':('--source-vendor-acl-sql-aliases',b'g',True),
@@ -52,7 +55,7 @@ class TransportRefused(ValueError):
 # Reuse the original bounded, private extraction/dependency loader, including its
 # finally cleanup. No independent tar parser or key/archive frame implementation.
 _dispatch="""
- if mode in (b'G',b'I',b'g',b'i',b'T',b'U'):
+ if mode in (b'G',b'I',b'g',b'i',b'M',b'N',b'T',b'U'):
   from emqx_real_owner_transport import owner_main
   raise SystemExit(owner_main(mode))
 """
@@ -225,7 +228,7 @@ def bundle_code():
     selected=[p for p in paths if (Path(p).name.startswith('emqx_') and Path(p).suffix in ('.py','.escript','.expr'))
               or Path(p).name=='ha_real_fixture.py']
     required={'emqx_real_owner_transport.py','emqx_real_owner_workflow.py','emqx_post_restore_values.py',
-              'emqx_owner_fixture_files.py','emqx_target_fixture_policy.py','emqx_adapter_mqtt.py','emqx_issued_target_probe.py','emqx_retained_history.py','emqx_source_api_validator.py','emqx_source_mqtt_negative.py','emqx_owned_client.py'}
+              'emqx_owner_fixture_files.py','emqx_target_fixture_policy.py','emqx_adapter_mqtt.py','emqx_issued_target_probe.py','emqx_retained_history.py','emqx_source_api_validator.py','emqx_source_mqtt_negative.py','emqx_owned_client.py','emqx_imported_acl_target_mode.py','emqx_mnesia_acl_target_variant.py'}
     if not required<={Path(p).name for p in selected}:raise ValueError()
     raw=subprocess.check_output(['git','archive','HEAD','backup-engine/woowbackup',*selected],cwd=ROOT)
     if not 0<len(raw)<=16*1024*1024:raise ValueError()
@@ -342,7 +345,9 @@ def owner_main(mode):
         with tempfile.TemporaryDirectory(prefix='emqx-real-owner-private-',dir=Path.home()) as d:
             parent=Path(d);parent.chmod(0o700)
             admitted=AdmittedStream(sys.stdin.buffer)
-            result=run_real_framed_owner(admitted,private_parent=parent,source_mode=source_mode,no_live=no_live)
+            from emqx_imported_acl_target_mode import FILE_BASELINE,IMPORTED_MNESIA
+            result=run_real_framed_owner(admitted,private_parent=parent,source_mode=source_mode,no_live=no_live,
+                target_mode=IMPORTED_MNESIA if mode in IMPORTED_MODES else FILE_BASELINE)
         if no_live:
             if result!={'scope':'sha-bound-ciphertext-and-client-frame-only','runtime':'not-run',
                     'source_authentication':'not-performed','restore':'not-performed'}:raise ValueError()

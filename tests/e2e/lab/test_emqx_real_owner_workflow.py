@@ -354,6 +354,107 @@ class FoundationTests(unittest.TestCase):
         with patch.object(m,'_mqtt_private',side_effect=wrong_retain):
             with self.assertRaises(ValueError):m.validate_source_mqtt(self.provision,clients)
 
+    def test_imported_acl_mqtt_requires_sensor_puback_lab_control_gateway_retained_and_sensor_deny(self):
+        clients=self.clients();clients.fields.update(lab_user=b'lab',lab_password=b'generated-lab-password')
+        calls=[]
+        def reply(provision,provided,role,**kw):
+            self.assertIs(provided,clients);calls.append((role,kw))
+            if kw.get('publish'):
+                return SimpleNamespace(returncode=0,stdout=b'Client generated received CONNACK (0)\nClient generated received PUBACK (Mid: 1, RC:0)\n',stderr=b'')
+            if kw.get('wrong_password'):return self.mqtt_reply(code=134,connack=134)
+            if kw.get('retained'):
+                i=1 if kw['topic'].endswith('/one') else 2
+                return SimpleNamespace(returncode=0,stdout=b'1:'+clients.fields['retained_topic'+str(i)]+b':'+clients.fields['retained_payload'+str(i)].hex().encode()+b'\n',stderr=b'')
+            return self.mqtt_reply(suback=135 if kw['topic']=='b1/secret/#' else 1)
+        with patch.object(m,'_mqtt_private',side_effect=reply):
+            m.validate_source_mqtt(self.provision,clients,target_mode=m.IMPORTED_MNESIA)
+        self.assertEqual([(r,k['topic']) for r,k in calls if k.get('publish')],
+            [('sensor','b1/sensor/b1-sensor/probe'),('lab','lab/owner-probe')])
+        self.assertIn(('sensor',{'topic':'b1/secret/#'}),calls)
+        for raw,code in ((b'received CONNACK (0)',0),(b'received CONNACK (0)\nreceived PUBACK (Mid: 1, RC:135)',0),
+                (b'received CONNACK (0)\nreceived PUBACK (Mid: 2, RC:0)',0),
+                (b'received CONNACK (0)\nreceived PUBACK (Mid: 1, RC:0)',27)):
+            with patch.object(m,'_mqtt_private',return_value=SimpleNamespace(returncode=code,stdout=raw,stderr=b'')):
+                with self.assertRaises(m.RealOwnerRefused) as caught:m._validate_phase_mqtt(self.provision,clients,m.IMPORTED_MNESIA)
+                self.assertEqual(caught.exception.phase,'mqtt')
+
+    def test_actual_owner_provisions_selected_policy_only_after_original_source_frame_and_history(self):
+        from contextlib import contextmanager
+        @contextmanager
+        def staged(*args,**kw):
+            self.assertEqual(kw['source_mode'],m.SOURCE_MODES[0])
+            yield self.root/'generated-cipher',b'generated-key',self.root,object(),self.root
+        for target_mode in (m.FILE_BASELINE,m.IMPORTED_MNESIA):
+            seen=[]
+            def create(base,acl,bootstrap,dashboard):
+                seen.append((base,acl,bootstrap));raise ValueError('generated-stop-after-policy')
+            with patch.object(m,'OwnerProvision',return_value=self.provision),patch.object(m,'_full_restore_budget'), \
+                 patch.object(m,'staged_owner_frame',side_effect=staged),patch.object(m,'_payload_history',return_value=object()) as history, \
+                 patch.object(self.provision,'create',side_effect=create),patch.object(self.provision,'cleanup'):
+                with self.assertRaises(m.RealOwnerRefused) as caught:
+                    m.run_real_framed_owner(io.BytesIO(self.owner_prefix()),private_parent=self.root,
+                        source_mode=m.SOURCE_MODES[0],no_live=False,target_mode=target_mode)
+            self.assertEqual(caught.exception.phase,'provision');history.assert_called_once()
+            self.assertEqual(len(seen),1);base,acl,bootstrap=seen[0]
+            if target_mode==m.IMPORTED_MNESIA:
+                self.assertIn(b'type=built_in_database,enable=true',base)
+                self.assertEqual(acl,b'{allow, {username, "lab"}, all, ["lab/#"]}.\n')
+                self.assertNotIn(b'b1-',acl)
+            else:
+                self.assertNotIn(b'type=built_in_database',base);self.assertEqual(acl,m._target_acl())
+            self.assertTrue(bootstrap.startswith(b'user_id,password,is_superuser\nlab,'))
+
+    def test_publish_transport_private_config_fixed_topic_owned_cleanup_and_no_retain(self):
+        import json
+        from emqx_owned_client import LABEL
+        from emqx_adapter_mqtt import CLIENT
+        clients=self.clients();running={};configs=[];removed=[]
+        def podman(*args,**kwargs):
+            if args[:2]==('container','exists'):
+                return SimpleNamespace(returncode=0 if any(args[2] in (n,d['Id']) for n,d in running.items()) else 1,stdout=b'',stderr=b'')
+            if args[:2]==('container','inspect'):
+                return SimpleNamespace(returncode=0,stdout=json.dumps([running[args[2]]]).encode(),stderr=b'')
+            if args[0]=='rm':
+                self.assertEqual(args[-1],'a'*64);removed.append(args[-1]);running.clear()
+                return SimpleNamespace(returncode=0,stdout=b'',stderr=b'')
+            name=args[args.index('--name')+1];label,nonce=args[args.index('--label')+1].split('=',1)
+            self.assertEqual(label,LABEL)
+            running[name]={'Id':'a'*64,'Name':name,'Image':CLIENT,'Config':{'Labels':{LABEL:nonce}}}
+            path=Path(args[args.index('-v')+1].removesuffix(':/work:ro'))/'mosquitto_pub';configs.append(path)
+            self.assertEqual(path.stat().st_mode&0o777,0o600)
+            self.assertIn(b'-P '+clients.fields['sensor_password'],path.read_bytes())
+            self.assertIn(b'-t b1/sensor/b1-sensor/probe',path.read_bytes())
+            self.assertNotIn(clients.fields['sensor_password'].decode(),repr(args))
+            self.assertNotIn('b1/sensor/b1-sensor/probe',args)
+            self.assertIn('--entrypoint=mosquitto_pub',args);self.assertIn('--image-volume=ignore',args)
+            self.assertNotIn('-r',args);self.assertEqual(args[-3:],('-m','owner-probe','-d'))
+            return SimpleNamespace(returncode=0,stdout=b'generated-private-ack',stderr=b'')
+        with patch.object(self.runner,'podman',side_effect=podman),patch.object(m,'_ram_client_parent',return_value=self.root):
+            m._mqtt_private(self.provision,clients,'sensor',topic='b1/sensor/b1-sensor/probe',publish=True)
+        self.assertEqual(removed,['a'*64]);self.assertTrue(all(not p.exists() for p in configs))
+        for kw in ({'topic':'b1/secret/arbitrary','publish':True},{'topic':'b1/sensor/b1-sensor/probe','publish':True,'retained':True}):
+            with patch.object(self.runner,'podman') as run:
+                with self.assertRaises(ValueError):m._mqtt_private(self.provision,clients,'sensor',**kw)
+                run.assert_not_called()
+
+    def test_imported_policy_requires_private_non_superuser_roles_and_all_acl_scopes(self):
+        from test_emqx_source_api_validator import SourceAPITests
+        issued=SourceAPITests();issued.setUp();self.addCleanup(issued.doCleanups)
+        issued.documents['mqtt_users']['data'].append({'user_id':'b1-sensor','is_superuser':False})
+        issued.documents['mqtt_users']['meta']['count']=2
+        issued.documents['authorization_sources']['sources'].append({'type':'built_in_database','enable':True})
+        observed=issued.run_api();m._assert_imported_acl_api(observed)
+        for mutation in ('superuser','missing_role','disabled_db','client_scope','all_scope'):
+            docs=copy.deepcopy(observed._documents);facts=copy.deepcopy(observed._facts)
+            if mutation=='superuser':observed._documents['mqtt_users']['data'][0]['is_superuser']=True
+            elif mutation=='missing_role':observed._documents['mqtt_users']['data'].pop()
+            elif mutation=='disabled_db':observed._documents['authorization_sources']['sources'][1]['enable']=False
+            elif mutation=='client_scope':observed._facts['acl_clients']['rule_counts']={}
+            else:observed._facts['acl_all']['count']=0
+            with self.assertRaises(m.RealOwnerRefused) as caught:m._assert_imported_acl_api(observed)
+            self.assertEqual(caught.exception.phase,'source_api')
+            observed._documents=docs;observed._facts=facts
+
     def test_mqtt_transport_keeps_inputs_out_of_argv_env_and_cleans_timeout_and_bad_reply(self):
         clients=self.clients()
         import json
@@ -417,7 +518,7 @@ class FoundationTests(unittest.TestCase):
         from test_emqx_owner_preflight import JoinTests
         from emqx_private_boundary import PrivateFailure
         joined=JoinTests();joined.setUp();self.addCleanup(joined.doCleanups)
-        clients=self.clients()
+        clients=self.clients();clients.fields.update(lab_user=b'lab',lab_password=b'generated-target-lab-control-password')
         with joined.source() as (captured,binding):
             session=joined.join(captured)
             artifacts=list(joined.evidence.iterdir())
@@ -430,7 +531,7 @@ class FoundationTests(unittest.TestCase):
             actual=session.registry._runtime.summary()
             self.assertEqual(session.coverage['target-bootstrap'],actual['target-bootstrap']+
                 actual['runtime-login-input']+actual['runtime-login-token'])
-            for name in (*m.CLIENT_FIELDS[:6],'negative_password'):
+            for name in (*m.CLIENT_FIELDS[:6],'negative_password','lab_user','lab_password'):
                 with self.subTest(name=name), self.assertRaises(PrivateFailure):
                     session.registry.scan(clients.fields[name])
             import base64
@@ -450,7 +551,7 @@ class FoundationTests(unittest.TestCase):
             (self.root/'.config'/self.fixture.prefix/'fail-once').unlink()
             raise flows.RolledBack(BackupError('job-failed','generated'),{'rolled_back':True})
         with patch.object(flows,'run_restore',side_effect=restore), patch.object(m,'_ready'), \
-             patch.object(m,'validate_source_mqtt',side_effect=lambda p,c:events.append('mqtt')) as mqtt:
+             patch.object(m,'validate_source_mqtt',side_effect=lambda p,c,**kw:events.append('mqtt')) as mqtt:
             m._restore_and_rollback(ctx,app,self.provision,'generated-package',state,clients=clients)
         self.assertEqual(events,['restore','mqtt','restore','mqtt','mqtt'])
         self.assertEqual(mqtt.call_count,3)
@@ -499,7 +600,7 @@ class FoundationTests(unittest.TestCase):
             self.assertIs(prior,scanners[index]);events.append('capture')
             return scanners[index+1]
         with patch.object(flows,'run_restore',side_effect=restore), patch.object(m,'_ready'), \
-             patch.object(m,'validate_source_mqtt',side_effect=lambda p,c:events.append('mqtt')), \
+             patch.object(m,'validate_source_mqtt',side_effect=lambda p,c,**kw:events.append('mqtt')), \
              patch.object(m,'_post_activity_capture',side_effect=capture):
             result=m._restore_and_rollback(ctx,app,self.provision,'generated-package',state,
                 clients=clients,session=session)
@@ -655,12 +756,13 @@ class FoundationTests(unittest.TestCase):
         def native(provision,prior):
             i=events.count('capture');self.assertIs(prior,scanners[i]);events.append('capture');return scanners[i+1]
         with patch.object(flows,'run_restore',side_effect=restore),patch.object(m,'_ready'), \
-             patch.object(m,'validate_source_mqtt',side_effect=lambda *a:events.append('mqtt')), \
+             patch.object(m,'validate_source_mqtt',side_effect=lambda *a,**kw:events.append('mqtt')), \
              patch.object(m,'_source_api_activity',side_effect=api),patch.object(m,'_source_negative_activity',side_effect=negative), \
-             patch.object(m,'_post_activity_capture',side_effect=native):
+             patch.object(m,'_post_activity_capture',side_effect=native), \
+             patch.object(m,'_assert_imported_acl_api',side_effect=lambda observed:events.append('acl_api')) as acl_api:
             result=m._restore_and_rollback(ctx,app,self.provision,'generated-package',state,clients=clients,
-                session=session,api_credentials=credentials,api_results=api_results,negative_results=negative_results)
-        self.assertEqual(events,['restore','mqtt','api','negative','capture','restore','mqtt','api','negative','capture','mqtt','api','negative','capture'])
+                session=session,api_credentials=credentials,api_results=api_results,negative_results=negative_results,target_mode=m.IMPORTED_MNESIA)
+        self.assertEqual(events,['restore','mqtt','api','negative','acl_api','capture','restore','mqtt','api','negative','acl_api','capture','mqtt','api','negative','acl_api','capture'])
         self.assertEqual(api_results,observations);self.assertEqual(negative_results,negative_observations)
         self.assertIs(result,scanners[-1]);self.assertIs(session.registry,original)
 

@@ -22,6 +22,7 @@ from types import SimpleNamespace
 
 from emqx_adapter_owner import OwnerProvision, LabOwnerRunner
 from emqx_adapter_fixture import Fixture
+from emqx_imported_acl_target_mode import FILE_BASELINE, IMPORTED_MNESIA, target_policy_for_mode
 from emqx_arm_source_owner import validate_source_capture, _exact
 from emqx_captured_candidate import build_captured_candidate
 from emqx_fresh_owner_workflow import staged_owner_frame
@@ -216,13 +217,14 @@ def _package_same_target(ctx,app,provision,volumes,root):
     return result['backup_id']
 
 
-def _restore_and_rollback(ctx,app,provision,backup_id,state,*,clients=None,session=None,api_credentials=None,api_results=None,negative_results=None):
+def _restore_and_rollback(ctx,app,provision,backup_id,state,*,clients=None,session=None,api_credentials=None,api_results=None,negative_results=None,target_mode=FILE_BASELINE):
     """Product restore, destructive one-shot startup failure, automatic rollback.
 
     Live callers supply source clients/API credentials and require positive MQTT,
     API and negative MQTT validation before native capture after every last client activity. File-policy authorization does not
     prove source Mnesia ACL behavior. Never report commercial acceptance.
     """
+    if target_mode not in (FILE_BASELINE,IMPORTED_MNESIA):raise RealOwnerRefused('profile')
     _assert_binding(provision,app)
     post_registry=session.registry if session is not None else None
     if api_credentials is not None and (type(api_results) is not list or api_results or clients is None or session is None):
@@ -233,9 +235,10 @@ def _restore_and_rollback(ctx,app,provision,backup_id,state,*,clients=None,sessi
     outcome=flows.run_restore(ctx,request)
     if outcome.get('rolled_back') or not outcome.get('changed'):raise ValueError()
     _ready(provision)
-    if clients is not None:validate_source_mqtt(provision,clients)
+    if clients is not None:_validate_phase_mqtt(provision,clients,target_mode)
     if api_credentials is not None:api_results.append(_source_api_activity(provision,post_registry,session,clients,api_credentials))
     if api_credentials is not None:negative_results.append(_source_negative_activity(provision,session,clients,api_results[-1]))
+    if api_credentials is not None and target_mode==IMPORTED_MNESIA:_assert_imported_acl_api(api_results[-1])
     if session is not None:post_registry=_post_activity_capture(provision,post_registry)
     r,f=provision.runner,provision.fixture
     directory='.config/systemd/user/'+f.unit+'.d'
@@ -257,9 +260,10 @@ def _restore_and_rollback(ctx,app,provision,backup_id,state,*,clients=None,sessi
             if error.result.get('rolled_back') is not True or not state['injected']:raise ValueError()
         else:raise ValueError()
         _ready(provision)
-        if clients is not None:validate_source_mqtt(provision,clients)
+        if clients is not None:_validate_phase_mqtt(provision,clients,target_mode)
         if api_credentials is not None:api_results.append(_source_api_activity(provision,post_registry,session,clients,api_credentials))
         if api_credentials is not None:negative_results.append(_source_negative_activity(provision,session,clients,api_results[-1]))
+        if api_credentials is not None and target_mode==IMPORTED_MNESIA:_assert_imported_acl_api(api_results[-1])
         if session is not None:post_registry=_post_activity_capture(provision,post_registry)
         if r.stat_files([marker])[marker]['type']!='missing':raise ValueError()
     finally:
@@ -270,9 +274,10 @@ def _restore_and_rollback(ctx,app,provision,backup_id,state,*,clients=None,sessi
         if dropin_created:r.systemctl('daemon-reload')
     r.systemctl('restart','--',f.unit,timeout=180)
     _ready(provision)
-    if clients is not None:validate_source_mqtt(provision,clients)
+    if clients is not None:_validate_phase_mqtt(provision,clients,target_mode)
     if api_credentials is not None:api_results.append(_source_api_activity(provision,post_registry,session,clients,api_credentials))
     if api_credentials is not None:negative_results.append(_source_negative_activity(provision,session,clients,api_results[-1]))
+    if api_credentials is not None and target_mode==IMPORTED_MNESIA:_assert_imported_acl_api(api_results[-1])
     if session is not None:post_registry=_post_activity_capture(provision,post_registry)
     return post_registry
 
@@ -522,6 +527,7 @@ def _register_client_inputs(session,clients,evidence,*,api_credentials=None):
     runtime=session.registry._runtime
     runtime.summary()  # still requires actual complete target, never an empty ack
     inputs=[clients.fields[name] for name in (*CLIENT_FIELDS[:6],'negative_password')]
+    if 'lab_password' in clients.fields:inputs.extend((clients.fields['lab_user'],clients.fields['lab_password']))
     if api_credentials is not None:
         if type(api_credentials) is not SourceAPICredentials:raise ValueError()
         import base64
@@ -547,8 +553,8 @@ def _register_client_inputs(session,clients,evidence,*,api_credentials=None):
     session.coverage=coverage  # re-derived actual summary, never hand-filled counts
 
 
-def _mqtt_private(provision,clients,role,*,topic,retained=False,wrong_password=None):
-    """Bounded pinned Mosquitto subscription only, never publish source payloads.
+def _mqtt_private(provision,clients,role,*,topic,retained=False,wrong_password=None,publish=False):
+    """Bounded pinned Mosquitto; only fixed non-retained synthetic probe publishes.
 
     Uses private config, retained bit/topic/hex-payload formatting per official
     mosquitto_sub manual (https://mosquitto.org/man/mosquitto_sub-1.html).
@@ -560,13 +566,15 @@ def _mqtt_private(provision,clients,role,*,topic,retained=False,wrong_password=N
     user=clients.fields[role+'_user'];password=wrong_password or clients.fields[role+'_password']
     if re.fullmatch(rb'[A-Za-z0-9_-]{1,128}',user) is None or re.fullmatch(rb'[A-Za-z0-9_-]{1,128}',password) is None:
         raise ValueError()
+    if type(publish) is not bool or (publish and (retained or wrong_password is not None or (role,topic) not in (('sensor','b1/sensor/b1-sensor/probe'),('lab','lab/owner-probe')))):raise ValueError()
+    program='mosquitto_pub' if publish else 'mosquitto_sub'
     topic_raw=topic.encode('ascii')
-    if topic not in ('b1/retained/#','b1/secret/#') and re.fullmatch(rb'b1/retained/[A-Za-z0-9_/-]{1,110}',topic_raw) is None:
+    if topic not in ('b1/retained/#','b1/secret/#','b1/sensor/b1-sensor/probe','lab/owner-probe') and re.fullmatch(rb'b1/retained/[A-Za-z0-9_/-]{1,110}',topic_raw) is None:
         raise ValueError()
     client=f.prefix+'-mqtt-'+secrets.token_hex(6)
     with tempfile.TemporaryDirectory(prefix=client+'-',dir=_ram_client_parent()) as directory:
         root=Path(directory);root.chmod(0o700)
-        fd=os.open(root/'mosquitto_sub',os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o600)
+        fd=os.open(root/program,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o600)
         with os.fdopen(fd,'wb') as config:
             os.fchmod(config.fileno(),0o600);config.write(b'-u '+user+b'\n-P '+password+b'\n-t '+topic_raw+b'\n')
         with owned_client(r,client) as owned_args:
@@ -574,9 +582,9 @@ def _mqtt_private(provision,clients,role,*,topic,retained=False,wrong_password=N
                 '--network=container:'+f.prefix,'--userns=keep-id:uid=1000,gid=1000','--user=1000:1000',
                 '--memory=64m','--cpus=0.25','--pids-limit=32','--timeout=15','--stop-timeout=1',
                 '-e','HOME=/work','-e','XDG_CONFIG_HOME=/work','-v',str(root)+':/work:ro',
-                '--entrypoint=mosquitto_sub',CLIENT,'-h','127.0.0.1','-p','1883','-V','mqttv5',
+                '--entrypoint='+program,CLIENT,'-h','127.0.0.1','-p','1883','-V','mqttv5',
                 '-q','1','-i',client]
-            command += ['-C','1','-W','5','-F','%r:%t:%x'] if retained else ['-E','-W','5','-d']
+            command += ['-m','owner-probe','-d'] if publish else (['-C','1','-W','5','-F','%r:%t:%x'] if retained else ['-E','-W','5','-d'])
             result=r.podman(*command,timeout=20,check=False,max_output=65536)
             if (type(result.returncode) is not int or any(type(x) is not bytes or len(x)>65536
                     for x in (result.stdout,result.stderr))):raise ValueError()
@@ -589,15 +597,23 @@ def _reason(output,kind):
     return int(found[0])
 
 
-def validate_source_mqtt(provision,clients):
+def validate_source_mqtt(provision,clients,*,target_mode=FILE_BASELINE):
     """Explicit source CONNACK, gateway allow, sensor deny and two retained bytes.
 
-    B1 public fixture roles/topics with the COMPILED TARGET FILE ACL: gateway
-    retained reads allowed, sensor secret subscriptions denied. This does not
-    prove source Mnesia ACL chain behavior. No guessed publish permission.
+    FILE baseline tests its compiled file grants only. Explicit imported mode
+    adds sensor QoS1 PUBACK and target lab control against a lab-only file ACL;
+    source-role grants then require the imported database and non-superuser API
+    observations. PUBACK0/16 are successful MQTTv5 acknowledgements, not delivery
+    proof. Source payloads are never published by these fixed probes.
     Timeout/transport errors never establish protocol authorization or denial.
     """
-    if type(clients) is not SourceClients:raise ValueError()
+    if type(clients) is not SourceClients or target_mode not in (FILE_BASELINE,IMPORTED_MNESIA):raise ValueError()
+    if target_mode==IMPORTED_MNESIA:
+        for role,topic in (('sensor','b1/sensor/b1-sensor/probe'),('lab','lab/owner-probe')):
+            result=_mqtt_private(provision,clients,role,topic=topic,publish=True)
+            output=result.stdout+b'\n'+result.stderr
+            ack=re.findall(rb'received PUBACK \(Mid: ([0-9]{1,5}), RC: ?([0-9]{1,3})\)',output)
+            if result.returncode!=0 or _reason(output,'connack')!=0 or len(ack)!=1 or ack[0][0]!=b'1' or ack[0][1] not in (b'0',b'16'):raise ValueError()
     for role in ('sensor','gateway','third'):
         result=_mqtt_private(provision,clients,role,topic='b1/retained/#')
         output=result.stdout+b'\n'+result.stderr
@@ -616,6 +632,32 @@ def validate_source_mqtt(provision,clients):
         payload=clients.fields['retained_payload'+str(index)]
         result=_mqtt_private(provision,clients,'gateway',topic=topic.decode('ascii'),retained=True)
         if result.returncode or result.stdout!=b'1:'+topic+b':'+payload.hex().encode()+b'\n':raise ValueError()
+
+
+def _validate_phase_mqtt(provision,clients,target_mode):
+    try:validate_source_mqtt(provision,clients,target_mode=target_mode)
+    except BaseException:raise RealOwnerRefused('mqtt') from None
+
+
+def _assert_imported_acl_api(result):
+    from emqx_source_api_validator import SourceAPIResult
+    try:
+        if type(result) is not SourceAPIResult:raise ValueError()
+        docs=result.private_documents()
+        users=docs['mqtt_users']['data']
+        for name in ('b1-sensor','b1-gateway'):
+            matches=[r for r in users if r.get('user_id')==name]
+            if len(matches)!=1 or matches[0].get('is_superuser') is not False:raise ValueError()
+        sources=docs['authorization_sources']
+        if type(sources) is dict:sources=sources['sources']
+        if [(r['type'],r['enable']) for r in sources]!=[('file',True),('built_in_database',True)]:raise ValueError()
+        if docs['authorization_settings'].get('no_match')!='deny':raise ValueError()
+        # API helper has already checked complete user/clientid/all ACL inventory.
+        facts=result.private_facts()
+        if (facts['acl_users']['rule_counts']!={'b1-gateway':2,'b1-sensor':2}
+                or facts['acl_clients']['rule_counts']!={'b1-dashboard-panel':1}
+                or facts['acl_all']['count']!=1):raise ValueError()
+    except BaseException:raise RealOwnerRefused('source_api') from None
 
 
 def final_private_receipt(registry):
@@ -647,7 +689,7 @@ def _payload_history(source_mode,source,key,spool,profile,clients):
     return result
 
 
-def run_real_framed_owner(stream,*,private_parent,source_mode,no_live=True):
+def run_real_framed_owner(stream,*,private_parent,source_mode,no_live=True,target_mode=FILE_BASELINE):
     """Internal fixed-frame operation; NO CLI/host mode or restore right added.
 
     Default no_live validates only the fixed client prefix and ciphertext frame.
@@ -659,7 +701,7 @@ def run_real_framed_owner(stream,*,private_parent,source_mode,no_live=True):
     provision=None
     create_attempted=False
     try:
-        if source_mode not in SOURCE_MODES or type(no_live) is not bool:raise ValueError()
+        if source_mode not in SOURCE_MODES or type(no_live) is not bool or target_mode not in (FILE_BASELINE,IMPORTED_MNESIA):raise ValueError()
         phase='observer_dependency'
         observer_factory=_composite_observer_factory()
         phase='realm'
@@ -681,9 +723,11 @@ def run_real_framed_owner(stream,*,private_parent,source_mode,no_live=True):
             phase='provision'
             # All bootstrap inputs belong solely to THIS invocation/fixture.
             dashboard=secrets.token_hex(24).encode()
-            bootstrap=('user_id,password,is_superuser\nlab,'+secrets.token_hex(24)+',false\n').encode()
-            base=_target_base()
-            acl=_target_acl()
+            lab_password=secrets.token_hex(24).encode()
+            bootstrap=b'user_id,password,is_superuser\nlab,'+lab_password+b',false\n'
+            policy=target_policy_for_mode(target_mode)
+            base,acl=policy.base,policy.acl
+            if target_mode==IMPORTED_MNESIA:clients.fields.update(lab_user=b'lab',lab_password=lab_password)
             create_attempted=True
             provision.create(base,acl,bootstrap,dashboard)
             _opt_in_private_unit(provision)
@@ -736,7 +780,7 @@ def run_real_framed_owner(stream,*,private_parent,source_mode,no_live=True):
                 api_results=[];negative_results=[]
                 try:
                     post_registry=_restore_and_rollback(ctx,app,provision,backup_id,state,clients=clients,session=session,
-                        api_credentials=api_credentials,api_results=api_results,negative_results=negative_results)
+                        api_credentials=api_credentials,api_results=api_results,negative_results=negative_results,target_mode=target_mode)
                 except RealOwnerRefused as error:
                     phase=error.phase
                     raise
@@ -746,8 +790,8 @@ def run_real_framed_owner(stream,*,private_parent,source_mode,no_live=True):
         phase='payload_history';retained_history.scan(receipt)
         phase='source_api';_scan_source_api_receipt(receipt,api_results,session)
         phase='source_negative';_scan_source_negative_receipt(receipt,negative_results,api_results,session)
-        return {'evidence_bytes':receipt,'scope':'private-same-target-product-flow', 'client_validation':'source-login-target-file-acl-retained-after-restore-rollback-restart',
-                'source_mnesia_acl_behavior':'not-assessed-target-file-authorizer',
+        return {'evidence_bytes':receipt,'scope':'private-same-target-product-flow', 'client_validation':('source-login-imported-mnesia-acl-retained-after-restore-rollback-restart' if target_mode==IMPORTED_MNESIA else 'source-login-target-file-acl-retained-after-restore-rollback-restart'),
+                'source_mnesia_acl_behavior':('mqtt-validated-imported-database-with-lab-only-file' if target_mode==IMPORTED_MNESIA else 'not-assessed-target-file-authorizer'),
                 'source_final_state':'not-assessed','commercial_acceptance':'not-assessed'}
     except RealOwnerRefused:
         raise

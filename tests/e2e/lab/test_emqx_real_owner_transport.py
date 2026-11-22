@@ -104,6 +104,33 @@ class TransportTests(unittest.TestCase):
                 self.assertEqual(caught.exception.phase,expected)
             finally:child.wait();child.stdout.close()
 
+    def test_fixed_imported_mode_dispatch_preserves_independent_source_frame(self):
+        import emqx_real_owner_transport as m
+        import emqx_real_owner_workflow as workflow
+        import struct
+        from types import SimpleNamespace
+        for flag in ('--real-restore-mnesia-acl','--x86-real-restore-mnesia-acl'):
+            source_mode,wire,no_live=m.MODES[flag]
+            self.assertFalse(no_live);self.assertIn(wire,m.IMPORTED_MODES)
+            self.assertIn(repr(wire),m._dispatch)
+            body=b'generated-original-source-frame'
+            stream=io.BytesIO(struct.pack('!Q',len(body))+body+m.ADMISSION)
+            output=io.BytesIO()
+            def run(admitted,**kw):
+                self.assertEqual(kw['source_mode'],source_mode)
+                self.assertEqual(kw['target_mode'],workflow.IMPORTED_MNESIA)
+                self.assertFalse(kw['no_live']);self.assertEqual(admitted.read(len(body)),body)
+                self.assertEqual(admitted.read(1),b'');admitted.finish()
+                return {'evidence_bytes':m.canonical_receipt()}
+            with patch('emqx_arm_source_owner._owner_realm',return_value=True), \
+                 patch.object(workflow,'run_real_framed_owner',side_effect=run) as entry, \
+                 patch.object(m.sys,'stdin',SimpleNamespace(buffer=stream)), \
+                 patch.object(m.sys,'stdout',SimpleNamespace(buffer=output)):
+                self.assertEqual(m.owner_main(wire),0)
+            entry.assert_called_once()
+            from emqx_framed_preflight import evidence_frame
+            self.assertEqual(output.getvalue(),evidence_frame(m.canonical_receipt()))
+
     def test_original_fixed_modes_only_no_argv_path_hash_or_key(self):
         import emqx_real_owner_transport as m
         import contextlib
@@ -124,7 +151,7 @@ class TransportTests(unittest.TestCase):
         from unittest.mock import Mock
         class Sink(io.BytesIO):
             def close(self):pass
-        for mode in ('--real-restore','--x86-real-restore'):
+        for mode in ('--real-restore','--x86-real-restore','--real-restore-mnesia-acl','--x86-real-restore-mnesia-acl'):
             with tempfile.TemporaryDirectory() as d:
                 root=Path(d);cipher=b'generated-cipher-only';archive=root/'cipher.tar';archive.write_bytes(cipher)
                 creds=root/'clients';creds.write_bytes(b'B1_MQTT_USER1=b1-sensor\nB1_MQTT_PW1=generated-one\nB1_MQTT_USER2=b1-gateway\nB1_MQTT_PW2=generated-two\nB1_MQTT_USER3=generated-third\nB1_MQTT_PW3=generated-three\n');creds.chmod(0o600)
