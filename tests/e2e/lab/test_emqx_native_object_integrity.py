@@ -28,7 +28,7 @@ class NativeObjectTests(unittest.TestCase):
         self.secret='generated-original-connector-password'
         self.source_side.config['connectors']['http']['b1_http']['password']=self.secret
         context=self.source_side.source()
-        captured,binding=context.__enter__();self.addCleanup(context.__exit__,None,None,None)
+        captured,binding=context.__enter__();self.captured=captured;self.addCleanup(context.__exit__,None,None,None)
         self.session=self.source_side.join(captured)
         self.expected=self.source_side.mint(captured,self.session)
         self.prior=self.session.registry;self.runtime=self.prior._runtime
@@ -88,6 +88,96 @@ class NativeObjectTests(unittest.TestCase):
         with self.assertRaises(m.NativeObjectPhaseRefused) as inner:
             m.compare_b1_objects_native(**kwargs)
         self.assertEqual(str(inner.exception),'native-object-integrity-refused')
+
+    def metadata_profile(self):
+        metadata={'created_at':1700000000123,'last_modified_at':1700000001000}
+        for key,rule in self.source_side.config['rule_engine']['rules'].items():
+            rule['metadata']=copy.deepcopy(metadata)
+            self.config['rule_engine']['rules'][key]['metadata']=copy.deepcopy(metadata)
+        self.expected=self.source_side.mint(self.captured,self.session)
+        for row in self.documents['rules']['data']:
+            row['created_at']='2023-11-14T22:13:20.123+00:00'
+            row['last_modified_at']='2023-11-15T06:13:21.000+08:00'
+        self.refresh_api()
+
+    def refresh_api(self):
+        self.api_mode=True
+        try:self.observed=self.run_api()
+        finally:self.api_mode=False
+
+    def test_metadata_actual_collectors_three_way_and_all_source_fields(self):
+        self.metadata_profile()
+        self.compare(self.native())
+        self.documents['rules']['data'][0]['sql']='generated-changed-sql'
+        self.refresh_api()
+        self.workflow_refuse(self.native(),'rules_value')
+
+    def test_metadata_native_changed_missing_type_unknown(self):
+        for change,reason in (('changed','value'),('missing','missing'),('type','type'),('unknown','value')):
+            with self.subTest(change=change):
+                self.metadata_profile()
+                md=self.config['rule_engine']['rules']['b1_rule_republish']['metadata']
+                if change=='changed':md['created_at']+=1
+                elif change=='missing':del md['created_at']
+                elif change=='type':md['created_at']=True
+                else:md['unknown']=1
+                self.workflow_refuse(self.native(),'rules_'+reason)
+
+    def test_metadata_api_time_missing_precision_timezone_and_changed(self):
+        for value in (None, '2023-11-14T22:13:20.124+00:00',
+                      '2023-11-14T22:13:20.123Z','2023-11-14t22:13:20.123+00:00',
+                      '2023-11-14T22:13:20.12+00:00','2023-11-14T22:13:20.123-00:00',
+                      '2023-11-14T22:13:20.123+24:00', '2023-11-14T22:13:60.123+00:00',17):
+            with self.subTest(case_type=type(value).__name__):
+                self.metadata_profile()
+                row=self.documents['rules']['data'][0]
+                if value is None:del row['created_at']
+                else:row['created_at']=value
+                self.refresh_api()
+                self.workflow_refuse(self.native(),'rules_'+('missing' if value is None else 'type' if type(value) is not str else 'value'))
+
+    def test_metadata_original_unknown_missing_type_overflow(self):
+        for change,reason in (('unknown','value'),('missing','missing'),('bool','type'),
+                              ('float','type'),('string','type'),('negative','value'),('overflow','value')):
+            with self.subTest(change=change):
+                self.metadata_profile()
+                md=self.source_side.config['rule_engine']['rules']['b1_rule_republish']['metadata']
+                if change=='unknown':md['unknown']=1
+                elif change=='missing':del md['created_at']
+                else:md['created_at']={'bool':True,'float':1.0,'string':'1','negative':-1,'overflow':253402214400001}[change]
+                self.expected=self.source_side.mint(self.captured,self.session)
+                self.workflow_refuse(self.native(),'rules_'+reason)
+
+    def test_metadata_actual_collectors_unsigned_supported_endpoints(self):
+        self.metadata_profile()
+        for key,rule in self.source_side.config['rule_engine']['rules'].items():
+            rule['metadata']={'created_at':0,'last_modified_at':253402214400000}
+            self.config['rule_engine']['rules'][key]['metadata']=copy.deepcopy(rule['metadata'])
+        self.expected=self.source_side.mint(self.captured,self.session)
+        for row in self.documents['rules']['data']:
+            row['created_at']='1970-01-01T08:00:00.000+08:00'
+            row['last_modified_at']='9999-12-31T00:00:00.000+00:00'
+        self.refresh_api()
+        self.compare(self.native())
+
+    def test_action_integer_timestamps_remain_exact_without_rule_mapping(self):
+        self.metadata_profile()
+        action=self.source_side.config['actions']['http']['b1_http_action']
+        action.update(created_at=1700000000123,last_modified_at=1700000001000)
+        self.expected=self.source_side.mint(self.captured,self.session)
+        row=self.documents['actions'][0]
+        row.update(created_at=1700000000123,last_modified_at=1700000001000)
+        self.refresh_api()
+        self.compare(self.native())
+        row['created_at']='2023-11-14T22:13:20.123+00:00'
+        self.refresh_api()
+        self.workflow_refuse(self.native(),'actions_type')
+
+    def test_metadata_epoch_bounds_and_integer_exact_offsets(self):
+        self.assertEqual(m._timestamp_ms('1970-01-01T00:00:00.000+00:00'),0)
+        self.assertEqual(m._timestamp_ms('1969-12-31T23:00:00.001-01:00'),1)
+        self.assertEqual(m._timestamp_ms('9999-12-31T00:00:00.000+00:00'),253402214400000)
+        with self.assertRaises(m._Difference):m._timestamp_ms('9999-12-31T00:00:00.001+00:00')
 
     def test_actual_collectors_to_workflow_category_type_missing_value_phases(self):
         baseline=copy.deepcopy(self.documents)

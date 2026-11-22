@@ -3,9 +3,17 @@
 Only actual API/native collectors mint receipts. Flat scanner membership, caller
 config dictionaries and manually constructed PostRestoreValues prove nothing.
 No HTTP/native IO here; compares bounded completed observations, not future live
-state. Caller owns exclusion across API/native phases and later publication.
+state. Rule metadata has a narrow three-way pinned5.8.9 semantic profile: source
+integer milliseconds must equal fresh native cooked metadata and API RFC3339
+instants. emqx_rule_engine_api:add_metadata/1, format_rule_info_resp/1 and
+emqx_rule_engine:with_parsed_rule/3 define the mapping. Metadata schema is map(),
+not uint: unknown fields/partial maps and out-of-profile times explicitly refuse.
+OTP26 calendar docs system_time_to_rfc3339/2 specify default T/local offset and
+exactly3 fractional digits for millisecond (https://www.erlang.org/docs/26/man/calendar.html). Caller owns exclusion across API/native phases and later publication.
 """
 import copy
+import re
+from datetime import datetime, timedelta, timezone
 from itertools import count
 import weakref
 
@@ -119,6 +127,59 @@ def _same(expected,actual,path,secrets):
     elif expected!=actual:raise _Difference('value')
 
 
+# Narrow supported timestamp profile, not a claim that metadata map() is uint.
+# emqx_utils_calendar's validated nonnegative millisecond ceiling; native decoder
+# also requires signed64 integers. No floating point conversion or coercion.
+_METADATA_KEYS=frozenset(('created_at','last_modified_at'))
+_MAX_METADATA_MS=253402214400000
+_API_TIME=re.compile(r'([0-9]{4})-([0-9]{2})-([0-9]{2})T([0-9]{2}):([0-9]{2}):([0-9]{2})\.([0-9]{3})([+-])([0-9]{2}):([0-9]{2})')
+_EPOCH=datetime(1970,1,1,tzinfo=timezone.utc)
+
+
+def _timestamp_ms(value):
+    # Vendor passes ONLY {unit,millisecond}: default T, exactly3 fraction digits,
+    # default local numeric offset. No Z/lowercase/space/unknown-offset profile.
+    if type(value) is not str:raise _Difference('type')
+    match=_API_TIME.fullmatch(value)
+    if match is None:raise _Difference('value')
+    y,mo,d,h,mi,sec,ms,sign,oh,om=match.groups()
+    oh,om=int(oh),int(om)
+    if oh>23 or om>59 or (sign=='-' and oh==om==0):raise _Difference('value')
+    offset=timedelta(hours=oh,minutes=om)*(1 if sign=='+' else -1)
+    try:
+        delta=datetime(int(y),int(mo),int(d),int(h),int(mi),int(sec),int(ms)*1000,
+                       tzinfo=timezone(offset)).astimezone(timezone.utc)-_EPOCH
+    except (ValueError,OverflowError):raise _Difference('value') from None
+    result=(delta.days*86400+delta.seconds)*1000+delta.microseconds//1000
+    if not 0<=result<=_MAX_METADATA_MS:raise _Difference('value')
+    return result
+
+
+def _same_rule(expected,actual,path,secrets,config):
+    if 'metadata' not in expected:
+        return _same(expected,actual,path,secrets)
+    metadata=expected['metadata']
+    if type(metadata) is not dict:raise _Difference('type')
+    if set(metadata)!=_METADATA_KEYS:raise _Difference('missing' if set(metadata)<_METADATA_KEYS else 'value')
+    try:
+        current=config['rule_engine']['rules'][path[-1]]['metadata']
+    except (KeyError,TypeError):raise _Difference('missing') from None
+    if type(current) is not dict:raise _Difference('type')
+    if set(current)!=_METADATA_KEYS:raise _Difference('missing' if set(current)<_METADATA_KEYS else 'value')
+    if type(actual) is not dict:raise _Difference('type')
+    for key in _METADATA_KEYS:
+        source=metadata[key];native=current[key]
+        if type(source) is not int or type(native) is not int:raise _Difference('type')
+        if not 0<=source<=_MAX_METADATA_MS or source!=native:raise _Difference('value')
+        if key not in actual:raise _Difference('missing')
+        if _timestamp_ms(actual[key])!=source:raise _Difference('value')
+    # Every remaining source field retains its previous strict comparison.
+    for key,value in expected.items():
+        if key=='metadata':continue
+        if key not in actual:raise _Difference('missing')
+        _same(value,actual[key],path+(key,),secrets)
+
+
 def compare_b1_objects_native(*,expected,source_api,native_values):
     """Keep nonsecret API comparison; resolve ONLY validated native secret paths.
 
@@ -168,7 +229,9 @@ def compare_b1_objects_native(*,expected,source_api,native_values):
                 path=('rule_engine','rules',key) if category=='rules' else (category,*key)
                 stage=category+'_missing'
                 observed=actual[key]
-                try:_same(obj,observed,path,native['secrets'])
+                try:
+                    if category=='rules':_same_rule(obj,observed,path,native['secrets'],native['config'])
+                    else:_same(obj,observed,path,native['secrets'])
                 except _Difference as error:
                     raise NativeObjectPhaseRefused(category+'_'+error.reason) from None
         return NativeObjectComparison(expected,source_api,native_values)
