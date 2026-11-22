@@ -1,0 +1,24 @@
+{
+  "source_commit": "888f465b37ee013febe10ab883ecabe6cf46afc5",
+  "scope": "actual fresh pinned broker target producer with proved inert default TLS callback; no real source or restore",
+  "exit": 1,
+  "elapsed_seconds": 40.453935394994915,
+  "stdout_sha256": "3eeacbb8bca9cd78ee4e7c968b79c0da12c44ae8372bd4ef40cf0861bda5de84",
+  "stderr_bytes_not_published": 0,
+  "restore_executed": false,
+  "stage": "postflight",
+  "consumer_fixed_stage": "inventory",
+  "target_completeness": "not-assessed",
+  "ha_commercial_acceptance": "not-claimed",
+  "checks": {
+    "broker_cleanup": "passed",
+    "broker_ready": "passed",
+    "clients_cleanup": "passed",
+    "fresh_ticker_identity_suspended_after": "passed",
+    "fresh_ticker_identity_suspended_before": "passed",
+    "native_fixed_expression_parsed": "passed",
+    "no_clients_after_capture": "passed",
+    "no_clients_before_capture": "passed",
+    "private_files_cleanup": "passed"
+  }
+}
