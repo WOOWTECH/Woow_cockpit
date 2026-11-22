@@ -219,6 +219,8 @@ def run_owner_target(root, broker, clients, report, *, owned_container_id):
     except OwnerCaptureRefused as failure:
         report['consumer_fixed_stage']=failure.phase
         report['consumer_fixed_reason']=failure.reason
+        if failure.reference is not None:
+            report['consumer_fixed_reference']=failure.reference
         raise
 
 

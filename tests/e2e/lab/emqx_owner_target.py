@@ -31,14 +31,30 @@ CONSUMER_REASONS = frozenset(('private_refused','inventory_names_type','inventor
     'inventory_name_shape','inventory_duplicate_name','inventory_missing_schema',
     'inventory_schema_type','inventory_schema_count','inventory_schema_entry_shape',
     'inventory_schema_name_kind','inventory_schema_duplicate','inventory_schema_binding',
-    'inventory_tables_type','inventory_tables_count','inventory_builtin_profile'))
+    'inventory_tables_type','inventory_tables_count','inventory_builtin_profile','reference_file_authorizer','reference_template',
+    'reference_env','reference_vault','reference_file_uri','reference_url','reference_file_setting'))
+
+
+REFERENCE_ROOTS = frozenset(('listeners','dashboard','authorization','authentication','node','cluster',
+    'rpc','api_key','connectors','bridges','actions','sources','gateway','exhook','log','other_root'))
+REFERENCE_KEYS = frozenset(('certfile','keyfile','cacertfile','bootstrap_file','init_file','config_files',
+    'crash_dump_file','cookie','path','type','other_file_key','other_key'))
+REFERENCE_CONTEXTS = frozenset(('ssl_disabled','ssl_enabled','wss_disabled','wss_enabled',
+    'dashboard_https_disabled','dashboard_https_enabled','log_console_disabled','log_console_enabled',
+    'log_file_disabled','log_file_enabled','not_assessed'))
 
 
 class OwnerCaptureRefused(TargetCaptureUnsupported):
-    def __init__(self,phase,reason='private_refused'):
+    def __init__(self,phase,reason='private_refused',reference=None):
         super().__init__()
         self.phase=phase if type(phase) is str and phase in CONSUMER_PHASES else 'wire'
         self.reason=reason if type(reason) is str and reason in CONSUMER_REASONS else 'private_refused'
+        self.reference = None
+        if (self.phase == 'references' and type(reference) is dict and set(reference) == {'root','key','context'}
+                and type(reference['root']) is str and reference['root'] in REFERENCE_ROOTS
+                and type(reference['key']) is str and reference['key'] in REFERENCE_KEYS
+                and type(reference['context']) is str and reference['context'] in REFERENCE_CONTEXTS):
+            self.reference = dict(reference)
 
 
 
@@ -99,24 +115,62 @@ def _text(value):
     unsupported()
 
 
-def _no_refs(value, key=''):
+
+def _reference_diagnostic(path,key,config):
+    root=path[0] if path and type(path[0]) is str and path[0] in REFERENCE_ROOTS else 'other_root'
+    safe_key=key if key in REFERENCE_KEYS else ('other_file_key' if key.endswith('_file') else 'other_key')
+    context='not_assessed'
+    # These flags are observations for diagnostics only, never reference waivers.
+    if root == 'listeners' and len(path) >= 3 and path[1] in ('ssl','wss'):
+        listeners=config.get('listeners',{})
+        group=listeners.get(path[1],{}) if type(listeners) is dict else {}
+        listener=group.get(path[2]) if type(group) is dict else None
+        if type(listener) is dict and listener.get('enable') in ('false','true'):
+            context=path[1]+('_disabled' if listener['enable']=='false' else '_enabled')
+    elif root == 'dashboard' and path[:3] == ('dashboard','listeners','https'):
+        dashboard=config.get('dashboard',{})
+        listeners=dashboard.get('listeners',{}) if type(dashboard) is dict else {}
+        https=listeners.get('https',{}) if type(listeners) is dict else {}
+        bind=https.get('bind') if type(https) is dict else None
+        if type(bind) is int:
+            context='dashboard_https_disabled' if bind == 0 else 'dashboard_https_enabled'
+    elif root == 'log' and len(path) >= 2:
+        logs=config.get('log',{})
+        logs=logs if type(logs) is dict else {}
+        handler=logs.get('console') if path[1]=='console' else None
+        kind='console'
+        if path[1]=='file' and len(path) >= 3:
+            files=logs.get('file',{})
+            handler=files.get(path[2]) if type(files) is dict else None
+            kind='file'
+        if type(handler) is dict and handler.get('enable') in ('false','true'):
+            context='log_'+kind+('_disabled' if handler['enable']=='false' else '_enabled')
+    return {'root':root,'key':safe_key,'context':context}
+
+
+def _no_refs(value, key='', path=(), config=None):
+    if config is None:
+        config=value
+    def refuse(reason):
+        raise OwnerCaptureRefused('references',reason,_reference_diagnostic(path,key,config))
     if type(value) is dict:
-        # A file authorizer also has a dependency when its path is implicit.
-        # No target file observer is installed in this restricted live profile.
+        # File authorizers retain the original implicit-path refusal.
         if value.get('type') in ('file', b'file'):
-            unsupported()
+            refuse('reference_file_authorizer')
         for name, child in value.items():
-            _no_refs(child, name)
+            _no_refs(child,name,path+(name,),config)
     elif type(value) in (tuple, list):
-        for child in value:
-            _no_refs(child, key)
+        for index,child in enumerate(value):
+            _no_refs(child,key,path+(index,),config)
     elif type(value) in (bytes, str):
         text = _text(value)
-        if any(marker in text.lower() for marker in ('${', 'env:', 'vault:', 'file:', '://')):
-            unsupported()
+        for marker,reason in (('${','reference_template'),('env:','reference_env'),
+                ('vault:','reference_vault'),('file:','reference_file_uri'),('://','reference_url')):
+            if marker in text.lower():
+                refuse(reason)
         if text and (key in ('certfile', 'keyfile', 'cacertfile', 'bootstrap_file', 'init_file')
                      or key.endswith('_file')):
-            unsupported()
+            refuse('reference_file_setting')
 
 
 def _absence_profile(config, provider, mark=lambda _:None):
