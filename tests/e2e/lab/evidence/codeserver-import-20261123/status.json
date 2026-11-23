@@ -30,10 +30,30 @@
     "real_backup_write_path": "the importer's writers on the REAL backup against an EMPTY simulated target in the same kind of container: pi volume 515 members, IDE 19, extensions 1, every member 0:0, nested.check_volume ok, no login/connector/leftover file present; SQLite quick_check replaced by ok there (the unprivileged container cannot leave its network namespace, the sandbox refused as designed)"
   },
   "real_run": {
-    "state": "pending",
-    "why": "dev-e has no code-server yet: only lane batch2-lab deploys on dev-e (main's rule); REQUEST written in team/batch2-lab.md (~18:47); batch2-lab idle since 17:22",
-    "harness": "tests/e2e/lab/codeserver_full_flow.py (--self-check PASS)",
-    "evidence_target": "tests/e2e/lab/evidence/codeserver-import-20261123/codeserver-x86-attempt1.json"
+    "state": "PASS (lab end to end with the real HA backup); commercial acceptance stays not-complete until the integrated-version verification",
+    "attempts": {
+      "codeserver-x86-attempt1.json": "exit 0, 87/87 PASS, 795 s, source 6cdae62, lock held 794 s (20:17-20:30)"
+    },
+    "device": "woowbk-dev-e (network none, no published port; isolation true none {} before and after): code-server 4.139.1-8 from package e7dbbea, deployed by batch2-lab B2-OWNER-1945 with this lane's catalog entry",
+    "source": "the real x86 showcase backup 8f2dc23f (encrypted securetar v3, add-on 1b7b4ce7_woow_ha_code_server 0.1.14, no share folder)",
+    "flow": "the helper commands the page sends: upload-begin/finish, ha-check-start (HA key on stdin), ha-convert-start (the job's SpaceGuard with the real floor 10 GiB reserve + 512 MiB), inspect, restore-start",
+    "proven": [
+      "check: no blocker; the four program versions read from the LIVE image in a throwaway network-none container equal the add-on 0.1.14 pins (code-server 4.139.1, Pi 0.99.1, Claude Code 2.1.285, Codex 0.167.0); counts = the backup facts; the version container removed",
+      "convert 108 s, encrypted manual backup with its HA origin; inspect: preflight ok, settings same, in place; restore 52.8 s with a safety backup, health ok",
+      "client: /healthz 200; POST /login with this device's password (read inside dev-e, never printed) -> 302 + session cookie; the workbench (after code-server's folder redirect) 200; anonymous / -> login; wrong password -> no cookie",
+      "HA-side markers (snippet dcae1e20ae973d5c, skill 48d2358822db7c52) served by the logged-in IDE's /vscode-remote-resource route AND read by the IDE user in the container, both with the recorded SHA-256",
+      "settings.json merged (this device's ACP agents pi-code/claude-agent-acp/codex-code, no zsh default, trust off, HA keys present); 28 Pi sessions, 20 Claude Code and 15 Codex session files, HA skills plus this device's",
+      "kept byte-identical (SHA-256 maps): the generated test login, connector state, IDE machine id/workspace state, the whole extensions volume, the whole workspace (Desktop), the password secret and the env file; HA's logins/connectors/codex-bootstrap/trust.json absent; HA's moved entries 0:0 (coder)",
+      "restart: all client checks again; automatic rollback: a one-shot ExecStartPre failure -> rolled-back, imported data intact; manual rollback to the safety backup: this device's markers back, HA's markers gone",
+      "cleanup: converted + safety backups, HA store record, needle file and the seeded test login removed; no job objects, staging or key files; timer unmasked; leak scan 0 hits (74 engine files, 2.7 MB journal, the app's own log 0, this evidence 0)"
+    ],
+    "not_covered_stated": [
+      "the workspace move: this backup has no share folder (only the no-workspace path ran for real; the share path is unit-tested with fakes)",
+      "HA's moved MCP header/env needles: 0 secret-looking values in this backup (the leak scan registered the HA key, the device password and the test login)",
+      "no user extension in this backup (the 2 are the connector VSIX, never moved): extension moves are unit-tested only",
+      "agent provider logins (D2 a keeps this device's; none in the lab), Omnigent/Paseo pairing (D3), the browser page itself (dev-e publishes no port; the helper calls are the page's), ARM, a host reboot"
+    ],
+    "private_detail": "~/.woowbk-lab/evidence/codeserver-csff/20261123T201721/ (0700, redacted)"
   },
   "not_moved_reminders": {
     "cloudflare_tunnel": "page: re-add every route on this device's tunnel, re-link WOOW PaaS, then remove HA's routes and stop the add-on (cf-tunnel.md D1 a). Listing the routes themselves is NOT done: they are in the add-on's options.json, which the engine never reads (it holds the tunnel token) -> owner item",
