@@ -262,7 +262,7 @@ Findings of iteration 2:
    job (HA's side only) can still be blinded by a crafted data directory; the conversion cannot.
 10. **SR-9 (high for a foreign backup, like SR-6) — fixed `a06dc21`.** The SR-6 check cut the callback names to the
    first 50 before it looked for a dot, so 60 plain `success_callback` names that sort before a dotted one hid it
-   (no blocker on `1e29974` and `f2a2cb4`). LiteLLM imports every dotted entry of `success_callback`,
+   (no blocker on `f2a2cb4`, `original3-stored_variants.json`; `1e29974` has the same code). LiteLLM imports every dotted entry of `success_callback`,
    `failure_callback` and `audit_log_callbacks` (`proxy_server.py:6233-6300`) and of `callbacks`
    (`callback_utils.py:150-395`) and accepts plain names there, so the padding is cheap. Fix: the query returns
    `litellm_settings.<list>` for any entry with a dot, however many names come first.
