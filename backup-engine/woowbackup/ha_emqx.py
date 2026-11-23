@@ -650,7 +650,11 @@ def boot_form(execute):
 # num_acceptors = schedulers_online (emqx_dashboard_schema.erl:125-131), node.broker_pool_size = 2 x schedulers and
 # generic_pool_size = schedulers (emqx_conf_schema.erl:688-706, emqx_vm.erl:174-175). The candidate runs with fewer CPUs
 # (tempctr --cpus), so the VM gives it fewer online schedulers (dev-d 2026-11-24 attempt-08: `dashboard` differed); it
-# therefore starts with this device's counts (ERL_FLAGS "+S total:online", passed on by bin/emqx:472,1212).
+# therefore starts with this device's counts: ERL_AFLAGS "+S total:online" (erlexec puts it at the START of the
+# command line). Not ERL_FLAGS: erlexec appends that after bin/emqx's trailing `-emqx_data_dir <dir>`, which bin/emqx
+# then reads back from `ps -ef` for every ctl/eval command (bin/emqx:570, :1321-1324 "order matters"): the data dir
+# became "/opt/emqx/data --", mkdir failed on the read-only root, `emqx ctl status` never answered (dev-d 2026-11-24
+# attempt-10; reproduced in the lab store).
 VM_EXPR = ('io:format("WOOWVM:~b:~b:END~n", '
            '[erlang:system_info(schedulers), erlang:system_info(schedulers_online)]).')
 MAX_SCHEDULERS = 1024
@@ -1291,7 +1295,7 @@ def target_broker(work, tmp, target, export, ids, *, hint='', target_snapshot=No
     # The product's Target adds its EnvironmentFile= settings; internal callers' target objects carry their env as given.
     env = target.candidate_env() if isinstance(target, Target) else target.env
     if target_vm is not None:   # Target.env holds EMQX_* settings only: this is the candidate's one Erlang flag
-        env = dict(env, ERL_FLAGS=f'+S {target_vm[0]}:{target_vm[1]}')
+        env = dict(env, ERL_AFLAGS=f'+S {target_vm[0]}:{target_vm[1]}')
     tmp.run('emqx-new', target.image, [], detach=True, read_only_root=True, env=env, secrets=target.secrets,
             volumes=[(tmp.name('emqx-new'), DATA_TARGET, None), (tmp.name('emqx-new-log'), LOG_TARGET, None),
                      (tmp.name('emqx-in'), WORK, None)] + target.files)

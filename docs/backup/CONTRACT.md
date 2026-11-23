@@ -1977,7 +1977,8 @@ PostgreSQL 15).
    `EMQX_*` environment, its `Secret=` mounts and its read-only host files, the snapshot in an otherwise empty data
    volume and the export (owned by the image's emqx user) at `/work/in`. It starts with this device's scheduler
    counts (fixed `emqx eval` of `erlang:system_info(schedulers)` and `schedulers_online` on the running broker,
-   passed as `ERL_FLAGS="+S total:online"`, bin/emqx:472,1212): a boot stores schema defaults derived from them in
+   passed as `ERL_AFLAGS="+S total:online"` at the start of the command line; `ERL_FLAGS` would land after the
+   `-emqx_data_dir` that bin/emqx reads back from `ps`, bin/emqx:570,1321-1324): a boot stores schema defaults derived from them in
    the raw configuration (Dashboard listeners' `num_acceptors` = online schedulers, emqx_dashboard_schema.erl:125-131;
    node pool sizes, emqx_conf_schema.erl:688-706) and the candidate runs under `--cpus`. Before anything is imported
    its scheduler counts, `EMQX_ETC_DIR`, effective configuration and image TLS fingerprints must equal this device's. `emqx ctl data import`

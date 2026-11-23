@@ -122,11 +122,11 @@ class World(fk.World):
 
     def schedulers(self, role):
         """(total, online) as `role`'s VM answers ha_emqx.VM_EXPR: this device 4/4; a throwaway runs with half the CPUs
-        (tempctr --cpus) and so 2 online, unless its last `podman run` gave ERL_FLAGS "+S total:online"."""
+        (tempctr --cpus) and so 2 online, unless its last `podman run` gave ERL_AFLAGS "+S total:online"."""
         if role == 'woow-emqx':
             return 4, 4
-        flags = [value[len('ERL_FLAGS='):] for run_role, _image, _command, options in self.runs if run_role == role
-                 for value in options.get('--env', []) if value.startswith('ERL_FLAGS=')]
+        flags = [value[len('ERL_AFLAGS='):] for run_role, _image, _command, options in self.runs if run_role == role
+                 for value in options.get('--env', []) if value.startswith('ERL_AFLAGS=')]
         if flags and flags[-1].startswith('+S '):
             total, online = flags[-1][3:].split(':')
             return int(total), int(online)

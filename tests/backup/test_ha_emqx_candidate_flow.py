@@ -96,8 +96,8 @@ class Transport:
 
     def exec(self, role, command, **kwargs):
         if command == ['emqx', 'eval', emqx.VM_EXPR]:
-            # The candidate's VM: half the CPUs (tempctr --cpus) give 2 online schedulers unless ERL_FLAGS sets them.
-            flags = getattr(self, 'run_env', {}).get('ERL_FLAGS', '')
+            # The candidate's VM: half the CPUs (tempctr --cpus) give 2 online schedulers unless ERL_AFLAGS sets them.
+            flags = getattr(self, 'run_env', {}).get('ERL_AFLAGS', '')
             counts = flags[3:].encode() if flags.startswith('+S ') else b'4:2'
             return Result(0, b'WOOWVM:' + counts + b':END\nok\n', b'')
         if command == ['emqx', 'eval', emqx.BOOT_CONFIG_EXPR]:

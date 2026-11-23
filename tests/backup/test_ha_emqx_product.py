@@ -426,7 +426,7 @@ class SchedulerWorld(base.World):
 
 
 class SchedulerTests(base.EmqxCase):
-    """The candidate starts with this device's scheduler counts (ha_emqx.VM_EXPR -> ERL_FLAGS "+S total:online"), so
+    """The candidate starts with this device's scheduler counts (ha_emqx.VM_EXPR -> ERL_AFLAGS "+S total:online"), so
     the defaults EMQX derives from them are this device's; a candidate that does not answer them is refused."""
     world_class = SchedulerWorld
 
@@ -439,8 +439,8 @@ class SchedulerTests(base.EmqxCase):
         done = self.convert(self.upload_emqx(state='stopped'), ['emqx'])
         self.assertTrue(done['backup_id'])
         env = self.runs('emqx-new')[0][3].get('--env', [])
-        self.assertIn('ERL_FLAGS=+S 4:4', env)
-        self.assertEqual([e for e in env if e.startswith('ERL_')], ['ERL_FLAGS=+S 4:4'], 'one Erlang flag, no other')
+        self.assertIn('ERL_AFLAGS=+S 4:4', env)
+        self.assertEqual([e for e in env if e.startswith('ERL_')], ['ERL_AFLAGS=+S 4:4'], 'one Erlang flag, no other')
         self.assertNotIn('dashboard', self.world.current_config,
                          'the candidate already had this device\'s dashboard settings: nothing of it was written '
                          '(its raw root carries dashboard.default_password from the env)')
