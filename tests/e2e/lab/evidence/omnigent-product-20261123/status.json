@@ -1,0 +1,60 @@
+{
+ "lane": "omnigent-product",
+ "date": "2026-11-23",
+ "repo": "R-COCKPIT",
+ "branch": "feat/ha-import-omnigent-product-20261123",
+ "base": "82ac971 (integration/ha-import-batch1-20261123)",
+ "product_commit": "805ff1b",
+ "driver_commit": "b5aa69e",
+ "owner_decision": "2026-11-23 決定1 做: Omnigent HA import as a real product path; SECURITY_BLOCKER removed together with the enforced protections",
+ "unit_tests": {
+  "tests/backup full suite": "1411 run; only the 10 pre-existing EMQX PRESERVATION_BLOCKER tests not ok",
+  "omnigent modules": "54 OK + 34 OK (real_app_fixture, install_harness)",
+  "lab omnigent tests": "19 OK",
+  "backup-ui.mjs": "99/99",
+  "mutation check": "17/17 protections caught (tests/backup/evidence/omnigent-product-20261123/mutation-check.json)"
+ },
+ "real_attempts": [
+  {
+   "evidence": "omnigent-x86-plain-attempt1.json",
+   "source_commit": "805ff1b",
+   "exit": 1,
+   "elapsed_seconds": 949.2,
+   "summary": "omnigent full flow x86 plain: 110/111 FAIL",
+   "lock": "lock held for 948 s"
+  },
+  {
+   "evidence": "omnigent-arm-enc-attempt1.json",
+   "source_commit": "b5aa69e",
+   "exit": 0,
+   "elapsed_seconds": 1530.7,
+   "summary": "omnigent full flow arm enc: 111/111 PASS",
+   "lock": "lock held for 840 s"
+  },
+  {
+   "evidence": "omnigent-x86-enc-attempt1.json",
+   "source_commit": "b5aa69e",
+   "exit": 0,
+   "elapsed_seconds": 1145.4,
+   "summary": "omnigent full flow x86 enc: 111/111 PASS",
+   "lock": "lock held for 805 s"
+  },
+  {
+   "evidence": "omnigent-arm-plain-attempt1.json",
+   "source_commit": "0eeb74b",
+   "exit": 0,
+   "elapsed_seconds": 3225.8,
+   "summary": "omnigent full flow arm plain: 111/111 PASS",
+   "lock": "lock held for 1372 s"
+  }
+ ],
+ "not_covered_stated": [
+  "browser page itself (helper calls the page sends, dev-d publishes no port)",
+  "host reboot",
+  "Pi agent / model provider (out of scope); HA runner re-pointing not run",
+  "test mode (task pause) only unit-tested, real runs were full imports",
+  "server-data and pi-data are live exports during convert (CONTRACT B1-11, unchanged)",
+  "leak scan cannot observe tokens the server issues to the runner itself"
+ ],
+ "commercial_acceptance": "not-complete"
+}
