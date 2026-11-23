@@ -1912,6 +1912,11 @@ emqx,headscale,mcp-admin}.md` of the design notes.
    SEQUENCE SET entries, whose statement pg_dump writes from the value the server sent (unquoted), are printed by
    pg_restore itself (`-f - -L`) before anything is restored and must be exactly one
    `SELECT pg_catalog.setval('public.<trusted sequence>', <integer>, true|false);` each (SR-3).
+   HA's `pg_dump` runs as the OS user `65534:65534` (`DUMP_USER`, over the socket directory, mode 3777), never as
+   the HA server's own user (`postgres`, uid 70): code HA's catalog runs inside its server can then neither open
+   pg_dump's stdout through `/proc/<pid>/fd` nor signal it, so it cannot write the archive the conversion restores
+   (SR-2b). Names taken from HA's database (tables, schemas, extensions, alembic) reach the job log and the page
+   with control characters shown as `?` (`hacommon.names`, SR-4).
 4. `omnigent-server-data`: the live export without `artifacts/**` plus HA's artifacts owned like the live artifacts
    folder (dirs 0755, files 0644, `accounts-cookie-secret` 0600: HA's session key replaces this device's, so HA's grants
    and tokens keep working and this device's browser sessions end); `omnigent-pi-data`: the live export as it is (the
