@@ -44,10 +44,14 @@ def refuse():
 
 class Values:
     """Private values only; repr never displays source material or adapter output."""
-    def __init__(self):
+    def __init__(self, *, max_nodes=None, max_values=None):
         self._values = set()
         self._total = 0
         self._nodes = 0
+        # Optional per-reader overrides; None keeps the module bounds (read at call time).
+        if any(x is not None and (type(x) is not int or x < 1) for x in (max_nodes, max_values)):
+            refuse()
+        self._max_nodes, self._max_values = max_nodes, max_values
 
     def __repr__(self):
         return '<EMQX private semantic values>'
@@ -62,13 +66,14 @@ class Values:
         if not value or value in self._values:
             return
         self._total += len(value)
-        if self._total > MAX_OUTPUT or len(self._values) >= MAX_VALUES:
+        limit = MAX_VALUES if self._max_values is None else self._max_values
+        if self._total > MAX_OUTPUT or len(self._values) >= limit:
             refuse()
         self._values.add(value)
 
     def tick(self, depth):
         self._nodes += 1
-        if depth > MAX_DEPTH or self._nodes > MAX_NODES:
+        if depth > MAX_DEPTH or self._nodes > (MAX_NODES if self._max_nodes is None else self._max_nodes):
             refuse()
 
 

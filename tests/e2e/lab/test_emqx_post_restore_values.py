@@ -131,12 +131,30 @@ class PostNativeTests(unittest.TestCase):
         self.edit=duplicate_table
         self.assertEqual(self.stage_of(),'decode_inventory')
         self.edit=None
-        import emqx_semantic_readers as readers
-        for budget,stage in (('MAX_NODES','decode_config_nodes'),('MAX_VALUES','decode_config_values')):
-            with self.subTest(budget=budget), patch.object(readers,budget,8), \
-                 patch.object(m,'MAX_NODES' if budget=='MAX_NODES' else 'MAX_SEMANTIC_VALUES',8):
+        for budget,stage in (('CAPTURE_MAX_NODES','decode_config_nodes'),('CAPTURE_MAX_VALUES','decode_config_values')):
+            with self.subTest(budget=budget), patch.object(m,budget,8):
                 self.assertEqual(self.stage_of(),stage)
         self.assertEqual(len(self.collect()._generations),1)  # unchanged budgets still pass
+
+    def test_live_rows_beyond_shared_node_budget_fit_the_wire_bound_capture_budget(self):
+        import emqx_semantic_readers as readers
+        def grow(doc):
+            table=next(t for t in doc['tables'] if t['rows'])
+            first=table['rows'][0]
+            extra=[]
+            for index in range(readers.MAX_NODES//(len(table['attributes'])+1)+16):
+                row=copy.deepcopy(first)
+                row['value'][-1]=term('integer',10**6+index)  # generated growing live rows
+                extra.append(row)
+            table['rows']=table['rows']+extra;table['row_count']=len(table['rows'])
+        self.edit=grow
+        result=self.collect()
+        self.assertEqual(len(result._generations),1)
+        values=readers.Values()  # the shared default budget is unchanged and still refuses
+        with self.assertRaises(readers.SemanticRefused):
+            for _ in range(readers.MAX_NODES+1):values.tick(0)
+        with patch.object(m,'CAPTURE_MAX_NODES',readers.MAX_NODES):
+            self.assertEqual(self.stage_of(),'decode_rows_nodes')
 
     def test_populated_api_rules_connectors_and_unexecuted_refs_are_values_only(self):
         with patch('emqx_owner_target._absence_profile',side_effect=AssertionError('no initial profile')), \

@@ -69,10 +69,20 @@ class NativeDecodeRefused(ValueError):
         super().__init__('native-decode-refused')
 
 
+# The post-restore capture decodes the issued lab broker's OWN live tables, which
+# grow with uptime and per-round activity (attempt 15: round 2 exhausted the shared
+# 8192-node budget in rows). Its resource bound is the reply wire: MAX_WIRE carries
+# <= MAX_OUTPUT (1 MiB) of typed JSON and every typed node needs >= 27 bytes, so at
+# most ~40k nodes/values fit. 65536 keeps that wire bound, not an arbitrary count,
+# binding. Depth, single-value size, distinct-bytes and row limits are unchanged.
+CAPTURE_MAX_NODES = 65536
+CAPTURE_MAX_VALUES = 65536
+
+
 def _budget(values):
-    if values._nodes > MAX_NODES:
+    if values._nodes > (MAX_NODES if values._max_nodes is None else values._max_nodes):
         return 'nodes'
-    if len(values._values) >= MAX_SEMANTIC_VALUES:
+    if len(values._values) >= (MAX_SEMANTIC_VALUES if values._max_values is None else values._max_values):
         return 'values'
     if values._total > MAX_OUTPUT:
         return 'bytes'
@@ -80,7 +90,7 @@ def _budget(values):
 
 
 def _native_values(wire, generation):
-    values = Values()
+    values = Values(max_nodes=CAPTURE_MAX_NODES, max_values=CAPTURE_MAX_VALUES)
     step = 'reply'
     try:
         raw, doc = _read_reply(wire, generation)
@@ -197,7 +207,7 @@ def collect_post_restore_values(*, prior_registry, provision, expected_container
     No transport/credential/profile defaults. CID is explicit and reverified
     before/after INSIDE caller's actual exclusion lease. Producer exec targets CID,
     not a name that can race a restart. Inspect:5s/64KiB; native exec:30s/MAX_WIRE
-    (decoded native limit1MiB, depth16,8192 nodes,4096 values/rows). OwnerRunner
+    (decoded native limit1MiB, depth16, capture 65536 nodes/values, 4096 rows). OwnerRunner
     enforces bounded private subprocess output/timeouts. Cleanup must succeed
     before return. The old file token's bound CID must remain untouched.
     """
