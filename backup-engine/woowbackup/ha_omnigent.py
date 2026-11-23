@@ -937,6 +937,44 @@ def require_schema(cluster, trusted, stage):
                                         '已停止，這台的應用沒有任何變更。', stage=stage)
 
 
+HA_ANSWERS_DIFFER = ('這份 HA 備份的 Omnigent 資料庫回報的內容和它實際的資料不一致（備份可能被竄改過），已停止，'
+                     '這台的應用沒有任何變更。')
+
+
+def _answers(detail, keys, counts):
+    """HA's (or the new cluster's) answers in a comparable form: lists as sorted sets (json_agg order follows the
+    collation, which differs between HA's cluster and this device's), numbers as numbers."""
+    def norm(value):
+        if isinstance(value, list):
+            return sorted(json.dumps(v, sort_keys=True) for v in value)
+        return value
+    detail = detail if isinstance(detail, dict) else {}
+    keys = keys if isinstance(keys, dict) else {}
+    return ({k: norm(v) for k, v in detail.items()}, {k: norm(v) for k, v in keys.items()},
+            {k: ha_odoo._int(v) for k, v in (counts or {}).items()})
+
+
+def require_answers(cluster, found):
+    """secreview SR-1: what the check and this conversion SHOW and VALIDATE (accounts and their conflicts, active
+    schedules, public shares, external credentials, the artifact keys, the counts) was answered by HA's cluster,
+    which a crafted backup controls (its catalog, its own per-role search_path). The new cluster holds exactly HA's
+    data on THIS device's schema and server (nothing of this device's added yet): it must answer the same, else the
+    job stops before anything is exported."""
+    tables = sorted(KNOWN_TABLES | set(found['counts']))
+    now = _answers(cluster.query_json(DETAIL_SQL, DATABASE), cluster.query_json(KEYS_SQL, DATABASE),
+                   table_counts(cluster, tables))
+    ha = _answers(found['detail'], found['keys'], {t: found['counts'].get(t) for t in tables})
+    differ = []
+    for part, a, b in zip(('detail', 'keys', 'counts'), ha, now):
+        for name in sorted(set(a) | set(b)):
+            if a.get(name) != b.get(name):
+                # counts name the table and both numbers; the other answers only their name (never a value)
+                differ.append(f'{name}（HA {a.get(name)}，實際 {b.get(name)}）' if part == 'counts' else name)
+    if differ:
+        raise BackupError('incompatible', f'{HA_ANSWERS_DIFFER}不一致的項目：{"、".join(differ[:10])}。',
+                          stage='answers')
+
+
 def audit_new_cluster(cluster, superuser):
     """Nothing but the schema and the data: one role (the app's), no setting, no large object."""
     found = cluster.query_json(AUDIT_SQL, DATABASE)
@@ -1027,6 +1065,7 @@ def convert(work, app, test_mode, out_dir):
     os.unlink(dump)
     os.unlink(schema_dump)
     require_schema(pg, trusted, 'restored')
+    require_answers(pg, found)
     kept = carry_accounts_restricted(pg, live_users(work, app, target))
     conflicts = account_conflicts(found, target)
     paused = 0

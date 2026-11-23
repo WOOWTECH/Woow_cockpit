@@ -540,6 +540,33 @@ class TrustedSchemaTests(OmnigentCase):
                 self.world.execs.clear()
                 self.assert_refused('job-failed', words, loaded=True)
 
+    def test_answers_of_has_cluster_that_lie_stop_the_conversion(self):
+        """secreview SR-1: HA's cluster answered the check (a crafted backup can make it lie: a pg_-named schema of
+        same-count views and its own per-role search_path, proven in the lab); the new cluster, which holds exactly
+        HA's data on this device's schema and server, must answer the same before anything is exported."""
+        real = self.world.answer
+        cases = (
+            ('scheduled_tasks_active', ha_omnigent.DETAIL_SQL, lambda v: dict(v, scheduled_tasks_active=3)),
+            ('public_sessions', ha_omnigent.DETAIL_SQL, lambda v: dict(v, public_sessions=2)),
+            ('user_ids', ha_omnigent.DETAIL_SQL, lambda v: dict(v, user_ids=['admin', 'alice', 'bob'])),
+            ('bundles', ha_omnigent.KEYS_SQL, lambda v: dict(v, bundles=[BUNDLE, '../../../etc/passwd'])),
+            ('scheduled_tasks（HA 2，實際 5）', None, lambda v: dict(v, scheduled_tasks=5)))
+        for name, query, change in cases:
+            with self.subTest(name=name):
+                def answer(role, sql, database, query=query, change=change):
+                    value = real(role, sql, database)
+                    if role != 'omni-db' or not isinstance(value, dict):
+                        return value
+                    if query is None:   # the table counts (several statements of 40 tables)
+                        return change(value) if 'scheduled_task_runs' in value else value
+                    return change(value) if sql == query else value
+                self.world.answer = answer
+                self.world.execs.clear()
+                error = self.assert_refused('incompatible', '回報的內容和它實際的資料不一致', loaded=True)
+                self.assertIn(name, error.message)
+                self.assertNotIn('etc/passwd', error.message)   # a value is never repeated
+        self.world.answer = real
+
     def test_unregistered_quadlet_secrets_refuse_before_anything(self):
         self.catalog['omnigent'].secrets = [{'name': 'omnigent-postgres-password'}]
         with self.assertRaises(BackupError) as caught:
