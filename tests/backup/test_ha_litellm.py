@@ -25,7 +25,9 @@ from . import hafixtures as hx
 SLUG = '9663031d_woow-litellm'
 SALT = b'sk-' + b'a1' * 32
 OTHER_SALT = b'sk-' + b'b2' * 32
-MIGRATIONS = ['20250326162113_baseline', '20250412081753_team_member_permissions', '20251101000000_add_x']
+# One real LiteLLM 1.104.0 migration name has spaces (litellm-proxy-extras 0.4.102.post1).
+MIGRATIONS = ['20250326162113_baseline', '20250412081753_team_member_permissions',
+              '20251122125322_Add organization_id to spend logs']
 QUADLETS = {
     'litellm-postgres.container': b'[Container]\nContainerName=litellm-postgres\n'
                                   b'Image=docker.io/library/postgres:17.11-alpine3.23@sha256:bc27\n'
@@ -382,11 +384,10 @@ class ConvertTests(LiteLLMCase):
         self.assertEqual(self.world.converted_dumps, {'main': b'PGDMP-ll-db'})
         # HA's rows: only the trusted tables, read with the trusted columns, loaded by the role without privileges
         self.assertEqual([sql for _r, _u, sql in self.world.copies_out],
-                         [ha_litellm.copy_out_sql(s, t, ['id', 'value']) for s, t in TABLES])
+                         [f'COPY "{s}"."{t}" ("id", "value") TO STDOUT' for s, t in TABLES])
         self.assertEqual({(r, u) for r, u, _s in self.world.copies_out}, {('hapg', 'postgres')})
         self.assertEqual([(r, u, sql) for r, u, sql, _d in self.world.copies_in],
-                         [('ll-db', ha_litellm.RESTORE_ROLE, ha_litellm.copy_in_sql(s, t, ['id', 'value']))
-                          for s, t in TABLES])
+                         [('ll-db', 'woowbk_restore', f'COPY "{s}"."{t}" ("id", "value") FROM STDIN') for s, t in TABLES])
         self.assertEqual([d for *_x, d in self.world.copies_in], [f'rows of "{s}"."{t}"\n'.encode() for s, t in TABLES])
         self.assertFalse(any('woow"."meta' in sql for _r, _u, sql in self.world.copies_out))
         # the schema is this device's: both sections of the trusted archive, by the app superuser; nothing of HA's
@@ -521,7 +522,7 @@ class ConvertTests(LiteLLMCase):
         self.world.ha_signature = self.world.live_signature = sig
         with self.assertRaises(BackupError) as caught:
             self.convert(self.upload_litellm(), ['litellm'])
-        self.assertIn('名稱不是這個匯入支援的格式', caught.exception.message)
+        self.assertIn('1 個資料表、欄位或序號的名稱不是這個匯入支援的格式', caught.exception.message)
         self.assertFalse(self.world.copies_out, 'refused before any HA row is read')
         self.assert_nothing_loaded()
 

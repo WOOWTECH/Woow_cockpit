@@ -74,7 +74,9 @@ RESTORE_ROLE = 'woowbk_restore'
 READER_ROLE = 'woowbk_litellm_reader'
 DASHBOARD_TEAM = 'litellm-dashboard'            # the UI's session keys: deleted by the proxy at the first start
 IDENT_RE = re.compile(r'[A-Za-z_][A-Za-z0-9_]{0,62}\Z')
-MIGRATION_RE = re.compile(r'[0-9A-Za-z_.-]{1,200}\Z')
+# Prisma migration folder names; one of LiteLLM 1.104.0's has spaces (litellm-proxy-extras 0.4.102.post1:
+# litellm_proxy_extras/migrations/20251122125322_Add organization_id to spend logs/migration.sql).
+MIGRATION_RE = re.compile(r'[0-9A-Za-z_. -]{1,200}\Z')
 VERSION_RE = re.compile(r'[0-9]{1,4}\.[0-9]{1,4}\.[0-9]{1,4}\Z')
 SALT_RE = re.compile(rb'[A-Za-z0-9_-]{16,256}\Z')   # HA woow_init.py SECRET_VALUE_RE (read_secret strips)
 MAX_SALT_FILE = 1024
@@ -435,7 +437,8 @@ def require_names(schema, app=None):
     names += [row[2] for row in schema.columns]
     bad = [n for n in names if not isinstance(n, str) or not IDENT_RE.fullmatch(n)]
     if bad or len(schema.tables()) > MAX_TABLES or not schema.tables():
-        raise BackupError('incompatible', 'LiteLLM 的資料表名稱不是這個匯入支援的格式，無法匯入。',
+        raise BackupError('incompatible', f'LiteLLM 有 {len(bad)} 個資料表、欄位或序號的名稱不是這個匯入支援的格式'
+                                          f'（{len(schema.tables())} 個資料表），沒有讀取任何資料就停止了。',
                           **({'app': app.id} if app is not None else {}))
 
 

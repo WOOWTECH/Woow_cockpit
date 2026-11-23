@@ -501,11 +501,14 @@ class Run:
             # database mode (postgres item main), no built-in digests, the readiness URL within 300 s.
             entry = json.loads(json.dumps(variant.get('entry'))) if isinstance(variant.get('entry'), dict) else None
             if entry is not None:
+                # The package's production entry (tests/backup/test_suggest.py fixture, facts CAT): no built-in
+                # digests, GET /health/readiness (the draft proposes the Quadlet's liveness URL), both config files.
                 entry['verify'] = []
-                # Lab difference: the readiness URL may take up to 600 s (catalog maximum) on the loaded lab host;
-                # the package's production entry allows 300 s.
-                for item in entry.get('health') or []:
-                    item['timeout_seconds'] = 600
+                # Lab difference: up to 600 s (catalog maximum) on the loaded lab host; production allows 300 s.
+                entry['health'] = [{'type': 'http', 'url': 'http://127.0.0.1:4000/health/readiness', 'expect_status': 200,
+                                    'timeout_seconds': 600}]
+                files = [c for c in entry.get('config_files') or [] if c.get('path') != '.config/litellm/litellm.env']
+                entry['config_files'] = files + [{'path': '.config/litellm/litellm.env', 'mode': '0600'}]
             if not ev.check('setup: catalog-suggest proposes the litellm entry (single-database mode) from the installed '
                             'Quadlet files', isinstance(entry, dict) and variant.get('valid') is True,
                             {'apps': [a.get('id') for a in suggestion.get('apps') or []],
@@ -521,8 +524,10 @@ class Run:
         entry = drv.catalog('litellm')
         ev.save('catalog-litellm-installed.json', entry)
         pg = (entry.get('postgres') or [{}])[0]
-        ev.check('setup: the litellm catalog entry has the package units, the postgres item main, the five secrets and '
-                 'the readiness health URL', set(UNITS) <= set(entry.get('units') or [])
+        ev.check('setup: the litellm catalog entry has the package units, the postgres item main, the five secrets, '
+                 'both config files and the readiness health URL', set(UNITS) <= set(entry.get('units') or [])
+                 and sorted(c.get('path') for c in entry.get('config_files') or []) == ['.config/litellm/config.yaml',
+                                                                                    '.config/litellm/litellm.env']
                  and (pg.get('id'), pg.get('container'), pg.get('database'), pg.get('user')) ==
                  ('main', 'litellm-postgres', 'litellm', 'litellm')
                  and sorted(s['name'] for s in entry.get('secrets') or []) == LITELLM_SECRETS
