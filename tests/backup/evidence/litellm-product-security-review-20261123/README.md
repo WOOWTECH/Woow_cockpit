@@ -27,8 +27,11 @@ Fixes are on branch `review/litellm-secreview-20261123` (from `3bde418`): `ad674
   (`/tmp/woowbk-review-*`), which the harness reads back before the objects are removed.
 - `tests/e2e/lab/litellm_archive_review.py`: 36 crafted add-on members through the real `scan_member` / `PgSink`
   (offline, no container).
-- Every evidence file records `source.commit` (clean tree, `tracked_changes: false`) and the SHA-256 of
-  `ha_litellm.py`. `original-*` ran on `2284e4d`/`cd900c5` (product code = `3bde418`), `fixed-*` on `d31c59a`.
+- Every evidence file records `source.commit` and the SHA-256 of `ha_litellm.py` (`104e9ceb…` = `3bde418`'s,
+  `03f3ec69…` = the fixed `d31c59a`'s). `original-*` ran on clean `2284e4d`/`cd900c5` (product code = `3bde418`),
+  `fixed-*` on clean `d31c59a`. The later `owner_view` case ran from `f474bb5`: `original-owner_view.json` with
+  `3bde418`'s `ha_litellm.py` put into a throwaway worktree (hence `tracked_changes: true`), `fixed-owner_view.json`
+  from the review worktree.
 - No secret anywhere: the salt is generated per run and never printed; the crafted clusters use trust on their unix
   socket only; the probes record environment variable names, never values.
 
@@ -37,7 +40,7 @@ Fixes are on branch `review/litellm-secreview-20261123` (from `3bde418`): `ad674
 | Attack | Product `3bde418` | Fixed `d31c59a` | Evidence |
 |---|---|---|---|
 | T1: `public.json_agg(name)` aggregate created by the non-superuser owner (search-path trojan) | **ran as the superuser `postgres` during `analyse`** → `COPY … TO PROGRAM` → shell uid 70 in the HA container | not resolved (search_path pg_catalog); no marker; refused (SUPERUSER_SQL reports the aggregate as FUNCTION (LANGUAGE C): an aggregate is an internal-language pg_proc row; migrations unknown) | `*-owner_trojan.json` |
-| T1: `_prisma_migrations` replaced by a view over a plpgsql function | read as the superuser (here the trojan above failed the query first) | not read: only an ordinary table is read; blocker 資料庫結構版本不同 | `fixed-owner_trojan.json` |
+| T1: `_prisma_migrations` replaced by a view over a plpgsql function (view only, no aggregate) | **ran as the superuser during `analyse`, and the check found NO blocker** (migrations read through the view) | not read: only an ordinary table is read; no marker; blocker 資料庫結構版本不同 | `*-owner_view.json` |
 | T2: `login` event trigger | **ran at the engine's first connection** (before any check) | did not fire | `*-superuser_catalog.json` |
 | T2: `ddl_command_end` event trigger | **ran at `salt_binding`'s GRANT**, before the EVENT TRIGGER blocker | did not fire; blocker unchanged | same |
 | Per-database `session_preload_libraries = auto_explain` | **loaded** despite `-c session_preload_libraries=` | `''` | same |
@@ -54,12 +57,31 @@ read-only root, no `/run/secrets`, no host path (`/home` empty), 16 processes (i
 limited (the harness ran with 1 GiB / 512, the product's defaults are 2 GiB / 1024). No anonymous volume and no
 container of the review was left.
 
+## Checked by reading (no finding)
+
+- **Privilege.** The engine runs Podman as the app owner (rootless); HA's server runs as uid 70 in the throwaway
+  container (no capability, `no-new-privileges`). HA's rows enter the new cluster only through `COPY … FROM STDIN`
+  of `woowbk_restore` (INSERT and sequence values only; dropped before the audit); the bootstrap superuser restores
+  only this device's own pre-/post-data sections. Staging rows and the salt file are 0600 in 0700 folders
+  (`O_EXCL|O_NOFOLLOW` for the salt). No HA string reaches SQL text: every statement uses this device's names
+  (`IDENT_RE`), sequence values must be JSON integers.
+- **Secrets.** The salt is masked for the whole job, never in argv, logs, errors or the page; the salt reader gets
+  it back only in captured stdout. `import_manifest(secrets=…)` replaces only a secret the catalog declares, from
+  one regular file of 1..511999 bytes; the other four LiteLLM secrets are read live. The product lane's evidence
+  files hold fixed status lines only (scanned).
+- **Rollback.** The restore's safety backup reads every secret live, so the automatic and the manual rollback put
+  the own salt back with the own database (the product lane's real attempt 4 on `3bde418`: both PASS for salt and
+  decryption; its own-state count FAILs were its probes' own spend logs, fixed in `db73107`).
+- **Page.** `backup.js` renders the check's strings as text nodes (no `innerHTML` anywhere); HA-controlled names in
+  messages are cut at 60 characters and at most 10 are listed (`hacommon.names`).
+
 ## Findings
 
 1. **SR-1 (medium) — fixed `ad6745a`.** Code the HA database owner may create ran as the superuser in the engine's
    throwaway PostgreSQL 18: the engine's catalog queries call functions unqualified (`json_agg`, …) with the
-   default search_path, and it read `public._prisma_migrations` without checking it is a table. Contained by the
-   sandbox, but it turned a compromised HA LiteLLM into an OS shell (as postgres) inside the job. Fix: every
+   default search_path, and it read `public._prisma_migrations` without checking it is a table (with the view alone
+   the check even passed with no blocker). Contained by the sandbox, but it turned a compromised HA LiteLLM into an
+   OS shell (as postgres) inside every check and conversion of that backup. Fix: every
    session the engine opens there sends client options (`PGOPTIONS`, `HaSessions` in `start_ha_cluster`):
    `search_path=pg_catalog` and the settings below. Client options beat HA's per-database/per-role settings
    (`GucSource`: `PGC_S_CLIENT` > `PGC_S_DATABASE_USER` > `PGC_S_ARGV`, PostgreSQL `src/include/utils/guc.h`).
