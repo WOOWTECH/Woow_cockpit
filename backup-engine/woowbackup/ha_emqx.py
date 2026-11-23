@@ -999,6 +999,44 @@ def jq_rule_count(config):
     return len(found)
 
 
+CREDENTIAL_RECEIVER = ('EMQX 不能搬過來：HA 的 EMQX 設定有{what}，它會收到每個連線用戶端的帳號與密碼（包括這台自己服務的帳號）；'
+                       '搬過來會把這台的帳號密碼送到 HA 設定的伺服器，為保護這台的帳號已停止。'
+                       '目前只支援「內建資料庫」帳號驗證，且不能有啟用的 ExHook；請先在 HA 移除或停用它們，再重新備份後匯入。')
+BUILTIN_AUTHN = frozenset({('password_based', 'built_in_database'), ('scram', 'built_in_database')})
+AUTHN_NAMES = {'http': 'HTTP', 'mysql': 'MySQL', 'postgresql': 'PostgreSQL', 'redis': 'Redis', 'mongodb': 'MongoDB',
+               'ldap': 'LDAP', 'jwt': 'JWT', 'cinfo': '用戶端資訊', 'gcp_device': 'GCP 裝置', 'kerberos': 'Kerberos'}
+
+
+def credential_receivers(config):
+    """What the settings HA's import brought would hand client credentials to: an enabled authenticator that is not
+    the built-in database (an HTTP one posts `${password}`, JWT/LDAP/SQL/Redis ones query outside), or an enabled
+    ExHook server (its client.authenticate hook carries the password: emqx_exhook_handler.erl:104,318-333). This
+    device's own services log in through the same chain with the bootstrap users' passwords (security review SR-7,
+    2026-11-23). Returns display names, [] when only built-in database authenticators and no ExHook remain."""
+    found = []
+    authn = config.get('authentication', [])
+    names = set()
+    for authenticator in authn if isinstance(authn, list) else [None]:
+        if not isinstance(authenticator, dict):
+            names.add('未知的帳號驗證')
+            continue
+        if authenticator.get('enable', True) is False:
+            continue
+        kind = (authenticator.get('mechanism'), authenticator.get('backend'))
+        if kind not in BUILTIN_AUTHN:
+            raw = kind[1] if isinstance(kind[1], str) else kind[0]
+            names.add(AUTHN_NAMES.get(raw) or (raw if isinstance(raw, str) and re.fullmatch(r'[a-z_]{1,32}', raw)
+                                                else '未知的帳號驗證'))
+    if names:
+        found.append('外部帳號驗證（' + '、'.join(sorted(names)) + '）')
+    exhook = config.get('exhook')
+    servers = exhook.get('servers', []) if isinstance(exhook, dict) else []
+    if not isinstance(servers, list) or any(not isinstance(server, dict) or server.get('enable', True) is not False
+                                            for server in servers):
+        found.append('ExHook')
+    return found
+
+
 SNAPSHOT_CHANGED = ('EMQX 不能搬過來：這台 EMQX 的 ACL 或憑證檔案放在資料卷裡（例如在 Dashboard 編輯過授權規則），'
                     '匯入 HA 的資料會改寫這個檔案；為避免改變這台的存取權限，已停止。')
 
@@ -1098,6 +1136,9 @@ def target_broker(work, tmp, target, export, ids, *, hint='', target_snapshot=No
         count = jq_rule_count(final)
         if count:
             raise BackupError('incompatible', JQ_RULE.format(count=count))
+        receivers = credential_receivers(final)
+        if receivers:
+            raise BackupError('incompatible', CREDENTIAL_RECEIVER.format(what='、'.join(receivers)))
         check_candidate_bootstrap(tmp, target, final)
     else:
         # Legacy internal test path only; public convert remains blocked.
