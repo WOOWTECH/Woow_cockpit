@@ -646,10 +646,16 @@ class Run:
                       and found.get('db_salt_sha256') == before.get('db_salt_sha256'),
                       {'equal': {n: (found.get('secret_sha256') or {}).get(n) == (before.get('secret_sha256') or {}).get(n)
                                  for n in LITELLM_SECRETS}})
+        # spend_logs is left out of the equality: LiteLLM logs the probes' own-key calls themselves, so the safety
+        # backup (taken when the restore starts) holds more rows than the `before` probe saw (attempt 4: 1 -> 3).
+        def stable(counts):
+            return {k: v for k, v in (counts or {}).items() if k != 'spend_logs'}
+
         self.ev.check(f"{label_text}: this device's own data is back (counts, schema), own key 200, HA test key refused",
-                      found.get('counts') == before.get('counts') and found.get('signature_sha256') == before.get(
-                          'signature_sha256') and keys.get('own', {}).get('key_info') == 200
-                      and keys.get('ha', {}).get('key_info') in (401, 403),
+                      stable(found.get('counts')) == stable(before.get('counts'))
+                      and (found.get('counts') or {}).get('spend_logs', -1) >= (before.get('counts') or {}).get('spend_logs', 0)
+                      and found.get('signature_sha256') == before.get('signature_sha256')
+                      and keys.get('own', {}).get('key_info') == 200 and keys.get('ha', {}).get('key_info') in (401, 403),
                       {'counts': [before.get('counts'), found.get('counts')], 'keys': keys})
         self.ev.check(f"{label_text}: this device's own stored values decrypt with its own salt again",
                       d.get('stored_values', 0) >= 1 and d.get('stored_ok') == d.get('stored_values')
