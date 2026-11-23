@@ -1,0 +1,60 @@
+{
+ "lane": "hermes-real",
+ "date": "2026-11-23",
+ "updated": "2026-11-23T13:10+08:00",
+ "authorization": "owner explicitly authorized real Hermes testing on 2026-11-23 (relayed request)",
+ "security_review": "independent FTS/SQLite security review: owner keeps it a manual (human) item; this lane did not do or redo it; the engine under test includes 8b47124 (hasqlite fails closed without a network namespace)",
+ "target": "lab woowbk-dev-d (network none, no published ports; isolation asserted before and after every run), production-like Hermes v0.22.5 Quadlet units, image woow-hermes-agent:v0.22.5-woow4",
+ "source": "real batch-1 x86 HA backups of add-on 9c1a67eb_woow-hermes 0.1.14 (x86-enc ha-f82422e327f151ec819d, x86-plain ha-3871a468e2f3a11488df, x86-unc ha-d32d92f6d60c0e70f5e6), each bound to its local fixture by SHA-256",
+ "path": "this tree's engine installed in dev-d by deploy-src.sh (installed modules and helper SHA-256 equal to the tree); every engine call is the installed helper command the Cockpit page sends: ha-check-start, ha-convert-start, inspect, restore-start, job-status, list, status, catalog-install, key-init, delete",
+ "results": {
+  "check": {
+   "status": "pass",
+   "attempt": 6,
+   "detail": "x86-enc, x86-plain, x86-unc: ok, no blockers, amd64 / 0.1.14 / 0.22.5, 5 sessions, 15 messages, schema 32, config 51, 64 skills, 1 cron job, HA-internal URL warned, no throwaway object left"
+  },
+  "import_x86_enc": {
+   "status": "pass",
+   "attempt": 7,
+   "checks": "83/83",
+   "detail": "convert 11 s, restore 103 s, continuity and FTS5 search through Hermes, b1 Hermes checks, restart, rollback with the safety backup, baseline digest equal"
+  },
+  "import_x86_plain": {
+   "status": "pass",
+   "attempt": 8,
+   "detail": "same chain as x86-enc"
+  },
+  "import_x86_unc": {
+   "status": "partial",
+   "attempt": 9,
+   "detail": "convert 18 s, inspect ok, restore 200 s, continuity + FTS5 search + integrity after restore PASS, rollback PASS (baseline digest equal); the b1 driver's Hermes probe exited rc 1 with output suppressed, so its checks, the restart and the after-restart recheck did not run for this form; rerun with safe diagnostics pending"
+  },
+  "kit_baseline": {
+   "status": "pass",
+   "attempt": 9,
+   "detail": "dev-d's own baseline backup 20261119T072434Z-45b29e52 restored with the 11-19 emergency kit (page path 'enter emergency key'), 184.6 s, health ok, markers back, digest equal to the first pre-import digest"
+  },
+  "cleanup": {
+   "status": "pass",
+   "attempt": 9,
+   "detail": "7 test backups deleted, no job container/volume/network, staging empty, no key file"
+  },
+  "leaks": {
+   "status": "pass",
+   "attempt": 9,
+   "detail": "0 hits: 229 engine files + device journal since the run started (12 lane secret values incl. dev-d's Hermes podman secrets) and 19 private evidence files"
+  }
+ },
+ "not_covered": [
+  "the browser page itself (dev-d publishes no port; the helper commands are the page's)",
+  "a chat turn with a model (dev-d runs Hermes --no-llm; HA's config points to an HA-internal URL, as the import warns)",
+  "ARM (the Hermes add-on is amd64 only)",
+  "production"
+ ],
+ "lab_changes": [
+  "dev-d: engine/page installed by deploy-src.sh, schedule timer masked, Hermes catalog entry = the one carried by baseline 45b29e52, device key 2E90-066E-D8E5-07C2 (its kit never read)",
+  "dev-d: python3-nacl, python3-cryptography, libsodium23, python3-cffi-backend installed with dpkg from host-downloaded noble debs (lost in the 11-20 re-creation)",
+  "the engine's own safety-backup pruning (SAFETY_KEEP=3) may have removed older Hermes safety backups of 11-19"
+ ],
+ "commercial_acceptance": "not-complete"
+}

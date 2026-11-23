@@ -100,6 +100,30 @@ Failed = drv.Failed
 drv.state_path = lambda: LAB / 'run' / 'hermes_real_ha.json'   # never the b1 driver's own state file
 
 
+def _device_python_diag(script, request=None, *, as_owner=True, timeout=600):
+    """The b1 driver's device_python (same guard, same transport) that, on failure, names only the exception class
+    and the program line of the device probe -- never its message or output, which may hold values (11-23 attempt 9:
+    the driver's Hermes probe failed with 'diagnostic output suppressed' and nothing else)."""
+    if script in (drv.OMNI_PROBE, drv.EMQX_PROBE, drv.CREDENTIAL_HTTP, drv.RUNNER_TOKEN, drv.RUNNER_HOST):
+        raise Failed('credential producer disabled: issuance cannot be captured on failure')
+    argv = ([drv.OWNER] if as_owner else []) + ['python3', '-I', '-c', script]
+    proc = drv.run([drv.LP, 'exec', '-i', drv.DEVICE, *argv], input=json.dumps(request or {}).encode('utf-8'),
+                   timeout=timeout)
+    if proc.returncode == 0:
+        try:
+            return json.loads(drv.out(proc).strip().splitlines()[-1])
+        except (ValueError, IndexError):
+            pass
+    err = proc.stderr.decode('utf-8', 'replace').splitlines()
+    kinds = [m.group(1) for m in (re.match(r'([A-Za-z_][A-Za-z0-9_.]{0,80})(?::|$)', x) for x in err) if m]
+    lines = [m.group(1) for m in (re.search(r'File "<string>", line ([0-9]{1,6})', x) for x in err) if m]
+    raise Failed(f'device probe failed (rc {proc.returncode}; {kinds[-1] if kinds else "no exception"} at program '
+                 f'line {lines[-1] if lines else "?"}); output suppressed')
+
+
+drv.device_python = _device_python_diag
+
+
 def label(text):
     return SAFE_LABEL.sub('_', str(text))[:200] or 'unnamed'
 

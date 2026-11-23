@@ -303,6 +303,46 @@ max、oom、oom_kill 都是 0。上限 4g 為 HA 匯入時的拋棄式容器（t
 約 15 分鐘，其中映像約 10 分鐘、四個安裝合計約 5 分鐘）。新的設備金鑰會覆寫 `dev-d-kit.txt`，之前下載的 dev-d 備份就打不開了；
 `dev-d-markers.json` 保留，下一次基準會沿用。只更新引擎與頁面：`deploy-src.sh d --src <工作樹>`。dev-d 不用時以 `down.sh d` 停止。
 
+### Hermes 真實還原（`hermes_real_ha.py`，hermes-real 線，2026-11-23）
+
+擁有者 2026-11-23 明確授權實測 Hermes。把批次一的**真實 x86 HA 備份**（附加元件 `9c1a67eb_woow-hermes` 0.1.14，Hermes v0.22.5，
+結構 32，5 個對話／15 則訊息，兩個建在 view 上的 FTS5 表）以**產品路徑**匯入 dev-d 的 Hermes：引擎是本工作樹（`deploy-src.sh d` 安裝），
+每一步都是頁面送出的 helper 指令（root、stdin 一個 JSON、回一個 JSON）。b1 驅動程式（`ha_import_b1_e2e.py`）本身的真實入口仍然
+fail-closed；本程式只重用它的 helper 呼叫、`Secrets` 讀取器、遮蔽後的證據與 Hermes 驗證。
+
+```bash
+python3 -I tests/e2e/lab/hermes_real_capture.py --private=<~/.woowbk-lab/evidence/hermes-real/…-stdout.txt> \
+    tests/e2e/lab/evidence/hermes-real-20261123/attempt-NN-<scope>.json <scope> -- \
+    python3 -I tests/e2e/lab/hermes_real_ha.py packages setup before check import:x86-enc   # 之後 import:x86-plain import:x86-unc kit-baseline cleanup leaks
+```
+
+* 一次執行＝一次持有 `/tmp/woowbk-dev-d-mutation.lock`（`/tmp/woowbk-dev-d-emqx-main-waiting` 存在時不取鎖，步驟之間看到它就讓出），
+  前後都跑 `owner.sh d --verify-isolation`，每步前檢查 dev-d cgroup 餘裕 ≥ 1.5 GiB、主機 MemAvailable ≥ 1 GiB、磁碟 ≥ 13 GiB；
+  持有超過 30 分鐘就不再開始新步驟。工作樹必須乾淨（先提交再實測）。
+* `packages`：dev-d 在 11-20 以 network none 重建後少了本節「建置」裝的 `python3-nacl`、`python3-cryptography`（HA 加密備份需要）；
+  設備沒有網路，所以由主機 `apt-get download`（Ubuntu 24.04 noble 官方庫，apt 依簽章索引驗證；dev-d 也是 24.04）下載
+  `libsodium23`、`python3-cffi-backend`、`python3-nacl`、`python3-cryptography`，以 `labpodman cp` 放入再 `dpkg -i`。
+* `setup`：先 `systemctl mask` 排程計時器（共用實驗室，不要排程），`deploy-src.sh d --src <本樹> --no-demo-catalog`；Hermes 的目錄項目
+  取自 dev-d **自己的** Hermes 基準備份 `20261119T072434Z-45b29e52` 附帶的設定（用 11-19 的緊急金鑰 `dev-d-kit.txt` 開，絕不顯示），
+  以 `catalog-install` 原樣安裝；`key-init` 建立設備金鑰（不讀取其緊急金鑰；測試備份最後會刪除）。不讀正式主機的任何目錄項目。
+* `before`：基準標記（`batch1_markers.py hermes read`）、檔案擁有者例外、Hermes 狀態摘要（對話與每則訊息的 sha256、記憶、技能、排程、
+  看板、config.yaml、.env 的鍵名）。
+* `check`：三份 HA 檔（store 內 SHA-256 與本機 fixture 相同）各跑一次 `ha-check-start`，結果等於來源事實。
+* `import:<x86-enc|x86-plain|x86-unc>`：轉換、inspect、還原；經由 Hermes 本身驗證：儀表板 API 列出 HA 的 5 個對話（訊息數、來源、模型、
+  標題、開始時間＝來源事實），每則訊息 API 內容＝state.db（id、role、sha256），全文搜尋 `/api/sessions/search`（FTS5，片段帶 `>>> <<<`）
+  找到的對話＝容器內非 FTS 掃描的結果；兩個 FTS5 表在一致的複本上 `integrity-check` 通過；b1 驅動程式的 Hermes 檢查（儀表板密碼、
+  記憶、技能、排程、看板、.env、webhook 簽章、API 金鑰）；重新啟動 hermes-agent 後再驗一次；以還原時產生的還原前備份回退，
+  基準標記回來、HA 的資料與搜尋結果消失、狀態摘要等於 `before`。
+* `kit-baseline`：以緊急金鑰還原 dev-d 的 Hermes 基準備份（頁面「輸入緊急金鑰」的路徑），標記與摘要回到 `before`。
+* `cleanup`／`leaks`：刪除本測試的轉換與還原前備份；沒有作業的拋棄式容器、暫存資料夾、金鑰檔；引擎紀錄、日誌、run 目錄與
+  run 開始後的設備日誌中沒有 HA 金鑰、HA 的 Hermes 測試秘密、緊急金鑰或 dev-d 的 Hermes 密鑰（只回傳次數）。
+* 沒有涵蓋：瀏覽器頁面本身（dev-d 不公開任何埠；helper 呼叫就是頁面送出的）、與模型對話（dev-d 以 `--no-llm` 安裝，HA 的設定指向
+  HA 內部網址，匯入時已提醒）、ARM（Hermes 附加元件只有 amd64）。
+* 鎖：像 `flock -w` 一樣阻塞等待；emqx-main 的等待檔存在時不取鎖（取到也立即放開）。只有在 emqx-main 的真實執行**持有**鎖
+  （`/proc/<pid>/fdinfo` 有 `lock: FLOCK` 行）期間看到的那一份等待檔才視為過時；只開啟鎖檔（`flock -n` 失敗的重試）不算持有。
+* 結果（2026-11-23）：見 `evidence/hermes-real-20261123/`（每次嘗試一份 JSON：固定狀態行、stdout SHA-256、來源提交、
+  `commercial_acceptance: not-complete`）與 `status.json`。
+
 ## 端到端測試（整合）
 
 兩個執行器都只透過 labpodman 操作設備，結果與截圖寫入 `~/.woowbk-lab/evidence/integration/<時間>-<情境>/`
