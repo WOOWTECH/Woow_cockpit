@@ -226,9 +226,35 @@ for root in roots:
         data = open(path, "rb").read()
         scanned += 1
         hits += sum(data.count(s) for s in needles)
-journal = subprocess.run(["journalctl", "-o", "cat", "--no-pager"], capture_output=True, check=True).stdout
-hits += sum(journal.count(s) for s in needles)
-print(json.dumps({"scanned": scanned, "journal_bytes": len(journal), "names": len(secrets), "hits": hits}))
+# The whole device journal, entry by entry. A public link's token is part of its URL (Nextcloud
+# apps/dav/lib/Connector/Sabre/PublicAuth.php:104-109 reads it from public.php/dav/files/<token>/) and the web servers log
+# every request line (the gateway's nginx.conf:23,27 `$request`/`$remote_user`, Apache's apache2.conf:213 `%r`/`%u`):
+# for the names in `url_tokens` ONLY, hits in an HTTP access-log entry of the Nextcloud gateway or app unit that
+# requests public.php/ are counted apart (the client's own public-link requests); everything else counts as a hit.
+url_needles = secret_scan_needles([secrets[n] for n in req.get("url_tokens", []) if n in secrets])
+other = [s for s in needles if s not in url_needles]
+ACCESS_UNITS = ("nextcloud-gateway.service", "nextcloud-app.service")
+def access_line(entry):
+    try:
+        e = json.loads(entry)
+    except ValueError:
+        return False
+    msg = e.get("MESSAGE")
+    msg = bytes(msg).decode("utf-8", "replace") if isinstance(msg, list) else str(msg or "")
+    return e.get("_SYSTEMD_USER_UNIT") in ACCESS_UNITS and "public.php/" in msg and " HTTP/" in msg
+journal = subprocess.run(["journalctl", "-o", "json", "--no-pager"], capture_output=True, check=True).stdout
+access, outside_access = 0, 0
+for entry in journal.splitlines():
+    hits += sum(entry.count(s) for s in other)
+    url_hits = sum(entry.count(s) for s in url_needles)
+    if url_hits:
+        if access_line(entry):
+            access += url_hits
+        else:
+            outside_access += url_hits
+hits += outside_access
+print(json.dumps({"scanned": scanned, "journal_bytes": len(journal), "names": len(secrets), "hits": hits,
+                  "url_token_access_log_hits": access, "url_token_hits_elsewhere": outside_access}))
 '''
 
 
@@ -920,7 +946,8 @@ class Run:
         if self.args.run:
             facts = self.args.facts
             names += [facts[k] for k in ('user_pw', 'app_pw', 'user2_pw', 'link_pw', 'link_token') if facts.get(k)]
-        request = {'secrets': {name: self.args.secrets[name] for name in names}}
+        url_tokens = [self.args.facts['link_token']] if self.args.run and self.args.facts.get('link_token') else []
+        request = {'secrets': {name: self.args.secrets[name] for name in names}, 'url_tokens': url_tokens}
         report = drv.device_python(LEAKS, request, as_owner=False, timeout=900)
         host = drv.scan_host_evidence(ev.dir, self.args.secrets)
         ev.save('leaks.json', {'device': report, 'host': host})
@@ -928,6 +955,11 @@ class Run:
                  'device journal, and not in this evidence',
                  report.get('hits') == 0 and report.get('scanned', 0) > 0 and not host.get('hits'),
                  {'device': report, 'host_hits': host.get('hits')})
+        if url_tokens:
+            ev.check('leaks: the public link token is only in the Nextcloud web servers\' access logs of the client\'s own '
+                     'public-link requests (a public link carries its token in the URL)',
+                     report.get('url_token_access_log_hits', 0) > 0 and report.get('url_token_hits_elsewhere') == 0,
+                     {k: report.get(k) for k in ('url_token_access_log_hits', 'url_token_hits_elsewhere')})
 
 
 def negative(args):
