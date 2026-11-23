@@ -1117,6 +1117,26 @@ def http_self_check():
         server.server_close()
 
 
+def walk_self_check():
+    """COMMON's WALK program on a temporary tree (pure Python, no device)."""
+    import tempfile
+    ns = {}
+    exec(COMMON.replace('REQ = json.loads(sys.stdin.read() or "{}")', 'REQ = {}'), ns)
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        (root / 'skills' / 'a').mkdir(parents=True)
+        (root / 'skills' / 'a' / 'SKILL.md').write_bytes(b'# a')
+        os.symlink('SKILL.md', root / 'skills' / 'a' / 'link')
+        proc = subprocess.run([sys.executable, '-I', '-c', ns['WALK'], str(root), 'skills', 'missing.json'],
+                              capture_output=True, timeout=60, check=True)
+        doc = json.loads(proc.stdout)
+        assert doc['missing'] == ['missing.json'] and doc['entries'] == 4, doc
+        assert doc['map']['skills/a/SKILL.md'].startswith('f ') and doc['map']['skills/a/link'].startswith('l ')
+        proc = subprocess.run([sys.executable, '-I', '-c', ns['WALK'], str(root), '.'], capture_output=True,
+                              timeout=60, check=True)
+        assert set(json.loads(proc.stdout)['map']) == {'.', 'skills', 'skills/a', 'skills/a/SKILL.md', 'skills/a/link'}
+
+
 def self_check():
     for script in (BEFORE, CLIENT, SEED, UNSEED, COLLECT, LEAKS, ENGINE_HASHES, SPACE):
         compile(script, '<device program>', 'exec')
@@ -1132,6 +1152,7 @@ def self_check():
         'pi': ['missing:auth.json']}
     assert all(label(x) == x for x in ('check: ok, no blockers', 'restart: systemctl --user restart code-server.service'))
     http_self_check()
+    walk_self_check()
     print('self-check: PASS')
     return 0
 
