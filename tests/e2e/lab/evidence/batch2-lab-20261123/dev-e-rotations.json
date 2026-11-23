@@ -1,0 +1,31 @@
+{
+ "schema_version": 1,
+ "kind": "lab-rotation",
+ "device": "woowbk-dev-e (lab, network none, no published port, 3g, 2 CPUs)",
+ "rule": "owner 2026-11-23 (team/batch2-lab.md 16:15): after an app's restore tests pass, its lab images and lab test data may be deleted to free space; the real HA fixtures stay",
+ "rotations": [
+  {
+   "app": "opendesign",
+   "when": "2026-11-23 19:43:54-19:44:30 Asia/Taipei",
+   "reason": "opendesign-import real run attempt 3 PASS 85/85 (team/opendesign-import.md 17:55)",
+   "steps": [
+    "systemctl --user stop open-design-terminal open-design-mcp open-design-nginx open-design (all inactive, no container left)",
+    "deploy-batch2.sh e drop-images:opendesign (5bf5f9b959b3 localhost/woow-open-design:4.2.1, 1ae82dcc4a34 nginx:1.30.4-alpine)"
+   ],
+   "host_free_before_mib": 20984,
+   "host_free_after_mib": 33349,
+   "freed_mib": 12364,
+   "freed_note": "the image (6.68 GB) and its keep-id:uid=1001 ID-mapped copy",
+   "kept": [
+    "quadlets, env file, secrets",
+    "data volumes (10 MB)",
+    "catalog entry open-design",
+    "baseline backup 20261123T084036Z-5ebb7283 (dev-e backup store)"
+   ],
+   "wake": "deploy-batch2.sh e images:opendesign, then systemctl --user start open-design.service (and its -nginx, -mcp, -terminal units)",
+   "isolation_after": "none {}"
+  }
+ ],
+ "commercial_acceptance": "not-complete",
+ "what_this_is": "a record of lab disk rotation on dev-e; no product behaviour is tested here"
+}
