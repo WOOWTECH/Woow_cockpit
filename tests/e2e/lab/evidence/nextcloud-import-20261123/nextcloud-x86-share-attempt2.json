@@ -1,0 +1,33 @@
+{
+ "source_commit": "3ade81d80ff5f4c1cae2d440755939b82301da9e",
+ "scope": "nextcloud-x86-share",
+ "exit": 1,
+ "elapsed_seconds": 881.2,
+ "stdout_sha256": "46e72ee57728d9be6ee20d9b06acfc86d816ab1012891fb6cc381353d5543c71",
+ "fixed_status": [
+  "preflight: the checkout has no tracked change: PASS",
+  "preflight: dev-e isolation true none: PASS",
+  "preflight: the host keeps 12 GiB plus this run's need free: PASS",
+  "setup: deploy-src.sh e --src this tree: PASS",
+  "setup: the installed engine is exactly this tree: PASS",
+  "setup: the helper answers status with this tree's VERSION: PASS",
+  "setup: the nextcloud catalog entry names the five units and the four data dirs: PASS",
+  "setup: a device key exists (key-init): PASS",
+  "setup: Nextcloud runs (five units active, status.php installed 35.0.1.1, no maintenance): PASS",
+  "before: dev-e's own markers read (baseline user and its WebDAV file): PASS",
+  "before: dev-e's own account logs in (OCS) and the wrong password is refused: PASS",
+  "upload: the fixture has the recorded SHA-256: PASS",
+  "upload: upload-finish answers the HA record: PASS",
+  "upload: nextcloud is importable and installed here: PASS",
+  "run stopped: host free space 14311845888 below the floor plus the step need 1610612736 before check: FAIL",
+  "cleanup: the HA store record of this run is deleted: PASS",
+  "cleanup: no throwaway container, volume or network of a job left: PASS",
+  "cleanup: no staging folder and no key file left: PASS",
+  "leaks: the HA key and the HA test credentials are in no engine record, upload, staging, run dir or the device journal, and not in this evide: PASS",
+  "leaks: the public link token is only in the Nextcloud web servers' access logs of the client's own public-link requests (a public link carri: PASS",
+  "lock held for 876 s",
+  "end: dev-e isolation true none: PASS"
+ ],
+ "stderr_bytes_not_published": 0,
+ "commercial_acceptance": "not-complete"
+}
