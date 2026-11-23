@@ -52,6 +52,8 @@ IMPORTERS = (
     # Batch 2: the MCP server is built into the add-on (no separate MCP add-on; ha_opendesign writes that line).
     Importer('open-design', 'woow_ha_opendesign', 'OpenDesign 設計工具', 'ha_opendesign',
              mcp_admin='opendesign-mcp-admin', engine_mcp_lines=True),
+    # Batch 2: code-server has no MCP admin app and no HA MCP add-on (facts mcp-admin.md section 1.1).
+    Importer('woow-code-server', 'woow_ha_code_server', 'code-server 開發環境', 'ha_codeserver'),
 )
 
 BY_APP = {importer.app_id: importer for importer in IMPORTERS}

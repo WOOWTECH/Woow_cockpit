@@ -16,6 +16,10 @@ The baseline markers stay, so the live data equals the baseline backup afterward
 is generated once into ~/.woowbk-lab/secrets/dev-e-markers.json (0600) and never printed. Evidence (no keys, no
 secrets) goes to ~/.woowbk-lab/evidence/batch2-lab/<stamp>-baseline/; result.json holds the checks and, per app, the
 backup id, sizes, times and the safety backup id. The backups stay (lab data).
+Host disk (the team keeps >= 12 GiB free on the host at every moment): before the backup and before the restore, the
+host must keep FLOOR + RESERVE free after an estimated peak of 2.5 x the app's live data (measured in dev-e); otherwise
+that app stops with "PAUSED: host disk" before writing anything. While a job runs, a watchdog cancels it (job-cancel)
+when host free space falls to FLOOR + 0.25 GiB.
 A failing app is recorded and the next one still runs; the exit status is 0 only when every app passed everything.
 """
 import json
@@ -38,6 +42,10 @@ PASSWORDS = LAB / 'secrets' / 'dev-e-markers.json'
 EVIDENCE = LAB / 'evidence' / 'batch2-lab' / (time.strftime('%Y%m%dT%H%M%S') + '-baseline')
 ALL = ['nextcloud', 'opendesign']
 CATALOG_ID = {'nextcloud': 'nextcloud', 'opendesign': 'open-design'}
+GIB = 1024 ** 3
+FLOOR = 12 * GIB      # the team keeps >= 12 GiB free on the host at every moment
+RESERVE = 1 * GIB     # what the other lanes may write meanwhile
+WATCH = FLOOR + GIB // 4
 APPS = sys.argv[1:] or ALL
 if not set(APPS) <= set(ALL):
     raise SystemExit('usage: batch2_baseline.py [nextcloud] [opendesign]')
@@ -115,9 +123,17 @@ BASELINE = {
 def digests(found):
     """The baseline files with their content digests ('name:sha256')."""
     return sorted(f for f in found.get('files', []) if f.startswith('woowbk-lab-baseline'))
+def host_free():
+    st = os.statvfs('/')
+    return st.f_bavail * st.f_frsize
+
+
 def wait_job(job_id, label, timeout=3600):
     start, phase = time.monotonic(), None
     while True:
+        if host_free() < WATCH:
+            engine('job-cancel', {'job_id': job_id})
+            raise SystemExit(f'{label}: host free space fell to {host_free() >> 20} MiB (floor {FLOOR >> 30} GiB): job cancelled')
         reply = engine('job-status', {'job_id': job_id})
         job = reply['job']
         if job.get('phase') != phase:
@@ -140,6 +156,31 @@ def catalog(app):
     raw = subprocess.run([LP, 'exec', DEV, 'cat', f'/etc/woowtech-cockpit/backup/apps/{app}.json'],
                          capture_output=True, check=True, timeout=30).stdout
     return json.loads(raw)
+
+
+def live_bytes(app):
+    """Bytes of the app's live data in dev-e: the catalog's data_dirs and volumes, as appowner sees them."""
+    entry = catalog(CATALOG_ID[app])
+    paths = [f'/home/appowner/{d["path"]}' for d in entry.get('data_dirs', [])]
+    for volume in entry.get('volumes', []):
+        mount = subprocess.run([LP, 'exec', '-i', DEV, OWNER, 'podman', 'volume', 'inspect', '--format', '{{.Mountpoint}}',
+                                volume['name']], capture_output=True, timeout=60, check=True).stdout.decode().strip()
+        paths.append(mount)
+    out = subprocess.run([LP, 'exec', '-i', DEV, OWNER, 'podman', 'unshare', 'du', '-sb', '--', *paths],
+                         capture_output=True, timeout=600, check=True).stdout.decode()
+    return sum(int(line.split()[0]) for line in out.splitlines() if line.strip())
+
+
+def disk_ok(app, step):
+    data = live_bytes(app)
+    need = int(2.5 * data) + GIB // 4
+    free = host_free()
+    detail = {'step': step, 'host_free_mib': free >> 20, 'live_data_mib': data >> 20, 'estimated_peak_mib': need >> 20,
+              'floor_mib': FLOOR >> 20, 'reserve_mib': RESERVE >> 20}
+    ok = free - need >= FLOOR + RESERVE
+    check(f'{app}: host disk keeps the 12 GiB floor + 1 GiB reserve after the {step}'
+          + ('' if ok else ' (PAUSED: host disk)'), ok, detail)
+    return ok
 
 
 pw = passwords()
@@ -165,6 +206,8 @@ def baseline(app):
                  sorted(BASELINE[app] - have)):
         return
 
+    if not disk_ok(app, 'backup'):
+        return
     request = {'apps': [CATALOG_ID[app]], 'include_images': False, 'note': f'dev-e 基準備份（{app}）', 'request_id': str(uuid.uuid4()),
                'encrypt': True}
     start = engine('backup-start', request)
@@ -185,6 +228,8 @@ def baseline(app):
     check(f'{app}: inspect preflight ok, in-place restorable', inspect['preflight']['ok'] and pre['restorable']
           and pre['mode'] == 'inplace', pre)
 
+    if not disk_ok(app, 'restore'):  # before the after marker, so a pause leaves the baseline state
+        return
     created = markers(app, 'seed', 'after', time.strftime('%Y%m%dT%H%M%S'), secrets.token_urlsafe(18))
     after = names(app, markers(app, 'read')) - BASELINE[app]
     check(f'{app}: "after" marker present before the restore', after, created)
