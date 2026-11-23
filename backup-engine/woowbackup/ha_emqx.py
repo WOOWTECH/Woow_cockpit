@@ -80,8 +80,9 @@ ETC_EXPR = 'io:format("WOOWETC:~s:END", [os:getenv("EMQX_ETC_DIR", "")]).'
 PROFILES = {(('file', True),): ('file',), (('file', True), ('built_in_database', True)): ('file', 'built_in_database')}
 SOURCE_NAMES = {'file': 'ACL 檔案', 'built_in_database': '內建資料庫', 'http': 'HTTP', 'redis': 'Redis', 'mysql': 'MySQL',
                 'postgresql': 'PostgreSQL', 'mongodb': 'MongoDB', 'ldap': 'LDAP', 'client_info': '用戶端資訊'}
-# One plain `EMQX_KEY=value` line of an EnvironmentFile (podman --env-file keeps the value literal): no quotes,
-# backslashes, `$` or surrounding blanks, so the candidate gets exactly what the running broker got.
+# One plain `EMQX_KEY=value` line of an EnvironmentFile, the only form supported (podman --env-file keeps such a value
+# literal on every version): no quotes, backslashes, `$` or surrounding blanks. podman itself reads the file for the
+# candidate (Target.candidate_env), as for the running broker.
 ENV_FILE_LINE = re.compile(r'(EMQX_[A-Z0-9_]{1,100})=([^\s"\'\\$](?:[^"\'\\$]{0,4094}[^\s"\'\\$])?)')
 NOT_RUNNING = '這台的 EMQX 沒有在執行，無法讀取它的設定；請先到「應用軟體」啟動 EMQX 後再試一次。'
 # OWNER DECISION 2026-11-23 「C」 (EMQX 權限): the owner's text, verbatim (acl_blocker).
@@ -239,11 +240,20 @@ class Target:
         self._runner = work.runner(app)
 
     def candidate_env(self):
-        """The environment this device's broker runs with, for the candidate: the Quadlet's `Environment=` EMQX_*
-        settings plus those of its `EnvironmentFile=` files (podman --env-file: KEY=VALUE lines, values literal;
-        dev-d's product package sets EMQX_LOG__CONSOLE__LEVEL there, 2026-11-23 attempt-06). Only plain values in the
-        owner's home are supported; anything else refuses, naming the file. Values are never logged."""
-        env = dict(self.env)
+        """The environment this device's broker runs with, for the candidate, as (env, env_files): `env` holds the
+        Quadlet's `Environment=` EMQX_* settings (podman --env, on the command line as this device's own Quadlet puts
+        them), `env_files` the absolute paths of its `EnvironmentFile=` files (dev-d's product package sets
+        EMQX_LOG__CONSOLE__LEVEL there, 2026-11-23 attempt-06), which podman reads for the candidate with --env-file
+        exactly as for this device's broker. Their values never reach a command line: such a file may hold secrets
+        (CONTRACT keeps it 0600) and every local account can read /proc/<pid>/cmdline (security review SR-8,
+        2026-11-24: a value passed with --env was in two world-readable command lines; tempctr.run_argv, podman.py's
+        runner rule). podman's own parser reads them, so the candidate gets what the running broker got (SR-9: Python's
+        splitlines() also splits at \\v, \\f, \\x1c-\\x1e, \\x85, \\u2028, \\u2029 and a lone \\r, podman 4.9.3 at \\n
+        only). The EMQX_* lines are still checked as podman reads them (one line per \\n, a final \\r dropped, leading
+        blanks and tabs trimmed): only plain values in the owner's home are supported; anything else refuses, naming
+        the file. Values are never logged."""
+        env, seen, files = dict(self.env), {}, []
+        home = str(self._runner.home).rstrip('/')
         for value in self.env_files:
             optional = value.startswith('-')
             path = value.lstrip('-')
@@ -257,16 +267,20 @@ class Target:
                 if optional:
                     continue
                 raise BackupError('incompatible', f'EMQX 不能搬過來：無法讀取這台 EMQX 的 EnvironmentFile（~/{rel}）。') from None
-            for line in data.decode('utf-8', 'replace').splitlines():
-                stripped = line.lstrip()   # podman trims leading blanks only; a trailing blank refuses below
+            for raw in data.split(b'\n'):   # podman --env-file: one line per \n, a final \r dropped
+                line = raw[:-1] if raw.endswith(b'\r') else raw
+                stripped = line.decode('utf-8', 'replace').lstrip(' \t')   # podman trims leading blanks and tabs only
                 if not stripped.startswith('EMQX_'):
                     continue   # comments, blank lines, other programs' settings: not EMQX configuration
                 match = ENV_FILE_LINE.fullmatch(stripped)
-                if match is None or (match.group(1) in env and env[match.group(1)] != match.group(2)):
+                key = match.group(1) if match is not None else None
+                if (match is None or (key in env and env[key] != match.group(2))
+                        or (key in seen and seen[key] != match.group(2))):
                     raise BackupError('incompatible', f'EMQX 不能搬過來：這台 EMQX 的 EnvironmentFile（~/{rel}）有無法安全'
                                                       '重現的 EMQX 設定（引號、跳脫字元、變數或重複的設定），尚未支援。')
-                env[match.group(1)] = match.group(2)
-        return env
+                seen[key] = match.group(2)
+            files.append(f'{home}/{rel}')
+        return env, files
 
 
 # ====================================================================== the brokers
@@ -1304,11 +1318,13 @@ def target_broker(work, tmp, target, export, ids, *, hint='', target_snapshot=No
     if target_snapshot is not None:
         import_target_snapshot(tmp, target_snapshot, ids)
     tmp.volume('emqx-new-log')
-    # The product's Target adds its EnvironmentFile= settings; internal callers' target objects carry their env as given.
-    env = target.candidate_env() if isinstance(target, Target) else target.env
+    # The product's Target adds its EnvironmentFile= files, which podman reads itself (their values never reach a
+    # command line, SR-8); internal callers' target objects carry their env as given.
+    env, env_files = target.candidate_env() if isinstance(target, Target) else (target.env, [])
     if target_vm is not None:   # Target.env holds EMQX_* settings only: this is the candidate's one Erlang flag
-        env = dict(env, ERL_AFLAGS=f'+S {target_vm[0]}:{target_vm[1]}')
-    tmp.run('emqx-new', target.image, [], detach=True, read_only_root=True, env=env, secrets=target.secrets,
+        env = dict(env, ERL_AFLAGS=f'+S {target_vm[0]}:{target_vm[1]}')   # --env wins over an env file's value
+    tmp.run('emqx-new', target.image, [], detach=True, read_only_root=True, env=env, env_files=env_files,
+            secrets=target.secrets,
             volumes=[(tmp.name('emqx-new'), DATA_TARGET, None), (tmp.name('emqx-new-log'), LOG_TARGET, None),
                      (tmp.name('emqx-in'), WORK, None)] + target.files)
     wait_ready(tmp, 'emqx-new', checkpoint=work.checkpoint)

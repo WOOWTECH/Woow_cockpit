@@ -40,7 +40,7 @@ N8N_QUADLETS = {
     'n8n-valkey.volume': b'[Volume]\nVolumeName=n8n_valkey_data\n',
 }
 SKIP = {'--name', '--label', '--log-driver', '--network', '--security-opt', '--pids-limit', '--memory', '--cpus',
-        '--user', '--workdir', '--entrypoint', '--env', '--volume', '--secret'}
+        '--user', '--workdir', '--entrypoint', '--env', '--env-file', '--volume', '--secret'}
 FLAGS = {'--pull=never', '--detach', '--rm', '--interactive', '--read-only'}
 IDS = (nested.IdMap('0 1013 1\n1 100000 65536\n'), nested.IdMap('0 1013 1\n1 100000 65536\n'))
 

@@ -19,7 +19,7 @@ from .test_ha_import import FlowCase
 IDS = (nested.IdMap('0 1013 1\n1 100000 65536\n'), nested.IdMap('0 1013 1\n1 100000 65536\n'))
 ROLE_RE = re.compile(r'^woowbk-j[0-9]{8}T[0-9]{6}Z-[0-9a-f]{8}-')
 VALUE_OPTIONS = {'--name', '--label', '--log-driver', '--network', '--security-opt', '--pids-limit', '--memory',
-                 '--cpus', '--user', '--workdir', '--entrypoint', '--env', '--volume', '--secret', '--add-host'}
+                 '--cpus', '--user', '--workdir', '--entrypoint', '--env', '--env-file', '--volume', '--secret', '--add-host'}
 FLAG_OPTIONS = {'--pull=never', '--detach', '--rm', '--interactive', '--read-only'}
 
 

@@ -401,13 +401,15 @@ class EnvironmentFileTests(unittest.TestCase):
 
     def test_the_env_file_settings_reach_the_candidate(self):
         files = {'.config/emqx/emqx.env': b'# c\n  EMQX_LOG__CONSOLE__LEVEL=warning\nWOOW_EMQX_BIND=0.0.0.0\n\n'}
-        env = self.target('EnvironmentFile=%h/.config/emqx/emqx.env\n', files).candidate_env()
-        self.assertEqual(env['EMQX_LOG__CONSOLE__LEVEL'], 'warning')
+        env, env_files = self.target('EnvironmentFile=%h/.config/emqx/emqx.env\n', files).candidate_env()
+        self.assertEqual(env_files, ['/home/appowner/.config/emqx/emqx.env'], 'podman reads the file for the candidate')
+        self.assertNotIn('EMQX_LOG__CONSOLE__LEVEL', env, 'an EnvironmentFile value never reaches a command line '
+                         '(security review SR-8: --env values are in world-readable /proc/<pid>/cmdline)')
         self.assertEqual(env['EMQX_NODE__NAME'], 'emqx@127.0.0.1', 'the Quadlet\'s own settings stay')
         self.assertNotIn('WOOW_EMQX_BIND', env)
-        self.assertNotIn('EMQX_LOG__CONSOLE__LEVEL', self.target('', files).candidate_env())
-        self.assertNotIn('EMQX_LOG__CONSOLE__LEVEL', self.target('EnvironmentFile=-%h/.config/emqx/missing.env\n', {})
-                         .candidate_env(), 'an optional missing file is skipped')
+        self.assertEqual(self.target('', files).candidate_env()[1], [])
+        self.assertEqual(self.target('EnvironmentFile=-%h/.config/emqx/missing.env\n', {}).candidate_env()[1], [],
+                         'an optional missing file is skipped')
 
     def test_what_cannot_be_reproduced_exactly_refuses_naming_the_file(self):
         line = 'EnvironmentFile=%h/.config/emqx/emqx.env\n'
@@ -566,8 +568,11 @@ class ConvertReadbackTests(base.EmqxCase):
         self.assertTrue(any('還原後會再核對' in n for n in notes), notes)
         options = self.runs('emqx-new')[0][3]
         env = list(options.get('--env', [])) + list(options.get('-e', []))
-        self.assertIn('EMQX_LOG__CONSOLE__LEVEL=warning', env, 'the candidate runs with the EnvironmentFile setting')
-        self.assertFalse([e for e in env if e.startswith('WOOW_')], 'only EMQX settings are taken from the file')
+        self.assertEqual(options.get('--env-file'), ['/home/appowner/.config/emqx/emqx.env'],
+                         'the candidate runs with the EnvironmentFile settings: podman reads the device\'s file itself, '
+                         'as for the device\'s broker')
+        self.assertFalse([e for e in env if e.startswith(('EMQX_LOG__CONSOLE__LEVEL=', 'WOOW_'))],
+                         'no value of the file is on the command line (security review SR-8)')
 
     def test_a_readback_that_cannot_be_read_stops_the_conversion(self):
         real = self.world.evaluate
