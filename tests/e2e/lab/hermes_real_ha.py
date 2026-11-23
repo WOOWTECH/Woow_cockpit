@@ -71,10 +71,12 @@ TAGS = ('x86-enc', 'x86-plain', 'x86-unc')
 STORE_IDS = {'x86-enc': 'ha-f82422e327f151ec819d', 'x86-plain': 'ha-3871a468e2f3a11488df',
              'x86-unc': 'ha-d32d92f6d60c0e70f5e6'}
 # Terms of the full-text check. s2/s3: the user markers "b1-hermes-s2"/"b1-hermes-s3" the fixture's seed sent
-# (testha-b1/hermes-3.sh); mock: every mock-model reply ("B1 mock reply #n: ok"); WOOWBK: dev-d's own baseline
-# session ("WOOWBK lab marker woowbk-lab-baseline ..."); the last one is in neither.
+# (testha-b1/hermes-3.sh); mock: every mock-model reply ("B1 mock reply #n: ok"); marker: dev-d's own baseline
+# message ("WOOWBK lab marker woowbk-lab-baseline ..."); the last one is in neither. No term may be part of a session
+# id: Hermes's search answers id matches first and keeps the first hit per conversation, without an FTS snippet
+# (hermes_state_search.py:1245-1265, hermes_cli/web_routers/sessions.py:356-394, 404-411).
 HA_TERMS = {'s2': 'b1-hermes-s2', 's3': 'b1-hermes-s3', 'mock': 'mock'}
-BASE_TERMS = {'WOOWBK': 'WOOWBK lab marker'}
+BASE_TERMS = {'marker': 'marker'}
 NEG_TERMS = {'zzqx7negative': 'zzqx7negative'}
 BASE_SESSION = 'woowbk-lab-baseline'
 HERMES_SECRETS = ['hermes-api-server-key', 'hermes-webhook-secret', 'hermes-dashboard-session-secret',
@@ -331,9 +333,22 @@ journal = subprocess.run(["journalctl", "-o", "cat", "--no-pager", "--since", "@
 hits += sum(journal.count(s) for s in needles)
 print(json.dumps({"scanned": scanned, "journal_bytes": len(journal), "names": len(secrets), "hits": hits}))
 '''
+# The installed engine (root in dev-d): every module of the library and the helper, as SHA-256.
+ENGINE_HASHES = r'''
+import hashlib, json, os
+lib = "/usr/local/lib/woowtech-cockpit-backup/woowbackup"
+out = {}
+for d, _dirs, files in os.walk(lib):
+    for f in files:
+        if f.endswith(".py"):
+            p = os.path.join(d, f)
+            out[os.path.relpath(p, lib)] = hashlib.sha256(open(p, "rb").read()).hexdigest()
+helper = "/usr/local/libexec/woowtech-cockpit-backup"
+print(json.dumps({"lib": out, "helper": hashlib.sha256(open(helper, "rb").read()).hexdigest()}))
+'''
 LANE_SECRETS = ('HA_BACKUP_KEY', 'B1_HERMES_DASHBOARD_PW', 'B1_HERMES_API_KEY', 'B1_HERMES_WEBHOOK_SECRET',
                 'B1_HERMES_ROUTE_SECRET', 'B1_HERMES_DUMMY_KEY', 'DEV_D_KIT_1119')
-PROGRAMS = {'CONTINUITY': CONTINUITY, 'DIGEST': DIGEST, 'LEAK_SCAN': LEAK_SCAN}
+PROGRAMS = {'CONTINUITY': CONTINUITY, 'DIGEST': DIGEST, 'LEAK_SCAN': LEAK_SCAN, 'ENGINE_HASHES': ENGINE_HASHES}
 
 
 # ---------------------------------------------------------------- lab guards
@@ -506,12 +521,10 @@ def continuity(ev, label_text, mode):
         ev.check(f'{label_text}: the s2 and s3 markers are in two different HA sessions',
                  like.get('s2') and like.get('s3') and like.get('s2') != like.get('s3'),
                  {'s2': like.get('s2'), 's3': like.get('s3')})
-        # (the b1 driver's webhook check posts "woowbk lab seamless check", so later WOOWBK hits may exist; only
-        # the baseline session itself must be gone)
         ev.check(f'{label_text}: dev-d\'s own baseline session is replaced by HA\'s data (not listed, no message)',
-                 BASE_SESSION not in listed and not db_msgs.get(BASE_SESSION) and BASE_SESSION not in hits('WOOWBK')
-                 and not like.get('WOOWBK'), {'listed': BASE_SESSION in listed,
-                                             'rows': len(db_msgs.get(BASE_SESSION) or [])})
+                 BASE_SESSION not in listed and not db_msgs.get(BASE_SESSION) and BASE_SESSION not in hits('marker')
+                 and BASE_SESSION not in (like.get('marker') or []), {'listed': BASE_SESSION in listed,
+                                                                     'rows': len(db_msgs.get(BASE_SESSION) or [])})
     else:
         ev.check(f'{label_text}: no HA session is left (dashboard list and state.db)',
                  not (set(listed) & set(src)) and not any(db_msgs.get(sid) for sid in src),
@@ -520,10 +533,10 @@ def continuity(ev, label_text, mode):
             ev.check(f'{label_text}: full-text search "{term}" finds nothing of HA\'s',
                      not hits(term) and not like.get(term) and (search.get(term) or {}).get('code') == 200,
                      search.get(term))
-        base = like.get('WOOWBK')
-        ev.check(f'{label_text}: full-text search "WOOWBK" through Hermes finds dev-d\'s baseline session (FTS5 snippet)',
-                 base == [BASE_SESSION] and hits('WOOWBK') == base and match.get('WOOWBK') == base and all_fts('WOOWBK'),
-                 {'api': search.get('WOOWBK'), 'like': base, 'match': match.get('WOOWBK')})
+        base = like.get('marker')
+        ev.check(f'{label_text}: full-text search "marker" through Hermes finds dev-d\'s baseline session (FTS5 snippet)',
+                 base == [BASE_SESSION] and hits('marker') == base and match.get('marker') == base and all_fts('marker'),
+                 {'api': search.get('marker'), 'like': base, 'match': match.get('marker')})
         ev.check(f'{label_text}: the dashboard lists dev-d\'s baseline session with its message',
                  BASE_SESSION in listed and (api_msgs.get(BASE_SESSION) or {}).get('rows') == db_msgs.get(BASE_SESSION)
                  and len(db_msgs.get(BASE_SESSION) or []) == 1, {'listed': listed.get(BASE_SESSION)})
@@ -580,6 +593,13 @@ def step_setup(ev, args):
     if not ev.check('setup: deploy-src.sh d --src <this tree> --no-demo-catalog', proc.returncode == 0,
                     f'rc {proc.returncode}'):
         raise Failed('deploy failed')
+    installed = drv.device_python(ENGINE_HASHES, {}, as_owner=False, timeout=300)
+    base = REPO / 'backup-engine' / 'woowbackup'
+    tree = {str(p.relative_to(base)): sha256_file(p) for p in base.rglob('*.py') if '__pycache__' not in p.parts}
+    differ = sorted(k for k in set(tree) | set(installed.get('lib') or {}) if tree.get(k) != (installed.get('lib') or {}).get(k))
+    ev.check('setup: the installed engine is this tree (every module and the helper SHA-256 equal)',
+             not differ and installed.get('helper') == sha256_file(REPO / 'backup-engine' / 'woowtech-cockpit-backup'),
+             {'modules': len(tree), 'differ': differ[:10]})
     status = drv.ok('status', ev=ev)
     version = (REPO / 'VERSION').read_text().strip()
     ev.check('setup: the installed helper answers status with this tree\'s VERSION',

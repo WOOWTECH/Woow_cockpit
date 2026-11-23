@@ -59,7 +59,7 @@ def probe(mode, *, break_rows=False, plain_snippet=False):
     if break_rows:
         api['api-a']['rows'][0][2] = 'different'
     like = {'s2': ['api-a'] if ha else [], 's3': ['api-b'] if ha else [], 'mock': ['api-a', 'api-b'] if ha else [],
-            'WOOWBK': [] if ha else [hr.BASE_SESSION], 'zzqx7negative': []}
+            'marker': ['api-a', 'api-b'] if ha else [hr.BASE_SESSION], 'zzqx7negative': []}
     search = {t: {'code': 200, 'hits': [[sid, not plain_snippet] for sid in v]} for t, v in like.items()}
     return {'health_api': 200, 'health_webhook': 200, 'login': 200, 'list_code': 200, 'sessions': listed,
             'messages': api, 'search': search,
@@ -123,7 +123,7 @@ class OfflineEntryTests(unittest.TestCase):
     def test_self_check(self):
         result = self.invoke('--self-check')
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn('3 embedded programs compiled', result.stdout)
+        self.assertIn('4 embedded programs compiled', result.stdout)
 
     def test_unknown_step_refused_before_anything(self):
         for args in ((), ('import:arm-enc',), ('upload',), ('setup', 'bogus')):
