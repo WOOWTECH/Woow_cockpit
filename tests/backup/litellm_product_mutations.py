@@ -167,7 +167,9 @@ def run_tests(root):
 def main(argv):
     parser = argparse.ArgumentParser()
     parser.add_argument('--json')
+    parser.add_argument('--only', help='comma-separated mutation ids (a subset; the baseline always runs)')
     args = parser.parse_args(argv)
+    only = set(args.only.split(',')) if args.only else None
     sources = {name: (REPO / 'backup-engine' / name).read_text(encoding='utf-8') for name in (LL, QP, HI)}
     results = []
     started = time.monotonic()
@@ -186,6 +188,8 @@ def main(argv):
         baseline = {'returncode': rc, 'tests': ran, 'failures': failures}
         print(f'baseline: {"pass" if rc == 0 else "FAIL"} ({failures}/{ran})', flush=True)
         for ident, name, module, old, new, count in MUTATIONS:
+            if only is not None and ident not in only:
+                continue
             source = sources[module]
             if source.count(old) != count:
                 results.append({'id': ident, 'protection': name, 'module': module, 'applied': False})
@@ -201,6 +205,7 @@ def main(argv):
     ok = baseline['returncode'] == 0 and all(r.get('applied') and r.get('caught') for r in results)
     summary = {'modules': {name: hashlib.sha256(text.encode('utf-8')).hexdigest() for name, text in sources.items()},
                'tests': list(TESTS), 'baseline': baseline, 'mutations': results, 'all_caught': ok,
+               'subset': sorted(only) if only is not None else None,
                'seconds': round(time.monotonic() - started, 1)}
     if args.json:
         Path(args.json).write_text(json.dumps(summary, ensure_ascii=False, indent=1) + '\n', encoding='utf-8')
