@@ -389,7 +389,7 @@ def verdict(src, found, *, live_alembic_value, ha_major, target_major):
         blockers.append(f'HA 的 PostgreSQL 是 {ha_major or "未知"} 版，這台是 {target_major or "未知"} 版；只能從相同或較舊的版本搬過來。')
     ha_alembic = found['alembic']
     if not ha_alembic or live_alembic_value is None or sorted(ha_alembic) != sorted(live_alembic_value):
-        blockers.append(f'資料庫結構版本不同：HA 是 {"、".join(ha_alembic) or "未知"}，這台是 '
+        blockers.append(f'資料庫結構版本不同：HA 是 {hacommon.names(ha_alembic, 5) or "未知"}，這台是 '
                         f'{"、".join(live_alembic_value or []) or "未知"}。請先讓兩邊的 Omnigent 版本一致後再匯入。')
     if not src.cookie:
         blockers.append('HA 備份裡找不到 Omnigent 的登入金鑰（accounts-cookie-secret），它應在 /data/omnigent-home/.omnigent/'
@@ -432,7 +432,7 @@ def account_conflicts(found, target):
 
 def section(src, found, *, version, conflicts):
     detail = found['detail']
-    return {'omnigent_version': version or '', 'alembic': '、'.join(found['alembic']),
+    return {'omnigent_version': version or '', 'alembic': hacommon.names(found['alembic'], 5),
             'users': ha_odoo._int(detail.get('users')), 'admins': ha_odoo._int(detail.get('admins')),
             'conversations': ha_odoo._int(detail.get('conversations')),
             'scheduled_tasks': ha_odoo._int(detail.get('scheduled_tasks')),
@@ -668,6 +668,45 @@ def capture_consistent_target_schema(work, app, target, path, expected_alembic):
             capture.unlink(missing_ok=True)
 
 
+# secreview SR-3: a SEQUENCE SET entry is SQL that pg_dump WROTE FROM WHAT HA'S SERVER SENT: `SELECT
+# pg_catalog.setval('<name>', <last_value as sent>, <called>);` (pg_dump.c dumpSequenceData puts last_value into the
+# statement unquoted). HA's server is untrusted (a crafted catalog makes last_value any text: proven in the lab, the
+# archive then held a whole DO block). Before anything is loaded, the selected SEQUENCE SET entries are printed by
+# pg_restore itself (`-f -`, the very text `-d` would run) and must be exactly one setval of a trusted sequence with an
+# integer each; pg_restore's own header lines may precede them, nothing else may appear.
+SETVAL_RE = re.compile(r"SELECT pg_catalog\.setval\('public\.([A-Za-z_][A-Za-z0-9_]{0,62})', (-?[0-9]{1,19}), "
+                       r"(true|false)\);")
+SCRIPT_HEADER = frozenset({'SET statement_timeout = 0;', 'SET lock_timeout = 0;',
+                           'SET idle_in_transaction_session_timeout = 0;', 'SET transaction_timeout = 0;',
+                           'SET standard_conforming_strings = on;', 'SET check_function_bodies = false;',
+                           'SET xmloption = content;', 'SET client_min_messages = warning;', 'SET row_security = off;'})
+SCRIPT_HEADER_RE = re.compile(r"SET client_encoding = '[A-Z0-9_]{1,30}';"
+                              r"|SELECT pg_catalog\.set_config\('search_path', '(?:[^'\n]|''){0,500}', false\);")
+SCRIPT_SKIP_RE = re.compile(r'|--.*|\\(?:un)?restrict [A-Za-z0-9]{1,128}')
+SEQUENCE_SET_ODD = 'HA 的資料庫匯出清單裡的序號（SEQUENCE SET）項目含有序號值以外的內容，無法安全地搬過來。'
+SEQUENCE_SCRIPT_OUTPUT = 4 * 1024 * 1024
+
+
+def sequence_set_lines(selection):
+    return [line for line in selection.splitlines() if re.match(r'\s*\d+;\s+\d+\s+\d+\s+SEQUENCE SET ', line)]
+
+
+def require_sequence_sets(script, count, sequences):
+    """`script`: pg_restore's plain text of the `count` selected SEQUENCE SET entries (see SETVAL_RE above)."""
+    names, body = [], False
+    for line in script.splitlines():
+        if SCRIPT_SKIP_RE.fullmatch(line):
+            continue
+        match = SETVAL_RE.fullmatch(line)
+        if match:
+            body = True
+            names.append(match.group(1))
+        elif body or not (line in SCRIPT_HEADER or SCRIPT_HEADER_RE.fullmatch(line)):
+            raise BackupError('incompatible', SEQUENCE_SET_ODD)
+    if len(names) != count or len(set(names)) != count or not set(names) <= set(sequences or ()):
+        raise BackupError('incompatible', SEQUENCE_SET_ODD)
+
+
 def restore_trusted_data(work, tmp, schema_dump, data_dump, superuser, *, source_columns, role='omni-db',
                          tables=None, sequences=None):
     """Load the trusted target schema and only data from HA (`tables`/`sequences`: data_only_toc's names).
@@ -682,6 +721,13 @@ def restore_trusted_data(work, tmp, schema_dump, data_dump, superuser, *, source
                            timeout=DUMP_TIMEOUT, max_output=ha_odoo.TOC_OUTPUT).stdout or b''
     text = listing.decode('utf-8', 'surrogateescape')
     selection = data_only_toc(text, tables=tables, sequences=sequences)
+    sets = sequence_set_lines(selection)
+    if sets:
+        cluster.write_file('/tmp/woowbk-omnigent-seq.toc', ('\n'.join(sets) + '\n').encode('utf-8', 'surrogateescape'))
+        with open(data_dump, 'rb') as handle:
+            script = tmp.exec(role, ['pg_restore', '-f', '-', '-L', '/tmp/woowbk-omnigent-seq.toc'], user='postgres',
+                              input=handle, timeout=DUMP_TIMEOUT, max_output=SEQUENCE_SCRIPT_OUTPUT).stdout or b''
+        require_sequence_sets(script.decode('utf-8', 'surrogateescape'), len(sets), sequences)
     skipped = [kind for kind in toc_kinds(text) if kind not in ('TABLE DATA', 'SEQUENCE SET')]
     work.log(f'HA 的資料庫匯出清單：只載入資料（TABLE DATA、SEQUENCE SET），略過 {len(skipped)} 種結構項目'
              + (f'（{hacommon.names(skipped, 8)}）' if skipped else ''))

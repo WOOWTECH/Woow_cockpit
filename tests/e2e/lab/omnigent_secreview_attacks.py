@@ -665,8 +665,8 @@ CREATE TABLE atk_schema.t (x text DEFAULT public.atk_pwn());
 COMMENT ON TABLE public.users IS 'atk comment';
 SELECT pg_catalog.lo_from_bytea(0, pg_catalog.convert_to('atk-lo-in-ha', 'UTF8'));
 CREATE ROLE atk_ha_role SUPERUSER LOGIN;
-ALTER DATABASE omnigent SET work_mem = '66kB';
-ALTER ROLE postgres SET work_mem = '55kB';
+ALTER DATABASE omnigent SET work_mem = '6MB';
+ALTER ROLE postgres SET work_mem = '5MB';
 GRANT ALL ON public.users TO PUBLIC;
 CREATE EVENT TRIGGER atk_evt ON ddl_command_start EXECUTE FUNCTION public.atk_evt();
 """
@@ -954,13 +954,15 @@ def tar_attack(lab, name, entries):
             data = path.read_bytes()
             try:
                 tmp.volume_import(role, lambda o, data=data: o.write(data))
-                listing = tmp.run(role, IMAGE, ['-c', "cd /v && find . -printf '%y %m %p\\n' | sort | head -40"],
+                listing = tmp.run(role, IMAGE, ['-c', "cd /v && find . | while read -r p; do stat -c '%F|%a|%n' \"$p\"; "
+                                                      "done | sort | head -60"],
                                   entrypoint='sh', volumes=[(tmp.name(role), '/v', 'ro')], timeout=120,
                                   read_only_root=True, max_output=256 * 1024, remove=True).stdout or b''
-                lines = listing.decode('utf-8', 'replace').splitlines()
-                out['imported'] = {'entries': len(lines), 'types': sorted({l.split(' ')[0] for l in lines}),
-                                   'max_mode': max((l.split(' ')[1] for l in lines), default=''),
-                                   'outside': [l for l in lines if ' ./' not in l and not l.endswith(' .')][:3]}
+                rows = [line.split('|', 2) for line in listing.decode('utf-8', 'replace').splitlines() if '|' in line]
+                out['imported'] = {'entries': len(rows), 'types': sorted({r[0] for r in rows}),
+                                   'modes': sorted({r[1] for r in rows}),
+                                   'outside': [r[2][:60] for r in rows if not (r[2] == '.' or r[2].startswith('./'))
+                                               or '/../' in r[2]][:3]}
             except BackupError as error:
                 out['imported'] = f'refused: {error.code}'
             finally:

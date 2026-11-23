@@ -25,9 +25,14 @@ VERSION_RE = re.compile(r'v?([0-9]{1,4})\.([0-9]{1,4})\.([0-9]{1,4})\Z')
 ELF_MACHINES = {'x86_64': 0x3E, 'amd64': 0x3E, 'aarch64': 0xB7, 'arm64': 0xB7}
 
 
+CONTROL_RE = re.compile(r'[\x00-\x1f\x7f-\x9f\u2028\u2029]')
+
+
 def names(items, limit=10):
-    """`a、b、c 等 N 個` (each item cut at 60 characters)."""
-    items = [str(item)[:60] for item in items]
+    """`a、b、c 等 N 個` (each item cut at 60 characters; control characters shown as `?`: a name from HA's backup
+    -- a table, schema or extension name -- can hold a line break or a terminal escape, and these messages reach the
+    job log and the page; secreview SR-4)."""
+    items = [CONTROL_RE.sub('?', str(item)[:60]) for item in items]
     return '、'.join(items[:limit]) + (f' 等 {len(items)} 個' if len(items) > limit else '')
 
 

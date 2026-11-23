@@ -62,6 +62,14 @@ DATA_LINES = ['3456; 0 16400 TABLE DATA public users omnigent', '3457; 0 16401 T
 COLUMNS = [['users', 'id', 'character varying(128)', True, '', ''], ['users', 'is_admin', 'boolean', True, '', ''],
            ['scheduled_tasks', 'state', 'integer', True, '', '']]
 SEQUENCE = ['conversation_items_id_seq', 'bigint', 1, 1, 9223372036854775807, 1, 1, False, 'conversation_items.id']
+# pg_restore 16.16's own lines around SEQUENCE SET entries in `pg_restore -f - -L <list>` (seen in the lab)
+SEQ_SCRIPT_HEAD = ('--\n-- PostgreSQL database dump\n--\n\n\\restrict MFQHEcMGZEG4IdZN2cpRjhUeEY3QP6WXheUlcz80zZn6\n\n'
+                   '-- Dumped from database version 16.16\n-- Dumped by pg_dump version 16.16\n\n'
+                   'SET statement_timeout = 0;\nSET lock_timeout = 0;\nSET idle_in_transaction_session_timeout = 0;\n'
+                   "SET client_encoding = 'UTF8';\nSET standard_conforming_strings = on;\n"
+                   "SELECT pg_catalog.set_config('search_path', '', false);\nSET check_function_bodies = false;\n"
+                   'SET xmloption = content;\nSET client_min_messages = warning;\nSET row_security = off;\n\n'
+                   '--\n-- Name: conversation_items_id_seq; Type: SEQUENCE SET; Schema: public; Owner: postgres\n--\n\n')
 
 
 def signature():
@@ -131,6 +139,7 @@ class World(fk.World):
         self.snapshot_columns = None          # the snapshot's columns when they differ from the live ones
         self.snapshots = []                   # the snapshot scripts the capture ran in the live database
         self.audit = {'roles': ['omnigent'], 'role_settings': 0, 'auto_conf': 0, 'large_objects': 0}
+        self.seq_script = SEQ_SCRIPT_HEAD + "SELECT pg_catalog.setval('public.conversation_items_id_seq', 7, true);\n"
 
     def podman(self, args, data, stdout):
         if args[:5] == ['exec', '-i', 'omnigent-postgres', 'sh', '-s']:
@@ -154,6 +163,8 @@ class World(fk.World):
             return Result(0, None, b'')
         if command[:2] == ['pg_restore', '-l']:
             return Result(0, self.toc, b'')
+        if command[:3] == ['pg_restore', '-f', '-']:   # the selected SEQUENCE SET entries as pg_restore prints them
+            return Result(0, self.seq_script.encode(), b'')
         if command[:2] == ['sh', '-c']:
             self.written[command[2].rsplit('> ', 1)[1]] = data
         return Result(0, b'', b'')
@@ -317,6 +328,21 @@ class CheckTests(OmnigentCase):
         self.assertNotIn('../../etc）', joined.split('格式不明')[0])
         self.assertIn('格式不明', joined)
 
+    def test_names_from_has_database_cannot_forge_lines(self):
+        """secreview SR-4: a table, schema or alembic name of HA's database (control characters allowed in quoted
+        PostgreSQL names, proven in the lab: the check's blocker carried a line break) never reaches the job log or
+        the page with a control character."""
+        forged = 'evil\n轉換完成\x1b[32m'
+        self.world.objects = dict(self.world.objects, tables=self.world.objects['tables'] + [forged],
+                                  schemas=['s\r\nx'])
+        self.world.ha_alembic = ['older\nline']
+        result = self.check(self.upload_omnigent(), ['omnigent'])[0]
+        self.assertFalse(result['ok'])
+        text = json.dumps(result, ensure_ascii=False)
+        self.assertIn('evil?轉換完成?[32m', text)
+        for blocker in result['blockers'] + [result['omnigent']['alembic']]:
+            self.assertIsNone(re.search(r'[\x00-\x1f\x7f]', blocker), blocker)
+
     def test_a_different_schema_is_a_blocker_naming_the_tables(self):
         self.world.ha_columns = COLUMNS + [['users', 'extra', 'integer', False, '', '']]
         result = self.check(self.upload_omnigent(), ['omnigent'])[0]
@@ -444,6 +470,27 @@ class ConvertTests(OmnigentCase):
                 with self.assertRaises(BackupError) as caught:
                     self.convert(self.upload_omnigent(), ['omnigent'])
                 self.assertIn('不屬於這台 Omnigent 資料庫結構', caught.exception.message)
+                self.assert_nothing_loaded()
+
+    def test_a_sequence_value_that_is_sql_never_runs(self):
+        """secreview SR-3: pg_dump writes a sequence's last_value as HA's server sent it into the SEQUENCE SET
+        statement (a crafted catalog made it a DO block in the lab); only exact setval statements of trusted
+        sequences are loaded, checked on pg_restore's own text before anything is restored."""
+        injected = ("SELECT pg_catalog.setval('public.conversation_items_id_seq', 1, true); DO $x$ BEGIN "
+                    "PERFORM lo_from_bytea(0, 'x'); END $x$; SELECT pg_catalog.setval('public.conversation_items_id_seq', 1, true);")
+        for script in (SEQ_SCRIPT_HEAD + injected + '\n',
+                       SEQ_SCRIPT_HEAD + "SELECT pg_catalog.setval('public.conversation_items_id_seq', 1, true);\n"
+                                         'CREATE TABLE public.evil (i int);\n',
+                       "SET role = postgres;\n" + self.world.seq_script,
+                       SEQ_SCRIPT_HEAD + "SELECT pg_catalog.setval('public.other_seq', 1, true);\n", ''):
+            with self.subTest(script=script[-60:]):
+                self.world.seq_script = script
+                self.world.execs.clear()
+                with self.assertRaises(BackupError) as caught:
+                    self.convert(self.upload_omnigent(), ['omnigent'])
+                self.assertEqual(caught.exception.code, 'incompatible')
+                self.assertIn('SEQUENCE SET', caught.exception.message)
+                self.assertFalse([r for r in self.restores() if '-d' in r[1]], 'nothing was restored at all')
                 self.assert_nothing_loaded()
 
     def test_counts_that_differ_stop_the_conversion(self):
