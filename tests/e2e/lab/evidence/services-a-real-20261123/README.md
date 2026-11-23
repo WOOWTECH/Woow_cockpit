@@ -116,6 +116,46 @@ lab-made with random names; the engine runs on the host through the lab bridge a
 goes through `podman exec` into the running server; the throwaway PostgreSQL containers were capped at
 512 MiB (product default 2 GiB) to fit dev-d's 4 GiB cgroup.
 
+## services-a-2 (2026-11-23 afternoon): the verifier's two gaps
+
+Lane services-a-2, branch `test/services-a2-20261123` from R-COCKPIT `integration/ha-import-batch1-20261123`
+(82ac971, which already holds services-a's work and the sandbox fixes). Runs started from a separate run worktree at
+the named commit (`git status` clean outside the evidence folders), so the code that ran is exactly that commit.
+
+### Omnigent: isolation record and clean tree in the harness itself
+
+`omnigent_real_ha.py` now (0cc2289) refuses to start when the checkout has any change outside the evidence folders,
+prints `source commit <sha>` with a `source` event, and calls `owner.sh d --verify-isolation` right after taking the
+dev-d lock and again in a `finally` after the inventory check (fixed line `dev-d isolation: true none {}` plus an
+`isolation` event each time). The lock is taken through `dev_d_guard.py` (blocking like `flock -w`, yields to
+emqx-main's waiting file).
+
+| Attempt | Source | Exit | Seconds | Result |
+| --- | --- | ---: | ---: | --- |
+| `omnigent-x86-attempt5.json` | 0cc2289 | 0 | 673.7 (672 s holding the lock, waited 0 s) | **PASS** on the integrated code: clean tree (0 changed paths), isolation before and after, same chain as attempt 4 (HA store publish, internal candidate with live discovery, public SECURITY_BLOCKER still refuses, installer, restart, injected one-shot rollback, HA admin/member logins, 31 registered values / 0 hits, inventory unchanged). |
+
+### Headscale: the full product flow into dev-d's INSTALLED Headscale — `tests/e2e/lab/headscale_full_flow.py --run --arch <x86|arm>`
+
+Target: dev-d's own WOOWTECH Podman Headscale package units (`headscale`, `headplane`, `headscale-entrance`,
+server_url `http://localhost:28080`), not a disposable target. Every engine call is the root helper the Cockpit page
+calls (`/usr/local/libexec/woowtech-cockpit-backup`, one JSON request on stdin), with this tree's engine installed by
+`deploy-src.sh d --src <tree> --no-demo-catalog` (installed modules and helper SHA-256 = tree):
+`inspect` (dev-d's Headscale baseline backup with the 11-19 kit, for its catalog entry) → `catalog-install` →
+`key-init` → `upload-begin`/copy/`upload-finish` (HA store) → `ha-check-start` → `ha-convert-start` → `inspect` →
+`restore-start` → restart → `restore-start` with an injected one-shot failure (must end `rolled-back`) →
+`restore-start` of the import's safety backup → `delete` / `catalog-remove`.
+
+Lab precondition (stated simulation, reverted at the end of every run): since 11-20 dev-d's `config.yaml` has an empty
+DERP map (`urls: []`, embedded server off), so Headscale 0.29.4 crash-loops (`initial DERPMap is empty`,
+`hscontrol/app.go:656`). For the run only its `derp:` block becomes the embedded region 999 (no URL, `urls: []`);
+the original file is kept next to it and written back (SHA-256 equal) after the rollback, and the units go back to
+the state they were found in.
+
+| Attempt | Source | Exit | Seconds | Result |
+| --- | --- | ---: | ---: | --- |
+| `headscale-fullflow-x86-attempt1.json` | 1b174e4 | 1 | 25.8 | Harness: setup inspected dev-d's Headscale baseline backup before the secrets phase had read the 11-19 kit, so the helper refused (`invalid-request`, field `key`). Nothing of dev-d's Headscale touched. Fixed in b9fc697. |
+| `headscale-fullflow-x86-attempt2.json` | b9fc697 | 1 | 2976.7 (2377 s holding the lock after ~10 min behind an EMQX run) | **Product flow PASS, clients FAIL (harness)**: setup, the carried catalog entry (inspect with the 11-19 kit, catalog-install), lab config (3 units active, health/metrics 200), before markers, upload (page path; the store record is the fixture, it existed: dedupe), ha-check 44 s (section = source facts, only the API-key warning), real space (floor 11.27 GB = 10 GiB running reserve + 512 MiB vs 23.7 GB free), ha-convert 42 s (30720 B, device-key encrypted, listed as manual with its HA origin), inspect (in place, settings same), restore-start 58.9 s (safety backup, health-1/health-2 ok, writers paused 34.0 s, unavailable 36.5 s), every server check after the restore and after `systemctl --user restart headscale.service`. The new devices were tailscaled containers in dev-d's loopback-only namespace: tailscaled pauses its control client without an up non-loopback interface (`control: setPaused(true)`, NeedsLogin), so the joins, node counts, DERP pings and reconnects failed. Fixed in d1bb776 (fresh namespace per client with an up veth and a relay to localhost:28080). Then **also real and passing**: a second restore-start with a one-shot `ExecStartPre` failure ended `rolled-back` (73.4 s, `無法啟動服務：headscale.service。`, the failure consumed, drop-in gone) and left HA's imported server intact (every server check again); the import's safety backup restored (49.8 s, health ok): dev-d's own markers back and its Headscale equal to the state before the import (users, nodes, API keys, pre-auth keys, DNS, Noise key); converted and safety backups deleted, the catalog entry removed again, no job object/staging/key file; leak scan 0 hits; isolation `true none {}` after. 86/95. The original config.yaml was written back (sha256 equal) but the blocking unit restart that followed hit its 360 s timeout (`lab config off: ran: FAIL`, TimeoutExpired: headplane's ExecStartPre waits 180 s for the crash-looping headscale); since 398241d that restart is `--no-block`. |
+
 ## What is still not proven (why `commercial_acceptance` stays `not-complete`)
 
 * Both services ran against **disposable lab targets** (lab-made catalog/Quadlets/config, random names), not
