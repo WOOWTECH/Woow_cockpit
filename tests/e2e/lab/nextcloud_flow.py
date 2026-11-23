@@ -82,9 +82,11 @@ RUN_HOLD_BUDGET = 100 * 60  # the share run: upload, check, convert, restore x3,
 FLOOR = 12 * 1024 ** 3          # the team keeps >= 12 GiB free on the host at every moment
 NEED = 1536 * 1024 ** 2         # the upload copy in dev-e plus the check's throwaway cluster, with margin
 CANDIDATE_NEED = 4608 * 1024 ** 2  # the candidate: live html pack + html dir tar + cluster export + the archive
-# The share run's conversion after the upload: the data dir tar, the cluster work, the live html pack and html tar,
-# the archive. Every later step checks its own need (restore_need) and the host-floor watchdog guards each job.
-CONVERT_NEED = 3584 * 1024 ** 2
+# The share run: before the upload only the fixture plus the check's throwaway cluster is asked for; the conversion's
+# own need is computed after the check from dev-e's live html and PostgreSQL dirs and HA's data dir (convert_need);
+# every restore checks its own need (restore_need) and the host-floor watchdog guards each job.
+RUN_CHECK_NEED = 1024 ** 3
+LIVE_ROOT = '/home/appowner/.local/share/nextcloud-office'
 WATCH_FLOOR = FLOOR + 256 * 1024 ** 2  # below it every running job of dev-e is cancelled (the job cleans up)
 FIXTURE = (LAB / 'ha-fixtures' / '20261123-batch2' / 'x86' / 'woow-b2-nextcloud-x86-enc-noshare'
            / 'woow-b2-nextcloud-x86-enc-noshare-20261123.tar')
@@ -396,6 +398,7 @@ class Run:
         self.lock_started = time.monotonic()
         self.created_store = None
         self.before = {}
+        self.section = {}
 
     def budget(self, phase, need=NEED):
         if time.monotonic() - self.lock_started > (RUN_HOLD_BUDGET if self.args.run else HOLD_BUDGET):
@@ -459,9 +462,35 @@ class Run:
         return drv.device_python(CLIENT, {'user': BASE_USER, 'user_pw': self.args.secrets['DEV_D_MARKER_NEXTCLOUD']},
                                  timeout=600)
 
+    @staticmethod
+    def live_sizes():
+        """Bytes of dev-e's live Nextcloud dirs (podman unshare du as appowner; read only)."""
+        sizes = {}
+        for name in ('html', 'postgres', 'data'):
+            proc = drv.owner('podman', 'unshare', 'du', '-sb', f'{LIVE_ROOT}/{name}', timeout=900)
+            try:
+                sizes[name] = int(drv.out(proc).split()[0]) if proc.returncode == 0 else None
+            except (ValueError, IndexError):
+                sizes[name] = None
+        return sizes
+
+    def convert_need(self, datadir_bytes):
+        """The conversion's staging peak (ha_nextcloud.convert order): HA's data dir tar and the PostgreSQL dir tar
+        stay while the cluster work (dump + volume, volume + export: about 3x the cluster), then the live html pack plus
+        the html dir tar (2x html), then the dir tars plus the archive (code and the cluster compress to about half,
+        the users' files not at all); plus margin."""
+        sizes = self.before.get('sizes') or {}
+        html = sizes.get('html') or 2 * 1024 ** 3
+        pg = sizes.get('postgres') or 1024 ** 3
+        data = int(datadir_bytes or 0)
+        archive = data + (html + pg) // 2
+        return (data + pg + max(3 * pg, 2 * html, html + archive) + 512 * 1024 ** 2
+                + int(self.args.facts.get('extra_need', 0)))
+
     def before_state(self):
         ev = self.ev
-        self.before = {'markers': self.markers(), 'state': self.state(), 'client': self.base_client()}
+        self.before = {'markers': self.markers(), 'state': self.state(), 'client': self.base_client(),
+                       'sizes': self.live_sizes()}
         ev.save('before.json', self.before)
         ev.check('before: dev-e\'s own markers read (baseline user and its WebDAV file)',
                  BASE_USER in (self.before['markers'].get('users') or [])
@@ -475,7 +504,7 @@ class Run:
 
     def upload(self):
         ev = self.ev
-        self.budget('upload', NEED + FIXTURE.stat().st_size)
+        self.budget('upload', (RUN_CHECK_NEED if self.args.run else NEED) + FIXTURE.stat().st_size)
         if not ev.check('upload: the fixture has the recorded SHA-256', sha256_file(FIXTURE) == FIXTURE_SHA):
             raise Failed('fixture differs')
         started = time.monotonic()
@@ -506,7 +535,7 @@ class Run:
             ev.check('check: nextcloud is ok with no blocker', app.get('ok') is True and not blockers, blockers)
         else:
             self.negative_blockers(blockers, app)
-        section = app.get('nextcloud') or {}
+        section = self.section = app.get('nextcloud') or {}
         differ = {k: [v, section.get(k)] for k, v in SECTION.items() if section.get(k) != v}
         ev.check('check: the section equals the backup facts (HA cluster opened and read: users, files, tokens, apps)',
                  not differ, differ or section)
@@ -629,7 +658,9 @@ class Run:
 
     def import_real(self):
         ev, facts = self.ev, self.args.facts
-        self.budget('import', CONVERT_NEED + int(facts.get('extra_need', 0)))
+        need = self.convert_need(self.section.get('datadir_bytes'))
+        ev.log(f'import: conversion need {need} B (live sizes {self.before.get("sizes")})')
+        self.budget('import', need)
         tripped = []
         with self.watching(tripped):
             job, took = drv.convert(self.created_store, ['nextcloud'], False, ev=ev,
@@ -895,7 +926,7 @@ def negative(args):
         return 2
     if not ev.check('preflight: dev-e isolation true none {}', isolation() == 'true none {}', isolation()):
         return 2
-    need = NEED + (FIXTURE.stat().st_size + CONVERT_NEED + int(args.facts.get('extra_need', 0)) if args.run else 0)
+    need = FIXTURE.stat().st_size + RUN_CHECK_NEED + int(args.facts.get('extra_need', 0)) if args.run else NEED
     if not ev.check('preflight: the host keeps 12 GiB plus this run\'s need free', host_free() >= FLOOR + need,
                     f'{host_free()} B, need {need} B'):
         return 2
