@@ -1,0 +1,60 @@
+{
+ "addon_members": 1,
+ "binding": "match",
+ "blockers": [],
+ "commercial_acceptance": "not-complete",
+ "elapsed_seconds": 70.3,
+ "exported_bytes": 896181,
+ "exported_tables": 86,
+ "fixture_sha256_matches_record": true,
+ "left_behind": 0,
+ "markers": {},
+ "member_encrypted": true,
+ "migrations": 189,
+ "rows_total": 2882,
+ "scan": {
+  "pg_files": 1807,
+  "pg_version": "18",
+  "recovery_files": 0,
+  "salt_valid": true,
+  "state_version": "1.104.0",
+  "symlinks": 0
+ },
+ "schemas": [
+  "woow",
+  "woow_platform"
+ ],
+ "scratch_removed": true,
+ "sequences": 1,
+ "session_settings": {
+  "datestyle": "ISO, MDY",
+  "event_triggers": "off",
+  "extra_float_digits": "3",
+  "search_path": "pg_catalog",
+  "session_preload_libraries": ""
+ },
+ "source": {
+  "commit": "119ed711709d818aed011321b372f0039810015f",
+  "ha_litellm_sha256": "f81c9b46dff5e3d86adf71a4a4fae3e4eeadfc5eb93c84cd3b8a77a42d535c13",
+  "tracked_changes": false
+ },
+ "stored_settings": {
+  "callbacks": 0,
+  "env_names": 0,
+  "hooks": 0,
+  "hooks_blocker": false,
+  "sections": 1,
+  "unreadable": false,
+  "warning_line": false
+ },
+ "superuser_objects": [],
+ "tables": 86,
+ "trusted_recheck": {
+  "blocker": false,
+  "callbacks": 0,
+  "env_names": 0,
+  "hooks": 0,
+  "unreadable": false
+ },
+ "warnings_count": 0
+}
