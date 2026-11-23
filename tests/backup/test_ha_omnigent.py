@@ -85,7 +85,7 @@ def signature():
     return found
 
 
-def addon_tar(*, version='0.1.23', cookie=True, extra=(), artifacts=True):
+def addon_tar(*, version='0.1.23', cookie=True, extra=(), artifacts=True, pg_version=b'16\n'):
     addon = {'user': {'version': version, 'image': 'ghcr.io/woowtech/woow-ha-omnigent-amd64',
                       'options': {'admin_password': 'ha-admin-secret'}},
              'system': {'slug': 'woow-omnigent', 'name': 'Woow Omnigent'}, 'version': version}
@@ -93,7 +93,7 @@ def addon_tar(*, version='0.1.23', cookie=True, extra=(), artifacts=True):
     entries = [{'name': '.', 'type': 'dir'}, {'name': './addon.json', 'data': json.dumps(addon).encode()},
                {'name': 'data', 'type': 'dir'}, {'name': 'data/options.json', 'data': b'{"admin_password": "x"}'},
                {'name': 'data/postgres', 'type': 'dir', 'mode': 0o700},
-               {'name': 'data/postgres/PG_VERSION', 'data': b'16\n'},
+               {'name': 'data/postgres/PG_VERSION', 'data': pg_version},
                {'name': 'data/postgres/base', 'type': 'dir'}, {'name': 'data/postgres/base/1', 'type': 'dir'},
                {'name': 'data/postgres/base/1/1259', 'data': b'page'},
                {'name': 'data/postgres/pg_hba.conf', 'data': b'host all all 0.0.0.0/0 trust\n'},
@@ -282,6 +282,28 @@ class OmnigentCase(fk.ConversionCase):
 
 
 class CheckTests(OmnigentCase):
+    def test_has_pg_version_and_backup_name_cannot_forge_a_job_log_line(self):
+        """secreview SR-6 (real in the lab: attack v7): HA's PG_VERSION (PostgreSQL reads only the number of its first
+        token, '16.') and the HA backup's name (hastore refuses only C0 control characters) reach the job log as HA
+        wrote them. Through the real JobStore every message stays one line without control characters: no forged
+        line reaches the page."""
+        from types import SimpleNamespace
+        ha_id = self.upload(hx.outer_bytes([(f'{SLUG}.tar.gz', addon_tar(pg_version=b'16.\x0bFORGED OK\n'))],
+                                           hx.ha_doc(addons=(SLUG,), name='WOOW FORGED 轉換完成：全部成功')))
+        self.check(ha_id, ['omnigent'])
+        logged = [str(message) for message in self.reporter.logs]
+        self.assertTrue(any('PostgreSQL 16.\x0bFORGED' in m for m in logged), 'the source: HA text as it is')
+        self.assertTrue(any('WOOW FORGED' in m for m in logged), 'the source: HA text as it is')
+        (self.root / 'joblog').mkdir()
+        store = jobs.JobStore(SimpleNamespace(jobs=str(self.root / 'joblog')))
+        job = jobs.new_job_id()
+        for message in logged:
+            store.append_log(job, message)
+        read = store.read_log(job, limit=10000)
+        self.assertEqual(len(read), len(logged))
+        self.assertFalse([line for line in read if line.startswith('FORGED')])
+        self.assertFalse([line for line in read if re.search(r'[\x00-\x1f\x7f-\x9f  ]', line)])
+
     def test_a_clean_backup(self):
         result = self.check(self.upload_omnigent(), ['omnigent'])[0]
         self.assertEqual((result['ok'], result['blockers'], result['version'], result['target_version']),

@@ -80,6 +80,10 @@ DEDUP_SECONDS = 24 * 3600
 QUEUED_GRACE_SECONDS = 120
 MAX_RECORD_BYTES = 1024 * 1024
 MAX_LOG_LINE = 500
+# A log line stays ONE line on the page: read_log splits on '\n' only, and append_log turns into a space every C0/C1
+# control character and U+2028/U+2029 (str.splitlines() also splits on \x0b, \x0c, \x1c-\x1e, \x85, U+2028 and U+2029).
+# Lines carry text an HA backup chose -- its name, its PG_VERSION -- which forged a line before (secreview SR-6).
+LOG_CONTROL_RE = re.compile(r'[\x00-\x1f\x7f-\x9f\u2028\u2029]')
 LOCK_WAIT_SECONDS = 120
 KEY_FILE_MAX_AGE = 15 * 60  # an inspect takes seconds; older key-inspect-* files were left by a killed helper
 KEEP_TERMINAL = 200  # finished records kept (with their logs) besides the ones that are still needed
@@ -426,7 +430,7 @@ class JobStore:
         return True
 
     def append_log(self, job_id, message, now=None):
-        line = redact(message).replace('\r', ' ').replace('\n', ' ')[:MAX_LOG_LINE]
+        line = LOG_CONTROL_RE.sub(' ', redact(message))[:MAX_LOG_LINE]
         fd = os.open(self.log_path(job_id), os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW | os.O_CLOEXEC,
                      0o600)
         try:
@@ -442,7 +446,9 @@ class JobStore:
         with os.fdopen(fd, 'rb') as handle:
             size = os.fstat(handle.fileno()).st_size
             handle.seek(max(0, size - 256 * 1024))
-            lines = handle.read().decode('utf-8', 'replace').splitlines()
+            lines = handle.read().decode('utf-8', 'replace').split('\n')
+        if lines and lines[-1] == '':
+            lines.pop()
         return [redact(line) for line in lines[-limit:]]
 
     def request_cancel(self, job_id):

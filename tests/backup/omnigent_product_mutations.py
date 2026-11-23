@@ -95,6 +95,11 @@ MUTATIONS = (
      '        if uids is not None and (candidate not in uids or candidate not in gids):\n            continue\n', '', 1),
     ('M25', "the names in the SR-1 message are cut and without control characters (verifier, SR-4 class)",
      '                shown = hacommon.names([name])\n', '                shown = name\n', 1),
+    ('M26', "every job log line stays one line without control characters: HA's PG_VERSION and backup name "
+            "(secreview SR-6, shared jobs.py)",
+     "        line = LOG_CONTROL_RE.sub(' ', redact(message))[:MAX_LOG_LINE]\n",
+     "        line = redact(message).replace('\\r', ' ').replace('\\n', ' ')[:MAX_LOG_LINE]\n", 1,
+     'woowbackup/jobs.py'),
     ('M21', "HA-controlled names reach the job log and the page without control characters (SR-4, shared hacommon)",
      "    items = [CONTROL_RE.sub('?', str(item)[:60]) for item in items]\n",
      '    items = [str(item)[:60] for item in items]\n', 1, 'woowbackup/hacommon.py'),
