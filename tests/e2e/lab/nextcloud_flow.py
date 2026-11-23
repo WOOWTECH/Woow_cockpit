@@ -26,6 +26,16 @@ installed engine == this tree; Nextcloud's five units active and status.php inst
   leaks    the HA key and the HA-side test credentials appear nowhere in the engine's records, uploads, staging, run dir
            or the device journal, nor in this evidence
 
+--candidate (INTERNAL candidate, never acceptance; same fixture): the same setup, before, upload and check; then
+ha-convert-start is created through the helper's own command code, but its job runs in a root process inside dev-e
+where ONLY ha_nextcloud.datadir_pass is replaced (the users' files are not in this backup: the data dir gets just
+`.ncdata`); the product's refusal stays in the installed engine and in every public route. It exercises the real
+conversion: pg_dump of HA's real database, the new cluster from the live image/env/secret, the live role and grants,
+pg_restore as that role, the storage/Office/cron fix-ups and their verification against the live database, the
+PostgreSQL settings, config.php merged and parsed back by the live PHP, the html/PostgreSQL/Redis dir tars and the
+packaging. The converted backup is inspected (preflight passes, the four data dirs, settings same) and deleted, never
+restored; dev-e's Nextcloud must be unchanged (after), cleanup and leaks as above.
+
 stdout carries only fixed lines (`<check>: PASS|FAIL`, the source commit, the lock time); details go to the private,
 redacted evidence folder ~/.woowbk-lab/evidence/nextcloud-flow/<time>/ (0700). Not covered by --negative (stated):
 a restore (the product refuses to build one), the users' files, Office, a browser.
@@ -173,6 +183,39 @@ for root in roots:
 journal = subprocess.run(["journalctl", "-o", "cat", "--no-pager"], capture_output=True, check=True).stdout
 hits += sum(journal.count(s) for s in needles)
 print(json.dumps({"scanned": scanned, "journal_bytes": len(journal), "names": len(secrets), "hits": hits}))
+'''
+
+
+CANDIDATE = r'''
+import io, json, sys, time
+sys.path.insert(0, "/usr/local/lib/woowtech-cockpit-backup")
+from unittest import mock
+from woowbackup import cli, ha_nextcloud
+from woowbackup.paths import Paths
+req = json.loads(sys.stdin.read())
+NCDATA = b"# Nextcloud data directory\n# Do not change this file\n"
+def relaxed(work, src, *, out=None, ids=None):
+    data = ha_nextcloud.DataDir()
+    data.present = data.ncdata = True
+    if out is not None:
+        out.add(".ncdata", "file", mode=0o644, uid=ids[0], gid=ids[1], mtime=time.time(), size=len(NCDATA),
+                fileobj=io.BytesIO(NCDATA))
+    work.log("INTERNAL CANDIDATE: the users' files are not in this backup; the data dir gets only .ncdata")
+    return data
+svc = cli.Services(Paths(), launcher=lambda job_id: None)
+def call(argv, request=None):
+    out = io.StringIO()
+    code = cli.main(argv, stdin=io.StringIO(json.dumps(request) if request is not None else ""), stdout=out,
+                    services=svc)
+    lines = out.getvalue().strip().splitlines()
+    return code, json.loads(lines[-1]) if lines else {}
+code, reply = call(["ha-convert-start"], req["request"])
+if code != 0 or not reply.get("job_id"):
+    print(json.dumps({"started": False, "error": (reply.get("error") or {}).get("code")}))
+    sys.exit(0)
+with mock.patch.object(ha_nextcloud, "datadir_pass", relaxed):
+    code, run = call(["run-job", reply["job_id"]])
+print(json.dumps({"started": True, "job_id": reply["job_id"], "state": run.get("state"), "code": code}))
 '''
 
 
@@ -328,6 +371,50 @@ class Run:
         after = {b['id'] for b in drv.ok('list', ev=ev).get('backups') or []}
         ev.check('convert: no backup was added', after == before, sorted(after - before))
 
+    def candidate(self):
+        ev = self.ev
+        self.budget('candidate')
+        before = {b['id'] for b in drv.ok('list', ev=ev).get('backups') or []}
+        request = {'ha_backup_id': self.created_store, 'apps': ['nextcloud'], 'test_mode': False, 'confirm': True,
+                   'request_id': drv.request_id('nc-candidate'), 'key': self.args.secrets['HA_BACKUP_KEY']}
+        started = time.monotonic()
+        run = drv.device_python(CANDIDATE, {'request': request}, as_owner=False, timeout=5400)
+        took = time.monotonic() - started
+        ev.save('candidate-run.json', run)
+        job = drv.ok('job-status', {'job_id': run.get('job_id')}, ev=ev).get('job') if run.get('started') else {}
+        ev.time('candidate-convert', 'noshare', 'nextcloud', took, job)
+        result = (job or {}).get('result') or {}
+        ev.save('candidate-job.json', {'job': job})
+        backup = result.get('backup_id')
+        if backup:
+            drv.STATE.setdefault('created_backups', []).append(backup)
+        if not ev.check('candidate: the internal conversion job succeeds (real dump, new cluster, role, restore, '
+                        'fix-ups verified against the live database, PHP check, dir tars, packaging)',
+                        run.get('started') and (job or {}).get('state') == 'succeeded' and bool(backup),
+                        {'run': run, 'state': (job or {}).get('state'), 'error': (job or {}).get('error')}):
+            return
+        self.converted = backup
+        row = result.get('ha_import') or {}
+        ev.check('candidate: the notes and reminders name Collabora, the share folder rule and the MCP admin lines',
+                 any('Collabora' in n for n in row.get('notes') or [])
+                 and any('Woow Nextcloud MCP Server' in r for r in (row.get('reminders_by_app') or {}).get('nextcloud') or []),
+                 row)
+        inspect = drv.ok('inspect', {'backup_id': backup}, ev=ev, timeout=900)
+        ev.save('candidate-inspect.json', inspect)
+        pre = inspect.get('preflight') or {}
+        failed = [c for c in pre.get('checks') or [] if c.get('status') == 'fail']
+        ev.check('candidate: inspect: preflight passes, settings same, in place',
+                 pre.get('ok') and not failed and all((a.get('settings') or {}).get('state') == 'same'
+                                                      and a.get('mode') == 'inplace' for a in pre.get('apps') or []),
+                 failed[:3] or [(a.get('id'), a.get('mode')) for a in pre.get('apps') or []])
+        apps = (inspect.get('manifest') or {}).get('apps') or []
+        dirs = sorted(d.get('path') for a in apps for d in a.get('data_dirs') or [] if isinstance(d, dict))
+        ev.check('candidate: the converted backup holds the four Nextcloud data dirs',
+                 dirs == sorted(f'.local/share/nextcloud-office/{n}' for n in ('data', 'html', 'postgres', 'redis')),
+                 dirs)
+        after = {b['id'] for b in drv.ok('list', ev=ev).get('backups') or []}
+        ev.check('candidate: exactly the converted backup was added', after - before == {backup}, sorted(after - before))
+
     def after_state(self):
         ev = self.ev
         after = {'markers': self.markers(), 'state': self.state()}
@@ -341,6 +428,9 @@ class Run:
 
     def cleanup(self):
         ev = self.ev
+        if getattr(self, 'converted', None):
+            rc, _reply = drv.helper('delete', {'backup_id': self.converted, 'confirm': True})
+            ev.check('cleanup: the internal candidate backup is deleted (never restored)', rc == 0)
         if self.created_store:
             rc, _reply = drv.helper('ha-delete', {'ha_backup_id': self.created_store, 'confirm': True})
             ev.check('cleanup: the HA store record of this run is deleted', rc == 0)
@@ -391,7 +481,9 @@ def negative(args):
                 time.sleep(10)
         run = Run(args, ev)
         try:
-            for step in (run.setup, run.before_state, run.upload, run.check, run.convert, run.after_state):
+            steps = (run.setup, run.before_state, run.upload, run.check,
+                     run.candidate if args.candidate else run.convert, run.after_state)
+            for step in steps:
                 step()
         except Failed as error:
             ev.check(f'run stopped: {label(error)}', False)
@@ -409,7 +501,7 @@ def negative(args):
 
 def self_check():
     compile((HERE / 'nextcloud_flow.py').read_text(encoding='utf-8'), 'nextcloud_flow.py', 'exec')
-    for script in (STATE, ENGINE_HASHES, LEAKS):
+    for script in (STATE, ENGINE_HASHES, LEAKS, CANDIDATE):
         compile(script, 'device', 'exec')
     assert all(SAFE_LABEL.sub('', name) == name for name in ('check: amd64, add-on 0.2.3, target 35.0.1.1',))
     print('self-check: PASS')
@@ -420,6 +512,7 @@ def main(argv):
     parser = argparse.ArgumentParser()
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument('--negative', action='store_true')
+    group.add_argument('--candidate', action='store_true')
     group.add_argument('--self-check', action='store_true')
     args = parser.parse_args(argv)
     if args.self_check:
