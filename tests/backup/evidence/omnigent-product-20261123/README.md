@@ -48,3 +48,34 @@ only: no Podman, no device, no secret.
 * `test_ha_omnigent_trusted`: strict data-only list; the old guards replaced by the product checks.
 * `test_b1_01_guard`: the unsafe helpers are gone; nothing runs before the secrets are registered; HA's dump only ever
   loaded as data by the restricted role.
+
+## Iteration 2 (2026-11-23 evening): the security review's fixes, two more, the final mutation check
+
+The security review (lane omnigent-secreview, `tests/backup/evidence/omnigent-product-security-review-20261123/`)
+found SR-1..SR-5 on this branch. Its fixes are cherry-picked here (SR-1 `require_answers`, SR-3
+`require_sequence_sets`, SR-4 `hacommon.names` without control characters, SR-2b HA's `pg_dump` under another OS
+user, docs) together with its README and attack evidence. Two more changes of this lane:
+
+* `DATA_REFUSED` (`load_into_new_cluster`, review v5 / SR-5 UX): HA rows that this device's schema refuses (its
+  CHECK / NOT NULL constraints at the data load; its primary keys, unique indexes and foreign keys at post-data; a
+  value its column types reject) end the job `incompatible` with a plain message instead of
+  `podman exec … 執行失敗（結束碼 1）`; pg_restore's stderr (it holds HA's row values) only classifies and is never
+  shown or logged. Real check with the review harness in the lab store (real PostgreSQL 16.16, crafted backup from the
+  real b1 x86 cluster): `secreview-v5-data-refused-lab.json` (check ok, conversion refused with `DATA_REFUSED`,
+  canary in no message, log or kept stderr, nothing left).
+* SR-2b on dev-d: the review's `65534:65534` failed in the REAL product flow (dev-d's owner maps only uids
+  1..55000, `podman exec` exit 255; evidence `tests/e2e/lab/evidence/omnigent-product-20261123/
+  omnigent-x86-plain-secreview-fixes-attempt1.json`). The review's `dump_user` (first of 65534, 32767, 9999, 999 in
+  the owner's uid AND gid maps, never root or the image's postgres ids) is the one kept; this lane's own variant
+  (fixed uid 1, 1b6228e) was reverted (1ca1602) so that only one SR-2b change exists.
+
+`mutation-check-final.json` (engine `ha_omnigent.py` sha256 f3090f78…, `hacommon.py` 67f2ed25…): baseline 57/57
+pass; **24/24 protections caught** -- M01..M17 as above plus M18 `require_answers` (SR-1), M19
+`require_sequence_sets` (SR-3), M20 pg_dump under `dump_user` (SR-2b), M21 `hacommon.names` control characters
+(SR-4, shared module), M22 `DATA_REFUSED` classification, M23 never root/postgres for the dump uid, M24 the dump uid
+mapped in the owner's uid and gid maps. The script now names the module each mutation changes.
+
+Unit tests on this tip: Omnigent modules (`test_ha_omnigent*`, `test_b1_01_guard`, `test_ha_common`) OK;
+`test_ha_headscale`, `test_ha_hermes`, `test_ha_litellm_candidate`, `test_ha_flows`, `test_ha_import`,
+`test_ha_registry` OK (the shared fake `hab1fakes` now keeps the child's stderr on `CommandError` like
+`podman.Runner.run`); `test_ha_emqx`: the same 10 pre-existing PRESERVATION_BLOCKER failures as before.
