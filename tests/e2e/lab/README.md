@@ -411,7 +411,7 @@ rootless 容器（含巢狀）的用量全部算到同一個使用者，16:35 �
 實例、立即釋放），可用少於 5 個就暫停；不留下 `tail -f` 之類的追蹤程式或閒置的測試容器。dev-e 只由 batch2-lab 變更，其他線在
 `team/batch2-lab.md` 寫 `REQUEST:` 並等 READY。
 
-**輪替指令**（2026-11-23 第 3 輪加入，離線測試 8 項＋5 個突變檢查）：先以 `batch2_baseline.py --verify <應用>` 證明資料回到基準，再
+**輪替指令**（2026-11-23 第 3 輪加入，離線測試 9 項＋6 個突變檢查）：先以 `batch2_baseline.py --verify <應用>` 證明資料回到基準，再
 `flock -w 3600 /tmp/woowbk-dev-e-mutation.lock tests/e2e/lab/deploy-batch2.sh e rotate:<應用>`：依序停止該應用的單元與計時器，每一個都不再
 執行（inactive；健康檢查單元上次失敗算 failed、也不在執行）、沒有它的容器，才刪除它的映像（keep-id 複本隨映像一起刪）；任何一項不符就停下、
 映像保留。資料、單元、env、密鑰、目錄項目與基準備份都留著。喚醒用 `deploy-batch2.sh e wake:<應用>`：`images:<應用>`、確認每個已安裝單元的
