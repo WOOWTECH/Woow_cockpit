@@ -1990,7 +1990,12 @@ PostgreSQL 15).
    strip, masked at once), `data/woow/state.json`; never `options.json`, the master key, the UI or database password
    files, the pre-upgrade dumps. HA's cluster runs in the official PostgreSQL 18.7 image pinned by content
    (`PG18_IDS`; else `PG18_PINNED` is pulled by digest and must give one of them), hardened like Odoo's (read-only root,
-   network none, noexec data volume at the image's VOLUME path, every library/command setting overridden). The salt
+   network none, noexec data volume at the image's VOLUME path, every library/command setting overridden, event
+   triggers off). HA's per-database and per-role settings beat the command line, so every session the engine opens
+   there sends its own client options, which beat them (`HA_SESSION_OPTIONS`; the superuser's also
+   `HA_SUPERUSER_OPTIONS`): names resolve in `pg_catalog` only, the rows are exported in fixed formats like pg_dump's,
+   no preload library, no event trigger (review SR-1..SR-3); `public._prisma_migrations` is read only as an ordinary
+   table; `backup_label` and `tablespace_map` never reach the volume and refuse (a cold backup has neither; SR-4). The salt
    must be the one HA's database is bound to (`woow_platform.settings` and the `woow.meta` fingerprint, read by a role
    without privileges): else `incompatible` -- nothing stored could be decrypted. HA's database: only `public`,
    `woow_platform` and `woow` (with `meta` only), no object only a superuser creates, no large object, UTF8; its data
@@ -2011,6 +2016,10 @@ PostgreSQL 15).
    automatic rollback or a later restore of it puts both back. This device's virtual keys are replaced by HA's: the
    check's `key_users` and a note/reminder name the other catalog apps whose declared config files or Quadlet files set
    a LiteLLM key or address, or whose networks LiteLLM's drop-in `local-agent-networks.conf` joins (nothing else changes).
+   HA's stored proxy settings (`LiteLLM_Config`) move with the rows and take effect here (`store_model_in_db: true`:
+   stored environment variables are decrypted with the moved salt into the proxy's environment, callbacks are loaded):
+   the check warns and a note names the stored environment variable names and callback names (never a value; nothing
+   is refused; review SR-5).
 
 **Packaging**: per app `adapter.import_manifest` adds the live non-data items exactly as a backup reads them (images
 list, secrets, config files, Quadlet files, `catalog_entry`, `catalog_sha256`), so `match_items` finds every item and
