@@ -403,7 +403,14 @@
      "sockets": 0,
      "hardlinked_files": 0,
      "symlinks": 0
-    }
+    },
+    "image_accounts_0.2.3": {
+     "www-data": "33:33",
+     "redis": "100:102",
+     "postgres": "102:104",
+     "cool": "103:105"
+    },
+    "uid_note": "facts nextcloud.md lists the 0.2.4 image as postgres 997:997, redis 100:102, cool 102:104: uids differ per image version, map by name"
    },
    "markers": {
     "test_user": "woow-import-test (display WOOW 匯入測試); password B2_NC_X86_NOSHARE_USER_PW and app password B2_NC_X86_NOSHARE_APP_PW in ~/.woowbk-lab/secrets/b1-creds.env (names only)",
@@ -526,5 +533,23 @@
     }
    }
   }
- ]
+ ],
+ "end_state_check": {
+  "time_utc": "2026-11-23T08:17:14Z",
+  "script": "inv-after.sh + inv-who.sh (read-only)",
+  "apps": {
+   "1b7b4ce7_woow_ha_opendesign": "0.2.15 started (container started 08:08:28Z)",
+   "d65e8bf4_woow_ha_opendesign": "0.2.15 started (container started 08:08:33Z; never touched by this lane)",
+   "1b7b4ce7_woow_ha_code_server": "0.1.14 started (container started 08:08:38Z)",
+   "a020c0ec_woow_ha_code_server": "0.1.11 stopped (never touched)",
+   "1b7b4ce7_woow-nextcloud-office": "0.2.3 started, healthz 200, status 35.0.1 maintenance false, users admin,woow-mcp-test"
+  },
+  "note": "this lane stopped OpenDesign 07:57:36Z and code-server 08:02:43Z (their paused state); the actor who paused them at 07:07Z started all three again 5 s apart at 08:08:28-38Z (their resume); this lane did not change them afterwards. This lane ran OpenDesign 07:55:21-07:57:36Z and code-server 07:59:17-08:02:43Z inside that pause window.",
+  "showcase_backups_kept": [
+   "a64c4ba7",
+   "69cafef5",
+   "2d7882d8"
+  ],
+  "ha_backup_free": "630.7G"
+ }
 }
