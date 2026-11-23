@@ -45,6 +45,9 @@ ADMISSION=b'WOOWREALOWNER-ADMITTED1:'
 MAX_BODY=512*1024*1024+49152
 STAGED=b'REAL OWNER STAGED ONLY PASSED\n'
 DEPENDENCIES=b'REAL OWNER DEPENDENCIES PASSED\n'
+# Full real restore = 3 verified rounds; at host load ~27 round 2's capture already
+# ran at ~700-720s (attempts 13-15) and a full pass took 590s at load ~13.
+REAL_RESTORE_SECONDS=1500
 HOST_PHASES=frozenset(('profile','bundle','dependencies','client_credentials','retained_binding','key','archive','archive_binding','transfer','child','receipt'))
 
 class TransportRefused(ValueError):
@@ -348,7 +351,7 @@ def owner_main(mode):
         raise ValueError()
     previous=signal.signal(signal.SIGALRM,deadline)
     try:
-        signal.setitimer(signal.ITIMER_REAL,840)
+        signal.setitimer(signal.ITIMER_REAL,REAL_RESTORE_SECONDS)
         from emqx_real_owner_workflow import run_real_framed_owner
         from emqx_framed_preflight import evidence_frame
         with tempfile.TemporaryDirectory(prefix='emqx-real-owner-private-',dir=Path.home()) as d:
@@ -559,7 +562,7 @@ def main(argv=None):
             # Sole admission point. An exceptional close is NOT a commit.
             child.stdin.write(ADMISSION)
             child.stdin.close()
-        phase='child';frame=read_result(child,timeout=900)
+        phase='child';frame=read_result(child,timeout=REAL_RESTORE_SECONDS+60)
         if no_live:
             if frame!=STAGED:raise ValueError()
             print('REAL OWNER STAGED ONLY PASSED',flush=True)
