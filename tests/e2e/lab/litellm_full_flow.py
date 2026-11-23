@@ -502,6 +502,10 @@ class Run:
             entry = json.loads(json.dumps(variant.get('entry'))) if isinstance(variant.get('entry'), dict) else None
             if entry is not None:
                 entry['verify'] = []
+                # Lab difference: the readiness URL may take up to 600 s (catalog maximum) on the loaded lab host;
+                # the package's production entry allows 300 s.
+                for item in entry.get('health') or []:
+                    item['timeout_seconds'] = 600
             if not ev.check('setup: catalog-suggest proposes the litellm entry (single-database mode) from the installed '
                             'Quadlet files', isinstance(entry, dict) and variant.get('valid') is True,
                             {'apps': [a.get('id') for a in suggestion.get('apps') or []],
@@ -575,7 +579,10 @@ class Run:
                             'dev-d maps IDs 0..55000)', proc.returncode == 0, f'rc {proc.returncode}'):
                 raise Failed('derived image build failed')
         started = time.monotonic()
-        proc = drv.owner(f'{home}/{DEST}/scripts/install.sh', '--no-pull', timeout=1800)
+        # QL_HEALTH_ACTIVE=0 (the package library's own knob): its waiter otherwise runs `podman healthcheck run` every
+        # 2 s, and each run uses one of the 40 startup-probe attempts the unit plans 15 s apart; on the loaded lab host
+        # podman then restarts LiteLLM after ~2.5 min, before it is ready (attempt 2, 2026-11-23 18:33-18:48).
+        proc = drv.owner('env', 'QL_HEALTH_ACTIVE=0', f'{home}/{DEST}/scripts/install.sh', '--no-pull', timeout=1800)
         ev.save('package-install.log', drv.out(proc)[-30000:] + proc.stderr.decode('utf-8', 'replace')[-20000:])
         if not ev.check('setup: Woow_podman_litellm dd690ae scripts/install.sh --no-pull in dev-d (fresh secrets, units, '
                         'health, smoke)', proc.returncode == 0,
