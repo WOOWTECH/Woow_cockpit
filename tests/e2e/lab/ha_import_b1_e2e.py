@@ -614,11 +614,14 @@ def dash_login(password):
         code = 0
     return code, op, jar
 def get(op, path):
+    # A slow or broken answer is code 0 (its check fails) instead of killing the whole probe (same as continuity).
     try:
-        with op.open(D + path, timeout=30) as resp:
+        with op.open(D + path, timeout=60) as resp:
             return resp.status, json.loads(resp.read() or b"null")
     except urllib.error.HTTPError as e:
         return e.code, None
+    except (OSError, ValueError):
+        return 0, None
 code, op, jar = dash_login(secret("hermes-dashboard-password"))
 out["issued_device"] = issue_events(jar, code, "device-")
 c2, _ = get(op, "/api/config")
