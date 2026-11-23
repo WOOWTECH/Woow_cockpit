@@ -39,9 +39,9 @@
     }
   },
   "integration_20261123": {
-    "as_of": "2026-11-23 23:58 Asia/Taipei",
+    "as_of": "2026-11-24 00:45 Asia/Taipei",
     "branch": "integration/ha-import-batch1-20261123 (R-COCKPIT, local only, not pushed, no PR)",
-    "last_merge_commit": "3579716",
+    "last_merge_commit": "17c81b8",
     "merged": [
       {
         "lane": "hasqlite fail-closed",
@@ -133,6 +133,13 @@
         "tip": "24a045e",
         "merge_commit": "3579716",
         "by": "integration-3"
+      },
+      {
+        "lane": "nextcloud-import (at its iteration-2 hand-off)",
+        "branch": "feat/ha-import-nextcloud-20261123",
+        "tip": "aaed6cf",
+        "merge_commit": "17c81b8",
+        "by": "integration-3"
       }
     ],
     "open": [
@@ -149,8 +156,8 @@
         "reason": "security review fixes merged on the lane branch; real product-flow attempts still running; not merged, so the public EMQX guard is still on in this branch"
       },
       {
-        "item": "nextcloud-import",
-        "reason": "real share-including run on dev-e in progress (dev-e handed to it 22:46); not merged"
+        "item": "nextcloud-import follow-up",
+        "reason": "merged at aaed6cf (no-share 34/34, share attempt 1 85/86 with the leak-scope fix); open in the lane: a fully green share attempt 3 and the dev-e journal cleanup of the public-link token; later commits get merged again"
       },
       {
         "item": "lab/batch2-dev-e-20261123 later commits",
@@ -174,7 +181,7 @@
       }
     ],
     "public_guards_on_this_branch": "EMQX PRESERVATION_BLOCKER on, Omnigent SECURITY_BLOCKER on, LiteLLM not in haimport.APPS (they change only with the product-lane merges under owner decision 1)",
-    "unit_tests_latest": "integration-3: at ae5420d tests/backup 1471 (12 not-ok = test_ha_omnigent 7 SECURITY_BLOCKER + test_litellm_lab_runner 5 guard false positive, 6/6 with --exe-only), backup-ui 100/100, lab 1090 started / 1043 ok (73 not-ok records = run_native refused + 2 stale persisted_values); at fb284b8 (after code-server and batch-2 lab): backup-ui 101/101, tests/backup 1488 = 1475 ok, 1 skipped, the same 12 not-ok ids, RealBackupTests with the 20261118 backups 1/1, lab 1097 started / 1050 ok with the same 73 records. 3579716 adds lab scripts and evidence only. Evidence: tests/e2e/lab/evidence/integration-20261123/unit-tests-step3.json and unit-tests-step3b.json.",
+    "unit_tests_latest": "integration-3: at ae5420d tests/backup 1471 (12 not-ok = test_ha_omnigent 7 SECURITY_BLOCKER + test_litellm_lab_runner 5 guard false positive, 6/6 with --exe-only), backup-ui 100/100, lab 1090 started / 1043 ok (73 not-ok records = run_native refused + 2 stale persisted_values); at fb284b8 (after code-server and batch-2 lab): backup-ui 101/101, tests/backup 1488 = 1475 ok, 1 skipped, the same 12 not-ok ids, RealBackupTests with the 20261118 backups 1/1, lab 1097 started / 1050 ok with the same 73 records. 3579716 adds lab scripts and evidence only. At 17c81b8 (nextcloud): affected tests/backup modules 101/101, backup-ui 101/103 (one timeout + one 320 px layout overflow, both 2/2 when rerun alone at the same commit). Evidence: tests/e2e/lab/evidence/integration-20261123/unit-tests-step3.json, unit-tests-step3b.json, unit-tests-step3c.json.",
     "evidence": "tests/e2e/lab/evidence/integration-20261123/README.md (integration-1/2/3 sections), unit-tests.json, unit-tests-step2.json, unit-tests-step3.json",
     "commercial_acceptance": "not-complete"
   },

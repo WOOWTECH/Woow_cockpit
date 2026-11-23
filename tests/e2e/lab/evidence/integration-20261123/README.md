@@ -229,3 +229,19 @@ code-server 兩個第二批情境）。整套 `tests/backup` 與 `tests/e2e/lab`
   轉換後備份，資料檢查分不出回復與成功；瀏覽器頁面沒有在 dev-e 上測。
 * code-server（21:30）：自動回復同樣是把同一份轉換後備份再還原一次（只證明回復路徑，手動回復才證明資料互換）；「MCP 值已收集」
   是空集合（0 個值）；工作區搬移、延伸模組搬移、ARM、真正的瀏覽器頁面、正式主機的目錄項目都沒有實測（該線已說明）。
+
+## 第三次整合（續）：Nextcloud（`unit-tests-step3c.json`）
+
+| 合併 commit | 來源（tip） | 內容 |
+| --- | --- | --- |
+| `17c81b8` | `feat/ha-import-nextcloud-20261123`（`aaed6cf`） | Nextcloud Office 匯入（`ha_nextcloud.py`、haapps `nextcloud`、頁面的 Nextcloud 檢查卡、文件、CONTRACT、測試）、`nextcloud_flow.py`、`nextcloud_member_scan.py` 與 dev-e 證據：沒有 share 的第 2 次 34/34（產品拒絕缺少 share 資料夾的備份）、含 share 的第 1 次 85/86（匯入、用戶端、重新啟動、自動與手動回復、清理全部通過；唯一的 FAIL 是外洩搜尋在 dev-e 的網頁存取日誌找到公開連結權杖，之後依廠商 `PublicAuth.php:104-109` 等縮小範圍）、第 2 次在檢查前被主機空間保護停止。 |
+
+沒有衝突：那條分支自己先合併了本分支的 `88e7e6b`，18 個檔案在合併基準 `fb284b8` 之後這邊都沒改，合併後全部等於 `aaed6cf`；
+`haapps.IMPORTERS` 保留 OpenDesign 與 code-server，最後加上 Nextcloud。依該線 00:00 的交接（請本組合併這個 tip）合併；
+該線仍開著：全綠的含 share 第 3 次、dev-e 日誌中那個權杖的清理，之後的 commit 會再合併。
+
+測試：受影響的 `tests/backup` 模組（nextcloud、cli、import、registry、codeserver、opendesign，開啟真實 batch-1 備份）101/101；
+`node tests/backup-ui.mjs` 在 `17c81b8`：103 個中 101 個通過，第 4 個（上傳串流，Playwright 10 秒逾時，主機負載約 30）與第 16 個
+（320 px 時工作執行中畫面的示範警告清單多出 5 px；這次合併沒有碰那個畫面或任何樣式）未通過，在同一個 commit 單獨重跑這兩個：2/2 通過；
+第二批 4 個 HA 情境（OpenDesign、code-server、Nextcloud 含／不含 share）全部通過。整套 `tests/backup` 與 `tests/e2e/lab` 最後一次在
+`fb284b8`（第 3b 步）；下一次整套在產品線合併之後。
