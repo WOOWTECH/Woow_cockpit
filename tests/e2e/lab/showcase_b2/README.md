@@ -43,3 +43,34 @@ command line and is never written anywhere.
   share-including Nextcloud backup (and the code-server workspace `/share/projects`) waits for the owner.
 - Nextcloud `data/` had no device nodes, FIFOs, sockets, hard links or symlinks; the strict walker accepted the whole
   member (facts risk R1 did not occur in this backup). `data/postgres/PG_VERSION` is owned 102:104 in the backup.
+
+## Nextcloud WITH the share folder (2026-11-23 evening, lane showcase-nc-share)
+
+MAIN decision 17:30 (within the owner's rotation rule): the share-including Nextcloud backup is approved and runs last,
+after the OpenDesign and code-server real runs passed and both were rotated out of dev-e. Started 20:35 (both passed
+85/85 and 87/87, ROTATED 19:44 and 20:32, host 31.9 GiB free). Evidence: `../evidence/ha-b2-nc-share-20261123.json`.
+
+1. `ncs-a.sh` (on the showcase): markers that live IN the share folder: users `woow-import-share` (A) and
+   `woow-import-share2` (B), A's app password, WebDAV files (ASCII, CJK name, nested CJK folders with a 4 MiB random
+   file, one file with an older version), a read-only user share A->B, a password-protected public link (expires
+   2026-12-07), one CalDAV event, one CardDAV contact. Generated secrets went out only as `@@CRED@@` lines
+   (`B2_NC_X86_SHARE_*` in `~/.woowbk-lab/secrets/b1-creds.env`).
+2. `ncs-b.sh`: ONE encrypted partial backup (add-on + `share`) as a Supervisor background job, polled every 2 s:
+   the add-on was stopped at +4 s and started again at +22 s (stage `addons`, cold); the share folder was written
+   after the restart (stage `folders`); 222 s in all, healthz 200. HA slug `507c3510`, 4,467,947,520 B, sha256
+   `2dcfc6769d6fed7dd5c375fc379aac43da606931c8378e3970c33f78a4bded9d`. Per-user file manifests, `/share/projects`
+   and the share totals were identical before and after the backup.
+3. `ncs-c.sh`: both test users deleted; every counted row, the share size and entry count are back to the 17:31
+   baseline (`ncs-inv.sh` end-state check), Nextcloud started, healthz 200.
+4. Download: attempt 1 (`ncs-dl.sh`, one SSH stream) broke after 1.96 GB (`client_loop: send disconnect: Broken
+   pipe`) and its guard deleted the partial file. Attempt 2 (`ncs-dl-chunked.sh`, 17 chunks of 256 MiB, each checked
+   against a sha256 list made on the showcase, 1 chunk retried) took 3548 s; whole-file sha256 MATCH; lowest
+   projected host free 16.5 GiB (floor 12 GiB kept throughout).
+5. `ncs-run-verify.sh` + `ncs_verify.py` (product reader, network-none read-only lab container): add-on member
+   complete (7168 entries), share member complete (24,422 entries = `find /share -xdev | wc -l` at backup time;
+   2722 dirs, 21,672 files, 28 symlinks all handed out, no FIFO/device/never-read entry). The per-user manifest
+   digests computed from the backup equal the showcase's for all four users (admin 88 files, woow-mcp-test 1,
+   A 68, B 64; versions and trash counts equal), `/share/projects` (1488 files) equal, `.ncdata` present, the 4 marker
+   files present with the showcase's sha256 and owner 33:33.
+6. The showcase is not short of space (672.6 GB free of 983.7 GB), so backup `507c3510` stays there with the other
+   three for the main session to delete at the end. `ncs_evidence.py` built the evidence; `ncs_leakscan.py`: 0 hits.
