@@ -128,21 +128,53 @@ class Ev(drv.Evidence):
         return result
 
 
-def acquire(lock=LOCK, waiting=WAITING, timeout=LOCK_TIMEOUT, *, sleep=time.sleep, clock=time.monotonic):
+class _Tick(Exception):
+    pass
+
+
+def _tick(_signum, _frame):
+    raise _Tick()
+
+
+def _block(fd, seconds):
+    """A kernel-queued `flock` wait of at most `seconds` (True: held)."""
+    import fcntl
+    import signal
+    previous = signal.signal(signal.SIGALRM, _tick)
+    signal.alarm(max(1, int(seconds)))
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        return True
+    except _Tick:
+        return False
+    finally:
+        signal.alarm(0)
+        signal.signal(signal.SIGALRM, previous)
+
+
+def acquire(lock=LOCK, waiting=WAITING, timeout=LOCK_TIMEOUT, *, sleep=time.sleep, clock=time.monotonic, tick=30,
+            block=_block):
+    """The dev-d mutation lock like `flock -w <timeout>`: a kernel-queued waiter like the other lanes' drivers (the
+    omnigent-product driver's method; this driver's earlier 5-second polling lost every turn to them, attempt 6),
+    never taken while emqx-main asks for the next turn (its waiting file exists) and given back at once when that
+    file appeared meanwhile. Returns (fd, waited seconds)."""
     import fcntl
     fd = os.open(lock, os.O_RDWR | os.O_CREAT, 0o664)
     started = clock()
     try:
         while True:
-            if not waiting.exists():
-                try:
-                    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                    return fd, int(clock() - started)
-                except BlockingIOError:
-                    pass
             if clock() - started > timeout:
                 raise Failed('dev-d mutation lock not acquired in time')
-            sleep(5)
+            if waiting.exists():
+                sleep(5)
+                continue
+            if not block(fd, tick):
+                continue
+            if waiting.exists():
+                fcntl.flock(fd, fcntl.LOCK_UN)
+                sleep(5)
+                continue
+            return fd, int(clock() - started)
     except BaseException:
         os.close(fd)
         raise

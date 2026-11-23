@@ -34,6 +34,46 @@ class DriverRules(unittest.TestCase):
             os.close(fd)
             self.assertEqual(waited, 0)
 
+    def test_lock_is_a_kernel_queued_wait_that_gives_way_to_emqx_main(self):
+        import fcntl
+        with tempfile.TemporaryDirectory() as directory:
+            lock, waiting = Path(directory) / 'lock', Path(directory) / 'waiting'
+            calls, released = [], []
+            answers = iter([False, False, True, True])
+
+            def block(fd, seconds):
+                calls.append(seconds)
+                held = next(answers)
+                if held and len(calls) == 3:
+                    waiting.write_text('x')  # emqx-main asks for the next turn while this driver got the lock
+                return held
+
+            def sleep(_s):
+                released.append(True)
+                waiting.unlink(missing_ok=True)
+
+            with mock.patch.object(fcntl, 'flock', side_effect=lambda fd, op: None):
+                fd, waited = flow.acquire(lock, waiting, timeout=100, sleep=sleep, clock=lambda: 0, tick=30,
+                                          block=block)
+            os.close(fd)
+            self.assertEqual((calls, len(released), waited), ([30, 30, 30, 30], 1, 0))
+            self.assertIs(flow.acquire.__kwdefaults__['block'], flow._block)
+
+    def test_a_real_kernel_queued_wait_times_out_and_then_holds(self):
+        import fcntl
+        with tempfile.TemporaryDirectory() as directory:
+            lock = Path(directory) / 'lock'
+            other = os.open(lock, os.O_RDWR | os.O_CREAT, 0o664)
+            fcntl.flock(other, fcntl.LOCK_EX)
+            fd = os.open(lock, os.O_RDWR)
+            try:
+                self.assertFalse(flow._block(fd, 1))
+                fcntl.flock(other, fcntl.LOCK_UN)
+                self.assertTrue(flow._block(fd, 1))
+            finally:
+                os.close(fd)
+                os.close(other)
+
     def test_only_evidence_may_differ_from_the_commit(self):
         out = ' M tests/e2e/lab/evidence/litellm-product-20261123/attempt-01.json\n?? tests/backup/evidence/x.json\n'
         with mock.patch.object(flow.subprocess, 'run', return_value=mock.Mock(stdout=out)):
