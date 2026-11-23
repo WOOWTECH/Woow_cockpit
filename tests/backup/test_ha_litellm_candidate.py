@@ -210,7 +210,10 @@ class LiteLLMCandidateTests(unittest.TestCase):
         self.assertEqual(plan['conversion'], 'disabled')
 
     def test_no_registry_advertisement_and_conversion_is_guarded(self):
-        self.assertNotIn('litellm', haapps.APP_IDS)
+        # Owner decision 2026-11-23 (「決定1 做」): litellm is imported by the PRODUCT module ha_litellm (trusted schema,
+        # HA's rows only, salt binding enforced; tests.backup.test_ha_litellm); this lab candidate stays unregistered.
+        self.assertEqual(haapps.get('litellm').module, 'ha_litellm')
+        self.assertNotIn('ha_litellm_candidate', {importer.module for importer in haapps.IMPORTERS})
         for mode in (False, True):
             work = Mock()
             with self.assertRaises(BackupError) as caught:

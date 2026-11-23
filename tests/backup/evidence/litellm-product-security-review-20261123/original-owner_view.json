@@ -1,0 +1,101 @@
+{
+ "after_analyse": [
+  "woowbk-review-view_prisma_migrations_postgres.txt"
+ ],
+ "after_first_connection": {},
+ "after_salt_binding": [
+  "woowbk-review-view_prisma_migrations_postgres.txt"
+ ],
+ "binding": "match",
+ "blockers": [],
+ "case": "owner_view",
+ "container": {
+  "cap_add": [],
+  "cap_drop": [],
+  "memory": 1073741824,
+  "mounts": [
+   "volume:/var/lib/postgresql:noexec,nosuid,nodev,rbind"
+  ],
+  "network_mode": "none",
+  "pids_limit": 512,
+  "ports": {},
+  "privileged": false,
+  "read_only_root": true,
+  "security_opt": [
+   "no-new-privileges"
+  ],
+  "user": ""
+ },
+ "elapsed_seconds": 253.5,
+ "found": {
+  "migrations": [
+   "20250326162113_baseline"
+  ],
+  "schemas": [
+   "woow",
+   "woow_platform"
+  ],
+  "superuser": []
+ },
+ "image_pg18": "sha256:4ea77c7055dec6a632156aa2cd9f1abaaedeba5f812f104f4e9e1ac37363469b",
+ "markers_final": {
+  "woowbk-review-view_prisma_migrations_postgres.txt": {
+   "CapEff": "0000000000000000",
+   "CapPrm": "0000000000000000",
+   "NoNewPrivs": "1",
+   "Seccomp": "2",
+   "data_exec": "no",
+   "default_routes": "0",
+   "dns": "no",
+   "egress_ip": "no",
+   "env_names": "DOCKER_PG_LLVM_DEPS GOSU_VERSION HOME HOSTNAME LANG LC_COLLATE LC_CTYPE LC_MESSAGES LC_MONETARY LC_NUMERIC LC_TIME PATH PGDATA PGSYSCONFDIR PG_MAJOR PG_SHA256 PG_VERSION PWD SHLVL container",
+   "host_root_visible": "0",
+   "id": "uid=70(postgres) gid=70(postgres) groups=70(postgres)",
+   "ifaces": "lo",
+   "mem_max": "1073741824",
+   "mounts": "/dev/shm:rw,nosuid,nodev,noexec,relatime /var/lib/postgresql:rw,nosuid,nodev,noexec,relatime /:ro,relatime /tmp:rw,nosuid,nodev,relatime /run:rw,nosuid,nodev,relatime /var/tmp:rw,nosuid,nodev,relatime",
+   "pids_max": "512",
+   "procs_visible": "16",
+   "root_write": "no",
+   "run_secrets": "0",
+   "tag": "view_prisma_migrations_postgres",
+   "tmp_exec": "yes"
+  }
+ },
+ "notes": [],
+ "scan": {
+  "pg_version": "18",
+  "salt_valid": true,
+  "symlinks": 0
+ },
+ "session_settings": {
+  "datestyle": "ISO, MDY",
+  "event_triggers": "on",
+  "extra_float_digits": "1",
+  "review": null,
+  "search_path": "\"$user\", public",
+  "session_preload_libraries": "",
+  "shared_preload_libraries": ""
+ },
+ "source": {
+  "commit": "f474bb56cfbec4166f10b31888c51e084fd40416",
+  "ha_litellm_sha256": "104e9ceb4efd10af86c4996c94f77c774cf7c1abeca93cb1f5dc0c7694eba74f",
+  "tracked_changes": true
+ },
+ "steps": [
+  "start_ha_cluster",
+  "analyse",
+  "salt_binding",
+  "read_schema",
+  "export_rows"
+ ],
+ "user_row_as_exported": [
+  "u1",
+  "proxy_admin",
+  "0.123456789012345",
+  "2026-11-05 10:00:00",
+  "2026-11-05 10:00:00+00"
+ ],
+ "volumes_left_behind": [],
+ "warnings": []
+}

@@ -39,7 +39,7 @@ from .errors import BackupError
 
 # catalog id -> add-on slug (after the repository prefix), from the one registry of importers (haapps.IMPORTERS)
 APPS = {importer.app_id: importer.slug for importer in haapps.IMPORTERS}
-ITEM_KEYS = ('volumes', 'postgres', 'dirs')  # what a module's convert hands to adapter.import_manifest
+ITEM_KEYS = ('volumes', 'postgres', 'dirs', 'secrets')  # what a module's convert hands to adapter.import_manifest
 REGISTRY = 'ha-imports.json'
 REGISTRY_SCHEMA = 1
 REGISTRY_MAX = 1000

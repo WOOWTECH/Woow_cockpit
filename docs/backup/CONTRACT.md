@@ -58,6 +58,12 @@ page (§11) and the lab scenarios (§13). The archive and index formats are unch
 backup with the note 排程備份 that the schedule's registry lists, readable by 2026.11.15.2.
 Revised 2026-11-19 (branch `feat/ha-import-arm`): HA backups made on **ARM (aarch64)** are imported like x86 ones, after tests with
 a real Raspberry Pi 5; an Odoo custom module that would be copied and holds an ELF file for another processor is a blocker (§7, §9).
+Revised 2026-11-23 (branch `feat/ha-import-litellm-product-20261123`, owner decision 「決定1 做」): the WOOWTECH LiteLLM add-on
+(`woow-litellm` → `litellm`) is imported as a product (§9 "LiteLLM"): HA's PostgreSQL 18 rows move into this device's
+PostgreSQL 17 schema (never HA's DDL), HA's salt key replaces this device's secret `litellm-salt-key` through the new
+`adapter.import_manifest(secrets={name: file})` item (only a declared secret), and the check and the notes name this
+device's apps that use LiteLLM keys (`HaCheck.litellm.key_users`); every other shape is unchanged except the app id
+enumerations gaining `litellm`.
 Revised 2026-11-19 (branch `feat/ha-import-batch1`, engine): the HA import is **registry-driven** (`haapps.IMPORTERS`: add-on slug
 suffix → catalog app id, default name, module, convert params, MCP admin app) and imports four more WOOWTECH add-ons: Omnigent
 (`woow-omnigent` → `omnigent`), Hermes (`woow-hermes` → `hermes`), EMQX (`woow-emqx` → `emqx`) and Headscale (`woow-headscale` →
@@ -1000,10 +1006,10 @@ Shapes:
   `…Z`), `type("full"|"partial"), supervisor_version, protected(bool)` (what backup.json says), `compressed(bool),
   addons[{slug, name, version, encrypted(bool)}]` (`encrypted`: from the member's first bytes), `folders[str], size,
   sha256, uploaded_at, filename` (display only: the uploaded name when it is a plain file name, else
-  `ha-backup-<YYYYMMDD-HHMMSS>.tar`), plus the derived `importable_apps[{slug, app_id("odoo"|"n8n"|"omnigent"|"hermes"|"emqx"|"headscale"|"open-design"|"woow-code-server"), app_name,
+  `ha-backup-<YYYYMMDD-HHMMSS>.tar`), plus the derived `importable_apps[{slug, app_id("odoo"|"n8n"|"omnigent"|"hermes"|"emqx"|"headscale"|"open-design"|"woow-code-server"|"litellm"), app_name,
   installed(bool)}]` (WOOWTECH add-ons this engine can import, §5; `installed`: this device's catalog has `app_id`;
   `app_name` from the catalog, else 「Odoo 18」/「n8n 工作流程」/「Omnigent 協作平台」/「Hermes 代理」/「EMQX MQTT 代理」/
-  「Headscale VPN 控制伺服器」/「OpenDesign 設計工具」/「code-server 開發環境」) and `other_addons[{slug, name, version}]` (add-ons without
+  「Headscale VPN 控制伺服器」/「OpenDesign 設計工具」/「code-server 開發環境」/「LiteLLM 閘道」) and `other_addons[{slug, name, version}]` (add-ons without
   an app here: 「這台沒有對應的應用」; the page adds a to-do for the Cloudflare Tunnel and the MCP admin add-ons, §9
   "Batch 2: add-ons that are not moved").
 * `HaCheck` (part B): `ha_backup_id, apps[{app_id, slug, name (the add-on's name), arch("amd64"|"aarch64"|"unknown"),
@@ -1035,7 +1041,11 @@ Shapes:
   workspace_bytes, skipped_symlinks, ha_urls[("<file>：<host>")], left_out{<area>:<label>: entries}, unknown[]},
   nextcloud?{nextcloud_version (HA's config.php `version`), addon_nextcloud_version|null, users, files (file cache rows),
   shares, tokens, calendar_objects, contacts, datadir (HA's `datadirectory`), datadir_in_backup(bool), datadir_files,
-  datadir_bytes, custom_apps[], pg_version, office(bool: richdocuments enabled on HA), ha_url, target_url}}]`
+  datadir_bytes, custom_apps[], pg_version, office(bool: richdocuments enabled on HA), ha_url, target_url},
+  litellm?{litellm_version (HA's, from the add-on version), migrations (finished Prisma migrations), pg_major (HA's,
+  18), target_pg_major, users, teams, keys (virtual keys without the UI's session keys), models, credentials,
+  organizations, spend_logs, chatgpt_accounts, salt_moves(true), key_users[names of this device's other catalog apps
+  whose configuration uses LiteLLM today]}}]`
   (batch 2: `target_version` of OpenDesign is the live image's `OD_APP_VERSION`; batch 2: `target_version` of code-server is the live image's `code-server --version`; batch 2: `target_version` of Nextcloud is the live config.php `version`; batch 1: `target_version` is
   the live server's `/v1/info` version for Omnigent, the live image's Hermes base tag, the live image's version label
   for EMQX and Headscale) — an app
@@ -2109,9 +2119,70 @@ html,data}`; facts `phase3/facts/nextcloud.md`, owner decisions D1-D5 applied wi
    still name HA; mail settings did not move; Office not enabled on HA; the MCP lines for `nextcloud-mcp-admin` and
    「Woow Nextcloud MCP Server」 (`engine_mcp_lines`). Test mode changes nothing else for Nextcloud.
 
+**LiteLLM** (`woow-litellm` → `litellm`: one `postgres` item `main`, container `litellm-postgres`, database and user
+`litellm`; the proxy container `litellm` reads secret `litellm-salt-key` as `LITELLM_SALT_KEY`; owner decision 2026-11-23).
+1. Versions: add-on 0.1.15 → LiteLLM 1.104.0 must equal the running proxy's `importlib.metadata.version("litellm")`
+   (`podman exec litellm`, read only); HA's `data/woow/state.json` `litellm_version`, when present, must say the same;
+   HA's finished Prisma migrations must be exactly the live database's. HA's PostgreSQL is 18 (`PG_VERSION`), this
+   device's 17: the only importer that moves data to an older major, and only as rows (3).
+2. One pass: `data/postgres/**` through `ha_odoo.PgSink` (configuration replaced, recovery/pid files dropped; a symlink
+   such as a tablespace refuses), `data/secrets/salt_key` (one small regular file, `^[A-Za-z0-9_-]{16,256}$` after
+   strip, masked at once), `data/woow/state.json`; never `options.json`, the master key, the UI or database password
+   files, the pre-upgrade dumps. HA's cluster runs in the official PostgreSQL 18.7 image pinned by content
+   (`PG18_IDS`; else `PG18_PINNED` is pulled by digest and must give one of them), hardened like Odoo's (read-only root,
+   network none, noexec data volume at the image's VOLUME path, every library/command setting overridden, event
+   triggers off). HA's per-database and per-role settings beat the command line, so every session the engine opens
+   there sends its own client options, which beat them (`HA_SESSION_OPTIONS`; the superuser's also
+   `HA_SUPERUSER_OPTIONS`): names resolve in `pg_catalog` only, the rows are exported in fixed formats like pg_dump's,
+   no preload library, no event trigger (review SR-1..SR-3); `public._prisma_migrations` is read only as an ordinary
+   table; `backup_label` and `tablespace_map` never reach the volume and refuse (a cold backup has neither; SR-4). The salt
+   must be the one HA's database is bound to (`woow_platform.settings` and the `woow.meta` fingerprint, read by a role
+   without privileges): else `incompatible` -- nothing stored could be decrypted. HA's database: only `public`,
+   `woow_platform` and `woow` (with `meta` only), no object only a superuser creates, no large object, UTF8; its data
+   shape (columns, sequences, types of `public` and `woow_platform`) must equal the live database's. Every session
+   that reads the columns or the schema signature -- HA's cluster, the live database, the schema snapshot and the new
+   cluster -- pins `search_path = pg_catalog` in the query itself (`PIN_SEARCH_PATH`), so type names and expressions
+   render alike on every side (an enum column is `public."JobStatus"` everywhere; without the pin HA's pg_catalog-only
+   sessions and this device's default ones differed, real attempt 7).
+3. Convert: this device's schema is captured like Omnigent's (one exported snapshot of the live database: migrations,
+   columns line, `pg_dump --schema-only`; the live signature before == after == the snapshot's columns, else
+   `incompatible` and nothing changed); a NEW cluster from the live `litellm-postgres` image, environment and secret
+   mount gets its pre-data section; every trusted table's rows are copied as `COPY "<schema>"."<table>" (<trusted
+   columns>) TO STDOUT` in HA's cluster and `... FROM STDIN` in the new one by `woowbk_restore` (INSERT and sequence
+   values only), each trusted sequence value is set by it, then the post-data section (HA's rows must satisfy this
+   device's constraints). The new cluster's signature equals the live one after the post-data section and after the
+   last write, it holds only its bootstrap superuser (no role or database setting, ALTER SYSTEM value or large object),
+   every table's count and the migrations equal HA's, and the salt row it got equals the salt that moves. Its
+   `pg_dump -Fc` (read in full once) is `postgres/main.dump` (PostgreSQL 17); HA's salt is the item's
+   `secrets{litellm-salt-key}`. `test_mode` changes nothing for LiteLLM.
+4. What stays: the master key, UI password, database password and URL (the other four secrets, read live),
+   `config.yaml`, `litellm.env`, the Quadlet files. The restore's safety backup holds the old salt and database, so an
+   automatic rollback or a later restore of it puts both back. This device's virtual keys are replaced by HA's: the
+   check's `key_users` and a note/reminder name the other catalog apps whose declared config files or Quadlet files set
+   a LiteLLM key or address, whose networks LiteLLM's drop-in `local-agent-networks.conf` joins, or whose Pi agent
+   provider list (`models.json` in the volume a `.container` mounts at its `PI_CODING_AGENT_DIR`, default
+   `/data/pi-agent`: pi-web, Omnigent's runner; read as the owner, inside the owner's home only, only the verdict kept)
+   has a provider whose base URL is this device's LiteLLM (nothing else changes).
+   HA's stored proxy settings (`LiteLLM_Config`) move with the rows and take effect here (`store_model_in_db: true`:
+   stored environment variables are decrypted with the moved salt into the proxy's environment, callbacks are loaded):
+   the check warns and a note names the stored environment variable names and callback names (never a value; review
+   SR-5). Stored settings LiteLLM imports and calls as code refuse (SR-6; LiteLLM's `get_instance_fn` imports any
+   dotted path): `post_call_rules`, the `general_settings` `custom_*` hooks, a callback whose name has a dot, a string
+   `callbacks` value, `custom_provider_map[].custom_handler`, a dotted guardrail callback or type (`guardrails` v1 and
+   v2 shapes), a dotted `pass_through_endpoints[].target` that is not `scheme://…`, `litellm_jwtauth.custom_validate`,
+   `router_settings.plugins` and a `key_management_settings.custom_secret_manager` (the vendor's own DB-overlay list
+   plus the router plugins and the custom secret manager file it misses); a dotted callback is found by the query
+   itself, however many plain names come before it. The check's blocker names them (labels only) and the conversion
+   stops before reading HA's rows or capturing this device's schema. An answer that cannot be read completely (over the output limit, a timeout, not an object) refuses too
+   (fail closed). Because HA's data directory controls its throwaway cluster's catalog, the conversion asks the same
+   question again in the new cluster after HA's rows are loaded (this device's image and schema, HA's data only as
+   rows) and refuses there before the converted dump is written; the import note names what that answer found (SR-8).
+
 **Packaging**: per app `adapter.import_manifest` adds the live non-data items exactly as a backup reads them (images
 list, secrets, config files, Quadlet files, `catalog_entry`, `catalog_sha256`), so `match_items` finds every item and
-the restore's settings check says `same`; then `flows._package` (§8 "Home Assistant import jobs").
+the restore's settings check says `same`; then `flows._package` (§8 "Home Assistant import jobs"). A conversion's
+`secrets{name: file}` (LiteLLM's salt) replaces that one live secret; it must be declared by the catalog and be one
+regular file of 1..511999 bytes.
 
 **Batch 2: OpenDesign** (branch `feat/ha-import-opendesign-20261123`; `ha_opendesign.py`; owner decision 2026-11-23
 「決定2 A」; facts `phase3/facts/opendesign.md`). Add-on `woow_ha_opendesign` (its slug holds `_`: the member is found by

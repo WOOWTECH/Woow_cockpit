@@ -1,0 +1,1620 @@
+{
+ "cases": {
+  "absolute_name": {
+   "code": "corrupt-archive",
+   "detail": {
+    "member": "/data/postgres/base/1/9999",
+    "reason": "absolute entry name"
+   },
+   "outcome": "refused"
+  },
+  "baseline": {
+   "outcome": "accepted",
+   "pg_files": 2,
+   "pg_version": "18",
+   "salt_present": true,
+   "salt_valid": true,
+   "skipped_other": 0,
+   "state_version": "1.104.0",
+   "symlinks": 0,
+   "volume_names": [
+    [
+     ".",
+     "5",
+     "0o700",
+     70,
+     70,
+     ""
+    ],
+    [
+     "PG_VERSION",
+     "0",
+     "0o600",
+     70,
+     70,
+     ""
+    ],
+    [
+     "base",
+     "5",
+     "0o700",
+     70,
+     70,
+     ""
+    ],
+    [
+     "base/1",
+     "5",
+     "0o700",
+     70,
+     70,
+     ""
+    ],
+    [
+     "base/1/1259",
+     "0",
+     "0o600",
+     70,
+     70,
+     ""
+    ],
+    [
+     "pg_hba.conf",
+     "0",
+     "0o600",
+     70,
+     70,
+     ""
+    ],
+    [
+     "pg_ident.conf",
+     "0",
+     "0o600",
+     70,
+     70,
+     ""
+    ],
+    [
+     "postgresql.auto.conf",
+     "0",
+     "0o600",
+     70,
+     70,
+     ""
+    ],
+    [
+     "postgresql.conf",
+     "0",
+     "0o600",
+     70,
+     70,
+     ""
+    ]
+   ]
+  },
+  "control_char_name": {
+   "code": "corrupt-archive",
+   "detail": {
+    "member": "data/postgres/base/1/a\nb",
+    "reason": "entry name has control characters"
+   },
+   "outcome": "refused"
+  },
+  "hba_and_conf_d": {
+   "outcome": "accepted",
+   "pg_files": 4,
+   "pg_version": "18",
+   "salt_present": true,
+   "salt_valid": true,
+   "skipped_other": 0,
+   "state_version": "1.104.0",
+   "symlinks": 0,
+   "volume_names": [
+    [
+     ".",
+     "5",
+     "0o700",
+     70,
+     70,
+     ""
+    ],
+    [
+     "PG_VERSION",
+     "0",
+     "0o600",
+     70,
+     70,
+     ""
+    ],
+    [
+     "base",
+     "5",
+     "0o700",
+     70,
+     70,
+     ""
+    ],
+    [
+     "base/1",
+     "5",
+     "0o700",
+     70,
+     70,
+     ""
+    ],
+    [
+     "base/1/1259",
+     "0",
+     "0o600",
+     70,
+     70,
+     ""
+    ],
+    [
+     "pg_hba.conf",
+     "0",
+     "0o600",
+     70,
+     70,
+     ""
+    ],
+    [
+     "conf.d",
+     "5",
+     "0o700",
+     70,
+     70,
+     ""
+    ],
+    [
+     "conf.d/evil.conf",
+     "0",
+     "0o600",
+     70,
+     70,
+     ""
+    ],
+    [
+     "pg_ident.conf",
+     "0",
+     "0o600",
+     70,
+     70,
+     ""
+    ],
+    [
+     "postgresql.auto.conf",
+     "0",
+     "0o600",
+     70,
+     70,
+     ""
+    ],
+    [
+     "postgresql.conf",
+     "0",
+     "0o600",
+     70,
+     70,
+     ""
+    ]
+   ]
+  },
+  "no_addon_json": {
+   "code": "incompatible",
+   "detail": {},
+   "outcome": "refused"
+  },
+  "no_end_of_archive_marker": {
+   "code": "corrupt-archive",
+   "detail": {
+    "reason": "the inner tar is truncated"
+   },
+   "outcome": "refused"
+  },
+  "other_member_paths_ignored": {
+   "outcome": "accepted",
+   "pg_files": 2,
+   "pg_version": "18",
+   "salt_present": true,
+   "salt_valid": true,
+   "skipped_other": 0,
+   "state_version": "1.104.0",
+   "symlinks": 0,
+   "volume_names": [
+    [
+     ".",
+     "5",
+     "0o700",
+     70,
+     70,
+     ""
+    ],
+    [
+     "PG_VERSION",
+     "0",
+     "0o600",
+     70,
+     70,
+     ""
+    ],
+    [
+     "base",
+     "5",
+     "0o700",
+     70,
+     70,
+     ""
+    ],
+    [
+     "base/1",
+     "5",
+     "0o700",
+     70,
+     70,
+     ""
+    ],
+    [
+     "base/1/1259",
+     "0",
+     "0o600",
+     70,
+     70,
+     ""
+    ],
+    [
+     "pg_hba.conf",
+     "0",
+     "0o600",
+     70,
+     70,
+     ""
+    ],
+    [
+     "pg_ident.conf",
+     "0",
+     "0o600",
+     70,
+     70,
+     ""
+    ],
+    [
+     "postgresql.auto.conf",
+     "0",
+     "0o600",
+     70,
+     70,
+     ""
+    ],
+    [
+     "postgresql.conf",
+     "0",
+     "0o600",
+     70,
+     70,
+     ""
+    ]
+   ]
+  },
+  "pax_path_traversal": {
+   "code": "corrupt-archive",
+   "detail": {
+    "member": "data/postgres/../../escape",
+    "reason": "entry name with an empty, \".\" or \"..\" component"
+   },
+   "outcome": "refused"
+  },
+  "pg_block_device": {
+   "code": "corrupt-archive",
+   "detail": {
+    "member": "data/postgres/base/1/blk",
+    "reason": "entry type not allowed (device, sparse, contiguous or unknown)",
+    "type": "4"
+   },
+   "outcome": "refused"
+  },
+  "pg_char_device": {
+   "code": "corrupt-archive",
+   "detail": {
+    "member": "data/postgres/base/1/dev",
+    "reason": "entry type not allowed (device, sparse, contiguous or unknown)",
+    "type": "3"
+   },
+   "outcome": "refused"
+  },
+  "pg_fifo": {
+   "outcome": "accepted",
+   "pg_files": 2,
+   "pg_version": "18",
+   "salt_present": true,
+   "salt_valid": true,
+   "skipped_other": 1,
+   "state_version": "1.104.0",
+   "symlinks": 0,
+   "volume_names": [
+    [
+     ".",
+     "5",
+     "0o700",
+     70,
+     70,
+     ""
+    ],
+    [
+     "PG_VERSION",
+     "0",
+     "0o600",
+     70,
+     70,
+     ""
+    ],
+    [
+     "base",
+     "5",
+     "0o700",
+     70,
+     70,
+     ""
+    ],
+    [
+     "base/1",
+     "5",
+     "0o700",
+     70,
+     70,
+     ""
+    ],
+    [
+     "base/1/1259",
+     "0",
+     "0o600",
+     70,
+     70,
+     ""
+    ],
+    [
+     "pg_hba.conf",
+     "0",
+     "0o600",
+     70,
+     70,
+     ""
+    ],
+    [
+     "pg_ident.conf",
+     "0",
+     "0o600",
+     70,
+     70,
+     ""
+    ],
+    [
+     "postgresql.auto.conf",
+     "0",
+     "0o600",
+     70,
+     70,
+     ""
+    ],
+    [
+     "postgresql.conf",
+     "0",
+     "0o600",
+     70,
+     70,
+     ""
+    ]
+   ]
+  },
+  "pg_hardlink_to_master_key": {
+   "code": "corrupt-archive",
+   "detail": {
+    "member": "data/postgres/base/1/16500",
+    "reason": "hard link to an entry outside the selection"
+   },
+   "outcome": "refused"
+  },
+  "pg_setuid_mode_and_owner": {
+   "outcome": "accepted",
+   "pg_files": 3,
+   "pg_version": "18",
+   "salt_present": true,
+   "salt_valid": true,
+   "skipped_other": 0,
+   "state_version": "1.104.0",
+   "symlinks": 0,
+   "volume_names": [
+    [
+     ".",
+     "5",
+     "0o700",
+     70,
+     70,
+     ""
+    ],
+    [
+     "PG_VERSION",
+     "0",
+     "0o600",
+     70,
+     70,
+     ""
+    ],
+    [
+     "base",
+     "5",
+     "0o700",
+     70,
+     70,
+     ""
+    ],
+    [
+     "base/1",
+     "5",
+     "0o700",
+     70,
+     70,
+     ""
+    ],
+    [
+     "base/1/1259",
+     "0",
+     "0o600",
+     70,
+     70,
+     ""
+    ],
+    [
+     "base/1/suid",
+     "0",
+     "0o600",
+     70,
+     70,
+     ""
+    ],
+    [
+     "pg_hba.conf",
+     "0",
+     "0o600",
+     70,
+     70,
+     ""
+    ],
+    [
+     "pg_ident.conf",
+     "0",
+     "0o600",
+     70,
+     70,
+     ""
+    ],
+    [
+     "postgresql.auto.conf",
+     "0",
+     "0o600",
+     70,
+     70,
+     ""
+    ],
+    [
+     "postgresql.conf",
+     "0",
+     "0o600",
+     70,
+     70,
+     ""
+    ]
+   ]
+  },
+  "pg_sparse_gnu_type": {
+   "code": "corrupt-archive",
+   "detail": {
+    "member": "data/postgres/base/1/sparse",
+    "reason": "entry type not allowed (device, sparse, contiguous or unknown)",
+    "type": "S"
+   },
+   "outcome": "refused"
+  },
+  "pg_version_duplicate": {
+   "code": "corrupt-archive",
+   "detail": {
+    "member": "data/postgres/PG_VERSION",
+    "reason": "duplicate entry"
+   },
+   "outcome": "refused"
+  },
+  "pg_version_not_a_number": {
+   "outcome": "accepted",
+   "pg_files": 2,
+   "pg_version": null,
+   "salt_present": true,
+   "salt_valid": true,
+   "skipped_other": 0,
+   "state_version": "1.104.0",
+   "symlinks": 0,
+   "volume_names": [
+    [
+     ".",
+     "5",
+     "0o700",
+     70,
+     70,
+     ""
+    ],
+    [
+     "PG_VERSION",
+     "0",
+     "0o600",
+     70,
+     70,
+     ""
+    ],
+    [
+     "base",
+     "5",
+     "0o700",
+     70,
+     70,
+     ""
+    ],
+    [
+     "base/1",
+     "5",
+     "0o700",
+     70,
+     70,
+     ""
+    ],
+    [
+     "base/1/1259",
+     "0",
+     "0o600",
+     70,
+     70,
+     ""
+    ],
+    [
+     "pg_hba.conf",
+     "0",
+     "0o600",
+     70,
+     70,
+     ""
+    ],
+    [
+     "pg_ident.conf",
+     "0",
+     "0o600",
+     70,
+     70,
+     ""
+    ],
+    [
+     "postgresql.auto.conf",
+     "0",
+     "0o600",
+     70,
+     70,
+     ""
+    ],
+    [
+     "postgresql.conf",
+     "0",
+     "0o600",
+     70,
+     70,
+     ""
+    ]
+   ]
+  },
+  "pg_version_oversized": {
+   "code": "limit-exceeded",
+   "detail": {
+    "member": "data/postgres/PG_VERSION",
+    "reason": "file too large to read"
+   },
+   "outcome": "refused"
+  },
+  "recovery_and_backup_label": {
+   "outcome": "accepted",
+   "pg_files": 5,
+   "pg_version": "18",
+   "salt_present": true,
+   "salt_valid": true,
+   "skipped_other": 0,
+   "state_version": "1.104.0",
+   "symlinks": 0,
+   "volume_names": [
+    [
+     ".",
+     "5",
+     "0o700",
+     70,
+     70,
+     ""
+    ],
+    [
+     "PG_VERSION",
+     "0",
+     "0o600",
+     70,
+     70,
+     ""
+    ],
+    [
+     "base",
+     "5",
+     "0o700",
+     70,
+     70,
+     ""
+    ],
+    [
+     "base/1",
+     "5",
+     "0o700",
+     70,
+     70,
+     ""
+    ],
+    [
+     "base/1/1259",
+     "0",
+     "0o600",
+     70,
+     70,
+     ""
+    ],
+    [
+     "pg_hba.conf",
+     "0",
+     "0o600",
+     70,
+     70,
+     ""
+    ],
+    [
+     "pg_ident.conf",
+     "0",
+     "0o600",
+     70,
+     70,
+     ""
+    ],
+    [
+     "postgresql.auto.conf",
+     "0",
+     "0o600",
+     70,
+     70,
+     ""
+    ],
+    [
+     "postgresql.conf",
+     "0",
+     "0o600",
+     70,
+     70,
+     ""
+    ]
+   ]
+  },
+  "replaced_conf_as_dir": {
+   "outcome": "accepted",
+   "pg_files": 3,
+   "pg_version": "18",
+   "salt_present": true,
+   "salt_valid": true,
+   "skipped_other": 0,
+   "state_version": "1.104.0",
+   "symlinks": 0,
+   "volume_names": [
+    [
+     ".",
+     "5",
+     "0o700",
+     70,
+     70,
+     ""
+    ],
+    [
+     "PG_VERSION",
+     "0",
+     "0o600",
+     70,
+     70,
+     ""
+    ],
+    [
+     "base",
+     "5",
+     "0o700",
+     70,
+     70,
+     ""
+    ],
+    [
+     "base/1",
+     "5",
+     "0o700",
+     70,
+     70,
+     ""
+    ],
+    [
+     "base/1/1259",
+     "0",
+     "0o600",
+     70,
+     70,
+     ""
+    ],
+    [
+     "postgresql.auto.conf",
+     "0",
+     "0o600",
+     70,
+     70,
+     ""
+    ],
+    [
+     "pg_hba.conf",
+     "0",
+     "0o600",
+     70,
+     70,
+     ""
+    ],
+    [
+     "pg_ident.conf",
+     "0",
+     "0o600",
+     70,
+     70,
+     ""
+    ],
+    [
+     "postgresql.conf",
+     "0",
+     "0o600",
+     70,
+     70,
+     ""
+    ]
+   ]
+  },
+  "salt_bad_charset": {
+   "outcome": "accepted",
+   "pg_files": 2,
+   "pg_version": "18",
+   "salt_present": false,
+   "salt_valid": false,
+   "skipped_other": 0,
+   "state_version": "1.104.0",
+   "symlinks": 0,
+   "volume_names": [
+    [
+     ".",
+     "5",
+     "0o700",
+     70,
+     70,
+     ""
+    ],
+    [
+     "PG_VERSION",
+     "0",
+     "0o600",
+     70,
+     70,
+     ""
+    ],
+    [
+     "base",
+     "5",
+     "0o700",
+     70,
+     70,
+     ""
+    ],
+    [
+     "base/1",
+     "5",
+     "0o700",
+     70,
+     70,
+     ""
+    ],
+    [
+     "base/1/1259",
+     "0",
+     "0o600",
+     70,
+     70,
+     ""
+    ],
+    [
+     "pg_hba.conf",
+     "0",
+     "0o600",
+     70,
+     70,
+     ""
+    ],
+    [
+     "pg_ident.conf",
+     "0",
+     "0o600",
+     70,
+     70,
+     ""
+    ],
+    [
+     "postgresql.auto.conf",
+     "0",
+     "0o600",
+     70,
+     70,
+     ""
+    ],
+    [
+     "postgresql.conf",
+     "0",
+     "0o600",
+     70,
+     70,
+     ""
+    ]
+   ]
+  },
+  "salt_directory": {
+   "code": "incompatible",
+   "detail": {},
+   "outcome": "refused"
+  },
+  "salt_duplicate": {
+   "code": "corrupt-archive",
+   "detail": {
+    "member": "data/secrets/salt_key",
+    "reason": "duplicate entry"
+   },
+   "outcome": "refused"
+  },
+  "salt_hardlink_to_master": {
+   "code": "corrupt-archive",
+   "detail": {
+    "member": "data/secrets/salt_key",
+    "reason": "hard link to an entry outside the selection"
+   },
+   "outcome": "refused"
+  },
+  "salt_oversized_1025": {
+   "code": "incompatible",
+   "detail": {},
+   "outcome": "refused"
+  },
+  "salt_short_15": {
+   "outcome": "accepted",
+   "pg_files": 2,
+   "pg_version": "18",
+   "salt_present": false,
+   "salt_valid": false,
+   "skipped_other": 0,
+   "state_version": "1.104.0",
+   "symlinks": 0,
+   "volume_names": [
+    [
+     ".",
+     "5",
+     "0o700",
+     70,
+     70,
+     ""
+    ],
+    [
+     "PG_VERSION",
+     "0",
+     "0o600",
+     70,
+     70,
+     ""
+    ],
+    [
+     "base",
+     "5",
+     "0o700",
+     70,
+     70,
+     ""
+    ],
+    [
+     "base/1",
+     "5",
+     "0o700",
+     70,
+     70,
+     ""
+    ],
+    [
+     "base/1/1259",
+     "0",
+     "0o600",
+     70,
+     70,
+     ""
+    ],
+    [
+     "pg_hba.conf",
+     "0",
+     "0o600",
+     70,
+     70,
+     ""
+    ],
+    [
+     "pg_ident.conf",
+     "0",
+     "0o600",
+     70,
+     70,
+     ""
+    ],
+    [
+     "postgresql.auto.conf",
+     "0",
+     "0o600",
+     70,
+     70,
+     ""
+    ],
+    [
+     "postgresql.conf",
+     "0",
+     "0o600",
+     70,
+     70,
+     ""
+    ]
+   ]
+  },
+  "salt_symlink": {
+   "outcome": "accepted",
+   "pg_files": 2,
+   "pg_version": "18",
+   "salt_present": false,
+   "salt_valid": false,
+   "skipped_other": 0,
+   "state_version": "1.104.0",
+   "symlinks": 1,
+   "volume_names": [
+    [
+     ".",
+     "5",
+     "0o700",
+     70,
+     70,
+     ""
+    ],
+    [
+     "PG_VERSION",
+     "0",
+     "0o600",
+     70,
+     70,
+     ""
+    ],
+    [
+     "base",
+     "5",
+     "0o700",
+     70,
+     70,
+     ""
+    ],
+    [
+     "base/1",
+     "5",
+     "0o700",
+     70,
+     70,
+     ""
+    ],
+    [
+     "base/1/1259",
+     "0",
+     "0o600",
+     70,
+     70,
+     ""
+    ],
+    [
+     "pg_hba.conf",
+     "0",
+     "0o600",
+     70,
+     70,
+     ""
+    ],
+    [
+     "pg_ident.conf",
+     "0",
+     "0o600",
+     70,
+     70,
+     ""
+    ],
+    [
+     "postgresql.auto.conf",
+     "0",
+     "0o600",
+     70,
+     70,
+     ""
+    ],
+    [
+     "postgresql.conf",
+     "0",
+     "0o600",
+     70,
+     70,
+     ""
+    ]
+   ]
+  },
+  "salt_with_nul": {
+   "outcome": "accepted",
+   "pg_files": 2,
+   "pg_version": "18",
+   "salt_present": false,
+   "salt_valid": false,
+   "skipped_other": 0,
+   "state_version": "1.104.0",
+   "symlinks": 0,
+   "volume_names": [
+    [
+     ".",
+     "5",
+     "0o700",
+     70,
+     70,
+     ""
+    ],
+    [
+     "PG_VERSION",
+     "0",
+     "0o600",
+     70,
+     70,
+     ""
+    ],
+    [
+     "base",
+     "5",
+     "0o700",
+     70,
+     70,
+     ""
+    ],
+    [
+     "base/1",
+     "5",
+     "0o700",
+     70,
+     70,
+     ""
+    ],
+    [
+     "base/1/1259",
+     "0",
+     "0o600",
+     70,
+     70,
+     ""
+    ],
+    [
+     "pg_hba.conf",
+     "0",
+     "0o600",
+     70,
+     70,
+     ""
+    ],
+    [
+     "pg_ident.conf",
+     "0",
+     "0o600",
+     70,
+     70,
+     ""
+    ],
+    [
+     "postgresql.auto.conf",
+     "0",
+     "0o600",
+     70,
+     70,
+     ""
+    ],
+    [
+     "postgresql.conf",
+     "0",
+     "0o600",
+     70,
+     70,
+     ""
+    ]
+   ]
+  },
+  "state_deep_nesting": {
+   "outcome": "accepted",
+   "pg_files": 2,
+   "pg_version": "18",
+   "salt_present": true,
+   "salt_valid": true,
+   "skipped_other": 0,
+   "state_version": null,
+   "symlinks": 0,
+   "volume_names": [
+    [
+     ".",
+     "5",
+     "0o700",
+     70,
+     70,
+     ""
+    ],
+    [
+     "PG_VERSION",
+     "0",
+     "0o600",
+     70,
+     70,
+     ""
+    ],
+    [
+     "base",
+     "5",
+     "0o700",
+     70,
+     70,
+     ""
+    ],
+    [
+     "base/1",
+     "5",
+     "0o700",
+     70,
+     70,
+     ""
+    ],
+    [
+     "base/1/1259",
+     "0",
+     "0o600",
+     70,
+     70,
+     ""
+    ],
+    [
+     "pg_hba.conf",
+     "0",
+     "0o600",
+     70,
+     70,
+     ""
+    ],
+    [
+     "pg_ident.conf",
+     "0",
+     "0o600",
+     70,
+     70,
+     ""
+    ],
+    [
+     "postgresql.auto.conf",
+     "0",
+     "0o600",
+     70,
+     70,
+     ""
+    ],
+    [
+     "postgresql.conf",
+     "0",
+     "0o600",
+     70,
+     70,
+     ""
+    ]
+   ]
+  },
+  "state_duplicate_entry": {
+   "code": "corrupt-archive",
+   "detail": {
+    "member": "data/woow/state.json",
+    "reason": "duplicate entry"
+   },
+   "outcome": "refused"
+  },
+  "state_duplicate_keys": {
+   "outcome": "accepted",
+   "pg_files": 2,
+   "pg_version": "18",
+   "salt_present": true,
+   "salt_valid": true,
+   "skipped_other": 0,
+   "state_version": null,
+   "symlinks": 0,
+   "volume_names": [
+    [
+     ".",
+     "5",
+     "0o700",
+     70,
+     70,
+     ""
+    ],
+    [
+     "PG_VERSION",
+     "0",
+     "0o600",
+     70,
+     70,
+     ""
+    ],
+    [
+     "base",
+     "5",
+     "0o700",
+     70,
+     70,
+     ""
+    ],
+    [
+     "base/1",
+     "5",
+     "0o700",
+     70,
+     70,
+     ""
+    ],
+    [
+     "base/1/1259",
+     "0",
+     "0o600",
+     70,
+     70,
+     ""
+    ],
+    [
+     "pg_hba.conf",
+     "0",
+     "0o600",
+     70,
+     70,
+     ""
+    ],
+    [
+     "pg_ident.conf",
+     "0",
+     "0o600",
+     70,
+     70,
+     ""
+    ],
+    [
+     "postgresql.auto.conf",
+     "0",
+     "0o600",
+     70,
+     70,
+     ""
+    ],
+    [
+     "postgresql.conf",
+     "0",
+     "0o600",
+     70,
+     70,
+     ""
+    ]
+   ]
+  },
+  "state_oversized": {
+   "outcome": "accepted",
+   "pg_files": 2,
+   "pg_version": "18",
+   "salt_present": true,
+   "salt_valid": true,
+   "skipped_other": 0,
+   "state_version": null,
+   "symlinks": 0,
+   "volume_names": [
+    [
+     ".",
+     "5",
+     "0o700",
+     70,
+     70,
+     ""
+    ],
+    [
+     "PG_VERSION",
+     "0",
+     "0o600",
+     70,
+     70,
+     ""
+    ],
+    [
+     "base",
+     "5",
+     "0o700",
+     70,
+     70,
+     ""
+    ],
+    [
+     "base/1",
+     "5",
+     "0o700",
+     70,
+     70,
+     ""
+    ],
+    [
+     "base/1/1259",
+     "0",
+     "0o600",
+     70,
+     70,
+     ""
+    ],
+    [
+     "pg_hba.conf",
+     "0",
+     "0o600",
+     70,
+     70,
+     ""
+    ],
+    [
+     "pg_ident.conf",
+     "0",
+     "0o600",
+     70,
+     70,
+     ""
+    ],
+    [
+     "postgresql.auto.conf",
+     "0",
+     "0o600",
+     70,
+     70,
+     ""
+    ],
+    [
+     "postgresql.conf",
+     "0",
+     "0o600",
+     70,
+     70,
+     ""
+    ]
+   ]
+  },
+  "tablespace_symlink_out": {
+   "outcome": "accepted",
+   "pg_files": 2,
+   "pg_version": "18",
+   "salt_present": true,
+   "salt_valid": true,
+   "skipped_other": 0,
+   "state_version": "1.104.0",
+   "symlinks": 1,
+   "volume_names": [
+    [
+     ".",
+     "5",
+     "0o700",
+     70,
+     70,
+     ""
+    ],
+    [
+     "PG_VERSION",
+     "0",
+     "0o600",
+     70,
+     70,
+     ""
+    ],
+    [
+     "base",
+     "5",
+     "0o700",
+     70,
+     70,
+     ""
+    ],
+    [
+     "base/1",
+     "5",
+     "0o700",
+     70,
+     70,
+     ""
+    ],
+    [
+     "base/1/1259",
+     "0",
+     "0o600",
+     70,
+     70,
+     ""
+    ],
+    [
+     "pg_tblspc",
+     "5",
+     "0o700",
+     70,
+     70,
+     ""
+    ],
+    [
+     "pg_hba.conf",
+     "0",
+     "0o600",
+     70,
+     70,
+     ""
+    ],
+    [
+     "pg_ident.conf",
+     "0",
+     "0o600",
+     70,
+     70,
+     ""
+    ],
+    [
+     "postgresql.auto.conf",
+     "0",
+     "0o600",
+     70,
+     70,
+     ""
+    ],
+    [
+     "postgresql.conf",
+     "0",
+     "0o600",
+     70,
+     70,
+     ""
+    ]
+   ]
+  },
+  "tablespace_symlink_relative_in": {
+   "outcome": "accepted",
+   "pg_files": 2,
+   "pg_version": "18",
+   "salt_present": true,
+   "salt_valid": true,
+   "skipped_other": 0,
+   "state_version": "1.104.0",
+   "symlinks": 1,
+   "volume_names": [
+    [
+     ".",
+     "5",
+     "0o700",
+     70,
+     70,
+     ""
+    ],
+    [
+     "PG_VERSION",
+     "0",
+     "0o600",
+     70,
+     70,
+     ""
+    ],
+    [
+     "base",
+     "5",
+     "0o700",
+     70,
+     70,
+     ""
+    ],
+    [
+     "base/1",
+     "5",
+     "0o700",
+     70,
+     70,
+     ""
+    ],
+    [
+     "base/1/1259",
+     "0",
+     "0o600",
+     70,
+     70,
+     ""
+    ],
+    [
+     "pg_tblspc",
+     "5",
+     "0o700",
+     70,
+     70,
+     ""
+    ],
+    [
+     "pg_hba.conf",
+     "0",
+     "0o600",
+     70,
+     70,
+     ""
+    ],
+    [
+     "pg_ident.conf",
+     "0",
+     "0o600",
+     70,
+     70,
+     ""
+    ],
+    [
+     "postgresql.auto.conf",
+     "0",
+     "0o600",
+     70,
+     70,
+     ""
+    ],
+    [
+     "postgresql.conf",
+     "0",
+     "0o600",
+     70,
+     70,
+     ""
+    ]
+   ]
+  },
+  "traversal_dotdot": {
+   "code": "corrupt-archive",
+   "detail": {
+    "member": "data/postgres/../../../tmp/evil",
+    "reason": "entry name with an empty, \".\" or \"..\" component"
+   },
+   "outcome": "refused"
+  },
+  "truncated_mid_file": {
+   "code": "corrupt-archive",
+   "detail": {
+    "member": "data/postgres/base/1/16600",
+    "reason": "the inner tar is truncated"
+   },
+   "outcome": "refused"
+  },
+  "wrong_slug": {
+   "code": "incompatible",
+   "detail": {},
+   "outcome": "refused"
+  }
+ },
+ "reviewed": "ha_litellm.scan_member + ha_odoo.PgSink (real code)",
+ "source": {
+  "commit": "d31c59a6f8d62ff9abf4aa6e27b90365cda997e7",
+  "ha_litellm_sha256": "03f3ec69ccf992c8cdafad9b0cb56e993e638756c93113bcaa4997c74bdaf192",
+  "tracked_changes": false
+ }
+}

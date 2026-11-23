@@ -1,0 +1,75 @@
+{
+ "after_first_connection": {},
+ "case": "owner_trojan",
+ "container": {
+  "cap_add": [],
+  "cap_drop": [],
+  "memory": 1073741824,
+  "mounts": [
+   "volume:/var/lib/postgresql:noexec,nosuid,nodev,rbind"
+  ],
+  "network_mode": "none",
+  "pids_limit": 512,
+  "ports": {},
+  "privileged": false,
+  "read_only_root": true,
+  "security_opt": [
+   "no-new-privileges"
+  ],
+  "user": ""
+ },
+ "elapsed_seconds": 91.4,
+ "image_pg18": "sha256:4ea77c7055dec6a632156aa2cd9f1abaaedeba5f812f104f4e9e1ac37363469b",
+ "markers_final": {
+  "woowbk-review-aggregate_json_agg_name_postgres.txt": {
+   "CapEff": "0000000000000000",
+   "CapPrm": "0000000000000000",
+   "NoNewPrivs": "1",
+   "Seccomp": "2",
+   "data_exec": "no",
+   "default_routes": "0",
+   "dns": "no",
+   "egress_ip": "no",
+   "env_names": "DOCKER_PG_LLVM_DEPS GOSU_VERSION HOME HOSTNAME LANG LC_COLLATE LC_CTYPE LC_MESSAGES LC_MONETARY LC_NUMERIC LC_TIME PATH PGDATA PGSYSCONFDIR PG_MAJOR PG_SHA256 PG_VERSION PWD SHLVL container",
+   "host_root_visible": "0",
+   "id": "uid=70(postgres) gid=70(postgres) groups=70(postgres)",
+   "ifaces": "lo",
+   "mem_max": "1073741824",
+   "mounts": "/dev/shm:rw,nosuid,nodev,noexec,relatime /var/lib/postgresql:rw,nosuid,nodev,noexec,relatime /:ro,relatime /tmp:rw,nosuid,nodev,relatime /run:rw,nosuid,nodev,relatime /var/tmp:rw,nosuid,nodev,relatime",
+   "pids_max": "512",
+   "procs_visible": "16",
+   "root_write": "no",
+   "run_secrets": "0",
+   "tag": "aggregate_json_agg_name_postgres",
+   "tmp_exec": "yes"
+  }
+ },
+ "notes": [],
+ "scan": {
+  "pg_version": "18",
+  "salt_valid": true,
+  "symlinks": 0
+ },
+ "session_settings": {
+  "datestyle": "ISO, MDY",
+  "event_triggers": "on",
+  "extra_float_digits": "1",
+  "review": null,
+  "search_path": "\"$user\", public",
+  "session_preload_libraries": "",
+  "shared_preload_libraries": ""
+ },
+ "source": {
+  "commit": "2284e4d1167a60ad27c292f31bf9dbe88690d2ee",
+  "ha_litellm_sha256": "104e9ceb4efd10af86c4996c94f77c774cf7c1abeca93cb1f5dc0c7694eba74f",
+  "tracked_changes": false
+ },
+ "steps": [
+  "start_ha_cluster"
+ ],
+ "stopped_with": {
+  "code": "job-failed",
+  "message": "lab podman exec --user rc=1: ERROR:  function json_agg(character varying) is not unique\nLINE 1: SELECT coalesce(json_agg(migration_name ORDER BY migration_n...\n                        ^\nHINT:  Could not choose a best candidate function. You might need to add explicit type casts.\n"
+ },
+ "volumes_left_behind": []
+}

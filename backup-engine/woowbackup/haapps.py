@@ -57,6 +57,8 @@ IMPORTERS = (
     # Batch 2: the user files come from HA's share folder (ha_nextcloud refuses a backup without them).
     Importer('nextcloud', 'woow-nextcloud-office', 'Nextcloud 雲端硬碟', 'ha_nextcloud', mcp_admin='nextcloud-mcp-admin',
              mcp_addon='Woow Nextcloud MCP Server', engine_mcp_lines=True),
+    Importer('litellm', 'woow-litellm', 'LiteLLM 閘道', 'ha_litellm', mcp_admin='litellm-mcp-admin',
+             mcp_addon='Woow LiteLLM MCP Server', engine_mcp_lines=True),
 )
 
 BY_APP = {importer.app_id: importer for importer in IMPORTERS}

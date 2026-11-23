@@ -1,0 +1,54 @@
+{
+ "pin": "SET search_path = pg_catalog; ",
+ "17": {
+  "version": "postgres (PostgreSQL) 17.11",
+  "status_type": {
+   "device_default/unpinned/columns": [
+    "\"JobStatus\""
+   ],
+   "device_default/pinned/columns": [
+    "public.\"JobStatus\""
+   ],
+   "ha_pg_catalog/unpinned/columns": [
+    "public.\"JobStatus\""
+   ],
+   "ha_pg_catalog/pinned/columns": [
+    "public.\"JobStatus\""
+   ]
+  },
+  "unpinned_columns_equal": false,
+  "pinned_columns_equal": true,
+  "unpinned_signature_equal": false,
+  "pinned_signature_equal": true,
+  "schema_differences_unpinned": [
+   "public.LiteLLM_CronJob"
+  ],
+  "schema_differences_pinned": []
+ },
+ "18": {
+  "version": "postgres (PostgreSQL) 18.7",
+  "status_type": {
+   "device_default/unpinned/columns": [
+    "\"JobStatus\""
+   ],
+   "device_default/pinned/columns": [
+    "public.\"JobStatus\""
+   ],
+   "ha_pg_catalog/unpinned/columns": [
+    "public.\"JobStatus\""
+   ],
+   "ha_pg_catalog/pinned/columns": [
+    "public.\"JobStatus\""
+   ]
+  },
+  "unpinned_columns_equal": false,
+  "pinned_columns_equal": true,
+  "unpinned_signature_equal": false,
+  "pinned_signature_equal": true,
+  "schema_differences_unpinned": [
+   "public.LiteLLM_CronJob"
+  ],
+  "schema_differences_pinned": []
+ },
+ "containers_left": []
+}

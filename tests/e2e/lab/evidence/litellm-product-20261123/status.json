@@ -1,0 +1,98 @@
+{
+ "lane": "litellm-product",
+ "date": "2026-11-23",
+ "updated": "2026-11-24T01:50+08:00",
+ "scope": "LiteLLM HA import as the PRODUCT path (owner decision 2026-11-23 「決定1 做」): haapps registers litellm, ha_litellm.py converts with the Omnigent trust rules (this device's schema, HA's rows only), HA's salt replaces litellm-salt-key; the real test runs the Cockpit page's helper commands on dev-d",
+ "branch": "R-COCKPIT feat/ha-import-litellm-product-20261123 (base integration/ha-import-batch1-20261123 d812699)",
+ "product_commits": [
+  "e0c9e56",
+  "3bde418",
+  "3c1a0a4",
+  "215fdf0"
+ ],
+ "harness_commits": [
+  "5faef6f",
+  "5c2e435",
+  "db73107",
+  "ce95602",
+  "82e68ac",
+  "6c5610c"
+ ],
+ "source": "owner-made real encrypted showcase HA backup woow-litellm 0.1.15 (LiteLLM 1.104.0, PostgreSQL 18.6), SHA-256 9dc5994497d9d6ff4c3ee8d3fcf86f295cf25c69d1eae98227854fee85286f27",
+ "target": "dev-d with the WOOWTECH Podman package Woow_podman_litellm dd690ae installed for the run and removed after it (outer network none, isolation checked before/after); production untouched",
+ "real_runs": {
+  "01": {
+   "commit": "e0c9e56",
+   "result": "cancelled while waiting for the lock (no dev-d object)"
+  },
+  "02": {
+   "commit": "5faef6f",
+   "result": "FAIL 11/13: package install (library waiter consumed the startup-probe budget)"
+  },
+  "03": {
+   "commit": "5c2e435",
+   "result": "FAIL 28/33: product check refused migration names with spaces (real finding, fixed in 3bde418)"
+  },
+  "04": {
+   "commit": "3bde418",
+   "result": "67/69: every product step and client check PASSED; 2 FAILs = harness own-state equality on spend_logs (fixed in db73107)",
+   "elapsed_s": 2337,
+   "lock_held_s": 1881,
+   "proved": [
+    "ha-check ok (versions, PG 18->17, salt binding, schema, 1/1/24)",
+    "ha-convert 171 s (trusted schema, rows only, counts equal, salt moved)",
+    "converted backup manual + encrypted + from_ha; inspect in place, settings same, postgres main PG 17, 5 secrets",
+    "automatic rollback of a failing import restore: own salt, data and key back",
+    "import: HA test key /key/info 200 with alias, /v1/models 200, users/teams/models 1/1/24, 72/72 + 5/5 decrypt with moved salt and 0 with a random one, salt secret and DB salt HA's, other 4 secrets unchanged, master key works, own key 401, 0/3 egress, schema = device's",
+    "restart: same",
+    "manual rollback: own salt, data and key back",
+    "leaks 0",
+    "cleanup",
+    "isolation true none {}"
+   ]
+  },
+  "05": {
+   "commit": "db73107",
+   "result": "FAIL 45/49 under host load 40-69: restores exceeded the 600 s readiness window; engine rollbacks reported incomplete while the restored own state was verified; leaks 0, cleanup, isolation PASS",
+   "elapsed_s": 7032,
+   "lock_held_s": 5738
+  },
+  "06": {
+   "commit": "3c1a0a4",
+   "result": "cancelled while polling for the lock (no dev-d object touched)"
+  },
+  "07": {
+   "commit": "82e68ac",
+   "result": "FAIL 30/33: product check refused the real backup (enum type rendered public.\"JobStatus\" in HA sessions vs \"JobStatus\" here) -> fixed in 215fdf0"
+  },
+  "08": {
+   "commit": "215fdf0",
+   "result": "68/69: every product step and client check PASSED (check, convert, auto rollback, import, HA key, 72/72+5/5 decrypt, restart, manual rollback, leaks, cleanup, isolation); 1 FAIL = harness container-set equality saw dev-d headscale restart loop (pre-existing, not LiteLLM)",
+   "note": "215fdf0 lacks the review iteration-2 fixes (SR-6 refusal 1e29974, SR-8..SR-10); not the final product code"
+  },
+  "secreview-01": {
+   "commit": "14be8bc (product code 1a83926)",
+   "result": "PASS 69/69 exit 0: the whole product flow on the final code (run by lane litellm-secreview with this driver)"
+  }
+ },
+ "unit": "tests/backup/evidence/litellm-product-20261123/unit-tests.json (full tests/backup 1483: only the 7 pre-existing test_ha_omnigent failures; backup-ui 101/101; mutation 33/33)",
+ "open": [
+  "one all-green real attempt with db73107 when the host load allows (check uptime < ~30; ~31 min hold)",
+  "ARM: no ARM LiteLLM HA backup exists (the add-on is amd64-only)",
+  "key_users on dev-d is [] (its Hermes has an empty LITELLM_API_KEY); detection of Omnigent/Pi keys kept in their volumes (pi models.json) is not implemented: config files, Quadlet files and LiteLLM's network drop-in only"
+ ],
+ "owner_notes": [
+  "package library: QL_HEALTH_ACTIVE=1 waiter consumes HealthStartupRetries on slow hosts (scripts/lib/quadlet-lib.sh 2179 vs quadlet/litellm.container 76-78)",
+  "LiteLLM restores on a loaded device can exceed the catalog health window (production 300 s) and end 'rollback incomplete' although data is back"
+ ],
+ "lab_differences": [
+  "app image = lab build 0c71bec8 derived with USER 1000:0 + prisma chown (dev-d maps IDs 0..55000)",
+  "PG17 094ecc9c tagged and pinned to its device digest",
+  "install with QL_HEALTH_ACTIVE=0",
+  "catalog readiness timeout 600 s (production 300 s)",
+  "no network: no provider calls or ChatGPT refresh"
+ ],
+ "commercial_acceptance": "not-complete",
+ "security_review_fixes_merged": "review/litellm-secreview-20261123 cdf6eba (SR-1..SR-5), fast-forwarded 2026-11-23 22:20",
+ "final_product_code": "1a83926 (review/litellm-secreview-fix2-20261124, merged into feat/ha-import-litellm-product-20261123)"
+}

@@ -1,0 +1,155 @@
+{
+ "after_analyse": [
+  "woowbk-review-event_trigger_login_postgres.txt"
+ ],
+ "after_first_connection": {
+  "woowbk-review-event_trigger_login_postgres.txt": {
+   "CapEff": "0000000000000000",
+   "CapPrm": "0000000000000000",
+   "NoNewPrivs": "1",
+   "Seccomp": "2",
+   "data_exec": "no",
+   "default_routes": "0",
+   "dns": "no",
+   "egress_ip": "no",
+   "env_names": "DOCKER_PG_LLVM_DEPS GOSU_VERSION HOME HOSTNAME LANG LC_COLLATE LC_CTYPE LC_MESSAGES LC_MONETARY LC_NUMERIC LC_TIME PATH PGDATA PGSYSCONFDIR PG_MAJOR PG_SHA256 PG_VERSION PWD SHLVL container",
+   "host_root_visible": "0",
+   "id": "uid=70(postgres) gid=70(postgres) groups=70(postgres)",
+   "ifaces": "lo",
+   "mem_max": "1073741824",
+   "mounts": "/dev/shm:rw,nosuid,nodev,noexec,relatime /var/lib/postgresql:rw,nosuid,nodev,noexec,relatime /:ro,relatime /tmp:rw,nosuid,nodev,relatime /run:rw,nosuid,nodev,relatime /var/tmp:rw,nosuid,nodev,relatime",
+   "pids_max": "512",
+   "procs_visible": "16",
+   "root_write": "no",
+   "run_secrets": "0",
+   "tag": "event_trigger_login_postgres",
+   "tmp_exec": "yes"
+  }
+ },
+ "after_salt_binding": [
+  "woowbk-review-event_trigger_ddl_end_postgres.txt",
+  "woowbk-review-event_trigger_login_postgres.txt"
+ ],
+ "binding": "match",
+ "blockers": [
+  "HA 的 LiteLLM 資料庫含有只有資料庫超級使用者才能建立的物件（EVENT TRIGGER），無法安全地搬過來。"
+ ],
+ "case": "superuser_catalog",
+ "container": {
+  "cap_add": [],
+  "cap_drop": [],
+  "memory": 1073741824,
+  "mounts": [
+   "volume:/var/lib/postgresql:noexec,nosuid,nodev,rbind"
+  ],
+  "network_mode": "none",
+  "pids_limit": 512,
+  "ports": {},
+  "privileged": false,
+  "read_only_root": true,
+  "security_opt": [
+   "no-new-privileges"
+  ],
+  "user": ""
+ },
+ "elapsed_seconds": 238.7,
+ "found": {
+  "migrations": [
+   "20250326162113_baseline"
+  ],
+  "schemas": [
+   "woow",
+   "woow_platform"
+  ],
+  "superuser": [
+   "EVENT TRIGGER"
+  ]
+ },
+ "image_pg18": "sha256:4ea77c7055dec6a632156aa2cd9f1abaaedeba5f812f104f4e9e1ac37363469b",
+ "markers_final": {
+  "woowbk-review-event_trigger_ddl_end_postgres.txt": {
+   "CapEff": "0000000000000000",
+   "CapPrm": "0000000000000000",
+   "NoNewPrivs": "1",
+   "Seccomp": "2",
+   "data_exec": "no",
+   "default_routes": "0",
+   "dns": "no",
+   "egress_ip": "no",
+   "env_names": "DOCKER_PG_LLVM_DEPS GOSU_VERSION HOME HOSTNAME LANG LC_COLLATE LC_CTYPE LC_MESSAGES LC_MONETARY LC_NUMERIC LC_TIME PATH PGDATA PGSYSCONFDIR PG_MAJOR PG_SHA256 PG_VERSION PWD SHLVL container",
+   "host_root_visible": "0",
+   "id": "uid=70(postgres) gid=70(postgres) groups=70(postgres)",
+   "ifaces": "lo",
+   "mem_max": "1073741824",
+   "mounts": "/dev/shm:rw,nosuid,nodev,noexec,relatime /var/lib/postgresql:rw,nosuid,nodev,noexec,relatime /:ro,relatime /tmp:rw,nosuid,nodev,relatime /run:rw,nosuid,nodev,relatime /var/tmp:rw,nosuid,nodev,relatime",
+   "pids_max": "512",
+   "procs_visible": "16",
+   "root_write": "no",
+   "run_secrets": "0",
+   "tag": "event_trigger_ddl_end_postgres",
+   "tmp_exec": "yes"
+  },
+  "woowbk-review-event_trigger_login_postgres.txt": {
+   "CapEff": "0000000000000000",
+   "CapPrm": "0000000000000000",
+   "NoNewPrivs": "1",
+   "Seccomp": "2",
+   "data_exec": "no",
+   "default_routes": "0",
+   "dns": "no",
+   "egress_ip": "no",
+   "env_names": "DOCKER_PG_LLVM_DEPS GOSU_VERSION HOME HOSTNAME LANG LC_COLLATE LC_CTYPE LC_MESSAGES LC_MONETARY LC_NUMERIC LC_TIME PATH PGDATA PGSYSCONFDIR PG_MAJOR PG_SHA256 PG_VERSION PWD SHLVL container",
+   "host_root_visible": "0",
+   "id": "uid=70(postgres) gid=70(postgres) groups=70(postgres)",
+   "ifaces": "lo",
+   "mem_max": "1073741824",
+   "mounts": "/dev/shm:rw,nosuid,nodev,noexec,relatime /var/lib/postgresql:rw,nosuid,nodev,noexec,relatime /:ro,relatime /tmp:rw,nosuid,nodev,relatime /run:rw,nosuid,nodev,relatime /var/tmp:rw,nosuid,nodev,relatime",
+   "pids_max": "512",
+   "procs_visible": "16",
+   "root_write": "no",
+   "run_secrets": "0",
+   "tag": "event_trigger_login_postgres",
+   "tmp_exec": "yes"
+  }
+ },
+ "notes": [],
+ "scan": {
+  "pg_version": "18",
+  "salt_valid": true,
+  "symlinks": 0
+ },
+ "session_settings": {
+  "datestyle": "SQL, DMY",
+  "event_triggers": "on",
+  "extra_float_digits": "-10",
+  "review": "database-setting-applied",
+  "search_path": "\"$user\", public",
+  "session_preload_libraries": "auto_explain",
+  "shared_preload_libraries": ""
+ },
+ "source": {
+  "commit": "2284e4d1167a60ad27c292f31bf9dbe88690d2ee",
+  "ha_litellm_sha256": "104e9ceb4efd10af86c4996c94f77c774cf7c1abeca93cb1f5dc0c7694eba74f",
+  "tracked_changes": false
+ },
+ "steps": [
+  "start_ha_cluster",
+  "analyse",
+  "salt_binding",
+  "read_schema",
+  "export_rows"
+ ],
+ "user_row_as_exported": [
+  "u1",
+  "proxy_admin",
+  "0.12346",
+  "05/11/2026 10:00:00",
+  "05/11/2026 10:00:00 UTC"
+ ],
+ "volumes_left_behind": [
+  "2ffb8274186f6dcf99108f104417d506c0193daa8ac18eeab7cc4d883c37997e",
+  "5650c68838aeb97639320fc7b2a4fd47de2c341e65aed4e8c200c234ab7ce85b",
+  "5e041e6d5c26676035033bcdfa534bea4f5f4e2841bd79fc284df4d1453c00fb"
+ ],
+ "warnings": []
+}

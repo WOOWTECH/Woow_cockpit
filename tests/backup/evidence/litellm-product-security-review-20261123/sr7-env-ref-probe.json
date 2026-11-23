@@ -1,0 +1,36 @@
+{
+ "canary": "generated inside the container, compared there, never printed (searched: not in stdout/stderr)",
+ "commercial_acceptance": "not-complete",
+ "harness": {
+  "commit": "455d1f4",
+  "script": "tests/e2e/lab/litellm_env_ref_probe.py",
+  "wrapper": "tests/e2e/lab/litellm_env_ref_probe.sh"
+ },
+ "probe_containers_left": 0,
+ "result": {
+  "cases": {
+   "encrypted_reference": {
+    "added": 1,
+    "bearer_present": true,
+    "device_master_key_sent": true,
+    "error": null,
+    "requests": 1
+   },
+   "plaintext_reference": {
+    "added": 1,
+    "bearer_present": true,
+    "device_master_key_sent": true,
+    "error": null,
+    "requests": 1
+   }
+  },
+  "litellm_version": "unknown"
+ },
+ "status_lines": [
+  "rc=0 seconds=59",
+  "dev-d isolation: true none {}"
+ ],
+ "stdout_sha256": "e03fa2236468b6a4d01eaf3aa5102b40a94e32cad033fb7b0903de41d192e951",
+ "what": "SR-7 probe: a DB model row whose api_key is os.environ/LITELLM_MASTER_KEY, through LiteLLM 1.104.0's own DB-model path (ProxyConfig._add_deployment -> Router -> one chat completion) to a local fake provider",
+ "where": "dev-d (under /tmp/woowbk-dev-d-mutation.lock), appowner rootless Podman, throwaway container --rm --network=none --read-only --cap-drop=ALL --user 1000:0 --memory 1200m, image = the package lab build sha256:0c71bec8 (already in dev-d)"
+}

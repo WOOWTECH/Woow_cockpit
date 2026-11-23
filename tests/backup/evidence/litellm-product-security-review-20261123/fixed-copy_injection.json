@@ -1,0 +1,27 @@
+{
+ "after": {
+  "injected": [],
+  "rows": 4
+ },
+ "case": "copy_injection",
+ "elapsed_seconds": 67.1,
+ "end_marker_crlf_then_sql": {
+  "returncode": 0
+ },
+ "end_marker_then_sql": {
+  "returncode": 0
+ },
+ "image_pg18": "sha256:4ea77c7055dec6a632156aa2cd9f1abaaedeba5f812f104f4e9e1ac37363469b",
+ "psql_meta_after_end": {
+  "returncode": 0
+ },
+ "psql_shell_marker_files": 0,
+ "source": {
+  "commit": "d31c59a6f8d62ff9abf4aa6e27b90365cda997e7",
+  "ha_litellm_sha256": "03f3ec69ccf992c8cdafad9b0cb56e993e638756c93113bcaa4997c74bdaf192",
+  "tracked_changes": false
+ },
+ "sql_as_data": {
+  "returncode": 0
+ }
+}

@@ -1,0 +1,230 @@
+{
+ "all_as_expected": true,
+ "canary_found_in_product_output_or_logs": false,
+ "canary_found_in_this_document": false,
+ "cases": {
+  "custom_dir_env": {
+   "as_expected": true,
+   "exception": null,
+   "expected_named": true,
+   "key_users_named": true,
+   "key_users_seconds": 0.43,
+   "log_lines": 0,
+   "pi_agent_uses_litellm": true,
+   "seconds": 0.22,
+   "sources": [
+    [
+     "volume",
+     "woowbk-review-pi-*"
+    ]
+   ]
+  },
+  "dash_volume": {
+   "as_expected": true,
+   "exception": null,
+   "expected_named": false,
+   "key_users_named": false,
+   "key_users_seconds": 0.21,
+   "log_lines": 0,
+   "pi_agent_uses_litellm": false,
+   "seconds": 0.0,
+   "sources": []
+  },
+  "deep_nesting": {
+   "as_expected": true,
+   "exception": "RecursionError",
+   "expected_named": false,
+   "key_users_named": false,
+   "key_users_seconds": 0.79,
+   "log_lines": 0,
+   "pi_agent_uses_litellm": null,
+   "seconds": 0.25,
+   "sources": [
+    [
+     "volume",
+     "woowbk-review-pi-*"
+    ]
+   ]
+  },
+  "fifo": {
+   "as_expected": true,
+   "exception": null,
+   "expected_named": false,
+   "key_users_named": false,
+   "key_users_seconds": 0.55,
+   "log_lines": 0,
+   "pi_agent_uses_litellm": false,
+   "seconds": 0.21,
+   "sources": [
+    [
+     "volume",
+     "woowbk-review-pi-*"
+    ]
+   ]
+  },
+  "home_path": {
+   "as_expected": true,
+   "exception": null,
+   "expected_named": true,
+   "key_users_named": true,
+   "key_users_seconds": 0.1,
+   "log_lines": 0,
+   "pi_agent_uses_litellm": true,
+   "seconds": 0.1,
+   "sources": [
+    [
+     "path",
+     "<review dir>"
+    ]
+   ]
+  },
+  "litellm_volume": {
+   "as_expected": true,
+   "exception": null,
+   "expected_named": true,
+   "key_users_named": true,
+   "key_users_seconds": 2.95,
+   "log_lines": 0,
+   "pi_agent_uses_litellm": true,
+   "seconds": 0.81,
+   "sources": [
+    [
+     "volume",
+     "woowbk-review-pi-*"
+    ]
+   ]
+  },
+  "not_utf8": {
+   "as_expected": true,
+   "exception": null,
+   "expected_named": false,
+   "key_users_named": false,
+   "key_users_seconds": 0.59,
+   "log_lines": 0,
+   "pi_agent_uses_litellm": false,
+   "seconds": 2.16,
+   "sources": [
+    [
+     "volume",
+     "woowbk-review-pi-*"
+    ]
+   ]
+  },
+  "other_provider": {
+   "as_expected": true,
+   "exception": null,
+   "expected_named": false,
+   "key_users_named": false,
+   "key_users_seconds": 0.45,
+   "log_lines": 0,
+   "pi_agent_uses_litellm": false,
+   "seconds": 2.08,
+   "sources": [
+    [
+     "volume",
+     "woowbk-review-pi-*"
+    ]
+   ]
+  },
+  "outside_home": {
+   "as_expected": true,
+   "exception": null,
+   "expected_named": false,
+   "key_users_named": false,
+   "key_users_seconds": 0.17,
+   "log_lines": 0,
+   "pi_agent_uses_litellm": false,
+   "seconds": 0.0,
+   "sources": []
+  },
+  "oversized": {
+   "as_expected": true,
+   "exception": null,
+   "expected_named": false,
+   "key_users_named": false,
+   "key_users_seconds": 0.76,
+   "log_lines": 0,
+   "pi_agent_uses_litellm": false,
+   "seconds": 1.33,
+   "sources": [
+    [
+     "volume",
+     "woowbk-review-pi-*"
+    ]
+   ]
+  },
+  "symlink_dir": {
+   "as_expected": true,
+   "exception": null,
+   "expected_named": false,
+   "key_users_named": false,
+   "key_users_seconds": 0.58,
+   "log_lines": 0,
+   "pi_agent_uses_litellm": false,
+   "seconds": 0.04,
+   "sources": [
+    [
+     "path",
+     "<review dir>"
+    ]
+   ]
+  },
+  "symlink_file": {
+   "as_expected": true,
+   "exception": null,
+   "expected_named": false,
+   "key_users_named": false,
+   "key_users_seconds": 1.07,
+   "log_lines": 0,
+   "pi_agent_uses_litellm": false,
+   "seconds": 0.12,
+   "sources": [
+    [
+     "volume",
+     "woowbk-review-pi-*"
+    ]
+   ]
+  },
+  "traversal": {
+   "as_expected": true,
+   "exception": null,
+   "expected_named": false,
+   "key_users_named": false,
+   "key_users_seconds": 0.38,
+   "log_lines": 0,
+   "pi_agent_uses_litellm": false,
+   "seconds": 0.0,
+   "sources": []
+  },
+  "url_carries_canary": {
+   "as_expected": true,
+   "exception": null,
+   "expected_named": true,
+   "key_users_named": true,
+   "key_users_seconds": 0.37,
+   "log_lines": 0,
+   "pi_agent_uses_litellm": true,
+   "seconds": 0.4,
+   "sources": [
+    [
+     "volume",
+     "woowbk-review-pi-*"
+    ]
+   ]
+  }
+ },
+ "elapsed_seconds": 27.0,
+ "podman_calls": [
+  "volume inspect"
+ ],
+ "podman_volume_args": [
+  "woowbk-review-pi-*"
+ ],
+ "review_dir_left": false,
+ "review_volumes_left": [],
+ "source": {
+  "harness_commit": "f484d9792e00def29c8bb38fb8fb15c7ab6f79eb",
+  "harness_tracked_changes": false,
+  "product_ha_litellm_sha256": "e356b55e79efea78a2e45409f74413a7feba55175100d3ae62ed504177e1fd45"
+ }
+}

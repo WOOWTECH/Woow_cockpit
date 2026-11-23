@@ -1,0 +1,143 @@
+{
+ "modules": {
+  "woowbackup/ha_litellm.py": "4eb30d9f5aee9b3f536e7b1c66de2f52cff96025d6826fc3200900d53c382c2c",
+  "woowbackup/adapters/quadlet_postgres.py": "f7e3eba019fb7074fad8aa4bf52380ab9810d5e65e7fde1a2d9b9bb4d648c4ac",
+  "woowbackup/haimport.py": "2722cc979c55b8ec86eb320fe4bfe564d93d63c85de73b08346812eef6b6a3c1"
+ },
+ "tests": [
+  "tests.backup.test_ha_litellm",
+  "tests.backup.test_adapter_import_secrets",
+  "tests.backup.test_ha_litellm_candidate"
+ ],
+ "baseline": {
+  "returncode": 0,
+  "tests": 52,
+  "failures": 0
+ },
+ "mutations": [
+  {
+   "id": "M19",
+   "protection": "HA's cluster gets every library/command setting overridden",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 52
+  },
+  {
+   "id": "M34",
+   "protection": "every session in HA's cluster sends the pinned client options (SR-1/SR-2)",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 52
+  },
+  {
+   "id": "M35",
+   "protection": "the superuser's sessions fire no event trigger and load no preload library (SR-3)",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 52
+  },
+  {
+   "id": "M36",
+   "protection": "HA's server starts with event triggers off (SR-3)",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 52
+  },
+  {
+   "id": "M37",
+   "protection": "_prisma_migrations is read only as an ordinary table (SR-1)",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 52
+  },
+  {
+   "id": "M38",
+   "protection": "backup_label/tablespace_map never reach HA's volume (SR-4)",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 52
+  },
+  {
+   "id": "M39",
+   "protection": "backup_label/tablespace_map refuse (SR-4)",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 52
+  },
+  {
+   "id": "M40",
+   "protection": "HA's stored proxy settings are named in the check (SR-5)",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "caught": true,
+   "failures": 2,
+   "tests": 52
+  },
+  {
+   "id": "M41",
+   "protection": "HA's stored proxy settings are named in the import notes (SR-5)",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 52
+  },
+  {
+   "id": "M42",
+   "protection": "stored settings that load and run code refuse in the check (SR-6)",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 52
+  },
+  {
+   "id": "M43",
+   "protection": "stored settings that load and run code stop the conversion first (SR-6)",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 52
+  },
+  {
+   "id": "M44",
+   "protection": "a callback with a dot in its name is a module load (SR-6)",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 52
+  }
+ ],
+ "all_caught": true,
+ "subset": [
+  "M19",
+  "M34",
+  "M35",
+  "M36",
+  "M37",
+  "M38",
+  "M39",
+  "M40",
+  "M41",
+  "M42",
+  "M43",
+  "M44"
+ ],
+ "seconds": 175.4
+}
