@@ -423,7 +423,7 @@ def soft(name, condition):
 
 def worker(tmp, role, action, env, **fields):
     payload = json.dumps(dict(action=action, env=env, **fields)) + '\n'
-    result = tmp.exec(role, ['python', '-I', '-c', WORKER], input=payload.encode(),
+    result = tmp.exec(app_name(role), ['python', '-I', '-c', WORKER], input=payload.encode(),
                       timeout=660 if action == 'start' else 300, max_output=8192, check=False)
     out = result.stdout or b''
     try:
@@ -439,7 +439,39 @@ def worker(tmp, role, action, env, **fields):
     return reply
 
 
+START_ATTEMPTS = 3      # litellm.container: Restart=always, RestartSec=10 (StartLimitBurst=5 in 300 s)
+STARTS = {}
+
+
 def app_start(tmp, role, network, env):
+    """Start the app like the package unit would: a failed start is retried after 10 s (at most START_ATTEMPTS
+    containers, each a fresh one). Returns the seconds of the successful start; STARTS[role] = attempts used."""
+    for attempt in range(1, START_ATTEMPTS + 1):
+        name = role if attempt == 1 else f'{role}-{attempt}'
+        try:
+            seconds = _app_start_once(tmp, name, network, env)
+        except Failed:
+            if tmp.name(name) in tmp.containers:
+                tmp.remove(name)
+            if attempt == START_ATTEMPTS:
+                STARTS[role] = attempt
+                raise
+            time.sleep(10)
+            continue
+        STARTS[role] = attempt
+        if name != role:
+            APP_ALIASES[role] = name
+        return seconds
+
+
+APP_ALIASES = {}
+
+
+def app_name(role):
+    return APP_ALIASES.get(role, role)
+
+
+def _app_start_once(tmp, role, network, env):
     tmp.memory = APP_MEMORY
     # dev-d maps IDs 0..55000 only: image USER 65534 cannot start here; non-root 1000 with GID 0 (rehearsal choice).
     tmp.run(role, APP_IMAGE, ['-I', '-c', 'import time; time.sleep(3600)'], entrypoint='python', user='1000:0',
@@ -456,8 +488,31 @@ def app_start(tmp, role, network, env):
 
 
 def app_stop(tmp, role):
-    tmp.stop(role, timeout=20)
-    tmp.remove(role)
+    name = app_name(role)
+    tmp.stop(name, timeout=20)
+    tmp.remove(name)
+
+
+def remove_role(tmp, role):
+    """Remove every container of a role (retries included) after an optional stage failed."""
+    for name in [role] + [f'{role}-{n}' for n in range(2, START_ATTEMPTS + 1)]:
+        if tmp.name(name) in tmp.containers:
+            tmp.remove(name)
+    APP_ALIASES.pop(role, None)
+
+
+def db_memory_events(tmp):
+    """oom_kill count and peak of the target PostgreSQL container's own cgroup (it must never be OOM-killed)."""
+    out = tmp.exec('target', ['cat', '/sys/fs/cgroup/memory.events', '/sys/fs/cgroup/memory.peak'], timeout=60,
+                   max_output=4096, check=False).stdout or b''
+    values = {}
+    for line in out.decode('ascii', 'replace').splitlines():
+        parts = line.split()
+        if len(parts) == 2 and parts[1].isdigit():
+            values[parts[0]] = int(parts[1])
+        elif len(parts) == 1 and parts[0].isdigit():
+            values['peak'] = int(parts[0])
+    return values
 
 
 def target_env(host, pg_password, master, salt, ui_password):
@@ -622,7 +677,7 @@ def lab_run(args, ha, member, keys, runner, test_vkey, started, lock_started):
             runner.podman('secret', 'create', secret_name, '-', input=pg_password.encode(), max_output=4096)
             secret_made = True
             tmp.volume('target-data')
-            tmp.memory = '256m'
+            tmp.memory = '384m'
             tmp.run('target', PG17_IMAGE, ['postgres', '-c', 'shared_buffers=16MB', '-c', 'max_connections=40'],
                     detach=True, network=network, read_only_root=True,
                     env={'POSTGRES_USER': 'litellm', 'POSTGRES_DB': 'litellm',
@@ -643,6 +698,7 @@ def lab_run(args, ha, member, keys, runner, test_vkey, started, lock_started):
             emit('target_db_ready', pg_major=17, scram_auth=True)
 
             stage = 'target_before'
+            db_events = [db_memory_events(tmp)]
             seconds = app_start(tmp, 'target-before', network, env_before)
             worker(tmp, 'target-before', 'seed', env_before, marker='woowbk-rollback-marker', credential=seed_credential)
             worker(tmp, 'target-before', 'verify', env_before, marker='woowbk-rollback-marker',
@@ -653,7 +709,8 @@ def lab_run(args, ha, member, keys, runner, test_vkey, started, lock_started):
             before_rows = digests(target)
             before_dump = dump(tmp, 'target', 'litellm')
             only_ha, only_target = schema_difference(source_schema, before_schema)
-            emit('target_before', app_start_s=seconds, own_model_seeded=True, own_provider_value_decrypts=True,
+            emit('target_before', app_start_s=seconds, start_attempts=STARTS['target-before'], own_model_seeded=True,
+                 own_provider_value_decrypts=True,
                  schema_items_only_in_ha=only_ha, schema_items_only_in_target=only_target)
 
             # 3. Import: the package restore order, HA's dump, HA's salt moved; target keeps its other credentials.
@@ -691,12 +748,16 @@ def lab_run(args, ha, member, keys, runner, test_vkey, started, lock_started):
             soft('stored_values_all_decrypt', counts['stored_values_ok'] == counts['stored_values'])
             soft('wrong_salt_decrypts_nothing', counts['model_values_wrong_ok'] == 0
                  and counts['stored_values_wrong_ok'] == 0)
-            soft('app_serves_all_stored_models', counts['api_models'] >= counts['db_models'])
-            emit('ha_import_verified', app_start_s=seconds, **printable(counts))
+            emit('ha_import_verified', app_start_s=seconds, start_attempts=STARTS['target-after'], **printable(counts))
+            emit('model_breakdown', config='chatgpt_disabled', missing=reply['breakdown']['missing_by_provider'],
+                 loaded=reply['breakdown']['loaded_by_provider'],
+                 missing_team_scoped=reply['breakdown']['missing_team_scoped'])
+            db_events.append(db_memory_events(tmp))
 
             stage = 'restart'
-            if time.monotonic() - lock_started < SOFT_DEADLINE:
-                app_stop(tmp, 'target-after')
+            app_stop(tmp, 'target-after')
+            try:
+                require(time.monotonic() - lock_started < SOFT_DEADLINE, 'soft_deadline')
                 seconds = app_start(tmp, 'target-restart', network, env_after)
                 again = worker(tmp, 'target-restart', 'recheck', env_after, test_vkey=test_vkey,
                                expected_alias=EXPECTED_ALIAS, issued_key=issued_key)['counts']
@@ -705,12 +766,39 @@ def lab_run(args, ha, member, keys, runner, test_vkey, started, lock_started):
                                                         'orgs')))
                 issued_ok = soft('restart_issued_client_usable', again['issued_key_info'] == 200)
                 ha_ok = soft('restart_ha_client_accepted', again['test_key_status'] == 200)
-                emit('restart_verified', app_start_s=seconds, counts_equal=same, ha_client_accepted=ha_ok,
-                     issued_client_accepted=issued_ok)
+                emit('restart_verified', app_start_s=seconds, start_attempts=STARTS['target-restart'],
+                     counts_equal=same, ha_client_accepted=ha_ok, issued_client_accepted=issued_ok)
                 app_stop(tmp, 'target-restart')
-            else:
-                emit('restart_skipped', reason='soft_deadline')
-                app_stop(tmp, 'target-after')
+            except Failed as exc:
+                soft('restart_completed', False)
+                emit('restart_failed', label=str(exc), start_attempts=STARTS.get('target-restart', 0))
+                private_note(traceback.format_exc().encode())
+                remove_role(tmp, 'target-restart')
+            db_events.append(db_memory_events(tmp))
+
+            # The package's own setting WOOW_CHATGPT_ENABLED=true (token directory private to the container; the
+            # quadlet uses a tmpfs): HA's ChatGPT subscription models and accounts as the package would serve them.
+            stage = 'chatgpt_enabled'
+            try:
+                require(time.monotonic() - lock_started < SOFT_DEADLINE, 'soft_deadline')
+                env_chatgpt = dict(env_after, WOOW_CHATGPT_ENABLED='true', CHATGPT_TOKEN_DIR='/tmp/woowbk-chatgpt',
+                                   WOOW_CHATGPT_DEFAULT_MODELS='visible')
+                seconds = app_start(tmp, 'target-chatgpt', network, env_chatgpt)
+                full = worker(tmp, 'target-chatgpt', 'recheck', env_chatgpt, test_vkey=test_vkey,
+                              expected_alias=EXPECTED_ALIAS, issued_key=issued_key)
+                served = soft('app_serves_all_stored_models', full['counts']['api_models'] >= full['counts']['db_models'])
+                soft('chatgpt_config_ha_client_accepted', full['counts']['test_key_status'] == 200)
+                emit('chatgpt_enabled_verified', app_start_s=seconds, start_attempts=STARTS['target-chatgpt'],
+                     all_stored_models_served=served, **printable(full['counts']))
+                emit('model_breakdown', config='chatgpt_enabled', missing=full['breakdown']['missing_by_provider'],
+                     loaded=full['breakdown']['loaded_by_provider'],
+                     missing_team_scoped=full['breakdown']['missing_team_scoped'])
+                app_stop(tmp, 'target-chatgpt')
+            except Failed as exc:
+                soft('app_serves_all_stored_models', False)
+                emit('chatgpt_enabled_failed', label=str(exc), start_attempts=STARTS.get('target-chatgpt', 0))
+                private_note(traceback.format_exc().encode())
+                remove_role(tmp, 'target-chatgpt')
 
             # 4. The target's own salt cannot open the imported database (db_prepare refuses, rows unchanged).
             stage = 'salt_controls'
@@ -732,6 +820,7 @@ def lab_run(args, ha, member, keys, runner, test_vkey, started, lock_started):
             back_rows = soft('rollback_rows_equal_before', digests(target) == before_rows)
             back_schema = soft('rollback_schema_equal_before', target.query_json(SCHEMA, 'litellm') == before_schema)
             seconds = app_start(tmp, 'target-rollback', network, env_before)
+            db_events.append(db_memory_events(tmp))
             worker(tmp, 'target-rollback', 'verify', env_before, marker='woowbk-rollback-marker',
                    credential=seed_credential)
             gone = worker(tmp, 'target-rollback', 'rollback-verify', env_before, test_vkey=test_vkey,
@@ -739,7 +828,12 @@ def lab_run(args, ha, member, keys, runner, test_vkey, started, lock_started):
             soft('rollback_removes_ha_and_issued_clients', gone['test_vkey_status'] == 401
                  and gone['issued_key_status'] == 401)
             app_stop(tmp, 'target-rollback')
-            emit('rollback_verified', app_start_s=seconds, rows_equal_before=back_rows,
+            kills = [e.get('oom_kill', -1) for e in db_events]
+            soft('target_db_never_oom_killed', all(k == 0 for k in kills))
+            emit('target_db_memory', oom_kill_max=max(kills), peak_mib=max(e.get('peak', 0) for e in db_events) // 2 ** 20,
+                 samples=len(db_events))
+            emit('rollback_verified', app_start_s=seconds, start_attempts=STARTS['target-rollback'],
+                 rows_equal_before=back_rows,
                  schema_equal_before=back_schema, own_provider_value_decrypts=True,
                  ha_client_status=gone['test_vkey_status'], issued_client_status=gone['issued_key_status'])
             passed = True

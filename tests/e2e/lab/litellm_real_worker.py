@@ -7,7 +7,9 @@ before using the reply). Never prints exception text, API bodies, DB values or c
 import importlib.metadata
 import json
 import os
+import re
 import selectors
+import socket
 import signal
 import subprocess
 import sys
@@ -100,6 +102,38 @@ router_settings:
 """
 
 
+def db_reachable():
+    """Private diagnostic only: can this container open TCP to the database host right now (5 s)?"""
+    try:
+        with socket.create_connection((os.environ.get('DATABASE_HOST', ''), 5432), timeout=5):
+            return True
+    except OSError:
+        return False
+
+
+def model_breakdown(db, salt, loaded_ids):
+    """Stored models served or not by the running router, counted by provider prefix of the decrypted `model` value
+    (a provider word such as openai; anything else is 'other'). No model name or value leaves this process."""
+    from litellm.proxy.common_utils.encrypt_decrypt_utils import _decrypt_with_signing_key as decrypt_value
+    result = {'missing_by_provider': {}, 'loaded_by_provider': {}, 'missing_team_scoped': 0}
+    rows = db.execute('SELECT model_id, litellm_params, model_info FROM public."LiteLLM_ProxyModelTable"').fetchall()
+    for model_id, params, info in rows:
+        params = json.loads(params) if isinstance(params, str) else (params or {})
+        info = json.loads(info) if isinstance(info, str) else (info or {})
+        try:
+            model = decrypt_value(value=params.get('model'), signing_key=salt)
+        except Exception:
+            model = None
+        provider = model.split('/', 1)[0] if isinstance(model, str) and '/' in model else 'none'
+        if not re.fullmatch(r'[a-z0-9_-]{1,30}', provider):
+            provider = 'other'
+        bucket = 'loaded_by_provider' if model_id in loaded_ids else 'missing_by_provider'
+        result[bucket][provider] = result[bucket].get(provider, 0) + 1
+        if bucket == 'missing_by_provider' and isinstance(info, dict) and info.get('team_id'):
+            result['missing_team_scoped'] += 1
+    return result
+
+
 def decrypt_counts(db, salt, wrong_salt):
     """Every top-level string value of every stored model's litellm_params and every stored credential value:
     how many decrypt with `salt` and how many with `wrong_salt` (must be none). Values stay in this process."""
@@ -152,14 +186,23 @@ def ha_checks(request, master_key, db_models):
                                             (info.get('info') or {}).get('key_alias') == request['expected_alias'])
         models = api_as('/v1/models', request['test_vkey'])
         counts['vkey_models'] = len(models.get('data') or [])
-    deadline = time.monotonic() + 90
+    deadline = time.monotonic() + 150
+    first = None
     while True:
         listed = api('/model/info', master_key)
+        if first is None:
+            first = len(listed.get('data') or [])
         if len(listed.get('data') or []) >= db_models or time.monotonic() > deadline:
             break
-        time.sleep(3)
+        time.sleep(5)
+    counts['api_models_first'] = first
     counts['api_models'] = len(listed.get('data') or [])
-    return counts
+    loaded = set()
+    for item in listed.get('data') or []:
+        ident = (item.get('model_info') or {}).get('id') if isinstance(item, dict) else None
+        if isinstance(ident, str):
+            loaded.add(ident)
+    return counts, loaded
 
 
 def bounded_capture(argv, *, timeout=30, limit=PROCESS_LIMIT):
@@ -253,7 +296,7 @@ os.close(fd)
                     diagnostic = handle.read(PROCESS_LIMIT)
             except OSError:
                 diagnostic = b''
-            metrics = {'reason': reason, 'child_returncode': child.poll()}
+            metrics = {'reason': reason, 'child_returncode': child.poll(), 'db_tcp_after_failure': db_reachable()}
             for filename in ('memory.events', 'memory.max', 'memory.peak'):
                 try:
                     with open('/sys/fs/cgroup/' + filename) as handle:
@@ -332,8 +375,9 @@ os.close(fd)
         issued = []
         with psycopg.connect(os.environ['DATABASE_URL'], connect_timeout=10) as db:
             stored = db_counts(db)
-            counts = ha_checks(request, master, stored['db_models'])
+            counts, loaded = ha_checks(request, master, stored['db_models'])
             counts.update(stored)
+            breakdown = model_breakdown(db, os.environ['LITELLM_SALT_KEY'], loaded)
             if action == 'ha-verify':
                 counts.update(decrypt_counts(db, os.environ['LITELLM_SALT_KEY'], request['wrong_salt']))
                 salt = db.execute("SELECT value FROM woow_platform.settings WHERE key='litellm_salt_key'").fetchall()
@@ -348,7 +392,7 @@ os.close(fd)
             counts['issued_key_info'] = status_of('/key/info', key)
         else:
             counts['issued_key_info'] = status_of('/key/info', request['issued_key'])
-        print(json.dumps({'ok': True, 'counts': counts, 'issued': issued}))
+        print(json.dumps({'ok': True, 'counts': counts, 'issued': issued, 'breakdown': breakdown}))
         return
     if action == 'rollback-verify':
         statuses = {'test_vkey_status': status_of('/key/info', request['test_vkey']),
