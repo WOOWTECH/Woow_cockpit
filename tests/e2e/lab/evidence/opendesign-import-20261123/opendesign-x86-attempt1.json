@@ -1,0 +1,24 @@
+{
+ "source_commit": "d36e498dce9e4ed63c29d45a7ddb8f92502f99fd",
+ "scope": "opendesign-x86",
+ "exit": 1,
+ "elapsed_seconds": 264.5,
+ "stdout_sha256": "4635f6cb57c08a43bfec74018519d55a528c37b21ad2705d63d9d23fcf29fd51",
+ "fixed_status": [
+  "source commit d36e498dce9e4ed63c29d45a7ddb8f92502f99fd",
+  "preflight: dev-e runs with network none and no published port: PASS",
+  "preflight: the checkout has no tracked change (the source commit describes the code): PASS",
+  "preflight: the local file is the recorded showcase OpenDesign backup (sha256): PASS",
+  "preflight: dev-e memory headroom for OpenDesign and the jobs (before any change): PASS",
+  "preflight: host disk keeps the 12 GiB floor after the run's writes  host MemAvailable >= 1 GiB: FAIL",
+  "run stopped in a step (Failed): FAIL",
+  "cleanup: no throwaway container, volume or network of a job left: PASS",
+  "cleanup: no staging folder and no key file left: PASS",
+  "cleanup: the test's converted and safety backups are deleted: PASS",
+  "after: dev-e still runs with network none and no published port: PASS",
+  "lock held for 52 s",
+  "opendesign full flow: 8/10 FAIL"
+ ],
+ "stderr_bytes_not_published": 0,
+ "commercial_acceptance": "not-complete"
+}

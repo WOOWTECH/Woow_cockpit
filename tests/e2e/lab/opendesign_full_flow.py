@@ -68,7 +68,10 @@ MIN_HOST_AVAILABLE_KIB = 1024 * 1024
 MIN_DEVICE_HEADROOM = 1024 * 1024 * 1024   # the jobs, the SQLite child and the daemon's growth above idle
 OD_IDLE = 1280 * 1024 * 1024              # OpenDesign's four containers when started (idle ~0.8 GiB, facts 2.4)
 FLOOR = 12 * 1024 ** 3          # the team keeps >= 12 GiB free on the host at every moment
-NEED = 3 * 1024 ** 3            # the upload copy (1.1 GB) + staging, archive, safety backups, volume imports
+MARGIN = 256 * 1024 ** 2
+# What each step may still write on the host disk (dev-e's volumes live there): checked before the step, so the floor
+# holds at every moment (attempt 1 refused with one static 3 GiB estimate at 14.15 GiB free).
+NEEDS = {'upload': None, 'check': 64 * 1024 ** 2, 'convert': 512 * 1024 ** 2, 'restore': 256 * 1024 ** 2}
 FIXTURE = (LAB / 'ha-fixtures' / '20261123-batch2' / 'x86' / 'woow-b2-opendesign-x86-enc'
            / 'woow-b2-opendesign-x86-enc-20261123.tar')
 FIXTURE_SHA = 'c3d23cedc831d14a221f9be6063c23913fb896f39e882127a52aac7039178dd7'
@@ -543,16 +546,23 @@ class Run:
                        'units': self.found_units})
         if not ok:
             raise Failed('dev-e memory headroom too small')
-        st = os.statvfs('/')
-        free = st.f_bavail * st.f_frsize
         available = next(int(line.split()[1]) for line in Path('/proc/meminfo').read_text().splitlines()
                          if line.startswith('MemAvailable:'))
-        ok = free - NEED >= FLOOR and available >= MIN_HOST_AVAILABLE_KIB
-        self.ev.check('preflight: host disk keeps the 12 GiB floor after the run\'s writes; host MemAvailable >= 1 GiB',
-                      ok, {'free_gib': round(free / 1024 ** 3, 2), 'need_gib': NEED / 1024 ** 3,
-                           'mem_available_kib': available})
+        if not self.ev.check('preflight: host MemAvailable >= 1 GiB', available >= MIN_HOST_AVAILABLE_KIB,
+                             {'mem_available_kib': available}):
+            raise Failed('host memory')
+        self.space('preflight', 'upload')
+
+    def space(self, label_text, step):
+        """The host keeps FLOOR free after what `step` may write (the upload: the HA file plus a margin)."""
+        st = os.statvfs('/')
+        free = st.f_bavail * st.f_frsize
+        need = (FIXTURE.stat().st_size if NEEDS[step] is None else NEEDS[step]) + MARGIN
+        ok = free - need >= FLOOR
+        self.ev.check(f'{label_text}: host disk keeps the 12 GiB floor after the {step} step\'s writes', ok,
+                      {'free_gib': round(free / 1024 ** 3, 2), 'need_mib': need >> 20})
         if not ok:
-            raise Failed('host headroom')
+            raise Failed(f'host disk before {step}')
 
     # -------- setup
     def setup(self):
@@ -636,6 +646,7 @@ class Run:
     # -------- upload and check
     def step_upload(self):
         ev = self.ev
+        self.space('upload', 'upload')
         store_id = 'ha-' + FIXTURE_SHA[:20]
         listed = {h.get('id') for h in drv.ok('list', ev=ev).get('ha_backups') or []}
         started = time.monotonic()
@@ -655,6 +666,7 @@ class Run:
 
     def step_check(self):
         ev = self.ev
+        self.space('check', 'check')
         job, took = drv.run_check(self.store_id, ['open-design'], ev=ev, key=self.args.secrets['HA_BACKUP_KEY'],
                                   tag='check-od-x86')
         if not ev.check('check: ha-check-start job succeeded', job['state'] == 'succeeded',
@@ -687,6 +699,7 @@ class Run:
                  isinstance(space.get('floor'), int) and space['min_free'] > space['floor'],
                  {k: space.get(k) for k in ('running_reserve', 'watch_margin', 'floor', 'min_free')})
         before_ids = {b['id'] for b in drv.ok('list', ev=ev)['backups']}
+        self.space('import', 'convert')
         job, took = drv.convert(self.store_id, ['open-design'], False, ev=ev, key=self.args.secrets['HA_BACKUP_KEY'],
                                 tag='convert-od-x86')
         ev.save('convert-job.json', job)
@@ -716,6 +729,7 @@ class Run:
                                                       and a.get('mode') == 'inplace' for a in pre.get('apps') or []),
                  failed[:3] or [(a.get('id'), a.get('mode'), (a.get('settings') or {}).get('state'))
                                 for a in pre.get('apps') or []])
+        self.space('import', 'restore')
         rjob, rtook = drv.restore(self.converted, ['open-design'], ev=ev, tag='restore-od-x86')
         ev.save('restore-job.json', rjob)
         rresult = rjob.get('result') or {}
@@ -809,6 +823,7 @@ class Run:
 
     def step_auto_rollback(self):
         ev = self.ev
+        self.space('auto rollback', 'restore')
         self.inject_on()
         try:
             job, took = drv.restore(self.converted, ['open-design'], ev=ev, tag='restore-inject-od-x86')
@@ -826,6 +841,7 @@ class Run:
 
     def step_rollback_to_own(self):
         ev = self.ev
+        self.space('rollback', 'restore')
         job, took = drv.restore(self.safety, ['open-design'], ev=ev, tag='rollback-od-x86')
         ev.save('rollback-job.json', job)
         result = job.get('result') or {}
