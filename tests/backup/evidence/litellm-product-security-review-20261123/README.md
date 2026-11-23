@@ -6,8 +6,9 @@ against `integration/ha-import-batch1-20261123` (merge base `d812699`): `ha_lite
 `adapters/quadlet_postgres.py` (`import_manifest(secrets=...)`), `haapps.py`, `haimport.py`, `backup/backup.js`, the
 docs, the unit tests and the lab driver. Reviewer lane: litellm-secreview (owner instance SR-OWNER-1942).
 
-Fixes are on branch `review/litellm-secreview-20261123` (from `3bde418`): `ad6745a` (SR-1..SR-4) and `d31c59a`
-(SR-5); the attack harness is `2284e4d`, `cd900c5` and the `stored_settings` case in `d31c59a`. Nothing was pushed.
+Fixes are on branch `review/litellm-secreview-20261123` (from `3bde418`; it also contains the product lane's final
+`ce95602`): `ad6745a` (SR-1..SR-4), `d31c59a` (SR-5) and `1e29974` (SR-6); the attack harness is `2284e4d`,
+`cd900c5`, `f474bb5`, `7cfb585` and the `stored_settings` case. Nothing was pushed.
 
 ## How it was tested
 
@@ -28,8 +29,9 @@ Fixes are on branch `review/litellm-secreview-20261123` (from `3bde418`): `ad674
 - `tests/e2e/lab/litellm_archive_review.py`: 36 crafted add-on members through the real `scan_member` / `PgSink`
   (offline, no container).
 - Every evidence file records `source.commit` and the SHA-256 of `ha_litellm.py` (`104e9ceb…` = `3bde418`'s,
-  `03f3ec69…` = the fixed `d31c59a`'s). `original-*` ran on clean `2284e4d`/`cd900c5` (product code = `3bde418`),
-  `fixed-*` on clean `d31c59a`. The later `owner_view` case ran from `f474bb5`: `original-owner_view.json` with
+  `03f3ec69…` = `d31c59a`'s, `4eb30d9f…` = the final `1e29974`'s). `original-*` ran on clean `2284e4d`/`cd900c5`
+  (product code = `3bde418`), `fixed-*` on clean `d31c59a`, except `fixed-stored_settings.json` and
+  `fixed-real-backup.json`, which ran on clean `1e29974`. The later `owner_view` case ran from `f474bb5`: `original-owner_view.json` with
   `3bde418`'s `ha_litellm.py` put into a throwaway worktree (hence `tracked_changes: true`), `fixed-owner_view.json`
   from the clean review worktree at `fd9e63a`.
 - No secret anywhere: the salt is generated per run and never printed; the crafted clusters use trust on their unix
@@ -46,9 +48,10 @@ Fixes are on branch `review/litellm-secreview-20261123` (from `3bde418`): `ad674
 | Per-database `session_preload_libraries = auto_explain` | **loaded** despite `-c session_preload_libraries=` | `''` | same |
 | Per-database `DateStyle 'SQL, DMY'`, `extra_float_digits -10` (USERSET: the owner may set them) | exported `05/11/2026 10:00:00` for 2026-11-05 (the ISO/MDY target reads **11 May**), spend `0.12346` for 0.123456789012345 | `2026-11-05 10:00:00`, `0.123456789012345` | same |
 | T2: `backup_label` + `tablespace_map`, no symlink in the member | **PG 18 created `pg_tblspc/16400 -> /tmp/woowbk-review-tablespace`** at its start (`src.symlinks` = 0); this start then failed (WAL ends before end of online backup), a complete online backup would start | never streamed into the volume; no link; blocker 不是在停止狀態下備份的 | `*-tablespace_map.json` |
-| HA's stored proxy settings (`LiteLLM_Config`: env vars, callbacks) | moved silently | warning + import note name `HTTPS_PROXY`, `LANGFUSE_HOST`, `langfuse`, … (names only) | `fixed-stored_settings.json` |
+| HA's stored proxy settings (`LiteLLM_Config`): env vars, named callbacks | moved silently | warning + import note name `HTTPS_PROXY`, `LANGFUSE_HOST`, `langfuse`, … (names only) | `fixed-stored_settings.json` |
+| HA's stored settings that LiteLLM imports as code (`post_call_rules: "builtins.exec"`, `general_settings.custom_auth`, a dotted callback) | **moved silently; this device's LiteLLM would import and call them** (vendor source, SR-6) | **blocker** naming them; the conversion stops before reading anything | `fixed-stored_settings.json` (`stored_hooks_blocker`) |
 | `COPY … FROM STDIN` data ending in `\.` with SQL or `\!` after it (PG 17.11 psql `-c`, as `load_rows` runs it) | nothing executed, SQL-as-data stays data | same | `*-copy_injection.json` |
-| **The real owner-made encrypted LiteLLM HA backup** (fixture SHA-256 checked) through the fixed HA-cluster steps (`tests/e2e/lab/litellm_sandbox_real.py`, lab store, not dev-d) | (attempt 4 of lane litellm-product: whole flow) | salt binding `match`, **no blocker**, 189 migrations, 86 tables, 2882 rows, all 86 exported by COPY (896,181 bytes, deleted at once), 1 sequence; the sessions really ran with search_path pg_catalog, ISO dates, extra_float_digits 3, event triggers off; 1 stored settings section, no env var or callback (no SR-5 line); no marker, nothing left | `fixed-real-backup.json` |
+| **The real owner-made encrypted LiteLLM HA backup** (fixture SHA-256 checked) through the fixed HA-cluster steps (`tests/e2e/lab/litellm_sandbox_real.py`, lab store, not dev-d; final `1e29974`) | (attempt 4 of lane litellm-product: whole flow) | salt binding `match`, **no blocker** (no module hook either), 189 migrations, 86 tables, 2882 rows, all 86 exported by COPY (896,181 bytes, deleted at once), 1 sequence; the sessions really ran with search_path pg_catalog, ISO dates, extra_float_digits 3, event triggers off; 1 stored settings section, no env var or callback (no SR-5 line); no marker, nothing left | `fixed-real-backup.json` |
 | 36 crafted members: traversal, absolute and PAX paths, control characters, devices, sparse, FIFOs, hard links to the master key, symlinked/hard-linked/duplicate/oversized/short salt, oversized/duplicate/deep `state.json`, duplicate/oversized `PG_VERSION`, replaced config files as folders, `conf.d`, recovery and pid files, other member paths, wrong slug, truncated streams | 19 refused, 17 accepted but neutralized (modes 0600/0700, owner postgres; config files replaced; recovery and pid files dropped; secrets, `options.json`, dumps never read; a bad salt or `state.json` gives a blocker or no version); only `backup_label`/`tablespace_map` reached the volume | same, and those two no longer reach it | `*-archive.json` |
 
 What attacker code saw inside the HA container (`original-owner_trojan.json`, `original-superuser_catalog.json`):
@@ -108,19 +111,33 @@ container of the review was left.
    warns and the import notes name the variable and callback names (never a value); nothing is refused, because
    the owner's own HA settings are meant to move.
 
+6. **SR-6 (high for a foreign backup) — refused `1e29974`.** Some stored settings are code: LiteLLM's
+   `get_instance_fn` imports ANY dotted path (`litellm/proxy/types_utils/utils.py:9-52`: `importlib.import_module`
+   + `getattr`). `litellm_settings.post_call_rules: "builtins.exec"` becomes `litellm.post_call_rules`
+   (`proxy_server.py:6193-6194`, reached from the DB overlay through `get_config` :5805-5825 → `load_config`
+   :6048-6063) and is called with every model response text (`litellm/litellm_core_utils/rules.py:41-46`); the
+   `general_settings` `custom_*` hooks and dotted callbacks load the same way; the DB overlay refuses only
+   `s3://`/`gcs://` for them (:4494-4513). A crafted HA backup could make this device's LiteLLM run code with its
+   master key, database URL and salt, on the Hermes and OpenDesign networks. The check refuses and the conversion
+   stops (before reading HA's rows or capturing this device's schema) when any of these is stored; plain
+   integration names stay an SR-5 warning. The real showcase backup has none (no blocker).
+
 Every public refusal stayed; no check was weakened or skipped. Each SR-1..SR-4 regression test
-(`SecurityReviewTests`) fails on `3bde418` and passes on the fix; SR-5 has `StoredSettingsTests`.
+(`SecurityReviewTests`) fails on `3bde418` and passes on the fix; SR-5/SR-6 have `StoredSettingsTests` (the two
+SR-6 tests fail when the refusal is removed).
 
 ## Tests
 
-- `tests.backup.test_ha_litellm`: 33/33 on the fix (7 new: `SecurityReviewTests` ×4, each failing on `3bde418`;
-  `StoredSettingsTests` ×3). With `test_ha_litellm_candidate`, `test_adapter_import_secrets` and `test_ha_odoo`: 80 OK.
+- `tests.backup.test_ha_litellm`: 35/35 on the final fix (9 new: `SecurityReviewTests` ×4, each failing on
+  `3bde418`; `StoredSettingsTests` ×5). With `test_ha_litellm_candidate`, `test_adapter_import_secrets` and
+  `test_ha_odoo`: 82 OK.
   Lab unit tests `test_litellm_full_flow`, `test_litellm_real_ha`: OK.
 - Full `tests/backup` on `d31c59a` (host-heavy lock): 1490 tests, only the 7 pre-existing `test_ha_omnigent` failures
   (5 failures, 2 errors; the same 7 as on `d812699` and `3bde418`, lane omnigent-product), 6 skipped.
-- The product's mutation check (`tests/backup/litellm_product_mutations.py`) with 8 new mutations M34–M41 (one per
-  protection of SR-1..SR-5): first run 40/41 caught — every new mutation caught; M19's text had to follow
-  `ha_server_args`' new last line (same mutation, `7b2401c`). Rerun of all 41 on the final tip: see the hand-off.
+- The product's mutation check (`tests/backup/litellm_product_mutations.py`) with 11 new mutations M34–M44 (one per
+  protection of SR-1..SR-6): first run (M34–M41, on `50622c3`) 40/41 caught — every new mutation caught; M19's
+  text had to follow `ha_server_args`' new last line (same mutation, `7b2401c`). Rerun of all 44 on the final tip:
+  see the lane hand-off (team/litellm-secreview.md).
 
 ## Old guard
 
@@ -142,7 +159,8 @@ automatic and the manual rollback. That real proof is on `3bde418`; on the fixed
   (`ha_odoo.start_ha_cluster` / `ha_odoo.Cluster` without client options; unqualified catalog queries as the
   superuser on HA's catalog). Not changed here (other lanes' code); noted for them.
 - Importing HA's LiteLLM data trusts it like a LiteLLM admin: users and roles, virtual keys (budgets, expiry),
-  guardrails and other stored `general_settings` (SR-5 names only env vars and callbacks), and the models with
+  guardrails (`litellm_settings.guardrails` and the guardrails table: not checked here) and other stored
+  `general_settings` (SR-5 names env vars and callbacks, SR-6 refuses the module hooks), and the models with
   their `api_base`, stored provider credentials and ChatGPT subscription sign-ins: after the import this device's
   apps send their requests to the providers and accounts HA's data names (the notes say the models and credentials
   are replaced; the check counts the ChatGPT sign-ins). Only import a backup you made yourself.

@@ -3,7 +3,7 @@
  "binding": "match",
  "blockers": [],
  "commercial_acceptance": "not-complete",
- "elapsed_seconds": 327.6,
+ "elapsed_seconds": 75.0,
  "exported_bytes": 896181,
  "exported_tables": 86,
  "fixture_sha256_matches_record": true,
@@ -34,8 +34,8 @@
   "session_preload_libraries": ""
  },
  "source": {
-  "commit": "7cfb585195d154ded6d7f9e328f9df391b341c4e",
-  "ha_litellm_sha256": "03f3ec69ccf992c8cdafad9b0cb56e993e638756c93113bcaa4997c74bdaf192",
+  "commit": "1e29974cb27ce5ec97ab089b9652b61428302fd5",
+  "ha_litellm_sha256": "4eb30d9f5aee9b3f536e7b1c66de2f52cff96025d6826fc3200900d53c382c2c",
   "tracked_changes": false
  },
  "stored_settings": {
