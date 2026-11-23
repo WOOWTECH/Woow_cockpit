@@ -371,7 +371,11 @@ variant invalid (`field: "id"`): installing it would move that entry and its bac
 * `health`: every `http://localhost|127.0.0.1|0.0.0.0[:port]/path` in a `HealthCmd=`, mapped to the host port of a
   `PublishPort=` bound to 127.0.0.1 or all addresses (of the container, its network-namespace owner or its pod; with
   `Network=host` the port itself); `expect_status` 200 and `timeout_seconds` 300 (180 for a single service without a
-  database) are proposals (`hints`). LAN-only ports, HTTPS and unpublished ports give hints instead of URLs. A query
+  database; 600 for the id `litellm`, `suggest.HEALTH_TIMEOUTS`) are proposals (`hints`). LiteLLM's 600 s (owner
+  decision 2026-11-23, the catalog maximum) follows its package's own 10-minute start budget (40 readiness probes 15 s
+  apart, `TimeoutStartSec=600`): real restores on a loaded test device took 251-345 s until `/health/readiness`
+  answered, so 300 s could declare a restore that worked failed. A longer limit only waits longer; no check is relaxed.
+  LAN-only ports, HTTPS and unpublished ports give hints instead of URLs. A query
   string (`?…`, possibly a token) is never copied: the URL keeps only its path and a hint says so (review L5).
 * `verify`: built-in digests (feature 1): one `postgres-digest` per PostgreSQL database (`{"postgres": "main"}` in export
   modes, `{"container","unit","user"}` in cold mode) and one `files-digest` per proposed volume and host directory, except
@@ -383,7 +387,10 @@ variant invalid (`field: "id"`): installing it would move that entry and its bac
 **Installed entries.** For an id that is installed for this owner, every variant keeps the installed entry's name,
 description, `template_dir`, volume and directory labels, `health` and `verify` items (built-in digests of targets the
 installed checks do not cover are appended), its list order (new items last; the start order only when no unit was
-added), and leaves out empty lists the installed entry leaves out. `installed.changes` is the structured diff
+added), and leaves out empty lists the installed entry leaves out. One exception: a `health` item of an id in
+`suggest.HEALTH_TIMEOUTS` (`litellm`) with a shorter `timeout_seconds` (or none, the catalog's 60 s) gets that limit in
+the draft, with an info note `health-timeout` naming the old limits; it takes effect when the draft is installed (the
+engine never edits an installed entry by itself). `installed.changes` is the structured diff
 installed → draft, `installed.drift` the zh-TW notes on structural differences (a volume, directory, secret, config file,
 unit, writer or Quadlet file on one side only), `installed.same` true when nothing differs.
 

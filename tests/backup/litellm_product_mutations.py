@@ -2,7 +2,9 @@
 """Mutation check of the LiteLLM product import (owner decision 2026-11-23 「決定1 做」: the lab-proven method as the
 product, with the trust rules of the Omnigent import): every protection the lab proved -- and each one the product
 adds -- is removed, one at a time, in a throwaway copy of the engine, and the LiteLLM unit tests must FAIL for each
-(and pass on the unmodified copy). Nothing here touches Podman, a device or a secret.
+(and pass on the unmodified copy). The readiness-limit mutations (owner decision 2026-11-23 23:28: LiteLLM's catalog
+health checks wait 600 s, every other app keeps its limit) run tests.backup.test_suggest instead. Nothing here touches
+Podman, a device or a secret.
 
   python3 -I tests/backup/litellm_product_mutations.py [--json OUT]
 
@@ -25,10 +27,12 @@ REPO = Path(__file__).resolve().parents[2]
 LL = 'woowbackup/ha_litellm.py'
 QP = 'woowbackup/adapters/quadlet_postgres.py'
 HI = 'woowbackup/haimport.py'
+SG = 'woowbackup/suggest.py'
 TESTS = ('tests.backup.test_ha_litellm', 'tests.backup.test_adapter_import_secrets',
          'tests.backup.test_ha_litellm_candidate')
+SUGGEST_TESTS = ('tests.backup.test_suggest',)
 
-# (id, protection, module, exact text, replacement, occurrences)
+# (id, protection, module, exact text, replacement, occurrences[, test modules (default TESTS)])
 MUTATIONS = (
     ('M01', "HA's rows are loaded by the role without privileges, never the superuser", LL,
      "tmp.exec(role, ['psql', '-X', '-q', '-v', 'ON_ERROR_STOP=1', '-1', '-U', RESTORE_ROLE, '-d', DATABASE,",
@@ -188,14 +192,37 @@ MUTATIONS = (
     ('M56', "the import notes name what moved, not what HA's cluster said (SR-8)", LL,
      "    settings = stored_settings(pg, trusted)\n    hooks = stored_hooks_blocker(settings)\n",
      "    moved = stored_settings(pg, trusted)\n    hooks = stored_hooks_blocker(moved)\n", 1),
+    # Readiness limit (owner decision 2026-11-23 23:28): LiteLLM 600 s, every other app unchanged.
+    ('M59', "LiteLLM's drafted health checks wait 600 s (no per-app limit)", SG,
+     "HEALTH_TIMEOUTS = {'litellm': 600}\n", "HEALTH_TIMEOUTS = {}\n", 1, SUGGEST_TESTS),
+    ('M60', "LiteLLM's limit is 600 s, not the generic 300 s", SG,
+     "HEALTH_TIMEOUTS = {'litellm': 600}\n", "HEALTH_TIMEOUTS = {'litellm': 300}\n", 1, SUGGEST_TESTS),
+    ('M61', 'a new draft uses the per-app limit', SG,
+     "        timeout = HEALTH_TIMEOUTS.get(app['id'])\n", '        timeout = None\n', 1, SUGGEST_TESTS),
+    ('M62', 'every other app keeps the generic 300 s / 180 s', SG,
+     '            timeout = 300 if len(containers) >= 3 or any(self._database(c) for c in containers) else 180\n',
+     '            timeout = 600\n', 1, SUGGEST_TESTS),
+    ('M63', "the draft of an installed LiteLLM entry raises a shorter limit", SG,
+     "            raised = raise_health_timeouts(app['id'], variant['entry']) or raised\n", '', 1, SUGGEST_TESTS),
+    ('M64', 'only the listed apps are raised', SG,
+     '    limit = HEALTH_TIMEOUTS.get(app_id)\n', '    limit = 600\n', 1, SUGGEST_TESTS),
+    ('M65', "a check without a limit (the catalog's 60 s) is raised too", SG,
+     "        current = item.get('timeout_seconds', 60)\n", "        current = item.get('timeout_seconds', 600)\n", 1,
+     SUGGEST_TESTS),
+    ('M66', 'a limit already at 600 s is left alone (no note)', SG,
+     '        if type(current) is int and current < limit:\n', '        if type(current) is int and current <= limit:\n',
+     1, SUGGEST_TESTS),
+    ('M67', 'the draft says what it raised (health-timeout note)', SG,
+     "        if raised:\n            limit = HEALTH_TIMEOUTS[app['id']]\n",
+     "        if False:\n            limit = HEALTH_TIMEOUTS[app['id']]\n", 1, SUGGEST_TESTS),
 )
 
 
-def run_tests(root):
-    """The LiteLLM tests in the throwaway copy `root` (tests/backup/__init__.py puts ITS backup-engine first)."""
+def run_tests(root, tests=TESTS):
+    """The unit tests `tests` in the throwaway copy `root` (tests/backup/__init__.py puts ITS backup-engine first)."""
     env = dict(os.environ, PYTHONPATH=os.pathsep.join([str(root / 'backup-engine'), str(root)]),
                PYTHONDONTWRITEBYTECODE='1')
-    proc = subprocess.run([sys.executable, '-m', 'unittest', *TESTS], cwd=root, env=env, capture_output=True,
+    proc = subprocess.run([sys.executable, '-m', 'unittest', *tests], cwd=root, env=env, capture_output=True,
                           timeout=1800)
     tail = proc.stderr.decode('utf-8', 'replace').strip().splitlines()
     ran = next((int(m.group(1)) for line in tail if (m := re.match(r'Ran (\d+) tests?', line))), 0)
@@ -210,7 +237,7 @@ def main(argv):
     parser.add_argument('--only', help='comma-separated mutation ids (a subset; the baseline always runs)')
     args = parser.parse_args(argv)
     only = set(args.only.split(',')) if args.only else None
-    sources = {name: (REPO / 'backup-engine' / name).read_text(encoding='utf-8') for name in (LL, QP, HI)}
+    sources = {name: (REPO / 'backup-engine' / name).read_text(encoding='utf-8') for name in (LL, QP, HI, SG)}
     results = []
     started = time.monotonic()
     with tempfile.TemporaryDirectory(prefix='litellm-mutation-') as directory:
@@ -224,10 +251,11 @@ def main(argv):
             else:
                 shutil.copy2(item, root / item.name)
         engine = root / 'backup-engine'
-        rc, ran, failures = run_tests(root)
+        rc, ran, failures = run_tests(root, TESTS + SUGGEST_TESTS)
         baseline = {'returncode': rc, 'tests': ran, 'failures': failures}
         print(f'baseline: {"pass" if rc == 0 else "FAIL"} ({failures}/{ran})', flush=True)
-        for ident, name, module, old, new, count in MUTATIONS:
+        for ident, name, module, old, new, count, *tests in MUTATIONS:
+            tests = tests[0] if tests else TESTS
             if only is not None and ident not in only:
                 continue
             source = sources[module]
@@ -236,15 +264,15 @@ def main(argv):
                 print(f'{ident} {name}: NOT APPLIED (pattern count {source.count(old)})', flush=True)
                 continue
             (engine / module).write_text(source.replace(old, new), encoding='utf-8')
-            rc, ran, failures = run_tests(root)
+            rc, ran, failures = run_tests(root, tests)
             (engine / module).write_text(source, encoding='utf-8')
             caught = rc != 0 and failures > 0
             results.append({'id': ident, 'protection': name, 'module': module, 'applied': True, 'caught': caught,
-                            'failures': failures, 'tests': ran})
+                            'failures': failures, 'tests': ran, 'test_modules': list(tests)})
             print(f'{ident} {name}: {"caught" if caught else "MISSED"} ({failures}/{ran})', flush=True)
     ok = baseline['returncode'] == 0 and all(r.get('applied') and r.get('caught') for r in results)
     summary = {'modules': {name: hashlib.sha256(text.encode('utf-8')).hexdigest() for name, text in sources.items()},
-               'tests': list(TESTS), 'baseline': baseline, 'mutations': results, 'all_caught': ok,
+               'tests': list(TESTS + SUGGEST_TESTS), 'baseline': baseline, 'mutations': results, 'all_caught': ok,
                'subset': sorted(only) if only is not None else None,
                'seconds': round(time.monotonic() - started, 1)}
     if args.json:

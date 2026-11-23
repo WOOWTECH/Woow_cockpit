@@ -599,6 +599,37 @@ class ReferenceHostTests(unittest.TestCase):
         self.assertEqual({h['timeout_seconds'] for h in self.apps['vk-mcp-admin']['entry']['health']}, {180})
         self.assertEqual({h['timeout_seconds'] for h in self.apps['odoo']['entry']['health']}, {300})
 
+    def test_health_time_limit_is_600_for_litellm_and_unchanged_for_every_other_app(self):
+        # Owner decision 2026-11-23 23:28: LiteLLM restores on a loaded device took 251-345 s until /health/readiness
+        # answered, so its proposal is 600 s (the catalog maximum); every other app keeps 300 s (a database or 3+
+        # services) or 180 s. The HA import restores the catalog entry with ha_litellm's id.
+        from woowbackup import ha_litellm
+        self.assertEqual(suggest.HEALTH_TIMEOUTS, {ha_litellm.APP_ID: 600})
+        litellm = self.apps['litellm']
+        self.assertEqual(litellm['entry']['health'],
+                         [{'type': 'http', 'url': 'http://127.0.0.1:4000/health/readiness', 'expect_status': 200,
+                           'timeout_seconds': 600}])
+        self.assertEqual([v['id'] for v in litellm['variants']], ['cold', 'instance', 'database'])
+        for item in litellm['variants']:
+            with self.subTest(variant=item['id']):
+                self.assertEqual([h['timeout_seconds'] for h in item['entry']['health']], [600])
+                self.assertTrue(item['valid'], item['problem'])  # 600 is inside the catalog's 1..600
+        self.assertIn('逾時 600 秒', ''.join(litellm['hints']))
+        self.assertNotIn('health-timeout', [n['code'] for n in litellm['notes']])  # nothing installed was raised
+        pinned = {'code-server': 180, 'emqx-mcp-admin': 180, 'headscale': 300, 'headscale-mcp-admin': 180,
+                  'hermes': 300, 'hermes-mcp-admin': 180, 'homeassistant': 300, 'k8s-mcp-admin': 180,
+                  'litellm-mcp-admin': 180, 'n8n': 300, 'n8n-mcp-admin': 180, 'nextcloud': 300,
+                  'nextcloud-mcp-admin': 180, 'odoo': 300, 'odoo-mcp-admin': 180, 'open-design': 300,
+                  'opendesign-mcp-admin': 180, 'vk-mcp-admin': 180}
+        others = {app_id: app for app_id, app in self.apps.items() if app_id != 'litellm' and app['entry']['health']}
+        self.assertEqual(sorted(others), sorted(pinned))
+        for app_id, app in others.items():
+            with self.subTest(app=app_id):
+                generic = 300 if len(app['containers']) >= 3 or app['databases'] else 180
+                self.assertEqual(pinned[app_id], generic)
+                self.assertEqual({h['timeout_seconds'] for h in app['entry']['health']}, {generic})
+                self.assertIn(f'逾時 {generic} 秒', ''.join(app['hints']))
+
     def test_config_file_modes(self):
         configs = {c['path']: c['mode'] for c in self.apps['n8n']['entry']['config_files']}
         self.assertEqual(configs, {'.config/n8n/n8n.env': '0600', '.config/n8n/start-valkey.sh': '0644',
@@ -686,6 +717,69 @@ class InstalledEntryTests(unittest.TestCase):
         self.assertIn(('verify[id=db-main]', 'add'), paths)
         self.assertNotIn(('units', 'order'), paths)  # the draft follows the installed order
         self.assertFalse(installed['same'])
+        self.assertNotIn('health-timeout', [n['code'] for n in app['notes']])  # n8n keeps its installed 300 s
+
+    def _installed_litellm(self, timeouts):
+        """The entry a device installed from an earlier LiteLLM draft, with these health time limits (None: left out,
+        the catalog's default 60 s)."""
+        draft, _ = run_suggest(self.tmp.name, self.home)
+        entry = copy.deepcopy(next(a for a in draft['apps'] if a['id'] == 'litellm')['entry'])
+        base = entry['health'][0]
+        entry['health'] = []
+        for index, timeout in enumerate(timeouts):
+            item = dict(base, url=base['url'] if index == 0 else f'http://127.0.0.1:4000/health/liveliness{index}')
+            item.pop('timeout_seconds')
+            if timeout is not None:
+                item['timeout_seconds'] = timeout
+            entry['health'].append(item)
+        return entry
+
+    def test_installed_litellm_draft_raises_a_shorter_health_limit_to_600(self):
+        # Owner decision 2026-11-23 23:28: a device that installed LiteLLM with the earlier 300 s proposal gets a draft
+        # with 600 s and a note; installing it from the page applies it (this engine never edits an installed entry).
+        installed_entry = self._installed_litellm([300, None])
+        result, _ = run_suggest(self.tmp.name, self.home, installed=[installed_entry])
+        app = next(a for a in result['apps'] if a['id'] == 'litellm')
+        self.assertEqual([h['timeout_seconds'] for h in app['entry']['health']], [600, 600])
+        for item in app['variants']:
+            with self.subTest(variant=item['id']):
+                self.assertEqual([h['timeout_seconds'] for h in item['entry']['health']], [600, 600])
+        self.assertEqual(app['variant'], 'cold')  # the installed (cold) mode
+        self.assertTrue(app['valid'], app['problem'])
+        notes = [n for n in app['notes'] if n['code'] == 'health-timeout']
+        self.assertEqual(len(notes), 1)
+        self.assertEqual(notes[0]['level'], 'info')
+        self.assertIn('（60、300 秒）', notes[0]['message'])
+        self.assertIn('提高為 600 秒', notes[0]['message'])
+        installed = app['installed']
+        self.assertEqual(installed['entry']['health'], installed_entry['health'])  # the installed entry as it is
+        self.assertFalse(installed['same'])
+        self.assertEqual(sorted((c['path'], c['op'], c.get('old'), c.get('new')) for c in installed['changes']),
+                         [('health[url=http://127.0.0.1:4000/health/liveliness1].timeout_seconds', 'add', None, 600),
+                          ('health[url=http://127.0.0.1:4000/health/readiness].timeout_seconds', 'change', 300, 600)])
+
+    def test_installed_litellm_with_600_stays_the_same(self):
+        installed_entry = self._installed_litellm([600])
+        result, _ = run_suggest(self.tmp.name, self.home, installed=[installed_entry])
+        app = next(a for a in result['apps'] if a['id'] == 'litellm')
+        self.assertEqual(app['entry']['health'], installed_entry['health'])
+        self.assertNotIn('health-timeout', [n['code'] for n in app['notes']])
+        self.assertTrue(app['installed']['same'], app['installed']['changes'])
+
+    def test_raise_health_timeouts_only_touches_shorter_limits_of_the_listed_apps(self):
+        def entry(*timeouts):
+            return {'health': [{'url': f'u{i}', **({} if t is None else {'timeout_seconds': t})}
+                               for i, t in enumerate(timeouts)] + ['not an object']}
+        for app_id in ('n8n', 'odoo', 'litellm-mcp-admin', 'LiteLLM', 'hermes'):
+            with self.subTest(app=app_id):
+                item = entry(300, None, 180)
+                self.assertEqual(suggest.raise_health_timeouts(app_id, item), [])
+                self.assertEqual(item, entry(300, None, 180))
+        item = entry(300, None, 600, True, '120', 599)
+        self.assertEqual(suggest.raise_health_timeouts('litellm', item), [300, 60, 599])
+        self.assertEqual([h.get('timeout_seconds') for h in item['health'][:-1]], [600, 600, 600, True, '120', 600])
+        self.assertEqual(suggest.raise_health_timeouts('litellm', {'health': None}), [])
+        self.assertEqual(suggest.raise_health_timeouts('litellm', {}), [])
 
     def test_keys_the_installed_entry_leaves_out_stay_out_when_empty(self):
         mcp = {'schema': 1, 'id': 'headscale-mcp-admin', 'name': 'Headscale MCP 管理', 'description': '', 'owner': OWNER,
