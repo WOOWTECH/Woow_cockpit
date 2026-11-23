@@ -410,6 +410,12 @@ class Run:
     # -------- setup
     def setup(self):
         ev = self.ev
+        # deploy-src.sh copies the checkout as it is NOW (the lock may have taken an hour): it must still be the commit
+        # this run recorded at its start, else the evidence would name another engine than the one deployed
+        clean, dirty = clean_tree()
+        if not ev.check('setup: the checkout is still the recorded source commit (nothing changed while waiting)',
+                        clean and head() == getattr(self.args, 'source_commit', None), {'dirty': dirty[:5]}):
+            raise Failed('the checkout changed while waiting for the lock')
         state = drv.out(drv.root('systemctl', 'is-enabled', TIMER, timeout=60)).strip()
         if state != 'masked':
             proc = drv.root('systemctl', 'mask', '--now', TIMER, timeout=120)
@@ -916,6 +922,7 @@ def main(argv):
         parser.error('--form active is the x86 lab-made fixture')
     clean, _dirty = clean_tree()
     commit = head()
+    args.source_commit = commit
     emit(f'source commit {commit}')
     if not clean:
         emit('source tree committed: FAIL')
