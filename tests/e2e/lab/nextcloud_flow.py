@@ -554,7 +554,7 @@ class Run:
 
     def check(self):
         ev = self.ev
-        self.budget('check')
+        self.budget('check', RUN_CHECK_NEED if self.args.run else NEED)
         job, took = drv.run_check(self.created_store, ['nextcloud'], ev=ev, key=self.args.secrets['HA_BACKUP_KEY'])
         ev.time('check', 'share' if self.args.run else 'noshare', 'nextcloud', took, job)
         result = (job.get('result') or {}).get('ha_check') or {}
