@@ -129,8 +129,18 @@ class ProgramTests(unittest.TestCase):
         real.self_check()
         self.assertEqual(real.parse_step('import:arm-cold:builtin'), ('import', 'arm-cold', 'builtin'))
         self.assertEqual(real.parse_step('cleanup-baseline'), ('cleanup-baseline', None, None))
-        for bad in ('import:arm-enc:file', 'import:x86-cold', 'import:x86-cold:mnesia', 'restore'):
+        self.assertEqual(real.parse_step('rollback:x86-cold'), ('rollback', 'x86-cold', 'builtin'))
+        for bad in ('import:arm-enc:file', 'import:x86-cold', 'import:x86-cold:mnesia', 'restore', 'rollback:arm-enc',
+                    'rollback'):
             self.assertEqual(real.parse_step(bad), (None, None, None))
+
+    def test_every_step_has_an_estimate_and_the_two_halves_fit_one_hold_each(self):
+        for name in ('setup', 'before', 'check', 'check-hot', 'import:arm-cold:file', 'import:arm-cold:builtin',
+                     'rollback:arm-cold', 'cleanup', 'cleanup-baseline', 'leaks'):
+            self.assertGreater(real.estimate(name), 0, name)
+        self.assertLessEqual(real.estimate('setup') + real.estimate('import:x86-cold:builtin'), real.HOLD_LIMIT)
+        self.assertLessEqual(real.estimate('setup') + real.estimate('rollback:x86-cold'), real.HOLD_LIMIT)
+        self.assertLessEqual(real.HOLD_LIMIT, 40 * 60)
 
     def test_the_probe_logs_in_exactly_three_times_and_never_retries_a_login(self):
         logins = re.findall(r'call\(E, "POST", "/api/v5/login"', real.PROBE)

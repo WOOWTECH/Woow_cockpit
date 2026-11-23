@@ -15,7 +15,8 @@ EMQX stopped: arm = the real RPi5, x86 = the real x86 HA).
 Every step runs inside ONE hold of the dev-d mutation lock (/tmp/woowbk-dev-d-mutation.lock, waited for like
 `flock -w 3600`; never taken while /tmp/woowbk-dev-d-emqx-main-waiting is fresh), with dev-d's outer isolation
 asserted before and after (owner.sh d --verify-isolation: running, network none, no published port) and a
-memory/disk headroom check before each step. No new step starts after HOLD_BUDGET seconds of holding the lock.
+memory/disk headroom check before each step. No new step starts after HOLD_BUDGET seconds of holding the lock, nor
+when the hold so far plus the step's estimate (ESTIMATE) would pass HOLD_LIMIT (40 min).
 
 Steps (run in the order given):
   setup        deploy THIS tree into dev-d (deploy-src.sh d --src <tree> --no-demo-catalog; the schedule timer is
@@ -36,10 +37,14 @@ Steps (run in the order given):
                its REST API first (after the file ACL: what the owner's text tells the customer to do in the
                Dashboard; the import itself never adds a source). Then: ha-check (ok), ha-convert (the real space check), inspect,
                restore (its readback must pass), the client probe after the restore, `systemctl --user restart
-               emqx.service` and the probe again, an AUTOMATIC rollback (a one-shot ExecStartPre failure of
-               emqx.service armed right before a second restore of the same converted backup: the restore must fail
-               and roll back by itself; the probe again), and the MANUAL rollback to the baseline (restore of B0:
-               the state digest equals `before`, the markers are back)
+               emqx.service` and the probe again; the imported state is recorded for:
+  rollback:TAG the rollback rounds in their own lock hold, from the recorded imported state (proven again first): an
+               AUTOMATIC rollback (a one-shot ExecStartPre failure of emqx.service armed right before a second
+               restore of the same converted backup: the restore must fail and roll back by itself; the probe
+               again), the READBACK rollback (a one-shot ExecStartPre appends one HOCON line to the restored
+               cluster.hocon: the restore's readback must name 設定（log） and roll back by itself; the probe again),
+               and the MANUAL rollback to the baseline (restore of B0: the state digest equals `before`, the
+               markers are back)
   cleanup      the test's converted and safety backups deleted (B0 stays until `cleanup-baseline`); no job
                container/volume/network, staging or key file; no drop-in or marker left
   cleanup-baseline
@@ -953,23 +958,34 @@ PROGRAMS['ENGINE_HASHES'] = ENGINE_HASHES
 
 # ---------------------------------------------------------------- steps
 
-def step_setup(ev, args):
-    proc = drv.root('systemctl', 'mask', TIMER, timeout=120)
-    ev.check('setup: the scheduled-backup timer is masked before the install (shared lab, no schedule wanted)',
-             proc.returncode == 0, drv.out(proc)[-200:])
-    proc = drv.run(['bash', str(HERE / 'deploy-src.sh'), 'd', '--src', str(REPO), '--no-demo-catalog'], timeout=1800)
-    ev.save('deploy.log', drv.out(proc)[-20000:] + proc.stderr.decode('utf-8', 'replace')[-5000:])
-    if not ev.check('setup: deploy-src.sh d --src <this tree> --no-demo-catalog', proc.returncode == 0,
-                    f'rc {proc.returncode}'):
-        raise Failed('deploy failed')
+def installed_engine():
+    """(same, modules, differ): dev-d's installed engine modules and helper against this tree (SHA-256)."""
     installed = drv.device_python(ENGINE_HASHES, {}, as_owner=False, timeout=300)
     base = REPO / 'backup-engine' / 'woowbackup'
     tree = {str(p.relative_to(base)): sha256_file(p) for p in base.rglob('*.py') if '__pycache__' not in p.parts}
     lib = installed.get('lib') or {}
     differ = sorted(k for k in set(tree) | set(lib) if tree.get(k) != lib.get(k))
-    ev.check('setup: the installed engine is this tree (every module and the helper SHA-256 equal)',
-             not differ and installed.get('helper') == sha256_file(REPO / 'backup-engine' / 'woowtech-cockpit-backup'),
-             {'modules': len(tree), 'differ': differ[:10]})
+    same = not differ and installed.get('helper') == sha256_file(REPO / 'backup-engine' / 'woowtech-cockpit-backup')
+    return same, len(tree), differ
+
+
+def step_setup(ev, args):
+    proc = drv.root('systemctl', 'mask', TIMER, timeout=120)
+    ev.check('setup: the scheduled-backup timer is masked before the install (shared lab, no schedule wanted)',
+             proc.returncode == 0, drv.out(proc)[-200:])
+    # Other lanes install their own trees into dev-d between the holds: every attempt starts with this tree.
+    if installed_engine()[0]:
+        ev.log('setup: dev-d already runs this tree\'s engine and helper; deploy skipped')
+    else:
+        proc = drv.run(['bash', str(HERE / 'deploy-src.sh'), 'd', '--src', str(REPO), '--no-demo-catalog'],
+                       timeout=1800)
+        ev.save('deploy.log', drv.out(proc)[-20000:] + proc.stderr.decode('utf-8', 'replace')[-5000:])
+        if not ev.check('setup: deploy-src.sh d --src <this tree> --no-demo-catalog', proc.returncode == 0,
+                        f'rc {proc.returncode}'):
+            raise Failed('deploy failed')
+    same, modules, differ = installed_engine()
+    ev.check('setup: the installed engine is this tree (every module and the helper SHA-256 equal)', same,
+             {'modules': modules, 'differ': differ[:10]})
     status = drv.ok('status', ev=ev)
     version = (REPO / 'VERSION').read_text().strip()
     ev.check('setup: the installed helper answers status with this tree\'s VERSION', status.get('version') == version,
@@ -1132,6 +1148,8 @@ def step_import(ev, args, tag, mode):
         bind_store(ev)
     if 'digest_before' not in drv.STATE or not drv.STATE.get('baseline_b0'):
         raise Failed('run setup and before first (the before digest or B0 is missing)')
+    if drv.STATE.get('imported'):
+        raise Failed('an imported state waits for its rollback step (rollback:TAG) first')
     label_text = f'import {tag}/emqx ({mode} target)'
     src = drv.source(machine_of(tag))['emqx']
     pre = run_probe(ev, args, f'{label_text} pre', 'base')
@@ -1141,8 +1159,8 @@ def step_import(ev, args, tag, mode):
         if not refuse_file(ev, args, tag, label_text):
             manual_baseline(ev, args, label_text, False)   # never expected: bring the baseline back
         return
-    changed = False     # dev-d's EMQX may differ from the baseline: the finally block restores B0
-    tested = False      # the whole chain ran: the B0 restore is the manual rollback under test
+    changed = False     # dev-d's EMQX may differ from the baseline: the finally block restores B0 ...
+    kept = False        # ... unless the imported state was recorded for the rollback step (step_rollback)
     try:
         if mode == 'builtin':
             changed = True
@@ -1201,8 +1219,38 @@ def step_import(ev, args, tag, mode):
         restart_emqx(ev, label_text)
         restarted = run_probe(ev, args, f'{label_text} after restart', mode, tag)
         check_imported(ev, f'{label_text} after restart', restarted, src, mode)
-        ev.check(f'{label_text} after restart: the same state as right after the restore',
-                 stable(restarted) == stable(imported), {'differs': diff_digest(stable(restarted), stable(imported))})
+        if not ev.check(f'{label_text} after restart: the same state as right after the restore',
+                        stable(restarted) == stable(imported),
+                        {'differs': diff_digest(stable(restarted), stable(imported))}):
+            return
+        # The rollback rounds run in their own lock hold (step rollback:TAG; one hold stays under 40 min): dev-d's
+        # EMQX keeps this imported state in between, recorded here and proven again before the rounds.
+        drv.STATE['imported'] = {'tag': tag, 'backup_id': converted, 'stable': stable(restarted)}
+        drv.save_state()
+        kept = True
+    finally:
+        if changed and not kept:
+            manual_baseline(ev, args, label_text, False)
+
+
+def step_rollback(ev, args, tag):
+    """The rollback rounds of `import:TAG:builtin`, from the imported state it recorded: AUTOMATIC rollback (a
+    one-shot start failure), the READBACK rollback (a one-shot HOCON change), then the MANUAL rollback to B0."""
+    mode = 'builtin'
+    label_text = f'import {tag}/emqx ({mode} target)'
+    imported = drv.STATE.get('imported') or {}
+    if imported.get('tag') != tag or not imported.get('backup_id'):
+        raise Failed(f'run import:{tag}:builtin first (no imported state recorded)')
+    converted = imported['backup_id']
+    src = drv.source(machine_of(tag))['emqx']
+    tested = False
+    try:
+        restarted = run_probe(ev, args, f'{label_text} before the rollback rounds', mode, tag)
+        check_imported(ev, f'{label_text} before the rollback rounds', restarted, src, mode)
+        if not ev.check(f'{label_text} before the rollback rounds: dev-d\'s EMQX still holds the imported state',
+                        stable(restarted) == imported['stable'],
+                        {'differs': diff_digest(stable(restarted), imported['stable'])}):
+            raise Failed('the imported state changed between the lock holds')
         # AUTOMATIC rollback: the same converted backup again, a one-shot start failure armed right before it.
         dir_existed = arm_fail_once()
         try:
@@ -1245,8 +1293,9 @@ def step_import(ev, args, tag, mode):
                  stable(tampered) == stable(rolled), {'differs': diff_digest(stable(tampered), stable(rolled))})
         tested = True
     finally:
-        if changed:
-            manual_baseline(ev, args, label_text, tested)
+        manual_baseline(ev, args, label_text, tested)
+        drv.STATE['imported'] = None
+        drv.save_state()
 
 
 def stable(probe):
@@ -1359,11 +1408,15 @@ def step_check_hot(ev, args):
         result = job['result']['ha_check']['apps'][0]
         ev.save(f'check-{tag}-emqx.json', result)
         warnings, blockers = result.get('warnings') or [], result.get('blockers') or []
-        named = ((result.get('ok') is True and any('執行中製作' in w for w in warnings)
-                  and (result.get('emqx') or {}).get('hot_backup') is True)
+        section = result.get('emqx') or {}
+        # dev-d's own target is [file]: HA's ACL rows add decision C's blocker, so `ok` alone says nothing here.
+        named = ((any('執行中製作' in w for w in warnings) and section.get('hot_backup') is True)
                  or (result.get('ok') is False and any('停止 EMQX 附加元件' in b for b in blockers)))
         ev.check(f'{label_text}: the hot backup is named (warning, or the stop-the-add-on advice as the blocker)',
                  named, {'ok': result.get('ok'), 'blockers': blockers, 'warnings': warnings})
+        if isinstance(section.get('acl_rules'), int) and section['acl_rules'] > 0 and section.get('target_authorization') == ['file']:
+            ev.check(f'{label_text}: HA\'s ACL rows on this file-only target also give the decision-C blocker',
+                     result.get('ok') is False and OWNER_ACL_TEXT in blockers, blockers)
 
 
 STEPS = {'setup': step_setup, 'before': step_before, 'check': step_check, 'check-hot': step_check_hot,
@@ -1377,7 +1430,21 @@ def parse_step(name):
     parts = name.split(':')
     if len(parts) == 3 and parts[0] == 'import' and parts[1] in TAGS and parts[2] in MODES:
         return 'import', parts[1], parts[2]
+    if len(parts) == 2 and parts[0] == 'rollback' and parts[1] in TAGS:
+        return 'rollback', parts[1], 'builtin'
     return None, None, None
+
+
+# Minutes a step is expected to hold dev-d (measured 2026-11-23 under host load ~50; refined after each attempt):
+# a step only starts when the hold so far plus its estimate stays within HOLD_LIMIT.
+HOLD_LIMIT = 40 * 60
+ESTIMATE = {'setup': 6, 'before': 6, 'check': 12, 'check-hot': 12, 'import:file': 15, 'import:builtin': 30,
+            'rollback': 24, 'cleanup': 4, 'cleanup-baseline': 2, 'leaks': 4}
+
+
+def estimate(name):
+    kind, _tag, mode = parse_step(name)
+    return 60 * ESTIMATE[f'import:{mode}' if kind == 'import' else kind]
 
 
 def self_check():
@@ -1395,7 +1462,7 @@ def main(argv):
         return 0
     steps = argv
     if not steps or any(parse_step(s)[0] is None for s in steps):
-        print('usage: emqx_product_real_ha.py <setup|before|check|check-hot|import:TAG:MODE|cleanup|cleanup-baseline|leaks> ...',
+        print('usage: emqx_product_real_ha.py <setup|before|check|check-hot|import:TAG:MODE|rollback:TAG|cleanup|cleanup-baseline|leaks> ...',
               file=sys.stderr)
         return 2
     if not clean_tree():
@@ -1420,8 +1487,9 @@ def main(argv):
     failed_steps = []
     try:
         verify_isolation()
-        for name in steps:
-            if time.monotonic() - held > HOLD_BUDGET:
+        for index, name in enumerate(steps):
+            spent = time.monotonic() - held
+            if spent > HOLD_BUDGET or (index and spent + estimate(name) > HOLD_LIMIT):
                 emit(f'STEP {name}: SKIP hold_budget=1')
                 failed_steps.append(name)
                 continue
@@ -1438,6 +1506,8 @@ def main(argv):
             try:
                 if kind == 'import':
                     step_import(ev, args, tag, mode)
+                elif kind == 'rollback':
+                    step_rollback(ev, args, tag)
                 else:
                     STEPS[kind](ev, args)
             except Failed as error:
