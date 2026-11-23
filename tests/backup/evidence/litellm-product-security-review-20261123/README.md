@@ -130,8 +130,10 @@ automatic and the manual rollback. That real proof is on `3bde418`; on the fixed
   (`ha_odoo.start_ha_cluster` / `ha_odoo.Cluster` without client options; unqualified catalog queries as the
   superuser on HA's catalog). Not changed here (other lanes' code); noted for them.
 - Importing HA's LiteLLM data trusts it like a LiteLLM admin: users and roles, virtual keys (budgets, expiry),
-  models with any `api_base`, guardrails and other stored `general_settings` (SR-5 names only env vars and
-  callbacks).
+  guardrails and other stored `general_settings` (SR-5 names only env vars and callbacks), and the models with
+  their `api_base`, stored provider credentials and ChatGPT subscription sign-ins: after the import this device's
+  apps send their requests to the providers and accounts HA's data names (the notes say the models and credentials
+  are replaced; the check counts the ChatGPT sign-ins). Only import a backup you made yourself.
 - The salt binding proves the salt file is the database's stored salt, not that every stored value decrypts (the
   real run proved it for the real backup).
 - No quota on the throwaway volumes: the job watchdog (free space every 2 s, floor = running reserve + 512 MiB,
