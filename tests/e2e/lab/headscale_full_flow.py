@@ -410,7 +410,8 @@ needles = secret_scan_needles(secrets.values())
 hits, scanned = 0, 0
 roots = ["/var/lib/woowtech-backup/jobs", "/var/lib/woowtech-backup/ha-backups", "/var/lib/woowtech-backup/ha-imports.json",
          "/var/lib/woowtech-backup/archives", "/run/woowtech-backup", "/var/lib/woowtech-backup/uploads",
-         "/var/lib/woowtech-backup/staging", "/var/lib/woowtech-backup/requests.json", os.path.join(private, "logs")]
+         "/var/lib/woowtech-backup/staging", "/var/lib/woowtech-backup/requests.json", "/var/lib/woowtech-backup/pending",
+         "/var/lib/woowtech-backup/exports", os.path.join(private, "logs")]
 for root in roots:
     if not os.path.exists(root) or os.path.islink(root):
         raise RuntimeError("required scan root missing or unsafe")
