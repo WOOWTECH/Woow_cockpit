@@ -120,6 +120,7 @@ HA_LANGUAGES = frozenset({'home-assistant', 'esphome'})
 PINNED_SETTINGS = ('security.workspace.trust.enabled', 'security.workspace.trust.startupPrompt',
                    'security.workspace.trust.banner', 'security.workspace.trust.emptyWindow', 'extensions.autoUpdate')
 ACP_AGENTS = 'acp.agents'
+STANDARD_AGENTS = frozenset({'pi', 'claude', 'codex'})   # both sides ship these three ACP agents
 
 SQLITE_HEAD = b'SQLite format 3\x00'
 SIDECARS = ('-wal', '-journal')
@@ -284,7 +285,7 @@ def merge_settings(ha_doc, live_doc):
                     extra.append(name)
         merged[ACP_AGENTS] = agents
     elif isinstance(ha_agents, dict):
-        extra = sorted(ha_agents)
+        extra = sorted(name for name in ha_agents if name not in STANDARD_AGENTS)
     return merged, dropped, extra
 
 

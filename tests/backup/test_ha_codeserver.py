@@ -574,6 +574,8 @@ class PureTests(unittest.TestCase):
         merged, added, same = cs.merge_mcp(HA_MCP, LIVE_MCP)
         self.assertEqual((sorted(added), same), (['docs', 'ha-core', 'secret-one'], ['shared-name']))
         self.assertEqual(merged['mcpServers']['target-own'], LIVE_MCP['mcpServers']['target-own'])
+        merged_settings, _dropped, extra = cs.merge_settings({'acp.agents': {'pi': {}, 'claude': {}, 'mine': {}}}, None)
+        self.assertEqual((extra, sorted(merged_settings['acp.agents'])), (['mine'], ['claude', 'mine', 'pi']))
         merged, added, _same = cs.merge_mcp(HA_MCP, None)
         self.assertEqual(merged, HA_MCP)
         self.assertEqual(cs.mcp_review(HA_MCP), (['secret-one'], ['supervisor']))
