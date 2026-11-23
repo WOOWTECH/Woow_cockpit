@@ -105,7 +105,8 @@ DROPIN = DROPDIR + '/woowbk-emqx-product-fail-once.conf'
 MARKER = '.config/emqx-woowbk-fail-once'
 # The readback under test: a one-shot ExecStartPre that changes the RESTORED data right before the broker starts (one
 # HOCON line appended to the restored configs/cluster.hocon), so the restored broker no longer equals what the
-# conversion verified; the restore must name it and roll back by itself.
+# conversion verified; the restore must name it and roll back by itself. Not log.console.level: dev-d's EnvironmentFile
+# sets EMQX_LOG__CONSOLE__LEVEL and environment overrides win over cluster.hocon (emqx_config.erl:365-366, 455-461).
 TAMPER_DROPIN = DROPDIR + '/woowbk-emqx-product-tamper-once.conf'
 TAMPER_SCRIPT = '.config/emqx-woowbk-tamper.sh'
 TAMPER_MARKER = '.config/emqx-woowbk-tamper-once'
@@ -114,7 +115,7 @@ TAMPER = (b'#!/bin/sh\n'
           b'[ -f "$m" ] || exit 0\n'
           b'rm -f "$m"\n'
           b'd=$(podman volume inspect woow_emqx_data --format "{{.Mountpoint}}") || exit 0\n'
-          b'podman unshare sh -c "printf \'\\nlog.console.level = notice\\n\' >> \'$d/configs/cluster.hocon\'"\n'
+          b'podman unshare sh -c "printf \'\\nlog.console.formatter = json\\n\' >> \'$d/configs/cluster.hocon\'"\n'
           b'exit 0\n')
 READBACK_LOG = 'EMQX 還原後核對一致'
 # OWNER DECISION 2026-11-23 「C」, the owner's text verbatim (independent of the product constant on purpose).

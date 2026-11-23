@@ -156,7 +156,7 @@ class ProgramTests(unittest.TestCase):
             script = Path(root) / 'tamper.sh'
             script.write_bytes(real.TAMPER)
             self.assertEqual(subprocess.run(['sh', '-n', str(script)]).returncode, 0)
-        self.assertIn(b'log.console.level = notice', real.TAMPER)
+        self.assertIn(b'log.console.formatter = json', real.TAMPER)
         self.assertTrue(real.TAMPER_DROPIN.startswith(real.DROPDIR + '/') and real.DROPIN.startswith(real.DROPDIR + '/'))
         self.assertNotEqual(real.TAMPER_MARKER, real.MARKER)
 
