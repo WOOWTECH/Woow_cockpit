@@ -1,7 +1,7 @@
 {
  "lane": "hermes-real",
  "date": "2026-11-23",
- "updated": "2026-11-23T13:10+08:00",
+ "updated": "2026-11-23T13:30+08:00",
  "authorization": "owner explicitly authorized real Hermes testing on 2026-11-23 (relayed request)",
  "security_review": "independent FTS/SQLite security review: owner keeps it a manual (human) item; this lane did not do or redo it; the engine under test includes 8b47124 (hasqlite fails closed without a network namespace)",
  "target": "lab woowbk-dev-d (network none, no published ports; isolation asserted before and after every run), production-like Hermes v0.22.5 Quadlet units, image woow-hermes-agent:v0.22.5-woow4",
@@ -26,8 +26,11 @@
   },
   "import_x86_unc": {
    "status": "partial",
-   "attempt": 9,
-   "detail": "convert 18 s, inspect ok, restore 200 s, continuity + FTS5 search + integrity after restore PASS, rollback PASS (baseline digest equal); the b1 driver's Hermes probe exited rc 1 with output suppressed, so its checks, the restart and the after-restart recheck did not run for this form; rerun with safe diagnostics pending"
+   "attempts": [
+    9,
+    10
+   ],
+   "detail": "twice: convert (18 s / 12 s), inspect ok, restore (200 s / 153 s, health ok), continuity + FTS5 search + integrity after restore PASS, rollback PASS (baseline digest equal); then the b1 driver's Hermes probe died with TimeoutError at its program line 101 (get(): a dashboard GET over its 30 s timeout), so its checks, the restart and the after-restart recheck did not run for this form. x86-enc and x86-plain passed the same probe."
   },
   "kit_baseline": {
    "status": "pass",
@@ -37,12 +40,20 @@
   "cleanup": {
    "status": "pass",
    "attempt": 9,
-   "detail": "7 test backups deleted, no job container/volume/network, staging empty, no key file"
+   "detail": "7 test backups deleted, no job container/volume/network, staging empty, no key file",
+   "attempts": [
+    9,
+    10
+   ]
   },
   "leaks": {
    "status": "pass",
    "attempt": 9,
-   "detail": "0 hits: 229 engine files + device journal since the run started (12 lane secret values incl. dev-d's Hermes podman secrets) and 19 private evidence files"
+   "detail": "0 hits: 229 engine files + device journal since the run started (12 lane secret values incl. dev-d's Hermes podman secrets) and 19 private evidence files",
+   "attempts": [
+    9,
+    10
+   ]
   }
  },
  "not_covered": [
@@ -56,5 +67,6 @@
   "dev-d: python3-nacl, python3-cryptography, libsodium23, python3-cffi-backend installed with dpkg from host-downloaded noble debs (lost in the 11-20 re-creation)",
   "the engine's own safety-backup pruning (SAFETY_KEEP=3) may have removed older Hermes safety backups of 11-19"
  ],
- "commercial_acceptance": "not-complete"
+ "commercial_acceptance": "not-complete",
+ "next": "measure each dashboard endpoint the driver probe calls (/api/config, /api/sessions, /api/cron/jobs, /api/skills, /api/webhooks, /api/plugins/kanban/board, /api/env) with a long timeout right after the x86-unc restore, find which exceeds 30 s and why (data or load); keep the driver's 30 s probe unchanged unless the cause is proven; then rerun import:x86-unc for the restart recheck"
 }
