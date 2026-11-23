@@ -95,15 +95,11 @@ ALEMBIC_RE = re.compile(r'[0-9a-z_]{1,64}\Z')
 SERVER_VERSION_RE = re.compile(r'[0-9]{1,4}\.[0-9]{1,4}\.[0-9]{1,4}\Z')
 MAX_KEYS = 1_000_000
 DUMP_TIMEOUT = ha_odoo.DUMP_TIMEOUT
-# HA's pg_dump runs as an OS user that is not the HA server's (postgres: uid 70 in the Alpine image, 999 in the Debian
-# one) and owns nothing writable in the container (read-only root): code HA's catalog runs inside its server (security
-# review 2026-11-23 SR-2) can then neither open pg_dump's stdout through /proc/<pid>/fd (a same-uid check that Yama does
-# not restrict) nor signal it, so it cannot write the archive the conversion restores. pg_dump connects over the socket
-# directory (others may search it) as the database user postgres (trust). The uid is below 70 because a rootless
-# container maps its uids 1..N without gaps: whatever runs the image's postgres user also maps it, while 65534 (the
-# review's first choice) is NOT mapped for an owner with fewer subordinate ids (dev-d: 55000; `podman exec --user
-# 65534:65534` exited 255 in the real product flow on 2026-11-23).
-DUMP_USER = '1:1'
+# HA's pg_dump runs as an OS user that is not the HA server's (postgres, uid 70) and owns nothing in the container: code
+# HA's catalog runs inside its server (security review 2026-11-23 SR-2) can then neither open pg_dump's stdout through
+# /proc/<pid>/fd (a same-uid check that Yama does not restrict) nor signal it, so it cannot write the archive the
+# conversion restores. pg_dump connects over the socket directory (mode 3777) as the database user postgres (trust).
+DUMP_USER = '65534:65534'
 SCHEMA_CHANGED = ('這台 Omnigent 的資料庫結構在轉換期間改變了（可能正在升級或重新啟動），沒有匯入任何資料；'
                   '請等它正常執行後再轉換一次。')
 
