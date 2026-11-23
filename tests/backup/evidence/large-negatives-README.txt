@@ -46,11 +46,27 @@ the ephemeral identity itself, scratch and key removed by the harness, 0 tool ch
 Space: free before 21,362,221,056; minimum sampled 17,210,093,568 (12GiB reserve + 256MiB guard enforced every
 250 ms and in every progress callback); free after cleanup 21,542,596,608. Max RSS 34,792 KiB.
 
+Attempt with the REAL job-cancel CLI command (source 2bfe810, exit 0, 523 s,
+large-negatives-cli-cancel-8193mib.{stdout,attempt}.json, --cases cancel-extract,cancel-write; the fixture write
+always runs; the other cases are unchanged code and stand on the run above). Real smoke 128 MiB with all cases:
+large-negatives-cli-cancel-smoke-128mib.* (exit 0). The cancel now comes from a SEPARATE PROCESS running
+woowbackup.cli job-cancel with {"job_id": ...} on stdin, exactly as the Cockpit page sends it (backup.js call():
+cockpit.spawn([HELPER, 'job-cancel']) + JSON input); test hooks only: Paths(base=scratch) and require_root=False.
+The harness settles the job the way jobs.run_job does (finish 'cancelled', clear the request file).
+  cancel-extract  command exit 0 {"ok": true, "state": "cancelled"}; flows.Cancelled at 4,301,911,040 bytes
+                  (threshold 4 GiB); partial output 4,301,955,072 bytes really allocated, root EMPTY before harness
+                  cleanup, sampled free space +4,302,077,952 after the engine's cleanup; job record cancelled,
+                  not cancellable, request cleared; children 2 seen / 0 after, fds delta 0
+  cancel-write    command exit 0 {"ok": true, "state": "cancelled"}; flows.Cancelled at 4,294,967,296 bytes;
+                  staged .tar.tmp and .recipient- seen while writing, staging EMPTY after, destination never
+                  created; job record cancelled; children 2 seen / 0 after, fds delta 0
+  Space: free before 21,258,174,464; minimum sampled 16,786,321,408; after cleanup 21,323,923,456.
+
 What this does NOT prove:
 - The ciphertext is compressible (34.5 MB); the incompressible >8GiB OUTER archive is a separate item (below).
-- Cancellation goes through the real job store and FlowContext checkpoint, but not through a run-job process,
-  systemd unit, HTTP/Cockpit UI endpoint or a full restore/backup flow (no apps, no Podman); the cancelling
-  "administrator" is a thread of the same process.
+- Cancellation uses the real job store, the real job-cancel CLI command (separate process) and the real
+  FlowContext checkpoint, but not the Cockpit bridge/UI itself, root privileges, a run-job process or systemd unit,
+  or a full restore/backup flow (no apps, no Podman); the job's progress side runs inside the probe process.
 - truncate-last-byte-extract output allocation was bounded by harness hole punching; the cancel-extract case is the
   one whose partial output was really allocated.
 - x86_64 only; no ARM run, no service restore, no Hermes. commercial_acceptance stays not-complete.
