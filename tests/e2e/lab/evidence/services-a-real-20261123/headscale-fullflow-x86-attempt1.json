@@ -1,0 +1,27 @@
+{
+ "source_commit": "1b174e46e194d484740aecca7352121839ecf081",
+ "scope": "real b1 x86 plain HA backup -> Cockpit helper flow on dev-d: upload into the HA store, ha-check, ha-convert (real space guard), inspect, restore into the installed Headscale package units, clients, restart, automatic rollback, safety-backup rollback, cleanup, leak scan (services-a-2)",
+ "exit": 1,
+ "elapsed_seconds": 25.8,
+ "stdout_sha256": "4e633ac21ac1ec9170dee6a58429d5e56bc0aefd2cf1f14f899e7f1baa359aec",
+ "fixed_status": [
+  "source commit 1b174e46e194d484740aecca7352121839ecf081",
+  "source tree committed: PASS",
+  "dev-d mutation lock acquired: PASS (waited 0 s)",
+  "dev-d isolation: true none {}",
+  "dev-d memory current=1866129408 limit=4294967296; headroom >= 1.25 GiB; host MemAvailable 2957752 KiB",
+  "setup: the scheduled-backup timer is masked (shared lab, no schedule): PASS",
+  "setup: deploy-src.sh d --src <this tree> --no-demo-catalog: PASS",
+  "setup: the installed engine is this tree (every module and the helper SHA-256 equal): PASS",
+  "setup: the installed helper answers status with this tree's VERSION: PASS",
+  "phase stopped: Failed: FAIL",
+  "cleanup: no throwaway container, volume or network of a job left: PASS",
+  "cleanup: no staging folder and no key file left: PASS",
+  "cleanup: the test's converted and safety backups are deleted, dev-d's baseline stays: PASS",
+  "headscale full flow x86: 7/8 FAIL",
+  "dev-d isolation: true none {}",
+  "lock held for 24 s"
+ ],
+ "stderr_bytes_not_published": 0,
+ "commercial_acceptance": "not-complete"
+}

@@ -77,7 +77,8 @@ class LockTest(unittest.TestCase):
         import fcntl
         with tempfile.TemporaryDirectory() as directory:
             path = os.path.join(directory, 'lock')
-            with mock.patch.object(real, 'LOCK', path):
+            with mock.patch.object(real, 'LOCK', path), \
+                    mock.patch.object(real, 'WAITING', os.path.join(directory, 'waiting')):
                 with real.dev_d_lock(timeout=5):
                     pass
                 fd = os.open(path, os.O_RDWR)
@@ -89,6 +90,68 @@ class LockTest(unittest.TestCase):
                                 pass
                 finally:
                     os.close(fd)
+
+
+class GuardsTest(unittest.TestCase):
+    """services-a-2: the run names a clean commit and records dev-d's outer isolation before and after."""
+
+    def test_dirty_tree_refuses_before_the_lock(self):
+        events = []
+        with mock.patch.object(real.guard, 'clean_tree', return_value=(False, ['backup-engine/x.py'])), \
+                mock.patch.object(real.guard, 'head', return_value='a' * 40), \
+                mock.patch.object(real, 'event', lambda stage, **v: events.append((stage, v))), \
+                mock.patch('builtins.print'):
+            with self.assertRaisesRegex(RuntimeError, 'engine_or_harness_changes_not_committed'):
+                real.committed_source()
+        self.assertEqual(events, [('source', {'clean_tree': False, 'changed_paths': 1})])
+
+    def test_isolation_event_and_failure(self):
+        events = []
+        with mock.patch.object(real.guard, 'verify_isolation', return_value='dev-d isolation: true none {}'), \
+                mock.patch.object(real, 'event', lambda stage, **v: events.append((stage, v))), \
+                mock.patch('builtins.print') as printed:
+            real.isolation('before')
+        printed.assert_called_once_with('dev-d isolation: true none {}', flush=True)
+        self.assertEqual(events, [('isolation', {'when': 'before', 'verified': True, 'running': True,
+                                                 'network': 'none', 'published_ports': 0})])
+        events.clear()
+        with mock.patch.object(real.guard, 'verify_isolation', side_effect=real.guard.GuardError('x')), \
+                mock.patch.object(real, 'event', lambda stage, **v: events.append((stage, v))):
+            with self.assertRaisesRegex(RuntimeError, 'dev_d_isolation_failed'):
+                real.isolation('after')
+        self.assertEqual(events, [('isolation', {'when': 'after', 'verified': False})])
+
+    def test_main_order_isolation_around_the_run(self):
+        calls = []
+        args = SimpleNamespace(run=True, arch='x86', outer_isolation_confirmed=True)
+
+        @real.contextlib.contextmanager
+        def lock():
+            calls.append('lock')
+            try:
+                yield 0
+            finally:
+                calls.append('unlock')
+
+        with mock.patch.object(real.argparse.ArgumentParser, 'parse_args', return_value=args), \
+                mock.patch.object(real.util, 'find_tool', return_value='/usr/bin/x'), \
+                mock.patch.object(real, 'committed_source', lambda: calls.append('source')), \
+                mock.patch.object(real, 'dev_d_lock', lock), \
+                mock.patch.object(real, 'isolation', lambda when: calls.append('isolation-' + when)), \
+                mock.patch.object(real.chain, 'isolated_preflight', lambda: calls.append('preflight')), \
+                mock.patch.object(real.chain, 'Runner', lambda: None), \
+                mock.patch.object(real, 'inventory', lambda runner: ()), \
+                mock.patch.object(real, 'run', side_effect=RuntimeError('boom')), \
+                mock.patch.object(real, 'event', lambda *a, **k: None):
+            with self.assertRaisesRegex(RuntimeError, 'boom'):
+                real.main()
+        self.assertEqual(calls, ['source', 'lock', 'isolation-before', 'preflight', 'isolation-after', 'unlock'])
+
+    def test_capture_keeps_the_new_lines(self):
+        self.assertEqual(capture.status_lines('dev-d isolation: true none {}\nsource commit ' + 'a' * 40 + '\n'
+                                              '{"stage": "isolation", "when": "after", "verified": true}\n'),
+                         ['dev-d isolation: true none {}', 'source commit ' + 'a' * 40,
+                          '{"stage": "isolation", "when": "after", "verified": true}'])
 
 
 class SummaryTest(unittest.TestCase):

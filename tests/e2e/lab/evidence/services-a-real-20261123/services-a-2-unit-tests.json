@@ -1,0 +1,34 @@
+{
+ "schema_version": 1,
+ "kind": "unit-tests",
+ "lane": "services-a-2",
+ "date": "2026-11-23",
+ "tested_commit": "47ba45b (lab suite) / 5c9fd64 (test_headscale_full_flow)",
+ "tree": "test/services-a2-20261123 = integration/ha-import-batch1-20261123 82ac971 + this lane's harness commits (no backup-engine file changed)",
+ "suites": {
+  "tests/e2e/lab (every test_*.py module)": {
+   "ran": 296,
+   "ok": 296,
+   "note": "263 at 82ac971 + test_dev_d_guard 9 + test_omnigent_real_ha 4 new + test_headscale_full_flow 20 (21 at 5c9fd64)"
+  },
+  "tests.e2e.lab.test_headscale_full_flow @5c9fd64": {
+   "ran": 21,
+   "ok": 21
+  },
+  "tests.backup.test_ha_headscale": {
+   "ran": 12,
+   "ok": 12
+  },
+  "tests.backup.test_ha_backup": {
+   "ran": 31,
+   "ok": 30,
+   "skipped": 1,
+   "note": "RealBackupTests needs the 20261118 real backups (skipped, as at the base)"
+  }
+ },
+ "not_changed": [
+  "backup-engine/** (no product file changed by this lane)",
+  "every public import guard (PRESERVATION_BLOCKER, SECURITY_BLOCKER)"
+ ],
+ "commercial_acceptance": "not-complete"
+}
