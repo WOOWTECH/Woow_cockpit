@@ -6,10 +6,11 @@
   python3 -I tests/e2e/lab/hermes_real_ha.py --self-check        (offline; never touches a device or a secret)
 
 The owner authorized real Hermes testing on 2026-11-23. Every step runs inside ONE hold of the dev-d mutation lock
-(/tmp/woowbk-dev-d-mutation.lock; never while /tmp/woowbk-dev-d-emqx-main-waiting exists, emqx-main has priority),
-with dev-d's outer isolation asserted before and after (owner.sh d --verify-isolation: running, network none, no
-published port) and a memory/disk headroom check before each step. A new step is not started after HOLD_BUDGET
-seconds or while emqx-main waits, so the lock is never held much longer than 40 minutes.
+(/tmp/woowbk-dev-d-mutation.lock; a run never starts while /tmp/woowbk-dev-d-emqx-main-waiting exists: emqx-main has
+priority, "do not start a new dev-d run after your current one"), with dev-d's outer isolation asserted before and
+after (owner.sh d --verify-isolation: running, network none, no published port) and a memory/disk headroom check
+before each step. A new step is not started after HOLD_BUDGET seconds, so the lock is never held much longer than
+40 minutes; keep each run to the steps that fit (one import with its rollback is about 12 minutes).
 
 What is real: dev-d's production-like Hermes v0.22.5 (Quadlet units hermes-agent/-postgres/-redis, image
 woow-hermes-agent:v0.22.5-woow4) and the real batch-1 x86 Home Assistant backups of add-on 9c1a67eb_woow-hermes
@@ -833,10 +834,6 @@ def main(argv):
         for name in steps:
             if time.monotonic() - held > HOLD_BUDGET:
                 emit(f'STEP {name}: SKIP hold_budget=1')
-                failed_steps.append(name)
-                continue
-            if WAITING.exists():
-                emit(f'STEP {name}: SKIP emqx_main_waiting=1')
                 failed_steps.append(name)
                 continue
             try:
