@@ -962,6 +962,43 @@ def file_secret_roots(config):
     return sorted(found)
 
 
+JQ_RULE = ('EMQX 不能搬過來：HA 的 EMQX 規則（{count} 條）使用 jq 函式；EMQX 的 jq 能讀取這台 EMQX 的環境變數（其中有 Dashboard '
+           '密碼與節點 cookie 等機密），搬過來的規則可以把它們發布或送出去，為保護這台的機密已停止。'
+           '請先在 HA 移除或改寫這些規則，再重新備份後匯入。')
+JQ_CALL = re.compile(r'(?<![A-Za-z0-9_])jq(?![A-Za-z0-9_])', re.IGNORECASE)
+
+
+def jq_rule_count(config):
+    """How many migrated rules name EMQX's jq function. jq runs with the broker's process environment
+    (emqx_rule_funcs.erl:957-980 -> jq:process_json; jq('env'), jq('$ENV'), jq('env.NAME') return it, proven in a
+    throwaway 5.8.9 broker), i.e. this device's env secrets, and its program may even come from a message at run
+    time, so any use counts (security review SR-6, 2026-11-23). Every string under rule_engine is scanned."""
+    rules = config.get('rule_engine')
+    if not isinstance(rules, dict):
+        return 0
+    found = set()
+
+    def visit(path, value, depth=0):
+        if depth > 64:
+            found.add(path[:1])
+            return
+        if isinstance(value, str) or (isinstance(value, list) and value and len(value) <= 65536
+                                      and all(type(v) is int and 0 < v < 0x110000 for v in value)):
+            text = value if isinstance(value, str) else ''.join(map(chr, value))
+            if JQ_CALL.search(text):
+                found.add(path[:2])
+            return
+        if isinstance(value, dict):
+            for key, item in value.items():
+                visit(path + (str(key)[:200],), item, depth + 1)
+        elif isinstance(value, list):
+            for item in value:
+                visit(path, item, depth + 1)
+
+    visit((), rules)
+    return len(found)
+
+
 SNAPSHOT_CHANGED = ('EMQX 不能搬過來：這台 EMQX 的 ACL 或憑證檔案放在資料卷裡（例如在 Dashboard 編輯過授權規則），'
                     '匯入 HA 的資料會改寫這個檔案；為避免改變這台的存取權限，已停止。')
 
@@ -1058,6 +1095,9 @@ def target_broker(work, tmp, target, export, ids, *, hint='', target_snapshot=No
         roots = file_secret_roots(final)
         if roots:
             raise BackupError('incompatible', FILE_SECRET.format(roots=hacommon.names(roots)))
+        count = jq_rule_count(final)
+        if count:
+            raise BackupError('incompatible', JQ_RULE.format(count=count))
         check_candidate_bootstrap(tmp, target, final)
     else:
         # Legacy internal test path only; public convert remains blocked.

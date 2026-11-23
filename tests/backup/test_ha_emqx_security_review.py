@@ -205,5 +205,44 @@ class FileSecretUnitTests(unittest.TestCase):
         self.assertEqual(roots({'connectors': {'http': {'a': {'url': 'http://h/file://x', 'password': 'p'}}}}), [])
 
 
+class JqRuleWorld(base.World):
+    """HA's import brings a rule with `sql` (SR-6)."""
+    sql = 'SELECT jq(\'env.EMQX_DASHBOARD__DEFAULT_PASSWORD\', \'{}\') as leak FROM "t/#"'
+
+    def exec(self, role, command, data, stdout):
+        result = super().exec(role, command, data, stdout)
+        if command[:4] == ['emqx', 'ctl', 'data', 'import']:
+            self.current_config['rule_engine'] = {'rules': {'ha_rule': {'sql': self.sql, 'actions': []}}}
+        return result
+
+
+class JqRuleTests(base.EmqxCase):
+    """SR-6: EMQX's jq reads the broker's environment, i.e. this device's env secrets."""
+    world_class = JqRuleWorld
+
+    def test_a_migrated_jq_rule_refuses(self):
+        with self.assertRaises(BackupError) as caught:
+            self.internal_candidate(self.upload_emqx())
+        self.assertEqual(caught.exception.message, ha_emqx.JQ_RULE.format(count=1))
+
+    def test_a_rule_without_jq_passes(self):
+        self.world.sql = 'SELECT payload.temp as t FROM "jquery/sensor"'
+        result = self.internal_candidate(self.upload_emqx())
+        self.assertIn('woow_emqx_data', result['volumes'])
+
+
+class JqRuleUnitTests(unittest.TestCase):
+    def test_every_spelling_counts_once_per_rule(self):
+        count = ha_emqx.jq_rule_count
+        rules = lambda *sqls: {'rule_engine': {'rules': {f'r{i}': {'sql': q} for i, q in enumerate(sqls)}}}
+        self.assertEqual(count(rules('SELECT JQ (payload.p, payload) FROM "a"')), 1)
+        self.assertEqual(count(rules('SELECT jq(\'.a\', payload), jq(\'env\', \'{}\') FROM "a"')), 1)
+        self.assertEqual(count(rules('SELECT jq/**/(\'$ENV\', payload) FROM "a"', 'SELECT 1 FROM "b"')), 1)
+        self.assertEqual(count({'rule_engine': {'rules': {'r': {'sql': list(b'select jq(1,2) from "a"')}}}}), 1)
+        self.assertEqual(count(rules('SELECT payload FROM "jquery/x"', 'SELECT jq_x FROM "y"')), 0)
+        self.assertEqual(count({'rule_engine': {'rules': {}}}), 0)
+        self.assertEqual(count({}), 0)
+
+
 if __name__ == '__main__':
     unittest.main()
