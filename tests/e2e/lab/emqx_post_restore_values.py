@@ -24,12 +24,11 @@ from emqx_owner_target import (EXPRESSION, MAX_WIRE, _read_reply, _decode,
 from emqx_persisted_values import PersistedValues, native_name
 from emqx_private_boundary import PrivateFailure, MAX_VALUES
 from emqx_runtime_workflow import CombinedRegistry
-from emqx_semantic_readers import Values, _pairs
+from emqx_semantic_readers import (Values, _pairs, MAX_NODES, MAX_OUTPUT,
+    MAX_VALUES as MAX_SEMANTIC_VALUES)
 
 MAX_CAPTURES = 4
 # Fixed collector stages only; the private failure text never escapes.
-CAPTURE_STAGES = ('input', 'limit', 'quiesce_enter', 'identity_before', 'exec', 'decode',
-                  'identity_after', 'prior_scan', 'quiesce_exit', 'record', 'record_native')
 
 
 class PostCaptureRefused(PrivateFailure):
@@ -52,41 +51,84 @@ class PostRestoreValues:
         self._persisted.scan(payload)
 
 
+# Fixed decode sub-steps; *_nodes/_values/_bytes name which shared Values budget
+# (MAX_NODES/MAX_VALUES/MAX_OUTPUT) was exhausted, *_other any other refusal.
+DECODE_STEPS = ('reply', 'inventory', 'table_shape', 'rows_rowcount', 'table_set',
+                *(step + '_' + budget for step in ('config', 'secrets', 'providers', 'schema', 'rows')
+                  for budget in ('nodes', 'values', 'bytes', 'other')))
+
+
+CAPTURE_STAGES = ('input', 'limit', 'quiesce_enter', 'identity_before', 'exec', 'decode',
+                  *('decode_' + step for step in DECODE_STEPS),
+                  'identity_after', 'prior_scan', 'quiesce_exit', 'record', 'record_native')
+
+
+class NativeDecodeRefused(ValueError):
+    def __init__(self, step):
+        self.step = step if step in DECODE_STEPS else 'reply'
+        super().__init__('native-decode-refused')
+
+
+def _budget(values):
+    if values._nodes > MAX_NODES:
+        return 'nodes'
+    if len(values._values) >= MAX_SEMANTIC_VALUES:
+        return 'values'
+    if values._total > MAX_OUTPUT:
+        return 'bytes'
+    return 'other'
+
+
 def _native_values(wire, generation):
-    raw, doc = _read_reply(wire, generation)
     values = Values()
-    config = _decode(doc['config'], values)
-    if doc['contract'] == 'emqx-owner-live-target-v2':
-        _config_secret_metadata(config, _decode(doc['config_secret_wrappers'], values))
-    _decode(doc['providers'], values)
-    schema = _decode(doc['schema_metadata'], values)
-    names = doc['table_names']
-    _validate_inventory(names, schema, doc['tables'])
-    tables, total = set(), 0
-    for table in doc['tables']:
-        if (type(table) is not dict or set(table) != {'table','record_name','attributes','row_count','rows'}
-                or not _live_table_name(table['table']) or table['table'] in tables
-                or not (table['record_name'] == _LIVE_SYNC_TABLE if table['table'] == _LIVE_SYNC_TABLE
-                        else native_name(table['record_name']))
-                or type(table['attributes']) is not list or not table['attributes']
-                or not all(native_name(x) for x in table['attributes'])
-                or len(set(table['attributes'])) != len(table['attributes'])
-                or type(table['rows']) is not list or type(table['row_count']) is not int
-                or table['row_count'] != len(table['rows'])):
-            raise ValueError()
-        total += len(table['rows'])
-        if total > MAX_VALUES:
-            raise ValueError()
-        for row in table['rows']:
-            if (type(row) is not dict or row.get('type') != 'tuple'
-                    or type(row.get('value')) is not list
-                    or len(row['value']) != len(table['attributes']) + 1
-                    or row['value'][0] != {'type':'atom','value':table['record_name']}):
+    step = 'reply'
+    try:
+        raw, doc = _read_reply(wire, generation)
+        step = 'config'
+        config = _decode(doc['config'], values)
+        step = 'secrets'
+        if doc['contract'] == 'emqx-owner-live-target-v2':
+            _config_secret_metadata(config, _decode(doc['config_secret_wrappers'], values))
+        step = 'providers'
+        _decode(doc['providers'], values)
+        step = 'schema'
+        schema = _decode(doc['schema_metadata'], values)
+        names = doc['table_names']
+        step = 'inventory'
+        _validate_inventory(names, schema, doc['tables'])
+        tables, total = set(), 0
+        for table in doc['tables']:
+            step = 'table_shape'
+            if (type(table) is not dict or set(table) != {'table','record_name','attributes','row_count','rows'}
+                    or not _live_table_name(table['table']) or table['table'] in tables
+                    or not (table['record_name'] == _LIVE_SYNC_TABLE if table['table'] == _LIVE_SYNC_TABLE
+                            else native_name(table['record_name']))
+                    or type(table['attributes']) is not list or not table['attributes']
+                    or not all(native_name(x) for x in table['attributes'])
+                    or len(set(table['attributes'])) != len(table['attributes'])
+                    or type(table['rows']) is not list or type(table['row_count']) is not int
+                    or table['row_count'] != len(table['rows'])):
                 raise ValueError()
-            _decode(row, values)  # All tables/rows, no business projection or filtering.
-        tables.add(table['table'])
-    if tables != set(names) - {'schema'}:
-        raise ValueError()
+            total += len(table['rows'])
+            if total > MAX_VALUES:
+                step = 'rows_rowcount'
+                raise ValueError()
+            step = 'rows'
+            for row in table['rows']:
+                if (type(row) is not dict or row.get('type') != 'tuple'
+                        or type(row.get('value')) is not list
+                        or len(row['value']) != len(table['attributes']) + 1
+                        or row['value'][0] != {'type':'atom','value':table['record_name']}):
+                    raise ValueError()
+                _decode(row, values)  # All tables/rows, no business projection or filtering.
+            tables.add(table['table'])
+        step = 'table_set'
+        if tables != set(names) - {'schema'}:
+            raise ValueError()
+    except Exception:
+        if step in ('config', 'secrets', 'providers', 'schema', 'rows'):
+            step = step + '_' + _budget(values)
+        raise NativeDecodeRefused(step) from None
     bindings = {name: {'input_sha256':hashlib.sha256(raw).hexdigest(), 'input_bytes':len(raw)} for name in names}
     return PersistedValues(generation, 'target', bindings, values.values)
 
@@ -195,7 +237,11 @@ def collect_post_restore_values(*, prior_registry, provision, expected_container
             if output.returncode:
                 raise ValueError()
             stage = 'decode'
-            companion = _native_values(output.stdout, generation)
+            try:
+                companion = _native_values(output.stdout, generation)
+            except NativeDecodeRefused as error:
+                stage = 'decode_' + error.step
+                raise
             stage = 'identity_after'
             if before != _runtime_identity(provision, expected_container_id):
                 raise ValueError()

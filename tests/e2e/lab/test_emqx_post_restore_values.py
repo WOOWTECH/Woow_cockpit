@@ -126,7 +126,17 @@ class PostNativeTests(unittest.TestCase):
         self.runner.podman=self.podman
         def bad_wire(doc):doc['contract']='generated-unknown-contract'
         self.edit=bad_wire
-        self.assertEqual(self.stage_of(),'decode')
+        self.assertEqual(self.stage_of(),'decode_reply')
+        def duplicate_table(doc):doc['table_names'].append(doc['table_names'][0])
+        self.edit=duplicate_table
+        self.assertEqual(self.stage_of(),'decode_inventory')
+        self.edit=None
+        import emqx_semantic_readers as readers
+        for budget,stage in (('MAX_NODES','decode_config_nodes'),('MAX_VALUES','decode_config_values')):
+            with self.subTest(budget=budget), patch.object(readers,budget,8), \
+                 patch.object(m,'MAX_NODES' if budget=='MAX_NODES' else 'MAX_SEMANTIC_VALUES',8):
+                self.assertEqual(self.stage_of(),stage)
+        self.assertEqual(len(self.collect()._generations),1)  # unchanged budgets still pass
 
     def test_populated_api_rules_connectors_and_unexecuted_refs_are_values_only(self):
         with patch('emqx_owner_target._absence_profile',side_effect=AssertionError('no initial profile')), \
