@@ -343,12 +343,22 @@ python3 -I tests/e2e/lab/hermes_real_capture.py --private=<~/.woowbk-lab/evidenc
   每次登入在探測前就登記為一個宣告來源（`drv.ISSUED_SESSIONS`），`leaks` 在任何掃描之前，只要有一個宣告來源沒有登錄到值就失敗，
   並以一行 CHECK 記錄來源數與值數。值只在記憶體裡，所以 `leaks` 必須和登入在同一次執行。探測的子程序不繼承 stdin
   （事件模式下 stdin 是主機的確認通道）；儀表板 API 逾時或非 JSON 回應記為代碼 0（該項檢查失敗），不再讓整個探測結束。
+* 每次儀表板呼叫的耗時（hermes-real，dbdf399）：continuity 與 b1 的 Hermes 探測都把每次呼叫記成「固定路徑（去掉查詢字串）、
+  回應代碼、秒數」（不含任何值或 cookie），交回主機；主機把最慢的四次寫進私有 `run.log`。第 9、10 次嘗試的 x86-unc 都有一次
+  儀表板 GET 超過 30 秒，當時沒有記錄是哪一個端點，之後就靠這一行找出來。檢查與逾時都沒有改。
 * 沒有涵蓋：瀏覽器頁面本身（dev-d 不公開任何埠；helper 呼叫就是頁面送出的）、與模型對話（dev-d 以 `--no-llm` 安裝，HA 的設定指向
   HA 內部網址，匯入時已提醒）、ARM（Hermes 附加元件只有 amd64）。
 * 鎖：像 `flock -w` 一樣阻塞等待；emqx-main 的等待檔存在時不取鎖（取到也立即放開）。只有在 emqx-main 的真實執行**持有**鎖
   （`/proc/<pid>/fdinfo` 有 `lock: FLOCK` 行）期間看到的那一份等待檔才視為過時；只開啟鎖檔（`flock -n` 失敗的重試）不算持有。
 * 結果（2026-11-23）：見 `evidence/hermes-real-20261123/`（每次嘗試一份 JSON：固定狀態行、stdout SHA-256、來源提交、
-  `commercial_acceptance: not-complete`）與 `status.json`。
+  `commercial_acceptance: not-complete`）與 `status.json`。三種 x86 備份都在實驗室完整走完（轉換、inspect、還原、Hermes 本身提供
+  對話／訊息／FTS5 搜尋、b1 的 Hermes 檢查、重新啟動後再驗、以還原前備份回退且摘要相同）：x86-enc 第 7、11 次，x86-plain 第 8、12 次，
+  x86-unc 第 11 次（第 9、10 次只到回退，b1 檢查與重啟沒跑到）；緊急金鑰還原基準第 9、12 次；cleanup／leaks 第 9–12 次，
+  其中第 11、12 次涵蓋登入發出的 cookie（9＋6 個宣告來源、18＋12 個值、0 命中）。
+* 第 9、10 次 x86-unc 失敗的可能原因：第 12 次量到還原後**第一次** `GET /api/env` 要 17.72 秒（其他呼叫都 ≤ 3.71 秒）。vendor
+  `hermes_cli/web_routers/config_env.py:259-269` → `hermes_cli/web_server_messaging.py:103-107` → `:79-82`：儀表板程序第一次
+  建頻道清單時才執行 `discover_plugins()`，是一次性的冷啟動成本，主機負載約 22–25 時會更慢。第 9、10 次當時沒有記錄端點，
+  所以「就是 `/api/env`」是推論，不是觀察。
 
 ## 端到端測試（整合）
 
