@@ -310,6 +310,9 @@ started = time.monotonic()
 # The Dashboard answers some seconds after EMQX starts: wait with an unauthenticated GET (401 = up). A login is never
 # retried (the credential-event transport counts every login), so it comes only once the API answers.
 ready, _ = call(E, "GET", "/api/v5/nodes", wait=240)
+while ready != 401 and time.monotonic() - started < 240:   # a starting Dashboard answers 404 before its routes exist
+    time.sleep(2)                                          # (attempt-05: a login right after a restore got 404)
+    ready, _ = call(E, "GET", "/api/v5/nodes", wait=30)
 out["api_ready_after_s"] = round(time.monotonic() - started, 1)
 out["api_ready_code"] = ready
 # Exactly three Dashboard logins, always in this order (the event transport registers each issued token). The
