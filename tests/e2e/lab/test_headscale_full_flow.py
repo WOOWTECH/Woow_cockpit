@@ -241,6 +241,14 @@ class CleanupOrderTest(unittest.TestCase):
                           'step_cleanup', 'step_leaks', 'remove_private'])
         self.assertNotIn('step_restart', names)
 
+    def test_secrets_are_loaded_before_setup(self):
+        # attempt 1 (11-23 16:08): setup inspected the baseline before the kit was read -> invalid-request
+        run, calls = self.fake_run('step_import', safety=None)
+        with mock.patch.object(hsff, 'keep_volume_keys', lambda *a: None):
+            hsff.run_all(run)
+        names = [c for c in calls if isinstance(c, str)]
+        self.assertLess(names.index('load_secrets'), names.index('setup'))
+
     def test_no_restore_means_no_rollback_restore(self):
         run, calls = self.fake_run('step_import', safety=None)
         with mock.patch.object(hsff, 'keep_volume_keys', lambda *a: None):

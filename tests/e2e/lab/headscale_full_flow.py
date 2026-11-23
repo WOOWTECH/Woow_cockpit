@@ -619,6 +619,8 @@ class Run:
                  status.get('version') == version, {'installed': status.get('version'), 'tree': version})
         catalog = {a['id'] for a in status.get('apps') or []}
         if 'headscale' not in catalog:
+            if not self.kit:
+                raise Failed('the 11-19 kit is not loaded (secrets phase first)')
             reply = drv.ok('inspect', {'backup_id': BASELINE, 'key': self.kit}, ev=ev, timeout=900)
             apps = (reply.get('preflight') or {}).get('apps') or []
             carried = next((a.get('settings') or {} for a in apps if a.get('id') == 'headscale'), {})
@@ -1186,7 +1188,7 @@ print(json.dumps(out))
 
 def run_all(run):
     ev = run.ev
-    phases = [('setup', run.setup), ('secrets', run.load_secrets), ('lab config', run.lab_config_on),
+    phases = [('secrets', run.load_secrets), ('setup', run.setup), ('lab config', run.lab_config_on),
               ('before', run.step_before), ('upload', run.step_upload), ('check', run.step_check),
               ('import', run.step_import), ('verify', lambda: run.verify('restore')),
               ('volume keys', lambda: keep_volume_keys(ev, run.private, 'restore')),
