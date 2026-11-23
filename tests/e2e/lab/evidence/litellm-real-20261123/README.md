@@ -44,6 +44,10 @@ from the backup in memory. No value is printed, logged or stored in this folder.
 | 01 | 8998444 | cancelled (exit -15) | blocked in flock; no dev-d object; harness changes loaded |
 | 02 | 0f53ac5 | cancelled (exit -15) | blocked in flock; no dev-d object; harness changes loaded |
 | 03 | aef40b1 | FAIL (exit 1, 792 s, lock 638 s) | import, row/schema/sequence equality, salt binding, HA virtual key 200 + alias, users 1, teams 1, decryption 72/72 model values + 5/5 stored values (0 with the wrong salt), issued key 200, cleanup, leak scan 0/13 sources: PASS. FAIL: 10 of 24 stored models served with the ChatGPT plugin disabled; restart container's start died in Prisma migrate (P1001, DB unreachable; not OOM) and the harness had no unit-like retry |
+| 04 | 894bece | **PASS** (exit 0, 2956 s incl. 1240 s lock wait, lock 1711 s) | 24/24 checks. Same import/decryption/HA-client results as 03; model breakdown with the ChatGPT plugin off: openai 3 + openrouter 7 served, chatgpt 14 not; restart counts equal, HA and issued keys accepted (1 start); package setting WOOW_CHATGPT_ENABLED=true: 24/24 stored models served (HA key sees 17), all chatgpt 14 loaded; db_prepare refuses the target's own salt, rows unchanged; target DB oom_kill 0, peak 122 MiB; rollback rows and schema equal to the target's own data, own credential decrypts, HA and issued keys 401. The rollback app needed one unit-like retry: its first start died in the package's ui-session-reconcile with psycopg OperationalError (database reachable right after; transient connect failure under host load). Cleanup 0 objects, baseline unchanged, isolation true none {}, leak scan 13 sources/13 values/0 matches |
+
+Independent post-run scan of this folder (lab secret files through the harness reader plus the backup's own four
+secret files, 33 values, raw and JSON-escaped): 0 matches.
 
 ## Not covered (stays open)
 
