@@ -26,7 +26,7 @@ TESTS = ('tests.backup.test_ha_omnigent', 'tests.backup.test_ha_omnigent_candida
          'tests.backup.test_ha_omnigent_trusted', 'tests.backup.test_b1_01_guard',
          'tests.backup.test_ha_omnigent_install')
 
-# (id, protection, exact text in ha_omnigent.py, replacement, occurrences)
+# (id, protection, exact text, replacement, occurrences[, module under backup-engine/; default MODULE])
 MUTATIONS = (
     ('M01', 'only TABLE DATA / SEQUENCE SET of HA restored (data-only list)',
      "        if match.group(2).startswith(('TABLE DATA ', 'SEQUENCE SET ')):\n",
@@ -80,6 +80,18 @@ MUTATIONS = (
     ('M17', "the runner's pi volume is this device's (never HA's)",
      '    hacommon.live_export(work, app, target.pi_volume, pi_path)\n',
      "    import shutil as _s\n    _s.copyfile(server_path, pi_path)\n", 1),
+    # security review 2026-11-23 (SR-OWNER-1942) findings, fixed on the product branch:
+    ('M18', "HA's answers (accounts, schedules, shares, keys, counts) re-derived on the trusted new cluster (SR-1)",
+     '    require_answers(pg, found)\n', '', 1),
+    ('M19', 'SEQUENCE SET entries are only bare setval calls of trusted sequences (SR-3)',
+     "        require_sequence_sets(script.decode('utf-8', 'surrogateescape'), len(sets), sequences)\n",
+     '        pass\n', 1),
+    ('M20', "HA's pg_dump runs as an OS user unrelated to HA's server (SR-2b)",
+     "['pg_dump', '-U', 'postgres', '-Fc', '-d', DATABASE], user=DUMP_USER,",
+     "['pg_dump', '-U', 'postgres', '-Fc', '-d', DATABASE], user='postgres',", 1),
+    ('M21', "HA-controlled names reach the job log and the page without control characters (SR-4, shared hacommon)",
+     "    items = [CONTROL_RE.sub('?', str(item)[:60]) for item in items]\n",
+     '    items = [str(item)[:60] for item in items]\n', 1, 'woowbackup/hacommon.py'),
 )
 
 
@@ -100,7 +112,9 @@ def main(argv):
     parser = argparse.ArgumentParser()
     parser.add_argument('--json')
     args = parser.parse_args(argv)
-    source = (REPO / 'backup-engine' / MODULE).read_text(encoding='utf-8')
+    modules = sorted({MODULE} | {m[5] for m in MUTATIONS if len(m) > 5})
+    sources = {module: (REPO / 'backup-engine' / module).read_text(encoding='utf-8') for module in modules}
+    source = sources[MODULE]
     results = []
     started = time.monotonic()
     with tempfile.TemporaryDirectory(prefix='omni-mutation-') as directory:
@@ -117,20 +131,25 @@ def main(argv):
         rc, ran, failures = run_tests(root)
         baseline = {'returncode': rc, 'tests': ran, 'failures': failures}
         print(f'baseline: {"pass" if rc == 0 else "FAIL"} ({failures}/{ran})', flush=True)
-        for ident, name, old, new, count in MUTATIONS:
-            if source.count(old) != count:
-                results.append({'id': ident, 'protection': name, 'applied': False})
-                print(f'{ident} {name}: NOT APPLIED (pattern count {source.count(old)})', flush=True)
+        for ident, name, old, new, count, *where in MUTATIONS:
+            module = where[0] if where else MODULE
+            original = sources[module]
+            if original.count(old) != count:
+                results.append({'id': ident, 'protection': name, 'module': module, 'applied': False})
+                print(f'{ident} {name}: NOT APPLIED (pattern count {original.count(old)})', flush=True)
                 continue
-            (engine / MODULE).write_text(source.replace(old, new), encoding='utf-8')
-            rc, ran, failures = run_tests(root)
+            (engine / module).write_text(original.replace(old, new), encoding='utf-8')
+            try:
+                rc, ran, failures = run_tests(root)
+            finally:
+                (engine / module).write_text(original, encoding='utf-8')
             caught = rc != 0 and failures > 0
-            results.append({'id': ident, 'protection': name, 'applied': True, 'caught': caught,
+            results.append({'id': ident, 'protection': name, 'module': module, 'applied': True, 'caught': caught,
                             'failures': failures, 'tests': ran})
             print(f'{ident} {name}: {"caught" if caught else "MISSED"} ({failures}/{ran})', flush=True)
-        (engine / MODULE).write_text(source, encoding='utf-8')
     ok = baseline['returncode'] == 0 and all(r.get('applied') and r.get('caught') for r in results)
     summary = {'module': MODULE, 'module_sha256': hashlib.sha256(source.encode('utf-8')).hexdigest(),
+               'modules_sha256': {m: hashlib.sha256(t.encode('utf-8')).hexdigest() for m, t in sources.items()},
                'tests': list(TESTS), 'baseline': baseline, 'mutations': results, 'all_caught': ok,
                'seconds': round(time.monotonic() - started, 1)}
     if args.json:
