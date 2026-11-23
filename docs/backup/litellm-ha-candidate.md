@@ -175,3 +175,21 @@ Lab limits that stay open: the app runs as 1000:0 because dev-d maps only IDs 0.
 `WOOW_CHATGPT_ENABLED=false` (no ChatGPT subscription restore); no provider call (no
 network); the restore runs as the package's database owner, which is a superuser in the
 package as in `restore.sh` (a product importer must decide how far to trust HA's dump).
+
+Result (evidence `tests/e2e/lab/evidence/litellm-real-20261123/`, attempt 04 at `894bece`):
+24/24 checks passed with the real backup. Every table's rows, the sequences and the schema
+of the restored PostgreSQL 17 database equal HA's PostgreSQL 18.6 cluster; the HA-issued
+virtual key is accepted (200, its alias) and sees its models; users 1, teams 1; all 72
+stored model parameter values and 5 stored credential values decrypt with the moved salt
+and none with the target's own; the restored app issues a new key; a fresh container
+(restart) serves the same; with the package's `WOOW_CHATGPT_ENABLED=true` the router serves
+all 24 stored models (14 `chatgpt/` subscription models load only with the plugin on);
+`db_prepare` refuses the target's own salt without changing rows; rollback restores the
+target's own rows, schema and decryptable credential and the HA and issued keys get 401.
+Two of eleven app starts across attempts 03 and 04 failed once on a database connection
+(Prisma P1001; the package's ui-session-reconcile OperationalError) while the database
+was reachable right after; attempt 04 emulates the unit's `Restart=always`/`RestartSec=10`
+with at most three fresh containers and records the attempts (rollback needed two).
+This is lab evidence for the internal candidate, not commercial acceptance: the public
+importer, the package's Quadlet units, product UID 65534, provider calls and ChatGPT token
+refresh remain untested.
