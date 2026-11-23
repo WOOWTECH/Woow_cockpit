@@ -1,0 +1,108 @@
+{
+  "date": "2026-11-23",
+  "scope": "HA EMQX backup (woow-emqx add-on, EMQX 5.8.9) -> product HA import -> isolated Podman EMQX 5.8.9 on lab woowbk-dev-d (network none, no published ports)",
+  "commercial_acceptance": "not-complete",
+  "public_import_guards": "retained (PRESERVATION_BLOCKER and guarded refusals untouched; internal-candidate lab path only)",
+  "branch": "feat/ha-import-batch1 (R-EMQX /tmp/ha-real-fixture-candidate-20261121, local only, not pushed)",
+  "real_sources": {
+    "arm": "~/.woowbk-lab/ha-fixtures/20261119-b1/arm/woow-b1-arm-emqx-stopped-enc (sha256 b6eb257c...)",
+    "x86": "~/.woowbk-lab/ha-fixtures/20261119-b1/x86/woow-b1-x86-emqx-stopped-enc (sha256 0a53e938...)"
+  },
+  "each_pass_proves": [
+    "real encrypted HA backup authenticated, decrypted and imported through the product path (emqx ctl data export/import) into an isolated Podman EMQX 5.8.9",
+    "three fully verified rounds: after restore, after an injected one-shot startup failure with automatic product rollback, after restart",
+    "per round: MQTT allowed and denied operations with the HA credentials, retained messages, source REST API (users, ACL inventory or file-policy contract, rules/actions/connectors), negative MQTT, fresh native capture, rule/action/connector object integrity against the source cluster.hocon",
+    "final private receipt scanned against every private value registry (source secrets, issued credentials, all native captures)",
+    "cleanup: owned containers, volumes, secrets, units and scratch removed; dev-d isolation re-verified (REAL OWNER POSTFLIGHT PASSED)"
+  ],
+  "variants": [
+    {
+      "variant": "(1) ARM, built-in database ACL (--real-restore-mnesia-acl)",
+      "result": "PASS",
+      "evidence": "emqx-real-restore-20261123/arm-mnesia-attempt17.json",
+      "source_commit": "6ffc757",
+      "elapsed_seconds": 648.3,
+      "rule_delivery": "real: republish delivered to an HA-credential subscriber; original HTTP action executed (vendor counters +1 success, 0 failures)",
+      "earlier_pass_without_delivery": "arm-mnesia-attempt16.json (f559d85, 590.2s)"
+    },
+    {
+      "variant": "(2) ARM, target file ACL policy (--real-restore)",
+      "result": "PASS",
+      "evidence": "emqx-real-restore-20261123/arm-attempt18.json",
+      "source_commit": "b3fc322 (code 6ffc757)",
+      "elapsed_seconds": 958.0,
+      "rule_delivery": "not assessed by design: the target file ACL denies the HA roles' rule topics"
+    },
+    {
+      "variant": "(3) x86, built-in database ACL (--x86-real-restore-mnesia-acl)",
+      "result": "PASS",
+      "evidence": "emqx-real-restore-20261123/x86-mnesia-attempt2.json",
+      "source_commit": "6287f49 (code 6ffc757)",
+      "elapsed_seconds": 753.5,
+      "rule_delivery": "real, as variant (1)",
+      "earlier_pass_without_delivery": "x86-mnesia-attempt1.json (b21fcf7, 828.0s)"
+    },
+    {
+      "variant": "(4) x86, target file ACL policy (--x86-real-restore)",
+      "result": "PASS",
+      "evidence": "emqx-real-restore-20261123/x86-attempt2.json",
+      "source_commit": "5eb9d49",
+      "elapsed_seconds": 950.6,
+      "rule_delivery": "not assessed by design: the target file ACL denies the HA roles' rule topics",
+      "earlier_attempt": "x86-attempt1.json: generic BUILD refusal after 622s (held readers' exit after the build, under host load ~25-34); now labelled build_readers_exit_<substep> (5eb9d49); did not recur"
+    }
+  ],
+  "fixes_today": [
+    {
+      "commit": "b5e289d",
+      "what": "action last_modified_at is the vendor data-import instant (emqx_bridge_v2.erl:1176-1179,2049-2063,2083-2084): API == native integer inside the capture->native window; created_at and all other fields stay exact"
+    },
+    {
+      "commit": "f57378a 66bd2f7 038cee9 a248f65",
+      "what": "fixed-label diagnostics: restore/rollback/restart round outcomes and prefixes, DEADLINE, post-capture collector and quiescence stages, native decode sub-step and budget"
+    },
+    {
+      "commit": "a76bef0 038cee9 b21fcf7",
+      "what": "wall-clock bounds only for a contended 4-CPU host (load up to ~28): native runner, history reader, inspect/eval/readiness probes, real-restore child alarm 1500s"
+    },
+    {
+      "commit": "f559d85",
+      "what": "post-restore live capture budget bound by its reply wire (65536 nodes/values instead of the shared 8192/4096); shared defaults unchanged"
+    },
+    {
+      "commit": "38da4c7",
+      "what": "cherry-pick of emqx-filepolicy ba29d59: strict builtin-absent 404 contract, exact file ACL readback, native emqx_acl inventory proof"
+    },
+    {
+      "commit": "6ffc757",
+      "what": "cherry-pick of emqx-delivery 75c776d: real republish + original HTTP action delivery after restore (Mnesia variants, round 1)"
+    },
+    {
+      "commit": "5eb9d49",
+      "what": "fixed label for a held-readers exit refusal after the candidate build (build_readers_exit_<quiescence substep>)"
+    },
+    {
+      "commit": "68f2d75",
+      "what": "test closing the emqx-filepolicy verifier's surviving minting mutation"
+    }
+  ],
+  "lab_operations": [
+    "dev-d page-cache reclaims 26-28 (evidence emqx-dev-d-cache-reclaim-26..28-20261123.json); 29 failed to take the lock (no evidence written), 30 unused",
+    "lab-only dev-d journalctl --vacuum-time=24h: tmpfs journal 796 -> 345 MiB, headroom 2037 -> 2435 MiB, no OOM events (emqx-dev-d-journal-vacuum-1-20261123.json)"
+  ],
+  "corrections": [
+    "6aeab97 subject says 'post-capture refusal after all restore rounds'; an unprefixed POST_CAPTURE meant the round-1 capture or the final receipt check. Attempt 14 (with stage labels) passed round 1, so attempt 13 was most likely a load-related round-1 capture refusal. History not rewritten."
+  ],
+  "deviations_and_open": [
+    "host-run unit test test_emqx_mnesia_acl_target_variant (and other run_native tests) uses the host /usr/bin/podman = production rootless storage; emqx-main ran it 5x this morning before noticing (transient --rm network=none containers of the pinned image; no service, secret, image or catalog changed). Do not run those tests on the host.",
+    "rule delivery uses the HA backup's ORIGINAL HTTP target (the broker's own 127.0.0.1:18083 /api/v5/status) with vendor counters; request wire bytes are not captured",
+    "commercial acceptance stays not-complete until the owner accepts the evidence; no production system was touched; nothing pushed"
+  ],
+  "summary": "All four variants passed end to end on real HA backups (ARM and x86; built-in database ACL with real rule delivery; target file ACL policy). Commercial acceptance remains for the owner to grant.",
+  "attempt_history_20261123": {
+    "arm_mnesia": "attempts 9-15 refused (action value, action last_modified_at, generic restore, payload history, post capture, round-2 decode, round-2 node budget) -> fixed; 16 PASS, 17 PASS with delivery",
+    "x86_mnesia": "1 PASS, 2 PASS with delivery",
+    "arm_file": "18 PASS (attempt 17 earlier: SOURCE_API_ACL_USERS_HTTP_404, fixed by the file-policy contract)",
+    "x86_file": "1 generic BUILD (readers exit), 2 PASS"
+  }
+}
