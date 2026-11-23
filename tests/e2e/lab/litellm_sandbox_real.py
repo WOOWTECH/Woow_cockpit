@@ -98,6 +98,14 @@ def main():
             stored = ha_litellm.stored_settings(cluster, ha_schema)
             files, sequences = ha_litellm.export_rows(work, cluster, ha_schema, scratch)
             exported = sum(path.stat().st_size for path in files.values())
+            # iteration 2 (SR-8): the same check on the staged LiteLLM_Config rows in a fresh PostgreSQL 17.11, which
+            # the conversion now asks after loading; counts only (no name of a stored setting)
+            staged = files.get(('public', 'LiteLLM_Config'))
+            trusted = None if staged is None else review.trusted_recheck(staged, ha_schema)
+            facts['trusted_recheck'] = None if trusted is None else {
+                'blocker': trusted.get('blocker'), 'hooks': len(trusted.get('hooks') or []),
+                'env_names': trusted.get('env_count'), 'callbacks': len(trusted.get('callbacks') or []),
+                'unreadable': bool(trusted.get('unreadable'))}
             for path in files.values():
                 path.unlink()
             facts.update({
@@ -108,7 +116,9 @@ def main():
                 'exported_tables': len(files), 'exported_bytes': exported, 'sequences': len(sequences),
                 'stored_settings': None if stored is None else {
                     'sections': len(stored['sections']), 'env_names': len(stored['env']),
-                    'callbacks': len(stored['callbacks']),
+                    'callbacks': len(stored['callbacks']), 'hooks': len(stored.get('hooks') or []),
+                    'unreadable': bool(stored.get('unreadable')),
+                    'hooks_blocker': ha_litellm.stored_hooks_blocker(stored) is not None,
                     'warning_line': ha_litellm.stored_settings_line(stored) is not None},
                 'markers': review.markers(tmp, 'hapg')})
         left = [runner.podman(kind, *args, '--filter', f'name={job}', '--format', '{{.Names}}',
