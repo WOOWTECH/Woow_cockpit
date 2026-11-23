@@ -1,7 +1,7 @@
 {
  "lane": "litellm-product",
  "date": "2026-11-23",
- "updated": "2026-11-24T01:05+08:00",
+ "updated": "2026-11-24T01:50+08:00",
  "scope": "LiteLLM HA import as the PRODUCT path (owner decision 2026-11-23 「決定1 做」): haapps registers litellm, ha_litellm.py converts with the Omnigent trust rules (this device's schema, HA's rows only), HA's salt replaces litellm-salt-key; the real test runs the Cockpit page's helper commands on dev-d",
  "branch": "R-COCKPIT feat/ha-import-litellm-product-20261123 (base integration/ha-import-batch1-20261123 d812699)",
  "product_commits": [
@@ -67,7 +67,12 @@
   },
   "08": {
    "commit": "215fdf0",
-   "result": "68/69: every product step and client check PASSED (check, convert, auto rollback, import, HA key, 72/72+5/5 decrypt, restart, manual rollback, leaks, cleanup, isolation); 1 FAIL = harness container-set equality saw dev-d headscale restart loop (pre-existing, not LiteLLM)"
+   "result": "68/69: every product step and client check PASSED (check, convert, auto rollback, import, HA key, 72/72+5/5 decrypt, restart, manual rollback, leaks, cleanup, isolation); 1 FAIL = harness container-set equality saw dev-d headscale restart loop (pre-existing, not LiteLLM)",
+   "note": "215fdf0 lacks the review iteration-2 fixes (SR-6 refusal 1e29974, SR-8..SR-10); not the final product code"
+  },
+  "secreview-01": {
+   "commit": "14be8bc (product code 1a83926)",
+   "result": "PASS 69/69 exit 0: the whole product flow on the final code (run by lane litellm-secreview with this driver)"
   }
  },
  "unit": "tests/backup/evidence/litellm-product-20261123/unit-tests.json (full tests/backup 1483: only the 7 pre-existing test_ha_omnigent failures; backup-ui 101/101; mutation 33/33)",
@@ -88,5 +93,6 @@
   "no network: no provider calls or ChatGPT refresh"
  ],
  "commercial_acceptance": "not-complete",
- "security_review_fixes_merged": "review/litellm-secreview-20261123 cdf6eba (SR-1..SR-5), fast-forwarded 2026-11-23 22:20"
+ "security_review_fixes_merged": "review/litellm-secreview-20261123 cdf6eba (SR-1..SR-5), fast-forwarded 2026-11-23 22:20",
+ "final_product_code": "1a83926 (review/litellm-secreview-fix2-20261124, merged into feat/ha-import-litellm-product-20261123)"
 }
