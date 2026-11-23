@@ -5,6 +5,8 @@ Caller holds actual source/target exclusion via quiesce. Fixed loopback HTTP onl
 login is the only write. API views may mask values: this retains EVERY returned
 value, never reconstructs plaintext or claims native/final storage completeness.
 Mnesia ACL API facts do NOT attest the active file ACL or MQTT authorization.
+The explicit FILE-target profile accepts only the pinned builtin-absent 404 and
+derives no ACL fact from it (see emqx_file_policy_api for the native ACL proof).
 """
 import base64
 import copy
@@ -34,11 +36,27 @@ PATHS = {
  'dashboard_users':'/users', 'api_keys':'/api_key', 'nodes':'/nodes',
 }
 PAGED = {'mqtt_users','acl_users','acl_clients','banned','rules','retainer'}
+STRICT_API_PROFILE='source-api-strict-v1'
+FILE_POLICY_API_PROFILE='target-file-policy-builtin-absent-v1'
+# Pinned EMQX 5.8.9 (+ minirest 1.4.8, rebar.config:90). When authorization.sources has
+# NO built_in_database entry (enabled or disabled alike: get_raw_source/1 matches type
+# only), the schema filter emqx_authz_api_mnesia:is_configured_authz_source/2
+# (emqx_authz_api_mnesia.erl:95,142,297,442-448) answers via
+# emqx_authz_api_sources:with_source/2 (emqx_authz_api_sources.erl:534-549) with
+# {404,#{code=><<"NOT_FOUND">>,message=><<"Not found: built_in_database">>}} before any
+# handler or Mnesia read. Its code is a binary, so minirest_handler:reply/3 takes the
+# plain {Status,Map} clause; minirest_json_encoder emits JSON with DEFAULT_RESPONSE_HEADERS
+# content-type application/json (minirest_http.hrl:56). Authorization runs first, so the
+# 404 is authenticated. It proves source absence only: NEVER ACL rows or ACL equality.
+INACTIVE_ACL_ENDPOINTS=frozenset(('acl_users','acl_clients','acl_all'))
+BUILTIN_ABSENT_404={'code':'NOT_FOUND','message':'Not found: built_in_database'}
+BUILTIN_ABSENT_CONTENT_TYPE=b'application/json'
+FILE_POLICY_ACL_SCOPE='target-file-policy-builtin-absent-api404-not-acl-proof'
 
 
 ENDPOINTS = frozenset(('input','identity','facts','proof','login_admin','login_second',
                        'second_nodes','api_key_nodes',*PATHS))
-REASONS = frozenset(('http_401','http_403','http_404','http_429','http_other',
+REASONS = frozenset(('http_200','http_401','http_403','http_404','http_429','http_other',
                      'parse','contract','identity','timeout'))
 SOURCE_API_PHASES = frozenset('source_api_'+e+'_'+r for e in ENDPOINTS for r in REASONS)
 
@@ -51,7 +69,8 @@ class SourceAPIPhaseRefused(PrivateFailure):
 
 
 def _http_reason(status):
-    return 'http_'+str(status) if type(status) is int and status in (401,403,404,429) else 'http_other'
+    # 200 is only ever an unexpected status for an inactive file-policy builtin endpoint.
+    return 'http_'+str(status) if type(status) is int and status in (200,401,403,404,429) else 'http_other'
 
 
 class SourceAPIResult:
@@ -111,7 +130,13 @@ def _rows(document, name):
     return rows
 
 
-def _facts(documents, admin, second, topics):
+def _facts(documents, admin, second, topics, *, file_acl=None):
+    """file_acl=None is the unchanged strict profile. A str selects ONLY the FILE target
+    profile: builtin ACL documents must be absent (their exact 404 was checked by the
+    caller) and NO ACL fact is derived; the active file ACL must read back exactly."""
+    file_policy=file_acl is not None
+    if file_policy and (type(file_acl) is not str or set(documents)!=set(PATHS)-INACTIVE_ACL_ENDPOINTS):
+        raise ValueError()
     rows={name:_rows(doc,name) for name,doc in documents.items()
           if name not in ('acl_all','authorization_settings','authorization_sources')}
     def ids(name, key):
@@ -125,7 +150,7 @@ def _facts(documents, admin, second, topics):
         pairs=[(r['type'],r['name']) for r in rows[name]]
         if any(type(x) is not str or not x for pair in pairs for x in pair) or len(set(pairs))!=len(pairs): raise ValueError()
         facts[name]['ids']=sorted(pairs)
-    for name,key in [('acl_users','username'),('acl_clients','clientid')]:
+    for name,key in (() if file_policy else [('acl_users','username'),('acl_clients','clientid')]):
         facts[name]['ids']=ids(name,key)
         if any(type(r.get('rules')) is not list for r in rows[name]): raise ValueError()
         facts[name]['rule_counts']={r[key]:len(r['rules']) for r in rows[name]}
@@ -140,9 +165,23 @@ def _facts(documents, admin, second, topics):
             or any(type(x) is not dict or type(x.get('type')) is not str or type(x.get('enable')) is not bool for x in sources)):
         raise ValueError()
     facts['authorization_sources']={'types':[x['type'] for x in sources]}
-    all_rules=documents['acl_all']
-    if type(all_rules) is not dict or type(all_rules.get('rules')) is not list: raise ValueError()
-    facts['acl_all']={'count':len(all_rules['rules'])}
+    if file_policy:
+        # GET /authorization/sources runs emqx_authz:maybe_read_source_files/1 per source
+        # (emqx_authz_api_sources.erl:242-257, emqx_authz.erl:782-789): the file source's
+        # path is replaced by the bytes EMQX itself reads (emqx_authz_file.erl:63-65,103-104;
+        # api_file schema = type/enable/rules, emqx_authz_file_schema.erl:51-60). A read
+        # failure falls back to the raw path form, which refuses here.
+        if (type(documents['authorization_sources']) is not dict
+                or set(documents['authorization_sources'])!={'sources'}
+                or sources!=[{'type':'file','enable':True,'rules':file_acl}]
+                or settings.get('no_match')!='deny' or settings.get('deny_action')!='ignore'):
+            raise ValueError()
+        facts['builtin_acl_api']={name:{'status':404,'code':BUILTIN_ABSENT_404['code']}
+                                  for name in sorted(INACTIVE_ACL_ENDPOINTS)}
+    else:
+        all_rules=documents['acl_all']
+        if type(all_rules) is not dict or type(all_rules.get('rules')) is not list: raise ValueError()
+        facts['acl_all']={'count':len(all_rules['rules'])}
     if (not {admin.decode(),second.decode()} <= set(facts['dashboard_users']['ids'])
             or not any(r.get('name')=='b1-import-key' and r.get('enable') is True for r in rows['api_keys'])
             or not {'b1_rule_republish','b1_rule_http'} <= set(facts['rules']['ids'])
@@ -150,11 +189,14 @@ def _facts(documents, admin, second, topics):
             or ('http','b1_http_action') not in facts['actions']['ids']
             or not any(r.get('as')=='clientid' and r.get('who')=='b1-banned-client' for r in rows['banned'])
             or not {x.decode() for x in topics} <= set(facts['retainer']['ids'])
-            or facts['acl_users']['rule_counts'] != {'b1-gateway':2,'b1-sensor':2}
-            or facts['acl_clients']['rule_counts'] != {'b1-dashboard-panel':1}
-            or facts['acl_all']['count'] != 1 or not rows['nodes']): raise ValueError()
-    facts['acl_scope']='source-mnesia-data-only'
+            or (not file_policy and (facts['acl_users']['rule_counts'] != {'b1-gateway':2,'b1-sensor':2}
+                or facts['acl_clients']['rule_counts'] != {'b1-dashboard-panel':1}
+                or facts['acl_all']['count'] != 1)) or not rows['nodes']): raise ValueError()
+    facts['acl_scope']=FILE_POLICY_ACL_SCOPE if file_policy else 'source-mnesia-data-only'
     facts['active_file_acl_behavior']='requires-separate-mqtt-validation'
+    if file_policy:
+        facts['active_file_acl_readback']='exact-target-file-policy-bytes'
+        facts['source_acl_rows']='requires-native-emqx-acl-inventory'
     return facts
 
 
@@ -169,9 +211,33 @@ def validate_source_api(*, prior_registry, provision, expected_container_id, qui
     GETs are fixed, single-page/1000-row bounded and refuse incomplete inventory.
     Returned result is private; caller MUST scan evidence through it. No evidence
     is emitted even on success, and failures disclose only a fixed code.
+    Strict profile: every builtin ACL endpoint MUST return its full 200 inventory.
     """
+    return _observe_source_api(api_profile=STRICT_API_PROFILE,target_file_acl=None,
+        prior_registry=prior_registry,provision=provision,expected_container_id=expected_container_id,
+        quiesce=quiesce,port=port,admin_username=admin_username,admin_password=admin_password,
+        second_username=second_username,second_password=second_password,api_key=api_key,
+        api_secret=api_secret,retained_topics=retained_topics)
+
+
+def _observe_source_api(*, api_profile, target_file_acl, prior_registry, provision,
+                        expected_container_id, quiesce, port, admin_username, admin_password,
+                        second_username, second_password, api_key, api_secret, retained_topics):
+    """Shared collector. Only the explicit FILE profile (selected by the caller from its
+    own target mode, never from a response) expects the exact builtin-absent 404 on the
+    three builtin ACL endpoints, and derives NO ACL fact from it."""
     endpoint,reason='input','contract'
     try:
+        if api_profile==STRICT_API_PROFILE:
+            if target_file_acl is not None: raise ValueError()
+            file_acl=None
+        elif api_profile==FILE_POLICY_API_PROFILE:
+            if (type(target_file_acl) is not bytes or not 1<=len(target_file_acl)<=MAX_VALUE
+                    or b'\x00' in target_file_acl): raise ValueError()
+            file_acl=target_file_acl.decode('utf-8')
+        else: raise ValueError()
+        file_policy=file_acl is not None
+        absent=set()
         prior=prior_registry.registry if type(prior_registry) is PrivateSession else prior_registry
         root=prior
         for _ in range(4):
@@ -226,12 +292,19 @@ def validate_source_api(*, prior_registry, provision, expected_container_id, qui
             reason='parse'
             body,ctype,status=response.stdout.rsplit(b'\n',2)
             reason='contract'
-            if status!=b'200':
+            inactive=file_policy and name in INACTIVE_ACL_ENDPOINTS
+            expected=b'404' if inactive else b'200'
+            if status!=expected:
                 reason=_http_reason(int(status) if re.fullmatch(rb'[1-5][0-9]{2}',status) else None);raise ValueError()
-            if len(body)>MAX_VALUE or ctype.split(b';',1)[0].strip().lower()!=b'application/json' or status!=b'200': raise ValueError()
+            if len(body)>MAX_VALUE or ctype.split(b';',1)[0].strip().lower()!=b'application/json' or status!=expected: raise ValueError()
+            if inactive and ctype!=BUILTIN_ABSENT_CONTENT_TYPE: raise ValueError()
             reason='parse'
             document=_register_document(runtime,body)
             reason='contract'
+            if inactive:
+                # Exact vendor shape only; any other 404 body is not this source-absent answer.
+                if type(document) is not dict or document!=BUILTIN_ABSENT_404 or name in absent: raise ValueError()
+                absent.add(name)
             return document
         with quiesce():
             endpoint,reason='identity','identity'
@@ -258,9 +331,13 @@ def validate_source_api(*, prior_registry, provision, expected_container_id, qui
             second=login_registered(runtime,observed_login,username=second_username,password=second_password)
             if not _rows(second.with_bearer(lambda bearer:get('nodes',bearer)),'nodes'): raise ValueError()
             if not _rows(get('nodes',basic),'nodes'): raise ValueError()
-            documents={name:admin.with_bearer(lambda bearer,name=name:get(name,bearer)) for name in PATHS}
+            documents={}
+            for name in PATHS:
+                document=admin.with_bearer(lambda bearer,name=name:get(name,bearer))
+                if name not in absent: documents[name]=document
             endpoint,reason='facts','contract'
-            facts=_facts(documents,admin_username,second_username,retained_topics)
+            if absent!=(INACTIVE_ACL_ENDPOINTS if file_policy else set()): raise ValueError()
+            facts=_facts(documents,admin_username,second_username,retained_topics,file_acl=file_acl)
             _register_document(runtime,json.dumps(facts,separators=(',',':')).encode())
             endpoint,reason='identity','identity'
             if _runtime_identity(provision,expected_container_id)!=before or record['cid']!=old_cid: raise ValueError()

@@ -228,7 +228,7 @@ def bundle_code():
     selected=[p for p in paths if (Path(p).name.startswith('emqx_') and Path(p).suffix in ('.py','.escript','.expr'))
               or Path(p).name=='ha_real_fixture.py']
     required={'emqx_real_owner_transport.py','emqx_real_owner_workflow.py','emqx_post_restore_values.py',
-              'emqx_owner_fixture_files.py','emqx_target_fixture_policy.py','emqx_adapter_mqtt.py','emqx_issued_target_probe.py','emqx_retained_history.py','emqx_source_api_validator.py','emqx_source_mqtt_negative.py','emqx_owned_client.py','emqx_imported_acl_target_mode.py','emqx_mnesia_acl_target_variant.py','emqx_b1_object_integrity.py','emqx_native_object_integrity.py','emqx_client_sink_capabilities.py','emqx_client_nc_primitives.py'}
+              'emqx_owner_fixture_files.py','emqx_target_fixture_policy.py','emqx_adapter_mqtt.py','emqx_issued_target_probe.py','emqx_retained_history.py','emqx_source_api_validator.py','emqx_source_mqtt_negative.py','emqx_owned_client.py','emqx_imported_acl_target_mode.py','emqx_mnesia_acl_target_variant.py','emqx_b1_object_integrity.py','emqx_native_object_integrity.py','emqx_file_policy_api.py','emqx_client_sink_capabilities.py','emqx_client_nc_primitives.py'}
     if not required<={Path(p).name for p in selected}:raise ValueError()
     raw=subprocess.check_output(['git','archive','HEAD','backup-engine/woowbackup',*selected],cwd=ROOT)
     if not 0<len(raw)<=16*1024*1024:raise ValueError()

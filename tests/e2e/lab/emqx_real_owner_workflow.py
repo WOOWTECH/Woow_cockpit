@@ -45,6 +45,8 @@ from emqx_source_api_validator import SOURCE_API_PHASES, SourceAPIPhaseRefused
 PHASES=PHASES | SOURCE_API_PHASES
 from emqx_native_object_integrity import OBJECT_PHASES, NativeObjectPhaseRefused
 PHASES=PHASES | OBJECT_PHASES
+from emqx_file_policy_api import FILE_POLICY_ACL_PHASES
+PHASES=PHASES | FILE_POLICY_ACL_PHASES
 from emqx_candidate_stage import STAGES as BUILD_STAGES, KINDS as BUILD_KINDS
 from emqx_captured_candidate import CandidatePhaseRefused
 PHASES=PHASES | frozenset('build_'+s+'_'+k for s in BUILD_STAGES for k in BUILD_KINDS)
@@ -328,6 +330,9 @@ def _restore_and_rollback(ctx,app,provision,backup_id,state,*,clients=None,sessi
     Live callers supply source clients/API credentials and require positive MQTT,
     API and negative MQTT validation before native capture after every last client activity. File-policy authorization does not
     prove source Mnesia ACL behavior. Never report commercial acceptance.
+    FILE baseline uses the explicit file-policy API profile (exact builtin-absent 404,
+    exact file ACL readback); the inactive source ACL rows are then proven ONLY from
+    each phase's fresh native capture, after the object comparison.
     """
     if target_mode not in (FILE_BASELINE,IMPORTED_MNESIA):raise RealOwnerRefused('profile')
     _assert_binding(provision,app)
@@ -344,11 +349,12 @@ def _restore_and_rollback(ctx,app,provision,backup_id,state,*,clients=None,sessi
     if outcome.get('rolled_back') or not outcome.get('changed'):raise ValueError()
     with _fixed('restore_ready'):_ready(provision)
     if clients is not None:_validate_phase_mqtt(provision,clients,target_mode)
-    if api_credentials is not None:api_results.append(_source_api_activity(provision,post_registry,session,clients,api_credentials))
+    if api_credentials is not None:api_results.append(_source_api_activity(provision,post_registry,session,clients,api_credentials,target_mode=target_mode))
     if api_credentials is not None:negative_results.append(_source_negative_activity(provision,session,clients,api_results[-1]))
     if api_credentials is not None and target_mode==IMPORTED_MNESIA:_assert_imported_acl_api(api_results[-1])
     if session is not None:post_registry=_post_activity_capture(provision,post_registry)
     if api_credentials is not None:object_results.append(_compare_source_objects(object_expected,api_results[-1],post_registry))
+    if api_credentials is not None and target_mode==FILE_BASELINE:_assert_file_policy_native_acl(api_results[-1],post_registry)
     r,f=provision.runner,provision.fixture
     directory='.config/systemd/user/'+f.unit+'.d'
     dropin=directory+'/woowbk-real-owner-fail-once.conf'
@@ -373,11 +379,12 @@ def _restore_and_rollback(ctx,app,provision,backup_id,state,*,clients=None,sessi
         with _fixed('rollback_ready'):_ready(provision)
         with _fixed('rollback_run','rollback'):
             if clients is not None:_validate_phase_mqtt(provision,clients,target_mode)
-            if api_credentials is not None:api_results.append(_source_api_activity(provision,post_registry,session,clients,api_credentials))
+            if api_credentials is not None:api_results.append(_source_api_activity(provision,post_registry,session,clients,api_credentials,target_mode=target_mode))
             if api_credentials is not None:negative_results.append(_source_negative_activity(provision,session,clients,api_results[-1]))
             if api_credentials is not None and target_mode==IMPORTED_MNESIA:_assert_imported_acl_api(api_results[-1])
             if session is not None:post_registry=_post_activity_capture(provision,post_registry)
             if api_credentials is not None:object_results.append(_compare_source_objects(object_expected,api_results[-1],post_registry))
+            if api_credentials is not None and target_mode==FILE_BASELINE:_assert_file_policy_native_acl(api_results[-1],post_registry)
         with _fixed('rollback_marker'):
             if r.stat_files([marker])[marker]['type']!='missing':raise ValueError()
     finally:
@@ -391,11 +398,12 @@ def _restore_and_rollback(ctx,app,provision,backup_id,state,*,clients=None,sessi
     with _fixed('restart_ready'):_ready(provision)
     with _fixed('restart_run','restart'):
         if clients is not None:_validate_phase_mqtt(provision,clients,target_mode)
-        if api_credentials is not None:api_results.append(_source_api_activity(provision,post_registry,session,clients,api_credentials))
+        if api_credentials is not None:api_results.append(_source_api_activity(provision,post_registry,session,clients,api_credentials,target_mode=target_mode))
         if api_credentials is not None:negative_results.append(_source_negative_activity(provision,session,clients,api_results[-1]))
         if api_credentials is not None and target_mode==IMPORTED_MNESIA:_assert_imported_acl_api(api_results[-1])
         if session is not None:post_registry=_post_activity_capture(provision,post_registry)
         if api_credentials is not None:object_results.append(_compare_source_objects(object_expected,api_results[-1],post_registry))
+        if api_credentials is not None and target_mode==FILE_BASELINE:_assert_file_policy_native_acl(api_results[-1],post_registry)
     return post_registry
 
 
@@ -507,18 +515,27 @@ def read_source_api_credentials(stream,source_mode):
 _SOURCE_API_CIDS = weakref.WeakKeyDictionary()
 
 
-def _source_api_activity(provision,prior_registry,session,clients,credentials):
+def _source_api_activity(provision,prior_registry,session,clients,credentials,*,target_mode=None):
+    """None/IMPORTED_MNESIA keep the unchanged strict 200-inventory profile. Only the
+    caller's explicit FILE_BASELINE selects the file-policy profile, bound to the same
+    issued target ACL bytes that provisioning used; a response never selects it."""
     from emqx_source_api_validator import validate_source_api,SourceAPIResult
     from emqx_runtime_workflow import PrivateSession,CombinedRegistry
     try:
+        if target_mode not in (None,FILE_BASELINE,IMPORTED_MNESIA):raise ValueError()
         if (type(credentials) is not SourceAPICredentials or type(session) is not PrivateSession
                 or type(session.registry) is not CombinedRegistry or type(clients) is not SourceClients):raise ValueError()
         cid=_inspect(provision).get('Id')
         if type(cid) is not str or re.fullmatch('[0-9a-f]{64}',cid) is None:raise ValueError()
-        result=validate_source_api(prior_registry=prior_registry,provision=provision,expected_container_id=cid,
+        inputs=dict(prior_registry=prior_registry,provision=provision,expected_container_id=cid,
             quiesce=lambda:fixture_quiescence(provision),port=18083,
             **dict(zip(API_FIELDS,credentials.fields)),
             retained_topics=tuple(clients.fields['retained_topic'+str(i)] for i in (1,2)))
+        if target_mode==FILE_BASELINE:
+            from emqx_file_policy_api import validate_file_policy_source_api
+            result=validate_file_policy_source_api(target_file_acl=target_policy_for_mode(FILE_BASELINE).acl,**inputs)
+        else:
+            result=validate_source_api(**inputs)
         if (type(result) is not SourceAPIResult or result._prior is not prior_registry
                 or result._runtime is not session.registry._runtime):raise ValueError()
         if result in _SOURCE_API_CIDS:raise ValueError()
@@ -849,10 +866,28 @@ def _assert_imported_acl_api(result):
         if docs['authorization_settings'].get('no_match')!='deny':raise ValueError()
         # API helper has already checked complete user/clientid/all ACL inventory.
         facts=result.private_facts()
+        if facts.get('acl_scope')!='source-mnesia-data-only':raise ValueError()  # never a FILE 404 observation
         if (facts['acl_users']['rule_counts']!={'b1-gateway':2,'b1-sensor':2}
                 or facts['acl_clients']['rule_counts']!={'b1-dashboard-panel':1}
                 or facts['acl_all']['count']!=1):raise ValueError()
     except BaseException:raise RealOwnerRefused('source_api') from None
+
+
+def _assert_file_policy_native_acl(source_api,native_values):
+    """FILE baseline only. The builtin API 404 is never ACL proof: this phase's fresh
+    native capture must hold the exact B1 emqx_acl inventory (inactive under the file ACL)."""
+    try:
+        from emqx_file_policy_api import (compare_file_policy_native_acl,FilePolicyNativeACL,
+            FilePolicyACLRefused)
+    except BaseException:raise RealOwnerRefused('file_policy_acl') from None
+    try:
+        proof=compare_file_policy_native_acl(source_api=source_api,native_values=native_values)
+        if type(proof) is not FilePolicyNativeACL or proof._api is not source_api or proof._native is not native_values:
+            raise ValueError()
+        proof.scan(b'')
+        return proof
+    except FilePolicyACLRefused as error:raise RealOwnerRefused(error.phase) from None
+    except BaseException:raise RealOwnerRefused('file_policy_acl') from None
 
 
 def final_private_receipt(registry):
@@ -991,6 +1026,7 @@ def run_real_framed_owner(stream,*,private_parent,source_mode,no_live=True,targe
         phase='object_integrity';_scan_object_receipt(receipt,object_expected,object_results,api_results,session)
         return {'evidence_bytes':receipt,'scope':'private-same-target-product-flow', 'client_validation':('source-login-imported-mnesia-acl-retained-after-restore-rollback-restart' if target_mode==IMPORTED_MNESIA else 'source-login-target-file-acl-retained-after-restore-rollback-restart'),
                 'source_mnesia_acl_behavior':('mqtt-validated-imported-database-with-lab-only-file' if target_mode==IMPORTED_MNESIA else 'not-assessed-target-file-authorizer'),
+                'source_mnesia_acl_rows':('api-b1-inventory-active-imported-database' if target_mode==IMPORTED_MNESIA else 'native-b1-inventory-inactive-under-target-file-acl-api404-not-proof'),
                 'source_final_state':'not-assessed','commercial_acceptance':'not-assessed'}
     except RealOwnerRefused:
         raise

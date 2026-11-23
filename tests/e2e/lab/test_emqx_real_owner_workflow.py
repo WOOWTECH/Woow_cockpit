@@ -931,7 +931,8 @@ class FoundationTests(unittest.TestCase):
             if events.count('restore')==1:return {'changed':True}
             ctx.adapter(app).imported_hook();(self.root/'.config'/self.fixture.prefix/'fail-once').unlink()
             raise flows.RolledBack(BackupError('job-failed','generated'),{'rolled_back':True})
-        def api(provision,prior,supplied,actual_clients,actual_credentials):
+        def api(provision,prior,supplied,actual_clients,actual_credentials,*,target_mode):
+            self.assertEqual(target_mode,m.IMPORTED_MNESIA)  # explicit strict profile, never inferred
             i=events.count('api');self.assertIs(prior,scanners[i]);self.assertIs(supplied,session)
             self.assertIs(actual_clients,clients);self.assertIs(actual_credentials,credentials)
             events.append('api');return observations[i]

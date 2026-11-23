@@ -256,7 +256,10 @@ def collect_post_restore_values(*, prior_registry, provision, expected_container
             raise ValueError()
         from emqx_native_object_integrity import _record_native
         stage = 'record_native'
-        return _record_native(result,output.stdout,generation,provision,expected_container_id,before)
+        recorded=_record_native(result,output.stdout,generation,provision,expected_container_id,before)
+        # Value-only emqx_acl projection of this SAME wire; consumed only by FILE target proof.
+        from emqx_file_policy_api import _record_native_acl
+        return _record_native_acl(recorded,output.stdout,generation)
     except (KeyboardInterrupt, SystemExit):
         raise PrivateFailure('post-native-values-cancelled') from None
     except Exception:
