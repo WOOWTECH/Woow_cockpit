@@ -31,7 +31,10 @@
       "evidence": "emqx-real-restore-20261123/arm-attempt18.json",
       "source_commit": "b3fc322 (code 6ffc757)",
       "elapsed_seconds": 958.0,
-      "rule_delivery": "not assessed by design: the target file ACL denies the HA roles' rule topics"
+      "rule_delivery": "PENDING for ARM: the FILE-baseline delivery round exists since f82bbd2 (HA rule-topic publishes refused by the unchanged target file ACL, management-API ingress with the restored HA key, republish delivered to an HA-gateway session, original HTTP action by vendor counters). arm-attempt18 passed BEFORE that round existed. arm-attempt19 (f82bbd2, 655s) stopped at REAL OWNER BUILD_PRODUCT_ACL_BASELINE_PRODUCT REFUSED in the product candidate build, before restore, so the round was not reached (inferred cause: the product's fixed 10s emqx eval bound under host load 19-25; 14d4a19 now names product_timeout/command/incompatible). Retry: arm-attempt20.",
+      "attempts_with_delivery_round": [
+        "arm-attempt19.json (refused at product build, delivery not reached)"
+      ]
     },
     {
       "variant": "(3) x86, built-in database ACL (--x86-real-restore-mnesia-acl)",
@@ -44,12 +47,18 @@
     },
     {
       "variant": "(4) x86, target file ACL policy (--x86-real-restore)",
-      "result": "PASS",
+      "result": "PASS (also with the FILE-baseline rule-delivery round)",
       "evidence": "emqx-real-restore-20261123/x86-attempt2.json",
       "source_commit": "5eb9d49",
       "elapsed_seconds": 950.6,
-      "rule_delivery": "not assessed by design: the target file ACL denies the HA roles' rule topics",
-      "earlier_attempt": "x86-attempt1.json: generic BUILD refusal after 622s under host load ~25-34; the cause (held readers' exit after the build) is INFERRED, not observed or root-caused; since 5eb9d49 such a stop is labelled build_readers_exit_<substep>; it did not recur in x86-attempt2 but may recur"
+      "rule_delivery": "real since x86-attempt3 (code 995a856 = f82bbd2 lab code; 1474.7s; exit 0): HA sensor and HA gateway rule-topic publishes refused by the unchanged target file ACL (PUBACK 135) and no rule/action counter moved; the HA-gateway session's own SUBSCRIBE of the republish output refused (SUBACK 1,135); the restored HA API key added that subscription and published one reading and one command through the management API (202, no subscribers); exactly one rendered republish reached the HA-gateway session; HTTP rule/action +1 success, 0 failures at the original loopback status API (vendor counters; request wire bytes not captured)",
+      "earlier_attempt": "x86-attempt1.json: generic BUILD refusal after 622s under host load ~25-34; the cause (held readers' exit after the build) is INFERRED, not observed or root-caused; since 5eb9d49 such a stop is labelled build_readers_exit_<substep>; it did not recur in x86-attempt2 but may recur",
+      "pass_with_delivery": {
+        "evidence": "emqx-real-restore-20261123/x86-attempt3.json",
+        "source_commit": "995a856",
+        "variant_flag": "--x86-real-restore",
+        "elapsed_seconds": 1474.7
+      }
     }
   ],
   "fixes_today": [
@@ -95,15 +104,15 @@
   ],
   "deviations_and_open": [
     "host /usr/bin/podman (the host user's production rootless storage) WAS used by host-run unit tests earlier today: test_emqx_mnesia_acl_target_variant (it calls emqx_native_runtime.run_native) ran 5x in lane emqx-main and 3x in lane emqx-filepolicy on 2026-11-23, each a transient --rm network=none container of the pinned EMQX image; per those lanes' records no service, secret, image or catalog was changed. This cannot be re-checked independently, because host production inventory access is not permitted. Never run run_native tests on the host.",
-    "rule delivery uses the HA backup's ORIGINAL HTTP target (the broker's own 127.0.0.1:18083 /api/v5/status) with vendor counters; request wire bytes are not captured",
+    "rule delivery uses the HA backup's ORIGINAL HTTP target (the broker's own 127.0.0.1:18083 /api/v5/status) with vendor counters; request wire bytes are not captured. In the FILE baseline the HA roles are refused on the rule topics by the target's own file ACL (proven), so there the rules are fed through the management API (vendor: no MQTT authorization on POST /publish and /clients/:id/subscribe) and the republish is delivered to an HA-gateway session whose subscription the management API placed",
     "commercial acceptance stays not-complete until the owner accepts the evidence; nothing pushed. Production: see the host /usr/bin/podman entry above (the earlier wording 'no production system was touched' was wrong and is withdrawn)."
   ],
-  "summary": "All four variants passed end to end on real HA backups (ARM and x86; built-in database ACL with real rule delivery; target file ACL policy). Commercial acceptance remains for the owner to grant.",
+  "summary": "Built-in database ACL: ARM and x86 passed end to end with real rule delivery. Target file ACL policy: x86 passed end to end WITH the new FILE-baseline rule-delivery round (x86-attempt3); ARM passed without it (arm-attempt18) and its retry with the round is pending (arm-attempt19 stopped at a product candidate-build stage before restore). Commercial acceptance remains for the owner to grant.",
   "attempt_history_20261123": {
     "arm_mnesia": "attempts 9-15 refused (action value, action last_modified_at, generic restore, payload history, post capture, round-2 decode, round-2 node budget) -> fixed; 16 PASS, 17 PASS with delivery",
     "x86_mnesia": "1 PASS, 2 PASS with delivery",
-    "arm_file": "18 PASS (attempt 17 earlier: SOURCE_API_ACL_USERS_HTTP_404, fixed by the file-policy contract)",
-    "x86_file": "1 generic BUILD (readers exit), 2 PASS"
+    "arm_file": "18 PASS (attempt 17 earlier: SOURCE_API_ACL_USERS_HTTP_404, fixed by the file-policy contract); 19 product candidate-build refusal (BUILD_PRODUCT_ACL_BASELINE_PRODUCT, before restore) with the delivery round required; 20 pending",
+    "x86_file": "1 generic BUILD (readers exit), 2 PASS; 3 PASS with the FILE delivery round"
   },
   "variant_flags": {
     "note": "attempt JSONs up to arm-attempt18/x86-attempt2 do not record the mode flag; the flags below come from lane emqx-main's transcript, and the 13:45 verifier independently confirmed them for the four passes (arm-mnesia-attempt17, x86-mnesia-attempt2, arm-attempt18, x86-attempt2). From arm-attempt19 on, each attempt JSON records variant_flag, target_mode, source_arch and rule_delivery_round (a static fact of the committed code).",
