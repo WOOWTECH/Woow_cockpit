@@ -1,0 +1,100 @@
+{
+ "after_analyse": [],
+ "after_first_connection": {},
+ "after_salt_binding": [],
+ "binding": "match",
+ "blockers": [],
+ "case": "t2_hidden_hooks",
+ "check_sees": {
+  "blocker": false,
+  "callbacks": [],
+  "env_count": 0,
+  "hooks": [],
+  "returned": "dict",
+  "seconds": 0.7
+ },
+ "container": {
+  "cap_add": [],
+  "cap_drop": [],
+  "memory": 1073741824,
+  "mounts": [
+   "volume:/var/lib/postgresql:noexec,nosuid,nodev,rbind"
+  ],
+  "network_mode": "none",
+  "pids_limit": 512,
+  "ports": {},
+  "privileged": false,
+  "read_only_root": true,
+  "security_opt": [
+   "no-new-privileges"
+  ],
+  "user": ""
+ },
+ "elapsed_seconds": 56.0,
+ "found": {
+  "migrations": [
+   "20250326162113_baseline"
+  ],
+  "schemas": [
+   "woow",
+   "woow_platform"
+  ],
+  "superuser": []
+ },
+ "image_pg18": "sha256:4ea77c7055dec6a632156aa2cd9f1abaaedeba5f812f104f4e9e1ac37363469b",
+ "markers_final": {},
+ "notes": [],
+ "scan": {
+  "pg_version": "18",
+  "salt_valid": true,
+  "symlinks": 0
+ },
+ "session_settings": {
+  "datestyle": "ISO, MDY",
+  "event_triggers": "off",
+  "extra_float_digits": "3",
+  "review": null,
+  "search_path": "pg_catalog",
+  "session_preload_libraries": "",
+  "shared_preload_libraries": ""
+ },
+ "source": {
+  "commit": "f484d9792e00def29c8bb38fb8fb15c7ab6f79eb",
+  "ha_litellm_sha256": "4eb30d9f5aee9b3f536e7b1c66de2f52cff96025d6826fc3200900d53c382c2c",
+  "tracked_changes": false
+ },
+ "staged_config_rows": {
+  "builtins_exec": 2,
+  "custom_auth": true,
+  "post_call_rules": true,
+  "rows": 2
+ },
+ "steps": [
+  "start_ha_cluster",
+  "analyse",
+  "salt_binding",
+  "read_schema",
+  "export_rows"
+ ],
+ "stored_hooks_blocker": null,
+ "stored_settings": {
+  "callbacks": [],
+  "env": [],
+  "hooks": [],
+  "sections": [
+   "general_settings",
+   "litellm_settings"
+  ]
+ },
+ "stored_settings_line": null,
+ "text_eq_operator_code": "public.woowbk_texteq",
+ "user_row_as_exported": [
+  "u1",
+  "proxy_admin",
+  "0.123456789012345",
+  "2026-11-05 10:00:00",
+  "2026-11-05 10:00:00+00"
+ ],
+ "volumes_left_behind": [],
+ "warnings": []
+}

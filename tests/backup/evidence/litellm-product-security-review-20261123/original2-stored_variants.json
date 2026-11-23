@@ -1,0 +1,205 @@
+{
+ "after_analyse": [],
+ "after_first_connection": {},
+ "after_salt_binding": [],
+ "binding": "match",
+ "blockers": [],
+ "case": "stored_variants",
+ "container": {
+  "cap_add": [],
+  "cap_drop": [],
+  "memory": 1073741824,
+  "mounts": [
+   "volume:/var/lib/postgresql:noexec,nosuid,nodev,rbind"
+  ],
+  "network_mode": "none",
+  "pids_limit": 512,
+  "ports": {},
+  "privileged": false,
+  "read_only_root": true,
+  "security_opt": [
+   "no-new-privileges"
+  ],
+  "user": ""
+ },
+ "elapsed_seconds": 83.6,
+ "found": {
+  "migrations": [
+   "20250326162113_baseline"
+  ],
+  "schemas": [
+   "woow",
+   "woow_platform"
+  ],
+  "superuser": []
+ },
+ "image_pg18": "sha256:4ea77c7055dec6a632156aa2cd9f1abaaedeba5f812f104f4e9e1ac37363469b",
+ "markers_final": {},
+ "notes": [],
+ "scan": {
+  "pg_version": "18",
+  "salt_valid": true,
+  "symlinks": 0
+ },
+ "session_settings": {
+  "datestyle": "ISO, MDY",
+  "event_triggers": "off",
+  "extra_float_digits": "3",
+  "review": null,
+  "search_path": "pg_catalog",
+  "session_preload_libraries": "",
+  "shared_preload_libraries": ""
+ },
+ "source": {
+  "commit": "adfc20087b3d6503056c7711d06475f60769c6b6",
+  "ha_litellm_sha256": "4eb30d9f5aee9b3f536e7b1c66de2f52cff96025d6826fc3200900d53c382c2c",
+  "tracked_changes": false
+ },
+ "staged_config_rows": {
+  "builtins_exec": 1,
+  "custom_auth": false,
+  "post_call_rules": true,
+  "rows": 1
+ },
+ "steps": [
+  "start_ha_cluster",
+  "analyse",
+  "salt_binding",
+  "read_schema",
+  "export_rows"
+ ],
+ "stored_hooks_blocker": null,
+ "stored_settings": {
+  "callbacks": [],
+  "env": [],
+  "hooks": [],
+  "sections": [
+   "litellm_settings"
+  ]
+ },
+ "stored_settings_line": null,
+ "user_row_as_exported": [
+  "u1",
+  "proxy_admin",
+  "0.123456789012345",
+  "2026-11-05 10:00:00",
+  "2026-11-05 10:00:00+00"
+ ],
+ "variants": {
+  "big_env_plus_hook": {
+   "blocker": false,
+   "returned": "None",
+   "seconds": 4.76
+  },
+  "callbacks_absolute_path_module": {
+   "blocker": true,
+   "callbacks": [],
+   "env_count": 0,
+   "hooks": [
+    "litellm_settings 回呼 /tmp/woowbk_review.fn"
+   ],
+   "returned": "dict",
+   "seconds": 0.88
+  },
+  "callbacks_string": {
+   "blocker": false,
+   "callbacks": [],
+   "env_count": 0,
+   "hooks": [],
+   "returned": "dict",
+   "seconds": 0.79
+  },
+  "control_pass_through_url": {
+   "blocker": false,
+   "callbacks": [],
+   "env_count": 0,
+   "hooks": [],
+   "returned": "dict",
+   "seconds": 0.47
+  },
+  "control_plain_names": {
+   "blocker": false,
+   "callbacks": [
+    "langfuse",
+    "otel"
+   ],
+   "env_count": 1,
+   "hooks": [],
+   "returned": "dict",
+   "seconds": 0.31
+  },
+  "custom_provider_map": {
+   "blocker": false,
+   "callbacks": [],
+   "env_count": 0,
+   "hooks": [],
+   "returned": "dict",
+   "seconds": 0.4
+  },
+  "guardrails_v1_callbacks": {
+   "blocker": false,
+   "callbacks": [],
+   "env_count": 0,
+   "hooks": [],
+   "returned": "dict",
+   "seconds": 0.64
+  },
+  "guardrails_v2_module": {
+   "blocker": false,
+   "callbacks": [],
+   "env_count": 0,
+   "hooks": [],
+   "returned": "dict",
+   "seconds": 0.57
+  },
+  "jwt_custom_validate": {
+   "blocker": false,
+   "callbacks": [],
+   "env_count": 0,
+   "hooks": [],
+   "returned": "dict",
+   "seconds": 0.8
+  },
+  "pass_through_module_target": {
+   "blocker": false,
+   "callbacks": [],
+   "env_count": 0,
+   "hooks": [],
+   "returned": "dict",
+   "seconds": 1.18
+  },
+  "post_call_rules_baseline": {
+   "blocker": true,
+   "callbacks": [],
+   "env_count": 0,
+   "hooks": [
+    "litellm_settings.post_call_rules"
+   ],
+   "returned": "dict",
+   "seconds": 1.49
+  },
+  "router_settings_plugins": {
+   "blocker": false,
+   "callbacks": [],
+   "env_count": 0,
+   "hooks": [],
+   "returned": "dict",
+   "seconds": 0.61
+  },
+  "success_callback_string": {
+   "blocker": false,
+   "callbacks": [],
+   "env_count": 0,
+   "hooks": [],
+   "returned": "dict",
+   "seconds": 0.44
+  },
+  "timeout_scaled_plus_hook": {
+   "blocker": false,
+   "returned": "None",
+   "seconds": 0.06
+  }
+ },
+ "volumes_left_behind": [],
+ "warnings": []
+}
