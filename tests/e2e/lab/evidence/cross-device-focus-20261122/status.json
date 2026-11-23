@@ -33,7 +33,7 @@
       "cli_cancel_result": "real job-cancel CLI command in a separate process returned ok/state cancelled in restore decrypt and backup package windows; engine cleanup as above",
       "ciphertext_bytes": 34503003,
       "harness_storage_measures": "sliding-window source and hole-punched truncate-extract output (stated in large-negatives-README.txt); cancel-extract 4.0GiB really allocated",
-      "incompressible_outer_status": "blocked: host disk shortfall 326506805 bytes (required free 21856942389, free 21530435584); probe refused before generating anything; 128MiB real smoke passed",
+      "incompressible_outer_status": "blocked: host disk shortfall 752646453 bytes at 2026-11-23T01:33:46Z (required free 21856942389, free 21104295936; attempt 1 shortfall 326506805); probe refused before generating anything; 128MiB real smoke passed",
       "incompressible_outer_evidence": "tests/backup/evidence/large-incompressible-outer-8193mib.attempt.json",
       "commercial_acceptance": "not-complete"
     }

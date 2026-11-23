@@ -80,6 +80,8 @@ Incompressible outer archive above 8GiB (probe tests/backup/bounded_incompressib
 - Actual 8193 MiB attempt REFUSED BEFORE GENERATING ANYTHING (large-incompressible-outer-8193mib.*, exit 3):
   required free 21,856,942,389 bytes = 12GiB reserve + 256MiB guard + 8,610,281,781 (the writer's own archive
   bound; model of the real size 8,593,308,283) + 93,323,264 window; free at plan 21,530,435,584;
-  shortfall 326,506,805 bytes. The archive itself must exist in full (>8GiB) for the reader/verify path, so no
+  shortfall 326,506,805 bytes. A 15-minute watch afterwards never saw more than 21,298,855,936 bytes free;
+  attempt 2 (large-incompressible-outer-8193mib-attempt2.*, 2026-11-23T01:33:46Z, exit 3): free 21,104,295,936,
+  shortfall 752,646,453 bytes. The archive itself must exist in full (>8GiB) for the reader/verify path, so no
   harness technique can remove this need. Unit checks of the >8GiB raw PAX size-record parser use a real engine
   header (ustar size field 0, PAX size record) but no >8GiB payload.
