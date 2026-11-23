@@ -65,7 +65,8 @@ DEVICE = 'woowbk-dev-e'
 LOCK = '/tmp/woowbk-dev-e-mutation.lock'
 HOLD_BUDGET = 40 * 60
 MIN_HOST_AVAILABLE_KIB = 1024 * 1024
-MIN_DEVICE_HEADROOM = 2304 * 1024 * 1024   # OpenDesign's daemon peaks ~1.5 GiB (facts), the jobs and the SQLite child
+MIN_DEVICE_HEADROOM = 1024 * 1024 * 1024   # the jobs, the SQLite child and the daemon's growth above idle
+OD_IDLE = 1280 * 1024 * 1024              # OpenDesign's four containers when started (idle ~0.8 GiB, facts 2.4)
 FLOOR = 12 * 1024 ** 3          # the team keeps >= 12 GiB free on the host at every moment
 NEED = 3 * 1024 ** 3            # the upload copy (1.1 GB) + staging, archive, safety backups, volume imports
 FIXTURE = (LAB / 'ha-fixtures' / '20261123-batch2' / 'x86' / 'woow-b2-opendesign-x86-enc'
@@ -204,6 +205,16 @@ print(json.dumps({"entries": total, "nonroot": nonroot, "missing": missing,
 """
 def walk(volume, parts):
     return json.loads(run(["podman", "unshare", "python3", "-I", "-c", WALK, mountpoint(volume), *parts], timeout=600))
+def target_prefs():
+    # sha256 prefixes of the preferences this device keeps (installationId, agentCliEnv, agentCliEnvIntent): equal
+    # before and after the import, whatever HA's were (never a value)
+    p = subprocess.run(["podman", "unshare", "cat", os.path.join(mountpoint("open-design_open_design_data"),
+                                                                 "app-config.json")], capture_output=True, timeout=120)
+    if p.returncode != 0:
+        return {}
+    doc = json.loads(p.stdout)
+    return {k: hashlib.sha256(json.dumps(doc[k], sort_keys=True).encode()).hexdigest()[:12]
+            for k in ("installationId", "agentCliEnv", "agentCliEnvIntent") if k in doc}
 def mcp_token():
     data = run(["podman", "unshare", "cat", os.path.join(mountpoint("open-design_mcp_data"), "state", "state.json")])
     return json.loads(data).get("token")
@@ -295,12 +306,7 @@ out["data_entries"], out["data_nonroot"] = data["entries"], data["nonroot"]
 kept = walk("open-design_open_design_data", REQ["kept"])
 out["kept_fingerprint"], out["kept_missing"] = kept["fingerprint"], kept["missing"]
 out["mcp_fingerprint"] = walk("open-design_mcp_data", [])["fingerprint"]
-prefs = run(["podman", "unshare", "cat", os.path.join(mountpoint("open-design_open_design_data"), "app-config.json")])
-inst = run(["podman", "unshare", "cat", os.path.join(mountpoint("open-design_open_design_data"), "installation.json")])
-try:
-    out["prefs_installation_is_this_devices"] = json.loads(prefs).get("installationId") == json.loads(inst).get("installationId")
-except ValueError:
-    out["prefs_installation_is_this_devices"] = False
+out["target_prefs"] = target_prefs()
 print(json.dumps(out))
 '''
 
@@ -313,6 +319,7 @@ out["mcp_fingerprint"] = walk("open-design_mcp_data", [])["fingerprint"]
 status, body, _h = mcp(mcp_token(), "initialize", {"protocolVersion": "2025-06-18", "capabilities": {},
                                                     "clientInfo": {"name": "woowbk-odff", "version": "1"}})
 out["mcp_initialize"] = status
+out["target_prefs"] = target_prefs()
 print(json.dumps(out))
 '''
 
@@ -516,19 +523,24 @@ class Run:
             raise Failed(f'lock hold budget reached before {phase}')
 
     def device_memory(self):
-        proc = drv.root('sh', '-c', 'echo "$(cat /sys/fs/cgroup/memory.current) $(cat /sys/fs/cgroup/memory.max)"',
+        """(memory that cannot be reclaimed: anon + kernel, the cgroup limit) of dev-e; its page cache is reclaimable."""
+        proc = drv.root('sh', '-c', 'grep -E "^(anon|kernel) " /sys/fs/cgroup/memory.stat; cat /sys/fs/cgroup/memory.max',
                         timeout=60)
         try:
-            current, maximum = (int(x) for x in drv.out(proc).split())
-        except ValueError:
+            lines = drv.out(proc).split('\n')
+            used = sum(int(line.split()[1]) for line in lines if line.startswith(('anon ', 'kernel ')))
+            maximum = int(next(line for line in lines if line.strip().isdigit()))
+        except (ValueError, StopIteration, IndexError):
             raise Failed('cannot read dev-e cgroup memory') from None
-        return current, maximum
+        return used, maximum
 
     def headroom(self):
-        current, maximum = self.device_memory()
-        ok = maximum - current >= MIN_DEVICE_HEADROOM
-        self.ev.check('preflight: dev-e memory headroom for OpenDesign and the jobs', ok,
-                      {'current_mib': current >> 20, 'limit_mib': maximum >> 20, 'units': self.found_units})
+        used, maximum = self.device_memory()
+        need = MIN_DEVICE_HEADROOM + (OD_IDLE if any(s != 'active' for s in self.found_units.values()) else 0)
+        ok = maximum - used >= need
+        self.ev.check('preflight: dev-e memory headroom for OpenDesign and the jobs (before any change)', ok,
+                      {'unreclaimable_mib': used >> 20, 'limit_mib': maximum >> 20, 'need_mib': need >> 20,
+                       'units': self.found_units})
         if not ok:
             raise Failed('dev-e memory headroom too small')
         st = os.statvfs('/')
@@ -557,13 +569,13 @@ class Run:
                         sha[:16]):
             raise Failed('fixture changed')
         self.found_units = {u: unit_state(u) for u in UNITS}
+        self.headroom()
+        self.uid = device_uid()
         if any(state != 'active' for state in self.found_units.values()):
             proc = drv.owner('systemctl', '--user', 'start', 'open-design.service', timeout=900)
             ev.check('setup: dev-e\'s OpenDesign was stopped (lane batch2-lab saves RAM); started for the run', proc.returncode == 0,
                      self.found_units)
             wait_units(ev, 'setup start')
-        self.headroom()
-        self.uid = device_uid()
         self.timer_found = drv.out(drv.root('systemctl', 'is-enabled', TIMER, timeout=60)).strip()
         proc = drv.root('systemctl', 'mask', TIMER, timeout=120)
         ev.check('setup: the scheduled-backup timer is masked (shared lab, no schedule)', proc.returncode == 0,
@@ -756,9 +768,11 @@ class Run:
             ev.check(f'{label_text}: HA\'s {SOURCE["conversations"]} conversations through the API',
                      state.get('conversations') == SOURCE['conversations'], state.get('conversations'))
             ev.check(f'{label_text}: every member of the data volume is owned 0:0 (the daemon\'s user via keep-id); '
-                     'HA\'s preferences carry this device\'s installation id',
-                     state.get('data_nonroot') == 0 and state.get('prefs_installation_is_this_devices') is True,
-                     {k: state.get(k) for k in ('data_entries', 'data_nonroot', 'prefs_installation_is_this_devices')})
+                     'the preferences this device keeps (installation id, agent CLI environment) are its own, not HA\'s',
+                     state.get('data_nonroot') == 0 and state.get('target_prefs') == self.before.get('target_prefs'),
+                     {'data_entries': state.get('data_entries'), 'data_nonroot': state.get('data_nonroot'),
+                      'target_prefs_equal': state.get('target_prefs') == self.before.get('target_prefs'),
+                      'target_prefs_keys': sorted(state.get('target_prefs') or {})})
         return state
 
     def collect_needles(self):
