@@ -308,6 +308,126 @@ class BaselineDriverTest(unittest.TestCase):
         self.assertNotIn("'after', time.strftime('%Y%m%dT%H%M%S'), secrets.", text)
 
 
+# A stand-in labpodman for batch2_baseline.py --verify: answers from a scenario file and logs every call, so the tests
+# see exactly what the read-only mode asks dev-e to do. It never reaches a real labpodman or device.
+FAKE_LP = r'''#!/usr/bin/env python3
+import json, os, sys
+argv = sys.argv[1:]
+scenario = json.load(open(os.environ['FAKE_LP_SCENARIO']))
+def log(entry):
+    with open(os.environ['FAKE_LP_LOG'], 'a') as handle:
+        handle.write(json.dumps(entry) + '\n')
+if argv[:2] == ['inspect', 'woowbk-dev-e']:
+    log(['inspect']); print(scenario.get('inspect', 'true none {}')); sys.exit(0)
+if argv[:3] == ['exec', '-i', 'woowbk-dev-e'] and argv[3] == '/usr/local/libexec/woowtech-cockpit-backup':
+    request = sys.stdin.read()
+    log(['engine', argv[4], request]); print(json.dumps(scenario['engine'][argv[4]])); sys.exit(0)
+if argv[:4] == ['exec', '-i', 'woowbk-dev-e', '/usr/local/bin/woowbk-owner'] and argv[4:7] == ['python3', '-I', '-c']:
+    app, action = argv[8], argv[9]
+    log(['markers', app, action, argv[10:], json.loads(sys.stdin.read() or '{}') != {}])
+    print(json.dumps(scenario['markers'][app][action])); sys.exit(0)
+if argv[:3] == ['exec', 'woowbk-dev-e', 'cat']:
+    log(['cat', argv[3]]); print(json.dumps(scenario['catalog'][argv[3].rsplit('/', 1)[1][:-5]])); sys.exit(0)
+if argv[:3] == ['exec', 'woowbk-dev-e', 'curl']:
+    log(['curl', argv[-1]]); print(scenario.get('http', {}).get(argv[-1], '200'), end=''); sys.exit(0)
+log(['UNEXPECTED', argv]); sys.exit(97)
+'''
+NC_SHA = 'woowbk-lab-baseline.txt:' + '5' * 64
+CS_READ = {'snippets': ['woowbk-lab-baseline.code-snippets:' + 'a' * 64], 'skills': ['woowbk-lab-baseline:' + 'b' * 64],
+           'files': ['woowbk-lab-baseline.txt:' + 'c' * 64]}
+
+
+class VerifyModeTest(unittest.TestCase):
+    """batch2_baseline.py --verify against the stand-in labpodman: read only, and every way it must fail."""
+
+    def run_verify(self, apps, read=None, listed=True, inspect='true none {}', http=None, password=True):
+        import json
+        home = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        lab = home / '.woowbk-lab'
+        (lab / 'bin').mkdir(parents=True)
+        lp = lab / 'bin' / 'labpodman'
+        lp.write_text(FAKE_LP)
+        lp.chmod(0o755)
+        if password:
+            (lab / 'secrets').mkdir(mode=0o700)
+            (lab / 'secrets' / 'dev-e-markers.json').write_text(json.dumps({'nextcloud': 'not-a-real-one'}))
+        baseline_reads = {'nextcloud': {'users': ['woowbk-lab-baseline'], 'files': [NC_SHA]}, 'code-server': CS_READ}
+        for app, found in baseline_reads.items():
+            run = lab / 'evidence' / 'batch2-lab' / '20261123T211623-baseline'
+            run.mkdir(parents=True, exist_ok=True)
+            (run / f'{app}-markers-after-restore.json').write_text(json.dumps(found))
+        ids = {app: json.loads((HERE / 'evidence' / 'batch2-lab-20261123' / f'{app}-baseline.json').read_text())['backup_id']
+               for app in ('nextcloud', 'code-server')}
+        catalog_id = {'nextcloud': 'nextcloud', 'code-server': 'woow-code-server'}
+        scenario = {
+            'inspect': inspect, 'http': http or {},
+            'engine': {'status': {'ok': True, 'key': {'key_id': 'lab-key'},
+                                  'apps': [{'id': i, 'deployed': True, 'state': 'running', 'problems': []}
+                                           for i in catalog_id.values()]},
+                       'list': {'ok': True, 'backups': [{'id': ids[a], 'encrypted': True, 'key_id': 'lab-key',
+                                                         'apps': [{'id': catalog_id[a]}]} for a in ids if listed]}},
+            'markers': {app: {'read': (read or {}).get(app, found), 'login': {'ok': True}}
+                        for app, found in baseline_reads.items()},
+            'catalog': {i: {'health': [{'url': f'http://127.0.0.1/{i}', 'expect_status': 200}]} for i in catalog_id.values()},
+        }
+        (home / 'scenario.json').write_text(json.dumps(scenario))
+        env = dict(os.environ, HOME=str(home), WOOWBK_LAB_HOME=str(lab), FAKE_LP_SCENARIO=str(home / 'scenario.json'),
+                   FAKE_LP_LOG=str(home / 'calls.log'))
+        proc = subprocess.run([sys.executable, '-I', str(HERE / 'batch2_baseline.py'), '--verify', *apps],
+                              capture_output=True, text=True, env=env, timeout=120)
+        calls = [json.loads(line) for line in (home / 'calls.log').read_text().splitlines()]
+        results = sorted((lab / 'evidence' / 'batch2-lab').glob('*-verify/result.json'))
+        result = json.loads(results[-1].read_text()) if results else None
+        return proc, calls, result, lab
+
+    def failed(self, result):
+        return [c['check'] for c in result['checks'] if not c['ok']]
+
+    def test_baseline_state_passes_and_only_reads(self):
+        proc, calls, result, lab = self.run_verify(['nextcloud', 'code-server'])
+        self.assertEqual(proc.returncode, 0, proc.stdout[-2000:] + proc.stderr[-2000:])
+        self.assertEqual(self.failed(result), [])
+        self.assertEqual(result['passed'], result['total'])
+        self.assertEqual({c[1] for c in calls if c[0] == 'engine'}, {'status', 'list'})  # no job, key or restore command
+        self.assertEqual({c[2] for c in calls if c[0] == 'markers'}, {'read', 'login'})  # never seed
+        self.assertNotIn('UNEXPECTED', [c[0] for c in calls])
+        self.assertTrue(any(c == ['markers', 'nextcloud', 'read', [], True] for c in calls))  # the password goes by stdin
+        self.assertNotIn('not-a-real-one', proc.stdout + proc.stderr + json_dumps(result))
+        self.assertIn(['markers', 'code-server', 'login', [], False], calls)
+        self.assertEqual(list((lab / 'evidence' / 'batch2-lab').glob('*-baseline/*-backup-job.json')), [])
+
+    def test_a_leftover_after_marker_fails(self):
+        read = {'nextcloud': {'users': ['woowbk-lab-after', 'woowbk-lab-baseline'], 'files': [NC_SHA]}}
+        proc, _, result, _ = self.run_verify(['nextcloud'], read=read)
+        self.assertEqual(proc.returncode, 1)
+        failed = self.failed(result)
+        self.assertEqual(len(failed), 2, failed)
+        self.assertTrue(failed[0].startswith('nextcloud: only the baseline markers'))
+        self.assertTrue(failed[1].startswith("nextcloud: marker read equals the baseline's"))
+
+    def test_a_changed_file_fails(self):
+        read = {'code-server': dict(CS_READ, files=['woowbk-lab-baseline.txt:' + 'd' * 64])}
+        proc, _, result, _ = self.run_verify(['code-server'], read=read)
+        self.assertEqual(proc.returncode, 1)
+        self.assertEqual(len(self.failed(result)), 1)
+        self.assertTrue(self.failed(result)[0].startswith("code-server: marker read equals the baseline's"))
+
+    def test_a_missing_baseline_backup_a_bad_health_answer_and_a_network_fail(self):
+        proc, _, result, _ = self.run_verify(['nextcloud'], listed=False, inspect='true bridge {}',
+                                             http={'http://127.0.0.1/nextcloud': '503'})
+        self.assertEqual(proc.returncode, 1)
+        failed = self.failed(result)
+        self.assertEqual(len(failed), 3, failed)
+        self.assertEqual(failed[0], 'dev-e: running, network none, no published port')
+        self.assertTrue(failed[1].startswith('nextcloud: catalog health URLs'))
+        self.assertTrue(failed[2].startswith('nextcloud: baseline backup'))
+
+    def test_verify_never_creates_the_password_file(self):
+        proc, calls, result, lab = self.run_verify(['code-server'], password=False)
+        self.assertEqual(proc.returncode, 0, proc.stdout[-2000:])
+        self.assertFalse((lab / 'secrets' / 'dev-e-markers.json').exists())
+
+
 class CodeServerCatalogTest(unittest.TestCase):
     def test_lab_entry_matches_what_the_baseline_and_markers_use(self):
         import json
