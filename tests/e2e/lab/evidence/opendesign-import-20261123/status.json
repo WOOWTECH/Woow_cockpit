@@ -87,7 +87,7 @@
  },
  "unit_and_suites": {
   "tests/backup/test_ha_opendesign.py": "17/17",
-  "node tests/backup-ui.mjs": "99/99 (482dd8c)",
+  "node tests/backup-ui.mjs": "100/100 at c32365d (adds the OpenDesign check-card case; 99/99 at 482dd8c)",
   "tests/backup full": "1414 run, 17 fail ONLY in test_ha_emqx (10) + test_ha_omnigent (7): pre-existing on the unchanged base (same 14 F + 3 E), their public guards"
  },
  "not_covered_or_simulated": [
