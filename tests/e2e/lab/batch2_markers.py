@@ -24,8 +24,9 @@ account's password>} (Nextcloud only; generated once by batch2_baseline.py, neve
               baseline: exactly the device markers of lane codeserver-import's harness (codeserver_full_flow.py
               DEVICE_MARKERS), so that harness finds them and seeds nothing; after: the same with woowbk-lab-after.
               login: the real browser login inside dev-e: POST /login with the password from the podman secret
-              code-server-config (302 + code-server-session cookie), GET / with that cookie (200) and without it (302),
-              a wrong password (no cookie). Only status codes are printed, never the password or the cookie.
+              code-server-config (302 + code-server-session cookie); GET / with that cookie (302 ./?folder=/workspace, the
+              default folder) and that page (200, the workbench); GET / without it (302 ./login); a wrong password (no
+              cookie). Only status codes and redirect paths are printed, never the password or the cookie.
 Seeding only creates what is missing. Every marker name starts with woowbk-lab-."""
 import base64
 import hashlib
@@ -300,16 +301,20 @@ def cs_password():
     raise SystemExit('no password in the code-server-config secret')
 
 
-def cs_request(method, path, body=None, headers=None):
+def cs_request(method, path, body=None, headers=None, want_body=False):
     import http.client
     conn = http.client.HTTPConnection('127.0.0.1', CS_PORT, timeout=60)
     try:
         conn.request(method, path, body=body, headers=dict(headers or {}))
         response = conn.getresponse()
-        response.read()
-        return response.status, response.getheaders()
+        data = response.read()
+        return (response.status, response.getheaders(), data) if want_body else (response.status, response.getheaders())
     finally:
         conn.close()
+
+
+def cs_location(headers):
+    return next((value for key, value in headers if key.lower() == 'location'), '')
 
 
 def cs_session(headers):
@@ -321,8 +326,9 @@ def cs_session(headers):
 
 
 def cs_login():
-    """The real browser login: POST /login with the device's password gives a session cookie, the workbench loads with
-    it, without it / redirects to the login, a wrong password gets no cookie. Only status codes are reported."""
+    """The real browser login: POST /login with the device's password gives a session cookie; with it / redirects to the
+    default folder (code-server 4.139.1: 302 ./?folder=/workspace) and that page is the workbench (200); without it /
+    redirects to ./login; a wrong password gets no cookie. Only status codes and the redirect paths are reported."""
     form = {'Content-Type': 'application/x-www-form-urlencoded'}
     deadline = time.monotonic() + 180
     while True:
@@ -335,15 +341,24 @@ def cs_login():
         time.sleep(3)
     status, headers = cs_request('POST', '/login', urllib.parse.urlencode({'password': cs_password()}), form)
     cookie = cs_session(headers)
-    page = cs_request('GET', '/', headers={'Cookie': cookie})[0] if cookie else None
-    anonymous = cs_request('GET', '/')[0]
+    root = folder = page = None
+    workbench = False
+    if cookie:
+        root, root_headers = cs_request('GET', '/', headers={'Cookie': cookie})
+        folder = cs_location(root_headers)
+        if root == 302 and folder.startswith('./?folder='):
+            page, _headers, body = cs_request('GET', folder[1:], headers={'Cookie': cookie}, want_body=True)
+            workbench = b'workbench' in body
+    anonymous, anonymous_headers = cs_request('GET', '/')
     wrong_status, wrong_headers = cs_request('POST', '/login',
                                              urllib.parse.urlencode({'password': 'woowbk-lab-' + secrets.token_hex(12)}),
                                              form)
-    result = {'healthz': health, 'login': status, 'session_cookie': cookie is not None, 'page_with_cookie': page,
-              'page_without_cookie': anonymous, 'wrong_password': wrong_status,
-              'wrong_password_cookie': cs_session(wrong_headers) is not None}
-    result['ok'] = (health == 200 and status == 302 and cookie is not None and page == 200 and anonymous == 302
+    result = {'healthz': health, 'login': status, 'session_cookie': cookie is not None, 'root_with_cookie': root,
+              'root_redirect': folder, 'page_with_cookie': page, 'workbench': workbench,
+              'page_without_cookie': anonymous, 'anonymous_redirect': cs_location(anonymous_headers),
+              'wrong_password': wrong_status, 'wrong_password_cookie': cs_session(wrong_headers) is not None}
+    result['ok'] = (health == 200 and status == 302 and cookie is not None and root == 302 and page == 200 and workbench
+                    and anonymous == 302 and result['anonymous_redirect'].startswith('./login')
                     and wrong_status != 302 and not result['wrong_password_cookie'])
     return result
 

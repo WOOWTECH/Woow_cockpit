@@ -256,13 +256,19 @@ class CodeServerMarkersTest(unittest.TestCase):
                 self.send_header('Content-Length', '0')
                 self.end_headers()
 
-            def do_GET(self):
+            def do_GET(self):  # code-server 4.139.1 as measured in dev-e
                 if self.path == '/healthz':
                     self.reply(200)
-                elif self.headers.get('Cookie') == 'code-server-session=s3ss10n':
-                    self.reply(200)
-                else:
+                elif self.headers.get('Cookie') != 'code-server-session=s3ss10n':
                     self.reply(302, [('Location', './login')])
+                elif self.path == '/':
+                    self.reply(302, [('Location', './?folder=/workspace')])
+                else:
+                    body = b'<html><div class="monaco-workbench"></div></html>'
+                    self.send_response(200)
+                    self.send_header('Content-Length', str(len(body)))
+                    self.end_headers()
+                    self.wfile.write(body)
 
             def do_POST(self):
                 body = self.rfile.read(int(self.headers.get('Content-Length') or 0)).decode()
@@ -276,9 +282,10 @@ class CodeServerMarkersTest(unittest.TestCase):
         try:
             env = dict(self.env, WOOWBK_LAB_CS_PORT=str(server.server_address[1]))
             result = self.markers('login', env=env)
-            self.assertEqual(result, {'healthz': 200, 'login': 302, 'session_cookie': True, 'page_with_cookie': 200,
-                                      'page_without_cookie': 302, 'wrong_password': 200,
-                                      'wrong_password_cookie': False, 'ok': True})
+            self.assertEqual(result, {'healthz': 200, 'login': 302, 'session_cookie': True, 'root_with_cookie': 302,
+                                      'root_redirect': './?folder=/workspace', 'page_with_cookie': 200,
+                                      'workbench': True, 'page_without_cookie': 302, 'anonymous_redirect': './login',
+                                      'wrong_password': 200, 'wrong_password_cookie': False, 'ok': True})
             bad = self.markers('login', env=dict(env, FAKE_PASSWORD='not-the-password'))
             self.assertFalse(bad['ok'])
             self.assertNotIn('lab-test-pw', json_dumps(result) + json_dumps(bad))
