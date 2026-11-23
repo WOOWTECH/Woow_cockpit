@@ -11,6 +11,8 @@ Cases (each crafts its own cluster in a throwaway container, packs it as an HA a
   owner_trojan      objects HA's NON-superuser database owner `litellm` can create itself (a compromised LiteLLM in
                     HA): public.json_agg(name) aggregate (search-path trojan, CVE-2018-1058 class) and
                     public._prisma_migrations replaced by a view over a plpgsql function.
+  owner_view        only the view part of owner_trojan (no aggregate): public._prisma_migrations as a view over a
+                    plpgsql function, read by the engine as the superuser.
   superuser_catalog objects only a superuser (or a crafted data directory) has: a login and a ddl_command_end event
                     trigger, per-database settings (session_preload_libraries, DateStyle, extra_float_digits).
   tablespace_map    a cold cluster plus backup_label + tablespace_map (no symlink in the archive).
@@ -130,6 +132,9 @@ CREATE VIEW public._prisma_migrations AS SELECT * FROM public.woowbk_view_rows()
 RESET ROLE;
 """
 
+OWNER_VIEW_SQL = OWNER_TROJAN_SQL[OWNER_TROJAN_SQL.index('CREATE FUNCTION public.woowbk_view_rows'):]
+OWNER_VIEW_SQL = 'SET ROLE litellm;\n' + OWNER_VIEW_SQL
+
 SUPERUSER_SQL = r"""
 CREATE FUNCTION public.woowbk_et_ddl() RETURNS event_trigger LANGUAGE plpgsql AS $f$
 BEGIN PERFORM public.woowbk_probe('event_trigger_ddl_end'); END $f$;
@@ -226,9 +231,11 @@ def craft(case, salt, fingerprint, scratch):
         cluster.statement("CREATE ROLE litellm LOGIN NOSUPERUSER", 'postgres')
         cluster.statement("CREATE DATABASE litellm OWNER litellm ENCODING 'UTF8' TEMPLATE template0", 'postgres')
         cluster.script('SET ROLE litellm;\n' + probe_function() + 'RESET ROLE;\n', 'litellm')
-        cluster.script(base_sql(salt, fingerprint, view_migrations=(case == 'owner_trojan')), 'litellm')
+        cluster.script(base_sql(salt, fingerprint, view_migrations=case in ('owner_trojan', 'owner_view')), 'litellm')
         if case == 'owner_trojan':
             cluster.script(OWNER_TROJAN_SQL, 'litellm')
+        elif case == 'owner_view':
+            cluster.script(OWNER_VIEW_SQL, 'litellm')
         elif case == 'superuser_catalog':
             cluster.script(SUPERUSER_SQL, 'litellm')
         elif case == 'stored_settings':
@@ -439,7 +446,7 @@ def copy_injection():
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--case', required=True,
-                        choices=('owner_trojan', 'superuser_catalog', 'tablespace_map', 'stored_settings',
+                        choices=('owner_trojan', 'owner_view', 'superuser_catalog', 'tablespace_map', 'stored_settings',
                                  'copy_injection'))
     args = parser.parse_args()
     started = time.monotonic()
