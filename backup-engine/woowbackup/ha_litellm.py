@@ -573,6 +573,11 @@ NESTED_HOOKS = (
      f'lax $.pass_through_endpoints[*].target ? ({_TEXT} && @ like_regex "[.]" && '
      '!(@ like_regex "^[a-z][a-z0-9+-]*://" flag "i"))'),
     ('general_settings', 'litellm_jwtauth.custom_validate', f'lax $.litellm_jwtauth.custom_validate ? ({_TEXT})'),
+    # key_management_system "custom" loads <config dir>/<file>.py (or an absolute path) with exec_module at every start
+    # (secret_managers/custom_secret_manager_loader.py:30-75 via proxy_server.py:6981-6987, called on the DB-merged
+    # configuration, :5815-5831 -> :5550-5590)
+    ('general_settings', 'custom_secret_manager',
+     f'lax $.key_management_settings.custom_secret_manager ? ({_TEXT})'),
     ('router_settings', 'plugins', f'lax $.plugins[*] ? ({_TEXT})'),
 )
 _OBJECT = "CASE WHEN jsonb_typeof({v}) = 'object' THEN {v} ELSE '{{}}'::jsonb END"

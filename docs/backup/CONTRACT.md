@@ -2029,10 +2029,11 @@ PostgreSQL 15).
    SR-5). Stored settings LiteLLM imports and calls as code refuse (SR-6; LiteLLM's `get_instance_fn` imports any
    dotted path): `post_call_rules`, the `general_settings` `custom_*` hooks, a callback whose name has a dot, a string
    `callbacks` value, `custom_provider_map[].custom_handler`, a dotted guardrail callback or type (`guardrails` v1 and
-   v2 shapes), a dotted `pass_through_endpoints[].target` that is not `scheme://…`, `litellm_jwtauth.custom_validate`
-   and `router_settings.plugins` (the vendor's own DB-overlay list plus the router plugins it misses). The check's
-   blocker names them (labels only) and the conversion stops before reading HA's rows or capturing this device's
-   schema. An answer that cannot be read completely (over the output limit, a timeout, not an object) refuses too
+   v2 shapes), a dotted `pass_through_endpoints[].target` that is not `scheme://…`, `litellm_jwtauth.custom_validate`,
+   `router_settings.plugins` and a `key_management_settings.custom_secret_manager` (the vendor's own DB-overlay list
+   plus the router plugins and the custom secret manager file it misses); a dotted callback is found by the query
+   itself, however many plain names come before it. The check's blocker names them (labels only) and the conversion
+   stops before reading HA's rows or capturing this device's schema. An answer that cannot be read completely (over the output limit, a timeout, not an object) refuses too
    (fail closed). Because HA's data directory controls its throwaway cluster's catalog, the conversion asks the same
    question again in the new cluster after HA's rows are loaded (this device's image and schema, HA's data only as
    rows) and refuses there before the converted dump is written; the import note names what that answer found (SR-8).

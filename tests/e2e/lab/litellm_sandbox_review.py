@@ -206,6 +206,9 @@ VARIANTS = {
     'pass_through_module_target': [('general_settings', _j({'pass_through_endpoints': [
         {'path': '/woowbk', 'target': HOOK}]}))],
     'jwt_custom_validate': [('general_settings', _j({'litellm_jwtauth': {'custom_validate': HOOK}}))],
+    'custom_secret_manager': [('general_settings', _j({'key_management_system': 'custom',
+                                                       'key_management_settings': {
+                                                           'custom_secret_manager': 'woowbk_review.Manager'}}))],
     'callbacks_string': [('litellm_settings', _j({'callbacks': HOOK}))],
     'success_callback_string': [('litellm_settings', _j({'success_callback': HOOK}))],
     'router_settings_plugins': [('router_settings', _j({'plugins': [HOOK]}))],

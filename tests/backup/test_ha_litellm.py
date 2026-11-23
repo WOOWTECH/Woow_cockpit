@@ -630,7 +630,8 @@ class StoredSettingsTests(LiteLLMCase):
         # real PostgreSQL 18 in the review's sandbox (stored_variants); here: each one is asked and each label refuses.
         sql = ha_litellm.STORED_SETTINGS_SQL
         labels = sorted({f'{section}.{label}' for section, label, _path in ha_litellm.NESTED_HOOKS})
-        self.assertEqual(labels, ['general_settings.litellm_jwtauth.custom_validate',
+        self.assertEqual(labels, ['general_settings.custom_secret_manager',
+                                  'general_settings.litellm_jwtauth.custom_validate',
                                   'general_settings.pass_through_endpoints', 'litellm_settings.custom_provider_map',
                                   'litellm_settings.guardrails', 'router_settings.plugins'])
         for section, label, path in ha_litellm.NESTED_HOOKS:
@@ -644,7 +645,8 @@ class StoredSettingsTests(LiteLLMCase):
         for path, words in (('custom_provider_map[*].custom_handler', ()), ('guardrails[*].*.callbacks[*]', ('[.]',)),
                             ('guardrails[*].*.guardrail', ('[.]',)),
                             ('pass_through_endpoints[*].target', ('[.]', '!(@ like_regex "^[a-z][a-z0-9+-]*://"')),
-                            ('litellm_jwtauth.custom_validate', ()), ('plugins[*]', ())):
+                            ('litellm_jwtauth.custom_validate', ()), ('plugins[*]', ()),
+                            ('key_management_settings.custom_secret_manager', ())):
             match = [p for _s, _l, p in ha_litellm.NESTED_HOOKS if f'$.{path} ?' in p]
             self.assertEqual(len(match), 1, path)
             for word in words:

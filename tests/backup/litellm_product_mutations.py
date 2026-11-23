@@ -182,6 +182,9 @@ MUTATIONS = (
      "    if hooks:\n        raise BackupError('incompatible', f'LiteLLM 不能搬過來：{hooks}', app=app.id)\n", "", 1),
     ('M57', 'a dotted callback is found by the query, however many plain names come first', LL,
      "AND strpos(v.value, '.') > 0\"", "AND false\"", 1),
+    ('M58', 'a custom secret manager path is asked (it loads a .py file at every start)', LL,
+     "    ('general_settings', 'custom_secret_manager',\n"
+     "     f'lax $.key_management_settings.custom_secret_manager ? ({_TEXT})'),\n", "", 1),
     ('M56', "the import notes name what moved, not what HA's cluster said (SR-8)", LL,
      "    settings = stored_settings(pg, trusted)\n    hooks = stored_hooks_blocker(settings)\n",
      "    moved = stored_settings(pg, trusted)\n    hooks = stored_hooks_blocker(moved)\n", 1),
