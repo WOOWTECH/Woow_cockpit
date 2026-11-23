@@ -1,0 +1,51 @@
+{
+ "acceptance": "not acceptance (read-only probe)",
+ "checks": {
+  "HA cluster streamed into the throwaway volume": "PASS",
+  "cleanup: the throwaway container and volume are gone": "PASS",
+  "fixture sha256 equals the recorded one": "PASS",
+  "shape: nothing beyond Nextcloud's own tables, sequences and indexes": "PASS",
+  "the backup holds exactly one Nextcloud Office add-on": "PASS",
+  "throwaway PostgreSQL 16 started (network none, read-only root)": "PASS",
+  "throwaway PostgreSQL ready": "PASS",
+  "toc: every kind is one Nextcloud creates (TOC_ALLOWED)": "PASS",
+  "toc: the dump lists entries": "PASS"
+ },
+ "date": "2026-11-24T02:47:46+0800",
+ "defaults_count": 131,
+ "elapsed_s": 169.6,
+ "exit": 0,
+ "fixture_sha256": "2dcfc6769d6fed7dd5c375fc379aac43da606931c8378e3970c33f78a4bded9d",
+ "image": "docker.io/library/postgres:16-alpine",
+ "kind": "nextcloud-shape-probe",
+ "odd_defaults": [],
+ "pg_files": 2160,
+ "shape": {
+  "checks": 0,
+  "event_triggers": 0,
+  "functions": 0,
+  "generated": 0,
+  "inherits": 0,
+  "operators": 0,
+  "others": 0,
+  "policies": 0,
+  "relations": 0,
+  "role_settings": 0,
+  "rules": 0,
+  "triggers": 0,
+  "types": 0
+ },
+ "shape_problems": [],
+ "source_commit": "ecc1e24",
+ "toc_kinds": {
+  "CONSTRAINT": 146,
+  "DEFAULT": 110,
+  "FK CONSTRAINT": 11,
+  "INDEX": 268,
+  "SEQUENCE": 110,
+  "SEQUENCE OWNED BY": 110,
+  "SEQUENCE SET": 110,
+  "TABLE": 145,
+  "TABLE DATA": 145
+ }
+}
