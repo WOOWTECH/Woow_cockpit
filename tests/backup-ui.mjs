@@ -1582,7 +1582,7 @@ function odooDb(name, extra = {}) {
     custom_modules: [{ name: 'woow_paas_platform', version: '18.0.1.2.0', from: 'share/odoo_addons' }], crons_active: 12,
     mail_servers_active: 1, size: 310 * MiB, filestore_files: 3210, filestore_bytes: 120 * MiB, ...extra };
   db.warnings = extra.warnings ?? [
-    ...(db.mail_servers_active ? [`HA 的資料庫有 ${db.mail_servers_active} 個啟用中的外寄郵件伺服器，搬過來後會開始寄信。`] : []),
+    ...(db.mail_servers_active ? [`HA 的資料庫有 ${db.mail_servers_active} 個啟用中的外寄郵件伺服器，搬過來後會開始寄信（包括 HA 上還沒寄出的信和每天的提醒信）；正式搬家前請先停掉 HA 那邊的 Odoo，避免兩邊各寄一次。`] : []),
     ...(db.crons_active ? [`HA 的資料庫有 ${db.crons_active} 個啟用中的排程工作，搬過來後會在這台執行。`] : []),
     ...(db.attachments && !db.filestore_files ? [NO_FILESTORE] : [])];
   return db;
@@ -5133,7 +5133,7 @@ try {
       // What to know before moving a database: the engine says it per database only (review P-02).
       const issues = db => databases.nth(db).locator('.check').evaluateAll(items => items.map(item => [item.className.replace('check check-', ''),
         item.querySelector('.check-message').textContent]));
-      assert.deepEqual(await issues(0), [['warn', 'HA 的資料庫有 1 個啟用中的外寄郵件伺服器，搬過來後會開始寄信。'],
+      assert.deepEqual(await issues(0), [['warn', 'HA 的資料庫有 1 個啟用中的外寄郵件伺服器，搬過來後會開始寄信（包括 HA 上還沒寄出的信和每天的提醒信）；正式搬家前請先停掉 HA 那邊的 Odoo，避免兩邊各寄一次。'],
         ['warn', 'HA 的資料庫有 12 個啟用中的排程工作，搬過來後會在這台執行。']]);
       assert.deepEqual(await issues(1), [['warn', NO_FILESTORE]]);
       assert.deepEqual(await issues(2), [['fail', MISSING_MODULE], ['warn', 'HA 的資料庫有 3 個啟用中的排程工作，搬過來後會在這台執行。']]);
@@ -5143,6 +5143,7 @@ try {
       assert.equal(await page.locator('#ha-test-mode').isChecked(), false, '「這只是測試」 is off until ticked');
       assert.equal(await page.locator('label[for="ha-test-mode"] strong').textContent(), '這只是測試（先關掉排程、寄信和工作流程）');
       assert.match(await page.locator('#ha-test-mode-help').textContent(), /正式搬家請不要勾/);
+      assert.match(await page.locator('#ha-test-mode-help').textContent(), /正式搬家時，Odoo 會接著寄出 HA 上還沒寄出的信和每天的提醒信，請先停掉 HA 那邊的 Odoo，避免兩邊各寄一次。$/);
       const starts = (await calls(page, 'ha-check-start')).map(requestOf);
       assert.equal(starts.length, 2);
       assert(starts.every(item => !('key' in item)), 'no key for an unencrypted HA backup');
@@ -5431,7 +5432,7 @@ try {
       const jobDatabases = await page.locator('.job-result .ha-database-list > li').evaluateAll(items => items.map(item => [item.dataset.database,
         item.querySelector('.chip').textContent, [...item.querySelectorAll('.check-message')].map(message => message.textContent)]));
       assert.deepEqual(jobDatabases, [
-        ['woowtest', '可以搬', ['HA 的資料庫有 1 個啟用中的外寄郵件伺服器，搬過來後會開始寄信。', 'HA 的資料庫有 12 個啟用中的排程工作，搬過來後會在這台執行。']],
+        ['woowtest', '可以搬', ['HA 的資料庫有 1 個啟用中的外寄郵件伺服器，搬過來後會開始寄信（包括 HA 上還沒寄出的信和每天的提醒信）；正式搬家前請先停掉 HA 那邊的 Odoo，避免兩邊各寄一次。', 'HA 的資料庫有 12 個啟用中的排程工作，搬過來後會在這台執行。']],
         ['demo-old', '不能搬', [MISSING_MODULE, 'HA 的資料庫有 3 個啟用中的排程工作，搬過來後會在這台執行。']]]);
       assert.match(await page.locator('.job-result').textContent(), /要匯入，請回到 HA 備份按「檢查並匯入…」，並重新輸入 HA 備份金鑰。/);
       // A failed check shows the engine's words.
