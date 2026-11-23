@@ -131,6 +131,12 @@
     "safety-backup rollback equals dev-d state before import",
     "cleanup + leak scan 0 hits"
    ]
-  }
+  },
+  "side_effects": [
+   "engine of this tree stays installed in dev-d (engine files identical to integration 82ac971)",
+   "scheduled-backup timer stays masked",
+   "product SAFETY_KEEP=3 pruning deleted 11-19 Headscale safety backups 4343b4b5, 8b0f572d, 61dd9816 (earlier b1 test artifacts); all four dev-d baselines remain",
+   "one throwaway tailscale-version container ran while my own attempt 2 held the lock (removed at once)"
+  ]
  }
 }

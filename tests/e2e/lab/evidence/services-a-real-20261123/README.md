@@ -198,6 +198,14 @@ the page's ha-check answered ok with 0 blockers (`found_state_check` event): the
 files, loaded and masked units only (`adapters/quadlet_postgres.py` probe), so an unhealthy target is only stopped
 by the restore's health checks and the automatic rollback, not warned about before the import.
 
+Side effects on dev-d (lab only), stated: the engine of this tree stays installed (no engine file differs from
+integration 82ac971); the scheduled-backup timer stays masked (as hermes-real left it); during x86 attempt 2 the
+product's own retention of restore-safety backups (`flows.SAFETY_KEEP = 3`, `prune_safety`) deleted three older
+11-19 Headscale safety backups of earlier b1 test runs (20261119T073006Z-4343b4b5, 20261119T085538Z-8b0f572d,
+20261119T084929Z-61dd9816; job log lines "已刪除較舊的還原前備份"); dev-d's four baseline backups, including the
+Headscale baseline 20261119T072939Z-d52b60b2, remain. At ~16:27, while attempt 2 held the lock, one throwaway
+`podman run --rm ... tailscale version` container ran in dev-d (removed at once).
+
 ## What is still not proven (why `commercial_acceptance` stays `not-complete`)
 
 * Omnigent ran against a **disposable lab target** (lab-made catalog/Quadlets/config, random names), not the
