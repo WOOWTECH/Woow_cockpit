@@ -1,0 +1,133 @@
+{
+ "kind": "real-data offline member scan (not an import run)",
+ "date": "2026-11-23",
+ "lane": "nextcloud-import",
+ "source_commit": "3943702",
+ "fixture": "woow-b2-nextcloud-x86-enc-noshare-20261123.tar",
+ "fixture_sha256": "88e0f79415473c3453fb2889375b5fe0167e5d0a685d17da768ccc641c3c027f",
+ "where": "throwaway lab container (labpodman, localhost/woowbk-device:noble, --network none, --read-only, fixture and engine mounted read-only, HA key on stdin only, PyNaCl from the lab deb cache)",
+ "script": "tests/e2e/lab/nextcloud_member_scan.py",
+ "exit_code": 0,
+ "results": {
+  "folders": [],
+  "addon": {
+   "slug": "woow-nextcloud-office",
+   "version": "0.2.3",
+   "image": "ghcr.io/woowtech/woow-ha-nextcloud-office-amd64",
+   "arch": "amd64",
+   "name": "Woow Nextcloud Office",
+   "state": "started"
+  },
+  "pg_version": "16",
+  "pg_files": 2158,
+  "config_found": true,
+  "config_parsed": true,
+  "plain": {
+   "version": "35.0.1.1",
+   "installed": true,
+   "dbtype": "pgsql",
+   "dbtableprefix": "oc_",
+   "datadirectory": "/share/nextcloud",
+   "maintenance": false,
+   "dbname": "nextcloud",
+   "dbuser": "nextcloud",
+   "overwrite.cli.url": "https://woowtech-nextcloud.woowtech.io"
+  },
+  "identity_ok": true,
+  "config_blockers": [],
+  "datadir_source": [
+   "share",
+   "nextcloud"
+  ],
+  "bad_apps": [],
+  "skipped_symlinks": 0,
+  "complete": true,
+  "roundtrip": true,
+  "carried": [],
+  "skipped": [
+   "filelocking.enabled",
+   "defaultapp"
+  ],
+  "mail_keys": [
+   "mail_smtpmode"
+  ],
+  "app_warnings": []
+ },
+ "config_key_names": [
+  "apps_paths",
+  "datadirectory",
+  "dbhost",
+  "dbname",
+  "dbpassword",
+  "dbtableprefix",
+  "dbtype",
+  "dbuser",
+  "default_phone_region",
+  "defaultapp",
+  "filelocking.enabled",
+  "installed",
+  "instanceid",
+  "loglevel",
+  "mail_smtpmode",
+  "maintenance",
+  "maintenance_window_start",
+  "memcache.local",
+  "memcache.locking",
+  "overwrite.cli.url",
+  "overwritehost",
+  "overwriteprotocol",
+  "passwordsalt",
+  "redis",
+  "secret",
+  "trusted_domains",
+  "trusted_proxies",
+  "upgrade.disable-web",
+  "version"
+ ],
+ "custom_apps": {
+  "notes": {
+   "version": "6.1.0",
+   "info_ok": true,
+   "nextcloud": [
+    "33",
+    "36"
+   ],
+   "php": [
+    "8.2",
+    "8.5"
+   ],
+   "files": 296,
+   "foreign": []
+  },
+  "richdocuments": {
+   "version": "12.0.1",
+   "info_ok": true,
+   "nextcloud": [
+    "35",
+    "35"
+   ],
+   "php": [
+    "8.3",
+    ""
+   ],
+   "files": 1274,
+   "foreign": []
+  },
+  "tasks": {
+   "version": "0.18.1",
+   "info_ok": true,
+   "nextcloud": [
+    "31",
+    "35"
+   ],
+   "php": [
+    "8.2",
+    "8.6"
+   ],
+   "files": 239,
+   "foreign": []
+  }
+ },
+ "not_shown": "every value of config.php except the listed plain keys (no secret, password, salt or instance id)",
+ "commercial_acceptance": "not-complete"
+}
