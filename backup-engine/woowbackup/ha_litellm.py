@@ -277,8 +277,14 @@ def _own(catalog, alias='o', column='oid'):
 
 
 IN_SCHEMAS = "n.nspname IN ('public', 'woow_platform')"
+# Every session that reads COLUMNS_SQL or SIGNATURE_SQL -- HA's cluster, this device's live database, the schema
+# snapshot, the new cluster -- renders names with the same search_path, pg_catalog only: format_type, pg_get_expr and
+# the pg_get_*def functions then qualify every name outside pg_catalog (public."JobStatus"), whatever the role or
+# database settings say. HA's sessions have it anyway (HA_SESSION_OPTIONS, SR-1); without the pin this device's sides
+# rendered the same enum column as "JobStatus" and the real backup's LiteLLM_CronJob "differed" (real attempt 7).
+PIN_SEARCH_PATH = 'SET search_path = pg_catalog; '
 # Physical data columns, in order (schema, table, column, type, not null, identity, generated).
-COLUMNS_SQL = ("SELECT coalesce(json_agg(json_build_array(n.nspname, c.relname, a.attname, "
+COLUMNS_SQL = (PIN_SEARCH_PATH + "SELECT coalesce(json_agg(json_build_array(n.nspname, c.relname, a.attname, "
                "pg_catalog.format_type(a.atttypid, a.atttypmod), a.attnotnull, a.attidentity::text, a.attgenerated::text) "
                "ORDER BY n.nspname, c.relname, a.attnum), '[]'::json) FROM pg_catalog.pg_attribute a "
                "JOIN pg_catalog.pg_class c ON c.oid = a.attrelid JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace "
@@ -363,7 +369,8 @@ SIGNATURE_PARTS = (
         f"'{name}', (SELECT count(*) FROM pg_catalog.{name} o WHERE o.oid >= 16384 AND {_own(name)})"
         for name in OTHER_CATALOGS) + ')'),
 )
-SIGNATURE_SQL = 'SELECT json_build_object(' + ', '.join(f"'{key}', ({sql})" for key, sql in SIGNATURE_PARTS) + ')'
+SIGNATURE_SQL = (PIN_SEARCH_PATH + 'SELECT json_build_object('
+                 + ', '.join(f"'{key}', ({sql})" for key, sql in SIGNATURE_PARTS) + ')')
 SIGNATURE_KEYS = tuple(key for key, _sql in SIGNATURE_PARTS)
 # What the new cluster may hold besides the schema and HA's rows: only its bootstrap superuser, no role or database
 # setting, no ALTER SYSTEM setting, no large object.

@@ -1999,7 +1999,11 @@ PostgreSQL 15).
    must be the one HA's database is bound to (`woow_platform.settings` and the `woow.meta` fingerprint, read by a role
    without privileges): else `incompatible` -- nothing stored could be decrypted. HA's database: only `public`,
    `woow_platform` and `woow` (with `meta` only), no object only a superuser creates, no large object, UTF8; its data
-   shape (columns, sequences, types of `public` and `woow_platform`) must equal the live database's.
+   shape (columns, sequences, types of `public` and `woow_platform`) must equal the live database's. Every session
+   that reads the columns or the schema signature -- HA's cluster, the live database, the schema snapshot and the new
+   cluster -- pins `search_path = pg_catalog` in the query itself (`PIN_SEARCH_PATH`), so type names and expressions
+   render alike on every side (an enum column is `public."JobStatus"` everywhere; without the pin HA's pg_catalog-only
+   sessions and this device's default ones differed, real attempt 7).
 3. Convert: this device's schema is captured like Omnigent's (one exported snapshot of the live database: migrations,
    columns line, `pg_dump --schema-only`; the live signature before == after == the snapshot's columns, else
    `incompatible` and nothing changed); a NEW cluster from the live `litellm-postgres` image, environment and secret

@@ -195,6 +195,12 @@ class World(fk.World):
         return [statement for _db, statement, _t in self.psql[role].executed] if role in self.psql else []
 
     def answer(self, role, sql, database):
+        # psql -c sends the pin and the query as two statements (hafakes.Psql answers each); the pin itself was
+        # checked on the command line (SchemaReadTests), the query is answered as the whole constant.
+        if sql == ha_litellm.PIN_SEARCH_PATH.strip().rstrip(';'):
+            return None
+        if ha_litellm.PIN_SEARCH_PATH + sql in (ha_litellm.COLUMNS_SQL, ha_litellm.SIGNATURE_SQL):
+            sql = ha_litellm.PIN_SEARCH_PATH + sql
         if 'server_version_num' in sql:
             return {'hapg': 18, 'll-db': 17}.get(role)
         if "current_setting('server_version')" in sql:
@@ -571,6 +577,46 @@ class StoredSettingsTests(LiteLLMCase):
         notes, _reminders = ha_litellm.import_texts({'counts': {}, 'key_users': [], 'stored_settings': None})
         self.assertFalse([n for n in notes if '代理設定' in n])
         self.assertEqual(ha_litellm.stored_settings_line({'env': ['A'] * 12, 'callbacks': []}).count('A、'), 9)
+
+
+class SchemaReadTests(LiteLLMCase):
+    """Real attempt 7 (dev-d, the real HA backup): HA's sessions resolve names in pg_catalog only (SR-1), so
+    format_type renders the enum column LiteLLM_CronJob.status as public."JobStatus" there while this device's
+    sessions rendered "JobStatus": the check refused a backup whose schema IS this device's. Every session that reads
+    the columns or the signature -- HA's cluster, the live database, the schema snapshot, the new cluster -- must
+    pin the same search_path, so the names render alike on every side."""
+    COLUMNS_MARK = 'pg_catalog.format_type(a.atttypid, a.atttypmod), a.attnotnull, a.attidentity::text'
+    SIGNATURE_MARK = "SELECT json_build_object('relations', (SELECT"
+
+    def schema_reads(self):
+        reads = []
+        for role, command, _data in self.world.execs:
+            if command and command[0] == 'psql' and '-c' in command:
+                sql = command[command.index('-c') + 1]
+                if self.COLUMNS_MARK in sql or self.SIGNATURE_MARK in sql:
+                    reads.append((role, sql))
+        return reads
+
+    def test_every_schema_read_pins_the_search_path(self):
+        self.assertTrue(ha_litellm.COLUMNS_SQL.startswith('SET search_path = pg_catalog; SELECT '))
+        self.assertTrue(ha_litellm.SIGNATURE_SQL.startswith('SET search_path = pg_catalog; SELECT '))
+        result = self.convert(self.upload_litellm(), ['litellm'])
+        self.assertTrue(result.get('backup_id'), result)
+        reads = self.schema_reads()
+        roles = {role for role, _sql in reads}
+        self.assertTrue({'hapg', 'll-db', 'litellm-postgres'} <= roles, roles)
+        for role, sql in reads:
+            self.assertTrue(sql.startswith('SET search_path = pg_catalog; SELECT '), (role, sql[:80]))
+        script = self.world.snapshots[0][1].decode('utf-8')
+        columns_line = re.search(r'o \$snapdir/columns\n(.*)\n', script).group(1)
+        self.assertTrue(columns_line.startswith('SET search_path = pg_catalog; SELECT coalesce(json_agg('), columns_line)
+
+    def test_the_check_reads_both_sides_pinned(self):
+        result = self.check(self.upload_litellm(), ['litellm'])[0]
+        self.assertTrue(result['ok'], result)
+        reads = self.schema_reads()
+        self.assertTrue({'hapg', 'litellm-postgres'} <= {role for role, _sql in reads}, reads)
+        self.assertTrue(all(sql.startswith(ha_litellm.PIN_SEARCH_PATH) for _role, sql in reads))
 
 
 class ConvertTests(LiteLLMCase):

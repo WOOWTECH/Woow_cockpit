@@ -148,6 +148,9 @@ MUTATIONS = (
     ('M43', "only a provider at this device's LiteLLM counts, not any provider (option A)", LL,
      "            if isinstance(value, str) and value.strip() and LITELLM_URL_RE.search(value.strip()[:2048]):\n",
      "            if isinstance(value, str) and value.strip():\n", 1),
+    # Real attempt 7: HA's sessions (search_path=pg_catalog, SR-1) and this device's rendered enum types differently.
+    ('M44', 'every columns/signature read pins search_path=pg_catalog (all sides render names alike)', LL,
+     "PIN_SEARCH_PATH = 'SET search_path = pg_catalog; '\n", "PIN_SEARCH_PATH = ''\n", 1),
 )
 
 
