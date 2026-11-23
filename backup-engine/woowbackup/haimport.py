@@ -578,26 +578,17 @@ def run_ha_convert(ctx, params):
 
 
 def _run_omnigent_candidate(ctx, params, *, schema_ddl_quiesced):
-    """Internal Python entry only; never selected by request fields or public routing.
-
-    Caller holds target-wide DDL quiescence through conversion (including migrations,
-    extension/type/function/constraint changes and other sessions). Snapshot locks
-    alone do not establish this. Installation is a separate restore job/context.
-    """
-    from . import ha_omnigent
+    """Lab compatibility entry of the 2026-11-20..23 internal-candidate harnesses; never selected by request fields
+    or public routing. It runs exactly the product conversion (`run_ha_convert`): Omnigent's `convert` enforces the
+    trusted schema and the capture's stability itself (ha_omnigent.trusted_schema), so the flag only keeps those
+    callers' contract (Omnigent alone, the flag exactly True)."""
     if list(params.get('apps') or []) != ['omnigent'] or schema_ddl_quiesced is not True:
         raise BackupError('incompatible', '內部候選僅限 Omnigent，且須保證目標結構變更已暫停。')
-
-    def convert(work, app, test_mode, out_dir):
-        ha_omnigent.require_registered_secrets(work, app)
-        return ha_omnigent._convert_candidate(work, app, test_mode, out_dir,
-                                              schema_ddl_quiesced=True)
-
-    return _run_ha_convert(ctx, params, omnigent_candidate=convert)
+    return _run_ha_convert(ctx, params)
 
 
 def _install_omnigent_candidate(ctx, backup_id):
-    """Install a locally registered candidate via the ordinary safety/rollback flow."""
+    """Lab compatibility entry: the ordinary restore (safety backup, rollback) of a converted Omnigent backup."""
     from . import flows
     row = (load_registry(ctx.paths) or {}).get(backup_id)
     if not row or row.get('apps') != ['omnigent']:
@@ -605,7 +596,7 @@ def _install_omnigent_candidate(ctx, backup_id):
     return flows.run_restore(ctx, {'backup_id': backup_id, 'apps': ['omnigent']})
 
 
-def _run_ha_convert(ctx, params, *, omnigent_candidate=None):
+def _run_ha_convert(ctx, params):
     from . import ha_odoo
     from .flows import _package, resolve_apps
     ctx.cancellable(True)
@@ -655,8 +646,7 @@ def _run_ha_convert(ctx, params, *, omnigent_candidate=None):
             out_dir.mkdir(mode=0o700, parents=True)
             importer = haapps.get(app.id)
             values = {'odoo_database': database, 'test_mode': test_mode}
-            converter = omnigent_candidate if app.id == 'omnigent' and omnigent_candidate else importer.load().convert
-            data = converter(work, app, *[values[name] for name in importer.convert_args], out_dir)
+            data = importer.load().convert(work, app, *[values[name] for name in importer.convert_args], out_dir)
             converted[app.id] = data
             item_args = {key: data[key] for key in ITEM_KEYS if key in data}
             work.checkpoint()

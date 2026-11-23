@@ -14,8 +14,8 @@ What is real here:
     image with a freshly generated admin password; the product discovers it through its real adapter
     (`read_quadlets`, `probe`), its live `/v1/info` (answered by the running server, not replayed) and its live
     alembic revision;
-  * conversion is `haimport._run_omnigent_candidate(..., schema_ddl_quiesced=True)`: the INTERNAL candidate
-    entry (the public `ha_omnigent.convert` keeps SECURITY_BLOCKER and is asserted to still refuse). The server
+  * conversion is `haimport._run_omnigent_candidate(..., schema_ddl_quiesced=True)`: the internal entry, which since
+    2026-11-23 runs exactly the product conversion (the SECURITY_BLOCKER hold was replaced by it). The server
     is stopped right after the product's live discovery and before any schema capture, so no DDL writer exists;
   * installation is `haimport._install_omnigent_candidate` (flows.run_restore with its safety backup), then a
     restart, then a second install with an injected one-shot ExecStartPre failure that must roll back.
@@ -413,14 +413,11 @@ def run(arch):
     register_private(ha_cookie.strip())
     target_password = secrets.token_urlsafe(32)
     register_private(target_password)
-    # The public conversion stays blocked (B1-01); only the internal candidate entry is used below.
-    try:
-        ha_omnigent.convert(None, SimpleNamespace(id='omnigent'), False, None)
-    except BackupError as error:
-        require(error.code == 'incompatible' and error.message == ha_omnigent.SECURITY_BLOCKER, 'public_guard_changed')
-    else:
-        raise RuntimeError('public_guard_missing')
-    event('public_guard', security_blocker_still_refuses=True)
+    # Since 2026-11-23 (owner decision) the public conversion IS the trusted-schema product path; the internal entry
+    # used below runs exactly it (haimport._run_omnigent_candidate -> _run_ha_convert -> ha_omnigent.convert).
+    require(not hasattr(ha_omnigent, 'SECURITY_BLOCKER') and callable(getattr(ha_omnigent, 'trusted_schema', None)),
+            'product_path_missing')
+    event('public_guard', replaced_by_product_trusted_schema=True)
 
     device = installer.DeviceOwner()
     r = device.runner

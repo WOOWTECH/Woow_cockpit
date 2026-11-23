@@ -19,18 +19,28 @@ setting overridden); the database must hold only Omnigent's own tables, no funct
 other schema or object only a superuser can create, extensions within plpgsql and pg_trgm, UTF8; every agent bundle and
 file blob the database names must be in the backup's artifact store, whose `accounts-cookie-secret` must be there.
 
-The public conversion remains blocked. The internal candidate derives its schema from the target and restores only
-HA table data and sequence values under a restricted role; it is not approved for public use.
+The check also compares HA's tables and columns with this device's live database (the trusted schema, below); a
+difference is a blocker naming the tables.
 
-Historical conversion design: `pg_dump -Fc omnigent`; a NEW cluster from the live image, environment and secret mount (its superuser is the
-live app role with the live password); pg_trgm created first; the dump's list must hold only the kinds of objects
-Omnigent creates (TOC_ALLOWED) and is restored by a separate role without any privilege
-(`pg_restore --no-owner --no-acl --exit-on-error --single-transaction`, then REASSIGN OWNED to the app role and the
-role dropped). This does not prevent stored expressions from running with superuser rights; conversion is disabled (B1-01). This device's own admin and runner accounts
-(the Quadlet's OMNIGENT_ACCOUNTS_INIT_ADMIN_USERNAME / OMNIGENT_RUNNER_USERNAME) are read from the live database as
-the app owner and added back unless HA has a user of the same name (HA's wins, with a warning): without them the
-runner could not log in while every health check stays green. Test mode pauses every active scheduled task. Counts
-and alembic are verified, the cluster is stopped cleanly (`pg_controldata` "shut down") and exported.
+convert (B1-01: HA's backup never provides DDL, defaults, checks or domains): `pg_dump -Fc omnigent` of HA's cluster
+is the source of DATA only. A NEW cluster from the live image, environment and secret mount (its superuser is the live
+app role with the live password) gets THIS device's schema: `pg_dump --schema-only` of the live database inside one
+exported snapshot (capture_consistent_target_schema), its pre-data and post-data sections restored by the app role.
+The product enforces what the lab proved instead of trusting a caller (trusted_schema): the live database's whole
+schema signature (SCHEMA_SIGNATURE_SQL: tables, columns with types and defaults, constraints, indexes, sequences,
+types, functions, triggers, rules, views, policies, extensions, schemas, other user objects) and alembic revision are
+read before and after the capture and must be equal, and so must the snapshot's columns (no DDL ran while it was
+taken; else the job stops and nothing changed); HA's columns, sequences and types must equal it (else `incompatible`,
+naming the tables); from HA's dump only TABLE DATA and SEQUENCE SET entries are restored (`-L`, data_only_toc), by a
+role without any privilege beyond INSERT and sequence values (`woowbk_restore`); the new cluster's schema signature
+must equal the live one after the post-data section and again after the last write, and the new cluster may hold no
+other role, no role or database setting, no ALTER SYSTEM setting and no large object (audit_new_cluster). This
+device's own admin and runner accounts (the Quadlet's OMNIGENT_ACCOUNTS_INIT_ADMIN_USERNAME /
+OMNIGENT_RUNNER_USERNAME) are read from the live database as the app owner and added back by that restricted role
+unless HA has a user of the same name (HA's wins, with a warning): without them the runner could not log in while
+every health check stays green. Test mode pauses every active scheduled task (the restricted role). Counts and alembic
+are verified, the restricted role is dropped, the cluster is stopped cleanly (`pg_controldata` "shut down") and
+exported.
 `omnigent-server-data` is the live export without `artifacts/**` plus HA's artifacts (owner of the live artifacts
 folder, dirs 0755, files 0644, the cookie key 0600; `.cache/` never moves); `omnigent-pi-data` is the live export as
 it is (the runner's identity, logins and pairings never move). HA's runtime setting files in /data (sharing, admins,
@@ -82,9 +92,8 @@ ALEMBIC_RE = re.compile(r'[0-9a-z_]{1,64}\Z')
 SERVER_VERSION_RE = re.compile(r'[0-9]{1,4}\.[0-9]{1,4}\.[0-9]{1,4}\Z')
 MAX_KEYS = 1_000_000
 DUMP_TIMEOUT = ha_odoo.DUMP_TIMEOUT
-
-# Fail closed until HA data is loaded into a trusted live-derived schema (B1-01).
-SECURITY_BLOCKER = 'Omnigent HA 匯入暫時停用：資料庫結構的安全驗證尚未完成。'
+SCHEMA_CHANGED = ('這台 Omnigent 的資料庫結構在轉換期間改變了（可能正在升級或重新啟動），沒有匯入任何資料；'
+                  '請等它正常執行後再轉換一次。')
 
 
 # ====================================================================== the add-on member
@@ -481,13 +490,17 @@ def check(work, app):
     work.phase('check')
     cluster = ha_odoo.start_ha_cluster(work, tmp, target.db_image)
     found = analyse(cluster)
+    ha_schema = read_schema(cluster, found['alembic']) if set(TABLES) <= set(found['tables']) else None
     tmp.remove('hapg')
     tmp.remove_volume('hapg')
     blockers, warnings = verdict(src, found, live_alembic_value=alembic, ha_major=_ha_major(src),
                                  target_major=ha_odoo.target_pg_major(work, app, target.db_image))
     if blocker:
         blockers.insert(0, blocker)
-    blockers.insert(0, SECURITY_BLOCKER)
+    if ha_schema is not None:
+        differ = schema_differences(ha_schema, live_schema(work, app, target))
+        if differ:
+            blockers.append(schema_blocker(differ))
     conflicts = account_conflicts(found, target)
     if conflicts:
         warnings.append(f'HA 也有和這台相同名稱的帳號（{hacommon.names(conflicts)}），匯入後以 HA 的帳號為準，這台的'
@@ -512,44 +525,13 @@ def toc_kinds(text):
     return found
 
 
-def restore_dump(work, tmp, dump, superuser, role='omni-db'):
-    """Restore HA's dump into the new cluster's database AS A ROLE WITHOUT ANY PRIVILEGE (RESTORE_ROLE), then hand
-    every object to the app role and drop the restore role; refused before anything when the list holds a kind of
-    object Omnigent never creates."""
-    # This helper also must fail closed if a future caller bypasses convert().
-    raise BackupError('incompatible', SECURITY_BLOCKER)
-
-    cluster = ha_odoo.Cluster(tmp, role, superuser=superuser, log=work.log)
-    with open(dump, 'rb') as handle:
-        toc = tmp.exec(role, ['pg_restore', '-l'], user='postgres', input=handle, timeout=DUMP_TIMEOUT,
-                       max_output=ha_odoo.TOC_OUTPUT).stdout or b''
-    text = toc.decode('utf-8', 'surrogateescape')
-    odd = [kind for kind in toc_kinds(text) if kind not in TOC_ALLOWED]
-    if odd:
-        raise BackupError('incompatible', f'HA 的 Omnigent 資料庫含有 Omnigent 不會建立的物件（{hacommon.names(odd)}），'
-                                          '無法安全地搬過來。')
-    cluster.write_file('/tmp/woowbk-omnigent.toc', ha_odoo.filter_toc(text).encode('utf-8', 'surrogateescape'))
-    cluster.script(f'CREATE ROLE {RESTORE_ROLE} LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;\n'
-                   f'GRANT CREATE, USAGE ON SCHEMA public TO {RESTORE_ROLE};\n', DATABASE)
-    work.log('把 HA 的 Omnigent 資料庫還原到新的叢集（以沒有任何權限的暫用角色還原）')
-    with open(dump, 'rb') as handle:
-        try:
-            tmp.exec(role, ['pg_restore', '-U', RESTORE_ROLE, '--no-owner', '--no-acl', '--exit-on-error',
-                            '--single-transaction', '-L', '/tmp/woowbk-omnigent.toc', '-d', DATABASE],
-                     user='postgres', input=handle, timeout=DUMP_TIMEOUT, max_output=1024 * 1024)
-        except BackupError as error:
-            if error.code != 'job-failed':
-                raise
-            raise BackupError('job-failed', '無法把 HA 的 Omnigent 資料庫還原到新的叢集（可能含有這台不支援的內容）。') from None
-    cluster.script(f'REASSIGN OWNED BY {RESTORE_ROLE} TO {ha_odoo.pg_ident(superuser)};\n'
-                   f'DROP OWNED BY {RESTORE_ROLE};\nDROP ROLE {RESTORE_ROLE};\n', DATABASE)
-    tmp.exec(role, ['rm', '-f', '/tmp/woowbk-omnigent.toc'], user='postgres', timeout=120)
-    return cluster
-
-
-def data_only_toc(text):
-    """Return only table data and sequence values from a locally generated custom archive."""
-    selected, seen = [], set()
+def data_only_toc(text, *, tables=None, sequences=None):
+    """Only the table data and sequence values of a locally generated custom archive (its `pg_restore -l` list), as
+    the `-L` list of the data restore. pg_restore reads nothing of a selected line but the dump id at its start, so a
+    name in HA's database that carries a line break could add an entry of its own choice: with `tables`/`sequences`
+    (the trusted schema's names) every selected entry must name one of them, each at most once."""
+    selected, seen, named = [], set(), set()
+    strict = tables is not None or sequences is not None
     for line in text.splitlines():
         if not line.strip() or line.lstrip().startswith(';'):
             continue
@@ -558,6 +540,13 @@ def data_only_toc(text):
             raise BackupError('incompatible', 'HA 的資料庫匯出清單格式不正確。')
         seen.add(match.group(1))
         if match.group(2).startswith(('TABLE DATA ', 'SEQUENCE SET ')):
+            if strict:
+                entry = re.fullmatch(r'(TABLE DATA|SEQUENCE SET) public (\S+) \S+', match.group(2))
+                allowed = (tables if entry and entry.group(1) == 'TABLE DATA' else sequences) or ()
+                if not entry or entry.group(2) not in allowed or entry.groups()[:2] in named:
+                    raise BackupError('incompatible', 'HA 的資料庫匯出清單有不屬於這台 Omnigent 資料庫結構的資料項目，'
+                                                      '無法安全地搬過來。')
+                named.add(entry.groups()[:2])
             selected.append(line)
     if not selected:
         raise BackupError('incompatible', 'HA 的資料庫匯出清單沒有資料。')
@@ -679,8 +668,9 @@ def capture_consistent_target_schema(work, app, target, path, expected_alembic):
             capture.unlink(missing_ok=True)
 
 
-def restore_trusted_data(work, tmp, schema_dump, data_dump, superuser, *, source_columns, role='omni-db'):
-    """Internal candidate: load a trusted target schema and only data from HA.
+def restore_trusted_data(work, tmp, schema_dump, data_dump, superuser, *, source_columns, role='omni-db',
+                         tables=None, sequences=None):
+    """Load the trusted target schema and only data from HA (`tables`/`sequences`: data_only_toc's names).
 
     Both archives must be generated by our own pg_dump; schema_dump must come from
     the trusted target. The caller must compare Alembic revisions before calling.
@@ -690,7 +680,11 @@ def restore_trusted_data(work, tmp, schema_dump, data_dump, superuser, *, source
     with open(data_dump, 'rb') as handle:
         listing = tmp.exec(role, ['pg_restore', '-l'], user='postgres', input=handle,
                            timeout=DUMP_TIMEOUT, max_output=ha_odoo.TOC_OUTPUT).stdout or b''
-    selection = data_only_toc(listing.decode('utf-8', 'surrogateescape'))
+    text = listing.decode('utf-8', 'surrogateescape')
+    selection = data_only_toc(text, tables=tables, sequences=sequences)
+    skipped = [kind for kind in toc_kinds(text) if kind not in ('TABLE DATA', 'SEQUENCE SET')]
+    work.log(f'HA 的資料庫匯出清單：只載入資料（TABLE DATA、SEQUENCE SET），略過 {len(skipped)} 種結構項目'
+             + (f'（{hacommon.names(skipped, 8)}）' if skipped else ''))
     cluster.write_file('/tmp/woowbk-omnigent.toc', selection.encode('utf-8', 'surrogateescape'))
     with open(schema_dump, 'rb') as handle:
         tmp.exec(role, ['pg_restore', '-U', superuser, '--no-owner', '--no-acl', '--exit-on-error',
@@ -739,33 +733,225 @@ def carry_accounts_restricted(cluster, rows):
     return [row['id'] for row in carried]
 
 
-def carry_accounts(work, cluster, rows):
-    """Add this device's own accounts back (HA's same-named users win): the rows travel in a file inside the
-    throwaway container (never in a statement, an argv or a log); returns the names added."""
-    if not rows:
-        return []
-    names = [row['id'] for row in rows]
-    present = cluster.query_json('SELECT coalesce(json_agg(id), \'[]\'::json) FROM users WHERE id IN ('
-                                 + ', '.join(ha_odoo.sql_literal(n) for n in names) + ')', DATABASE)
-    present = {p for p in present if isinstance(p, str)} if isinstance(present, list) else set()
-    carried = [row for row in rows if row['id'] not in present]
-    if not carried:
-        return []
-    cluster.write_file('/tmp/woowbk-omnigent-users.json', json.dumps(carried).encode('utf-8'))
-    cluster.script("INSERT INTO users SELECT * FROM json_populate_recordset(NULL::users, "
-                   "pg_read_file('/tmp/woowbk-omnigent-users.json')::json) ON CONFLICT DO NOTHING;\n", DATABASE)
-    cluster.tmp.exec(cluster.role, ['rm', '-f', '/tmp/woowbk-omnigent-users.json'], user='postgres', timeout=120)
-    return [row['id'] for row in carried]
-
-
 PAUSE_SQL = 'UPDATE scheduled_tasks SET state = 2 WHERE state = 1;\n'
 ACTIVE_SQL = 'SELECT to_json(count(*)) FROM scheduled_tasks WHERE state = 1'
 
 
-def convert(work, app, test_mode, out_dir):
-    """Build the app's volumes in `out_dir/volumes`; returns {volumes {name: path}, counts, kept_accounts,
-    conflicts, ...}."""
-    raise BackupError('incompatible', SECURITY_BLOCKER, app=app.id)
+# ====================================================================== the trusted schema (B1-01)
+#
+# HA's archive provides DATA only. The schema is this device's own; the product itself proves (never a caller's
+# promise) that what the new cluster gets is exactly that schema and that no DDL ran while it was captured.
+
+def _own(catalog, column='oid'):
+    """`<alias>.<column>` is not a member of an extension (pg_trgm puts its type and functions into public)."""
+    return (f"NOT EXISTS (SELECT 1 FROM pg_catalog.pg_depend x WHERE x.classid = 'pg_catalog.{catalog}'::regclass "
+            f"AND x.objid = o.{column} AND x.deptype = 'e')")
+
+
+# User objects outside the parts below (FirstNormalObjectId 16384: what initdb made is older); Omnigent has none.
+OTHER_CATALOGS = ('pg_cast', 'pg_operator', 'pg_opclass', 'pg_opfamily', 'pg_collation', 'pg_conversion',
+                  'pg_ts_config', 'pg_ts_dict', 'pg_ts_parser', 'pg_ts_template', 'pg_foreign_data_wrapper',
+                  'pg_foreign_server', 'pg_publication', 'pg_statistic_ext', 'pg_transform', 'pg_language', 'pg_am',
+                  'pg_event_trigger')
+SIGNATURE_PARTS = (
+    ('relations', "SELECT coalesce(json_agg(json_build_array(o.relname, o.relkind::text, o.relpersistence::text, "
+                  "o.relrowsecurity, o.relforcerowsecurity, coalesce(array_to_string(o.reloptions, ','), ''), "
+                  "o.relispartition) ORDER BY o.relname), '[]'::json) FROM pg_catalog.pg_class o "
+                  "JOIN pg_catalog.pg_namespace n ON n.oid = o.relnamespace WHERE n.nspname = 'public' "
+                  "AND o.relkind IN ('r', 'p', 'v', 'm', 'S', 'f', 'c') AND " + _own('pg_class')),
+    ('columns', "SELECT coalesce(json_agg(json_build_array(o.relname, a.attname, "
+                "pg_catalog.format_type(a.atttypid, a.atttypmod), a.attnotnull, a.attidentity::text, "
+                "a.attgenerated::text, coalesce(pg_catalog.pg_get_expr(d.adbin, d.adrelid), ''), "
+                "CASE WHEN a.attcollation <> t.typcollation THEN coalesce(l.collname, '?') ELSE '' END) "
+                "ORDER BY o.relname, a.attnum), '[]'::json) FROM pg_catalog.pg_attribute a "
+                "JOIN pg_catalog.pg_class o ON o.oid = a.attrelid JOIN pg_catalog.pg_namespace n ON n.oid = o.relnamespace "
+                "JOIN pg_catalog.pg_type t ON t.oid = a.atttypid "
+                "LEFT JOIN pg_catalog.pg_attrdef d ON d.adrelid = a.attrelid AND d.adnum = a.attnum "
+                "LEFT JOIN pg_catalog.pg_collation l ON l.oid = a.attcollation "
+                "WHERE n.nspname = 'public' AND o.relkind IN ('r', 'p', 'v', 'm', 'f', 'c') AND a.attnum > 0 "
+                "AND NOT a.attisdropped AND " + _own('pg_class')),
+    ('constraints', "SELECT coalesce(json_agg(json_build_array(coalesce(c.relname, t.typname, ''), o.conname, "
+                    "o.contype::text, pg_catalog.pg_get_constraintdef(o.oid), o.condeferrable, o.condeferred, "
+                    "o.convalidated, o.connoinherit) ORDER BY coalesce(c.relname, t.typname, ''), o.conname), "
+                    "'[]'::json) FROM pg_catalog.pg_constraint o JOIN pg_catalog.pg_namespace n ON n.oid = o.connamespace "
+                    "LEFT JOIN pg_catalog.pg_class c ON c.oid = o.conrelid LEFT JOIN pg_catalog.pg_type t "
+                    "ON t.oid = o.contypid WHERE n.nspname = 'public'"),
+    ('indexes', "SELECT coalesce(json_agg(json_build_array(c.relname, i.relname, "
+                "pg_catalog.pg_get_indexdef(o.indexrelid)) ORDER BY c.relname, i.relname), '[]'::json) "
+                "FROM pg_catalog.pg_index o JOIN pg_catalog.pg_class i ON i.oid = o.indexrelid "
+                "JOIN pg_catalog.pg_class c ON c.oid = o.indrelid JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace "
+                "WHERE n.nspname = 'public'"),
+    ('sequences', "SELECT coalesce(json_agg(json_build_array(o.relname, pg_catalog.format_type(s.seqtypid, NULL), "
+                  "s.seqstart, s.seqincrement, s.seqmax, s.seqmin, s.seqcache, s.seqcycle, "
+                  "coalesce((SELECT r.relname || '.' || a.attname FROM pg_catalog.pg_depend d "
+                  "JOIN pg_catalog.pg_class r ON r.oid = d.refobjid JOIN pg_catalog.pg_attribute a "
+                  "ON a.attrelid = d.refobjid AND a.attnum = d.refobjsubid "
+                  "WHERE d.classid = 'pg_catalog.pg_class'::regclass AND d.objid = o.oid "
+                  "AND d.refclassid = 'pg_catalog.pg_class'::regclass AND d.deptype IN ('a', 'i') "
+                  "ORDER BY 1 LIMIT 1), '')) ORDER BY o.relname), '[]'::json) FROM pg_catalog.pg_sequence s "
+                  "JOIN pg_catalog.pg_class o ON o.oid = s.seqrelid JOIN pg_catalog.pg_namespace n ON n.oid = o.relnamespace "
+                  "WHERE n.nspname = 'public'"),
+    ('types', "SELECT coalesce(json_agg(json_build_array(o.typname, o.typtype::text, "
+              "CASE WHEN o.typbasetype <> 0 THEN pg_catalog.format_type(o.typbasetype, o.typtypmod) ELSE '' END, "
+              "o.typnotnull, coalesce(pg_catalog.pg_get_expr(o.typdefaultbin, 0), ''), "
+              "(SELECT coalesce(json_agg(e.enumlabel ORDER BY e.enumsortorder), '[]'::json) FROM pg_catalog.pg_enum e "
+              "WHERE e.enumtypid = o.oid)) ORDER BY o.typname), '[]'::json) FROM pg_catalog.pg_type o "
+              "JOIN pg_catalog.pg_namespace n ON n.oid = o.typnamespace LEFT JOIN pg_catalog.pg_class r ON r.oid = o.typrelid "
+              "WHERE n.nspname = 'public' AND o.typcategory <> 'A' AND (o.typrelid = 0 OR r.relkind = 'c') AND "
+              + _own('pg_type')),
+    ('functions', "SELECT coalesce(json_agg(n.nspname || '.' || o.proname || '(' "
+                  "|| pg_catalog.pg_get_function_identity_arguments(o.oid) || ')' || o.prokind::text "
+                  "ORDER BY n.nspname, o.proname, pg_catalog.pg_get_function_identity_arguments(o.oid)), '[]'::json) "
+                  "FROM pg_catalog.pg_proc o JOIN pg_catalog.pg_namespace n ON n.oid = o.pronamespace "
+                  "WHERE n.nspname NOT IN ('pg_catalog', 'information_schema') AND " + _own('pg_proc')),
+    ('triggers', "SELECT coalesce(json_agg(json_build_array(c.relname, o.tgname, pg_catalog.pg_get_triggerdef(o.oid)) "
+                 "ORDER BY c.relname, o.tgname), '[]'::json) FROM pg_catalog.pg_trigger o "
+                 "JOIN pg_catalog.pg_class c ON c.oid = o.tgrelid WHERE NOT o.tgisinternal"),
+    ('rules', "SELECT coalesce(json_agg(json_build_array(c.relname, o.rulename, pg_catalog.pg_get_ruledef(o.oid)) "
+              "ORDER BY c.relname, o.rulename), '[]'::json) FROM pg_catalog.pg_rewrite o "
+              "JOIN pg_catalog.pg_class c ON c.oid = o.ev_class JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace "
+              "WHERE o.rulename <> '_RETURN' AND n.nspname NOT IN ('pg_catalog', 'information_schema')"),
+    ('views', "SELECT coalesce(json_agg(json_build_array(n.nspname, o.relname, pg_catalog.pg_get_viewdef(o.oid)) "
+              "ORDER BY n.nspname, o.relname), '[]'::json) FROM pg_catalog.pg_class o "
+              "JOIN pg_catalog.pg_namespace n ON n.oid = o.relnamespace WHERE o.relkind IN ('v', 'm') "
+              "AND n.nspname NOT IN ('pg_catalog', 'information_schema') AND " + _own('pg_class')),
+    ('policies', "SELECT coalesce(json_agg(json_build_array(c.relname, o.polname, o.polcmd::text, o.polpermissive, "
+                 "coalesce(pg_catalog.pg_get_expr(o.polqual, o.polrelid), ''), "
+                 "coalesce(pg_catalog.pg_get_expr(o.polwithcheck, o.polrelid), '')) ORDER BY c.relname, o.polname), "
+                 "'[]'::json) FROM pg_catalog.pg_policy o JOIN pg_catalog.pg_class c ON c.oid = o.polrelid"),
+    ('extensions', "SELECT coalesce(json_agg(json_build_array(o.extname, o.extversion, n.nspname) ORDER BY o.extname), "
+                   "'[]'::json) FROM pg_catalog.pg_extension o JOIN pg_catalog.pg_namespace n ON n.oid = o.extnamespace"),
+    ('schemas', "SELECT coalesce(json_agg(o.nspname ORDER BY o.nspname), '[]'::json) FROM pg_catalog.pg_namespace o "
+                "WHERE o.nspname NOT IN ('public', 'information_schema') AND o.nspname !~ '^pg_'"),
+    ('other', 'SELECT json_build_object(' + ', '.join(
+        f"'{name}', (SELECT count(*) FROM pg_catalog.{name} o WHERE o.oid >= 16384 AND {_own(name)})"
+        for name in OTHER_CATALOGS) + ')'),
+)
+SCHEMA_SIGNATURE_SQL = ('SELECT json_build_object('
+                        + ', '.join(f"'{key}', ({sql})" for key, sql in SIGNATURE_PARTS) + ')')
+SIGNATURE_KEYS = tuple(key for key, _sql in SIGNATURE_PARTS)
+# What the new cluster may hold besides the schema: only its bootstrap superuser, no role or database setting, no
+# ALTER SYSTEM setting, no large object (lo_export/lo_import are what B1-01's expressions would have used).
+AUDIT_SQL = ("SELECT json_build_object("
+             "'roles', (SELECT coalesce(json_agg(rolname ORDER BY rolname), '[]'::json) FROM pg_catalog.pg_roles "
+             "WHERE rolname !~ '^pg_'), "
+             "'role_settings', (SELECT count(*) FROM pg_catalog.pg_db_role_setting), "
+             "'auto_conf', (SELECT count(*) FROM pg_catalog.pg_file_settings WHERE sourcefile ~ '/postgresql[.]auto[.]conf$'), "
+             "'large_objects', (SELECT count(*) FROM pg_catalog.pg_largeobject_metadata))")
+
+
+class Schema:
+    """A database's columns (SCHEMA_COLUMNS_SQL), whole signature (SCHEMA_SIGNATURE_SQL) and alembic revision."""
+
+    def __init__(self, columns, signature, alembic):
+        self.columns, self.signature, self.alembic = columns, signature, sorted(alembic or [])
+
+    def __eq__(self, other):
+        return isinstance(other, Schema) and (self.columns, self.signature, self.alembic) == (
+            other.columns, other.signature, other.alembic)
+
+    def tables(self):
+        return sorted({row[0] for row in self.signature.get('relations') or [] if row[1] in ('r', 'p')})
+
+    def sequences(self):
+        return sorted({row[0] for row in self.signature.get('sequences') or []})
+
+
+def _signature(value):
+    if not isinstance(value, dict) or set(value) != set(SIGNATURE_KEYS):
+        raise BackupError('incompatible', '無法確認 Omnigent 的資料庫結構。')
+    return value
+
+
+def schema_signature(cluster):
+    return _signature(cluster.query_json(SCHEMA_SIGNATURE_SQL, DATABASE))
+
+
+def read_schema(cluster, alembic):
+    """HA's (or the new cluster's) schema, from a throwaway cluster."""
+    return Schema(schema_columns(cluster), schema_signature(cluster), alembic)
+
+
+def live_schema(work, app, target):
+    """This device's schema, read from the LIVE database as the app owner (read only)."""
+    columns = hacommon.live_json(work, app, target.db_container, target.db_user, target.database, SCHEMA_COLUMNS_SQL)
+    if not isinstance(columns, list) or not columns or any(not isinstance(r, list) or len(r) != 6 for r in columns):
+        raise BackupError('incompatible', '無法確認這台 Omnigent 的資料表結構。', app=app.id)
+    signature = _signature(hacommon.live_json(work, app, target.db_container, target.db_user, target.database,
+                                              SCHEMA_SIGNATURE_SQL))
+    alembic = live_alembic(work, app, target)
+    if alembic is None:
+        raise BackupError('incompatible', '無法讀取這台 Omnigent 的資料庫結構版本。', app=app.id)
+    return Schema(columns, signature, alembic)
+
+
+def _by(rows, width):
+    groups = {}
+    for row in rows or []:
+        if isinstance(row, list) and row:
+            groups.setdefault(str(row[0]), []).append(tuple(row[1:width]))
+    return groups
+
+
+def schema_differences(ha, trusted):
+    """The names (tables, sequences, types) whose DATA shape differs between HA and the trusted schema: the columns
+    (name, type, not null, identity, generated; in order), the sequences (type, owning column) and the types.
+    Defaults, constraints and indexes are never compared: HA's are never used, the trusted ones apply."""
+    differ = set()
+    ha_cols, trusted_cols = _by(ha.columns, 6), _by(trusted.columns, 6)
+    differ |= {t for t in set(ha_cols) | set(trusted_cols) if ha_cols.get(t) != trusted_cols.get(t)}
+    pick = lambda rows: {str(r[0]): (r[1], r[8]) for r in rows or [] if isinstance(r, list) and len(r) == 9}  # noqa: E731
+    ha_seq, trusted_seq = pick(ha.signature.get('sequences')), pick(trusted.signature.get('sequences'))
+    differ |= {s for s in set(ha_seq) | set(trusted_seq) if ha_seq.get(s) != trusted_seq.get(s)}
+    ha_types, trusted_types = _by(ha.signature.get('types'), 6), _by(trusted.signature.get('types'), 6)
+    differ |= {t for t in set(ha_types) | set(trusted_types) if ha_types.get(t) != trusted_types.get(t)}
+    return sorted(differ)
+
+
+def schema_blocker(differ):
+    return (f'HA 與這台 Omnigent 的資料庫結構不同（{hacommon.names(differ)}）：只能搬到資料表與欄位完全相同的 Omnigent，'
+            '請先讓兩邊的 Omnigent 版本一致後再匯入。')
+
+
+def trusted_schema(work, app, target, path, alembic):
+    """This device's schema as the new cluster gets it: `path` is its `pg_dump --schema-only` taken in one exported
+    snapshot; the live schema (signature, columns, alembic) before and after the capture and the snapshot's columns
+    must all be equal -- no DDL ran meanwhile (enforced here, not promised by a caller)."""
+    before = live_schema(work, app, target)
+    if before.alembic != sorted(alembic or []):
+        raise BackupError('incompatible', SCHEMA_CHANGED, app=app.id)
+    columns = capture_consistent_target_schema(work, app, target, path, alembic)
+    after = live_schema(work, app, target)
+    if columns != before.columns or after != before:
+        path.unlink(missing_ok=True)
+        raise BackupError('incompatible', SCHEMA_CHANGED, app=app.id)
+    return before
+
+
+def require_schema(cluster, trusted, stage):
+    """The new cluster's schema signature equals the trusted one (after the post-data section, after the last write)."""
+    found = schema_signature(cluster)
+    differ = [key for key in SIGNATURE_KEYS if found.get(key) != trusted.signature.get(key)]
+    if differ:
+        raise BackupError('job-failed', f'新的 PostgreSQL 叢集的資料庫結構和這台 Omnigent 的不同（{"、".join(differ)}），'
+                                        '已停止，這台的應用沒有任何變更。', stage=stage)
+
+
+def audit_new_cluster(cluster, superuser):
+    """Nothing but the schema and the data: one role (the app's), no setting, no large object."""
+    found = cluster.query_json(AUDIT_SQL, DATABASE)
+    if not isinstance(found, dict):
+        raise BackupError('job-failed', '無法檢查新的 PostgreSQL 叢集。')
+    problems = []
+    if found.get('roles') != [superuser]:
+        problems.append('多出的資料庫角色')
+    for key, label in (('role_settings', '角色或資料庫設定'), ('auto_conf', 'ALTER SYSTEM 設定'),
+                       ('large_objects', '大型物件')):
+        if found.get(key) != 0:
+            problems.append(label)
+    if problems:
+        raise BackupError('job-failed', f'新的 PostgreSQL 叢集含有不應存在的內容（{"、".join(problems)}），已停止，'
+                                        '這台的應用沒有任何變更。')
 
 
 def require_registered_secrets(work, app):
@@ -782,10 +968,10 @@ def require_registered_secrets(work, app):
                           app=app.id)
 
 
-def _convert_candidate(work, app, test_mode, out_dir, *, schema_ddl_quiesced):
-    """Internal only: caller must guarantee no target schema DDL during capture."""
-    if schema_ddl_quiesced is not True:
-        raise BackupError('incompatible', '目標資料庫結構變更未暫停，無法擷取安全快照。', app=app.id)
+def convert(work, app, test_mode, out_dir):
+    """Build the app's volumes in `out_dir/volumes` (module docstring: the trusted schema, HA's data only); returns
+    {volumes {name: path}, counts, kept_accounts, conflicts, paused_tasks, ...}."""
+    require_registered_secrets(work, app)
     adapter = work.adapter(app)
     tmp = work.temp(app)
     target, version, alembic, addon, blocker = _prepare(work, app)
@@ -805,13 +991,13 @@ def _convert_candidate(work, app, test_mode, out_dir, *, schema_ddl_quiesced):
     work.guard.check(2 * src.pg_bytes + ha_odoo.WAL_ALLOWANCE)
     cluster = ha_odoo.start_ha_cluster(work, tmp, target.db_image)
     found = analyse(cluster)
-    source_columns = schema_columns(cluster)
     blockers, _warnings = verdict(src, found, live_alembic_value=alembic, ha_major=_ha_major(src),
                                   target_major=ha_odoo.target_pg_major(work, app, target.db_image))
     if blockers:
         raise BackupError('incompatible', f'Omnigent 不能搬過來：{blockers[0]}', app=app.id)
+    ha_schema = read_schema(cluster, found['alembic'])
     dump = staging / 'omnigent.dump'
-    work.log('匯出 HA 的 Omnigent 資料庫')
+    work.log('匯出 HA 的 Omnigent 資料（只當作資料來源，HA 的資料庫結構不會使用）')
     with open(dump, 'xb') as handle:
         os.fchmod(handle.fileno(), 0o600)
         tmp.exec('hapg', ['pg_dump', '-U', 'postgres', '-Fc', '-d', DATABASE], user='postgres', stdout=handle,
@@ -824,17 +1010,23 @@ def _convert_candidate(work, app, test_mode, out_dir, *, schema_ddl_quiesced):
 
     work.log('建立新的 PostgreSQL 資料庫叢集（與這台相同的映像與設定）')
     tmp.volume('omni-db')
-    tmp.run('omni-db', target.db_image, [], detach=True, volumes=[(tmp.name('omni-db'), target.db_target, 'rw,noexec,nosuid,nodev')],
+    tmp.run('omni-db', target.db_image, [], detach=True,
+            volumes=[(tmp.name('omni-db'), target.db_target, 'rw,noexec,nosuid,nodev')],
             env=target.db_env, secrets=target.db_secrets, read_only_root=True)
     pg = ha_odoo.Cluster(tmp, 'omni-db', superuser=target.db_user, log=work.log)
     pg.wait_ready(tcp=True, checkpoint=work.checkpoint)
     schema_dump = staging / 'target-schema.dump'
-    target_columns = capture_consistent_target_schema(work, app, target, schema_dump, alembic)
-    if target_columns != source_columns:
-        raise BackupError('incompatible', 'HA 與目標 Omnigent 的資料表欄位結構不同。', app=app.id)
-    restore_trusted_data(work, tmp, schema_dump, dump, target.db_user, source_columns=source_columns)
+    work.log('讀取這台 Omnigent 自己的資料庫結構（同一個快照；前後比對確認期間沒有結構變更）')
+    trusted = trusted_schema(work, app, target, schema_dump, alembic)
+    differ = schema_differences(ha_schema, trusted)
+    if differ:
+        raise BackupError('incompatible', f'Omnigent 不能搬過來：{schema_blocker(differ)}', app=app.id)
+    work.log('用這台的資料庫結構建立資料表，只把 HA 的資料（資料列與序號）以沒有任何管理權限的暫用角色載入')
+    restore_trusted_data(work, tmp, schema_dump, dump, target.db_user, source_columns=ha_schema.columns,
+                         tables=trusted.tables(), sequences=trusted.sequences())
     os.unlink(dump)
     os.unlink(schema_dump)
+    require_schema(pg, trusted, 'restored')
     kept = carry_accounts_restricted(pg, live_users(work, app, target))
     conflicts = account_conflicts(found, target)
     paused = 0
@@ -845,13 +1037,15 @@ def _convert_candidate(work, app, test_mode, out_dir, *, schema_ddl_quiesced):
         if ha_odoo._int(pg.query_json(ACTIVE_SQL, DATABASE)):
             raise BackupError('job-failed', '測試匯入沒有暫停全部 Omnigent 排程。')
     finish_trusted_data(pg)
+    require_schema(pg, trusted, 'loaded')
+    audit_new_cluster(pg, target.db_user)
     counts = table_counts(pg, found['tables'])
     expected = dict(found['counts'], users=found['counts'].get('users', 0) + len(kept))
     differ = [f'{t}（HA {n}，匯入後 {counts.get(t)}）' for t, n in sorted(expected.items()) if counts.get(t) != n]
     now_alembic = pg.query_json(ALEMBIC_SQL, DATABASE)
     if differ or sorted(now_alembic or []) != sorted(found['alembic']):
         raise BackupError('job-failed', f'Omnigent 匯入後的資料和 HA 不同，已停止：{"、".join(differ[:10]) or "結構版本"}。')
-    work.log(f'Omnigent 資料匯入完成：{len(expected)} 個資料表的筆數都和 HA 相同'
+    work.log(f'Omnigent 資料匯入完成：{len(expected)} 個資料表的筆數都和 HA 相同，資料庫結構和這台的相同'
              + (f'，保留這台的帳號 {"、".join(kept)}' if kept else ''))
     pg.statement('CHECKPOINT;')
     code = tmp.stop('omni-db', timeout=300)
@@ -882,6 +1076,14 @@ def _convert_candidate(work, app, test_mode, out_dir, *, schema_ddl_quiesced):
             'scheduled_tasks_active': ha_odoo._int(found['detail'].get('scheduled_tasks_active')),
             'public_sessions': ha_odoo._int(found['detail'].get('public_sessions')),
             'overrides': list(src.overrides), 'hosts': ha_odoo._int(found['detail'].get('hosts'))}
+
+
+def _convert_candidate(work, app, test_mode, out_dir, *, schema_ddl_quiesced):
+    """Lab compatibility entry of the 2026-11-20..23 internal-candidate harnesses: the product conversion (`convert`
+    enforces the capture's stability itself; the flag is still required so those callers keep their contract)."""
+    if schema_ddl_quiesced is not True:
+        raise BackupError('incompatible', '目標資料庫結構變更未暫停，無法擷取安全快照。', app=app.id)
+    return convert(work, app, test_mode, out_dir)
 
 
 def server_volume(work, app, target, staging, out_dir):
@@ -925,7 +1127,9 @@ def server_volume(work, app, target, staging, out_dir):
 
 def import_texts(data):
     notes = ['Omnigent 的使用者帳號、工作階段、代理程式與排程會換成 HA 的；HA 的登入金鑰（accounts-cookie-secret）一起搬過來，'
-             '這台目前登入的瀏覽器與裝置需要重新登入。']
+             '這台目前登入的瀏覽器與裝置需要重新登入。',
+             'Omnigent 只搬 HA 的資料：資料庫結構（資料表、欄位、預設值、檢查與索引）用這台 Omnigent 自己的，'
+             'HA 備份裡的資料庫結構不會執行。']
     kept = data.get('kept_accounts') or []
     if kept:
         notes.append(f'這台 Omnigent 的管理者與 runner 帳號（{hacommon.names(kept)}）會保留，密碼不變。')

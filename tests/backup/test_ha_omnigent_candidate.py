@@ -1,7 +1,9 @@
-"""Synthetic full conversion exercises the internal candidate; public guard stays intact."""
+"""The lab compatibility entries of the internal candidate (2026-11-20..23) now run exactly the product conversion,
+whose protections hold whoever calls it (B1-01: the public guard was removed by the owner's decision of 2026-11-23
+together with this change); request fields can neither select another converter nor skip a check."""
 from unittest import mock
 
-from woowbackup import haimport
+from woowbackup import cli, haimport
 from woowbackup import ha_omnigent as omni
 from woowbackup.errors import BackupError
 from .test_ha_omnigent import OmnigentCase, World, HASH, BUNDLE
@@ -12,17 +14,14 @@ COLUMNS = [['users', 'id', 'text', True, '', ''], ['scheduled_tasks', 'state', '
 class CandidateWorld(World):
     mismatch = False
 
-    def answer(self, role, sql, database):
-        if sql == omni.SCHEMA_COLUMNS_SQL:
-            if role == 'omni-db' and self.mismatch:
-                return COLUMNS + [['users', 'extra', 'integer', False, '', '']]
-            return COLUMNS
-        return super().answer(role, sql, database)
+    def __init__(self):
+        super().__init__()
+        self.ha_columns, self.live_columns = list(COLUMNS), list(COLUMNS)
 
-    def carried(self):
-        if any('json_populate_recordset' in sql for sql in self.executed('omni-db')):
-            return [row for row in self.live_rows if row['id'] not in self.ha_users]
-        return []
+    def answer(self, role, sql, database):
+        if sql == omni.SCHEMA_COLUMNS_SQL and role == 'omni-db' and self.mismatch:
+            return COLUMNS + [['users', 'extra', 'integer', False, '', '']]
+        return super().answer(role, sql, database)
 
 
 class CandidateFlowTests(OmnigentCase):
@@ -34,8 +33,6 @@ class CandidateFlowTests(OmnigentCase):
         return COLUMNS
 
     def run_candidate(self, **kwargs):
-        self.catalog['omnigent'].secrets = [{'name': 'omnigent-postgres-password'},
-                                             {'name': 'omnigent-database-url'}]
         params = {'source': 'ha', 'ha_backup_id': self.upload_omnigent(), 'apps': ['omnigent'],
                   'encrypt': True, 'test_mode': False, **kwargs}
         with mock.patch.object(omni, 'capture_consistent_target_schema', self.synthetic_snapshot):
@@ -57,6 +54,13 @@ class CandidateFlowTests(OmnigentCase):
         self.assertIn('--section=post-data', restore[2])
         self.assertEqual([row['id'] for row in self.world.carried()], ['admin', 'operator'])
         self.assertNotIn(HASH, '\n'.join(self.reporter.logs))
+
+    def test_the_compatibility_entry_is_the_product_conversion(self):
+        with mock.patch.object(omni, 'convert', side_effect=BackupError('incompatible', 'product path')) as product:
+            with self.assertRaises(BackupError) as caught:
+                self.run_candidate()
+        self.assertEqual(caught.exception.message, 'product path')
+        product.assert_called_once()
 
     def test_same_alembic_but_different_columns_is_rejected_before_data(self):
         self.world.mismatch = True
@@ -98,18 +102,26 @@ class CandidateFlowTests(OmnigentCase):
         self.assertEqual(self.world.runs, [])
         self.assertEqual(self.storage.list_backups(), [])
 
-    def test_request_fields_cannot_enable_public_conversion(self):
+    def test_request_fields_cannot_select_a_converter_or_skip_a_check(self):
+        # The helper refuses such fields before any job exists ...
+        base = {'ha_backup_id': 'ha-' + 'a' * 20, 'apps': ['omnigent'], 'test_mode': False,
+                'request_id': 'req-00000001', 'confirm': True}
+        for field, value in (('schema_ddl_quiesced', True), ('omnigent_candidate', 'omnigent'),
+                             ('trusted_schema', False)):
+            with self.subTest(field=field), self.assertRaises(BackupError) as caught:
+                cli.validate('ha-convert-start', dict(base, **{field: value}))
+            self.assertEqual(caught.exception.code, 'invalid-request')
+        # ... and a job's params carrying them still run the one product path with every check.
         backup_id = self.upload_omnigent()
-        with mock.patch.object(omni, '_convert_candidate',
-                               side_effect=AssertionError('private converter reached')) as private:
-            for test_mode in (False, True):
-                for selector in (True, 'omnigent', {'enabled': True}):
-                    with self.subTest(test_mode=test_mode, selector=selector):
-                        with self.assertRaises(BackupError) as caught:
-                            self.convert(backup_id, ['omnigent'], test_mode=test_mode,
-                                         schema_ddl_quiesced=True, omnigent_candidate=selector)
-                        self.assertEqual(caught.exception.code, 'incompatible')
-                        self.assertEqual(caught.exception.message, omni.SECURITY_BLOCKER)
-            private.assert_not_called()
-        self.assertEqual(self.world.runs, [])
+        self.world.ha_columns = self.world.ha_columns + [['users', 'extra', 'integer', False, '', '']]
+        for test_mode in (False, True):
+            for selector in (True, 'omnigent', {'enabled': True}):
+                with self.subTest(test_mode=test_mode, selector=selector):
+                    with self.assertRaises(BackupError) as caught:
+                        self.convert(backup_id, ['omnigent'], test_mode=test_mode,
+                                     schema_ddl_quiesced=True, omnigent_candidate=selector)
+                    self.assertEqual(caught.exception.code, 'incompatible')
+                    self.assertIn('資料庫結構不同', caught.exception.message)
+        self.assertFalse([cmd for role, cmd, _d in self.world.execs if role == 'omni-db' and cmd[0] == 'pg_restore'
+                          and omni.RESTORE_ROLE in cmd])
         self.assertEqual(self.storage.list_backups(), [])

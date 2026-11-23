@@ -1,7 +1,9 @@
-"""HA import, Omnigent part (ha_omnigent.py): the check and the whole conversion against a fake owner whose podman
-answers like the lab's -- versions, HA's hardened cluster, the dump restored by a role without privileges, this
-device's admin and runner accounts kept, test mode, the server volume with HA's artifacts and cookie key (CONTRACT
-section 9). Team E2."""
+"""HA import, Omnigent part (ha_omnigent.py): the check and the whole product conversion against a fake owner whose
+podman answers like the lab's -- versions, HA's hardened cluster, the trusted schema (this device's own, captured in
+one snapshot and proven unchanged; B1-01), only HA's data loaded by a role without privileges, the new cluster's
+schema and contents audited, this device's admin and runner accounts kept, test mode, the server volume with HA's
+artifacts and cookie key (CONTRACT section 9). Team E2."""
+import copy
 import gzip
 import io
 import json
@@ -48,9 +50,31 @@ TOC = (b';\n; Archive created\n;\n2; 3079 16385 EXTENSION - pg_trgm \n'
        b'3; 0 0 COMMENT - EXTENSION pg_trgm \n'
        b'210; 1259 16400 TABLE public users omnigent\n'
        b'211; 1259 16401 TABLE public alembic_version omnigent\n'
+       b'212; 2604 16402 DEFAULT public users created_at omnigent\n'
        b'3456; 0 16400 TABLE DATA public users omnigent\n'
+       b'3457; 0 16401 TABLE DATA public alembic_version omnigent\n'
+       b'3458; 0 0 SEQUENCE SET public conversation_items_id_seq omnigent\n'
        b'3500; 2606 16500 CONSTRAINT public users users_pkey omnigent\n'
+       b'3501; 2606 16501 CHECK CONSTRAINT public users ck_users_evil omnigent\n'
        b'3600; 1259 16600 INDEX public ix_conv_title_trgm omnigent\n')
+DATA_LINES = ['3456; 0 16400 TABLE DATA public users omnigent', '3457; 0 16401 TABLE DATA public alembic_version omnigent',
+              '3458; 0 0 SEQUENCE SET public conversation_items_id_seq omnigent']
+COLUMNS = [['users', 'id', 'character varying(128)', True, '', ''], ['users', 'is_admin', 'boolean', True, '', ''],
+           ['scheduled_tasks', 'state', 'integer', True, '', '']]
+SEQUENCE = ['conversation_items_id_seq', 'bigint', 1, 1, 9223372036854775807, 1, 1, False, 'conversation_items.id']
+
+
+def signature():
+    """The trusted schema's signature as SCHEMA_SIGNATURE_SQL answers it (a short excerpt of Omnigent's)."""
+    found = {key: [] for key in ha_omnigent.SIGNATURE_KEYS}
+    found.update(relations=[[name, 'r', 'p', False, False, '', False] for name in sorted(ha_omnigent.KNOWN_TABLES)]
+                 + [[SEQUENCE[0], 'S', 'p', False, False, '', False]],
+                 columns=[row + ['false' if row[1] == 'is_admin' else '', ''] for row in COLUMNS],
+                 constraints=[['users', 'users_pkey', 'p', 'PRIMARY KEY (id)', False, False, True, False]],
+                 indexes=[['users', 'users_pkey', 'CREATE UNIQUE INDEX users_pkey ON public.users USING btree (id)']],
+                 sequences=[list(SEQUENCE)], extensions=[['pg_trgm', '1.6', 'public'], ['plpgsql', '1.0', 'pg_catalog']],
+                 other={name: 0 for name in ha_omnigent.OTHER_CATALOGS})
+    return found
 
 
 def addon_tar(*, version='0.1.23', cookie=True, extra=(), artifacts=True):
@@ -99,6 +123,25 @@ class World(fk.World):
                            'password_hash': HASH + 'op', 'created_at': 1, 'last_login_at': None,
                            'account_generation': None}]
         self.written = {}
+        self.ha_columns, self.live_columns = copy.deepcopy(COLUMNS), copy.deepcopy(COLUMNS)
+        self.ha_signature, self.live_signature = signature(), signature()
+        self.restored_signature = None        # None: the new cluster's schema is the trusted one
+        self.live_reads = 0                   # SCHEMA_SIGNATURE_SQL answers of the live database so far
+        self.after_capture = None             # a change of the live schema once the snapshot was taken
+        self.snapshot_columns = None          # the snapshot's columns when they differ from the live ones
+        self.snapshots = []                   # the snapshot scripts the capture ran in the live database
+        self.audit = {'roles': ['omnigent'], 'role_settings': 0, 'auto_conf': 0, 'large_objects': 0}
+
+    def podman(self, args, data, stdout):
+        if args[:5] == ['exec', '-i', 'omnigent-postgres', 'sh', '-s']:
+            # capture_consistent_target_schema: the live database's columns line, then its schema-only archive.
+            self.snapshots.append((args[5:], data))
+            columns = self.snapshot_columns if self.snapshot_columns is not None else self.live_columns
+            stdout.write(json.dumps(columns).encode() + b'\nPGDMP-trusted-schema')
+            if self.after_capture:
+                self.after_capture(self)
+            return Result(0, None, b'')
+        return super().podman(args, data, stdout)
 
     def run(self, role, image, command, options, data):
         if role == 'controldata':
@@ -119,6 +162,17 @@ class World(fk.World):
         return [statement for _db, statement, _t in self.psql[role].executed] if role in self.psql else []
 
     def answer(self, role, sql, database):
+        if sql == ha_omnigent.SCHEMA_COLUMNS_SQL:
+            return {'omnigent-postgres': self.live_columns, 'hapg': self.ha_columns}.get(role, self.live_columns)
+        if sql == ha_omnigent.SCHEMA_SIGNATURE_SQL:
+            if role == 'omnigent-postgres':
+                self.live_reads += 1
+                return self.live_signature
+            if role == 'hapg':
+                return self.ha_signature
+            return self.restored_signature if self.restored_signature is not None else self.live_signature
+        if sql == ha_omnigent.AUDIT_SQL and role == 'omni-db':
+            return self.audit
         if role == 'omnigent-postgres':  # the live database (read only)
             if 'alembic_version' in sql:
                 return self.live_alembic
@@ -152,9 +206,19 @@ class World(fk.World):
                 return 0 if PAUSE in self.executed('omni-db') else 1
         return None
 
+    def restricted(self):
+        """The SQL the role without privileges (woowbk_restore) ran in the new cluster."""
+        return [data.decode() for role, cmd, data in self.execs if role == 'omni-db' and cmd[0] == 'psql'
+                and cmd[cmd.index('-U') + 1] == ha_omnigent.RESTORE_ROLE and data]
+
     def carried(self):
-        data = self.written.get('/tmp/woowbk-omnigent-users.json')
-        return json.loads(data) if data else []
+        """The accounts the restricted role added back (the rows of its INSERT ... json_populate_recordset)."""
+        rows = []
+        for sql in self.restricted():
+            match = re.search(r"json_populate_recordset\(NULL::users, '(.*)'::json\)", sql, re.S)
+            if match:
+                rows += json.loads(match.group(1).replace("''", "'"))
+        return rows
 
     def export(self, volume):
         if volume == 'omnigent-server-data':
@@ -192,6 +256,7 @@ class OmnigentCase(fk.ConversionCase):
         return {'omnigent': fk.app('omnigent', 'Omnigent 協作平台',
                                    volumes=[{'name': 'omnigent-postgres-data'}, {'name': 'omnigent-server-data'},
                                             {'name': 'omnigent-pi-data'}],
+                                   secrets=[{'name': 'omnigent-postgres-password'}, {'name': 'omnigent-database-url'}],
                                    health=[{'type': 'http', 'url': 'http://127.0.0.1:8000/health'}])}
 
     def upload_omnigent(self, **kwargs):
@@ -252,6 +317,15 @@ class CheckTests(OmnigentCase):
         self.assertNotIn('../../etc）', joined.split('格式不明')[0])
         self.assertIn('格式不明', joined)
 
+    def test_a_different_schema_is_a_blocker_naming_the_tables(self):
+        self.world.ha_columns = COLUMNS + [['users', 'extra', 'integer', False, '', '']]
+        result = self.check(self.upload_omnigent(), ['omnigent'])[0]
+        self.assertFalse(result['ok'])
+        self.assertEqual([b for b in result['blockers'] if '資料庫結構不同' in b],
+                         [ha_omnigent.schema_blocker(['users'])])
+        self.assertEqual(self.world.live_reads, 1, "the live schema is read once, read only")
+        self.assertFalse(self.runs('omni-db'), 'a check changes nothing')
+
     def test_a_same_named_account_is_a_warning(self):
         self.world.ha_users = ['admin', 'alice']
         result = self.check(self.upload_omnigent(), ['omnigent'])[0]
@@ -261,33 +335,67 @@ class CheckTests(OmnigentCase):
 
 
 class ConvertTests(OmnigentCase):
+    def restores(self):
+        """Every pg_restore that writes into the new cluster: (role it runs as, argv, what it read)."""
+        return [(cmd[cmd.index('-U') + 1], cmd, data) for role, cmd, data in self.world.execs
+                if role == 'omni-db' and cmd[0] == 'pg_restore' and '-U' in cmd]
+
+    def assert_nothing_loaded(self):
+        self.assertFalse([r for r in self.restores() if r[0] == ha_omnigent.RESTORE_ROLE], 'no HA data was loaded')
+        self.assertEqual(self.storage.list_backups(), [])
+
     def test_the_whole_conversion_in_test_mode(self):
         result = self.convert(self.upload_omnigent(), ['omnigent'], test_mode=True)
         imp = result['ha_import']
         self.assertEqual(imp['apps'], ['omnigent'])
         self.assertTrue(any('admin、operator' in line for line in imp['notes']), imp['notes'])
+        self.assertTrue(any('資料庫結構' in line and '這台' in line for line in imp['notes']), imp['notes'])
         self.assertTrue(any('runner' in line for line in imp['reminders_by_app']['omnigent']))
         self.assertTrue(any('暫停 1 個排程' in line for line in imp['reminders_by_app']['omnigent']))
         self.assertFalse(any('MCP 管理' in line for line in imp['reminders_by_app']['omnigent']), 'no admin app here')
-        # The new cluster: the live image, environment and secret; restored by a role without privileges.
+        # The new cluster: the live image, environment and secret, hardened like HA's.
         new = self.runs('omni-db')[0]
         self.assertEqual(new[1], 'docker.io/library/postgres:16.15-alpine3.24')
         self.assertIn('POSTGRES_USER=omnigent', new[3]['--env'])
         self.assertEqual(new[3]['--secret'], ['omnigent-postgres-password,type=mount,target=/run/secrets/postgres-password,'
                                               'mode=0400'])
-        restore = next(cmd for role, cmd, _d in self.world.execs if role == 'omni-db' and cmd[0] == 'pg_restore'
-                       and '-U' in cmd)
-        self.assertEqual(restore[restore.index('-U') + 1], ha_omnigent.RESTORE_ROLE)
-        self.assertIn('--no-owner', restore)
-        statements = self.world.executed('omni-db')
-        self.assertTrue(any(s.startswith('CREATE ROLE woowbk_restore LOGIN NOSUPERUSER') for s in statements))
-        self.assertTrue(any(s.startswith('REASSIGN OWNED BY woowbk_restore TO "omnigent"') for s in statements))
-        self.assertIn('DROP ROLE woowbk_restore', statements)
-        self.assertIn(PAUSE, statements)
-        self.assertNotIn(HASH, '\n'.join(statements), 'the hashes travel in a file, never in a statement')
+        self.assertIn('--read-only', new[3])
+        self.assertTrue(any(v.endswith(':rw,noexec,nosuid,nodev') for v in new[3]['--volume']))
+        # The trusted schema: this device's, from one snapshot with the live revision; read before and after.
+        self.assertEqual(len(self.world.snapshots), 1)
+        self.assertEqual(self.world.snapshots[0][0], ['--', 'omnigent', 'omnigent'])
+        self.assertIn(json.dumps([ALEMBIC]).encode(), self.world.snapshots[0][1])
+        self.assertEqual(self.world.live_reads, 2, 'the live schema before and after the capture')
+        # Three writes into the new cluster: this device's pre-data and post-data as the app role, HA's DATA (only the
+        # entries of the -L list) as the role without privileges -- HA's archive never provides DDL.
+        restores = self.restores()
+        self.assertEqual([(user, '--section=pre-data' in cmd, '-L' in cmd, '--section=post-data' in cmd)
+                          for user, cmd, _data in restores],
+                         [('omnigent', True, False, False), (ha_omnigent.RESTORE_ROLE, False, True, False),
+                          ('omnigent', False, False, True)])
+        self.assertEqual(restores[0][2], b'PGDMP-trusted-schema')
+        self.assertEqual(restores[2][2], b'PGDMP-trusted-schema')
+        self.assertEqual(restores[1][2], b'PGDMP-hapg', 'the data comes from HA')
+        for _user, cmd, _data in restores:
+            self.assertTrue({'--no-owner', '--no-acl', '--exit-on-error', '--single-transaction'} <= set(cmd))
         toc = self.world.written['/tmp/woowbk-omnigent.toc'].decode()
-        self.assertNotIn('EXTENSION', toc)
+        self.assertEqual(toc.splitlines(), DATA_LINES, 'only TABLE DATA and SEQUENCE SET of HA')
+        statements = self.world.executed('omni-db')
+        create = next(s for s in statements if s.startswith('CREATE ROLE woowbk_restore'))
+        self.assertIn('NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS', create)
+        self.assertFalse([s for s in statements if 'GRANT CREATE' in s or 'REASSIGN OWNED' in s or 'pg_read_file' in s])
+        self.assertIn('DROP ROLE woowbk_restore', statements)
+        restricted = self.world.restricted()
+        self.assertTrue(any(PAUSE in sql for sql in restricted), 'test mode pauses as the restricted role')
         self.assertEqual([row['id'] for row in self.world.carried()], ['admin', 'operator'])
+        # The hashes travel only on the restricted loader's stdin: never in an argv or a log line.
+        self.assertFalse([cmd for _r, cmd, _d in self.world.execs if any(HASH in str(a) for a in cmd)])
+        self.assertFalse([run for run in self.world.runs if HASH in json.dumps(run, default=str)])
+        self.assertTrue(any(HASH in sql for sql in restricted))
+        # The new cluster was audited and its schema compared twice (after post-data, after the last write).
+        audits = [s for s in statements if s == ha_omnigent.AUDIT_SQL]
+        self.assertEqual(len(audits), 1)
+        self.assertEqual(len([s for s in statements if s == ha_omnigent.SCHEMA_SIGNATURE_SQL]), 2)
         # The volumes.
         self.assertEqual(sorted(self.world.manifests['omnigent']), ['volumes'])
         server = self.volume('omnigent-server-data')
@@ -301,7 +409,7 @@ class ConvertTests(OmnigentCase):
         self.assertEqual(self.volume('omnigent-pi-data')['auth.json'][1], b'pi-login', 'the runner keeps its own')
         self.assertIn('PG_VERSION', self.volume('omnigent-postgres-data'))
         self.assertNotIn(HASH, '\n'.join(self.reporter.logs))
-        self.assertTrue(self.reporter.logs)
+        self.assertTrue(any('略過' in line for line in self.reporter.logs), 'the skipped structure entries are logged')
         self.assertNotIn(HASH, jobs.redact(f'x {HASH} y'), 'masked as soon as it was read')
 
     def test_a_same_named_ha_account_wins(self):
@@ -309,17 +417,34 @@ class ConvertTests(OmnigentCase):
         result = self.convert(self.upload_omnigent(), ['omnigent'])
         self.assertEqual([row['id'] for row in self.world.carried()], ['operator'])
         self.assertTrue(any('HA 也有帳號 admin' in line for line in result['ha_import']['notes']))
-        self.assertNotIn(PAUSE, self.world.executed('omni-db'), 'not a test import')
+        self.assertFalse(any(PAUSE in sql for sql in self.world.restricted()), 'not a test import')
 
-    def test_a_dump_with_code_is_refused_before_the_restore(self):
-        self.world.toc = TOC + b'3700; 1255 16700 FUNCTION public evil() omnigent\n'
+    def test_code_in_has_database_never_runs(self):
+        # A database with code is refused before anything is dumped or created.
+        self.world.objects = dict(self.world.objects, functions=1)
         with self.assertRaises(BackupError) as caught:
             self.convert(self.upload_omnigent(), ['omnigent'])
         self.assertEqual(caught.exception.code, 'incompatible')
-        self.assertIn('FUNCTION', caught.exception.message)
-        self.assertFalse([cmd for role, cmd, _d in self.world.execs if role == 'omni-db' and cmd[0] == 'pg_restore'
-                          and '-U' in cmd])
-        self.assertEqual(self.storage.list_backups(), [])
+        self.assertIn('函式', caught.exception.message)
+        self.assertFalse(self.runs('omni-db'))
+        self.assert_nothing_loaded()
+        # HA's dump list with code, defaults and checks: none of those entries is ever selected.
+        self.world.objects = dict(self.world.objects, functions=0)
+        self.world.toc = TOC + b'3700; 1255 16700 FUNCTION public evil() omnigent\n'
+        self.convert(self.upload_omnigent(), ['omnigent'])
+        self.assertEqual(self.world.written['/tmp/woowbk-omnigent.toc'].decode().splitlines(), DATA_LINES)
+
+    def test_a_name_with_a_line_break_cannot_add_an_entry(self):
+        # pg_restore -L reads only the id at the start of a line: a second "users" line would be any entry of HA's.
+        for extra in (b'3701; 0 0 TABLE DATA public users x\n', b'3702; 0 0 TABLE DATA public evil x\n',
+                      b'3703; 0 0 SEQUENCE SET public other_seq x\n'):
+            with self.subTest(extra=extra):
+                self.world.toc = TOC + extra
+                self.world.execs.clear()
+                with self.assertRaises(BackupError) as caught:
+                    self.convert(self.upload_omnigent(), ['omnigent'])
+                self.assertIn('不屬於這台 Omnigent 資料庫結構', caught.exception.message)
+                self.assert_nothing_loaded()
 
     def test_counts_that_differ_stop_the_conversion(self):
         real = self.world.answer
@@ -334,6 +459,93 @@ class ConvertTests(OmnigentCase):
         with self.assertRaises(BackupError) as caught:
             self.convert(self.upload_omnigent(), ['omnigent'])
         self.assertIn('conversations', caught.exception.message)
+
+
+class TrustedSchemaTests(OmnigentCase):
+    """What the product enforces itself instead of a caller's promise (B1-01): each case stops before HA's data is
+    loaded or before anything is exported, and no backup is made."""
+
+    def assert_refused(self, code, words, *, loaded=False):
+        with self.assertRaises(BackupError) as caught:
+            self.convert(self.upload_omnigent(), ['omnigent'])
+        self.assertEqual(caught.exception.code, code)
+        self.assertIn(words, caught.exception.message)
+        self.assertEqual(self.storage.list_backups(), [])
+        data = [cmd for role, cmd, _d in self.world.execs if role == 'omni-db' and cmd[0] == 'pg_restore'
+                and ha_omnigent.RESTORE_ROLE in cmd]
+        if not loaded:
+            self.assertEqual(data, [], 'stopped before any HA data was loaded')
+        self.assertFalse([p for p in self.world.volume_data if p == 'omnigent-postgres-data'], 'nothing exported')
+        return caught.exception
+
+    def test_ddl_during_the_capture_stops(self):
+        def change(world):
+            world.live_signature = dict(world.live_signature, indexes=world.live_signature['indexes'] + [
+                ['users', 'ix_new', 'CREATE INDEX ix_new ON public.users USING btree (is_admin)']])
+        self.world.after_capture = change
+        self.assert_refused('incompatible', '資料庫結構在轉換期間改變了')
+
+    def test_snapshot_columns_must_be_the_live_ones(self):
+        self.world.snapshot_columns = COLUMNS + [['users', 'extra', 'integer', False, '', '']]
+        self.assert_refused('incompatible', '資料庫結構在轉換期間改變了')
+
+    def test_a_revision_that_moved_since_the_check_stops(self):
+        real = self.world.answer
+        calls = {'n': 0}
+
+        def answer(role, sql, database):
+            if role == 'omnigent-postgres' and 'alembic_version' in sql:
+                calls['n'] += 1
+                return self.world.live_alembic if calls['n'] == 1 else ['newer']
+            return real(role, sql, database)
+
+        self.world.answer = answer
+        self.assert_refused('incompatible', '資料庫結構在轉換期間改變了')
+
+    def test_has_columns_must_equal_the_trusted_ones(self):
+        self.world.ha_columns = COLUMNS + [['users', 'x', 'integer', False, '', '']]
+        error = self.assert_refused('incompatible', '資料庫結構不同（users）')
+        self.assertIn('版本一致', error.message)
+
+    def test_has_sequences_and_types_must_equal_the_trusted_ones(self):
+        seq = list(SEQUENCE)
+        seq[8] = 'users.id'
+        self.world.ha_signature = dict(signature(), sequences=[seq])
+        self.assert_refused('incompatible', 'conversation_items_id_seq')
+        self.world.ha_signature = dict(signature(), types=[['mood', 'e', '', False, '', ['ok', 'sad']]])
+        self.assert_refused('incompatible', 'mood')
+
+    def test_has_defaults_checks_and_indexes_are_not_compared(self):
+        # They are never used (the trusted ones apply), so a different one is no reason to refuse.
+        self.world.ha_signature = dict(signature(), constraints=[['users', 'ck_evil', 'c', 'CHECK (lo_export(0, \'/x\') > 0)',
+                                                                  False, False, False, False]], indexes=[])
+        cols = signature()['columns']
+        self.world.ha_signature['columns'] = [row[:6] + ['lo_export(0, \'/x\')', ''] for row in cols]
+        self.convert(self.upload_omnigent(), ['omnigent'])
+        self.assertEqual(len(self.storage.list_backups()), 1)
+
+    def test_the_new_clusters_schema_must_be_the_trusted_one(self):
+        self.world.restored_signature = dict(signature(), constraints=signature()['constraints'] + [
+            ['users', 'ck_evil', 'c', "CHECK (lo_export(0, '/x') > 0)", False, False, False, False]])
+        error = self.assert_refused('job-failed', '新的 PostgreSQL 叢集的資料庫結構和這台 Omnigent 的不同', loaded=True)
+        self.assertIn('constraints', error.message)
+
+    def test_the_new_cluster_holds_nothing_else(self):
+        for key, value, words in (('roles', ['evil', 'omnigent'], '多出的資料庫角色'),
+                                  ('role_settings', 1, '角色或資料庫設定'), ('auto_conf', 1, 'ALTER SYSTEM 設定'),
+                                  ('large_objects', 1, '大型物件')):
+            with self.subTest(key=key):
+                self.world.audit = {**{'roles': ['omnigent'], 'role_settings': 0, 'auto_conf': 0, 'large_objects': 0},
+                                    key: value}
+                self.world.execs.clear()
+                self.assert_refused('job-failed', words, loaded=True)
+
+    def test_unregistered_quadlet_secrets_refuse_before_anything(self):
+        self.catalog['omnigent'].secrets = [{'name': 'omnigent-postgres-password'}]
+        with self.assertRaises(BackupError) as caught:
+            self.convert(self.upload_omnigent(), ['omnigent'])
+        self.assertIn('機密未完整登記', caught.exception.message)
+        self.assertFalse(self.runs('hapg'))
 
 
 class ScanTests(unittest.TestCase):

@@ -1621,6 +1621,7 @@ const HA_NOTES = {
   odoo: ['Odoo 的使用者帳號和密碼會換成 HA 那邊的，這台原本的 Odoo 管理者密碼不再適用。', 'HA 的自訂模組 woow_paas_platform 會一起放進這台的自訂模組資料夾。'],
   n8n: ['n8n 的登入帳號會換成 HA 的管理者帳號（owner@example.com）。'],
   omnigent: ['Omnigent 的使用者帳號、工作階段、代理程式與排程會換成 HA 的；HA 的登入金鑰（accounts-cookie-secret）一起搬過來，這台目前登入的瀏覽器與裝置需要重新登入。',
+    'Omnigent 只搬 HA 的資料：資料庫結構（資料表、欄位、預設值、檢查與索引）用這台 Omnigent 自己的，HA 備份裡的資料庫結構不會執行。',
     '這台 Omnigent 的管理者與 runner 帳號（admin、operator）會保留，密碼不變。', 'HA 的 Omnigent 分享與管理者執行期設定不會搬過來，這台維持自己的設定。'],
   hermes: ['Hermes 的對話、記憶、技能、排程、外掛與 HA 的設定檔（config.yaml）會換成 HA 的；這台的 Dashboard 密碼、API 金鑰、Webhook 與工作階段金鑰以及 hermes.env 保持不變，hermes.env 中的金鑰會蓋過 HA 的同名金鑰。',
     'HA 的 Hermes 外掛（omnigent、paseo）會取代這台的外掛與配對（例如 Omnigent、Paseo）。'],
@@ -5590,7 +5591,7 @@ try {
         這台的伺服器網址: 'https://hs.example.com' });
       // How to log in afterwards: Hermes keeps this device's password, Headscale's devices move to this device's server.
       assert.deepEqual(await Promise.all(B1_APPS.map(id => card(id).locator('p.muted').last().textContent())), [
-        '匯入後，用 HA 那邊 Omnigent 的帳號和密碼登入；這台的管理者與 runner 帳號會保留（和 HA 同名的帳號以 HA 的為準）。',
+        '只搬 HA 的資料，資料庫結構用這台 Omnigent 自己的。匯入後，用 HA 那邊 Omnigent 的帳號和密碼登入；這台的管理者與 runner 帳號會保留（和 HA 同名的帳號以 HA 的為準）。',
         '匯入後，用這台的 Hermes Dashboard 密碼登入（不是 HA 的）。',
         '匯入後，用 HA 那邊 EMQX Dashboard 的帳號和密碼登入；MQTT 裝置與服務要改連到這台。',
         '匯入後，每一台裝置的登入伺服器都要改成這台的 https://hs.example.com。']);

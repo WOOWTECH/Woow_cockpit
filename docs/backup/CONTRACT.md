@@ -1874,16 +1874,34 @@ emqx,headscale,mcp-admin}.md` of the design notes.
    trigger, view, rule, policy or other schema, an object only a superuser can create, extensions beyond plpgsql and
    pg_trgm, not UTF8, a missing `accounts-cookie-secret`, an agent bundle or file blob the database names that is not
    in the staged store, a malformed artifact key.
-3. **Security hold (B1-01): Omnigent HA conversion is disabled.** HA-written defaults and constraints could execute as the application superuser after restore. The following describes the disabled implementation, not a security guarantee. Conversion: `pg_dump -Fc omnigent`; a new cluster from the live image, environment and secret mount; pg_trgm created
-   first; the dump's list must hold only TABLE, TABLE DATA, INDEX, (FK/CHECK) CONSTRAINT, SEQUENCE (SET, OWNED BY),
-   DEFAULT, COMMENT, TYPE, DOMAIN, EXTENSION (filtered out), SCHEMA and ACL entries (else `incompatible`, naming the
-   kinds); it is restored by a role without any privilege (`woowbk_restore`: `pg_restore --no-owner --no-acl
-   --exit-on-error --single-transaction`), then `REASSIGN OWNED` to the app role and the role dropped. This device's own
-   accounts -- the Quadlet's `OMNIGENT_ACCOUNTS_INIT_ADMIN_USERNAME` and `OMNIGENT_RUNNER_USERNAME` (default admin,
-   operator) -- are read from the live database as the owner (password hashes masked) and added back through a file
-   inside the throwaway container (`pg_read_file` + `json_populate_recordset`, `ON CONFLICT DO NOTHING`: a same-named HA
-   user wins, with a note); test mode pauses every active scheduled task (`state` 1 → 2); every table's rows equal HA's
-   (users plus the accounts added), alembic unchanged; `CHECKPOINT`, stop, `pg_controldata` "shut down", export.
+3. **Trusted schema (B1-01; owner decision 2026-11-23 replaced the security hold).** HA's backup provides DATA only:
+   no DDL, default, check, domain, index or function written by HA ever runs. The check reads this device's live
+   schema (as the owner, read only) and names every table whose columns differ (a blocker). Conversion: HA's cluster
+   is dumped (`pg_dump -Fc omnigent`, the hardened throwaway); a new cluster from the live image, environment and
+   secret mount (read-only root, data volume `noexec,nosuid,nodev`) gets THIS device's schema: `pg_dump
+   --schema-only` of the live database inside one exported snapshot (`REPEATABLE READ READ ONLY`, revision checked in
+   the snapshot), its pre-data and post-data sections restored by the app role. The product itself proves what the
+   lab proved (`ha_omnigent.trusted_schema`; no caller flag): the live schema signature (`SCHEMA_SIGNATURE_SQL`:
+   relations, columns with types/defaults/collations, constraints, indexes, sequences, types and enum labels,
+   functions, triggers, rules, views, policies, extensions, schemas, other user objects), its columns and its alembic
+   revision are read before and after the capture and must be equal, and the snapshot's columns must be the live
+   ones -- else `incompatible` 「這台 Omnigent 的資料庫結構在轉換期間改變了…」, nothing changed. HA's columns (in order),
+   sequences (type, owning column) and types must equal the trusted ones (else `incompatible`, naming them); HA's
+   defaults, checks and indexes are not compared because they are never used. From HA's dump only TABLE DATA and
+   SEQUENCE SET entries are restored (`pg_restore -L`), and each selected entry must name a table or sequence of the
+   trusted schema exactly once (pg_restore reads only a line's dump id: a name with a line break cannot add an entry);
+   they are loaded by `woowbk_restore` (`LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS`, only
+   `USAGE` on public, `INSERT` on its tables, `SELECT` on users/scheduled_tasks, `UPDATE` on scheduled_tasks,
+   sequence values; `--no-owner --no-acl --exit-on-error --single-transaction`). The new cluster's signature must
+   equal the trusted one after the post-data section and again after the last write; `woowbk_restore` is dropped
+   (`DROP OWNED`, `DROP ROLE`); the cluster may then hold only its bootstrap role, no role or database setting, no
+   `postgresql.auto.conf` setting and no large object (else `job-failed`). This device's own accounts -- the
+   Quadlet's `OMNIGENT_ACCOUNTS_INIT_ADMIN_USERNAME` and `OMNIGENT_RUNNER_USERNAME` (default admin, operator) -- are
+   read from the live database as the owner (password hashes masked in every log line) and added back by
+   `woowbk_restore` (`json_populate_recordset` on its stdin, never an argv; `ON CONFLICT DO NOTHING`: a same-named HA
+   user wins, with a note); test mode pauses every active scheduled task (`state` 1 → 2) as `woowbk_restore`; every
+   table's rows equal HA's (users plus the accounts added), alembic unchanged; `CHECKPOINT`, stop, `pg_controldata`
+   "shut down", export. Every Quadlet `Secret=` of the app must be declared in its catalog entry before anything runs.
 4. `omnigent-server-data`: the live export without `artifacts/**` plus HA's artifacts owned like the live artifacts
    folder (dirs 0755, files 0644, `accounts-cookie-secret` 0600: HA's session key replaces this device's, so HA's grants
    and tokens keep working and this device's browser sessions end); `omnigent-pi-data`: the live export as it is (the
@@ -2066,8 +2084,9 @@ the restore's settings check says `same`; then `flows._package` (§8 "Home Assis
    Batch 1: every SQLite file of an HA backup (and the copy of the live Headscale database) is opened only by
    `hasqlite`'s child (nobody, chroot, no network, limits, defensive, ordinary tables, fixed statements; databases containing virtual tables are refused before integrity checks), whose only
    write is Headscale's `api_keys` on a database without triggers or views, and what it wrote is copied out with
-   O_NOFOLLOW as a regular file with one link; Omnigent HA conversion is disabled pending a trusted-schema fix (B1-01); its previous dump restore used a role without privileges and refused
-   when its list holds a kind of object Omnigent never creates; HA's EMQX data is opened by the live image without a
+   O_NOFOLLOW as a regular file with one link; Omnigent's HA data is loaded into this device's own schema (B1-01: HA's
+   DDL, defaults, checks and domains never run; only its table data and sequence values, by a role without
+   privileges, each entry naming a trusted table once; the new cluster's schema and contents audited); HA's EMQX data is opened by the live image without a
    network, with a read-only root and a `noexec` data volume, its cookie, generated configs, plugins and patches never
    staged; an absolute symlink is handed out only below an allowed prefix with a clean target and stays a link entry;
    a hard link only to an earlier file of the same tree that moves; the HA-side secrets of the new add-ons are never
