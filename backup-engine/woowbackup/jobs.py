@@ -83,7 +83,9 @@ MAX_LOG_LINE = 500
 # A log line stays ONE line on the page: read_log splits on '\n' only, and append_log turns into a space every C0/C1
 # control character and U+2028/U+2029 (str.splitlines() also splits on \x0b, \x0c, \x1c-\x1e, \x85, U+2028 and U+2029).
 # Lines carry text an HA backup chose -- its name, its PG_VERSION -- which forged a line before (secreview SR-6).
-LOG_CONTROL_RE = re.compile(r'[\x00-\x1f\x7f-\x9f\u2028\u2029]')
+# The Unicode bidirectional controls (PropList Bidi_Control: U+061C, U+200E, U+200F, U+202A-U+202E, U+2066-U+2069)
+# become a space too: inside one line they still reorder how the rest of it reads (the verifier's SR-6 gap).
+LOG_CONTROL_RE = re.compile(r'[\x00-\x1f\x7f-\x9f\u2028\u2029\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]')
 LOCK_WAIT_SECONDS = 120
 KEY_FILE_MAX_AGE = 15 * 60  # an inspect takes seconds; older key-inspect-* files were left by a killed helper
 KEEP_TERMINAL = 200  # finished records kept (with their logs) besides the ones that are still needed

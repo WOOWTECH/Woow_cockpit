@@ -127,6 +127,24 @@ class StoreTests(JobCase):
         self.assertEqual(len(log), len(breaks) + 1)
         self.assertTrue(log[-1].endswith('here'))
 
+    def test_a_log_line_keeps_its_reading_order(self):
+        """The verifier's SR-6 gap: a Unicode bidirectional control in text an HA backup chose (U+202E in its name)
+        stays inside the one line and reorders how the rest of it reads on the page ('WOOW' U+202E 'TLIAF' shows 'FAIL').
+        Every Bidi_Control code point (PropList: U+061C, U+200E, U+200F, U+202A-U+202E, U+2066-U+2069) is written as
+        a space; the explicit-formatting classes are taken from the Unicode database itself, so none is missed."""
+        import unicodedata
+        explicit = {'LRE', 'RLE', 'PDF', 'LRO', 'RLO', 'LRI', 'RLI', 'FSI', 'PDI'}
+        controls = ''.join(chr(cp) for cp in range(0x110000) if unicodedata.bidirectional(chr(cp)) in explicit)
+        self.assertEqual(len(controls), 9, 'Unicode: U+202A-U+202E and U+2066-U+2069')
+        controls += '\u061c\u200e\u200f'
+        record = self.store.create('backup', {})
+        for ch in controls:
+            self.store.append_log(record['id'], f'檢查 HA 備份「WOOW{ch}TLIAF」')
+        log = self.store.read_log(record['id'])
+        self.assertEqual(len(log), len(controls))
+        for line in log:
+            self.assertRegex(line, r'\A\S+ 檢查 HA 備份「WOOW TLIAF」\Z')
+
     def test_unencrypted_backup_package_phase_says_so(self):
         labels = {encrypt: {p['id']: p['label'] for p in self.store.create('backup', {'encrypt': encrypt})['phases']}
                   for encrypt in (True, False)}

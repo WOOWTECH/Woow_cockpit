@@ -100,6 +100,14 @@ MUTATIONS = (
      "        line = LOG_CONTROL_RE.sub(' ', redact(message))[:MAX_LOG_LINE]\n",
      "        line = redact(message).replace('\\r', ' ').replace('\\n', ' ')[:MAX_LOG_LINE]\n", 1,
      'woowbackup/jobs.py'),
+    ('M27', "a job log line keeps its reading order: every Unicode bidirectional control becomes a space (the "
+            "verifier's SR-6 gap, shared jobs.py)",
+     "LOG_CONTROL_RE = re.compile(r'[\\x00-\\x1f\\x7f-\\x9f\\u2028\\u2029\\u061c\\u200e\\u200f\\u202a-\\u202e\\u2066-\\u2069]')\n",
+     "LOG_CONTROL_RE = re.compile(r'[\\x00-\\x1f\\x7f-\\x9f\\u2028\\u2029]')\n", 1, 'woowbackup/jobs.py'),
+    ('M28', "names from HA's backup reach a message without a Unicode bidirectional control (the verifier's "
+            "SR-6 gap, shared hacommon)",
+     "CONTROL_RE = re.compile(r'[\\x00-\\x1f\\x7f-\\x9f\\u2028\\u2029\\u061c\\u200e\\u200f\\u202a-\\u202e\\u2066-\\u2069]')\n",
+     "CONTROL_RE = re.compile(r'[\\x00-\\x1f\\x7f-\\x9f\\u2028\\u2029]')\n", 1, 'woowbackup/hacommon.py'),
     ('M21', "HA-controlled names reach the job log and the page without control characters (SR-4, shared hacommon)",
      "    items = [CONTROL_RE.sub('?', str(item)[:60]) for item in items]\n",
      '    items = [str(item)[:60] for item in items]\n', 1, 'woowbackup/hacommon.py'),

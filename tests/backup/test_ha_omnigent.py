@@ -304,6 +304,32 @@ class CheckTests(OmnigentCase):
         self.assertFalse([line for line in read if line.startswith('FORGED')])
         self.assertFalse([line for line in read if re.search(r'[\x00-\x1f\x7f-\x9f  ]', line)])
 
+    def test_has_text_cannot_reorder_a_message_or_a_log_line(self):
+        """The verifier's SR-6 gap: HA's backup name (hastore refuses only C0 control characters) and a table name of
+        HA's database can carry a Unicode bidirectional control; U+202E reverses how the rest of the line reads on the
+        page. The check's blockers show it as '?' (hacommon.names) and, through the real JobStore, no job log line
+        keeps one (jobs.LOG_CONTROL_RE)."""
+        from types import SimpleNamespace
+        bidi = set('\u061c\u200e\u200f\u202a\u202b\u202c\u202d\u202e\u2066\u2067\u2068\u2069')
+        self.world.objects = dict(self.world.objects, tables=self.world.objects['tables'] + ['evil\u202eLIAF'])
+        ha_id = self.upload(hx.outer_bytes([(f'{SLUG}.tar.gz', addon_tar())],
+                                           hx.ha_doc(addons=(SLUG,), name='WOOW\u202e\u2066 LIAF')))
+        result = self.check(ha_id, ['omnigent'])[0]
+        self.assertFalse(result['ok'])
+        self.assertTrue(any('evil?LIAF' in blocker for blocker in result['blockers']), result['blockers'])
+        self.assertFalse([blocker for blocker in result['blockers'] if set(blocker) & bidi])
+        logged = [str(message) for message in self.reporter.logs]
+        self.assertTrue(any('WOOW\u202e\u2066 LIAF' in m for m in logged), 'the source: HA text as it is')
+        (self.root / 'joblog').mkdir()
+        store = jobs.JobStore(SimpleNamespace(jobs=str(self.root / 'joblog')))
+        job = jobs.new_job_id()
+        for message in logged:
+            store.append_log(job, message)
+        read = store.read_log(job, limit=10000)
+        self.assertEqual(len(read), len(logged))
+        self.assertFalse([line for line in read if set(line) & bidi])
+        self.assertTrue(any('WOOW   LIAF' in line for line in read))
+
     def test_a_clean_backup(self):
         result = self.check(self.upload_omnigent(), ['omnigent'])[0]
         self.assertEqual((result['ok'], result['blockers'], result['version'], result['target_version']),
