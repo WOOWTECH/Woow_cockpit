@@ -180,6 +180,11 @@ class OutputTest(unittest.TestCase):
                             '(running reserve + watch margin) the convert job enforces') + ': PASS']
         self.assertEqual(capture.status_lines('\n'.join(lines)), lines)
 
+    def test_found_state_event_is_kept_by_the_capture(self):
+        line = json.dumps({'stage': 'found_state_check', 'ha_check_ok': True, 'blockers': 0,
+                           'headscale_unit': 'activating'}, sort_keys=True)
+        self.assertEqual(capture.status_lines(line), [line])
+
     def test_self_check(self):
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
