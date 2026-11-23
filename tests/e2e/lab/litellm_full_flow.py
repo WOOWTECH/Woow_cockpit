@@ -352,6 +352,11 @@ if REQ.get("decrypt"):
         out["decrypt"] = json.loads(res.strip().splitlines()[-1]) if rc == 0 else {"rc": rc}
     except Exception:
         out["decrypt"] = {"rc": rc}
+EGRESS = ("import socket, sys\nok = 0\nfor host, port in ((\"1.1.1.1\", 443), (\"8.8.8.8\", 53), (\"api.openai.com\", 443)):\n"
+          "    try:\n        socket.create_connection((host, port), timeout=4).close()\n        ok += 1\n"
+          "    except Exception:\n        pass\nprint(ok)")
+rc, res = run("podman", "exec", "litellm", "python", "-I", "-c", EGRESS, timeout=120)
+out["egress_connections"] = int(res.strip() or b"-1") if rc == 0 and res.strip().isdigit() else None
 units = {}
 for u in ("litellm-postgres.service", "litellm.service"):
     rc, state = run("systemctl", "--user", "is-active", u, timeout=60)
@@ -359,6 +364,49 @@ for u in ("litellm-postgres.service", "litellm.service"):
 out["units"] = units
 print(json.dumps(out))
 '''
+
+
+# The leak scan (root, inside dev-d), like omnigent_full_flow.LEAKS (91a3086): the b1 driver's LEAK_SCAN requires
+# /var/lib/woowtech-backup/index.json, which this engine does not keep; these are the engine's records as dev-d holds them.
+LEAKS = 'import json\n' + __import__('inspect').getsource(drv.secret_scan_needles) + r"""
+import os, subprocess, sys
+req = json.loads(sys.stdin.read())
+secrets = {name: value.encode() for name, value in req["secrets"].items() if value}
+def owner(*argv):
+    return subprocess.run(["runuser", "-u", "appowner", "--", "env", "-i", "PATH=/usr/bin:/bin", "HOME=/home/appowner",
+                           "XDG_RUNTIME_DIR=/run/user/%d" % req["uid"], *argv], capture_output=True, timeout=120)
+for name in req["podman_secrets"]:
+    p = owner("podman", "secret", "inspect", "--showsecret", "--format", "{{.SecretData}}", name)
+    value = p.stdout.rstrip(b"\n")
+    if p.returncode != 0 or len(value) < 8:
+        raise RuntimeError("cannot inspect required device secret")
+    secrets["device:" + name] = value
+needles = secret_scan_needles(secrets.values())
+hits, scanned = 0, 0
+roots = ["/var/lib/woowtech-backup/jobs", "/var/lib/woowtech-backup/ha-backups", "/var/lib/woowtech-backup/ha-imports.json",
+         "/var/lib/woowtech-backup/archives", "/run/woowtech-backup", "/var/lib/woowtech-backup/uploads",
+         "/var/lib/woowtech-backup/staging", "/var/lib/woowtech-backup/requests.json"]
+def walk_error(error):
+    raise RuntimeError("scan enumeration failed") from error
+for root in roots:
+    if not os.path.exists(root) or os.path.islink(root):
+        raise RuntimeError("required scan root missing or unsafe")
+    paths = [root] if os.path.isfile(root) else []
+    if os.path.isdir(root):
+        for d, dirs, files in os.walk(root, onerror=walk_error, followlinks=False):
+            paths.extend(os.path.join(d, f) for f in files)
+    for path in paths:
+        if path.endswith(".tar") and ("/ha-backups/" in path or "/archives/" in path):
+            continue  # the uploaded HA files themselves and the (encrypted) backups
+        if os.path.islink(path):
+            raise RuntimeError("unsafe scan path")
+        data = open(path, "rb").read()
+        scanned += 1
+        hits += sum(data.count(s) for s in needles)
+journal = subprocess.run(["journalctl", "-o", "cat", "--no-pager"], capture_output=True, check=True).stdout
+hits += sum(journal.count(s) for s in needles)
+print(json.dumps({"scanned": scanned, "journal_bytes": len(journal), "names": len(secrets), "hits": hits}))
+"""
 
 
 # ---------------------------------------------------------------- the run
@@ -773,6 +821,9 @@ class Run:
                  found.get('master_user_list') == 200 and found.get('master_models') == 200
                  and keys.get('own', {}).get('key_info') in (401, 403),
                  {'master': [found.get('master_user_list'), found.get('master_models')], 'own': keys.get('own')})
+        ev.check(f'{label_text}: the lab LiteLLM has no outbound network (0 of 3 connections from inside the container: '
+                 'public IP, DNS server, provider host)', found.get('egress_connections') == 0,
+                 {'egress_connections': found.get('egress_connections')})
         ev.check(f"{label_text}: the live schema is this device's (signature equal to before the import)",
                  found.get('signature_sha256') == self.before.get('signature_sha256'),
                  {'differ': sorted(k for k, v in (found.get('signature_parts') or {}).items()
@@ -813,7 +864,7 @@ class Run:
         request = {'secrets': {n: s[n] for n in names if s[n]}, 'podman_secrets': LITELLM_SECRETS, 'uid': 1019}
         if len(request['secrets']) < 8:
             raise Failed('a lane secret is missing from the scan request')
-        report = drv.device_python(drv.LEAK_SCAN, request, as_owner=False, timeout=900)
+        report = drv.device_python(LEAKS, request, as_owner=False, timeout=900)
         host = drv.scan_host_evidence(ev.dir, s)
         ev.save('leaks.json', {'device': report, 'host': host, 'names': sorted(names)})
         ev.check("leaks: no registered value (HA key, HA test key, HA's secret files, own key and seed, dev-d's LiteLLM "
@@ -958,11 +1009,12 @@ def run_all(run):
 
 
 def self_check():
-    for name, program in (('SPACE', SPACE), ('PROBE', PROBE), ('ENGINE_HASHES', ENGINE_HASHES), ('DECRYPT', DECRYPT)):
+    for name, program in (('SPACE', SPACE), ('PROBE', PROBE), ('ENGINE_HASHES', ENGINE_HASHES), ('DECRYPT', DECRYPT),
+                          ('LEAKS', LEAKS)):
         compile(program, name, 'exec')
     if not re.fullmatch(r'[0-9a-f]{64}', FIXTURE_SHA256) or 'USER 1000:0' not in DERIVE:
         raise SystemExit('bad constants')
-    print('offline self-check passed: 4 embedded programs compiled, fixture digest and derive recipe fixed')
+    print('offline self-check passed: 5 embedded programs compiled, fixture digest and derive recipe fixed')
 
 
 def main(argv):
