@@ -487,7 +487,11 @@ class ConvertTests(OmnigentCase):
         dumps = [user for user, args in self.world.exec_users
                  if 'pg_dump' in args and any(a.endswith('-hapg') for a in args)]
         self.assertEqual(dumps, [ha_omnigent.DUMP_USER])
-        self.assertNotIn(ha_omnigent.DUMP_USER.split(':')[0], ('70', 'postgres', '0', 'root'))
+        uid, gid = ha_omnigent.DUMP_USER.split(':')
+        self.assertNotIn(uid, ('70', '999', 'postgres', '0', 'root'))
+        # mapped in every rootless user namespace that maps the image's postgres user (uids 1..N without gaps): the
+        # real product flow on dev-d (55000 subordinate ids) failed with 65534:65534 (podman exec exit 255)
+        self.assertTrue(1 <= int(uid) < 70 and 1 <= int(gid) < 70, ha_omnigent.DUMP_USER)
         analysis = {user for user, args in self.world.exec_users if 'psql' in args and any(a.endswith('-hapg') for a in args)}
         self.assertEqual(analysis, {'postgres'})   # only the queries run as postgres; their answers are checked (SR-1)
 
