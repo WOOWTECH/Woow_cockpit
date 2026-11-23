@@ -54,6 +54,9 @@ IMPORTERS = (
              mcp_admin='opendesign-mcp-admin', engine_mcp_lines=True),
     # Batch 2: code-server has no MCP admin app and no HA MCP add-on (facts mcp-admin.md section 1.1).
     Importer('woow-code-server', 'woow_ha_code_server', 'code-server 開發環境', 'ha_codeserver'),
+    # Batch 2: the user files come from HA's share folder (ha_nextcloud refuses a backup without them).
+    Importer('nextcloud', 'woow-nextcloud-office', 'Nextcloud 雲端硬碟', 'ha_nextcloud', mcp_admin='nextcloud-mcp-admin',
+             mcp_addon='Woow Nextcloud MCP Server', engine_mcp_lines=True),
 )
 
 BY_APP = {importer.app_id: importer for importer in IMPORTERS}

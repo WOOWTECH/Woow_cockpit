@@ -79,6 +79,12 @@ add-on, the app id enumerations `woow-code-server`, `HaCheck` the `woow-code-ser
 page also names the add-ons an HA backup may hold that are **never moved** — the Cloudflare Tunnel and the WOOWTECH MCP
 admin add-ons — with what to do on this device (§9 "Batch 2: add-ons that are not moved"). Every other shape is
 unchanged.
+Revised 2026-11-23 (branch `feat/ha-import-nextcloud-20261123`, engine + page; owner decision 2026-11-23 「決定2 A」): imports
+the WOOWTECH **Nextcloud Office** add-on (`woow-nextcloud-office` → `nextcloud`, `ha_nextcloud.py`; §9 "Batch 2: Nextcloud"):
+HA's PostgreSQL 16 database (restored as the live Nextcloud role), config.php's identity, the custom apps and the users'
+files, which live in HA's **share folder** (a backup without it, or without the data directory, is refused); the target keeps
+its URLs, database credentials, mail, caches, secrets and Office (Collabora) settings. The app id enumerations gain
+`nextcloud`; `HaCheck` gains the `nextcloud` section (§7); no other shape changes.
 Revised 2026-11-18 (branch `feat/ha-import`, part A: engine) for **importing Home Assistant backups** (owner decisions
 2026-11-18: Cockpit reads a Home Assistant OS backup file itself; only the WOOWTECH Odoo and n8n add-ons; x86 only; the
 HA key is pasted for each import and never stored): an uploaded HA backup is recognised by `upload-finish` and kept in
@@ -1026,8 +1032,11 @@ Shapes:
   codex} (HA's, '' when the add-on ships none), target_pins{same keys} (what the live image prints), files, bytes,
   sessions, claude_projects, codex_sessions, skills, snippets, settings(bool), extensions (HA's own, without the
   connector VSIX), mcp_servers, workspace(bool: `projects/` found in HA's share folder), share(bool), workspace_files,
-  workspace_bytes, skipped_symlinks, ha_urls[("<file>：<host>")], left_out{<area>:<label>: entries}, unknown[]}}]`
-  (batch 2: `target_version` of OpenDesign is the live image's `OD_APP_VERSION`; batch 2: `target_version` of code-server is the live image's `code-server --version`; batch 1: `target_version` is
+  workspace_bytes, skipped_symlinks, ha_urls[("<file>：<host>")], left_out{<area>:<label>: entries}, unknown[]},
+  nextcloud?{nextcloud_version (HA's config.php `version`), addon_nextcloud_version|null, users, files (file cache rows),
+  shares, tokens, calendar_objects, contacts, datadir (HA's `datadirectory`), datadir_in_backup(bool), datadir_files,
+  datadir_bytes, custom_apps[], pg_version, office(bool: richdocuments enabled on HA), ha_url, target_url}}]`
+  (batch 2: `target_version` of OpenDesign is the live image's `OD_APP_VERSION`; batch 2: `target_version` of code-server is the live image's `code-server --version`; batch 2: `target_version` of Nextcloud is the live config.php `version`; batch 1: `target_version` is
   the live server's `/v1/info` version for Omnigent, the live image's Hermes base tag, the live image's version label
   for EMQX and Headscale) — an app
   is `ok` only without blockers (Odoo: and at least one database `ok`); a blocker is a plain sentence (unknown processor, app
@@ -2048,6 +2057,57 @@ state is HA's credentials and URLs) stay `other_addons`. The HA backup page and 
 what to do here: re-add every route on this device's tunnel with this device's services and re-link WOOW PaaS, then
 remove the routes from HA and stop HA's add-on; re-configure the product's MCP admin app here (this device's catalog
 name, or install it), stop HA's add-on and re-create the MCP connectors with this device's MCP address.
+
+**Batch 2: Nextcloud** (`woow-nextcloud-office` → `nextcloud`: data dirs `.local/share/nextcloud-office/{postgres,redis,
+html,data}`; facts `phase3/facts/nextcloud.md`, owner decisions D1-D5 applied with their recommended answers).
+1. Where the data is: the add-on member holds the PostgreSQL 16 cluster (`data/postgres`), `data/nextcloud/config/config.php`
+   and the app-store apps (`data/nextcloud/custom_apps/<id>`); the users' files are Nextcloud's `datadirectory` (default
+   `/share/nextcloud`): `/share/<p>` is read from the share folder member (`share.tar[.gz]`, only `<p>/**`), `/data/<p>` and
+   `/config/<p>` from the add-on member (never overlapping the add-on's own items); anything else (a network mount, /media)
+   is a blocker. No share folder in the backup → blocker 「這份 HA 備份沒有包含 share 資料夾，Nextcloud 的使用者檔案（…）不在
+   備份裡…」; a data directory missing from it or without its `.ncdata` → blocker. Never read: `data/options.json`, HA's
+   `apps.config.php`, Redis and Collabora data, `config/**`, everything of the share folder outside the data directory.
+2. config.php is PHP code and is never run by the engine: a strict parser accepts only what Nextcloud's var_export writes
+   (one `$CONFIG = array (...)`; arrays, single-quoted strings, numbers, booleans, null; comments skipped); anything else is
+   a blocker. Versions: HA's `version` (4 parts) must equal the live config.php's and its first three parts the live
+   image's `NEXTCLOUD_VERSION`; both `installed`; HA not in maintenance; `dbtype` pgsql; table prefix `oc_` on both sides;
+   no object storage; server-side encryption (an `oc_appconfig` flag or `files_encryption` folders: decision D4) and
+   symlinks in the data directory are blockers. The add-on version (0.2.3/0.2.4 → 35.0.1) is shown only.
+3. check: the cluster is streamed into a throwaway volume and opened by a throwaway PostgreSQL 16 exactly like Odoo's (§9
+   Odoo 1); the database named by HA's `dbname` must hold Nextcloud's tables, only the plpgsql extension, no other schema,
+   and the root storage `local::<HA datadirectory>/` (lib/private/Files/Storage/Local.php `getId`; longer than 64 bytes →
+   its md5); counts (users, file cache, shares, tokens, calendar objects, contacts, storages, mounts, external mounts) are
+   read; warnings: apps HA enables that exist nowhere here, HA custom apps whose info.xml excludes this Nextcloud or PHP
+   version or that hold programs for another processor, local external storages, HA config keys that do not move (names).
+4. convert: `pg_dump -Fc`; a NEW cluster from the live database image, environment and secret; the live config.php's
+   `dbuser` role (e.g. `oc_admin`) with the LIVE attributes and password verifier (stdin, masked) and the grants
+   Nextcloud's installer gives it (lib/private/Setup/PostgreSQL.php: `GRANT CONNECT`, `REVOKE ALL … FROM PUBLIC`,
+   `GRANT CREATE ON SCHEMA public`), the live extensions (`vector`); the dump restored as that role (`--no-owner --no-acl
+   --exit-on-error --single-transaction`, no EXTENSION entries, superuser-only objects refused). Fix-ups in one
+   transaction: the root storage id → `local::<target datadirectory>/`; `richdocuments` `wopi_url`, `public_wopi_url`,
+   `wopi_callback_url`, `wopi_allowlist`, `disable_certificate_verification` and `core.backgroundjobs_mode` exactly as the
+   live database has them (Office uses this device's Collabora); HA's cached Collabora discovery
+   (`appdata_<instanceid>/richdocuments/remoteData`) is dropped from the data dir and its file cache rows deleted, so
+   discovery is fetched again from this device's Collabora. Verified: every count (file cache minus those rows), table
+   owners = the role, root storage id, roles, extensions, database and public-schema grants and the kept settings equal
+   the live ones. Live PostgreSQL settings are carried (§9 Odoo); clean stop, `pg_controldata` "shut down"; the PostgreSQL
+   dir is the volume export with its top folder owned like the live one.
+5. config.php = the live one (base: URLs, trusted domains, proxies, database credentials, data directory, caches, mail,
+   maintenance window) + HA's `instanceid`, `passwordsalt`, `secret` + HA's `twofactor_enforced*` and
+   `app_install_overwrite` (D1; a live two-factor enforcement HA lacks stays) + a new `data-fingerprint` (md5 of the time,
+   as `occ maintenance:data-fingerprint` writes it; the package's own restore runs that command, scripts/restore.sh:76: sync
+   clients then treat the server as restored and keep local files it lacks), written in Nextcloud's format with the live
+   file's owner and mode; before packaging the live image's PHP (throwaway container, network none, read-only root, the
+   file on stdin) must lint it and return exactly the merged values. html dir = the live pack without `config/config.php`
+   and without the custom apps HA brings, plus the merged file and HA's custom apps (D2; owner www-data of the live image);
+   data dir = HA's data directory (owner www-data, HA's modes, top folder like the live one; `updater-*` skipped, previews
+   kept: D5); Redis dir = its top folder only, owned like the live one. Every dir tar is checked like a restore reads it.
+6. Notes and reminders: the users, files, shares, calendars, contacts and app passwords become HA's; the URL, database
+   password, mail and Office settings stay; HA's custom apps; stop the HA add-on for good (same instance identity); log in
+   with HA's accounts and point sync, CalDAV and CardDAV clients to this device's URL; the new data fingerprint (sync
+   clients keep their local files); public links and federated IDs
+   still name HA; mail settings did not move; Office not enabled on HA; the MCP lines for `nextcloud-mcp-admin` and
+   「Woow Nextcloud MCP Server」 (`engine_mcp_lines`). Test mode changes nothing else for Nextcloud.
 
 **Packaging**: per app `adapter.import_manifest` adds the live non-data items exactly as a backup reads them (images
 list, secrets, config files, Quadlet files, `catalog_entry`, `catalog_sha256`), so `match_items` finds every item and

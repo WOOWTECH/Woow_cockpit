@@ -320,7 +320,7 @@ Cockpit「備份與還原」頁為 rootless Podman Quadlet 應用建立備份，
 
 ## 從 Home Assistant 備份匯入
 
-可以把 Home Assistant OS（HA）的備份檔上傳到這台設備，把其中 WOOWTECH 的 Odoo、n8n、Omnigent、Hermes、EMQX、Headscale、OpenDesign 與 code-server 附加元件的資料搬到這台的 Podman 應用。整個過程分成三段：**檢查**（不變更任何資料）→ **轉換**成這台的備份（不停機、不變更任何資料）→ 用一般的**還原**步驟取代這台的資料（和一般還原一樣，先自動保存還原前備份，失敗自動回復）。需要支援 HA 匯入的備份元件；較舊的備份元件會說明需要更新（見下方「錯誤與提示」）。
+可以把 Home Assistant OS（HA）的備份檔上傳到這台設備，把其中 WOOWTECH 的 Odoo、n8n、Omnigent、Hermes、EMQX、Headscale、OpenDesign、code-server 與 Nextcloud 附加元件的資料搬到這台的 Podman 應用。整個過程分成三段：**檢查**（不變更任何資料）→ **轉換**成這台的備份（不停機、不變更任何資料）→ 用一般的**還原**步驟取代這台的資料（和一般還原一樣，先自動保存還原前備份，失敗自動回復）。需要支援 HA 匯入的備份元件；較舊的備份元件會說明需要更新（見下方「錯誤與提示」）。
 
 ### 可以匯入什麼
 
@@ -334,6 +334,7 @@ Cockpit「備份與還原」頁為 rootless Podman Quadlet 應用建立備份，
 | WOOWTECH Headscale 附加元件（`*_woow-headscale`） | 「Headscale VPN 控制伺服器」 | 使用者、裝置、預先授權金鑰、DNS 額外記錄與伺服器身分金鑰一起搬；這台的伺服器網址、IP 位址範圍與 API 金鑰保留 |
 | WOOWTECH OpenDesign 附加元件（`*_woow_ha_opendesign`） | 「OpenDesign 設計工具」 | 專案、對話、執行紀錄、設計系統、品牌、技能、外掛、記憶、偏好設定與在 OpenDesign 裡設定的外部 MCP 伺服器、連接器、媒體服務金鑰一起搬；這台的登入密碼（API 權杖）、MCP 權杖、代理程式登入、Omnigent 連線與 Paseo 配對保留 |
 | WOOWTECH code-server 附加元件（`*_woow_ha_code_server`） | 「code-server 開發環境」（目錄項目 `woow-code-server`） | VS Code 設定（合併）、快捷鍵、程式碼片段、HA 自己安裝的延伸模組、Pi／Claude Code／Codex 的對話記錄與技能、共用 MCP 伺服器一起搬；HA 的工作區（`/share/projects`，備份有包含 share 資料夾時）放進這台工作區的新資料夾。這台的密碼、代理程式的登入、Omnigent／Paseo 連接器與主機的 `.ssh`、`.gitconfig` 保留 |
+| WOOWTECH Nextcloud Office 附加元件（`*_woow-nextcloud-office`） | 「Nextcloud」 | 使用者、檔案、分享、行事曆、聯絡人、應用程式密碼與自訂應用一起搬；使用者的檔案放在 HA 的 share 資料夾，HA 備份**一定要勾選 share 資料夾**，沒有就不能匯入；這台的網址、資料庫密碼、郵件設定與 Office（Collabora）連線設定保留 |
 | Cloudflare Tunnel（`*_cloudflared`）、WOOWTECH MCP 管理附加元件（`*_woow_mcp_*`） | — | **不會搬過來**：HA 備份頁與匯入第一步會寫出要在這台做的事（Cloudflare Tunnel：在這台的 Cloudflare Tunnel 重新加入每一條路由、重新連結 WOOW PaaS；MCP 管理附加元件：在這台的「<產品> MCP 管理」重新設定連線，停掉 HA 的附加元件並用這台的 MCP 網址重建 MCP 連接器） |
 | 其他附加元件、Home Assistant 本身的設定 | — | 不會匯入；HA 備份頁列為「這台沒有對應的應用」（Cloudflare Tunnel 與各 MCP 管理附加元件不搬，只有頁面提醒） |
 
@@ -350,13 +351,14 @@ Cockpit「備份與還原」頁為 rootless Podman Quadlet 應用建立備份，
   - Headscale：兩邊的 IP 位址範圍設定相同，而且 HA 每台裝置的 VPN 位址都在範圍內。
   - 這台的空間足夠。
 
-### 各應用搬什麼、留什麼（Omnigent、Hermes、EMQX、Headscale、OpenDesign）
+### 各應用搬什麼、留什麼（Omnigent、Hermes、EMQX、Headscale、OpenDesign、code-server、Nextcloud）
 
 還原前的說明會逐項列出下面這些內容（由備份元件寫出），檢查結果也會列出各項的數量。
 
 - **Omnigent**：使用者帳號、工作階段、代理程式、排程、上傳的檔案和檔案區換成 HA 的；HA 的登入金鑰（accounts-cookie-secret）一起搬過來，所以這台目前登入的瀏覽器與裝置要重新登入。這台的管理者與 runner 帳號會保留、密碼不變；HA 也有同名帳號時以 HA 的為準。HA 的分享與管理者執行期設定不會搬過來，這台維持自己的設定。
 - **Hermes**：對話、記憶、技能、排程、外掛與 HA 的設定檔（`config.yaml`）換成 HA 的。這台的 Dashboard 密碼、API 金鑰、Webhook 與工作階段金鑰以及 `hermes.env` 保持不變，`hermes.env` 中的金鑰會蓋過 HA 的同名金鑰。HA 的外掛會取代這台的外掛與配對（例如 Omnigent、Paseo）。HA 的 `/media` 資料夾不會搬過來。
 - **EMQX**：MQTT 帳號、ACL 規則、Dashboard 帳號、API 金鑰、封鎖名單、PSK、保留訊息與規則、連接器設定換成 HA 的；HA 的 API 金鑰會取代這台的。這台的節點名稱、連接埠、匿名登入限制與「未符合規則的主題拒絕」設定保持不變（HA 允許匿名連線時，原本匿名連線的裝置要建立 MQTT 帳號）。HA 的 EMQX 外掛不會搬過來。
+- **Nextcloud**：使用者、檔案、分享、行事曆、聯絡人、應用程式密碼與 HA 的自訂應用（custom_apps）換成 HA 的；Nextcloud 的身分資料（instanceid 與加密用的 secret）也一起搬，所以 HA 的應用程式密碼和雙重驗證可以繼續使用。使用者的檔案放在 HA 的 share 資料夾（預設 `/share/nextcloud`）：做 HA 備份時沒勾 share 資料夾，檢查會說「這份 HA 備份沒有包含 share 資料夾…」並拒絕匯入（只搬資料庫會讓檔案遺失）。這台的網址、信任網域、資料庫密碼、郵件與快取設定保持不變；Office 會改用這台的 Collabora（HA 暫存的 Collabora 設定不會搬過來）。HA 的伺服器端加密、物件儲存（S3）與使用者檔案裡的符號連結目前不支援。匯入後請把 HA 的 Nextcloud 附加元件永久停用，並把同步用戶端、行事曆與聯絡人改連到這台的網址。
 - **Headscale**：使用者、裝置、預先授權金鑰與 DNS 額外記錄換成 HA 的，HA 的伺服器身分金鑰（noise）也一起搬過來。這台的伺服器網址、IP 位址範圍、存取政策與 API 金鑰保持不變：HA 的 API 金鑰不會搬過來，這台的 Headplane 與 MCP 管理工具照常可用。
 - **OpenDesign**：專案、對話與訊息（`app.sqlite`）、執行紀錄、成品、設計系統與範本、品牌、資料庫、記憶、技能、外掛、偏好設定，以及在 OpenDesign 裡設定的外部 MCP 伺服器、連接器與媒體服務金鑰換成 HA 的；偏好設定與外部 MCP 伺服器設定裡指向 HA 資料夾（`/data/opendesign`）的路徑會改成這台的（`/app/.od`）；Paseo 自己登記的 MCP 項目（`woow-paseo`）不會從 HA 搬過來，維持這台的。這台的登入密碼（API 權杖）、MCP 權杖與工具設定、代理程式（Claude Code、Codex、Pi、OpenCode）的登入、Omnigent 連線、Paseo 配對、安裝識別與 `open-design.env` 保持不變。HA 專用的共用工作區與共用技能會原樣放進這台的資料夾，但這台不會自動使用。兩邊的 OpenDesign 核心必須是同一個版本（附加元件 0.2.15 = 核心 `05b23f5a`，OpenDesign 0.24.1），否則檢查會說明版本不同。
 - **code-server**（目錄項目 `woow-code-server`；三個資料卷，目錄有列出時加上工作區資料夾）：

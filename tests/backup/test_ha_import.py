@@ -379,13 +379,13 @@ class RegistryTests(unittest.TestCase):
         self.assertEqual(haimport.load_registry(self.paths), {})
 
     def test_strict_rows_and_an_unreadable_file_is_kept(self):
-        for bad in (self.row(extra=1), self.row(apps=['nextcloud']), self.row(test_mode='no')):
+        for bad in (self.row(extra=1), self.row(apps=['wordpress']), self.row(test_mode='no')):
             with self.subTest(bad=bad), self.assertRaises(BackupError):
                 haimport.register(self.paths, '20261118T120001Z-0123abcd', bad)
         # What a conversion writes is cleaned instead of refused (review C-03).
         haimport.register(self.paths, '20261118T120001Z-0123abcd',
                           self.row(workflows_to_fix=[{'name': 'x'}], name='a\nb', reminders=['r'] * 30,
-                                   reminders_by_app={'odoo': ['n\x00'], 'nextcloud': ['x']}))
+                                   reminders_by_app={'odoo': ['n\x00'], 'wordpress': ['x']}))
         row = haimport.load_registry(self.paths)['20261118T120001Z-0123abcd']
         self.assertEqual((row['name'], row['workflows_to_fix']), ('a b', [{'name': 'x', 'active': False,
                                                                              'reasons': []}]))

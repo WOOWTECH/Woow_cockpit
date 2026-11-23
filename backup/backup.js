@@ -133,27 +133,32 @@
   const HA_TRUST = "Odoo 的自訂模組和 n8n 的社群節點是會在這台執行的程式，只匯入你信任的備份。";
   // This device's app for each add-on it can take, when neither the engine nor the catalog names it (haapps.IMPORTERS).
   const HA_APP_NAMES = { odoo: "Odoo 18", n8n: "n8n 工作流程", omnigent: "Omnigent 協作平台", hermes: "Hermes 代理",
-    emqx: "EMQX MQTT 代理", headscale: "Headscale VPN 控制伺服器", "open-design": "OpenDesign 設計工具", "woow-code-server": "code-server 開發環境" };
+    emqx: "EMQX MQTT 代理", headscale: "Headscale VPN 控制伺服器", "open-design": "OpenDesign 設計工具", "woow-code-server": "code-server 開發環境",
+    nextcloud: "Nextcloud 雲端硬碟" };
   // The product of each importable add-on in a sentence (「Odoo、n8n」), in the engine's order (CONTRACT §5 "Apps").
   const HA_SHORT = { odoo: "Odoo", n8n: "n8n", omnigent: "Omnigent", hermes: "Hermes", emqx: "EMQX", headscale: "Headscale",
     "open-design": "OpenDesign",
-    "woow-code-server": "code-server" };
+    "woow-code-server": "code-server",
+    nextcloud: "Nextcloud" };
   // Odoo and n8n keep the sentences written and tested for them; with any other app (batch 1: Omnigent, Hermes, EMQX,
   // Headscale) a sentence says only what applies to each app.
   const HA_LEGACY = new Set(["odoo", "n8n"]);
   // What of an add-on runs here as code (Hermes's skills and plugins, Omnigent's agents, OpenDesign's skills, plugins
   // and external MCP servers, code-server's extensions, skills and shared MCP servers); EMQX and Headscale bring
   // accounts, keys and settings only (CONTRACT §9 "Batch 1").
+  // Batch 2: Nextcloud's app-store apps (custom_apps) are PHP code that runs here.
   const HA_CODE = { odoo: "Odoo 的自訂模組", n8n: "n8n 的社群節點", omnigent: "Omnigent 的代理程式", hermes: "Hermes 的技能與外掛",
     "open-design": "OpenDesign 的技能、外掛與外部 MCP 伺服器",
-    "woow-code-server": "code-server 的延伸模組、技能與共用 MCP 伺服器" };
+    "woow-code-server": "code-server 的延伸模組、技能與共用 MCP 伺服器",
+    nextcloud: "Nextcloud 的自訂應用" };
   // A test import pauses these apps' automatic work (CONTRACT §7 HaImport): Odoo is neutralized, n8n's workflows are
   // unpublished, Omnigent's active scheduled tasks paused. It changes nothing of the others (Hermes, EMQX, Headscale).
   const HA_TEST_PAUSES = new Set(["odoo", "n8n", "omnigent"]);
   // The add-ons whose members are large (a Hermes home of several GB; HA's own image in every EMQX and Headscale
   // member, OpenDesign's agent logins and Paseo runtime, code-server's agent home with its connector runtimes,
   // decrypted and skipped): their check and conversion take longer than Odoo's and n8n's.
-  const HA_LARGE = new Set(["hermes", "emqx", "headscale", "open-design", "woow-code-server"]);
+  // Nextcloud: the users' files come from HA's share folder, which is read as a whole.
+  const HA_LARGE = new Set(["hermes", "emqx", "headscale", "open-design", "woow-code-server", "nextcloud"]);
   // Catalog entries that keep their own login to the imported app: it changes with the imported users (DESIGN §0). The
   // page is named as this device's catalog names it; `page` only when the entry has no name. Odoo and n8n only: for
   // the batch 1 apps the engine writes the MCP lines itself (`reminders_by_app`, CONTRACT §7 HaImport), so adding them
@@ -4253,12 +4258,36 @@
         ["程式版本", programs.join("、") || "—"]
       ]),
       h("p", { class: "muted", text: "匯入後，用這台 code-server 的密碼登入；Pi、Claude Code、Codex 沿用這台的登入，Omnigent 與 Paseo 連接器維持這台的。" })
+      ];
+    }
+
+  // Batch 2 (CONTRACT §9 "Batch 2: Nextcloud"): the user files must be in the backup (HA's share folder).
+  function haNextcloudFacts(nextcloud) {
+    const apps = list(nextcloud.custom_apps).filter(isString);
+    const url = str(nextcloud.target_url);
+    return [
+      metadata([
+        ["Nextcloud 版本", str(nextcloud.nextcloud_version) || "—"],
+        ["使用者", `${num(nextcloud.users)} 位`],
+        ["檔案", `${num(nextcloud.files)} 筆檔案紀錄`],
+        ["使用者檔案", nextcloud.datadir_in_backup === true
+          ? `${num(nextcloud.datadir_files)} 個檔案（${bytes(nextcloud.datadir_bytes)}），來自 ${str(nextcloud.datadir) || "HA"}`
+          : `不在這份備份裡（${str(nextcloud.datadir) || "HA 的資料夾"}）`],
+        ["分享", `${num(nextcloud.shares)} 個`],
+        ["行事曆與聯絡人", `${num(nextcloud.calendar_objects)} 個行程、${num(nextcloud.contacts)} 位聯絡人`],
+        ["自訂應用", apps.length ? apps.join("、") : "沒有"],
+        ["Office", nextcloud.office === true ? "HA 有啟用，匯入後使用這台的 Collabora" : "HA 沒有啟用"],
+        ["HA 的網址", str(nextcloud.ha_url) || "—", "mono"],
+        ["這台的網址", url || "—", "mono"]
+      ]),
+      h("p", { class: "muted", text: `匯入後，用 HA 那邊 Nextcloud 的帳號和密碼登入；同步用戶端與行事曆、聯絡人要改連到這台的 ${url || "Nextcloud 網址"}。` })
     ];
   }
 
   const HA_FACTS = { omnigent: haOmnigentFacts, hermes: haHermesFacts, emqx: haEmqxFacts, headscale: haHeadscaleFacts,
     "open-design": haOpenDesignFacts,
-    "woow-code-server": haCodeServerFacts };
+    "woow-code-server": haCodeServerFacts,
+    nextcloud: haNextcloudFacts };
 
   function confirmHaConvert(ha, wizard) {
     const apps = haChosen(wizard);

@@ -1925,6 +1925,58 @@ function csFixture() {
   Object.assign(data.scripts, haScripts({ check }));
   return data;
 }
+// Batch 2 (2026-11-23): the WOOWTECH Nextcloud Office add-on as ha_nextcloud.py reports the real x86 showcase backups
+// (its section of HaCheck, CONTRACT §7 and §9 "Batch 2: Nextcloud"): with HA's share folder the users' files come along;
+// without it the import is refused (a database without its files would lose them).
+const NC = { slug: '1b7b4ce7_woow-nextcloud-office', addon: 'Woow Nextcloud Office', version: '0.2.3', app: 'Nextcloud 雲端硬碟' };
+const HA_NC = 'ha-0e0e0e0e0e0e0e0e0e0e';
+const NC_NO_SHARE = '這份 HA 備份沒有包含 share 資料夾，Nextcloud 的使用者檔案（/share/nextcloud）不在備份裡，無法匯入'
+  + '（只搬資料庫會讓檔案遺失）。請在 HA 重新做一份備份，並勾選 share 資料夾。';
+const NC_WARNINGS = ['HA 的 Nextcloud 設定 filelocking.enabled、defaultapp 不會搬過來（以這台的設定為準）。'];
+const NC_SECTION = { nextcloud_version: '35.0.1.1', addon_nextcloud_version: '35.0.1', users: 4, files: 381, shares: 3, tokens: 125,
+  calendar_objects: 7, contacts: 8, datadir: '/share/nextcloud', datadir_in_backup: true, datadir_files: 412, datadir_bytes: 210 * MiB,
+  custom_apps: ['notes', 'richdocuments', 'tasks'], pg_version: '16', office: true, ha_url: 'https://nextcloud.example.test',
+  target_url: 'http://192.168.2.46:18081' };
+function ncFixture({ share = true } = {}) {
+  const data = fixture();
+  data.status.apps.push(app('nextcloud', NC.app));
+  const meta = haMeta(HA_NC, { name: 'Nextcloud 備份 2026-11-23', date: '2026-11-23T12:38:18Z', protected: true,
+    size: (share ? 4700 : 237) * MiB, filename: 'woow-b2-nextcloud.tar', folders: share ? ['share'] : [],
+    addons: [{ slug: NC.slug, name: NC.addon, version: NC.version, encrypted: true }],
+    importable_apps: [{ slug: NC.slug, app_id: 'nextcloud', app_name: NC.app, installed: true }], other_addons: [] });
+  const section = share ? structuredClone(NC_SECTION)
+    : { ...structuredClone(NC_SECTION), users: 3, files: 300, shares: 1, tokens: 125, calendar_objects: 2, contacts: 3,
+      datadir_in_backup: false, datadir_files: 0, datadir_bytes: 0 };
+  const check = { ha_check: { ha_backup_id: HA_NC, apps: [{ app_id: 'nextcloud', slug: NC.slug, name: NC.addon, arch: 'amd64',
+    version: NC.version, target_version: '35.0.1.1', ok: share, blockers: share ? [] : [NC_NO_SHARE], warnings: [...NC_WARNINGS],
+    nextcloud: section }] } };
+  data.ha = { backups: [meta], key: HA_KEY, jobKeyFailure: null, legacy: false, imports: {} };
+  Object.assign(data.scripts, haScripts({ check }));
+  return data;
+}
+const NC_FACTS = { 'Nextcloud 版本': '35.0.1.1', 使用者: '4 位', 檔案: '381 筆檔案紀錄', 使用者檔案: '412 個檔案（210 MiB），來自 /share/nextcloud',
+  分享: '3 個', 行事曆與聯絡人: '7 個行程、8 位聯絡人', 自訂應用: 'notes、richdocuments、tasks', Office: 'HA 有啟用，匯入後使用這台的 Collabora',
+  'HA 的網址': 'https://nextcloud.example.test', 這台的網址: 'http://192.168.2.46:18081' };
+const openNc = async page => {
+  await ready(page);
+  await page.locator('[data-nav="backups"]').click();
+  await page.locator(`[data-focus="open-${HA_NC}"]`).click();
+  await page.locator('.ha-addons-table').waitFor();
+  const rows = await page.locator('.ha-addons-table tbody tr').evaluateAll(items => items.map(row => [...row.children].map(cell => cell.textContent.trim())));
+  assert.deepEqual(rows, [[`${NC.addon}${NC.slug}`, NC.version, `可以匯入這台的「${NC.app}」`]]);
+  await page.locator(`[data-focus="ha-import-${HA_NC}"]`).click();
+  await page.locator('.stepper[aria-label="匯入步驟"]').waitFor();
+  assert.deepEqual(await page.locator('.wizard-card input[type="checkbox"]').evaluateAll(items => items.map(item => [item.id, item.checked, item.disabled])),
+    [['ha-app-nextcloud', true, false]]);
+  assert.equal(await page.locator('.ha-slow').textContent(), 'Nextcloud 的附加元件檔案比較大，檢查和轉換會花比較久的時間。');
+  await page.locator('[data-focus="ha-apps-next"]').click();
+  await page.locator('#ha-key').fill(HA_KEY);
+  await page.locator('[data-focus="ha-key-next"]').click();
+  await page.locator('[data-ha-app="nextcloud"]').waitFor();
+  const start = requestOf((await calls(page, 'ha-check-start')).at(-1));
+  assert.deepEqual(start, { ha_backup_id: HA_NC, apps: ['nextcloud'], request_id: start.request_id, key: HA_KEY });
+  return page.locator('[data-ha-app="nextcloud"]');
+};
 const openB1 = async page => {
   await page.locator('[data-nav="backups"]').click();
   await page.locator(`[data-focus="ha-import-${HA_B1}"]`).click();
@@ -4936,7 +4988,7 @@ try {
     async page => {
       await ready(page);
       await page.locator('[data-nav="restore"]').click();
-      await page.getByText('也可以上傳 Home Assistant 的備份檔（.tar），把其中的 Odoo、n8n、Omnigent、Hermes、EMQX、Headscale、OpenDesign、code-server 匯入這台。').waitFor();
+      await page.getByText('也可以上傳 Home Assistant 的備份檔（.tar），把其中的 Odoo、n8n、Omnigent、Hermes、EMQX、Headscale、OpenDesign、code-server、Nextcloud 匯入這台。').waitFor();
       await page.locator('#restore-file').setInputFiles({ name: 'woow_import_test.tar', mimeType: 'application/x-tar', buffer: Buffer.alloc(256 * KiB, 5) });
       await page.locator('[data-focus="restore-upload"]').click();
       await page.waitForFunction(id => window.location.hash === `#/ha/${id}`, HA_ID);
@@ -5603,7 +5655,7 @@ try {
         [`WOOW n8n${N8N_SLUG}`, '2.43.6', '還沒安裝「n8n 工作流程」：這台還沒安裝，請先到「應用軟體」安裝同版本'],
         ...B1_APPS.map(id => [`${B1[id].addon}${B1[id].slug}`, B1[id].version, `可以匯入這台的「${B1[id].app}」`]),
         ['Mosquitto brokercore_mosquitto', '6.5.1', '這台沒有對應的應用']]);
-      await page.getByText('只有支援的 Odoo、n8n、Omnigent、Hermes、EMQX、Headscale、OpenDesign、code-server 附加元件能匯入這台；Home Assistant 本身和其他附加元件不會匯入。').waitFor();
+      await page.getByText('只有支援的 Odoo、n8n、Omnigent、Hermes、EMQX、Headscale、OpenDesign、code-server、Nextcloud 附加元件能匯入這台；Home Assistant 本身和其他附加元件不會匯入。').waitFor();
       await page.locator(`[data-focus="ha-import-${HA_B1}"]`).click();
       assert.deepEqual(await page.locator('.stepper[aria-label="匯入步驟"] .step-label').allTextContents(), ['選擇應用', '檢查', '結果與選項', '轉換', '還原'],
         'HA did not encrypt these add-ons: no key step');
@@ -5741,6 +5793,37 @@ try {
       await enabled(page, '[data-focus="ha-convert"]');
       await allWidths(page, 'batch 2 code-server results');
       assert.deepEqual((await contrastOf(page)).failures, [], 'the code-server check card keeps WCAG AA contrast');
+    });
+
+  await check('從 HA 備份匯入, batch 2: Nextcloud with HA\'s share folder is importable; the check card shows the users, the users\' files from the share folder, shares, calendars, custom apps, Office and both URLs',
+    ncFixture(), async page => {
+      const card = await openNc(page);
+      assert.equal(await card.locator('.muted').first().textContent(), 'HA 附加元件版本 0.2.3（Nextcloud 35.0.1.1），這台的 Nextcloud 35.0.1.1。');
+      assert.equal(await card.locator('.chip').first().textContent(), '可以匯入');
+      assert.deepEqual(await card.locator('.check-warn .check-message').allTextContents(), NC_WARNINGS);
+      assert.deepEqual((await metadataOf(card))[0], NC_FACTS);
+      assert.equal(await card.locator('p.muted').last().textContent(),
+        '匯入後，用 HA 那邊 Nextcloud 的帳號和密碼登入；同步用戶端與行事曆、聯絡人要改連到這台的 http://192.168.2.46:18081。');
+      await page.locator('.wizard-card .notice-info').getByText('Nextcloud 的自訂應用是會在這台執行的程式，只匯入你信任的備份。').waitFor();
+      await enabled(page, '[data-focus="ha-convert"]');
+      await allWidths(page, 'batch 2 Nextcloud results');
+      assert.deepEqual((await contrastOf(page)).failures, [], 'the Nextcloud check card keeps WCAG AA contrast');
+    });
+
+  await check('從 HA 備份匯入, batch 2: Nextcloud without HA\'s share folder is refused with the engine\'s sentence (the users\' files are not in the backup); the card says where they were and convert stays disabled',
+    ncFixture({ share: false }), async page => {
+      const card = await openNc(page);
+      assert.match(await card.getAttribute('class'), /is-blocked/);
+      assert.equal(await card.locator('.chip').first().textContent(), '無法匯入');
+      assert.deepEqual(await card.locator('.check-fail .check-message').allTextContents(), [NC_NO_SHARE]);
+      const facts = (await metadataOf(card))[0];
+      assert.equal(facts['使用者檔案'], '不在這份備份裡（/share/nextcloud）');
+      assert.equal(facts['使用者'], '3 位');
+      assert.equal(await page.locator('[data-focus="ha-convert"]').isDisabled(), true);
+      await page.getByText('有應用沒有通過檢查，無法轉換。請依上面的說明處理後按「重新檢查」。').waitFor();
+      assert.equal((await calls(page, 'ha-convert-start')).length, 0);
+      await allWidths(page, 'batch 2 Nextcloud refused');
+      assert.deepEqual((await contrastOf(page)).failures, [], 'the refused Nextcloud card keeps WCAG AA contrast');
     });
 
   await check('從 HA 備份匯入, batch 1: convert and restore; the notice says what each app replaces and keeps; the result lists each app\'s to-dos (Headscale\'s devices, Hermes\'s Omnigent and Paseo pairing, the engine\'s MCP lines) and no MCP line of the page; 由 HA 轉換 and 活動紀錄',

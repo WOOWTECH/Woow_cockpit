@@ -1,0 +1,74 @@
+{
+ "lane": "nextcloud-import",
+ "date": "2026-11-23",
+ "branch": "feat/ha-import-nextcloud-20261123 (local, not pushed)",
+ "base": "integration/ha-import-batch1-20261123 82ac971, merged with its 88e7e6b (OpenDesign + code-server) in 0876eb4",
+ "owner_decision": "決定2 A: HA -> Podman import for Nextcloud; facts nextcloud.md D1-D5 recommended answers applied",
+ "commercial_acceptance": "not-complete",
+ "engine": {
+  "module": "backup-engine/woowbackup/ha_nextcloud.py",
+  "registry": "haapps.IMPORTERS nextcloud (woow-nextcloud-office), MCP admin nextcloud-mcp-admin, HA add-on 'Woow Nextcloud MCP Server'",
+  "share_folder": "users' files read only from HA's share member under the datadirectory (/share/nextcloud); a backup without the share folder or without the data dir/.ncdata is refused with a clear sentence",
+  "office": "richdocuments wopi keys and core.backgroundjobs_mode kept exactly as the live database has them; HA's cached Collabora discovery dropped",
+  "data_fingerprint": "new data-fingerprint in the converted config.php (= occ maintenance:data-fingerprint, NC 35.0.1 core/Command/Maintenance/DataFingerprint.php:34-35)",
+  "public_guards_changed": "none"
+ },
+ "tests": {
+  "unit_test_ha_nextcloud": "19 OK (fakes)",
+  "backup_full_merged": "1507 run, 6 skipped, only the 7 pre-existing test_ha_omnigent problems (identical on unchanged integration 88e7e6b)",
+  "page_ha_cases_merged": "node --test-name-pattern='從 HA 備份匯入' tests/backup-ui.mjs: 23/23 (2 Nextcloud cases included)",
+  "real_sql_pg16": "iteration 1: every importer SQL statement on a real PostgreSQL 16 (lab, network none)"
+ },
+ "real_runs": [
+  {
+   "evidence": "nextcloud-x86-noshare-attempt1.json",
+   "source": "162a51c",
+   "exit": 1,
+   "result": "32/33: product refusal correct; the FAIL was the harness's expected calendar/contact counts (fixed in 1dd0106)"
+  },
+  {
+   "evidence": "nextcloud-x86-noshare-attempt2.json",
+   "source": "1dd0106",
+   "exit": 0,
+   "result": "34/34 PASS: the real backup without HA's share folder is refused at check and convert; dev-e unchanged"
+  },
+  {
+   "evidence": "nextcloud-x86-share-attempt1.json",
+   "source": "863179e",
+   "exit": 1,
+   "result": "85/86: upload, check, real conversion, restore, all client checks after import/restart/automatic rollback, manual rollback, after, cleanup PASS; FAIL = the test public link token in dev-e's nginx/Apache access logs of the client's own public-link requests (scoped in 3ade81d)"
+  },
+  {
+   "evidence": "nextcloud-x86-share-attempt2.json",
+   "source": "3ade81d",
+   "exit": 1,
+   "result": "stopped by the host-floor guard before the check (other lanes' disk use); dev-e untouched"
+  }
+ ],
+ "share_run_checks": [
+  "status.php 35.0.1.1 no maintenance no db upgrade",
+  "4 marker files sha256 (CJK, nested, 4 MiB)",
+  "per-user manifest digests of all 4 HA users == the backup's",
+  "OCS: HA password and HA app password 200, wrong 401",
+  "second user reads the shared file",
+  "public link with password; 401 without and with a wrong password",
+  "CalDAV event and CardDAV contact by UID",
+  "older version on disk and in the versions API",
+  "richdocuments wopi keys and cron mode == dev-e's own",
+  "Office capabilities == dev-e's own account's",
+  "Collabora discovery on the gateway",
+  "new data fingerprint == config.php's",
+  "root storage local::/var/www/html/data/, tables owned by oc_admin",
+  "restart then the same checks",
+  "automatic rollback (one-shot ExecStartPre failure) then the same checks",
+  "manual rollback: dev-e's markers back, HA-only users gone, own login",
+  "cleanup: no job objects, staging, key files; HA record deleted"
+ ],
+ "not_covered": [
+  "a browser (Office editing, the page itself)",
+  "TOTP / two-factor (none in the test backup)",
+  "ARM (add-on is amd64-only)",
+  "server-side encryption and object storage (refused by design, unit tested only)",
+  "a fully green share attempt (attempt 3 waits for a host disk window)"
+ ]
+}
