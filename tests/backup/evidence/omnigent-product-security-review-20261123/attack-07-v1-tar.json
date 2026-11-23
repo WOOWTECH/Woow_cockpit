@@ -1,0 +1,453 @@
+{
+ "what": "v1 visible DDL (real check + verdict bypassed), tar-level artifact attacks with real volume import",
+ "harness": "tests/e2e/lab/omnigent_secreview_attacks.py",
+ "source_commit": "aa5f48e product code; harness 64081f2",
+ "exit_code": 0,
+ "elapsed_s": 544.1,
+ "stdout_sha256": "19eaf43821a7660ec323a87c8457bf74823beb296c39f5e01aa8a683aa50f061",
+ "lab": "isolated labpodman store (~/.woowbk-lab), throwaway containers by tempctr.TempObjects (--network none); never production, never dev-d",
+ "commercial_acceptance": "not-complete",
+ "result": {
+  "harness": "tests/e2e/lab/omnigent_secreview_attacks.py",
+  "image": "docker.io/library/postgres:16-alpine",
+  "fixture_sha256": "3871a468e2f3a11488df7c6a00a4a8ed7c5b89c3ba2dbc2903ec3bd677013516",
+  "started": "2026-11-23T20:48:29+0800",
+  "variants": [
+   {
+    "variant": "v1-visible-ddl",
+    "backup_bytes": 8970240,
+    "real": {
+     "check": {
+      "ok": true,
+      "blockers": 2,
+      "blocker_heads": [
+       "HA 的 Omnigent 資料庫含有 Omnigent 不會建立的物件（函式、觸發程序、檢視表、規則、資料列政策、其他結構描述（atk_s",
+       "HA 的 Omnigent 資料庫含有只有資料庫超級使用者才能建立的物件（EVENT TRIGGER），無法安全地搬過來。"
+      ],
+      "warnings": 0,
+      "warning_heads": [],
+      "section": {
+       "users": 2,
+       "scheduled_tasks_active": 0,
+       "public_sessions": 0,
+       "account_conflicts": [],
+       "files": 1,
+       "agents": 17
+      },
+      "seconds": 83.6
+     },
+     "convert": {
+      "ok": false,
+      "code": "incompatible",
+      "message_head": "Omnigent 不能搬過來：HA 的 Omnigent 資料庫含有 Omnigent 不會建立的物件（函式、觸發程序、檢視表、規則、資料列政策、其他結構描述（atk_schema）），無法安全地搬過",
+      "seconds": 85.8
+     },
+     "simulated": [],
+     "log_lines": 2,
+     "left_after_cleanup": [],
+     "leaks": {
+      "live_admin_hash_canary": false
+     },
+     "unsurfaced_stderr_has": {
+      "live_admin_hash_canary": false
+     }
+    },
+    "fooled": {
+     "check": {
+      "ok": true,
+      "blockers": 0,
+      "blocker_heads": [],
+      "warnings": 0,
+      "warning_heads": [],
+      "section": {
+       "users": 2,
+       "scheduled_tasks_active": 0,
+       "public_sessions": 0,
+       "account_conflicts": [],
+       "files": 1,
+       "agents": 17
+      },
+      "seconds": 77.5
+     },
+     "convert": {
+      "ok": false,
+      "code": "incompatible",
+      "message_head": "HA 的資料庫匯出清單有不屬於這台 Omnigent 資料庫結構的資料項目，無法安全地搬過來。",
+      "seconds": 129.7
+     },
+     "simulated": [
+      "check verdict bypassed in convert (tests the conversion isolation alone)"
+     ],
+     "log_lines": 6,
+     "left_after_cleanup": [],
+     "leaks": {
+      "live_admin_hash_canary": false
+     },
+     "unsurfaced_stderr_has": {
+      "live_admin_hash_canary": false
+     }
+    },
+    "backup_sha256": "0738f2907567accbe2ad728a4527213e36b1af253b05174460c586bda1bf0912",
+    "seconds": 451.3
+   },
+   {
+    "variant": "tar-attacks",
+    "cases": [
+     {
+      "case": "t01-traversal-name",
+      "scan": {
+       "accepted": false,
+       "code": "corrupt-archive",
+       "message_head": "HA 備份檔已損毀或遭到修改，無法使用。"
+      }
+     },
+     {
+      "case": "t02-absolute-name",
+      "scan": {
+       "accepted": false,
+       "code": "corrupt-archive",
+       "message_head": "HA 備份檔已損毀或遭到修改，無法使用。"
+      }
+     },
+     {
+      "case": "t03-symlink-out",
+      "scan": {
+       "accepted": true,
+       "artifact_files": 2,
+       "cookie": true,
+       "keys": 2
+      },
+      "tree": [
+       [
+        "artifacts",
+        "dir",
+        "0o755"
+       ],
+       [
+        "artifacts/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa...",
+        "file",
+        "0o644"
+       ],
+       [
+        "artifacts/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "dir",
+        "0o755"
+       ],
+       [
+        "artifacts/accounts-cookie-secret",
+        "file",
+        "0o600"
+       ]
+      ],
+      "tree_names_outside": [],
+      "check_volume": "ok",
+      "imported": {
+       "entries": 5,
+       "types": [
+        "directory",
+        "regular file"
+       ],
+       "modes": [
+        "600",
+        "644",
+        "755"
+       ],
+       "outside": []
+      }
+     },
+     {
+      "case": "t04-symlink-dir-then-file",
+      "scan": {
+       "accepted": false,
+       "code": "corrupt-archive",
+       "message_head": "HA 備份檔已損毀或遭到修改，無法使用。"
+      }
+     },
+     {
+      "case": "t05-hardlink-to-postgres",
+      "scan": {
+       "accepted": false,
+       "code": "incompatible",
+       "message_head": "HA 的 Omnigent 檔案區有指向其他資料的硬連結，無法安全地搬過來。"
+      }
+     },
+     {
+      "case": "t06-hardlink-to-cache",
+      "scan": {
+       "accepted": false,
+       "code": "corrupt-archive",
+       "message_head": "HA 備份檔已損毀或遭到修改，無法使用。"
+      }
+     },
+     {
+      "case": "t07-hardlink-forward",
+      "scan": {
+       "accepted": false,
+       "code": "corrupt-archive",
+       "message_head": "HA 備份檔已損毀或遭到修改，無法使用。"
+      }
+     },
+     {
+      "case": "t08-hardlink-to-cookie",
+      "scan": {
+       "accepted": true,
+       "artifact_files": 2,
+       "cookie": true,
+       "keys": 3
+      },
+      "tree": [
+       [
+        "artifacts",
+        "dir",
+        "0o755"
+       ],
+       [
+        "artifacts/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa...",
+        "file",
+        "0o644"
+       ],
+       [
+        "artifacts/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "dir",
+        "0o755"
+       ],
+       [
+        "artifacts/accounts-cookie-secret",
+        "file",
+        "0o600"
+       ],
+       [
+        "artifacts/hl",
+        "hardlink",
+        "0o644"
+       ]
+      ],
+      "tree_names_outside": [],
+      "check_volume": "ok",
+      "imported": {
+       "entries": 6,
+       "types": [
+        "directory",
+        "regular file"
+       ],
+       "modes": [
+        "600",
+        "644",
+        "755"
+       ],
+       "outside": []
+      }
+     },
+     {
+      "case": "t09-fifo-and-device",
+      "scan": {
+       "accepted": false,
+       "code": "corrupt-archive",
+       "message_head": "HA 備份檔已損毀或遭到修改，無法使用。"
+      }
+     },
+     {
+      "case": "t10-duplicate-file",
+      "scan": {
+       "accepted": false,
+       "code": "corrupt-archive",
+       "message_head": "HA 備份檔已損毀或遭到修改，無法使用。"
+      }
+     },
+     {
+      "case": "t11-setuid-and-sticky",
+      "scan": {
+       "accepted": true,
+       "artifact_files": 3,
+       "cookie": true,
+       "keys": 3
+      },
+      "tree": [
+       [
+        "artifacts",
+        "dir",
+        "0o755"
+       ],
+       [
+        "artifacts/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa...",
+        "file",
+        "0o644"
+       ],
+       [
+        "artifacts/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "dir",
+        "0o755"
+       ],
+       [
+        "artifacts/accounts-cookie-secret",
+        "file",
+        "0o600"
+       ],
+       [
+        "artifacts/sdir",
+        "dir",
+        "0o755"
+       ],
+       [
+        "artifacts/suid",
+        "file",
+        "0o644"
+       ]
+      ],
+      "tree_names_outside": [],
+      "check_volume": "ok",
+      "imported": {
+       "entries": 7,
+       "types": [
+        "directory",
+        "regular file"
+       ],
+       "modes": [
+        "600",
+        "644",
+        "755"
+       ],
+       "outside": []
+      }
+     },
+     {
+      "case": "t12-control-chars",
+      "scan": {
+       "accepted": false,
+       "code": "corrupt-archive",
+       "message_head": "HA 備份檔已損毀或遭到修改，無法使用。"
+      }
+     },
+     {
+      "case": "t13-store-is-a-file",
+      "scan": {
+       "accepted": false,
+       "code": "corrupt-archive",
+       "message_head": "HA 備份檔已損毀或遭到修改，無法使用。"
+      }
+     },
+     {
+      "case": "t14-dotdot-middle",
+      "scan": {
+       "accepted": false,
+       "code": "corrupt-archive",
+       "message_head": "HA 備份檔已損毀或遭到修改，無法使用。"
+      }
+     },
+     {
+      "case": "t15-long-name",
+      "scan": {
+       "accepted": true,
+       "artifact_files": 3,
+       "cookie": true,
+       "keys": 3
+      },
+      "tree": [
+       [
+        "artifacts",
+        "dir",
+        "0o755"
+       ],
+       [
+        "artifacts/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa...",
+        "file",
+        "0o644"
+       ],
+       [
+        "artifacts/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "dir",
+        "0o755"
+       ],
+       [
+        "artifacts/accounts-cookie-secret",
+        "file",
+        "0o600"
+       ],
+       [
+        "artifacts/dddddddddddddddddddddddddddddd...",
+        "file",
+        "0o644"
+       ]
+      ],
+      "tree_names_outside": [],
+      "check_volume": "ok",
+      "imported": {
+       "entries": 36,
+       "types": [
+        "directory",
+        "regular file"
+       ],
+       "modes": [
+        "600",
+        "644",
+        "755"
+       ],
+       "outside": []
+      }
+     },
+     {
+      "case": "t16-hardlink-self",
+      "scan": {
+       "accepted": false,
+       "code": "corrupt-archive",
+       "message_head": "HA 備份檔已損毀或遭到修改，無法使用。"
+      }
+     },
+     {
+      "case": "t17-hardlink-to-dir",
+      "scan": {
+       "accepted": false,
+       "code": "corrupt-archive",
+       "message_head": "HA 備份檔已損毀或遭到修改，無法使用。"
+      }
+     },
+     {
+      "case": "t18-size-lie",
+      "scan": {
+       "accepted": false,
+       "code": "corrupt-archive",
+       "message_head": "HA 備份檔已損毀或遭到修改，無法使用。"
+      }
+     }
+    ],
+    "seconds": 45.0
+   }
+  ],
+  "real_schema": {
+   "alembic": [
+    "d0a1f879a01d"
+   ],
+   "tables": [
+    "account_tokens",
+    "agents",
+    "alembic_version",
+    "comments",
+    "connections",
+    "conversation_items",
+    "conversation_labels",
+    "conversations",
+    "device_grants",
+    "files",
+    "hosts",
+    "omnigent_conversation_metadata",
+    "policies",
+    "preferences",
+    "projects",
+    "scheduled_task_runs",
+    "scheduled_tasks",
+    "session_permissions",
+    "user_daily_cost",
+    "users"
+   ],
+   "sequences": [],
+   "pg_version": "16",
+   "artifact_files": 19,
+   "cookie": true,
+   "schema_sql_sha256": "de9a06d1183a000a20dff97616ef6154c0d5ee05fcdd67cece613d6a4e00655f",
+   "counts_total": 38
+  },
+  "live_extra_sql": null,
+  "elapsed_s": 544.1,
+  "lab_left_after_cleanup": []
+ }
+}

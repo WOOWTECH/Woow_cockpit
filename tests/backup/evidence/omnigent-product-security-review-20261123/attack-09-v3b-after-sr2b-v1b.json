@@ -1,0 +1,316 @@
+{
+ "what": "v3b after the SR-2b fix (pg_dump unreachable); v1b malicious DDL on Omnigent's own tables with the verdict bypassed: restore stage reached, restored = live",
+ "harness": "tests/e2e/lab/omnigent_secreview_attacks.py",
+ "source_commit": "3e7837d product code (SR-1, SR-2b, SR-3, SR-4); harness 3e7837d + v1b (committed in 3b792ee/4d1a59b)",
+ "exit_code": 0,
+ "elapsed_s": 1260.9,
+ "stdout_sha256": "19eaf43821a7660ec323a87c8457bf74823beb296c39f5e01aa8a683aa50f061",
+ "lab": "isolated labpodman store (~/.woowbk-lab), throwaway containers by tempctr.TempObjects (--network none); never production, never dev-d",
+ "commercial_acceptance": "not-complete",
+ "result": {
+  "harness": "tests/e2e/lab/omnigent_secreview_attacks.py",
+  "image": "docker.io/library/postgres:16-alpine",
+  "fixture_sha256": "3871a468e2f3a11488df7c6a00a4a8ed7c5b89c3ba2dbc2903ec3bd677013516",
+  "started": "2026-11-23T21:09:52+0800",
+  "variants": [
+   {
+    "variant": "v3b-pipe",
+    "backup_bytes": 8888320,
+    "real": {
+     "check": {
+      "ok": true,
+      "blockers": 0,
+      "blocker_heads": [],
+      "warnings": 0,
+      "warning_heads": [],
+      "section": {
+       "users": 2,
+       "scheduled_tasks_active": 0,
+       "public_sessions": 0,
+       "account_conflicts": [],
+       "files": 1,
+       "agents": 17
+      },
+      "seconds": 97.8
+     },
+     "convert": {
+      "ok": true,
+      "seconds": 344.1,
+      "kept_accounts": [
+       "admin",
+       "operator"
+      ],
+      "conflicts": [],
+      "paused_tasks": 0,
+      "scheduled_tasks_active_reported": 0,
+      "public_sessions_reported": 0,
+      "reminders": 2,
+      "notes": 3,
+      "reminder_mentions_active_tasks": false,
+      "volumes": [
+       "omnigent-postgres-data",
+       "woowbk-j20261123T130952Z-acd6dae6-live-pi",
+       "woowbk-j20261123T130952Z-acd6dae6-live-server"
+      ]
+     },
+     "simulated": [
+      "observation hook before the HA cluster is removed (harness only)"
+     ],
+     "observed_roles": [
+      "hapg",
+      "hapg"
+     ],
+     "observed_all": [
+      {
+       "proof": [
+        "uid=70",
+        "ifaces=lo,",
+        "route_lines=1",
+        "capeff=CapEff:0000000000000000",
+        "nonewprivs=NoNewPrivs:1",
+        "rootfs=readonly",
+        "tmp=writable",
+        "tmp_noexec=0",
+        "secrets=0",
+        "mounts=36",
+        "pidsmax=1024",
+        "memmax=805306368",
+        "egress=blocked"
+       ],
+       "pipe": [],
+       "session_preload_libraries": "auto_explain",
+       "shared_preload_libraries": "",
+       "archive_mode": "off",
+       "archive_command": "(disabled)",
+       "listen_addresses": "",
+       "ssl": "off",
+       "search_path": "pg_atkfn, pg_catalog, public"
+      },
+      {
+       "proof": [
+        "uid=70",
+        "ifaces=lo,",
+        "route_lines=1",
+        "capeff=CapEff:0000000000000000",
+        "nonewprivs=NoNewPrivs:1",
+        "rootfs=readonly",
+        "tmp=writable",
+        "tmp_noexec=0",
+        "secrets=0",
+        "mounts=36",
+        "pidsmax=1024",
+        "memmax=805306368",
+        "egress=blocked"
+       ],
+       "pipe": [
+        "pgdump_stdout_open_for_write=no",
+        "pgdump_signal=denied",
+        "pgdump_uid=65534",
+        "self_uid=70"
+       ],
+       "session_preload_libraries": "auto_explain",
+       "shared_preload_libraries": "",
+       "archive_mode": "off",
+       "archive_command": "(disabled)",
+       "listen_addresses": "",
+       "ssl": "off",
+       "search_path": "pg_atkfn, pg_catalog, public"
+      }
+     ],
+     "observed": {
+      "proof": [
+       "uid=70",
+       "ifaces=lo,",
+       "route_lines=1",
+       "capeff=CapEff:0000000000000000",
+       "nonewprivs=NoNewPrivs:1",
+       "rootfs=readonly",
+       "tmp=writable",
+       "tmp_noexec=0",
+       "secrets=0",
+       "mounts=36",
+       "pidsmax=1024",
+       "memmax=805306368",
+       "egress=blocked"
+      ],
+      "pipe": [],
+      "session_preload_libraries": "auto_explain",
+      "shared_preload_libraries": "",
+      "archive_mode": "off",
+      "archive_command": "(disabled)",
+      "listen_addresses": "",
+      "ssl": "off",
+      "search_path": "pg_atkfn, pg_catalog, public"
+     },
+     "log_lines": 9,
+     "left_after_cleanup": [],
+     "leaks": {
+      "live_admin_hash_canary": false
+     },
+     "unsurfaced_stderr_has": {
+      "live_admin_hash_canary": false
+     },
+     "restored_probe": {
+      "objects_equal_live": true,
+      "differs": [],
+      "restored": {
+       "functions": [],
+       "user_triggers": 0,
+       "rules": 0,
+       "views": 0,
+       "policies": 0,
+       "event_triggers": 0,
+       "schemas": [],
+       "roles": [
+        "omnigent"
+       ],
+       "superusers": [
+        "omnigent"
+       ],
+       "role_settings": 0,
+       "large_objects": 0,
+       "extensions": [
+        "pg_trgm",
+        "plpgsql"
+       ],
+       "domains": 0,
+       "comments_user": 1,
+       "canary_user_rows": 0,
+       "active_tasks": 0,
+       "sequences": 0
+      },
+      "signature_equal_live": true,
+      "schema_dump_equal_live": true,
+      "schema_dump_sha256": "d799a0ae077ac38f87f85371939959bb13f394753c6736df15db469b201f911f"
+     }
+    },
+    "backup_sha256": "7c5782001588eb766851fc7188fbfea089da3171288ef6e1cfa4ead632c8bba2",
+    "seconds": 575.4
+   },
+   {
+    "variant": "v1b-ddl-on-real-tables",
+    "backup_bytes": 8980480,
+    "fooled": {
+     "check": {
+      "ok": true,
+      "blockers": 0,
+      "blocker_heads": [],
+      "warnings": 0,
+      "warning_heads": [],
+      "section": {
+       "users": 2,
+       "scheduled_tasks_active": 0,
+       "public_sessions": 0,
+       "account_conflicts": [],
+       "files": 1,
+       "agents": 17
+      },
+      "seconds": 85.4
+     },
+     "convert": {
+      "ok": true,
+      "seconds": 316.3,
+      "kept_accounts": [
+       "admin",
+       "operator"
+      ],
+      "conflicts": [],
+      "paused_tasks": 0,
+      "scheduled_tasks_active_reported": 0,
+      "public_sessions_reported": 0,
+      "reminders": 2,
+      "notes": 3,
+      "reminder_mentions_active_tasks": false,
+      "volumes": [
+       "omnigent-postgres-data",
+       "woowbk-j20261123T130952Z-acd6dae6-live-pi",
+       "woowbk-j20261123T130952Z-acd6dae6-live-server"
+      ]
+     },
+     "simulated": [
+      "check verdict bypassed in convert (tests the conversion isolation alone)"
+     ],
+     "log_lines": 9,
+     "left_after_cleanup": [],
+     "leaks": {
+      "live_admin_hash_canary": false
+     },
+     "unsurfaced_stderr_has": {
+      "live_admin_hash_canary": false
+     },
+     "restored_probe": {
+      "objects_equal_live": true,
+      "differs": [],
+      "restored": {
+       "functions": [],
+       "user_triggers": 0,
+       "rules": 0,
+       "views": 0,
+       "policies": 0,
+       "event_triggers": 0,
+       "schemas": [],
+       "roles": [
+        "omnigent"
+       ],
+       "superusers": [
+        "omnigent"
+       ],
+       "role_settings": 0,
+       "large_objects": 0,
+       "extensions": [
+        "pg_trgm",
+        "plpgsql"
+       ],
+       "domains": 0,
+       "comments_user": 1,
+       "canary_user_rows": 0,
+       "active_tasks": 0,
+       "sequences": 0
+      },
+      "signature_equal_live": true,
+      "schema_dump_equal_live": true,
+      "schema_dump_sha256": "d799a0ae077ac38f87f85371939959bb13f394753c6736df15db469b201f911f"
+     }
+    },
+    "backup_sha256": "d52627b55b36833e242154147f4738c6aa4a29955e19d76102aa7ff17e6545b2",
+    "seconds": 630.7
+   }
+  ],
+  "real_schema": {
+   "alembic": [
+    "d0a1f879a01d"
+   ],
+   "tables": [
+    "account_tokens",
+    "agents",
+    "alembic_version",
+    "comments",
+    "connections",
+    "conversation_items",
+    "conversation_labels",
+    "conversations",
+    "device_grants",
+    "files",
+    "hosts",
+    "omnigent_conversation_metadata",
+    "policies",
+    "preferences",
+    "projects",
+    "scheduled_task_runs",
+    "scheduled_tasks",
+    "session_permissions",
+    "user_daily_cost",
+    "users"
+   ],
+   "sequences": [],
+   "pg_version": "16",
+   "artifact_files": 19,
+   "cookie": true,
+   "schema_sql_sha256": "de9a06d1183a000a20dff97616ef6154c0d5ee05fcdd67cece613d6a4e00655f",
+   "counts_total": 38
+  },
+  "live_extra_sql": null,
+  "elapsed_s": 1260.9,
+  "lab_left_after_cleanup": []
+ }
+}
