@@ -49,6 +49,8 @@ IMPORTERS = (
              mcp_addon='Woow EMQX MCP Server', engine_mcp_lines=True),
     Importer('headscale', 'woow-headscale', 'Headscale VPN 控制伺服器', 'ha_headscale', mcp_admin='headscale-mcp-admin',
              mcp_addon='Woow Headscale MCP Server', engine_mcp_lines=True),
+    # Batch 2: code-server has no MCP admin app and no HA MCP add-on (facts mcp-admin.md section 1.1).
+    Importer('woow-code-server', 'woow_ha_code_server', 'code-server 開發環境', 'ha_codeserver'),
 )
 
 BY_APP = {importer.app_id: importer for importer in IMPORTERS}
