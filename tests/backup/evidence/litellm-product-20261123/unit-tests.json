@@ -4,19 +4,15 @@
  "scope": "unit and offline tests of the LiteLLM HA import product path (fixtures and fakes; NOT acceptance: the real runs are tests/e2e/lab/evidence/litellm-product-20261123/)",
  "results": {
   "PYTHONPATH=backup-engine:tests/e2e/lab python3 -m unittest discover -s tests/backup -p 'test_*.py' -t . (host-heavy lock)": {
-   "source_commit": "3bde418",
-   "tests": 1483,
+   "source_commit": "215fdf0",
+   "tests": 1497,
    "skipped": 6,
    "failures": 5,
    "errors": 2,
-   "seconds": 248.8,
-   "failing": "only tests.backup.test_ha_omnigent (5 FAIL + 2 ERROR: the Omnigent public-import guard; identical on the clean integration tip d812699, fixed by lane omnigent-product, not this lane)",
-   "earlier_run": "same result on 5faef6f (1483 tests, the same 7, 279.3 s)"
-  },
-  "tests.backup.test_ha_litellm + test_adapter_import_secrets + test_ha_litellm_candidate (+ cluster candidate)": {
-   "source_commit": "3bde418",
-   "tests": 43,
-   "result": "OK"
+   "seconds": 282.9,
+   "failing": "only tests.backup.test_ha_omnigent (5 FAIL + 2 ERROR: the Omnigent public-import guard on this branch's base d812699; identical on clean d812699, fixed by lane omnigent-product, not this lane)",
+   "earlier_run": "same result on 5faef6f (1483 tests, the same 7, 279.3 s)",
+   "earlier_runs": "3bde418: 1483 (same 7); 82e68ac (product 3c1a0a4): 1495 (same 7, 451.7 s)"
   },
   "node tests/backup-ui.mjs (host-heavy lock)": {
    "source_tree": "5faef6f (page code unchanged since e0c9e56)",
@@ -24,19 +20,44 @@
    "pass": 101,
    "fail": 0,
    "seconds": 499.8,
-   "litellm_scenarios": 2
+   "litellm_scenarios": 2,
+   "note": "backup/backup.js and tests/backup-ui.mjs unchanged since e0c9e56 (iteration 2 changed only the engine, docs and CONTRACT), so this result still covers the page"
   },
   "tests/e2e/lab/test_litellm_full_flow.py": {
-   "source_commit": "5faef6f",
-   "tests": 6,
-   "result": "OK"
+   "source_commit": "215fdf0",
+   "tests": 8,
+   "result": "OK",
+   "new": "kernel-queued dev-d lock wait (2)"
   },
   "python3 -I tests/backup/litellm_product_mutations.py": {
-   "source_commit": "3bde418",
-   "mutations": 33,
-   "caught": 33,
-   "file": "mutation-check.json"
+   "source_commit": "215fdf0",
+   "mutations": 44,
+   "caught": 44,
+   "baseline_tests": 57,
+   "file": "mutation-check-215fdf0.json",
+   "earlier": "3bde418: 33/33 (mutation-check.json); 82e68ac: 43/43; M34-M41 = security review, M42-M44 = this iteration"
+  },
+  "tests.backup.test_ha_litellm + test_adapter_import_secrets + test_ha_litellm_candidate + test_ha_litellm_cluster_candidate": {
+   "source_commit": "215fdf0",
+   "tests": 62,
+   "result": "OK",
+   "new_since_iteration_1": "Pi-agent key_users (5: KeyUserTests x2, CheckTests x3), SchemaReadTests x2 (search_path pin on hapg, ll-db, litellm-postgres and the snapshot), plus the security review's 7"
+  },
+  "real PostgreSQL search_path pin proof (tests/e2e/lab/litellm_pin_proof.py, lab store, network none)": {
+   "source_commit": "215fdf0",
+   "postgres": [
+    "17.11",
+    "18.7"
+   ],
+   "unpinned_schema_differences": [
+    "public.LiteLLM_CronJob"
+   ],
+   "pinned_schema_differences": [],
+   "pinned_signatures_equal": true,
+   "containers_left": [],
+   "file": "search-path-pin-proof.json"
   }
  },
- "commercial_acceptance": "not-complete"
+ "commercial_acceptance": "not-complete",
+ "updated": "2026-11-24T01:25+08:00"
 }
