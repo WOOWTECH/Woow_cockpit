@@ -115,6 +115,16 @@ class SummaryTest(unittest.TestCase):
         self.assertFalse(reporter.cancel_requested())
 
 
+class ItemsTest(unittest.TestCase):
+    def test_paginated_list_and_plain_shapes(self):
+        self.assertEqual(real.items({'object': 'list', 'data': [{'id': 'a'}], 'has_more': False}, 'sessions'),
+                         [{'id': 'a'}])
+        self.assertEqual(real.items([{'id': 'b'}], 'users'), [{'id': 'b'}])
+        self.assertEqual(real.items({'users': [{'id': 'c'}], 'data': []}, 'users'), [{'id': 'c'}])
+        self.assertEqual(real.items({'detail': 'x'}, 'comments'), [])
+        self.assertEqual(real.items(None), [])
+
+
 class EventVocabularyTest(unittest.TestCase):
     def test_json_events(self):
         good = json.dumps({'stage': 'installed_app_verified', 'phase': 'installed', 'ha_admin_login': True,

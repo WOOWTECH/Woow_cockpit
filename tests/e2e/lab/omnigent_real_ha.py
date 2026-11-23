@@ -294,6 +294,18 @@ def ha_member_cookie(backup):
         return value
 
 
+def items(body, *keys):
+    """The list of a response: the body itself, or its first list under `keys`, `data`, `items` or `results`
+    (0.21.0 list endpoints answer PaginatedList {"object": "list", "data": [...]}, omnigent/server/schemas.py:42)."""
+    if isinstance(body, list):
+        return body
+    if isinstance(body, dict):
+        for key in keys + ('data', 'items', 'results'):
+            if isinstance(body.get(key), list):
+                return body[key]
+    return []
+
+
 def verify_installed(lab, expect, creds, phase, observed, *, target_password, pi_files, ha_cookie):
     """Every fact of the restored HA data and this device's kept identity; returns tokens (registered)."""
     lab.ready()
@@ -313,8 +325,7 @@ def verify_installed(lab, expect, creds, phase, observed, *, target_password, pi
     require(mm.get('status') == 200 and muser.get('id') == creds['member'][0] and not muser.get('is_admin'),
             phase + '_ha_member_identity')
     users = lab.api({'method': 'GET', 'path': '/auth/users', 'body': None, 'token': admin})
-    body = users.get('body')
-    rows = body if isinstance(body, list) else (body or {}).get('users') or []
+    rows = items(users.get('body'), 'users')
     ids = {(u.get('id'), bool(u.get('is_admin'))) for u in rows if isinstance(u, dict)}
     require(all((u['id'], u['is_admin']) in ids for u in expect['users']) and (TARGET_ADMIN, True) in ids,
             phase + '_users_mismatch')
@@ -336,8 +347,7 @@ def verify_installed(lab, expect, creds, phase, observed, *, target_password, pi
     text = json.dumps(labels.get('body'), ensure_ascii=False)
     require(labels.get('status') == 200 and '"b1"' in text and 'import-test' in text, phase + '_labels_mismatch')
     comments = lab.api({'method': 'GET', 'path': '/v1/sessions/' + sid + '/comments', 'body': None, 'token': admin})
-    cbody = comments.get('body')
-    crow = cbody if isinstance(cbody, list) else (cbody or {}).get('comments') or []
+    crow = items(comments.get('body'), 'comments')
     require(comments.get('status') == 200 and len(crow) == expect['admin_session']['comments'],
             phase + '_comments_mismatch')
     att = expect['attachment']
@@ -346,8 +356,7 @@ def verify_installed(lab, expect, creds, phase, observed, *, target_password, pi
     require(content.get('status') == 200 and content.get('sha256') == att['sha256'] and content.get('bytes') == att['bytes'],
             phase + '_attachment_mismatch')
     msessions = lab.api({'method': 'GET', 'path': '/v1/sessions', 'body': None, 'token': member})
-    mbody = msessions.get('body')
-    mrows = mbody if isinstance(mbody, list) else (mbody or {}).get('sessions') or (mbody or {}).get('conversations') or []
+    mrows = items(msessions.get('body'), 'sessions', 'conversations')
     require(msessions.get('status') == 200 and expect['member_sessions'][0]['id'] in {x.get('id') for x in mrows if isinstance(x, dict)},
             phase + '_member_session_missing')
     require(lab.sql('SELECT version_num FROM alembic_version;').decode() == expect['alembic'], phase + '_alembic_mismatch')
@@ -648,6 +657,6 @@ if __name__ == '__main__':
         # Exception messages and command stderr can contain test credentials: fixed fields only.
         code = str(error) if isinstance(error, RuntimeError) and re.fullmatch(r'[a-z0-9_]{3,80}', str(error)) else None
         event('failed', error_type=type(error).__name__, code=code or getattr(error, 'code', None),
-              frames=[{'file': Path(f.filename).name, 'line': f.lineno, 'function': f.name}
+              frames=[{'file': Path(f.filename).name, 'line': f.lineno, 'function': f.name.strip('<>')}
                       for f in traceback.extract_tb(error.__traceback__)][-6:])
         sys.exit(1)
