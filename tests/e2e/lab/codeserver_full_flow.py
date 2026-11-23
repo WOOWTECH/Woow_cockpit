@@ -158,10 +158,12 @@ def sha256_file(path):
 # ---------------------------------------------------------------- device-side programs (python3 -I -c, stdin JSON)
 
 COMMON = r'''
-import hashlib, http.client, json, os, subprocess, sys, time, urllib.parse
+import hashlib, json, os, subprocess, sys, time, urllib.parse
+import http.client as httpclient
 REQ = json.loads(sys.stdin.read() or "{}")
 VOLUMES = {"pi": "woow-code-server-pi-data", "ide": "woow-code-server-ide", "ext": "woow-code-server-extensions"}
 HOME = "/home/appowner"
+PORT = int(REQ.get("port", 18443))   # dev-e's code-server (inside dev-e only; the self-check uses a local fake)
 def run(argv, timeout=300, check=True, input=None):
     p = subprocess.run(argv, capture_output=True, timeout=timeout, input=input)
     if check and p.returncode:
@@ -194,7 +196,7 @@ def http(method, path, *, body=None, headers=None, retry=0):
     deadline = time.monotonic() + retry
     while True:
         try:
-            conn = http.client.HTTPConnection("127.0.0.1", 18443, timeout=60)
+            conn = httpclient.HTTPConnection("127.0.0.1", PORT, timeout=60)
             conn.request(method, path, body=body, headers=dict(headers or {}))
             r = conn.getresponse()
             data = r.read()
@@ -204,7 +206,7 @@ def http(method, path, *, body=None, headers=None, retry=0):
                 time.sleep(3)
                 continue
             return r.status, data, hdrs
-        except (ConnectionError, OSError, http.client.HTTPException):
+        except (ConnectionError, OSError, httpclient.HTTPException):
             if time.monotonic() >= deadline:
                 return 0, b"", []
             time.sleep(3)
@@ -213,7 +215,7 @@ def header(hdrs, name):
 def login(pw):
     body = urllib.parse.urlencode({"password": pw}).encode()
     status, data, hdrs = http("POST", "/login", body=body, headers={
-        "Content-Type": "application/x-www-form-urlencoded", "Origin": "http://127.0.0.1:18443"})
+        "Content-Type": "application/x-www-form-urlencoded", "Origin": "http://127.0.0.1:%d" % PORT})
     cookie = None
     for item in header(hdrs, "Set-Cookie"):
         first = item.split(";", 1)[0]
@@ -557,17 +559,22 @@ def wait_unit(ev, label_text, timeout=420):
     ev.check(f'{label_text}: code-server.service is active', state == 'active', state)
 
 
+SNAP_AREAS = ('pi', 'ide', 'ext', 'desktop')
+
+
 def compare(before, after, churn=()):
     """{area: [names that differ]} of two snapshots' maps, without the names in `churn` (measured app rewrites)."""
     differ = {}
-    for area in sorted(set(before) | set(after)):
-        if area in ('secret', 'env'):
-            continue
-        b = (before.get(area) or {}).get('map') or {}
-        a = (after.get(area) or {}).get('map') or {}
+    for area in SNAP_AREAS:
+        b = before.get(area) if isinstance(before.get(area), dict) else {}
+        a = after.get(area) if isinstance(after.get(area), dict) else {}
+        if b.get('missing') != a.get('missing'):
+            differ.setdefault(area, []).extend(f'missing:{name}' for name in sorted(
+                set(b.get('missing') or []) ^ set(a.get('missing') or [])))
+        b, a = b.get('map') or {}, a.get('map') or {}
         names = sorted(k for k in set(b) | set(a) if b.get(k) != a.get(k) and f'{area}:{k}' not in churn)
         if names:
-            differ[area] = names
+            differ.setdefault(area, []).extend(names)
     return differ
 
 
@@ -1049,17 +1056,82 @@ def run_all(run):
     return failed is None
 
 
+def http_self_check():
+    """COMMON's login and HTTP helpers against a local fake of code-server's routes (an ephemeral port on 127.0.0.1;
+    never a device, never the host's real code-server)."""
+    import http.server
+    import threading
+
+    class Fake(http.server.BaseHTTPRequestHandler):
+        def _send(self, status, headers=(), body=b''):
+            self.send_response(status)
+            for key, value in headers:
+                self.send_header(key, value)
+            self.send_header('Content-Length', str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def do_POST(self):
+            data = self.rfile.read(int(self.headers.get('Content-Length', 0))).decode()
+            if self.path == '/login' and data == 'password=right+one':
+                self._send(302, [('Location', './'), ('Set-Cookie', 'other=1; Path=/'),
+                                 ('Set-Cookie', 'code-server-session=fake; Path=/; HttpOnly')])
+            else:
+                self._send(200, body=b'<html>login</html>')
+
+        def do_GET(self):
+            authed = 'code-server-session=fake' in (self.headers.get('Cookie') or '')
+            if self.path == '/healthz':
+                self._send(200, body=b'{"status":"alive"}')
+            elif self.path == '/':
+                self._send(200, body=b'<meta id="vscode-workbench-web-configuration">') if authed else \
+                    self._send(302, [('Location', './login')])
+            elif self.path.startswith('/vscode-remote-resource?path=') and authed:
+                self._send(200, body=b'marker')
+            else:
+                self._send(404)
+
+        def log_message(self, *_args):
+            pass
+
+    server = http.server.HTTPServer(('127.0.0.1', 0), Fake)
+    port = server.server_address[1]
+    assert port != 18443
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        ns = {}
+        exec(COMMON.replace('REQ = json.loads(sys.stdin.read() or "{}")', f'REQ = {{"port": {port}}}'), ns)
+        status, cookie, location = ns['login']('right one')
+        assert (status, cookie, location) == (302, 'code-server-session=fake', ['./']), (status, cookie, location)
+        assert ns['login']('wrong')[:2] == (200, None)
+        assert ns['http']('GET', '/healthz')[0] == 200
+        status, body, _h = ns['http']('GET', '/', headers={'Cookie': cookie})
+        assert status == 200 and b'workbench' in body
+        status, _b, headers = ns['http']('GET', '/')
+        assert status == 302 and ns['header'](headers, 'location') == ['./login']
+        status, body, _h = ns['http']('GET', '/vscode-remote-resource?path=%2Fdata%2Fx', headers={'Cookie': cookie})
+        assert (status, ns['sha16'](body)) == (200, hashlib.sha256(b'marker').hexdigest()[:16])
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
 def self_check():
     for script in (BEFORE, CLIENT, SEED, UNSEED, COLLECT, LEAKS, ENGINE_HASHES, SPACE):
         compile(script, '<device program>', 'exec')
     assert FIXTURE_SHA.startswith('8f2dc23f') and len(HA_MARKERS) == 2 and len(DEVICE_MARKERS) == 3
     entry = json.loads((HERE / 'catalog' / 'woow-code-server.json').read_text(encoding='utf-8'))
     assert entry['id'] == 'woow-code-server' and [v['name'] for v in entry['volumes']] == list(VOLUMES.values())
-    a = {'pi': {'map': {'x': 'f 644 1 aa', 'churn': 'f 644 1 bb'}}, 'secret': 's'}
-    b = {'pi': {'map': {'x': 'f 644 1 aa', 'churn': 'f 644 1 cc'}}, 'secret': 's'}
+    a = {'pi': {'map': {'x': 'f 644 1 aa', 'churn': 'f 644 1 bb'}, 'missing': []}, 'secret': 's', 'health': 200,
+         'never_missing': {'pi': ['x']}}
+    b = {'pi': {'map': {'x': 'f 644 1 aa', 'churn': 'f 644 1 cc'}, 'missing': []}, 'secret': 's', 'health': 200}
     assert churn_of(a, b) == {'pi:churn'} and compare(a, b, {'pi:churn'}) == {}
-    assert compare(a, {'pi': {'map': {'x': 'f 644 1 zz'}}}) == {'pi': ['churn', 'x']}
+    assert compare(a, {'pi': {'map': {'x': 'f 644 1 zz'}, 'missing': []}}) == {'pi': ['churn', 'x']}
+    assert compare(a, {'pi': {'map': {'x': 'f 644 1 aa', 'churn': 'f 644 1 bb'}, 'missing': ['auth.json']}}) == {
+        'pi': ['missing:auth.json']}
     assert all(label(x) == x for x in ('check: ok, no blockers', 'restart: systemctl --user restart code-server.service'))
+    http_self_check()
     print('self-check: PASS')
     return 0
 
