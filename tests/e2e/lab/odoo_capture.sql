@@ -43,8 +43,6 @@ WITH rows(table_name, row_data) AS (
  UNION ALL SELECT 'public.ir_cron',to_jsonb(t) FROM public.ir_cron t
  UNION ALL SELECT 'public.ir_cron_progress',to_jsonb(t) FROM public.ir_cron_progress t
  UNION ALL SELECT 'public.bus_bus',to_jsonb(t) FROM public.bus_bus t
- UNION ALL SELECT 'public.mail_mail',to_jsonb(t) FROM public.mail_mail t
- UNION ALL SELECT 'public.mail_message',to_jsonb(t) FROM public.mail_message t
 )
 SELECT jsonb_build_object('kind','row','table',table_name,'id',row_data->'id',
  'row_sha256',encode(sha256(convert_to(row_data::text,'UTF8')),'hex'),
@@ -66,16 +64,33 @@ SELECT jsonb_build_object('kind','row','table',table_name,'id',row_data->'id',
    'remaining',row_data->'remaining','deactivate',row_data->'deactivate',
    'timed_out_counter',row_data->'timed_out_counter','create_date',row_data->'create_date',
    'write_date',row_data->'write_date')
-  WHEN 'public.mail_mail' THEN jsonb_build_object('mail_message_id',row_data->'mail_message_id',
-   'state',row_data->'state','create_date',row_data->'create_date','write_date',row_data->'write_date')
-  WHEN 'public.mail_message' THEN jsonb_build_object('model',row_data->'model','res_id',row_data->'res_id',
-   'message_type',row_data->'message_type','create_date',row_data->'create_date','write_date',row_data->'write_date')
   ELSE jsonb_build_object('create_date',row_data->'create_date') END)
 FROM rows ORDER BY table_name,(row_data->>'id')::bigint;
+-- The mail tables exist only where the mail module is installed (dev-c's own Odoo has no mail module): psql's
+-- \gset / \if keep this one read-only script valid for both (PostgreSQL 10+ psql).
+SELECT to_regclass('public.mail_mail') IS NOT NULL AND to_regclass('public.mail_message') IS NOT NULL
+  AS woow_capture_mail \gset
+\if :woow_capture_mail
+WITH rows(table_name, row_data) AS (
+ SELECT 'public.mail_mail',to_jsonb(t) FROM public.mail_mail t
+ UNION ALL SELECT 'public.mail_message',to_jsonb(t) FROM public.mail_message t
+)
+SELECT jsonb_build_object('kind','row','table',table_name,'id',row_data->'id',
+ 'row_sha256',encode(sha256(convert_to(row_data::text,'UTF8')),'hex'),
+ 'field_sha256',(SELECT jsonb_object_agg(key,encode(sha256(convert_to(value::text,'UTF8')),'hex'))
+                 FROM jsonb_each(row_data)),
+ 'safe',CASE table_name
+  WHEN 'public.mail_mail' THEN jsonb_build_object('mail_message_id',row_data->'mail_message_id',
+   'state',row_data->'state','create_date',row_data->'create_date','write_date',row_data->'write_date')
+  ELSE jsonb_build_object('model',row_data->'model','res_id',row_data->'res_id',
+   'message_type',row_data->'message_type','create_date',row_data->'create_date','write_date',row_data->'write_date')
+  END)
+FROM rows ORDER BY table_name,(row_data->>'id')::bigint;
+SELECT jsonb_build_object('kind','count','table','public.mail_mail','count',count(*)) FROM public.mail_mail
+UNION ALL SELECT jsonb_build_object('kind','count','table','public.mail_message','count',count(*)) FROM public.mail_message;
+\endif
 SELECT jsonb_build_object('kind','count','table','public.ir_config_parameter','count',count(*)) FROM public.ir_config_parameter
 UNION ALL SELECT jsonb_build_object('kind','count','table','public.ir_cron','count',count(*)) FROM public.ir_cron
 UNION ALL SELECT jsonb_build_object('kind','count','table','public.ir_cron_progress','count',count(*)) FROM public.ir_cron_progress
-UNION ALL SELECT jsonb_build_object('kind','count','table','public.bus_bus','count',count(*)) FROM public.bus_bus
-UNION ALL SELECT jsonb_build_object('kind','count','table','public.mail_mail','count',count(*)) FROM public.mail_mail
-UNION ALL SELECT jsonb_build_object('kind','count','table','public.mail_message','count',count(*)) FROM public.mail_message;
+UNION ALL SELECT jsonb_build_object('kind','count','table','public.bus_bus','count',count(*)) FROM public.bus_bus;
 COMMIT;
