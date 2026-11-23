@@ -95,11 +95,27 @@ ALEMBIC_RE = re.compile(r'[0-9a-z_]{1,64}\Z')
 SERVER_VERSION_RE = re.compile(r'[0-9]{1,4}\.[0-9]{1,4}\.[0-9]{1,4}\Z')
 MAX_KEYS = 1_000_000
 DUMP_TIMEOUT = ha_odoo.DUMP_TIMEOUT
-# HA's pg_dump runs as an OS user that is not the HA server's (postgres, uid 70) and owns nothing in the container: code
-# HA's catalog runs inside its server (security review 2026-11-23 SR-2) can then neither open pg_dump's stdout through
-# /proc/<pid>/fd (a same-uid check that Yama does not restrict) nor signal it, so it cannot write the archive the
-# conversion restores. pg_dump connects over the socket directory (mode 3777) as the database user postgres (trust).
-DUMP_USER = '65534:65534'
+# HA's pg_dump runs as an OS user that is not the HA server's (the image's postgres, uid 70) and owns nothing in the
+# container: code HA's catalog runs inside its server (security review 2026-11-23 SR-2) can then neither open
+# pg_dump's stdout through /proc/<pid>/fd (a same-uid check that Yama does not restrict) nor signal it, so it cannot
+# write the archive the conversion restores. pg_dump connects over the socket directory (mode 3777) as the database
+# user postgres (trust). The id must be one the owner's rootless user namespace can represent (dev-d's maps only
+# 1-54999: `podman exec --user 65534` failed there with 255), so the first of DUMP_IDS the owner's uid AND gid maps
+# hold is taken, never root and never the image's postgres ids.
+DUMP_IDS = (65534, 32767, 9999, 999)
+
+
+def dump_user(ids, pg_ids):
+    """`uid:gid` of HA's pg_dump (see DUMP_IDS): `ids` = the owner's (uid IdMap, gid IdMap), `pg_ids` = the image's
+    postgres (uid, gid)."""
+    uids, gids = ids if ids else (None, None)
+    for candidate in DUMP_IDS:
+        if candidate in (0, *pg_ids):
+            continue
+        if uids is not None and (candidate not in uids or candidate not in gids):
+            continue
+        return f'{candidate}:{candidate}'
+    raise BackupError('job-failed', '這台的使用者命名空間沒有可用來匯出 HA 資料庫的帳號 ID，無法安全地轉換。')
 SCHEMA_CHANGED = ('這台 Omnigent 的資料庫結構在轉換期間改變了（可能正在升級或重新啟動），沒有匯入任何資料；'
                   '請等它正常執行後再轉換一次。')
 
@@ -1115,8 +1131,8 @@ def convert(work, app, test_mode, out_dir):
     work.log('匯出 HA 的 Omnigent 資料（只當作資料來源，HA 的資料庫結構不會使用）')
     with open(dump, 'xb') as handle:
         os.fchmod(handle.fileno(), 0o600)
-        tmp.exec('hapg', ['pg_dump', '-U', 'postgres', '-Fc', '-d', DATABASE], user=DUMP_USER, stdout=handle,
-                 timeout=DUMP_TIMEOUT, max_output=work.guard.budget())
+        tmp.exec('hapg', ['pg_dump', '-U', 'postgres', '-Fc', '-d', DATABASE], user=dump_user(ids, pg_ids),
+                 stdout=handle, timeout=DUMP_TIMEOUT, max_output=work.guard.budget())
         handle.flush()
         os.fsync(handle.fileno())
     tmp.remove('hapg')

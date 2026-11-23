@@ -486,10 +486,24 @@ class ConvertTests(OmnigentCase):
         self.convert(self.upload_omnigent(), ['omnigent'], test_mode=True)
         dumps = [user for user, args in self.world.exec_users
                  if 'pg_dump' in args and any(a.endswith('-hapg') for a in args)]
-        self.assertEqual(dumps, [ha_omnigent.DUMP_USER])
-        self.assertNotIn(ha_omnigent.DUMP_USER.split(':')[0], ('70', 'postgres', '0', 'root'))
-        analysis = {user for user, args in self.world.exec_users if 'psql' in args and any(a.endswith('-hapg') for a in args)}
+        self.assertEqual(dumps, ['65534:65534'])     # the fakes' owner maps 1-65536
+        analysis = {user for user, args in self.world.exec_users
+                    if 'psql' in args and any(a.endswith('-hapg') for a in args)}
         self.assertEqual(analysis, {'postgres'})   # only the queries run as postgres; their answers are checked (SR-1)
+
+    def test_the_dump_user_is_one_the_owners_namespace_can_represent(self):
+        """SR-2b on dev-d: its nested rootless namespace maps only 1-54999, and `podman exec --user 65534:65534`
+        failed there (exit 255). The id comes from the owner's own maps; never root, never the image's postgres."""
+        from woowbackup import nested
+        devd = nested.IdMap('0 1019 1\n1 10000 55000\n')
+        wide = nested.IdMap('0 1000 1\n1 100000 65536\n')
+        self.assertEqual(ha_omnigent.dump_user((wide, wide), (70, 70)), '65534:65534')
+        self.assertEqual(ha_omnigent.dump_user((devd, devd), (70, 70)), '32767:32767')
+        self.assertEqual(ha_omnigent.dump_user((devd, devd), (32767, 32767)), '9999:9999')   # never postgres's ids
+        self.assertEqual(ha_omnigent.dump_user((wide, devd), (70, 70)), '32767:32767')        # uid AND gid mapped
+        tiny = nested.IdMap('0 1000 1\n1 100000 100\n')
+        with self.assertRaises(BackupError):
+            ha_omnigent.dump_user((tiny, tiny), (70, 70))
 
     def test_a_sequence_value_that_is_sql_never_runs(self):
         """secreview SR-3: pg_dump writes a sequence's last_value as HA's server sent it into the SEQUENCE SET
