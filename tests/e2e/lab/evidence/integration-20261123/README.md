@@ -267,3 +267,30 @@ emqx-product 已含 `75aad7a`、`f397590`、`7b173af`，之後合併它時是共
 `test_litellm_lab_runner` 5：本組守門擋下測試自己的假子程序，第 3a 步以 `--exe-only` 跑 6/6）；`RealBackupTests`（20261118 備份）1/1；
 `node tests/backup-ui.mjs` 在 `f8e0c1d`：**103/103**（鎖 01:09:52–01:17:54）。本組誤排了一次重複的頁面測試（01:22:38 起），
 跑了 77 個後由本組停止，不算。`tests/e2e/lab` 整套最後一次在 `fb284b8`；需要 `run_native`（主機 `/usr/bin/podman`）的實驗室測試照舊不跑。
+
+## 第三次整合（續）：LiteLLM 產品線（`unit-tests-step3e.json`，擁有者決定 1）
+
+| 合併 commit | 來源（tip） | 內容 |
+| --- | --- | --- |
+| `d72ae5f` | `feat/ha-import-litellm-product-20261123`（`033f2f7`） | LiteLLM 匯入成為正式產品路徑：`ha_litellm.py`（haapps `litellm`，排在第二批應用之後；可信任的資料庫結構、只搬 HA 的資料列、加密 salt 綁定；`key_users` 讀 Pi 代理的 `models.json`；每次讀欄位／簽章都固定 search_path，`215fdf0`）、`haimport.py`、`adapters/quadlet_postgres.py`、頁面、文件、CONTRACT §9、測試與突變檢查、實驗室驅動程式與證據。內含安全審查的最終 tip `review/litellm-secreview-fix2-20261124@7844157`（SR-1～SR-6、SR-8、SR-9、SR-10 的修正；最終產品程式 `1a83926`）與那份程式在 dev-d 的真實流程 `attempt-secreview-01` **69/69**（真實加密備份、整個協助程式流程，含自動與手動回復、重新啟動、外洩檢查、清理、隔離）；產品線自己的第 6 次（取消）、第 7 次 30/33（找到 enum 顯示的錯誤）、第 8 次 68/69（`215fdf0`；唯一失敗是 dev-d 的 headscale 一直重啟，讓容器集合比對不相等）都保留 |
+
+依產品線約 01:50 的最終交接（READY/DONE for integration `@033f2f7`）與審查線 01:05 的最終交接、01:46 的真實流程合併。
+
+**擁有者決定 1**：LiteLLM 改由產品模組匯入；實驗室候選 `ha_litellm_candidate` 保留它的 `GUARD`、不註冊。換掉的斷言（取產品線的版本）：
+`tests/backup/test_ha_litellm_candidate.py` 的 `assertNotIn('litellm', haapps.APP_IDS)` 改成 `assertEqual(haapps.get('litellm').module, 'ha_litellm')`
+加上 `assertNotIn('ha_litellm_candidate', …)`。其他公開保護都沒變（EMQX `PRESERVATION_BLOCKER`、Omnigent `SECURITY_BLOCKER` 照舊）。
+
+衝突：5 個檔案 18 個 diff3 區塊（`haapps.py` 1、`backup.js` 3、`docs/backup.md` 8、`CONTRACT.md` 4、`tests/backup-ui.mjs` 2），全部是清單
+追加（這邊是 OpenDesign／code-server／Nextcloud，那邊是 LiteLLM）：17 個是純插入或不重疊的修改，依「這邊先」合併（第二批應用在前、
+LiteLLM 在後，與 `haapps.IMPORTERS`、`HA_SHORT` 的順序一致）；1 個手動：文件開頭那句改成「…Headscale、OpenDesign、code-server、Nextcloud
+與 LiteLLM 附加元件」。逐檔證明：結果和「兩邊各自的修改」相比，只差在合併後的那幾行；只有那邊改的 79 個檔案等於 `033f2f7`，只有這邊改的
+159 個檔案不變；`haapps.py`、`backup.js`、`backup-ui.mjs` 與 00:52 演練 `007d9b6` 的結果逐位元相同；5 個像 HA 金鑰的字串（格式範例）與
+合併前的 sha256 相同。
+
+測試（主機守門，真實 batch-1 備份，0 次拒絕的呼叫）：暫存的合併上 54 個 HA／LiteLLM／adapter／jobs 模組 803 個，只有既有的
+`test_ha_omnigent` 7 個未通過；`test_litellm_lab_runner --exe-only` 6/6；實驗室 `test_litellm_full_flow`＋`test_litellm_real_ha` 20/20。
+整套在 `d72ae5f`（另一個工作樹，主機重測鎖 01:54:07–02:05:27）：`tests/backup` 1574 個，1561 通過、1 略過、12 未通過，與 `fb284b8`、`f8e0c1d`
+**完全相同的 12 個 id**；`RealBackupTests` 1/1；`node tests/backup-ui.mjs` **105/105**。
+
+仍開著（擁有者）：SR-7 的政策（HA 資料列裡的 `os.environ/` 參照要拒絕還是只提醒）、正式機 LiteLLM 的就緒等待時間、
+`Woow_podman_litellm` 安裝等待、dev-d 的 headscale 一直重啟（`team/services-a-2.md`）、沒有 ARM 的 LiteLLM HA 備份；商業驗收未完成。

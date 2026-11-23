@@ -1,0 +1,146 @@
+{
+  "schema_version": 1,
+  "kind": "unit-tests",
+  "lane": "integration-3",
+  "step": "3e (litellm-product merge, owner decision 1)",
+  "tested_commits": {
+    "targeted modules": "the staged merge in the integration worktree (committed unchanged as d72ae5f)",
+    "full tests/backup + RealBackupTests": "d72ae5f (second worktree /tmp/int3-trial-20261123)",
+    "node tests/backup-ui.mjs": "d72ae5f (second worktree /tmp/int3-trial-20261123)"
+  },
+  "tree": "d647d88 (step 3d evidence) + d72ae5f (merge feat/ha-import-litellm-product-20261123 033f2f7)",
+  "merges": [
+    {
+      "lane": "litellm-product",
+      "branch": "feat/ha-import-litellm-product-20261123",
+      "tip": "033f2f7",
+      "merge_commit": "d72ae5f",
+      "contains": "review/litellm-secreview-fix2-20261124@7844157 (security review fixes SR-1..SR-6, SR-8, SR-9, SR-10; final product code 1a83926; real dev-d run attempt-secreview-01 69/69 PASS)",
+      "conflicts": "18 diff3 regions in backup-engine/woowbackup/haapps.py (1), backup/backup.js (3), docs/backup.md (8), docs/backup/CONTRACT.md (4), tests/backup-ui.mjs (2); all list appends (OpenDesign/code-server/Nextcloud on this branch, LiteLLM on the lane branch)",
+      "resolution": "17 pure insertions or disjoint edits merged ours first (batch-2 apps, then LiteLLM = the order of haapps.IMPORTERS and HA_SHORT); 1 by hand: the docs intro sentence 「…Headscale、OpenDesign、code-server、Nextcloud 與 LiteLLM 附加元件」",
+      "proof": "per conflicted file the result differs from ours + theirs' changes only in the combined lines; the 79 theirs-only files == 033f2f7 blobs; the 159 ours-only files unchanged; haapps.py, backup.js, backup-ui.mjs byte-identical to the rehearsal of 007d9b6; the 5 HA-key-shaped strings equal HEAD's by sha256 (format examples)",
+      "owner_decision_1_replaced_assertions": [
+        "tests/backup/test_ha_litellm_candidate.py: assertNotIn('litellm', haapps.APP_IDS) -> assertEqual(haapps.get('litellm').module, 'ha_litellm') + assertNotIn('ha_litellm_candidate', importer modules)"
+      ],
+      "guards_kept": "EMQX PRESERVATION_BLOCKER and Omnigent SECURITY_BLOCKER references unchanged; the lab candidate ha_litellm_candidate keeps its GUARD and stays unregistered",
+      "taken_at": "the product lane's FINAL HAND-OFF (~01:50, READY/DONE for integration @033f2f7) after litellm-secreview's FINAL hand-off (01:05) and real run (01:46)"
+    }
+  ],
+  "suites": {
+    "54 tests/backup HA/LiteLLM/adapter/jobs modules on the staged merge": {
+      "not_ok_explained": "the 7 pre-existing test_ha_omnigent tests (public Omnigent SECURITY_BLOCKER still on here)",
+      "tests": 803,
+      "failures": 5,
+      "errors": 2,
+      "skipped": 1,
+      "expected_failures": 0,
+      "unexpected_successes": 0,
+      "guard_refused_calls": 0,
+      "shim_hits": 0,
+      "run_native": "denied",
+      "elapsed_seconds": 190,
+      "not_ok_ids": [
+        "tests.backup.test_ha_omnigent.CheckTests.test_a_clean_backup",
+        "tests.backup.test_ha_omnigent.CheckTests.test_a_same_named_account_is_a_warning",
+        "tests.backup.test_ha_omnigent.CheckTests.test_versions",
+        "tests.backup.test_ha_omnigent.ConvertTests.test_a_dump_with_code_is_refused_before_the_restore",
+        "tests.backup.test_ha_omnigent.ConvertTests.test_a_same_named_ha_account_wins",
+        "tests.backup.test_ha_omnigent.ConvertTests.test_counts_that_differ_stop_the_conversion",
+        "tests.backup.test_ha_omnigent.ConvertTests.test_the_whole_conversion_in_test_mode"
+      ],
+      "ok": 795
+    },
+    "tests.backup.test_litellm_lab_runner --exe-only": {
+      "tests": 6,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "expected_failures": 0,
+      "unexpected_successes": 0,
+      "guard_refused_calls": 0,
+      "shim_hits": 0,
+      "run_native": "denied",
+      "elapsed_seconds": 1,
+      "not_ok_ids": [],
+      "ok": 6
+    },
+    "lab test_litellm_full_flow + test_litellm_real_ha": {
+      "tests": 20,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "expected_failures": 0,
+      "unexpected_successes": 0,
+      "guard_refused_calls": 0,
+      "shim_hits": 0,
+      "run_native": "denied",
+      "elapsed_seconds": 1,
+      "not_ok_ids": [],
+      "ok": 20
+    },
+    "tests/backup full at d72ae5f (real batch-1 backups)": {
+      "not_ok_explained": "the same 12 ids as at fb284b8 and f8e0c1d: test_ha_omnigent 7 (SECURITY_BLOCKER on until the omnigent-product merge) + test_litellm_lab_runner 5 (this lane's host guard refuses the test's own fake child; 6/6 with --exe-only above)",
+      "tests": 1574,
+      "failures": 7,
+      "errors": 5,
+      "skipped": 1,
+      "expected_failures": 0,
+      "unexpected_successes": 0,
+      "guard_refused_calls": 6,
+      "shim_hits": 0,
+      "run_native": "denied",
+      "elapsed_seconds": 252,
+      "not_ok_ids": [
+        "tests.backup.test_ha_omnigent.CheckTests.test_a_clean_backup",
+        "tests.backup.test_ha_omnigent.CheckTests.test_a_same_named_account_is_a_warning",
+        "tests.backup.test_ha_omnigent.CheckTests.test_versions",
+        "tests.backup.test_ha_omnigent.ConvertTests.test_a_dump_with_code_is_refused_before_the_restore",
+        "tests.backup.test_ha_omnigent.ConvertTests.test_a_same_named_ha_account_wins",
+        "tests.backup.test_ha_omnigent.ConvertTests.test_counts_that_differ_stop_the_conversion",
+        "tests.backup.test_ha_omnigent.ConvertTests.test_the_whole_conversion_in_test_mode",
+        "tests.backup.test_litellm_lab_runner.LabRunnerTests.test_abort_is_forwarded",
+        "tests.backup.test_litellm_lab_runner.LabRunnerTests.test_exact_reader_capture_boundary",
+        "tests.backup.test_litellm_lab_runner.LabRunnerTests.test_input_and_file_output_are_forwarded_and_bounded",
+        "tests.backup.test_litellm_lab_runner.LabRunnerTests.test_real_child_overflow_is_bounded_and_sanitized",
+        "tests.backup.test_litellm_lab_runner.LabRunnerTests.test_stderr_and_failures_are_not_returned"
+      ],
+      "ok": 1561
+    },
+    "tests.backup.test_ha_backup.RealBackupTests with the 20261118 backups at d72ae5f": {
+      "tests": 1,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "expected_failures": 0,
+      "unexpected_successes": 0,
+      "guard_refused_calls": 0,
+      "shim_hits": 0,
+      "run_native": "denied",
+      "elapsed_seconds": 9,
+      "not_ok_ids": [],
+      "ok": 1
+    },
+    "node tests/backup-ui.mjs at d72ae5f": {
+      "tests": 105,
+      "pass": 105,
+      "fail": 0,
+      "skipped": 0,
+      "cancelled": 0,
+      "elapsed_seconds": 413,
+      "not_ok": []
+    }
+  },
+  "not_run_here": "tests/e2e/lab full discover (last at fb284b8; runs again after the last merge). Lab tests that need run_native (host /usr/bin/podman) stay unrun.",
+  "not_changed": "No test, assertion or public guard was changed by this lane; the one replaced assertion is the product lane's own change under owner decision 1.",
+  "commercial_acceptance": "not-complete",
+  "private_logs_sha256": {
+    "m11-lit.log": "476b64203a4496dc4f0d8e730bdde81ebe9e78fd208598002dc9864b0684a529",
+    "m11-lit.out": "1ade986198100f45b6e76177faffc5fe2e7fdb9870d29345e4846e46626b4899",
+    "m11-runner.out": "de1d4a0cd0ce2eecaf58b00cae07b85c022e3e9bea8d8f44fd6afcf99e8a2e7a",
+    "m11-lab.out": "7c6299a20d11eadfb6cf57e1d0b3fe4be889d4975ccfa2392368563306cceece",
+    "m12-backup.log": "23e808f723ca806cd7e423c28b61c09a3776c00257b23cd59e44a5025ff595dc",
+    "m12-backup.out": "e7f74cbe9597dc4cba47b58aefb2551c30cef14151e2f074b8c8be80d2de5340",
+    "m12-ha118.out": "43c94a99340f8d7473684729308671aa27bba16c0738e548762b4f67c87e7f1b",
+    "m12-ui.log": "a424e6ad72609bd8635fda80d98fd996394cdd634d9bc9f3ea073dbe7f1cbcc3"
+  }
+}
