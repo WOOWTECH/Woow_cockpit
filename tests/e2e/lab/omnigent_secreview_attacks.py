@@ -836,6 +836,13 @@ def run_variant(lab, builder, name, results, canaries):
             res['backup_bytes'] = size
             res['real'] = run_product(lab, path, convert=True)
             res['fooled'] = run_product(lab, path, bypass_verdict=True)
+        elif name == 'v1b-ddl-on-real-tables':
+            # v1 without its table in another schema (data_only_toc's strict names stopped v1 before any data was
+            # loaded): every object stays on Omnigent's own tables, so with the verdict bypassed the restore runs
+            path, size, _ = builder.build(name, V1_VISIBLE_DDL.replace(
+                'CREATE TABLE atk_schema.t (x text DEFAULT public.atk_pwn());\n', ''))
+            res['backup_bytes'] = size
+            res['fooled'] = run_product(lab, path, bypass_verdict=True)
         elif name == 'v2-lies':
             path, size, _ = builder.build(name, V2_LIES)
             res['backup_bytes'] = size

@@ -1902,6 +1902,16 @@ emqx,headscale,mcp-admin}.md` of the design notes.
    user wins, with a note); test mode pauses every active scheduled task (`state` 1 → 2) as `woowbk_restore`; every
    table's rows equal HA's (users plus the accounts added), alembic unchanged; `CHECKPOINT`, stop, `pg_controldata`
    "shut down", export. Every Quadlet `Secret=` of the app must be declared in its catalog entry before anything runs.
+   HA's cluster is hostile code, not only hostile data (security review 2026-11-23, `tests/backup/evidence/
+   omnigent-product-security-review-20261123/`): its catalog and its own per-role/per-database settings (which win over
+   the command line) can make every answer lie and can run commands inside the throwaway container, whose boundary
+   (no network, read-only root, limits) is what holds. So nothing it answers is believed: right after HA's data is
+   loaded, the new cluster (HA's data on this device's schema and server) must give the check's answers again --
+   `DETAIL_SQL`, `KEYS_SQL` and every table count (lists compared as sets) -- else `incompatible`
+   「這份 HA 備份的 Omnigent 資料庫回報的內容和它實際的資料不一致…」 before anything is exported (SR-1); and the selected
+   SEQUENCE SET entries, whose statement pg_dump writes from the value the server sent (unquoted), are printed by
+   pg_restore itself (`-f - -L`) before anything is restored and must be exactly one
+   `SELECT pg_catalog.setval('public.<trusted sequence>', <integer>, true|false);` each (SR-3).
 4. `omnigent-server-data`: the live export without `artifacts/**` plus HA's artifacts owned like the live artifacts
    folder (dirs 0755, files 0644, `accounts-cookie-secret` 0600: HA's session key replaces this device's, so HA's grants
    and tokens keep working and this device's browser sessions end); `omnigent-pi-data`: the live export as it is (the

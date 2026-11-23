@@ -84,8 +84,9 @@ REPLACED_PG_FILES = {'pg_hba.conf': PG_HBA, 'postgresql.conf': PG_CONF,
 SKIPPED_PG_FILES = ('postmaster.pid', 'postmaster.opts', 'recovery.signal', 'standby.signal', 'recovery.conf',
                     'recovery.done')
 HA_DATA = '/var/lib/postgresql/data'
-# Command-line settings win over every configuration file: nothing of HA's cluster can load a library, run a command
-# or listen anywhere.
+# Command-line settings win over every configuration FILE of HA's cluster (they do not win over its own per-role and
+# per-database settings in pg_db_role_setting, and its catalog can make the server run code as the superuser: security
+# review 2026-11-23 SR-2). The boundary is the container: no network, read-only root, noexec data volume, limits.
 HA_SERVER_SETTINGS = ('listen_addresses=', 'max_connections=20', 'shared_preload_libraries=',
                       'session_preload_libraries=', 'local_preload_libraries=', 'dynamic_library_path=$libdir',
                       'archive_mode=off', 'archive_command=', 'archive_library=', 'restore_command=',
@@ -1261,7 +1262,8 @@ def ha_server_args():
 def start_ha_cluster(work, tmp, image):
     """PostgreSQL 16 on HA's (untrusted) cluster: every library/command setting overridden on the command line, the
     data volume mounted noexec/nosuid/nodev (no library of HA's can be loaded from it), a read-only root file system,
-    no network (review HA-SEC-01). What it answers is still HA's data only: the dump is restored as the role odoo."""
+    no network (review HA-SEC-01). HA's catalog and its per-role/per-database settings can still make this server lie
+    and run commands inside the container (security review 2026-11-23 SR-2): every answer is HA's, untrusted."""
     tmp.run('hapg', image, ha_server_args(), detach=True, read_only_root=True,
             volumes=[(tmp.name('hapg'), HA_DATA, 'rw,noexec,nosuid,nodev')])
     cluster = Cluster(tmp, 'hapg', log=work.log)

@@ -40,7 +40,9 @@ OMNIGENT_RUNNER_USERNAME) are read from the live database as the app owner and a
 unless HA has a user of the same name (HA's wins, with a warning): without them the runner could not log in while
 every health check stays green. Test mode pauses every active scheduled task (the restricted role). Counts and alembic
 are verified, the restricted role is dropped, the cluster is stopped cleanly (`pg_controldata` "shut down") and
-exported.
+exported. HA's cluster can lie and run code inside its container (security review 2026-11-23): its answers are given
+again by the new cluster before anything is exported (require_answers, SR-1) and the SEQUENCE SET statements pg_dump
+wrote from its values must be bare setval calls (require_sequence_sets, SR-3).
 `omnigent-server-data` is the live export without `artifacts/**` plus HA's artifacts (owner of the live artifacts
 folder, dirs 0755, files 0644, the cookie key 0600; `.cache/` never moves); `omnigent-pi-data` is the live export as
 it is (the runner's identity, logins and pairings never move). HA's runtime setting files in /data (sharing, admins,
