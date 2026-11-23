@@ -553,6 +553,28 @@ MODULE_HOOKS = (('litellm_settings', 'post_call_rules'), ('general_settings', 'c
                 ('general_settings', 'custom_key_generate'), ('general_settings', 'custom_key_update'),
                 ('general_settings', 'custom_key_policy'), ('general_settings', 'custom_team_metadata_validate'),
                 ('general_settings', 'custom_sso'), ('general_settings', 'custom_ui_sso_sign_in_handler'))
+# The nested places of the same kind (review iteration 2): the rest of the vendor's own DB-overlay list of values that
+# reach get_instance_fn (proxy_server.py:4486-4640) plus router_settings.plugins, which that list misses
+# (:6722-6737 -> resolve_routing_plugins :4767-4800; router_settings is a DB-overlay section, :5186-5193). Each is a
+# SQL/JSON path over the section's stored object; only the label leaves the database, never a value.
+#   custom_provider_map[].custom_handler: get_instance_fn for every item (:6215-6231);
+#   guardrails v1 {name: {callbacks, guardrail}} and v2 {litellm_params: {callbacks, guardrail}}: a dotted callback
+#     or guardrail type is a module (guardrails/init_guardrails.py:101-160 -> callback_utils; guardrail_registry.py
+#     :580-618), a plain name is a built-in one;
+#   pass_through_endpoints[].target: get_instance_fn for EVERY target (pass_through_endpoints.py:1993-2001); a URL only
+#     falls back because its import fails, so a dotted target that is not scheme://... is a module;
+#   litellm_jwtauth.custom_validate (_types.py:5374-5378); router_settings.plugins.
+_TEXT = '@.type() == "string" && @ != ""'
+NESTED_HOOKS = (
+    ('litellm_settings', 'custom_provider_map', f'lax $.custom_provider_map[*].custom_handler ? ({_TEXT})'),
+    ('litellm_settings', 'guardrails', f'lax $.guardrails[*].*.callbacks[*] ? ({_TEXT} && @ like_regex "[.]")'),
+    ('litellm_settings', 'guardrails', f'lax $.guardrails[*].*.guardrail ? ({_TEXT} && @ like_regex "[.]")'),
+    ('general_settings', 'pass_through_endpoints',
+     f'lax $.pass_through_endpoints[*].target ? ({_TEXT} && @ like_regex "[.]" && '
+     '!(@ like_regex "^[a-z][a-z0-9+-]*://" flag "i"))'),
+    ('general_settings', 'litellm_jwtauth.custom_validate', f'lax $.litellm_jwtauth.custom_validate ? ({_TEXT})'),
+    ('router_settings', 'plugins', f'lax $.plugins[*] ? ({_TEXT})'),
+)
 _OBJECT = "CASE WHEN jsonb_typeof({v}) = 'object' THEN {v} ELSE '{{}}'::jsonb END"
 STORED_SETTINGS_SQL = (
     "SELECT json_build_object("
@@ -571,33 +593,51 @@ STORED_SETTINGS_SQL = (
     "'[]'::json) FROM public.\"LiteLLM_Config\" c "
     f"CROSS JOIN LATERAL jsonb_each({_OBJECT.format(v='c.param_value')}) h "
     "WHERE (c.param_name, h.key) IN (" + ', '.join(f"('{a}', '{b}')" for a, b in MODULE_HOOKS) + ") "
-    "AND h.value NOT IN ('null'::jsonb, '\"\"'::jsonb, '[]'::jsonb)))")
+    "AND h.value NOT IN ('null'::jsonb, '\"\"'::jsonb, '[]'::jsonb)), "
+    # a STRING litellm_settings.callbacks is one module path (common_utils/callback_utils.py:403-415)
+    "'nested', (SELECT coalesce(json_agg(DISTINCT n.label ORDER BY n.label), '[]'::json) FROM ("
+    "SELECT 'litellm_settings.callbacks' AS label FROM public.\"LiteLLM_Config\" c "
+    "WHERE c.param_name = 'litellm_settings' AND jsonb_typeof(c.param_value -> 'callbacks') = 'string' "
+    "AND (c.param_value ->> 'callbacks') <> ''"
+    + ''.join(f" UNION ALL SELECT '{section}.{label}' FROM public.\"LiteLLM_Config\" c WHERE c.param_name = "
+              f"'{section}' AND jsonb_path_exists({_OBJECT.format(v='c.param_value')}, '{path}')"
+              for section, label, path in NESTED_HOOKS)
+    + ") n))")
+
+
+UNREADABLE = {'sections': [], 'env': [], 'callbacks': [], 'hooks': [], 'unreadable': True}
 
 
 def stored_settings(cluster, schema):
-    """{sections, env, callbacks}: the NAMES of HA's stored LiteLLM settings (STORED_SETTINGS_SQL), or None when HA has
-    no such table or it cannot be read (the check goes on without the line)."""
+    """{sections, env, callbacks, hooks}: the NAMES of the stored LiteLLM settings in `cluster` (STORED_SETTINGS_SQL),
+    or None when the schema has no such table. An answer that cannot be read (over the output limit, a timeout, not a
+    JSON object) is UNREADABLE, which refuses (review iteration 2: it failed open, so ~1M stored names hid a hook)."""
     columns = {row[2]: row[3] for row in schema.columns if (row[0], row[1]) == CONFIG_TABLE}
     if columns.get('param_value') != 'jsonb' or 'param_name' not in columns:
         return None
     try:
         found = cluster.query_json(STORED_SETTINGS_SQL, DATABASE)
     except BackupError:
-        return None
+        return dict(UNREADABLE)
     if not isinstance(found, dict):
-        return None
+        return dict(UNREADABLE)
 
     def names(value):
         return [str(v)[:60] for v in value[:50] if isinstance(v, str)] if isinstance(value, list) else []
 
     callbacks = names(found.get('callbacks'))
-    hooks = names(found.get('hooks')) + [f'litellm_settings 回呼 {c}'[:60] for c in callbacks if '.' in c]
+    hooks = (names(found.get('hooks')) + names(found.get('nested'))
+             + [f'litellm_settings 回呼 {c}'[:60] for c in callbacks if '.' in c])
     return {'sections': names(found.get('sections')), 'env': names(found.get('env')),
             'callbacks': [c for c in callbacks if '.' not in c], 'hooks': hooks}
 
 
 def stored_hooks_blocker(found):
-    """The blocker when HA's stored settings make LiteLLM load and run code (MODULE_HOOKS), else None."""
+    """The blocker when HA's stored settings make LiteLLM load and run code (MODULE_HOOKS, NESTED_HOOKS) or cannot be
+    read completely, else None."""
+    if found and found.get('unreadable'):
+        return ('無法完整讀取 HA 的 LiteLLM 存在資料庫裡的設定（內容過大或讀取逾時），無法確認其中沒有會載入並執行程式的設定，'
+                '無法安全地搬過來。')
     if not found or not found.get('hooks'):
         return None
     return (f'HA 的 LiteLLM 在資料庫裡存了會載入並執行程式的設定（{hacommon.names(found["hooks"])}），匯入後這台的 LiteLLM '
@@ -1349,6 +1389,13 @@ def convert(work, app, test_mode, out_dir):
     os.unlink(schema_dump)
     require_schema(pg, trusted, 'loaded')
     audit_new_cluster(pg, target.db_user)
+    # Review SR-8: the check above ran in HA's cluster, whose catalog HA's data directory controls (an edited built-in
+    # operator hid two stored hooks from it while COPY moved them). Decide again on what actually moved: the same
+    # query in the new cluster (this device's image and schema, HA's data only as rows); its names are the notes'.
+    settings = stored_settings(pg, trusted)
+    hooks = stored_hooks_blocker(settings)
+    if hooks:
+        raise BackupError('incompatible', f'LiteLLM 不能搬過來：{hooks}', app=app.id)
     counts = table_counts(pg, tables)
     differ = [f'{t}（HA {n}，匯入後 {counts.get(t)}）' for t, n in sorted(expected.items()) if counts.get(t) != n]
     now = _migrations(pg.query_json(MIGRATIONS_SQL, DATABASE))

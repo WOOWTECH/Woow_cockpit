@@ -145,7 +145,10 @@ MUTATIONS = (
     ('M42', "stored settings that load and run code refuse in the check (SR-6)", LL,
      "    hooks = stored_hooks_blocker(settings)\n    if hooks:\n        blockers.append(hooks)\n", "", 1),
     ('M43', "stored settings that load and run code stop the conversion first (SR-6)", LL,
-     "    if hooks:\n        raise BackupError('incompatible', f'LiteLLM 不能搬過來：{hooks}', app=app.id)\n", "", 1),
+     # the same removal as before; the text now names its line because the trusted re-check (M55) repeats it
+     "    settings = stored_settings(cluster, ha_schema)\n    hooks = stored_hooks_blocker(settings)\n"
+     "    if hooks:\n        raise BackupError('incompatible', f'LiteLLM 不能搬過來：{hooks}', app=app.id)\n",
+     "    settings = stored_settings(cluster, ha_schema)\n", 1),
     ('M44', "a callback with a dot in its name is a module load (SR-6)", LL,
      "[f'litellm_settings 回呼 {c}'[:60] for c in callbacks if '.' in c]", "[]", 1),
     # Option A, iteration 2: the Pi agent provider list (pi-web / Omnigent's runner models.json).
@@ -157,6 +160,29 @@ MUTATIONS = (
     # Real attempt 7: HA's sessions (search_path=pg_catalog, SR-1) and this device's rendered enum types differently.
     ('M47', 'every columns/signature read pins search_path=pg_catalog (all sides render names alike)', LL,
      "PIN_SEARCH_PATH = 'SET search_path = pg_catalog; '\n", "PIN_SEARCH_PATH = ''\n", 1),
+    # Review iteration 2: the rest of the vendor's code-loading keys, fail closed, the trusted re-check (SR-8).
+    ('M48', 'a stored-settings answer over the limit or timed out refuses (fail closed)', LL,
+     "    except BackupError:\n        return dict(UNREADABLE)\n", "    except BackupError:\n        return None\n", 1),
+    ('M49', 'a stored-settings answer that is not an object refuses (fail closed)', LL,
+     "    if not isinstance(found, dict):\n        return dict(UNREADABLE)\n",
+     "    if not isinstance(found, dict):\n        return None\n", 1),
+    ('M50', 'an unreadable answer is a blocker', LL,
+     "    if found and found.get('unreadable'):\n", "    if False:\n", 1),
+    ('M51', 'the nested code places count as hooks', LL,
+     "names(found.get('hooks')) + names(found.get('nested'))", "names(found.get('hooks'))", 1),
+    ('M52', 'router_settings.plugins is asked (not in the vendor list)', LL,
+     "    ('router_settings', 'plugins', f'lax $.plugins[*] ? ({_TEXT})'),\n", "", 1),
+    ('M53', 'a dotted guardrail callback is asked', LL,
+     "    ('litellm_settings', 'guardrails', f'lax $.guardrails[*].*.callbacks[*] ? ({_TEXT} && @ like_regex \"[.]\")'),\n",
+     "", 1),
+    ('M54', 'a string-form callbacks value is asked', LL,
+     "jsonb_typeof(c.param_value -> 'callbacks') = 'string'", "false", 1),
+    ('M55', 'the conversion decides again in the new cluster (SR-8)', LL,
+     "    settings = stored_settings(pg, trusted)\n    hooks = stored_hooks_blocker(settings)\n"
+     "    if hooks:\n        raise BackupError('incompatible', f'LiteLLM 不能搬過來：{hooks}', app=app.id)\n", "", 1),
+    ('M56', "the import notes name what moved, not what HA's cluster said (SR-8)", LL,
+     "    settings = stored_settings(pg, trusted)\n    hooks = stored_hooks_blocker(settings)\n",
+     "    moved = stored_settings(pg, trusted)\n    hooks = stored_hooks_blocker(moved)\n", 1),
 )
 
 
