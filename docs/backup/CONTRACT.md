@@ -2015,7 +2015,10 @@ PostgreSQL 15).
    `config.yaml`, `litellm.env`, the Quadlet files. The restore's safety backup holds the old salt and database, so an
    automatic rollback or a later restore of it puts both back. This device's virtual keys are replaced by HA's: the
    check's `key_users` and a note/reminder name the other catalog apps whose declared config files or Quadlet files set
-   a LiteLLM key or address, or whose networks LiteLLM's drop-in `local-agent-networks.conf` joins (nothing else changes).
+   a LiteLLM key or address, whose networks LiteLLM's drop-in `local-agent-networks.conf` joins, or whose Pi agent
+   provider list (`models.json` in the volume a `.container` mounts at its `PI_CODING_AGENT_DIR`, default
+   `/data/pi-agent`: pi-web, Omnigent's runner; read as the owner, inside the owner's home only, only the verdict kept)
+   has a provider whose base URL is this device's LiteLLM (nothing else changes).
    HA's stored proxy settings (`LiteLLM_Config`) move with the rows and take effect here (`store_model_in_db: true`:
    stored environment variables are decrypted with the moved salt into the proxy's environment, callbacks are loaded):
    the check warns and a note names the stored environment variable names and callback names (never a value; nothing

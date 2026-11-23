@@ -52,7 +52,8 @@ Keys: HA's salt replaces this device's secret `litellm-salt-key` in the converte
 master key, UI password, database password and URL, config.yaml, litellm.env and Quadlet files (read live like every
 backup). The restore's safety backup holds the old salt and database, so a failed or undone import puts both back.
 This device's virtual keys are replaced by HA's: the check and the conversion name this device's other apps whose
-configuration uses LiteLLM today (key_users: catalog config files and Quadlet files, LiteLLM's own network drop-ins),
+configuration uses LiteLLM today (key_users: catalog config files and Quadlet files, LiteLLM's own network drop-ins,
+the Pi agent provider list models.json of pi-web / Omnigent's runner),
 whose keys stop working after the import (owner decision 2026-11-23, option A: a reminder, nothing else changes).
 """
 import hashlib
@@ -751,11 +752,100 @@ def _joins_litellm_network(text):
     return False
 
 
+# The Pi coding agent (the Pi agent package's pi-web and Omnigent's runner) keeps its model providers, keys included,
+# in <PI_CODING_AGENT_DIR>/models.json on a volume: both packages set PI_CODING_AGENT_DIR=/data/pi-agent (pi-web's
+# image ENV, omnigent-runner.container Environment=) and mount their pi volume there. A provider whose base URL is this
+# device's LiteLLM uses one of its keys.
+PI_DIR_ENV = 'PI_CODING_AGENT_DIR'
+PI_DIR_DEFAULT = '/data/pi-agent'
+PI_MODELS = 'models.json'
+PI_URL_KEYS = ('baseUrl', 'baseURL', 'base_url')
+VOLUME_NAME_RE = re.compile(r'[A-Za-z0-9][A-Za-z0-9_.-]{0,127}')
+
+
+def pi_agent_sources(quadlets, home):
+    """[('volume', name) | ('path', path relative to the owner's home)] of the mounts that hold a Pi agent directory:
+    a `.container` file's `Volume=` whose container target is its PI_CODING_AGENT_DIR (the Quadlet's Environment=, else
+    /data/pi-agent). Sources outside the owner's home are never read."""
+    home = home.rstrip('/')
+    found = []
+    for name in sorted(quadlets):
+        if not name.endswith('.container'):
+            continue
+        data = quadlets[name]
+        text = data.decode('utf-8', 'replace') if isinstance(data, bytes) else str(data)
+        try:
+            target = (tempctr.quadlet_environment(text, {PI_DIR_ENV}).get(PI_DIR_ENV) or PI_DIR_DEFAULT).rstrip('/')
+        except BackupError:
+            continue
+        for key, value in tempctr.parse_unit(text).get('Container', []):
+            parts = value.split(':')
+            if key != 'Volume' or len(parts) < 2 or not target or parts[1].rstrip('/') != target:
+                continue
+            source = parts[0]
+            if source.endswith('.volume'):
+                try:
+                    found.append(('volume', ha_odoo.quadlet_volume_name(quadlets, source)))
+                except BackupError:
+                    continue
+            elif source.startswith(('%h/', home + '/')):
+                rel = source[3:] if source.startswith('%h/') else source[len(home) + 1:]
+                if rel and '..' not in rel.split('/'):
+                    found.append(('path', rel.rstrip('/')))
+            elif VOLUME_NAME_RE.fullmatch(source):
+                found.append(('volume', source))
+    return found
+
+
+def models_use_litellm(data):
+    """True when a Pi agent models.json names a provider whose base URL is this device's LiteLLM. The file holds API
+    keys: only the verdict leaves this function (no value is kept or logged)."""
+    try:
+        doc = json.loads(data.decode('utf-8') if isinstance(data, bytes) else data)
+    except (UnicodeDecodeError, ValueError, TypeError):
+        return False
+    providers = doc.get('providers') if isinstance(doc, dict) else None
+    if not isinstance(providers, dict):
+        return False
+    for provider in list(providers.values())[:500]:
+        if not isinstance(provider, dict):
+            continue
+        for key in PI_URL_KEYS:
+            value = provider.get(key)
+            if isinstance(value, str) and value.strip() and LITELLM_URL_RE.search(value.strip()[:2048]):
+                return True
+    return False
+
+
+def pi_agent_uses_litellm(work, other, quadlets):
+    """An app whose Pi agent provider list (models.json in a mount found by pi_agent_sources) points at this
+    device's LiteLLM. A volume outside the owner's home, a missing or unreadable file: not counted."""
+    runner = work.runner(other)
+    home = str(runner.home).rstrip('/')
+    for kind, source in pi_agent_sources(quadlets, home):
+        try:
+            if kind == 'volume':
+                mount = (runner.podman('volume', 'inspect', '--format', '{{.Mountpoint}}', source, timeout=60,
+                                       max_output=64 * 1024).stdout or b'').decode('utf-8', 'replace').strip()
+                if '\n' in mount or not mount.startswith(home + '/') or len(mount) > 1024:
+                    continue
+                rel = mount[len(home) + 1:].rstrip('/')
+            else:
+                rel = source
+            data = runner.read_file(f'{rel}/{PI_MODELS}', max_bytes=MAX_SCAN)
+        except (BackupError, OSError, TypeError, ValueError):
+            continue
+        if models_use_litellm(data):
+            return True
+    return False
+
+
 def key_users(work, app):
     """The names of this device's OTHER catalog apps whose configuration uses LiteLLM today (their virtual keys stop
     working once HA's keys replace this device's): a declared config file or a Quadlet file sets a LiteLLM key or
-    address, or LiteLLM's own drop-ins join one of the app's networks. Derived from the catalog and the files as they
-    are; nothing is written and no value leaves this function. A file that cannot be read is skipped."""
+    address, LiteLLM's own drop-ins join one of the app's networks, or the app's Pi agent provider list (models.json)
+    points at this device's LiteLLM. Derived from the catalog and the files as they are; nothing is written and no
+    value leaves this function. A file that cannot be read is skipped."""
     try:
         catalog = work.ctx.catalog()
     except Exception:  # noqa: BLE001 - no catalog: no reminder line
@@ -781,7 +871,7 @@ def key_users(work, app):
                 texts = [data.decode('utf-8', 'replace') if isinstance(data, bytes) else str(data)
                          for name, data in quadlets.items() if name.endswith('.container')]
                 uses = (any(_uses_litellm_text(text) or _joins_litellm_network(text) for text in texts)
-                        or bool(joined & _network_names(quadlets)))
+                        or bool(joined & _network_names(quadlets)) or pi_agent_uses_litellm(work, other, quadlets))
         except Exception:  # noqa: BLE001 - an app whose files cannot be read is not named
             continue
         if uses:

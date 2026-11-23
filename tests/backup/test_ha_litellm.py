@@ -280,6 +280,47 @@ class RegistryTests(unittest.TestCase):
 
 
 class CheckTests(LiteLLMCase):
+    PI_MODELS = '.local/share/containers/storage/volumes/omnigent-pi/_data/models.json'
+
+    def omnigent_runner(self, providers):
+        """Omnigent's runner as the package installs it (pi volume at PI_CODING_AGENT_DIR=/data/pi-agent)."""
+        self.world.quadlets['omnigent'] = {
+            'omnigent-runner.container': b'[Container]\nContainerName=omnigent-runner\nImage=r\n'
+                                         b'Volume=omnigent-pi.volume:/data/pi-agent\n'
+                                         b'Environment=PI_CODING_AGENT_DIR=/data/pi-agent\n',
+            'omnigent-pi.volume': b'[Volume]\nVolumeName=omnigent-pi\n'}
+        self.world.files[self.PI_MODELS] = json.dumps({'providers': providers}).encode()
+
+    def test_a_pi_agent_provider_at_this_litellm_names_its_app(self):
+        self.omnigent_runner({'openrouter': {'baseUrl': 'https://openrouter.ai/api/v1', 'apiKey': 'sk-or-secret'},
+                              'woow-litellm': {'baseUrl': 'http://host.containers.internal:4000/v1',
+                                               'apiKey': 'sk-omnigent-device-key'}})
+        result = self.check(self.upload_litellm(), ['litellm'])[0]
+        self.assertEqual(result['litellm']['key_users'], ['Hermes 代理', 'Omnigent 協作平台', 'OpenDesign'])
+        self.assertTrue(any('Omnigent 協作平台' in w and '金鑰會失效' in w for w in result['warnings']), result['warnings'])
+        shown = json.dumps(result, ensure_ascii=False) + self.logs()
+        for value in ('sk-omnigent-device-key', 'sk-or-secret', 'host.containers.internal'):
+            self.assertNotIn(value, shown)
+
+    def test_a_pi_agent_provider_list_without_this_litellm_names_nothing(self):
+        self.omnigent_runner({'openrouter': {'baseUrl': 'https://openrouter.ai/api/v1', 'apiKey': 'sk-or-secret'},
+                              'other-gateway': {'baseUrl': 'https://litellm.example.com/v1'}})
+        result = self.check(self.upload_litellm(), ['litellm'])[0]
+        self.assertEqual(result['litellm']['key_users'], ['Hermes 代理', 'OpenDesign'])
+
+    def test_a_pi_volume_outside_the_owners_home_is_not_read(self):
+        self.omnigent_runner({'woow-litellm': {'baseUrl': 'http://litellm:4000/v1'}})
+        podman = self.world.podman
+
+        def elsewhere(args, data, stdout):
+            if args[:2] == ['volume', 'inspect']:
+                return Result(0, b'/var/lib/elsewhere/omnigent-pi/_data\n', b'')
+            return podman(args, data, stdout)
+
+        self.world.podman = elsewhere
+        result = self.check(self.upload_litellm(), ['litellm'])[0]
+        self.assertEqual(result['litellm']['key_users'], ['Hermes 代理', 'OpenDesign'])
+
     def test_a_clean_backup(self):
         result = self.check(self.upload_litellm(), ['litellm'])[0]
         self.assertEqual((result['ok'], result['blockers'], result['version'], result['target_version']),
@@ -746,6 +787,37 @@ class KeyUserTests(unittest.TestCase):
     def test_line(self):
         self.assertIsNone(ha_litellm.key_users_line([]))
         self.assertIn('Hermes 代理 目前使用', ha_litellm.key_users_line(['Hermes 代理']))
+
+    def test_what_counts_in_a_pi_agent_provider_list(self):
+        uses = ha_litellm.models_use_litellm
+        self.assertTrue(uses(json.dumps({'providers': {'woow-litellm': {
+            'baseUrl': 'http://host.containers.internal:4000/v1', 'apiKey': 'sk-device'}}}).encode()))
+        self.assertTrue(uses(json.dumps({'providers': {'a': {'baseURL': 'http://litellm:4000'}}})))
+        self.assertTrue(uses(json.dumps({'providers': {'b': {'base_url': 'http://127.0.0.1:4000/v1'}}})))
+        for doc in ({'providers': {'openrouter': {'baseUrl': 'https://openrouter.ai/api/v1', 'apiKey': 'sk-or'}}},
+                    {'providers': {'remote': {'baseUrl': 'https://litellm.example.com/v1'}}},
+                    {'providers': {'woow-litellm': {'apiKey': 'sk-no-url'}}},
+                    {'providers': [{'baseUrl': 'http://litellm:4000'}]}, {'baseUrl': 'http://litellm:4000'}, []):
+            self.assertFalse(uses(json.dumps(doc).encode()), doc)
+        self.assertFalse(uses(b'\xff{not json'))
+
+    def test_where_a_pi_agent_keeps_its_providers(self):
+        quadlets = {
+            'omnigent-runner.container': b'[Container]\nImage=r\nVolume=omnigent-pi.volume:/data/pi-agent\n'
+                                         b'Environment=PI_CODING_AGENT_DIR=/data/pi-agent\n',
+            'omnigent-pi.volume': b'[Volume]\n',
+            'omnigent-server.container': b'[Container]\nImage=s\nVolume=omnigent-data.volume:/data\n',
+            'pi-web.container': b'[Container]\nImage=p\nVolume=pi-agent-data.volume:/data/pi-agent\n'
+                                b'Volume=/home/appowner:/host/home/appowner:rw\n',
+            'pi-agent-data.volume': b'[Volume]\nVolumeName=pi-agent-data\n',
+            'other.container': b'[Container]\nImage=o\nEnvironment=PI_CODING_AGENT_DIR=/srv/pi\n'
+                               b'Volume=%h/agents/pi:/srv/pi:Z\nVolume=named-x:/data/pi-agent\n',
+            'outside.container': b'[Container]\nImage=q\nVolume=/srv/pi:/data/pi-agent\n'
+                                 b'Volume=%h/../etc:/data/pi-agent\n',
+            'under-home.container': b'[Container]\nImage=u\nVolume=/home/appowner/pi/:/data/pi-agent/\n'}
+        self.assertEqual(ha_litellm.pi_agent_sources(quadlets, '/home/appowner/'),
+                         [('volume', 'systemd-omnigent-pi'), ('path', 'agents/pi'), ('volume', 'pi-agent-data'),
+                          ('path', 'pi')])
 
 
 class CandidateStillGuarded(unittest.TestCase):

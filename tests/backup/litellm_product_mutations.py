@@ -142,6 +142,12 @@ MUTATIONS = (
      "    stored_line = stored_settings_line(data.get('stored_settings'))\n"
      "    if stored_line:\n        notes.append(stored_line)\n",
      "", 1),
+    # Option A, iteration 2: the Pi agent provider list (pi-web / Omnigent's runner models.json).
+    ('M42', 'an app whose Pi agent provider list points at this LiteLLM is named (option A)', LL,
+     " or pi_agent_uses_litellm(work, other, quadlets))\n", ")\n", 1),
+    ('M43', "only a provider at this device's LiteLLM counts, not any provider (option A)", LL,
+     "            if isinstance(value, str) and value.strip() and LITELLM_URL_RE.search(value.strip()[:2048]):\n",
+     "            if isinstance(value, str) and value.strip():\n", 1),
 )
 
 
