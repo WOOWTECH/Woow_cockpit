@@ -1,0 +1,58 @@
+{
+ "schema_version": 1,
+ "kind": "lab-deploy",
+ "device": "woowbk-dev-e (lab, network none, no published port, 3g, 2 CPUs, appowner 1025)",
+ "app": "opendesign",
+ "when": "2026-11-23 16:10-16:37 Asia/Taipei",
+ "source_commit": "8a26ae9 (scripts as committed)",
+ "package": "Woow_podman_opendesign 1067bc4 (the host checkout; PR #17 head, merged upstream as bbbd4de)",
+ "installer": "scripts/install.sh --no-build --accept-defaults --set WOOW_OD_PASEO=on --set OPENDESIGN_PASEO_ORIGIN=https://opendesign.lab.invalid --set OD_ALLOWED_ORIGINS=<example local origins>,https://opendesign.lab.invalid",
+ "images": [
+  "image localhost/woow-open-design:4.2.1 loaded in 877s, ID 5bf5f9b959b3 (same as the host); 6367 MiB, compressed copy 2359 MiB, lowest host free 20830 MiB",
+  "image docker.io/library/nginx:1.30.4-alpine loaded in 13s, ID 1ae82dcc4a34 (same as the host); 66 MiB, compressed copy 28 MiB, lowest host free 25436 MiB"
+ ],
+ "package_smoke": "56 passed, 0 failed, 1 warnings",
+ "package_smoke_warnings": [
+  "WARN A13 podman inspect shows the env-type token of the daemon (podman behaviour)"
+ ],
+ "check_opendesign": [
+  "app open-design: deployed=True state=running owner=appowner units=4 inactive=[] problems=[]",
+  "health http://127.0.0.1:7456/api/health -> 200 (expects 200)",
+  "unit open-design.service: active",
+  "unit open-design-mcp.service: active",
+  "unit open-design-nginx.service: active",
+  "unit open-design-terminal.service: active",
+  "healthcheck open-design: healthy",
+  "healthcheck open-design-nginx: healthy",
+  "healthcheck open-design-mcp: healthy",
+  "healthcheck open-design-terminal: healthy",
+  "failed user units: none"
+ ],
+ "compare_with_host": {
+  "identical": [
+   "open-design.network",
+   "open-design-data.volume",
+   "open-design-mcp-data.volume",
+   "open-design-mcp-run.volume",
+   "open-design.container",
+   "open-design-mcp.container",
+   "open-design-terminal.container",
+   "nginx.conf",
+   "nginx-auth.conf",
+   "od-export-bridge.js"
+  ],
+  "differs": {
+   "open-design-nginx.container": "Image= digest only (the manifest digest of the copy loaded in dev-e; same image ID)",
+   "nginx-paseo.conf": "the Paseo origin (host: its public https origin; dev-e: https://opendesign.lab.invalid)",
+   "open-design.env": "OD_ALLOWED_ORIGINS and OPENDESIGN_PASEO_ORIGIN values (origins), key order",
+   "catalog open-design.json": "owner only"
+  },
+  "host_only": [
+   "open-design-local-health.service",
+   "open-design-local-health.timer (2026-11-08, in no package commit)"
+  ],
+  "image_ids": "all four containers run the host image IDs (5bf5f9b959b3, nginx 1ae82dcc4a34)"
+ },
+ "first_start": "the keep-id (uid 1001) ID-mapped copy of the 6.2 GiB image was made at the first start (~4 min; host free 24.15 -> 19.44 GiB), as on the host",
+ "commercial_acceptance": "not-complete"
+}

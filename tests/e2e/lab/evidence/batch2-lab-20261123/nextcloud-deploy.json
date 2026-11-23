@@ -1,0 +1,66 @@
+{
+ "schema_version": 1,
+ "kind": "lab-deploy",
+ "device": "woowbk-dev-e (lab, network none, no published port, 3g, 2 CPUs, appowner 1025)",
+ "app": "nextcloud",
+ "when": "2026-11-23 16:55-17:15 Asia/Taipei",
+ "source_commit": "a9dc46b (deploy-batch2.sh as in f328c7e; the image-owner scan added there by another session did not run in this load)",
+ "package": "Woow_podman_nextcloud_fresh 19a7609 (the host checkout = head of the open PR #7; the host Quadlets render from it)",
+ "installer": "scripts/install.sh (no options): env = the example with the host data dirs .local/share/nextcloud-office/{html,data,postgres,redis} and the host values of HOST_BIND and PHP_MEMORY_LIMIT (read by key, never printed); local URLs; fresh secrets",
+ "richdocuments": "12.0.1 (the host version) from the official release archive, sha256 0639ab0e3413142a76334af20ca88cba0a351a11c9c07effa0f1eb7f05941f2c, seeded into html/custom_apps before the first start (dev-e cannot reach the app store); occ integrity:check-app: no findings",
+ "images": [
+  "image localhost/woow-nextcloud:35.0.1-office2 loaded in 146s, ID e80170f48ac2 (same as the host); 1877 MiB, compressed copy 676 MiB, lowest host free 16688 MiB",
+  "image docker.io/collabora/code:26.04.4.2.1 loaded in 187s, ID a35ff1de149a (same as the host); 1267 MiB, compressed copy 488 MiB, lowest host free 15213 MiB",
+  "image docker.io/pgvector/pgvector:0.8.6-pg16 loaded in 67s, ID 9b05db12a354 (same as the host); 425 MiB, compressed copy 154 MiB, lowest host free 15409 MiB",
+  "image docker.io/library/redis:8.10.1-alpine loaded in 17s, ID d1e21a26915a (same as the host); 113 MiB, compressed copy 38 MiB, lowest host free 15523 MiB",
+  "image docker.io/nginxinc/nginx-unprivileged:1.29.3-alpine already loaded (696695300a3c)"
+ ],
+ "image_owner_note": "/usr/src/nextcloud in localhost/woow-nextcloud:35.0.1-office2 is owned by 65534:65534 (above the nested range): loaded with ignore_chown_errors (belongs to the container root in dev-e); the entrypoint copies it with rsync --chown (entrypoint.sh:201)",
+ "first_attempt": "the first load at 16:51 failed on that owner (potentially insufficient UIDs); nothing was left behind",
+ "install_elapsed_seconds": 339,
+ "package_smoke": {
+  "ok_lines": 24,
+  "result": "smoke: all checks passed"
+ },
+ "check_nextcloud": [
+  "app nextcloud: deployed=True state=running owner=appowner units=5 inactive=[] problems=[]",
+  "health http://127.0.0.1:18081/status.php -> 200 (expects 200)",
+  "unit nextcloud-db.service: active",
+  "unit nextcloud-redis.service: active",
+  "unit nextcloud-app.service: active",
+  "unit nextcloud-office.service: active",
+  "unit nextcloud-gateway.service: active",
+  "unit nextcloud-cron.timer: active",
+  "nextcloud: richdocuments enabled=True version=12.0.1",
+  "nextcloud: occ integrity:check-app richdocuments -> no findings",
+  "nextcloud: Collabora discovery through the gateway -> ok",
+  "failed user units: none"
+ ],
+ "compare_with_host": {
+  "identical": [
+   "nextcloud.network",
+   "nextcloud-db.container",
+   "nextcloud-redis.container",
+   "nextcloud-app.container",
+   "nextcloud-gateway.container",
+   "nextcloud.target",
+   "nextcloud-cron.service",
+   "nextcloud-cron.timer",
+   "gateway.conf"
+  ],
+  "differs": {
+   "nextcloud-office.container": "Environment aliasgroup1 and server_name (rendered from the env: the host LAN address vs 127.0.0.1)",
+   "nextcloud.env": "values of NEXTCLOUD_TRUSTED_DOMAINS, NEXTCLOUD_PUBLIC_URL, COLLABORA_SERVER_NAME (host addresses) and OVERWRITEPROTOCOL, OVERWRITECLIURL, TRUSTED_PROXIES (set on the host, empty in dev-e); key order",
+   "catalog nextcloud.json": "owner only"
+  },
+  "image_ids": "all five equal the host IDs at load time (containers removed while hibernated)"
+ },
+ "baseline": {
+  "ran": false,
+  "result": "PAUSED: host disk by the batch2_baseline.py guard before writing anything",
+  "detail": "17:12:32 FAIL nextcloud: host disk keeps the 12 GiB floor + 1 GiB reserve after the backup (PAUSED: host disk) -- {'step': 'backup', 'host_free_mib': 14491, 'live_data_mib': 1014, 'estimated_peak_mib': 2791, 'floor_mib': 12288, 'reserve_mib': 1024}",
+  "baseline_log_sha256": "4d723a77439eec2d4cf737f074d06e8fcf4aab29dac73e46bcadd3e66413c1c0"
+ },
+ "state_after": "hibernated at 17:15: units stopped, the five images dropped (host free 14.15 -> 17.94 GiB); data dirs (html 897M, data 134M, postgres 72M, redis), config.php, secrets, env and the catalog entry kept. Wake: deploy-batch2.sh e images:nextcloud + start the units",
+ "commercial_acceptance": "not-complete"
+}

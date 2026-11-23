@@ -9,10 +9,10 @@ device_vars "${1:-}"
 shift
 # Read-only outer isolation assertion; never enters the host Podman store.
 if [ "${1:-}" = --verify-isolation ]; then
-    [ "$DEV" = d ] && [ "$#" = 1 ] || die "isolation assertion is dev-d only"
+    { [ "$DEV" = d ] || [ "$DEV" = e ]; } && [ "$#" = 1 ] || die "isolation assertion is dev-d and dev-e only"
     state=$("$LP" inspect "$NAME" --format '{{.State.Running}} {{.HostConfig.NetworkMode}} {{json .HostConfig.PortBindings}}')
-    [ "$state" = 'true none {}' ] || die "dev-d isolation assertion failed"
-    echo 'dev-d isolation: true none {}'
+    [ "$state" = 'true none {}' ] || die "dev-$DEV isolation assertion failed"
+    echo "dev-$DEV isolation: true none {}"
     exit 0
 fi
 tty_flag=()
