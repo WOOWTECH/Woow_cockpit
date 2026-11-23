@@ -1,0 +1,1471 @@
+#!/usr/bin/env python3
+"""EMQX: the real batch-1 HA backups -> dev-d's EMQX through the installed product helper (lane emqx-product).
+
+  python3 -I tests/e2e/lab/emqx_product_real_capture.py <evidence.json> <scope> -- \\
+      python3 -I tests/e2e/lab/emqx_product_real_ha.py <step> [<step> ...]
+  python3 -I tests/e2e/lab/emqx_product_real_ha.py --self-check       (offline; never touches a device or a secret)
+
+The owner decided on 2026-11-23 ("決定1 做") that the HA EMQX import becomes a real product import. This harness
+drives it exactly as the Cockpit page does: every engine call is the helper command the page sends (root inside
+dev-d, one JSON request on stdin, one JSON reply): status, list, inspect, catalog-install, key-init, backup-start,
+ha-check-start, ha-convert-start, restore-start, job-status, delete. The HA files are the ones already in dev-d's HA
+store, bound to the local fixtures by SHA-256 (the cold encrypted backups of add-on 1b7b4ce7_woow-emqx, made with
+EMQX stopped: arm = the real RPi5, x86 = the real x86 HA).
+
+Every step runs inside ONE hold of the dev-d mutation lock (/tmp/woowbk-dev-d-mutation.lock, waited for like
+`flock -w 3600`; never taken while /tmp/woowbk-dev-d-emqx-main-waiting is fresh), with dev-d's outer isolation
+asserted before and after (owner.sh d --verify-isolation: running, network none, no published port) and a
+memory/disk headroom check before each step. No new step starts after HOLD_BUDGET seconds of holding the lock.
+
+Steps (run in the order given):
+  setup        deploy THIS tree into dev-d (deploy-src.sh d --src <tree> --no-demo-catalog; the schedule timer is
+               masked first); EMQX's catalog entry is the one carried by dev-d's own EMQX baseline backup (inspect
+               with the 11-19 emergency kit, catalog-install of exactly that entry) when it is missing; a device key
+  before       dev-d's EMQX as it is: the probe as this device's admin (state digest, markers); the test's own
+               baseline backup B0 (backup-start emqx, the device key) is made once and reused
+  check        ha-check-start (emqx) on arm-cold and x86-cold against dev-d's own target (the ACL file only): the
+               check REFUSES with the owner's text (OWNER DECISION 2026-11-23 「C」: HA's backups carry ACL rows),
+               HA's facts equal the recorded source, nothing changed
+  check-hot    ha-check-start (emqx) on arm-enc and x86-enc (made while EMQX ran): the hot backup is named
+  import:TAG:file
+               decision C on dev-d's own target (the ACL file only): ha-check refuses with the owner's text (one
+               blocker), ha-convert (the real space check) is refused with the same text before any candidate, no
+               backup and no throwaway object is left, dev-d's EMQX state digest still equals `before`
+  import:TAG:builtin
+               TAG = arm-cold | x86-cold; the built-in database authorization source is added to dev-d's EMQX through
+               its REST API first (after the file ACL: what the owner's text tells the customer to do in the
+               Dashboard; the import itself never adds a source). Then: ha-check (ok), ha-convert (the real space check), inspect,
+               restore (its readback must pass), the client probe after the restore, `systemctl --user restart
+               emqx.service` and the probe again, an AUTOMATIC rollback (a one-shot ExecStartPre failure of
+               emqx.service armed right before a second restore of the same converted backup: the restore must fail
+               and roll back by itself; the probe again), and the MANUAL rollback to the baseline (restore of B0:
+               the state digest equals `before`, the markers are back)
+  cleanup      the test's converted and safety backups deleted (B0 stays until `cleanup-baseline`); no job
+               container/volume/network, staging or key file; no drop-in or marker left
+  cleanup-baseline
+               B0 deleted too
+  leaks        no test secret (HA key, b1 test passwords, dev-d's EMQX secrets, issued Dashboard tokens) in the
+               engine's records, logs, journal or this run's private evidence
+
+The client probe (inside dev-d, as appowner, through the b1 credential-event transport: every Dashboard login it makes
+is registered before it is acknowledged) checks with HA's credentials: Dashboard logins, MQTT logins of HA's three
+users, wrong password / anonymous / banned client refused, this device's bootstrap user still logs in, the 2 retained
+messages (MQTT payload == stored payload), the authorization sources and settings are THIS device's (the file ACL
+read back byte-equal to this device's acl.conf), HA's ACL rows active through the API (builtin: since decision C the
+file target is refused, never imported), allowed and denied MQTT operations, rule delivery (HA's republish
+rule delivers to a subscriber; HA's HTTP action executes: its rule and action counters move), HA's API key works.
+stdout carries only fixed status lines (STEP/CHECK/RESULT ...); details go to the private, redacted evidence folder
+~/.woowbk-lab/evidence/emqx-product/<time>/ (0700). Secrets are read only by the b1 harness reader and the kit file.
+Not covered (stated in the evidence): the browser page itself (dev-d publishes no port; the helper calls are the
+page's), production, MQTT devices outside dev-d.
+"""
+import fcntl
+import hashlib
+import importlib.util
+import json
+import os
+from pathlib import Path
+import re
+import signal
+import stat
+import subprocess
+import sys
+import time
+
+HERE = Path(__file__).resolve().parent
+REPO = HERE.parents[2]
+LAB = Path.home() / '.woowbk-lab'
+LOCK = Path('/tmp/woowbk-dev-d-mutation.lock')
+WAITING = Path('/tmp/woowbk-dev-d-emqx-main-waiting')
+LOCK_WAIT = 3600
+HOLD_BUDGET = 32 * 60          # no new step after this many seconds of holding the lock (< 40 min per hold)
+MIN_DEVICE_HEADROOM = 1536 * 1024 * 1024
+MIN_HOST_AVAILABLE_KIB = 1024 * 1024
+MIN_DISK_FREE = 13 * 1024 ** 3  # the team keeps >= 12 GiB free at every moment
+BASELINE = '20261119T072831Z-168aaa02'   # dev-d's own EMQX baseline backup (11-19 device key): carries the entry
+OLD_KIT = LAB / 'secrets' / 'dev-d-kit.txt'
+TIMER = 'woowtech-cockpit-backup-schedule.timer'
+TAGS = ('arm-cold', 'x86-cold')
+MODES = ('file', 'builtin')
+STORE_IDS = {'arm-cold': 'ha-b6eb257cc5790bee3050', 'x86-cold': 'ha-0a53e93888209316040a'}
+FIXTURE_SHA256 = {'arm-cold': 'b6eb257cc5790bee30500f929d51ade66bfa8354dbe5bb61ba7c4bc08582f664',
+                  'x86-cold': '0a53e93888209316040af505484bba3ee3891c2ad2df7ae689bc0d4fd02690f9'}
+EMQX_SECRETS = ['woow-emqx-dashboard-password', 'woow-emqx-mqtt-password', 'woow-emqx-node-cookie',
+                'woow-emqx-mqtt-bootstrap']
+LANE_SECRETS = ('HA_BACKUP_KEY', 'B1_EMQX_ADMIN_PW', 'B1_EMQX_USER2_PW', 'B1_MQTT_PW1', 'B1_MQTT_PW2', 'B1_MQTT_PW3',
+                'B1_ARM_EMQX_API_KEY', 'B1_ARM_EMQX_API_SECRET', 'B1_X86_EMQX_API_KEY', 'B1_X86_EMQX_API_SECRET')
+UNIT = 'emqx.service'
+DROPDIR = '.config/systemd/user/emqx.service.d'
+DROPIN = DROPDIR + '/woowbk-emqx-product-fail-once.conf'
+MARKER = '.config/emqx-woowbk-fail-once'
+# The readback under test: a one-shot ExecStartPre that changes the RESTORED data right before the broker starts (one
+# HOCON line appended to the restored configs/cluster.hocon), so the restored broker no longer equals what the
+# conversion verified; the restore must name it and roll back by itself.
+TAMPER_DROPIN = DROPDIR + '/woowbk-emqx-product-tamper-once.conf'
+TAMPER_SCRIPT = '.config/emqx-woowbk-tamper.sh'
+TAMPER_MARKER = '.config/emqx-woowbk-tamper-once'
+TAMPER = (b'#!/bin/sh\n'
+          b'm="$HOME/.config/emqx-woowbk-tamper-once"\n'
+          b'[ -f "$m" ] || exit 0\n'
+          b'rm -f "$m"\n'
+          b'd=$(podman volume inspect woow_emqx_data --format "{{.Mountpoint}}") || exit 0\n'
+          b'podman unshare sh -c "printf \'\\nlog.console.level = notice\\n\' >> \'$d/configs/cluster.hocon\'"\n'
+          b'exit 0\n')
+READBACK_LOG = 'EMQX 還原後核對一致'
+# OWNER DECISION 2026-11-23 「C」, the owner's text verbatim (independent of the product constant on purpose).
+OWNER_ACL_TEXT = ('Podman 上的 EMQX 沒有開啟『內建資料庫』權限，HA 的裝置權限搬過去不會生效，裝置會被拒絕。'
+                  '請先在 Podman EMQX 的管理頁「存取控制 → 授權」新增「內建資料庫」（排在檔案規則之後），再匯入。')
+SAFE_LABEL = re.compile(r"[^A-Za-z0-9 ,()/:'<>.=_+#-]")
+OWNER_UID = 1019
+
+
+def _load_driver():
+    spec = importlib.util.spec_from_file_location('ha_import_b1_e2e', HERE / 'ha_import_b1_e2e.py')
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+drv = _load_driver()
+Failed = drv.Failed
+drv.state_path = lambda: LAB / 'run' / 'emqx_product_real_ha.json'   # never the b1 driver's own state file
+
+
+def label(text):
+    return SAFE_LABEL.sub('_', str(text))[:200] or 'unnamed'
+
+
+def slug(text):
+    return re.sub(r'[^A-Za-z0-9_.-]+', '-', str(text)).strip('-')[:120] or 'unnamed'
+
+
+def emit(line):
+    print(line, flush=True)
+
+
+class Evidence(drv.Evidence):
+    """The b1 driver's redacted evidence folder; stdout gets only `CHECK <label>: PASS|FAIL` (no detail)."""
+
+    def __init__(self, secrets):
+        super().__init__(secrets, 'emqx-product')
+
+    def log(self, text):
+        line = f'{time.strftime("%H:%M:%S")} {self.secrets.redact(str(text))}'
+        with open(self.log_path, 'a', encoding='utf-8') as handle:
+            handle.write(line + '\n')
+
+    def check(self, name, ok, detail=''):
+        result = super().check(name, ok, detail)
+        emit(f'CHECK {label(self.secrets.redact(str(name)))}: {"PASS" if result else "FAIL"}')
+        return result
+
+
+# ---------------------------------------------------------------- the device-side probe (as appowner in dev-d)
+
+MQTT = r'''
+import socket, struct
+def _str(s):
+    b = s.encode() if isinstance(s, str) else s
+    return struct.pack("!H", len(b)) + b
+def _len(n):
+    o = bytearray()
+    while True:
+        d = n % 128
+        n //= 128
+        o.append(d | (0x80 if n else 0))
+        if not n:
+            return bytes(o)
+def _recv(s, n):
+    buf = b""
+    while len(buf) < n:
+        chunk = s.recv(n - len(buf))
+        if not chunk:
+            raise EOFError
+        buf += chunk
+    return buf
+def read_packet(s):
+    h = _recv(s, 1)[0]
+    mult, n = 1, 0
+    while True:
+        b = _recv(s, 1)[0]
+        n += (b & 0x7F) * mult
+        mult *= 128
+        if not b & 0x80:
+            break
+    return h >> 4, h & 0x0F, _recv(s, n)
+def connect(client_id, user=None, password=None):
+    """MQTT 3.1.1 -> (socket or None, CONNACK return code or an error word)"""
+    try:
+        s = socket.create_connection(("127.0.0.1", 1883), timeout=10)
+    except OSError as e:
+        return None, "connect:" + type(e).__name__
+    flags = 0x02
+    payload = _str(client_id)
+    if user is not None:
+        flags |= 0x80
+        payload += _str(user)
+    if password is not None:
+        flags |= 0x40
+        payload += _str(password)
+    body = _str("MQTT") + bytes([4, flags]) + struct.pack("!H", 60) + payload
+    try:
+        s.sendall(bytes([0x10]) + _len(len(body)) + body)
+        t, f, data = read_packet(s)
+    except (EOFError, OSError) as e:
+        s.close()
+        return None, "closed:" + type(e).__name__
+    if t != 2:
+        s.close()
+        return None, "type%d" % t
+    if data[1] != 0:
+        s.close()
+        return None, data[1]
+    return s, 0
+def drain(s, wait, got, stop=None):
+    """Collect PUBLISH packets (topic, retain flag, payload sha256, payload) for `wait` s."""
+    deadline = time.monotonic() + wait
+    other = []
+    while True:
+        left = deadline - time.monotonic()
+        if left <= 0:
+            return other
+        s.settimeout(left)
+        try:
+            t, f, data = read_packet(s)
+        except (socket.timeout, EOFError, OSError):
+            return other
+        if t == 3:
+            tl = struct.unpack("!H", data[:2])[0]
+            top = data[2:2 + tl].decode("utf-8", "replace")
+            q = (f >> 1) & 3
+            pos = 2 + tl
+            if q:
+                pid = data[pos:pos + 2]
+                pos += 2
+                try:
+                    s.sendall(bytes([0x40, 2]) + pid)
+                except OSError:
+                    pass
+            payload = data[pos:]
+            got.append((top, f & 1, hashlib.sha256(payload).hexdigest(), payload))
+            if stop is not None and stop(got):
+                return other
+        else:
+            other.append((t, data))
+def subscribe(s, topic, qos=1, wait=3.0):
+    """-> (SUBACK code, [(topic, retain, sha256, payload)] received within `wait` s)"""
+    body = struct.pack("!H", 7) + _str(topic) + bytes([qos])
+    code, got = None, []
+    try:
+        s.sendall(bytes([0x82]) + _len(len(body)) + body)
+        s.settimeout(10)
+        while code is None:
+            t, f, data = read_packet(s)
+            if t == 9:
+                code = data[2]
+            elif t == 3:
+                tl = struct.unpack("!H", data[:2])[0]
+                top = data[2:2 + tl].decode("utf-8", "replace")
+                q = (f >> 1) & 3
+                pos = 2 + tl
+                if q:
+                    pid = data[pos:pos + 2]
+                    pos += 2
+                    s.sendall(bytes([0x40, 2]) + pid)
+                got.append((top, f & 1, hashlib.sha256(data[pos:]).hexdigest(), data[pos:]))
+    except (socket.timeout, EOFError, OSError):
+        return None, got
+    drain(s, wait, got)
+    return code, got
+def publish(s, topic, payload, pid=11):
+    """QoS 1 publish -> True when the PUBACK of `pid` came back (MQTT 3.1.1 PUBACK has no reason code)."""
+    body = _str(topic) + struct.pack("!H", pid) + payload
+    try:
+        s.sendall(bytes([0x32]) + _len(len(body)) + body)
+        s.settimeout(10)
+        while True:
+            t, f, data = read_packet(s)
+            if t == 4 and data[:2] == struct.pack("!H", pid):
+                return True
+    except (socket.timeout, EOFError, OSError):
+        return False
+def close(s):
+    try:
+        s.sendall(b"\xe0\x00")
+        s.close()
+    except OSError:
+        pass
+'''
+
+PROBE = drv.PROBE_COMMON + MQTT + r'''
+import base64, urllib.parse, secrets as _rnd
+out = {"mode": REQ["mode"]}
+E = "http://127.0.0.1:18083"
+started = time.monotonic()
+# The Dashboard answers some seconds after EMQX starts: wait with an unauthenticated GET (401 = up). A login is never
+# retried (the credential-event transport counts every login), so it comes only once the API answers.
+ready, _ = call(E, "GET", "/api/v5/nodes", wait=240)
+out["api_ready_after_s"] = round(time.monotonic() - started, 1)
+out["api_ready_code"] = ready
+# Exactly three Dashboard logins, always in this order (the event transport registers each issued token). The
+# entrance rate-limits /api/v5/login (10/min, burst 5): 7 s between them never touches the limit.
+code_ha, body_ha = call(E, "POST", "/api/v5/login", {"username": "admin", "password": REQ["ha_admin_password"]})
+time.sleep(7)
+code_u2, body_u2 = call(E, "POST", "/api/v5/login", {"username": REQ["user2"], "password": REQ["user2_password"]})
+time.sleep(7)
+code_dev, body_dev = call(E, "POST", "/api/v5/login", {"username": "admin", "password": secret("woow-emqx-dashboard-password")})
+out["login"] = {"ha_admin": code_ha, "ha_user2": code_u2, "device_admin": code_dev}
+token = None
+if code_ha == 200:
+    token = (body_ha or {}).get("token")
+elif code_dev == 200:
+    token = (body_dev or {}).get("token")
+out["token_from"] = "ha_admin" if code_ha == 200 else ("device_admin" if code_dev == 200 else None)
+def get(path, wait=0):
+    return call(E, "GET", path, token=token, wait=wait)
+if token and REQ.get("authz_add"):
+    c, b = call(E, "POST", "/api/v5/authorization/sources", {"type": "built_in_database", "enable": True}, token=token)
+    out["authz_add"] = c
+if token:
+    c, body = get("/api/v5/authentication/password_based:built_in_database/users?limit=1000", wait=120)
+    out["mqtt_users"] = sorted([u.get("user_id"), u.get("is_superuser")] for u in items(body))
+    c, body = get("/api/v5/authentication")
+    out["authenticators"] = sorted([a.get("id"), a.get("enable")] for a in items(body))
+    c, body = get("/api/v5/authorization/settings")
+    out["authz_settings"] = {k: (body or {}).get(k) for k in ("no_match", "deny_action")}
+    c, body = get("/api/v5/authorization/sources")
+    sources = items(body, "sources")
+    out["authz_sources"] = [[x.get("type"), x.get("enable")] for x in sources]
+    with open(os.path.expanduser("~/.config/emqx/acl.conf"), "rb") as handle:
+        acl_file = handle.read()
+    files = [x for x in sources if x.get("type") == "file"]
+    out["file_acl_readback_equal"] = (len(files) == 1 and isinstance(files[0].get("rules"), str)
+                                     and files[0]["rules"].encode() == acl_file)
+    acl = {}
+    for kind, path in (("users", "/api/v5/authorization/sources/built_in_database/rules/users?limit=1000"),
+                       ("clients", "/api/v5/authorization/sources/built_in_database/rules/clients?limit=1000")):
+        c, body = get(path)
+        acl[kind] = [c, sorted([r.get("username") or r.get("clientid"), len(r.get("rules") or [])] for r in items(body))]
+    c, body = get("/api/v5/authorization/sources/built_in_database/rules/all")
+    acl["all"] = [c, len((body or {}).get("rules") or [])]
+    out["acl_api"] = acl
+    c, body = get("/api/v5/mqtt/retainer/messages?limit=1000")
+    stored = {}
+    for m in items(body):
+        topic = m.get("topic")
+        c2, one = get("/api/v5/mqtt/retainer/message/" + urllib.parse.quote(topic, safe=""))
+        payload = base64.b64decode((one or {}).get("payload") or "") if c2 == 200 else None
+        stored[topic] = hashlib.sha256(payload).hexdigest() if payload is not None else None
+    out["retained_api"] = stored
+    c, body = get("/api/v5/rules?limit=1000")
+    out["rules"] = sorted([r.get("id"), r.get("enable")] for r in items(body))
+    c, body = get("/api/v5/connectors")
+    out["connectors"] = sorted([x.get("type"), x.get("name"), x.get("status")] for x in items(body))
+    c, body = get("/api/v5/actions")
+    out["actions"] = sorted([x.get("type"), x.get("name"), x.get("status")] for x in items(body))
+    c, body = get("/api/v5/banned?limit=1000")
+    out["banned"] = sorted([b.get("as"), b.get("who")] for b in items(body))
+    c, body = get("/api/v5/users")
+    out["dashboard_users"] = sorted(u.get("username") for u in items(body))
+    c, body = get("/api/v5/api_key")
+    out["api_keys"] = sorted([k.get("name"), k.get("enable")] for k in items(body))
+    c, body = get("/api/v5/nodes")
+    out["nodes"] = [[n.get("node"), n.get("version"), n.get("node_status")] for n in items(body)]
+if REQ.get("api_key"):
+    c, _ = call(E, "GET", "/api/v5/nodes", basic=(REQ["api_key"], REQ["api_secret"]))
+    out["api_key_works"] = c
+COUNT = ("[{T, case catch mnesia:table_info(T, size) of N when is_integer(N) -> N; _ -> -1 end} || T <- ["
+         "emqx_authn_mnesia, emqx_authn_scram_mnesia, emqx_acl, emqx_banned, emqx_banned_rules, emqx_admin, "
+         "emqx_app, emqx_psk, emqx_retainer_message]].")
+rc, so, se = pexec("woow-emqx", "emqx", "eval", COUNT)
+counts = {}
+for name, number in __import__("re").findall(r"\{([a-z_]+),\s*(-?[0-9]+)\}", so or ""):
+    counts[name] = int(number)
+out["native_counts"] = counts
+CFG = 'io:format("WOOWCFG:~s:END~n", [base64:encode(emqx_utils_json:encode(emqx:get_raw_config([])))]).'
+rc, so, se = pexec("woow-emqx", "emqx", "eval", CFG)
+raw = (so or "").strip()
+try:
+    # canonical JSON (key order never matters), the same reader the product uses
+    doc = json.loads(base64.b64decode(raw[len("WOOWCFG:"):raw.index(":END")]))
+    out["config_sha256"] = hashlib.sha256(json.dumps(doc, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+    out["config_roots"] = len(doc)
+except (ValueError, TypeError):
+    out["config_sha256"] = None
+if REQ.get("mqtt"):
+    users = REQ["mqtt"]
+    mq = {}
+    for user, password in users:
+        s, rc = connect("b1lab-login-" + user, user, password)
+        mq["login_" + user] = rc
+        if s:
+            close(s)
+    sensor, gateway, admin = users[0], users[1], users[2]
+    s, rc = connect("b1lab-wrong", gateway[0], "wrong-password-for-the-test")
+    mq["wrong_password"] = rc
+    if s:
+        close(s)
+    s, rc = connect("b1lab-anonymous")
+    mq["anonymous"] = rc
+    if s:
+        close(s)
+    s, rc = connect("b1-banned-client", gateway[0], gateway[1])
+    mq["banned_client"] = rc
+    if s:
+        close(s)
+    s, rc = connect("b1lab-bootstrap", "woow", secret("woow-emqx-mqtt-password"))
+    mq["bootstrap_woow"] = rc
+    if s:
+        close(s)
+    def sub_once(client, cred, topic, wait=3.0):
+        s, rc = connect(client, cred[0], cred[1])
+        if not s:
+            return {"connack": rc}
+        code, got = subscribe(s, topic, wait=wait)
+        close(s)
+        return {"connack": rc, "suback": code, "retained": sorted([t, h] for t, r, h, p in got if r)}
+    mq["admin_retained"] = sub_once("b1lab-admin-retained", admin, "b1/retained/#")
+    mq["gateway_retained"] = sub_once("b1lab-gateway-retained", gateway, "b1/retained/#")
+    mq["sensor_secret"] = sub_once("b1lab-sensor-secret", sensor, "b1/secret/#", wait=1.0)
+    mq["sensor_retained"] = sub_once("b1lab-sensor-retained", sensor, "b1/retained/#", wait=1.0)
+    # This device's file rule: every user may use "<username>/#" (pub/sub round trip, the same user).
+    own = gateway[0] + "/woowbk-probe/" + _rnd.token_hex(4)
+    s1, rc1 = connect("b1lab-own-sub", gateway[0], gateway[1])
+    s2, rc2 = connect("b1lab-own-pub", gateway[0], gateway[1])
+    own_result = {"connack": [rc1, rc2]}
+    if s1 and s2:
+        code, got = subscribe(s1, own, wait=0.5)
+        own_result["suback"] = code
+        own_result["puback"] = publish(s2, own.encode(), b"woowbk-own-topic")
+        drain(s1, 3.0, got, stop=lambda g: len(g) >= 1)
+        own_result["received"] = len([1 for t, r, h, p in got if t == own and p == b"woowbk-own-topic"])
+    for x in (s1, s2):
+        if x:
+            close(x)
+    mq["own_topic"] = own_result
+    out["mqtt"] = mq
+    # Rule delivery: HA's republish rule (b1/sensor/# with payload.temp > 30 -> b1/alerts/${clientid}) and HA's HTTP
+    # action rule (b1/cmd/#). Builtin mode uses HA's own roles (sensor publishes, gateway subscribes); file mode uses
+    # HA's superuser for both ends, because this device's file ACL only lets a user use "<username>/#".
+    publisher = sensor if REQ["mode"] == "builtin" else admin
+    listener = gateway if REQ["mode"] == "builtin" else admin
+    cmd_sender = gateway if REQ["mode"] == "builtin" else admin
+    pub_id = "b1lab-dlv-" + _rnd.token_hex(4)
+    delivery = {"publisher": publisher[0], "listener": listener[0]}
+    def metrics(path):
+        c, body = get(path)
+        if c != 200 or not isinstance(body, dict):
+            return None
+        m = body.get("metrics") or {}
+        return {k: m.get(k) for k in ("matched", "passed", "failed", "success", "actions.total", "actions.success",
+                                      "actions.failed", "dropped", "late_reply", "retried", "queuing", "inflight")
+                if k in m}
+    if token:
+        before = {"republish": metrics("/api/v5/rules/b1_rule_republish/metrics"),
+                  "http_rule": metrics("/api/v5/rules/b1_rule_http/metrics"),
+                  "http_action": metrics("/api/v5/actions/http:b1_http_action/metrics")}
+    alerts = "b1/alerts/" + pub_id
+    sl, rl = connect("b1lab-dlv-listen-" + _rnd.token_hex(3), listener[0], listener[1])
+    sp, rp = connect(pub_id, publisher[0], publisher[1])
+    delivery["connack"] = [rl, rp]
+    if sl and sp:
+        code, got = subscribe(sl, alerts, wait=0.5)
+        delivery["suback"] = code
+        temp = 31 + _rnd.randbelow(60)
+        sensor_topic = "b1/sensor/" + publisher[0] + "/delivery-" + _rnd.token_hex(4)
+        delivery["puback"] = publish(sp, sensor_topic.encode(), json.dumps({"temp": temp}).encode())
+        drain(sl, 8.0, got, stop=lambda g: len(g) >= 1)
+        drain(sl, 1.0, got)
+        delivery["received"] = len([1 for t, r, h, p in got if t == alerts])
+        delivery["payload_equal"] = [p for t, r, h, p in got if t == alerts] == [str(temp).encode()]
+    for x in (sl, sp):
+        if x:
+            close(x)
+    sc, rc = connect("b1lab-dlv-cmd-" + _rnd.token_hex(3), cmd_sender[0], cmd_sender[1])
+    if sc:
+        delivery["cmd_puback"] = publish(sc, ("b1/cmd/delivery-" + _rnd.token_hex(4)).encode(), b'{"cmd":"woowbk"}')
+        close(sc)
+    time.sleep(6)
+    if token:
+        after = {"republish": metrics("/api/v5/rules/b1_rule_republish/metrics"),
+                 "http_rule": metrics("/api/v5/rules/b1_rule_http/metrics"),
+                 "http_action": metrics("/api/v5/actions/http:b1_http_action/metrics")}
+        delivery["metrics_before"] = before
+        delivery["metrics_after"] = after
+    out["delivery"] = delivery
+rc, so, se = pexec("woow-emqx", "emqx", "ctl", "status")
+out["ctl_status"] = so.strip().splitlines()[:2]
+finish(out)
+'''
+
+DIGEST_KEYS = ('mqtt_users', 'authenticators', 'authz_settings', 'authz_sources', 'file_acl_readback_equal', 'acl_api',
+               'retained_api', 'rules', 'connectors', 'actions', 'banned', 'dashboard_users', 'api_keys',
+               'native_counts', 'config_sha256')
+
+PROGRAMS = {'PROBE': PROBE}
+
+
+# ---------------------------------------------------------------- lab guards
+
+def git(*args):
+    return subprocess.run(['git', '-C', str(REPO), *args], capture_output=True, text=True, timeout=60).stdout.strip()
+
+
+def clean_tree():
+    proc = subprocess.run(['git', '-C', str(REPO), 'status', '--porcelain'],
+                          capture_output=True, text=True, timeout=60)
+    return proc.returncode == 0 and not proc.stdout.strip()
+
+
+def verify_isolation():
+    proc = subprocess.run(['bash', str(HERE / 'owner.sh'), 'd', '--verify-isolation'], capture_output=True, text=True,
+                          timeout=120)
+    line = proc.stdout.strip()
+    if proc.returncode != 0 or line != 'dev-d isolation: true none {}':
+        raise Failed('dev-d isolation assertion failed')
+    emit(line)
+
+
+def headroom():
+    proc = drv.root('sh', '-c', 'echo "$(cat /sys/fs/cgroup/memory.current) $(cat /sys/fs/cgroup/memory.max)"',
+                    timeout=60)
+    try:
+        current, maximum = (int(x) for x in drv.out(proc).split())
+    except ValueError:
+        raise Failed('cannot read dev-d cgroup memory') from None
+    available = 0
+    for line in Path('/proc/meminfo').read_text().splitlines():
+        if line.startswith('MemAvailable:'):
+            available = int(line.split()[1])
+    st = os.statvfs('/')
+    free = st.f_bavail * st.f_frsize
+    emit(f'dev-d memory current={current} limit={maximum} headroom={maximum - current}')
+    emit(f'host MemAvailable={available} KiB disk free={free} B')
+    if maximum - current < MIN_DEVICE_HEADROOM:
+        raise Failed('dev-d memory headroom below 1.5 GiB')
+    if available < MIN_HOST_AVAILABLE_KIB:
+        raise Failed('host MemAvailable below 1 GiB')
+    if free < MIN_DISK_FREE:
+        raise Failed('host disk free below 13 GiB')
+
+
+class _Tick(Exception):
+    pass
+
+
+def waiting_mtime():
+    try:
+        return WAITING.stat().st_mtime_ns
+    except FileNotFoundError:
+        return None
+
+
+def emqx_main_holds_lock():
+    """True only while an emqx-main real run HOLDS the lock (a FLOCK `lock:` line in /proc/<pid>/fdinfo)."""
+    for proc in Path('/proc').iterdir():
+        if not proc.name.isdigit():
+            continue
+        try:
+            cmd = (proc / 'cmdline').read_bytes()
+            if b'run_emqx_real_owner.sh' not in cmd and b'emqx_real_owner_transport.py' not in cmd:
+                continue
+            for fd in (proc / 'fd').iterdir():
+                if os.readlink(fd) == str(LOCK):
+                    info = (proc / 'fdinfo' / fd.name).read_text()
+                    if any(line.startswith('lock:') and 'FLOCK' in line for line in info.splitlines()):
+                        return True
+        except OSError:
+            continue
+    return False
+
+
+def _tick(_signum, _frame):
+    raise _Tick()
+
+
+def acquire_lock():
+    """The dev-d mutation lock, waited for like `flock -w` (blocking), released at once while emqx-main waits."""
+    fd = os.open(LOCK, os.O_RDONLY | os.O_NOFOLLOW)
+    st = os.fstat(fd)
+    if not stat.S_ISREG(st.st_mode) or st.st_uid != os.getuid() or st.st_nlink != 1:
+        os.close(fd)
+        raise Failed('unsafe dev-d lock file')
+    previous = signal.signal(signal.SIGALRM, _tick)
+    started = time.monotonic()
+    stale = None
+    try:
+        while True:
+            if time.monotonic() - started > LOCK_WAIT:
+                os.close(fd)
+                raise Failed('dev-d lock not acquired within 3600 s')
+            mtime = waiting_mtime()
+            if mtime is not None and emqx_main_holds_lock():
+                stale = mtime
+            if mtime is not None and mtime != stale:
+                time.sleep(5)
+                continue
+            signal.alarm(30)
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX)
+            except _Tick:
+                continue
+            finally:
+                signal.alarm(0)
+            mtime = waiting_mtime()
+            if mtime is not None and mtime != stale:
+                fcntl.flock(fd, fcntl.LOCK_UN)
+                time.sleep(5)
+                continue
+            emit(f'lock acquired after {int(time.monotonic() - started)} s')
+            return fd
+    finally:
+        signal.signal(signal.SIGALRM, previous)
+
+
+# ---------------------------------------------------------------- helpers
+
+def sha256_file(path):
+    digest = hashlib.sha256()
+    with open(path, 'rb') as handle:
+        for block in iter(lambda: handle.read(1 << 20), b''):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def fixture_path(tag):
+    machine, name = drv.UPLOADS[tag][0], drv.UPLOADS[tag][1]
+    return drv.FIXTURES / machine / name / f'{name}.tar'
+
+
+def machine_of(tag):
+    return drv.UPLOADS[tag][0]
+
+
+def probe_request(args, mode, tag=None, *, authz_add=False):
+    s = args.secrets
+    request = {'mode': mode, 'ha_admin_password': s['B1_EMQX_ADMIN_PW'], 'user2': s['B1_EMQX_USER2'],
+               'user2_password': s['B1_EMQX_USER2_PW'], 'authz_add': authz_add}
+    if tag is not None:
+        prefix = 'B1_ARM' if machine_of(tag) == 'arm' else 'B1_X86'
+        request.update(mqtt=[[s[f'B1_MQTT_USER{i}'], s[f'B1_MQTT_PW{i}']] for i in (1, 2, 3)],
+                       api_key=s[f'{prefix}_EMQX_API_KEY'], api_secret=s[f'{prefix}_EMQX_API_SECRET'])
+    return request
+
+
+def run_probe(ev, args, label_text, mode, tag=None, *, authz_add=False):
+    probe = drv.event_device_python(PROBE, probe_request(args, mode, tag, authz_add=authz_add), args.secrets,
+                                    [('/api/v5/login', ('token',), False)] * 3, timeout=900)
+    ev.save(f'probe-{slug(label_text)}-{int(time.time())}.json', probe)
+    return probe
+
+
+def digest(probe):
+    """The state a probe saw; EMQX's own $SYS retained messages (rewritten at every start) are left out."""
+    found = {key: probe.get(key) for key in DIGEST_KEYS}
+    found['retained_api'] = {t: h for t, h in (probe.get('retained_api') or {}).items() if not t.startswith('$SYS/')}
+    return found
+
+
+def diff_digest(a, b):
+    return sorted(k for k in set(a) | set(b) if a.get(k) != b.get(k))
+
+
+def evaluate_imported(probe, src, mode):
+    """[(check name, ok, detail)] of one probe after an import of `src` (the recorded HA facts) in `mode`."""
+    results = []
+    login = probe.get('login') or {}
+    results.append(('the Dashboard takes HA\'s admin and HA\'s second user; this device\'s old admin password no '
+                    'longer logs in', login.get('ha_admin') == 200 and login.get('ha_user2') == 200
+                    and login.get('device_admin') == 401, login))
+    users = probe.get('mqtt_users') or []
+    want_users = sorted([u['user_id'], u['is_superuser']] for u in src['mqtt_users'])
+    results.append(('HA\'s three MQTT users and this device\'s bootstrap user woow',
+                    all(u in users for u in want_users) and ['woow', False] in users, users))
+    results.append(('authorization settings are this device\'s (no_match deny, deny_action ignore)',
+                    probe.get('authz_settings') == {'no_match': 'deny', 'deny_action': 'ignore'},
+                    probe.get('authz_settings')))
+    want_sources = [['file', True]] + ([['built_in_database', True]] if mode == 'builtin' else [])
+    results.append((f'authorization sources are this device\'s ({"file + built-in database" if mode == "builtin" else "file only"})',
+                    probe.get('authz_sources') == want_sources, probe.get('authz_sources')))
+    results.append(('the file ACL reads back byte-equal to this device\'s acl.conf',
+                    probe.get('file_acl_readback_equal') is True, probe.get('file_acl_readback_equal')))
+    acl = probe.get('acl_api') or {}
+    counts = probe.get('native_counts') or {}
+    if mode == 'builtin':
+        results.append(('HA\'s ACL rules are active in the built-in database (2 users, 1 client, 1 for all)',
+                        acl.get('users') == [200, [['b1-gateway', 2], ['b1-sensor', 2]]]
+                        and acl.get('clients') == [200, [['b1-dashboard-panel', 1]]] and acl.get('all') == [200, 1], acl))
+    else:
+        results.append(('HA\'s ACL rows are in the built-in database table (4 rows) but inactive: the source is not '
+                        'configured here (API 404)', counts.get('emqx_acl') == 4
+                        and all((acl.get(k) or [None])[0] == 404 for k in ('users', 'clients', 'all')),
+                        {'emqx_acl': counts.get('emqx_acl'), 'api': {k: (acl.get(k) or [None])[0] for k in acl}}))
+    retained = probe.get('retained_api') or {}
+    results.append(('the 2 retained messages are stored', set(src['retained_messages']) <= set(retained)
+                    and all(retained.get(t) for t in src['retained_messages']), sorted(retained)))
+    rules = [r[0] for r in probe.get('rules') or []]
+    results.append(('rules b1_rule_republish and b1_rule_http, connector b1_http, action b1_http_action',
+                    all(r in rules for r in src['rules']) and any(c[1] == 'b1_http' for c in probe.get('connectors') or [])
+                    and any(a[1] == 'b1_http_action' for a in probe.get('actions') or []),
+                    {k: probe.get(k) for k in ('rules', 'connectors', 'actions')}))
+    results.append(('the banned client', ['clientid', 'b1-banned-client'] in (probe.get('banned') or []),
+                    probe.get('banned')))
+    results.append(('Dashboard users admin and b1ops', all(u in (probe.get('dashboard_users') or [])
+                                                           for u in src['dashboard_users']), probe.get('dashboard_users')))
+    results.append(('HA\'s API key b1-import-key is there and works', ['b1-import-key', True] in (probe.get('api_keys') or [])
+                    and probe.get('api_key_works') == 200, {'keys': probe.get('api_keys'), 'works': probe.get('api_key_works')}))
+    mq = probe.get('mqtt') or {}
+    names = [u['user_id'] for u in src['mqtt_users']]
+    results.append(('MQTT: HA\'s three users log in with HA\'s passwords',
+                    all(mq.get(f'login_{u}') == 0 for u in names), {k: v for k, v in mq.items() if k.startswith('login_')}))
+    results.append(('MQTT: wrong password, anonymous login and the banned client id are refused',
+                    all(mq.get(k) not in (0, None) for k in ('wrong_password', 'anonymous', 'banned_client')),
+                    {k: mq.get(k) for k in ('wrong_password', 'anonymous', 'banned_client')}))
+    results.append(('MQTT: this device\'s bootstrap user woow still logs in', mq.get('bootstrap_woow') == 0,
+                    mq.get('bootstrap_woow')))
+    stored = sorted([t, h] for t, h in retained.items() if t in src['retained_messages'])
+    admin = mq.get('admin_retained') or {}
+    results.append(('MQTT: HA\'s superuser gets the 2 retained messages; each payload equals the stored one',
+                    admin.get('suback') in (0, 1) and admin.get('retained') == stored and len(stored) == 2,
+                    {'suback': admin.get('suback'), 'topics': [t for t, _h in admin.get('retained') or []]}))
+    gateway = mq.get('gateway_retained') or {}
+    sensor_secret = mq.get('sensor_secret') or {}
+    if mode == 'builtin':
+        results.append(('MQTT: b1-gateway (HA\'s rule, active here) subscribes b1/retained/# and gets the 2 retained '
+                        'messages', gateway.get('suback') in (0, 1) and gateway.get('retained') == stored,
+                        {'suback': gateway.get('suback'), 'topics': [t for t, _h in gateway.get('retained') or []]}))
+    else:
+        results.append(('MQTT: b1-gateway on b1/retained/# is refused (SUBACK 0x80): this device\'s file ACL governs, '
+                        'not HA\'s rows', gateway.get('suback') == 0x80 and not gateway.get('retained'),
+                        {'suback': gateway.get('suback')}))
+    results.append(('MQTT: b1-sensor on b1/secret/# is refused (SUBACK 0x80)', sensor_secret.get('suback') == 0x80,
+                    sensor_secret.get('suback')))
+    own = mq.get('own_topic') or {}
+    results.append(('MQTT: this device\'s file rule still lets b1-gateway use b1-gateway/# (subscribe, publish, '
+                    'receive)', own.get('suback') in (0, 1) and own.get('puback') is True and own.get('received') == 1,
+                    own))
+    delivery = probe.get('delivery') or {}
+    results.append(('rule delivery: HA\'s republish rule delivers exactly one message with the rendered payload',
+                    delivery.get('suback') in (0, 1) and delivery.get('puback') is True
+                    and delivery.get('received') == 1 and delivery.get('payload_equal') is True,
+                    {k: delivery.get(k) for k in ('publisher', 'listener', 'suback', 'puback', 'received',
+                                                  'payload_equal')}))
+    before, after = delivery.get('metrics_before') or {}, delivery.get('metrics_after') or {}
+    def moved(name, key, by=1):
+        a, b = (before.get(name) or {}).get(key), (after.get(name) or {}).get(key)
+        return isinstance(a, int) and isinstance(b, int) and b - a >= by
+    results.append(('rule delivery: the republish rule and HA\'s HTTP action rule matched (+1 each) and the HTTP '
+                    'action ran (its counters moved)', moved('republish', 'matched') and moved('http_rule', 'matched')
+                    and (moved('http_action', 'success') or moved('http_action', 'failed') or moved('http_action', 'matched')),
+                    {'before': before, 'after': after}))
+    results.append(('emqx ctl status: the node is started', any('is started' in line for line in probe.get('ctl_status') or []),
+                    probe.get('ctl_status')))
+    return results
+
+
+def check_imported(ev, label_text, probe, src, mode):
+    for name, ok, detail in evaluate_imported(probe, src, mode):
+        ev.check(f'{label_text}: {name}', ok, detail)
+
+
+def markers(ev, label_text):
+    proc = drv.run([drv.LP, 'exec', '-i', drv.DEVICE, drv.OWNER, 'python3', '-I', '-c', drv.MARKERS, 'emqx', 'read'],
+                   input=b'{}', timeout=600)
+    try:
+        found = json.loads(drv.out(proc).strip().splitlines()[-1])
+    except (ValueError, IndexError):
+        found = {'error': 'marker read failed'}
+    ev.save(f'markers-{slug(label_text)}-{int(time.time())}.json', found)
+    have = drv.marker_names(found)
+    want = drv.BASELINE_MARKERS['emqx']
+    ev.check(f'{label_text}: dev-d\'s own EMQX baseline markers (batch1_markers.py read)', want <= have, sorted(have))
+    return found
+
+
+def job_log_has(job_reply_log, words):
+    return any(words in (line.get('message') if isinstance(line, dict) else str(line)) for line in job_reply_log or [])
+
+
+def run_job(ev, command, request, label_text, *, timeout=3600):
+    request = dict(request, request_id=drv.request_id(label_text))
+    started = time.monotonic()
+    reply = drv.ok(command, request, ev=ev, timeout=300)
+    job = drv.wait_job(reply['job_id'], ev=ev, timeout=timeout)
+    took = time.monotonic() - started
+    status = drv.ok('job-status', {'job_id': reply['job_id']}, ev=ev)
+    return job, status.get('log') or [], took
+
+
+def restore_with(ev, backup_id, label_text, key=None):
+    request = {'backup_id': backup_id, 'apps': ['emqx'], 'confirm': True}
+    if key is not None:
+        request['key'] = key
+    job, log, took = run_job(ev, 'restore-start', request, label_text)
+    result = job.get('result') or {}
+    drv.created_backup(result.get('safety_backup_id'))
+    if job['state'] != 'succeeded':
+        error = job.get('error') or {}
+        drv.created_backup((error.get('details') or {}).get('safety_backup_id') if isinstance(error, dict) else None)
+    ev.time('restore', label_text, 'emqx', took, job)
+    return job, log, took
+
+
+def restart_emqx(ev, label_text):
+    started = time.monotonic()
+    proc = drv.owner('systemctl', '--user', 'restart', UNIT, timeout=600)
+    took = time.monotonic() - started
+    ev.check(f'{label_text}: systemctl --user restart {UNIT}', proc.returncode == 0, f'rc {proc.returncode} {took:.0f} s')
+    ev.time('restart', '-', 'emqx', took)
+
+
+def stat_owner(paths):
+    script = ('import json, os, sys\nhome = os.path.expanduser("~")\nout = {}\n'
+              'for p in json.loads(sys.stdin.read()):\n'
+              '    out[p] = os.path.lexists(os.path.join(home, p))\nprint(json.dumps(out))\n')
+    proc = drv.run([drv.LP, 'exec', '-i', drv.DEVICE, drv.OWNER, 'python3', '-I', '-c', script],
+                   input=json.dumps(list(paths)).encode(), timeout=120)
+    return json.loads(drv.out(proc).strip().splitlines()[-1])
+
+
+def arm_fail_once():
+    """A one-shot ExecStartPre failure of emqx.service: the next start of the unit fails once (and removes the marker)."""
+    exists = stat_owner([DROPDIR, DROPIN, MARKER])
+    if exists[DROPIN] or exists[MARKER]:
+        raise Failed('a fail-once drop-in or marker already exists')
+    text = ('[Service]\nExecStartPre=/bin/sh -c \'if test -f %h/' + MARKER + '; then rm -f %h/' + MARKER +
+            '; exit 1; fi\'\n')
+    script = ('import os, sys\nhome = os.path.expanduser("~")\n'
+              f'os.makedirs(os.path.join(home, {DROPDIR!r}), mode=0o700, exist_ok=True)\n'
+              f'with open(os.path.join(home, {DROPIN!r}), "x") as h:\n    h.write(sys.stdin.read())\n'
+              f'with open(os.path.join(home, {MARKER!r}), "x") as h:\n    h.write("fail once\\n")\n')
+    proc = drv.run([drv.LP, 'exec', '-i', drv.DEVICE, drv.OWNER, 'python3', '-I', '-c', script],
+                   input=text.encode(), timeout=120)
+    if proc.returncode != 0:
+        raise Failed('cannot write the fail-once drop-in')
+    if drv.owner('systemctl', '--user', 'daemon-reload', timeout=120).returncode != 0:
+        raise Failed('daemon-reload after the drop-in failed')
+    return exists[DROPDIR]
+
+
+def arm_tamper_once():
+    exists = stat_owner([DROPDIR, TAMPER_DROPIN, TAMPER_SCRIPT, TAMPER_MARKER])
+    if exists[TAMPER_DROPIN] or exists[TAMPER_SCRIPT] or exists[TAMPER_MARKER]:
+        raise Failed('a tamper drop-in, script or marker already exists')
+    request = {'script': TAMPER.decode(), 'dropin': '[Service]\nExecStartPre=/bin/sh %h/' + TAMPER_SCRIPT + '\n'}
+    script = ('import json, os, sys\nhome = os.path.expanduser("~")\nreq = json.loads(sys.stdin.read())\n'
+              f'os.makedirs(os.path.join(home, {DROPDIR!r}), mode=0o700, exist_ok=True)\n'
+              f'fd = os.open(os.path.join(home, {TAMPER_SCRIPT!r}), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o700)\n'
+              'os.write(fd, req["script"].encode()); os.close(fd)\n'
+              f'with open(os.path.join(home, {TAMPER_DROPIN!r}), "x") as h:\n    h.write(req["dropin"])\n'
+              f'with open(os.path.join(home, {TAMPER_MARKER!r}), "x") as h:\n    h.write("tamper once\\n")\n')
+    proc = drv.run([drv.LP, 'exec', '-i', drv.DEVICE, drv.OWNER, 'python3', '-I', '-c', script],
+                   input=json.dumps(request).encode(), timeout=120)
+    if proc.returncode != 0:
+        raise Failed('cannot write the tamper drop-in')
+    if drv.owner('systemctl', '--user', 'daemon-reload', timeout=120).returncode != 0:
+        raise Failed('daemon-reload after the tamper drop-in failed')
+    return exists[DROPDIR]
+
+
+def disarm_tamper(dir_existed):
+    script = ('import os, json\nhome = os.path.expanduser("~")\nout = {}\n'
+              f'for p in ({TAMPER_DROPIN!r}, {TAMPER_SCRIPT!r}, {TAMPER_MARKER!r}):\n'
+              '    try:\n        os.remove(os.path.join(home, p)); out[p] = "removed"\n'
+              '    except FileNotFoundError:\n        out[p] = "absent"\n'
+              + ('' if dir_existed else
+                 f'try:\n    os.rmdir(os.path.join(home, {DROPDIR!r})); out["dir"] = "removed"\n'
+                 'except OSError:\n    out["dir"] = "kept"\n') +
+              'print(json.dumps(out))\n')
+    proc = drv.run([drv.LP, 'exec', '-i', drv.DEVICE, drv.OWNER, 'python3', '-I', '-c', script], timeout=120)
+    drv.owner('systemctl', '--user', 'daemon-reload', timeout=120)
+    try:
+        return json.loads(drv.out(proc).strip().splitlines()[-1])
+    except (ValueError, IndexError):
+        return {'error': 'disarm output unreadable'}
+
+
+def disarm_fail_once(dir_existed):
+    script = ('import os, json\nhome = os.path.expanduser("~")\nout = {}\n'
+              f'for p in ({DROPIN!r}, {MARKER!r}):\n'
+              '    try:\n        os.remove(os.path.join(home, p)); out[p] = "removed"\n'
+              '    except FileNotFoundError:\n        out[p] = "absent"\n'
+              + ('' if dir_existed else
+                 f'try:\n    os.rmdir(os.path.join(home, {DROPDIR!r})); out["dir"] = "removed"\n'
+                 'except OSError:\n    out["dir"] = "kept"\n') +
+              'print(json.dumps(out))\n')
+    proc = drv.run([drv.LP, 'exec', '-i', drv.DEVICE, drv.OWNER, 'python3', '-I', '-c', script], timeout=120)
+    drv.owner('systemctl', '--user', 'daemon-reload', timeout=120)
+    try:
+        return json.loads(drv.out(proc).strip().splitlines()[-1])
+    except (ValueError, IndexError):
+        return {'error': 'disarm output unreadable'}
+
+
+def bind_store(ev):
+    listing = drv.ok('list', ev=ev)
+    present = {h.get('id') for h in listing.get('ha_backups') or []}
+    for tag in TAGS:
+        store_id = STORE_IDS[tag]
+        meta = json.loads(drv.out(drv.root('cat', f'/var/lib/woowtech-backup/ha-backups/{store_id}.json', check=True)))
+        local = drv.STATE.setdefault('fixture_sha256', {}).get(tag)
+        if local is None:
+            local = sha256_file(fixture_path(tag))
+            drv.STATE['fixture_sha256'][tag] = local
+        ok = (store_id in present and meta.get('sha256') == local == FIXTURE_SHA256[tag]
+              and store_id == 'ha-' + local[:20])
+        ev.check(f'store {tag}: the stored HA file is the real fixture (SHA-256 equal, id from it)', ok,
+                 {'store': store_id, 'listed': store_id in present, 'filename': meta.get('filename')})
+        if not ok:
+            raise Failed(f'HA store entry {tag} not bound to its fixture')
+        drv.STATE[f'ha_{tag}'] = store_id
+    drv.save_state()
+
+
+def load_kit(args):
+    if getattr(args, 'kit', None):
+        return args.kit
+    kit = OLD_KIT.read_text(encoding='utf-8')
+    lines = [line.strip() for line in kit.splitlines() if line.strip().startswith('AGE-SECRET-KEY-')]
+    if len(lines) != 1:
+        raise Failed('the 11-19 kit does not hold exactly one key line')
+    args.secrets.register('DEV_D_KIT_1119', lines[0])
+    args.kit = kit
+    return kit
+
+
+ENGINE_HASHES = r'''
+import hashlib, json, os
+def sha(path):
+    with open(path, "rb") as handle:
+        return hashlib.sha256(handle.read()).hexdigest()
+base = "/usr/local/lib/woowtech-cockpit-backup/woowbackup"
+lib = {}
+for root, dirs, files in os.walk(base):
+    dirs[:] = [d for d in dirs if d != "__pycache__"]
+    for name in files:
+        if name.endswith(".py"):
+            path = os.path.join(root, name)
+            lib[os.path.relpath(path, base)] = sha(path)
+print(json.dumps({"lib": lib, "helper": sha("/usr/local/libexec/woowtech-cockpit-backup")}))
+'''
+PROGRAMS['ENGINE_HASHES'] = ENGINE_HASHES
+
+
+# ---------------------------------------------------------------- steps
+
+def step_setup(ev, args):
+    proc = drv.root('systemctl', 'mask', TIMER, timeout=120)
+    ev.check('setup: the scheduled-backup timer is masked before the install (shared lab, no schedule wanted)',
+             proc.returncode == 0, drv.out(proc)[-200:])
+    proc = drv.run(['bash', str(HERE / 'deploy-src.sh'), 'd', '--src', str(REPO), '--no-demo-catalog'], timeout=1800)
+    ev.save('deploy.log', drv.out(proc)[-20000:] + proc.stderr.decode('utf-8', 'replace')[-5000:])
+    if not ev.check('setup: deploy-src.sh d --src <this tree> --no-demo-catalog', proc.returncode == 0,
+                    f'rc {proc.returncode}'):
+        raise Failed('deploy failed')
+    installed = drv.device_python(ENGINE_HASHES, {}, as_owner=False, timeout=300)
+    base = REPO / 'backup-engine' / 'woowbackup'
+    tree = {str(p.relative_to(base)): sha256_file(p) for p in base.rglob('*.py') if '__pycache__' not in p.parts}
+    lib = installed.get('lib') or {}
+    differ = sorted(k for k in set(tree) | set(lib) if tree.get(k) != lib.get(k))
+    ev.check('setup: the installed engine is this tree (every module and the helper SHA-256 equal)',
+             not differ and installed.get('helper') == sha256_file(REPO / 'backup-engine' / 'woowtech-cockpit-backup'),
+             {'modules': len(tree), 'differ': differ[:10]})
+    status = drv.ok('status', ev=ev)
+    version = (REPO / 'VERSION').read_text().strip()
+    ev.check('setup: the installed helper answers status with this tree\'s VERSION', status.get('version') == version,
+             {'installed': status.get('version'), 'tree': version})
+    catalog = {a['id'] for a in status.get('apps') or []}
+    if 'emqx' not in catalog:
+        kit = load_kit(args)
+        reply = drv.ok('inspect', {'backup_id': BASELINE, 'key': kit}, ev=ev, timeout=900)
+        apps = (reply.get('preflight') or {}).get('apps') or []
+        carried = next((a.get('settings') or {} for a in apps if a.get('id') == 'emqx'), {})
+        entry = carried.get('entry')
+        ev.check('setup: dev-d\'s EMQX baseline backup opens with the 11-19 emergency kit and carries its catalog entry',
+                 isinstance(entry, dict) and entry.get('id') == 'emqx' and carried.get('state') == 'missing',
+                 {'state': carried.get('state'), 'owner': (entry or {}).get('owner')})
+        if not isinstance(entry, dict):
+            raise Failed('no carried EMQX catalog entry')
+        ev.save('catalog-entry-emqx.json', entry)
+        preview = drv.ok('catalog-install', {'entry': entry}, ev=ev, timeout=300)
+        ev.save('catalog-preview.json', preview)
+        if not ev.check('setup: catalog-install preview of the carried entry is valid', preview.get('valid') is True,
+                        {k: preview.get(k) for k in ('valid', 'errors', 'warnings', 'conflicts')}):
+            raise Failed('catalog preview refused')
+        done = drv.ok('catalog-install', {'entry': entry, 'confirm': True,
+                                          'expected_sha256': preview.get('expected_sha256')}, ev=ev, timeout=300)
+        ev.save('catalog-install.json', done)
+    key = drv.ok('key-init', ev=ev)
+    ev.check('setup: a device key exists (key-init; the kit is never read)', bool((key.get('key') or {}).get('key_id')),
+             {'created': key.get('created'), 'key_id': (key.get('key') or {}).get('key_id')})
+    status = drv.ok('status', ev=ev)
+    state = next((a for a in status.get('apps') or [] if a['id'] == 'emqx'), {})
+    ev.check('setup: status: emqx running, no problems', state.get('state') == 'running' and not state.get('problems'),
+             {k: state.get(k) for k in ('state', 'problems')})
+    leftovers = stat_owner([DROPIN, MARKER, TAMPER_DROPIN, TAMPER_SCRIPT, TAMPER_MARKER])
+    ev.check('setup: no fail-once or tamper drop-in, script or marker of an earlier run', not any(leftovers.values()),
+             leftovers)
+
+
+def base_checks(ev, label_text, probe):
+    login = probe.get('login') or {}
+    ev.check(f'{label_text}: this device\'s admin logs in; HA\'s admin password does not', login.get('device_admin') == 200
+             and login.get('ha_admin') == 401, login)
+    ev.check(f'{label_text}: authorization is this device\'s own (file ACL only, no_match deny)',
+             probe.get('authz_sources') == [['file', True]] and probe.get('authz_settings') ==
+             {'no_match': 'deny', 'deny_action': 'ignore'} and probe.get('file_acl_readback_equal') is True,
+             {k: probe.get(k) for k in ('authz_sources', 'authz_settings', 'file_acl_readback_equal')})
+    names = {u[0] for u in probe.get('mqtt_users') or []}
+    ev.check(f'{label_text}: no HA data (no b1 user, rule, retained message or API key)',
+             not any(n.startswith('b1-') for n in names) and not probe.get('rules')
+             and not any(t.startswith('b1/') for t in probe.get('retained_api') or {})
+             and not any(k[0] == 'b1-import-key' for k in probe.get('api_keys') or []), sorted(names))
+
+
+def step_before(ev, args):
+    probe = run_probe(ev, args, 'before', 'base')
+    base_checks(ev, 'before', probe)
+    markers(ev, 'before')
+    current = digest(probe)
+    first = drv.STATE.setdefault('digest_first', drv.STATE.get('digest_before') or current)
+    ev.check('before: EMQX state digest equals the first one recorded before any import (every earlier rollback was '
+             'exact)', current == first, {'differs': diff_digest(current, first)})
+    drv.STATE['digest_before'] = current
+    if not drv.STATE.get('baseline_b0'):
+        job, _log, took = run_job(ev, 'backup-start', {'apps': ['emqx'], 'note': 'emqx-product baseline B0'}, 'baseline-b0')
+        result = job.get('result') or {}
+        b0 = result.get('backup_id')
+        ev.check('before: the test\'s own baseline backup B0 of EMQX (backup-start, encrypted with the device key)',
+                 job['state'] == 'succeeded' and bool(b0) and result.get('encrypted') is True,
+                 {'state': job['state'], 'error': job.get('error'), 'id': b0, 'took_s': round(took, 1)})
+        if job['state'] != 'succeeded' or not b0:
+            raise Failed('no baseline backup')
+        drv.STATE['baseline_b0'] = b0
+        drv.created_backup(b0)
+        after = digest(run_probe(ev, args, 'before after B0', 'base'))
+        ev.check('before: the backup changed nothing (digest equal after it)', after == current,
+                 {'differs': diff_digest(after, current)})
+    emit(f'backup id baseline {drv.STATE["baseline_b0"]}')
+    drv.save_state()
+
+
+def check_one(ev, args, tag, *, mode):
+    """ha-check-start (emqx) of one cold upload, as the page starts it. builtin target: ok, no blocker. file target
+    (dev-d's own): refused with exactly the owner's text (decision C). The app's result, or None when the job failed."""
+    key = args.secrets['HA_BACKUP_KEY']
+    job, took = drv.run_check(drv.STATE[f'ha_{tag}'], ['emqx'], ev=ev, key=key, tag=f'check-{tag}-{mode}-emqx')
+    ev.time('check', tag, 'emqx', took, job)
+    label_text = f'check {tag}/emqx ({mode} target)'
+    if not ev.check(f'{label_text}: job succeeded', job['state'] == 'succeeded', f'{took:.0f} s {job.get("error")}'):
+        return None
+    result = job['result']['ha_check']['apps'][0]
+    ev.save(f'check-{tag}-{mode}-emqx.json', result)
+    section = result.get('emqx') or {}
+    if mode == 'builtin':
+        ev.check(f'{label_text}: ok, no blockers', result.get('ok') is True and not result.get('blockers'),
+                 result.get('blockers'))
+        ev.check(f'{label_text}: this device\'s authorization reads file + built-in database',
+                 section.get('target_authorization') == ['file', 'built_in_database'], section.get('target_authorization'))
+    else:
+        ev.check(f'{label_text}: refused at check time with exactly the owner\'s text, the only blocker (decision C)',
+                 result.get('ok') is False and result.get('blockers') == [OWNER_ACL_TEXT], result.get('blockers'))
+        ev.check(f'{label_text}: this device\'s authorization reads file only', section.get('target_authorization') == ['file'],
+                 section.get('target_authorization'))
+    arch = 'aarch64' if machine_of(tag) == 'arm' else 'amd64'
+    ev.check(f'{label_text}: source {arch}, add-on 5.9.1, target 5.8.9', result.get('arch') == arch
+             and result.get('version') == '5.9.1' and result.get('target_version') == '5.8.9',
+             {k: result.get(k) for k in ('arch', 'version', 'target_version')})
+    drv.compare_check(ev, label_text, 'emqx', result, machine_of(tag), False, tag)
+    warnings = result.get('warnings') or []
+    ev.check(f'{label_text}: no ACL warning (decision C made it a blocker)', not any('不會生效' in w for w in warnings),
+             warnings)
+    ev.check(f'{label_text}: no hot-backup warning (the add-on was stopped)', not any('執行中製作' in w for w in warnings),
+             warnings)
+    return result
+
+
+def step_check(ev, args):
+    bind_store(ev)
+    for tag in TAGS:
+        check_one(ev, args, tag, mode='file')
+    leftovers = drv.labelled()
+    ev.check('check: no throwaway container, volume or network left', not any(leftovers.values()), leftovers)
+
+
+def refuse_file(ev, args, tag, label_text):
+    """Decision C on dev-d's own target (the ACL file only, as installed): the check refuses with the owner's text;
+    the conversion, started through the helper anyway (the page offers no 轉換 after a blocker), is refused with the
+    same text before any candidate; nothing is left and dev-d's EMQX is unchanged."""
+    if check_one(ev, args, tag, mode='file') is None:
+        raise Failed('the check job failed')
+    leftovers = drv.labelled()
+    ev.check(f'{label_text}: the check left no throwaway container, volume or network', not any(leftovers.values()),
+             leftovers)
+    before_ids = {b['id'] for b in drv.ok('list', ev=ev)['backups']}
+    job, took = drv.convert(drv.STATE[f'ha_{tag}'], ['emqx'], False, ev=ev, key=args.secrets['HA_BACKUP_KEY'],
+                            tag=f'convert-{tag}-file-emqx')
+    ev.time('convert', tag, 'emqx', took, job)
+    error = job.get('error') if isinstance(job.get('error'), dict) else {}
+    ev.check(f'{label_text}: the conversion is refused (incompatible) with the owner\'s text',
+             job['state'] == 'failed' and error.get('code') == 'incompatible'
+             and OWNER_ACL_TEXT in (error.get('message') or ''),
+             {'state': job['state'], 'code': error.get('code'), 'message': error.get('message'),
+              'took_s': round(took, 1)})
+    if job['state'] == 'succeeded':   # never expected: keep the backup for cleanup
+        drv.created_backup((job.get('result') or {}).get('backup_id'))
+    objects = drv.labelled()
+    after_ids = {b['id'] for b in drv.ok('list', ev=ev)['backups']}
+    ev.check(f'{label_text}: the refused conversion left nothing (no backup, no throwaway object)',
+             after_ids == before_ids and not any(objects.values()), {'new': sorted(after_ids - before_ids), **objects})
+    post = run_probe(ev, args, f'{label_text} after the refusal', 'base')
+    base_checks(ev, f'{label_text} after the refusal', post)
+    markers(ev, f'{label_text} after the refusal')
+    return ev.check(f'{label_text}: dev-d\'s EMQX is unchanged (state digest equals the one before)',
+                    digest(post) == drv.STATE['digest_before'],
+                    {'differs': diff_digest(digest(post), drv.STATE['digest_before'])})
+
+
+def step_import(ev, args, tag, mode):
+    if tag not in TAGS or mode not in MODES:
+        raise Failed(f'unknown import {tag}:{mode}')
+    if drv.STATE.get(f'ha_{tag}') != STORE_IDS[tag]:
+        bind_store(ev)
+    if 'digest_before' not in drv.STATE or not drv.STATE.get('baseline_b0'):
+        raise Failed('run setup and before first (the before digest or B0 is missing)')
+    label_text = f'import {tag}/emqx ({mode} target)'
+    src = drv.source(machine_of(tag))['emqx']
+    pre = run_probe(ev, args, f'{label_text} pre', 'base')
+    if digest(pre) != drv.STATE['digest_before']:
+        raise Failed('dev-d\'s EMQX is not at its baseline; refusing to import over unknown data')
+    if mode == 'file':
+        if not refuse_file(ev, args, tag, label_text):
+            manual_baseline(ev, args, label_text, False)   # never expected: bring the baseline back
+        return
+    changed = False     # dev-d's EMQX may differ from the baseline: the finally block restores B0
+    tested = False      # the whole chain ran: the B0 restore is the manual rollback under test
+    try:
+        if mode == 'builtin':
+            changed = True
+            added = run_probe(ev, args, f'{label_text} add builtin', 'base', authz_add=True)
+            if not ev.check(f'{label_text}: the built-in database source was added through the API (file + built-in)',
+                            added.get('authz_add') in (200, 204) and added.get('authz_sources') ==
+                            [['file', True], ['built_in_database', True]],
+                            {'add': added.get('authz_add'), 'sources': added.get('authz_sources')}):
+                raise Failed('the builtin source could not be added')
+        if check_one(ev, args, tag, mode=mode) is None:
+            raise Failed('the check job failed')
+        before_ids = {b['id'] for b in drv.ok('list', ev=ev)['backups']}
+        job, took = drv.convert(drv.STATE[f'ha_{tag}'], ['emqx'], False, ev=ev, key=args.secrets['HA_BACKUP_KEY'],
+                                tag=f'convert-{tag}-{mode}-emqx')
+        ev.time('convert', tag, 'emqx', took, job)
+        if not ev.check(f'{label_text}: conversion succeeded with a backup id', job['state'] == 'succeeded',
+                        f'{took:.0f} s {job.get("error")}'):
+            objects = drv.labelled()
+            after_ids = {b['id'] for b in drv.ok('list', ev=ev)['backups']}
+            ev.check(f'{label_text}: the refused conversion left nothing (no backup, no throwaway object)',
+                     after_ids == before_ids and not any(objects.values()),
+                     {'new': sorted(after_ids - before_ids), **objects})
+            return
+        result = job['result']
+        converted = result['backup_id']
+        drv.created_backup(converted)
+        emit(f'backup id converted {converted}')
+        imp = result.get('ha_import') or {}
+        ev.save(f'ha-import-{tag}-{mode}.json', imp)
+        ev.check(f'{label_text}: ha_import names emqx with its note and reminders', imp.get('apps') == ['emqx']
+                 and any('EMQX' in n for n in imp.get('notes') or [])
+                 and bool((imp.get('reminders_by_app') or {}).get('emqx')), {k: imp.get(k) for k in ('apps', 'notes')})
+        inspect = drv.ok('inspect', {'backup_id': converted}, ev=ev, timeout=900)
+        pre_flight = inspect.get('preflight') or {}
+        failed = [c for c in pre_flight.get('checks') or [] if c.get('status') == 'fail']
+        ev.check(f'{label_text}: inspect: preflight passes, settings same, in place',
+                 pre_flight.get('ok') and not failed and all((a.get('settings') or {}).get('state') == 'same'
+                                                             and a.get('mode') == 'inplace'
+                                                             for a in pre_flight.get('apps') or []),
+                 failed[:3] or [(a.get('id'), a.get('mode'), (a.get('settings') or {}).get('state'))
+                                for a in pre_flight.get('apps') or []])
+        changed = True
+        rjob, rlog, rtook = restore_with(ev, converted, f'restore-{tag}-{mode}')
+        rresult = rjob.get('result') or {}
+        safety = rresult.get('safety_backup_id')
+        if safety:
+            emit(f'backup id safety {safety}')
+        if not ev.check(f'{label_text}: restore of the converted backup succeeded with a safety backup, not rolled back',
+                        rjob['state'] == 'succeeded' and bool(safety) and rresult.get('rolled_back') is False,
+                        {'state': rjob['state'], 'error': rjob.get('error'), 'took_s': round(rtook, 1)}):
+            return
+        ev.check(f'{label_text}: the restore\'s own readback check passed (job log)', job_log_has(rlog, READBACK_LOG),
+                 [str(line)[-300:] for line in rlog if 'EMQX' in str(line)][-6:])
+        imported = run_probe(ev, args, f'{label_text} after restore', mode, tag)
+        check_imported(ev, f'{label_text} after restore', imported, src, mode)
+        restart_emqx(ev, label_text)
+        restarted = run_probe(ev, args, f'{label_text} after restart', mode, tag)
+        check_imported(ev, f'{label_text} after restart', restarted, src, mode)
+        ev.check(f'{label_text} after restart: the same state as right after the restore',
+                 stable(restarted) == stable(imported), {'differs': diff_digest(stable(restarted), stable(imported))})
+        # AUTOMATIC rollback: the same converted backup again, a one-shot start failure armed right before it.
+        dir_existed = arm_fail_once()
+        try:
+            fjob, _flog, ftook = restore_with(ev, converted, f'autorollback-{tag}-{mode}')
+            error = fjob.get('error') or {}
+            fresult = fjob.get('result') or {}
+            left = stat_owner([MARKER])
+            ev.check(f'{label_text}: a restore whose EMQX fails to start rolls back by itself (job rolled-back, '
+                     'result rolled_back, the one-shot failure consumed)',
+                     fjob['state'] == 'rolled-back' and fresult.get('rolled_back') is True and not left[MARKER],
+                     {'state': fjob['state'], 'code': error.get('code') if isinstance(error, dict) else None,
+                      'rolled_back': fresult.get('rolled_back'), 'marker_left': left[MARKER],
+                      'took_s': round(ftook, 1)})
+        finally:
+            ev.check(f'{label_text}: the fail-once drop-in is removed again', True, disarm_fail_once(dir_existed))
+        rolled = run_probe(ev, args, f'{label_text} after automatic rollback', mode, tag)
+        check_imported(ev, f'{label_text} after automatic rollback', rolled, src, mode)
+        ev.check(f'{label_text} after automatic rollback: the state equals the one before that restore',
+                 stable(rolled) == stable(restarted), {'differs': diff_digest(stable(rolled), stable(restarted))})
+        # THE READBACK: the restored data changed right before the start (one HOCON line); the restore must name the
+        # differing root and roll back by itself.
+        dir_existed = arm_tamper_once()
+        try:
+            tjob, tlog, ttook = restore_with(ev, converted, f'readback-{tag}-{mode}')
+            error = tjob.get('error') or {}
+            tresult = tjob.get('result') or {}
+            left = stat_owner([TAMPER_MARKER])
+            message = error.get('message') if isinstance(error, dict) else ''
+            ev.check(f'{label_text}: a restored broker that differs from what the conversion verified fails the '
+                     'readback, named (設定（log）), and the restore rolls back by itself',
+                     tjob['state'] == 'rolled-back' and tresult.get('rolled_back') is True and not left[TAMPER_MARKER]
+                     and '設定（log）' in (message or '') and not job_log_has(tlog, READBACK_LOG),
+                     {'state': tjob['state'], 'code': error.get('code') if isinstance(error, dict) else None,
+                      'message': message, 'rolled_back': tresult.get('rolled_back'), 'took_s': round(ttook, 1)})
+        finally:
+            ev.check(f'{label_text}: the tamper drop-in is removed again', True, disarm_tamper(dir_existed))
+        tampered = run_probe(ev, args, f'{label_text} after the readback rollback', mode, tag)
+        check_imported(ev, f'{label_text} after the readback rollback', tampered, src, mode)
+        ev.check(f'{label_text} after the readback rollback: the state equals the one before that restore',
+                 stable(tampered) == stable(rolled), {'differs': diff_digest(stable(tampered), stable(rolled))})
+        tested = True
+    finally:
+        if changed:
+            manual_baseline(ev, args, label_text, tested)
+
+
+def stable(probe):
+    """The imported state without the counters a probe itself moves (rule metrics, retained $SYS messages)."""
+    found = digest(probe)
+    found.pop('native_counts', None)   # emqx_retainer_message moves with $SYS retained messages
+    return found
+
+
+def manual_baseline(ev, args, label_text, tested):
+    """MANUAL rollback to the baseline: the test's own B0 through restore-start (the page's 還原)."""
+    bjob, _blog, btook = restore_with(ev, drv.STATE['baseline_b0'], f'baseline-{slug(label_text)}')
+    ev.check(f'{label_text}: manual rollback to the baseline (restore of B0) succeeded',
+             bjob['state'] == 'succeeded', {'state': bjob['state'], 'error': bjob.get('error'), 'took_s': round(btook, 1),
+                                            'after_full_chain': tested})
+    base = run_probe(ev, args, f'{label_text} after the baseline restore', 'base')
+    base_checks(ev, f'{label_text} after the baseline restore', base)
+    markers(ev, f'{label_text} after the baseline restore')
+    ev.check(f'{label_text} after the baseline restore: EMQX state digest equals the one before any import',
+             digest(base) == drv.STATE['digest_before'], {'differs': diff_digest(digest(base), drv.STATE['digest_before'])})
+
+
+def delete_created(ev, keep=()):
+    present = {b['id'] for b in drv.ok('list', ev=ev)['backups']}
+    created = [b for b in drv.STATE.get('created_backups') or [] if b not in keep and b != BASELINE]
+    deleted, refused = [], []
+    for backup_id in created:
+        if backup_id in present:
+            rc, _reply = drv.helper('delete', {'backup_id': backup_id})
+            (deleted if rc == 0 else refused).append(backup_id)
+        else:
+            deleted.append(backup_id)
+    drv.STATE['created_backups'] = [b for b in drv.STATE.get('created_backups') or [] if b not in deleted]
+    drv.save_state()
+    left = {b['id'] for b in drv.ok('list', ev=ev)['backups']}
+    return deleted, refused, left
+
+
+def step_cleanup(ev, args):
+    objects = drv.labelled()
+    ev.check('cleanup: no throwaway container, volume or network of a job left', not any(objects.values()), objects)
+    listing = drv.device_python(drv.RUN_LIST, as_owner=False)
+    staging = listing.get(drv.STAGING)
+    keys = [n for n in listing.get('/run/woowtech-backup') or [] if isinstance(n, str) and n.startswith('key-')]
+    ev.check('cleanup: no staging folder and no key file left', staging in ([], 'missing') and not keys, listing)
+    b0 = drv.STATE.get('baseline_b0')
+    deleted, refused, left = delete_created(ev, keep=(b0,) if b0 else ())
+    ev.check('cleanup: the test\'s converted and safety backups are deleted (B0 and dev-d\'s own backups stay)',
+             not refused and BASELINE in left and (not b0 or b0 in left) and not (left & set(deleted)),
+             {'deleted': len(deleted), 'refused': refused})
+    leftovers = stat_owner([DROPIN, MARKER, TAMPER_DROPIN, TAMPER_SCRIPT, TAMPER_MARKER])
+    ev.check('cleanup: no fail-once or tamper drop-in, script or marker left', not any(leftovers.values()), leftovers)
+    names = drv.out(drv.owner('podman', 'ps', '--format', '{{.Names}}')).split()
+    ev.check('cleanup: woow-emqx and woow-emqx-entrance run, no job container exists',
+             {'woow-emqx', 'woow-emqx-entrance'} <= set(names) and not [n for n in names if n.startswith('woowbk-j')],
+             names)
+
+
+def step_cleanup_baseline(ev, args):
+    b0 = drv.STATE.get('baseline_b0')
+    if b0:
+        rc, _reply = drv.helper('delete', {'backup_id': b0})
+        ev.check('cleanup-baseline: B0 deleted', rc == 0, b0)
+        drv.STATE['created_backups'] = [b for b in drv.STATE.get('created_backups') or [] if b != b0]
+        drv.STATE['baseline_b0'] = None
+        drv.save_state()
+
+
+def step_leaks(ev, args):
+    load_kit(args)
+    since = drv.STATE.get('run_started') or int(time.time()) - 6 * 3600
+    request = {'secrets': {n: args.secrets[n] for n in LANE_SECRETS if args.secrets.values.get(n)},
+               'podman_secrets': EMQX_SECRETS, 'uid': OWNER_UID, 'since': int(since)}
+    if len(request['secrets']) != len(LANE_SECRETS):
+        raise Failed('a lane secret is missing from the readers')
+    issued = {k: v for k, v in args.secrets.values.items() if k.startswith('ISSUED_TOKEN_') and v}
+    request['secrets'].update(issued)
+    ev.check(f'leaks: every Dashboard token issued to this run\'s probes ({len(issued)}) is in the scan', True,
+             {'issued_values': len(issued)})
+    report = drv.device_python(drv.LEAK_SCAN, request, as_owner=False, timeout=900)
+    host = drv.scan_host_evidence(ev.dir, args.secrets)
+    ev.save('leaks.json', {'device': report, 'host': host})
+    ev.check('leaks: no test secret, HA key, kit, dev-d EMQX secret or issued token in engine records, logs, journal or '
+             'evidence', isinstance(report, dict) and report.get('hits') == 0 and report.get('scanned', 0) > 0
+             and host.get('hits') == 0, {'device': {k: report.get(k) for k in ('scanned', 'names', 'hits')},
+                                         'host': host})
+
+
+HOT_TAGS = ('arm-enc', 'x86-enc')
+HOT_STORE_IDS = {'arm-enc': 'ha-6d0647f0acb2e0d95043', 'x86-enc': 'ha-f82422e327f151ec819d'}
+
+
+def step_check_hot(ev, args):
+    """The encrypted backups made while EMQX ran: the check names the hot backup (warning, or the stop-the-add-on
+    advice as its blocker when HA's database did not load) -- the hint stays."""
+    key = args.secrets['HA_BACKUP_KEY']
+    for tag in HOT_TAGS:
+        store_id = HOT_STORE_IDS[tag]
+        meta = json.loads(drv.out(drv.root('cat', f'/var/lib/woowtech-backup/ha-backups/{store_id}.json', check=True)))
+        local = drv.STATE.setdefault('fixture_sha256', {}).get(tag) or sha256_file(fixture_path(tag))
+        drv.STATE['fixture_sha256'][tag] = local
+        if not ev.check(f'store {tag}: the stored HA file is the real fixture (SHA-256 equal, id from it)',
+                        meta.get('sha256') == local and store_id == 'ha-' + local[:20], {'store': store_id}):
+            continue
+        job, took = drv.run_check(store_id, ['emqx'], ev=ev, key=key, tag=f'check-{tag}-emqx')
+        ev.time('check', tag, 'emqx', took, job)
+        label_text = f'check {tag}/emqx (hot backup)'
+        if not ev.check(f'{label_text}: job succeeded', job['state'] == 'succeeded', f'{took:.0f} s {job.get("error")}'):
+            continue
+        result = job['result']['ha_check']['apps'][0]
+        ev.save(f'check-{tag}-emqx.json', result)
+        warnings, blockers = result.get('warnings') or [], result.get('blockers') or []
+        named = ((result.get('ok') is True and any('執行中製作' in w for w in warnings)
+                  and (result.get('emqx') or {}).get('hot_backup') is True)
+                 or (result.get('ok') is False and any('停止 EMQX 附加元件' in b for b in blockers)))
+        ev.check(f'{label_text}: the hot backup is named (warning, or the stop-the-add-on advice as the blocker)',
+                 named, {'ok': result.get('ok'), 'blockers': blockers, 'warnings': warnings})
+
+
+STEPS = {'setup': step_setup, 'before': step_before, 'check': step_check, 'check-hot': step_check_hot,
+         'cleanup': step_cleanup,
+         'cleanup-baseline': step_cleanup_baseline, 'leaks': step_leaks}
+
+
+def parse_step(name):
+    if name in STEPS:
+        return name, None, None
+    parts = name.split(':')
+    if len(parts) == 3 and parts[0] == 'import' and parts[1] in TAGS and parts[2] in MODES:
+        return 'import', parts[1], parts[2]
+    return None, None, None
+
+
+def self_check():
+    for name, program in PROGRAMS.items():
+        compile(program, name, 'exec')
+    for tag in TAGS:
+        assert drv.UPLOADS[tag][3] == ('emqx',) and drv.UPLOADS[tag][2] is True and drv.UPLOADS[tag][4] is False
+        assert STORE_IDS[tag] == 'ha-' + FIXTURE_SHA256[tag][:20]
+    print(f'offline self-check passed: {len(PROGRAMS)} embedded programs compiled, {len(TAGS)} cold uploads known')
+
+
+def main(argv):
+    if argv == ['--self-check']:
+        self_check()
+        return 0
+    steps = argv
+    if not steps or any(parse_step(s)[0] is None for s in steps):
+        print('usage: emqx_product_real_ha.py <setup|before|check|check-hot|import:TAG:MODE|cleanup|cleanup-baseline|leaks> ...',
+              file=sys.stderr)
+        return 2
+    if not clean_tree():
+        print('commit tested code first', file=sys.stderr)
+        return 2
+    emit(f'source commit {git("rev-parse", "HEAD")}')
+    secrets = drv.Secrets([drv.SECRET_DIR / 'b1-creds.env', drv.SECRET_DIR / 'ha-import-creds.env'],
+                          drv.SECRET_DIR / 'dev-d-markers.json')
+    args = type('Args', (), {})()
+    args.secrets = secrets
+    args.kit = None
+    ev = Evidence(secrets)
+    drv.load_state()
+    drv.STATE.setdefault('run_started', int(time.time()) - 60)
+    for tag in TAGS:   # hash the fixtures before taking the lock (host only)
+        if tag not in drv.STATE.setdefault('fixture_sha256', {}):
+            drv.STATE['fixture_sha256'][tag] = sha256_file(fixture_path(tag))
+    drv.save_state()
+    verify_isolation()
+    fd = acquire_lock()
+    held = time.monotonic()
+    failed_steps = []
+    try:
+        verify_isolation()
+        for name in steps:
+            if time.monotonic() - held > HOLD_BUDGET:
+                emit(f'STEP {name}: SKIP hold_budget=1')
+                failed_steps.append(name)
+                continue
+            try:
+                headroom()
+            except Failed as error:
+                ev.check(f'{name}: headroom before the step', False, str(error))
+                emit(f'STEP {name}: SKIP headroom=1')
+                failed_steps.append(name)
+                break
+            ev.log(f'== {name}')
+            started = time.monotonic()
+            kind, tag, mode = parse_step(name)
+            try:
+                if kind == 'import':
+                    step_import(ev, args, tag, mode)
+                else:
+                    STEPS[kind](ev, args)
+            except Failed as error:
+                ev.check(f'{name}: step ran to the end', False, str(error))
+            except Exception as error:  # noqa: BLE001 - recorded (type only), the lock is still released below
+                ev.check(f'{name}: step ran to the end', False, f'{type(error).__name__}')
+            finally:
+                drv.save_state()
+            took = time.monotonic() - started
+            bad = [r for r in ev.results if not r['ok'] and r.get('step') is None]
+            for r in ev.results:
+                r.setdefault('step', name)
+            emit(f'STEP {name}: {"FAIL" if bad else "PASS"} seconds={took:.0f}')
+            if bad:
+                failed_steps.append(name)
+                if name in ('setup', 'before', 'check'):
+                    break
+    finally:
+        try:
+            verify_isolation()
+        finally:
+            emit(f'lock held for {int(time.monotonic() - held)} s')
+            os.close(fd)
+    ok = ev.finish()
+    passed = sum(1 for r in ev.results if r['ok'])
+    emit(f'RESULT {passed}/{len(ev.results)} passed')
+    return 0 if ok and not failed_steps else 1
+
+
+if __name__ == '__main__':
+    sys.exit(main(sys.argv[1:]))
