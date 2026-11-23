@@ -334,7 +334,7 @@ def digests(db):
     for schema, table in tables:
         quoted = '.'.join('"' + part.replace('"', '""') + '"' for part in (schema, table))
         result[schema + '.' + table] = db.query_json(
-            "SET TIME ZONE 'UTC'; SELECT json_build_array(count(*), coalesce(md5(string_agg(h, '' ORDER BY h)), "
+            "SET TIME ZONE 'UTC'; SELECT json_build_array(count(*), coalesce(md5(string_agg(h, '' ORDER BY h COLLATE \"C\")), "
             "'')) FROM (SELECT md5(to_jsonb(t)::text) AS h FROM " + quoted + " t) s", 'litellm')
     result['sequence-state'] = hashlib.sha256(json.dumps(db.query_json(SEQUENCES, 'litellm')).encode()).hexdigest()
     return result

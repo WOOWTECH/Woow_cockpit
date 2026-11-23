@@ -140,16 +140,22 @@ def db_counts(db):
     return counts
 
 
-def ha_checks(request, master_key):
+def ha_checks(request, master_key, db_models):
     """The restored HA data as served by the running app: the HA-issued virtual key, its model list, the stored
-    models, users and teams. Returns counts only."""
+    models, users and teams. Returns counts only. The router loads stored models in the background, so the model
+    list is polled (90 s) until it holds at least the stored models."""
     if status_of('/key/info', request['test_vkey']) != 200:
         raise RuntimeError('HA virtual key not accepted')
     info = api_as('/key/info', request['test_vkey'])
     if not isinstance(info, dict) or (info.get('info') or {}).get('key_alias') != request['expected_alias']:
         raise RuntimeError('HA virtual key identity')
+    deadline = time.monotonic() + 90
+    while True:
+        listed = api('/model/info', master_key)
+        if len(listed.get('data') or []) >= db_models or time.monotonic() > deadline:
+            break
+        time.sleep(3)
     models = api_as('/v1/models', request['test_vkey'])
-    listed = api('/model/info', master_key)
     counts = {'vkey_models': len(models.get('data') or []), 'api_models': len(listed.get('data') or [])}
     if counts['vkey_models'] < 1:
         raise RuntimeError('HA virtual key sees no model')
@@ -323,10 +329,11 @@ os.close(fd)
         return
     if action in ('ha-verify', 'recheck'):
         master = os.environ['LITELLM_MASTER_KEY']
-        counts = ha_checks(request, master)
         issued = []
         with psycopg.connect(os.environ['DATABASE_URL'], connect_timeout=10) as db:
-            counts.update(db_counts(db))
+            stored = db_counts(db)
+            counts = ha_checks(request, master, stored['db_models'])
+            counts.update(stored)
             if action == 'ha-verify':
                 counts.update(decrypt_counts(db, os.environ['LITELLM_SALT_KEY'], request['wrong_salt']))
                 salt = db.execute("SELECT value FROM woow_platform.settings WHERE key='litellm_salt_key'").fetchall()
