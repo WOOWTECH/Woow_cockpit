@@ -7,7 +7,7 @@ page text, docs and tests — and the shared code that path relies on (`ha_odoo.
 `tempctr`, `habackup`, `hacommon`, `nested`). The product lane's later commits are covered in "Final diff".
 
 Fixes: R-COCKPIT `review/omnigent-product-secreview-20261123` (parent `3707724`), to be cherry-picked onto the
-product branch: `f13c3bf` (SR-1), `aa5f48e` (SR-3, SR-4), `3b792ee` (SR-2 documentation), `3e7837d` (SR-2b).
+product branch: `f13c3bf` (SR-1), `aa5f48e` (SR-3, SR-4), `3b792ee` (SR-2 documentation), `3e7837d` (SR-2b; corrected by the product lane's `1b6228e`, see SR-2b).
 `64081f2` and `4d1a59b` only add harness variants.
 
 ## How it was attacked (real code, real PostgreSQL, real HA data)
@@ -45,10 +45,10 @@ product branch: `f13c3bf` (SR-1), `aa5f48e` (SR-3, SR-4), `3b792ee` (SR-2 docume
 |---|---|---|---|
 | SR-1 | Medium | The facts the check and the conversion SHOW and VALIDATE (accounts and conflicts, active schedules, public shares, stored external credentials, artifact keys, counts) are answers of HA's own cluster, which the crafted backup controls. Proven (v2): a `pg_`-named schema (catalog rename; skipped by the check's schema list and by pg_dump) of same-row-count views hidden as `pg_trgm` extension members, plus the superuser's per-role `search_path` (per-role settings beat the server's command line). Real check: 0 blockers, 0 warnings, `scheduled_tasks_active 0`; real convert (real move): OK, no active-schedule reminder; the restored database had an ACTIVE scheduled task that would run on this device's runner. The same views hide account conflicts (HA's `admin` silently wins), public shares, encrypted connections and bad/missing artifact keys. | **Fixed `f13c3bf`**: `require_answers()` re-reads `DETAIL_SQL`, `KEYS_SQL` and every table count on the new cluster (HA's data on this device's schema and server, before anything of this device is added) and stops `incompatible` before anything is exported; lists compared as sets, values never repeated in the message. Unit test (5 subtests; all fail with the call removed). Real re-run (attack-08 v2): check still lies, convert refused 「…不一致的項目：scheduled_tasks_active。」. |
 | SR-2 | Medium (pre-existing, shared `ha_odoo.start_ha_cluster`; containment held) | A crafted backup runs shell commands INSIDE the throwaway HA cluster during the check: the per-role `search_path` shadows a builtin the product's analysis calls (`pg_encoding_to_char`) with a superuser plpgsql function → `COPY … TO PROGRAM`. HA's per-database `session_preload_libraries` overrode `HA_SERVER_SETTINGS` (`SHOW` = `auto_explain`). Read from inside: uid 70, only `lo`, no route, CapEff 0, NoNewPrivs 1, read-only root, `/tmp` writable and NOT noexec, no secrets, pids.max 1024, memory limit, egress blocked. PgSink's file replacement held (archive off, listen '', ssl off, no shared_preload_libraries, recovery.signal dropped). | Containment is the boundary and held; not changed (shared with Odoo/n8n). Docstrings corrected (`3b792ee`). Every output of that container is now treated as hostile: answers (SR-1), SEQUENCE SET SQL (SR-3), pg_dump's process (SR-2b). Hardening options under "Residual risk". |
-| SR-2b | Medium (real on 0.21.0; bounded by `woowbk_restore`) | HA's `pg_dump` ran as the HA server's own OS user (postgres, uid 70) in the same container as that code. Proven (v3b, writing nothing): a process the HA cluster's code left behind (`setsid`) found pg_dump as uid 70 and could OPEN ITS STDOUT FOR WRITING through `/proc/<pid>/fd/1` (a same-uid READ-mode check that Yama `ptrace_scope` 1 does not restrict) and SIGNAL it, i.e. replace the archive the conversion restores; any TABLE DATA entry's COPY statement is SQL pg_restore runs (bounded like v4b: the restricted role). | **Fixed `3e7837d`**: pg_dump runs as `65534:65534` (owns nothing in the container; connects over the 3777 socket directory as database user postgres, trust). Unit test (fails if reverted). Real re-run (attack-09 v3b): `pgdump_uid=65534`, stdout open denied, signal denied; conversion OK, restored = live. A server that answers pg_dump falsely can still only produce row data and bare setval statements (SR-3). |
+| SR-2b | Medium (real on 0.21.0; bounded by `woowbk_restore`) | HA's `pg_dump` ran as the HA server's own OS user (postgres, uid 70) in the same container as that code. Proven (v3b, writing nothing): a process the HA cluster's code left behind (`setsid`) found pg_dump as uid 70 and could OPEN ITS STDOUT FOR WRITING through `/proc/<pid>/fd/1` (a same-uid READ-mode check that Yama `ptrace_scope` 1 does not restrict) and SIGNAL it, i.e. replace the archive the conversion restores; any TABLE DATA entry's COPY statement is SQL pg_restore runs (bounded like v4b: the restricted role). | **Fixed `3e7837d`; corrected on the product branch by `1b6228e`**: pg_dump runs as an OS user that is not the HA server's and owns nothing writable (connects over the socket directory as database user postgres, trust). `3e7837d` used `65534:65534`; the real dev-d flow then FAILED (`podman exec 65534:65534 … 執行失敗（結束碼 255）`: dev-d's owner has 55000 subordinate ids; dev-d attempt 1, kept). The product lane's `1b6228e` uses `1:1` (rootless containers map 1..N without gaps, so it is mapped wherever the image's postgres uid 70/999 is) — reviewed, kept. My alternative `f95d34e` (first of 65534/32767/9999/999 the owner's maps hold) is NOT taken; dev-d attempt 2 ran it (uid 32767). Lab re-run (attack-09 v3b, 65534): stdout open denied, signal denied; conversion OK, restored = live. A server that answers pg_dump falsely can still only produce row data and bare setval statements (SR-3). |
 | SR-3 | Low on 0.21.0 (latent; Medium for any schema with a sequence) | pg_dump writes a sequence's `last_value` AS THE SERVER SENT IT into the SEQUENCE SET statement, unquoted (PostgreSQL `src/bin/pg_dump/pg_dump.c` `dumpSequenceData`). Proven (pg_dump 16.16): a table made a sequence in the catalog (relkind `S` + a `pg_sequence` row) with a TEXT `last_value` gave an archive whose SEQUENCE SET entry is a whole `DO` block (`pg_restore -f -` shows it). 0.21.0's schema has no sequence, so data_only_toc's strict names refuse it (v4). With a trusted sequence of the same name (v4b, simulating a future schema) the real check passed, the real convert SUCCEEDED and the injected SQL ran in the new cluster as `woowbk_restore`: CREATE TABLE / CREATE FUNCTION / SUPERUSER / `pg_read_file` / `COPY TO PROGRAM` denied; TEMP table, its own role setting, `UPDATE scheduled_tasks`, `SELECT users` allowed; the exported cluster kept two extra (empty) temp namespaces. | **Fixed `aa5f48e`**: the selected SEQUENCE SET entries are printed by pg_restore itself (`-f - -L`, the text `-d` runs) before anything is restored and must be exactly one `SELECT pg_catalog.setval('public.<trusted>', <integer>, true|false);` each after pg_restore's own header lines (taken from real 16.16 output). Unit test (5 subtests; all fail without the check). Real re-run (attack-06 v4b): refused before any data load. |
 | SR-4 | Low | HA-controlled names reached blocker messages raw: v4's check blocker carried a LINE BREAK from a crafted table name (`hacommon.names` cut at 60 characters but kept control characters) → job-log/page line forging (the page renders text nodes only: no HTML injection). | **Fixed `aa5f48e`**: `hacommon.names` shows control characters (C0, DEL, C1, U+2028/2029) as `?`; alembic values go through it. Unit test (fails without the fix). |
-| SR-5 | Info (UX) | HA data that violates one of this device's CHECK constraints (HA's own constraint dropped; constraints are not compared) stops the data load with the generic `podman exec … 執行失敗（結束碼 1）`. No leak: the canary row was in the kept stderr (PostgreSQL "Failing row contains") but in no message or log line (v5). | Not changed (fails closed, safe). |
+| SR-5 | Info (UX) | HA data that violates one of this device's CHECK constraints (HA's own constraint dropped; constraints are not compared) stops the data load with the generic `podman exec … 執行失敗（結束碼 1）`. No leak: the canary row was in the kept stderr (PostgreSQL "Failing row contains") but in no message or log line (v5). | Fixed by the product lane `ae29256`: such failures now end `incompatible` with a plain message (DATA_REFUSED), chosen from pg_restore's kept stderr, which is still never shown; reviewed (the classification only changes the message of a failure that already stops the job). |
 
 ## What was tried (all real, lab store; evidence `attack-*.json`)
 
@@ -122,14 +122,33 @@ with its fix removed). New tests: `TrustedSchemaTests.test_answers_of_has_cluste
 
 ## Real product-flow re-run of the fixed engine (dev-d)
 
-PENDING (see the lane hand-off): `omnigent_full_flow.py --run --arch x86 --form plain` from this branch @ `4d1a59b`
-(engine = the product branch's), queued for dev-d's lock since 21:12 behind litellm_full_flow and emqx-product.
+Driver: the product lane's `tests/e2e/lab/omnigent_full_flow.py --run --arch x86 --form plain` (wrapped by
+`services_a_capture.py`) from this branch, i.e. the real b1 x86 backup through dev-d's INSTALLED Omnigent and the
+page's helper commands, the engine of this tree deployed.
+
+- Attempt 1 (`4d1a59b`, lock 515 s): exit 1, 27/29 — `ha-convert-start` failed at the HA export
+  (`podman exec 65534:65534 …-hapg` exit 255: uid 65534 is not in dev-d's nested user namespace). Cleanup (catalog as
+  found, no job object, staging or key file), leak scan and isolation before/after: PASS. Evidence
+  `tests/e2e/lab/evidence/omnigent-product-20261123/omnigent-x86-plain-secreview-fixes-attempt1.json`. This is the
+  finding that made the SR-2b correction (`1b6228e` on the product branch; my alternative `f95d34e`): a unit- or
+  lab-only fix would have shipped broken.
+- Attempt 2 (`e463fc5`: product code = `8b78ada` + my `f95d34e`, dump uid 32767 on dev-d): exit 0, **111/111 PASS**, lock 869 s (22:13-22:28), elapsed
+  1184 s. The real b1 x86 plain backup through dev-d's installed Omnigent with every fix of this review in the engine
+  (SR-1 `require_answers`, SR-3 SEQUENCE SET check, SR-4 names, SR-2b pg_dump as uid 32767 there): check, convert,
+  restore with a safety backup, HA's and this device's logins, data, counts, runner online, cookie key, pi volume
+  unchanged, live schema = dev-d's; restart; injected failure → rolled back; rollback to the safety backup → dev-d's own
+  state; cleanup; leak scan of every registered value; dev-d isolation before and after. Evidence
+  `tests/e2e/lab/evidence/omnigent-product-20261123/omnigent-x86-plain-secreview-fixes-attempt2.json`. So the
+  answers check does not refuse an honest real backup, and a mapped non-postgres dump uid works in the real flow.
+  (The product branch's own uid-1 variant is proven by the product lane's runs from `1b6228e`.)
 
 ## Final diff
 
-Product branch `feat/ha-import-omnigent-product-20261123` @ `8b78ada` (product lane iteration 2, 21:33): it
-cherry-picked these fixes (`95b2338` `65d8a51` `9e5156e` `40844ae` `f3b7d2c` `1203cef` = `f13c3bf` `aa5f48e` `64081f2`
-`3b792ee` `3e7837d` `4d1a59b`), added `cdbc430` (docs/backup.md: the two new refusals, accurate) and `8b78ada` (its
-mutation check now also removes M18 SR-1, M19 SR-3, M20 SR-2b, M21 SR-4). `git diff 4d1a59b 8b78ada -- backup-engine
-backup` is EMPTY: the product code on the branch is exactly the code reviewed and attacked here. The product lane
-added no product code after `3707724` other than these fixes.
+Product branch `feat/ha-import-omnigent-product-20261123` @ `7a319f1` (product lane iteration 2). It cherry-picked
+these fixes (`95b2338` `65d8a51` `9e5156e` `40844ae` `f3b7d2c` `1203cef` = `f13c3bf` `aa5f48e` `64081f2` `3b792ee`
+`3e7837d` `4d1a59b`) and added: `cdbc430` and `f0a13e1` (docs/backup.md and CONTRACT: the new refusals and
+protections; accurate), `8b78ada` (mutation check M18 SR-1, M19 SR-3, M20 SR-2b, M21 SR-4), `ae29256` (SR-5:
+DATA_REFUSED), `1b6228e` (SR-2b correction: pg_dump as `1:1`), `deffc57`/`6a17eaa` (its lab driver), `7a319f1`
+(evidence). `git diff 4d1a59b 7a319f1 -- backup-engine backup` = exactly `DUMP_USER = '1:1'` and the DATA_REFUSED
+classification; both reviewed above. The product code on that branch is the code attacked here except uid 1 for
+pg_dump, which keeps the SR-2b property (a uid other than the HA server's) by the same mechanism.
