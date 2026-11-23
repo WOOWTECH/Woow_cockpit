@@ -1,0 +1,68 @@
+{
+ "schema_version": 1,
+ "kind": "unit-tests",
+ "tested_commit": "110b881",
+ "tree": "integration/ha-import-batch1-20261123 = feat/ha-import-batch1 b2f63ce + --no-ff merges of 10fe446, e415fc4, e2515f8, 5ab3249 (no textual conflicts; 80 files, no file touched by two branches)",
+ "host_python": "3.12.3",
+ "guard": "in-process: subprocess.Popen, os.exec*, os.posix_spawn*, os.system refuse podman/labpodman/ssh/sudo/machinectl/systemctl/runuser (as the executable, and podman/labpodman anywhere in argv); host /usr/bin/podman is the production rootless store and is never run",
+ "secrets": "HA_BACKUP_KEY read in-process with shlex from ~/.woowbk-lab/secrets/ha-import-creds.env into WOOWBK_HA_B1_KEY (and WOOWBK_HA_KEY); never printed; logs masked (0 masked values found)",
+ "suites": {
+  "tests/backup (discover, real batch-1 backups on)": {
+   "env": "WOOWBK_HA_B1_FIXTURES=~/.woowbk-lab/ha-fixtures/20261119-b1, WOOWBK_HA_B1_KEY=<in-process>",
+   "tests": 1397,
+   "ok": 1374,
+   "skipped": 1,
+   "failures": 16,
+   "errors": 6,
+   "guard_blocked_calls": 6,
+   "elapsed_seconds": 405,
+   "real_backup_tests": "test_ha_b1_real 5/5 ok (arm + x86 batch-1 HA backups, decrypted with the lab HA key)",
+   "not_ok_explained": {
+    "pre-existing public guards, identical at b2f63ce (rerun there: 24 tests, 14 failures + 3 errors, same ids)": {
+     "tests.backup.test_ha_emqx (PRESERVATION_BLOCKER kept)": [
+      "CheckTests.test_a_clean_backup",
+      "CheckTests.test_a_hot_backup_is_tried_and_named",
+      "CheckTests.test_an_ip_node_name_needs_no_host_line",
+      "CheckTests.test_blockers",
+      "ConvertTests.test_a_failed_export_stops_the_conversion_with_the_advice",
+      "ConvertTests.test_a_partial_import_stops_the_conversion",
+      "ConvertTests.test_an_import_that_would_open_anonymous_login_is_refused",
+      "ConvertTests.test_lost_rows_stop_the_conversion",
+      "ConvertTests.test_the_strict_settings_must_come_back",
+      "ConvertTests.test_the_whole_conversion (error)"
+     ],
+     "tests.backup.test_ha_omnigent (SECURITY_BLOCKER kept)": [
+      "CheckTests.test_a_clean_backup",
+      "CheckTests.test_a_same_named_account_is_a_warning",
+      "CheckTests.test_versions",
+      "ConvertTests.test_a_dump_with_code_is_refused_before_the_restore",
+      "ConvertTests.test_counts_that_differ_stop_the_conversion",
+      "ConvertTests.test_a_same_named_ha_account_wins (error)",
+      "ConvertTests.test_the_whole_conversion_in_test_mode (error)"
+     ]
+    },
+    "guard false positive (fake child script whose argv contains the word podman; LABPODMAN is patched to a temp file)": {
+     "tests.backup.test_litellm_lab_runner": "2 failures + 3 errors under the strict guard; rerun with the executable-only guard: 6/6 ok, 0 blocked"
+    }
+   },
+   "skipped_rerun": "tests.backup.test_ha_backup.RealBackupTests (needs WOOWBK_HA_FIXTURES): rerun with ~/.woowbk-lab/ha-fixtures/20261118 + lab key: 1/1 ok (enc, plain, enc-uncompressed real HA backups)"
+  },
+  "tests/e2e/lab (discover, all 30 modules; mocked/offline)": {
+   "tests": 259,
+   "ok": 259,
+   "failures": 0,
+   "errors": 0,
+   "guard_blocked_calls": 0,
+   "elapsed_seconds": 71
+  }
+ },
+ "not_changed": "No test, assertion or guard was changed; EMQX PRESERVATION_BLOCKER and Omnigent SECURITY_BLOCKER stay enabled.",
+ "private_logs_sha256": {
+  "backup-suite.log": "1b77b5a55db2f21cfa98c991469eb3a14ff7fbd2d361f33ba6f27ebb5038ed7c",
+  "lab-suite2.log": "6c0c78e81448ed0dbf3098a59cfa9442f81a92d33aca136bfa82b59d448049b9",
+  "litellm-runner.log": "33e0ac2abea15c9f3e697dfa31b2cf8c2f3a8ffbae10c7135adbddcaa2a3b10f",
+  "ha-backup-real.log": "051e08bace44bee52679de734f572ed1a53e760b53f264c19f7d55036d09e34a",
+  "base-emqx-omnigent.log (b2f63ce)": "bc0b68e3cea1e6ca3cc04678ec8457ae02d7ec42d87d89064e098f2b1e420c71"
+ },
+ "commercial_acceptance": "not-complete"
+}
