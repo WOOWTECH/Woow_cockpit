@@ -272,6 +272,31 @@ class TransportTests(unittest.TestCase):
             from emqx_framed_preflight import evidence_frame
             self.assertEqual(output.getvalue(),evidence_frame(m.canonical_receipt()))
 
+    def test_expired_child_deadline_reports_fixed_deadline_not_interrupted_step(self):
+        import emqx_real_owner_transport as m
+        import emqx_real_owner_workflow as workflow
+        import os,signal,struct
+        from types import SimpleNamespace
+        source_mode,wire,no_live=m.MODES['--real-restore-mnesia-acl']
+        for interrupted in (True,False):
+            with self.subTest(deadline=interrupted):
+                body=b'generated-original-source-frame'
+                stream=io.BytesIO(struct.pack('!Q',len(body))+body+m.ADMISSION)
+                output=io.BytesIO()
+                def run(admitted,**kw):
+                    try:
+                        if interrupted:os.kill(os.getpid(),signal.SIGALRM)  # the child's own deadline
+                        raise ValueError('generated-private-step')
+                    except BaseException:raise workflow.RealOwnerRefused('rollback_ready') from None
+                with patch('emqx_arm_source_owner._owner_realm',return_value=True), \
+                     patch.object(workflow,'run_real_framed_owner',side_effect=run), \
+                     patch.object(m.sys,'stdin',SimpleNamespace(buffer=stream)), \
+                     patch.object(m.sys,'stdout',SimpleNamespace(buffer=output)):
+                    self.assertEqual(m.owner_main(wire),1)
+                self.assertEqual(output.getvalue(),b'REALOWNER-REFUSED:'+(b'deadline' if interrupted else b'rollback_ready')+b'\n')
+                self.assertIn('deadline',workflow.PHASES)
+                self.assertEqual(signal.getitimer(signal.ITIMER_REAL),(0.0,0.0))
+
     def test_original_fixed_modes_only_no_argv_path_hash_or_key(self):
         import emqx_real_owner_transport as m
         import contextlib

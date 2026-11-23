@@ -39,7 +39,8 @@ from woowbackup.paths import Paths
 
 PHASES = frozenset(('profile','observer_dependency','realm','budget','frame','provision',
     'ready','source','target','preflight','build','package','restore',
-    'rollback','restart','cleanup','client_frame','no_live','mqtt','post_capture','post_capture_identity','payload_history','build_adapter','source_api','source_negative','object_integrity','api_frame'))
+    'rollback','restart','cleanup','client_frame','no_live','mqtt','post_capture','post_capture_identity','payload_history','build_adapter','source_api','source_negative','object_integrity','api_frame',
+    'deadline'))
 from emqx_source_api_validator import SOURCE_API_PHASES, SourceAPIPhaseRefused
 PHASES=PHASES | SOURCE_API_PHASES
 from emqx_native_object_integrity import OBJECT_PHASES, NativeObjectPhaseRefused

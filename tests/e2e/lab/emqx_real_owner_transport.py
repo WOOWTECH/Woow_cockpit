@@ -342,7 +342,10 @@ def owner_main(mode):
     source_mode,_,no_live=selected[0]
     from emqx_arm_source_owner import _owner_realm
     if not _owner_realm():return 1
-    def deadline(*_):raise ValueError()
+    fired=[]
+    def deadline(*_):
+        fired.append(True)  # fixed DEADLINE label, never the interrupted step's label
+        raise ValueError()
     previous=signal.signal(signal.SIGALRM,deadline)
     try:
         signal.setitimer(signal.ITIMER_REAL,840)
@@ -366,6 +369,7 @@ def owner_main(mode):
     except BaseException as error:
         from emqx_real_owner_workflow import RealOwnerRefused,PHASES
         phase=error.phase if type(error) is RealOwnerRefused and error.phase in PHASES else 'profile'
+        if fired:phase='deadline'
         sys.stdout.buffer.write(b'REALOWNER-REFUSED:'+phase.encode('ascii')+b'\n')
         sys.stdout.buffer.flush()
         return 1
