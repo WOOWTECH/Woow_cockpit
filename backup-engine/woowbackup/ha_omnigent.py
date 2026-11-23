@@ -94,6 +94,11 @@ ALEMBIC_RE = re.compile(r'[0-9a-z_]{1,64}\Z')
 SERVER_VERSION_RE = re.compile(r'[0-9]{1,4}\.[0-9]{1,4}\.[0-9]{1,4}\Z')
 MAX_KEYS = 1_000_000
 DUMP_TIMEOUT = ha_odoo.DUMP_TIMEOUT
+# HA's pg_dump runs as an OS user that is not the HA server's (postgres, uid 70) and owns nothing in the container: code
+# HA's catalog runs inside its server (security review 2026-11-23 SR-2) can then neither open pg_dump's stdout through
+# /proc/<pid>/fd (a same-uid check that Yama does not restrict) nor signal it, so it cannot write the archive the
+# conversion restores. pg_dump connects over the socket directory (mode 3777) as the database user postgres (trust).
+DUMP_USER = '65534:65534'
 SCHEMA_CHANGED = ('這台 Omnigent 的資料庫結構在轉換期間改變了（可能正在升級或重新啟動），沒有匯入任何資料；'
                   '請等它正常執行後再轉換一次。')
 
@@ -1086,7 +1091,7 @@ def convert(work, app, test_mode, out_dir):
     work.log('匯出 HA 的 Omnigent 資料（只當作資料來源，HA 的資料庫結構不會使用）')
     with open(dump, 'xb') as handle:
         os.fchmod(handle.fileno(), 0o600)
-        tmp.exec('hapg', ['pg_dump', '-U', 'postgres', '-Fc', '-d', DATABASE], user='postgres', stdout=handle,
+        tmp.exec('hapg', ['pg_dump', '-U', 'postgres', '-Fc', '-d', DATABASE], user=DUMP_USER, stdout=handle,
                  timeout=DUMP_TIMEOUT, max_output=work.guard.budget())
         handle.flush()
         os.fsync(handle.fileno())

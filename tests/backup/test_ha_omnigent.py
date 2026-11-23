@@ -139,9 +139,12 @@ class World(fk.World):
         self.snapshot_columns = None          # the snapshot's columns when they differ from the live ones
         self.snapshots = []                   # the snapshot scripts the capture ran in the live database
         self.audit = {'roles': ['omnigent'], 'role_settings': 0, 'auto_conf': 0, 'large_objects': 0}
+        self.exec_users = []                  # (--user or None, podman exec argv)
         self.seq_script = SEQ_SCRIPT_HEAD + "SELECT pg_catalog.setval('public.conversation_items_id_seq', 7, true);\n"
 
     def podman(self, args, data, stdout):
+        if args[:1] == ['exec']:
+            self.exec_users.append((args[args.index('--user') + 1] if '--user' in args else None, list(args)))
         if args[:5] == ['exec', '-i', 'omnigent-postgres', 'sh', '-s']:
             # capture_consistent_target_schema: the live database's columns line, then its schema-only archive.
             self.snapshots.append((args[5:], data))
@@ -471,6 +474,18 @@ class ConvertTests(OmnigentCase):
                     self.convert(self.upload_omnigent(), ['omnigent'])
                 self.assertIn('不屬於這台 Omnigent 資料庫結構', caught.exception.message)
                 self.assert_nothing_loaded()
+
+    def test_has_pg_dump_runs_as_another_os_user_than_has_server(self):
+        """secreview SR-2b: code HA's catalog runs inside its server (uid 70, proven in the lab) could open pg_dump's
+        stdout through /proc and write the archive the conversion restores, or signal pg_dump, when both are the same
+        OS user; pg_dump runs as an unrelated uid."""
+        self.convert(self.upload_omnigent(), ['omnigent'], test_mode=True)
+        dumps = [user for user, args in self.world.exec_users
+                 if 'pg_dump' in args and any(a.endswith('-hapg') for a in args)]
+        self.assertEqual(dumps, [ha_omnigent.DUMP_USER])
+        self.assertNotIn(ha_omnigent.DUMP_USER.split(':')[0], ('70', 'postgres', '0', 'root'))
+        analysis = {user for user, args in self.world.exec_users if 'psql' in args and any(a.endswith('-hapg') for a in args)}
+        self.assertEqual(analysis, {'postgres'})   # only the queries run as postgres; their answers are checked (SR-1)
 
     def test_a_sequence_value_that_is_sql_never_runs(self):
         """secreview SR-3: pg_dump writes a sequence's last_value as HA's server sent it into the SEQUENCE SET
