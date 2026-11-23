@@ -67,6 +67,13 @@ caller allows (`Select.absolute_symlinks`) and new HA-side secrets are never rea
 (`hasqlite`, §9, §10 rule 18). Odoo and n8n behave exactly as before; every existing shape is unchanged except that the app id
 enumerations (`apps`, `importable_apps[].app_id`, `HaCheck.apps[].app_id`, `HaImport.apps`) gain the four ids, and `HaCheck` /
 `reminders_by_app` gain the new apps' sections and lines.
+Revised 2026-11-23 (branch `feat/ha-import-code-server-20261123`, engine and page; owner decision 「決定2 A」): the HA import
+takes the WOOWTECH **code-server** add-on (`woow_ha_code_server` → `woow-code-server`, §9 "Batch 2: code-server"): the
+registry gains its importer (no MCP admin app, no HA MCP add-on), `habackup.NEVER_READ` the agents' login files of that
+add-on, the app id enumerations `woow-code-server`, `HaCheck` the `woow-code-server` section and the page its facts. The
+page also names the add-ons an HA backup may hold that are **never moved** — the Cloudflare Tunnel and the WOOWTECH MCP
+admin add-ons — with what to do on this device (§9 "Batch 2: add-ons that are not moved"). Every other shape is
+unchanged.
 Revised 2026-11-18 (branch `feat/ha-import`, part A: engine) for **importing Home Assistant backups** (owner decisions
 2026-11-18: Cockpit reads a Home Assistant OS backup file itself; only the WOOWTECH Odoo and n8n add-ons; x86 only; the
 HA key is pasted for each import and never stored): an uploaded HA backup is recognised by `upload-finish` and kept in
@@ -982,11 +989,12 @@ Shapes:
   `…Z`), `type("full"|"partial"), supervisor_version, protected(bool)` (what backup.json says), `compressed(bool),
   addons[{slug, name, version, encrypted(bool)}]` (`encrypted`: from the member's first bytes), `folders[str], size,
   sha256, uploaded_at, filename` (display only: the uploaded name when it is a plain file name, else
-  `ha-backup-<YYYYMMDD-HHMMSS>.tar`), plus the derived `importable_apps[{slug, app_id("odoo"|"n8n"|"omnigent"|"hermes"|"emqx"|"headscale"), app_name,
+  `ha-backup-<YYYYMMDD-HHMMSS>.tar`), plus the derived `importable_apps[{slug, app_id("odoo"|"n8n"|"omnigent"|"hermes"|"emqx"|"headscale"|"woow-code-server"), app_name,
   installed(bool)}]` (WOOWTECH add-ons this engine can import, §5; `installed`: this device's catalog has `app_id`;
   `app_name` from the catalog, else 「Odoo 18」/「n8n 工作流程」/「Omnigent 協作平台」/「Hermes 代理」/「EMQX MQTT 代理」/
-  「Headscale VPN 控制伺服器」) and `other_addons[{slug, name, version}]` (add-ons without
-  an app here: 「這台沒有對應的應用」).
+  「Headscale VPN 控制伺服器」/「code-server 開發環境」) and `other_addons[{slug, name, version}]` (add-ons without
+  an app here: 「這台沒有對應的應用」; the page adds a to-do for the Cloudflare Tunnel and the MCP admin add-ons, §9
+  "Batch 2: add-ons that are not moved").
 * `HaCheck` (part B): `ha_backup_id, apps[{app_id, slug, name (the add-on's name), arch("amd64"|"aarch64"|"unknown"),
   version (the add-on's), target_version (Odoo: the target image's `18.0-YYYYMMDD`; n8n: its `n8n --version`), ok(bool),
   blockers[zh-TW], warnings[zh-TW], odoo?{databases[{name, ok, blockers[], warnings[], partners, users (internal,
@@ -1003,7 +1011,13 @@ Shapes:
   api_keys, banned, psk, retained_messages, default_dashboard_password(bool), anonymous(bool), hot_backup(bool: the
   backup was made while EMQX ran, or its state is unknown), plugins[], ha_hosts[]},
   headscale?{headscale_version, target_version, db_version, users, nodes, pre_auth_keys, api_keys (HA's, not moved),
-  policies, prefixes{v4, v6} (HA's), server_url (HA's), target_server_url, dns_records}}]` (batch 1: `target_version` is
+  policies, prefixes{v4, v6} (HA's), server_url (HA's), target_server_url, dns_records},
+  woow-code-server?{woow-code-server_version (HA's code-server, from the add-on version), pins{code-server, pi, claude,
+  codex} (HA's, '' when the add-on ships none), target_pins{same keys} (what the live image prints), files, bytes,
+  sessions, claude_projects, codex_sessions, skills, snippets, settings(bool), extensions (HA's own, without the
+  connector VSIX), mcp_servers, workspace(bool: `projects/` found in HA's share folder), share(bool), workspace_files,
+  workspace_bytes, skipped_symlinks, ha_urls[("<file>：<host>")], left_out{<area>:<label>: entries}, unknown[]}}]`
+  (batch 2: `target_version` of code-server is the live image's `code-server --version`; batch 1: `target_version` is
   the live server's `/v1/info` version for Omnigent, the live image's Hermes base tag, the live image's version label
   for EMQX and Headscale) — an app
   is `ok` only without blockers (Odoo: and at least one database `ok`); a blocker is a plain sentence (unknown processor, app
@@ -1968,6 +1982,62 @@ PostgreSQL 15).
    (network none, read-only root, the live configuration read-only) opens a throwaway copy of that volume: version path,
    migrations and schema as the server will check them; failing it fails the job. `headplane-data`: the live export
    (this device's Headplane logins and roles stay).
+
+**Batch 2: code-server** (branch `feat/ha-import-code-server-20261123`; `ha_codeserver.py`; owner decision 2026-11-23
+「決定2 A」 = the facts' recommended answers D1 b, D2 a, D3, D4 a, D6; facts `phase3/facts/code-server.md`). Add-on
+`woow_ha_code_server` → app `woow-code-server`: the container `code-server` (`keep-id:uid=1000`) with the volumes
+`woow-code-server-pi-data` (at `/data/pi-agent`), `woow-code-server-ide` (at `/home/coder/.local/share/code-server/User`)
+and `woow-code-server-extensions` (at `…/code-server/extensions`), and, when the catalog lists it (D1 b), the workspace
+folder bound at `/workspace` (one data dir, the bind's path below the owner's home); another set of volumes or data
+dirs is `incompatible`. No database server.
+1. Versions (D6): the add-on version maps to the four programs that write the data (code-server, Pi, Claude Code,
+   Codex; 0.1.6–0.1.15 all code-server 4.139.1, Pi 0.99.1, Claude Code 2.1.285, Codex 0.167.0 from 0.1.8, none before),
+   and each must equal what the live image prints: `--version` of each in one throwaway container of the live image
+   (entrypoint `/bin/sh`, network none, nothing pulled). An unknown add-on version, a program that differs or cannot be
+   read is a blocker; a program the add-on did not ship is not compared.
+2. One pass over `data/pi-agent/**`, `data/vscode/User/**` and `data/vscode/extensions/**`; never handed out (NEVER_READ or
+   excluded from the walk): `options.json`, `pi-agent/{auth.json, mcp-auth.json, claude/.credentials.json,
+   codex/auth.json}`, `.ssh/`, `git/`, `.zsh_history`, the legacy `claude/`, `woow-connectors-primary/`,
+   `pi-agent/{connectors, connectors-primary, omnigent}/`. `share.tar.gz` is read only for `projects/**` and only when
+   the catalog lists the workspace.
+3. Moved, HA's entry wins (the IDE volume): `keybindings.json`, `tasks.json`, `mcp.json`, `chatLanguageModels.json`,
+   `snippets/`, `globalStorage/` (without `globalStorage/woowtech.{paseo,omnigent}`, the connector extensions' state, D3),
+   `History/`, `profiles/`, `prompts/`; `settings.json` merged (JSON with comments and trailing commas accepted, written
+   back as plain JSON): this device's settings, HA's keys over them without the HA-only values that break here
+   (`terminal.integrated.defaultProfile.linux` `zsh`, zsh terminal profiles, the Prettier default formatter,
+   `[home-assistant]`/`[esphome]` blocks and `files.associations` to those languages), this device's
+   `security.workspace.trust.*` and `extensions.autoUpdate`, and `acp.agents` = this device's agents plus HA's other
+   ones. Left: `workspaceStorage/`, `caches/`, `machineid`, `*ExtensionsCache.json`, `sync/`, `logs/`.
+4. Moved, this device's entry wins (the agents' volume): `sessions/`, `skills/` (a folder `skills/<name>` that this device
+   has stays whole, HA's is skipped and named), `claude/projects/`, `claude/file-history/`, `codex/sessions/`,
+   `codex/archived_sessions/`, `settings.json`, `models.json`, `codex/session_index.jsonl`,
+   `home/.pi/pi-acp/session-map.json`; `claude/history.jsonl` merged by `timestamp` (each line once; this device's file
+   stays when either side is not JSON lines or both exceed 32 MiB); `shared/mcp.json` merged (D4 a: HA's servers added, the
+   same name stays this device's; servers with `headers`/`env` and HA-only hosts in their URLs are named for review,
+   never their values). Left: the logins (D2 a) and `claude/.claude.json`, `codex/config.toml`, `mcp.json`, `trust.json`,
+   `.woow-pi-store`, `*.before-*`, `bin/`, `npm-global/` (programs), every other file below `claude/`, `codex/`, `home/`,
+   `shared/` (caches, locks, state databases); another top-level name with files in it is left with a warning naming it.
+5. Extensions: HA's extension folders listed in its `extensions.json`, except the connector VSIX (`woowtech.*`), the ids
+   this device has, `targetPlatform` for another processor and folders with a program for another processor; this
+   device's `extensions.json` gains them with `location.path` below this device's folder (an unreadable list moves none).
+6. Moved SQLite files (header `SQLite format 3`) are staged with their `-wal`/`-journal` (never `-shm`) and quick-checked by
+   the sandboxed child (`hasqlite`); a damaged one stays in HA (a warning).
+7. Every moved member is owned like the live volume's top folder, permission bits without setuid/setgid; symlinks as link
+   entries when relative and inside their own tree (others skipped and counted); hard links only to an earlier moved
+   file (one to a file that does not move: `incompatible`). Each volume is then completed from a live export (read while
+   the app runs; not a cold snapshot) with its owners and modes; a folder both sides have keeps the live owner and mode;
+   a kept hard link to a replaced file stops the job (`job-failed`). The workspace dir tar is the live folder pack plus
+   HA's `projects/**` in a new folder `ha-projects-<HA backup date>` (a suffix when the name exists), owned like the live
+   folder's root. Secrets (`code-server-config`), `woow-code-server.env` and units are the live ones (packaging below).
+   Test mode changes nothing of code-server (it runs no scheduled work).
+
+**Batch 2: add-ons that are not moved** (page only). The Cloudflare Tunnel (`*_cloudflared`; facts `cf-tunnel.md` D1 a:
+its token, certificate and PaaS link belong to the tunnel it serves, and its routes are in options this engine never
+reads or in Cloudflare) and the WOOWTECH MCP admin add-ons (`*_woow_mcp_<product>`; facts `mcp-admin.md` verdict: their
+state is HA's credentials and URLs) stay `other_addons`. The HA backup page and the wizard's first step say for each
+what to do here: re-add every route on this device's tunnel with this device's services and re-link WOOW PaaS, then
+remove the routes from HA and stop HA's add-on; re-configure the product's MCP admin app here (this device's catalog
+name, or install it), stop HA's add-on and re-create the MCP connectors with this device's MCP address.
 
 **Packaging**: per app `adapter.import_manifest` adds the live non-data items exactly as a backup reads them (images
 list, secrets, config files, Quadlet files, `catalog_entry`, `catalog_sha256`), so `match_items` finds every item and
