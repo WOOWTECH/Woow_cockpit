@@ -1912,10 +1912,12 @@ emqx,headscale,mcp-admin}.md` of the design notes.
    SEQUENCE SET entries, whose statement pg_dump writes from the value the server sent (unquoted), are printed by
    pg_restore itself (`-f - -L`) before anything is restored and must be exactly one
    `SELECT pg_catalog.setval('public.<trusted sequence>', <integer>, true|false);` each (SR-3).
-   HA's `pg_dump` runs as the OS user `65534:65534` (`DUMP_USER`, over the socket directory, mode 3777), never as
-   the HA server's own user (`postgres`, uid 70): code HA's catalog runs inside its server can then neither open
-   pg_dump's stdout through `/proc/<pid>/fd` nor signal it, so it cannot write the archive the conversion restores
-   (SR-2b). Names taken from HA's database (tables, schemas, extensions, alembic) reach the job log and the page
+   HA's `pg_dump` runs as an OS user that is not the HA server's (`dump_user`: the first of `DUMP_IDS` 65534, 32767,
+   9999, 999 that the owner's uid AND gid maps hold, never root and never the image's postgres ids; none ->
+   `job-failed` before anything is exported), over the socket directory as the database user postgres: code HA's
+   catalog runs inside its server can then neither open pg_dump's stdout through `/proc/<pid>/fd` nor signal it, so it
+   cannot write the archive the conversion restores (SR-2b). A fixed 65534 failed in the real product flow on dev-d,
+   whose owner maps only uids 1..55000 (`podman exec` exit 255); dev-d gets 32767. Names taken from HA's database (tables, schemas, extensions, alembic) reach the job log and the page
    with control characters shown as `?` (`hacommon.names`, SR-4).
    HA's rows that this device's schema refuses (its CHECK/NOT NULL constraints at the data load, its primary keys,
    unique indexes and foreign keys at post-data, values its column types reject; the schema comparison covers
