@@ -342,8 +342,8 @@ def digests(db):
     result = {}
     if selects:
         # One statement: one snapshot for every table, one podman exec.
-        rows = db.query_json("SET TIME ZONE 'UTC'; SELECT json_agg(v) FROM (" + " UNION ALL ".join(selects) + ") u",
-                             'litellm')
+        # No SET in the same -c string (psql >= 15 prints every result); both servers run in UTC (time_zone event).
+        rows = db.query_json("SELECT json_agg(v) FROM (" + " UNION ALL ".join(selects) + ") u", 'litellm')
         result = {name: [count, digest] for name, count, digest in rows}
     result['sequence-state'] = hashlib.sha256(json.dumps(db.query_json(SEQUENCES, 'litellm')).encode()).hexdigest()
     return result
@@ -602,6 +602,7 @@ def lab_run(args, ha, member, keys, runner, test_vkey, started, lock_started):
             emit('source_salt_binding', ha_salt=binding, other_salt=negative)
             soft('source_salt_binding_match', binding == 'match')
             soft('source_salt_binding_discriminates', negative == 'mismatch')
+            source_tz = hapg.query_json("SELECT to_json(current_setting('TimeZone'))", 'litellm')
             source_schema = hapg.query_json(SCHEMA, 'litellm')
             source_rows = digests(hapg)
             source_dump = dump(tmp, 'hapg', 'postgres')
@@ -629,6 +630,9 @@ def lab_run(args, ha, member, keys, runner, test_vkey, started, lock_started):
             target.wait_ready(tcp=True, timeout=300)
             require(target.query_json("SELECT to_json(current_setting('server_version_num')::int/10000)", 'litellm')
                     == 17, 'target_server_major')
+            target_tz = target.query_json("SELECT to_json(current_setting('TimeZone'))", 'litellm')
+            soft('both_servers_utc', source_tz in ('UTC', 'Etc/UTC') and target_tz in ('UTC', 'Etc/UTC'))
+            emit('time_zone', source=str(source_tz)[:20].replace('/', '_'), target=str(target_tz)[:20].replace('/', '_'))
             host = tmp.name('target')
             env_before = target_env(host, pg_password, master, target_salt, ui_password)
             env_after = dict(env_before, LITELLM_SALT_KEY=ha_salt)
@@ -743,11 +747,12 @@ def lab_run(args, ha, member, keys, runner, test_vkey, started, lock_started):
             runner.podman('secret', 'rm', secret_name, check=False, max_output=4096)
         stage = 'cleanup'
     try:
-        leftovers = {kind: runner.podman(*argv, max_output=65536).stdout.decode().split() for kind, argv in (
-            ('containers', ('ps', '-a', '--filter', f'name={job}', '--format', '{{.Names}}')),
-            ('volumes', ('volume', 'ls', '--filter', f'name={job}', '--format', '{{.Name}}')),
-            ('networks', ('network', 'ls', '--filter', f'name={job}', '--format', '{{.Name}}')),
-            ('secrets', ('secret', 'ls', '--filter', f'name={job}', '--format', '{{.Name}}')))}
+        leftovers = {kind: [name for name in runner.podman(*argv, max_output=262144).stdout.decode().split()
+                            if job in name] for kind, argv in (
+            ('containers', ('ps', '-a', '--format', '{{.Names}}')),
+            ('volumes', ('volume', 'ls', '--format', '{{.Name}}')),
+            ('networks', ('network', 'ls', '--format', '{{.Name}}')),
+            ('secrets', ('secret', 'ls', '--format', '{{.Name}}')))}
         after_running = running_names(runner)
     except BackupError:
         leftovers = {'containers': ['?'], 'volumes': [], 'networks': [], 'secrets': []}

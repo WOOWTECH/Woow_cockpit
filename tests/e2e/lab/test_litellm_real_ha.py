@@ -126,7 +126,7 @@ class DigestTests(unittest.TestCase):
         self.assertEqual(db.queries[1].count('UNION ALL'), 1)
         self.assertIn("'woow.o''dd'", db.queries[1])
         self.assertIn('"o\'dd"', db.queries[1])
-        self.assertTrue(db.queries[1].startswith("SET TIME ZONE 'UTC'; "))
+        self.assertTrue(db.queries[1].startswith('SELECT json_agg(v) FROM ('))
         self.assertEqual(found['public.LiteLLM_UserTable'], [1, 'aa'])
         self.assertEqual(len(found['sequence-state']), 64)
 
