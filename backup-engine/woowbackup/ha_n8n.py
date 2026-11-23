@@ -8,7 +8,9 @@ PostgreSQL 16 with the same n8n version (the import's migration check requires i
 
 check: the SQLite files (database and WAL; never HA's `-shm` wal-index) are copied into the job's root staging and
 read by a child process that drops to the account nobody (chrooted into the folder of its copy, no supplementary
-groups, its own network namespace, CPU, memory, file size and process limits) on a copy of its own, with `SQLITE_DBCONFIG_DEFENSIVE`, `trusted_schema=OFF`
+groups, its own network namespace -- os.unshare, or libc's unshare on Python < 3.12; a child that cannot leave the
+network stops with NO_NETNS and the check stops: no unisolated fallback --, CPU, memory, file size and process limits)
+on a copy of its own, with `SQLITE_DBCONFIG_DEFENSIVE`, `trusted_schema=OFF`
 and only ordinary tables (no virtual table or its shadow tables; explicit columns): the owner account (email and
 password set, else nothing can be moved), counts, and the workflows one per line, whose reasons (shell commands, SSH,
 local files, Home Assistant, HA-internal addresses, Redis/MQTT, webhooks) this process works out row by row within a
@@ -263,6 +265,8 @@ class _Counted:
 COUNTED = {'workflows': 'workflow_entity', 'credentials': 'credentials_entity', 'executions': 'execution_entity',
            'users': 'user', 'projects': 'project', 'variables': 'variables', 'data_tables': 'data_table'}
 
+NO_NETNS = 3  # SQLITE_CHILD's exit status when, as root, it cannot leave the network namespace (as hasqlite.NO_NETNS)
+
 # The child that reads HA's SQLite file: it drops its privileges before it opens the file and writes JSON lines (a
 # header, then one line per workflow, then {"end": true}). argv: uid gid max_row max_total max_rows file_size max_line.
 SQLITE_CHILD = r"""
@@ -271,8 +275,13 @@ uid, gid, max_row, max_total, max_rows, fsize, max_line = (int(x) for x in sys.a
 if os.geteuid() == 0:
     try:
         os.unshare(os.CLONE_NEWNET)
-    except (AttributeError, OSError):
-        pass
+    except AttributeError:
+        # Python < 3.12 (Debian 12: 3.11) has no os.unshare: the same system call through libc, still fail-closed.
+        import ctypes
+        if ctypes.CDLL(None, use_errno=True).unshare(0x40000000) != 0:  # CLONE_NEWNET, <linux/sched.h>
+            os._exit(3)  # NO_NETNS
+    except OSError:
+        os._exit(3)  # NO_NETNS: never read an archive's database with the host's network
     # The folder of the copy becomes the whole file system: SQLite opens it by its full path, and the job's staging
     # folders above it are root's alone (0700).
     os.chroot(".")
@@ -459,7 +468,10 @@ def _read_child(proc, checkpoint):
         workflows.append((doc['n'][:200], doc.get('a') is True, reasons))
         if checkpoint is not None:
             checkpoint()
-    if proc.wait(timeout=60) != 0 or header is None or not ended:
+    status = proc.wait(timeout=60)
+    if status == NO_NETNS and header is None and not workflows and not ended:
+        raise BackupError('job-failed', '無法替讀取 HA 備份中 n8n 資料庫的程序切斷網路（隔離失敗），已停止，沒有讀取任何資料。')
+    if status != 0 or header is None or not ended:
         raise BackupError('corrupt-archive', 'HA 備份中 n8n 的資料庫無法開啟或內容無法讀取。')
     tables = {name: rows for name, rows in (header.get('tables') or {}).items()
               if isinstance(name, str) and TABLE_RE.fullmatch(name) and isinstance(rows, int) and rows >= 0}

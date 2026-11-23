@@ -3,6 +3,7 @@ SQLite copy (owner, counts, no views), the workflows to fix, community packages 
 source volume. Team E2."""
 import io
 import json
+import os
 import re
 import sqlite3
 import struct
@@ -151,6 +152,34 @@ class SqliteTests(unittest.TestCase):
         child = ha_n8n.SQLITE_CHILD
         self.assertLess(child.index('os.chroot(".")'), child.index('os.setuid(uid)'))
         self.assertLess(child.index('os.setuid(uid)'), child.index('sqlite3.connect('))
+
+    def test_child_that_cannot_leave_the_network_stops_the_check(self):
+        # Python < 3.12 has no os.unshare (Debian 12 ships 3.11, e.g. the ARM54 target): the old child passed over
+        # the AttributeError (and any OSError) and read HA's n8n database with the host's network. It now makes the
+        # same system call through libc and exits NO_NETNS when it cannot; the parent stops with a clear message.
+        # tests/e2e/lab/arm54_final_n8n_sandbox_probe.py runs the real child set-up as root on .54 (Python 3.11).
+        child = ha_n8n.SQLITE_CHILD
+        start, chroot = child.index('if os.geteuid() == 0:'), child.index('os.chroot(".")')
+        block = child[start:chroot]
+        self.assertIn('ctypes.CDLL(None, use_errno=True).unshare(0x40000000)', block)
+        self.assertIn('os._exit(3)', block)
+        self.assertIsNone(re.search(r'\bpass\b', block))
+        self.assertEqual(ha_n8n.NO_NETNS, 3)
+        proc = ha_n8n.subprocess.Popen([ha_n8n.sys.executable, '-c', 'import sys; sys.exit(3)'],
+                                       stdout=ha_n8n.subprocess.PIPE)
+        try:
+            with self.assertRaises(BackupError) as caught:
+                ha_n8n._read_child(proc, None)
+        finally:
+            proc.stdout.close()
+        self.assertEqual(caught.exception.code, 'job-failed')
+        if os.geteuid() == 0:
+            self.skipTest('root may leave the network namespace; the refusal needs an unprivileged run')
+        code = ('import os\nif hasattr(os, "unshare"):\n    del os.unshare\n'
+                + block.replace('if os.geteuid() == 0:\n', 'if True:\n', 1) + 'print("continued")\n')
+        done = ha_n8n.subprocess.run([ha_n8n.sys.executable, '-I', '-S', '-c', code], capture_output=True, timeout=30)
+        self.assertEqual(done.returncode, ha_n8n.NO_NETNS)
+        self.assertNotIn(b'continued', done.stdout)
 
     def test_workflow_rows_are_bounded_and_analysed_one_by_one(self):
         sqlite_db(self.path)
