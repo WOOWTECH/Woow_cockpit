@@ -104,6 +104,11 @@ def label(text):
     return SAFE_LABEL.sub('_', str(text))[:200] or 'unnamed'
 
 
+def slug(text):
+    """A file-name part: never a path separator (a label like 'import x86-enc/hermes' must not name a folder)."""
+    return re.sub(r'[^A-Za-z0-9_.-]+', '-', str(text)).strip('-')[:120] or 'unnamed'
+
+
 def emit(line):
     print(line, flush=True)
 
@@ -497,7 +502,7 @@ def markers(ev, label_text):
         found = json.loads(drv.out(proc).strip().splitlines()[-1])
     except (ValueError, IndexError):
         found = {'error': 'marker read failed'}
-    ev.save(f'markers-{label(label_text).replace(" ", "-")}-{int(time.time())}.json', found)
+    ev.save(f'markers-{slug(label_text)}-{int(time.time())}.json', found)
     have = drv.marker_names(found)
     want = drv.BASELINE_MARKERS['hermes']
     ev.check(f'{label_text}: dev-d\'s own Hermes baseline markers (batch1_markers.py read)',
@@ -507,7 +512,7 @@ def markers(ev, label_text):
 
 def state_digest(ev, label_text):
     probe = drv.device_python(DIGEST, {}, timeout=600)
-    ev.save(f'digest-{label(label_text).replace(" ", "-")}-{int(time.time())}.json', probe)
+    ev.save(f'digest-{slug(label_text)}-{int(time.time())}.json', probe)
     if 'digest' not in probe:
         raise Failed(f'{label_text}: state digest probe failed')
     return probe['digest']
@@ -520,7 +525,7 @@ def continuity(ev, label_text, mode):
     terms = dict(HA_TERMS, **BASE_TERMS, **NEG_TERMS)
     probe = drv.device_python(CONTINUITY, {'session_ids': ha_ids + [BASE_SESSION], 'terms': sorted(terms),
                                            'like': terms}, timeout=900)
-    ev.save(f'continuity-{label(label_text).replace(" ", "-")}-{int(time.time())}.json', probe)
+    ev.save(f'continuity-{slug(label_text)}-{int(time.time())}.json', probe)
     inner = probe.get('inner') or {}
     ev.check(f'{label_text}: Hermes healthy (API and webhook /health 200) and the dashboard takes this device\'s '
              f'password', probe.get('health_api') == 200 and probe.get('health_webhook') == 200
@@ -690,6 +695,9 @@ def step_before(ev, args):
     drv.STATE.pop('hermes_owner_exceptions_before', None)
     drv.hermes_owner_baseline(ev)
     digest = state_digest(ev, 'before')
+    first = drv.STATE.setdefault('digest_first', drv.STATE.get('digest_before') or digest)
+    ev.check('before: Hermes state digest equals the first one recorded before any import (every earlier rollback '
+             'was exact)', digest == first, {'differs': diff_digest(digest, first)})
     drv.STATE['digest_before'] = digest
     drv.save_state()
     ev.check('before: dev-d\'s Hermes holds only its own baseline session (no HA session)',

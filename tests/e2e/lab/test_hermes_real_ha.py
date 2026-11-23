@@ -132,6 +132,10 @@ class OfflineEntryTests(unittest.TestCase):
                 self.assertEqual(result.returncode, 2)
                 self.assertEqual(result.stdout, '')
 
+    def test_file_name_parts_never_hold_a_separator(self):
+        self.assertEqual(hr.slug('import x86-enc/hermes after restore'), 'import-x86-enc-hermes-after-restore')
+        self.assertNotIn('/', hr.slug('../../etc/passwd'))
+
     def test_labels_are_reduced_to_the_status_charset(self):
         self.assertEqual(hr.label('full-text "s2"\nfinds'), 'full-text _s2__finds')
         line = f'CHECK {hr.label("x86-enc: HA\'s 5 sessions (FTS5) <ok>")}: PASS'
