@@ -27,14 +27,21 @@
     },
     {
       "variant": "(2) ARM, target file ACL policy (--real-restore)",
-      "result": "PASS",
+      "result": "PASS (also with the FILE-baseline rule-delivery round)",
       "evidence": "emqx-real-restore-20261123/arm-attempt18.json",
       "source_commit": "b3fc322 (code 6ffc757)",
       "elapsed_seconds": 958.0,
-      "rule_delivery": "PENDING for ARM: the FILE-baseline delivery round exists since f82bbd2 (HA rule-topic publishes refused by the unchanged target file ACL, management-API ingress with the restored HA key, republish delivered to an HA-gateway session, original HTTP action by vendor counters). arm-attempt18 passed BEFORE that round existed. arm-attempt19 (f82bbd2, 655s) stopped at REAL OWNER BUILD_PRODUCT_ACL_BASELINE_PRODUCT REFUSED in the product candidate build, before restore, so the round was not reached (inferred cause: the product's fixed 10s emqx eval bound under host load 19-25; 14d4a19 now names product_timeout/command/incompatible). Retry: arm-attempt20.",
+      "rule_delivery": "real since arm-attempt20 (code d433de9 = f82bbd2 delivery round + 14d4a19 build-kind labels + 2100s child alarm; 1050.8s; exit 0): same proof as variant (4) with the real ARM HA backup. arm-attempt18 passed before the round existed; arm-attempt19 (f82bbd2) stopped at REAL OWNER BUILD_PRODUCT_ACL_BASELINE_PRODUCT REFUSED in the product candidate build, before restore (round not reached; inferred cause: the product's fixed 10s emqx eval bound under host load 19-25; did not recur)",
       "attempts_with_delivery_round": [
-        "arm-attempt19.json (refused at product build, delivery not reached)"
-      ]
+        "arm-attempt19.json (refused at product build, delivery not reached)",
+        "arm-attempt20.json (PASS)"
+      ],
+      "pass_with_delivery": {
+        "evidence": "emqx-real-restore-20261123/arm-attempt20.json",
+        "source_commit": "d433de9",
+        "variant_flag": "--real-restore",
+        "elapsed_seconds": 1050.8
+      }
     },
     {
       "variant": "(3) x86, built-in database ACL (--x86-real-restore-mnesia-acl)",
@@ -107,11 +114,11 @@
     "rule delivery uses the HA backup's ORIGINAL HTTP target (the broker's own 127.0.0.1:18083 /api/v5/status) with vendor counters; request wire bytes are not captured. In the FILE baseline the HA roles are refused on the rule topics by the target's own file ACL (proven), so there the rules are fed through the management API (vendor: no MQTT authorization on POST /publish and /clients/:id/subscribe) and the republish is delivered to an HA-gateway session whose subscription the management API placed",
     "commercial acceptance stays not-complete until the owner accepts the evidence; nothing pushed. Production: see the host /usr/bin/podman entry above (the earlier wording 'no production system was touched' was wrong and is withdrawn)."
   ],
-  "summary": "Built-in database ACL: ARM and x86 passed end to end with real rule delivery. Target file ACL policy: x86 passed end to end WITH the new FILE-baseline rule-delivery round (x86-attempt3); ARM passed without it (arm-attempt18) and its retry with the round is pending (arm-attempt19 stopped at a product candidate-build stage before restore). Commercial acceptance remains for the owner to grant.",
+  "summary": "All four variants passed end to end on real HA backups WITH real rule delivery: built-in database ACL (ARM arm-mnesia-attempt17, x86 x86-mnesia-attempt2: HA clients drive the rules) and target file ACL policy (ARM arm-attempt20, x86 x86-attempt3: the unchanged target file ACL refuses the HA clients on the rule topics, the restored HA API key drives the rules through the management API, the republish reaches an HA-gateway session). Commercial acceptance remains for the owner to grant.",
   "attempt_history_20261123": {
     "arm_mnesia": "attempts 9-15 refused (action value, action last_modified_at, generic restore, payload history, post capture, round-2 decode, round-2 node budget) -> fixed; 16 PASS, 17 PASS with delivery",
     "x86_mnesia": "1 PASS, 2 PASS with delivery",
-    "arm_file": "18 PASS (attempt 17 earlier: SOURCE_API_ACL_USERS_HTTP_404, fixed by the file-policy contract); 19 product candidate-build refusal (BUILD_PRODUCT_ACL_BASELINE_PRODUCT, before restore) with the delivery round required; 20 pending",
+    "arm_file": "18 PASS (attempt 17 earlier: SOURCE_API_ACL_USERS_HTTP_404, fixed by the file-policy contract); 19 product candidate-build refusal (BUILD_PRODUCT_ACL_BASELINE_PRODUCT, before restore) with the delivery round required; 20 PASS with the FILE delivery round",
     "x86_file": "1 generic BUILD (readers exit), 2 PASS; 3 PASS with the FILE delivery round"
   },
   "variant_flags": {
