@@ -649,6 +649,9 @@ class VerifyModeTest(unittest.TestCase):
         self.assertNotIn('UNEXPECTED', [c[0] for c in calls])
         self.assertTrue(any(c == ['markers', 'nextcloud', 'read', [], True] for c in calls))  # the password goes by stdin
         self.assertNotIn('not-a-real-one', proc.stdout + proc.stderr + json_dumps(result))
+        # The baseline backup's key_id (a name with KEY) never reaches the evidence.
+        self.assertNotIn('lab-key', json_dumps(result) + proc.stdout)
+        self.assertIn('<masked>', json_dumps(result))
         self.assertIn(['markers', 'code-server', 'login', [], False], calls)
         self.assertEqual(list((lab / 'evidence' / 'batch2-lab').glob('*-baseline/*-backup-job.json')), [])
         # Every check and the total come out as fixed status lines that services_a_capture.py keeps.
@@ -684,6 +687,19 @@ class VerifyModeTest(unittest.TestCase):
         self.assertEqual(failed[0], 'dev-e: running, network none, no published port')
         self.assertTrue(failed[1].startswith('nextcloud: catalog health URLs'))
         self.assertTrue(failed[2].startswith('nextcloud: baseline backup'))
+
+    def test_masking_of_secret_looking_names(self):
+        """batch2_baseline.masked(): dict entries and 'name': 'value' text whose name holds a team secret word."""
+        import re
+        text = (HERE / 'batch2_baseline.py').read_text()
+        scope = {'re': re}
+        exec(text[text.index('SECRET_WORDS = '):text.index('def check(')], scope)
+        masked = scope['masked']
+        self.assertEqual(masked({'id': 'b1', 'key_id': 'D4C1', 'apps': [{'auth_token': 't', 'id': 'nextcloud'}]}),
+                         {'id': 'b1', 'key_id': '<masked>', 'apps': [{'auth_token': '<masked>', 'id': 'nextcloud'}]})
+        self.assertEqual(masked("{'key_id': 'D4C1', 'id': 'x', \"ODOO_PWD\": \"p\"}"),
+                         "{'key_id': '<masked>', 'id': 'x', \"ODOO_PWD\": \"<masked>\"}")
+        self.assertEqual(masked(['woowbk-lab-baseline.txt:' + '5' * 64]), ['woowbk-lab-baseline.txt:' + '5' * 64])
 
     def test_verify_never_creates_the_password_file(self):
         proc, calls, result, lab = self.run_verify(['code-server'], password=False)

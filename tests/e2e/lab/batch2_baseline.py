@@ -38,6 +38,7 @@ in to the app) and never while an importer lane's run holds it.
 """
 import json
 import os
+import re
 import secrets
 import subprocess
 import sys
@@ -76,7 +77,24 @@ def log(message):
         handle.write(line + '\n')
 
 
+# Team rule: a value whose name contains one of these words is secret and never reaches the evidence (mask by default).
+SECRET_WORDS = ('PWD', 'PASS', 'KEY', 'TOKEN', 'SECRET', 'CRED', 'AUTH', 'SIG')
+SECRET_TEXT = re.compile(r'''(['"])(\w*(?:pwd|pass|key|token|secret|cred|auth|sig)\w*)\1(\s*:\s*)(['"])[^'"]*\4''', re.I)
+
+
+def masked(value):
+    """value with every entry whose name looks secret replaced by '<masked>' (dicts, lists, and 'name': 'value' text)."""
+    if isinstance(value, dict):
+        return {k: '<masked>' if any(w in str(k).upper() for w in SECRET_WORDS) else masked(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [masked(v) for v in value]
+    if isinstance(value, str):
+        return SECRET_TEXT.sub(lambda m: f'{m[1]}{m[2]}{m[1]}{m[3]}{m[4]}<masked>{m[4]}', value)
+    return value
+
+
 def check(name, ok, detail=''):
+    detail = masked(detail if isinstance(detail, (dict, list)) else str(detail))
     checks.append({'check': name, 'ok': bool(ok), 'detail': str(detail)[:800]})
     log(f'{"PASS" if ok else "FAIL"} {name}' + (f' -- {detail}' if detail and not ok else ''))
     return bool(ok)
@@ -239,7 +257,8 @@ def baseline(app):
                'encrypt': True}
     start = engine('backup-start', request)
     job, joblog, wall = wait_job(start['job_id'], f'backup {app}')
-    (EVIDENCE / f'{app}-backup-job.json').write_text(json.dumps({'job': job, 'log': joblog}, ensure_ascii=False, indent=1))
+    (EVIDENCE / f'{app}-backup-job.json').write_text(json.dumps(masked({'job': job, 'log': joblog}), ensure_ascii=False,
+                                                               indent=1))
     if not check(f'{app}: encrypted backup succeeded', job['state'] == 'succeeded', job.get('error')):
         return
     result = job['result']
@@ -251,7 +270,7 @@ def baseline(app):
           and [a['id'] for a in meta['apps']] == [CATALOG_ID[app]], meta)
     inspect = engine('inspect', {'backup_id': backup_id})
     pre = next(a for a in inspect['preflight']['apps'] if a['id'] == CATALOG_ID[app])
-    (EVIDENCE / f'{app}-inspect.json').write_text(json.dumps(inspect, ensure_ascii=False, indent=1))
+    (EVIDENCE / f'{app}-inspect.json').write_text(json.dumps(masked(inspect), ensure_ascii=False, indent=1))
     check(f'{app}: inspect preflight ok, in-place restorable', inspect['preflight']['ok'] and pre['restorable']
           and pre['mode'] == 'inplace', pre)
 
@@ -265,7 +284,8 @@ def baseline(app):
     start = engine('restore-start', {'backup_id': backup_id, 'apps': [CATALOG_ID[app]], 'request_id': str(uuid.uuid4()),
                                      'confirm': True})
     rjob, rlog, rwall = wait_job(start['job_id'], f'restore {app}')
-    (EVIDENCE / f'{app}-restore-job.json').write_text(json.dumps({'job': rjob, 'log': rlog}, ensure_ascii=False, indent=1))
+    (EVIDENCE / f'{app}-restore-job.json').write_text(json.dumps(masked({'job': rjob, 'log': rlog}), ensure_ascii=False,
+                                                                indent=1))
     if not check(f'{app}: in-place restore succeeded', rjob['state'] == 'succeeded', rjob.get('error')):
         return
     rresult = rjob['result']
