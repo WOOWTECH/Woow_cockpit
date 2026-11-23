@@ -51,6 +51,17 @@ def driver_sections(results_dir):
                                                   'tables_outside_row_evidence', 'explained_tables', 'all_explained',
                                                   'summary', 'events'))
         out['armcompare'] = section
+    if (d / 'capture-compare.json').exists():
+        compare = load(d / 'capture-compare.json')
+        section = pick(compare, ('schema_version', 'status', 'source_tables', 'target_tables', 'identical', 'changed',
+                                 'missing', 'added', 'unverified_tables'))
+        rows = compare.get('row_evidence')
+        if isinstance(rows, dict):
+            section['row_evidence'] = pick(rows, ('status', 'error_type', 'source_capture_run', 'archive_sha256',
+                                                  'restore_started_utc', 'captured_at', 'cron_log',
+                                                  'tables_with_row_events', 'tables_outside_row_evidence',
+                                                  'explained_tables', 'all_explained', 'summary', 'events'))
+        out['capcompare'] = section
     if (d / 'n8n-diagnosis.json').exists():
         out['n8n_diagnosis'] = pick(load(d / 'n8n-diagnosis.json'),
                                     ('login', 'listing', 'process_samples', 'npm_outdated_seen', 'n8n_packages',

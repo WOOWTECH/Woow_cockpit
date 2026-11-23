@@ -52,8 +52,12 @@ class EvidenceTests(unittest.TestCase):
         rc, doc, _ = self.build({'passed': 0, 'failed': 0, 'results': []}, {
             'n8n-diagnosis.json': {'login': True, 'listing': {'seconds': 150.0}, 'npm_outdated_seen': [1, 2, 3],
                                    'password_field_never_selected': 'x'},
-            'leaks.json': {'scanned': 3, 'journal_bytes': 9, 'hits': {}}})
+            'leaks.json': {'scanned': 3, 'journal_bytes': 9, 'hits': {}},
+            'capture-compare.json': {'status': 'explained_row_differences', 'identical': 199, 'secret_field': 'x',
+                                     'row_evidence': {'all_explained': True, 'binding': 'not copied'}}})
         self.assertEqual(rc, 0)
+        self.assertEqual(doc['capcompare'], {'status': 'explained_row_differences', 'identical': 199,
+                                             'row_evidence': {'all_explained': True}})
         self.assertEqual(doc['n8n_diagnosis'], {'login': True, 'listing': {'seconds': 150.0},
                                                 'npm_outdated_seen': [1, 2, 3]})
         self.assertEqual(doc['leak_scan'], {'files_scanned': 3, 'journal_bytes': 9, 'hits': 0})
