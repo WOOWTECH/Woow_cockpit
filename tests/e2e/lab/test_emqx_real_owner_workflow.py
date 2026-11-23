@@ -1091,6 +1091,46 @@ class FoundationTests(unittest.TestCase):
                 self.assertEqual(events,['join','objects'] if malformed else ['join','objects','build'],caught.exception.phase)
                 self.assertEqual(caught.exception.phase,'object_integrity' if malformed else 'build')
 
+    def test_held_readers_exit_refusal_after_build_names_quiescence_substep(self):
+        from contextlib import contextmanager
+        from test_emqx_b1_object_integrity import ObjectIntegrityTests
+        import emqx_b1_object_integrity as integrity
+        fixture=ObjectIntegrityTests();fixture.setUp();self.addCleanup(fixture.doCleanups)
+        token=m._QUIESCE_STATE.set('none');self.addCleanup(m._QUIESCE_STATE.reset,token)
+        profile=SimpleNamespace(sha256=fixture.digest,arch='aarch64',fixture_profile='generated-only',file_dependency_profile=None)
+        for exit_state,expected in (('exit_clients','build_readers_exit_exit_clients'),
+                                    ('exit_done','build_readers_exit_exit_done'),
+                                    ('generated-private','build_readers_exit')):
+            with self.subTest(state=exit_state), tempfile.TemporaryDirectory() as directory:
+                root=Path(directory)
+                @contextmanager
+                def staged(*args,**kw):yield fixture.path,b'generated-key',fixture.spool,profile,root
+                @contextmanager
+                def source(*args,**kw):
+                    with fixture.source() as result:yield result
+                @contextmanager
+                def readers(**kw):
+                    yield SimpleNamespace(generation='generated-only')
+                    m._QUIESCE_STATE.set(exit_state)  # e.g. a client connected during the build
+                    raise ValueError('generated-private-exit')
+                def join(**kw):
+                    return fixture.join(kw['captured'],evidence_directory=kw['evidence_directory'],evidence_name=kw['evidence_name'])
+                with patch.object(owner,'LabOwnerRunner',return_value=self.runner),patch.object(m,'_full_restore_budget'), \
+                     patch.object(m,'staged_owner_frame',side_effect=staged),patch.object(m,'_payload_history',return_value=object()), \
+                     patch.object(owner.OwnerProvision,'cleanup',autospec=True,side_effect=lambda p:files.revoke(p.file_capability)), \
+                     patch.object(m,'_opt_in_private_unit'),patch.object(m,'_ready'), \
+                     patch.object(m,'capture_owner_source',side_effect=source),patch.object(m,'validate_source_capture'), \
+                     patch.object(m,'owner_target_readers',side_effect=readers),patch.object(m,'owner_preflight',side_effect=join), \
+                     patch.object(integrity,'source_profile',return_value=profile), \
+                     patch.object(m,'build_captured_candidate',return_value={'generated':'volumes'}), \
+                     patch.object(m,'_package_same_target') as package:
+                    with self.assertRaises(m.RealOwnerRefused) as caught:
+                        m.run_real_framed_owner(io.BytesIO(self.owner_prefix()),private_parent=root,
+                            source_mode=m.SOURCE_MODES[0],no_live=False)
+                package.assert_not_called()
+                self.assertEqual(caught.exception.phase,expected)
+                self.assertIn(caught.exception.phase,m.PHASES)
+
     def test_actual_native_object_comparisons_and_receipt_scan_require_fresh_collector_chain(self):
         from test_emqx_native_object_integrity import NativeObjectTests
         from emqx_private_evidence import names_receipt,SOURCE_NAMES

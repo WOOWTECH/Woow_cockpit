@@ -61,9 +61,10 @@ MQTT_REASONS=frozenset(('input','setup','run','cleanup','protocol','exit_shape',
 PHASES=PHASES | frozenset('mqtt_'+step+'_'+reason for step in MQTT_STEPS for reason in MQTT_REASONS)
 from emqx_post_restore_values import CAPTURE_STAGES, PostCaptureRefused
 QUIESCE_STAGES=('none',*(side+'_'+step for side in ('enter','exit') for step in ('inspect','clients')),
-    'enter_suspend','enter_ticker','exit_ticker')
+    'enter_suspend','enter_ticker','exit_ticker','exit_done')
 PHASES=PHASES | frozenset(('post_capture_final',*('post_capture_'+s for s in CAPTURE_STAGES),
-    *('post_capture_'+s for s in QUIESCE_STAGES)))
+    *('post_capture_'+s for s in QUIESCE_STAGES),'build_readers_exit',
+    *('build_readers_exit_'+s for s in QUIESCE_STAGES)))
 _QUIESCE_STATE=ContextVar('emqx_private_quiesce_diagnostic',default='none')
 # Wall-clock bounds only (contended 4-CPU lab host, load ~27 on 2026-11-23);
 # every identity/isolation/no-client/ticker/value check is unchanged.
@@ -312,6 +313,7 @@ def fixture_quiescence(provision):
         stable('exit')
         _QUIESCE_STATE.set('exit_ticker')
         if evaluate(expression)!=b'ticker_unchanged': raise ValueError()
+        _QUIESCE_STATE.set('exit_done')  # later refusals are not this quiescence
 
 
 def _package_same_target(ctx,app,provision,volumes,root):
@@ -1052,6 +1054,10 @@ def run_real_framed_owner(stream,*,private_parent,source_mode,no_live=True,targe
                         # retain only fixed diagnostics before unwinding them.
                         phase='build_'+error.stage+'_'+error.kind
                         raise
+                    # Build done; a refusal now comes from the held readers' exit
+                    # (quiescence re-check / vendor observer), named by sub-step.
+                    _QUIESCE_STATE.set('none')
+                    phase='build_readers_exit'
                 phase='package'
                 backup_id=_package_same_target(ctx,app,provision,volumes,root)
                 phase='restore'
@@ -1082,6 +1088,8 @@ def run_real_framed_owner(stream,*,private_parent,source_mode,no_live=True,targe
     except CandidatePhaseRefused as error:
         raise RealOwnerRefused('build_'+error.stage+'_'+error.kind) from None
     except BaseException:
+        if phase=='build_readers_exit' and _QUIESCE_STATE.get() in QUIESCE_STAGES:
+            phase='build_readers_exit_'+_QUIESCE_STATE.get()
         raise RealOwnerRefused(phase) from None
     finally:
         if provision is not None and create_attempted:
