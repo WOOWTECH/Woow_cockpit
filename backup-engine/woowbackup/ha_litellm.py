@@ -527,6 +527,62 @@ DETAIL = (('users', 'public', 'LiteLLM_UserTable', ''), ('teams', 'public', 'Lit
           ('chatgpt_accounts', 'woow_platform', 'chatgpt_accounts', ''))
 
 
+# HA's LiteLLM settings stored in its database (LiteLLM_Config): with `store_model_in_db: true` (the package's
+# config.yaml) the proxy applies them at every start: `environment_variables` decrypted with the salt and put into its
+# environment, `litellm_settings` callbacks loaded (litellm 1.104.0 litellm/proxy/proxy_server.py
+# _update_config_from_db :7741-7793; only s3:// and gcs:// module URLs are refused, :4486-4513). So an import moves
+# HA's proxy behaviour too (an HTTPS_PROXY or a logging callback would send this device's requests where HA's settings
+# say). The check and the import name them (review SR-5): names only, never a value.
+CONFIG_TABLE = ('public', 'LiteLLM_Config')
+CALLBACK_KEYS = ('callbacks', 'success_callback', 'failure_callback', 'audit_log_callbacks')
+_OBJECT = "CASE WHEN jsonb_typeof({v}) = 'object' THEN {v} ELSE '{{}}'::jsonb END"
+STORED_SETTINGS_SQL = (
+    "SELECT json_build_object("
+    "'sections', (SELECT coalesce(json_agg(c.param_name ORDER BY c.param_name), '[]'::json) "
+    "FROM public.\"LiteLLM_Config\" c), "
+    "'env', (SELECT coalesce(json_agg(k.key ORDER BY k.key), '[]'::json) FROM public.\"LiteLLM_Config\" c "
+    f"CROSS JOIN LATERAL jsonb_each({_OBJECT.format(v='c.param_value')}) k "
+    "WHERE c.param_name = 'environment_variables'), "
+    "'callbacks', (SELECT coalesce(json_agg(DISTINCT v.value ORDER BY v.value), '[]'::json) "
+    "FROM public.\"LiteLLM_Config\" c "
+    f"CROSS JOIN LATERAL jsonb_each({_OBJECT.format(v='c.param_value')}) e "
+    "CROSS JOIN LATERAL jsonb_array_elements_text(CASE WHEN jsonb_typeof(e.value) = 'array' THEN e.value "
+    "ELSE '[]'::jsonb END) v WHERE c.param_name = 'litellm_settings' AND e.key IN ("
+    + ', '.join(f"'{key}'" for key in CALLBACK_KEYS) + ")))")
+
+
+def stored_settings(cluster, schema):
+    """{sections, env, callbacks}: the NAMES of HA's stored LiteLLM settings (STORED_SETTINGS_SQL), or None when HA has
+    no such table or it cannot be read (the check goes on without the line)."""
+    columns = {row[2]: row[3] for row in schema.columns if (row[0], row[1]) == CONFIG_TABLE}
+    if columns.get('param_value') != 'jsonb' or 'param_name' not in columns:
+        return None
+    try:
+        found = cluster.query_json(STORED_SETTINGS_SQL, DATABASE)
+    except BackupError:
+        return None
+    if not isinstance(found, dict):
+        return None
+
+    def names(value):
+        return [str(v)[:60] for v in value[:50] if isinstance(v, str)] if isinstance(value, list) else []
+
+    return {'sections': names(found.get('sections')), 'env': names(found.get('env')),
+            'callbacks': names(found.get('callbacks'))}
+
+
+def stored_settings_line(found):
+    if not found or not (found.get('env') or found.get('callbacks')):
+        return None
+    parts = []
+    if found.get('env'):
+        parts.append(f'環境變數 {hacommon.names(found["env"])}')
+    if found.get('callbacks'):
+        parts.append(f'記錄或通知的回呼 {hacommon.names(found["callbacks"])}')
+    return (f'HA 的 LiteLLM 有存在資料庫裡的代理設定（{"；".join(parts)}），匯入後會在這台的 LiteLLM 生效'
+            '（這台的 LiteLLM 以資料庫裡的設定為準），請求可能會被轉送或記錄到這些設定指定的地方；請確認都是你自己設定的再正式匯入。')
+
+
 def detail_sql(tables):
     present = set(tables)
     parts = ', '.join(f"'{key}', (SELECT count(*) FROM {_q(s, t)}{where})" for key, s, t, where in DETAIL
@@ -864,10 +920,14 @@ def check(work, app):
     tables = ha_schema.tables() if ha_schema else []
     sql = detail_sql(tables)
     detail = cluster.query_json(sql, DATABASE) if sql else {}
+    settings = stored_settings(cluster, ha_schema) if ha_schema else None
     tmp.remove('hapg')
     tmp.remove_volume('hapg')
     blockers, warnings = verdict(src, found, ha_major=_ha_major(src), target_major=target_major,
                                  live_migrations_value=migrations, binding=binding)
+    stored_line = stored_settings_line(settings)
+    if stored_line:
+        warnings.append(stored_line)
     for item in (_state_blocker(src, work.addon_info(SLUG)), blocker):
         if item:
             blockers.insert(0, item)
@@ -1144,6 +1204,7 @@ def convert(work, app, test_mode, out_dir):
     detail = cluster.query_json(detail_sql(tables), DATABASE) if detail_sql(tables) else {}
     work.log(f'匯出 HA 的 LiteLLM 資料：{len(tables)} 個資料表的資料列（只當作資料來源，HA 的資料庫結構不會使用）')
     files, sequences = export_rows(work, cluster, trusted, staging)
+    settings = stored_settings(cluster, ha_schema)
     tmp.remove('hapg')
     tmp.remove_volume('hapg')
     work.checkpoint()
@@ -1196,7 +1257,7 @@ def convert(work, app, test_mode, out_dir):
             'secrets': {SALT_SECRET: salt_path},
             'counts': section(src, detail, version=version, migrations=found['migrations'],
                               target_major=target_major, key_users_value=users),
-            'tables': len(tables), 'key_users': users}
+            'tables': len(tables), 'key_users': users, 'stored_settings': settings}
 
 
 # ====================================================================== texts
@@ -1210,6 +1271,9 @@ def import_texts(data):
     line = key_users_line(data.get('key_users') or [])
     if line:
         notes.append(line)
+    stored_line = stored_settings_line(data.get('stored_settings'))
+    if stored_line:
+        notes.append(stored_line)
     reminders = ['請用這台 LiteLLM 的主金鑰與管理介面密碼登入（HA 的主金鑰在這台不能用）；HA 的虛擬金鑰在這台繼續有效，'
                  '請把原本連到 HA 的用戶端改連到這台的 LiteLLM 網址。']
     if data.get('key_users'):

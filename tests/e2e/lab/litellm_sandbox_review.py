@@ -14,6 +14,8 @@ Cases (each crafts its own cluster in a throwaway container, packs it as an HA a
   superuser_catalog objects only a superuser (or a crafted data directory) has: a login and a ddl_command_end event
                     trigger, per-database settings (session_preload_libraries, DateStyle, extra_float_digits).
   tablespace_map    a cold cluster plus backup_label + tablespace_map (no symlink in the archive).
+  stored_settings   a clean cluster whose LiteLLM_Config holds stored environment variables and callbacks (SR-5): what
+                    ha_litellm.stored_settings reads from it on the real PostgreSQL 18 (names only).
   copy_injection    (no HA cluster) PostgreSQL 17.11's psql: `COPY ... FROM STDIN` data that ends with `\\.` and
                     SQL after it, the way load_rows feeds HA's rows.
 Every attacker action writes a marker inside the container only (/tmp/woowbk-review-*); the harness reads the markers
@@ -145,6 +147,19 @@ ALTER ROLE postgres IN DATABASE litellm SET event_triggers = on;
 """
 
 
+# LiteLLM_Config as LiteLLM 1.104.0's schema.prisma has it (param_value Json? = jsonb); placeholder values only.
+STORED_SETTINGS_SQL = r"""
+SET ROLE litellm;
+CREATE TABLE public."LiteLLM_Config" (param_name text PRIMARY KEY, param_value jsonb, last_run_at timestamp(3),
+  reload_revision bigint NOT NULL DEFAULT 0);
+INSERT INTO public."LiteLLM_Config" (param_name, param_value) VALUES
+ ('environment_variables', '{"HTTPS_PROXY": "placeholder-not-a-value", "LANGFUSE_HOST": "placeholder"}'),
+ ('litellm_settings', '{"success_callback": ["langfuse"], "callbacks": ["custom_callbacks.proxy_handler_instance", {"x": 1}], "drop_params": true}'),
+ ('general_settings', '{"alerting": ["slack"]}');
+RESET ROLE;
+"""
+
+
 class LabRunner:
     """The lab Podman (its own storage root) with the product runner's interface."""
     uid = None
@@ -216,6 +231,8 @@ def craft(case, salt, fingerprint, scratch):
             cluster.script(OWNER_TROJAN_SQL, 'litellm')
         elif case == 'superuser_catalog':
             cluster.script(SUPERUSER_SQL, 'litellm')
+        elif case == 'stored_settings':
+            cluster.script(STORED_SETTINGS_SQL, 'litellm')
         # The crafting session must not leave markers behind: the volume is what HA's backup would carry.
         tmp.exec('craft', ['sh', '-c', 'rm -f /tmp/woowbk-review-*'], user='postgres', check=False, max_output=4096)
         tmp.stop('craft', timeout=60)
@@ -345,6 +362,9 @@ def product_path(case, inner, salt):
             facts['after_salt_binding'] = sorted(markers(tmp, 'hapg'))
             ha_schema = ha_litellm.read_schema(cluster, found['migrations']) if found['migrations'] else None
             steps.append('read_schema')
+            if ha_schema is not None and hasattr(ha_litellm, 'stored_settings'):
+                facts['stored_settings'] = ha_litellm.stored_settings(cluster, ha_schema)
+                facts['stored_settings_line'] = ha_litellm.stored_settings_line(facts['stored_settings'])
             blockers, warnings = ha_litellm.verdict(src, found, ha_major=18, target_major=17,
                                                     live_migrations_value=found['migrations'], binding=binding)
             facts['blockers'] = blockers
@@ -419,7 +439,8 @@ def copy_injection():
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--case', required=True,
-                        choices=('owner_trojan', 'superuser_catalog', 'tablespace_map', 'copy_injection'))
+                        choices=('owner_trojan', 'superuser_catalog', 'tablespace_map', 'stored_settings',
+                                 'copy_injection'))
     args = parser.parse_args()
     started = time.monotonic()
     if args.case == 'copy_injection':

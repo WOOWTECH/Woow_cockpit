@@ -469,6 +469,69 @@ class SecurityReviewTests(LiteLLMCase):
         self.assertFalse(self.world.copies_in, 'no HA row was loaded')
 
 
+class StoredSettingsTests(LiteLLMCase):
+    """Review SR-5: with store_model_in_db (the package's config.yaml) the proxy applies HA's stored environment
+    variables and callbacks here (litellm 1.104.0 proxy_server.py _update_config_from_db); the check and the import
+    name them, values never."""
+
+    CONFIG = [['public', 'LiteLLM_Config', 'param_name', 'text', True, '', ''],
+              ['public', 'LiteLLM_Config', 'param_value', 'jsonb', False, '', '']]
+    FOUND = {'sections': ['environment_variables', 'litellm_settings'], 'env': ['HTTPS_PROXY', 'LANGFUSE_HOST'],
+             'callbacks': ['langfuse']}
+
+    def answering(self, value):
+        answer, self.asked = self.world.answer, []
+
+        def stored(role, sql, database):
+            if sql == ha_litellm.STORED_SETTINGS_SQL:
+                self.asked.append(role)
+                return value
+            return answer(role, sql, database)
+
+        self.world.answer = stored
+
+    def test_has_stored_proxy_settings_are_named_in_the_check(self):
+        self.world.ha_columns = COLUMNS + self.CONFIG
+        self.answering(self.FOUND)
+        result = self.check(self.upload_litellm(), ['litellm'])[0]
+        lines = [w for w in result['warnings'] if '存在資料庫裡的代理設定' in w]
+        self.assertEqual(len(lines), 1, result['warnings'])
+        for word in ('HTTPS_PROXY', 'LANGFUSE_HOST', 'langfuse', '請確認都是你自己設定的'):
+            self.assertIn(word, lines[0])
+        self.assertEqual(self.asked, ['hapg'], "read once, in HA's cluster only")
+
+    def test_no_table_or_no_answer_no_line(self):
+        self.answering(self.FOUND)
+        result = self.check(self.upload_litellm(), ['litellm'])[0]
+        self.assertEqual(self.asked, [], 'no LiteLLM_Config table: not asked')
+        self.assertFalse([w for w in result['warnings'] if '代理設定' in w])
+        self.world.ha_columns = COLUMNS + self.CONFIG[:1] + [['public', 'LiteLLM_Config', 'param_value', 'text', False,
+                                                              '', '']]
+        self.check(self.upload_litellm(), ['litellm'])
+        self.assertEqual(self.asked, [], 'param_value is not jsonb: not asked')
+        self.world.ha_columns = COLUMNS + self.CONFIG
+        self.answering(None)
+        result = self.check(self.upload_litellm(), ['litellm'])[0]
+        self.assertEqual(self.asked, ['hapg'])
+        self.assertFalse([w for w in result['warnings'] if '代理設定' in w])
+        self.answering({'sections': ['general_settings'], 'env': [], 'callbacks': []})
+        result = self.check(self.upload_litellm(), ['litellm'])[0]
+        self.assertFalse([w for w in result['warnings'] if '代理設定' in w], 'only environment variables and callbacks')
+
+    def test_the_import_notes_name_them(self):
+        notes, _reminders = ha_litellm.import_texts({'counts': {}, 'key_users': [],
+                                                     'stored_settings': {'sections': [], 'env': ['HTTPS_PROXY'],
+                                                                         'callbacks': ['x' * 100]}})
+        line = [n for n in notes if '存在資料庫裡的代理設定' in n]
+        self.assertEqual(len(line), 1)
+        self.assertIn('HTTPS_PROXY', line[0])
+        self.assertIn('x' * 60, line[0])
+        self.assertNotIn('x' * 61, line[0], 'each name cut at 60 characters')
+        notes, _reminders = ha_litellm.import_texts({'counts': {}, 'key_users': [], 'stored_settings': None})
+        self.assertFalse([n for n in notes if '代理設定' in n])
+        self.assertEqual(ha_litellm.stored_settings_line({'env': ['A'] * 12, 'callbacks': []}).count('A、'), 9)
+
+
 class ConvertTests(LiteLLMCase):
     def assert_nothing_loaded(self):
         self.assertFalse(self.world.copies_in, 'no HA row was loaded')
