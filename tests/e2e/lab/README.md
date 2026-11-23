@@ -312,7 +312,7 @@ max、oom、oom_kill 都是 0。上限 4g 為 HA 匯入時的拋棄式容器（t
 **用途**：測試「把 Home Assistant 附加元件的備份匯入 Podman 的 OpenDesign、Nextcloud 與 code-server」（HA 匯入第二批，擁有者
 2026-11-23 的決定 2 A）。dev-e 跑本主機這三個應用的真實複本：映像 ID 相同、同樣的套件安裝程式與版本（正式主機實際執行的提交）、
 同樣的單元／容器／資料卷／密鑰／網路名稱與連接埠。密鑰全部在設備內重新產生；沒有複製正式主機的任何密鑰、權杖或應用資料。
-2026-11-23 建置。**一次只跑一個應用**（見「輪替」）：20:16 起只執行 code-server；OpenDesign 在它的真實匯入通過後於 19:44 輪替出去，Nextcloud 停止且映像已移除（休眠）。輪替紀錄在 `tests/e2e/lab/evidence/batch2-lab-20261123/dev-e-rotations.json`。
+2026-11-23 建置。**一次只跑一個應用**（見「輪替」）：21:04 起只執行 Nextcloud；OpenDesign（19:44）與 code-server（20:32）都在各自的真實匯入通過後輪替出去（映像移除，資料與基準備份保留）。輪替紀錄在 `tests/e2e/lab/evidence/batch2-lab-20261123/dev-e-rotations.json`。
 
 | 項目 | woowbk-dev-e |
 | --- | --- |
@@ -321,8 +321,8 @@ max、oom、oom_kill 都是 0。上限 4g 為 HA 匯入時的拋棄式容器（t
 | 資源上限 | `--memory 3g --cpus 2` |
 | 額外套件 | 設備映像沒有、dev-e 也連不到 apt：python3-nacl 1.5.0-4build1、python3-cryptography 41.0.7-4ubuntu0.4（HA 加密備份）、jq 1.7.1-3ubuntu0.24.04.2，由同一個設備映像的拋棄式容器（實驗室儲存、唯一連網的步驟）下載 .deb 到 `~/.woowbk-lab/cache/debs-noble`（附 sha256），再複製進去以 dpkg 安裝 |
 | OpenDesign 4.2.1（OpenDesign 0.24.1） | `open-design`／`open-design-mcp`／`open-design-nginx`／`open-design-terminal`，127.0.0.1:7456；套件 `~/Woow_podman_opendesign`（1067bc4，PR #17 的 head，上游合併為 bbbd4de）；Paseo 開啟，來源 `https://opendesign.lab.invalid`。**19:44 輪替出去**（真實匯入 85／85 通過之後）：單元停止、映像與 keep-id 複本移除（主機多出 12.07 GiB）；單元檔、env、密鑰、資料卷、目錄項目與基準備份保留。喚醒：`deploy-batch2.sh e images:opendesign`，再啟動四個單元 |
-| Nextcloud 35.0.1＋Collabora | `nextcloud-db`／`-redis`／`-app`／`-office`／`-gateway`＋`nextcloud-cron.timer`，127.0.0.1:18081；套件 `~/Woow_podman_nextcloud_fresh`（19a7609，PR #7 的 head）。2026-11-23 17:11 已安裝（套件 smoke 全部通過、`check:nextcloud` 全綠），**目前停止、映像已移除**（輪替，讓 OpenDesign 的真實匯入有磁碟空間；單元、密鑰、設定與資料目錄都還在） |
-| code-server 4.139.1-8 | `code-server`＋`code-server-health.timer`，127.0.0.1:18443；套件 `~/Woow_podman_code_server_package`（tag 4.139.1-8＝e7dbbea），2026-11-23 20:08 以 `scripts/install.sh --no-build --yes` 安裝（全新密碼密鑰 `code-server-config`，套件 smoke 11／11，`check:code-server` 全綠）；正式主機沒有它的目錄項目（未納入），dev-e 用 codeserver-import 那一線的實驗室目錄項目 `tests/e2e/lab/catalog/woow-code-server.json`（三個資料卷、密鑰、env 檔與工作區 `~/Desktop`，擁有者決定 D1 b） |
+| Nextcloud 35.0.1＋Collabora | `nextcloud-db`／`-redis`／`-app`／`-office`／`-gateway`＋`nextcloud-cron.timer`，127.0.0.1:18081；套件 `~/Woow_podman_nextcloud_fresh`（19a7609，PR #7 的 head）。2026-11-23 17:11 已安裝（套件 smoke 全部通過、`check:nextcloud` 全綠），17:15 休眠（單元停止、映像移除，讓 OpenDesign 的真實匯入有磁碟空間），**21:04 喚醒**（五個映像以主機的 ID 重新複製、`nextcloud.target` 啟動、`check:nextcloud` 全綠），基準備份 `20261123T132013Z-34811d90` |
+| code-server 4.139.1-8 | `code-server`＋`code-server-health.timer`，127.0.0.1:18443；套件 `~/Woow_podman_code_server_package`（tag 4.139.1-8＝e7dbbea），2026-11-23 20:08 以 `scripts/install.sh --no-build --yes` 安裝（全新密碼密鑰 `code-server-config`，套件 smoke 11／11，`check:code-server` 全綠）；正式主機沒有它的目錄項目（未納入），dev-e 用 codeserver-import 那一線的實驗室目錄項目 `tests/e2e/lab/catalog/woow-code-server.json`（三個資料卷、密鑰、env 檔與工作區 `~/Desktop`，擁有者決定 D1 b）。真實匯入 87／87 通過後 **20:32 輪替出去**（映像與 keep-id 複本移除，主機多出 10.62 GiB；資料卷、`~/Desktop`、密鑰、目錄項目與基準備份保留）。喚醒：`images:code-server` 再跑一次 `code-server` 階段 |
 | 備份引擎 | lab/batch2-dev-e-20261123 79c0f8d（＝integration/ha-import-batch1-20261123 82ac971 加上實驗室腳本；匯入那一線跑的時候會換成自己的引擎），目錄項目 open-design、nextcloud、woow-code-server；設備金鑰 D4C6-F434-C5D0-659C，緊急金鑰 `~/.woowbk-lab/secrets/dev-e-kit.txt`（0600，實驗室拋棄式） |
 
 **建置**（重設後照做即可；每個階段都可以重跑）：
@@ -394,8 +394,12 @@ code-server（2026-11-23 20:12–20:15，16／16 通過，證據 `~/.woowbk-lab/
 `GET /` 當成 200 而失敗，只寫入了基準標記；已修正）。
 `batch2_baseline.py` 在備份之前與（之後標記建立之前的）還原之前，要求主機在「應用現有資料 × 2.5」的估計尖峰之後仍保有 12 GiB＋1 GiB，
 否則該應用記為「PAUSED: host disk」、不寫任何東西；作業執行中主機剩不到 12.25 GiB 就以 `job-cancel` 取消作業。Nextcloud 的基準
-（17:12）因此暫停：標記已以 Nextcloud 自己的介面建立並讀回（`occ user:add`、標記使用者的 WebDAV PUT／PROPFIND／GET），但主機當時
-14.2 GiB 可用、估計尖峰 2.7 GiB，備份前就停止。
+（17:12）因此暫停（主機當時 14.2 GiB 可用、估計尖峰 2.7 GiB，備份前就停止）；喚醒後在 21:16–21:40 完成，14／14 通過
+（證據 `~/.woowbk-lab/evidence/batch2-lab/20261123T211623-baseline/` 與 `tests/e2e/lab/evidence/batch2-lab-20261123/nextcloud-baseline.json`）：
+標記使用者 `woowbk-lab-baseline` 與它的 WebDAV 檔案（`occ user:add`、WebDAV PUT／PROPFIND／GET），加密備份 `20261123T132013Z-34811d90`
+（422 MB、停機 102 秒）、之後的標記、原位還原（還原前備份 `20261123T133633Z-a7d7e492`）。驅動程式在還原期間被本線的 590 秒工具時限停掉
+（主機負載當時 117–235），還原作業本身照常完成，還原後的 7 項檢查由同樣檢查的接續腳本完成（證據裡有記錄）；更早一次嘗試因驅動程式
+用錯密碼寫入之後的檔案（HTTP 401）而停止，已修正，它的備份已刪除。
 
 **輪替與主機限制**（2026-11-23 實測）：三個應用的映像 15.2 GiB，加上 OpenDesign 與 code-server 第一次啟動時的 keep-id 複本（6.2＋5.2 GiB），
 一共約 27 GiB；主機在保留 12 GiB 之後只剩約 16 GiB，記憶體約 2.3 GB 可用。所以 dev-e 一次只部署（與執行）一個應用，測完以
