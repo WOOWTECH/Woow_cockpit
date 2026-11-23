@@ -1,0 +1,2357 @@
+{
+ "schema_version": 2,
+ "attempt": "ARM woow-arm-enc same-run Odoo capture v2 (source, restored, converted, runtime after 150 s, quiescent)",
+ "kind": "capture",
+ "device": "woowbk-dev-c (lab; network none, no published ports)",
+ "started_utc": "2026-11-23T00:53:50Z",
+ "source_commit": "capture e26ed30 (SQL v2 without snapshot_at); comparison b9da16e",
+ "engine_files_sha256": "7bf56d306e0ad2ac7e9affbc2d5568a9eaee561e905b2e28b0fbababda97ddf4",
+ "command": "python3 -B -I tests/e2e/lab/odoo_capture.py run --slot-granted --request <private 0600: ha-a5fb626820a0947482a3 woowtest, baseline 20261118T095247Z-388c9bd7, runtime_wait_seconds 150, lab HA key>; then fetch --run-id 997c63e766654d81bfe4aaf10d015b38 --fingerprint ~/.woowbk-lab/evidence/arm-ha-import/source-fingerprint.txt",
+ "exit_code": 0,
+ "elapsed_seconds": 355,
+ "stdout_sha256": "9dd997d4b4d4920948ff35f465cdb88cf46dfb3262d437176e7129b71b66723b",
+ "private_evidence": "/home/woowtechopenclaw/.woowbk-lab/evidence/odoo-n8n-final-20261123/capture-arm-997c63e7",
+ "status": "explained_row_differences",
+ "acceptance": true,
+ "run_id": "997c63e766654d81bfe4aaf10d015b38",
+ "source_vs_ha_fingerprint": {
+  "differ": [],
+  "tables": 205
+ },
+ "restore_start_utc": "2026-11-23T00:55:10.342982",
+ "runtime_wait_seconds": 150,
+ "cron_log": {
+  "completed": [
+   1,
+   2,
+   3,
+   5,
+   7,
+   8,
+   9,
+   10,
+   11,
+   12,
+   13,
+   14,
+   15
+  ],
+  "lines": 52,
+  "started": [
+   1,
+   2,
+   3,
+   5,
+   7,
+   8,
+   9,
+   10,
+   11,
+   12,
+   13,
+   14,
+   15
+  ]
+ },
+ "limits": "Four tables row by row, every other table by count and md5 in the same snapshot. Explained rows follow odoo_explain rules (vendor file:line there); anything else fails.",
+ "edges": {
+  "converted_cold->quiescent": {
+   "rules": [
+    "runtime"
+   ],
+   "ok": true,
+   "other_tables_differ": [],
+   "summary": {
+    "events": 32,
+    "tables": {
+     "public.bus_bus": {
+      "by_kind": {
+       "removed": 6
+      },
+      "by_rule": {
+       "bus-gc": 6
+      },
+      "events": 6,
+      "explained": 6
+     },
+     "public.ir_cron": {
+      "by_kind": {
+       "changed": 13
+      },
+      "by_rule": {
+       "cron-schedule": 13
+      },
+      "events": 13,
+      "explained": 13
+     },
+     "public.ir_cron_progress": {
+      "by_kind": {
+       "added": 13
+      },
+      "by_rule": {
+       "cron-progress": 13
+      },
+      "events": 13,
+      "explained": 13
+     }
+    },
+    "unexplained": 0
+   },
+   "events": [
+    {
+     "after": null,
+     "before": {
+      "create_date": "2026-11-19T00:59:16.042443"
+     },
+     "columns": [],
+     "explained": true,
+     "id": 1,
+     "kind": "removed",
+     "rule": "bus-gc",
+     "table": "public.bus_bus",
+     "why": "older than 24 h, autovacuum ran"
+    },
+    {
+     "after": null,
+     "before": {
+      "create_date": "2026-11-19T00:59:16.042443"
+     },
+     "columns": [],
+     "explained": true,
+     "id": 2,
+     "kind": "removed",
+     "rule": "bus-gc",
+     "table": "public.bus_bus",
+     "why": "older than 24 h, autovacuum ran"
+    },
+    {
+     "after": null,
+     "before": {
+      "create_date": "2026-11-19T00:59:16.042443"
+     },
+     "columns": [],
+     "explained": true,
+     "id": 3,
+     "kind": "removed",
+     "rule": "bus-gc",
+     "table": "public.bus_bus",
+     "why": "older than 24 h, autovacuum ran"
+    },
+    {
+     "after": null,
+     "before": {
+      "create_date": "2026-11-19T00:59:16.042443"
+     },
+     "columns": [],
+     "explained": true,
+     "id": 4,
+     "kind": "removed",
+     "rule": "bus-gc",
+     "table": "public.bus_bus",
+     "why": "older than 24 h, autovacuum ran"
+    },
+    {
+     "after": null,
+     "before": {
+      "create_date": "2026-11-19T00:59:16.042443"
+     },
+     "columns": [],
+     "explained": true,
+     "id": 5,
+     "kind": "removed",
+     "rule": "bus-gc",
+     "table": "public.bus_bus",
+     "why": "older than 24 h, autovacuum ran"
+    },
+    {
+     "after": null,
+     "before": {
+      "create_date": "2026-11-19T00:59:16.042443"
+     },
+     "columns": [],
+     "explained": true,
+     "id": 6,
+     "kind": "removed",
+     "rule": "bus-gc",
+     "table": "public.bus_bus",
+     "why": "older than 24 h, autovacuum ran"
+    },
+    {
+     "after": {
+      "cron_name": "Base: Auto-vacuum internal data",
+      "failure_count": 0,
+      "first_failure_date": null,
+      "lastcall": "2026-11-23T00:57:27",
+      "nextcall": "2026-11-24T00:56:21",
+      "xmlid": "base.autovacuum_job"
+     },
+     "before": {
+      "cron_name": "Base: Auto-vacuum internal data",
+      "failure_count": 0,
+      "first_failure_date": null,
+      "lastcall": "2026-11-19T01:09:39",
+      "nextcall": "2026-11-20T00:56:21",
+      "xmlid": "base.autovacuum_job"
+     },
+     "columns": [
+      "lastcall",
+      "nextcall"
+     ],
+     "explained": true,
+     "id": 1,
+     "kind": "changed",
+     "rule": "cron-schedule",
+     "table": "public.ir_cron",
+     "why": "job ran after the restore"
+    },
+    {
+     "after": {
+      "cron_name": "Base: Portal Users Deletion",
+      "failure_count": 0,
+      "first_failure_date": null,
+      "lastcall": "2026-11-23T00:57:28",
+      "nextcall": "2026-11-24T00:56:21",
+      "xmlid": "base.ir_cron_res_users_deletion"
+     },
+     "before": {
+      "cron_name": "Base: Portal Users Deletion",
+      "failure_count": 0,
+      "first_failure_date": null,
+      "lastcall": "2026-11-19T00:57:32",
+      "nextcall": "2026-11-20T00:56:21",
+      "xmlid": "base.ir_cron_res_users_deletion"
+     },
+     "columns": [
+      "lastcall",
+      "nextcall"
+     ],
+     "explained": true,
+     "id": 2,
+     "kind": "changed",
+     "rule": "cron-schedule",
+     "table": "public.ir_cron",
+     "why": "job ran after the restore"
+    },
+    {
+     "after": {
+      "cron_name": "Mail: Email Queue Manager",
+      "failure_count": 0,
+      "first_failure_date": null,
+      "lastcall": "2026-11-23T00:57:28",
+      "nextcall": "2026-11-23T00:59:22",
+      "xmlid": "mail.ir_cron_mail_scheduler_action"
+     },
+     "before": {
+      "cron_name": "Mail: Email Queue Manager",
+      "failure_count": 0,
+      "first_failure_date": null,
+      "lastcall": "2026-11-19T01:00:51",
+      "nextcall": "2026-11-19T01:59:22",
+      "xmlid": "mail.ir_cron_mail_scheduler_action"
+     },
+     "columns": [
+      "lastcall",
+      "nextcall"
+     ],
+     "explained": true,
+     "id": 3,
+     "kind": "changed",
+     "rule": "cron-schedule",
+     "table": "public.ir_cron",
+     "why": "job ran after the restore"
+    },
+    {
+     "after": {
+      "cron_name": "Notification: Delete Notifications older than 6 Month",
+      "failure_count": 0,
+      "first_failure_date": null,
+      "lastcall": "2026-11-23T00:57:28",
+      "nextcall": "2026-11-23T00:59:22",
+      "xmlid": "mail.ir_cron_delete_notification"
+     },
+     "before": {
+      "cron_name": "Notification: Delete Notifications older than 6 Month",
+      "failure_count": 0,
+      "first_failure_date": null,
+      "lastcall": "2026-11-19T01:00:50",
+      "nextcall": "2026-11-20T00:59:22",
+      "xmlid": "mail.ir_cron_delete_notification"
+     },
+     "columns": [
+      "lastcall",
+      "nextcall"
+     ],
+     "explained": true,
+     "id": 5,
+     "kind": "changed",
+     "rule": "cron-schedule",
+     "table": "public.ir_cron",
+     "why": "job ran after the restore"
+    },
+    {
+     "after": {
+      "cron_name": "Mail: Post scheduled messages",
+      "failure_count": 0,
+      "first_failure_date": null,
+      "lastcall": "2026-11-23T00:57:28",
+      "nextcall": "2026-11-23T00:59:22",
+      "xmlid": "mail.ir_cron_post_scheduled_message"
+     },
+     "before": {
+      "cron_name": "Mail: Post scheduled messages",
+      "failure_count": 0,
+      "first_failure_date": null,
+      "lastcall": "2026-11-19T01:00:50",
+      "nextcall": "2026-11-20T00:59:22",
+      "xmlid": "mail.ir_cron_post_scheduled_message"
+     },
+     "columns": [
+      "lastcall",
+      "nextcall"
+     ],
+     "explained": true,
+     "id": 7,
+     "kind": "changed",
+     "rule": "cron-schedule",
+     "table": "public.ir_cron",
+     "why": "job ran after the restore"
+    },
+    {
+     "after": {
+      "cron_name": "Notification: Notify scheduled messages",
+      "failure_count": 0,
+      "first_failure_date": null,
+      "lastcall": "2026-11-23T00:57:28",
+      "nextcall": "2026-11-23T00:59:22",
+      "xmlid": "mail.ir_cron_send_scheduled_message"
+     },
+     "before": {
+      "cron_name": "Notification: Notify scheduled messages",
+      "failure_count": 0,
+      "first_failure_date": null,
+      "lastcall": "2026-11-19T01:00:50",
+      "nextcall": "2026-11-19T01:59:22",
+      "xmlid": "mail.ir_cron_send_scheduled_message"
+     },
+     "columns": [
+      "lastcall",
+      "nextcall"
+     ],
+     "explained": true,
+     "id": 8,
+     "kind": "changed",
+     "rule": "cron-schedule",
+     "table": "public.ir_cron",
+     "why": "job ran after the restore"
+    },
+    {
+     "after": {
+      "cron_name": "Mail: send web push notification",
+      "failure_count": 0,
+      "first_failure_date": null,
+      "lastcall": "2026-11-23T00:57:28",
+      "nextcall": "2026-11-23T00:59:22",
+      "xmlid": "mail.ir_cron_web_push_notification"
+     },
+     "before": {
+      "cron_name": "Mail: send web push notification",
+      "failure_count": 0,
+      "first_failure_date": null,
+      "lastcall": "2026-11-19T01:00:50",
+      "nextcall": "2026-11-20T00:59:22",
+      "xmlid": "mail.ir_cron_web_push_notification"
+     },
+     "columns": [
+      "lastcall",
+      "nextcall"
+     ],
+     "explained": true,
+     "id": 9,
+     "kind": "changed",
+     "rule": "cron-schedule",
+     "table": "public.ir_cron",
+     "why": "job ran after the restore"
+    },
+    {
+     "after": {
+      "cron_name": "Discuss: channel member unmute",
+      "failure_count": 0,
+      "first_failure_date": null,
+      "lastcall": "2026-11-23T00:57:28",
+      "nextcall": "2026-11-23T00:59:22",
+      "xmlid": "mail.ir_cron_discuss_channel_member_unmute"
+     },
+     "before": {
+      "cron_name": "Discuss: channel member unmute",
+      "failure_count": 0,
+      "first_failure_date": null,
+      "lastcall": "2026-11-19T01:00:50",
+      "nextcall": "2026-11-20T00:59:22",
+      "xmlid": "mail.ir_cron_discuss_channel_member_unmute"
+     },
+     "columns": [
+      "lastcall",
+      "nextcall"
+     ],
+     "explained": true,
+     "id": 10,
+     "kind": "changed",
+     "rule": "cron-schedule",
+     "table": "public.ir_cron",
+     "why": "job ran after the restore"
+    },
+    {
+     "after": {
+      "cron_name": "Discuss: users settings unmute",
+      "failure_count": 0,
+      "first_failure_date": null,
+      "lastcall": "2026-11-23T00:57:28",
+      "nextcall": "2026-11-23T00:59:22",
+      "xmlid": "mail.ir_cron_discuss_users_settings_unmute"
+     },
+     "before": {
+      "cron_name": "Discuss: users settings unmute",
+      "failure_count": 0,
+      "first_failure_date": null,
+      "lastcall": "2026-11-19T01:00:51",
+      "nextcall": "2026-11-20T00:59:22",
+      "xmlid": "mail.ir_cron_discuss_users_settings_unmute"
+     },
+     "columns": [
+      "lastcall",
+      "nextcall"
+     ],
+     "explained": true,
+     "id": 11,
+     "kind": "changed",
+     "rule": "cron-schedule",
+     "table": "public.ir_cron",
+     "why": "job ran after the restore"
+    },
+    {
+     "after": {
+      "cron_name": "Users: Notify About Unregistered Users",
+      "failure_count": 0,
+      "first_failure_date": null,
+      "lastcall": "2026-11-23T00:57:28",
+      "nextcall": "2026-11-23T00:59:23",
+      "xmlid": "auth_signup.ir_cron_auth_signup_send_pending_user_reminder"
+     },
+     "before": {
+      "cron_name": "Users: Notify About Unregistered Users",
+      "failure_count": 0,
+      "first_failure_date": null,
+      "lastcall": "2026-11-19T01:00:51",
+      "nextcall": "2026-11-20T00:59:23",
+      "xmlid": "auth_signup.ir_cron_auth_signup_send_pending_user_reminder"
+     },
+     "columns": [
+      "lastcall",
+      "nextcall"
+     ],
+     "explained": true,
+     "id": 12,
+     "kind": "changed",
+     "rule": "cron-schedule",
+     "table": "public.ir_cron",
+     "why": "job ran after the restore"
+    },
+    {
+     "after": {
+      "cron_name": "Partner Autocomplete: Sync with remote DB",
+      "failure_count": 0,
+      "first_failure_date": null,
+      "lastcall": "2026-11-23T00:57:28",
+      "nextcall": "2026-11-23T00:59:26",
+      "xmlid": "partner_autocomplete.ir_cron_partner_autocomplete"
+     },
+     "before": {
+      "cron_name": "Partner Autocomplete: Sync with remote DB",
+      "failure_count": 0,
+      "first_failure_date": null,
+      "lastcall": "2026-11-19T01:00:51",
+      "nextcall": "2026-11-19T01:59:26",
+      "xmlid": "partner_autocomplete.ir_cron_partner_autocomplete"
+     },
+     "columns": [
+      "lastcall",
+      "nextcall"
+     ],
+     "explained": true,
+     "id": 13,
+     "kind": "changed",
+     "rule": "cron-schedule",
+     "table": "public.ir_cron",
+     "why": "job ran after the restore"
+    },
+    {
+     "after": {
+      "cron_name": "SMS: SMS Queue Manager",
+      "failure_count": 0,
+      "first_failure_date": null,
+      "lastcall": "2026-11-23T00:57:28",
+      "nextcall": "2026-11-23T00:59:28",
+      "xmlid": "sms.ir_cron_sms_scheduler_action"
+     },
+     "before": {
+      "cron_name": "SMS: SMS Queue Manager",
+      "failure_count": 0,
+      "first_failure_date": null,
+      "lastcall": "2026-11-19T01:00:51",
+      "nextcall": "2026-11-19T01:59:28",
+      "xmlid": "sms.ir_cron_sms_scheduler_action"
+     },
+     "columns": [
+      "lastcall",
+      "nextcall"
+     ],
+     "explained": true,
+     "id": 14,
+     "kind": "changed",
+     "rule": "cron-schedule",
+     "table": "public.ir_cron",
+     "why": "job ran after the restore"
+    },
+    {
+     "after": {
+      "cron_name": "Snailmail: process letters queue",
+      "failure_count": 0,
+      "first_failure_date": null,
+      "lastcall": "2026-11-23T00:57:28",
+      "nextcall": "2026-11-23T00:59:29",
+      "xmlid": "snailmail.snailmail_print"
+     },
+     "before": {
+      "cron_name": "Snailmail: process letters queue",
+      "failure_count": 0,
+      "first_failure_date": null,
+      "lastcall": "2026-11-19T01:00:51",
+      "nextcall": "2026-11-19T01:59:29",
+      "xmlid": "snailmail.snailmail_print"
+     },
+     "columns": [
+      "lastcall",
+      "nextcall"
+     ],
+     "explained": true,
+     "id": 15,
+     "kind": "changed",
+     "rule": "cron-schedule",
+     "table": "public.ir_cron",
+     "why": "job ran after the restore"
+    },
+    {
+     "after": {
+      "create_date": "2026-11-23T00:57:27.087021",
+      "cron_id": 1,
+      "done": 0,
+      "remaining": 0,
+      "timed_out_counter": 0
+     },
+     "before": null,
+     "columns": [],
+     "explained": true,
+     "id": 16,
+     "kind": "added",
+     "rule": "cron-progress",
+     "table": "public.ir_cron_progress",
+     "why": "progress of a job that ran after the restore"
+    },
+    {
+     "after": {
+      "create_date": "2026-11-23T00:57:27.960464",
+      "cron_id": 5,
+      "done": 0,
+      "remaining": 0,
+      "timed_out_counter": 0
+     },
+     "before": null,
+     "columns": [],
+     "explained": true,
+     "id": 17,
+     "kind": "added",
+     "rule": "cron-progress",
+     "table": "public.ir_cron_progress",
+     "why": "progress of a job that ran after the restore"
+    },
+    {
+     "after": {
+      "create_date": "2026-11-23T00:57:28.047624",
+      "cron_id": 7,
+      "done": 0,
+      "remaining": 0,
+      "timed_out_counter": 0
+     },
+     "before": null,
+     "columns": [],
+     "explained": true,
+     "id": 18,
+     "kind": "added",
+     "rule": "cron-progress",
+     "table": "public.ir_cron_progress",
+     "why": "progress of a job that ran after the restore"
+    },
+    {
+     "after": {
+      "create_date": "2026-11-23T00:57:28.09352",
+      "cron_id": 8,
+      "done": 0,
+      "remaining": 0,
+      "timed_out_counter": 0
+     },
+     "before": null,
+     "columns": [],
+     "explained": true,
+     "id": 19,
+     "kind": "added",
+     "rule": "cron-progress",
+     "table": "public.ir_cron_progress",
+     "why": "progress of a job that ran after the restore"
+    },
+    {
+     "after": {
+      "create_date": "2026-11-23T00:57:28.097872",
+      "cron_id": 9,
+      "done": 0,
+      "remaining": 0,
+      "timed_out_counter": 0
+     },
+     "before": null,
+     "columns": [],
+     "explained": true,
+     "id": 20,
+     "kind": "added",
+     "rule": "cron-progress",
+     "table": "public.ir_cron_progress",
+     "why": "progress of a job that ran after the restore"
+    },
+    {
+     "after": {
+      "create_date": "2026-11-23T00:57:28.136749",
+      "cron_id": 10,
+      "done": 0,
+      "remaining": 0,
+      "timed_out_counter": 0
+     },
+     "before": null,
+     "columns": [],
+     "explained": true,
+     "id": 21,
+     "kind": "added",
+     "rule": "cron-progress",
+     "table": "public.ir_cron_progress",
+     "why": "progress of a job that ran after the restore"
+    },
+    {
+     "after": {
+      "create_date": "2026-11-23T00:57:28.143053",
+      "cron_id": 11,
+      "done": 0,
+      "remaining": 0,
+      "timed_out_counter": 0
+     },
+     "before": null,
+     "columns": [],
+     "explained": true,
+     "id": 22,
+     "kind": "added",
+     "rule": "cron-progress",
+     "table": "public.ir_cron_progress",
+     "why": "progress of a job that ran after the restore"
+    },
+    {
+     "after": {
+      "create_date": "2026-11-23T00:57:28.175683",
+      "cron_id": 14,
+      "done": 0,
+      "remaining": 0,
+      "timed_out_counter": 0
+     },
+     "before": null,
+     "columns": [],
+     "explained": true,
+     "id": 23,
+     "kind": "added",
+     "rule": "cron-progress",
+     "table": "public.ir_cron_progress",
+     "why": "progress of a job that ran after the restore"
+    },
+    {
+     "after": {
+      "create_date": "2026-11-23T00:57:28.187633",
+      "cron_id": 15,
+      "done": 0,
+      "remaining": 0,
+      "timed_out_counter": 0
+     },
+     "before": null,
+     "columns": [],
+     "explained": true,
+     "id": 24,
+     "kind": "added",
+     "rule": "cron-progress",
+     "table": "public.ir_cron_progress",
+     "why": "progress of a job that ran after the restore"
+    },
+    {
+     "after": {
+      "create_date": "2026-11-23T00:57:28.236885",
+      "cron_id": 3,
+      "done": 0,
+      "remaining": 0,
+      "timed_out_counter": 0
+     },
+     "before": null,
+     "columns": [],
+     "explained": true,
+     "id": 25,
+     "kind": "added",
+     "rule": "cron-progress",
+     "table": "public.ir_cron_progress",
+     "why": "progress of a job that ran after the restore"
+    },
+    {
+     "after": {
+      "create_date": "2026-11-23T00:57:28.245065",
+      "cron_id": 12,
+      "done": 0,
+      "remaining": 0,
+      "timed_out_counter": 0
+     },
+     "before": null,
+     "columns": [],
+     "explained": true,
+     "id": 26,
+     "kind": "added",
+     "rule": "cron-progress",
+     "table": "public.ir_cron_progress",
+     "why": "progress of a job that ran after the restore"
+    },
+    {
+     "after": {
+      "create_date": "2026-11-23T00:57:28.278056",
+      "cron_id": 13,
+      "done": 0,
+      "remaining": 0,
+      "timed_out_counter": 0
+     },
+     "before": null,
+     "columns": [],
+     "explained": true,
+     "id": 27,
+     "kind": "added",
+     "rule": "cron-progress",
+     "table": "public.ir_cron_progress",
+     "why": "progress of a job that ran after the restore"
+    },
+    {
+     "after": {
+      "create_date": "2026-11-23T00:57:28.331471",
+      "cron_id": 2,
+      "done": 0,
+      "remaining": 0,
+      "timed_out_counter": 0
+     },
+     "before": null,
+     "columns": [],
+     "explained": true,
+     "id": 28,
+     "kind": "added",
+     "rule": "cron-progress",
+     "table": "public.ir_cron_progress",
+     "why": "progress of a job that ran after the restore"
+    }
+   ]
+  },
+  "converted_cold->runtime": {
+   "rules": [
+    "runtime"
+   ],
+   "ok": true,
+   "other_tables_differ": [],
+   "summary": {
+    "events": 32,
+    "tables": {
+     "public.bus_bus": {
+      "by_kind": {
+       "removed": 6
+      },
+      "by_rule": {
+       "bus-gc": 6
+      },
+      "events": 6,
+      "explained": 6
+     },
+     "public.ir_cron": {
+      "by_kind": {
+       "changed": 13
+      },
+      "by_rule": {
+       "cron-schedule": 13
+      },
+      "events": 13,
+      "explained": 13
+     },
+     "public.ir_cron_progress": {
+      "by_kind": {
+       "added": 13
+      },
+      "by_rule": {
+       "cron-progress": 13
+      },
+      "events": 13,
+      "explained": 13
+     }
+    },
+    "unexplained": 0
+   },
+   "events": [
+    {
+     "after": null,
+     "before": {
+      "create_date": "2026-11-19T00:59:16.042443"
+     },
+     "columns": [],
+     "explained": true,
+     "id": 1,
+     "kind": "removed",
+     "rule": "bus-gc",
+     "table": "public.bus_bus",
+     "why": "older than 24 h, autovacuum ran"
+    },
+    {
+     "after": null,
+     "before": {
+      "create_date": "2026-11-19T00:59:16.042443"
+     },
+     "columns": [],
+     "explained": true,
+     "id": 2,
+     "kind": "removed",
+     "rule": "bus-gc",
+     "table": "public.bus_bus",
+     "why": "older than 24 h, autovacuum ran"
+    },
+    {
+     "after": null,
+     "before": {
+      "create_date": "2026-11-19T00:59:16.042443"
+     },
+     "columns": [],
+     "explained": true,
+     "id": 3,
+     "kind": "removed",
+     "rule": "bus-gc",
+     "table": "public.bus_bus",
+     "why": "older than 24 h, autovacuum ran"
+    },
+    {
+     "after": null,
+     "before": {
+      "create_date": "2026-11-19T00:59:16.042443"
+     },
+     "columns": [],
+     "explained": true,
+     "id": 4,
+     "kind": "removed",
+     "rule": "bus-gc",
+     "table": "public.bus_bus",
+     "why": "older than 24 h, autovacuum ran"
+    },
+    {
+     "after": null,
+     "before": {
+      "create_date": "2026-11-19T00:59:16.042443"
+     },
+     "columns": [],
+     "explained": true,
+     "id": 5,
+     "kind": "removed",
+     "rule": "bus-gc",
+     "table": "public.bus_bus",
+     "why": "older than 24 h, autovacuum ran"
+    },
+    {
+     "after": null,
+     "before": {
+      "create_date": "2026-11-19T00:59:16.042443"
+     },
+     "columns": [],
+     "explained": true,
+     "id": 6,
+     "kind": "removed",
+     "rule": "bus-gc",
+     "table": "public.bus_bus",
+     "why": "older than 24 h, autovacuum ran"
+    },
+    {
+     "after": {
+      "cron_name": "Base: Auto-vacuum internal data",
+      "failure_count": 0,
+      "first_failure_date": null,
+      "lastcall": "2026-11-23T00:57:27",
+      "nextcall": "2026-11-24T00:56:21",
+      "xmlid": "base.autovacuum_job"
+     },
+     "before": {
+      "cron_name": "Base: Auto-vacuum internal data",
+      "failure_count": 0,
+      "first_failure_date": null,
+      "lastcall": "2026-11-19T01:09:39",
+      "nextcall": "2026-11-20T00:56:21",
+      "xmlid": "base.autovacuum_job"
+     },
+     "columns": [
+      "lastcall",
+      "nextcall"
+     ],
+     "explained": true,
+     "id": 1,
+     "kind": "changed",
+     "rule": "cron-schedule",
+     "table": "public.ir_cron",
+     "why": "job ran after the restore"
+    },
+    {
+     "after": {
+      "cron_name": "Base: Portal Users Deletion",
+      "failure_count": 0,
+      "first_failure_date": null,
+      "lastcall": "2026-11-23T00:57:28",
+      "nextcall": "2026-11-24T00:56:21",
+      "xmlid": "base.ir_cron_res_users_deletion"
+     },
+     "before": {
+      "cron_name": "Base: Portal Users Deletion",
+      "failure_count": 0,
+      "first_failure_date": null,
+      "lastcall": "2026-11-19T00:57:32",
+      "nextcall": "2026-11-20T00:56:21",
+      "xmlid": "base.ir_cron_res_users_deletion"
+     },
+     "columns": [
+      "lastcall",
+      "nextcall"
+     ],
+     "explained": true,
+     "id": 2,
+     "kind": "changed",
+     "rule": "cron-schedule",
+     "table": "public.ir_cron",
+     "why": "job ran after the restore"
+    },
+    {
+     "after": {
+      "cron_name": "Mail: Email Queue Manager",
+      "failure_count": 0,
+      "first_failure_date": null,
+      "lastcall": "2026-11-23T00:57:28",
+      "nextcall": "2026-11-23T00:59:22",
+      "xmlid": "mail.ir_cron_mail_scheduler_action"
+     },
+     "before": {
+      "cron_name": "Mail: Email Queue Manager",
+      "failure_count": 0,
+      "first_failure_date": null,
+      "lastcall": "2026-11-19T01:00:51",
+      "nextcall": "2026-11-19T01:59:22",
+      "xmlid": "mail.ir_cron_mail_scheduler_action"
+     },
+     "columns": [
+      "lastcall",
+      "nextcall"
+     ],
+     "explained": true,
+     "id": 3,
+     "kind": "changed",
+     "rule": "cron-schedule",
+     "table": "public.ir_cron",
+     "why": "job ran after the restore"
+    },
+    {
+     "after": {
+      "cron_name": "Notification: Delete Notifications older than 6 Month",
+      "failure_count": 0,
+      "first_failure_date": null,
+      "lastcall": "2026-11-23T00:57:28",
+      "nextcall": "2026-11-23T00:59:22",
+      "xmlid": "mail.ir_cron_delete_notification"
+     },
+     "before": {
+      "cron_name": "Notification: Delete Notifications older than 6 Month",
+      "failure_count": 0,
+      "first_failure_date": null,
+      "lastcall": "2026-11-19T01:00:50",
+      "nextcall": "2026-11-20T00:59:22",
+      "xmlid": "mail.ir_cron_delete_notification"
+     },
+     "columns": [
+      "lastcall",
+      "nextcall"
+     ],
+     "explained": true,
+     "id": 5,
+     "kind": "changed",
+     "rule": "cron-schedule",
+     "table": "public.ir_cron",
+     "why": "job ran after the restore"
+    },
+    {
+     "after": {
+      "cron_name": "Mail: Post scheduled messages",
+      "failure_count": 0,
+      "first_failure_date": null,
+      "lastcall": "2026-11-23T00:57:28",
+      "nextcall": "2026-11-23T00:59:22",
+      "xmlid": "mail.ir_cron_post_scheduled_message"
+     },
+     "before": {
+      "cron_name": "Mail: Post scheduled messages",
+      "failure_count": 0,
+      "first_failure_date": null,
+      "lastcall": "2026-11-19T01:00:50",
+      "nextcall": "2026-11-20T00:59:22",
+      "xmlid": "mail.ir_cron_post_scheduled_message"
+     },
+     "columns": [
+      "lastcall",
+      "nextcall"
+     ],
+     "explained": true,
+     "id": 7,
+     "kind": "changed",
+     "rule": "cron-schedule",
+     "table": "public.ir_cron",
+     "why": "job ran after the restore"
+    },
+    {
+     "after": {
+      "cron_name": "Notification: Notify scheduled messages",
+      "failure_count": 0,
+      "first_failure_date": null,
+      "lastcall": "2026-11-23T00:57:28",
+      "nextcall": "2026-11-23T00:59:22",
+      "xmlid": "mail.ir_cron_send_scheduled_message"
+     },
+     "before": {
+      "cron_name": "Notification: Notify scheduled messages",
+      "failure_count": 0,
+      "first_failure_date": null,
+      "lastcall": "2026-11-19T01:00:50",
+      "nextcall": "2026-11-19T01:59:22",
+      "xmlid": "mail.ir_cron_send_scheduled_message"
+     },
+     "columns": [
+      "lastcall",
+      "nextcall"
+     ],
+     "explained": true,
+     "id": 8,
+     "kind": "changed",
+     "rule": "cron-schedule",
+     "table": "public.ir_cron",
+     "why": "job ran after the restore"
+    },
+    {
+     "after": {
+      "cron_name": "Mail: send web push notification",
+      "failure_count": 0,
+      "first_failure_date": null,
+      "lastcall": "2026-11-23T00:57:28",
+      "nextcall": "2026-11-23T00:59:22",
+      "xmlid": "mail.ir_cron_web_push_notification"
+     },
+     "before": {
+      "cron_name": "Mail: send web push notification",
+      "failure_count": 0,
+      "first_failure_date": null,
+      "lastcall": "2026-11-19T01:00:50",
+      "nextcall": "2026-11-20T00:59:22",
+      "xmlid": "mail.ir_cron_web_push_notification"
+     },
+     "columns": [
+      "lastcall",
+      "nextcall"
+     ],
+     "explained": true,
+     "id": 9,
+     "kind": "changed",
+     "rule": "cron-schedule",
+     "table": "public.ir_cron",
+     "why": "job ran after the restore"
+    },
+    {
+     "after": {
+      "cron_name": "Discuss: channel member unmute",
+      "failure_count": 0,
+      "first_failure_date": null,
+      "lastcall": "2026-11-23T00:57:28",
+      "nextcall": "2026-11-23T00:59:22",
+      "xmlid": "mail.ir_cron_discuss_channel_member_unmute"
+     },
+     "before": {
+      "cron_name": "Discuss: channel member unmute",
+      "failure_count": 0,
+      "first_failure_date": null,
+      "lastcall": "2026-11-19T01:00:50",
+      "nextcall": "2026-11-20T00:59:22",
+      "xmlid": "mail.ir_cron_discuss_channel_member_unmute"
+     },
+     "columns": [
+      "lastcall",
+      "nextcall"
+     ],
+     "explained": true,
+     "id": 10,
+     "kind": "changed",
+     "rule": "cron-schedule",
+     "table": "public.ir_cron",
+     "why": "job ran after the restore"
+    },
+    {
+     "after": {
+      "cron_name": "Discuss: users settings unmute",
+      "failure_count": 0,
+      "first_failure_date": null,
+      "lastcall": "2026-11-23T00:57:28",
+      "nextcall": "2026-11-23T00:59:22",
+      "xmlid": "mail.ir_cron_discuss_users_settings_unmute"
+     },
+     "before": {
+      "cron_name": "Discuss: users settings unmute",
+      "failure_count": 0,
+      "first_failure_date": null,
+      "lastcall": "2026-11-19T01:00:51",
+      "nextcall": "2026-11-20T00:59:22",
+      "xmlid": "mail.ir_cron_discuss_users_settings_unmute"
+     },
+     "columns": [
+      "lastcall",
+      "nextcall"
+     ],
+     "explained": true,
+     "id": 11,
+     "kind": "changed",
+     "rule": "cron-schedule",
+     "table": "public.ir_cron",
+     "why": "job ran after the restore"
+    },
+    {
+     "after": {
+      "cron_name": "Users: Notify About Unregistered Users",
+      "failure_count": 0,
+      "first_failure_date": null,
+      "lastcall": "2026-11-23T00:57:28",
+      "nextcall": "2026-11-23T00:59:23",
+      "xmlid": "auth_signup.ir_cron_auth_signup_send_pending_user_reminder"
+     },
+     "before": {
+      "cron_name": "Users: Notify About Unregistered Users",
+      "failure_count": 0,
+      "first_failure_date": null,
+      "lastcall": "2026-11-19T01:00:51",
+      "nextcall": "2026-11-20T00:59:23",
+      "xmlid": "auth_signup.ir_cron_auth_signup_send_pending_user_reminder"
+     },
+     "columns": [
+      "lastcall",
+      "nextcall"
+     ],
+     "explained": true,
+     "id": 12,
+     "kind": "changed",
+     "rule": "cron-schedule",
+     "table": "public.ir_cron",
+     "why": "job ran after the restore"
+    },
+    {
+     "after": {
+      "cron_name": "Partner Autocomplete: Sync with remote DB",
+      "failure_count": 0,
+      "first_failure_date": null,
+      "lastcall": "2026-11-23T00:57:28",
+      "nextcall": "2026-11-23T00:59:26",
+      "xmlid": "partner_autocomplete.ir_cron_partner_autocomplete"
+     },
+     "before": {
+      "cron_name": "Partner Autocomplete: Sync with remote DB",
+      "failure_count": 0,
+      "first_failure_date": null,
+      "lastcall": "2026-11-19T01:00:51",
+      "nextcall": "2026-11-19T01:59:26",
+      "xmlid": "partner_autocomplete.ir_cron_partner_autocomplete"
+     },
+     "columns": [
+      "lastcall",
+      "nextcall"
+     ],
+     "explained": true,
+     "id": 13,
+     "kind": "changed",
+     "rule": "cron-schedule",
+     "table": "public.ir_cron",
+     "why": "job ran after the restore"
+    },
+    {
+     "after": {
+      "cron_name": "SMS: SMS Queue Manager",
+      "failure_count": 0,
+      "first_failure_date": null,
+      "lastcall": "2026-11-23T00:57:28",
+      "nextcall": "2026-11-23T00:59:28",
+      "xmlid": "sms.ir_cron_sms_scheduler_action"
+     },
+     "before": {
+      "cron_name": "SMS: SMS Queue Manager",
+      "failure_count": 0,
+      "first_failure_date": null,
+      "lastcall": "2026-11-19T01:00:51",
+      "nextcall": "2026-11-19T01:59:28",
+      "xmlid": "sms.ir_cron_sms_scheduler_action"
+     },
+     "columns": [
+      "lastcall",
+      "nextcall"
+     ],
+     "explained": true,
+     "id": 14,
+     "kind": "changed",
+     "rule": "cron-schedule",
+     "table": "public.ir_cron",
+     "why": "job ran after the restore"
+    },
+    {
+     "after": {
+      "cron_name": "Snailmail: process letters queue",
+      "failure_count": 0,
+      "first_failure_date": null,
+      "lastcall": "2026-11-23T00:57:28",
+      "nextcall": "2026-11-23T00:59:29",
+      "xmlid": "snailmail.snailmail_print"
+     },
+     "before": {
+      "cron_name": "Snailmail: process letters queue",
+      "failure_count": 0,
+      "first_failure_date": null,
+      "lastcall": "2026-11-19T01:00:51",
+      "nextcall": "2026-11-19T01:59:29",
+      "xmlid": "snailmail.snailmail_print"
+     },
+     "columns": [
+      "lastcall",
+      "nextcall"
+     ],
+     "explained": true,
+     "id": 15,
+     "kind": "changed",
+     "rule": "cron-schedule",
+     "table": "public.ir_cron",
+     "why": "job ran after the restore"
+    },
+    {
+     "after": {
+      "create_date": "2026-11-23T00:57:27.087021",
+      "cron_id": 1,
+      "done": 0,
+      "remaining": 0,
+      "timed_out_counter": 0
+     },
+     "before": null,
+     "columns": [],
+     "explained": true,
+     "id": 16,
+     "kind": "added",
+     "rule": "cron-progress",
+     "table": "public.ir_cron_progress",
+     "why": "progress of a job that ran after the restore"
+    },
+    {
+     "after": {
+      "create_date": "2026-11-23T00:57:27.960464",
+      "cron_id": 5,
+      "done": 0,
+      "remaining": 0,
+      "timed_out_counter": 0
+     },
+     "before": null,
+     "columns": [],
+     "explained": true,
+     "id": 17,
+     "kind": "added",
+     "rule": "cron-progress",
+     "table": "public.ir_cron_progress",
+     "why": "progress of a job that ran after the restore"
+    },
+    {
+     "after": {
+      "create_date": "2026-11-23T00:57:28.047624",
+      "cron_id": 7,
+      "done": 0,
+      "remaining": 0,
+      "timed_out_counter": 0
+     },
+     "before": null,
+     "columns": [],
+     "explained": true,
+     "id": 18,
+     "kind": "added",
+     "rule": "cron-progress",
+     "table": "public.ir_cron_progress",
+     "why": "progress of a job that ran after the restore"
+    },
+    {
+     "after": {
+      "create_date": "2026-11-23T00:57:28.09352",
+      "cron_id": 8,
+      "done": 0,
+      "remaining": 0,
+      "timed_out_counter": 0
+     },
+     "before": null,
+     "columns": [],
+     "explained": true,
+     "id": 19,
+     "kind": "added",
+     "rule": "cron-progress",
+     "table": "public.ir_cron_progress",
+     "why": "progress of a job that ran after the restore"
+    },
+    {
+     "after": {
+      "create_date": "2026-11-23T00:57:28.097872",
+      "cron_id": 9,
+      "done": 0,
+      "remaining": 0,
+      "timed_out_counter": 0
+     },
+     "before": null,
+     "columns": [],
+     "explained": true,
+     "id": 20,
+     "kind": "added",
+     "rule": "cron-progress",
+     "table": "public.ir_cron_progress",
+     "why": "progress of a job that ran after the restore"
+    },
+    {
+     "after": {
+      "create_date": "2026-11-23T00:57:28.136749",
+      "cron_id": 10,
+      "done": 0,
+      "remaining": 0,
+      "timed_out_counter": 0
+     },
+     "before": null,
+     "columns": [],
+     "explained": true,
+     "id": 21,
+     "kind": "added",
+     "rule": "cron-progress",
+     "table": "public.ir_cron_progress",
+     "why": "progress of a job that ran after the restore"
+    },
+    {
+     "after": {
+      "create_date": "2026-11-23T00:57:28.143053",
+      "cron_id": 11,
+      "done": 0,
+      "remaining": 0,
+      "timed_out_counter": 0
+     },
+     "before": null,
+     "columns": [],
+     "explained": true,
+     "id": 22,
+     "kind": "added",
+     "rule": "cron-progress",
+     "table": "public.ir_cron_progress",
+     "why": "progress of a job that ran after the restore"
+    },
+    {
+     "after": {
+      "create_date": "2026-11-23T00:57:28.175683",
+      "cron_id": 14,
+      "done": 0,
+      "remaining": 0,
+      "timed_out_counter": 0
+     },
+     "before": null,
+     "columns": [],
+     "explained": true,
+     "id": 23,
+     "kind": "added",
+     "rule": "cron-progress",
+     "table": "public.ir_cron_progress",
+     "why": "progress of a job that ran after the restore"
+    },
+    {
+     "after": {
+      "create_date": "2026-11-23T00:57:28.187633",
+      "cron_id": 15,
+      "done": 0,
+      "remaining": 0,
+      "timed_out_counter": 0
+     },
+     "before": null,
+     "columns": [],
+     "explained": true,
+     "id": 24,
+     "kind": "added",
+     "rule": "cron-progress",
+     "table": "public.ir_cron_progress",
+     "why": "progress of a job that ran after the restore"
+    },
+    {
+     "after": {
+      "create_date": "2026-11-23T00:57:28.236885",
+      "cron_id": 3,
+      "done": 0,
+      "remaining": 0,
+      "timed_out_counter": 0
+     },
+     "before": null,
+     "columns": [],
+     "explained": true,
+     "id": 25,
+     "kind": "added",
+     "rule": "cron-progress",
+     "table": "public.ir_cron_progress",
+     "why": "progress of a job that ran after the restore"
+    },
+    {
+     "after": {
+      "create_date": "2026-11-23T00:57:28.245065",
+      "cron_id": 12,
+      "done": 0,
+      "remaining": 0,
+      "timed_out_counter": 0
+     },
+     "before": null,
+     "columns": [],
+     "explained": true,
+     "id": 26,
+     "kind": "added",
+     "rule": "cron-progress",
+     "table": "public.ir_cron_progress",
+     "why": "progress of a job that ran after the restore"
+    },
+    {
+     "after": {
+      "create_date": "2026-11-23T00:57:28.278056",
+      "cron_id": 13,
+      "done": 0,
+      "remaining": 0,
+      "timed_out_counter": 0
+     },
+     "before": null,
+     "columns": [],
+     "explained": true,
+     "id": 27,
+     "kind": "added",
+     "rule": "cron-progress",
+     "table": "public.ir_cron_progress",
+     "why": "progress of a job that ran after the restore"
+    },
+    {
+     "after": {
+      "create_date": "2026-11-23T00:57:28.331471",
+      "cron_id": 2,
+      "done": 0,
+      "remaining": 0,
+      "timed_out_counter": 0
+     },
+     "before": null,
+     "columns": [],
+     "explained": true,
+     "id": 28,
+     "kind": "added",
+     "rule": "cron-progress",
+     "table": "public.ir_cron_progress",
+     "why": "progress of a job that ran after the restore"
+    }
+   ]
+  },
+  "restored_cold->converted_cold": {
+   "rules": [
+    "import"
+   ],
+   "ok": true,
+   "other_tables_differ": [],
+   "summary": {
+    "events": 3,
+    "tables": {
+     "public.ir_config_parameter": {
+      "by_kind": {
+       "added": 1,
+       "changed": 1,
+       "removed": 1
+      },
+      "by_rule": {
+       "import-settings": 3
+      },
+      "events": 3,
+      "explained": 3
+     }
+    },
+    "unexplained": 0
+   },
+   "events": [
+    {
+     "after": {
+      "key": "web.base.url",
+      "value": "http://localhost:8069",
+      "write_date": "2026-11-23T00:54:32.707005"
+     },
+     "before": {
+      "key": "web.base.url",
+      "value": "http://192.168.2.34:8069",
+      "write_date": "2026-11-19T00:56:30.59518"
+     },
+     "columns": [
+      "value",
+      "write_date"
+     ],
+     "explained": true,
+     "id": 4,
+     "kind": "changed",
+     "rule": "import-settings",
+     "table": "public.ir_config_parameter",
+     "why": "web.base.url"
+    },
+    {
+     "after": null,
+     "before": {
+      "key": "web.base.url.freeze",
+      "value": "True",
+      "write_date": "2026-11-19T00:56:30.59518"
+     },
+     "columns": [],
+     "explained": true,
+     "id": 11,
+     "kind": "removed",
+     "rule": "import-settings",
+     "table": "public.ir_config_parameter",
+     "why": "web.base.url.freeze"
+    },
+    {
+     "after": {
+      "key": "woow_paas_platform.upgrade_done",
+      "value": "{\"digest\":\"sha256:dd0982f37ae8628bbe146004058c6e7fcb5ed54c5cefe0a0901bab79a703c0fe\",\"core_date\":\"18.0.20260926\"}",
+      "write_date": "2026-11-23T00:54:32.707005"
+     },
+     "before": null,
+     "columns": [],
+     "explained": true,
+     "id": 50,
+     "kind": "added",
+     "rule": "import-settings",
+     "table": "public.ir_config_parameter",
+     "why": "woow_paas_platform.upgrade_done"
+    }
+   ]
+  },
+  "runtime->quiescent": {
+   "rules": [
+    "runtime"
+   ],
+   "ok": true,
+   "other_tables_differ": [],
+   "summary": {
+    "events": 0,
+    "tables": {},
+    "unexplained": 0
+   },
+   "events": []
+  },
+  "source_cold->quiescent": {
+   "rules": [
+    "import",
+    "runtime"
+   ],
+   "ok": true,
+   "other_tables_differ": [],
+   "summary": {
+    "events": 35,
+    "tables": {
+     "public.bus_bus": {
+      "by_kind": {
+       "removed": 6
+      },
+      "by_rule": {
+       "bus-gc": 6
+      },
+      "events": 6,
+      "explained": 6
+     },
+     "public.ir_config_parameter": {
+      "by_kind": {
+       "added": 1,
+       "changed": 1,
+       "removed": 1
+      },
+      "by_rule": {
+       "import-settings": 3
+      },
+      "events": 3,
+      "explained": 3
+     },
+     "public.ir_cron": {
+      "by_kind": {
+       "changed": 13
+      },
+      "by_rule": {
+       "cron-schedule": 13
+      },
+      "events": 13,
+      "explained": 13
+     },
+     "public.ir_cron_progress": {
+      "by_kind": {
+       "added": 13
+      },
+      "by_rule": {
+       "cron-progress": 13
+      },
+      "events": 13,
+      "explained": 13
+     }
+    },
+    "unexplained": 0
+   },
+   "events": [
+    {
+     "after": null,
+     "before": {
+      "create_date": "2026-11-19T00:59:16.042443"
+     },
+     "columns": [],
+     "explained": true,
+     "id": 1,
+     "kind": "removed",
+     "rule": "bus-gc",
+     "table": "public.bus_bus",
+     "why": "older than 24 h, autovacuum ran"
+    },
+    {
+     "after": null,
+     "before": {
+      "create_date": "2026-11-19T00:59:16.042443"
+     },
+     "columns": [],
+     "explained": true,
+     "id": 2,
+     "kind": "removed",
+     "rule": "bus-gc",
+     "table": "public.bus_bus",
+     "why": "older than 24 h, autovacuum ran"
+    },
+    {
+     "after": null,
+     "before": {
+      "create_date": "2026-11-19T00:59:16.042443"
+     },
+     "columns": [],
+     "explained": true,
+     "id": 3,
+     "kind": "removed",
+     "rule": "bus-gc",
+     "table": "public.bus_bus",
+     "why": "older than 24 h, autovacuum ran"
+    },
+    {
+     "after": null,
+     "before": {
+      "create_date": "2026-11-19T00:59:16.042443"
+     },
+     "columns": [],
+     "explained": true,
+     "id": 4,
+     "kind": "removed",
+     "rule": "bus-gc",
+     "table": "public.bus_bus",
+     "why": "older than 24 h, autovacuum ran"
+    },
+    {
+     "after": null,
+     "before": {
+      "create_date": "2026-11-19T00:59:16.042443"
+     },
+     "columns": [],
+     "explained": true,
+     "id": 5,
+     "kind": "removed",
+     "rule": "bus-gc",
+     "table": "public.bus_bus",
+     "why": "older than 24 h, autovacuum ran"
+    },
+    {
+     "after": null,
+     "before": {
+      "create_date": "2026-11-19T00:59:16.042443"
+     },
+     "columns": [],
+     "explained": true,
+     "id": 6,
+     "kind": "removed",
+     "rule": "bus-gc",
+     "table": "public.bus_bus",
+     "why": "older than 24 h, autovacuum ran"
+    },
+    {
+     "after": {
+      "key": "web.base.url",
+      "value": "http://localhost:8069",
+      "write_date": "2026-11-23T00:54:32.707005"
+     },
+     "before": {
+      "key": "web.base.url",
+      "value": "http://192.168.2.34:8069",
+      "write_date": "2026-11-19T00:56:30.59518"
+     },
+     "columns": [
+      "value",
+      "write_date"
+     ],
+     "explained": true,
+     "id": 4,
+     "kind": "changed",
+     "rule": "import-settings",
+     "table": "public.ir_config_parameter",
+     "why": "web.base.url"
+    },
+    {
+     "after": null,
+     "before": {
+      "key": "web.base.url.freeze",
+      "value": "True",
+      "write_date": "2026-11-19T00:56:30.59518"
+     },
+     "columns": [],
+     "explained": true,
+     "id": 11,
+     "kind": "removed",
+     "rule": "import-settings",
+     "table": "public.ir_config_parameter",
+     "why": "web.base.url.freeze"
+    },
+    {
+     "after": {
+      "key": "woow_paas_platform.upgrade_done",
+      "value": "{\"digest\":\"sha256:dd0982f37ae8628bbe146004058c6e7fcb5ed54c5cefe0a0901bab79a703c0fe\",\"core_date\":\"18.0.20260926\"}",
+      "write_date": "2026-11-23T00:54:32.707005"
+     },
+     "before": null,
+     "columns": [],
+     "explained": true,
+     "id": 50,
+     "kind": "added",
+     "rule": "import-settings",
+     "table": "public.ir_config_parameter",
+     "why": "woow_paas_platform.upgrade_done"
+    },
+    {
+     "after": {
+      "cron_name": "Base: Auto-vacuum internal data",
+      "failure_count": 0,
+      "first_failure_date": null,
+      "lastcall": "2026-11-23T00:57:27",
+      "nextcall": "2026-11-24T00:56:21",
+      "xmlid": "base.autovacuum_job"
+     },
+     "before": {
+      "cron_name": "Base: Auto-vacuum internal data",
+      "failure_count": 0,
+      "first_failure_date": null,
+      "lastcall": "2026-11-19T01:09:39",
+      "nextcall": "2026-11-20T00:56:21",
+      "xmlid": "base.autovacuum_job"
+     },
+     "columns": [
+      "lastcall",
+      "nextcall"
+     ],
+     "explained": true,
+     "id": 1,
+     "kind": "changed",
+     "rule": "cron-schedule",
+     "table": "public.ir_cron",
+     "why": "job ran after the restore"
+    },
+    {
+     "after": {
+      "cron_name": "Base: Portal Users Deletion",
+      "failure_count": 0,
+      "first_failure_date": null,
+      "lastcall": "2026-11-23T00:57:28",
+      "nextcall": "2026-11-24T00:56:21",
+      "xmlid": "base.ir_cron_res_users_deletion"
+     },
+     "before": {
+      "cron_name": "Base: Portal Users Deletion",
+      "failure_count": 0,
+      "first_failure_date": null,
+      "lastcall": "2026-11-19T00:57:32",
+      "nextcall": "2026-11-20T00:56:21",
+      "xmlid": "base.ir_cron_res_users_deletion"
+     },
+     "columns": [
+      "lastcall",
+      "nextcall"
+     ],
+     "explained": true,
+     "id": 2,
+     "kind": "changed",
+     "rule": "cron-schedule",
+     "table": "public.ir_cron",
+     "why": "job ran after the restore"
+    },
+    {
+     "after": {
+      "cron_name": "Mail: Email Queue Manager",
+      "failure_count": 0,
+      "first_failure_date": null,
+      "lastcall": "2026-11-23T00:57:28",
+      "nextcall": "2026-11-23T00:59:22",
+      "xmlid": "mail.ir_cron_mail_scheduler_action"
+     },
+     "before": {
+      "cron_name": "Mail: Email Queue Manager",
+      "failure_count": 0,
+      "first_failure_date": null,
+      "lastcall": "2026-11-19T01:00:51",
+      "nextcall": "2026-11-19T01:59:22",
+      "xmlid": "mail.ir_cron_mail_scheduler_action"
+     },
+     "columns": [
+      "lastcall",
+      "nextcall"
+     ],
+     "explained": true,
+     "id": 3,
+     "kind": "changed",
+     "rule": "cron-schedule",
+     "table": "public.ir_cron",
+     "why": "job ran after the restore"
+    },
+    {
+     "after": {
+      "cron_name": "Notification: Delete Notifications older than 6 Month",
+      "failure_count": 0,
+      "first_failure_date": null,
+      "lastcall": "2026-11-23T00:57:28",
+      "nextcall": "2026-11-23T00:59:22",
+      "xmlid": "mail.ir_cron_delete_notification"
+     },
+     "before": {
+      "cron_name": "Notification: Delete Notifications older than 6 Month",
+      "failure_count": 0,
+      "first_failure_date": null,
+      "lastcall": "2026-11-19T01:00:50",
+      "nextcall": "2026-11-20T00:59:22",
+      "xmlid": "mail.ir_cron_delete_notification"
+     },
+     "columns": [
+      "lastcall",
+      "nextcall"
+     ],
+     "explained": true,
+     "id": 5,
+     "kind": "changed",
+     "rule": "cron-schedule",
+     "table": "public.ir_cron",
+     "why": "job ran after the restore"
+    },
+    {
+     "after": {
+      "cron_name": "Mail: Post scheduled messages",
+      "failure_count": 0,
+      "first_failure_date": null,
+      "lastcall": "2026-11-23T00:57:28",
+      "nextcall": "2026-11-23T00:59:22",
+      "xmlid": "mail.ir_cron_post_scheduled_message"
+     },
+     "before": {
+      "cron_name": "Mail: Post scheduled messages",
+      "failure_count": 0,
+      "first_failure_date": null,
+      "lastcall": "2026-11-19T01:00:50",
+      "nextcall": "2026-11-20T00:59:22",
+      "xmlid": "mail.ir_cron_post_scheduled_message"
+     },
+     "columns": [
+      "lastcall",
+      "nextcall"
+     ],
+     "explained": true,
+     "id": 7,
+     "kind": "changed",
+     "rule": "cron-schedule",
+     "table": "public.ir_cron",
+     "why": "job ran after the restore"
+    },
+    {
+     "after": {
+      "cron_name": "Notification: Notify scheduled messages",
+      "failure_count": 0,
+      "first_failure_date": null,
+      "lastcall": "2026-11-23T00:57:28",
+      "nextcall": "2026-11-23T00:59:22",
+      "xmlid": "mail.ir_cron_send_scheduled_message"
+     },
+     "before": {
+      "cron_name": "Notification: Notify scheduled messages",
+      "failure_count": 0,
+      "first_failure_date": null,
+      "lastcall": "2026-11-19T01:00:50",
+      "nextcall": "2026-11-19T01:59:22",
+      "xmlid": "mail.ir_cron_send_scheduled_message"
+     },
+     "columns": [
+      "lastcall",
+      "nextcall"
+     ],
+     "explained": true,
+     "id": 8,
+     "kind": "changed",
+     "rule": "cron-schedule",
+     "table": "public.ir_cron",
+     "why": "job ran after the restore"
+    },
+    {
+     "after": {
+      "cron_name": "Mail: send web push notification",
+      "failure_count": 0,
+      "first_failure_date": null,
+      "lastcall": "2026-11-23T00:57:28",
+      "nextcall": "2026-11-23T00:59:22",
+      "xmlid": "mail.ir_cron_web_push_notification"
+     },
+     "before": {
+      "cron_name": "Mail: send web push notification",
+      "failure_count": 0,
+      "first_failure_date": null,
+      "lastcall": "2026-11-19T01:00:50",
+      "nextcall": "2026-11-20T00:59:22",
+      "xmlid": "mail.ir_cron_web_push_notification"
+     },
+     "columns": [
+      "lastcall",
+      "nextcall"
+     ],
+     "explained": true,
+     "id": 9,
+     "kind": "changed",
+     "rule": "cron-schedule",
+     "table": "public.ir_cron",
+     "why": "job ran after the restore"
+    },
+    {
+     "after": {
+      "cron_name": "Discuss: channel member unmute",
+      "failure_count": 0,
+      "first_failure_date": null,
+      "lastcall": "2026-11-23T00:57:28",
+      "nextcall": "2026-11-23T00:59:22",
+      "xmlid": "mail.ir_cron_discuss_channel_member_unmute"
+     },
+     "before": {
+      "cron_name": "Discuss: channel member unmute",
+      "failure_count": 0,
+      "first_failure_date": null,
+      "lastcall": "2026-11-19T01:00:50",
+      "nextcall": "2026-11-20T00:59:22",
+      "xmlid": "mail.ir_cron_discuss_channel_member_unmute"
+     },
+     "columns": [
+      "lastcall",
+      "nextcall"
+     ],
+     "explained": true,
+     "id": 10,
+     "kind": "changed",
+     "rule": "cron-schedule",
+     "table": "public.ir_cron",
+     "why": "job ran after the restore"
+    },
+    {
+     "after": {
+      "cron_name": "Discuss: users settings unmute",
+      "failure_count": 0,
+      "first_failure_date": null,
+      "lastcall": "2026-11-23T00:57:28",
+      "nextcall": "2026-11-23T00:59:22",
+      "xmlid": "mail.ir_cron_discuss_users_settings_unmute"
+     },
+     "before": {
+      "cron_name": "Discuss: users settings unmute",
+      "failure_count": 0,
+      "first_failure_date": null,
+      "lastcall": "2026-11-19T01:00:51",
+      "nextcall": "2026-11-20T00:59:22",
+      "xmlid": "mail.ir_cron_discuss_users_settings_unmute"
+     },
+     "columns": [
+      "lastcall",
+      "nextcall"
+     ],
+     "explained": true,
+     "id": 11,
+     "kind": "changed",
+     "rule": "cron-schedule",
+     "table": "public.ir_cron",
+     "why": "job ran after the restore"
+    },
+    {
+     "after": {
+      "cron_name": "Users: Notify About Unregistered Users",
+      "failure_count": 0,
+      "first_failure_date": null,
+      "lastcall": "2026-11-23T00:57:28",
+      "nextcall": "2026-11-23T00:59:23",
+      "xmlid": "auth_signup.ir_cron_auth_signup_send_pending_user_reminder"
+     },
+     "before": {
+      "cron_name": "Users: Notify About Unregistered Users",
+      "failure_count": 0,
+      "first_failure_date": null,
+      "lastcall": "2026-11-19T01:00:51",
+      "nextcall": "2026-11-20T00:59:23",
+      "xmlid": "auth_signup.ir_cron_auth_signup_send_pending_user_reminder"
+     },
+     "columns": [
+      "lastcall",
+      "nextcall"
+     ],
+     "explained": true,
+     "id": 12,
+     "kind": "changed",
+     "rule": "cron-schedule",
+     "table": "public.ir_cron",
+     "why": "job ran after the restore"
+    },
+    {
+     "after": {
+      "cron_name": "Partner Autocomplete: Sync with remote DB",
+      "failure_count": 0,
+      "first_failure_date": null,
+      "lastcall": "2026-11-23T00:57:28",
+      "nextcall": "2026-11-23T00:59:26",
+      "xmlid": "partner_autocomplete.ir_cron_partner_autocomplete"
+     },
+     "before": {
+      "cron_name": "Partner Autocomplete: Sync with remote DB",
+      "failure_count": 0,
+      "first_failure_date": null,
+      "lastcall": "2026-11-19T01:00:51",
+      "nextcall": "2026-11-19T01:59:26",
+      "xmlid": "partner_autocomplete.ir_cron_partner_autocomplete"
+     },
+     "columns": [
+      "lastcall",
+      "nextcall"
+     ],
+     "explained": true,
+     "id": 13,
+     "kind": "changed",
+     "rule": "cron-schedule",
+     "table": "public.ir_cron",
+     "why": "job ran after the restore"
+    },
+    {
+     "after": {
+      "cron_name": "SMS: SMS Queue Manager",
+      "failure_count": 0,
+      "first_failure_date": null,
+      "lastcall": "2026-11-23T00:57:28",
+      "nextcall": "2026-11-23T00:59:28",
+      "xmlid": "sms.ir_cron_sms_scheduler_action"
+     },
+     "before": {
+      "cron_name": "SMS: SMS Queue Manager",
+      "failure_count": 0,
+      "first_failure_date": null,
+      "lastcall": "2026-11-19T01:00:51",
+      "nextcall": "2026-11-19T01:59:28",
+      "xmlid": "sms.ir_cron_sms_scheduler_action"
+     },
+     "columns": [
+      "lastcall",
+      "nextcall"
+     ],
+     "explained": true,
+     "id": 14,
+     "kind": "changed",
+     "rule": "cron-schedule",
+     "table": "public.ir_cron",
+     "why": "job ran after the restore"
+    },
+    {
+     "after": {
+      "cron_name": "Snailmail: process letters queue",
+      "failure_count": 0,
+      "first_failure_date": null,
+      "lastcall": "2026-11-23T00:57:28",
+      "nextcall": "2026-11-23T00:59:29",
+      "xmlid": "snailmail.snailmail_print"
+     },
+     "before": {
+      "cron_name": "Snailmail: process letters queue",
+      "failure_count": 0,
+      "first_failure_date": null,
+      "lastcall": "2026-11-19T01:00:51",
+      "nextcall": "2026-11-19T01:59:29",
+      "xmlid": "snailmail.snailmail_print"
+     },
+     "columns": [
+      "lastcall",
+      "nextcall"
+     ],
+     "explained": true,
+     "id": 15,
+     "kind": "changed",
+     "rule": "cron-schedule",
+     "table": "public.ir_cron",
+     "why": "job ran after the restore"
+    },
+    {
+     "after": {
+      "create_date": "2026-11-23T00:57:27.087021",
+      "cron_id": 1,
+      "done": 0,
+      "remaining": 0,
+      "timed_out_counter": 0
+     },
+     "before": null,
+     "columns": [],
+     "explained": true,
+     "id": 16,
+     "kind": "added",
+     "rule": "cron-progress",
+     "table": "public.ir_cron_progress",
+     "why": "progress of a job that ran after the restore"
+    },
+    {
+     "after": {
+      "create_date": "2026-11-23T00:57:27.960464",
+      "cron_id": 5,
+      "done": 0,
+      "remaining": 0,
+      "timed_out_counter": 0
+     },
+     "before": null,
+     "columns": [],
+     "explained": true,
+     "id": 17,
+     "kind": "added",
+     "rule": "cron-progress",
+     "table": "public.ir_cron_progress",
+     "why": "progress of a job that ran after the restore"
+    },
+    {
+     "after": {
+      "create_date": "2026-11-23T00:57:28.047624",
+      "cron_id": 7,
+      "done": 0,
+      "remaining": 0,
+      "timed_out_counter": 0
+     },
+     "before": null,
+     "columns": [],
+     "explained": true,
+     "id": 18,
+     "kind": "added",
+     "rule": "cron-progress",
+     "table": "public.ir_cron_progress",
+     "why": "progress of a job that ran after the restore"
+    },
+    {
+     "after": {
+      "create_date": "2026-11-23T00:57:28.09352",
+      "cron_id": 8,
+      "done": 0,
+      "remaining": 0,
+      "timed_out_counter": 0
+     },
+     "before": null,
+     "columns": [],
+     "explained": true,
+     "id": 19,
+     "kind": "added",
+     "rule": "cron-progress",
+     "table": "public.ir_cron_progress",
+     "why": "progress of a job that ran after the restore"
+    },
+    {
+     "after": {
+      "create_date": "2026-11-23T00:57:28.097872",
+      "cron_id": 9,
+      "done": 0,
+      "remaining": 0,
+      "timed_out_counter": 0
+     },
+     "before": null,
+     "columns": [],
+     "explained": true,
+     "id": 20,
+     "kind": "added",
+     "rule": "cron-progress",
+     "table": "public.ir_cron_progress",
+     "why": "progress of a job that ran after the restore"
+    },
+    {
+     "after": {
+      "create_date": "2026-11-23T00:57:28.136749",
+      "cron_id": 10,
+      "done": 0,
+      "remaining": 0,
+      "timed_out_counter": 0
+     },
+     "before": null,
+     "columns": [],
+     "explained": true,
+     "id": 21,
+     "kind": "added",
+     "rule": "cron-progress",
+     "table": "public.ir_cron_progress",
+     "why": "progress of a job that ran after the restore"
+    },
+    {
+     "after": {
+      "create_date": "2026-11-23T00:57:28.143053",
+      "cron_id": 11,
+      "done": 0,
+      "remaining": 0,
+      "timed_out_counter": 0
+     },
+     "before": null,
+     "columns": [],
+     "explained": true,
+     "id": 22,
+     "kind": "added",
+     "rule": "cron-progress",
+     "table": "public.ir_cron_progress",
+     "why": "progress of a job that ran after the restore"
+    },
+    {
+     "after": {
+      "create_date": "2026-11-23T00:57:28.175683",
+      "cron_id": 14,
+      "done": 0,
+      "remaining": 0,
+      "timed_out_counter": 0
+     },
+     "before": null,
+     "columns": [],
+     "explained": true,
+     "id": 23,
+     "kind": "added",
+     "rule": "cron-progress",
+     "table": "public.ir_cron_progress",
+     "why": "progress of a job that ran after the restore"
+    },
+    {
+     "after": {
+      "create_date": "2026-11-23T00:57:28.187633",
+      "cron_id": 15,
+      "done": 0,
+      "remaining": 0,
+      "timed_out_counter": 0
+     },
+     "before": null,
+     "columns": [],
+     "explained": true,
+     "id": 24,
+     "kind": "added",
+     "rule": "cron-progress",
+     "table": "public.ir_cron_progress",
+     "why": "progress of a job that ran after the restore"
+    },
+    {
+     "after": {
+      "create_date": "2026-11-23T00:57:28.236885",
+      "cron_id": 3,
+      "done": 0,
+      "remaining": 0,
+      "timed_out_counter": 0
+     },
+     "before": null,
+     "columns": [],
+     "explained": true,
+     "id": 25,
+     "kind": "added",
+     "rule": "cron-progress",
+     "table": "public.ir_cron_progress",
+     "why": "progress of a job that ran after the restore"
+    },
+    {
+     "after": {
+      "create_date": "2026-11-23T00:57:28.245065",
+      "cron_id": 12,
+      "done": 0,
+      "remaining": 0,
+      "timed_out_counter": 0
+     },
+     "before": null,
+     "columns": [],
+     "explained": true,
+     "id": 26,
+     "kind": "added",
+     "rule": "cron-progress",
+     "table": "public.ir_cron_progress",
+     "why": "progress of a job that ran after the restore"
+    },
+    {
+     "after": {
+      "create_date": "2026-11-23T00:57:28.278056",
+      "cron_id": 13,
+      "done": 0,
+      "remaining": 0,
+      "timed_out_counter": 0
+     },
+     "before": null,
+     "columns": [],
+     "explained": true,
+     "id": 27,
+     "kind": "added",
+     "rule": "cron-progress",
+     "table": "public.ir_cron_progress",
+     "why": "progress of a job that ran after the restore"
+    },
+    {
+     "after": {
+      "create_date": "2026-11-23T00:57:28.331471",
+      "cron_id": 2,
+      "done": 0,
+      "remaining": 0,
+      "timed_out_counter": 0
+     },
+     "before": null,
+     "columns": [],
+     "explained": true,
+     "id": 28,
+     "kind": "added",
+     "rule": "cron-progress",
+     "table": "public.ir_cron_progress",
+     "why": "progress of a job that ran after the restore"
+    }
+   ]
+  },
+  "source_cold->restored_cold": {
+   "rules": [],
+   "ok": true,
+   "other_tables_differ": [],
+   "summary": {
+    "events": 0,
+    "tables": {},
+    "unexplained": 0
+   },
+   "events": []
+  }
+ },
+ "notes": [
+  "Odoo only (apps [odoo]); in-process engine jobs through conversion hooks (same engine files as installed, sha256 aggregate above); the baseline Odoo backup 20261118T095247Z-388c9bd7 was restored at the end (outcome.json baseline_restored true).",
+  "Archive sha256 a5fb626820a0947482a394094cd004715eb348fc92cec760c0dc7d9546f420e5 = fixture 20261119-arm/woow-arm-enc; source capture equals the HA-side fingerprint of all 205 tables.",
+  "Every other table (201) identical on every edge by count and md5 in the same snapshot; the four tables explained row by row (odoo_explain.py rules, vendor file:line in the module docstring)."
+ ],
+ "commercial_acceptance": "not-complete"
+}
