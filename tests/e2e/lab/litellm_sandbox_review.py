@@ -366,6 +366,14 @@ def product_path(case, inner, salt):
                 facts['pg_tblspc'] = (link or b'').decode('utf-8', 'replace').splitlines()[:10]
         except BackupError as error:
             facts['stopped_with'] = {'code': error.code, 'message': str(error)[:300]}
+            if case == 'tablespace_map':  # what the server's start left in HA's volume
+                left = tmp.run('look', PG18, ['-c', 'ls -la /var/lib/postgresql/pg_tblspc/ | tail -n +2; '
+                                              'readlink /var/lib/postgresql/pg_tblspc/16400; '
+                                              'ls /var/lib/postgresql | grep -E "backup_label|tablespace_map"'],
+                               entrypoint='sh', user='postgres', read_only_root=True,
+                               volumes=[(tmp.name('hapg'), ha_litellm.HA_PGDATA, 'ro,noexec,nosuid,nodev')],
+                               check=False, max_output=65536).stdout
+                facts['pg_tblspc'] = (left or b'').decode('utf-8', 'replace').splitlines()[:10]
         facts['steps'] = steps
         facts['markers_final'] = markers(tmp, 'hapg') if tmp.running('hapg') else 'container not running'
     facts['volumes_left_behind'] = sorted(volumes_now(runner) - before)
