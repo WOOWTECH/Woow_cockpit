@@ -242,7 +242,8 @@ def baseline(app):
 
     if not disk_ok(app, 'restore'):  # before the after marker, so a pause leaves the baseline state
         return
-    created = markers(app, 'seed', 'after', time.strftime('%Y%m%dT%H%M%S'), secrets.token_urlsafe(18))
+    # With the baseline user's password (the app's marker password): Nextcloud writes the after file into that user's files.
+    created = markers(app, 'seed', 'after', time.strftime('%Y%m%dT%H%M%S'))
     after = names(app, markers(app, 'read')) - BASELINE[app]
     check(f'{app}: "after" marker present before the restore', after, created)
 

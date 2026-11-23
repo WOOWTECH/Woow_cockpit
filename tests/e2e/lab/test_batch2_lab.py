@@ -299,6 +299,15 @@ def json_dumps(value):
     return json.dumps(value)
 
 
+class BaselineDriverTest(unittest.TestCase):
+    def test_after_marker_uses_the_baseline_password(self):
+        """Nextcloud's after file is a WebDAV PUT into the baseline user's files: the driver must pass that user's
+        password (a random one gave HTTP 401 on the first real Nextcloud baseline, 2026-11-23 21:12)."""
+        text = (HERE / 'batch2_baseline.py').read_text()
+        self.assertIn("created = markers(app, 'seed', 'after', time.strftime('%Y%m%dT%H%M%S'))\n", text)
+        self.assertNotIn("'after', time.strftime('%Y%m%dT%H%M%S'), secrets.", text)
+
+
 class CodeServerCatalogTest(unittest.TestCase):
     def test_lab_entry_matches_what_the_baseline_and_markers_use(self):
         import json
