@@ -651,6 +651,11 @@ class VerifyModeTest(unittest.TestCase):
         self.assertNotIn('not-a-real-one', proc.stdout + proc.stderr + json_dumps(result))
         self.assertIn(['markers', 'code-server', 'login', [], False], calls)
         self.assertEqual(list((lab / 'evidence' / 'batch2-lab').glob('*-baseline/*-backup-job.json')), [])
+        # Every check and the total come out as fixed status lines that services_a_capture.py keeps.
+        import services_a_capture
+        kept = services_a_capture.status_lines(proc.stdout)
+        self.assertIn(f'batch2 verify nextcloud code-server: {result["total"]}/{result["total"]} PASS', kept)
+        self.assertEqual(len(kept), result['total'] + 1, kept)
 
     def test_a_leftover_after_marker_fails(self):
         read = {'nextcloud': {'users': ['woowbk-lab-after', 'woowbk-lab-baseline'], 'files': [NC_SHA]}}
@@ -660,6 +665,8 @@ class VerifyModeTest(unittest.TestCase):
         self.assertEqual(len(failed), 2, failed)
         self.assertTrue(failed[0].startswith('nextcloud: only the baseline markers'))
         self.assertTrue(failed[1].startswith("nextcloud: marker read equals the baseline's"))
+        self.assertIn('nextcloud: only the baseline markers (no leftover test marker): FAIL', proc.stdout)
+        self.assertRegex(proc.stdout, r'batch2 verify nextcloud: [0-9]+/[0-9]+ FAIL')
 
     def test_a_changed_file_fails(self):
         read = {'code-server': dict(CS_READ, files=['woowbk-lab-baseline.txt:' + 'd' * 64])}

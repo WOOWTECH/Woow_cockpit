@@ -311,7 +311,7 @@ def verify(app):
     found = markers(app, 'read')
     (EVIDENCE / f'{app}-markers.json').write_text(json.dumps(found, ensure_ascii=False, indent=1))
     have = names(app, found)
-    check(f'{app}: only the baseline markers, no leftover woowbk-lab-* marker of a test', have == BASELINE[app],
+    check(f'{app}: only the baseline markers (no leftover test marker)', have == BASELINE[app],
           {'missing': sorted(BASELINE[app] - have), 'extra': sorted(have - BASELINE[app])})
     got = canonical(found)
     check(f'{app}: marker read equals the baseline\'s after-restore read (names and sha256, {reads[-1].parent.name})',
@@ -355,4 +355,9 @@ passed = sum(c['ok'] for c in checks)
                                                   'summary': summary}, ensure_ascii=False, indent=1))
 log(f'RESULT {passed}/{len(checks)} checks passed; evidence in {EVIDENCE}')
 print(json.dumps(summary, ensure_ascii=False, indent=1))
-sys.exit(0 if passed == len(checks) and set(summary) == set(APPS) else 1)
+ok = passed == len(checks) and set(summary) == set(APPS)
+# Fixed status lines (no detail, no values) that services_a_capture.py keeps in a committed attempt JSON.
+for c in checks:
+    print(f'{c["check"]}: {"PASS" if c["ok"] else "FAIL"}')
+print(f'batch2 {"verify" if VERIFY else "baseline"} {" ".join(APPS)}: {passed}/{len(checks)} {"PASS" if ok else "FAIL"}')
+sys.exit(0 if ok else 1)
