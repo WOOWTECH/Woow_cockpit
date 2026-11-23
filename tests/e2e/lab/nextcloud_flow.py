@@ -82,6 +82,9 @@ RUN_HOLD_BUDGET = 100 * 60  # the share run: upload, check, convert, restore x3,
 FLOOR = 12 * 1024 ** 3          # the team keeps >= 12 GiB free on the host at every moment
 NEED = 1536 * 1024 ** 2         # the upload copy in dev-e plus the check's throwaway cluster, with margin
 CANDIDATE_NEED = 4608 * 1024 ** 2  # the candidate: live html pack + html dir tar + cluster export + the archive
+# The share run's conversion after the upload: the data dir tar, the cluster work, the live html pack and html tar,
+# the archive. Every later step checks its own need (restore_need) and the host-floor watchdog guards each job.
+CONVERT_NEED = 3584 * 1024 ** 2
 WATCH_FLOOR = FLOOR + 256 * 1024 ** 2  # below it every running job of dev-e is cancelled (the job cleans up)
 FIXTURE = (LAB / 'ha-fixtures' / '20261123-batch2' / 'x86' / 'woow-b2-nextcloud-x86-enc-noshare'
            / 'woow-b2-nextcloud-x86-enc-noshare-20261123.tar')
@@ -626,7 +629,7 @@ class Run:
 
     def import_real(self):
         ev, facts = self.ev, self.args.facts
-        self.budget('import', CANDIDATE_NEED + int(facts.get('extra_need', 0)))
+        self.budget('import', CONVERT_NEED + int(facts.get('extra_need', 0)))
         tripped = []
         with self.watching(tripped):
             job, took = drv.convert(self.created_store, ['nextcloud'], False, ev=ev,
@@ -806,6 +809,12 @@ class Run:
                  job.get('state') == 'rolled-back' and result.get('rolled_back') is True and consumed and not tripped,
                  {'state': job.get('state'), 'took_s': round(took, 1), 'consumed': consumed, 'tripped': tripped})
         self.verify('auto rollback')
+        extra = result.get('safety_backup_id')
+        if extra and extra != self.safety:  # a backup of the imported state; not needed after this check
+            rc, _reply = drv.helper('delete', {'backup_id': extra})
+            ev.check('auto rollback: its own safety backup (the imported state) is deleted', rc == 0)
+            if rc == 0:
+                self.deleted = getattr(self, 'deleted', set()) | {extra}
         self.budget('rollback', self.restore_need(self.safety))
         tripped = []
         with self.watching(tripped):
@@ -886,7 +895,7 @@ def negative(args):
         return 2
     if not ev.check('preflight: dev-e isolation true none {}', isolation() == 'true none {}', isolation()):
         return 2
-    need = NEED + (FIXTURE.stat().st_size + CANDIDATE_NEED + int(args.facts.get('extra_need', 0)) if args.run else 0)
+    need = NEED + (FIXTURE.stat().st_size + CONVERT_NEED + int(args.facts.get('extra_need', 0)) if args.run else 0)
     if not ev.check('preflight: the host keeps 12 GiB plus this run\'s need free', host_free() >= FLOOR + need,
                     f'{host_free()} B, need {need} B'):
         return 2
