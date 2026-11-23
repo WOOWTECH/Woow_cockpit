@@ -707,6 +707,86 @@ class VerifyModeTest(unittest.TestCase):
         self.assertFalse((lab / 'secrets' / 'dev-e-markers.json').exists())
 
 
+# A stand-in labpodman for batch2_journal_cleanup.py: a journal of N entries that --rotate + --vacuum-time empties
+# (or not, when the scenario says the vacuum fails); every call is logged.
+FAKE_JOURNAL_LP = r"""#!/usr/bin/env python3
+import json, os, sys, time
+argv = sys.argv[1:]
+path = os.environ['FAKE_STATE']
+st = json.load(open(path))
+def log(*e):
+    with open(os.environ['FAKE_LOG'], 'a') as h:
+        h.write(json.dumps(list(e)) + '\n')
+def done(text='', rc=0):
+    if text:
+        print(text)
+    json.dump(st, open(path, 'w')); sys.exit(rc)
+if argv[:2] == ['inspect', 'woowbk-dev-e']:
+    done('true none {}')
+if argv[:2] == ['exec', 'woowbk-dev-e']:
+    cmd = argv[2:]
+    log(*cmd)
+    if cmd == ['journalctl', '--disk-usage']:
+        done(f"Archived and active journals take up {st['mb']}.0M in the file system.")
+    if cmd == ['journalctl', '--rotate']:
+        st['rotated'] = True; done()
+    if cmd == ['journalctl', '--vacuum-time=1s']:
+        if st.get('vacuum_fails'):
+            done('', 1)
+        if st.get('rotated'):
+            st['entries'], st['mb'], st['oldest'] = 1, 8, time.time()
+        done('Vacuuming done, freed 32.0M of archived journals.')
+    if cmd[:2] == ['sh', '-c']:
+        if 'wc -l' in cmd[2] and 'ls /var/log/journal' in cmd[2]:
+            done(str(3 if st['entries'] > 1 else 1))
+        if 'short-unix' in cmd[2]:
+            done(f"{st['oldest']:.6f}" if st['entries'] else '')
+        if 'wc -l' in cmd[2]:
+            done(str(st['entries']))
+log('UNEXPECTED', argv)
+done('', 97)
+"""
+
+
+class JournalCleanupTest(unittest.TestCase):
+    def run_cleanup(self, **state):
+        import json
+        home = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        (home / '.woowbk-lab' / 'bin').mkdir(parents=True)
+        lp = home / '.woowbk-lab' / 'bin' / 'labpodman'
+        lp.write_text(FAKE_JOURNAL_LP)
+        lp.chmod(0o755)
+        (home / 'state.json').write_text(json.dumps({'entries': 5000, 'mb': 40, 'oldest': 1795000000.0, **state}))
+        env = dict(os.environ, HOME=str(home), FAKE_STATE=str(home / 'state.json'), FAKE_LOG=str(home / 'calls.log'))
+        target = home / 'evidence.json'
+        proc = subprocess.run([sys.executable, '-I', str(HERE / 'batch2_journal_cleanup.py'), str(target)],
+                              capture_output=True, text=True, env=env, timeout=120)
+        calls = [json.loads(line) for line in (home / 'calls.log').read_text().splitlines()]
+        return proc, calls, json.loads(target.read_text()) if target.exists() else None, target, env
+
+    def test_rotate_then_vacuum_and_only_old_entries_go(self):
+        proc, calls, doc, target, env = self.run_cleanup()
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertLess(calls.index(['journalctl', '--rotate']), calls.index(['journalctl', '--vacuum-time=1s']))
+        self.assertTrue(doc['ok'])
+        self.assertEqual((doc['before']['disk_usage'], doc['after']['disk_usage']), ('40.0M', '8.0M'))
+        self.assertEqual((doc['before']['entries'], doc['after']['entries']), (5000, 1))
+        self.assertGreaterEqual(doc['after']['oldest_entry_epoch'], doc['start_epoch'] - 1)
+        self.assertEqual(doc['commercial_acceptance'], 'not-complete')
+        self.assertNotIn('UNEXPECTED', [c[0] for c in calls])
+        # never overwrites an attempt
+        again = subprocess.run([sys.executable, '-I', str(HERE / 'batch2_journal_cleanup.py'), str(target)],
+                               capture_output=True, text=True, env=env, timeout=120)
+        self.assertNotEqual(again.returncode, 0)
+        self.assertIn('never overwrite', again.stderr)
+
+    def test_a_failed_vacuum_is_not_ok(self):
+        proc, _, doc, _, _ = self.run_cleanup(vacuum_fails=True)
+        self.assertEqual(proc.returncode, 1)
+        self.assertFalse(doc['ok'])
+        self.assertEqual(doc['vacuum_exit'], 1)
+
+
 class CodeServerCatalogTest(unittest.TestCase):
     def test_lab_entry_matches_what_the_baseline_and_markers_use(self):
         import json
