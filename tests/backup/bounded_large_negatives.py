@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Opt-in real >8GiB encrypted stream negatives on the public engine API, bounded for a shared host disk.
-python3 tests/backup/bounded_large_negatives.py [--mib 8193] [--scratch-parent /tmp]
+python3 tests/backup/bounded_large_negatives.py [--mib 8193] [--scratch-parent /tmp] [--cases a,b]
 
 One fresh compressible keystream (the existing SHAKE256 tile generator) is streamed through the real age/zstd writer
 by a sliding-window source (bounded_stream_window); the engine's own sha256 check proves every byte it read was the
@@ -9,11 +9,14 @@ keystream. Ephemeral age key in private scratch. Cases, all through public engin
   flip-last-byte      verify_archive: corrupt-archive after >= payload-64MiB of progress
   truncate-last-byte  verify_archive, then extract_archive (harness punches holes behind the engine's write offset to
                       bound allocation): corrupt-archive late; the engine removes its partial output
-  cancel-extract      restore 'decrypt' window: a second thread calls jobs.cancel_job (the job-cancel command's
-                      function) at >= half; the real FlowContext.byte_progress raises flows.Cancelled; the engine
-                      removes its partial output (really allocated, not punched) and the space comes back
-  cancel-write        backup 'package' window, same real job cancel during write_archive: staged temp archive and the
-                      recipient file are removed, the destination is never created
+  cancel-extract      restore 'decrypt' window: at >= half the real job-cancel CLI command runs in a separate process
+                      (JSON on stdin, as the Cockpit page sends it; test hooks: scratch Paths, no root); the real
+                      FlowContext.byte_progress raises flows.Cancelled; the harness settles the job like run_job
+                      (finish 'cancelled', clear request); the engine removes its partial output (really allocated,
+                      not punched) and the space comes back
+  cancel-write        backup 'package' window, same real job-cancel command during write_archive: staged temp
+                      archive and recipient file are removed, the destination is never created
+--cases selects a subset (the fixture write always runs).
 Each case counts age/zstd children while active and after return (must be 0), checks pipes/temp fds return to their
 baseline and that no copy of the identity exists anywhere in scratch. No raw exception text, tool stderr, key
 contents or key identifiers are recorded.
@@ -25,6 +28,7 @@ from pathlib import Path
 import resource
 import shutil
 import signal
+import subprocess
 import sys
 import tempfile
 import threading
@@ -51,6 +55,7 @@ APP = 'large-probe'
 ENTRY = f'apps/{APP}/config/payload.bin'
 DEADLINE = 3600
 SECRET_MARK = b'AGE-SECRET-KEY-'
+CASES = ('control-verify', 'flip-last-byte', 'truncate-last-byte', 'cancel-extract', 'cancel-write')
 LATE_SLACK = 64 * MIB
 
 
@@ -74,40 +79,83 @@ def job_context(folder, job_type, params, phase):
     return paths, store, record['id'], ctx
 
 
-class UserCancel(threading.Thread):
-    """Plays the administrator: once released it calls the job-cancel command's function from another thread while
-    the engine keeps streaming (in production run-job and the cancel command are separate processes)."""
+CANCEL_WAIT = 30  # seconds the paused progress callback waits for the cancel command to record its request
+# The job-cancel command exactly as the Cockpit page sends it (helper argv 'job-cancel', JSON request on stdin), in a
+# separate process. Test hooks only: Paths(base=scratch) instead of the system paths and require_root=False.
+CLI_SCRIPT = (
+    "import sys\n"
+    "sys.path[:0] = [sys.argv[1] + '/backup-engine']\n"
+    "from woowbackup import cli\n"
+    "from woowbackup.paths import Paths\n"
+    "sys.exit(cli.main(['job-cancel'], paths=Paths(base=sys.argv[2]), require_root=False))\n"
+)
 
-    def __init__(self, paths, job_id):
-        super().__init__(name='probe-user-cancel', daemon=True)
-        self.paths, self.job_id = paths, job_id
-        self.release, self.done = threading.Event(), threading.Event()
+
+class CliCancel(threading.Thread):
+    """Plays the administrator pressing 取消作業: once released, runs the real job-cancel CLI command in another
+    process while the engine keeps streaming. The command waits (as in production) up to 3 s for the job to end."""
+
+    def __init__(self, paths, job_id, cwd):
+        super().__init__(name='probe-cli-cancel', daemon=True)
+        self.paths, self.job_id, self.cwd = paths, job_id, cwd
+        self.release = threading.Event()
         self.abandoned = False
-        self.state = self.error = None
+        self.exit_code = self.response = self.error = None
 
     def run(self):
         self.release.wait()
         if self.abandoned:
             return
         try:
-            self.state = jobs.cancel_job(self.paths, self.job_id, wait_seconds=0)['state']
-        except BaseException as exc:  # noqa: BLE001 - recorded by type only
+            proc = subprocess.run([sys.executable, '-I', '-c', CLI_SCRIPT, str(ROOT), str(self.paths.base)],
+                                  input=json.dumps({'job_id': self.job_id}).encode(), capture_output=True,
+                                  timeout=120, cwd=self.cwd, env=util.clean_env(), check=False)
+            self.exit_code = proc.returncode
+            doc = json.loads(proc.stdout.decode('utf-8'))
+            self.response = {'ok': doc.get('ok'), 'state': doc.get('state'),
+                             'error_code': (doc.get('error') or {}).get('code')}
+        except BaseException as exc:  # noqa: BLE001 - recorded by type only (no raw output is kept)
             self.error = type(exc).__name__
-        finally:
-            self.done.set()
 
-    def request(self, timeout=10):
-        """Release the cancel command and let it record its request before this progress callback returns, so the
-        engine meets the request at a known checkpoint (the engine code path is unchanged; it is only paused)."""
+    def request(self, store):
+        """Release the command and pause this progress callback until the job store holds its request, so the
+        engine meets it at a known checkpoint (the engine code path is unchanged; it is only paused)."""
         self.release.set()
-        return self.done.wait(timeout)
+        deadline = time.monotonic() + CANCEL_WAIT
+        while time.monotonic() < deadline:
+            if store.cancel_requested(self.job_id):
+                return True
+            if not self.is_alive():
+                return store.cancel_requested(self.job_id)
+            time.sleep(0.05)
+        return False
 
     def finish(self):
         if not self.release.is_set():
             self.abandoned = True
             self.release.set()
-        self.join(timeout=30)
+        self.join(timeout=150)
         return not self.is_alive()
+
+
+def settle_job(ctx, store, job_id, result):
+    """What run_job does around a Cancelled flow: finish('cancelled'), then clear the request file."""
+    ctx.reporter.finish('cancelled')
+    store.clear_cancel(job_id)
+    record = store.get(job_id)
+    result.update(job_final_state=record.get('state'), job_cancellable_after=record.get('cancellable'),
+                  cancel_request_cleared=not store.cancel_requested(job_id))
+
+
+def check_cli(user, case):
+    case.r.update(cancel_command='woowbackup.cli job-cancel (separate process, JSON on stdin)',
+                  cancel_command_exit=user.exit_code, cancel_command_response=user.response,
+                  cancel_command_error=user.error)
+    require(user.error is None and user.exit_code == 0 and (user.response or {}).get('ok') is True,
+            'job-cancel command failed')
+    require(user.response['state'] in ('cancelled', 'running'), 'job-cancel returned an unexpected state')
+    require(case.r['job_final_state'] == 'cancelled' and case.r['job_cancellable_after'] is False
+            and case.r['cancel_request_cleared'], 'job record not settled as cancelled')
 
 
 def secret_copies(folder, identity):
@@ -232,7 +280,7 @@ def cancel_extract(original, identities, folder, size, monitor, guard, report):
     case = Case('cancel-extract', 'extract_archive', size, monitor, report)
     root = folder / 'cancel-extract'
     root.mkdir(mode=0o700)
-    user = UserCancel(paths, job_id)
+    user = CliCancel(paths, job_id, folder)
     user.start()
     threshold = size // 2 // archive.PROGRESS_STEP * archive.PROGRESS_STEP
     product = ctx.byte_progress('解密並驗證')  # flows.run_restore's label and callback for this phase
@@ -247,7 +295,7 @@ def cancel_extract(original, identities, folder, size, monitor, guard, report):
             case.r['free_bytes_with_partial_output'] = guard.free()
         if done >= threshold and not user.release.is_set():
             case.r['cancel_requested_at_bytes'] = done
-            require(user.request(), 'job-cancel did not answer')
+            require(user.request(store), 'job-cancel did not record a request')
         product(done, total)
 
     try:
@@ -256,13 +304,13 @@ def cancel_extract(original, identities, folder, size, monitor, guard, report):
             archive.extract_archive(original, identities, root, progress=progress, apps=[APP])
         except flows.Cancelled:
             case.r['exception'] = 'flows.Cancelled'
+            case.r['cancel_request_recorded'] = store.cancel_requested(job_id)
+            settle_job(ctx, store, job_id, case.r)
         else:
             raise RuntimeError('cancelled extraction unexpectedly succeeded')
-        require(user.finish(), 'cancel thread did not finish')
-        case.r.update(cancel_command_state=user.state, cancel_command_error=user.error,
-                      cancel_request_recorded=store.cancel_requested(job_id),
-                      cancellation_threshold_bytes=threshold)
-        require(user.error is None and user.state == 'running', 'job-cancel did not accept the request')
+        require(user.finish(), 'cancel command did not finish')
+        case.r['cancellation_threshold_bytes'] = threshold
+        check_cli(user, case)
         require(threshold <= case.r['max_progress_bytes'] < size, 'cancellation not mid-stream')
         case.after()
         case.r['root_exists_before_harness_cleanup'] = root.exists()
@@ -292,7 +340,7 @@ def cancel_write(folder, entry_sha256, mib, key, monitor, report):
     staging.mkdir(mode=0o700)
     dest = staging / 'cancelled.tar'
     source = window.WindowSource(folder / 'source-cancel.bin', mib, window.compressible_block)
-    user = UserCancel(paths, job_id)
+    user = CliCancel(paths, job_id, folder)
     user.start()
     threshold = size // 2 // archive.PROGRESS_STEP * archive.PROGRESS_STEP
     product = ctx.byte_progress('加密封裝')  # flows._package's label for an encrypted backup
@@ -307,7 +355,7 @@ def cancel_write(folder, entry_sha256, mib, key, monitor, report):
                                                         sum(n.startswith('.recipient-') for n in names))
         if done >= threshold and not user.release.is_set():
             case.r['cancel_requested_at_bytes'] = done
-            require(user.request(), 'job-cancel did not answer')
+            require(user.request(store), 'job-cancel did not record a request')
         product(done, total)
 
     try:
@@ -317,13 +365,13 @@ def cancel_write(folder, entry_sha256, mib, key, monitor, report):
                                   tmp_dir=staging, progress=progress)
         except flows.Cancelled:
             case.r['exception'] = 'flows.Cancelled'
+            case.r['cancel_request_recorded'] = store.cancel_requested(job_id)
+            settle_job(ctx, store, job_id, case.r)
         else:
             raise RuntimeError('cancelled write unexpectedly succeeded')
-        require(user.finish(), 'cancel thread did not finish')
-        case.r.update(cancel_command_state=user.state, cancel_command_error=user.error,
-                      cancel_request_recorded=store.cancel_requested(job_id),
-                      cancellation_threshold_bytes=threshold)
-        require(user.error is None and user.state == 'running', 'job-cancel did not accept the request')
+        require(user.finish(), 'cancel command did not finish')
+        case.r['cancellation_threshold_bytes'] = threshold
+        check_cli(user, case)
         require(threshold <= case.r['max_progress_bytes'] < size, 'cancellation not mid-stream')
         case.after()
         require(case.r.get('staged_temp_archives_observed') == 1, 'staged temp archive not observed while writing')
@@ -346,9 +394,13 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--mib', type=int, default=8193)
     parser.add_argument('--scratch-parent', type=Path, default=Path('/tmp'))
+    parser.add_argument('--cases', default=','.join(CASES), help='comma-separated subset; fixture write always runs')
     args = parser.parse_args()
     if not 128 <= args.mib <= 8193:
         parser.error('mib must be 128..8193; default 8193 is the actual >8GiB run')
+    selected = [name for name in args.cases.split(',') if name]
+    if not selected or any(name not in CASES for name in selected):
+        parser.error(f'cases must be a comma-separated subset of {",".join(CASES)}')
     size = args.mib * MIB
     os.umask(0o077)
     resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
@@ -361,7 +413,7 @@ def main():
                   encryption='age-x25519', compression='zstd', reserve_bytes=RESERVE, guard_margin_bytes=MARGIN,
                   archive_cap_bytes=CAP, deadline_seconds=DEADLINE, planned_peak_storage_bytes=storage_budget(size),
                   required_free_bytes=RESERVE + MARGIN + storage_budget(size), service_restore=False,
-                  hermes_attempts=0, commercial_acceptance='not-complete', cases={})
+                  hermes_attempts=0, commercial_acceptance='not-complete', selected_cases=selected, cases={})
     try:
         with tempfile.TemporaryDirectory(prefix='woow-large-negatives-', dir=args.scratch_parent) as tmp:
             folder = Path(tmp)
@@ -435,9 +487,12 @@ def main():
                 report['archive_bytes'], report['archive_sha256'] = written['size'], written['sha256']
                 report['ciphertext_bytes'] = written['apps'][0]['size']
 
-                control_verify(original, identities, size, monitor, report)
+                if 'control-verify' in selected:
+                    control_verify(original, identities, size, monitor, report)
                 mutated = folder / 'mutated.tar'
                 for kind in ('flip-last-byte', 'truncate-last-byte'):
+                    if kind not in selected:
+                        continue
                     resource.setrlimit(resource.RLIMIT_FSIZE, (CAP, size + MARGIN))
                     mutation = failures.make_negative(original, mutated, kind)
                     resource.setrlimit(resource.RLIMIT_FSIZE, (size + MARGIN, size + MARGIN))
@@ -449,9 +504,11 @@ def main():
                         tail_extract(f'{kind}-extract', mutated, identities, folder / 'truncate-extract', size,
                                      monitor, report)
                     mutated.unlink()
-                guard.check(size // 2 + 64 * MIB)
-                cancel_extract(original, identities, folder, size, monitor, guard, report)
-                cancel_write(folder, entry_sha256, args.mib, key, monitor, report)
+                if 'cancel-extract' in selected:
+                    guard.check(size // 2 + 64 * MIB)
+                    cancel_extract(original, identities, folder, size, monitor, guard, report)
+                if 'cancel-write' in selected:
+                    cancel_write(folder, entry_sha256, args.mib, key, monitor, report)
                 require(util.sha256_file(original) == written['sha256'], 'original fixture changed')
                 report['original_fixture_unchanged'] = True
                 report['identity_copies_in_scratch'] = secret_copies(folder, key.path)

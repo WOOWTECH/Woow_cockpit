@@ -185,10 +185,38 @@ class HarnessTests(unittest.TestCase):
             case = report['cases']['cancel-extract']
             self.assertEqual(case['status'], 'passed')
             self.assertEqual(case['exception'], 'flows.Cancelled')
-            self.assertEqual(case['cancel_command_state'], 'running')
+            self.assertEqual(case['cancel_command_exit'], 0)
+            self.assertTrue(case['cancel_command_response']['ok'])
+            self.assertIn(case['cancel_command_response']['state'], ('cancelled', 'running'))
             self.assertTrue(case['cancel_request_recorded'])
+            self.assertEqual(case['job_final_state'], 'cancelled')
+            self.assertFalse(case['job_cancellable_after'])
+            self.assertTrue(case['cancel_request_cleared'])
             self.assertEqual(case['cancel_requested_at_bytes'], 64 * MIB)
             self.assertEqual(case['max_progress_bytes'], 64 * MIB)
+            self.assertFalse((folder / 'cancel-extract').exists())
+
+    def test_cancel_command_that_records_nothing_fails_the_case(self):
+        children, total = ChildrenWhileActive(), 128 * MIB
+        report = {}
+        refuse = "import sys\nsys.stdout.write('{\"ok\": false, \"error\": {\"code\": \"not-cancellable\"}}')\nsys.exit(1)\n"
+        with tempfile.TemporaryDirectory() as tmp:
+            guard = mock.Mock(free=mock.Mock(return_value=10 ** 12))
+            with mock.patch.object(probe.archive, 'extract_archive',
+                                   self.fake_extract(children, remove=True, total=total, fail_at=total + 1)), \
+                 mock.patch.object(probe, 'tool_children', children), \
+                 mock.patch.object(probe, 'open_fds', return_value=0), \
+                 mock.patch.object(probe, 'CLI_SCRIPT', refuse):
+                with self.assertRaisesRegex(RuntimeError, 'did not record a request'):
+                    probe.cancel_extract(None, [], Path(tmp), total, lambda: None, guard, report)
+            self.assertTrue(report['cases']['cancel-extract']['harness_removed_owned_root'])
+
+    def test_unknown_case_name_is_rejected(self):
+        with mock.patch('sys.argv', ['probe', '--mib', '128', '--cases', 'cancel-extract,bogus']), \
+             contextlib.redirect_stderr(io.StringIO()):
+            with self.assertRaises(SystemExit) as caught:
+                probe.main()
+        self.assertEqual(caught.exception.code, 2)
 
     def test_cancelled_consumer_that_finishes_is_failure(self):
         report = {}
