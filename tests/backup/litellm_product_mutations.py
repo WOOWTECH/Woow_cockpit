@@ -142,14 +142,20 @@ MUTATIONS = (
      "    stored_line = stored_settings_line(data.get('stored_settings'))\n"
      "    if stored_line:\n        notes.append(stored_line)\n",
      "", 1),
+    ('M42', "stored settings that load and run code refuse in the check (SR-6)", LL,
+     "    hooks = stored_hooks_blocker(settings)\n    if hooks:\n        blockers.append(hooks)\n", "", 1),
+    ('M43', "stored settings that load and run code stop the conversion first (SR-6)", LL,
+     "    if hooks:\n        raise BackupError('incompatible', f'LiteLLM 不能搬過來：{hooks}', app=app.id)\n", "", 1),
+    ('M44', "a callback with a dot in its name is a module load (SR-6)", LL,
+     "[f'litellm_settings 回呼 {c}'[:60] for c in callbacks if '.' in c]", "[]", 1),
     # Option A, iteration 2: the Pi agent provider list (pi-web / Omnigent's runner models.json).
-    ('M42', 'an app whose Pi agent provider list points at this LiteLLM is named (option A)', LL,
+    ('M45', 'an app whose Pi agent provider list points at this LiteLLM is named (option A)', LL,
      " or pi_agent_uses_litellm(work, other, quadlets))\n", ")\n", 1),
-    ('M43', "only a provider at this device's LiteLLM counts, not any provider (option A)", LL,
+    ('M46', "only a provider at this device's LiteLLM counts, not any provider (option A)", LL,
      "            if isinstance(value, str) and value.strip() and LITELLM_URL_RE.search(value.strip()[:2048]):\n",
      "            if isinstance(value, str) and value.strip():\n", 1),
     # Real attempt 7: HA's sessions (search_path=pg_catalog, SR-1) and this device's rendered enum types differently.
-    ('M44', 'every columns/signature read pins search_path=pg_catalog (all sides render names alike)', LL,
+    ('M47', 'every columns/signature read pins search_path=pg_catalog (all sides render names alike)', LL,
      "PIN_SEARCH_PATH = 'SET search_path = pg_catalog; '\n", "PIN_SEARCH_PATH = ''\n", 1),
 )
 
@@ -170,7 +176,9 @@ def run_tests(root):
 def main(argv):
     parser = argparse.ArgumentParser()
     parser.add_argument('--json')
+    parser.add_argument('--only', help='comma-separated mutation ids (a subset; the baseline always runs)')
     args = parser.parse_args(argv)
+    only = set(args.only.split(',')) if args.only else None
     sources = {name: (REPO / 'backup-engine' / name).read_text(encoding='utf-8') for name in (LL, QP, HI)}
     results = []
     started = time.monotonic()
@@ -189,6 +197,8 @@ def main(argv):
         baseline = {'returncode': rc, 'tests': ran, 'failures': failures}
         print(f'baseline: {"pass" if rc == 0 else "FAIL"} ({failures}/{ran})', flush=True)
         for ident, name, module, old, new, count in MUTATIONS:
+            if only is not None and ident not in only:
+                continue
             source = sources[module]
             if source.count(old) != count:
                 results.append({'id': ident, 'protection': name, 'module': module, 'applied': False})
@@ -204,6 +214,7 @@ def main(argv):
     ok = baseline['returncode'] == 0 and all(r.get('applied') and r.get('caught') for r in results)
     summary = {'modules': {name: hashlib.sha256(text.encode('utf-8')).hexdigest() for name, text in sources.items()},
                'tests': list(TESTS), 'baseline': baseline, 'mutations': results, 'all_caught': ok,
+               'subset': sorted(only) if only is not None else None,
                'seconds': round(time.monotonic() - started, 1)}
     if args.json:
         Path(args.json).write_text(json.dumps(summary, ensure_ascii=False, indent=1) + '\n', encoding='utf-8')

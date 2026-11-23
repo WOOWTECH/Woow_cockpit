@@ -565,6 +565,39 @@ class StoredSettingsTests(LiteLLMCase):
         result = self.check(self.upload_litellm(), ['litellm'])[0]
         self.assertFalse([w for w in result['warnings'] if '代理設定' in w], 'only environment variables and callbacks')
 
+    def test_settings_that_load_code_refuse(self):
+        # SR-6: LiteLLM's get_instance_fn imports any dotted path (post_call_rules "builtins.exec" runs every response).
+        self.world.ha_columns = COLUMNS + self.CONFIG
+        for found, words in (({'sections': ['litellm_settings'], 'env': [], 'callbacks': [],
+                               'hooks': ['litellm_settings.post_call_rules']}, 'litellm_settings.post_call_rules'),
+                             ({'sections': ['general_settings'], 'env': [], 'callbacks': [],
+                               'hooks': ['general_settings.custom_auth']}, 'general_settings.custom_auth'),
+                             ({'sections': ['litellm_settings'], 'env': [], 'hooks': [],
+                               'callbacks': ['langfuse', 'custom_callbacks.proxy_handler_instance']},
+                              'custom_callbacks.proxy_handler_instance')):
+            self.answering(found)
+            result = self.check(self.upload_litellm(), ['litellm'])[0]
+            hooks = [b for b in result['blockers'] if '會載入並執行程式的設定' in b]
+            self.assertEqual(len(hooks), 1, result['blockers'])
+            self.assertIn(words, hooks[0])
+        self.assertTrue(any('langfuse' in w for w in result['warnings']), 'a named integration stays a warning')
+        self.assertFalse(any('custom_callbacks' in w for w in result['warnings']))
+        self.answering({'sections': ['litellm_settings'], 'env': [], 'callbacks': ['langfuse'], 'hooks': []})
+        result = self.check(self.upload_litellm(), ['litellm'])[0]
+        self.assertFalse([b for b in result['blockers'] if '會載入並執行程式的設定' in b])
+        self.assertIn("('litellm_settings', 'post_call_rules')", ha_litellm.STORED_SETTINGS_SQL)
+
+    def test_settings_that_load_code_stop_the_conversion_before_anything_is_read(self):
+        self.world.ha_columns = COLUMNS + self.CONFIG
+        self.answering({'sections': ['litellm_settings'], 'env': [], 'callbacks': [],
+                        'hooks': ['litellm_settings.post_call_rules']})
+        with self.assertRaises(BackupError) as caught:
+            self.convert(self.upload_litellm(), ['litellm'])
+        self.assertIn('會載入並執行程式的設定', caught.exception.message)
+        self.assertFalse(self.world.copies_out, "no HA row was read")
+        self.assertFalse(self.world.snapshots, "this device's schema was not captured")
+        self.assertFalse(self.world.copies_in)
+
     def test_the_import_notes_name_them(self):
         notes, _reminders = ha_litellm.import_texts({'counts': {}, 'key_users': [],
                                                      'stored_settings': {'sections': [], 'env': ['HTTPS_PROXY'],

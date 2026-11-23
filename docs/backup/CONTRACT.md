@@ -2025,8 +2025,10 @@ PostgreSQL 15).
    has a provider whose base URL is this device's LiteLLM (nothing else changes).
    HA's stored proxy settings (`LiteLLM_Config`) move with the rows and take effect here (`store_model_in_db: true`:
    stored environment variables are decrypted with the moved salt into the proxy's environment, callbacks are loaded):
-   the check warns and a note names the stored environment variable names and callback names (never a value; nothing
-   is refused; review SR-5).
+   the check warns and a note names the stored environment variable names and callback names (never a value; review
+   SR-5). Stored settings LiteLLM imports and calls as code (`post_call_rules`, the `general_settings` `custom_*`
+   hooks, a callback whose name has a dot: LiteLLM's `get_instance_fn` imports any dotted path) refuse: the check's
+   blocker names them and the conversion stops before reading HA's rows or capturing this device's schema (SR-6).
 
 **Packaging**: per app `adapter.import_manifest` adds the live non-data items exactly as a backup reads them (images
 list, secrets, config files, Quadlet files, `catalog_entry`, `catalog_sha256`), so `match_items` finds every item and
