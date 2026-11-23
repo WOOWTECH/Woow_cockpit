@@ -359,11 +359,12 @@ if isinstance(doc, dict):
     out["trust_enabled"] = doc.get("security.workspace.trust.enabled")
 else:
     out["settings_unreadable"] = True
-pi = walk("pi", ["sessions", "claude/projects", "codex/sessions", "skills"])
+pi = walk("pi", ["sessions", "claude/projects", "codex/sessions", "codex/archived_sessions", "skills"])
 m = pi["map"] or {}
 out["pi_sessions"] = sum(1 for k, v in m.items() if k.startswith("sessions/") and k.endswith(".jsonl") and v.startswith("f"))
 out["claude_projects"] = sum(1 for k, v in m.items() if k.startswith("claude/projects/") and k.endswith(".jsonl") and v.startswith("f"))
-out["codex_sessions"] = sum(1 for k, v in m.items() if k.startswith("codex/sessions/") and k.endswith(".jsonl") and v.startswith("f"))
+out["codex_sessions"] = sum(1 for k, v in m.items() if k.startswith(("codex/sessions/", "codex/archived_sessions/"))
+                            and k.endswith(".jsonl") and v.startswith("f"))
 out["skills"] = sorted({k.split("/")[1] for k in m if k.startswith("skills/") and k.count("/") >= 1})
 never = {}
 for area, parts in REQ["never"].items():
@@ -387,9 +388,13 @@ def owner(*argv):
                            "XDG_RUNTIME_DIR=/run/user/%d" % req["uid"], *argv], capture_output=True, timeout=120)
 mp = owner("podman", "volume", "inspect", "--format", "{{.Mountpoint}}", "woow-code-server-pi-data").stdout.decode().strip()
 values = set()
+import re
 def strings(value):
+    # secret-looking values only: 16+ characters, letters and digits, no space, no path, no URL without userinfo or
+    # query (generic header values such as "application/json" would match ordinary log lines)
     if isinstance(value, str):
-        if len(value) >= 12 and not value.startswith("/"):
+        if (len(value) >= 16 and " " not in value and not value.startswith("/") and re.search(r"[0-9]", value)
+                and re.search(r"[A-Za-z]", value) and not re.fullmatch(r"https?://[^@?#\s]*", value)):
             values.add(value)
     elif isinstance(value, list):
         for item in value:
