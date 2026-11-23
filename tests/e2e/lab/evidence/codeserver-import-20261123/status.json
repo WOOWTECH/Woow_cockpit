@@ -1,0 +1,34 @@
+{
+  "lane": "codeserver-import",
+  "date": "2026-11-23",
+  "branch": "feat/ha-import-code-server-20261123",
+  "base": "integration/ha-import-batch1-20261123 d812699 (+ lab/batch2-dev-e-20261123 2b85b92)",
+  "owner_decision": "決定2 A: HA -> Podman import for code-server (facts code-server.md recommended answers D1 b, D2 a, D3, D4 a, D6)",
+  "commercial_acceptance": "not-complete",
+  "engine": {
+    "module": "backup-engine/woowbackup/ha_codeserver.py",
+    "registry": "haapps.IMPORTERS woow-code-server (woow_ha_code_server), no MCP admin",
+    "never_read_added": ["data/pi-agent/auth.json", "data/pi-agent/mcp-auth.json", "data/pi-agent/claude/.credentials.json", "data/pi-agent/codex/auth.json"],
+    "public_guards_changed": "none"
+  },
+  "lab_catalog_entry": "tests/e2e/lab/catalog/woow-code-server.json (owner appowner; dev-e only; a production entry is the owner's review)",
+  "tests": {
+    "unit_test_ha_codeserver": "17/17 OK (fakes)",
+    "ha_suites": "test_ha_registry/store/cli/cli/import/flows/common/backup/space/links/sqlite/redact: 187 OK, 1 skipped",
+    "page_cases_ha": "node --test-name-pattern='從 HA 備份匯入' tests/backup-ui.mjs: 20/20 after one wrong expectation of mine was fixed (new batch 2 code-server case included)"
+  },
+  "dev_checks_not_acceptance": {
+    "real_backup_scan": "importer scan of the REAL backup (8f2dc23f) in a network-none lab container: walk complete, 5 never-read files skipped unread, 377 + 9 files to move, 28 Pi sessions, 20 Claude and 15 Codex session files, 3 skills, 1 snippet, 0 user extensions, 9 shared MCP servers (1 with headers/env), codex-bootstrap unknown (warning), 0 blockers with the 0.1.15 pins",
+    "real_backup_write_path": "the importer's writers on the REAL backup against an EMPTY simulated target in the same kind of container: pi volume 515 members, IDE 19, extensions 1, every member 0:0, nested.check_volume ok, no login/connector/leftover file present; SQLite quick_check replaced by ok there (the unprivileged container cannot leave its network namespace, the sandbox refused as designed)"
+  },
+  "real_run": {
+    "state": "pending",
+    "why": "dev-e has no code-server yet: only lane batch2-lab deploys on dev-e (main's rule); REQUEST written in team/batch2-lab.md (~18:47); batch2-lab idle since 17:22",
+    "harness": "tests/e2e/lab/codeserver_full_flow.py (--self-check PASS)",
+    "evidence_target": "tests/e2e/lab/evidence/codeserver-import-20261123/codeserver-x86-attempt1.json"
+  },
+  "not_moved_reminders": {
+    "cloudflare_tunnel": "page: re-add every route on this device's tunnel, re-link WOOW PaaS, then remove HA's routes and stop the add-on (cf-tunnel.md D1 a). Listing the routes themselves is NOT done: they are in the add-on's options.json, which the engine never reads (it holds the tunnel token) -> owner item",
+    "mcp_admin_addons": "page: re-configure <product> MCP 管理 here (or install it), stop HA's add-on, re-create the MCP connectors (mcp-admin.md verdict)"
+  }
+}
