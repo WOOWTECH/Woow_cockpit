@@ -81,6 +81,44 @@
    "isolation_before_after": "true none {} / true none {}",
    "clean_tree": true,
    "commercial_acceptance": "not-complete"
+  },
+  "headscale_full_flow": {
+   "harness": "tests/e2e/lab/headscale_full_flow.py --run --arch <x86|arm>",
+   "target": "dev-d's installed WOOWTECH Podman Headscale package units (headscale, headplane, headscale-entrance), server_url http://localhost:28080",
+   "flow": "helper commands as the Cockpit page: inspect (baseline+kit) -> catalog-install -> key-init -> upload-begin/finish -> ha-check-start -> ha-convert-start -> inspect -> restore-start -> restart -> injected restore (rolled-back) -> restore safety backup -> delete/catalog-remove",
+   "attempts": {
+    "headscale-fullflow-arm-attempt1.json": {
+     "source_commit": "cb21c08",
+     "exit": 0,
+     "elapsed_seconds": 1703.9,
+     "summary": "headscale full flow arm: 101/101 PASS"
+    },
+    "headscale-fullflow-x86-attempt1.json": {
+     "source_commit": "1b174e4",
+     "exit": 1,
+     "elapsed_seconds": 25.8,
+     "summary": "headscale full flow x86: 7/8 FAIL"
+    },
+    "headscale-fullflow-x86-attempt2.json": {
+     "source_commit": "b9fc697",
+     "exit": 1,
+     "elapsed_seconds": 2976.7,
+     "summary": "headscale full flow x86: 86/95 FAIL"
+    }
+   },
+   "lab_precondition": "dev-d config.yaml derp block -> embedded region 999 for the run only (empty DERP map since 11-20 = 'initial DERPMap is empty' crash loop, hscontrol/app.go:656); original written back, sha256 equal",
+   "commercial_acceptance": "not-complete",
+   "passed": {
+    "arm": "headscale-fullflow-arm-attempt1.json (exit 0, 101/101)"
+   },
+   "finding_for_owner": "found-state ha-check answers ok/0 blockers on a crash-looping Headscale (adapter probe checks files/load/mask only); restore health checks + automatic rollback stop such an import",
+   "proved_arm": [
+    "real RPi5-made tailscale client re-pointed to http://localhost:28080 without auth key: same node id 2, node key, addresses, no new node",
+    "new device with HA reusable pre-auth key, 10/10 DERP(lab) pongs",
+    "restart and injected rolled-back restore with clients back by themselves",
+    "safety-backup rollback equals dev-d state before import",
+    "cleanup + leak scan 0 hits"
+   ]
   }
  }
 }
