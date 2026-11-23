@@ -78,7 +78,8 @@ MUTATIONS = (
      "    tmp.run('hapg', image, ha_server_args(), detach=True, read_only_root=False, env={'PGDATA': HA_PGDATA},\n"
      "            volumes=[(tmp.name('hapg'), HA_PGDATA, 'rw')])\n", 1),
     ('M19', "HA's cluster gets every library/command setting overridden", LL,
-     '        args += [\'-c\', setting]\n    return args\n', '    return args\n', 1),
+     "        args += ['-c', setting]\n    return args + ['-c', 'event_triggers=off']\n",
+     "    return args + ['-c', 'event_triggers=off']\n", 1),
     ('M20', 'the new cluster runs with a read-only root and a noexec data volume', LL,
      "            volumes=[(tmp.name('ll-db'), target.db_target, 'rw,noexec,nosuid,nodev')],\n"
      "            env=target.db_env, secrets=target.db_secrets, read_only_root=True)\n",
