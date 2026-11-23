@@ -146,6 +146,15 @@ for volume in "$target_volume" "$plane_volume" "$converted_volume"; do podman vo
 
 progress target
 # 1. The disposable target: initialised by the real image with ITS OWN API key, then stopped (cold).
+#    Like the Podman package's install.sh (hs_ensure_extra_records), the data volume first gets an empty
+#    extra-records file: headscale 0.29.4 refuses to start when dns.extra_records_path does not exist
+#    (hscontrol/dns/extrarecords.go NewExtraRecordsManager: os.Stat error is fatal).
+mkdir -m 0700 "$test_dir/seed"
+printf '[]\n' > "$test_dir/seed/extra_records.json"
+chmod 0644 "$test_dir/seed/extra_records.json"
+tar -C "$test_dir/seed" -cf - extra_records.json | podman volume import "$target_volume" -
+rm -rf -- "$test_dir/seed"
+echo 'Target data volume seeded like the Podman package (empty extra-records file): PASS'
 podman run -d --name "$target_server" --pull=never --memory=384m --network=none \
   -v "$test_dir/config:/etc/headscale:ro" -v "$target_volume:/var/lib/headscale" \
   -v "$test_dir/target-run:/var/run/headscale" localhost/woow-headscale:0.29.4-r1 serve >/dev/null
