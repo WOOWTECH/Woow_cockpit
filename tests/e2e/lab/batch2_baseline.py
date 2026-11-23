@@ -1,17 +1,20 @@
 #!/usr/bin/env python3
 """dev-e baseline (deploy-batch2.sh): marker data in each catalog app, then per app an encrypted Cockpit backup (the
 baseline that later HA-import tests restore) proved by an in-place restore of it.
-    python3 -I tests/e2e/lab/batch2_baseline.py [nextcloud] [opendesign]    # default: both (they need their catalog entries)
-code-server has no catalog entry on the host (not onboarded), so the engine cannot back it up yet: not covered here.
+    python3 -I tests/e2e/lab/batch2_baseline.py [nextcloud] [opendesign] [code-server]   # default: all three
+Each app needs its catalog entry in dev-e: nextcloud and open-design are the host's files, woow-code-server is the lab
+entry tests/e2e/lab/catalog/woow-code-server.json (the host has none; lane codeserver-import, owner decision D1 b).
 Per app (batch2_markers.py, run inside dev-e, creates and reads the markers through the app's own interfaces):
-  1. the "baseline" markers (woowbk-lab-baseline: a Nextcloud user with a WebDAV file, an OpenDesign project with a file)
+  1. the "baseline" markers (woowbk-lab-baseline: a Nextcloud user with a WebDAV file, an OpenDesign project with a file,
+     a code-server IDE snippet, pi skill and workspace file; code-server also gets the real login check here)
      are created where missing (seeding is idempotent); any other woowbk-lab-* marker means an earlier run stopped
      between its after marker and its restore: that app stops with a FAIL (restore its baseline backup first)
   2. an encrypted backup with the device key, without images (note 「dev-e 基準備份（<app>）」), inspect says it
      restores in place
   3. an "after" marker (woowbk-lab-after), then an in-place restore of that backup: the baseline markers must be there
      with the same content digests and the after marker gone, the restore made a safety backup, was not rolled back
-     and every catalog health check passed; status shows the app running without problems; the health URLs answer
+     and every catalog health check passed; status shows the app running without problems; the health URLs answer;
+     code-server: the real login again (session cookie, workbench page, wrong password refused)
 The baseline markers stay, so the live data equals the baseline backup afterwards. The Nextcloud marker user's password
 is generated once into ~/.woowbk-lab/secrets/dev-e-markers.json (0600) and never printed. Evidence (no keys, no
 secrets) goes to ~/.woowbk-lab/evidence/batch2-lab/<stamp>-baseline/; result.json holds the checks and, per app, the
@@ -40,15 +43,15 @@ DEV = 'woowbk-dev-e'
 OWNER = '/usr/local/bin/woowbk-owner'
 PASSWORDS = LAB / 'secrets' / 'dev-e-markers.json'
 EVIDENCE = LAB / 'evidence' / 'batch2-lab' / (time.strftime('%Y%m%dT%H%M%S') + '-baseline')
-ALL = ['nextcloud', 'opendesign']
-CATALOG_ID = {'nextcloud': 'nextcloud', 'opendesign': 'open-design'}
+ALL = ['nextcloud', 'opendesign', 'code-server']
+CATALOG_ID = {'nextcloud': 'nextcloud', 'opendesign': 'open-design', 'code-server': 'woow-code-server'}
 GIB = 1024 ** 3
 FLOOR = 12 * GIB      # the team keeps >= 12 GiB free on the host at every moment
 RESERVE = 1 * GIB     # what the other lanes may write meanwhile
 WATCH = FLOOR + GIB // 4
 APPS = sys.argv[1:] or ALL
 if not set(APPS) <= set(ALL):
-    raise SystemExit('usage: batch2_baseline.py [nextcloud] [opendesign]')
+    raise SystemExit('usage: batch2_baseline.py [nextcloud] [opendesign] [code-server]')
 checks = []
 EVIDENCE.mkdir(parents=True, exist_ok=True)
 
@@ -119,10 +122,14 @@ def names(app, found):
 BASELINE = {
     'nextcloud': {'users:woowbk-lab-baseline', 'files:woowbk-lab-baseline.txt'},
     'opendesign': {'projects:woowbk-lab-baseline', 'files:woowbk-lab-baseline.txt'},
+    'code-server': {'snippets:woowbk-lab-baseline.code-snippets', 'skills:woowbk-lab-baseline', 'files:woowbk-lab-baseline.txt'},
 }
+# Apps with a real client login check (batch2_markers.py <app> login), before the backup and after the restore.
+LOGIN = {'code-server'}
 def digests(found):
-    """The baseline files with their content digests ('name:sha256')."""
-    return sorted(f for f in found.get('files', []) if f.startswith('woowbk-lab-baseline'))
+    """The baseline markers with their content digests ('name:sha256'): files, and code-server's snippets and skills."""
+    return sorted(f for kind in ('files', 'snippets', 'skills') for f in found.get(kind, [])
+                  if f.startswith('woowbk-lab-baseline'))
 def host_free():
     st = os.statvfs('/')
     return st.f_bavail * st.f_frsize
@@ -205,6 +212,11 @@ def baseline(app):
     if not check(f'{app}: baseline markers present before the backup', BASELINE[app] <= have,
                  sorted(BASELINE[app] - have)):
         return
+    if app in LOGIN:
+        login = markers(app, 'login')
+        if not check(f'{app}: real login before the backup (session cookie, workbench page, wrong password refused)',
+                     login.get('ok'), login):
+            return
 
     if not disk_ok(app, 'backup'):
         return
@@ -230,7 +242,8 @@ def baseline(app):
 
     if not disk_ok(app, 'restore'):  # before the after marker, so a pause leaves the baseline state
         return
-    created = markers(app, 'seed', 'after', time.strftime('%Y%m%dT%H%M%S'), secrets.token_urlsafe(18))
+    # With the baseline user's password (the app's marker password): Nextcloud writes the after file into that user's files.
+    created = markers(app, 'seed', 'after', time.strftime('%Y%m%dT%H%M%S'))
     after = names(app, markers(app, 'read')) - BASELINE[app]
     check(f'{app}: "after" marker present before the restore', after, created)
 
@@ -258,6 +271,10 @@ def baseline(app):
           and not state['problems'], state)
     codes = {c['url']: (http_code(c['url']), str(c['expect_status'])) for c in catalog(CATALOG_ID[app])['health']}
     check(f'{app}: catalog health URLs answer as expected after the restore', all(a == e for a, e in codes.values()), codes)
+    if app in LOGIN:
+        login = markers(app, 'login')
+        check(f'{app}: real login after the restore (session cookie, workbench page, wrong password refused)',
+              login.get('ok'), login)
     summary[app] = {'backup_id': backup_id, 'backup_size': result['size'], 'backup_wall_s': round(wall, 1),
                     'backup_downtime_s': result.get('downtime_seconds'), 'restore_wall_s': round(rwall, 1),
                     'restore_downtime_s': rresult.get('downtime_seconds'), 'safety_backup_id': rresult.get('safety_backup_id'),

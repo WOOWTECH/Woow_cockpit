@@ -1,0 +1,76 @@
+{
+ "schema_version": 1,
+ "kind": "lab-rotation",
+ "device": "woowbk-dev-e (lab, network none, no published port, 3g, 2 CPUs)",
+ "rule": "owner 2026-11-23 (team/batch2-lab.md 16:15): after an app's restore tests pass, its lab images and lab test data may be deleted to free space; the real HA fixtures stay",
+ "rotations": [
+  {
+   "app": "opendesign",
+   "when": "2026-11-23 19:43:54-19:44:30 Asia/Taipei",
+   "reason": "opendesign-import real run attempt 3 PASS 85/85 (team/opendesign-import.md 17:55)",
+   "steps": [
+    "systemctl --user stop open-design-terminal open-design-mcp open-design-nginx open-design (all inactive, no container left)",
+    "deploy-batch2.sh e drop-images:opendesign (5bf5f9b959b3 localhost/woow-open-design:4.2.1, 1ae82dcc4a34 nginx:1.30.4-alpine)"
+   ],
+   "host_free_before_mib": 20984,
+   "host_free_after_mib": 33349,
+   "freed_mib": 12364,
+   "freed_note": "the image (6.68 GB) and its keep-id:uid=1001 ID-mapped copy",
+   "kept": [
+    "quadlets, env file, secrets",
+    "data volumes (10 MB)",
+    "catalog entry open-design",
+    "baseline backup 20261123T084036Z-5ebb7283 (dev-e backup store)"
+   ],
+   "wake": "deploy-batch2.sh e images:opendesign, then systemctl --user start open-design.service (and its -nginx, -mcp, -terminal units)",
+   "isolation_after": "none {}"
+  },
+  {
+   "app": "code-server",
+   "when": "2026-11-23 20:31:27-20:32:05 Asia/Taipei",
+   "reason": "codeserver-import real run attempt 1 PASS 87/87 (team/batch2-lab.md 'DONE code-server PASS 20:30'; R-COCKPIT feat/ha-import-code-server-20261123 tests/e2e/lab/evidence/codeserver-import-20261123/codeserver-x86-attempt1.json)",
+   "before": "code-server's data = the baseline (batch2_markers.py code-server read 20:31: the three baseline markers with the digests of the baseline's after-restore read)",
+   "steps": [
+    "systemctl --user stop code-server-health.timer code-server-health.service code-server.service (all inactive, no container left)",
+    "deploy-batch2.sh e drop-images:code-server (7999790230ec ghcr.io/woowtech/woow-code-server-amd64:4.139.1-8)"
+   ],
+   "host_free_before_mib": 21402,
+   "host_free_after_mib": 32277,
+   "freed_mib": 10875,
+   "freed_note": "the image (5362 MiB) and its keep-id:uid=1000,gid=1000 ID-mapped copy",
+   "kept": [
+    "quadlets, env file, secret code-server-config",
+    "volumes woow-code-server-{pi-data,ide,extensions} and ~/Desktop",
+    "catalog entry woow-code-server",
+    "baseline backup 20261123T121327Z-74c471c6 (dev-e backup store)"
+   ],
+   "wake": "deploy-batch2.sh e images:code-server, then the code-server phase again (idempotent: makes the ID-mapped copy first) or start code-server.service + code-server-health.timer and allow ~6 min for the copy",
+   "isolation_after": "none {}"
+  },
+  {
+   "app": "nextcloud",
+   "direction": "wake",
+   "when": "2026-11-23 20:32:39-21:04:20 Asia/Taipei",
+   "reason": "nextcloud-import REQUEST 18:02 (no-share window), after ROTATED code-server",
+   "steps": [
+    "deploy-batch2.sh e images:nextcloud (5 images, host IDs)",
+    "systemctl --user start nextcloud.target",
+    "deploy-batch2.sh e check:nextcloud (green)"
+   ],
+   "images": [
+    "lab: image localhost/woow-nextcloud:35.0.1-office2: ignore-chown (lab-only; the host maps these ids normally) (31348 of 53616 entries under /usr/src/nextcloud, as at 17:05)",
+    "lab: image localhost/woow-nextcloud:35.0.1-office2 loaded in 609s, ID e80170f48ac2 (same as the host); 1877 MiB, compressed copy 676 MiB, lowest host free 28679 MiB",
+    "lab: image docker.io/collabora/code:26.04.4.2.1 loaded in 608s, ID a35ff1de149a (same as the host); 1267 MiB, compressed copy 488 MiB, lowest host free 26058 MiB",
+    "lab: image docker.io/pgvector/pgvector:0.8.6-pg16 loaded in 325s, ID 9b05db12a354 (same as the host); 425 MiB, compressed copy 154 MiB, lowest host free 24779 MiB",
+    "lab: image docker.io/library/redis:8.10.1-alpine loaded in 106s, ID d1e21a26915a (same as the host); 113 MiB, compressed copy 38 MiB, lowest host free 24455 MiB",
+    "lab: image docker.io/nginxinc/nginx-unprivileged:1.29.3-alpine loaded in 74s, ID 696695300a3c (same as the host); 51 MiB, compressed copy 22 MiB, lowest host free 24127 MiB"
+   ],
+   "host_free_before_mib": 32276,
+   "host_free_after_mib": 26020,
+   "data": "kept from the 17:12 hibernation (html, data, postgres, config.php, secrets, env, catalog entry)",
+   "isolation_after": "none {}"
+  }
+ ],
+ "commercial_acceptance": "not-complete",
+ "what_this_is": "a record of lab disk rotation on dev-e; no product behaviour is tested here"
+}
