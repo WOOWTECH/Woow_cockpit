@@ -197,6 +197,14 @@ VARIANTS = {
                             ('environment_variables', _j({'LANGFUSE_HOST': 'placeholder'}))],
     'control_pass_through_url': [('general_settings', _j({'pass_through_endpoints': [
         {'path': '/woowbk', 'target': 'https://api.example.invalid/v1'}]}))],
+    'control_pass_through_upper_scheme': [('general_settings', _j({'pass_through_endpoints': [
+        {'path': '/woowbk', 'target': 'HTTPS://api.example.invalid/v1'}]}))],
+    'pass_through_spaced_module_target': [('general_settings', _j({'pass_through_endpoints': [
+        {'path': '/woowbk', 'target': '  builtins.exec'}]}))],
+    'pass_through_absolute_path_target': [('general_settings', _j({'pass_through_endpoints': [
+        {'path': '/woowbk', 'target': '/tmp/woowbk_review.handler'}]}))],
+    'custom_provider_map_as_object': [('litellm_settings', _j({'custom_provider_map': {
+        'provider': 'woowbk', 'custom_handler': HOOK}}))],
     'custom_provider_map': [('litellm_settings', _j({'custom_provider_map': [
         {'provider': 'woowbk', 'custom_handler': HOOK}]}))],
     'guardrails_v1_callbacks': [('litellm_settings', _j({'guardrails': [
