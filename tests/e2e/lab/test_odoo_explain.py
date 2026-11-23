@@ -273,6 +273,37 @@ class ExplainTests(unittest.TestCase):
         del dst['public.mail_message']['rows']['1']
         self.assertTrue(unexplained(explain(src, dst, log=(12,))), 'mail rows never disappear')
 
+    def queue(self, caps, before='outgoing', after='exception', written='2026-11-23T02:01:20', cols=None):
+        caps['public.mail_mail']['rows']['1'] = row(id=1, mail_message_id=1, state=before, create_date=OLD,
+                                                    write_date=OLD)
+        changed = row(id=1, mail_message_id=1, state=after, create_date=OLD, write_date=written)
+        for name in cols or ('failure_reason',):
+            changed['fields'][name] = 'f' * 64
+        return changed
+
+    def test_failed_send_of_a_queued_mail_explained(self):
+        src = self.with_mail(source())
+        changed = self.queue(src)
+        dst = copy.deepcopy(src)
+        dst['public.ir_cron']['rows']['3'] = cron(3, x.MAIL_QUEUE, '2026-11-23T03:01:00', '2026-11-23T02:01:21')
+        src['public.ir_cron']['rows']['3'] = cron(3, x.MAIL_QUEUE, '2026-11-19T01:59:22', '2026-11-19T01:00:51')
+        dst['public.mail_mail']['rows']['1'] = changed
+        self.assertEqual(unexplained(explain(src, dst, log=(3,))), [])
+        self.assertTrue(unexplained(explain(src, dst, log=())), 'the queue job did not run')
+
+    def test_other_mail_changes_stay_unexplained(self):
+        cases = (dict(before='exception'), dict(after='sent'), dict(written='2026-11-23T01:00:00'),
+                 dict(cols=('body_html',)))
+        for case in cases:
+            with self.subTest(case=case):
+                src = self.with_mail(source())
+                changed = self.queue(src, **case)
+                src['public.ir_cron']['rows']['3'] = cron(3, x.MAIL_QUEUE, '2026-11-19T01:59:22', None)
+                dst = copy.deepcopy(src)
+                ran(dst, 3)
+                dst['public.mail_mail']['rows']['1'] = changed
+                self.assertTrue(unexplained(explain(src, dst, log=(3,))))
+
     def test_row_tables_must_match(self):
         src = self.with_mail(source())
         with self.assertRaises(ValueError):

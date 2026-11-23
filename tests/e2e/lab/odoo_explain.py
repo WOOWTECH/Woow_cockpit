@@ -23,6 +23,11 @@ Rules and their source (Odoo 18.0-20260926 in dev-c's image, /usr/lib/python3/di
                    addons/mail/models/mail_template.py:620-660 (send_mail -> mail.mail) and mail/models/mail_mail.py:30
                    (_inherits mail.message), :47 (message_type email_outgoing), :65-71 (state outgoing): one queued
                    mail.mail and its mail.message on res.users, written after the restore by that job.
+  mail-queue-failed addons/mail/models/mail_mail.py:218-266 (process_email_queue: every 'outgoing' mail) and
+                   :637-649 (ir.mail_server.connect fails -> write state 'exception' and failure_reason), run hourly by
+                   mail/data/ir_cron_data.xml (mail.ir_cron_mail_scheduler_action): a mail already queued in the HA
+                   backup that the lab cannot send (no network) after the restore. On a host that can reach its mail
+                   server the same mail would be sent ('sent', or deleted when auto_delete); that stays unexplained.
 A deactivated cron (active changed), a changed progress or bus row, a changed key, any other key, any schema change,
 any other mail row and any row in another table stay unexplained. The mail tables are explained only when both
 captures hold them row by row (otherwise they are compared as whole tables like every other table).
@@ -32,6 +37,8 @@ from datetime import datetime, timedelta, timezone
 TABLES = ('public.bus_bus', 'public.ir_config_parameter', 'public.ir_cron', 'public.ir_cron_progress')
 MAIL_TABLES = ('public.mail_mail', 'public.mail_message')
 SIGNUP_REMINDER = 'auth_signup.ir_cron_auth_signup_send_pending_user_reminder'
+MAIL_QUEUE = 'mail.ir_cron_mail_scheduler_action'
+MAIL_FAILED_COLUMNS = frozenset({'state', 'failure_reason', 'write_date', 'write_uid'})
 SETTINGS_KEYS = ('web.base.url', 'web.base.url.freeze', 'woow_paas_platform.upgrade_done',
                  'woow_paas_platform.upgrade_attempt')
 # Keys whose value the capture may show in plain text (none of them is a credential).
@@ -41,7 +48,7 @@ AUTOVACUUM = 'base.autovacuum_job'
 BUS_RETENTION = timedelta(hours=24)       # bus.py:25 DEFAULT_GC_RETENTION_SECONDS
 PROGRESS_RETENTION = timedelta(weeks=1)   # ir_cron.py:784
 RULES = ('import-settings', 'cron-schedule', 'cron-progress', 'progress-gc', 'bus-gc', 'bus-runtime',
-         'signup-reminder')
+         'signup-reminder', 'mail-queue-failed')
 
 
 def row_tables(source, target):
@@ -203,8 +210,9 @@ def explain(source, target, *, rules, restore_start=None, captured_at=None, live
                 events.append({'table': 'public.bus_bus', 'id': int(ident), 'kind': 'kept',
                                'columns': [], 'before': None, 'after': row['safe'], 'rule': None, 'explained': False,
                                'why': 'old notification survived an autovacuum run'})
-    reminder_ran = any(target_crons[str(i)]['safe'].get('xmlid') == SIGNUP_REMINDER for i in ran
-                       if str(i) in target_crons)
+    def job_ran(xmlid):
+        return any(target_crons[str(i)]['safe'].get('xmlid') == xmlid for i in ran if str(i) in target_crons)
+    reminder_ran, queue_ran = job_ran(SIGNUP_REMINDER), job_ran(MAIL_QUEUE)
     reminders = set()
     for event in by_table['public.mail_message']:
         after = event['after'] or {}
@@ -216,7 +224,16 @@ def explain(source, target, *, rules, restore_start=None, captured_at=None, live
         mark(event, 'signup-reminder' if ok else None, 'reminder message written by the signup reminder job' if ok
              else 'mail message not written by the signup reminder job after the restore')
     for event in by_table['public.mail_mail']:
-        after = event['after'] or {}
+        before, after = event['before'] or {}, event['after'] or {}
+        if event['kind'] == 'changed':
+            written = ts(after.get('write_date'))
+            ok = ('runtime' in rules and queue_ran and set(event['columns']) <= MAIL_FAILED_COLUMNS
+                  and 'state' in event['columns'] and before.get('state') == 'outgoing'
+                  and after.get('state') == 'exception' and written and restore_start <= written <= captured_at
+                  and before.get('mail_message_id') == after.get('mail_message_id'))
+            mark(event, 'mail-queue-failed' if ok else None, 'queued mail the lab could not send' if ok
+                 else 'mail changed other than a failed send of a queued mail after the restore')
+            continue
         created = ts(after.get('create_date')) if event['kind'] == 'added' else None
         ok = ('runtime' in rules and created and restore_start <= created <= captured_at
               and after.get('mail_message_id') in reminders and after.get('state') == 'outgoing')
@@ -242,7 +259,7 @@ def public_event(event):
             'public.ir_cron_progress': ('cron_id', 'create_date', 'done', 'remaining', 'timed_out_counter'),
             'public.bus_bus': ('create_date',),
             'public.mail_message': ('model', 'res_id', 'message_type', 'create_date'),
-            'public.mail_mail': ('mail_message_id', 'state', 'create_date')}.get(event['table'], ())
+            'public.mail_mail': ('mail_message_id', 'state', 'create_date', 'write_date')}.get(event['table'], ())
     for side in ('before', 'after'):
         values = event.get(side) or {}
         shown = {k: values.get(k) for k in keep if k in values}
