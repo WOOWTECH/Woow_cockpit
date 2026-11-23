@@ -306,6 +306,18 @@ def items(body, *keys):
     return []
 
 
+# Owner rule: any name containing these words is secret; such tables' counts are never printed.
+SECRET_NAME = re.compile(r'PWD|PASS|KEY|TOKEN|SECRET|CRED|AUTH|SIG', re.I)
+
+
+def printable(counts):
+    return {k: v for k, v in counts.items() if not SECRET_NAME.search(k)}
+
+
+def table_counts(lab):
+    return {table: int(lab.sql('SELECT count(*) FROM %s;' % table)) for table in ha_omnigent.TABLES}
+
+
 def verify_installed(lab, expect, creds, phase, observed, *, target_password, pi_files, ha_cookie):
     """Every fact of the restored HA data and this device's kept identity; returns tokens (registered)."""
     lab.ready()
@@ -360,13 +372,14 @@ def verify_installed(lab, expect, creds, phase, observed, *, target_password, pi
     require(msessions.get('status') == 200 and expect['member_sessions'][0]['id'] in {x.get('id') for x in mrows if isinstance(x, dict)},
             phase + '_member_session_missing')
     require(lab.sql('SELECT version_num FROM alembic_version;').decode() == expect['alembic'], phase + '_alembic_mismatch')
-    counts = {}
-    for table in ha_omnigent.TABLES:
-        counts[table] = int(lab.sql('SELECT count(*) FROM %s;' % table))
+    counts = table_counts(lab)
     want = dict(expect['db_counts'], users=expect['db_counts']['users'] + 1)
     # account_tokens grow with every login above. hosts/device_grants must be HA's exactly: the placeholder runner
     # never registers, so HA's runner rows arrive as data while this device's runner identity stays in its pi volume.
     differ = sorted(k for k, v in want.items() if k != 'account_tokens' and counts.get(k) != v)
+    if differ:
+        # Table names and integer counts only (no row content): what differs from HA's counts plus the kept account.
+        event('table_counts_differ', phase=phase, differ=printable({k: [want[k], counts.get(k)] for k in differ}))
     require(not differ, phase + '_table_counts_differ')
     require(counts['account_tokens'] >= expect['db_counts']['account_tokens'], phase + '_ha_tokens_missing')
     cookie = lab.r.podman('exec', SERVER, 'cat', '/data/artifacts/accounts-cookie-secret', max_output=4096).stdout
@@ -535,6 +548,12 @@ def run(arch):
 
         result = haimport._install_omnigent_candidate(context(), converted['backup_id'])
         require(result['changed'] and not result['rolled_back'], 'install_failed')
+        # Counts right after the restore (server started by the flow, before any login or API call of this run).
+        fresh = table_counts(lab)
+        want = dict(summary['db_counts'], users=summary['db_counts']['users'] + 1)
+        event('installed_counts_before_login',
+              equal_to_ha_plus_kept=sorted(k for k in printable(want) if fresh.get(k) == want[k]),
+              differ=printable({k: [want[k], fresh.get(k)] for k in sorted(want) if fresh.get(k) != want[k]}))
         installer_meta = deps.storage.get(result['safety_backup_id'])
         require(installer_meta['type'] == 'safety' and installer_meta['encrypted'], 'safety_not_encrypted')
         verify_installed(lab, summary, creds, 'installed', observed, target_password=target_password,
