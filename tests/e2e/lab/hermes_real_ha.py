@@ -20,6 +20,8 @@ sends (root, one JSON request on stdin, one JSON reply): inspect, catalog-instal
 ha-convert-start, restore-start, job-status, list, status, delete.
 
 Steps (run in the order given):
+  packages     python3-nacl and python3-cryptography (+ libsodium23, python3-cffi-backend) in dev-d, as its README's
+               `packages` stage has them: .deb files from the host's apt-get download, dpkg -i (dev-d has no network)
   setup        deploy this tree (the schedule timer is masked first: dev-d is shared and no schedule is wanted);
                Hermes's catalog entry is the one carried by dev-d's own Hermes baseline backup (inspect with dev-d's
                11-19 emergency kit, then catalog-install of exactly that entry); a device key (key-init; its kit is
@@ -837,7 +839,41 @@ def step_leaks(ev, args):
                                          'host': host})
 
 
-STEPS = {'setup': step_setup, 'before': step_before, 'check': step_check, 'kit-baseline': step_kit_baseline,
+DEBS = ('libsodium23', 'python3-cffi-backend', 'python3-nacl', 'python3-cryptography')
+DEB_DIR = LAB / 'run' / 'debs-hermes-real'
+
+
+def step_packages(ev, args):
+    """The packages the README's dev-d `packages` stage installs for HA decryption (python3-nacl for SecureTar v3,
+    python3-cryptography for v1/v2), lost when dev-d was recreated with network none on 11-20. dev-d has no network:
+    the .deb files come from the host's own `apt-get download` (Ubuntu 24.04 noble archive, checked by apt against the
+    signed index; dev-d is Ubuntu 24.04 too) and are installed with dpkg -i."""
+    query = drv.root('dpkg-query', '-W', '-f=${Package} ${Status}\n', *DEBS, timeout=60)
+    installed = {line.split()[0] for line in drv.out(query).splitlines() if line.endswith('install ok installed')}
+    missing = [d for d in DEBS if d not in installed]
+    if missing:
+        DEB_DIR.mkdir(parents=True, exist_ok=True)
+        if not all(list(DEB_DIR.glob(f'{d}_*_amd64.deb')) for d in missing):
+            proc = subprocess.run(['apt-get', 'download', *missing], cwd=DEB_DIR, capture_output=True, timeout=300)
+            if proc.returncode != 0:
+                raise Failed('apt-get download failed')
+        debs = sorted(p for d in missing for p in DEB_DIR.glob(f'{d}_*_amd64.deb'))
+        ev.save('debs.json', {p.name: sha256_file(p) for p in debs})
+        target = '/var/tmp/hermes-real-debs'
+        drv.root('mkdir', '-p', target, check=True)
+        for deb in debs:
+            drv.run([drv.LP, 'cp', str(deb), f'{drv.DEVICE}:{target}/{deb.name}'], check=True, timeout=120)
+        proc = drv.root('dpkg', '-i', *[f'{target}/{deb.name}' for deb in debs], timeout=600)
+        ev.save('dpkg.log', drv.out(proc)[-4000:] + proc.stderr.decode('utf-8', 'replace')[-2000:])
+        drv.root('rm', '-rf', target, timeout=60)
+        ev.check('packages: dpkg -i of the downloaded .deb files', proc.returncode == 0, f'rc {proc.returncode}')
+    probe = drv.root('python3', '-I', '-c', 'import nacl, nacl.bindings, nacl.pwhash, cryptography; '
+                     'print(nacl.__version__, cryptography.__version__)', timeout=60)
+    ev.check('packages: python3-nacl and python3-cryptography import in dev-d', probe.returncode == 0,
+             drv.out(probe).strip()[:80])
+
+
+STEPS = {'packages': step_packages, 'setup': step_setup, 'before': step_before, 'check': step_check, 'kit-baseline': step_kit_baseline,
          'cleanup': step_cleanup, 'leaks': step_leaks}
 
 
@@ -855,7 +891,7 @@ def main(argv):
         return 0
     steps = argv
     if not steps or any(s not in STEPS and not (s.startswith('import:') and s[7:] in TAGS) for s in steps):
-        print('usage: hermes_real_ha.py <setup|before|check|import:TAG|kit-baseline|cleanup|leaks> ...', file=sys.stderr)
+        print('usage: hermes_real_ha.py <packages|setup|before|check|import:TAG|kit-baseline|cleanup|leaks> ...', file=sys.stderr)
         return 2
     if not clean_tree():
         print('commit tested code first', file=sys.stderr)
@@ -911,7 +947,7 @@ def main(argv):
             emit(f'STEP {name}: {"FAIL" if bad else "PASS"} seconds={took:.0f}')
             if bad:
                 failed_steps.append(name)
-                if name in ('setup', 'before', 'check'):
+                if name in ('packages', 'setup', 'before', 'check'):
                     break
     finally:
         try:
