@@ -1258,10 +1258,14 @@ def target_broker(work, tmp, target, export, ids, *, hint='', target_snapshot=No
                                                max_output=MAX_HOCON, check=False)
     if image_fingerprints is not None and tls_fingerprints(read_candidate, image_fingerprints) != image_fingerprints:
         raise BackupError('incompatible', 'EMQX 候選憑證與目標不一致，已停止。')
-    if target_config is not None and (target_etc_dir(read_candidate) != ETC_DIR or (
-            boot_form(read_candidate) != target_boot if target_boot is not None
-            else read_effective_config(read_candidate) != target_config)):
-        raise BackupError('incompatible', 'EMQX 候選啟動後設定與目標不一致，已停止。')
+    if target_config is not None:
+        if target_etc_dir(read_candidate) != ETC_DIR:
+            raise BackupError('incompatible', 'EMQX 候選啟動後設定與目標不一致，已停止。')
+        want = target_boot if target_boot is not None else target_config
+        got = boot_form(read_candidate) if target_boot is not None else read_effective_config(read_candidate)
+        differ = sorted(root for root in set(want) | set(got) if want.get(root) != got.get(root))
+        if differ:   # root names only (schema keys), never values
+            raise BackupError('incompatible', f'EMQX 候選啟動後設定與目標不一致（{hacommon.names(differ, 8)}），已停止。')
     if target_config is not None:
         check_candidate_bootstrap(tmp, target, target_config)
     seeded = parse_counts(evaluate(tmp, 'emqx-new', COUNT_EXPR))

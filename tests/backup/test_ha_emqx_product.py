@@ -346,6 +346,15 @@ class DashboardChangedTargetTests(base.EmqxCase):
                          ha_emqx.config_roots(self.world.target_config)['authorization'],
                          'the readback holds the boot form (max_rules filled), as the restored broker boots')
 
+    def test_a_candidate_that_differs_is_refused_naming_the_roots(self):
+        real = self.world.boot_view
+        self.world.boot_view = lambda role, config: (dict(real(role, config), log={'console': {'level': 'notice'}})
+                                                     if role == 'emqx-new' else real(role, config))
+        with self.assertRaises(BackupError) as caught:
+            self.convert(self.upload_emqx(state='stopped'), ['emqx'])
+        self.assertEqual(caught.exception.message, 'EMQX 候選啟動後設定與目標不一致（log），已停止。')
+        self.assertEqual(self.storage.list_backups(), [])
+
 
 class EnvironmentFileTests(unittest.TestCase):
     """dev-d 2026-11-23 attempt-06: the product package sets EMQX_LOG__CONSOLE__LEVEL in the Quadlet's EnvironmentFile=;
