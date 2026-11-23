@@ -105,6 +105,32 @@ class HarnessTests(unittest.TestCase):
             harness.main(['--private-dir', str(harness.REPO / '.local')])
 
 
+class FakeDb:
+    def __init__(self):
+        self.queries = []
+
+    def query_json(self, sql, database='postgres', **kwargs):
+        self.queries.append(sql)
+        if sql == harness.TABLES:
+            return [['public', 'LiteLLM_UserTable'], ['woow', "o'dd"]]
+        if sql == harness.SEQUENCES:
+            return [['public', 's', 1, 1, 9, 1, False, 1, 3]]
+        return [['public.LiteLLM_UserTable', 1, 'aa'], ["woow.o'dd", 0, '']]
+
+
+class DigestTests(unittest.TestCase):
+    def test_one_statement_for_all_tables(self):
+        db = FakeDb()
+        found = harness.digests(db)
+        self.assertEqual(len(db.queries), 3)
+        self.assertEqual(db.queries[1].count('UNION ALL'), 1)
+        self.assertIn("'woow.o''dd'", db.queries[1])
+        self.assertIn('"o\'dd"', db.queries[1])
+        self.assertTrue(db.queries[1].startswith("SET TIME ZONE 'UTC'; "))
+        self.assertEqual(found['public.LiteLLM_UserTable'], [1, 'aa'])
+        self.assertEqual(len(found['sequence-state']), 64)
+
+
 class CaptureTests(unittest.TestCase):
     def test_only_fixed_event_lines_are_kept(self):
         good = json.dumps({'stage': 'ha_restored', 'all_tables_rows_equal': True, 'counts': {'LiteLLM_UserTable': 1}})

@@ -285,35 +285,38 @@ def outer_cgroup():
 
 
 def memory_now(cgroup):
+    """(current, max, host MemAvailable KiB, clean inactive page cache of dev-d: reclaimable, credited up to 512 MiB)."""
     current = int((cgroup / 'memory.current').read_text())
     maximum = int((cgroup / 'memory.max').read_text())
     available = next(int(line.split()[1]) for line in Path('/proc/meminfo').read_text().splitlines()
                      if line.startswith('MemAvailable:'))
-    return current, maximum, available
+    stats = dict(line.split() for line in (cgroup / 'memory.stat').read_text().splitlines())
+    clean = max(0, int(stats['inactive_file']) - int(stats['file_dirty']) - int(stats['file_writeback']))
+    return current, maximum, available, min(clean, 512 * 1024 * 1024)
 
 
 def pressure_guard(cgroup):
     """TempObjects abort hook: stop only this job on live memory pressure (cleanup never uses it)."""
     def check():
         try:
-            current, maximum, available = memory_now(cgroup)
-        except (OSError, ValueError, StopIteration):
+            current, maximum, available, credit = memory_now(cgroup)
+        except (OSError, ValueError, StopIteration, KeyError):
             return BackupError('job-failed', 'live resource check unavailable')
-        if available < 400 * 1024 or maximum - current < 192 * 1024 * 1024:
+        if available < 400 * 1024 or maximum - current + credit < 160 * 1024 * 1024:
             return BackupError('job-failed', 'live memory pressure: lab job aborted')
         return None
     return check
 
 
 def headroom(runner, cgroup):
-    current, maximum, available = memory_now(cgroup)
+    current, maximum, available, credit = memory_now(cgroup)
     st = os.statvfs('/')
     free = st.f_bavail * st.f_frsize
     names = runner.podman('ps', '-a', '--format', '{{.Names}}', max_output=16384).stdout.decode().split()
     competing = [n for n in names if n.startswith('woowbk-j')]
-    emit('headroom', device_headroom_mib=(maximum - current) // 2 ** 20, host_available_mib=available // 1024,
-         disk_free_gib=free // 2 ** 30, competing_job_containers=len(competing))
-    require(maximum - current >= MIN_DEVICE_HEADROOM, 'device_headroom_low')
+    emit('headroom', device_headroom_mib=(maximum - current) // 2 ** 20, reclaimable_credit_mib=credit // 2 ** 20,
+         host_available_mib=available // 1024, disk_free_gib=free // 2 ** 30, competing_job_containers=len(competing))
+    require(maximum - current + credit >= MIN_DEVICE_HEADROOM, 'device_headroom_low')
     require(available >= MIN_HOST_AVAILABLE_KIB, 'host_memory_low')
     require(free >= MIN_DISK_FREE, 'disk_free_low')
     require(not competing, 'competing_job_containers')
@@ -330,12 +333,18 @@ def digests(db):
     """Per-table row count and MD5 of every row (one MVCC snapshot per table, UTC rendering) plus sequence state.
     Comparable across PostgreSQL 18 and 17; values never leave the database, only digests do."""
     tables = db.query_json(TABLES, 'litellm')
-    result = {}
+    selects = []
     for schema, table in tables:
         quoted = '.'.join('"' + part.replace('"', '""') + '"' for part in (schema, table))
-        result[schema + '.' + table] = db.query_json(
-            "SET TIME ZONE 'UTC'; SELECT json_build_array(count(*), coalesce(md5(string_agg(h, '' ORDER BY h COLLATE \"C\")), "
-            "'')) FROM (SELECT md5(to_jsonb(t)::text) AS h FROM " + quoted + " t) s", 'litellm')
+        label = "'" + (schema + '.' + table).replace("'", "''") + "'"
+        selects.append("SELECT json_build_array(" + label + ", count(*), coalesce(md5(string_agg(h, '' ORDER BY h "
+                       "COLLATE \"C\")), '')) AS v FROM (SELECT md5(to_jsonb(t)::text) AS h FROM " + quoted + " t) s")
+    result = {}
+    if selects:
+        # One statement: one snapshot for every table, one podman exec.
+        rows = db.query_json("SET TIME ZONE 'UTC'; SELECT json_agg(v) FROM (" + " UNION ALL ".join(selects) + ") u",
+                             'litellm')
+        result = {name: [count, digest] for name, count, digest in rows}
     result['sequence-state'] = hashlib.sha256(json.dumps(db.query_json(SEQUENCES, 'litellm')).encode()).hexdigest()
     return result
 
@@ -398,6 +407,15 @@ def printable(counts):
         if not SECRET_NAME.search(key) and isinstance(value, (bool, int)):
             out[key] = value
     return out
+
+
+CHECKS = {}
+
+
+def soft(name, condition):
+    """A result check that does not stop the run (later stages still give evidence); the final status needs all."""
+    CHECKS[name] = bool(condition)
+    return bool(condition)
 
 
 def worker(tmp, role, action, env, **fields):
@@ -582,7 +600,8 @@ def lab_run(args, ha, member, keys, runner, test_vkey, started, lock_started):
             binding = candidate.read_source_salt_binding(hapg, ha_salt.encode('ascii'))
             negative = candidate.read_source_salt_binding(hapg, target_salt.encode('ascii'))
             emit('source_salt_binding', ha_salt=binding, other_salt=negative)
-            require(binding == 'match' and negative == 'mismatch', 'source_salt_binding')
+            soft('source_salt_binding_match', binding == 'match')
+            soft('source_salt_binding_discriminates', negative == 'mismatch')
             source_schema = hapg.query_json(SCHEMA, 'litellm')
             source_rows = digests(hapg)
             source_dump = dump(tmp, 'hapg', 'postgres')
@@ -633,9 +652,19 @@ def lab_run(args, ha, member, keys, runner, test_vkey, started, lock_started):
             stage = 'import'
             recreate_and_load(tmp, target, source_dump)
             restored_rows = digests(target)
-            require(target.query_json(SCHEMA, 'litellm') == source_schema, 'restored_schema_differs')
-            require(restored_rows == source_rows, 'restored_rows_differ')
-            emit('ha_restored', all_tables_rows_equal=True, schema_equal=True, sequences_equal=True)
+            restored_schema = target.query_json(SCHEMA, 'litellm')
+            only_source, only_restored = schema_difference(source_schema, restored_schema)
+            rows_equal = soft('restored_rows_equal_source',
+                              {k: v for k, v in restored_rows.items() if k != 'sequence-state'}
+                              == {k: v for k, v in source_rows.items() if k != 'sequence-state'})
+            sequences_equal = soft('restored_sequences_equal_source',
+                                   restored_rows['sequence-state'] == source_rows['sequence-state'])
+            schema_equal = soft('restored_schema_equal_source', restored_schema == source_schema)
+            emit('ha_restored', all_tables_rows_equal=rows_equal, sequences_equal=sequences_equal,
+                 schema_equal=schema_equal, schema_items_only_in_ha=only_source,
+                 schema_items_only_in_restored=only_restored,
+                 tables_differing=sum(1 for k in source_rows.keys() | restored_rows.keys()
+                                      if source_rows.get(k) != restored_rows.get(k)))
 
             stage = 'target_after'
             seconds = app_start(tmp, 'target-after', network, env_after)
@@ -644,14 +673,14 @@ def lab_run(args, ha, member, keys, runner, test_vkey, started, lock_started):
                            issued_alias='woowbk-lab-issued-' + secrets.token_hex(4))
             counts = reply['counts']
             issued_key = reply['issued'][0]
-            require(counts['issued_key_info'] == 200, 'issued_client_unusable')
-            require(counts['salt_row_matches'] is True, 'salt_row')
-            require(counts['model_values'] > 0 and counts['model_values_ok'] == counts['model_values'],
-                    'model_values_not_all_decrypted')
-            require(counts['stored_values_ok'] == counts['stored_values'], 'stored_values_not_all_decrypted')
-            require(counts['model_values_wrong_ok'] == 0 and counts['stored_values_wrong_ok'] == 0,
-                    'wrong_salt_decrypted')
-            require(counts['api_models'] >= counts['db_models'], 'api_models_missing')
+            soft('issued_client_usable', counts['issued_key_info'] == 200)
+            soft('salt_row_matches', counts['salt_row_matches'] is True)
+            soft('model_values_all_decrypt', counts['model_values'] > 0
+                 and counts['model_values_ok'] == counts['model_values'])
+            soft('stored_values_all_decrypt', counts['stored_values_ok'] == counts['stored_values'])
+            soft('wrong_salt_decrypts_nothing', counts['model_values_wrong_ok'] == 0
+                 and counts['stored_values_wrong_ok'] == 0)
+            soft('app_serves_all_stored_models', counts['api_models'] >= counts['db_models'])
             emit('ha_import_verified', app_start_s=seconds, ha_client_accepted=True, ha_client_alias_matches=True,
                  **printable(counts))
 
@@ -661,11 +690,12 @@ def lab_run(args, ha, member, keys, runner, test_vkey, started, lock_started):
                 seconds = app_start(tmp, 'target-restart', network, env_after)
                 again = worker(tmp, 'target-restart', 'recheck', env_after, test_vkey=test_vkey,
                                expected_alias=EXPECTED_ALIAS, issued_key=issued_key)['counts']
-                for key in ('vkey_models', 'api_models', 'users', 'teams', 'db_models', 'orgs'):
-                    require(again[key] == counts[key], 'restart_count_' + key)
-                require(again['issued_key_info'] == 200, 'restart_issued_client')
-                emit('restart_verified', app_start_s=seconds, counts_equal=True, ha_client_accepted=True,
-                     issued_client_accepted=True)
+                same = soft('restart_counts_equal', all(again[key] == counts[key] for key in
+                                                       ('vkey_models', 'api_models', 'users', 'teams', 'db_models',
+                                                        'orgs')))
+                issued_ok = soft('restart_issued_client_usable', again['issued_key_info'] == 200)
+                emit('restart_verified', app_start_s=seconds, counts_equal=same, ha_client_accepted=True,
+                     issued_client_accepted=issued_ok)
                 app_stop(tmp, 'target-restart')
             else:
                 emit('restart_skipped', reason='soft_deadline')
@@ -680,24 +710,27 @@ def lab_run(args, ha, member, keys, runner, test_vkey, started, lock_started):
             unchanged = digests(target)
             worker(tmp, 'salt-controls', 'salt-refusal', env_before)
             worker(tmp, 'salt-controls', 'salt-accept', env_after)
-            require(digests(target) == unchanged, 'salt_checks_changed_rows')
+            rows_kept = soft('salt_checks_rows_unchanged', digests(target) == unchanged)
             app_stop(tmp, 'salt-controls')
-            emit('wrong_salt_refused', db_prepare_refuses_target_salt=True, ha_salt_accepted=True, rows_unchanged=True)
+            emit('wrong_salt_refused', db_prepare_refuses_target_salt=True, ha_salt_accepted=True,
+                 rows_unchanged=rows_kept)
 
             # 5. Rollback to the target's own data and salt.
             stage = 'rollback'
             recreate_and_load(tmp, target, before_dump)
-            require(digests(target) == before_rows, 'rollback_rows_differ')
-            require(target.query_json(SCHEMA, 'litellm') == before_schema, 'rollback_schema_differs')
+            back_rows = soft('rollback_rows_equal_before', digests(target) == before_rows)
+            back_schema = soft('rollback_schema_equal_before', target.query_json(SCHEMA, 'litellm') == before_schema)
             seconds = app_start(tmp, 'target-rollback', network, env_before)
             worker(tmp, 'target-rollback', 'verify', env_before, marker='woowbk-rollback-marker',
                    credential=seed_credential)
             gone = worker(tmp, 'target-rollback', 'rollback-verify', env_before, test_vkey=test_vkey,
                           issued_key=issued_key)['counts']
-            require(gone['test_vkey_status'] == 401 and gone['issued_key_status'] == 401, 'rollback_clients_still_valid')
+            soft('rollback_removes_ha_and_issued_clients', gone['test_vkey_status'] == 401
+                 and gone['issued_key_status'] == 401)
             app_stop(tmp, 'target-rollback')
-            emit('rollback_verified', app_start_s=seconds, rows_equal_before=True, schema_equal_before=True,
-                 own_provider_value_decrypts=True, ha_client_status=401, issued_client_status=401)
+            emit('rollback_verified', app_start_s=seconds, rows_equal_before=back_rows,
+                 schema_equal_before=back_schema, own_provider_value_decrypts=True,
+                 ha_client_status=gone['test_vkey_status'], issued_client_status=gone['issued_key_status'])
             passed = True
     except Failed as exc:
         emit('failed', at=stage, label=str(exc))
@@ -737,7 +770,9 @@ def lab_run(args, ha, member, keys, runner, test_vkey, started, lock_started):
              detail='matches' if not missing else 'missing')
         private_note(str(exc).encode())
         scanned = False
-    ok = passed and clean and baseline_ok and scanned
+    failed_checks = sorted(name for name, value in CHECKS.items() if not value)
+    emit('checks', passed=sum(CHECKS.values()), total=len(CHECKS), failed=failed_checks)
+    ok = passed and clean and baseline_ok and scanned and not failed_checks
     emit('result', status='PASS' if ok else 'FAIL', elapsed_s=int(time.monotonic() - started),
          commercial_acceptance='not-complete')
     return 0 if ok else 1
