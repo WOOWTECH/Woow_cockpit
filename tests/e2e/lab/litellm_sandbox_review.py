@@ -26,9 +26,9 @@ Cases (each crafts its own cluster in a throwaway container, packs it as an HA a
                     litellm_jwtauth.custom_validate, router_settings.plugins), string-form callbacks, ~1M
                     environment-variable names (> 16 MiB answer) and a real psql timeout (the query's timeout scaled
                     down to 0.05 s by a wrapper; the same subprocess timeout path as the 600 s one), plus controls.
-  t2_hidden_hooks   (iteration 2) a crafted data directory: LiteLLM_Config holds code hooks and the superuser
-                    redefined pg_catalog.jsonb_each(jsonb) (used only by the stored-settings query) to return no rows;
-                    what the check sees vs. what export_rows (COPY) moves.
+  t2_hidden_hooks   (iteration 2) a crafted data directory: LiteLLM_Config holds code hooks and the superuser pointed
+                    the built-in =(text,text) operator at a SQL function that hides the hook names; what the check
+                    sees vs. what export_rows (COPY) moves.
 Every attacker action writes a marker inside the container only (/tmp/woowbk-review-*); the harness reads the markers
 back before the throwaway objects are removed. Output: one JSON document of fixed facts (no data value, no secret;
 the salt is a generated test value, the clusters use trust on their unix socket only)."""
@@ -217,17 +217,22 @@ VARIANTS = {
     'timeout_scaled_plus_hook': [('litellm_settings', _j({'post_call_rules': HOOK}))],
 }
 
-# The crafted-data-directory case: hooks stored, and jsonb_each(jsonb) answers nothing (a superuser catalog edit, which
-# whoever made the data directory can do; the check's sessions resolve it through search_path=pg_catalog).
+# The crafted-data-directory case: hooks stored, and the built-in text equality operator =(text,text) points at a SQL
+# function that answers "not equal" for the hook names (a catalog edit whoever made the data directory can do as its
+# superuser; SUPERUSER_SQL does not list SQL functions or edited built-in operators, and the check's sessions use the
+# operator by its OID whatever search_path says). PostgreSQL calls built-in FUNCTIONS by OID without reading pg_proc
+# (fmgr's builtin fast path: editing pg_proc.prolang of jsonb_each changed nothing, first run of this case), but an
+# OPERATOR's implementation is looked up in pg_operator.oprcode.
 T2_SQL = r"""
-INSERT INTO public."LiteLLM_Config" (param_name, param_value) VALUES
- ('general_settings', '{"custom_auth": "builtins.exec"}')
- ON CONFLICT (param_name) DO UPDATE SET param_value = EXCLUDED.param_value;
-UPDATE public."LiteLLM_Config" SET param_value = '{"post_call_rules": "builtins.exec", "callbacks": ["x.y"]}'
+UPDATE public."LiteLLM_Config" SET param_value = '{"post_call_rules": "builtins.exec"}'
  WHERE param_name = 'litellm_settings';
-UPDATE pg_catalog.pg_proc SET prolang = (SELECT oid FROM pg_catalog.pg_language WHERE lanname = 'sql'),
-  prosrc = 'SELECT NULL::text, NULL::jsonb WHERE false'
- WHERE oid = 'pg_catalog.jsonb_each(jsonb)'::pg_catalog.regprocedure;
+INSERT INTO public."LiteLLM_Config" (param_name, param_value) VALUES ('general_settings', '{"custom_auth": "builtins.exec"}');
+CREATE FUNCTION public.woowbk_texteq(a text, b text) RETURNS boolean LANGUAGE sql IMMUTABLE STRICT AS $f$
+  SELECT CASE WHEN pg_catalog.texteq(a, 'post_call_rules') OR pg_catalog.texteq(b, 'post_call_rules')
+                OR pg_catalog.texteq(a, 'custom_auth') OR pg_catalog.texteq(b, 'custom_auth')
+              THEN false ELSE pg_catalog.texteq(a, b) END $f$;
+UPDATE pg_catalog.pg_operator SET oprcode = 'public.woowbk_texteq'::pg_catalog.regproc
+ WHERE oid = '=(text,text)'::pg_catalog.regoperator;
 """
 
 
@@ -506,10 +511,9 @@ def product_path(case, inner, salt):
                 facts['variants'] = run_variants(cluster, ha_schema)
             if ha_schema is not None and case == 't2_hidden_hooks':
                 facts['check_sees'] = hooks_verdict(cluster, ha_schema)
-                facts['jsonb_each_lang'] = cluster.query_json(
-                    "SELECT json_build_object('lang', (SELECT l.lanname FROM pg_catalog.pg_proc p JOIN "
-                    "pg_catalog.pg_language l ON l.oid = p.prolang WHERE p.oid = "
-                    "'pg_catalog.jsonb_each(jsonb)'::pg_catalog.regprocedure))", 'litellm')
+                facts['text_eq_operator_code'] = cluster.query_json(
+                    "SELECT to_json((SELECT oprcode::text FROM pg_catalog.pg_operator "
+                    "WHERE oid = '=(text,text)'::pg_catalog.regoperator))", 'litellm')
             blockers, warnings = ha_litellm.verdict(src, found, ha_major=18, target_major=17,
                                                     live_migrations_value=found['migrations'], binding=binding)
             facts['blockers'] = blockers
