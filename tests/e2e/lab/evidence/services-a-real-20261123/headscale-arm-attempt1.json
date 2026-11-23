@@ -1,0 +1,22 @@
+{
+ "source_commit": "9b3860dbc092af6cef78254ee2a7165bd3e540a3",
+ "scope": "real b1 RPi5 HA Headscale backup -> product convert -> disposable dev-d target with local DERP map; real client re-point; DERP; API; installer+rollback+restart",
+ "exit": 1,
+ "elapsed_seconds": 88.0,
+ "stdout_sha256": "b7bc35000acdc970fd402ea4bb8279e6478cf96871263c1ae1936adf97cada06",
+ "fixed_status": [
+  "source commit 9b3860dbc092af6cef78254ee2a7165bd3e540a3",
+  "dev-d isolation: true none {}",
+  "dev-d memory current=2240770048 limit=4294967296; headroom >= 1.25 GiB; host MemAvailable 3429752 KiB",
+  "real HA backup sha256 = recorded b1 arm fixture sha256: PASS",
+  "expectations and HA pre-auth key staged privately: PASS",
+  "controller exit=1",
+  "last runner step: target",
+  "staged private inputs removed (backup copy, client state, expectations, key): PASS",
+  "dev-d inventory (containers, volumes, networks, secrets) unchanged: PASS",
+  "dev-d isolation: true none {}",
+  "lock held for 88 s"
+ ],
+ "stderr_bytes_not_published": 84,
+ "commercial_acceptance": "not-complete"
+}
