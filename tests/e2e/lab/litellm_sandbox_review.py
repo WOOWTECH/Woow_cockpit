@@ -273,6 +273,28 @@ def hooks_verdict(cluster, schema):
     return out
 
 
+def trusted_recheck(staged_path, schema):
+    """HA's staged LiteLLM_Config rows loaded into a FRESH PostgreSQL 17.11 cluster (the package's image; a clean
+    catalog, HA's data only as rows, COPY FROM STDIN like load_rows), then the product's stored-settings check run
+    there: what a re-check on the data that actually moves decides (review SR-8)."""
+    runner = LabRunner()
+    with tempctr.TempObjects(runner, job_id('trusted'), memory='1g', pids=512, cpus='1') as tmp:
+        tmp.volume('ll')
+        tmp.run('ll', PG17, [], detach=True, env={'POSTGRES_HOST_AUTH_METHOD': 'trust', 'POSTGRES_USER': 'litellm',
+                                                   'POSTGRES_DB': 'litellm', 'PGDATA': '/var/lib/postgresql/data/pgdata'},
+                volumes=[(tmp.name('ll'), '/var/lib/postgresql/data', 'rw,noexec,nosuid,nodev')], read_only_root=True)
+        cluster = ha_odoo.Cluster(tmp, 'll', superuser='litellm')
+        cluster.wait_ready(tcp=True)
+        cluster.script('CREATE TABLE public."LiteLLM_Config" (param_name text PRIMARY KEY, param_value jsonb, '
+                       'last_run_at timestamp(3), reload_revision bigint NOT NULL DEFAULT 0);\n', 'litellm')
+        columns = schema.copy_columns('public', 'LiteLLM_Config')
+        with open(staged_path, 'rb') as handle:
+            tmp.exec('ll', ['psql', '-X', '-q', '-v', 'ON_ERROR_STOP=1', '-1', '-U', 'litellm', '-d', 'litellm', '-c',
+                            ha_litellm.copy_in_sql('public', 'LiteLLM_Config', columns)], user='postgres',
+                     input=handle, max_output=65536)
+        return hooks_verdict(cluster, schema)
+
+
 def run_variants(cluster, schema):
     results = {}
     for name, rows in VARIANTS.items():
@@ -529,6 +551,8 @@ def product_path(case, inner, salt):
                                                        'post_call_rules': b'post_call_rules' in data,
                                                        'custom_auth': b'custom_auth' in data,
                                                        'builtins_exec': data.count(b'builtins.exec')}
+                        if case == 't2_hidden_hooks':
+                            facts['trusted_recheck_sees'] = trusted_recheck(config_rows, ha_schema)
                     sample = files.get(('public', 'LiteLLM_UserTable'))
                     if sample is not None:
                         row = sample.read_bytes().split(b'\n')[0].split(b'\t')
