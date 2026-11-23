@@ -1011,7 +1011,8 @@ Shapes:
   policies, prefixes{v4, v6} (HA's), server_url (HA's), target_server_url, dns_records},
   open-design?{open-design_version (HA's, from the add-on version), source_revision, target_version, target_revision
   (8 hex each), files, bytes, dirs, symlinks, hardlinks, skipped_symlinks, projects, conversations, messages,
-  routines, routines_active, project_folders, mcp_servers, shared, ha_urls[("<file>：<host>")], left_out{<top-level
+  routines, routines_active, project_folders, mcp_servers (HA's that move), mcp_integration_entries (HA's `woow-paseo`,
+  not moved), shared, ha_urls[("<file>：<host>")], left_out{<top-level
   name>: entries}}}]` (batch 2: `target_version` of OpenDesign is the live image's `OD_APP_VERSION`; batch 1: `target_version` is
   the live server's `/v1/info` version for Omnigent, the live image's Hermes base tag, the live image's version label
   for EMQX and Headscale) — an app
@@ -1995,7 +1996,9 @@ the slug after the repository prefix and must carry `system.slug` `woow_ha_opend
 2. One pass over `data/opendesign/**` (never `data/mcp/**` nor `data/options.json`). Moved (owner decisions O4, O5 =
    the facts' recommended answers): `app.sqlite` with `-wal`/`-journal` (never `-shm`), `projects/ runs/ artifacts/
    chat-artifact-blobs/ critique-artifacts/ design-systems/ design-templates/ brands/ library/ memory/ skills/ plugins/
-   connectors/`, `mcp-config.json` (every `/data/opendesign` path in its strings remapped to `/app/.od`),
+   connectors/`, `mcp-config.json` (every `/data/opendesign` path in its strings remapped to `/app/.od`; the entries
+   this device's integrations write themselves, `woow-paseo` of the Paseo runtime, are never taken from HA: this
+   device's entry stays, O2),
    `mcp-tokens.json`, `mcp-oauth-clients.json`, `media-config.json`, `app-config.json` (HA's preferences with this
    device's `installationId`, `agentCliEnv`, `agentCliEnvIntent`; project locations and recent folders below
    `/data/opendesign` remapped, others dropped with a warning), and HA's `shared/workspaces/**`, `shared/skills/**`

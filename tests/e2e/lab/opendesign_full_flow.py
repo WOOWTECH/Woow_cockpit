@@ -26,10 +26,11 @@ device key, deployed by lane batch2-lab, are used as they are):
   verify     the client: GET /api/projects through nginx with Basic auth open-design:<this device's API token> lists
              HA's 12 projects with the HA-side marker project and name, its files' contents through the API have the
              recorded SHA-256, the conversations through the API, unauthenticated and wrong-password requests get
-             401; the MCP client (POST /mcp, Bearer = this device's MCP token) initializes and lists tools, a wrong
-             token gets 401; every member of the data volume is owned 0:0 (the daemon's user through keep-id); the
-             kept parts and the MCP volume have the fingerprints of before; HA's app-config.json carries this
-             device's installation id
+             401; the MCP client (POST /mcp, Bearer = this device's MCP token) initializes and lists tools (SSE
+             answers read), a wrong token gets 401; every member of the data volume is owned 0:0 (the daemon's user
+             through keep-id); the MCP volume is byte-identical; every kept entry OpenDesign does not rewrite itself
+             (RUNTIME_KEPT, measured without an import) is byte-identical, the identity files named; mcp-config.json
+             holds only this device's own Paseo entry; the preferences this device keeps are its own
   restart    systemctl --user restart open-design.service: health, the client checks again
   rollback   (a) automatic: a second restore of the converted backup with a one-shot ExecStartPre failure on
              open-design.service must end `rolled-back` and leave HA's imported data; (b) the first restore's safety
@@ -76,8 +77,10 @@ FIXTURE = (LAB / 'ha-fixtures' / '20261123-batch2' / 'x86' / 'woow-b2-opendesign
            / 'woow-b2-opendesign-x86-enc-20261123.tar')
 FIXTURE_SHA = 'c3d23cedc831d14a221f9be6063c23913fb896f39e882127a52aac7039178dd7'
 # Facts of the backup (showcase-backups-2 evidence f884a0a; the importer's own scan of this file, dev check 16:59)
+# mcp-config.json holds one server, HA's own Paseo entry `woow-paseo` (stdio; HA's paths): not moved (O2), so 0 servers
+# move and 1 integration entry stays on HA (kinds of its values checked in a network-none container, 17:31).
 SOURCE = {'version': '0.2.15', 'arch': 'amd64', 'target_version': '0.24.1', 'projects': 12, 'conversations': 12,
-          'messages': 22, 'files': 77, 'mcp_servers': 1, 'routines': 0}
+          'messages': 22, 'files': 77, 'mcp_servers': 0, 'mcp_integration_entries': 1, 'routines': 0}
 MARKER_PROJECT = 'woow-import-test-20261123'
 MARKER_NAME = 'WOOW匯入測試 20261123'
 MARKER_FILES = {'woow-import-test.txt': '540d9ac26237dbb1', 'woow-import-cjk.txt': 'f2e0dc84bf608ae9'}
@@ -90,6 +93,17 @@ DROPIN_DIR_REL = '.config/systemd/user/open-design.service.d'
 DROPIN_REL = DROPIN_DIR_REL + '/zz-odff-fail-once.conf'
 MARKER_REL = '.odff-fail-once'
 NEEDLES = '/var/lib/woowbk-odff/needles.json'     # root 0600 inside dev-e (network none); removed at the end
+# Kept entries OpenDesign rewrites ITSELF: measured on dev-e 2026-11-23 17:4x with no import at all (60 s idle, then a
+# plain `systemctl --user restart open-design.service`): codex's temporary launchers, opencode's locks, log and database,
+# Paseo's runtime state, pid, log, locks and its per-start local credential. Every other kept entry (the agents' logins
+# such as home/.pi/agent/auth.json, Omnigent's integrations/omnigent/state.json, Paseo's identity daemon-keypair.json,
+# server-id, cli-client-id, host-registration.json, ...) must be byte-identical before and after the import.
+RUNTIME_KEPT = re.compile(r'(?:home/\.codex/tmp|home/\.local/state/opencode/locks|home/\.local/share/opencode/log)(?:/.*)?'
+                          r'|home/\.local/share/opencode/opencode\.db(?:-shm|-wal)?'
+                          r'|paseo/(?:bridge\.json|state\.json|supervisor\.json|host-mcp\.json|runtime\.lock'
+                          r'|bridge-lifecycle\.lock(?:/.*)?|daemon/(?:daemon\.log|paseo\.pid|local-credential))')
+IDENTITY = re.compile(r'.*(?:auth\.json|\.credentials\.json|keypair\.json|server-id|cli-client-id|host-registration\.json'
+                      r'|pairing[^/]*|integrations/omnigent/state\.json|\.claude\.json)')
 SAFE_LABEL = re.compile(r"[^A-Za-z0-9 ,()/:'<>.=_-]")
 
 
@@ -177,7 +191,7 @@ def mountpoint(volume):
 WALK = """
 import hashlib, json, os, stat, sys
 root, parts = sys.argv[1], sys.argv[2:]
-rows, nonroot, total, missing = [], 0, 0, []
+rows, nonroot, total, missing, entries = [], 0, 0, [], {}
 def one(path, rel):
     global nonroot, total
     st = os.lstat(path)
@@ -187,10 +201,13 @@ def one(path, rel):
     if stat.S_ISREG(st.st_mode):
         h = hashlib.sha256(open(path, "rb").read()).hexdigest()
         rows.append("f %s %o %s" % (rel, st.st_mode & 0o7777, h))
+        entries[rel] = "f %o %d %s" % (st.st_mode & 0o7777, st.st_size, h[:8])
     elif stat.S_ISLNK(st.st_mode):
         rows.append("l %s %s" % (rel, os.readlink(path)))
+        entries[rel] = "l " + hashlib.sha256(os.readlink(path).encode()).hexdigest()[:8]
     else:
         rows.append("d %s %o" % (rel, st.st_mode & 0o7777))
+        entries[rel] = "d %o" % (st.st_mode & 0o7777)
 for part in parts or ["."]:
     top = os.path.join(root, part)
     if not os.path.lexists(top):
@@ -204,7 +221,8 @@ for part in parts or ["."]:
                 one(p, os.path.relpath(p, root))
 rows.sort()
 print(json.dumps({"entries": total, "nonroot": nonroot, "missing": missing,
-                  "fingerprint": hashlib.sha256("\\n".join(rows).encode()).hexdigest()[:16]}))
+                  "fingerprint": hashlib.sha256("\\n".join(rows).encode()).hexdigest()[:16],
+                  "map": entries if len(entries) <= 5000 else None}))
 """
 def walk(volume, parts):
     return json.loads(run(["podman", "unshare", "python3", "-I", "-c", WALK, mountpoint(volume), *parts], timeout=600))
@@ -218,15 +236,44 @@ def target_prefs():
     doc = json.loads(p.stdout)
     return {k: hashlib.sha256(json.dumps(doc[k], sort_keys=True).encode()).hexdigest()[:12]
             for k in ("installationId", "agentCliEnv", "agentCliEnvIntent") if k in doc}
+def mcp_entries():
+    # {server id: sha256 prefix of the entry} of the daemon's mcp-config.json (ids are names, never values)
+    p = subprocess.run(["podman", "unshare", "cat", os.path.join(mountpoint("open-design_open_design_data"),
+                                                                 "mcp-config.json")], capture_output=True, timeout=120)
+    if p.returncode != 0:
+        return {}
+    try:
+        servers = json.loads(p.stdout).get("servers") or []
+    except (ValueError, AttributeError):
+        return {"unreadable": ""}
+    return {str(e.get("id"))[:64]: hashlib.sha256(json.dumps(e, sort_keys=True).encode()).hexdigest()[:12]
+            for e in servers if isinstance(e, dict)}
 def mcp_token():
     data = run(["podman", "unshare", "cat", os.path.join(mountpoint("open-design_mcp_data"), "state", "state.json")])
     return json.loads(data).get("token")
 def mcp(token, method, params, session=None, ident=1):
+    # A notification carries no id. The child answers requests as an SSE stream (the gateway relays it; only the
+    # initialize answer is turned into JSON for a JSON-only client), so `rpc` reads both.
     headers = {"Content-Type": "application/json", "Accept": "application/json"}
     if session:
         headers["Mcp-Session-Id"] = session
-    body = json.dumps({"jsonrpc": "2.0", "id": ident, "method": method, "params": params}).encode()
-    return http("POST", "/mcp", bearer=token, body=body, headers=headers)
+    message = {"jsonrpc": "2.0", "method": method, "params": params}
+    if ident is not None:
+        message["id"] = ident
+    return http("POST", "/mcp", bearer=token, body=json.dumps(message).encode(), headers=headers)
+def rpc(body):
+    """The JSON-RPC answer of a reply body: plain JSON, or the last `data:` event of an SSE stream; None."""
+    try:
+        return json.loads(body)
+    except ValueError:
+        pass
+    data = [line[5:].strip() for line in body.decode("utf-8", "replace").splitlines() if line.startswith("data:")]
+    for item in reversed(data):
+        try:
+            return json.loads(item)
+        except ValueError:
+            continue
+    return None
 '''
 
 # The client checks of the restored OpenDesign (as appowner; prints one JSON line of facts, never a value).
@@ -290,26 +337,28 @@ token_mcp = mcp_token()
 status, body, headers = mcp(token_mcp, "initialize", {"protocolVersion": "2025-06-18", "capabilities": {},
                                                        "clientInfo": {"name": "woowbk-odff", "version": "1"}})
 out["mcp_initialize"] = status
-try:
-    out["mcp_server"] = (json.loads(body).get("result") or {}).get("serverInfo", {}).get("name")
-except (ValueError, AttributeError):
-    out["mcp_server"] = None
+doc = rpc(body)
+out["mcp_server"] = ((doc.get("result") or {}).get("serverInfo") or {}).get("name") if isinstance(doc, dict) else None
 session = {k.lower(): v for k, v in headers.items()}.get("mcp-session-id")
 if session:
     mcp(token_mcp, "notifications/initialized", {}, session=session, ident=None)
 status, body, _h = mcp(token_mcp, "tools/list", {}, session=session, ident=2)
 out["mcp_tools_status"] = status
-try:
-    out["mcp_tools"] = len((json.loads(body).get("result") or {}).get("tools") or [])
-except (ValueError, AttributeError):
-    out["mcp_tools"] = None
+out["mcp_session"] = bool(session)
+doc = rpc(body)
+tools = (doc.get("result") or {}).get("tools") if isinstance(doc, dict) else None
+out["mcp_tools"] = len(tools) if isinstance(tools, list) else None
+error = doc.get("error") if isinstance(doc, dict) else None
+out["mcp_tools_error"] = [error.get("code"), str(error.get("message"))[:120]] if isinstance(error, dict) else (
+    None if doc is not None else "unreadable")
 out["mcp_wrong_token"] = mcp("wrong-" + "y" * 30, "initialize", {})[0]
 data = walk("open-design_open_design_data", [])
 out["data_entries"], out["data_nonroot"] = data["entries"], data["nonroot"]
 kept = walk("open-design_open_design_data", REQ["kept"])
-out["kept_fingerprint"], out["kept_missing"] = kept["fingerprint"], kept["missing"]
+out["kept_fingerprint"], out["kept_missing"], out["kept_map"] = kept["fingerprint"], kept["missing"], kept["map"]
 out["mcp_fingerprint"] = walk("open-design_mcp_data", [])["fingerprint"]
 out["target_prefs"] = target_prefs()
+out["mcp_entries"] = mcp_entries()
 print(json.dumps(out))
 '''
 
@@ -317,12 +366,13 @@ print(json.dumps(out))
 BEFORE = COMMON + r'''
 out = {"health": http("GET", "/api/health", retry=300)[0]}
 kept = walk("open-design_open_design_data", REQ["kept"])
-out["kept_fingerprint"], out["kept_missing"] = kept["fingerprint"], kept["missing"]
+out["kept_fingerprint"], out["kept_missing"], out["kept_map"] = kept["fingerprint"], kept["missing"], kept["map"]
 out["mcp_fingerprint"] = walk("open-design_mcp_data", [])["fingerprint"]
 status, body, _h = mcp(mcp_token(), "initialize", {"protocolVersion": "2025-06-18", "capabilities": {},
                                                     "clientInfo": {"name": "woowbk-odff", "version": "1"}})
 out["mcp_initialize"] = status
 out["target_prefs"] = target_prefs()
+out["mcp_entries"] = mcp_entries()
 print(json.dumps(out))
 '''
 
@@ -336,9 +386,12 @@ def owner(*argv):
                            "XDG_RUNTIME_DIR=/run/user/%d" % req["uid"], *argv], capture_output=True, timeout=120)
 mp = owner("podman", "volume", "inspect", "--format", "{{.Mountpoint}}", "open-design_open_design_data").stdout.decode().strip()
 values = set()
+import re
 def strings(value):
+    # credentials only: a path (`/...`) or a URL without userinfo, query or fragment is no secret (attempt 2 counted
+    # the moved HOME=/app/.od/home of HA's Paseo MCP entry in the journal: 9 false hits)
     if isinstance(value, str):
-        if len(value) >= 12:
+        if len(value) >= 12 and not value.startswith("/") and not re.fullmatch(r"https?://[^@?#\s]*", value):
             values.add(value)
     elif isinstance(value, list):
         for item in value:
@@ -488,6 +541,18 @@ def wait_units(ev, label_text, timeout=420):
             break
         time.sleep(5)
     ev.check(f'{label_text}: the four OpenDesign units are active', all(s == 'active' for s in states.values()), states)
+
+
+def kept_compare(before, after):
+    """(differences outside RUNTIME_KEPT, entries compared, identity files compared, runtime entries that differ)."""
+    before, after = before or {}, after or {}
+    stable = lambda m: {k: v for k, v in m.items() if not RUNTIME_KEPT.fullmatch(k)}
+    b, a = stable(before), stable(after)
+    differ = sorted(set(b) ^ set(a) | {k for k in set(b) & set(a) if b[k] != a[k]})
+    runtime = sorted(k for k in set(before) | set(after) if RUNTIME_KEPT.fullmatch(k)
+                     and before.get(k) != after.get(k))
+    identity = sorted(k for k in b if IDENTITY.fullmatch(k) and not b[k].startswith('d '))
+    return differ, len(b), identity, runtime
 
 
 def device_uid():
@@ -681,7 +746,8 @@ class Run:
                  and result.get('target_version') == SOURCE['target_version']
                  and section.get('source_revision') == section.get('target_revision') == '05b23f5a',
                  {k: result.get(k) for k in ('arch', 'version', 'target_version')})
-        counts = {k: section.get(k) for k in ('projects', 'conversations', 'messages', 'files', 'mcp_servers', 'routines')}
+        counts = {k: section.get(k) for k in ('projects', 'conversations', 'messages', 'files', 'mcp_servers',
+                                              'mcp_integration_entries', 'routines')}
         ev.check('check: the section counts equal the backup\'s facts (projects, conversations, messages, files)',
                  counts == {k: SOURCE[k] for k in counts}, counts)
         ev.check('check: home, paseo, integrations and installation.json stay on HA (left out)',
@@ -764,13 +830,20 @@ class Run:
                  and (state.get('mcp_tools') or 0) > 0 and state.get('mcp_wrong_token') == 401,
                  {k: state.get(k) for k in ('mcp_initialize', 'mcp_server', 'mcp_tools_status', 'mcp_tools',
                                             'mcp_wrong_token')})
-        ev.check(f'{label_text}: the MCP volume and the kept parts (agent logins, Omnigent, Paseo, installation id) '
-                 'are exactly this device\'s', state.get('mcp_fingerprint') == self.before.get('mcp_fingerprint')
-                 and state.get('kept_fingerprint') == self.before.get('kept_fingerprint')
-                 and state.get('kept_missing') == self.before.get('kept_missing'),
-                 {'kept_equal': state.get('kept_fingerprint') == self.before.get('kept_fingerprint'),
-                  'mcp_equal': state.get('mcp_fingerprint') == self.before.get('mcp_fingerprint'),
-                  'kept_missing': state.get('kept_missing')})
+        differ, compared, identity, runtime = kept_compare(self.before.get('kept_map'), state.get('kept_map'))
+        ev.check(f'{label_text}: the MCP volume is byte-identical and every kept entry OpenDesign does not rewrite itself '
+                 '(agent logins, Omnigent, Paseo identity) is this device\'s, unchanged',
+                 state.get('mcp_fingerprint') == self.before.get('mcp_fingerprint') and not differ and identity
+                 and state.get('kept_missing') == self.before.get('kept_missing') and state.get('kept_map') is not None,
+                 {'mcp_equal': state.get('mcp_fingerprint') == self.before.get('mcp_fingerprint'),
+                  'compared': compared, 'differ': differ[:30], 'identity_files': identity[:30],
+                  'runtime_changed': runtime[:20], 'kept_missing': state.get('kept_missing')})
+        ev.check(f'{label_text}: mcp-config.json holds this device\'s own Paseo entry and no other server (HA moves none)',
+                 sorted(state.get('mcp_entries') or {}) == sorted(e for e in self.before.get('mcp_entries') or {}
+                                                                   if e == 'woow-paseo'),
+                 {'after': sorted(state.get('mcp_entries') or {}), 'before': sorted(self.before.get('mcp_entries') or {}),
+                  'paseo_entry_unchanged': (state.get('mcp_entries') or {}).get('woow-paseo')
+                  == (self.before.get('mcp_entries') or {}).get('woow-paseo')})
         if imported:
             ev.check(f'{label_text}: HA\'s {SOURCE["projects"]} projects through the API, the HA-side marker project with '
                      'its name, no lab project left', state.get('projects') == SOURCE['projects']

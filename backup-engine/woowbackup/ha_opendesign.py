@@ -37,6 +37,7 @@ import json
 import os
 import re
 import tarfile
+import time
 
 from . import habackup, hacommon, hasqlite, ha_n8n, ha_odoo, tempctr
 from .errors import BackupError
@@ -70,6 +71,10 @@ LEFT_OUT = frozenset({'home', 'paseo', 'integrations', 'installation.json', 'dia
 # Kept from this device's live volume (everything else of it is replaced).
 KEEP_LIVE = frozenset({'home', 'paseo', 'integrations', 'installation.json', 'export-render', 'export-pdf'})
 TARGET_PREFS = ('installationId', 'agentCliEnv', 'agentCliEnvIntent')
+# mcp-config.json entries that this device's integrations write themselves (the Paseo runtime registers `woow-paseo`
+# through PUT /api/mcp/servers/woow-paseo, Woow_podman_opendesign paseo/runtime/host/native-mcp.mjs:5-24; the HA
+# add-on's points at HA's paths): never moved from HA, this device's own entry stays (decision O2).
+OWNED_MCP_SERVERS = frozenset({'woow-paseo'})
 MAX_CONFIG = 4 * 1024 * 1024
 MAX_SCAN = 1024 * 1024
 COUNTS = ('projects', 'conversations', 'messages', 'routines')
@@ -138,6 +143,21 @@ def merge_prefs(ha_doc, live_doc):
     return doc, dropped
 
 
+def merge_mcp(ha_doc, live_doc):
+    """(HA's MCP settings with its paths remapped and this device's own integration entries, number of path strings
+    remapped, number of HA's integration entries left out)."""
+    counter = [0]
+    doc = rewrite_strings({key: value for key, value in ha_doc.items() if key != 'servers'}, counter)
+    servers = ha_doc.get('servers') if isinstance(ha_doc.get('servers'), list) else []
+    kept = [rewrite_strings(item, counter) for item in servers
+            if not (isinstance(item, dict) and item.get('id') in OWNED_MCP_SERVERS)]
+    dropped = len(servers) - len(kept)
+    live = live_doc.get('servers') if isinstance(live_doc, dict) and isinstance(live_doc.get('servers'), list) else []
+    kept += [item for item in live if isinstance(item, dict) and item.get('id') in OWNED_MCP_SERVERS]
+    doc['servers'] = kept
+    return doc, counter[0], dropped
+
+
 def json_bytes(doc):
     return (json.dumps(doc, ensure_ascii=False, indent=2) + '\n').encode('utf-8')
 
@@ -157,7 +177,8 @@ class Source:
         self.prefs_dropped = 0
         self.prefs_unreadable = False
         self.mcp_unreadable = False
-        self.mcp_servers = 0
+        self.mcp_owned = 0           # HA's integration entries (woow-paseo) in mcp-config.json: left out
+        self.mcp_servers = 0         # HA's external MCP servers that move
         self.tree = False
         self.counts = {}
 
@@ -254,7 +275,9 @@ def _config(src, rel, data):
     if rel == 'mcp-config.json':
         doc = hacommon.strict_json(data, MAX_CONFIG)
         servers = doc.get('servers') if isinstance(doc, dict) else None
-        src.mcp_servers = len(servers) if isinstance(servers, list) else 0
+        servers = servers if isinstance(servers, list) else []
+        owned = sum(1 for item in servers if isinstance(item, dict) and item.get('id') in OWNED_MCP_SERVERS)
+        src.mcp_servers, src.mcp_owned = len(servers) - owned, owned
 
 
 def scan_member(stream, report, staging, out, *, machine=None, checkpoint=None):
@@ -331,13 +354,18 @@ def ha_prefs(src):
     return doc if isinstance(doc, dict) else None
 
 
-def finish_configs(src, out, live_prefs):
+def finish_configs(src, out, live_prefs, live_mcp=None):
     """Write HA's JSON settings into `out` (TreeTar or _Count): app-config.json merged with this device's
-    preferences (`live_prefs`: the live file's document or None), mcp-config.json with its paths remapped. A setting
-    that is not a JSON object is left out: this device's app-config.json stays (copy_kept), an unreadable
-    mcp-config.json is dropped (the daemon starts without external MCP servers)."""
+    preferences (`live_prefs`: the live file's document or None), mcp-config.json with its paths remapped, without
+    HA's integration entries and with this device's (`live_mcp`). A setting that is not a JSON object is left out:
+    this device's app-config.json stays (copy_kept), an unreadable mcp-config.json leaves only this device's
+    integration entries (the daemon starts without HA's external MCP servers)."""
     for rel in CONFIGS:
         if rel not in src.configs:
+            if rel == 'mcp-config.json' and live_mcp is not None:
+                doc, _refs, _dropped = merge_mcp({}, live_mcp)
+                if doc['servers']:
+                    out.data(rel, json_bytes(doc), 0o600, int(time.time()))
             continue
         data, mode, mtime = src.configs[rel]
         if rel == 'app-config.json':
@@ -350,10 +378,11 @@ def finish_configs(src, out, live_prefs):
             doc = hacommon.strict_json(data, MAX_CONFIG)
             if not isinstance(doc, dict):
                 src.mcp_unreadable = True
+                doc = {}
+            doc, refs, _owned = merge_mcp(doc, live_mcp)
+            src.path_refs += refs
+            if src.mcp_unreadable and not doc['servers']:
                 continue
-            counter = [0]
-            doc = rewrite_strings(doc, counter)
-            src.path_refs += counter[0]
         out.data(rel, json_bytes(doc), mode, mtime)
     src.counts.update(out.counts)
 
@@ -475,7 +504,8 @@ def section(src, details, *, revision, version):
             'skipped_symlinks': src.counts.get('skipped_symlinks', 0),
             **{name: details.get(name, 0) for name in COUNTS},
             'routines_active': details.get('routines_active', 0), 'project_folders': details['project_folders'],
-            'mcp_servers': src.mcp_servers, 'shared': src.shared_moved, 'ha_urls': sorted(src.ha_urls)[:20],
+            'mcp_servers': src.mcp_servers, 'mcp_integration_entries': src.mcp_owned, 'shared': src.shared_moved,
+            'ha_urls': sorted(src.ha_urls)[:20],
             'left_out': {name: count for name, count in sorted(src.left_out.items())}}
 
 
@@ -524,10 +554,10 @@ def check(work, app):
 
 def copy_kept(live_path, out, *, keep_prefs, what='這台 OpenDesign 的資料卷'):
     """Copy KEEP_LIVE of a live export (and its app-config.json when `keep_prefs`: HA has none that can be used) into
-    the TreeTar `out` with the live owners; returns the live app-config.json document (None when absent or
-    unreadable)."""
+    the TreeTar `out` with the live owners; returns the live app-config.json and mcp-config.json documents (None when
+    absent or unreadable)."""
     keep = KEEP_LIVE | ({'app-config.json'} if keep_prefs else set())
-    live_prefs, written = None, set()
+    live_prefs, live_mcp, written = None, None, set()
     try:
         with ha_odoo._live_tar(live_path, what) as tar:
             for member in tar:
@@ -536,9 +566,12 @@ def copy_kept(live_path, out, *, keep_prefs, what='這台 OpenDesign 的資料�
                     raise BackupError('job-failed', f'{what}的匯出內容格式不正確。')
                 top = name.split('/', 1)[0]
                 body = tar.extractfile(member) if member.isfile() else None
-                if name == 'app-config.json' and member.isfile() and member.size <= MAX_CONFIG:
+                if name in CONFIGS and member.isfile() and member.size <= MAX_CONFIG:
                     data = body.read()
-                    live_prefs = hacommon.strict_json(data, MAX_CONFIG)
+                    if name == 'app-config.json':
+                        live_prefs = hacommon.strict_json(data, MAX_CONFIG)
+                    else:
+                        live_mcp = hacommon.strict_json(data, MAX_CONFIG)
                     body = io.BytesIO(data)
                 if name == '.' or top not in keep:
                     tar.members.clear()
@@ -554,7 +587,7 @@ def copy_kept(live_path, out, *, keep_prefs, what='這台 OpenDesign 的資料�
                 tar.members.clear()
     except tarfile.TarError:
         raise BackupError('job-failed', f'{what}的匯出內容無法讀取。') from None
-    return live_prefs if isinstance(live_prefs, dict) else None
+    return (live_prefs if isinstance(live_prefs, dict) else None), (live_mcp if isinstance(live_mcp, dict) else None)
 
 
 def convert(work, app, test_mode, out_dir):
@@ -575,8 +608,8 @@ def convert(work, app, test_mode, out_dir):
     try:
         out.root(root[2], root[0], root[1])
         src = _pass(work, app, staging, out)
-        live_prefs = copy_kept(live, out, keep_prefs=ha_prefs(src) is None)
-        finish_configs(src, out, live_prefs)
+        live_prefs, live_mcp = copy_kept(live, out, keep_prefs=ha_prefs(src) is None)
+        finish_configs(src, out, live_prefs, live_mcp)
     finally:
         out.close()
     os.unlink(live)

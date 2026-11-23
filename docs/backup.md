@@ -356,7 +356,7 @@ Cockpit「備份與還原」頁為 rootless Podman Quadlet 應用建立備份，
 - **Hermes**：對話、記憶、技能、排程、外掛與 HA 的設定檔（`config.yaml`）換成 HA 的。這台的 Dashboard 密碼、API 金鑰、Webhook 與工作階段金鑰以及 `hermes.env` 保持不變，`hermes.env` 中的金鑰會蓋過 HA 的同名金鑰。HA 的外掛會取代這台的外掛與配對（例如 Omnigent、Paseo）。HA 的 `/media` 資料夾不會搬過來。
 - **EMQX**：MQTT 帳號、ACL 規則、Dashboard 帳號、API 金鑰、封鎖名單、PSK、保留訊息與規則、連接器設定換成 HA 的；HA 的 API 金鑰會取代這台的。這台的節點名稱、連接埠、匿名登入限制與「未符合規則的主題拒絕」設定保持不變（HA 允許匿名連線時，原本匿名連線的裝置要建立 MQTT 帳號）。HA 的 EMQX 外掛不會搬過來。
 - **Headscale**：使用者、裝置、預先授權金鑰與 DNS 額外記錄換成 HA 的，HA 的伺服器身分金鑰（noise）也一起搬過來。這台的伺服器網址、IP 位址範圍、存取政策與 API 金鑰保持不變：HA 的 API 金鑰不會搬過來，這台的 Headplane 與 MCP 管理工具照常可用。
-- **OpenDesign**：專案、對話與訊息（`app.sqlite`）、執行紀錄、成品、設計系統與範本、品牌、資料庫、記憶、技能、外掛、偏好設定，以及在 OpenDesign 裡設定的外部 MCP 伺服器、連接器與媒體服務金鑰換成 HA 的；偏好設定裡指向 HA 資料夾（`/data/opendesign`）的路徑會改成這台的（`/app/.od`）。這台的登入密碼（API 權杖）、MCP 權杖與工具設定、代理程式（Claude Code、Codex、Pi、OpenCode）的登入、Omnigent 連線、Paseo 配對、安裝識別與 `open-design.env` 保持不變。HA 專用的共用工作區與共用技能會原樣放進這台的資料夾，但這台不會自動使用。兩邊的 OpenDesign 核心必須是同一個版本（附加元件 0.2.15 = 核心 `05b23f5a`，OpenDesign 0.24.1），否則檢查會說明版本不同。
+- **OpenDesign**：專案、對話與訊息（`app.sqlite`）、執行紀錄、成品、設計系統與範本、品牌、資料庫、記憶、技能、外掛、偏好設定，以及在 OpenDesign 裡設定的外部 MCP 伺服器、連接器與媒體服務金鑰換成 HA 的；偏好設定與外部 MCP 伺服器設定裡指向 HA 資料夾（`/data/opendesign`）的路徑會改成這台的（`/app/.od`）；Paseo 自己登記的 MCP 項目（`woow-paseo`）不會從 HA 搬過來，維持這台的。這台的登入密碼（API 權杖）、MCP 權杖與工具設定、代理程式（Claude Code、Codex、Pi、OpenCode）的登入、Omnigent 連線、Paseo 配對、安裝識別與 `open-design.env` 保持不變。HA 專用的共用工作區與共用技能會原樣放進這台的資料夾，但這台不會自動使用。兩邊的 OpenDesign 核心必須是同一個版本（附加元件 0.2.15 = 核心 `05b23f5a`，OpenDesign 0.24.1），否則檢查會說明版本不同。
 
 ### 步驟
 

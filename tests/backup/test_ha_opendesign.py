@@ -52,7 +52,12 @@ MCP_CONFIG = {'servers': [{'id': 'files', 'transport': 'stdio', 'enabled': True,
                            'args': ['/data/opendesign/shared/mcp/files.js', '--root=/data/opendesign/projects'],
                            'env': {'TOKEN': 'ha-mcp-server-token'}},
                           {'id': 'ha', 'transport': 'http', 'enabled': True,
-                           'url': 'http://homeassistant:8123/api/mcp'}]}
+                           'url': 'http://homeassistant:8123/api/mcp'},
+                          {'id': 'woow-paseo', 'transport': 'stdio', 'enabled': True, 'command': '/usr/local/bin/node',
+                           'args': ['/opt/paseo-runtime/bin/mcp.mjs'], 'env': {'HOME': '/data/opendesign/home'}}]}
+LIVE_MCP_CONFIG = {'servers': [{'id': 'target-own', 'transport': 'http', 'enabled': True, 'url': 'http://x.invalid/mcp'},
+                               {'id': 'woow-paseo', 'transport': 'stdio', 'enabled': True, 'command': '/usr/bin/node',
+                                'args': ['/app/paseo/bin/mcp.mjs'], 'env': {'HOME': '/app/.od/home'}}]}
 ARM_ELF = b'\x7fELF\x02\x01\x01' + bytes(11) + b'\xb7\x00' + bytes(40)
 
 
@@ -155,7 +160,8 @@ def live_data(prefs=LIVE_PREFS, extra=()):
                {'name': 'export-render', 'type': 'dir'}, {'name': 'export-pdf', 'type': 'dir'},
                {'name': 'projects', 'type': 'dir'}, {'name': 'projects/target-only', 'type': 'dir'},
                {'name': 'projects/target-only/a.html', 'data': b'target project'},
-               {'name': 'diagnostics', 'type': 'dir'}, {'name': 'mcp-config.json', 'data': b'{"servers": []}'}]
+               {'name': 'diagnostics', 'type': 'dir'},
+               {'name': 'mcp-config.json', 'data': json.dumps(LIVE_MCP_CONFIG).encode()}]
     if prefs is not None:
         entries.append({'name': 'app-config.json', 'data': json.dumps(prefs).encode()})
     return fk.tar_of(entries + list(extra))
@@ -215,7 +221,8 @@ class CheckTests(OpenDesignCase):
                          ('0.24.1', REV[:8], REV[:8]))
         self.assertEqual((section['projects'], section['conversations'], section['messages'], section['routines']),
                          (3, 3, 5, 2))
-        self.assertEqual((section['routines_active'], section['project_folders'], section['mcp_servers']), (1, 0, 2))
+        self.assertEqual((section['routines_active'], section['project_folders'], section['mcp_servers'],
+                          section['mcp_integration_entries']), (1, 0, 2, 1))
         self.assertEqual((section['symlinks'], section['hardlinks'], section['skipped_symlinks']), (1, 1, 1))
         self.assertEqual(section['left_out'], {'.backup': 2, 'app.sqlite-shm': 1, 'diagnostics': 2, 'home': 3,
                                                'installation.json': 1, 'integrations': 3, 'paseo': 2})
@@ -303,8 +310,11 @@ class ConvertTests(OpenDesignCase):
         self.assertIsNone(prefs['defaultProjectLocationId'])
         self.assertEqual(prefs['recentLinkedDirs'], ['/app/.od/shared/workspaces'])
         servers = json.loads(data['mcp-config.json'][1])['servers']
+        self.assertEqual([item['id'] for item in servers], ['files', 'ha', 'woow-paseo'],
+                         'HA\'s servers move, the target-only one is replaced, the Paseo entry is this device\'s')
         self.assertEqual(servers[0]['args'], ['/app/.od/shared/mcp/files.js', '--root=/app/.od/projects'])
         self.assertEqual(servers[0]['env'], {'TOKEN': 'ha-mcp-server-token'}, 'HA\'s third-party settings move')
+        self.assertEqual(servers[2], LIVE_MCP_CONFIG['servers'][1], 'this device\'s own Paseo MCP entry stays')
         self.assertEqual(data['mcp-tokens.json'][1], b'{"files": "ha-oauth-token"}')
         self.assertEqual(data['connectors/credentials.json'][1], b'{"github": "ha-connector-secret"}')
         ha_owned = [n for n, (m, _d) in data.items() if (m.uid, m.gid) != (0, 0)]
@@ -366,6 +376,12 @@ class UnitTests(unittest.TestCase):
                                  counter)
         self.assertEqual(doc, {'a': ['/app/.od/x', 'cd /app/.od/y && run', 'keep'], 'n': 1})
         self.assertEqual(counter, [2])
+
+    def test_merge_mcp(self):
+        doc, refs, owned = od.merge_mcp(json.loads(json.dumps(MCP_CONFIG)), None)
+        self.assertEqual(([s['id'] for s in doc['servers']], refs, owned), (['files', 'ha'], 2, 1))
+        doc, refs, owned = od.merge_mcp({}, LIVE_MCP_CONFIG)
+        self.assertEqual(([s['id'] for s in doc['servers']], refs, owned), (['woow-paseo'], 0, 0))
 
     def test_merge_prefs_without_a_live_file(self):
         doc, dropped = od.merge_prefs(dict(HA_PREFS), None)
