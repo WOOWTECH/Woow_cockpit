@@ -1466,6 +1466,16 @@ def self_check():
     print(f'offline self-check passed: {len(PROGRAMS)} embedded programs compiled, {len(TAGS)} cold uploads known')
 
 
+def dangling_volumes():
+    """Names of dev-d's owner volumes that no container uses (`podman volume ls --filter dangling=true`): a throwaway
+    whose image VOLUME path had no mount leaves one behind (2026-11-24: one per EMQX check and conversion before
+    be5bc6f). Names only (random ids), never contents."""
+    proc = drv.owner('podman', 'volume', 'ls', '--filter', 'dangling=true', '--format', '{{.Name}}', timeout=120)
+    if proc.returncode:
+        raise Failed('cannot list dev-d\'s dangling volumes')
+    return set(drv.out(proc).split())
+
+
 def main(argv):
     if argv == ['--self-check']:
         self_check()
@@ -1514,6 +1524,10 @@ def main(argv):
             started = time.monotonic()
             kind, tag, mode = parse_step(name)
             try:
+                left_before = dangling_volumes()
+            except Failed:
+                left_before = None
+            try:
                 if kind == 'import':
                     step_import(ev, args, tag, mode)
                 elif kind == 'rollback':
@@ -1526,6 +1540,14 @@ def main(argv):
                 ev.check(f'{name}: step ran to the end', False, f'{type(error).__name__}')
             finally:
                 drv.save_state()
+            try:
+                if left_before is None:
+                    raise Failed('cannot list dev-d\'s dangling volumes before the step')
+                new = dangling_volumes() - left_before
+                ev.check(f'{name}: no anonymous volume left on dev-d (every image VOLUME path of a throwaway mounted)',
+                         not new, {'new_dangling_volumes': len(new)})
+            except Failed as error:
+                ev.check(f'{name}: no anonymous volume left on dev-d', False, str(error))
             took = time.monotonic() - started
             bad = [r for r in ev.results if not r['ok'] and r.get('step') is None]
             for r in ev.results:
