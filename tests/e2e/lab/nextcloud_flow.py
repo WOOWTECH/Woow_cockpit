@@ -44,8 +44,8 @@ CalDAV/CardDAV objects with their UIDs, the versioned file and its version count
 Steps: setup, before (also dev-e's own account through the client: logins, Office capabilities, data fingerprint),
 upload, check (nextcloud ok, no blocker, the section as FILE says), import (ha-convert-start with the product's space
 guard and the host-floor watchdog; notes; inspect: preflight passes; restore-start in place with its safety backup
-and health checks; the uploaded HA file is deleted first only when the host needs the space), verify (status.php;
-the marker files and every HA user's files on disk against the backup's digests; OCS with the HA password and with
+and health checks; the uploaded HA file is deleted first, as the page allows: the restores need the space), verify
+(status.php; the marker files and every HA user's files on disk against the backup's digests; OCS with the HA password and with
 HA's app password, a wrong password 401; the second user reads the shared file; the public link with its password,
 401 without or with a wrong one; CalDAV and CardDAV objects; the older version on disk and in the versions API;
 richdocuments wopi keys and the cron mode exactly dev-e's; Office capabilities as for dev-e's own account; the
@@ -86,6 +86,7 @@ CANDIDATE_NEED = 4608 * 1024 ** 2  # the candidate: live html pack + html dir ta
 # own need is computed after the check from dev-e's live html and PostgreSQL dirs and HA's data dir (convert_need);
 # every restore checks its own need (restore_need) and the host-floor watchdog guards each job.
 RUN_CHECK_NEED = 1024 ** 3
+RUN_START_NEED = 3 * 1024 ** 3   # at the start of a share run: the conversion's need after the upload, with margin
 LIVE_ROOT = '/home/appowner/.local/share/nextcloud-office'
 WATCH_FLOOR = FLOOR + 256 * 1024 ** 2  # below it every running job of dev-e is cancelled (the job cleans up)
 FIXTURE = (LAB / 'ha-fixtures' / '20261123-batch2' / 'x86' / 'woow-b2-nextcloud-x86-enc-noshare'
@@ -437,8 +438,8 @@ class Run:
         if timed and time.monotonic() - self.lock_started > (RUN_HOLD_BUDGET if self.args.run else HOLD_BUDGET):
             raise Failed(f'lock hold budget reached before {phase}')
         free = host_free()
-        if free < FLOOR + need:
-            raise Failed(f'host free space {free} below the floor plus the step need {need} before {phase}')
+        if free < WATCH_FLOOR + need:  # the watchdog's floor: a step that fits the 12 GiB floor only would trip it
+            raise Failed(f'host free space {free} below the watch floor plus the step need {need} before {phase}')
 
     def state(self):
         return drv.device_python(STATE, {'units': list(UNITS)}, timeout=600)
@@ -683,11 +684,14 @@ class Run:
 
     # -------- the acceptance run (share-including backup)
     def restore_need(self, backup_id):
-        """Host bytes a restore of `backup_id` may write: its safety backup (about the live dirs) plus the restored
-        dirs (about the backup's size), with margin."""
+        """Host bytes a restore of `backup_id` may write while the old and the new dirs both exist: the pending copy of
+        the live dirs and the safety package made from it (2 x the live dirs), the restored dirs (2 x the backup:
+        code and the cluster compress to about half), with margin. Attempt 3 (2026-11-24) measured ~3.7 GB for the
+        import's restore against the 2 x backup + 2 GiB used until then."""
         backups = {b['id']: b for b in drv.ok('list', ev=self.ev).get('backups') or []}
         size = int((backups.get(backup_id) or {}).get('size') or 0)
-        return 2 * size + 2 * 1024 ** 3
+        live = sum(v for v in (self.before.get('sizes') or {}).values() if isinstance(v, int)) or 2 * 1024 ** 3
+        return 2 * size + 2 * live + 2 * 1024 ** 3
 
     def import_real(self):
         ev, facts = self.ev, self.args.facts
@@ -722,10 +726,12 @@ class Run:
                         failed[:3] or [(a.get('id'), a.get('mode')) for a in pre.get('apps') or []]):
             raise Failed('inspect')
         need = self.restore_need(self.converted)
-        if host_free() < FLOOR + need and self.created_store:
-            # The page lets the user delete the HA file at any time; done before the restore only when the host needs it.
+        if self.created_store:
+            # The page lets the user delete the HA file at any time; the share run does it before the restore, so the
+            # restores and rollbacks have the host space they write (attempt 3 tripped the watchdog with it kept).
             rc, _reply = drv.helper('ha-delete', {'ha_backup_id': self.created_store, 'confirm': True})
-            ev.check('import: the uploaded HA file is deleted before the restore (host space)', rc == 0)
+            ev.check('import: the uploaded HA file is deleted before the restore (as the page allows; host space)',
+                     rc == 0)
             if rc == 0:
                 self.created_store = None
         self.budget('restore', need)
@@ -971,8 +977,11 @@ def negative(args):
         return 2
     if not ev.check('preflight: dev-e isolation true none {}', isolation() == 'true none {}', isolation()):
         return 2
-    need = FIXTURE.stat().st_size + RUN_CHECK_NEED + int(args.facts.get('extra_need', 0)) if args.run else NEED
-    if not ev.check('preflight: the host keeps 12 GiB plus this run\'s need free', host_free() >= FLOOR + need,
+    # The share run's start need: the upload copy plus the conversion's own need, which comes right after it
+    # (attempt 1-3: 2.54 GB); measured against the watchdog's floor, so a run never starts that would stop there.
+    need = FIXTURE.stat().st_size + RUN_START_NEED + int(args.facts.get('extra_need', 0)) if args.run else NEED
+    floor = WATCH_FLOOR if args.run else FLOOR
+    if not ev.check('preflight: the host keeps 12 GiB plus this run\'s need free', host_free() >= floor + need,
                     f'{host_free()} B, need {need} B'):
         return 2
     with open(LOCK, 'a') as lock:
