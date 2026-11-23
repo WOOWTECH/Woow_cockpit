@@ -1018,11 +1018,12 @@ def preserved_bootstrap_authn(original, imported):
     return rows
 
 
-def restore_target_settings(tmp, original, read_candidate, *, observe=None):
+def restore_target_settings(tmp, original, read_candidate, *, observe=None, original_boot=None):
     """Replace changed target setting roots, not merge stale/imported fields into them.
 
     Roots absent on the target cannot be restored by guessing an empty/default value.
     Any such extra operational root remains a failure until removal is implemented.
+    `original_boot`: this device's configuration in its boot form (boot_form); a root loaded back must equal it there.
     """
     before_digest=[]
     before = read_effective_config(read_candidate, allow_authz_omission=True,_native_digest=before_digest)
@@ -1101,8 +1102,19 @@ def restore_target_settings(tmp, original, read_candidate, *, observe=None):
         if path_proof is not None:
             if observe is not None: observe('acl_path_final')
             verify_generated_path(tmp,path_proof,after_digest[0],observe=observe)
-    if preserved_settings(after) != expected or (authn is not None and after.get('authentication') != authn):
-        raise BackupError('incompatible', 'EMQX 匯入後未能保留目標有效設定，已停止。')
+    want = dict(expected)
+    if original_boot is not None:
+        # `emqx ctl conf load` stores every root it loads with its schema defaults filled (emqx_conf_cli.erl:350-353,
+        # 541-546), per root as fill_defaults/1 does (emqx_config.erl:487-505): a loaded root of this device equals its
+        # boot form, not its plain raw form when it was changed at runtime (dev-d 2026-11-24 attempt-11: the
+        # 「內建資料庫」 source added in the Dashboard lacks `max_rules` until a restart).
+        want.update({key: original_boot[key] for key in changed if key in want and key in original_boot})
+    kept = preserved_settings(after)
+    differ = sorted(key for key in set(kept) | set(want) if kept.get(key) != want.get(key))
+    if authn is not None and after.get('authentication') != authn:
+        differ.append('authentication')
+    if differ:   # root names only (schema keys), never values
+        raise BackupError('incompatible', f'EMQX 匯入後未能保留目標有效設定（{hacommon.names(differ, 8)}），已停止。')
 
 
 FILE_SECRET = ('EMQX 不能搬過來：HA 的 EMQX 設定（{roots}）用「file://」讀取本機檔案當作密碼；搬過來後這台的 EMQX 會讀取'
@@ -1329,7 +1341,7 @@ def target_broker(work, tmp, target, export, ids, *, hint='', target_snapshot=No
         raise BackupError('incompatible', 'HA 的 EMQX 資料匯入時發生錯誤（部分資料無法匯入），已停止。' + hint)
     if target_config is not None:
         restore_target_settings(tmp, target_config, read_candidate,
-                                observe=getattr(work, '_emqx_build_stage', None))
+                                observe=getattr(work, '_emqx_build_stage', None), original_boot=target_boot)
         if image_fingerprints is not None and tls_fingerprints(read_candidate, image_fingerprints) != image_fingerprints:
             raise BackupError('incompatible', 'EMQX 匯入後憑證與目標不一致，已停止。')
         if snapshot_digests:   # after every settings change; the remaining checks only read

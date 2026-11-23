@@ -316,6 +316,13 @@ class DashboardChangedWorld(TargetWorld):
     def boot_view(self, role, config):
         return self.filled(config)
 
+    def exec(self, role, command, data, stdout):
+        """`emqx ctl conf load` stores what it loads with the schema defaults filled (emqx_conf_cli.erl:541-546)."""
+        result = super().exec(role, command, data, stdout)
+        if command[:4] == ['emqx', 'ctl', 'conf', 'load']:
+            self.current_config = self.filled(self.current_config)
+        return result
+
     def evaluate(self, role, expression):
         if role == 'woow-emqx' and expression == ha_emqx.CONFIG_EXPR:
             return b'WOOWCFG:' + base64.b64encode(json.dumps(self.runtime(self.target_config)).encode()) + b':ENDok\n'
@@ -354,6 +361,25 @@ class DashboardChangedTargetTests(base.EmqxCase):
             self.convert(self.upload_emqx(state='stopped'), ['emqx'])
         self.assertEqual(caught.exception.message, 'EMQX 候選啟動後設定與目標不一致（log），已停止。')
         self.assertEqual(self.storage.list_backups(), [])
+
+    def test_the_loaded_settings_must_equal_this_devices_boot_form(self):
+        """dev-d 2026-11-24 attempt-11: this device's authorization is loaded back with `conf load`, which fills
+        `max_rules`; that equals its boot form (the conversion goes on). A loaded value that is not this device's
+        is still refused, naming the root."""
+        self.assertNotIn('max_rules', self.world.runtime(self.world.target_config)['authorization']['sources'][1])
+        self.assertTrue(self.convert(self.upload_emqx(state='stopped'), ['emqx'])['backup_id'])
+        real = self.world.exec
+
+        def exec(role, command, data, stdout):
+            result = real(role, command, data, stdout)
+            if command[:4] == ['emqx', 'ctl', 'conf', 'load']:
+                self.world.current_config['authorization']['sources'][1]['max_rules'] = 7
+            return result
+        self.world.exec = exec
+        with self.assertRaises(BackupError) as caught:
+            self.convert(self.upload_emqx(state='stopped'), ['emqx'])
+        self.assertEqual(caught.exception.message, 'EMQX 匯入後未能保留目標有效設定（authorization），已停止。')
+        self.assertEqual(len(self.storage.list_backups()), 1, 'only the first conversion made a backup')
 
 
 class EnvironmentFileTests(unittest.TestCase):
