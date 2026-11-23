@@ -56,6 +56,27 @@ class BridgeTests(unittest.TestCase):
         with self.assertRaises(ValueError):mark('generated-private')
         self.assertEqual(CandidatePhaseRefused('generated-private','generated-private').stage,'authorization')
 
+    def test_product_error_kind_splits_only_by_fixed_code_and_timeout_text(self):
+        from emqx_candidate_stage import current,kind,mark,KINDS
+        from emqx_captured_candidate import CandidatePhaseRefused
+        from woowbackup.errors import BackupError
+        from woowbackup.podman import CommandError
+        import emqx_real_owner_workflow as workflow
+        mark('product_acl_baseline')
+        for error,expected in (
+                # woowbackup/podman.py:908-909 (runner timeout) and :677-682,915-917 (non-zero exit).
+                (BackupError('job-failed','podman exec 執行逾時（10 秒）。',command='podman exec'),'product_timeout'),
+                (CommandError('podman exec 執行失敗（結束碼 1）。',returncode=1,command='podman exec'),'product_command'),
+                (BackupError('incompatible','generated-private refusal'),'product_incompatible'),
+                (BackupError('job-failed','generated-private 無法執行'),'product'),
+                (BackupError('busy','generated-private'),'product')):
+            with self.subTest(expected=expected):
+                refused=CandidatePhaseRefused(current(),kind(error))
+                self.assertEqual((refused.stage,refused.kind),('product_acl_baseline',expected))
+                self.assertIn('build_product_acl_baseline_'+expected,workflow.PHASES)
+                self.assertNotIn('generated-private',refused.kind)
+        self.assertTrue({'product','product_timeout','product_command','product_incompatible'}<=KINDS)
+
     def test_real_frontgates_and_archive_reverification_reach_readonly_bytes_without_recapture(self):
         inspected = []
         def inspect(work, app, tmp, target, private, *, version):
