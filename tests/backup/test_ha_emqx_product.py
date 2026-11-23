@@ -483,6 +483,40 @@ class SchedulerTests(base.EmqxCase):
         self.assertEqual(self.storage.list_backups(), [])
 
 
+class ImageVolumeTests(base.EmqxCase):
+    """dev-d 2026-11-24: the EMQX image declares VOLUME /opt/emqx/data and /opt/emqx/log; HA's broker mounted only the
+    log path, so every check and every conversion left an anonymous volume on this device (`podman rm` keeps it). Each
+    throwaway broker mounts both paths with this job's own volumes (removed with the job's other objects)."""
+    IMAGE_VOLUMES = ('/opt/emqx/data', '/opt/emqx/log')
+
+    def setUp(self):
+        super().setUp()
+        self.world.target_config['authorization']['sources'] = copy.deepcopy(base.BUILTIN_TARGET)
+        self.world.current_config = copy.deepcopy(self.world.target_config)
+
+    def mounts(self, role):
+        runs = self.runs(role)
+        self.assertTrue(runs, role)
+        for _role, _image, _command, options in runs:
+            mounts = {}
+            for spec in options.get('--volume', []):
+                source, target, *opts = spec.split(':')
+                mounts[target] = (source, opts)
+            yield mounts
+
+    def test_every_throwaway_broker_covers_the_image_volume_paths(self):
+        self.check(self.upload_emqx(state='stopped'), ['emqx'])
+        self.convert(self.upload_emqx(state='stopped'), ['emqx'])
+        for role in ('emqx-ha', 'emqx-new'):
+            for mounts in self.mounts(role):
+                for path in self.IMAGE_VOLUMES:
+                    with self.subTest(role=role, path=path):
+                        self.assertIn(path, mounts)
+                        self.assertTrue(mounts[path][0].startswith('woowbk-j'), 'this job\'s own named volume')
+        for mounts in self.mounts('emqx-ha'):   # security review SR-1: nothing of HA's broker may be executable
+            self.assertEqual(mounts['/opt/emqx/data'][1], ['rw,noexec,nosuid,nodev'])
+
+
 class ConvertReadbackTests(base.EmqxCase):
     def setUp(self):
         super().setUp()

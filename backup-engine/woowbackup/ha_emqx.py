@@ -367,6 +367,11 @@ def ha_broker(work, tmp, target, src, node, *, out_dir=None):
         volumes.append((tmp.name('emqx-xfer'), WORK, 'rw,noexec,nosuid,nodev'))
     tmp.volume('emqx-ha-log')
     volumes.append((tmp.name('emqx-ha-log'), LOG_TARGET, 'rw,noexec,nosuid,nodev'))
+    # The image declares VOLUME /opt/emqx/data and /opt/emqx/log: a path no mount covers gets an anonymous volume that
+    # `podman rm` keeps (dev-d 2026-11-24: one left on the device by every check and every conversion). This broker's
+    # data lives in HA_DATA_DIR; the image path gets this job's own volume, removed with the others.
+    tmp.volume('emqx-ha-image')
+    volumes.append((tmp.name('emqx-ha-image'), DATA_TARGET, 'rw,noexec,nosuid,nodev'))
     try:
         tmp.run('emqx-ha', target.image, [], detach=True, user='0', read_only_root=True, add_hosts=hosts, env=env,
                 volumes=volumes)
