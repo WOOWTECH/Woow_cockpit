@@ -1,0 +1,21 @@
+{
+  "source_commit": "730073a7f3365c31aba3b478bca4baba9e0702c0",
+  "scope": "legacy generated host unit boundary baseline, no broker or commercial proof",
+  "tests_run": 13,
+  "failures": [
+    "tests.backup.test_ha_emqx.CheckTests.test_a_clean_backup",
+    "tests.backup.test_ha_emqx.CheckTests.test_a_hot_backup_is_tried_and_named",
+    "tests.backup.test_ha_emqx.CheckTests.test_an_ip_node_name_needs_no_host_line",
+    "tests.backup.test_ha_emqx.CheckTests.test_blockers",
+    "tests.backup.test_ha_emqx.ConvertTests.test_a_failed_export_stops_the_conversion_with_the_advice",
+    "tests.backup.test_ha_emqx.ConvertTests.test_a_partial_import_stops_the_conversion",
+    "tests.backup.test_ha_emqx.ConvertTests.test_an_import_that_would_open_anonymous_login_is_refused",
+    "tests.backup.test_ha_emqx.ConvertTests.test_lost_rows_stop_the_conversion",
+    "tests.backup.test_ha_emqx.ConvertTests.test_the_strict_settings_must_come_back"
+  ],
+  "errors": [
+    "tests.backup.test_ha_emqx.ConvertTests.test_the_whole_conversion"
+  ],
+  "skipped": 0,
+  "transcript_sha256": "99ed981fadbfcb99b1db218d619af338783dacf2c438db088994df870ed82bf4"
+}

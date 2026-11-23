@@ -1,0 +1,36 @@
+{
+  "authoritative_source_commit": "7a283a94932ee6ba77e94240facde5620e2fb466",
+  "evidence_files": {
+    "RESULTS.txt": "9a5e5b231d8045f685f11b0c67f0503b7e76415b08d4d108be57834e15d33a99",
+    "attempt-1.jsonl": "39b3c49ccf1a6793b04610d2bad549da75bbd607196004db1b1862fc7512b1c1",
+    "attempt-2.jsonl": "831c0fc2cf928aee2dfae06e96da715d834cd4cb6e6a7f5996139c164183d689",
+    "attempt-3.jsonl": "cd07436135662e3516ddbd9fb66cd4957708d3132b4f5d4b2a3262cac4b2c3db",
+    "attempt-4.jsonl": "8b804df6797bc847a97880c9a4e0ccdfce739e8a302824a9cea693b2cf10470d",
+    "attempt-5.jsonl": "36feb226cf950d89630a85cf13b98d78099ecc76db0ad6c978215d28770690ce",
+    "final.jsonl": "36feb226cf950d89630a85cf13b98d78099ecc76db0ad6c978215d28770690ce",
+    "postflight.json": "78cee719654499ff041f9b34f5c357094a7c363c13c168350eb358056cf2a9a5"
+  },
+  "exporter_commit": "545d816b9b1c5ac5a5583aa9b4029ab0e9c0b870",
+  "final_alias_of": "attempt-5.jsonl",
+  "per_attempt_source_commits": {
+    "attempt-1.jsonl": "40a62e8fdfc918de1a1365a295a87f433e39e73d",
+    "attempt-2.jsonl": "0cd310a7ee8dc4d222b581999bb00a40cf4e8bbf",
+    "attempt-3.jsonl": "a60b18c67dfaf42bf892dd4e44cca2c61351339c",
+    "attempt-4.jsonl": "63624a19acae33ea7ad6907bc548b70a26ad7753",
+    "attempt-5.jsonl": "7a283a94932ee6ba77e94240facde5620e2fb466"
+  },
+  "projector_atom_fix_commit": "7a283a94932ee6ba77e94240facde5620e2fb466",
+  "runtime_owner_fix_commit": "28cd6c40abd13beb14725fb9997ab2a3f8c5e7a4",
+  "schema": 1,
+  "source_files": {
+    "emqx_broker_export.py": "0d13e7d7c4633ba1ce5eeada414602d5f0211d7a2970fa9db734a9e665b24556",
+    "emqx_broker_workload.py": "a1745c9a56931f58f5918038e122eaeae5aae2a0971c72950d59611a53a3aaf9",
+    "emqx_checkpoint_json.py": "36e624ef624ef53c5e7bbe06178b5df3f2cddec9199a0097cf0a75c2bdbfc3f9",
+    "emqx_mnesia_checkpoint.erl": "5b68d2065eebdee360a0ce4889592e628a1e3aaf3b0dc1e94672f5289e124834",
+    "emqx_mnesia_export.escript": "21368c75a658d350e4c05b34984f902ef1aafbc87f0cd4d4166edef225b94062",
+    "emqx_native_runtime.py": "892270e9ec9b0c890bf0d237db0c1d03ccbc7ee83b52dedc05b7a88064b27855",
+    "emqx_target_capture.py": "a360b34c85597086ec00b1fe8b13be9d918246240c9b37cf67611ab6a8a8b268",
+    "run_emqx_broker_export.sh": "b7dc67b4d0d8a6ed2b8c38440afac442f6592ebe1cf565c0e3c6b1e7814bfcbe",
+    "test_emqx_target_group.py": "2af0ca8665c7fef6b0c5dd4f0e438646f8a56e976fcb3ac3131c09de6add55de"
+  }
+}

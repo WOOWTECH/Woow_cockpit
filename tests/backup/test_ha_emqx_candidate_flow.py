@@ -28,10 +28,17 @@ class Transport:
         self.live_response = None
         self.missing = False
         self.restore_bad = False
+        self.override_absent = False
+        self.override_states = ['present']
+        self.override_reads = 0
         self.logs = []
 
     def podman(self, *args, **kwargs):
         assert args[:2] == ('exec', 'lab-target')
+        if args[2:] == ('emqx','eval',emqx.OVERRIDE_STATE_EXPR):
+            state=self.override_states[min(self.override_reads,len(self.override_states)-1)]
+            self.override_reads+=1
+            return Result(0,b'WOOWOVERRIDE:'+state.encode()+b':ENDok\n',b'')
         assert args[2:] == ('emqx', 'eval', emqx.CONFIG_EXPR)
         assert kwargs['max_output'] == emqx.MAX_HOCON
         self.events.append('read-live')
@@ -42,6 +49,7 @@ class Transport:
         self.events.append('export')
         files = {'configs/cluster.hocon': b'custom target configuration',
                  'authz/custom.acl': b'{deny, all}.', 'certs/lab.pem': b'fixture-only'}
+        if self.override_absent:del files['configs/cluster.hocon']
         if self.missing:
             del files['authz/custom.acl']
         with tarfile.open(fileobj=stdout, mode='w|') as archive:
@@ -119,6 +127,52 @@ class CandidateFlowTests(unittest.TestCase):
         for first, second in [('export', 'seed'), ('seed', 'start'), ('start', 'import'), ('import', 'restore')]:
             self.assertLess(transport.events.index(first), transport.events.index(second))
         self.assertEqual(transport.events[-1], 'read-candidate')
+
+    def test_imported_retainer_storage_and_expiry_survive_operational_restore(self):
+        source = {'backend': {'type': 'built_in_database', 'storage_type': 'disc'},
+                  'msg_expiry_interval': '2h', 'msg_clear_interval': '1m'}
+        class RetainerTransport(Transport):
+            def exec(self, role, command, **kwargs):
+                result = super().exec(role, command, **kwargs)
+                if command[:4] == ['emqx', 'ctl', 'data', 'import']:
+                    self.running_config['retainer'] = copy.deepcopy(source)
+                return result
+        transport = RetainerTransport()
+        transport.config.update({'retainer': {'backend': {'storage_type': 'ram'}},
+                                 'node': {'name': 'target@localhost', 'data_dir': '/opt/emqx/data'},
+                                 'listeners': {**transport.config['listeners'], 'tcp': {'default': {'bind': 1883}}}})
+        transport.running_config = copy.deepcopy(transport.config)
+        self.invoke(transport)
+        self.assertIn('retainer', emqx.DATA_ROOTS)
+        self.assertNotIn('retainer', transport.restore)
+        self.assertEqual(transport.running_config['retainer'], source)
+        for root in ('authorization', 'node', 'listeners'):
+            self.assertEqual(transport.running_config[root], transport.config[root])
+
+    def test_retainer_raw_omissions_and_ram_are_not_rewritten_as_disc(self):
+        for source in ({}, {'backend': {'storage_type': 'ram'}},
+                       {'msg_expiry_interval': '0s'}):
+            config = {'retainer': source, 'node': {'name': 'target@localhost'}}
+            self.assertEqual(emqx.preserved_settings(config), {'node': config['node']})
+            self.assertEqual(config['retainer'], source)
+
+    def test_actual_entry_preserves_known_mount_config_when_override_is_absent(self):
+        transport=Transport();transport.override_absent=True;transport.override_states=['absent']
+        self.assertEqual(len(self.invoke(transport)),4)
+        self.assertEqual(transport.running_config,transport.config)
+        self.assertNotIn('configs/cluster.hocon',transport.seed)
+        self.assertEqual(transport.seed['authz/custom.acl'],b'{deny, all}.')
+        self.assertEqual(transport.override_reads,2)
+
+    def test_absence_does_not_skip_explicit_cluster_reference_or_moving_state(self):
+        for changed in ('explicit','moving','missing-acl','unexpected-present'):
+            transport=Transport();transport.override_absent=True;transport.override_states=['absent']
+            if changed=='explicit':transport.config['authorization']['sources'][0]['path']='/opt/emqx/data/configs/cluster.hocon'
+            if changed=='moving':transport.override_states=['absent','present']
+            if changed=='missing-acl':transport.missing=True
+            if changed=='unexpected-present':transport.override_absent=False
+            with self.subTest(changed=changed),self.assertRaises(BackupError):self.invoke(transport)
+            self.assertNotIn('start',transport.events)
 
     def test_missing_reference_stops_before_start(self):
         transport = Transport()
@@ -218,3 +272,32 @@ class CandidateFlowTests(unittest.TestCase):
         with self.assertRaises(BackupError) as caught:
             self.invoke(FailedLoad())
         self.assertNotIn('secret', str(caught.exception))
+
+class FixedBuildStageTests(unittest.TestCase):
+    def test_version_refusal_still_precedes_member_or_broker_with_observer(self):
+        from unittest.mock import patch
+        events=[]
+        work=SimpleNamespace(addon_info=lambda _:SimpleNamespace(version='unsupported'),
+                             _emqx_build_stage=events.append)
+        with patch.object(emqx,'member_pass') as member,patch.object(emqx,'ha_broker') as broker:
+            with self.assertRaises(BackupError):
+                emqx._build_candidate(work,SimpleNamespace(id='emqx'),object(),object(),Path('/unused'),version='5.8.9')
+            member.assert_not_called();broker.assert_not_called()
+        self.assertEqual(events,['version'])
+
+    def test_real_node_guard_refuses_identically_and_observer_never_receives_values(self):
+        from unittest.mock import patch
+        src=emqx.Source();src.node_file='generated-private-invalid-node';src.node_dirs={'emqx@127.0.0.1'}
+        errors=[]
+        for observed in (False,True):
+            events=[]
+            work=SimpleNamespace(addon_info=lambda _:SimpleNamespace(version='5.9.1'),phase=lambda _:None)
+            if observed:work._emqx_build_stage=events.append
+            with patch.object(emqx,'member_pass',return_value=src),patch.object(emqx,'ha_broker') as broker:
+                with self.assertRaises(BackupError) as failure:
+                    emqx._build_candidate(work,SimpleNamespace(id='emqx'),object(),object(),Path('/unused'),version='5.8.9')
+                broker.assert_not_called()
+            errors.append(str(failure.exception))
+            self.assertEqual(events,['version','member_pass','node_name'] if observed else [])
+            self.assertNotIn('generated-private-invalid-node',' '.join(events))
+        self.assertEqual(errors[0],errors[1])

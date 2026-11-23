@@ -1,0 +1,9 @@
+{
+  "arch": "x86",
+  "scope": "failed source diagnosis fixed codes only",
+  "status": "refused",
+  "stage": "bounded-full-stream",
+  "expanded_bytes_before_refusal": 268439474,
+  "kind": "OverflowError",
+  "code": null
+}

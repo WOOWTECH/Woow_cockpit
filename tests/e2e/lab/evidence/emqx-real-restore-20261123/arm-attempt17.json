@@ -1,0 +1,13 @@
+{
+  "source_commit": "2f8b273868d73e9b55cf7d7c0e3755bb1b66b0d8",
+  "scope": "real ARM HA backup target-file-policy internal candidate product restore",
+  "exit": 1,
+  "elapsed_seconds": 381.101,
+  "stdout_sha256": "4bbefbb4962e5ccb69bd1769cfe2ab51200e370d25034c6371273b8e3dfed08f",
+  "fixed_status": [
+    "REAL OWNER SOURCE_API_ACL_USERS_HTTP_404 REFUSED",
+    "REAL OWNER POSTFLIGHT PASSED"
+  ],
+  "stderr_bytes_not_published": 0,
+  "commercial_acceptance": "not-complete"
+}

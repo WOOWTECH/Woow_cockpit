@@ -58,6 +58,15 @@ QUERIES = {
     'headscale.node_ips': ('nodes', ('ipv4', 'ipv6'), 'SELECT ipv4, ipv6 FROM nodes ORDER BY id LIMIT 100000', 'rows'),
     'headscale.api_key_prefixes': ('api_keys', ('prefix',), 'SELECT prefix FROM api_keys ORDER BY id LIMIT 1000',
                                    'column'),
+    # OpenDesign: projects imported from a folder (metadata_json.baseDir, ODS projects.ts:86-89) and how many of them
+    # are below HA's /data/opendesign; malformed JSON is skipped, never an error.
+    'opendesign.project_folders': (
+        'projects', ('metadata_json',),
+        "SELECT count(*), coalesce(sum(b = '/data/opendesign' OR substr(b, 1, 17) = '/data/opendesign/'), 0) FROM "
+        "(SELECT json_extract(m, '$.baseDir') AS b FROM (SELECT CASE WHEN json_valid(metadata_json) THEN metadata_json "
+        "END AS m FROM projects) WHERE json_type(m, '$.baseDir') = 'text')", 'rows'),
+    'opendesign.routines_active': ('routines', ('enabled',), 'SELECT count(*) FROM routines WHERE enabled = 1',
+                                   'scalar'),
 }
 
 CHILD = r'''

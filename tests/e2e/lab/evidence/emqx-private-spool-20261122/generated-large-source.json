@@ -1,0 +1,13 @@
+{
+  "scope": "generated137936119byte private spool only; no HA source parsing or broker acceptance",
+  "bytes": 137936119,
+  "complete": true,
+  "sha256": "a21e5e7f48bf13fc809c9334595ef4a16822a63e8d42aef22ee7e94cfc645bf9",
+  "allocated_bytes": 137940992,
+  "source_finished_before_consumer": true,
+  "owned_spool_removed": true,
+  "elapsed_seconds": 0.9551582881249487,
+  "max_rss_kib": 26960,
+  "source_commit": "e46915d",
+  "module_sha256": "4c12d1081f3f25be43e5888893ce8963923f3dce7a9c72b0276d04c6795eb7ff"
+}

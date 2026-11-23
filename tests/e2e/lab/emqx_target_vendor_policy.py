@@ -1,0 +1,255 @@
+"""Narrow reference authorization from a trusted, held vendor observation lease.
+
+The callback must observe pinned image and actual owned broker files, register
+complete bytes/PEM representations in supplied Values, and repeat observation on
+lease exit. A receipt is not a standalone JSON authorization capability.
+"""
+import re
+from emqx_native_runtime import IMAGE
+from emqx_target_capture import unsupported
+
+FILES = {'certfile': 'cert.pem', 'keyfile': 'key.pem', 'cacertfile': 'cacert.pem'}
+BOOTSTRAP_PATH = '/opt/emqx/etc/auth-built-in-db-bootstrap.csv'
+BOOTSTRAP_REFERENCE = '${EMQX_ETC_DIR}/auth-built-in-db-bootstrap.csv'
+TLS_REFERENCES = tuple('${EMQX_ETC_DIR}/certs/' + name for name in FILES.values())
+ACL_PATH = '/opt/emqx/etc/acl.conf'
+ACL_REFERENCE = '${EMQX_ETC_DIR}/acl.conf'
+REFERENCES = TLS_REFERENCES + (BOOTSTRAP_REFERENCE, ACL_REFERENCE)
+
+
+class DisabledVendorTLS:
+    def __init__(self, observed):
+        self.paths = set()
+        self.acl_literals = (ACL_REFERENCE, ACL_PATH)
+        self.bootstrap_literals = (BOOTSTRAP_REFERENCE,)
+        receipts = observed.receipts
+        if type(receipts) not in (tuple, list) or len(receipts) not in (3, 4, 5):
+            unsupported()
+        cid = None
+        for item in receipts:
+            if type(item) is not dict:
+                unsupported()
+            path = item.get('path')
+            if (path not in ({'/opt/emqx/etc/certs/' + name for name in FILES.values()} | {BOOTSTRAP_PATH, ACL_PATH})
+                    or path in self.paths or item.get('image') != IMAGE
+                    or type(item.get('bytes')) is not int or not 1 <= item['bytes'] <= 65536
+                    or type(item.get('sha256')) is not str
+                    or re.fullmatch('[0-9a-f]{64}', item['sha256']) is None
+                    or type(item.get('container_id')) is not str
+                    or re.fullmatch('[0-9a-f]{64}', item['container_id']) is None
+                    or not item.get('image_identity') or not item.get('target_identity')):
+                unsupported()
+            if cid is not None and cid != item['container_id']:
+                unsupported()
+            cid = item['container_id']
+            self.paths.add(path)
+        if not {'/opt/emqx/etc/certs/' + name for name in FILES.values()} <= self.paths:
+            unsupported()
+
+    def allows(self, config, path, text):
+        if (len(path) == 5 and path[:4] == ('dashboard','listeners','https','ssl_options')
+                and path[4] in FILES):
+            return self.dashboard_https_defaults(config) and text == '${EMQX_ETC_DIR}/certs/' + FILES[path[4]]
+        if path == ('authentication', 0, 'bootstrap_file'):
+            return self.bootstrap_allows(config, text)
+        if (len(path) != 5 or path[0] != 'listeners' or path[1] not in ('ssl', 'wss')
+                or path[2:4] != ('default', 'ssl_options') or path[4] not in FILES):
+            return False
+        listener = config['listeners'][path[1]]['default']
+        filename = FILES[path[4]]
+        return (listener.get('enable') == 'false'
+                and text == '${EMQX_ETC_DIR}/certs/' + filename
+                and '/opt/emqx/etc/certs/' + filename in self.paths)
+
+
+    def dashboard_https_defaults(self, config):
+        try:
+            https=config['dashboard']['listeners']['https']
+            if type(https) is not dict or type(https.get('bind')) is not int or https['bind'] != 0:
+                return False
+            options=https.get('ssl_options')
+            if type(options) is not dict:
+                return False
+            for key,filename in FILES.items():
+                expected='${EMQX_ETC_DIR}/certs/'+filename
+                if (type(options.get(key)) not in (str,bytes)
+                        or options[key] not in (expected,expected.encode())
+                        or '/opt/emqx/etc/certs/'+filename not in self.paths):
+                    return False
+            return True
+        except (KeyError,TypeError):
+            return False
+
+    def acl_source(self, config, path, source):
+        if (len(path) != 3 or path[:2] != ('authorization', 'sources')
+                or type(path[2]) is not int or path[2] < 0
+                or ACL_PATH not in self.paths or type(source) is not dict
+                or source.get('type') not in ('file', b'file')
+                or type(source.get('enable')) is not str
+                or source['enable'] not in ('true', 'false')):
+            return False
+        try:
+            sources = config['authorization']['sources']
+            if type(sources) is not list or sources[path[2]] is not source:
+                return False
+        except (KeyError, IndexError, TypeError):
+            return False
+        value = source.get('path')
+        if type(value) is list:
+            if not value or any(type(v) is not int or not 0 <= v <= 127 for v in value):
+                return False
+            value = ''.join(chr(v) for v in value)
+        if type(value) is bytes:
+            try: value = value.decode('ascii')
+            except UnicodeDecodeError: return False
+        return type(value) is str and value in self.acl_literals
+
+    def allows_acl_path(self, config, path, value):
+        if len(path) != 4 or path[-1] != 'path':
+            return False
+        try:
+            source = config['authorization']['sources'][path[2]]
+        except (KeyError, IndexError, TypeError):
+            return False
+        return self.acl_source(config, path[:-1], source) and source['path'] is value
+
+    def bootstrap_allows(self, config, text):
+        # ACTIVE startup dependency: authorize only complete fixed-file capture.
+        # Never convert it to empty, omit it or treat default material as absent.
+        if text not in self.bootstrap_literals or BOOTSTRAP_PATH not in self.paths:
+            return False
+        auth = config.get('authentication')
+        if type(auth) is not list or len(auth) != 1 or type(auth[0]) is not dict:
+            return False
+        entry = auth[0]
+        def is_text(key, expected):
+            return entry.get(key) in (expected, expected.encode())
+        return (entry.get('enable') == 'true'
+                and is_text('mechanism', 'password_based')
+                and is_text('backend', 'built_in_database')
+                and is_text('user_id_type', 'username')
+                and is_text('bootstrap_type', 'plain'))
+
+
+def vendor_observer(*, broker, owned_container_id, private_eval, private_inspect, fixture_capability=None):
+    """Bind Bernoulli's actual observer to one owner lease; never accept JSON code.
+
+    Immutable IMAGE is the fixed expected public-content authority: helper reads
+    that image, compares every byte with the actual broker and registers bytes.
+    No caller-selected digest can replace this comparison.
+    """
+    from contextlib import contextmanager
+
+    @contextmanager
+    def observe(*, generation, private_values):
+        from emqx_owner_vendor_files import observe_vendor_files
+        if type(generation) is not str or re.fullmatch('[0-9a-f]{32}', generation) is None:
+            unsupported()
+        def capture():
+            if fixture_capability is not None:
+                from emqx_target_fixture_policy import capture_composed_files
+                return capture_composed_files(fixture_capability, generation=generation,
+                    broker=broker, owned_container_id=owned_container_id,
+                    private_eval=private_eval, private_inspect=private_inspect,
+                    private_values=private_values)
+            return observe_vendor_files(REFERENCES, private_eval=private_eval,
+                private_inspect=private_inspect, broker=broker,
+                owned_container_id=owned_container_id, private_values=private_values)
+        before = capture()
+        policy_from_observation(before,generation)
+        yield before
+        after = capture()
+        policy_from_observation(before,generation)
+        policy_from_observation(after,generation)
+        # Ephemeral baseline sidecars may have different overlay inode/device
+        # IDs. Each read validates those internally; only the actual target
+        # identity and pinned content are required to persist across this lease.
+        fields = ('path', 'image', 'container_id', 'bytes', 'sha256', 'target_identity')
+        def stable(observed):
+            return {item['path']: tuple(item[key] for key in fields)
+                    for item in observed.receipts}
+        if (stable(before) != stable(after)
+                or getattr(before,'fixture_receipts',None) != getattr(after,'fixture_receipts',None)):
+            unsupported()
+    return observe
+
+
+def bounded_vendor_callbacks(*, broker, runner=None):
+    """Actual owner transport bounds, enforced while reading, not after capture.
+
+    Product OwnerRunner starts a separate session, caps stdout during pipe reads,
+    retains only a bounded stderr tail and kills/reaps the process group on abort.
+    Do not route these callbacks through runtime_live.podman's 90s PIPE capture.
+    """
+    from emqx_private_boundary import PrivateFailure
+    def read(args, timeout, kind):
+        nonlocal runner
+        try:
+            from emqx_owner_vendor_files import MAX_WIRE, LIMIT
+            limit = MAX_WIRE if kind == 'eval' else LIMIT
+            if runner is None:
+                from emqx_adapter_owner import LabOwnerRunner
+                runner = LabOwnerRunner()
+            result = runner.podman(*args, timeout=timeout, max_output=limit)
+            if result.returncode != 0 or type(result.stdout) is not bytes or len(result.stdout) > limit:
+                raise ValueError()
+            return result.stdout
+        except Exception:
+            raise PrivateFailure('private-vendor-files-refused') from None
+    return (lambda expression: read(('exec', broker, 'emqx', 'eval', expression), 10, 'eval'),
+            lambda: read(('inspect', broker), 5, 'inspect'))
+
+
+DEFAULT_ORIGINS = [b'http://localhost:18083', b'http://127.0.0.1:18083']
+
+
+def inactive_default_origins(config, path, value):
+    """Pinned websocket comparison data, never a fetched URL or file source.
+
+    emqx_schema:fields(websocket), to_comma_separated_binary and
+    emqx_ws_connection:check_origin_header/parse_header_fun_origin define this
+    exact binary list and passive membership semantics. Native decoding already
+    registers every list value before this reference-policy check.
+    """
+    if (len(path) != 5 or path[0] != 'listeners' or path[1] not in ('ws', 'wss')
+            or path[2:] != ('default', 'websocket', 'check_origins')
+            or type(value) is not list or value != DEFAULT_ORIGINS
+            or any(type(item) is not bytes for item in value)):
+        return False
+    try:
+        listener = config['listeners'][path[1]]['default']
+        return (listener.get('enable') == 'false'
+                and listener['websocket'].get('check_origin_enable') == 'false')
+    except (KeyError, TypeError, AttributeError):
+        return False
+
+
+PROMETHEUS_DEFAULT_JOB = b'${name}/instance/${name}~${host}'
+
+
+def inactive_default_prometheus_job(config, path, value):
+    """Exact pinned node-label template, disabled exporter only; never render it.
+
+    Public emqx_prometheus:join_url renders only name/host/cluster_name. The
+    supervisor/config handler gates creation on the push exporter enable flag.
+    Mixed legacy/new layouts are deliberately unsupported here.
+    """
+    if type(value) is not bytes or value != PROMETHEUS_DEFAULT_JOB:
+        return False
+    prometheus = config.get('prometheus')
+    if type(prometheus) is not dict:
+        return False
+    if path == ('prometheus', 'job_name'):
+        return prometheus.get('enable') == 'false' and 'push_gateway' not in prometheus
+    if path == ('prometheus', 'push_gateway', 'job_name'):
+        gateway = prometheus.get('push_gateway')
+        return (type(gateway) is dict and gateway.get('enable') == 'false'
+                and 'enable' not in prometheus and 'job_name' not in prometheus)
+    return False
+
+
+def policy_from_observation(observed, generation):
+    from emqx_target_fixture_policy import HeldFixtureObservation, FixtureFilePolicy
+    if type(observed) is HeldFixtureObservation:
+        return FixtureFilePolicy(observed,generation)
+    return DisabledVendorTLS(observed)

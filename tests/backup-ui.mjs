@@ -1582,7 +1582,7 @@ function odooDb(name, extra = {}) {
     custom_modules: [{ name: 'woow_paas_platform', version: '18.0.1.2.0', from: 'share/odoo_addons' }], crons_active: 12,
     mail_servers_active: 1, size: 310 * MiB, filestore_files: 3210, filestore_bytes: 120 * MiB, ...extra };
   db.warnings = extra.warnings ?? [
-    ...(db.mail_servers_active ? [`HA 的資料庫有 ${db.mail_servers_active} 個啟用中的外寄郵件伺服器，搬過來後會開始寄信。`] : []),
+    ...(db.mail_servers_active ? [`HA 的資料庫有 ${db.mail_servers_active} 個啟用中的外寄郵件伺服器，搬過來後會開始寄信（包括 HA 上還沒寄出的信和每天的提醒信）；正式搬家前請先停掉 HA 那邊的 Odoo，避免兩邊各寄一次。`] : []),
     ...(db.crons_active ? [`HA 的資料庫有 ${db.crons_active} 個啟用中的排程工作，搬過來後會在這台執行。`] : []),
     ...(db.attachments && !db.filestore_files ? [NO_FILESTORE] : [])];
   return db;
@@ -1868,11 +1868,68 @@ function b1Fixture({ check = b1Check(), testMode = false, extra = {} } = {}) {
 // The page's own reminder for the batch 1 HA file.
 const B1_DELETE_LINE = `匯入完成後，建議刪除這份 HA 備份檔（裡面可能有 HA 的密碼與權杖）。 前往 HA 備份「${B1_NAME}」`;
 const B1_STOP_LINES = B1_APPS.map(id => `請把 HA 那邊的「${B1[id].addon}」附加元件停掉，避免同一件事兩邊各做一次。`);
+// Batch 2 (2026-11-23): the WOOWTECH OpenDesign add-on as ha_opendesign.py reports the real x86 showcase backup (its
+// section of HaCheck, CONTRACT §7; one engine warning), on a device with OpenDesign and its MCP admin app installed.
+const OD = { slug: '1b7b4ce7_woow_ha_opendesign', addon: 'Woow HA OpenDesign', version: '0.2.15', app: 'OpenDesign 設計工具', product: '0.24.1' };
+const HA_OD = 'ha-0d0d0d0d0d0d0d0d0d0d';
+const OD_WARNING = 'HA 的 OpenDesign 資料中有 5 個指向資料以外的符號連結沒有搬過來（多半在代理程式的登入資料夾裡，這台保留自己的）。';
+const OD_SECTION = { 'open-design_version': '0.24.1', source_revision: '05b23f5a', target_version: '0.24.1', target_revision: '05b23f5a',
+  files: 77, bytes: 11212414, dirs: 55, symlinks: 0, hardlinks: 0, skipped_symlinks: 5, projects: 12, conversations: 12, messages: 22,
+  routines: 0, routines_active: 0, project_folders: 0, mcp_servers: 0, mcp_integration_entries: 1, shared: 2, ha_urls: [],
+  left_out: { home: 4600, paseo: 1940, integrations: 4, 'installation.json': 1 } };
+function odFixture() {
+  const data = fixture();
+  data.status.apps.push(app('open-design', OD.app), app('opendesign-mcp-admin', 'OpenDesign MCP 管理'));
+  const meta = haMeta(HA_OD, { name: 'OpenDesign 每週備份 2026-11-23', date: '2026-11-23T07:56:03Z', protected: false, size: 1065 * MiB,
+    filename: 'woow-b2-opendesign.tar', folders: [], addons: [{ slug: OD.slug, name: OD.addon, version: OD.version, encrypted: false }],
+    importable_apps: [{ slug: OD.slug, app_id: 'open-design', app_name: OD.app, installed: true }], other_addons: [] });
+  const check = { ha_check: { ha_backup_id: HA_OD, apps: [{ app_id: 'open-design', slug: OD.slug, name: OD.addon, arch: 'amd64',
+    version: OD.version, target_version: OD.product, ok: true, blockers: [], warnings: [OD_WARNING], 'open-design': structuredClone(OD_SECTION) }] } };
+  data.ha = { backups: [meta], key: HA_KEY, jobKeyFailure: null, legacy: false, imports: {} };
+  Object.assign(data.scripts, haScripts({ check }));
+  return data;
+}
+// Batch 2 (2026-11-23): the WOOWTECH code-server add-on as ha_codeserver.py reports the real x86 showcase backup (its
+// section of HaCheck, CONTRACT §7; the engine's warnings), with a Cloudflare Tunnel and an MCP admin add-on that never
+// move (CONTRACT §9 "Batch 2: add-ons that are not moved"), on a device with code-server and Odoo MCP 管理 installed.
+const CS = { slug: '1b7b4ce7_woow_ha_code_server', addon: 'Woow Code Server', version: '0.1.14', app: 'code-server 開發環境', product: '4.139.1' };
+const CS_CF = { slug: '1b7b4ce7_cloudflared', name: 'Woow Cloudflared', version: '1.1.3' };
+const CS_MCP = { slug: '1b7b4ce7_woow_mcp_odoo', name: 'Woow Odoo MCP Server', version: '0.4.14' };
+const HA_CS = 'ha-0c0c0c0c0c0c0c0c0c0c';
+const CS_WARNINGS = ['這份 HA 備份沒有包含 share 資料夾，HA 的工作區專案（/share/projects）不會搬過來；要一起搬，請在 HA 建立備份時勾選 share，或自行複製。',
+  'HA 的 code-server 資料中有這台不認得的項目（codex-bootstrap），不會搬過來；需要時請自行複製。'];
+const CS_PINS = { 'code-server': '4.139.1', pi: '0.99.1', claude: '2.1.285', codex: '0.167.0' };
+const CS_SECTION = { 'woow-code-server_version': '4.139.1', pins: CS_PINS, target_pins: CS_PINS, files: 386, bytes: 17570555,
+  sessions: 28, claude_projects: 20, codex_sessions: 15, skills: 3, snippets: 1, settings: true, extensions: 0, mcp_servers: 9,
+  workspace: false, share: false, workspace_files: 0, workspace_bytes: 0, skipped_symlinks: 7, ha_urls: [],
+  left_out: { 'pi:own': 12, 'pi:programs': 5, 'pi:state': 1986, 'user:workspaceStorage': 226 }, unknown: ['codex-bootstrap'] };
+const CS_CF_LINE = '「Woow Cloudflared」（Cloudflare Tunnel）不會搬過來：請在 HA 的 Cloudflared 頁面記下它的每一條路由（公開網址和對應的服務），'
+  + '在這台的 Cloudflare Tunnel 重新加入，服務位址改成這台的應用；用 WOOW PaaS 連結的，請在這台重新連結（換機）。'
+  + '確認這台的網址都正常後，再刪掉 HA 那邊的路由並停掉 HA 的 Cloudflared。';
+const CS_MCP_LINE = '「Woow Odoo MCP Server」（Odoo 的 MCP 管理工具）不會搬過來：請到這台的「Odoo MCP 管理」重新設定連線，'
+  + '再停掉 HA 的「Woow Odoo MCP Server」，並把指向它的 MCP 連接器（例如 claude.ai）刪掉，改用這台的 MCP 網址重新建立。';
+function csFixture() {
+  const data = fixture();
+  data.status.apps.push(app('woow-code-server', CS.app), app('odoo-mcp-admin', 'Odoo MCP 管理'));
+  const meta = haMeta(HA_CS, { name: 'code-server 每週備份 2026-11-23', date: '2026-11-23T08:00:19Z', protected: true, size: 598 * MiB,
+    filename: 'woow-b2-codeserver.tar', folders: [],
+    addons: [{ slug: CS.slug, name: CS.addon, version: CS.version, encrypted: true },
+      { slug: CS_CF.slug, name: CS_CF.name, version: CS_CF.version, encrypted: true },
+      { slug: CS_MCP.slug, name: CS_MCP.name, version: CS_MCP.version, encrypted: true }],
+    importable_apps: [{ slug: CS.slug, app_id: 'woow-code-server', app_name: CS.app, installed: true }],
+    other_addons: [CS_CF, CS_MCP] });
+  const check = { ha_check: { ha_backup_id: HA_CS, apps: [{ app_id: 'woow-code-server', slug: CS.slug, name: CS.addon, arch: 'amd64',
+    version: CS.version, target_version: CS.product, ok: true, blockers: [], warnings: [...CS_WARNINGS],
+    'woow-code-server': structuredClone(CS_SECTION) }] } };
+  data.ha = { backups: [meta], key: HA_KEY, jobKeyFailure: null, legacy: false, imports: {} };
+  Object.assign(data.scripts, haScripts({ check }));
+  return data;
+}
 // Batch 2 (2026-11-23): the WOOWTECH Nextcloud Office add-on as ha_nextcloud.py reports the real x86 showcase backups
 // (its section of HaCheck, CONTRACT §7 and §9 "Batch 2: Nextcloud"): with HA's share folder the users' files come along;
 // without it the import is refused (a database without its files would lose them).
 const NC = { slug: '1b7b4ce7_woow-nextcloud-office', addon: 'Woow Nextcloud Office', version: '0.2.3', app: 'Nextcloud 雲端硬碟' };
-const HA_NC = 'ha-0d0d0d0d0d0d0d0d0d0d';
+const HA_NC = 'ha-0e0e0e0e0e0e0e0e0e0e';
 const NC_NO_SHARE = '這份 HA 備份沒有包含 share 資料夾，Nextcloud 的使用者檔案（/share/nextcloud）不在備份裡，無法匯入'
   + '（只搬資料庫會讓檔案遺失）。請在 HA 重新做一份備份，並勾選 share 資料夾。';
 const NC_WARNINGS = ['HA 的 Nextcloud 設定 filelocking.enabled、defaultapp 不會搬過來（以這台的設定為準）。'];
@@ -4931,7 +4988,7 @@ try {
     async page => {
       await ready(page);
       await page.locator('[data-nav="restore"]').click();
-      await page.getByText('也可以上傳 Home Assistant 的備份檔（.tar），把其中的 Odoo、n8n、Omnigent、Hermes、EMQX、Headscale、Nextcloud 匯入這台。').waitFor();
+      await page.getByText('也可以上傳 Home Assistant 的備份檔（.tar），把其中的 Odoo、n8n、Omnigent、Hermes、EMQX、Headscale、OpenDesign、code-server、Nextcloud 匯入這台。').waitFor();
       await page.locator('#restore-file').setInputFiles({ name: 'woow_import_test.tar', mimeType: 'application/x-tar', buffer: Buffer.alloc(256 * KiB, 5) });
       await page.locator('[data-focus="restore-upload"]').click();
       await page.waitForFunction(id => window.location.hash === `#/ha/${id}`, HA_ID);
@@ -5185,7 +5242,7 @@ try {
       // What to know before moving a database: the engine says it per database only (review P-02).
       const issues = db => databases.nth(db).locator('.check').evaluateAll(items => items.map(item => [item.className.replace('check check-', ''),
         item.querySelector('.check-message').textContent]));
-      assert.deepEqual(await issues(0), [['warn', 'HA 的資料庫有 1 個啟用中的外寄郵件伺服器，搬過來後會開始寄信。'],
+      assert.deepEqual(await issues(0), [['warn', 'HA 的資料庫有 1 個啟用中的外寄郵件伺服器，搬過來後會開始寄信（包括 HA 上還沒寄出的信和每天的提醒信）；正式搬家前請先停掉 HA 那邊的 Odoo，避免兩邊各寄一次。'],
         ['warn', 'HA 的資料庫有 12 個啟用中的排程工作，搬過來後會在這台執行。']]);
       assert.deepEqual(await issues(1), [['warn', NO_FILESTORE]]);
       assert.deepEqual(await issues(2), [['fail', MISSING_MODULE], ['warn', 'HA 的資料庫有 3 個啟用中的排程工作，搬過來後會在這台執行。']]);
@@ -5195,6 +5252,7 @@ try {
       assert.equal(await page.locator('#ha-test-mode').isChecked(), false, '「這只是測試」 is off until ticked');
       assert.equal(await page.locator('label[for="ha-test-mode"] strong').textContent(), '這只是測試（先關掉排程、寄信和工作流程）');
       assert.match(await page.locator('#ha-test-mode-help').textContent(), /正式搬家請不要勾/);
+      assert.match(await page.locator('#ha-test-mode-help').textContent(), /正式搬家時，Odoo 會接著寄出 HA 上還沒寄出的信和每天的提醒信，請先停掉 HA 那邊的 Odoo，避免兩邊各寄一次。$/);
       const starts = (await calls(page, 'ha-check-start')).map(requestOf);
       assert.equal(starts.length, 2);
       assert(starts.every(item => !('key' in item)), 'no key for an unencrypted HA backup');
@@ -5483,7 +5541,7 @@ try {
       const jobDatabases = await page.locator('.job-result .ha-database-list > li').evaluateAll(items => items.map(item => [item.dataset.database,
         item.querySelector('.chip').textContent, [...item.querySelectorAll('.check-message')].map(message => message.textContent)]));
       assert.deepEqual(jobDatabases, [
-        ['woowtest', '可以搬', ['HA 的資料庫有 1 個啟用中的外寄郵件伺服器，搬過來後會開始寄信。', 'HA 的資料庫有 12 個啟用中的排程工作，搬過來後會在這台執行。']],
+        ['woowtest', '可以搬', ['HA 的資料庫有 1 個啟用中的外寄郵件伺服器，搬過來後會開始寄信（包括 HA 上還沒寄出的信和每天的提醒信）；正式搬家前請先停掉 HA 那邊的 Odoo，避免兩邊各寄一次。', 'HA 的資料庫有 12 個啟用中的排程工作，搬過來後會在這台執行。']],
         ['demo-old', '不能搬', [MISSING_MODULE, 'HA 的資料庫有 3 個啟用中的排程工作，搬過來後會在這台執行。']]]);
       assert.match(await page.locator('.job-result').textContent(), /要匯入，請回到 HA 備份按「檢查並匯入…」，並重新輸入 HA 備份金鑰。/);
       // A failed check shows the engine's words.
@@ -5597,7 +5655,7 @@ try {
         [`WOOW n8n${N8N_SLUG}`, '2.43.6', '還沒安裝「n8n 工作流程」：這台還沒安裝，請先到「應用軟體」安裝同版本'],
         ...B1_APPS.map(id => [`${B1[id].addon}${B1[id].slug}`, B1[id].version, `可以匯入這台的「${B1[id].app}」`]),
         ['Mosquitto brokercore_mosquitto', '6.5.1', '這台沒有對應的應用']]);
-      await page.getByText('只有支援的 Odoo、n8n、Omnigent、Hermes、EMQX、Headscale、Nextcloud 附加元件能匯入這台；Home Assistant 本身和其他附加元件不會匯入。').waitFor();
+      await page.getByText('只有支援的 Odoo、n8n、Omnigent、Hermes、EMQX、Headscale、OpenDesign、code-server、Nextcloud 附加元件能匯入這台；Home Assistant 本身和其他附加元件不會匯入。').waitFor();
       await page.locator(`[data-focus="ha-import-${HA_B1}"]`).click();
       assert.deepEqual(await page.locator('.stepper[aria-label="匯入步驟"] .step-label').allTextContents(), ['選擇應用', '檢查', '結果與選項', '轉換', '還原'],
         'HA did not encrypt these add-ons: no key step');
@@ -5663,6 +5721,78 @@ try {
       assert.match(await page.locator('#confirm-body').textContent(), /Hermes、EMQX、Headscale 的附加元件檔案比較大，檢查和轉換會花比較久的時間。/);
       await page.locator('#confirm-cancel').click();
       assert.equal((await calls(page, 'ha-convert-start')).length, 0);
+    });
+
+  await check('從 HA 備份匯入, batch 2: OpenDesign is importable; its check card shows the core revision both sides share, what moves and how to log in afterwards',
+    odFixture(), async page => {
+      await ready(page);
+      await page.locator('[data-nav="backups"]').click();
+      await page.locator(`[data-focus="ha-import-${HA_OD}"]`).click();
+      await page.locator('.stepper[aria-label="匯入步驟"]').waitFor();
+      assert.deepEqual(await page.locator('.wizard-card input[type="checkbox"]').evaluateAll(items => items.map(item => [item.id, item.checked, item.disabled])),
+        [['ha-app-open-design', true, false]]);
+      // The member holds the agents' logins and Paseo's runtime (decrypted and skipped): it takes longer.
+      assert.equal(await page.locator('.ha-slow').textContent(), 'OpenDesign 的附加元件檔案比較大，檢查和轉換會花比較久的時間。');
+      await page.locator('[data-focus="ha-apps-next"]').click();
+      await page.locator('[data-ha-app="open-design"]').waitFor();
+      const start = requestOf((await calls(page, 'ha-check-start')).at(-1));
+      assert.deepEqual(start, { ha_backup_id: HA_OD, apps: ['open-design'], request_id: start.request_id });
+      const card = page.locator('[data-ha-app="open-design"]');
+      // `open-design_version` of the section is the product version the add-on ships.
+      assert.equal(await card.locator('.muted').first().textContent(), 'HA 附加元件版本 0.2.15（OpenDesign 0.24.1），這台的 OpenDesign 0.24.1。');
+      assert.equal(await card.locator('.chip').first().textContent(), '可以匯入');
+      assert.deepEqual(await card.locator('.check-warn .check-message').allTextContents(), [OD_WARNING]);
+      assert.deepEqual((await metadataOf(card))[0], { 專案: '12 個', 對話: '12 個，22 則訊息', 例行工作: '0 個（啟用中 0 個）',
+        '外部 MCP 伺服器': '0 個', 資料: '77 個檔案（10.7 MiB）', 核心版本: 'HA 05b23f5a，這台 05b23f5a' });
+      assert.equal(await card.locator('p.muted').last().textContent(),
+        '匯入後，用這台的 OpenDesign 登入資料（帳號 open-design 與這台的 API 權杖）登入；代理程式的登入、Omnigent 與 Paseo 維持這台的。');
+      // Skills, plugins and external MCP servers run here: only import a trusted backup.
+      await page.locator('.wizard-card .notice-info').getByText('OpenDesign 的技能、外掛與外部 MCP 伺服器是會在這台執行的程式，只匯入你信任的備份。').waitFor();
+      await enabled(page, '[data-focus="ha-convert"]');
+      await allWidths(page, 'batch 2 OpenDesign results');
+      assert.deepEqual((await contrastOf(page)).failures, [], 'the OpenDesign check card keeps WCAG AA contrast');
+    });
+
+  await check('從 HA 備份匯入, batch 2: code-server is importable; Cloudflare Tunnel and the MCP admin add-on are never moved and say what to do here; the check card shows what moves and the four program versions',
+    csFixture(), async page => {
+      await ready(page);
+      await page.locator('[data-nav="backups"]').click();
+      await page.locator(`[data-focus="open-${HA_CS}"]`).click();
+      await page.locator('.ha-addons-table').waitFor();
+      const rows = await page.locator('.ha-addons-table tbody tr').evaluateAll(items => items.map(row => [...row.children].map(cell => cell.textContent.trim())));
+      assert.deepEqual(rows, [
+        [`${CS.addon}${CS.slug}`, CS.version, `可以匯入這台的「${CS.app}」`],
+        [`${CS_CF.name}${CS_CF.slug}`, CS_CF.version, '不會搬過來請在這台重新設定（見下方說明）'],
+        [`${CS_MCP.name}${CS_MCP.slug}`, CS_MCP.version, '不會搬過來請在這台重新設定（見下方說明）']]);
+      assert.deepEqual(await page.locator('section[aria-labelledby="ha-addons"] .ha-not-moved li').allTextContents(), [CS_CF_LINE, CS_MCP_LINE]);
+      await page.locator(`[data-focus="ha-import-${HA_CS}"]`).click();
+      await page.locator('.stepper[aria-label="匯入步驟"]').waitFor();
+      assert.deepEqual(await page.locator('.wizard-card input[type="checkbox"]').evaluateAll(items => items.map(item => [item.id, item.checked, item.disabled])),
+        [['ha-app-woow-code-server', true, false]]);
+      assert.match(await page.locator('.wizard-card').textContent(), /其他附加元件（Woow Cloudflared、Woow Odoo MCP Server）這台沒有對應的應用，不會匯入。/);
+      assert.deepEqual(await page.locator('.wizard-card .ha-not-moved li').allTextContents(), [CS_CF_LINE, CS_MCP_LINE]);
+      assert.equal(await page.locator('.ha-slow').textContent(), 'code-server 的附加元件檔案比較大，檢查和轉換會花比較久的時間。');
+      await page.locator('[data-focus="ha-apps-next"]').click();
+      await page.locator('#ha-key').fill(HA_KEY);
+      await page.locator('[data-focus="ha-key-next"]').click();
+      await page.locator('[data-ha-app="woow-code-server"]').waitFor();
+      const start = requestOf((await calls(page, 'ha-check-start')).at(-1));
+      assert.deepEqual(start, { ha_backup_id: HA_CS, apps: ['woow-code-server'], request_id: start.request_id, key: HA_KEY });
+      const card = page.locator('[data-ha-app="woow-code-server"]');
+      // `woow-code-server_version` of the section is the code-server version the add-on ships.
+      assert.equal(await card.locator('.muted').first().textContent(), 'HA 附加元件版本 0.1.14（code-server 4.139.1），這台的 code-server 4.139.1。');
+      assert.equal(await card.locator('.chip').first().textContent(), '可以匯入');
+      assert.deepEqual(await card.locator('.check-warn .check-message').allTextContents(), CS_WARNINGS);
+      assert.deepEqual((await metadataOf(card))[0], { 代理程式對話: 'Pi 28 個、Claude Code 20 個、Codex 15 個（只能查看）', 技能: '3 個',
+        'VS Code': '設定（合併）、1 個程式碼片段、0 個自己安裝的延伸模組', '共用 MCP 伺服器': '9 個',
+        工作區: '這份備份沒有包含 share 資料夾，不會搬過來', 資料: '386 個檔案（16.8 MiB）',
+        程式版本: 'code-server 4.139.1、Pi 0.99.1、Claude Code 2.1.285、Codex 0.167.0' });
+      assert.equal(await card.locator('p.muted').last().textContent(),
+        '匯入後，用這台 code-server 的密碼登入；Pi、Claude Code、Codex 沿用這台的登入，Omnigent 與 Paseo 連接器維持這台的。');
+      await page.locator('.wizard-card .notice-info').getByText('code-server 的延伸模組、技能與共用 MCP 伺服器是會在這台執行的程式，只匯入你信任的備份。').waitFor();
+      await enabled(page, '[data-focus="ha-convert"]');
+      await allWidths(page, 'batch 2 code-server results');
+      assert.deepEqual((await contrastOf(page)).failures, [], 'the code-server check card keeps WCAG AA contrast');
     });
 
   await check('從 HA 備份匯入, batch 2: Nextcloud with HA\'s share folder is importable; the check card shows the users, the users\' files from the share folder, shares, calendars, custom apps, Office and both URLs',

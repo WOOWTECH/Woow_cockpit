@@ -1,0 +1,16 @@
+{
+  "source_commit": "f11dd76e2b292a249c4c2acca21e63969ece0076",
+  "scope": "real ARM fixed data-root substitution diagnosis; no cold traversal or broker",
+  "exit": 1,
+  "elapsed_seconds": 9.764027388067916,
+  "fixed_phases": [
+    "ARM TRANSFER PASSED",
+    "ARM SELECT PASSED",
+    "ARM VENDOR_SCALAR_SUBSTITUTION_RULE_ENGINE REFUSED",
+    "ARM POSTFLIGHT PASSED"
+  ],
+  "unpublished_stdout_lines": 0,
+  "stderr_bytes_not_published": 0,
+  "stdout_sha256": "2aa8ac0d917a142a5a52513c2206ab31aa58e10328d19804e62817e8acc595e1",
+  "restore_executed": false
+}

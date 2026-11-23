@@ -1,0 +1,6 @@
+{
+  "scope": "actual immutable public image fixed default authentication bootstrap presence only; no broker/private data",
+  "exit": 0,
+  "state": "BOOTSTRAP_REGULAR",
+  "elapsed_seconds": 3.024510663934052
+}

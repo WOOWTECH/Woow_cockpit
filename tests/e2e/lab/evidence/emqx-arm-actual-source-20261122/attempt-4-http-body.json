@@ -1,0 +1,14 @@
+{
+  "source_commit": "2e9e6e2e54ed91ee37e0bd8e1c570aa3eb0fb6e4",
+  "scope": "actual encrypted ARM source Capture with bounded HTTP body context; no target or restore",
+  "exit": 1,
+  "elapsed_seconds": 7.235060597071424,
+  "fixed_phases": [
+    "ARM POSTFLIGHT PASSED"
+  ],
+  "unpublished_stdout_lines": 0,
+  "stderr_bytes_not_published": 0,
+  "stdout_sha256": "454e6b69da271338f2cb3c9c7eeca9b40376c66677218f315b2f64e45a8865d7",
+  "restore_executed": false,
+  "full_scan_performed": false
+}

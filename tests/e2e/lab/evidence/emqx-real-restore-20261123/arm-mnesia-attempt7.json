@@ -1,0 +1,13 @@
+{
+  "source_commit": "aa0ece1524fa1885fb528a36b56f2136d5403798",
+  "scope": "real ARM HA backup internal candidate install and client acceptance Mnesia ACL",
+  "exit": 1,
+  "elapsed_seconds": 368.268,
+  "stdout_sha256": "f7300eb228d6798ebaa31c3db13321961bf646d1727fbe5c7c9ffe79f89c79dd",
+  "fixed_status": [
+    "REAL OWNER OBJECT_INTEGRITY REFUSED",
+    "REAL OWNER POSTFLIGHT PASSED"
+  ],
+  "stderr_bytes_not_published": 0,
+  "commercial_acceptance": "not-complete"
+}

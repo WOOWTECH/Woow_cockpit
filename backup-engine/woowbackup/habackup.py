@@ -94,12 +94,16 @@ BACKUP_JSON = 'backup.json'
 ADDON_JSON = 'addon.json'
 # Files of an add-on's data that hold Home Assistant passwords or tokens: never read, extracted or kept (batch 1:
 # Hermes's generated secrets and the hashes of its applied provider keys, EMQX's Erlang cookie, Headscale's
-# Headplane API key and cookie secret; facts hermes.md, emqx.md, headscale.md section 1).
+# Headplane API key and cookie secret; facts hermes.md, emqx.md, headscale.md section 1; batch 2: code-server's
+# agent logins).
 NEVER_READ = frozenset({'data/options.json', 'data/odoo.conf', 'data/n8n-runners-auth-token',
                         'data/secrets/dashboard_password', 'data/secrets/api_server_key', 'data/secrets/webhook_secret',
                         'data/secrets/basic_auth_secret', 'data/applied/minimax_api_key',
                         'data/applied/openrouter_api_key', 'data/applied/github_token', 'data/emqx/node.cookie',
-                        'data/.headplane_api_key', 'data/.headplane_cookie_secret'})
+                        'data/.headplane_api_key', 'data/.headplane_cookie_secret',
+                        # batch 2, code-server: the agents' logins (facts code-server.md section 1.4, decision D2 a)
+                        'data/pi-agent/auth.json', 'data/pi-agent/mcp-auth.json',
+                        'data/pi-agent/claude/.credentials.json', 'data/pi-agent/codex/auth.json'})
 OUTER_PAX_KEYS = frozenset({'path', 'size', 'mtime', 'atime', 'ctime', 'uid', 'gid', 'uname', 'gname', 'hdrcharset'})
 LEGACY_APPS_FOLDERS = ('apps/local', 'addons/local')
 

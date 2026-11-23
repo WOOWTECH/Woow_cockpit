@@ -1,0 +1,23 @@
+{
+  "source_commit": "38ca281a53e23db77a2541916b9e6c4c6dc1ddce",
+  "scope": "actual encrypted HA ARM/x86 source-only full selected-value registration; registries unsealed without actual target documents",
+  "actual_results": [
+    {
+      "architecture": "aarch64",
+      "exit": 0,
+      "seconds": 80.77425388782285,
+      "evidence": "emqx-arm-actual-source-20261122/attempt-9-sql-aliases.json"
+    },
+    {
+      "architecture": "amd64",
+      "exit": 0,
+      "seconds": 71.20916029205546,
+      "evidence": "emqx-x86-actual-source-20261122/attempt-3-sql-aliases.json"
+    }
+  ],
+  "postflight": "passed for both",
+  "source_broker_started": false,
+  "full_combined_scan": false,
+  "restore_executed": false,
+  "commercial_acceptance": "not-complete"
+}

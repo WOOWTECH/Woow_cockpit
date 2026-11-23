@@ -1,0 +1,19 @@
+{
+  "upstream_commit": "a8319fe2390169e1f2483e3ec80dd01a6cdb233d",
+  "emqx_version": "5.8.9",
+  "hocon_dependency_tag": "0.44.0",
+  "baseline": "1b8f3383e05b2e3e0108c18406404aaabd6b22ae",
+  "files_sha256": {
+    "rebar.config": "64e8ca43054082c37b0242a327533b376110b75f50a867b69e7d0e5a27c549e4",
+    "mix.exs": "94ea8c2f079fed82f7119412b396a687c3f6794c565892cae6960a1267859f58",
+    "apps/emqx_management/src/emqx_mgmt_data_backup.erl": "9b15f060a5c553415493a3c61e88e5b33140e64e3b81183d31e65627e94b63b7",
+    "apps/emqx_auth_mnesia/src/emqx_authn_mnesia.erl": "96f4be5ce86b1f19f8e0774f0ed0dbc74d47f42c265feb36a2c2767620407094",
+    "apps/emqx_auth_mnesia/src/emqx_authn_scram_mnesia.erl": "2785937ceaa2803dbbbaec70e1766eb927ea86874a63ccd8b3e5bcf1cef7a465",
+    "apps/emqx_auth_mnesia/src/emqx_authz_mnesia.erl": "ef3dc2f61931e06dc6e89e7c22c5f94f4450e16bfa73b66f05d8fe8163a2c74f",
+    "apps/emqx_dashboard/include/emqx_dashboard.hrl": "8be1edf8f6c5f40d17b2d1bbfdeb9676927f550e40e1159b869ae7f6e315ebf4",
+    "apps/emqx_management/src/emqx_mgmt_auth.erl": "ee7c91adcc5590078452b3aaaa17572e41d0466e347df203a401c2889c753662"
+  },
+  "real_source_parsed": false,
+  "runtime_or_lab_mutations": false,
+  "consumer_modified": false
+}

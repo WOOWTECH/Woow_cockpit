@@ -1,0 +1,106 @@
+{
+ "lane": "opendesign-import",
+ "date": "2026-11-23",
+ "repo": "R-COCKPIT (WOOWTECH/Woow_cockpit), local only, not pushed",
+ "branch": "feat/ha-import-opendesign-20261123 (from integration/ha-import-batch1-20261123 82ac971; merges lab/batch2-dev-e-20261123)",
+ "owner_decision": "決定2 A: HA -> Podman import for OpenDesign; facts phase3/facts/opendesign.md recommended answers O1-O5 applied",
+ "fixture": {
+  "path": "~/.woowbk-lab/ha-fixtures/20261123-batch2/x86/woow-b2-opendesign-x86-enc/woow-b2-opendesign-x86-enc-20261123.tar",
+  "sha256": "c3d23cedc831d14a221f9be6063c23913fb896f39e882127a52aac7039178dd7",
+  "source": "x86 showcase HA own add-on 1b7b4ce7_woow_ha_opendesign 0.2.15 (OpenDesign 0.24.1), securetar v3 encrypted"
+ },
+ "target": "woowbk-dev-e (network none, no published port): OpenDesign Podman package 4.2.1 (1067bc4), image source-revision 05b23f5a5259d4f2c22e5c6e3eb92ce9103ed34a",
+ "attempts": [
+  {
+   "file": "opendesign-x86-attempt1.json",
+   "source_commit": "d36e498",
+   "exit": 1,
+   "checks": "8/10",
+   "outcome": "refused in preflight: one static 3 GiB need at 14.15 GiB host free would cross the 12 GiB floor; nothing changed on dev-e"
+  },
+  {
+   "file": "opendesign-x86-attempt2.json",
+   "source_commit": "76fc4c1",
+   "exit": 1,
+   "checks": "72/81",
+   "outcome": "whole product flow worked (check, convert, restore, API client with the HA marker, restart, auto and manual rollback, cleanup); found: HA's woow-paseo MCP entry replaced this device's (engine fixed f4a3c16), MCP SSE answers unread and kept-part churn by the app itself (harness fixed), 9 leak hits = the moved path HOME=/app/.od/home (not a credential; HA key, API and MCP tokens 0 hits per name)"
+  },
+  {
+   "file": "opendesign-x86-attempt3.json",
+   "source_commit": "f4a3c16",
+   "exit": 0,
+   "checks": "85/85",
+   "elapsed_seconds": 522.0,
+   "outcome": "PASS"
+  }
+ ],
+ "attempt3_facts": {
+  "check": {
+   "ok": true,
+   "blockers": [],
+   "arch": "amd64",
+   "addon": "0.2.15",
+   "target_version": "0.24.1",
+   "core_revision": "05b23f5a = 05b23f5a",
+   "projects": 12,
+   "conversations": 12,
+   "messages": 22,
+   "routines": 0,
+   "files_moved": 77,
+   "bytes_moved": 11212414,
+   "mcp_servers_moved": 0,
+   "mcp_integration_entries_left_on_ha": 1,
+   "left_out": "home 4600, paseo 1940, integrations 4, installation.json, diagnostics, .backup, od-next-*, export-*, app.sqlite-shm",
+   "warning": "5 out-of-tree symlinks (in the agents' login folder) not moved"
+  },
+  "convert": {
+   "state": "succeeded",
+   "backup_bytes": 1454080,
+   "encrypted": true
+  },
+  "restore": {
+   "state": "succeeded",
+   "health": [
+    "ok"
+   ],
+   "safety_backup": true
+  },
+  "client_after_import_restart_and_auto_rollback": {
+   "api_projects": 12,
+   "marker_project": "woow-import-test-20261123 with its name",
+   "marker_files_sha256_16": {
+    "woow-import-test.txt": "540d9ac26237dbb1",
+    "woow-import-cjk.txt": "f2e0dc84bf608ae9"
+   },
+   "api_conversations": 12,
+   "version": "0.24.1",
+   "anonymous_and_wrong_password": "401",
+   "mcp": "initialize 200, tools/list 15 tools, wrong token 401",
+   "owner": "every data-volume entry 0:0 (daemon user via keep-id)",
+   "kept": "55 stable kept entries byte-identical incl. 7 identity files (agent logins, Omnigent state, Paseo keypair/server-id/cli-client-id/host-registration); MCP volume byte-identical; mcp-config.json = this device's woow-paseo entry only"
+  },
+  "auto_rollback": "one-shot ExecStartPre failure -> rolled-back, HA data still served",
+  "manual_rollback": "the import's safety backup restored: dev-e's own woowbk-lab-baseline project back exactly, HA marker gone",
+  "cleanup": "converted + safety backups deleted, HA store record deleted, no job objects/staging/key files, needle file removed, timer as found",
+  "leaks": "0 hits (HA key, dev-e API token, dev-e MCP token) in engine records, uploads, staging, run dir, device journal; 0 in the private evidence",
+  "isolation": "true none {} before and after; dev-e mutation lock held 520 s"
+ },
+ "unit_and_suites": {
+  "tests/backup/test_ha_opendesign.py": "17/17",
+  "node tests/backup-ui.mjs": "100/100 at c32365d (adds the OpenDesign check-card case; 99/99 at 482dd8c)",
+  "tests/backup full": "1414 run, 17 fail ONLY in test_ha_emqx (10) + test_ha_omnigent (7): pre-existing on the unchanged base (same 14 F + 3 E), their public guards"
+ },
+ "not_covered_or_simulated": [
+  "the browser page itself (dev-e publishes no port; the helper commands are the page's)",
+  "agent provider logins, Omnigent and Paseo pairing are kept from the target by design (O1/O2), not re-paired",
+  "HA's MCP token is never read or imported (O3); its refusal on the target is not tested",
+  "no folder-imported project in the real backup: the metadata_json.baseDir case is only unit-tested (warning, no rewrite)",
+  "the kept parts are copied from a LIVE export (daemon running), not a cold snapshot"
+ ],
+ "open": [
+  "projects.metadata_json.baseDir rewrite /data/opendesign -> /app/.od (needs a new SQLite write in the shared sandbox; today a warning)",
+  "test mode does not pause OpenDesign routines (reminder only)",
+  "commercial acceptance not-complete until main's integrated-version verification"
+ ],
+ "commercial_acceptance": "not-complete"
+}

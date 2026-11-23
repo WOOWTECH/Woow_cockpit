@@ -1,0 +1,9 @@
+{
+  "scope": "actual immutable public image bootstrap CSV schema/row metadata only; no broker/private file contents published",
+  "result": "passed",
+  "header_contract": "plain",
+  "rows_after_header": 0,
+  "all_rows_same_width": true,
+  "bytes": 30,
+  "elapsed_seconds": 2.499863082077354
+}

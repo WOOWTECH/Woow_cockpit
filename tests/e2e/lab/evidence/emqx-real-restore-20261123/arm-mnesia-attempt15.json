@@ -1,0 +1,13 @@
+{
+  "source_commit": "38da4c70b37274bb445aaa942b5869c54e5d298a",
+  "scope": "real ARM HA backup Mnesia ACL decode budget labels plus file-policy contract real restore",
+  "exit": 1,
+  "elapsed_seconds": 721.118,
+  "stdout_sha256": "7fe39fd5df3a162535bd972149d8cf88f24ab4a7e35ec87c3a79b0c6c81cd4d9",
+  "fixed_status": [
+    "REAL OWNER ROLLBACK_POST_CAPTURE_DECODE_ROWS_NODES REFUSED",
+    "REAL OWNER POSTFLIGHT PASSED"
+  ],
+  "stderr_bytes_not_published": 0,
+  "commercial_acceptance": "not-complete"
+}

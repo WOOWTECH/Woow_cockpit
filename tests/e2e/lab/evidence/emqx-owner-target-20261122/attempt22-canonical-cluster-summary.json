@@ -1,0 +1,32 @@
+{
+  "source_commit": "516e4d8660fe8dfd3716aac509122b17385fde9f",
+  "scope": "actual fresh pinned broker canonical cluster/RPC configuration and full observed files; no real source restore",
+  "exit": 1,
+  "elapsed_seconds": 46.735797591973096,
+  "stdout_sha256": "4a2de507f90f69a79660d7373fcce90bdfe4bdaa58063e723196a362e38bffca",
+  "stderr_bytes_not_published": 0,
+  "reports": [
+    {
+      "checks": {
+        "broker_cleanup": "passed",
+        "broker_ready": "passed",
+        "clients_cleanup": "passed",
+        "fresh_ticker_identity_suspended_after": "passed",
+        "fresh_ticker_identity_suspended_before": "passed",
+        "native_fixed_expression_parsed": "passed",
+        "no_clients_after_capture": "passed",
+        "no_clients_before_capture": "passed",
+        "private_files_cleanup": "passed"
+      },
+      "consumer_fixed_reason": "private_refused",
+      "consumer_fixed_stage": "dashboard",
+      "ha_commercial_acceptance": "not-claimed",
+      "native_transport": "passed",
+      "result": "failed",
+      "scope": "synthetic-broker-owner-target",
+      "target_completeness": "not-assessed"
+    }
+  ],
+  "postflight_passed": true,
+  "restore_executed": false
+}

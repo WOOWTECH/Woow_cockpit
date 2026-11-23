@@ -1,0 +1,15 @@
+{
+  "scope": "real ARM source after metadata compatibility; negative only",
+  "source_commit": "1502eb9",
+  "archive_sha256": "b6eb257cc5790bee30500f929d51ade66bfa8354dbe5bb61ba7c4bc08582f664",
+  "target_completeness": "not-assessed",
+  "restore_executed": false,
+  "status": "refused",
+  "fixed_reason": "private-source-native-mnesia-unsupported",
+  "registry_sealed": false,
+  "excluded_files": {
+    "files": 3,
+    "bytes": 117561023
+  },
+  "private_spool_files_after": 0
+}

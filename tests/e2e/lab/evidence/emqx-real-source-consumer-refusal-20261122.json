@@ -1,0 +1,11 @@
+{
+  "scope": "real ARM source consumer refusal/cleanup only; no target acknowledgement or broker",
+  "archive_sha256": "b6eb257cc5790bee30500f929d51ade66bfa8354dbe5bb61ba7c4bc08582f664",
+  "target_snapshots": "generated empty placeholders for negative test only",
+  "restore_executed": false,
+  "raw_exception_exported": false,
+  "status": "refused",
+  "fixed_reason": "private-source-refused",
+  "registry_sealed": false,
+  "private_spool_files_after": 0
+}

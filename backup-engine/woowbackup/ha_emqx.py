@@ -27,6 +27,7 @@ cluster.hocon, data exports and traces; `woow_emqx_log` is only its top folder. 
 the EMQX version it pins (VERSIONS), which must equal the live image's `org.opencontainers.image.version`.
 """
 import io
+import hashlib
 import base64
 import json
 import os
@@ -50,8 +51,11 @@ LOG_TARGET = '/opt/emqx/log'
 WORK = '/work'
 # Add-on version -> the EMQX release its Dockerfile pins (Woow_ha_emqx CHANGELOG.md, Dockerfile EMQX_VERSION).
 VERSIONS = hacommon.VersionTable('EMQX', {'5.8.9': '5.8.9', '5.9.0': '5.8.9', '5.9.1': '5.8.9'})
+# Retainer backend/storage/expiry belong to HA message data. Import them before
+# Mnesia keep_tables; restoring target RAM settings would lose rows at packaging stop.
 DATA_ROOTS = ('authentication', 'authorization', 'rule_engine', 'connectors', 'actions', 'sources', 'bridges',
-              'rewrite', 'auto_subscribe', 'exhook', 'gateway', 'psk_authentication', 'topic_metrics')
+              'rewrite', 'auto_subscribe', 'exhook', 'gateway', 'psk_authentication', 'topic_metrics',
+              'retainer')
 TABLE_SETS = ('builtin_authn', 'builtin_authz', 'banned', 'dashboard_users', 'api_keys', 'psk', 'builtin_retainer')
 TABLES = ('emqx_authn_mnesia', 'emqx_authn_scram_mnesia', 'emqx_acl', 'emqx_banned', 'emqx_banned_rules', 'emqx_admin',
           'emqx_app', 'emqx_psk', 'emqx_retainer_message')
@@ -374,13 +378,16 @@ def take_export(work, tmp, path, staging):
     return dest
 
 
-def target_config_snapshot(volume_tar, snapshot_path, required, *, limit=MAX_HOCON):
+def target_config_snapshot(volume_tar, snapshot_path, required, *, limit=MAX_HOCON, absent=()):
     """Stage named target config/ACL files from a volume export. Callers must enumerate effective references.
 
     This deliberately does not discover HOCON references or merge HA settings: the public import stays blocked until
     those operations and effective read-back are implemented. Missing, duplicate, linked or unsafe paths fail closed.
     """
     names = set(required)
+    absent=set(absent)
+    if absent - {'configs/cluster.hocon'} or absent - names:
+        raise BackupError('incompatible', '不允許略過目標 EMQX 的必要設定參照。')
     if not names or 'configs/cluster.hocon' not in names:
         raise BackupError('incompatible', '缺少目標 EMQX 設定快照所需的檔案清單。')
     for name in names:
@@ -395,6 +402,10 @@ def target_config_snapshot(volume_tar, snapshot_path, required, *, limit=MAX_HOC
                 name = ha_odoo._norm(member.name)
                 if name is None:
                     raise BackupError('incompatible', '目標 EMQX 資料卷含有不安全的路徑。')
+                if name in absent:
+                    raise BackupError('incompatible', 'EMQX 原本不存在的覆寫檔於快照期間出現，已停止。')
+                if any(required.startswith(name + '/') for required in names) and not member.isdir():
+                    raise BackupError('incompatible', 'EMQX 設定檔的上層不是一般目錄，已停止。')
                 if name in names:
                     if name in found or not member.isfile() or member.size < 0:
                         raise BackupError('incompatible', '目標 EMQX 設定檔重複或不是一般檔案。')
@@ -406,7 +417,7 @@ def target_config_snapshot(volume_tar, snapshot_path, required, *, limit=MAX_HOC
                     out.add_member(info, source.extractfile(member))
                     found.add(name)
                 source.members.clear()
-        if found != names:
+        if found != names - absent:
             raise BackupError('incompatible', '目標 EMQX 設定參照的檔案不存在，已停止。')
     except Exception:
         out.close()
@@ -417,16 +428,25 @@ def target_config_snapshot(volume_tar, snapshot_path, required, *, limit=MAX_HOC
     return found
 
 
-def authorization_file_references(authorization, mounts):
+def authorization_file_references(authorization, mounts, *, include_cluster=True, observe=None):
     """Resolve an already-decoded effective authorization object; reject unsupported sources.
 
-    This covers file ACL sources only, not other EMQX configuration roots. Host paths are
-    never read here. Exact existing read-only file mounts may satisfy an external reference.
+    This covers file ACL sources and exact raw builtin database source objects,
+    not other EMQX configuration roots. Host paths are never read here. Exact
+    existing read-only file mounts may satisfy an external reference. Builtin
+    objects are checked without default expansion or unknown-field stripping.
     """
     if not isinstance(authorization, dict) or not isinstance(authorization.get('sources'), list):
         raise BackupError('incompatible', '無法取得目標 EMQX 的有效授權來源。')
-    references = {'configs/cluster.hocon'}
+    references = {'configs/cluster.hocon'} if include_cluster else set()
     for source in authorization['sources']:
+        if type(source) is dict and source.get('type') == 'built_in_database':
+            from .ha_emqx_authorizers import builtin_database_references, builtin_database_shape
+            if observe is not None:
+                observe('target_references_builtin_'+builtin_database_shape(source))
+            references.update(builtin_database_references(source))
+            if observe is not None: observe('target_references')
+            continue
         if not isinstance(source, dict) or source.get('type') != 'file':
             raise BackupError('incompatible', '目標 EMQX 使用尚未支援的授權來源。')
         path = source.get('path')
@@ -446,7 +466,7 @@ def authorization_file_references(authorization, mounts):
     return references
 
 
-def snapshot_target_volume(work, app, volume, staging, required):
+def snapshot_target_volume(work, app, volume, staging, required, *, absent=()):
     """Export the target volume and stage only explicitly enumerated configuration references.
 
     A caller must first establish the complete effective reference list. This helper is not an
@@ -456,7 +476,7 @@ def snapshot_target_volume(work, app, volume, staging, required):
     snapshot = staging / 'emqx-target-config-snapshot.tar'
     try:
         hacommon.live_export(work, app, volume, raw)
-        target_config_snapshot(raw, snapshot, required)
+        target_config_snapshot(raw, snapshot, required, absent=absent)
     finally:
         if raw.exists():
             raw.unlink()
@@ -499,8 +519,13 @@ CONFIG_EXPR = ('io:format("WOOWCFG:~s:END~n", '
                '[base64:encode(emqx_utils_json:encode(emqx:get_raw_config([])))]).')
 
 
-def read_effective_config(execute):
-    """Read merged broker configuration with bounded output; never expose its body in errors."""
+def read_effective_config(execute, *, allow_authz_omission=False, _native_digest=None):
+    """Read merged RAW broker config, not cooked schema-expanded defaults.
+
+    CONFIG_EXPR calls get_raw_config; retain every returned field unchanged so
+    restricted source validators can reject unknown/expanded shapes. Never expose
+    the body in errors.
+    """
     try:
         result = execute(['emqx', 'eval', CONFIG_EXPR])
         body = result.stdout or b''
@@ -509,12 +534,21 @@ def read_effective_config(execute):
         encoded, tail = body[8:].split(b':END', 1)
         if tail.strip() not in (b'', b'ok'):
             raise ValueError()
-        config = util.loads_strict(base64.b64decode(encoded, validate=True), max_bytes=MAX_HOCON)
+        native_json = base64.b64decode(encoded, validate=True)
+        config = util.loads_strict(native_json, max_bytes=MAX_HOCON)
         if not isinstance(config, dict) or not config or not isinstance(config.get('authorization'), dict):
             raise ValueError()
         auth = config['authorization']
-        if auth.get('no_match') not in ('allow', 'deny') or auth.get('deny_action') not in ('ignore', 'disconnect'):
+        if type(allow_authz_omission) is not bool:
             raise ValueError()
+        for key, allowed in (('no_match', ('allow','deny')), ('deny_action', ('ignore','disconnect'))):
+            if key not in auth and allow_authz_omission:
+                continue
+            if auth.get(key) not in allowed:
+                raise ValueError()
+        if _native_digest is not None:
+            if type(_native_digest) is not list or _native_digest: raise ValueError()
+            _native_digest.append(hashlib.sha256(native_json).hexdigest().upper())
         return config
     except (BackupError, ValueError, TypeError, RecursionError):
         raise BackupError('incompatible', '無法安全取得 EMQX 有效設定，已停止。') from None
@@ -644,7 +678,7 @@ def tls_fingerprints(execute, paths):
     return result
 
 
-def configuration_references(config, mounts, secrets=()):
+def configuration_references(config, mounts, secrets=(), *, include_cluster=True, observe=None):
     """Resolve file ACL and explicit TLS file fields in supported configuration roots.
 
     Unknown roots are rejected until their schema/file dependencies have been reviewed.
@@ -657,12 +691,12 @@ def configuration_references(config, mounts, secrets=()):
     if set(config) - SUPPORTED_CONFIGURATION_ROOTS:
         raise BackupError('incompatible', 'EMQX 含有尚未完成檔案參照審查的設定類型。')
     bootstrap_references(config, mounts, secrets)
-    required = authorization_file_references(config['authorization'], mounts)
+    required = authorization_file_references(config['authorization'], mounts, include_cluster=False, observe=observe)
     for key in ('banned', 'api_key'):
         bootstrap_path = config.get(key, {}).get('bootstrap_file')
         if bootstrap_path:
             required.update(authorization_file_references(
-                {'sources': [{'type': 'file', 'path': bootstrap_path}]}, mounts))
+                {'sources': [{'type': 'file', 'path': bootstrap_path}]}, mounts, include_cluster=False))
     def visit(value, depth=0):
         if depth > 32:
             raise BackupError('incompatible', 'EMQX 設定巢狀層級超過限制。')
@@ -672,7 +706,7 @@ def configuration_references(config, mounts, secrets=()):
                     if isinstance(item, str) and item in IMAGE_TLS_FILES:
                         continue
                     required.update(authorization_file_references(
-                        {'sources': [{'type': 'file', 'path': item}]}, mounts))
+                        {'sources': [{'type': 'file', 'path': item}]}, mounts, include_cluster=False))
                 elif key == 'bootstrap_file':
                     if not any(value is entry for entry in config.get('authentication', [])):
                         raise BackupError('incompatible', 'EMQX bootstrap 出現在不支援的設定位置。')
@@ -685,30 +719,68 @@ def configuration_references(config, mounts, secrets=()):
             for item in value:
                 visit(item, depth + 1)
     visit({key: value for key, value in config.items() if key not in ('node', 'cluster', 'log', 'banned', 'api_key')})
-    return required
+    return required | ({'configs/cluster.hocon'} if include_cluster else set())
 
 
-def candidate_from_target(work, app, tmp, target, staging, export, ids, *, hint=''):
-    """Internal candidate entry: live structured read -> validated snapshot -> broker.
+OVERRIDE_STATE_EXPR = ('D=file:read_link_info("/opt/emqx/data/configs"), '
+    'F=file:read_link_info("/opt/emqx/data/configs/cluster.hocon"), '
+    'S=case {D,F} of {{error,enoent},{error,enoent}} -> <<"parent-absent">>; '
+    '{{ok,Dir},{error,enoent}} when element(3,Dir)=:=directory -> <<"absent">>; '
+    '{{ok,Dir},{ok,File}} when element(3,Dir)=:=directory, element(3,File)=:=regular, '
+    'element(9,File)=:=1, element(2,File)=<8388608 -> <<"present">>; _ -> <<"refused">> end, '
+    'io:format("WOOWOVERRIDE:~s:END",[S]).')
 
-    The public convert guard still prevents this candidate from performing a real import.
+
+def target_override_state(execute):
+    """Fixed no-follow metadata proof; never read or invent override contents."""
+    result=execute(['emqx','eval',OVERRIDE_STATE_EXPR])
+    raw=(result.stdout or b'').strip()
+    if result.returncode==0:
+        for state in ('present','absent','parent-absent'):
+            if raw==b'WOOWOVERRIDE:'+state.encode()+b':ENDok':return state
+    raise BackupError('incompatible', '無法驗證 EMQX 原始覆寫設定檔，已停止。')
+
+
+def capture_target_seed(work, app, target, staging):
+    """Exact product target preflight, including explicitly proven absence.
+
+    A missing cluster override is permitted only when no effective dependency
+    references it and no-follow metadata plus COMPLETE volume traversal prove
+    its absence. No empty override file is fabricated. All other files remain
+    mandatory; effective configuration/state are re-read before candidate boot.
     """
+    observe=getattr(work,'_emqx_build_stage',None)
+    def stage(name):
+        if observe is not None:observe(name)
     def execute(command):
         return work.runner(app).podman('exec', target.container, *command, timeout=120,
                                       max_output=MAX_HOCON, check=False)
     if (target.env.get('EMQX_LOG_DIR', LOG_TARGET) != LOG_TARGET or
             target.env.get('EMQX_ETC_DIR', '/opt/emqx/etc') != '/opt/emqx/etc'):
         raise BackupError('incompatible', 'EMQX 自訂日誌目錄尚未支援。')
-    original = read_effective_config(execute)
-    required = configuration_references(original, target.files, target.secrets)
-    fingerprints = tls_fingerprints(execute, image_tls_references(original))
-    snapshot = snapshot_target_volume(work, app, target.data_volume, staging, required)
-    # Reject a moving configuration rather than mixing two generations of files/settings.
-    if read_effective_config(execute) != original:
+    stage('target_config');original=read_effective_config(execute)
+    stage('target_references')
+    explicit=configuration_references(original,target.files,target.secrets,include_cluster=False,observe=observe)
+    state=target_override_state(execute)
+    absent=({'configs/cluster.hocon'} if state in ('absent','parent-absent')
+            and 'configs/cluster.hocon' not in explicit else set())
+    required=explicit | {'configs/cluster.hocon'}
+    stage('target_tls');fingerprints=tls_fingerprints(execute,image_tls_references(original))
+    stage('target_snapshot')
+    snapshot=snapshot_target_volume(work,app,target.data_volume,staging,required,absent=absent)
+    stage('target_consistency')
+    if target_override_state(execute)!=state or read_effective_config(execute)!=original:
         raise BackupError('incompatible', 'EMQX 設定於快照期間改變，已停止。')
-    return target_broker(work, tmp, target, export, ids, hint=hint,
-                         target_snapshot=snapshot, target_config=original, image_fingerprints=fingerprints)
+    return original,snapshot,fingerprints
 
+
+def candidate_from_target(work, app, tmp, target, staging, export, ids, *, hint=''):
+    """Internal candidate; public conversion preservation guard remains enabled."""
+    original,snapshot,fingerprints=capture_target_seed(work,app,target,staging)
+    observe=getattr(work,'_emqx_build_stage',None)
+    if observe is not None:observe('target_runtime')
+    return target_broker(work,tmp,target,export,ids,hint=hint,
+        target_snapshot=snapshot,target_config=original,image_fingerprints=fingerprints)
 
 def candidate_with_effective_acl(work, app, tmp, target, staging, export, ids, authorization, *, hint=''):
     """Stage known file ACL references and seed a candidate; not a complete preservation check.
@@ -754,13 +826,14 @@ def preserved_bootstrap_authn(original, imported):
     return rows
 
 
-def restore_target_settings(tmp, original, read_candidate):
+def restore_target_settings(tmp, original, read_candidate, *, observe=None):
     """Replace changed target setting roots, not merge stale/imported fields into them.
 
     Roots absent on the target cannot be restored by guessing an empty/default value.
     Any such extra operational root remains a failure until removal is implemented.
     """
-    before = read_effective_config(read_candidate)
+    before_digest=[]
+    before = read_effective_config(read_candidate, allow_authz_omission=True,_native_digest=before_digest)
     expected = preserved_settings(original)
     actual = preserved_settings(before)
     if set(actual) - set(expected):
@@ -771,8 +844,25 @@ def restore_target_settings(tmp, original, read_candidate):
         changed['authentication'] = authn
     if set(changed) & ha_emqx_settings.IMMUTABLE_ROOTS:
         raise BackupError('incompatible', 'EMQX 唯讀啟動設定在匯入後改變，已停止。')
-    if changed:
-        snippet = json.dumps(changed, ensure_ascii=True).encode()
+    from .ha_emqx_acl_preservation import (disabled_intermediate, candidate_acl_receipt, refuse,
+        imported_acl_profile_stage, uses_generated_acl_charlist)
+    from .ha_emqx_acl_path_proof import observe_generated_path, verify_generated_path, disable_generated_path
+    if observe is not None:
+        observe('acl_profile')
+        observe(imported_acl_profile_stage(before))
+    path_proof=None
+    original_sources=original['authorization'].get('sources')
+    original_file_only=(type(original_sources) is list and original_sources
+        and all(type(source) is dict and source.get('type')=='file' for source in original_sources))
+    imported_sources=before['authorization'].get('sources')
+    enabled_builtin=(type(imported_sources) is list and any(type(source) is dict
+        and source.get('type')=='built_in_database' and source.get('enable') is True for source in imported_sources))
+    if original_file_only and enabled_builtin and uses_generated_acl_charlist(before):
+        if observe is not None: observe('acl_path_proof')
+        path_proof=observe_generated_path(tmp,before,before_digest[0],observe=observe)
+    intermediate = disabled_intermediate(original, before, observe=observe,path_proof=path_proof)
+    def load_settings(settings):
+        snippet = json.dumps(settings, ensure_ascii=True).encode()
         try:
             written = tmp.exec('emqx-new', ['sh', '-c', f'umask 077; cat > {WORK}/in/target-settings.hocon'],
                                input=snippet, timeout=120, max_output=64 * 1024, check=False)
@@ -784,7 +874,40 @@ def restore_target_settings(tmp, original, read_candidate):
                 raise ValueError()
         except (BackupError, ValueError):
             raise BackupError('incompatible', '無法恢復 EMQX 目標設定，已停止。') from None
-    after = read_effective_config(read_candidate)
+    baseline = None
+    if intermediate is not None:
+        if observe is not None: observe('acl_baseline')
+        baseline = candidate_acl_receipt(tmp)
+        if read_effective_config(read_candidate, allow_authz_omission=True) != before:
+            refuse()
+        if observe is not None: observe('acl_disable')
+        if uses_generated_acl_charlist(before):
+            disable_generated_path(tmp,path_proof,observe=observe)
+        else:
+            load_settings({'authorization': intermediate['authorization']})
+        if observe is not None: observe('acl_afterdisable')
+        if (read_effective_config(read_candidate, allow_authz_omission=True) != intermediate
+                or candidate_acl_receipt(tmp) != baseline
+                or read_effective_config(read_candidate, allow_authz_omission=True) != intermediate):
+            refuse()
+        if path_proof is not None:
+            if observe is not None: observe('acl_path_afterdisable')
+            verify_generated_path(tmp,path_proof,observe=observe)
+    if changed:
+        if intermediate is not None and observe is not None: observe('acl_restore')
+        load_settings(changed)
+    if intermediate is not None and observe is not None: observe('acl_final')
+    after_digest=[]
+    after = read_effective_config(read_candidate,_native_digest=after_digest)
+    if intermediate is not None:
+        final_expected = dict(intermediate)
+        final_expected.update(changed)
+        if (after != final_expected or candidate_acl_receipt(tmp) != baseline
+                or read_effective_config(read_candidate) != final_expected):
+            refuse()
+        if path_proof is not None:
+            if observe is not None: observe('acl_path_final')
+            verify_generated_path(tmp,path_proof,after_digest[0],observe=observe)
     if preserved_settings(after) != expected or (authn is not None and after.get('authentication') != authn):
         raise BackupError('incompatible', 'EMQX 匯入後未能保留目標有效設定，已停止。')
 
@@ -837,7 +960,8 @@ def target_broker(work, tmp, target, export, ids, *, hint='', target_snapshot=No
     if b'imported successfully' not in out:
         raise BackupError('incompatible', 'HA 的 EMQX 資料匯入時發生錯誤（部分資料無法匯入），已停止。' + hint)
     if target_config is not None:
-        restore_target_settings(tmp, target_config, read_candidate)
+        restore_target_settings(tmp, target_config, read_candidate,
+                                observe=getattr(work, '_emqx_build_stage', None))
         if image_fingerprints is not None and tls_fingerprints(read_candidate, image_fingerprints) != image_fingerprints:
             raise BackupError('incompatible', 'EMQX 匯入後憑證與目標不一致，已停止。')
         check_candidate_bootstrap(tmp, target, read_effective_config(read_candidate))
@@ -861,7 +985,7 @@ def target_broker(work, tmp, target, export, ids, *, hint='', target_snapshot=No
     return seeded, counts, strict, authn
 
 
-def check_counts(ha, seeded, counts):
+def check_counts(ha, seeded, counts, *, observe=None):
     """Tables where the import lost or invented rows (HA's rows must all be there, at most plus the seed)."""
     problems = []
     for table in TABLES:
@@ -869,6 +993,8 @@ def check_counts(ha, seeded, counts):
         if theirs < 0:
             continue
         if not theirs <= mine <= theirs + seed:
+            if observe is not None:
+                observe(table, 'underflow' if mine < theirs else 'overflow')
             problems.append(f'{table}（HA {theirs}，匯入後 {mine}）')
     return problems
 
@@ -1019,26 +1145,40 @@ def _build_candidate(work, app, tmp, target, staging, *, version):
 
     Used by the isolated synthetic integration harness and the guarded conversion body.
     """
+    # Internal test-owner diagnostics receive fixed stages only, never source
+    # values or exception text. Ordinary product callers have no observer.
+    observe=getattr(work,'_emqx_build_stage',None)
+    def stage(name):
+        if observe is not None:observe(name)
+    stage('version')
     blocker = VERSIONS.blocker(work.addon_info(SLUG).version, version)
     if blocker:
         raise BackupError('incompatible', blocker, app=app.id)
+    stage('member_pass')
     src = member_pass(work, tmp)
     work.phase('convert')
+    stage('node_name')
     node, blocker = node_name(src)
     if blocker:
         raise BackupError('incompatible', f'EMQX 不能搬過來：{blocker}', app=app.id)
+    stage('source_broker')
     readings = ha_broker(work, tmp, target, src, node, out_dir=staging)
+    stage('source_analysis')
     blockers, _warnings = _source_analysis(src, readings, addon_version=work.addon_info(SLUG).version, version=version)
     if blockers:
         raise BackupError('incompatible', f'EMQX 不能搬過來：{blockers[0]}', app=app.id)
     tmp.stop('emqx-ha', timeout=60)
     tmp.remove('emqx-ha')
+    stage('source_export')
     export = take_export(work, tmp, readings['export'], staging)
     _clean(tmp, volumes=('emqx-src', 'emqx-xfer', 'emqx-ha-log'))
     emqx_ids = tmp.user_ids('ids-emqx', target.image, 'emqx')
+    stage('target_candidate')
     seeded, counts, strict, live_authn = candidate_from_target(
         work, app, tmp, target, staging, export, emqx_ids, hint=hint_for(src.addon))
-    problems = check_counts(readings['counts'], seeded, counts)
+    stage('row_counts')
+    problems = check_counts(readings['counts'], seeded, counts,
+        observe=(lambda table, direction: stage('row_counts_'+table+'_'+direction)) if observe is not None else None)
     if problems:
         raise BackupError('job-failed', f'EMQX 匯入後的資料筆數和 HA 不同，已停止：{"、".join(problems[:10])}。')
     return src, node, readings, export, counts, strict, live_authn

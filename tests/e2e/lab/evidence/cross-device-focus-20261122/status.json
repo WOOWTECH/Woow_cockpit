@@ -38,6 +38,136 @@
       "commercial_acceptance": "not-complete"
     }
   },
+  "integration_20261123": {
+    "as_of": "2026-11-23 21:10 Asia/Taipei",
+    "branch": "integration/ha-import-batch1-20261123 (R-COCKPIT, local only, not pushed, no PR)",
+    "last_merge_commit": "88e7e6b",
+    "merged": [
+      {
+        "lane": "hasqlite fail-closed",
+        "branch": "fix/hasqlite-netns-fail-closed-20261123",
+        "tip": "10fe446",
+        "merge_commit": "7790cf8",
+        "by": "integration-1"
+      },
+      {
+        "lane": "large-archive",
+        "branch": "test/large-archive-final-20261123",
+        "tip": "e415fc4",
+        "merge_commit": "a8b7a04",
+        "by": "integration-1"
+      },
+      {
+        "lane": "odoo-n8n",
+        "branch": "test/odoo-n8n-final-20261123",
+        "tip": "e2515f8",
+        "merge_commit": "1bd5dcc",
+        "by": "integration-1"
+      },
+      {
+        "lane": "services-a",
+        "branch": "test/services-a-final-20261123",
+        "tip": "5ab3249",
+        "merge_commit": "110b881",
+        "by": "integration-1"
+      },
+      {
+        "lane": "R-EMQX real-backup line (EMQX real restores, emqx-gaps)",
+        "branch": "emqx/real-backup-line-20261123 (= R-EMQX feat/ha-import-batch1)",
+        "tip": "ab9e4da",
+        "merge_commit": "90613fc",
+        "by": "integration-2"
+      },
+      {
+        "lane": "odoo mail reminder (owner decision A)",
+        "branch": "feat/odoo-import-mail-reminder-20261123",
+        "tip": "ae5b0d4",
+        "merge_commit": "7c87560",
+        "by": "integration-2"
+      },
+      {
+        "lane": "services-b (LiteLLM real HA backup harness)",
+        "branch": "test/services-b-final-20261123",
+        "tip": "cde33c2",
+        "merge_commit": "d812699",
+        "by": "integration-2"
+      },
+      {
+        "lane": "hermes-real",
+        "branch": "test/hermes-real-20261123",
+        "tip": "e52ffd5",
+        "merge_commit": "1072954",
+        "by": "integration-3"
+      },
+      {
+        "lane": "services-a-2 (Headscale full product flow)",
+        "branch": "test/services-a2-20261123",
+        "tip": "1214226",
+        "merge_commit": "315ec8b",
+        "by": "integration-3"
+      },
+      {
+        "lane": "opendesign-import",
+        "branch": "feat/ha-import-opendesign-20261123",
+        "tip": "13c83f3",
+        "merge_commit": "ae5420d",
+        "by": "integration-3"
+      },
+      {
+        "lane": "codeserver-import",
+        "branch": "feat/ha-import-code-server-20261123",
+        "tip": "f20ac84",
+        "merge_commit": "88e7e6b",
+        "by": "integration-3"
+      }
+    ],
+    "open": [
+      {
+        "item": "omnigent-product (owner decision 1: SECURITY_BLOCKER removed with the enforced product path)",
+        "reason": "security review SR-OWNER-1942 still running; lane not done; not merged, so the public Omnigent guard is still on in this branch"
+      },
+      {
+        "item": "litellm-product (owner decision 1: LiteLLM into haimport.APPS with the product path)",
+        "reason": "security review found SR-1..SR-5 (fixes on review/litellm-secreview-20261123); the lane must merge them and rerun its real flow; not merged"
+      },
+      {
+        "item": "emqx-product (owner decision 1: PRESERVATION_BLOCKER removed with the enforced protections)",
+        "reason": "security review found SR-1..SR-7 (fixes on the lane branch); lane not done; not merged, so the public EMQX guard is still on in this branch"
+      },
+      {
+        "item": "nextcloud-import",
+        "reason": "waiting for dev-e Nextcloud (batch2-lab) and the share-including HA backup; not merged"
+      },
+      {
+        "item": "showcase-nc-share evidence",
+        "reason": "waiting (share backup download); evidence branch not final; not merged"
+      },
+      {
+        "item": "lab/batch2-dev-e-20261123",
+        "reason": "contained up to 2b85b92 (via the code-server merge); later dev-e records (3cc1286..d8b9e92) not merged yet"
+      },
+      {
+        "item": "arm54-2 (test/arm54-final-20261123)",
+        "reason": "by design not merged here: the main session squash-merges it at the end (its early commits contain a test password literal); it edits this status.json from the end of final_version on"
+      },
+      {
+        "item": "final real re-verification of the integrated version",
+        "reason": "not run by the integration lanes after these merges (separate final step; dev-c stopped since 16:55)"
+      },
+      {
+        "item": "Hermes security review wording",
+        "reason": "8b47124's message records an owner-authorized independent FTS5 review; the lane rules still list the human Hermes review as manual; main/owner to settle"
+      },
+      {
+        "item": "commercial acceptance",
+        "reason": "owner; every lab result here stays not-complete"
+      }
+    ],
+    "public_guards_on_this_branch": "EMQX PRESERVATION_BLOCKER on, Omnigent SECURITY_BLOCKER on, LiteLLM not in haimport.APPS (they change only with the product-lane merges under owner decision 1)",
+    "unit_tests_latest": "integration-3 at ae5420d (3 merges): tests/backup 1471 = 1458 ok, 1 skipped, 12 not-ok (test_ha_omnigent 7 = SECURITY_BLOCKER, test_litellm_lab_runner 5 = guard false positive, 6/6 with --exe-only); RealBackupTests with the 20261118 backups 1/1; backup-ui 100/100; tests/e2e/lab 1090 started, 1043 ok, the same 73 not-ok records as integration-2 (run_native refused, 2 stale persisted_values). After the code-server merge 88e7e6b: affected tests/backup modules 167 run, 0 not-ok (real batch-1 backups on); full page suite rerun pending (void run under host load 53). Evidence: tests/e2e/lab/evidence/integration-20261123/unit-tests-step3.json.",
+    "evidence": "tests/e2e/lab/evidence/integration-20261123/README.md (integration-1/2/3 sections), unit-tests.json, unit-tests-step2.json, unit-tests-step3.json",
+    "commercial_acceptance": "not-complete"
+  },
   "final_version": {
     "worker": "01a200bc-fdfc-7813-b6d3-10d8413281a7",
     "status": "32/32 focused local private dispatch methods passed; final source bindings independently audited; ARM lifecycle six checks across initial and completion attempts",

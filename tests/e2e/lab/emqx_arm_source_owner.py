@@ -1,0 +1,182 @@
+"""Private fixed ARM/x86 source subcases; no lab entry, target docs or evidence stdout.
+
+The authorized controller supplies the existing owner frame after stripping its
+code/dependency bootstrap: uint32 key length, ASCII key, uint64 ciphertext size,
+exact ciphertext, EOF. No paths/key/SHA overrides are accepted through argv/env.
+Exit zero means source-only registration and cleanup, NEVER full scan/restore.
+"""
+import os
+from pathlib import Path
+import signal
+import socket
+import stat
+import struct
+import sys
+import tempfile
+import hashlib
+
+from emqx_owner_source_capture import capture_owner_source
+from emqx_private_boundary import PrivateFailure, SourcePhaseFailure, fixed_source_phase
+from emqx_source_profiles import SOURCE_MODES, source_profile
+from emqx_native_runtime import IMAGE
+
+MAX_ARCHIVE = 512 * 1024 * 1024
+
+
+def _exact(stream, size):
+    pieces = []
+    while size:
+        chunk = stream.read(min(size, 65536))
+        if type(chunk) is not bytes or not chunk or len(chunk) > size:
+            raise ValueError()
+        pieces.append(chunk)
+        size -= len(chunk)
+    return b''.join(pieces)
+
+
+def validate_source_capture(captured, binding, profile):
+    """Fixed profile receipt/architecture checks; never target completeness."""
+    stage = 'RECEIPT'
+    try:
+        receipt = captured.cold_receipt
+        if (type(receipt) is not dict
+                or set(receipt) != {'scope', 'files', 'bytes', 'final_state'}
+                or receipt['scope'] != 'historical-values-only'
+                or receipt['final_state'] is not False
+                or type(receipt['files']) is not int or not 1 <= receipt['files'] <= 64
+                or type(receipt['bytes']) is not int
+                or not receipt['files'] <= receipt['bytes'] <= min(32*1024**2, receipt['files']*8388608)):
+            raise ValueError()
+        if (profile.cold_receipt is not None
+                and (receipt['files'], receipt['bytes']) != profile.cold_receipt):
+            raise ValueError()
+        stage = 'ARCH'
+        if binding['addon_info']('woow-emqx').arch != profile.arch:
+            raise ValueError()
+    except Exception:
+        raise SourcePhaseFailure('private-source-profile-refused', stage) from None
+
+
+def consume_source_frame(stream, *, staging_parent, mode='--source'):
+    """Actual framed transfer -> authenticated Capture; return static scope only.
+
+    Trusted in-process owner callable. CLI additionally checks its dev-d realm.
+    No public diagnostics, source values, keys, bindings or replay escape. The
+    receipt is returned only AFTER all private staging/spool cleanup completes.
+    Target categories are not acknowledged, and the registry must be unsealed.
+    """
+    stage = 'FRAME_PROFILE'
+    try:
+        profile = source_profile(mode)
+        stage = 'FRAME_KEY'
+        key_size = struct.unpack('!I', _exact(stream, 4))[0]
+        if not 1 <= key_size <= 1024:
+            raise ValueError()
+        password = _exact(stream, key_size).decode('ascii')
+        if not password or '\n' in password or '\r' in password:
+            raise ValueError()
+        stage = 'FRAME_ARCHIVE'
+        size = struct.unpack('!Q', _exact(stream, 8))[0]
+        if not 0 < size <= MAX_ARCHIVE:
+            raise ValueError()
+        with tempfile.TemporaryDirectory(prefix='woowbk-arm-cold-private-source-',
+                                         dir=staging_parent) as directory:
+            root = Path(directory)
+            root.chmod(0o700)
+            source = root / 'encrypted-source.tar'
+            fd = os.open(source, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+            digest = hashlib.sha256()
+            with os.fdopen(fd, 'wb') as output:
+                info = os.fstat(output.fileno())
+                if info.st_uid != os.geteuid() or stat.S_IMODE(info.st_mode) != 0o600:
+                    raise ValueError()
+                left = size
+                while left:
+                    chunk = _exact(stream, min(left, 65536))
+                    output.write(chunk)
+                    digest.update(chunk)
+                    left -= len(chunk)
+                output.flush()
+                os.fsync(output.fileno())
+            stage = 'FRAME_DIGEST'
+            if stream.read(1) != b'' or digest.hexdigest() != profile.sha256:
+                raise ValueError()
+            stage = 'CAPTURE'
+            with capture_owner_source(source, password=password,
+                    expected_sha256=profile.sha256, spool_directory=root,
+                    fixture_profile=profile.fixture_profile,
+                    file_dependency_profile=profile.file_dependency_profile,
+                    product_image=IMAGE if profile.file_dependency_profile is not None else None) as (captured, binding):
+                stage = 'RECEIPT'
+                receipt = captured.cold_receipt
+                if (type(receipt) is not dict
+                        or set(receipt) != {'scope', 'files', 'bytes', 'final_state'}
+                        or receipt['scope'] != 'historical-values-only'
+                        or receipt['final_state'] is not False
+                        or type(receipt['files']) is not int or not 1 <= receipt['files'] <= 64
+                        or type(receipt['bytes']) is not int
+                        or not receipt['files'] <= receipt['bytes'] <= min(32*1024**2, receipt['files']*8388608)):
+                    raise ValueError()
+                if (profile.cold_receipt is not None
+                        and (receipt['files'], receipt['bytes']) != profile.cold_receipt):
+                    raise ValueError()
+                stage = 'ARCH'
+                if binding['addon_info']('woow-emqx').arch != profile.arch:
+                    raise ValueError()
+                stage = 'UNSEALED'
+                try:
+                    captured.registry.summary()
+                except PrivateFailure as failure:
+                    if str(failure) != 'private-registration-incomplete':
+                        raise ValueError() from None
+                else:
+                    raise ValueError()  # Unexpectedly sealed is not source-only.
+                stage = 'CLEANUP'
+        return {'scope': 'source-only-registration', 'registry': 'unsealed',
+                'source_completeness': 'not-assessed',
+                'target_completeness': 'not-assessed',
+                'full_scan': 'not-performed', 'restore': 'not-performed'}
+    except (KeyboardInterrupt, SystemExit):
+        raise SourcePhaseFailure('private-source-frame-cancelled', stage) from None
+    except SourcePhaseFailure as error:
+        raise SourcePhaseFailure('private-source-frame-refused', error.phase if stage in ('CAPTURE','CLEANUP') else stage) from None
+    except Exception:
+        raise SourcePhaseFailure('private-source-frame-refused', stage) from None
+
+
+def _owner_realm():
+    return socket.gethostname() == 'woowbk-dev-d' and os.geteuid() != 0
+
+
+def main(argv=None):
+    args = sys.argv[1:] if argv is None else argv
+    diagnostic = len(args) == 2 and args[1] == '--diagnose'
+    if diagnostic:
+        args = args[:1]
+    if len(args) != 1 or args[0] not in SOURCE_MODES:
+        return 2
+    if not _owner_realm():
+        if diagnostic:
+            print('SOURCE REALM REFUSED', flush=True)
+        return 1
+    def deadline(*_):
+        raise RuntimeError('private-source-deadline')
+    previous = signal.signal(signal.SIGALRM, deadline)
+    try:
+        signal.setitimer(signal.ITIMER_REAL, 180)
+        consume_source_frame(sys.stdin.buffer, staging_parent=Path.home(), mode=args[0])
+        if diagnostic:
+            print('SOURCE COMPLETE PASSED', flush=True)
+        return 0
+    except BaseException as error:
+        if diagnostic:
+            phase = fixed_source_phase(getattr(error, 'phase', None))
+            print('SOURCE ' + phase + ' REFUSED', flush=True)
+        return 1
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, 0)
+        signal.signal(signal.SIGALRM, previous)
+
+
+if __name__ == '__main__':
+    raise SystemExit(main())

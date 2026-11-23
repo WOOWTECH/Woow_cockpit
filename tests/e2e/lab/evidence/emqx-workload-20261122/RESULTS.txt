@@ -1,0 +1,61 @@
+Actual synthetic-broker MQTT workload acceptance, not HA/source acceptance.
+Source: ee5e7fbc53f1438bc05a218561c0242ee4b65c74.
+Command: tests/e2e/lab/run_emqx_broker_workload.sh.
+Evidence: mqtt-attempt-1.jsonl, PASS, 14 new workload checks true.
+No rerun of previously accepted runtime login 12-check suite.
+
+EMQX image sha256:3f60addfad2bfc6c09400aa48cfbc1b2b2aab04fb6a64d6392c016e02d7fb57b.
+Mosquitto client image sha256:93a0bdfcbd9b7a86b36127cb81f54e1afd2019f12f39033458df405a027c03e3.
+Actual client help reported mosquitto_pub/libmosquitto 2.0.22.
+Broker configured with built-in database auth (sha256/suffix), one freshly
+generated non-superuser, file ACL allowing only allowed/#, no_match deny.
+Both client default configs are fresh 0600 files in a 0700 temporary directory;
+credentials travel in mounted files, not argv/environment. Default config format
+reference: https://mosquitto.org/man/mosquitto_pub-1.html (the separate -o option
+is 2.1+, so this 2.0.22 driver uses XDG_CONFIG_HOME/mosquitto_pub or mosquitto_sub).
+Only fixed summaries are retained; raw client debug/packet output stays in memory.
+PartialScan covers generated username/password and their raw/base64/hex/percent/
+JSON escaped forms in the identical emitted summary bytes. This is partial-producer
+scanning, does NOT expose full registry/source coverage and is not a replacement
+for the sealed source/target registry workflow.
+
+Before AND after actual podman restart of the SAME synthetic broker:
+- QoS1 MQTTv5 publish allowed, PUBACK reason 0 or 16 required.
+- Subscribe on allowed topic returns exact synthetic retained marker.
+- Denied publish: explicit PUBACK reason 135 (not inferred from timeout).
+- Denied subscription: explicit SUBACK rejection 135.
+- Retained message published before restart was received after restart before
+  republishing. Retainer disc storage survived the same container's restart.
+14 checks include new workload, readiness and cleanup; not 14 independent runs.
+
+Outer dev-d network none / ports {} confirmed before and after run; 4 GiB,
+2 CPUs, memory.current 2296680448 at preflight. Dedicated broker network none,
+768 MiB / 0.75 CPU / 256 pids, log-driver none, image-volume ignore. No volume
+mounts allowed. Clients join only that broker's network namespace, 64 MiB /
+0.25 CPU / 32 pids, log-driver none, image-volume ignore, pull never. Actual
+operations only through owner.sh and lab wrapper. Wrapper holds dev-d mutation
+and prior Headscale locks; preexisting Headscale autonomous restarts remain a
+possible resource disturbance, never stopped by this run.
+
+All broker/client containers removed with --volumes; no implicit volumes created.
+Private configs and code directories deleted. postflight.json independently
+confirms no workload containers, private workload dirs or staged code dirs.
+No production Podman, original secrets, source archive or restore was accessed.
+Public guards and Mnesia source admission unchanged. No TLS, replacement-container
+persistence, HA restore, source completeness or commercial acceptance claimed.
+No failed MQTT attempts occurred in this segment. git diff --check passed.
+
+Checkpoint next-step handoff for main agent / Mencius:
+Observed native worktree /tmp/emqx-native-adapter-20261122 at 7e89816 with
+uncommitted emqx_mnesia_checkpoint.erl/export.escript/fixture.escript and helpers.
+No changing exporter file was copied or executed. Need immutable exporter commit.
+Planned smallest live integration is a single emqx_authn_mnesia table on a NEW
+synthetic broker: activate owner-controlled local checkpoint, backup checkpoint,
+deactivate in finally, read-only native traverse, bind semantic JSON to exact
+checkpoint SHA/length/schema and register all extracted values before summaries.
+Compare table fingerprint before/after to establish no row mutation. Private
+checkpoint/JSON must be deleted and tooling containers log-none/volume-ignore.
+This does not authorize cold DAT decoding or assert all source tables covered.
+Original cold DAT source gate remains refused; no real HA restore until complete
+secret coverage exists. This session has no agent send_input tool, so coordination
+handoff is through main agent/user thread. Sole dev-d operator remains this owner.

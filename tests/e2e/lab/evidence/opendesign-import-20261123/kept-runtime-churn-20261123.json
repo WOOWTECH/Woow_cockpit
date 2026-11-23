@@ -1,0 +1,73 @@
+{
+ "what": "kept entries of dev-e OpenDesign (home/, integrations/, paseo/, installation.json) that the app rewrites itself with NO import: 60 s idle, then systemctl --user restart open-design.service; entry names only",
+ "device": "woowbk-dev-e",
+ "measured": "2026-11-23T17:40:43+0800",
+ "script": "scratchpad opendesign/churn.py (tests/e2e/lab/opendesign_full_flow.py COMMON walk)",
+ "entries": 84,
+ "idle_60s": {
+  "removed": [
+   "home/.codex/tmp/arg0/codex-arg0eJo2au",
+   "home/.codex/tmp/arg0/codex-arg0eJo2au/.lock",
+   "home/.codex/tmp/arg0/codex-arg0eJo2au/apply_patch",
+   "home/.codex/tmp/arg0/codex-arg0eJo2au/applypatch",
+   "home/.codex/tmp/arg0/codex-arg0eJo2au/codex-execve-wrapper",
+   "home/.codex/tmp/arg0/codex-arg0eJo2au/codex-linux-sandbox",
+   "paseo/bridge-lifecycle.lock",
+   "paseo/bridge-lifecycle.lock/owner.json"
+  ],
+  "added": [
+   "home/.codex/tmp/arg0/codex-arg0ghiOwN",
+   "home/.codex/tmp/arg0/codex-arg0ghiOwN/.lock",
+   "home/.codex/tmp/arg0/codex-arg0ghiOwN/apply_patch",
+   "home/.codex/tmp/arg0/codex-arg0ghiOwN/applypatch",
+   "home/.codex/tmp/arg0/codex-arg0ghiOwN/codex-execve-wrapper",
+   "home/.codex/tmp/arg0/codex-arg0ghiOwN/codex-linux-sandbox"
+  ],
+  "changed": [
+   "paseo/daemon/daemon.log"
+  ]
+ },
+ "restart": {
+  "removed": [
+   "home/.codex/tmp/arg0/codex-arg0ghiOwN",
+   "home/.codex/tmp/arg0/codex-arg0ghiOwN/.lock",
+   "home/.codex/tmp/arg0/codex-arg0ghiOwN/apply_patch",
+   "home/.codex/tmp/arg0/codex-arg0ghiOwN/applypatch",
+   "home/.codex/tmp/arg0/codex-arg0ghiOwN/codex-execve-wrapper",
+   "home/.codex/tmp/arg0/codex-arg0ghiOwN/codex-linux-sandbox",
+   "paseo/daemon/local-credential"
+  ],
+  "added": [
+   "home/.codex/tmp/arg0/codex-arg0ikCRFh",
+   "home/.codex/tmp/arg0/codex-arg0ikCRFh/.lock",
+   "home/.codex/tmp/arg0/codex-arg0ikCRFh/apply_patch",
+   "home/.codex/tmp/arg0/codex-arg0ikCRFh/applypatch",
+   "home/.codex/tmp/arg0/codex-arg0ikCRFh/codex-execve-wrapper",
+   "home/.codex/tmp/arg0/codex-arg0ikCRFh/codex-linux-sandbox",
+   "paseo/bridge-lifecycle.lock",
+   "paseo/bridge-lifecycle.lock/owner.json",
+   "paseo/runtime.lock"
+  ],
+  "changed": [
+   "home/.local/share/opencode/log/opencode.log",
+   "home/.local/share/opencode/opencode.db",
+   "home/.local/share/opencode/opencode.db-shm",
+   "home/.local/share/opencode/opencode.db-wal",
+   "home/.local/state/opencode/locks/c94cf2600fd640fa46003d8e64fe85848c04d9f7.lock/meta.json",
+   "home/.local/state/opencode/locks/ec591be17fe7af4b2a5afd6b806b8d1449815ca6.lock/meta.json",
+   "paseo/bridge.json",
+   "paseo/daemon/daemon.log",
+   "paseo/daemon/paseo.pid",
+   "paseo/host-mcp.json",
+   "paseo/state.json",
+   "paseo/supervisor.json"
+  ]
+ },
+ "restart_rc": 0,
+ "states": [
+  "active",
+  "active",
+  "active",
+  "active"
+ ]
+}

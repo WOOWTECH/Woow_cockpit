@@ -1,0 +1,26 @@
+{
+  "scope": "public pinned native builtin registration; no private source values",
+  "image_id": "sha256:3f60addfad2bfc6c09400aa48cfbc1b2b2aab04fb6a64d6392c016e02d7fb57b",
+  "emqx_version": "5.8.9",
+  "module": "mnesia_rocksdb",
+  "public_abstract_source_sha256": "8d574ddf082aabc31cff0ba8ade64529cc6e9bc1b31e8756c3e7b4bb0400fe44",
+  "public_register_and_default_alias": "register() ->\n    register(default_alias()).\nregister(Alias) ->\n    Module = mnesia_rocksdb,\n    case mnesia:add_backend_type(Alias, Module) of\n        {atomic, ok} ->\n            {ok, Alias};\n        {aborted, {backend_type_already_exists, _}} ->\n            {ok, Alias};\n        {aborted, Reason} ->\n            {error, Reason}\n    end.\ndefault_alias() ->\n    rocksdb_copies.\n",
+  "backend_executed": false,
+  "unknown_registrations": "refused",
+  "external_copies": "refused",
+  "index_plugins": "refused",
+  "duplicate_user_properties": "refused",
+  "exact_allowed_registrations": [
+    [
+      "rocksdb_copies",
+      "mnesia_rocksdb"
+    ],
+    [
+      "null_copies",
+      "mria_mnesia_null_storage"
+    ]
+  ],
+  "null_backend_public_bytecode_sha256": "0d23eee8054bc343638677e18ad7ef8c9e303f685c25c68a6f236eabb5cabfa8",
+  "null_backend_public_default_registration": "register/0 moves atom null_copies then calls register/1; register/1 calls mnesia:add_backend_type(null_copies,mria_mnesia_null_storage); init_backend/0 and add_aliases/1 return ok",
+  "allowed_sets": "unique subsets of the two exact builtin pairs; no other aliases/providers"
+}

@@ -1,0 +1,13 @@
+{
+  "source_commit": "862aacb85805d292e9918a06541b59558364e47c",
+  "scope": "real ARM integrated native path and native object proof after guarded budget recovery",
+  "exit": 1,
+  "elapsed_seconds": 244.32191148609854,
+  "stdout_sha256": "8f30a012b48482ede3cd162af961ea21cd1c3fc527d6e770f6263596c0f8e420",
+  "fixed_status": [
+    "REAL OWNER BUILD_PRODUCT_ACL_PROFILE_FILE_PATH_IMPORTED_LIST_ASCII_TRUE_PRODUCT REFUSED",
+    "REAL OWNER POSTFLIGHT PASSED"
+  ],
+  "stderr_bytes_not_published": 0,
+  "commercial_acceptance": "not-complete"
+}

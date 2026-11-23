@@ -1,0 +1,16 @@
+{
+  "source_commit": "265a4521a1ef6cb6c200b7235fe473c57c0f1213",
+  "scope": "real ARM fixed public root substitution classification; no cold traversal or broker",
+  "exit": 1,
+  "elapsed_seconds": 11.797359145013615,
+  "fixed_phases": [
+    "ARM TRANSFER PASSED",
+    "ARM SELECT PASSED",
+    "ARM VENDOR_SCALAR_SUBSTITUTION REFUSED",
+    "ARM POSTFLIGHT PASSED"
+  ],
+  "unpublished_stdout_lines": 0,
+  "stderr_bytes_not_published": 0,
+  "stdout_sha256": "3969f5727a1bacaf05c17f7ca468c2ff5b9ba10098c85251547eea3ae854acbb",
+  "restore_executed": false
+}

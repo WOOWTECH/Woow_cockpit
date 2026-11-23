@@ -1,0 +1,20 @@
+{
+  "baseline_commit": "9642f57",
+  "scope": "generated owner producer-to-consumer dependency regression; not real broker",
+  "baseline_run": 1,
+  "baseline_subcase_failures": 2,
+  "baseline_errors": 0,
+  "baseline_actual": "PrivateFailure not raised for explicit and implicit unobserved file authorizers",
+  "false_positive_pattern_removed": "self.fail inside contexts that convert arbitrary exceptions into PrivateFailure",
+  "fix": "unsupported target type=file refused including omitted path; default/source vendor ACL profile is separate",
+  "commercial_acceptance_complete": false,
+  "fixed_commit": "668d11249f1096930cb1f37757c3e9d08d46c925",
+  "corrected_negative_regressions": {
+    "run": 37,
+    "passed": 37,
+    "failed": 0,
+    "errors": 0,
+    "skipped": 0,
+    "scope": "generated consumer/file-system boundaries; includes inherited baseline tests"
+  }
+}

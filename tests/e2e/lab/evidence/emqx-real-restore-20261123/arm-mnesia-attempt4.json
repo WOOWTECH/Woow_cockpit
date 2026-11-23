@@ -1,0 +1,13 @@
+{
+  "source_commit": "730073a7f3365c31aba3b478bca4baba9e0702c0",
+  "scope": "real ARM Mnesia ACL full product restore with fixed per-client MQTT protocol diagnostics",
+  "exit": 1,
+  "elapsed_seconds": 301.418518217979,
+  "stdout_sha256": "1bf3956957f9c37942d7db048f713317fbd6cd4a74ae16642ef9647a946723c7",
+  "fixed_status": [
+    "REAL OWNER MQTT_RETAINED_ONE_EXIT_27 REFUSED",
+    "REAL OWNER POSTFLIGHT PASSED"
+  ],
+  "stderr_bytes_not_published": 0,
+  "commercial_acceptance": "not-complete"
+}

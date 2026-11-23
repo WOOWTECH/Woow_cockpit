@@ -1,0 +1,16 @@
+{
+  "source_commit": "a1ea05f62b5753e5bba2eab4c67e7d972fb0e25b",
+  "scope": "real ARM addon metadata and native HOCON after semantic-depth fix; no broker",
+  "exit": 1,
+  "elapsed_seconds": 5.916659207083285,
+  "fixed_phases": [
+    "ARM TRANSFER PASSED",
+    "ARM SELECT PASSED",
+    "ARM HOCON_CONTRACT REFUSED",
+    "ARM POSTFLIGHT PASSED"
+  ],
+  "unpublished_stdout_lines": 0,
+  "stderr_bytes_not_published": 0,
+  "stdout_sha256": "031901f2f56f053f1916a669f4726b4224cb4a20b3e1508761ab4142fbcd51ba",
+  "restore_executed": false
+}

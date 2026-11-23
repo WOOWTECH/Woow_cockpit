@@ -36,7 +36,8 @@
   "harness": "tests/e2e/lab/omnigent_real_ha.py --run --arch <x86|arm> --outer-isolation-confirmed",
   "passed": {
    "x86": "omnigent-x86-attempt4.json (exit 0)",
-   "arm": "omnigent-arm-attempt1.json (exit 0)"
+   "arm": "omnigent-arm-attempt1.json (exit 0)",
+   "x86_integrated_code": "omnigent-x86-attempt5.json (exit 0, services-a-2, source 0cc2289 = integration/ha-import-batch1-20261123 82ac971 + isolation/clean-tree guards)"
   },
   "failed_attempts_kept": [
    "omnigent-x86-attempt1.json (harness read PaginatedList wrong)",
@@ -60,10 +61,82 @@
    "engine on the host through the owner.sh bridge; /v1/info via podman exec into the running server",
    "throwaway PostgreSQL capped at 512 MiB in the lab",
    "the Omnigent public import guard remains a product decision (not removed)"
+  ],
+  "harness_guards": [
+   "refuses any change outside the evidence folders (source event clean_tree, changed_paths)",
+   "owner.sh d --verify-isolation right after the lock and again in a finally after the inventory check (fixed line + isolation event when=before/after)",
+   "dev-d lock through dev_d_guard.py: blocking like flock -w, yields to emqx-main's waiting file"
   ]
  },
  "manual_or_owner_items": [
   "Hermes independent FTS/SQLite review stays a manual human item (not part of this lane)",
   "Removing the Omnigent public SECURITY_BLOCKER is an owner/product decision; these runs used only the internal candidate entry"
- ]
+ ],
+ "services_a_2": {
+  "omnigent": {
+   "attempt": "omnigent-x86-attempt5.json",
+   "exit": 0,
+   "elapsed_seconds": 673.7,
+   "lock_seconds": 672,
+   "isolation_before_after": "true none {} / true none {}",
+   "clean_tree": true,
+   "commercial_acceptance": "not-complete"
+  },
+  "headscale_full_flow": {
+   "harness": "tests/e2e/lab/headscale_full_flow.py --run --arch <x86|arm>",
+   "target": "dev-d's installed WOOWTECH Podman Headscale package units (headscale, headplane, headscale-entrance), server_url http://localhost:28080",
+   "flow": "helper commands as the Cockpit page: inspect (baseline+kit) -> catalog-install -> key-init -> upload-begin/finish -> ha-check-start -> ha-convert-start -> inspect -> restore-start -> restart -> injected restore (rolled-back) -> restore safety backup -> delete/catalog-remove",
+   "attempts": {
+    "headscale-fullflow-arm-attempt1.json": {
+     "source_commit": "cb21c08",
+     "exit": 0,
+     "elapsed_seconds": 1703.9,
+     "summary": "headscale full flow arm: 101/101 PASS"
+    },
+    "headscale-fullflow-x86-attempt1.json": {
+     "source_commit": "1b174e4",
+     "exit": 1,
+     "elapsed_seconds": 25.8,
+     "summary": "headscale full flow x86: 7/8 FAIL"
+    },
+    "headscale-fullflow-x86-attempt2.json": {
+     "source_commit": "b9fc697",
+     "exit": 1,
+     "elapsed_seconds": 2976.7,
+     "summary": "headscale full flow x86: 86/95 FAIL"
+    },
+    "headscale-fullflow-x86-attempt3.json": {
+     "source_commit": "883f157",
+     "exit": 0,
+     "elapsed_seconds": 1470.4,
+     "summary": "headscale full flow x86: 96/96 PASS"
+    }
+   },
+   "lab_precondition": "dev-d config.yaml derp block -> embedded region 999 for the run only (empty DERP map since 11-20 = 'initial DERPMap is empty' crash loop, hscontrol/app.go:656); original written back, sha256 equal",
+   "commercial_acceptance": "not-complete",
+   "passed": {
+    "arm": "headscale-fullflow-arm-attempt1.json (exit 0, 101/101)",
+    "x86": "headscale-fullflow-x86-attempt3.json (exit 0, 96/96)"
+   },
+   "finding_for_owner": "found-state ha-check answers ok/0 blockers on a crash-looping Headscale (adapter probe checks files/load/mask only); restore health checks + automatic rollback stop such an import",
+   "proved_arm": [
+    "real RPi5-made tailscale client re-pointed to http://localhost:28080 without auth key: same node id 2, node key, addresses, no new node",
+    "new device with HA reusable pre-auth key, 10/10 DERP(lab) pongs",
+    "restart and injected rolled-back restore with clients back by themselves",
+    "safety-backup rollback equals dev-d state before import",
+    "cleanup + leak scan 0 hits"
+   ],
+   "proved_x86": [
+    "same flow; two new devices with HA x86 reusable key, 10/10 DERP(lab) pongs, back after restart and automatic rollback",
+    "safety-backup rollback equals dev-d state before import",
+    "cleanup + leak scan 0 hits"
+   ]
+  },
+  "side_effects": [
+   "engine of this tree stays installed in dev-d (engine files identical to integration 82ac971)",
+   "scheduled-backup timer stays masked",
+   "product SAFETY_KEEP=3 pruning deleted 11-19 Headscale safety backups 4343b4b5, 8b0f572d, 61dd9816 (earlier b1 test artifacts); all four dev-d baselines remain",
+   "one throwaway tailscale-version container ran while my own attempt 2 held the lock (removed at once)"
+  ]
+ }
 }

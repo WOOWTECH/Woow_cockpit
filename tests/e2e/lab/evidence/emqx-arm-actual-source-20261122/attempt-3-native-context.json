@@ -1,0 +1,14 @@
+{
+  "source_commit": "bc8a68791f9d1947fbad439f54f1aaa986ce916a",
+  "scope": "real ARM actual authenticated Capture with original native syntax occurrence contexts, vendor ACL and cold values; unsealed; no target/broker",
+  "exit": 1,
+  "elapsed_seconds": 6.658147583948448,
+  "fixed_phases": [
+    "ARM POSTFLIGHT PASSED"
+  ],
+  "unpublished_stdout_lines": 0,
+  "stderr_bytes_not_published": 0,
+  "stdout_sha256": "454e6b69da271338f2cb3c9c7eeca9b40376c66677218f315b2f64e45a8865d7",
+  "restore_executed": false,
+  "full_scan_performed": false
+}

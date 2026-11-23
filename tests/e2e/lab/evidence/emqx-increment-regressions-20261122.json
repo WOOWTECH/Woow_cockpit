@@ -1,0 +1,65 @@
+{
+  "scope": "necessary main integration regressions; generated/native helpers only, no commercial claim",
+  "checks": [
+    {
+      "commit": "484a9fe",
+      "suite": "test_emqx_syntax_reasons",
+      "run": 4,
+      "pass": 4,
+      "seconds": 9.478
+    },
+    {
+      "commit": "1f4566c",
+      "suite": "test_emqx_owner_inventory",
+      "run": 5,
+      "pass": 5,
+      "seconds": 2.45
+    },
+    {
+      "commit": "43687d8",
+      "suite": "test_emqx_payload_grammar",
+      "run": 3,
+      "pass": 3,
+      "seconds": 11.105
+    },
+    {
+      "commit": "9e086ba",
+      "suite": "test_emqx_fresh_owner_workflow",
+      "run": 7,
+      "pass": 7,
+      "seconds": 4.768
+    },
+    {
+      "commit": "6cfaa6d",
+      "suite": "test_emqx_owner_reference_diagnostic",
+      "run": 3,
+      "pass": 3,
+      "seconds": 0.035
+    },
+    {
+      "commit": "b79e1ec",
+      "suite": "test_emqx_fresh_owner_workflow",
+      "run": 8,
+      "pass": 8,
+      "seconds": 1.692
+    },
+    {
+      "commit": "b01330f",
+      "suite": "test_emqx_message_roots",
+      "run": 4,
+      "pass": 4,
+      "seconds": 9.816
+    },
+    {
+      "commit": "336fb37",
+      "suite": "test_emqx_adapter_preparation",
+      "run": 9,
+      "pass": 9,
+      "seconds": 0.074
+    }
+  ],
+  "skipped": 0,
+  "real_source_restore": "not-run",
+  "independent_review": "unverified-tool-rejection-not-retried",
+  "commercial_acceptance": "not-complete"
+}

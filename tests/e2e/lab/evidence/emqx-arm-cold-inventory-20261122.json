@@ -1,0 +1,119 @@
+{
+  "scope": "ARM realtest cold file metadata only",
+  "complete": true,
+  "rows": [
+    {
+      "product_file": "unclassified-native-file",
+      "bytes": 139
+    },
+    {
+      "product_file": "emqx_psk.DCD",
+      "bytes": 8
+    },
+    {
+      "product_file": "LATEST.LOG",
+      "bytes": 5622
+    },
+    {
+      "product_file": "emqx_dashboard_monitor.DCD",
+      "bytes": 3977
+    },
+    {
+      "product_file": "emqx_activated_alarm.DCD",
+      "bytes": 90
+    },
+    {
+      "product_file": "emqx_delayed.DCD",
+      "bytes": 8
+    },
+    {
+      "product_file": "emqx_app.DCD",
+      "bytes": 269
+    },
+    {
+      "product_file": "emqx_banned.DCD",
+      "bytes": 184
+    },
+    {
+      "product_file": "unclassified-native-file",
+      "bytes": 3100
+    },
+    {
+      "product_file": "emqx_retainer_index_meta.DCD",
+      "bytes": 204
+    },
+    {
+      "product_file": "schema.DAT",
+      "bytes": 33593
+    },
+    {
+      "product_file": "emqx_deactivated_alarm.DCL",
+      "bytes": 630
+    },
+    {
+      "product_file": "emqx_authn_scram_mnesia.DCD",
+      "bytes": 8
+    },
+    {
+      "product_file": "emqx_deactivated_alarm.DCD",
+      "bytes": 8
+    },
+    {
+      "product_file": "emqx_trace.DCD",
+      "bytes": 8
+    },
+    {
+      "product_file": "emqx_dashboard_monitor.DCL",
+      "bytes": 2148
+    },
+    {
+      "product_file": "emqx_acl.DCD",
+      "bytes": 649
+    },
+    {
+      "product_file": "emqx_authn_mnesia.DCD",
+      "bytes": 581
+    },
+    {
+      "product_file": "DECISION_TAB.LOG",
+      "bytes": 153
+    },
+    {
+      "product_file": "emqx_ds_builtin_local_metadata_tab.DCD",
+      "bytes": 8
+    },
+    {
+      "product_file": "emqx_ds_builtin_local_timestamp_tab.DCD",
+      "bytes": 8
+    },
+    {
+      "product_file": "emqx_banned_rules.DCD",
+      "bytes": 8
+    },
+    {
+      "product_file": "emqx_retainer_index.DCD",
+      "bytes": 1830
+    },
+    {
+      "product_file": "emqx_retainer_message.DCD",
+      "bytes": 1240
+    },
+    {
+      "product_file": "emqx_telemetry.DCD",
+      "bytes": 245
+    },
+    {
+      "product_file": "emqx_activated_alarm.DCL",
+      "bytes": 1013
+    },
+    {
+      "product_file": "emqx_admin_jwt.DCD",
+      "bytes": 1428
+    },
+    {
+      "product_file": "emqx_admin.DCD",
+      "bytes": 343
+    }
+  ],
+  "restore_executed": false
+}

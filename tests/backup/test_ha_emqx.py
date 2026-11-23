@@ -3,12 +3,15 @@ patches; HA's broker in a throwaway of the live image (network none, read-only r
 127.0.0.1) exports the data; this device's broker imports it, gets its strict settings back and is checked; versions,
 the default Dashboard account and the volumes (CONTRACT section 9). Team E2."""
 import gzip
+import base64
+import copy
 import io
 import json
 import tarfile
 import unittest
+from pathlib import Path
 
-from woowbackup import ha_emqx
+from woowbackup import ha_emqx, haimport, ha_n8n, hacommon
 from woowbackup.errors import BackupError
 from woowbackup.podman import Result
 
@@ -94,6 +97,9 @@ class World(fk.World):
         self.import_lost = None
         self.ctl_calls = []
         self.snippet = None
+        self.target_config = {'authorization': {'no_match': 'deny', 'deny_action': 'ignore',
+            'sources': [{'type': 'file', 'enable': True, 'path': '/opt/emqx/etc/acl.conf'}]}}
+        self.current_config = copy.deepcopy(self.target_config)
 
     def labels(self, image):
         return {'org.opencontainers.image.version': self.version}
@@ -112,9 +118,12 @@ class World(fk.World):
                               .encode(), b'')
             if command[2:4] == ['data', 'import']:
                 self.imported_into = True
+                self.current_config['authorization'] = {'no_match': 'allow', 'deny_action': 'ignore', 'sources': []}
                 return Result(0, b'Importing data...\nData has been imported successfully.\n', b'')
             if command[2:4] == ['conf', 'load']:
                 self.restored = True
+                if self.snippet and self.snippet.startswith(b'{'):
+                    self.current_config.update(json.loads(self.snippet))
             return Result(0, b'', b'')
         if command[:2] == ['emqx', 'eval']:
             return Result(0, self.evaluate(role, command[2]), b'')
@@ -123,6 +132,10 @@ class World(fk.World):
         return Result(0, b'', b'')
 
     def evaluate(self, role, expression):
+        if expression == ha_emqx.CONFIG_EXPR:
+            return b'WOOWCFG:' + base64.b64encode(json.dumps(self.current_config).encode()) + b':ENDok\n'
+        if expression == ha_emqx.OVERRIDE_STATE_EXPR:
+            return b'WOOWOVERRIDE:present:ENDok\n'
         if expression == ha_emqx.SUSPEND_SYS_EXPR:
             return b'WOOWSYS:<0.1.0>:suspended\nok\n'
         if expression == ha_emqx.TICKER_STATUS_EXPR.replace('{pid}', '<0.1.0>'):
@@ -187,11 +200,42 @@ class EmqxCase(fk.ConversionCase):
         with tarfile.open(fileobj=io.BytesIO(self.world.imported['emqx-src'])) as tar:
             return {m.name: m for m in tar.getmembers()}
 
+    def internal_candidate(self, ha_id):
+        """Actual internal build/package with generated transport, never public convert.
+
+        Public preservation tests remain separate. No target-policy helper or
+        preservation gate is patched out here; the fixture answers its native
+        config/volume protocol just as it answers counts and import outcomes.
+        """
+        ctx = self.ctx()
+        ctx.storage.ensure_layout()
+        staging = Path(ctx.storage.staging_dir(ctx.job_id))
+        staging.mkdir(parents=True, exist_ok=True)
+        work = haimport.Work(ctx, None, None, staging)
+        try:
+            work.record = haimport._open(work, ctx, {'ha_backup_id': ha_id})
+            app = self.catalog['emqx']
+            target, version = ha_emqx._prepare(work, app)
+            tmp = work.temp(app)
+            private = staging / 'internal-emqx-work'
+            private.mkdir(mode=0o700)
+            built = ha_emqx._build_candidate(work, app, tmp, target, private, version=version)
+            paths = ha_emqx._package_candidate(work, tmp, target, private, staging / 'internal-emqx-output',
+                built[3], ids=work.adapter(app).owner_ids(),
+                log_root=ha_n8n.volume_root(work, app, target.log_volume))
+            data = {'ha_hosts': hacommon.ha_hosts(built[0].hocon), 'plugins': sorted(built[0].plugins),
+                    'api_keys': max(built[2]['counts'].get('emqx_app', 0), 0)}
+            notes, _, reminders = haimport.import_texts({'emqx': data}, self.catalog)
+            return {'volumes': paths, 'notes': notes, 'reminders': reminders['emqx']}
+        finally:
+            self.assertEqual(work.close(), [])
+
 
 class CheckTests(EmqxCase):
     def test_a_clean_backup(self):
         result = self.check(self.upload_emqx(), ['emqx'])[0]
-        self.assertEqual((result['ok'], result['blockers'], result['target_version']), (True, [], '5.8.9'))
+        self.assertEqual((result['ok'], result['blockers'], result['target_version']),
+                         (False, [ha_emqx.PRESERVATION_BLOCKER], '5.8.9'))
         section = result['emqx']
         self.assertEqual((section['node_name'], section['mqtt_users'], section['acl_rules'], section['api_keys'],
                           section['retained_messages'], section['default_dashboard_password']),
@@ -232,11 +276,13 @@ class CheckTests(EmqxCase):
                 self.assertTrue(any(words in b for b in result['blockers']), result['blockers'])
         self.world.version = '5.9.0'
         result = self.check(self.upload_emqx(), ['emqx'])[0]
-        self.assertIn('HA 的 EMQX 是 5.8.9', result['blockers'][0])
+        self.assertTrue(any('HA 的 EMQX 是 5.8.9' in blocker for blocker in result['blockers']))
+        self.assertIn(ha_emqx.PRESERVATION_BLOCKER, result['blockers'])
 
     def test_a_hot_backup_is_tried_and_named(self):
         result = self.check(self.upload_emqx(), ['emqx'])[0]
-        self.assertTrue(result['ok'])
+        self.assertFalse(result['ok'])
+        self.assertIn(ha_emqx.PRESERVATION_BLOCKER, result['blockers'])
         self.assertTrue(result['emqx']['hot_backup'])
         self.assertTrue(any('執行中製作' in w for w in result['warnings']))
         result = self.check(self.upload_emqx(state='stopped'), ['emqx'])[0]
@@ -282,13 +328,14 @@ class CheckTests(EmqxCase):
 
     def test_an_ip_node_name_needs_no_host_line(self):
         result = self.check(self.upload_emqx(node_file='emqx@127.0.0.1', nodes=('emqx@127.0.0.1',)), ['emqx'])[0]
-        self.assertTrue(result['ok'])
+        self.assertFalse(result['ok'])
+        self.assertIn(ha_emqx.PRESERVATION_BLOCKER, result['blockers'])
         self.assertNotIn('--add-host', self.runs('emqx-ha')[0][3])
 
 
 class ConvertTests(EmqxCase):
     def test_the_whole_conversion(self):
-        result = self.convert(self.upload_emqx(), ['emqx'])
+        result = self.internal_candidate(self.upload_emqx())
         export = [c for c in self.world.ctl_calls if c[1][:2] == ['data', 'export']][0][1]
         self.assertEqual(export[export.index('--root-keys') + 1], 'authentication,authorization,rule_engine,connectors')
         self.assertEqual(export[export.index('--table-sets') + 1].split(','), list(ha_emqx.TABLE_SETS))
@@ -303,18 +350,19 @@ class ConvertTests(EmqxCase):
         self.assertEqual(incoming.extractfile('in/' + EXPORT.rsplit('/', 1)[1]).read(), b'export-tarball')
         self.assertEqual({(m.uid, m.gid) for m in incoming.getmembers()}, {(1000, 1000)})
         self.assertIn(['data', 'import', '/work/in/' + EXPORT.rsplit('/', 1)[1]], [c[1] for c in self.world.ctl_calls])
-        self.assertIn(b'no_match = deny', self.world.snippet)
-        self.assertIn(b'deny_action = ignore', self.world.snippet)
-        self.assertIn(['conf', 'load', '--merge', '/work/in/strict.hocon'], [c[1] for c in self.world.ctl_calls])
-        data = self.volume('woow_emqx_data')
+        self.assertEqual(json.loads(self.world.snippet)['authorization'], self.world.target_config['authorization'])
+        self.assertIn(['conf', 'load', '--replace', '/work/in/target-settings.hocon'], [c[1] for c in self.world.ctl_calls])
+        with tarfile.open(result['volumes']['woow_emqx_data']) as archive:
+            data = {member.name: member for member in archive}
         self.assertIn('mnesia/emqx@127.0.0.1/emqx_admin.DCD', data)
         self.assertIn('configs/cluster.hocon', data)
         for gone in ('configs/vm.2026.args', 'configs/app.2026.config', 'configs/cluster.hocon.2026.bak',
                      'backup/x.tar.gz'):
             self.assertNotIn(gone, data)
         self.assertIn('backup', data)
-        self.assertEqual(list(self.volume('woow_emqx_log')), ['.'])
-        reminders = result['ha_import']['reminders_by_app']['emqx']
+        with tarfile.open(result['volumes']['woow_emqx_log']) as archive:
+            self.assertEqual(archive.getnames(), ['.'])
+        reminders = result['reminders']
         self.assertTrue(any('Woow EMQX MCP Server' in line for line in reminders))
         self.assertTrue(any('homeassistant' in line for line in reminders))
 
@@ -328,7 +376,7 @@ class ConvertTests(EmqxCase):
 
         self.world.exec = exec_
         with self.assertRaises(BackupError) as caught:
-            self.convert(self.upload_emqx(), ['emqx'])
+            self.internal_candidate(self.upload_emqx())
         self.assertEqual(caught.exception.code, 'incompatible')
         self.assertIn('EMQX 無法匯出 HA 的資料', caught.exception.message)
         self.assertIn('停止 EMQX 附加元件', caught.exception.message)
@@ -345,20 +393,20 @@ class ConvertTests(EmqxCase):
 
         self.world.exec = exec_
         with self.assertRaises(BackupError) as caught:
-            self.convert(self.upload_emqx(), ['emqx'])
+            self.internal_candidate(self.upload_emqx())
         self.assertIn('部分資料無法匯入', caught.exception.message)
 
     def test_lost_rows_stop_the_conversion(self):
         self.world.import_lost = 'emqx_acl'
         with self.assertRaises(BackupError) as caught:
-            self.convert(self.upload_emqx(), ['emqx'])
+            self.internal_candidate(self.upload_emqx())
         self.assertIn('emqx_acl', caught.exception.message)
         self.assertEqual(self.storage.list_backups(), [])
 
     def test_an_import_that_would_open_anonymous_login_is_refused(self):
         self.world.ha_authn = '[{password_based,built_in_database,false,sha256,suffix}]'
         with self.assertRaises(BackupError) as caught:
-            self.convert(self.upload_emqx(), ['emqx'])
+            self.internal_candidate(self.upload_emqx())
         self.assertIn('匿名登入', caught.exception.message)
 
     def test_the_strict_settings_must_come_back(self):
@@ -371,8 +419,8 @@ class ConvertTests(EmqxCase):
 
         self.world.exec = exec_
         with self.assertRaises(BackupError) as caught:
-            self.convert(self.upload_emqx(), ['emqx'])
-        self.assertIn('存取政策', caught.exception.message)
+            self.internal_candidate(self.upload_emqx())
+        self.assertIn('未能保留目標有效設定', caught.exception.message)
 
 
 class ParseTests(unittest.TestCase):

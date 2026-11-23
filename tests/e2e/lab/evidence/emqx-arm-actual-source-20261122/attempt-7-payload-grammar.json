@@ -1,0 +1,15 @@
+{
+  "source_commit": "43687d8dbf748a5c00e252182ac8a5e6f312b96e",
+  "scope": "actual ARM source payload grammar diagnosis; no target or restore",
+  "exit": 1,
+  "elapsed_seconds": 9.562617801129818,
+  "fixed_phases": [
+    "SOURCE HOCON_SYNTAX_REPUBLISH_PAYLOAD_UNKNOWN_ROOT REFUSED",
+    "ARM POSTFLIGHT PASSED"
+  ],
+  "unpublished_stdout_lines": 0,
+  "stderr_bytes_not_published": 0,
+  "stdout_sha256": "310c2d4e6973cfa8eb906811d2c026a542caa9e741290beb488e0c2087415899",
+  "restore_executed": false,
+  "full_scan_performed": false
+}

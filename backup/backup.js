@@ -133,30 +133,46 @@
   const HA_TRUST = "Odoo 的自訂模組和 n8n 的社群節點是會在這台執行的程式，只匯入你信任的備份。";
   // This device's app for each add-on it can take, when neither the engine nor the catalog names it (haapps.IMPORTERS).
   const HA_APP_NAMES = { odoo: "Odoo 18", n8n: "n8n 工作流程", omnigent: "Omnigent 協作平台", hermes: "Hermes 代理",
-    emqx: "EMQX MQTT 代理", headscale: "Headscale VPN 控制伺服器", nextcloud: "Nextcloud 雲端硬碟" };
+    emqx: "EMQX MQTT 代理", headscale: "Headscale VPN 控制伺服器", "open-design": "OpenDesign 設計工具", "woow-code-server": "code-server 開發環境",
+    nextcloud: "Nextcloud 雲端硬碟" };
   // The product of each importable add-on in a sentence (「Odoo、n8n」), in the engine's order (CONTRACT §5 "Apps").
   const HA_SHORT = { odoo: "Odoo", n8n: "n8n", omnigent: "Omnigent", hermes: "Hermes", emqx: "EMQX", headscale: "Headscale",
+    "open-design": "OpenDesign",
+    "woow-code-server": "code-server",
     nextcloud: "Nextcloud" };
   // Odoo and n8n keep the sentences written and tested for them; with any other app (batch 1: Omnigent, Hermes, EMQX,
   // Headscale) a sentence says only what applies to each app.
   const HA_LEGACY = new Set(["odoo", "n8n"]);
-  // What of an add-on runs here as code (Hermes's skills and plugins, Omnigent's agents); EMQX and Headscale bring
+  // What of an add-on runs here as code (Hermes's skills and plugins, Omnigent's agents, OpenDesign's skills, plugins
+  // and external MCP servers, code-server's extensions, skills and shared MCP servers); EMQX and Headscale bring
   // accounts, keys and settings only (CONTRACT §9 "Batch 1").
   // Batch 2: Nextcloud's app-store apps (custom_apps) are PHP code that runs here.
   const HA_CODE = { odoo: "Odoo 的自訂模組", n8n: "n8n 的社群節點", omnigent: "Omnigent 的代理程式", hermes: "Hermes 的技能與外掛",
+    "open-design": "OpenDesign 的技能、外掛與外部 MCP 伺服器",
+    "woow-code-server": "code-server 的延伸模組、技能與共用 MCP 伺服器",
     nextcloud: "Nextcloud 的自訂應用" };
   // A test import pauses these apps' automatic work (CONTRACT §7 HaImport): Odoo is neutralized, n8n's workflows are
   // unpublished, Omnigent's active scheduled tasks paused. It changes nothing of the others (Hermes, EMQX, Headscale).
   const HA_TEST_PAUSES = new Set(["odoo", "n8n", "omnigent"]);
   // The add-ons whose members are large (a Hermes home of several GB; HA's own image in every EMQX and Headscale
-  // member, decrypted and skipped): their check and conversion take longer than Odoo's and n8n's.
+  // member, OpenDesign's agent logins and Paseo runtime, code-server's agent home with its connector runtimes,
+  // decrypted and skipped): their check and conversion take longer than Odoo's and n8n's.
   // Nextcloud: the users' files come from HA's share folder, which is read as a whole.
-  const HA_LARGE = new Set(["hermes", "emqx", "headscale", "nextcloud"]);
+  const HA_LARGE = new Set(["hermes", "emqx", "headscale", "open-design", "woow-code-server", "nextcloud"]);
   // Catalog entries that keep their own login to the imported app: it changes with the imported users (DESIGN §0). The
   // page is named as this device's catalog names it; `page` only when the entry has no name. Odoo and n8n only: for
   // the batch 1 apps the engine writes the MCP lines itself (`reminders_by_app`, CONTRACT §7 HaImport), so adding them
   // here would say the same twice in other words.
   const HA_MCP_ADMIN = { odoo: { id: "odoo-mcp-admin", page: "Odoo MCP 管理", app: "Odoo" }, n8n: { id: "n8n-mcp-admin", page: "n8n MCP 管理", app: "n8n" } };
+  // Add-ons an HA backup may hold that never move (CONTRACT §9 "Batch 2: add-ons that are not moved"), by the slug
+  // after the repository prefix: the Cloudflare Tunnel (its token and routes belong to the tunnel it serves; facts
+  // cf-tunnel.md D1 a) and the WOOWTECH MCP admin add-ons (their state is HA's credentials and URLs; facts
+  // mcp-admin.md verdict "re-configure"). Each one gets its own to-do; the MCP admin app is named as this device's
+  // catalog names it.
+  const HA_CF_TUNNEL = "cloudflared";
+  const HA_MCP_ADDONS = { woow_mcp_odoo: "Odoo", woow_mcp_n8n: "n8n", woow_mcp_hermes: "Hermes", woow_mcp_emqx: "EMQX",
+    woow_mcp_litellm: "LiteLLM", woow_mcp_nextcloud: "Nextcloud", woow_mcp_headscale: "Headscale",
+    woow_mcp_opendesign: "OpenDesign" };
   // The uploaded HA file holds all of HA, its passwords and tokens too, and stays until deleted (review HA-SEC-06).
   const HA_DELETE_REMINDER = "匯入完成後，建議刪除這份 HA 備份檔（裡面可能有 HA 的密碼與權杖）。";
   const HA_JOB_TITLES = { check: "檢查 HA 備份", convert: "轉換 HA 備份" };
@@ -3213,6 +3229,26 @@
   const haAddons = ha => list(ha?.addons).filter(item => isObject(item) && isString(item.slug));
   const haAddonsText = ha => haAddons(ha).map(item => str(item.name) || item.slug).join("、") || "沒有附加元件";
   const haOtherAddons = ha => list(ha?.other_addons).filter(item => isObject(item) && (isString(item.slug) || isString(item.name)));
+  // The slug after the repository prefix (`1b7b4ce7_cloudflared` -> `cloudflared`), like the engine's hastore.addon_suffix.
+  const haSlugSuffix = slug => { const text = str(slug); const cut = text.indexOf("_"); return cut >= 0 ? text.slice(cut + 1) : text; };
+  // What to do on this device for an add-on that is never moved (HA_CF_TUNNEL, HA_MCP_ADDONS), else null.
+  function haNotMovedText(item) {
+    const suffix = haSlugSuffix(item.slug);
+    const name = str(item.name) || str(item.slug);
+    if (suffix === HA_CF_TUNNEL) {
+      return `「${name}」（Cloudflare Tunnel）不會搬過來：請在 HA 的 Cloudflared 頁面記下它的每一條路由（公開網址和對應的服務），`
+        + "在這台的 Cloudflare Tunnel 重新加入，服務位址改成這台的應用；用 WOOW PaaS 連結的，請在這台重新連結（換機）。"
+        + "確認這台的網址都正常後，再刪掉 HA 那邊的路由並停掉 HA 的 Cloudflared。";
+    }
+    if (!Object.hasOwn(HA_MCP_ADDONS, suffix)) return null;
+    const product = HA_MCP_ADDONS[suffix];
+    const admin = list(state.status?.apps).find(app => isObject(app) && app.id === `${product.toLowerCase()}-mcp-admin`);
+    const where = admin ? `請到這台的「${str(admin.name).trim() || `${product} MCP 管理`}」重新設定連線`
+      : `請在這台安裝「${product} MCP 管理」後重新設定連線`;
+    return `「${name}」（${product} 的 MCP 管理工具）不會搬過來：${where}，再停掉 HA 的「${name}」，`
+      + "並把指向它的 MCP 連接器（例如 claude.ai）刪掉，改用這台的 MCP 網址重新建立。";
+  }
+  const haNotMoved = ha => haOtherAddons(ha).map(haNotMovedText).filter(Boolean);
   const num = value => (isNumber(value) ? value.toLocaleString("zh-TW") : "—");
   // An imported app as this device's catalog names it, else as the engine's registry does (also after it was removed).
   const haAppName = id => state.status?.apps?.find(app => app.id === id)?.name || (Object.hasOwn(HA_APP_NAMES, id) ? HA_APP_NAMES[id] : id);
@@ -3309,13 +3345,16 @@
 
   // The choice before the conversion (結果與選項).
   const haTestLabel = apps => (haLegacy(apps) ? "這只是測試（先關掉排程、寄信和工作流程）" : "這只是測試");
+  // A real Odoo move keeps sending: HA's queued mail and the daily reminders go out from here (owner, 2026-11-23).
+  const HA_ODOO_MAIL = "正式搬家時，Odoo 會接著寄出 HA 上還沒寄出的信和每天的提醒信，請先停掉 HA 那邊的 Odoo，避免兩邊各寄一次。";
   function haTestHelp(apps) {
-    if (haLegacy(apps)) return "勾選時，搬過來的 n8n 工作流程都先停用，Odoo 不寄信也不跑排程，HA 那邊可以照常使用；正式搬家請不要勾。";
+    const mail = apps.includes("odoo") ? HA_ODOO_MAIL : "";
+    if (haLegacy(apps)) return "勾選時，搬過來的 n8n 工作流程都先停用，Odoo 不寄信也不跑排程，HA 那邊可以照常使用；正式搬家請不要勾。" + mail;
     const parts = [apps.includes("n8n") ? "搬過來的 n8n 工作流程都先停用" : null, apps.includes("odoo") ? "Odoo 不寄信也不跑排程" : null,
       apps.includes("omnigent") ? "Omnigent 的排程都先暫停" : null].filter(Boolean);
     const kept = haTestKept(apps);
     const what = kept.length ? [parts.join("，"), ...kept].filter(Boolean).join("；") : `${parts.join("，")}，HA 那邊可以照常使用`;
-    return `勾選時，${what}；正式搬家請不要勾。`;
+    return `勾選時，${what}；正式搬家請不要勾。${mail}`;
   }
 
   // A test import as a value (the confirmation, the job's choices, the converted backup): `legacy` is Odoo's and n8n's
@@ -3596,8 +3635,12 @@
         : [h("span", { class: "chips" }, chip("還沒安裝", "warn", "alert-outline")),
           h("span", { class: "secondary", text: `「${app.name}」：這台還沒安裝，請先到「應用軟體」安裝同版本` })])),
       ...haOtherAddons(ha).map(item => row(str(item.name) || str(item.slug), str(item.slug), str(item.version),
-        h("span", { class: "secondary", text: "這台沒有對應的應用" })))
+        haNotMovedText(item)
+          ? [h("span", { class: "chips" }, chip("不會搬過來", "warn", "alert-outline")),
+            h("span", { class: "secondary", text: "請在這台重新設定（見下方說明）" })]
+          : h("span", { class: "secondary", text: "這台沒有對應的應用" })))
     ];
+    const notMoved = haNotMoved(ha);
     return h("section", { class: "card list-card", "aria-labelledby": "ha-addons" },
       h("div", { class: "card-head" }, h("h3", { id: "ha-addons", text: "附加元件" })),
       rows.length ? h("table", { class: "data ha-addons-table" }, h("caption", { class: "sr-only", text: "HA 備份中的附加元件" }),
@@ -3605,6 +3648,7 @@
         h("tbody", null, rows)) : null,
       h("div", { class: "card-body" },
         h("p", { class: "muted", text: `只有支援的 ${Object.values(HA_SHORT).join("、")} 附加元件能匯入這台；Home Assistant 本身和其他附加元件不會匯入。` }),
+        notMoved.length ? h("ul", { class: "bullet-list ha-not-moved" }, notMoved.map(line => h("li", { text: line }))) : null,
         !apps.length ? infoNotice("這份 HA 備份沒有這台可以匯入的應用。")
           : !apps.some(app => app.installed)
             ? infoNotice("要匯入，請先到「應用軟體」安裝這台還沒有的應用（版本要和 HA 那邊相同），再回來按「檢查並匯入…」。", "warn", "alert-outline") : null));
@@ -3734,6 +3778,7 @@
               : "這台還沒安裝，請先到「應用軟體」安裝同版本。" })));
       })) : infoNotice("這份 HA 備份沒有這台可以匯入的應用。", "warn", "alert-outline"),
       others.length ? h("p", { class: "muted", text: `其他附加元件（${others.map(item => str(item.name) || str(item.slug)).join("、")}）這台沒有對應的應用，不會匯入。` }) : null,
+      haNotMoved(ha).length ? h("ul", { class: "bullet-list ha-not-moved" }, haNotMoved(ha).map(line => h("li", { text: line }))) : null,
       slow ? h("p", { class: "hint ha-slow", text: slow }) : null,
       haNoDeviceKey() ? haDeviceKeyNotice() : null,
       active && !wizard.keyNeeded ? haActiveNotice(active) : null,
@@ -4177,6 +4222,45 @@
     ];
   }
 
+  // OpenDesign (ha_opendesign.py): what moves, and the core revision both sides must share (no data version stamp).
+  function haOpenDesignFacts(od) {
+    const core = [str(od.source_revision), str(od.target_revision)];
+    return [
+      metadata([
+        ["專案", `${num(od.projects)} 個${od.project_folders ? `（${num(od.project_folders)} 個從資料夾匯入，搬過來後打不開）` : ""}`],
+        ["對話", `${num(od.conversations)} 個，${num(od.messages)} 則訊息`],
+        ["例行工作", `${num(od.routines)} 個（啟用中 ${num(od.routines_active)} 個）`],
+        ["外部 MCP 伺服器", `${num(od.mcp_servers)} 個`],
+        ["資料", `${num(od.files)} 個檔案（${bytes(od.bytes)}）`],
+        ["核心版本", core[0] && core[1] ? `HA ${core[0]}，這台 ${core[1]}` : "—", "mono"]
+      ]),
+      h("p", { class: "muted", text: "匯入後，用這台的 OpenDesign 登入資料（帳號 open-design 與這台的 API 權杖）登入；代理程式的登入、Omnigent 與 Paseo 維持這台的。" })
+    ];
+  }
+
+  // code-server (ha_codeserver.py): what moves, and the four programs that write the data, the same on both sides.
+  function haCodeServerFacts(cs) {
+    const pins = isObject(cs.pins) ? cs.pins : {};
+    const here = isObject(cs.target_pins) ? cs.target_pins : {};
+    const programs = [["code-server", "code-server"], ["pi", "Pi"], ["claude", "Claude Code"], ["codex", "Codex"]]
+      .filter(([id]) => str(pins[id]))
+      .map(([id, label]) => `${label} ${str(pins[id])}${str(here[id]) && str(here[id]) !== str(pins[id]) ? `（這台 ${str(here[id])}）` : ""}`);
+    const workspace = cs.workspace ? `${num(cs.workspace_files)} 個檔案（${bytes(cs.workspace_bytes)}），放進這台工作區的新資料夾`
+      : cs.share ? "share 資料夾裡沒有工作區（projects）" : "這份備份沒有包含 share 資料夾，不會搬過來";
+    return [
+      metadata([
+        ["代理程式對話", `Pi ${num(cs.sessions)} 個、Claude Code ${num(cs.claude_projects)} 個、Codex ${num(cs.codex_sessions)} 個（只能查看）`],
+        ["技能", `${num(cs.skills)} 個`],
+        ["VS Code", `設定${cs.settings ? "（合併）" : "（沒有）"}、${num(cs.snippets)} 個程式碼片段、${num(cs.extensions)} 個自己安裝的延伸模組`],
+        ["共用 MCP 伺服器", `${num(cs.mcp_servers)} 個`],
+        ["工作區", workspace],
+        ["資料", `${num(cs.files)} 個檔案（${bytes(cs.bytes)}）`],
+        ["程式版本", programs.join("、") || "—"]
+      ]),
+      h("p", { class: "muted", text: "匯入後，用這台 code-server 的密碼登入；Pi、Claude Code、Codex 沿用這台的登入，Omnigent 與 Paseo 連接器維持這台的。" })
+      ];
+    }
+
   // Batch 2 (CONTRACT §9 "Batch 2: Nextcloud"): the user files must be in the backup (HA's share folder).
   function haNextcloudFacts(nextcloud) {
     const apps = list(nextcloud.custom_apps).filter(isString);
@@ -4201,6 +4285,8 @@
   }
 
   const HA_FACTS = { omnigent: haOmnigentFacts, hermes: haHermesFacts, emqx: haEmqxFacts, headscale: haHeadscaleFacts,
+    "open-design": haOpenDesignFacts,
+    "woow-code-server": haCodeServerFacts,
     nextcloud: haNextcloudFacts };
 
   function confirmHaConvert(ha, wizard) {

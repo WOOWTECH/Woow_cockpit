@@ -1,26 +1,25 @@
 #!/usr/bin/env python3
 """dev-d only; synthetic appowner EMQX restore/rollback integration driver.
 
-Run only via labpodman inside the isolated dev-d device. The caller supplies a
+Run only via owner.sh inside the isolated dev-d device. The caller supplies a
 full already-present image ID and an isolated private staging directory.
 """
 import argparse
 import base64
 import json
-import os
 from pathlib import Path
 import re
 import secrets
 import shutil
 import time
 
-from emqx_adapter_provision import Provision
+from emqx_adapter_owner import OwnerProvision as Provision, adapter_factory as owner_adapter_factory
+from emqx_adapter_mqtt import mqtt as private_mqtt
 from emqx_adapter_flow import package_candidate, restore_candidate
 from emqx_ha_candidate import backup_from_volume, build_candidate
 from woowbackup import catalog, flows
 from woowbackup.paths import Paths
 
-CLIENT = 'sha256:93a0bdfcbd9b7a86b36127cb81f54e1afd2019f12f39033458df405a027c03e3'
 STAGE = 'startup'
 
 
@@ -84,6 +83,26 @@ retainer.backend.storage_type = disc
         inspection = json.loads(runner.podman('container', 'inspect', f.prefix).stdout)[0]
         f.validate_inspection(inspection)
 
+        # Actual fixed files/secret of this new fixture, before any client or
+        # source data. Readonly mounts and complete before/after identities are
+        # checked by the issued capability; this is not full target coverage.
+        STAGE = 'actual_owned_mount_capture'
+        from emqx_owner_fixture_files import observe_fixture_files, PATHS, MAX_WIRE, LIMIT
+        from emqx_semantic_readers import Values
+        private_files = Values()
+        file_receipts = observe_fixture_files(provision.file_capability,
+            private_eval=lambda expr: runner.podman('exec', f.prefix, 'emqx', 'eval', expr,
+                timeout=10, max_output=MAX_WIRE).stdout,
+            private_inspect=lambda: runner.podman('inspect', f.prefix,
+                timeout=5, max_output=LIMIT).stdout,
+            private_values=private_files)
+        if ({row['path'] for row in file_receipts} != set(PATHS)
+                or password.encode() not in private_files.values
+                or base not in private_files.values or acl not in private_files.values):
+            raise RuntimeError('synthetic owned file capture incomplete')
+        print(json.dumps({'stage': STAGE, 'result': 'pass',
+                          'scope': 'issued-fixture-files-only'}), flush=True)
+
         def configuration():
             expr = ('io:format("WOOWCFG:~s:END~n", '
                     '[base64:encode(emqx_utils_json:encode(emqx:get_raw_config([])))]).')
@@ -92,13 +111,17 @@ retainer.backend.storage_type = disc
                 raise RuntimeError('cannot read synthetic effective config')
             return json.loads(base64.b64decode(raw[8:].split(b':END', 1)[0], validate=True))
 
-        def mqtt(program, topic, payload=None, *, username='lab', credential=None):
-            argv = ['run', '--rm', '--pull=never', '--network=container:' + f.prefix,
-                    '--memory=64m', '--cpus=1', '--entrypoint=' + program, CLIENT,
-                    '-h', '127.0.0.1', '-p', '1883', '-V', 'mqttv5', '-q', '1',
-                    '-u', username, '-P', password if credential is None else credential, '-t', topic]
-            argv += ['-r', '-m', payload, '-d'] if payload is not None else ['-C', '1', '-W', '10']
-            return runner.podman(*argv, timeout=60, check=False)
+        def mqtt(program, topic, payload=None, *, username='lab', credential=None, clear=False, await_suback=False):
+            return private_mqtt(runner, f.prefix, program, topic, payload,
+                username=username, credential=password if credential is None else credential,
+                clear=clear, await_suback=await_suback)
+
+        def denied_subscription():
+            result = mqtt('mosquitto_sub', 'outside/denied', await_suback=True)
+            output = result.stdout + result.stderr
+            if (b'SUBACK' not in output or not (
+                    re.search(rb'Subscribed[^\n]*:\s*135\b', output) or b'Not authorized' in output)):
+                raise RuntimeError('synthetic subscription denial not established by SUBACK')
 
         def publish(topic, payload):
             result = mqtt('mosquitto_pub', topic, payload)
@@ -144,7 +167,7 @@ retainer.backend.storage_type = disc
         deps.sweep_temp = None
         deps.audit = lambda _line: None
         state = {'arm': False, 'injected': False}
-        original_factory = deps.adapter_factory
+        original_factory = owner_adapter_factory(f, runner)
         def adapter_factory(app_, **kwargs):
             original_hook = kwargs.get('imported_hook')
             def imported():
@@ -186,10 +209,7 @@ retainer.backend.storage_type = disc
         user_command('delete')
         user_command('absent')
         # Remove the source marker on the target; the candidate must restore it.
-        clear = runner.podman('run', '--rm', '--pull=never', '--network=container:' + f.prefix,
-            '--memory=64m', '--cpus=1', '--entrypoint=mosquitto_pub', CLIENT,
-            '-h', '127.0.0.1', '-p', '1883', '-V', 'mqttv5', '-q', '1', '-u', 'lab', '-P', password,
-            '-t', 'lab/from-ha', '-r', '-n', '-d', check=False, timeout=60)
+        clear = mqtt('mosquitto_pub', 'lab/from-ha', clear=True)
         if clear.returncode or not re.search(rb'RC:(?:0|16)\b', clear.stdout):
             raise RuntimeError('cannot clear target source marker')
         receive_absent('lab/from-ha')
@@ -221,6 +241,9 @@ retainer.backend.storage_type = disc
         if configuration() != before_config:
             raise RuntimeError('synthetic target configuration was not preserved')
         print(json.dumps({'stage': 'candidate_installed', 'result': 'pass'}), flush=True)
+        STAGE = 'candidate_denied_subscription'
+        denied_subscription()
+        print(json.dumps({'stage': STAGE, 'result': 'pass', 'mqtt_reason': 135}), flush=True)
         STAGE = 'rollback_injection'
         publish('lab/before-rollback', 'rollback-marker')
         receive('lab/before-rollback', 'rollback-marker')
@@ -256,6 +279,9 @@ retainer.backend.storage_type = disc
         if configuration() != before_config:
             raise RuntimeError('synthetic configuration changed on restart')
         receive('lab/before-rollback', 'rollback-marker')
+        STAGE = 'restarted_denied_subscription'
+        denied_subscription()
+        print(json.dumps({'stage': STAGE, 'result': 'pass', 'mqtt_reason': 135}), flush=True)
         print(json.dumps({'stage': 'automatic_rollback_verified', 'result': 'pass'}), flush=True)
     finally:
         errors = []
@@ -285,9 +311,16 @@ retainer.backend.storage_type = disc
     print(json.dumps({'stage': 'adapter_automatic_rollback', 'result': 'pass', 'cleanup': 'pass'}), flush=True)
 
 
+def failure_report(error):
+    """Fixed fixture diagnostics only; never publish private exception text."""
+    from emqx_owner_fixture_files import failure_metadata
+    return {'stage': STAGE, 'result': 'fail', 'error_type': type(error).__name__,
+            **failure_metadata(error)}
+
+
 if __name__ == '__main__':
     try:
         main()
     except Exception as error:
-        print(json.dumps({'stage': STAGE, 'result': 'fail', 'error_type': type(error).__name__}), flush=True)
+        print(json.dumps(failure_report(error)), flush=True)
         raise SystemExit(1) from None
