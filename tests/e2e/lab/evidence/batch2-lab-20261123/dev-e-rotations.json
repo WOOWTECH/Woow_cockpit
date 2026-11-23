@@ -24,6 +24,28 @@
    ],
    "wake": "deploy-batch2.sh e images:opendesign, then systemctl --user start open-design.service (and its -nginx, -mcp, -terminal units)",
    "isolation_after": "none {}"
+  },
+  {
+   "app": "code-server",
+   "when": "2026-11-23 20:31:27-20:32:05 Asia/Taipei",
+   "reason": "codeserver-import real run attempt 1 PASS 87/87 (team/batch2-lab.md 'DONE code-server PASS 20:30'; R-COCKPIT feat/ha-import-code-server-20261123 tests/e2e/lab/evidence/codeserver-import-20261123/codeserver-x86-attempt1.json)",
+   "before": "code-server's data = the baseline (batch2_markers.py code-server read 20:31: the three baseline markers with the digests of the baseline's after-restore read)",
+   "steps": [
+    "systemctl --user stop code-server-health.timer code-server-health.service code-server.service (all inactive, no container left)",
+    "deploy-batch2.sh e drop-images:code-server (7999790230ec ghcr.io/woowtech/woow-code-server-amd64:4.139.1-8)"
+   ],
+   "host_free_before_mib": 21402,
+   "host_free_after_mib": 32277,
+   "freed_mib": 10875,
+   "freed_note": "the image (5362 MiB) and its keep-id:uid=1000,gid=1000 ID-mapped copy",
+   "kept": [
+    "quadlets, env file, secret code-server-config",
+    "volumes woow-code-server-{pi-data,ide,extensions} and ~/Desktop",
+    "catalog entry woow-code-server",
+    "baseline backup 20261123T121327Z-74c471c6 (dev-e backup store)"
+   ],
+   "wake": "deploy-batch2.sh e images:code-server, then the code-server phase again (idempotent: makes the ID-mapped copy first) or start code-server.service + code-server-health.timer and allow ~6 min for the copy",
+   "isolation_after": "none {}"
   }
  ],
  "commercial_acceptance": "not-complete",
