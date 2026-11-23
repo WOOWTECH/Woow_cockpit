@@ -59,8 +59,9 @@ systemd 為 PID 1 的 rootless 容器，內含 Cockpit 362、rootless Podman（�
 | `prodlike_baseline.py [odoo] [n8n]` | dev-c 的基準：每個應用一份加密備份與原位還原，前後的標記資料列證明資料真的還原（見 dev-c 一節） |
 | `deploy-batch1.sh d --omnigent-repo D --hermes-repo D --emqx-repo D --headscale-repo D [--<應用>-rev R] [--cockpit-src D] [階段…]` | 只用於 dev-d：`packages images omnigent hermes emqx headscale cockpit check`（見 dev-d 一節），每個階段都可以重跑 |
 | `batch1_baseline.py [omnigent] [hermes] [emqx] [headscale]` | dev-d 的基準：在每個應用放入標記資料（`batch1_markers.py`，在設備內以應用自己的 API、CLI 或程式碼建立與讀取），每個應用一份加密備份，再以原位還原證明它能還原（見 dev-d 一節） |
-| `deploy-batch2.sh e [--nextcloud-repo D] [--code-server-repo D] [--opendesign-repo D] [--<應用>-rev R] [--cockpit-src D] 階段…` | 只用於 dev-e：`packages images[:應用] nextcloud code-server opendesign cockpit check[:應用] drop-images:應用`（見 dev-e 一節），每個階段都可以重跑 |
+| `deploy-batch2.sh e [--nextcloud-repo D] [--code-server-repo D] [--opendesign-repo D] [--<應用>-rev R] [--cockpit-src D] 階段…` | 只用於 dev-e：`packages images[:應用] nextcloud code-server opendesign cockpit check[:應用] drop-images:應用 wake:應用 rotate:應用`（見 dev-e 一節），每個階段都可以重跑 |
 | `batch2_baseline.py [nextcloud] [opendesign] [code-server]` | dev-e 的基準：標記資料（`batch2_markers.py`，在設備內以應用自己的介面建立與讀取）、每個應用一份加密備份，再以原位還原證明它能還原 |
+| `batch2_baseline.py --verify [nextcloud] [opendesign] [code-server]` | **只讀**：證明 dev-e 上的應用回到它的基準（標記名稱與 sha256 等於基準還原後的讀取、code-server 真實登入、引擎狀態、健康檢查網址、基準備份仍在且以設備金鑰加密、dev-e 仍是 network none）；不建立、不備份、不還原；證據在 `~/.woowbk-lab/evidence/batch2-lab/<時間>-verify/` |
 | `compare_batch2.py [nextcloud] [code-server] [opendesign]` | 只讀比對正式主機與 dev-e 已安裝的檔案、env 鍵（值只顯示調校用的鍵）、目錄項目與每個容器的映像 ID |
 | `deploy-demo.sh <a\|b> [--notes N] [--files M] [--title T] [--no-seed]` | 不經引擎、以 appowner 手動部署 woowbk-demo（拉取 postgres、建置應用映像、安裝 Quadlet、daemon-reload、seed） |
 | `deploy-dirs.sh <a\|b> [--items N] [--delete K] [--title T] [--owner-note T] [--seed S] [--no-seed]` | 同上，部署主機資料夾示範應用 woowbk-dirs（`catalog-examples/woowbk-dirs/README.md`）：複製到 `/opt/woowbk-dirs`、拉取 postgres（已有則略過）、建置 `localhost/woowbk-dirs-app:1`、安裝 Quadlet、seed（密鑰、設定檔、主機資料夾與容器帳號擁有者、資料庫角色與第二個資料庫、項目） |
@@ -466,6 +467,15 @@ rootless 容器（含巢狀）的用量全部算到同一個使用者，16:35 �
 擁有者同意後，main 在 17:13 把上限調到 1024（`/etc/sysctl.d/90-woowtech-inotify.conf`）。規則（main，16:55）：dev-e 每加一個應用或容器之前跑一次**有上限的探測**（最多同時建立 10 個
 實例、立即釋放），可用少於 5 個就暫停；不留下 `tail -f` 之類的追蹤程式或閒置的測試容器。dev-e 只由 batch2-lab 變更，其他線在
 `team/batch2-lab.md` 寫 `REQUEST:` 並等 READY。
+
+**輪替指令**（2026-11-23 第 3 輪加入，離線測試 9 項＋6 個突變檢查）：先以 `batch2_baseline.py --verify <應用>` 證明資料回到基準，再
+`flock -w 3600 /tmp/woowbk-dev-e-mutation.lock tests/e2e/lab/deploy-batch2.sh e rotate:<應用>`：依序停止該應用的單元與計時器，每一個都不再
+執行（inactive；健康檢查單元上次失敗算 failed、也不在執行）、沒有它的容器，才刪除它的映像（keep-id 複本隨映像一起刪）；任何一項不符就停下、
+映像保留。資料、單元、env、密鑰、目錄項目與基準備份都留著。喚醒用 `deploy-batch2.sh e wake:<應用>`：`images:<應用>`、確認每個已安裝單元的
+`Image=` 都已載入（否則不啟動任何東西）、code-server 先做 ID 對應複本、有上限的 inotify 探測（少於 5 個就停）、主機在第一次啟動的複本
+（OpenDesign 7 GiB、Nextcloud 3 GiB）之後仍要留 13 GiB，依序啟動單元（啟動時主機低於 12.25 GiB 就把該單元停掉）、健康網址回應後才啟動計時器，
+最後在 `WAKE_READY_S`（預設 1200 秒）內 `check:<應用>` 通過。磁碟需求（`images` 的守門：映像大小的 2.2 倍＋13 GiB）：code-server 喚醒開始時約需 24.5 GiB 可用、用掉約 10.6 GiB；
+OpenDesign 約需 26.7 GiB、用掉約 12.1 GiB；Nextcloud 約需 17 GiB、用掉約 6.1 GiB。
 
 **重設**：`tests/e2e/lab/reset.sh e --up` 刪除容器與三個資料卷，再照「建置」重跑。新的設備金鑰會覆寫 `dev-e-kit.txt`；`dev-e-markers.json` 保留。
 dev-e 的變更請以 `flock -w 3600 /tmp/woowbk-dev-e-mutation.lock <指令>` 包起來（與 dev-d 相同的規則）。

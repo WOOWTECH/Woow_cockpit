@@ -11,7 +11,8 @@
 #   --<app>-rev REV     copy REV instead of the production commit
 #   --cockpit-src DIR   Woow_cockpit tree to deploy (default: this one), passed to deploy-src.sh --src
 #   PHASE               packages | images[:APP] | nextcloud | code-server | opendesign | cockpit | catalog |
-#                       check[:APP] | drop-images:APP ; APP is nextcloud, code-server or opendesign
+#                       check[:APP] | drop-images:APP | wake:APP | rotate:APP ; APP is nextcloud, code-server or
+#                       opendesign
 #
 # dev-e has no network (it is created with --network none): nothing inside it can pull an image or reach apt, the
 # Nextcloud app store or any registry, and nothing outside reaches it.
@@ -37,6 +38,15 @@
 #           for code-server (not onboarded there): its entry is the lab file catalog/woow-code-server.json of lane
 #           codeserver-import (owner decision D1 b: the workspace folder ~/Desktop is backed up), already for appowner
 # drop-images:APP  removes APP's images from dev-e (test data rotation: they can be copied again from the host)
+# rotate:APP  test data rotation of an installed app (owner rule 2026-11-23: after its real runs passed): its units and
+#           timers stopped, every one inactive, no container of it left (quadlet containers run with --rm), then
+#           drop-images:APP (an ID-mapped keep-id copy goes with its image). Its data, units, env, secrets, catalog entry
+#           and baseline backup stay. Any check failing stops before the images go. Prove the data is on its baseline
+#           first: batch2_baseline.py --verify APP
+# wake:APP  brings a rotated-out app back: images:APP; the capped inotify probe (main's rule: at most 10 instances held,
+#           none kept; fewer than 5 free stops); the host must keep FLOOR + RESERVE free after the app's first-start
+#           ID-mapped copy (code-server's is made first by a throwaway container, see cs_idmap_copy); its units started in
+#           order, its timers once the catalog health URLs answer, then check:APP within WAKE_READY_S
 # Every phase can be run again: loaded images and copies that are already there are kept.
 # Start over with: tests/e2e/lab/reset.sh e --up
 source "$(dirname "$0")/lib.sh"
@@ -62,7 +72,9 @@ while [ $# -gt 0 ]; do
         --cockpit-src) cockpit_src=${2:?--cockpit-src needs a checkout}; shift ;;
         packages | images | images:nextcloud | images:code-server | images:opendesign | nextcloud | code-server | \
             opendesign | cockpit | catalog | check | check:nextcloud | check:code-server | check:opendesign | \
-            drop-images:nextcloud | drop-images:code-server | drop-images:opendesign) phases+=("$1") ;;
+            drop-images:nextcloud | drop-images:code-server | drop-images:opendesign | \
+            wake:nextcloud | wake:code-server | wake:opendesign | \
+            rotate:nextcloud | rotate:code-server | rotate:opendesign) phases+=("$1") ;;
         *) die "unknown argument: $1" ;;
     esac
     shift
@@ -640,11 +652,161 @@ phase_check_opendesign() {
     healthchecks open-design open-design-nginx open-design-mcp open-design-terminal
 }
 
+# ---- rotation: wake:APP and rotate:APP (see the header) ------------------------------------------------------------
+# What a woken app starts (in order; its timers only after its health URLs answer) and what a rotation stops (in order).
+declare -A WAKE_UNITS=([nextcloud]="nextcloud.target" [code-server]="code-server.service"
+                       [opendesign]="open-design.service open-design-nginx.service open-design-mcp.service open-design-terminal.service")
+declare -A WAKE_TIMERS=([nextcloud]="nextcloud-cron.timer" [code-server]="code-server-health.timer" [opendesign]="")
+declare -A STOP_UNITS=([nextcloud]="nextcloud-cron.timer nextcloud-cron.service nextcloud.target"
+                       [code-server]="code-server-health.timer code-server-health.service code-server.service"
+                       [opendesign]="open-design-terminal.service open-design-mcp.service open-design-nginx.service open-design.service")
+# The app's installed container quadlets (a stopped unit leaves no container: quadlet runs them with --rm).
+declare -A APP_QUADLETS=([nextcloud]="nextcloud-gateway nextcloud-office nextcloud-app nextcloud-redis nextcloud-db"
+                         [code-server]="code-server" [opendesign]="open-design-terminal open-design-mcp open-design-nginx open-design")
+# The ID-mapped copy a first start makes (GiB, measured 2026-11-23): OpenDesign's keep-id:uid=1001 copy of its 6.2 GiB
+# image; Nextcloud's start used 2.5 GiB beyond its images; code-server's copy is made before its start (cs_idmap_copy).
+declare -A IDMAP_GIB=([nextcloud]=3 [code-server]=0 [opendesign]=7)
+WAKE_READY_S=${WAKE_READY_S:-1200}
+WAKE_START_S=${WAKE_START_S:-1800}
+
+# Main's rule (2026-11-23 16:55): before each new app or container on dev-e, a CAPPED probe of the host user's inotify
+# instances: it holds at most 10 and closes them at once; fewer than 5 free -> stop. Every rootless container, nested
+# ones included, counts against the same host user (fs.inotify.max_user_instances).
+inotify_headroom() {  # <what is about to start>
+    python3 -I - <<'PY' || die "inotify: fewer than 5 instances free for the host user: stopped before starting $1 (main's rule)"
+import ctypes, os, sys
+libc = ctypes.CDLL(None, use_errno=True)
+fds = []
+try:
+    while len(fds) < 10:
+        fd = libc.inotify_init1(0o2000000)  # IN_CLOEXEC
+        if fd < 0:
+            break
+        fds.append(fd)
+finally:
+    for fd in fds:
+        os.close(fd)
+print(f'inotify headroom: {len(fds)}{"+" if len(fds) == 10 else ""} (cap 10, stop below 5)', file=sys.stderr)
+sys.exit(0 if len(fds) >= 5 else 1)
+PY
+}
+
+catalog_field() {  # <app> <health|units>: the catalog entry's health checks (url|status) or units, one per line
+    "$LP" exec "$NAME" python3 -I -c '
+import json, sys
+entry = json.load(open(f"/etc/woowtech-cockpit/backup/apps/{sys.argv[1]}.json"))
+for item in entry[sys.argv[2]]:
+    print(item["url"] + "|" + str(item["expect_status"]) if sys.argv[2] == "health" else item)' "${CATALOG_ID[$1]}" "$2"
+}
+
+health_ok() {  # <app>: every catalog health URL answers as expected (quiet)
+    local url expect code checks
+    checks=$(catalog_field "$1" health) || return 1
+    while IFS='|' read -r url expect; do
+        code=$("$LP" exec "$NAME" curl -s -o /dev/null -w '%{http_code}' --max-time 10 "$url" || true)
+        [ "$code" = "$expect" ] || return 1
+    done <<<"$checks"
+}
+
+app_containers_left() {  # <app>: the app's containers (and code-server's throwaway copy container) still there
+    local names
+    names=$(owner podman ps -a --format '{{.Names}}') || die "podman ps in $NAME failed"
+    grep -Fx -f <(printf '%s\n' ${APP_QUADLETS[$1]} woowbk-lab-cs-idmap-copy) <<<"$names" || true
+}
+
+images_resolve() {  # <app>: every installed quadlet of the app names an image that is loaded in dev-e
+    local quadlet ref bad=
+    for quadlet in ${APP_QUADLETS[$1]}; do
+        ref=$(owner sed -n 's/^Image=//p' "$HOME_D/.config/containers/systemd/$quadlet.container" 2>/dev/null) || ref=
+        if [ -z "$ref" ] || ! owner podman image exists "$ref"; then
+            bad+=" $quadlet.container(Image=${ref:-none})"
+        fi
+    done
+    [ -z "$bad" ] || die "wake:$1: installed units name images that are not loaded:$bad (nothing started; the app phase re-pins)"
+    log "wake:$1: every installed unit's Image= is loaded"
+}
+
+start_watched() {  # <app> <unit>: start the unit in dev-e; at the host floor or after WAKE_START_S it is stopped again
+    local app=$1 unit=$2 pid free limit=$(((FLOOR_GIB * 4 + 1) * GIB / 4)) deadline=$((SECONDS + WAKE_START_S))
+    owner systemctl --user start "$unit" & pid=$!
+    while kill -0 "$pid" 2>/dev/null; do
+        free=$(host_free)
+        [ "$free" -ge "$MIN_FREE" ] || MIN_FREE=$free
+        if [ "$free" -lt "$limit" ] || [ "$SECONDS" -ge "$deadline" ]; then
+            owner systemctl --user stop "$unit" >/dev/null 2>&1 || true  # cancels the start and its ID-mapped copy
+            wait "$pid" 2>/dev/null || true
+            die "wake:$app: $unit stopped again: host free $((free >> 20)) MiB (floor ${FLOOR_GIB} GiB) or ${WAKE_START_S}s passed"
+        fi
+        sleep 1
+    done
+    wait "$pid" || die "wake:$app: starting $unit failed (the units after it were not started)"
+}
+
+phase_rotate() {  # <app>
+    local app=$1 unit state left units
+    deployed "$app" || die "rotate:$app: $app is not installed in $NAME"
+    units=$(catalog_field "$app" units) || die "rotate:$app: no catalog entry ${CATALOG_ID[$app]} in $NAME"
+    for unit in ${STOP_UNITS[$app]}; do
+        owner systemctl --user stop "$unit" || die "rotate:$app: stopping $unit failed (images kept)"
+        log "rotate:$app: stopped $unit"
+    done
+    # shellcheck disable=SC2086 # unit lists are space/newline-separated names
+    for unit in ${STOP_UNITS[$app]} ${WAKE_UNITS[$app]} ${WAKE_TIMERS[$app]} $units; do
+        state=$(owner systemctl --user is-active "$unit" 2>/dev/null || true)
+        case "$state" in
+            inactive) ;;
+            failed) log "rotate:$app: $unit is failed (its last run failed; not running)" ;;
+            *) die "rotate:$app: $unit is ${state:-unknown} after the stop (images kept)" ;;
+        esac
+    done
+    left=$(app_containers_left "$app")
+    [ -z "$left" ] || die "rotate:$app: containers still there: $(echo $left) (images kept)"
+    phase_drop_images "$app"
+    log "rotate:$app: units stopped and inactive, no container left, images dropped; host $(($(host_free) >> 20)) MiB free"
+}
+
+phase_wake() {  # <app>
+    local app=$1 unit start deadline free
+    deployed "$app" || die "wake:$app: $app is not installed in $NAME (install it with its app phase)"
+    phase_images "$app"
+    images_resolve "$app"
+    if [ "$app" = code-server ]; then
+        inotify_headroom "the ID-mapped copy container"
+        cs_idmap_copy
+    fi
+    free=$(host_free)
+    [ $((free - ${IDMAP_GIB[$app]} * GIB)) -ge $(((FLOOR_GIB + RESERVE_GIB) * GIB)) ] ||
+        die "host disk: $((free >> 30)) GiB free; $app's first start needs up to ${IDMAP_GIB[$app]} GiB and $((FLOOR_GIB + RESERVE_GIB)) GiB must stay free (images kept, nothing started)"
+    inotify_headroom "$app's units"
+    start=$SECONDS MIN_FREE=$free
+    for unit in ${WAKE_UNITS[$app]}; do
+        start_watched "$app" "$unit"
+        log "wake:$app: started $unit ($((SECONDS - start))s, lowest host free $((MIN_FREE >> 20)) MiB)"
+    done
+    deadline=$((start + WAKE_READY_S))
+    until health_ok "$app"; do
+        [ "$SECONDS" -lt "$deadline" ] || break
+        sleep 15
+    done
+    for unit in ${WAKE_TIMERS[$app]}; do
+        owner systemctl --user start "$unit" || die "wake:$app: starting $unit failed"
+        log "wake:$app: started $unit"
+    done
+    until (phase_check "$app") >/dev/null 2>&1; do
+        [ "$SECONDS" -lt "$deadline" ] || break
+        sleep 15
+    done
+    phase_check "$app"  # once more out loud: every line, and it stops the script when the app is not ready
+    log "wake:$app: ready $((SECONDS - start))s after its first unit started; host $(($(host_free) >> 20)) MiB free"
+}
+
 for phase in "${phases[@]}"; do
     log "== phase $phase"
     case "$phase" in
         images:*) phase_images "${phase#images:}" ;;
         drop-images:*) phase_drop_images "${phase#drop-images:}" ;;
+        wake:*) phase_wake "${phase#wake:}" ;;
+        rotate:*) phase_rotate "${phase#rotate:}" ;;
         check:*) phase_check "${phase#check:}" ;;
         code-server) phase_code_server ;;
         *) "phase_$phase" ;;

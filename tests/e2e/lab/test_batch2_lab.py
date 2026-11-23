@@ -94,6 +94,262 @@ class Batch2ScriptsTest(unittest.TestCase):
             self.assertIn(f'phase_check_{app.replace("-", "_")}() {{', text)
 
 
+# Stand-ins for deploy-batch2.sh's rotate:APP and wake:APP: a labpodman that keeps dev-e's unit, container and image
+# state in a JSON file (starting a unit makes its containers, stopping removes them: quadlet's --rm), a host podman
+# that only answers `image inspect` (anything else, e.g. save, is UNEXPECTED), and a df with a chosen free space.
+# Every call is logged. Nothing reaches a real labpodman, the host's Podman or a device.
+FAKE_DEVICE_LP = r'''#!/usr/bin/env python3
+import json, os, sys
+argv = sys.argv[1:]
+path = os.environ['FAKE_STATE']
+st = json.load(open(path))
+def save():
+    json.dump(st, open(path, 'w'))
+def log(*entry):
+    with open(os.environ['FAKE_LOG'], 'a') as handle:
+        handle.write(json.dumps(list(entry)) + '\n')
+def out(text, rc=0):
+    if text:
+        print(text)
+    save(); sys.exit(rc)
+CONTAINERS = st['unit_containers']
+if argv[:2] == ['container', 'inspect']:
+    out('running')
+if argv[:2] == ['inspect', 'woowbk-dev-e']:
+    out('none {}')
+if argv[:2] == ['volume', 'inspect']:
+    out(st['volume'])
+if argv[:4] == ['exec', '-i', 'woowbk-dev-e', '/usr/local/libexec/woowtech-cockpit-backup']:
+    log('engine', argv[4])
+    apps = [{'id': i, 'deployed': True, 'state': 'running', 'owner': 'appowner', 'problems': [],
+             'units': [{'name': u, 'active': st['units'].get(u) == 'active'} for u in entry['units']]}
+            for i, entry in st['catalog'].items()]
+    out(json.dumps({'ok': True, 'apps': apps}))
+if argv[:4] == ['exec', '-i', 'woowbk-dev-e', '/usr/local/bin/woowbk-owner']:
+    cmd = argv[4:]
+    if cmd[:2] == ['test', '-f']:
+        out('', 0 if os.path.basename(cmd[2]) in st['quadlets'] else 1)
+    if cmd[:2] == ['systemctl', '--user']:
+        verb, unit = cmd[2], (cmd[3] if len(cmd) > 3 else '')
+        if verb in ('start', 'stop'):
+            log('systemctl', verb, unit)
+            if verb == 'start' and unit in st.get('fail_start', []):
+                out('', 1)
+            if verb == 'start':
+                st['units'][unit] = 'active'
+                st['containers'] += [c for c in CONTAINERS.get(unit, []) if c not in st['containers']]
+            elif unit not in st.get('stuck', []):
+                if st['units'].get(unit) != 'failed':
+                    st['units'][unit] = 'inactive'
+                st['containers'] = [c for c in st['containers']
+                                    if c not in CONTAINERS.get(unit, []) or c in st.get('leftover', [])]
+            out('')
+        if verb == 'is-active':
+            state = st['units'].get(unit, 'inactive')
+            out(state, 0 if state == 'active' else 3)
+        if verb == 'list-units':
+            out('')
+    if cmd[:2] == ['podman', 'ps']:
+        out('\n'.join(st['containers']))
+    if cmd[:3] == ['podman', 'image', 'inspect']:
+        ref = cmd[-1]
+        out(st['images'][ref], 0) if ref in st['images'] else out('', 125)
+    if cmd[:3] == ['podman', 'image', 'exists']:
+        out('', 0 if cmd[3] in st['images'] or cmd[3] in st.get('pinned', []) else 1)
+    if cmd[:2] == ['podman', 'rmi']:
+        log('rmi', cmd[-1])
+        st['images'] = {k: v for k, v in st['images'].items() if v != cmd[-1]}
+        st['pinned'] = []
+        out('')
+    if cmd[:2] == ['podman', 'tag']:
+        st['images'][cmd[3]] = cmd[2]
+        out('')
+    if cmd[:2] == ['podman', 'create']:
+        log('create', cmd[cmd.index('--name') + 1], cmd[cmd.index('--userns') + 1])
+        st['containers'].append(cmd[cmd.index('--name') + 1])
+        out('')
+    if cmd[:2] == ['podman', 'rm']:
+        name = cmd[-1]
+        was = name in st['containers']
+        st['containers'] = [c for c in st['containers'] if c != name]
+        out('', 0 if was or '-f' in cmd else 1)
+    if cmd[:3] == ['podman', 'healthcheck', 'run']:
+        out('')
+    if cmd[:1] == ['sed']:
+        out(st['quadlet_image'].get(os.path.basename(cmd[-1])[:-len('.container')], ''))
+    if cmd[:1] == ['grep']:
+        out('')
+if argv[:2] == ['exec', 'woowbk-dev-e']:
+    cmd = argv[2:]
+    if cmd[:2] == ['test', '-f']:
+        out('')
+    if cmd[:3] == ['python3', '-I', '-c']:
+        entry = st['catalog'][cmd[4]]
+        field = cmd[5] if len(cmd) > 5 else ('health' if '"health"' in cmd[3] else 'units')
+        out('\n'.join(f"{h['url']}|{h['expect_status']}" for h in entry['health']) if field == 'health'
+            else '\n'.join(entry['units']))
+    if cmd[:1] == ['curl']:
+        log('curl', cmd[-1])
+        print(st.get('http', {}).get(cmd[-1], '200'), end=''); save(); sys.exit(0)
+log('UNEXPECTED', 'labpodman', argv)
+save(); sys.exit(97)
+'''
+FAKE_HOST_PODMAN = r'''#!/usr/bin/env python3
+import json, os, sys
+argv = sys.argv[1:]
+st = json.load(open(os.environ['FAKE_STATE']))
+if argv[:3] == ['image', 'inspect', '--format'] and argv[3] == '{{.Id}}':
+    print(st['host_ids'][argv[4]]); sys.exit(0)
+with open(os.environ['FAKE_LOG'], 'a') as handle:
+    handle.write(json.dumps(['UNEXPECTED', 'host podman', argv]) + '\n')
+sys.exit(97)
+'''
+FAKE_DF = '#!/bin/sh\necho Avail\necho "$FAKE_FREE"\n'
+CS_ID = '7999790230ec' + '0' * 52
+CS_REF = 'ghcr.io/woowtech/woow-code-server-amd64:4.139.1-8'
+OD_IDS = {'localhost/woow-open-design:4.2.1': '5bf5f9b959b3' + '1' * 52,
+          'docker.io/library/nginx:1.30.4-alpine': '1ae82dcc4a34' + '2' * 52}
+
+
+class RotationPhasesTest(unittest.TestCase):
+    """deploy-batch2.sh e rotate:APP / wake:APP against the stand-ins: order of the steps and every refusal."""
+
+    def device(self, app, awake, loaded, free_gib=30, **extra):
+        import json
+        home = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        lab, fake_bin = home / '.woowbk-lab', home / 'fakebin'
+        (lab / 'bin').mkdir(parents=True)
+        fake_bin.mkdir()
+        for path, text in ((lab / 'bin' / 'labpodman', FAKE_DEVICE_LP), (fake_bin / 'podman', FAKE_HOST_PODMAN),
+                           (fake_bin / 'df', FAKE_DF)):
+            path.write_text(text)
+            path.chmod(0o755)
+        if app == 'code-server':
+            units = {'code-server.service': ['code-server'], 'code-server-health.timer': [],
+                     'code-server-health.service': []}
+            catalog = {'woow-code-server': {'units': ['code-server.service'],
+                                            'health': [{'url': 'http://127.0.0.1:18443/healthz', 'expect_status': 200}]}}
+            host_ids = {CS_REF + '@sha256:fe8b6a0f1b90863cb784cc8a4d69ba33783ee7b87d6322bf975a59511905370d': CS_ID}
+            images = {CS_REF: CS_ID, CS_ID: CS_ID} if loaded else {}
+            quadlets, quadlet_image = ['code-server.container'], {'code-server': CS_REF + '@sha256:' + 'e' * 64}
+            pinned = [CS_REF + '@sha256:' + 'e' * 64] if loaded else []
+        else:
+            names = ['open-design', 'open-design-nginx', 'open-design-mcp', 'open-design-terminal']
+            units = {f'{n}.service': [n] for n in names}
+            catalog = {'open-design': {'units': [f'{n}.service' for n in names],
+                                       'health': [{'url': 'http://127.0.0.1:7456/api/health', 'expect_status': 200}]}}
+            host_ids = {'localhost/woow-open-design:4.2.1': OD_IDS['localhost/woow-open-design:4.2.1'],
+                        'docker.io/library/nginx:1.30.4-alpine@sha256:dc5069ad14f19660b141b21236140b91656bf89bbc3e2417c70ae650cd66104c':
+                            OD_IDS['docker.io/library/nginx:1.30.4-alpine']}
+            images = {**OD_IDS, **{i: i for i in OD_IDS.values()}} if loaded else {}
+            quadlets = [f'{n}.container' for n in names]
+            quadlet_image = {'open-design': 'localhost/woow-open-design:4.2.1', 'open-design-nginx':
+                             'docker.io/library/nginx:1.30.4-alpine', 'open-design-mcp': 'localhost/woow-open-design:4.2.1',
+                             'open-design-terminal': 'localhost/woow-open-design:4.2.1'}
+            pinned = []
+        state = {'units': {u: ('active' if awake else 'inactive') for u in units}, 'unit_containers': units,
+                 'containers': [c for cs in units.values() for c in cs] if awake else [], 'images': images,
+                 'pinned': pinned, 'catalog': catalog, 'host_ids': host_ids, 'quadlets': quadlets,
+                 'quadlet_image': quadlet_image, 'volume': str(home / 'volume-home')}
+        state.update(extra)
+        (home / 'state.json').write_text(json.dumps(state))
+        env = dict(os.environ, HOME=str(home), WOOWBK_LAB_HOME=str(lab), FAKE_STATE=str(home / 'state.json'),
+                   FAKE_LOG=str(home / 'calls.log'), FAKE_FREE=str(free_gib * 1024 ** 3),
+                   PATH=f'{fake_bin}:{os.environ["PATH"]}', WAKE_READY_S='20')
+        return home, env
+
+    def run_phase(self, home, env, phase):
+        import json
+        proc = subprocess.run(['bash', str(HERE / 'deploy-batch2.sh'), 'e', phase], capture_output=True, text=True,
+                              env=env, timeout=300)
+        log = home / 'calls.log'
+        calls = [json.loads(line) for line in log.read_text().splitlines()] if log.exists() else []
+        self.assertNotIn('UNEXPECTED', [c[0] for c in calls], calls)
+        return proc, calls, json.loads((home / 'state.json').read_text())
+
+    def test_rotate_stops_everything_then_drops_the_images(self):
+        home, env = self.device('code-server', awake=True, loaded=True)
+        proc, calls, state = self.run_phase(home, env, 'rotate:code-server')
+        self.assertEqual(proc.returncode, 0, proc.stderr[-3000:])
+        stops = [c[2] for c in calls if c[:2] == ['systemctl', 'stop']]
+        self.assertEqual(stops, ['code-server-health.timer', 'code-server-health.service', 'code-server.service'])
+        self.assertEqual([c for c in calls if c[0] == 'rmi'], [['rmi', CS_ID]])
+        self.assertGreater(calls.index(['rmi', CS_ID]), calls.index(['systemctl', 'stop', 'code-server.service']))
+        self.assertEqual(state['images'], {})
+        self.assertEqual(state['containers'], [])
+
+    def test_rotate_keeps_the_images_when_a_unit_stays_active(self):
+        home, env = self.device('code-server', awake=True, loaded=True, stuck=['code-server.service'])
+        proc, calls, state = self.run_phase(home, env, 'rotate:code-server')
+        self.assertEqual(proc.returncode, 1)
+        self.assertIn('code-server.service is active after the stop (images kept)', proc.stderr)
+        self.assertEqual([c for c in calls if c[0] == 'rmi'], [])
+        self.assertIn(CS_ID, state['images'].values())
+
+    def test_rotate_keeps_the_images_when_a_container_is_left(self):
+        home, env = self.device('opendesign', awake=True, loaded=True, leftover=['open-design-mcp'])
+        proc, calls, state = self.run_phase(home, env, 'rotate:opendesign')
+        self.assertEqual(proc.returncode, 1)
+        self.assertIn('containers still there: open-design-mcp (images kept)', proc.stderr)
+        self.assertEqual([c for c in calls if c[0] == 'rmi'], [])
+
+    def test_rotate_accepts_a_failed_health_run(self):
+        home, env = self.device('code-server', awake=True, loaded=True)
+        state = __import__('json').loads((home / 'state.json').read_text())
+        state['units']['code-server-health.service'] = 'failed'
+        (home / 'state.json').write_text(__import__('json').dumps(state))
+        proc, calls, state = self.run_phase(home, env, 'rotate:code-server')
+        self.assertEqual(proc.returncode, 0, proc.stderr[-3000:])
+        self.assertIn('code-server-health.service is failed (its last run failed; not running)', proc.stderr)
+
+    def test_wake_code_server_copies_first_then_starts_then_checks(self):
+        home, env = self.device('code-server', awake=False, loaded=True)
+        proc, calls, state = self.run_phase(home, env, 'wake:code-server')
+        self.assertEqual(proc.returncode, 0, proc.stderr[-3000:])
+        create = ['create', 'woowbk-lab-cs-idmap-copy', 'keep-id:uid=1000,gid=1000']
+        start_service = ['systemctl', 'start', 'code-server.service']
+        start_timer = ['systemctl', 'start', 'code-server-health.timer']
+        self.assertLess(calls.index(create), calls.index(start_service))
+        self.assertLess(calls.index(start_service), calls.index(start_timer))
+        self.assertLess(calls.index(start_timer), max(i for i, c in enumerate(calls) if c[0] == 'engine'))
+        self.assertIn('dev-e ready: code-server running and healthy', proc.stderr)
+        self.assertEqual(state['containers'], ['code-server'])  # the throwaway copy container is gone
+
+    def test_wake_refuses_an_unloaded_pinned_image_before_any_start(self):
+        home, env = self.device('code-server', awake=False, loaded=True, pinned=[])
+        proc, calls, _ = self.run_phase(home, env, 'wake:code-server')
+        self.assertEqual(proc.returncode, 1)
+        self.assertIn('installed units name images that are not loaded: code-server.container', proc.stderr)
+        self.assertEqual([c for c in calls if c[:2] == ['systemctl', 'start'] or c[0] == 'create'], [])
+
+    def test_wake_refuses_when_the_first_start_copy_would_cross_the_floor(self):
+        home, env = self.device('opendesign', awake=False, loaded=True, free_gib=19)
+        proc, calls, _ = self.run_phase(home, env, 'wake:opendesign')
+        self.assertEqual(proc.returncode, 1)
+        self.assertIn("opendesign's first start needs up to 7 GiB and 13 GiB must stay free (images kept, nothing started)",
+                      proc.stderr)
+        self.assertEqual([c for c in calls if c[:2] == ['systemctl', 'start']], [])
+
+    def test_wake_stops_at_a_unit_that_does_not_start(self):
+        home, env = self.device('opendesign', awake=False, loaded=True, free_gib=21, fail_start=['open-design-nginx.service'])
+        proc, calls, _ = self.run_phase(home, env, 'wake:opendesign')
+        self.assertEqual(proc.returncode, 1)
+        self.assertIn('wake:opendesign: starting open-design-nginx.service failed (the units after it were not started)',
+                      proc.stderr)
+        self.assertEqual([c[2] for c in calls if c[:2] == ['systemctl', 'start']],
+                         ['open-design.service', 'open-design-nginx.service'])
+
+    def test_wake_opendesign_starts_its_four_units_in_order(self):
+        home, env = self.device('opendesign', awake=False, loaded=True, free_gib=21)
+        proc, calls, state = self.run_phase(home, env, 'wake:opendesign')
+        self.assertEqual(proc.returncode, 0, proc.stderr[-3000:])
+        self.assertEqual([c[2] for c in calls if c[:2] == ['systemctl', 'start']],
+                         ['open-design.service', 'open-design-nginx.service', 'open-design-mcp.service',
+                          'open-design-terminal.service'])
+        self.assertEqual(sorted(state['containers']), sorted(['open-design', 'open-design-nginx', 'open-design-mcp',
+                                                              'open-design-terminal']))
+
+
 
 def _layer(entries, gzip=False):
     """A layer tarball (bytes) with (name, uid, gid) regular files and directories (names ending in /)."""
@@ -306,6 +562,229 @@ class BaselineDriverTest(unittest.TestCase):
         text = (HERE / 'batch2_baseline.py').read_text()
         self.assertIn("created = markers(app, 'seed', 'after', time.strftime('%Y%m%dT%H%M%S'))\n", text)
         self.assertNotIn("'after', time.strftime('%Y%m%dT%H%M%S'), secrets.", text)
+
+
+# A stand-in labpodman for batch2_baseline.py --verify: answers from a scenario file and logs every call, so the tests
+# see exactly what the read-only mode asks dev-e to do. It never reaches a real labpodman or device.
+FAKE_LP = r'''#!/usr/bin/env python3
+import json, os, sys
+argv = sys.argv[1:]
+scenario = json.load(open(os.environ['FAKE_LP_SCENARIO']))
+def log(entry):
+    with open(os.environ['FAKE_LP_LOG'], 'a') as handle:
+        handle.write(json.dumps(entry) + '\n')
+if argv[:2] == ['inspect', 'woowbk-dev-e']:
+    log(['inspect']); print(scenario.get('inspect', 'true none {}')); sys.exit(0)
+if argv[:3] == ['exec', '-i', 'woowbk-dev-e'] and argv[3] == '/usr/local/libexec/woowtech-cockpit-backup':
+    request = sys.stdin.read()
+    log(['engine', argv[4], request]); print(json.dumps(scenario['engine'][argv[4]])); sys.exit(0)
+if argv[:4] == ['exec', '-i', 'woowbk-dev-e', '/usr/local/bin/woowbk-owner'] and argv[4:7] == ['python3', '-I', '-c']:
+    app, action = argv[8], argv[9]
+    log(['markers', app, action, argv[10:], json.loads(sys.stdin.read() or '{}') != {}])
+    print(json.dumps(scenario['markers'][app][action])); sys.exit(0)
+if argv[:3] == ['exec', 'woowbk-dev-e', 'cat']:
+    log(['cat', argv[3]]); print(json.dumps(scenario['catalog'][argv[3].rsplit('/', 1)[1][:-5]])); sys.exit(0)
+if argv[:3] == ['exec', 'woowbk-dev-e', 'curl']:
+    log(['curl', argv[-1]]); print(scenario.get('http', {}).get(argv[-1], '200'), end=''); sys.exit(0)
+log(['UNEXPECTED', argv]); sys.exit(97)
+'''
+NC_SHA = 'woowbk-lab-baseline.txt:' + '5' * 64
+CS_READ = {'snippets': ['woowbk-lab-baseline.code-snippets:' + 'a' * 64], 'skills': ['woowbk-lab-baseline:' + 'b' * 64],
+           'files': ['woowbk-lab-baseline.txt:' + 'c' * 64]}
+
+
+class VerifyModeTest(unittest.TestCase):
+    """batch2_baseline.py --verify against the stand-in labpodman: read only, and every way it must fail."""
+
+    def run_verify(self, apps, read=None, listed=True, inspect='true none {}', http=None, password=True):
+        import json
+        home = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        lab = home / '.woowbk-lab'
+        (lab / 'bin').mkdir(parents=True)
+        lp = lab / 'bin' / 'labpodman'
+        lp.write_text(FAKE_LP)
+        lp.chmod(0o755)
+        if password:
+            (lab / 'secrets').mkdir(mode=0o700)
+            (lab / 'secrets' / 'dev-e-markers.json').write_text(json.dumps({'nextcloud': 'not-a-real-one'}))
+        baseline_reads = {'nextcloud': {'users': ['woowbk-lab-baseline'], 'files': [NC_SHA]}, 'code-server': CS_READ}
+        for app, found in baseline_reads.items():
+            run = lab / 'evidence' / 'batch2-lab' / '20261123T211623-baseline'
+            run.mkdir(parents=True, exist_ok=True)
+            (run / f'{app}-markers-after-restore.json').write_text(json.dumps(found))
+        ids = {app: json.loads((HERE / 'evidence' / 'batch2-lab-20261123' / f'{app}-baseline.json').read_text())['backup_id']
+               for app in ('nextcloud', 'code-server')}
+        catalog_id = {'nextcloud': 'nextcloud', 'code-server': 'woow-code-server'}
+        scenario = {
+            'inspect': inspect, 'http': http or {},
+            'engine': {'status': {'ok': True, 'key': {'key_id': 'lab-key'},
+                                  'apps': [{'id': i, 'deployed': True, 'state': 'running', 'problems': []}
+                                           for i in catalog_id.values()]},
+                       'list': {'ok': True, 'backups': [{'id': ids[a], 'encrypted': True, 'key_id': 'lab-key',
+                                                         'apps': [{'id': catalog_id[a]}]} for a in ids if listed]}},
+            'markers': {app: {'read': (read or {}).get(app, found), 'login': {'ok': True}}
+                        for app, found in baseline_reads.items()},
+            'catalog': {i: {'health': [{'url': f'http://127.0.0.1/{i}', 'expect_status': 200}]} for i in catalog_id.values()},
+        }
+        (home / 'scenario.json').write_text(json.dumps(scenario))
+        env = dict(os.environ, HOME=str(home), WOOWBK_LAB_HOME=str(lab), FAKE_LP_SCENARIO=str(home / 'scenario.json'),
+                   FAKE_LP_LOG=str(home / 'calls.log'))
+        proc = subprocess.run([sys.executable, '-I', str(HERE / 'batch2_baseline.py'), '--verify', *apps],
+                              capture_output=True, text=True, env=env, timeout=120)
+        calls = [json.loads(line) for line in (home / 'calls.log').read_text().splitlines()]
+        results = sorted((lab / 'evidence' / 'batch2-lab').glob('*-verify/result.json'))
+        result = json.loads(results[-1].read_text()) if results else None
+        return proc, calls, result, lab
+
+    def failed(self, result):
+        return [c['check'] for c in result['checks'] if not c['ok']]
+
+    def test_baseline_state_passes_and_only_reads(self):
+        proc, calls, result, lab = self.run_verify(['nextcloud', 'code-server'])
+        self.assertEqual(proc.returncode, 0, proc.stdout[-2000:] + proc.stderr[-2000:])
+        self.assertEqual(self.failed(result), [])
+        self.assertEqual(result['passed'], result['total'])
+        self.assertEqual({c[1] for c in calls if c[0] == 'engine'}, {'status', 'list'})  # no job, key or restore command
+        self.assertEqual({c[2] for c in calls if c[0] == 'markers'}, {'read', 'login'})  # never seed
+        self.assertNotIn('UNEXPECTED', [c[0] for c in calls])
+        self.assertTrue(any(c == ['markers', 'nextcloud', 'read', [], True] for c in calls))  # the password goes by stdin
+        self.assertNotIn('not-a-real-one', proc.stdout + proc.stderr + json_dumps(result))
+        # The baseline backup's key_id (a name with KEY) never reaches the evidence.
+        self.assertNotIn('lab-key', json_dumps(result) + proc.stdout)
+        self.assertIn('<masked>', json_dumps(result))
+        self.assertIn(['markers', 'code-server', 'login', [], False], calls)
+        self.assertEqual(list((lab / 'evidence' / 'batch2-lab').glob('*-baseline/*-backup-job.json')), [])
+        # Every check and the total come out as fixed status lines that services_a_capture.py keeps.
+        import services_a_capture
+        kept = services_a_capture.status_lines(proc.stdout)
+        self.assertIn(f'batch2 verify nextcloud code-server: {result["total"]}/{result["total"]} PASS', kept)
+        self.assertEqual(len(kept), result['total'] + 1, kept)
+
+    def test_a_leftover_after_marker_fails(self):
+        read = {'nextcloud': {'users': ['woowbk-lab-after', 'woowbk-lab-baseline'], 'files': [NC_SHA]}}
+        proc, _, result, _ = self.run_verify(['nextcloud'], read=read)
+        self.assertEqual(proc.returncode, 1)
+        failed = self.failed(result)
+        self.assertEqual(len(failed), 2, failed)
+        self.assertTrue(failed[0].startswith('nextcloud: only the baseline markers'))
+        self.assertTrue(failed[1].startswith("nextcloud: marker read equals the baseline's"))
+        self.assertIn('nextcloud: only the baseline markers (no leftover test marker): FAIL', proc.stdout)
+        self.assertRegex(proc.stdout, r'batch2 verify nextcloud: [0-9]+/[0-9]+ FAIL')
+
+    def test_a_changed_file_fails(self):
+        read = {'code-server': dict(CS_READ, files=['woowbk-lab-baseline.txt:' + 'd' * 64])}
+        proc, _, result, _ = self.run_verify(['code-server'], read=read)
+        self.assertEqual(proc.returncode, 1)
+        self.assertEqual(len(self.failed(result)), 1)
+        self.assertTrue(self.failed(result)[0].startswith("code-server: marker read equals the baseline's"))
+
+    def test_a_missing_baseline_backup_a_bad_health_answer_and_a_network_fail(self):
+        proc, _, result, _ = self.run_verify(['nextcloud'], listed=False, inspect='true bridge {}',
+                                             http={'http://127.0.0.1/nextcloud': '503'})
+        self.assertEqual(proc.returncode, 1)
+        failed = self.failed(result)
+        self.assertEqual(len(failed), 3, failed)
+        self.assertEqual(failed[0], 'dev-e: running, network none, no published port')
+        self.assertTrue(failed[1].startswith('nextcloud: catalog health URLs'))
+        self.assertTrue(failed[2].startswith('nextcloud: baseline backup'))
+
+    def test_masking_of_secret_looking_names(self):
+        """batch2_baseline.masked(): dict entries and 'name': 'value' text whose name holds a team secret word."""
+        import re
+        text = (HERE / 'batch2_baseline.py').read_text()
+        scope = {'re': re}
+        exec(text[text.index('SECRET_WORDS = '):text.index('def check(')], scope)
+        masked = scope['masked']
+        self.assertEqual(masked({'id': 'b1', 'key_id': 'D4C1', 'apps': [{'auth_token': 't', 'id': 'nextcloud'}]}),
+                         {'id': 'b1', 'key_id': '<masked>', 'apps': [{'auth_token': '<masked>', 'id': 'nextcloud'}]})
+        self.assertEqual(masked("{'key_id': 'D4C1', 'id': 'x', \"ODOO_PWD\": \"p\"}"),
+                         "{'key_id': '<masked>', 'id': 'x', \"ODOO_PWD\": \"<masked>\"}")
+        self.assertEqual(masked(['woowbk-lab-baseline.txt:' + '5' * 64]), ['woowbk-lab-baseline.txt:' + '5' * 64])
+
+    def test_verify_never_creates_the_password_file(self):
+        proc, calls, result, lab = self.run_verify(['code-server'], password=False)
+        self.assertEqual(proc.returncode, 0, proc.stdout[-2000:])
+        self.assertFalse((lab / 'secrets' / 'dev-e-markers.json').exists())
+
+
+# A stand-in labpodman for batch2_journal_cleanup.py: a journal of N entries that --rotate + --vacuum-time empties
+# (or not, when the scenario says the vacuum fails); every call is logged.
+FAKE_JOURNAL_LP = r"""#!/usr/bin/env python3
+import json, os, sys, time
+argv = sys.argv[1:]
+path = os.environ['FAKE_STATE']
+st = json.load(open(path))
+def log(*e):
+    with open(os.environ['FAKE_LOG'], 'a') as h:
+        h.write(json.dumps(list(e)) + '\n')
+def done(text='', rc=0):
+    if text:
+        print(text)
+    json.dump(st, open(path, 'w')); sys.exit(rc)
+if argv[:2] == ['inspect', 'woowbk-dev-e']:
+    done('true none {}')
+if argv[:2] == ['exec', 'woowbk-dev-e']:
+    cmd = argv[2:]
+    log(*cmd)
+    if cmd == ['journalctl', '--disk-usage']:
+        done(f"Archived and active journals take up {st['mb']}.0M in the file system.")
+    if cmd == ['journalctl', '--rotate']:
+        st['rotated'] = True; done()
+    if cmd == ['journalctl', '--vacuum-time=1s']:
+        if st.get('vacuum_fails'):
+            done('', 1)
+        if st.get('rotated'):
+            st['entries'], st['mb'], st['oldest'] = 1, 8, time.time()
+        done('Vacuuming done, freed 32.0M of archived journals.')
+    if cmd[:2] == ['sh', '-c']:
+        if 'wc -l' in cmd[2] and 'ls /var/log/journal' in cmd[2]:
+            done(str(3 if st['entries'] > 1 else 1))
+        if 'short-unix' in cmd[2]:
+            done(f"{st['oldest']:.6f}" if st['entries'] else '')
+        if 'wc -l' in cmd[2]:
+            done(str(st['entries']))
+log('UNEXPECTED', argv)
+done('', 97)
+"""
+
+
+class JournalCleanupTest(unittest.TestCase):
+    def run_cleanup(self, **state):
+        import json
+        home = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        (home / '.woowbk-lab' / 'bin').mkdir(parents=True)
+        lp = home / '.woowbk-lab' / 'bin' / 'labpodman'
+        lp.write_text(FAKE_JOURNAL_LP)
+        lp.chmod(0o755)
+        (home / 'state.json').write_text(json.dumps({'entries': 5000, 'mb': 40, 'oldest': 1795000000.0, **state}))
+        env = dict(os.environ, HOME=str(home), FAKE_STATE=str(home / 'state.json'), FAKE_LOG=str(home / 'calls.log'))
+        target = home / 'evidence.json'
+        proc = subprocess.run([sys.executable, '-I', str(HERE / 'batch2_journal_cleanup.py'), str(target)],
+                              capture_output=True, text=True, env=env, timeout=120)
+        calls = [json.loads(line) for line in (home / 'calls.log').read_text().splitlines()]
+        return proc, calls, json.loads(target.read_text()) if target.exists() else None, target, env
+
+    def test_rotate_then_vacuum_and_only_old_entries_go(self):
+        proc, calls, doc, target, env = self.run_cleanup()
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertLess(calls.index(['journalctl', '--rotate']), calls.index(['journalctl', '--vacuum-time=1s']))
+        self.assertTrue(doc['ok'])
+        self.assertEqual((doc['before']['disk_usage'], doc['after']['disk_usage']), ('40.0M', '8.0M'))
+        self.assertEqual((doc['before']['entries'], doc['after']['entries']), (5000, 1))
+        self.assertGreaterEqual(doc['after']['oldest_entry_epoch'], doc['start_epoch'] - 1)
+        self.assertEqual(doc['commercial_acceptance'], 'not-complete')
+        self.assertNotIn('UNEXPECTED', [c[0] for c in calls])
+        # never overwrites an attempt
+        again = subprocess.run([sys.executable, '-I', str(HERE / 'batch2_journal_cleanup.py'), str(target)],
+                               capture_output=True, text=True, env=env, timeout=120)
+        self.assertNotEqual(again.returncode, 0)
+        self.assertIn('never overwrite', again.stderr)
+
+    def test_a_failed_vacuum_is_not_ok(self):
+        proc, _, doc, _, _ = self.run_cleanup(vacuum_fails=True)
+        self.assertEqual(proc.returncode, 1)
+        self.assertFalse(doc['ok'])
+        self.assertEqual(doc['vacuum_exit'], 1)
 
 
 class CodeServerCatalogTest(unittest.TestCase):
