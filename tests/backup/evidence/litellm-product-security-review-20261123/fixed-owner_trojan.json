@@ -1,0 +1,69 @@
+{
+ "after_analyse": [],
+ "after_first_connection": {},
+ "after_salt_binding": [],
+ "binding": "match",
+ "blockers": [
+  "HA 的 LiteLLM 資料庫含有只有資料庫超級使用者才能建立的物件（FUNCTION (LANGUAGE C)），無法安全地搬過來。",
+  "資料庫結構版本不同（Prisma 遷移紀錄：只在 HA 的 未知 筆，只在這台的 未知 筆）。請先讓兩邊的 LiteLLM 版本一致後再匯入。"
+ ],
+ "case": "owner_trojan",
+ "container": {
+  "cap_add": [],
+  "cap_drop": [],
+  "memory": 1073741824,
+  "mounts": [
+   "volume:/var/lib/postgresql:noexec,nosuid,nodev,rbind"
+  ],
+  "network_mode": "none",
+  "pids_limit": 512,
+  "ports": {},
+  "privileged": false,
+  "read_only_root": true,
+  "security_opt": [
+   "no-new-privileges"
+  ],
+  "user": ""
+ },
+ "elapsed_seconds": 106.5,
+ "found": {
+  "migrations": null,
+  "schemas": [
+   "woow",
+   "woow_platform"
+  ],
+  "superuser": [
+   "FUNCTION (LANGUAGE C)"
+  ]
+ },
+ "image_pg18": "sha256:4ea77c7055dec6a632156aa2cd9f1abaaedeba5f812f104f4e9e1ac37363469b",
+ "markers_final": {},
+ "notes": [],
+ "scan": {
+  "pg_version": "18",
+  "salt_valid": true,
+  "symlinks": 0
+ },
+ "session_settings": {
+  "datestyle": "ISO, MDY",
+  "event_triggers": "off",
+  "extra_float_digits": "3",
+  "review": null,
+  "search_path": "pg_catalog",
+  "session_preload_libraries": "",
+  "shared_preload_libraries": ""
+ },
+ "source": {
+  "commit": "d31c59a6f8d62ff9abf4aa6e27b90365cda997e7",
+  "ha_litellm_sha256": "03f3ec69ccf992c8cdafad9b0cb56e993e638756c93113bcaa4997c74bdaf192",
+  "tracked_changes": false
+ },
+ "steps": [
+  "start_ha_cluster",
+  "analyse",
+  "salt_binding",
+  "read_schema"
+ ],
+ "volumes_left_behind": [],
+ "warnings": []
+}

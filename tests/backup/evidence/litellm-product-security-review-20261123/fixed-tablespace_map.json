@@ -1,0 +1,82 @@
+{
+ "after_analyse": [],
+ "after_first_connection": {},
+ "after_salt_binding": [],
+ "binding": "match",
+ "blockers": [
+  "HA 的 LiteLLM 資料庫不是在停止狀態下備份的（含有 backup_label 或 tablespace_map），無法安全地搬過來；請在 HA 重新做一份 LiteLLM 的備份。"
+ ],
+ "case": "tablespace_map",
+ "container": {
+  "cap_add": [],
+  "cap_drop": [],
+  "memory": 1073741824,
+  "mounts": [
+   "volume:/var/lib/postgresql:noexec,nosuid,nodev,rbind"
+  ],
+  "network_mode": "none",
+  "pids_limit": 512,
+  "ports": {},
+  "privileged": false,
+  "read_only_root": true,
+  "security_opt": [
+   "no-new-privileges"
+  ],
+  "user": ""
+ },
+ "elapsed_seconds": 228.4,
+ "found": {
+  "migrations": [
+   "20250326162113_baseline"
+  ],
+  "schemas": [
+   "woow",
+   "woow_platform"
+  ],
+  "superuser": []
+ },
+ "image_pg18": "sha256:4ea77c7055dec6a632156aa2cd9f1abaaedeba5f812f104f4e9e1ac37363469b",
+ "markers_final": {},
+ "notes": [],
+ "pg_tblspc": [
+  "drwx------    2 postgres postgres      4096 Nov 23 12:54 .",
+  "drwx------   19 postgres postgres      4096 Nov 23 12:56 .."
+ ],
+ "scan": {
+  "pg_version": "18",
+  "salt_valid": true,
+  "symlinks": 0
+ },
+ "session_settings": {
+  "datestyle": "ISO, MDY",
+  "event_triggers": "off",
+  "extra_float_digits": "3",
+  "review": null,
+  "search_path": "pg_catalog",
+  "session_preload_libraries": "",
+  "shared_preload_libraries": ""
+ },
+ "source": {
+  "commit": "d31c59a6f8d62ff9abf4aa6e27b90365cda997e7",
+  "ha_litellm_sha256": "03f3ec69ccf992c8cdafad9b0cb56e993e638756c93113bcaa4997c74bdaf192",
+  "tracked_changes": false
+ },
+ "steps": [
+  "start_ha_cluster",
+  "analyse",
+  "salt_binding",
+  "read_schema",
+  "export_rows"
+ ],
+ "stored_settings": null,
+ "stored_settings_line": null,
+ "user_row_as_exported": [
+  "u1",
+  "proxy_admin",
+  "0.123456789012345",
+  "2026-11-05 10:00:00",
+  "2026-11-05 10:00:00+00"
+ ],
+ "volumes_left_behind": [],
+ "warnings": []
+}
