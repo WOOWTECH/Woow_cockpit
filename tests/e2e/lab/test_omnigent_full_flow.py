@@ -1,7 +1,9 @@
 """Offline tests of omnigent_full_flow.py's pure parts: the team's dev-d lock rule (like `flock -w`, never while
 emqx-main's waiting file exists), the committed-tree rule, fixed output labels and the embedded programs. Nothing here
 reaches a device, labpodman or a secret."""
+import contextlib
 import fcntl
+import io
 import importlib.util
 import os
 from pathlib import Path
@@ -114,7 +116,18 @@ class OutputTests(unittest.TestCase):
 
     def test_the_fixture_paths_and_digests(self):
         self.assertEqual(flow.fixture_path('arm', 'enc').name, 'woow-b1-arm-enc.tar')
-        self.assertEqual(sorted(flow.FIXTURE_SHA), [('arm', 'enc'), ('arm', 'plain'), ('x86', 'enc'), ('x86', 'plain')])
+        self.assertEqual(sorted(flow.FIXTURE_SHA), [('arm', 'enc'), ('arm', 'plain'), ('x86', 'active'), ('x86', 'enc'),
+                                                    ('x86', 'plain')])
+
+    def test_the_active_task_fixture_is_the_lab_made_x86_copy(self):
+        self.assertEqual(flow.fixture_path('x86', 'active'), flow.ACTIVE_FIXTURE)
+        self.assertEqual(flow.ACTIVE_FIXTURE.name, 'woow-b1-x86-plain-active-task.tar')
+        self.assertIn('20261119-b1-lab', flow.ACTIVE_FIXTURE.parts)   # never one of the real HA files' folders
+        with self.assertRaises(flow.Failed):
+            flow.fixture_path('arm', 'active')
+        with self.assertRaises(SystemExit):
+            with contextlib.redirect_stderr(io.StringIO()):
+                flow.main(['--run', '--arch', 'arm', '--form', 'active', '--test-mode'])
 
     def test_the_embedded_programs_compile_and_print_no_value(self):
         flow.self_check()

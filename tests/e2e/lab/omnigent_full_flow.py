@@ -5,8 +5,15 @@ HA-import flow, exactly the helper commands the Cockpit page sends (lane omnigen
 that replaced the SECURITY_BLOCKER hold: trusted schema, HA's data only).
 
   python3 -I tests/e2e/lab/services_a_capture.py --private=FILE <evidence.json> <scope> -- \\
-      python3 -I tests/e2e/lab/omnigent_full_flow.py --run --arch x86|arm --form plain|enc
+      python3 -I tests/e2e/lab/omnigent_full_flow.py --run --arch x86|arm --form plain|enc [--test-mode]
+      python3 -I tests/e2e/lab/omnigent_full_flow.py --run --arch x86 --form active --test-mode
   python3 -I tests/e2e/lab/omnigent_full_flow.py --self-check      (offline; never touches a device or a secret)
+
+`--form active` is the LAB-MADE copy of the real x86 plain b1 backup with ONE more Omnigent scheduled task, ACTIVE
+(tm_build.py, 11-19; HA's real backups hold only a paused task), so that the page's test mode (`--test-mode`: the
+convert job's test_mode) has a task to pause: the check must count 2 tasks / 1 active, the result must say it paused
+1, and every task must be paused in the restored database (without test mode the active task must stay active and the
+reminder must say it will run here).
 
 One run = one hold of the dev-d mutation lock (blocking like `flock -w 3600`, never taken while emqx-main's waiting
 file exists), dev-d's outer isolation recorded before and after (`owner.sh d --verify-isolation`), the checkout
@@ -77,6 +84,10 @@ FIXTURE_SHA = {('x86', 'plain'): '3871a468e2f3a11488df7c6a00a4a8ed7c5b89c3ba2dbc
                ('arm', 'plain'): '1e6a4665315bc69fd114f8d43f7d429aecab53f07d07793ecf8c2c057a92c5d4',
                ('x86', 'enc'): 'f82422e327f151ec819d8e626011af965e40bf1ac78da3fa7a7bd0f869b69e1d',
                ('arm', 'enc'): '6d0647f0acb2e0d95043d66852c08bbc020d409d4f6747f817c10f94e2c33d1c'}
+# lab-made from the real x86 plain b1 backup (see the docstring and ha_import_b1_e2e.ACTIVE_FIXTURE)
+ACTIVE_FIXTURE = (LAB / 'ha-fixtures' / '20261119-b1-lab' / 'woow-b1-x86-plain-active-task' /
+                  'woow-b1-x86-plain-active-task.tar')
+FIXTURE_SHA[('x86', 'active')] = 'c37cf411338525eaa838254359fc62ba74ef400a7d2948d1f0300efca770af94'
 UNITS = ('omnigent-postgres.service', 'omnigent-server.service', 'omnigent-runner.service')
 DROPIN_DIR_REL = '.config/systemd/user/omnigent-server.service.d'
 DROPIN_REL = DROPIN_DIR_REL + '/zz-omni-product-fail-once.conf'
@@ -196,6 +207,10 @@ def verify_isolation():
 
 
 def fixture_path(arch, form):
+    if form == 'active':
+        if arch != 'x86':
+            raise Failed('the active-task fixture is the x86 one')
+        return ACTIVE_FIXTURE
     name = f'woow-b1-{arch}-{form}'
     return FIXTURES / arch / name / f'{name}.tar'
 
@@ -339,6 +354,8 @@ class Run:
         self.lock_started = time.monotonic()
         self.before, self.before_markers = {}, {}
         self.converted = self.safety = self.store_id = self.kit = self.ha_cookie_sha = None
+        self.test_mode = bool(getattr(args, 'test_mode', False))
+        self.upload_tag = f'{self.arch}-{self.form}'   # 'x86-active' = ha_import_b1_e2e's COUNT_OVERRIDES key
 
     # -------- guards
     def budget(self, phase):
@@ -375,7 +392,7 @@ class Run:
             raise Failed('the HA backup key is missing from the harness reader')
         if s['B1_OMNI_ADMIN_USER'] != next(u['id'] for u in self.src['users'] if u['is_admin']):
             raise Failed('the b1 admin is not the source fact admin')
-        plain = fixture_path(self.arch, 'plain')
+        plain = self.fixture if self.form == 'active' else fixture_path(self.arch, 'plain')
         cookie = ha_cookie(plain)
         s.register('HA_OMNI_COOKIE', cookie.decode('latin-1'))
         if cookie.strip() != cookie:
@@ -506,7 +523,8 @@ class Run:
         ev = self.ev
         sha = sha256_file(self.fixture)
         tag = f'{self.arch}-{self.form}'
-        if not ev.check(f'upload {tag}: the local file is the recorded b1 fixture (sha256)',
+        what = 'lab-made b1 fixture with one active task' if self.form == 'active' else 'b1 fixture'
+        if not ev.check(f'upload {tag}: the local file is the recorded {what} (sha256)',
                         sha == FIXTURE_SHA[(self.arch, self.form)], sha[:16]):
             raise Failed('fixture changed')
         store_id = 'ha-' + sha[:20]
@@ -553,6 +571,10 @@ class Run:
                  section.get('alembic') == want['alembic'] and section.get('admins') == want['admins']
                  and section.get('users', -1) >= want['admins'],
                  {k: section.get(k) for k in ('alembic', 'users', 'admins', 'conversations', 'agents', 'hosts')})
+        if self.form == 'active':
+            ev.check(f'check {tag}/omnigent: 2 scheduled tasks, 1 of them active (the lab-made one)',
+                     section.get('scheduled_tasks') == 2 and section.get('scheduled_tasks_active') == 1,
+                     {k: section.get(k) for k in ('scheduled_tasks', 'scheduled_tasks_active')})
         leftovers = drv.labelled()
         ev.check('check: no throwaway container, volume or network left', not any(leftovers.values()), leftovers)
 
@@ -567,7 +589,7 @@ class Run:
                  and space['floor'] >= 2 * 1024 ** 3 and space['min_free'] > space['floor'],
                  {k: space.get(k) for k in ('total', 'running_reserve', 'watch_margin', 'floor', 'min_free')})
         before_ids = {b['id'] for b in drv.ok('list', ev=ev)['backups']}
-        job, took = drv.convert(self.store_id, ['omnigent'], False, ev=ev, key=self.key(),
+        job, took = drv.convert(self.store_id, ['omnigent'], self.test_mode, ev=ev, key=self.key(),
                                 tag=f'convert-{tag}-omnigent')
         ev.save('convert-job.json', job)
         if not ev.check(f'import {tag}: ha-convert-start job succeeded with a backup id', job['state'] == 'succeeded'
@@ -577,8 +599,9 @@ class Run:
         self.converted = result['backup_id']
         drv.created_backup(self.converted)
         imp = result.get('ha_import') or {}
-        ev.check(f'import {tag}: ha_import: apps omnigent, not test mode, the trusted-schema note and the runner reminder',
-                 imp.get('apps') == ['omnigent'] and imp.get('test_mode') is False
+        ev.check(f'import {tag}: ha_import: apps omnigent, {"test mode" if self.test_mode else "not test mode"}, the '
+                 'trusted-schema note and the runner reminder',
+                 imp.get('apps') == ['omnigent'] and imp.get('test_mode') is self.test_mode
                  and any('資料庫結構' in n and '這台' in n for n in imp.get('notes') or [])
                  and any('runner' in line for line in (imp.get('reminders_by_app') or {}).get('omnigent') or []),
                  {k: imp.get(k) for k in ('apps', 'test_mode')})
@@ -587,6 +610,16 @@ class Run:
                  'only HA data loaded by the role without privileges, HA structure entries skipped)',
                  '只當作資料來源' in log and '同一個快照' in log and '沒有任何管理權限的暫用角色' in log and '略過' in log
                  and '資料庫結構和這台的相同' in log, {'log_lines': log.count('\n') + 1})
+        if self.form == 'active':
+            reminders = (imp.get('reminders_by_app') or {}).get('omnigent') or []
+            if self.test_mode:
+                ev.check(f'import {tag}: test mode paused the 1 active task (job log and the Omnigent reminder)',
+                         '測試匯入：暫停 1 個啟用中的 Omnigent 排程' in log
+                         and any('測試匯入已暫停 1 個排程' in line for line in reminders), reminders)
+            else:
+                ev.check(f'import {tag}: without test mode the reminder warns that the 1 active task will run here',
+                         any('HA 的 1 個啟用中的排程會在這台執行' in line for line in reminders)
+                         and '測試匯入' not in log, reminders)
         listing = drv.ok('list', ev=ev)
         row = next((b for b in listing['backups'] if b['id'] == self.converted), {})
         ev.check(f'import {tag}: the converted backup is listed as manual with its HA origin',
@@ -619,7 +652,7 @@ class Run:
     def verify(self, label_text):
         ev = self.ev
         self.wait_units(label_text)
-        drv.verify_omnigent(ev, self.args, self.arch, label_text, test_mode=False, upload=f'{self.arch}-{self.form}')
+        drv.verify_omnigent(ev, self.args, self.arch, label_text, test_mode=self.test_mode, upload=self.upload_tag)
         state = self.state(label_text)
         ev.check(f"{label_text}: HA's cookie key is installed (SHA-256)", state.get('cookie_sha256') == self.ha_cookie_sha,
                  {'equal': state.get('cookie_sha256') == self.ha_cookie_sha})
@@ -863,7 +896,7 @@ def self_check():
     for key in FIXTURE_SHA:
         if not re.fullmatch(r'[0-9a-f]{64}', FIXTURE_SHA[key]):
             raise SystemExit('bad fixture digest')
-    print('offline self-check passed: 5 embedded programs compiled, 4 fixture digests')
+    print(f'offline self-check passed: 5 embedded programs compiled, {len(FIXTURE_SHA)} fixture digests')
 
 
 def main(argv):
@@ -871,13 +904,16 @@ def main(argv):
     parser.add_argument('--self-check', action='store_true')
     parser.add_argument('--run', action='store_true')
     parser.add_argument('--arch', choices=('x86', 'arm'))
-    parser.add_argument('--form', choices=('plain', 'enc'))
+    parser.add_argument('--form', choices=('plain', 'enc', 'active'))
+    parser.add_argument('--test-mode', action='store_true', help="the convert job's test mode (the page's 測試匯入)")
     args = parser.parse_args(argv)
     if args.self_check:
         self_check()
         return 0
     if not args.run or not args.arch or not args.form:
-        parser.error('--run --arch x86|arm --form plain|enc required')
+        parser.error('--run --arch x86|arm --form plain|enc|active required')
+    if args.form == 'active' and args.arch != 'x86':
+        parser.error('--form active is the x86 lab-made fixture')
     clean, _dirty = clean_tree()
     commit = head()
     emit(f'source commit {commit}')
@@ -904,9 +940,11 @@ def main(argv):
         failed = [r for r in ev.results if not r['ok']]
         ev.save('results.json', {'passed': len(ev.results) - len(failed), 'failed': len(failed),
                                  'failed_checks': [r['check'] for r in failed], 'results': ev.results,
-                                 'source_commit': commit, 'arch': args.arch, 'form': args.form})
+                                 'source_commit': commit, 'arch': args.arch, 'form': args.form,
+                                 'test_mode': args.test_mode})
         drv.save_state()
-        emit(f'omnigent full flow {args.arch} {args.form}: {len(ev.results) - len(failed)}/{len(ev.results)} '
+        emit(f'omnigent full flow {args.arch} {args.form}{" test-mode" if args.test_mode else ""}: '
+             f'{len(ev.results) - len(failed)}/{len(ev.results)} '
              f'{"PASS" if not failed and failure is None else "FAIL"}')
         rc = 0 if not failed and failure is None else 1
     finally:
