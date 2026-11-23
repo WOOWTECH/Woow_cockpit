@@ -252,6 +252,48 @@ print(json.dumps(out))
 
 MARKERS = (HERE / 'batch1_markers.py').read_text(encoding='utf-8')
 
+# The leak scan (root, inside dev-d): the b1 driver's LEAK_SCAN requires /var/lib/woowtech-backup/index.json, which this
+# engine does not keep (x86-plain attempt 1 stopped there); these are the engine's records as dev-d holds them.
+LEAKS = 'import json\n' + __import__('inspect').getsource(drv.secret_scan_needles) + r'''
+import os, subprocess, sys
+req = json.loads(sys.stdin.read())
+secrets = {name: value.encode() for name, value in req["secrets"].items() if value}
+def owner(*argv):
+    return subprocess.run(["runuser", "-u", "appowner", "--", "env", "-i", "PATH=/usr/bin:/bin", "HOME=/home/appowner",
+                           "XDG_RUNTIME_DIR=/run/user/%d" % req["uid"], *argv], capture_output=True, timeout=120)
+for name in req["podman_secrets"]:
+    p = owner("podman", "secret", "inspect", "--showsecret", "--format", "{{.SecretData}}", name)
+    value = p.stdout.rstrip(b"\n")
+    if p.returncode != 0 or len(value) < 8:
+        raise RuntimeError("cannot inspect required device secret")
+    secrets["device:" + name] = value
+needles = secret_scan_needles(secrets.values())
+hits, scanned = 0, 0
+roots = ["/var/lib/woowtech-backup/jobs", "/var/lib/woowtech-backup/ha-backups", "/var/lib/woowtech-backup/ha-imports.json",
+         "/var/lib/woowtech-backup/archives", "/run/woowtech-backup", "/var/lib/woowtech-backup/uploads",
+         "/var/lib/woowtech-backup/staging", "/var/lib/woowtech-backup/requests.json"]
+def walk_error(error):
+    raise RuntimeError("scan enumeration failed") from error
+for root in roots:
+    if not os.path.exists(root) or os.path.islink(root):
+        raise RuntimeError("required scan root missing or unsafe")
+    paths = [root] if os.path.isfile(root) else []
+    if os.path.isdir(root):
+        for d, dirs, files in os.walk(root, onerror=walk_error, followlinks=False):
+            paths.extend(os.path.join(d, f) for f in files)
+    for path in paths:
+        if path.endswith(".tar") and ("/ha-backups/" in path or "/archives/" in path):
+            continue  # the uploaded HA files themselves and the (encrypted) backups
+        if os.path.islink(path):
+            raise RuntimeError("unsafe scan path")
+        data = open(path, "rb").read()
+        scanned += 1
+        hits += sum(data.count(s) for s in needles)
+journal = subprocess.run(["journalctl", "-o", "cat", "--no-pager"], capture_output=True, check=True).stdout
+hits += sum(journal.count(s) for s in needles)
+print(json.dumps({"scanned": scanned, "journal_bytes": len(journal), "names": len(secrets), "hits": hits}))
+'''
+
 
 # ---------------------------------------------------------------- the run
 
@@ -685,7 +727,7 @@ class Run:
         request = {'secrets': {n: s[n] for n in names if s[n]}, 'podman_secrets': OMNI_SECRETS, 'uid': 1019}
         if len(request['secrets']) < 4:
             raise Failed('a lane secret is missing from the scan request')
-        report = drv.device_python(drv.LEAK_SCAN, request, as_owner=False, timeout=900)
+        report = drv.device_python(LEAKS, request, as_owner=False, timeout=900)
         host = drv.scan_host_evidence(ev.dir, s)
         ev.save('leaks.json', {'device': report, 'host': host,
                                'issued_tokens_registered': len([n for n in names if n.startswith('ISSUED_TOKEN_')])})
@@ -788,12 +830,12 @@ def run_all(run):
 
 def self_check():
     for name, program in (('SPACE', SPACE), ('STATE_PROBE', STATE_PROBE), ('ENGINE_HASHES', ENGINE_HASHES),
-                          ('MARKERS', MARKERS)):
+                          ('MARKERS', MARKERS), ('LEAKS', LEAKS)):
         compile(program, name, 'exec')
     for key in FIXTURE_SHA:
         if not re.fullmatch(r'[0-9a-f]{64}', FIXTURE_SHA[key]):
             raise SystemExit('bad fixture digest')
-    print('offline self-check passed: 4 embedded programs compiled, 4 fixture digests')
+    print('offline self-check passed: 5 embedded programs compiled, 4 fixture digests')
 
 
 def main(argv):

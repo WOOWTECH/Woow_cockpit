@@ -78,6 +78,13 @@ class OutputTests(unittest.TestCase):
             self.assertNotIn('--showsecret', program)
         self.assertIn('sha256', flow.STATE_PROBE)
 
+    def test_the_leak_scan_reads_only_roots_this_engine_keeps(self):
+        # x86-plain attempt 1: the b1 driver's scan required index.json, which this engine does not write.
+        self.assertNotIn('index.json', flow.LEAKS)
+        for root in ('/var/lib/woowtech-backup/jobs', '/var/lib/woowtech-backup/requests.json', 'journalctl'):
+            self.assertIn(root, flow.LEAKS)
+        self.assertNotIn('print(json.dumps(secrets', flow.LEAKS)
+
 
 if __name__ == '__main__':
     unittest.main()

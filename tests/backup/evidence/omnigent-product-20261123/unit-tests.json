@@ -37,7 +37,14 @@
    "mutations": 17,
    "caught": 17,
    "evidence": "mutation-check.json"
+  },
+  "node tests/backup-ui.mjs (host-heavy lock, chromium headless shell 1248; source 805ff1b)": {
+   "tests": 99,
+   "pass": 99,
+   "fail": 0,
+   "seconds": 639.6
   }
  },
- "commercial_acceptance": "not-complete"
+ "commercial_acceptance": "not-complete",
+ "source_commit": "805ff1b"
 }
