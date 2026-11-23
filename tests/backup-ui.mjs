@@ -1868,6 +1868,27 @@ function b1Fixture({ check = b1Check(), testMode = false, extra = {} } = {}) {
 // The page's own reminder for the batch 1 HA file.
 const B1_DELETE_LINE = `匯入完成後，建議刪除這份 HA 備份檔（裡面可能有 HA 的密碼與權杖）。 前往 HA 備份「${B1_NAME}」`;
 const B1_STOP_LINES = B1_APPS.map(id => `請把 HA 那邊的「${B1[id].addon}」附加元件停掉，避免同一件事兩邊各做一次。`);
+// Batch 2 (2026-11-23): the WOOWTECH OpenDesign add-on as ha_opendesign.py reports the real x86 showcase backup (its
+// section of HaCheck, CONTRACT §7; one engine warning), on a device with OpenDesign and its MCP admin app installed.
+const OD = { slug: '1b7b4ce7_woow_ha_opendesign', addon: 'Woow HA OpenDesign', version: '0.2.15', app: 'OpenDesign 設計工具', product: '0.24.1' };
+const HA_OD = 'ha-0d0d0d0d0d0d0d0d0d0d';
+const OD_WARNING = 'HA 的 OpenDesign 資料中有 5 個指向資料以外的符號連結沒有搬過來（多半在代理程式的登入資料夾裡，這台保留自己的）。';
+const OD_SECTION = { 'open-design_version': '0.24.1', source_revision: '05b23f5a', target_version: '0.24.1', target_revision: '05b23f5a',
+  files: 77, bytes: 11212414, dirs: 55, symlinks: 0, hardlinks: 0, skipped_symlinks: 5, projects: 12, conversations: 12, messages: 22,
+  routines: 0, routines_active: 0, project_folders: 0, mcp_servers: 0, mcp_integration_entries: 1, shared: 2, ha_urls: [],
+  left_out: { home: 4600, paseo: 1940, integrations: 4, 'installation.json': 1 } };
+function odFixture() {
+  const data = fixture();
+  data.status.apps.push(app('open-design', OD.app), app('opendesign-mcp-admin', 'OpenDesign MCP 管理'));
+  const meta = haMeta(HA_OD, { name: 'OpenDesign 每週備份 2026-11-23', date: '2026-11-23T07:56:03Z', protected: false, size: 1065 * MiB,
+    filename: 'woow-b2-opendesign.tar', folders: [], addons: [{ slug: OD.slug, name: OD.addon, version: OD.version, encrypted: false }],
+    importable_apps: [{ slug: OD.slug, app_id: 'open-design', app_name: OD.app, installed: true }], other_addons: [] });
+  const check = { ha_check: { ha_backup_id: HA_OD, apps: [{ app_id: 'open-design', slug: OD.slug, name: OD.addon, arch: 'amd64',
+    version: OD.version, target_version: OD.product, ok: true, blockers: [], warnings: [OD_WARNING], 'open-design': structuredClone(OD_SECTION) }] } };
+  data.ha = { backups: [meta], key: HA_KEY, jobKeyFailure: null, legacy: false, imports: {} };
+  Object.assign(data.scripts, haScripts({ check }));
+  return data;
+}
 const openB1 = async page => {
   await page.locator('[data-nav="backups"]').click();
   await page.locator(`[data-focus="ha-import-${HA_B1}"]`).click();
@@ -4879,7 +4900,7 @@ try {
     async page => {
       await ready(page);
       await page.locator('[data-nav="restore"]').click();
-      await page.getByText('也可以上傳 Home Assistant 的備份檔（.tar），把其中的 Odoo、n8n、Omnigent、Hermes、EMQX、Headscale 匯入這台。').waitFor();
+      await page.getByText('也可以上傳 Home Assistant 的備份檔（.tar），把其中的 Odoo、n8n、Omnigent、Hermes、EMQX、Headscale、OpenDesign 匯入這台。').waitFor();
       await page.locator('#restore-file').setInputFiles({ name: 'woow_import_test.tar', mimeType: 'application/x-tar', buffer: Buffer.alloc(256 * KiB, 5) });
       await page.locator('[data-focus="restore-upload"]').click();
       await page.waitForFunction(id => window.location.hash === `#/ha/${id}`, HA_ID);
@@ -5546,7 +5567,7 @@ try {
         [`WOOW n8n${N8N_SLUG}`, '2.43.6', '還沒安裝「n8n 工作流程」：這台還沒安裝，請先到「應用軟體」安裝同版本'],
         ...B1_APPS.map(id => [`${B1[id].addon}${B1[id].slug}`, B1[id].version, `可以匯入這台的「${B1[id].app}」`]),
         ['Mosquitto brokercore_mosquitto', '6.5.1', '這台沒有對應的應用']]);
-      await page.getByText('只有支援的 Odoo、n8n、Omnigent、Hermes、EMQX、Headscale 附加元件能匯入這台；Home Assistant 本身和其他附加元件不會匯入。').waitFor();
+      await page.getByText('只有支援的 Odoo、n8n、Omnigent、Hermes、EMQX、Headscale、OpenDesign 附加元件能匯入這台；Home Assistant 本身和其他附加元件不會匯入。').waitFor();
       await page.locator(`[data-focus="ha-import-${HA_B1}"]`).click();
       assert.deepEqual(await page.locator('.stepper[aria-label="匯入步驟"] .step-label').allTextContents(), ['選擇應用', '檢查', '結果與選項', '轉換', '還原'],
         'HA did not encrypt these add-ons: no key step');
@@ -5612,6 +5633,36 @@ try {
       assert.match(await page.locator('#confirm-body').textContent(), /Hermes、EMQX、Headscale 的附加元件檔案比較大，檢查和轉換會花比較久的時間。/);
       await page.locator('#confirm-cancel').click();
       assert.equal((await calls(page, 'ha-convert-start')).length, 0);
+    });
+
+  await check('從 HA 備份匯入, batch 2: OpenDesign is importable; its check card shows the core revision both sides share, what moves and how to log in afterwards',
+    odFixture(), async page => {
+      await ready(page);
+      await page.locator('[data-nav="backups"]').click();
+      await page.locator(`[data-focus="ha-import-${HA_OD}"]`).click();
+      await page.locator('.stepper[aria-label="匯入步驟"]').waitFor();
+      assert.deepEqual(await page.locator('.wizard-card input[type="checkbox"]').evaluateAll(items => items.map(item => [item.id, item.checked, item.disabled])),
+        [['ha-app-open-design', true, false]]);
+      // The member holds the agents' logins and Paseo's runtime (decrypted and skipped): it takes longer.
+      assert.equal(await page.locator('.ha-slow').textContent(), 'OpenDesign 的附加元件檔案比較大，檢查和轉換會花比較久的時間。');
+      await page.locator('[data-focus="ha-apps-next"]').click();
+      await page.locator('[data-ha-app="open-design"]').waitFor();
+      const start = requestOf((await calls(page, 'ha-check-start')).at(-1));
+      assert.deepEqual(start, { ha_backup_id: HA_OD, apps: ['open-design'], request_id: start.request_id });
+      const card = page.locator('[data-ha-app="open-design"]');
+      // `open-design_version` of the section is the product version the add-on ships.
+      assert.equal(await card.locator('.muted').first().textContent(), 'HA 附加元件版本 0.2.15（OpenDesign 0.24.1），這台的 OpenDesign 0.24.1。');
+      assert.equal(await card.locator('.chip').first().textContent(), '可以匯入');
+      assert.deepEqual(await card.locator('.check-warn .check-message').allTextContents(), [OD_WARNING]);
+      assert.deepEqual((await metadataOf(card))[0], { 專案: '12 個', 對話: '12 個，22 則訊息', 例行工作: '0 個（啟用中 0 個）',
+        '外部 MCP 伺服器': '0 個', 資料: '77 個檔案（10.7 MiB）', 核心版本: 'HA 05b23f5a，這台 05b23f5a' });
+      assert.equal(await card.locator('p.muted').last().textContent(),
+        '匯入後，用這台的 OpenDesign 登入資料（帳號 open-design 與這台的 API 權杖）登入；代理程式的登入、Omnigent 與 Paseo 維持這台的。');
+      // Skills, plugins and external MCP servers run here: only import a trusted backup.
+      await page.locator('.wizard-card .notice-info').getByText('OpenDesign 的技能、外掛與外部 MCP 伺服器是會在這台執行的程式，只匯入你信任的備份。').waitFor();
+      await enabled(page, '[data-focus="ha-convert"]');
+      await allWidths(page, 'batch 2 OpenDesign results');
+      assert.deepEqual((await contrastOf(page)).failures, [], 'the OpenDesign check card keeps WCAG AA contrast');
     });
 
   await check('從 HA 備份匯入, batch 1: convert and restore; the notice says what each app replaces and keeps; the result lists each app\'s to-dos (Headscale\'s devices, Hermes\'s Omnigent and Paseo pairing, the engine\'s MCP lines) and no MCP line of the page; 由 HA 轉換 and 活動紀錄',

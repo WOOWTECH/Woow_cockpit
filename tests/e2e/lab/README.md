@@ -2,7 +2,8 @@
 
 兩台彼此隔離、接近實機的 Ubuntu 24.04「設備」（dev-a、dev-b），供備份與還原端到端測試使用；第三台 dev-c 跑本主機
 Odoo 與 n8n 的複本，供 HA 匯入測試（見「[dev-c：正式主機 Odoo 與 n8n 的複本](#dev-c正式主機-odoo-與-n8n-的複本ha-匯入測試)」）；第四台 dev-d 跑本主機
-Omnigent、Hermes、EMQX 與 Headscale 的複本，供 HA 匯入第一批的測試（見「[dev-d](#dev-d正式主機-omnigenthermesemqx-與-headscale-的複本ha-匯入第一批)」）。每台設備是一個以
+Omnigent、Hermes、EMQX 與 Headscale 的複本，供 HA 匯入第一批的測試（見「[dev-d](#dev-d正式主機-omnigenthermesemqx-與-headscale-的複本ha-匯入第一批)」）；第五台 dev-e 跑本主機
+Nextcloud、code-server 與 OpenDesign 的複本，供 HA 匯入第二批，沒有網路也沒有發布連接埠（見「[dev-e](#dev-e正式主機-nextcloudcode-server-與-opendesign-的複本ha-匯入第二批)」）。每台設備是一個以
 systemd 為 PID 1 的 rootless 容器，內含 Cockpit 362、rootless Podman（巢狀）、age、zstd 與 python3。
 **所有容器操作只透過 `~/.woowbk-lab/bin/labpodman`**（獨立儲存根目錄 `~/.woowbk-lab/storage`），
 正式主機的容器、資料卷、映像與服務在這裡完全看不到，也不會被影響。不使用 sudo。
@@ -58,6 +59,9 @@ systemd 為 PID 1 的 rootless 容器，內含 Cockpit 362、rootless Podman（�
 | `prodlike_baseline.py [odoo] [n8n]` | dev-c 的基準：每個應用一份加密備份與原位還原，前後的標記資料列證明資料真的還原（見 dev-c 一節） |
 | `deploy-batch1.sh d --omnigent-repo D --hermes-repo D --emqx-repo D --headscale-repo D [--<應用>-rev R] [--cockpit-src D] [階段…]` | 只用於 dev-d：`packages images omnigent hermes emqx headscale cockpit check`（見 dev-d 一節），每個階段都可以重跑 |
 | `batch1_baseline.py [omnigent] [hermes] [emqx] [headscale]` | dev-d 的基準：在每個應用放入標記資料（`batch1_markers.py`，在設備內以應用自己的 API、CLI 或程式碼建立與讀取），每個應用一份加密備份，再以原位還原證明它能還原（見 dev-d 一節） |
+| `deploy-batch2.sh e [--nextcloud-repo D] [--code-server-repo D] [--opendesign-repo D] [--<應用>-rev R] [--cockpit-src D] 階段…` | 只用於 dev-e：`packages images[:應用] nextcloud code-server opendesign cockpit check[:應用] drop-images:應用`（見 dev-e 一節），每個階段都可以重跑 |
+| `batch2_baseline.py [nextcloud] [opendesign]` | dev-e 的基準：標記資料（`batch2_markers.py`，在設備內以應用自己的介面建立與讀取）、每個應用一份加密備份，再以原位還原證明它能還原 |
+| `compare_batch2.py [nextcloud] [code-server] [opendesign]` | 只讀比對正式主機與 dev-e 已安裝的檔案、env 鍵（值只顯示調校用的鍵）、目錄項目與每個容器的映像 ID |
 | `deploy-demo.sh <a\|b> [--notes N] [--files M] [--title T] [--no-seed]` | 不經引擎、以 appowner 手動部署 woowbk-demo（拉取 postgres、建置應用映像、安裝 Quadlet、daemon-reload、seed） |
 | `deploy-dirs.sh <a\|b> [--items N] [--delete K] [--title T] [--owner-note T] [--seed S] [--no-seed]` | 同上，部署主機資料夾示範應用 woowbk-dirs（`catalog-examples/woowbk-dirs/README.md`）：複製到 `/opt/woowbk-dirs`、拉取 postgres（已有則略過）、建置 `localhost/woowbk-dirs-app:1`、安裝 Quadlet、seed（密鑰、設定檔、主機資料夾與容器帳號擁有者、資料庫角色與第二個資料庫、項目） |
 | `dirs-catalog.sh <a\|b> install\|remove\|status` | 以 root 安裝或移除 woowbk-dirs 的受信任目錄項目（`/etc/woowtech-cockpit/backup/apps/woowbk-dirs.json`）與 Quadlet 範本，並列出已安裝引擎對它的判斷（沒有主機資料夾支援的引擎回報「不支援的欄位：data_dirs」並略過此應用） |
@@ -359,6 +363,83 @@ python3 -I tests/e2e/lab/hermes_real_capture.py --private=<~/.woowbk-lab/evidenc
   `hermes_cli/web_routers/config_env.py:259-269` → `hermes_cli/web_server_messaging.py:103-107` → `:79-82`：儀表板程序第一次
   建頻道清單時才執行 `discover_plugins()`，是一次性的冷啟動成本，主機負載約 22–25 時會更慢。第 9、10 次當時沒有記錄端點，
   所以「就是 `/api/env`」是推論，不是觀察。
+
+## dev-e：正式主機 Nextcloud、code-server 與 OpenDesign 的複本（HA 匯入第二批）
+
+**用途**：測試「把 Home Assistant 附加元件的備份匯入 Podman 的 OpenDesign、Nextcloud 與 code-server」（HA 匯入第二批，擁有者
+2026-11-23 的決定 2 A）。dev-e 跑本主機這三個應用的真實複本：映像 ID 相同、同樣的套件安裝程式與版本（正式主機實際執行的提交）、
+同樣的單元／容器／資料卷／密鑰／網路名稱與連接埠。密鑰全部在設備內重新產生；沒有複製正式主機的任何密鑰、權杖或應用資料。
+2026-11-23 建置。**一次只跑一個應用**（見「輪替」）：目前部署的是 OpenDesign。
+
+| 項目 | woowbk-dev-e |
+| --- | --- |
+| 網路 | `--network none`、**沒有發布任何連接埠**：主機連不到它的 Cockpit 與應用，它也連不到任何網路（`owner.sh e --verify-isolation` 印出 `dev-e isolation: true none {}`）。只用 `owner.sh e`、`engine.sh e`、`exec.sh e` |
+| appowner | UID 1025，subuid／subgid `10000:55000` |
+| 資源上限 | `--memory 3g --cpus 2` |
+| 額外套件 | 設備映像沒有、dev-e 也連不到 apt：python3-nacl 1.5.0-4build1、python3-cryptography 41.0.7-4ubuntu0.4（HA 加密備份）、jq 1.7.1-3ubuntu0.24.04.2，由同一個設備映像的拋棄式容器（實驗室儲存、唯一連網的步驟）下載 .deb 到 `~/.woowbk-lab/cache/debs-noble`（附 sha256），再複製進去以 dpkg 安裝 |
+| OpenDesign 4.2.1（OpenDesign 0.24.1） | `open-design`／`open-design-mcp`／`open-design-nginx`／`open-design-terminal`，127.0.0.1:7456；套件 `~/Woow_podman_opendesign`（1067bc4，PR #17 的 head，上游合併為 bbbd4de）；Paseo 開啟，來源 `https://opendesign.lab.invalid` |
+| Nextcloud 35.0.1＋Collabora | 已寫好（`deploy-batch2.sh` 的 `nextcloud` 階段，套件 `~/Woow_podman_nextcloud_fresh` 19a7609），**尚未部署**（輪替） |
+| code-server 4.139.1-8 | 已寫好（`code-server` 階段，套件 tag 4.139.1-8＝e7dbbea），**尚未部署**；正式主機沒有它的目錄項目（擁有者決定不納入），匯入那一線要先提供 |
+| 備份引擎 | lab/batch2-dev-e-20261123 8a26ae9（＝integration/ha-import-batch1-20261123 82ac971 加上實驗室腳本），只有 open-design 目錄項目；設備金鑰 D4C6-F434-C5D0-659C，緊急金鑰 `~/.woowbk-lab/secrets/dev-e-kit.txt`（0600，實驗室拋棄式） |
+
+**建置**（重設後照做即可；每個階段都可以重跑）：
+
+```bash
+tests/e2e/lab/up.sh e && tests/e2e/lab/verify-device.sh e
+tests/e2e/lab/deploy-batch2.sh e packages images:opendesign
+tests/e2e/lab/deploy-batch2.sh e --opendesign-repo ~/Woow_podman_opendesign opendesign
+tests/e2e/lab/deploy-batch2.sh e --cockpit-src <要測的 Woow_cockpit 樹> cockpit check:opendesign
+python3 -I tests/e2e/lab/batch2_baseline.py opendesign
+python3 -I tests/e2e/lab/compare_batch2.py opendesign > ~/.woowbk-lab/evidence/batch2-lab/compare-prod-opendesign.txt
+```
+
+其他兩個應用（一次一個，見「輪替」）：`deploy-batch2.sh e images:nextcloud`，`deploy-batch2.sh e --nextcloud-repo ~/Woow_podman_nextcloud_fresh nextcloud`；
+`deploy-batch2.sh e images:code-server`，`deploy-batch2.sh e --code-server-repo ~/.woowbk-lab/cache/repos/Woow_podman_code_server_package.git code-server`
+（主機的 `~/Woow_podman_code_server_package` 停在沒有 tag 4.139.1-8 的舊分支；快取裡的是 GitHub main 89e6648 的裸複本，含 e7dbbea），
+之後 `cockpit` 與 `check:<應用>`。richdocuments 發行檔與 .deb 快取在 `~/.woowbk-lab/cache/`（sha256 固定）。
+
+* `images[:應用]`：映像從本主機自己的儲存以映像 ID `podman save --format docker-dir --compress` **直接寫進 dev-e 的 home 資料卷**
+  （主機那一側的 `/home/.woowbk-xfer`），再以 appowner `podman load`、以 ID 加上名稱、刪掉傳輸目錄。主機上只執行 `podman image inspect`
+  與 `podman save`，從不拉取。壓縮目錄讓尖峰約為「2 × 壓縮後＋1 × 映像」；`podman save | podman load` 的管線約要 3 × 映像
+  （podman 先把標準輸入複製成暫存檔，containers/image 又在提交映像前保留每個 blob 的暫存複本）。每個映像之前檢查主機在估計尖峰
+  之後仍有 12 GiB＋1 GiB 可用，複製期間每秒檢查一次，降到 12.25 GiB 就停止並刪掉傳輸目錄。實測 OpenDesign 6367 MiB → 壓縮 2359 MiB，
+  877 秒（主機負載約 20），過程中主機最低 20.3 GiB 可用。映像 ID 與主機相同（ID 是設定的摘要）；清單摘要會變，所以以摘要固定的參照
+  （OpenDesign 的 nginx、code-server 的 ghcr 映像）在套件副本中改成載入後的摘要。
+* `opendesign`：套件的 `scripts/install.sh --no-build --accept-defaults --set WOOW_OD_PASEO=on --set OPENDESIGN_PASEO_ORIGIN=https://opendesign.lab.invalid
+  --set OD_ALLOWED_ORIGINS=<範例的本機來源>,https://opendesign.lab.invalid`（主機的 `open-design.env` 只有這三個鍵和範例不同：主機開著 Paseo，
+  來源是它的公開 https 網址）。`.invalid`（RFC 2606）永遠解析不到；Paseo 連不到中繼，啟動器的監督程式只重啟 Paseo。套件 smoke 56 通過、0 失敗、
+  1 個警告（`podman inspect` 看得到 env 型密鑰，套件本身的行為）。**第一次啟動**時 rootless overlay 為 `UserNS=keep-id:uid=1001` 做出整個映像的
+  ID 對應複本（約 4 分鐘、約 4.7 GiB），正式主機也有這份複本。
+* `nextcloud`（已寫好、未部署）：`~/.config/nextcloud/nextcloud.env` 是範例，資料目錄改成主機目錄項目的 `.local/share/nextcloud-office/{html,data,postgres,redis}`，
+  `HOST_BIND` 與 `PHP_MEMORY_LIMIT` 以鍵名從主機的 env 檔讀取（調校值、不是祕密、從不印出），其餘網址、受信任網域與代理設定保留範例的本機值。
+  套件會從 Nextcloud 應用商店安裝 richdocuments，dev-e 連不到：改用主機實際執行的版本 12.0.1（主機 2026-11-10 套件備份中的 `appinfo/info.xml`）
+  的官方發行檔（應用商店的下載來源，sha256 固定在腳本裡），在第一次啟動前解到 `html/custom_apps`（www-data、0644／0755），安裝程式找得到
+  （`app:getpath`）就只會啟用它；`check:nextcloud` 以 `occ integrity:check-app richdocuments` 核對發行檔的簽章。
+* `code-server`（已寫好、未部署）：主機的 env 檔與範例完全相同；主機安裝好的單元另有兩處手動修改（`[Container]` 第一行
+  `Environment=WOOW_CONNECTOR_DATA_DIR=/data/pi-agent/connectors-primary`、`Image=` 改成 ghcr 映像的摘要），套件副本在安裝前套用同樣兩處；
+  安裝程式的 `--no-build` 檢查要 `localhost/woow-code-server:4.139.1-8`，這個名稱只在安裝期間存在（主機沒有它）。`UserNS=keep-id:uid=1000` 一樣會在第一次啟動做 5.2 GiB 的複本。
+* `cockpit`：`deploy-src.sh e --src …`（不加示範目錄項目）、已部署應用的主機目錄項目只把 `owner` 改成 appowner、設備金鑰（key-init → key-kit → key-confirm）；
+  `check[:應用]`：引擎 status、目錄項目的健康網址、單元 active、各容器 healthcheck、沒有失敗的使用者單元。
+
+**和正式主機的差異**（`compare_batch2.py` 只讀比對兩邊已安裝的 Quadlet、單元、設定檔、env 檔、目錄項目與每個容器的映像 ID；
+值只顯示調校用的鍵，網址與來源一律不顯示；2026-11-23 的結果在 `~/.woowbk-lab/evidence/batch2-lab/compare-prod-opendesign-20261123.txt`）：
+OpenDesign 的 7 個 Quadlet 中只有 `open-design-nginx.container` 的 `Image=` 摘要不同；`nginx.conf`、`nginx-auth.conf`、`od-export-bridge.js` 相同，
+`nginx-paseo.conf` 只差 Paseo 來源；`open-design.env` 只差 `OD_ALLOWED_ORIGINS`、`OPENDESIGN_PASEO_ORIGIN` 的值（以及鍵的順序）；目錄項目只差 `owner`；
+四個容器的映像 ID 都和主機相同。主機另有 `open-design-local-health.{service,timer}`（11-08 加的，套件任何提交都沒有），dev-e 沒有。資料是全新安裝加基準標記。
+
+**基準**（`batch2_baseline.py`，2026-11-23，OpenDesign 12／12 通過，證據 `~/.woowbk-lab/evidence/batch2-lab/20261123T163929-baseline/` 與
+`tests/e2e/lab/evidence/batch2-lab-20261123/opendesign-baseline.json`）：標記專案 `woowbk-lab-baseline` 與檔案 `woowbk-lab-baseline.txt`（OpenDesign 自己的 API）、
+加密備份 `20261123T084036Z-5ebb7283`（1.0 MB、60.8 秒、停機 22 秒）、之後的標記專案 `woowbk-lab-after`、原位還原（74.8 秒、還原前備份
+`20261123T084149Z-1b9c4a80`）：基準標記還在、檔案 sha256 相同、之後的標記消失、健康檢查通過。目前的資料等於這份基準備份。
+
+**輪替與主機限制**（2026-11-23 實測）：三個應用的映像 15.2 GiB，加上 OpenDesign 與 code-server 第一次啟動時的 keep-id 複本（6.2＋5.2 GiB），
+一共約 27 GiB；主機在保留 12 GiB 之後只剩約 16 GiB，記憶體約 2.3 GB 可用。所以 dev-e 一次只部署（與執行）一個應用，測完以
+`deploy-batch2.sh e drop-images:<應用>` 與移除該應用後換下一個。另外，主機使用者的 inotify 實例上限只有 128（`fs.inotify.max_user_instances`），
+rootless 容器（含巢狀）的用量全部算到同一個使用者，16:35 只剩 2 個；dev-e 的 `systemd-ask-password-wall.path` 因此以「Too many open files」
+失敗，`verify-device.sh e` 因而報 degraded。調高上限要正式主機的 root（擁有者決定）。
+
+**重設**：`tests/e2e/lab/reset.sh e --up` 刪除容器與三個資料卷，再照「建置」重跑。新的設備金鑰會覆寫 `dev-e-kit.txt`；`dev-e-markers.json` 保留。
+dev-e 的變更請以 `flock -w 3600 /tmp/woowbk-dev-e-mutation.lock <指令>` 包起來（與 dev-d 相同的規則）。
 
 ## 端到端測試（整合）
 

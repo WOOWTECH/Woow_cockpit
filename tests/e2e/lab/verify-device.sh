@@ -8,12 +8,13 @@
 #   5. the Quadlet user generator turns ~/.config/containers/systemd/*.container into a user
 #      service that starts and stops (probe unit removed afterwards)
 #   6. Cockpit HTTPS login + administrative access via Playwright (skip with --no-browser)
-#   tests/e2e/lab/verify-device.sh <a|b|c|d> [--no-browser]
+#   tests/e2e/lab/verify-device.sh <a|b|c|d|e> [--no-browser]   (dev-e: always --no-browser, nothing is published)
 source "$(dirname "$0")/lib.sh"
 
 device_vars "${1:-}"
 browser=yes
 [ "${2:-}" = --no-browser ] && browser=no
+[ "$DEVICE_NETWORK" != none ] || browser=no  # nothing is published: no browser can reach Cockpit
 [ "$(container_state "$NAME")" = running ] || die "$NAME is not running (tests/e2e/lab/up.sh $DEV)"
 failures=0
 pass() { echo "PASS  $*"; }
@@ -30,7 +31,11 @@ fi
 
 # 2. Cockpit socket
 if "$LP" exec "$NAME" sh -c 'systemctl is-active --quiet cockpit.socket && ss -Hltn "sport = :9090" | grep -q 9090'; then
-    pass "cockpit.socket active, listening on :9090 (host https://127.0.0.1:$PORT)"
+    if [ "$DEVICE_NETWORK" = none ]; then
+        pass "cockpit.socket active, listening on :9090 (inside the device only: network none, no published port)"
+    else
+        pass "cockpit.socket active, listening on :9090 (host https://127.0.0.1:$PORT)"
+    fi
 else
     fail "cockpit.socket not listening"
 fi
@@ -52,6 +57,12 @@ case "$info" in overlay*) pass "podman storage: $info" ;; *) fail "podman storag
 PROBE_IMAGE=docker.io/library/alpine:3.20
 had_probe_image=no
 owner podman image exists "$PROBE_IMAGE" && had_probe_image=yes
+if [ "$had_probe_image" = no ] && [ "$DEVICE_NETWORK" = none ]; then
+    # Nothing inside a network-none device can pull: the probe image comes from the lab storage (pulled into it once
+    # when missing; never the host's production storage).
+    "$LP" image exists "$PROBE_IMAGE" || "$LP" pull -q "$PROBE_IMAGE" >/dev/null || fail "pulling $PROBE_IMAGE into the lab storage"
+    "$LP" save --format docker-archive "$PROBE_IMAGE" | owner podman load -q >/dev/null || fail "loading $PROBE_IMAGE into $NAME"
+fi
 probe=$(owner podman run --rm --memory 64m --name woowbk-probe-run docker.io/library/alpine:3.20 \
     sh -c 'echo "$(id -u) $(cat /sys/fs/cgroup/memory.max)"; tr -s " " < /proc/self/uid_map | xargs' 2>&1 | tail -2 | xargs)
 # Each device may have its own subordinate range (subids.sh; dev-b differs on purpose): expect the configured one.

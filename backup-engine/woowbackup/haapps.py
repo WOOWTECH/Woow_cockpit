@@ -49,6 +49,9 @@ IMPORTERS = (
              mcp_addon='Woow EMQX MCP Server', engine_mcp_lines=True),
     Importer('headscale', 'woow-headscale', 'Headscale VPN 控制伺服器', 'ha_headscale', mcp_admin='headscale-mcp-admin',
              mcp_addon='Woow Headscale MCP Server', engine_mcp_lines=True),
+    # Batch 2: the MCP server is built into the add-on (no separate MCP add-on; ha_opendesign writes that line).
+    Importer('open-design', 'woow_ha_opendesign', 'OpenDesign 設計工具', 'ha_opendesign',
+             mcp_admin='opendesign-mcp-admin', engine_mcp_lines=True),
 )
 
 BY_APP = {importer.app_id: importer for importer in IMPORTERS}
