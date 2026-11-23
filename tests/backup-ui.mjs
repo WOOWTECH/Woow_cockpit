@@ -4879,7 +4879,7 @@ try {
     async page => {
       await ready(page);
       await page.locator('[data-nav="restore"]').click();
-      await page.getByText('也可以上傳 Home Assistant 的備份檔（.tar），把其中的 Odoo、n8n、Omnigent、Hermes、EMQX、Headscale 匯入這台。').waitFor();
+      await page.getByText('也可以上傳 Home Assistant 的備份檔（.tar），把其中的 Odoo、n8n、Omnigent、Hermes、EMQX、Headscale、OpenDesign 匯入這台。').waitFor();
       await page.locator('#restore-file').setInputFiles({ name: 'woow_import_test.tar', mimeType: 'application/x-tar', buffer: Buffer.alloc(256 * KiB, 5) });
       await page.locator('[data-focus="restore-upload"]').click();
       await page.waitForFunction(id => window.location.hash === `#/ha/${id}`, HA_ID);
@@ -5545,7 +5545,7 @@ try {
         [`WOOW n8n${N8N_SLUG}`, '2.43.6', '還沒安裝「n8n 工作流程」：這台還沒安裝，請先到「應用軟體」安裝同版本'],
         ...B1_APPS.map(id => [`${B1[id].addon}${B1[id].slug}`, B1[id].version, `可以匯入這台的「${B1[id].app}」`]),
         ['Mosquitto brokercore_mosquitto', '6.5.1', '這台沒有對應的應用']]);
-      await page.getByText('只有支援的 Odoo、n8n、Omnigent、Hermes、EMQX、Headscale 附加元件能匯入這台；Home Assistant 本身和其他附加元件不會匯入。').waitFor();
+      await page.getByText('只有支援的 Odoo、n8n、Omnigent、Hermes、EMQX、Headscale、OpenDesign 附加元件能匯入這台；Home Assistant 本身和其他附加元件不會匯入。').waitFor();
       await page.locator(`[data-focus="ha-import-${HA_B1}"]`).click();
       assert.deepEqual(await page.locator('.stepper[aria-label="匯入步驟"] .step-label').allTextContents(), ['選擇應用', '檢查', '結果與選項', '轉換', '還原'],
         'HA did not encrypt these add-ons: no key step');
