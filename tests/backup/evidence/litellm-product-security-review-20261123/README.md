@@ -59,7 +59,9 @@ uid 70 postgres, CapEff 0, NoNewPrivs 1, seccomp on; interfaces `lo` only, 0 def
 read-only root, no `/run/secrets`, no host path (`/home` empty), 16 processes (its own); data volume `noexec`;
 **`/tmp`, `/var/tmp` and `/run` are exec-able** (Podman's `--read-only` tmpfs has no `noexec`); memory and pids
 limited (the harness ran with 1 GiB / 512, the product's defaults are 2 GiB / 1024). No anonymous volume and no
-container of the review was left.
+container of the review was left. (`volumes_left_behind` in `original-superuser_catalog.json` and
+`original-tablespace_map.json` lists dangling volumes other lanes made meanwhile: by their content they are EMQX's
+`/opt/emqx/data` and `/opt/emqx/log` anonymous volumes; reported to the EMQX lanes, not removed.)
 
 ## Checked by reading (no finding)
 
