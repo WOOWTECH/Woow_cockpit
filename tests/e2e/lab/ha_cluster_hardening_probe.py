@@ -9,8 +9,8 @@ Two server containers on that volume, each started like the product starts HA's 
 `postgres` with ha_odoo.HA_SERVER_SETTINGS, read-only root, data volume rw,noexec,nosuid,nodev, the tempctr flags):
 
   A = today's flags (tempctr.TempObjects.run_argv + start_ha_cluster)
-  B = A + --read-only-tmpfs=false and explicit noexec tmpfs on /tmp, /var/tmp, /run (podman --tmpfs default options
-      are rw,noexec,nosuid,nodev) + --memory 256m --memory-swap 256m + --oom-score-adj 1000
+  B = A + explicit noexec tmpfs on /tmp, /var/tmp, /run (they replace podman's read-only tmpfs there; /dev/shm is
+      noexec already) + --memory 256m --memory-swap 256m + --oom-score-adj 1000
 
 In each, as the database superuser (what code in a crafted HA catalog runs as, security review SR-2): copy an image
 library and busybox into every writable place and try LOAD / execute; read the memory limits; in B only, one query
@@ -50,7 +50,10 @@ def base_flags(memory):
             '--pids-limit', str(tempctr.PIDS), '--memory', memory, '--read-only']
 
 
-HARDENED = ['--read-only-tmpfs=false', '--tmpfs', '/tmp:rw,noexec,nosuid,nodev,size=64m,mode=1777',
+# Explicit --tmpfs mounts replace podman's read-only tmpfs at the same paths. --read-only-tmpfs=false must NOT be used:
+# it also takes the writable /dev/shm away and PostgreSQL stops at start (lab 2026-11-24: 'could not open shared
+# memory segment "/PostgreSQL.…": Read-only file system').
+HARDENED = ['--tmpfs', '/tmp:rw,noexec,nosuid,nodev,size=64m,mode=1777',
             '--tmpfs', '/var/tmp:rw,noexec,nosuid,nodev,size=16m,mode=1777',
             '--tmpfs', '/run:rw,noexec,nosuid,nodev,size=16m,mode=755',
             '--memory-swap', '256m', '--oom-score-adj', '1000']
@@ -87,11 +90,15 @@ def facts(name):
         lib = f'{where}/x{secrets.token_hex(2)}.so'
         copied = psql(name, f"COPY (SELECT 1) TO PROGRAM 'cp /usr/local/lib/postgresql/auto_explain.so {lib}'")
         load = psql(name, f"LOAD '{lib}'") if copied['ok'] else {'ok': False, 'out': 'not copied'}
-        binary = f'{where}/b{secrets.token_hex(2)}'
-        run = psql(name, f"COPY (SELECT 1) TO PROGRAM 'cp /bin/busybox {binary} && {binary} true'")
+        # a copied binary keeps its name: busybox picks its applet from argv[0]
+        folder = f'{where}/d{secrets.token_hex(2)}'
+        run = psql(name, f"COPY (SELECT 1) TO PROGRAM 'mkdir {folder} && cp /bin/busybox {folder}/busybox && "
+                         f"{folder}/busybox true'")
+        elf = psql(name, f"COPY (SELECT 1) TO PROGRAM 'cp /usr/local/bin/pg_isready {folder}/ && "
+                         f"{folder}/pg_isready --version > /dev/null'")
         tries[where] = {'copy_library': copied['ok'], 'load_library': load['ok'],
                         'load_error': '' if load['ok'] else load['out'][-90:],
-                        'run_copied_busybox': run['ok']}
+                        'run_copied_busybox': run['ok'], 'run_copied_pg_isready': elf['ok']}
     out['writable_places'] = tries
     # the image's own binaries stay usable (the container, not noexec, is the boundary for shell code)
     out['image_shell_runs'] = psql(name, "COPY (SELECT 1) TO PROGRAM 'id -u > /dev/null'")['ok']
