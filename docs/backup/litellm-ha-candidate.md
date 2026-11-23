@@ -143,3 +143,35 @@ The lab source image is PostgreSQL 18.7 as reported by the coordinator; the HA p
 uses 18.6. The fixed fixture found no incompatibility; it does not test general
 PG18-to-PG17 compatibility, LiteLLM Prisma schemas, arbitrary DDL safety, sequences,
 encrypted credential transfer, or rollback. Conversion remains disabled.
+
+## Real HA backup through the internal cluster reader (2026-11-23)
+
+`cluster_member` is an internal candidate, not an importer: `convert` still refuses with
+`GUARD` and `litellm` is not in `haimport.APPS`. It makes one strict pass over the add-on
+member, hands every `data/postgres` entry (name relative to the cluster) to the product
+`ha_odoo.PgSink` (HA's `pg_hba.conf`, `postgresql.conf`, `postgresql.auto.conf` and
+`pg_ident.conf` replaced, recovery/standby/pid files dropped) and returns the four
+`data/secrets` files (`master_key`, `salt_key`, `pg_password`, `ui_password`; vendor
+`woow_init.py` `SECRET_FILES`) in a private holder without repr. Each must be one small
+regular file and the salt must have HA's format; a symlink or a missing file refuses.
+It proves nothing about the database binding by itself.
+
+`tests/e2e/lab/litellm_real_ha.py` drives one isolated dev-d run from the owner-made real
+backup (`ha-fixtures/20261123-litellm/x86`, add-on 0.1.15, LiteLLM 1.104.0, PG 18.6,
+encrypted): product decrypt and `scan_member`, the cluster into a throwaway PostgreSQL 18
+(read-only root, `noexec` data volume, every library/command setting overridden on the
+command line as in `ha_odoo.HA_SERVER_SETTINGS`), the product salt/database binding
+reader (`match` for HA's salt and `mismatch` for another), a plain `pg_dump` restored into
+the package's PostgreSQL 17.11 image in the order of the package's `scripts/restore.sh`
+(drop, create, load in one transaction), HA's salt moved while the target keeps its own
+master key, UI password and database password (a Podman secret created from stdin), the
+package entrypoint `/opt/woow/start.sh` (db_prepare salt gate, Prisma, UI session
+revocation) and the real app API. Row digests (count and MD5 of every row, every table,
+sequence state) are compared between HA's cluster and the restored target, and between
+the target's own data before the import and after the rollback.
+
+Lab limits that stay open: the app runs as 1000:0 because dev-d maps only IDs 0..55000
+(image USER 65534); throwaway containers stand in for the package's Quadlet units;
+`WOOW_CHATGPT_ENABLED=false` (no ChatGPT subscription restore); no provider call (no
+network); the restore runs as the package's database owner, which is a superuser in the
+package as in `restore.sh` (a product importer must decide how far to trust HA's dump).
