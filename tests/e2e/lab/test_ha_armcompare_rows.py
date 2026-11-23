@@ -14,7 +14,7 @@ import odoo_capture
 
 ROOT = Path(__file__).resolve().parent
 FUNCTIONS = ('parse_arm_fingerprint', 'scenario_armcompare', 'sibling', 'arm_row_capture', 'odoo_cron_log',
-             'arm_row_evidence')
+             'arm_row_evidence', 'scenario_capcompare')
 FOUR = ('bus_bus', 'ir_config_parameter', 'ir_cron', 'ir_cron_progress')
 RESTORE = datetime(2026, 11, 23, 2, 0, 0)
 LIVE_URL, MARKER = 'http://localhost:8069', '{"digest":"sha256:feed"}'
@@ -217,6 +217,38 @@ class RowEvidenceTests(unittest.TestCase):
         self.assertFalse(passed)
         self.assertEqual(ev.saved['arm-compare.json']['row_evidence']['tables_outside_row_evidence'],
                          ['public.mail_mail'])
+
+    def run_capcompare(self):
+        rows, values = self.target
+        out = '\n'.join(json.dumps(r) for r in capture(rows, values, 'odoo')).encode()
+        self.ns['owner'] = lambda *a, **k: types.SimpleNamespace(returncode=0, stdout=out)
+        self.ns['root'] = lambda *a, **k: types.SimpleNamespace(returncode=0, stdout=self.log.encode())
+        ev = Evidence()
+        self.ns['scenario_capcompare'](ev, self.args)
+        return all(ok for _, ok in ev.checks), ev
+
+    def test_capcompare_uses_the_source_capture_as_reference(self):
+        self.write_fingerprint({'public.unrelated': ('1', 'c' * 32)})   # the HA-side file is not consulted
+        passed, ev = self.run_capcompare()
+        self.assertTrue(passed, ev.checks)
+        self.assertEqual(ev.saved['capture-compare.json']['status'], 'explained_row_differences')
+        self.assertEqual(ev.saved['capture-compare.json']['identical'], 201)
+
+    def test_capcompare_fails_closed(self):
+        rows, values = self.target
+        values['public.table_9'] = ('15', 'd' * 32)
+        passed, ev = self.run_capcompare()
+        self.assertFalse(passed)
+        self.assertIn('public.table_9', ev.saved['capture-compare.json']['unverified_tables'])
+        self.target = (target_rows(), prints(changed=['public.' + t for t in FOUR]))
+        self.target[1].pop('public.table_8')
+        self.assertFalse(self.run_capcompare()[0])
+        self.log = ''
+        self.target = (target_rows(), prints(changed=['public.' + t for t in FOUR]))
+        self.assertFalse(self.run_capcompare()[0])
+        self.args.source_capture = None
+        with self.assertRaises(Failed):
+            self.ns['scenario_capcompare'](Evidence(), self.args)
 
     def test_rows_and_fingerprints_must_agree(self):
         rows, values = self.target

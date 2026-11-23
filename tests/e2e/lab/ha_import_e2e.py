@@ -17,7 +17,8 @@ never printed: every evidence line is redacted.
   web.base.url and upgrade marker for a later `verify`, when the import itself runs elsewhere (ha_import_ui.mjs);
   `restart` restarts the imported Odoo and n8n units and checks data, logins and the credential again; `n8ndiag`
   measures n8n's registry-bound package list next to the registry-free local probe (root cause of the old timeout).
-  armcompare with --source-capture explains differing rows one by one (odoo_explain.py), otherwise they stay unverified.
+  armcompare with --source-capture explains differing rows one by one (odoo_explain.py), otherwise they stay unverified;
+  `capcompare` compares the whole database with the --source-capture of the same archive on any processor.
 
 Options: --fixtures DIR (default ~/.woowbk-lab/ha-fixtures/20261118),
 --creds FILE (default ~/.woowbk-lab/secrets/ha-import-creds.env), --n8n-data FILE (the test-data script holding the
@@ -57,7 +58,7 @@ ALL = ('upload', 'keys', 'check', 'convert', 'restore', 'verify', 'db2', 'testmo
 # Backups from a real ARM HA (--arch aarch64, opt-in): the decrypted copy HA's page downloads, ARM-only code in a custom
 # module and a community node, PostgreSQL stopped uncleanly, and the imported tables against the source's fingerprint.
 EXTRA = ('baseline', 'live', 'kill', 'cancel', 'space', 'pull', 'c19', 'rollback', 'armdownload', 'armnative', 'armcrash',
-         'armcompare', 'n8ndiag', 'restart')
+         'armcompare', 'capcompare', 'n8ndiag', 'restart')
 STAGING = '/var/lib/woowtech-backup/staging'
 JOB_LABEL = 'label=io.woowtech.backup.job'
 
@@ -1043,6 +1044,45 @@ def scenario_armcompare(ev, args):
                  bool(rows and rows.get('all_explained')), (rows or {}).get('summary') or rows)
     if unresolved:
         ev.log('Unverified table differences; no automatic exemption: ' + ', '.join(unresolved))
+
+
+def scenario_capcompare(ev, args):
+    """The whole imported database against the source capture of the same HA archive (any processor; the source
+    side is odoo_capture.py's source_cold stage, so no HA-side fingerprint is needed): every table by count and md5
+    in one snapshot, differing rows one by one (odoo_explain); anything unexplained fails."""
+    if not getattr(args, 'source_capture', None):
+        raise Failed('capcompare needs --source-capture')
+    try:
+        capture = arm_row_capture(args)
+    except (Failed, OSError, UnicodeError, ValueError, KeyError, StopIteration) as error:
+        ev.save('capture-compare.json', {'schema_version': 1, 'status': 'invalid_input',
+                                       'error_type': type(error).__name__})
+        ev.check('capture compare input valid', False, type(error).__name__)
+        return
+    source, here = capture['source_prints'], capture['target_prints']
+    missing, added = sorted(set(source) - set(here)), sorted(set(here) - set(source))
+    changed = sorted(t for t in source if t in here and here[t] != source[t])
+    rows, explained = None, set()
+    if changed:
+        try:
+            rows = arm_row_evidence(capture, source, changed)
+            explained = set(rows['explained_tables']) if rows['all_explained'] else set()
+        except (Failed, OSError, ValueError, KeyError) as error:
+            rows = {'status': 'invalid_row_evidence', 'error_type': type(error).__name__}
+    unresolved = sorted((set(changed) - explained) | set(missing) | set(added))
+    ev.save('capture-compare.json', {'schema_version': 1,
+            'status': 'unverified_differences' if unresolved else (
+                'explained_row_differences' if changed else 'equal_fingerprints'),
+            'source_tables': len(source), 'target_tables': len(here), 'identical': len(source) - len(changed) - len(missing),
+            'changed': changed, 'missing': missing, 'added': added, 'unverified_tables': unresolved,
+            'row_evidence': rows})
+    ev.check(f'source capture and imported copy: exact table inventory ({len(source)} tables)', not missing and not added,
+             {'missing': missing, 'added': added})
+    ev.check('source capture and imported copy: every table identical by count and md5, apart from rows explained '
+             'one by one in capture-compare.json', not (set(changed) - explained), changed)
+    if changed:
+        ev.check('capture row evidence: every differing row matches a vendor-cited rule (no schema change, no other '
+                 'table)', bool(rows and rows.get('all_explained')), (rows or {}).get('summary') or rows)
 
 
 # n8n's package list (GET /rest/community-packages) awaits `npm outdated --json` whenever a community package is
