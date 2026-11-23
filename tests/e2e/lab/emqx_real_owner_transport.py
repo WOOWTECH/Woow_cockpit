@@ -47,7 +47,9 @@ STAGED=b'REAL OWNER STAGED ONLY PASSED\n'
 DEPENDENCIES=b'REAL OWNER DEPENDENCIES PASSED\n'
 # Full real restore = 3 verified rounds; at host load ~27 round 2's capture already
 # ran at ~700-720s (attempts 13-15) and a full pass took 590s at load ~13.
-REAL_RESTORE_SECONDS=1500
+# The FILE baseline with its rule-delivery round passed in 1474.7s at load ~22
+# (x86-attempt3), 25s under the old 1500s alarm: wall-clock bound only.
+REAL_RESTORE_SECONDS=2100
 HOST_PHASES=frozenset(('profile','bundle','dependencies','client_credentials','retained_binding','key','archive','archive_binding','transfer','child','receipt'))
 
 class TransportRefused(ValueError):
