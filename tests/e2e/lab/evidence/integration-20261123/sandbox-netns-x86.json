@@ -1,0 +1,67 @@
+{
+ "schema_version": 1,
+ "kind": "sandbox-netns-observation",
+ "run": "x86-full-real.json",
+ "attempt": "n8n sandbox children during the x86 full run (integrated engine)",
+ "device": "woowbk-dev-c (lab; network none, no published ports)",
+ "sampler_started_utc": "2026-11-23T04:31:09Z",
+ "sampler": "tests/e2e/lab/sandbox_netns_sampler.py (commit ba618ba), fed on stdin to python3 -I inside dev-c as root; reads /proc only (cmdline, status, ns/net and root links) every 10 ms; never signals or traces",
+ "programs_sha256": {
+  "n8n": "1f7ce7aaa2fddf4ef2295fcd5da3f2b856691ee3cb6d10fd8f26e3363c22e4d3 (woowbackup.ha_n8n.SQLITE_CHILD at ba618ba)",
+  "hasqlite": "6f99cdfb4c02ce26cbb9a84cfff81b6d8011d57088e1cee7d161de7a91026283 (woowbackup.hasqlite.CHILD at ba618ba)"
+ },
+ "stream_sha256": "a5a112b395763f3741c0271bdf12e22e85f3796b5bfe9590b61de389e2985c32",
+ "stopped": "SIGTERM after the driver ended (13:05 local); no end line",
+ "children_seen": 5,
+ "by_child": {
+  "n8n": 5
+ },
+ "observed_after_drop": 5,
+ "after_drop_isolated_and_chrooted": 5,
+ "after_drop_not_isolated": 0,
+ "ended_between_scans": 0,
+ "events": [
+  {
+   "args": 7,
+   "child": "n8n",
+   "chrooted": true,
+   "euid": 65534,
+   "netns_isolated": true,
+   "t": "04:36:15"
+  },
+  {
+   "args": 7,
+   "child": "n8n",
+   "chrooted": true,
+   "euid": 65534,
+   "netns_isolated": true,
+   "t": "04:37:00"
+  },
+  {
+   "args": 7,
+   "child": "n8n",
+   "chrooted": true,
+   "euid": 65534,
+   "netns_isolated": true,
+   "t": "04:37:46"
+  },
+  {
+   "args": 7,
+   "child": "n8n",
+   "chrooted": true,
+   "euid": 65534,
+   "netns_isolated": true,
+   "t": "04:39:15"
+  },
+  {
+   "args": 7,
+   "child": "n8n",
+   "chrooted": true,
+   "euid": 65534,
+   "netns_isolated": true,
+   "t": "04:51:50"
+  }
+ ],
+ "reading": "A sandbox child drops to nobody only after unshare(CLONE_NEWNET) and chroot; at that point its network namespace must differ from dev-c PID 1. A child that ends between two 10 ms scans is listed as ended_before_drop (not observable after the drop); with 10fe446 a child that cannot leave the network exits 3 and the job fails, so a succeeded job also implies the switch.",
+ "commercial_acceptance": "not-complete"
+}
