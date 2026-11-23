@@ -336,6 +336,13 @@ python3 -I tests/e2e/lab/hermes_real_capture.py --private=<~/.woowbk-lab/evidenc
 * `kit-baseline`：以緊急金鑰還原 dev-d 的 Hermes 基準備份（頁面「輸入緊急金鑰」的路徑），標記與摘要回到 `before`。
 * `cleanup`／`leaks`：刪除本測試的轉換與還原前備份；沒有作業的拋棄式容器、暫存資料夾、金鑰檔；引擎紀錄、日誌、run 目錄與
   run 開始後的設備日誌中沒有 HA 金鑰、HA 的 Hermes 測試秘密、緊急金鑰或 dev-d 的 Hermes 密鑰（只回傳次數）。
+* 動態憑證（services-b，2026-11-23）：每次儀表板密碼登入都會**發出**工作階段 cookie `hermes_session_at`（必有）與
+  `hermes_session_rt`（供應者有給才有；vendor hermes-agent v0.22.5 `hermes_cli/dashboard_auth/cookies.py:27-28`、`:86-95`）。
+  continuity 與 b1 的 Hermes 檢查（這台的密碼一次、HA 的密碼一次＝應被拒）都經由有確認的事件傳輸
+  （`event_device_python`）把拿到的值交給主機登錄後才繼續（共用片段 `drv.HERMES_ISSUE`，順序 `HERMES_AUTH`／`ISSUED_AUTH`）；
+  每次登入在探測前就登記為一個宣告來源（`drv.ISSUED_SESSIONS`），`leaks` 在任何掃描之前，只要有一個宣告來源沒有登錄到值就失敗，
+  並以一行 CHECK 記錄來源數與值數。值只在記憶體裡，所以 `leaks` 必須和登入在同一次執行。探測的子程序不繼承 stdin
+  （事件模式下 stdin 是主機的確認通道）；儀表板 API 逾時或非 JSON 回應記為代碼 0（該項檢查失敗），不再讓整個探測結束。
 * 沒有涵蓋：瀏覽器頁面本身（dev-d 不公開任何埠；helper 呼叫就是頁面送出的）、與模型對話（dev-d 以 `--no-llm` 安裝，HA 的設定指向
   HA 內部網址，匯入時已提醒）、ARM（Hermes 附加元件只有 amd64）。
 * 鎖：像 `flock -w` 一樣阻塞等待；emqx-main 的等待檔存在時不取鎖（取到也立即放開）。只有在 emqx-main 的真實執行**持有**鎖
