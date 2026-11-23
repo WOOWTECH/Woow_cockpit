@@ -239,7 +239,8 @@ class CleanupOrderTest(unittest.TestCase):
                     raise hsff.Failed('stop')
             return inner
 
-        for name in ('setup', 'load_secrets', 'lab_config_on', 'step_before', 'step_upload', 'step_check',
+        for name in ('setup', 'load_secrets', 'lab_config_on', 'step_before', 'step_upload', 'step_found_state_check',
+                     'step_check',
                      'step_import', 'clients_phase', 'step_restart', 'step_auto_rollback', 'clients_stop', 'inject_off',
                      'step_rollback_to_own', 'lab_config_off', 'step_cleanup', 'step_leaks'):
             setattr(run, name, step(name))
@@ -270,6 +271,14 @@ class CleanupOrderTest(unittest.TestCase):
         names = [c for c in calls if isinstance(c, str)]
         self.assertEqual(names[-7:], ['clients_stop', 'inject_off', 'step_rollback_to_own', 'lab_config_off',
                                       'step_cleanup', 'step_leaks', 'remove_private'])
+
+    def test_found_state_refusal_runs_before_the_lab_config(self):
+        run, calls = self.fake_run('step_import', safety=None)
+        with mock.patch.object(hsff, 'keep_volume_keys', lambda *a: None):
+            hsff.run_all(run)
+        names = [c for c in calls if isinstance(c, str)]
+        self.assertEqual(names[:6], ['load_secrets', 'setup', 'step_upload', 'step_found_state_check', 'lab_config_on',
+                                     'step_before'])
 
     def test_secrets_are_loaded_before_setup(self):
         # attempt 1 (11-23 16:08): setup inspected the baseline before the kit was read -> invalid-request

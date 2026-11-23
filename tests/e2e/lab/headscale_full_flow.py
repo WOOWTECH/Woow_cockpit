@@ -822,6 +822,24 @@ class Run:
         if rc != 0 or meta.get('id') != store_id:
             raise Failed('upload refused')
 
+    def step_found_state_check(self):
+        """The page's ha-check while dev-d's Headscale is as found (crash-looping on its empty DERP map): the product
+        must refuse to import into an unhealthy target, as a blocker of the result, and leave nothing behind."""
+        ev = self.ev
+        tag = f'{self.arch}-plain'
+        states = {u: unit_state(u) for u in UNITS}
+        job, took = drv.run_check(self.store_id, ['headscale'], ev=ev, tag=f'check-found-{tag}-headscale')
+        apps = ((job.get('result') or {}).get('ha_check') or {}).get('apps') or [{}]
+        result = apps[0]
+        ev.save('check-found-state.json', {'units': states, 'job_state': job.get('state'), 'result': result})
+        blockers = result.get('blockers') or []
+        leftovers = drv.labelled()
+        ev.check('found state: with dev-d\'s Headscale crash-looping (empty DERP map) the product\'s ha-check refuses the '
+                 'import (target not healthy) and leaves nothing', job.get('state') == 'succeeded'
+                 and result.get('ok') is False and any('狀態異常' in b or '部署完成' in b for b in blockers)
+                 and not any(leftovers.values()), {'units': states, 'blockers': blockers, 'took_s': round(took, 1),
+                                                   'leftovers': leftovers})
+
     def step_check(self):
         ev = self.ev
         tag = f'{self.arch}-plain'
@@ -1309,8 +1327,9 @@ print(json.dumps(out))
 
 def run_all(run):
     ev = run.ev
-    phases = [('secrets', run.load_secrets), ('setup', run.setup), ('lab config', run.lab_config_on),
-              ('before', run.step_before), ('upload', run.step_upload), ('check', run.step_check),
+    phases = [('secrets', run.load_secrets), ('setup', run.setup), ('upload', run.step_upload),
+              ('found state', run.step_found_state_check), ('lab config', run.lab_config_on),
+              ('before', run.step_before), ('check', run.step_check),
               ('import', run.step_import), ('verify', lambda: run.verify('restore')),
               ('volume keys', lambda: keep_volume_keys(ev, run.private, 'restore')),
               ('status', lambda: (app_status(ev, 'restore'), drv.app_health(ev, 'headscale', 'restore'))),
