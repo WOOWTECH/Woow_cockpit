@@ -33,7 +33,9 @@
 #           range (its subuid COUNT in dev-e): such an image is refused unless it is flagged ignore-chown (see IMAGES)
 # cockpit   deploy-src.sh e (this tree's engine and page), then the catalog phase
 # catalog   the host's catalog entries of the deployed apps (owner -> appowner) and the device key, WITHOUT touching
-#           the installed engine (an importer lane may have deployed its own engine to dev-e)
+#           the installed engine (an importer lane may have deployed its own engine to dev-e). The host has no entry
+#           for code-server (not onboarded there): its entry is the lab file catalog/woow-code-server.json of lane
+#           codeserver-import (owner decision D1 b: the workspace folder ~/Desktop is backed up), already for appowner
 # drop-images:APP  removes APP's images from dev-e (test data rotation: they can be copied again from the host)
 # Every phase can be run again: loaded images and copies that are already there are kept.
 # Start over with: tests/e2e/lab/reset.sh e --up
@@ -383,7 +385,9 @@ phase_nextcloud() {
 }
 
 # ---- catalog entries, engine, device key ------------------------------------------------------------------------
-declare -A CATALOG_ID=([nextcloud]=nextcloud [opendesign]=open-design [code-server]=)
+declare -A CATALOG_ID=([nextcloud]=nextcloud [opendesign]=open-design [code-server]=woow-code-server)
+# Entries that come from this tree instead of the host's /etc/woowtech-cockpit/backup/apps (the host has none).
+declare -A LAB_CATALOG=([code-server]=$LAB_DIR/catalog/woow-code-server.json)
 declare -A FIRST_QUADLET=([nextcloud]=nextcloud-app.container [opendesign]=open-design.container
                           [code-server]=code-server.container)
 deployed() { owner test -f "$HOME_D/.config/containers/systemd/${FIRST_QUADLET[$1]}"; }
@@ -394,23 +398,29 @@ phase_cockpit() {
 }
 
 phase_catalog() {
-    local app id
+    local app id src what content
     "$LAB_DIR/engine.sh" e status >/dev/null || die "the backup engine is not installed in $NAME (run the cockpit phase)"
     for app in nextcloud code-server opendesign; do
         id=${CATALOG_ID[$app]}
-        if [ -z "$id" ]; then
-            log "$app: the host has no catalog entry (owner decision: not onboarded); the code-server import lane adds one"
-            continue
-        fi
         if ! deployed "$app"; then
             log "$app is not deployed yet: its catalog entry is installed when it is"
             continue
         fi
-        python3 -I - "/etc/woowtech-cockpit/backup/apps/$id.json" "$OWNER" <<'PY' |
+        src=/etc/woowtech-cockpit/backup/apps/$id.json what="the host's file, owner -> $OWNER"
+        if [ -n "${LAB_CATALOG[$app]:-}" ]; then
+            src=${LAB_CATALOG[$app]} what="the lab file ${LAB_CATALOG[$app]#"$REPO_ROOT"/}, owner $OWNER"
+        fi
+        # The whole entry first, then one install: a refused entry never leaves an empty or partial file in dev-e.
+        content=$(python3 -I - "$src" "$OWNER" "${LAB_CATALOG[$app]:+lab}" <<'PY'
 import json, sys
-path, owner = sys.argv[1], sys.argv[2]
+path, owner, lab = sys.argv[1], sys.argv[2], sys.argv[3]
 text = open(path, encoding='utf-8').read()
 entry = json.loads(text)
+if lab:  # written for dev-e already: installed as it is
+    if entry.get('owner') != owner:
+        sys.exit(f'{path}: owner {entry.get("owner")!r}, expected {owner!r}')
+    sys.stdout.write(text)
+    sys.exit(0)
 old = '"owner": %s' % json.dumps(entry['owner'])
 if text.count(old) != 1:
     sys.exit(f'{path}: expected one {old}')
@@ -418,9 +428,11 @@ new_text = text.replace(old, '"owner": %s' % json.dumps(owner))
 assert json.loads(new_text) == dict(entry, owner=owner), 'unexpected change'
 sys.stdout.write(new_text)
 PY
+        ) || die "the $id catalog entry ($src) was refused"
+        printf '%s\n' "$content" |
             dexec "$NAME" install -m 0644 -o root -g root /dev/stdin "/etc/woowtech-cockpit/backup/apps/$id.json" ||
             die "installing the $id catalog entry failed"
-        log "catalog entry $id installed (the host's file, owner -> $OWNER)"
+        log "catalog entry $id installed ($what)"
     done
     python3 -I - "$LP" "$NAME" "$SECRETS_DIR/dev-e-kit.txt" <<'PY'
 import json, os, subprocess, sys
@@ -468,10 +480,10 @@ print(f'nextcloud: richdocuments enabled={version is not None} version={version}
 sys.exit(0 if version == sys.argv[2] else 1)
 PY
 )
-# The packages' own units beyond the catalog's (code-server has no catalog entry). The host's
+# The packages' own units beyond the catalog's (code-server: its health timer). The host's
 # open-design-local-health.{service,timer} (2026-11-08) are in no commit of the OpenDesign package: not deployed here.
 declare -A EXTRA_UNITS=([nextcloud]="nextcloud-cron.timer" [opendesign]=""
-                        [code-server]="code-server.service code-server-health.timer")
+                        [code-server]="code-server-health.timer")
 phase_check() {  # [app]: engine status, the catalog's health URLs, every unit active, no failed user unit
     local failures=0 app id url expect code unit units state failed apps=()
     for app in nextcloud code-server opendesign; do
@@ -564,9 +576,27 @@ PY
         die "editing the code-server copy failed"
 }
 
+# The unit runs with UserNS=keep-id:uid=1000,gid=1000: its first start makes an ID-mapped copy of the whole image
+# (rootless overlay, ~5 GiB, minutes on this loaded host), longer than the unit's TimeoutStartSec=180. A throwaway
+# container created with the same mapping makes that copy first (storage keeps it with the image), so install.sh's
+# start does not time out. Nothing else changes: the copy is what the first start would have made.
+cs_idmap_copy() {
+    local free start name=woowbk-lab-cs-idmap-copy
+    free=$(host_free)
+    [ $((free - 6 * GIB)) -ge $(((FLOOR_GIB + RESERVE_GIB) * GIB)) ] ||
+        die "host disk: $((free >> 30)) GiB free; the ID-mapped copy needs up to 6 GiB and $((FLOOR_GIB + RESERVE_GIB)) GiB must stay free"
+    start=$SECONDS MIN_FREE=$free
+    owner podman rm -f "$name" >/dev/null 2>&1 || true
+    guarded 1800 "$LP" exec -i "$NAME" /usr/local/bin/woowbk-owner podman create -q --name "$name" \
+        --userns keep-id:uid=1000,gid=1000 "$CS_GHCR" true >/dev/null || die "creating $name failed"
+    owner podman rm "$name" >/dev/null || die "removing $name failed"
+    log "ID-mapped copy for keep-id:uid=1000,gid=1000 made in $((SECONDS - start))s (throwaway container removed), lowest host free $((MIN_FREE >> 20)) MiB"
+}
+
 phase_code_server() {
     copy_repo code-server
     code_server_edit_copy
+    cs_idmap_copy
     owner podman tag "$CS_GHCR" "$CS_LOCAL"
     log "running Woow_podman_code_server_package scripts/install.sh --no-build --yes as $OWNER (fresh password secret)"
     if ! owner "$HOME_D/${DEST[code-server]}/scripts/install.sh" --no-build --yes; then
