@@ -1,0 +1,23 @@
+{
+ "schema_version": 1,
+ "attempt": "x86 woow-import-test-enc same-run Odoo capture v2, attempt 2 (mail tables row by row)",
+ "kind": "capture",
+ "device": "woowbk-dev-c (lab; network none, no published ports)",
+ "started_utc": "2026-11-23T02:21:28Z",
+ "source_commit": "feee79c",
+ "engine_files_sha256": "7bf56d306e0ad2ac7e9affbc2d5568a9eaee561e905b2e28b0fbababda97ddf4",
+ "command": "python3 -B -I tests/e2e/lab/odoo_capture.py run --slot-granted --request <private 0600: ha-1840b054568cb54d9b79 woowtest, baseline 20261118T095247Z-388c9bd7, runtime_wait_seconds 150, lab HA key>",
+ "exit_code": 2,
+ "elapsed_seconds": 4,
+ "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+ "status_lines": [
+  "FAIL capture: invalid_or_incomplete (target_before query, psql exit 3)"
+ ],
+ "run_id": "b1e2c33b20444adb84897e91e83fe892",
+ "stages_captured": 0,
+ "conversion_job": "j20261123T022130Z-aba415e9 failed (job-failed) in 2 s",
+ "cause": "dev-c own Odoo has no mail module, so public.mail_mail / public.mail_message do not exist and the unconditional query failed; nothing was converted or restored (outcome.json: stages 0, restore_job null).",
+ "after_state": "checked: no job-labelled container, volume or network; empty staging; no key file; dev-c Odoo untouched.",
+ "fixed_by": "47ba6b5 (psql \\gset/\\if: mail tables only where they exist; checked on a throwaway PostgreSQL 16.15)",
+ "commercial_acceptance": "not-complete"
+}
