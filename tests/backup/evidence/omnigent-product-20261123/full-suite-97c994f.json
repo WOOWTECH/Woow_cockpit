@@ -1,0 +1,26 @@
+{
+ "scope": "omnigent-product-full-tests-backup-suite",
+ "source_commit": "97c994ff3d35df7c42e122460fbf68555686d43e",
+ "worktree": "detached worktree checked out at 97c994f; git status clean after the run",
+ "command": "PYTHONPATH=backup-engine:tests/e2e/lab:. python3 -m unittest discover -s tests/backup -t . (nice 10, idle I/O, under /tmp/woowbk-host-heavy-tests.lock)",
+ "lock": "queued 03:11:42, held 2026-11-24 03:42:01-03:48:14 (Asia/Taipei); started before the heavy.sh rule of 07:29",
+ "ran": 1423,
+ "seconds": 370.522,
+ "result_line": "failures=9, errors=1, skipped=6",
+ "not_ok": [
+  "FAIL tests.backup.test_ha_emqx.CheckTests.test_a_clean_backup",
+  "FAIL tests.backup.test_ha_emqx.CheckTests.test_a_hot_backup_is_tried_and_named",
+  "FAIL tests.backup.test_ha_emqx.CheckTests.test_an_ip_node_name_needs_no_host_line",
+  "FAIL tests.backup.test_ha_emqx.CheckTests.test_blockers",
+  "FAIL tests.backup.test_ha_emqx.ConvertTests.test_a_failed_export_stops_the_conversion_with_the_advice",
+  "FAIL tests.backup.test_ha_emqx.ConvertTests.test_a_partial_import_stops_the_conversion",
+  "FAIL tests.backup.test_ha_emqx.ConvertTests.test_an_import_that_would_open_anonymous_login_is_refused",
+  "FAIL tests.backup.test_ha_emqx.ConvertTests.test_lost_rows_stop_the_conversion",
+  "FAIL tests.backup.test_ha_emqx.ConvertTests.test_the_strict_settings_must_come_back",
+  "ERROR tests.backup.test_ha_emqx.ConvertTests.test_the_whole_conversion"
+ ],
+ "not_ok_count": 10,
+ "expected_not_ok": "the 10 pre-existing test_ha_emqx tests (EMQX PRESERVATION_BLOCKER guard on this base; they belong to the EMQX lane), no other",
+ "output_sha256": "13f7d43b8ab3d7c3ed93aa45de9fddfbb8a5d2f1e835f68dbcdc45f4eca5a91a",
+ "commercial_acceptance": "not-complete"
+}
