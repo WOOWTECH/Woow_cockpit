@@ -1,0 +1,13 @@
+{
+ "cause": "crun setgroups EINVAL: the image user 65534 is not mapped in dev-d's user namespace; attempt 2 runs as 1000:0 (455d1f4), like the product lane lab",
+ "commercial_acceptance": "not-complete",
+ "harness": {
+  "commit": "393a34f"
+ },
+ "status_lines": [
+  "Error: OCI runtime error: crun: setgroups: Invalid argument",
+  "rc=126 seconds=2",
+  "dev-d isolation: true none {}"
+ ],
+ "what": "SR-7 probe attempt 1 (the container did not start)"
+}
