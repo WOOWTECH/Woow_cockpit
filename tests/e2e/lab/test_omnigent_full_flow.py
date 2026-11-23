@@ -16,39 +16,83 @@ spec.loader.exec_module(flow)
 
 
 class LockTests(unittest.TestCase):
-    def test_waits_for_the_waiting_file_and_a_holder(self):
+    def test_waits_for_the_waiting_file_then_queues_on_the_lock(self):
         with tempfile.TemporaryDirectory() as directory:
             lock, waiting = Path(directory) / 'lock', Path(directory) / 'waiting'
             waiting.write_text('')
-            holder = os.open(lock, os.O_RDWR | os.O_CREAT, 0o600)
-            fcntl.flock(holder, fcntl.LOCK_EX)
             clock = {'t': 0}
-            events = []
+            tries = []
 
             def sleep(seconds):
                 clock['t'] += seconds
-                events.append(clock['t'])
                 if clock['t'] == 10:
-                    waiting.unlink()          # emqx-main started its run ...
-                if clock['t'] == 20:
-                    os.close(holder)          # ... and finished it
-            fd, waited = flow.acquire(lock, waiting, 3600, sleep=sleep, clock=lambda: clock['t'])
+                    waiting.unlink()          # emqx-main started its run
+
+            def block(fd, seconds):
+                tries.append(clock['t'])
+                clock['t'] += seconds
+                if len(tries) < 3:
+                    return False              # emqx-main still holds the lock
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                return True
+            fd, waited = flow.acquire(lock, waiting, 3600, sleep=sleep, clock=lambda: clock['t'], tick=30,
+                                      block=block)
             try:
-                self.assertEqual(waited, 20)
-                self.assertEqual(events, [5, 10, 15, 20])
+                self.assertEqual(tries, [10, 40, 70])
+                self.assertEqual(waited, 100)
+            finally:
+                os.close(fd)
+
+    def test_gives_the_lock_back_when_emqx_asks_meanwhile(self):
+        with tempfile.TemporaryDirectory() as directory:
+            lock, waiting = Path(directory) / 'lock', Path(directory) / 'waiting'
+            clock = {'t': 0}
+            held = []
+
+            def sleep(seconds):
+                clock['t'] += seconds
+                if waiting.exists():
+                    waiting.unlink()
+
+            def block(fd, seconds):
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                held.append(clock['t'])
+                if len(held) == 1:
+                    waiting.write_text('')    # emqx-main asked while this waiter got the lock
+                return True
+            fd, _waited = flow.acquire(lock, waiting, 3600, sleep=sleep, clock=lambda: clock['t'], block=block)
+            try:
+                self.assertEqual(len(held), 2)
+                other = os.open(lock, os.O_RDWR)
+                with self.assertRaises(BlockingIOError):
+                    fcntl.flock(other, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                os.close(other)
             finally:
                 os.close(fd)
 
     def test_gives_up_after_the_timeout(self):
         with tempfile.TemporaryDirectory() as directory:
             lock, waiting = Path(directory) / 'lock', Path(directory) / 'waiting'
-            waiting.write_text('')
             clock = {'t': 0}
 
-            def sleep(seconds):
+            def block(fd, seconds):
                 clock['t'] += seconds
+                return False
             with self.assertRaises(flow.Failed):
-                flow.acquire(lock, waiting, 30, sleep=sleep, clock=lambda: clock['t'])
+                flow.acquire(lock, waiting, 60, clock=lambda: clock['t'], tick=30, block=block)
+
+    def test_the_real_blocking_wait_times_out_and_then_holds(self):
+        with tempfile.TemporaryDirectory() as directory:
+            lock = Path(directory) / 'lock'
+            holder = os.open(lock, os.O_RDWR | os.O_CREAT, 0o600)
+            fcntl.flock(holder, fcntl.LOCK_EX)
+            fd = os.open(lock, os.O_RDWR)
+            try:
+                self.assertFalse(flow._block(fd, 1))
+                os.close(holder)
+                self.assertTrue(flow._block(fd, 1))
+            finally:
+                os.close(fd)
 
 
 class TreeTests(unittest.TestCase):
