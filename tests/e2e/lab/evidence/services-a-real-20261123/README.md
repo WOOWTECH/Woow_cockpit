@@ -77,6 +77,7 @@ at the start of every run; only the internal candidate entry is used.
 | `omnigent-x86-attempt2.json` | 5b0e782 | 1 | 1051.6 | Member session passed; stopped at `installed_table_counts_differ` (no diagnostics yet). d5c40bf added table-name/count diagnostics. |
 | `omnigent-x86-attempt3.json` | d5c40bf | 1 | 938.6 | Right after installation every printable table equalled HA's count plus the kept account; after this run's three refresh-issuing logins `device_grants` was 0 → 3 (vendor `server/routes/accounts_auth.py:364-371`). 974fa48 makes the pre-login equality a hard check for every table and lets only `account_tokens`/`device_grants` grow after logins. |
 | `omnigent-x86-attempt4.json` | 974fa48 | 0 | 1334.4 (632 s holding the lock) | **PASS** — see below. |
+| `omnigent-arm-attempt1.json` | 8e78b2c | 0 | 1101.3 (534 s holding the lock) | **PASS** — the same chain on the b1 RPi5 backup (aarch64 add-on member): every table equal to HA's count plus the kept account before any login, including HA's runner host row and its device grant (`hosts` 1, `device_grants` 1) carried as data while this device's runner pi volume stayed byte-identical (the RPi5 runner's pairing is not moved); all application checks after install, restart and automatic rollback; 31 registered values, 0 scan hits; cleanup complete. |
 
 What the passing x86 run used and proved (real unless stated):
 
@@ -114,3 +115,14 @@ rows arrive as data and stay offline — the runner pairing is not moved); the t
 lab-made with random names; the engine runs on the host through the lab bridge and the live `/v1/info` GET
 goes through `podman exec` into the running server; the throwaway PostgreSQL containers were capped at
 512 MiB (product default 2 GiB) to fit dev-d's 4 GiB cgroup.
+
+## What is still not proven (why `commercial_acceptance` stays `not-complete`)
+
+* Both services ran against **disposable lab targets** (lab-made catalog/Quadlets/config, random names), not
+  the WOOWTECH packages' installed units, and not dev-d's own `headscale.service`/Omnigent units.
+* Omnigent's **public** HA import stays blocked (`SECURITY_BLOCKER`, B1-01): these runs prove the internal
+  candidate path only. Lifting the guard is an owner/product decision.
+* Omnigent runner: placeholder container only (Pi agent and models out of scope); HA's runners would have to
+  be re-paired by their owners (product reminder text), which was not exercised.
+* Headscale: lab CA and userspace clients with forced DERP; Headplane UI and host-reboot persistence not run.
+* The engine ran on the host through the lab owner bridge, not as Cockpit's helper inside the device.
