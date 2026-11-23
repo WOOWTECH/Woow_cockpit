@@ -111,6 +111,17 @@ container of the review was left.
 Every public refusal stayed; no check was weakened or skipped. Each SR-1..SR-4 regression test
 (`SecurityReviewTests`) fails on `3bde418` and passes on the fix; SR-5 has `StoredSettingsTests`.
 
+## Tests
+
+- `tests.backup.test_ha_litellm`: 33/33 on the fix (7 new: `SecurityReviewTests` ×4, each failing on `3bde418`;
+  `StoredSettingsTests` ×3). With `test_ha_litellm_candidate`, `test_adapter_import_secrets` and `test_ha_odoo`: 80 OK.
+  Lab unit tests `test_litellm_full_flow`, `test_litellm_real_ha`: OK.
+- Full `tests/backup` on `d31c59a` (host-heavy lock): 1490 tests, only the 7 pre-existing `test_ha_omnigent` failures
+  (5 failures, 2 errors; the same 7 as on `d812699` and `3bde418`, lane omnigent-product), 6 skipped.
+- The product's mutation check (`tests/backup/litellm_product_mutations.py`) with 8 new mutations M34–M41 (one per
+  protection of SR-1..SR-5): first run 40/41 caught — every new mutation caught; M19's text had to follow
+  `ha_server_args`' new last line (same mutation, `7b2401c`). Rerun of all 41 on the final tip: see the hand-off.
+
 ## Old guard
 
 The lab candidate's guard (`ha_litellm_candidate.GUARD`: schema and key compatibility unverified; conversion off
