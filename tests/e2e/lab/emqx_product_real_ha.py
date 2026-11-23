@@ -331,6 +331,11 @@ def get(path, wait=0):
 if token and REQ.get("authz_add"):
     c, b = call(E, "POST", "/api/v5/authorization/sources", {"type": "built_in_database", "enable": True}, token=token)
     out["authz_add"] = c
+    # EMQX 5.8.9 PREPENDS a created source (emqx_authz_api_sources.erl:258-259, ?CMD_PREPEND); the owner's text says
+    # 「排在檔案規則之後」: move it after the file source (same file :71 /move, :315, :587-600 position "after:file").
+    c, b = call(E, "POST", "/api/v5/authorization/sources/built_in_database/move", {"position": "after:file"},
+                token=token)
+    out["authz_move"] = c
 if token:
     c, body = get("/api/v5/authentication/password_based:built_in_database/users?limit=1000", wait=120)
     out["mqtt_users"] = sorted([u.get("user_id"), u.get("is_superuser")] for u in items(body))
@@ -1165,10 +1170,12 @@ def step_import(ev, args, tag, mode):
         if mode == 'builtin':
             changed = True
             added = run_probe(ev, args, f'{label_text} add builtin', 'base', authz_add=True)
-            if not ev.check(f'{label_text}: the built-in database source was added through the API (file + built-in)',
-                            added.get('authz_add') in (200, 204) and added.get('authz_sources') ==
-                            [['file', True], ['built_in_database', True]],
-                            {'add': added.get('authz_add'), 'sources': added.get('authz_sources')}):
+            if not ev.check(f'{label_text}: the built-in database source was added through the API and moved after '
+                            'the file source (file + built-in)',
+                            added.get('authz_add') in (200, 204) and added.get('authz_move') in (200, 204)
+                            and added.get('authz_sources') == [['file', True], ['built_in_database', True]],
+                            {'add': added.get('authz_add'), 'move': added.get('authz_move'),
+                             'sources': added.get('authz_sources')}):
                 raise Failed('the builtin source could not be added')
         if check_one(ev, args, tag, mode=mode) is None:
             raise Failed('the check job failed')
