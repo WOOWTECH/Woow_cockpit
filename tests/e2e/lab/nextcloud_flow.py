@@ -403,9 +403,12 @@ class Run:
         self.created_store = None
         self.before = {}
         self.section = {}
+        self.safety = None          # the import's safety backup: dev-e's own Nextcloud before the import
+        self.restored_back = False  # True once that safety backup is restored (manual rollback)
 
-    def budget(self, phase, need=NEED):
-        if time.monotonic() - self.lock_started > (RUN_HOLD_BUDGET if self.args.run else HOLD_BUDGET):
+    def budget(self, phase, need=NEED, *, timed=True):
+        """Before a step: the lock hold budget (`timed`; never for putting dev-e's own data back) and the host floor."""
+        if timed and time.monotonic() - self.lock_started > (RUN_HOLD_BUDGET if self.args.run else HOLD_BUDGET):
             raise Failed(f'lock hold budget reached before {phase}')
         free = host_free()
         if free < FLOOR + need:
@@ -850,26 +853,32 @@ class Run:
             ev.check('auto rollback: its own safety backup (the imported state) is deleted', rc == 0)
             if rc == 0:
                 self.deleted = getattr(self, 'deleted', set()) | {extra}
-        self.budget('rollback', self.restore_need(self.safety))
+        self.manual_rollback('rollback')
+
+    def manual_rollback(self, phase):
+        """Restore the import's safety backup (dev-e's own Nextcloud): the manual rollback, and the recovery when a run
+        stops after the import's restore. Never limited by the lock hold budget; the host floor still applies."""
+        ev = self.ev
+        self.budget(phase, self.restore_need(self.safety), timed=False)
         tripped = []
         with self.watching(tripped):
-            job, took = drv.restore(self.safety, ['nextcloud'], ev=ev, tag='nc-share-rollback')
+            job, took = drv.restore(self.safety, ['nextcloud'], ev=ev, tag=f'nc-share-{phase.replace(" ", "-")}')
         result = job.get('result') or {}
         drv.created_backup(result.get('safety_backup_id'))
-        ev.save('rollback-manual-job.json', {'state': job.get('state'), 'error': job.get('error'),
-                                             'health': result.get('health')})
-        ev.check('rollback: the import\'s safety backup restored (manual rollback), every health check ok',
-                 job.get('state') == 'succeeded' and not tripped
-                 and all(h.get('status') == 'ok' for h in result.get('health') or []),
+        ev.save(f'{phase.replace(" ", "-")}-job.json', {'state': job.get('state'), 'error': job.get('error'),
+                                                       'health': result.get('health')})
+        self.restored_back = job.get('state') == 'succeeded'
+        ev.check(f'{phase}: the import\'s safety backup restored (manual rollback), every health check ok',
+                 self.restored_back and not tripped and all(h.get('status') == 'ok' for h in result.get('health') or []),
                  {'state': job.get('state'), 'took_s': round(took, 1), 'tripped': tripped})
         found = self.markers()
         users = self.state().get('users') or []
         ha_only = set(self.args.facts.get('digests') or {}) - set(self.before['state'].get('users') or [])
-        ev.check('rollback: dev-e\'s own markers are back exactly and the HA-only users are gone',
+        ev.check(f'{phase}: dev-e\'s own markers are back exactly and the HA-only users are gone',
                  found == self.before['markers'] and bool(ha_only) and not ha_only & set(users),
                  {'markers_same': found == self.before['markers'], 'users': users, 'ha_only': sorted(ha_only)})
         client = self.base_client()
-        ev.check('rollback: dev-e\'s own account logs in again (OCS)', (client.get('ocs') or {}).get('password') == [200, True],
+        ev.check(f'{phase}: dev-e\'s own account logs in again (OCS)', (client.get('ocs') or {}).get('password') == [200, True],
                  client.get('ocs'))
 
     def after_state(self):
@@ -958,7 +967,14 @@ def negative(args):
         except Failed as error:
             ev.check(f'run stopped: {label(error)}', False)
         finally:
+            if args.run and run.safety and not run.restored_back:
+                try:  # the run stopped after the import's restore: put dev-e's own Nextcloud back before cleanup
+                    run.manual_rollback('recovery')
+                except Failed as error:
+                    ev.check(f'recovery stopped: {label(error)}', False)
             try:
+                if args.run and run.safety and not run.restored_back:
+                    raise Failed('dev-e still holds the imported data; the safety backup is kept (no cleanup of backups)')
                 run.cleanup()
                 run.leaks()
             except Failed as error:
