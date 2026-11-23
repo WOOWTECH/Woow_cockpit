@@ -5,6 +5,7 @@
 import importlib.util
 import os
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -85,6 +86,76 @@ class Batch2ScriptsTest(unittest.TestCase):
         self.assertIn('RD_SHA256=0639ab0e3413142a76334af20ca88cba0a351a11c9c07effa0f1eb7f05941f2c', text)
         self.assertIn('FLOOR_GIB=12', text)
 
+
+
+def _layer(entries, gzip=False):
+    """A layer tarball (bytes) with (name, uid, gid) regular files and directories (names ending in /)."""
+    import io, tarfile
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode='w:gz' if gzip else 'w') as tar:
+        for name, uid, gid in entries:
+            info = tarfile.TarInfo(name.rstrip('/'))
+            info.uid, info.gid = uid, gid
+            if name.endswith('/'):
+                info.type, info.mode = tarfile.DIRTYPE, 0o755
+                tar.addfile(info)
+            else:
+                data = b'x'
+                info.size, info.mode = len(data), 0o644
+                tar.addfile(info, io.BytesIO(data))
+    return buf.getvalue()
+
+
+class ImageIdRangeTest(unittest.TestCase):
+    LAYERS = [[('usr/', 0, 0), ('usr/bin/tool', 0, 0)],
+              [('usr/src/nextcloud/', 65534, 65534), ('usr/src/nextcloud/occ', 65534, 65534), ('var/www/', 33, 33),
+               ('home/nonroot/', 65532, 65532), ('etc/ok', 55000, 55000)]]
+
+    def run_scan(self, args, data=None):
+        proc = subprocess.run([sys.executable, '-I', str(HERE / 'image_id_range.py'), *args], input=data,
+                              capture_output=True, timeout=60)
+        return proc.returncode, proc.stdout.decode(), proc.stderr.decode()
+
+    def check(self, rc, out):
+        import json
+        self.assertEqual(rc, 3)
+        result = json.loads(out)
+        self.assertEqual((result['layers'], result['entries'], result['out_of_range']), (2, 7, 3))
+        self.assertEqual(result['owners'], {'65534:65534': 2, '65532:65532': 1})
+        self.assertEqual(result['top'], {'/usr/src': 2, '/home/nonroot': 1})
+        self.assertEqual(sorted(result['sample']), ['/home/nonroot', '/usr/src/nextcloud', '/usr/src/nextcloud/occ'])
+
+    def test_docker_dir_with_gzip_layers(self):
+        import hashlib, json
+        with tempfile.TemporaryDirectory() as d:
+            layers = []
+            for entries in self.LAYERS:
+                blob = _layer(entries, gzip=True)
+                digest = hashlib.sha256(blob).hexdigest()
+                Path(d, digest).write_bytes(blob)
+                layers.append({'digest': 'sha256:' + digest})
+            Path(d, 'manifest.json').write_text(json.dumps({'layers': layers}))
+            self.check(*self.run_scan([d, '55000'])[:2])
+            rc, out, _ = self.run_scan([d, '65534'])
+            self.assertEqual((rc, json.loads(out)['out_of_range']), (0, 0))
+
+    def test_docker_archive_on_stdin(self):
+        import io, tarfile
+        buf = io.BytesIO()
+        with tarfile.open(fileobj=buf, mode='w') as outer:
+            for index, entries in enumerate(self.LAYERS):
+                blob = _layer(entries)
+                info = tarfile.TarInfo(f'{index:064x}.tar')
+                info.size = len(blob)
+                outer.addfile(info, io.BytesIO(blob))
+            info = tarfile.TarInfo('manifest.json')
+            info.size = 2
+            outer.addfile(info, io.BytesIO(b'[]'))
+        self.check(*self.run_scan(['-', '55000'], buf.getvalue())[:2])
+
+    def test_bad_arguments(self):
+        self.assertEqual(self.run_scan(['/nonexistent', '55000'])[0], 2)
+        self.assertEqual(self.run_scan(['-', 'many'])[0], 2)
 
 if __name__ == '__main__':
     unittest.main()
