@@ -34,10 +34,10 @@ MUTATIONS = (
     ('M02', 'each selected entry names a trusted table/sequence once (line-break injection)',
      '    strict = tables is not None or sequences is not None\n', '    strict = False\n', 1),
     ('M03', "HA's data loaded by the role without privileges, never the superuser",
-     "        tmp.exec(role, ['pg_restore', '-U', RESTORE_ROLE, '--no-owner', '--no-acl', '--exit-on-error',\n"
-     "                        '--single-transaction', '-L', '/tmp/woowbk-omnigent.toc', '-d', DATABASE],\n",
-     "        tmp.exec(role, ['pg_restore', '-U', superuser, '--no-owner', '--no-acl', '--exit-on-error',\n"
-     "                        '--single-transaction', '-L', '/tmp/woowbk-omnigent.toc', '-d', DATABASE],\n", 1),
+     "    load_into_new_cluster(tmp, role, ['pg_restore', '-U', RESTORE_ROLE, '--no-owner', '--no-acl', '--exit-on-error',\n"
+     "                                      '--single-transaction', '-L', '/tmp/woowbk-omnigent.toc', '-d', DATABASE],\n",
+     "    load_into_new_cluster(tmp, role, ['pg_restore', '-U', superuser, '--no-owner', '--no-acl', '--exit-on-error',\n"
+     "                                      '--single-transaction', '-L', '/tmp/woowbk-omnigent.toc', '-d', DATABASE],\n", 1),
     ('M04', "pre-data comes from this device's schema, never HA's archive",
      "    with open(schema_dump, 'rb') as handle:\n        tmp.exec(role, ['pg_restore', '-U', superuser, '--no-owner', "
      "'--no-acl', '--exit-on-error',\n                        '--single-transaction', '--section=pre-data'",
@@ -92,6 +92,8 @@ MUTATIONS = (
     ('M21', "HA-controlled names reach the job log and the page without control characters (SR-4, shared hacommon)",
      "    items = [CONTROL_RE.sub('?', str(item)[:60]) for item in items]\n",
      '    items = [str(item)[:60] for item in items]\n', 1, 'woowbackup/hacommon.py'),
+    ('M22', "HA's rows that this device's schema refuses end with the plain message, never their values (review v5)",
+     "            if DATA_REFUSED_RE.search(error.stderr or b''):\n", '            if False:\n', 1),
 )
 
 

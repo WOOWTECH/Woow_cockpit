@@ -1917,6 +1917,11 @@ emqx,headscale,mcp-admin}.md` of the design notes.
    pg_dump's stdout through `/proc/<pid>/fd` nor signal it, so it cannot write the archive the conversion restores
    (SR-2b). Names taken from HA's database (tables, schemas, extensions, alembic) reach the job log and the page
    with control characters shown as `?` (`hacommon.names`, SR-4).
+   HA's rows that this device's schema refuses (its CHECK/NOT NULL constraints at the data load, its primary keys,
+   unique indexes and foreign keys at post-data, values its column types reject; the schema comparison covers
+   columns, sequences and types, not constraints) end the job `incompatible` with `DATA_REFUSED`
+   「HA 的 Omnigent 資料不符合這台 Omnigent 的資料庫結構…」 (`load_into_new_cluster`): pg_restore's stderr only
+   classifies the failure and is never shown or logged (it holds HA's row values); other failures stay as they were.
 4. `omnigent-server-data`: the live export without `artifacts/**` plus HA's artifacts owned like the live artifacts
    folder (dirs 0755, files 0644, `accounts-cookie-secret` 0600: HA's session key replaces this device's, so HA's grants
    and tokens keep working and this device's browser sessions end); `omnigent-pi-data`: the live export as it is (the

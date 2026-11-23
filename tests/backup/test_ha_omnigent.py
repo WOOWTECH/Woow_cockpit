@@ -141,6 +141,7 @@ class World(fk.World):
         self.audit = {'roles': ['omnigent'], 'role_settings': 0, 'auto_conf': 0, 'large_objects': 0}
         self.exec_users = []                  # (--user or None, podman exec argv)
         self.seq_script = SEQ_SCRIPT_HEAD + "SELECT pg_catalog.setval('public.conversation_items_id_seq', 7, true);\n"
+        self.exec_failure = None              # (role, command) -> a failing Result, or None
 
     def podman(self, args, data, stdout):
         if args[:1] == ['exec']:
@@ -161,6 +162,9 @@ class World(fk.World):
         return Result(0, b'', b'')
 
     def exec(self, role, command, data, stdout):
+        failed = self.exec_failure(role, command) if self.exec_failure else None
+        if failed is not None:
+            return failed
         if command[0] == 'pg_dump':
             stdout.write(b'PGDMP-' + role.encode())
             return Result(0, None, b'')
@@ -628,6 +632,43 @@ class TrustedSchemaTests(OmnigentCase):
                 self.assertIn(name, error.message)
                 self.assertNotIn('etc/passwd', error.message)   # a value is never repeated
         self.world.answer = real
+
+    def test_has_rows_this_devices_schema_refuses_end_with_a_plain_message(self):
+        """HA's rows that this device's constraints refuse (security review v5, real: a CHECK HA had dropped; also NOT
+        NULL, duplicate keys at post-data, dangling references, bad values) stop the job as 'incompatible' with a plain
+        message; pg_restore's stderr (it holds HA's row values) never reaches the message or the job log; any other
+        failure of the same command stays what it was."""
+        canary = 'CANARY-HA-ROW-7f3a'
+        cases = (
+            ('data', 'COPY failed for table "users": ERROR:  new row for relation "users" violates check constraint '
+                     '"ck_users_id"'),
+            ('data', 'ERROR:  null value in column "id" of relation "agents" violates not-null constraint'),
+            ('data', 'ERROR:  invalid input syntax for type integer: "x"'),
+            ('post-data', 'ERROR:  could not create unique index "users_pkey"'),
+            ('post-data', 'ERROR:  insert or update on table "comments" violates foreign key constraint "fk_c"'))
+        for step, error in cases:
+            with self.subTest(step=step, error=error[:40]):
+                def fail(role, command, step=step, error=error):
+                    if role != 'omni-db' or command[:1] != ['pg_restore'] or '-d' not in command:
+                        return None
+                    if (step == 'data') != (ha_omnigent.RESTORE_ROLE in command) or \
+                            (step == 'post-data') != ('--section=post-data' in command):
+                        return None
+                    return Result(1, b'', f'pg_restore: error: {error}\nDETAIL:  Failing row contains ({canary}).\n'
+                                  .encode())
+                self.world.exec_failure = fail
+                self.world.execs.clear()
+                self.reporter.logs.clear()
+                refused = self.assert_refused('incompatible', ha_omnigent.DATA_REFUSED, loaded=True)
+                self.assertNotIn(canary, refused.message)
+                self.assertFalse([line for line in self.reporter.logs if canary in line])
+        self.world.exec_failure = lambda role, command: (
+            Result(1, b'', b'pg_restore: error: connection to server lost\n')
+            if role == 'omni-db' and ha_omnigent.RESTORE_ROLE in command and '-d' in command else None)
+        self.world.execs.clear()
+        other = self.assert_refused('job-failed', '執行失敗', loaded=True)
+        self.assertNotEqual(other.message, ha_omnigent.DATA_REFUSED)
+        self.world.exec_failure = None
 
     def test_unregistered_quadlet_secrets_refuse_before_anything(self):
         self.catalog['omnigent'].secrets = [{'name': 'omnigent-postgres-password'}]

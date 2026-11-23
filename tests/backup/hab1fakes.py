@@ -62,7 +62,9 @@ class Owner:
         data = input.read() if hasattr(input, 'read') else input
         result = self.world.podman(list(args), data, stdout)
         if check and result.returncode != 0:
-            raise CommandError(f'podman {args[0]} 執行失敗（結束碼 {result.returncode}）。', returncode=result.returncode)
+            # like podman.Runner.run: the child's stderr is kept on the error (diagnostics only)
+            raise CommandError(f'podman {args[0]} 執行失敗（結束碼 {result.returncode}）。', returncode=result.returncode,
+                               stderr=result.stderr)
         return result
 
     def relay(self, args, *, stdout, timeout=None, max_output=None, check=True, abort=None):

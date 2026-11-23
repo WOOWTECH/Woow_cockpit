@@ -56,6 +56,7 @@ import urllib.parse
 
 from . import habackup, hacommon, ha_n8n, ha_odoo, tempctr
 from .errors import BackupError
+from .podman import CommandError
 
 SLUG = 'woow-omnigent'
 APP_ID = 'omnigent'
@@ -714,6 +715,31 @@ def require_sequence_sets(script, count, sequences):
         raise BackupError('incompatible', SEQUENCE_SET_ODD)
 
 
+# HA's rows that this device's schema refuses (a CHECK or NOT NULL constraint, a duplicate key, a reference to a row that
+# is not there, a value its column type rejects; the schema comparison covers columns, sequences and types, not
+# constraints): pg_restore stops (--exit-on-error, one transaction, nothing of it stays) and the job says why in plain
+# words (security review 2026-11-23 v5: the message only said that a command failed). pg_restore's stderr is kept for
+# diagnostics only and never shown or logged (it can hold HA's row values); it only tells these failures from others.
+DATA_REFUSED = ('HA 的 Omnigent 資料不符合這台 Omnigent 的資料庫結構（例如違反欄位的檢查條件、必填的欄位是空的、'
+                '資料重複或參照的資料不存在），無法匯入；這台的應用沒有任何變更。')
+DATA_REFUSED_RE = re.compile(rb'violates (?:check|not-null|foreign key|unique|exclusion) constraint'
+                             rb'|could not create unique index|invalid input (?:syntax|value) for'
+                             rb'|value too long for type|out of range for type|invalid byte sequence for encoding'
+                             rb'|missing data for column|extra data after last expected column')
+
+
+def load_into_new_cluster(tmp, role, argv, path):
+    """One pg_restore of the archive `path` into the new cluster; HA's rows refused by this device's schema end the job
+    with DATA_REFUSED ('incompatible'), every other failure as it was."""
+    with open(path, 'rb') as handle:
+        try:
+            tmp.exec(role, argv, user='postgres', input=handle, timeout=DUMP_TIMEOUT, max_output=1024 * 1024)
+        except CommandError as error:
+            if DATA_REFUSED_RE.search(error.stderr or b''):
+                raise BackupError('incompatible', DATA_REFUSED, stage='data') from None
+            raise
+
+
 def restore_trusted_data(work, tmp, schema_dump, data_dump, superuser, *, source_columns, role='omni-db',
                          tables=None, sequences=None):
     """Load the trusted target schema and only data from HA (`tables`/`sequences`: data_only_toc's names).
@@ -751,14 +777,12 @@ def restore_trusted_data(work, tmp, schema_dump, data_dump, superuser, *, source
                    f'GRANT SELECT ON public.users, public.scheduled_tasks TO {RESTORE_ROLE};\n'
                    f'GRANT UPDATE ON public.scheduled_tasks TO {RESTORE_ROLE};\n'
                    f'GRANT USAGE, UPDATE ON ALL SEQUENCES IN SCHEMA public TO {RESTORE_ROLE};\n', DATABASE)
-    with open(data_dump, 'rb') as handle:
-        tmp.exec(role, ['pg_restore', '-U', RESTORE_ROLE, '--no-owner', '--no-acl', '--exit-on-error',
-                        '--single-transaction', '-L', '/tmp/woowbk-omnigent.toc', '-d', DATABASE],
-                 user='postgres', input=handle, timeout=DUMP_TIMEOUT, max_output=1024 * 1024)
-    with open(schema_dump, 'rb') as handle:
-        tmp.exec(role, ['pg_restore', '-U', superuser, '--no-owner', '--no-acl', '--exit-on-error',
-                        '--single-transaction', '--section=post-data', '-d', DATABASE], user='postgres',
-                 input=handle, timeout=DUMP_TIMEOUT, max_output=1024 * 1024)
+    load_into_new_cluster(tmp, role, ['pg_restore', '-U', RESTORE_ROLE, '--no-owner', '--no-acl', '--exit-on-error',
+                                      '--single-transaction', '-L', '/tmp/woowbk-omnigent.toc', '-d', DATABASE],
+                          data_dump)
+    # post-data (primary keys, unique indexes, foreign keys) is this device's; it fails on HA's duplicate or dangling rows
+    load_into_new_cluster(tmp, role, ['pg_restore', '-U', superuser, '--no-owner', '--no-acl', '--exit-on-error',
+                                      '--single-transaction', '--section=post-data', '-d', DATABASE], schema_dump)
     tmp.exec(role, ['rm', '-f', '/tmp/woowbk-omnigent.toc'], user='postgres', timeout=120)
     return cluster
 
