@@ -108,6 +108,27 @@ class DriverRules(unittest.TestCase):
         self.assertNotIn('sk-secret-value-123', ' '.join(argv))
         self.assertIn(b'sk-secret-value-123', data)
 
+    def test_the_key_users_stub_is_a_valid_catalog_app_the_product_names(self):
+        # The stub only has a catalog entry and a Quadlet file: the engine's own validator accepts the entry, the
+        # product's key_users text rule names it, it is not one of LiteLLM's own apps, and it holds no secret.
+        import types
+        from woowbackup import catalog, ha_litellm
+        from woowbackup.paths import Paths
+
+        def lookup(name):
+            if name != 'appowner':
+                raise KeyError(name)
+            return types.SimpleNamespace(pw_name=name, pw_uid=1001, pw_gid=1001, pw_dir='/home/appowner')
+
+        with tempfile.TemporaryDirectory() as base:
+            app = catalog.validate_entry(flow.STUB_ENTRY, paths=Paths(base=Path(base)), user_lookup=lookup)
+        self.assertEqual((app.id, app.owner), (flow.STUB_ID, 'appowner'))
+        self.assertEqual(flow.STUB_ENTRY['quadlet']['files'], [flow.STUB_FILE])
+        self.assertTrue(ha_litellm._uses_litellm_text(flow.STUB_QUADLET))
+        self.assertFalse(flow.STUB_ID == ha_litellm.APP_ID or flow.STUB_ID.startswith(f'{ha_litellm.APP_ID}-mcp'))
+        self.assertNotIn('[Install]', flow.STUB_QUADLET)  # never started: no unit is enabled
+        self.assertFalse(any(word in flow.STUB_QUADLET.upper() for word in ('KEY=', 'TOKEN', 'PASSWORD', 'SECRET')))
+
     def test_optional_phases_stop_at_the_hold_budget(self):
         run = flow.Run(mock.Mock(), mock.Mock())
         run.lock_started = flow.time.monotonic()
