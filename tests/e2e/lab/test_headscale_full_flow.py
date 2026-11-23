@@ -184,7 +184,27 @@ class OutputTest(unittest.TestCase):
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
             hsff.self_check()
-        self.assertIn('6 embedded programs compiled', out.getvalue())
+        self.assertIn('7 embedded programs compiled', out.getvalue())
+
+
+class ClientNamespaceTest(unittest.TestCase):
+    """Attempt 2 (11-23): a tailscaled in dev-d's loopback-only namespace pauses its control client and never logs in.
+    Each client now gets a fresh namespace with an up veth (TEST-NET address, no peer) and only the relay to
+    localhost:28080."""
+
+    def test_relay_inner_brings_up_an_isolated_interface_then_runs_the_daemon(self):
+        compile(hsff.RELAY, 'RELAY', 'exec')
+        for needed in ('"ip", "link", "set", "lo", "up"', '"type", "veth", "peer", "name", "hsff1"',
+                       'address + "/24", "dev", "hsff0"', '"route", "add", "default", "dev", "hsff0"',
+                       '(socket.AF_INET, "127.0.0.1")', 'subprocess.call(cmd)'):
+            self.assertIn(needed, hsff.RELAY)
+        self.assertLess(hsff.RELAY.index('"type", "veth"'), hsff.RELAY.index('subprocess.call(cmd)'))
+
+    def test_join_hands_the_key_over_in_a_file_never_argv(self):
+        self.assertIn('"--auth-key=file:" + path', hsff.JOIN)
+        self.assertIn('0o600', hsff.JOIN)
+        self.assertIn('os.unlink(path)', hsff.JOIN)
+        self.assertNotIn('req["key"]]', hsff.JOIN)
 
 
 class MainGuardsTest(unittest.TestCase):

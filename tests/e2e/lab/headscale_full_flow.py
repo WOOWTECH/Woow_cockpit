@@ -53,9 +53,13 @@ installed by deploy-src.sh:
 
 stdout carries only fixed lines (`<check>: PASS|FAIL`, the isolation line, the source commit, lock time); details
 go to the private, redacted evidence folder ~/.woowbk-lab/evidence/services-a-2-hsff/<time>/ (0700).
+Clients: each tailscaled (userspace networking) runs as a transient unit of dev-d in a FRESH network namespace whose
+only way out is a relay from its 127.0.0.1:28080 to dev-d's 127.0.0.1:28080 (= server_url http://localhost:28080), and
+a veth pair with a TEST-NET address and no peer: tailscale pauses its control client while no non-loopback interface
+is up (attempt 2 on 11-23: a client in dev-d's loopback-only namespace stayed in NeedsLogin, `control: setPaused(true)`).
 Not covered (stated): the browser page itself (dev-d publishes no port; the helper calls are the page's), Headplane's
-UI, a host reboot, a client on another machine (the clients are userspace tailscaled in dev-d's network namespace,
-DERP over plain HTTP via TS_DEBUG_USE_DERP_HTTP), HA's second node (no live client).
+UI, a host reboot, a client on another machine (DERP over plain HTTP via TS_DEBUG_USE_DERP_HTTP), HA's second node
+(no live client).
 """
 import argparse
 import base64
@@ -92,7 +96,12 @@ DROPIN_REL = DROPIN_DIR_REL + '/zz-services-a2-fail-once.conf'
 MARKER_REL = '.services-a2-fail-once'
 PRIVATE_RE = re.compile(r'/home/appowner/\.services-a2-hsff\.[A-Za-z0-9]{8}')
 CLIENT_PREFIX = 'woowbk-hsff-'
-TS_IMAGE = 'docker.io/tailscale/tailscale:stable'
+# The clients are the tailscale 1.104.7 binaries of the lab image that made the real client's state
+# (~/.woowbk-lab/run/b1-import/ts-bin, copied out of b1-ts-alice; dev-d's tailscale image is the same version).
+TS_BIN = LAB / 'run' / 'b1-import' / 'ts-bin'
+TS_SHA = {'tailscale': '27727240e017011fa068', 'tailscaled': 'feb7193e43600f6c2e70'}   # sha256 prefixes
+CLIENT_ROOT = '/var/lib/woowbk-hsff'    # root 0700 in dev-d: binaries, relay, each client's state, client logs
+CLIENT_RUN = '/run/woowbk-hsff'         # each client's relay socket and tailscaled socket
 HS_SECRETS = ['headscale-headplane-api-key', 'headscale-headplane-cookie', 'headscale-entrance-password']
 BASE_MARKERS = {'users:woowbk-lab-baseline', 'preauthkeys:woowbk-lab-baseline', 'nodes:woowbk-lab-baseline',
                 'dns_records:woowbk-lab-baseline.ts.local'}
@@ -352,8 +361,71 @@ os.replace(path + ".new", path)
 print(json.dumps({"kept": len([k for k in kept if k])}))
 '''
 
-# A new device joins with a pre-auth key: the key goes into a 0600 file of its state directory (the container's
-# /state), `tailscale up --auth-key=file:` reads it, the file is removed at once. Only the exit code comes back.
+# relay.py outer <unix socket> <host> <port>            : unix socket -> TCP host:port (dev-d's network namespace)
+# relay.py inner <unix socket> <port> <address> -- <cmd...> : in a FRESH network namespace: lo up, a veth pair with
+#   <address>/24 and a default route (no peer: nothing is reachable through it; tailscale only needs an interface
+#   that is up), 127.0.0.1/::1:<port> -> unix socket, then <cmd> (tailscaled) runs there.
+RELAY = r'''
+import os, socket, subprocess, sys, threading
+def pipe(a, b):
+    try:
+        while True:
+            data = a.recv(65536)
+            if not data:
+                break
+            b.sendall(data)
+    except OSError:
+        pass
+    finally:
+        for s in (a, b):
+            try:
+                s.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
+def serve(listener, connect):
+    while True:
+        conn, _ = listener.accept()
+        try:
+            peer = connect()
+        except OSError:
+            conn.close()
+            continue
+        threading.Thread(target=pipe, args=(conn, peer), daemon=True).start()
+        threading.Thread(target=pipe, args=(peer, conn), daemon=True).start()
+mode, path = sys.argv[1], sys.argv[2]
+if mode == "outer":
+    host, port = sys.argv[3], int(sys.argv[4])
+    if os.path.exists(path):
+        os.remove(path)
+    ls = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    ls.bind(path)
+    os.chmod(path, 0o600)
+    ls.listen(64)
+    serve(ls, lambda: socket.create_connection((host, port), timeout=10))
+else:
+    port, address = int(sys.argv[3]), sys.argv[4]
+    cmd = sys.argv[sys.argv.index("--") + 1:]
+    for argv in (["ip", "link", "set", "lo", "up"],
+                 ["ip", "link", "add", "hsff0", "type", "veth", "peer", "name", "hsff1"],
+                 ["ip", "addr", "add", address + "/24", "dev", "hsff0"],
+                 ["ip", "link", "set", "hsff1", "up"], ["ip", "link", "set", "hsff0", "up"],
+                 ["ip", "route", "add", "default", "dev", "hsff0"]):
+        subprocess.run(argv, check=True)
+    def unix():
+        s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        s.connect(path)
+        return s
+    for family, addr in ((socket.AF_INET, "127.0.0.1"), (socket.AF_INET6, "::1")):
+        ls = socket.socket(family, socket.SOCK_STREAM)
+        ls.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        ls.bind((addr, port))
+        ls.listen(64)
+        threading.Thread(target=serve, args=(ls, unix), daemon=True).start()
+    sys.exit(subprocess.call(cmd))
+'''
+
+# A new device joins with a pre-auth key: the key goes into a root 0600 file of its state directory, `tailscale up
+# --auth-key=file:` reads it, the file is removed at once. Only the exit code comes back.
 JOIN = r'''
 import json, os, subprocess, sys
 req = json.loads(sys.stdin.read())
@@ -362,9 +434,9 @@ fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
 with os.fdopen(fd, "w") as h:
     h.write(req["key"])
 try:
-    p = subprocess.run(["podman", "exec", req["name"], "tailscale", "--socket=/tmp/tailscaled.sock", "up",
-                        "--login-server=" + req["url"], "--auth-key=file:/state/.authkey", "--hostname=" + req["hostname"],
-                        "--accept-dns=false", "--timeout=90s"], capture_output=True, timeout=150)
+    p = subprocess.run([req["cli"], "--socket=" + req["socket"], "up", "--login-server=" + req["url"],
+                        "--auth-key=file:" + path, "--hostname=" + req["hostname"], "--accept-dns=false", "--timeout=90s"],
+                       capture_output=True, timeout=150)
     rc = p.returncode
 finally:
     os.unlink(path)
@@ -388,7 +460,7 @@ private = req["private"]
 kept = json.load(open(os.path.join(private, "keys.json")))
 for i, value in enumerate(kept):
     secrets["volume:%d" % i] = value.encode()
-states = sorted(glob.glob(os.path.join(private, "*", "tailscaled.state")))
+states = sorted(glob.glob(os.path.join(req["client_root"], "*", "tailscaled.state")))
 if len(states) != req["clients"]:
     raise RuntimeError("client state files missing")
 for path in states:
@@ -411,7 +483,7 @@ hits, scanned = 0, 0
 roots = ["/var/lib/woowtech-backup/jobs", "/var/lib/woowtech-backup/ha-backups", "/var/lib/woowtech-backup/ha-imports.json",
          "/var/lib/woowtech-backup/archives", "/run/woowtech-backup", "/var/lib/woowtech-backup/uploads",
          "/var/lib/woowtech-backup/staging", "/var/lib/woowtech-backup/requests.json", "/var/lib/woowtech-backup/pending",
-         "/var/lib/woowtech-backup/exports", os.path.join(private, "logs")]
+         "/var/lib/woowtech-backup/exports", os.path.join(req["client_root"], "logs")]
 for root in roots:
     if not os.path.exists(root) or os.path.islink(root):
         raise RuntimeError("required scan root missing or unsafe")
@@ -429,7 +501,7 @@ for root in roots:
         data = open(path, "rb").read()
         scanned += 1
         hits += sum(data.count(s) for s in needles)
-logs = len(os.listdir(os.path.join(private, "logs")))
+logs = len(os.listdir(os.path.join(req["client_root"], "logs")))
 journal = subprocess.run(["journalctl", "-o", "cat", "--no-pager"], capture_output=True, check=True).stdout
 hits += sum(journal.count(s) for s in needles)
 print(json.dumps({"scanned": scanned, "client_logs": logs, "journal_bytes": len(journal), "names": len(secrets),
@@ -535,7 +607,8 @@ class Run:
         self.original_config = None
         self.installed_entry = False
         self.created_store = None
-        self.clients = []          # container names
+        self.clients = []          # client names (real, new1, new2): transient units woowbk-hsff-<name>-ts/-relay
+        self.client_dirs = False
         self.client_states = 0
         self.dropin = False
         self.lock_started = time.monotonic()
@@ -652,15 +725,11 @@ class Run:
         key = drv.ok('key-init', ev=ev)
         ev.check('setup: a device key exists (key-init; the kit is never read)', bool((key.get('key') or {}).get('key_id')),
                  {'created': key.get('created'), 'key_id': (key.get('key') or {}).get('key_id')})
-        proc = drv.owner('podman', 'image', 'exists', TS_IMAGE, timeout=60)
-        if not ev.check('setup: the tailscale client image is in dev-d (no pull)', proc.returncode == 0,
-                        f'rc {proc.returncode}'):
-            raise Failed('tailscale image missing')
         stage = owner_ok('mktemp', '-d', '/home/appowner/.services-a2-hsff.XXXXXXXX').strip()
         if not PRIVATE_RE.fullmatch(stage):
             raise Failed('unexpected private directory')
         self.private = stage
-        owner_ok('mkdir', '-m', '0700', f'{stage}/logs')
+        self.client_setup()
 
     # -------- lab configuration
     def lab_config_on(self):
@@ -852,27 +921,60 @@ class Run:
                  {'public': state.get('server_public_key')})
         return state
 
-    # -------- clients
-    def client_start(self, name, state_dir):
-        argv = ['podman', 'run', '-d', '--name', name, '--pull=never', '--memory=192m', '--network', 'host',
-                '-e', 'TS_DEBUG_ALWAYS_USE_DERP=true', '-e', 'TS_DEBUG_USE_DERP_HTTP=true', '-e', 'TS_NO_LOGS_NO_SUPPORT=true',
-                '-v', f'{state_dir}:/state', '--entrypoint', 'tailscaled', TS_IMAGE, '--tun=userspace-networking',
-                '--state=/state/tailscaled.state', '--socket=/tmp/tailscaled.sock', '--no-logs-no-support', '--port=0']
-        proc = drv.owner(*argv, timeout=300)
+    # -------- clients (tailscaled in its own network namespace, reaching only dev-d's localhost:28080)
+    def client_setup(self):
+        ev = self.ev
+        found = {name: sha256_file(TS_BIN / name) for name in ('tailscale', 'tailscaled')}
+        if any(not found[name].startswith(prefix) for name, prefix in TS_SHA.items()):
+            raise Failed('the lab tailscale binaries changed')
+        if drv.root('test', '-e', CLIENT_ROOT, timeout=60).returncode == 0 or \
+                drv.root('test', '-e', CLIENT_RUN, timeout=60).returncode == 0:
+            raise Failed('a previous run left its client folders')
+        drv.root('install', '-d', '-m', '0700', CLIENT_ROOT, f'{CLIENT_ROOT}/bin', f'{CLIENT_ROOT}/logs', CLIENT_RUN,
+                 check=True)
+        self.client_dirs = True
+        for name in ('tailscale', 'tailscaled'):
+            drv.run([drv.LP, 'cp', str(TS_BIN / name), f'{drv.DEVICE}:{CLIENT_ROOT}/bin/{name}'], check=True, timeout=120)
+        drv.root('chmod', '0755', f'{CLIENT_ROOT}/bin/tailscale', f'{CLIENT_ROOT}/bin/tailscaled', check=True)
+        drv.root('python3', '-I', '-c', 'import sys\nopen(sys.argv[1], "w").write(sys.stdin.read())',
+                 f'{CLIENT_ROOT}/relay.py', input=RELAY.encode(), check=True)
+        version = drv.out(drv.root(f'{CLIENT_ROOT}/bin/tailscale', 'version', timeout=60)).splitlines()[:1]
+        ev.check('setup: the lab tailscale client binaries are staged in dev-d (sha256 as recorded)', version == ['1.104.7'],
+                 {'version': version, 'sha256': {k: v[:20] for k, v in found.items()}})
+
+    def client_start(self, client, state_dir, index):
+        units = (f'{CLIENT_PREFIX}{client}-relay', f'{CLIENT_PREFIX}{client}-ts')
+        drv.root('install', '-d', '-m', '0700', f'{CLIENT_RUN}/{client}', check=True)
+        sock = f'{CLIENT_RUN}/{client}/hs.sock'
+        proc = drv.root('systemd-run', f'--unit={units[0]}', '--quiet', 'python3', '-I', f'{CLIENT_ROOT}/relay.py', 'outer',
+                        sock, '127.0.0.1', '28080', timeout=120)
         if proc.returncode != 0:
-            raise Failed(f'client container {name} did not start')
-        self.clients.append(name)
+            raise Failed(f'client relay {client} did not start')
+        self.clients.append(client)
+        for _ in range(20):
+            if drv.root('test', '-S', sock, timeout=30).returncode == 0:
+                break
+            time.sleep(0.5)
+        proc = drv.root('systemd-run', f'--unit={units[1]}', '--quiet', '--setenv=TS_DEBUG_USE_DERP_HTTP=true',
+                        '--setenv=TS_DEBUG_ALWAYS_USE_DERP=true', '--setenv=TS_NO_LOGS_NO_SUPPORT=true',
+                        'unshare', '-n', 'python3', '-I', f'{CLIENT_ROOT}/relay.py', 'inner', sock, '28080',
+                        f'192.0.2.{10 + index}', '--', f'{CLIENT_ROOT}/bin/tailscaled', '--tun=userspace-networking',
+                        f'--state={state_dir}/tailscaled.state', f'--socket={CLIENT_RUN}/{client}/tailscaled.sock',
+                        '--no-logs-no-support', '--encrypt-state=false', '--port=0', timeout=120)
+        if proc.returncode != 0:
+            raise Failed(f'client daemon {client} did not start')
         for _ in range(30):
-            if self.ts_status(name).get('BackendState'):
+            if self.ts_status(client).get('BackendState'):
                 return
             time.sleep(1)
-        raise Failed(f'client daemon {name} did not answer')
+        raise Failed(f'client daemon {client} did not answer')
 
-    def ts(self, name, *argv, timeout=120):
-        return drv.owner('podman', 'exec', name, 'tailscale', '--socket=/tmp/tailscaled.sock', *argv, timeout=timeout)
+    def ts(self, client, *argv, timeout=120):
+        return drv.root(f'{CLIENT_ROOT}/bin/tailscale', f'--socket={CLIENT_RUN}/{client}/tailscaled.sock', *argv,
+                        timeout=timeout)
 
-    def ts_status(self, name):
-        proc = self.ts(name, 'status', '--json')
+    def ts_status(self, client):
+        proc = self.ts(client, 'status', '--json')
         try:
             data = json.loads(drv.out(proc))
         except ValueError:
@@ -884,13 +986,13 @@ class Run:
                 'Peers': sorted([p.get('HostName'), (p.get('TailscaleIPs') or [None])[0], p.get('Online'), p.get('Relay')]
                                 for p in (data.get('Peer') or {}).values())}
 
-    def wait_running(self, name, seconds=120):
+    def wait_running(self, client, seconds=120):
         deadline = time.monotonic() + seconds
         status = {}
         attempts = 0
         while time.monotonic() < deadline:
             attempts += 1
-            status = self.ts_status(name)
+            status = self.ts_status(client)
             if status.get('BackendState') == 'Running' and status.get('TailscaleIPs') and not status.get('AuthURL'):
                 break
             time.sleep(2)
@@ -900,15 +1002,15 @@ class Run:
         ev = self.ev
         client = drv.source('arm')['tailscale_client']
         volume = LAB / 'storage' / 'volumes' / 'b1-ts-alice-state' / '_data'
-        state_dir = f'{self.private}/real'
-        owner_ok('mkdir', '-m', '0700', state_dir)
+        state_dir = f'{CLIENT_ROOT}/real'
+        drv.root('install', '-d', '-m', '0700', state_dir, check=True)
         tar = drv.run(['tar', '-C', str(volume), '-cf', '-', '.'], timeout=120, check=True).stdout
-        proc = drv.owner('tar', '-C', state_dir, '--no-same-owner', '-xf', '-', input=tar, timeout=120)
+        proc = drv.root('tar', '-C', state_dir, '--no-same-owner', '-xf', '-', input=tar, timeout=120)
         if proc.returncode != 0:
             raise Failed('client state copy failed')
         self.client_states += 1
-        name = CLIENT_PREFIX + 'real'
-        self.client_start(name, state_dir)
+        name = 'real'
+        self.client_start(name, state_dir, 0)
         version = drv.out(self.ts(name, 'version')).splitlines()[:1]
         first = {}
         for _ in range(20):
@@ -955,14 +1057,16 @@ class Run:
 
     def new_device(self, index):
         ev = self.ev
-        name = f'{CLIENT_PREFIX}new{index}'
-        state_dir = f'{self.private}/new{index}'
-        owner_ok('mkdir', '-m', '0700', state_dir)
+        name = f'new{index}'
+        state_dir = f'{CLIENT_ROOT}/{name}'
+        drv.root('install', '-d', '-m', '0700', state_dir, check=True)
         self.client_states += 1
-        self.client_start(name, state_dir)
+        self.client_start(name, state_dir, index)
         key = self.args.secrets[f'B1_{self.arch.upper()}_HS_KEY_BOB_REUSABLE']
-        result = drv.device_python(JOIN, {'state_dir': state_dir, 'name': name, 'key': key, 'url': HS_URL,
-                                          'hostname': f'hsff-new{index}'}, timeout=300)
+        result = drv.device_python(JOIN, {'state_dir': state_dir, 'key': key, 'url': HS_URL, 'hostname': f'hsff-new{index}',
+                                          'cli': f'{CLIENT_ROOT}/bin/tailscale',
+                                          'socket': f'{CLIENT_RUN}/{name}/tailscaled.sock'},
+                                   as_owner=False, timeout=300)
         status, attempts = self.wait_running(name)
         ok = result.get('rc') == 0 and result.get('removed') is True and status.get('BackendState') == 'Running'
         ev.check(f'client {self.arch}: new device {index} joins with HA\'s reusable pre-auth key (key file removed)', ok,
@@ -1024,16 +1128,19 @@ class Run:
             online = {n[1]: n[5] for n in state.get('nodes') or [] if isinstance(n, list)}
         ev.check(f'{label_text}: every client reconnected by itself (Running, online on the server, same node)',
                  all(r[0] == 'Running' for r in results.values()) and all(online.get(n) for n in expected_online)
-                 and (self.arch != 'arm' or results.get(CLIENT_PREFIX + 'real', (None, None))[1]
+                 and (self.arch != 'arm' or results.get('real', (None, None))[1]
                       == drv.source('arm')['tailscale_client']['NodeID']), {'clients': results, 'online': online})
 
     def clients_stop(self):
-        for name in list(self.clients):
-            proc = drv.owner('podman', 'logs', name, timeout=120)
-            log = proc.stdout + proc.stderr
-            drv.owner('sh', '-c', 'umask 077; cat > "$1"', 'sh', f'{self.private}/logs/{name}.log', input=log, timeout=120)
-            drv.owner('podman', 'rm', '-f', '-t', '10', name, timeout=180)
-            self.clients.remove(name)
+        for client in list(self.clients):
+            units = [f'{CLIENT_PREFIX}{client}-ts.service', f'{CLIENT_PREFIX}{client}-relay.service']
+            drv.root('systemctl', 'stop', *units, timeout=120)
+            log = drv.root('journalctl', '-u', units[0], '-o', 'cat', '--no-pager', timeout=120).stdout
+            drv.root('python3', '-I', '-c', 'import os, sys\nfd = os.open(sys.argv[1], os.O_WRONLY | os.O_CREAT | '
+                     'os.O_TRUNC, 0o600)\nos.write(fd, sys.stdin.buffer.read())', f'{CLIENT_ROOT}/logs/{client}.log',
+                     input=log, timeout=120)
+            drv.root('systemctl', 'reset-failed', *units, timeout=60)
+            self.clients.remove(client)
 
     # -------- restart and rollbacks
     def step_restart(self):
@@ -1150,7 +1257,7 @@ class Run:
         names = [n for n in s.values if n not in s.names and (n.startswith(('B1_ARM_HS_', 'B1_X86_HS_', 'HA_H',
                                                                             'REAL_CLIENT_KEY_', 'DEV_D_KIT_')))]
         request = {'secrets': {n: s[n] for n in names}, 'podman_secrets': HS_SECRETS, 'uid': 1019,
-                   'private': self.private, 'clients': self.client_states}
+                   'private': self.private, 'clients': self.client_states, 'client_root': CLIENT_ROOT}
         expected = 4 + 3 + (1 if self.arch == 'arm' else 0)
         if len(request['secrets']) < expected:
             raise Failed('a lane secret is missing from the scan request')
@@ -1165,12 +1272,17 @@ class Run:
                  {'device': report, 'host': host})
 
     def remove_private(self):
-        if not self.private:
-            return True
-        drv.owner('rm', '-rf', '--', self.private, timeout=120)
-        gone = drv.owner('test', '-e', self.private, timeout=60).returncode != 0
-        if gone:
-            self.private = None
+        gone = True
+        if self.private:
+            drv.owner('rm', '-rf', '--', self.private, timeout=120)
+            gone = drv.owner('test', '-e', self.private, timeout=60).returncode != 0
+            if gone:
+                self.private = None
+        if self.client_dirs:
+            drv.root('rm', '-rf', '--', CLIENT_ROOT, CLIENT_RUN, timeout=120)
+            left = any(drv.root('test', '-e', path, timeout=60).returncode == 0 for path in (CLIENT_ROOT, CLIENT_RUN))
+            self.client_dirs = left
+            gone = gone and not left
         return gone
 
 
@@ -1228,15 +1340,16 @@ def run_all(run):
             run.step_leaks()
         except Exception as error:  # noqa: BLE001
             ev.check('leaks: ran', False, type(error).__name__)
-        ev.check('cleanup: the run\'s private folder (client states, logs, kept keys) is removed', run.remove_private(), '')
+        ev.check('cleanup: the run\'s private folders (kept keys; client binaries, states and logs) are removed',
+                 run.remove_private(), '')
     return failure
 
 
 def self_check():
-    for name, program in (('HS_PROBE', HS_PROBE), ('SPACE', SPACE), ('KEEP_KEYS', KEEP_KEYS), ('JOIN', JOIN),
-                          ('LEAKS', LEAKS), ('ENGINE_HASHES', ENGINE_HASHES)):
+    for name, program in (('HS_PROBE', HS_PROBE), ('SPACE', SPACE), ('KEEP_KEYS', KEEP_KEYS), ('RELAY', RELAY),
+                          ('JOIN', JOIN), ('LEAKS', LEAKS), ('ENGINE_HASHES', ENGINE_HASHES)):
         compile(program, name, 'exec')
-    print('offline self-check passed: 6 embedded programs compiled')
+    print('offline self-check passed: 7 embedded programs compiled')
 
 
 def main(argv):
