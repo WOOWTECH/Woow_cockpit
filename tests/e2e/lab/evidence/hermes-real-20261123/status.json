@@ -1,0 +1,92 @@
+{
+ "lane": "hermes-real",
+ "date": "2026-11-23",
+ "updated": "2026-11-23T13:58+08:00",
+ "authorization": "owner explicitly authorized real Hermes testing on 2026-11-23 (relayed request)",
+ "security_review": "independent FTS/SQLite security review: owner keeps it a manual (human) item; this lane did not do or redo it; the engine under test includes 8b47124 (hasqlite fails closed without a network namespace)",
+ "target": "lab woowbk-dev-d (network none, no published ports; isolation asserted before and after every run), production-like Hermes v0.22.5 Quadlet units, image woow-hermes-agent:v0.22.5-woow4",
+ "source": "real batch-1 x86 HA backups of add-on 9c1a67eb_woow-hermes 0.1.14 (x86-enc ha-f82422e327f151ec819d, x86-plain ha-3871a468e2f3a11488df, x86-unc ha-d32d92f6d60c0e70f5e6), each bound to its local fixture by SHA-256",
+ "path": "this tree's engine installed in dev-d by deploy-src.sh (installed modules and helper SHA-256 equal to the tree); every engine call is the installed helper command the Cockpit page sends: ha-check-start, ha-convert-start, inspect, restore-start, job-status, list, status, catalog-install, key-init, delete",
+ "results": {
+  "check": {
+   "status": "pass",
+   "attempt": 6,
+   "detail": "x86-enc, x86-plain, x86-unc: ok, no blockers, amd64 / 0.1.14 / 0.22.5, 5 sessions, 15 messages, schema 32, config 51, 64 skills, 1 cron job, HA-internal URL warned, no throwaway object left"
+  },
+  "import_x86_enc": {
+   "status": "pass",
+   "attempt": 7,
+   "checks": "83/83",
+   "detail": "convert 11 s, restore 103 s, continuity and FTS5 search through Hermes, b1 Hermes checks, restart, rollback with the safety backup, baseline digest equal; attempt 11 (services-b run from branch test/services-b-hermes-cred2-20261123 at cb43498 = this harness + dashboard-cookie coverage, same engine) passed the same chain again with every dashboard login registered",
+   "attempts": [
+    7,
+    11
+   ]
+  },
+  "import_x86_plain": {
+   "status": "pass",
+   "attempts": [
+    8,
+    12
+   ],
+   "detail": "attempt 8: same chain as x86-enc (before the cookie coverage). attempt 12 (dbdf399, exit 0, 105/105 with kit-baseline, cleanup and leaks in the same run, 516.9 s): convert 13 s, inspect ok, restore 95 s, continuity + all 15 messages + FTS5 search s2/s3/mock with snippets + FTS5 integrity-check through Hermes, the b1 Hermes checks, systemctl restart 26 s + recheck, rollback with the safety backup 103 s, baseline digest equal; every dashboard login registered and scanned"
+  },
+  "import_x86_unc": {
+   "status": "pass",
+   "attempt": 11,
+   "earlier_partial": [
+    9,
+    10
+   ],
+   "detail": "attempt 11 (services-b run, cb43498, exit 0, 155/155 checks with x86-enc in the same run): convert, inspect, restore, continuity + FTS5 search + integrity through Hermes, the b1 driver Hermes checks (26 s, every call answered, no timeout reached), systemctl restart + after-restart recheck, rollback with the safety backup, baseline digest equal. Attempts 9 and 10 had lost the b1 checks/restart when one dashboard GET exceeded the probe's 30 s timeout under host load ~22-25; which endpoint was not recorded (dbdf399 now logs per-call times); 70a2e42 makes such a call fail its own check (code 0, 60 s) instead of killing the probe",
+   "cause_of_earlier_partial": "measured in attempt 12 (x86-plain, same data shape): the FIRST GET /api/env after a restore took 17.72 s (every other dashboard call <= 3.71 s); vendor hermes-agent v0.22.5: GET /api/env (hermes_cli/web_routers/config_env.py:259-269) -> _channel_managed_env_keys (hermes_cli/web_server_messaging.py:103-107) -> _messaging_platform_catalog, which runs discover_plugins() on first use because the dashboard process never imported model_tools (web_server_messaging.py:79-82). A one-time cold-start cost, CPU-bound under host load ~22-25; for attempts 9 and 10 the endpoint was not recorded, so /api/env there is an inference, not an observation."
+  },
+  "kit_baseline": {
+   "status": "pass",
+   "attempt": 9,
+   "detail": "dev-d's own baseline backup 20261119T072434Z-45b29e52 restored with the 11-19 emergency kit (page path 'enter emergency key'), 184.6 s, health ok, markers back, digest equal to the first pre-import digest; attempt 12 again: 110.4 s, digest equal (dev-d left at this baseline)",
+   "attempts": [
+    9,
+    12
+   ]
+  },
+  "cleanup": {
+   "status": "pass",
+   "attempt": 9,
+   "detail": "7 test backups deleted, no job container/volume/network, staging empty, no key file",
+   "attempts": [
+    9,
+    10,
+    11,
+    12
+   ]
+  },
+  "leaks": {
+   "status": "pass",
+   "attempt": 9,
+   "detail": "0 hits: 229 engine files + device journal since the run started (12 lane secret values incl. dev-d's Hermes podman secrets) and 19 private evidence files",
+   "attempts": [
+    9,
+    10,
+    11,
+    12
+   ],
+   "dynamic_credentials": "attempt 11: every dashboard password login of the run is a declared source (7 continuity + 2 b1 probe logins = 9), each issued hermes_session_at + hermes_session_rt (18 values) registered before the probe continued and added to the scan; 0 hits (device: 256 engine files + journal since the start; host: private evidence). attempt 12: 6 declared logins, 12 issued values registered and scanned, 0 hits. Attempts 7-10 predate this (cookies not scanned); every form now has a cookie-covered run: x86-enc and x86-unc (11), x86-plain (12)."
+  }
+ },
+ "not_covered": [
+  "the browser page itself (dev-d publishes no port; the helper commands are the page's)",
+  "a chat turn with a model (dev-d runs Hermes --no-llm; HA's config points to an HA-internal URL, as the import warns)",
+  "ARM (the Hermes add-on is amd64 only)",
+  "production"
+ ],
+ "lab_changes": [
+  "dev-d: engine/page installed by deploy-src.sh, schedule timer masked, Hermes catalog entry = the one carried by baseline 45b29e52, device key 2E90-066E-D8E5-07C2 (its kit never read)",
+  "dev-d: python3-nacl, python3-cryptography, libsodium23, python3-cffi-backend installed with dpkg from host-downloaded noble debs (lost in the 11-20 re-creation)",
+  "the engine's own safety-backup pruning (SAFETY_KEEP=3) may have removed older Hermes safety backups of 11-19"
+ ],
+ "commercial_acceptance": "not-complete",
+ "next": "nothing left on dev-d for this lane; not covered by design: browser page, model chat, ARM, production; the independent FTS/SQLite security review stays a manual (human) item per the owner",
+ "independent_scan": "hermes-real lane, after attempt 12: the committed evidence folder, the branch diff b2f63ce..HEAD and its commit messages scanned for all 30 lab secret values the harness readers hold (lane env files + the 11-19 kit line): 0 hits (counts only; script outside the repo)",
+ "summary": "REAL lab pass for all three x86 HA backup forms: each went through the installed product helper (check, convert, inspect, restore), Hermes served the restored sessions/messages and FTS5 search, survived a restart, and was rolled back to dev-d's own baseline (safety backup; plus the kit-restored baseline 45b29e52); cleanup and a cookie-covered leak scan passed. commercial_acceptance stays not-complete (team-level)."
+}

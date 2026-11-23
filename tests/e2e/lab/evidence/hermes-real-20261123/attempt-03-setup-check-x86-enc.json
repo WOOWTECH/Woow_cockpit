@@ -1,0 +1,14 @@
+{
+ "source_commit": "d1e0e5066b463ffae38e4eeabb2e83ac3efe56f2",
+ "scope": "setup-before-check-import-x86-enc",
+ "exit": -15,
+ "elapsed_seconds": 1453.1,
+ "stdout_sha256": "782f6265ba593ce2cd111534a877617cd214835009c9c906bba9a098342e4140",
+ "fixed_status": [
+  "source commit d1e0e5066b463ffae38e4eeabb2e83ac3efe56f2",
+  "dev-d isolation: true none {}"
+ ],
+ "stdout_lines_not_published": 0,
+ "stderr_bytes_not_published": 0,
+ "commercial_acceptance": "not-complete"
+}
