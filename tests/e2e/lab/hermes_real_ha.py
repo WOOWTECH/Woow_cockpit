@@ -168,29 +168,38 @@ def dash_login(password):
     op = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
     body = json.dumps({"provider": "basic", "username": "admin", "password": password, "next": "/"}).encode()
     deadline = time.monotonic() + 240
+    t0 = time.monotonic()
     while True:
         r = urllib.request.Request(D + "/auth/password-login", data=body, headers={"Content-Type": "application/json"})
         try:
             with op.open(r, timeout=30) as resp:
+                CALLS.append(["/auth/password-login", resp.status, round(time.monotonic() - t0, 2)])
                 return resp.status, op, jar
         except urllib.error.HTTPError as e:
             if e.code in (502, 503, 504) and time.monotonic() < deadline:
                 time.sleep(3)
                 continue
+            CALLS.append(["/auth/password-login", e.code, round(time.monotonic() - t0, 2)])
             return e.code, op, jar
         except OSError:
             if time.monotonic() < deadline:
                 time.sleep(3)
                 continue
+            CALLS.append(["/auth/password-login", 0, round(time.monotonic() - t0, 2)])
             return 0, op, jar
+# Every dashboard call's fixed path (no query), answer code and seconds: names a slow endpoint without any value.
+CALLS = []
 def get(op, path):
+    t0 = time.monotonic()
     try:
         with op.open(D + path, timeout=60) as resp:
-            return resp.status, json.loads(resp.read() or b"null")
+            got = resp.status, json.loads(resp.read() or b"null")
     except urllib.error.HTTPError as e:
-        return e.code, None
+        got = e.code, None
     except (OSError, ValueError):
-        return 0, None
+        got = 0, None
+    CALLS.append([path.split("?")[0], got[0], round(time.monotonic() - t0, 2)])
+    return got
 def digest(value):
     text = value if isinstance(value, str) else json.dumps(value, sort_keys=True)
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
@@ -271,6 +280,7 @@ try:
     out["inner"] = json.loads(so.strip().splitlines()[-1])
 except (ValueError, IndexError):
     out["inner"] = {"error": "inner probe failed rc=%d" % rc}
+out["dashboard_calls"] = CALLS
 finish(out)
 '''
 
@@ -565,6 +575,9 @@ def continuity(ev, label_text, mode):
     probe = drv.event_device_python(CONTINUITY, {'session_ids': ha_ids + [BASE_SESSION], 'terms': sorted(terms),
                                                  'like': terms}, recorder, ISSUED_AUTH, timeout=900)
     ev.save(f'continuity-{slug(label_text)}-{int(time.time())}.json', probe)
+    calls = [c for c in probe.get('dashboard_calls') or [] if isinstance(c, list) and len(c) == 3]
+    ev.log(f'{label_text}: slowest dashboard calls [path, code, s]: '
+           f'{sorted(calls, key=lambda c: -float(c[2] or 0))[:4]} of {len(calls)}')
     inner = probe.get('inner') or {}
     ev.check(f'{label_text}: Hermes healthy (API and webhook /health 200) and the dashboard takes this device\'s '
              f'password', probe.get('health_api') == 200 and probe.get('health_webhook') == 200

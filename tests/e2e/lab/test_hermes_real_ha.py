@@ -34,6 +34,7 @@ SRC = {
 class FakeEvidence:
     def __init__(self):
         self.results = []
+        self.lines = []
         self.secrets = object()
 
     def check(self, name, ok, detail=''):
@@ -42,6 +43,9 @@ class FakeEvidence:
 
     def save(self, *_args):
         pass
+
+    def log(self, text):
+        self.lines.append(str(text))
 
     def failed(self):
         return [name for name, ok in self.results if not ok]
@@ -378,6 +382,81 @@ class IssuedCredentialTests(unittest.TestCase):
         finally:
             hr.load_kit, hr.drv.device_python, hr.drv.scan_host_evidence = saved
             del FakeEvidence.dir
+
+
+class DashboardTimingTests(unittest.TestCase):
+    """Both probes record every dashboard call as [fixed path without query, code, seconds] (no value) and the owner
+    logs the slowest ones, so a slow endpoint is named the next time (11-23 attempts 9 and 10: one GET of the b1 probe
+    took over 30 s after the x86-unc restore and nothing named it)."""
+
+    @staticmethod
+    def get_function(program):
+        start = program.index('def get(op, path):')
+        end = program.index('    return got\n', start) + len('    return got\n')
+        return program[start:end]
+
+    def run_get(self, program, behaviour):
+        import urllib.error
+        import urllib.request
+
+        class Opener:
+            def open(self, url, timeout):
+                return behaviour(url, timeout)
+        space = {'D': 'http://127.0.0.1:19119', 'CALLS': [], 'json': json, 'time': __import__('time'),
+                 'urllib': urllib}
+        exec(self.get_function(program), space)
+        return space['get'](Opener(), '/api/sessions?limit=100'), space['CALLS']
+
+    def test_both_programs_hand_over_their_call_times(self):
+        for program in (hr.CONTINUITY, hr.drv.HERMES_PROBE):
+            self.assertIn('CALLS = []', program)
+            self.assertIn('out["dashboard_calls"] = CALLS\nfinish(out)', program)
+
+    def test_a_timeout_is_code_0_with_its_time_and_never_kills_the_probe(self):
+        def slow(url, timeout):
+            self.assertEqual(timeout, 60)
+            raise TimeoutError('timed out')
+        for program in (hr.CONTINUITY, hr.drv.HERMES_PROBE):
+            got, calls = self.run_get(program, slow)
+            self.assertEqual(got, (0, None))
+            self.assertEqual(len(calls), 1)
+            self.assertEqual(calls[0][:2], ['/api/sessions', 0])
+            self.assertIsInstance(calls[0][2], float)
+
+    def test_a_non_json_body_is_code_0(self):
+        class Resp:
+            status = 200
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_a):
+                return False
+
+            def read(self):
+                return b'<html>'
+        for program in (hr.CONTINUITY, hr.drv.HERMES_PROBE):
+            got, calls = self.run_get(program, lambda url, timeout: Resp())
+            self.assertEqual(got, (0, None))
+            self.assertEqual(calls[0][:2], ['/api/sessions', 0])
+
+    def test_continuity_logs_the_slowest_calls_without_values(self):
+        saved = hr.source_sessions, hr.drv.event_device_python
+        try:
+            hr.source_sessions = lambda: SRC
+            data = probe('ha')
+            data['dashboard_calls'] = [['/api/config', 200, 0.4], ['/api/sessions', 200, 41.5],
+                                       ['/auth/password-login', 200, 2.0], 'junk']
+            hr.drv.event_device_python = lambda *a, **k: data
+            ev = FakeEvidence()
+            hr.continuity(ev, 'unit', 'ha')
+        finally:
+            hr.source_sessions, hr.drv.event_device_python = saved
+            hr.drv.ISSUED_SESSIONS.clear()
+        line = [x for x in ev.lines if 'slowest dashboard calls' in x]
+        self.assertEqual(len(line), 1)
+        self.assertIn("[['/api/sessions', 200, 41.5], ['/auth/password-login', 200, 2.0], ['/api/config', 200, 0.4]]"
+                      " of 3", line[0])
 
 
 class OfflineEntryTests(unittest.TestCase):

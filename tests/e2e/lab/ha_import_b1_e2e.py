@@ -601,10 +601,13 @@ D = "http://127.0.0.1:19119"
 for name, url in (("api", "http://127.0.0.1:18642/health"), ("webhook", "http://127.0.0.1:18644/health")):
     code, _ = call(url, "GET", "", raw=True, wait=240)
     out["health_" + name] = code
+# Every dashboard call's fixed path (no query), answer code and seconds: names a slow endpoint without any value.
+CALLS = []
 def dash_login(password):
     jar = http.cookiejar.CookieJar()
     op = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
     r = urllib.request.Request(D + "/auth/password-login", data=json.dumps({"provider": "basic", "username": "admin", "password": password, "next": "/"}).encode(), headers={"Content-Type": "application/json"})
+    t0 = time.monotonic()
     try:
         with op.open(r, timeout=30) as resp:
             code = resp.status
@@ -612,16 +615,20 @@ def dash_login(password):
         code = e.code
     except OSError:
         code = 0
+    CALLS.append(["/auth/password-login", code, round(time.monotonic() - t0, 2)])
     return code, op, jar
 def get(op, path):
     # A slow or broken answer is code 0 (its check fails) instead of killing the whole probe (same as continuity).
+    t0 = time.monotonic()
     try:
         with op.open(D + path, timeout=60) as resp:
-            return resp.status, json.loads(resp.read() or b"null")
+            got = resp.status, json.loads(resp.read() or b"null")
     except urllib.error.HTTPError as e:
-        return e.code, None
+        got = e.code, None
     except (OSError, ValueError):
-        return 0, None
+        got = 0, None
+    CALLS.append([path.split("?")[0], got[0], round(time.monotonic() - t0, 2)])
+    return got
 code, op, jar = dash_login(secret("hermes-dashboard-password"))
 out["issued_device"] = issue_events(jar, code, "device-")
 c2, _ = get(op, "/api/config")
@@ -707,6 +714,7 @@ code, _ = call("http://127.0.0.1:18642", "GET", "/v1/models", token=secret("herm
 out["api_device_key"] = code
 code, _ = call("http://127.0.0.1:18642", "GET", "/v1/models", token=REQ["ha_api_key"])
 out["api_ha_key"] = code
+out["dashboard_calls"] = CALLS
 finish(out)
 '''
 
@@ -1290,6 +1298,9 @@ def verify_hermes(ev, args, machine, label, test_mode=False, upload=None):
                                                'memory_markers': markers, 'skill_marker': 'b1-hermes-skill-5e2a'},
                                 recorder, HERMES_AUTH, timeout=900)
     ev.save(f'probe-hermes-{machine}-{int(time.time())}.json', probe)
+    calls = [c for c in probe.get('dashboard_calls') or [] if isinstance(c, list) and len(c) == 3]
+    ev.log(f'{label}: slowest dashboard calls [path, code, s]: '
+           f'{sorted(calls, key=lambda c: -float(c[2] or 0))[:4]} of {len(calls)}')
     ev.check(f'{label}: health /health 200 on the API and webhook ports',
              probe.get('health_api') == 200 and probe.get('health_webhook') == 200,
              [probe.get('health_api'), probe.get('health_webhook')])
