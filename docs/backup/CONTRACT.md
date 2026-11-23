@@ -2076,21 +2076,36 @@ html,data}`; facts `phase3/facts/nextcloud.md`, owner decisions D1-D5 applied wi
 3. check: the cluster is streamed into a throwaway volume and opened by a throwaway PostgreSQL 16 exactly like Odoo's (§9
    Odoo 1); the database named by HA's `dbname` must hold Nextcloud's tables, only the plpgsql extension, no other schema,
    and the root storage `local::<HA datadirectory>/` (lib/private/Files/Storage/Local.php `getId`; longer than 64 bytes →
-   its md5); counts (users, file cache, shares, tokens, calendar objects, contacts, storages, mounts, external mounts) are
-   read; warnings: apps HA enables that exist nowhere here, HA custom apps whose info.xml excludes this Nextcloud or PHP
+   its md5). Every session in HA's cluster carries PGOPTIONS `-c search_path=pg_catalog` (a client setting: above HA's
+   per-database and per-role settings; no function, operator or table of HA's can stand in for a built-in). HA's catalogs
+   are read first (`SHAPE_SQL`, extension members not counted): any function, procedure, aggregate, operator, type or
+   domain, trigger, rule, policy or row security, event trigger, view or other relation kind than table/sequence/index,
+   CHECK or exclusion constraint, generated column, inheritance, collation, conversion, text search object, operator
+   class/family, cast, foreign server, user mapping, publication, large object, default privilege or transform, or a
+   column default that is neither a constant nor `nextval()` → blocker 「HA 的 Nextcloud 資料庫含有 Nextcloud 不會建立的
+   資料庫物件（…），無法安全地搬過來。」 and HA's tables are not read at all (an unreadable shape → blocker too); a
+   genuine Nextcloud 35.0.1 database has none of them (dev-e, 2026-11-24). Counts (users, file cache, shares, tokens,
+   calendar objects, contacts, storages, mounts, external mounts) are read; warnings: apps HA enables that exist nowhere here, HA custom apps whose info.xml excludes this Nextcloud or PHP
    version or that hold programs for another processor, local external storages, HA config keys that do not move (names).
 4. convert: `pg_dump -Fc`; a NEW cluster from the live database image, environment and secret; the live config.php's
    `dbuser` role (e.g. `oc_admin`) with the LIVE attributes and password verifier (stdin, masked) and the grants
    Nextcloud's installer gives it (lib/private/Setup/PostgreSQL.php: `GRANT CONNECT`, `REVOKE ALL … FROM PUBLIC`,
    `GRANT CREATE ON SCHEMA public`), the live extensions (`vector`); the dump restored as that role (`--no-owner --no-acl
-   --exit-on-error --single-transaction`, no EXTENSION entries, superuser-only objects refused). Fix-ups in one
+   --exit-on-error --single-transaction`, no EXTENSION entries, superuser-only objects refused, and refused before
+   anything is restored when its `pg_restore -l` list holds a kind outside TABLE, TABLE DATA, SEQUENCE, SEQUENCE SET,
+   SEQUENCE OWNED BY, DEFAULT, CONSTRAINT, FK CONSTRAINT, INDEX, COMMENT, ACL, EXTENSION, unknown kinds included:
+   「HA 的 Nextcloud 資料庫匯出檔含有 Nextcloud 不會建立的物件（…）」). From the restore on every session in the new cluster
+   is pinned the same way; its superuser reads catalogs only (the `SHAPE_SQL` refusal again, now also any per-role or
+   per-database setting) and every statement on HA's tables (the fix-ups, the counts, the kept settings) runs as the
+   Nextcloud role itself, so nothing of HA's ever runs with more rights than Nextcloud has. Fix-ups in one
    transaction: the root storage id → `local::<target datadirectory>/`; `richdocuments` `wopi_url`, `public_wopi_url`,
    `wopi_callback_url`, `wopi_allowlist`, `disable_certificate_verification` and `core.backgroundjobs_mode` exactly as the
    live database has them (Office uses this device's Collabora); HA's cached Collabora discovery
    (`appdata_<instanceid>/richdocuments/remoteData`) is dropped from the data dir and its file cache rows deleted, so
    discovery is fetched again from this device's Collabora. Verified: every count (file cache minus those rows), table
-   owners = the role, root storage id, roles, extensions, database and public-schema grants and the kept settings equal
-   the live ones. Live PostgreSQL settings are carried (§9 Odoo); clean stop, `pg_controldata` "shut down"; the PostgreSQL
+   owners = the role, the role's attributes (never superuser) and password verifier, root storage id, roles, extensions,
+   database and public-schema grants and the kept settings equal the live ones, no per-role or per-database setting,
+   no table or column grant (the dump is restored with --no-acl, so one can only come from SQL hidden in it). Live PostgreSQL settings are carried (§9 Odoo); clean stop, `pg_controldata` "shut down"; the PostgreSQL
    dir is the volume export with its top folder owned like the live one.
 5. config.php = the live one (base: URLs, trusted domains, proxies, database credentials, data directory, caches, mail,
    maintenance window) + HA's `instanceid`, `passwordsalt`, `secret` + HA's `twofactor_enforced*` and
