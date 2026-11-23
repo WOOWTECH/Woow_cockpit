@@ -2,6 +2,7 @@
 user files of the share folder move; the target keeps its URLs, database credentials, Office (Collabora) settings and
 secrets; a backup without the share folder is refused (CONTRACT section 9 "Batch 2: Nextcloud"). Team E2."""
 import gzip
+import hashlib
 import io
 import json
 import tarfile
@@ -270,6 +271,7 @@ class World(fk.World):
         if sql.startswith("SELECT json_build_object(\n 'counts'"):
             return self.verify if self.verify is not None else {
                 'counts': {**HA_COUNTS, 'files': 298}, 'owners': ['oc_admin'], 'root': 1, 'old': 0,
+                'verifier_md5': hashlib.md5(VERIFIER.encode()).hexdigest(),
                 **{key: LIVE_DB[key] for key in ('roles', 'extensions', 'datacl', 'nspacl', 'appconfig')}}
         if 'FROM pg_settings' in sql or 'pg_file_settings' in sql:
             return []
@@ -511,10 +513,11 @@ class ConvertTests(NextcloudCase):
             self.assertIn(part, reminders)
 
     def test_a_failed_verification_stops_the_conversion(self):
-        self.world.verify = {'counts': HA_COUNTS, 'owners': ['nextcloud'], 'root': 0, 'old': 1}
+        self.world.verify = {'counts': HA_COUNTS, 'owners': ['nextcloud'], 'root': 0, 'old': 1, 'verifier_md5': 'x'}
         with self.assertRaises(BackupError) as caught:
             self.convert(self.upload_nextcloud(), ['nextcloud'])
         self.assertIn('檢查沒有通過', caught.exception.message)
+        self.assertIn('密碼設定和這台的不同', caught.exception.message)
 
     def test_no_share_is_refused_before_anything_is_built(self):
         with self.assertRaises(BackupError) as caught:

@@ -1123,7 +1123,7 @@ def fixup_sql(old_root, new_root, remote, live_rows):
     return ''.join(sql)
 
 
-def verify_sql(new_root, old_root, tables):
+def verify_sql(new_root, old_root, tables, role):
     lit = ha_odoo.sql_literal
     counts = [f"'{key}', (SELECT count(*) FROM {table})" for table, key in COUNTED if table in tables]
     keys = ' OR '.join(f'(appid = {lit(a)} AND configkey = {lit(k)})' for a, k in LIVE_APPCONFIG)
@@ -1132,6 +1132,7 @@ def verify_sql(new_root, old_root, tables):
  'owners', (SELECT coalesce(json_agg(DISTINCT tableowner), '[]'::json) FROM pg_tables WHERE schemaname = 'public'),
  'root', (SELECT count(*) FROM oc_storages WHERE id = {lit(new_root)}),
  'old', (SELECT count(*) FROM oc_storages WHERE id = {lit(old_root)}),
+ 'verifier_md5', (SELECT md5(rolpassword) FROM pg_authid WHERE rolname = {lit(role)}),
  'roles', (SELECT coalesce(json_agg(rolname ORDER BY rolname), '[]'::json) FROM pg_roles WHERE rolname !~ '^pg_'),
  'extensions', (SELECT coalesce(json_agg(extname ORDER BY extname), '[]'::json) FROM pg_extension),
  'datacl', (SELECT datacl::text FROM pg_database WHERE datname = current_database()),
@@ -1153,6 +1154,10 @@ def verify_converted(doc, *, expected, db, role, old_root, new_root):
         problems.append('資料筆數和 HA 的不同')
     if doc.get('owners') != [role]:
         problems.append(f'資料表的擁有者不是 {role}')
+    # PostgreSQL keeps a verifier only when it parses as one (else it hashes the text as a password): the role must
+    # hold exactly the live verifier, or Nextcloud's config.php password would not log in after the restore.
+    if doc.get('verifier_md5') != hashlib.md5(db['role']['password'].encode('utf-8')).hexdigest():
+        problems.append(f'{role} 角色的密碼設定和這台的不同')
     if doc.get('root') != 1 or (old_root != new_root and doc.get('old') != 0):
         problems.append('使用者檔案資料夾的儲存空間記錄沒有改成這台的路徑')
     for key, label in (('roles', '資料庫角色'), ('extensions', '擴充功能'), ('datacl', '資料庫權限'),
@@ -1207,7 +1212,7 @@ def build_cluster(work, app, tmp, target, dump, *, details, old_root, new_root, 
     pg.script(fixup_sql(old_root, new_root, remote, db['appconfig']), live.db_name)
     expected = dict(details['counts'])
     expected['files'] = expected.get('files', 0) - int(removed or 0)
-    doc = pg.query_json(verify_sql(new_root, old_root, details['tables']), live.db_name)
+    doc = pg.query_json(verify_sql(new_root, old_root, details['tables'], role), live.db_name)
     problems = verify_converted(doc, expected=expected, db=db, role=role, old_root=old_root, new_root=new_root)
     if problems:
         raise BackupError('job-failed', f'轉換後的 Nextcloud 資料庫檢查沒有通過：{"；".join(problems)}。')
