@@ -8,11 +8,14 @@ integer milliseconds must equal fresh native cooked metadata and API RFC3339
 instants. emqx_rule_engine_api:add_metadata/1, format_rule_info_resp/1 and
 emqx_rule_engine:with_parsed_rule/3 define the mapping. Metadata schema is map(),
 not uint: unknown fields/partial maps and out-of-profile times explicitly refuse.
+Action last_modified_at is the vendor data-import instant (see _IMPORT_REFRESHED):
+API == native integer inside this run's capture->native window; all else exact.
 OTP26 calendar docs system_time_to_rfc3339/2 specify default T/local offset and
 exactly3 fractional digits for millisecond (https://www.erlang.org/docs/26/man/calendar.html). Caller owns exclusion across API/native phases and later publication.
 """
 import copy
 import re
+import time
 from datetime import datetime, timedelta, timezone
 from itertools import count
 import weakref
@@ -96,7 +99,9 @@ def _record_native(result,wire,generation,provision,cid,identity):
         paths[key]=wrapper['env'][0]
     _NATIVE[result]={'owner':provision,'cid':cid,'identity':copy.deepcopy(identity),
         'registry':_root(result),'generation':generation,'persisted':result._persisted,
-        'config':config,'secrets':paths,'order':next(_ORDER)}
+        'config':config,'secrets':paths,'order':next(_ORDER),
+        # Wall-clock ms AFTER this native read: upper bound for any import instant.
+        'observed_ms':time.time_ns()//1000000}
     return result
 
 
@@ -182,7 +187,36 @@ def _same_rule(expected,actual,path,secrets,config):
         _same(value,actual[key],path+(key,),secrets)
 
 
-def _same_action(expected,actual,path,secrets):
+# Pinned EMQX 5.8.9 data import refreshes exactly ONE source-explicit action
+# field. `emqx ctl data import` -> emqx_mgmt_data_backup:do_import_conf/2
+# (emqx_mgmt_data_backup.erl:979-999) -> emqx_bridge_v2:import_config/1
+# (emqx_bridge_v2.erl:1104-1112) -> emqx_bridge:import_config/4 updates the
+# whole [actions] root (emqx_bridge.erl:479-488) -> pre_config_update([actions])
+# (emqx_bridge_v2.erl:1176-1179) -> convert_from_connectors/2 (2049-2063):
+# ensure_last_modified_at/1 writes now_ms()=erlang:system_time(millisecond)
+# (2083-2084, 2129-2130); ensure_created_at/1 keeps a present created_at
+# (2086-2087), so created_at stays exact. last_modified_at must be the import
+# instant: ONE integer (schema integer(), emqx_bridge_v2_schema.erl:540-541)
+# shared by the API raw config and the fresh native cooked config, inside this
+# run's source-capture -> native-read wall-clock window (same kernel clock; the
+# fixed 1s slack covers only Erlang's frozen no_time_warp offset).
+_IMPORT_REFRESHED='last_modified_at'
+_CLOCK_SLACK_MS=1000
+
+
+def _import_refreshed(source,observed,path,config,window):
+    if type(source) is not int or type(observed) is not int:raise _Difference('type')
+    if not 0<=source<=_MAX_METADATA_MS:raise _Difference('value')
+    try:native=config[path[0]][path[1]][path[2]][_IMPORT_REFRESHED]
+    except (KeyError,TypeError):raise _Difference('missing') from None
+    if type(native) is not int:raise _Difference('type')
+    start,end=window
+    if (type(start) is not int or type(end) is not int or native!=observed
+            or not 0<=observed<=_MAX_METADATA_MS
+            or not start-_CLOCK_SLACK_MS<=observed<=end+_CLOCK_SLACK_MS):raise _Difference('value')
+
+
+def _same_action(expected,actual,path,secrets,config,window):
     """Classify only a fixed action field name; no private value escapes."""
     if type(expected) is not dict or type(actual) is not dict:
         raise _Difference('type')
@@ -190,7 +224,9 @@ def _same_action(expected,actual,path,secrets):
         field=key if key in ACTION_FIELDS else 'other'
         if key not in actual:
             raise NativeObjectPhaseRefused('actions_'+field+'_missing')
-        try:_same(value,actual[key],path+(key,),secrets)
+        try:
+            if key==_IMPORT_REFRESHED:_import_refreshed(value,actual[key],path,config,window)
+            else:_same(value,actual[key],path+(key,),secrets)
         except _Difference as error:
             raise NativeObjectPhaseRefused('actions_'+field+'_'+error.reason) from None
 
@@ -246,7 +282,8 @@ def compare_b1_objects_native(*,expected,source_api,native_values):
                 observed=actual[key]
                 try:
                     if category=='rules':_same_rule(obj,observed,path,native['secrets'],native['config'])
-                    elif category=='actions':_same_action(obj,observed,path,native['secrets'])
+                    elif category=='actions':_same_action(obj,observed,path,native['secrets'],native['config'],
+                                                          (original['captured_ms'],native['observed_ms']))
                     else:_same(obj,observed,path,native['secrets'])
                 except _Difference as error:
                     raise NativeObjectPhaseRefused(category+'_'+error.reason) from None

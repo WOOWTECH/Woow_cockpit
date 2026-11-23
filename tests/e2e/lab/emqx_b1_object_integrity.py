@@ -143,8 +143,10 @@ def capture_b1_object_expectations(*,captured,session,source_mode):
         companion=PersistedValues(uuid.uuid4().hex,'source',{},values.values)
         _authorized(captured,binding,session,profile.sha256);timely()
         token=SourceObjects()
+        # Wall-clock ms AFTER the source read and BEFORE any build/import: the
+        # lower bound for vendor import-refreshed action metadata.
         _RECORDS[token]={'objects':objects,'registry':session.registry,'values':companion,
-                         'sha256':profile.sha256}
+                         'sha256':profile.sha256,'captured_ms':time.time_ns()//1000000}
         return token
     except (KeyboardInterrupt,SystemExit):raise PrivateFailure('object-integrity-cancelled') from None
     except Exception:raise PrivateFailure('object-integrity-refused') from None

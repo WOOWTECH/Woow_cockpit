@@ -3,6 +3,7 @@
 No actual native process, broker, lab, or commercial restore is exercised.
 """
 import copy
+import time
 import unittest
 from unittest.mock import patch
 
@@ -160,18 +161,72 @@ class NativeObjectTests(unittest.TestCase):
         self.refresh_api()
         self.compare(self.native())
 
-    def test_action_integer_timestamps_remain_exact_without_rule_mapping(self):
+    def action_timestamps(self,source_modified=1700000001000):
+        """Source keeps its own times; generated import instant follows the mint."""
+        import emqx_b1_object_integrity as objects
         self.metadata_profile()
         action=self.source_side.config['actions']['http']['b1_http_action']
-        action.update(created_at=1700000000123,last_modified_at=1700000001000)
+        action.update(created_at=1700000000123,last_modified_at=source_modified)
         self.expected=self.source_side.mint(self.captured,self.session)
+        captured=objects._RECORDS[self.expected]['captured_ms']
+        imported=time.time_ns()//1000000
+        self.assertLessEqual(captured,imported)
         row=self.documents['actions'][0]
-        row.update(created_at=1700000000123,last_modified_at=1700000001000)
+        native=self.config['actions']['http']['b1_http_action']
+        for target in (row,native):target.update(created_at=1700000000123,last_modified_at=imported)
         self.refresh_api()
+        return row,native,captured,imported
+
+    def test_action_created_at_exact_and_last_modified_at_import_refreshed(self):
+        row,native,captured,imported=self.action_timestamps()
         self.compare(self.native())
         row['created_at']='2023-11-14T22:13:20.123+00:00'
         self.refresh_api()
         self.workflow_refuse(self.native(),'actions_created_at_type')
+        row['created_at']=1700000000124
+        self.refresh_api()
+        self.workflow_refuse(self.native(),'actions_created_at_value')
+
+    def test_action_last_modified_at_stale_source_copy_refuses(self):
+        # Vendor import always refreshes it; an unrefreshed source copy is not
+        # the pinned import result, even when API and native agree.
+        row,native,captured,imported=self.action_timestamps()
+        for target in (row,native):target['last_modified_at']=1700000001000
+        self.refresh_api()
+        self.workflow_refuse(self.native(),'actions_last_modified_at_value')
+
+    def test_action_last_modified_at_window_edges(self):
+        row,native,captured,imported=self.action_timestamps()
+        for value,ok in ((captured-m._CLOCK_SLACK_MS,True),(captured-m._CLOCK_SLACK_MS-1,False),
+                         (time.time_ns()//1000000+60000,False)):
+            with self.subTest(offset=value-captured):
+                for target in (row,native):target['last_modified_at']=value
+                self.refresh_api()
+                if ok:self.compare(self.native())
+                else:self.workflow_refuse(self.native(),'actions_last_modified_at_value')
+
+    def test_action_last_modified_at_api_native_disagreement_and_shapes(self):
+        cases=(('native_changed','value'),('native_missing','missing'),('native_bool','type'),
+               ('native_string','type'),('api_string','type'),('api_bool','type'),('api_missing','missing'))
+        for change,reason in cases:
+            with self.subTest(change=change):
+                row,native,captured,imported=self.action_timestamps()
+                if change=='native_changed':native['last_modified_at']=imported+1
+                elif change=='native_missing':del native['last_modified_at']
+                elif change=='native_bool':native['last_modified_at']=True
+                elif change=='native_string':native['last_modified_at']=str(imported)
+                elif change=='api_string':row['last_modified_at']='2026-11-23T08:00:00.000+08:00'
+                elif change=='api_bool':row['last_modified_at']=True
+                else:del row['last_modified_at']
+                self.refresh_api()
+                self.workflow_refuse(self.native(),'actions_last_modified_at_'+reason)
+
+    def test_action_last_modified_at_source_profile(self):
+        for value,reason in ((True,'type'),('1700000001000','type'),(1.0,'type'),
+                             (-1,'value'),(253402214400001,'value')):
+            with self.subTest(case=type(value).__name__,reason=reason):
+                self.action_timestamps(source_modified=value)
+                self.workflow_refuse(self.native(),'actions_last_modified_at_'+reason)
 
     def test_metadata_epoch_bounds_and_integer_exact_offsets(self):
         self.assertEqual(m._timestamp_ms('1970-01-01T00:00:00.000+00:00'),0)
