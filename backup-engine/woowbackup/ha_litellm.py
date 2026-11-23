@@ -535,6 +535,16 @@ DETAIL = (('users', 'public', 'LiteLLM_UserTable', ''), ('teams', 'public', 'Lit
 # say). The check and the import name them (review SR-5): names only, never a value.
 CONFIG_TABLE = ('public', 'LiteLLM_Config')
 CALLBACK_KEYS = ('callbacks', 'success_callback', 'failure_callback', 'audit_log_callbacks')
+# Stored settings whose value LiteLLM turns into Python code to call: get_instance_fn imports any dotted path
+# (litellm/proxy/types_utils/utils.py:9-52, importlib.import_module), e.g. post_call_rules "builtins.exec" is then
+# called with every model response text (litellm/litellm_core_utils/rules.py:41-46; proxy_server.py:6193-6194); the
+# DB overlay refuses only s3:// and gcs:// for them (proxy_server.py:4494-4505). A callback with a dot in its name is
+# such a module path too (4506-4513); a plain name (`langfuse`) is a built-in integration. Any of them refuses
+# (review SR-6): this device's LiteLLM would run HA's code.
+MODULE_HOOKS = (('litellm_settings', 'post_call_rules'), ('general_settings', 'custom_auth'),
+                ('general_settings', 'custom_key_generate'), ('general_settings', 'custom_key_update'),
+                ('general_settings', 'custom_key_policy'), ('general_settings', 'custom_team_metadata_validate'),
+                ('general_settings', 'custom_sso'), ('general_settings', 'custom_ui_sso_sign_in_handler'))
 _OBJECT = "CASE WHEN jsonb_typeof({v}) = 'object' THEN {v} ELSE '{{}}'::jsonb END"
 STORED_SETTINGS_SQL = (
     "SELECT json_build_object("
@@ -548,7 +558,12 @@ STORED_SETTINGS_SQL = (
     f"CROSS JOIN LATERAL jsonb_each({_OBJECT.format(v='c.param_value')}) e "
     "CROSS JOIN LATERAL jsonb_array_elements_text(CASE WHEN jsonb_typeof(e.value) = 'array' THEN e.value "
     "ELSE '[]'::jsonb END) v WHERE c.param_name = 'litellm_settings' AND e.key IN ("
-    + ', '.join(f"'{key}'" for key in CALLBACK_KEYS) + ")))")
+    + ', '.join(f"'{key}'" for key in CALLBACK_KEYS) + ")), "
+    "'hooks', (SELECT coalesce(json_agg(DISTINCT c.param_name || '.' || h.key ORDER BY c.param_name || '.' || h.key), "
+    "'[]'::json) FROM public.\"LiteLLM_Config\" c "
+    f"CROSS JOIN LATERAL jsonb_each({_OBJECT.format(v='c.param_value')}) h "
+    "WHERE (c.param_name, h.key) IN (" + ', '.join(f"('{a}', '{b}')" for a, b in MODULE_HOOKS) + ") "
+    "AND h.value NOT IN ('null'::jsonb, '\"\"'::jsonb, '[]'::jsonb)))")
 
 
 def stored_settings(cluster, schema):
@@ -567,8 +582,18 @@ def stored_settings(cluster, schema):
     def names(value):
         return [str(v)[:60] for v in value[:50] if isinstance(v, str)] if isinstance(value, list) else []
 
+    callbacks = names(found.get('callbacks'))
+    hooks = names(found.get('hooks')) + [f'litellm_settings 回呼 {c}'[:60] for c in callbacks if '.' in c]
     return {'sections': names(found.get('sections')), 'env': names(found.get('env')),
-            'callbacks': names(found.get('callbacks'))}
+            'callbacks': [c for c in callbacks if '.' not in c], 'hooks': hooks}
+
+
+def stored_hooks_blocker(found):
+    """The blocker when HA's stored settings make LiteLLM load and run code (MODULE_HOOKS), else None."""
+    if not found or not found.get('hooks'):
+        return None
+    return (f'HA 的 LiteLLM 在資料庫裡存了會載入並執行程式的設定（{hacommon.names(found["hooks"])}），匯入後這台的 LiteLLM '
+            '會照著執行，無法安全地搬過來；請先在 HA 的 LiteLLM 移除這些設定，再重新備份。')
 
 
 def stored_settings_line(found):
@@ -928,6 +953,9 @@ def check(work, app):
     stored_line = stored_settings_line(settings)
     if stored_line:
         warnings.append(stored_line)
+    hooks = stored_hooks_blocker(settings)
+    if hooks:
+        blockers.append(hooks)
     for item in (_state_blocker(src, work.addon_info(SLUG)), blocker):
         if item:
             blockers.insert(0, item)
@@ -1192,6 +1220,10 @@ def convert(work, app, test_mode, out_dir):
     if blockers:
         raise BackupError('incompatible', f'LiteLLM 不能搬過來：{blockers[0]}', app=app.id)
     ha_schema = read_schema(cluster, found['migrations'])
+    settings = stored_settings(cluster, ha_schema)
+    hooks = stored_hooks_blocker(settings)
+    if hooks:
+        raise BackupError('incompatible', f'LiteLLM 不能搬過來：{hooks}', app=app.id)
     schema_dump = staging / 'target-schema.dump'
     work.log('讀取這台 LiteLLM 自己的資料庫結構（同一個快照；前後比對確認期間沒有結構變更）')
     trusted = trusted_schema(work, app, target, schema_dump, migrations)
@@ -1204,7 +1236,6 @@ def convert(work, app, test_mode, out_dir):
     detail = cluster.query_json(detail_sql(tables), DATABASE) if detail_sql(tables) else {}
     work.log(f'匯出 HA 的 LiteLLM 資料：{len(tables)} 個資料表的資料列（只當作資料來源，HA 的資料庫結構不會使用）')
     files, sequences = export_rows(work, cluster, trusted, staging)
-    settings = stored_settings(cluster, ha_schema)
     tmp.remove('hapg')
     tmp.remove_volume('hapg')
     work.checkpoint()

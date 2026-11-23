@@ -159,8 +159,8 @@ CREATE TABLE public."LiteLLM_Config" (param_name text PRIMARY KEY, param_value j
   reload_revision bigint NOT NULL DEFAULT 0);
 INSERT INTO public."LiteLLM_Config" (param_name, param_value) VALUES
  ('environment_variables', '{"HTTPS_PROXY": "placeholder-not-a-value", "LANGFUSE_HOST": "placeholder"}'),
- ('litellm_settings', '{"success_callback": ["langfuse"], "callbacks": ["custom_callbacks.proxy_handler_instance", {"x": 1}], "drop_params": true}'),
- ('general_settings', '{"alerting": ["slack"]}');
+ ('litellm_settings', '{"success_callback": ["langfuse"], "callbacks": ["custom_callbacks.proxy_handler_instance", {"x": 1}], "post_call_rules": "builtins.exec", "drop_params": true}'),
+ ('general_settings', '{"alerting": ["slack"], "custom_auth": "builtins.exec"}');
 RESET ROLE;
 """
 
@@ -372,6 +372,8 @@ def product_path(case, inner, salt):
             if ha_schema is not None and hasattr(ha_litellm, 'stored_settings'):
                 facts['stored_settings'] = ha_litellm.stored_settings(cluster, ha_schema)
                 facts['stored_settings_line'] = ha_litellm.stored_settings_line(facts['stored_settings'])
+                if hasattr(ha_litellm, 'stored_hooks_blocker'):
+                    facts['stored_hooks_blocker'] = ha_litellm.stored_hooks_blocker(facts['stored_settings'])
             blockers, warnings = ha_litellm.verdict(src, found, ha_major=18, target_major=17,
                                                     live_migrations_value=found['migrations'], binding=binding)
             facts['blockers'] = blockers

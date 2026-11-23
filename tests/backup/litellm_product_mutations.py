@@ -142,6 +142,12 @@ MUTATIONS = (
      "    stored_line = stored_settings_line(data.get('stored_settings'))\n"
      "    if stored_line:\n        notes.append(stored_line)\n",
      "", 1),
+    ('M42', "stored settings that load and run code refuse in the check (SR-6)", LL,
+     "    hooks = stored_hooks_blocker(settings)\n    if hooks:\n        blockers.append(hooks)\n", "", 1),
+    ('M43', "stored settings that load and run code stop the conversion first (SR-6)", LL,
+     "    if hooks:\n        raise BackupError('incompatible', f'LiteLLM 不能搬過來：{hooks}', app=app.id)\n", "", 1),
+    ('M44', "a callback with a dot in its name is a module load (SR-6)", LL,
+     "[f'litellm_settings 回呼 {c}'[:60] for c in callbacks if '.' in c]", "[]", 1),
 )
 
 
