@@ -21,15 +21,18 @@ containers of their own, made from images that are already on the device, and re
   job fails or is cancelled.
 """
 import contextlib
+import io
 import json
 import os
 import re
 import shlex
+import tarfile
 import threading
 
 from .errors import BackupError
 
 LABEL = 'io.woowtech.backup.job'
+ROOT_HEAD_BYTES = 64 * 1024   # enough for a top-directory entry and its pax header (tar_root)
 PREFIX = 'woowbk-'
 JOB_RE = re.compile(r'j[0-9]{8}T[0-9]{6}Z-[0-9a-f]{8}\Z')
 ROLE_RE = re.compile(r'[a-z0-9][a-z0-9-]{0,30}\Z')
@@ -147,6 +150,21 @@ def quadlet_environment(text, allowed):
                 raise BackupError('incompatible', f'Quadlet 檔中的 Environment= 設定格式不受支援：{key[:40]}')
             env[key] = val
     return env
+
+
+def tar_root(head):
+    """(uid, gid, mode) of a tar stream's top-directory entry when its first member is '.', else None (`head` = the
+    stream's first bytes; pax headers are read like tarfile reads them)."""
+    try:
+        with tarfile.open(fileobj=io.BytesIO(head), mode='r|') as tar:
+            first = tar.next()
+    except (tarfile.TarError, EOFError, OSError, ValueError):
+        return None
+    if first is None or not first.isdir() or first.name not in ('.', './'):
+        return None
+    if type(first.uid) is not int or type(first.gid) is not int or first.uid < 0 or first.gid < 0:
+        return None
+    return first.uid, first.gid, first.mode & 0o7777
 
 
 class TempObjects:
@@ -383,17 +401,33 @@ class TempObjects:
     def volume_import(self, role, produce, *, timeout=3 * 3600):
         """Fill the volume `woowbk-<job>-<role>` with the tar stream `produce(fileobj)` writes (a thread feeds
         `podman volume import <name> -` through a pipe, so nothing is staged). The producer's error wins over the
-        import's (a broken pipe is only the symptom)."""
+        import's (a broken pipe is only the symptom). A tar whose first member is the top directory ('.') gets that
+        entry's owner, group and mode applied to the volume afterwards (_apply_root)."""
         name = self.name(role)
         if name not in self.volumes:
             raise BackupError('internal-error', '只能匯入這個作業建立的資料卷。')
         read_fd, write_fd = os.pipe()
         failure = []
+        head = bytearray()
+
+        class _Head:
+            """Passes the stream on and keeps its first bytes (where a top-directory entry would be)."""
+
+            def __init__(self, out):
+                self.out = out
+
+            def write(self, data):
+                if len(head) < ROOT_HEAD_BYTES:
+                    head.extend(bytes(data[:ROOT_HEAD_BYTES - len(head)]))
+                return self.out.write(data)
+
+            def flush(self):
+                return self.out.flush()
 
         def feed():
             try:
                 with os.fdopen(write_fd, 'wb', buffering=1024 * 1024) as out:
-                    produce(out)
+                    produce(_Head(out))
             except BaseException as exc:  # noqa: BLE001 - handed to the caller below
                 failure.append(exc)
 
@@ -416,6 +450,23 @@ class TempObjects:
             raise
         if failure:
             raise failure[0]
+        self._apply_root(name, tar_root(bytes(head)))
+
+    def _apply_root(self, name, root):
+        """Owner, group and mode of the tar's top-directory entry on the imported volume. Podman 6.1.1
+        (192.168.2.54, 2026-11-23) ignores a tar's '.' entry on `volume import` and keeps the top directory as `volume
+        create` made it (root, 0755); a throwaway app running as its image user could not write its own data folder
+        (EMQX's candidate on its seeded data volume exited at boot: emqx-real-arm-attempt1). Same commands as the
+        adapter's _apply_volume_root (inside the owner's user namespace); None = left as Podman made it."""
+        if root is None:
+            return
+        uid, gid, mode = root
+        mount = (self.runner.podman('volume', 'inspect', '--format', '{{.Mountpoint}}', name, timeout=SHORT_TIMEOUT,
+                                    max_output=64 * 1024).stdout or b'').decode('utf-8', 'replace').strip()
+        if not mount.startswith('/') or '\n' in mount or len(mount) > 4096:
+            raise BackupError('job-failed', '無法讀取暫用資料卷的位置。')
+        self.runner.podman('unshare', 'chown', '--no-dereference', f'{uid}:{gid}', '--', mount, timeout=SHORT_TIMEOUT)
+        self.runner.podman('unshare', 'chmod', format(mode, '04o'), '--', mount, timeout=SHORT_TIMEOUT)
 
     def volume_export(self, role, handle, *, timeout=3 * 3600, max_output=None):
         """`podman volume export` of a throwaway volume into the open binary file `handle` (through the owner-side

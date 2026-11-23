@@ -275,6 +275,64 @@ class VolumeImportTests(unittest.TestCase):
             tmp.volume_import('src', lambda out: (_ for _ in ()).throw(Cancelled()))
 
 
+class VolumeRootTests(unittest.TestCase):
+    """Podman 6.1.1 ignores a tar's '.' entry on `volume import` (192.168.2.54): the entry is applied afterwards."""
+
+    @staticmethod
+    def tar_with_root(uid, gid, mode, *, first='.'):
+        import io
+        import tarfile
+        import time
+        buf = io.BytesIO()
+        with tarfile.open(fileobj=buf, mode='w|', format=tarfile.PAX_FORMAT) as tar:
+            info = tarfile.TarInfo(first)
+            info.type, info.uid, info.gid, info.mode, info.mtime = tarfile.DIRTYPE, uid, gid, mode, time.time()
+            tar.addfile(info)
+            child = tarfile.TarInfo('configs')
+            child.type, child.uid, child.gid, child.mode = tarfile.DIRTYPE, uid, gid, 0o700
+            tar.addfile(child)
+        return buf.getvalue()
+
+    def test_tar_root_reads_the_top_entry_behind_a_pax_header(self):
+        data = self.tar_with_root(1000, 1000, 0o700)   # a float mtime makes tarfile write a pax header first
+        self.assertEqual(tempctr.tar_root(data), (1000, 1000, 0o700))
+        self.assertEqual(tempctr.tar_root(data[:2048]), (1000, 1000, 0o700))
+        self.assertIsNone(tempctr.tar_root(self.tar_with_root(1000, 1000, 0o700, first='configs')))
+        self.assertIsNone(tempctr.tar_root(b'tar bytes' * 1000))
+        self.assertIsNone(tempctr.tar_root(b''))
+
+    def test_the_top_entry_is_applied_after_the_import(self):
+        runner = FakeRunner({('volume', 'inspect'): Result(0, b'/store/volumes/woowbk-x/_data\n', b'')})
+        tmp = tempctr.TempObjects(runner, JOB)
+        tmp.volume('emqx-new')
+        data = self.tar_with_root(1000, 1000, 0o700)
+        tmp.volume_import('emqx-new', lambda out: out.write(data))
+        name = tmp.name('emqx-new')
+        tail = runner.calls[-4:]
+        self.assertEqual(tail[0][:3], ('volume', 'import', name))
+        self.assertEqual(tail[1], ('volume', 'inspect', '--format', '{{.Mountpoint}}', name))
+        self.assertEqual(tail[2], ('unshare', 'chown', '--no-dereference', '1000:1000', '--',
+                                   '/store/volumes/woowbk-x/_data'))
+        self.assertEqual(tail[3], ('unshare', 'chmod', '0700', '--', '/store/volumes/woowbk-x/_data'))
+
+    def test_no_top_entry_changes_nothing(self):
+        runner = FakeRunner()
+        tmp = tempctr.TempObjects(runner, JOB)
+        tmp.volume('src')
+        data = self.tar_with_root(1000, 1000, 0o700, first='configs')
+        tmp.volume_import('src', lambda out: out.write(data))
+        self.assertFalse([c for c in runner.calls if c[:1] == ('unshare',) or c[:2] == ('volume', 'inspect')])
+
+    def test_a_bad_mountpoint_refuses(self):
+        runner = FakeRunner({('volume', 'inspect'): Result(0, b'relative/path', b'')})
+        tmp = tempctr.TempObjects(runner, JOB)
+        tmp.volume('src')
+        data = self.tar_with_root(0, 0, 0o755)
+        with self.assertRaises(BackupError):
+            tmp.volume_import('src', lambda out: out.write(data))
+        self.assertFalse([c for c in runner.calls if c[:1] == ('unshare',)])
+
+
 class SweepTests(unittest.TestCase):
     def runner(self):
         containers = [{'Names': [f'woowbk-{JOB}-hapg'], 'Labels': {tempctr.LABEL: JOB}},
