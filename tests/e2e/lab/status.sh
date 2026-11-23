@@ -15,11 +15,13 @@ code() {
 
 echo "host MemAvailable: $(mem_available_mb) MB"
 image_id=$("$LP" image inspect --format '{{.Id}}' "$IMAGE" 2>/dev/null || echo none)
-for dev in a b c d; do
+for dev in a b c d e; do
     device_vars "$dev"
     state=$(container_state "$NAME")
-    case "$dev" in c | d) [ "$state" != absent ] || continue ;; esac
-    line="$NAME state=$state cockpit=https://127.0.0.1:$PORT appowner=$OWNER_UID"
+    case "$dev" in c | d | e) [ "$state" != absent ] || continue ;; esac
+    cockpit_where="https://127.0.0.1:$PORT"
+    [ "$DEVICE_NETWORK" != none ] || cockpit_where="none (network none)"
+    line="$NAME state=$state cockpit=$cockpit_where appowner=$OWNER_UID"
     if [ "$state" = running ]; then
         mem=$("$LP" stats --no-stream --format '{{.MemUsage}}' "$NAME" 2>/dev/null | tr -d ' ')
         sys=$("$LP" exec "$NAME" systemctl is-system-running 2>/dev/null || true)

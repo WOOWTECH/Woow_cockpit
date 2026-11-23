@@ -19,17 +19,22 @@ log() { echo "lab: $*" >&2; }
 
 [ -x "$LP" ] || die "missing $LP"
 
-# device_vars <a|b|c|d>: sets DEV NAME PORT OWNER_UID VOLUMES DEVICE_MEMORY DEVICE_CPUS DEVICE_RUN_ARGS
+# device_vars <a|b|c|d|e>: sets DEV NAME PORT OWNER_UID VOLUMES DEVICE_MEMORY DEVICE_CPUS DEVICE_RUN_ARGS DEVICE_NETWORK
 # dev-c runs production-like copies of the host's Odoo (tenant) and n8n (queue) stacks, about ten containers,
 # so it gets more memory and CPU. Its images come from the host by `podman save` only (deploy-prodlike.sh); the
 # private registry name resolves to a dead address inside it, so nothing there can pull from that registry.
 # dev-d runs production-like copies of Omnigent, Hermes, EMQX and Headscale (HA import batch 1, eleven
 # containers; deploy-batch1.sh). Its images come from the host the same way; none of them is from the private
 # registry, and the digest pins point at the loaded images, so a missing image fails instead of being pulled.
+# dev-e runs production-like copies of Nextcloud (with Collabora), code-server and OpenDesign (HA import batch 2;
+# deploy-batch2.sh). It is created with --network none and publishes no port (DEVICE_NETWORK=none, PORT empty):
+# nothing outside reaches its Cockpit or apps and nothing inside reaches a network; use owner.sh, engine.sh and
+# exec.sh. Its images come from the host by `podman save` of the exact image IDs, like dev-c and dev-d.
 device_vars() {
     DEVICE_MEMORY=768m
     DEVICE_CPUS=1.5
     DEVICE_RUN_ARGS=()
+    DEVICE_NETWORK=
     case "${1:-}" in
         a | dev-a | woowbk-dev-a) DEV=a; PORT=19091; OWNER_UID=1001 ;;
         b | dev-b | woowbk-dev-b) DEV=b; PORT=19092; OWNER_UID=1007 ;;
@@ -38,7 +43,9 @@ device_vars() {
             DEVICE_RUN_ARGS=(--add-host jcr-prod.woowtech.io:127.0.0.1) ;;
         d | dev-d | woowbk-dev-d)
             DEV=d; PORT=19094; OWNER_UID=1019; DEVICE_MEMORY=4g; DEVICE_CPUS=2 ;;
-        *) die "device must be 'a', 'b', 'c' or 'd' (got '${1:-}')" ;;
+        e | dev-e | woowbk-dev-e)
+            DEV=e; PORT=; OWNER_UID=1025; DEVICE_MEMORY=3g; DEVICE_CPUS=2; DEVICE_NETWORK=none ;;
+        *) die "device must be 'a', 'b', 'c', 'd' or 'e' (got '${1:-}')" ;;
     esac
     NAME=woowbk-dev-$DEV
     # /home holds appowner's nested container storage: a volume (host ext4), so nested rootless
