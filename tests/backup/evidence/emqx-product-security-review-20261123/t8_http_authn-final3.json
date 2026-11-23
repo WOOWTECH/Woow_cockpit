@@ -1,0 +1,20 @@
+{
+ "attempt": "t8_http_authn-final3",
+ "code": "sec/emqx-secreview-20261123 7b173af (SR-1/2/3/6/7) + product-engine.patch",
+ "commercial_acceptance": "not-complete",
+ "exit": 0,
+ "ha_emqx_py_sha256": "396bc743b9fc62fcb0d834713e070ce7ae2f7bc6143dce28da8a462a866413ec",
+ "network": "none",
+ "result": {
+  "codebase": "final3",
+  "conversion": "REFUSED: EMQX 匯入後未能保留目標有效設定，已停止。",
+  "device_service_password_sent_to_ha_server": false,
+  "elapsed_s": 673.3,
+  "image": "docker.io/emqx/emqx:5.8.9",
+  "network": "none",
+  "store": "labpodman (separate --root)",
+  "test": "T8 migrated HTTP authenticator receives this device bootstrap logins"
+ },
+ "stdout_sha256": "a6cbd6be594e4baa231ea4d05d6d76d9caf6bb600c5f4faca645dbbea6b5afd1",
+ "store": "labpodman (separate --root); throwaway objects removed after the run"
+}

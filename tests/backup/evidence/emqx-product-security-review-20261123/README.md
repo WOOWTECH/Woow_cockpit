@@ -5,12 +5,12 @@ Lane emqx-secreview (owner instance SR-OWNER-1942). Reviewed: the EMQX import co
 `ha_emqx_acl_path_proof.py`, `ha_emqx_settings.py`, the shared member reader `habackup.py`, `tempctr.py`) and the
 emqx-product lane's product patch that removes the public guard `PRESERVATION_BLOCKER` (scratch
 `product-engine.patch`, sha256 `442dd509…2954`; target preflight `target_static`, readback `import_check` /
-`verify_restored`, `flows`/`archive`/`haimport` hooks). The product lane's final branch was not READY when this
-review started; its later diff is reviewed in the lane hand-off (see "Not covered").
+`verify_restored`, `flows`/`archive`/`haimport` hooks). The product lane's READY commit `7449540` is reviewed below ("Final product diff").
 
 Fixes: branch `sec/emqx-secreview-20261123` (local only, not pushed): **75aad7a** (SR-1, SR-2, SR-3),
 **f397590** (SR-6) and **7b173af** (SR-7), on top of integration ae5420d. The product branch `feat/ha-import-emqx-product-20261123`
-merged 75aad7a as its base (3bb261d).
+merged 75aad7a as its base (3bb261d) and, after this review flagged it, 7b173af (41ad5ef); its tip 9036688 has a
+`backup-engine` byte-identical to the merged tree the final real runs here used (`merged`, tree 99b7cae).
 
 ## How it was tested
 
@@ -40,9 +40,9 @@ merged 75aad7a as its base (3bb261d).
 | SR-2 | High | Removing the guard reopens B1-02: a device ACL file in the data volume (where the Dashboard writes edited rules) is overwritten by HA's file ACL; all config/readback comparisons stay equal | fixed 75aad7a (fail closed) |
 | SR-3 | High | Migrated connectors/authenticators with `file://` secrets read THIS device's bootstrap credentials and `/proc/self/environ` (Dashboard password) and send them to the server HA names | fixed 75aad7a |
 | SR-6 | High | Migrated rule SQL `jq('env…')` exposes this device's env secrets (bypasses SR-3) | fixed f397590 |
-| SR-7 | Medium | A migrated HTTP/JWT/LDAP/SQL authenticator or ExHook server receives this device's own service logins (bootstrap passwords) | fixed 7b173af |
+| SR-7 | Medium | A migrated HTTP/JWT/LDAP/SQL authenticator or ExHook server would receive this device's own service logins (bootstrap passwords); vendor-proven, NOT reproduced end to end | refusal added 7b173af (defense in depth) |
 | SR-4 | Low | The product readback hashes RAW config roots that contain env secrets (`dashboard.default_password`, `node.cookie`) into `import_check` | product lane (redaction), not on this branch |
-| SR-5 | Low / info | HA's authenticator hash settings are applied to this device's bootstrap users (see T5) | see T5 |
+| SR-5 | Low / info | HA's authenticator hash settings (e.g. `plain`) would apply to this device's bootstrap users, which the product re-attaches to HA's built-in authenticator | not exercised (T5 written, dropped for host load); residual |
 
 ### SR-1 — code execution in HA's broker (B1-06)
 
@@ -86,12 +86,34 @@ the password (`emqx_exhook_handler.erl:104,318-333`). Fix: the final candidate m
 authenticators (password_based or scram) and no enabled ExHook server (`ha_emqx.CREDENTIAL_RECEIVER`); disabled
 leftovers stay allowed.
 
+Real run (T8, device with the bootstrap CSV): the HTTP-authenticator backup was refused before SR-7's check by the
+existing exact-equality check of the restored authentication root (「EMQX 匯入後未能保留目標有效設定」: EMQX's
+`conf load` rewrites the raw HTTP authenticator), so the leak was not reproduced and that protection is accidental.
+ExHook (outside the authentication root, so not caught by that check) was not exercised: it needs a gRPC server.
+SR-7's refusal does not depend on EMQX's normalisation.
+
 ### SR-4 — readback hashes cover env secrets (product code)
 
 Proven in a throwaway broker: `emqx:get_raw_config([dashboard])` has `default_password` equal to the env value and
 `[node]` has `cookie` equal to the env value. The product's `config_roots` stores an unsalted SHA-256 per root in
 `import_check`; a converted HA backup does not otherwise contain these podman secrets, so an unencrypted converted
 backup gives offline brute-force material. Recommended (product lane): replace secret-named values before hashing.
+
+## Final product diff (feat/ha-import-emqx-product-20261123 @ 7449540)
+
+- **Was blocking (resolved by 41ad5ef):** `7449540` merged only 75aad7a; SR-6 (f397590) and SR-7 (7b173af) are missing, and SR-6 was proven
+  for real on exactly that code state. `git merge-tree --write-tree 7449540 7b173af` is clean (tree 99b7cae); on that
+  tree 426 tests pass (19 EMQX modules, test_ha_import, test_ha_flows, test_flows; 0 blocked). The product lane must
+  merge `sec/emqx-secreview-20261123` and post a new READY.
+- Kept: the SR-1 env pins and noexec on all three HA-broker volumes, SR-2's digest check after the settings restore,
+  SR-3's refusal on the final candidate configuration.
+- Owner decision C: `acl_blocker` refuses a file-only device with HA ACL rows at the check and again in
+  `_build_candidate` before a candidate exists (`convert` always passes the profile from `target_profile`, which
+  raises otherwise); the finished candidate must hold the same profile.
+- SR-4: `redacted()` runs inside `config_roots`, used by the conversion readback and by `verify_restored`
+  (secret-named keys, every `headers` value, URL user info). Over-redaction (`key`, `token` substrings) only lowers
+  readback coverage.
+- `archive.py`, `flows.py`, `haimport.py` hunks are the ones reviewed in the scratch patch. No new finding.
 
 ## Real attack and regression runs (lab store, `--network none`)
 
@@ -111,11 +133,11 @@ real batch-1 HA backups.
 | SR-3 fixed | REFUSED: EMQX 不能搬過來：HA 的 EMQX 設定（connectors）用「file://」讀取本機檔案 | 0 | 752.6 | t3_file_secret_exfil-final.json |
 | SR-6 attack | PASSED (candidate built, all product checks green); republished: True (retained=1:leaked=1) | 0 | 766.4 | t6_rule_jq_env-final.json |
 | SR-6 fixed | REFUSED: EMQX 不能搬過來：HA 的 EMQX 規則（1 條）使用 jq 函式；EMQX 的 jq 能讀取這 | 0 | 784.2 | t6_rule_jq_env-final3.json |
-| SR-7 attack | not run | | | |
-| SR-7 fixed | not run | | | |
-| Real x86 backup, final code | not run | | | |
-| Real ARM backup, final code | not run | | | |
-| SR-5 probe (plain hashing) | not run | | | |
+| SR-6 fixed, merged final code | REFUSED: EMQX 不能搬過來：HA 的 EMQX 規則（1 條）使用 jq 函式；EMQX 的 jq 能讀取這 | 0 | 306.5 | t6_rule_jq_env-merged.json |
+| SR-7 HTTP-authenticator attempt on pre-SR-7 code (inconclusive: host-load timeout) | REFUSED: podman exec woowbk-secrev-t8-emqx emqx 執行逾時（120 秒）。 | 0 | 686.4 | t8_http_authn-final2-attempt1.json |
+| SR-7 HTTP-authenticator attempt on fixed code (refused earlier by the existing authn equality check) | REFUSED: EMQX 匯入後未能保留目標有效設定，已停止。 | 0 | 673.3 | t8_http_authn-final3.json |
+| Real x86 b1 backup, merged final code, device ACL file + built-in database | PASSED (candidate built, all product checks green); node emqx@127.0.0.1; rules 2; connectors 1; readback roots 44; profile ['file', 'built_in_database'] | 0 | 593.4 | t7_real_backup-merged-x86-builtin.json |
+| Real ARM b1 backup, merged final code, device ACL file + built-in database | PASSED (candidate built, all product checks green); node emqx@127.0.0.1; rules 2; connectors 1; readback roots 44; profile ['file', 'built_in_database'] | 0 | 568.2 | t7_real_backup-merged-arm-builtin.json |
 
 Mutation check of the fixes (scratch copy, each protection removed in turn, `test_ha_emqx_security_review`): all 7
 removals were caught (plugin env pins, `/work` noexec, log noexec, digest check call, `file://` refusal, `jq`

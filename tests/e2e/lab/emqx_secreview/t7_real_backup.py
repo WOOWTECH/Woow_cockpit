@@ -3,7 +3,7 @@ the fixed conversion body (_build_candidate: member pass, HA's broker on HA's re
 candidate, settings restore, SR-2/SR-3/SR-6 checks, row counts, readback) in the lab store (--network none) against a
 device stand-in with the dev-d profile (ro ACL mount at /opt/emqx/etc/acl.conf, bootstrap CSV secret, Dashboard
 password env secret). The HA key is read in-process by the b1 harness's own Secrets reader and never printed.
-Run: python3 -I t7_real_backup.py <codebase> <x86|arm>"""
+Run: python3 -I t7_real_backup.py <codebase> <x86|arm> [file|builtin]"""
 import glob
 import io
 import json
@@ -23,7 +23,11 @@ FIXTURES = {'x86': '/home/woowtechopenclaw/.woowbk-lab/ha-fixtures/20261119-b1/x
 LAB_TESTS = os.environ.get('SECREV_LAB_TESTS') or os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
-def main(codebase, arch):
+BUILTIN_SOURCES = (b'authorization {\n  no_match = deny\n  deny_action = ignore\n  sources = [ { type = file, enable = true, '
+                   b'path = "/opt/emqx/etc/acl.conf" }, { type = built_in_database, enable = true } ]\n}\n')
+
+
+def main(codebase, arch, variant='file'):
     ha_emqx = L.use(codebase)
     sys.path.append(LAB_TESTS)
     from woowbackup import habackup, hasecuretar
@@ -31,6 +35,7 @@ def main(codebase, arch):
     started = time.time()
     path = sorted(glob.glob(FIXTURES[arch]))[0]
     result = {'test': 'T7 real batch-1 HA backup through the fixed conversion', 'codebase': codebase, 'arch': arch,
+              'device_sources': variant,
               'fixture': os.path.basename(path), 'fixture_sha256_prefix': L.digest(open(path, 'rb').read())[:16],
               'image': L.IMAGE, 'network': 'none', 'store': 'labpodman (separate --root)'}
     creds = b1.Secrets([b1.SECRET_DIR / 'b1-creds.env', b1.SECRET_DIR / 'ha-import-creds.env'],
@@ -51,7 +56,10 @@ def main(codebase, arch):
                         (s_dash, secrets.token_hex(12).encode())):
         L.lab('secret', 'rm', name, check=False)
         L.lab('secret', 'create', name, '-', input=value)
-    target = L.LabTarget(f't7{arch}', {'configs/cluster.hocon': T1.target_hocon('/opt/emqx/etc/acl.conf')},
+    hocon = T1.target_hocon('/opt/emqx/etc/acl.conf')
+    if variant == 'builtin':
+        hocon = BUILTIN_SOURCES + hocon.split(b'}\n', 1)[1]
+    target = L.LabTarget(f't7{arch}', {'configs/cluster.hocon': hocon},
                          ro_files=[(acl_host, '/opt/emqx/etc/acl.conf', 'ro')],
                          secrets_spec=[f'{s_boot},type=mount,target={T1.BOOT},uid=1000,gid=1000,mode=0400',
                                        f'{s_dash},type=env,target=EMQX_DASHBOARD__DEFAULT_PASSWORD'])
@@ -89,8 +97,8 @@ def main(codebase, arch):
             L.lab('secret', 'rm', name, check=False)
     result['elapsed_s'] = round(time.time() - started, 1)
     print(json.dumps(result, ensure_ascii=False, indent=1))
-    L.evidence(os.path.join(L.SR, 'runs', f't7-{codebase}-{arch}.json'), result)
+    L.evidence(os.path.join(L.SR, 'runs', f't7-{codebase}-{arch}' + (f'-{variant}' if variant != 'file' else '') + '.json'), result)
 
 
 if __name__ == '__main__':
-    main(sys.argv[1], sys.argv[2])
+    main(sys.argv[1], sys.argv[2], sys.argv[3] if len(sys.argv) > 3 else 'file')
