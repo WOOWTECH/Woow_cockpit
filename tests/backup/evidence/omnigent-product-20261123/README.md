@@ -80,3 +80,34 @@ Unit tests on this tip: Omnigent modules (`test_ha_omnigent*`, `test_b1_01_guard
 `test_ha_headscale`, `test_ha_hermes`, `test_ha_litellm_candidate`, `test_ha_flows`, `test_ha_import`,
 `test_ha_registry` OK (the shared fake `hab1fakes` now keeps the child's stderr on `CommandError` like
 `podman.Runner.run`); `test_ha_emqx`: the same 10 pre-existing PRESERVATION_BLOCKER failures as before.
+
+## Iteration 3 (2026-11-24 night): the review's iteration 2 (SR-6), the bidi gap, final checks
+
+The security review's iteration 2 (`tests/backup/evidence/omnigent-product-security-review-20261123/README.md`,
+section "Iteration 2") is cherry-picked here (97b21c3 a8a5978 b85f2c9 e8d608b 27b8341 66bb9b6 → 95a1b29 f4ca61c
+5b7be1f 1186fbb ee5f7f6 4a3622b): SR-6 (shared `jobs.py`: a job log line stays one line; `append_log` writes every
+C0/C1 control and U+2028/U+2029 as a space, `read_log` splits on `\n` only), its tests, mutation M26, the review
+harness, its attack evidence and README. `git diff 66bb9b6 4a3622b -- backup-engine backup docs` is empty: the product
+code is exactly what the review tested.
+
+One more change of this lane, **97c994f** (the independent verifier's SR-6 gap: Unicode bidirectional controls passed
+`jobs.LOG_CONTROL_RE`, `hacommon.names` and the hastore name check, so HA text could reorder how the rest of its line
+reads, e.g. U+202E in the backup name): both shared regexes also cover the 12 Bidi_Control code points (U+061C,
+U+200E, U+200F, U+202A–U+202E, U+2066–U+2069; log: a space, names: `?`). Tests, each failing with its regex reverted
+(checked by hand in a throwaway copy, then by the mutation check): `test_jobs` `StoreTests.test_a_log_line_keeps_its_reading_order`
+(the explicit-formatting classes come from `unicodedata`), `test_ha_common` `NamesTests.test_names_carry_no_control_or_bidirectional_character`,
+`test_ha_omnigent` `CheckTests.test_has_text_cannot_reorder_a_message_or_a_log_line` (HA backup name and table name
+through the real check and the real `JobStore`). hastore/habackup input checks are NOT changed (no backup is refused
+for its name; a bidi control in a list cell stays a display-only residual).
+
+`mutation-check-iter3-4a3622b.json` (4a3622b = review e8d608b code; `ha_omnigent.py` 44c47017…, `hacommon.py`
+67f2ed25…, `jobs.py` e38ff425…): baseline 59/59 pass; **26/26 caught** (M26 SR-6 caught).
+`mutation-check-iter3-final.json` (97c994f): running (result follows in the next commit).
+
+Unit and suites:
+* 4a3622b: Omnigent modules (9) + `test_jobs` + `test_ha_common` + `test_ha_import` + `test_ha_redact` 215 OK, lab
+  Omnigent 20 OK; trial merge into `integration/ha-import-batch1-20261123` 62fa9af (no conflict, `git merge-tree`
+  rc 0): the same 215 + `test_ha_flows`/`test_ha_registry` 13 + lab 24 OK.
+* 97c994f: every non-EMQX `test_ha_*` module + `test_jobs` + `test_b1_01_guard` 445 OK (1 skipped); `test_ha_emqx*`:
+  the same 10 pre-existing PRESERVATION_BLOCKER failures; lab Omnigent 20 OK.
+* Full `tests/backup` under the host-heavy lock: 5833258 (= 4a3622b code; lock 02:47:06-02:59:56): 1420 run, not ok = the 10 pre-existing `test_ha_emqx` PRESERVATION_BLOCKER tests + 1 flake `test_bounded_large_archive.HarnessSafetyTests.test_runtime_space_loss_aborts_and_cleans` (its child reported `ImportError` instead of `BackupError` under host load ~25; file unchanged since the base 82ac971, passed in the review's full suite on the same code; reruns of the module: 1 failed, then 6/6 OK); 97c994f: queued behind the 28-mutation check.
