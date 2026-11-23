@@ -6,6 +6,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import json
 
 HERE = Path(__file__).resolve().parent
 HARNESS = HERE / 'hermes_real_ha.py'
@@ -33,6 +34,7 @@ SRC = {
 class FakeEvidence:
     def __init__(self):
         self.results = []
+        self.secrets = object()
 
     def check(self, name, ok, detail=''):
         self.results.append((name, bool(ok)))
@@ -69,14 +71,19 @@ def probe(mode, *, break_rows=False, plain_snippet=False):
 
 class ContinuityLogicTests(unittest.TestCase):
     def setUp(self):
-        self.saved = (hr.source_sessions, hr.drv.device_python)
+        self.saved = (hr.source_sessions, hr.drv.device_python, hr.drv.event_device_python)
         hr.source_sessions = lambda: SRC
+        self.calls = []
 
     def tearDown(self):
-        hr.source_sessions, hr.drv.device_python = self.saved
+        hr.source_sessions, hr.drv.device_python, hr.drv.event_device_python = self.saved
+        hr.ISSUED_LOGINS.clear()
 
     def run_mode(self, mode, data):
-        hr.drv.device_python = lambda *_a, **_k: data
+        def event_probe(script, request, secrets, expected_auth, **_k):
+            self.calls.append((script is hr.CONTINUITY, secrets, expected_auth))
+            return data
+        hr.drv.event_device_python = event_probe
         ev = FakeEvidence()
         # SRC has 6 messages, the harness expects the fixture's 15: patch the total through the source counts
         hr.continuity(ev, 'unit', mode)
@@ -109,6 +116,78 @@ class ContinuityLogicTests(unittest.TestCase):
         data['inner']['fts_integrity'] = {'messages_fts': 'error malformed'}
         ev = self.run_mode('base', data)
         self.assertTrue(any('integrity-check' in n for n in ev.failed()))
+
+
+class IssuedCredentialTests(unittest.TestCase):
+    """Dashboard session cookies issued by each continuity login are registered and must reach the leak scan."""
+
+    def test_continuity_runs_through_the_acknowledged_transport(self):
+        case = ContinuityLogicTests('test_base_mode_passes_on_baseline_probe')
+        case.setUp()
+        try:
+            ev = case.run_mode('base', probe('base'))
+            self.assertEqual(case.calls, [(True, ev.secrets, hr.ISSUED_AUTH)])
+            self.assertEqual(hr.ISSUED_LOGINS, ['unit'])
+        finally:
+            case.tearDown()
+
+    def producer(self, events):
+        code = ("import json,sys\nreq=json.loads(sys.stdin.readline())\n"
+                "for e in json.loads(sys.argv[1]):\n print(json.dumps(e),flush=True)\n"
+                " assert sys.stdin.readline()=='OK\\n'\n")
+        return [sys.executable, '-I', '-c', code, json.dumps(events)]
+
+    def stream(self, rt):
+        events = [{'type': 'auth', 'sequence': 0, 'source': '/auth/password-login#at', 'status': 200,
+                   'credentials': {'hermes_session_at': 'synthetic-access-0001'}},
+                  {'type': 'auth', 'sequence': 1, 'source': '/auth/password-login#rt',
+                   'status': 200 if rt else 404,
+                   'credentials': {'hermes_session_rt': 'synthetic-refresh-0001'} if rt else {}},
+                  {'type': 'summary', 'sequence': 2, 'data': {'login': 200}},
+                  {'type': 'end', 'sequence': 3}]
+        return events
+
+    def test_event_shapes_continuity_emits_are_accepted_and_registered(self):
+        transport = load('b1_event_transport', HERE / 'b1_event_transport.py')
+        for rt in (True, False):
+            got = []
+            summary = transport.run_events(self.producer(self.stream(rt)), {'x': 1}, got.append, hr.ISSUED_AUTH,
+                                           timeout=30)
+            self.assertEqual(summary, {'login': 200})
+            self.assertEqual(got, ['synthetic-access-0001'] + (['synthetic-refresh-0001'] if rt else []))
+
+    def test_missing_access_cookie_breaks_coverage(self):
+        transport = load('b1_event_transport', HERE / 'b1_event_transport.py')
+        events = self.stream(False)
+        events[0] = dict(events[0], status=404, credentials={})
+        with self.assertRaises(transport.Incomplete):
+            transport.run_events(self.producer(events), {}, lambda v: None, hr.ISSUED_AUTH, timeout=30)
+
+    def test_leak_scan_refuses_when_an_issued_credential_is_missing(self):
+        saved = (hr.load_kit, hr.drv.device_python, hr.drv.scan_host_evidence)
+        secrets = type('S', (), {})()
+        secrets.values = {name: 'lane-value-' + name for name in hr.LANE_SECRETS}
+        hr.load_kit = lambda _args: None
+        FakeEvidence.dir = Path(tempfile.gettempdir())
+        seen = {}
+        hr.drv.device_python = lambda script, request, **_k: seen.setdefault('request', request) and {
+            'scanned': 1, 'names': 1, 'hits': 0}
+        hr.drv.scan_host_evidence = lambda *_a: {'hits': 0}
+        args = type('A', (), {})()
+        args.secrets = type('Secrets', (), {'values': secrets.values,
+                                            '__getitem__': lambda self, k: self.values[k]})()
+        try:
+            hr.ISSUED_LOGINS[:] = ['before', 'after import']
+            with self.assertRaises(hr.Failed):
+                hr.step_leaks(FakeEvidence(), args)
+            args.secrets.values['ISSUED_TOKEN_40'] = 'synthetic-access-0001'
+            args.secrets.values['ISSUED_TOKEN_41'] = 'synthetic-access-0002'
+            hr.step_leaks(FakeEvidence(), args)
+            self.assertIn('ISSUED_TOKEN_41', seen['request']['secrets'])
+        finally:
+            hr.load_kit, hr.drv.device_python, hr.drv.scan_host_evidence = saved
+            hr.ISSUED_LOGINS.clear()
+            del FakeEvidence.dir
 
 
 class OfflineEntryTests(unittest.TestCase):

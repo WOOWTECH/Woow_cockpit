@@ -172,17 +172,17 @@ def dash_login(password):
         r = urllib.request.Request(D + "/auth/password-login", data=body, headers={"Content-Type": "application/json"})
         try:
             with op.open(r, timeout=30) as resp:
-                return resp.status, op
+                return resp.status, op, jar
         except urllib.error.HTTPError as e:
             if e.code in (502, 503, 504) and time.monotonic() < deadline:
                 time.sleep(3)
                 continue
-            return e.code, op
+            return e.code, op, jar
         except OSError:
             if time.monotonic() < deadline:
                 time.sleep(3)
                 continue
-            return 0, op
+            return 0, op, jar
 def get(op, path):
     try:
         with op.open(D + path, timeout=60) as resp:
@@ -194,8 +194,21 @@ def get(op, path):
 def digest(value):
     text = value if isinstance(value, str) else json.dumps(value, sort_keys=True)
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
-code, op = dash_login(secret("hermes-dashboard-password"))
+code, op, jar = dash_login(secret("hermes-dashboard-password"))
+# The login ISSUED session credentials (vendor dashboard_auth/cookies.py: hermes_session_at, and hermes_session_rt
+# when the provider returns a refresh token). Each is handed to the owner, which registers it before acknowledging,
+# so every later scan looks for it; an absent refresh cookie is reported as status 404 (nothing issued).
+issued = {}
+for cookie in jar:
+    for bare in ("hermes_session_at", "hermes_session_rt"):
+        if cookie.name.endswith(bare) and cookie.value:
+            issued[bare] = cookie.value
+for bare in ("hermes_session_at", "hermes_session_rt"):
+    present = bare in issued
+    emit("auth", source="/auth/password-login#" + bare[-2:], status=(code if code else 599) if present else 404,
+         credentials={bare: issued[bare]} if present else {})
 out["login"] = code
+out["issued_cookie_names"] = sorted(issued)
 c, body = get(op, "/api/sessions?limit=100")
 out["list_code"] = c
 out["sessions"] = {s.get("id"): {k: s.get(k) for k in ("message_count", "source", "model", "title", "started_at")}
@@ -269,7 +282,7 @@ try:
     out["inner"] = json.loads(so.strip().splitlines()[-1])
 except (ValueError, IndexError):
     out["inner"] = {"error": "inner probe failed rc=%d" % rc}
-print(json.dumps(out))
+finish(out)
 '''
 
 # The logical state of dev-d's Hermes (inside hermes-agent as the hermes user, read-only): sessions with each
@@ -379,6 +392,10 @@ for d, _dirs, files in os.walk(lib):
 helper = "/usr/local/libexec/woowtech-cockpit-backup"
 print(json.dumps({"lib": out, "helper": hashlib.sha256(open(helper, "rb").read()).hexdigest()}))
 '''
+# Each continuity login issues an access-token cookie (must be registered) and maybe a refresh-token cookie.
+ISSUED_AUTH = [('/auth/password-login#at', ('hermes_session_at',), True),
+               ('/auth/password-login#rt', ('hermes_session_rt',), False)]
+ISSUED_LOGINS = []
 LANE_SECRETS = ('HA_BACKUP_KEY', 'B1_HERMES_DASHBOARD_PW', 'B1_HERMES_API_KEY', 'B1_HERMES_WEBHOOK_SECRET',
                 'B1_HERMES_ROUTE_SECRET', 'B1_HERMES_DUMMY_KEY', 'DEV_D_KIT_1119')
 PROGRAMS = {'CONTINUITY': CONTINUITY, 'DIGEST': DIGEST, 'LEAK_SCAN': LEAK_SCAN, 'ENGINE_HASHES': ENGINE_HASHES}
@@ -554,8 +571,9 @@ def continuity(ev, label_text, mode):
     src = source_sessions()
     ha_ids = sorted(src)
     terms = dict(HA_TERMS, **BASE_TERMS, **NEG_TERMS)
-    probe = drv.device_python(CONTINUITY, {'session_ids': ha_ids + [BASE_SESSION], 'terms': sorted(terms),
-                                           'like': terms}, timeout=900)
+    probe = drv.event_device_python(CONTINUITY, {'session_ids': ha_ids + [BASE_SESSION], 'terms': sorted(terms),
+                                                 'like': terms}, ev.secrets, ISSUED_AUTH, timeout=900)
+    ISSUED_LOGINS.append(label_text)
     ev.save(f'continuity-{slug(label_text)}-{int(time.time())}.json', probe)
     inner = probe.get('inner') or {}
     ev.check(f'{label_text}: Hermes healthy (API and webhook /health 200) and the dashboard takes this device\'s '
@@ -869,6 +887,11 @@ def step_leaks(ev, args):
                'podman_secrets': HERMES_SECRETS, 'uid': 1019, 'since': int(since)}
     if len(request['secrets']) != len(LANE_SECRETS):
         raise Failed('a lane secret is missing from the readers')
+    issued = {k: v for k, v in args.secrets.values.items() if k.startswith('ISSUED_TOKEN_') and v}
+    # Declared dynamic source: every continuity login of this run issued at least one registered session credential.
+    if ISSUED_LOGINS and len(issued) < len(ISSUED_LOGINS):
+        raise Failed('an issued dashboard session credential is missing from the leak scan')
+    request['secrets'].update(issued)
     report = drv.device_python(LEAK_SCAN, request, as_owner=False, timeout=900)
     host = drv.scan_host_evidence(ev.dir, args.secrets)
     ev.save('leaks.json', {'device': report, 'host': host})
