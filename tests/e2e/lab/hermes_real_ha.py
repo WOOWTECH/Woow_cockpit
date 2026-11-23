@@ -416,8 +416,12 @@ def waiting_mtime():
 
 
 def emqx_main_holds_lock():
-    """True while an emqx-main real run (run_emqx_real_owner.sh / its transport) has the lock file open. Its note says
-    the waiting file is removed when its run starts, so a file of that same age is not a request for the next turn."""
+    """True only while an emqx-main real run (run_emqx_real_owner.sh / its transport) HOLDS the lock: one of its
+    processes has the lock file open on the file description that carries the flock (a `lock:` line in
+    /proc/<pid>/fdinfo/<fd>). Opening the file alone is not holding it: run_emqx_real_owner.sh opens it before its
+    `flock -n` and dies when that fails, which is a busy retry of a waiting emqx-main (11-23 11:45: counting it as a
+    run let this harness jump the queue). Its note says the waiting file is removed when its run starts, so a file of
+    the age seen while it held the lock is not a request for the next turn."""
     for proc in Path('/proc').iterdir():
         if not proc.name.isdigit():
             continue
@@ -425,8 +429,11 @@ def emqx_main_holds_lock():
             cmd = (proc / 'cmdline').read_bytes()
             if b'run_emqx_real_owner.sh' not in cmd and b'emqx_real_owner_transport.py' not in cmd:
                 continue
-            if any(os.readlink(fd) == str(LOCK) for fd in (proc / 'fd').iterdir()):
-                return True
+            for fd in (proc / 'fd').iterdir():
+                if os.readlink(fd) == str(LOCK):
+                    info = (proc / 'fdinfo' / fd.name).read_text()
+                    if any(line.startswith('lock:') and 'FLOCK' in line for line in info.splitlines()):
+                        return True
         except OSError:
             continue
     return False

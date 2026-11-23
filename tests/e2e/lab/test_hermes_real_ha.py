@@ -178,6 +178,32 @@ class LockTests(unittest.TestCase):
         finally:
             hr.emqx_main_holds_lock = saved
 
+    def _fake_emqx(self, lock):
+        code = ('import fcntl, os, sys, time\n'
+                'fd = os.open(sys.argv[2], os.O_RDONLY)\n'
+                'if sys.argv[3] == "lock":\n    fcntl.flock(fd, fcntl.LOCK_EX)\n'
+                'print("ready", flush=True)\ntime.sleep(30)\n')
+        proc = subprocess.Popen([sys.executable, '-c', code, 'run_emqx_real_owner.sh', str(hr.LOCK), lock],
+                                stdout=subprocess.PIPE, text=True)
+        self.assertEqual(proc.stdout.readline().strip(), 'ready')
+        return proc
+
+    def test_an_emqx_process_that_only_opened_the_lock_is_not_holding_it(self):
+        proc = self._fake_emqx('open')
+        try:
+            self.assertFalse(hr.emqx_main_holds_lock())
+        finally:
+            proc.kill()
+            proc.wait()
+
+    def test_an_emqx_process_holding_the_flock_is_detected(self):
+        proc = self._fake_emqx('lock')
+        try:
+            self.assertTrue(hr.emqx_main_holds_lock())
+        finally:
+            proc.kill()
+            proc.wait()
+
     def test_symlinked_lock_refused(self):
         target = Path(self.tmp.name) / 'elsewhere'
         target.touch()
