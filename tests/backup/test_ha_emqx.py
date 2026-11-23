@@ -114,6 +114,10 @@ class World(fk.World):
     def labels(self, image):
         return {'org.opencontainers.image.version': self.version}
 
+    def boot_view(self, role, config):
+        """The boot form (ha_emqx.BOOT_CONFIG_EXPR) of `config` as `role` answers it: no schema defaults here."""
+        return config
+
     def user_ids(self, user):
         return b'1000\n1000\n'
 
@@ -148,6 +152,8 @@ class World(fk.World):
             return receipt_text(RECEIPT)
         if expression == ha_emqx.CONFIG_EXPR:
             return b'WOOWCFG:' + base64.b64encode(json.dumps(self.current_config).encode()) + b':ENDok\n'
+        if expression == ha_emqx.BOOT_CONFIG_EXPR:
+            return b'WOOWCFG:' + base64.b64encode(json.dumps(self.boot_view(role, self.current_config)).encode()) + b':ENDok\n'
         if expression == ha_emqx.OVERRIDE_STATE_EXPR:
             return b'WOOWOVERRIDE:present:ENDok\n'
         if expression == ha_emqx.SUSPEND_SYS_EXPR:

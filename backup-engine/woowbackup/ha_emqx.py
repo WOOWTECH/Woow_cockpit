@@ -550,9 +550,16 @@ def import_target_snapshot(tmp, snapshot_path, ids):
 # Fixed expression: no configuration or credential is interpolated into argv.
 CONFIG_EXPR = ('io:format("WOOWCFG:~s:END~n", '
                '[base64:encode(emqx_utils_json:encode(emqx:get_raw_config([])))]).')
+# The same configuration in the form a boot of the same files gives it. EMQX 5.8.9 stores
+# fill_defaults_for_all_roots(...) as the raw configuration at boot (emqx_config.erl:341,345) but a change made at
+# runtime (the Dashboard, the REST API, `conf load`) stores the new raw value without defaults: a built-in database
+# source added in the Dashboard reads `max_rules` only after a restart. fill_defaults/1 (exported, :32, :487-505) is
+# not idempotent on every root (`retainer`), so comparisons across a boot compare THIS form on both sides (boot_form).
+BOOT_CONFIG_EXPR = ('io:format("WOOWCFG:~s:END~n", '
+                    '[base64:encode(emqx_utils_json:encode(emqx_config:fill_defaults(emqx:get_raw_config([]))))]).')
 
 
-def read_effective_config(execute, *, allow_authz_omission=False, _native_digest=None):
+def read_effective_config(execute, *, allow_authz_omission=False, _native_digest=None, _expr=CONFIG_EXPR):
     """Read merged RAW broker config, not cooked schema-expanded defaults.
 
     CONFIG_EXPR calls get_raw_config; retain every returned field unchanged so
@@ -560,7 +567,9 @@ def read_effective_config(execute, *, allow_authz_omission=False, _native_digest
     the body in errors.
     """
     try:
-        result = execute(['emqx', 'eval', CONFIG_EXPR])
+        if _expr not in (CONFIG_EXPR, BOOT_CONFIG_EXPR):
+            raise ValueError()
+        result = execute(['emqx', 'eval', _expr])
         body = result.stdout or b''
         if result.returncode or len(body) > MAX_HOCON or not body.startswith(b'WOOWCFG:'):
             raise ValueError()
@@ -585,6 +594,13 @@ def read_effective_config(execute, *, allow_authz_omission=False, _native_digest
         return config
     except (BackupError, ValueError, TypeError, RecursionError):
         raise BackupError('incompatible', '無法安全取得 EMQX 有效設定，已停止。') from None
+
+
+def boot_form(execute):
+    """A running broker's configuration as a boot of the same files gives it (BOOT_CONFIG_EXPR): compared on both sides
+    wherever a boot stands between them (this device -> the candidate booted from its snapshot; the conversion's
+    candidate -> the restored broker). Every other check keeps the plain raw configuration."""
+    return read_effective_config(execute, _expr=BOOT_CONFIG_EXPR)
 
 
 def bootstrap_references(config, mounts, secrets):
@@ -869,10 +885,14 @@ def capture_target_seed(work, app, target, staging):
 def candidate_from_target(work, app, tmp, target, staging, export, ids, *, hint=''):
     """This device's capture (capture_target_seed) and the candidate built from it: the public conversion's path."""
     original,snapshot,fingerprints=capture_target_seed(work,app,target,staging)
+    # This device's configuration as its next boot will read it (a source added in the Dashboard since the last
+    # restart reads its defaults only then): the candidate, booted from the snapshot, must equal THIS form.
+    target_boot=boot_form(lambda command: work.runner(app).podman('exec', target.container, *command, timeout=120,
+                                                                   max_output=MAX_HOCON, check=False))
     observe=getattr(work,'_emqx_build_stage',None)
     if observe is not None:observe('target_runtime')
     return target_broker(work,tmp,target,export,ids,hint=hint,
-        target_snapshot=snapshot,target_config=original,image_fingerprints=fingerprints)
+        target_snapshot=snapshot,target_config=original,image_fingerprints=fingerprints,target_boot=target_boot)
 
 def candidate_with_effective_acl(work, app, tmp, target, staging, export, ids, authorization, *, hint=''):
     """Stage known file ACL references and seed a candidate; not a complete preservation check.
@@ -1177,8 +1197,11 @@ def check_candidate_bootstrap(tmp, target, config):
 
 
 def target_broker(work, tmp, target, export, ids, *, hint='', target_snapshot=None, target_config=None,
-                  image_fingerprints=None):
-    """This device's broker on an empty volume: import HA's export, load the strict settings back, verify."""
+                  image_fingerprints=None, target_boot=None):
+    """This device's broker on an empty volume: import HA's export, load the strict settings back, verify.
+
+    `target_boot`: this device's configuration in its boot form (boot_form); the candidate, just booted from the
+    snapshot, must equal it. Without it the plain raw configuration must be equal (callers that read no boot form)."""
     name = os.path.basename(export)
     snapshot_digests = snapshot_file_digests(target_snapshot) if target_snapshot is not None else None
     tmp.volume('emqx-in')
@@ -1196,8 +1219,9 @@ def target_broker(work, tmp, target, export, ids, *, hint='', target_snapshot=No
                                                max_output=MAX_HOCON, check=False)
     if image_fingerprints is not None and tls_fingerprints(read_candidate, image_fingerprints) != image_fingerprints:
         raise BackupError('incompatible', 'EMQX 候選憑證與目標不一致，已停止。')
-    if target_config is not None and (target_etc_dir(read_candidate) != ETC_DIR
-                                      or read_effective_config(read_candidate) != target_config):
+    if target_config is not None and (target_etc_dir(read_candidate) != ETC_DIR or (
+            boot_form(read_candidate) != target_boot if target_boot is not None
+            else read_effective_config(read_candidate) != target_config)):
         raise BackupError('incompatible', 'EMQX 候選啟動後設定與目標不一致，已停止。')
     if target_config is not None:
         check_candidate_bootstrap(tmp, target, target_config)
@@ -1366,7 +1390,8 @@ def candidate_readback(tmp):
     and its rows were counted; the profile is this device's again (restore_target_settings proved it)."""
     read = lambda command: tmp.exec('emqx-new', command, timeout=120, max_output=MAX_HOCON, check=False)
     config = read_effective_config(read)
-    return readback_record(config, table_receipts(read)), source_profile(config)
+    # The restored broker reads these settings at its boot: the record holds their boot form (boot_form).
+    return readback_record(boot_form(read), table_receipts(read)), source_profile(config)
 
 
 def compare_readback(expected, actual):
@@ -1412,7 +1437,7 @@ def verify_restored(adapter, app, check, *, log, sleep=time.sleep, clock=time.mo
         return adapter.runner.podman('exec', target.container, *command, timeout=120, max_output=MAX_HOCON,
                                      check=False)
     wait_live_ready(execute, sleep=sleep, clock=clock)
-    actual = readback_record(read_effective_config(execute), table_receipts(execute))
+    actual = readback_record(boot_form(execute), table_receipts(execute))
     problems = compare_readback(check, actual)
     if problems:
         raise BackupError('job-failed', f'EMQX 還原後的{"、".join(problems)}和轉換時核對的不同，已停止；'

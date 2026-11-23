@@ -50,6 +50,9 @@ class Transport:
             state=self.override_states[min(self.override_reads,len(self.override_states)-1)]
             self.override_reads+=1
             return Result(0,b'WOOWOVERRIDE:'+state.encode()+b':ENDok\n',b'')
+        if args[2:] == ('emqx', 'eval', emqx.BOOT_CONFIG_EXPR):   # no schema defaults here: same answer, no event
+            assert kwargs['max_output'] == emqx.MAX_HOCON
+            return self.live_response or response(self.config)
         assert args[2:] == ('emqx', 'eval', emqx.CONFIG_EXPR)
         assert kwargs['max_output'] == emqx.MAX_HOCON
         self.events.append('read-live')
@@ -89,6 +92,10 @@ class Transport:
         self.events.append('start')
 
     def exec(self, role, command, **kwargs):
+        if command == ['emqx', 'eval', emqx.BOOT_CONFIG_EXPR]:
+            # The generated transport has no schema defaults: its boot form is its raw configuration (no event, so
+            # the recorded read sequences stay those of the plain reads).
+            return response(self.running_config)
         if command == ['emqx', 'eval', emqx.CONFIG_EXPR]:
             self.events.append('read-candidate')
             return response(self.running_config)

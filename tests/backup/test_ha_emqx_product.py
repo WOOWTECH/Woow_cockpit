@@ -12,6 +12,7 @@ What replaced the public PRESERVATION_BLOCKER, each with tests that fail when th
   restore compares it with the restored broker, rolling back on any difference; a readback this engine does not know
   refuses the restore before anything changes.
 """
+import base64
 import copy
 import json
 import unittest
@@ -292,6 +293,60 @@ class AclNeedsBuiltinTests(base.EmqxCase):
         self.assertEqual(self.storage.list_backups(), [])
 
 
+class DashboardChangedWorld(TargetWorld):
+    """dev-d 2026-11-23 attempt-05: this device's built-in database source was added in the Dashboard (REST API) since
+    the last restart, so its running broker's RAW configuration lacks the schema default `max_rules` that every boot
+    fills in; the candidate, booted from the snapshot, reads it. `target_config` is the boot form."""
+
+    @staticmethod
+    def filled(config):
+        config = copy.deepcopy(config)
+        for source in (config.get('authorization') or {}).get('sources') or []:
+            if source.get('type') == 'built_in_database':
+                source.setdefault('max_rules', 100)
+        return config
+
+    @staticmethod
+    def runtime(config):
+        config = copy.deepcopy(config)
+        for source in (config.get('authorization') or {}).get('sources') or []:
+            source.pop('max_rules', None)
+        return config
+
+    def boot_view(self, role, config):
+        return self.filled(config)
+
+    def evaluate(self, role, expression):
+        if role == 'woow-emqx' and expression == ha_emqx.CONFIG_EXPR:
+            return b'WOOWCFG:' + base64.b64encode(json.dumps(self.runtime(self.target_config)).encode()) + b':ENDok\n'
+        if role == 'woow-emqx' and expression == ha_emqx.BOOT_CONFIG_EXPR:
+            return b'WOOWCFG:' + base64.b64encode(json.dumps(self.target_config).encode()) + b':ENDok\n'
+        return super().evaluate(role, expression)
+
+
+class DashboardChangedTargetTests(base.EmqxCase):
+    """The customer follows the owner's text (add 「內建資料庫」 in the Dashboard, after the ACL file) and imports without
+    restarting EMQX: the candidate must equal this device's configuration in its BOOT form (BOOT_CONFIG_EXPR) and the
+    readback holds that form, so the restored broker (which boots) compares equal."""
+    world_class = DashboardChangedWorld
+
+    def setUp(self):
+        super().setUp()
+        self.world.target_config['authorization']['sources'] = [
+            dict(FILE, path='/opt/emqx/etc/acl.conf'), dict(BUILTIN, max_rules=100)]
+        self.world.current_config = copy.deepcopy(self.world.target_config)
+
+    def test_the_conversion_compares_and_records_boot_forms(self):
+        result = self.check(self.upload_emqx(state='stopped'), ['emqx'])[0]
+        self.assertTrue(result['ok'], result['blockers'])
+        done = self.convert(self.upload_emqx(state='stopped'), ['emqx'])
+        self.assertTrue(done['backup_id'])
+        section = next(app for app in self.archive.writes[-1]['manifest']['apps'] if app['id'] == 'emqx')
+        self.assertEqual(section['import_check']['config_roots']['authorization'],
+                         ha_emqx.config_roots(self.world.target_config)['authorization'],
+                         'the readback holds the boot form (max_rules filled), as the restored broker boots')
+
+
 class ConvertReadbackTests(base.EmqxCase):
     def setUp(self):
         super().setUp()
@@ -404,7 +459,7 @@ class ReadbackTests(unittest.TestCase):
             with self.subTest(raw=raw[:40]), self.assertRaises(BackupError):
                 ha_emqx.table_receipts(answer(raw, code))
 
-    def adapter(self, config, tables, *, started_after=0):
+    def adapter(self, config, tables, *, started_after=0, boot=None):
         calls = {'status': 0}
 
         class Runner:
@@ -418,6 +473,8 @@ class ReadbackTests(unittest.TestCase):
                     started = calls['status'] > started_after
                     return Result(0 if started else 1, b"Node 'emqx@127.0.0.1' 5.8.9 is started\n" if started else b'',
                                   b'')
+                if command == ['emqx', 'eval', ha_emqx.BOOT_CONFIG_EXPR]:
+                    return flow.response(config if boot is None else boot)
                 if command == ['emqx', 'eval', ha_emqx.CONFIG_EXPR]:
                     return flow.response(config)
                 if command == ['emqx', 'eval', ha_emqx.TABLES_RECEIPT_EXPR]:
@@ -450,6 +507,22 @@ class ReadbackTests(unittest.TestCase):
             ha_emqx.verify_restored(adapter, self.app(), record, log=logs.append, sleep=lambda _s: None)
         self.assertIn('內建資料庫（emqx_admin）', caught.exception.message)
         self.assertEqual(len(logs), 1, 'only an equal readback logs the success line')
+
+    def test_the_restored_broker_is_compared_in_its_boot_form(self):
+        """A boot fills schema defaults into the raw configuration (EMQX 5.8.9 emqx_config.erl:341,345); a runtime change
+        does not. The record holds the boot form, so the restored broker's BOOT form is compared, never its plain read."""
+        boot = copy.deepcopy(self.config())
+        boot['authorization']['sources'][1]['max_rules'] = 100
+        plain = copy.deepcopy(self.config())
+        record = ha_emqx.readback_record(boot, TABLES)
+        adapter, _ = self.adapter(plain, TABLES, boot=boot)
+        logs = []
+        ha_emqx.verify_restored(adapter, self.app(), record, log=logs.append, sleep=lambda _s: None)
+        self.assertEqual(len(logs), 1)
+        adapter, _ = self.adapter(boot, TABLES, boot=plain)
+        with self.assertRaises(BackupError) as caught:
+            ha_emqx.verify_restored(adapter, self.app(), record, log=logs.append, sleep=lambda _s: None)
+        self.assertIn('設定（authorization）', caught.exception.message)
 
     def test_a_broker_that_never_starts_or_an_unknown_record_fails(self):
         record = ha_emqx.readback_record(self.config(), TABLES)
