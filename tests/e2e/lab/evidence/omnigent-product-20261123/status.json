@@ -16,20 +16,36 @@
  },
  "real_attempts": [
   {
-   "evidence": "omnigent-x86-plain-attempt1.json",
-   "source_commit": "805ff1b",
-   "exit": 1,
-   "elapsed_seconds": 949.2,
-   "summary": "omnigent full flow x86 plain: 110/111 FAIL",
-   "lock": "lock held for 948 s"
-  },
-  {
    "evidence": "omnigent-arm-enc-attempt1.json",
    "source_commit": "b5aa69e",
    "exit": 0,
    "elapsed_seconds": 1530.7,
    "summary": "omnigent full flow arm enc: 111/111 PASS",
    "lock": "lock held for 840 s"
+  },
+  {
+   "evidence": "omnigent-arm-enc-attempt2.json",
+   "source_commit": "fdf68dd",
+   "exit": 0,
+   "elapsed_seconds": 1977.7,
+   "summary": "omnigent full flow arm enc: 112/112 PASS",
+   "lock": "lock held for 779 s"
+  },
+  {
+   "evidence": "omnigent-arm-plain-attempt1.json",
+   "source_commit": "0eeb74b",
+   "exit": 0,
+   "elapsed_seconds": 3225.8,
+   "summary": "omnigent full flow arm plain: 111/111 PASS",
+   "lock": "lock held for 1372 s"
+  },
+  {
+   "evidence": "omnigent-x86-active-test-attempt1.json",
+   "source_commit": "fdf68dd",
+   "exit": 0,
+   "elapsed_seconds": 1351.8,
+   "summary": "omnigent full flow x86 active test-mode: 118/118 PASS",
+   "lock": "lock held for 1218 s"
   },
   {
    "evidence": "omnigent-x86-enc-attempt1.json",
@@ -40,12 +56,36 @@
    "lock": "lock held for 805 s"
   },
   {
-   "evidence": "omnigent-arm-plain-attempt1.json",
-   "source_commit": "0eeb74b",
+   "evidence": "omnigent-x86-plain-attempt1.json",
+   "source_commit": "805ff1b",
+   "exit": 1,
+   "elapsed_seconds": 949.2,
+   "summary": "omnigent full flow x86 plain: 110/111 FAIL",
+   "lock": "lock held for 948 s"
+  },
+  {
+   "evidence": "omnigent-x86-plain-attempt3.json",
+   "source_commit": "bd0f630",
    "exit": 0,
-   "elapsed_seconds": 3225.8,
-   "summary": "omnigent full flow arm plain: 111/111 PASS",
-   "lock": "lock held for 1372 s"
+   "elapsed_seconds": 2627.0,
+   "summary": "omnigent full flow x86 plain: 112/112 PASS",
+   "lock": "lock held for 1713 s"
+  },
+  {
+   "evidence": "omnigent-x86-plain-secreview-fixes-attempt1.json",
+   "source_commit": "4d1a59b",
+   "exit": 1,
+   "elapsed_seconds": 2918.3,
+   "summary": "omnigent full flow x86 plain: 27/29 FAIL",
+   "lock": "lock held for 515 s"
+  },
+  {
+   "evidence": "omnigent-x86-plain-secreview-fixes-attempt2.json",
+   "source_commit": "e463fc5",
+   "exit": 0,
+   "elapsed_seconds": 1183.9,
+   "summary": "omnigent full flow x86 plain: 111/111 PASS",
+   "lock": "lock held for 869 s"
   }
  ],
  "not_covered_stated": [
@@ -56,5 +96,25 @@
   "server-data and pi-data are live exports during convert (CONTRACT B1-11, unchanged)",
   "leak scan cannot observe tokens the server issues to the runner itself"
  ],
- "commercial_acceptance": "not-complete"
+ "commercial_acceptance": "not-complete",
+ "iteration_2": {
+  "final_tip_code": "1c81437",
+  "security_review": "lane omnigent-secreview (SR-OWNER-1942): SR-1..SR-5; fixes cherry-picked (95b2338 65d8a51 40844ae f3b7d2c fb37656 + harness/evidence 9e5156e 1203cef 7452196 1f77388 04dd1ec); README corrected after the independent verifier (bd0f630)",
+  "lane_fixes": {
+   "ae29256": "DATA_REFUSED: HA rows this schema refuses -> incompatible, plain message, stderr never shown",
+   "1c81437": "verifier Low: names in the SR-1 message through hacommon.names",
+   "1b6228e/1ca1602": "own uid-1 SR-2b variant, reverted in favour of the review fix f95d34e (fb37656)"
+  },
+  "unit_tests": {
+   "tests/backup full suite (fdf68dd, heavy lock)": "1417 run; only the 10 pre-existing EMQX PRESERVATION_BLOCKER tests not ok",
+   "omnigent modules (final)": "OK",
+   "mutation check (final engine)": "25/25 caught (tests/backup/evidence/omnigent-product-20261123/mutation-check-final.json)",
+   "secreview v5 against DATA_REFUSED (lab store, real PostgreSQL 16.16)": "refused incompatible, no canary anywhere (secreview-v5-data-refused-lab.json)"
+  },
+  "real_runs_final_engine": [
+   "omnigent-arm-enc-attempt2.json",
+   "omnigent-x86-active-test-attempt1.json",
+   "omnigent-x86-plain-attempt3.json"
+  ]
+ }
 }
