@@ -2,6 +2,7 @@
 writes only Headscale's API keys, and what it wrote is copied out without following anything (CONTRACT section 9,
 section 10 rule 18). Team E2."""
 import os
+import re
 import sqlite3
 import tempfile
 import unittest
@@ -169,6 +170,50 @@ class ChildTests(unittest.TestCase):
             headscale_db(self.root / 'db.sqlite', prefixes=[])
             hasqlite.run([{'db': 'db.sqlite'}], {'db.sqlite': self.root / 'db.sqlite'}, self.root / 'work')
         self.assertEqual(popen.call_args.args[0][:4], [hasqlite.sys.executable, '-I', '-S', '-c'])
+
+    def test_python_without_os_unshare_uses_libc_and_still_fails_closed(self):
+        # Python < 3.12 has no os.unshare (Debian 12 ships 3.11, e.g. the ARM54 target, where the 2026-11-23 child
+        # stopped every import with NO_NETNS): the child makes the same system call through libc and still stops
+        # with NO_NETNS when it is refused. tests/e2e/lab/arm54_final_sandbox_probe.py runs it as root on 3.11.
+        child = hasqlite.CHILD
+        start, chroot = child.index('if os.geteuid() == 0:'), child.index('os.chroot(".")')
+        block = child[start:chroot]
+        self.assertIn('ctypes.CDLL(None, use_errno=True).unshare(0x40000000)', block)
+        self.assertIsNone(re.search(r'\bpass\b', block))
+        if os.geteuid() == 0:
+            self.skipTest('root may leave the network namespace; the refusal needs an unprivileged run')
+        code = ('import os\nif hasattr(os, "unshare"):\n    del os.unshare\n'
+                + block.replace('if os.geteuid() == 0:\n', 'if True:\n', 1) + 'print("continued")\n')
+        proc = hasqlite.subprocess.run([hasqlite.sys.executable, '-I', '-S', '-c', code], capture_output=True,
+                                       timeout=30)
+        self.assertEqual(proc.returncode, hasqlite.NO_NETNS)
+        self.assertNotIn(b'continued', proc.stdout)
+
+    def test_a_child_that_cannot_leave_the_network_stops_the_job(self):
+        # Run as root it must not fall back to the host's network (found by the 2026-11-23 review: the old child
+        # passed over a failed unshare and could connect to 127.0.0.1). Unprivileged tests check the order and the
+        # parent's mapping; tests/e2e/lab/hasqlite_sandbox_review.py runs the real child as root.
+        child = hasqlite.CHILD
+        start, chroot = child.index('os.unshare(os.CLONE_NEWNET)'), child.index('os.chroot(".")')
+        self.assertLess(start, chroot)
+        self.assertIn('os._exit(3)', child[start:chroot])
+        self.assertIsNone(re.search(r'\bpass\b', child[start:chroot]))
+        self.assertEqual(hasqlite.NO_NETNS, 3)
+        proc = hasqlite.subprocess.Popen([hasqlite.sys.executable, '-c', 'import sys; sys.exit(3)'],
+                                         stdout=hasqlite.subprocess.PIPE)
+        with self.assertRaises(BackupError) as caught:
+            hasqlite._read(proc, {'x.db'}, checkpoint=None, timeout=30, what='資料庫')
+        proc.stdout.close()
+        self.assertEqual(caught.exception.code, 'job-failed')
+        self.assertIn('切斷網路', caught.exception.message)
+        # The same status after an answer is a broken run, not a network refusal.
+        proc = hasqlite.subprocess.Popen([hasqlite.sys.executable, '-c',
+                                          'import json, sys; print(json.dumps({"db": "x.db"})); sys.exit(3)'],
+                                         stdout=hasqlite.subprocess.PIPE)
+        with self.assertRaises(BackupError) as caught:
+            hasqlite._read(proc, {'x.db'}, checkpoint=None, timeout=30, what='資料庫')
+        proc.stdout.close()
+        self.assertEqual(caught.exception.code, 'corrupt-archive')
 
 
 class ApiKeyTests(unittest.TestCase):

@@ -1,0 +1,194 @@
+{
+ "mode": "bomb-large",
+ "sqlite_version": "3.45.1",
+ "python": "3.12.3",
+ "euid": 0,
+ "hasqlite_sha256": "f6e6aef2e142608e0ac911b0a6105b8c85f9f2a659dc4991180f70773a4ed7d4",
+ "sandbox_probe": {
+  "returncode": 0,
+  "stderr_tail": "",
+  "prefix_sha256": "ebe2344fa8aa30e301d02554f0236daff0f83aa297e0e90328f2d6b4826a944d",
+  "ids": [
+   65534,
+   65534,
+   65534,
+   65534,
+   []
+  ],
+  "root_listing": [],
+  "visible:/etc/passwd": false,
+  "visible:/proc/self/status": false,
+  "visible:/engine": false,
+  "visible:/real": false,
+  "visible:/usr/bin/python3": false,
+  "loopback_listener": "blocked errno=101",
+  "interfaces": [
+   "lo"
+  ],
+  "fork": "blocked errno=11",
+  "setuid0": "blocked errno=1",
+  "chroot_again": "blocked errno=1",
+  "rlimits": {
+   "RLIMIT_AS": [
+    2147483648,
+    2147483648
+   ],
+   "RLIMIT_CPU": [
+    60,
+    60
+   ],
+   "RLIMIT_NOFILE": [
+    64,
+    64
+   ],
+   "RLIMIT_FSIZE": [
+    67108864,
+    67108864
+   ],
+   "RLIMIT_CORE": [
+    0,
+    0
+   ],
+   "RLIMIT_NPROC": [
+    0,
+    0
+   ]
+  }
+ },
+ "real_layout": {
+  "tables": 43,
+  "views": [
+   "messages_fts_src",
+   "messages_fts_trigram_src"
+  ],
+  "triggers": [
+   "sessions_runtime_ledger_delete_guard",
+   "messages_transcript_revision_update",
+   "messages_message_uid_insert",
+   "messages_display_order_insert",
+   "messages_display_visibility_update",
+   "messages_display_identity_update",
+   "messages_display_identity_delete",
+   "messages_fts_insert",
+   "messages_fts_delete",
+   "messages_fts_update",
+   "messages_fts_trigram_insert",
+   "messages_fts_trigram_delete",
+   "messages_fts_trigram_update"
+  ],
+  "virtual": {
+   "messages_fts": {
+    "name": "messages_fts",
+    "module": "fts5",
+    "args": "content,tool_name,tool_calls,content='messages_fts_src',content_rowid='id'"
+   },
+   "messages_fts_trigram": {
+    "name": "messages_fts_trigram",
+    "module": "fts5",
+    "args": "content,tool_name,content='messages_fts_trigram_src',content_rowid='id',tokenize='trigram'"
+   }
+  },
+  "messages_columns": [
+   "id",
+   "session_id",
+   "role",
+   "content",
+   "tool_call_id",
+   "tool_calls",
+   "tool_name",
+   "effect_disposition",
+   "timestamp",
+   "token_count",
+   "finish_reason",
+   "reasoning",
+   "reasoning_content",
+   "reasoning_details",
+   "codex_reasoning_items",
+   "codex_message_items",
+   "platform_message_id",
+   "observed",
+   "_compressed_summary",
+   "active",
+   "compacted",
+   "api_content",
+   "display_kind",
+   "display_metadata",
+   "display_identity",
+   "display_order",
+   "message_uid",
+   "absorbed_message_uids",
+   "tool_call_uids",
+   "tool_call_uid"
+  ],
+  "state_db_bytes": 593920
+ },
+ "real_official": {
+  "verdict": {
+   "cron.executions.db": "ok",
+   "kanban.db": "ok",
+   "response_store.db": "ok",
+   "runs_idempotency.db": "ok",
+   "shared-state.db": "ok",
+   "state.db": "ok"
+  },
+  "elapsed": 0.1,
+  "state_counts": {
+   "sessions": 5,
+   "messages": 15
+  },
+  "state_values": {
+   "hermes.schema_version": 32
+  }
+ },
+ "real_raw_state": {
+  "class": "ACCEPTED",
+  "elapsed": 0.08,
+  "error": "",
+  "check_head": [
+   "ok"
+  ]
+ },
+ "view_cpu_bomb": {
+  "declaration": "content,tool_name,tool_calls,content='messages_fts_src',content_rowid='id'",
+  "raw": {
+   "class": "ACCEPTED",
+   "elapsed": 0.1,
+   "error": "",
+   "check_head": [
+    "ok"
+   ]
+  },
+  "official": {
+   "verdict": {
+    "state.db": "ok"
+   },
+   "elapsed": 0.06,
+   "state_counts": {
+    "sessions": 5,
+    "messages": 15
+   },
+   "state_values": {
+    "hermes.schema_version": 32
+   }
+  }
+ },
+ "large": {
+  "generator_seconds": 96.8,
+  "db_bytes": 273907712,
+  "messages_added": 60000,
+  "official": {
+   "verdict": {
+    "state.db": "ok"
+   },
+   "elapsed": 6.83,
+   "state_counts": {
+    "sessions": 5,
+    "messages": 60015
+   },
+   "state_values": {
+    "hermes.schema_version": 32
+   }
+  }
+ },
+ "total_seconds": 104.2
+}

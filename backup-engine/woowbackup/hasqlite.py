@@ -3,13 +3,17 @@ only by a child process that dropped its privileges -- the pattern of ha_n8n's S
 1 importers (CONTRACT section 9 "Home Assistant import", section 10 rule 18). Owner: E2.
 
 `run(specs, files, work_dir, ...)` copies `files` ({name: staged path}) into a new folder `work_dir`, hands it to the
-account nobody and starts CHILD (`python3 -I -S`): as root it leaves the network namespace, chroots into the folder
+account nobody and starts CHILD (`python3 -I -S`): as root it leaves the network namespace (os.unshare, or libc's
+unshare on Python < 3.12; a child that cannot leave it stops with NO_NETNS before it opens anything, and the job
+stops: no unisolated fallback), chroots into the folder
 (SQLite opens the copies by name; the job's 0700 staging above them stays out of reach), drops every group and its
 ids, then sets CPU, memory, file size, open-file and process limits before it opens anything. Every database is
 opened read-write on its own copy (a WAL or hot journal is applied there, never in staging) with
 `SQLITE_DBCONFIG_DEFENSIVE`, `trusted_schema=OFF`, `cell_size_check=ON` and no mmap; only ordinary tables are ever
 read (never a view, a virtual table or its shadow tables), with explicit columns. The Hermes state.db quick check
-accepts only known FTS5 declarations; it does not query those tables or validate their search index contents. A database that is only read is
+accepts only known FTS5 declarations. SQLite's quick_check then also runs FTS5's own check of those indexes (their
+structure and segment pages, parsed here in the sandbox); it does not compare an index with its content views and
+never runs those views (verified 2026-11-23 with SQLite 3.45.1). A database that is only read is
 `query_only`. The child answers one JSON line per database and `{"end": true}`; this process never opens a database
 itself.
 
@@ -42,6 +46,7 @@ MEMORY = 2 * 1024 * 1024 * 1024
 MAX_LINE = 32 * 1024 * 1024
 MAX_DBS = 64
 MAX_OUTPUT_FILE = 16 * 1024 ** 3
+NO_NETNS = 3            # CHILD's exit status when, as root, it cannot leave the network namespace
 
 # Fixed reads by name, sent to the child with the request (no other SQL ever is): (table, required columns,
 # statement, kind); a table that is not an ordinary one or lacks a column answers None.
@@ -62,8 +67,13 @@ request = json.loads(sys.stdin.read(4 * 1024 * 1024))
 if os.geteuid() == 0:
     try:
         os.unshare(os.CLONE_NEWNET)
-    except (AttributeError, OSError):
-        pass
+    except AttributeError:
+        # Python < 3.12 (Debian 12: 3.11) has no os.unshare: the same system call through libc, still fail-closed.
+        import ctypes
+        if ctypes.CDLL(None, use_errno=True).unshare(0x40000000) != 0:  # CLONE_NEWNET, <linux/sched.h>
+            os._exit(3)  # NO_NETNS
+    except OSError:
+        os._exit(3)  # NO_NETNS: never read an archive's databases with the host's network
     os.chroot(".")
     os.chdir("/")
     os.setgroups([])
@@ -348,7 +358,10 @@ def _read(proc, expected, *, checkpoint, timeout, what):
         if doc.get('db') not in expected or doc['db'] in answers:
             raise bad
         answers[doc['db']] = doc
-    if proc.wait(timeout=60) != 0 or not ended or set(answers) != expected:
+    status = proc.wait(timeout=60)
+    if status == NO_NETNS and not answers and not ended:
+        raise BackupError('job-failed', f'無法替讀取 HA 備份中的{what}的程序切斷網路（隔離失敗），已停止，沒有讀取任何資料。')
+    if status != 0 or not ended or set(answers) != expected:
         raise bad
     return answers
 
