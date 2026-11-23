@@ -120,6 +120,18 @@ class World(fk.World):
         """The boot form (ha_emqx.BOOT_CONFIG_EXPR) of `config` as `role` answers it: no schema defaults here."""
         return config
 
+    def schedulers(self, role):
+        """(total, online) as `role`'s VM answers ha_emqx.VM_EXPR: this device 4/4; a throwaway runs with half the CPUs
+        (tempctr --cpus) and so 2 online, unless its last `podman run` gave ERL_FLAGS "+S total:online"."""
+        if role == 'woow-emqx':
+            return 4, 4
+        flags = [value[len('ERL_FLAGS='):] for run_role, _image, _command, options in self.runs if run_role == role
+                 for value in options.get('--env', []) if value.startswith('ERL_FLAGS=')]
+        if flags and flags[-1].startswith('+S '):
+            total, online = flags[-1][3:].split(':')
+            return int(total), int(online)
+        return 4, 2
+
     def user_ids(self, user):
         return b'1000\n1000\n'
 
@@ -150,6 +162,8 @@ class World(fk.World):
     def evaluate(self, role, expression):
         if expression == ha_emqx.ETC_EXPR:
             return b'WOOWETC:/opt/emqx/etc:ENDok\n'
+        if expression == ha_emqx.VM_EXPR:
+            return 'WOOWVM:{}:{}:END\nok\n'.format(*self.schedulers(role)).encode()
         if expression == ha_emqx.TABLES_RECEIPT_EXPR:
             return receipt_text(RECEIPT)
         if expression == ha_emqx.CONFIG_EXPR:

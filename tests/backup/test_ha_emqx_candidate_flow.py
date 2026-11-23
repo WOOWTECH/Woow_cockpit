@@ -53,6 +53,8 @@ class Transport:
         if args[2:] == ('emqx', 'eval', emqx.BOOT_CONFIG_EXPR):   # no schema defaults here: same answer, no event
             assert kwargs['max_output'] == emqx.MAX_HOCON
             return self.live_response or response(self.config)
+        if args[2:] == ('emqx', 'eval', emqx.VM_EXPR):   # this device's schedulers (total, online); no event
+            return Result(0, b'WOOWVM:4:4:END\nok\n', b'')
         assert args[2:] == ('emqx', 'eval', emqx.CONFIG_EXPR)
         assert kwargs['max_output'] == emqx.MAX_HOCON
         self.events.append('read-live')
@@ -89,9 +91,15 @@ class Transport:
     def run(self, *args, **kwargs):
         assert 'authz/custom.acl' in self.seed
         assert 'certs/lab.pem' in self.seed
+        self.run_env = dict(kwargs.get('env') or {})
         self.events.append('start')
 
     def exec(self, role, command, **kwargs):
+        if command == ['emqx', 'eval', emqx.VM_EXPR]:
+            # The candidate's VM: half the CPUs (tempctr --cpus) give 2 online schedulers unless ERL_FLAGS sets them.
+            flags = getattr(self, 'run_env', {}).get('ERL_FLAGS', '')
+            counts = flags[3:].encode() if flags.startswith('+S ') else b'4:2'
+            return Result(0, b'WOOWVM:' + counts + b':END\nok\n', b'')
         if command == ['emqx', 'eval', emqx.BOOT_CONFIG_EXPR]:
             # The generated transport has no schema defaults: its boot form is its raw configuration (no event, so
             # the recorded read sequences stay those of the plain reads).

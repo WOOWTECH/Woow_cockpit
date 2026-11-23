@@ -404,6 +404,85 @@ class EnvironmentFileTests(unittest.TestCase):
         self.assertIn('無法讀取', caught.exception.message)
 
 
+class SchedulerWorld(base.World):
+    """dev-d 2026-11-24 attempt-08: EMQX 5.8.9 fills dashboard.listeners.{http,https}.num_acceptors at boot from the
+    VM's online schedulers (emqx_dashboard_schema.erl:125-131) and keeps it in the raw configuration; the throwaway
+    candidate runs with half the CPUs (tempctr --cpus) and so has fewer of them than this device (World.schedulers)."""
+    candidate_obeys_flags = True
+
+    def schedulers(self, role):
+        if role == 'emqx-new' and not self.candidate_obeys_flags:
+            return 4, 2
+        return super().schedulers(role)
+
+    def evaluate(self, role, expression):
+        answer = super().evaluate(role, expression)
+        if role not in ('woow-emqx', 'emqx-new') or expression not in (ha_emqx.CONFIG_EXPR, ha_emqx.BOOT_CONFIG_EXPR):
+            return answer
+        config = json.loads(base64.b64decode(answer[8:].split(b':END')[0]))
+        online = self.schedulers(role)[1]   # a dashboard root written at runtime (cluster.hocon) keeps its own value
+        config.setdefault('dashboard', {'listeners': {kind: {'num_acceptors': online} for kind in ('http', 'https')}})
+        return b'WOOWCFG:' + base64.b64encode(json.dumps(config).encode()) + b':ENDok\n'
+
+
+class SchedulerTests(base.EmqxCase):
+    """The candidate starts with this device's scheduler counts (ha_emqx.VM_EXPR -> ERL_FLAGS "+S total:online"), so
+    the defaults EMQX derives from them are this device's; a candidate that does not answer them is refused."""
+    world_class = SchedulerWorld
+
+    def setUp(self):
+        super().setUp()
+        self.world.target_config['authorization']['sources'] = copy.deepcopy(base.BUILTIN_TARGET)
+        self.world.current_config = copy.deepcopy(self.world.target_config)
+
+    def test_the_candidate_runs_with_this_devices_schedulers(self):
+        done = self.convert(self.upload_emqx(state='stopped'), ['emqx'])
+        self.assertTrue(done['backup_id'])
+        env = self.runs('emqx-new')[0][3].get('--env', [])
+        self.assertIn('ERL_FLAGS=+S 4:4', env)
+        self.assertEqual([e for e in env if e.startswith('ERL_')], ['ERL_FLAGS=+S 4:4'], 'one Erlang flag, no other')
+        self.assertNotIn('dashboard', self.world.current_config,
+                         'the candidate already had this device\'s dashboard settings: nothing of it was written '
+                         '(its raw root carries dashboard.default_password from the env)')
+        section = next(app for app in self.archive.writes[-1]['manifest']['apps'] if app['id'] == 'emqx')
+        device = {'dashboard': {'listeners': {kind: {'num_acceptors': 4} for kind in ('http', 'https')}}}
+        self.assertEqual(section['import_check']['config_roots']['dashboard'],
+                         ha_emqx.config_roots(device)['dashboard'], 'the readback holds this device\'s values')
+        for role in ('woow-emqx', 'emqx-new'):
+            self.assertIn((role, ['emqx', 'eval', ha_emqx.VM_EXPR]), [(r, c) for r, c, _d in self.world.execs])
+
+    def test_a_candidate_with_other_schedulers_is_refused(self):
+        self.world.candidate_obeys_flags = False
+        with self.assertRaises(BackupError) as caught:
+            self.convert(self.upload_emqx(state='stopped'), ['emqx'])
+        self.assertEqual(caught.exception.code, 'incompatible')
+        self.assertEqual(caught.exception.message, 'EMQX 候選的執行環境（排程器數量）和這台不同，已停止。')
+        self.assertEqual(self.storage.list_backups(), [])
+
+    def test_a_device_answer_that_is_not_exact_refuses(self):
+        self.assertEqual(ha_emqx.schedulers(answer(b'WOOWVM:4:4:END\nok\n')), (4, 4))
+        self.assertEqual(ha_emqx.schedulers(answer(b'WOOWVM:6:2:ENDok\n')), (6, 2))
+        self.assertEqual(ha_emqx.schedulers(answer(b'WOOWVM:1024:1:END\n')), (1024, 1))
+        for raw, code in ((b'WOOWVM:2:4:END\nok\n', 0), (b'WOOWVM:0:0:END\nok\n', 0), (b'WOOWVM:2048:4:END\nok\n', 0),
+                          (b'WOOWVM:04:4:END\nok\n', 0), (b'WOOWVM:4:4:END\nnot ok\n', 0), (b'WOOWVM:4:4\nok\n', 0),
+                          (b'WOOWVM:4:x:END\nok\n', 0), (b'WOOWVM:4:4:4:END\nok\n', 0), (b'ok\n', 0),
+                          (b'WOOWVM:4:4:END\nok\n', 1)):
+            with self.subTest(raw=raw, code=code):
+                with self.assertRaises(BackupError) as caught:
+                    ha_emqx.schedulers(answer(raw, code))
+                self.assertEqual(caught.exception.message, '無法安全取得 EMQX 的執行環境（排程器數量），已停止。')
+
+    def test_a_device_without_a_scheduler_answer_is_refused_before_any_candidate(self):
+        real = self.world.evaluate
+        self.world.evaluate = lambda role, expression: (b'ok\n' if expression == ha_emqx.VM_EXPR
+                                                        else real(role, expression))
+        with self.assertRaises(BackupError) as caught:
+            self.convert(self.upload_emqx(state='stopped'), ['emqx'])
+        self.assertEqual(caught.exception.message, '無法安全取得 EMQX 的執行環境（排程器數量），已停止。')
+        self.assertEqual(self.runs('emqx-new'), [])
+        self.assertEqual(self.storage.list_backups(), [])
+
+
 class ConvertReadbackTests(base.EmqxCase):
     def setUp(self):
         super().setUp()

@@ -640,6 +640,36 @@ def boot_form(execute):
     return read_effective_config(execute, _expr=BOOT_CONFIG_EXPR)
 
 
+# Fixed expression: a running broker's scheduler threads (total, online). EMQX 5.8.9 derives schema defaults from them
+# and a boot stores those in the raw configuration (emqx_config.erl:341,345): dashboard.listeners.{http,https}.
+# num_acceptors = schedulers_online (emqx_dashboard_schema.erl:125-131), node.broker_pool_size = 2 x schedulers and
+# generic_pool_size = schedulers (emqx_conf_schema.erl:688-706, emqx_vm.erl:174-175). The candidate runs with fewer CPUs
+# (tempctr --cpus), so the VM gives it fewer online schedulers (dev-d 2026-11-24 attempt-08: `dashboard` differed); it
+# therefore starts with this device's counts (ERL_FLAGS "+S total:online", passed on by bin/emqx:472,1212).
+VM_EXPR = ('io:format("WOOWVM:~b:~b:END~n", '
+           '[erlang:system_info(schedulers), erlang:system_info(schedulers_online)]).')
+MAX_SCHEDULERS = 1024
+
+
+def schedulers(execute):
+    """(total, online) scheduler threads of a running broker (VM_EXPR); anything else refuses."""
+    try:
+        result = execute(['emqx', 'eval', VM_EXPR])
+        body = result.stdout or b''
+        if result.returncode or not body.startswith(b'WOOWVM:'):
+            raise ValueError()
+        counts, tail = body[7:].split(b':END', 1)
+        if tail.strip() not in (b'', b'ok'):
+            raise ValueError()
+        match = re.fullmatch(rb'([1-9][0-9]{0,3}):([1-9][0-9]{0,3})', counts)
+        total, online = int(match.group(1)), int(match.group(2))
+        if not online <= total <= MAX_SCHEDULERS:
+            raise ValueError()
+        return total, online
+    except (BackupError, ValueError, TypeError, AttributeError):
+        raise BackupError('incompatible', '無法安全取得 EMQX 的執行環境（排程器數量），已停止。') from None
+
+
 def bootstrap_references(config, mounts, secrets):
     """Only built-in password database bootstrap files from existing explicit mounts.
 
@@ -924,12 +954,16 @@ def candidate_from_target(work, app, tmp, target, staging, export, ids, *, hint=
     original,snapshot,fingerprints=capture_target_seed(work,app,target,staging)
     # This device's configuration as its next boot will read it (a source added in the Dashboard since the last
     # restart reads its defaults only then): the candidate, booted from the snapshot, must equal THIS form.
-    target_boot=boot_form(lambda command: work.runner(app).podman('exec', target.container, *command, timeout=120,
-                                                                   max_output=MAX_HOCON, check=False))
+    device=lambda command: work.runner(app).podman('exec', target.container, *command, timeout=120,
+                                                   max_output=MAX_HOCON, check=False)
+    target_boot=boot_form(device)
+    # ... and the candidate starts with this device's scheduler counts, which some of those defaults come from.
+    target_vm=schedulers(device)
     observe=getattr(work,'_emqx_build_stage',None)
     if observe is not None:observe('target_runtime')
     return target_broker(work,tmp,target,export,ids,hint=hint,
-        target_snapshot=snapshot,target_config=original,image_fingerprints=fingerprints,target_boot=target_boot)
+        target_snapshot=snapshot,target_config=original,image_fingerprints=fingerprints,target_boot=target_boot,
+        target_vm=target_vm)
 
 def candidate_with_effective_acl(work, app, tmp, target, staging, export, ids, authorization, *, hint=''):
     """Stage known file ACL references and seed a candidate; not a complete preservation check.
@@ -1234,11 +1268,13 @@ def check_candidate_bootstrap(tmp, target, config):
 
 
 def target_broker(work, tmp, target, export, ids, *, hint='', target_snapshot=None, target_config=None,
-                  image_fingerprints=None, target_boot=None):
+                  image_fingerprints=None, target_boot=None, target_vm=None):
     """This device's broker on an empty volume: import HA's export, load the strict settings back, verify.
 
     `target_boot`: this device's configuration in its boot form (boot_form); the candidate, just booted from the
-    snapshot, must equal it. Without it the plain raw configuration must be equal (callers that read no boot form)."""
+    snapshot, must equal it. Without it the plain raw configuration must be equal (callers that read no boot form).
+    `target_vm`: this device's (total, online) schedulers (schedulers); the candidate starts with them and must answer
+    them before anything is compared."""
     name = os.path.basename(export)
     snapshot_digests = snapshot_file_digests(target_snapshot) if target_snapshot is not None else None
     tmp.volume('emqx-in')
@@ -1249,6 +1285,8 @@ def target_broker(work, tmp, target, export, ids, *, hint='', target_snapshot=No
     tmp.volume('emqx-new-log')
     # The product's Target adds its EnvironmentFile= settings; internal callers' target objects carry their env as given.
     env = target.candidate_env() if isinstance(target, Target) else target.env
+    if target_vm is not None:   # Target.env holds EMQX_* settings only: this is the candidate's one Erlang flag
+        env = dict(env, ERL_FLAGS=f'+S {target_vm[0]}:{target_vm[1]}')
     tmp.run('emqx-new', target.image, [], detach=True, read_only_root=True, env=env, secrets=target.secrets,
             volumes=[(tmp.name('emqx-new'), DATA_TARGET, None), (tmp.name('emqx-new-log'), LOG_TARGET, None),
                      (tmp.name('emqx-in'), WORK, None)] + target.files)
@@ -1256,6 +1294,8 @@ def target_broker(work, tmp, target, export, ids, *, hint='', target_snapshot=No
     ticker_pid = quiesce_system_ticker(tmp, 'emqx-new')
     read_candidate = lambda command: tmp.exec('emqx-new', command, timeout=120,
                                                max_output=MAX_HOCON, check=False)
+    if target_vm is not None and schedulers(read_candidate) != target_vm:
+        raise BackupError('incompatible', 'EMQX 候選的執行環境（排程器數量）和這台不同，已停止。')
     if image_fingerprints is not None and tls_fingerprints(read_candidate, image_fingerprints) != image_fingerprints:
         raise BackupError('incompatible', 'EMQX 候選憑證與目標不一致，已停止。')
     if target_config is not None:

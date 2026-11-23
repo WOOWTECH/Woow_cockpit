@@ -1973,8 +1973,12 @@ PostgreSQL 15).
    snapshotted (an override that is absent stays absent, proven by a complete volume traversal); configuration and
    override state are read again afterwards and must be unchanged. The candidate is the live image with the Quadlet's
    `EMQX_*` environment, its `Secret=` mounts and its read-only host files, the snapshot in an otherwise empty data
-   volume and the export (owned by the image's emqx user) at `/work/in`; before anything is imported its
-   `EMQX_ETC_DIR`, effective configuration and image TLS fingerprints must equal this device's. `emqx ctl data import`
+   volume and the export (owned by the image's emqx user) at `/work/in`. It starts with this device's scheduler
+   counts (fixed `emqx eval` of `erlang:system_info(schedulers)` and `schedulers_online` on the running broker,
+   passed as `ERL_FLAGS="+S total:online"`, bin/emqx:472,1212): a boot stores schema defaults derived from them in
+   the raw configuration (Dashboard listeners' `num_acceptors` = online schedulers, emqx_dashboard_schema.erl:125-131;
+   node pool sizes, emqx_conf_schema.erl:688-706) and the candidate runs under `--cpus`. Before anything is imported
+   its scheduler counts, `EMQX_ETC_DIR`, effective configuration and image TLS fingerprints must equal this device's. `emqx ctl data import`
    must say "imported successfully". Then this device's settings come back: every root that is not HA data
    (`DATA_ROOTS`), and `authorization`, is loaded back exactly as it was (`emqx ctl conf load --replace`, no merge of
    stale fields); the bootstrap file of this device's built-in authenticator is re-attached to HA's matching
