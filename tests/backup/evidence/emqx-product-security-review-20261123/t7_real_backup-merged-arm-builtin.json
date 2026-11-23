@@ -1,0 +1,62 @@
+{
+ "attempt": "t7_real_backup-merged-arm-builtin",
+ "code": "git merge-tree of feat/ha-import-emqx-product-20261123 7449540 (product READY) + sec/emqx-secreview-20261123 7b173af = tree 99b7cae (the final code once the product lane merges)",
+ "commercial_acceptance": "not-complete",
+ "exit": 0,
+ "ha_emqx_py_sha256": "0a3924dbb9edd1908bd958819380b818064cd8186be5943f0aa99072f8a945d3",
+ "network": "none",
+ "result": {
+  "addon_slug": "1b7b4ce7_woow-emqx",
+  "addon_versions": [
+   "5.9.1"
+  ],
+  "arch": "arm",
+  "candidate_connectors": 1,
+  "candidate_rules": 2,
+  "codebase": "merged",
+  "conversion": "PASSED (candidate built, all product checks green)",
+  "device_sources": "builtin",
+  "elapsed_s": 568.2,
+  "fixture": "woow-b1-arm-emqx-stopped-enc.tar",
+  "fixture_sha256_prefix": "b6eb257cc5790bee",
+  "ha_counts": {
+   "emqx_acl": 4,
+   "emqx_admin": 2,
+   "emqx_app": 1,
+   "emqx_authn_mnesia": 3,
+   "emqx_authn_scram_mnesia": 0,
+   "emqx_banned": 1,
+   "emqx_banned_rules": 0,
+   "emqx_psk": 0,
+   "emqx_retainer_message": 5
+  },
+  "ha_node": "emqx@127.0.0.1",
+  "ha_roots_exported": [
+   "actions",
+   "authentication",
+   "authorization",
+   "auto_subscribe",
+   "bridges",
+   "connectors",
+   "exhook",
+   "gateway",
+   "psk_authentication",
+   "retainer",
+   "rewrite",
+   "rule_engine",
+   "sources",
+   "topic_metrics"
+  ],
+  "image": "docker.io/emqx/emqx:5.8.9",
+  "network": "none",
+  "readback_profile": [
+   "file",
+   "built_in_database"
+  ],
+  "readback_roots": 44,
+  "store": "labpodman (separate --root)",
+  "test": "T7 real batch-1 HA backup through the fixed conversion"
+ },
+ "stdout_sha256": "3b8bbecb4852b3d35660c7b9713133be7f294056b036b69610e162123e95fd7b",
+ "store": "labpodman (separate --root); throwaway objects removed after the run"
+}

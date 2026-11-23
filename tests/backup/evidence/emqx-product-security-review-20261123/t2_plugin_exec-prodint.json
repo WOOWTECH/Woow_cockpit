@@ -1,0 +1,27 @@
+{
+ "attempt": "t2_plugin_exec-prodint",
+ "code": "integration ae5420d + emqx-product product-engine.patch (sha256 442dd509...2954); no security fix",
+ "commercial_acceptance": "not-complete",
+ "exit": 0,
+ "ha_emqx_py_sha256": "d5551f65eee0760b8ad4305ede037e6fd69ae5887edce209dabdbd98fa614b73",
+ "network": "none",
+ "note": "stdout was printed in the review session and not saved; result JSON written by the harness",
+ "result": {
+  "code_executed": true,
+  "codebase": "prodint",
+  "elapsed_s": 125.0,
+  "ha_broker": "started+exported",
+  "image": "docker.io/emqx/emqx:5.8.9",
+  "marker_in_src_volume": "SECREV-PLUGIN-RAN node='emqx@127.0.0.1' uid=0",
+  "marker_in_work_volume": "SECREV-PLUGIN-RAN node='emqx@127.0.0.1' uid=0",
+  "network": "none",
+  "node": "emqx@127.0.0.1",
+  "node_blocker": null,
+  "plugin_running": true,
+  "plugins_list_has_secrev": true,
+  "store": "labpodman (separate --root)",
+  "test": "T2 plugin code execution in the HA broker (B1-06)"
+ },
+ "stdout_sha256": null,
+ "store": "labpodman (separate --root); throwaway objects removed after the run"
+}

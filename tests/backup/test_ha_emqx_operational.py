@@ -154,7 +154,7 @@ class OperationalTests(unittest.TestCase):
                     return flow.Result(0, b'a' * 64 + b'  ' + args[3].encode() + b'\n', b'')
                 return super().podman(*args, **kwargs)
             def exec(self, role, command, **kwargs):
-                if command[0] == 'sha256sum':
+                if command[0] == 'sha256sum' and not command[1].startswith('/opt/emqx/data/'):
                     self.events.append('tls-candidate')
                     return flow.Result(0, b'a' * 64 + b'  ' + command[1].encode() + b'\n', b'')
                 return super().exec(role, command, **kwargs)
@@ -173,7 +173,7 @@ class OperationalTests(unittest.TestCase):
                     return flow.Result(0, b'a' * 64 + b'  ' + args[3].encode() + b'\n', b'')
                 return super().podman(*args, **kwargs)
             def exec(self, role, command, **kwargs):
-                if command[0] == 'sha256sum':
+                if command[0] == 'sha256sum' and not command[1].startswith('/opt/emqx/data/'):
                     return flow.Result(0, b'b' * 64 + b'  ' + command[1].encode() + b'\n', b'')
                 return super().exec(role, command, **kwargs)
         transport = TLS()
@@ -196,7 +196,7 @@ class OperationalTests(unittest.TestCase):
                     return flow.Result(0, b'a' * 64 + b'  ' + args[3].encode() + b'\n', b'')
                 return super().podman(*args, **kwargs)
             def exec(self, role, command, **kwargs):
-                if command[0] == 'sha256sum':
+                if command[0] == 'sha256sum' and not command[1].startswith('/opt/emqx/data/'):
                     digest = b'b' if 'import' in self.events else b'a'
                     return flow.Result(0, digest * 64 + b'  ' + command[1].encode() + b'\n', b'')
                 return super().exec(role, command, **kwargs)
