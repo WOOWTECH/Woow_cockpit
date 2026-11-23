@@ -1987,8 +1987,16 @@ PostgreSQL 15).
    『內建資料庫』權限，HA 的裝置權限搬過去不會生效，裝置會被拒絕。請先在 Podman EMQX 的管理頁「存取控制 → 授權」新增
    「內建資料庫」（排在檔案規則之後），再匯入。」: by the check as the app's blocker (nothing changed) and by the
    conversion, which reads this device's profile before anything runs and stops as soon as HA's rows are counted,
-   before any candidate; the finished candidate must hold the profile read before the build. The final effective
-   configuration must equal this device's in every preserved root; node, rpc and cluster never change; an enabled authenticator must remain (no
+   before any candidate; the finished candidate must hold the profile read before the build. Security review
+   2026-11-23: HA's broker runs with `EMQX_PLUGINS__STATES=[]` and the image's plugin folder pinned through the
+   environment (it wins over cluster.hocon; EMQX 5.8.9 starts every enabled plugin at boot) and all its volumes
+   `noexec,nosuid,nodev` (SR-1); after this device's settings came back the candidate is refused (`incompatible`,
+   with a message naming what) when a data-volume file of this device's snapshot other than `configs/cluster.hocon`
+   is not byte-identical (SR-2: HA's export inlines HA's file ACL and the import would rewrite this device's), when a
+   value in the roots HA's import brought uses EMQX's `file://` secret loader (SR-3), when a migrated rule calls `jq`
+   (SR-6: jq reads the broker's environment), or when an enabled authenticator other than the built-in database
+   (`password_based`/`scram`) or an enabled ExHook server remains (SR-7: they receive every client's credentials).
+   The final effective configuration must equal this device's in every preserved root; node, rpc and cluster never change; an enabled authenticator must remain (no
    anonymous login); every table holds at least HA's rows and at most HA's plus what the empty broker seeded. HA's
    API keys replace this device's. The candidate's fixed `emqx eval` reads are bounded at 120 s each (the vendor CLI
    itself waits without a limit, bin/nodetool); their output bounds are unchanged.
