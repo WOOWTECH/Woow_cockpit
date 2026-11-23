@@ -67,6 +67,11 @@ caller allows (`Select.absolute_symlinks`) and new HA-side secrets are never rea
 (`hasqlite`, §9, §10 rule 18). Odoo and n8n behave exactly as before; every existing shape is unchanged except that the app id
 enumerations (`apps`, `importable_apps[].app_id`, `HaCheck.apps[].app_id`, `HaImport.apps`) gain the four ids, and `HaCheck` /
 `reminders_by_app` gain the new apps' sections and lines.
+Revised 2026-11-23 (branch `feat/ha-import-opendesign-20261123`, engine and page; owner decision 「決定2 A」): the HA
+import takes the WOOWTECH **OpenDesign** add-on (`woow_ha_opendesign` → `open-design`, §9 "Batch 2: OpenDesign"): the
+registry gains its importer (MCP admin `opendesign-mcp-admin`; the MCP server is built into the add-on), the SQLite
+child two fixed reads (`opendesign.project_folders`, `opendesign.routines_active`), the app id enumerations
+`open-design`, `HaCheck` the `open-design` section and the page its facts. Every other shape is unchanged.
 Revised 2026-11-18 (branch `feat/ha-import`, part A: engine) for **importing Home Assistant backups** (owner decisions
 2026-11-18: Cockpit reads a Home Assistant OS backup file itself; only the WOOWTECH Odoo and n8n add-ons; x86 only; the
 HA key is pasted for each import and never stored): an uploaded HA backup is recognised by `upload-finish` and kept in
@@ -982,10 +987,10 @@ Shapes:
   `…Z`), `type("full"|"partial"), supervisor_version, protected(bool)` (what backup.json says), `compressed(bool),
   addons[{slug, name, version, encrypted(bool)}]` (`encrypted`: from the member's first bytes), `folders[str], size,
   sha256, uploaded_at, filename` (display only: the uploaded name when it is a plain file name, else
-  `ha-backup-<YYYYMMDD-HHMMSS>.tar`), plus the derived `importable_apps[{slug, app_id("odoo"|"n8n"|"omnigent"|"hermes"|"emqx"|"headscale"), app_name,
+  `ha-backup-<YYYYMMDD-HHMMSS>.tar`), plus the derived `importable_apps[{slug, app_id("odoo"|"n8n"|"omnigent"|"hermes"|"emqx"|"headscale"|"open-design"), app_name,
   installed(bool)}]` (WOOWTECH add-ons this engine can import, §5; `installed`: this device's catalog has `app_id`;
   `app_name` from the catalog, else 「Odoo 18」/「n8n 工作流程」/「Omnigent 協作平台」/「Hermes 代理」/「EMQX MQTT 代理」/
-  「Headscale VPN 控制伺服器」) and `other_addons[{slug, name, version}]` (add-ons without
+  「Headscale VPN 控制伺服器」/「OpenDesign 設計工具」) and `other_addons[{slug, name, version}]` (add-ons without
   an app here: 「這台沒有對應的應用」).
 * `HaCheck` (part B): `ha_backup_id, apps[{app_id, slug, name (the add-on's name), arch("amd64"|"aarch64"|"unknown"),
   version (the add-on's), target_version (Odoo: the target image's `18.0-YYYYMMDD`; n8n: its `n8n --version`), ok(bool),
@@ -1003,7 +1008,11 @@ Shapes:
   api_keys, banned, psk, retained_messages, default_dashboard_password(bool), anonymous(bool), hot_backup(bool: the
   backup was made while EMQX ran, or its state is unknown), plugins[], ha_hosts[]},
   headscale?{headscale_version, target_version, db_version, users, nodes, pre_auth_keys, api_keys (HA's, not moved),
-  policies, prefixes{v4, v6} (HA's), server_url (HA's), target_server_url, dns_records}}]` (batch 1: `target_version` is
+  policies, prefixes{v4, v6} (HA's), server_url (HA's), target_server_url, dns_records},
+  open-design?{open-design_version (HA's, from the add-on version), source_revision, target_version, target_revision
+  (8 hex each), files, bytes, dirs, symlinks, hardlinks, skipped_symlinks, projects, conversations, messages,
+  routines, routines_active, project_folders, mcp_servers, shared, ha_urls[("<file>：<host>")], left_out{<top-level
+  name>: entries}}}]` (batch 2: `target_version` of OpenDesign is the live image's `OD_APP_VERSION`; batch 1: `target_version` is
   the live server's `/v1/info` version for Omnigent, the live image's Hermes base tag, the live image's version label
   for EMQX and Headscale) — an app
   is `ok` only without blockers (Odoo: and at least one database `ok`); a blocker is a plain sentence (unknown processor, app
@@ -1972,6 +1981,44 @@ PostgreSQL 15).
 **Packaging**: per app `adapter.import_manifest` adds the live non-data items exactly as a backup reads them (images
 list, secrets, config files, Quadlet files, `catalog_entry`, `catalog_sha256`), so `match_items` finds every item and
 the restore's settings check says `same`; then `flows._package` (§8 "Home Assistant import jobs").
+
+**Batch 2: OpenDesign** (branch `feat/ha-import-opendesign-20261123`; `ha_opendesign.py`; owner decision 2026-11-23
+「決定2 A」; facts `phase3/facts/opendesign.md`). Add-on `woow_ha_opendesign` (its slug holds `_`: the member is found by
+the slug after the repository prefix and must carry `system.slug` `woow_ha_opendesign`) → app `open-design`: volumes
+`open-design_open_design_data` (at `/app/.od` of the `open-design` container, `keep-id`) and `open-design_mcp_data`
+(at `/data/mcp`); no database server (the daemon keeps `app.sqlite`, WAL mode, and plain files).
+1. Versions: the data has no version stamp and the daemon migrates `app.sqlite` forward silently, so the add-on version
+   maps to the WoowTech fork revision of the OpenDesign core it ships (0.2.15 → OpenDesign 0.24.1, fork
+   `05b23f5a5259d4f2c22e5c6e3eb92ce9103ed34a`) and that revision must equal the live image's label
+   `io.woow.opendesign.source-revision` (a shorter label must be a prefix of it); `OD_APP_VERSION` of the image is
+   shown. An add-on version the table does not know, a missing label or another revision is a blocker.
+2. One pass over `data/opendesign/**` (never `data/mcp/**` nor `data/options.json`). Moved (owner decisions O4, O5 =
+   the facts' recommended answers): `app.sqlite` with `-wal`/`-journal` (never `-shm`), `projects/ runs/ artifacts/
+   chat-artifact-blobs/ critique-artifacts/ design-systems/ design-templates/ brands/ library/ memory/ skills/ plugins/
+   connectors/`, `mcp-config.json` (every `/data/opendesign` path in its strings remapped to `/app/.od`),
+   `mcp-tokens.json`, `mcp-oauth-clients.json`, `media-config.json`, `app-config.json` (HA's preferences with this
+   device's `installationId`, `agentCliEnv`, `agentCliEnvIntent`; project locations and recent folders below
+   `/data/opendesign` remapped, others dropped with a warning), and HA's `shared/workspaces/**`, `shared/skills/**`
+   copied inert. Left out: `home/` (agent logins, O1), `paseo/`, `integrations/` (Paseo pairing and Omnigent host
+   identity, O2), `installation.json`, `diagnostics/`, `od-next-run-inputs/`, `od-next-task-inputs/`, `agent-runtime/`,
+   `export-render/`, `export-pdf/`, `credentials`, `.backup/`, `shared/mcp`, `shared/plugins`. Another top-level entry
+   with anything but directories in it is a blocker. Special files must be regular files (folders directories).
+   Every moved member is owned like the live volume's top folder, permission bits without setuid/setgid; symlinks as
+   link entries when relative and inside the tree (others skipped and counted); hard links only to an earlier moved
+   file (one to a file that does not move stops the job, `incompatible`). Warnings: programs for another processor in
+   the moved trees, skipped symlinks, HA-only hosts in the moved settings, projects imported from a folder
+   (`metadata_json.baseDir`; they will not open here), dropped preferences, active routines (they run here).
+3. The sandboxed child (`hasqlite`) opens `app.sqlite` with its WAL: `quick_check`, the counts of `projects`,
+   `conversations`, `messages`, `routines`, the folder projects and the active routines (fixed queries
+   `opendesign.project_folders`, `opendesign.routines_active`); a damaged database or one without `projects` is a
+   blocker.
+4. `open-design_open_design_data` from scratch: HA's moved tree, plus from a live export of the volume (read while the
+   daemon runs, like Odoo's web data; not a cold snapshot) this device's `home/`, `paseo/`, `integrations/`,
+   `installation.json`, `export-render/`, `export-pdf/` (and its `app-config.json` when HA has none that can be used)
+   with their live owners; a kept hard link to a replaced file stops the job. `open-design_mcp_data`: the live export,
+   unchanged (O3: this device's MCP token and tool grants stay). Secrets (`open-design-api-token`, the htpasswd),
+   `open-design.env`, nginx files and units are the live ones (packaging below).
+   Test mode changes nothing of OpenDesign (its routines are not paused; the reminder says so).
 
 ## 10. Security rules (reviewers will check each)
 

@@ -133,21 +133,24 @@
   const HA_TRUST = "Odoo 的自訂模組和 n8n 的社群節點是會在這台執行的程式，只匯入你信任的備份。";
   // This device's app for each add-on it can take, when neither the engine nor the catalog names it (haapps.IMPORTERS).
   const HA_APP_NAMES = { odoo: "Odoo 18", n8n: "n8n 工作流程", omnigent: "Omnigent 協作平台", hermes: "Hermes 代理",
-    emqx: "EMQX MQTT 代理", headscale: "Headscale VPN 控制伺服器" };
+    emqx: "EMQX MQTT 代理", headscale: "Headscale VPN 控制伺服器", "open-design": "OpenDesign 設計工具" };
   // The product of each importable add-on in a sentence (「Odoo、n8n」), in the engine's order (CONTRACT §5 "Apps").
-  const HA_SHORT = { odoo: "Odoo", n8n: "n8n", omnigent: "Omnigent", hermes: "Hermes", emqx: "EMQX", headscale: "Headscale" };
+  const HA_SHORT = { odoo: "Odoo", n8n: "n8n", omnigent: "Omnigent", hermes: "Hermes", emqx: "EMQX", headscale: "Headscale",
+    "open-design": "OpenDesign" };
   // Odoo and n8n keep the sentences written and tested for them; with any other app (batch 1: Omnigent, Hermes, EMQX,
   // Headscale) a sentence says only what applies to each app.
   const HA_LEGACY = new Set(["odoo", "n8n"]);
-  // What of an add-on runs here as code (Hermes's skills and plugins, Omnigent's agents); EMQX and Headscale bring
-  // accounts, keys and settings only (CONTRACT §9 "Batch 1").
-  const HA_CODE = { odoo: "Odoo 的自訂模組", n8n: "n8n 的社群節點", omnigent: "Omnigent 的代理程式", hermes: "Hermes 的技能與外掛" };
+  // What of an add-on runs here as code (Hermes's skills and plugins, Omnigent's agents, OpenDesign's skills, plugins
+  // and external MCP servers); EMQX and Headscale bring accounts, keys and settings only (CONTRACT §9 "Batch 1").
+  const HA_CODE = { odoo: "Odoo 的自訂模組", n8n: "n8n 的社群節點", omnigent: "Omnigent 的代理程式", hermes: "Hermes 的技能與外掛",
+    "open-design": "OpenDesign 的技能、外掛與外部 MCP 伺服器" };
   // A test import pauses these apps' automatic work (CONTRACT §7 HaImport): Odoo is neutralized, n8n's workflows are
   // unpublished, Omnigent's active scheduled tasks paused. It changes nothing of the others (Hermes, EMQX, Headscale).
   const HA_TEST_PAUSES = new Set(["odoo", "n8n", "omnigent"]);
   // The add-ons whose members are large (a Hermes home of several GB; HA's own image in every EMQX and Headscale
-  // member, decrypted and skipped): their check and conversion take longer than Odoo's and n8n's.
-  const HA_LARGE = new Set(["hermes", "emqx", "headscale"]);
+  // member, OpenDesign's agent logins and Paseo runtime, decrypted and skipped): their check and conversion take
+  // longer than Odoo's and n8n's.
+  const HA_LARGE = new Set(["hermes", "emqx", "headscale", "open-design"]);
   // Catalog entries that keep their own login to the imported app: it changes with the imported users (DESIGN §0). The
   // page is named as this device's catalog names it; `page` only when the entry has no name. Odoo and n8n only: for
   // the batch 1 apps the engine writes the MCP lines itself (`reminders_by_app`, CONTRACT §7 HaImport), so adding them
@@ -4173,7 +4176,24 @@
     ];
   }
 
-  const HA_FACTS = { omnigent: haOmnigentFacts, hermes: haHermesFacts, emqx: haEmqxFacts, headscale: haHeadscaleFacts };
+  // OpenDesign (ha_opendesign.py): what moves, and the core revision both sides must share (no data version stamp).
+  function haOpenDesignFacts(od) {
+    const core = [str(od.source_revision), str(od.target_revision)];
+    return [
+      metadata([
+        ["專案", `${num(od.projects)} 個${od.project_folders ? `（${num(od.project_folders)} 個從資料夾匯入，搬過來後打不開）` : ""}`],
+        ["對話", `${num(od.conversations)} 個，${num(od.messages)} 則訊息`],
+        ["例行工作", `${num(od.routines)} 個（啟用中 ${num(od.routines_active)} 個）`],
+        ["外部 MCP 伺服器", `${num(od.mcp_servers)} 個`],
+        ["資料", `${num(od.files)} 個檔案（${bytes(od.bytes)}）`],
+        ["核心版本", core[0] && core[1] ? `HA ${core[0]}，這台 ${core[1]}` : "—", "mono"]
+      ]),
+      h("p", { class: "muted", text: "匯入後，用這台的 OpenDesign 登入資料（帳號 open-design 與這台的 API 權杖）登入；代理程式的登入、Omnigent 與 Paseo 維持這台的。" })
+    ];
+  }
+
+  const HA_FACTS = { omnigent: haOmnigentFacts, hermes: haHermesFacts, emqx: haEmqxFacts, headscale: haHeadscaleFacts,
+    "open-design": haOpenDesignFacts };
 
   function confirmHaConvert(ha, wizard) {
     const apps = haChosen(wizard);

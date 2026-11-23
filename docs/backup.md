@@ -320,7 +320,7 @@ Cockpit「備份與還原」頁為 rootless Podman Quadlet 應用建立備份，
 
 ## 從 Home Assistant 備份匯入
 
-可以把 Home Assistant OS（HA）的備份檔上傳到這台設備，把其中 WOOWTECH 的 Odoo、n8n、Omnigent、Hermes、EMQX 與 Headscale 附加元件的資料搬到這台的 Podman 應用。整個過程分成三段：**檢查**（不變更任何資料）→ **轉換**成這台的備份（不停機、不變更任何資料）→ 用一般的**還原**步驟取代這台的資料（和一般還原一樣，先自動保存還原前備份，失敗自動回復）。需要支援 HA 匯入的備份元件；較舊的備份元件會說明需要更新（見下方「錯誤與提示」）。
+可以把 Home Assistant OS（HA）的備份檔上傳到這台設備，把其中 WOOWTECH 的 Odoo、n8n、Omnigent、Hermes、EMQX、Headscale 與 OpenDesign 附加元件的資料搬到這台的 Podman 應用。整個過程分成三段：**檢查**（不變更任何資料）→ **轉換**成這台的備份（不停機、不變更任何資料）→ 用一般的**還原**步驟取代這台的資料（和一般還原一樣，先自動保存還原前備份，失敗自動回復）。需要支援 HA 匯入的備份元件；較舊的備份元件會說明需要更新（見下方「錯誤與提示」）。
 
 ### 可以匯入什麼
 
@@ -332,7 +332,8 @@ Cockpit「備份與還原」頁為 rootless Podman Quadlet 應用建立備份，
 | WOOWTECH Hermes 附加元件（`*_woow-hermes`） | 「Hermes 代理」 | 對話、記憶、技能、排程、外掛與 HA 的設定檔（`config.yaml`）一起搬；這台的 Dashboard 密碼、API 與 Webhook 金鑰、`hermes.env` 保留 |
 | WOOWTECH EMQX 附加元件（`*_woow-emqx`） | 「EMQX MQTT 代理」 | MQTT 帳號、ACL 規則、Dashboard 帳號、API 金鑰、封鎖名單、保留訊息、規則與連接器一起搬；這台的節點名稱與連接埠保留 |
 | WOOWTECH Headscale 附加元件（`*_woow-headscale`） | 「Headscale VPN 控制伺服器」 | 使用者、裝置、預先授權金鑰、DNS 額外記錄與伺服器身分金鑰一起搬；這台的伺服器網址、IP 位址範圍與 API 金鑰保留 |
-| 其他附加元件、Home Assistant 本身的設定 | — | 不會匯入；HA 備份頁列為「這台沒有對應的應用」 |
+| WOOWTECH OpenDesign 附加元件（`*_woow_ha_opendesign`） | 「OpenDesign 設計工具」 | 專案、對話、執行紀錄、設計系統、品牌、技能、外掛、記憶、偏好設定與在 OpenDesign 裡設定的外部 MCP 伺服器、連接器、媒體服務金鑰一起搬；這台的登入密碼（API 權杖）、MCP 權杖、代理程式登入、Omnigent 連線與 Paseo 配對保留 |
+| 其他附加元件、Home Assistant 本身的設定 | — | 不會匯入；HA 備份頁列為「這台沒有對應的應用」（Cloudflare Tunnel 與各 MCP 管理附加元件不搬，只有頁面提醒） |
 
 - **會搬過來的**：資料、資料本身的金鑰（例如 n8n 的加密金鑰、Headscale 的伺服器身分金鑰）和大多數應用的登入帳號（使用者跟著資料走；Hermes 例外，見下方）。
 - **保持不變的**：這台的網址（Odoo 的 `web.base.url`、Headscale 的伺服器網址）、連接埠、資料庫密碼、Odoo 主密碼、n8n 的 webhook 網址與佇列設定、應用機密與服務定義，以及這台放在資料以外的設定檔（例如 Hermes 的 `hermes.env`、EMQX 的 `base.hocon`）。
@@ -347,7 +348,7 @@ Cockpit「備份與還原」頁為 rootless Podman Quadlet 應用建立備份，
   - Headscale：兩邊的 IP 位址範圍設定相同，而且 HA 每台裝置的 VPN 位址都在範圍內。
   - 這台的空間足夠。
 
-### 各應用搬什麼、留什麼（Omnigent、Hermes、EMQX、Headscale）
+### 各應用搬什麼、留什麼（Omnigent、Hermes、EMQX、Headscale、OpenDesign）
 
 還原前的說明會逐項列出下面這些內容（由備份元件寫出），檢查結果也會列出各項的數量。
 
@@ -355,6 +356,7 @@ Cockpit「備份與還原」頁為 rootless Podman Quadlet 應用建立備份，
 - **Hermes**：對話、記憶、技能、排程、外掛與 HA 的設定檔（`config.yaml`）換成 HA 的。這台的 Dashboard 密碼、API 金鑰、Webhook 與工作階段金鑰以及 `hermes.env` 保持不變，`hermes.env` 中的金鑰會蓋過 HA 的同名金鑰。HA 的外掛會取代這台的外掛與配對（例如 Omnigent、Paseo）。HA 的 `/media` 資料夾不會搬過來。
 - **EMQX**：MQTT 帳號、ACL 規則、Dashboard 帳號、API 金鑰、封鎖名單、PSK、保留訊息與規則、連接器設定換成 HA 的；HA 的 API 金鑰會取代這台的。這台的節點名稱、連接埠、匿名登入限制與「未符合規則的主題拒絕」設定保持不變（HA 允許匿名連線時，原本匿名連線的裝置要建立 MQTT 帳號）。HA 的 EMQX 外掛不會搬過來。
 - **Headscale**：使用者、裝置、預先授權金鑰與 DNS 額外記錄換成 HA 的，HA 的伺服器身分金鑰（noise）也一起搬過來。這台的伺服器網址、IP 位址範圍、存取政策與 API 金鑰保持不變：HA 的 API 金鑰不會搬過來，這台的 Headplane 與 MCP 管理工具照常可用。
+- **OpenDesign**：專案、對話與訊息（`app.sqlite`）、執行紀錄、成品、設計系統與範本、品牌、資料庫、記憶、技能、外掛、偏好設定，以及在 OpenDesign 裡設定的外部 MCP 伺服器、連接器與媒體服務金鑰換成 HA 的；偏好設定裡指向 HA 資料夾（`/data/opendesign`）的路徑會改成這台的（`/app/.od`）。這台的登入密碼（API 權杖）、MCP 權杖與工具設定、代理程式（Claude Code、Codex、Pi、OpenCode）的登入、Omnigent 連線、Paseo 配對、安裝識別與 `open-design.env` 保持不變。HA 專用的共用工作區與共用技能會原樣放進這台的資料夾，但這台不會自動使用。兩邊的 OpenDesign 核心必須是同一個版本（附加元件 0.2.15 = 核心 `05b23f5a`，OpenDesign 0.24.1），否則檢查會說明版本不同。
 
 ### 步驟
 
@@ -385,7 +387,7 @@ Cockpit「備份與還原」頁為 rootless Podman Quadlet 應用建立備份，
     - 上傳的 HA 備份檔還在這台時：「匯入完成後，建議刪除這份 HA 備份檔（裡面可能有 HA 的密碼與權杖）。」並連到那份 HA 備份；
     - 可能需要修改的 n8n 工作流程。
 
-### 各應用匯入之後要做的事（Omnigent、Hermes、EMQX、Headscale）
+### 各應用匯入之後要做的事（Omnigent、Hermes、EMQX、Headscale、OpenDesign）
 
 這些提醒由備份元件寫出，結果頁照原文列出（數量與網址是這次匯入的）：
 
@@ -393,7 +395,8 @@ Cockpit「備份與還原」頁為 rootless Podman Quadlet 應用建立備份，
 - **Hermes**：用**這台**的 Hermes Dashboard 密碼登入（不是 HA 的）；呼叫 Hermes API 或 Webhook 的地方改用這台的網址與 API 金鑰；**重新配對 Hermes 的 Omnigent 與 Paseo 外掛**，HA 上的配對不會沿用；HA 的設定連到 HA 內部的位址時（例如 `homeassistant.local` 或 HA 上其他附加元件），改成這台連得到的位址；用到 HA 的 `/media` 的設定、排程或技能改用這台的資料夾；HA 的排程會在這台執行，請先停掉 HA 的 Hermes。
 - **EMQX**：把 MQTT 裝置與服務（例如 Home Assistant 的 MQTT 整合、Zigbee2MQTT）改連到這台的 EMQX；用 HA 那邊的 EMQX Dashboard 帳號和密碼登入；HA 允許匿名連線時，原本匿名連線的裝置要建立 MQTT 帳號；HA 的規則或連接器連到 HA 內部的位址時要改；HA 的 EMQX 外掛需要時請在這台重新安裝；HA 的 API 金鑰已取代這台的，使用這台 EMQX API 的工具要換成新的金鑰。
 - **Headscale**：**把每一台裝置的登入伺服器改成這台的網址**（例如 `tailscale up --login-server=<這台的網址>`），不再使用 HA 的網址；**把 HA 的 Headscale 附加元件永久停用**（關掉開機自動啟動）：兩台伺服器使用同一個身分金鑰卻有不同的資料，會讓裝置連線錯亂。
-- **MCP（Hermes、EMQX、Headscale）**：這台有對應的 MCP 管理應用（目錄項目 `hermes-mcp-admin`、`emqx-mcp-admin`、`headscale-mcp-admin`，以這台目錄裡的名稱顯示）時，提醒到那裡確認或重新設定連線資料（MCP 管理工具的設定不會從 HA 搬過來）；另外提醒：HA 上如果有「Woow Hermes MCP Server」等 MCP 附加元件，請把它停掉，並把指向它的 MCP 連接器（例如 claude.ai）刪掉，改用這台的 MCP 網址重新建立。這些 MCP 提醒由備份元件寫出，頁面不會再用自己的話重複一次。
+- **OpenDesign**：用**這台**的 OpenDesign 帳號 `open-design` 和這台的 API 權杖登入（不是 HA 的登入）；代理程式沿用這台原本的登入，HA 上登入的帳號不會搬過來，需要時在這台的終端機重新登入；Omnigent 與 Paseo 沿用這台的連線與配對，請到 HA 的 OpenDesign 連過的 Omnigent 伺服器移除 HA 那台主機；HA 的 OpenDesign 附加元件內建的 MCP 伺服器不會搬過來，指向它的 MCP 連接器（例如 claude.ai）要刪掉，改用這台的 MCP 網址與權杖重新建立；在瀏覽器裡輸入的模型金鑰（BYOK）不在備份裡，要在這台重新輸入；從資料夾匯入的專案在這台打不開，要重新匯入；HA 有啟用中的例行工作時，提醒先停掉 HA 的 OpenDesign，避免重複執行。
+- **MCP（Hermes、EMQX、Headscale、OpenDesign）**：這台有對應的 MCP 管理應用（目錄項目 `hermes-mcp-admin`、`emqx-mcp-admin`、`headscale-mcp-admin`、`opendesign-mcp-admin`，以這台目錄裡的名稱顯示）時，提醒到那裡確認或重新設定連線資料（MCP 管理工具的設定不會從 HA 搬過來）；另外提醒：HA 上如果有「Woow Hermes MCP Server」等 MCP 附加元件，請把它停掉，並把指向它的 MCP 連接器（例如 claude.ai）刪掉，改用這台的 MCP 網址重新建立。這些 MCP 提醒由備份元件寫出，頁面不會再用自己的話重複一次。
 
 轉換好的備份會留在「備份列表」（標示「由 HA 轉換」），詳情頁寫出它來自哪一份 HA 備份；之後要再還原它，按「還原」即可。
 
@@ -407,7 +410,7 @@ Cockpit「備份與還原」頁為 rootless Podman Quadlet 應用建立備份，
 | Odoo | 不寄信、不執行排程動作（並換一個新的資料庫識別碼） |
 | Omnigent | 啟用中的排程全部先暫停；確認無誤後到 Omnigent 重新啟用 |
 | Hermes | **不會暫停任何功能**：排程和訊息機器人照常執行，所以測試時請停掉 HA 那邊的 Hermes 附加元件，避免兩邊各做一次 |
-| EMQX、Headscale | 不會先關掉任何功能，還原後照常運作 |
+| EMQX、Headscale、OpenDesign | 不會先關掉任何功能，還原後照常運作（OpenDesign 的例行工作會照常執行） |
 
 只匯入 Odoo、n8n 或 Omnigent 時，測試期間 HA 那邊可以照常使用；有 Hermes、EMQX 或 Headscale 時則不一定（Hermes 要先停掉 HA 那邊的附加元件；Headscale 的提醒會請你停用 HA 的 Headscale 附加元件）。確定要正式搬過來時，請重新匯入一次，並且不要勾選。
 
