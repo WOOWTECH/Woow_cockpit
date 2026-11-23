@@ -1268,20 +1268,22 @@ class FoundationTests(unittest.TestCase):
             if events.count('restore')==1:return {'changed':True}
             ctx.adapter(app).imported_hook();(self.root/'.config'/self.fixture.prefix/'fail-once').unlink()
             raise flows.RolledBack(BackupError('job-failed','generated'),{'rolled_back':True})
-        def activity(provision,supplied,actual_clients,actual_credentials,expected):
-            self.assertIs(supplied,session);self.assertIs(actual_clients,clients)
-            self.assertIs(actual_credentials,credentials);self.assertIs(expected,object_expected)
-            events.append('delivery')
-            if delivery is not None:raise delivery
-            delivered.append(object());return delivered[-1]
         kwargs=dict(clients=clients,session=session,api_credentials=credentials,api_results=[],negative_results=[],
             target_mode=m.IMPORTED_MNESIA,object_expected=object_expected,object_results=[],delivery_results=[])
         kwargs.update(changes)
+        def activity(provision,supplied,actual_clients,actual_credentials,expected,*,target_mode):
+            self.assertIs(supplied,session);self.assertIs(actual_clients,clients)
+            self.assertIs(actual_credentials,credentials);self.assertIs(expected,object_expected)
+            self.assertEqual(target_mode,kwargs['target_mode'])
+            events.append('delivery')
+            if delivery is not None:raise delivery
+            delivered.append(object());return delivered[-1]
         with patch.object(flows,'run_restore',side_effect=restore),patch.object(m,'_ready'), \
              patch.object(m,'validate_source_mqtt',side_effect=lambda *a,**kw:events.append('mqtt')), \
              patch.object(m,'_source_api_activity',side_effect=lambda *a,**kw:events.append('api') or object()), \
              patch.object(m,'_source_negative_activity',side_effect=lambda *a,**kw:events.append('negative') or object()), \
              patch.object(m,'_assert_imported_acl_api',side_effect=lambda observed:events.append('acl_api')), \
+             patch.object(m,'_assert_file_policy_native_acl',side_effect=lambda *a:events.append('file_acl')), \
              patch.object(m,'_delivery_activity',side_effect=activity), \
              patch.object(m,'_post_activity_capture',side_effect=lambda p,prior:events.append('capture') or object()), \
              patch.object(m,'_compare_source_objects',side_effect=lambda *a,**kw:events.append('objects') or object()):
@@ -1301,16 +1303,67 @@ class FoundationTests(unittest.TestCase):
         self.assertEqual(caught.exception.phase,'delivery_republish_timeout')
         self.assertEqual(self.delivery_events,['restore','mqtt','api','negative','acl_api','delivery'])
 
-    def test_delivery_requires_imported_policy_api_credentials_and_fresh_list(self):
-        for changes in (dict(target_mode=m.FILE_BASELINE),dict(delivery_results=[object()]),dict(delivery_results=()),
-                        dict(api_credentials=None,api_results=None,negative_results=None,object_results=None)):
-            with self.subTest(changes=sorted(changes)):
-                with self.assertRaises(m.RealOwnerRefused) as caught:self.delivery_rounds(**changes)
-                self.assertEqual(caught.exception.phase,'delivery_input');self.assertEqual(self.delivery_events,[])
-        self.assertEqual(m._delivery_plan(m.IMPORTED_MNESIA),[]);self.assertIsNone(m._delivery_plan(m.FILE_BASELINE))
+    def test_file_restore_round_proves_rule_delivery_after_negative_before_capture_once(self):
+        kwargs,delivered=self.delivery_rounds(target_mode=m.FILE_BASELINE)
+        self.assertEqual(self.delivery_events,['restore','mqtt','api','negative','delivery','capture','objects','file_acl',
+            'restore','mqtt','api','negative','capture','objects','file_acl','mqtt','api','negative','capture','objects','file_acl'])
+        self.assertEqual(kwargs['delivery_results'],delivered);self.assertEqual(len(delivered),1)
+
+    def test_file_delivery_refusal_stops_native_capture_and_later_rounds(self):
+        with self.assertRaises(m.RealOwnerRefused) as caught:
+            self.delivery_rounds(delivery=m.RealOwnerRefused('delivery_publish_sensor_allowed'),target_mode=m.FILE_BASELINE)
+        self.assertEqual(caught.exception.phase,'delivery_publish_sensor_allowed')
+        self.assertEqual(self.delivery_events,['restore','mqtt','api','negative','delivery'])
+
+    def test_delivery_requires_api_credentials_and_fresh_list_for_both_policies(self):
+        # Before 2026-11-23 the FILE baseline was refused here because its file ACL
+        # refuses the HA roles on the rule topics; the vendor management API is an
+        # authorized ingress there (emqx_mgmt_api_publish.erl:255-265; emqx_channel.erl
+        # 1588-1597), so FILE now REQUIRES the delivery round (test above).
+        for mode in (m.IMPORTED_MNESIA,m.FILE_BASELINE):
+            for changes in (dict(delivery_results=[object()]),dict(delivery_results=()),
+                            dict(api_credentials=None,api_results=None,negative_results=None,object_results=None)):
+                with self.subTest(mode=mode,changes=sorted(changes)):
+                    with self.assertRaises(m.RealOwnerRefused) as caught:self.delivery_rounds(target_mode=mode,**changes)
+                    self.assertEqual(caught.exception.phase,'delivery_input');self.assertEqual(self.delivery_events,[])
+        self.assertEqual(m._delivery_plan(m.IMPORTED_MNESIA),[]);self.assertEqual(m._delivery_plan(m.FILE_BASELINE),[])
+        self.assertIsNone(m._delivery_plan('generated-other-mode'))
         from emqx_controlled_delivery import LABELS
         self.assertTrue({'delivery',*('delivery_'+label for label in LABELS)}<=m.PHASES)
         self.assertFalse(any(p.startswith(('rollback_delivery','restart_delivery')) for p in m.PHASES))
+
+    def test_actual_file_delivery_callsite_dispatches_by_policy_and_binds_mode(self):
+        from test_emqx_file_policy_delivery import FileDeliveryTests
+        from emqx_runtime_workflow import PrivateSession
+        from emqx_private_evidence import names_receipt,SOURCE_NAMES
+        import emqx_controlled_delivery as delivery
+        issued=FileDeliveryTests('test_file_acl_refuses_ha_rule_topics_and_trusted_api_delivers_exactly_once')
+        issued.setUp();self.addCleanup(issued.doCleanups)
+        session=PrivateSession(object(),issued.prior,{},None)
+        with patch.object(m,'_inspect',return_value=issued.doc[0]),patch.object(m,'fixture_quiescence',side_effect=lambda p:issued.quiesce()):
+            result=m._delivery_activity(issued.provision,session,issued.clients,issued.credentials,issued.source,
+                target_mode=m.FILE_BASELINE)
+        self.assertIs(result._runtime,issued.runtime);self.assertEqual(result._mode,m.FILE_BASELINE)
+        self.assertEqual(issued.active,set());self.assertEqual(len(issued.posts),3)
+        m._scan_delivery_receipt(names_receipt('restore','passed',SOURCE_NAMES),[result],session)
+        # A result of the other policy, or an unknown policy, never passes.
+        for mode,runner in ((m.IMPORTED_MNESIA,'run_rule_delivery'),(m.FILE_BASELINE,'run_file_policy_rule_delivery')):
+            other=m.FILE_BASELINE if mode==m.IMPORTED_MNESIA else m.IMPORTED_MNESIA
+            foreign=delivery.RuleDelivery(issued.runtime,issued.source,{},other)
+            with patch.object(m,'_inspect',return_value=issued.doc[0]),patch.object(delivery,runner,return_value=foreign):
+                with self.assertRaises(m.RealOwnerRefused) as caught:
+                    m._delivery_activity(issued.provision,session,issued.clients,issued.credentials,issued.source,target_mode=mode)
+            self.assertEqual(caught.exception.phase,'delivery')
+        with self.assertRaises(m.RealOwnerRefused) as caught:
+            m._delivery_activity(issued.provision,session,issued.clients,issued.credentials,issued.source,
+                target_mode='generated-other-mode')
+        self.assertEqual(caught.exception.phase,'delivery')
+        with patch.object(m,'_inspect',return_value=issued.doc[0]), \
+             patch.object(delivery,'run_file_policy_rule_delivery',side_effect=delivery.DeliveryRefused('denied_counters')):
+            with self.assertRaises(m.RealOwnerRefused) as caught:
+                m._delivery_activity(issued.provision,session,issued.clients,issued.credentials,issued.source,
+                    target_mode=m.FILE_BASELINE)
+        self.assertEqual(caught.exception.phase,'delivery_denied_counters')
 
     def test_actual_delivery_callsite_binds_current_cid_session_runtime_and_final_scan(self):
         from test_emqx_controlled_delivery import DeliveryTests

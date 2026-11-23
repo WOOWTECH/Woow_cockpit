@@ -82,7 +82,7 @@ PHASES=PHASES | frozenset(r+'_'+o for r in ('restore','rollback','restart') for 
 # Rounds 2/3 (after automatic rollback, after restart) prefix every per-round
 # client/API/native/object label, so a refusal names its round too.
 PHASES=PHASES | frozenset(r+'_'+p for r in ('rollback','restart') for p in PHASES)
-# Restore round only (imported Mnesia ACL target): HA rules really execute.
+# Restore round only (both target policies): HA rules really execute.
 from emqx_controlled_delivery import LABELS as DELIVERY_LABELS
 PHASES=PHASES | frozenset(('delivery',*('delivery_'+label for label in DELIVERY_LABELS)))
 _ROLLBACK_PROBLEM_TEXT=(('回復後健康檢查未通過','health'),('回復後資料與還原前不一致','verify'),
@@ -338,8 +338,10 @@ def _restore_and_rollback(ctx,app,provision,backup_id,state,*,clients=None,sessi
     FILE baseline uses the explicit file-policy API profile (exact builtin-absent 404,
     exact file ACL readback); the inactive source ACL rows are then proven ONLY from
     each phase's fresh native capture, after the object comparison.
-    With delivery_results (imported Mnesia ACL only) the restore round also proves
-    the HA republish rule and HTTP action execute, before that round's capture.
+    With delivery_results the restore round also proves the HA republish rule and
+    HTTP action execute, before that round's capture: imported Mnesia ACL through
+    the HA clients, FILE baseline through the target's trusted management API after
+    proving its unchanged file ACL refuses the HA clients on the rule topics.
     """
     if target_mode not in (FILE_BASELINE,IMPORTED_MNESIA):raise RealOwnerRefused('profile')
     _assert_binding(provision,app)
@@ -351,7 +353,7 @@ def _restore_and_rollback(ctx,app,provision,backup_id,state,*,clients=None,sessi
     if api_credentials is not None and (object_expected is None or type(object_results) is not list or object_results):
         raise RealOwnerRefused('object_integrity')
     if delivery_results is not None and (type(delivery_results) is not list or delivery_results
-            or api_credentials is None or target_mode!=IMPORTED_MNESIA):raise RealOwnerRefused('delivery_input')
+            or api_credentials is None):raise RealOwnerRefused('delivery_input')
     request={'backup_id':backup_id,'apps':['emqx'],'accept_unauthenticated':True}
     try:outcome=flows.run_restore(ctx,request)
     except BaseException as error:raise RealOwnerRefused(_restore_refusal('restore',error)) from None
@@ -362,7 +364,8 @@ def _restore_and_rollback(ctx,app,provision,backup_id,state,*,clients=None,sessi
     if api_credentials is not None:negative_results.append(_source_negative_activity(provision,session,clients,api_results[-1]))
     if api_credentials is not None and target_mode==IMPORTED_MNESIA:_assert_imported_acl_api(api_results[-1])
     if delivery_results is not None:
-        delivery_results.append(_delivery_activity(provision,session,clients,api_credentials,object_expected))
+        delivery_results.append(_delivery_activity(provision,session,clients,api_credentials,object_expected,
+            target_mode=target_mode))
     if session is not None:post_registry=_post_activity_capture(provision,post_registry)
     if api_credentials is not None:object_results.append(_compare_source_objects(object_expected,api_results[-1],post_registry))
     if api_credentials is not None and target_mode==FILE_BASELINE:_assert_file_policy_native_acl(api_results[-1],post_registry)
@@ -602,30 +605,37 @@ def _scan_source_negative_receipt(receipt,results,api_results,session):
         raise RealOwnerRefused('source_negative') from None
 
 
-def _delivery_activity(provision,session,clients,credentials,object_expected):
+def _delivery_activity(provision,session,clients,credentials,object_expected,*,target_mode=IMPORTED_MNESIA):
     """Restored broker executes the HA republish rule and original HTTP action.
 
     Same current-CID/exclusion pattern as the API activity; fixed labels only.
+    The target policy selects the twin; its result must carry that same mode.
     """
-    from emqx_controlled_delivery import run_rule_delivery,RuleDelivery,DeliveryRefused
+    from emqx_controlled_delivery import (run_rule_delivery,run_file_policy_rule_delivery,RuleDelivery,
+        DeliveryRefused)
     from emqx_runtime_workflow import PrivateSession,CombinedRegistry
     try:
+        if target_mode not in (FILE_BASELINE,IMPORTED_MNESIA):raise ValueError()
         if type(session) is not PrivateSession or type(session.registry) is not CombinedRegistry:raise ValueError()
         cid=_inspect(provision).get('Id')
         if type(cid) is not str or re.fullmatch('[0-9a-f]{64}',cid) is None:raise ValueError()
-        result=run_rule_delivery(registry=session.registry,provision=provision,expected_container_id=cid,
+        run=run_file_policy_rule_delivery if target_mode==FILE_BASELINE else run_rule_delivery
+        result=run(registry=session.registry,provision=provision,expected_container_id=cid,
             clients=clients,api_credentials=credentials,source_objects=object_expected,
             quiesce=lambda:fixture_quiescence(provision))
-        if type(result) is not RuleDelivery or result._runtime is not session.registry._runtime:raise ValueError()
+        if (type(result) is not RuleDelivery or result._runtime is not session.registry._runtime
+                or result._mode!=target_mode):raise ValueError()
         return result
     except DeliveryRefused as error:raise RealOwnerRefused('delivery_'+error.label) from None
     except BaseException:raise RealOwnerRefused('delivery') from None
 
 
 def _delivery_plan(target_mode):
-    # The FILE baseline ACL denies the HA roles' rule topics by design, so rule
-    # delivery is assessed only where the imported HA Mnesia ACL is active.
-    return [] if target_mode==IMPORTED_MNESIA else None
+    # Both target policies prove rule delivery. The FILE baseline ACL refuses the
+    # HA roles on the rule topics (proven first), so its twin feeds the rules
+    # through the management API, which runs no MQTT authorization
+    # (emqx_mgmt_api_publish.erl:255-265; emqx_channel.erl:1588-1597).
+    return [] if target_mode in (FILE_BASELINE,IMPORTED_MNESIA) else None
 
 
 def _scan_delivery_receipt(receipt,results,session):
@@ -1081,7 +1091,9 @@ def run_real_framed_owner(stream,*,private_parent,source_mode,no_live=True,targe
         return {'evidence_bytes':receipt,'scope':'private-same-target-product-flow', 'client_validation':('source-login-imported-mnesia-acl-retained-after-restore-rollback-restart' if target_mode==IMPORTED_MNESIA else 'source-login-target-file-acl-retained-after-restore-rollback-restart'),
                 'source_mnesia_acl_behavior':('mqtt-validated-imported-database-with-lab-only-file' if target_mode==IMPORTED_MNESIA else 'not-assessed-target-file-authorizer'),
                 'source_mnesia_acl_rows':('api-b1-inventory-active-imported-database' if target_mode==IMPORTED_MNESIA else 'native-b1-inventory-inactive-under-target-file-acl-api404-not-proof'),
-                'rule_delivery':('republish-and-original-http-action-executed-after-restore' if delivery_results is not None else 'not-assessed-target-file-authorizer'),
+                'rule_delivery':('not-assessed' if delivery_results is None else
+                    'republish-and-original-http-action-executed-after-restore' if target_mode==IMPORTED_MNESIA else
+                    'file-acl-refuses-ha-rule-topics-management-api-ingress-republish-to-ha-gateway-session-and-original-http-action-executed-after-restore'),
                 'source_final_state':'not-assessed','commercial_acceptance':'not-assessed'}
     except RealOwnerRefused:
         raise
