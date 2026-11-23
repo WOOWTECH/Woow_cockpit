@@ -91,8 +91,12 @@ WATCH_FLOOR = FLOOR + 256 * 1024 ** 2  # below it every running job of dev-e is 
 FIXTURE = (LAB / 'ha-fixtures' / '20261123-batch2' / 'x86' / 'woow-b2-nextcloud-x86-enc-noshare'
            / 'woow-b2-nextcloud-x86-enc-noshare-20261123.tar')
 FIXTURE_SHA = '88e0f79415473c3453fb2889375b5fe0167e5d0a685d17da768ccc641c3c027f'
+# calendar_objects/contacts: the showcase lane listed 2 and 3 BEFORE its marker user; Nextcloud 35.0.1 adds the new
+# user's card to the system address book (apps/dav/lib/Listener/UserEventsListener.php:89) and example content at the
+# first login (:79-80, :157, ExampleContactService/ExampleEventService): +2 and +2 per user, as the share backup's
+# markers show (2 users + 1 event + 1 contact: 2 -> 7 and 3 -> 8). Real attempt 1 read 4 and 5.
 SECTION = {'nextcloud_version': '35.0.1.1', 'pg_version': '16', 'users': 3, 'files': 300, 'shares': 1, 'tokens': 125,
-           'calendar_objects': 2, 'contacts': 3, 'custom_apps': ['notes', 'richdocuments', 'tasks'],
+           'calendar_objects': 4, 'contacts': 5, 'custom_apps': ['notes', 'richdocuments', 'tasks'],
            'datadir': '/share/nextcloud', 'datadir_in_backup': False}
 UNITS = ('nextcloud-db.service', 'nextcloud-redis.service', 'nextcloud-app.service', 'nextcloud-office.service',
          'nextcloud-gateway.service')
