@@ -80,6 +80,9 @@ ETC_EXPR = 'io:format("WOOWETC:~s:END", [os:getenv("EMQX_ETC_DIR", "")]).'
 PROFILES = {(('file', True),): ('file',), (('file', True), ('built_in_database', True)): ('file', 'built_in_database')}
 SOURCE_NAMES = {'file': 'ACL 檔案', 'built_in_database': '內建資料庫', 'http': 'HTTP', 'redis': 'Redis', 'mysql': 'MySQL',
                 'postgresql': 'PostgreSQL', 'mongodb': 'MongoDB', 'ldap': 'LDAP', 'client_info': '用戶端資訊'}
+# One plain `EMQX_KEY=value` line of an EnvironmentFile (podman --env-file keeps the value literal): no quotes,
+# backslashes, `$` or surrounding blanks, so the candidate gets exactly what the running broker got.
+ENV_FILE_LINE = re.compile(r'(EMQX_[A-Z0-9_]{1,100})=([^\s"\'\\$](?:[^"\'\\$]{0,4094}[^\s"\'\\$])?)')
 NOT_RUNNING = '這台的 EMQX 沒有在執行，無法讀取它的設定；請先到「應用軟體」啟動 EMQX 後再試一次。'
 # OWNER DECISION 2026-11-23 「C」 (EMQX 權限): the owner's text, verbatim (acl_blocker).
 ACL_NEEDS_BUILTIN = ('Podman 上的 EMQX 沒有開啟『內建資料庫』權限，HA 的裝置權限搬過去不會生效，裝置會被拒絕。'
@@ -230,6 +233,40 @@ class Target:
         self.files = [(s, t, 'ro') for s, t, _o in ha_odoo.quadlet_mounts(quadlets, broker, home)
                       if s.startswith('/') and t not in (DATA_TARGET, LOG_TARGET)]
         self.node = self.env.get('EMQX_NODE__NAME', 'emqx@127.0.0.1')
+        body = text.decode('utf-8', 'replace') if isinstance(text, bytes) else str(text)
+        self.env_files = [value for key, value in tempctr.parse_unit(body).get('Container', [])
+                          if key == 'EnvironmentFile']
+        self._runner = work.runner(app)
+
+    def candidate_env(self):
+        """The environment this device's broker runs with, for the candidate: the Quadlet's `Environment=` EMQX_*
+        settings plus those of its `EnvironmentFile=` files (podman --env-file: KEY=VALUE lines, values literal;
+        dev-d's product package sets EMQX_LOG__CONSOLE__LEVEL there, 2026-11-23 attempt-06). Only plain values in the
+        owner's home are supported; anything else refuses, naming the file. Values are never logged."""
+        env = dict(self.env)
+        for value in self.env_files:
+            optional = value.startswith('-')
+            path = value.lstrip('-')
+            rel = path[3:] if path.startswith('%h/') else None
+            if rel is None or not re.fullmatch(r'[A-Za-z0-9._/-]{1,200}', rel) or '..' in rel.split('/'):
+                raise BackupError('incompatible', f'EMQX 不能搬過來：這台 EMQX 的 EnvironmentFile（{path[:120]}）不在'
+                                                  '應用擁有者的家目錄下，尚未支援。')
+            try:
+                data = self._runner.read_file(rel, max_bytes=256 * 1024)
+            except BackupError:
+                if optional:
+                    continue
+                raise BackupError('incompatible', f'EMQX 不能搬過來：無法讀取這台 EMQX 的 EnvironmentFile（~/{rel}）。') from None
+            for line in data.decode('utf-8', 'replace').splitlines():
+                stripped = line.lstrip()   # podman trims leading blanks only; a trailing blank refuses below
+                if not stripped.startswith('EMQX_'):
+                    continue   # comments, blank lines, other programs' settings: not EMQX configuration
+                match = ENV_FILE_LINE.fullmatch(stripped)
+                if match is None or (match.group(1) in env and env[match.group(1)] != match.group(2)):
+                    raise BackupError('incompatible', f'EMQX 不能搬過來：這台 EMQX 的 EnvironmentFile（~/{rel}）有無法安全'
+                                                      '重現的 EMQX 設定（引號、跳脫字元、變數或重複的設定），尚未支援。')
+                env[match.group(1)] = match.group(2)
+        return env
 
 
 # ====================================================================== the brokers
@@ -1210,7 +1247,9 @@ def target_broker(work, tmp, target, export, ids, *, hint='', target_snapshot=No
     if target_snapshot is not None:
         import_target_snapshot(tmp, target_snapshot, ids)
     tmp.volume('emqx-new-log')
-    tmp.run('emqx-new', target.image, [], detach=True, read_only_root=True, env=target.env, secrets=target.secrets,
+    # The product's Target adds its EnvironmentFile= settings; internal callers' target objects carry their env as given.
+    env = target.candidate_env() if isinstance(target, Target) else target.env
+    tmp.run('emqx-new', target.image, [], detach=True, read_only_root=True, env=env, secrets=target.secrets,
             volumes=[(tmp.name('emqx-new'), DATA_TARGET, None), (tmp.name('emqx-new-log'), LOG_TARGET, None),
                      (tmp.name('emqx-in'), WORK, None)] + target.files)
     wait_ready(tmp, 'emqx-new', checkpoint=work.checkpoint)

@@ -347,6 +347,54 @@ class DashboardChangedTargetTests(base.EmqxCase):
                          'the readback holds the boot form (max_rules filled), as the restored broker boots')
 
 
+class EnvironmentFileTests(unittest.TestCase):
+    """dev-d 2026-11-23 attempt-06: the product package sets EMQX_LOG__CONSOLE__LEVEL in the Quadlet's EnvironmentFile=;
+    the candidate must get it like the running broker (podman --env-file: plain KEY=VALUE, value literal)."""
+
+    def target(self, line, files):
+        quadlets = dict(base.QUADLETS)
+        text = base.QUADLETS['emqx.container'].replace(b'EnvironmentFile=%h/.config/emqx/emqx.env\n', line.encode())
+        quadlets['emqx.container'] = text
+        def read_file(rel, max_bytes=None):   # the owner runner's contract: a missing file is a BackupError
+            if rel not in files:
+                raise BackupError('not-found', 'missing')
+            return files[rel]
+        runner = SimpleNamespace(home='/home/appowner', read_file=read_file)
+        work = SimpleNamespace(quadlets=lambda _app: quadlets, runner=lambda _app: runner)
+        app = fk.app('emqx', 'EMQX MQTT 代理', volumes=[{'name': 'woow_emqx_data'}, {'name': 'woow_emqx_log'}])
+        return ha_emqx.Target(work, app)
+
+    def test_the_env_file_settings_reach_the_candidate(self):
+        files = {'.config/emqx/emqx.env': b'# c\n  EMQX_LOG__CONSOLE__LEVEL=warning\nWOOW_EMQX_BIND=0.0.0.0\n\n'}
+        env = self.target('EnvironmentFile=%h/.config/emqx/emqx.env\n', files).candidate_env()
+        self.assertEqual(env['EMQX_LOG__CONSOLE__LEVEL'], 'warning')
+        self.assertEqual(env['EMQX_NODE__NAME'], 'emqx@127.0.0.1', 'the Quadlet\'s own settings stay')
+        self.assertNotIn('WOOW_EMQX_BIND', env)
+        self.assertNotIn('EMQX_LOG__CONSOLE__LEVEL', self.target('', files).candidate_env())
+        self.assertNotIn('EMQX_LOG__CONSOLE__LEVEL', self.target('EnvironmentFile=-%h/.config/emqx/missing.env\n', {})
+                         .candidate_env(), 'an optional missing file is skipped')
+
+    def test_what_cannot_be_reproduced_exactly_refuses_naming_the_file(self):
+        line = 'EnvironmentFile=%h/.config/emqx/emqx.env\n'
+        for content in (b'EMQX_LOG__CONSOLE__LEVEL="warning"\n', b"EMQX_LOG__CONSOLE__LEVEL='warning'\n",
+                        b'EMQX_LOG__CONSOLE__LEVEL=$LEVEL\n', b'EMQX_LOG__CONSOLE__LEVEL=warn\\\n',
+                        b'EMQX_LOG__CONSOLE__LEVEL=warning \n', b'EMQX_LOG__CONSOLE__LEVEL=\n', b'EMQX_LOG__CONSOLE__LEVEL\n',
+                        b'EMQX_NODE__NAME=emqx@10.0.0.1\n'):
+            with self.subTest(content=content):
+                with self.assertRaises(BackupError) as caught:
+                    self.target(line, {'.config/emqx/emqx.env': content}).candidate_env()
+                self.assertEqual(caught.exception.code, 'incompatible')
+                self.assertIn('EnvironmentFile（~/.config/emqx/emqx.env）', caught.exception.message)
+        for other in ('EnvironmentFile=/etc/emqx.env\n', 'EnvironmentFile=%h/../x.env\n', 'EnvironmentFile=emqx.env\n'):
+            with self.subTest(line=other):
+                with self.assertRaises(BackupError) as caught:
+                    self.target(other, {}).candidate_env()
+                self.assertIn('不在應用擁有者的家目錄下', caught.exception.message)
+        with self.assertRaises(BackupError) as caught:
+            self.target(line, {}).candidate_env()
+        self.assertIn('無法讀取', caught.exception.message)
+
+
 class ConvertReadbackTests(base.EmqxCase):
     def setUp(self):
         super().setUp()
@@ -368,6 +416,10 @@ class ConvertReadbackTests(base.EmqxCase):
                          'the readback holds this device\'s authorization, not HA\'s')
         notes = done['ha_import']['notes']
         self.assertTrue(any('還原後會再核對' in n for n in notes), notes)
+        options = self.runs('emqx-new')[0][3]
+        env = list(options.get('--env', [])) + list(options.get('-e', []))
+        self.assertIn('EMQX_LOG__CONSOLE__LEVEL=warning', env, 'the candidate runs with the EnvironmentFile setting')
+        self.assertFalse([e for e in env if e.startswith('WOOW_')], 'only EMQX settings are taken from the file')
 
     def test_a_readback_that_cannot_be_read_stops_the_conversion(self):
         real = self.world.evaluate

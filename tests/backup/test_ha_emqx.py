@@ -107,6 +107,8 @@ class World(fk.World):
         self.import_lost = None
         self.ctl_calls = []
         self.snippet = None
+        # The Quadlet's EnvironmentFile= (QUADLETS) as the product package ships it: one EMQX setting, other programs'.
+        self.files['.config/emqx/emqx.env'] = b'# woow emqx\nEMQX_LOG__CONSOLE__LEVEL=warning\nWOOW_EMQX_BIND=0.0.0.0\n'
         self.target_config = {'authorization': {'no_match': 'deny', 'deny_action': 'ignore',
             'sources': [{'type': 'file', 'enable': True, 'path': '/opt/emqx/etc/acl.conf'}]}}
         self.current_config = copy.deepcopy(self.target_config)
