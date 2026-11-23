@@ -122,6 +122,12 @@ LIVE_DB = {'role': {'password': VERIFIER, 'super': False, 'login': True, 'create
            'appconfig': LIVE_APPCONFIG}
 HA_COUNTS = {'users': 3, 'files': 300, 'shares': 1, 'tokens': 125, 'calendar_objects': 2, 'contacts': 3, 'storages': 3,
              'mounts': 2}
+# dev-e's Nextcloud 35.0.1 (2026-11-24): nothing beyond tables, sequences and indexes; these default shapes.
+CLEAN_SHAPE = {**{key: 0 for key, _label in nc.SHAPE_LABELS}, 'role_settings': 0,
+               'defaults': ["''::character varying", "''::text", "'-1'::integer", "'0'::double precision", '0', '1',
+                            "'OCA\\WorkflowEngine\\Entity\\File'::character varying", 'false',
+                            "NULL::character varying", 'NULL::timestamp without time zone',
+                            "nextval('public.oc_accounts_data_id_seq'::regclass)"]}
 TABLES = ['oc_appconfig', 'oc_authtoken', 'oc_calendarobjects', 'oc_cards', 'oc_filecache', 'oc_mounts', 'oc_share',
           'oc_storages', 'oc_users']
 
@@ -220,8 +226,27 @@ class World(fk.World):
         self.ha_details = {'extensions': ['plpgsql'], 'schemas': [], 'local_storages': ['local::/share/nextcloud/'],
                            'enabled': ['dav', 'files', 'notes', 'richdocuments', 'gone_app'], 'encryption': None}
         self.verify = None
+        self.catalog = None
+        self.shape = {'hapg': dict(CLEAN_SHAPE), 'nc-db': dict(CLEAN_SHAPE)}
+        self.toc = b';\n; Archive\n201; 1259 16390 TABLE public oc_users nextcloud\n'
+        self.sessions = []
         self.php = []
         self.dirs = {}
+
+    def podman(self, args, data, stdout):
+        if args[0] == 'exec':
+            env, i = {}, 1
+            while args[i].startswith('--'):
+                if args[i] == '--env':
+                    key, _sep, value = args[i + 1].partition('=')
+                    env[key] = value
+                i += 2 if args[i] in ('--user', '--workdir', '--env') else 1
+            command = list(args[i + 1:])
+            sql = command[command.index('-c') + 1] if '-c' in command[:-1] else (
+                data.decode('utf-8', 'replace') if isinstance(data, bytes) and command[:1] == ['psql'] else '')
+            self.sessions.append({'role': fk.role_of(args[i]), 'tool': command[0], 'env': env, 'sql': sql,
+                                  'pg_user': command[command.index('-U') + 1] if '-U' in command[:-1] else None})
+        return super().podman(args, data, stdout)
 
     def factory(self, app, **_kwargs):
         return Adapter(app, self)
@@ -254,7 +279,7 @@ class World(fk.World):
             stdout.write(b'PGDMP-ha-nextcloud')
             return Result(0, None, b'')
         if role == 'nc-db' and command[:2] == ['pg_restore', '-l']:
-            return Result(0, b';\n; Archive\n201; 1259 16390 TABLE public oc_users nextcloud\n', b'')
+            return Result(0, self.toc, b'')
         return Result(0, b'', b'')
 
     def answer(self, role, sql, database):
@@ -264,17 +289,22 @@ class World(fk.World):
             return TABLES
         if sql == nc.HA_SQL:
             return self.ha_details
+        if sql == nc.SHAPE_SQL:
+            return self.shape.get(role)
         if sql.startswith("SELECT json_build_object('users'"):
             return HA_COUNTS
         if sql.startswith("SELECT json_build_object(\n 'role'"):
             return LIVE_DB
-        if sql.startswith('SELECT count(*) FROM oc_filecache'):
+        if sql.startswith('SELECT count(*) FROM public.oc_filecache'):
             return 2
         if sql.startswith("SELECT json_build_object(\n 'counts'"):
             return self.verify if self.verify is not None else {
-                'counts': {**HA_COUNTS, 'files': 298}, 'owners': ['oc_admin'], 'root': 1, 'old': 0,
-                'verifier_md5': hashlib.md5(VERIFIER.encode()).hexdigest(),
-                **{key: LIVE_DB[key] for key in ('roles', 'extensions', 'datacl', 'nspacl', 'appconfig')}}
+                'counts': {**HA_COUNTS, 'files': 298}, 'root': 1, 'old': 0, 'appconfig': LIVE_DB['appconfig']}
+        if sql.startswith("SELECT json_build_object(\n 'owners'"):
+            return self.catalog if self.catalog is not None else {
+                'owners': ['oc_admin'], 'verifier_md5': hashlib.md5(VERIFIER.encode()).hexdigest(),
+                'role': {k: v for k, v in LIVE_DB['role'].items() if k != 'password'}, 'role_settings': 0,
+                **{key: LIVE_DB[key] for key in ('roles', 'extensions', 'datacl', 'nspacl')}}
         if 'FROM pg_settings' in sql or 'pg_file_settings' in sql:
             return []
         return None
@@ -474,6 +504,26 @@ class CheckTests(NextcloudCase):
         self.assertTrue(any('只支援 16 版' in b for b in result['blockers']))
         self.assertFalse(self.runs('hapg')[1:], 'the PostgreSQL 17 cluster is never started')
 
+    def test_a_database_with_objects_nextcloud_never_creates_is_refused_unread(self):
+        # A trigger function, a trojan aggregate in public and a default that reads a server file: refused from the
+        # catalogs alone; none of HA's tables is read (no view or function of HA's runs, even in the throwaway cluster).
+        self.world.shape['hapg'] = dict(CLEAN_SHAPE, functions=2, triggers=1,
+                                        defaults=CLEAN_SHAPE['defaults'] + ["pg_read_file('/etc/passwd'::text)"])
+        result = self.check(self.upload_nextcloud(), ['nextcloud'])[0]
+        self.assertFalse(result['ok'])
+        self.assertEqual(len(result['blockers']), 1, result['blockers'])
+        for part in ('Nextcloud 不會建立的資料庫物件', '函式', '觸發程序', '不是固定值的欄位預設值', '無法安全地搬過來'):
+            self.assertIn(part, result['blockers'][0])
+        ha = [x for x in self.world.sessions if x['role'] == 'hapg' and x['tool'] == 'psql']
+        self.assertTrue(ha and all(x['env'].get('PGOPTIONS') == '-c search_path=pg_catalog' for x in ha))
+        self.assertFalse([x for x in ha if 'public.oc_' in x['sql']], 'no table of HA is read')
+
+    def test_an_unreadable_database_shape_is_refused(self):
+        for shape in (None, dict(CLEAN_SHAPE, triggers='1'), {k: v for k, v in CLEAN_SHAPE.items() if k != 'rules'}):
+            self.world.shape['hapg'] = shape
+            result = self.check(self.upload_nextcloud(), ['nextcloud'])[0]
+            self.assertEqual(result['blockers'], [nc.MSG_SHAPE_UNREAD], shape)
+
 
 class ConvertTests(NextcloudCase):
     def test_conversion_builds_the_four_folders(self):
@@ -505,30 +555,150 @@ class ConvertTests(NextcloudCase):
         self.assertIn('REVOKE ALL PRIVILEGES ON DATABASE "nextcloud" FROM PUBLIC', joined)
         self.assertIn('GRANT CREATE ON SCHEMA public TO "oc_admin"', joined)
         self.assertIn('CREATE EXTENSION IF NOT EXISTS "vector"', joined)
-        self.assertIn("UPDATE oc_storages SET id = 'local::/var/www/html/data/' WHERE id = 'local::/share/nextcloud/'",
-                      joined)
+        self.assertIn("UPDATE public.oc_storages SET id = 'local::/var/www/html/data/' WHERE id = "
+                      "'local::/share/nextcloud/'", joined)
         self.assertIn('http://nextcloud-office:9980', joined)
         self.assertIn("appdata_ochaabcdef12/richdocuments/remoteData", joined)
         restore = [c for r, c, _d in self.world.execs if r == 'nc-db' and c[:1] == ['pg_restore'] and '-U' in c]
         self.assertEqual(restore[0][:3], ['pg_restore', '-U', 'oc_admin'])
+        self.assert_sessions_pinned()
         row = result['ha_import']
         self.assertTrue(any('Collabora' in line for line in row['notes']))
         reminders = '\n'.join(row['reminders_by_app']['nextcloud'])
         for part in ('永久停用', 'http://127.0.0.1:18081', 'SMTP', 'Woow Nextcloud MCP Server'):
             self.assertIn(part, reminders)
 
+    def assert_sessions_pinned(self):
+        """HA's cluster: every session pinned. The new cluster: the setup before HA's dump runs as its superuser
+        unpinned (CREATE EXTENSION needs the default search path); from the restore on every session is pinned, the
+        superuser reads catalogs only and every statement on HA's tables runs as the live Nextcloud role."""
+        sessions = self.world.sessions
+        ha = [x for x in sessions if x['role'] == 'hapg' and x['tool'] in ('psql', 'pg_dump')]
+        self.assertTrue(ha)
+        self.assertTrue(all(x['env'].get('PGOPTIONS') == '-c search_path=pg_catalog' for x in ha), ha)
+        new = [x for x in sessions if x['role'] == 'nc-db' and x['tool'] in ('psql', 'pg_restore')]
+        start = next(i for i, x in enumerate(new) if x['tool'] == 'pg_restore' and x['pg_user'] == 'oc_admin')
+        self.assertTrue(all('PGOPTIONS' not in x['env'] for x in new[:start]), new[:start])
+        after = [x for x in new[start + 1:] if x['tool'] == 'psql']
+        self.assertTrue(after and all(x['env'].get('PGOPTIONS') == '-c search_path=pg_catalog' for x in after), after)
+        for x in after:
+            touches = 'public.oc_' in x['sql']
+            self.assertEqual(x['pg_user'], 'oc_admin' if touches else 'nextcloud', x['sql'][:120])
+        owner = '\n'.join(x['sql'] for x in after if x['pg_user'] == 'oc_admin')
+        for part in ('UPDATE public.oc_storages', 'DELETE FROM public.oc_appconfig', 'INSERT INTO public.oc_appconfig',
+                     'DELETE FROM public.oc_filecache', "'counts'"):
+            self.assertIn(part, owner)
+
     def test_a_failed_verification_stops_the_conversion(self):
-        self.world.verify = {'counts': HA_COUNTS, 'owners': ['nextcloud'], 'root': 0, 'old': 1, 'verifier_md5': 'x'}
+        self.world.verify = {'counts': HA_COUNTS, 'root': 0, 'old': 1, 'appconfig': []}
+        self.world.catalog = {'owners': ['nextcloud'], 'verifier_md5': 'x'}
         with self.assertRaises(BackupError) as caught:
             self.convert(self.upload_nextcloud(), ['nextcloud'])
         self.assertIn('檢查沒有通過', caught.exception.message)
         self.assertIn('密碼設定和這台的不同', caught.exception.message)
+
+    def test_a_dump_with_kinds_nextcloud_never_creates_is_refused_before_the_restore(self):
+        for toc, kinds in (
+                (b'201; 1259 16390 TABLE public oc_users nextcloud\n'
+                 b'202; 1255 16400 FUNCTION public woow_t() nextcloud\n'
+                 b'203; 2620 16401 TRIGGER public oc_storages woow_t nextcloud\n', ('FUNCTION', 'TRIGGER')),
+                (b'201; 1259 16390 TABLE public oc_users nextcloud\n'
+                 b'204; 1259 16402 VIEW public oc_storages2 nextcloud\n', ('VIEW',)),
+                (b'205; 2617 16403 OPERATOR public = nextcloud\n', ('OPERATOR',)),
+                (b'206; 0 0 WHATEVER public x nextcloud\n', ('UNKNOWN WHATEVER',))):
+            with self.subTest(kinds=kinds):
+                self.world.toc = b';\n; Archive\n' + toc
+                seen = len(self.world.execs)
+                with self.assertRaises(BackupError) as caught:
+                    self.convert(self.upload_nextcloud(), ['nextcloud'])
+                self.assertEqual(caught.exception.code, 'incompatible')
+                self.assertIn('Nextcloud 不會建立的物件', caught.exception.message)
+                for kind in kinds:
+                    self.assertIn(kind, caught.exception.message)
+                restores = [c for r, c, _d in self.world.execs[seen:]
+                            if r == 'nc-db' and c[:1] == ['pg_restore'] and '-U' in c]
+                self.assertEqual(restores, [], 'nothing of HA is restored')
+
+    def test_objects_found_after_the_restore_stop_before_any_fix_up(self):
+        self.world.shape['nc-db'] = dict(CLEAN_SHAPE, triggers=1)
+        with self.assertRaises(BackupError) as caught:
+            self.convert(self.upload_nextcloud(), ['nextcloud'])
+        self.assertEqual(caught.exception.code, 'incompatible')
+        self.assertIn('觸發程序', caught.exception.message)
+        sql = '\n'.join(x['sql'] for x in self.world.sessions if x['role'] == 'nc-db')
+        self.assertNotIn('UPDATE public.oc_storages', sql)
+        self.assertNotIn('public.oc_appconfig', sql)
+
+    def test_a_role_or_database_setting_in_the_new_cluster_is_refused(self):
+        self.world.shape['nc-db'] = dict(CLEAN_SHAPE, role_settings=1)
+        with self.assertRaises(BackupError) as caught:
+            self.convert(self.upload_nextcloud(), ['nextcloud'])
+        self.assertIn('角色或資料庫層級的設定', caught.exception.message)
+
+    def test_a_role_that_gained_rights_fails_the_verification(self):
+        good = {'owners': ['oc_admin'], 'verifier_md5': hashlib.md5(VERIFIER.encode()).hexdigest(),
+                'role': {k: v for k, v in LIVE_DB['role'].items() if k != 'password'}, 'role_settings': 0,
+                **{key: LIVE_DB[key] for key in ('roles', 'extensions', 'datacl', 'nspacl')}}
+        for change, text in (({'role': dict(good['role'], super=True)}, 'oc_admin 角色的權限和這台的不同'),
+                             ({'role': dict(good['role'], createrole=True)}, 'oc_admin 角色的權限和這台的不同'),
+                             ({'role': None}, 'oc_admin 角色的權限和這台的不同'),
+                             ({'role_settings': 1}, '出現了角色或資料庫層級的設定')):
+            with self.subTest(change=change):
+                self.world.catalog = dict(good, **change)
+                with self.assertRaises(BackupError) as caught:
+                    self.convert(self.upload_nextcloud(), ['nextcloud'])
+                self.assertEqual(caught.exception.code, 'job-failed')
+                self.assertIn(text, caught.exception.message)
 
     def test_no_share_is_refused_before_anything_is_built(self):
         with self.assertRaises(BackupError) as caught:
             self.convert(self.upload_nextcloud(share=None), ['nextcloud'])
         self.assertIn('沒有包含 share 資料夾', caught.exception.message)
         self.assertFalse(self.runs('nc-db') or self.runs('hapg'), 'no cluster is started')
+
+
+class ShapeTests(unittest.TestCase):
+    def test_toc_kinds(self):
+        text = ('; Archive created at 2026-11-24\n;\n'
+                '201; 1259 16390 TABLE public oc_users oc_admin\n'
+                '202; 0 16390 TABLE DATA public oc_users oc_admin\n'
+                '203; 1259 16391 SEQUENCE public oc_users_id_seq oc_admin\n'
+                '204; 0 0 SEQUENCE OWNED BY public oc_users_id_seq oc_admin\n'
+                '205; 0 0 SEQUENCE SET public oc_users_id_seq oc_admin\n'
+                '206; 2604 16392 DEFAULT public oc_users id oc_admin\n'
+                '207; 2606 16393 CONSTRAINT public oc_users oc_users_pkey oc_admin\n'
+                '208; 2606 16394 FK CONSTRAINT public oc_x oc_x_fk oc_admin\n'
+                '209; 1259 16395 INDEX public oc_users_uid oc_admin\n'
+                '210; 0 0 ACL - SCHEMA public pg_database_owner\n'
+                '211; 1255 16396 FUNCTION public f() oc_admin\n'
+                '212; 1255 16397 AGGREGATE public json_agg(name) oc_admin\n'
+                '213; 2618 16398 RULE public oc_users r oc_admin\n'
+                '214; 0 0 COMMENT public COLUMN oc_users.uid oc_admin\n'
+                '215; 1259 16399 MATERIALIZED VIEW public mv oc_admin\n')
+        self.assertEqual(nc.toc_kinds(text), ['TABLE', 'TABLE DATA', 'SEQUENCE', 'SEQUENCE OWNED BY', 'SEQUENCE SET',
+                                              'DEFAULT', 'CONSTRAINT', 'FK CONSTRAINT', 'INDEX', 'ACL', 'FUNCTION',
+                                              'AGGREGATE', 'RULE', 'COMMENT', 'MATERIALIZED VIEW'])
+        self.assertEqual([k for k in nc.toc_kinds(text) if k not in nc.TOC_ALLOWED],
+                         ['FUNCTION', 'AGGREGATE', 'RULE', 'MATERIALIZED VIEW'])
+
+    def test_defaults_nextcloud_writes_and_others(self):
+        # dev-e's Nextcloud 35.0.1 (2026-11-24, pg_get_expr with search_path=pg_catalog).
+        for text in CLEAN_SHAPE['defaults'] + ["'0'::character varying", "'[]'::text", '2', '9', 'true',
+                                               "'1.0'::character varying", "nextval('oc_x_seq'::regclass)",
+                                               "'{}'::text[]", "'it''s'::text"]:
+            self.assertTrue(nc.DEFAULT_RE.fullmatch(text), text)
+        for text in ("pg_read_file('/etc/passwd'::text)", "'a'::text || pg_read_file('x')", 'now()',
+                     "lo_export(1, '/tmp/x')", "nextval('oc_x_seq'::regclass) + public.f()", 'CURRENT_TIMESTAMP',
+                     "('x'::text)::regclass", "'x'::text; DROP TABLE y"):
+            self.assertIsNone(nc.DEFAULT_RE.fullmatch(text), text)
+        self.assertEqual(nc.shape_problems(CLEAN_SHAPE), [])
+        self.assertEqual(nc.shape_problems(dict(CLEAN_SHAPE, role_settings=2)), [])
+        self.assertEqual(nc.shape_problems(dict(CLEAN_SHAPE, role_settings=2), converted=True), ['角色或資料庫層級的設定'])
+        self.assertEqual(nc.shape_problems(dict(CLEAN_SHAPE, relations=1, defaults=['now()'])),
+                         ['檢視表或其他特殊資料表', '不是固定值的欄位預設值'])
+        for bad in (None, [], dict(CLEAN_SHAPE, defaults=None), dict(CLEAN_SHAPE, checks=True),
+                    dict(CLEAN_SHAPE, others=-1)):
+            self.assertIsNone(nc.shape_problems(bad), bad)
 
 
 class TargetTests(unittest.TestCase):
