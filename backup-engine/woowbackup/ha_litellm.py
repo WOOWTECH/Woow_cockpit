@@ -15,9 +15,17 @@ migrations must be exactly the live database's. HA's PostgreSQL is 18, this devi
 data DOWN a major, and only as plain rows (below), never as HA's dump or HA's DDL.
 
 check: HA's cluster is streamed into a throwaway volume (its configuration and recovery files replaced or dropped,
-ha_odoo.PgSink; a symlink in it -- a tablespace -- refuses) and opened by a throwaway PostgreSQL 18 of the official
-image pinned by content (PG18_IDS; pulled by digest when the device has none) as hardened as Odoo's (socket only,
-network none, read-only root, noexec data volume, every library/command setting overridden). The salt file must be
+ha_odoo.PgSink; a symlink in it -- a tablespace -- refuses, and so do backup_label and tablespace_map, which a cold
+backup never has: tablespace_map would make the server create tablespace links itself, review SR-4) and opened by a
+throwaway PostgreSQL 18 of the official image pinned by content (PG18_IDS; pulled by digest when the device has none)
+as hardened as Odoo's (socket only, network none, read-only root, noexec data volume, every library/command setting
+of the configuration files overridden, event triggers off). Per-database and per-role settings stored in HA's catalog
+beat the command line, so every session the engine opens there also sends its own settings as client options, which
+beat them (HA_SESSION_OPTIONS: names resolve in pg_catalog only -- a function or aggregate HA's database owner put in
+`public` never runs as the superuser, review SR-1 --, the rows are exported in fixed formats like pg_dump's -- an
+`ALTER DATABASE ... SET DateStyle` cannot turn 5 November into 11 May, SR-2 --, and the superuser's sessions fire no
+event trigger, SR-3). A crafted data directory can still run its own SQL as the superuser inside that sandbox (it can
+redirect built-in operators and types); what it answers is only ever HA's data. The salt file must be
 HA's format and must be the salt the database is bound to (woow_platform.settings and the woow.meta fingerprint, read
 by a role without privileges; ha_litellm_candidate.read_source_salt_binding): else nothing can decrypt the stored
 credentials and the import refuses. HA's database may hold only `public`, `woow_platform` and `woow` (with `meta`
@@ -89,6 +97,20 @@ PG18_PINNED = 'docker.io/library/postgres@sha256:ff64c9e3bdf8e2120107d3559de8db3
 PG18_IDS = ('sha256:4ea77c7055dec6a632156aa2cd9f1abaaedeba5f812f104f4e9e1ac37363469b',
             'sha256:d4e55489302f9c75af116f3b3147f613e712f07e5eb8dabec82d9147dd0a00e5')
 HA_PGDATA = '/var/lib/postgresql'               # the PG 18 image's VOLUME: mounted there, no anonymous volume
+# Files of an online (hot) backup: a cold HA backup never has them; tablespace_map makes the server create tablespace
+# links at its start (review SR-4). Never streamed into the volume; their presence refuses the import.
+RECOVERY_FILES = ('backup_label', 'tablespace_map')
+# Client options of every session the engine opens in HA's cluster (libpq PGOPTIONS): they beat HA's per-database and
+# per-role settings (PostgreSQL GucSource: PGC_S_CLIENT > PGC_S_DATABASE_USER > PGC_S_ARGV). Names resolve in
+# pg_catalog only (SR-1); the text COPY and json write is fixed like pg_dump's setup_connection (SR-2). Only
+# settings any role may set: the salt reader (no privileges) gets them too.
+HA_SESSION_OPTIONS = ('-c search_path=pg_catalog -c DateStyle=ISO,MDY -c IntervalStyle=postgres '
+                      '-c extra_float_digits=3 -c client_encoding=UTF8 -c bytea_output=hex -c TimeZone=UTC '
+                      '-c standard_conforming_strings=on -c local_preload_libraries=')
+# The superuser's sessions also load no library HA's catalog names for them and fire no event trigger (PostgreSQL 17+
+# `event_triggers`; SR-3: a login trigger would run at the engine's first connection, a ddl_command_end one at the
+# salt reader's GRANT). Superuser-only settings: a role without privileges could not log in with them.
+HA_SUPERUSER_OPTIONS = HA_SESSION_OPTIONS + ' -c session_preload_libraries= -c event_triggers=off'
 SCHEMA_CHANGED = ('這台 LiteLLM 的資料庫結構在轉換期間改變了（可能正在升級或重新啟動），沒有匯入任何資料；'
                   '請等 LiteLLM 正常執行後再匯入一次。')
 SALT_MISMATCH = ('HA 備份裡的加密金鑰（salt_key）和 HA 資料庫裡記錄的金鑰不一致，搬過來後儲存的供應商憑證都無法解密，'
@@ -101,7 +123,8 @@ class Source:
     """What one pass over the add-on's member learned: the cluster (`pg_version`, files, bytes), the salt (private:
     no repr, never logged; `salt_valid`), state.json's `litellm_version`, symlinks the cluster had (refused)."""
 
-    __slots__ = ('addon', 'pg_version', 'pg_files', 'pg_bytes', '_salt', 'salt_valid', 'state_version', 'symlinks')
+    __slots__ = ('addon', 'pg_version', 'pg_files', 'pg_bytes', '_salt', 'salt_valid', 'state_version', 'symlinks',
+                 'recovery_files')
 
     def __init__(self):
         self.addon = None
@@ -111,6 +134,7 @@ class Source:
         self.salt_valid = False
         self.state_version = None
         self.symlinks = 0
+        self.recovery_files = 0
 
     def __repr__(self):
         return f'<Source pg={self.pg_version} files={self.pg_files} salt_valid={self.salt_valid}>'
@@ -131,6 +155,9 @@ def scan_member(stream, report, *, pg=None, checkpoint=None):
         name = entry.name
         if ha_odoo._under(name, PG_PREFIX):
             rel = name[len(PG_PREFIX) + 1:] if name != PG_PREFIX else '.'
+            if rel.split('/', 1)[0] in RECOVERY_FILES:
+                src.recovery_files += 1  # never reaches the volume (SR-4); the verdict refuses
+                continue
             data = None
             if entry.kind == 'file':
                 src.pg_files += 1
@@ -221,6 +248,12 @@ def target_version(work, app):
 
 MIGRATIONS_SQL = ('SELECT coalesce(json_agg(migration_name ORDER BY migration_name COLLATE "C"), \'[]\'::json) '
                   'FROM public."_prisma_migrations" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL')
+
+
+# HA's migrations are read only from an ordinary table: a view (or anything else) there could run HA's code as the
+# superuser at the read (review SR-1).
+MIGRATIONS_TABLE_SQL = ("SELECT to_json(coalesce((SELECT c.relkind = 'r' FROM pg_catalog.pg_class c "
+                        "WHERE c.oid = pg_catalog.to_regclass('public._prisma_migrations')), false))")
 
 
 def _migrations(value):
@@ -526,8 +559,7 @@ def analyse(cluster):
     objects = cluster.query_json(OBJECTS_SQL, DATABASE)
     if not isinstance(objects, dict):
         raise BackupError('job-failed', '無法讀取 HA 的 LiteLLM 資料庫。')
-    has_migrations = cluster.query_json("SELECT to_json(to_regclass('public._prisma_migrations') IS NOT NULL)",
-                                        DATABASE)
+    has_migrations = cluster.query_json(MIGRATIONS_TABLE_SQL, DATABASE)
     migrations = _migrations(cluster.query_json(MIGRATIONS_SQL, DATABASE)) if has_migrations is True else None
     superuser = cluster.query_json(ha_odoo.SUPERUSER_SQL, DATABASE)
     return {'objects': objects, 'databases': sorted(databases), 'migrations': migrations,
@@ -540,6 +572,9 @@ def verdict(src, found, *, ha_major, target_major, live_migrations_value, bindin
     objects = found['objects']
     if src.symlinks:
         blockers.append('HA 的 LiteLLM 資料庫使用了表格空間或符號連結，無法安全地搬過來。')
+    if src.recovery_files:
+        blockers.append('HA 的 LiteLLM 資料庫不是在停止狀態下備份的（含有 backup_label 或 tablespace_map），無法安全地搬過來；'
+                        '請在 HA 重新做一份 LiteLLM 的備份。')
     if ha_major != HA_PG_MAJOR or src.pg_version is None:
         blockers.append(f'HA 的 LiteLLM 資料庫不是預期的 PostgreSQL {HA_PG_MAJOR}（是 {ha_major or "未知"} 版）。')
     if target_major is None or not 13 <= target_major < HA_PG_MAJOR + 1:
@@ -723,7 +758,8 @@ def pick_pg18(work, app):
 
 
 def ha_server_args():
-    """ha_odoo.HA_SERVER_SETTINGS (every library/command setting off, socket only) with the PG 18 image's paths."""
+    """ha_odoo.HA_SERVER_SETTINGS (every library/command setting off, socket only) with the PG 18 image's paths, and
+    no event trigger (SR-3; HA's per-database settings could turn it on again: the sessions' own options win)."""
     args = ['postgres']
     for setting in ha_odoo.HA_SERVER_SETTINGS:
         if setting.startswith('hba_file='):
@@ -731,7 +767,25 @@ def ha_server_args():
         elif setting.startswith('ident_file='):
             setting = f'ident_file={HA_PGDATA}/pg_ident.conf'
         args += ['-c', setting]
-    return args
+    return args + ['-c', 'event_triggers=off']
+
+
+class HaSessions:
+    """The job's throwaway objects as HA's cluster sees them: every `podman exec` in the HA container carries
+    PGOPTIONS (HA_SUPERUSER_OPTIONS; the salt reader, a role without privileges, HA_SESSION_OPTIONS), so no session
+    the engine opens there -- ha_odoo.Cluster's, export_rows' COPY, the salt reader's -- runs with HA's settings."""
+
+    def __init__(self, tmp, role):
+        self._tmp, self._role = tmp, role
+
+    def __getattr__(self, name):
+        return getattr(self._tmp, name)
+
+    def exec(self, role, argv, *, env=None, **kwargs):
+        if role == self._role:
+            user = argv[argv.index('-U') + 1] if '-U' in argv[:-1] else None
+            env = {**(env or {}), 'PGOPTIONS': HA_SESSION_OPTIONS if user == READER_ROLE else HA_SUPERUSER_OPTIONS}
+        return self._tmp.exec(role, argv, env=env, **kwargs)
 
 
 def start_ha_cluster(work, tmp, image):
@@ -739,7 +793,7 @@ def start_ha_cluster(work, tmp, image):
     the data volume noexec/nosuid/nodev at the image's VOLUME path, every library/command setting overridden."""
     tmp.run('hapg', image, ha_server_args(), detach=True, read_only_root=True, env={'PGDATA': HA_PGDATA},
             volumes=[(tmp.name('hapg'), HA_PGDATA, 'rw,noexec,nosuid,nodev')])
-    cluster = ha_odoo.Cluster(tmp, 'hapg', log=work.log)
+    cluster = ha_odoo.Cluster(HaSessions(tmp, 'hapg'), 'hapg', log=work.log)
     cluster.wait_ready(checkpoint=work.checkpoint)
     major = cluster.query_json("SELECT to_json(current_setting('server_version_num')::int / 10000)", DATABASE)
     if major != HA_PG_MAJOR:

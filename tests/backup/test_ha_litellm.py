@@ -368,6 +368,107 @@ class CheckTests(LiteLLMCase):
         self.assertFalse(self.runs('ll-db'), 'a check changes nothing')
 
 
+class SecurityReviewTests(LiteLLMCase):
+    """Security review 2026-11-23 (tests/backup/evidence/litellm-product-security-review-20261123; the real attacks are
+    tests/e2e/lab/litellm_sandbox_review.py): HA's PostgreSQL 18 catalog is untrusted, also below the superuser."""
+
+    def setUp(self):
+        super().setUp()
+        self.raw = []
+        original = self.world.podman
+
+        def record(args, data, stdout):
+            self.raw.append(list(args))
+            return original(args, data, stdout)
+
+        self.world.podman = record
+
+    def hapg_sessions(self):
+        """(PGOPTIONS or None, psql user) of every psql/pg_isready the engine ran in HA's container."""
+        found = []
+        for args in self.raw:
+            if args[:1] != ['exec']:
+                continue
+            i, env = 1, {}
+            while args[i].startswith('--'):
+                if args[i] == '--env':
+                    key, _, value = args[i + 1].partition('=')
+                    env[key] = value
+                i += 2 if args[i] in ('--user', '--workdir', '--env') else 1
+            command = args[i + 1:]
+            if fk.role_of(args[i]) == 'hapg' and command[:1] in (['psql'], ['pg_isready']):
+                found.append((env.get('PGOPTIONS'), command[command.index('-U') + 1], command[0]))
+        return found
+
+    def test_every_session_in_has_cluster_pins_its_own_settings(self):
+        # SR-1/SR-2/SR-3: HA's per-database/per-role settings beat the command line, client options beat them.
+        for run in (lambda: self.check(self.upload_litellm(), ['litellm']), lambda: self.convert_litellm()):
+            self.raw.clear()
+            run()
+            sessions = self.hapg_sessions()
+            psql = [s for s in sessions if s[2] == 'psql']
+            self.assertTrue(len(psql) >= 8, sessions)
+            for options, user, _tool in sessions:
+                expected = ha_litellm.HA_SESSION_OPTIONS if user == ha_litellm.READER_ROLE \
+                    else ha_litellm.HA_SUPERUSER_OPTIONS
+                self.assertEqual(options, expected, (user, options))
+            self.assertIn(ha_litellm.READER_ROLE, {user for _o, user, _t in psql})
+        for word in ('-c search_path=pg_catalog', '-c DateStyle=ISO,MDY', '-c extra_float_digits=3',
+                     '-c client_encoding=UTF8', '-c IntervalStyle=postgres', '-c TimeZone=UTC'):
+            self.assertIn(word, ha_litellm.HA_SESSION_OPTIONS)
+        self.assertIn('-c local_preload_libraries=', ha_litellm.HA_SESSION_OPTIONS)
+        for word in ('event_triggers', 'session_preload_libraries'):
+            self.assertNotIn(word, ha_litellm.HA_SESSION_OPTIONS, 'a role without privileges may not set it')
+        self.assertTrue(ha_litellm.HA_SUPERUSER_OPTIONS.endswith(' -c session_preload_libraries= -c event_triggers=off'))
+        # the live database and the new cluster are this device's own: no HA options there
+        self.assertFalse([a for a in self.raw if a[:1] == ['exec'] and any('PGOPTIONS' in x for x in a)
+                          and not any(fk.role_of(x) == 'hapg' for x in a)])
+
+    def convert_litellm(self):
+        return self.convert(self.upload_litellm(), ['litellm'])
+
+    def test_the_server_starts_without_event_triggers(self):
+        args = ha_litellm.ha_server_args()
+        self.assertEqual(args[-2:], ['-c', 'event_triggers=off'])
+        self.check(self.upload_litellm(), ['litellm'])
+        self.assertIn('event_triggers=off', self.runs('hapg')[0][2])
+
+    def test_migrations_are_read_only_from_an_ordinary_table(self):
+        # SR-1: a view there would run HA's code as the superuser at the read.
+        answer = self.world.answer
+
+        def not_a_table(role, sql, database):
+            if role == 'hapg' and sql == ha_litellm.MIGRATIONS_TABLE_SQL:
+                return False
+            if role == 'hapg' and sql == ha_litellm.MIGRATIONS_SQL:
+                raise AssertionError('HA migrations read from something that is not an ordinary table')
+            return answer(role, sql, database)
+
+        self.world.answer = not_a_table
+        result = self.check(self.upload_litellm(), ['litellm'])[0]
+        self.assertFalse(result['ok'])
+        self.assertTrue(any('資料庫結構版本不同' in b for b in result['blockers']), result['blockers'])
+        self.assertIn("c.relkind = 'r'", ha_litellm.MIGRATIONS_TABLE_SQL)
+
+    def test_online_backup_files_never_reach_the_volume_and_refuse(self):
+        # SR-4: tablespace_map makes PostgreSQL create tablespace links at its start (no symlink in the archive).
+        for extra in ([{'name': 'data/postgres/tablespace_map', 'data': b'16400 /tmp/elsewhere\n'}],
+                      [{'name': 'data/postgres/backup_label', 'data': b'START WAL LOCATION: 0/2000028\n'}],
+                      [{'name': 'data/postgres/backup_label', 'type': 'dir'},
+                       {'name': 'data/postgres/backup_label/x', 'data': b'x'}]):
+            result = self.check(self.upload_litellm(extra=extra), ['litellm'])[0]
+            self.assertFalse(result['ok'])
+            self.assertTrue(any('不是在停止狀態下備份的' in b for b in result['blockers']), result['blockers'])
+            with tarfile.open(fileobj=io.BytesIO(self.world.imported['hapg'])) as tar:
+                names = tar.getnames()
+            self.assertFalse([n for n in names if n.split('/')[0] in ('tablespace_map', 'backup_label')], names)
+        with self.assertRaises(BackupError) as caught:
+            self.convert(self.upload_litellm(extra=[{'name': 'data/postgres/tablespace_map', 'data': b'1 /x\n'}]),
+                         ['litellm'])
+        self.assertIn('不是在停止狀態下備份的', caught.exception.message)
+        self.assertFalse(self.world.copies_in, 'no HA row was loaded')
+
+
 class ConvertTests(LiteLLMCase):
     def assert_nothing_loaded(self):
         self.assertFalse(self.world.copies_in, 'no HA row was loaded')
