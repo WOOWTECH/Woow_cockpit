@@ -1,7 +1,7 @@
 {
  "lane": "services-b",
  "date": "2026-11-23",
- "updated": "2026-11-23T13:20+08:00",
+ "updated": "2026-11-23T13:12+08:00",
  "scope": "lab internal-candidate test of the HA -> Podman LiteLLM migration; the public import stays guarded (ha_litellm_candidate.convert refuses, litellm is not in haimport.APPS)",
  "authorization": "the owner provided the real showcase HA LiteLLM backup through the main session and allowed real keys inside network-none labs (team note 2026-11-23 09:55)",
  "target": "lab woowbk-dev-d (outer network none, no published ports, isolation asserted before and after the run); production untouched",
