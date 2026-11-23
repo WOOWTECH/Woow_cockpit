@@ -1,0 +1,1 @@
+{"checks": {"broker_and_clients_absent": true, "private_workload_directories_absent": true, "staged_code_directories_absent": true}, "result": "passed", "scope": "synthetic-mqtt-postflight"}

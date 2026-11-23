@@ -1,0 +1,14 @@
+{
+  "source_commit": "be2dfb88bf9dd9f822efde82b1ac48895521e5e1",
+  "scope": "actual pinned CLIENT BusyBox applet presence only; no source credentials or broker provisioning",
+  "exit": 1,
+  "elapsed_seconds": 2.976378837134689,
+  "stdout_sha256": "50aaad961db77ed24bda555b3004e6bd45fc2d392b25c8d60aa066b351d4ad6a",
+  "fixed_status": [
+    "REAL OWNER SINK_MISSING_HTTPD REFUSED",
+    "REAL OWNER POSTFLIGHT PASSED"
+  ],
+  "stderr_bytes_not_published": 0,
+  "delivery_acceptance": "not-executed",
+  "commercial_acceptance": "not-complete"
+}

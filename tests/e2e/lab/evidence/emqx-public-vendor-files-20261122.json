@@ -1,0 +1,9 @@
+{
+  "source_commit": "e19cd6e39a171ca5c7c0e5ed7f573d04e1012fd5",
+  "scope": "actual immutable public cached image fixed ACL and TLS files native observer; no broker or real HA data",
+  "result": "passed",
+  "elapsed_seconds": 1.766665023053065,
+  "private_file_contents_published": false,
+  "broker_observation": "not-run",
+  "commercial_acceptance": "not-complete"
+}

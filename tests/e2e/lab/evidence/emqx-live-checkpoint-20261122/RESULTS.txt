@@ -1,0 +1,100 @@
+Scope: actual synthetic EMQX data export inventory + separate owner-created
+checkpoint -> native typed semantic -> single MQTT target-category consumer.
+Not cold-source ingestion, not HA restore, not commercial acceptance.
+Command: tests/e2e/lab/run_emqx_broker_export.sh.
+Authoritative successful source: 7a283a94932ee6ba77e94240facde5620e2fb466.
+final.jsonl is an exact copy/alias of attempt-5.jsonl, NOT another run.
+Five integration attempts total, ONE successful whole chain, 14 checks passed.
+Previously accepted login12/MQTT14/full native25 suites were NOT rerun.
+
+Implementation: 40a62e8 workflow/tooling; 0cd310a stage diagnostics/projector;
+28cd6c4 explicit owner UID/GID runtime fix; a60b18c target binding;
+63624a1 native group type diagnosis; 7a283a9 atom-group projector fix/regression.
+Pinned exporter: 545d816b9b1c5ac5a5583aa9b4029ab0e9c0b870, native prerequisite65e5e85.
+Native Erlang exporter/escript/private JSON reader match that commit exactly.
+Native runner differs ONLY by explicit --user=<owneruid>:<ownergid>; all limits
+and read-only/network/log/image-volume restrictions remain intact.
+Target projector started from e38f996, plus minimal observed-atom-group fix.
+13b9312 absence profile/two-table gates were NOT integrated or selected.
+
+Per-attempt source and actual outcomes (every source hash also in JSONL):
+1 40a62e8fdfc918de1a1365a295a87f433e39e73d: real data export inventory passed;
+  checkpoint eval output included fixed return 'ok', strict output framing refused.
+2 0cd310a7ee8dc4d222b581999bb00a40cf4e8bbf: actual checkpoint receipt created;
+  native runner exit1 because nested keep-id still used image UID1000 rather
+  than dev-d owner1019, unable to open owner0700 code path.
+3 a60b18c67dfaf42bf892dd4e44cca2c61351339c: native export exit0, schema/typed
+  reader/value registration/leak refusal and table nonmutation passed; target
+  caller's binary-only provider-group precondition refused actual native atom.
+4 63624a19acae33ea7ad6907bc548b70a26ad7753: actual provider state group AND
+  checkpoint row group identified as atom without disclosing group values;
+  fixed binary-only target projector refused. All prior native steps passed.
+5 7a283a94932ee6ba77e94240facde5620e2fb466: all14checks passed after exact
+  owner-verified atom-name comparison, no other target/schema admission changes.
+No failures were overwritten or counted as acceptance.
+
+Actual export files, METADATA ONLY (content never emitted):
+META.hocon 31B; cluster.hocon 0B;
+mnesia/emqx_authn_mnesia 810B; mnesia/emqx_authn_scram_mnesia 655B.
+This is a freshly created owner data export. Its file inventory is bounded,
+regular-file/directory-only, duplicate/path/link checked. No member is chosen
+as a decoder input: data_export_decoder_selection remains none.
+A SEPARATE new checkpoint is minted directly in the fresh synthetic broker via
+activate_checkpoint(min=[emqx_authn_mnesia],allow_remote=false), node list must
+be exactly local node, backup_checkpoint, deactivate in after. Owner validates
+native table/record/attributes/disc_copies/ordered_set before capture. Private
+receipt binds actual container ID, image, table, checkpoint size/SHA and exporter
+commit. 0600 checkpoint/private receipt stay in invocation-owned0700 directories.
+Bounded no-follow stable-inode reads reach EOF; only these freshly minted bytes
+enter native disk_log traversal. No archive/HA/cold-source bytes enter exporter.
+
+Successful actual checkpoint: 810B, table emqx_authn_mnesia, 1 typed row,
+6 unique semantic values. All values (including metadata atoms such as false)
+registered in the PARTIAL producer scanner before final summary. All extracted
+actual values individually refused on scan; full report exact bytes scanned.
+Checks use passed/failed strings because registered false must not be exempted.
+Native JSON binds input SHA/length/version/schema and remains private. Live
+broker table fingerprint before export/checkpoint and after native export matched;
+fingerprint and row contents never emitted. Native final cleanup is mandatory
+before run_native returns status0. No table import/restore/repair/write performed.
+
+Pinned public auth-chain abstract source was read separately (no broker data):
+insert_user_group assigns Chain.name for password_based/built_in_database;
+list_authenticators serializes provider state. The real owner's sole global
+password authenticator provider/state supplies expected group independently of
+row contents. State and row are actual atoms. Projector now accepts only native
+binary or UTF8 atom group NAME exactly equal to that owner-verified expectation.
+No atom creation, other-type coercion, row-derived expected group, row filtering,
+username/hash conversion, schema loosening or auto-filled categories introduced.
+Projected one MQTT record is read through mqtt_table_reader in memory; values
+registered. Remaining api-keys/connectors/tls/bootstrap stay unsupported. Full
+target registration still fails atomically and registry summary stays unsealed.
+Source/target completeness BOTH not-assessed. No login_preflight claim.
+
+Targeted necessary regression: original six projector tests + three new atom-group
+matching/wrong-group/type/non-coercion tests, 9 passed in0.005s. No additional
+live suite reruns for counting. git diff --check and unchanged product/source
+gate checks passed. Probe results: ownerUID1019 vs imageUID1000 confirmed; after
+explicit owner binding, private0700 minimal escript passed; one public source
+inspection probe exited127 before corrected script framing, then public code
+inspection succeeded. These probes are not broker acceptance checks.
+
+Isolation: outer networknone/ports{} before/after every completed successful
+wrapper run; final preflight memory.current2429526016/max4294967296, 2 CPU.
+Fresh broker networknone/lognone/image-volumeignore,768MiB/0.75CPU/pids256.
+Native pinned image3f60addfad2bfc6c09400aa48cfbc1b2b2aab04fb6a64d6392c016e02d7fb57b,
+OTP26/ERTS14.2.5.11 enforced. Native capdropALL/no-new-privileges/read-only,
+RAM+swap256MiB,pids64,CPU10s,file8MiB,container15s/client20s,crashdump/dev/null.
+Host accesses only via lab owner.sh/wrapper, exclusive mutation locks held.
+Existing Headscale auto-restarts were not stopped. No host production Podman.
+All raw broker/tool diagnostics, config, export archive, checkpoint, receipt,
+private JSON and projector snapshots are deleted; only fixed sanitized metadata
+is retained. postflight independently confirms no broker/client/native/probe
+containers or private/staged/probe dirs. No implicit image volumes created.
+
+Cold-source follow-up stays gated, coordinated through main/Mencius; no direct
+agent-send tool is available. Parent reports ARM117760000B/x86290785280B expanded
+EOF+fullfinish,43files,DCD22/DCL3/LOG2/DAT1. These are parent-supplied readonly
+facts, not reproduced here and not inputs to this owner-checkpoint exporter.
+No original source opened, recovered or fed to native decoder. Full coverage and
+cold dump/log recovery semantics remain required before real HA restore.

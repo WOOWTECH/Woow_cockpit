@@ -1,0 +1,14 @@
+{
+  "source_commit": "05c25dde7b0ca807cbf39d92471e4886869bbe17",
+  "scope": "real ARM framed actual source Capture with observed pinned vendor ACL and cold history; unsealed; no target/broker",
+  "exit": 1,
+  "elapsed_seconds": 7.147400507004932,
+  "fixed_phases": [
+    "ARM POSTFLIGHT PASSED"
+  ],
+  "unpublished_stdout_lines": 0,
+  "stderr_bytes_not_published": 0,
+  "stdout_sha256": "454e6b69da271338f2cb3c9c7eeca9b40376c66677218f315b2f64e45a8865d7",
+  "restore_executed": false,
+  "full_scan_performed": false
+}

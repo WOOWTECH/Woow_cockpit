@@ -1,0 +1,13 @@
+{
+  "source_commit": "0d942fdccfc821000d72667567b354208b59fbda",
+  "scope": "real ARM imported Mnesia ACL mode with same-capture target reference shape diagnostics",
+  "exit": 1,
+  "elapsed_seconds": 201.8422597979661,
+  "stdout_sha256": "7ea908fe33f032653f5446c2d07f0bdbc14f18a7132ae92b947b0a58fd65ec85",
+  "fixed_status": [
+    "REAL OWNER BUILD_PRODUCT_TARGET_REFERENCES_BUILTIN_EXACT_TYPE_ENABLE_MAXRULES100_PRODUCT REFUSED",
+    "REAL OWNER POSTFLIGHT PASSED"
+  ],
+  "stderr_bytes_not_published": 0,
+  "commercial_acceptance": "not-complete"
+}

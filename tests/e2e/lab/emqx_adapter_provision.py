@@ -26,7 +26,7 @@ class Provision:
         if labels.get('org.opencontainers.image.version') != '5.8.9':
             raise RuntimeError('image version mismatch')
         config = '.config/' + f.prefix
-        r.run(['/usr/bin/mkdir', '--', r.home + '/' + config])
+        r.run(['/usr/bin/mkdir', '-m', '0700', '--', r.home + '/' + config])
         self.created.append(('config', config))
         for name, value in (('base.hocon', base), ('acl.conf', acl)):
             r.write_file(config + '/' + name, value, 0o644)

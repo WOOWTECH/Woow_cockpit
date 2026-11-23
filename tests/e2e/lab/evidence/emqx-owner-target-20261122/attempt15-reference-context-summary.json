@@ -1,0 +1,37 @@
+{
+  "source_commit": "6cfaa6d7709614e04ee32397ad974c00bfaa0ab6",
+  "scope": "actual fresh pinned broker fixed reference root/key/context diagnosis; no real source restore",
+  "exit": 1,
+  "elapsed_seconds": 45.16600985801779,
+  "stdout_sha256": "f9823d7b636fcded8a7a26a5ba08fd434bc4cd3a63c0de09f1c1c9d7f604e195",
+  "stderr_bytes_not_published": 0,
+  "reports": [
+    {
+      "checks": {
+        "broker_cleanup": "passed",
+        "broker_ready": "passed",
+        "clients_cleanup": "passed",
+        "fresh_ticker_identity_suspended_after": "passed",
+        "fresh_ticker_identity_suspended_before": "passed",
+        "native_fixed_expression_parsed": "passed",
+        "no_clients_after_capture": "passed",
+        "no_clients_before_capture": "passed",
+        "private_files_cleanup": "passed"
+      },
+      "consumer_fixed_reason": "reference_template",
+      "consumer_fixed_reference": {
+        "context": "ssl_disabled",
+        "key": "certfile",
+        "root": "listeners"
+      },
+      "consumer_fixed_stage": "references",
+      "ha_commercial_acceptance": "not-claimed",
+      "native_transport": "passed",
+      "result": "failed",
+      "scope": "synthetic-broker-owner-target",
+      "target_completeness": "not-assessed"
+    }
+  ],
+  "postflight_passed": true,
+  "restore_executed": false
+}

@@ -1,0 +1,14 @@
+{
+  "source_commit": "89b8a65014b18883bebf8687238c72155dd9a1d1",
+  "scope": "real ARM joined preflight with complete isolated policy bundle; no restore",
+  "exit": 1,
+  "elapsed_seconds": 111.93283179309219,
+  "stdout_sha256": "d3855123a209b9df396ae47e4368b1849f2091a0ac4aac6d075b5c95d5673706",
+  "fixed_status": [
+    "PREFLIGHT STAGE REFUSED target_native_wire",
+    "ARM TRANSFER REFUSED",
+    "ARM POSTFLIGHT PASSED"
+  ],
+  "stderr_bytes_not_published": 0,
+  "restore_executed": false
+}

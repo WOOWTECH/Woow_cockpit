@@ -1,0 +1,43 @@
+{
+  "scope": "named dev-d file cache only before unchanged full-test gate",
+  "requested_bytes": 134217728,
+  "swappiness": 0,
+  "result": "complete",
+  "errno": 0,
+  "before": {
+    "current": 2353377280,
+    "maximum": "4294967296",
+    "anon": 1024716800,
+    "file": 1251131392,
+    "shmem": 886820864,
+    "inactive_file": 255512576,
+    "events": {
+      "low": "0",
+      "high": "0",
+      "max": "6708",
+      "oom": "5",
+      "oom_kill": "4",
+      "oom_group_kill": "0",
+      "sock_throttled": "65"
+    }
+  },
+  "after": {
+    "current": 2214244352,
+    "maximum": "4294967296",
+    "anon": 1024716800,
+    "file": 1116700672,
+    "shmem": 886820864,
+    "inactive_file": 177070080,
+    "events": {
+      "low": "0",
+      "high": "0",
+      "max": "6708",
+      "oom": "5",
+      "oom_kill": "4",
+      "oom_group_kill": "0",
+      "sock_throttled": "65"
+    }
+  },
+  "limit_unchanged": true,
+  "service_stop_requested": false
+}

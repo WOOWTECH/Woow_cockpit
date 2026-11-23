@@ -1,0 +1,13 @@
+{
+  "source_commit": "aed89cfabc660aadf65702baee06589c1d7eb625",
+  "scope": "real ARM HA backup Mnesia ACL import-refreshed action metadata real restore",
+  "exit": 1,
+  "elapsed_seconds": 592.3,
+  "stdout_sha256": "34c860e67b8a955e4eeffe7a7d4c57894e519343fbf0e919fb1bbe2fa890a52f",
+  "fixed_status": [
+    "REAL OWNER RESTORE REFUSED",
+    "REAL OWNER POSTFLIGHT PASSED"
+  ],
+  "stderr_bytes_not_published": 0,
+  "commercial_acceptance": "not-complete"
+}

@@ -1,0 +1,13 @@
+{
+  "source_commit": "a0677175bebab421efef0ffd24cd91ecfee915de",
+  "scope": "real ARM candidate ACL preservation retaining exact imported vendor default path",
+  "exit": 1,
+  "elapsed_seconds": 2.0639212829992175,
+  "stdout_sha256": "9ebe0e77ea6ab682f0a36cbfbee0f0fb2ad56fd3b5b5c0672f46179583c2fef1",
+  "fixed_status": [
+    "REAL OWNER BUDGET REFUSED",
+    "REAL OWNER POSTFLIGHT PASSED"
+  ],
+  "stderr_bytes_not_published": 0,
+  "commercial_acceptance": "not-complete"
+}

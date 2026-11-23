@@ -1,0 +1,14 @@
+{
+  "source_commit": "173a7c3c66ba725f38e6a84cff885462ee165cb9",
+  "scope": "real encrypted ARM HA same-issued-target product restore client and rollback acceptance",
+  "exit": 1,
+  "elapsed_seconds": 197.02987359603867,
+  "stdout_sha256": "7bbec0d0fcdecffec8fb0de35afde987fcad1aa067b30290aafb9d66fc993750",
+  "fixed_status": [
+    "REAL OWNER BUILD REFUSED",
+    "REAL OWNER POSTFLIGHT PASSED"
+  ],
+  "stdout_bytes": 54,
+  "stderr_bytes_not_published": 0,
+  "commercial_acceptance": "not-complete"
+}

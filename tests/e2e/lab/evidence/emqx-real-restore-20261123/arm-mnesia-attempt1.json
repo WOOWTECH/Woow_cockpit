@@ -1,0 +1,13 @@
+{
+  "source_commit": "d4e8c8bacf51a9f250880095536763fe3fb8248c",
+  "scope": "real ARM restore into target file plus imported Mnesia ACL with actual positive negative MQTT and API",
+  "exit": 1,
+  "elapsed_seconds": 213.14250087412074,
+  "stdout_sha256": "7ea8929eb478bf9c5eea0b58b2f0d0bd45647b3041e463a7f173e3894d90155c",
+  "fixed_status": [
+    "REAL OWNER BUILD_PRODUCT_TARGET_REFERENCES_PRODUCT REFUSED",
+    "REAL OWNER POSTFLIGHT PASSED"
+  ],
+  "stderr_bytes_not_published": 0,
+  "commercial_acceptance": "not-complete"
+}

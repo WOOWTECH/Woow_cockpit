@@ -1,0 +1,34 @@
+{
+  "scope": "generated main integration failures preserved and corrected with stricter fixture inputs; no commercial claim",
+  "runs": [
+    {
+      "commit": "bfd2d36",
+      "run": 18,
+      "pass": 17,
+      "fail": 1,
+      "error": 0,
+      "reason": "new required vendor observation absent in old generated fresh fixture",
+      "correction": "14c7ac1/3058816",
+      "corrected_run": 19,
+      "corrected_pass": 19,
+      "corrected_seconds": 4.347
+    },
+    {
+      "commit": "6be85f7",
+      "run": 40,
+      "pass": 36,
+      "fail": 3,
+      "error": 1,
+      "reasons": [
+        "old generated driver fixture excluded newly required ACL observation",
+        "old negative used now-supported proven vendor ACL path"
+      ],
+      "correction": "d76145f",
+      "corrected_run": 40,
+      "corrected_pass": 40,
+      "corrected_seconds": 4.423
+    }
+  ],
+  "guards_removed": false,
+  "skipped": 0
+}

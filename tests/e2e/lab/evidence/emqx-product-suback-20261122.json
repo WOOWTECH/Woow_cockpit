@@ -1,0 +1,21 @@
+{
+  "scope": "actual isolated synthetic HA conversion and product adapter restore/rollback; not real HA backup acceptance",
+  "source_commit": "336fb37ba79f89fdab26ebfc0849709d325ebc48",
+  "exit": 0,
+  "evidence": "emqx-ha-adapter-joined/run-20261122T131458Z-1275344.jsonl",
+  "checks_passed": [
+    "source_absent_from_target",
+    "ha_build_and_package",
+    "temporary_objects_cleanup",
+    "candidate_installed",
+    "candidate_denied_subscription",
+    "restarted_denied_subscription",
+    "automatic_rollback_verified",
+    "adapter_automatic_rollback",
+    "wrapper_cleanup"
+  ],
+  "subscription_denial_reason": 135,
+  "postflight": "dev-d isolation: true none {}",
+  "real_source_restore": false,
+  "commercial_acceptance": "not-complete"
+}

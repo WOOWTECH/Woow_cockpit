@@ -1,0 +1,21 @@
+{
+  "source_commit": "2e9e6e2e54ed91ee37e0bd8e1c570aa3eb0fb6e4",
+  "scope": "generated HTTP parser native and source transfer tests; not real restore",
+  "initial_command": "PYTHONPATH=tests/e2e/lab python3 -m unittest test_emqx_http_context test_emqx_source_profiles test_emqx_source_transfer",
+  "initial_result": {
+    "run": 10,
+    "pass": 9,
+    "error": 1,
+    "error_reason": "missing backup-engine import path: woowbackup"
+  },
+  "corrected_command": "PYTHONPATH=tests/e2e/lab:backup-engine:. python3 -m unittest test_emqx_http_context.HttpContextTests.test_owner_fixed_frame_actual_capture_native_registry_unsealed_and_cleanup",
+  "corrected_result": {
+    "run": 1,
+    "pass": 1,
+    "fail": 0,
+    "error": 0,
+    "seconds": 2.606
+  },
+  "real_backup_attempt": "emqx-arm-actual-source-20261122/attempt-4-http-body.json",
+  "commercial_acceptance": "not-complete"
+}

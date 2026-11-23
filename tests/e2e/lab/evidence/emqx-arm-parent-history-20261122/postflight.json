@@ -1,0 +1,11 @@
+{
+  "source_commit": "3ec88ac5ca51073a7c1ec76a3f89cea1a6e6b7c7",
+  "outer_running": true,
+  "outer_network": "none",
+  "outer_published_ports": {},
+  "owned_native_containers": 0,
+  "owned_code_dirs": 0,
+  "owned_private_dirs": 0,
+  "postflight_exit": 0,
+  "restore_executed": false
+}

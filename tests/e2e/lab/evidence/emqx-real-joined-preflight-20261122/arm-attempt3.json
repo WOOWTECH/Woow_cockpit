@@ -1,0 +1,14 @@
+{
+  "source_commit": "7b614d1ff0f1033b3bdb1ccda1f98ed619b05310",
+  "scope": "real ARM joined preflight fixed target substage diagnosis; no restore",
+  "exit": 1,
+  "elapsed_seconds": 107.3076864159666,
+  "stdout_sha256": "0be05327f3326e96983842b1fafd9b7c1dc15178084d92aa5d9994311f1af372",
+  "fixed_status": [
+    "PREFLIGHT STAGE REFUSED target_vendor",
+    "ARM TRANSFER REFUSED",
+    "ARM POSTFLIGHT PASSED"
+  ],
+  "stderr_bytes_not_published": 0,
+  "restore_executed": false
+}

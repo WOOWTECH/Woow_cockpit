@@ -1,0 +1,15 @@
+{
+  "source_commit": "a981ca5b2f25d770d4b1e69cf53e1429f110d6e8",
+  "scope": "actual pinned CLIENT public NC listener, empty health connection and repeated HTTP primitive behavior only",
+  "exit": 1,
+  "elapsed_seconds": 2.790499526076019,
+  "stdout_sha256": "2923648b052769767edb49d5a29ab6d970f9c9f26ed7d854ed13f5cbb432415d",
+  "fixed_status": [
+    "REAL OWNER NC_RUN REFUSED",
+    "REAL OWNER POSTFLIGHT PASSED"
+  ],
+  "stderr_bytes_not_published": 0,
+  "source_credentials": "not-read",
+  "delivery_acceptance": "not-executed",
+  "commercial_acceptance": "not-complete"
+}

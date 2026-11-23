@@ -1,0 +1,10 @@
+{
+  "source_commit": "23b4fa553b8bc129e1389d68ea1a04c8773f2fa3",
+  "scope": "pinned public NC primitive behavior only",
+  "exit": 1,
+  "elapsed_seconds": 0.032,
+  "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "fixed_status": [],
+  "stderr_bytes_not_published": 30,
+  "commercial_acceptance": "not-complete"
+}

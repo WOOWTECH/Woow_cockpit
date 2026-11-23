@@ -1,0 +1,13 @@
+{
+  "source_commit": "63ae77565ca8a164ee8b280727382d8aeb8d5d45",
+  "scope": "real ARM retainer storage and expiry migration with MQTT retained byte oracles and full owner acceptance",
+  "exit": 1,
+  "elapsed_seconds": 4.705187662038952,
+  "stdout_sha256": "9ebe0e77ea6ab682f0a36cbfbee0f0fb2ad56fd3b5b5c0672f46179583c2fef1",
+  "fixed_status": [
+    "REAL OWNER BUDGET REFUSED",
+    "REAL OWNER POSTFLIGHT PASSED"
+  ],
+  "stderr_bytes_not_published": 0,
+  "commercial_acceptance": "not-complete"
+}

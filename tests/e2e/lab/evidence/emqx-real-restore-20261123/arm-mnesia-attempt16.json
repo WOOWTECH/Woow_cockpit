@@ -1,0 +1,13 @@
+{
+  "source_commit": "f559d85e20216d2bd1f3d7c27e5252b6ac69aabd",
+  "scope": "real ARM HA backup Mnesia ACL wire-bound capture budget real restore",
+  "exit": 0,
+  "elapsed_seconds": 590.221,
+  "stdout_sha256": "6a289ca5d193e91cd258081090243fe73fc64011082c0b1f8ac0302863a62de4",
+  "fixed_status": [
+    "REAL OWNER RESTORE ROLLBACK PASSED",
+    "REAL OWNER POSTFLIGHT PASSED"
+  ],
+  "stderr_bytes_not_published": 0,
+  "commercial_acceptance": "not-complete"
+}

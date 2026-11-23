@@ -1,0 +1,13 @@
+{
+  "source_commit": "fd8eb4be5d1bdd2e3dc38699b551356a2451a949",
+  "scope": "real ARM HA backup Mnesia ACL per-field action diagnostics real restore",
+  "exit": 1,
+  "elapsed_seconds": 387.034,
+  "stdout_sha256": "0bbb9259c91d4b2d194cf5722bf7bb39c72cf9bc5acd6a6ee6d32a4d3df77e53",
+  "fixed_status": [
+    "REAL OWNER OBJECT_INTEGRITY_ACTIONS_LAST_MODIFIED_AT_VALUE REFUSED",
+    "REAL OWNER POSTFLIGHT PASSED"
+  ],
+  "stderr_bytes_not_published": 0,
+  "commercial_acceptance": "not-complete"
+}

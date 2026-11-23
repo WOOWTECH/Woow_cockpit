@@ -1,0 +1,16 @@
+{
+  "source_commit": "c3dde672434c24399262c353207d664fd9bf2d2a",
+  "scope": "real ARM vendor profile fixed private phase diagnosis; no cold traversal or broker",
+  "exit": 1,
+  "elapsed_seconds": 6.43719475902617,
+  "fixed_phases": [
+    "ARM TRANSFER PASSED",
+    "ARM SELECT PASSED",
+    "ARM VENDOR_SCALAR REFUSED",
+    "ARM POSTFLIGHT PASSED"
+  ],
+  "unpublished_stdout_lines": 0,
+  "stderr_bytes_not_published": 0,
+  "stdout_sha256": "0a3d48b40746fed45a8c052608cf05a35d2a7542ad65097e5ec3ed49310ee9aa",
+  "restore_executed": false
+}

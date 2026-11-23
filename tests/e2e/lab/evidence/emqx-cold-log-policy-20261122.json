@@ -1,0 +1,15 @@
+{
+  "scope": "pinned OTP native source filename/header contract only",
+  "extracted_source_sha256": "2e1649d7eb0ace5e915ae3035e41c176e3ecd53d4a6d0c2cce8fb62b006b6364",
+  "DECISION_TAB.LOG": {
+    "kind": "decision-tab",
+    "native_header": "decision_tab",
+    "version": "1.0"
+  },
+  "LATEST.LOG": {
+    "kind": "transaction-log",
+    "native_header": "trans_log",
+    "version": "4.3"
+  },
+  "runtime_source_provenance": "existing fixed EMQX5.8.9 native tooling; no real source decoded"
+}

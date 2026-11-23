@@ -1,0 +1,1 @@
+{"checks": {"emqx-native-containers_absent": true, "private_workload_directories_absent": true, "probe_directories_absent": true, "staged_code_directories_absent": true, "woowbk-emqx-workloadcontainers_absent": true, "woowbk-native-containers_absent": true}, "result": "passed", "scope": "owner-live-checkpoint-postflight"}

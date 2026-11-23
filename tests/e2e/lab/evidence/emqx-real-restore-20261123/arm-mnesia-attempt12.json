@@ -1,0 +1,13 @@
+{
+  "source_commit": "382c5c7809b3eeaee8a104bceedb031a561907ff",
+  "scope": "real ARM HA backup Mnesia ACL fixed round labels real restore",
+  "exit": 1,
+  "elapsed_seconds": 151.86,
+  "stdout_sha256": "7d19629948a2a9cc1bca7ef59c8209ddc7488b9cc80db22e2f33276ee2886203",
+  "fixed_status": [
+    "REAL OWNER PAYLOAD_HISTORY REFUSED",
+    "REAL OWNER POSTFLIGHT PASSED"
+  ],
+  "stderr_bytes_not_published": 0,
+  "commercial_acceptance": "not-complete"
+}

@@ -1,0 +1,16 @@
+{
+  "source_commit": "68e798eaf412cf107b2ab391f8b254e52bb6a7b6",
+  "scope": "real ARM file-authorizer classification only; semantic gate retained; no broker",
+  "exit": 1,
+  "elapsed_seconds": 6.352199677145109,
+  "fixed_phases": [
+    "ARM TRANSFER PASSED",
+    "ARM SELECT PASSED",
+    "ARM HOCON_FILE_AUTHORIZER REFUSED",
+    "ARM POSTFLIGHT PASSED"
+  ],
+  "unpublished_stdout_lines": 0,
+  "stderr_bytes_not_published": 0,
+  "stdout_sha256": "7d89280a5ecfa1a8cefbc52c20d9560d5f8aa8fe413a475ce9de8165466b2317",
+  "restore_executed": false
+}

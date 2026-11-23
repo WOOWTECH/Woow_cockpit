@@ -1,0 +1,13 @@
+{
+  "source_commit": "56c924f062e1427c055de9f85cf26fd6e2e42fc0",
+  "scope": "real ARM restore with nondestructive target authorization preservation and full ACL digest verification",
+  "exit": 1,
+  "elapsed_seconds": 253.01117759011686,
+  "stdout_sha256": "543cdd52d3143e006951236e83cf7aaf7f5195e6082f77a0cf7e20f0e1b0cfe5",
+  "fixed_status": [
+    "REAL OWNER BUILD_PRODUCT_TARGET_RUNTIME_PRODUCT REFUSED",
+    "REAL OWNER POSTFLIGHT PASSED"
+  ],
+  "stderr_bytes_not_published": 0,
+  "commercial_acceptance": "not-complete"
+}

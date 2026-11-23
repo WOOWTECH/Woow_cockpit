@@ -1,0 +1,13 @@
+{
+  "source_commit": "a76bef04c28e9b92faee1d25ebacb9e1b447f884",
+  "scope": "real ARM HA backup Mnesia ACL widened native wall bounds real restore",
+  "exit": 1,
+  "elapsed_seconds": 716.903,
+  "stdout_sha256": "d5e1999a998ce7ac10659c1825f735f1c01dd63ee715da4296e4c58da476a3dc",
+  "fixed_status": [
+    "REAL OWNER POST_CAPTURE REFUSED",
+    "REAL OWNER POSTFLIGHT PASSED"
+  ],
+  "stderr_bytes_not_published": 0,
+  "commercial_acceptance": "not-complete"
+}

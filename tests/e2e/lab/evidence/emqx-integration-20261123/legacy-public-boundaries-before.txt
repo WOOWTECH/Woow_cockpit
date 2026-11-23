@@ -1,0 +1,117 @@
+test_a_broker_that_does_not_start_is_refused_with_the_advice (tests.backup.test_ha_emqx.CheckTests.test_a_broker_that_does_not_start_is_refused_with_the_advice) ... ok
+test_a_clean_backup (tests.backup.test_ha_emqx.CheckTests.test_a_clean_backup) ... FAIL
+test_a_half_loaded_database_is_refused_with_the_advice (tests.backup.test_ha_emqx.CheckTests.test_a_half_loaded_database_is_refused_with_the_advice) ... ok
+test_a_hot_backup_is_tried_and_named (tests.backup.test_ha_emqx.CheckTests.test_a_hot_backup_is_tried_and_named) ... FAIL
+test_an_ip_node_name_needs_no_host_line (tests.backup.test_ha_emqx.CheckTests.test_an_ip_node_name_needs_no_host_line) ... FAIL
+test_blockers (tests.backup.test_ha_emqx.CheckTests.test_blockers) ... FAIL
+test_a_failed_export_stops_the_conversion_with_the_advice (tests.backup.test_ha_emqx.ConvertTests.test_a_failed_export_stops_the_conversion_with_the_advice) ... FAIL
+test_a_partial_import_stops_the_conversion (tests.backup.test_ha_emqx.ConvertTests.test_a_partial_import_stops_the_conversion) ... FAIL
+test_an_import_that_would_open_anonymous_login_is_refused (tests.backup.test_ha_emqx.ConvertTests.test_an_import_that_would_open_anonymous_login_is_refused) ... FAIL
+test_lost_rows_stop_the_conversion (tests.backup.test_ha_emqx.ConvertTests.test_lost_rows_stop_the_conversion) ... FAIL
+test_the_strict_settings_must_come_back (tests.backup.test_ha_emqx.ConvertTests.test_the_strict_settings_must_come_back) ... FAIL
+test_the_whole_conversion (tests.backup.test_ha_emqx.ConvertTests.test_the_whole_conversion) ... ERROR
+test_eval_answers (tests.backup.test_ha_emqx.ParseTests.test_eval_answers) ... ok
+
+======================================================================
+ERROR: test_the_whole_conversion (tests.backup.test_ha_emqx.ConvertTests.test_the_whole_conversion)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/tmp/ha-real-fixture-candidate-20261121/tests/backup/test_ha_emqx.py", line 291, in test_the_whole_conversion
+    result = self.convert(self.upload_emqx(), ['emqx'])
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/ha-real-fixture-candidate-20261121/tests/backup/hab1fakes.py", line 234, in convert
+    return flows.run_backup(self.ctx(), base)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/ha-real-fixture-candidate-20261121/backup-engine/woowbackup/flows.py", line 663, in run_backup
+    return run_ha_convert(ctx, params)  # an HA import: convert an uploaded HA backup (branch feat/ha-import)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/ha-real-fixture-candidate-20261121/backup-engine/woowbackup/haimport.py", line 626, in run_ha_convert
+    data = importer.load().convert(work, app, *[values[name] for name in importer.convert_args], out_dir)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/ha-real-fixture-candidate-20261121/backup-engine/woowbackup/ha_emqx.py", line 1217, in convert
+    raise BackupError('incompatible', PRESERVATION_BLOCKER, app=app.id)
+woowbackup.errors.BackupError: 目前無法確認匯入後仍保留這台 EMQX 的授權規則與叢集設定，為避免變更存取權限或遺失設定，已停止匯入。
+
+======================================================================
+FAIL: test_a_clean_backup (tests.backup.test_ha_emqx.CheckTests.test_a_clean_backup)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/tmp/ha-real-fixture-candidate-20261121/tests/backup/test_ha_emqx.py", line 194, in test_a_clean_backup
+    self.assertEqual((result['ok'], result['blockers'], result['target_version']), (True, [], '5.8.9'))
+AssertionError: Tuples differ: (False, ['目前無法確認匯入後仍保留這台 EMQX 的授權規則與叢集設定，為避免變更存取權限或遺失設定，已停止匯入。'], '5.8.9') != (True, [], '5.8.9')
+
+First differing element 0:
+False
+True
+
+- (False, ['目前無法確認匯入後仍保留這台 EMQX 的授權規則與叢集設定，為避免變更存取權限或遺失設定，已停止匯入。'], '5.8.9')
++ (True, [], '5.8.9')
+
+======================================================================
+FAIL: test_a_hot_backup_is_tried_and_named (tests.backup.test_ha_emqx.CheckTests.test_a_hot_backup_is_tried_and_named)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/tmp/ha-real-fixture-candidate-20261121/tests/backup/test_ha_emqx.py", line 239, in test_a_hot_backup_is_tried_and_named
+    self.assertTrue(result['ok'])
+AssertionError: False is not true
+
+======================================================================
+FAIL: test_an_ip_node_name_needs_no_host_line (tests.backup.test_ha_emqx.CheckTests.test_an_ip_node_name_needs_no_host_line)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/tmp/ha-real-fixture-candidate-20261121/tests/backup/test_ha_emqx.py", line 285, in test_an_ip_node_name_needs_no_host_line
+    self.assertTrue(result['ok'])
+AssertionError: False is not true
+
+======================================================================
+FAIL: test_blockers (tests.backup.test_ha_emqx.CheckTests.test_blockers)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/tmp/ha-real-fixture-candidate-20261121/tests/backup/test_ha_emqx.py", line 235, in test_blockers
+    self.assertIn('HA 的 EMQX 是 5.8.9', result['blockers'][0])
+AssertionError: 'HA 的 EMQX 是 5.8.9' not found in '目前無法確認匯入後仍保留這台 EMQX 的授權規則與叢集設定，為避免變更存取權限或遺失設定，已停止匯入。'
+
+======================================================================
+FAIL: test_a_failed_export_stops_the_conversion_with_the_advice (tests.backup.test_ha_emqx.ConvertTests.test_a_failed_export_stops_the_conversion_with_the_advice)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/tmp/ha-real-fixture-candidate-20261121/tests/backup/test_ha_emqx.py", line 333, in test_a_failed_export_stops_the_conversion_with_the_advice
+    self.assertIn('EMQX 無法匯出 HA 的資料', caught.exception.message)
+AssertionError: 'EMQX 無法匯出 HA 的資料' not found in '目前無法確認匯入後仍保留這台 EMQX 的授權規則與叢集設定，為避免變更存取權限或遺失設定，已停止匯入。'
+
+======================================================================
+FAIL: test_a_partial_import_stops_the_conversion (tests.backup.test_ha_emqx.ConvertTests.test_a_partial_import_stops_the_conversion)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/tmp/ha-real-fixture-candidate-20261121/tests/backup/test_ha_emqx.py", line 349, in test_a_partial_import_stops_the_conversion
+    self.assertIn('部分資料無法匯入', caught.exception.message)
+AssertionError: '部分資料無法匯入' not found in '目前無法確認匯入後仍保留這台 EMQX 的授權規則與叢集設定，為避免變更存取權限或遺失設定，已停止匯入。'
+
+======================================================================
+FAIL: test_an_import_that_would_open_anonymous_login_is_refused (tests.backup.test_ha_emqx.ConvertTests.test_an_import_that_would_open_anonymous_login_is_refused)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/tmp/ha-real-fixture-candidate-20261121/tests/backup/test_ha_emqx.py", line 362, in test_an_import_that_would_open_anonymous_login_is_refused
+    self.assertIn('匿名登入', caught.exception.message)
+AssertionError: '匿名登入' not found in '目前無法確認匯入後仍保留這台 EMQX 的授權規則與叢集設定，為避免變更存取權限或遺失設定，已停止匯入。'
+
+======================================================================
+FAIL: test_lost_rows_stop_the_conversion (tests.backup.test_ha_emqx.ConvertTests.test_lost_rows_stop_the_conversion)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/tmp/ha-real-fixture-candidate-20261121/tests/backup/test_ha_emqx.py", line 355, in test_lost_rows_stop_the_conversion
+    self.assertIn('emqx_acl', caught.exception.message)
+AssertionError: 'emqx_acl' not found in '目前無法確認匯入後仍保留這台 EMQX 的授權規則與叢集設定，為避免變更存取權限或遺失設定，已停止匯入。'
+
+======================================================================
+FAIL: test_the_strict_settings_must_come_back (tests.backup.test_ha_emqx.ConvertTests.test_the_strict_settings_must_come_back)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/tmp/ha-real-fixture-candidate-20261121/tests/backup/test_ha_emqx.py", line 375, in test_the_strict_settings_must_come_back
+    self.assertIn('存取政策', caught.exception.message)
+AssertionError: '存取政策' not found in '目前無法確認匯入後仍保留這台 EMQX 的授權規則與叢集設定，為避免變更存取權限或遺失設定，已停止匯入。'
+
+----------------------------------------------------------------------
+Ran 13 tests in 0.586s
+
+FAILED (failures=9, errors=1)

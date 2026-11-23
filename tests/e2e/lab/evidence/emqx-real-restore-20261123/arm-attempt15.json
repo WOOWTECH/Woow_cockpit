@@ -1,0 +1,13 @@
+{
+  "source_commit": "6bdc339ff412cca0972be21bfeb47f3de6afb3fb",
+  "scope": "real ARM exact generated charlist and native builtin disable with full ACL integrity",
+  "exit": 1,
+  "elapsed_seconds": 3.4098038459196687,
+  "stdout_sha256": "9ebe0e77ea6ab682f0a36cbfbee0f0fb2ad56fd3b5b5c0672f46179583c2fef1",
+  "fixed_status": [
+    "REAL OWNER BUDGET REFUSED",
+    "REAL OWNER POSTFLIGHT PASSED"
+  ],
+  "stderr_bytes_not_published": 0,
+  "commercial_acceptance": "not-complete"
+}

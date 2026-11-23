@@ -1,0 +1,12 @@
+{
+  "source_commit": "6d32e78c4bd791289039eab1295e5a02045f2ee7",
+  "run": 24,
+  "passed": 24,
+  "failed": 0,
+  "errors": 0,
+  "skipped": 0,
+  "scope": "native canonical/storage fixtures plus generated consumer/ticker cases; not full real target acceptance",
+  "actual_broker_attempt8": "canonical schema accepted; serialize_config unsupported_function refused",
+  "actual_restore_executed": false,
+  "commercial_acceptance_complete": false
+}

@@ -1,0 +1,13 @@
+{
+  "source_commit": "489a4d26bc15a47784a0f3495d32e7e183e04dcb",
+  "scope": "real ARM product restore with private API and owned MQTT clients",
+  "exit": 1,
+  "elapsed_seconds": 273.8487842499744,
+  "stdout_sha256": "8f28127b57ffa8aca1409e535279d044fcb370e1fb7744603f5c67ccb57f7066",
+  "fixed_status": [
+    "REAL OWNER BUILD_PRODUCT_ROW_COUNTS_PRODUCT REFUSED",
+    "REAL OWNER POSTFLIGHT PASSED"
+  ],
+  "stderr_bytes_not_published": 0,
+  "commercial_acceptance": "not-complete"
+}
