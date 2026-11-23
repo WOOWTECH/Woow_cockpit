@@ -289,7 +289,7 @@ Findings of iteration 2:
   stored-settings query, its tests, the mutation list and the docs; it ran with the affected modules (96 OK), not with
   a second full suite.
 - Mutation check (`tests/backup/litellm_product_mutations.py`): on `f2a2cb4` 56/56 caught (baseline 63 tests;
-  `mutation-check-f2a2cb4.json`); on the final `1a83926`: running at the time of this commit under the host-heavy lock (result in the next commit). New: M48–M58 (fail closed ×2, the unreadable
+  `mutation-check-f2a2cb4.json`); on the final `1a83926` (`ha_litellm.py` `3a6e928e…`): **58/58 caught** (baseline 63 tests, 597 s, from a clean throwaway worktree at `1a83926`; `mutation-check-1a83926.json`). New: M48–M58 (fail closed ×2, the unreadable
   blocker, the nested labels, router plugins, dotted guardrail callbacks, string callbacks, the re-check in the new
   cluster, the notes from it, the dotted-callback clause, the custom secret manager). M43's text now names its line
   (the re-check repeats the old text; same removal); the product's Pi agent and search_path mutations are M45–M47.
