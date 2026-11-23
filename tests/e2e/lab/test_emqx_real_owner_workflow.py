@@ -148,6 +148,94 @@ class FoundationTests(unittest.TestCase):
         self.assertFalse((self.root/'.config/systemd/user'/ (self.fixture.unit+'.d')).exists())
         self.assertIn(('systemctl',('restart','--',self.fixture.unit)),self.generated.calls)
 
+    def second_restore_refusal(self,second,*,ready=None,mqtt=None,restart=None,first=None):
+        """Generated product outcomes only; returns the fixed refusal phase."""
+        ctx,app,state=self.context()
+        (self.root/'.config/systemd/user').mkdir(parents=True,exist_ok=True)
+        calls=[]
+        def restore(context,request):
+            calls.append('restore')
+            if len(calls)==1:
+                if first is not None:raise first
+                return {'changed':True,'rolled_back':False}
+            ctx.adapter(app).imported_hook()
+            (self.root/'.config'/self.fixture.prefix/'fail-once').unlink()
+            return second(state)
+        clients=self.clients() if mqtt is not None else None
+        original=self.runner.systemctl
+        def systemctl(*args,**kwargs):
+            if args[:1]==('restart',) and restart is not None:raise restart
+            return original(*args,**kwargs)
+        with patch.object(flows,'run_restore',side_effect=restore), \
+             patch.object(m,'_ready',side_effect=ready), \
+             patch.object(m,'validate_source_mqtt',side_effect=mqtt), \
+             patch.object(self.runner,'systemctl',side_effect=systemctl):
+            with self.assertRaises(m.RealOwnerRefused) as caught:
+                m._restore_and_rollback(ctx,app,self.provision,'generated-private-package',state,clients=clients)
+        self.assertIn(caught.exception.phase,m.PHASES)
+        self.assertNotIn('generated-private',caught.exception.phase)
+        self.assertFalse((self.root/'.config/systemd/user'/(self.fixture.unit+'.d')).exists())
+        self.assertFalse(state['armed'])
+        return caught.exception.phase
+
+    def test_second_restore_outcomes_have_fixed_round_labels(self):
+        def rolled(state,result=None,injected=True):
+            state['injected']=injected
+            raise flows.RolledBack(BackupError('job-failed','generated-private start'),result or {'rolled_back':True})
+        def incomplete(text):
+            def second(state):
+                error=BackupError('job-failed','generated-private 「emqx」'+text+' backup generated-private-id')
+                error.result={'changed':True,'rolled_back':False};raise error
+            return second
+        def refused(code):
+            def second(state):
+                error=BackupError(code,'generated-private refusal');error.result={'changed':False,'rolled_back':False}
+                raise error
+            return second
+        cases=((lambda state:{'changed':True},'rollback_not_raised'),
+               (lambda state:rolled(state,{'rolled_back':False}),'rollback_result'),
+               (lambda state:rolled(state,injected=False),'rollback_result'),
+               (incomplete('回復後健康檢查未通過'),'rollback_incomplete_health'),
+               (incomplete('回復後資料與還原前不一致'),'rollback_incomplete_verify'),
+               (incomplete('：無法啟動服務 generated.service'),'rollback_incomplete_start'),
+               (incomplete('無法重新啟動服務 generated.service'),'rollback_incomplete_writers'),
+               (incomplete('generated unknown problem'),'rollback_incomplete_other'),
+               (refused('busy'),'rollback_error_busy'),(refused('wrong-key'),'rollback_error_wrong_key'),
+               (lambda state:(_ for _ in ()).throw(OSError('generated-private')),'rollback_other'))
+        for second,phase in cases:
+            with self.subTest(phase=phase):
+                self.assertEqual(self.second_restore_refusal(second),phase)
+
+    def test_round_step_failures_and_prefixed_round_activity_labels(self):
+        def rolled(state):
+            raise flows.RolledBack(BackupError('job-failed','generated'),{'rolled_back':True})
+        counts={'ready':0,'mqtt':0}
+        def ready_at(n):
+            def ready(provision):
+                counts['ready']+=1
+                if counts['ready']==n:raise ValueError('generated-private')
+            return ready
+        def mqtt_at(n):
+            def mqtt(*args,**kwargs):
+                counts['mqtt']+=1
+                if counts['mqtt']==n:
+                    m._mqtt_step('retained_one');m._mqtt_fail('exit_27')
+            return mqtt
+        for n,phase in ((1,'restore_ready'),(2,'rollback_ready'),(3,'restart_ready')):
+            with self.subTest(phase=phase):
+                counts['ready']=0
+                self.assertEqual(self.second_restore_refusal(rolled,ready=ready_at(n)),phase)
+        for n,phase in ((1,'mqtt_retained_one_exit_27'),(2,'rollback_mqtt_retained_one_exit_27'),
+                        (3,'restart_mqtt_retained_one_exit_27')):
+            with self.subTest(phase=phase):
+                counts['mqtt']=0
+                self.assertEqual(self.second_restore_refusal(rolled,mqtt=mqtt_at(n)),phase)
+        self.assertEqual(self.second_restore_refusal(rolled,restart=ValueError('generated-private')),'restart')
+        first=BackupError('busy','generated-private');first.result={'changed':False,'rolled_back':False}
+        self.assertEqual(self.second_restore_refusal(rolled,first=first),'restore_error_busy')
+        self.assertEqual(self.second_restore_refusal(
+            rolled,first=flows.RolledBack(BackupError('job-failed','generated'),{'rolled_back':True})),'restore_rolled_back')
+
     def test_restore_refusal_cannot_be_reported_as_rollback_success(self):
         ctx,app,state=self.context()
         with patch.object(flows,'run_restore',return_value={'changed':False}) as restore:

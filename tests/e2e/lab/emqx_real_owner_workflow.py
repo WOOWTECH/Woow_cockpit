@@ -56,6 +56,20 @@ MQTT_REASONS=frozenset(('input','setup','run','cleanup','protocol','exit_shape',
     'puback_other','payload_mismatch')) | frozenset('exit_'+str(c) for c in MQTT_EXITS) | frozenset(
     kind+'_'+str(c) for kind in ('connack','suback','puback') for c in MQTT_CODES)
 PHASES=PHASES | frozenset('mqtt_'+step+'_'+reason for step in MQTT_STEPS for reason in MQTT_REASONS)
+# Fixed product restore outcome labels. Private product text/IDs never escape:
+# BackupError codes map to a fixed set and rollback problems to fixed phrases.
+RESTORE_PROBLEMS=('health','verify','writers','start','unexpected','no_pending','manifest','other')
+from woowbackup.errors import CODES as _PRODUCT_CODES
+RESTORE_ERRORS=(*sorted(code.replace('-','_') for code in _PRODUCT_CODES),'other')
+_ROUND_OUTCOMES=frozenset(('run','not_raised','result','rolled_back','other','setup','marker','cleanup','ready',
+    *('incomplete_'+p for p in RESTORE_PROBLEMS),*('error_'+c for c in RESTORE_ERRORS)))
+PHASES=PHASES | frozenset(r+'_'+o for r in ('restore','rollback','restart') for o in _ROUND_OUTCOMES)
+# Rounds 2/3 (after automatic rollback, after restart) prefix every per-round
+# client/API/native/object label, so a refusal names its round too.
+PHASES=PHASES | frozenset(r+'_'+p for r in ('rollback','restart') for p in PHASES)
+_ROLLBACK_PROBLEM_TEXT=(('回復後健康檢查未通過','health'),('回復後資料與還原前不一致','verify'),
+    ('無法重新啟動服務','writers'),('無法啟動服務','start'),('未預期','unexpected'),
+    ('沒有可用的還原前備份','no_pending'),('還原前資料不含此應用','manifest'))
 _MQTT_STATE=ContextVar('emqx_private_mqtt_diagnostic',default=('input','input'))
 
 def _mqtt_step(step):
@@ -90,6 +104,32 @@ class RealOwnerRefused(PrivateFailure):
     def __init__(self, phase):
         self.phase = phase if phase in PHASES else 'profile'
         super().__init__('private-real-owner-refused')
+
+
+@contextmanager
+def _fixed(phase, prefix=None):
+    """Unlabelled step failure -> fixed phase; labelled ones gain the round prefix."""
+    if phase not in PHASES or prefix not in (None,'rollback','restart'):raise ValueError()
+    try:yield
+    except RealOwnerRefused as error:
+        if prefix is None:raise
+        raise RealOwnerRefused(prefix+'_'+error.phase) from None
+    except BaseException:raise RealOwnerRefused(phase) from None
+
+
+def _restore_refusal(prefix, error):
+    """Fixed label for an unexpected product restore outcome; no private text."""
+    from woowbackup.errors import BackupError
+    if prefix not in ('restore','rollback'):raise ValueError()
+    if isinstance(error,flows.RolledBack):return prefix+'_rolled_back'
+    if isinstance(error,BackupError):
+        result=getattr(error,'result',None)
+        if type(result) is dict and result.get('changed') is True and result.get('rolled_back') is False:
+            message=error.message if type(error.message) is str else ''
+            return prefix+'_incomplete_'+next((code for text,code in _ROLLBACK_PROBLEM_TEXT if text in message),'other')
+        code=error.code.replace('-','_') if type(error.code) is str else ''
+        return prefix+'_error_'+(code if code in RESTORE_ERRORS else 'other')
+    return prefix+'_other'
 
 
 def _composite_observer_factory():
@@ -275,9 +315,10 @@ def _restore_and_rollback(ctx,app,provision,backup_id,state,*,clients=None,sessi
     if api_credentials is not None and (object_expected is None or type(object_results) is not list or object_results):
         raise RealOwnerRefused('object_integrity')
     request={'backup_id':backup_id,'apps':['emqx'],'accept_unauthenticated':True}
-    outcome=flows.run_restore(ctx,request)
+    try:outcome=flows.run_restore(ctx,request)
+    except BaseException as error:raise RealOwnerRefused(_restore_refusal('restore',error)) from None
     if outcome.get('rolled_back') or not outcome.get('changed'):raise ValueError()
-    _ready(provision)
+    with _fixed('restore_ready'):_ready(provision)
     if clients is not None:_validate_phase_mqtt(provision,clients,target_mode)
     if api_credentials is not None:api_results.append(_source_api_activity(provision,post_registry,session,clients,api_credentials))
     if api_credentials is not None:negative_results.append(_source_negative_activity(provision,session,clients,api_results[-1]))
@@ -290,41 +331,47 @@ def _restore_and_rollback(ctx,app,provision,backup_id,state,*,clients=None,sessi
     marker='.config/'+f.prefix+'/fail-once'
     directory_created=dropin_created=False
     try:
-        if r.stat_files([directory,dropin,marker])[directory]['type']!='missing':raise ValueError()
-        if any(r.stat_files([path])[path]['type']!='missing' for path in (dropin,marker)):raise ValueError()
-        r.run(['/usr/bin/mkdir','-m','0700','--',r.home+'/'+directory]);directory_created=True
-        command=('[Service]\nExecStartPre=/bin/sh -c \'if test -f %h/'+marker+
-            '; then rm -f %h/'+marker+'; exit 1; fi\'\n').encode()
-        r.write_file(dropin,command,0o600);dropin_created=True
-        r.systemctl('daemon-reload')
+        with _fixed('rollback_setup'):
+            if r.stat_files([directory,dropin,marker])[directory]['type']!='missing':raise ValueError()
+            if any(r.stat_files([path])[path]['type']!='missing' for path in (dropin,marker)):raise ValueError()
+            r.run(['/usr/bin/mkdir','-m','0700','--',r.home+'/'+directory]);directory_created=True
+            command=('[Service]\nExecStartPre=/bin/sh -c \'if test -f %h/'+marker+
+                '; then rm -f %h/'+marker+'; exit 1; fi\'\n').encode()
+            r.write_file(dropin,command,0o600);dropin_created=True
+            r.systemctl('daemon-reload')
         state['armed']=True
         try:
             flows.run_restore(ctx,request)
         except flows.RolledBack as error:
-            if error.result.get('rolled_back') is not True or not state['injected']:raise ValueError()
-        else:raise ValueError()
-        _ready(provision)
+            if error.result.get('rolled_back') is not True or not state['injected']:raise RealOwnerRefused('rollback_result') from None
+        except BaseException as error:raise RealOwnerRefused(_restore_refusal('rollback',error)) from None
+        else:raise RealOwnerRefused('rollback_not_raised')
+        with _fixed('rollback_ready'):_ready(provision)
+        with _fixed('rollback_run','rollback'):
+            if clients is not None:_validate_phase_mqtt(provision,clients,target_mode)
+            if api_credentials is not None:api_results.append(_source_api_activity(provision,post_registry,session,clients,api_credentials))
+            if api_credentials is not None:negative_results.append(_source_negative_activity(provision,session,clients,api_results[-1]))
+            if api_credentials is not None and target_mode==IMPORTED_MNESIA:_assert_imported_acl_api(api_results[-1])
+            if session is not None:post_registry=_post_activity_capture(provision,post_registry)
+            if api_credentials is not None:object_results.append(_compare_source_objects(object_expected,api_results[-1],post_registry))
+        with _fixed('rollback_marker'):
+            if r.stat_files([marker])[marker]['type']!='missing':raise ValueError()
+    finally:
+        state['armed']=False
+        with _fixed('rollback_cleanup'):
+            if dropin_created:r.remove_file(dropin)
+            if state['injected']:r.remove_file(marker)
+            if directory_created:r.run(['/usr/bin/rmdir','--',r.home+'/'+directory])
+            if dropin_created:r.systemctl('daemon-reload')
+    with _fixed('restart'):r.systemctl('restart','--',f.unit,timeout=180)
+    with _fixed('restart_ready'):_ready(provision)
+    with _fixed('restart_run','restart'):
         if clients is not None:_validate_phase_mqtt(provision,clients,target_mode)
         if api_credentials is not None:api_results.append(_source_api_activity(provision,post_registry,session,clients,api_credentials))
         if api_credentials is not None:negative_results.append(_source_negative_activity(provision,session,clients,api_results[-1]))
         if api_credentials is not None and target_mode==IMPORTED_MNESIA:_assert_imported_acl_api(api_results[-1])
         if session is not None:post_registry=_post_activity_capture(provision,post_registry)
         if api_credentials is not None:object_results.append(_compare_source_objects(object_expected,api_results[-1],post_registry))
-        if r.stat_files([marker])[marker]['type']!='missing':raise ValueError()
-    finally:
-        state['armed']=False
-        if dropin_created:r.remove_file(dropin)
-        if state['injected']:r.remove_file(marker)
-        if directory_created:r.run(['/usr/bin/rmdir','--',r.home+'/'+directory])
-        if dropin_created:r.systemctl('daemon-reload')
-    r.systemctl('restart','--',f.unit,timeout=180)
-    _ready(provision)
-    if clients is not None:_validate_phase_mqtt(provision,clients,target_mode)
-    if api_credentials is not None:api_results.append(_source_api_activity(provision,post_registry,session,clients,api_credentials))
-    if api_credentials is not None:negative_results.append(_source_negative_activity(provision,session,clients,api_results[-1]))
-    if api_credentials is not None and target_mode==IMPORTED_MNESIA:_assert_imported_acl_api(api_results[-1])
-    if session is not None:post_registry=_post_activity_capture(provision,post_registry)
-    if api_credentials is not None:object_results.append(_compare_source_objects(object_expected,api_results[-1],post_registry))
     return post_registry
 
 
