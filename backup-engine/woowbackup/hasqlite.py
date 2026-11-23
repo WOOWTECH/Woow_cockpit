@@ -3,8 +3,9 @@ only by a child process that dropped its privileges -- the pattern of ha_n8n's S
 1 importers (CONTRACT section 9 "Home Assistant import", section 10 rule 18). Owner: E2.
 
 `run(specs, files, work_dir, ...)` copies `files` ({name: staged path}) into a new folder `work_dir`, hands it to the
-account nobody and starts CHILD (`python3 -I -S`): as root it leaves the network namespace (a child that cannot
-leave it stops with NO_NETNS before it opens anything, and the job stops: no unisolated fallback), chroots into the folder
+account nobody and starts CHILD (`python3 -I -S`): as root it leaves the network namespace (os.unshare, or libc's
+unshare on Python < 3.12; a child that cannot leave it stops with NO_NETNS before it opens anything, and the job
+stops: no unisolated fallback), chroots into the folder
 (SQLite opens the copies by name; the job's 0700 staging above them stays out of reach), drops every group and its
 ids, then sets CPU, memory, file size, open-file and process limits before it opens anything. Every database is
 opened read-write on its own copy (a WAL or hot journal is applied there, never in staging) with
@@ -66,7 +67,12 @@ request = json.loads(sys.stdin.read(4 * 1024 * 1024))
 if os.geteuid() == 0:
     try:
         os.unshare(os.CLONE_NEWNET)
-    except (AttributeError, OSError):
+    except AttributeError:
+        # Python < 3.12 (Debian 12: 3.11) has no os.unshare: the same system call through libc, still fail-closed.
+        import ctypes
+        if ctypes.CDLL(None, use_errno=True).unshare(0x40000000) != 0:  # CLONE_NEWNET, <linux/sched.h>
+            os._exit(3)  # NO_NETNS
+    except OSError:
         os._exit(3)  # NO_NETNS: never read an archive's databases with the host's network
     os.chroot(".")
     os.chdir("/")
