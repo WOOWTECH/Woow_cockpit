@@ -141,3 +141,56 @@ R-EMQX 先前通過的相同（`ea43e157...5b0e`）。執行後 dev-d：`isolati
 範圍照實說：真實的 ARM 加密冷備份走**內部候選**建置／打包路徑（公開的 HA EMQX 匯入仍被 PRESERVATION_BLOCKER 擋住）進到 dev-d 的
 EMQX，含匯入的 Mnesia ACL；MQTT／API／負面／ACL／物件檢查、真實規則投遞（HTTP 動作用廠商計數器證明，目標是備份原本的位址）、
 注入一次啟動失敗觸發自動回復、重新啟動一輪、清理與事後檢查。模擬的只有回復的觸發。
+
+# 第三次整合（最後整合，進行中）：2026-11-23（integration-3 小組）
+
+同一條分支 `integration/ha-import-batch1-20261123`（只在本機，沒有推送、沒有 PR），接在 integration-2 的 `a8ed026` 之後。
+這一組**只合併、只跑單元測試**，不做實驗室的真實還原（dev-d、dev-e、.54 由各自的負責小組使用；最後的真實重驗是另一個步驟）。
+`commercial_acceptance` 一律是 `not-complete`。
+
+## 合併了什麼（全部 `--no-ff`，依序）
+
+| 合併 commit | 來源（tip） | 內容 |
+| --- | --- | --- |
+| `1072954` | `test/hermes-real-20261123`（`e52ffd5`） | Hermes 真實 HA 備份的實驗室工具（`hermes_real_ha.py`、`hermes_real_capture.py`）、儀表板 cookie 覆蓋（services-b 的 4 個 commit 的複本）、第 1–12 次嘗試的證據；第 7、8、11、12 次通過。 |
+| `315ec8b` | `test/services-a2-20261123`（`1214226`） | Headscale 完整產品流程（ARM 第 1 次 101/101、x86 第 3 次 96/96，失敗的 x86 第 1、2 次保留）、Omnigent x86 第 5 次、`dev_d_guard.py`；只有 `tests/e2e/lab`。 |
+| `ae5420d` | `feat/ha-import-opendesign-20261123`（`13c83f3`） | OpenDesign 匯入（`ha_opendesign.py`、haapps `open-design`、hasqlite 的 opendesign 讀取、頁面、文件、CONTRACT）、dev-e 實驗室腳本、`opendesign_full_flow.py` 與 dev-e 證據（第 3 次 85/85）。 |
+
+## 合併衝突與處理
+
+* hermes-real、services-a-2：沒有衝突；分支改的 18／14 個檔案在整合分支與分支 tip 位元組完全相同。
+* OpenDesign：只有 `tests/e2e/lab/README.md` 衝突：兩邊在同一個位置（dev-d 一節的最後）各加了一節（hermes-real 的
+  「Hermes 真實還原」小節、OpenDesign 的「dev-e」一節）。兩節都保留，Hermes 在前（它屬於 dev-d 一節）。逐行證明：這邊加的 57 行、
+  那邊加的 82 行全部在結果裡，基準中被刪的只有 1 行（那邊把開頭的介紹改成也提到 dev-e），沒有任何一邊都沒有的行。
+  `backup/backup.js`（這邊：Odoo 寄信提醒 `7c87560`；那邊：HA 對照表與 `haOpenDesignFacts`）、`docs/backup.md`、`tests/backup-ui.mjs`
+  兩邊改的位置不同、自動合併；三個檔案都驗證 patch-id(基準→那邊) = patch-id(這邊→結果)，且 patch-id(基準→這邊) = patch-id(那邊→結果)。
+  其餘 26 個只有那邊改的檔案等於 `13c83f3` 的版本。
+* lab/batch2-dev-e-20261123 之後的兩個 commit（`00b0785`、`2b85b92`，以及更晚的）不在這次合併裡，會跟著第二批的分支進來。
+
+## 單元測試（`unit-tests-step3.json`，測試 commit `ae5420d`）
+
+守衛與做法同 integration-2（程序內禁止啟動 podman／labpodman／ssh／sudo／systemctl 等，擋下 `emqx_native_runtime.run_native`，
+PATH 擋板）；整套測試都在 `/tmp/woowbk-host-heavy-tests.lock` 裡、nice／ionice 下跑。每次合併在提交前先跑受影響的模組
+（63／54／63＋81 個，全部通過，0 次被擋）。
+
+| 套件 | 結果 |
+| --- | --- |
+| `tests/backup`（全部，開啟真實 batch-1 HA 備份） | 1471 個：1458 通過、1 略過、12 未通過＝`test_ha_omnigent` 7 個（既有的 SECURITY_BLOCKER，與 integration-2 相同的 id）＋`test_litellm_lab_runner` 5 個（本守衛的誤擋：測試的假子程序參數裡有 podman；`--exe-only` 守衛下 6/6 通過，只啟動假的 `child`）。integration-2 多 1 個的時間性偶發失敗這次沒有出現。 |
+| 略過的那 1 個 | `test_ha_backup.RealBackupTests`：用 20261118 的真實 HA 備份重跑 1/1 通過。 |
+| `node tests/backup-ui.mjs` | 100/100 通過（含 OpenDesign 檢查卡片的情境；integration-2 時是 99 個）。 |
+| `tests/e2e/lab`（兩條線全部模組） | 啟動 1090 個、1043 通過；未通過的 73 筆紀錄與 integration-2（`5d83b24`）**完全相同**：71 個是 R-EMQX 需要 `run_native`（主機正式環境的 `/usr/bin/podman`，被守衛擋下，133 次）的測試，其中 8 個整個類別在 setUpClass 就停；2 個是過期的 `test_emqx_persisted_values`（R-EMQX `60844f1` 起回執改成 `.txt`，留給 EMQX 小組）。新增的 78 個測試全部通過。 |
+
+沒有跑（照規則）：需要 `run_native` 的實驗室測試（上面那 71 筆），它們只能在實驗室裡跑。
+
+提交前掃描：三次合併帶進來的 61 個檔案，以既有的 `ha_import_b1_e2e.Secrets` 讀出的 30 個實驗室值（原文與 JSON 跳脫）搜尋，
+0 命中；5 個 HA 金鑰形狀的字串是文件與頁面上的格式範例、頁面測試的常數 `HA_KEY`／`HA_WRONG_KEY`，在 `a8ed026` 就已存在、內容沒變。
+
+## 給主線與擁有者的紀錄
+
+* hermes-real 的獨立驗證（19:57）全部確認。它提醒的兩點：`1eb0933`（Python < 3.12 改用 libc `unshare`）已經在這條分支上
+  （由 integration-1 的 `7790cf8` 帶進來）；Hermes FTS5 安全審查的說法：`8b47124` 的 commit 訊息記錄了擁有者授權的獨立審查，
+  而小組規則仍把「人工的 Hermes 安全審查」列為人工項目。這一組沒有改 hermes-real 的 `status.json`，最後的說法請主線／擁有者決定。
+* services-a-2 的驗證者提醒的用語照抄：「真實 RPi5 客戶端」其實是這台主機上的 x86-64 tailscaled 1.104.7（加入 RPi5 的 Headscale
+  後的實驗室容器），測試時在 dev-d 裡跑；「頁面流程」是頁面送出的 root helper 指令（瀏覽器上傳改成複製檔案）；found-state 的
+  ha-check 斷言（`c5f9c92` → `5c9fd64`）改動引用的是產品原始碼而不是廠商原始碼，是實驗室的預期值、不是公開的防護，已列為擁有者的發現。
+* OpenDesign 仍開著（不是阻擋）：`projects.metadata_json.baseDir` 改寫（目前只是警告）、測試模式不會暫停 OpenDesign 的例行工作（只有提醒）。
