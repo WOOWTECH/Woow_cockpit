@@ -22,7 +22,18 @@
     "encrypted_evidence": "tests/backup/evidence/large-encrypted-8193mib.json",
     "encrypted_integration_commit": "36d13a9",
     "negative_evidence": "tests/backup/evidence/large-failure-2gib.json",
-    "negative_integration_commit": "28e1572"
+    "negative_integration_commit": "28e1572",
+    "update_20261123": {
+      "branch": "test/large-archive-final-20261123",
+      "status": "actual8193MiB encrypted late corruption (flip and truncate last ciphertext byte, verify and extract) refused corrupt-archive late; real job-cancel (jobs.cancel_job + FlowContext checkpoint) mid-stream in restore decrypt and backup package windows raised flows.Cancelled; children reaped, partial output, staged temp archive and recipient file removed, no identity copy",
+      "negative_8193_evidence": "tests/backup/evidence/large-negatives-8193mib.stdout.json",
+      "negative_8193_source_commit": "1e91626",
+      "ciphertext_bytes": 34503003,
+      "harness_storage_measures": "sliding-window source and hole-punched truncate-extract output (stated in large-negatives-README.txt); cancel-extract 4.0GiB really allocated",
+      "incompressible_outer_status": "blocked: host disk shortfall 326506805 bytes (required free 21856942389, free 21530435584); probe refused before generating anything; 128MiB real smoke passed",
+      "incompressible_outer_evidence": "tests/backup/evidence/large-incompressible-outer-8193mib.attempt.json",
+      "commercial_acceptance": "not-complete"
+    }
   },
   "final_version": {
     "worker": "01a200bc-fdfc-7813-b6d3-10d8413281a7",

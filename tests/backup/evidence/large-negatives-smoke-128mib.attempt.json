@@ -1,0 +1,28 @@
+{
+  "name": "large-negatives-smoke-128mib",
+  "attempt": 1,
+  "command": "python3 tests/backup/bounded_large_negatives.py --mib 128 --scratch-parent /tmp",
+  "runner": "nice -n 10 ionice -c3",
+  "source_commit": "1e916262ed3b8a96e6d40d1616208244d24a0881",
+  "started_utc": "2026-11-23T00:45:49+00:00",
+  "finished_utc": "2026-11-23T00:45:58+00:00",
+  "exit_code": 0,
+  "elapsed_seconds": 9.411,
+  "stdout_file": "large-negatives-smoke-128mib.stdout.json",
+  "stdout_sha256": "8a495fc578a969ad7b1fd7e646e0e4cbe80df52d29e9a1d5d6a981d1b9e51a98",
+  "stdout_bytes": 7343,
+  "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "stderr_bytes": 0,
+  "stderr_stored": false,
+  "status_lines": [
+    "status=passed",
+    "case fixture-write: passed",
+    "case control-verify: passed",
+    "case flip-last-byte-verify: passed corrupt-archive",
+    "case truncate-last-byte-verify: passed corrupt-archive",
+    "case truncate-last-byte-extract: passed corrupt-archive",
+    "case cancel-extract: passed flows.Cancelled",
+    "case cancel-write: passed flows.Cancelled"
+  ],
+  "commercial_acceptance": "not-complete"
+}

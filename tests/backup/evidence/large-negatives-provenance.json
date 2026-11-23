@@ -1,0 +1,19 @@
+{
+  "source_commit": "1e916262ed3b8a96e6d40d1616208244d24a0881",
+  "engine_changed_vs_feat_ha_import_batch1_b2f63ce": false,
+  "python": "3.12.3",
+  "machine": "x86_64",
+  "sha256": {
+    "tests/backup/bounded_large_negatives.py": "581d5dc051007fe9bef5079bb5acbefd1143ace28453e09dada1418ce0cc0d27",
+    "tests/backup/bounded_stream_window.py": "8aa0f20e3cc105f8f81259c54864c9df5774e19601fb080639ec57c861a8f31c",
+    "tests/backup/record_attempt.py": "c69b16cb95264878ab03f5ee59a45ab82102ba0bcdc0e3af6729cc6690c70b89",
+    "tests/backup/bounded_stream_failures.py": "66bd8a3a43cdd1900d9d4331e99fe1cedb6503a2db17413c6027db0bfb3b8abe",
+    "tests/backup/bounded_large_archive.py": "9049d930d7ba99c6dd32500cde3d3289214ca329eff83175d521fb95eebf208a",
+    "tests/backup/test_bounded_large_negatives.py": "5bb8922a1ac8ae6104fab4532bc9784af903f77ee4799185e041d7f7664c82fa",
+    "backup-engine/woowbackup/archive.py": "85b58635a23a552cbe446ceab6dee9fc914d245c708bc86d2211fc69c39e9d49",
+    "backup-engine/woowbackup/flows.py": "0549b1918760048a8981dcff2755fd9ee74742cb28e3df2a43a88dad74885210",
+    "backup-engine/woowbackup/jobs.py": "77c56e70e3ff0bbea2066a3c42aa360fe219f1329b0e54c4063efd6fb140c492",
+    "backup-engine/woowbackup/keys.py": "9ab11bb4c11b36e3589c069af43ad9b7500d6596bf39932612d384a40c28379e",
+    "backup-engine/woowbackup/haimport.py": "27a32eb950bddc322a4c47313a48ed91fa7f2ada82d70cfef08bfcc503710cec"
+  }
+}
