@@ -295,14 +295,19 @@ def ha_broker(work, tmp, target, src, node, *, out_dir=None):
     # No cookie is set: the image's default only guards the distribution port inside a container without a network.
     # An empty default password: no Dashboard user is created at boot (emqx_dashboard_admin:add_default_user), so the
     # export holds HA's users only.
-    env = {'EMQX_NODE__NAME': node, 'EMQX_NODE__DATA_DIR': HA_DATA_DIR, 'EMQX_DASHBOARD__DEFAULT_PASSWORD': ''}
+    # HA's cluster.hocon may name plugins and the folder they load from: EMQX 5.8.9 loads and starts every enabled
+    # plugin at boot (emqx_plugins_app.erl:31-33, emqx_plugins.erl:310-321,1023-1066; `noexec` does not stop BEAM
+    # loading), so a crafted backup staging one under certs/ ran its code here (security review SR-1, B1-06 port of
+    # e848015). Environment overrides win over cluster.hocon: no plugin, the image's own empty plugin folder.
+    env = {'EMQX_NODE__NAME': node, 'EMQX_NODE__DATA_DIR': HA_DATA_DIR, 'EMQX_DASHBOARD__DEFAULT_PASSWORD': '',
+           'EMQX_PLUGINS__STATES': '[]', 'EMQX_PLUGINS__INSTALL_DIR': '/opt/emqx/plugins'}
     volumes = [(tmp.name('emqx-src'), HA_DATA_DIR, 'rw,noexec,nosuid,nodev')]
     if out_dir is not None:
         tmp.volume('emqx-xfer')
         tmp.volume_import('emqx-xfer', lambda out: _folder_tar(out, 'out', 0, 0))
-        volumes.append((tmp.name('emqx-xfer'), WORK, None))
+        volumes.append((tmp.name('emqx-xfer'), WORK, 'rw,noexec,nosuid,nodev'))
     tmp.volume('emqx-ha-log')
-    volumes.append((tmp.name('emqx-ha-log'), LOG_TARGET, None))
+    volumes.append((tmp.name('emqx-ha-log'), LOG_TARGET, 'rw,noexec,nosuid,nodev'))
     try:
         tmp.run('emqx-ha', target.image, [], detach=True, user='0', read_only_root=True, add_hosts=hosts, env=env,
                 volumes=volumes)
@@ -912,6 +917,88 @@ def restore_target_settings(tmp, original, read_candidate, *, observe=None):
         raise BackupError('incompatible', 'EMQX 匯入後未能保留目標有效設定，已停止。')
 
 
+FILE_SECRET = ('EMQX 不能搬過來：HA 的 EMQX 設定（{roots}）用「file://」讀取本機檔案當作密碼；搬過來後這台的 EMQX 會讀取'
+               '這台自己的檔案（例如 MQTT 帳號檔或環境變數）並送到這些設定指定的伺服器，為保護這台的機密已停止。'
+               '請先在 HA 把這些密碼改成直接填寫，再重新備份後匯入。')
+
+
+def file_secret_roots(config):
+    """The roots HA's import brought (DATA_ROOTS except this device's authorization) holding a value that EMQX 5.8.9
+    loads with its `file://` secret loader (emqx_schema_secret.erl:74-77, emqx_secret_loader.erl:28-45: the file is
+    read on THIS device at use time, its path even env-interpolated). A migrated connector or authenticator would read
+    this device's bootstrap credential mount or /proc/self/environ (its env secrets) and send it to the server HA's
+    settings name (security review SR-3, 2026-11-23). Conservative: any string or ASCII charlist that starts with
+    `file://` after leading blanks, any case."""
+    found = set()
+
+    def text(value):
+        if isinstance(value, str):
+            return value
+        if (isinstance(value, list) and value and len(value) <= 4096
+                and all(type(v) is int and 0 < v < 128 for v in value)):
+            return ''.join(map(chr, value))
+        return None
+
+    def visit(root, value, depth=0):
+        if depth > 64:
+            found.add(root)
+            return
+        candidate = text(value)
+        if candidate is not None:
+            if candidate.lstrip().lower().startswith('file://'):
+                found.add(root)
+            return
+        if isinstance(value, dict):
+            for key, item in value.items():
+                visit(root, key, depth + 1)
+                visit(root, item, depth + 1)
+        elif isinstance(value, list):
+            for item in value:
+                visit(root, item, depth + 1)
+
+    for root in DATA_ROOTS:
+        if root != 'authorization' and root in config:
+            visit(root, config[root])
+    return sorted(found)
+
+
+SNAPSHOT_CHANGED = ('EMQX 不能搬過來：這台 EMQX 的 ACL 或憑證檔案放在資料卷裡（例如在 Dashboard 編輯過授權規則），'
+                    '匯入 HA 的資料會改寫這個檔案；為避免改變這台的存取權限，已停止。')
+
+
+def snapshot_file_digests(snapshot_path):
+    """{name: sha256 hex} of the target snapshot's data-volume files except the override file (EMQX rewrites
+    configs/cluster.hocon on every settings change; every other one must reach the candidate byte for byte)."""
+    digests = {}
+    with ha_odoo._live_tar(snapshot_path, '目標 EMQX 設定快照') as source:
+        for member in source:
+            name = ha_odoo._norm(member.name)
+            if name and member.isfile() and name != 'configs/cluster.hocon':
+                digest = hashlib.sha256()
+                handle = source.extractfile(member)
+                for chunk in iter(lambda: handle.read(habackup.CHUNK), b''):
+                    digest.update(chunk)
+                digests[name] = digest.hexdigest()
+            source.members.clear()
+    return digests
+
+
+def check_snapshot_files(read_candidate, digests):
+    """Every data-volume file this device's effective configuration names (its ACL, certificates, ...) must be
+    byte-identical in the finished candidate. HA's export inlines HA's file ACL and the import writes it to
+    <data_dir>/authz/acl.conf (EMQX 5.8.9 emqx_authz_file.erl:64-75,120-121), which IS this device's ACL once the
+    Dashboard edited it: the settings come back with the same path, so only the content shows the change (security
+    review SR-2, 2026-11-23). Digests only; contents never leave the candidate."""
+    for name, want in sorted(digests.items()):
+        path = f'{DATA_TARGET}/{name}'
+        result = read_candidate(['sha256sum', path])
+        raw = result.stdout or b''
+        if (result.returncode or len(raw) > 4096
+                or not re.fullmatch(rb'[0-9a-f]{64}  ' + re.escape(path.encode()) + rb'\n', raw)
+                or raw[:64].decode('ascii') != want):
+            raise BackupError('incompatible', SNAPSHOT_CHANGED)
+
+
 def check_candidate_bootstrap(tmp, target, config):
     paths = bootstrap_references(config, target.files, target.secrets)
     for key in ('banned', 'api_key'):
@@ -930,6 +1017,7 @@ def target_broker(work, tmp, target, export, ids, *, hint='', target_snapshot=No
                   image_fingerprints=None):
     """This device's broker on an empty volume: import HA's export, load the strict settings back, verify."""
     name = os.path.basename(export)
+    snapshot_digests = snapshot_file_digests(target_snapshot) if target_snapshot is not None else None
     tmp.volume('emqx-in')
     tmp.volume_import('emqx-in', lambda out: _folder_tar(out, 'in', ids[0], ids[1], [(name, export)]))
     tmp.volume('emqx-new')
@@ -964,7 +1052,13 @@ def target_broker(work, tmp, target, export, ids, *, hint='', target_snapshot=No
                                 observe=getattr(work, '_emqx_build_stage', None))
         if image_fingerprints is not None and tls_fingerprints(read_candidate, image_fingerprints) != image_fingerprints:
             raise BackupError('incompatible', 'EMQX 匯入後憑證與目標不一致，已停止。')
-        check_candidate_bootstrap(tmp, target, read_effective_config(read_candidate))
+        if snapshot_digests:   # after every settings change; the remaining checks only read
+            check_snapshot_files(read_candidate, snapshot_digests)
+        final = read_effective_config(read_candidate)
+        roots = file_secret_roots(final)
+        if roots:
+            raise BackupError('incompatible', FILE_SECRET.format(roots=hacommon.names(roots)))
+        check_candidate_bootstrap(tmp, target, final)
     else:
         # Legacy internal test path only; public convert remains blocked.
         snippet = f'authorization {{\n  no_match = {strict[0]}\n  deny_action = {strict[1]}\n  sources = []\n}}\n'.encode()
