@@ -102,7 +102,7 @@ for its name; a bidi control in a list cell stays a display-only residual).
 
 `mutation-check-iter3-4a3622b.json` (4a3622b = review e8d608b code; `ha_omnigent.py` 44c47017…, `hacommon.py`
 67f2ed25…, `jobs.py` e38ff425…): baseline 59/59 pass; **26/26 caught** (M26 SR-6 caught).
-`mutation-check-iter3-final.json` (97c994f): running (result follows in the next commit).
+`mutation-check-iter3-final.json` (97c994f; `ha_omnigent.py` 44c47017…, `hacommon.py` ad058935…, `jobs.py` c6e62948…): baseline 60/60 pass; **28/28 caught** (M27 `jobs.LOG_CONTROL_RE` bidi set and M28 `hacommon.CONTROL_RE` bidi set caught by the new Omnigent check test).
 
 Unit and suites:
 * 4a3622b: Omnigent modules (9) + `test_jobs` + `test_ha_common` + `test_ha_import` + `test_ha_redact` 215 OK, lab
