@@ -274,6 +274,22 @@ Findings of iteration 2:
    configuration :5815-5831 → :5550-5590); not in the vendor's scrub list. It needs a `.py` file that already exists,
    hence the lower weight, but it is a stored setting that runs code: it refuses like the others.
 
+### Real end-to-end flow on the final code (iteration 2)
+
+`tests/e2e/lab/evidence/litellm-product-20261123/attempt-secreview-01.json`: the product lane's own driver
+(`litellm_full_flow.py --run` through `services_a_capture.py`) run by this review from the clean tree `14be8bc`
+(product code `1a83926`, `ha_litellm.py` `3a6e928e…`) on dev-d with the owner's real encrypted LiteLLM HA backup,
+2026-11-24 01:12-01:45: **exit 0, 69/69 PASS** (2033 s, dev-d lock held 1690 s after a 342 s wait). Package install,
+this device's own data, upload, `ha-check` (no blocker: salt bound, data shape equal, 1/1/24, PG 18 → 17),
+`ha-convert` (the conversion now also asks the stored-settings question in the new cluster — no false refusal on
+the real backup), inspect, the automatic rollback of an injected failing import (own salt, data and key back, own
+values decrypt), the import (HA's test key `/key/info` 200, every stored provider value decrypts with the moved
+salt and none with a random one, `litellm-salt-key` and the database salt are HA's while the master key, UI and
+database secrets are unchanged, this device's own key replaced, the live schema is this device's), restart (the
+same checks again), the manual rollback (own state back), no registered value in the engine records, cleanup and
+dev-d isolation `true none {}`. This is the real proof of the fixed code; `commercial_acceptance` stays
+`not-complete` (one run, one device, x86 only; the add-on is amd64-only).
+
 ### Tests (iteration 2)
 
 - Review tip `4d7d9bf`: `test_ha_litellm` with `test_ha_litellm_candidate`, `test_adapter_import_secrets` and
@@ -346,13 +362,5 @@ Findings of iteration 2:
   evening; the product lane measured that LiteLLM's restore readiness needs a load below about 30.
 - The page was checked by reading (`backup.js` builds text nodes only, no `innerHTML`), not fuzzed.
 - LiteLLM application bugs that stored data could trigger in the proxy itself.
-- Iteration 2: **the product's real end-to-end flow on the fixed tip `review/litellm-secreview-fix2-20261124`**
-  (dev-d, `litellm_full_flow.py`): pending — the product lane is asked to fast-forward
-  `feat/ha-import-litellm-product-20261123` to it and run its attempt 9. Its attempt 8 (`215fdf0`: SR-1..SR-5, the
-  Pi agent `key_users` and the search_path pin, but not the SR-6 refusal nor this iteration's fixes) passed every
-  product step and client check on the real backup (68/69; the one FAIL was dev-d's restarting headscale container
-  in the harness's container-set equality), so the unchanged parts are proven there. The changed code runs in the check, after `load_rows` in the
-  conversion and in the notes; the real backup passed the HA-side check and the re-check on its staged rows in the
-  sandbox (`fixed2-real-backup.json`).
 - RestrictedPython escapes from a `custom_code` guardrail; SR-7 beyond the model path (the DB-merged configuration
   and guardrail paths were read in the vendor source, not probed).
