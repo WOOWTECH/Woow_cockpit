@@ -251,8 +251,12 @@ class Lab:
         return path
 
     def journal(self, unit):
-        result = self.r.run(['/usr/bin/journalctl', '--user', '-u', unit, '-o', 'cat', '--no-pager'], check=False,
-                            timeout=60, max_output=4 * 1024 * 1024)
+        """The unit's journal (the server's container output with LogDriver journald), or None when unreadable."""
+        try:
+            result = self.r.run(['/usr/bin/journalctl', '--user', '-u', unit, '-o', 'cat', '--no-pager', '-n', '20000'],
+                                check=False, timeout=60, max_output=16 * 1024 * 1024)
+        except BackupError:
+            return None
         return result.stdout if result.returncode == 0 else None
 
 
@@ -565,8 +569,7 @@ def run(arch):
             except Exception:
                 failures.append(label)
         for unit in UNITS:
-            text = lab.journal(unit) if created_files else None
-            logs.append(text)
+            logs.append(lab.journal(unit) if created_files else None)
         if created_files:
             for unit in reversed(UNITS):
                 attempt(lambda unit=unit: r.systemctl('stop', '--', unit, check=False, timeout=120), 'stop')
@@ -599,7 +602,9 @@ def run(arch):
         event('secret_scan', registered_values=len(chain.SECRET_VALUES), login_credential_sources=len(observed),
               journals_scanned=sum(t is not None for t in logs), engine_log_lines=len(reporter.lines), hits=hits)
         event('cleanup', complete=not failures and not remaining, private_engine_root_removed=not root.exists())
-        require(not failures and not remaining and hits == 0, 'cleanup_or_scan_failed')
+        # The server's journal (its container output) must have been readable: otherwise coverage is incomplete.
+        require(not failures and not remaining and hits == 0 and (not created_files or logs[1] is not None),
+                'cleanup_or_scan_failed')
     require(success, 'run_incomplete')
     event('omnigent_real_ha', arch=arch, result='PASS')
 
