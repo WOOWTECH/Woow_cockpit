@@ -1139,8 +1139,9 @@ class Run:
     def clients_reconnect(self, label_text):
         ev = self.ev
         results = {}
+        deadline = time.monotonic() + 180       # one budget for all clients: a working client is back in seconds
         for name in self.clients:
-            status, attempts = self.wait_running(name, seconds=180)
+            status, attempts = self.wait_running(name, seconds=max(5, deadline - time.monotonic()))
             results[name] = (status.get('BackendState'), status.get('ID'), attempts)
         state = probe(ev, f'{label_text} nodes')
         online = {n[1]: n[5] for n in state.get('nodes') or [] if isinstance(n, list)}
