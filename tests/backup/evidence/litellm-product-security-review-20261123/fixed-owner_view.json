@@ -24,7 +24,7 @@
   ],
   "user": ""
  },
- "elapsed_seconds": 155.6,
+ "elapsed_seconds": 113.2,
  "found": {
   "migrations": null,
   "schemas": [
@@ -51,9 +51,9 @@
   "shared_preload_libraries": ""
  },
  "source": {
-  "commit": "f474bb56cfbec4166f10b31888c51e084fd40416",
+  "commit": "fd9e63a316ead97ad0c6dc854eb4ba707f1c8ee1",
   "ha_litellm_sha256": "03f3ec69ccf992c8cdafad9b0cb56e993e638756c93113bcaa4997c74bdaf192",
-  "tracked_changes": true
+  "tracked_changes": false
  },
  "steps": [
   "start_ha_cluster",

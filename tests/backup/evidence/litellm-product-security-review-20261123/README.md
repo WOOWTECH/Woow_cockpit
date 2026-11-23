@@ -31,7 +31,7 @@ Fixes are on branch `review/litellm-secreview-20261123` (from `3bde418`): `ad674
   `03f3ec69…` = the fixed `d31c59a`'s). `original-*` ran on clean `2284e4d`/`cd900c5` (product code = `3bde418`),
   `fixed-*` on clean `d31c59a`. The later `owner_view` case ran from `f474bb5`: `original-owner_view.json` with
   `3bde418`'s `ha_litellm.py` put into a throwaway worktree (hence `tracked_changes: true`), `fixed-owner_view.json`
-  from the review worktree.
+  from the clean review worktree at `fd9e63a`.
 - No secret anywhere: the salt is generated per run and never printed; the crafted clusters use trust on their unix
   socket only; the probes record environment variable names, never values.
 
