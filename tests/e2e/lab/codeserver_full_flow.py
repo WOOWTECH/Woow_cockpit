@@ -329,8 +329,15 @@ pw = password()
 status, cookie, location = login(pw)
 out["login_status"], out["login_cookie"], out["login_location"] = status, bool(cookie), location[:1]
 status, body, hdrs = http("GET", "/", headers={"Cookie": cookie} if cookie else {})
+out["root_status"] = status
+# code-server answers / with the cookie by sending the browser to its default folder (302 ./?folder=/workspace,
+# measured on dev-e by batch2-lab 20:14); the workbench is that page
+target = (header(hdrs, "Location") or [""])[0]
+if status == 302 and cookie and "folder=" in target and "login" not in target:
+    status, body, hdrs = http("GET", "/" + target.lstrip("./"), headers={"Cookie": cookie})
+    out["root_redirect"] = target[:80]
 out["workbench_status"] = status
-out["workbench_page"] = b"workbench" in body or b"vscode" in body.lower()
+out["workbench_page"] = b"workbench" in body
 status, _b, hdrs = http("GET", "/")
 out["anonymous_status"] = status
 out["anonymous_to_login"] = any("login" in v for v in header(hdrs, "Location"))
@@ -1084,8 +1091,10 @@ def http_self_check():
             if self.path == '/healthz':
                 self._send(200, body=b'{"status":"alive"}')
             elif self.path == '/':
-                self._send(200, body=b'<meta id="vscode-workbench-web-configuration">') if authed else \
+                self._send(302, [('Location', './?folder=/workspace')]) if authed else \
                     self._send(302, [('Location', './login')])
+            elif self.path == '/?folder=/workspace' and authed:
+                self._send(200, body=b'<meta id="vscode-workbench-web-configuration">')
             elif self.path.startswith('/vscode-remote-resource?path=') and authed:
                 self._send(200, body=b'marker')
             else:
@@ -1106,7 +1115,10 @@ def http_self_check():
         assert (status, cookie, location) == (302, 'code-server-session=fake', ['./']), (status, cookie, location)
         assert ns['login']('wrong')[:2] == (200, None)
         assert ns['http']('GET', '/healthz')[0] == 200
-        status, body, _h = ns['http']('GET', '/', headers={'Cookie': cookie})
+        status, _body, headers = ns['http']('GET', '/', headers={'Cookie': cookie})
+        assert status == 302 and ns['header'](headers, 'Location') == ['./?folder=/workspace']
+        target = ns['header'](headers, 'Location')[0]
+        status, body, _h = ns['http']('GET', '/' + target.lstrip('./'), headers={'Cookie': cookie})
         assert status == 200 and b'workbench' in body
         status, _b, headers = ns['http']('GET', '/')
         assert status == 302 and ns['header'](headers, 'location') == ['./login']
