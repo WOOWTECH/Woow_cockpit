@@ -1,0 +1,25 @@
+{
+ "attempt": "t6_rule_jq_env-final",
+ "code": "sec/emqx-secreview-20261123 75aad7a (SR-1/2/3) + product-engine.patch",
+ "commercial_acceptance": "not-complete",
+ "exit": 0,
+ "ha_emqx_py_sha256": "05d86111bb2a8c0fcdb86804e033bed54c16d56789a586c1a08375b98ee37e95",
+ "network": "none",
+ "result": {
+  "candidate": "retained=1:leaked=1",
+  "candidate_rules": [
+   "secrev_env"
+  ],
+  "codebase": "final",
+  "conversion": "PASSED (candidate built, all product checks green)",
+  "device_dashboard_password_republished": true,
+  "elapsed_s": 766.4,
+  "image": "docker.io/emqx/emqx:5.8.9",
+  "network": "none",
+  "store": "labpodman (separate --root)",
+  "test": "T6 migrated rule jq env reads this device env secrets",
+  "trigger": true
+ },
+ "stdout_sha256": "39a15f4d03882010a9559d7d41f83e8ef1bd5013492586ce801cbfabf8f8ac4a",
+ "store": "labpodman (separate --root); throwaway objects removed after the run"
+}

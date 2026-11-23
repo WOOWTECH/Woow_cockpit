@@ -1,0 +1,26 @@
+{
+ "attempt": "t2_plugin_exec-fixedprod",
+ "code": "integration ae5420d + SR-1/SR-2 fixes (working tree before SR-3; same SR-1/SR-2 code as 75aad7a) + product-engine.patch",
+ "commercial_acceptance": "not-complete",
+ "exit": 0,
+ "ha_emqx_py_sha256": "a357ffc9fa67928cbeb7d5bd25bdf49d22814dfadb5968adf5306fffe45a4cfd",
+ "network": "none",
+ "result": {
+  "code_executed": false,
+  "codebase": "fixedprod",
+  "elapsed_s": 159.8,
+  "ha_broker": "started+exported",
+  "image": "docker.io/emqx/emqx:5.8.9",
+  "marker_in_src_volume": null,
+  "marker_in_work_volume": null,
+  "network": "none",
+  "node": "emqx@127.0.0.1",
+  "node_blocker": null,
+  "plugin_running": false,
+  "plugins_list_has_secrev": false,
+  "store": "labpodman (separate --root)",
+  "test": "T2 plugin code execution in the HA broker (B1-06)"
+ },
+ "stdout_sha256": "93a8f7e040ac0748adf95f637219c02f3515e61df6cc22d87d8b61efa28ce20d",
+ "store": "labpodman (separate --root); throwaway objects removed after the run"
+}

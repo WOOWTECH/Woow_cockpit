@@ -1,0 +1,20 @@
+{
+ "attempt": "t6_rule_jq_env-final3",
+ "code": "sec/emqx-secreview-20261123 7b173af (SR-1/2/3/6/7) + product-engine.patch",
+ "commercial_acceptance": "not-complete",
+ "exit": 0,
+ "ha_emqx_py_sha256": "396bc743b9fc62fcb0d834713e070ce7ae2f7bc6143dce28da8a462a866413ec",
+ "network": "none",
+ "result": {
+  "codebase": "final3",
+  "conversion": "REFUSED: EMQX 不能搬過來：HA 的 EMQX 規則（1 條）使用 jq 函式；EMQX 的 jq 能讀取這台 EMQX 的環境變數（其中有 Dashboard 密碼與節點 cookie 等機密），搬過來的規則可以把它們發布或送出去，為保護這台的機密已停止。請先在 HA 移除或改寫這些規則，再重新備份後匯入。",
+  "device_dashboard_password_republished": false,
+  "elapsed_s": 784.2,
+  "image": "docker.io/emqx/emqx:5.8.9",
+  "network": "none",
+  "store": "labpodman (separate --root)",
+  "test": "T6 migrated rule jq env reads this device env secrets"
+ },
+ "stdout_sha256": "a16732156bcdfe88bc1d4f13f44f8daf3f1f55f7d530add55610a0012e94ebea",
+ "store": "labpodman (separate --root); throwaway objects removed after the run"
+}
