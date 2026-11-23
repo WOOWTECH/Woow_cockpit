@@ -36,23 +36,30 @@ PostgreSQL settings, config.php merged and parsed back by the live PHP, the html
 packaging. The converted backup is inspected (preflight passes, the four data dirs, settings same) and deleted, never
 restored; dev-e's Nextcloud must be unchanged (after), cleanup and leaks as above.
 
---run --facts FILE (the share-including backup, when it exists; the acceptance run): FILE (JSON, written from the
-showcase lane's READY line) names {fixture, sha256, user, user_pw, app_pw (secret NAMES in the lab cred files),
-files {name: sha256} of the HA test user's WebDAV marker files, section {expected check section values}}. Steps:
-setup, before, upload, check (nextcloud ok, no blocker, the section as FILE says), import (ha-convert-start with the
-product's SpaceGuard/Watchdog and the host-floor watchdog, inspect: preflight passes, restore-start in place with
-its safety backup and health checks), verify (status.php through the gateway; the HA test user's WebDAV files
-with the recorded SHA-256; OCS with the user's password AND with HA's app password (HA's `secret` moved); a wrong
-password 401; the Office discovery served on this device's origin; in the database the root storage
-local::/var/www/html/data/, the live wopi_url and the tables' owner), restart (nextcloud-app.service restarted,
-verify again), rollback (a: a second restore with a one-shot ExecStartPre failure must end rolled-back; b: the
-import's safety backup restored: dev-e's own markers are back and the HA test user is gone), cleanup, leaks.
+--run --facts FILE (the share-including backup; the acceptance run): FILE (JSON, private, written from the showcase
+lane's READY line and its walk of the backup) names the fixture and its SHA-256, the HA test users and the NAMES of
+their secrets in the lab cred files (user_pw, app_pw, user2_pw, link_token, link_pw), the marker files {WebDAV name:
+SHA-256 or its 16-character prefix}, the per-user manifest digests of the data directory, the shared file, the
+CalDAV/CardDAV objects with their UIDs, the versioned file and its version count, and the expected check section.
+Steps: setup, before (also dev-e's own account through the client: logins, Office capabilities, data fingerprint),
+upload, check (nextcloud ok, no blocker, the section as FILE says), import (ha-convert-start with the product's space
+guard and the host-floor watchdog; notes; inspect: preflight passes; restore-start in place with its safety backup
+and health checks; the uploaded HA file is deleted first only when the host needs the space), verify (status.php;
+the marker files and every HA user's files on disk against the backup's digests; OCS with the HA password and with
+HA's app password, a wrong password 401; the second user reads the shared file; the public link with its password,
+401 without or with a wrong one; CalDAV and CardDAV objects; the older version on disk and in the versions API;
+richdocuments wopi keys and the cron mode exactly dev-e's; Office capabilities as for dev-e's own account; the
+discovery on this device's gateway; a new data fingerprint; root storage and table owners), restart
+(nextcloud-app.service restarted, verify again), rollback (a: a second restore with a one-shot ExecStartPre failure
+must end rolled-back, verify again; b: the import's safety backup restored: dev-e's own markers are back, the HA-only
+users are gone, dev-e's own account logs in), after (as --negative), cleanup, leaks (every secret named above).
 
 stdout carries only fixed lines (`<check>: PASS|FAIL`, the source commit, the lock time); details go to the private,
 redacted evidence folder ~/.woowbk-lab/evidence/nextcloud-flow/<time>/ (0700). Not covered by --negative (stated):
 a restore (the product refuses to build one), the users' files, Office, a browser.
 """
 import argparse
+import contextlib
 import fcntl
 import hashlib
 import importlib.util
@@ -71,6 +78,7 @@ LAB = Path.home() / '.woowbk-lab'
 DEVICE = 'woowbk-dev-e'
 LOCK = '/tmp/woowbk-dev-e-mutation.lock'
 HOLD_BUDGET = 40 * 60
+RUN_HOLD_BUDGET = 100 * 60  # the share run: upload, check, convert, restore x3, restart
 FLOOR = 12 * 1024 ** 3          # the team keeps >= 12 GiB free on the host at every moment
 NEED = 1536 * 1024 ** 2         # the upload copy in dev-e plus the check's throwaway cluster, with margin
 CANDIDATE_NEED = 4608 * 1024 ** 2  # the candidate: live html pack + html dir tar + cluster export + the archive
@@ -87,6 +95,7 @@ SHARE_TEXT = '沒有包含 share 資料夾'
 SAFE_LABEL = re.compile(r"[^A-Za-z0-9 ,()/:'<>.=_-]")
 SECRET_FILES = (LAB / 'secrets' / 'ha-import-creds.env', LAB / 'secrets' / 'b1-creds.env')
 MARKERS = LAB / 'secrets' / 'dev-e-markers.json'
+BASE_USER = 'woowbk-lab-baseline'  # dev-e's own marker account (batch2_markers.py)
 
 
 def _load(name):
@@ -151,12 +160,22 @@ files = text(run("podman", "exec", "nextcloud-db", "psql", "-X", "-At", "-U", "n
                  "SELECT count(*) FROM oc_filecache"))
 db = text(run("podman", "exec", "nextcloud-db", "psql", "-X", "-At", "-U", "nextcloud", "-d", "nextcloud", "-c", sql))
 top = text(run("podman", "exec", "nextcloud-app", "ls", "-1A", "/var/www/html/data"))
+office = text(run("podman", "exec", "nextcloud-db", "psql", "-X", "-At", "-U", "nextcloud", "-d", "nextcloud", "-c",
+                  "SELECT coalesce(json_object_agg(appid || '.' || configkey, configvalue ORDER BY appid, configkey), '{}') "
+                  "FROM oc_appconfig WHERE (appid = 'richdocuments' AND configkey IN ('wopi_url', 'public_wopi_url', "
+                  "'wopi_callback_url', 'wopi_allowlist', 'disable_certificate_verification')) "
+                  "OR (appid = 'core' AND configkey = 'backgroundjobs_mode')"))
+fp = run("podman", "exec", "-u", "www-data", "nextcloud-app", "php", "/var/www/html/occ", "config:system:get",
+         "data-fingerprint")
+fp = fp.stdout.decode("utf-8", "replace").strip() if fp.returncode == 0 else ""
 units = {u: (text(run("systemctl", "--user", "is-active", u)) or "inactive").strip() for u in REQ["units"]}
 print(json.dumps({"config_sha256": cfg.split()[0] if cfg else None,
                   "users": sorted(json.loads(users)) if users else None,
                   "status": json.loads(status) if status else None,
                   "db": json.loads(db) if db else None,
                   "data_top": sorted(top.split()) if top is not None else None, "units": units,
+                  "office": json.loads(office) if office else None,
+                  "fingerprint": __import__("hashlib").sha256(fp.encode()).hexdigest()[:16] if fp else None,
                   "filecache_rows": int(files) if files and files.strip().isdigit() else None}))
 '''
 
@@ -238,44 +257,107 @@ print(json.dumps({"started": True, "job_id": reply["job_id"], "state": run.get("
 
 
 CLIENT = r'''
-import base64, hashlib, json, subprocess, sys, urllib.error, urllib.parse, urllib.request
+import base64, hashlib, json, re, subprocess, sys, urllib.error, urllib.parse, urllib.request
 REQ = json.loads(sys.stdin.read())
 NC = "http://127.0.0.1:18081"
-def call(method, path, user=None, password=None, headers=None):
+NAME = re.compile(r"[A-Za-z0-9._@-]{1,64}")
+def call(method, path, user=None, password=None, headers=None, body=None):
     h = dict(headers or {})
     if user is not None:
         h["Authorization"] = "Basic " + base64.b64encode(f"{user}:{password}".encode()).decode()
-    req = urllib.request.Request(NC + path, method=method, headers=h)
+    req = urllib.request.Request(NC + path, method=method, headers=h, data=body)
     try:
-        with urllib.request.urlopen(req, timeout=60) as r:
+        with urllib.request.urlopen(req, timeout=120) as r:
             return r.status, r.read()
     except urllib.error.HTTPError as e:
         return e.code, e.read()
+def q(text):
+    return urllib.parse.quote(text, safe="/")
+def sha(code, data):
+    return hashlib.sha256(data).hexdigest() if code == 200 else "HTTP%d" % code
+def short(value):
+    return hashlib.sha256(value.encode()).hexdigest()[:16] if value else None
 def sql(statement):
     p = subprocess.run(["podman", "exec", "nextcloud-db", "psql", "-X", "-At", "-U", "nextcloud", "-d", "nextcloud",
                         "-c", statement], capture_output=True, timeout=120)
     return p.stdout.decode().strip() if p.returncode == 0 else None
-user, pw, app = REQ["user"], REQ["user_pw"], REQ["app_pw"]
+def app_sh(script, *args):
+    p = subprocess.run(["podman", "exec", "-u", "www-data", "nextcloud-app", "sh", "-c", script, "sh", *args],
+                       capture_output=True, timeout=900)
+    return p.stdout.decode("utf-8", "replace").strip() if p.returncode == 0 else "rc%d" % p.returncode
+PROP = (b'<?xml version="1.0"?><d:propfind xmlns:d="DAV:" xmlns:oc="http://owncloud.org/ns"><d:prop>%s</d:prop>'
+        b'</d:propfind>')
+DAVX = {"Depth": "0", "Content-Type": "application/xml"}
+user, pw = REQ["user"], REQ["user_pw"]
+assert NAME.fullmatch(user) and all(NAME.fullmatch(u) for u in REQ.get("digest_users", []))
+out = {}
 code, body = call("GET", "/status.php")
-status = json.loads(body) if code == 200 else None
-files = {}
-for name in REQ["files"]:
-    c, data = call("GET", "/remote.php/dav/files/%s/%s" % (urllib.parse.quote(user), urllib.parse.quote(name)), user, pw)
-    files[name] = hashlib.sha256(data).hexdigest() if c == 200 else "HTTP%d" % c
+out["status"] = json.loads(body) if code == 200 else None
 ocs = {}
-for kind, secret in (("password", pw), ("app_password", app), ("wrong", pw + "-wrong")):
+for kind, secret in (("password", pw), ("app_password", REQ.get("app_pw")), ("wrong", pw + "-wrong")):
+    if secret is None:
+        continue
     c, data = call("GET", "/ocs/v2.php/cloud/user?format=json", user, secret, {"OCS-APIRequest": "true"})
     try:
         ident = json.loads(data)["ocs"]["data"]["id"] if c == 200 else None
     except (ValueError, KeyError, TypeError):
         ident = None
     ocs[kind] = [c, ident == user]
+out["ocs"] = ocs
+# Office as this Nextcloud sees it (richdocuments capabilities; `collabora` is what it read from its WOPI server).
+c, data = call("GET", "/ocs/v2.php/cloud/capabilities?format=json", user, pw, {"OCS-APIRequest": "true"})
+office = None
+if c == 200:
+    try:
+        rd = json.loads(data)["ocs"]["data"]["capabilities"].get("richdocuments") or {}
+        cfg = rd.get("config") if isinstance(rd.get("config"), dict) else {}
+        col = rd.get("collabora")
+        office = {"keys": sorted(rd)[:40], "config": {k: cfg[k] for k in ("wopi_url", "public_wopi_url", "wopi_callback_url",
+                                                                       "disable_certificate_verification") if k in cfg},
+                  "collabora": sorted(col)[:30] if isinstance(col, dict) else bool(col),
+                  "product": str(rd.get("productName") or "")[:60]}
+    except (ValueError, KeyError, TypeError, AttributeError):
+        office = "unreadable"
+out["capabilities"] = [c, office]
+c, data = call("PROPFIND", "/remote.php/dav/files/%s/" % q(user), user, pw, DAVX, PROP % b"<oc:data-fingerprint/>")
+m = re.search(rb"<oc:data-fingerprint>([^<]*)</oc:data-fingerprint>", data or b"")
+out["fingerprint"] = [c, short(m.group(1).decode()) if m else None]
 c, data = call("GET", "/hosting/discovery")
-print(json.dumps({"status": status, "files": files, "ocs": ocs,
-                  "office": [c, b"urlsrc" in data and b"127.0.0.1:18081" in data],
-                  "storage": sql("SELECT id FROM oc_storages WHERE id LIKE 'local::%' ORDER BY numeric_id"),
-                  "wopi_url": sql("SELECT configvalue FROM oc_appconfig WHERE appid = 'richdocuments' AND configkey = 'wopi_url'"),
-                  "owners": sql("SELECT string_agg(DISTINCT tableowner, ',') FROM pg_tables WHERE schemaname = 'public'")}))
+out["discovery"] = [c, b"<wopi-discovery" in data and b"urlsrc" in data]
+out["files"] = {name: sha(*call("GET", "/remote.php/dav/files/%s/%s" % (q(user), q(name)), user, pw))
+                for name in REQ.get("files", [])}
+if REQ.get("user2"):
+    assert NAME.fullmatch(REQ["user2"])
+    out["user2_file"] = sha(*call("GET", "/remote.php/dav/files/%s/%s" % (q(REQ["user2"]), q(REQ["user2_file"])),
+                                  REQ["user2"], REQ["user2_pw"]))
+if REQ.get("link_token"):
+    path = "/public.php/dav/files/%s/%s" % (q(REQ["link_token"]), q(REQ["link_file"]))
+    out["link"] = [sha(*call("GET", path, "anonymous", REQ["link_pw"])), call("GET", path)[0],
+                   call("GET", path, "anonymous", REQ["link_pw"] + "-wrong")[0]]
+for kind, base in (("caldav", "/remote.php/dav/calendars/%s/"), ("carddav", "/remote.php/dav/addressbooks/users/%s/")):
+    if REQ.get(kind):
+        c, data = call("GET", base % q(user) + q(REQ[kind]), user, pw)
+        out[kind] = [c, c == 200 and ("UID:" + REQ[kind + "_uid"]).encode() in data]
+if REQ.get("versioned"):
+    c, data = call("PROPFIND", "/remote.php/dav/files/%s/%s" % (q(user), q(REQ["versioned"])), user, pw, DAVX,
+                   PROP % b"<oc:fileid/>")
+    m = re.search(rb"<oc:fileid>([0-9]{1,18})</oc:fileid>", data or b"")
+    listed = None
+    if m:
+        c2, data2 = call("PROPFIND", "/remote.php/dav/versions/%s/versions/%s" % (q(user), m.group(1).decode()), user, pw,
+                         {"Depth": "1"})
+        listed = [c2, len(re.findall(rb"<d:response>", data2)) - 1 if c2 == 207 else None]
+    out["versions"] = {"dav": listed, "on_disk": app_sh('find "$1" -type f 2>/dev/null | wc -l',
+                                                        "/var/www/html/data/%s/files_versions" % user)}
+# Per-user manifest digests of the data dir, the showcase method: cd D; find . -type f -print0 | LC_ALL=C sort -z |
+# xargs -0 -r sha256sum | sha256sum.
+out["digests"] = {u: app_sh('cd "$1" 2>/dev/null || exit 3; find . -type f -print0 | LC_ALL=C sort -z | '
+                            'xargs -0 -r sha256sum | sha256sum | cut -c1-64', "/var/www/html/data/%s/files" % u)
+                  for u in REQ.get("digest_users", [])}
+out["storage"] = sql("SELECT id FROM oc_storages WHERE id LIKE 'local::%' ORDER BY numeric_id")
+out["owners"] = sql("SELECT string_agg(DISTINCT tableowner, ',') FROM pg_tables WHERE schemaname = 'public'")
+out["lastcron"] = sql("SELECT configvalue FROM oc_appconfig WHERE appid = 'core' AND configkey = 'lastcron'")
+print(json.dumps(out))
 '''
 DROPIN_DIR_REL = '.config/systemd/user/nextcloud-app.service.d'
 DROPIN_REL = DROPIN_DIR_REL + '/zz-ncflow-fail-once.conf'
@@ -312,12 +394,12 @@ class Run:
         self.created_store = None
         self.before = {}
 
-    def budget(self, phase):
-        if time.monotonic() - self.lock_started > HOLD_BUDGET:
+    def budget(self, phase, need=NEED):
+        if time.monotonic() - self.lock_started > (RUN_HOLD_BUDGET if self.args.run else HOLD_BUDGET):
             raise Failed(f'lock hold budget reached before {phase}')
         free = host_free()
-        if free < FLOOR + NEED:
-            raise Failed(f'host free space {free} below the floor plus the step need before {phase}')
+        if free < FLOOR + need:
+            raise Failed(f'host free space {free} below the floor plus the step need {need} before {phase}')
 
     def state(self):
         return drv.device_python(STATE, {'units': list(UNITS)}, timeout=600)
@@ -368,17 +450,29 @@ class Run:
                         and status.get('maintenance') is False, {'units': state.get('units'), 'status': status}):
             raise Failed('Nextcloud not running')
 
+    def base_client(self):
+        """dev-e's own account through the same client program (read only): logins, Office capabilities, the data
+        fingerprint, the discovery."""
+        return drv.device_python(CLIENT, {'user': BASE_USER, 'user_pw': self.args.secrets['DEV_D_MARKER_NEXTCLOUD']},
+                                 timeout=600)
+
     def before_state(self):
         ev = self.ev
-        self.before = {'markers': self.markers(), 'state': self.state()}
+        self.before = {'markers': self.markers(), 'state': self.state(), 'client': self.base_client()}
         ev.save('before.json', self.before)
         ev.check('before: dev-e\'s own markers read (baseline user and its WebDAV file)',
-                 'woowbk-lab-baseline' in (self.before['markers'].get('users') or [])
+                 BASE_USER in (self.before['markers'].get('users') or [])
                  and bool(self.before['markers'].get('files')), self.before['markers'])
+        client = self.before['client']
+        ev.check('before: dev-e\'s own account logs in (OCS) and the wrong password is refused',
+                 (client.get('ocs') or {}).get('password') == [200, True]
+                 and ((client.get('ocs') or {}).get('wrong') or [None])[0] == 401, client.get('ocs'))
+        ev.log(f'before: capabilities {client.get("capabilities")} discovery {client.get("discovery")} '
+               f'fingerprint set {bool((client.get("fingerprint") or [None, None])[1])} office {self.before["state"].get("office")}')
 
     def upload(self):
         ev = self.ev
-        self.budget('upload')
+        self.budget('upload', NEED + FIXTURE.stat().st_size)
         if not ev.check('upload: the fixture has the recorded SHA-256', sha256_file(FIXTURE) == FIXTURE_SHA):
             raise Failed('fixture differs')
         started = time.monotonic()
@@ -397,7 +491,7 @@ class Run:
         ev = self.ev
         self.budget('check')
         job, took = drv.run_check(self.created_store, ['nextcloud'], ev=ev, key=self.args.secrets['HA_BACKUP_KEY'])
-        ev.time('check', 'noshare', 'nextcloud', took, job)
+        ev.time('check', 'share' if self.args.run else 'noshare', 'nextcloud', took, job)
         result = (job.get('result') or {}).get('ha_check') or {}
         apps = result.get('apps') or []
         app = apps[0] if apps else {}
@@ -456,6 +550,17 @@ class Run:
                 pass
             return
 
+    @contextlib.contextmanager
+    def watching(self, tripped):
+        stop = threading.Event()
+        watcher = threading.Thread(target=self.watch_host, args=(stop, tripped), daemon=True)
+        watcher.start()
+        try:
+            yield
+        finally:
+            stop.set()
+            watcher.join(timeout=60)
+
     def candidate(self):
         ev = self.ev
         self.budget('candidate')
@@ -512,21 +617,20 @@ class Run:
         ev.check('candidate: exactly the converted backup was added', after - before == {backup}, sorted(after - before))
 
     # -------- the acceptance run (share-including backup)
+    def restore_need(self, backup_id):
+        """Host bytes a restore of `backup_id` may write: its safety backup (about the live dirs) plus the restored
+        dirs (about the backup's size), with margin."""
+        backups = {b['id']: b for b in drv.ok('list', ev=self.ev).get('backups') or []}
+        size = int((backups.get(backup_id) or {}).get('size') or 0)
+        return 2 * size + 2 * 1024 ** 3
+
     def import_real(self):
         ev, facts = self.ev, self.args.facts
-        self.budget('import')
-        if not ev.check('import: the host keeps 12 GiB plus the conversion\'s need free',
-                        host_free() >= FLOOR + CANDIDATE_NEED + int(facts.get('extra_need', 0)), f'{host_free()} B'):
-            raise Failed('host space')
-        stop, tripped = threading.Event(), []
-        watcher = threading.Thread(target=self.watch_host, args=(stop, tripped), daemon=True)
-        watcher.start()
-        try:
+        self.budget('import', CANDIDATE_NEED + int(facts.get('extra_need', 0)))
+        tripped = []
+        with self.watching(tripped):
             job, took = drv.convert(self.created_store, ['nextcloud'], False, ev=ev,
                                     key=self.args.secrets['HA_BACKUP_KEY'], tag='nc-share-convert')
-        finally:
-            stop.set()
-            watcher.join(timeout=60)
         ev.time('convert', 'share', 'nextcloud', took, job)
         result = job.get('result') or {}
         ev.save('convert-job.json', {'state': job.get('state'), 'error': job.get('error'), 'result': result})
@@ -536,50 +640,121 @@ class Run:
                         job.get('state') == 'succeeded' and bool(self.converted) and not tripped,
                         {'state': job.get('state'), 'error': job.get('error'), 'tripped': tripped}):
             raise Failed('convert')
+        row = result.get('ha_import') or {}
+        ev.check('import: the notes and reminders name Collabora, the data fingerprint and the MCP admin lines',
+                 any('Collabora' in n for n in row.get('notes') or []) and any('資料指紋' in n for n in row.get('notes') or [])
+                 and any('Woow Nextcloud MCP Server' in r for r in (row.get('reminders_by_app') or {}).get('nextcloud') or []),
+                 row)
         inspect = drv.ok('inspect', {'backup_id': self.converted}, ev=ev, timeout=900)
+        ev.save('inspect.json', inspect)
         pre = inspect.get('preflight') or {}
         failed = [c for c in pre.get('checks') or [] if c.get('status') == 'fail']
-        ev.check('import: inspect: preflight passes, settings same, in place',
-                 pre.get('ok') and not failed and all((a.get('settings') or {}).get('state') == 'same'
-                                                      and a.get('mode') == 'inplace' for a in pre.get('apps') or []),
-                 failed[:3])
-        job, took = drv.restore(self.converted, ['nextcloud'], ev=ev, tag='nc-share-restore')
+        if not ev.check('import: inspect: preflight passes, settings same, in place',
+                        pre.get('ok') and not failed and all((a.get('settings') or {}).get('state') == 'same'
+                                                             and a.get('mode') == 'inplace' for a in pre.get('apps') or []),
+                        failed[:3] or [(a.get('id'), a.get('mode')) for a in pre.get('apps') or []]):
+            raise Failed('inspect')
+        need = self.restore_need(self.converted)
+        if host_free() < FLOOR + need and self.created_store:
+            # The page lets the user delete the HA file at any time; done before the restore only when the host needs it.
+            rc, _reply = drv.helper('ha-delete', {'ha_backup_id': self.created_store, 'confirm': True})
+            ev.check('import: the uploaded HA file is deleted before the restore (host space)', rc == 0)
+            if rc == 0:
+                self.created_store = None
+        self.budget('restore', need)
+        tripped = []
+        with self.watching(tripped):
+            job, took = drv.restore(self.converted, ['nextcloud'], ev=ev, tag='nc-share-restore')
         ev.time('restore', 'share', 'nextcloud', took, job)
         result = job.get('result') or {}
         self.safety = result.get('safety_backup_id')
         drv.created_backup(self.safety)
         health = result.get('health') or []
+        ev.save('restore-job.json', {'state': job.get('state'), 'error': job.get('error'), 'health': health})
         if not ev.check('import: restore-start succeeds with its safety backup and every health check ok',
-                        job.get('state') == 'succeeded' and bool(self.safety) and health
+                        job.get('state') == 'succeeded' and bool(self.safety) and bool(health) and not tripped
                         and all(h.get('status') == 'ok' for h in health),
-                        {'state': job.get('state'), 'error': job.get('error'), 'took_s': round(took, 1)}):
+                        {'state': job.get('state'), 'error': job.get('error'), 'took_s': round(took, 1), 'tripped': tripped}):
             raise Failed('restore')
 
     def client(self):
         facts, secrets = self.args.facts, self.args.secrets
         request = {'user': facts['user'], 'user_pw': secrets[facts['user_pw']], 'app_pw': secrets[facts['app_pw']],
-                   'files': sorted(facts['files'])}
-        return drv.device_python(CLIENT, request, timeout=900)
+                   'files': sorted(facts['files']), 'digest_users': sorted(facts.get('digests') or {}),
+                   'versioned': facts.get('versioned')}
+        if facts.get('user2'):
+            request.update(user2=facts['user2'], user2_pw=secrets[facts['user2_pw']], user2_file=facts['user2_file'])
+        if facts.get('link_token'):
+            request.update(link_token=secrets[facts['link_token']], link_pw=secrets[facts['link_pw']],
+                           link_file=facts['link_file'])
+        for kind in ('caldav', 'carddav'):
+            if facts.get(kind):
+                request.update({kind: facts[kind], f'{kind}_uid': facts[f'{kind}_uid']})
+        return drv.device_python(CLIENT, request, timeout=1800)
+
+    @staticmethod
+    def same_sha(found, want):
+        """A full SHA-256 equals; a recorded 16-character prefix (the showcase lane prints prefixes) is its start."""
+        return isinstance(found, str) and isinstance(want, str) and len(want) >= 16 and found.startswith(want)
 
     def verify(self, phase):
         ev, facts = self.ev, self.args.facts
         found = self.client()
-        ev.save(f'client-{phase}.json', found)
+        state = self.state()
+        ev.save(f'client-{phase}.json', {'client': found, 'state': state})
         status = found.get('status') or {}
-        ev.check(f'{phase}: status.php installed 35.0.1.1, no maintenance',
-                 status.get('installed') is True and status.get('version') == '35.0.1.1' and status.get('maintenance') is False,
-                 status)
-        ev.check(f'{phase}: the HA test user\'s WebDAV files have the recorded SHA-256 (user files moved intact)',
-                 found.get('files') == facts['files'], found.get('files'))
+        ev.check(f'{phase}: status.php installed 35.0.1.1, no maintenance, no database upgrade needed',
+                 status.get('installed') is True and status.get('version') == '35.0.1.1' and status.get('maintenance') is False
+                 and status.get('needsDbUpgrade') is False, status)
+        files = found.get('files') or {}
+        ev.check(f'{phase}: the HA test user\'s WebDAV files (CJK names, nested, 4 MiB binary) have the recorded SHA-256',
+                 set(files) == set(facts['files']) and all(self.same_sha(files[n], facts['files'][n]) for n in files),
+                 {n: (v[:16] if isinstance(v, str) else v) for n, v in files.items()})
+        digests = found.get('digests') or {}
+        ev.check(f'{phase}: every HA user\'s files on disk equal the backup (per-user manifest digests, showcase method)',
+                 bool(digests) and digests == facts.get('digests'), {u: str(d)[:16] for u, d in digests.items()})
         ocs = found.get('ocs') or {}
         ev.check(f'{phase}: OCS login with the HA password and with HA\'s app password (secret moved); wrong password 401',
                  ocs.get('password') == [200, True] and ocs.get('app_password') == [200, True]
                  and (ocs.get('wrong') or [None])[0] == 401, ocs)
-        ev.check(f'{phase}: Office discovery is served on this device\'s origin', found.get('office') == [200, True],
-                 found.get('office'))
-        ev.check(f'{phase}: database: root storage is this device\'s data dir, live wopi_url, tables owned by oc_admin',
-                 found.get('storage') == 'local::/var/www/html/data/' and found.get('wopi_url') == 'http://nextcloud-office:9980'
-                 and found.get('owners') == 'oc_admin', {k: found.get(k) for k in ('storage', 'wopi_url', 'owners')})
+        if facts.get('user2'):
+            ev.check(f'{phase}: the second HA user reads the file shared with them (user share moved)',
+                     self.same_sha(found.get('user2_file'), facts['files'].get(facts['user2_shared'])),
+                     str(found.get('user2_file'))[:16])
+        if facts.get('link_token'):
+            link = found.get('link') or [None, None, None]
+            ev.check(f'{phase}: the password-protected public link serves the file; without or with a wrong password 401',
+                     self.same_sha(link[0], facts['files'].get(facts['user2_shared'])) and link[1] == 401 and link[2] == 401,
+                     [str(link[0])[:16], link[1], link[2]])
+        for kind, text in (('caldav', 'CalDAV event'), ('carddav', 'CardDAV contact')):
+            if facts.get(kind):
+                ev.check(f'{phase}: the HA test user\'s {text} is served with its UID', found.get(kind) == [200, True],
+                         found.get(kind))
+        if facts.get('versioned'):
+            versions = found.get('versions') or {}
+            dav = versions.get('dav') or [None, None]
+            ev.check(f'{phase}: the older version is on disk and listed by the versions API',
+                     str(versions.get('on_disk')) == str(facts['versions']) and dav[0] == 207
+                     and isinstance(dav[1], int) and dav[1] >= int(facts['versions']), versions)
+        before = self.before['state']
+        ev.check(f'{phase}: Office settings (richdocuments wopi keys) and the cron mode are exactly this device\'s',
+                 state.get('office') == before.get('office') and bool(before.get('office')),
+                 {'before': before.get('office'), 'now': state.get('office')})
+        caps = found.get('capabilities') or [None, None]
+        base_caps = (self.before.get('client') or {}).get('capabilities') or [None, None]
+        ev.check(f'{phase}: Nextcloud reports this device\'s Office server (capabilities as for dev-e\'s own account)',
+                 caps[0] == 200 and isinstance(caps[1], dict) and caps[1] == base_caps[1], {'now': caps, 'before': base_caps})
+        ev.check(f'{phase}: Collabora discovery is served on this device\'s gateway', found.get('discovery') == [200, True],
+                 found.get('discovery'))
+        fp = found.get('fingerprint') or [None, None]
+        ev.check(f'{phase}: clients see a new data fingerprint (restored-from-backup signal), the one in config.php',
+                 fp[0] == 207 and bool(fp[1]) and fp[1] == state.get('fingerprint')
+                 and fp[1] != ((self.before.get('client') or {}).get('fingerprint') or [None, None])[1],
+                 {'dav': fp, 'config': state.get('fingerprint')})
+        ev.check(f'{phase}: database: root storage is this device\'s data dir, tables owned by oc_admin',
+                 found.get('storage') == 'local::/var/www/html/data/' and found.get('owners') == 'oc_admin',
+                 {k: found.get(k) for k in ('storage', 'owners')})
+        ev.log(f'{phase}: lastcron {found.get("lastcron")}')
         return found
 
     def restart(self):
@@ -592,8 +767,9 @@ class Run:
             if all(v == 'active' for v in (state.get('units') or {}).values()) and (state.get('status') or {}).get('installed'):
                 break
             time.sleep(10)
-        ev.check('restart: nextcloud-app restarted, five units active, status.php answers', bool((state.get('status') or {}).get('installed')),
-                 state.get('units'))
+        ev.check('restart: nextcloud-app restarted, five units active, status.php answers',
+                 all(v == 'active' for v in (state.get('units') or {}).values())
+                 and bool((state.get('status') or {}).get('installed')), state.get('units'))
         self.verify('restart')
 
     def inject(self, on):
@@ -613,30 +789,44 @@ class Run:
 
     def rollback(self):
         ev = self.ev
-        self.budget('auto rollback')
+        self.budget('auto rollback', self.restore_need(self.converted))
         self.inject(True)
+        tripped = []
         try:
-            job, took = drv.restore(self.converted, ['nextcloud'], ev=ev, tag='nc-share-restore-inject')
+            with self.watching(tripped):
+                job, took = drv.restore(self.converted, ['nextcloud'], ev=ev, tag='nc-share-restore-inject')
         finally:
             consumed = drv.owner('test', '-e', '/home/appowner/' + FAIL_MARKER_REL, timeout=60).returncode != 0
             self.inject(False)
         result = job.get('result') or {}
         drv.created_backup(result.get('safety_backup_id'))
+        ev.save('rollback-auto-job.json', {'state': job.get('state'), 'error': job.get('error'),
+                                           'rolled_back': result.get('rolled_back')})
         ev.check('auto rollback: a restore with a one-shot ExecStartPre failure ends rolled-back',
-                 job.get('state') == 'rolled-back' and result.get('rolled_back') is True and consumed,
-                 {'state': job.get('state'), 'took_s': round(took, 1)})
+                 job.get('state') == 'rolled-back' and result.get('rolled_back') is True and consumed and not tripped,
+                 {'state': job.get('state'), 'took_s': round(took, 1), 'consumed': consumed, 'tripped': tripped})
         self.verify('auto rollback')
-        self.budget('rollback')
-        job, took = drv.restore(self.safety, ['nextcloud'], ev=ev, tag='nc-share-rollback')
+        self.budget('rollback', self.restore_need(self.safety))
+        tripped = []
+        with self.watching(tripped):
+            job, took = drv.restore(self.safety, ['nextcloud'], ev=ev, tag='nc-share-rollback')
         result = job.get('result') or {}
         drv.created_backup(result.get('safety_backup_id'))
+        ev.save('rollback-manual-job.json', {'state': job.get('state'), 'error': job.get('error'),
+                                             'health': result.get('health')})
         ev.check('rollback: the import\'s safety backup restored (manual rollback), every health check ok',
-                 job.get('state') == 'succeeded' and all(h.get('status') == 'ok' for h in result.get('health') or []),
-                 {'state': job.get('state'), 'took_s': round(took, 1)})
+                 job.get('state') == 'succeeded' and not tripped
+                 and all(h.get('status') == 'ok' for h in result.get('health') or []),
+                 {'state': job.get('state'), 'took_s': round(took, 1), 'tripped': tripped})
         found = self.markers()
-        ev.check('rollback: dev-e\'s own markers are back exactly and the HA test user is gone',
-                 found == self.before['markers'] and self.args.facts['user'] not in (self.state().get('users') or []),
-                 found)
+        users = self.state().get('users') or []
+        ha_only = set(self.args.facts.get('digests') or {}) - set(self.before['state'].get('users') or [])
+        ev.check('rollback: dev-e\'s own markers are back exactly and the HA-only users are gone',
+                 found == self.before['markers'] and bool(ha_only) and not ha_only & set(users),
+                 {'markers_same': found == self.before['markers'], 'users': users, 'ha_only': sorted(ha_only)})
+        client = self.base_client()
+        ev.check('rollback: dev-e\'s own account logs in again (OCS)', (client.get('ocs') or {}).get('password') == [200, True],
+                 client.get('ocs'))
 
     def after_state(self):
         ev = self.ev
@@ -647,7 +837,8 @@ class Run:
         # The file cache row count is recorded only (dev-e's own cron job may change it at any time).
         ev.log(f'filecache rows before {b.get("filecache_rows")} after {a.get("filecache_rows")}')
         for key, text in (('config_sha256', 'config.php'), ('users', 'the users'), ('db', 'the storages and user count in the database'),
-                          ('data_top', 'the data dir top entries'), ('units', 'the five units'), ('status', 'status.php')):
+                          ('data_top', 'the data dir top entries'), ('units', 'the five units'), ('status', 'status.php'),
+                          ('office', 'the Office settings and the cron mode')):
             ev.check(f'after: {text} unchanged', a.get(key) == b.get(key) and a.get(key) is not None,
                      {'before': b.get(key), 'after': a.get(key)} if key != 'config_sha256' else '')
 
@@ -672,9 +863,10 @@ class Run:
 
     def leaks(self):
         ev = self.ev
-        names = ['HA_BACKUP_KEY', 'B2_NC_X86_NOSHARE_USER_PW', 'B2_NC_X86_NOSHARE_APP_PW']
+        names = ['HA_BACKUP_KEY', 'B2_NC_X86_NOSHARE_USER_PW', 'B2_NC_X86_NOSHARE_APP_PW', 'DEV_D_MARKER_NEXTCLOUD']
         if self.args.run:
-            names += [self.args.facts['user_pw'], self.args.facts['app_pw']]
+            facts = self.args.facts
+            names += [facts[k] for k in ('user_pw', 'app_pw', 'user2_pw', 'link_pw', 'link_token') if facts.get(k)]
         request = {'secrets': {name: self.args.secrets[name] for name in names}}
         report = drv.device_python(LEAKS, request, as_owner=False, timeout=900)
         host = drv.scan_host_evidence(ev.dir, self.args.secrets)
@@ -694,8 +886,9 @@ def negative(args):
         return 2
     if not ev.check('preflight: dev-e isolation true none {}', isolation() == 'true none {}', isolation()):
         return 2
-    if not ev.check('preflight: the host keeps 12 GiB plus this run\'s need free', host_free() >= FLOOR + NEED,
-                    f'{host_free()} B'):
+    need = NEED + (FIXTURE.stat().st_size + CANDIDATE_NEED + int(args.facts.get('extra_need', 0)) if args.run else 0)
+    if not ev.check('preflight: the host keeps 12 GiB plus this run\'s need free', host_free() >= FLOOR + need,
+                    f'{host_free()} B, need {need} B'):
         return 2
     with open(LOCK, 'a') as lock:
         deadline = time.monotonic() + 3600
