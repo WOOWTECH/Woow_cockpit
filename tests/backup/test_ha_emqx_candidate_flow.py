@@ -1,6 +1,7 @@
 """Internal conversion chain with fixture Podman transport, never a real broker."""
 import base64
 import copy
+import hashlib
 import io
 import json
 import tarfile
@@ -103,6 +104,15 @@ class Transport:
             if not self.restore_bad:
                 self.running_config.update(self.restore)
             return Result(0, b'', b'')
+        if command[:1] == ['sha256sum'] and len(command) == 2 and command[1].startswith('/opt/emqx/data/'):
+            # Security review SR-2 (2026-11-23): an untouched data-volume file answers its seeded bytes' digest;
+            # `overwritten` models the vendor import rewriting it (emqx_authz_file.erl:69-75).
+            name = command[1][len('/opt/emqx/data/'):]
+            self.events.append('digest:' + name)
+            data = getattr(self, 'overwritten', {}).get(name, self.seed.get(name))
+            if data is None:
+                return Result(1, b'', b'No such file or directory')
+            return Result(0, hashlib.sha256(data).hexdigest().encode() + b'  ' + command[1].encode() + b'\n', b'')
         raise AssertionError('unexpected command')
 
 

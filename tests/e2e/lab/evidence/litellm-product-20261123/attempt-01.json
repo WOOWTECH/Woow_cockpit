@@ -1,0 +1,13 @@
+{
+ "source_commit": "e0c9e5646dd1be64147666cc2a2ce86086757d4b",
+ "scope": "litellm product flow x86-enc real HA backup on dev-d (attempt 1)",
+ "exit": -15,
+ "elapsed_seconds": 353.9,
+ "stdout_sha256": "3ac194d5ed76cf9fd8a3e677abd9975517b24d0a9891fafbfff14015ea56dac3",
+ "fixed_status": [
+  "source commit e0c9e5646dd1be64147666cc2a2ce86086757d4b",
+  "source tree committed: PASS"
+ ],
+ "stderr_bytes_not_published": 0,
+ "commercial_acceptance": "not-complete"
+}

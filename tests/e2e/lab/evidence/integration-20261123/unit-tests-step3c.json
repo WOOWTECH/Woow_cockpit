@@ -1,0 +1,56 @@
+{
+  "schema_version": 1,
+  "kind": "unit-tests",
+  "lane": "integration-3",
+  "step": "3c (nextcloud merge)",
+  "tested_commits": {
+    "tests/backup targeted": "17c81b8 (integration worktree)",
+    "node tests/backup-ui.mjs": "17c81b8 (second worktree /tmp/int3-trial-20261123 at the same commit)"
+  },
+  "tree": "00634c1 (step 3b) + 17c81b8 (merge feat/ha-import-nextcloud-20261123 aaed6cf)",
+  "merges": [
+    {
+      "lane": "nextcloud-import",
+      "branch": "feat/ha-import-nextcloud-20261123",
+      "tip": "aaed6cf",
+      "merge_commit": "17c81b8",
+      "conflicts": "none (the branch merged this integration branch at 88e7e6b itself; none of its 18 files changed here since the merge base fb284b8)",
+      "proof": "18/18 files == aaed6cf blobs; haapps.IMPORTERS keeps open-design and woow-code-server and appends nextcloud; the 5 HA-key-shaped strings in backup.js/docs/backup-ui are the unchanged format examples and test constants",
+      "taken_at": "the lane's iteration-2 hand-off (00:00), which asks integration-3 to merge this tip; open in the lane: a fully green share attempt 3 and the dev-e journal cleanup of the public-link token (later commits are merged again)",
+      "targeted_tests": "tests.backup test_ha_nextcloud, test_ha_cli, test_ha_import, test_ha_registry, test_ha_codeserver, test_ha_opendesign: 101 run, 0 not-ok (real batch-1 backups on)"
+    }
+  ],
+  "suites": {
+    "node tests/backup-ui.mjs": {
+      "not_ok_explained": "#4 'upload streams 512 KiB frames…' = Playwright setInputFiles 10 s timeout (host load ~30); #16 'layouts fit … every view' = one 5 px horizontal overflow at 320 px in the job-running view's demo warning list (the merge touches neither that view nor any style); both pass when rerun alone at the same commit (next entry); all 4 batch-2 HA cases pass (OpenDesign, code-server, Nextcloud with and without HA's share folder)",
+      "tests": 103,
+      "pass": 101,
+      "fail": 2,
+      "skipped": 0,
+      "cancelled": 0,
+      "elapsed_seconds": 861,
+      "not_ok": [
+        "upload streams 512 KiB frames within a 4 MiB ack window; cancel closes the channel and aborts",
+        "layouts fit 1440/1024/768/390/360/320 px for every view"
+      ]
+    },
+    "rerun of the 2 failing page cases at 17c81b8 (node --test-name-pattern, heavy lock)": {
+      "tests": 2,
+      "pass": 2,
+      "fail": 0,
+      "skipped": 0,
+      "cancelled": 0,
+      "elapsed_seconds": 43,
+      "not_ok": []
+    }
+  },
+  "not_run_here": "full tests/backup and tests/e2e/lab were last run at fb284b8 (step 3b); the nextcloud merge adds no lab unittest module and its backup modules ran above; the next full run is due after the product-lane merges",
+  "not_changed": "No test, assertion or public guard was changed by this lane.",
+  "commercial_acceptance": "not-complete",
+  "private_logs_sha256": {
+    "m6-nc-backup.log": "6d6174871f0480cce41b10c09c2c100fc00de3ac5d636108b72b97508dc01a3d",
+    "m6-nc-backup.out": "fa8730df875c207f3fc3e14dcecac5c3915a9a0b9576b7d6deac00e6c89ce017",
+    "m7ui-ui.log": "a67c6777104b444abd2d69ced0ab68917ba8c72dff2d4579a8bde0fa42391e78",
+    "m7ui-rerun2.log": "fb8fa51c16836027c5ea6eefc118c6318749cc2dc52f8d21c9c0f6bfbe76fa79"
+  }
+}

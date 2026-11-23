@@ -1,0 +1,44 @@
+{
+ "what": "Vendor-behaviour probes in throwaway EMQX 5.8.9 brokers (lab store, --network none, generated env values, outputs are booleans/shapes only); run as direct labpodman commands from the review session on 2026-11-23",
+ "image": "docker.io/emqx/emqx:5.8.9 (copied from dev-d store, image 3f60addfad2b there)",
+ "commercial_acceptance": "not-complete",
+ "probes": [
+  {
+   "id": "raw-config-env-secrets",
+   "finding": "SR-4",
+   "setup": "EMQX_DASHBOARD__DEFAULT_PASSWORD and EMQX_NODE__COOKIE set to generated values",
+   "expression": "maps:is_key/get on emqx:get_raw_config([dashboard]) and ([node]) compared with the env values in-broker",
+   "output": "dash_has_pw=true dash_pw_is_env=true node_has_cookie=true cookie_is_env=true",
+   "meaning": "the RAW config the product readback hashes per root contains env-provided secrets"
+  },
+  {
+   "id": "hocon-pp-roundtrip",
+   "finding": "none (held)",
+   "setup": "6 payloads in a connector description: quote break, triple-quote break, backslash, brace break, ${VAR}, multi-line",
+   "expression": "hocon_pp:do -> file -> hocon:files, compare keys/value, search env value",
+   "output": "all 6: keys=[connectors], value round-trips exactly, env value absent",
+   "meaning": "HA strings cannot inject HOCON into the export cluster.hocon"
+  },
+  {
+   "id": "hocon-files-env-substitution",
+   "finding": "none (held)",
+   "expression": "hocon:files on \"a = ${SECREV_PROBE}\"",
+   "output": "error resolve_error failed_to_resolve SECREV_PROBE",
+   "meaning": "the import parser does not resolve OS environment variables"
+  },
+  {
+   "id": "rule-jq-env",
+   "finding": "SR-6",
+   "setup": "SECREV_PROBE set to a generated value",
+   "expression": "emqx_rule_funcs:jq(Program, <<\"{}\">>) for Program in env, $ENV, env.SECREV_PROBE, $__loc__, input_filename",
+   "output": {
+    "env": "has_probe=true",
+    "$ENV": "has_probe=true",
+    "env.SECREV_PROBE": "has_probe=true",
+    "$__loc__": "has_probe=false",
+    "input_filename": "has_probe=false"
+   },
+   "meaning": "rule SQL jq() exposes the broker's process environment (this device's env secrets)"
+  }
+ ]
+}

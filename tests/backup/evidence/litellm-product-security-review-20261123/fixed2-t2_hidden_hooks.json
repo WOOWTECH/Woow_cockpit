@@ -1,0 +1,111 @@
+{
+ "after_analyse": [],
+ "after_first_connection": {},
+ "after_salt_binding": [],
+ "binding": "match",
+ "blockers": [],
+ "case": "t2_hidden_hooks",
+ "check_sees": {
+  "blocker": false,
+  "callbacks": [],
+  "env_count": 0,
+  "hooks": [],
+  "returned": "dict",
+  "seconds": 0.78
+ },
+ "container": {
+  "cap_add": [],
+  "cap_drop": [],
+  "memory": 1073741824,
+  "mounts": [
+   "volume:/var/lib/postgresql:noexec,nosuid,nodev,rbind"
+  ],
+  "network_mode": "none",
+  "pids_limit": 512,
+  "ports": {},
+  "privileged": false,
+  "read_only_root": true,
+  "security_opt": [
+   "no-new-privileges"
+  ],
+  "user": ""
+ },
+ "elapsed_seconds": 52.4,
+ "found": {
+  "migrations": [
+   "20250326162113_baseline"
+  ],
+  "schemas": [
+   "woow",
+   "woow_platform"
+  ],
+  "superuser": []
+ },
+ "image_pg18": "sha256:4ea77c7055dec6a632156aa2cd9f1abaaedeba5f812f104f4e9e1ac37363469b",
+ "markers_final": {},
+ "notes": [],
+ "scan": {
+  "pg_version": "18",
+  "salt_valid": true,
+  "symlinks": 0
+ },
+ "session_settings": {
+  "datestyle": "ISO, MDY",
+  "event_triggers": "off",
+  "extra_float_digits": "3",
+  "review": null,
+  "search_path": "pg_catalog",
+  "session_preload_libraries": "",
+  "shared_preload_libraries": ""
+ },
+ "source": {
+  "commit": "bbf26a83eb5d2f439ef63146e5be3c250755680d",
+  "ha_litellm_sha256": "f81c9b46dff5e3d86adf71a4a4fae3e4eeadfc5eb93c84cd3b8a77a42d535c13",
+  "tracked_changes": false
+ },
+ "staged_config_rows": {
+  "builtins_exec": 2,
+  "custom_auth": true,
+  "post_call_rules": true,
+  "rows": 2
+ },
+ "steps": [
+  "start_ha_cluster",
+  "analyse",
+  "salt_binding",
+  "read_schema",
+  "export_rows"
+ ],
+ "stored_hooks_blocker": null,
+ "stored_settings": {
+  "callbacks": [],
+  "env": [],
+  "hooks": [],
+  "sections": [
+   "general_settings",
+   "litellm_settings"
+  ]
+ },
+ "stored_settings_line": null,
+ "text_eq_operator_code": "public.woowbk_texteq",
+ "trusted_recheck_sees": {
+  "blocker": true,
+  "callbacks": [],
+  "env_count": 0,
+  "hooks": [
+   "general_settings.custom_auth",
+   "litellm_settings.post_call_rules"
+  ],
+  "returned": "dict",
+  "seconds": 0.34
+ },
+ "user_row_as_exported": [
+  "u1",
+  "proxy_admin",
+  "0.123456789012345",
+  "2026-11-05 10:00:00",
+  "2026-11-05 10:00:00+00"
+ ],
+ "volumes_left_behind": [],
+ "warnings": []
+}

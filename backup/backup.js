@@ -134,12 +134,13 @@
   // This device's app for each add-on it can take, when neither the engine nor the catalog names it (haapps.IMPORTERS).
   const HA_APP_NAMES = { odoo: "Odoo 18", n8n: "n8n 工作流程", omnigent: "Omnigent 協作平台", hermes: "Hermes 代理",
     emqx: "EMQX MQTT 代理", headscale: "Headscale VPN 控制伺服器", "open-design": "OpenDesign 設計工具", "woow-code-server": "code-server 開發環境",
-    nextcloud: "Nextcloud 雲端硬碟" };
+    nextcloud: "Nextcloud 雲端硬碟", litellm: "LiteLLM 閘道" };
   // The product of each importable add-on in a sentence (「Odoo、n8n」), in the engine's order (CONTRACT §5 "Apps").
   const HA_SHORT = { odoo: "Odoo", n8n: "n8n", omnigent: "Omnigent", hermes: "Hermes", emqx: "EMQX", headscale: "Headscale",
     "open-design": "OpenDesign",
     "woow-code-server": "code-server",
-    nextcloud: "Nextcloud" };
+    nextcloud: "Nextcloud",
+    litellm: "LiteLLM" };
   // Odoo and n8n keep the sentences written and tested for them; with any other app (batch 1: Omnigent, Hermes, EMQX,
   // Headscale) a sentence says only what applies to each app.
   const HA_LEGACY = new Set(["odoo", "n8n"]);
@@ -3347,8 +3348,18 @@
   const haTestLabel = apps => (haLegacy(apps) ? "這只是測試（先關掉排程、寄信和工作流程）" : "這只是測試");
   // A real Odoo move keeps sending: HA's queued mail and the daily reminders go out from here (owner, 2026-11-23).
   const HA_ODOO_MAIL = "正式搬家時，Odoo 會接著寄出 HA 上還沒寄出的信和每天的提醒信，請先停掉 HA 那邊的 Odoo，避免兩邊各寄一次。";
-  function haTestHelp(apps) {
-    const mail = apps.includes("odoo") ? HA_ODOO_MAIL : "";
+  // A real LiteLLM move replaces this device's virtual keys with HA's: the apps here that use LiteLLM keys today (the
+  // engine reads them from this device's catalog and configuration: `litellm.key_users`) must get new keys (owner,
+  // 2026-11-23, option A; nothing else changes).
+  function haLitellmKeysText(checked) {
+    const section = list(checked).find(app => app.app_id === "litellm")?.section;
+    const users = list(section?.key_users).filter(isString);
+    return users.length
+      ? `正式搬家時，這台 LiteLLM 原本的虛擬金鑰會換成 HA 的：${users.join("、")} 目前用的 LiteLLM 金鑰會失效，匯入後要為它們重新設定金鑰。`
+      : "正式搬家時，這台 LiteLLM 原本的虛擬金鑰會換成 HA 的，這台原本發出的金鑰都會失效（這台沒有找到其他使用 LiteLLM 金鑰的應用）。";
+  }
+  function haTestHelp(apps, checked = []) {
+    const mail = (apps.includes("odoo") ? HA_ODOO_MAIL : "") + (apps.includes("litellm") ? haLitellmKeysText(checked) : "");
     if (haLegacy(apps)) return "勾選時，搬過來的 n8n 工作流程都先停用，Odoo 不寄信也不跑排程，HA 那邊可以照常使用；正式搬家請不要勾。" + mail;
     const parts = [apps.includes("n8n") ? "搬過來的 n8n 工作流程都先停用" : null, apps.includes("odoo") ? "Odoo 不寄信也不跑排程" : null,
       apps.includes("omnigent") ? "Omnigent 的排程都先暫停" : null].filter(Boolean);
@@ -4047,7 +4058,7 @@
           dataset: { focus: "ha-test-mode" }, on: { change: event => { wizard.testMode = event.target.checked; render(); } }
         }),
         h("span", { class: "choice-body" }, h("strong", { text: haTestLabel(ids) }),
-          h("small", { id: "ha-test-mode-help", text: haTestHelp(ids) }))),
+          h("small", { id: "ha-test-mode-help", text: haTestHelp(ids, apps) }))),
       blocked ? infoNotice(`有應用沒有通過檢查，無法轉換。請依上面的說明處理後按「重新檢查」${apps.some(haImportable)
         ? "，或按「上一步」取消勾選沒有通過的應用，只匯入其他應用" : ""}。`, "fail", "close-circle-outline") : null,
       needDatabase ? h("p", { class: "hint", text: "請先選擇要搬過來的 Odoo 資料庫。" }) : null,
@@ -4284,10 +4295,29 @@
     ];
   }
 
+  // LiteLLM (CONTRACT §7 HaCheck): what moves, in counts; this device keeps its master key and UI password, HA's salt
+  // replaces this device's (the restore's safety backup keeps the old one).
+  function haLitellmFacts(litellm) {
+    const users = list(litellm.key_users).filter(isString);
+    return [
+      metadata([
+        ["虛擬金鑰", `${num(litellm.keys)} 把（不含管理介面的登入工作階段）`],
+        ["使用者與團隊", `${num(litellm.users)} 位使用者，${num(litellm.teams)} 個團隊`],
+        ["模型", `${num(litellm.models)} 個（儲存的供應商憑證 ${num(litellm.credentials)} 筆）`],
+        ["用量紀錄", `${num(litellm.spend_logs)} 筆`],
+        isNumber(litellm.chatgpt_accounts) && litellm.chatgpt_accounts > 0 ? ["ChatGPT 訂閱登入", `${num(litellm.chatgpt_accounts)} 個`] : null,
+        ["資料庫", `HA 的 PostgreSQL ${num(litellm.pg_major)} → 這台的 ${num(litellm.target_pg_major)}（只搬資料列，結構用這台的）`],
+        ["這台用 LiteLLM 金鑰的應用", users.length ? `${users.join("、")}（匯入後要重新設定金鑰）` : "沒有找到"]
+      ]),
+      h("p", { class: "muted", text: "匯入後，用這台 LiteLLM 的主金鑰與管理介面密碼登入（不是 HA 的）；HA 的加密金鑰會取代這台的 litellm-salt-key，還原失敗或之後還原到匯入前時會放回這台原本的。" })
+    ];
+  }
+
   const HA_FACTS = { omnigent: haOmnigentFacts, hermes: haHermesFacts, emqx: haEmqxFacts, headscale: haHeadscaleFacts,
     "open-design": haOpenDesignFacts,
     "woow-code-server": haCodeServerFacts,
-    nextcloud: haNextcloudFacts };
+    nextcloud: haNextcloudFacts,
+    litellm: haLitellmFacts };
 
   function confirmHaConvert(ha, wizard) {
     const apps = haChosen(wizard);

@@ -59,6 +59,14 @@ SCAN_OUTPUT = 2 * SCAN_MAX_TOTAL + 1024 * 1024  # JSON escapes (newlines, quotes
 SMALL_OUTPUT = 1024 * 1024
 MAX_STAT_PATHS = 400
 MAX_HEALTH = 8
+# Health-check time limit (seconds) of the apps that need longer than the generic 300 s (database or 3+ services) /
+# 180 s proposal. A longer limit only waits longer before a restore is declared failed; no check is relaxed.
+# litellm (owner decision 2026-11-23 23:28): the package gives its proxy a 10-minute start (Woow_podman_litellm dd690ae
+# quadlet/litellm.container:76-78 HealthStartupInterval=15s x HealthStartupRetries=40, :107 TimeoutStartSec=600) and
+# real restores on a loaded test device took 251-345 s until /health/readiness answered, so 300 s could end a restore
+# that worked as failed ("rollback incomplete"). 600 is the catalog maximum (catalog.validate_entry). The draft of an
+# installed entry keeps its own checks but raises a shorter limit of these apps (`health-timeout` note).
+HEALTH_TIMEOUTS = {'litellm': 600}
 # Per container: an owner's file could repeat a key thousands of times; the analysis stays bounded.
 MAX_ITEMS = 128
 MAX_VERIFY = 16
@@ -1534,7 +1542,9 @@ class Analyzer:
         app['hints'].extend(hints)
         if not urls and not hints:
             app['hints'].append('沒有找到可用的健康檢查網址；建議加入一個在應用真正可用時才回應 200 的本機網址。')
-        timeout = 300 if len(containers) >= 3 or any(self._database(c) for c in containers) else 180
+        timeout = HEALTH_TIMEOUTS.get(app['id'])
+        if timeout is None:
+            timeout = 300 if len(containers) >= 3 or any(self._database(c) for c in containers) else 180
         if urls:
             app['hints'].append('健康檢查的預期狀態碼假設為 200、逾時 '
                                 f'{timeout} 秒；請以實際回應與冷啟動時間確認。')
@@ -1821,10 +1831,19 @@ class Analyzer:
         if installed is None:
             return None
         current = json.loads(json.dumps(installed.raw))
+        raised = []
         for variant in variants:
             variant['entry'] = carry_over(current, variant['entry'])
+            raised = raise_health_timeouts(app['id'], variant['entry']) or raised
             valid, problem, where = self._validate(variant['entry'])
             variant.update(valid=valid, problem=problem, field=where)
+        if raised:
+            limit = HEALTH_TIMEOUTS[app['id']]
+            old = '、'.join(map(str, sorted(set(raised))))
+            app['notes'].append(_warn('health-timeout', f'已安裝設定的健康檢查逾時（{old} 秒）在草稿中提高為 {limit} 秒：'
+                                                        '這個應用在負載高的設備上，還原後可能要 5 分鐘以上才就緒，'
+                                                        '太短的逾時會把成功的還原判定為失敗。安裝草稿後生效。',
+                                      level='info'))
         chosen = next(v for v in variants if v['id'] == selected)
         changes = diff_entries(current, chosen['entry'])
         return {'id': installed.id, 'sha256': installed.sha256, 'entry': current, 'changes': changes,
@@ -1911,6 +1930,24 @@ def carry_over(installed, entry):
         if key in result and (key in installed or result[key] != []):  # an empty list the entry left out stays out
             ordered[key] = result[key]
     return ordered
+
+
+def raise_health_timeouts(app_id, entry):
+    """Raise `entry`'s health checks below HEALTH_TIMEOUTS[app_id] seconds to that limit, in place (other apps and
+    longer limits are left alone). Returns the limits that were raised (a check without one waits the catalog's
+    default 60 s)."""
+    limit = HEALTH_TIMEOUTS.get(app_id)
+    raised = []
+    if limit is None or not isinstance(entry.get('health'), list):
+        return raised
+    for item in entry['health']:
+        if not isinstance(item, dict):
+            continue
+        current = item.get('timeout_seconds', 60)
+        if type(current) is int and current < limit:
+            raised.append(current)
+            item['timeout_seconds'] = limit
+    return raised
 
 
 def _follow(old_items, new_items, ident=None):

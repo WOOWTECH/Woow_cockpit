@@ -1,0 +1,468 @@
+{
+ "schema": 1,
+ "date": "2026-11-23",
+ "lane": "showcase-nc-share (iteration 1)",
+ "scope": "REAL HA source backup of the x86 showcase HA own Nextcloud add-on WITH the share folder (owner decision 2026-11-23 「決定2 A」; MAIN decision 17:30: share approved, runs last). Source fixture only, NOT an import attempt.",
+ "commercial_acceptance": "not-complete",
+ "secrets": "none in this file; HA_BACKUP_KEY and the generated Nextcloud test credentials are named only (B2_NC_X86_SHARE_USER_PW, B2_NC_X86_SHARE_USER2_PW, B2_NC_X86_SHARE_APP_PW, B2_NC_X86_SHARE_LINK_PW, B2_NC_X86_SHARE_LINK_TOKEN in ~/.woowbk-lab/secrets/b1-creds.env); leak scan of logs and this file: 0 hits",
+ "source_commit": "93713ba (ncs-a/b/c, ncs-dl, ncs-run-verify, ncs_verify.py) + 20db4be (ncs-dl-chunked.sh)",
+ "preconditions_met_at": "2026-11-23T20:35+08:00 (OpenDesign 85/85 PASS + ROTATED 19:44; code-server 87/87 PASS + ROTATED 20:32; host free 31.9 GiB >= 24 GiB)",
+ "markers": {
+  "users": [
+   "woow-import-share (owner of all markers)",
+   "woow-import-share2 (receives the user share)"
+  ],
+  "status_lines": [
+   "before: 0.2.3 started users=2 authtoken=124 filecache=224 share=1 calendars=4 calendarobjects=2 addressbooks=2 cards=3 2026-11-23T12:37:16Z",
+   "mkcol: 201 201",
+   "put: 201 201 201 201",
+   "put v2: 204",
+   "user share A->B: status=200 id=35 msg=OK",
+   "public link: status=200 id=36 expiration=2026-12-07 23:59:59 msg=OK",
+   "caldav: mkcalendar=201 put=201 get=200",
+   "carddav: mkcol=201 put=201 get=200",
+   "A propfind (app password): 207",
+   "B sees the shared folder: 0 B reads the 4 MiB file: a26c847881f3b287",
+   "public link (new dav, anonymous:pw): a26c847881f3b287",
+   "public link (legacy webdav, token:pw): a26c847881f3b287",
+   "public link without password: 401",
+   "on disk (sha256/16): s1=d2db94c569cc906d s2=16b9381ef43b9f1f s3=a26c847881f3b287 v=12b8b630071fb89c versions=1 owner=33:33",
+   "rows of A: calendars=3 events=3 books=2 cards=2 shares=0,3 tokens=1",
+   "after: users=4 authtoken=125 filecache=381 share=3 calendars=9 calendarobjects=7 addressbooks=5 cards=8 2026-11-23T12:37:51Z"
+  ],
+  "files": {
+   "nextcloud/woow-import-share/files/woow-import-share-20261123.txt": "ASCII marker",
+   "nextcloud/woow-import-share/files/匯入測試-share-20261123.txt": "CJK name marker",
+   "nextcloud/woow-import-share/files/匯入資料夾/子資料夾/woow-random-4m.bin": "4 MiB random, nested CJK folders",
+   "nextcloud/woow-import-share/files/woow-versioned.txt": "current version 2; one older version in files_versions"
+  },
+  "note": "B2 PROPFIND grep for the folder href printed 0 (href encoding differs), but B read the 4 MiB file through its received share with the right sha256, so the share works; the public link answers with the password on both public DAV endpoints and 401 without it"
+ },
+ "backup": {
+  "ha_slug": "507c3510",
+  "name": "WOOW匯入測試 B2 Nextcloud x86 加密 含share 2026-11-23",
+  "addon": "1b7b4ce7_woow-nextcloud-office",
+  "remote": "/backup/woow-b2-nextcloud-x86-enc-share-20261123.tar",
+  "bytes": 4467947520,
+  "sha256": "2dcfc6769d6fed7dd5c375fc379aac43da606931c8378e3970c33f78a4bded9d",
+  "request": "POST /backups/new/partial {addons:[slug], folders:[share], password: env.HA_BACKUP_KEY, compressed, filename, background:true}",
+  "job_timeline": [
+   "t+0s stage=addons done=false addon=started",
+   "t+4s stage=addons done=false addon=stopped",
+   "t+22s stage=folders done=false addon=started",
+   "t+222s stage=await_addon_restarts done=true addon=started"
+  ],
+  "job_and_health": [
+   "job errors: []",
+   "backup: slug=507c3510 elapsed=222s addon_down_at=+4s addon_started_again_at=+22s",
+   "healthy again: healthz=200 at +222s status={\"installed\":true,\"versionstring\":\"35.0.1\",\"maintenance\":false,\"needsDbUpgrade\":false} addon=started 2026-11-23T12:42:04Z"
+  ],
+  "members": [
+   "248510144 1b7b4ce7_woow-nextcloud-office.tar.gz",
+   "4219423319 share.tar.gz",
+   "443 supervisor.tar.gz",
+   "1245 ./backup.json"
+  ],
+  "downtime": "add-on stopped at +4 s and started again at +22 s (stage addons); the share folder was written after the restart (stage folders, add-on started); healthz 200 when the job ended (+222 s)",
+  "consistency": "per-user file manifests, projects and share totals before == after the backup",
+  "manifests_before": {
+   "admin": {
+    "files": "88",
+    "bytes": "65786004",
+    "digest": "d0dcec39172f1acbcf9d7b2d92369f598b13c39fdd6ec604cd6d12a08400813d",
+    "versions": "2",
+    "trash": "0"
+   },
+   "woow-import-share": {
+    "files": "68",
+    "bytes": "69841987",
+    "digest": "21878b02b7cd7d48f7726acd0229b37aee4714d4d498312601f3795e30cb30f8",
+    "versions": "1",
+    "trash": "0"
+   },
+   "woow-import-share2": {
+    "files": "64",
+    "bytes": "65647541",
+    "digest": "f973c0ab3dd6e50d013dda588ac7520e9055e5e43f160abdb84797a8ff847412",
+    "versions": "0",
+    "trash": "0"
+   },
+   "woow-mcp-test": {
+    "files": "1",
+    "bytes": "31",
+    "digest": "b8404b7ebd4c3c0a9942964b9cbcb4c1375d6abfb03594ec4569c595011e9737",
+    "versions": "0",
+    "trash": "3"
+   },
+   "projects": {
+    "files": "1488",
+    "bytes": "9168943",
+    "digest": "5d9b7b9e8d4a9dfcf8b2dca3f1c2541c06c288a69f99557d0a39952f31c3ed86"
+   },
+   "share": {
+    "bytes": "5028564801",
+    "entries": "24422",
+    "files": "21672",
+    "dirs": "2722",
+    "symlinks": "28"
+   }
+  },
+  "manifests_after": {
+   "admin": {
+    "files": "88",
+    "bytes": "65786004",
+    "digest": "d0dcec39172f1acbcf9d7b2d92369f598b13c39fdd6ec604cd6d12a08400813d",
+    "versions": "2",
+    "trash": "0"
+   },
+   "woow-import-share": {
+    "files": "68",
+    "bytes": "69841987",
+    "digest": "21878b02b7cd7d48f7726acd0229b37aee4714d4d498312601f3795e30cb30f8",
+    "versions": "1",
+    "trash": "0"
+   },
+   "woow-import-share2": {
+    "files": "64",
+    "bytes": "65647541",
+    "digest": "f973c0ab3dd6e50d013dda588ac7520e9055e5e43f160abdb84797a8ff847412",
+    "versions": "0",
+    "trash": "0"
+   },
+   "woow-mcp-test": {
+    "files": "1",
+    "bytes": "31",
+    "digest": "b8404b7ebd4c3c0a9942964b9cbcb4c1375d6abfb03594ec4569c595011e9737",
+    "versions": "0",
+    "trash": "3"
+   },
+   "projects": {
+    "files": "1488",
+    "bytes": "9168943",
+    "digest": "5d9b7b9e8d4a9dfcf8b2dca3f1c2541c06c288a69f99557d0a39952f31c3ed86"
+   },
+   "share": {
+    "bytes": "5028564801",
+    "entries": "24422",
+    "files": "21672",
+    "dirs": "2722",
+    "symlinks": "28"
+   }
+  },
+  "showcase_space": "free=672462807040 B",
+  "kept_on_showcase": "yes: the showcase is not short of space (672.6 GB free of 983.7 GB after the backup), so the backup stays with the three earlier ones for the main session to delete at the end"
+ },
+ "cleanup": {
+  "status_lines": [
+   "delete woow-import-share: The specified user was deleted",
+   "delete woow-import-share2: The specified user was deleted",
+   "after cleanup: users=2 names=admin,woow-mcp-test",
+   "left of the test users: tokens=0 shares=0 calendars=0 books=0 filecache_storages=0 dirs=0",
+   "oc_users=2 oc_filecache=224 oc_share=1 oc_authtoken=124 oc_calendars=4 oc_calendarobjects=2 oc_addressbooks=2 oc_cards=3 oc_storages=3 oc_mounts=2 ",
+   "state: 0.2.3 started healthz=200 status={\"versionstring\":\"35.0.1\",\"maintenance\":false} 2026-11-23T12:45:36Z"
+  ]
+ },
+ "end_state_check": {
+  "status_lines": [
+   "now 2026-11-23T12:47:54Z",
+   "state: 0.2.3 started boot=auto",
+   "health: healthz=200 status={\"installed\":true,\"versionstring\":\"35.0.1\",\"maintenance\":false,\"needsDbUpgrade\":false}",
+   "users: 2 names=admin,woow-mcp-test",
+   "oc_users=2 oc_filecache=224 oc_share=1 oc_authtoken=124 oc_calendars=4 oc_calendarobjects=2 oc_addressbooks=2 oc_cards=3 oc_storages=3 oc_mounts=2 ",
+   "share: bytes=4892906967 entries=24265 dirs=2704 files=21533 symlinks=28 devices=0 fifos=0 sockets=0 hardlinked=0 mounts_below=0",
+   "datadir: 100467520 B, top: 9 entries, .ncdata=yes",
+   "backup dir: 672598388736 B free of 983749427200; backups=93"
+  ],
+  "note": "identical to the 17:31 baseline: users admin,woow-mcp-test; all counted rows equal; share bytes and entries equal; Nextcloud started, healthz 200"
+ },
+ "download": {
+  "attempt1": {
+   "script": "ncs-dl.sh (one SSH stream)",
+   "status_lines": [
+    "woow-b2-nextcloud-x86-enc-share: 1174 MiB of 4260 MiB, host free 25870 MiB",
+    "woow-b2-nextcloud-x86-enc-share: 1963491328 bytes in 995s (ssh rc=255), lowest projected free 21758 MiB, remote 2dcfc6769d6fed7d local 0402779ed8610804 MISMATCH",
+    "client_loop: send disconnect: Broken pipe",
+    "woow-b2-nextcloud-x86-enc-share: mismatch, file deleted"
+   ],
+   "result": "FAILED: SSH connection broke after 1.96 GB; the guard deleted the partial file"
+  },
+  "attempt2": {
+   "script": "ncs-dl-chunked.sh (256 MiB chunks, per-chunk sha256 from the showcase)",
+   "status_lines": [
+    "woow-b2-nextcloud-x86-enc-share: 3072 MiB of 4260 MiB, host free 19390 MiB, 2770s",
+    "woow-b2-nextcloud-x86-enc-share: 4096 MiB of 4260 MiB, host free 17179 MiB, 3349s",
+    "woow-b2-nextcloud-x86-enc-share: 4467947520 bytes in 3548s, 17 chunks, 1 chunk retries, lowest projected free 16905 MiB, remote 2dcfc6769d6fed7d local 2dcfc6769d6fed7d MATCH"
+   ]
+  },
+  "local_path": "~/.woowbk-lab/ha-fixtures/20261123-batch2/x86/woow-b2-nextcloud-x86-enc-share/woow-b2-nextcloud-x86-enc-share-20261123.tar (dirs 0700, file 0600)"
+ },
+ "strict_walk": {
+  "result": "ok",
+  "error": null,
+  "layout": {
+   "name": "WOOW匯入測試 B2 Nextcloud x86 加密 含share 2026-11-23",
+   "date": "2026-11-23T12:38:22Z",
+   "type": "partial",
+   "supervisor_version": "2026.11.0",
+   "protected": true,
+   "compressed": true,
+   "folders": [
+    "share"
+   ],
+   "supervisor": true,
+   "size": 4467947520,
+   "addons": [
+    {
+     "slug": "1b7b4ce7_woow-nextcloud-office",
+     "version": "0.2.3",
+     "size": 248510144,
+     "encryption": "v3"
+    }
+   ]
+  },
+  "members": [
+   {
+    "name": "1b7b4ce7_woow-nextcloud-office.tar.gz",
+    "role": "addon",
+    "size": 248510144,
+    "encryption": "v3"
+   },
+   {
+    "name": "share.tar.gz",
+    "role": "folder",
+    "size": 4219423319,
+    "encryption": "v3"
+   },
+   {
+    "name": "supervisor.tar.gz",
+    "role": "supervisor",
+    "size": 443,
+    "encryption": "v3"
+   }
+  ],
+  "addon_walk": {
+   "complete": true,
+   "entries": 7168,
+   "kinds": {
+    "dir": 1652,
+    "file": 5514
+   },
+   "bytes": 401856724,
+   "skipped_symlinks": 0,
+   "skipped_fifos": 0,
+   "never_read_skipped": 1,
+   "addon": {
+    "slug": "woow-nextcloud-office",
+    "version": "0.2.3",
+    "image": "ghcr.io/woowtech/woow-ha-nextcloud-office-amd64",
+    "arch": "amd64",
+    "name": "Woow Nextcloud Office",
+    "state": "started"
+   }
+  },
+  "share_walk": {
+   "complete": true,
+   "entries": 24422,
+   "kinds": {
+    "dir": 2722,
+    "file": 21672,
+    "symlink": 28
+   },
+   "bytes": 5017179874,
+   "skipped_symlinks": 0,
+   "skipped_fifos": 0,
+   "never_read_skipped": 0,
+   "addon": null
+  },
+  "share_tops": {
+   "top_level_entries": 62,
+   "datadir": {
+    "entries": 903,
+    "bytes": 234237098
+   },
+   "projects": {
+    "entries": 1711,
+    "bytes": 9168943
+   },
+   "other": {
+    "entries": 21808,
+    "bytes": 4773773833
+   }
+  },
+  "users": {
+   "admin": {
+    "files": 88,
+    "bytes": 65786004,
+    "digest": "d0dcec39172f1acbcf9d7b2d92369f598b13c39fdd6ec604cd6d12a08400813d",
+    "odd_names": 0,
+    "versions": 2,
+    "trash": 0
+   },
+   "woow-import-share": {
+    "files": 68,
+    "bytes": 69841987,
+    "digest": "21878b02b7cd7d48f7726acd0229b37aee4714d4d498312601f3795e30cb30f8",
+    "odd_names": 0,
+    "versions": 1,
+    "trash": 0
+   },
+   "woow-import-share2": {
+    "files": 64,
+    "bytes": 65647541,
+    "digest": "f973c0ab3dd6e50d013dda588ac7520e9055e5e43f160abdb84797a8ff847412",
+    "odd_names": 0,
+    "versions": 0,
+    "trash": 0
+   },
+   "woow-mcp-test": {
+    "files": 1,
+    "bytes": 31,
+    "digest": "b8404b7ebd4c3c0a9942964b9cbcb4c1375d6abfb03594ec4569c595011e9737",
+    "odd_names": 0,
+    "versions": 0,
+    "trash": 3
+   }
+  },
+  "projects": {
+   "files": 1488,
+   "bytes": 9168943,
+   "digest": "5d9b7b9e8d4a9dfcf8b2dca3f1c2541c06c288a69f99557d0a39952f31c3ed86"
+  },
+  "ncdata": "present",
+  "markers": {
+   "nextcloud/woow-import-share/files/woow-import-share-20261123.txt": {
+    "sha256_16": "d2db94c569cc906d",
+    "size": 55,
+    "uid": 33,
+    "gid": 33,
+    "mode": "0o644"
+   },
+   "nextcloud/woow-import-share/files/匯入測試-share-20261123.txt": {
+    "sha256_16": "16b9381ef43b9f1f",
+    "size": 44,
+    "uid": 33,
+    "gid": 33,
+    "mode": "0o644"
+   },
+   "nextcloud/woow-import-share/files/匯入資料夾/子資料夾/woow-random-4m.bin": {
+    "sha256_16": "a26c847881f3b287",
+    "size": 4194304,
+    "uid": 33,
+    "gid": 33,
+    "mode": "0o644"
+   },
+   "nextcloud/woow-import-share/files/woow-versioned.txt": {
+    "sha256_16": "12b8b630071fb89c",
+    "size": 43,
+    "uid": 33,
+    "gid": 33,
+    "mode": "0o644"
+   }
+  }
+ },
+ "showcase_vs_backup": {
+  "users": {
+   "admin": {
+    "showcase_digest": "d0dcec39172f1acbcf9d7b2d92369f598b13c39fdd6ec604cd6d12a08400813d",
+    "backup_digest": "d0dcec39172f1acbcf9d7b2d92369f598b13c39fdd6ec604cd6d12a08400813d",
+    "files": "88/88",
+    "equal": true
+   },
+   "woow-import-share": {
+    "showcase_digest": "21878b02b7cd7d48f7726acd0229b37aee4714d4d498312601f3795e30cb30f8",
+    "backup_digest": "21878b02b7cd7d48f7726acd0229b37aee4714d4d498312601f3795e30cb30f8",
+    "files": "68/68",
+    "equal": true
+   },
+   "woow-import-share2": {
+    "showcase_digest": "f973c0ab3dd6e50d013dda588ac7520e9055e5e43f160abdb84797a8ff847412",
+    "backup_digest": "f973c0ab3dd6e50d013dda588ac7520e9055e5e43f160abdb84797a8ff847412",
+    "files": "64/64",
+    "equal": true
+   },
+   "woow-mcp-test": {
+    "showcase_digest": "b8404b7ebd4c3c0a9942964b9cbcb4c1375d6abfb03594ec4569c595011e9737",
+    "backup_digest": "b8404b7ebd4c3c0a9942964b9cbcb4c1375d6abfb03594ec4569c595011e9737",
+    "files": "1/1",
+    "equal": true
+   }
+  },
+  "projects": {
+   "showcase_digest": "5d9b7b9e8d4a9dfcf8b2dca3f1c2541c06c288a69f99557d0a39952f31c3ed86",
+   "backup_digest": "5d9b7b9e8d4a9dfcf8b2dca3f1c2541c06c288a69f99557d0a39952f31c3ed86",
+   "equal": true
+  }
+ },
+ "steps": [
+  {
+   "step": "ncs-a",
+   "exit": "255",
+   "seconds": "31",
+   "log_sha256": "5cb0c1231d33323ce235f9f008691e9d3289a9f68bba908efbb9e27d3d565890",
+   "at": "2026-11-23T20:34:14+0800"
+  },
+  {
+   "step": "ncs-a-try1",
+   "exit": "0",
+   "seconds": "41",
+   "log_sha256": "110e73b371be69fc81300df0f546a9b141cbf0c49c34e7b7b9c4ff742708946a",
+   "at": "2026-11-23T20:37:51+0800"
+  },
+  {
+   "step": "ncs-b-try1",
+   "exit": "0",
+   "seconds": "296",
+   "log_sha256": "7c6546a07ea5ed74e0450a6af8eadb118d50a5b4bca065cde212bdd45ed38b34",
+   "at": "2026-11-23T20:43:07+0800"
+  },
+  {
+   "step": "ncs-c-try1",
+   "exit": "255",
+   "seconds": "30",
+   "log_sha256": "5cb0c1231d33323ce235f9f008691e9d3289a9f68bba908efbb9e27d3d565890",
+   "at": "2026-11-23T20:43:52+0800"
+  },
+  {
+   "step": "ncs-c-try2",
+   "exit": "255",
+   "seconds": "31",
+   "log_sha256": "5cb0c1231d33323ce235f9f008691e9d3289a9f68bba908efbb9e27d3d565890",
+   "at": "2026-11-23T20:44:54+0800"
+  },
+  {
+   "step": "ncs-c-try3",
+   "exit": "0",
+   "seconds": "12",
+   "log_sha256": "9d09de771ac64630140533e48c85a22c7b5fb0886333a00da460a240c4824a75",
+   "at": "2026-11-23T20:45:37+0800"
+  },
+  {
+   "step": "ncs-inv-after-try1",
+   "exit": "0",
+   "seconds": "12",
+   "log_sha256": "dcc20a85f18bef3852782d603e29d893db6b908b25899c307a498c8ea507eefd",
+   "at": "2026-11-23T20:48:01+0800"
+  },
+  {
+   "try": "1",
+   "exit": "4",
+   "seconds": "996",
+   "log_sha256": "6d1dfb02f2631095f04b9349e6c1ff8cd7db4edbfa7b3ee4c31387de94934ad0",
+   "at": "2026-11-23T21:02:35+0800"
+  },
+  {
+   "step": "dl-chunked-try2",
+   "exit": "0",
+   "seconds": "3549",
+   "log_sha256": "602b895f51ab3883f1a164f14aa5d4439500a8a4da4ab749fe8c81603c78654a",
+   "at": "2026-11-23T22:07:11+0800"
+  },
+  {
+   "step": "verify-share",
+   "exit": "0",
+   "seconds": "781",
+   "out_sha256": "b4fd7a2cf76f66eefa4e13166ef30bae39ba181ae5c7e4e56c06a62d3a40e851",
+   "at": "2026-11-23T22:21:09+0800"
+  }
+ ]
+}

@@ -57,7 +57,7 @@ No product/public-guard changes are needed for these provenance corrections.
 
 ## Integration status — 2026-11-23
 
-As of 2026-11-23 21:10 Asia/Taipei. Branch `integration/ha-import-batch1-20261123` (R-COCKPIT, local only; last merge `88e7e6b`).
+As of 2026-11-24 02:07 Asia/Taipei. Branch `integration/ha-import-batch1-20261123` (R-COCKPIT, local only; last merge `d72ae5f`).
 This is the integration record, not commercial acceptance: every lab result stays `not-complete`, and the final
 real re-verification of the integrated version is a separate step that has not run on this tip.
 
@@ -76,23 +76,29 @@ Merged (all `--no-ff`, conflicts proven per file in `tests/e2e/lab/evidence/inte
 | services-a-2 (Headscale full product flow) | `test/services-a2-20261123` @ `1214226` | `315ec8b` | integration-3 |
 | opendesign-import | `feat/ha-import-opendesign-20261123` @ `13c83f3` | `ae5420d` | integration-3 |
 | codeserver-import | `feat/ha-import-code-server-20261123` @ `f20ac84` | `88e7e6b` | integration-3 |
+| batch2-lab (dev-e code-server and Nextcloud records) | `lab/batch2-dev-e-20261123` @ `8de186d` | `fb284b8` | integration-3 |
+| showcase-nc-share (+ showcase source-backup evidence) | `evidence/ha-b2-nc-share-20261123` @ `24a045e` | `3579716` | integration-3 |
+| nextcloud-import (at its iteration-2 hand-off) | `feat/ha-import-nextcloud-20261123` @ `aaed6cf` | `17c81b8` | integration-3 |
+| batch2-lab again (dev-e verify, wake/rotate, journal cleanup) | `lab/batch2-dev-e-20261123` @ `472705c` | `ce6d652` | integration-3 |
+| emqx-secreview (EMQX import security review: SR-1/2/3/6/7 fixes, evidence, harness) | `sec/emqx-secreview-20261123` @ `cad50dd` | `f8e0c1d` | integration-3 |
+| litellm-product (owner decision 1: LiteLLM product path; contains review/litellm-secreview-fix2-20261124@7844157, real run 69/69 on the final code) | `feat/ha-import-litellm-product-20261123` @ `033f2f7` | `d72ae5f` | integration-3 |
 
 Still open:
 
 | Item | Why |
 | --- | --- |
-| omnigent-product (owner decision 1: SECURITY_BLOCKER removed with the enforced product path) | security review SR-OWNER-1942 still running; lane not done; not merged, so the public Omnigent guard is still on in this branch |
-| litellm-product (owner decision 1: LiteLLM into haimport.APPS with the product path) | security review found SR-1..SR-5 (fixes on review/litellm-secreview-20261123); the lane must merge them and rerun its real flow; not merged |
-| emqx-product (owner decision 1: PRESERVATION_BLOCKER removed with the enforced protections) | security review found SR-1..SR-7 (fixes on the lane branch); lane not done; not merged, so the public EMQX guard is still on in this branch |
-| nextcloud-import | waiting for dev-e Nextcloud (batch2-lab) and the share-including HA backup; not merged |
-| showcase-nc-share evidence | waiting (share backup download); evidence branch not final; not merged |
-| lab/batch2-dev-e-20261123 | contained up to 2b85b92 (via the code-server merge); later dev-e records (3cc1286..d8b9e92) not merged yet |
-| arm54-2 (test/arm54-final-20261123) | by design not merged here: the main session squash-merges it at the end (its early commits contain a test password literal); it edits this status.json from the end of final_version on |
+| omnigent-product (owner decision 1: SECURITY_BLOCKER removed with the enforced product path) | security review DONE (iteration 1 22:29, iteration 2 00:22 incl. the shared jobs.py SR-6 log-line fix); the product branch (ac31234 at 01:30) has not yet taken the iteration-2 picks and its last hand-off says continue (2 completeness runs queued); not merged, so the public Omnigent guard is still on in this branch |
+| LiteLLM owner items | merged at 033f2f7 (d72ae5f); open for the owner: SR-7 policy (os.environ/ references in HA rows: refuse or warn), the production LiteLLM readiness window, the Woow_podman_litellm install waiter, dev-d headscale restart loop, no ARM LiteLLM HA backup |
+| emqx-product (owner decision 1: PRESERVATION_BLOCKER removed with the enforced protections) | its security-review fixes are already in this branch through f8e0c1d; real product-flow chain attempts 08-12 running on dev-d since 01:10 (attempts 05-07 refused by a candidate/boot difference; arm54-2 found one root cause: num_acceptors follows the CPU count); not merged, so the public EMQX guard is still on in this branch |
+| nextcloud-import follow-up | merged at aaed6cf; open in the lane: a fully green share attempt 3 (waits for a host disk window of 19.5 GiB) and the dev-e journal cleanup of the public-link token; later commits get merged again |
+| lab/batch2-dev-e-20261123 later commits | merged up to 472705c; later commits are merged again |
+| arm54-2 (test/arm54-final-20261123) | by design not merged here: the main session squash-merges it at the end (its early commits contain a test password literal); merge-tree trial of its tip 569f4e1 on top of f8e0c1d: no conflict; it also carries product fixes (tempctr 98410bd, a7f32e9) and touches adapters/quadlet_postgres.py and flows.py, which litellm-product/emqx-product may also change |
 | final real re-verification of the integrated version | not run by the integration lanes after these merges (separate final step; dev-c stopped since 16:55) |
 | Hermes security review wording | 8b47124's message records an owner-authorized independent FTS5 review; the lane rules still list the human Hermes review as manual; main/owner to settle |
 | commercial acceptance | owner; every lab result here stays not-complete |
 
-Public guards on this branch: EMQX `PRESERVATION_BLOCKER` and Omnigent `SECURITY_BLOCKER` are on, LiteLLM is not in
-`haimport.APPS`; they change only when the product lanes are merged under owner decision 1.
+Public guards on this branch: EMQX `PRESERVATION_BLOCKER` and Omnigent `SECURITY_BLOCKER` are on; they change only when
+those product lanes are merged under owner decision 1. LiteLLM is importable through the product module `ha_litellm` since
+`d72ae5f` (owner decision 1; the lab candidate keeps its `GUARD`).
 
-Unit suites: integration-3 at ae5420d (3 merges): tests/backup 1471 = 1458 ok, 1 skipped, 12 not-ok (test_ha_omnigent 7 = SECURITY_BLOCKER, test_litellm_lab_runner 5 = guard false positive, 6/6 with --exe-only); RealBackupTests with the 20261118 backups 1/1; backup-ui 100/100; tests/e2e/lab 1090 started, 1043 ok, the same 73 not-ok records as integration-2 (run_native refused, 2 stale persisted_values). After the code-server merge 88e7e6b: affected tests/backup modules 167 run, 0 not-ok (real batch-1 backups on); full page suite rerun pending (void run under host load 53). Evidence: tests/e2e/lab/evidence/integration-20261123/unit-tests-step3.json.
+Unit suites: integration-3: at ae5420d tests/backup 1471 (12 not-ok = test_ha_omnigent 7 SECURITY_BLOCKER + test_litellm_lab_runner 5 guard false positive, 6/6 with --exe-only), backup-ui 100/100, lab 1090 started / 1043 ok (73 not-ok records = run_native refused + 2 stale persisted_values); at fb284b8: backup-ui 101/101, tests/backup 1488 = 1475 ok, 1 skipped, the same 12 not-ok ids, RealBackupTests 1/1, lab 1097 started / 1050 ok with the same 73 records; at 17c81b8 (nextcloud): affected modules 101/101, backup-ui 101/103 (timeout + 320 px overflow, both 2/2 alone); at f8e0c1d (batch2-lab again + EMQX security review): tests/backup 1525 = 1512 ok, 1 skipped, the same 12 not-ok ids, RealBackupTests 1/1, backup-ui 103/103, EMQX + import + flows modules 177/177, test_batch2_lab + test_dev_d_guard 43/43; at d72ae5f (litellm-product): tests/backup 1574 = 1561 ok, 1 skipped, the same 12 not-ok ids, RealBackupTests 1/1, backup-ui 105/105, 54 HA/LiteLLM modules 803 (only the 7 Omnigent), lab LiteLLM 20/20. Evidence: tests/e2e/lab/evidence/integration-20261123/unit-tests-step3.json, unit-tests-step3b.json, unit-tests-step3c.json, unit-tests-step3d.json, unit-tests-step3e.json.

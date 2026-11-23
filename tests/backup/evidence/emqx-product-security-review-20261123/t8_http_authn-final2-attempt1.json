@@ -1,0 +1,20 @@
+{
+ "attempt": "t8_http_authn-final2-attempt1",
+ "code": "sec/emqx-secreview-20261123 f397590 (SR-1/2/3/6) + product-engine.patch",
+ "commercial_acceptance": "not-complete",
+ "exit": 0,
+ "ha_emqx_py_sha256": "459c66c6903495ddde819d52894f9ec94fcf7e146a93f90f126b6f6f03bff42e",
+ "network": "none",
+ "result": {
+  "codebase": "final2",
+  "conversion": "REFUSED: podman exec woowbk-secrev-t8-emqx emqx 執行逾時（120 秒）。",
+  "device_service_password_sent_to_ha_server": false,
+  "elapsed_s": 686.4,
+  "image": "docker.io/emqx/emqx:5.8.9",
+  "network": "none",
+  "store": "labpodman (separate --root)",
+  "test": "T8 migrated HTTP authenticator receives this device bootstrap logins"
+ },
+ "stdout_sha256": "be5bc0d460e9121f59f2cc65506387dcac7430c5205b257f3a8e504f83fb99e6",
+ "store": "labpodman (separate --root); throwaway objects removed after the run"
+}

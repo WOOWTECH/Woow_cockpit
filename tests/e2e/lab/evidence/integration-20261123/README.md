@@ -194,3 +194,103 @@ PATH 擋板）；整套測試都在 `/tmp/woowbk-host-heavy-tests.lock` 裡、ni
   後的實驗室容器），測試時在 dev-d 裡跑；「頁面流程」是頁面送出的 root helper 指令（瀏覽器上傳改成複製檔案）；found-state 的
   ha-check 斷言（`c5f9c92` → `5c9fd64`）改動引用的是產品原始碼而不是廠商原始碼，是實驗室的預期值、不是公開的防護，已列為擁有者的發現。
 * OpenDesign 仍開著（不是阻擋）：`projects.metadata_json.baseDir` 改寫（目前只是警告）、測試模式不會暫停 OpenDesign 的例行工作（只有提醒）。
+
+## 第三次整合（續）：code-server、第二批實驗室紀錄與 share 來源備份
+
+| 合併 commit | 來源（tip） | 內容 |
+| --- | --- | --- |
+| `88e7e6b` | `feat/ha-import-code-server-20261123`（`f20ac84`） | code-server 匯入（`ha_codeserver.py`、haapps `woow-code-server`、`habackup.NEVER_READ` 加上代理程式的登入檔）、頁面（code-server 事實卡、Cloudflare Tunnel 與 `woow_mcp_*` 附加元件「不會搬過來」的提醒）、文件、CONTRACT、dev-e 目錄項目、`codeserver_full_flow.py` 與證據（第 1 次真實嘗試 87/87）。 |
+| `fb284b8` | `lab/batch2-dev-e-20261123`（`8de186d`） | dev-e 的 code-server 與 Nextcloud 實驗室紀錄（部署、基準 16/16 與 14/14、輪替紀錄、`test_batch2_lab.py`）；只有 `tests/e2e/lab`。 |
+| `3579716` | `evidence/ha-b2-nc-share-20261123`（`24a045e`） | 從擁有者的 x86 展示機 HA 做的第二批真實來源備份紀錄（`f884a0a`、`1c76ded`）與「含 share 資料夾」的 Nextcloud HA 備份（4,467,947,520 位元組，sha256 `2dcfc676…ded9d`，兩邊相同）的腳本與證據；這是**來源**，不是匯入。 |
+
+**code-server 的衝突**（5 個檔案、diff3 共 20 段，全部是「兩邊各把自己的應用加進同一個清單」，基準 `d812699`）：
+`haapps.IMPORTERS` 兩個項目都留（OpenDesign 在前）；`backup.js` 的 `HA_APP_NAMES`、`HA_SHORT`、`HA_FACTS`、`HA_LARGE`
+都是同一位置的純插入，兩邊都留（這邊在前），`HA_LARGE` 的註解重新斷行；`HA_CODE` 手動合併（每個應用一行，註解同時寫
+OpenDesign 與 code-server 會執行的程式）；`docs/backup.md` 開頭那句手動改成「Headscale、OpenDesign 與 code-server」，版本檢查
+那一行、測試模式表格、匯入對照表與各應用的段落兩邊都留；CONTRACT 兩段修訂說明、列舉值、`HaCheck` 依序列出
+`open-design?{…}` 與 `woow-code-server?{…}`（括號讓 OpenDesign 變成中間項目後仍然成對）；`tests/backup-ui.mjs` 兩組 fixture、
+兩個第二批的情境，兩句產品清單改成「…、OpenDesign、code-server」。證明：每個檔案和「這邊＋那邊的修改」不一樣的行
+只有這些合併後的行；只有那邊改的 8 個檔案等於 `f20ac84`，只有這邊改的 45 個不變；第二批實驗室檔案兩邊相同，只有
+`batch2_baseline.py` 取 `2b85b92`（同一條實驗室分支較新的 commit，這邊的 `a9dc46b` 是它的祖先）；`tests/e2e/lab/README.md` 等於
+那邊的版本加上這邊的 Hermes 一節（一個區塊、沒有刪除任何行）。
+
+**第二批實驗室分支**：沒有文字衝突；10 個檔案中 9 個等於 `8de186d`。更正：`fb284b8` 的 commit 訊息寫「這 10 個檔案在
+`2b85b92` 之後這邊都沒改」，`tests/e2e/lab/README.md` 例外（這邊有 hermes-real 的一節），git 自動合併；證明 patch-id 兩個方向都相同，
+結果與那邊相比只多 Hermes 那一節。歷史沒有改寫。
+
+**測試**：合併前（暫存的合併結果）受影響的 `tests/backup` 模組 167 個（含真實 batch-1 HA 備份），0 個未通過、1 個略過（20261118
+的重跑，整套時另外跑）；`test_batch2_lab`＋`test_dev_d_guard` 19／26 個全過。`node tests/backup-ui.mjs`：20:48 那次在主機負載 53 時
+只出現 Playwright 10 秒逾時，由本組停止、不算；22:28–22:41（負載約 24–30）在 `fb284b8` 重跑 **101/101**（含 OpenDesign 與
+code-server 兩個第二批情境）。整套 `tests/backup` 與 `tests/e2e/lab` 在 `fb284b8`（本組另一個工作樹，同一個 commit）：`tests/backup` 1488 個：1475 通過、1 略過、12 未通過，與第一步完全相同的 id（`test_ha_omnigent` 7＋`test_litellm_lab_runner` 5，新加的 17 個 code-server 測試全過）；20261118 重跑 1/1；`tests/e2e/lab` 啟動 1097 個、1050 通過，未通過的 73 筆與第一步、integration-2 完全相同（新加的 7 個 `test_batch2_lab` 全過）。之後的 `3579716` 只加了 33 個實驗室腳本與證據檔（沒有單元測試模組），上面的結果不變。證據 `unit-tests-step3b.json`。
+
+**驗證者的提醒照抄**：
+* OpenDesign（20:36）：第 2 次失敗後 `f4a3c16` 放寬了兩項實驗室檢查（`RUNTIME_KEPT` 排除 30 個執行期項目、外洩搜尋略過以 `/`
+  開頭的值與一般網址），依據是量測與分析，不是規則 2 要求的廠商檔案行號；真實備份沒有搬任何第三方憑證；自動回復還原的是同一份
+  轉換後備份，資料檢查分不出回復與成功；瀏覽器頁面沒有在 dev-e 上測。
+* code-server（21:30）：自動回復同樣是把同一份轉換後備份再還原一次（只證明回復路徑，手動回復才證明資料互換）；「MCP 值已收集」
+  是空集合（0 個值）；工作區搬移、延伸模組搬移、ARM、真正的瀏覽器頁面、正式主機的目錄項目都沒有實測（該線已說明）。
+
+## 第三次整合（續）：Nextcloud（`unit-tests-step3c.json`）
+
+| 合併 commit | 來源（tip） | 內容 |
+| --- | --- | --- |
+| `17c81b8` | `feat/ha-import-nextcloud-20261123`（`aaed6cf`） | Nextcloud Office 匯入（`ha_nextcloud.py`、haapps `nextcloud`、頁面的 Nextcloud 檢查卡、文件、CONTRACT、測試）、`nextcloud_flow.py`、`nextcloud_member_scan.py` 與 dev-e 證據：沒有 share 的第 2 次 34/34（產品拒絕缺少 share 資料夾的備份）、含 share 的第 1 次 85/86（匯入、用戶端、重新啟動、自動與手動回復、清理全部通過；唯一的 FAIL 是外洩搜尋在 dev-e 的網頁存取日誌找到公開連結權杖，之後依廠商 `PublicAuth.php:104-109` 等縮小範圍）、第 2 次在檢查前被主機空間保護停止。 |
+
+沒有衝突：那條分支自己先合併了本分支的 `88e7e6b`，18 個檔案在合併基準 `fb284b8` 之後這邊都沒改，合併後全部等於 `aaed6cf`；
+`haapps.IMPORTERS` 保留 OpenDesign 與 code-server，最後加上 Nextcloud。依該線 00:00 的交接（請本組合併這個 tip）合併；
+該線仍開著：全綠的含 share 第 3 次、dev-e 日誌中那個權杖的清理，之後的 commit 會再合併。
+
+測試：受影響的 `tests/backup` 模組（nextcloud、cli、import、registry、codeserver、opendesign，開啟真實 batch-1 備份）101/101；
+`node tests/backup-ui.mjs` 在 `17c81b8`：103 個中 101 個通過，第 4 個（上傳串流，Playwright 10 秒逾時，主機負載約 30）與第 16 個
+（320 px 時工作執行中畫面的示範警告清單多出 5 px；這次合併沒有碰那個畫面或任何樣式）未通過，在同一個 commit 單獨重跑這兩個：2/2 通過；
+第二批 4 個 HA 情境（OpenDesign、code-server、Nextcloud 含／不含 share）全部通過。整套 `tests/backup` 與 `tests/e2e/lab` 最後一次在
+`fb284b8`（第 3b 步）；下一次整套在產品線合併之後。
+
+## 第三次整合（續）：第二批實驗室再合併、EMQX 安全審查（`unit-tests-step3d.json`）
+
+| 合併 commit | 來源（tip） | 內容 |
+| --- | --- | --- |
+| `ce6d652` | `lab/batch2-dev-e-20261123`（`472705c`） | 只有實驗室：`batch2_baseline.py --verify`（只讀，證明 dev-e 上的應用回到基準；固定狀態行、證據細節裡像密鑰的名稱一律遮蔽）、`deploy-batch2.sh` 的 `wake:應用`／`rotate:應用`（`rotate:nextcloud` 也停 `nextcloud-cron.service`）、`batch2_journal_cleanup.py`（輪替並清理 dev-e 的日誌，證據不含日誌內容）、README、`test_batch2_lab.py`，以及第一次真實 `--verify`（Nextcloud 在 share 嘗試之後 7/7） |
+| `f8e0c1d` | `sec/emqx-secreview-20261123`（`cad50dd`） | EMQX 匯入安全審查：`75aad7a`（SR-1 高：HA 備份的 `cluster.hocon` 可讓 HA 的暫用代理在**公開的檢查**時載入外掛；SR-2：這台資料卷上的 ACL 檔案不可被換掉，以摘要核對、失敗即拒絕；SR-3：不讀 `file://` 密鑰）、`f397590`（SR-6：拒絕呼叫 jq 的規則）、`7b173af`（SR-7：拒絕會收到裝置登入的接收端）、`b26d4dd`＋`cad50dd`（審查 README、16 個嘗試 JSON、廠商探測、突變檢查、`tests/e2e/lab/emqx_secreview` 實驗室工具） |
+
+沒有衝突。第二批實驗室：自 `8de186d` 起兩邊都改的只有 `tests/e2e/lab/README.md`，自動合併；patch-id 兩個方向都相同
+（`8de186d→472705c` 等於「本分支→結果」，`8de186d→本分支` 等於「`472705c`→結果」），所以結果就是本分支的 Hermes 一節加上
+batch2-lab 的幾行；其他 5 個檔案等於 `472705c`。EMQX 審查：33 個檔案在 `ae5420d` 之後這邊都沒改，合併後全部等於 `cad50dd`；
+`ha_emqx.py` 的 `PRESERVATION_BLOCKER` 前後都是 3 處（公開的 EMQX 保護仍開著）；3 個測試檔只加了新的資料卷摘要讀取的假回應，
+沒有放寬任何斷言。依審查線 22:15 的最終交接（status done）與 21:03 的請求（SR-1 經由本分支的公開檢查就能觸發）先合併；
+emqx-product 已含 `75aad7a`、`f397590`、`7b173af`，之後合併它時是共同祖先。
+
+測試（主機守門，0 次拒絕的呼叫，除非另註）：`test_batch2_lab`＋`test_dev_d_guard` 43/43；18 個 EMQX 模組＋`test_ha_import`＋
+`test_ha_flows`（真實 batch-1 備份）177/177（與審查線相同）；整套 `tests/backup` 在 `f8e0c1d`（本組另一個工作樹，同一個 commit，
+主機重測鎖 00:52:39–00:59:55）：1525 個，1512 通過、1 略過、12 未通過，與第 3b 步（`fb284b8`）**完全相同的 12 個 id**
+（`test_ha_omnigent` 7：本分支仍開著公開的 Omnigent `SECURITY_BLOCKER`，要等 omnigent-product 依擁有者決定 1 合併才會改；
+`test_litellm_lab_runner` 5：本組守門擋下測試自己的假子程序，第 3a 步以 `--exe-only` 跑 6/6）；`RealBackupTests`（20261118 備份）1/1；
+`node tests/backup-ui.mjs` 在 `f8e0c1d`：**103/103**（鎖 01:09:52–01:17:54）。本組誤排了一次重複的頁面測試（01:22:38 起），
+跑了 77 個後由本組停止，不算。`tests/e2e/lab` 整套最後一次在 `fb284b8`；需要 `run_native`（主機 `/usr/bin/podman`）的實驗室測試照舊不跑。
+
+## 第三次整合（續）：LiteLLM 產品線（`unit-tests-step3e.json`，擁有者決定 1）
+
+| 合併 commit | 來源（tip） | 內容 |
+| --- | --- | --- |
+| `d72ae5f` | `feat/ha-import-litellm-product-20261123`（`033f2f7`） | LiteLLM 匯入成為正式產品路徑：`ha_litellm.py`（haapps `litellm`，排在第二批應用之後；可信任的資料庫結構、只搬 HA 的資料列、加密 salt 綁定；`key_users` 讀 Pi 代理的 `models.json`；每次讀欄位／簽章都固定 search_path，`215fdf0`）、`haimport.py`、`adapters/quadlet_postgres.py`、頁面、文件、CONTRACT §9、測試與突變檢查、實驗室驅動程式與證據。內含安全審查的最終 tip `review/litellm-secreview-fix2-20261124@7844157`（SR-1～SR-6、SR-8、SR-9、SR-10 的修正；最終產品程式 `1a83926`）與那份程式在 dev-d 的真實流程 `attempt-secreview-01` **69/69**（真實加密備份、整個協助程式流程，含自動與手動回復、重新啟動、外洩檢查、清理、隔離）；產品線自己的第 6 次（取消）、第 7 次 30/33（找到 enum 顯示的錯誤）、第 8 次 68/69（`215fdf0`；唯一失敗是 dev-d 的 headscale 一直重啟，讓容器集合比對不相等）都保留 |
+
+依產品線約 01:50 的最終交接（READY/DONE for integration `@033f2f7`）與審查線 01:05 的最終交接、01:46 的真實流程合併。
+
+**擁有者決定 1**：LiteLLM 改由產品模組匯入；實驗室候選 `ha_litellm_candidate` 保留它的 `GUARD`、不註冊。換掉的斷言（取產品線的版本）：
+`tests/backup/test_ha_litellm_candidate.py` 的 `assertNotIn('litellm', haapps.APP_IDS)` 改成 `assertEqual(haapps.get('litellm').module, 'ha_litellm')`
+加上 `assertNotIn('ha_litellm_candidate', …)`。其他公開保護都沒變（EMQX `PRESERVATION_BLOCKER`、Omnigent `SECURITY_BLOCKER` 照舊）。
+
+衝突：5 個檔案 18 個 diff3 區塊（`haapps.py` 1、`backup.js` 3、`docs/backup.md` 8、`CONTRACT.md` 4、`tests/backup-ui.mjs` 2），全部是清單
+追加（這邊是 OpenDesign／code-server／Nextcloud，那邊是 LiteLLM）：17 個是純插入或不重疊的修改，依「這邊先」合併（第二批應用在前、
+LiteLLM 在後，與 `haapps.IMPORTERS`、`HA_SHORT` 的順序一致）；1 個手動：文件開頭那句改成「…Headscale、OpenDesign、code-server、Nextcloud
+與 LiteLLM 附加元件」。逐檔證明：結果和「兩邊各自的修改」相比，只差在合併後的那幾行；只有那邊改的 79 個檔案等於 `033f2f7`，只有這邊改的
+159 個檔案不變；`haapps.py`、`backup.js`、`backup-ui.mjs` 與 00:52 演練 `007d9b6` 的結果逐位元相同；5 個像 HA 金鑰的字串（格式範例）與
+合併前的 sha256 相同。
+
+測試（主機守門，真實 batch-1 備份，0 次拒絕的呼叫）：暫存的合併上 54 個 HA／LiteLLM／adapter／jobs 模組 803 個，只有既有的
+`test_ha_omnigent` 7 個未通過；`test_litellm_lab_runner --exe-only` 6/6；實驗室 `test_litellm_full_flow`＋`test_litellm_real_ha` 20/20。
+整套在 `d72ae5f`（另一個工作樹，主機重測鎖 01:54:07–02:05:27）：`tests/backup` 1574 個，1561 通過、1 略過、12 未通過，與 `fb284b8`、`f8e0c1d`
+**完全相同的 12 個 id**；`RealBackupTests` 1/1；`node tests/backup-ui.mjs` **105/105**。
+
+仍開著（擁有者）：SR-7 的政策（HA 資料列裡的 `os.environ/` 參照要拒絕還是只提醒）、正式機 LiteLLM 的就緒等待時間、
+`Woow_podman_litellm` 安裝等待、dev-d 的 headscale 一直重啟（`team/services-a-2.md`）、沒有 ARM 的 LiteLLM HA 備份；商業驗收未完成。

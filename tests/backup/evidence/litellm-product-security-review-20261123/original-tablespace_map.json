@@ -1,0 +1,34 @@
+{
+ "case": "tablespace_map",
+ "elapsed_seconds": 41.5,
+ "image_pg18": "sha256:4ea77c7055dec6a632156aa2cd9f1abaaedeba5f812f104f4e9e1ac37363469b",
+ "markers_final": "container not running",
+ "notes": [],
+ "pg_tblspc": [
+  "drwx------    2 postgres postgres      4096 Nov 23 12:31 .",
+  "drwx------   19 postgres postgres      4096 Nov 23 12:31 ..",
+  "lrwxrwxrwx    1 postgres postgres        29 Nov 23 12:31 16400 -> /tmp/woowbk-review-tablespace",
+  "/tmp/woowbk-review-tablespace",
+  "backup_label.old",
+  "tablespace_map.old"
+ ],
+ "scan": {
+  "pg_version": "18",
+  "salt_valid": true,
+  "symlinks": 0
+ },
+ "source": {
+  "commit": "cd900c5fc129d55ff9bd3648b2516b70579d8acf",
+  "ha_litellm_sha256": "104e9ceb4efd10af86c4996c94f77c774cf7c1abeca93cb1f5dc0c7694eba74f",
+  "tracked_changes": false
+ },
+ "steps": [],
+ "stopped_with": {
+  "code": "job-failed",
+  "message": "暫用的 PostgreSQL 沒有啟動（資料可能不完整或版本不符）。"
+ },
+ "volumes_left_behind": [
+  "33022e09694e35ec26f7bce1bbf929803f8d69be54d0937f5273b6f8573ccebc",
+  "544ccef8161e9aa0b5d4c0d04ed2cbe1198ce631a9a6fe5d757ece8da1c543fc"
+ ]
+}

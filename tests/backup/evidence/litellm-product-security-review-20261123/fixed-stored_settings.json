@@ -1,0 +1,96 @@
+{
+ "after_analyse": [],
+ "after_first_connection": {},
+ "after_salt_binding": [],
+ "binding": "match",
+ "blockers": [],
+ "case": "stored_settings",
+ "container": {
+  "cap_add": [],
+  "cap_drop": [],
+  "memory": 1073741824,
+  "mounts": [
+   "volume:/var/lib/postgresql:noexec,nosuid,nodev,rbind"
+  ],
+  "network_mode": "none",
+  "pids_limit": 512,
+  "ports": {},
+  "privileged": false,
+  "read_only_root": true,
+  "security_opt": [
+   "no-new-privileges"
+  ],
+  "user": ""
+ },
+ "elapsed_seconds": 46.1,
+ "found": {
+  "migrations": [
+   "20250326162113_baseline"
+  ],
+  "schemas": [
+   "woow",
+   "woow_platform"
+  ],
+  "superuser": []
+ },
+ "image_pg18": "sha256:4ea77c7055dec6a632156aa2cd9f1abaaedeba5f812f104f4e9e1ac37363469b",
+ "markers_final": {},
+ "notes": [],
+ "scan": {
+  "pg_version": "18",
+  "salt_valid": true,
+  "symlinks": 0
+ },
+ "session_settings": {
+  "datestyle": "ISO, MDY",
+  "event_triggers": "off",
+  "extra_float_digits": "3",
+  "review": null,
+  "search_path": "pg_catalog",
+  "session_preload_libraries": "",
+  "shared_preload_libraries": ""
+ },
+ "source": {
+  "commit": "1e29974cb27ce5ec97ab089b9652b61428302fd5",
+  "ha_litellm_sha256": "4eb30d9f5aee9b3f536e7b1c66de2f52cff96025d6826fc3200900d53c382c2c",
+  "tracked_changes": false
+ },
+ "steps": [
+  "start_ha_cluster",
+  "analyse",
+  "salt_binding",
+  "read_schema",
+  "export_rows"
+ ],
+ "stored_hooks_blocker": "HA 的 LiteLLM 在資料庫裡存了會載入並執行程式的設定（general_settings.custom_auth、litellm_settings.post_call_rules、litellm_settings 回呼 custom_callbacks.proxy_handler_instance），匯入後這台的 LiteLLM 會照著執行，無法安全地搬過來；請先在 HA 的 LiteLLM 移除這些設定，再重新備份。",
+ "stored_settings": {
+  "callbacks": [
+   "langfuse",
+   "{\"x\": 1}"
+  ],
+  "env": [
+   "HTTPS_PROXY",
+   "LANGFUSE_HOST"
+  ],
+  "hooks": [
+   "general_settings.custom_auth",
+   "litellm_settings.post_call_rules",
+   "litellm_settings 回呼 custom_callbacks.proxy_handler_instance"
+  ],
+  "sections": [
+   "environment_variables",
+   "general_settings",
+   "litellm_settings"
+  ]
+ },
+ "stored_settings_line": "HA 的 LiteLLM 有存在資料庫裡的代理設定（環境變數 HTTPS_PROXY、LANGFUSE_HOST；記錄或通知的回呼 langfuse、{\"x\": 1}），匯入後會在這台的 LiteLLM 生效（這台的 LiteLLM 以資料庫裡的設定為準），請求可能會被轉送或記錄到這些設定指定的地方；請確認都是你自己設定的再正式匯入。",
+ "user_row_as_exported": [
+  "u1",
+  "proxy_admin",
+  "0.123456789012345",
+  "2026-11-05 10:00:00",
+  "2026-11-05 10:00:00+00"
+ ],
+ "volumes_left_behind": [],
+ "warnings": []
+}

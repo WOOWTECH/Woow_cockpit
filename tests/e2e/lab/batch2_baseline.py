@@ -24,9 +24,21 @@ host must keep FLOOR + RESERVE free after an estimated peak of 2.5 x the app's l
 that app stops with "PAUSED: host disk" before writing anything. While a job runs, a watchdog cancels it (job-cancel)
 when host free space falls to FLOOR + 0.25 GiB.
 A failing app is recorded and the next one still runs; the exit status is 0 only when every app passed everything.
+
+    python3 -I tests/e2e/lab/batch2_baseline.py --verify [nextcloud] [opendesign] [code-server]
+READ-ONLY check that an app on dev-e is back on its baseline (after another lane's import run, after a wake, before a
+handover): dev-e is still network none without published ports; the marker read equals the read taken right after the
+baseline's own restore (newest ~/.woowbk-lab/evidence/batch2-lab/*-baseline/<app>-markers-after-restore.json: every
+woowbk-lab-* name with its sha256, so a leftover test marker or a changed file fails); code-server's real login; the
+engine status shows the app running without problems; the catalog health URLs answer; the baseline backup named by the
+committed evidence (evidence/batch2-lab-20261123/<app>-baseline.json) is still listed, encrypted with the device key.
+It seeds, backs up, restores and generates nothing (no password file is created; without it Nextcloud fails).
+Evidence: ~/.woowbk-lab/evidence/batch2-lab/<stamp>-verify/result.json. Run it under the dev-e lock (a marker read logs
+in to the app) and never while an importer lane's run holds it.
 """
 import json
 import os
+import re
 import secrets
 import subprocess
 import sys
@@ -42,16 +54,18 @@ MARKERS = (HERE / 'batch2_markers.py').read_text()
 DEV = 'woowbk-dev-e'
 OWNER = '/usr/local/bin/woowbk-owner'
 PASSWORDS = LAB / 'secrets' / 'dev-e-markers.json'
-EVIDENCE = LAB / 'evidence' / 'batch2-lab' / (time.strftime('%Y%m%dT%H%M%S') + '-baseline')
+VERIFY = sys.argv[1:2] == ['--verify']
+EVIDENCE = LAB / 'evidence' / 'batch2-lab' / (time.strftime('%Y%m%dT%H%M%S') + ('-verify' if VERIFY else '-baseline'))
+COMMITTED = HERE / 'evidence' / 'batch2-lab-20261123'  # <app>-baseline.json: the baseline backup id
 ALL = ['nextcloud', 'opendesign', 'code-server']
 CATALOG_ID = {'nextcloud': 'nextcloud', 'opendesign': 'open-design', 'code-server': 'woow-code-server'}
 GIB = 1024 ** 3
 FLOOR = 12 * GIB      # the team keeps >= 12 GiB free on the host at every moment
 RESERVE = 1 * GIB     # what the other lanes may write meanwhile
 WATCH = FLOOR + GIB // 4
-APPS = sys.argv[1:] or ALL
+APPS = sys.argv[2 if VERIFY else 1:] or ALL
 if not set(APPS) <= set(ALL):
-    raise SystemExit('usage: batch2_baseline.py [nextcloud] [opendesign] [code-server]')
+    raise SystemExit('usage: batch2_baseline.py [--verify] [nextcloud] [opendesign] [code-server]')
 checks = []
 EVIDENCE.mkdir(parents=True, exist_ok=True)
 
@@ -63,7 +77,24 @@ def log(message):
         handle.write(line + '\n')
 
 
+# Team rule: a value whose name contains one of these words is secret and never reaches the evidence (mask by default).
+SECRET_WORDS = ('PWD', 'PASS', 'KEY', 'TOKEN', 'SECRET', 'CRED', 'AUTH', 'SIG')
+SECRET_TEXT = re.compile(r'''(['"])(\w*(?:pwd|pass|key|token|secret|cred|auth|sig)\w*)\1(\s*:\s*)(['"])[^'"]*\4''', re.I)
+
+
+def masked(value):
+    """value with every entry whose name looks secret replaced by '<masked>' (dicts, lists, and 'name': 'value' text)."""
+    if isinstance(value, dict):
+        return {k: '<masked>' if any(w in str(k).upper() for w in SECRET_WORDS) else masked(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [masked(v) for v in value]
+    if isinstance(value, str):
+        return SECRET_TEXT.sub(lambda m: f'{m[1]}{m[2]}{m[1]}{m[3]}{m[4]}<masked>{m[4]}', value)
+    return value
+
+
 def check(name, ok, detail=''):
+    detail = masked(detail if isinstance(detail, (dict, list)) else str(detail))
     checks.append({'check': name, 'ok': bool(ok), 'detail': str(detail)[:800]})
     log(f'{"PASS" if ok else "FAIL"} {name}' + (f' -- {detail}' if detail and not ok else ''))
     return bool(ok)
@@ -79,7 +110,9 @@ def engine(command, request=None, timeout=120):
 
 
 def passwords():
-    """The marker accounts' passwords, generated once (0600)."""
+    """The marker accounts' passwords, generated once (0600); --verify only reads them (none: Nextcloud's read fails)."""
+    if VERIFY:
+        return json.loads(PASSWORDS.read_text()) if PASSWORDS.exists() else {}
     if not PASSWORDS.exists():
         PASSWORDS.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
         data = {app: secrets.token_urlsafe(24) for app in ('nextcloud',)}
@@ -224,7 +257,8 @@ def baseline(app):
                'encrypt': True}
     start = engine('backup-start', request)
     job, joblog, wall = wait_job(start['job_id'], f'backup {app}')
-    (EVIDENCE / f'{app}-backup-job.json').write_text(json.dumps({'job': job, 'log': joblog}, ensure_ascii=False, indent=1))
+    (EVIDENCE / f'{app}-backup-job.json').write_text(json.dumps(masked({'job': job, 'log': joblog}), ensure_ascii=False,
+                                                               indent=1))
     if not check(f'{app}: encrypted backup succeeded', job['state'] == 'succeeded', job.get('error')):
         return
     result = job['result']
@@ -236,7 +270,7 @@ def baseline(app):
           and [a['id'] for a in meta['apps']] == [CATALOG_ID[app]], meta)
     inspect = engine('inspect', {'backup_id': backup_id})
     pre = next(a for a in inspect['preflight']['apps'] if a['id'] == CATALOG_ID[app])
-    (EVIDENCE / f'{app}-inspect.json').write_text(json.dumps(inspect, ensure_ascii=False, indent=1))
+    (EVIDENCE / f'{app}-inspect.json').write_text(json.dumps(masked(inspect), ensure_ascii=False, indent=1))
     check(f'{app}: inspect preflight ok, in-place restorable', inspect['preflight']['ok'] and pre['restorable']
           and pre['mode'] == 'inplace', pre)
 
@@ -250,7 +284,8 @@ def baseline(app):
     start = engine('restore-start', {'backup_id': backup_id, 'apps': [CATALOG_ID[app]], 'request_id': str(uuid.uuid4()),
                                      'confirm': True})
     rjob, rlog, rwall = wait_job(start['job_id'], f'restore {app}')
-    (EVIDENCE / f'{app}-restore-job.json').write_text(json.dumps({'job': rjob, 'log': rlog}, ensure_ascii=False, indent=1))
+    (EVIDENCE / f'{app}-restore-job.json').write_text(json.dumps(masked({'job': rjob, 'log': rlog}), ensure_ascii=False,
+                                                                indent=1))
     if not check(f'{app}: in-place restore succeeded', rjob['state'] == 'succeeded', rjob.get('error')):
         return
     rresult = rjob['result']
@@ -281,16 +316,68 @@ def baseline(app):
                     'health': rresult.get('health'), 'markers': sorted(BASELINE[app])}
 
 
+def canonical(found):
+    """A marker read as {kind: sorted names} (every woowbk-lab-* entry, files with their sha256)."""
+    return {kind: sorted(str(v) for v in value) for kind, value in found.items() if isinstance(value, (list, dict))}
 
+
+def verify(app):
+    """Read only: the app on dev-e equals its baseline (see the module docstring, --verify)."""
+    reads = sorted(LAB.glob(f'evidence/batch2-lab/*-baseline/{app}-markers-after-restore.json'))
+    if not check(f'{app}: the baseline\'s own after-restore marker read exists', reads, 'no baseline restore evidence'):
+        return
+    expected = canonical(json.loads(reads[-1].read_text()))
+    backup_id = json.loads((COMMITTED / f'{app}-baseline.json').read_text())['backup_id']
+    found = markers(app, 'read')
+    (EVIDENCE / f'{app}-markers.json').write_text(json.dumps(found, ensure_ascii=False, indent=1))
+    have = names(app, found)
+    check(f'{app}: only the baseline markers (no leftover test marker)', have == BASELINE[app],
+          {'missing': sorted(BASELINE[app] - have), 'extra': sorted(have - BASELINE[app])})
+    got = canonical(found)
+    check(f'{app}: marker read equals the baseline\'s after-restore read (names and sha256, {reads[-1].parent.name})',
+          got == expected, {k: {'now': got.get(k), 'baseline': expected.get(k)} for k in sorted(set(got) | set(expected))
+                            if got.get(k) != expected.get(k)})
+    if app in LOGIN:
+        login = markers(app, 'login')
+        check(f'{app}: real login (session cookie, workbench page, wrong password refused)', login.get('ok'), login)
+    status = engine('status')
+    state = next((a for a in status['apps'] if a['id'] == CATALOG_ID[app]), None)
+    check(f'{app}: engine status running, no problems', state and state['deployed'] and state['state'] == 'running'
+          and not state['problems'], state)
+    codes = {c['url']: (http_code(c['url']), str(c['expect_status'])) for c in catalog(CATALOG_ID[app])['health']}
+    check(f'{app}: catalog health URLs answer as expected', all(a == e for a, e in codes.values()), codes)
+    meta = next((b for b in engine('list')['backups'] if b['id'] == backup_id), None)
+    check(f'{app}: baseline backup {backup_id} still listed, encrypted with the device key, this app only',
+          meta and meta['encrypted'] and meta['key_id'] == status['key']['key_id']
+          and [a['id'] for a in meta['apps']] == [CATALOG_ID[app]], meta or 'not listed')
+    summary[app] = {'baseline_backup_id': backup_id, 'baseline_read': reads[-1].parent.name, 'markers': sorted(have)}
+
+
+def isolation():
+    state = subprocess.run([LP, 'inspect', DEV, '--format',
+                            '{{.State.Running}} {{.HostConfig.NetworkMode}} {{json .HostConfig.PortBindings}}'],
+                           capture_output=True, timeout=60).stdout.decode().strip()
+    check('dev-e: running, network none, no published port', state == 'true none {}', state)
+
+
+# A read-only check records any error and goes on; a baseline run stops on an unexpected error (a job may be running).
+CAUGHT = (SystemExit, Exception) if VERIFY else (SystemExit,)
+if VERIFY:
+    isolation()
 for app in APPS:
     try:
-        baseline(app)
-    except SystemExit as error:  # one app failing must not hide the others' results
-        check(f'{app}: baseline run', False, error)
+        verify(app) if VERIFY else baseline(app)
+    except CAUGHT as error:  # one app failing must not hide the others' results
+        check(f'{app}: {"verify" if VERIFY else "baseline"} run', False, f'{type(error).__name__}: {error}')
 
 passed = sum(c['ok'] for c in checks)
 (EVIDENCE / 'result.json').write_text(json.dumps({'checks': checks, 'passed': passed, 'total': len(checks),
                                                   'summary': summary}, ensure_ascii=False, indent=1))
 log(f'RESULT {passed}/{len(checks)} checks passed; evidence in {EVIDENCE}')
 print(json.dumps(summary, ensure_ascii=False, indent=1))
-sys.exit(0 if passed == len(checks) and set(summary) == set(APPS) else 1)
+ok = passed == len(checks) and set(summary) == set(APPS)
+# Fixed status lines (no detail, no values) that services_a_capture.py keeps in a committed attempt JSON.
+for c in checks:
+    print(f'{c["check"]}: {"PASS" if c["ok"] else "FAIL"}')
+print(f'batch2 {"verify" if VERIFY else "baseline"} {" ".join(APPS)}: {passed}/{len(checks)} {"PASS" if ok else "FAIL"}')
+sys.exit(0 if ok else 1)
