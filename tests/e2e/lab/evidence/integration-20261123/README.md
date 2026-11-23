@@ -245,3 +245,25 @@ code-server 兩個第二批情境）。整套 `tests/backup` 與 `tests/e2e/lab`
 （320 px 時工作執行中畫面的示範警告清單多出 5 px；這次合併沒有碰那個畫面或任何樣式）未通過，在同一個 commit 單獨重跑這兩個：2/2 通過；
 第二批 4 個 HA 情境（OpenDesign、code-server、Nextcloud 含／不含 share）全部通過。整套 `tests/backup` 與 `tests/e2e/lab` 最後一次在
 `fb284b8`（第 3b 步）；下一次整套在產品線合併之後。
+
+## 第三次整合（續）：第二批實驗室再合併、EMQX 安全審查（`unit-tests-step3d.json`）
+
+| 合併 commit | 來源（tip） | 內容 |
+| --- | --- | --- |
+| `ce6d652` | `lab/batch2-dev-e-20261123`（`472705c`） | 只有實驗室：`batch2_baseline.py --verify`（只讀，證明 dev-e 上的應用回到基準；固定狀態行、證據細節裡像密鑰的名稱一律遮蔽）、`deploy-batch2.sh` 的 `wake:應用`／`rotate:應用`（`rotate:nextcloud` 也停 `nextcloud-cron.service`）、`batch2_journal_cleanup.py`（輪替並清理 dev-e 的日誌，證據不含日誌內容）、README、`test_batch2_lab.py`，以及第一次真實 `--verify`（Nextcloud 在 share 嘗試之後 7/7） |
+| `f8e0c1d` | `sec/emqx-secreview-20261123`（`cad50dd`） | EMQX 匯入安全審查：`75aad7a`（SR-1 高：HA 備份的 `cluster.hocon` 可讓 HA 的暫用代理在**公開的檢查**時載入外掛；SR-2：這台資料卷上的 ACL 檔案不可被換掉，以摘要核對、失敗即拒絕；SR-3：不讀 `file://` 密鑰）、`f397590`（SR-6：拒絕呼叫 jq 的規則）、`7b173af`（SR-7：拒絕會收到裝置登入的接收端）、`b26d4dd`＋`cad50dd`（審查 README、16 個嘗試 JSON、廠商探測、突變檢查、`tests/e2e/lab/emqx_secreview` 實驗室工具） |
+
+沒有衝突。第二批實驗室：自 `8de186d` 起兩邊都改的只有 `tests/e2e/lab/README.md`，自動合併；patch-id 兩個方向都相同
+（`8de186d→472705c` 等於「本分支→結果」，`8de186d→本分支` 等於「`472705c`→結果」），所以結果就是本分支的 Hermes 一節加上
+batch2-lab 的幾行；其他 5 個檔案等於 `472705c`。EMQX 審查：33 個檔案在 `ae5420d` 之後這邊都沒改，合併後全部等於 `cad50dd`；
+`ha_emqx.py` 的 `PRESERVATION_BLOCKER` 前後都是 3 處（公開的 EMQX 保護仍開著）；3 個測試檔只加了新的資料卷摘要讀取的假回應，
+沒有放寬任何斷言。依審查線 22:15 的最終交接（status done）與 21:03 的請求（SR-1 經由本分支的公開檢查就能觸發）先合併；
+emqx-product 已含 `75aad7a`、`f397590`、`7b173af`，之後合併它時是共同祖先。
+
+測試（主機守門，0 次拒絕的呼叫，除非另註）：`test_batch2_lab`＋`test_dev_d_guard` 43/43；18 個 EMQX 模組＋`test_ha_import`＋
+`test_ha_flows`（真實 batch-1 備份）177/177（與審查線相同）；整套 `tests/backup` 在 `f8e0c1d`（本組另一個工作樹，同一個 commit，
+主機重測鎖 00:52:39–00:59:55）：1525 個，1512 通過、1 略過、12 未通過，與第 3b 步（`fb284b8`）**完全相同的 12 個 id**
+（`test_ha_omnigent` 7：本分支仍開著公開的 Omnigent `SECURITY_BLOCKER`，要等 omnigent-product 依擁有者決定 1 合併才會改；
+`test_litellm_lab_runner` 5：本組守門擋下測試自己的假子程序，第 3a 步以 `--exe-only` 跑 6/6）；`RealBackupTests`（20261118 備份）1/1；
+`node tests/backup-ui.mjs` 在 `f8e0c1d`：**103/103**（鎖 01:09:52–01:17:54）。本組誤排了一次重複的頁面測試（01:22:38 起），
+跑了 77 個後由本組停止，不算。`tests/e2e/lab` 整套最後一次在 `fb284b8`；需要 `run_native`（主機 `/usr/bin/podman`）的實驗室測試照舊不跑。
