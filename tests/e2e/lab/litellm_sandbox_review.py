@@ -261,7 +261,7 @@ def hooks_verdict(cluster, schema):
             out['hooks'] = [str(h)[:80] for h in (found.get('hooks') or [])][:10]
             out['env_count'] = len(found.get('env') or [])
             out['callbacks'] = [str(c)[:60] for c in (found.get('callbacks') or [])][:10]
-            for key in ('blockers', 'blocker', 'error'):
+            for key in ('blockers', 'blocker', 'error', 'unreadable'):
                 if key in found:
                     out[key] = bool(found[key])
         blocker = ha_litellm.stored_hooks_blocker(found) if hasattr(ha_litellm, 'stored_hooks_blocker') else None
