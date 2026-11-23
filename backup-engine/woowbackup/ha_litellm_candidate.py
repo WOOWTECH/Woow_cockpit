@@ -101,6 +101,86 @@ def assess(source, *, target_version, target_pg_major):
                         'salt_file_valid': source.salt_valid}}
 
 
+PG_PREFIX = 'data/postgres'
+SECRETS_PREFIX = 'data/secrets'
+# HA woow_init.py SECRET_FILES: the four /data/secrets files the add-on creates or loads.
+SECRET_NAMES = ('master_key', 'salt_key', 'pg_password', 'ui_password')
+MAX_SECRET_FILE = 1024
+MAX_PG_VERSION_FILE = 64
+
+
+class SourceSecrets:
+    """HA's /data/secrets values (stripped bytes) held privately: no repr, no iteration, no message carries them.
+    The caller decides what to transfer (only the salt is needed by a target) and must never log a value."""
+
+    __slots__ = ('_values',)
+
+    def __init__(self, values):
+        self._values = dict(values)
+
+    def __repr__(self):
+        return '<SourceSecrets>'
+
+    def value(self, name):
+        return self._values.get(name)
+
+    def names(self):
+        return tuple(sorted(self._values))
+
+
+@dataclass(frozen=True)
+class ClusterSource:
+    addon_version: str | None
+    pg_version: str | None
+    pg_files: int
+    pg_bytes: int
+    secrets: SourceSecrets
+
+
+def _under(name, prefix):
+    return name == prefix or name.startswith(prefix + '/')
+
+
+def cluster_member(stream, sink, *, checkpoint=None):
+    """INTERNAL CANDIDATE for isolated lab tests only: not registered, and `convert` keeps refusing.
+
+    One strict pass over the add-on member (habackup.iter_entries: no symlink or hard link is handed out). Every
+    data/postgres entry goes to `sink` with its name relative to the cluster (an ha_odoo.PgSink replaces HA's
+    configuration files and drops its recovery/standby/pid files); the fixed data/secrets files come back in a
+    private SourceSecrets. Each secret must be one small regular file, the salt in HA's format. This proves nothing
+    about the database binding: the caller must still run read_source_salt_binding on the restored cluster."""
+    report = habackup.Report()
+    wanted = tuple(f'{SECRETS_PREFIX}/{name}' for name in SECRET_NAMES)
+    select = habackup.Select(include=(PG_PREFIX,) + wanted, symlinks=(), hardlinks=False)
+    pg_version = None
+    files = size = 0
+    values = {}
+    for entry in habackup.iter_entries(stream, select, report, addon=True, checkpoint=checkpoint):
+        name = entry.name
+        if _under(name, PG_PREFIX):
+            rel = name[len(PG_PREFIX) + 1:] if name != PG_PREFIX else '.'
+            data = None
+            if entry.kind == 'file':
+                files += 1
+                size += entry.size
+                if rel == 'PG_VERSION':
+                    data = entry.read_all(MAX_PG_VERSION_FILE)
+                    text = data.decode('ascii', 'replace').strip()
+                    pg_version = text if re.fullmatch(r'[1-9][0-9]?', text) else None
+            sink.add(rel, entry, data)
+            continue
+        key = name.rsplit('/', 1)[1]
+        if entry.kind != 'file' or entry.size > MAX_SECRET_FILE or key in values:
+            raise BackupError('incompatible', 'LiteLLM 附加元件的金鑰檔格式不正確。')
+        values[key] = entry.read_all(MAX_SECRET_FILE).strip()
+    info = report.addon
+    if info is None or info.slug != SLUG:
+        raise BackupError('incompatible', '備份不是可辨識的 LiteLLM 附加元件。')
+    if any(not values.get(name) for name in SECRET_NAMES) or not _SALT.fullmatch(values['salt_key']):
+        raise BackupError('incompatible', 'LiteLLM 附加元件缺少完整的金鑰檔，無法搬移加密的憑證。')
+    return ClusterSource(info.version, pg_version, files, size, SourceSecrets(values))
+
+
 _IMAGE_ID = re.compile(r"sha256:[0-9a-f]{64}\Z")
 _PG_ENV = re.compile(r"PG_MAJOR=([1-9][0-9]?)\Z")
 

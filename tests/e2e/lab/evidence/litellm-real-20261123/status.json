@@ -1,0 +1,59 @@
+{
+ "lane": "services-b",
+ "date": "2026-11-23",
+ "updated": "2026-11-23T13:12+08:00",
+ "scope": "lab internal-candidate test of the HA -> Podman LiteLLM migration; the public import stays guarded (ha_litellm_candidate.convert refuses, litellm is not in haimport.APPS)",
+ "authorization": "the owner provided the real showcase HA LiteLLM backup through the main session and allowed real keys inside network-none labs (team note 2026-11-23 09:55)",
+ "target": "lab woowbk-dev-d (outer network none, no published ports, isolation asserted before and after the run); production untouched",
+ "source": "real encrypted, compressed, cold HA backup of the showcase x86 add-on 9663031d_woow-litellm 0.1.15 (LiteLLM 1.104.0, PostgreSQL 18.6), HA slug 20a0e8bd, file SHA-256 9dc5994497d9d6ff4c3ee8d3fcf86f295cf25c69d1eae98227854fee85286f27 checked before every run",
+ "harness": "tests/e2e/lab/litellm_real_ha.py --run --outer-isolation-confirmed (evidence by litellm_real_capture.py: fixed JSON event lines only)",
+ "results": {
+  "real_run": {
+   "status": "pass",
+   "attempt": 4,
+   "source_commit": "894bece0b330c5ea392f01922b33934293930674",
+   "checks": "24/24",
+   "elapsed_s": 2956,
+   "lock_held_s": 1711
+  },
+  "source_read": {"status": "pass", "detail": "product habackup/hasecuretar decrypt + ha_litellm_candidate.scan_member: 0.1.15 / 1.104.0 / PG 18 / control file / salt format valid"},
+  "cluster_stream": {"status": "pass", "detail": "internal candidate cluster_member -> product PgSink -> throwaway PostgreSQL 18.7: 1807 files, 78 MiB, HA configuration replaced"},
+  "salt_binding": {"status": "pass", "detail": "product read_source_salt_binding: HA salt match, another salt mismatch"},
+  "schema_and_rows": {"status": "pass", "detail": "package PostgreSQL 17.11 (SCRAM), restore.sh order (drop, create, load): every table's rows, every sequence and the schema equal HA's (0 tables differing)"},
+  "real_app": {"status": "pass", "detail": "package image on public LiteLLM 1.104.0 with the package start.sh, HA salt moved, target master key / UI password / DB password kept: HA virtual key /key/info 200 with its alias, users 1, teams 1, 72/72 stored model values and 5/5 stored credential values decrypt with the moved salt (0 with the target salt), an app-issued key works"},
+  "chatgpt_plugin_stage": {"status": "pass", "detail": "WOOW_CHATGPT_ENABLED=true (package default) serves 24/24 stored models (14 chatgpt/, 3 openai, 7 openrouter)"},
+  "restart": {"status": "pass", "detail": "fresh container: counts equal, HA and issued keys accepted"},
+  "wrong_salt": {"status": "pass", "detail": "db_prepare refuses the target's own salt, rows unchanged"},
+  "memory": {"status": "pass", "detail": "target database oom_kill 0 (peak 122 MiB); app bounded at 1408 MiB; dev-d baseline services kept running"},
+  "rollback": {"status": "pass", "detail": "rows and schema equal the target's own data, own credential decrypts, HA and issued keys 401"},
+  "cleanup": {"status": "pass", "detail": "0 containers / volumes / networks / secrets / notes left, baseline 8 containers unchanged"}
+ },
+ "dynamic_credentials": {
+  "status": "pass",
+  "detail": "credential_ledger.Ledger declared 13 sources (lab HA backup key, test virtual key, the backup's 4 secret files, 6 generated target values incl. DATABASE_URL, the app-issued key): all 13 registered before the scan, 0 matches in everything the run printed; the scan raises CoverageError while any declared source is unregistered (unit-tested); independent post-run scan of this folder with 33 lab + HA values: 0 matches"
+ },
+ "earlier_attempts": {
+  "01": "cancelled while blocked in flock (no dev-d object)",
+  "02": "cancelled while blocked in flock (no dev-d object)",
+  "03": "FAIL: router served 10 of 24 models with the ChatGPT plugin off; the restart container's start died once in Prisma migrate P1001 (no retry then)"
+ },
+ "truth_notes": [
+  "2 of 11 app starts hit a transient database connect failure under host load (~19); the unit-like retry (Restart=always, RestartSec=10) recovered each",
+  "the rollback app needed one unit-like retry (package ui-session-reconcile psycopg OperationalError; the database was reachable right after)"
+ ],
+ "lab_differences": [
+  "the app runs as 1000:0 with its Prisma folder chowned at start, not as the image's USER 65534 (dev-d maps container IDs 0..55000 only)",
+  "the package Quadlet/systemd units are emulated by fresh containers with Restart=always-like retries",
+  "no provider calls and no ChatGPT token refresh (no network in the lab)"
+ ],
+ "not_covered": [
+  "the public HA -> Podman LiteLLM import (guarded; a product decision)",
+  "ARM (no ARM LiteLLM HA backup exists)",
+  "production"
+ ],
+ "owner_needs": [
+  "decide whether to open the public LiteLLM import: superuser restore of HA's dump, the target UID, how ChatGPT account tokens move",
+  "for ARM coverage: install woow-litellm on the RPi5 HA (.34) and make one backup (the .34 lane does device work)"
+ ],
+ "commercial_acceptance": "not-complete"
+}

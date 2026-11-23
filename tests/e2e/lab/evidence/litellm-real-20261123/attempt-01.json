@@ -1,0 +1,16 @@
+{
+ "source_commit": "8998444fa9f3fcaf612cbcea6627733b33894c67",
+ "scope": "litellm-real-ha-x86-internal-candidate",
+ "exit": -15,
+ "elapsed_seconds": 224.8,
+ "stdout_sha256": "0e744171254907246da119720b7b43a91ae2f3ef624959d1364175a773d10188",
+ "fixed_status": [
+  "{\"clean_tree\": true, \"commit\": \"8998444fa9f3fcaf612cbcea6627733b33894c67\", \"stage\": \"source_commit\"}",
+  "{\"addon\": \"woow-litellm\", \"arch\": \"x86\", \"encrypted\": true, \"fixture_sha256_matches_record\": true, \"stage\": \"real_source\"}",
+  "{\"convert_refuses\": true, \"not_registered\": true, \"stage\": \"public_guard\"}",
+  "{\"addon_version\": \"0.1.15\", \"control_present\": true, \"member_encrypted\": true, \"pg_major\": 18, \"product_version\": \"1.104.0\", \"salt_file_valid\": true, \"stage\": \"source_scan\"}",
+  "{\"isolation\": \"true_none_no_ports\", \"stage\": \"isolation_before\"}"
+ ],
+ "stderr_bytes_not_published": 0,
+ "commercial_acceptance": "not-complete"
+}
