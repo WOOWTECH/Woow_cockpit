@@ -304,7 +304,7 @@ class World(fk.World):
             return self.catalog if self.catalog is not None else {
                 'owners': ['oc_admin'], 'verifier_md5': hashlib.md5(VERIFIER.encode()).hexdigest(),
                 'role': {k: v for k, v in LIVE_DB['role'].items() if k != 'password'}, 'role_settings': 0,
-                **{key: LIVE_DB[key] for key in ('roles', 'extensions', 'datacl', 'nspacl')}}
+                'grants': 0, **{key: LIVE_DB[key] for key in ('roles', 'extensions', 'datacl', 'nspacl')}}
         if 'FROM pg_settings' in sql or 'pg_file_settings' in sql:
             return []
         return None
@@ -638,11 +638,12 @@ class ConvertTests(NextcloudCase):
     def test_a_role_that_gained_rights_fails_the_verification(self):
         good = {'owners': ['oc_admin'], 'verifier_md5': hashlib.md5(VERIFIER.encode()).hexdigest(),
                 'role': {k: v for k, v in LIVE_DB['role'].items() if k != 'password'}, 'role_settings': 0,
-                **{key: LIVE_DB[key] for key in ('roles', 'extensions', 'datacl', 'nspacl')}}
+                'grants': 0, **{key: LIVE_DB[key] for key in ('roles', 'extensions', 'datacl', 'nspacl')}}
         for change, text in (({'role': dict(good['role'], super=True)}, 'oc_admin 角色的權限和這台的不同'),
                              ({'role': dict(good['role'], createrole=True)}, 'oc_admin 角色的權限和這台的不同'),
                              ({'role': None}, 'oc_admin 角色的權限和這台的不同'),
-                             ({'role_settings': 1}, '出現了角色或資料庫層級的設定')):
+                             ({'role_settings': 1}, '出現了角色或資料庫層級的設定'),
+                             ({'grants': 2}, '資料表或欄位多了權限設定'), ({'grants': None}, '資料表或欄位多了權限設定')):
             with self.subTest(change=change):
                 self.world.catalog = dict(good, **change)
                 with self.assertRaises(BackupError) as caught:

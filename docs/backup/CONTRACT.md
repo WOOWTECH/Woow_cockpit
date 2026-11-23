@@ -2104,7 +2104,8 @@ html,data}`; facts `phase3/facts/nextcloud.md`, owner decisions D1-D5 applied wi
    (`appdata_<instanceid>/richdocuments/remoteData`) is dropped from the data dir and its file cache rows deleted, so
    discovery is fetched again from this device's Collabora. Verified: every count (file cache minus those rows), table
    owners = the role, the role's attributes (never superuser) and password verifier, root storage id, roles, extensions,
-   database and public-schema grants and the kept settings equal the live ones, no per-role or per-database setting. Live PostgreSQL settings are carried (§9 Odoo); clean stop, `pg_controldata` "shut down"; the PostgreSQL
+   database and public-schema grants and the kept settings equal the live ones, no per-role or per-database setting,
+   no table or column grant (the dump is restored with --no-acl, so one can only come from SQL hidden in it). Live PostgreSQL settings are carried (§9 Odoo); clean stop, `pg_controldata` "shut down"; the PostgreSQL
    dir is the volume export with its top folder owned like the live one.
 5. config.php = the live one (base: URLs, trusted domains, proxies, database credentials, data directory, caches, mail,
    maintenance window) + HA's `instanceid`, `passwordsalt`, `secret` + HA's `twofactor_enforced*` and

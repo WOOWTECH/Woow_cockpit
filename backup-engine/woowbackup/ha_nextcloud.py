@@ -1307,6 +1307,12 @@ def catalog_verify_sql(role):
  'extensions', (SELECT coalesce(json_agg(extname ORDER BY extname), '[]'::json) FROM pg_extension),
  'datacl', (SELECT datacl::text FROM pg_database WHERE datname = current_database()),
  'nspacl', (SELECT nspacl::text FROM pg_namespace WHERE nspname = 'public'),
+ 'grants', (SELECT count(*) FROM pg_class WHERE relacl IS NOT NULL AND relnamespace IN (SELECT oid FROM pg_namespace
+            WHERE nspname !~ '^pg_' AND nspname <> 'information_schema')
+            AND oid NOT IN (SELECT objid FROM pg_depend WHERE deptype = 'e' AND classid = 'pg_class'::regclass))
+           + (SELECT count(*) FROM pg_attribute WHERE attacl IS NOT NULL AND attrelid IN (SELECT oid FROM pg_class
+              WHERE relnamespace IN (SELECT oid FROM pg_namespace WHERE nspname !~ '^pg_'
+                                     AND nspname <> 'information_schema'))),
  'role_settings', (SELECT count(*) FROM pg_db_role_setting))"""
 
 
@@ -1327,6 +1333,9 @@ def verify_converted(doc, *, expected, db, role, old_root, new_root):
         problems.append(f'{role} 角色的權限和這台的不同')
     if doc.get('role_settings') != 0:
         problems.append('出現了角色或資料庫層級的設定')
+    # The dump is restored with --no-acl: a grant on a table or column can only come from SQL hidden in HA's dump.
+    if doc.get('grants') != 0:
+        problems.append('資料表或欄位多了權限設定')
     if doc.get('counts') != expected:
         problems.append('資料筆數和 HA 的不同')
     if doc.get('owners') != [role]:
