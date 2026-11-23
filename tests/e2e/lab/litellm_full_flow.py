@@ -20,11 +20,12 @@ deploy-src.sh. Phases:
             folder owned by it, because dev-d maps container IDs 0..55000 and the image's 65534 cannot run -- the
             lab difference services-b used too), scripts/install.sh --no-pull (fresh secrets, units, smoke); the
             catalog entry from catalog-suggest -> catalog-install; key-init; this device's OWN data seeded through
-            the API with its master key (a credential, a model using it, a virtual key with a value chosen here)
+            the API with its master key (a credential, a model using it, a virtual key with a value chosen here);
+            a lab STUB app (catalog entry + Quadlet file, never started) whose Quadlet points at LiteLLM
   before    this device's own state: secret digests, DB counts and salt digest, schema signature digest, own key 200
   upload    upload-begin, the file copied to the path the helper gave, upload-finish
   check     ha-check-start litellm with the HA key: ok, versions 0.1.15 / 1.104.0, PG 18 -> 17, counts 1/1/24, keys,
-            the derived key_users (dev-d's real catalog and configuration)
+            the derived key_users (dev-d's real catalog and configuration) must name the stub
   convert   the real free space and the product floor, ha-convert-start (real SpaceGuard/Watchdog), the job log
             names the trusted-schema steps, the list row, inspect (preflight in place, settings same)
   autorb    restore-start with a one-shot ExecStartPre failure of litellm.service: must end rolled-back with THIS
@@ -91,6 +92,20 @@ TIMER = 'woowtech-cockpit-backup-schedule.timer'
 DROPIN_DIR_REL = '.config/systemd/user/litellm.service.d'
 DROPIN_REL = DROPIN_DIR_REL + '/zz-litellm-product-fail-once.conf'
 MARKER_REL = '.litellm-product-fail-once'
+# Option A's positive case (verifier 2026-11-24 02:14: the real run only showed key_users == []): a lab STUB app, never
+# started, whose Quadlet points an OpenAI client at this device's LiteLLM. Only its catalog entry and Quadlet file exist
+# during the run; the product's own key_users must name it in the check, the conversion notes and the reminders.
+STUB_ID = 'woowbk-llm-client'
+STUB_FILE = f'{STUB_ID}.container'
+STUB_UNIT = f'{STUB_ID}.service'
+STUB_QUADLET = ('[Unit]\nDescription=Lab stub of an app that uses this device\'s LiteLLM (never started; '
+                'litellm_full_flow key_users case)\n\n[Container]\nImage=localhost/woowbk-llm-client-stub:never\n'
+                f'ContainerName={STUB_ID}\nEnvironment=OPENAI_BASE_URL=http://litellm:4000/v1\n')
+STUB_ENTRY = {'schema': 1, 'id': STUB_ID, 'name': STUB_ID, 'owner': 'appowner',
+              'description': 'Lab stub (never started): an app whose Quadlet uses this device\'s LiteLLM.',
+              'adapter': 'quadlet-postgres', 'quadlet': {'files': [STUB_FILE]}, 'units': [STUB_UNIT],
+              'writer_units': [STUB_UNIT], 'health': [], 'verify': []}
+QUADLET_DIR_REL = '.config/containers/systemd'
 SAFE_LABEL = re.compile(r"[^A-Za-z0-9 ,()/:'<>.=_-]")
 
 
@@ -449,6 +464,7 @@ class Run:
         self.ev = ev
         self.lock_started = time.monotonic()
         self.installed_entry = self.deployed = self.timer_masked_here = self.dropin = False
+        self.stub_entry = self.stub_file = False
         self.created_store = None
         self.before = {}
         self.converted = self.safety = self.store_id = None
@@ -530,13 +546,19 @@ class Run:
             app = next((a for a in suggestion.get('apps') or [] if a.get('id') == 'litellm'), {})
             variant = next((v for v in app.get('variants') or [] if v.get('id') == 'database'), {})
             # The production catalog of this package (tests/backup/test_suggest.py fixture, facts CAT): the single
-            # database mode (postgres item main), no built-in digests, the readiness URL within 300 s.
+            # database mode (postgres item main), no built-in digests, the readiness URL; since 98427dc the product's
+            # draft gives LiteLLM's health checks 600 s (owner decision 2026-11-23 23:28; the host's installed entry
+            # was made with the earlier 300 s proposal).
+            proposed = sorted({h.get('timeout_seconds') for v in app.get('variants') or []
+                               for h in (v.get('entry') or {}).get('health') or [] if isinstance(h, dict)}, key=str)
+            ev.check("setup: catalog-suggest proposes 600 s for LiteLLM's health checks in every variant (owner "
+                     'decision 2026-11-23; other apps keep 300/180 s)', proposed == [600], {'timeouts': proposed})
             entry = json.loads(json.dumps(variant.get('entry'))) if isinstance(variant.get('entry'), dict) else None
             if entry is not None:
                 # The package's production entry (tests/backup/test_suggest.py fixture, facts CAT): no built-in
                 # digests, GET /health/readiness (the draft proposes the Quadlet's liveness URL), both config files.
                 entry['verify'] = []
-                # Lab difference: up to 600 s (catalog maximum) on the loaded lab host; production allows 300 s.
+                # 600 s = the product's proposal for LiteLLM (catalog maximum).
                 entry['health'] = [{'type': 'http', 'url': 'http://127.0.0.1:4000/health/readiness', 'expect_status': 200,
                                     'timeout_seconds': 600}]
                 files = [c for c in entry.get('config_files') or [] if c.get('path') != '.config/litellm/litellm.env']
@@ -565,6 +587,7 @@ class Run:
                  and sorted(s['name'] for s in entry.get('secrets') or []) == LITELLM_SECRETS
                  and any('/health/readiness' in h.get('url', '') for h in entry.get('health') or []),
                  {'units': entry.get('units'), 'postgres': pg, 'secrets': [s['name'] for s in entry.get('secrets') or []]})
+        self.add_stub()
         key = drv.ok('key-init', ev=ev)
         ev.check('setup: a device key exists (key-init)', bool((key.get('key') or {}).get('key_id')),
                  {'created': key.get('created')})
@@ -575,6 +598,37 @@ class Run:
         ev.check("setup: this device's own data seeded with its master key (credential, model, key with a chosen value)",
                  sd.get('credential') == 200 and sd.get('model') == 200 and sd.get('key') == 200
                  and sd.get('key_echo_matches') is True, sd)
+
+    def add_stub(self):
+        """The never-started stub client (STUB_*): its Quadlet file and its catalog entry (removed at cleanup)."""
+        ev = self.ev
+        write_owner_file(f'{QUADLET_DIR_REL}/{STUB_FILE}', STUB_QUADLET.encode(), '0644')
+        self.stub_file = True
+        status = drv.ok('status', ev=ev)
+        if STUB_ID not in {a['id'] for a in status.get('apps') or []}:
+            preview = drv.ok('catalog-install', {'entry': STUB_ENTRY}, ev=ev, timeout=300)
+            if preview.get('valid') is True:
+                drv.ok('catalog-install', {'entry': STUB_ENTRY, 'confirm': True,
+                                           'expected_sha256': preview.get('expected_sha256')}, ev=ev, timeout=300)
+        self.stub_entry = STUB_ID in {a['id'] for a in drv.ok('status', ev=ev).get('apps') or []}
+        ev.check(f'setup: the lab stub {STUB_ID} (never started; its Quadlet points at LiteLLM) is in the catalog',
+                 self.stub_entry and owner_exists(f'{QUADLET_DIR_REL}/{STUB_FILE}'), {'entry': self.stub_entry})
+
+    def remove_stub(self):
+        ev = self.ev
+        rc = 0
+        if self.stub_entry:
+            preview = drv.ok('catalog-remove', {'id': STUB_ID}, ev=ev)
+            rc, _reply = drv.helper('catalog-remove', {'id': STUB_ID, 'confirm': True,
+                                                       'expected_sha256': preview.get('expected_sha256')})
+            self.stub_entry = rc != 0
+        if self.stub_file:
+            drv.owner('rm', '-f', f'/home/appowner/{QUADLET_DIR_REL}/{STUB_FILE}', timeout=60)
+            drv.owner('systemctl', '--user', 'daemon-reload', timeout=120)
+            self.stub_file = owner_exists(f'{QUADLET_DIR_REL}/{STUB_FILE}')
+        apps = {a['id'] for a in drv.ok('status', ev=ev).get('apps') or []}
+        ev.check(f'cleanup: the lab stub {STUB_ID} is gone (catalog entry and Quadlet file)',
+                 rc == 0 and STUB_ID not in apps and not self.stub_file, {'rc': rc})
 
     def deploy_litellm(self):
         """The package in dev-d (see the module docstring), skipped when its units already run (a re-run)."""
@@ -738,8 +792,11 @@ class Run:
                  all(section.get(k) == v for k, v in EXPECTED.items()) and section.get('keys', 0) >= 1,
                  {k: section.get(k) for k in ('users', 'teams', 'models', 'keys', 'credentials', 'chatgpt_accounts')})
         self.key_users = section.get('key_users')
-        ev.check("check: key_users derived from dev-d's real catalog and configuration (option A reminder)",
-                 isinstance(self.key_users, list), {'key_users': self.key_users, 'warnings': result.get('warnings')})
+        warned = [w for w in result.get('warnings') or [] if isinstance(w, str) and '目前使用這台 LiteLLM 的金鑰' in w]
+        ev.check(f"check: key_users derived from dev-d's real catalog and configuration names the lab stub {STUB_ID} "
+                 '(option A reminder in the check warnings)',
+                 isinstance(self.key_users, list) and STUB_ID in self.key_users and len(warned) == 1
+                 and STUB_ID in warned[0], {'key_users': self.key_users, 'warned': len(warned)})
         leftovers = drv.labelled()
         ev.check('check: no throwaway container, volume or network left', not any(leftovers.values()), leftovers)
 
@@ -766,6 +823,11 @@ class Run:
                  imp.get('apps') == ['litellm'] and 'litellm-salt-key' in notes and '資料庫結構' in notes
                  and any('Woow LiteLLM MCP Server' in line for line in (imp.get('reminders_by_app') or {}).get('litellm')
                          or []), {k: imp.get(k) for k in ('apps', 'test_mode')})
+        reminders = (imp.get('reminders_by_app') or {}).get('litellm') or []
+        ev.check(f'convert: option A: the import notes and the after-import reminders name the lab stub {STUB_ID} '
+                 '(its LiteLLM key must be set again)',
+                 any(STUB_ID in n and '目前使用這台 LiteLLM 的金鑰' in n for n in imp.get('notes') or [])
+                 and any(STUB_ID in r and '重新設定 LiteLLM 金鑰' in r for r in reminders), {'reminders': len(reminders)})
         log = '\n'.join(str(line) for line in (drv.ok('job-status', {'job_id': job['id']}, ev=ev).get('log') or []))
         ev.save('convert-log.txt', log)
         ev.check("convert: the job log names the product steps (PG 18 rows only, this device's schema in one snapshot, "
@@ -945,6 +1007,8 @@ class Run:
         if self.created_store:
             rc, _reply = drv.helper('ha-delete', {'ha_backup_id': self.created_store, 'confirm': True})
             ev.check('cleanup: the HA store record this run created is deleted', rc == 0, self.created_store)
+        if self.stub_entry or self.stub_file:
+            self.remove_stub()
         if self.installed_entry:
             preview = drv.ok('catalog-remove', {'id': 'litellm'}, ev=ev)
             rc, reply = drv.helper('catalog-remove', {'id': 'litellm', 'confirm': True,
