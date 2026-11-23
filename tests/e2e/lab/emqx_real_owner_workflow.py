@@ -57,6 +57,17 @@ MQTT_REASONS=frozenset(('input','setup','run','cleanup','protocol','exit_shape',
     'puback_other','payload_mismatch')) | frozenset('exit_'+str(c) for c in MQTT_EXITS) | frozenset(
     kind+'_'+str(c) for kind in ('connack','suback','puback') for c in MQTT_CODES)
 PHASES=PHASES | frozenset('mqtt_'+step+'_'+reason for step in MQTT_STEPS for reason in MQTT_REASONS)
+from emqx_post_restore_values import CAPTURE_STAGES, PostCaptureRefused
+QUIESCE_STAGES=('none',*(side+'_'+step for side in ('enter','exit') for step in ('inspect','clients')),
+    'enter_suspend','enter_ticker','exit_ticker')
+PHASES=PHASES | frozenset(('post_capture_final',*('post_capture_'+s for s in CAPTURE_STAGES),
+    *('post_capture_'+s for s in QUIESCE_STAGES)))
+_QUIESCE_STATE=ContextVar('emqx_private_quiesce_diagnostic',default='none')
+# Wall-clock bounds only (contended 4-CPU lab host, load ~27 on 2026-11-23);
+# every identity/isolation/no-client/ticker/value check is unchanged.
+INSPECT_SECONDS=20
+EVAL_SECONDS=60
+READY_SECONDS=180
 # Fixed product restore outcome labels. Private product text/IDs never escape:
 # BackupError codes map to a fixed set and rollback problems to fixed phrases.
 RESTORE_PROBLEMS=('health','verify','writers','start','unexpected','no_pending','manifest','other')
@@ -237,7 +248,7 @@ def flow_context(provision,root,job):
 def _inspect(provision):
     from emqx_semantic_readers import _pairs
     r,f=provision.runner,provision.fixture
-    response=r.podman('container','inspect',f.prefix,timeout=5,max_output=65536)
+    response=r.podman('container','inspect',f.prefix,timeout=INSPECT_SECONDS,max_output=65536)
     raw=response.stdout
     if response.returncode or type(raw) is not bytes or not 0<len(raw)<=65536: raise ValueError()
     rows=json.loads(raw,object_pairs_hook=_pairs)
@@ -248,11 +259,17 @@ def _inspect(provision):
 
 
 def _ready(provision):
-    deadline=time.monotonic()+120
+    from woowbackup.errors import BackupError
+    deadline=time.monotonic()+READY_SECONDS
     while time.monotonic()<deadline:
         _inspect(provision)
-        response=provision.runner.podman('exec',provision.fixture.prefix,'emqx','ctl','status',
-            timeout=10,max_output=65536,check=False)
+        try:
+            response=provision.runner.podman('exec',provision.fixture.prefix,'emqx','ctl','status',
+                timeout=EVAL_SECONDS,max_output=65536,check=False)
+        except BackupError:
+            # A runner timeout of one status probe is "not ready yet"; identity and
+            # isolation (_inspect) still refuse at once and the deadline still holds.
+            time.sleep(1);continue
         if response.returncode==0 and b'is started' in response.stdout:return
         time.sleep(1)
     raise ValueError()
@@ -263,26 +280,32 @@ def fixture_quiescence(provision):
     """Limited same-fixture no-client/ticker exclusion; no completeness assertion."""
     from woowbackup.ha_emqx import SUSPEND_SYS_EXPR,TICKER_STATUS_EXPR
     r,f=provision.runner,provision.fixture
+    _QUIESCE_STATE.set('enter_inspect')
     before=_inspect(provision)
     def evaluate(expr):
-        response=r.podman('exec',f.prefix,'emqx','eval',expr,timeout=15,max_output=65536)
+        response=r.podman('exec',f.prefix,'emqx','eval',expr,timeout=EVAL_SECONDS,max_output=65536)
         if response.returncode or type(response.stdout) is not bytes or len(response.stdout)>65536:
             raise ValueError()
         return response.stdout.strip()
-    def stable():
+    def stable(side):
+        _QUIESCE_STATE.set(side+'_inspect')
         after=_inspect(provision)
         if before['Id']!=after['Id']: raise ValueError()
+        _QUIESCE_STATE.set(side+'_clients')
         if evaluate('[] = emqx_cm:all_channels(), io:format("OWNERNOCLIENTS").')!=b'OWNERNOCLIENTSok':
             raise ValueError()
-    stable()
+    stable('enter')
+    _QUIESCE_STATE.set('enter_suspend')
     match=re.fullmatch(rb'WOOWSYS:(<[0-9]+\.[0-9]+\.[0-9]+>):suspended\s*(?:ok\s*)?',
                       evaluate(SUSPEND_SYS_EXPR))
     if match is None: raise ValueError()
     expression=TICKER_STATUS_EXPR.replace('{pid}',match[1].decode('ascii'))
+    _QUIESCE_STATE.set('enter_ticker')
     if evaluate(expression)!=b'ticker_unchanged': raise ValueError()
     try: yield
     finally:
-        stable()
+        stable('exit')
+        _QUIESCE_STATE.set('exit_ticker')
         if evaluate(expression)!=b'ticker_unchanged': raise ValueError()
 
 
@@ -390,11 +413,17 @@ def _post_activity_capture(provision,prior_registry):
     if (owner is not provision or type(cid) is not str or re.fullmatch('[0-9a-f]{64}',cid) is None
             or record['cid'] is None):
         raise RealOwnerRefused('post_capture_identity')
+    token=_QUIESCE_STATE.set('none')
     try:
         return collect_post_restore_values(prior_registry=prior_registry,provision=provision,
             expected_container_id=cid,quiesce=lambda:fixture_quiescence(provision))
-    except BaseException:
-        raise RealOwnerRefused('post_capture') from None
+    except BaseException as error:
+        stage=getattr(error,'stage',None) if type(error) is PostCaptureRefused else None
+        if stage in ('quiesce_enter','quiesce_exit'):label='post_capture_'+_QUIESCE_STATE.get()
+        elif stage is not None:label='post_capture_'+stage
+        else:label='post_capture'
+        raise RealOwnerRefused(label if label in PHASES else 'post_capture') from None
+    finally:_QUIESCE_STATE.reset(token)
 
 
 def _full_restore_budget():
@@ -831,7 +860,7 @@ def final_private_receipt(registry):
     from emqx_post_restore_values import PostRestoreValues
     from emqx_private_evidence import names_receipt, SOURCE_NAMES
     if type(registry) is not PostRestoreValues or len(registry._generations) != 3:
-        raise RealOwnerRefused('post_capture')
+        raise RealOwnerRefused('post_capture_final')
     raw=names_receipt('restore','passed',SOURCE_NAMES)
     registry.scan(raw)
     return raw

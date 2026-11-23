@@ -97,6 +97,37 @@ class PostNativeTests(unittest.TestCase):
         with self.assertRaisesRegex(PrivateFailure,'^post-native-values-refused$'):
             self.collect(**changes)
 
+    def stage_of(self, **changes):
+        with self.assertRaisesRegex(PrivateFailure,'^post-native-values-refused$') as caught:
+            self.collect(**changes)
+        self.assertIs(type(caught.exception),m.PostCaptureRefused)
+        self.assertIn(caught.exception.stage,m.CAPTURE_STAGES)
+        return caught.exception.stage
+
+    def test_refusal_names_fixed_collector_stage_only(self):
+        @contextmanager
+        def enter_fails():
+            raise ValueError('generated-private-enter')
+            yield
+        @contextmanager
+        def exit_fails():
+            yield
+            raise ValueError('generated-private-exit')
+        self.assertEqual(self.stage_of(quiesce=enter_fails),'quiesce_enter')
+        self.assertEqual(self.stage_of(quiesce=exit_fails),'quiesce_exit')
+        self.assertEqual(self.stage_of(expected_container_id='generated-private-cid'),'input')
+        original=self.podman
+        def failing_exec(*args,**kwargs):
+            if args[:1]==('exec',):return SimpleNamespace(returncode=1,stdout=b'generated-private-output')
+            return original(*args,**kwargs)
+        with patch.object(self,'podman',side_effect=failing_exec):
+            self.runner.podman=self.podman
+            self.assertEqual(self.stage_of(),'exec')
+        self.runner.podman=self.podman
+        def bad_wire(doc):doc['contract']='generated-unknown-contract'
+        self.edit=bad_wire
+        self.assertEqual(self.stage_of(),'decode')
+
     def test_populated_api_rules_connectors_and_unexecuted_refs_are_values_only(self):
         with patch('emqx_owner_target._absence_profile',side_effect=AssertionError('no initial profile')), \
              patch('emqx_owner_target._build_checked',side_effect=AssertionError('no business projection')):

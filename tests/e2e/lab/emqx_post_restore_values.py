@@ -27,6 +27,15 @@ from emqx_runtime_workflow import CombinedRegistry
 from emqx_semantic_readers import Values, _pairs
 
 MAX_CAPTURES = 4
+# Fixed collector stages only; the private failure text never escapes.
+CAPTURE_STAGES = ('input', 'limit', 'quiesce_enter', 'identity_before', 'exec', 'decode',
+                  'identity_after', 'prior_scan', 'quiesce_exit', 'record', 'record_native')
+
+
+class PostCaptureRefused(PrivateFailure):
+    def __init__(self, stage):
+        self.stage = stage if stage in CAPTURE_STAGES else 'input'
+        super().__init__('post-native-values-refused')
 
 
 class PostRestoreValues:
@@ -150,6 +159,7 @@ def collect_post_restore_values(*, prior_registry, provision, expected_container
     enforces bounded private subprocess output/timeouts. Cleanup must succeed
     before return. The old file token's bound CID must remain untouched.
     """
+    stage = 'input'
     try:
         if (type(prior_registry) not in (CombinedRegistry, PostRestoreValues)
                 or type(provision) is not OwnerProvision or not isinstance(provision.runner, LabOwnerRunner)
@@ -163,11 +173,15 @@ def collect_post_restore_values(*, prior_registry, provision, expected_container
         generations = prior_registry._generations if type(prior_registry) is PostRestoreValues else ()
         previous = (prior_registry._preflight_generations if type(prior_registry) is PostRestoreValues else tuple(
             p.generation for p in prior_registry._persisted if isinstance(p, PersistedValues) and p.scope == 'target'))
+        stage = 'limit'
         if len(generations) >= MAX_CAPTURES:
             raise ValueError()
+        stage = 'prior_scan'
         prior_registry.scan(b'')
         result = None
+        stage = 'quiesce_enter'
         with quiesce():
+            stage = 'identity_before'
             before = _runtime_identity(provision, expected_container_id)
             generation = uuid.uuid4().hex
             if generation in generations + previous:
@@ -175,22 +189,29 @@ def collect_post_restore_values(*, prior_registry, provision, expected_container
             expression = ' '.join(line.strip() for line in EXPRESSION.read_text().splitlines()
                                   if line.strip() and not line.lstrip().startswith('%'))
             expression = expression.replace('__OWNER_NONCE__', generation)
+            stage = 'exec'
             output = provision.runner.podman('exec', expected_container_id, 'emqx', 'eval', expression,
                 timeout=30, max_output=MAX_WIRE, check=False)
             if output.returncode:
                 raise ValueError()
+            stage = 'decode'
             companion = _native_values(output.stdout, generation)
+            stage = 'identity_after'
             if before != _runtime_identity(provision, expected_container_id):
                 raise ValueError()
             if _record(provision.file_capability)[0] is not record or record['cid'] != old_cid:
                 raise ValueError()
+            stage = 'prior_scan'
             prior_registry.scan(b'')
             result = PostRestoreValues(prior_registry, companion, generations+(generation,), previous)
+            stage = 'quiesce_exit'
+        stage = 'record'
         if _record(provision.file_capability)[0] is not record or record['cid'] != old_cid:
             raise ValueError()
         from emqx_native_object_integrity import _record_native
+        stage = 'record_native'
         return _record_native(result,output.stdout,generation,provision,expected_container_id,before)
     except (KeyboardInterrupt, SystemExit):
         raise PrivateFailure('post-native-values-cancelled') from None
     except Exception:
-        raise PrivateFailure('post-native-values-refused') from None
+        raise PostCaptureRefused(stage) from None

@@ -236,6 +236,48 @@ class FoundationTests(unittest.TestCase):
         self.assertEqual(self.second_restore_refusal(
             rolled,first=flows.RolledBack(BackupError('job-failed','generated'),{'rolled_back':True})),'restore_rolled_back')
 
+    def test_post_capture_refusal_names_fixed_collector_and_quiescence_stage(self):
+        import emqx_post_restore_values as post
+        current={'Id':'a'*64}
+        def collector(stage,quiesce_state=None):
+            def collect(**kwargs):
+                if quiesce_state is not None:m._QUIESCE_STATE.set(quiesce_state)
+                raise post.PostCaptureRefused(stage)
+            return collect
+        cases=((collector('exec'),'post_capture_exec'),(collector('decode'),'post_capture_decode'),
+               (collector('quiesce_enter','enter_clients'),'post_capture_enter_clients'),
+               (collector('quiesce_exit','exit_ticker'),'post_capture_exit_ticker'),
+               (collector('quiesce_enter','generated-private'),'post_capture'),
+               (ValueError('generated-private'),'post_capture'))
+        for effect,phase in cases:
+            with self.subTest(phase=phase), patch.object(m,'_inspect',return_value=current), \
+                 patch.object(files,'_record',return_value=({'cid':'a'*64},self.provision)), \
+                 patch.object(post,'collect_post_restore_values',side_effect=effect):
+                with self.assertRaises(m.RealOwnerRefused) as caught:
+                    m._post_activity_capture(self.provision,object())
+                self.assertEqual(caught.exception.phase,phase)
+                self.assertEqual(m._QUIESCE_STATE.get(),'none')
+        for phase in ('rollback_post_capture_exec','restart_post_capture_enter_clients','post_capture_final'):
+            self.assertIn(phase,m.PHASES)
+        with self.assertRaises(m.RealOwnerRefused) as caught:m.final_private_receipt(object())
+        self.assertEqual(caught.exception.phase,'post_capture_final')
+
+    def test_ready_retries_runner_timeout_but_not_identity_refusal(self):
+        calls=[]
+        def podman(*args,**kwargs):
+            calls.append(args)
+            if len(calls)==1:raise BackupError('job-failed','generated-private timeout')
+            return SimpleNamespace(returncode=0,stdout=b'Node is started')
+        with patch.object(m,'_inspect') as inspect,patch.object(self.runner,'podman',side_effect=podman), \
+             patch.object(m.time,'sleep'):
+            m._ready(self.provision)
+        self.assertEqual(len(calls),2);self.assertEqual(inspect.call_count,2)
+        self.assertEqual(calls[0][:4],('exec',self.fixture.prefix,'emqx','ctl'))
+        with patch.object(m,'_inspect',side_effect=ValueError('generated-isolation')), \
+             patch.object(self.runner,'podman') as never:
+            with self.assertRaises(ValueError):m._ready(self.provision)
+        never.assert_not_called()
+
     def test_restore_refusal_cannot_be_reported_as_rollback_success(self):
         ctx,app,state=self.context()
         with patch.object(flows,'run_restore',return_value={'changed':False}) as restore:
