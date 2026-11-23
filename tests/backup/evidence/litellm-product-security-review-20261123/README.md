@@ -160,7 +160,7 @@ The product path answers its finding: the schema is this device's own (captured 
 only HA's rows move through a role that may only insert, the salt binding refuses a mismatch, only the declared
 `litellm-salt-key` can be replaced, and the product lane's real run on `3bde418` (attempt 4) decrypted 72/72 + 5/5
 stored values with the moved salt (0 with a random one) and put this device's own salt and data back on both the
-automatic and the manual rollback. That real proof is on `3bde418`; on the fixed tip it is pending (below).
+automatic and the manual rollback. That real proof was on `3bde418`; on the final review code (`1a83926`) the same flow passed 69/69 (iteration 2, `attempt-secreview-01.json`).
 
 ## Iteration 2 (2026-11-24): re-review of the final diff
 
@@ -354,12 +354,8 @@ dev-d isolation `true none {}`. This is the real proof of the fixed code; `comme
 
 - Kernel or container escapes; PostgreSQL 18 bugs reachable with crafted data pages (no page fuzzing).
 - The arm64 PostgreSQL 18 image (`d4e55489…`).
-- **The product's real end-to-end flow on the fixed tip** (real encrypted HA backup → check → convert into
-  PostgreSQL 17 → import → restart → rollback on dev-d, `litellm_full_flow.py`): not run on the fixed tip. The
-  changed code (HA's cluster side) ran on the real backup in the lab sandbox (`fixed-real-backup.json`, no
-  blocker); the PostgreSQL 17 side, the restore and the rollback did not change and passed on `3bde418` (lane
-  litellm-product attempt 4). dev-d was held by other lanes' real runs and the host load stayed at 45-170 this
-  evening; the product lane measured that LiteLLM's restore readiness needs a load below about 30.
+- Iteration 1's note that the real end-to-end flow had not run on the fixed tip is superseded: it ran on the final
+  code in iteration 2 (69/69 PASS, above).
 - The page was checked by reading (`backup.js` builds text nodes only, no `innerHTML`), not fuzzed.
 - LiteLLM application bugs that stored data could trigger in the proxy itself.
 - RestrictedPython escapes from a `custom_code` guardrail; SR-7 beyond the model path (the DB-merged configuration
