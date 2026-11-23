@@ -1,0 +1,23 @@
+{
+ "source_commit": "d5c40bfda65ab17dc00b26a89c4bbaf85c70c9d6",
+ "scope": "real b1 x86 HA Omnigent backup -> HA store -> internal candidate with real target discovery -> installer, restart, injected rollback; HA logins and data markers",
+ "exit": 1,
+ "elapsed_seconds": 938.6,
+ "stdout_sha256": "5e02185498b748c7715aa99760ed599f347a002f0d288fa3e913c890ad4f5105",
+ "fixed_status": [
+  "{\"held\": true, \"stage\": \"dev_d_lock\"}",
+  "{\"arch\": \"x86\", \"fixture_sha256_matches_record\": true, \"stage\": \"real_source\"}",
+  "{\"security_blocker_still_refuses\": true, \"stage\": \"public_guard\"}",
+  "{\"independently_initialised\": true, \"quadlet_units\": 3, \"stage\": \"target_deployed\", \"target_admin_login\": true}",
+  "{\"product_publish\": true, \"sha256_matches_fixture\": true, \"stage\": \"ha_store_published\"}",
+  "{\"encrypted\": true, \"internal_entry\": true, \"live_alembic\": true, \"live_info_from_running_server\": true, \"real_adapter_discovery\": true, \"real_ha_store\": true, \"server_stopped_before_schema_capture\": true, \"stage\": \"candidate_converted\", \"test_mode\": false}",
+  "{\"differ\": {}, \"equal_to_ha_plus_kept\": [\"agents\", \"comments\", \"connections\", \"conversation_items\", \"conversation_labels\", \"conversations\", \"device_grants\", \"files\", \"hosts\", \"omnigent_conversation_metadata\", \"policies\", \"preferences\", \"projects\", \"scheduled_task_runs\", \"scheduled_tasks\", \"session_permissions\", \"user_daily_cost\", \"users\"], \"stage\": \"installed_counts_before_login\"}",
+  "{\"differ\": {\"device_grants\": [0, 3]}, \"phase\": \"installed\", \"stage\": \"table_counts_differ\"}",
+  "{\"engine_log_lines\": 34, \"hits\": 0, \"journals_scanned\": 3, \"login_credential_sources\": 8, \"registered_values\": 16, \"stage\": \"secret_scan\"}",
+  "{\"complete\": true, \"private_engine_root_removed\": true, \"stage\": \"cleanup\"}",
+  "{\"containers_volumes_secrets_unchanged\": true, \"lock_seconds\": 297, \"stage\": \"inventory\"}",
+  "{\"code\": \"installed_table_counts_differ\", \"error_type\": \"RuntimeError\", \"frames\": [{\"file\": \"omnigent_real_ha.py\", \"function\": \"module\", \"line\": 674}, {\"file\": \"omnigent_real_ha.py\", \"function\": \"main\", \"line\": 664}, {\"file\": \"omnigent_real_ha.py\", \"function\": \"run\", \"line\": 559}, {\"file\": \"omnigent_real_ha.py\", \"function\": \"verify_installed\", \"line\": 383}, {\"file\": \"omnigent_real_ha.py\", \"function\": \"require\", \"line\": 82}], \"stage\": \"failed\"}"
+ ],
+ "stderr_bytes_not_published": 0,
+ "commercial_acceptance": "not-complete"
+}

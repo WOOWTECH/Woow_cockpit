@@ -374,14 +374,16 @@ def verify_installed(lab, expect, creds, phase, observed, *, target_password, pi
     require(lab.sql('SELECT version_num FROM alembic_version;').decode() == expect['alembic'], phase + '_alembic_mismatch')
     counts = table_counts(lab)
     want = dict(expect['db_counts'], users=expect['db_counts']['users'] + 1)
-    # account_tokens grow with every login above. hosts/device_grants must be HA's exactly: the placeholder runner
-    # never registers, so HA's runner rows arrive as data while this device's runner identity stays in its pi volume.
-    differ = sorted(k for k, v in want.items() if k != 'account_tokens' and counts.get(k) != v)
+    # This run's logins write account_tokens and, because they ask for a refresh grant (issue_refresh), device_grants
+    # (x86 attempt 3: device_grants 0 -> 3 after three logins). Those two may only grow; every other table must equal
+    # HA's count plus the kept account exactly. hosts stays HA's: the placeholder runner never registers.
+    grown = ('account_tokens', 'device_grants')
+    require(all(counts.get(k, -1) >= want[k] for k in grown), phase + '_ha_tokens_or_grants_missing')
+    differ = sorted(k for k, v in want.items() if k not in grown and counts.get(k) != v)
     if differ:
         # Table names and integer counts only (no row content): what differs from HA's counts plus the kept account.
         event('table_counts_differ', phase=phase, differ=printable({k: [want[k], counts.get(k)] for k in differ}))
     require(not differ, phase + '_table_counts_differ')
-    require(counts['account_tokens'] >= expect['db_counts']['account_tokens'], phase + '_ha_tokens_missing')
     cookie = lab.r.podman('exec', SERVER, 'cat', '/data/artifacts/accounts-cookie-secret', max_output=4096).stdout
     require(cookie == ha_cookie, phase + '_cookie_not_ha')
     pi = tar_files(lab.volume_bytes(PIVOL, lab.private / ('pi-' + phase + '.tar')))
@@ -553,7 +555,11 @@ def run(arch):
         want = dict(summary['db_counts'], users=summary['db_counts']['users'] + 1)
         event('installed_counts_before_login',
               equal_to_ha_plus_kept=sorted(k for k in printable(want) if fresh.get(k) == want[k]),
-              differ=printable({k: [want[k], fresh.get(k)] for k in sorted(want) if fresh.get(k) != want[k]}))
+              differ=printable({k: [want[k], fresh.get(k)] for k in sorted(want) if fresh.get(k) != want[k]}),
+              secret_named_tables_equal=all(fresh.get(k) == want[k] for k in want if k not in printable(want)))
+        # Data integrity of the installed candidate: EVERY table (secret-named ones compared, not printed) holds
+        # exactly HA's rows plus this device's kept account before anything else touches the database.
+        require(all(fresh.get(k) == want[k] for k in want), 'installed_counts_before_login_differ')
         installer_meta = deps.storage.get(result['safety_backup_id'])
         require(installer_meta['type'] == 'safety' and installer_meta['encrypted'], 'safety_not_encrypted')
         verify_installed(lab, summary, creds, 'installed', observed, target_password=target_password,
