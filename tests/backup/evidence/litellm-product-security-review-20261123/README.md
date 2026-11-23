@@ -185,7 +185,7 @@ reviewer's own code (the product lane was waiting for a dev-d run); an independe
   hang: `O_NONBLOCK` + `fstat`), 2 MiB (too large), 100000 nested arrays, invalid UTF-8, `%h/../..`, `/etc`, an
   option-like volume name: not named or never read. The canary values were found nowhere (return values,
   `key_users_line`, the job log, the harness output); the only Podman call was `volume inspect`
-  (`pi-models-215fdf0.json`, `fixed2-pi-models.json`). Nit: `models_use_litellm` lets `RecursionError` escape;
+  (`pi-models-215fdf0.json`; `fixed2-pi-models.json` ran while this README had uncommitted edits, hence its `harness_tracked_changes: true`; `fixed4-pi-models.json` on the clean final `1a83926`). Nit: `models_use_litellm` lets `RecursionError` escape;
   `key_users` then skips that app (no reminder for it) — harmless. The whole file (at most 1 MiB) is parsed in
   memory; only the base URL fields are looked at and nothing is kept.
 
@@ -215,7 +215,9 @@ New sandbox cases (`litellm_sandbox_review.py`, same sandbox as above):
 Evidence: `original2-stored_variants.json`, `original2-t2_hidden_hooks.json`, `original2-t2_hidden_hooks-trusted.json`,
 `original2-t2_pgproc_edit.json` (review tip `4d7d9bf`); `fixed2-*.json` (`f2a2cb4`); `original3-stored_variants.json`
 (`f2a2cb4`, the SR-9 variant), `fixed3-*.json` (`a06dc21`) and `fixed4-*.json` (the final `1a83926`: stored variants
-with the custom secret manager, crafted operator, stored settings, the real backup); `sr7-env-ref-probe*.json` (SR-7).
+with the custom secret manager, crafted operator, stored settings, the real backup), `fixed5-stored_variants.json`
+(`1a83926` with four edge shapes: an upper-case `HTTPS://` target stays a URL; a spaced or absolute-path module target
+and a `custom_provider_map` object refuse; 20/20 variants as expected); `sr7-env-ref-probe*.json` (SR-7).
 Each file's `source` names the clean commit and the `ha_litellm.py` SHA-256 it ran with.
 
 Findings of iteration 2:
@@ -346,8 +348,10 @@ Findings of iteration 2:
 - LiteLLM application bugs that stored data could trigger in the proxy itself.
 - Iteration 2: **the product's real end-to-end flow on the fixed tip `review/litellm-secreview-fix2-20261124`**
   (dev-d, `litellm_full_flow.py`): pending — the product lane is asked to fast-forward
-  `feat/ha-import-litellm-product-20261123` to it and run its attempt 9 (its attempt 8 ran from `215fdf0`, without
-  the SR-6 refusal and this iteration's fixes). The changed code runs in the check, after `load_rows` in the
+  `feat/ha-import-litellm-product-20261123` to it and run its attempt 9. Its attempt 8 (`215fdf0`: SR-1..SR-5, the
+  Pi agent `key_users` and the search_path pin, but not the SR-6 refusal nor this iteration's fixes) passed every
+  product step and client check on the real backup (68/69; the one FAIL was dev-d's restarting headscale container
+  in the harness's container-set equality), so the unchanged parts are proven there. The changed code runs in the check, after `load_rows` in the
   conversion and in the notes; the real backup passed the HA-side check and the re-check on its staged rows in the
   sandbox (`fixed2-real-backup.json`).
 - RestrictedPython escapes from a `custom_code` guardrail; SR-7 beyond the model path (the DB-merged configuration
