@@ -165,6 +165,15 @@ class LockTests(unittest.TestCase):
         with self.assertRaises(hr.Failed):
             hr.acquire_lock()
 
+    def test_waiting_file_seen_during_an_emqx_main_run_is_stale(self):
+        hr.WAITING.touch()
+        saved = hr.emqx_main_holds_lock
+        hr.emqx_main_holds_lock = lambda: True
+        try:
+            os.close(hr.acquire_lock())
+        finally:
+            hr.emqx_main_holds_lock = saved
+
     def test_symlinked_lock_refused(self):
         target = Path(self.tmp.name) / 'elsewhere'
         target.touch()

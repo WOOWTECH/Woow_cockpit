@@ -401,6 +401,30 @@ class _Tick(Exception):
     pass
 
 
+def waiting_mtime():
+    try:
+        return WAITING.stat().st_mtime_ns
+    except FileNotFoundError:
+        return None
+
+
+def emqx_main_holds_lock():
+    """True while an emqx-main real run (run_emqx_real_owner.sh / its transport) has the lock file open. Its note says
+    the waiting file is removed when its run starts, so a file of that same age is not a request for the next turn."""
+    for proc in Path('/proc').iterdir():
+        if not proc.name.isdigit():
+            continue
+        try:
+            cmd = (proc / 'cmdline').read_bytes()
+            if b'run_emqx_real_owner.sh' not in cmd and b'emqx_real_owner_transport.py' not in cmd:
+                continue
+            if any(os.readlink(fd) == str(LOCK) for fd in (proc / 'fd').iterdir()):
+                return True
+        except OSError:
+            continue
+    return False
+
+
 def _tick(_signum, _frame):
     raise _Tick()
 
@@ -415,12 +439,16 @@ def acquire_lock():
         raise Failed('unsafe dev-d lock file')
     previous = signal.signal(signal.SIGALRM, _tick)
     started = time.monotonic()
+    stale = None   # mtime of a waiting file seen while emqx-main itself held the lock (it was not waiting then)
     try:
         while True:
             if time.monotonic() - started > LOCK_WAIT:
                 os.close(fd)
                 raise Failed('dev-d lock not acquired within 3600 s')
-            if WAITING.exists():
+            mtime = waiting_mtime()
+            if mtime is not None and emqx_main_holds_lock():
+                stale = mtime
+            if mtime is not None and mtime != stale:
                 time.sleep(5)
                 continue
             signal.alarm(30)
@@ -430,7 +458,8 @@ def acquire_lock():
                 continue   # (a tick right after the grant leaves the lock held; the next flock returns at once)
             finally:
                 signal.alarm(0)
-            if WAITING.exists():
+            mtime = waiting_mtime()
+            if mtime is not None and mtime != stale:
                 fcntl.flock(fd, fcntl.LOCK_UN)
                 time.sleep(5)
                 continue
