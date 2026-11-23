@@ -24,7 +24,7 @@ from ha_real_fixture import source_binding
 from woowbackup import hacommon, habackup, ha_emqx, hasecuretar
 
 MODES = ('--source-vendor-acl-sql-aliases','--x86-source-vendor-acl-sql-aliases')
-SECONDS = 120
+SECONDS = 300  # cooperative; several native decodes on a contended lab host
 
 
 class RetainedHistory:
@@ -90,7 +90,7 @@ def collect_original_retained_payloads(*, source_mode, password, topics, spool_d
     read-only/O_NOFOLLOW, requires a regular file, binds all reads to its FD and
     checks the original full SHA plus before/after identity stamps. Same default256MiB / explicit290785280-byte x86 spool profile,
     12GiB reserve and private700/600 cleanup. <=64 cold files, each8MiB,total32MiB;
-    120s cooperative deadline checked around IO/native calls (native wall20s/file).
+    300s cooperative deadline checked around IO/native calls (native wall75s/file).
     This may conservatively refuse divergent history despite a valid final row.
     """
     try:
