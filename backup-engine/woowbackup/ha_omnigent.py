@@ -1061,8 +1061,10 @@ def require_answers(cluster, found):
     for part, a, b in zip(('detail', 'keys', 'counts'), ha, now):
         for name in sorted(set(a) | set(b)):
             if a.get(name) != b.get(name):
-                # counts name the table and both numbers; the other answers only their name (never a value)
-                differ.append(f'{name}（HA {a.get(name)}，實際 {b.get(name)}）' if part == 'counts' else name)
+                # counts name the table and both numbers; the other answers only their name (never a value). The
+                # names are HA's (a crafted cluster chooses its answers' keys): cut, no control characters (SR-4 class)
+                shown = hacommon.names([name])
+                differ.append(f'{shown}（HA {a.get(name)}，實際 {b.get(name)}）' if part == 'counts' else shown)
     if differ:
         raise BackupError('incompatible', f'{HA_ANSWERS_DIFFER}不一致的項目：{"、".join(differ[:10])}。',
                           stage='answers')

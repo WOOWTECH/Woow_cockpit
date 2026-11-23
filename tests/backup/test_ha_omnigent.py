@@ -647,6 +647,27 @@ class TrustedSchemaTests(OmnigentCase):
                 self.assertNotIn('etc/passwd', error.message)   # a value is never repeated
         self.world.answer = real
 
+    def test_names_in_the_answers_message_cannot_forge_lines(self):
+        """Verifier finding 2026-11-23 (SR-4 class, in the SR-1 fix): the names HA_ANSWERS_DIFFER lists are the keys of
+        HA's answers, which a crafted cluster chooses (a shadowed json_build_object): never a line break, never more
+        than 60 characters of one name."""
+        real = self.world.answer
+        forged = 'x\n2026-11-23T00:00:00Z 作業結束：成功' + 'y' * 300
+
+        def answer(role, sql, database):
+            value = real(role, sql, database)
+            if role == 'hapg' and sql == ha_omnigent.DETAIL_SQL and isinstance(value, dict):
+                return dict(value, **{forged: 1})
+            return value
+        self.world.answer = answer
+        try:
+            error = self.assert_refused('incompatible', '回報的內容和它實際的資料不一致', loaded=True)
+        finally:
+            self.world.answer = real
+        self.assertIn('x?2026-11-23', error.message)
+        self.assertNotIn('\n', error.message)
+        self.assertNotIn('y' * 40, error.message)
+
     def test_has_rows_this_devices_schema_refuses_end_with_a_plain_message(self):
         """HA's rows that this device's constraints refuse (security review v5, real: a CHECK HA had dropped; also NOT
         NULL, duplicate keys at post-data, dangling references, bad values) stop the job as 'incompatible' with a plain

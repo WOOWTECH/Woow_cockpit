@@ -93,6 +93,8 @@ MUTATIONS = (
      '        if candidate in (0, *pg_ids):\n            continue\n', '', 1),
     ('M24', "HA's pg_dump uid is mapped in the owner's uid and gid maps (dev-d maps 1..55000: 65534 failed for real)",
      '        if uids is not None and (candidate not in uids or candidate not in gids):\n            continue\n', '', 1),
+    ('M25', "the names in the SR-1 message are cut and without control characters (verifier, SR-4 class)",
+     '                shown = hacommon.names([name])\n', '                shown = name\n', 1),
     ('M21', "HA-controlled names reach the job log and the page without control characters (SR-4, shared hacommon)",
      "    items = [CONTROL_RE.sub('?', str(item)[:60]) for item in items]\n",
      '    items = [str(item)[:60] for item in items]\n', 1, 'woowbackup/hacommon.py'),
