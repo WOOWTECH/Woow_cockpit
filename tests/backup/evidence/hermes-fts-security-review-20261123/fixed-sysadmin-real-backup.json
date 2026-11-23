@@ -1,0 +1,77 @@
+{
+ "mode": "failclosed",
+ "sqlite_version": "3.45.1",
+ "python": "3.12.3",
+ "euid": 0,
+ "hasqlite_sha256": "a3675569b87fbc3f09fc7a5119d956f3b40e1b3d640dbece1a869d2d0d43580c",
+ "sandbox_probe": {
+  "returncode": 0,
+  "stderr_tail": "",
+  "prefix_sha256": "73eda846d5389608dd51ce6b9d1437b0b0c98617d1f83f9cb0188dd010d17828",
+  "ids": [
+   65534,
+   65534,
+   65534,
+   65534,
+   []
+  ],
+  "root_listing": [],
+  "visible:/etc/passwd": false,
+  "visible:/proc/self/status": false,
+  "visible:/engine": false,
+  "visible:/real": false,
+  "visible:/usr/bin/python3": false,
+  "loopback_listener": "blocked errno=101",
+  "interfaces": [
+   "lo"
+  ],
+  "fork": "blocked errno=11",
+  "setuid0": "blocked errno=1",
+  "chroot_again": "blocked errno=1",
+  "rlimits": {
+   "RLIMIT_AS": [
+    2147483648,
+    2147483648
+   ],
+   "RLIMIT_CPU": [
+    60,
+    60
+   ],
+   "RLIMIT_NOFILE": [
+    64,
+    64
+   ],
+   "RLIMIT_FSIZE": [
+    67108864,
+    67108864
+   ],
+   "RLIMIT_CORE": [
+    0,
+    0
+   ],
+   "RLIMIT_NPROC": [
+    0,
+    0
+   ]
+  }
+ },
+ "real_official": {
+  "verdict": {
+   "cron.executions.db": "ok",
+   "kanban.db": "ok",
+   "response_store.db": "ok",
+   "runs_idempotency.db": "ok",
+   "shared-state.db": "ok",
+   "state.db": "ok"
+  },
+  "elapsed": 0.09,
+  "state_counts": {
+   "sessions": 5,
+   "messages": 15
+  },
+  "state_values": {
+   "hermes.schema_version": 32
+  }
+ },
+ "total_seconds": 0.3
+}

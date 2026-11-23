@@ -22,8 +22,8 @@ record of applied keys: without it the first start applies this device's hermes.
 HA's provider keys but loses the lines this device's secrets and URLs own (API_SERVER_KEY, WEBHOOK_SECRET,
 HERMES_DASHBOARD_BASIC_AUTH_*, HERMES_DASHBOARD_PUBLIC_URL, HERMES_BASE_URL, HERMES_PASEO_*). The SQLite files move
 unchanged with their WAL; the sandboxed child (hasqlite) checks each known database (`quick_check`) and reads
-`state.db`'s counts and schema version; known Hermes FTS5 layouts are allowed but their search index contents
-are not independently validated. `hermes-redis-data` is only its top folder (owned like the live one) and the
+`state.db`'s counts and schema version; known Hermes FTS5 layouts are allowed, their index structure is checked
+by quick_check in the sandbox, but an index is not compared with its messages. `hermes-redis-data` is only its top folder (owned like the live one) and the
 database `main` is a dump of the live, unused database (this device's own, unchanged). HA's /media is never moved.
 """
 import re
