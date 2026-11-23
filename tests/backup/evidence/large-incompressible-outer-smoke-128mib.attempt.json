@@ -1,0 +1,24 @@
+{
+  "name": "large-incompressible-outer-smoke-128mib",
+  "attempt": 1,
+  "command": "python3 tests/backup/bounded_incompressible_outer.py --mib 128 --scratch-parent /tmp",
+  "runner": "nice -n 10 ionice -c3",
+  "source_commit": "9e30d089e81df043ebc23148ff4a8dbc439d1653",
+  "started_utc": "2026-11-23T00:59:25+00:00",
+  "finished_utc": "2026-11-23T00:59:50+00:00",
+  "exit_code": 0,
+  "elapsed_seconds": 24.159,
+  "stdout_file": "large-incompressible-outer-smoke-128mib.stdout.json",
+  "stdout_sha256": "f721701ffb278069eff7291d829f9805f0052e5eedd0ba09fd9020b689740296",
+  "stdout_bytes": 3880,
+  "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "stderr_bytes": 0,
+  "stderr_stored": false,
+  "status_lines": [
+    "status=passed",
+    "case fixture-write: passed",
+    "case verify: passed",
+    "case flip-last-byte-in-place-verify: passed corrupt-archive"
+  ],
+  "commercial_acceptance": "not-complete"
+}

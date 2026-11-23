@@ -1,0 +1,21 @@
+{
+  "name": "large-incompressible-outer-8193mib",
+  "attempt": 2,
+  "command": "python3 tests/backup/bounded_incompressible_outer.py --mib 8193 --scratch-parent /tmp",
+  "runner": "nice -n 10 ionice -c3",
+  "source_commit": "232dd748cd05af2f987323cb1a74dda4d7213779",
+  "started_utc": "2026-11-23T01:33:46+00:00",
+  "finished_utc": "2026-11-23T01:33:46+00:00",
+  "exit_code": 3,
+  "elapsed_seconds": 0.495,
+  "stdout_file": "large-incompressible-outer-8193mib-attempt2.stdout.json",
+  "stdout_sha256": "e4c4067b5fa5804297f6f12c8bf72ffe6fe0d3baa35ab26ccf0dfd812dad13b8",
+  "stdout_bytes": 788,
+  "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "stderr_bytes": 0,
+  "stderr_stored": false,
+  "status_lines": [
+    "status=insufficient-space"
+  ],
+  "commercial_acceptance": "not-complete"
+}
