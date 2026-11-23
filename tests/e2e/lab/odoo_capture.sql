@@ -31,17 +31,20 @@ FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
 JOIN pg_attribute a ON a.attrelid=c.oid
 LEFT JOIN pg_attrdef ad ON ad.adrelid=c.oid AND ad.adnum=a.attnum
 WHERE n.nspname='public' AND c.relname IN
- ('ir_config_parameter','ir_cron','ir_cron_progress','bus_bus')
+ ('ir_config_parameter','ir_cron','ir_cron_progress','bus_bus','mail_mail','mail_message')
 AND a.attnum>0 AND NOT a.attisdropped ORDER BY c.relname,a.attnum;
 -- to_jsonb covers ALL real columns; no hard-coded list drops unknown fields.
 -- Digests are change locators, not proof of legitimate changes or secret storage.
 -- `safe` is a small plaintext projection of non-secret columns for row evidence: configuration values only for
--- the import settings keys and the bus retention (odoo_explain.PLAIN_KEYS), never bus messages or channels.
+-- the import settings keys and the bus retention (odoo_explain.PLAIN_KEYS), never bus messages or channels, never
+-- mail subjects, bodies or addresses.
 WITH rows(table_name, row_data) AS (
  SELECT 'public.ir_config_parameter',to_jsonb(t) FROM public.ir_config_parameter t
  UNION ALL SELECT 'public.ir_cron',to_jsonb(t) FROM public.ir_cron t
  UNION ALL SELECT 'public.ir_cron_progress',to_jsonb(t) FROM public.ir_cron_progress t
  UNION ALL SELECT 'public.bus_bus',to_jsonb(t) FROM public.bus_bus t
+ UNION ALL SELECT 'public.mail_mail',to_jsonb(t) FROM public.mail_mail t
+ UNION ALL SELECT 'public.mail_message',to_jsonb(t) FROM public.mail_message t
 )
 SELECT jsonb_build_object('kind','row','table',table_name,'id',row_data->'id',
  'row_sha256',encode(sha256(convert_to(row_data::text,'UTF8')),'hex'),
@@ -63,10 +66,16 @@ SELECT jsonb_build_object('kind','row','table',table_name,'id',row_data->'id',
    'remaining',row_data->'remaining','deactivate',row_data->'deactivate',
    'timed_out_counter',row_data->'timed_out_counter','create_date',row_data->'create_date',
    'write_date',row_data->'write_date')
+  WHEN 'public.mail_mail' THEN jsonb_build_object('mail_message_id',row_data->'mail_message_id',
+   'state',row_data->'state','create_date',row_data->'create_date','write_date',row_data->'write_date')
+  WHEN 'public.mail_message' THEN jsonb_build_object('model',row_data->'model','res_id',row_data->'res_id',
+   'message_type',row_data->'message_type','create_date',row_data->'create_date','write_date',row_data->'write_date')
   ELSE jsonb_build_object('create_date',row_data->'create_date') END)
 FROM rows ORDER BY table_name,(row_data->>'id')::bigint;
 SELECT jsonb_build_object('kind','count','table','public.ir_config_parameter','count',count(*)) FROM public.ir_config_parameter
 UNION ALL SELECT jsonb_build_object('kind','count','table','public.ir_cron','count',count(*)) FROM public.ir_cron
 UNION ALL SELECT jsonb_build_object('kind','count','table','public.ir_cron_progress','count',count(*)) FROM public.ir_cron_progress
-UNION ALL SELECT jsonb_build_object('kind','count','table','public.bus_bus','count',count(*)) FROM public.bus_bus;
+UNION ALL SELECT jsonb_build_object('kind','count','table','public.bus_bus','count',count(*)) FROM public.bus_bus
+UNION ALL SELECT jsonb_build_object('kind','count','table','public.mail_mail','count',count(*)) FROM public.mail_mail
+UNION ALL SELECT jsonb_build_object('kind','count','table','public.mail_message','count',count(*)) FROM public.mail_message;
 COMMIT;

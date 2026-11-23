@@ -933,7 +933,8 @@ def arm_row_capture(args):
     if proc.returncode != 0:
         raise Failed('target capture failed')
     records = [oc.loads(line) for line in proc.stdout.decode('utf-8').splitlines() if line.strip()]
-    target_tables = oc.validate(records)
+    # Only the tables the source capture holds row by row are compared row by row; the rest stay whole-table checks.
+    target_tables = {t: v for t, v in oc.validate(records).items() if t in source_tables}
     lines = '\n'.join(r['line'] for r in records if r.get('kind') == 'table_fingerprint')
     meta = next(r for r in records if r.get('kind') == 'capture_metadata')
     # snapshot_at (clock_timestamp in the first statement) bounds every commit the snapshot can see.
@@ -971,9 +972,10 @@ def arm_row_evidence(capture, source, changed):
     events = ox.explain(capture['source_tables'], capture['target_tables'], rules=('import', 'runtime'), live=live,
                         restore_start=ox.ts(STATE['restore_started_utc']),
                         captured_at=ox.ts(capture['captured_at']), cron_log_ids=log['started'])
+    rows_held = ox.row_tables(capture['source_tables'], capture['target_tables'])
     with_events = sorted({e['table'] for e in events})
-    expected = sorted(t for t in changed if t in ox.TABLES)
-    outside = sorted(t for t in changed if t not in ox.TABLES)
+    expected = sorted(t for t in changed if t in rows_held)
+    outside = sorted(t for t in changed if t not in rows_held)
     complete = with_events == expected and not binding
     explained = [t for t in expected if complete and all(e['explained'] for e in events if e['table'] == t)]
     return {'source_capture_run': capture['source_capture_run'], 'archive_sha256': capture['archive_sha256'],

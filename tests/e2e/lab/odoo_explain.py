@@ -17,12 +17,21 @@ Rules and their source (Odoo 18.0-20260926 in dev-c's image, /usr/lib/python3/di
                    default 24 h at bus.py:25), run by addons/base/models/ir_autovacuum.py:25-42 (_run_vacuum_cleaner,
                    the job base.autovacuum_job).
   bus-runtime      addons/bus/models/bus.py:106-140 (_sendone / precommit create): notifications written while Odoo runs.
-A deactivated cron (active changed), a changed progress or bus row, a changed key, any other key, any schema change
-and any row in another table stay unexplained.
+  signup-reminder  addons/auth_signup/models/res_users.py:248-276 (send_unregistered_user_reminder: internal users
+                   created exactly five days ago who never logged in -> template.send_mail(force_send=False)), run by
+                   auth_signup/data/ir_cron_data.xml (auth_signup.ir_cron_auth_signup_send_pending_user_reminder);
+                   addons/mail/models/mail_template.py:620-660 (send_mail -> mail.mail) and mail/models/mail_mail.py:30
+                   (_inherits mail.message), :47 (message_type email_outgoing), :65-71 (state outgoing): one queued
+                   mail.mail and its mail.message on res.users, written after the restore by that job.
+A deactivated cron (active changed), a changed progress or bus row, a changed key, any other key, any schema change,
+any other mail row and any row in another table stay unexplained. The mail tables are explained only when both
+captures hold them row by row (otherwise they are compared as whole tables like every other table).
 """
 from datetime import datetime, timedelta, timezone
 
 TABLES = ('public.bus_bus', 'public.ir_config_parameter', 'public.ir_cron', 'public.ir_cron_progress')
+MAIL_TABLES = ('public.mail_mail', 'public.mail_message')
+SIGNUP_REMINDER = 'auth_signup.ir_cron_auth_signup_send_pending_user_reminder'
 SETTINGS_KEYS = ('web.base.url', 'web.base.url.freeze', 'woow_paas_platform.upgrade_done',
                  'woow_paas_platform.upgrade_attempt')
 # Keys whose value the capture may show in plain text (none of them is a credential).
@@ -31,7 +40,20 @@ SCHEDULER_COLUMNS = frozenset({'nextcall', 'lastcall', 'failure_count', 'first_f
 AUTOVACUUM = 'base.autovacuum_job'
 BUS_RETENTION = timedelta(hours=24)       # bus.py:25 DEFAULT_GC_RETENTION_SECONDS
 PROGRESS_RETENTION = timedelta(weeks=1)   # ir_cron.py:784
-RULES = ('import-settings', 'cron-schedule', 'cron-progress', 'progress-gc', 'bus-gc', 'bus-runtime')
+RULES = ('import-settings', 'cron-schedule', 'cron-progress', 'progress-gc', 'bus-gc', 'bus-runtime',
+         'signup-reminder')
+
+
+def row_tables(source, target):
+    """Tables both captures hold row by row: the four core tables, plus the mail tables when both have them."""
+    if not set(TABLES) <= set(source) & set(target):
+        raise ValueError('core tables missing')
+    if set(source) != set(target):
+        raise ValueError('captures hold different tables')
+    unknown = set(source) - set(TABLES) - set(MAIL_TABLES)
+    if unknown or (set(source) & set(MAIL_TABLES) and not set(MAIL_TABLES) <= set(source)):
+        raise ValueError('unexpected row tables')
+    return tuple(sorted(source))
 
 
 def ts(value):
@@ -48,7 +70,7 @@ def ts(value):
 
 def _events(source, target):
     out = []
-    for table in TABLES:
+    for table in row_tables(source, target):
         a, b = source[table], target[table]
         if a['schema'] != b['schema']:
             out.append({'table': table, 'id': None, 'kind': 'schema', 'columns': [], 'before': None, 'after': None})
@@ -106,7 +128,7 @@ def explain(source, target, *, rules, restore_start=None, captured_at=None, live
     if 'import' in rules and live is None:
         raise ValueError('import rules need the live values')
     events = _events(source, target)
-    by_table = {t: [e for e in events if e['table'] == t] for t in TABLES}
+    by_table = {t: [e for e in events if e['table'] == t] for t in TABLES + MAIL_TABLES}
     logged = set(cron_log_ids or ())
     ran = set()
     target_crons = target['public.ir_cron']['rows']
@@ -181,6 +203,25 @@ def explain(source, target, *, rules, restore_start=None, captured_at=None, live
                 events.append({'table': 'public.bus_bus', 'id': int(ident), 'kind': 'kept',
                                'columns': [], 'before': None, 'after': row['safe'], 'rule': None, 'explained': False,
                                'why': 'old notification survived an autovacuum run'})
+    reminder_ran = any(target_crons[str(i)]['safe'].get('xmlid') == SIGNUP_REMINDER for i in ran
+                       if str(i) in target_crons)
+    reminders = set()
+    for event in by_table['public.mail_message']:
+        after = event['after'] or {}
+        created = ts(after.get('create_date')) if event['kind'] == 'added' else None
+        ok = ('runtime' in rules and reminder_ran and created and restore_start <= created <= captured_at
+              and after.get('model') == 'res.users' and after.get('message_type') == 'email_outgoing')
+        if ok:
+            reminders.add(event['id'])
+        mark(event, 'signup-reminder' if ok else None, 'reminder message written by the signup reminder job' if ok
+             else 'mail message not written by the signup reminder job after the restore')
+    for event in by_table['public.mail_mail']:
+        after = event['after'] or {}
+        created = ts(after.get('create_date')) if event['kind'] == 'added' else None
+        ok = ('runtime' in rules and created and restore_start <= created <= captured_at
+              and after.get('mail_message_id') in reminders and after.get('state') == 'outgoing')
+        mark(event, 'signup-reminder' if ok else None, 'queued reminder mail of that message' if ok
+             else 'mail not a queued reminder of an explained message')
     for event in by_table['public.ir_config_parameter']:
         if 'import' not in rules:
             mark(event, None, 'no import between these captures')
@@ -199,7 +240,9 @@ def public_event(event):
     keep = {'public.ir_config_parameter': ('key', 'value', 'write_date'),
             'public.ir_cron': ('xmlid', 'cron_name', 'nextcall', 'lastcall', 'failure_count', 'first_failure_date'),
             'public.ir_cron_progress': ('cron_id', 'create_date', 'done', 'remaining', 'timed_out_counter'),
-            'public.bus_bus': ('create_date',)}.get(event['table'], ())
+            'public.bus_bus': ('create_date',),
+            'public.mail_message': ('model', 'res_id', 'message_type', 'create_date'),
+            'public.mail_mail': ('mail_message_id', 'state', 'create_date')}.get(event['table'], ())
     for side in ('before', 'after'):
         values = event.get(side) or {}
         shown = {k: values.get(k) for k in keep if k in values}

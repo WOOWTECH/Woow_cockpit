@@ -228,6 +228,61 @@ class ExplainTests(unittest.TestCase):
         dst['public.bus_bus']['rows'].clear()
         self.assertTrue(unexplained(explain(src, dst, log=(1,))))
 
+    def with_mail(self, caps):
+        caps = copy.deepcopy(caps)
+        caps['public.mail_message'] = table(row(id=1, model='res.partner', res_id=3, message_type='comment',
+                                                create_date=OLD, write_date=OLD))
+        caps['public.mail_mail'] = table(row(id=1, mail_message_id=1, state='sent', create_date=OLD, write_date=OLD))
+        caps['public.ir_cron']['rows']['12'] = cron(12, x.SIGNUP_REMINDER, '2026-11-20T01:00:00', None)
+        return caps
+
+    def reminder(self, caps, created='2026-11-23T02:01:10', model='res.users', state='outgoing', kind='email_outgoing'):
+        caps['public.mail_message']['rows']['2'] = row(id=2, model=model, res_id=2, message_type=kind,
+                                                       create_date=created, write_date=created)
+        caps['public.mail_mail']['rows']['2'] = row(id=2, mail_message_id=2, state=state, create_date=created,
+                                                    write_date=created)
+
+    def test_signup_reminder_mail_explained(self):
+        src = self.with_mail(source())
+        dst = copy.deepcopy(src)
+        ran(dst, 12)
+        dst['public.ir_cron_progress']['rows']['9'] = progress(9, 12, '2026-11-23T02:01:09')
+        self.reminder(dst)
+        events = explain(src, dst, log=(12,))
+        self.assertEqual(unexplained(events), [])
+        self.assertEqual(sorted(e['rule'] for e in events if e['table'].startswith('public.mail')),
+                         ['signup-reminder', 'signup-reminder'])
+
+    def test_other_mail_rows_stay_unexplained(self):
+        src = self.with_mail(source())
+        for change in ({'model': 'res.partner'}, {'state': 'sent'}, {'kind': 'comment'},
+                       {'created': '2026-11-23T01:00:00'}):
+            with self.subTest(change=change):
+                dst = copy.deepcopy(src)
+                ran(dst, 12)
+                self.reminder(dst, **change)
+                self.assertTrue(unexplained(explain(src, dst, log=(12,))))
+        dst = copy.deepcopy(src)
+        self.reminder(dst)
+        self.assertTrue(unexplained(explain(src, dst, log=())), 'the reminder job did not run')
+        dst = copy.deepcopy(src)
+        dst['public.mail_mail']['rows']['1'] = row(id=1, mail_message_id=1, state='exception', create_date=OLD,
+                                                  write_date='2026-11-23T02:01:00')
+        self.assertTrue(unexplained(explain(src, dst, log=(12,))), 'existing mail rows never change')
+        dst = copy.deepcopy(src)
+        del dst['public.mail_message']['rows']['1']
+        self.assertTrue(unexplained(explain(src, dst, log=(12,))), 'mail rows never disappear')
+
+    def test_row_tables_must_match(self):
+        src = self.with_mail(source())
+        with self.assertRaises(ValueError):
+            explain(src, source())
+        half = copy.deepcopy(src)
+        del half['public.mail_mail']
+        with self.assertRaises(ValueError):
+            explain(half, half)
+        self.assertEqual(x.row_tables(src, src), tuple(sorted(src)))
+
     def test_schema_change_never_explained(self):
         dst = source()
         dst['public.bus_bus']['schema'] = dict(dst['public.bus_bus']['schema'], extra={'position': 9})

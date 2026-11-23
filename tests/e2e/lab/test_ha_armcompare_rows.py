@@ -56,7 +56,7 @@ def capture(tables, prints, database, captured_at='2026-11-23T02:05:00+00:00'):
                 'captured_at': captured_at}]
     records += [{'kind': 'table_fingerprint', 'line': f'{t} {c} {m}'} for t, (c, m) in sorted(prints.items())]
     for table, rows in tables.items():
-        columns = sorted({k for r in source_rows()[table] for k in r})   # the same schema on both sides
+        columns = sorted({k for r in source_rows().get(table, rows) for k in r} | {'id'})   # same schema both sides
         records += [{'kind': 'column', 'table': 'public.' + table, 'name': c, 'position': i + 1, 'type': 'text',
                      'not_null': c == 'id', 'primary_key': c == 'id', 'identity': '', 'generated': '',
                      'collation': None, 'default_sha256': None} for i, c in enumerate(columns)]
@@ -96,8 +96,8 @@ def target_rows():
 
 
 def prints(changed=()):
-    names = list(FOUR) + ['res_partner', 'woow_import_probe', 'res_partner_category', 'res_country'] + \
-        [f'table_{i}' for i in range(197)]
+    names = list(FOUR) + ['res_partner', 'woow_import_probe', 'res_partner_category', 'res_country',
+                          'mail_mail', 'mail_message'] + [f'table_{i}' for i in range(195)]
     out = {f'public.{n}': ('15', 'a' * 32) for n in names}
     for name in changed:
         out[name] = ('16', 'b' * 32)
@@ -204,6 +204,19 @@ class RowEvidenceTests(unittest.TestCase):
         passed, ev = self.run_compare()
         self.assertFalse(passed)
         self.assertEqual(ev.saved['arm-compare.json']['status'], 'invalid_input')
+
+    def test_mail_rows_of_a_newer_target_capture_stay_whole_table_checks(self):
+        rows, values = self.target
+        rows['mail_mail'] = [{'id': 1, 'mail_message_id': 1, 'state': 'outgoing', 'create_date': 'x'}]
+        rows['mail_message'] = [{'id': 1, 'model': 'res.users', 'res_id': 2, 'message_type': 'email_outgoing',
+                                 'create_date': 'x'}]
+        passed, ev = self.run_compare()
+        self.assertTrue(passed, ev.checks)   # the source capture has no mail rows: equal whole tables suffice
+        values['public.mail_mail'] = ('16', 'b' * 32)
+        passed, ev = self.run_compare()
+        self.assertFalse(passed)
+        self.assertEqual(ev.saved['arm-compare.json']['row_evidence']['tables_outside_row_evidence'],
+                         ['public.mail_mail'])
 
     def test_rows_and_fingerprints_must_agree(self):
         rows, values = self.target

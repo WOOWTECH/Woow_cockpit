@@ -31,9 +31,32 @@ def wire(data):
     return b'\n'.join(m.encoded(r) for r in data)
 
 
+def records_v2(tables):
+    result = [{'kind': 'capture_metadata', 'schema_version': 2, 'database': 'fixture', 'other_clients': 0}]
+    result += [{'kind': 'table_fingerprint', 'line': f'{t} 1 ' + 'c' * 32} for t in sorted(m.TABLES | m.OPTIONAL_TABLES)]
+    for r in records()[1:]:
+        if r['kind'] == 'row':
+            r = dict(r, safe={'id': 1})
+        result.append(r)
+    for table in sorted(tables):
+        result.append({'kind': 'column', 'table': table, 'position': 1, 'name': 'id', 'type': 'integer',
+                       'not_null': True, 'primary_key': True, 'identity': '', 'generated': '', 'collation': None,
+                       'default_sha256': None})
+        result.append({'kind': 'count', 'table': table, 'count': 0})
+    return result
+
+
 class CaptureTests(unittest.TestCase):
     def test_complete_all_fields(self):
         self.assertEqual(set(m.validate(records())), m.TABLES)
+
+    def test_v2_mail_tables_both_or_none(self):
+        self.assertEqual(set(m.validate(records_v2(m.OPTIONAL_TABLES))), m.TABLES | m.OPTIONAL_TABLES)
+        self.assertEqual(set(m.validate(records_v2(set()))), m.TABLES)
+        with self.assertRaises(ValueError):
+            m.validate(records_v2({'public.mail_mail'}))
+        with self.assertRaises(ValueError):
+            m.validate(records() + records_v2(m.OPTIONAL_TABLES)[-2:])   # version 1 never holds mail rows
 
     def test_reject_partial_duplicates_missing_columns_and_unquiet(self):
         base = records()

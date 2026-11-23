@@ -21,6 +21,8 @@ import time
 import uuid
 
 TABLES = {'public.' + t for t in ('ir_config_parameter', 'ir_cron', 'ir_cron_progress', 'bus_bus')}
+# Captured row by row since the x86 run of 2026-11-23 (an Odoo job can queue mail at runtime); older captures lack them.
+OPTIONAL_TABLES = {'public.mail_mail', 'public.mail_message'}
 STAGES = ('target_before', 'source_cold', 'restored_cold', 'converted_cold', 'runtime', 'quiescent')
 HEX = re.compile(r'[0-9a-f]{64}')
 
@@ -94,12 +96,15 @@ def validate(records, *, quiet=False):
     if version == 2:
         found = fingerprints(records)
         require(bool(found) and set(TABLES) <= set(found))
-    tables = {t: {'schema': {}, 'rows': {}, 'count': None} for t in TABLES}
+    optional = {r.get('table') for r in records if r.get('kind') == 'column'} & OPTIONAL_TABLES
+    require(not optional or (version == 2 and optional == OPTIONAL_TABLES))
+    known = TABLES | optional
+    tables = {t: {'schema': {}, 'rows': {}, 'count': None} for t in known}
     for r in records:
         kind = r.get('kind')
         if kind == 'capture_metadata' or (version == 2 and kind == 'table_fingerprint'):
             continue
-        require(kind in ('column', 'row', 'count') and r.get('table') in TABLES)
+        require(kind in ('column', 'row', 'count') and r.get('table') in known)
         table = tables[r['table']]
         if kind == 'column':
             name = r.get('name')
@@ -132,7 +137,8 @@ def validate(records, *, quiet=False):
 
 def differences(left, right):
     out = []
-    for table in sorted(TABLES):
+    require(set(left) == set(right))
+    for table in sorted(left):
         a, b = left[table], right[table]
         if a['schema'] != b['schema']:
             out.append({'table': table, 'kind': 'schema'})
@@ -256,7 +262,7 @@ def explain_run(raws, captures, manifest, delta, edges, fingerprint_text):
                                       restore_start=restore_start,
                                       captured_at=odoo_explain.ts(meta.get('snapshot_at') or meta['captured_at']),
                                       cron_log_ids=started)
-        other = table_delta(prints[a], prints[b], skip=odoo_explain.TABLES)
+        other = table_delta(prints[a], prints[b], skip=odoo_explain.row_tables(captures[a], captures[b]))
         edge_ok = all(e['explained'] for e in events) and not other
         ok &= edge_ok
         report[name] = {'rules': list(rules), 'ok': edge_ok, 'other_tables_differ': other,
