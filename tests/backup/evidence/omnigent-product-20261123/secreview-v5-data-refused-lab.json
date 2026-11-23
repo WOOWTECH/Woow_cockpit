@@ -1,0 +1,88 @@
+{
+ "harness": "tests/e2e/lab/omnigent_secreview_attacks.py",
+ "image": "docker.io/library/postgres:16-alpine",
+ "fixture_sha256": "3871a468e2f3a11488df7c6a00a4a8ed7c5b89c3ba2dbc2903ec3bd677013516",
+ "started": "2026-11-23T22:00:17+0800",
+ "variants": [
+  {
+   "variant": "v5-leak",
+   "backup_bytes": 8888320,
+   "real": {
+    "check": {
+     "ok": true,
+     "blockers": 0,
+     "blocker_heads": [],
+     "warnings": 0,
+     "warning_heads": [],
+     "section": {
+      "users": 2,
+      "scheduled_tasks_active": 0,
+      "public_sessions": 0,
+      "account_conflicts": [],
+      "files": 1,
+      "agents": 17
+     },
+     "seconds": 107.9
+    },
+    "convert": {
+     "ok": false,
+     "code": "incompatible",
+     "message_head": "HA 的 Omnigent 資料不符合這台 Omnigent 的資料庫結構（例如違反欄位的檢查條件、必填的欄位是空的、資料重複或參照的資料不存在），無法匯入；這台的應用沒有任何變更。",
+     "seconds": 126.4
+    },
+    "simulated": [],
+    "log_lines": 7,
+    "left_after_cleanup": [],
+    "leaks": {
+     "live_admin_hash_canary": false,
+     "ha_row_canary": false
+    },
+    "unsurfaced_stderr_has": {
+     "live_admin_hash_canary": false,
+     "ha_row_canary": false
+    }
+   },
+   "backup_sha256": "8e4069ee585aac3623f5e4e67bfe77cf29b10da360e5ef5ede42dc17dc942c52",
+   "seconds": 312.0
+  }
+ ],
+ "real_schema": {
+  "alembic": [
+   "d0a1f879a01d"
+  ],
+  "tables": [
+   "account_tokens",
+   "agents",
+   "alembic_version",
+   "comments",
+   "connections",
+   "conversation_items",
+   "conversation_labels",
+   "conversations",
+   "device_grants",
+   "files",
+   "hosts",
+   "omnigent_conversation_metadata",
+   "policies",
+   "preferences",
+   "projects",
+   "scheduled_task_runs",
+   "scheduled_tasks",
+   "session_permissions",
+   "user_daily_cost",
+   "users"
+  ],
+  "sequences": [],
+  "pg_version": "16",
+  "artifact_files": 19,
+  "cookie": true,
+  "schema_sql_sha256": "de9a06d1183a000a20dff97616ef6154c0d5ee05fcdd67cece613d6a4e00655f",
+  "counts_total": 38
+ },
+ "live_extra_sql": null,
+ "elapsed_s": 360.6,
+ "lab_left_after_cleanup": [],
+ "run_by": "lane omnigent-product, 2026-11-23 iteration 2 (the security review harness, variant v5-leak)",
+ "engine_commit": "deffc57 (feat/ha-import-omnigent-product-20261123; DUMP_USER was 65534:65534 then, changed to 1:1 in 1b6228e: not on the v5 path, the lab store maps 65536 uids)",
+ "what_it_shows": "A crafted HA backup built from the real b1 x86 cluster with a row that violates one of this device's CHECK constraints (HA's own constraint dropped), through the product's real check() and convert() in the isolated lab store (real PostgreSQL 16.16): the check passes (constraints are not compared), the conversion stops 'incompatible' with DATA_REFUSED (was: job-failed 'podman exec ... 執行失敗（結束碼 1）'), the canary row value is in no message, log line or kept stderr, nothing left in the lab store."
+}
