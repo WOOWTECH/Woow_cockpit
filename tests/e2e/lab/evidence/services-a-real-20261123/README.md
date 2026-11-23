@@ -64,3 +64,53 @@ WOOWTECH package's installed files); TLS uses a lab CA; clients use userspace ne
 `TS_DEBUG_ALWAYS_USE_DERP`; HA's second node (`b1-bob-nas`) has no live client; the new device is a
 lab client; Headplane UI and host-reboot persistence were not exercised (the Headplane volume is
 carried and compared byte-exact); the elapsed values are observation windows, not outage measurements.
+
+## Omnigent — `tests/e2e/lab/omnigent_real_ha.py --run --arch <x86|arm> --outer-isolation-confirmed`
+
+The engine runs on the host and reaches dev-d's owner only through `owner.sh d` (the lab bridge of
+`OwnerRunner`). The public `ha_omnigent.convert` is asserted to still refuse with `SECURITY_BLOCKER`
+at the start of every run; only the internal candidate entry is used.
+
+| Attempt | Source | Exit | Seconds | Result |
+| --- | --- | ---: | ---: | --- |
+| `omnigent-x86-attempt1.json` | b25aa9c | 1 | 509.3 | Real source, guard, target, HA-store publish, internal candidate conversion with real discovery, installation, HA admin/member logins, target admin login, negative login, identities, users, agent, paused task, session title/labels/comment and attachment sha256 passed; stopped at `installed_member_session_missing`: the harness read the wrong key of `GET /v1/sessions` (0.21.0 answers `PaginatedList` `data[]`, `omnigent/server/schemas.py:42`). Fixed in 5b0e782. |
+| `omnigent-x86-attempt2.json` | 5b0e782 | 1 | 1051.6 | Member session passed; stopped at `installed_table_counts_differ` (no diagnostics yet). d5c40bf added table-name/count diagnostics. |
+| `omnigent-x86-attempt3.json` | d5c40bf | 1 | 938.6 | Right after installation every printable table equalled HA's count plus the kept account; after this run's three refresh-issuing logins `device_grants` was 0 → 3 (vendor `server/routes/accounts_auth.py:364-371`). 974fa48 makes the pre-login equality a hard check for every table and lets only `account_tokens`/`device_grants` grow after logins. |
+| `omnigent-x86-attempt4.json` | 974fa48 | 0 | 1334.4 (632 s holding the lock) | **PASS** — see below. |
+
+What the passing x86 run used and proved (real unless stated):
+
+* **Source**: the actual b1 x86 Supervisor backup (sha256 equal to the recorded fixture), copied into the
+  engine's HA store and published by the product's `HaStore.publish`; `haimport._open` opened it from the
+  store (real outer envelope, `backup.json`, add-on member 0.1.23 amd64 stopped, embedded PostgreSQL 16
+  cluster, artifact store with the agent bundles, upload blob and `accounts-cookie-secret`).
+* **Target**: a disposable Omnigent in dev-d deployed as three real Quadlet units (PostgreSQL 16, the
+  omnigent-server 0.21.0 image, a runner placeholder holding the runner's pi volume), initialised by the
+  real image with a freshly generated admin password (a Podman secret). The product discovered it through
+  its real adapter (`read_quadlets`, `probe`), the live `/v1/info` of the running server and its live
+  alembic revision; the server was then stopped before any schema capture (no DDL writer).
+* **Conversion**: `haimport._run_omnigent_candidate(..., schema_ddl_quiesced=True)` (internal entry)
+  produced an encrypted candidate. The public conversion still refuses (`SECURITY_BLOCKER`).
+* **Installation**: `haimport._install_omnigent_candidate` (flows.run_restore with an encrypted safety
+  backup). Right after it, before any login, **every** table (19, the secret-named ones compared but not
+  printed) held exactly HA's count plus this device's kept admin account.
+* **Application checks** after install, after a restart and after the automatic rollback: HA's admin and
+  member log in with HA's passwords (the fixture's generated test credentials, read only through the b1
+  harness reader, never printed) and `/auth/me` names them with the right admin flag; this device's admin
+  still logs in with its own password; HA's admin refuses this device's password; HA's agent, paused task
+  (name, rrule, never ran), session (title, labels `b1=import-test`, one comment), attachment (sha256 and
+  size computed inside the container), the member's session, alembic `d0a1f879a01d` and the table counts
+  (only `account_tokens`/`device_grants`, which this run's own logins write, may grow); HA's cookie key bytes
+  are the installed ones; the runner's pi volume (its identity/pairing) is byte-for-byte this device's.
+* **Rollback**: a second installation with an injected one-shot `ExecStartPre` failure raised
+  `flows.RolledBack`; the pre-failure database and server-volume markers came back.
+* **Secret coverage**: 31 registered values (HA passwords, target password, both cookies, the runner
+  identity marker, every issued token and refresh token from 20 login sources, users' password hashes);
+  event output, the three units' journals (the server keeps its log) and 78 engine job-log lines scanned:
+  0 hits. Cleanup complete, private engine root removed, dev-d containers/volumes/secrets unchanged.
+
+Stated simulations and limits: the runner is a placeholder container (no Pi agent, no model; HA's runner
+rows arrive as data and stay offline — the runner pairing is not moved); the target's catalog/Quadlets are
+lab-made with random names; the engine runs on the host through the lab bridge and the live `/v1/info` GET
+goes through `podman exec` into the running server; the throwaway PostgreSQL containers were capped at
+512 MiB (product default 2 GiB) to fit dev-d's 4 GiB cgroup.
