@@ -50,6 +50,7 @@ import json
 import os
 from pathlib import Path
 import re
+import signal
 import stat
 import subprocess
 import sys
@@ -396,29 +397,47 @@ def headroom():
         raise Failed('host disk free below 13 GiB')
 
 
+class _Tick(Exception):
+    pass
+
+
+def _tick(_signum, _frame):
+    raise _Tick()
+
+
 def acquire_lock():
-    """The dev-d mutation lock, never taken while emqx-main is waiting for it (its waiting file exists)."""
+    """The dev-d mutation lock, waited for like `flock -w` (blocking, so other blocking waiters get no head start),
+    but never kept while emqx-main is waiting for it (its waiting file exists): then it is released at once."""
     fd = os.open(LOCK, os.O_RDONLY | os.O_NOFOLLOW)
     st = os.fstat(fd)
     if not stat.S_ISREG(st.st_mode) or st.st_uid != os.getuid() or st.st_nlink != 1:
         os.close(fd)
         raise Failed('unsafe dev-d lock file')
+    previous = signal.signal(signal.SIGALRM, _tick)
     started = time.monotonic()
-    while True:
-        if not WAITING.exists():
+    try:
+        while True:
+            if time.monotonic() - started > LOCK_WAIT:
+                os.close(fd)
+                raise Failed('dev-d lock not acquired within 3600 s')
+            if WAITING.exists():
+                time.sleep(5)
+                continue
+            signal.alarm(30)
             try:
-                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            except BlockingIOError:
-                pass
-            else:
-                if not WAITING.exists():
-                    emit(f'lock acquired after {int(time.monotonic() - started)} s')
-                    return fd
+                fcntl.flock(fd, fcntl.LOCK_EX)
+            except _Tick:
+                continue   # (a tick right after the grant leaves the lock held; the next flock returns at once)
+            finally:
+                signal.alarm(0)
+            if WAITING.exists():
                 fcntl.flock(fd, fcntl.LOCK_UN)
-        if time.monotonic() - started > LOCK_WAIT:
-            os.close(fd)
-            raise Failed('dev-d lock not acquired within 3600 s')
-        time.sleep(15)
+                time.sleep(5)
+                continue
+            emit(f'lock acquired after {int(time.monotonic() - started)} s')
+            return fd
+    finally:
+        signal.signal(signal.SIGALRM, previous)
 
 
 # ---------------------------------------------------------------- helpers

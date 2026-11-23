@@ -138,6 +138,42 @@ class OfflineEntryTests(unittest.TestCase):
         self.assertEqual(cap.status_lines(line), [line])
 
 
+class LockTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.saved = (hr.LOCK, hr.WAITING, hr.LOCK_WAIT)
+        hr.LOCK = Path(self.tmp.name) / 'mutation.lock'
+        hr.LOCK.touch()
+        hr.WAITING = Path(self.tmp.name) / 'emqx-main-waiting'
+
+    def tearDown(self):
+        hr.LOCK, hr.WAITING, hr.LOCK_WAIT = self.saved
+        self.tmp.cleanup()
+
+    def test_free_lock_is_taken(self):
+        fd = hr.acquire_lock()
+        other = os.open(hr.LOCK, os.O_RDONLY)
+        with self.assertRaises(BlockingIOError):
+            import fcntl
+            fcntl.flock(other, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        os.close(other)
+        os.close(fd)
+
+    def test_never_taken_while_emqx_main_waits(self):
+        hr.WAITING.touch()
+        hr.LOCK_WAIT = 2
+        with self.assertRaises(hr.Failed):
+            hr.acquire_lock()
+
+    def test_symlinked_lock_refused(self):
+        target = Path(self.tmp.name) / 'elsewhere'
+        target.touch()
+        hr.LOCK.unlink()
+        hr.LOCK.symlink_to(target)
+        with self.assertRaises(OSError):
+            hr.acquire_lock()
+
+
 class CaptureVocabularyTests(unittest.TestCase):
     def test_only_fixed_lines_are_published(self):
         text = '\n'.join([
