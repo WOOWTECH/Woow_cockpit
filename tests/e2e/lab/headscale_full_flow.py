@@ -416,10 +416,16 @@ else:
         s.connect(path)
         return s
     for family, addr in ((socket.AF_INET, "127.0.0.1"), (socket.AF_INET6, "::1")):
-        ls = socket.socket(family, socket.SOCK_STREAM)
-        ls.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        ls.bind((addr, port))
-        ls.listen(64)
+        try:
+            ls = socket.socket(family, socket.SOCK_STREAM)
+            ls.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            ls.bind((addr, port))
+            ls.listen(64)
+        except OSError as error:
+            if family == socket.AF_INET:
+                raise
+            print("relay: no IPv6 loopback listener:", error.errno, flush=True)
+            continue
         threading.Thread(target=serve, args=(ls, unix), daemon=True).start()
     sys.exit(subprocess.call(cmd))
 '''
