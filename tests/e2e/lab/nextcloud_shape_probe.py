@@ -30,7 +30,7 @@ sys.path.insert(0, str(REPO / 'backup-engine'))
 sys.path.insert(0, str(HERE))
 
 import nextcloud_flow as nf  # noqa: E402  (the lab secret readers; nothing is printed)
-from woowbackup import habackup, ha_nextcloud as nc, ha_odoo  # noqa: E402
+from woowbackup import habackup, hasecuretar, ha_nextcloud as nc, ha_odoo  # noqa: E402
 
 LABPODMAN = str(Path.home() / '.woowbk-lab' / 'bin' / 'labpodman')
 IMAGE = 'docker.io/library/postgres:16-alpine'
@@ -80,6 +80,9 @@ def main():
     name = 'woowbk-ncprobe-' + time.strftime('%Y%m%dT%H%M%S')
     try:
         code = probe(fixture, name, doc, check)
+    except Exception as error:  # recorded by type only (a message could quote data)
+        check(f'probe ran to its end (stopped by {type(error).__name__})', False)
+        code = 1
     finally:
         lp('rm', '-f', '-t', '10', name, timeout=120)
         lp('volume', 'rm', '-f', name, timeout=120)
@@ -99,7 +102,13 @@ def probe(fixture, name, doc, check):
     sink = ha_odoo.PgSink(proc.stdin, PG_UID, PG_UID)
     dbname, pg_files = None, 0
     select = habackup.Select(include=(nc.PG_PREFIX, nc.CONFIG_PHP), symlinks=(), hardlinks=False)
-    with habackup.open_member(str(fixture), f'{nc.SLUG}.tar.gz', password=key) as stream:
+    backup = habackup.open_backup(str(fixture))
+    try:
+        addons = [m for m in backup.layout.members if m.role == 'addon'
+                  and (m.slug == nc.SLUG or str(m.slug).endswith('_' + nc.SLUG))]
+        if not check('the backup holds exactly one Nextcloud Office add-on', len(addons) == 1):
+            return 1
+        stream = backup.open_member(addons[0].name, keys=hasecuretar.Keys(key))
         for entry in habackup.iter_entries(stream, select, habackup.Report()):
             if entry.name == nc.CONFIG_PHP and entry.kind == 'file':
                 config = nc.parse_config(entry.read_all(nc.MAX_CONFIG))
@@ -109,6 +118,8 @@ def probe(fixture, name, doc, check):
                 rel = entry.name[len(nc.PG_PREFIX) + 1:] if entry.name != nc.PG_PREFIX else '.'
                 pg_files += entry.kind == 'file'
                 sink.add(rel, entry)
+    finally:
+        backup.close()
     sink.close()
     proc.stdin.close()
     imported = proc.wait(timeout=900) == 0
