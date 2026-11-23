@@ -1,0 +1,26 @@
+{
+ "source_commit": "8e78b2c262ec247120b509d8558478566b14488b",
+ "scope": "real b1 RPi5 HA Omnigent backup -> HA store -> internal candidate with real target discovery -> installer, restart, injected rollback; HA logins and data markers",
+ "exit": 0,
+ "elapsed_seconds": 1101.3,
+ "stdout_sha256": "3564f3bbb969b49390618d5eb6b961163309ab85e57a65624c2690660722b3a1",
+ "fixed_status": [
+  "{\"held\": true, \"stage\": \"dev_d_lock\"}",
+  "{\"arch\": \"arm\", \"fixture_sha256_matches_record\": true, \"stage\": \"real_source\"}",
+  "{\"security_blocker_still_refuses\": true, \"stage\": \"public_guard\"}",
+  "{\"independently_initialised\": true, \"quadlet_units\": 3, \"stage\": \"target_deployed\", \"target_admin_login\": true}",
+  "{\"product_publish\": true, \"sha256_matches_fixture\": true, \"stage\": \"ha_store_published\"}",
+  "{\"encrypted\": true, \"internal_entry\": true, \"live_alembic\": true, \"live_info_from_running_server\": true, \"real_adapter_discovery\": true, \"real_ha_store\": true, \"server_stopped_before_schema_capture\": true, \"stage\": \"candidate_converted\", \"test_mode\": false}",
+  "{\"differ\": {}, \"equal_to_ha_plus_kept\": [\"agents\", \"comments\", \"connections\", \"conversation_items\", \"conversation_labels\", \"conversations\", \"device_grants\", \"files\", \"hosts\", \"omnigent_conversation_metadata\", \"policies\", \"preferences\", \"projects\", \"scheduled_task_runs\", \"scheduled_tasks\", \"session_permissions\", \"user_daily_cost\", \"users\"], \"secret_named_tables_equal\": true, \"stage\": \"installed_counts_before_login\"}",
+  "{\"agent\": true, \"alembic\": true, \"attachment_sha256\": true, \"ha_admin_login\": true, \"ha_admin_refuses_target_password\": true, \"ha_cookie_installed\": true, \"ha_member_login\": true, \"member_session\": true, \"paused_task\": true, \"phase\": \"installed\", \"runner_pi_volume_unchanged\": true, \"session_title_labels_comment\": true, \"stage\": \"installed_app_verified\", \"table_counts\": 19, \"target_admin_login\": true}",
+  "{\"agent\": true, \"alembic\": true, \"attachment_sha256\": true, \"ha_admin_login\": true, \"ha_admin_refuses_target_password\": true, \"ha_cookie_installed\": true, \"ha_member_login\": true, \"member_session\": true, \"paused_task\": true, \"phase\": \"restarted\", \"runner_pi_volume_unchanged\": true, \"session_title_labels_comment\": true, \"stage\": \"installed_app_verified\", \"table_counts\": 19, \"target_admin_login\": true}",
+  "{\"agent\": true, \"alembic\": true, \"attachment_sha256\": true, \"ha_admin_login\": true, \"ha_admin_refuses_target_password\": true, \"ha_cookie_installed\": true, \"ha_member_login\": true, \"member_session\": true, \"paused_task\": true, \"phase\": \"rolled_back\", \"runner_pi_volume_unchanged\": true, \"session_title_labels_comment\": true, \"stage\": \"installed_app_verified\", \"table_counts\": 19, \"target_admin_login\": true}",
+  "{\"db_and_server_markers\": true, \"one_shot_systemd_failure\": true, \"real_flow\": true, \"stage\": \"automatic_rollback\"}",
+  "{\"engine_log_lines\": 78, \"hits\": 0, \"journals_scanned\": 3, \"login_credential_sources\": 20, \"registered_values\": 31, \"stage\": \"secret_scan\"}",
+  "{\"complete\": true, \"private_engine_root_removed\": true, \"stage\": \"cleanup\"}",
+  "{\"arch\": \"arm\", \"result\": \"PASS\", \"stage\": \"omnigent_real_ha\"}",
+  "{\"containers_volumes_secrets_unchanged\": true, \"lock_seconds\": 534, \"stage\": \"inventory\"}"
+ ],
+ "stderr_bytes_not_published": 0,
+ "commercial_acceptance": "not-complete"
+}

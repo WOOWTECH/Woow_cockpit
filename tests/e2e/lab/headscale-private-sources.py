@@ -15,7 +15,7 @@ import sys
 import tarfile
 
 MAX_FILE = 4 * 1024 * 1024
-PRIVATE = re.compile(r'(?<![A-Za-z0-9_])(?:privkey|nodepriv|machinepriv|discpriv):([0-9a-fA-F]{64})(?![0-9a-fA-F])')
+PRIVATE = re.compile(r'(?<![A-Za-z0-9_])(?:privkey|nodepriv|machinepriv|discpriv|nlpriv):([0-9a-fA-F]{64})(?![0-9a-fA-F])')
 PEM = re.compile(r'-----BEGIN (?:RSA |EC )?PRIVATE KEY-----\r?\n([A-Za-z0-9+/=\r\n]+)-----END (?:RSA |EC )?PRIVATE KEY-----')
 
 
@@ -44,7 +44,7 @@ def client_keys(data):
     # text values, bounded by size and depth, and require two private keys.
     root = json.loads(data)
     pending = [(root, 0, None)]
-    found = {'machine': set(), 'node': set()}
+    found = {'machine': set(), 'node': set(), 'lock': set()}
     visited = 0
     while pending:
         value, depth, role = pending.pop()
@@ -54,8 +54,12 @@ def client_keys(data):
         if isinstance(value, dict):
             for name, item in value.items():
                 field = re.sub(r'[^a-z]', '', str(name).lower())
+                # Real tailscaled state (ipn/store, persist.Persist): _machinekey, PrivateNodeKey,
+                # OldPrivateNodeKey and the tailnet-lock NetworkLockKey (nlpriv:) are all private.
                 kind = ('machine' if field in ('machinekey', 'privatemachinekey') else
-                        'node' if field in ('privatenodekey', 'nodeprivatekey', 'privateoldnodekey') else role)
+                        'node' if field in ('privatenodekey', 'nodeprivatekey', 'privateoldnodekey',
+                                            'oldprivatenodekey') else
+                        'lock' if field == 'networklockkey' else role)
                 pending.append((item, depth + 1, kind))
         elif isinstance(value, list):
             pending.extend((v, depth + 1, role) for v in value)
@@ -74,7 +78,7 @@ def client_keys(data):
                     pass
     if not found['machine'] or not found['node'] or found['machine'] == found['node']:
         raise ValueError('client machine/node private keys missing or unsupported state')
-    keys = found['machine'] | found['node']
+    keys = found['machine'] | found['node'] | found['lock']
     return sorted(keys | {item.split(':', 1)[1] for item in keys})
 
 
@@ -91,6 +95,24 @@ def volume_key(path, name):
     if len(matches) != 1:
         raise ValueError('private key missing or duplicated')
     return private_key(matches[0])
+
+
+def volume_all_keys(path):
+    """Every private key file of a volume export (e.g. a configtest or restored data volume, where the
+    service may have created keys of its own): each regular `*.key` file (<= 4 KiB) must hold one valid
+    private key. At least one is required; names are never printed."""
+    values = []
+    with tarfile.open(fileobj=io.BytesIO(read_source(path)), mode='r:') as archive:
+        for member in archive:
+            name = member.name.removeprefix('./')
+            if not name.endswith('.key'):
+                continue
+            if not member.isfile() or member.size > 4096:
+                raise ValueError('private key not a regular file')
+            values.extend(private_key(archive.extractfile(member).read()))
+    if not values:
+        raise ValueError('no private key in volume')
+    return sorted(set(values))
 
 
 def read_source(path):
@@ -116,6 +138,8 @@ def main():
         kind, path = sys.argv[1:3]
         if kind == 'volume':
             values = volume_key(path, sys.argv[3])
+        elif kind == 'volume-all':
+            values = volume_all_keys(path)
         else:
             data = read_source(path)
             values = {'pem': pem_values, 'client': client_keys}[kind](data)

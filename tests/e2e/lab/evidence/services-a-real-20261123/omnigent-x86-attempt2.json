@@ -1,0 +1,21 @@
+{
+ "source_commit": "5b0e782ce7f14a495e4977c01ffcc81a729f66cb",
+ "scope": "real b1 x86 HA Omnigent backup -> HA store -> internal candidate with real target discovery -> installer, restart, injected rollback; HA logins and data markers",
+ "exit": 1,
+ "elapsed_seconds": 1051.6,
+ "stdout_sha256": "6dd0ac9afcbd6ee3f0efd7e8309c2ac714fde615ff5713a7a9c15ebef93b7990",
+ "fixed_status": [
+  "{\"held\": true, \"stage\": \"dev_d_lock\"}",
+  "{\"arch\": \"x86\", \"fixture_sha256_matches_record\": true, \"stage\": \"real_source\"}",
+  "{\"security_blocker_still_refuses\": true, \"stage\": \"public_guard\"}",
+  "{\"independently_initialised\": true, \"quadlet_units\": 3, \"stage\": \"target_deployed\", \"target_admin_login\": true}",
+  "{\"product_publish\": true, \"sha256_matches_fixture\": true, \"stage\": \"ha_store_published\"}",
+  "{\"encrypted\": true, \"internal_entry\": true, \"live_alembic\": true, \"live_info_from_running_server\": true, \"real_adapter_discovery\": true, \"real_ha_store\": true, \"server_stopped_before_schema_capture\": true, \"stage\": \"candidate_converted\", \"test_mode\": false}",
+  "{\"engine_log_lines\": 34, \"hits\": 0, \"journals_scanned\": 3, \"login_credential_sources\": 8, \"registered_values\": 16, \"stage\": \"secret_scan\"}",
+  "{\"complete\": true, \"private_engine_root_removed\": true, \"stage\": \"cleanup\"}",
+  "{\"containers_volumes_secrets_unchanged\": true, \"lock_seconds\": 425, \"stage\": \"inventory\"}",
+  "{\"code\": \"installed_table_counts_differ\", \"error_type\": \"RuntimeError\", \"frames\": [{\"file\": \"omnigent_real_ha.py\", \"function\": \"module\", \"line\": 655}, {\"file\": \"omnigent_real_ha.py\", \"function\": \"main\", \"line\": 645}, {\"file\": \"omnigent_real_ha.py\", \"function\": \"run\", \"line\": 540}, {\"file\": \"omnigent_real_ha.py\", \"function\": \"verify_installed\", \"line\": 370}, {\"file\": \"omnigent_real_ha.py\", \"function\": \"require\", \"line\": 82}], \"stage\": \"failed\"}"
+ ],
+ "stderr_bytes_not_published": 0,
+ "commercial_acceptance": "not-complete"
+}
