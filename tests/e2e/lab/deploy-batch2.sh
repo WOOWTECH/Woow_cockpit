@@ -10,8 +10,8 @@
 #                       `git archive` to the same path under appowner's home as on the host
 #   --<app>-rev REV     copy REV instead of the production commit
 #   --cockpit-src DIR   Woow_cockpit tree to deploy (default: this one), passed to deploy-src.sh --src
-#   PHASE               packages | images[:APP] | nextcloud | code-server | opendesign | cockpit | check[:APP] |
-#                       drop-images:APP ; APP is nextcloud, code-server or opendesign
+#   PHASE               packages | images[:APP] | nextcloud | code-server | opendesign | cockpit | catalog |
+#                       check[:APP] | drop-images:APP ; APP is nextcloud, code-server or opendesign
 #
 # dev-e has no network (it is created with --network none): nothing inside it can pull an image or reach apt, the
 # Nextcloud app store or any registry, and nothing outside reaches it.
@@ -28,7 +28,12 @@
 #           Before every image the host must keep FLOOR_GIB (12) + RESERVE_GIB (1) free after the estimated peak,
 #           and a watchdog stops the copy and removes the transfer directory if free space falls to FLOOR_GIB + 0.25.
 #           Image IDs equal the host's (the ID is the config digest); manifest digests change on the way, so the app
-#           phases change the package copy's digest pins (quadlet/*.container Image=) to the loaded digests
+#           phases change the package copy's digest pins (quadlet/*.container Image=) to the loaded digests.
+#           Before each load, image_id_range.py scans the saved layers for entries owned by ids above appowner's nested
+#           range (its subuid COUNT in dev-e): such an image is refused unless it is flagged ignore-chown (see IMAGES)
+# cockpit   deploy-src.sh e (this tree's engine and page), then the catalog phase
+# catalog   the host's catalog entries of the deployed apps (owner -> appowner) and the device key, WITHOUT touching
+#           the installed engine (an importer lane may have deployed its own engine to dev-e)
 # drop-images:APP  removes APP's images from dev-e (test data rotation: they can be copied again from the host)
 # Every phase can be run again: loaded images and copies that are already there are kept.
 # Start over with: tests/e2e/lab/reset.sh e --up
@@ -54,7 +59,7 @@ while [ $# -gt 0 ]; do
             app=${1#--}; app=${app%-rev}; REV[$app]=${2:?$1 needs a commit}; shift ;;
         --cockpit-src) cockpit_src=${2:?--cockpit-src needs a checkout}; shift ;;
         packages | images | images:nextcloud | images:code-server | images:opendesign | nextcloud | code-server | \
-            opendesign | cockpit | check | check:nextcloud | check:code-server | check:opendesign | \
+            opendesign | cockpit | catalog | check | check:nextcloud | check:code-server | check:opendesign | \
             drop-images:nextcloud | drop-images:code-server | drop-images:opendesign) phases+=("$1") ;;
         *) die "unknown argument: $1" ;;
     esac
@@ -74,11 +79,16 @@ CACHE_DIR=$LAB_HOME/cache
 DEB_DIR=$CACHE_DIR/debs-noble
 DEBS=(python3-nacl python3-cryptography jq)
 
-# <the reference in the host's Quadlet files>|<name in dev-e>. Every image is saved by its ID (a docker-dir has no
-# name) and tagged with the name after the load. A reference with a digest gets the plain tag in dev-e and the app
-# phase pins the loaded digest.
+# <the reference in the host's Quadlet files>|<name in dev-e>[|ignore-chown]. Every image is saved by its ID (a docker-dir
+# has no name) and tagged with the name after the load. A reference with a digest gets the plain tag in dev-e and the
+# app phase pins the loaded digest.
+# ignore-chown: the Nextcloud image has /usr/src/nextcloud owned by 65534:65534, above appowner's nested range (container
+# ids 1-55000; a device has only 65536 ids), like dev-d's Headplane image. That one load runs with `podman --storage-opt
+# ignore_chown_errors=true load`, so the path belongs to the container's root instead; the image ID stays the host's.
+# The entrypoint copies /usr/src/nextcloud into html with `rsync --chown www-data:root`, so the installed files do not
+# depend on it.
 declare -A IMAGES=(
-    [nextcloud]="localhost/woow-nextcloud:35.0.1-office2|localhost/woow-nextcloud:35.0.1-office2
+    [nextcloud]="localhost/woow-nextcloud:35.0.1-office2|localhost/woow-nextcloud:35.0.1-office2|ignore-chown
 docker.io/collabora/code:26.04.4.2.1|docker.io/collabora/code:26.04.4.2.1
 docker.io/pgvector/pgvector:0.8.6-pg16|docker.io/pgvector/pgvector:0.8.6-pg16
 docker.io/library/redis:8.10.1-alpine|docker.io/library/redis:8.10.1-alpine
@@ -155,8 +165,29 @@ guarded() {
     return "$rc"
 }
 
-copy_image() {  # <host reference> <name in dev-e>
-    local src=$1 name=$2 id size free need start xfer_dev compressed
+nested_max() {  # the highest container uid/gid appowner can map in dev-e (its subuid COUNT)
+    local count
+    count=$("$LP" exec "$NAME" awk -F: -v owner="$OWNER" '$1 == owner { print $3; exit }' /etc/subuid)
+    [[ $count =~ ^[0-9]+$ ]] || die "no subuid range for $OWNER in $NAME"
+    printf '%s' "$count"
+}
+
+scan_owners() {  # <name> <flag>: refuses an image with entries owned outside the nested range unless flagged ignore-chown
+    local name=$1 flag=$2 max scan rc
+    max=$(nested_max)
+    rc=0
+    scan=$(nice -n 10 python3 -I "$LAB_DIR/image_id_range.py" "$XFER_HOST" "$max") || rc=$?
+    case $rc in
+        0) log "image $name: every entry's owner is inside appowner's nested range (0-$max)" ;;
+        3) [ "$flag" = ignore-chown ] ||
+               die "image $name has entries owned by ids above $max, which podman load cannot map: $scan (check them; if they do not matter at runtime, flag the image ignore-chown in IMAGES)"
+           log "image $name: ignore-chown (lab-only; the host maps these ids normally): $scan" ;;
+        *) die "scanning the saved layers of $name failed (exit $rc)" ;;
+    esac
+}
+
+copy_image() {  # <host reference> <name in dev-e> [ignore-chown]
+    local src=$1 name=$2 flag=${3:-} id size free need start xfer_dev compressed load_opts=()
     id=$(podman image inspect --format '{{.Id}}' "$src") || die "the host has no image $src"
     if [ "$(device_id "$id")" = "$id" ]; then
         [ "$(device_id "$name")" = "$id" ] || owner podman tag "$id" "$name"
@@ -178,7 +209,10 @@ copy_image() {  # <host reference> <name in dev-e>
     guarded 3600 nice -n 10 ionice -c3 podman save -q --format docker-dir --compress -o "$XFER_HOST" "$id" ||
         die "podman save of $src failed"
     compressed=$(du -sb "$XFER_HOST" | cut -f1)
-    guarded 3600 nice -n 10 "$LP" exec -i "$NAME" /usr/local/bin/woowbk-owner podman load -q -i "$xfer_dev" >/dev/null ||
+    scan_owners "$name" "$flag"
+    [ "$flag" != ignore-chown ] || load_opts=(--storage-opt ignore_chown_errors=true)
+    guarded 3600 nice -n 10 "$LP" exec -i "$NAME" /usr/local/bin/woowbk-owner podman "${load_opts[@]}" load -q -i "$xfer_dev" \
+        >/dev/null ||
         die "podman load of $src in $NAME failed"
     xfer_cleanup
     [ "$(device_id "$id")" = "$id" ] || die "$src did not arrive in $NAME"
@@ -188,15 +222,15 @@ copy_image() {  # <host reference> <name in dev-e>
 }
 
 phase_images() {  # [app]
-    local app spec specs src name
+    local app spec specs src name flag
     VOLUME_HOME=$("$LP" volume inspect "$NAME-home" --format '{{.Mountpoint}}') || die "no volume $NAME-home"
     for app in "${IMAGE_ORDER[@]}"; do
         [ -z "${1:-}" ] || [ "$1" = "$app" ] || continue
         # An array, not `while read`: the labpodman exec -i calls inside would read the loop's input.
         mapfile -t specs <<<"${IMAGES[$app]}"
         for spec in "${specs[@]}"; do
-            IFS='|' read -r src name <<<"$spec"
-            copy_image "$src" "$name"
+            IFS='|' read -r src name flag <<<"$spec"
+            copy_image "$src" "$name" "$flag"
         done
     done
     log "host disk after the images: $(($(host_free) >> 30)) GiB free"
@@ -206,7 +240,7 @@ phase_drop_images() {  # <app>
     local src name id spec specs
     mapfile -t specs <<<"${IMAGES[$1]}"
     for spec in "${specs[@]}"; do
-        IFS='|' read -r src name <<<"$spec"
+        IFS='|' read -r src name _ <<<"$spec"
         id=$(podman image inspect --format '{{.Id}}' "$src") || die "the host has no image $src"
         if owner podman image exists "$id"; then
             owner podman rmi -f "$id" >/dev/null || die "removing $name from $NAME failed"
@@ -235,7 +269,7 @@ repin() {  # <app>: the package copy's registry digest pins -> the digests of th
     local app=$1 spec specs src name pairs=()
     mapfile -t specs <<<"${IMAGES[$app]}"
     for spec in "${specs[@]}"; do
-        IFS='|' read -r src name <<<"$spec"
+        IFS='|' read -r src name _ <<<"$spec"
         [[ $src == *@* ]] || continue
         pairs+=("$src=$(device_pin "$name")")
     done
@@ -355,8 +389,13 @@ declare -A FIRST_QUADLET=([nextcloud]=nextcloud-app.container [opendesign]=open-
 deployed() { owner test -f "$HOME_D/.config/containers/systemd/${FIRST_QUADLET[$1]}"; }
 
 phase_cockpit() {
-    local app id
     "$LAB_DIR/deploy-src.sh" e --src "$cockpit_src" --no-demo-catalog
+    phase_catalog
+}
+
+phase_catalog() {
+    local app id
+    "$LAB_DIR/engine.sh" e status >/dev/null || die "the backup engine is not installed in $NAME (run the cockpit phase)"
     for app in nextcloud code-server opendesign; do
         id=${CATALOG_ID[$app]}
         if [ -z "$id" ]; then

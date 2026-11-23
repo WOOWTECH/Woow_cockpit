@@ -336,6 +336,11 @@ python3 -I tests/e2e/lab/batch2_baseline.py opendesign
 python3 -I tests/e2e/lab/compare_batch2.py opendesign > ~/.woowbk-lab/evidence/batch2-lab/compare-prod-opendesign.txt
 ```
 
+其他兩個應用（一次一個，見「輪替」）：`deploy-batch2.sh e images:nextcloud`，`deploy-batch2.sh e --nextcloud-repo ~/Woow_podman_nextcloud_fresh nextcloud`；
+`deploy-batch2.sh e images:code-server`，`deploy-batch2.sh e --code-server-repo ~/.woowbk-lab/cache/repos/Woow_podman_code_server_package.git code-server`
+（主機的 `~/Woow_podman_code_server_package` 停在沒有 tag 4.139.1-8 的舊分支；快取裡的是 GitHub main 89e6648 的裸複本，含 e7dbbea），
+之後 `cockpit` 與 `check:<應用>`。richdocuments 發行檔與 .deb 快取在 `~/.woowbk-lab/cache/`（sha256 固定）。
+
 * `images[:應用]`：映像從本主機自己的儲存以映像 ID `podman save --format docker-dir --compress` **直接寫進 dev-e 的 home 資料卷**
   （主機那一側的 `/home/.woowbk-xfer`），再以 appowner `podman load`、以 ID 加上名稱、刪掉傳輸目錄。主機上只執行 `podman image inspect`
   與 `podman save`，從不拉取。壓縮目錄讓尖峰約為「2 × 壓縮後＋1 × 映像」；`podman save | podman load` 的管線約要 3 × 映像
