@@ -350,7 +350,8 @@ class FileDeliveryTests(unittest.TestCase):
         self.exit_early=True;self.refused('subscribe_launch');self.assertEqual(len(self.runs),3)
         self.exit_early=False;self.visible=False;self.sub_wait=1.5;self.fresh()
         with patch.object(m,'READY_SECONDS',0.5):self.refused('subscribe_timeout')
-        self.visible=True;self.sub_wait=0.3
+        # Refusals below happen while the subscriber still waits (1.5 s keeps it alive on a loaded host).
+        self.visible=True;self.sub_wait=1.5
         self.grants={GRANT,API_ALERTS};self.fresh();self.refused('subscribe_allowed');self.assertEqual(self.posts,[])
         self.grants={GRANT}
         for edit in (lambda rows:[dict(rows[0],qos=0)],lambda rows:[dict(rows[0],topic='b1/#')],
@@ -359,7 +360,7 @@ class FileDeliveryTests(unittest.TestCase):
                 self.rows_override=edit;self.fresh();self.refused('subscribe_mismatch');self.assertEqual(self.posts,[])
 
     def test_management_subscription_reply_and_listing_are_exact(self):
-        self.sub_wait=0.3
+        self.sub_wait=1.5
         for edit in (lambda a:dict(a,topic='b1/alerts/#'),lambda a:dict(a,qos=0),lambda a:dict(a,clientid='generated-other'),
                      lambda a:dict(a,node='emqx@generated'),lambda a:dict(a,nl=1),lambda a:dict(a,rh=False),
                      lambda a:dict(a,extra='generated'),lambda a:[a]):
@@ -369,11 +370,10 @@ class FileDeliveryTests(unittest.TestCase):
         self.api_sub_edit=None
         for status in (404,):
             self.api_sub_status=status;self.fresh();self.refused('api_subscribe')
-        self.api_sub_status=200;self.api_sub_visible=False;self.sub_wait=1.5;self.fresh()
+        self.api_sub_status=200;self.api_sub_visible=False;self.fresh()
         with patch.object(m,'READY_SECONDS',0.2):self.refused('api_subscribe_timeout')
-        self.sub_wait=0.3
         self.assertEqual(len(self.posts),1)
-        self.api_sub_visible=True
+        self.api_sub_visible=True;self.sub_wait=1.5
         def qos_zero(rows):return [dict(r,qos=0) if r['topic']==API_ALERTS else r for r in rows]
         self.rows_override=qos_zero;self.fresh();self.refused('subscribe_mismatch')
 
@@ -389,11 +389,14 @@ class FileDeliveryTests(unittest.TestCase):
         def second(answer):
             count[0]+=1
             return answer if count[0]==1 else dict(answer,reason_code=0)
-        self.publish_edit=second;self.fresh();self.refused('api_publish_gateway')
+        self.publish_edit=second;self.sub_wait=3.0;self.fresh();self.refused('api_publish_gateway')
 
     # ---- refusals: republish delivery to the HA-gateway session ----------------------------
     def test_republish_delivery_refusals(self):
         self.sub_wait=0.2;self.drop_republish=True;self.refused('republish_timeout')
+        # The cases below need the delivery itself: the subscriber returns at once
+        # when the message arrives, so a long wait only matters on a loaded host.
+        self.sub_wait=3.0
         self.drop_republish=False;self.fresh();self.payload_override=b'generated-wrong'
         self.refused('republish_mismatch')
         self.payload_override=None;self.fresh();self.sub_exit=1;self.refused('republish_exit')
