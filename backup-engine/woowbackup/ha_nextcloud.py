@@ -870,18 +870,9 @@ def ha_database(cluster, dbname):
     return doc
 
 
-def analyse(src, data, details, target, *, ha_source, pg_major):
-    """(blockers, warnings) of everything a check found."""
-    config, live = src.config, target.config
-    blockers = config_blockers(config if src.config_found else None, live, target.image_version)
-    warnings = []
-    ha_major = ha_odoo._ha_major(src)
-    if src.pg_version is None or ha_major is None:
-        blockers.append('HA 備份裡沒有 Nextcloud 的 PostgreSQL 資料庫。')
-    elif ha_major != 16:
-        blockers.append(f'HA 的 PostgreSQL 是 {src.pg_version} 版，目前只支援 16 版。')
-    elif pg_major is None or ha_major > pg_major:
-        blockers.append(f'HA 的 PostgreSQL（{src.pg_version}）比這台的（{pg_major or "未知"}）新，無法匯入。')
+def datadir_blockers(config, data, ha_source):
+    """zh-TW blockers about HA's data directory (where it is, whether the backup holds it, what it holds)."""
+    blockers = []
     datadir = config.get('datadirectory') if isinstance(config, dict) else None
     if isinstance(config, dict):
         if not isinstance(datadir, str):
@@ -899,6 +890,22 @@ def analyse(src, data, details, target, *, ha_source, pg_major):
                                 f'{data.symlink_samples[0][:120]}），無法安全地搬過來。')
             if data.encryption:
                 blockers.append('HA 的 Nextcloud 開啟了伺服器端加密（files_encryption），目前不支援匯入。')
+    return blockers
+
+
+def analyse(src, data, details, target, *, ha_source, pg_major):
+    """(blockers, warnings) of everything a check found."""
+    config, live = src.config, target.config
+    blockers = config_blockers(config if src.config_found else None, live, target.image_version)
+    warnings = []
+    ha_major = ha_odoo._ha_major(src)
+    if src.pg_version is None or ha_major is None:
+        blockers.append('HA 備份裡沒有 Nextcloud 的 PostgreSQL 資料庫。')
+    elif ha_major != 16:
+        blockers.append(f'HA 的 PostgreSQL 是 {src.pg_version} 版，目前只支援 16 版。')
+    elif pg_major is None or ha_major > pg_major:
+        blockers.append(f'HA 的 PostgreSQL（{src.pg_version}）比這台的（{pg_major or "未知"}）新，無法匯入。')
+    blockers += datadir_blockers(config, data, ha_source)
     if details is None and ha_major == 16:
         blockers.append('HA 的 PostgreSQL 裡沒有 Nextcloud 的資料庫。')
     elif isinstance(details, dict):
@@ -1366,6 +1373,9 @@ def convert(work, app, test_mode, out_dir):
         data = datadir_pass(work, src, out=data_out, ids=www)
     finally:
         data_out.close()
+    early = datadir_blockers(src.config, data, datadir_source(src.config.get('datadirectory')))
+    if early:  # refused before any cluster is started or anything else is built
+        raise BackupError('incompatible', early[0], app=app.id)
     work.phase('convert')
     cluster = ha_odoo.start_ha_cluster(work, tmp, image)
     dbname = src.config['dbname']

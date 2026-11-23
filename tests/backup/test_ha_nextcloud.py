@@ -520,7 +520,7 @@ class ConvertTests(NextcloudCase):
         with self.assertRaises(BackupError) as caught:
             self.convert(self.upload_nextcloud(share=None), ['nextcloud'])
         self.assertIn('沒有包含 share 資料夾', caught.exception.message)
-        self.assertFalse(self.runs('nc-db'))
+        self.assertFalse(self.runs('nc-db') or self.runs('hapg'), 'no cluster is started')
 
 
 class TargetTests(unittest.TestCase):
