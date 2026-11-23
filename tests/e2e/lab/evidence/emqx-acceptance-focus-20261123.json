@@ -1,6 +1,6 @@
 {
   "date": "2026-11-23",
-  "scope": "HA EMQX backup (woow-emqx add-on, EMQX 5.8.9) -> product HA import -> isolated Podman EMQX 5.8.9 on lab woowbk-dev-d (network none, no published ports)",
+  "scope": "HA EMQX backup (woow-emqx add-on, EMQX 5.8.9) -> internal-candidate lab import path (the public HA EMQX import stays blocked by PRESERVATION_BLOCKER) -> product backup-engine package + restore -> isolated Podman EMQX 5.8.9 on lab woowbk-dev-d (network none, no published ports)",
   "commercial_acceptance": "not-complete",
   "public_import_guards": "retained (PRESERVATION_BLOCKER and guarded refusals untouched; internal-candidate lab path only)",
   "branch": "feat/ha-import-batch1 (R-EMQX /tmp/ha-real-fixture-candidate-20261121, local only, not pushed)",
@@ -9,7 +9,7 @@
     "x86": "~/.woowbk-lab/ha-fixtures/20261119-b1/x86/woow-b1-x86-emqx-stopped-enc (sha256 0a53e938...)"
   },
   "each_pass_proves": [
-    "real encrypted HA backup authenticated, decrypted and imported through the product path (emqx ctl data export/import) into an isolated Podman EMQX 5.8.9",
+    "real encrypted HA backup authenticated and decrypted; an internal-candidate build (_build_candidate/_package_candidate path, NOT the public HA import, which stays blocked) imported it with the vendor tool (emqx ctl data export/import), then the product backup engine packaged and restored it (flows._package, flows.run_restore) into an isolated Podman EMQX 5.8.9",
     "three fully verified rounds: after restore, after an injected one-shot startup failure with automatic product rollback, after restart",
     "per round: MQTT allowed and denied operations with the HA credentials, retained messages, source REST API (users, ACL inventory or file-policy contract, rules/actions/connectors), negative MQTT, fresh native capture, rule/action/connector object integrity against the source cluster.hocon",
     "final private receipt scanned against every private value registry (source secrets, issued credentials, all native captures)",
@@ -49,7 +49,7 @@
       "source_commit": "5eb9d49",
       "elapsed_seconds": 950.6,
       "rule_delivery": "not assessed by design: the target file ACL denies the HA roles' rule topics",
-      "earlier_attempt": "x86-attempt1.json: generic BUILD refusal after 622s (held readers' exit after the build, under host load ~25-34); now labelled build_readers_exit_<substep> (5eb9d49); did not recur"
+      "earlier_attempt": "x86-attempt1.json: generic BUILD refusal after 622s under host load ~25-34; the cause (held readers' exit after the build) is INFERRED, not observed or root-caused; since 5eb9d49 such a stop is labelled build_readers_exit_<substep>; it did not recur in x86-attempt2 but may recur"
     }
   ],
   "fixes_today": [
@@ -94,9 +94,9 @@
     "6aeab97 subject says 'post-capture refusal after all restore rounds'; an unprefixed POST_CAPTURE meant the round-1 capture or the final receipt check. Attempt 14 (with stage labels) passed round 1, so attempt 13 was most likely a load-related round-1 capture refusal. History not rewritten."
   ],
   "deviations_and_open": [
-    "host-run unit test test_emqx_mnesia_acl_target_variant (and other run_native tests) uses the host /usr/bin/podman = production rootless storage; emqx-main ran it 5x this morning before noticing (transient --rm network=none containers of the pinned image; no service, secret, image or catalog changed). Do not run those tests on the host.",
+    "host /usr/bin/podman (the host user's production rootless storage) WAS used by host-run unit tests earlier today: test_emqx_mnesia_acl_target_variant (it calls emqx_native_runtime.run_native) ran 5x in lane emqx-main and 3x in lane emqx-filepolicy on 2026-11-23, each a transient --rm network=none container of the pinned EMQX image; per those lanes' records no service, secret, image or catalog was changed. This cannot be re-checked independently, because host production inventory access is not permitted. Never run run_native tests on the host.",
     "rule delivery uses the HA backup's ORIGINAL HTTP target (the broker's own 127.0.0.1:18083 /api/v5/status) with vendor counters; request wire bytes are not captured",
-    "commercial acceptance stays not-complete until the owner accepts the evidence; no production system was touched; nothing pushed"
+    "commercial acceptance stays not-complete until the owner accepts the evidence; nothing pushed. Production: see the host /usr/bin/podman entry above (the earlier wording 'no production system was touched' was wrong and is withdrawn)."
   ],
   "summary": "All four variants passed end to end on real HA backups (ARM and x86; built-in database ACL with real rule delivery; target file ACL policy). Commercial acceptance remains for the owner to grant.",
   "attempt_history_20261123": {
@@ -104,5 +104,16 @@
     "x86_mnesia": "1 PASS, 2 PASS with delivery",
     "arm_file": "18 PASS (attempt 17 earlier: SOURCE_API_ACL_USERS_HTTP_404, fixed by the file-policy contract)",
     "x86_file": "1 generic BUILD (readers exit), 2 PASS"
-  }
+  },
+  "variant_flags": {
+    "note": "attempt JSONs up to arm-attempt18/x86-attempt2 do not record the mode flag; the flags below come from lane emqx-main's transcript, and the 13:45 verifier independently confirmed them for the four passes (arm-mnesia-attempt17, x86-mnesia-attempt2, arm-attempt18, x86-attempt2). From arm-attempt19 on, each attempt JSON records variant_flag, target_mode, source_arch and rule_delivery_round (a static fact of the committed code).",
+    "arm-mnesia-attempt16.json": "--real-restore-mnesia-acl",
+    "arm-mnesia-attempt17.json": "--real-restore-mnesia-acl",
+    "x86-mnesia-attempt1.json": "--x86-real-restore-mnesia-acl",
+    "x86-mnesia-attempt2.json": "--x86-real-restore-mnesia-acl",
+    "arm-attempt18.json": "--real-restore",
+    "x86-attempt1.json": "--x86-real-restore",
+    "x86-attempt2.json": "--x86-real-restore"
+  },
+  "stdout_sha256_note": "every pass has the same stdout_sha256: it is the hash of the two fixed lines only, so it identifies the outcome, not the run; the run identity is source_commit + attempt file + private receipt time."
 }

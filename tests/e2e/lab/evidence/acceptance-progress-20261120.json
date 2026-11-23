@@ -5,7 +5,8 @@
   "scope": {
     "direction": "HA to Podman",
     "pi_agent": "excluded",
-    "production_changes": false
+    "production_changes": false,
+    "production_changes_note_20261123": "production_changes=false means no production service, secret, image or catalog was changed. On 2026-11-23 test_emqx_mnesia_acl_target_variant (it calls emqx_native_runtime.run_native) ran 5x in lane emqx-main and 3x in lane emqx-filepolicy on 2026-11-23, each a transient --rm network=none container of the pinned EMQX image; per those lanes' records no service, secret, image or catalog was changed. This cannot be re-checked independently, because host production inventory access is not permitted. Never run run_native tests on the host."
   },
   "verified_increments": [
     {

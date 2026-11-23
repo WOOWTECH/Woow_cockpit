@@ -57,6 +57,7 @@
     "c7a7cd0 incorrect compressed-input change fully reverted by5cff165; affected24 tests passed after revert",
     "no Hermes review retry; no public guard bypass; no original production mutation",
     "nativeparser image-volume ignore31f576e passed one affected real native test; broker adjacent18 tests passed after integration",
-    "Capacity correction: historical117/138MB member_bytes are encrypted outer-member sizes, not decompressed tar sizes. Actual generated137MB spool evidence does not establish real-source expanded fit within256MiB; oversized streams remain refused."
+    "Capacity correction: historical117/138MB member_bytes are encrypted outer-member sizes, not decompressed tar sizes. Actual generated137MB spool evidence does not establish real-source expanded fit within256MiB; oversized streams remain refused.",
+    "2026-11-23 clarification: 'no original production mutation' means no production service, secret, image or catalog was changed; host-run run_native unit tests use the host /usr/bin/podman (production rootless storage) for transient --rm network=none containers of the pinned EMQX image (recorded for 2026-11-23 in emqx-acceptance-focus-20261123.json); whether such tests ran on the host on 2026-11-22 is not recorded."
   ]
 }
