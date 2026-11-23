@@ -194,3 +194,38 @@ PATH 擋板）；整套測試都在 `/tmp/woowbk-host-heavy-tests.lock` 裡、ni
   後的實驗室容器），測試時在 dev-d 裡跑；「頁面流程」是頁面送出的 root helper 指令（瀏覽器上傳改成複製檔案）；found-state 的
   ha-check 斷言（`c5f9c92` → `5c9fd64`）改動引用的是產品原始碼而不是廠商原始碼，是實驗室的預期值、不是公開的防護，已列為擁有者的發現。
 * OpenDesign 仍開著（不是阻擋）：`projects.metadata_json.baseDir` 改寫（目前只是警告）、測試模式不會暫停 OpenDesign 的例行工作（只有提醒）。
+
+## 第三次整合（續）：code-server、第二批實驗室紀錄與 share 來源備份
+
+| 合併 commit | 來源（tip） | 內容 |
+| --- | --- | --- |
+| `88e7e6b` | `feat/ha-import-code-server-20261123`（`f20ac84`） | code-server 匯入（`ha_codeserver.py`、haapps `woow-code-server`、`habackup.NEVER_READ` 加上代理程式的登入檔）、頁面（code-server 事實卡、Cloudflare Tunnel 與 `woow_mcp_*` 附加元件「不會搬過來」的提醒）、文件、CONTRACT、dev-e 目錄項目、`codeserver_full_flow.py` 與證據（第 1 次真實嘗試 87/87）。 |
+| `fb284b8` | `lab/batch2-dev-e-20261123`（`8de186d`） | dev-e 的 code-server 與 Nextcloud 實驗室紀錄（部署、基準 16/16 與 14/14、輪替紀錄、`test_batch2_lab.py`）；只有 `tests/e2e/lab`。 |
+| `3579716` | `evidence/ha-b2-nc-share-20261123`（`24a045e`） | 從擁有者的 x86 展示機 HA 做的第二批真實來源備份紀錄（`f884a0a`、`1c76ded`）與「含 share 資料夾」的 Nextcloud HA 備份（4,467,947,520 位元組，sha256 `2dcfc676…ded9d`，兩邊相同）的腳本與證據；這是**來源**，不是匯入。 |
+
+**code-server 的衝突**（5 個檔案、diff3 共 20 段，全部是「兩邊各把自己的應用加進同一個清單」，基準 `d812699`）：
+`haapps.IMPORTERS` 兩個項目都留（OpenDesign 在前）；`backup.js` 的 `HA_APP_NAMES`、`HA_SHORT`、`HA_FACTS`、`HA_LARGE`
+都是同一位置的純插入，兩邊都留（這邊在前），`HA_LARGE` 的註解重新斷行；`HA_CODE` 手動合併（每個應用一行，註解同時寫
+OpenDesign 與 code-server 會執行的程式）；`docs/backup.md` 開頭那句手動改成「Headscale、OpenDesign 與 code-server」，版本檢查
+那一行、測試模式表格、匯入對照表與各應用的段落兩邊都留；CONTRACT 兩段修訂說明、列舉值、`HaCheck` 依序列出
+`open-design?{…}` 與 `woow-code-server?{…}`（括號讓 OpenDesign 變成中間項目後仍然成對）；`tests/backup-ui.mjs` 兩組 fixture、
+兩個第二批的情境，兩句產品清單改成「…、OpenDesign、code-server」。證明：每個檔案和「這邊＋那邊的修改」不一樣的行
+只有這些合併後的行；只有那邊改的 8 個檔案等於 `f20ac84`，只有這邊改的 45 個不變；第二批實驗室檔案兩邊相同，只有
+`batch2_baseline.py` 取 `2b85b92`（同一條實驗室分支較新的 commit，這邊的 `a9dc46b` 是它的祖先）；`tests/e2e/lab/README.md` 等於
+那邊的版本加上這邊的 Hermes 一節（一個區塊、沒有刪除任何行）。
+
+**第二批實驗室分支**：沒有文字衝突；10 個檔案中 9 個等於 `8de186d`。更正：`fb284b8` 的 commit 訊息寫「這 10 個檔案在
+`2b85b92` 之後這邊都沒改」，`tests/e2e/lab/README.md` 例外（這邊有 hermes-real 的一節），git 自動合併；證明 patch-id 兩個方向都相同，
+結果與那邊相比只多 Hermes 那一節。歷史沒有改寫。
+
+**測試**：合併前（暫存的合併結果）受影響的 `tests/backup` 模組 167 個（含真實 batch-1 HA 備份），0 個未通過、1 個略過（20261118
+的重跑，整套時另外跑）；`test_batch2_lab`＋`test_dev_d_guard` 19／26 個全過。`node tests/backup-ui.mjs`：20:48 那次在主機負載 53 時
+只出現 Playwright 10 秒逾時，由本組停止、不算；22:28–22:41（負載約 24–30）在 `fb284b8` 重跑 **101/101**（含 OpenDesign 與
+code-server 兩個第二批情境）。整套 `tests/backup` 與 `tests/e2e/lab` 在 `fb284b8`（本組另一個工作樹，同一個 commit）：`tests/backup` 1488 個：1475 通過、1 略過、12 未通過，與第一步完全相同的 id（`test_ha_omnigent` 7＋`test_litellm_lab_runner` 5，新加的 17 個 code-server 測試全過）；20261118 重跑 1/1；`tests/e2e/lab` 啟動 1097 個、1050 通過，未通過的 73 筆與第一步、integration-2 完全相同（新加的 7 個 `test_batch2_lab` 全過）。之後的 `3579716` 只加了 33 個實驗室腳本與證據檔（沒有單元測試模組），上面的結果不變。證據 `unit-tests-step3b.json`。
+
+**驗證者的提醒照抄**：
+* OpenDesign（20:36）：第 2 次失敗後 `f4a3c16` 放寬了兩項實驗室檢查（`RUNTIME_KEPT` 排除 30 個執行期項目、外洩搜尋略過以 `/`
+  開頭的值與一般網址），依據是量測與分析，不是規則 2 要求的廠商檔案行號；真實備份沒有搬任何第三方憑證；自動回復還原的是同一份
+  轉換後備份，資料檢查分不出回復與成功；瀏覽器頁面沒有在 dev-e 上測。
+* code-server（21:30）：自動回復同樣是把同一份轉換後備份再還原一次（只證明回復路徑，手動回復才證明資料互換）；「MCP 值已收集」
+  是空集合（0 個值）；工作區搬移、延伸模組搬移、ARM、真正的瀏覽器頁面、正式主機的目錄項目都沒有實測（該線已說明）。
