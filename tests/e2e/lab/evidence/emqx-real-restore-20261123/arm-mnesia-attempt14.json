@@ -1,0 +1,13 @@
+{
+  "source_commit": "038cee9a8991a8079dd956c24e2ee388fee6e22c",
+  "scope": "real ARM HA backup Mnesia ACL post-capture stage labels real restore",
+  "exit": 1,
+  "elapsed_seconds": 696.222,
+  "stdout_sha256": "08af61007ab589ce1a2b6bda0d60ad2ea09f9f17135a5bc6653e932495b5fe49",
+  "fixed_status": [
+    "REAL OWNER ROLLBACK_POST_CAPTURE_DECODE REFUSED",
+    "REAL OWNER POSTFLIGHT PASSED"
+  ],
+  "stderr_bytes_not_published": 0,
+  "commercial_acceptance": "not-complete"
+}
