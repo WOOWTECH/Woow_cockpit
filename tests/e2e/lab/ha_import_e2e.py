@@ -14,7 +14,10 @@ never printed: every evidence line is redacted.
   review fixes (opt-in, FIXPLAN item 21): kill cancel space pull c19 rollback (they need `upload` first);
   `baseline` (with --baseline ODOO_ID,N8N_ID) first restores dev-c's own backups made before any import, so the custom
   module is copied again and the result shows the import from a clean device; `live` only records the target's
-  web.base.url and upgrade marker for a later `verify`, when the import itself runs elsewhere (ha_import_ui.mjs).
+  web.base.url and upgrade marker for a later `verify`, when the import itself runs elsewhere (ha_import_ui.mjs);
+  `restart` restarts the imported Odoo and n8n units and checks data, logins and the credential again; `n8ndiag`
+  measures n8n's registry-bound package list next to the registry-free local probe (root cause of the old timeout).
+  armcompare with --source-capture explains differing rows one by one (odoo_explain.py), otherwise they stay unverified.
 
 Options: --fixtures DIR (default ~/.woowbk-lab/ha-fixtures/20261118),
 --creds FILE (default ~/.woowbk-lab/secrets/ha-import-creds.env), --n8n-data FILE (the test-data script holding the
@@ -23,6 +26,7 @@ Evidence: ~/.woowbk-lab/evidence/<NAME>/<ts>/.
 Only ~/.woowbk-lab/bin/labpodman is used; nothing on the host itself is touched.
 """
 import argparse
+from datetime import datetime, timezone
 import json
 import os
 import re
@@ -53,7 +57,7 @@ ALL = ('upload', 'keys', 'check', 'convert', 'restore', 'verify', 'db2', 'testmo
 # Backups from a real ARM HA (--arch aarch64, opt-in): the decrypted copy HA's page downloads, ARM-only code in a custom
 # module and a community node, PostgreSQL stopped uncleanly, and the imported tables against the source's fingerprint.
 EXTRA = ('baseline', 'live', 'kill', 'cancel', 'space', 'pull', 'c19', 'rollback', 'armdownload', 'armnative', 'armcrash',
-         'armcompare')
+         'armcompare', 'n8ndiag', 'restart')
 STAGING = '/var/lib/woowtech-backup/staging'
 JOB_LABEL = 'label=io.woowtech.backup.job'
 
@@ -558,6 +562,8 @@ def convert(ha, apps, database, test_mode, *, ev, key, tag):
         # The target's address and gate marker right before this import (an Odoo admin login without the freeze flag
         # moves web.base.url to the address it used, e.g. the probe's 127.0.0.1:18069).
         STATE['live_before'] = live_odoo_facts()
+        STATE['live_freeze'] = psql('odoo18-db', 'postgres', 'odoo',
+                                    "SELECT value FROM ir_config_parameter WHERE key = 'web.base.url.freeze';")
     request = {'ha_backup_id': ha, 'apps': apps, 'test_mode': test_mode, 'confirm': True,
                'request_id': request_id(tag)}
     if database:
@@ -614,6 +620,10 @@ def restore(backup_id, apps, *, ev, tag):
 def scenario_restore(ev, args):
     if not STATE.get('converted'):
         raise Failed('restore needs the converted backup of this run (convert failed or did not run)')
+    # armcompare's row evidence: anything Odoo's scheduler writes is after this moment.
+    STATE['restore_started_epoch'] = time.time()
+    STATE['restore_started_utc'] = datetime.fromtimestamp(STATE['restore_started_epoch'], timezone.utc).replace(
+        tzinfo=None).isoformat()
     job, took = restore(STATE['converted'], ['odoo', 'n8n'], ev=ev, tag='restore')
     ev.check('restore of the converted backup succeeded', job['state'] == 'succeeded',
              f'{took:.0f} s {job.get("error")} safety={(job.get("result") or {}).get("safety_backup_id")}')
@@ -887,7 +897,94 @@ def parse_arm_fingerprint(text, *, source=False):
     return result
 
 
+def sibling(name):
+    """odoo_capture / odoo_explain next to this driver (python3 -I leaves the script folder off sys.path)."""
+    if name in sys.modules:
+        return sys.modules[name]
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(name, Path(__file__).with_name(name + '.py'))
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    sys.modules[name] = module
+    return module
+
+
+def arm_row_capture(args):
+    """Row evidence inputs: the source rows (odoo_capture.py's source_cold stage of this very HA archive, fetched to
+    --source-capture) and the target now, every table's fingerprint and the four tables row by row in ONE snapshot."""
+    oc = sibling('odoo_capture')
+    directory = Path(args.source_capture)
+    manifest = oc.loads((directory / 'complete.json').read_bytes())
+    raw = (directory / 'source_cold.json').read_bytes()
+    if manifest.get('status') != 'complete' or (manifest.get('files') or {}).get('source_cold.json') != oc.digest(raw):
+        raise Failed('source capture incomplete or altered')
+    cap = oc.loads(raw)
+    archive = Path(args.fixtures) / NAMES['enc'] / f'{NAMES["enc"]}.tar'
+    if cap.get('stage') != 'source_cold' or cap.get('archive_sha256') != oc.file_hash(archive):
+        raise Failed('source capture is not of this HA archive')
+    source_tables = oc.validate(cap['records'], quiet=True)
+    source_prints = oc.fingerprints(cap['records'])
+    if not source_prints:
+        raise Failed('source capture has no table fingerprints (schema version 1)')
+    require_isolated_device()
+    sql = Path(__file__).with_name('odoo_capture.sql').read_text(encoding='utf-8')
+    proc = owner('podman', 'exec', '-i', 'odoo18-db', 'psql', '-X', '-qAt', '-v', 'ON_ERROR_STOP=1', '-U', 'postgres',
+                 '-d', 'odoo', '-f', '-', input=sql.encode(), timeout=600)
+    if proc.returncode != 0:
+        raise Failed('target capture failed')
+    records = [oc.loads(line) for line in proc.stdout.decode('utf-8').splitlines() if line.strip()]
+    target_tables = oc.validate(records)
+    lines = '\n'.join(r['line'] for r in records if r.get('kind') == 'table_fingerprint')
+    meta = next(r for r in records if r.get('kind') == 'capture_metadata')
+    return {'source_tables': source_tables, 'source_prints': source_prints, 'target_tables': target_tables,
+            'target_prints': parse_arm_fingerprint(lines), 'captured_at': meta['captured_at'],
+            'source_capture_run': manifest.get('run_id'), 'archive_sha256': cap['archive_sha256']}
+
+
+def odoo_cron_log(since_epoch):
+    """ir.cron jobs Odoo's own log (the device journal) shows starting since a moment."""
+    oc = sibling('odoo_capture')
+    proc = root('journalctl', '--since', '@%d' % int(since_epoch), '--no-pager', '-o', 'cat',
+                'CONTAINER_NAME=odoo18-web', timeout=120)
+    if proc.returncode != 0:
+        raise Failed('the Odoo log could not be read')
+    started, completed, lines = set(), set(), 0
+    for line in proc.stdout.decode('utf-8', 'replace').splitlines():
+        match = oc.CRON_LINE.search(line)
+        if match:
+            lines += 1
+            (started if match.group(2) == 'starting' else completed).add(int(match.group(1)))
+    return {'started': sorted(started), 'completed': sorted(completed), 'lines': lines}
+
+
+def arm_row_evidence(capture, source, changed):
+    """Every differing row of the four tables against a vendor-cited rule (odoo_explain); fail closed."""
+    oc, ox = sibling('odoo_capture'), sibling('odoo_explain')
+    binding = oc.table_delta(source, capture['source_prints'])
+    if not (STATE.get('restore_started_utc') and STATE.get('restore_started_epoch') and STATE.get('live_before')):
+        raise Failed('row evidence needs this run\'s convert and restore')
+    log = odoo_cron_log(STATE['restore_started_epoch'] - 5)
+    live = {'web.base.url': STATE['live_before'].get('base_url') or None,
+            'web.base.url.freeze': STATE.get('live_freeze') or None,
+            'woow_paas_platform.upgrade_done': STATE['live_before'].get('marker') or None}
+    events = ox.explain(capture['source_tables'], capture['target_tables'], rules=('import', 'runtime'), live=live,
+                        restore_start=ox.ts(STATE['restore_started_utc']),
+                        captured_at=ox.ts(capture['captured_at']), cron_log_ids=log['started'])
+    with_events = sorted({e['table'] for e in events})
+    expected = sorted(t for t in changed if t in ox.TABLES)
+    outside = sorted(t for t in changed if t not in ox.TABLES)
+    complete = with_events == expected and not binding
+    explained = [t for t in expected if complete and all(e['explained'] for e in events if e['table'] == t)]
+    return {'source_capture_run': capture['source_capture_run'], 'archive_sha256': capture['archive_sha256'],
+            'binding_ok': not binding, 'binding': {'tables': len(source), 'differ_from_ha_fingerprint': binding},
+            'restore_started_utc': STATE['restore_started_utc'], 'captured_at': capture['captured_at'],
+            'cron_log': log, 'tables_with_row_events': with_events, 'tables_outside_row_evidence': outside,
+            'explained_tables': explained, 'all_explained': complete and not outside and len(explained) == len(expected),
+            'summary': ox.summary(events), 'events': [ox.public_event(e) for e in events]}
+
+
 def scenario_armcompare(ev, args):
+    capture = None
     try:
         source = parse_arm_fingerprint(Path(args.fingerprint).read_text(encoding='utf-8'), source=True)
         if len(source) != 205:
@@ -896,8 +993,12 @@ def scenario_armcompare(ev, args):
                     'public.res_partner_category', 'public.res_country'}
         if not required <= source.keys():
             raise Failed('required source fingerprint tables missing')
-        here = parse_arm_fingerprint(psql('odoo18-db', 'postgres', 'odoo', FINGERPRINT_SQL))
-    except (Failed, OSError, UnicodeError) as error:
+        if getattr(args, 'source_capture', None):
+            capture = arm_row_capture(args)
+            here = capture['target_prints']
+        else:
+            here = parse_arm_fingerprint(psql('odoo18-db', 'postgres', 'odoo', FINGERPRINT_SQL))
+    except (Failed, OSError, UnicodeError, ValueError, KeyError, StopIteration) as error:
         ev.save('arm-compare.json', {'schema_version': 1, 'status': 'invalid_input',
                                    'error_type': type(error).__name__})
         ev.check('ARM fingerprint input valid', False, type(error).__name__)
@@ -906,23 +1007,187 @@ def scenario_armcompare(ev, args):
     rows_differ = sorted(t for t in source if t in here and here[t][0] != source[t][0])
     content_differs = sorted(t for t in source if t in here and here[t][0] == source[t][0] and here[t][1] != source[t][1])
     missing, added = sorted(set(source) - set(here)), sorted(set(here) - set(source))
-    # Every changed table needs evidence. No table name grants an exemption.
+    # Every changed table needs evidence. No table name grants an exemption: only rows the explainer matches to a
+    # vendor-cited rule, from a capture of this very archive, count as explained.
     changed = sorted(set(rows_differ) | set(content_differs))
-    unresolved = sorted(set(changed) | set(missing) | set(added))
-    ev.save('arm-compare.json', {'schema_version': 1,
-            'status': 'unverified_differences' if unresolved else 'equal_fingerprints',
+    rows, explained = None, set()
+    if capture is not None and changed:
+        try:
+            rows = arm_row_evidence(capture, source, changed)
+            explained = set(rows['explained_tables']) if rows['all_explained'] else set()
+        except (Failed, OSError, ValueError, KeyError) as error:
+            rows = {'status': 'invalid_row_evidence', 'error_type': type(error).__name__}
+    unresolved = sorted((set(changed) - explained) | set(missing) | set(added))
+    ev.save('arm-compare.json', {'schema_version': 2 if capture is not None else 1,
+            'status': 'unverified_differences' if unresolved else (
+                'explained_row_differences' if changed else 'equal_fingerprints'),
             'source_tables': len(source), 'target_tables': len(here),
             'unverified_tables': unresolved, 'identical': len(same),
             'rows_differ': {t: (source[t][0], here[t][0]) for t in rows_differ},
             'content_differs': content_differs, 'missing': missing, 'added': added,
-            'requires_row_evidence': changed})
+            'requires_row_evidence': changed, 'row_evidence': rows})
     ev.check('ARM source and x86 copy: exact table inventory', not missing and not added,
              {'missing': missing, 'added': added})
-    ev.check('ARM source and x86 copy: all table row counts identical', not rows_differ, rows_differ)
-    ev.check('ARM source and x86 copy: all equal-count table contents identical',
-             not content_differs, content_differs)
+    suffix = '' if capture is None else ' (apart from rows explained one by one in arm-compare.json)'
+    ev.check('ARM source and x86 copy: all table row counts identical' + suffix,
+             not (set(rows_differ) - explained), rows_differ)
+    ev.check('ARM source and x86 copy: all equal-count table contents identical' + suffix,
+             not (set(content_differs) - explained), content_differs)
+    if capture is not None and changed:
+        ev.check('ARM row evidence: the source capture is this HA archive and equals the HA-side fingerprint of '
+                 'all 205 tables', bool(rows and rows.get('binding_ok')), (rows or {}).get('binding') or rows)
+        ev.check('ARM row evidence: every differing row matches a vendor-cited rule (no schema change, no other table)',
+                 bool(rows and rows.get('all_explained')), (rows or {}).get('summary') or rows)
     if unresolved:
         ev.log('Unverified table differences; no automatic exemption: ' + ', '.join(unresolved))
+
+
+# n8n's package list (GET /rest/community-packages) awaits `npm outdated --json` whenever a community package is
+# installed (n8n 2.43.6 dist/modules/community-packages/community-packages.lifecycle.service.js:62-90; npm-utils.js:118
+# runs npm with no timeout), i.e. it needs the npm registry. This measures that request with a longer limit while it
+# samples the n8n container's processes, then runs the registry-free local probe on the same session.
+N8N_DIAGNOSIS = LOCAL_COMMUNITY_PROBE + r"""
+import http.cookiejar, json, subprocess, sys, threading, time, urllib.request
+req = json.loads(sys.stdin.read())
+out = {}
+jar = http.cookiejar.CookieJar()
+opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
+headers = {"browser-id": "woow-ha-e2e"}
+try:
+    login = urllib.request.Request("http://127.0.0.1:15678/rest/login", data=json.dumps(
+        {"emailOrLdapLoginId": req["email"], "password": req["password"]}).encode(),
+        headers=dict({"Content-Type": "application/json"}, **headers))
+    with opener.open(login, timeout=60) as resp:
+        out["login"] = resp.status == 200
+except Exception as exc:
+    out["login"] = False
+    out["login_error_type"] = type(exc).__name__
+listing = {}
+def run_listing():
+    began = time.monotonic()
+    try:
+        r = urllib.request.Request("http://127.0.0.1:15678/rest/community-packages", headers=headers)
+        with opener.open(r, timeout=req["timeout"]) as resp:
+            body = json.loads(resp.read() or b"null")
+            listing["status"] = resp.status
+            listing["packages"] = [[p.get("packageName"), p.get("installedVersion"), bool(p.get("failedLoading"))]
+                                   for p in (body or {}).get("data", [])]
+    except Exception as exc:
+        listing["error_type"] = type(exc).__name__
+    listing["seconds"] = round(time.monotonic() - began, 1)
+PROCS = ["/usr/local/bin/woowbk-owner", "podman", "exec", "n8n", "sh", "-c",
+         'for f in /proc/[0-9]*/cmdline; do tr "\\000" " " < "$f" 2>/dev/null; echo; done']
+seen, samples = [], 0
+if out.get("login"):
+    thread = threading.Thread(target=run_listing, daemon=True)
+    began = time.monotonic()
+    thread.start()
+    while thread.is_alive() and time.monotonic() - began < req["timeout"] + 15:
+        p = subprocess.run(PROCS, capture_output=True, timeout=30)
+        samples += 1
+        if any("npm" in line and "outdated" in line for line in p.stdout.decode("utf-8", "replace").splitlines()):
+            seen.append(round(time.monotonic() - began, 1))
+        time.sleep(3)
+    thread.join(5)
+    started = time.monotonic()
+    out.update(local_community_probe(opener, headers))
+    out["local_probe_seconds"] = round(time.monotonic() - started, 1)
+out["listing"] = listing
+out["process_samples"] = samples
+out["npm_outdated_seen"] = [seen[0], seen[-1], len(seen)] if seen else []
+print(json.dumps(out))
+"""
+
+
+def scenario_n8ndiag(ev, args):
+    """Root cause of the old 60 s probe timeout: the package list waits on the npm registry, the node itself loads."""
+    require_isolated_device()
+    request = {'email': OWNER_EMAIL, 'password': args.secrets['N8N_OWNER_PW'], 'timeout': 150}
+    proc = root('python3', '-I', '-c', N8N_DIAGNOSIS, input=json.dumps(request).encode(), timeout=400)
+    try:
+        result = json.loads(proc.stdout.decode('utf-8', 'replace').strip().splitlines()[-1])
+    except (ValueError, IndexError):
+        raise Failed('n8n diagnosis failed') from None
+    ev.save('n8n-diagnosis.json', result)
+    listing = result.get('listing') or {}
+    ev.check('n8n diagnosis: the owner logs in', result.get('login') is True, result.get('login_error_type'))
+    if EXPECT['arch'] == 'aarch64':
+        waited = listing.get('error_type') in ('TimeoutError', 'URLError', 'timeout') or listing.get('seconds', 0) >= 60
+        ev.check('n8n diagnosis: with the community package installed, GET /rest/community-packages waits on '
+                 '`npm outdated` (npm registry; this lab has no network)',
+                 bool(result.get('npm_outdated_seen')) and waited,
+                 {'listing': listing, 'npm_outdated_seen': result.get('npm_outdated_seen'),
+                  'samples': result.get('process_samples')})
+        ev.check('n8n diagnosis: the same restored node loads without the registry (database row, package files, '
+                 'runtime node type)',
+                 result.get('n8n_packages') == [['n8n-nodes-globals', '1.1.0', False]]
+                 and result.get('n8n_community_nodes_checked', 0) >= 1,
+                 {k: result.get(k) for k in ('n8n_packages', 'n8n_community_nodes_checked', 'n8n_community_error_type',
+                                             'n8n_community_error_code', 'local_probe_seconds')})
+    else:
+        ev.check('n8n diagnosis: without community packages the list answers at once and runs no npm',
+                 listing.get('status') == 200 and listing.get('packages') == [] and listing.get('seconds', 99) < 10
+                 and not result.get('npm_outdated_seen'),
+                 {'listing': listing, 'npm_outdated_seen': result.get('npm_outdated_seen')})
+
+
+def wait_healthy(seconds):
+    urls = ('http://127.0.0.1:18069/web/health', 'http://127.0.0.1:18080/web/health',
+            'http://127.0.0.1:15678/healthz/readiness', 'http://127.0.0.1:15679/healthz')
+    deadline = time.monotonic() + seconds
+    while True:
+        codes = {url: http_code(url) for url in urls}
+        if all(code == '200' for code in codes.values()) or time.monotonic() > deadline:
+            return codes
+        time.sleep(5)
+
+
+def scenario_restart(ev, args, *, database='woowtest'):
+    """The imported apps survive a full restart of their units: Odoo's database, web and gateway, and n8n.target
+    (its 7 services); then the data, logins, the credential and (ARM) the community node are checked again."""
+    names = ('odoo18-db', 'odoo18-web', 'odoo18-gateway', 'n8n-postgres', 'n8n', 'n8n-worker')
+    def started():
+        return {n: owner('podman', 'inspect', '--format', '{{.State.StartedAt}}', n).stdout.decode().strip()
+                for n in names}
+    before = started()
+    odoo_rc = owner('systemctl', '--user', 'restart', 'odoo-db.service', 'odoo.service', 'odoo-gateway.service',
+                    timeout=900).returncode
+    n8n_rc = owner('systemctl', '--user', 'restart', 'n8n.target', timeout=900).returncode
+    codes = wait_healthy(420)
+    after = started()
+    ev.check('restart: Odoo (database, web, gateway) and n8n.target restarted with new containers',
+             odoo_rc == 0 and n8n_rc == 0 and all(after[n] and after[n] != before[n] for n in names),
+             {'odoo_rc': odoo_rc, 'n8n_rc': n8n_rc, 'new_start': sorted(n for n in names if after[n] != before[n])})
+    ev.check('restart: health 200 everywhere', all(code == '200' for code in codes.values()), codes)
+    gate = owner('systemctl', '--user', 'show', 'odoo.service', '-p', 'ActiveState', '-p', 'Result').stdout.decode()
+    ev.check('restart: odoo.service active again (upgrade gate passed on start)', 'ActiveState=active' in gate,
+             gate.strip())
+    count = psql('odoo18-db', 'postgres', 'odoo', f"SELECT count(*) FROM res_partner WHERE name LIKE '{PARTNER}%';")
+    record = psql('odoo18-db', 'postgres', 'odoo', f"SELECT count(*) FROM woow_import_probe WHERE name = '{PROBE_RECORD}';")
+    ev.check('restart: Odoo still has the 5 test partners and the probe record', count == '5' and record == '1',
+             f'{count} {record}')
+    secrets = args.secrets
+    probe = device_probe({'odoo': {'logins': [['admin', secrets['ODOO_ADMIN_PW']], ['ha-probe', secrets['ODOO_PROBE_PW']]]},
+                          'n8n': {'email': OWNER_EMAIL, 'password': secrets['N8N_OWNER_PW'], 'credential': CREDENTIAL,
+                                  'value': secrets['N8N_CREDENTIAL_VALUE']}})
+    ev.save('probe-restart.json', probe)
+    ev.check('restart: Odoo admin and ha-probe log in, attachment readable',
+             probe.get('odoo_login_admin') and probe.get('odoo_login_ha-probe') and probe.get('odoo_attachment') is True,
+             probe)
+    ev.check('restart: n8n owner logs in and the credential is listed',
+             probe.get('n8n_login') is True and probe.get('n8n_credential_found') is True, probe)
+    if EXPECT['arch'] == 'aarch64':
+        ev.check('restart: the JavaScript community node still loads',
+                 ['n8n-nodes-globals', '1.1.0', False] in (probe.get('n8n_packages') or []), probe.get('n8n_packages'))
+    decrypted = credential_probe(CREDENTIAL, secrets['N8N_CREDENTIAL_VALUE'])
+    ev.check(f'restart: credential "{CREDENTIAL}" still decrypts to the expected value', decrypted.get('match') is True,
+             decrypted)
+    rows = psql('n8n-postgres', 'n8n', 'n8n', 'SELECT name || \'|\' || active FROM workflow_entity ORDER BY name;')
+    flows = dict(line.split('|', 1) for line in rows.splitlines() if '|' in line)
+    executions = psql('n8n-postgres', 'n8n', 'n8n', 'SELECT count(*) FROM execution_entity;')
+    ev.check(f'restart: 3 workflows with "{SCHEDULED}" active and the executions kept',
+             len(flows) == 3 and flows.get(SCHEDULED) == 'true' and executions.isdigit() and int(executions) >= 1,
+             {'workflows': flows, 'executions': executions})
 
 
 # ---------------------------------------------------------------- review-fix scenarios (FIXPLAN item 21)
@@ -1250,6 +1515,8 @@ def main():
     parser.add_argument('--creds', default=str(SECRET_DIR / 'ha-import-creds.env'))
     parser.add_argument('--n8n-data', default=str(SECRET_DIR / 'ha-import-n8n-testdata.sh'))
     parser.add_argument('--baseline', help='ODOO_BACKUP_ID,N8N_BACKUP_ID of dev-c backups from before any import')
+    parser.add_argument('--source-capture', help='armcompare row evidence: odoo_capture.py fetch directory of the same '
+                                                 'ARM archive (schema version 2); without it differences stay unverified')
     parser.add_argument('--evidence', default='ha-import', help='evidence folder below ~/.woowbk-lab/evidence')
     args = parser.parse_args()
     try:

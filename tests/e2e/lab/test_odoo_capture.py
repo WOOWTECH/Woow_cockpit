@@ -245,10 +245,14 @@ class PipelineTests(unittest.TestCase):
                             with self.assertRaises(ValueError): m.device_run(request, 'synthetic SQL')
                         else:
                             result = m.device_run(request, 'synthetic SQL')
-                            self.assertTrue(result['acceptance'])
+                            # The device only captures; the comparison runs on the host (fetch / compare).
+                            self.assertEqual(result['status'], 'captured')
+                            self.assertIsNone(result['acceptance'])
                 finally:
                     sys.path[:] = original_path
                 run_dir = next(output.iterdir())
+                if failure is None:
+                    self.assertTrue(m.compare(run_dir)['acceptance'])
                 outcome = m.loads((run_dir / 'outcome.json').read_bytes())
                 self.assertEqual(outcome['baseline_restored'], failure != 'baseline')
                 self.assertEqual((run_dir / 'complete.json').exists(), failure is None)
