@@ -1,0 +1,149 @@
+{
+ "what": "v4b: fake sequence with a trusted sequence of the same name (simulated future schema): injected SQL ran as woowbk_restore",
+ "harness": "tests/e2e/lab/omnigent_secreview_attacks.py",
+ "source_commit": "f13c3bf (SR-1 only, before the SR-3 fix)",
+ "exit_code": 0,
+ "elapsed_s": 287.8,
+ "stdout_sha256": "19eaf43821a7660ec323a87c8457bf74823beb296c39f5e01aa8a683aa50f061",
+ "lab": "isolated labpodman store (~/.woowbk-lab), throwaway containers by tempctr.TempObjects (--network none); never production, never dev-d",
+ "commercial_acceptance": "not-complete",
+ "result": {
+  "harness": "tests/e2e/lab/omnigent_secreview_attacks.py",
+  "image": "docker.io/library/postgres:16-alpine",
+  "fixture_sha256": "3871a468e2f3a11488df7c6a00a4a8ed7c5b89c3ba2dbc2903ec3bd677013516",
+  "started": "2026-11-23T20:39:43+0800",
+  "variants": [
+   {
+    "variant": "v4b-sequence-what-if",
+    "simulated": [
+     "the live target has a sequence public.atk_seq (as a future Omnigent schema with a sequence would)"
+    ],
+    "backup_bytes": 8908800,
+    "real": {
+     "check": {
+      "ok": true,
+      "blockers": 0,
+      "blocker_heads": [],
+      "warnings": 0,
+      "warning_heads": [],
+      "section": {
+       "users": 2,
+       "scheduled_tasks_active": 0,
+       "public_sessions": 0,
+       "account_conflicts": [],
+       "files": 1,
+       "agents": 17
+      },
+      "seconds": 58.2
+     },
+     "convert": {
+      "ok": true,
+      "seconds": 119.7,
+      "kept_accounts": [
+       "admin",
+       "operator"
+      ],
+      "conflicts": [],
+      "paused_tasks": 0,
+      "scheduled_tasks_active_reported": 0,
+      "public_sessions_reported": 0,
+      "reminders": 2,
+      "notes": 3,
+      "reminder_mentions_active_tasks": false,
+      "volumes": [
+       "omnigent-postgres-data",
+       "woowbk-j20261123T123942Z-7bbc966c-live-pi",
+       "woowbk-j20261123T123942Z-7bbc966c-live-server"
+      ]
+     },
+     "simulated": [
+      "observation hook reads the new cluster before the restore role is dropped"
+     ],
+     "log_lines": 9,
+     "left_after_cleanup": [],
+     "leaks": {
+      "live_admin_hash_canary": false
+     },
+     "hook": {
+      "large_objects_before_drop": [
+       "atk-injected:create_table=denied;superuser=denied;create_function=denied;read_file=denied;copy_program=denied;temp_table=ok;role_setting=ok;update_tasks=ok;select_users=ok;user=woowbk_restore;"
+      ]
+     },
+     "restored_probe": {
+      "objects_equal_live": false,
+      "differs": [
+       "all_schemas"
+      ],
+      "restored": {
+       "functions": [],
+       "user_triggers": 0,
+       "rules": 0,
+       "views": 0,
+       "policies": 0,
+       "event_triggers": 0,
+       "schemas": [],
+       "roles": [
+        "omnigent"
+       ],
+       "superusers": [
+        "omnigent"
+       ],
+       "role_settings": 0,
+       "large_objects": 0,
+       "extensions": [
+        "pg_trgm",
+        "plpgsql"
+       ],
+       "domains": 0,
+       "comments_user": 1,
+       "canary_user_rows": 0,
+       "active_tasks": 0,
+       "sequences": 1
+      },
+      "signature_equal_live": true,
+      "schema_dump_equal_live": true,
+      "schema_dump_sha256": "51f3e02013f44e0d730347dc6ad35e0029e24d63314d653257ce2b6689abc045"
+     }
+    },
+    "backup_sha256": "245a914603a3036af595aa915d6f4dae436f1ebe18fa0e1d35418309b857bf8d",
+    "seconds": 248.4
+   }
+  ],
+  "real_schema": {
+   "alembic": [
+    "d0a1f879a01d"
+   ],
+   "tables": [
+    "account_tokens",
+    "agents",
+    "alembic_version",
+    "comments",
+    "connections",
+    "conversation_items",
+    "conversation_labels",
+    "conversations",
+    "device_grants",
+    "files",
+    "hosts",
+    "omnigent_conversation_metadata",
+    "policies",
+    "preferences",
+    "projects",
+    "scheduled_task_runs",
+    "scheduled_tasks",
+    "session_permissions",
+    "user_daily_cost",
+    "users"
+   ],
+   "sequences": [],
+   "pg_version": "16",
+   "artifact_files": 19,
+   "cookie": true,
+   "schema_sql_sha256": "de9a06d1183a000a20dff97616ef6154c0d5ee05fcdd67cece613d6a4e00655f",
+   "counts_total": 38
+  },
+  "live_extra_sql": "CREATE SEQUENCE public.atk_seq;\n",
+  "elapsed_s": 287.8,
+  "lab_left_after_cleanup": []
+ }
+}

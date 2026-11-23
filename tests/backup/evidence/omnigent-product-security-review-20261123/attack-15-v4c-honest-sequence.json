@@ -1,0 +1,151 @@
+{
+ "what": "iteration 2: v4c, the positive path of the SR-3 check (an honest sequence of a trusted schema still moves); iteration 1's attempt had no result (podman inspect timeout)",
+ "harness": "tests/e2e/lab/omnigent_secreview_attacks.py",
+ "source_commit": "e8d608b (engine = bd0f630 + b85f2c9; SR-3 code = bd0f630's)",
+ "exit_code": 0,
+ "elapsed_s": 116.4,
+ "stdout_sha256": "19eaf43821a7660ec323a87c8457bf74823beb296c39f5e01aa8a683aa50f061",
+ "stdout_status_lines": [
+  "exit=0"
+ ],
+ "lab": "isolated labpodman store (~/.woowbk-lab), throwaway containers, --network none; never production, never dev-d",
+ "commercial_acceptance": "not-complete",
+ "result": {
+  "harness": "tests/e2e/lab/omnigent_secreview_attacks.py",
+  "image": "docker.io/library/postgres:16-alpine",
+  "fixture_sha256": "3871a468e2f3a11488df7c6a00a4a8ed7c5b89c3ba2dbc2903ec3bd677013516",
+  "started": "2026-11-24T00:17:58+0800",
+  "variants": [
+   {
+    "variant": "v4c-honest-sequence",
+    "backup_bytes": 8888320,
+    "real": {
+     "check": {
+      "ok": true,
+      "blockers": 0,
+      "blocker_heads": [],
+      "warnings": 0,
+      "warning_heads": [],
+      "section": {
+       "users": 2,
+       "scheduled_tasks_active": 0,
+       "public_sessions": 0,
+       "account_conflicts": [],
+       "files": 1,
+       "agents": 17
+      },
+      "seconds": 20.0
+     },
+     "convert": {
+      "ok": true,
+      "seconds": 51.3,
+      "kept_accounts": [
+       "admin",
+       "operator"
+      ],
+      "conflicts": [],
+      "paused_tasks": 0,
+      "scheduled_tasks_active_reported": 0,
+      "public_sessions_reported": 0,
+      "reminders": 2,
+      "notes": 3,
+      "reminder_mentions_active_tasks": false,
+      "volumes": [
+       "omnigent-postgres-data",
+       "woowbk-j20261123T161758Z-6f680abc-live-pi",
+       "woowbk-j20261123T161758Z-6f680abc-live-server"
+      ]
+     },
+     "simulated": [
+      "the live target has a sequence public.atk_seq (a future schema); observation hook reads it before the restore role is dropped"
+     ],
+     "log_lines": 9,
+     "left_after_cleanup": [],
+     "leaks": {
+      "live_admin_hash_canary": false
+     },
+     "hook": {
+      "sequence_before_drop": [
+       42,
+       true
+      ]
+     },
+     "restored_probe": {
+      "objects_equal_live": true,
+      "differs": [],
+      "restored": {
+       "functions": [],
+       "user_triggers": 0,
+       "rules": 0,
+       "views": 0,
+       "policies": 0,
+       "event_triggers": 0,
+       "schemas": [],
+       "roles": [
+        "omnigent"
+       ],
+       "superusers": [
+        "omnigent"
+       ],
+       "role_settings": 0,
+       "large_objects": 0,
+       "extensions": [
+        "pg_trgm",
+        "plpgsql"
+       ],
+       "domains": 0,
+       "comments_user": 1,
+       "canary_user_rows": 0,
+       "active_tasks": 0,
+       "task_states": {
+        "2": 1
+       },
+       "sequences": 1
+      },
+      "signature_equal_live": true,
+      "schema_dump_equal_live": true,
+      "schema_dump_sha256": "51f3e02013f44e0d730347dc6ad35e0029e24d63314d653257ce2b6689abc045"
+     }
+    },
+    "backup_sha256": "01b41392d4ace2b009cd90e89c2018dc9a008c026e9f5b2ffd4907541719da02",
+    "seconds": 104.3
+   }
+  ],
+  "real_schema": {
+   "alembic": [
+    "d0a1f879a01d"
+   ],
+   "tables": [
+    "account_tokens",
+    "agents",
+    "alembic_version",
+    "comments",
+    "connections",
+    "conversation_items",
+    "conversation_labels",
+    "conversations",
+    "device_grants",
+    "files",
+    "hosts",
+    "omnigent_conversation_metadata",
+    "policies",
+    "preferences",
+    "projects",
+    "scheduled_task_runs",
+    "scheduled_tasks",
+    "session_permissions",
+    "user_daily_cost",
+    "users"
+   ],
+   "sequences": [],
+   "pg_version": "16",
+   "artifact_files": 19,
+   "cookie": true,
+   "schema_sql_sha256": "de9a06d1183a000a20dff97616ef6154c0d5ee05fcdd67cece613d6a4e00655f",
+   "counts_total": 38
+  },
+  "live_extra_sql": "CREATE SEQUENCE public.atk_seq;\n",
+  "elapsed_s": 116.4,
+  "lab_left_after_cleanup": []
+ }
+}

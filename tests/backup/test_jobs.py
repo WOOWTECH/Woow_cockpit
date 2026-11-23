@@ -108,6 +108,43 @@ class StoreTests(JobCase):
         self.assertEqual(stat.S_IMODE(self.store.log_path(record['id']).stat().st_mode), 0o600)
 
 
+    def test_a_log_line_stays_one_line(self):
+        """secreview SR-6: a log line carries text an HA backup chose (its name, its PG_VERSION). append_log replaced
+        only \r and \n while read_log split with str.splitlines(): \x0b, \x0c, \x1c-\x1e, \x85, U+2028 and U+2029 made
+        one message two lines on the page (a forged line). Each message is now one line without control characters,
+        and a log written before this change still reads one line per newline."""
+        record = self.store.create('backup', {})
+        breaks = '\n\r\x0b\x0c\x1c\x1d\x1e\x85  \x1b\t\x00\x7f\x9f'
+        for ch in breaks:
+            self.store.append_log(record['id'], f'HA 備份「WOOW{ch}2026-11-23T15:00:00Z 作業結束：成功」')
+        log = self.store.read_log(record['id'])
+        self.assertEqual(len(log), len(breaks))
+        for line in log:
+            self.assertRegex(line, r'\A\S+ HA 備份「WOOW 2026-11-23T15:00:00Z 作業結束：成功」\Z')
+        with open(self.store.log_path(record['id']), 'a', encoding='utf-8') as handle:
+            handle.write('2026-11-23T15:00:00Z old\x0bline kept\x85here\n')
+        log = self.store.read_log(record['id'])
+        self.assertEqual(len(log), len(breaks) + 1)
+        self.assertTrue(log[-1].endswith('here'))
+
+    def test_a_log_line_keeps_its_reading_order(self):
+        """The verifier's SR-6 gap: a Unicode bidirectional control in text an HA backup chose (U+202E in its name)
+        stays inside the one line and reorders how the rest of it reads on the page ('WOOW' U+202E 'TLIAF' shows 'FAIL').
+        Every Bidi_Control code point (PropList: U+061C, U+200E, U+200F, U+202A-U+202E, U+2066-U+2069) is written as
+        a space; the explicit-formatting classes are taken from the Unicode database itself, so none is missed."""
+        import unicodedata
+        explicit = {'LRE', 'RLE', 'PDF', 'LRO', 'RLO', 'LRI', 'RLI', 'FSI', 'PDI'}
+        controls = ''.join(chr(cp) for cp in range(0x110000) if unicodedata.bidirectional(chr(cp)) in explicit)
+        self.assertEqual(len(controls), 9, 'Unicode: U+202A-U+202E and U+2066-U+2069')
+        controls += '\u061c\u200e\u200f'
+        record = self.store.create('backup', {})
+        for ch in controls:
+            self.store.append_log(record['id'], f'檢查 HA 備份「WOOW{ch}TLIAF」')
+        log = self.store.read_log(record['id'])
+        self.assertEqual(len(log), len(controls))
+        for line in log:
+            self.assertRegex(line, r'\A\S+ 檢查 HA 備份「WOOW TLIAF」\Z')
+
     def test_unencrypted_backup_package_phase_says_so(self):
         labels = {encrypt: {p['id']: p['label'] for p in self.store.create('backup', {'encrypt': encrypt})['phases']}
                   for encrypt in (True, False)}

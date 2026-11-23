@@ -25,9 +25,16 @@ VERSION_RE = re.compile(r'v?([0-9]{1,4})\.([0-9]{1,4})\.([0-9]{1,4})\Z')
 ELF_MACHINES = {'x86_64': 0x3E, 'amd64': 0x3E, 'aarch64': 0xB7, 'arm64': 0xB7}
 
 
+# C0/C1 controls, U+2028/U+2029 and the Unicode bidirectional controls (PropList Bidi_Control: U+061C, U+200E,
+# U+200F, U+202A-U+202E, U+2066-U+2069, which reorder how the text after them reads).
+CONTROL_RE = re.compile(r'[\x00-\x1f\x7f-\x9f\u2028\u2029\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]')
+
+
 def names(items, limit=10):
-    """`a、b、c 等 N 個` (each item cut at 60 characters)."""
-    items = [str(item)[:60] for item in items]
+    """`a、b、c 等 N 個` (each item cut at 60 characters; control characters shown as `?`: a name from HA's backup
+    -- a table, schema or extension name -- can hold a line break, a terminal escape or a bidirectional control,
+    and these messages reach the job log and the page; secreview SR-4 and the verifier's bidi gap)."""
+    items = [CONTROL_RE.sub('?', str(item)[:60]) for item in items]
     return '、'.join(items[:limit]) + (f' 等 {len(items)} 個' if len(items) > limit else '')
 
 

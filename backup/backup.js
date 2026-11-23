@@ -4177,7 +4177,7 @@
         ["檔案", `${num(omnigent.files)} 個`],
         ["檔案區", `${num(omnigent.artifact_files)} 個檔案（${bytes(omnigent.artifact_bytes)}）`]
       ]),
-      h("p", { class: "muted", text: "匯入後，用 HA 那邊 Omnigent 的帳號和密碼登入；這台的管理者與 runner 帳號會保留（和 HA 同名的帳號以 HA 的為準）。" })
+      h("p", { class: "muted", text: "只搬 HA 的資料，資料庫結構用這台 Omnigent 自己的。匯入後，用 HA 那邊 Omnigent 的帳號和密碼登入；這台的管理者與 runner 帳號會保留（和 HA 同名的帳號以 HA 的為準）。" })
     ];
   }
 

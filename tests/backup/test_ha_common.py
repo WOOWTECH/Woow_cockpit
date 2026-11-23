@@ -97,6 +97,18 @@ class TreeTarTests(unittest.TestCase):
             hacommon.copy_live(live, hacommon.FileTar(Path(tmp.name) / 'out2.tar'))
 
 
+class NamesTests(unittest.TestCase):
+    def test_names_carry_no_control_or_bidirectional_character(self):
+        """secreview SR-4 and the verifier's bidi gap: a name from HA's backup (a table, schema or extension name, an
+        alembic revision) reaches a message on the page. Line breaks, terminal escapes and every Unicode
+        bidirectional control (U+061C, U+200E, U+200F, U+202A-U+202E, U+2066-U+2069: a U+202E reverses how the
+        rest of the message reads) are shown as '?'; other text, Chinese included, is kept."""
+        controls = '\n\r\x1b\x85\u2028\u2029\u061c\u200e\u200f\u202a\u202b\u202c\u202d\u202e\u2066\u2067\u2068\u2069'
+        shown = hacommon.names([f'表{ch}x' for ch in controls], limit=len(controls))
+        self.assertEqual(shown, '、'.join(['表?x'] * len(controls)))
+        self.assertEqual(hacommon.names(['users', '使用者']), 'users、使用者')
+
+
 class LabelTests(unittest.TestCase):
     def work(self, stdout, code=0):
         runner = types.SimpleNamespace(podman=lambda *a, **k: types.SimpleNamespace(returncode=code, stdout=stdout))
