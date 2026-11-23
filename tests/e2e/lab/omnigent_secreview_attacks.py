@@ -1021,7 +1021,7 @@ def main(argv):
            'fixture_sha256': FIXTURE_SHA, 'started': time.strftime('%Y-%m-%dT%H:%M:%S%z'), 'variants': []}
     try:
         doc['real_schema'] = {k: v for k, v in load_or_extract(lab).items() if k != 'check_constraints'}
-        extra = V4B_LIVE_EXTRA if names == ['v4b-sequence-what-if'] else ''
+        extra = V4B_LIVE_EXTRA if names in (['v4b-sequence-what-if'], ['v4c-honest-sequence']) else ''
         lab.start_live(extra)
         doc['live_extra_sql'] = extra or None
         canaries = {'live_admin_hash_canary': lab.live_canary}
@@ -1033,6 +1033,31 @@ def main(argv):
                 doc['variants'].append({'variant': name, 'cases': [tar_attack(lab, case, entries)
                                                                    for case, entries in tar_cases().items()],
                                         'seconds': round(time.monotonic() - t0, 1)})
+            elif name == 'v4c-honest-sequence':
+                # the positive case of SR-3: an honest sequence of a trusted schema still moves (value 42)
+                t0 = time.monotonic()
+                path, size, _ = builder.build(name, "CREATE SEQUENCE public.atk_seq;\n"
+                                                    "SELECT pg_catalog.setval('public.atk_seq', 42);\n")
+                hook = {}
+                real_finish = omni.finish_trusted_data
+
+                def finish(cluster, hook=hook):
+                    hook['sequence_before_drop'] = cluster.query_json(
+                        'SELECT json_build_array(last_value, is_called) FROM public.atk_seq', omni.DATABASE)
+                    return real_finish(cluster)
+                with mock.patch.object(omni, 'finish_trusted_data', finish):
+                    run = run_product(lab, path, convert=True)
+                run['simulated'].append('the live target has a sequence public.atk_seq (a future schema); '
+                                        'observation hook reads it before the restore role is dropped')
+                run['leaks'] = scan_leaks(run.pop('_texts'), canaries)
+                run['hook'] = hook
+                if run.get('volumes'):
+                    run['restored_probe'] = probe_restored(lab, run['volumes']['omnigent-postgres-data'], 'v4c')
+                shutil.rmtree(run.pop('_out_dir'), ignore_errors=True)
+                doc['variants'].append({'variant': name, 'backup_bytes': size, 'real': run,
+                                        'backup_sha256': hashlib.sha256(Path(path).read_bytes()).hexdigest(),
+                                        'seconds': round(time.monotonic() - t0, 1)})
+                Path(path).unlink()
             elif name == 'v4b-sequence-what-if':
                 res = {'variant': name, 'simulated': ['the live target has a sequence public.atk_seq '
                                                       '(as a future Omnigent schema with a sequence would)']}
