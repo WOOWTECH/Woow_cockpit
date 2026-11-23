@@ -253,7 +253,8 @@ def explain_run(raws, captures, manifest, delta, edges, fingerprint_text):
         meta = next(r for r in raws[b]['records'] if r['kind'] == 'capture_metadata')
         rules = EDGE_RULES[name]
         events = odoo_explain.explain(captures[a], captures[b], rules=rules, live=live,
-                                      restore_start=restore_start, captured_at=odoo_explain.ts(meta['captured_at']),
+                                      restore_start=restore_start,
+                                      captured_at=odoo_explain.ts(meta.get('snapshot_at') or meta['captured_at']),
                                       cron_log_ids=started)
         other = table_delta(prints[a], prints[b], skip=odoo_explain.TABLES)
         edge_ok = all(e['explained'] for e in events) and not other

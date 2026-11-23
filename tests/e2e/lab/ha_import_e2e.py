@@ -936,8 +936,9 @@ def arm_row_capture(args):
     target_tables = oc.validate(records)
     lines = '\n'.join(r['line'] for r in records if r.get('kind') == 'table_fingerprint')
     meta = next(r for r in records if r.get('kind') == 'capture_metadata')
+    # snapshot_at (clock_timestamp in the first statement) bounds every commit the snapshot can see.
     return {'source_tables': source_tables, 'source_prints': source_prints, 'target_tables': target_tables,
-            'target_prints': parse_arm_fingerprint(lines), 'captured_at': meta['captured_at'],
+            'target_prints': parse_arm_fingerprint(lines), 'captured_at': meta.get('snapshot_at') or meta['captured_at'],
             'source_capture_run': manifest.get('run_id'), 'archive_sha256': cap['archive_sha256']}
 
 

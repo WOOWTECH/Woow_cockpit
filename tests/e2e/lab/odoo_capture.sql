@@ -7,7 +7,7 @@ SET LOCAL lock_timeout TO '5s';
 SELECT jsonb_build_object('kind','capture_metadata','schema_version',2,
   'database',current_database(),'server_version',current_setting('server_version'),
   'encoding',current_setting('server_encoding'),'snapshot',txid_current_snapshot()::text,
-  'captured_at',transaction_timestamp(),
+  'captured_at',transaction_timestamp(),'snapshot_at',clock_timestamp(),
   'other_clients',(SELECT count(*) FROM pg_stat_activity WHERE datname=current_database()
                    AND pid<>pg_backend_pid() AND backend_type='client backend'));
 -- Every user table in the same snapshot, with exactly ha_import_e2e.FINGERPRINT_SQL's count and md5.
