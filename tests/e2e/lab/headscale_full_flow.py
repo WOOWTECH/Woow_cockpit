@@ -692,7 +692,9 @@ class Run:
         same = hashlib.sha256(read_owner_file(CONFIG_REL)).hexdigest() == self.original_sha
         if same:
             drv.owner('rm', '-f', f'/home/appowner/{ORIG_REL}', timeout=60)
-        proc = drv.owner('systemctl', '--user', 'restart', *UNITS, timeout=360)
+        # --no-block: on the original (empty DERP map) config headscale crash-loops again and headplane's ExecStartPre
+        # waits up to 180 s for it -- exactly the state dev-d was found in; nothing to wait for.
+        proc = drv.owner('systemctl', '--user', 'restart', '--no-block', *UNITS, timeout=120)
         ev.check('cleanup: the original config.yaml is back (sha256 equal), its copy removed, the units restarted on it',
                  same and not owner_exists(ORIG_REL), {'restart_rc': proc.returncode,
                                                         'states': {u: unit_state(u) for u in UNITS}})
@@ -1201,7 +1203,7 @@ def run_all(run):
             run.budget(name)
             ev.log(f'== {name}')
             step()
-    except (Failed, KeyError, ValueError, OSError, subprocess.SubprocessError) as error:
+    except Exception as error:  # noqa: BLE001 - whatever stopped a phase, the cleanup below always runs
         failure = error
         ev.check(f'phase stopped: {type(error).__name__}', False, str(error)[:300])
     # Always: clients off, dev-d's own data back, the lab config back, cleanup, leaks, private folder removed.

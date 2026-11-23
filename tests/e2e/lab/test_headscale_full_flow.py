@@ -241,6 +241,16 @@ class CleanupOrderTest(unittest.TestCase):
                           'step_cleanup', 'step_leaks', 'remove_private'])
         self.assertNotIn('step_restart', names)
 
+    def test_an_unexpected_exception_still_cleans_up(self):
+        run, calls = self.fake_run(None, safety='20261123T000000Z-abcdef12')
+        run.step_check = lambda: (_ for _ in ()).throw(TypeError('harness bug'))
+        with mock.patch.object(hsff, 'keep_volume_keys', lambda *a: None):
+            failure = hsff.run_all(run)
+        self.assertIsInstance(failure, TypeError)
+        names = [c for c in calls if isinstance(c, str)]
+        self.assertEqual(names[-7:], ['clients_stop', 'inject_off', 'step_rollback_to_own', 'lab_config_off',
+                                      'step_cleanup', 'step_leaks', 'remove_private'])
+
     def test_secrets_are_loaded_before_setup(self):
         # attempt 1 (11-23 16:08): setup inspected the baseline before the kit was read -> invalid-request
         run, calls = self.fake_run('step_import', safety=None)
