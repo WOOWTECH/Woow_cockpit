@@ -72,3 +72,72 @@ dev-c `/tmp` 沒有 woowbk 檔案；觀察程式全部結束；dev-c 記憶體 9
 刻意保留：整合後的引擎留在 dev-c（之前是 `b2f63ce` 引擎，只差上述 3 個檔案；被取代的檔案備份在 dev-c
 `/var/backups/woowtech-cockpit-source/20261123T034203256171Z`）；引擎目錄多了這幾次產生的 16 個封存（約 100 MiB，轉換後的測試封存
 與還原前安全包），與之前的小組一樣保留；排程計時器 enabled＋active、沒有 schedule.json（排程關閉），與 11-23 odoo-n8n 部署後相同。
+
+---
+
+# 第二次整合與 dev-d EMQX 真實重驗：2026-11-23（integration-2 小組）
+
+同一條分支 `integration/ha-import-batch1-20261123`（只在本機，沒有推送、沒有 PR），接在 integration-1 的 `82ac971` 之後。
+`commercial_acceptance` 一律是 `not-complete`。
+
+## 合併了什麼（全部 `--no-ff`，依序）
+
+| 合併 commit | 來源（tip） | 內容 |
+| --- | --- | --- |
+| `90613fc` | R-EMQX `/tmp/ha-real-fixture-candidate-20261121` 的 `feat/ha-import-batch1`（`ab9e4da`，在本 repo 存成本機分支 `emqx/real-backup-line-20261123`） | EMQX 真實 HA 備份的實驗室工具與證據（11-21～11-23），含 emqx-gaps 的 `f82bbd2..ab9e4da`（FILE 基線的真實規則投遞、子程序時限 2100 秒）。`c8fcbe9` 之後沒有任何 commit 改 `backup-engine/`。 |
+| `7c87560` | `feat/odoo-import-mail-reminder-20261123`（`ae5b0d4`） | 擁有者決定 A：正式搬 Odoo 前提醒先停掉 HA 那邊的 Odoo，避免兩邊各寄一次信（只有提示文字，行為不變）。 |
+| `d812699` | `test/services-b-final-20261123`（`cde33c2`） | LiteLLM 真實 HA 備份的實驗室工具與證據（attempt 04 通過 24/24）、credential ledger。 |
+
+刻意沒有合併：`test/hermes-real-20261123`、`test/arm54-final-20261123`（還在跑；arm54 要 squash）。Hermes 的儀表板 cookie
+覆蓋不在 services-b-final 分支裡，它已經由 hermes-real 收進自己的分支，最後一步跟著 hermes-real 一起進來。
+
+## 合併衝突與處理（只有 R-EMQX 那一次有）
+
+兩條線從 `d06e166` 分開（R-EMQX 328 個 commit、這邊 97 個），有 9 個檔案兩邊都改過。兩邊共同的部分來自相同的 cherry-pick
+（patch-id 相同：`6ab87c2=dc1aa7e`、`79dfbc0=6b34dba`、`412124e=4a1f9fd`、`57ae7de=38f5a8c`、`7fb0e1c=61773ec`），所以每個
+衝突檔案其實只有**一邊**有自己的修改，逐一證明後整檔取那一邊：
+
+| 檔案 | 取哪一邊 | 理由 |
+| --- | --- | --- |
+| `tests/e2e/lab/emqx_real_candidate.py` | R-EMQX | 後來真實測試用的就是這版（`1b8f338`、`b727726`、`6f106de`：固定的建置階段標記、可選的 private_capture，拒絕條件不變）；這邊的檔案等於 R-EMQX 在 `61773ec` 的版本。 |
+| `tests/e2e/lab/EMQX-REAL-CALLER.md` | R-EMQX | `dea3e13`、`1b8f338` 加的段落；這邊等於 `61773ec` 的版本。 |
+| `tests/e2e/lab/ha_real_fixture.py` | 這邊 | 唯一差別是 `7566d44` 加的說明文字；程式碼與真實測試用的完全相同。 |
+| `tests/e2e/lab/test_ha_real_fixture.py`、`test_emqx_real_candidate.py` | 這邊 | `7566d44` 是 R-EMQX 版本的嚴格超集（完整讀完來源串流、v3 尾端驗證失敗、截斷、gzip 尾端損壞、公開 EMQX 轉換在內部建置後仍被擋）。這就是把這邊的意圖帶到 R-EMQX 的程式上；在 R-EMQX 的程式上通過 54/54。沒有放寬任何斷言。 |
+
+自動合併、人工檢查：`acceptance-progress-20261120.json` 仍是合法 JSON，這邊改的 64 個值與 R-EMQX 改的 1 個值都在；
+`emqx-cold-encrypted-preflight-20261121.json`、`real-fixture-metadata-20261121.json`、`REAL-FIXTURE-PREPARATION.md` 兩邊位元組相同。
+其他證據路徑不同，兩邊全部保留。
+
+合併後另外修了一個 R-EMQX 線既有的錯誤：`5d83b24` `run_emqx_adapter_lab.sh` 打包清單裡的 `emqx_candidate_stage.py` 少了
+`tests/e2e/lab/` 前綴（`b727726` 帶進來的；`5d83b24` 的 commit 訊息把 `b727726` 的日期寫成 11-22，正確是 2026-11-23 00:19），
+tar 會失敗；只改路徑，`test_emqx_adapter_wrapper` 由 5/7 變 7/7。真實擁有者測試用的 `run_emqx_real_owner.sh` 不受影響。
+
+## 單元測試（`unit-tests-step2.json`）
+
+全部在主機上跑，程序內守衛禁止啟動 podman／labpodman／ssh／sudo／systemctl 等，也擋下 `emqx_native_runtime.run_native`
+（它會呼叫主機正式環境的 `/usr/bin/podman`）；另有 PATH 擋板。整套測試都在 `/tmp/woowbk-host-heavy-tests.lock` 裡、nice／ionice 下跑。
+
+| 套件 | 結果 |
+| --- | --- |
+| `tests/backup`（全部，開啟真實 batch-1 HA 備份） | 1454 個：1440 通過、1 略過、13 未通過＝`test_ha_omnigent` 7 個（既有的 SECURITY_BLOCKER，`82ac971` 與 `ab9e4da` 上 id 完全相同）＋`test_litellm_lab_runner` 5 個（守衛自己的誤判；只看執行檔重跑 6/6 通過）＋1 個時間敏感測試（子程序只給 0.3 秒，主機負載約 25 時沒趕上；單獨重跑 3 次 18/18 通過）。`test_ha_b1_real` 5/5。 |
+| 略過的那 1 個 | `test_ha_backup.RealBackupTests`：用 20261118 的真實 HA 備份重跑 1/1 通過。 |
+| `test_ha_emqx` | 這裡 0 個未通過（`82ac971` 上是 10 個）。不是本小組改的：R-EMQX 的 `ca0a30d`（11-23 04:09）把舊的公開入口測試改成檢查 PRESERVATION_BLOCKER 必須擋下，建置／打包的回歸測試改走內部候選路徑。防護本身沒變：`ha_emqx.convert` 仍丟出 PRESERVATION_BLOCKER。 |
+| `node tests/backup-ui.mjs` | 99/99 通過（500 秒）。 |
+| `tests/e2e/lab`（兩條線全部 120 個模組，`5d83b24`） | 啟動 1012 個、965 通過。R-COCKPIT 自己的 152/152、兩邊都有的 111/111、services-b 17/17 全過；R-EMQX 自己的 732 個裡 685 通過、45 個需要真的原生執行環境（`run_native`＝主機 podman）而被守衛在啟動前擋下、2 個過期測試（見下）；另有 8 個測試類別（30 個測試）的 setUpClass 就需要原生環境，沒有啟動。被擋下的呼叫共 133 次，全是 `run_native`，沒有任何 podman 程序被啟動。同樣的未通過 id 在合併前的 `ab9e4da` 一模一樣。 |
+| 合併前的 EMQX 模擬測試（19 個模組） | 314/314 通過。 |
+
+過期測試：`test_emqx_persisted_values` 2 個，從 R-EMQX 的 `60844f1`（11-22 23:16，二分搜尋找到）開始失敗：證據回執改成固定的在地化文字
+（`credential-preflight.txt`，198 位元組，不再含 ASCII 的 `passed`），測試還在找 `credential-preflight.json`，而且拿 `passed`
+當作必須出現在回執裡的探針值。依規則（只有供應商原始碼能證明時才改斷言）這裡沒改，留給 EMQX 小組更新探針。
+
+## dev-d 真實重驗（從整合後的樹跑 EMQX）
+
+`emqx-real-restore-20261123/integration-arm-mnesia-attempt1.json`（證據 commit `1646337`）：在 `d812699` 從本工作樹執行
+`tests/e2e/lab/run_emqx_real_owner.sh --real-restore-mnesia-acl`。結束碼 0、1057 秒（18:13:59–18:31:36），只有兩行固定輸出
+`REAL OWNER RESTORE ROLLBACK PASSED`、`REAL OWNER POSTFLIGHT PASSED`；stderr 0 位元組；dev-d 鎖由這次執行持有；執行中 HEAD 沒變；
+這個模式下規則投遞是必跑的。私有回執 `~/.woowbk-lab/emqx-real-owner-evidence-gn1stghl/owner-restore.txt`（0600）的 sha256 與
+R-EMQX 先前通過的相同（`ea43e157...5b0e`）。執行後 dev-d：`isolation true none {}`。
+
+範圍照實說：真實的 ARM 加密冷備份走**內部候選**建置／打包路徑（公開的 HA EMQX 匯入仍被 PRESERVATION_BLOCKER 擋住）進到 dev-d 的
+EMQX，含匯入的 Mnesia ACL；MQTT／API／負面／ACL／物件檢查、真實規則投遞（HTTP 動作用廠商計數器證明，目標是備份原本的位址）、
+注入一次啟動失敗觸發自動回復、重新啟動一輪、清理與事後檢查。模擬的只有回復的觸發。
