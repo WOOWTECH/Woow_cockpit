@@ -1781,19 +1781,24 @@ class QuadletPostgresAdapter(Adapter):
         """{file name: bytes} of the app's Quadlet files as the owner has them (the HA import reads the live setup)."""
         return self._read_owner_quadlets()
 
-    def import_manifest(self, staging_dir, *, postgres=None, volumes=None, dirs=None):
+    def import_manifest(self, staging_dir, *, postgres=None, volumes=None, dirs=None, secrets=None):
         """The app section and entries of a backup whose data items were made elsewhere -- a Home Assistant import
         (haimport.py, CONTRACT section 9): images, secrets, config files and Quadlet files are read from the live app
         as the owner, without stopping anything, exactly like backup() reads them; the data items are `postgres`
         {id: {database, server_version, major, file}}, `volumes` {name: file} and `dirs` {path: file}, exactly one
-        for every item the catalog declares. No http-json snapshot and no digests are recorded (nothing to compare
+        for every item the catalog declares. `secrets` {name: file}: a secret the conversion brings from HA instead
+        of the live one (LiteLLM's salt key, which belongs to the database it encrypted); only a secret the catalog
+        declares, one small regular file each. No http-json snapshot and no digests are recorded (nothing to compare
         them with on this device); the installed settings are carried like in every backup."""
         app = self.app
         staging = Path(staging_dir)
         postgres, volumes, dirs = dict(postgres or {}), dict(volumes or {}), dict(dirs or {})
+        replaced = dict(secrets or {})
         wanted = ({p['id'] for p in app.postgres}, {v['name'] for v in app.volumes}, {d['path'] for d in app.data_dirs})
         if (set(postgres), set(volumes), set(dirs)) != wanted:
             raise BackupError('internal-error', f'轉換後的資料項目和應用「{app.name}」的設定不一致。', app=app.id)
+        if not set(replaced) <= {s['name'] for s in app.secrets}:
+            raise BackupError('internal-error', f'轉換帶來的應用機密不是應用「{app.name}」設定的機密。', app=app.id)
         for sub in ('postgres', 'volumes', 'dirs', 'secrets', 'config', 'quadlet'):
             (staging / sub).mkdir(mode=0o700, exist_ok=True)
         quadlets = self._read_owner_quadlets()
@@ -1803,7 +1808,8 @@ class QuadletPostgresAdapter(Adapter):
             if image is None:
                 raise BackupError('job-failed', f'找不到應用使用的映像 {ref}。', app=app.id)
             images.append({'ref': ref, **image})
-        secrets_ = [self._read_secret(s['name'], staging) for s in app.secrets]
+        secrets_ = [self._converted_secret(s['name'], replaced[s['name']]) if s['name'] in replaced
+                    else self._read_secret(s['name'], staging) for s in app.secrets]
         configs = [self._read_config(i, c, staging) for i, c in enumerate(app.config_files)]
         for name in app.quadlet_files:
             _write_private(staging / 'quadlet' / name, quadlets[name])
@@ -2149,6 +2155,18 @@ class QuadletPostgresAdapter(Adapter):
         _write_private(dest, data[:-1])
         self.log(f'已讀取應用機密 {name}（內容不記錄）')
         return {'name': name, 'file': dest}
+
+    def _converted_secret(self, name, path):
+        """A secret value a conversion wrote (import_manifest `secrets`): one regular file, not a link, 1 byte to
+        MAX_SECRET_BYTES (what `podman secret create` takes back at the restore)."""
+        try:
+            st = os.lstat(path)
+        except OSError:
+            raise BackupError('internal-error', f'找不到轉換後的應用機密 {name}。', app=self.app.id) from None
+        if not stat.S_ISREG(st.st_mode) or not 0 < st.st_size <= MAX_SECRET_BYTES:
+            raise BackupError('internal-error', f'轉換後的應用機密 {name} 格式不正確。', app=self.app.id)
+        self.log(f'應用機密 {name} 使用 HA 備份帶來的值（內容不記錄）')
+        return {'name': name, 'file': Path(path)}
 
     def _read_config(self, index, config, staging):
         data = self.runner.read_file(config['path'])

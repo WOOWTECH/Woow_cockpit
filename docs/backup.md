@@ -320,7 +320,7 @@ Cockpit「備份與還原」頁為 rootless Podman Quadlet 應用建立備份，
 
 ## 從 Home Assistant 備份匯入
 
-可以把 Home Assistant OS（HA）的備份檔上傳到這台設備，把其中 WOOWTECH 的 Odoo、n8n、Omnigent、Hermes、EMQX 與 Headscale 附加元件的資料搬到這台的 Podman 應用。整個過程分成三段：**檢查**（不變更任何資料）→ **轉換**成這台的備份（不停機、不變更任何資料）→ 用一般的**還原**步驟取代這台的資料（和一般還原一樣，先自動保存還原前備份，失敗自動回復）。需要支援 HA 匯入的備份元件；較舊的備份元件會說明需要更新（見下方「錯誤與提示」）。
+可以把 Home Assistant OS（HA）的備份檔上傳到這台設備，把其中 WOOWTECH 的 Odoo、n8n、Omnigent、Hermes、EMQX、Headscale 與 LiteLLM 附加元件的資料搬到這台的 Podman 應用。整個過程分成三段：**檢查**（不變更任何資料）→ **轉換**成這台的備份（不停機、不變更任何資料）→ 用一般的**還原**步驟取代這台的資料（和一般還原一樣，先自動保存還原前備份，失敗自動回復）。需要支援 HA 匯入的備份元件；較舊的備份元件會說明需要更新（見下方「錯誤與提示」）。
 
 ### 可以匯入什麼
 
@@ -332,12 +332,13 @@ Cockpit「備份與還原」頁為 rootless Podman Quadlet 應用建立備份，
 | WOOWTECH Hermes 附加元件（`*_woow-hermes`） | 「Hermes 代理」 | 對話、記憶、技能、排程、外掛與 HA 的設定檔（`config.yaml`）一起搬；這台的 Dashboard 密碼、API 與 Webhook 金鑰、`hermes.env` 保留 |
 | WOOWTECH EMQX 附加元件（`*_woow-emqx`） | 「EMQX MQTT 代理」 | MQTT 帳號、ACL 規則、Dashboard 帳號、API 金鑰、封鎖名單、保留訊息、規則與連接器一起搬；這台的節點名稱與連接埠保留 |
 | WOOWTECH Headscale 附加元件（`*_woow-headscale`） | 「Headscale VPN 控制伺服器」 | 使用者、裝置、預先授權金鑰、DNS 額外記錄與伺服器身分金鑰一起搬；這台的伺服器網址、IP 位址範圍與 API 金鑰保留 |
+| WOOWTECH LiteLLM 附加元件（`*_woow-litellm`，WOOWTECH 內部 HA 才有） | 「LiteLLM 閘道」 | 虛擬金鑰、使用者、團隊、模型、儲存的供應商憑證、用量紀錄與 ChatGPT 訂閱登入一起搬，HA 的加密金鑰（salt）取代這台的；這台的主金鑰、管理介面密碼、資料庫密碼與網址保留 |
 | 其他附加元件、Home Assistant 本身的設定 | — | 不會匯入；HA 備份頁列為「這台沒有對應的應用」 |
 
-- **會搬過來的**：資料、資料本身的金鑰（例如 n8n 的加密金鑰、Headscale 的伺服器身分金鑰）和大多數應用的登入帳號（使用者跟著資料走；Hermes 例外，見下方）。
+- **會搬過來的**：資料、資料本身的金鑰（例如 n8n 的加密金鑰、Headscale 的伺服器身分金鑰、LiteLLM 的加密金鑰 salt）和大多數應用的登入帳號（使用者跟著資料走；Hermes 例外，見下方）。
 - **保持不變的**：這台的網址（Odoo 的 `web.base.url`、Headscale 的伺服器網址）、連接埠、資料庫密碼、Odoo 主密碼、n8n 的 webhook 網址與佇列設定、應用機密與服務定義，以及這台放在資料以外的設定檔（例如 Hermes 的 `hermes.env`、EMQX 的 `base.hocon`）。
 - **條件**（檢查時逐項確認，不符合就無法轉換，並說明原因）：
-  - 這台已安裝對應的應用，而且和 HA 那邊是同一個版本：Odoo 每個已安裝模組的版本都相同，n8n、Omnigent、Hermes、EMQX、Headscale 本身的版本相同（HA 附加元件有自己的版本號，檢查時換算成它附帶的產品版本再比較，例如 Omnigent 附加元件 0.1.23 是 Omnigent 0.21.0）。這台還沒安裝時，HA 備份頁會寫「這台還沒安裝，請先到「應用軟體」安裝同版本」。
+  - 這台已安裝對應的應用，而且和 HA 那邊是同一個版本：Odoo 每個已安裝模組的版本都相同，n8n、Omnigent、Hermes、EMQX、Headscale、LiteLLM 本身的版本相同（HA 附加元件有自己的版本號，檢查時換算成它附帶的產品版本再比較，例如 Omnigent 附加元件 0.1.23 是 Omnigent 0.21.0）。這台還沒安裝時，HA 備份頁會寫「這台還沒安裝，請先到「應用軟體」安裝同版本」。
   - HA 那台是 x86（amd64）或 ARM（aarch64，例如樹莓派、HA Green）的 64 位元設備，兩種做的備份都能匯入這台。
   - 要搬過來的 Odoo 自訂模組不能含只能在其他處理器上執行的程式（例如 ARM 專用的 `.so`）；有的話會寫出模組名稱並擋下，請先在 HA 換成不含這類程式的版本再做一次備份。Hermes 的資料也一樣：含其他處理器的程式時無法匯入。n8n 的社群節點含這類程式時仍可匯入，但會提醒你該節點要在這台重新安裝。
   - Odoo 用到這台沒有的模組時，HA 備份裡要有那個模組。模組放在 HA 的 `/share/odoo_addons` 時，做 HA 備份要把 **share** 資料夾也勾進去。
@@ -345,9 +346,10 @@ Cockpit「備份與還原」頁為 rootless Podman Quadlet 應用建立備份，
   - Omnigent：資料庫結構版本和這台相同，HA 備份裡有 Omnigent 的登入金鑰與代理程式檔案。
   - EMQX：HA 的 EMQX Dashboard 已經改掉預設的 admin／public 密碼。
   - Headscale：兩邊的 IP 位址範圍設定相同，而且 HA 每台裝置的 VPN 位址都在範圍內。
+  - LiteLLM：附加元件 0.1.15（LiteLLM 1.104.0）搭配這台同版本的 LiteLLM，兩邊的資料庫結構版本（Prisma 遷移紀錄）與資料表欄位完全相同；HA 備份裡的加密金鑰（`data/secrets/salt_key`）必須就是 HA 資料庫所記錄的那一把，否則搬過來後儲存的供應商憑證無法解密，所以會擋下。HA 用 PostgreSQL 18、這台用 17：只有 LiteLLM 這樣從較新的版本搬到較舊的版本，而且只搬資料列（見下方）。
   - 這台的空間足夠。
 
-### 各應用搬什麼、留什麼（Omnigent、Hermes、EMQX、Headscale）
+### 各應用搬什麼、留什麼（Omnigent、Hermes、EMQX、Headscale、LiteLLM）
 
 還原前的說明會逐項列出下面這些內容（由備份元件寫出），檢查結果也會列出各項的數量。
 
@@ -355,6 +357,7 @@ Cockpit「備份與還原」頁為 rootless Podman Quadlet 應用建立備份，
 - **Hermes**：對話、記憶、技能、排程、外掛與 HA 的設定檔（`config.yaml`）換成 HA 的。這台的 Dashboard 密碼、API 金鑰、Webhook 與工作階段金鑰以及 `hermes.env` 保持不變，`hermes.env` 中的金鑰會蓋過 HA 的同名金鑰。HA 的外掛會取代這台的外掛與配對（例如 Omnigent、Paseo）。HA 的 `/media` 資料夾不會搬過來。
 - **EMQX**：MQTT 帳號、ACL 規則、Dashboard 帳號、API 金鑰、封鎖名單、PSK、保留訊息與規則、連接器設定換成 HA 的；HA 的 API 金鑰會取代這台的。這台的節點名稱、連接埠、匿名登入限制與「未符合規則的主題拒絕」設定保持不變（HA 允許匿名連線時，原本匿名連線的裝置要建立 MQTT 帳號）。HA 的 EMQX 外掛不會搬過來。
 - **Headscale**：使用者、裝置、預先授權金鑰與 DNS 額外記錄換成 HA 的，HA 的伺服器身分金鑰（noise）也一起搬過來。這台的伺服器網址、IP 位址範圍、存取政策與 API 金鑰保持不變：HA 的 API 金鑰不會搬過來，這台的 Headplane 與 MCP 管理工具照常可用。
+- **LiteLLM**：虛擬金鑰、使用者、團隊、組織、模型、儲存的供應商憑證、預算、用量紀錄、管理介面存的設定與 ChatGPT 訂閱登入換成 HA 的；HA 的加密金鑰（salt）一起搬過來，取代這台的應用機密 `litellm-salt-key`（還原前備份保有這台原本的金鑰與資料，還原失敗自動回復或之後還原到匯入前，兩者都會放回來）。這台的主金鑰（master key）、管理介面帳號密碼、資料庫密碼與網址、`config.yaml`、`litellm.env` 與服務定義保持不變。只搬 HA 的資料：資料庫結構用這台 LiteLLM 自己的（轉換時在同一個快照讀出並確認期間沒有變動），HA 的資料表內容逐表以這台的欄位清單搬到新的資料庫，HA 備份裡的資料庫結構、HA 自己的 `woow` 結構描述與兩個手動建立的用量索引、HA 的其他機密檔與設定都不會搬過來。**這台原本的虛擬金鑰會失效**：檢查結果與還原前的說明會列出這台目前使用 LiteLLM 金鑰的其他應用（依這台的應用目錄、設定檔與服務定義判斷，例如 Hermes、OpenDesign、Omnigent、Pi Agent），匯入後要為它們重新設定金鑰；除了這個提醒，匯入不會改動那些應用。
 
 ### 步驟
 
@@ -372,9 +375,10 @@ Cockpit「備份與還原」頁為 rootless Podman Quadlet 應用建立備份，
      - Hermes：對話（工作階段與訊息）、技能、排程、外掛、資料大小，以及 HA 的 `.env` 有幾項設定（內容不會顯示；這台 `hermes.env` 的同名設定優先）；匯入後用**這台**的 Hermes Dashboard 密碼登入，不是 HA 的。
      - EMQX：MQTT 帳號、ACL 規則、Dashboard 帳號、API 金鑰、封鎖名單、保留訊息、是否允許匿名連線，以及製作備份時 EMQX 是否正在執行；匯入後用 HA 那邊 EMQX Dashboard 的帳號和密碼登入。
      - Headscale：使用者、裝置、預先授權金鑰、API 金鑰（不會搬過來）、DNS 額外記錄、IP 位址範圍、HA 的伺服器網址與這台的伺服器網址；匯入後每一台裝置的登入伺服器都要改成這台的網址。
+     - LiteLLM：虛擬金鑰（不含管理介面的登入工作階段）、使用者與團隊、模型與儲存的供應商憑證、用量紀錄、ChatGPT 訂閱登入、資料庫版本（HA 的 PostgreSQL 18 → 這台的 17，只搬資料列）與「這台用 LiteLLM 金鑰的應用」；匯入後用這台的主金鑰與管理介面密碼登入。
      - 需要注意的地方照備份元件的說明列出，例如 Hermes 設定裡連到 HA 內部的位址、會取代這台的外掛（Omnigent、Paseo 等配對要重新設定）、EMQX 的 API 金鑰會取代這台的、備份是在 EMQX 執行中製作的、Headscale 的 API 金鑰不會搬過來、Omnigent 不會搬過來的執行期設定檔。
    - 頁面提醒哪些內容是會在這台執行的程式，只匯入你信任的備份：Odoo 與 n8n 是「**Odoo 的自訂模組和 n8n 的社群節點是會在這台執行的程式，只匯入你信任的備份。**」；Omnigent 的代理程式、Hermes 的技能與外掛也算在內。只匯入 EMQX 或 Headscale 時，提醒的是搬過來的帳號、金鑰和設定都來自這份 HA 備份。
-   - 「這只是測試」：預設**不勾**，下面一行寫出這次勾選的應用各會先關掉什麼、什麼不會關掉（只有 Odoo 和 n8n 時寫成「這只是測試（先關掉排程、寄信和工作流程）」），見下方「測試匯入」。勾選的應用有 Odoo 時，再加一句：正式搬家時 Odoo 會接著寄出 HA 上還沒寄出的信和每天的提醒信，請先停掉 HA 那邊的 Odoo，避免兩邊各寄一次。
+   - 「這只是測試」：預設**不勾**，下面一行寫出這次勾選的應用各會先關掉什麼、什麼不會關掉（只有 Odoo 和 n8n 時寫成「這只是測試（先關掉排程、寄信和工作流程）」），見下方「測試匯入」。勾選的應用有 Odoo 時，再加一句：正式搬家時 Odoo 會接著寄出 HA 上還沒寄出的信和每天的提醒信，請先停掉 HA 那邊的 Odoo，避免兩邊各寄一次。勾選的應用有 LiteLLM 時，再加一句（負責人 2026-11-23 的決定，只是提醒）：正式搬家時這台 LiteLLM 原本的虛擬金鑰會換成 HA 的，列出這台目前用 LiteLLM 金鑰的應用（例如「Hermes 代理、OpenDesign 目前用的 LiteLLM 金鑰會失效，匯入後要為它們重新設定金鑰」；沒有找到時寫「這台原本發出的金鑰都會失效」）。
    - 有任何應用沒有通過檢查時不能繼續；依原因處理後按「重新檢查」，或按「上一步」取消勾選沒有通過的應用，只匯入其他應用。
 8. **轉換**：按「下一步：轉換…」並確認後，背景作業「轉換 HA 備份」把資料轉成這台的備份格式，完成並驗證後存成一份手動備份（備註「由 HA 備份轉換：…」，依「預設加密備份」以這台設備的金鑰加密）。轉換時應用照常運作。
 9. **還原**：轉換完成後，頁面直接帶到這份備份的還原步驟（從「預檢」開始），上方說明還原會取代什麼、保留什麼，以及備份元件對這次匯入的說明（例如登入帳號會換成 HA 那邊的、HA 的自訂模組會一起放進這台的自訂模組資料夾；Omnigent、Hermes、EMQX、Headscale 各寫一段搬什麼、留什麼，見上方「各應用搬什麼、留什麼」）；「確認」步驟也看得到。之後的預檢、確認與進度和一般還原完全相同；還原不需要 HA 的金鑰。
@@ -385,7 +389,7 @@ Cockpit「備份與還原」頁為 rootless Podman Quadlet 應用建立備份，
     - 上傳的 HA 備份檔還在這台時：「匯入完成後，建議刪除這份 HA 備份檔（裡面可能有 HA 的密碼與權杖）。」並連到那份 HA 備份；
     - 可能需要修改的 n8n 工作流程。
 
-### 各應用匯入之後要做的事（Omnigent、Hermes、EMQX、Headscale）
+### 各應用匯入之後要做的事（Omnigent、Hermes、EMQX、Headscale、LiteLLM）
 
 這些提醒由備份元件寫出，結果頁照原文列出（數量與網址是這次匯入的）：
 
@@ -393,7 +397,8 @@ Cockpit「備份與還原」頁為 rootless Podman Quadlet 應用建立備份，
 - **Hermes**：用**這台**的 Hermes Dashboard 密碼登入（不是 HA 的）；呼叫 Hermes API 或 Webhook 的地方改用這台的網址與 API 金鑰；**重新配對 Hermes 的 Omnigent 與 Paseo 外掛**，HA 上的配對不會沿用；HA 的設定連到 HA 內部的位址時（例如 `homeassistant.local` 或 HA 上其他附加元件），改成這台連得到的位址；用到 HA 的 `/media` 的設定、排程或技能改用這台的資料夾；HA 的排程會在這台執行，請先停掉 HA 的 Hermes。
 - **EMQX**：把 MQTT 裝置與服務（例如 Home Assistant 的 MQTT 整合、Zigbee2MQTT）改連到這台的 EMQX；用 HA 那邊的 EMQX Dashboard 帳號和密碼登入；HA 允許匿名連線時，原本匿名連線的裝置要建立 MQTT 帳號；HA 的規則或連接器連到 HA 內部的位址時要改；HA 的 EMQX 外掛需要時請在這台重新安裝；HA 的 API 金鑰已取代這台的，使用這台 EMQX API 的工具要換成新的金鑰。
 - **Headscale**：**把每一台裝置的登入伺服器改成這台的網址**（例如 `tailscale up --login-server=<這台的網址>`），不再使用 HA 的網址；**把 HA 的 Headscale 附加元件永久停用**（關掉開機自動啟動）：兩台伺服器使用同一個身分金鑰卻有不同的資料，會讓裝置連線錯亂。
-- **MCP（Hermes、EMQX、Headscale）**：這台有對應的 MCP 管理應用（目錄項目 `hermes-mcp-admin`、`emqx-mcp-admin`、`headscale-mcp-admin`，以這台目錄裡的名稱顯示）時，提醒到那裡確認或重新設定連線資料（MCP 管理工具的設定不會從 HA 搬過來）；另外提醒：HA 上如果有「Woow Hermes MCP Server」等 MCP 附加元件，請把它停掉，並把指向它的 MCP 連接器（例如 claude.ai）刪掉，改用這台的 MCP 網址重新建立。這些 MCP 提醒由備份元件寫出，頁面不會再用自己的話重複一次。
+- **LiteLLM**：用**這台**的主金鑰與管理介面密碼登入（HA 的主金鑰在這台不能用）；HA 的虛擬金鑰在這台繼續有效，原本連到 HA 的用戶端改連到這台的 LiteLLM 網址；**為這台使用 LiteLLM 金鑰的應用重新設定金鑰**（名單見還原前的說明）；有 ChatGPT 訂閱登入時請停掉 HA 那邊的 LiteLLM（登入權杖會輪替，兩邊同時用會讓其中一邊失效），HA 在備份之後還執行過的話到這台的 ChatGPT 頁面重新連結；HA 的模型設定連到 HA 內部的位址時改成這台連得到的位址。
+- **MCP（Hermes、EMQX、Headscale、LiteLLM）**：這台有對應的 MCP 管理應用（目錄項目 `hermes-mcp-admin`、`emqx-mcp-admin`、`headscale-mcp-admin`、`litellm-mcp-admin`，以這台目錄裡的名稱顯示）時，提醒到那裡確認或重新設定連線資料（MCP 管理工具的設定不會從 HA 搬過來）；另外提醒：HA 上如果有「Woow Hermes MCP Server」等 MCP 附加元件，請把它停掉，並把指向它的 MCP 連接器（例如 claude.ai）刪掉，改用這台的 MCP 網址重新建立。這些 MCP 提醒由備份元件寫出，頁面不會再用自己的話重複一次。
 
 轉換好的備份會留在「備份列表」（標示「由 HA 轉換」），詳情頁寫出它來自哪一份 HA 備份；之後要再還原它，按「還原」即可。
 
@@ -407,7 +412,7 @@ Cockpit「備份與還原」頁為 rootless Podman Quadlet 應用建立備份，
 | Odoo | 不寄信、不執行排程動作（並換一個新的資料庫識別碼） |
 | Omnigent | 啟用中的排程全部先暫停；確認無誤後到 Omnigent 重新啟用 |
 | Hermes | **不會暫停任何功能**：排程和訊息機器人照常執行，所以測試時請停掉 HA 那邊的 Hermes 附加元件，避免兩邊各做一次 |
-| EMQX、Headscale | 不會先關掉任何功能，還原後照常運作 |
+| EMQX、Headscale、LiteLLM | 不會先關掉任何功能，還原後照常運作 |
 
 只匯入 Odoo、n8n 或 Omnigent 時，測試期間 HA 那邊可以照常使用；有 Hermes、EMQX 或 Headscale 時則不一定（Hermes 要先停掉 HA 那邊的附加元件；Headscale 的提醒會請你停用 HA 的 Headscale 附加元件）。確定要正式搬過來時，請重新匯入一次，並且不要勾選。
 

@@ -1865,6 +1865,29 @@ function b1Fixture({ check = b1Check(), testMode = false, extra = {} } = {}) {
   data.inspect[B_B1] = b1Inspect();
   return data;
 }
+// LiteLLM (owner decision 2026-11-23, 「決定1 做」): the WOOWTECH LiteLLM add-on as the engine's tests name and version it
+// (tests/backup/test_ha_litellm.py), its section and warnings (ha_litellm.check: the apps here that use LiteLLM keys,
+// read from this device's catalog and configuration, option A).
+const LL = { slug: '9663031d_woow-litellm', addon: 'Woow LiteLLM', version: '0.1.15', app: 'LiteLLM 閘道', product: '1.104.0' };
+const HA_LL = 'ha-11111111111111111111';
+const LL_KEY_USERS = ['Hermes 代理', 'OpenDesign'];
+const LL_KEYS_WARNING = '這台的 Hermes 代理、OpenDesign 目前使用這台 LiteLLM 的金鑰；匯入後這台 LiteLLM 的虛擬金鑰會換成 HA 的，這些應用的 LiteLLM 金鑰會失效，請在匯入後為它們重新設定金鑰。';
+const LL_SECTION = { litellm_version: '1.104.0', migrations: 118, pg_major: 18, target_pg_major: 17, users: 1, teams: 1, keys: 1, models: 24,
+  credentials: 5, organizations: 0, spend_logs: 0, chatgpt_accounts: 0, salt_moves: true, key_users: LL_KEY_USERS };
+function llCheck(section = LL_SECTION, warnings = [LL_KEYS_WARNING]) {
+  return { ha_check: { ha_backup_id: HA_LL, apps: [{ app_id: 'litellm', slug: LL.slug, name: LL.addon, arch: 'amd64', version: LL.version,
+    target_version: LL.product, ok: true, blockers: [], warnings: [...warnings], litellm: structuredClone(section) }] } };
+}
+function llFixture({ check = llCheck() } = {}) {
+  const data = fixture();
+  data.status.apps.push(app('litellm', LL.app), app('hermes', 'Hermes 代理'), app('litellm-mcp-admin', 'LiteLLM MCP 管理'));
+  const meta = haMeta(HA_LL, { name: 'LiteLLM 備份 2026-11-23', date: '2026-11-23T01:49:00Z', protected: false, size: 14 * MiB,
+    filename: 'woow-litellm-x86.tar', addons: [{ slug: LL.slug, name: LL.addon, version: LL.version, encrypted: false }],
+    importable_apps: [{ slug: LL.slug, app_id: 'litellm', app_name: LL.app, installed: true }] });
+  data.ha = { backups: [meta], key: HA_KEY, jobKeyFailure: null, legacy: false, imports: {} };
+  Object.assign(data.scripts, haScripts({ check, converted: convertedMeta() }));
+  return data;
+}
 // The page's own reminder for the batch 1 HA file.
 const B1_DELETE_LINE = `匯入完成後，建議刪除這份 HA 備份檔（裡面可能有 HA 的密碼與權杖）。 前往 HA 備份「${B1_NAME}」`;
 const B1_STOP_LINES = B1_APPS.map(id => `請把 HA 那邊的「${B1[id].addon}」附加元件停掉，避免同一件事兩邊各做一次。`);
@@ -4879,7 +4902,7 @@ try {
     async page => {
       await ready(page);
       await page.locator('[data-nav="restore"]').click();
-      await page.getByText('也可以上傳 Home Assistant 的備份檔（.tar），把其中的 Odoo、n8n、Omnigent、Hermes、EMQX、Headscale 匯入這台。').waitFor();
+      await page.getByText('也可以上傳 Home Assistant 的備份檔（.tar），把其中的 Odoo、n8n、Omnigent、Hermes、EMQX、Headscale、LiteLLM 匯入這台。').waitFor();
       await page.locator('#restore-file').setInputFiles({ name: 'woow_import_test.tar', mimeType: 'application/x-tar', buffer: Buffer.alloc(256 * KiB, 5) });
       await page.locator('[data-focus="restore-upload"]').click();
       await page.waitForFunction(id => window.location.hash === `#/ha/${id}`, HA_ID);
@@ -5530,6 +5553,54 @@ try {
       assert.equal((await calls(page, 'ha-check-start')).length, 0);
     });
 
+  // ------------------------------------------------------------------ 從 HA 備份匯入, LiteLLM (owner decision 2026-11-23)
+
+  await check('從 HA 備份匯入, LiteLLM: the check shows the versions, what moves, the salt that replaces this device\'s, and before a real import the apps here whose LiteLLM keys stop working',
+    llFixture(), async page => {
+      await ready(page);
+      await page.locator('[data-nav="backups"]').click();
+      await page.locator(`[data-focus="open-${HA_LL}"]`).click();
+      await page.locator('.ha-addons-table').waitFor();
+      assert.equal(await page.locator('.view-title-text p.muted').textContent(),
+        '從 Home Assistant 上傳的備份。可以把其中的 LiteLLM 匯入這台的應用；匯入前會先檢查內容與版本。');
+      await page.locator(`[data-focus="ha-import-${HA_LL}"]`).click();
+      assert.deepEqual(await page.locator('.wizard-card input[type="checkbox"]').evaluateAll(items => items.map(item => [item.id, item.checked, item.disabled])),
+        [['ha-app-litellm', true, false]]);
+      await page.locator('[data-focus="ha-apps-next"]').click();
+      await page.locator('[data-ha-app="litellm"]').waitFor();
+      const start = requestOf((await calls(page, 'ha-check-start')).at(-1));
+      assert.deepEqual(start, { ha_backup_id: HA_LL, apps: ['litellm'], request_id: start.request_id });
+      const card = page.locator('[data-ha-app="litellm"]');
+      assert.equal(await card.locator('.muted').first().textContent(), 'HA 附加元件版本 0.1.15（LiteLLM 1.104.0），這台的 LiteLLM 1.104.0。');
+      assert.equal(await card.locator('.chip').first().textContent(), '可以匯入');
+      // The engine's words: the apps here that use LiteLLM keys (read from this device's catalog and configuration).
+      assert.deepEqual(await card.locator('.check-warn .check-message').allTextContents(), [LL_KEYS_WARNING]);
+      assert.deepEqual((await metadataOf(card))[0], { 虛擬金鑰: '1 把（不含管理介面的登入工作階段）', 使用者與團隊: '1 位使用者，1 個團隊',
+        模型: '24 個（儲存的供應商憑證 5 筆）', 用量紀錄: '0 筆', 資料庫: 'HA 的 PostgreSQL 18 → 這台的 17（只搬資料列，結構用這台的）',
+        '這台用 LiteLLM 金鑰的應用': 'Hermes 代理、OpenDesign（匯入後要重新設定金鑰）' });
+      assert.equal(await card.locator('p.muted').last().textContent(),
+        '匯入後，用這台 LiteLLM 的主金鑰與管理介面密碼登入（不是 HA 的）；HA 的加密金鑰會取代這台的 litellm-salt-key，還原失敗或之後還原到匯入前時會放回這台原本的。');
+      // Before a real import (option A): the reminder under 「這只是測試」, nothing else changes.
+      assert.equal(await page.locator('label[for="ha-test-mode"] strong').textContent(), '這只是測試');
+      assert.equal(await page.locator('#ha-test-mode-help').textContent(),
+        '勾選時，LiteLLM 不會先關掉任何功能，還原後會照常運作；正式搬家請不要勾。正式搬家時，這台 LiteLLM 原本的虛擬金鑰會換成 HA 的：Hermes 代理、OpenDesign 目前用的 LiteLLM 金鑰會失效，匯入後要為它們重新設定金鑰。');
+      await page.locator('.wizard-card .notice-info').getByText('搬過來的帳號、金鑰和設定都來自這份 HA 備份，只匯入你信任的備份。').waitFor();
+    });
+
+  await check('從 HA 備份匯入, LiteLLM: with no other app using LiteLLM keys the reminder still says this device\'s keys stop working',
+    llFixture({ check: llCheck({ ...LL_SECTION, key_users: [] }, []) }), async page => {
+      await ready(page);
+      await page.locator('[data-nav="backups"]').click();
+      await page.locator(`[data-focus="open-${HA_LL}"]`).click();
+      await page.locator(`[data-focus="ha-import-${HA_LL}"]`).click();
+      await page.locator('[data-focus="ha-apps-next"]').click();
+      await page.locator('[data-ha-app="litellm"]').waitFor();
+      const card = page.locator('[data-ha-app="litellm"]');
+      assert.equal((await metadataOf(card))[0]['這台用 LiteLLM 金鑰的應用'], '沒有找到');
+      assert.match(await page.locator('#ha-test-mode-help').textContent(),
+        /正式搬家時，這台 LiteLLM 原本的虛擬金鑰會換成 HA 的，這台原本發出的金鑰都會失效（這台沒有找到其他使用 LiteLLM 金鑰的應用）。$/);
+    });
+
   // ------------------------------------------------------------------ 從 HA 備份匯入, batch 1 (2026-11-19, CONTRACT §7, §9)
 
   await check('從 HA 備份匯入, batch 1: the HA page offers Omnigent, Hermes, EMQX and Headscale; the check shows each app\'s versions, facts and warnings; the trust notice and the test choice say what applies',
@@ -5546,7 +5617,7 @@ try {
         [`WOOW n8n${N8N_SLUG}`, '2.43.6', '還沒安裝「n8n 工作流程」：這台還沒安裝，請先到「應用軟體」安裝同版本'],
         ...B1_APPS.map(id => [`${B1[id].addon}${B1[id].slug}`, B1[id].version, `可以匯入這台的「${B1[id].app}」`]),
         ['Mosquitto brokercore_mosquitto', '6.5.1', '這台沒有對應的應用']]);
-      await page.getByText('只有支援的 Odoo、n8n、Omnigent、Hermes、EMQX、Headscale 附加元件能匯入這台；Home Assistant 本身和其他附加元件不會匯入。').waitFor();
+      await page.getByText('只有支援的 Odoo、n8n、Omnigent、Hermes、EMQX、Headscale、LiteLLM 附加元件能匯入這台；Home Assistant 本身和其他附加元件不會匯入。').waitFor();
       await page.locator(`[data-focus="ha-import-${HA_B1}"]`).click();
       assert.deepEqual(await page.locator('.stepper[aria-label="匯入步驟"] .step-label').allTextContents(), ['選擇應用', '檢查', '結果與選項', '轉換', '還原'],
         'HA did not encrypt these add-ons: no key step');
