@@ -36,7 +36,8 @@
   "harness": "tests/e2e/lab/omnigent_real_ha.py --run --arch <x86|arm> --outer-isolation-confirmed",
   "passed": {
    "x86": "omnigent-x86-attempt4.json (exit 0)",
-   "arm": "omnigent-arm-attempt1.json (exit 0)"
+   "arm": "omnigent-arm-attempt1.json (exit 0)",
+   "x86_integrated_code": "omnigent-x86-attempt5.json (exit 0, services-a-2, source 0cc2289 = integration/ha-import-batch1-20261123 82ac971 + isolation/clean-tree guards)"
   },
   "failed_attempts_kept": [
    "omnigent-x86-attempt1.json (harness read PaginatedList wrong)",
@@ -60,10 +61,26 @@
    "engine on the host through the owner.sh bridge; /v1/info via podman exec into the running server",
    "throwaway PostgreSQL capped at 512 MiB in the lab",
    "the Omnigent public import guard remains a product decision (not removed)"
+  ],
+  "harness_guards": [
+   "refuses any change outside the evidence folders (source event clean_tree, changed_paths)",
+   "owner.sh d --verify-isolation right after the lock and again in a finally after the inventory check (fixed line + isolation event when=before/after)",
+   "dev-d lock through dev_d_guard.py: blocking like flock -w, yields to emqx-main's waiting file"
   ]
  },
  "manual_or_owner_items": [
   "Hermes independent FTS/SQLite review stays a manual human item (not part of this lane)",
   "Removing the Omnigent public SECURITY_BLOCKER is an owner/product decision; these runs used only the internal candidate entry"
- ]
+ ],
+ "services_a_2": {
+  "omnigent": {
+   "attempt": "omnigent-x86-attempt5.json",
+   "exit": 0,
+   "elapsed_seconds": 673.7,
+   "lock_seconds": 672,
+   "isolation_before_after": "true none {} / true none {}",
+   "clean_tree": true,
+   "commercial_acceptance": "not-complete"
+  }
+ }
 }
