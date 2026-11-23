@@ -135,11 +135,15 @@ SR-6 tests fail when the refusal is removed).
   `test_ha_odoo`: 82 OK.
   Lab unit tests `test_litellm_full_flow`, `test_litellm_real_ha`: OK.
 - Full `tests/backup` on `d31c59a` (host-heavy lock): 1490 tests, only the 7 pre-existing `test_ha_omnigent` failures
-  (5 failures, 2 errors; the same 7 as on `d812699` and `3bde418`, lane omnigent-product), 6 skipped.
+  (5 failures, 2 errors; the same 7 as on `d812699` and `3bde418`, lane omnigent-product), 6 skipped. The later
+  SR-6 change (`1e29974`: `ha_litellm.py` and `test_ha_litellm.py` only) was run with the affected modules (82 OK),
+  not with a second full suite.
 - The product's mutation check (`tests/backup/litellm_product_mutations.py`) with 11 new mutations M34–M44 (one per
   protection of SR-1..SR-6): first run (M34–M41, on `50622c3`) 40/41 caught — every new mutation caught; M19's
-  text had to follow `ha_server_args`' new last line (same mutation, `7b2401c`). Rerun of all 44 on the final tip:
-  see the lane hand-off (team/litellm-secreview.md).
+  text had to follow `ha_server_args`' new last line (same mutation, `7b2401c`). On the final tip (`4b70d09`,
+  `ha_litellm.py` `4eb30d9f…`) all 44 are caught, run as two subsets with `--only` (the host-heavy lock was taken
+  by the integrator's page suite and six waiters): the review's 12 (`mutation-check-review-ids.json`, 12/12) and
+  the product's other 32 (`mutation-check-product-ids.json`, 32/32); baseline 52 tests pass in both.
 
 ## Old guard
 
