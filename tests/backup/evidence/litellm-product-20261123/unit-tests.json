@@ -1,0 +1,42 @@
+{
+ "lane": "litellm-product",
+ "date": "2026-11-23",
+ "scope": "unit and offline tests of the LiteLLM HA import product path (fixtures and fakes; NOT acceptance: the real runs are tests/e2e/lab/evidence/litellm-product-20261123/)",
+ "results": {
+  "PYTHONPATH=backup-engine:tests/e2e/lab python3 -m unittest discover -s tests/backup -p 'test_*.py' -t . (host-heavy lock)": {
+   "source_commit": "3bde418",
+   "tests": 1483,
+   "skipped": 6,
+   "failures": 5,
+   "errors": 2,
+   "seconds": 248.8,
+   "failing": "only tests.backup.test_ha_omnigent (5 FAIL + 2 ERROR: the Omnigent public-import guard; identical on the clean integration tip d812699, fixed by lane omnigent-product, not this lane)",
+   "earlier_run": "same result on 5faef6f (1483 tests, the same 7, 279.3 s)"
+  },
+  "tests.backup.test_ha_litellm + test_adapter_import_secrets + test_ha_litellm_candidate (+ cluster candidate)": {
+   "source_commit": "3bde418",
+   "tests": 43,
+   "result": "OK"
+  },
+  "node tests/backup-ui.mjs (host-heavy lock)": {
+   "source_tree": "5faef6f (page code unchanged since e0c9e56)",
+   "tests": 101,
+   "pass": 101,
+   "fail": 0,
+   "seconds": 499.8,
+   "litellm_scenarios": 2
+  },
+  "tests/e2e/lab/test_litellm_full_flow.py": {
+   "source_commit": "5faef6f",
+   "tests": 6,
+   "result": "OK"
+  },
+  "python3 -I tests/backup/litellm_product_mutations.py": {
+   "source_commit": "3bde418",
+   "mutations": 33,
+   "caught": 33,
+   "file": "mutation-check.json"
+  }
+ },
+ "commercial_acceptance": "not-complete"
+}
