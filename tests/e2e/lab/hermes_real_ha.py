@@ -156,7 +156,7 @@ class Evidence(drv.Evidence):
 
 # ---------------------------------------------------------------- device-side probes (as appowner in dev-d)
 
-CONTINUITY = drv.PROBE_COMMON + r'''
+CONTINUITY = drv.PROBE_COMMON + drv.HERMES_ISSUE + r'''
 import http.cookiejar, urllib.parse
 D = "http://127.0.0.1:19119"
 out = {}
@@ -195,20 +195,9 @@ def digest(value):
     text = value if isinstance(value, str) else json.dumps(value, sort_keys=True)
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 code, op, jar = dash_login(secret("hermes-dashboard-password"))
-# The login ISSUED session credentials (vendor dashboard_auth/cookies.py: hermes_session_at, and hermes_session_rt
-# when the provider returns a refresh token). Each is handed to the owner, which registers it before acknowledging,
-# so every later scan looks for it; an absent refresh cookie is reported as status 404 (nothing issued).
-issued = {}
-for cookie in jar:
-    for bare in ("hermes_session_at", "hermes_session_rt"):
-        if cookie.name.endswith(bare) and cookie.value:
-            issued[bare] = cookie.value
-for bare in ("hermes_session_at", "hermes_session_rt"):
-    present = bare in issued
-    emit("auth", source="/auth/password-login#" + bare[-2:], status=(code if code else 599) if present else 404,
-         credentials={bare: issued[bare]} if present else {})
+# The login ISSUED session credentials; drv.HERMES_ISSUE hands them to the owner (registered before the ack).
 out["login"] = code
-out["issued_cookie_names"] = sorted(issued)
+out["issued_cookie_names"] = issue_events(jar, code, "")
 c, body = get(op, "/api/sessions?limit=100")
 out["list_code"] = c
 out["sessions"] = {s.get("id"): {k: s.get(k) for k in ("message_count", "source", "model", "title", "started_at")}
@@ -392,10 +381,10 @@ for d, _dirs, files in os.walk(lib):
 helper = "/usr/local/libexec/woowtech-cockpit-backup"
 print(json.dumps({"lib": out, "helper": hashlib.sha256(open(helper, "rb").read()).hexdigest()}))
 '''
-# Each continuity login issues an access-token cookie (must be registered) and maybe a refresh-token cookie.
+# Each continuity login issues an access-token cookie (must be registered) and maybe a refresh-token cookie. Every
+# login is declared in drv.ISSUED_SESSIONS before its probe runs; step_leaks refuses while one registered nothing.
 ISSUED_AUTH = [('/auth/password-login#at', ('hermes_session_at',), True),
                ('/auth/password-login#rt', ('hermes_session_rt',), False)]
-ISSUED_LOGINS = []
 LANE_SECRETS = ('HA_BACKUP_KEY', 'B1_HERMES_DASHBOARD_PW', 'B1_HERMES_API_KEY', 'B1_HERMES_WEBHOOK_SECRET',
                 'B1_HERMES_ROUTE_SECRET', 'B1_HERMES_DUMMY_KEY', 'DEV_D_KIT_1119')
 PROGRAMS = {'CONTINUITY': CONTINUITY, 'DIGEST': DIGEST, 'LEAK_SCAN': LEAK_SCAN, 'ENGINE_HASHES': ENGINE_HASHES}
@@ -571,9 +560,10 @@ def continuity(ev, label_text, mode):
     src = source_sessions()
     ha_ids = sorted(src)
     terms = dict(HA_TERMS, **BASE_TERMS, **NEG_TERMS)
+    recorder = drv.IssuedRecorder(ev.secrets)
+    drv.ISSUED_SESSIONS.append((f'{label_text} (continuity dashboard login)', recorder.values))
     probe = drv.event_device_python(CONTINUITY, {'session_ids': ha_ids + [BASE_SESSION], 'terms': sorted(terms),
-                                                 'like': terms}, ev.secrets, ISSUED_AUTH, timeout=900)
-    ISSUED_LOGINS.append(label_text)
+                                                 'like': terms}, recorder, ISSUED_AUTH, timeout=900)
     ev.save(f'continuity-{slug(label_text)}-{int(time.time())}.json', probe)
     inner = probe.get('inner') or {}
     ev.check(f'{label_text}: Hermes healthy (API and webhook /health 200) and the dashboard takes this device\'s '
@@ -887,10 +877,18 @@ def step_leaks(ev, args):
                'podman_secrets': HERMES_SECRETS, 'uid': 1019, 'since': int(since)}
     if len(request['secrets']) != len(LANE_SECRETS):
         raise Failed('a lane secret is missing from the readers')
+    # Declared dynamic sources: every dashboard login of THIS process (continuity and the b1 probe) must have
+    # registered its issued session credential; the values live only in memory, so leaks runs in the same invocation.
+    gaps = drv.issued_session_gaps(args.secrets)
+    if gaps:
+        raise Failed(f'{len(gaps)} declared dashboard login source(s) registered no issued session credential')
     issued = {k: v for k, v in args.secrets.values.items() if k.startswith('ISSUED_TOKEN_') and v}
-    # Declared dynamic source: every continuity login of this run issued at least one registered session credential.
-    if ISSUED_LOGINS and len(issued) < len(ISSUED_LOGINS):
-        raise Failed('an issued dashboard session credential is missing from the leak scan')
+    held = {v for _label, values in drv.ISSUED_SESSIONS for v in values}
+    if not held <= set(issued.values()) | set(request['secrets'].values()):
+        raise Failed('an issued dashboard session credential is missing from the leak scan request')
+    ev.check(f'leaks: every dashboard login of this run ({len(drv.ISSUED_SESSIONS)} declared dynamic sources, '
+             f'{len(held)} issued values) is registered and in the scan', True,
+             {'sources': len(drv.ISSUED_SESSIONS), 'issued_values': len(held), 'registered_issued': len(issued)})
     request['secrets'].update(issued)
     report = drv.device_python(LEAK_SCAN, request, as_owner=False, timeout=900)
     host = drv.scan_host_evidence(ev.dir, args.secrets)

@@ -337,6 +337,32 @@ def require_credential_coverage():
         raise Failed('credential coverage incomplete; further restore blocked')
 
 
+# Declared dynamic credential sources of this process: one entry (label, values) per probe whose Hermes dashboard
+# password login must have ISSUED a session credential. The entry is declared BEFORE the probe runs, so a probe that
+# dies before handing its value over stays a visible gap; issued_session_gaps() names every entry without a registered
+# value and the leak scan refuses to run while there is one.
+ISSUED_SESSIONS = []
+
+
+class IssuedRecorder:
+    """Stands in for Secrets in event_device_python: registers each handed-over value (Secrets.register_observed, so
+    redaction and every scan see it) and keeps this probe's own list, duplicates across logins included."""
+
+    def __init__(self, secrets):
+        self.secrets, self.values = secrets, []
+
+    def register_observed(self, value):
+        self.secrets.register_observed(value)
+        if isinstance(value, str) and value:
+            self.values.append(value)
+
+
+def issued_session_gaps(secrets):
+    """Labels of declared login sources that registered nothing, or a value the secret registry does not hold."""
+    known = set(secrets.secret_values())
+    return [label for label, values in ISSUED_SESSIONS if not values or any(v not in known for v in values)]
+
+
 def http_code(url):
     proc = root('curl', '-s', '-o', '/dev/null', '-w', '%{http_code}', '--max-time', '20', url, timeout=60)
     return out(proc).strip()
@@ -399,9 +425,10 @@ def finish(data):
         emit("end")
     else:
         print(json.dumps(data))
+# Children never inherit this probe's stdin: in event mode it carries the owner's acknowledgements.
 def secret(name):
     return subprocess.run(["podman", "secret", "inspect", "--showsecret", "--format", "{{.SecretData}}", name],
-                          capture_output=True, text=True, timeout=60).stdout.rstrip("\n")
+                          stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=60).stdout.rstrip("\n")
 def call(base, method, path, body=None, token=None, headers=None, raw=False, wait=0, basic=None):
     deadline = time.monotonic() + wait
     auth_request = path.startswith("/auth/") or path in ("/oauth/token", "/api/v5/login")
@@ -457,7 +484,8 @@ def items(body, *keys):
                 return body[k]
     return []
 def pexec(*argv, input=None, timeout=300):
-    p = subprocess.run(["podman", "exec", "-i", *argv], input=input, capture_output=True, text=True, timeout=timeout)
+    feed = {"input": input} if input is not None else {"stdin": subprocess.DEVNULL}
+    p = subprocess.run(["podman", "exec", "-i", *argv], capture_output=True, text=True, timeout=timeout, **feed)
     return p.returncode, p.stdout, p.stderr
 '''
 
@@ -541,7 +569,32 @@ out["db_hosts"] = sql("SELECT string_agg(encode(host_id, 'hex') || ':' || user_i
 finish(out)
 '''
 
-HERMES_PROBE = PROBE_COMMON + r'''
+# A Hermes dashboard password login ISSUES session credentials: cookies hermes_session_at and, when the provider returns
+# a refresh token, hermes_session_rt (vendor hermes-agent v0.22.5 hermes_cli/dashboard_auth/cookies.py:27-28 names,
+# :86-95 set_session_cookies; an empty refresh token is not persisted; reader name variants __Host-/__Secure-, :34).
+# issue_events() hands whatever one login got to the owner through the acknowledged event transport (it registers the
+# value before acknowledging), in a fixed order: <tag>at, then <tag>rt; "nothing issued" is status 404.
+HERMES_ISSUE = r'''
+def issue_events(jar, code, tag):
+    got = {}
+    for cookie in jar:
+        for bare in ("hermes_session_at", "hermes_session_rt"):
+            if cookie.name.endswith(bare) and cookie.value:
+                got[bare] = cookie.value
+    for bare in ("hermes_session_at", "hermes_session_rt"):
+        present = bare in got
+        emit("auth", source="/auth/password-login#" + tag + bare[-2:],
+             status=(code if code else 599) if present else 404, credentials={bare: got[bare]} if present else {})
+    return sorted(got)
+'''
+# verify_hermes' probe logs in twice: this device's password must issue an access cookie; HA's password must be refused
+# (a wrongly issued cookie is still registered, and the refusal check fails).
+HERMES_AUTH = (('/auth/password-login#device-at', ('hermes_session_at',), True),
+               ('/auth/password-login#device-rt', ('hermes_session_rt',), False),
+               ('/auth/password-login#ha-at', ('hermes_session_at',), False),
+               ('/auth/password-login#ha-rt', ('hermes_session_rt',), False))
+
+HERMES_PROBE = PROBE_COMMON + HERMES_ISSUE + r'''
 import hmac, http.cookiejar
 out = {}
 D = "http://127.0.0.1:19119"
@@ -559,17 +612,19 @@ def dash_login(password):
         code = e.code
     except OSError:
         code = 0
-    return code, op
+    return code, op, jar
 def get(op, path):
     try:
         with op.open(D + path, timeout=30) as resp:
             return resp.status, json.loads(resp.read() or b"null")
     except urllib.error.HTTPError as e:
         return e.code, None
-code, op = dash_login(secret("hermes-dashboard-password"))
+code, op, jar = dash_login(secret("hermes-dashboard-password"))
+out["issued_device"] = issue_events(jar, code, "device-")
 c2, _ = get(op, "/api/config")
 out["dashboard_login_device_password"] = [code, c2]
-code_ha, op_ha = dash_login(REQ["ha_dashboard_password"])
+code_ha, op_ha, jar_ha = dash_login(REQ["ha_dashboard_password"])
+out["issued_ha"] = issue_events(jar_ha, code_ha, "ha-")
 c3, _ = get(op_ha, "/api/config")
 out["dashboard_login_ha_password"] = [code_ha, c3]
 c, body = get(op, "/api/sessions?limit=100")
@@ -649,7 +704,7 @@ code, _ = call("http://127.0.0.1:18642", "GET", "/v1/models", token=secret("herm
 out["api_device_key"] = code
 code, _ = call("http://127.0.0.1:18642", "GET", "/v1/models", token=REQ["ha_api_key"])
 out["api_ha_key"] = code
-print(json.dumps(out))
+finish(out)
 '''
 
 MQTT_LIB = r'''
@@ -1222,18 +1277,27 @@ def verify_hermes(ev, args, machine, label, test_mode=False, upload=None):
     src = source(machine)['hermes']
     s = args.secrets
     markers = [m.split()[-1] for m in src['created_by_b1']['memory_markers']]
-    probe = device_python(HERMES_PROBE, {'ha_dashboard_password': s['B1_HERMES_DASHBOARD_PW'],
-                                         'route_secret': s['B1_HERMES_ROUTE_SECRET'], 'dummy': s['B1_HERMES_DUMMY_KEY'],
-                                         'ha_api_key': s['B1_HERMES_API_KEY'], 'memory_markers': markers,
-                                         'skill_marker': 'b1-hermes-skill-5e2a'}, timeout=900)
+    # Both dashboard logins of the probe go through the acknowledged event transport: the session credential this
+    # device's password issues is registered (declared source below) before the probe continues.
+    recorder = IssuedRecorder(s)
+    ISSUED_SESSIONS.append((f'{label} (b1 probe dashboard login)', recorder.values))
+    probe = event_device_python(HERMES_PROBE, {'ha_dashboard_password': s['B1_HERMES_DASHBOARD_PW'],
+                                               'route_secret': s['B1_HERMES_ROUTE_SECRET'],
+                                               'dummy': s['B1_HERMES_DUMMY_KEY'], 'ha_api_key': s['B1_HERMES_API_KEY'],
+                                               'memory_markers': markers, 'skill_marker': 'b1-hermes-skill-5e2a'},
+                                recorder, HERMES_AUTH, timeout=900)
     ev.save(f'probe-hermes-{machine}-{int(time.time())}.json', probe)
     ev.check(f'{label}: health /health 200 on the API and webhook ports',
              probe.get('health_api') == 200 and probe.get('health_webhook') == 200,
              [probe.get('health_api'), probe.get('health_webhook')])
     ev.check(f'{label}: the dashboard takes THIS device\'s password',
              probe.get('dashboard_login_device_password') == [200, 200], probe.get('dashboard_login_device_password'))
+    ev.check(f'{label}: the dashboard login issued an access cookie that is registered for redaction and the leak scan',
+             'hermes_session_at' in (probe.get('issued_device') or []) and bool(recorder.values)
+             and not issued_session_gaps(s), {'issued': probe.get('issued_device'), 'registered': len(recorder.values)})
     ev.check(f'{label}: the dashboard refuses HA\'s dashboard password (the device\'s secret wins)',
-             (probe.get('dashboard_login_ha_password') or [0])[0] in (400, 401, 403), probe.get('dashboard_login_ha_password'))
+             (probe.get('dashboard_login_ha_password') or [0])[0] in (400, 401, 403)
+             and not probe.get('issued_ha'), [probe.get('dashboard_login_ha_password'), probe.get('issued_ha')])
     want = sorted([sid, n] for sid, n in src['messages_per_session'].items())
     inner = probe.get('inner') or {}
     ev.check(f'{label}: HA\'s 5 sessions with 3 messages each in state.db (schema 32, quick_check ok)',

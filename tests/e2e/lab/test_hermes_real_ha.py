@@ -77,7 +77,7 @@ class ContinuityLogicTests(unittest.TestCase):
 
     def tearDown(self):
         hr.source_sessions, hr.drv.device_python, hr.drv.event_device_python = self.saved
-        hr.ISSUED_LOGINS.clear()
+        hr.drv.ISSUED_SESSIONS.clear()
 
     def run_mode(self, mode, data):
         def event_probe(script, request, secrets, expected_auth, **_k):
@@ -118,18 +118,172 @@ class ContinuityLogicTests(unittest.TestCase):
         self.assertTrue(any('integrity-check' in n for n in ev.failed()))
 
 
-class IssuedCredentialTests(unittest.TestCase):
-    """Dashboard session cookies issued by each continuity login are registered and must reach the leak scan."""
+def real_secrets(directory):
+    """A real drv.Secrets over synthetic files (lane names, nothing from the lab)."""
+    env = Path(directory) / 'synthetic-creds.env'
+    env.write_text(''.join(f'{n}=synthetic-lane-{i:04d}\n' for i, n in enumerate(hr.LANE_SECRETS)), encoding='utf-8')
+    markers = Path(directory) / 'synthetic-markers.json'
+    markers.write_text('{}', encoding='utf-8')
+    return hr.drv.Secrets([env], markers)
 
-    def test_continuity_runs_through_the_acknowledged_transport(self):
+
+def jar_with(*cookies):
+    import http.cookiejar
+    jar = http.cookiejar.CookieJar()
+    for name, value in cookies:
+        jar.set_cookie(http.cookiejar.Cookie(0, name, value, None, False, '127.0.0.1', False, False, '/', True, False,
+                                             None, False, None, None, {}))
+    return jar
+
+
+def fake_b1_source():
+    """The keys verify_hermes reads from the b1 source summary (toy values; the real one lives in the lab)."""
+    return {'hermes': {'created_by_b1': {'memory_markers': ['memory m1']}, 'messages_per_session': {},
+                       'memories_sha256': {'MEMORY.md': 'toy', 'USER.md': 'toy'}, 'skills_SKILL_md': 0,
+                       'cron_jobs': [{'id': 'j1', 'name': 'toy'}], 'config': {'model': {'base_url': 'x', 'default': 'm'}}}}
+
+
+class IssuedCredentialTests(unittest.TestCase):
+    """Dashboard session cookies issued by every dashboard login are registered and must reach the leak scan."""
+
+    def tearDown(self):
+        hr.drv.ISSUED_SESSIONS.clear()
+
+    def test_continuity_runs_through_the_acknowledged_transport_and_declares_its_login(self):
         case = ContinuityLogicTests('test_base_mode_passes_on_baseline_probe')
         case.setUp()
         try:
             ev = case.run_mode('base', probe('base'))
-            self.assertEqual(case.calls, [(True, ev.secrets, hr.ISSUED_AUTH)])
-            self.assertEqual(hr.ISSUED_LOGINS, ['unit'])
+            [(is_continuity, recorder, expected)] = case.calls
+            self.assertTrue(is_continuity)
+            self.assertIs(recorder.secrets, ev.secrets)
+            self.assertEqual(expected, hr.ISSUED_AUTH)
+            self.assertEqual([label for label, _v in hr.drv.ISSUED_SESSIONS], ['unit (continuity dashboard login)'])
+            self.assertIs(hr.drv.ISSUED_SESSIONS[0][1], recorder.values)
         finally:
             case.tearDown()
+
+    def run_issue(self, jar, code, tag):
+        events = []
+        scope = {'emit': lambda kind, **fields: events.append(dict(type=kind, **fields))}
+        exec(compile(hr.drv.HERMES_ISSUE, 'HERMES_ISSUE', 'exec'), scope)
+        return scope['issue_events'](jar, code, tag), events
+
+    def test_issue_events_hands_over_both_cookies_in_order_with_prefixed_names(self):
+        names, events = self.run_issue(jar_with(('__Host-hermes_session_rt', 'synthetic-refresh-0001'),
+                                                ('hermes_session_at', 'synthetic-access-0001'),
+                                                ('hermes_session_provider', 'basic')), 200, 'device-')
+        self.assertEqual(names, ['hermes_session_at', 'hermes_session_rt'])
+        self.assertEqual(events, [
+            {'type': 'auth', 'source': '/auth/password-login#device-at', 'status': 200,
+             'credentials': {'hermes_session_at': 'synthetic-access-0001'}},
+            {'type': 'auth', 'source': '/auth/password-login#device-rt', 'status': 200,
+             'credentials': {'hermes_session_rt': 'synthetic-refresh-0001'}}])
+
+    def test_issue_events_reports_nothing_issued_as_404(self):
+        names, events = self.run_issue(jar_with(), 401, 'ha-')
+        self.assertEqual(names, [])
+        self.assertEqual([(e['source'], e['status'], e['credentials']) for e in events],
+                         [('/auth/password-login#ha-at', 404, {}), ('/auth/password-login#ha-rt', 404, {})])
+
+    def test_programs_carry_the_issuer_and_end_through_finish(self):
+        self.assertIn(hr.drv.HERMES_ISSUE, hr.CONTINUITY)
+        self.assertIn(hr.drv.HERMES_ISSUE, hr.drv.HERMES_PROBE)
+        self.assertTrue(hr.drv.HERMES_PROBE.rstrip().endswith('finish(out)'))
+        self.assertIn('issue_events(jar, code, "device-")', hr.drv.HERMES_PROBE)
+        self.assertIn('issue_events(jar_ha, code_ha, "ha-")', hr.drv.HERMES_PROBE)
+        self.assertEqual([s for s, _f, _r in hr.drv.HERMES_AUTH],
+                         ['/auth/password-login#device-at', '/auth/password-login#device-rt',
+                          '/auth/password-login#ha-at', '/auth/password-login#ha-rt'])
+        self.assertEqual([r for _s, _f, r in hr.drv.HERMES_AUTH], [True, False, False, False])
+
+    def test_probe_children_never_read_the_acknowledgement_pipe(self):
+        """In event mode the probe's stdin stays open for the owner's acks: a child that inherited it would block
+        (or eat an ack). A fake podman that reads its stdin to EOF proves pexec() and secret() give it /dev/null."""
+        transport = load('b1_event_transport', HERE / 'b1_event_transport.py')
+        program = hr.drv.PROBE_COMMON + ('rc, so, se = pexec("hermes-agent", "find")\n'
+                                         'value = secret("synthetic-name")\n'
+                                         'finish({"rc": rc, "so": so.strip(), "secret": value})\n')
+        with tempfile.TemporaryDirectory() as tmp:
+            fake = Path(tmp) / 'podman'
+            fake.write_text('#!/bin/sh\ncat >/dev/null\necho child-saw-eof\n', encoding='utf-8')
+            fake.chmod(0o700)
+            argv = ['env', f'PATH={tmp}:/usr/bin:/bin', sys.executable, '-I', '-c', program]
+            summary = transport.run_events(argv, {'__events': True}, lambda v: None, (), timeout=20)
+        self.assertEqual(summary, {'rc': 0, 'so': 'child-saw-eof', 'secret': 'child-saw-eof'})
+
+    def test_b1_probe_logins_are_declared_registered_and_checked(self):
+        saved = (hr.drv.event_device_python, hr.drv.source)
+        src = fake_b1_source()
+        hr.drv.source = lambda _m: src
+        seen = {}
+
+        def event_probe(script, request, secrets, expected_auth, **_k):
+            seen.update(script=script, expected=expected_auth, declared=len(hr.drv.ISSUED_SESSIONS))
+            secrets.register_observed('synthetic-device-access-0001')
+            return {'health_api': 200, 'health_webhook': 200, 'dashboard_login_device_password': [200, 200],
+                    'dashboard_login_ha_password': [401, 401], 'issued_device': ['hermes_session_at'],
+                    'issued_ha': []}
+        hr.drv.event_device_python = event_probe
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                args = type('A', (), {})()
+                args.secrets = real_secrets(tmp)
+                ev = FakeEvidence()
+                hr.drv.verify_hermes(ev, args, 'x86', 'unit')
+                self.assertIs(seen['script'], hr.drv.HERMES_PROBE)
+                self.assertEqual(seen['expected'], hr.drv.HERMES_AUTH)
+                self.assertEqual(seen['declared'], 1)   # declared before the probe ran
+                self.assertIn('synthetic-device-access-0001', args.secrets.secret_values())
+                self.assertEqual(hr.drv.issued_session_gaps(args.secrets), [])
+                passed = dict(ev.results)
+                self.assertTrue(passed['unit: the dashboard login issued an access cookie that is registered for '
+                                       'redaction and the leak scan'])
+                self.assertTrue(passed['unit: the dashboard refuses HA\'s dashboard password (the device\'s secret '
+                                       'wins)'])
+        finally:
+            hr.drv.event_device_python, hr.drv.source = saved
+
+    def test_b1_probe_fails_the_refusal_check_when_ha_password_issues_a_cookie(self):
+        saved = (hr.drv.event_device_python, hr.drv.source)
+        src = fake_b1_source()
+        hr.drv.source = lambda _m: src
+
+        def event_probe(script, request, secrets, expected_auth, **_k):
+            secrets.register_observed('synthetic-device-access-0002')
+            secrets.register_observed('synthetic-ha-access-0002')
+            return {'dashboard_login_device_password': [200, 200], 'dashboard_login_ha_password': [401, 200],
+                    'issued_device': ['hermes_session_at'], 'issued_ha': ['hermes_session_at']}
+        hr.drv.event_device_python = event_probe
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                args = type('A', (), {})()
+                args.secrets = real_secrets(tmp)
+                ev = FakeEvidence()
+                hr.drv.verify_hermes(ev, args, 'x86', 'unit')
+                self.assertIn('synthetic-ha-access-0002', args.secrets.secret_values())
+                self.assertIn('unit: the dashboard refuses HA\'s dashboard password (the device\'s secret wins)',
+                              ev.failed())
+        finally:
+            hr.drv.event_device_python, hr.drv.source = saved
+
+    def test_gaps_name_a_declared_login_that_registered_nothing_or_an_unknown_value(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            secrets = real_secrets(tmp)
+            ok = hr.drv.IssuedRecorder(secrets)
+            ok.register_observed('synthetic-access-0003')
+            hr.drv.ISSUED_SESSIONS.extend([('a', ok.values), ('b', []), ('c', ['synthetic-never-registered'])])
+            self.assertEqual(hr.drv.issued_session_gaps(secrets), ['b', 'c'])
+
+    def test_duplicate_issued_values_across_logins_are_not_a_gap(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            secrets = real_secrets(tmp)
+            first, second = hr.drv.IssuedRecorder(secrets), hr.drv.IssuedRecorder(secrets)
+            first.register_observed('synthetic-same-0004')
+            second.register_observed('synthetic-same-0004')
+            hr.drv.ISSUED_SESSIONS.extend([('first', first.values), ('second', second.values)])
+            self.assertEqual(hr.drv.issued_session_gaps(secrets), [])
+            self.assertEqual(second.values, ['synthetic-same-0004'])
 
     def producer(self, events):
         code = ("import json,sys\nreq=json.loads(sys.stdin.readline())\n"
@@ -163,30 +317,66 @@ class IssuedCredentialTests(unittest.TestCase):
         with self.assertRaises(transport.Incomplete):
             transport.run_events(self.producer(events), {}, lambda v: None, hr.ISSUED_AUTH, timeout=30)
 
-    def test_leak_scan_refuses_when_an_issued_credential_is_missing(self):
+    def b1_stream(self, *, device_at=True, ha_code=401, ha_cookie=False):
+        def auth(seq, source, field, value, ok_code):
+            present = value is not None
+            return {'type': 'auth', 'sequence': seq, 'source': source, 'status': ok_code if present else 404,
+                    'credentials': {field: value} if present else {}}
+        events = [auth(0, '/auth/password-login#device-at', 'hermes_session_at',
+                       'synthetic-device-0005' if device_at else None, 200),
+                  auth(1, '/auth/password-login#device-rt', 'hermes_session_rt', None, 200),
+                  auth(2, '/auth/password-login#ha-at', 'hermes_session_at',
+                       'synthetic-ha-0005' if ha_cookie else None, ha_code),
+                  auth(3, '/auth/password-login#ha-rt', 'hermes_session_rt', None, ha_code),
+                  {'type': 'summary', 'sequence': 4, 'data': {'probe': 1}}, {'type': 'end', 'sequence': 5}]
+        return events
+
+    def test_b1_probe_event_shapes_through_the_real_transport(self):
+        transport = load('b1_event_transport', HERE / 'b1_event_transport.py')
+        got = []
+        self.assertEqual(transport.run_events(self.producer(self.b1_stream()), {}, got.append, hr.drv.HERMES_AUTH,
+                                              timeout=30), {'probe': 1})
+        self.assertEqual(got, ['synthetic-device-0005'])
+        got = []   # a wrongly accepted HA password: its cookie is still registered (the refusal check fails)
+        transport.run_events(self.producer(self.b1_stream(ha_code=200, ha_cookie=True)), {}, got.append,
+                             hr.drv.HERMES_AUTH, timeout=30)
+        self.assertEqual(got, ['synthetic-device-0005', 'synthetic-ha-0005'])
+        with self.assertRaises(transport.Incomplete):   # this device's login handed over no access cookie
+            transport.run_events(self.producer(self.b1_stream(device_at=False)), {}, lambda v: None,
+                                 hr.drv.HERMES_AUTH, timeout=30)
+
+    def test_leak_scan_refuses_while_a_declared_login_source_is_missing(self):
         saved = (hr.load_kit, hr.drv.device_python, hr.drv.scan_host_evidence)
-        secrets = type('S', (), {})()
-        secrets.values = {name: 'lane-value-' + name for name in hr.LANE_SECRETS}
         hr.load_kit = lambda _args: None
         FakeEvidence.dir = Path(tempfile.gettempdir())
         seen = {}
         hr.drv.device_python = lambda script, request, **_k: seen.setdefault('request', request) and {
             'scanned': 1, 'names': 1, 'hits': 0}
         hr.drv.scan_host_evidence = lambda *_a: {'hits': 0}
-        args = type('A', (), {})()
-        args.secrets = type('Secrets', (), {'values': secrets.values,
-                                            '__getitem__': lambda self, k: self.values[k]})()
         try:
-            hr.ISSUED_LOGINS[:] = ['before', 'after import']
-            with self.assertRaises(hr.Failed):
-                hr.step_leaks(FakeEvidence(), args)
-            args.secrets.values['ISSUED_TOKEN_40'] = 'synthetic-access-0001'
-            args.secrets.values['ISSUED_TOKEN_41'] = 'synthetic-access-0002'
-            hr.step_leaks(FakeEvidence(), args)
-            self.assertIn('ISSUED_TOKEN_41', seen['request']['secrets'])
+            with tempfile.TemporaryDirectory() as tmp:
+                args = type('A', (), {})()
+                args.secrets = real_secrets(tmp)
+                registered = hr.drv.IssuedRecorder(args.secrets)
+                registered.register_observed('synthetic-access-0006')
+                missing = []
+                hr.drv.ISSUED_SESSIONS.extend([('before (continuity dashboard login)', registered.values),
+                                               ('after import (b1 probe dashboard login)', missing)])
+                with self.assertRaises(hr.Failed):
+                    hr.step_leaks(FakeEvidence(), args)
+                self.assertNotIn('request', seen)   # refused before any scan
+                hr.drv.IssuedRecorder(args.secrets).register_observed('synthetic-access-0007')
+                with self.assertRaises(hr.Failed):   # registered elsewhere, but this source's own list is empty
+                    hr.step_leaks(FakeEvidence(), args)
+                missing.append('synthetic-access-0007')
+                ev = FakeEvidence()
+                hr.step_leaks(ev, args)
+                values = set(seen['request']['secrets'].values())
+                self.assertTrue({'synthetic-access-0006', 'synthetic-access-0007'} <= values)
+                self.assertTrue(all(ok for _n, ok in ev.results))
+                self.assertTrue(any('2 declared dynamic sources, 2 issued values' in n for n, _ok in ev.results))
         finally:
             hr.load_kit, hr.drv.device_python, hr.drv.scan_host_evidence = saved
-            hr.ISSUED_LOGINS.clear()
             del FakeEvidence.dir
 
 
