@@ -146,7 +146,9 @@ users = text(run("podman", "exec", "-u", "www-data", "nextcloud-app", "php", "/v
                  "--output=json", "--limit=1000"))
 status = text(run("podman", "exec", "nextcloud-app", "curl", "-fsS", "-m", "20", "http://localhost/status.php"))
 sql = "SELECT json_build_object('storages', (SELECT json_agg(id ORDER BY numeric_id) FROM oc_storages), " \
-      "'files', (SELECT count(*) FROM oc_filecache), 'users', (SELECT count(*) FROM oc_users))"
+      "'users', (SELECT count(*) FROM oc_users))"
+files = text(run("podman", "exec", "nextcloud-db", "psql", "-X", "-At", "-U", "nextcloud", "-d", "nextcloud", "-c",
+                 "SELECT count(*) FROM oc_filecache"))
 db = text(run("podman", "exec", "nextcloud-db", "psql", "-X", "-At", "-U", "nextcloud", "-d", "nextcloud", "-c", sql))
 top = text(run("podman", "exec", "nextcloud-app", "ls", "-1A", "/var/www/html/data"))
 units = {u: (text(run("systemctl", "--user", "is-active", u)) or "inactive").strip() for u in REQ["units"]}
@@ -154,7 +156,8 @@ print(json.dumps({"config_sha256": cfg.split()[0] if cfg else None,
                   "users": sorted(json.loads(users)) if users else None,
                   "status": json.loads(status) if status else None,
                   "db": json.loads(db) if db else None,
-                  "data_top": sorted(top.split()) if top is not None else None, "units": units}))
+                  "data_top": sorted(top.split()) if top is not None else None, "units": units,
+                  "filecache_rows": int(files) if files and files.strip().isdigit() else None}))
 '''
 
 ENGINE_HASHES = r'''
@@ -641,7 +644,9 @@ class Run:
         ev.save('after.json', after)
         ev.check('after: dev-e\'s own markers are unchanged', after['markers'] == self.before['markers'])
         b, a = self.before['state'], after['state']
-        for key, text in (('config_sha256', 'config.php'), ('users', 'the users'), ('db', 'the storages, files and users in the database'),
+        # The file cache row count is recorded only (dev-e's own cron job may change it at any time).
+        ev.log(f'filecache rows before {b.get("filecache_rows")} after {a.get("filecache_rows")}')
+        for key, text in (('config_sha256', 'config.php'), ('users', 'the users'), ('db', 'the storages and user count in the database'),
                           ('data_top', 'the data dir top entries'), ('units', 'the five units'), ('status', 'status.php')):
             ev.check(f'after: {text} unchanged', a.get(key) == b.get(key) and a.get(key) is not None,
                      {'before': b.get(key), 'after': a.get(key)} if key != 'config_sha256' else '')
