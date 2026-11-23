@@ -52,8 +52,37 @@ def git(*args):
                           timeout=60).stdout.decode().strip()
 
 
+SAFE_TEXT = re.compile(r'[A-Za-z0-9_.:-]{0,80}')
+
+
+def _safe_value(value, depth=0):
+    if value is None or isinstance(value, bool) or isinstance(value, (int, float)):
+        return True
+    if isinstance(value, str):
+        return SAFE_TEXT.fullmatch(value) is not None
+    if isinstance(value, list) and depth < 2 and len(value) <= 40:
+        return all(_safe_value(v, depth + 1) for v in value)
+    if isinstance(value, dict) and depth < 2 and len(value) <= 20:
+        return all(SAFE_TEXT.fullmatch(k) and _safe_value(v, depth + 1) for k, v in value.items())
+    return False
+
+
+def json_event(line):
+    """A harness event line: a JSON object with a fixed-word 'stage' and only bools, numbers and short fixed-word
+    strings (or small lists/objects of them). Anything else (free text, values with spaces or symbols) is dropped."""
+    if not (line.startswith('{') and line.endswith('}')) or len(line) > 2000:
+        return False
+    try:
+        doc = json.loads(line)
+    except ValueError:
+        return False
+    return (isinstance(doc, dict) and isinstance(doc.get('stage'), str)
+            and re.fullmatch(r'[a-z_]{1,40}', doc['stage']) is not None
+            and all(re.fullmatch(r'[a-z_0-9]{1,60}', k) and _safe_value(v) for k, v in doc.items()))
+
+
 def status_lines(text):
-    return [line for line in text.splitlines() if any(p.fullmatch(line) for p in STATUS)]
+    return [line for line in text.splitlines() if any(p.fullmatch(line) for p in STATUS) or json_event(line)]
 
 
 def main(argv):
