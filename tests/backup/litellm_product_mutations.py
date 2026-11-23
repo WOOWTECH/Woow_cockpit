@@ -116,6 +116,31 @@ MUTATIONS = (
      '        if not stat.S_ISREG(st.st_mode) or not 0 < st.st_size <= MAX_SECRET_BYTES:\n', '        if False:\n', 1),
     ('A03', 'the conversion hands its secrets to import_manifest', HI,
      "ITEM_KEYS = ('volumes', 'postgres', 'dirs', 'secrets')", "ITEM_KEYS = ('volumes', 'postgres', 'dirs')", 1),
+    # Security review 2026-11-23 (tests/backup/evidence/litellm-product-security-review-20261123): SR-1..SR-5.
+    ('M34', "every session in HA's cluster sends the pinned client options (SR-1/SR-2)", LL,
+     "    cluster = ha_odoo.Cluster(HaSessions(tmp, 'hapg'), 'hapg', log=work.log)\n",
+     "    cluster = ha_odoo.Cluster(tmp, 'hapg', log=work.log)\n", 1),
+    ('M35', "the superuser's sessions fire no event trigger and load no preload library (SR-3)", LL,
+     "HA_SUPERUSER_OPTIONS = HA_SESSION_OPTIONS + ' -c session_preload_libraries= -c event_triggers=off'\n",
+     "HA_SUPERUSER_OPTIONS = HA_SESSION_OPTIONS\n", 1),
+    ('M36', "HA's server starts with event triggers off (SR-3)", LL,
+     "    return args + ['-c', 'event_triggers=off']\n", "    return args\n", 1),
+    ('M37', "_prisma_migrations is read only as an ordinary table (SR-1)", LL,
+     "MIGRATIONS_TABLE_SQL = (\"SELECT to_json(coalesce((SELECT c.relkind = 'r' FROM pg_catalog.pg_class c \"\n",
+     "MIGRATIONS_TABLE_SQL = (\"SELECT to_json(coalesce((SELECT true FROM pg_catalog.pg_class c \"\n", 1),
+    ('M38', "backup_label/tablespace_map never reach HA's volume (SR-4)", LL,
+     "                src.recovery_files += 1  # never reaches the volume (SR-4); the verdict refuses\n"
+     "                continue\n",
+     "                src.recovery_files += 1  # never reaches the volume (SR-4); the verdict refuses\n", 1),
+    ('M39', "backup_label/tablespace_map refuse (SR-4)", LL,
+     "    if src.recovery_files:\n", "    if False:\n", 1),
+    ('M40', "HA's stored proxy settings are named in the check (SR-5)", LL,
+     "    stored_line = stored_settings_line(settings)\n    if stored_line:\n        warnings.append(stored_line)\n",
+     "    stored_line = None\n", 1),
+    ('M41', "HA's stored proxy settings are named in the import notes (SR-5)", LL,
+     "    stored_line = stored_settings_line(data.get('stored_settings'))\n"
+     "    if stored_line:\n        notes.append(stored_line)\n",
+     "", 1),
 )
 
 
