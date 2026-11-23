@@ -144,21 +144,21 @@ def ha_checks(request, master_key, db_models):
     """The restored HA data as served by the running app: the HA-issued virtual key, its model list, the stored
     models, users and teams. Returns counts only. The router loads stored models in the background, so the model
     list is polled (90 s) until it holds at least the stored models."""
-    if status_of('/key/info', request['test_vkey']) != 200:
-        raise RuntimeError('HA virtual key not accepted')
-    info = api_as('/key/info', request['test_vkey'])
-    if not isinstance(info, dict) or (info.get('info') or {}).get('key_alias') != request['expected_alias']:
-        raise RuntimeError('HA virtual key identity')
+    counts = {'test_key_status': status_of('/key/info', request['test_vkey']), 'test_key_alias_matches': False,
+              'vkey_models': 0}
+    if counts['test_key_status'] == 200:
+        info = api_as('/key/info', request['test_vkey'])
+        counts['test_key_alias_matches'] = (isinstance(info, dict) and
+                                            (info.get('info') or {}).get('key_alias') == request['expected_alias'])
+        models = api_as('/v1/models', request['test_vkey'])
+        counts['vkey_models'] = len(models.get('data') or [])
     deadline = time.monotonic() + 90
     while True:
         listed = api('/model/info', master_key)
         if len(listed.get('data') or []) >= db_models or time.monotonic() > deadline:
             break
         time.sleep(3)
-    models = api_as('/v1/models', request['test_vkey'])
-    counts = {'vkey_models': len(models.get('data') or []), 'api_models': len(listed.get('data') or [])}
-    if counts['vkey_models'] < 1:
-        raise RuntimeError('HA virtual key sees no model')
+    counts['api_models'] = len(listed.get('data') or [])
     return counts
 
 

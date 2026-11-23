@@ -149,6 +149,7 @@ def private_note(data):
 class DevDRunner:
     """Rootless Podman of dev-d's appowner through owner.sh; failure output goes to the private note only."""
     uid = None
+    last_stderr = b''
 
     def podman(self, *args, input=None, stdout=None, timeout=120, check=True, max_output=None, abort=None):
         argv = [str(OWNER), 'd', 'podman', *args]
@@ -161,6 +162,7 @@ class DevDRunner:
             raise BackupError('job-failed', '隔離實驗室命令執行逾時。') from None
         except OSError:
             raise BackupError('job-failed', '無法執行隔離實驗室命令。') from None
+        self.last_stderr = (result.stderr or b'')[-16384:]
         if check and result.returncode:
             private_note(b'podman ' + ' '.join(a for a in args[:3] if isinstance(a, str)).encode() + b' rc=' +
                          str(result.returncode).encode() + b'\n' + (result.stderr or b'')[-16384:])
@@ -396,7 +398,8 @@ def quiesce(db):
 
 # ---------------------------------------------------------------- app helpers
 
-PRINTABLE_LABELS = {'vkey_models': 'client_models', 'issued_key_info': 'issued_client_status'}
+PRINTABLE_LABELS = {'vkey_models': 'client_models', 'issued_key_info': 'issued_client_status',
+                    'test_key_status': 'ha_client_status', 'test_key_alias_matches': 'ha_client_alias_matches'}
 
 
 def printable(counts):
@@ -430,7 +433,8 @@ def worker(tmp, role, action, env, **fields):
     for key in reply.get('issued', []) if isinstance(reply, dict) else []:
         LEDGER.register('issued.virtual_key', key)          # registered before anything else uses the reply
     if result.returncode != 0 or not isinstance(reply, dict) or reply.get('ok') is not True:
-        private_note(b'worker ' + action.encode() + b' rc=' + str(result.returncode).encode())
+        private_note(b'worker ' + action.encode() + b' rc=' + str(result.returncode).encode() + b'\n' +
+                     getattr(getattr(tmp, 'runner', None), 'last_stderr', b''))
         raise Failed('worker_' + action.replace('-', '_'))
     return reply
 
@@ -677,6 +681,9 @@ def lab_run(args, ha, member, keys, runner, test_vkey, started, lock_started):
                            issued_alias='woowbk-lab-issued-' + secrets.token_hex(4))
             counts = reply['counts']
             issued_key = reply['issued'][0]
+            soft('ha_client_accepted', counts['test_key_status'] == 200)
+            soft('ha_client_alias_matches', counts['test_key_alias_matches'] is True)
+            soft('ha_client_sees_models', counts['vkey_models'] >= 1)
             soft('issued_client_usable', counts['issued_key_info'] == 200)
             soft('salt_row_matches', counts['salt_row_matches'] is True)
             soft('model_values_all_decrypt', counts['model_values'] > 0
@@ -685,8 +692,7 @@ def lab_run(args, ha, member, keys, runner, test_vkey, started, lock_started):
             soft('wrong_salt_decrypts_nothing', counts['model_values_wrong_ok'] == 0
                  and counts['stored_values_wrong_ok'] == 0)
             soft('app_serves_all_stored_models', counts['api_models'] >= counts['db_models'])
-            emit('ha_import_verified', app_start_s=seconds, ha_client_accepted=True, ha_client_alias_matches=True,
-                 **printable(counts))
+            emit('ha_import_verified', app_start_s=seconds, **printable(counts))
 
             stage = 'restart'
             if time.monotonic() - lock_started < SOFT_DEADLINE:
@@ -698,7 +704,8 @@ def lab_run(args, ha, member, keys, runner, test_vkey, started, lock_started):
                                                        ('vkey_models', 'api_models', 'users', 'teams', 'db_models',
                                                         'orgs')))
                 issued_ok = soft('restart_issued_client_usable', again['issued_key_info'] == 200)
-                emit('restart_verified', app_start_s=seconds, counts_equal=same, ha_client_accepted=True,
+                ha_ok = soft('restart_ha_client_accepted', again['test_key_status'] == 200)
+                emit('restart_verified', app_start_s=seconds, counts_equal=same, ha_client_accepted=ha_ok,
                      issued_client_accepted=issued_ok)
                 app_stop(tmp, 'target-restart')
             else:
