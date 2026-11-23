@@ -1,0 +1,156 @@
+{
+ "attempt": "t4_members-fixedprod",
+ "code": "integration ae5420d + SR-1/SR-2 fixes (working tree before SR-3; same SR-1/SR-2 code as 75aad7a) + product-engine.patch",
+ "commercial_acceptance": "not-complete",
+ "exit": 0,
+ "ha_emqx_py_sha256": "a357ffc9fa67928cbeb7d5bd25bdf49d22814dfadb5968adf5306fffe45a4cfd",
+ "network": "none",
+ "note": "stdout was printed in the review session and not saved; result JSON written by the harness",
+ "result": {
+  "cases": {
+   "absolute_name": {
+    "code": "corrupt-archive",
+    "message": "HA 備份檔已損毀或遭到修改，無法使用。",
+    "outcome": "refused"
+   },
+   "absolute_symlink_acl": {
+    "outcome": "accepted",
+    "skipped_other": 0,
+    "skipped_symlinks": 1,
+    "staged": {
+     "authz": [
+      "5",
+      "0o755",
+      0,
+      0,
+      0
+     ]
+    }
+   },
+   "block_device": {
+    "code": "corrupt-archive",
+    "message": "HA 備份檔已損毀或遭到修改，無法使用。",
+    "outcome": "refused"
+   },
+   "char_device": {
+    "code": "corrupt-archive",
+    "message": "HA 備份檔已損毀或遭到修改，無法使用。",
+    "outcome": "refused"
+   },
+   "control_char_name": {
+    "code": "corrupt-archive",
+    "message": "HA 備份檔已損毀或遭到修改，無法使用。",
+    "outcome": "refused"
+   },
+   "dotdot_name": {
+    "code": "corrupt-archive",
+    "message": "HA 備份檔已損毀或遭到修改，無法使用。",
+    "outcome": "refused"
+   },
+   "duplicate_cluster_hocon": {
+    "code": "corrupt-archive",
+    "message": "HA 備份檔已損毀或遭到修改，無法使用。",
+    "outcome": "refused"
+   },
+   "entry_below_file": {
+    "code": "corrupt-archive",
+    "message": "HA 備份檔已損毀或遭到修改，無法使用。",
+    "outcome": "refused"
+   },
+   "fifo": {
+    "outcome": "accepted",
+    "skipped_other": 1,
+    "skipped_symlinks": 0,
+    "staged": {}
+   },
+   "generated_configs_never_staged": {
+    "outcome": "accepted",
+    "skipped_other": 0,
+    "skipped_symlinks": 0,
+    "staged": {}
+   },
+   "hardlink_to_node_file": {
+    "code": "corrupt-archive",
+    "message": "HA 備份檔已損毀或遭到修改，無法使用。",
+    "outcome": "refused"
+   },
+   "oversized_cluster_hocon": {
+    "code": "limit-exceeded",
+    "message": "HA 備份檔超出安全限制（檔案數量或大小），已拒絕處理。",
+    "outcome": "refused"
+   },
+   "pax_path_override": {
+    "code": "corrupt-archive",
+    "message": "HA 備份檔已損毀或遭到修改，無法使用。",
+    "outcome": "refused"
+   },
+   "relative_symlink_escape": {
+    "outcome": "accepted",
+    "skipped_other": 0,
+    "skipped_symlinks": 1,
+    "staged": {
+     "certs": [
+      "5",
+      "0o755",
+      0,
+      0,
+      0
+     ]
+    }
+   },
+   "setuid_executable_cert": {
+    "outcome": "accepted",
+    "skipped_other": 0,
+    "skipped_symlinks": 0,
+    "staged": {
+     "certs": [
+      "5",
+      "0o755",
+      0,
+      0,
+      0
+     ],
+     "certs/run.sh": [
+      "0",
+      "0o600",
+      0,
+      0,
+      10
+     ]
+    }
+   },
+   "setuid_executable_mnesia": {
+    "outcome": "accepted",
+    "skipped_other": 0,
+    "skipped_symlinks": 0,
+    "staged": {
+     "mnesia": [
+      "5",
+      "0o755",
+      0,
+      0,
+      0
+     ],
+     "mnesia/emqx@127.0.0.1": [
+      "5",
+      "0o755",
+      0,
+      0,
+      0
+     ],
+     "mnesia/emqx@127.0.0.1/x": [
+      "0",
+      "0o644",
+      0,
+      0,
+      10
+     ]
+    }
+   }
+  },
+  "codebase": "fixedprod",
+  "test": "T4 crafted add-on members through scan_member"
+ },
+ "stdout_sha256": null,
+ "store": "labpodman (separate --root); throwaway objects removed after the run"
+}

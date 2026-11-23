@@ -1,0 +1,14 @@
+{
+ "what": "each security protection removed in a scratch copy of 7b173af backup-engine; tests.backup.test_ha_emqx_security_review run (guarded, no real podman)",
+ "mutations": {
+  "SR1 plugin env pins": "KILLED",
+  "SR1 /work noexec": "KILLED",
+  "SR1 log noexec": "KILLED",
+  "SR2 digest check call": "KILLED",
+  "SR3 file secret refusal": "KILLED",
+  "SR6 jq refusal": "KILLED",
+  "SR7 receivers refusal": "KILLED"
+ },
+ "baseline_after_restore": "tests=18 failures=0 errors=0 skipped=0 expected_failures=0 unexpected_successes=0 blocked=0",
+ "commercial_acceptance": "not-complete"
+}

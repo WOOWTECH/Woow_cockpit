@@ -241,6 +241,8 @@ class JqRuleUnitTests(unittest.TestCase):
         self.assertEqual(count({'rule_engine': {'rules': {'r': {'sql': list(b'select jq(1,2) from "a"')}}}}), 1)
         self.assertEqual(count(rules('SELECT payload FROM "jquery/x"', 'SELECT jq_x FROM "y"')), 0)
         self.assertEqual(count({'rule_engine': {'rules': {}}}), 0)
+        self.assertEqual(count({'rule_engine': {'rules': {}, 'jq_implementation_module': 'jq_nif',
+                                                'jq_function_default_timeout': '10s'}}), 0)
         self.assertEqual(count({}), 0)
 
 
