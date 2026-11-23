@@ -18,11 +18,16 @@ def response(config):
     return Result(0, b'WOOWCFG:' + base64.b64encode(json.dumps(config).encode()) + b':END\nok\n', b'')
 
 
+ETC_REPLY = b'WOOWETC:/opt/emqx/etc:ENDok\n'
+RECEIPT_REPLY = ('WOOWTAB:' + ''.join(f'{t}:0:{"A" * 64};' for t in emqx.STABLE_TABLES) + ':ENDok').encode()
+
+
 class Transport:
     def __init__(self):
+        # One file source: EMQX 5.8.9 refuses two sources of one type (emqx_authz.erl:145-148, 386-408
+        # check_dup_types), so a running broker never has two file ACLs.
         self.config = {'authorization': {'no_match': 'deny', 'deny_action': 'ignore',
-            'sources': [{'type': 'file', 'path': '/opt/emqx/data/authz/custom.acl'},
-                        {'type': 'file', 'path': '/opt/emqx/etc/acl.conf'}]},
+            'sources': [{'type': 'file', 'path': '/opt/emqx/data/authz/custom.acl'}]},
             'listeners': {'ssl': {'default': {'ssl_options': {'certfile': '/opt/emqx/data/certs/lab.pem'}}}}}
         self.events, self.seed = [], {}
         self.running_config = copy.deepcopy(self.config)
@@ -35,7 +40,12 @@ class Transport:
         self.logs = []
 
     def podman(self, *args, **kwargs):
+        if args == ('container', 'inspect', '--format', '{{.State.Running}}', 'lab-target'):
+            self.events.append('inspect-live')
+            return Result(0, b'true\n', b'')
         assert args[:2] == ('exec', 'lab-target')
+        if args[2:] == ('emqx', 'eval', emqx.ETC_EXPR):
+            return Result(0, ETC_REPLY, b'')
         if args[2:] == ('emqx','eval',emqx.OVERRIDE_STATE_EXPR):
             state=self.override_states[min(self.override_reads,len(self.override_states)-1)]
             self.override_reads+=1
@@ -82,6 +92,11 @@ class Transport:
         if command == ['emqx', 'eval', emqx.CONFIG_EXPR]:
             self.events.append('read-candidate')
             return response(self.running_config)
+        if command == ['emqx', 'eval', emqx.ETC_EXPR]:
+            return Result(0, ETC_REPLY, b'')
+        if command == ['emqx', 'eval', emqx.TABLES_RECEIPT_EXPR]:
+            self.events.append('receipt')
+            return Result(0, RECEIPT_REPLY, b'')
         if command[:2] == ['emqx', 'eval']:
             expression = command[2]
             value = {emqx.SUSPEND_SYS_EXPR: 'WOOWSYS:<0.1.0>:suspended\nok',

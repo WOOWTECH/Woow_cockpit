@@ -570,10 +570,10 @@ def _validate_app(app, where, ref, by_path):
     """One app section (v1 manifest `apps[]`, v2 per-app manifest `app`). `ref(app_id, section, entry, where)` checks
     an entry reference."""
     # `data_dirs` (host directories), `verify_digests` and `catalog_entry` (2026.11.15.2) are optional: archives
-    # written before them have none.
+    # written before them have none; so is `import_check` (2026-11-23: a Home Assistant import's readback).
     _obj(app, where, ('id', 'name', 'adapter', 'adapter_version', 'catalog_sha256', 'owner', 'images',
                       'postgres', 'volumes', 'secrets', 'config_files', 'quadlet_files', 'verify_snapshot'),
-         ('data_dirs', 'verify_digests', 'catalog_entry'))
+         ('data_dirs', 'verify_digests', 'catalog_entry', 'import_check'))
     _str(app['id'], f'{where}.id', APP_ID_RE, max_len=41)
     app_id = app['id']
     _str(app['name'], f'{where}.name', min_len=1, max_len=200)
@@ -658,12 +658,49 @@ def _validate_app(app, where, ref, by_path):
     if 'catalog_entry' in app:
         _catalog_entry(app['catalog_entry'], f'{where}.catalog_entry', app_id)
 
+    if 'import_check' in app:
+        _import_check(app['import_check'], f'{where}.import_check', app_id)
+
     snapshot = app['verify_snapshot']
     _need(isinstance(snapshot, dict) and len(snapshot) <= 20, f'{where}.verify_snapshot must be an object')
     for key, value in snapshot.items():
         _str(key, f'{where}.verify_snapshot key', VERIFY_ID_RE, max_len=64)
         _need(isinstance(value, dict), f'{where}.verify_snapshot.{key} must be an object')
         _json_value(value, f'{where}.verify_snapshot.{key}')
+
+
+IMPORT_CHECK_ROOT_RE = re.compile(r'^[a-z][a-z0-9_]{0,63}\Z')
+# kind -> (app id, the exact table names of its readback); haimport.IMPORT_CHECKS dispatches the same kinds.
+IMPORT_CHECK_KINDS = {'emqx-readback': ('emqx', ('emqx_authn_mnesia', 'emqx_authn_scram_mnesia', 'emqx_acl',
+                                                 'emqx_admin', 'emqx_app', 'emqx_psk', 'emqx_banned_rules'))}
+
+
+def _import_check(item, where, app_id):
+    """`import_check` of an app section [format]: {kind, version 1, config_roots {root: sha256}, tables {table: [rows,
+    sha256|null]}} -- the readback a converted Home Assistant backup's restore compares (CONTRACT sections 5, 9)."""
+    _obj(item, where, ('kind', 'version', 'config_roots', 'tables'))
+    _need(item['kind'] in IMPORT_CHECK_KINDS and IMPORT_CHECK_KINDS[item['kind']][0] == app_id,
+          f'{where}.kind is not a readback of this app')
+    _int(item['version'], f'{where}.version', 1, 1)
+    roots = item['config_roots']
+    _need(isinstance(roots, dict) and 1 <= len(roots) <= 128, f'{where}.config_roots must be an object of 1-128 roots')
+    for name, digest in roots.items():
+        _str(name, f'{where}.config_roots key', IMPORT_CHECK_ROOT_RE, max_len=64)
+        _str(digest, f'{where}.config_roots.{name}', SHA256_RE, max_len=64)
+    tables = item['tables']
+    _obj(tables, f'{where}.tables', IMPORT_CHECK_KINDS[item['kind']][1])
+    for name, value in tables.items():
+        _need(isinstance(value, list) and len(value) == 2, f'{where}.tables.{name} must be [rows, digest]')
+        _int(value[0], f'{where}.tables.{name} rows', -1, 2 ** 31)
+        if value[0] < 0:
+            _need(value[1] is None, f'{where}.tables.{name} of a missing table has a digest')
+        else:
+            _str(value[1], f'{where}.tables.{name} digest', SHA256_RE, max_len=64)
+
+
+def validate_import_check(item, app_id):
+    """The same validation for a conversion about to write it (BackupError invalid-manifest)."""
+    _import_check(item, 'import_check', app_id)
 
 
 MAX_CATALOG_ENTRY = 256 * 1024  # catalog.MAX_ENTRY_BYTES: the largest entry a device installs

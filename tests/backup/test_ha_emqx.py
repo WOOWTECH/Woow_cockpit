@@ -83,6 +83,16 @@ def counts_text(counts):
     return ('[' + ',\n '.join(f'{{{t},{n}}}' for t, n in counts.items()) + ']\n').encode()
 
 
+def receipt_text(tables):
+    """The answer of ha_emqx.TABLES_RECEIPT_EXPR: {table: (rows, sha256 hex upper | None)}."""
+    return ('WOOWTAB:' + ''.join(f'{t}:{n}:{h or "-"};' for t, (n, h) in tables.items()) + ':ENDok\n').encode()
+
+
+RECEIPT = {t: (n, (t.encode().hex().upper() * 8)[:64]) for t, n in
+           (('emqx_authn_mnesia', 4), ('emqx_authn_scram_mnesia', 0), ('emqx_acl', 2), ('emqx_admin', 2),
+            ('emqx_app', 1), ('emqx_psk', 0), ('emqx_banned_rules', 0))}
+
+
 class World(fk.World):
     def __init__(self):
         super().__init__()
@@ -132,6 +142,10 @@ class World(fk.World):
         return Result(0, b'', b'')
 
     def evaluate(self, role, expression):
+        if expression == ha_emqx.ETC_EXPR:
+            return b'WOOWETC:/opt/emqx/etc:ENDok\n'
+        if expression == ha_emqx.TABLES_RECEIPT_EXPR:
+            return receipt_text(RECEIPT)
         if expression == ha_emqx.CONFIG_EXPR:
             return b'WOOWCFG:' + base64.b64encode(json.dumps(self.current_config).encode()) + b':ENDok\n'
         if expression == ha_emqx.OVERRIDE_STATE_EXPR:
@@ -231,11 +245,23 @@ class EmqxCase(fk.ConversionCase):
             self.assertEqual(work.close(), [])
 
 
+BUILTIN_TARGET = [{'type': 'file', 'enable': True, 'path': '/opt/emqx/etc/acl.conf'},
+                  {'type': 'built_in_database', 'enable': True}]
+
+
 class CheckTests(EmqxCase):
+    def setUp(self):
+        super().setUp()
+        # HA's backup has ACL rows (HA_COUNTS): the import target is one that asks its built-in database too (OWNER
+        # DECISION 2026-11-23 「C」; a file-only target refuses them: test_ha_emqx_product.AclNeedsBuiltinTests).
+        self.world.target_config['authorization']['sources'] = copy.deepcopy(BUILTIN_TARGET)
+        self.world.current_config = copy.deepcopy(self.world.target_config)
+
     def test_a_clean_backup(self):
         result = self.check(self.upload_emqx(), ['emqx'])[0]
         self.assertEqual((result['ok'], result['blockers'], result['target_version']),
-                         (False, [ha_emqx.PRESERVATION_BLOCKER], '5.8.9'))
+                         (True, [], '5.8.9'))
+        self.assertEqual(result['emqx']['target_authorization'], ['file', 'built_in_database'])
         section = result['emqx']
         self.assertEqual((section['node_name'], section['mqtt_users'], section['acl_rules'], section['api_keys'],
                           section['retained_messages'], section['default_dashboard_password']),
@@ -277,12 +303,11 @@ class CheckTests(EmqxCase):
         self.world.version = '5.9.0'
         result = self.check(self.upload_emqx(), ['emqx'])[0]
         self.assertTrue(any('HA 的 EMQX 是 5.8.9' in blocker for blocker in result['blockers']))
-        self.assertIn(ha_emqx.PRESERVATION_BLOCKER, result['blockers'])
+        self.assertEqual(len(result['blockers']), 1, 'the version is the only blocker (no blanket guard any more)')
 
     def test_a_hot_backup_is_tried_and_named(self):
         result = self.check(self.upload_emqx(), ['emqx'])[0]
-        self.assertFalse(result['ok'])
-        self.assertIn(ha_emqx.PRESERVATION_BLOCKER, result['blockers'])
+        self.assertTrue(result['ok'], 'a hot backup whose database loaded completely is importable, with the warning')
         self.assertTrue(result['emqx']['hot_backup'])
         self.assertTrue(any('執行中製作' in w for w in result['warnings']))
         result = self.check(self.upload_emqx(state='stopped'), ['emqx'])[0]
@@ -328,8 +353,7 @@ class CheckTests(EmqxCase):
 
     def test_an_ip_node_name_needs_no_host_line(self):
         result = self.check(self.upload_emqx(node_file='emqx@127.0.0.1', nodes=('emqx@127.0.0.1',)), ['emqx'])[0]
-        self.assertFalse(result['ok'])
-        self.assertIn(ha_emqx.PRESERVATION_BLOCKER, result['blockers'])
+        self.assertTrue(result['ok'])
         self.assertNotIn('--add-host', self.runs('emqx-ha')[0][3])
 
 

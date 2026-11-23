@@ -1,0 +1,563 @@
+"""HA import, EMQX as a product import (owner decision 2026-11-23, 「決定1 做」): the protections the lab proved are
+enforced by the public check, convert and restore path itself. Generated transports only: no broker, no podman.
+
+What replaced the public PRESERVATION_BLOCKER, each with tests that fail when the protection is removed:
+* this device's broker is read first and must be inside the proven profile: authorization sources exactly [file] or
+  [file, built_in_database], EMQX_ETC_DIR /opt/emqx/etc before the vendor template `${EMQX_ETC_DIR}/acl.conf` is
+  resolved, the broker running -- else the check and the conversion refuse naming it;
+* HA's ACL rows need this device's built-in database source (OWNER DECISION 「C」): a target without it refuses a
+  backup with ACL rows at the check (a blocker) and in the conversion before any candidate is built;
+* the readback's configuration digests never contain this device's secret values (security review SR-4);
+* the conversion records a readback (every configuration root, the administrator tables) in the backup and the
+  restore compares it with the restored broker, rolling back on any difference; a readback this engine does not know
+  refuses the restore before anything changes.
+"""
+import copy
+import json
+import unittest
+from types import SimpleNamespace
+from unittest import mock
+
+from woowbackup import archive, flows, ha_emqx, haimport
+from woowbackup.errors import BackupError
+from woowbackup.ha_emqx_acl_preservation import disabled_intermediate
+from woowbackup.podman import Result
+
+from . import hab1fakes as fk
+from . import test_flows as tf
+from . import test_ha_emqx as base
+from . import test_ha_emqx_acl_imported_default_path as default_path
+from . import test_ha_emqx_candidate_flow as flow
+
+MOUNT = [('/home/appowner/.config/emqx/acl.conf', '/opt/emqx/etc/acl.conf', 'ro')]
+FILE = {'type': 'file', 'enable': True, 'path': '${EMQX_ETC_DIR}/acl.conf'}
+BUILTIN = {'type': 'built_in_database', 'enable': True}
+TABLES = {t: [0, 'a' * 64] for t in ha_emqx.STABLE_TABLES}
+
+
+def answer(raw, code=0):
+    return lambda _command: Result(code, raw, b'')
+
+
+class TemplatePathTests(unittest.TestCase):
+    def references(self, path, mounts=MOUNT, etc_dir=ha_emqx.ETC_DIR):
+        return ha_emqx.authorization_file_references({'sources': [dict(FILE, path=path)]}, mounts,
+                                                     include_cluster=False, etc_dir=etc_dir)
+
+    def test_the_vendor_template_resolves_only_on_the_proven_etc_dir(self):
+        self.assertEqual(self.references('${EMQX_ETC_DIR}/acl.conf'), set(), 'the read-only mount is the ACL')
+        for etc_dir in (None, '/etc/emqx'):
+            with self.subTest(etc_dir=etc_dir), self.assertRaises(BackupError):
+                self.references('${EMQX_ETC_DIR}/acl.conf', etc_dir=etc_dir)
+        with self.assertRaises(BackupError) as caught:
+            self.references('${EMQX_ETC_DIR}/acl.conf', mounts=[])
+        self.assertIn('唯一的唯讀掛載', caught.exception.message)
+        other = MOUNT + [('/home/appowner/.config/emqx/other.conf', '/opt/emqx/etc/other.conf', 'ro')]
+        for path in ('$EMQX_ETC_DIR/acl.conf', '${EMQX_ETC_DIR}/other.conf', '${EMQX_ETC_DIR}/../etc/acl.conf',
+                     '${OTHER_DIR}/acl.conf', '${EMQX_ETC_DIR}//acl.conf'):
+            with self.subTest(path=path), self.assertRaises(BackupError):
+                self.references(path, mounts=other)
+
+    def test_disabled_intermediate_keeps_the_target_template_only_on_the_proven_etc_dir(self):
+        original, imported = default_path.ImportedDefaultAclPathTests.configs(None, '/opt/emqx/etc/acl.conf')
+        original['authorization']['sources'][0]['path'] = '${EMQX_ETC_DIR}/acl.conf'
+        before = copy.deepcopy(original)
+        with self.assertRaises(BackupError):
+            disabled_intermediate(original, imported)
+        intermediate = disabled_intermediate(original, imported, target_etc_dir=ha_emqx.ETC_DIR)
+        self.assertEqual(intermediate['authorization']['sources'][-1], {'type': 'built_in_database', 'enable': False})
+        self.assertEqual(original, before, 'the target template is kept verbatim, never expanded')
+        for path in ('etc/acl.conf', '${EMQX_ETC_DIR}/custom.conf'):
+            original['authorization']['sources'][0]['path'] = path
+            with self.subTest(path=path), self.assertRaises(BackupError):
+                disabled_intermediate(original, imported, target_etc_dir=ha_emqx.ETC_DIR)
+
+
+class TargetProfileTests(unittest.TestCase):
+    def config(self, *sources):
+        return {'authorization': {'no_match': 'deny', 'deny_action': 'ignore', 'sources': list(sources)}}
+
+    def test_only_the_proven_combinations_are_supported(self):
+        self.assertEqual(ha_emqx.source_profile(self.config(FILE)), ('file',))
+        self.assertEqual(ha_emqx.source_profile(self.config(FILE, BUILTIN)), ('file', 'built_in_database'))
+        for sources, shown in (((BUILTIN, FILE), '內建資料庫＋ACL 檔案'), ((BUILTIN,), '內建資料庫'), ((), '沒有任何來源'),
+                               ((dict(FILE, enable=False),), 'ACL 檔案（停用）'),
+                               ((FILE, dict(BUILTIN, enable=False)), 'ACL 檔案＋內建資料庫（停用）'),
+                               ((FILE, {'type': 'http', 'enable': True}), 'ACL 檔案＋HTTP'),
+                               (({'type': 'Weird type!', 'enable': True},), '未知的來源')):
+            with self.subTest(shown=shown), self.assertRaises(BackupError) as caught:
+                ha_emqx.source_profile(self.config(*sources))
+            self.assertEqual(caught.exception.code, 'incompatible')
+            self.assertIn(f'授權來源組合（{shown}）', caught.exception.message)
+            self.assertIn('目前只支援「ACL 檔案」或「ACL 檔案＋內建資料庫」', caught.exception.message)
+
+    def test_the_etc_dir_must_be_the_images(self):
+        self.assertEqual(ha_emqx.target_etc_dir(answer(b'WOOWETC:/opt/emqx/etc:ENDok\n')), '/opt/emqx/etc')
+        with self.assertRaises(BackupError) as caught:
+            ha_emqx.target_etc_dir(answer(b'WOOWETC:/etc/emqx:ENDok\n'))
+        self.assertIn('EMQX_ETC_DIR', caught.exception.message)
+        for raw, code in ((b'garbage', 0), (b'WOOWETC:/opt/emqx/etc:ENDok', 1), (b'', 0)):
+            with self.subTest(raw=raw), self.assertRaises(BackupError) as caught:
+                ha_emqx.target_etc_dir(answer(raw, code))
+            self.assertNotIn('EMQX_ETC_DIR', caught.exception.message)
+
+    def test_the_conversion_reads_the_etc_dir_of_target_and_candidate(self):
+        class OtherEtc(flow.Transport):
+            def __init__(self, side):
+                super().__init__()
+                self.side = side
+
+            def podman(self, *args, **kwargs):
+                if self.side == 'target' and args[2:] == ('emqx', 'eval', ha_emqx.ETC_EXPR):
+                    return Result(0, b'WOOWETC:/etc/emqx:ENDok\n', b'')
+                return super().podman(*args, **kwargs)
+
+            def exec(self, role, command, **kwargs):
+                if self.side == 'candidate' and command == ['emqx', 'eval', ha_emqx.ETC_EXPR]:
+                    return Result(0, b'WOOWETC:/etc/emqx:ENDok\n', b'')
+                return super().exec(role, command, **kwargs)
+        for side in ('target', 'candidate'):
+            transport = OtherEtc(side)
+            with self.subTest(side=side), self.assertRaises(BackupError):
+                flow.CandidateFlowTests.invoke(self, transport)
+            self.assertNotIn('import', transport.events)
+        self.assertNotIn('export', OtherEtc('target').events)
+
+    def test_a_profile_outside_the_proven_ones_stops_before_the_snapshot(self):
+        transport = flow.Transport()
+        transport.config['authorization']['sources'].insert(0, dict(BUILTIN))
+        transport.running_config = copy.deepcopy(transport.config)
+        with self.assertRaises(BackupError) as caught:
+            flow.CandidateFlowTests.invoke(self, transport)
+        self.assertIn('授權來源組合（內建資料庫＋ACL 檔案）', caught.exception.message)
+        self.assertNotIn('export', transport.events)
+
+    def test_a_stopped_target_is_named(self):
+        class Stopped(flow.Transport):
+            def podman(self, *args, **kwargs):
+                if args[:2] == ('container', 'inspect'):
+                    return Result(0, b'false\n', b'')
+                return super().podman(*args, **kwargs)
+        transport = Stopped()
+        transport.live_response = Result(125, b'', b'Error: container is not running')
+        with self.assertRaises(BackupError) as caught:
+            flow.CandidateFlowTests.invoke(self, transport)
+        self.assertEqual(caught.exception.message, ha_emqx.NOT_RUNNING)
+        running = flow.Transport()
+        running.live_response = Result(0, b'garbage', b'')
+        with self.assertRaises(BackupError) as caught:
+            flow.CandidateFlowTests.invoke(self, running)
+        self.assertNotEqual(caught.exception.message, ha_emqx.NOT_RUNNING, 'a running broker gets the read error')
+
+
+class TargetWorld(base.World):
+    """test_ha_emqx's World with this device's broker reading as `sources` and optionally stopped."""
+    stopped = False
+
+    def podman(self, args, data, stdout):
+        if self.stopped and args[:2] == ['container', 'inspect'] and args[-1] == 'woow-emqx':
+            return Result(0, b'false\n', b'')
+        return super().podman(args, data, stdout)
+
+    def exec(self, role, command, data, stdout):
+        if self.stopped and role == 'woow-emqx':
+            return Result(125, b'', b'Error: container is not running')
+        return super().exec(role, command, data, stdout)
+
+
+class CheckPreflightTests(base.EmqxCase):
+    world_class = TargetWorld
+
+    def target(self, *sources):
+        self.world.target_config['authorization']['sources'] = [copy.deepcopy(s) for s in sources]
+        self.world.current_config = copy.deepcopy(self.world.target_config)
+
+    def test_an_unsupported_target_is_the_apps_blocker_and_the_facts_stay(self):
+        self.target(dict(FILE, path='/opt/emqx/etc/acl.conf'), {'type': 'http', 'enable': True})
+        result = self.check(self.upload_emqx(state='stopped'), ['emqx'])[0]
+        self.assertFalse(result['ok'])
+        self.assertTrue(any('授權來源組合（ACL 檔案＋HTTP）' in b for b in result['blockers']), result['blockers'])
+        self.assertEqual(result['emqx']['mqtt_users'], 3, 'HA\'s facts are still shown')
+        self.assertEqual(result['emqx']['target_authorization'], [])
+        self.assertFalse(self.runs('emqx-new'), 'a check changes nothing')
+
+    def test_a_stopped_target_is_named_in_the_check(self):
+        self.world.stopped = True
+        result = self.check(self.upload_emqx(state='stopped'), ['emqx'])[0]
+        self.assertFalse(result['ok'])
+        self.assertIn(ha_emqx.NOT_RUNNING, result['blockers'])
+
+    def test_the_vendor_template_target_of_the_product_package_is_supported(self):
+        self.target(FILE, BUILTIN)   # Woow_podman_emqx base.hocon: path = "${EMQX_ETC_DIR}/acl.conf"
+        result = self.check(self.upload_emqx(state='stopped'), ['emqx'])[0]
+        self.assertTrue(result['ok'], result['blockers'])
+        self.assertEqual(result['emqx']['target_authorization'], ['file', 'built_in_database'])
+        self.target(FILE)
+        with mock.patch.dict(base.HA_COUNTS, {'emqx_acl': 0}):
+            result = self.check(self.upload_emqx(state='stopped'), ['emqx'])[0]
+        self.assertTrue(result['ok'], result['blockers'])
+        self.assertEqual(result['emqx']['target_authorization'], ['file'])
+
+
+class AclNeedsBuiltinTests(base.EmqxCase):
+    """OWNER DECISION 2026-11-23 「C」 (EMQX 權限): HA's ACL rows only take effect through this device's built-in
+    database source and the import never adds or changes a source itself, so a target without it refuses a backup with
+    ACL rows -- at the check (a blocker, nothing changed) and again in the conversion before any candidate is built."""
+    world_class = TargetWorld
+    OWNER_TEXT = ('Podman 上的 EMQX 沒有開啟『內建資料庫』權限，HA 的裝置權限搬過去不會生效，裝置會被拒絕。'
+                  '請先在 Podman EMQX 的管理頁「存取控制 → 授權」新增「內建資料庫」（排在檔案規則之後），再匯入。')
+
+    def target(self, *sources):
+        self.world.target_config['authorization']['sources'] = [copy.deepcopy(s) for s in sources]
+        self.world.current_config = copy.deepcopy(self.world.target_config)
+
+    def assert_target_unchanged(self):
+        self.assertFalse(self.runs('emqx-new'), 'no candidate was built')
+        self.assertFalse([call for call in self.world.ctl_calls if call[0] != 'emqx-ha'],
+                         'only HA\'s throwaway broker was asked anything through emqx ctl')
+        self.assertFalse(self.world.imported_into or self.world.restored, 'nothing was imported or loaded')
+
+    def test_the_text_is_the_owners(self):
+        self.assertEqual(ha_emqx.ACL_NEEDS_BUILTIN, self.OWNER_TEXT)
+
+    def test_a_file_only_target_refuses_has_acl_rows_at_the_check(self):
+        result = self.check(self.upload_emqx(state='stopped'), ['emqx'])[0]   # [file] target, HA has 2 ACL rows
+        self.assertFalse(result['ok'])
+        self.assertEqual(result['blockers'], [self.OWNER_TEXT])
+        self.assertEqual(result['emqx']['target_authorization'], ['file'])
+        self.assertEqual(result['emqx']['acl_rules'], 2, 'HA\'s facts are still shown')
+        self.assertFalse([w for w in result['warnings'] if '不會生效' in w], 'a blocker, not a warning')
+        self.assert_target_unchanged()
+
+    def test_a_file_only_target_stops_the_conversion_before_any_candidate(self):
+        with self.assertRaises(BackupError) as caught:
+            self.convert(self.upload_emqx(state='stopped'), ['emqx'])
+        self.assertEqual(caught.exception.code, 'incompatible')
+        self.assertEqual(caught.exception.message, 'EMQX 不能搬過來：' + self.OWNER_TEXT)
+        self.assert_target_unchanged()
+        self.assertEqual(self.storage.list_backups(), [])
+
+    def test_a_backup_without_acl_rows_needs_no_builtin_source(self):
+        with mock.patch.dict(base.HA_COUNTS, {'emqx_acl': 0}):
+            result = self.check(self.upload_emqx(state='stopped'), ['emqx'])[0]
+            self.assertTrue(result['ok'], result['blockers'])
+            done = self.convert(self.upload_emqx(state='stopped'), ['emqx'])
+        self.assertTrue(done['backup_id'])
+        section = next(app for app in self.archive.writes[-1]['manifest']['apps'] if app['id'] == 'emqx')
+        self.assertEqual(section['import_check']['config_roots']['authorization'],
+                         ha_emqx.config_roots(self.world.target_config)['authorization'])
+
+    def test_a_target_with_the_builtin_source_takes_has_rows(self):
+        self.target(dict(FILE, path='/opt/emqx/etc/acl.conf'), BUILTIN)
+        result = self.check(self.upload_emqx(state='stopped'), ['emqx'])[0]
+        self.assertTrue(result['ok'], result['blockers'])
+        self.assertEqual(result['emqx']['target_authorization'], ['file', 'built_in_database'])
+        done = self.convert(self.upload_emqx(state='stopped'), ['emqx'])
+        self.assertTrue(done['backup_id'])
+        self.assertFalse([n for n in done['ha_import']['notes'] if '不會生效' in n])
+
+    def test_the_rule(self):
+        rows = lambda n: {'counts': {'emqx_acl': n}}
+        for readings in (rows(1), rows(2), rows(10 ** 6)):
+            self.assertEqual(ha_emqx.acl_blocker(readings, ('file',)), self.OWNER_TEXT)
+        for readings, profile in ((rows(0), ('file',)), (rows(-1), ('file',)), (rows(2), ('file', 'built_in_database')),
+                                  (rows(2), None), (None, ('file',)), ({'counts': {}}, ('file',))):
+            with self.subTest(readings=readings, profile=profile):
+                self.assertIsNone(ha_emqx.acl_blocker(readings, profile))
+
+    def test_the_conversion_reads_this_devices_profile_before_anything_runs(self):
+        self.target(dict(FILE, path='/opt/emqx/etc/acl.conf'), {'type': 'http', 'enable': True})
+        with self.assertRaises(BackupError) as caught:
+            self.convert(self.upload_emqx(state='stopped'), ['emqx'])
+        self.assertIn('授權來源組合（ACL 檔案＋HTTP）', caught.exception.message)
+        self.assertFalse(self.runs('emqx-ha'), 'refused before HA\'s broker started')
+        self.world.stopped = True
+        self.target(dict(FILE, path='/opt/emqx/etc/acl.conf'), BUILTIN)
+        with self.assertRaises(BackupError) as caught:
+            self.convert(self.upload_emqx(state='stopped'), ['emqx'])
+        self.assertEqual(caught.exception.message, ha_emqx.NOT_RUNNING)
+        self.assertFalse(self.runs('emqx-ha'))
+
+    def test_the_finished_candidate_must_hold_the_profile_read_before_the_build(self):
+        self.target(dict(FILE, path='/opt/emqx/etc/acl.conf'), BUILTIN)
+        real = ha_emqx.candidate_readback
+
+        def other_profile(tmp):
+            record, _profile = real(tmp)
+            return record, ('file',)
+        with mock.patch.object(ha_emqx, 'candidate_readback', other_profile):
+            with self.assertRaises(BackupError) as caught:
+                self.convert(self.upload_emqx(state='stopped'), ['emqx'])
+        self.assertEqual(caught.exception.message, 'EMQX 設定於轉換期間改變，已停止。')
+        self.assertEqual(self.storage.list_backups(), [])
+
+
+class ConvertReadbackTests(base.EmqxCase):
+    def setUp(self):
+        super().setUp()
+        # HA's backup has ACL rows: the import target asks its built-in database too (OWNER DECISION 「C」).
+        self.world.target_config['authorization']['sources'] = copy.deepcopy(base.BUILTIN_TARGET)
+        self.world.current_config = copy.deepcopy(self.world.target_config)
+
+    def test_the_public_conversion_carries_the_readback_into_the_app_section(self):
+        done = self.convert(self.upload_emqx(state='stopped'), ['emqx'])
+        written = self.archive.writes[-1]['manifest']
+        section = next(app for app in written['apps'] if app['id'] == 'emqx')
+        check = section['import_check']
+        archive.validate_import_check(check, 'emqx')
+        self.assertEqual(check['kind'], 'emqx-readback')
+        self.assertEqual(check['tables'], {t: [n, h.lower()] for t, (n, h) in base.RECEIPT.items()})
+        self.assertIn('authorization', check['config_roots'])
+        self.assertEqual(check['config_roots']['authorization'],
+                         ha_emqx.config_roots(self.world.target_config)['authorization'],
+                         'the readback holds this device\'s authorization, not HA\'s')
+        notes = done['ha_import']['notes']
+        self.assertTrue(any('還原後會再核對' in n for n in notes), notes)
+
+    def test_a_readback_that_cannot_be_read_stops_the_conversion(self):
+        real = self.world.evaluate
+
+        def evaluate(role, expression):
+            if expression == ha_emqx.TABLES_RECEIPT_EXPR:
+                return b'WOOWTAB:REFUSED'
+            return real(role, expression)
+        self.world.evaluate = evaluate
+        with self.assertRaises(BackupError) as caught:
+            self.convert(self.upload_emqx(state='stopped'), ['emqx'])
+        self.assertIn('核對資料', caught.exception.message)
+        self.assertEqual(self.storage.list_backups(), [])
+
+
+class ReadbackTests(unittest.TestCase):
+    def config(self):
+        return {'authorization': {'no_match': 'deny', 'deny_action': 'ignore', 'sources': [FILE, BUILTIN]},
+                'log': {'console': {'level': 'warning', 'enable': True}}, 'node': {'name': 'emqx@127.0.0.1'}}
+
+    def test_the_record_and_its_comparison_name_what_differs(self):
+        config = self.config()
+        record = ha_emqx.readback_record(config, copy.deepcopy(TABLES))
+        archive.validate_import_check(record, 'emqx')
+        self.assertEqual(ha_emqx.compare_readback(record, copy.deepcopy(record)), [])
+        reordered = {'node': config['node'], 'log': {'console': {'enable': True, 'level': 'warning'}},
+                     'authorization': config['authorization']}
+        self.assertEqual(ha_emqx.compare_readback(record, ha_emqx.readback_record(reordered, TABLES)), [],
+                         'key order never matters')
+        cases = []
+        changed = self.config(); changed['log']['console']['level'] = 'debug'; cases.append((changed, TABLES, ['設定（log）']))
+        changed = self.config(); changed['authorization']['sources'].reverse()
+        cases.append((changed, TABLES, ['設定（authorization）']))
+        changed = self.config(); del changed['node']; cases.append((changed, TABLES, ['設定（node）']))
+        changed = self.config(); changed['extra'] = {}; cases.append((changed, TABLES, ['設定（extra）']))
+        tables = copy.deepcopy(TABLES); tables['emqx_acl'] = [1, 'b' * 64]
+        cases.append((self.config(), tables, ['內建資料庫（emqx_acl）']))
+        for config, tables, problems in cases:
+            with self.subTest(problems=problems):
+                self.assertEqual(ha_emqx.compare_readback(record, ha_emqx.readback_record(config, tables)), problems)
+
+    def test_secret_values_never_enter_the_digests_but_everything_else_is_compared(self):
+        """Security review SR-4: the raw configuration holds this device's Dashboard password and Erlang cookie (from
+        the environment); the readback travels in the converted backup, so their values are redacted before hashing."""
+        def device():
+            return {'dashboard': {'default_password': 'device-pass-1', 'listeners': {'http': {'bind': 18083}}},
+                    'node': {'name': 'emqx@127.0.0.1', 'cookie': 'device-cookie-1'},
+                    'authentication': [{'mechanism': 'password_based', 'backend': 'built_in_database',
+                                        'password_hash_algorithm': {'name': 'sha256', 'salt_position': 'suffix'}}],
+                    'connectors': {'http': {'c1': {'url': 'http://user:pw-1@host:80/x', 'pool_size': 8,
+                                                   'headers': {'authorization': 'Bearer tok-1'},
+                                                   'ssl': {'password': 'k-1', 'enable': False}}}}}
+        base_roots = ha_emqx.config_roots(device())
+        shown = json.dumps(ha_emqx.redacted(device()))
+        for secret in ('device-pass-1', 'device-cookie-1', 'pw-1', 'tok-1', 'k-1'):
+            self.assertNotIn(secret, shown)
+        same = (lambda c: c['dashboard'].update(default_password='other'),
+                lambda c: c['node'].update(cookie='other'),
+                lambda c: c['connectors']['http']['c1'].update(url='http://user:other@host:80/x'),
+                lambda c: c['connectors']['http']['c1']['headers'].update(authorization='Bearer other'),
+                lambda c: c['connectors']['http']['c1']['ssl'].update(password='other'))
+        differs = ((lambda c: c['dashboard']['listeners']['http'].update(bind=18084), 'dashboard'),
+                   (lambda c: c['node'].update(name='emqx@10.0.0.1'), 'node'),
+                   (lambda c: c['authentication'][0]['password_hash_algorithm'].update(name='bcrypt'), 'authentication'),
+                   (lambda c: c['connectors']['http']['c1'].update(url='http://user:pw-1@other:80/x'), 'connectors'),
+                   (lambda c: c['connectors']['http']['c1'].update(pool_size=9), 'connectors'),
+                   (lambda c: c['connectors']['http']['c1']['ssl'].update(enable=True), 'connectors'))
+        for change in same:
+            config = device(); change(config)
+            self.assertEqual(ha_emqx.config_roots(config), base_roots)
+        for change, root in differs:
+            with self.subTest(root=root):
+                config = device(); change(config)
+                roots = ha_emqx.config_roots(config)
+                self.assertNotEqual(roots[root], base_roots[root])
+                self.assertEqual({k: v for k, v in roots.items() if k != root},
+                                 {k: v for k, v in base_roots.items() if k != root})
+
+    def test_the_receipt_answer_is_parsed_strictly(self):
+        good = ('WOOWTAB:' + ''.join(f'{t}:{i}:{"F" * 64};' for i, t in enumerate(ha_emqx.STABLE_TABLES))
+                + ':ENDok\n').encode()
+        found = ha_emqx.table_receipts(answer(good))
+        self.assertEqual(found['emqx_acl'], [2, 'f' * 64])
+        absent = good.replace(b'emqx_psk:5:' + b'F' * 64, b'emqx_psk:-1:-')
+        self.assertEqual(ha_emqx.table_receipts(answer(absent))['emqx_psk'], [-1, None])
+        for raw, code in ((b'WOOWTAB:REFUSED', 0), (good, 1), (good.replace(b'emqx_acl', b'emqx_other'), 0),
+                          (good.replace(b'emqx_banned_rules:6:' + b'F' * 64 + b';', b''), 0),
+                          (good.replace(b'F' * 64, b'not-hex', 1), 0), (b'', 0)):
+            with self.subTest(raw=raw[:40]), self.assertRaises(BackupError):
+                ha_emqx.table_receipts(answer(raw, code))
+
+    def adapter(self, config, tables, *, started_after=0):
+        calls = {'status': 0}
+
+        class Runner:
+            home = '/home/appowner'
+
+            def podman(self, *args, **kwargs):
+                assert args[:2] == ('exec', 'woow-emqx'), args
+                command = list(args[2:])
+                if command == ['emqx', 'ctl', 'status']:
+                    calls['status'] += 1
+                    started = calls['status'] > started_after
+                    return Result(0 if started else 1, b"Node 'emqx@127.0.0.1' 5.8.9 is started\n" if started else b'',
+                                  b'')
+                if command == ['emqx', 'eval', ha_emqx.CONFIG_EXPR]:
+                    return flow.response(config)
+                if command == ['emqx', 'eval', ha_emqx.TABLES_RECEIPT_EXPR]:
+                    return Result(0, base.receipt_text({t: (n, h.upper() if h else None)
+                                                        for t, (n, h) in tables.items()}), b'')
+                raise AssertionError(command)
+        adapter = SimpleNamespace(runner=Runner(), read_quadlets=lambda: base.QUADLETS)
+        return adapter, calls
+
+    def app(self):
+        return fk.app('emqx', 'EMQX MQTT 代理', volumes=[{'name': 'woow_emqx_data'}, {'name': 'woow_emqx_log'}])
+
+    def test_verify_restored_waits_for_the_broker_then_compares_everything(self):
+        record = ha_emqx.readback_record(self.config(), TABLES)
+        adapter, calls = self.adapter(self.config(), TABLES, started_after=2)
+        logs = []
+        ha_emqx.verify_restored(adapter, self.app(), record, log=logs.append, sleep=lambda _s: None)
+        self.assertEqual(calls['status'], 3)
+        self.assertEqual(len(logs), 1)
+        self.assertIn('EMQX 還原後核對一致', logs[0])
+        changed = self.config(); changed['authorization']['no_match'] = 'allow'
+        adapter, _ = self.adapter(changed, TABLES)
+        with self.assertRaises(BackupError) as caught:
+            ha_emqx.verify_restored(adapter, self.app(), record, log=logs.append, sleep=lambda _s: None)
+        self.assertEqual(caught.exception.code, 'job-failed')
+        self.assertIn('設定（authorization）', caught.exception.message)
+        tables = copy.deepcopy(TABLES); tables['emqx_admin'] = [3, 'c' * 64]
+        adapter, _ = self.adapter(self.config(), tables)
+        with self.assertRaises(BackupError) as caught:
+            ha_emqx.verify_restored(adapter, self.app(), record, log=logs.append, sleep=lambda _s: None)
+        self.assertIn('內建資料庫（emqx_admin）', caught.exception.message)
+        self.assertEqual(len(logs), 1, 'only an equal readback logs the success line')
+
+    def test_a_broker_that_never_starts_or_an_unknown_record_fails(self):
+        record = ha_emqx.readback_record(self.config(), TABLES)
+        adapter, _ = self.adapter(self.config(), TABLES, started_after=10 ** 6)
+        ticks = iter(range(0, 10 ** 6, 50))
+        with self.assertRaises(BackupError) as caught:
+            ha_emqx.verify_restored(adapter, self.app(), record, log=lambda _l: None, sleep=lambda _s: None,
+                                    clock=lambda: next(ticks))
+        self.assertIn('沒有啟動完成', caught.exception.message)
+        for bad in (dict(record, kind='other'), dict(record, version=2), None):
+            with self.subTest(bad=bool(bad)), self.assertRaises(BackupError):
+                ha_emqx.verify_restored(self.adapter(self.config(), TABLES)[0], self.app(), bad, log=lambda _l: None)
+
+
+class ManifestFormatTests(unittest.TestCase):
+    def test_the_archive_accepts_exactly_the_readback_shape(self):
+        good = ha_emqx.readback_record({'node': {}, 'authorization': {}}, copy.deepcopy(TABLES))
+        archive.validate_import_check(good, 'emqx')
+        bad = []
+        bad.append(('another app', good, 'odoo'))
+        bad.append(('unknown kind', dict(good, kind='other'), 'emqx'))
+        bad.append(('version', dict(good, version=2), 'emqx'))
+        bad.append(('extra key', dict(good, extra=1), 'emqx'))
+        bad.append(('no roots', dict(good, config_roots={}), 'emqx'))
+        bad.append(('bad digest', dict(good, config_roots={'node': 'x'}), 'emqx'))
+        bad.append(('bad root name', dict(good, config_roots={'Node!': 'a' * 64}), 'emqx'))
+        tables = copy.deepcopy(TABLES); del tables['emqx_acl']
+        bad.append(('missing table', dict(good, tables=tables), 'emqx'))
+        tables = copy.deepcopy(TABLES); tables['emqx_acl'] = [-1, 'a' * 64]
+        bad.append(('missing table with digest', dict(good, tables=tables), 'emqx'))
+        tables = copy.deepcopy(TABLES); tables['emqx_acl'] = [True, 'a' * 64]
+        bad.append(('bool rows', dict(good, tables=tables), 'emqx'))
+        for name, item, app_id in bad:
+            with self.subTest(name), self.assertRaises(BackupError) as caught:
+                archive.validate_import_check(item, app_id)
+            self.assertEqual(caught.exception.code, 'invalid-manifest')
+
+    def test_the_restore_knows_exactly_the_readback_kinds_the_archive_accepts(self):
+        self.assertEqual({kind: app for kind, (app, _tables) in archive.IMPORT_CHECK_KINDS.items()},
+                         haimport.IMPORT_CHECKS)
+        self.assertEqual(archive.IMPORT_CHECK_KINDS['emqx-readback'][1], ha_emqx.STABLE_TABLES)
+        app = SimpleNamespace(id='emqx', name='EMQX MQTT 代理')
+        self.assertIsNone(haimport.import_check_problem(app, {'kind': 'emqx-readback'}))
+        for check in ({'kind': 'other'}, {}, None, 'emqx-readback'):
+            with self.subTest(check=check):
+                self.assertIn('匯入核對資料', haimport.import_check_problem(app, check))
+        self.assertIn('匯入核對資料', haimport.import_check_problem(SimpleNamespace(id='odoo', name='Odoo'),
+                                                                 {'kind': 'emqx-readback'}))
+
+    def test_verify_import_dispatches_only_a_known_kind_to_its_importer(self):
+        app = SimpleNamespace(id='emqx', name='EMQX MQTT 代理')
+        calls = []
+        with mock.patch.object(ha_emqx, 'verify_restored', lambda *a, **k: calls.append(a[2])):
+            haimport.verify_import(app, object(), {'kind': 'emqx-readback'}, log=lambda _l: None)
+            with self.assertRaises(BackupError) as caught:
+                haimport.verify_import(app, object(), {'kind': 'other'}, log=lambda _l: None)
+        self.assertEqual(calls, [{'kind': 'emqx-readback'}])
+        self.assertEqual(caught.exception.code, 'incompatible')
+
+
+class RestoreReadbackTests(tf.RestoreCase):
+    """flows.run_restore of a backup whose app section carries an import_check (the fake world's app)."""
+
+    def mark(self, check):
+        path = self.storage.archive_path(self.backup_id)
+        data = json.loads(path.read_text())
+        for app in data['manifest']['apps']:
+            if app['id'] == 'woowbk-demo':
+                app['import_check'] = check
+        path.write_text(json.dumps(data))
+
+    def test_the_readback_runs_after_the_health_checks(self):
+        calls = []
+        self.mark({'kind': 'lab'})
+        with mock.patch.object(haimport, 'import_check_problem', lambda app, check: None), \
+                mock.patch.object(haimport, 'verify_import',
+                                  lambda app, adapter, check, log: calls.append((app.id, check, adapter.app.id))):
+            result = self.restore()
+        self.assertEqual(calls, [('woowbk-demo', {'kind': 'lab'}, 'woowbk-demo')])
+        self.assertIs(result['rolled_back'], False)
+        self.assertEqual(self.world.data['woowbk-demo'], b'notes-v1')
+
+    def test_a_difference_rolls_the_restore_back(self):
+        def differs(app, adapter, check, log):
+            raise BackupError('job-failed', 'EMQX 還原後的設定（log）和轉換時核對的不同，已停止。', app=app.id)
+        self.mark({'kind': 'lab'})
+        with mock.patch.object(haimport, 'import_check_problem', lambda app, check: None), \
+                mock.patch.object(haimport, 'verify_import', differs):
+            with self.assertRaises(flows.RolledBack) as caught:
+                self.restore()
+        self.assertTrue(caught.exception.result['rolled_back'])
+        self.assertIn('設定（log）', caught.exception.error.message)
+        self.assertEqual(self.world.data['woowbk-demo'], b'notes-v2-changed', 'the pre-restore state is back')
+
+    def test_an_unknown_readback_refuses_before_anything_changes(self):
+        self.mark({'kind': 'other'})
+        with self.assertRaises(BackupError) as caught:
+            self.restore()
+        self.assertEqual(caught.exception.code, 'incompatible')
+        self.assertIn('匯入核對資料', caught.exception.message)
+        self.assertEqual(self.world.data['woowbk-demo'], b'notes-v2-changed')
+        self.assertEqual(self.safety_ids(), [])
+
+    def test_a_section_without_a_readback_is_not_compared(self):
+        with mock.patch.object(haimport, 'verify_import', mock.Mock(side_effect=AssertionError('not expected'))):
+            result = self.restore()
+        self.assertIs(result['rolled_back'], False)
+
+
+if __name__ == '__main__':
+    unittest.main()

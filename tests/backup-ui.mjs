@@ -1624,7 +1624,8 @@ const HA_NOTES = {
     '這台 Omnigent 的管理者與 runner 帳號（admin、operator）會保留，密碼不變。', 'HA 的 Omnigent 分享與管理者執行期設定不會搬過來，這台維持自己的設定。'],
   hermes: ['Hermes 的對話、記憶、技能、排程、外掛與 HA 的設定檔（config.yaml）會換成 HA 的；這台的 Dashboard 密碼、API 金鑰、Webhook 與工作階段金鑰以及 hermes.env 保持不變，hermes.env 中的金鑰會蓋過 HA 的同名金鑰。',
     'HA 的 Hermes 外掛（omnigent、paseo）會取代這台的外掛與配對（例如 Omnigent、Paseo）。'],
-  emqx: ['EMQX 的 MQTT 帳號、ACL 規則、Dashboard 帳號、API 金鑰、封鎖名單、PSK、保留訊息與規則、連接器設定會換成 HA 的；這台的節點名稱、連接埠、匿名登入限制與「未符合規則的主題拒絕」設定保持不變。'],
+  emqx: ['EMQX 的 MQTT 帳號、ACL 規則、Dashboard 帳號、API 金鑰、封鎖名單、PSK、保留訊息與規則、連接器設定會換成 HA 的；這台的節點名稱、連接埠、匿名登入限制與「未符合規則的主題拒絕」設定保持不變。',
+    '這台 EMQX 的授權設定（ACL 檔案、授權來源與順序）與 bootstrap 帳號檔保持不變；還原後會再核對設定與內建資料庫都和轉換時相同，不同就自動回復。'],
   headscale: ['Headscale 的使用者、裝置、預先授權金鑰與 DNS 額外記錄會換成 HA 的，HA 的伺服器身分金鑰（noise）也一起搬過來；這台的伺服器網址、IP 位址範圍、存取政策與 API 金鑰保持不變。',
     'HA 的 2 把 Headscale API 金鑰不會搬過來，這台的 2 把（Headplane、MCP 管理）保持有效。'],
 };
@@ -1802,7 +1803,7 @@ const B1_SECTIONS = {
     skipped: ['gateway.pid', 'state.db-shm', '.woow-image-version'] },
   emqx: { emqx_version: '5.8.9', target_version: '5.8.9', node_name: 'emqx@127.0.0.1', files: 38, bytes: 2 * MiB, mqtt_users: 3, acl_rules: 4,
     dashboard_users: 2, api_keys: 1, banned: 1, psk: 0, retained_messages: 2, default_dashboard_password: false, anonymous: false,
-    hot_backup: true, plugins: [], ha_hosts: [] },
+    hot_backup: true, plugins: [], ha_hosts: [], target_authorization: ['file', 'built_in_database'] },
   headscale: { headscale_version: '0.29.4', target_version: '0.29.4', db_version: 'v0.29.4', users: 3, nodes: 2, pre_auth_keys: 2, api_keys: 2,
     policies: 0, prefixes: { v4: '100.64.0.0/10', v6: 'fd7a:115c:a1e0::/48' }, server_url: 'https://ha-hs.example.com',
     target_server_url: 'https://hs.example.com', dns_records: 1 },
@@ -5606,7 +5607,8 @@ try {
       assert.deepEqual((await metadataOf(card('hermes')))[0], { 對話: '5 個工作階段，15 則訊息', 技能: '64 個', 排程: '1 個', 外掛: 'omnigent、paseo',
         資料: '412 個檔案（96.0 MiB）', 'HA 的 .env': '12 項設定（這台 hermes.env 的同名設定優先）' });
       assert.deepEqual((await metadataOf(card('emqx')))[0], { 'MQTT 帳號': '3 個', 'ACL 規則': '4 條', 'Dashboard 帳號': '2 個', 'API 金鑰': '1 把',
-        封鎖名單: '1 筆', 保留訊息: '2 則', 匿名連線: '不允許', 製作備份時: 'EMQX 正在執行或狀態不明' });
+        封鎖名單: '1 筆', 保留訊息: '2 則', 匿名連線: '不允許', 這台的授權: 'ACL 檔案＋內建資料庫',
+        製作備份時: 'EMQX 正在執行或狀態不明' });
       assert.deepEqual((await metadataOf(card('headscale')))[0], { 使用者: '3 位', 裝置: '2 台', 預先授權金鑰: '2 把', 'API 金鑰': '2 把（不會搬過來）',
         'DNS 額外記錄': '1 筆', 'IP 位址範圍': '100.64.0.0/10、fd7a:115c:a1e0::/48', 'HA 的伺服器網址': 'https://ha-hs.example.com',
         這台的伺服器網址: 'https://hs.example.com' });

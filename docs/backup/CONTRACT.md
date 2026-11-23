@@ -692,6 +692,22 @@ target hex|-> <path hex>` sorted by path bytes; postgres `D <db hex>` (each data
 hex> <t|f>` sorted by line bytes (`woowbackup.digests` parses both and is what the engine uses; a reader that only
 displays may ignore the entry). The verify job's deep check may recompute the entry's sha256 against `digest`.
 
+**Import readback in the archive [format]** (2026-11-23). The app section of a converted Home Assistant backup may
+carry `import_check` (older archives have none; an engine that does not know the key refuses the archive as before):
+
+```json
+"import_check": {"kind": "emqx-readback", "version": 1,
+  "config_roots": {"authorization": "<sha256 hex>", "listeners": "<sha256 hex>", "node": "<sha256 hex>"},
+  "tables": {"emqx_authn_mnesia": [4, "<sha256 hex>"], "emqx_authn_scram_mnesia": [0, "<sha256 hex>"],
+             "emqx_acl": [4, "<sha256 hex>"], "emqx_admin": [2, "<sha256 hex>"], "emqx_app": [1, "<sha256 hex>"],
+             "emqx_psk": [0, "<sha256 hex>"], "emqx_banned_rules": [-1, null]}}
+```
+
+Validation (strict, unknown keys rejected): `kind` one of the known kinds and belonging to the section's app
+(`emqx-readback` → `emqx`), `version` 1, `config_roots` 1–128 roots `^[a-z][a-z0-9_]{0,63}$` (a real broker has all of its about 44) each a 64
+lowercase hex digest, `tables` exactly the kind's tables, each `[rows, digest]` with `rows` −1…2^31 (−1: no such table, digest
+`null`) and a 64 lowercase hex digest otherwise. CONTRACT section 9 (EMQX, step 6) says how a restore uses it.
+
 **Instance-mode PostgreSQL items [format]** (accepted by both formats since 2026-11-13). A `postgres[]` item may carry `"scope": "instance"`; then (all keys required,
 unknown keys rejected):
 
@@ -1943,18 +1959,59 @@ PostgreSQL 15).
    policy; then `emqx ctl data export --root-keys <DATA_ROOTS present> --table-sets builtin_authn,builtin_authz,banned,
    dashboard_users,api_keys,psk,builtin_retainer --dir /work/out` (settings such as listeners, dashboard, node, log,
    mqtt, zones are never exported).
-4. This device's broker: the live image with the Quadlet's `EMQX_*` environment, its `Secret=` mounts and its host
-   files (base.hocon, acl.conf) read-only, an empty data volume (so it boots with this device's admin password,
-   bootstrap MQTT user, node name and cookie), the export (owned by the image's emqx user) at `/work/in`;
-   `emqx ctl data import` must say "imported successfully"; this device's `authorization.no_match`/`deny_action` are
-   loaded back (`emqx ctl conf load --merge`, `sources = []` keeps every source) and must read back equal; when this
-   device has an enabled authenticator one must remain (else `incompatible`: no anonymous login); every table holds at
-   least HA's rows and at most HA's plus what the empty broker seeded. HA's API keys replace this device's.
+4. This device's broker (the candidate). Read first from the running broker as the owner, with fixed `emqx eval`
+   expressions: its effective RAW configuration (`emqx:get_raw_config([])`, never cooked defaults), `EMQX_ETC_DIR`
+   (must be `/opt/emqx/etc`; vendor rel/emqx_vars, bin/emqx) and the no-follow state of `data/configs/cluster.hocon`.
+   Supported, else `incompatible` with a message naming what (the check reports the same message as the app's
+   blocker; a stopped broker is named too): authorization sources exactly `[file]` or `[file, built_in_database]`, both
+   enabled, in that order (EMQX 5.8.9 allows one source per type, emqx_authz.erl check_dup_types); a file ACL at
+   `${EMQX_ETC_DIR}/acl.conf` (resolved with the verified directory, as the vendor's `naive_env_interpolation` does),
+   an absolute path or a data-volume path under `authz/`, `configs/` or `certs/`, on exactly one read-only mount or in
+   the data volume; the built-in password database's bootstrap file on a read-only mount or a `type=mount` secret (mode
+   0400/0440); the image's own TLS files (fingerprinted); only configuration roots whose file dependencies were
+   reviewed for 5.8.9. The data volume's `configs/cluster.hocon` and the data-volume files the configuration names are
+   snapshotted (an override that is absent stays absent, proven by a complete volume traversal); configuration and
+   override state are read again afterwards and must be unchanged. The candidate is the live image with the Quadlet's
+   `EMQX_*` environment, its `Secret=` mounts and its read-only host files, the snapshot in an otherwise empty data
+   volume and the export (owned by the image's emqx user) at `/work/in`; before anything is imported its
+   `EMQX_ETC_DIR`, effective configuration and image TLS fingerprints must equal this device's. `emqx ctl data import`
+   must say "imported successfully". Then this device's settings come back: every root that is not HA data
+   (`DATA_ROOTS`), and `authorization`, is loaded back exactly as it was (`emqx ctl conf load --replace`, no merge of
+   stale fields); the bootstrap file of this device's built-in authenticator is re-attached to HA's matching
+   authenticator. When this device authorizes with the file ACL only and HA's import enabled the built-in database
+   source, that source is first disabled (EMQX 5.8.9 destroys an enabled source's table when it is removed) and the
+   ACL table is proven unchanged by a native receipt (rows, bytes, sorted row hashes) before and after. HA's ACL rows
+   only take effect through an enabled built-in database source and the import never adds or changes this device's
+   sources (owner decision 2026-11-23 「C」): on a target that authorizes with the file ACL only, a backup with ACL
+   rows (`emqx_acl` > 0 in HA's broker) is refused, `incompatible` with the owner's text 「Podman 上的 EMQX 沒有開啟
+   『內建資料庫』權限，HA 的裝置權限搬過去不會生效，裝置會被拒絕。請先在 Podman EMQX 的管理頁「存取控制 → 授權」新增
+   「內建資料庫」（排在檔案規則之後），再匯入。」: by the check as the app's blocker (nothing changed) and by the
+   conversion, which reads this device's profile before anything runs and stops as soon as HA's rows are counted,
+   before any candidate; the finished candidate must hold the profile read before the build. The final effective
+   configuration must equal this device's in every preserved root; node, rpc and cluster never change; an enabled authenticator must remain (no
+   anonymous login); every table holds at least HA's rows and at most HA's plus what the empty broker seeded. HA's
+   API keys replace this device's. The candidate's fixed `emqx eval` reads are bounded at 120 s each (the vendor CLI
+   itself waits without a limit, bin/nodetool); their output bounds are unchanged.
    Hot backups (addon.json `state` `started`: the add-on has no cold backup mode) are tried; when HA's broker does not
    start, a table is missing, EMQX's own export fails or the import reports errors, the job refuses (`incompatible`) with
    the advice to make a new backup with the add-on stopped -- never a silently incomplete result.
 5. `woow_emqx_data`: that broker's volume export without `configs/app.*.config`, `configs/vm.*.args` (the cookie),
    `configs/*.bak`, `backup/**`, `trace/**`; `woow_emqx_log`: its top folder only, owned like the live one.
+6. Readback (2026-11-23). Before the candidate stops, its readback goes into the converted backup's app section as
+   `import_check` (section 5): a SHA-256 per root of its effective raw configuration (canonical JSON per root; first
+   every value under a key containing password, passwd, secret, cookie, token or key, every value below `headers` and
+   the user part of a `scheme://user@host` URL become one fixed marker, so the digests never carry this device's
+   Dashboard password or Erlang cookie, which the raw configuration holds; security review SR-4) and,
+   per table only an administrator changes (`emqx_authn_mnesia`, `emqx_authn_scram_mnesia`, `emqx_acl`, `emqx_admin`,
+   `emqx_app`, `emqx_psk`, `emqx_banned_rules`), the row count and the SHA-256 of the sorted SHA-256s of the rows'
+   external terms (one read-locked transaction per table; -1 for a table the broker does not have). Retained
+   messages and the banned list move with clients and expiry and are only counted by the conversion. After a restore
+   of that backup started the units and its health checks passed, the engine waits until `emqx ctl status` says "is
+   started" (300 s) and reads the same values from the restored broker; any difference fails the restore with the
+   names of the differing roots or tables (「EMQX 還原後的設定（…）和轉換時核對的不同…」), and the restore rolls back
+   by itself; an equal readback logs 「EMQX 還原後核對一致…」. A section whose `import_check` this engine does not know
+   (another kind or app) refuses the restore in its preflight, before anything changes. The digests are derived from
+   data the same archive holds and never appear in a log or job record.
 
 **Headscale** (`woow-headscale` → `headscale`: volumes `headscale-data`, `headplane-data`).
 1. Versions: add-on 0.1.1–0.1.3 → Headscale 0.29.4 (0.1.0 → 0.29.3) must equal the live image's

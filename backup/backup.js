@@ -4153,6 +4153,11 @@
         ["保留訊息", `${num(emqx.retained_messages)} 則`],
         isNumber(emqx.psk) && emqx.psk > 0 ? ["PSK 金鑰", `${num(emqx.psk)} 個`] : null,
         ["匿名連線", emqx.anonymous === true ? "HA 允許，這台不允許" : "不允許"],
+        // This device's authorization sources stay as they are (ha_emqx.source_profile). HA's ACL rows need its
+        // built-in database (owner decision 「C」: without it the check refuses them). Older engines send no list.
+        Array.isArray(emqx.target_authorization) && emqx.target_authorization.length
+          ? ["這台的授權", emqx.target_authorization.includes("built_in_database") ? "ACL 檔案＋內建資料庫" : "只用 ACL 檔案"]
+          : null,
         // The add-on has no cold backup mode: a backup made while EMQX ran may hold a half-written database.
         ["製作備份時", emqx.hot_backup === true ? "EMQX 正在執行或狀態不明" : "EMQX 已停止"]
       ]),
