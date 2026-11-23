@@ -31,7 +31,6 @@ bridge), and the live /v1/info GET goes through `podman exec` into the running s
 """
 import argparse
 import contextlib
-import fcntl
 import hashlib
 import json
 import os
@@ -52,6 +51,7 @@ sys.path.insert(0, str(ROOT / 'backup-engine'))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import omnigent_real_app_chain as chain  # noqa: E402  (register_private, event, login_registered, cookie readers)
 import omnigent_install_rollback as installer  # noqa: E402  (DeviceOwner bridge, arm_once)
+import dev_d_guard as guard  # noqa: E402  (clean tree, isolation record, team lock)
 from woowbackup import (archive, catalog, flows, ha_omnigent, habackup, haimport, hastore, keys, storage,  # noqa: E402
                         tempctr, util)
 from woowbackup.adapters import quadlet_postgres  # noqa: E402
@@ -63,6 +63,7 @@ LAB = Path.home() / '.woowbk-lab'
 FIXTURE_SHA = {'arm': '1e6a4665315bc69fd114f8d43f7d429aecab53f07d07793ecf8c2c057a92c5d4',
                'x86': '3871a468e2f3a11488df7c6a00a4a8ed7c5b89c3ba2dbc2903ec3bd677013516'}
 LOCK = '/tmp/woowbk-dev-d-mutation.lock'
+WAITING = str(guard.WAITING)   # emqx-main asks for the next dev-d turn with this file
 PG_IMAGE = chain.IMAGE              # docker.io/library/postgres:16.15-alpine3.24 (image id)
 APP_IMAGE = chain.APP_IMAGE         # ghcr.io/omnigent-ai/omnigent-server:v0.21.0 (image id)
 TARGET_ADMIN = 'target-admin'
@@ -92,19 +93,37 @@ def file_sha256(path):
 
 @contextlib.contextmanager
 def dev_d_lock(timeout=3600):
-    fd = os.open(LOCK, os.O_RDWR | os.O_CREAT, 0o664)
-    deadline = time.monotonic() + timeout
+    """The dev-d mutation lock as the team takes it (dev_d_guard.acquire: blocking like `flock -w`, yields to a
+    waiting emqx-main run)."""
     try:
-        while True:
-            try:
-                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                break
-            except BlockingIOError:
-                require(time.monotonic() < deadline, 'dev_d_lock_timeout')
-                time.sleep(5)
-        yield
+        fd, waited = guard.acquire(Path(LOCK), Path(WAITING), timeout)
+    except guard.GuardError as error:
+        raise RuntimeError(str(error)) from None
+    try:
+        yield waited
     finally:
         os.close(fd)
+
+
+def isolation(when):
+    """dev-d's outer isolation (owner.sh d --verify-isolation) as a fixed line and an event; raises otherwise."""
+    try:
+        line = guard.verify_isolation(chain.OWNER)
+    except guard.GuardError:
+        event('isolation', when=when, verified=False)
+        raise RuntimeError('dev_d_isolation_failed') from None
+    print(line, flush=True)
+    event('isolation', when=when, verified=True, running=True, network='none', published_ports=0)
+
+
+def committed_source():
+    """The run must execute exactly the commit it names: no change outside the evidence folders."""
+    clean, dirty = guard.clean_tree(ROOT)
+    commit = guard.head(ROOT)
+    print(f'source commit {commit}', flush=True)
+    event('source', clean_tree=clean, changed_paths=len(dirty))
+    require(clean, 'engine_or_harness_changes_not_committed')
+    return commit
 
 
 def quadlets():
@@ -660,19 +679,24 @@ def main():
         parser.error('explicit --run and --outer-isolation-confirmed are required')
     for tool in ('age', 'age-keygen', 'zstd'):
         require(util.find_tool(tool) is not None, 'missing_host_archive_tool')
-    with dev_d_lock():
+    committed_source()
+    with dev_d_lock() as waited:
         started = time.monotonic()
-        event('dev_d_lock', held=True)
-        chain.isolated_preflight()
-        runner = chain.Runner()
-        before = inventory(runner)
+        event('dev_d_lock', held=True, waited_seconds=waited)
+        isolation('before')
         try:
-            run(args.arch)
+            chain.isolated_preflight()
+            runner = chain.Runner()
+            before = inventory(runner)
+            try:
+                run(args.arch)
+            finally:
+                unchanged = inventory(runner) == before
+                event('inventory', containers_volumes_secrets_unchanged=unchanged,
+                      lock_seconds=int(time.monotonic() - started))
+                require(unchanged, 'inventory_changed')
         finally:
-            unchanged = inventory(runner) == before
-            event('inventory', containers_volumes_secrets_unchanged=unchanged,
-                  lock_seconds=int(time.monotonic() - started))
-            require(unchanged, 'inventory_changed')
+            isolation('after')
 
 
 if __name__ == '__main__':
