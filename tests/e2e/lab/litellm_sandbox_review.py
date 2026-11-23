@@ -20,6 +20,15 @@ Cases (each crafts its own cluster in a throwaway container, packs it as an HA a
                     ha_litellm.stored_settings reads from it on the real PostgreSQL 18 (names only).
   copy_injection    (no HA cluster) PostgreSQL 17.11's psql: `COPY ... FROM STDIN` data that ends with `\\.` and
                     SQL after it, the way load_rows feeds HA's rows.
+  stored_variants   (iteration 2) one clean cluster; LiteLLM_Config is rewritten between runs of the product's
+                    stored-settings check with each remaining code-loading key of the vendor DB overlay list
+                    (custom_provider_map.custom_handler, guardrails v1/v2, pass_through_endpoints.target,
+                    litellm_jwtauth.custom_validate, router_settings.plugins), string-form callbacks, ~1M
+                    environment-variable names (> 16 MiB answer) and a real psql timeout (the query's timeout scaled
+                    down to 0.05 s by a wrapper; the same subprocess timeout path as the 600 s one), plus controls.
+  t2_hidden_hooks   (iteration 2) a crafted data directory: LiteLLM_Config holds code hooks and the superuser
+                    redefined pg_catalog.jsonb_each(jsonb) (used only by the stored-settings query) to return no rows;
+                    what the check sees vs. what export_rows (COPY) moves.
 Every attacker action writes a marker inside the container only (/tmp/woowbk-review-*); the harness reads the markers
 back before the throwaway objects are removed. Output: one JSON document of fixed facts (no data value, no secret;
 the salt is a generated test value, the clusters use trust on their unix socket only)."""
@@ -165,6 +174,111 @@ RESET ROLE;
 """
 
 
+
+# Iteration 2: a clean LiteLLM_Config the variants overwrite (placeholder values only; "builtins.exec" is the vendor's
+# own example of an importable callable and nothing here ever starts LiteLLM).
+CONFIG_TABLE_SQL = r"""
+SET ROLE litellm;
+CREATE TABLE public."LiteLLM_Config" (param_name text PRIMARY KEY, param_value jsonb, last_run_at timestamp(3),
+  reload_revision bigint NOT NULL DEFAULT 0);
+INSERT INTO public."LiteLLM_Config" (param_name, param_value) VALUES ('litellm_settings', '{"drop_params": true}');
+RESET ROLE;
+"""
+
+
+def _j(obj):
+    return "'" + json.dumps(obj).replace("'", "''") + "'::jsonb"
+
+
+HOOK = 'builtins.exec'
+VARIANTS = {
+    'control_plain_names': [('litellm_settings', _j({'success_callback': ['langfuse'], 'callbacks': ['otel']})),
+                            ('environment_variables', _j({'LANGFUSE_HOST': 'placeholder'}))],
+    'control_pass_through_url': [('general_settings', _j({'pass_through_endpoints': [
+        {'path': '/woowbk', 'target': 'https://api.example.invalid/v1'}]}))],
+    'custom_provider_map': [('litellm_settings', _j({'custom_provider_map': [
+        {'provider': 'woowbk', 'custom_handler': HOOK}]}))],
+    'guardrails_v1_callbacks': [('litellm_settings', _j({'guardrails': [
+        {'woowbk_g': {'callbacks': [HOOK], 'default_on': True}}]}))],
+    'guardrails_v2_module': [('litellm_settings', _j({'guardrails': [
+        {'guardrail_name': 'woowbk_g2', 'litellm_params': {'guardrail': HOOK, 'mode': 'pre_call'}}]}))],
+    'pass_through_module_target': [('general_settings', _j({'pass_through_endpoints': [
+        {'path': '/woowbk', 'target': HOOK}]}))],
+    'jwt_custom_validate': [('general_settings', _j({'litellm_jwtauth': {'custom_validate': HOOK}}))],
+    'callbacks_string': [('litellm_settings', _j({'callbacks': HOOK}))],
+    'success_callback_string': [('litellm_settings', _j({'success_callback': HOOK}))],
+    'router_settings_plugins': [('router_settings', _j({'plugins': [HOOK]}))],
+    'callbacks_absolute_path_module': [('litellm_settings', _j({'callbacks': ['/tmp/woowbk_review.fn']}))],
+    'post_call_rules_baseline': [('litellm_settings', _j({'post_call_rules': HOOK}))],
+    'big_env_plus_hook': [('environment_variables', "(SELECT jsonb_object_agg('WOOWBK_REVIEW_ENV_' || g, 'x') "
+                                                    "FROM generate_series(1, 1000000) g)"),
+                          ('litellm_settings', _j({'post_call_rules': HOOK}))],
+    'timeout_scaled_plus_hook': [('litellm_settings', _j({'post_call_rules': HOOK}))],
+}
+
+# The crafted-data-directory case: hooks stored, and jsonb_each(jsonb) answers nothing (a superuser catalog edit, which
+# whoever made the data directory can do; the check's sessions resolve it through search_path=pg_catalog).
+T2_SQL = r"""
+INSERT INTO public."LiteLLM_Config" (param_name, param_value) VALUES
+ ('general_settings', '{"custom_auth": "builtins.exec"}')
+ ON CONFLICT (param_name) DO UPDATE SET param_value = EXCLUDED.param_value;
+UPDATE public."LiteLLM_Config" SET param_value = '{"post_call_rules": "builtins.exec", "callbacks": ["x.y"]}'
+ WHERE param_name = 'litellm_settings';
+UPDATE pg_catalog.pg_proc SET prolang = (SELECT oid FROM pg_catalog.pg_language WHERE lanname = 'sql'),
+  prosrc = 'SELECT NULL::text, NULL::jsonb WHERE false'
+ WHERE oid = 'pg_catalog.jsonb_each(jsonb)'::pg_catalog.regprocedure;
+"""
+
+
+class ShortTimeout:
+    """The product's HA cluster with every query_json timeout forced to `seconds` (a real subprocess timeout)."""
+
+    def __init__(self, cluster, seconds):
+        self._cluster, self._seconds = cluster, seconds
+
+    def __getattr__(self, name):
+        return getattr(self._cluster, name)
+
+    def query_json(self, sql, database='postgres', **kwargs):
+        kwargs['timeout'] = self._seconds
+        return self._cluster.query_json(sql, database, **kwargs)
+
+
+def hooks_verdict(cluster, schema):
+    """What the product's stored-settings check decides on HA's cluster as it is now (API of the code under test)."""
+    t0 = time.monotonic()
+    out = {}
+    try:
+        found = ha_litellm.stored_settings(cluster, schema)
+        out['returned'] = 'None' if found is None else type(found).__name__
+        if isinstance(found, dict):
+            out['hooks'] = [str(h)[:80] for h in (found.get('hooks') or [])][:10]
+            out['env_count'] = len(found.get('env') or [])
+            out['callbacks'] = [str(c)[:60] for c in (found.get('callbacks') or [])][:10]
+            for key in ('blockers', 'blocker', 'error'):
+                if key in found:
+                    out[key] = bool(found[key])
+        blocker = ha_litellm.stored_hooks_blocker(found) if hasattr(ha_litellm, 'stored_hooks_blocker') else None
+        out['blocker'] = bool(blocker) or bool(out.get('blockers'))
+    except BackupError as error:
+        out['raised'] = error.code
+        out['blocker'] = True  # a check step that stops the job: nothing is converted
+    out['seconds'] = round(time.monotonic() - t0, 2)
+    return out
+
+
+def run_variants(cluster, schema):
+    results = {}
+    for name, rows in VARIANTS.items():
+        sql = 'DELETE FROM public."LiteLLM_Config";\n' + ''.join(
+            f'INSERT INTO public."LiteLLM_Config" (param_name, param_value) VALUES (\'{param}\', {value});\n'
+            for param, value in rows)
+        cluster.script(sql, ha_litellm.DATABASE)
+        target = ShortTimeout(cluster, 0.05) if name.startswith('timeout_scaled') else cluster
+        results[name] = hooks_verdict(target, schema)
+    return results
+
+
 class LabRunner:
     """The lab Podman (its own storage root) with the product runner's interface."""
     uid = None
@@ -240,6 +354,11 @@ def craft(case, salt, fingerprint, scratch):
             cluster.script(SUPERUSER_SQL, 'litellm')
         elif case == 'stored_settings':
             cluster.script(STORED_SETTINGS_SQL, 'litellm')
+        elif case == 'stored_variants':
+            cluster.script(CONFIG_TABLE_SQL, 'litellm')
+        elif case == 't2_hidden_hooks':
+            cluster.script(CONFIG_TABLE_SQL, 'litellm')
+            cluster.script(T2_SQL, 'litellm')
         # The crafting session must not leave markers behind: the volume is what HA's backup would carry.
         tmp.exec('craft', ['sh', '-c', 'rm -f /tmp/woowbk-review-*'], user='postgres', check=False, max_output=4096)
         tmp.stop('craft', timeout=60)
@@ -374,6 +493,14 @@ def product_path(case, inner, salt):
                 facts['stored_settings_line'] = ha_litellm.stored_settings_line(facts['stored_settings'])
                 if hasattr(ha_litellm, 'stored_hooks_blocker'):
                     facts['stored_hooks_blocker'] = ha_litellm.stored_hooks_blocker(facts['stored_settings'])
+            if ha_schema is not None and case == 'stored_variants':
+                facts['variants'] = run_variants(cluster, ha_schema)
+            if ha_schema is not None and case == 't2_hidden_hooks':
+                facts['check_sees'] = hooks_verdict(cluster, ha_schema)
+                facts['jsonb_each_lang'] = cluster.query_json(
+                    "SELECT json_build_object('lang', (SELECT l.lanname FROM pg_catalog.pg_proc p JOIN "
+                    "pg_catalog.pg_language l ON l.oid = p.prolang WHERE p.oid = "
+                    "'pg_catalog.jsonb_each(jsonb)'::pg_catalog.regprocedure))", 'litellm')
             blockers, warnings = ha_litellm.verdict(src, found, ha_major=18, target_major=17,
                                                     live_migrations_value=found['migrations'], binding=binding)
             facts['blockers'] = blockers
@@ -382,6 +509,13 @@ def product_path(case, inner, salt):
                 with tempfile.TemporaryDirectory(dir=os.environ.get('WOOWBK_REVIEW_SCRATCH')) as staging:
                     files, _seq = ha_litellm.export_rows(work, cluster, ha_schema, Path(staging))
                     steps.append('export_rows')
+                    config_rows = files.get(('public', 'LiteLLM_Config'))
+                    if config_rows is not None:
+                        data = config_rows.read_bytes()
+                        facts['staged_config_rows'] = {'rows': data.count(b'\n'),
+                                                       'post_call_rules': b'post_call_rules' in data,
+                                                       'custom_auth': b'custom_auth' in data,
+                                                       'builtins_exec': data.count(b'builtins.exec')}
                     sample = files.get(('public', 'LiteLLM_UserTable'))
                     if sample is not None:
                         row = sample.read_bytes().split(b'\n')[0].split(b'\t')
@@ -449,7 +583,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--case', required=True,
                         choices=('owner_trojan', 'owner_view', 'superuser_catalog', 'tablespace_map', 'stored_settings',
-                                 'copy_injection'))
+                                 'copy_injection', 'stored_variants', 't2_hidden_hooks'))
     args = parser.parse_args()
     started = time.monotonic()
     if args.case == 'copy_injection':
