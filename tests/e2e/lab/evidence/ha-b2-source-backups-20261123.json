@@ -1,0 +1,530 @@
+{
+ "schema": 1,
+ "date": "2026-11-23",
+ "lane": "showcase-backups-2 (iteration 1)",
+ "scope": "REAL HA source backups of the x86 showcase HA own add-ons (owner decision 2026-11-23 「決定2 A」); source fixtures only, NOT an import attempt",
+ "commercial_acceptance": "not-complete",
+ "secrets": "none in this file; HA_BACKUP_KEY and the Nextcloud test credentials are named only (lab creds files)",
+ "source_host": {
+  "haos": "18.1",
+  "supervisor": "2026.11.0",
+  "core": "2026.7.2",
+  "arch": "amd64",
+  "machine": "generic-x86-64",
+  "cpus": 4,
+  "ram_mb": 15845
+ },
+ "share_folder": {
+  "bytes": 4892906973,
+  "gib": 4.557,
+  "limit_gib": 3,
+  "included": false,
+  "largest_entries": {
+   "woowtechbot-image-test-20261119": "3.1G",
+   "woow-migration-backups": "1.2G",
+   "woow-nextcloud-backup": "150.9M",
+   "nextcloud": "96.5M",
+   "nextcloud-office-staging": "71.9M",
+   "projects": "13.2M"
+  },
+  "nextcloud_datadirectory": "/share/nextcloud",
+  "nextcloud_datadirectory_bytes": 100467520,
+  "codeserver_workspace": "/share/projects (config_path is the default)",
+  "decision": "OWNER: share folder 4.56 GiB > 3 GiB; the share-including backups wait for the owner"
+ },
+ "paused_before": "OpenDesign x2 and code-server 1b7b4ce7 were stopped by another actor at 07:07Z (their protected backup d88821e8 hm19b-pause-apps-202611231507); this lane started each one only for marker+backup and stopped it again",
+ "backups": [
+  {
+   "app": "opendesign",
+   "ha_slug": "a64c4ba7",
+   "name": "WOOW匯入測試 B2 OpenDesign x86 加密 2026-11-23",
+   "addon": "1b7b4ce7_woow_ha_opendesign",
+   "addon_version": "0.2.15",
+   "latest": "0.2.15",
+   "update": "none needed (0.2.15 = the Podman 4.2.1 core, facts opendesign.md §3)",
+   "date_utc": "2026-11-23T07:56:03Z",
+   "backup_seconds": 55,
+   "mode": "cold (HA stopped and restarted it)",
+   "encrypted": "v3 (HA_BACKUP_KEY)",
+   "compressed": true,
+   "folders": [],
+   "remote": "/backup/woow-b2-opendesign-x86-enc-20261123.tar",
+   "bytes": 1116784640,
+   "sha256": "c3d23cedc831d14a221f9be6063c23913fb896f39e882127a52aac7039178dd7",
+   "local": "/home/woowtechopenclaw/.woowbk-lab/ha-fixtures/20261123-batch2/x86/woow-b2-opendesign-x86-enc/woow-b2-opendesign-x86-enc-20261123.tar",
+   "download_seconds": 381,
+   "sha256_match": true,
+   "live_facts": {
+    "opendesign": "0.24.1",
+    "projects_before": 11,
+    "projects_with_marker": 12,
+    "data_opendesign": "2.2G",
+    "app_sqlite_bytes": 4997120,
+    "app_sqlite_wal_bytes": 4140632
+   },
+   "markers": {
+    "project": "woow-import-test-20261123 (name WOOW匯入測試 20261123)",
+    "files": {
+     "woow-import-test.txt": "540d9ac26237dbb1",
+     "woow-import-cjk.txt": "f2e0dc84bf608ae9"
+    }
+   },
+   "health_after_backup": "api/health 200 at 07:57:14Z, marker present",
+   "cleanup": "marker project deleted (DELETE 200, then 404, dir absent, 11 projects); add-on stopped again 07:57:36Z",
+   "verify": {
+    "result": "ok",
+    "reader": "R-COCKPIT feat/ha-import-batch1 b2f63ce backup-engine/woowbackup/habackup.py iter_entries (strict), inside a throwaway --network none labpodman container",
+    "members": [
+     {
+      "name": "1b7b4ce7_woow_ha_opendesign.tar.gz",
+      "role": "addon",
+      "size": 1116769213,
+      "encryption": "v3"
+     },
+     {
+      "name": "supervisor.tar.gz",
+      "role": "supervisor",
+      "size": 443,
+      "encryption": "v3"
+     }
+    ],
+    "walk": {
+     "complete": true,
+     "entries": 6716,
+     "kinds": {
+      "dir": 1713,
+      "file": 4989,
+      "symlink": 7
+     },
+     "bytes": 1536627261,
+     "skipped_symlinks": 5,
+     "skipped_fifos": 0,
+     "never_read_skipped": 1,
+     "addon": {
+      "slug": "woow_ha_opendesign",
+      "version": "0.2.15",
+      "image": "ghcr.io/woowtech/woow-ha-opendesign-amd64",
+      "arch": "amd64",
+      "name": "Woow HA OpenDesign",
+      "state": "started"
+     }
+    },
+    "top_dirs": {
+     "data/opendesign/paseo": {
+      "entries": 1940,
+      "bytes": 1312883602
+     },
+     "data/opendesign/home": {
+      "entries": 4600,
+      "bytes": 212446351
+     },
+     "data/opendesign/app.sqlite": {
+      "entries": 1,
+      "bytes": 4997120
+     },
+     "data/opendesign/app.sqlite-wal": {
+      "entries": 1,
+      "bytes": 4140632
+     },
+     "data/opendesign/runs": {
+      "entries": 43,
+      "bytes": 1376231
+     },
+     "data/opendesign/projects": {
+      "entries": 67,
+      "bytes": 611232
+     },
+     "data/opendesign/connectors": {
+      "entries": 2,
+      "bytes": 79278
+     },
+     "data/opendesign/diagnostics": {
+      "entries": 7,
+      "bytes": 48998
+     },
+     "data/opendesign/app.sqlite-shm": {
+      "entries": 1,
+      "bytes": 32768
+     },
+     "data/opendesign/skills": {
+      "entries": 3,
+      "bytes": 7203
+     },
+     "data/opendesign/od-next-task-inputs": {
+      "entries": 7,
+      "bytes": 1550
+     },
+     "data/opendesign/app-config.json": {
+      "entries": 1,
+      "bytes": 871
+     },
+     "data/opendesign/mcp-config.json": {
+      "entries": 1,
+      "bytes": 373
+     },
+     "data/mcp/state.json": {
+      "entries": 1,
+      "bytes": 366
+     }
+    },
+    "markers": {
+     "data/opendesign/projects/woow-import-test-20261123/woow-import-test.txt": {
+      "sha256_16": "540d9ac26237dbb1",
+      "size": 45,
+      "uid": 1001,
+      "gid": 1001,
+      "mode": "0o644"
+     },
+     "data/opendesign/projects/woow-import-test-20261123/woow-import-cjk.txt": {
+      "sha256_16": "f2e0dc84bf608ae9",
+      "size": 34,
+      "uid": 1001,
+      "gid": 1001,
+      "mode": "0o644"
+     }
+    }
+   }
+  },
+  {
+   "app": "code-server",
+   "ha_slug": "69cafef5",
+   "name": "WOOW匯入測試 B2 code-server x86 加密 2026-11-23",
+   "addon": "1b7b4ce7_woow_ha_code_server",
+   "addon_version": "0.1.14",
+   "latest": "0.1.15",
+   "update": "none needed: add-on CHANGELOG 0.1.15 \"Pi, Claude Code, Codex, extensions, the base image, options and the data layout are unchanged\" (pins = Podman 4.139.1-8); the importer pin table needs a 0.1.14 row",
+   "date_utc": "2026-11-23T08:00:19Z",
+   "backup_seconds": 116,
+   "mode": "cold (HA stopped and restarted it)",
+   "encrypted": "v3 (HA_BACKUP_KEY)",
+   "compressed": true,
+   "folders": [],
+   "remote": "/backup/woow-b2-codeserver-x86-enc-20261123.tar",
+   "bytes": 627415040,
+   "sha256": "8f2dc23fd17b115c7317cf07f90b2fc685e901ead9282be3f3da8cef16c9856f",
+   "local": "/home/woowtechopenclaw/.woowbk-lab/ha-fixtures/20261123-batch2/x86/woow-b2-codeserver-x86-enc/woow-b2-codeserver-x86-enc-20261123.tar",
+   "download_seconds": 194,
+   "sha256_match": true,
+   "live_facts": {
+    "code_server": "4.139.1 (Code 1.139.1)",
+    "image": "ghcr.io/woowtech/woow-ha-code-server-amd64:0.1.14",
+    "extensions": 2,
+    "pi_sessions_jsonl": 28,
+    "skills": 2,
+    "sizes": {
+     "data": "1.7G",
+     "vscode": "1.3M",
+     "extensions": "188K",
+     "pi-agent": "1.7G",
+     "sessions": "3.7M",
+     "claude": "30M",
+     "codex": "111M",
+     "connectors": "1.1G"
+    }
+   },
+   "markers": {
+    "data/vscode/User/snippets/woow-import-test-20261123.code-snippets": "dcae1e20ae973d5c",
+    "data/pi-agent/skills/woow-import-test-20261123/SKILL.md": "48d2358822db7c52"
+   },
+   "not_in_backup": "workspace /share/projects (share folder not included; owner decision)",
+   "health_after_backup": "healthz 200 at 08:02:24Z, markers present",
+   "cleanup": "both markers removed (0 left, skills back to 2); add-on stopped again 08:02:43Z",
+   "verify": {
+    "result": "ok",
+    "reader": "R-COCKPIT feat/ha-import-batch1 b2f63ce backup-engine/woowbackup/habackup.py iter_entries (strict), inside a throwaway --network none labpodman container",
+    "members": [
+     {
+      "name": "1b7b4ce7_woow_ha_code_server.tar.gz",
+      "role": "addon",
+      "size": 627407754,
+      "encryption": "v3"
+     },
+     {
+      "name": "supervisor.tar.gz",
+      "role": "supervisor",
+      "size": 443,
+      "encryption": "v3"
+     }
+    ],
+    "walk": {
+     "complete": true,
+     "entries": 28905,
+     "kinds": {
+      "dir": 3323,
+      "file": 25546,
+      "symlink": 24
+     },
+     "bytes": 1674949151,
+     "skipped_symlinks": 10,
+     "skipped_fifos": 0,
+     "never_read_skipped": 1,
+     "addon": {
+      "slug": "woow_ha_code_server",
+      "version": "0.1.14",
+      "image": "ghcr.io/woowtech/woow-ha-code-server-amd64",
+      "arch": "amd64",
+      "name": "Woow Code Server",
+      "state": "started"
+     }
+    },
+    "top_dirs": {
+     "data/pi-agent/connectors": {
+      "entries": 25800,
+      "bytes": 1038071732
+     },
+     "data/pi-agent/codex-bootstrap": {
+      "entries": 69,
+      "bytes": 458613009
+     },
+     "data/pi-agent/codex": {
+      "entries": 685,
+      "bytes": 113988109
+     },
+     "data/pi-agent/claude": {
+      "entries": 1341,
+      "bytes": 27470730
+     },
+     "data/woow-connectors-primary/paseo": {
+      "entries": 73,
+      "bytes": 12186566
+     },
+     "data/pi-agent/bin": {
+      "entries": 3,
+      "bytes": 9014648
+     },
+     "data/woow-connectors-primary/omnigent": {
+      "entries": 121,
+      "bytes": 6809606
+     },
+     "data/pi-agent/skills": {
+      "entries": 379,
+      "bytes": 4521821
+     },
+     "data/pi-agent/sessions": {
+      "entries": 45,
+      "bytes": 3675075
+     },
+     "data/pi-agent/home": {
+      "entries": 38,
+      "bytes": 260799
+     },
+     "data/pi-agent/shared": {
+      "entries": 20,
+      "bytes": 114261
+     },
+     "data/vscode/User": {
+      "entries": 263,
+      "bytes": 109498
+     },
+     "data/vscode/extensions": {
+      "entries": 27,
+      "bytes": 108782
+     },
+     "data/pi-agent/auth.json": {
+      "entries": 1,
+      "bytes": 2110
+     }
+    },
+    "markers": {
+     "data/vscode/User/snippets/woow-import-test-20261123.code-snippets": {
+      "sha256_16": "dcae1e20ae973d5c",
+      "size": 227,
+      "uid": 0,
+      "gid": 0,
+      "mode": "0o644"
+     },
+     "data/pi-agent/skills/woow-import-test-20261123/SKILL.md": {
+      "sha256_16": "48d2358822db7c52",
+      "size": 242,
+      "uid": 0,
+      "gid": 0,
+      "mode": "0o644"
+     }
+    }
+   }
+  },
+  {
+   "app": "nextcloud",
+   "ha_slug": "2d7882d8",
+   "name": "WOOW匯入測試 B2 Nextcloud x86 加密 無share 2026-11-23",
+   "addon": "1b7b4ce7_woow-nextcloud-office",
+   "addon_version": "0.2.3",
+   "latest": "0.2.4",
+   "update": "none needed: 0.2.3 runs Nextcloud 35.0.1.1 (status.php) = the facts Podman target 35.0.1.1",
+   "kind": "PARTIAL / NEGATIVE fixture: add-on only, WITHOUT the share folder, so the user files (/share/nextcloud) are NOT in it; the real import must refuse it (facts nextcloud.md R2); a share-including backup waits for the owner",
+   "date_utc": "2026-11-23T08:02:57Z",
+   "backup_seconds": 25,
+   "mode": "cold (HA stopped and restarted it; ~80 s until healthz 200)",
+   "encrypted": "v3 (HA_BACKUP_KEY)",
+   "compressed": true,
+   "folders": [],
+   "remote": "/backup/woow-b2-nextcloud-x86-enc-noshare-20261123.tar",
+   "bytes": 248125440,
+   "sha256": "88e0f79415473c3453fb2889375b5fe0167e5d0a685d17da768ccc641c3c027f",
+   "local": "/home/woowtechopenclaw/.woowbk-lab/ha-fixtures/20261123-batch2/x86/woow-b2-nextcloud-x86-enc-noshare/woow-b2-nextcloud-x86-enc-noshare-20261123.tar",
+   "download_seconds": 87,
+   "sha256_match": true,
+   "live_facts": {
+    "nextcloud": "35.0.1.1",
+    "postgres": "16.15 (PG_VERSION 16)",
+    "datadirectory": "/share/nextcloud",
+    "users": 2,
+    "apps_enabled": 53,
+    "apps_disabled": 7,
+    "custom_apps": [
+     "notes",
+     "richdocuments",
+     "tasks"
+    ],
+    "encryption": "off",
+    "twofactor_enforced": "unset",
+    "rows": {
+     "oc_users": 2,
+     "oc_filecache": 224,
+     "oc_share": 1,
+     "oc_authtoken": 124,
+     "oc_calendarobjects": 2,
+     "oc_cards": 3,
+     "oc_storages": 3,
+     "oc_mounts": 2
+    },
+    "sizes": {
+     "data": "396M",
+     "postgres": "76M",
+     "nextcloud": "95M",
+     "custom_apps": "95M",
+     "redis": "8.0K",
+     "coolwsd-jail": "225M",
+     "coolwsd-cache": "4.0K"
+    },
+    "special_entries_under_data": {
+     "devices": 0,
+     "fifos": 0,
+     "sockets": 0,
+     "hardlinked_files": 0,
+     "symlinks": 0
+    }
+   },
+   "markers": {
+    "test_user": "woow-import-test (display WOOW 匯入測試); password B2_NC_X86_NOSHARE_USER_PW and app password B2_NC_X86_NOSHARE_APP_PW in ~/.woowbk-lab/secrets/b1-creds.env (names only)",
+    "rows_after_markers": {
+     "users": 3,
+     "oc_authtoken": 125,
+     "oc_filecache": 300
+    },
+    "webdav_files_not_in_this_backup": {
+     "woow-import-test-20261123.txt": "f153890213d72a04",
+     "匯入測試-20261123.txt": "f2e0dc84bf608ae9"
+    },
+    "checks": "PUT 201 201, PROPFIND with the app password 207"
+   },
+   "health_after_backup": "healthz 200 and status.php installed 35.0.1 maintenance false at 08:04:46Z; test user present",
+   "cleanup": "test user deleted (occ user:delete): users admin,woow-mcp-test, its tokens 0, files dir absent; Nextcloud stays started (as before)",
+   "verify": {
+    "result": "ok",
+    "reader": "R-COCKPIT feat/ha-import-batch1 b2f63ce backup-engine/woowbackup/habackup.py iter_entries (strict), inside a throwaway --network none labpodman container",
+    "members": [
+     {
+      "name": "1b7b4ce7_woow-nextcloud-office.tar.gz",
+      "role": "addon",
+      "size": 248110616,
+      "encryption": "v3"
+     },
+     {
+      "name": "supervisor.tar.gz",
+      "role": "supervisor",
+      "size": 443,
+      "encryption": "v3"
+     }
+    ],
+    "walk": {
+     "complete": true,
+     "entries": 7020,
+     "kinds": {
+      "dir": 1578,
+      "file": 5440
+     },
+     "bytes": 399993180,
+     "skipped_symlinks": 0,
+     "skipped_fifos": 0,
+     "never_read_skipped": 1,
+     "addon": {
+      "slug": "woow-nextcloud-office",
+      "version": "0.2.3",
+      "image": "ghcr.io/woowtech/woow-ha-nextcloud-office-amd64",
+      "arch": "amd64",
+      "name": "Woow Nextcloud Office",
+      "state": "started"
+     }
+    },
+    "top_dirs": {
+     "data/nextcloud/custom_apps": {
+      "entries": 2046,
+      "bytes": 93880442
+     },
+     "data/coolwsd-jail/367-F213B60B": {
+      "entries": 344,
+      "bytes": 81986587
+     },
+     "data/coolwsd-jail/374-83EC27C7": {
+      "entries": 390,
+      "bytes": 62782346
+     },
+     "data/coolwsd-jail/369-2EC68D6B": {
+      "entries": 187,
+      "bytes": 55108291
+     },
+     "data/postgres/base": {
+      "entries": 2084,
+      "bytes": 44866636
+     },
+     "data/postgres/pg_wal": {
+      "entries": 4,
+      "bytes": 33554432
+     },
+     "data/coolwsd-jail/372-776B2C06": {
+      "entries": 195,
+      "bytes": 7696469
+     },
+     "data/coolwsd-jail/378-3DC6E17F": {
+      "entries": 196,
+      "bytes": 5873632
+     },
+     "data/coolwsd-jail/375-FCE0F098": {
+      "entries": 129,
+      "bytes": 1190799
+     },
+     "data/coolwsd-jail/369-D3A51551": {
+      "entries": 101,
+      "bytes": 915990
+     },
+     "data/coolwsd-jail/367-B74A82B6": {
+      "entries": 101,
+      "bytes": 915990
+     },
+     "data/coolwsd-jail/361-595E4190": {
+      "entries": 73,
+      "bytes": 670728
+     },
+     "data/coolwsd-jail/358-84DF26CE": {
+      "entries": 73,
+      "bytes": 670728
+     },
+     "data/coolwsd-jail/333-0CDDDB8C": {
+      "entries": 73,
+      "bytes": 670728
+     }
+    },
+    "markers": {
+     "data/postgres/PG_VERSION": {
+      "sha256_16": "e6c21e8d260fe718",
+      "size": 3,
+      "uid": 102,
+      "gid": 104,
+      "mode": "0o644"
+     }
+    }
+   }
+  }
+ ]
+}
