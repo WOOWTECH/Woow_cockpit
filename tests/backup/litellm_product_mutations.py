@@ -180,6 +180,8 @@ MUTATIONS = (
     ('M55', 'the conversion decides again in the new cluster (SR-8)', LL,
      "    settings = stored_settings(pg, trusted)\n    hooks = stored_hooks_blocker(settings)\n"
      "    if hooks:\n        raise BackupError('incompatible', f'LiteLLM 不能搬過來：{hooks}', app=app.id)\n", "", 1),
+    ('M57', 'a dotted callback is found by the query, however many plain names come first', LL,
+     "AND strpos(v.value, '.') > 0\"", "AND false\"", 1),
     ('M56', "the import notes name what moved, not what HA's cluster said (SR-8)", LL,
      "    settings = stored_settings(pg, trusted)\n    hooks = stored_hooks_blocker(settings)\n",
      "    moved = stored_settings(pg, trusted)\n    hooks = stored_hooks_blocker(moved)\n", 1),

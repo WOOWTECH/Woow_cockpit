@@ -599,6 +599,13 @@ STORED_SETTINGS_SQL = (
     "SELECT 'litellm_settings.callbacks' AS label FROM public.\"LiteLLM_Config\" c "
     "WHERE c.param_name = 'litellm_settings' AND jsonb_typeof(c.param_value -> 'callbacks') = 'string' "
     "AND (c.param_value ->> 'callbacks') <> ''"
+    # a dotted entry in ANY of the callback lists, however many plain names come first (the Python side used to look
+    # only at the first 50 names; review iteration 2)
+    " UNION ALL SELECT 'litellm_settings.' || e.key FROM public.\"LiteLLM_Config\" c "
+    f"CROSS JOIN LATERAL jsonb_each({_OBJECT.format(v='c.param_value')}) e "
+    "CROSS JOIN LATERAL jsonb_array_elements_text(CASE WHEN jsonb_typeof(e.value) = 'array' THEN e.value "
+    "ELSE '[]'::jsonb END) v WHERE c.param_name = 'litellm_settings' AND e.key IN ("
+    + ', '.join(f"'{key}'" for key in CALLBACK_KEYS) + ") AND strpos(v.value, '.') > 0"
     + ''.join(f" UNION ALL SELECT '{section}.{label}' FROM public.\"LiteLLM_Config\" c WHERE c.param_name = "
               f"'{section}' AND jsonb_path_exists({_OBJECT.format(v='c.param_value')}, '{path}')"
               for section, label, path in NESTED_HOOKS)

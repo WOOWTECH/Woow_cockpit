@@ -638,6 +638,9 @@ class StoredSettingsTests(LiteLLMCase):
                           f"'{section}' AND jsonb_path_exists(", sql)
             self.assertIn(f"'{path}')", sql)
         self.assertIn("jsonb_typeof(c.param_value -> 'callbacks') = 'string'", sql)
+        # a dotted callback is found by the query itself, not in the first 50 names the Python side keeps
+        self.assertIn("SELECT 'litellm_settings.' || e.key FROM public.\"LiteLLM_Config\" c", sql)
+        self.assertIn("AND strpos(v.value, '.') > 0", sql)
         for path, words in (('custom_provider_map[*].custom_handler', ()), ('guardrails[*].*.callbacks[*]', ('[.]',)),
                             ('guardrails[*].*.guardrail', ('[.]',)),
                             ('pass_through_endpoints[*].target', ('[.]', '!(@ like_regex "^[a-z][a-z0-9+-]*://"')),
@@ -647,7 +650,7 @@ class StoredSettingsTests(LiteLLMCase):
             for word in words:
                 self.assertIn(word, match[0])
         self.world.ha_columns = COLUMNS + self.CONFIG
-        for label in labels + ['litellm_settings.callbacks']:
+        for label in labels + ['litellm_settings.callbacks', 'litellm_settings.success_callback']:
             self.answering({'sections': [label.split('.')[0]], 'env': [], 'callbacks': [], 'hooks': [],
                             'nested': [label]})
             result = self.check(self.upload_litellm(), ['litellm'])[0]
