@@ -48,6 +48,7 @@ Fixes are on branch `review/litellm-secreview-20261123` (from `3bde418`): `ad674
 | T2: `backup_label` + `tablespace_map`, no symlink in the member | **PG 18 created `pg_tblspc/16400 -> /tmp/woowbk-review-tablespace`** at its start (`src.symlinks` = 0); this start then failed (WAL ends before end of online backup), a complete online backup would start | never streamed into the volume; no link; blocker 不是在停止狀態下備份的 | `*-tablespace_map.json` |
 | HA's stored proxy settings (`LiteLLM_Config`: env vars, callbacks) | moved silently | warning + import note name `HTTPS_PROXY`, `LANGFUSE_HOST`, `langfuse`, … (names only) | `fixed-stored_settings.json` |
 | `COPY … FROM STDIN` data ending in `\.` with SQL or `\!` after it (PG 17.11 psql `-c`, as `load_rows` runs it) | nothing executed, SQL-as-data stays data | same | `*-copy_injection.json` |
+| **The real owner-made encrypted LiteLLM HA backup** (fixture SHA-256 checked) through the fixed HA-cluster steps (`tests/e2e/lab/litellm_sandbox_real.py`, lab store, not dev-d) | (attempt 4 of lane litellm-product: whole flow) | salt binding `match`, **no blocker**, 189 migrations, 86 tables, 2882 rows, all 86 exported by COPY (896,181 bytes, deleted at once), 1 sequence; the sessions really ran with search_path pg_catalog, ISO dates, extra_float_digits 3, event triggers off; 1 stored settings section, no env var or callback (no SR-5 line); no marker, nothing left | `fixed-real-backup.json` |
 | 36 crafted members: traversal, absolute and PAX paths, control characters, devices, sparse, FIFOs, hard links to the master key, symlinked/hard-linked/duplicate/oversized/short salt, oversized/duplicate/deep `state.json`, duplicate/oversized `PG_VERSION`, replaced config files as folders, `conf.d`, recovery and pid files, other member paths, wrong slug, truncated streams | 19 refused, 17 accepted but neutralized (modes 0600/0700, owner postgres; config files replaced; recovery and pid files dropped; secrets, `options.json`, dumps never read; a bad salt or `state.json` gives a blocker or no version); only `backup_label`/`tablespace_map` reached the volume | same, and those two no longer reach it | `*-archive.json` |
 
 What attacker code saw inside the HA container (`original-owner_trojan.json`, `original-superuser_catalog.json`):
@@ -145,8 +146,11 @@ automatic and the manual rollback. That real proof is on `3bde418`; on the fixed
 
 - Kernel or container escapes; PostgreSQL 18 bugs reachable with crafted data pages (no page fuzzing).
 - The arm64 PostgreSQL 18 image (`d4e55489…`).
-- **The product's real end-to-end flow on the fixed tip** (real encrypted HA backup → check → convert → import →
-  restart → rollback on dev-d): the product lane was asked to merge `d31c59a` and run it; until that attempt is
-  recorded, the fixes are proven by the real attacks above and the unit tests only.
+- **The product's real end-to-end flow on the fixed tip** (real encrypted HA backup → check → convert into
+  PostgreSQL 17 → import → restart → rollback on dev-d, `litellm_full_flow.py`): not run on the fixed tip. The
+  changed code (HA's cluster side) ran on the real backup in the lab sandbox (`fixed-real-backup.json`, no
+  blocker); the PostgreSQL 17 side, the restore and the rollback did not change and passed on `3bde418` (lane
+  litellm-product attempt 4). dev-d was held by other lanes' real runs and the host load stayed at 45-170 this
+  evening; the product lane measured that LiteLLM's restore readiness needs a load below about 30.
 - The page was checked by reading (`backup.js` builds text nodes only, no `innerHTML`), not fuzzed.
 - LiteLLM application bugs that stored data could trigger in the proxy itself.
