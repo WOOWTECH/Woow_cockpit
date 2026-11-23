@@ -561,9 +561,148 @@ class StoredSettingsTests(LiteLLMCase):
         result = self.check(self.upload_litellm(), ['litellm'])[0]
         self.assertEqual(self.asked, ['hapg'])
         self.assertFalse([w for w in result['warnings'] if '代理設定' in w])
+        self.assertTrue([b for b in result['blockers'] if '無法完整讀取' in b], 'an answer that is not an object refuses')
         self.answering({'sections': ['general_settings'], 'env': [], 'callbacks': []})
         result = self.check(self.upload_litellm(), ['litellm'])[0]
         self.assertFalse([w for w in result['warnings'] if '代理設定' in w], 'only environment variables and callbacks')
+
+    def test_settings_that_load_code_refuse(self):
+        # SR-6: LiteLLM's get_instance_fn imports any dotted path (post_call_rules "builtins.exec" runs every response).
+        self.world.ha_columns = COLUMNS + self.CONFIG
+        for found, words in (({'sections': ['litellm_settings'], 'env': [], 'callbacks': [],
+                               'hooks': ['litellm_settings.post_call_rules']}, 'litellm_settings.post_call_rules'),
+                             ({'sections': ['general_settings'], 'env': [], 'callbacks': [],
+                               'hooks': ['general_settings.custom_auth']}, 'general_settings.custom_auth'),
+                             ({'sections': ['litellm_settings'], 'env': [], 'hooks': [],
+                               'callbacks': ['langfuse', 'custom_callbacks.proxy_handler_instance']},
+                              'custom_callbacks.proxy_handler_instance')):
+            self.answering(found)
+            result = self.check(self.upload_litellm(), ['litellm'])[0]
+            hooks = [b for b in result['blockers'] if '會載入並執行程式的設定' in b]
+            self.assertEqual(len(hooks), 1, result['blockers'])
+            self.assertIn(words, hooks[0])
+        self.assertTrue(any('langfuse' in w for w in result['warnings']), 'a named integration stays a warning')
+        self.assertFalse(any('custom_callbacks' in w for w in result['warnings']))
+        self.answering({'sections': ['litellm_settings'], 'env': [], 'callbacks': ['langfuse'], 'hooks': []})
+        result = self.check(self.upload_litellm(), ['litellm'])[0]
+        self.assertFalse([b for b in result['blockers'] if '會載入並執行程式的設定' in b])
+        self.assertIn("('litellm_settings', 'post_call_rules')", ha_litellm.STORED_SETTINGS_SQL)
+
+    def test_settings_that_load_code_stop_the_conversion_before_anything_is_read(self):
+        self.world.ha_columns = COLUMNS + self.CONFIG
+        self.answering({'sections': ['litellm_settings'], 'env': [], 'callbacks': [],
+                        'hooks': ['litellm_settings.post_call_rules']})
+        with self.assertRaises(BackupError) as caught:
+            self.convert(self.upload_litellm(), ['litellm'])
+        self.assertIn('會載入並執行程式的設定', caught.exception.message)
+        self.assertFalse(self.world.copies_out, "no HA row was read")
+        self.assertFalse(self.world.snapshots, "this device's schema was not captured")
+        self.assertFalse(self.world.copies_in)
+
+    def raising(self, code):
+        answer, self.asked = self.world.answer, []
+
+        def stored(role, sql, database):
+            if sql == ha_litellm.STORED_SETTINGS_SQL:
+                self.asked.append(role)
+                raise BackupError(code, 'psql: output over the limit or timed out')
+            return answer(role, sql, database)
+
+        self.world.answer = stored
+
+    def test_an_answer_that_cannot_be_read_refuses(self):
+        # Review iteration 2: stored_settings() returned None on any read error, so ~1M stored environment-variable
+        # names (over the 16 MiB answer limit; HA's non-superuser owner can store them) or a timeout hid a hook.
+        self.world.ha_columns = COLUMNS + self.CONFIG
+        for code in ('limit-exceeded', 'job-failed'):
+            self.raising(code)
+            result = self.check(self.upload_litellm(), ['litellm'])[0]
+            self.assertEqual(self.asked, ['hapg'])
+            self.assertTrue([b for b in result['blockers'] if '無法完整讀取' in b], (code, result['blockers']))
+            with self.assertRaises(BackupError) as caught:
+                self.convert(self.upload_litellm(), ['litellm'])
+            self.assertIn('無法完整讀取', caught.exception.message)
+            self.assertFalse(self.world.copies_out, 'no HA row was read')
+
+    def test_every_vendor_code_place_refuses(self):
+        # The vendor's DB-overlay list (litellm 1.104.0 proxy_server.py:4486-4640) and router_settings.plugins
+        # (:6722-6737); a STRING callbacks value (callback_utils.py:403-415). The SQL/JSON paths themselves ran on
+        # real PostgreSQL 18 in the review's sandbox (stored_variants); here: each one is asked and each label refuses.
+        sql = ha_litellm.STORED_SETTINGS_SQL
+        labels = sorted({f'{section}.{label}' for section, label, _path in ha_litellm.NESTED_HOOKS})
+        self.assertEqual(labels, ['general_settings.custom_secret_manager',
+                                  'general_settings.litellm_jwtauth.custom_validate',
+                                  'general_settings.pass_through_endpoints', 'litellm_settings.custom_provider_map',
+                                  'litellm_settings.guardrails', 'router_settings.plugins'])
+        for section, label, path in ha_litellm.NESTED_HOOKS:
+            self.assertIn(f"SELECT '{section}.{label}' FROM public.\"LiteLLM_Config\" c WHERE c.param_name = "
+                          f"'{section}' AND jsonb_path_exists(", sql)
+            self.assertIn(f"'{path}')", sql)
+        self.assertIn("jsonb_typeof(c.param_value -> 'callbacks') = 'string'", sql)
+        # a dotted callback is found by the query itself, not in the first 50 names the Python side keeps
+        self.assertIn("SELECT 'litellm_settings.' || e.key FROM public.\"LiteLLM_Config\" c", sql)
+        self.assertIn("AND strpos(v.value, '.') > 0", sql)
+        for path, words in (('custom_provider_map[*].custom_handler', ()), ('guardrails[*].*.callbacks[*]', ('[.]',)),
+                            ('guardrails[*].*.guardrail', ('[.]',)),
+                            ('pass_through_endpoints[*].target', ('[.]', '!(@ like_regex "^[a-z][a-z0-9+-]*://"')),
+                            ('litellm_jwtauth.custom_validate', ()), ('plugins[*]', ()),
+                            ('key_management_settings.custom_secret_manager', ())):
+            match = [p for _s, _l, p in ha_litellm.NESTED_HOOKS if f'$.{path} ?' in p]
+            self.assertEqual(len(match), 1, path)
+            for word in words:
+                self.assertIn(word, match[0])
+        self.world.ha_columns = COLUMNS + self.CONFIG
+        for label in labels + ['litellm_settings.callbacks', 'litellm_settings.success_callback']:
+            self.answering({'sections': [label.split('.')[0]], 'env': [], 'callbacks': [], 'hooks': [],
+                            'nested': [label]})
+            result = self.check(self.upload_litellm(), ['litellm'])[0]
+            hooks = [b for b in result['blockers'] if '會載入並執行程式的設定' in b]
+            self.assertEqual(len(hooks), 1, (label, result['blockers']))
+            self.assertIn(label, hooks[0])
+
+    def both_sides(self, ha_value, new_value):
+        """HA's cluster answers ha_value, the new cluster new_value (both schemas hold LiteLLM_Config)."""
+        self.world.ha_columns = COLUMNS + self.CONFIG
+        self.world.live_columns = COLUMNS + self.CONFIG
+        self.world.counts['public.LiteLLM_Config'] = 2
+        answer, self.asked = self.world.answer, []
+
+        def stored(role, sql, database):
+            if sql == ha_litellm.STORED_SETTINGS_SQL:
+                self.asked.append(role)
+                return copy.deepcopy(ha_value if role == 'hapg' else new_value)
+            return answer(role, sql, database)
+
+        self.world.answer = stored
+
+    def test_the_conversion_decides_again_on_what_moved(self):
+        # Review SR-8: a crafted data directory controls HA's catalog; an edited built-in =(text,text) operator hid
+        # post_call_rules and custom_auth from the HA-side query while COPY moved them (sandbox t2_hidden_hooks).
+        # The same query in the new cluster (this device's image and schema, HA's data as rows) must refuse.
+        clean = {'sections': ['litellm_settings'], 'env': [], 'callbacks': [], 'hooks': [], 'nested': []}
+        for new_value, words in (({'sections': ['litellm_settings'], 'env': [], 'callbacks': [],
+                                   'hooks': ['litellm_settings.post_call_rules'], 'nested': []},
+                                  '會載入並執行程式的設定'),
+                                 ({'sections': ['router_settings'], 'env': [], 'callbacks': [], 'hooks': [],
+                                   'nested': ['router_settings.plugins']}, 'router_settings.plugins'),
+                                 (None, '無法完整讀取')):
+            self.both_sides(clean, new_value)
+            with self.assertRaises(BackupError) as caught:
+                self.convert(self.upload_litellm(), ['litellm'])
+            self.assertIn(words, caught.exception.message)
+            self.assertEqual(self.asked, ['hapg', 'll-db'], 'asked in HA\'s cluster, then in the new one')
+            full_reads = [r for r in self.world.restores if r[0] == 'll-db' and '/dev/null' in r[1]]
+            self.assertFalse(full_reads, 'stopped before the converted database was written')
+
+    def test_the_import_notes_name_what_moved(self):
+        self.both_sides({'sections': ['environment_variables'], 'env': [], 'callbacks': [], 'hooks': [],
+                         'nested': []},
+                        {'sections': ['environment_variables'], 'env': ['HTTPS_PROXY'], 'callbacks': [], 'hooks': [],
+                         'nested': []})
+        result = self.convert(self.upload_litellm(), ['litellm'])
+        self.assertEqual(self.asked, ['hapg', 'll-db'])
+        notes = '\n'.join(result['ha_import']['notes'])
+        self.assertIn('HTTPS_PROXY', notes, 'the names of what moved, not what HA\'s cluster said')
 
     def test_the_import_notes_name_them(self):
         notes, _reminders = ha_litellm.import_texts({'counts': {}, 'key_users': [],

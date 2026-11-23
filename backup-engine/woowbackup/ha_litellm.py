@@ -543,6 +543,43 @@ DETAIL = (('users', 'public', 'LiteLLM_UserTable', ''), ('teams', 'public', 'Lit
 # say). The check and the import name them (review SR-5): names only, never a value.
 CONFIG_TABLE = ('public', 'LiteLLM_Config')
 CALLBACK_KEYS = ('callbacks', 'success_callback', 'failure_callback', 'audit_log_callbacks')
+# Stored settings whose value LiteLLM turns into Python code to call: get_instance_fn imports any dotted path
+# (litellm/proxy/types_utils/utils.py:9-52, importlib.import_module), e.g. post_call_rules "builtins.exec" is then
+# called with every model response text (litellm/litellm_core_utils/rules.py:41-46; proxy_server.py:6193-6194); the
+# DB overlay refuses only s3:// and gcs:// for them (proxy_server.py:4494-4505). A callback with a dot in its name is
+# such a module path too (4506-4513); a plain name (`langfuse`) is a built-in integration. Any of them refuses
+# (review SR-6): this device's LiteLLM would run HA's code.
+MODULE_HOOKS = (('litellm_settings', 'post_call_rules'), ('general_settings', 'custom_auth'),
+                ('general_settings', 'custom_key_generate'), ('general_settings', 'custom_key_update'),
+                ('general_settings', 'custom_key_policy'), ('general_settings', 'custom_team_metadata_validate'),
+                ('general_settings', 'custom_sso'), ('general_settings', 'custom_ui_sso_sign_in_handler'))
+# The nested places of the same kind (review iteration 2): the rest of the vendor's own DB-overlay list of values that
+# reach get_instance_fn (proxy_server.py:4486-4640) plus router_settings.plugins, which that list misses
+# (:6722-6737 -> resolve_routing_plugins :4767-4800; router_settings is a DB-overlay section, :5186-5193). Each is a
+# SQL/JSON path over the section's stored object; only the label leaves the database, never a value.
+#   custom_provider_map[].custom_handler: get_instance_fn for every item (:6215-6231);
+#   guardrails v1 {name: {callbacks, guardrail}} and v2 {litellm_params: {callbacks, guardrail}}: a dotted callback
+#     or guardrail type is a module (guardrails/init_guardrails.py:101-160 -> callback_utils; guardrail_registry.py
+#     :580-618), a plain name is a built-in one;
+#   pass_through_endpoints[].target: get_instance_fn for EVERY target (pass_through_endpoints.py:1993-2001); a URL only
+#     falls back because its import fails, so a dotted target that is not scheme://... is a module;
+#   litellm_jwtauth.custom_validate (_types.py:5374-5378); router_settings.plugins.
+_TEXT = '@.type() == "string" && @ != ""'
+NESTED_HOOKS = (
+    ('litellm_settings', 'custom_provider_map', f'lax $.custom_provider_map[*].custom_handler ? ({_TEXT})'),
+    ('litellm_settings', 'guardrails', f'lax $.guardrails[*].*.callbacks[*] ? ({_TEXT} && @ like_regex "[.]")'),
+    ('litellm_settings', 'guardrails', f'lax $.guardrails[*].*.guardrail ? ({_TEXT} && @ like_regex "[.]")'),
+    ('general_settings', 'pass_through_endpoints',
+     f'lax $.pass_through_endpoints[*].target ? ({_TEXT} && @ like_regex "[.]" && '
+     '!(@ like_regex "^[a-z][a-z0-9+-]*://" flag "i"))'),
+    ('general_settings', 'litellm_jwtauth.custom_validate', f'lax $.litellm_jwtauth.custom_validate ? ({_TEXT})'),
+    # key_management_system "custom" loads <config dir>/<file>.py (or an absolute path) with exec_module at every start
+    # (secret_managers/custom_secret_manager_loader.py:30-75 via proxy_server.py:6981-6987, called on the DB-merged
+    # configuration, :5815-5831 -> :5550-5590)
+    ('general_settings', 'custom_secret_manager',
+     f'lax $.key_management_settings.custom_secret_manager ? ({_TEXT})'),
+    ('router_settings', 'plugins', f'lax $.plugins[*] ? ({_TEXT})'),
+)
 _OBJECT = "CASE WHEN jsonb_typeof({v}) = 'object' THEN {v} ELSE '{{}}'::jsonb END"
 STORED_SETTINGS_SQL = (
     "SELECT json_build_object("
@@ -556,27 +593,67 @@ STORED_SETTINGS_SQL = (
     f"CROSS JOIN LATERAL jsonb_each({_OBJECT.format(v='c.param_value')}) e "
     "CROSS JOIN LATERAL jsonb_array_elements_text(CASE WHEN jsonb_typeof(e.value) = 'array' THEN e.value "
     "ELSE '[]'::jsonb END) v WHERE c.param_name = 'litellm_settings' AND e.key IN ("
-    + ', '.join(f"'{key}'" for key in CALLBACK_KEYS) + ")))")
+    + ', '.join(f"'{key}'" for key in CALLBACK_KEYS) + ")), "
+    "'hooks', (SELECT coalesce(json_agg(DISTINCT c.param_name || '.' || h.key ORDER BY c.param_name || '.' || h.key), "
+    "'[]'::json) FROM public.\"LiteLLM_Config\" c "
+    f"CROSS JOIN LATERAL jsonb_each({_OBJECT.format(v='c.param_value')}) h "
+    "WHERE (c.param_name, h.key) IN (" + ', '.join(f"('{a}', '{b}')" for a, b in MODULE_HOOKS) + ") "
+    "AND h.value NOT IN ('null'::jsonb, '\"\"'::jsonb, '[]'::jsonb)), "
+    # a STRING litellm_settings.callbacks is one module path (common_utils/callback_utils.py:403-415)
+    "'nested', (SELECT coalesce(json_agg(DISTINCT n.label ORDER BY n.label), '[]'::json) FROM ("
+    "SELECT 'litellm_settings.callbacks' AS label FROM public.\"LiteLLM_Config\" c "
+    "WHERE c.param_name = 'litellm_settings' AND jsonb_typeof(c.param_value -> 'callbacks') = 'string' "
+    "AND (c.param_value ->> 'callbacks') <> ''"
+    # a dotted entry in ANY of the callback lists, however many plain names come first (the Python side used to look
+    # only at the first 50 names; review iteration 2)
+    " UNION ALL SELECT 'litellm_settings.' || e.key FROM public.\"LiteLLM_Config\" c "
+    f"CROSS JOIN LATERAL jsonb_each({_OBJECT.format(v='c.param_value')}) e "
+    "CROSS JOIN LATERAL jsonb_array_elements_text(CASE WHEN jsonb_typeof(e.value) = 'array' THEN e.value "
+    "ELSE '[]'::jsonb END) v WHERE c.param_name = 'litellm_settings' AND e.key IN ("
+    + ', '.join(f"'{key}'" for key in CALLBACK_KEYS) + ") AND strpos(v.value, '.') > 0"
+    + ''.join(f" UNION ALL SELECT '{section}.{label}' FROM public.\"LiteLLM_Config\" c WHERE c.param_name = "
+              f"'{section}' AND jsonb_path_exists({_OBJECT.format(v='c.param_value')}, '{path}')"
+              for section, label, path in NESTED_HOOKS)
+    + ") n))")
+
+
+UNREADABLE = {'sections': [], 'env': [], 'callbacks': [], 'hooks': [], 'unreadable': True}
 
 
 def stored_settings(cluster, schema):
-    """{sections, env, callbacks}: the NAMES of HA's stored LiteLLM settings (STORED_SETTINGS_SQL), or None when HA has
-    no such table or it cannot be read (the check goes on without the line)."""
+    """{sections, env, callbacks, hooks}: the NAMES of the stored LiteLLM settings in `cluster` (STORED_SETTINGS_SQL),
+    or None when the schema has no such table. An answer that cannot be read (over the output limit, a timeout, not a
+    JSON object) is UNREADABLE, which refuses (review iteration 2: it failed open, so ~1M stored names hid a hook)."""
     columns = {row[2]: row[3] for row in schema.columns if (row[0], row[1]) == CONFIG_TABLE}
     if columns.get('param_value') != 'jsonb' or 'param_name' not in columns:
         return None
     try:
         found = cluster.query_json(STORED_SETTINGS_SQL, DATABASE)
     except BackupError:
-        return None
+        return dict(UNREADABLE)
     if not isinstance(found, dict):
-        return None
+        return dict(UNREADABLE)
 
     def names(value):
         return [str(v)[:60] for v in value[:50] if isinstance(v, str)] if isinstance(value, list) else []
 
+    callbacks = names(found.get('callbacks'))
+    hooks = (names(found.get('hooks')) + names(found.get('nested'))
+             + [f'litellm_settings 回呼 {c}'[:60] for c in callbacks if '.' in c])
     return {'sections': names(found.get('sections')), 'env': names(found.get('env')),
-            'callbacks': names(found.get('callbacks'))}
+            'callbacks': [c for c in callbacks if '.' not in c], 'hooks': hooks}
+
+
+def stored_hooks_blocker(found):
+    """The blocker when HA's stored settings make LiteLLM load and run code (MODULE_HOOKS, NESTED_HOOKS) or cannot be
+    read completely, else None."""
+    if found and found.get('unreadable'):
+        return ('無法完整讀取 HA 的 LiteLLM 存在資料庫裡的設定（內容過大或讀取逾時），無法確認其中沒有會載入並執行程式的設定，'
+                '無法安全地搬過來。')
+    if not found or not found.get('hooks'):
+        return None
+    return (f'HA 的 LiteLLM 在資料庫裡存了會載入並執行程式的設定（{hacommon.names(found["hooks"])}），匯入後這台的 LiteLLM '
+            '會照著執行，無法安全地搬過來；請先在 HA 的 LiteLLM 移除這些設定，再重新備份。')
 
 
 def stored_settings_line(found):
@@ -1025,6 +1102,9 @@ def check(work, app):
     stored_line = stored_settings_line(settings)
     if stored_line:
         warnings.append(stored_line)
+    hooks = stored_hooks_blocker(settings)
+    if hooks:
+        blockers.append(hooks)
     for item in (_state_blocker(src, work.addon_info(SLUG)), blocker):
         if item:
             blockers.insert(0, item)
@@ -1289,6 +1369,10 @@ def convert(work, app, test_mode, out_dir):
     if blockers:
         raise BackupError('incompatible', f'LiteLLM 不能搬過來：{blockers[0]}', app=app.id)
     ha_schema = read_schema(cluster, found['migrations'])
+    settings = stored_settings(cluster, ha_schema)
+    hooks = stored_hooks_blocker(settings)
+    if hooks:
+        raise BackupError('incompatible', f'LiteLLM 不能搬過來：{hooks}', app=app.id)
     schema_dump = staging / 'target-schema.dump'
     work.log('讀取這台 LiteLLM 自己的資料庫結構（同一個快照；前後比對確認期間沒有結構變更）')
     trusted = trusted_schema(work, app, target, schema_dump, migrations)
@@ -1301,7 +1385,6 @@ def convert(work, app, test_mode, out_dir):
     detail = cluster.query_json(detail_sql(tables), DATABASE) if detail_sql(tables) else {}
     work.log(f'匯出 HA 的 LiteLLM 資料：{len(tables)} 個資料表的資料列（只當作資料來源，HA 的資料庫結構不會使用）')
     files, sequences = export_rows(work, cluster, trusted, staging)
-    settings = stored_settings(cluster, ha_schema)
     tmp.remove('hapg')
     tmp.remove_volume('hapg')
     work.checkpoint()
@@ -1318,6 +1401,13 @@ def convert(work, app, test_mode, out_dir):
     os.unlink(schema_dump)
     require_schema(pg, trusted, 'loaded')
     audit_new_cluster(pg, target.db_user)
+    # Review SR-8: the check above ran in HA's cluster, whose catalog HA's data directory controls (an edited built-in
+    # operator hid two stored hooks from it while COPY moved them). Decide again on what actually moved: the same
+    # query in the new cluster (this device's image and schema, HA's data only as rows); its names are the notes'.
+    settings = stored_settings(pg, trusted)
+    hooks = stored_hooks_blocker(settings)
+    if hooks:
+        raise BackupError('incompatible', f'LiteLLM 不能搬過來：{hooks}', app=app.id)
     counts = table_counts(pg, tables)
     differ = [f'{t}（HA {n}，匯入後 {counts.get(t)}）' for t, n in sorted(expected.items()) if counts.get(t) != n]
     now = _migrations(pg.query_json(MIGRATIONS_SQL, DATABASE))
