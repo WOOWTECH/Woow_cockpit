@@ -50,6 +50,7 @@ from pathlib import Path
 import re
 import subprocess
 import sys
+import threading
 import time
 
 HERE = Path(__file__).resolve().parent
@@ -60,6 +61,8 @@ LOCK = '/tmp/woowbk-dev-e-mutation.lock'
 HOLD_BUDGET = 40 * 60
 FLOOR = 12 * 1024 ** 3          # the team keeps >= 12 GiB free on the host at every moment
 NEED = 1536 * 1024 ** 2         # the upload copy in dev-e plus the check's throwaway cluster, with margin
+CANDIDATE_NEED = 4608 * 1024 ** 2  # the candidate: live html pack + html dir tar + cluster export + the archive
+WATCH_FLOOR = FLOOR + 256 * 1024 ** 2  # below it every running job of dev-e is cancelled (the job cleans up)
 FIXTURE = (LAB / 'ha-fixtures' / '20261123-batch2' / 'x86' / 'woow-b2-nextcloud-x86-enc-noshare'
            / 'woow-b2-nextcloud-x86-enc-noshare-20261123.tar')
 FIXTURE_SHA = '88e0f79415473c3453fb2889375b5fe0167e5d0a685d17da768ccc641c3c027f'
@@ -371,15 +374,42 @@ class Run:
         after = {b['id'] for b in drv.ok('list', ev=ev).get('backups') or []}
         ev.check('convert: no backup was added', after == before, sorted(after - before))
 
+    def watch_host(self, stop, tripped):
+        """While the candidate runs: the host floor (dev-e's engine only sees its own floor). On a breach every running
+        job of dev-e is cancelled through the helper; the job stops and removes its objects itself."""
+        while not stop.wait(2):
+            if host_free() >= WATCH_FLOOR:
+                continue
+            tripped.append(host_free())
+            try:
+                jobs = drv.ok('jobs', ev=self.ev).get('jobs') or []
+                for job in jobs:
+                    if job.get('state') in ('queued', 'running'):
+                        drv.helper('job-cancel', {'job_id': job['id']})
+            except Failed:
+                pass
+            return
+
     def candidate(self):
         ev = self.ev
         self.budget('candidate')
+        if not ev.check('candidate: the host keeps 12 GiB plus the candidate\'s need free', host_free() >= FLOOR + CANDIDATE_NEED,
+                        f'{host_free()} B'):
+            return
         before = {b['id'] for b in drv.ok('list', ev=ev).get('backups') or []}
         request = {'ha_backup_id': self.created_store, 'apps': ['nextcloud'], 'test_mode': False, 'confirm': True,
                    'request_id': drv.request_id('nc-candidate'), 'key': self.args.secrets['HA_BACKUP_KEY']}
         started = time.monotonic()
-        run = drv.device_python(CANDIDATE, {'request': request}, as_owner=False, timeout=5400)
+        stop, tripped = threading.Event(), []
+        watcher = threading.Thread(target=self.watch_host, args=(stop, tripped), daemon=True)
+        watcher.start()
+        try:
+            run = drv.device_python(CANDIDATE, {'request': request}, as_owner=False, timeout=5400)
+        finally:
+            stop.set()
+            watcher.join(timeout=60)
         took = time.monotonic() - started
+        ev.check('candidate: the host floor held during the conversion (no cancel needed)', not tripped, tripped)
         ev.save('candidate-run.json', run)
         job = drv.ok('job-status', {'job_id': run.get('job_id')}, ev=ev).get('job') if run.get('started') else {}
         ev.time('candidate-convert', 'noshare', 'nextcloud', took, job)
