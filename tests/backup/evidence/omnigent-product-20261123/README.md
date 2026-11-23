@@ -69,11 +69,12 @@ user, docs) together with its README and attack evidence. Two more changes of th
   the owner's uid AND gid maps, never root or the image's postgres ids) is the one kept; this lane's own variant
   (fixed uid 1, 1b6228e) was reverted (1ca1602) so that only one SR-2b change exists.
 
-`mutation-check-final.json` (engine `ha_omnigent.py` sha256 f3090f78…, `hacommon.py` 67f2ed25…): baseline 57/57
-pass; **24/24 protections caught** -- M01..M17 as above plus M18 `require_answers` (SR-1), M19
+`mutation-check-final.json` (engine `ha_omnigent.py` sha256 44c47017…, `hacommon.py` 67f2ed25…; first run on
+f3090f78… 24/24, then rerun after 1c81437): baseline 58/58 pass; **25/25 protections caught** -- M01..M17 as above plus M18 `require_answers` (SR-1), M19
 `require_sequence_sets` (SR-3), M20 pg_dump under `dump_user` (SR-2b), M21 `hacommon.names` control characters
 (SR-4, shared module), M22 `DATA_REFUSED` classification, M23 never root/postgres for the dump uid, M24 the dump uid
-mapped in the owner's uid and gid maps. The script now names the module each mutation changes.
+mapped in the owner's uid and gid maps, M25 the names in the SR-1 message through `hacommon.names` (the independent
+verifier's Low finding, fixed in 1c81437). The script now names the module each mutation changes.
 
 Unit tests on this tip: Omnigent modules (`test_ha_omnigent*`, `test_b1_01_guard`, `test_ha_common`) OK;
 `test_ha_headscale`, `test_ha_hermes`, `test_ha_litellm_candidate`, `test_ha_flows`, `test_ha_import`,

@@ -1,8 +1,8 @@
 {
  "module": "woowbackup/ha_omnigent.py",
- "module_sha256": "f3090f78db113f0c240025a651dbf910d15c96b412dd37b2b6d82fdac5092922",
+ "module_sha256": "44c47017901959bf898a1e2009625248339b6110a69773461f8956ad1c87511a",
  "modules_sha256": {
-  "woowbackup/ha_omnigent.py": "f3090f78db113f0c240025a651dbf910d15c96b412dd37b2b6d82fdac5092922",
+  "woowbackup/ha_omnigent.py": "44c47017901959bf898a1e2009625248339b6110a69773461f8956ad1c87511a",
   "woowbackup/hacommon.py": "67f2ed25307a7ba5066824ebe1c5e9b5232ac4a9e572bc2d3df45295288ec6f3"
  },
  "tests": [
@@ -14,7 +14,7 @@
  ],
  "baseline": {
   "returncode": 0,
-  "tests": 57,
+  "tests": 58,
   "failures": 0
  },
  "mutations": [
@@ -24,8 +24,8 @@
    "module": "woowbackup/ha_omnigent.py",
    "applied": true,
    "caught": true,
-   "failures": 41,
-   "tests": 57
+   "failures": 42,
+   "tests": 58
   },
   {
    "id": "M02",
@@ -34,7 +34,7 @@
    "applied": true,
    "caught": true,
    "failures": 5,
-   "tests": 57
+   "tests": 58
   },
   {
    "id": "M03",
@@ -43,7 +43,7 @@
    "applied": true,
    "caught": true,
    "failures": 10,
-   "tests": 57
+   "tests": 58
   },
   {
    "id": "M04",
@@ -52,7 +52,7 @@
    "applied": true,
    "caught": true,
    "failures": 2,
-   "tests": 57
+   "tests": 58
   },
   {
    "id": "M05",
@@ -61,7 +61,7 @@
    "applied": true,
    "caught": true,
    "failures": 2,
-   "tests": 57
+   "tests": 58
   },
   {
    "id": "M06",
@@ -70,7 +70,7 @@
    "applied": true,
    "caught": true,
    "failures": 1,
-   "tests": 57
+   "tests": 58
   },
   {
    "id": "M07",
@@ -79,7 +79,7 @@
    "applied": true,
    "caught": true,
    "failures": 8,
-   "tests": 57
+   "tests": 58
   },
   {
    "id": "M08",
@@ -88,7 +88,7 @@
    "applied": true,
    "caught": true,
    "failures": 1,
-   "tests": 57
+   "tests": 58
   },
   {
    "id": "M09",
@@ -97,7 +97,7 @@
    "applied": true,
    "caught": true,
    "failures": 4,
-   "tests": 57
+   "tests": 58
   },
   {
    "id": "M10",
@@ -106,7 +106,7 @@
    "applied": true,
    "caught": true,
    "failures": 13,
-   "tests": 57
+   "tests": 58
   },
   {
    "id": "M11",
@@ -115,7 +115,7 @@
    "applied": true,
    "caught": true,
    "failures": 1,
-   "tests": 57
+   "tests": 58
   },
   {
    "id": "M12",
@@ -124,7 +124,7 @@
    "applied": true,
    "caught": true,
    "failures": 2,
-   "tests": 57
+   "tests": 58
   },
   {
    "id": "M13",
@@ -133,7 +133,7 @@
    "applied": true,
    "caught": true,
    "failures": 1,
-   "tests": 57
+   "tests": 58
   },
   {
    "id": "M14",
@@ -142,7 +142,7 @@
    "applied": true,
    "caught": true,
    "failures": 5,
-   "tests": 57
+   "tests": 58
   },
   {
    "id": "M15",
@@ -151,7 +151,7 @@
    "applied": true,
    "caught": true,
    "failures": 1,
-   "tests": 57
+   "tests": 58
   },
   {
    "id": "M16",
@@ -160,7 +160,7 @@
    "applied": true,
    "caught": true,
    "failures": 1,
-   "tests": 57
+   "tests": 58
   },
   {
    "id": "M17",
@@ -169,7 +169,7 @@
    "applied": true,
    "caught": true,
    "failures": 3,
-   "tests": 57
+   "tests": 58
   },
   {
    "id": "M18",
@@ -177,8 +177,8 @@
    "module": "woowbackup/ha_omnigent.py",
    "applied": true,
    "caught": true,
-   "failures": 5,
-   "tests": 57
+   "failures": 6,
+   "tests": 58
   },
   {
    "id": "M19",
@@ -187,7 +187,7 @@
    "applied": true,
    "caught": true,
    "failures": 5,
-   "tests": 57
+   "tests": 58
   },
   {
    "id": "M20",
@@ -196,7 +196,7 @@
    "applied": true,
    "caught": true,
    "failures": 1,
-   "tests": 57
+   "tests": 58
   },
   {
    "id": "M23",
@@ -205,7 +205,7 @@
    "applied": true,
    "caught": true,
    "failures": 1,
-   "tests": 57
+   "tests": 58
   },
   {
    "id": "M24",
@@ -214,7 +214,16 @@
    "applied": true,
    "caught": true,
    "failures": 1,
-   "tests": 57
+   "tests": 58
+  },
+  {
+   "id": "M25",
+   "protection": "the names in the SR-1 message are cut and without control characters (verifier, SR-4 class)",
+   "module": "woowbackup/ha_omnigent.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 58
   },
   {
    "id": "M21",
@@ -222,8 +231,8 @@
    "module": "woowbackup/hacommon.py",
    "applied": true,
    "caught": true,
-   "failures": 1,
-   "tests": 57
+   "failures": 2,
+   "tests": 58
   },
   {
    "id": "M22",
@@ -232,9 +241,9 @@
    "applied": true,
    "caught": true,
    "failures": 5,
-   "tests": 57
+   "tests": 58
   }
  ],
  "all_caught": true,
- "seconds": 455.3
+ "seconds": 880.9
 }
