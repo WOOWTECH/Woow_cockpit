@@ -657,7 +657,7 @@ phase_check_opendesign() {
 declare -A WAKE_UNITS=([nextcloud]="nextcloud.target" [code-server]="code-server.service"
                        [opendesign]="open-design.service open-design-nginx.service open-design-mcp.service open-design-terminal.service")
 declare -A WAKE_TIMERS=([nextcloud]="nextcloud-cron.timer" [code-server]="code-server-health.timer" [opendesign]="")
-declare -A STOP_UNITS=([nextcloud]="nextcloud-cron.timer nextcloud.target"
+declare -A STOP_UNITS=([nextcloud]="nextcloud-cron.timer nextcloud-cron.service nextcloud.target"
                        [code-server]="code-server-health.timer code-server-health.service code-server.service"
                        [opendesign]="open-design-terminal.service open-design-mcp.service open-design-nginx.service open-design.service")
 # The app's installed container quadlets (a stopped unit leaves no container: quadlet runs them with --rm).
