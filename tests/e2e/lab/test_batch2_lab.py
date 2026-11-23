@@ -86,6 +86,13 @@ class Batch2ScriptsTest(unittest.TestCase):
         self.assertIn('RD_SHA256=0639ab0e3413142a76334af20ca88cba0a351a11c9c07effa0f1eb7f05941f2c', text)
         self.assertIn('FLOOR_GIB=12', text)
 
+    def test_every_app_has_its_check_function(self):
+        """phase_check calls phase_check_<app> with '-' as '_' (code-server -> phase_check_code_server)."""
+        text = (HERE / 'deploy-batch2.sh').read_text()
+        self.assertIn('"phase_check_${app//-/_}" || failures=1', text)
+        for app in ('nextcloud', 'code-server', 'opendesign'):
+            self.assertIn(f'phase_check_{app.replace("-", "_")}() {{', text)
+
 
 
 def _layer(entries, gzip=False):

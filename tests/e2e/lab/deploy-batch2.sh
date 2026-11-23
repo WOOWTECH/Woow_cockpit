@@ -517,7 +517,7 @@ print("\n".join(json.load(open(f"/etc/woowtech-cockpit/backup/apps/{sys.argv[1]}
             echo "unit $unit: $state"
             [ "$state" = active ] || failures=1
         done
-        "phase_check_$app" || failures=1
+        "phase_check_${app//-/_}" || failures=1
     done
     failed=$(owner systemctl --user list-units --failed --no-legend --plain 2>/dev/null | awk '{print $1}' | xargs)
     echo "failed user units: ${failed:-none}"
