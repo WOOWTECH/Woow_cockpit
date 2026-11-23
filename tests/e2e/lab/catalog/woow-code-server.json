@@ -1,0 +1,29 @@
+{
+  "schema": 1,
+  "id": "woow-code-server",
+  "name": "code-server 開發環境",
+  "description": "瀏覽器版 VS Code（code-server）與 Pi、Claude Code、Codex 代理程式；工作區是擁有者的桌面資料夾（實驗室項目，正式設備另行審查）",
+  "owner": "appowner",
+  "adapter": "quadlet-postgres",
+  "quadlet": {
+    "files": ["code-server.container", "woow-code-server-pi.volume", "woow-code-server-ide.volume",
+              "woow-code-server-extensions.volume"]
+  },
+  "units": ["code-server.service"],
+  "writer_units": ["code-server.service"],
+  "postgres": [],
+  "volumes": [
+    {"name": "woow-code-server-pi-data", "label": "代理程式資料（Pi、Claude Code、Codex 的對話與技能）"},
+    {"name": "woow-code-server-ide", "label": "VS Code 使用者設定"},
+    {"name": "woow-code-server-extensions", "label": "使用者安裝的延伸模組"}
+  ],
+  "data_dirs": [
+    {"path": "Desktop", "label": "工作區（桌面資料夾）"}
+  ],
+  "secrets": [{"name": "code-server-config"}],
+  "config_files": [{"path": ".config/woow-code-server/woow-code-server.env", "mode": "0600"}],
+  "health": [{"type": "http", "url": "http://127.0.0.1:18443/healthz", "expect_status": 200, "timeout_seconds": 180}],
+  "verify": [
+    {"id": "ide-files", "type": "files-digest", "volume": "woow-code-server-ide", "label": "VS Code 使用者設定"}
+  ]
+}
