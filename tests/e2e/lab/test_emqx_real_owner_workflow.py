@@ -1218,3 +1218,94 @@ class FoundationTests(unittest.TestCase):
             self.assertFalse(any(a[0]=='rm' for a in calls))
             self.assertEqual(state['Id'],'b'*64)
             self.assertFalse(list(self.root.glob(self.fixture.prefix+'-mqtt-*')))
+
+    def delivery_rounds(self,delivery=None,**changes):
+        ctx,app,state=self.context();(self.root/'.config/systemd/user').mkdir(parents=True,exist_ok=True)
+        clients=self.clients();credentials=m.SourceAPICredentials(self.api_values());events=[]
+        session=SimpleNamespace(registry=object());object_expected=object();delivered=[]
+        def restore(context,request):
+            events.append('restore')
+            if events.count('restore')==1:return {'changed':True}
+            ctx.adapter(app).imported_hook();(self.root/'.config'/self.fixture.prefix/'fail-once').unlink()
+            raise flows.RolledBack(BackupError('job-failed','generated'),{'rolled_back':True})
+        def activity(provision,supplied,actual_clients,actual_credentials,expected):
+            self.assertIs(supplied,session);self.assertIs(actual_clients,clients)
+            self.assertIs(actual_credentials,credentials);self.assertIs(expected,object_expected)
+            events.append('delivery')
+            if delivery is not None:raise delivery
+            delivered.append(object());return delivered[-1]
+        kwargs=dict(clients=clients,session=session,api_credentials=credentials,api_results=[],negative_results=[],
+            target_mode=m.IMPORTED_MNESIA,object_expected=object_expected,object_results=[],delivery_results=[])
+        kwargs.update(changes)
+        with patch.object(flows,'run_restore',side_effect=restore),patch.object(m,'_ready'), \
+             patch.object(m,'validate_source_mqtt',side_effect=lambda *a,**kw:events.append('mqtt')), \
+             patch.object(m,'_source_api_activity',side_effect=lambda *a,**kw:events.append('api') or object()), \
+             patch.object(m,'_source_negative_activity',side_effect=lambda *a,**kw:events.append('negative') or object()), \
+             patch.object(m,'_assert_imported_acl_api',side_effect=lambda observed:events.append('acl_api')), \
+             patch.object(m,'_delivery_activity',side_effect=activity), \
+             patch.object(m,'_post_activity_capture',side_effect=lambda p,prior:events.append('capture') or object()), \
+             patch.object(m,'_compare_source_objects',side_effect=lambda *a,**kw:events.append('objects') or object()):
+            try:m._restore_and_rollback(ctx,app,self.provision,'generated-package',state,**kwargs)
+            finally:self.delivery_events=events
+        return kwargs,delivered
+
+    def test_imported_restore_round_proves_rule_delivery_after_negative_before_capture_once(self):
+        kwargs,delivered=self.delivery_rounds()
+        self.assertEqual(self.delivery_events,['restore','mqtt','api','negative','acl_api','delivery','capture','objects',
+            'restore','mqtt','api','negative','acl_api','capture','objects','mqtt','api','negative','acl_api','capture','objects'])
+        self.assertEqual(kwargs['delivery_results'],delivered);self.assertEqual(len(delivered),1)
+
+    def test_delivery_refusal_stops_native_capture_and_later_rounds(self):
+        with self.assertRaises(m.RealOwnerRefused) as caught:
+            self.delivery_rounds(delivery=m.RealOwnerRefused('delivery_republish_timeout'))
+        self.assertEqual(caught.exception.phase,'delivery_republish_timeout')
+        self.assertEqual(self.delivery_events,['restore','mqtt','api','negative','acl_api','delivery'])
+
+    def test_delivery_requires_imported_policy_api_credentials_and_fresh_list(self):
+        for changes in (dict(target_mode=m.FILE_BASELINE),dict(delivery_results=[object()]),dict(delivery_results=()),
+                        dict(api_credentials=None,api_results=None,negative_results=None,object_results=None)):
+            with self.subTest(changes=sorted(changes)):
+                with self.assertRaises(m.RealOwnerRefused) as caught:self.delivery_rounds(**changes)
+                self.assertEqual(caught.exception.phase,'delivery_input');self.assertEqual(self.delivery_events,[])
+        self.assertEqual(m._delivery_plan(m.IMPORTED_MNESIA),[]);self.assertIsNone(m._delivery_plan(m.FILE_BASELINE))
+        from emqx_controlled_delivery import LABELS
+        self.assertTrue({'delivery',*('delivery_'+label for label in LABELS)}<=m.PHASES)
+        self.assertFalse(any(p.startswith(('rollback_delivery','restart_delivery')) for p in m.PHASES))
+
+    def test_actual_delivery_callsite_binds_current_cid_session_runtime_and_final_scan(self):
+        from test_emqx_controlled_delivery import DeliveryTests
+        from emqx_runtime_workflow import PrivateSession
+        from emqx_private_evidence import names_receipt,SOURCE_NAMES
+        from emqx_private_boundary import PrivateFailure
+        import emqx_controlled_delivery as delivery
+        issued=DeliveryTests('test_restored_rules_deliver_republish_and_http_action_exactly_once')
+        issued.setUp();self.addCleanup(issued.doCleanups)
+        session=PrivateSession(object(),issued.prior,{},None)
+        with patch.object(m,'_inspect',return_value=issued.doc[0]),patch.object(m,'fixture_quiescence',side_effect=lambda p:issued.quiesce()):
+            result=m._delivery_activity(issued.provision,session,issued.clients,issued.credentials,issued.source)
+        self.assertIs(result._runtime,issued.runtime);self.assertEqual(issued.active,set())
+        raw=names_receipt('restore','passed',SOURCE_NAMES)
+        m._scan_delivery_receipt(raw,[result],session)
+        for bad in ([result,result],[],[object()]):
+            with self.assertRaises(m.RealOwnerRefused) as caught:m._scan_delivery_receipt(raw,bad,session)
+            self.assertEqual(caught.exception.phase,'delivery')
+        with self.assertRaises(m.RealOwnerRefused) as caught:m._scan_delivery_receipt(raw+b'generated-gateway-password',[result],session)
+        self.assertEqual(caught.exception.phase,'delivery')
+        with patch.object(m,'_inspect',return_value=issued.doc[0]), \
+             patch.object(delivery,'run_rule_delivery',side_effect=delivery.DeliveryRefused('http_rule')):
+            with self.assertRaises(m.RealOwnerRefused) as caught:
+                m._delivery_activity(issued.provision,session,issued.clients,issued.credentials,issued.source)
+        self.assertEqual(caught.exception.phase,'delivery_http_rule')
+        for failure in (ValueError('generated-private'),PrivateFailure('generated-private')):
+            with patch.object(m,'_inspect',return_value=issued.doc[0]),patch.object(delivery,'run_rule_delivery',side_effect=failure):
+                with self.assertRaises(m.RealOwnerRefused) as caught:
+                    m._delivery_activity(issued.provision,session,issued.clients,issued.credentials,issued.source)
+            self.assertEqual(caught.exception.phase,'delivery')
+        foreign=delivery.RuleDelivery(object(),issued.source,{})
+        with patch.object(m,'_inspect',return_value=issued.doc[0]),patch.object(delivery,'run_rule_delivery',return_value=foreign):
+            with self.assertRaises(m.RealOwnerRefused) as caught:
+                m._delivery_activity(issued.provision,session,issued.clients,issued.credentials,issued.source)
+        self.assertEqual(caught.exception.phase,'delivery')
+        with self.assertRaises(m.RealOwnerRefused) as caught:
+            m._delivery_activity(issued.provision,SimpleNamespace(registry=issued.prior),issued.clients,issued.credentials,issued.source)
+        self.assertEqual(caught.exception.phase,'delivery')

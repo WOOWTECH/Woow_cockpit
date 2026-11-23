@@ -81,6 +81,9 @@ PHASES=PHASES | frozenset(r+'_'+o for r in ('restore','rollback','restart') for 
 # Rounds 2/3 (after automatic rollback, after restart) prefix every per-round
 # client/API/native/object label, so a refusal names its round too.
 PHASES=PHASES | frozenset(r+'_'+p for r in ('rollback','restart') for p in PHASES)
+# Restore round only (imported Mnesia ACL target): HA rules really execute.
+from emqx_controlled_delivery import LABELS as DELIVERY_LABELS
+PHASES=PHASES | frozenset(('delivery',*('delivery_'+label for label in DELIVERY_LABELS)))
 _ROLLBACK_PROBLEM_TEXT=(('回復後健康檢查未通過','health'),('回復後資料與還原前不一致','verify'),
     ('無法重新啟動服務','writers'),('無法啟動服務','start'),('未預期','unexpected'),
     ('沒有可用的還原前備份','no_pending'),('還原前資料不含此應用','manifest'))
@@ -324,7 +327,7 @@ def _package_same_target(ctx,app,provision,volumes,root):
     return result['backup_id']
 
 
-def _restore_and_rollback(ctx,app,provision,backup_id,state,*,clients=None,session=None,api_credentials=None,api_results=None,negative_results=None,target_mode=FILE_BASELINE,object_expected=None,object_results=None):
+def _restore_and_rollback(ctx,app,provision,backup_id,state,*,clients=None,session=None,api_credentials=None,api_results=None,negative_results=None,target_mode=FILE_BASELINE,object_expected=None,object_results=None,delivery_results=None):
     """Product restore, destructive one-shot startup failure, automatic rollback.
 
     Live callers supply source clients/API credentials and require positive MQTT,
@@ -333,6 +336,8 @@ def _restore_and_rollback(ctx,app,provision,backup_id,state,*,clients=None,sessi
     FILE baseline uses the explicit file-policy API profile (exact builtin-absent 404,
     exact file ACL readback); the inactive source ACL rows are then proven ONLY from
     each phase's fresh native capture, after the object comparison.
+    With delivery_results (imported Mnesia ACL only) the restore round also proves
+    the HA republish rule and HTTP action execute, before that round's capture.
     """
     if target_mode not in (FILE_BASELINE,IMPORTED_MNESIA):raise RealOwnerRefused('profile')
     _assert_binding(provision,app)
@@ -343,6 +348,8 @@ def _restore_and_rollback(ctx,app,provision,backup_id,state,*,clients=None,sessi
         raise RealOwnerRefused('source_negative')
     if api_credentials is not None and (object_expected is None or type(object_results) is not list or object_results):
         raise RealOwnerRefused('object_integrity')
+    if delivery_results is not None and (type(delivery_results) is not list or delivery_results
+            or api_credentials is None or target_mode!=IMPORTED_MNESIA):raise RealOwnerRefused('delivery_input')
     request={'backup_id':backup_id,'apps':['emqx'],'accept_unauthenticated':True}
     try:outcome=flows.run_restore(ctx,request)
     except BaseException as error:raise RealOwnerRefused(_restore_refusal('restore',error)) from None
@@ -352,6 +359,8 @@ def _restore_and_rollback(ctx,app,provision,backup_id,state,*,clients=None,sessi
     if api_credentials is not None:api_results.append(_source_api_activity(provision,post_registry,session,clients,api_credentials,target_mode=target_mode))
     if api_credentials is not None:negative_results.append(_source_negative_activity(provision,session,clients,api_results[-1]))
     if api_credentials is not None and target_mode==IMPORTED_MNESIA:_assert_imported_acl_api(api_results[-1])
+    if delivery_results is not None:
+        delivery_results.append(_delivery_activity(provision,session,clients,api_credentials,object_expected))
     if session is not None:post_registry=_post_activity_capture(provision,post_registry)
     if api_credentials is not None:object_results.append(_compare_source_objects(object_expected,api_results[-1],post_registry))
     if api_credentials is not None and target_mode==FILE_BASELINE:_assert_file_policy_native_acl(api_results[-1],post_registry)
@@ -589,6 +598,43 @@ def _scan_source_negative_receipt(receipt,results,api_results,session):
             result.scan(receipt)
     except BaseException:
         raise RealOwnerRefused('source_negative') from None
+
+
+def _delivery_activity(provision,session,clients,credentials,object_expected):
+    """Restored broker executes the HA republish rule and original HTTP action.
+
+    Same current-CID/exclusion pattern as the API activity; fixed labels only.
+    """
+    from emqx_controlled_delivery import run_rule_delivery,RuleDelivery,DeliveryRefused
+    from emqx_runtime_workflow import PrivateSession,CombinedRegistry
+    try:
+        if type(session) is not PrivateSession or type(session.registry) is not CombinedRegistry:raise ValueError()
+        cid=_inspect(provision).get('Id')
+        if type(cid) is not str or re.fullmatch('[0-9a-f]{64}',cid) is None:raise ValueError()
+        result=run_rule_delivery(registry=session.registry,provision=provision,expected_container_id=cid,
+            clients=clients,api_credentials=credentials,source_objects=object_expected,
+            quiesce=lambda:fixture_quiescence(provision))
+        if type(result) is not RuleDelivery or result._runtime is not session.registry._runtime:raise ValueError()
+        return result
+    except DeliveryRefused as error:raise RealOwnerRefused('delivery_'+error.label) from None
+    except BaseException:raise RealOwnerRefused('delivery') from None
+
+
+def _delivery_plan(target_mode):
+    # The FILE baseline ACL denies the HA roles' rule topics by design, so rule
+    # delivery is assessed only where the imported HA Mnesia ACL is active.
+    return [] if target_mode==IMPORTED_MNESIA else None
+
+
+def _scan_delivery_receipt(receipt,results,session):
+    from emqx_controlled_delivery import RuleDelivery
+    try:
+        if (type(receipt) is not bytes or type(results) is not list or len(results)!=1
+                or type(results[0]) is not RuleDelivery or results[0]._runtime is not session.registry._runtime):
+            raise ValueError()
+        results[0].scan(receipt)
+    except BaseException:
+        raise RealOwnerRefused('delivery') from None
 
 
 def _capture_source_objects(captured,session,source_mode):
@@ -1010,10 +1056,11 @@ def run_real_framed_owner(stream,*,private_parent,source_mode,no_live=True,targe
                 backup_id=_package_same_target(ctx,app,provision,volumes,root)
                 phase='restore'
                 api_results=[];negative_results=[];object_results=[]
+                delivery_results=_delivery_plan(target_mode)
                 try:
                     post_registry=_restore_and_rollback(ctx,app,provision,backup_id,state,clients=clients,session=session,
                         api_credentials=api_credentials,api_results=api_results,negative_results=negative_results,target_mode=target_mode,
-                        object_expected=object_expected,object_results=object_results)
+                        object_expected=object_expected,object_results=object_results,delivery_results=delivery_results)
                 except RealOwnerRefused as error:
                     phase=error.phase
                     raise
@@ -1024,9 +1071,11 @@ def run_real_framed_owner(stream,*,private_parent,source_mode,no_live=True,targe
         phase='source_api';_scan_source_api_receipt(receipt,api_results,session)
         phase='source_negative';_scan_source_negative_receipt(receipt,negative_results,api_results,session)
         phase='object_integrity';_scan_object_receipt(receipt,object_expected,object_results,api_results,session)
+        if delivery_results is not None:phase='delivery';_scan_delivery_receipt(receipt,delivery_results,session)
         return {'evidence_bytes':receipt,'scope':'private-same-target-product-flow', 'client_validation':('source-login-imported-mnesia-acl-retained-after-restore-rollback-restart' if target_mode==IMPORTED_MNESIA else 'source-login-target-file-acl-retained-after-restore-rollback-restart'),
                 'source_mnesia_acl_behavior':('mqtt-validated-imported-database-with-lab-only-file' if target_mode==IMPORTED_MNESIA else 'not-assessed-target-file-authorizer'),
                 'source_mnesia_acl_rows':('api-b1-inventory-active-imported-database' if target_mode==IMPORTED_MNESIA else 'native-b1-inventory-inactive-under-target-file-acl-api404-not-proof'),
+                'rule_delivery':('republish-and-original-http-action-executed-after-restore' if delivery_results is not None else 'not-assessed-target-file-authorizer'),
                 'source_final_state':'not-assessed','commercial_acceptance':'not-assessed'}
     except RealOwnerRefused:
         raise
