@@ -2014,7 +2014,9 @@ html,data}`; facts `phase3/facts/nextcloud.md`, owner decisions D1-D5 applied wi
    dir is the volume export with its top folder owned like the live one.
 5. config.php = the live one (base: URLs, trusted domains, proxies, database credentials, data directory, caches, mail,
    maintenance window) + HA's `instanceid`, `passwordsalt`, `secret` + HA's `twofactor_enforced*` and
-   `app_install_overwrite` (D1; a live two-factor enforcement HA lacks stays), written in Nextcloud's format with the live
+   `app_install_overwrite` (D1; a live two-factor enforcement HA lacks stays) + a new `data-fingerprint` (md5 of the time,
+   as `occ maintenance:data-fingerprint` writes it; the package's own restore runs that command, scripts/restore.sh:76: sync
+   clients then treat the server as restored and keep local files it lacks), written in Nextcloud's format with the live
    file's owner and mode; before packaging the live image's PHP (throwaway container, network none, read-only root, the
    file on stdin) must lint it and return exactly the merged values. html dir = the live pack without `config/config.php`
    and without the custom apps HA brings, plus the merged file and HA's custom apps (D2; owner www-data of the live image);
@@ -2022,7 +2024,8 @@ html,data}`; facts `phase3/facts/nextcloud.md`, owner decisions D1-D5 applied wi
    kept: D5); Redis dir = its top folder only, owned like the live one. Every dir tar is checked like a restore reads it.
 6. Notes and reminders: the users, files, shares, calendars, contacts and app passwords become HA's; the URL, database
    password, mail and Office settings stay; HA's custom apps; stop the HA add-on for good (same instance identity); log in
-   with HA's accounts and point sync, CalDAV and CardDAV clients to this device's URL; public links and federated IDs
+   with HA's accounts and point sync, CalDAV and CardDAV clients to this device's URL; the new data fingerprint (sync
+   clients keep their local files); public links and federated IDs
    still name HA; mail settings did not move; Office not enabled on HA; the MCP lines for `nextcloud-mcp-admin` and
    「Woow Nextcloud MCP Server」 (`engine_mcp_lines`). Test mode changes nothing else for Nextcloud.
 

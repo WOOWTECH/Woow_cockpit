@@ -32,7 +32,9 @@ Collabora; every count, owner, grant, extension and value is verified; PostgreSQ
 carried; clean stop, `pg_controldata` "shut down". config.php = the LIVE config.php (URLs, trusted domains, database
 credentials, mail, caches, data directory) plus HA's `instanceid`, `passwordsalt`, `secret` (app data folder, ICrypto:
 app passwords, TOTP, encrypted app values) and HA's two-factor enforcement and app_install_overwrite (owner decision
-D1; never weaker than the target's enforcement); the live image's PHP parses it and returns exactly the merged values.
+D1; never weaker than the target's enforcement) and a new `data-fingerprint` (what the package's own restore sets with
+`occ maintenance:data-fingerprint`, so sync clients treat the server as restored); the live image's PHP parses it and
+returns exactly the merged values.
 The html dir is the live dir without config.php and without the custom apps HA brings, plus the merged config.php and
 HA's custom apps (decision D2); the data dir is HA's data directory (owner www-data of the live image, top dir like
 the live one; web-updater backups `updater-*` skipped, previews kept: decision D5); the Redis dir is empty; the
@@ -87,7 +89,8 @@ HA_OWN = frozenset({'version', 'installed', 'dbtype', 'dbhost', 'dbname', 'dbuse
                     'overwriteprotocol', 'overwritewebroot', 'trusted_proxies', 'memcache.local', 'memcache.locking',
                     'memcache.distributed', 'redis', 'maintenance', 'maintenance_window_start', 'default_phone_region',
                     'apps_paths', 'logfile', 'loglevel', 'log_type', 'logtimezone', 'allow_local_remote_servers',
-                    'htaccess.RewriteBase', 'upgrade.disable-web', 'check_data_directory_permissions'})
+                    'htaccess.RewriteBase', 'upgrade.disable-web', 'check_data_directory_permissions',
+                    'data-fingerprint'})
 SECRET_KEYS = ('secret', 'passwordsalt', 'dbpassword', 'mail_smtppassword')
 # The Office (richdocuments) settings and the core setting the target keeps exactly as its live database has them.
 LIVE_APPCONFIG = (('richdocuments', 'wopi_url'), ('richdocuments', 'public_wopi_url'),
@@ -374,6 +377,14 @@ def merge_config(ha, live):
     skipped = [key for key in ha if isinstance(key, str) and key not in HA_OWN and key not in FROM_HA
                and key not in FROM_HA_POLICY and not key.startswith('mail_') and live.get(key) != ha[key]]
     return merged, carried, skipped
+
+
+def data_fingerprint():
+    """A new `data-fingerprint` system value, written the way `occ maintenance:data-fingerprint` writes it (md5 of the
+    time). The Podman package's own restore runs that command (Woow_podman_nextcloud scripts/restore.sh:76): sync
+    clients that see a new fingerprint treat the server as restored from a backup and do not delete their local files
+    that the restored server lacks."""
+    return hashlib.md5(str(int(time.time())).encode('ascii'), usedforsecurity=False).hexdigest()
 
 
 def storage_id(datadir):
@@ -1044,7 +1055,8 @@ def import_texts(data):
     """(notes, reminders) of a conversion (haimport.import_texts; CONTRACT section 7 HaImport)."""
     notes = ['Nextcloud 的使用者、檔案、分享、行事曆、聯絡人與應用程式密碼會換成 HA 的；這台原本的 Nextcloud 帳號與檔案'
              '不會保留（匯入前的自動備份裡還有）。',
-             'Nextcloud 的網址、資料庫密碼、郵件與快取設定保持這台的；Office 會改用這台的 Collabora。']
+             'Nextcloud 的網址、資料庫密碼、郵件與快取設定保持這台的；Office 會改用這台的 Collabora。',
+             'Nextcloud 會標示資料是從備份還原的（新的資料指紋），同步用戶端連上後不會因為這次匯入刪掉電腦上的檔案。']
     apps = data.get('custom_apps') or []
     if apps:
         notes.append(f'HA 的 Nextcloud 應用 {hacommon.names(apps)} 會一起放進這台的 custom_apps。')
@@ -1420,6 +1432,7 @@ def convert(work, app, test_mode, out_dir):
 
     # config.php: the live one plus HA's identity and policy keys, parsed back by the live image's PHP.
     merged, carried, _skipped = merge_config(src.config, target.config)
+    merged['data-fingerprint'] = data_fingerprint()  # what the package's restore does after a restore
     config_data = render_config(merged)
     php_check(tmp, live.app_image, config_data, merged)
     live_html = staging / 'live-html.tar'

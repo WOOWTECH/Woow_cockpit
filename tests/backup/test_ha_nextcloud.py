@@ -56,6 +56,7 @@ $CONFIG = array (
   'installed' => true,
   'maintenance' => false,
   'maintenance_window_start' => 1,
+  'data-fingerprint' => '00000000000000000000000000000001',
 );
 """
 HA_CONFIG = b"""<?php
@@ -83,6 +84,7 @@ $CONFIG = array (
   'enable_previews' => true,
   'preview_max_x' => 2048,
   'ratio' => 1.5,
+  'data-fingerprint' => '0000000000000000000000000000000a',
 );
 """
 INFO_NOTES = b'<?xml version="1.0"?><info><id>notes</id><version>4.12.0</version><dependencies>' \
@@ -487,6 +489,9 @@ class ConvertTests(NextcloudCase):
         self.assertIn('./custom_apps/notes/lib/Notes.php', html)
         self.assertIn('./config/redis.config.php', html)
         self.assertEqual(self.world.php, [html['./config/config.php'][1]])
+        # A new data fingerprint, as the package's restore sets with occ maintenance:data-fingerprint.
+        self.assertRegex(merged['data-fingerprint'], r'\A[0-9a-f]{32}\Z')
+        self.assertNotIn(merged['data-fingerprint'], ('00000000000000000000000000000001', '0000000000000000000000000000000a'))
         data = members(self.world.dirs[DIRS[3]])
         self.assertEqual((data['.'][0].uid, data['.'][0].mode), (33, 0o770))
         self.assertEqual(data['./admin/files/hello.txt'][1], b'hello from HA')
