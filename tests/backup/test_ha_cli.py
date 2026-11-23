@@ -146,7 +146,7 @@ class HaJobStartTests(HaCliCase):
                                                               'confirm', 'odoo_database', 'key'})
         valid = 'ha-' + '0' * 20
         base = {'ha_backup_id': valid, 'apps': ['odoo'], 'request_id': 'req-ha-check-1'}
-        for request in ({**base, 'apps': ['nextcloud']}, {**base, 'apps': ['odoo', 'odoo']}, {**base, 'apps': []},
+        for request in ({**base, 'apps': ['wordpress']}, {**base, 'apps': ['odoo', 'odoo']}, {**base, 'apps': []},
                         {**base, 'extra': 1}, {'ha_backup_id': valid, 'apps': ['odoo']}, {**base, 'key': ''}):
             with self.subTest(request=request):
                 self.assertEqual(self.error_code(['ha-check-start'], request), 'invalid-request')

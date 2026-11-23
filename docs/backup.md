@@ -320,7 +320,7 @@ Cockpit「備份與還原」頁為 rootless Podman Quadlet 應用建立備份，
 
 ## 從 Home Assistant 備份匯入
 
-可以把 Home Assistant OS（HA）的備份檔上傳到這台設備，把其中 WOOWTECH 的 Odoo、n8n、Omnigent、Hermes、EMQX 與 Headscale 附加元件的資料搬到這台的 Podman 應用。整個過程分成三段：**檢查**（不變更任何資料）→ **轉換**成這台的備份（不停機、不變更任何資料）→ 用一般的**還原**步驟取代這台的資料（和一般還原一樣，先自動保存還原前備份，失敗自動回復）。需要支援 HA 匯入的備份元件；較舊的備份元件會說明需要更新（見下方「錯誤與提示」）。
+可以把 Home Assistant OS（HA）的備份檔上傳到這台設備，把其中 WOOWTECH 的 Odoo、n8n、Omnigent、Hermes、EMQX、Headscale 與 Nextcloud 附加元件的資料搬到這台的 Podman 應用。整個過程分成三段：**檢查**（不變更任何資料）→ **轉換**成這台的備份（不停機、不變更任何資料）→ 用一般的**還原**步驟取代這台的資料（和一般還原一樣，先自動保存還原前備份，失敗自動回復）。需要支援 HA 匯入的備份元件；較舊的備份元件會說明需要更新（見下方「錯誤與提示」）。
 
 ### 可以匯入什麼
 
@@ -332,6 +332,7 @@ Cockpit「備份與還原」頁為 rootless Podman Quadlet 應用建立備份，
 | WOOWTECH Hermes 附加元件（`*_woow-hermes`） | 「Hermes 代理」 | 對話、記憶、技能、排程、外掛與 HA 的設定檔（`config.yaml`）一起搬；這台的 Dashboard 密碼、API 與 Webhook 金鑰、`hermes.env` 保留 |
 | WOOWTECH EMQX 附加元件（`*_woow-emqx`） | 「EMQX MQTT 代理」 | MQTT 帳號、ACL 規則、Dashboard 帳號、API 金鑰、封鎖名單、保留訊息、規則與連接器一起搬；這台的節點名稱與連接埠保留 |
 | WOOWTECH Headscale 附加元件（`*_woow-headscale`） | 「Headscale VPN 控制伺服器」 | 使用者、裝置、預先授權金鑰、DNS 額外記錄與伺服器身分金鑰一起搬；這台的伺服器網址、IP 位址範圍與 API 金鑰保留 |
+| WOOWTECH Nextcloud Office 附加元件（`*_woow-nextcloud-office`） | 「Nextcloud」 | 使用者、檔案、分享、行事曆、聯絡人、應用程式密碼與自訂應用一起搬；使用者的檔案放在 HA 的 share 資料夾，HA 備份**一定要勾選 share 資料夾**，沒有就不能匯入；這台的網址、資料庫密碼、郵件設定與 Office（Collabora）連線設定保留 |
 | 其他附加元件、Home Assistant 本身的設定 | — | 不會匯入；HA 備份頁列為「這台沒有對應的應用」 |
 
 - **會搬過來的**：資料、資料本身的金鑰（例如 n8n 的加密金鑰、Headscale 的伺服器身分金鑰）和大多數應用的登入帳號（使用者跟著資料走；Hermes 例外，見下方）。
@@ -347,13 +348,14 @@ Cockpit「備份與還原」頁為 rootless Podman Quadlet 應用建立備份，
   - Headscale：兩邊的 IP 位址範圍設定相同，而且 HA 每台裝置的 VPN 位址都在範圍內。
   - 這台的空間足夠。
 
-### 各應用搬什麼、留什麼（Omnigent、Hermes、EMQX、Headscale）
+### 各應用搬什麼、留什麼（Omnigent、Hermes、EMQX、Headscale、Nextcloud）
 
 還原前的說明會逐項列出下面這些內容（由備份元件寫出），檢查結果也會列出各項的數量。
 
 - **Omnigent**：使用者帳號、工作階段、代理程式、排程、上傳的檔案和檔案區換成 HA 的；HA 的登入金鑰（accounts-cookie-secret）一起搬過來，所以這台目前登入的瀏覽器與裝置要重新登入。這台的管理者與 runner 帳號會保留、密碼不變；HA 也有同名帳號時以 HA 的為準。HA 的分享與管理者執行期設定不會搬過來，這台維持自己的設定。
 - **Hermes**：對話、記憶、技能、排程、外掛與 HA 的設定檔（`config.yaml`）換成 HA 的。這台的 Dashboard 密碼、API 金鑰、Webhook 與工作階段金鑰以及 `hermes.env` 保持不變，`hermes.env` 中的金鑰會蓋過 HA 的同名金鑰。HA 的外掛會取代這台的外掛與配對（例如 Omnigent、Paseo）。HA 的 `/media` 資料夾不會搬過來。
 - **EMQX**：MQTT 帳號、ACL 規則、Dashboard 帳號、API 金鑰、封鎖名單、PSK、保留訊息與規則、連接器設定換成 HA 的；HA 的 API 金鑰會取代這台的。這台的節點名稱、連接埠、匿名登入限制與「未符合規則的主題拒絕」設定保持不變（HA 允許匿名連線時，原本匿名連線的裝置要建立 MQTT 帳號）。HA 的 EMQX 外掛不會搬過來。
+- **Nextcloud**：使用者、檔案、分享、行事曆、聯絡人、應用程式密碼與 HA 的自訂應用（custom_apps）換成 HA 的；Nextcloud 的身分資料（instanceid 與加密用的 secret）也一起搬，所以 HA 的應用程式密碼和雙重驗證可以繼續使用。使用者的檔案放在 HA 的 share 資料夾（預設 `/share/nextcloud`）：做 HA 備份時沒勾 share 資料夾，檢查會說「這份 HA 備份沒有包含 share 資料夾…」並拒絕匯入（只搬資料庫會讓檔案遺失）。這台的網址、信任網域、資料庫密碼、郵件與快取設定保持不變；Office 會改用這台的 Collabora（HA 暫存的 Collabora 設定不會搬過來）。HA 的伺服器端加密、物件儲存（S3）與使用者檔案裡的符號連結目前不支援。匯入後請把 HA 的 Nextcloud 附加元件永久停用，並把同步用戶端、行事曆與聯絡人改連到這台的網址。
 - **Headscale**：使用者、裝置、預先授權金鑰與 DNS 額外記錄換成 HA 的，HA 的伺服器身分金鑰（noise）也一起搬過來。這台的伺服器網址、IP 位址範圍、存取政策與 API 金鑰保持不變：HA 的 API 金鑰不會搬過來，這台的 Headplane 與 MCP 管理工具照常可用。
 
 ### 步驟

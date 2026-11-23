@@ -36,7 +36,7 @@ class RegistryTests(unittest.TestCase):
     def test_cli_validation_follows_the_registry(self):
         for value in (list(cli.HA_APP_IDS), list(cli.HA_APP_IDS)[:1]):
             self.assertEqual(cli.v_ha_apps(value, 'apps'), value)
-        for bad in ([], ['nextcloud'], ['odoo', 'odoo'], list(cli.HA_APP_IDS) + ['x'], 'odoo'):
+        for bad in ([], ['wordpress'], ['odoo', 'odoo'], list(cli.HA_APP_IDS) + ['x'], 'odoo'):
             with self.subTest(bad=bad), self.assertRaises(Exception) as caught:
                 cli.v_ha_apps(bad, 'apps')
             self.assertIn(f'1 到 {len(cli.HA_APP_IDS)} 個', caught.exception.message)

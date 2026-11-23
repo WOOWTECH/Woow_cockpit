@@ -49,6 +49,9 @@ IMPORTERS = (
              mcp_addon='Woow EMQX MCP Server', engine_mcp_lines=True),
     Importer('headscale', 'woow-headscale', 'Headscale VPN 控制伺服器', 'ha_headscale', mcp_admin='headscale-mcp-admin',
              mcp_addon='Woow Headscale MCP Server', engine_mcp_lines=True),
+    # Batch 2: the user files come from HA's share folder (ha_nextcloud refuses a backup without them).
+    Importer('nextcloud', 'woow-nextcloud-office', 'Nextcloud 雲端硬碟', 'ha_nextcloud', mcp_admin='nextcloud-mcp-admin',
+             mcp_addon='Woow Nextcloud MCP Server', engine_mcp_lines=True),
 )
 
 BY_APP = {importer.app_id: importer for importer in IMPORTERS}
