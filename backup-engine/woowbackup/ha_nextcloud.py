@@ -1379,6 +1379,8 @@ def convert(work, app, test_mode, out_dir):
     finally:
         data_out.close()
     early = datadir_blockers(src.config, data, datadir_source(src.config.get('datadirectory')))
+    if ha_odoo._ha_major(src) != 16:
+        early.append(f'HA 的 PostgreSQL 是 {src.pg_version or "未知"} 版，目前只支援 16 版。')
     if early:  # refused before any cluster is started or anything else is built
         raise BackupError('incompatible', early[0], app=app.id)
     work.phase('convert')
