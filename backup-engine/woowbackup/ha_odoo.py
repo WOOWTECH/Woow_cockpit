@@ -872,7 +872,8 @@ def database_verdict(details, target, candidates, *, ha_major, target_major, ext
         blockers.append(f'要一起搬過來的自訂模組含有只能在其他處理器（例如 ARM）上執行的程式：{_names(foreign)}。'
                         '請先在 HA 換成不含這類程式的版本，再做一次備份。')
     if details['mail_servers_active']:
-        warnings.append(f'HA 的資料庫有 {details["mail_servers_active"]} 個啟用中的外寄郵件伺服器，搬過來後會開始寄信。')
+        warnings.append(f'HA 的資料庫有 {details["mail_servers_active"]} 個啟用中的外寄郵件伺服器，搬過來後會開始寄信'
+                        '（包括 HA 上還沒寄出的信和每天的提醒信）；正式搬家前請先停掉 HA 那邊的 Odoo，避免兩邊各寄一次。')
     if details['crons_active']:
         warnings.append(f'HA 的資料庫有 {details["crons_active"]} 個啟用中的排程動作，搬過來後會在這台執行。')
     if details.get('website_domains'):

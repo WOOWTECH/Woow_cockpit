@@ -3305,13 +3305,16 @@
 
   // The choice before the conversion (結果與選項).
   const haTestLabel = apps => (haLegacy(apps) ? "這只是測試（先關掉排程、寄信和工作流程）" : "這只是測試");
+  // A real Odoo move keeps sending: HA's queued mail and the daily reminders go out from here (owner, 2026-11-23).
+  const HA_ODOO_MAIL = "正式搬家時，Odoo 會接著寄出 HA 上還沒寄出的信和每天的提醒信，請先停掉 HA 那邊的 Odoo，避免兩邊各寄一次。";
   function haTestHelp(apps) {
-    if (haLegacy(apps)) return "勾選時，搬過來的 n8n 工作流程都先停用，Odoo 不寄信也不跑排程，HA 那邊可以照常使用；正式搬家請不要勾。";
+    const mail = apps.includes("odoo") ? HA_ODOO_MAIL : "";
+    if (haLegacy(apps)) return "勾選時，搬過來的 n8n 工作流程都先停用，Odoo 不寄信也不跑排程，HA 那邊可以照常使用；正式搬家請不要勾。" + mail;
     const parts = [apps.includes("n8n") ? "搬過來的 n8n 工作流程都先停用" : null, apps.includes("odoo") ? "Odoo 不寄信也不跑排程" : null,
       apps.includes("omnigent") ? "Omnigent 的排程都先暫停" : null].filter(Boolean);
     const kept = haTestKept(apps);
     const what = kept.length ? [parts.join("，"), ...kept].filter(Boolean).join("；") : `${parts.join("，")}，HA 那邊可以照常使用`;
-    return `勾選時，${what}；正式搬家請不要勾。`;
+    return `勾選時，${what}；正式搬家請不要勾。${mail}`;
   }
 
   // A test import as a value (the confirmation, the job's choices, the converted backup): `legacy` is Odoo's and n8n's
