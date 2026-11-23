@@ -1,12 +1,12 @@
 #!/bin/bash
 # Stop a lab device; its container and volumes are kept (up.sh starts it again).
-#   tests/e2e/lab/down.sh <a|b|c|d|all> [--rm]     --rm also removes the container (volumes stay)
+#   tests/e2e/lab/down.sh <a|b|c|d|e|all> [--rm]     --rm also removes the container (volumes stay)
 source "$(dirname "$0")/lib.sh"
 
 target=${1:-}
 remove=no
 [ "${2:-}" = --rm ] && remove=yes
-if [ "$target" = all ]; then set -- a b c d; else set -- "$target"; fi
+if [ "$target" = all ]; then set -- a b c d e; else set -- "$target"; fi
 
 for dev in "$@"; do
     device_vars "$dev"

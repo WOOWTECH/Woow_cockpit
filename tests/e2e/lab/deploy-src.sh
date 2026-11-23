@@ -39,7 +39,7 @@ shift || true
 fallback=no
 tree=$REPO_ROOT
 demo_catalog=yes
-case "$DEV" in c | d) demo_catalog=no ;; esac
+case "$DEV" in c | d | e) demo_catalog=no ;; esac
 while [ $# -gt 0 ]; do
     case "$1" in
         --fallback) fallback=yes ;;
