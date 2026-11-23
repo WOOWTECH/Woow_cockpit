@@ -10,6 +10,13 @@ Fixes are on branch `review/litellm-secreview-20261123` (from `3bde418`; it also
 `ce95602`): `ad6745a` (SR-1..SR-4), `d31c59a` (SR-5) and `1e29974` (SR-6); the attack harness is `2284e4d`,
 `cd900c5`, `f474bb5`, `7cfb585` and the `stored_settings` case. Nothing was pushed.
 
+**Iteration 2 (2026-11-24, re-review of the final diff):** the product lane's later commits `3c1a0a4` (Pi agent
+`models.json` in `key_users`) and `215fdf0` (search_path pin) were reviewed, the SR-6 refusal was attacked again and
+found incomplete (more vendor code keys, fail-open on read errors) and blind under a crafted data directory (SR-8),
+SR-7 was found and proven on a real LiteLLM, and SR-9 (a truncation bypass of SR-6) and SR-10 (a custom secret
+manager file) were found. Fixes: branch `review/litellm-secreview-fix2-20261124` from the product's `215fdf0` (merge
+`c65ef56` of the review branch, fixes `f2a2cb4`, `a06dc21`, `1a83926`); see "Iteration 2" below.
+
 ## How it was tested
 
 - **Real attacks, real product code, throwaway containers only.** Every attack ran in rootless containers of the
@@ -155,12 +162,160 @@ only HA's rows move through a role that may only insert, the salt binding refuse
 stored values with the moved salt (0 with a random one) and put this device's own salt and data back on both the
 automatic and the manual rollback. That real proof is on `3bde418`; on the fixed tip it is pending (below).
 
+## Iteration 2 (2026-11-24): re-review of the final diff
+
+Reviewed: the product branch's commits after the review merge `cdf6eba`: `3c1a0a4` (product: `key_users` also reads
+the Pi agent provider list), `215fdf0` (product: search_path pin in every columns/signature read; the product lane's
+READY line named `215fdf0`), `82e68ac`/`6c5610c` (driver and evidence only). `215fdf0` did not contain the review's
+SR-6 fix (`1e29974`); the merge and the fixes below are on `review/litellm-secreview-fix2-20261124`. Fixed code:
+`f2a2cb4` (`ha_litellm.py` SHA-256 `f81c9b46…`: SR-6 gaps, fail closed, SR-8), `a06dc21` (`72d6f9d8…`: SR-9) and
+`1a83926` (`3a6e928e…`: SR-10, the final product code of this review). The fixes of this iteration are the
+reviewer's own code (the product lane was waiting for a dev-d run); an independent look at them is welcome.
+
+- **`215fdf0` (no finding).** It repairs a side effect of this review's SR-1 fix that the product lane's real attempt
+  7 found: HA's pinned sessions rendered the enum column `LiteLLM_CronJob.status` as `public."JobStatus"`, this
+  device's as `"JobStatus"`, so the check refused the owner's real backup (「資料庫結構不同」). The review's own
+  real-backup sandbox run (`fixed-real-backup.json`) ran only HA's side and never compared with a live schema, so it
+  could not see this. The pin only adds `SET search_path = pg_catalog;` to sessions; nothing is relaxed.
+- **`3c1a0a4` (no finding; one nit).** `tests/e2e/lab/litellm_pi_models_review.py` ran the real `key_users` /
+  `pi_agent_uses_litellm` / `pi_agent_sources` through the real owner file helper (`podman.FILE_HELPER`, as this lab
+  user without `runuser`) on real volumes of the lab Podman store, every `models.json` holding generated canary key
+  values: 14/14 as expected — a provider at this LiteLLM (also via `PI_CODING_AGENT_DIR=`, a `%h/` folder, a URL
+  whose query is a canary) is named; another provider, a symlinked `models.json`, a symlinked folder, a FIFO (no
+  hang: `O_NONBLOCK` + `fstat`), 2 MiB (too large), 100000 nested arrays, invalid UTF-8, `%h/../..`, `/etc`, an
+  option-like volume name: not named or never read. The canary values were found nowhere (return values,
+  `key_users_line`, the job log, the harness output); the only Podman call was `volume inspect`
+  (`pi-models-215fdf0.json`, `fixed2-pi-models.json`). Nit: `models_use_litellm` lets `RecursionError` escape;
+  `key_users` then skips that app (no reminder for it) — harmless. The whole file (at most 1 MiB) is parsed in
+  memory; only the base URL fields are looked at and nothing is kept.
+
+New sandbox cases (`litellm_sandbox_review.py`, same sandbox as above):
+- `stored_variants`: one clean HA cluster whose `LiteLLM_Config` is rewritten between runs of the product's
+  stored-settings check, one variant per vendor code key, plus ~1M environment-variable names (an answer over 16 MiB),
+  a real psql timeout (the query's timeout scaled down to 0.05 s by a wrapper; the same `TimeoutExpired` path as the
+  600 s one) and controls. The rows differ only in that table, so one cluster stands for one backup per variant.
+- `t2_hidden_hooks`: a crafted data directory with `post_call_rules` and `custom_auth` = `builtins.exec` whose
+  superuser pointed the built-in operator `=(text,text)` at a SQL function answering "not equal" for those key
+  names (`pg_operator.oprcode`). The first variant edited `pg_proc` of the built-in `jsonb_each` instead: no effect,
+  PostgreSQL calls built-in functions by OID without reading `pg_proc` (`original2-t2_pgproc_edit.json`, kept). The
+  case also loads the staged `LiteLLM_Config` rows into a fresh PostgreSQL 17.11 (the package's image, `COPY … FROM
+  STDIN` like `load_rows`) and runs the same check there.
+
+| Attack (real PostgreSQL 18.7 sandbox) | Review tip `4d7d9bf` (`4eb30d9f…`) | Fixed `f2a2cb4` (`f81c9b46…`), `a06dc21` (`72d6f9d8…`), `1a83926` (`3a6e928e…`) |
+|---|---|---|
+| `custom_provider_map[].custom_handler`, `guardrails` v1 callbacks, v2 `litellm_params.guardrail`, `pass_through_endpoints[].target` = `builtins.exec`, `litellm_jwtauth.custom_validate`, a string `callbacks`, `router_settings.plugins` | **no blocker** (7 of 7) | blocker naming the label (7 of 7) |
+| A dotted `success_callback` entry after 60 plain names (sorted before it) | **no blocker** (also on `f2a2cb4`: the dot was looked for only in the first 50 names) | `a06dc21`: blocker `litellm_settings.success_callback` (`original3-`/`fixed3-stored_variants.json`) |
+| `key_management_system: custom` + `key_management_settings.custom_secret_manager` | no blocker (by construction: not asked before `1a83926`) | `1a83926`: blocker `general_settings.custom_secret_manager` (`fixed4-stored_variants.json`) |
+| ~1M stored environment-variable names + `post_call_rules` | **`None` → no blocker** (`limit-exceeded`) | blocker 無法完整讀取 |
+| `post_call_rules` + a real query timeout | **`None` → no blocker** | blocker 無法完整讀取 |
+| Controls: `post_call_rules`; plain `langfuse`/`otel`; a URL pass-through target; a string `success_callback` (iterated per character by the vendor, no import) | blocker; SR-5 names; nothing; nothing | same |
+| Crafted `=(text,text)` operator (T2) | **check sees no hook** (no blocker, no superuser object, salt binding `match`); `export_rows` staged both hooks; the conversion asked the same blind question | the HA side is still blind (T2 controls that catalog); the same check on the staged rows in a fresh PostgreSQL 17.11 finds both hooks, which is what the conversion now asks after loading (refuses before the dump) |
+| Iteration-1 cases (`owner_trojan`, `owner_view`, `superuser_catalog`, `tablespace_map`, `stored_settings`, `copy_injection`, 36 archive members, the real encrypted backup) | — | the same as iteration 1 (no marker, the same blockers, no link, nothing executed, the same 36 archive verdicts); the real encrypted backup: salt binding `match`, no blocker, no hook, not unreadable, 86 tables / 2882 rows exported, and the re-check on its staged rows in a fresh PostgreSQL 17.11: no blocker (`fixed2-real-backup.json` on `119ed71`; again on the final `1a83926`: `fixed4-real-backup.json`) |
+
+Evidence: `original2-stored_variants.json`, `original2-t2_hidden_hooks.json`, `original2-t2_hidden_hooks-trusted.json`,
+`original2-t2_pgproc_edit.json` (review tip `4d7d9bf`); `fixed2-*.json` (`f2a2cb4`); `original3-stored_variants.json`
+(`f2a2cb4`, the SR-9 variant), `fixed3-*.json` (`a06dc21`) and `fixed4-*.json` (the final `1a83926`: stored variants
+with the custom secret manager, crafted operator, stored settings, the real backup); `sr7-env-ref-probe*.json` (SR-7).
+Each file's `source` names the clean commit and the `ha_litellm.py` SHA-256 it ran with.
+
+Findings of iteration 2:
+
+7. **SR-6 was incomplete (high for a foreign backup, like SR-6) — fixed `f2a2cb4`.** LiteLLM's `get_instance_fn`
+   (`types_utils/utils.py:9-52`) is reached from more stored keys than `1e29974` refused — the rest of the vendor's
+   own DB-overlay list (`proxy_server.py:4486-4640`): `litellm_settings.custom_provider_map[].custom_handler`
+   (:6217-6231), dotted guardrail callbacks and types in both `guardrails` shapes (`guardrails/init_guardrails.py:
+   101-160`, `guardrail_registry.py:580-618`), `general_settings.pass_through_endpoints[].target`
+   (`pass_through_endpoints.py:1993-2001` tries every target as a module; a URL only falls back because its import
+   fails), `general_settings.litellm_jwtauth.custom_validate` (`_types.py:5374-5378`); a string `callbacks` value
+   (`common_utils/callback_utils.py:406-415`); and `router_settings.plugins` (:6722-6737 → `resolve_routing_plugins`
+   :4767-4800), which the vendor's list misses although `router_settings` is a DB-overlay section (:5186-5193). And
+   `stored_settings()` failed open: any read error returned `None` and gave no blocker. Fix: `NESTED_HOOKS` (one
+   SQL/JSON path per place, labels only, never a value) refuse like the SR-6 hooks; an answer that cannot be read
+   completely is `UNREADABLE` and refuses (fail closed).
+8. **SR-7 (medium; owner decision) — not fixed.** HA's rows can make this device's LiteLLM send this device's own
+   secrets to a host they name. Database model parameters are decrypted and then `os.environ/NAME` is resolved
+   against this device's environment (`proxy_server.py:7119-7126`; a value that does not decrypt is used as plain
+   text, `common_utils/encrypt_decrypt_utils.py:180-206`); the whole DB-merged configuration too (`get_config`
+   :5815-5831 → `_check_for_os_environ_vars` :5508) and DB guardrails' `api_key`/`api_base`
+   (`guardrail_registry.py:528-531`). This device's LiteLLM has `DATABASE_URL`, `LITELLM_MASTER_KEY`, `UI_PASSWORD`,
+   `DATABASE_PASSWORD` and `LITELLM_SALT_KEY` in its environment (Woow_podman_litellm `dd690ae`
+   `quadlet/litellm.container:32-38`). **Real proof** (`sr7-env-ref-probe.json`, `tests/e2e/lab/litellm_env_ref_probe.sh`):
+   in a throwaway `--network=none` container of the package's LiteLLM lab build (`0c71bec8`, in dev-d, under the
+   dev-d lock, 59 s, removed, isolation asserted), LiteLLM 1.104.0's own DB-model path (`ProxyConfig._add_deployment`
+   → `Router` → one chat completion) sent the generated canary master key as the Bearer token to the row's
+   `api_base` (a local fake provider) for a plaintext and for an HA-salt-encrypted reference (attempt 1 did not start:
+   crun `setgroups` with the image user 65534, kept). Why only medium: the vendor's model API does not refuse `os.environ/`
+   either (only a health test endpoint does, `health_endpoints/_health_endpoints.py:87`, :2120-2125), so any LiteLLM
+   proxy admin can do this by design, and the import makes HA's admins this device's admins by design (residual
+   risk); what the import adds is that it needs no network path to this device. Recommendation (owner decision):
+   refuse references to the package's own secret names and warn with the names of others; seeing encrypted values
+   needs decryption with HA's salt (for example in a throwaway `--network=none` container of this device's LiteLLM
+   image, only names leaving it).
+
+9. **SR-8 (high for a crafted backup) — fixed `f2a2cb4`.** The SR-6 refusal was decided only inside HA's throwaway
+   cluster, whose catalog HA's data directory controls (`SUPERUSER_SQL` lists no SQL functions or edited built-in
+   operators, and operators are used by OID whatever search_path says). Fix: after HA's rows are loaded, the
+   conversion asks the same question in the new cluster (this device's image and schema, HA's data only as rows),
+   refuses there before the converted dump is written, and the import note names what that answer found. The check
+   job (HA's side only) can still be blinded by a crafted data directory; the conversion cannot.
+10. **SR-9 (high for a foreign backup, like SR-6) — fixed `a06dc21`.** The SR-6 check cut the callback names to the
+   first 50 before it looked for a dot, so 60 plain `success_callback` names that sort before a dotted one hid it
+   (no blocker on `1e29974` and `f2a2cb4`). LiteLLM imports every dotted entry of `success_callback`,
+   `failure_callback` and `audit_log_callbacks` (`proxy_server.py:6233-6300`) and of `callbacks`
+   (`callback_utils.py:150-395`) and accepts plain names there, so the padding is cheap. Fix: the query returns
+   `litellm_settings.<list>` for any entry with a dot, however many names come first.
+
+11. **SR-10 (low-medium) — fixed `1a83926`.** `general_settings.key_management_system: custom` with
+   `key_management_settings.custom_secret_manager: "<file>.<Class>"` makes LiteLLM load `<config dir>/<file>.py` (or
+   an absolute path) with `exec_module` at every start (`secret_managers/custom_secret_manager_loader.py:30-75`,
+   from `initialize_secret_manager` `proxy_server.py:6981-6987`, which `get_config` calls on the DB-merged
+   configuration :5815-5831 → :5550-5590); not in the vendor's scrub list. It needs a `.py` file that already exists,
+   hence the lower weight, but it is a stored setting that runs code: it refuses like the others.
+
+### Tests (iteration 2)
+
+- Review tip `4d7d9bf`: `test_ha_litellm` with `test_ha_litellm_candidate`, `test_adapter_import_secrets` and
+  `test_ha_odoo` = 85 OK (iteration 1 wrote 82; the verifier's 85 is right).
+- Final tip (`1a83926`): `test_ha_litellm` 46 OK — new in `StoredSettingsTests`: an answer that cannot be read
+  refuses in the check and stops the conversion (`limit-exceeded`, `job-failed`), every vendor code place is in the
+  query and its label refuses, the conversion decides again on what moved (asked in `hapg`, then in `ll-db`; stops
+  before the converted dump is written), the import notes name what moved; the old expectation that an unreadable
+  answer only drops the warning line now also expects the blocker (it encoded the fail-open). With the candidate,
+  adapter-secrets and `test_ha_odoo` tests: 96 OK. Lab `test_litellm_*`: 20 OK.
+- Full `tests/backup` on `a06dc21` (host-heavy lock, 422 s): 1503 tests, only the 7 pre-existing `test_ha_omnigent`
+  failures (5 failures, 2 errors; Omnigent's guard, lane omnigent-product), 6 skipped. `1a83926` changed only the
+  stored-settings query, its tests, the mutation list and the docs; it ran with the affected modules (96 OK), not with
+  a second full suite.
+- Mutation check (`tests/backup/litellm_product_mutations.py`): on `f2a2cb4` 56/56 caught (baseline 63 tests;
+  `mutation-check-f2a2cb4.json`); on the final `1a83926`: running at the time of this commit under the host-heavy lock (result in the next commit). New: M48–M58 (fail closed ×2, the unreadable
+  blocker, the nested labels, router plugins, dotted guardrail callbacks, string callbacks, the re-check in the new
+  cluster, the notes from it, the dotted-callback clause, the custom secret manager). M43's text now names its line
+  (the re-check repeats the old text; same removal); the product's Pi agent and search_path mutations are M45–M47.
+
 ## Residual risk
 
 - **A crafted data directory (T2) still runs SQL as the superuser inside the throwaway PostgreSQL 18** (it can point
   built-in operators or type output functions at its own functions). Containment is the sandbox above. Its `/tmp`
   is exec-able; mounting the tmpfs folders `noexec` would need a change in the shared `tempctr` (all importers), so
   it is a recommendation, not done here.
+  Iteration 2 made the consequence concrete (SR-8): the check job's answers about HA's stored settings can be
+  blinded by such a catalog; the conversion therefore asks again in the new cluster, as it already re-checked the
+  salt row, the counts, the migrations and the schema signature there. The check job's warnings and blockers about
+  stored settings remain advisory under a crafted data directory.
+- **Other stored objects HA's data brings that LiteLLM runs or sends data to (trust model, not refused):** the
+  guardrails table (`LiteLLM_GuardrailsTable`) is loaded at every start without a config path
+  (`proxy_server.py:8536-8575`), so custom (dotted) guardrail types cannot load modules from it, but a `custom_code`
+  guardrail runs HA's source in a RestrictedPython sandbox with HTTP primitives and may rewrite requests and responses
+  (`guardrail_hooks/custom_code/custom_code_guardrail.py:118-166`, `sandbox.py`, `primitives.py:450-660`; no escape
+  was tried); other guardrail types, MCP servers and pass-through URLs send this device's traffic to the hosts HA's
+  rows name. Recommendation: name them in the check like SR-5 (owner decision).
+- **SR-7** (above, proven on a real LiteLLM 1.104.0): `os.environ/` references in HA's rows resolve against this
+  device's environment and are sent to the hosts HA's rows name (this device's master key in the probe); owner
+  decision.
+- **Stored environment variables bypass the vendor's own blocklist:** a config file may not set `PATH`,
+  `LD_PRELOAD`, `LD_LIBRARY_PATH`, `PYTHONPATH`, `PYTHONSTARTUP`, `PYTHONHOME`, `HOME`, `NO_PROXY`, …
+  (`proxy_server.py:5924-5939`), but the database path skips only the MCP stdio flag (:7347-7372). SR-5 names them
+  in the warning; refusing these names would be the stricter choice (owner decision).
 - **The same SR-1..SR-4 class is in the shared code the Odoo and Omnigent imports use**
   (`ha_odoo.start_ha_cluster` / `ha_odoo.Cluster` without client options; unqualified catalog queries as the
   superuser on HA's catalog). Not changed here (other lanes' code); noted for them.
@@ -189,3 +344,11 @@ automatic and the manual rollback. That real proof is on `3bde418`; on the fixed
   evening; the product lane measured that LiteLLM's restore readiness needs a load below about 30.
 - The page was checked by reading (`backup.js` builds text nodes only, no `innerHTML`), not fuzzed.
 - LiteLLM application bugs that stored data could trigger in the proxy itself.
+- Iteration 2: **the product's real end-to-end flow on the fixed tip `review/litellm-secreview-fix2-20261124`**
+  (dev-d, `litellm_full_flow.py`): pending — the product lane is asked to fast-forward
+  `feat/ha-import-litellm-product-20261123` to it and run its attempt 9 (its attempt 8 ran from `215fdf0`, without
+  the SR-6 refusal and this iteration's fixes). The changed code runs in the check, after `load_rows` in the
+  conversion and in the notes; the real backup passed the HA-side check and the re-check on its staged rows in the
+  sandbox (`fixed2-real-backup.json`).
+- RestrictedPython escapes from a `custom_code` guardrail; SR-7 beyond the model path (the DB-merged configuration
+  and guardrail paths were read in the vendor source, not probed).
