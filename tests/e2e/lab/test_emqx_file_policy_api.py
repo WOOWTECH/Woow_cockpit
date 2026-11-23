@@ -411,6 +411,20 @@ class FilePolicyNativeTests(FileHTTP, unittest.TestCase):
         with self.assertRaises(ValueError):
             profile._record_native_acl(native, self.n.last_wire, native._persisted.generation)
 
+    def test_unminted_file_scope_observation_is_never_accepted(self):
+        # A genuine FILE-profile collector result that bypassed validate_file_policy_source_api
+        # carries the FILE acl_scope and the same facts, but no mint: it must still refuse.
+        self.n.api_mode = True
+        try:
+            unminted = api._observe_source_api(api_profile=api.FILE_POLICY_API_PROFILE, target_file_acl=TARGET_ACL,
+                prior_registry=self.n.prior, provision=self.n.provision, expected_container_id=self.n.cid,
+                quiesce=self.n.quiesce, port=18083, retained_topics=self.n.topics, **self.n.credentials)
+        finally:
+            self.n.api_mode = False
+        self.assertEqual(unminted._facts.get('acl_scope'), api.FILE_POLICY_ACL_SCOPE)
+        self.assertNotIn(unminted, profile._FILE_POLICY_API)
+        self.refused('api', unminted, self.n.native())
+
     def test_binding_order_and_minting_are_enforced(self):
         native = self.n.native()
         self.refused('api', self.strict, native)  # strict observation was never minted as FILE
