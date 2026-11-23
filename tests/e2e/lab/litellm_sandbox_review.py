@@ -211,6 +211,10 @@ VARIANTS = {
     'router_settings_plugins': [('router_settings', _j({'plugins': [HOOK]}))],
     'callbacks_absolute_path_module': [('litellm_settings', _j({'callbacks': ['/tmp/woowbk_review.fn']}))],
     'post_call_rules_baseline': [('litellm_settings', _j({'post_call_rules': HOOK}))],
+    # 60 plain names that sort before a dotted one: the product kept only the first 50 callback names before it
+    # looked for a dot (stored_settings: names() = value[:50])
+    'dotted_callback_after_50_plain': [('litellm_settings', _j({'success_callback': [f'a{i:02d}' for i in range(60)]
+                                                                + ['zz_woowbk.review_marker']}))],
     'big_env_plus_hook': [('environment_variables', "(SELECT jsonb_object_agg('WOOWBK_REVIEW_ENV_' || g, 'x') "
                                                     "FROM generate_series(1, 1000000) g)"),
                           ('litellm_settings', _j({'post_call_rules': HOOK}))],
