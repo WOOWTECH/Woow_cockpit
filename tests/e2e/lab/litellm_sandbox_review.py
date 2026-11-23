@@ -41,6 +41,7 @@ import json
 import os
 import re
 import secrets
+import subprocess
 import sys
 import tarfile
 import tempfile
@@ -54,7 +55,7 @@ if str(REPO / 'backup-engine') not in sys.path:
 
 from woowbackup import habackup, ha_litellm, ha_odoo, tempctr  # noqa: E402
 from woowbackup.errors import BackupError  # noqa: E402
-from woowbackup.podman import Result, default_runner  # noqa: E402
+from woowbackup.podman import OutputLimitExceeded, Result, default_runner  # noqa: E402
 
 LABPODMAN = Path.home() / '.woowbk-lab/bin/labpodman'
 PG18 = ha_litellm.PG18_IDS[0]
@@ -285,8 +286,16 @@ class LabRunner:
     owner = 'lab'
 
     def podman(self, *args, input=None, stdout=None, timeout=120, check=True, max_output=None, abort=None):
-        result = default_runner([str(LABPODMAN), *args], input=input, stdout=stdout, timeout=timeout,
-                                max_output=max_output, abort=abort)
+        # the same conversions as the product's OwnerRunner.run (podman.py: output limit, timeout -> BackupError)
+        try:
+            result = default_runner([str(LABPODMAN), *args], input=input, stdout=stdout, timeout=timeout,
+                                    max_output=max_output, abort=abort)
+        except OutputLimitExceeded as exceeded:
+            if exceeded.to_file:
+                raise BackupError('insufficient-space', f'lab podman {args[0]}: output over the free space') from None
+            raise BackupError('limit-exceeded', f'lab podman {args[0]}: output over the limit') from None
+        except subprocess.TimeoutExpired:
+            raise BackupError('job-failed', f'lab podman {args[0]}: timed out ({timeout} s)') from None
         if check and result.returncode:
             tail = (result.stderr or b'')[-400:].decode('utf-8', 'replace')
             raise BackupError('job-failed', f'lab podman {args[0]} {args[1] if len(args) > 1 else ""} '
