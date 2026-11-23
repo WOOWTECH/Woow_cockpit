@@ -1018,14 +1018,17 @@ def run_variant(lab, builder, name, results, canaries):
                 'PostgreSQL 16.' in line and any(c in line for c in LINE_BREAKS) for line in res['real']['_lines'])
         elif name == 'v8-gzip-bomb':
             require_room(name)
+            if free_disk() < 14 * 1024 ** 3:      # the host floor is 12 GiB and other lanes write too
+                res['skipped'] = 'free disk below 14 GiB at the start: not run'
+                raise SystemExit('STOP before v8-gzip-bomb: free disk below 14 GiB')
             declared = 3 * 1024 ** 3
             path = lab.scratch / 'attack-v8-gzip-bomb.tar'
             size, member_bytes = build_bomb(path, declared)
             res['backup_bytes'], res['member_bytes'], res['declared_inflated_bytes'] = size, member_bytes, declared
             free_before = free_disk()
-            floor = free_before - 1024 ** 3     # at most ~1 GiB (+ one 64 MiB guard step) may be written
+            floor = free_before - 512 * 1024 ** 2   # at most ~512 MiB (+ one 64 MiB guard step) may be written
             res['real'] = run_product(lab, path, convert=False, guard_floor=floor)
-            res['real']['simulated'].append('lab floor for the product SpaceGuard: free space at start minus 1 GiB '
+            res['real']['simulated'].append('lab floor for the product SpaceGuard: free space at start minus 512 MiB '
                                             '(production: the running reserve plus WATCH_MARGIN)')
             res['free_gib_before'] = round(free_before / 1024 ** 3, 2)
             res['free_gib_after'] = round(free_disk() / 1024 ** 3, 2)
