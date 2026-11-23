@@ -8,14 +8,22 @@
   "engine": {
     "module": "backup-engine/woowbackup/ha_codeserver.py",
     "registry": "haapps.IMPORTERS woow-code-server (woow_ha_code_server), no MCP admin",
-    "never_read_added": ["data/pi-agent/auth.json", "data/pi-agent/mcp-auth.json", "data/pi-agent/claude/.credentials.json", "data/pi-agent/codex/auth.json"],
+    "never_read_added": [
+      "data/pi-agent/auth.json",
+      "data/pi-agent/mcp-auth.json",
+      "data/pi-agent/claude/.credentials.json",
+      "data/pi-agent/codex/auth.json"
+    ],
     "public_guards_changed": "none"
   },
   "lab_catalog_entry": "tests/e2e/lab/catalog/woow-code-server.json (owner appowner; dev-e only; a production entry is the owner's review)",
   "tests": {
     "unit_test_ha_codeserver": "17/17 OK (fakes)",
     "ha_suites": "test_ha_registry/store/cli/cli/import/flows/common/backup/space/links/sqlite/redact: 187 OK, 1 skipped",
-    "page_cases_ha": "node --test-name-pattern='從 HA 備份匯入' tests/backup-ui.mjs: 20/20 after one wrong expectation of mine was fixed (new batch 2 code-server case included)"
+    "page_cases_ha": "node --test-name-pattern='從 HA 備份匯入' tests/backup-ui.mjs: 20/20 after one wrong expectation of mine was fixed (new batch 2 code-server case included)",
+    "page_full": "node tests/backup-ui.mjs (under /tmp/woowbk-host-heavy-tests.lock): 100/100 PASS at 8736180",
+    "backup_full": "python3 -m unittest discover -s tests/backup at 8736180: 1471 run, 6 skipped, 7 problems (5 failures, 2 errors) ALL in test_ha_omnigent; identical on the unchanged integration base d812699 (pre-existing, Omnigent guarded blockers vs older expectations; not this lane)",
+    "harness_self_check": "codeserver_full_flow.py --self-check PASS (device programs compile; login/HTTP helpers against a local fake on an ephemeral port; WALK on a temp tree; it found and fixed an http-module shadowing bug before any real attempt)"
   },
   "dev_checks_not_acceptance": {
     "real_backup_scan": "importer scan of the REAL backup (8f2dc23f) in a network-none lab container: walk complete, 5 never-read files skipped unread, 377 + 9 files to move, 28 Pi sessions, 20 Claude and 15 Codex session files, 3 skills, 1 snippet, 0 user extensions, 9 shared MCP servers (1 with headers/env), codex-bootstrap unknown (warning), 0 blockers with the 0.1.15 pins",
