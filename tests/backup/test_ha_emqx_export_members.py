@@ -121,6 +121,7 @@ class CheckTests(unittest.TestCase):
         bad = {'empty': b'', 'no prefix': listing(NAME)[1:], 'a line before it': b'x\n' + listing(NAME),
                'no end': listing(NAME).split(b':END')[0], 'more after it': listing(NAME) + b'x',
                'an error': b'RPC to emqx@127.0.0.1 failed: x\n', 'not base64': b'WOOWEXP:!!:END\nok\n',
+               'a stray character in the base64': encoded(good).replace(b'WOOWEXP:', b'WOOWEXP:!'),
                'not json': encoded(b'{'), 'not utf-8': encoded(b'\xff'), 'a list': encoded([good]), 'a string': encoded('x'),
                'null': encoded(None), 'no roots': encoded({'members': [META]}), 'no members': encoded({'roots': []}),
                'one field more': encoded(dict(good, x=1)), 'roots not a list': encoded(dict(good, roots={'rule_engine': 1})),
