@@ -163,6 +163,17 @@ class ProgramTests(unittest.TestCase):
         self.assertLessEqual(real.estimate('setup') + real.estimate('rollback:x86-cold'), real.HOLD_LIMIT)
         self.assertLessEqual(real.HOLD_LIMIT, 40 * 60)
 
+    def test_the_hold_never_passes_forty_minutes_and_keeps_the_closing_steps(self):
+        budget, limit = real.HOLD_BUDGET, real.HOLD_LIMIT
+        self.assertFalse(real.hold_spent(1, 60, 'import:x86-cold:builtin'))
+        self.assertTrue(real.hold_spent(2, budget + 1, 'import:x86-cold:file'), 'no long step after the budget')
+        for name in ('reclaim', 'leaks', 'catalog-own', 'cleanup', 'cleanup-baseline'):
+            self.assertFalse(real.hold_spent(3, budget + 1, name), name)
+            self.assertTrue(real.hold_spent(3, limit - real.estimate(name) + 1, name), name)
+        self.assertTrue(real.hold_spent(1, limit - real.estimate('rollback:x86-cold') + 1, 'rollback:x86-cold'))
+        self.assertFalse(real.hold_spent(0, 0, 'setup'))
+        self.assertLessEqual(budget + real.SHORT_STEP, limit)
+
     def test_the_probe_logs_in_exactly_three_times_and_never_retries_a_login(self):
         logins = re.findall(r'call\(E, "POST", "/api/v5/login"', real.PROBE)
         self.assertEqual(len(logins), 3)

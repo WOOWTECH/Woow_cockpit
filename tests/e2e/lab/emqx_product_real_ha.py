@@ -15,8 +15,8 @@ EMQX stopped: arm = the real RPi5, x86 = the real x86 HA).
 Every step runs inside ONE hold of the dev-d mutation lock (/tmp/woowbk-dev-d-mutation.lock, waited for like
 `flock -w 3600`; never taken while /tmp/woowbk-dev-d-emqx-main-waiting is fresh), with dev-d's outer isolation
 asserted before and after (owner.sh d --verify-isolation: running, network none, no published port) and a
-memory/disk headroom check before each step. No new step starts after HOLD_BUDGET seconds of holding the lock, nor
-when the hold so far plus the step's estimate (ESTIMATE) would pass HOLD_LIMIT (40 min).
+memory/disk headroom check before each step. No new step starts after HOLD_BUDGET seconds of holding the lock (only the
+short closing steps still do), nor when the hold so far plus the step's estimate (ESTIMATE) would pass HOLD_LIMIT (40 min).
 
 Steps (run in the order given):
   setup        deploy THIS tree into dev-d (deploy-src.sh d --src <tree> --no-demo-catalog; the schedule timer is
@@ -1788,6 +1788,7 @@ def parse_step(name):
 # load ~50, the slowest rollback rounds 723 s; refined after each attempt):
 # a step only starts when the hold so far plus its estimate stays within HOLD_LIMIT.
 HOLD_LIMIT = 40 * 60
+SHORT_STEP = 5 * 60
 ESTIMATE = {'setup': 6, 'before': 6, 'check': 12, 'check-hot': 12, 'import:file': 15, 'import:builtin': 22, 'import:first': 28,
             'rollback': 24, 'suggest-health': 10, 'catalog-draft': 3, 'catalog-own': 2, 'cleanup': 4, 'cleanup-baseline': 2, 'reclaim': 3, 'leaks': 4}
 
@@ -1799,6 +1800,14 @@ def estimate(name):
         if kind == 'import:builtin' and tag in FIRST_ROUNDS:
             kind = 'import:first'
     return 60 * ESTIMATE[kind]
+
+
+def hold_spent(index, spent, name):
+    """No new step that would pass HOLD_LIMIT (40 min); after HOLD_BUDGET only the short closing steps (reclaim, leaks,
+    catalog-own, cleanup, at most 5 minutes) still start, so that a slow import on a loaded host keeps its leak scan."""
+    if index and spent + estimate(name) > HOLD_LIMIT:
+        return True
+    return spent > HOLD_BUDGET and estimate(name) > SHORT_STEP
 
 
 def self_check():
@@ -1859,7 +1868,7 @@ def main(argv):
         verify_isolation()
         for index, name in enumerate(steps):
             spent = time.monotonic() - held
-            if spent > HOLD_BUDGET or (index and spent + estimate(name) > HOLD_LIMIT):
+            if hold_spent(index, spent, name):
                 emit(f'STEP {name}: SKIP hold_budget=1')
                 failed_steps.append(name)
                 continue
