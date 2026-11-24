@@ -308,6 +308,13 @@ class FailureTests(unittest.TestCase):
                 self.assertNotIn('secret detail', json.dumps([i.view(APP) for i in found], ensure_ascii=False))
                 self.assertIn(type(error).__name__, journal)
 
+    def test_the_journal_never_gets_the_ha_key(self):
+        key = 'Opaque Old Password'
+        with jobs.masked(key):
+            _found, journal = self.quiet(RuntimeError(f'could not use {key}'))
+        self.assertIn('RuntimeError', journal)
+        self.assertNotIn(key, journal)
+
     def test_what_ends_the_whole_job(self):
         wide = haissues.job_wide(BackupError('wrong-key', '金鑰不正確。'))
         for error in (wide, BackupError('busy', '忙碌'), flows.Cancelled(), jobs.Terminated(15), KeyboardInterrupt(),

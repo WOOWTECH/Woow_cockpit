@@ -437,7 +437,7 @@ def from_error(error):
         return issues
     if isinstance(error, BackupError):
         return [Issue(f'failure.{error.code}', 'stop', error.message, action=ACTIONS.get(error.code, ''))]
-    traceback.print_exception(type(error), error, error.__traceback__, file=sys.stderr)
+    sys.stderr.write(_redact(''.join(traceback.format_exception(error))))
     return [Issue('failure.internal-error', 'stop', UNEXPECTED, action=ACTIONS['internal-error'])]
 
 
