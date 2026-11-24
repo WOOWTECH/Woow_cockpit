@@ -49,7 +49,8 @@ and health checks; the uploaded HA file is deleted first, as the page allows: th
 HA's app password, a wrong password 401; the second user reads the shared file; the public link with its password,
 401 without or with a wrong one; CalDAV and CardDAV objects; the older version on disk and in the versions API;
 richdocuments wopi keys and the cron mode exactly dev-e's; Office capabilities as for dev-e's own account; the
-discovery on this device's gateway; a new data fingerprint; root storage and table owners), restart
+discovery on this device's gateway; a new data fingerprint; nothing below the data dir is served by the web server;
+root storage and table owners), restart
 (nextcloud-app.service restarted, verify again), rollback (a: a second restore with a one-shot ExecStartPre failure
 must end rolled-back, verify again; b: the import's safety backup restored: dev-e's own markers are back, the HA-only
 users are gone, dev-e's own account logs in), after (as --negative), cleanup, leaks (every secret named above).
@@ -114,6 +115,9 @@ def _load(name):
     spec.loader.exec_module(module)
     return module
 
+
+sys.path.insert(0, str(REPO / 'backup-engine'))
+from woowbackup import ha_nextcloud  # noqa: E402  (its constants: what the converted data must hold)
 
 drv = _load('ha_import_b1_e2e')
 drv.DEVICE = DEVICE                       # every helper/owner/root call of the b1 driver goes to dev-e
@@ -390,6 +394,15 @@ if REQ.get("versioned"):
 out["digests"] = {u: app_sh('cd "$1" 2>/dev/null || exit 3; find . -type f -print0 | LC_ALL=C sort -z | '
                             'xargs -0 -r sha256sum | sha256sum | cut -c1-64', "/var/www/html/data/%s/files" % u)
                   for u in REQ.get("digest_users", [])}
+# The data dir lies inside the web root here: nothing below /data/ may be served (Apache reads data/.htaccess), while an
+# ordinary static file is (the control). The picked user file has a name the web server would serve directly.
+picked = app_sh('cd /var/www/html/data && find . -type f -path "./*/files/*" \\( -name "*.jpg" -o -name "*.png" -o -name '
+                '"*.mp4" -o -name "*.svg" -o -name "*.html" \\) | LC_ALL=C sort | head -n 1')
+out["web"] = {"control": call("GET", "/core/img/logo/logo.svg")[0], "picked": picked.startswith("./"),
+              "codes": [call("GET", p)[0] for p in ["/data/.ncdata", "/data/index.html", "/data/nextcloud.log"]
+                        + (["/data/" + q(picked[2:])] if picked.startswith("./") else [])],
+              "htaccess": app_sh("sha256sum /var/www/html/data/.htaccess | cut -c1-64"),
+              "htaccess_below": app_sh('find /var/www/html/data -mindepth 2 -name .htaccess | wc -l')}
 out["storage"] = sql("SELECT id FROM oc_storages WHERE id LIKE 'local::%' ORDER BY numeric_id")
 out["owners"] = sql("SELECT string_agg(DISTINCT tableowner, ',') FROM pg_tables WHERE schemaname = 'public'")
 out["lastcron"] = sql("SELECT configvalue FROM oc_appconfig WHERE appid = 'core' AND configkey = 'lastcron'")
@@ -573,6 +586,9 @@ class Run:
         differ = {k: [v, section.get(k)] for k, v in SECTION.items() if section.get(k) != v}
         ev.check('check: the section equals the backup facts (HA cluster opened and read: users, files, tokens, apps)',
                  not differ, differ or section)
+        if self.args.run:
+            ev.check('check: the file lists of HA\'s database equal the files in the backup (no warning)',
+                     not any('檔案清單' in w for w in app.get('warnings') or []), app.get('warnings'))
         ev.check('check: amd64, add-on 0.2.3, target 35.0.1.1',
                  (app.get('arch'), app.get('version'), app.get('target_version')) == ('amd64', '0.2.3', '35.0.1.1'),
                  {k: app.get(k) for k in ('arch', 'version', 'target_version')})
@@ -824,6 +840,12 @@ class Run:
                  fp[0] == 207 and bool(fp[1]) and fp[1] == state.get('fingerprint')
                  and fp[1] != ((self.before.get('client') or {}).get('fingerprint') or [None, None])[1],
                  {'dav': fp, 'config': state.get('fingerprint')})
+        web = found.get('web') or {}
+        ev.check(f'{phase}: the web server serves nothing below the data dir (Nextcloud\'s own protection file; static '
+                 'control served)',
+                 web.get('control') == 200 and web.get('picked') is True and len(web.get('codes') or []) == 4
+                 and all(code in (403, 404) for code in web['codes']) and web.get('htaccess_below') == '0'
+                 and web.get('htaccess') == hashlib.sha256(ha_nextcloud.DATA_HTACCESS).hexdigest(), web)
         ev.check(f'{phase}: database: root storage is this device\'s data dir, tables owned by oc_admin',
                  found.get('storage') == 'local::/var/www/html/data/' and found.get('owners') == 'oc_admin',
                  {k: found.get(k) for k in ('storage', 'owners')})

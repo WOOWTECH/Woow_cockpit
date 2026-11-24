@@ -11,10 +11,13 @@ instead of inside a lab device:
      read-only root, the data volume noexec/nosuid/nodev, no capability;
   4. ha_nextcloud.SHAPE_SQL (pinned: PGOPTIONS search_path=pg_catalog) and the entry kinds of a pg_dump of the
      Nextcloud database (pg_restore -l, kinds and counts only) are read;
-  5. the container and the volume are removed (finally), and their absence is checked.
+  5. the share folder member is walked with ha_nextcloud.scan_datadir (the product's own walk, nothing written) and the
+     users' file lists of HA's database (FILES_SQL, pinned) are compared with the files in the backup (lists_differ);
+     the number of .htaccess files, symlinks and encryption folders is recorded;
+  6. the container and the volume are removed (finally), and their absence is checked.
 stdout: fixed lines only (`<check>: PASS|FAIL`, the source commit). The evidence JSON holds counts and kinds only:
-no table, role or object name, no value of any row (the column default expressions that are not constants would be
-listed, at most 10, 120 characters each: they are schema text).
+no table, role, object, user or file name, no value of any row (the column default expressions that are not constants
+would be listed, at most 10, 120 characters each: they are schema text).
 """
 import argparse
 import hashlib
@@ -100,7 +103,7 @@ def probe(fixture, name, doc, check):
     proc = subprocess.Popen([LABPODMAN, 'volume', 'import', name, '-'], stdin=subprocess.PIPE,
                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     sink = ha_odoo.PgSink(proc.stdin, PG_UID, PG_UID)
-    dbname, pg_files = None, 0
+    dbname, pg_files, config = None, 0, {}
     select = habackup.Select(include=(nc.PG_PREFIX, nc.CONFIG_PHP), symlinks=(), hardlinks=False)
     backup = habackup.open_backup(str(fixture))
     try:
@@ -113,7 +116,8 @@ def probe(fixture, name, doc, check):
             if entry.name == nc.CONFIG_PHP and entry.kind == 'file':
                 config = nc.parse_config(entry.read_all(nc.MAX_CONFIG))
                 nc.mask_config(config)
-                dbname = config.get('dbname') if isinstance(config, dict) else None
+                config = config if isinstance(config, dict) else {}
+                dbname = config.get('dbname')
             elif nc._under(entry.name, nc.PG_PREFIX):
                 rel = entry.name[len(nc.PG_PREFIX) + 1:] if entry.name != nc.PG_PREFIX else '.'
                 pg_files += entry.kind == 'file'
@@ -164,7 +168,47 @@ def probe(fixture, name, doc, check):
     check('toc: the dump lists entries', dump.returncode == 0 and bool(counts))
     check('toc: every kind is one Nextcloud creates (TOC_ALLOWED)', bool(counts)
           and all(k in nc.TOC_ALLOWED for k in counts))
+    lists = lp(*pinned, 'psql', '-X', '-A', '-t', '-q', '-v', 'ON_ERROR_STOP=1', '-U', 'postgres', '-d', dbname,
+               '-f', '-', input=nc.FILES_SQL.encode(), timeout=600)
+    try:
+        rows = json.loads(lists.stdout.decode('utf-8').strip()) if lists.returncode == 0 else None
+    except ValueError:
+        rows = None
+    check('lists: the file lists of HA\'s database are read (FILES_SQL)', isinstance(rows, list) and bool(rows))
+    data = share_walk(fixture, key, config)
+    if not check('datadir: the share member is walked to its end', data is not None and data.present and data.ncdata):
+        return 1
+    doc['datadir'] = {'files': data.files, 'dirs': data.dirs, 'bytes': data.bytes, 'hardlinks': data.hardlinks,
+                      'symlinks': data.symlinks, 'htaccess_below_the_top': data.htaccess,
+                      'encryption': data.encryption, 'users': len(data.users), 'skipped_files': data.skipped_files}
+    differ = nc.lists_differ(data, {'lists': rows})
+    doc['lists'] = {'users_database': len(rows or []), 'users_backup': len(data.lists),
+                    'files_database': sum(r[1] for r in rows or []), 'files_backup': sum(v[0] for v in data.lists.values()),
+                    'bytes_database': sum(r[2] for r in rows or []), 'bytes_backup': sum(v[1] for v in data.lists.values()),
+                    'users_that_differ': len(differ)}
+    check('datadir: no .htaccess below the top, no symlink, no encryption folder',
+          not data.htaccess and not data.symlinks and not data.encryption)
+    check('lists: every user\'s file list in HA\'s database equals the files in the backup', isinstance(rows, list)
+          and bool(rows) and not differ and not data.hardlinks)
     return 0 if all(v == 'PASS' for v in doc['checks'].values()) else 1
+
+
+def share_walk(fixture, key, config):
+    """ha_nextcloud.scan_datadir over the share folder member (nothing written)."""
+    located = nc.datadir_source(config.get('datadirectory'))
+    if located is None or located[0] != 'share':
+        return None
+    backup = habackup.open_backup(str(fixture))
+    try:
+        members = [m for m in backup.layout.members if m.role == 'folder' and m.slug == 'share']
+        if len(members) != 1:
+            return None
+        stream = backup.open_member(members[0].name, keys=hasecuretar.Keys(key))
+        report = habackup.Report()
+        data = nc.scan_datadir(stream, report, located[1], addon=False, instanceid=config.get('instanceid'))
+        return data if report.complete else None
+    finally:
+        backup.close()
 
 
 def write(args, doc, started, code):

@@ -128,8 +128,21 @@ CLEAN_SHAPE = {**{key: 0 for key, _label in nc.SHAPE_LABELS}, 'role_settings': 0
                             "'OCA\\WorkflowEngine\\Entity\\File'::character varying", 'false',
                             "NULL::character varying", 'NULL::timestamp without time zone',
                             "nextval('public.oc_accounts_data_id_seq'::regclass)"]}
-TABLES = ['oc_appconfig', 'oc_authtoken', 'oc_calendarobjects', 'oc_cards', 'oc_filecache', 'oc_mounts', 'oc_share',
-          'oc_storages', 'oc_users']
+TABLES = ['oc_appconfig', 'oc_authtoken', 'oc_calendarobjects', 'oc_cards', 'oc_filecache', 'oc_mimetypes', 'oc_mounts',
+          'oc_share', 'oc_storages', 'oc_users']
+
+
+def lists(*files):
+    """FILES_SQL's answer for (user, path, size) rows: the digest as PostgreSQL gives it (a signed bigint)."""
+    data = nc.DataDir()
+    for user, path, size in files:
+        data.listed(user, path, size)
+    return [[user, n, size, digest - 2 ** 64 if digest >= 2 ** 63 else digest]
+            for user, (n, size, digest) in sorted(data.lists.items())]
+
+
+# What share_tar() holds below `<user>/files`.
+HA_LISTS = lists(('admin', 'files/hello.txt', 13), ('admin', 'files/中文.txt', 6))
 
 
 def addon_tar(*, config=HA_CONFIG, pg_version=b'16\n', apps=True, extra=()):
@@ -228,6 +241,7 @@ class World(fk.World):
         self.verify = None
         self.catalog = None
         self.shape = {'hapg': dict(CLEAN_SHAPE), 'nc-db': dict(CLEAN_SHAPE)}
+        self.lists = HA_LISTS
         self.toc = b';\n; Archive\n201; 1259 16390 TABLE public oc_users nextcloud\n'
         self.sessions = []
         self.php = []
@@ -291,6 +305,8 @@ class World(fk.World):
             return self.ha_details
         if sql == nc.SHAPE_SQL:
             return self.shape.get(role)
+        if sql == nc.FILES_SQL:
+            return self.lists
         if sql.startswith("SELECT json_build_object('users'"):
             return HA_COUNTS
         if sql.startswith("SELECT json_build_object(\n 'role'"):
@@ -304,7 +320,8 @@ class World(fk.World):
             return self.catalog if self.catalog is not None else {
                 'owners': ['oc_admin'], 'verifier_md5': hashlib.md5(VERIFIER.encode()).hexdigest(),
                 'role': {k: v for k, v in LIVE_DB['role'].items() if k != 'password'}, 'role_settings': 0,
-                'grants': 0, **{key: LIVE_DB[key] for key in ('roles', 'extensions', 'datacl', 'nspacl')}}
+                'grants': 0, 'databases': ['nextcloud', 'postgres', 'template0', 'template1'],
+                **{key: LIVE_DB[key] for key in ('roles', 'extensions', 'datacl', 'nspacl')}}
         if 'FROM pg_settings' in sql or 'pg_file_settings' in sql:
             return []
         return None
@@ -376,6 +393,31 @@ class ConfigTests(unittest.TestCase):
         strict = dict(live, twofactor_enforced='true')
         merged, carried, _ = nc.merge_config(dict(ha, twofactor_enforced='false'), strict)
         self.assertEqual((merged['twofactor_enforced'], carried), ('true', []), 'never weaker than the target')
+
+    def test_the_two_factor_keys_are_one_policy(self):
+        # lib/private/Authentication/TwoFactorAuth/MandatoryTwoFactor.php: only the string 'true' enforces; a list of
+        # groups narrows it, an excluded group too. The groups belong to the users the policy came with.
+        live, ha = nc.parse_config(LIVE_CONFIG), nc.parse_config(HA_CONFIG)
+        ha.pop('twofactor_enforced')
+        everyone = {'twofactor_enforced': 'true', 'twofactor_enforced_groups': {}, 'twofactor_enforced_excluded_groups': {}}
+        some = {'twofactor_enforced': 'true', 'twofactor_enforced_groups': {0: 'staff'}}
+        other = {'twofactor_enforced': 'true', 'twofactor_enforced_groups': {0: 'family'},
+                 'twofactor_enforced_excluded_groups': {0: 'guests'}}
+        excluded = {'twofactor_enforced': 'true', 'twofactor_enforced_excluded_groups': {0: 'guests'}}
+        off = {'twofactor_enforced': 'false', 'twofactor_enforced_groups': {0: 'x'}}
+        boolean = {'twofactor_enforced': True}  # not the string 'true': Nextcloud does not enforce it
+        for of_ha, of_live, kept in (({}, {}, {}), ({}, some, some), (some, {}, some), (some, other, some),
+                                     (everyone, some, everyone), (some, everyone, everyone), (excluded, everyone, everyone),
+                                     (off, some, some), (off, {}, off), (off, off, off), (boolean, some, some),
+                                     (boolean, everyone, everyone), (some, off, some), (some, boolean, some),
+                                     ({'twofactor_enforced': 'true'}, other, {'twofactor_enforced': 'true'})):
+            with self.subTest(ha=of_ha, live=of_live):
+                merged, carried, _ = nc.merge_config({**ha, **of_ha}, {**live, **of_live})
+                self.assertEqual({k: merged[k] for k in nc.TWOFACTOR if k in merged}, kept)
+                self.assertEqual(carried, [k for k in nc.TWOFACTOR if k in of_ha] if kept == of_ha and of_ha else [])
+        merged, carried, _ = nc.merge_config(dict(ha, app_install_overwrite={0: 'notes'}), {**live, **some})
+        self.assertEqual((merged['app_install_overwrite'], carried, merged['twofactor_enforced_groups']),
+                         ({0: 'notes'}, ['app_install_overwrite'], {0: 'staff'}))
 
     def test_blockers(self):
         live, ha = nc.parse_config(LIVE_CONFIG), nc.parse_config(HA_CONFIG)
@@ -450,6 +492,60 @@ class DataDirTests(unittest.TestCase):
             {'name': 'nextcloud/admin/files/link', 'type': 'symlink', 'linkname': 'hello.txt'}]))
         self.assertEqual((found.ncdata, found.encryption, found.symlinks), (False, True, 1))
 
+    def test_htaccess_at_the_top_is_not_copied_and_any_other_is_counted(self):
+        # The data dir is inside Apache's web root here: HA's own .htaccess never moves, one further down could publish
+        # the folder or run files as programs (the caller refuses it). The web updater's folder is skipped as a whole.
+        found, tar = self.walk(share_tar(extra=[
+            {'name': 'nextcloud/.htaccess', 'data': b'Require all granted\n'},
+            {'name': 'nextcloud/updater-ochaabcdef12/backups/nc/.htaccess', 'data': b'Require all granted\n'}]))
+        self.assertEqual((found.htaccess, found.htaccess_samples), (0, []))
+        self.assertNotIn('./.htaccess', tar)
+        found, tar = self.walk(share_tar(extra=[
+            {'name': 'nextcloud/admin/files/site/.htaccess', 'data': b'Require all granted\n'},
+            {'name': 'nextcloud/appdata_ochaabcdef12/.htaccess', 'data': b'x'},
+            {'name': 'nextcloud/admin/files/.htaccess', 'type': 'dir'},
+            {'name': 'nextcloud/admin/files/.htaccess/x', 'data': b'x'},
+            {'name': 'nextcloud/admin/files/again/.htaccess', 'type': 'hardlink',
+             'linkname': 'nextcloud/admin/files/hello.txt'}]))
+        self.assertEqual((found.htaccess, found.htaccess_samples[0]), (5, 'admin/files/site/.htaccess'))
+        self.assertFalse([n for n in tar if '.htaccess' in n])
+        found, tar = self.walk(share_tar(extra=[{'name': 'nextcloud/.htaccess', 'type': 'dir'}]))
+        self.assertEqual((found.htaccess, './.htaccess' in tar), (1, False))
+        found, tar = self.walk(share_tar(extra=[{'name': 'nextcloud/admin/files/x.htaccess', 'data': b'x'},
+                                                {'name': 'nextcloud/admin/files/.htaccess.bak', 'data': b'x'}]))
+        self.assertEqual((found.htaccess, './admin/files/.htaccess.bak' in tar), (0, True))
+
+    def test_the_users_file_lists(self):
+        found, _tar = self.walk(share_tar(extra=[
+            {'name': 'nextcloud/admin/files_versions/hello.txt.v1', 'data': b'old'},
+            {'name': 'nextcloud/admin/cache/x', 'data': b'x'}]))
+        self.assertEqual(nc.lists_differ(found, {'lists': HA_LISTS}), [])
+        # The same numbers PostgreSQL gives: md5('<size>:<path>'), its first 16 digits as a (signed) bigint, XORed.
+        digest = 0
+        for text in ('13:files/hello.txt', '6:files/中文.txt'):
+            digest ^= int(hashlib.md5(text.encode('utf-8')).hexdigest()[:16], 16)
+        self.assertEqual(found.lists, {'admin': [2, 19, digest]})
+        signs = set()
+        for i in range(16):
+            name = f'files/{i}'
+            value = int.from_bytes(hashlib.md5(f'1:{name}'.encode('ascii')).digest()[:8], 'big', signed=True)
+            signs.add(value < 0)
+            data = nc.DataDir()
+            data.listed('u', name, 1)
+            self.assertEqual(nc.lists_differ(data, {'lists': [['u', 1, 1, value]]}), [], name)
+            self.assertEqual(nc.lists_differ(data, {'lists': [['u', 1, 2, value]]}), ['u'], 'another size')
+        self.assertEqual(signs, {True, False})
+        for rows in (lists(('admin', 'files/hello.txt', 13)), lists(('admin', 'files/hello.txt', 13),
+                                                                  ('admin', 'files/中文.txt', 7)),
+                     lists(('admin', 'files/hello.txt', 6), ('admin', 'files/中文.txt', 13)), []):
+            self.assertEqual(nc.lists_differ(found, {'lists': rows}), ['admin'], rows)
+        self.assertEqual(nc.lists_differ(found, {'lists': HA_LISTS + lists(('bob', 'files/a', 1))}), ['bob'])
+        for rows in (None, 'x', [['admin', 2, 19]], [['admin', 2, 19, True]], [[1, 2, 3, 4]]):
+            self.assertEqual(nc.lists_differ(found, {'lists': rows}), [], rows)
+        found, _tar = self.walk(share_tar(extra=[{'name': 'nextcloud/admin/files/again', 'type': 'hardlink',
+                                                  'linkname': 'nextcloud/admin/files/hello.txt'}]))
+        self.assertEqual(nc.lists_differ(found, {'lists': []}), [], 'a hard link has no size of its own')
+
     def test_hard_link_to_a_skipped_file_stops(self):
         with self.assertRaises(BackupError):
             self.walk(share_tar(extra=[{'name': 'nextcloud/admin/files/again', 'type': 'hardlink',
@@ -487,6 +583,40 @@ class CheckTests(NextcloudCase):
         empty = gzip.compress(hx.tar_bytes([{'name': 'other', 'type': 'dir'}]), mtime=0)
         result = self.check(self.upload_nextcloud(share=empty), ['nextcloud'])[0]
         self.assertIn('找不到 Nextcloud 的使用者檔案資料夾', result['blockers'][0])
+
+    def test_a_data_directory_with_htaccess_files_is_refused(self):
+        share = share_tar(extra=[{'name': 'nextcloud/.htaccess', 'data': b'Require all denied\n'},
+                                 {'name': 'nextcloud/admin/files/site/.htaccess', 'data': b'Require all granted\n'}])
+        result = self.check(self.upload_nextcloud(share=share), ['nextcloud'])[0]
+        self.assertFalse(result['ok'])
+        self.assertEqual(len(result['blockers']), 1, result['blockers'])
+        for part in ('1 個網站伺服器設定檔 .htaccess', 'admin/files/site/.htaccess', '無法安全地搬過來'):
+            self.assertIn(part, result['blockers'][0])
+        with self.assertRaises(BackupError) as caught:
+            self.convert(self.upload_nextcloud(share=share), ['nextcloud'])
+        self.assertEqual(caught.exception.code, 'incompatible')
+        self.assertIn('admin/files/site/.htaccess', caught.exception.message)
+        self.assertFalse(self.runs('nc-db'), 'no cluster is built')
+
+    def test_file_lists_that_differ_are_a_warning(self):
+        result = self.check(self.upload_nextcloud(), ['nextcloud'])[0]
+        self.assertFalse([w for w in result['warnings'] if '檔案清單' in w], 'the same files: no warning')
+        self.world.lists = lists(('admin', 'files/hello.txt', 13))
+        result = self.check(self.upload_nextcloud(), ['nextcloud'])[0]
+        self.assertTrue(result['ok'])
+        warning = [w for w in result['warnings'] if '檔案清單' in w]
+        self.assertEqual(len(warning), 1, result['warnings'])
+        for part in ('1 位 Nextcloud 使用者', 'admin', 'podman exec -u www-data nextcloud-app php occ files:scan --all'):
+            self.assertIn(part, warning[0])
+
+    def test_the_live_database_is_read_pinned(self):
+        # The live superuser's session: nothing the Nextcloud role could create in `public` stands in for a built-in.
+        self.check(self.upload_nextcloud(), ['nextcloud'])
+        live = [x for x in self.world.sessions if x['role'] == 'nextcloud-db' and 'rolpassword' in x['sql']]
+        self.assertEqual(len(live), 1)
+        self.assertTrue(live[0]['sql'].startswith('SET search_path = pg_catalog; SELECT '), live[0]['sql'][:80])
+        self.assertIn('FROM public.oc_appconfig a', live[0]['sql'])
+        self.assertNotIn('FROM oc_appconfig', live[0]['sql'])
 
     def test_other_blockers(self):
         self.world.ha_details = dict(self.world.ha_details, encryption='yes', extensions=['plpgsql', 'pg_trgm'])
@@ -545,6 +675,11 @@ class ConvertTests(NextcloudCase):
         data = members(self.world.dirs[DIRS[3]])
         self.assertEqual((data['.'][0].uid, data['.'][0].mode), (33, 0o770))
         self.assertEqual(data['./admin/files/hello.txt'][1], b'hello from HA')
+        # Nextcloud's own protection of a data dir inside the web root, also when HA's data directory has none.
+        protect = data['./.htaccess']
+        self.assertEqual((protect[1], protect[0].uid, protect[0].gid, protect[0].mode),
+                         (nc.DATA_HTACCESS, 33, 33, 0o644))
+        self.assertIn(b'\n  Require all denied\n', protect[1])
         pg = members(self.world.dirs[DIRS[0]])
         self.assertEqual(((pg['.'][0].uid, pg['.'][0].gid, pg['.'][0].mode), pg['./PG_VERSION'][1]),
                          ((999, 0, 0o700), b'16\n'))
@@ -567,6 +702,20 @@ class ConvertTests(NextcloudCase):
         reminders = '\n'.join(row['reminders_by_app']['nextcloud'])
         for part in ('永久停用', 'http://127.0.0.1:18081', 'SMTP', 'Woow Nextcloud MCP Server'):
             self.assertIn(part, reminders)
+
+    def test_the_protection_file_replaces_has_own(self):
+        share = share_tar(extra=[{'name': 'nextcloud/.htaccess', 'data': b'Require all granted\n'}])
+        result = self.convert(self.upload_nextcloud(share=share), ['nextcloud'])
+        data = members(self.world.dirs[DIRS[3]])
+        self.assertEqual(data['./.htaccess'][1], nc.DATA_HTACCESS)
+        self.assertFalse(any('檔案掃描' in line for line in result['ha_import']['reminders_by_app']['nextcloud']))
+
+    def test_a_reminder_to_scan_when_the_file_lists_differ(self):
+        self.world.lists = lists(('admin', 'files/hello.txt', 13))
+        result = self.convert(self.upload_nextcloud(), ['nextcloud'])
+        lines = [line for line in result['ha_import']['reminders_by_app']['nextcloud'] if '檔案掃描' in line]
+        self.assertEqual(len(lines), 1)
+        self.assertIn('podman exec -u www-data nextcloud-app php occ files:scan --all', lines[0])
 
     def assert_sessions_pinned(self):
         """HA's cluster: every session pinned. The new cluster: the setup before HA's dump runs as its superuser
@@ -638,12 +787,16 @@ class ConvertTests(NextcloudCase):
     def test_a_role_that_gained_rights_fails_the_verification(self):
         good = {'owners': ['oc_admin'], 'verifier_md5': hashlib.md5(VERIFIER.encode()).hexdigest(),
                 'role': {k: v for k, v in LIVE_DB['role'].items() if k != 'password'}, 'role_settings': 0,
-                'grants': 0, **{key: LIVE_DB[key] for key in ('roles', 'extensions', 'datacl', 'nspacl')}}
+                'grants': 0, 'databases': ['nextcloud', 'postgres', 'template0', 'template1'],
+                **{key: LIVE_DB[key] for key in ('roles', 'extensions', 'datacl', 'nspacl')}}
         for change, text in (({'role': dict(good['role'], super=True)}, 'oc_admin 角色的權限和這台的不同'),
                              ({'role': dict(good['role'], createrole=True)}, 'oc_admin 角色的權限和這台的不同'),
                              ({'role': None}, 'oc_admin 角色的權限和這台的不同'),
                              ({'role_settings': 1}, '出現了角色或資料庫層級的設定'),
-                             ({'grants': 2}, '資料表或欄位多了權限設定'), ({'grants': None}, '資料表或欄位多了權限設定')):
+                             ({'grants': 2}, '資料表或欄位多了權限設定'), ({'grants': None}, '資料表或欄位多了權限設定'),
+                             # The role may create databases (CREATEDB): SQL hidden in HA's dump could leave one behind.
+                             ({'databases': ['evil', 'nextcloud', 'postgres', 'template0', 'template1']}, '有其他資料庫'),
+                             ({'databases': None}, '有其他資料庫')):
             with self.subTest(change=change):
                 self.world.catalog = dict(good, **change)
                 with self.assertRaises(BackupError) as caught:

@@ -2088,8 +2088,11 @@ html,data}`; facts `phase3/facts/nextcloud.md`, owner decisions D1-D5 applied wi
    (one `$CONFIG = array (...)`; arrays, single-quoted strings, numbers, booleans, null; comments skipped); anything else is
    a blocker. Versions: HA's `version` (4 parts) must equal the live config.php's and its first three parts the live
    image's `NEXTCLOUD_VERSION`; both `installed`; HA not in maintenance; `dbtype` pgsql; table prefix `oc_` on both sides;
-   no object storage; server-side encryption (an `oc_appconfig` flag or `files_encryption` folders: decision D4) and
-   symlinks in the data directory are blockers. The add-on version (0.2.3/0.2.4 → 35.0.1) is shown only.
+   no object storage; server-side encryption (an `oc_appconfig` flag or `files_encryption` folders: decision D4),
+   symlinks in the data directory and a `.htaccess` anywhere below its top (「HA 的 Nextcloud 使用者檔案裡有 … 個網站伺服器
+   設定檔 .htaccess…」: here the data dir is inside Apache's web root with `AllowOverride All`, so one could publish a folder
+   or run files as programs; Nextcloud never creates nor accepts one) are blockers. The add-on version (0.2.3/0.2.4 →
+   35.0.1) is shown only.
 3. check: the cluster is streamed into a throwaway volume and opened by a throwaway PostgreSQL 16 exactly like Odoo's (§9
    Odoo 1); the database named by HA's `dbname` must hold Nextcloud's tables, only the plpgsql extension, no other schema,
    and the root storage `local::<HA datadirectory>/` (lib/private/Files/Storage/Local.php `getId`; longer than 64 bytes →
@@ -2098,11 +2101,17 @@ html,data}`; facts `phase3/facts/nextcloud.md`, owner decisions D1-D5 applied wi
    are read first (`SHAPE_SQL`, extension members not counted): any function, procedure, aggregate, operator, type or
    domain, trigger, rule, policy or row security, event trigger, view or other relation kind than table/sequence/index,
    CHECK or exclusion constraint, generated column, inheritance, collation, conversion, text search object, operator
-   class/family, cast, foreign server, user mapping, publication, large object, default privilege or transform, or a
-   column default that is neither a constant nor `nextval()` → blocker 「HA 的 Nextcloud 資料庫含有 Nextcloud 不會建立的
+   class/family, cast, foreign server, user mapping, publication, large object, default privilege, transform or extended
+   statistics, or a column default that is neither a constant nor `nextval()` → blocker 「HA 的 Nextcloud 資料庫含有 Nextcloud 不會建立的
    資料庫物件（…），無法安全地搬過來。」 and HA's tables are not read at all (an unreadable shape → blocker too); a
    genuine Nextcloud 35.0.1 database has none of them (dev-e, 2026-11-24). Counts (users, file cache, shares, tokens,
-   calendar objects, contacts, storages, mounts, external mounts) are read; warnings: apps HA enables that exist nowhere here, HA custom apps whose info.xml excludes this Nextcloud or PHP
+   calendar objects, contacts, storages, mounts, external mounts) are read; per user the database's file list (home
+   storages, `files/**`: number, bytes and an order-free md5 digest of size and path, `FILES_SQL`) is compared with the
+   files in the backup (HA archives the share folder after the add-on runs again): a difference is a warning and a reminder
+   with the command `podman exec -u www-data <app container> php occ files:scan --all`, not a blocker (not compared when
+   the data directory holds hard links). This device's own database is read as its superuser with `search_path =
+   pg_catalog` (nothing the Nextcloud role could create in `public` stands in for a built-in). Warnings besides: apps HA
+   enables that exist nowhere here, HA custom apps whose info.xml excludes this Nextcloud or PHP
    version or that hold programs for another processor, local external storages, HA config keys that do not move (names).
 4. convert: `pg_dump -Fc`; a NEW cluster from the live database image, environment and secret; the live config.php's
    `dbuser` role (e.g. `oc_admin`) with the LIVE attributes and password verifier (stdin, masked) and the grants
@@ -2121,24 +2130,28 @@ html,data}`; facts `phase3/facts/nextcloud.md`, owner decisions D1-D5 applied wi
    (`appdata_<instanceid>/richdocuments/remoteData`) is dropped from the data dir and its file cache rows deleted, so
    discovery is fetched again from this device's Collabora. Verified: every count (file cache minus those rows), table
    owners = the role, the role's attributes (never superuser) and password verifier, root storage id, roles, extensions,
-   database and public-schema grants and the kept settings equal the live ones, no per-role or per-database setting,
-   no table or column grant (the dump is restored with --no-acl, so one can only come from SQL hidden in it). Live PostgreSQL settings are carried (§9 Odoo); clean stop, `pg_controldata` "shut down"; the PostgreSQL
+   database and public-schema grants and the kept settings equal the live ones, no database besides `postgres`,
+   `template0`, `template1` and Nextcloud's, no per-role or per-database setting, no table or column grant (the dump is restored with --no-acl, so one can only come from SQL hidden in it). Live PostgreSQL settings are carried (§9 Odoo); clean stop, `pg_controldata` "shut down"; the PostgreSQL
    dir is the volume export with its top folder owned like the live one.
 5. config.php = the live one (base: URLs, trusted domains, proxies, database credentials, data directory, caches, mail,
    maintenance window) + HA's `instanceid`, `passwordsalt`, `secret` + HA's `twofactor_enforced*` and
-   `app_install_overwrite` (D1; a live two-factor enforcement HA lacks stays) + a new `data-fingerprint` (md5 of the time,
+   `app_install_overwrite` (D1; the three two-factor keys are one policy, MandatoryTwoFactor.php: all of HA's, or all of the
+   live ones when the live enforcement is stricter: HA enforces nothing, or leaves someone out where the live one is for
+   everybody) + a new `data-fingerprint` (md5 of the time,
    as `occ maintenance:data-fingerprint` writes it; the package's own restore runs that command, scripts/restore.sh:76: sync
    clients then treat the server as restored and keep local files it lacks), written in Nextcloud's format with the live
    file's owner and mode; before packaging the live image's PHP (throwaway container, network none, read-only root, the
    file on stdin) must lint it and return exactly the merged values. html dir = the live pack without `config/config.php`
    and without the custom apps HA brings, plus the merged file and HA's custom apps (D2; owner www-data of the live image);
    data dir = HA's data directory (owner www-data, HA's modes, top folder like the live one; `updater-*` skipped, previews
-   kept: D5); Redis dir = its top folder only, owned like the live one. Every dir tar is checked like a restore reads it.
+   kept: D5) with Nextcloud's own `.htaccess` (Setup.php `protectDataDirectory`, deny all) written at its top instead of
+   HA's, whether HA had one or not (HA's data directory is outside its web root, here it is inside); Redis dir = its top folder only, owned like the live one. Every dir tar is checked like a restore reads it.
 6. Notes and reminders: the users, files, shares, calendars, contacts and app passwords become HA's; the URL, database
    password, mail and Office settings stay; HA's custom apps; stop the HA add-on for good (same instance identity); log in
    with HA's accounts and point sync, CalDAV and CardDAV clients to this device's URL; the new data fingerprint (sync
    clients keep their local files); public links and federated IDs
-   still name HA; mail settings did not move; Office not enabled on HA; the MCP lines for `nextcloud-mcp-admin` and
+   still name HA; mail settings did not move; a file scan when HA's file lists and files differ; Office not enabled on HA;
+   the MCP lines for `nextcloud-mcp-admin` and
    「Woow Nextcloud MCP Server」 (`engine_mcp_lines`). Test mode changes nothing else for Nextcloud.
 
 **LiteLLM** (`woow-litellm` → `litellm`: one `postgres` item `main`, container `litellm-postgres`, database and user
