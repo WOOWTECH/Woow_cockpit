@@ -1,0 +1,255 @@
+{
+  "schema_version": 1,
+  "kind": "unit-tests",
+  "lane": "integration-3",
+  "step": "3k (final: emqx-secreview iteration 8 = SR-12 stored-form check, O-2 names(), O-3 DB_OFF warning, O-4 docs; the last whole GitHub validate workflow on the code tip)",
+  "tested_commits": {
+    "targeted modules after the merge": "61e7226 (tree ebd37068, backup-engine tree 70b6c874)",
+    "wf4 FINAL (whole validate workflow + extra suites)": "61e7226 in the clean detached worktree /tmp/int3-suite-20261124"
+  },
+  "tree": "61e7226 = a1b690f (interim, evidence of step 3j) + the iteration-8 merge; backup-engine/ and backup/ differ from 4353892 only in ha_emqx.py and hacommon.py",
+  "merges": [
+    {
+      "lane": "emqx-secreview iteration 8",
+      "branch": "sec/emqx-secreview8-20261124",
+      "tip": "6b5c97e",
+      "merge_commit": "61e7226",
+      "conflicts": "none; 20 of 22 files equal 6b5c97e; backup-engine/woowbackup/hacommon.py (3 + 3 hunks) and docs/backup/CONTRACT.md (7 + 2 hunks) are clean 3-way merges on base 3369a9c (merge-file rc 0, staged blobs equal)"
+    }
+  ],
+  "names_change": "hacommon.names() change of emqx-secreview iteration 8 (a1f1947): names() now shows every character of the Unicode categories\nCc, Cf, Cs, Cn, Zl, Zp as '?' (before: CONTROL_RE only); cut at 60 characters and the joined 'a、b 等 N 個' form are unchanged.\nCallers (git grep at a1f1947, backup-engine/woowbackup): ha_codeserver (wrapper names() at line 148, then 12 warning/note/reminder\ntexts), ha_emqx (15: blocker/warning/note/reminder/error texts, the SR-5 account list), ha_headscale (3 blocker texts), ha_hermes\n(5 blocker/warning/note/reminder texts), ha_litellm (11 message texts; its local names() at 640 is a different helper), ha_nextcloud\n(12 blocker/warning/note/error texts), ha_omnigent (15 message texts + section()['alembic'], a displayed report field; the import's\ndata path uses the raw found['alembic'] list at lines 414, 517, 1133, 1182), ha_opendesign (4 texts). Not called by ha_odoo, ha_n8n,\nhaimport; suggest.py has its own local names(entry, key, ident). Every use is display text (messages, the page, the job log);\nno file name, path, comparison or stored value of an import depends on it => display-only: the non-EMQX runs on 4353892 hold.",
+  "public_guards": "unchanged; SR-12 widens the clear-text refusal (CLEAR_ROWS by stored form per algorithm); O-3 adds a warning; no refusal removed",
+  "suites": {
+    "56 tests/backup modules (every test_ha_*, every module importing hacommon, test_suggest) at 61e7226 (b1 on)": {
+      "tests": 907,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 1,
+      "expected_failures": 0,
+      "unexpected_successes": 0,
+      "guard_refused_calls": 0,
+      "shim_hits": 0,
+      "run_native": "denied",
+      "elapsed_seconds": 110,
+      "not_ok_ids": [],
+      "ok": 906
+    },
+    "lab test_emqx_product_real_ha at 61e7226": {
+      "tests": 39,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "expected_failures": 0,
+      "unexpected_successes": 0,
+      "guard_refused_calls": 0,
+      "shim_hits": 0,
+      "run_native": "denied",
+      "elapsed_seconds": 0,
+      "not_ok_ids": [],
+      "ok": 39
+    },
+    "wf4 FINAL at 61e7226: validate.yml unittest discover (CI form: umask 022, --exe-only guard, no PYTHONPATH, WOOWBK_REQUIRE_HA_CRYPTO=1)": {
+      "rc": 1,
+      "tests": 2032,
+      "failures": 0,
+      "errors": 2,
+      "skipped": 6,
+      "expected_failures": 0,
+      "unexpected_successes": 0,
+      "guard_refused_calls": 2,
+      "shim_hits": 0,
+      "run_native": "absent",
+      "elapsed_seconds": 253,
+      "not_ok_ids": [
+        "tests.e2e.test_dirs_fixture.DriverTests.test_d3_dropin_refuses_start_only_with_the_marker",
+        "tests.e2e.test_dirs_fixture.DriverTests.test_embedded_programs_compile"
+      ],
+      "ok": 2024
+    },
+    "wf4 FINAL at 61e7226: validate.yml + pi-web-validation.yml syntax and source steps (check_source, bash -n, node --check)": {
+      "steps": {
+        "check_source": 0,
+        "bash-n-scripts": 0,
+        "node-check-native_podman_managed-owners.js": 0,
+        "node-check-branding_mobile-navigation.js": 0,
+        "node-check-tests_mobile-navigation-live.mjs": 0,
+        "node-check-tests_parallel-ingress-live.mjs": 0,
+        "node-check-apps-catalog_theme.js": 0,
+        "node-check-apps-catalog_apps.js": 0,
+        "node-check-apps-catalog_stacks.js": 0,
+        "node-check-scripts_capture.mjs": 0,
+        "node-check-services_service.js": 0,
+        "node-check-backup_backup.js": 0,
+        "node-check-pi-web-integration_gateway.mjs": 0,
+        "node-check-pi-web-integration_package_app.js": 0,
+        "piweb-bash-n-install": 0,
+        "piweb-node-check-gateway": 0,
+        "piweb-node-check-app": 0
+      },
+      "all_rc_0": true
+    },
+    "wf4 FINAL at 61e7226: node --test stack-plans": {
+      "rc": 0,
+      "tests": 3,
+      "pass": 3,
+      "fail": 0,
+      "skipped": 0,
+      "cancelled": 0,
+      "elapsed_seconds": 0,
+      "not_ok": []
+    },
+    "wf4 FINAL at 61e7226: node --test pi-web tests (validate.yml)": {
+      "rc": 0,
+      "tests": 13,
+      "pass": 13,
+      "fail": 0,
+      "skipped": 0,
+      "cancelled": 0,
+      "elapsed_seconds": 20,
+      "not_ok": []
+    },
+    "wf4 FINAL at 61e7226: node --test managed-owners": {
+      "rc": 0,
+      "tests": 4,
+      "pass": 4,
+      "fail": 0,
+      "skipped": 0,
+      "cancelled": 0,
+      "elapsed_seconds": 0,
+      "not_ok": []
+    },
+    "wf4 FINAL at 61e7226: node --test pi-web tests (pi-web-validation.yml)": {
+      "rc": 0,
+      "tests": 13,
+      "pass": 13,
+      "fail": 0,
+      "skipped": 0,
+      "cancelled": 0,
+      "elapsed_seconds": 19,
+      "not_ok": []
+    },
+    "wf4 FINAL at 61e7226: node tests/preview.mjs": {
+      "rc": 0,
+      "seconds": 8,
+      "fixed_result_lines": [
+        "PASS gallery 1440px: missing captures handled, assets loaded, white canvas, no overflow",
+        "PASS gallery 1024px: missing captures handled, assets loaded, white canvas, no overflow",
+        "PASS gallery 390px: missing captures handled, assets loaded, white canvas, no overflow",
+        "PASS gallery 360px: missing captures handled, assets loaded, white canvas, no overflow",
+        "PASS gallery: local capture visible and full-image link works",
+        "PASS historical layout review: missing captures handled, no JavaScript errors"
+      ]
+    },
+    "wf4 FINAL at 61e7226: node tests/brand-browser.mjs (both brands; runs apps-catalog, services-ui, backup-ui and embedded-theme per brand on installed roots)": {
+      "rc": 0,
+      "seconds": 769,
+      "fixed_result_lines": [
+        "PASS Cockpit theme switching and apps grouping, controls, logs, Pi link, and responsive layout",
+        "PASS Pi iframe follows Cockpit light, dark, auto and preserves native preference",
+        "PASS Cockpit theme switching and apps grouping, controls, logs, Pi link, and responsive layout",
+        "PASS Pi iframe follows Cockpit light, dark, auto and preserves native preference",
+        "PASS both installed brands: same helpers, application controls, service ownership, backup/restore UI and responsive themes"
+      ],
+      "tap_blocks": [
+        {
+          "tests": 10,
+          "pass": 10,
+          "fail": 0
+        },
+        {
+          "tests": 108,
+          "pass": 108,
+          "fail": 0
+        },
+        {
+          "tests": 10,
+          "pass": 10,
+          "fail": 0
+        },
+        {
+          "tests": 108,
+          "pass": 108,
+          "fail": 0
+        }
+      ]
+    },
+    "wf4 FINAL at 61e7226: node tests/pwa-brands.mjs": {
+      "rc": 0,
+      "seconds": 11,
+      "fixed_result_lines": [
+        "PWA manifest, installability: passed",
+        "PWA install, standalone launch: passed",
+        "PASS woowtech PWA manifest, icon retrieval, browser install and standalone launch (fixture)",
+        "PWA manifest, installability: passed",
+        "PWA install, standalone launch: passed",
+        "PASS apporo PWA manifest, icon retrieval, browser install and standalone launch (fixture)"
+      ]
+    },
+    "wf4 FINAL at 61e7226: full tests/backup with the two real batch-1 HA backups (guard default mode)": {
+      "rc": 1,
+      "tests": 1876,
+      "failures": 2,
+      "errors": 3,
+      "skipped": 1,
+      "expected_failures": 0,
+      "unexpected_successes": 0,
+      "guard_refused_calls": 6,
+      "shim_hits": 0,
+      "run_native": "denied",
+      "elapsed_seconds": 278,
+      "not_ok_ids": [
+        "tests.backup.test_litellm_lab_runner.LabRunnerTests.test_abort_is_forwarded",
+        "tests.backup.test_litellm_lab_runner.LabRunnerTests.test_exact_reader_capture_boundary",
+        "tests.backup.test_litellm_lab_runner.LabRunnerTests.test_input_and_file_output_are_forwarded_and_bounded",
+        "tests.backup.test_litellm_lab_runner.LabRunnerTests.test_real_child_overflow_is_bounded_and_sanitized",
+        "tests.backup.test_litellm_lab_runner.LabRunnerTests.test_stderr_and_failures_are_not_returned"
+      ],
+      "ok": 1870
+    },
+    "wf4 FINAL at 61e7226: tests.backup.test_ha_backup.RealBackupTests (real HA 2026.11 backup)": {
+      "rc": 0,
+      "tests": 1,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "expected_failures": 0,
+      "unexpected_successes": 0,
+      "guard_refused_calls": 0,
+      "shim_hits": 0,
+      "run_native": "denied",
+      "elapsed_seconds": 7,
+      "not_ok_ids": [],
+      "ok": 1
+    },
+    "wf4 FINAL at 61e7226: node tests/backup-ui.mjs": {
+      "rc": 0,
+      "tests": 108,
+      "pass": 108,
+      "fail": 0,
+      "skipped": 0,
+      "cancelled": 0,
+      "elapsed_seconds": 387,
+      "not_ok": []
+    }
+  },
+  "not_run_here": "the 2 tests.e2e.test_dirs_fixture DriverTests (host guard; unchanged since origin/main); lab tests that need run_native; the workflow install steps (the host has the pinned versions); no real lab restore in this lane",
+  "gate": "INTEGRATION FINAL-2 is written only after the independent verifier of review iteration 8 gives its verdict with no new product blocker (main 20:55)",
+  "commercial_acceptance": "not-complete",
+  "private_logs_sha256": {
+    "i8-units.out": "4e274fbf085443250e4a09375e0fdbd3032176acb7d889964671c3b20ae51e0b",
+    "i8-lab.out": "18e33a385079f63bb56157699423faa6cc72afab4e810c186a43da723df87e3b",
+    "wf4.wf.summary": "17ef0570ddb088ffc73a7b496b6184c17ffa330fe63deedcad0f9d73fe692451",
+    "wf4.wf.unittest.out": "ffd42b8b32e95420825b6d87feb5ac7bd0f5b0c97197a6f110c16092fe0f0147",
+    "wf4.wf.unittest.guardlog": "45d0c1c947c2a35875d4967de1b8d5166ba3ce4443a3909b9e15cb2dc12971e3",
+    "wf4.wf.node-test-stack-plans.log": "d871f7d56ad07c7800d2cc6b31466e274ab714deb1b972aea78a3ed3dbbf3783",
+    "wf4.wf.node-test-pi-web-tests.log": "d92df50611adff47d4c39d72cf072844eb451e7b019fc4793f4fa0e4c8e05275",
+    "wf4.wf.node-test-managed-owners.log": "bdb2a4d857fb7428dac0ab808c67aef3a3f84e27e06b9ae49f97ae9ef6734482",
+    "wf4.wf.piweb-node-test.log": "0ef5c42ce0dc402c9cbc01c2f90027577eded02810f13e37251f89406f1265d2",
+    "wf4.wf.node-preview.log": "b80d39db2b6584338f89f9aee3b5803e5e43f03c54599d8f09322b5bde2470ed",
+    "wf4.wf.node-brand-browser.log": "89378e42bc5fc19f95eacdbde3f290d5840967cd930c2c5d520138eedbce1d43",
+    "wf4.wf.node-pwa-brands.log": "004dd94fd92f03ce33ae67a89d2c520d7c4699a89bd9138244a6479141f1f989",
+    "wf4.wf.b1.out": "4a70618bf83c49336c3e8deebec5680cbf07935c8cb059c151d8d4ce9585d07b",
+    "wf4.wf.ha118.out": "84d21902dd3115813420e1ef2443a06364f7fd5f48a73e92036a8761c2aae244",
+    "wf4.wf.node-backup-ui.log": "c1331af26c5f8808a452c807ec658232edb6a5a4def27373da8991ddd9980449"
+  }
+}

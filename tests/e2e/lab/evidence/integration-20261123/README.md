@@ -449,3 +449,39 @@ Python 3.12.3，`playwright-core` 1.58.2（= package-lock.json），chromium 120
 需要主機 `/usr/bin/podman` 的實驗室測試（run_native）。這一步沒有做任何真實還原（最後的真實重跑是 final-verify 那條線）。
 
 `commercial_acceptance`：not-complete。
+
+## 第三次整合（最後，續）：EMQX 安全審查第 8 次（SR-12、O-2／O-3／O-4）與最後一次整套（`unit-tests-step3k.json`）
+
+`a1b690f`（19:14 寫的 INTEGRATION FINAL）只是中途的版本：主線 18:44 交代要等第 8 次審查；這一段補上它（主線 19:30 的更正）。
+
+| 合併 commit | 來源（tip） | 內容 |
+| --- | --- | --- |
+| `61e7226` | `sec/emqx-secreview8-20261124`（`6b5c97e`） | 主線依擁有者對 C 的原話「也不會留下明文密碼」要求加嚴。SR-12（低）：SR-11 的檢查會放過全是數字、以 `$2` 開頭或有鹽的明文（`9665533` 上實測證明）；`a1f1947` 修正：每一列都對到它所屬的內建資料庫（全域、MQTT 監聽器、閘道與閘道監聽器），只要不是該雜湊方式能驗證的固定格式就算可能是明文，在檢查與匯出前拒絕（只列帳號與所屬，不列密碼或雜湊）；刻意從嚴：舊雜湊方式留下、已無法驗證的列也拒絕。O-2：`hacommon.names` 把 Unicode 類別 Cc、Cf、Cs、Cn、Zl、Zp 的字元都顯示成 `?`（只影響顯示的文字）；O-3：HA 的內建資料庫關閉而這台有帳號時加一個警告；O-4：寫進文件（這台在管理頁自己建的帳號會被 HA 的取代）。審查組實測（實驗室，不是 dev-d）：真的 EMQX 5.8.9 寫出的各種格式答案完全正確、34 個 Erlang 突變全部抓到、真實 x86 與 RPi5 batch-1 備份沒有被誤擋。 |
+
+衝突：沒有；22 個檔案中 20 個等於來源分支；`backup-engine/woowbackup/hacommon.py`（arm54 的原生程式修正 3 個區塊＋這次 `names()` 3 個區塊）
+與 `docs/backup/CONTRACT.md`（7＋2 個區塊）都是乾淨的三方合併（`git merge-file` rc 0，與暫存的內容相同）。沒有拿掉任何拒絕。
+
+`hacommon.names()` 的影響（主線 19:30 要求寫清楚）：呼叫它的匯入程式有 code-server、EMQX、Headscale、Hermes、LiteLLM、Nextcloud、Omnigent、OpenDesign；
+Odoo、n8n 沒有用。每一處都是顯示用的文字（擋下原因、警告、說明、提醒、錯誤訊息、頁面上的報告欄位；Omnigent 報告裡的 alembic 欄位也是顯示用，
+匯入時比對用的是原始清單），沒有任何檔名、路徑、比對或寫入的值用到它的輸出，所以只影響顯示：非 EMQX 的應用在 `4353892` 上的最後實測仍然成立。
+
+測試（主機守門，真實 batch-1 備份）：`61e7226` 上 56 個 `tests/backup` 模組（所有 `test_ha_*`、所有用到 `hacommon` 的模組、`test_suggest`）
+907 個：906 通過、1 略過、0 未通過；實驗室 `test_emqx_product_real_ha` 39/39；以上 0 次被擋下的呼叫。
+
+**最後一次整套**（wf4，`61e7226`；方法同上一段：GitHub 驗證流程的每一個 `run:` 步驟，加上真實 batch-1 備份的 `tests/backup`、`RealBackupTests`、頁面測試）：
+
+| 步驟 | wf4：`61e7226`（20:46–21:16） |
+| --- | --- |
+| validate.yml：`python3 -m unittest discover -s tests -t .`（CI 的形式） | 2032 個：2024 通過、6 略過、2 個 DriverTests 被主機守門擋下 |
+| `check_source.py`、`bash -n`、12＋2 個 `node --check` | 全部通過 |
+| `node --test tests/stack-plans.mjs` | 3/3 |
+| `node --test pi-web-integration/tests/*.mjs`（兩個流程） | 13/13、13/13 |
+| `node --test tests/managed-owners.mjs` | 4/4 |
+| `node tests/preview.mjs` | 通過 |
+| `node tests/brand-browser.mjs`（兩個品牌） | 通過（769 秒；兩個品牌各：服務頁 10/10、備份頁 108/108，應用頁與主題也通過） |
+| `node tests/pwa-brands.mjs` | 通過 |
+| 另外：`tests/backup`（真實 batch-1 備份，守門預設模式） | 1876 個：1870 通過、1 略過、5 個 LiteLLM 實驗室執行器測試被守門擋下（CI 形式裡通過） |
+| 另外：`RealBackupTests` | 1/1 |
+| 另外：`node tests/backup-ui.mjs` | 108/108 |
+
+`commercial_acceptance`：not-complete。
