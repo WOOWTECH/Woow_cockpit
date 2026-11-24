@@ -113,3 +113,29 @@ value is printed, logged or stored in this folder.
   decided): 98427dc, `catalog-suggest` proposes 600 s for LiteLLM's health checks (every other app keeps 300/180 s); the
   draft of an installed LiteLLM entry raises a shorter limit with a `health-timeout` note. The host's installed production
   entry keeps 300 s until the owner installs the new draft from the page (no production file was touched).
+
+## Iteration 4 (2026-11-24 07:35-, final)
+
+- **Final product code** = `ha_litellm.py` and the shared import modules of 1a83926 (`3a6e928e…`) + `suggest.py` of 98427dc
+  (readiness 600 s, owner decision 2026-11-23 23:28). **Attempt 10 (6b55ec5) passed the whole real flow 73/73** on it; it
+  closes the two items iteration 3 left for a real run (the 600 s draft; option A's positive case).
+- **Real negative run `negative-01`: 58/58.** Crafted backups are refused by the product flow itself with the specific
+  message (salt, version, code hooks), and review SR-8's hidden hooks are refused by the conversion after the check was
+  blinded; this device unchanged. Sandbox case `planted_objects` (DOMAIN, TRIGGER, EXTENSION, large object …): nothing ran
+  (`tests/backup/evidence/litellm-product-security-review-20261123/planted-objects.json`).
+- **Tests on 6b55ec5** (clean detached worktree, `team/heavy.sh` + the host-heavy lock; later commits are lab harness and
+  evidence only): full `tests/backup` 1507 tests, 5 failures + 2 errors, all in `test_ha_omnigent` (this
+  branch's base; the Omnigent guard, gone in the integration branch since 97c22c9), 6 skipped
+  (`tests/backup/evidence/litellm-product-20261123/unit-tests-6b55ec5.json`); mutation check **67/67
+  caught**, baseline 109 tests (`mutation-check-6b55ec5.json`). Lab driver tests 32 OK (b3e587d). The page
+  is unchanged since e0c9e56 (101/101); the integrated page is run by integration-3.
+- **KNOWN OPEN RISKS (owner 2026-11-24 07:22, 「這個可以先不用管」: deferred, not closed; to be named in the PR text):** SR-7
+  (a stored `os.environ/` reference makes this device's LiteLLM send its own master key to the host the row names; proven
+  on dev-d, `sr7-env-ref-probe.json`) and the `ssl_verify`-type stored settings (vendor source only). No product change was
+  made for either; `wip/litellm-sr7-prep-20261124` stays unmerged. Details: the review README's section of the same name.
+- **Attempt 09 is kept as a failure of the run conditions, not of the product** (dev-d memory headroom right after another
+  lane's run); the driver's check was not changed.
+- Not proven / open: ARM (no LiteLLM ARM HA backup exists, the add-on is amd64-only); the installed production entry keeps
+  300 s until the owner installs the new draft from the page; the package's install waiter (`QL_HEALTH_ACTIVE`) stays a
+  package follow-up; no browser drove the page against dev-d (it publishes no port: the runs send the helper commands the
+  page sends, `tests/backup-ui.mjs` covers the page). `commercial_acceptance` stays `not-complete`.
