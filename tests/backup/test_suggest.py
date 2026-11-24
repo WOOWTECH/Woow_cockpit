@@ -498,9 +498,9 @@ class ReferenceHostTests(unittest.TestCase):
 
     def test_databases_default_to_cold_with_export_variants(self):
         n8n = self.apps['n8n']
-        self.assertEqual(n8n['variant'], 'cold')
+        self.assertEqual(self.apps['odoo']['variant'], 'cold', 'cold unless the import needs another mode (PREFERRED_MODES)')
         self.assertEqual([v['id'] for v in n8n['variants']], ['cold', 'instance', 'database'])
-        cold = n8n['entry']
+        cold = variant(n8n, 'cold')['entry']
         self.assertEqual(cold['postgres'], [])
         self.assertIn({'name': 'n8n_postgres_data', 'label': 'PostgreSQL 資料（冷備份）'}, cold['volumes'])
         self.assertIn('n8n-postgres.service', cold['writer_units'])
@@ -525,13 +525,50 @@ class ReferenceHostTests(unittest.TestCase):
         self.assertIn({'path': '.local/share/nextcloud-office/postgres', 'label': 'PostgreSQL 資料（冷備份）'},
                       nextcloud['entry']['data_dirs'])
 
-    def test_only_litellm_defaults_to_the_mode_its_import_needs(self):
+    def test_only_these_apps_default_to_the_mode_their_import_needs(self):
+        needs = {'litellm', 'n8n', 'hermes'}
+        self.assertEqual(set(suggest.PREFERRED_MODES), needs)
         for app_id, app in self.apps.items():
             with self.subTest(app=app_id):
-                self.assertEqual(app['variant'], 'database' if app_id == 'litellm' else 'cold')
-                self.assertEqual('import-mode' in [n['code'] for n in app['notes']], app_id == 'litellm')
+                self.assertEqual(app['variant'], 'database' if app_id in needs else 'cold')
+                self.assertEqual('import-mode' in [n['code'] for n in app['notes']], app_id in needs)
                 for item in app['variants']:
-                    self.assertEqual('（預設）' in item['label'], item['id'] == 'cold' and app_id != 'litellm')
+                    self.assertEqual('（預設）' in item['label'], item['id'] == 'cold' and app_id not in needs)
+
+    def import_target(self, app_id, entry):
+        """What the app's Home Assistant import says about this device with the entry installed."""
+        from woowbackup import ha_hermes, ha_n8n, ha_odoo
+        module = {'n8n': ha_n8n, 'hermes': ha_hermes, 'odoo': ha_odoo}[app_id]
+        self.assertEqual(module.APP_ID, app_id)
+        app = catalog.validate_entry(entry, paths=Paths(base=Path(self.tmp.name)), user_lookup=lookup_for(self.home))
+        quadlets = {name: (FIXTURES / 'quadlet' / name).read_bytes() for name in entry['quadlet']['files']}
+        work = types.SimpleNamespace(quadlets=lambda _app: quadlets,
+                                     runner=lambda _app: types.SimpleNamespace(home=str(self.home)))
+        return module.Target(work, app)
+
+    def test_the_default_drafts_are_the_entries_the_imports_fill(self):
+        for app_id in ('n8n', 'hermes', 'odoo'):
+            with self.subTest(app=app_id):
+                app = self.apps[app_id]
+                self.assertTrue(app['valid'])
+                self.import_target(app_id, app['entry'])  # accepted as it is, without a hand edit
+        for app_id in ('n8n', 'hermes'):
+            for mode in ('cold', 'instance'):
+                with self.subTest(app=app_id, mode=mode), self.assertRaises(BackupError) as caught:
+                    self.import_target(app_id, variant(self.apps[app_id], mode)['entry'])
+                self.assertEqual(caught.exception.code, 'incompatible')
+
+    def test_an_installed_cold_entry_keeps_its_mode_and_is_told_what_to_choose(self):
+        installed = [variant(self.apps[app_id], 'cold')['entry'] for app_id in ('n8n', 'hermes')]
+        with tempfile.TemporaryDirectory() as base:
+            result, _fake = run_suggest(base, self.home, installed=installed, linger=(OWNER,))
+        apps = {app['id']: app for app in result['apps']}
+        for app_id in ('n8n', 'hermes'):
+            with self.subTest(app=app_id):
+                self.assertEqual(apps[app_id]['variant'], 'cold', 'changing it would strand the existing backups')
+                notes = [(n['level'], n['message']) for n in apps[app_id]['notes'] if n['code'] == 'import-mode']
+                self.assertEqual([level for level, _m in notes], ['warn'])
+                self.assertIn('請在這裡改選「單一資料庫」並安裝', notes[0][1])
 
     def test_start_order_follows_the_dependencies(self):
         for app in self.result['apps']:
@@ -775,8 +812,12 @@ class InstalledEntryTests(unittest.TestCase):
         self.assertNotIn('health-timeout', [n['code'] for n in app['notes']])
         self.assertTrue(app['installed']['same'], app['installed']['changes'])
 
-    # ---- EMQX's entrance: /readyz answers only inside the container (arm54-2 real run on an ARM64 device, 2026-11-24)
-    def _emqx_on_loopback(self):
+    # ---- EMQX's health URLs that can never answer the engine's check (real devices, 2026-11-24): the entrance's /readyz
+    # answers only inside the container (403; arm54-2 on an ARM64 device), the Dashboard page / has no JSON (406; dev-d,
+    # emqx-product attempt-30: the restore failed its check and rolled back)
+    EMQX_HEALTH = 'http://127.0.0.1:18083/api/v5/error_codes'
+
+    def _emqx_on_loopback(self, path='/readyz'):
         """The reference EMQX with the package's own health command and the Dashboard published on 127.0.0.1."""
         qdir = self.home / '.config/containers/systemd'
         broker, entrance = qdir / 'emqx.container', qdir / 'emqx-entrance.container'
@@ -786,60 +827,90 @@ class InstalledEntryTests(unittest.TestCase):
         text = entrance.read_text()
         self.assertIn('Network=container:emqx\n', text)
         entrance.write_text(text.replace('Network=container:emqx\n', 'Network=container:emqx\nHealthCmd=wget -q -O '
-                                         '/dev/null http://127.0.0.1:18083/readyz\n'))
+                                         f'/dev/null http://127.0.0.1:18083{path}\n'))
 
     def _emqx(self, installed=()):
         result, _ = run_suggest(self.tmp.name, self.home, installed=installed)
         return next(a for a in result['apps'] if a['id'] == 'emqx')
 
-    def test_emqx_health_asks_the_dashboard_not_the_container_only_readyz(self):
-        self._emqx_on_loopback()
-        app = self._emqx()
-        self.assertEqual(app['entry']['health'], [{'type': 'http', 'url': 'http://127.0.0.1:18083/',
-                                                   'expect_status': 200, 'timeout_seconds': 180}])
-        hints = [h for h in app['hints'] if '/readyz' in h]
-        self.assertEqual(len(hints), 1, app['hints'])
-        self.assertIn('emqx-entrance.container', hints[0])
-        self.assertIn('403', hints[0])
-        self.assertIn('http://127.0.0.1:18083/。', hints[0])
-        self.assertTrue(app['valid'], app['problem'])
-        self.assertNotIn('health-path', [n['code'] for n in app['notes']])   # nothing installed was replaced
+    def test_emqx_health_asks_the_public_api_not_the_container_only_readyz_nor_the_page(self):
+        for path, word in (('/readyz', '403'), ('/', '406')):
+            with self.subTest(path=path):
+                self.tearDown()
+                self.setUp()
+                self._emqx_on_loopback(path)
+                app = self._emqx()
+                self.assertEqual(app['entry']['health'], [{'type': 'http', 'url': self.EMQX_HEALTH,
+                                                           'expect_status': 200, 'timeout_seconds': 180}])
+                hints = [h for h in app['hints'] if f'健康檢查網址 {path} ' in h]
+                self.assertEqual(len(hints), 1, app['hints'])
+                self.assertIn('emqx-entrance.container', hints[0])
+                self.assertIn(word, hints[0])
+                self.assertIn(f'{self.EMQX_HEALTH}。', hints[0])
+                self.assertTrue(app['valid'], app['problem'])
+                self.assertNotIn('health-path', [n['code'] for n in app['notes']])   # nothing installed was replaced
 
-    def test_installed_emqx_draft_replaces_a_readyz_check_that_expects_200(self):
+    def test_installed_emqx_draft_replaces_a_check_that_can_never_pass(self):
         self._emqx_on_loopback()
-        installed = copy.deepcopy(self._emqx()['entry'])
-        installed['health'] = [{'type': 'http', 'url': 'http://127.0.0.1:18083/readyz', 'timeout_seconds': 300}]
-        app = self._emqx([installed])
-        self.assertEqual([h['url'] for h in app['entry']['health']], ['http://127.0.0.1:18083/'])
-        self.assertEqual(app['entry']['health'][0]['timeout_seconds'], 300, 'its own limit stays')
-        for item in app['variants']:
-            self.assertEqual([h['url'] for h in item['entry']['health']], ['http://127.0.0.1:18083/'])
-        notes = [n for n in app['notes'] if n['code'] == 'health-path']
-        self.assertEqual(len(notes), 1)
-        self.assertEqual(notes[0]['level'], 'info')
-        self.assertIn('http://127.0.0.1:18083/readyz', notes[0]['message'])
-        self.assertIn('草稿改為 http://127.0.0.1:18083/。', notes[0]['message'])
-        self.assertEqual(app['installed']['entry']['health'], installed['health'], 'the installed entry is never edited')
-        self.assertFalse(app['installed']['same'])
+        original = self._emqx()['entry']
+        for url, word in (('http://127.0.0.1:18083/readyz', '403'), ('http://127.0.0.1:18083/', '406')):
+            with self.subTest(url=url):
+                installed = copy.deepcopy(original)
+                installed['health'] = [{'type': 'http', 'url': url, 'timeout_seconds': 300}]
+                app = self._emqx([installed])
+                self.assertEqual([h['url'] for h in app['entry']['health']], [self.EMQX_HEALTH])
+                self.assertEqual(app['entry']['health'][0]['timeout_seconds'], 300, 'its own limit stays')
+                for item in app['variants']:
+                    self.assertEqual([h['url'] for h in item['entry']['health']], [self.EMQX_HEALTH])
+                notes = [n for n in app['notes'] if n['code'] == 'health-path']
+                self.assertEqual(len(notes), 1)
+                self.assertEqual(notes[0]['level'], 'info')
+                self.assertIn(f'{url} ', notes[0]['message'])
+                self.assertIn(word, notes[0]['message'])
+                self.assertIn(f'草稿改為 {self.EMQX_HEALTH}。', notes[0]['message'])
+                self.assertEqual(app['installed']['entry']['health'], installed['health'], 'the installed entry is never edited')
+                self.assertFalse(app['installed']['same'])
 
     def test_replace_health_paths_leaves_every_other_check_alone(self):
         def entry(*items):
             return {'health': [dict({'type': 'http'}, **item) for item in items]}
         readyz = {'url': 'http://127.0.0.1:18083/readyz'}
         for app_id, value in (('emqx', entry(dict(readyz, expect_status=403))),       # adapted by the administrator
-                              ('emqx', entry(dict(readyz, expect_status=200), {'url': 'http://127.0.0.1:18083/'})),  # has it
+                              ('emqx', entry({'url': 'http://127.0.0.1:18083/', 'expect_status': 406})),
+                              ('emqx', entry({'url': self.EMQX_HEALTH})),
                               ('emqx', entry({'url': 'http://127.0.0.1:18083/readyz/x'})),
                               ('emqx', entry({'url': 'http://127.0.0.1:18083/healthz'})),
-                              ('other', entry(readyz)), ('emqx', {}), ('emqx', {'health': 'x'})):
+                              ('other', entry(readyz)), ('emqx', {}), ('emqx', {'health': 'x'}),
+                              ('emqx', {'health': ['not an object', {'url': 5}]})):
             with self.subTest(app=app_id, value=value):
                 before = copy.deepcopy(value)
                 self.assertEqual(suggest.replace_health_paths(app_id, value), [])
                 self.assertEqual(value, before)
-        value = entry(readyz, dict(readyz, url='http://127.0.0.1:18084/readyz', expect_status=200))
-        self.assertEqual(suggest.replace_health_paths('emqx', value),
-                         [('http://127.0.0.1:18083/readyz', 'http://127.0.0.1:18083/'),
-                          ('http://127.0.0.1:18084/readyz', 'http://127.0.0.1:18084/')])
-        self.assertEqual(suggest.HEALTH_PATHS, {('emqx', '/readyz'): '/'})
+
+    def test_replace_health_paths_every_port_once_and_no_check_twice(self):
+        def entry(*items):
+            return {'health': [dict({'type': 'http'}, **item) for item in items]}
+        readyz = {'url': 'http://127.0.0.1:18083/readyz'}
+        value = entry(readyz, dict(readyz, url='http://127.0.0.1:18084/readyz', expect_status=200),
+                      {'url': 'http://localhost:18083/'})
+        self.assertEqual([(old, new) for old, new, _why in suggest.replace_health_paths('emqx', value)],
+                         [('http://127.0.0.1:18083/readyz', self.EMQX_HEALTH),
+                          ('http://127.0.0.1:18084/readyz', 'http://127.0.0.1:18084/api/v5/error_codes'),
+                          ('http://localhost:18083/', 'http://localhost:18083/api/v5/error_codes')])
+        self.assertEqual([item['url'] for item in value['health']],
+                         [self.EMQX_HEALTH, 'http://127.0.0.1:18084/api/v5/error_codes',
+                          'http://localhost:18083/api/v5/error_codes'])
+        # both useless checks of one port, and the good one already asked: one good check is left
+        for value, left in ((entry(readyz, {'url': 'http://127.0.0.1:18083/'}), [self.EMQX_HEALTH]),
+                            (entry({'url': self.EMQX_HEALTH, 'timeout_seconds': 240}, readyz), [self.EMQX_HEALTH]),
+                            (entry(readyz, {'url': self.EMQX_HEALTH, 'timeout_seconds': 240}), [self.EMQX_HEALTH])):
+            with self.subTest(value=value):
+                replaced = suggest.replace_health_paths('emqx', value)
+                self.assertTrue(replaced)
+                self.assertEqual([item['url'] for item in value['health']], left)
+        self.assertEqual(value['health'][0]['timeout_seconds'], 240)
+        self.assertEqual({key: path for key, (path, _why) in suggest.HEALTH_PATHS.items()},
+                         {('emqx', '/readyz'): '/api/v5/error_codes', ('emqx', '/'): '/api/v5/error_codes'})
 
     def test_raise_health_timeouts_only_touches_shorter_limits_of_the_listed_apps(self):
         def entry(*timeouts):

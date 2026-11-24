@@ -1,0 +1,15 @@
+{
+ "scope": "omnigent-test-gaps-full-tests-backup-suite",
+ "source_commit": "01b36b44d26802d44cb5269e5280a45e8395f65c",
+ "worktree": "detached worktree checked out at source_commit; git status clean after the run",
+ "command": "PYTHONPATH=backup-engine:tests/e2e/lab:. python3 -m unittest discover -s tests/backup -t . (through heavy.sh, under /tmp/woowbk-host-heavy-tests.lock)",
+ "start": "2026-11-24 13:00:10",
+ "end": "2026-11-24 13:08:28",
+ "ran": 1681,
+ "seconds": 494.388,
+ "result_line": "OK (skipped=6)",
+ "exit": 0,
+ "not_ok": [],
+ "output_sha256": "160a071cb06d2994321a7bd253a58c7cc71252f19df1364781713044dce97a91",
+ "commercial_acceptance": "not-complete"
+}
