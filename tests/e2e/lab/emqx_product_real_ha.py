@@ -53,9 +53,10 @@ Steps (run in the order given):
                and the MANUAL rollback to the baseline (restore of B0: the state digest equals `before`, the
                markers are back)
   suggest-health
-               the catalog entry a customer installs from the page's own draft (needs the suggest.py fix a3a0479): dev-d's
-               EMQX entry is removed, a fresh catalog-suggest draft must ask the Dashboard through the entrance (not the
-               container-only /readyz, 403 from the device), it is installed, EMQX is backed up and that backup restored
+               the catalog entry a customer installs from the page's own draft (needs the suggest.py fix after a3a0479,
+               whose own real run attempt-30 failed: the Dashboard page answers the engine's check 406): dev-d's EMQX
+               entry is removed, a fresh catalog-suggest draft must ask the broker's public API through the entrance (not
+               the container-only /readyz, 403 from the device), it is installed, EMQX is backed up and that backup restored
                with the proposed health check (must succeed, not roll back), then dev-d's own entry is installed again
                (same SHA-256) and the EMQX state digest equals the one before
   cleanup      the test's converted and safety backups deleted (B0 stays until `cleanup-baseline`); no job
@@ -1493,9 +1494,10 @@ def step_suggest_health(ev, args):
         fresh = suggested_emqx(ev)
         entry = fresh.get('entry') or {}
         ev.save('suggested-emqx.json', fresh)
-        ev.check(f'{name}: a fresh draft asks the Dashboard through the entrance (/, 200), not the container-only /readyz',
+        ev.check(f'{name}: a fresh draft asks the broker\'s public API through the entrance (/api/v5/error_codes, 200), not the '
+                 'container-only /readyz',
                  [(h.get('url'), h.get('expect_status')) for h in entry.get('health') or []]
-                 == [('http://127.0.0.1:18083/', 200)] and fresh.get('valid') is True, entry.get('health'))
+                 == [('http://127.0.0.1:18083/api/v5/error_codes', 200)] and fresh.get('valid') is True, entry.get('health'))
         ev.check(f'{name}: the draft says why (/readyz answers 403 from the device)',
                  any('/readyz' in h and '403' in h for h in fresh.get('hints') or []), fresh.get('hints'))
         catalog_put(ev, entry, f'{name}: the fresh draft')
@@ -1503,7 +1505,8 @@ def step_suggest_health(ev, args):
                                   'suggest-health-backup')
         backup_id = (job.get('result') or {}).get('backup_id')
         drv.created_backup(backup_id)
-        if not ev.check(f'{name}: backup of EMQX with the proposed entry', job['state'] == 'succeeded' and bool(backup_id),
+        if not ev.check(f'{name}: backup of EMQX with the proposed entry, its health check passed (no warning)',
+                        job['state'] == 'succeeded' and bool(backup_id) and not job_log_has(_log, '健康檢查未通過'),
                         {'state': job['state'], 'error': job.get('error'), 'took_s': round(took, 1)}):
             raise Failed('the backup with the proposed entry failed')
         rjob, rlog, rtook = restore_with(ev, backup_id, 'suggest-health-restore')
