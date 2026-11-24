@@ -1,0 +1,16 @@
+{
+ "attempt": "unit-merged",
+ "lane": "emqx-secreview (SR-OWNER-1942)",
+ "iteration": 3,
+ "date": "2026-11-24",
+ "what": "EMQX modules, test_ha_tempctr, test_tempctr_cleanup_dependency, test_ha_import, test_ha_flows (guarded runner: no podman/ssh/sudo/systemctl)",
+ "tests": 258,
+ "failures": 0,
+ "errors": 0,
+ "blocked": 0,
+ "exit_code": 0,
+ "stdout_sha256": "ce6908cb0fceb7b38520fb2c16115965dfc61930814427be4d8a46e931c805ec",
+ "status_line": "tests=258 failures=0 errors=0 skipped=0 expected_failures=0 unexpected_successes=0 blocked=0",
+ "source": "trial commit cd66230 (tree of the product e08f8a1: backup-engine 865c930f), with this branch's test_ha_emqx_security_review2.py (8 tests)",
+ "commercial_acceptance": "not-complete"
+}

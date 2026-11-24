@@ -1,0 +1,47 @@
+{
+ "attempt": "t1-merged-ro",
+ "backup_engine_tree": "865c930f392006e0080de506eb7c425fd81becd7",
+ "command": "-I t1_datadir_acl.py merged ro",
+ "commercial_acceptance": "not-complete",
+ "credentials": "generated per run; HA key (T11) read in-process by the b1 Secrets reader, never printed",
+ "date": "2026-11-24",
+ "elapsed_s": 198.1,
+ "exit_code": 0,
+ "iteration": 3,
+ "lane": "emqx-secreview (SR-OWNER-1942)",
+ "result": {
+  "candidate_authorization_sources": [
+   {
+    "path": "/opt/emqx/etc/acl.conf",
+    "type": "file"
+   }
+  ],
+  "candidate_authz_stranger": "deny",
+  "candidate_data_acl_sha256": "4556e6af53719a140d1c808b3712b8ba00ed9a3001ff648d0e025332df378de8",
+  "candidate_no_match": "deny",
+  "codebase": "merged",
+  "conversion": "PASSED (candidate built, all product checks green)",
+  "elapsed_s": 197.7,
+  "ha_acl_sha256": "4556e6af53719a140d1c808b3712b8ba00ed9a3001ff648d0e025332df378de8",
+  "image": "docker.io/emqx/emqx:5.8.9",
+  "network": "none",
+  "readback_profile": [
+   "file"
+  ],
+  "store": "labpodman (separate --root)",
+  "target_acl_replaced_by_ha": true,
+  "target_acl_sha256": "a97ae69275ff98ad98a553fbffc16d21991823190ba036fef8af073b1dc94569",
+  "target_before_authz_stranger": "deny",
+  "test": "T1 this device ACL file in the data volume vs HA file ACL {allow, all}",
+  "variant": "ro"
+ },
+ "source_commit": "cd66230 (sec/emqx-secreview3-trial-20261124: product 5786ae4 + abff1a0 + the 8613ffa tempctr patch)",
+ "started": "2026-11-24T09:03:18+0800",
+ "status_lines": [
+  " \"target_acl_replaced_by_ha\": true,",
+  " \"elapsed_s\": 197.7",
+  "}"
+ ],
+ "stdout_sha256": "1c3e38ac54c5cb4fd5246e325066d7f2f3884a10b39d861ae0d7fcc996fe192e",
+ "store": "labpodman (separate --root, lab only), every podman run --network none"
+}

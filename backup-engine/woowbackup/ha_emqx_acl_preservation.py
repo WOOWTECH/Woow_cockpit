@@ -104,9 +104,14 @@ def acl_receipt(execute):
         refuse()
 
 
+# Wall-clock bound of one fixed `emqx eval` in the candidate (the CLI boots a hidden Erlang node; 10 s failed under a
+# host load of 19-25 on 2026-11-23, R-EMQX 995a856). Only the time bound: output bounds and checks are unchanged.
+EVAL_SECONDS = 120
+
+
 def candidate_acl_receipt(tmp):
     """Only the invocation-owned emqx-new candidate; fixed time/output bounds."""
-    return acl_receipt(lambda command: tmp.exec('emqx-new', command, timeout=10,
+    return acl_receipt(lambda command: tmp.exec('emqx-new', command, timeout=EVAL_SECONDS,
                                                max_output=256, check=False))
 
 
@@ -158,11 +163,15 @@ def uses_generated_acl_charlist(config):
         and ascii_path(source.get('path')) for source in sources)
 
 
-def disabled_intermediate(original, imported, *, observe=None, path_proof=None):
+def disabled_intermediate(original, imported, *, observe=None, path_proof=None, target_etc_dir=None):
     """FILE-only removal: preserve raw omissions and every value except enable.
 
     Unknown shapes refuse with fixed reasons. No native defaults are invented;
     the final target restore and strict runtime policy checks remain mandatory.
+    The ORIGINAL (this device's) file source may be the vendor template
+    `${EMQX_ETC_DIR}/acl.conf` only when the caller proved target_etc_dir == /opt/emqx/etc in
+    the running broker and the candidate (ha_emqx.target_etc_dir; vendor resolution:
+    emqx_authz_file.erl:116-117, emqx_schema.erl:3466-3503). It is kept verbatim, never expanded.
     """
     def fail(reason):
         if observe is not None: observe('acl_profile_'+reason)
@@ -223,7 +232,9 @@ def disabled_intermediate(original, imported, *, observe=None, path_proof=None):
                                   and source['path'] in IMPORTED_DEFAULT_ACL_PATHS)
                 from .ha_emqx_acl_path_proof import matches_generated_path
                 imported_charlist=imported_side and matches_generated_path(path_proof,imported,source['path'])
-                if path_kind!='absolute' and not imported_default and not imported_charlist:
+                target_template=(not imported_side and target_etc_dir=='/opt/emqx/etc'
+                                 and source['path']=='${EMQX_ETC_DIR}/acl.conf')
+                if path_kind!='absolute' and not imported_default and not imported_charlist and not target_template:
                     fail(file_path_type_reason(source,imported_side) if path_kind=='nontext' else 'file_path_'+path_kind)
             else:
                 fail('source_type')

@@ -40,6 +40,11 @@ from .errors import BackupError
 # catalog id -> add-on slug (after the repository prefix), from the one registry of importers (haapps.IMPORTERS)
 APPS = {importer.app_id: importer.slug for importer in haapps.IMPORTERS}
 ITEM_KEYS = ('volumes', 'postgres', 'dirs', 'secrets')  # what a module's convert hands to adapter.import_manifest
+# A module's readback for the restore (CONTRACT section 5 `import_check`, section 9): {kind: app id}. The converted
+# backup's app section carries it; the restore compares it after the units started (verify_import) and rolls back
+# on a difference; another kind or app refuses the restore in its preflight (import_check_problem).
+CHECK_KEY = 'import_check'
+IMPORT_CHECKS = {'emqx-readback': 'emqx'}
 REGISTRY = 'ha-imports.json'
 REGISTRY_SCHEMA = 1
 REGISTRY_MAX = 1000
@@ -651,6 +656,10 @@ def _run_ha_convert(ctx, params):
             item_args = {key: data[key] for key in ITEM_KEYS if key in data}
             work.checkpoint()
             app_manifest, app_entries = work.adapter(app).import_manifest(out_dir, **item_args)
+            if data.get(CHECK_KEY) is not None:
+                from .archive import validate_import_check
+                validate_import_check(data[CHECK_KEY], app.id)
+                app_manifest[CHECK_KEY] = data[CHECK_KEY]
             manifest_apps.append(app_manifest)
             entries.extend(app_entries)
         work.end_apps()
@@ -684,6 +693,23 @@ def _run_ha_convert(ctx, params):
                 forget(ctx.paths, backup_id)
         work.close()
         _cleanup(ctx)
+
+
+def import_check_problem(app, check):
+    """The preflight's word on an app section's `import_check`: None when this engine can verify it for `app`."""
+    kind = check.get('kind') if isinstance(check, dict) else None
+    if IMPORT_CHECKS.get(kind) != app.id:
+        return f'這份備份帶有這版備份元件不認得的「{app.name}」匯入核對資料，無法還原；請更新備份元件。'
+    return None
+
+
+def verify_import(app, adapter, check, *, log):
+    """After the restore started `app` (its health checks passed): the importer compares the restored app with the
+    conversion's readback. Raises BackupError on any difference: the restore then rolls back by itself."""
+    problem = import_check_problem(app, check)
+    if problem:
+        raise BackupError('incompatible', problem, app=app.id)
+    haapps.get(app.id).load().verify_restored(adapter, app, check, log=log)
 
 
 def _catalog_or_none(ctx):

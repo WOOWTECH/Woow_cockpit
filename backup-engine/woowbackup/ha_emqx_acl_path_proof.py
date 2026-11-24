@@ -108,7 +108,8 @@ def _resolved(value,cwd):
 
 
 def _query(tmp,expr,observe=None):
-    response=tmp.exec('emqx-new',['emqx','eval',expr],timeout=10,max_output=MAX_WIRE,check=False)
+    # Wall-clock bound only (host load, see ha_emqx_acl_preservation.EVAL_SECONDS); the wire bound stays MAX_WIRE.
+    response=tmp.exec('emqx-new',['emqx','eval',expr],timeout=120,max_output=MAX_WIRE,check=False)
     raw=response.stdout or b''
     match=re.fullmatch(rb'WOOWACLPATH:REFUSED:([a-z_]+?)(?:ok)?\s*',raw) if type(raw) is bytes and len(raw)<=MAX_WIRE else None
     if match:
