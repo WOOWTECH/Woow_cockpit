@@ -1704,7 +1704,8 @@ class _Link:
 
 
 class _Links:
-    """The hard links of a walk: the ones that wait, and what every one names (a link may name another link)."""
+    """The hard links of a walk: the ones that wait, and what every one names (a link may name another link; None: a name
+    that is withheld or no entry's)."""
 
     def __init__(self):
         self.waiting = []
@@ -1721,11 +1722,18 @@ class _Links:
             report.skip('hardlink', link.name)
 
     def resolve(self, key):
+        """The digest of the name a link stands for in the end; None when that is withheld or goes in circles."""
         for _ in range(8):
             if key not in self.targets:
-                break
+                return key
             key = self.targets[key]
-        return key
+        return None
+
+
+def _withheld(name, select, addon):
+    """True for a name whose content is handed out under no other name either: a secret, addon.json, what the caller
+    excludes."""
+    return never_read(name) or addon and name == ADDON_JSON or select.excludes(name)
 
 
 def inflate_budget(stream):
@@ -1817,8 +1825,10 @@ def iter_entries(stream, select=None, report=None, *, addon=None, until_addon=Fa
             target = target_key = None
             if kind == 'hardlink':
                 target = _link_target(header.linkname)
+                if target is not None and _withheld(target, select, addon):
+                    target = None  # not handed out, so neither for another name
                 target_key = names.digest(target) if target is not None else None
-                if key is not None and target is not None:
+                if key is not None:
                     links.note(key, target_key)
             wanted = select.wants(name) if flaw != 'blank' else select.include != ()
             if flaw is not None or not wanted:
@@ -1877,17 +1887,17 @@ def iter_entries(stream, select=None, report=None, *, addon=None, until_addon=Fa
     elif reader.another_header():  # no checksum covers this stream: zeros in its middle must not pass for its end
         raise _broken('the inner tar goes on after its end-of-archive marker')
     if links.waiting:
-        yield from _copy_links(stream, start, links, names, select, report, addon, checkpoint)
+        yield from _copy_links(stream, start, links, names, select, report, checkpoint)
     report.complete = True
 
 
-def _copy_links(stream, start, links, names, select, report, addon, checkpoint):
+def _copy_links(stream, start, links, names, select, report, checkpoint):
     """The hard links that wait, after a complete first pass (every check of the stream passed): one whose file was
     handed out only later in the tar is still a link for a caller that takes links; every other one is a regular file
     with the content of the file it names (through other links too), read in further passes over the same member. A
     file with several waiting links is handed out once and the others as links to it, or -- a caller that takes no links
-    -- from memory when it is small, else in the next pass. Never copied: a secret (never_read, addon.json), what the
-    caller excludes, and what is not a regular file of this member; such links are skipped and listed."""
+    -- from memory when it is small, else in the next pass. What is not a regular file of this member gives no content:
+    such links are skipped and listed (like those that name something withheld, which never came here)."""
     wanted = {}
     for link in links.waiting:
         if select.hardlinks and not link.copy and names.handed_out(link.key):
@@ -1897,15 +1907,18 @@ def _copy_links(stream, start, links, names, select, report, addon, checkpoint):
             if not entry._copy:
                 continue
             report.hardlinks -= 1
-        wanted.setdefault(links.resolve(link.key), []).append(link)
+        key = links.resolve(link.key)
+        if key is None:
+            report.skip('hardlink', link.name)
+        else:
+            wanted.setdefault(key, []).append(link)
     for _ in range(MAX_LINK_PASSES):
         again = _reopen(stream, start) if wanted else None
         if again is None:
             break
         later = {}
         try:
-            yield from _copy_pass(again, inflate_budget(stream), wanted, later, names, select, report, addon,
-                                  checkpoint)
+            yield from _copy_pass(again, inflate_budget(stream), wanted, later, names, select, report, checkpoint)
         except _Truncated:
             raise _broken('the inner tar is truncated') from None
         finally:
@@ -1922,7 +1935,7 @@ def _skip_links(links, report):
             report.skip('hardlink', link.name)
 
 
-def _copy_pass(stream, budget, wanted, later, names, select, report, addon, checkpoint):
+def _copy_pass(stream, budget, wanted, later, names, select, report, checkpoint):
     """One pass for `_copy_links`: takes out of `wanted` ({digest of a file's name: [_Link]}) what it finds; `later`
     gets what needs another pass. It stops once nothing is wanted any more: the first pass has checked the whole
     stream."""
@@ -1939,8 +1952,7 @@ def _copy_pass(stream, budget, wanted, later, names, select, report, addon, chec
         key = names.digest(name)
         waiting = wanted.pop(key, None) if KINDS.get(header.typeflag) == 'file' else None
         pad = (-header.size) % BLOCK
-        if waiting is None or never_read(name) or addon and name == ADDON_JSON or select.excludes(name):
-            _skip_links({key: waiting or ()}, report)
+        if waiting is None:
             reader.skip(header.size + pad)
             continue
         held = None

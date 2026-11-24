@@ -1619,6 +1619,14 @@ class HardLinkTests(WalkCase):
         files, _report = self.files([{'name': 'addon.json', 'data': b'share data'},
                                      {'name': 'b', 'type': 'hardlink', 'linkname': 'addon.json'}], addon=False)
         self.assertEqual(files['b'], b'share data', 'in a folder it is a file like any other')
+        for middle, select in (('data/options.json', habackup.Select()), ('data/.ssh/l', habackup.Select(exclude=('data/.ssh',)))):
+            entries = [{'name': 'data/plain', 'data': b'plain'}, {'name': middle, 'type': 'hardlink', 'linkname': 'data/plain'},
+                       {'name': 'x', 'type': 'hardlink', 'linkname': middle}, {'name': 'y', 'type': 'hardlink', 'linkname': 'x'}]
+            for order in (entries, entries[::-1]):
+                with self.subTest(middle=middle, first=order[0]['name']):
+                    files, report = self.files(order, select)
+                    self.assertEqual((files, report.skip_names('hardlink').sort()), ({'data/plain': b'plain'}, None))
+                    self.assertEqual(sorted(report.skip_names('hardlink')), ['x', 'y'])
 
     def test_a_caller_can_ask_for_the_content(self):
         """Entry.copy_later: a module that did not keep the linked file (CM-11, H-01, OP-11)."""
@@ -1687,6 +1695,42 @@ class HardLinkTests(WalkCase):
                 return self.data.read(n)
         out, report = self.walk([], habackup.Select(include=('y',)), stream=Once(gzip.decompress(member)), addon=True)
         self.assertEqual((out, report.skip_names()), ([], ['y/b']))
+
+    def test_random_trees(self):
+        """Files and links in any order, number and format against a plain model: every selected name that has content
+        comes exactly once, with that content; every other selected link is listed; nothing else is handed out."""
+        rng = random.Random(20261125)
+        for round_ in range(150):
+            names = [f'{rng.choice("ab")}/n{i}' for i in range(rng.randrange(2, 12))]
+            files = {name: rng.randbytes(rng.randrange(0, 40)) for name in names if rng.random() < 0.5}
+            links = {name: rng.choice([*names, 'b/none', '../x']) for name in names if name not in files}
+            order = list(names)
+            rng.shuffle(order)
+            entries = [{'name': name, 'data': files[name]} if name in files else
+                       {'name': name, 'type': 'hardlink', 'linkname': links[name]} for name in order]
+
+            def content(name, hops=0):
+                return files[name] if name in files else content(links[name], hops + 1) if name in links and hops < 8 else None
+            for hardlinks in (False, True):
+                select = habackup.Select(include=('a',), exclude=('a/n1',), hardlinks=hardlinks)
+                out, report = self.walk(entries, select, fmt=rng.choice([tarfile.PAX_FORMAT, tarfile.GNU_FORMAT,
+                                                                         tarfile.USTAR_FORMAT]))
+                got = {}
+                for name, kind, linkname, data in out:
+                    self.assertNotIn(name, got, 'once')
+                    if kind == 'hardlink':
+                        self.assertIn(linkname, got, 'the file it names came before')
+                    got[name] = got[linkname] if kind == 'hardlink' else data
+                chosen = [name for name in names if name.startswith('a/') and name != 'a/n1']
+                resolved = {name: content(name) for name in chosen}
+
+                def withheld(name, hops=0):  # at any step of the chain
+                    return name == 'a/n1' or name in links and hops < 8 and withheld(links[name], hops + 1)
+                expected = {name: data for name, data in resolved.items() if data is not None and not withheld(name)}
+                with self.subTest(round=round_, hardlinks=hardlinks):
+                    self.assertEqual(got, expected)
+                    self.assertEqual(report.skip_count('hardlink'), len(chosen) - len(expected))
+                    self.assertEqual(report.bytes, sum(len(row[3]) for row in out if row[1] == 'file'))
 
     @hx.needs_crypto
     def test_the_second_pass_of_an_encrypted_member(self):
