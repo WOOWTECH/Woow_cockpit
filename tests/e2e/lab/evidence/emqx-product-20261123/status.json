@@ -1,14 +1,17 @@
 {
  "lane": "emqx-product",
  "date": "2026-11-23",
- "updated": "2026-11-24T12:05+08:00",
+ "updated": "2026-11-24T15:23+08:00",
  "scope": "EMQX HA import as the PRODUCT path (owner decision 2026-11-23 「決定1 做」, decision C 「EMQX 權限」): the public PRESERVATION_BLOCKER is removed in the same change that makes the product enforce every protection the lab proved; real batch-1 HA backups (ARM RPi5 and x86, cold, encrypted) through the product flow on dev-d",
  "branch": "R-COCKPIT feat/ha-import-emqx-product-20261124 (local only, never pushed)",
  "product_tip": "e08f8a1",
  "backup_engine_tree": "865c930f392006e0080de506eb7c425fd81becd7",
  "merged_into_integration": [
   "9bf8f5e (c6435b4)",
-  "66c1142 (health fix 4ec3174)"
+  "66c1142 (health fix 4ec3174)",
+  "7165235 (d8c6d1b, README/status)",
+  "431201e (575f2fd, corrected health fix)",
+  "2b5fee1 (3891601, attempt-32)"
  ],
  "security_review": "emqx-secreview: DONE, verdict OK for backup-engine tree 865c930f (sec/emqx-secreview2-20261124@28c6d97)",
  "unit_tests": {
@@ -25,7 +28,20 @@
   "not covered: production, device reboot, EMQX clusters, other authorization sources, other EMQX versions"
  ],
  "commercial_acceptance": "not-complete",
- "extra_chain": "attempts 30+ (suggest-health, [file] import of lab-made backups without ACL rows, x86 built-in again on the integrated engine) run from /tmp/emqx-health-20261124, evidence on fix/emqx-health-suggest-20261124",
+ "extra_chain": {
+  "branch": "R-COCKPIT fix/emqx-health-suggest-20261124 (local only, never pushed); worktree /tmp/emqx-health-20261124",
+  "attempts_30_34_engine": "80215432 (attempt-30) and 45db404c (32-34) = the integrated engine + the health fix",
+  "attempts_35_36_engine": "f6dfa9c45975a31cb114611a6498d19f58440344 = integration 2b5fee1 + the export check dd3ae49 (merges bc414dd, d6f2c2f)",
+  "summary": "attempt-30 FAIL 32/33 (real product finding, fixed), 32 PASS 109/109, 33 PASS 153/153, 34 PASS 99/99, 35 PASS 95/95, 36 PASS 106/106; 31 never used (no JSON)"
+ },
+ "unit_tests_integrated": {
+  "it5d_575f2fd_engine_45db404c": "EMQX + harness + lab candidate 242 OK, shared (with test_suggest) 503 OK, lab ACL component 6 OK, 0 blocked",
+  "mutation_integrated_4539aec": "88/88 killed (81 EMQX protections + 7 of the first health fix)",
+  "mutation_corrected_health_fix": "13/13 killed (HB1-HB13), test_suggest 50 OK",
+  "it6_d6f2c2f_engine_f6dfa9c4": "EMQX + harness + lab candidate 259 OK, shared (with test_suggest) 503 OK, lab ACL component 6 OK, 0 blocked"
+ },
+ "security_review_later": "SR-10 fixed on integration (65d8a51, 97c994f); SR-5 closed (not reachable, 3 real conversions); export check dd3ae49 READY (emqx-secreview iteration 6), real product-flow proof = attempts 35/36",
+ "known_effect": "HA hashing MQTT passwords differently: conversion succeeds, this device's own MQTT account can no longer log in (named by the conversion, not by the check page)",
  "real_runs": {
   "attempt-01": {
    "scope": "setup-before-arm-file",
@@ -443,6 +459,130 @@
    "failed_checks": [],
    "what": "Cleanup on the FINAL engine: no throwaway container, volume or network of a job, no staging folder or key file, no drop-in, script or marker; the test's converted and safety backups and the baseline B0 deleted, dev-d's own backups stay, woow-emqx and its entrance run, no new anonymous volume; leak scan again = 0 hits; isolation true none {}.",
    "simulated": "-"
+  },
+  "attempt-30": {
+   "scope": "suggest-health",
+   "source_commit": "4ec3174",
+   "backup_engine_tree": "80215432",
+   "exit": 1,
+   "elapsed_seconds": 824.8,
+   "lock_held": "823 s",
+   "checks": "32/33",
+   "steps": [
+    "reclaim: PASS seconds=8",
+    "setup: PASS seconds=22",
+    "before: PASS seconds=89",
+    "suggest-health: FAIL seconds=698",
+    "reclaim: PASS seconds=2",
+    "leaks: PASS seconds=3"
+   ],
+   "failed_checks": [
+    "suggest-health: a restore with the proposed health check succeeds and is not rolled back (health passed)"
+   ],
+   "what": "FAILED = a REAL PRODUCT FINDING (the page's own draft): the merged health fix a3a0479 proposed the Dashboard page /; the engine's check sends Accept: application/json and EMQX answers that page 406 (cowboy_static, emqx_dashboard.erl:338), so the backup with the draft warned 「健康檢查未通過（HTTP 406）」 and the restore failed its check and rolled back (the rollback's own check failed the same way). dev-d's EMQX state digest equal to the one before, dev-d's own catalog entry back (same SHA-256), new baseline B0, leak scan 0 hits. The earlier \"/ 200\" had been measured with Accept: */*. Fixed a5c6a3c (the draft asks /api/v5/error_codes, the broker's public REST API).",
+   "simulated": "S1 S6"
+  },
+  "attempt-32": {
+   "scope": "suggest-health+fileonly-import",
+   "source_commit": "575f2fd",
+   "backup_engine_tree": "45db404c",
+   "exit": 0,
+   "elapsed_seconds": 1703.6,
+   "lock_held": "1703 s",
+   "checks": "109/109",
+   "steps": [
+    "reclaim: PASS seconds=1",
+    "setup: PASS seconds=12",
+    "before: PASS seconds=23",
+    "suggest-health: PASS seconds=241",
+    "import:x86-fileonly:file: PASS seconds=1413",
+    "reclaim: PASS seconds=3",
+    "leaks: PASS seconds=7"
+   ],
+   "failed_checks": [],
+   "what": "INTEGRATED engine + the corrected health fix (45db404c). (1) suggest-health: dev-d's installed EMQX entry read, a FRESH draft from the page's own catalog-suggest proposes /api/v5/error_codes through the entrance (200) instead of the container-only /readyz and says why (/readyz answers 403 from the device); installed UNEDITED: a backup with its health check passed (no warning) and a restore with it that is not rolled back; dev-d's own entry back (same SHA-256), state digest equal. (2) Decision C's other half on dev-d's own [file] target with the lab-made x86 backup whose ACL rows EMQX itself cleared (`x86-fileonly`): the FIRST import attempt from dev-d's OWN state fails twice on purpose, a one-shot start failure (the job rolls back; when the start failed the data volume held HA's rule = HA's data really was there) and a one-shot readback tamper (named ONLY 設定（log）, rolled back by itself); after each: dev-d's own state is back (state digest equal to its own state right before that restore, baseline markers, its own admin logs in and HA's admin password does not, its own bootstrap MQTT user logs in and HA's three MQTT users are refused, authorization is its own as right before that restore (no_match deny), no HA user, rule, retained message or API key); then the real import: check ok, real conversion, restore + the product's readback, client probes after the restore and after a restart (HA's users and passwords, HA's retained messages, rule delivery, denied topics, this device's file rule still applies). Leak scan with the 11 Dashboard tokens this run issued = 0 hits.",
+   "simulated": "S1 S3 S4 S5 S6 S7"
+  },
+  "attempt-33": {
+   "scope": "fileonly-rollback+noacl-import",
+   "source_commit": "3891601",
+   "backup_engine_tree": "45db404c",
+   "exit": 0,
+   "elapsed_seconds": 970.4,
+   "lock_held": "969 s",
+   "checks": "153/153",
+   "steps": [
+    "reclaim: PASS seconds=2",
+    "setup: PASS seconds=9",
+    "rollback:x86-fileonly: PASS seconds=430",
+    "import:x86-noacl:file: PASS seconds=521",
+    "reclaim: PASS seconds=2",
+    "leaks: PASS seconds=5"
+   ],
+   "failed_checks": [],
+   "what": "INTEGRATED engine (45db404c), dev-d's own [file] target. (1) `x86-fileonly` rollback rounds from the imported state: the imported state proven again (22 probes), AUTOMATIC rollback (start failure; the data volume held HA's data when it failed), READBACK rollback (named ONLY 設定（log）), each followed by the full client probes and a state equal to the one before that restore; manual rollback to the baseline B0 (digest equal, markers, no HA data). (2) the second lab-made input `x86-noacl` (HA authorizes with its built-in database, all ACL rows cleared): uploaded through the page's upload-begin/-finish, check ok (file-only target named, no ACL warning, no hot-backup warning), real conversion, inspect in place, restore + readback, client probes after the restore and after a restart, same state after the restart. Leak scan with 13 issued tokens = 0 hits.",
+   "simulated": "S1 S3 S4 S5 S6 S7"
+  },
+  "attempt-34": {
+   "scope": "noacl-rollback+draft",
+   "source_commit": "560936b",
+   "backup_engine_tree": "45db404c",
+   "exit": 0,
+   "elapsed_seconds": 485.8,
+   "lock_held": "485 s",
+   "checks": "99/99",
+   "steps": [
+    "reclaim: PASS seconds=2",
+    "setup: PASS seconds=8",
+    "rollback:x86-noacl: PASS seconds=443",
+    "catalog-draft: PASS seconds=21",
+    "reclaim: PASS seconds=3",
+    "leaks: PASS seconds=7"
+   ],
+   "failed_checks": [],
+   "what": "INTEGRATED engine (45db404c). (1) `x86-noacl` rollback rounds (the same rounds as attempt-33 on the second lab-made input): automatic rollback, readback rollback (only 設定（log） named), manual rollback to B0 (digest equal, no HA data). (2) catalog-draft: a fresh draft from the page's own catalog-suggest (asks /api/v5/error_codes, says why /readyz is not used) is installed UNEDITED as dev-d's EMQX entry and the device status is clean with it: attempts 35 and 36 run with it, as on a customer's device. Leak scan 656 files / 21 names = 0 hits.",
+   "simulated": "S1 S3 S4 S5 S6 S7"
+  },
+  "attempt-35": {
+   "scope": "x86-draft-import",
+   "source_commit": "d6f2c2f",
+   "backup_engine_tree": "f6dfa9c4",
+   "exit": 0,
+   "elapsed_seconds": 1139.3,
+   "lock_held": "1138 s",
+   "checks": "95/95",
+   "steps": [
+    "reclaim: PASS seconds=7",
+    "setup: PASS seconds=17",
+    "import:x86-cold:builtin: PASS seconds=1096",
+    "reclaim: PASS seconds=6",
+    "leaks: PASS seconds=10"
+   ],
+   "failed_checks": [],
+   "what": "FINAL integrated engine f6dfa9c4 (integration 2b5fee1 + the export check dd3ae49; the guarded unit set 259 + 503 + 6 OK on it first, in the same heavy slot) with the page's own UNEDITED draft as dev-d's EMQX entry (read back unchanged, health check included). Real x86 cold backup on the built-in target (the built-in database source added through the API after the file source): check ok (file + built-in read, no ACL or hot-backup warning), real conversion (the export check runs in target_broker right before `emqx ctl data import`, so HA's real export passed it), inspect in place, check and conversion changed nothing (digest equal). The FIRST import attempt from dev-d's OWN state fails twice on purpose: a one-shot start failure (the job rolls back; when the start failed the data volume held HA's rule) and a one-shot readback tamper (only 設定（log） named, rolled back by itself); after each dev-d's own state is back (state digest equal to its own state right before that restore, baseline markers, its own admin logs in and HA's admin password does not, its own bootstrap MQTT user logs in and HA's three MQTT users are refused, authorization is its own as right before that restore (no_match deny), no HA user, rule, retained message or API key). Then the real restore with a safety backup, not rolled back: the product's readback and the DRAFT's own health check passed (job log); client probes after the restore (21) and after a restart (22): HA's users and passwords, the retained messages, rule delivery, allowed and denied topics. Leak scan 657 files / 24 names with the 10 issued tokens = 0 hits.",
+   "simulated": "S1 S2 S3 S4 S5 S6"
+  },
+  "attempt-36": {
+   "scope": "x86-draft-rollback+cleanup",
+   "source_commit": "7631adb",
+   "backup_engine_tree": "f6dfa9c4",
+   "exit": 0,
+   "elapsed_seconds": 484.8,
+   "lock_held": "484 s",
+   "checks": "106/106",
+   "steps": [
+    "reclaim: PASS seconds=4",
+    "setup: PASS seconds=10",
+    "rollback:x86-cold: PASS seconds=421",
+    "catalog-own: PASS seconds=8",
+    "cleanup: PASS seconds=23",
+    "cleanup-baseline: PASS seconds=2",
+    "reclaim: PASS seconds=2",
+    "leaks: PASS seconds=6"
+   ],
+   "failed_checks": [],
+   "what": "FINAL integrated engine f6dfa9c4, the page's own unedited draft still installed (read back). x86 built-in rollback rounds from the imported state: the imported state proven again (23 checks), AUTOMATIC rollback (start failure; the data volume held HA's data when it failed), READBACK rollback (only 設定（log） named; every other setting and table were the converted ones), each followed by the full client probes (22) and a state equal to the one before that restore; manual rollback to the baseline B0 (digest equal to the one before any import, markers, own admin logs in and HA's does not, own file ACL only, no HA data). Then catalog-own: dev-d's own EMQX entry installed again (same SHA-256); cleanup: no job container, volume, network, staging folder or key file, the lab-made uploads deleted from the HA store (the real ones stay), the test's converted and safety backups deleted, no drop-in left, woow-emqx and its entrance run; B0 deleted; leak scan 646 files / 21 names = 0 hits; no new anonymous volume; isolation true none {} before and after.",
+   "simulated": "S1 S2 S3 S4 S5 S6"
   }
  }
 }
