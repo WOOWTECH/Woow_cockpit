@@ -5,9 +5,10 @@ for each (and pass on the unmodified copy). Nothing here touches Podman, a devic
 
   python3 -I tests/backup/omnigent_product_mutations.py [--json OUT] [--refusals]
 
-Prints one fixed line per mutation (`<id> <name>: caught|MISSED (<failures>/<tests>)`); exit 0 only when the
-baseline passes and every mutation is caught. `--refusals` checks instead of the list below what the module itself
-says no to: every `raise` and every blocker or problem it collects is removed, one at a time (`R<line>`).
+Prints one fixed line per mutation (`<id> <name>: caught|MISSED (<failures>/<tests>)`, the run of a mutation stops at
+its first failing test since 2026-11-24); exit 0 only when the baseline passes and every mutation is caught.
+`--refusals` checks instead of the list below what the module itself says no to: every `raise` and every blocker or
+problem it collects is removed, one at a time (`R<line>`).
 """
 import argparse
 import ast
@@ -152,6 +153,30 @@ MUTATIONS = (
      '[ -s "$snapdir/columns" ] || exit 22\n', 1),
     ('M43', "only a snapshot id reaches pg_dump's arguments (the same script)",
      "printf '%s' \"$snapshot\" | grep -Eq '^[0-9A-Fa-f-]+$' || exit 23\n", '', 1),
+    # found while closing them (2026-11-24): protections that are no refusal (--refusals covers those)
+    ('M44', "HA's cluster is removed before the new cluster starts",
+     "    tmp.remove('hapg')\n    tmp.remove_volume('hapg')\n    work.checkpoint()\n", '    work.checkpoint()\n', 1),
+    ('M45', "the new cluster is ready when it answers on TCP, not the image's temporary server",
+     '    pg.wait_ready(tcp=True, checkpoint=work.checkpoint)\n', '    pg.wait_ready(checkpoint=work.checkpoint)\n', 1),
+    ('M46', "HA's dump is private to the job (0600)",
+     "    with open(dump, 'xb') as handle:\n        os.fchmod(handle.fileno(), 0o600)\n",
+     "    with open(dump, 'xb') as handle:\n", 1),
+    ('M47', "the new cluster's export is private to the job (0600)",
+     "    with open(db_path, 'xb') as handle:\n        os.fchmod(handle.fileno(), 0o600)\n",
+     "    with open(db_path, 'xb') as handle:\n", 1),
+    ('M48', "this device's schema dump is private to the job (0600)",
+     '                os.fchmod(dest.fileno(), 0o600)\n', '', 1),
+    ('M49', 'the conversion checks the space it needs before it starts a cluster',
+     '    work.guard.check(2 * src.pg_bytes + ha_odoo.WAL_ALLOWANCE)\n', '', 1),
+    ('M50', 'a live account row nobody asked for is not carried',
+     "        if not isinstance(row, dict) or row.get('id') not in target.own_users:\n",
+     '        if not isinstance(row, dict):\n', 1),
+    ('M51', "the live version is asked on the loopback address only",
+     "        if parts.scheme == 'http' and parts.hostname in ('127.0.0.1', 'localhost'):\n", '        if True:\n', 1),
+    ('M52', 'an error page is no live version', '    if status != 200:\n        return None\n', '', 1),
+    ('M53', 'only x.y.z is a live version',
+     '    return version if isinstance(version, str) and SERVER_VERSION_RE.fullmatch(version) else None\n',
+     '    return version if isinstance(version, str) else None\n', 1),
 )
 
 
@@ -220,17 +245,17 @@ def main(argv):
             module = change[3] if len(change) > 3 else MODULE
             original = sources[module]
             if args.refusals:
-                mutated, options = change[0], ('--failfast',)   # the first failing test says it all
+                mutated = change[0]
             else:
                 old, new, count = change[:3]
-                mutated, options = original.replace(old, new), ()
+                mutated = original.replace(old, new)
                 if original.count(old) != count:
                     results.append({'id': ident, 'protection': name, 'module': module, 'applied': False})
                     print(f'{ident} {name}: NOT APPLIED (pattern count {original.count(old)})', flush=True)
                     continue
             (engine / module).write_text(mutated, encoding='utf-8')
             try:
-                rc, ran, failures = run_tests(root, *options)
+                rc, ran, failures = run_tests(root, '--failfast')
             finally:
                 (engine / module).write_text(original, encoding='utf-8')
             caught = rc != 0 and failures > 0

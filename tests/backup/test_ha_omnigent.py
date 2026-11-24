@@ -466,6 +466,16 @@ class ConvertTests(OmnigentCase):
                                               'mode=0400'])
         self.assertIn('--read-only', new[3])
         self.assertTrue(any(v.endswith(':rw,noexec,nosuid,nodev') for v in new[3]['--volume']))
+        # HA's own cluster is gone before the new one starts; the new one is ready when it answers on TCP (the image's
+        # temporary server of its first start listens on the socket only).
+        steps = [(' '.join(call[:2] if call[0] == 'volume' else call[:1]),
+                  [fk.role_of(a) for a in call if a.startswith(f'woowbk-{self.job_id}-') and ':' not in a])
+                 for call in self.world.owner.calls]
+        before = steps[:steps.index(('run', ['omni-db']))]
+        self.assertIn(('rm', ['hapg']), before)
+        self.assertIn(('volume rm', ['hapg']), before)
+        self.assertIn(['pg_isready', '-q', '-U', 'omnigent', '-h', '127.0.0.1', '-p', '5432'],
+                      [cmd for role, cmd, _d in self.world.execs if role == 'omni-db'])
         # The trusted schema: this device's, from one snapshot with the live revision; read before and after.
         self.assertEqual(len(self.world.snapshots), 1)
         self.assertEqual(self.world.snapshots[0][0], ['--', 'omnigent', 'omnigent'])
@@ -516,6 +526,29 @@ class ConvertTests(OmnigentCase):
         self.assertNotIn(HASH, '\n'.join(self.reporter.logs))
         self.assertTrue(any('略過' in line for line in self.reporter.logs), 'the skipped structure entries are logged')
         self.assertNotIn(HASH, jobs.redact(f'x {HASH} y'), 'masked as soon as it was read')
+
+    def test_what_the_job_writes_is_private_to_it(self):
+        """HA's dump (password hashes, connections), this device's schema dump and the three volumes exist in the
+        job's staging folder only, 0600 in folders of mode 0700."""
+        modes = {}
+
+        def mode(path):
+            return Path(path).stat().st_mode & 0o777
+        real_restore, real_manifest = ha_omnigent.restore_trusted_data, fk.Adapter.import_manifest
+
+        def restore(work, tmp, schema_dump, data_dump, *args, **kwargs):
+            modes.update(schema=mode(schema_dump), data=mode(data_dump), folder=mode(Path(data_dump).parent))
+            return real_restore(work, tmp, schema_dump, data_dump, *args, **kwargs)
+
+        def manifest(adapter, staging_dir, **items):
+            modes.update({name: mode(source) for name, source in items['volumes'].items()})
+            self.assertFalse((Path(staging_dir).parent.parent / 'omnigent-work' / 'omnigent.dump').exists())
+            return real_manifest(adapter, staging_dir, **items)
+        with mock.patch.object(ha_omnigent, 'restore_trusted_data', restore), \
+                mock.patch.object(fk.Adapter, 'import_manifest', manifest):
+            self.convert(self.upload_omnigent(), ['omnigent'])
+        self.assertEqual(modes, {'schema': 0o600, 'data': 0o600, 'folder': 0o700, 'omnigent-postgres-data': 0o600,
+                                 'omnigent-server-data': 0o600, 'omnigent-pi-data': 0o600})
 
     def test_a_same_named_ha_account_wins(self):
         self.world.ha_users = ['admin', 'alice']
@@ -1007,8 +1040,8 @@ class RefusalTests(OmnigentCase):
                 self.assertEqual((self.world.runs, self.world.imported), ([], {}), 'nothing of HA was read')
 
     def test_what_has_database_must_be(self):
-        """Each part of the verdict on its own: the check shows it as its only blocker and the conversion stops with
-        it before anything of HA is dumped."""
+        """Each part of the verdict on its own: the check shows it as a blocker and the conversion stops with it before
+        anything of HA is dumped."""
         objects = dict(self.world.objects)
         odd = 'HA 的 Omnigent 資料庫含有 Omnigent 不會建立的物件（{}），無法安全地搬過來。'
         for name, changed, upload, words in (
