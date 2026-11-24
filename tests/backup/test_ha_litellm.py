@@ -9,13 +9,18 @@ import gzip
 import hashlib
 import io
 import json
+import os
 import re
+import stat
+import subprocess
 import tarfile
+import tempfile
+import types
 import unittest
 from pathlib import Path
 from unittest import mock
 
-from woowbackup import ha_litellm, ha_litellm_candidate, ha_odoo, haapps, jobs
+from woowbackup import ha_litellm, ha_litellm_candidate, ha_odoo, haapps, haimport, jobs
 from woowbackup.errors import BackupError
 from woowbackup.podman import Result
 
@@ -102,9 +107,12 @@ def addon_tar(*, version='0.1.15', salt=SALT, state='1.104.0', pg_version=b'18\n
     return gzip.compress(hx.tar_bytes(entries + list(extra)), mtime=0)
 
 
+UNSET = object()
+
+
 class LiteAdapter(fk.Adapter):
     def image_inspect(self, image):
-        env = ['PG_MAJOR=17'] if 'postgres' in image else []
+        env = [f'PG_MAJOR={self.world.image_major}'] if 'postgres' in image and self.world.image_major else []
         return {'id': 'sha256:' + 'c' * 64, 'env': env, 'digest': '', 'arch': 'amd64', 'size': 1, 'names': []}
 
     def import_manifest(self, staging_dir, **items):
@@ -142,6 +150,12 @@ class World(fk.World):
         self.restores = []
         self.audit = {'roles': ['litellm'], 'role_settings': 0, 'auto_conf': 0, 'large_objects': 0}
         self.salt_digest = None
+        self.salt_rows = UNSET             # the new cluster's whole answer to SALT_DIGEST_SQL
+        self.ha_major, self.new_major, self.image_major = 18, 17, '17'
+        self.new_columns = None            # the new cluster's columns after the pre-data (None: HA's)
+        self.new_signatures = []           # the new cluster's signature answers in order (then restored_signature)
+        self.new_dump = None               # what pg_dump of the new cluster writes
+        self.chatgpt_accounts = 0
         self.converted_secrets, self.converted_dumps = {}, {}
         self.pulls = []
         self.pull_gives = None
@@ -185,7 +199,7 @@ class World(fk.World):
 
     def exec(self, role, command, data, stdout):
         if command[0] == 'pg_dump':
-            stdout.write(b'PGDMP-' + role.encode())
+            stdout.write(b'PGDMP-' + role.encode() if self.new_dump is None else self.new_dump)
             return Result(0, None, b'')
         if command[0] == 'pg_restore':
             self.restores.append((role, command, data))
@@ -202,10 +216,12 @@ class World(fk.World):
         if ha_litellm.PIN_SEARCH_PATH + sql in (ha_litellm.COLUMNS_SQL, ha_litellm.SIGNATURE_SQL):
             sql = ha_litellm.PIN_SEARCH_PATH + sql
         if 'server_version_num' in sql:
-            return {'hapg': 18, 'll-db': 17}.get(role)
+            return {'hapg': self.ha_major, 'll-db': self.new_major}.get(role)
         if "current_setting('server_version')" in sql:
             return '17.11 (Debian)'
         if sql == ha_litellm.COLUMNS_SQL:
+            if role == 'll-db' and self.new_columns is not None:
+                return self.new_columns
             return {'litellm-postgres': self.live_columns, 'hapg': self.ha_columns}.get(role, self.ha_columns)
         if sql == ha_litellm.SIGNATURE_SQL:
             if role == 'litellm-postgres':
@@ -213,6 +229,8 @@ class World(fk.World):
                 return self.live_signature
             if role == 'hapg':
                 return self.ha_signature
+            if self.new_signatures:
+                return self.new_signatures.pop(0)
             return self.restored_signature if self.restored_signature is not None else self.live_signature
         if sql == ha_litellm.MIGRATIONS_SQL:
             return self.live_migrations if role == 'litellm-postgres' else self.ha_migrations
@@ -220,7 +238,8 @@ class World(fk.World):
             if sql == ha_litellm.AUDIT_SQL:
                 return self.audit
             if sql == ha_litellm.SALT_DIGEST_SQL:
-                return [self.salt_digest or hashlib.sha256(SALT).hexdigest()]
+                return ([self.salt_digest or hashlib.sha256(SALT).hexdigest()] if self.salt_rows is UNSET
+                        else self.salt_rows)
         if role == 'hapg' and sql == ha_litellm.OBJECTS_SQL:
             return self.objects
         if role in ('hapg', 'll-db') and sql.startswith('SELECT json_build_object(') and '(SELECT count(*) FROM' in sql:
@@ -229,7 +248,8 @@ class World(fk.World):
                 counts = self.new_counts if role == 'll-db' and self.new_counts is not None else self.counts
                 return {name: counts[name] for name in names}
             keys = re.findall(r"'([a-z_]+)', \(SELECT", sql)
-            return {key: {'users': 1, 'teams': 1, 'keys': 1, 'models': 24, 'credentials': 5}.get(key, 0) for key in keys}
+            return {key: {'users': 1, 'teams': 1, 'keys': 1, 'models': 24, 'credentials': 5,
+                          'chatgpt_accounts': self.chatgpt_accounts}.get(key, 0) for key in keys}
         if role == 'hapg':
             if sql == ha_odoo.DATABASES_SQL:
                 return [['litellm', 9000, 'C', 'C.UTF-8'], ['postgres', 100, 'C', 'C.UTF-8']]
@@ -952,6 +972,307 @@ class ConvertTests(LiteLLMCase):
         result = self.convert(self.upload_litellm(), ['litellm'], test_mode=True)
         self.assertTrue(result['ha_import']['test_mode'])
         self.assertEqual(self.world.converted_secrets, {'litellm-salt-key': SALT})
+
+
+class SingleProtectionTests(LiteLLMCase):
+    """The lane verifier's own mutation check (2026-11-24) removed 16 single protections of ha_litellm.py that no unit
+    test noticed: each test here fails when that one protection is gone (litellm_product_mutations.py N01..N34; the
+    ids are the verifier's)."""
+
+    def refused(self, words, code='incompatible', **upload):
+        """A conversion that must stop with `words` and make no backup; the BackupError."""
+        with self.assertRaises(BackupError) as caught:
+            self.convert(self.upload_litellm(**upload), ['litellm'])
+        self.assertEqual(caught.exception.code, code, caught.exception.message)
+        self.assertIn(words, caught.exception.message)
+        self.assertEqual(self.storage.list_backups(), [])
+        return caught.exception
+
+    def blockers(self, **upload):
+        result = self.check(self.upload_litellm(**upload), ['litellm'])[0]
+        self.assertEqual(result['ok'], not result['blockers'])
+        return result['blockers']
+
+    def watch_podman(self, seen):
+        """Call seen(args) before every podman call of the fake owner."""
+        podman = self.world.podman
+
+        def watched(args, data, stdout):
+            seen(args)
+            return podman(args, data, stdout)
+
+        self.world.podman = watched
+
+    def test_n01_a_version_the_check_refuses_never_converts(self):
+        for upload, live, words in (({'version': '0.1.14'}, '1.104.0', '還不認得'),
+                                    ({}, '1.105.0', '版本不同：HA 的 LiteLLM 是 1.104.0'),
+                                    ({}, None, '無法讀取這台 LiteLLM 的版本')):
+            self.world.app_version = live
+            with self.subTest(words=words):
+                error = self.refused(words, **upload)
+                self.assertTrue(error.message.startswith('LiteLLM 不能搬過來：'), error.message)
+                self.assertNotIn('hapg', self.world.imported, "HA's cluster was not read")
+                self.assertFalse(self.world.runs, 'no throwaway container ran')
+                self.assertFalse(self.world.copies_out or self.world.copies_in or self.world.snapshots)
+
+    def test_n09_the_new_cluster_must_be_this_devices_major(self):
+        for major in (16, 18, '17', None, True):
+            self.world.new_major = major
+            with self.subTest(major=major):
+                self.refused('新的 PostgreSQL 叢集版本和這台的不同', 'job-failed')
+        self.world.new_major = 17
+        self.assertTrue(self.convert(self.upload_litellm(), ['litellm'])['backup_id'])
+
+    def test_n10_an_empty_dump_is_not_a_backup(self):
+        self.world.new_dump = b''
+        self.refused('LiteLLM 轉換後的資料庫匯出結果為空', 'job-failed')
+        self.assertFalse([cmd for _role, cmd, _d in self.world.restores if '/dev/null' in cmd], 'stopped at once')
+
+    def test_n11_has_cluster_must_open_as_postgresql_18(self):
+        for major in (17, 19, None):
+            self.world.ha_major = major
+            with self.subTest(major=major):
+                self.assertEqual(self.blockers(), ['暫用的 PostgreSQL 18 版本不符，已停止，這台的應用沒有任何變更。'])
+                self.refused('暫用的 PostgreSQL 18 版本不符', 'job-failed')
+        self.assertFalse(self.world.copies_out, "nothing of HA's database was read")
+
+    def test_n12_the_conversions_space_is_reserved_before_has_cluster_starts(self):
+        with tarfile.open(fileobj=io.BytesIO(gzip.decompress(addon_tar()))) as tar:
+            size = sum(m.size for m in tar.getmembers() if m.isfile() and m.name.startswith('data/postgres/'))
+        self.assertGreater(size, 0)
+        # exactly the write-ahead allowance is free above the floor: three times HA's cluster more is needed
+        with mock.patch.object(haimport.SpaceGuard, 'free', lambda guard: guard.floor + ha_odoo.WAL_ALLOWANCE):
+            error = self.refused('空間不足', 'insufficient-space')
+        self.assertEqual(error.details['required'] - error.details['free'], 3 * size)
+        self.assertFalse(self.runs('hapg'), "HA's cluster never started")
+        self.assertFalse(self.world.copies_out or self.world.snapshots)
+        with mock.patch.object(haimport.SpaceGuard, 'free',
+                               lambda guard: guard.floor + ha_odoo.WAL_ALLOWANCE + 3 * size):
+            self.assertTrue(self.convert(self.upload_litellm(), ['litellm'])['backup_id'], 'that much is enough')
+
+    BAD_SALT_FILE = 'LiteLLM 附加元件的加密金鑰檔格式不正確，無法匯入。'
+
+    def test_n14_the_salt_file_is_one_small_regular_file(self):
+        folder = {'name': 'data/secrets/salt_key', 'type': 'dir'}
+        large = {'name': 'data/secrets/salt_key', 'data': SALT + b'\n' * (1025 - len(SALT)), 'mode': 0o600}
+        for name, entry in (('a folder', folder), ('1025 bytes', large)):
+            with self.subTest(name):
+                self.assertEqual(self.blockers(salt=None, extra=[entry]), [self.BAD_SALT_FILE])
+                self.refused(self.BAD_SALT_FILE, salt=None, extra=[entry])
+        fits = dict(large, data=SALT + b'\n' * (1024 - len(SALT)))
+        self.assertEqual(self.blockers(salt=None, extra=[fits]), [], '1024 bytes are read, the line ends stripped')
+
+    def test_n14_a_second_salt_file_refuses(self):
+        # The strict archive reader already refuses a name that is there twice; the scan refuses it by itself, too.
+        second = {'name': 'data/secrets/salt_key', 'data': OTHER_SALT + b'\n', 'mode': 0o600}
+        with self.assertRaises(BackupError):
+            self.check(self.upload_litellm(extra=[second]), ['litellm'])
+
+        def entry():
+            data = SALT + b'\n'
+            return types.SimpleNamespace(name='data/secrets/salt_key', kind='file', size=len(data),
+                                         read_all=lambda _limit: data)
+
+        report = types.SimpleNamespace(addon=types.SimpleNamespace(slug='woow-litellm'), skipped_symlinks=0)
+        with mock.patch.object(ha_litellm.habackup, 'iter_entries', return_value=iter([entry()])):
+            self.assertTrue(ha_litellm.scan_member(None, report).salt_valid)
+        with mock.patch.object(ha_litellm.habackup, 'iter_entries', return_value=iter([entry(), entry()])):
+            with self.assertRaises(BackupError) as caught:
+                ha_litellm.scan_member(None, report)
+        self.assertEqual((caught.exception.code, caught.exception.message), ('incompatible', self.BAD_SALT_FILE))
+
+    def test_n16_the_new_clusters_schema_is_compared_after_post_data_and_after_the_last_write(self):
+        evil = dict(signature(), triggers=[['public', 'LiteLLM_UserTable', 'evil', 'CREATE T']])
+        drop = f'DROP ROLE {ha_litellm.RESTORE_ROLE}'
+        for answers, stage in (([evil, signature()], 'restored'), ([signature(), evil], 'loaded')):
+            self.world.new_signatures = list(answers)
+            self.world.psql.clear()
+            with self.subTest(stage=stage):
+                error = self.refused('triggers', 'job-failed')
+                self.assertEqual(error.details.get('stage'), stage)
+                # the first comparison stops before the loader role is dropped, the second one is after that last write
+                self.assertEqual(drop in self.world.executed('ll-db'), stage == 'loaded')
+        trusted = ha_litellm.Schema(COLUMNS, signature(), MIGRATIONS)
+        for part in ha_litellm.SIGNATURE_KEYS:  # every part of the signature counts
+            found = dict(signature(), **{part: ['another value']})
+            cluster = types.SimpleNamespace(query_json=lambda _sql, _database, found=found: found)
+            with self.subTest(part=part), self.assertRaises(BackupError) as caught:
+                ha_litellm.require_schema(cluster, trusted, 'loaded')
+            self.assertIn(f'（{part}）', caught.exception.message)
+
+    def test_n19_the_fresh_cluster_must_hold_has_columns_before_any_row(self):
+        self.world.new_columns = COLUMNS + [['public', 'LiteLLM_UserTable', 'later', 'text', False, '', '']]
+        self.refused('HA 與目標 LiteLLM 的資料表欄位結構不同。')
+        self.assertFalse(self.world.copies_in, 'no row of HA was loaded')
+        self.assertFalse([s for s in self.world.executed('ll-db') if s.startswith('CREATE ROLE')])
+
+    def shapes(self):
+        item = dict(self.catalog['litellm'].postgres[0])
+        instance = {key: value for key, value in item.items() if key != 'database'}
+        volume = {'name': 'litellm-pgdata', 'label': 'PostgreSQL 資料（冷備份）'}
+        return (('cold draft', {'postgres': [], 'volumes': [volume]}), ('extra volume', {'volumes': [volume]}),
+                ('host directory', {'data_dirs': [{'path': '.local/share/litellm', 'label': ''}]}),
+                ('two databases', {'postgres': [item, dict(item, id='db2')]}),
+                ('whole instance', {'postgres': [dict(instance, scope='instance')]}))
+
+    def test_n21_only_the_single_database_entry_is_filled(self):
+        original = vars(self.catalog['litellm']).copy()
+        for name, fields in self.shapes():
+            vars(self.catalog['litellm']).update(original, **fields)
+            with self.subTest(name):
+                self.assertEqual(self.blockers(), [ha_litellm.TARGET_SHAPE])
+                self.assertEqual(self.refused('單一資料庫').message, ha_litellm.TARGET_SHAPE)
+        self.assertFalse(self.world.runs, 'refused before anything ran')
+        for words in ('「單一資料庫」', '冷備份與整個執行個體都不能匯入', '「應用設定」', '無法以新設定還原'):
+            self.assertIn(words, ha_litellm.TARGET_SHAPE, 'what the owner has to choose, where, and what it costs')
+        vars(self.catalog['litellm']).update(original)
+        self.catalog['litellm'].postgres = [dict(original['postgres'][0], scope='database')]
+        self.assertEqual(self.blockers(), [], 'the single-database entry, scope written or not')
+        self.world.quadlets['litellm'] = {k: v for k, v in QUADLETS.items() if k != 'litellm.container'}
+        self.assertEqual(self.blockers(), ['這台的 LiteLLM 應用設定不是 HA 匯入支援的樣子：找不到 litellm-postgres 或 litellm 的 '
+                                           'Quadlet 檔。'])
+
+    def test_n28_has_database_must_have_the_platform_schema(self):
+        self.world.objects = dict(self.world.objects, schemas=['woow'])
+        self.assertEqual(self.blockers(), ['HA 的 LiteLLM 資料庫的結構描述不是 LiteLLM 會建立的（缺少 woow_platform），無法安全地搬過來。'])
+        self.refused('缺少 woow_platform')
+        self.assertFalse(self.world.copies_out)
+
+    def test_n29_this_devices_postgresql_must_be_known_and_supported(self):
+        for major, shown in (('', '未知'), ('12', '12'), ('19', '19'), ('x', '未知')):
+            self.world.image_major = major
+            with self.subTest(major=major):
+                words = f'無法確認這台 LiteLLM 的 PostgreSQL 版本（{shown}）。'
+                self.assertEqual(self.blockers(), [words])
+                self.refused(words)
+        self.assertFalse(self.world.copies_out)
+        for major in ('13', '17', '18'):
+            self.world.image_major = major
+            self.assertEqual(self.blockers(), [], major)
+
+    def test_n30_chatgpt_sign_ins_are_named_in_the_check(self):
+        self.assertFalse([w for w in self.check(self.upload_litellm(), ['litellm'])[0]['warnings'] if 'ChatGPT' in w])
+        self.world.chatgpt_accounts = 2
+        result = self.check(self.upload_litellm(), ['litellm'])[0]
+        lines = [w for w in result['warnings'] if 'ChatGPT' in w]
+        self.assertEqual(len(lines), 1, result['warnings'])
+        self.assertIn('有 2 個 ChatGPT 訂閱登入會一起搬過來；請先停掉 HA 那邊的 LiteLLM', lines[0])
+        self.assertEqual((result['ok'], result['litellm']['chatgpt_accounts']), (True, 2))
+        reminders = self.convert(self.upload_litellm(), ['litellm'])['ha_import']['reminders_by_app']['litellm']
+        self.assertTrue(any('請停掉 HA 那邊的 LiteLLM' in r and 'ChatGPT 頁面重新連結' in r for r in reminders), reminders)
+
+    def test_n32_has_rows_leave_the_disk_as_they_are_loaded(self):
+        seen, modes, after = [], set(), []
+
+        def watch(args):
+            staged = sorted(Path(self.paths.staging).rglob('rows-*.copy'))
+            if args[0] == 'exec' and args[-1].startswith('COPY ') and args[-1].endswith(' FROM STDIN'):
+                seen.append(len(staged))
+                modes.update(stat.S_IMODE(path.stat().st_mode) for path in staged)
+            elif args[0] == 'exec' and 'pg_dump' in args:
+                after.append(len(staged))
+
+        self.watch_podman(watch)
+        self.convert(self.upload_litellm(), ['litellm'])
+        self.assertEqual(seen, list(range(len(TABLES), 0, -1)), "each table's rows are deleted once they are loaded")
+        self.assertEqual((modes, after), ({0o600}, [0]), 'private, and none is left before the dump')
+
+    def test_n33_the_salt_row_must_be_there_and_be_the_only_one(self):
+        good = hashlib.sha256(SALT).hexdigest()
+        for rows in ([], None, [good, good], good, {}):
+            self.world.salt_rows = rows
+            with self.subTest(rows=rows):
+                self.refused('匯入後資料庫裡的加密金鑰和要搬過來的不同', 'job-failed')
+        self.assertFalse(self.world.converted_secrets, 'no salt was handed over')
+        self.world.salt_rows = [good]
+        self.assertTrue(self.convert(self.upload_litellm(), ['litellm'])['backup_id'])
+
+    def removals(self):
+        """Labels, in order, of the HA cluster's removals, this device's schema reads and the new cluster's start."""
+        order = []
+
+        def watch(args):
+            if args[0] == 'rm' and fk.role_of(args[-1]) == 'hapg':
+                order.append('container')
+            elif args[:2] == ['volume', 'rm'] and fk.role_of(args[-1]) == 'hapg':
+                order.append('volume')
+            elif args[0] == 'run' and fk.role_of(args[args.index('--name') + 1]) == 'll-db':
+                order.append('new cluster')
+            elif args[0] == 'exec' and 'litellm-postgres' in args and args[-1] == ha_litellm.SIGNATURE_SQL:
+                order.append('live schema')
+
+        self.watch_podman(watch)
+        return order
+
+    def test_n34_the_check_removes_has_cluster_before_it_reads_this_device(self):
+        order = self.removals()
+        self.assertEqual(self.blockers(), [])
+        self.assertEqual(order[:3], ['container', 'volume', 'live schema'])
+
+    def test_n34_the_conversion_removes_has_cluster_before_the_new_one_starts(self):
+        order = self.removals()
+        self.convert(self.upload_litellm(), ['litellm'])
+        self.assertLess(order.index('container'), order.index('new cluster'))
+        self.assertLess(order.index('volume'), order.index('new cluster'))
+
+
+class SnapshotScriptTests(unittest.TestCase):
+    """N18: what runs inside this device's litellm-postgres container to read its schema, run for real by sh with a
+    psql and a pg_dump that only answer: the columns and the dump leave only when the snapshot's migrations are the ones
+    the check saw."""
+    PSQL = '''#!/bin/sh
+out=/dev/null
+while IFS= read -r line; do
+    case $line in
+        '\\o '*) out=${line#* }; printf '%s\\n' "$out" >> "$STUB_LOG" ;;
+        '\\o') out=/dev/null ;;
+        '\\q') exit 0 ;;
+        'SELECT pg_export_snapshot();') printf '%s\\n' "$STUB_SNAPSHOT" > "$out" ;;
+        'SELECT CASE WHEN '*) printf '%s\\n' "$STUB_REVISION" > "$out" ;;
+        'SET search_path = pg_catalog; SELECT '*) [ -z "$STUB_DIES" ] || exit 3
+            printf '%s\\n' "$STUB_COLUMNS" > "$out" ;;
+    esac
+done
+'''
+    PG_DUMP = '#!/bin/sh\nprintf "pg_dump %s\\n" "$*" >> "$STUB_LOG"\nprintf PGDMP-stub\n'
+    COLUMNS_LINE = '[["public", "t", "id", "text", true, "", ""]]'
+
+    def run_script(self, **stub):
+        with tempfile.TemporaryDirectory() as directory:
+            for name, text in (('psql', self.PSQL), ('pg_dump', self.PG_DUMP)):
+                path = Path(directory) / name
+                path.write_text(text)
+                path.chmod(0o755)
+            log = Path(directory) / 'log'
+            log.touch()
+            env = {'PATH': f'{directory}:/usr/bin:/bin', 'STUB_LOG': str(log), 'STUB_SNAPSHOT': '00000003-0000001B-1',
+                   'STUB_REVISION': 'ok', 'STUB_COLUMNS': self.COLUMNS_LINE, 'STUB_DIES': '', **stub}
+            proc = subprocess.run(['sh', '-s', '--', 'litellm', 'litellm'], env=env, capture_output=True, timeout=60,
+                                  input=ha_litellm.snapshot_script(MIGRATIONS).encode('utf-8'))
+            lines = log.read_text().splitlines()
+        folders = {os.path.dirname(line) for line in lines if line.startswith('/tmp/woowbk-schema.')}
+        self.assertEqual(len(folders), 1, lines)
+        self.assertFalse(os.path.exists(folders.pop()), 'the private folder is removed on every way out')
+        return proc.returncode, proc.stdout, [line for line in lines if line.startswith('pg_dump ')]
+
+    def test_the_columns_and_the_schema_come_from_one_snapshot(self):
+        code, out, dumps = self.run_script()
+        self.assertEqual((code, out), (0, self.COLUMNS_LINE.encode() + b'\nPGDMP-stub'))
+        self.assertEqual(dumps, ['pg_dump -U litellm -d litellm -Fc --schema-only --no-owner --no-acl '
+                                 '--lock-wait-timeout=15s --snapshot=00000003-0000001B-1'])
+
+    def test_other_migrations_in_the_snapshot_stop_before_anything_leaves(self):
+        for revision in ('mismatch', '', 'ok '):
+            with self.subTest(revision=revision):
+                self.assertEqual(self.run_script(STUB_REVISION=revision), (22, b'', []))
+
+    def test_a_psql_that_ends_early_or_an_odd_snapshot_name_stop(self):
+        self.assertEqual(self.run_script(STUB_DIES='1'), (21, b'', []))
+        self.assertEqual(self.run_script(STUB_SNAPSHOT='x; rm -rf /'), (23, b'', []))
+
+    def test_the_script_asks_for_exactly_the_migrations_the_check_saw(self):
+        script = ha_litellm.snapshot_script(MIGRATIONS)
+        self.assertIn("::text = '" + json.dumps(sorted(MIGRATIONS)) + "' THEN 'ok' ELSE 'mismatch' END;", script)
 
 
 class KeyUserTests(unittest.TestCase):

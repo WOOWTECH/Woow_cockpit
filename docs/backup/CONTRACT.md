@@ -371,7 +371,11 @@ variant invalid (`field: "id"`): installing it would move that entry and its bac
   database keeps its data in a named volume — `instance` (`{"id","container","unit","user","data_volume","scope":
   "instance"}`) and `database` (`{"id","container","unit","database","user","data_volume"}`). The selected variant is
   `cold`, except for an installed entry that exports its database: then its mode is kept (`installed-mode`), because
-  changing the mode makes the existing backups unrestorable under the new entry.
+  changing the mode makes the existing backups unrestorable under the new entry; and except for an id in
+  `suggest.PREFERRED_MODES` (`litellm`: `database`) that is not installed: the mode its Home Assistant import needs
+  (§9 "LiteLLM"), when that variant can be installed (info note `import-mode`; the cold label then drops 「（預設）」).
+  An installed entry of such an id in another mode keeps it; a warn note `import-mode` says what to choose for an
+  import. Where that mode does not exist (the data in a host directory) the note says the import is not possible.
 * `volumes`: named volumes the containers mount (`Volume=x.volume:` resolved through `VolumeName=`, default
   `systemd-<stem>`), except volumes mounted only below `/run`, `/var/run`, `/tmp`, `/var/tmp`, `/dev/shm` (skipped: sockets,
   PID files) and, in export modes, the database's data volume.
@@ -384,7 +388,9 @@ variant invalid (`field: "id"`): installing it would move that entry and its bac
   `/run/dbus`) are skipped; a Podman/Docker socket is reported (`podman-socket`).
 * `config_files`: `EnvironmentFile=` files (mode `0600`) and bound files (`0644`, or `0600` when not readable by group and
   others) that lie in `.config/<id>/` or `.local/share/<id>/`; a current mode above 0644 is reported (`config-mode`); files
-  elsewhere are listed in `skipped`; files inside a proposed host directory are covered by it.
+  elsewhere are listed in `skipped`; files inside a proposed host directory are covered by it. A package file no
+  Quadlet names (`suggest.PACKAGE_CONFIGS`: LiteLLM's `litellm.env`, the input of its install script) is proposed
+  (`0600`) when the owner has it.
 * `secrets`: every `Secret=` name (also `PodmanArgs --secret`); names that do not exist are reported (`secret-missing`).
 * `health`: every `http://localhost|127.0.0.1|0.0.0.0[:port]/path` in a `HealthCmd=`, mapped to the host port of a
   `PublishPort=` bound to 127.0.0.1 or all addresses (of the container, its network-namespace owner or its pod; with
@@ -394,7 +400,9 @@ variant invalid (`field: "id"`): installing it would move that entry and its bac
   apart, `TimeoutStartSec=600`): real restores on a loaded test device took 251-345 s until `/health/readiness`
   answered, so 300 s could declare a restore that worked failed. A longer limit only waits longer; no check is relaxed.
   LAN-only ports, HTTPS and unpublished ports give hints instead of URLs. A query
-  string (`?…`, possibly a token) is never copied: the URL keeps only its path and a hint says so (review L5).
+  string (`?…`, possibly a token) is never copied: the URL keeps only its path and a hint says so (review L5). A path
+  in `suggest.READY_PATHS` is replaced (LiteLLM: `/health/liveliness`, which does not look at the database, by
+  `/health/readiness`, which its package's startup probe waits for), with a hint; an installed entry's checks are kept.
 * `verify`: built-in digests (feature 1): one `postgres-digest` per PostgreSQL database (`{"postgres": "main"}` in export
   modes, `{"container","unit","user"}` in cold mode) and one `files-digest` per proposed volume and host directory, except
   a PostgreSQL data volume or directory (the table digest covers it); at most 16. If the validator rejects them (an engine
@@ -405,7 +413,10 @@ variant invalid (`field: "id"`): installing it would move that entry and its bac
 **Installed entries.** For an id that is installed for this owner, every variant keeps the installed entry's name,
 description, `template_dir`, volume and directory labels, `health` and `verify` items (built-in digests of targets the
 installed checks do not cover are appended), its list order (new items last; the start order only when no unit was
-added), and leaves out empty lists the installed entry leaves out. One exception: a `health` item of an id in
+added), and leaves out empty lists the installed entry leaves out. A kept `postgres-digest` whose form another mode
+cannot use (the container form in an export mode, an unknown `postgres` id in cold mode) becomes that variant's own
+check of the same database container with the kept `id`, `label` and `exclude_tables` (`suggest.digest_for_mode`):
+every variant of an installed app can be installed as proposed. One exception: a `health` item of an id in
 `suggest.HEALTH_TIMEOUTS` (`litellm`) with a shorter `timeout_seconds` (or none, the catalog's 60 s) gets that limit in
 the draft, with an info note `health-timeout` naming the old limits; it takes effect when the draft is installed (the
 engine never edits an installed entry by itself). `installed.changes` is the structured diff
@@ -421,7 +432,8 @@ Which mode a draft proposes (the general guidance is the "PostgreSQL modes" tabl
 | Restore needs | the same PostgreSQL major | the same or a newer major | the same or a newer major |
 
 The draft for an app that is already installed in an export mode keeps that mode, because switching modes makes its
-existing backups unrestorable under the new entry (`compat` says so before installing).
+existing backups unrestorable under the new entry (`compat` says so before installing). LiteLLM is the one id whose
+new draft is single-database (`suggest.PREFERRED_MODES`).
 
 ### Installing and removing entries (`catalog-install`, `catalog-remove`)
 
@@ -2168,6 +2180,11 @@ html,data}`; facts `phase3/facts/nextcloud.md`, owner decisions D1-D5 applied wi
 
 **LiteLLM** (`woow-litellm` → `litellm`: one `postgres` item `main`, container `litellm-postgres`, database and user
 `litellm`; the proxy container `litellm` reads secret `litellm-salt-key` as `LITELLM_SALT_KEY`; owner decision 2026-11-23).
+The entry must be exactly one single-database `postgres` item, no volume and no host directory: any other mode (cold,
+instance) is a blocker that says what to choose and where (`ha_litellm.TARGET_SHAPE`); `catalog-suggest` proposes that
+entry for a LiteLLM that is not installed (§4). Its `verify` may hold a `postgres-digest` (the draft adds `db-main`):
+the converted backup records none, so the preflight warns (`digests-missing`) and the import reports `match: null`,
+while the safety backup records it and both rollbacks compare it before the app starts.
 1. Versions: add-on 0.1.15 → LiteLLM 1.104.0 must equal the running proxy's `importlib.metadata.version("litellm")`
    (`podman exec litellm`, read only); HA's `data/woow/state.json` `litellm_version`, when present, must say the same;
    HA's finished Prisma migrations must be exactly the live database's. HA's PostgreSQL is 18 (`PG_VERSION`), this

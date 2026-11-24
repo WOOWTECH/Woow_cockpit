@@ -1,15 +1,18 @@
 #!/usr/bin/env python3
 """Mutation check of the LiteLLM product import (owner decision 2026-11-23 「決定1 做」: the lab-proven method as the
-product, with the trust rules of the Omnigent import): every protection the lab proved -- and each one the product
-adds -- is removed, one at a time, in a throwaway copy of the engine, and the LiteLLM unit tests must FAIL for each
-(and pass on the unmodified copy). The readiness-limit mutations (owner decision 2026-11-23 23:28: LiteLLM's catalog
-health checks wait 600 s, every other app keeps its limit) run tests.backup.test_suggest instead. Nothing here touches
+product, with the trust rules of the Omnigent import): each protection listed in MUTATIONS is removed, one place at a
+time, in a throwaway copy of the engine, and the LiteLLM unit tests must FAIL for each (and pass on the unmodified
+copy). The list is what the lane, the security review and the lane verifiers named, not a proof that no other line
+matters: the verifier's own 26 removals of 2026-11-24 found 16 that no test noticed (N01..N34 here, each with its
+test). The catalog-suggest mutations (owner decision 2026-11-23 23:28: LiteLLM's health checks wait 600 s, every other
+app keeps its limit; and the draft the import can fill) run tests.backup.test_suggest instead. Nothing here touches
 Podman, a device or a secret.
 
-  python3 -I tests/backup/litellm_product_mutations.py [--json OUT]
+  python3 -I tests/backup/litellm_product_mutations.py [--json OUT] [--only ID,ID]
 
 Prints one fixed line per mutation (`<id> <name>: caught|MISSED (<failures>/<tests>)`); exit 0 only when the
-baseline passes and every mutation is caught.
+baseline passes and every mutation is caught. A mutation's run stops at its first failing test (`-f`: 1 failure is
+enough), the baseline runs every test.
 """
 import argparse
 import hashlib
@@ -59,9 +62,12 @@ MUTATIONS = (
      '    differ = schema_differences(ha_schema, trusted)\n', '    differ = []\n', 1),
     ('M10', 'the check names a schema difference as a blocker', LL,
      '        if differ:\n            blockers.append(schema_blocker(differ))\n', '        pass\n', 1),
-    ('M11', "the new cluster's schema equals the trusted one (after post-data and after the last write)", LL,
+    # one place each: the two calls, and what the comparison covers (until 2026-11-24 one entry disabled all three)
+    ('M11', "the new cluster's schema equals the trusted one after the post-data section", LL,
+     "    require_schema(cluster, trusted, 'restored')\n", '    pass\n', 1),
+    ('M11b', 'every part of the schema signature is compared', LL,
      "    differ = [key for key in SIGNATURE_KEYS if found.get(key) != trusted.signature.get(key)]\n",
-     '    differ = []\n', 1),
+     "    differ = [key for key in SIGNATURE_KEYS[:8] if found.get(key) != trusted.signature.get(key)]\n", 1),
     ('M12', 'the new cluster holds no other role, setting, ALTER SYSTEM value or large object', LL,
      "    if problems:\n        raise BackupError('job-failed', f'新的 PostgreSQL 叢集含有不應存在的內容",
      "    if False:\n        raise BackupError('job-failed', f'新的 PostgreSQL 叢集含有不應存在的內容", 1),
@@ -192,6 +198,81 @@ MUTATIONS = (
     ('M56', "the import notes name what moved, not what HA's cluster said (SR-8)", LL,
      "    settings = stored_settings(pg, trusted)\n    hooks = stored_hooks_blocker(settings)\n",
      "    moved = stored_settings(pg, trusted)\n    hooks = stored_hooks_blocker(moved)\n", 1),
+    # The lane verifier's own removals (2026-11-24) that no unit test noticed, by the verifier's ids.
+    ('N01', 'a version the check refuses never converts', LL,
+     "    if blocker:\n        raise BackupError('incompatible', f'LiteLLM 不能搬過來：{blocker}', app=app.id)\n", '', 1),
+    ('N09', "the new cluster's major is this device's", LL,
+     '    if type(major) is not int or major != target_major:\n', '    if False:\n', 1),
+    ('N10', 'an empty converted dump is refused', LL, '    if dump.stat().st_size == 0:\n', '    if False:\n', 1),
+    ('N11', "HA's cluster is opened by PostgreSQL 18 only", LL, '    if major != HA_PG_MAJOR:\n', '    if False:\n', 1),
+    ('N12', "the conversion's space is checked before HA's cluster starts", LL,
+     '    work.guard.check(3 * src.pg_bytes + ha_odoo.WAL_ALLOWANCE)\n', '    pass\n', 1),
+    ('N12b', "that space is three times HA's cluster and the write-ahead allowance", LL,
+     '    work.guard.check(3 * src.pg_bytes + ha_odoo.WAL_ALLOWANCE)\n',
+     '    work.guard.check(2 * src.pg_bytes + ha_odoo.WAL_ALLOWANCE)\n', 1),
+    ('N14', 'the salt file is a regular file', LL,
+     "            if entry.kind != 'file' or entry.size > MAX_SALT_FILE or salts > 1:\n",
+     '            if entry.size > MAX_SALT_FILE or salts > 1:\n', 1),
+    ('N14b', 'the salt file is at most 1024 bytes', LL,
+     "            if entry.kind != 'file' or entry.size > MAX_SALT_FILE or salts > 1:\n",
+     "            if entry.kind != 'file' or salts > 1:\n", 1),
+    ('N14c', 'a second salt file refuses', LL,
+     "            if entry.kind != 'file' or entry.size > MAX_SALT_FILE or salts > 1:\n",
+     "            if entry.kind != 'file' or entry.size > MAX_SALT_FILE:\n", 1),
+    ('N16', "the new cluster's schema equals the trusted one after the last write", LL,
+     "    require_schema(pg, trusted, 'loaded')\n", '    pass\n', 1),
+    ('N18', "the schema snapshot's migrations are the ones the check saw (the script inside litellm-postgres)", LL,
+     '[ -s "$snapdir/columns" ] && [ "$(cat "$snapdir/revision")" = ok ] || exit 22',
+     '[ -s "$snapdir/columns" ] || exit 22', 1),
+    ('N19', "the new cluster holds HA's columns before any row is loaded", LL,
+     "    if _columns(cluster.query_json(COLUMNS_SQL, DATABASE), '新的 PostgreSQL 叢集') != ha_columns:\n",
+     '    if False:\n', 1),
+    ('N21', 'an entry with a volume (the cold draft) is refused', LL,
+     "app.postgres[0].get('scope', 'database') != 'database' or app.volumes\n                or app.data_dirs):\n",
+     "app.postgres[0].get('scope', 'database') != 'database'\n                or app.data_dirs):\n", 1),
+    ('N21b', 'an entry with a host directory is refused', LL,
+     "app.postgres[0].get('scope', 'database') != 'database' or app.volumes\n                or app.data_dirs):\n",
+     "app.postgres[0].get('scope', 'database') != 'database' or app.volumes):\n", 1),
+    ('N21c', 'a whole-instance entry is refused', LL,
+     "        if (len(app.postgres) != 1 or app.postgres[0].get('scope', 'database') != 'database' or app.volumes\n",
+     '        if (len(app.postgres) != 1 or app.volumes\n', 1),
+    ('N21d', 'an entry with two databases is refused', LL,
+     "        if (len(app.postgres) != 1 or app.postgres[0].get('scope', 'database') != 'database' or app.volumes\n",
+     "        if (not app.postgres or app.postgres[0].get('scope', 'database') != 'database' or app.volumes\n", 1),
+    ('N28', "HA's database must have the woow_platform schema", LL,
+     "    if odd or 'woow_platform' not in schemas:\n", '    if odd:\n', 1),
+    ('N29', "this device's PostgreSQL major must be known", LL,
+     '    if target_major is None or not 13 <= target_major < HA_PG_MAJOR + 1:\n',
+     '    if target_major is not None and not 13 <= target_major < HA_PG_MAJOR + 1:\n', 1),
+    ('N29b', "this device's PostgreSQL major is not newer than HA's", LL,
+     '    if target_major is None or not 13 <= target_major < HA_PG_MAJOR + 1:\n',
+     '    if target_major is None or not 13 <= target_major:\n', 1),
+    ('N29c', "this device's PostgreSQL major is at least 13", LL,
+     '    if target_major is None or not 13 <= target_major < HA_PG_MAJOR + 1:\n',
+     '    if target_major is None or not target_major < HA_PG_MAJOR + 1:\n', 1),
+    ('N30', 'the check names ChatGPT sign-ins', LL,
+     "    if ha_odoo._int((detail or {}).get('chatgpt_accounts')):\n        warnings.append(",
+     '    if False:\n        warnings.append(', 1),
+    ('N32', "HA's staged rows leave the disk as they are loaded", LL,
+     '        os.unlink(path)\n        work.checkpoint()\n    if sequences:\n',
+     '        work.checkpoint()\n    if sequences:\n', 1),
+    ('N33', 'a new database without the salt row is refused', LL,
+     '    if salt_rows != [hashlib.sha256(src.salt()).hexdigest()]:\n',
+     '    if salt_rows and salt_rows != [hashlib.sha256(src.salt()).hexdigest()]:\n', 1),
+    ('N34', "the check removes HA's cluster before it reads this device", LL,
+     "    tmp.remove('hapg')\n    tmp.remove_volume('hapg')\n    blockers, warnings = verdict(",
+     '    blockers, warnings = verdict(', 1),
+    ('N34b', "the conversion removes HA's cluster before the new one starts", LL,
+     "    tmp.remove('hapg')\n    tmp.remove_volume('hapg')\n    work.checkpoint()\n\n    work.log('建立新的",
+     "    work.checkpoint()\n\n    work.log('建立新的", 1),
+    ('N35', 'the refusal of another mode says what to choose and where', LL,
+     "請到「應用設定」掃描，在 LiteLLM 的草稿選「單一資料庫」並安裝，'\n", "'\n", 1),
+    # The table digest the suggested entry has: the import compares nothing, both rollbacks compare (test_adapter_...).
+    ('D01', 'a backup without the digest is a warning before the restore, never a refusal', QP,
+     "            add('digests-missing', 'warn',", "            add('digests-missing', 'fail',", 1),
+    ('D02', "a rollback compares this device's own rows", QP,
+     "            result.update(before=before, after=after['summary'], match=after['digest'] == before_digest)\n",
+     "            result.update(before=before, after=after['summary'], match=True)\n", 1),
     # Readiness limit (owner decision 2026-11-23 23:28): LiteLLM 600 s, every other app unchanged.
     ('M59', "LiteLLM's drafted health checks wait 600 s (no per-app limit)", SG,
      "HEALTH_TIMEOUTS = {'litellm': 600}\n", "HEALTH_TIMEOUTS = {}\n", 1, SUGGEST_TESTS),
@@ -215,15 +296,44 @@ MUTATIONS = (
     ('M67', 'the draft says what it raised (health-timeout note)', SG,
      "        if raised:\n            limit = HEALTH_TIMEOUTS[app['id']]\n",
      "        if False:\n            limit = HEALTH_TIMEOUTS[app['id']]\n", 1, SUGGEST_TESTS),
+    # The draft the import can fill as it is (lane verifier 2026-11-24: a new draft was cold mode, which it refuses).
+    ('S01', 'a new LiteLLM draft is the single-database mode', SG,
+     "PREFERRED_MODES = {'litellm': 'database'}\n", 'PREFERRED_MODES = {}\n', 1, SUGGEST_TESTS),
+    ('S02', "an installed entry's mode is never switched", SG,
+     '        elif installed is None:\n', '        elif True:\n', 1, SUGGEST_TESTS),
+    ('S03', 'a mode that cannot be installed is not preselected', SG,
+     "        if not any(v['id'] == preferred and v['valid'] for v in variants):\n",
+     "        if not any(v['id'] == preferred for v in variants):\n", 1, SUGGEST_TESTS),
+    ('S04', 'the draft of another installed mode says what to choose for an import', SG,
+     "            app['notes'].append(_warn('import-mode', f'已安裝的應用設定不是",
+     "            app['skipped'].append(_warn('import-mode', f'已安裝的應用設定不是", 1, SUGGEST_TESTS),
+    ('S05', "LiteLLM's drafted health check asks for readiness", SG,
+     "READY_PATHS = {('litellm', '/health/liveliness'): '/health/readiness'}\n", 'READY_PATHS = {}\n', 1,
+     SUGGEST_TESTS),
+    ('S06', "the package's settings file stays in the draft", SG,
+     "PACKAGE_CONFIGS = {'litellm': ('.config/litellm/litellm.env',)}\n", 'PACKAGE_CONFIGS = {}\n', 1, SUGGEST_TESTS),
+    ('S07', 'a settings file the owner does not have is not proposed', SG,
+     "            if isinstance(state, dict) and state.get('type') == 'file':\n                add(rel, state.get('mode'), 'env')\n"
+     '        return result\n',
+     "            if isinstance(state, dict):\n                add(rel, state.get('mode'), 'env')\n        return result\n", 1,
+     SUGGEST_TESTS),
+    ('S08', 'a kept table digest takes the form the chosen mode needs', SG,
+     "        kept = [digest_for_mode(item, installed, entry) for item in json.loads(json.dumps(installed['verify']))]\n",
+     "        kept = json.loads(json.dumps(installed['verify']))\n", 1, SUGGEST_TESTS),
+    ('S09', "the changed digest keeps the installed check's id, label and exclusions", SG,
+     "    return {**own, 'id': item.get('id'), **{key: item[key] for key in ('label', 'exclude_tables') if key in item}}\n",
+     '    return dict(own)\n', 1, SUGGEST_TESTS),
+    ('S10', 'a digest that fits the mode is left alone', SG,
+     "        if container not in exported.values():\n            return item\n", '', 1, SUGGEST_TESTS),
 )
 
 
-def run_tests(root, tests=TESTS):
+def run_tests(root, tests=TESTS, failfast=True):
     """The unit tests `tests` in the throwaway copy `root` (tests/backup/__init__.py puts ITS backup-engine first)."""
     env = dict(os.environ, PYTHONPATH=os.pathsep.join([str(root / 'backup-engine'), str(root)]),
                PYTHONDONTWRITEBYTECODE='1')
-    proc = subprocess.run([sys.executable, '-m', 'unittest', *tests], cwd=root, env=env, capture_output=True,
-                          timeout=1800)
+    proc = subprocess.run([sys.executable, '-m', 'unittest', *(['-f'] if failfast else []), *tests], cwd=root, env=env,
+                          capture_output=True, timeout=1800)
     tail = proc.stderr.decode('utf-8', 'replace').strip().splitlines()
     ran = next((int(m.group(1)) for line in tail if (m := re.match(r'Ran (\d+) tests?', line))), 0)
     last = tail[-1] if tail else ''
@@ -251,7 +361,7 @@ def main(argv):
             else:
                 shutil.copy2(item, root / item.name)
         engine = root / 'backup-engine'
-        rc, ran, failures = run_tests(root, TESTS + SUGGEST_TESTS)
+        rc, ran, failures = run_tests(root, TESTS + SUGGEST_TESTS, failfast=False)
         baseline = {'returncode': rc, 'tests': ran, 'failures': failures}
         print(f'baseline: {"pass" if rc == 0 else "FAIL"} ({failures}/{ran})', flush=True)
         for ident, name, module, old, new, count, *tests in MUTATIONS:

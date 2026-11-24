@@ -3385,6 +3385,10 @@
     return code.length ? `${joinAnd(code)}是會在這台執行的程式，只匯入你信任的備份。` : "搬過來的帳號、金鑰和設定都來自這份 HA 備份，只匯入你信任的備份。";
   }
 
+  // LiteLLM's import fills exactly one single-database item (ha_litellm.Target); the draft in 應用設定 has it chosen, an
+  // entry installed in another mode is refused by the check (the engine's words say the same).
+  const HA_LITELLM_MODE = "LiteLLM 的應用設定要用「單一資料庫」方式：在「應用設定」掃描時，還沒安裝的 LiteLLM 草稿已經選好；裝的是其他方式時，請先在那裡改選「單一資料庫」並安裝。";
+
   // What an import moves and needs (CONTRACT §9: the data, its keys and the accounts move; the device keeps its URL,
   // ports, database passwords, secrets and settings; the versions are identical). Odoo and n8n keep their words; each
   // batch 1 app says what it moves and keeps in its own notes before the restore.
@@ -3396,7 +3400,8 @@
     const others = ids.filter(id => id !== "odoo").map(haShort);
     return ["會搬過來的有：資料、資料本身的金鑰，以及大多數應用的登入帳號；每個應用搬什麼、留什麼，檢查結果和還原前都會寫出來。"
       + "這台的網址、連接埠、資料庫密碼和應用機密保持不變。",
-    `兩邊的版本必須相同：${ids.includes("odoo") ? "Odoo 的每個模組，以及 " : ""}${others.join("、")} 本身都要同一個版本。`];
+    `兩邊的版本必須相同：${ids.includes("odoo") ? "Odoo 的每個模組，以及 " : ""}${others.join("、")} 本身都要同一個版本。`,
+    ...(ids.includes("litellm") ? [HA_LITELLM_MODE] : [])];
   }
 
   // Large add-ons take longer to check and convert (HA_LARGE).
