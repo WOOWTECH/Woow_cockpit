@@ -1,0 +1,2496 @@
+{
+ "modules": {
+  "woowbackup/ha_litellm.py": "f601e109f624adc7e1bac970296bfe341d58b350eaa662adc38f8972f6d3322b",
+  "woowbackup/adapters/quadlet_postgres.py": "f7e3eba019fb7074fad8aa4bf52380ab9810d5e65e7fde1a2d9b9bb4d648c4ac",
+  "woowbackup/haimport.py": "6ca0c47f399e64fc9b615e6d04ef77b0438588c67efb79cc3da2c4adc48de9ee",
+  "woowbackup/suggest.py": "4d28c43776e656e8cb0a30f8d411b8ff036583ff02a42a8b945710c6df3504a9"
+ },
+ "tests": [
+  "tests.backup.test_ha_litellm",
+  "tests.backup.test_adapter_import_secrets",
+  "tests.backup.test_ha_litellm_candidate",
+  "tests.backup.test_suggest"
+ ],
+ "baseline": {
+  "returncode": 0,
+  "tests": 172,
+  "failures": 0
+ },
+ "mutations": [
+  {
+   "id": "M01",
+   "protection": "HA's rows are loaded by the role without privileges, never the superuser",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 26,
+   "test_modules": [
+    "tests.backup.test_ha_litellm",
+    "tests.backup.test_adapter_import_secrets",
+    "tests.backup.test_ha_litellm_candidate"
+   ]
+  },
+  {
+   "id": "M02",
+   "protection": "HA's rows are read with this device's column list only",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 26,
+   "test_modules": [
+    "tests.backup.test_ha_litellm",
+    "tests.backup.test_adapter_import_secrets",
+    "tests.backup.test_ha_litellm_candidate"
+   ]
+  },
+  {
+   "id": "M03",
+   "protection": "the loader role has no privilege (NOSUPERUSER ...)",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 26,
+   "test_modules": [
+    "tests.backup.test_ha_litellm",
+    "tests.backup.test_adapter_import_secrets",
+    "tests.backup.test_ha_litellm_candidate"
+   ]
+  },
+  {
+   "id": "M04",
+   "protection": "the loader role is dropped before the export",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 26,
+   "test_modules": [
+    "tests.backup.test_ha_litellm",
+    "tests.backup.test_adapter_import_secrets",
+    "tests.backup.test_ha_litellm_candidate"
+   ]
+  },
+  {
+   "id": "M05",
+   "protection": "sequence values are set by the restricted role",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 26,
+   "test_modules": [
+    "tests.backup.test_ha_litellm",
+    "tests.backup.test_adapter_import_secrets",
+    "tests.backup.test_ha_litellm_candidate"
+   ]
+  },
+  {
+   "id": "M06",
+   "protection": "no DDL during the capture: the snapshot's columns are the live ones before it",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 19,
+   "test_modules": [
+    "tests.backup.test_ha_litellm",
+    "tests.backup.test_adapter_import_secrets",
+    "tests.backup.test_ha_litellm_candidate"
+   ]
+  },
+  {
+   "id": "M06b",
+   "protection": "no DDL during the capture: the live schema after it is the one before",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 13,
+   "test_modules": [
+    "tests.backup.test_ha_litellm",
+    "tests.backup.test_adapter_import_secrets",
+    "tests.backup.test_ha_litellm_candidate"
+   ]
+  },
+  {
+   "id": "M07",
+   "protection": "the live migrations did not move since the check (before the capture)",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 17,
+   "test_modules": [
+    "tests.backup.test_ha_litellm",
+    "tests.backup.test_adapter_import_secrets",
+    "tests.backup.test_ha_litellm_candidate"
+   ]
+  },
+  {
+   "id": "M08",
+   "protection": "the live database holds no other schema (the capture would take it)",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 10,
+   "test_modules": [
+    "tests.backup.test_ha_litellm",
+    "tests.backup.test_adapter_import_secrets",
+    "tests.backup.test_ha_litellm_candidate"
+   ]
+  },
+  {
+   "id": "M09",
+   "protection": "HA's columns, sequences and types equal the trusted schema (convert)",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 14,
+   "test_modules": [
+    "tests.backup.test_ha_litellm",
+    "tests.backup.test_adapter_import_secrets",
+    "tests.backup.test_ha_litellm_candidate"
+   ]
+  },
+  {
+   "id": "M10",
+   "protection": "the check names a schema difference as a blocker",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 3,
+   "test_modules": [
+    "tests.backup.test_ha_litellm",
+    "tests.backup.test_adapter_import_secrets",
+    "tests.backup.test_ha_litellm_candidate"
+   ]
+  },
+  {
+   "id": "M11",
+   "protection": "the new cluster's schema equals the trusted one after the post-data section",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 66,
+   "test_modules": [
+    "tests.backup.test_ha_litellm",
+    "tests.backup.test_adapter_import_secrets",
+    "tests.backup.test_ha_litellm_candidate"
+   ]
+  },
+  {
+   "id": "M11b",
+   "protection": "every part of the schema signature is compared",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 66,
+   "test_modules": [
+    "tests.backup.test_ha_litellm",
+    "tests.backup.test_adapter_import_secrets",
+    "tests.backup.test_ha_litellm_candidate"
+   ]
+  },
+  {
+   "id": "M12",
+   "protection": "the new cluster holds no other role",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 22,
+   "test_modules": [
+    "tests.backup.test_ha_litellm",
+    "tests.backup.test_adapter_import_secrets",
+    "tests.backup.test_ha_litellm_candidate"
+   ]
+  },
+  {
+   "id": "M12b",
+   "protection": "the new cluster holds no role or database setting",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 22,
+   "test_modules": [
+    "tests.backup.test_ha_litellm",
+    "tests.backup.test_adapter_import_secrets",
+    "tests.backup.test_ha_litellm_candidate"
+   ]
+  },
+  {
+   "id": "M12c",
+   "protection": "the new cluster holds no ALTER SYSTEM value",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 22,
+   "test_modules": [
+    "tests.backup.test_ha_litellm",
+    "tests.backup.test_adapter_import_secrets",
+    "tests.backup.test_ha_litellm_candidate"
+   ]
+  },
+  {
+   "id": "M12d",
+   "protection": "the new cluster holds no large object",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 22,
+   "test_modules": [
+    "tests.backup.test_ha_litellm",
+    "tests.backup.test_adapter_import_secrets",
+    "tests.backup.test_ha_litellm_candidate"
+   ]
+  },
+  {
+   "id": "M12e",
+   "protection": "what the new cluster's audit found stops the conversion",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 22,
+   "test_modules": [
+    "tests.backup.test_ha_litellm",
+    "tests.backup.test_adapter_import_secrets",
+    "tests.backup.test_ha_litellm_candidate"
+   ]
+  },
+  {
+   "id": "M13",
+   "protection": "every table's row count equals HA's",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 12,
+   "test_modules": [
+    "tests.backup.test_ha_litellm",
+    "tests.backup.test_adapter_import_secrets",
+    "tests.backup.test_ha_litellm_candidate"
+   ]
+  },
+  {
+   "id": "M13b",
+   "protection": "the loaded migrations equal HA's",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 58,
+   "test_modules": [
+    "tests.backup.test_ha_litellm",
+    "tests.backup.test_adapter_import_secrets",
+    "tests.backup.test_ha_litellm_candidate"
+   ]
+  },
+  {
+   "id": "M13c",
+   "protection": "every table was counted in HA",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 58,
+   "test_modules": [
+    "tests.backup.test_ha_litellm",
+    "tests.backup.test_adapter_import_secrets",
+    "tests.backup.test_ha_litellm_candidate"
+   ]
+  },
+  {
+   "id": "M14",
+   "protection": "the salt file must be the salt HA's database is bound to",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 7,
+   "test_modules": [
+    "tests.backup.test_ha_litellm",
+    "tests.backup.test_adapter_import_secrets",
+    "tests.backup.test_ha_litellm_candidate"
+   ]
+  },
+  {
+   "id": "M15",
+   "protection": "the salt row the new database got equals the salt that moves",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 21,
+   "test_modules": [
+    "tests.backup.test_ha_litellm",
+    "tests.backup.test_adapter_import_secrets",
+    "tests.backup.test_ha_litellm_candidate"
+   ]
+  },
+  {
+   "id": "M16",
+   "protection": "HA's salt becomes the converted backup's litellm-salt-key",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 20,
+   "test_modules": [
+    "tests.backup.test_ha_litellm",
+    "tests.backup.test_adapter_import_secrets",
+    "tests.backup.test_ha_litellm_candidate"
+   ]
+  },
+  {
+   "id": "M17",
+   "protection": "the HA salt is masked in every log line",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 2,
+   "test_modules": [
+    "tests.backup.test_ha_litellm",
+    "tests.backup.test_adapter_import_secrets",
+    "tests.backup.test_ha_litellm_candidate"
+   ]
+  },
+  {
+   "id": "M18",
+   "protection": "HA's cluster runs with a read-only root",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 2,
+   "test_modules": [
+    "tests.backup.test_ha_litellm",
+    "tests.backup.test_adapter_import_secrets",
+    "tests.backup.test_ha_litellm_candidate"
+   ]
+  },
+  {
+   "id": "M18b",
+   "protection": "HA's cluster runs on a noexec data volume",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 2,
+   "test_modules": [
+    "tests.backup.test_ha_litellm",
+    "tests.backup.test_adapter_import_secrets",
+    "tests.backup.test_ha_litellm_candidate"
+   ]
+  },
+  {
+   "id": "M19",
+   "protection": "HA's cluster gets every library/command setting overridden",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 2,
+   "test_modules": [
+    "tests.backup.test_ha_litellm",
+    "tests.backup.test_adapter_import_secrets",
+    "tests.backup.test_ha_litellm_candidate"
+   ]
+  },
+  {
+   "id": "M20",
+   "protection": "the new cluster runs with a read-only root",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 26,
+   "test_modules": [
+    "tests.backup.test_ha_litellm",
+    "tests.backup.test_adapter_import_secrets",
+    "tests.backup.test_ha_litellm_candidate"
+   ]
+  },
+  {
+   "id": "M21",
+   "protection": "a pulled PostgreSQL 18 must be the pinned image by content",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 24,
+   "test_modules": [
+    "tests.backup.test_ha_litellm",
+    "tests.backup.test_adapter_import_secrets",
+    "tests.backup.test_ha_litellm_candidate"
+   ]
+  },
+  {
+   "id": "M22",
+   "protection": "only public/woow_platform/woow schemas in HA",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 9,
+   "test_modules": [
+    "tests.backup.test_ha_litellm",
+    "tests.backup.test_adapter_import_secrets",
+    "tests.backup.test_ha_litellm_candidate"
+   ]
+  },
+  {
+   "id": "M23",
+   "protection": "HA objects only a superuser creates refuse",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 9,
+   "test_modules": [
+    "tests.backup.test_ha_litellm",
+    "tests.backup.test_adapter_import_secrets",
+    "tests.backup.test_ha_litellm_candidate"
+   ]
+  },
+  {
+   "id": "M24",
+   "protection": "a symlink (tablespace) in HA's cluster refuses",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 9,
+   "test_modules": [
+    "tests.backup.test_ha_litellm",
+    "tests.backup.test_adapter_import_secrets",
+    "tests.backup.test_ha_litellm_candidate"
+   ]
+  },
+  {
+   "id": "M25",
+   "protection": "state.json's LiteLLM version must be the add-on's",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 8,
+   "test_modules": [
+    "tests.backup.test_ha_litellm",
+    "tests.backup.test_adapter_import_secrets",
+    "tests.backup.test_ha_litellm_candidate"
+   ]
+  },
+  {
+   "id": "M25b",
+   "protection": "an add-on without a state.json is not refused for it",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 49,
+   "test_modules": [
+    "tests.backup.test_ha_litellm",
+    "tests.backup.test_adapter_import_secrets",
+    "tests.backup.test_ha_litellm_candidate"
+   ]
+  },
+  {
+   "id": "M26",
+   "protection": "table/column names are plain identifiers before any HA row is read",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 18,
+   "test_modules": [
+    "tests.backup.test_ha_litellm",
+    "tests.backup.test_adapter_import_secrets",
+    "tests.backup.test_ha_litellm_candidate"
+   ]
+  },
+  {
+   "id": "M26b",
+   "protection": "a name that is not plain refuses",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 18,
+   "test_modules": [
+    "tests.backup.test_ha_litellm",
+    "tests.backup.test_adapter_import_secrets",
+    "tests.backup.test_ha_litellm_candidate"
+   ]
+  },
+  {
+   "id": "M26c",
+   "protection": "the number of tables is bounded",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 50,
+   "test_modules": [
+    "tests.backup.test_ha_litellm",
+    "tests.backup.test_adapter_import_secrets",
+    "tests.backup.test_ha_litellm_candidate"
+   ]
+  },
+  {
+   "id": "M26d",
+   "protection": "a schema without tables refuses",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 50,
+   "test_modules": [
+    "tests.backup.test_ha_litellm",
+    "tests.backup.test_adapter_import_secrets",
+    "tests.backup.test_ha_litellm_candidate"
+   ]
+  },
+  {
+   "id": "M27",
+   "protection": "the target reads litellm-salt-key as LITELLM_SALT_KEY",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 25,
+   "test_modules": [
+    "tests.backup.test_ha_litellm",
+    "tests.backup.test_adapter_import_secrets",
+    "tests.backup.test_ha_litellm_candidate"
+   ]
+  },
+  {
+   "id": "M28",
+   "protection": "the converted dump is read in full once",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 26,
+   "test_modules": [
+    "tests.backup.test_ha_litellm",
+    "tests.backup.test_adapter_import_secrets",
+    "tests.backup.test_ha_litellm_candidate"
+   ]
+  },
+  {
+   "id": "M29",
+   "protection": "the apps that use LiteLLM keys are named (option A)",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 2,
+   "test_modules": [
+    "tests.backup.test_ha_litellm",
+    "tests.backup.test_adapter_import_secrets",
+    "tests.backup.test_ha_litellm_candidate"
+   ]
+  },
+  {
+   "id": "M30",
+   "protection": "post-data comes from the trusted archive",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 26,
+   "test_modules": [
+    "tests.backup.test_ha_litellm",
+    "tests.backup.test_adapter_import_secrets",
+    "tests.backup.test_ha_litellm_candidate"
+   ]
+  },
+  {
+   "id": "A01",
+   "protection": "a converted secret must be one the catalog declares",
+   "module": "woowbackup/adapters/quadlet_postgres.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 93,
+   "test_modules": [
+    "tests.backup.test_ha_litellm",
+    "tests.backup.test_adapter_import_secrets",
+    "tests.backup.test_ha_litellm_candidate"
+   ]
+  },
+  {
+   "id": "A02",
+   "protection": "a converted secret is a regular file",
+   "module": "woowbackup/adapters/quadlet_postgres.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 93,
+   "test_modules": [
+    "tests.backup.test_ha_litellm",
+    "tests.backup.test_adapter_import_secrets",
+    "tests.backup.test_ha_litellm_candidate"
+   ]
+  },
+  {
+   "id": "A02b",
+   "protection": "a converted secret is not empty",
+   "module": "woowbackup/adapters/quadlet_postgres.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 93,
+   "test_modules": [
+    "tests.backup.test_ha_litellm",
+    "tests.backup.test_adapter_import_secrets",
+    "tests.backup.test_ha_litellm_candidate"
+   ]
+  },
+  {
+   "id": "A02c",
+   "protection": "a converted secret is at most the size podman takes",
+   "module": "woowbackup/adapters/quadlet_postgres.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 93,
+   "test_modules": [
+    "tests.backup.test_ha_litellm",
+    "tests.backup.test_adapter_import_secrets",
+    "tests.backup.test_ha_litellm_candidate"
+   ]
+  },
+  {
+   "id": "A03",
+   "protection": "the conversion hands its secrets to import_manifest",
+   "module": "woowbackup/haimport.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 20,
+   "test_modules": [
+    "tests.backup.test_ha_litellm",
+    "tests.backup.test_adapter_import_secrets",
+    "tests.backup.test_ha_litellm_candidate"
+   ]
+  },
+  {
+   "id": "M34",
+   "protection": "every session in HA's cluster sends the pinned client options (SR-1/SR-2)",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 54,
+   "test_modules": [
+    "tests.backup.test_ha_litellm",
+    "tests.backup.test_adapter_import_secrets",
+    "tests.backup.test_ha_litellm_candidate"
+   ]
+  },
+  {
+   "id": "M35",
+   "protection": "the superuser's sessions fire no event trigger (SR-3)",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 54,
+   "test_modules": [
+    "tests.backup.test_ha_litellm",
+    "tests.backup.test_adapter_import_secrets",
+    "tests.backup.test_ha_litellm_candidate"
+   ]
+  },
+  {
+   "id": "M35b",
+   "protection": "the superuser's sessions load no preload library (SR-3)",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 54,
+   "test_modules": [
+    "tests.backup.test_ha_litellm",
+    "tests.backup.test_adapter_import_secrets",
+    "tests.backup.test_ha_litellm_candidate"
+   ]
+  },
+  {
+   "id": "M36",
+   "protection": "HA's server starts with event triggers off (SR-3)",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 57,
+   "test_modules": [
+    "tests.backup.test_ha_litellm",
+    "tests.backup.test_adapter_import_secrets",
+    "tests.backup.test_ha_litellm_candidate"
+   ]
+  },
+  {
+   "id": "M37",
+   "protection": "_prisma_migrations is read only as an ordinary table (SR-1)",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 55,
+   "test_modules": [
+    "tests.backup.test_ha_litellm",
+    "tests.backup.test_adapter_import_secrets",
+    "tests.backup.test_ha_litellm_candidate"
+   ]
+  },
+  {
+   "id": "M38",
+   "protection": "backup_label/tablespace_map never reach HA's volume (SR-4)",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 56,
+   "test_modules": [
+    "tests.backup.test_ha_litellm",
+    "tests.backup.test_adapter_import_secrets",
+    "tests.backup.test_ha_litellm_candidate"
+   ]
+  },
+  {
+   "id": "M39",
+   "protection": "backup_label/tablespace_map refuse (SR-4)",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 56,
+   "test_modules": [
+    "tests.backup.test_ha_litellm",
+    "tests.backup.test_adapter_import_secrets",
+    "tests.backup.test_ha_litellm_candidate"
+   ]
+  },
+  {
+   "id": "M40",
+   "protection": "HA's stored proxy settings are named in the check (SR-5)",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 82,
+   "test_modules": [
+    "tests.backup.test_ha_litellm",
+    "tests.backup.test_adapter_import_secrets",
+    "tests.backup.test_ha_litellm_candidate"
+   ]
+  },
+  {
+   "id": "M41",
+   "protection": "HA's stored proxy settings are named in the import notes (SR-5)",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 87,
+   "test_modules": [
+    "tests.backup.test_ha_litellm",
+    "tests.backup.test_adapter_import_secrets",
+    "tests.backup.test_ha_litellm_candidate"
+   ]
+  },
+  {
+   "id": "M42",
+   "protection": "stored settings that load and run code refuse in the check (SR-6)",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 80,
+   "test_modules": [
+    "tests.backup.test_ha_litellm",
+    "tests.backup.test_adapter_import_secrets",
+    "tests.backup.test_ha_litellm_candidate"
+   ]
+  },
+  {
+   "id": "M43",
+   "protection": "stored settings that load and run code stop the conversion first (SR-6)",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 80,
+   "test_modules": [
+    "tests.backup.test_ha_litellm",
+    "tests.backup.test_adapter_import_secrets",
+    "tests.backup.test_ha_litellm_candidate"
+   ]
+  },
+  {
+   "id": "M44",
+   "protection": "a callback with a dot in its name is a module load (SR-6)",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 84,
+   "test_modules": [
+    "tests.backup.test_ha_litellm",
+    "tests.backup.test_adapter_import_secrets",
+    "tests.backup.test_ha_litellm_candidate"
+   ]
+  },
+  {
+   "id": "M45",
+   "protection": "an app whose Pi agent provider list points at this LiteLLM is named (option A)",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 4,
+   "test_modules": [
+    "tests.backup.test_ha_litellm",
+    "tests.backup.test_adapter_import_secrets",
+    "tests.backup.test_ha_litellm_candidate"
+   ]
+  },
+  {
+   "id": "M46",
+   "protection": "only a provider at this device's LiteLLM counts, not any provider (option A)",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 5,
+   "test_modules": [
+    "tests.backup.test_ha_litellm",
+    "tests.backup.test_adapter_import_secrets",
+    "tests.backup.test_ha_litellm_candidate"
+   ]
+  },
+  {
+   "id": "M47",
+   "protection": "every columns/signature read pins search_path=pg_catalog (all sides render names alike)",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 52,
+   "test_modules": [
+    "tests.backup.test_ha_litellm",
+    "tests.backup.test_adapter_import_secrets",
+    "tests.backup.test_ha_litellm_candidate"
+   ]
+  },
+  {
+   "id": "M48",
+   "protection": "a stored-settings answer over the limit or timed out refuses (fail closed)",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 80,
+   "test_modules": [
+    "tests.backup.test_ha_litellm",
+    "tests.backup.test_adapter_import_secrets",
+    "tests.backup.test_ha_litellm_candidate"
+   ]
+  },
+  {
+   "id": "M49",
+   "protection": "a stored-settings answer that is not an object refuses (fail closed)",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 83,
+   "test_modules": [
+    "tests.backup.test_ha_litellm",
+    "tests.backup.test_adapter_import_secrets",
+    "tests.backup.test_ha_litellm_candidate"
+   ]
+  },
+  {
+   "id": "M50",
+   "protection": "an unreadable answer is a blocker",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 80,
+   "test_modules": [
+    "tests.backup.test_ha_litellm",
+    "tests.backup.test_adapter_import_secrets",
+    "tests.backup.test_ha_litellm_candidate"
+   ]
+  },
+  {
+   "id": "M51",
+   "protection": "the nested code places count as hooks",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 81,
+   "test_modules": [
+    "tests.backup.test_ha_litellm",
+    "tests.backup.test_adapter_import_secrets",
+    "tests.backup.test_ha_litellm_candidate"
+   ]
+  },
+  {
+   "id": "M52",
+   "protection": "router_settings.plugins is asked (not in the vendor list)",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 81,
+   "test_modules": [
+    "tests.backup.test_ha_litellm",
+    "tests.backup.test_adapter_import_secrets",
+    "tests.backup.test_ha_litellm_candidate"
+   ]
+  },
+  {
+   "id": "M53",
+   "protection": "a dotted guardrail callback is asked",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 81,
+   "test_modules": [
+    "tests.backup.test_ha_litellm",
+    "tests.backup.test_adapter_import_secrets",
+    "tests.backup.test_ha_litellm_candidate"
+   ]
+  },
+  {
+   "id": "M54",
+   "protection": "a string-form callbacks value is asked",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 81,
+   "test_modules": [
+    "tests.backup.test_ha_litellm",
+    "tests.backup.test_adapter_import_secrets",
+    "tests.backup.test_ha_litellm_candidate"
+   ]
+  },
+  {
+   "id": "M55",
+   "protection": "the conversion decides again in the new cluster (SR-8)",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 86,
+   "test_modules": [
+    "tests.backup.test_ha_litellm",
+    "tests.backup.test_adapter_import_secrets",
+    "tests.backup.test_ha_litellm_candidate"
+   ]
+  },
+  {
+   "id": "M57",
+   "protection": "a dotted callback is found by the query, however many plain names come first",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 81,
+   "test_modules": [
+    "tests.backup.test_ha_litellm",
+    "tests.backup.test_adapter_import_secrets",
+    "tests.backup.test_ha_litellm_candidate"
+   ]
+  },
+  {
+   "id": "M58",
+   "protection": "a custom secret manager path is asked (it loads a .py file at every start)",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 81,
+   "test_modules": [
+    "tests.backup.test_ha_litellm",
+    "tests.backup.test_adapter_import_secrets",
+    "tests.backup.test_ha_litellm_candidate"
+   ]
+  },
+  {
+   "id": "M56",
+   "protection": "the import notes name what moved, not what HA's cluster said (SR-8)",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 88,
+   "test_modules": [
+    "tests.backup.test_ha_litellm",
+    "tests.backup.test_adapter_import_secrets",
+    "tests.backup.test_ha_litellm_candidate"
+   ]
+  },
+  {
+   "id": "N01",
+   "protection": "a version the check refuses never converts",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 59,
+   "test_modules": [
+    "tests.backup.test_ha_litellm",
+    "tests.backup.test_adapter_import_secrets",
+    "tests.backup.test_ha_litellm_candidate"
+   ]
+  },
+  {
+   "id": "N02",
+   "protection": "the check reports the version blocker",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 8,
+   "test_modules": [
+    "tests.backup.test_ha_litellm",
+    "tests.backup.test_adapter_import_secrets",
+    "tests.backup.test_ha_litellm_candidate"
+   ]
+  },
+  {
+   "id": "N04",
+   "protection": "the check refuses another PostgreSQL major of HA's data",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 8,
+   "test_modules": [
+    "tests.backup.test_ha_litellm",
+    "tests.backup.test_adapter_import_secrets",
+    "tests.backup.test_ha_litellm_candidate"
+   ]
+  },
+  {
+   "id": "N05",
+   "protection": "large objects refuse",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 9,
+   "test_modules": [
+    "tests.backup.test_ha_litellm",
+    "tests.backup.test_adapter_import_secrets",
+    "tests.backup.test_ha_litellm_candidate"
+   ]
+  },
+  {
+   "id": "N06",
+   "protection": "HA's database must be UTF8",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 9,
+   "test_modules": [
+    "tests.backup.test_ha_litellm",
+    "tests.backup.test_adapter_import_secrets",
+    "tests.backup.test_ha_litellm_candidate"
+   ]
+  },
+  {
+   "id": "N07",
+   "protection": "HA's migrations must be this device's",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 8,
+   "test_modules": [
+    "tests.backup.test_ha_litellm",
+    "tests.backup.test_adapter_import_secrets",
+    "tests.backup.test_ha_litellm_candidate"
+   ]
+  },
+  {
+   "id": "N08",
+   "protection": "an object of HA's woow schema this import does not know refuses",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 9,
+   "test_modules": [
+    "tests.backup.test_ha_litellm",
+    "tests.backup.test_adapter_import_secrets",
+    "tests.backup.test_ha_litellm_candidate"
+   ]
+  },
+  {
+   "id": "N09",
+   "protection": "the new cluster's major is this device's",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 60,
+   "test_modules": [
+    "tests.backup.test_ha_litellm",
+    "tests.backup.test_adapter_import_secrets",
+    "tests.backup.test_ha_litellm_candidate"
+   ]
+  },
+  {
+   "id": "N09b",
+   "protection": "the new cluster's major is a whole number",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 60,
+   "test_modules": [
+    "tests.backup.test_ha_litellm",
+    "tests.backup.test_adapter_import_secrets",
+    "tests.backup.test_ha_litellm_candidate"
+   ]
+  },
+  {
+   "id": "N10",
+   "protection": "an empty converted dump is refused",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 61,
+   "test_modules": [
+    "tests.backup.test_ha_litellm",
+    "tests.backup.test_adapter_import_secrets",
+    "tests.backup.test_ha_litellm_candidate"
+   ]
+  },
+  {
+   "id": "N11",
+   "protection": "HA's cluster is opened by PostgreSQL 18 only",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 62,
+   "test_modules": [
+    "tests.backup.test_ha_litellm",
+    "tests.backup.test_adapter_import_secrets",
+    "tests.backup.test_ha_litellm_candidate"
+   ]
+  },
+  {
+   "id": "N12",
+   "protection": "the conversion's space is checked before HA's cluster starts",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 63,
+   "test_modules": [
+    "tests.backup.test_ha_litellm",
+    "tests.backup.test_adapter_import_secrets",
+    "tests.backup.test_ha_litellm_candidate"
+   ]
+  },
+  {
+   "id": "N12b",
+   "protection": "that space is three times HA's cluster and the write-ahead allowance",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 63,
+   "test_modules": [
+    "tests.backup.test_ha_litellm",
+    "tests.backup.test_adapter_import_secrets",
+    "tests.backup.test_ha_litellm_candidate"
+   ]
+  },
+  {
+   "id": "N14",
+   "protection": "the salt file is a regular file",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 65,
+   "test_modules": [
+    "tests.backup.test_ha_litellm",
+    "tests.backup.test_adapter_import_secrets",
+    "tests.backup.test_ha_litellm_candidate"
+   ]
+  },
+  {
+   "id": "N14b",
+   "protection": "the salt file is at most 1024 bytes",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 65,
+   "test_modules": [
+    "tests.backup.test_ha_litellm",
+    "tests.backup.test_adapter_import_secrets",
+    "tests.backup.test_ha_litellm_candidate"
+   ]
+  },
+  {
+   "id": "N14c",
+   "protection": "a second salt file refuses",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 64,
+   "test_modules": [
+    "tests.backup.test_ha_litellm",
+    "tests.backup.test_adapter_import_secrets",
+    "tests.backup.test_ha_litellm_candidate"
+   ]
+  },
+  {
+   "id": "N16",
+   "protection": "the new cluster's schema equals the trusted one after the last write",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 66,
+   "test_modules": [
+    "tests.backup.test_ha_litellm",
+    "tests.backup.test_adapter_import_secrets",
+    "tests.backup.test_ha_litellm_candidate"
+   ]
+  },
+  {
+   "id": "N17",
+   "protection": "the new cluster is audited",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 22,
+   "test_modules": [
+    "tests.backup.test_ha_litellm",
+    "tests.backup.test_adapter_import_secrets",
+    "tests.backup.test_ha_litellm_candidate"
+   ]
+  },
+  {
+   "id": "N18",
+   "protection": "the schema snapshot's migrations are the ones the check saw (the script inside litellm-postgres)",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 77,
+   "test_modules": [
+    "tests.backup.test_ha_litellm",
+    "tests.backup.test_adapter_import_secrets",
+    "tests.backup.test_ha_litellm_candidate"
+   ]
+  },
+  {
+   "id": "N19",
+   "protection": "the new cluster holds HA's columns before any row is loaded",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 67,
+   "test_modules": [
+    "tests.backup.test_ha_litellm",
+    "tests.backup.test_adapter_import_secrets",
+    "tests.backup.test_ha_litellm_candidate"
+   ]
+  },
+  {
+   "id": "N21",
+   "protection": "an entry with a volume (the cold draft) is refused",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 68,
+   "test_modules": [
+    "tests.backup.test_ha_litellm",
+    "tests.backup.test_adapter_import_secrets",
+    "tests.backup.test_ha_litellm_candidate"
+   ]
+  },
+  {
+   "id": "N21b",
+   "protection": "an entry with a host directory is refused",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 68,
+   "test_modules": [
+    "tests.backup.test_ha_litellm",
+    "tests.backup.test_adapter_import_secrets",
+    "tests.backup.test_ha_litellm_candidate"
+   ]
+  },
+  {
+   "id": "N21c",
+   "protection": "a whole-instance entry is refused",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 68,
+   "test_modules": [
+    "tests.backup.test_ha_litellm",
+    "tests.backup.test_adapter_import_secrets",
+    "tests.backup.test_ha_litellm_candidate"
+   ]
+  },
+  {
+   "id": "N21d",
+   "protection": "an entry with two databases is refused",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 68,
+   "test_modules": [
+    "tests.backup.test_ha_litellm",
+    "tests.backup.test_adapter_import_secrets",
+    "tests.backup.test_ha_litellm_candidate"
+   ]
+  },
+  {
+   "id": "N23",
+   "protection": "the app's own MCP administration is not named as another app that uses the keys",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 2,
+   "test_modules": [
+    "tests.backup.test_ha_litellm",
+    "tests.backup.test_adapter_import_secrets",
+    "tests.backup.test_ha_litellm_candidate"
+   ]
+  },
+  {
+   "id": "N26",
+   "protection": "a salt file that cannot be read is not a match",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 7,
+   "test_modules": [
+    "tests.backup.test_ha_litellm",
+    "tests.backup.test_adapter_import_secrets",
+    "tests.backup.test_ha_litellm_candidate"
+   ]
+  },
+  {
+   "id": "N28",
+   "protection": "HA's database must have the woow_platform schema",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 69,
+   "test_modules": [
+    "tests.backup.test_ha_litellm",
+    "tests.backup.test_adapter_import_secrets",
+    "tests.backup.test_ha_litellm_candidate"
+   ]
+  },
+  {
+   "id": "N29",
+   "protection": "this device's PostgreSQL major must be known",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 70,
+   "test_modules": [
+    "tests.backup.test_ha_litellm",
+    "tests.backup.test_adapter_import_secrets",
+    "tests.backup.test_ha_litellm_candidate"
+   ]
+  },
+  {
+   "id": "N29b",
+   "protection": "this device's PostgreSQL major is not newer than HA's",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 70,
+   "test_modules": [
+    "tests.backup.test_ha_litellm",
+    "tests.backup.test_adapter_import_secrets",
+    "tests.backup.test_ha_litellm_candidate"
+   ]
+  },
+  {
+   "id": "N29c",
+   "protection": "this device's PostgreSQL major is at least 13",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 70,
+   "test_modules": [
+    "tests.backup.test_ha_litellm",
+    "tests.backup.test_adapter_import_secrets",
+    "tests.backup.test_ha_litellm_candidate"
+   ]
+  },
+  {
+   "id": "N30",
+   "protection": "the check names ChatGPT sign-ins",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 71,
+   "test_modules": [
+    "tests.backup.test_ha_litellm",
+    "tests.backup.test_adapter_import_secrets",
+    "tests.backup.test_ha_litellm_candidate"
+   ]
+  },
+  {
+   "id": "N31",
+   "protection": "the new cluster's data volume is noexec",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 26,
+   "test_modules": [
+    "tests.backup.test_ha_litellm",
+    "tests.backup.test_adapter_import_secrets",
+    "tests.backup.test_ha_litellm_candidate"
+   ]
+  },
+  {
+   "id": "N32",
+   "protection": "HA's staged rows leave the disk as they are loaded",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 72,
+   "test_modules": [
+    "tests.backup.test_ha_litellm",
+    "tests.backup.test_adapter_import_secrets",
+    "tests.backup.test_ha_litellm_candidate"
+   ]
+  },
+  {
+   "id": "N33",
+   "protection": "a new database without the salt row is refused",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 73,
+   "test_modules": [
+    "tests.backup.test_ha_litellm",
+    "tests.backup.test_adapter_import_secrets",
+    "tests.backup.test_ha_litellm_candidate"
+   ]
+  },
+  {
+   "id": "N34",
+   "protection": "the check removes HA's cluster before it reads this device",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 74,
+   "test_modules": [
+    "tests.backup.test_ha_litellm",
+    "tests.backup.test_adapter_import_secrets",
+    "tests.backup.test_ha_litellm_candidate"
+   ]
+  },
+  {
+   "id": "N34b",
+   "protection": "the conversion removes HA's cluster before the new one starts",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 75,
+   "test_modules": [
+    "tests.backup.test_ha_litellm",
+    "tests.backup.test_adapter_import_secrets",
+    "tests.backup.test_ha_litellm_candidate"
+   ]
+  },
+  {
+   "id": "N35",
+   "protection": "the refusal of another mode says what to choose and where",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 68,
+   "test_modules": [
+    "tests.backup.test_ha_litellm",
+    "tests.backup.test_adapter_import_secrets",
+    "tests.backup.test_ha_litellm_candidate"
+   ]
+  },
+  {
+   "id": "R01",
+   "protection": "state.json's version is checked by the conversion, too",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 37,
+   "test_modules": [
+    "tests.backup.test_ha_litellm",
+    "tests.backup.test_adapter_import_secrets",
+    "tests.backup.test_ha_litellm_candidate"
+   ]
+  },
+  {
+   "id": "R02",
+   "protection": "only the LiteLLM add-on's member is read",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 38,
+   "test_modules": [
+    "tests.backup.test_ha_litellm",
+    "tests.backup.test_adapter_import_secrets",
+    "tests.backup.test_ha_litellm_candidate"
+   ]
+  },
+  {
+   "id": "R02b",
+   "protection": "a member without an add-on description is refused",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 38,
+   "test_modules": [
+    "tests.backup.test_ha_litellm",
+    "tests.backup.test_adapter_import_secrets",
+    "tests.backup.test_ha_litellm_candidate"
+   ]
+  },
+  {
+   "id": "R03",
+   "protection": "the columns answer is a list of rows",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 39,
+   "test_modules": [
+    "tests.backup.test_ha_litellm",
+    "tests.backup.test_adapter_import_secrets",
+    "tests.backup.test_ha_litellm_candidate"
+   ]
+  },
+  {
+   "id": "R03b",
+   "protection": "no columns at all is not a schema",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 39,
+   "test_modules": [
+    "tests.backup.test_ha_litellm",
+    "tests.backup.test_adapter_import_secrets",
+    "tests.backup.test_ha_litellm_candidate"
+   ]
+  },
+  {
+   "id": "R03c",
+   "protection": "the columns answer is bounded",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 39,
+   "test_modules": [
+    "tests.backup.test_ha_litellm",
+    "tests.backup.test_adapter_import_secrets",
+    "tests.backup.test_ha_litellm_candidate"
+   ]
+  },
+  {
+   "id": "R03d",
+   "protection": "each column row has its seven values",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 39,
+   "test_modules": [
+    "tests.backup.test_ha_litellm",
+    "tests.backup.test_adapter_import_secrets",
+    "tests.backup.test_ha_litellm_candidate"
+   ]
+  },
+  {
+   "id": "R04",
+   "protection": "the signature answer has every part and no other",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 39,
+   "test_modules": [
+    "tests.backup.test_ha_litellm",
+    "tests.backup.test_adapter_import_secrets",
+    "tests.backup.test_ha_litellm_candidate"
+   ]
+  },
+  {
+   "id": "R05",
+   "protection": "this device's migrations must be readable",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 40,
+   "test_modules": [
+    "tests.backup.test_ha_litellm",
+    "tests.backup.test_adapter_import_secrets",
+    "tests.backup.test_ha_litellm_candidate"
+   ]
+  },
+  {
+   "id": "R06",
+   "protection": "a table name is quoted only when it is plain",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 41,
+   "test_modules": [
+    "tests.backup.test_ha_litellm",
+    "tests.backup.test_adapter_import_secrets",
+    "tests.backup.test_ha_litellm_candidate"
+   ]
+  },
+  {
+   "id": "R06b",
+   "protection": "a schema name is quoted only when it is plain",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 41,
+   "test_modules": [
+    "tests.backup.test_ha_litellm",
+    "tests.backup.test_adapter_import_secrets",
+    "tests.backup.test_ha_litellm_candidate"
+   ]
+  },
+  {
+   "id": "R07",
+   "protection": "a column name is quoted only when it is plain",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 41,
+   "test_modules": [
+    "tests.backup.test_ha_litellm",
+    "tests.backup.test_adapter_import_secrets",
+    "tests.backup.test_ha_litellm_candidate"
+   ]
+  },
+  {
+   "id": "R07b",
+   "protection": "a copy without columns is refused",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 41,
+   "test_modules": [
+    "tests.backup.test_ha_litellm",
+    "tests.backup.test_adapter_import_secrets",
+    "tests.backup.test_ha_litellm_candidate"
+   ]
+  },
+  {
+   "id": "R08",
+   "protection": "a salt that could not be compared is not a match",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 42,
+   "test_modules": [
+    "tests.backup.test_ha_litellm",
+    "tests.backup.test_adapter_import_secrets",
+    "tests.backup.test_ha_litellm_candidate"
+   ]
+  },
+  {
+   "id": "R09",
+   "protection": "HA's cluster must hold the litellm database",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 43,
+   "test_modules": [
+    "tests.backup.test_ha_litellm",
+    "tests.backup.test_adapter_import_secrets",
+    "tests.backup.test_ha_litellm_candidate"
+   ]
+  },
+  {
+   "id": "R10",
+   "protection": "what HA's database holds must be readable",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 44,
+   "test_modules": [
+    "tests.backup.test_ha_litellm",
+    "tests.backup.test_adapter_import_secrets",
+    "tests.backup.test_ha_litellm_candidate"
+   ]
+  },
+  {
+   "id": "R11",
+   "protection": "no snapshot is taken for migrations that are not known",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 45,
+   "test_modules": [
+    "tests.backup.test_ha_litellm",
+    "tests.backup.test_adapter_import_secrets",
+    "tests.backup.test_ha_litellm_candidate"
+   ]
+  },
+  {
+   "id": "R11b",
+   "protection": "no snapshot is taken without migrations",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 45,
+   "test_modules": [
+    "tests.backup.test_ha_litellm",
+    "tests.backup.test_adapter_import_secrets",
+    "tests.backup.test_ha_litellm_candidate"
+   ]
+  },
+  {
+   "id": "R12",
+   "protection": "a new cluster that cannot be audited stops",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 46,
+   "test_modules": [
+    "tests.backup.test_ha_litellm",
+    "tests.backup.test_adapter_import_secrets",
+    "tests.backup.test_ha_litellm_candidate"
+   ]
+  },
+  {
+   "id": "R13",
+   "protection": "a sequence value that is not one stops",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 47,
+   "test_modules": [
+    "tests.backup.test_ha_litellm",
+    "tests.backup.test_adapter_import_secrets",
+    "tests.backup.test_ha_litellm_candidate"
+   ]
+  },
+  {
+   "id": "R14",
+   "protection": "a cluster version that is not a plain number is not known",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 48,
+   "test_modules": [
+    "tests.backup.test_ha_litellm",
+    "tests.backup.test_adapter_import_secrets",
+    "tests.backup.test_ha_litellm_candidate"
+   ]
+  },
+  {
+   "id": "R15",
+   "protection": "a state.json that is not a file is not read",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "caught": false,
+   "failures": 0,
+   "tests": 108,
+   "test_modules": [
+    "tests.backup.test_ha_litellm",
+    "tests.backup.test_adapter_import_secrets",
+    "tests.backup.test_ha_litellm_candidate"
+   ]
+  },
+  {
+   "id": "R15b",
+   "protection": "a large state.json is not read",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 49,
+   "test_modules": [
+    "tests.backup.test_ha_litellm",
+    "tests.backup.test_adapter_import_secrets",
+    "tests.backup.test_ha_litellm_candidate"
+   ]
+  },
+  {
+   "id": "T01",
+   "protection": "the entry's database is litellm",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 89,
+   "test_modules": [
+    "tests.backup.test_ha_litellm",
+    "tests.backup.test_adapter_import_secrets",
+    "tests.backup.test_ha_litellm_candidate"
+   ]
+  },
+  {
+   "id": "T02",
+   "protection": "the container's database is litellm",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 89,
+   "test_modules": [
+    "tests.backup.test_ha_litellm",
+    "tests.backup.test_adapter_import_secrets",
+    "tests.backup.test_ha_litellm_candidate"
+   ]
+  },
+  {
+   "id": "T03",
+   "protection": "the container's user is the entry's",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 89,
+   "test_modules": [
+    "tests.backup.test_ha_litellm",
+    "tests.backup.test_adapter_import_secrets",
+    "tests.backup.test_ha_litellm_candidate"
+   ]
+  },
+  {
+   "id": "T04",
+   "protection": "the user name is plain",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 89,
+   "test_modules": [
+    "tests.backup.test_ha_litellm",
+    "tests.backup.test_adapter_import_secrets",
+    "tests.backup.test_ha_litellm_candidate"
+   ]
+  },
+  {
+   "id": "T05",
+   "protection": "the database container has an image",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 89,
+   "test_modules": [
+    "tests.backup.test_ha_litellm",
+    "tests.backup.test_adapter_import_secrets",
+    "tests.backup.test_ha_litellm_candidate"
+   ]
+  },
+  {
+   "id": "T06",
+   "protection": "the proxy has an image",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 89,
+   "test_modules": [
+    "tests.backup.test_ha_litellm",
+    "tests.backup.test_adapter_import_secrets",
+    "tests.backup.test_ha_litellm_candidate"
+   ]
+  },
+  {
+   "id": "T07",
+   "protection": "the container's data volume is the entry's",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 89,
+   "test_modules": [
+    "tests.backup.test_ha_litellm",
+    "tests.backup.test_adapter_import_secrets",
+    "tests.backup.test_ha_litellm_candidate"
+   ]
+  },
+  {
+   "id": "T08",
+   "protection": "PGDATA is a plain path",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 89,
+   "test_modules": [
+    "tests.backup.test_ha_litellm",
+    "tests.backup.test_adapter_import_secrets",
+    "tests.backup.test_ha_litellm_candidate"
+   ]
+  },
+  {
+   "id": "T09",
+   "protection": "the proxy reads the salt secret once",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 89,
+   "test_modules": [
+    "tests.backup.test_ha_litellm",
+    "tests.backup.test_adapter_import_secrets",
+    "tests.backup.test_ha_litellm_candidate"
+   ]
+  },
+  {
+   "id": "T10",
+   "protection": "the entry declares the salt secret",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 25,
+   "test_modules": [
+    "tests.backup.test_ha_litellm",
+    "tests.backup.test_adapter_import_secrets",
+    "tests.backup.test_ha_litellm_candidate"
+   ]
+  },
+  {
+   "id": "T11",
+   "protection": "the entry declares each secret once",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 89,
+   "test_modules": [
+    "tests.backup.test_ha_litellm",
+    "tests.backup.test_adapter_import_secrets",
+    "tests.backup.test_ha_litellm_candidate"
+   ]
+  },
+  {
+   "id": "T12",
+   "protection": "the database's Quadlet file exists",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 89,
+   "test_modules": [
+    "tests.backup.test_ha_litellm",
+    "tests.backup.test_adapter_import_secrets",
+    "tests.backup.test_ha_litellm_candidate"
+   ]
+  },
+  {
+   "id": "T12b",
+   "protection": "the proxy's Quadlet file exists",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 68,
+   "test_modules": [
+    "tests.backup.test_ha_litellm",
+    "tests.backup.test_adapter_import_secrets",
+    "tests.backup.test_ha_litellm_candidate"
+   ]
+  },
+  {
+   "id": "K01",
+   "protection": "LiteLLM's own drop-in that joins the app's network names the app",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 31,
+   "test_modules": [
+    "tests.backup.test_ha_litellm",
+    "tests.backup.test_adapter_import_secrets",
+    "tests.backup.test_ha_litellm_candidate"
+   ]
+  },
+  {
+   "id": "K02",
+   "protection": "a container on LiteLLM's network names the app",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 2,
+   "test_modules": [
+    "tests.backup.test_ha_litellm",
+    "tests.backup.test_adapter_import_secrets",
+    "tests.backup.test_ha_litellm_candidate"
+   ]
+  },
+  {
+   "id": "K03",
+   "protection": "a setting in a Quadlet file names the app",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 29,
+   "test_modules": [
+    "tests.backup.test_ha_litellm",
+    "tests.backup.test_adapter_import_secrets",
+    "tests.backup.test_ha_litellm_candidate"
+   ]
+  },
+  {
+   "id": "K04",
+   "protection": "a network without a NetworkName has systemd's name",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 31,
+   "test_modules": [
+    "tests.backup.test_ha_litellm",
+    "tests.backup.test_adapter_import_secrets",
+    "tests.backup.test_ha_litellm_candidate"
+   ]
+  },
+  {
+   "id": "K05",
+   "protection": "a network's own file name counts",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 31,
+   "test_modules": [
+    "tests.backup.test_ha_litellm",
+    "tests.backup.test_adapter_import_secrets",
+    "tests.backup.test_ha_litellm_candidate"
+   ]
+  },
+  {
+   "id": "K06",
+   "protection": "a Pi agent's plain named volume is read",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 35,
+   "test_modules": [
+    "tests.backup.test_ha_litellm",
+    "tests.backup.test_adapter_import_secrets",
+    "tests.backup.test_ha_litellm_candidate"
+   ]
+  },
+  {
+   "id": "K07",
+   "protection": "a Pi agent's folder in the owner's home is read",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 28,
+   "test_modules": [
+    "tests.backup.test_ha_litellm",
+    "tests.backup.test_adapter_import_secrets",
+    "tests.backup.test_ha_litellm_candidate"
+   ]
+  },
+  {
+   "id": "D01",
+   "protection": "a backup without the digest is a warning before the restore, never a refusal",
+   "module": "woowbackup/adapters/quadlet_postgres.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 91,
+   "test_modules": [
+    "tests.backup.test_ha_litellm",
+    "tests.backup.test_adapter_import_secrets",
+    "tests.backup.test_ha_litellm_candidate"
+   ]
+  },
+  {
+   "id": "D02",
+   "protection": "a rollback compares this device's own rows",
+   "module": "woowbackup/adapters/quadlet_postgres.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 90,
+   "test_modules": [
+    "tests.backup.test_ha_litellm",
+    "tests.backup.test_adapter_import_secrets",
+    "tests.backup.test_ha_litellm_candidate"
+   ]
+  },
+  {
+   "id": "M59",
+   "protection": "LiteLLM's drafted health checks wait 600 s (no per-app limit)",
+   "module": "woowbackup/suggest.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 19,
+   "test_modules": [
+    "tests.backup.test_suggest"
+   ]
+  },
+  {
+   "id": "M60",
+   "protection": "LiteLLM's limit is 600 s, not the generic 300 s",
+   "module": "woowbackup/suggest.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 19,
+   "test_modules": [
+    "tests.backup.test_suggest"
+   ]
+  },
+  {
+   "id": "M61",
+   "protection": "a new draft uses the per-app limit",
+   "module": "woowbackup/suggest.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 31,
+   "test_modules": [
+    "tests.backup.test_suggest"
+   ]
+  },
+  {
+   "id": "M62",
+   "protection": "every other app keeps the generic 300 s / 180 s",
+   "module": "woowbackup/suggest.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 15,
+   "test_modules": [
+    "tests.backup.test_suggest"
+   ]
+  },
+  {
+   "id": "M63",
+   "protection": "the draft of an installed LiteLLM entry raises a shorter limit",
+   "module": "woowbackup/suggest.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 19,
+   "test_modules": [
+    "tests.backup.test_suggest"
+   ]
+  },
+  {
+   "id": "M64",
+   "protection": "only the listed apps are raised",
+   "module": "woowbackup/suggest.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 14,
+   "test_modules": [
+    "tests.backup.test_suggest"
+   ]
+  },
+  {
+   "id": "M65",
+   "protection": "a check without a limit (the catalog's 60 s) is raised too",
+   "module": "woowbackup/suggest.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 19,
+   "test_modules": [
+    "tests.backup.test_suggest"
+   ]
+  },
+  {
+   "id": "M66",
+   "protection": "a limit already at 600 s is left alone (no note)",
+   "module": "woowbackup/suggest.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 20,
+   "test_modules": [
+    "tests.backup.test_suggest"
+   ]
+  },
+  {
+   "id": "M67",
+   "protection": "the draft says what it raised (health-timeout note)",
+   "module": "woowbackup/suggest.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 19,
+   "test_modules": [
+    "tests.backup.test_suggest"
+   ]
+  },
+  {
+   "id": "S01",
+   "protection": "a new LiteLLM draft is the single-database mode",
+   "module": "woowbackup/suggest.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 19,
+   "test_modules": [
+    "tests.backup.test_suggest"
+   ]
+  },
+  {
+   "id": "S02",
+   "protection": "an installed entry's mode is never switched",
+   "module": "woowbackup/suggest.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 28,
+   "test_modules": [
+    "tests.backup.test_suggest"
+   ]
+  },
+  {
+   "id": "S03",
+   "protection": "a mode that cannot be installed is not preselected",
+   "module": "woowbackup/suggest.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 27,
+   "test_modules": [
+    "tests.backup.test_suggest"
+   ]
+  },
+  {
+   "id": "S04",
+   "protection": "the draft of another installed mode says what to choose for an import",
+   "module": "woowbackup/suggest.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 28,
+   "test_modules": [
+    "tests.backup.test_suggest"
+   ]
+  },
+  {
+   "id": "S05",
+   "protection": "LiteLLM's drafted health check asks for readiness",
+   "module": "woowbackup/suggest.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 30,
+   "test_modules": [
+    "tests.backup.test_suggest"
+   ]
+  },
+  {
+   "id": "S06",
+   "protection": "the package's settings file stays in the draft",
+   "module": "woowbackup/suggest.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 31,
+   "test_modules": [
+    "tests.backup.test_suggest"
+   ]
+  },
+  {
+   "id": "S07",
+   "protection": "a settings file the owner does not have is not proposed",
+   "module": "woowbackup/suggest.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 33,
+   "test_modules": [
+    "tests.backup.test_suggest"
+   ]
+  },
+  {
+   "id": "S08",
+   "protection": "a kept table digest takes the form the chosen mode needs",
+   "module": "woowbackup/suggest.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 28,
+   "test_modules": [
+    "tests.backup.test_suggest"
+   ]
+  },
+  {
+   "id": "S09",
+   "protection": "the changed digest keeps the installed check's id, label and exclusions",
+   "module": "woowbackup/suggest.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 34,
+   "test_modules": [
+    "tests.backup.test_suggest"
+   ]
+  },
+  {
+   "id": "S10",
+   "protection": "a digest that fits the mode is left alone",
+   "module": "woowbackup/suggest.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 35,
+   "test_modules": [
+    "tests.backup.test_suggest"
+   ]
+  }
+ ],
+ "controls": [
+  {
+   "id": "C01",
+   "change": "a changed comment in ha_litellm.py",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "unnoticed": true,
+   "failures": 0,
+   "tests": 108,
+   "test_modules": [
+    "tests.backup.test_ha_litellm",
+    "tests.backup.test_adapter_import_secrets",
+    "tests.backup.test_ha_litellm_candidate"
+   ]
+  },
+  {
+   "id": "C02",
+   "change": "a changed comment in quadlet_postgres.py",
+   "module": "woowbackup/adapters/quadlet_postgres.py",
+   "applied": true,
+   "unnoticed": true,
+   "failures": 0,
+   "tests": 108,
+   "test_modules": [
+    "tests.backup.test_ha_litellm",
+    "tests.backup.test_adapter_import_secrets",
+    "tests.backup.test_ha_litellm_candidate"
+   ]
+  },
+  {
+   "id": "C03",
+   "change": "a changed comment in haimport.py",
+   "module": "woowbackup/haimport.py",
+   "applied": true,
+   "unnoticed": true,
+   "failures": 0,
+   "tests": 108,
+   "test_modules": [
+    "tests.backup.test_ha_litellm",
+    "tests.backup.test_adapter_import_secrets",
+    "tests.backup.test_ha_litellm_candidate"
+   ]
+  },
+  {
+   "id": "C04",
+   "change": "a changed comment in suggest.py",
+   "module": "woowbackup/suggest.py",
+   "applied": true,
+   "unnoticed": true,
+   "failures": 0,
+   "tests": 64,
+   "test_modules": [
+    "tests.backup.test_suggest"
+   ]
+  }
+ ],
+ "all_caught": false,
+ "subset": null,
+ "seconds": 1939.1,
+ "source_commit": "ebb5562",
+ "where": "clean detached worktree /tmp/litellm-gaps-suite-20261124, one team/heavy.sh step holding the host-heavy lock (all9.sh: sweep, then tests/backup, then the page)",
+ "commercial_acceptance": "not-complete",
+ "note": "174/175: R15 (the kind test of state.json in scan_member) was noticed by no test; it is invisible through the outcome (habackup.Entry.read gives b'' for an entry that is not a file, hacommon.strict_json makes it None = the same \"no version\"). Test fix c78f39f (test_r15 requires that state.json is not read at all); its sweep: mutation-check-c78f39f-r15.json. This file is the sweep as it ran, unchanged."
+}

@@ -1,0 +1,80 @@
+{
+ "lane": "litellm-product",
+ "date": "2026-11-24",
+ "updated": "2026-11-24T15:29+08:00",
+ "scope": "unit and offline tests of the LiteLLM product tree after the test-gap iteration (fixtures and fakes; NOT acceptance: the real runs are tests/e2e/lab/evidence/litellm-product-20261123/)",
+ "results": {
+  "python3 -I tests/backup/litellm_product_mutations.py, full (team/heavy.sh + host-heavy lock)": {
+   "source_commit": "ebb5562",
+   "mutations": 175,
+   "caught": 174,
+   "missed": [
+    "R15"
+   ],
+   "controls": 4,
+   "controls_not_noticed": 4,
+   "baseline_tests": 172,
+   "seconds": 1939.1,
+   "modules": {
+    "woowbackup/ha_litellm.py": "f601e109f624adc7e1bac970296bfe341d58b350eaa662adc38f8972f6d3322b",
+    "woowbackup/adapters/quadlet_postgres.py": "f7e3eba019fb7074fad8aa4bf52380ab9810d5e65e7fde1a2d9b9bb4d648c4ac",
+    "woowbackup/haimport.py": "6ca0c47f399e64fc9b615e6d04ef77b0438588c67efb79cc3da2c4adc48de9ee",
+    "woowbackup/suggest.py": "4d28c43776e656e8cb0a30f8d411b8ff036583ff02a42a8b945710c6df3504a9"
+   },
+   "file": "mutation-check-ebb5562.json",
+   "earlier_run": "4d164a8 (2026-11-24 11:01-11:08): 93/106 as the tool reported it = its own misreading (13 caught removals counted as MISSED because it read the last stderr line), fixed in a2bf48c; the 13 ids are caught in the ebb5562 sweep; file mutation-check-4d164a8.json kept unchanged"
+  },
+  "the same tool --only R15,R15b on the R15 test fix": {
+   "source_commit": "c78f39f",
+   "mutations": 2,
+   "caught": 2,
+   "controls_not_noticed": 4,
+   "baseline_tests": 172,
+   "seconds": 97.7,
+   "file": "mutation-check-c78f39f-r15.json",
+   "so": "with the ebb5562 sweep: 175/175 one-place removals caught on c78f39f (only test_r15 and its import changed)"
+  },
+  "full tests/backup (team/heavy.sh + host-heavy lock, integration-3 guard.py --exe-only, clean detached worktree)": {
+   "source_commit": "ebb5562",
+   "tests": 1745,
+   "failures": 0,
+   "errors": 0,
+   "skipped": 6,
+   "host_process_calls_refused": 0,
+   "shim_hits": 0,
+   "seconds": 455,
+   "earlier_run": "4d164a8 (2026-11-24 10:52-10:55): 1638 tests, 0 failures, 0 errors, 6 skipped, 0 refused"
+  },
+  "node tests/backup-ui.mjs (same heavy step)": {
+   "source_commit": "ebb5562",
+   "tests": 107,
+   "pass": 107,
+   "fail": 0,
+   "earlier_run": "4d164a8 (2026-11-24 10:55-11:01): 107/107"
+  },
+  "LiteLLM unit modules + test_suggest + test_litellm_mutation_tool (guard.py --exe-only, after the R15 fix)": {
+   "source_commit": "c78f39f (working tree: only two README files differed)",
+   "tests": 176,
+   "failures": 0,
+   "errors": 0,
+   "host_process_calls_refused": 0
+  },
+  "tests/e2e/lab test_litellm_full_flow + test_litellm_real_ha + test_litellm_negative_flow (guard.py --exe-only)": {
+   "source_commit": "ebb5562 (working tree: only two README files differed)",
+   "tests": 39,
+   "failures": 0,
+   "errors": 0,
+   "host_process_calls_refused": 0
+  },
+  "postgres-digest lab proof (tests/e2e/lab/litellm_digest_proof.py, team/heavy.sh, lab Podman store, network none)": {
+   "source_commit": "baac85d",
+   "tracked_changes": false,
+   "exit": 0,
+   "ok": true,
+   "real": false,
+   "file": "postgres-digest-proof.json",
+   "note": "PostgreSQL 17.11 (the package image), LiteLLM 1.104.0 migrations, generated rows; the product adapter and digests modules are byte-identical in baac85d, ebb5562 and c78f39f"
+  }
+ },
+ "commercial_acceptance": "not-complete"
+}
