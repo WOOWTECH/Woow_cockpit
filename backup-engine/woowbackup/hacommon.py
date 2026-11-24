@@ -13,6 +13,7 @@ import os
 import re
 import tarfile
 import time
+import unicodedata
 
 from . import habackup, tempctr, util
 from .errors import BackupError
@@ -30,12 +31,26 @@ ELF_MACHINES = {'x86_64': 0x3E, 'amd64': 0x3E, 'aarch64': 0xB7, 'arm64': 0xB7}
 CONTROL_RE = re.compile(r'[\x00-\x1f\x7f-\x9f\u2028\u2029\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]')
 
 
+# What a shown name never carries as it is (EMQX security re-review 2026-11-24, iteration 8, O-2): every character of
+# the Unicode general categories Cc (controls), Cf (format: the bidirectional controls above, and also the zero-width
+# space / joiners U+200B-U+200D, the word joiner U+2060, the byte order mark U+FEFF, the soft hyphen U+00AD and the tag
+# characters, which make two names look alike or hide text), Cs (lone surrogates of an undecodable name), Cn
+# (unassigned) and Zl / Zp (line and paragraph separators). A superset of CONTROL_RE.
+HIDDEN_CATEGORIES = frozenset(('Cc', 'Cf', 'Cs', 'Cn', 'Zl', 'Zp'))
+
+
+def clean(text, limit=60):
+    """`text` cut at `limit` characters, every HIDDEN_CATEGORIES character shown as `?`."""
+    return ''.join('?' if unicodedata.category(ch) in HIDDEN_CATEGORIES else ch for ch in str(text)[:limit])
+
+
 def names(items, limit=10):
-    """`a、b、c 等 N 個` (each item cut at 60 characters; control characters shown as `?`: a name from HA's backup
-    -- a table, schema or extension name -- can hold a line break, a terminal escape or a bidirectional control,
-    and these messages reach the job log and the page; secreview SR-4 and the verifier's bidi gap)."""
-    items = [CONTROL_RE.sub('?', str(item)[:60]) for item in items]
-    return '、'.join(items[:limit]) + (f' 等 {len(items)} 個' if len(items) > limit else '')
+    """`a、b、c 等 N 個` (each item cut at 60 characters; control and format characters shown as `?` (clean): a name
+    from HA's backup -- a table, schema or extension name -- can hold a line break, a terminal escape, a bidirectional
+    control or a zero-width character, and these messages reach the job log and the page; secreview SR-4, the
+    verifier's bidi gap and the EMQX re-review's O-2)."""
+    items = list(items)
+    return '、'.join(clean(item) for item in items[:limit]) + (f' 等 {len(items)} 個' if len(items) > limit else '')
 
 
 # ====================================================================== versions

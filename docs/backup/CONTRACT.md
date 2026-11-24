@@ -2132,9 +2132,14 @@ PostgreSQL 15).
    密碼的方式（<HA's>）和這台（<this device's>）不同，匯入後以 HA 的為準：這台現有的 MQTT 帳號（<names>）匯入後
    無法再用原本的密碼登入，要在匯入後重新設定：到這台 EMQX 管理頁「存取控制 → 認證」的內建資料庫替這些帳號重設
    密碼或重新建立；由這台 bootstrap 帳號檔建立的帳號，刪除後重新啟動 EMQX 就會用原本的密碼建回。」 (names through
-   the shared name list: at most ten, each cut at 60 characters, control characters shown as `?`, 「等 N 個」 for
-   more), the page shows it with the check's other warnings before any conversion, and the conversion repeats it in
-   the import notes and the EMQX reminders. Equal hashing: nothing is added. HA's `plain` stores every password as
+   the shared name list: at most ten, each cut at 60 characters, control and format characters (Unicode Cc, Cf, Cs,
+   Cn, Zl, Zp: also zero-width and other invisible characters, iteration 8) shown as `?`, 「等 N 個」 for more), the page
+   shows it with the check's other warnings before any conversion, and the conversion repeats it in the import notes
+   and the EMQX reminders. Equal hashing: nothing is added. Iteration 8 (O-3): when HA's built-in password database is
+   disabled or absent and this device has users there, the check warns instead 「HA 的 EMQX 沒有啟用內建資料庫的帳號密碼認證，匯入後以 HA
+   的為準：這台的 MQTT 帳號（<names>）匯入後無法再用帳號密碼登入，這台設有 bootstrap 帳號檔時轉換也會停止。要繼續使用這些帳號，請先在 HA 的 EMQX 管理頁「存取控制 →
+   認證」啟用內建資料庫認證，再重新製作 HA 備份。」 (a bootstrap file of this device then has no enabled HA authenticator to stay attached
+   to, so the conversion stops while building the candidate). HA's `plain` stores every password as
    it is (emqx_passwd.erl:104, an empty salt: emqx_authn_password_hashing.erl:206-207): refused (`incompatible`),
    enabled or not, as the check's blocker and by the conversion right after HA's readings, before HA's export:
    「HA 的 EMQX 用「plain」（不加密）的方式保存 MQTT 帳號的密碼，搬過來會把明文密碼留在這台，所以不能匯入。請先在
@@ -2146,15 +2151,22 @@ PostgreSQL 15).
    Security re-review 2026-11-24 (iteration 7): HA's broker also answers `PLAIN_EXPR`: the number of `plain` built-in
    password databases outside the global chain (an MQTT listener's `listeners.<type>.<name>.authentication`, a
    gateway's `gateway.<name>.authentication` and a gateway listener's; their rows share the one exported table,
-   emqx_authn_mnesia.erl:105, and the `gateway` root is imported), the number of rows with an empty salt whose stored
-   value is neither hex nor a bcrypt string (stored in clear text: written under `plain` before HA changed the
-   algorithm, :130) and the first ten of their user ids (base64; never a hash or salt; a row of an unknown shape
-   answers `bad` and refuses like an unreadable answer). Either refuses (`incompatible`) at the check and in the
-   conversion before HA's export, after the global text above: 「HA 的 EMQX 在 MQTT
-   監聽器或閘道（gateway）的內建資料庫認證用「plain」（不加密）的方式保存 MQTT 帳號的密碼，搬過來會把明文密碼留在這台，所以不能匯入。請先在 HA 的 EMQX 把這些認證的密碼雜湊方式改成 plain
-   以外的方式，再替這些帳號重新設定一次密碼（或刪除這些認證和帳號），然後重新製作 HA 備份再匯入。」 or 「HA 的 EMQX 內建資料庫裡有 MQTT
-   帳號的密碼仍以明文保存（<names>；在改用其他雜湊方式之前用「plain」設定、之後沒有重新設定），搬過來會把明文密碼留在這台，所以不能匯入。請先在 HA 的 EMQX
-   替這些帳號重新設定一次密碼（或刪除不用的帳號），然後重新製作 HA 備份再匯入。」 (names through the shared name list). Not covered: a SCRAM
+   emqx_authn_mnesia.erl:105, and the `gateway` root is imported), the number of rows NOT stored in the form of their
+   authenticator's hashing (iteration 8: every algorithm verifies a row only in one form, so any other value never
+   logs in and may be the password itself: md5 / sha / sha256 / sha512 hex of 32 / 40 / 64 / 128 characters in any
+   case, emqx_passwd.erl:77-79,106-113,148-150; pbkdf2 hex of twice `dk_length` or of the MAC's own length,
+   :67-69,140-158; bcrypt `$2<a|b|x|y>$<04..31>$` + 53 characters of [./A-Za-z0-9],
+   emqx_authn_password_hashing.erl:220-224,252-253, minors and rounds proven in the 5.8.9 image; `plain` never;
+   whatever the salt, so `hash` imports and bootstrap files that stored a clear value are caught,
+   emqx_authn_mnesia.erl:541-542; a row of a user group no built-in database of HA's configuration owns, left by a
+   removed gateway or listener, must have one of these forms) and the first ten of them (base64 user id + base64 user
+   group; never a hash or salt; a row of an unknown shape answers `bad` and refuses like an unreadable answer). Either
+   refuses (`incompatible`) at the check and in the conversion before HA's export, after the global text above: 「HA 的
+   EMQX 在 MQTT 監聽器或閘道（gateway）的內建資料庫認證用「plain」（不加密）的方式保存 MQTT 帳號的密碼，搬過來會把明文密碼留在這台，所以不能匯入。請先在 HA 的 EMQX 把這些認證的密碼雜湊方式改成
+   plain 以外的方式，再替這些帳號重新設定一次密碼（或刪除這些認證和帳號），然後重新製作 HA 備份再匯入。」 or 「HA 的 EMQX 內建資料庫裡有 MQTT
+   帳號的密碼沒有以所屬認證目前的雜湊方式保存，可能是明文（<names>；例如在改用其他雜湊方式之前用「plain」設定，或以「hash」方式匯入帳號時填入了沒有雜湊的密碼；括號裡是不屬於全域認證的帳號所在的監聽器或閘道），這些帳號現在也無法用密碼登入。搬過來可能把明文密碼留在這台，所以不能匯入。請先在
+   HA 的 EMQX 管理頁「存取控制 → 認證」替這些帳號重新設定一次密碼，或刪除不用的帳號（所在的閘道或監聽器已經刪除時，先重新建立它的內建資料庫認證，再刪除這些帳號），然後重新製作 HA 備份再匯入。」
+   (names through the shared name list). Not covered: a SCRAM
    authenticator's algorithm, the account warning for listener-level or gateway users (the warning reads the global
    chain only), and a bootstrap file of type `hash` (the conversion still refuses one whose hashing differs).
 5. `woow_emqx_data`: that broker's volume export without `configs/app.*.config`, `configs/vm.*.args` (the cookie),
