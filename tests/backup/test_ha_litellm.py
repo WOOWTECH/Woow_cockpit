@@ -1432,6 +1432,16 @@ class KeyUserSourceTests(LiteLLMCase):
             with self.subTest(line=line):
                 self.assertEqual(self.users(), ['OpenDesign'])
 
+    def test_a_pi_agents_provider_list_in_a_folder_of_the_owners_home(self):
+        self.world.quadlets['omnigent'] = {'pi.container': b'[Container]\nImage=p\nVolume=%h/agents/pi:/data/pi-agent\n'}
+        self.assertEqual(self.users(), [], 'no provider list there')
+        for url, named in (('http://litellm:4000/v1', True), ('https://example.com/v1', False)):
+            self.world.files['agents/pi/models.json'] = json.dumps({'providers': {'x': {'baseUrl': url}}}).encode()
+            with self.subTest(url=url):
+                self.assertEqual(self.users(), ['Omnigent 協作平台'] if named else [])
+        self.world.files['agents/pi/models.json'] = b'{"providers": {"x": ["http://litellm:4000"]}}'
+        self.assertEqual(self.users(), [], 'a provider that is not an object is skipped')
+
     def test_litellms_own_drop_in_that_joins_the_apps_network(self):
         container = b'[Container]\nContainerName=od\nImage=x\nNetwork=design.network\n'
         for network, joined, named in (
@@ -1606,10 +1616,12 @@ class KeyUserTests(unittest.TestCase):
                                b'Volume=%h/agents/pi:/srv/pi:Z\nVolume=named-x:/data/pi-agent\n',
             'outside.container': b'[Container]\nImage=q\nVolume=/srv/pi:/data/pi-agent\n'
                                  b'Volume=%h/../etc:/data/pi-agent\n',
-            'under-home.container': b'[Container]\nImage=u\nVolume=/home/appowner/pi/:/data/pi-agent/\n'}
+            'under-home.container': b'[Container]\nImage=u\nVolume=/home/appowner/pi/:/data/pi-agent/\n',
+            'named.container': b'[Container]\nImage=n\nVolume=pi-named:/data/pi-agent:ro\n',
+            'pi-agent.image': b'[Image]\nImage=n\n'}
         self.assertEqual(ha_litellm.pi_agent_sources(quadlets, '/home/appowner/'),
-                         [('volume', 'systemd-omnigent-pi'), ('path', 'agents/pi'), ('volume', 'pi-agent-data'),
-                          ('path', 'pi')])
+                         [('volume', 'pi-named'), ('volume', 'systemd-omnigent-pi'), ('path', 'agents/pi'),
+                          ('volume', 'pi-agent-data'), ('path', 'pi')])
 
 
 class CandidateStillGuarded(unittest.TestCase):

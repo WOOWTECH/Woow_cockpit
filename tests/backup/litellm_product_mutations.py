@@ -444,6 +444,9 @@ MUTATIONS = (
      "        found.add(names[-1] if names else f'systemd-{name[:-len(\".network\")]}')\n",
      "        found.update(names[-1:])\n", 1),
     ('K05', "a network's own file name counts", LL, "        found.add(name[:-len('.network')])\n", '', 1),
+    ('K06', "a Pi agent's plain named volume is read", LL,
+     "            elif VOLUME_NAME_RE.fullmatch(source):\n                found.append(('volume', source))\n", '', 1),
+    ('K07', "a Pi agent's folder in the owner's home is read", LL, '                rel = source\n', "                rel = ''\n", 1),
     # The table digest the suggested entry has: the import compares nothing, both rollbacks compare (test_adapter_...).
     ('D01', 'a backup without the digest is a warning before the restore, never a refusal', QP,
      "            add('digests-missing', 'warn',", "            add('digests-missing', 'fail',", 1),
