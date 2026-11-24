@@ -294,3 +294,29 @@ LiteLLM 在後，與 `haapps.IMPORTERS`、`HA_SHORT` 的順序一致）；1 個�
 
 仍開著（擁有者）：SR-7 的政策（HA 資料列裡的 `os.environ/` 參照要拒絕還是只提醒）、正式機 LiteLLM 的就緒等待時間、
 `Woow_podman_litellm` 安裝等待、dev-d 的 headscale 一直重啟（`team/services-a-2.md`）、沒有 ARM 的 LiteLLM HA 備份；商業驗收未完成。
+
+## 第三次整合（續）：LiteLLM 600 秒與 Omnigent 產品線（`unit-tests-step3f.json`，擁有者決定 1）
+
+| 合併 commit | 來源（tip） | 內容 |
+| --- | --- | --- |
+| `ba637b7` | `feat/ha-import-litellm-product-20261123`（`a0475c5`） | `catalog-suggest` 對 LiteLLM 的健康檢查提案改成 600 秒（擁有者 2026-11-23 23:28 的決定；只是等久一點才判定失敗，其他應用照舊 300／180 秒），已安裝項目的草稿會把較短的逾時提高並附上說明；真實流程的 harness 檢查；證據用詞更正。依主線 07:33 指示合併。 |
+| `97c22c9` | `feat/ha-import-omnigent-product-20261123`（`cd96340`） | Omnigent 匯入成為正式產品路徑（產品程式最終 `97c994f`）：公開的 `SECURITY_BLOCKER` 換成真正會執行的保護（只搬 HA 的資料、資料庫結構用這台的、HA 的資料列由沒有權限的角色載入、HA 的答案在新資料庫再核對一次）。內含安全審查第 1、2 輪全部修正（SR-1～SR-6）與共用工作紀錄／名稱的雙向控制字元防護。 |
+
+**擁有者決定 1**：換掉的斷言（取產品線的版本，沒有文字衝突）逐條列在 `97c22c9` 的合併訊息與 `unit-tests-step3f.json`。
+EMQX 的 `PRESERVATION_BLOCKER` 在 `97c22c9` 照舊。
+
+衝突：兩次都沒有。`ba637b7` 的 9 個檔案有 8 個等於 `a0475c5`，`CONTRACT.md` 自動合併（patch-id 相同）。`97c22c9` 只有那邊改的 55 個
+檔案等於 `cd96340`；兩邊都改的 7 個檔案自動合併，逐行證明差異 0 行（其中 6 個的 patch-id 兩個方向都相同）。
+
+**已知仍開著的風險（不是已解決）**：LiteLLM 的 SR-7（HA 資料列裡的 `os.environ/` 參照會讓這台把自己的機密送到 HA 指定的主機；dev-d 已用
+假金鑰重現）由擁有者在 2026-11-24 07:22 決定延後（「這個可以先不用管」），與 `ssl_verify` 這類儲存設定一樣沒有任何產品行為改變；
+`wip/litellm-sr7-prep-20261124` 沒有合併。Omnigent 正式（非測試）匯入會保留 HA 啟用中的排程。
+
+測試（主機守門，真實 batch-1 備份，0 次拒絕的呼叫）：`ba637b7` 的 suggest／catalog／LiteLLM 模組 154/154、實驗室 LiteLLM 21/21；
+`97c22c9` 的 17 個模組（9 個 Omnigent、守門、共用、作業、匯入、流程…）317/317（原本 7 個 `SECURITY_BLOCKER` 未通過的測試都通過了）、
+實驗室 Omnigent 31/31。整套在 `97c22c9`（自己的工作樹 `/tmp/int3-suite-20261124`，經 `team/heavy.sh` 與主機重測鎖）：`tests/backup` 1604 個，
+1598 通過、1 略過、5 未通過（只有 `test_litellm_lab_runner`：這個小組的主機守門拒絕了測試自己的假子程序；`--exe-only` 6/6）；
+`RealBackupTests` 1/1；`node tests/backup-ui.mjs` **105/105**。
+
+給 arm54 最後的壓縮合併：`arm54_final_omnigent.py`、`arm54_final_owner_omnigent.py` 會檢查 `ha_omnigent.SECURITY_BLOCKER`，
+這個名稱從 `97c22c9` 起不存在；它們是合併前那些實測的紀錄，照原樣在整合版上重跑會停在那一行。
