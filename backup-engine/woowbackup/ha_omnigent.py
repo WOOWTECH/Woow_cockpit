@@ -646,9 +646,11 @@ pid=
 def capture_consistent_target_schema(work, app, target, path, expected_alembic):
     """Capture schema, revision and column signature from one exported snapshot.
 
-    Contract: the caller must prevent concurrent target schema DDL for the
-    duration of capture; PostgreSQL table locks do not cover every DDL object.
-    The public import remains guarded until that precondition is established.
+    PostgreSQL table locks do not cover every DDL object, so this capture alone does
+    not prove that no schema change ran meanwhile. Nobody has to promise it either:
+    the import's only caller, trusted_schema, compares the live schema (signature,
+    columns, revision) before and after the capture, and the columns returned here,
+    and stops the job when anything differs.
     """
     if not expected_alembic or any(not isinstance(v, str) or not ALEMBIC_RE.fullmatch(v) for v in expected_alembic):
         raise BackupError('incompatible', '目標 Omnigent 的結構版本不明。', app=app.id)

@@ -3,6 +3,7 @@ podman answers like the lab's -- versions, HA's hardened cluster, the trusted sc
 one snapshot and proven unchanged; B1-01), only HA's data loaded by a role without privileges, the new cluster's
 schema and contents audited, this device's admin and runner accounts kept, test mode, the server volume with HA's
 artifacts and cookie key (CONTRACT section 9). Team E2."""
+import contextlib
 import copy
 import gzip
 import io
@@ -10,6 +11,7 @@ import json
 import re
 import tarfile
 import unittest
+from pathlib import Path
 from unittest import mock
 
 from woowbackup import ha_odoo, ha_omnigent, habackup, haimport, jobs
@@ -70,6 +72,13 @@ SEQ_SCRIPT_HEAD = ('--\n-- PostgreSQL database dump\n--\n\n\\restrict MFQHEcMGZE
                    "SELECT pg_catalog.set_config('search_path', '', false);\nSET check_function_bodies = false;\n"
                    'SET xmloption = content;\nSET client_min_messages = warning;\nSET row_security = off;\n\n'
                    '--\n-- Name: conversation_items_id_seq; Type: SEQUENCE SET; Schema: public; Owner: postgres\n--\n\n')
+# pg_controldata 16's output (an excerpt): the cluster's state is one line among others
+CONTROLDATA = (b'pg_control version number:            1300\n'
+               b'Catalog version number:               202307071\n'
+               b'Database system identifier:           7442424242424242424\n'
+               b'Database cluster state:               %s\n'
+               b'pg_control last modified:             Tue Nov 24 00:00:00 2026\n'
+               b'Latest checkpoint location:           0/1A2B3C8\n')
 
 
 def signature():
@@ -142,6 +151,8 @@ class World(fk.World):
         self.exec_users = []                  # (--user or None, podman exec argv)
         self.seq_script = SEQ_SCRIPT_HEAD + "SELECT pg_catalog.setval('public.conversation_items_id_seq', 7, true);\n"
         self.exec_failure = None              # (role, command) -> a failing Result, or None
+        self.cluster_state = b'shut down'     # what pg_controldata says of the new cluster after its stop
+        self.extra_members = {}               # volume (or throwaway role) -> members its export holds besides the usual
 
     def podman(self, args, data, stdout):
         if args[:1] == ['exec']:
@@ -158,7 +169,7 @@ class World(fk.World):
 
     def run(self, role, image, command, options, data):
         if role == 'controldata':
-            return Result(0, b'Database cluster state:               shut down\n', b'')
+            return Result(0, CONTROLDATA % self.cluster_state, b'')
         return Result(0, b'', b'')
 
     def exec(self, role, command, data, stdout):
@@ -238,17 +249,30 @@ class World(fk.World):
                 rows += json.loads(match.group(1).replace("''", "'"))
         return rows
 
-    def export(self, volume):
+    def members(self, volume):
         if volume == 'omnigent-server-data':
-            return fk.tar_of([{'name': '.', 'type': 'dir', 'uid': 0, 'gid': 0},
-                              {'name': 'artifacts', 'type': 'dir', 'uid': 0, 'gid': 0},
-                              {'name': 'artifacts/accounts-cookie-secret', 'data': b'live-cookie', 'mode': 0o600},
-                              {'name': f'artifacts/{"e" * 32}', 'type': 'dir'},
-                              {'name': 'sharing_mode', 'data': b'off'}])
+            return [{'name': '.', 'type': 'dir', 'uid': 0, 'gid': 0},
+                    {'name': 'artifacts', 'type': 'dir', 'uid': 0, 'gid': 0},
+                    {'name': 'artifacts/accounts-cookie-secret', 'data': b'live-cookie', 'mode': 0o600},
+                    {'name': f'artifacts/{"e" * 32}', 'type': 'dir'}, {'name': 'sharing_mode', 'data': b'off'}]
         if volume == 'omnigent-pi-data':
-            return fk.tar_of([{'name': '.', 'type': 'dir', 'uid': 0}, {'name': 'auth.json', 'data': b'pi-login'}])
-        return fk.tar_of([{'name': '.', 'type': 'dir', 'uid': 70, 'gid': 70, 'mode': 0o700},
-                          {'name': 'PG_VERSION', 'data': b'16\n', 'uid': 70, 'gid': 70, 'mode': 0o600}])
+            return [{'name': '.', 'type': 'dir', 'uid': 0}, {'name': 'auth.json', 'data': b'pi-login'}]
+        return [{'name': '.', 'type': 'dir', 'uid': 70, 'gid': 70, 'mode': 0o700},
+                {'name': 'PG_VERSION', 'data': b'16\n', 'uid': 70, 'gid': 70, 'mode': 0o600}]
+
+    def export(self, volume):
+        return fk.tar_of(self.members(volume) + self.extra_members.get(fk.role_of(volume), []))
+
+    def exported(self):
+        """The throwaway roles and live volumes `podman volume export` read so far, in order."""
+        return [fk.role_of(call[-1]) for call in self.owner.calls if call[:3] == ('relay', 'volume', 'export')]
+
+    def forget(self):
+        """The next conversion of the same test starts with nothing recorded."""
+        for record in (self.runs, self.execs, self.exec_users, self.snapshots, self.psql, self.written, self.imported,
+                       self.manifests, self.volume_data, self.owner.calls):
+            record.clear()
+        self.live_reads = 0
 
 
 class OmnigentCase(fk.ConversionCase):
@@ -574,19 +598,162 @@ class ConvertTests(OmnigentCase):
                 self.assertFalse([r for r in self.restores() if '-d' in r[1]], 'nothing was restored at all')
                 self.assert_nothing_loaded()
 
-    def test_counts_that_differ_stop_the_conversion(self):
+    def assert_stopped(self, code, message, *, exported=(), upload=(), **params):
+        """One conversion that must end with `code` and exactly `message`: no backup, nothing packed, only the
+        volumes in `exported` were read out, the staging folder is gone."""
+        self.world.forget()
+        with self.assertRaises(BackupError) as caught:
+            self.convert(self.upload_omnigent(**dict(upload)), ['omnigent'], **params)
+        self.assertEqual((caught.exception.code, caught.exception.message), (code, message))
+        self.assertEqual(self.storage.list_backups(), [])
+        self.assertEqual(self.world.manifests, {}, 'nothing was packed')
+        self.assertEqual(self.world.exported(), list(exported))
+        self.assertFalse((Path(self.paths.staging) / self.job_id).exists(), 'staging is removed')
+
+    def test_a_version_that_does_not_match_stops_the_conversion_itself(self):
+        """The version rule of the check holds in the conversion too (nothing makes a job run the check first): an
+        add-on version that ships another Omnigent or that this engine does not know, another live version and a live
+        version that cannot be read stop before HA's database is read or anything is created."""
+        for addon, live, words in (
+                ('0.1.19', '0.21.0', '版本不同：HA 的 Omnigent 是 0.20.0（附加元件 0.1.19），這台是 0.21.0。'
+                                     '請先讓兩邊的 Omnigent 版本一致後再匯入。'),
+                ('0.9.0', '0.21.0', '無法確認 HA 附加元件版本 0.9.0 搭配的 Omnigent 版本（這台的資料表還不認得它），'
+                                    '為避免版本不同而無法匯入；請先更新這台的 Cockpit。'),
+                ('0.1.23', '0.22.0', '版本不同：HA 的 Omnigent 是 0.21.0（附加元件 0.1.23），這台是 0.22.0。'
+                                     '請先讓兩邊的 Omnigent 版本一致後再匯入。'),
+                ('0.1.23', None, '無法讀取這台 Omnigent 的版本。')):
+            with self.subTest(addon=addon, live=live):
+                self.server_version = live
+                self.assert_stopped('incompatible', f'Omnigent 不能搬過來：{words}', upload={'version': addon})
+                self.assertEqual(self.world.runs, [], 'no throwaway container, not even for the ids of an image')
+                self.assertEqual(self.world.imported, {}, "HA's cluster was not read")
+                self.assert_nothing_loaded()
+
+    @contextlib.contextmanager
+    def after_the_last_write(self, change):
+        """What the new cluster answers once the restricted role is dropped becomes `change(sql, answer)`: only the
+        schema, the audit and the final comparison are asked after that."""
         real = self.world.answer
 
         def answer(role, sql, database):
             value = real(role, sql, database)
-            if role == 'omni-db' and isinstance(value, dict) and 'conversations' in value:
-                value = dict(value, conversations=0)
+            if role == 'omni-db' and 'DROP ROLE woowbk_restore' in self.world.executed('omni-db'):
+                return change(sql, value)
             return value
-
         self.world.answer = answer
-        with self.assertRaises(BackupError) as caught:
-            self.convert(self.upload_omnigent(), ['omnigent'])
-        self.assertIn('conversations', caught.exception.message)
+        try:
+            yield
+        finally:
+            self.world.answer = real
+
+    def test_counts_that_differ_stop_the_conversion(self):
+        """The final comparison, after the last write into the new cluster (require_answers compared HA's answers right
+        after the data load, TrustedSchemaTests; this one also sees what adding this device's accounts and the
+        test-mode pause did): every table holds HA's rows, users this device's kept accounts too, and the revision is
+        HA's. Otherwise nothing is exported; the cluster is not even stopped."""
+        def counts(**changed):
+            def change(sql, value):
+                if not (sql.startswith('SELECT json_build_object(') and "'conversations', (SELECT count(*)" in sql):
+                    return value
+                return {k: v for k, v in dict(value, **changed).items() if v is not None}
+            return change
+
+        def revision(found):
+            return lambda sql, value: found if sql == ha_omnigent.ALEMBIC_SQL else value
+
+        for name, test_mode, change, words in (
+                ('a table lost a row', False, counts(conversations=1), 'conversations（HA 2，匯入後 1）'),
+                ('a table got a row', True, counts(scheduled_tasks=3), 'scheduled_tasks（HA 2，匯入後 3）'),
+                ('a table does not answer', False, counts(hosts=None), 'hosts（HA 2，匯入後 None）'),
+                ('the kept accounts are not there', False, counts(users=2), 'users（HA 4，匯入後 2）'),
+                ('two tables', True, counts(agents=0, files=0), 'agents（HA 2，匯入後 0）、files（HA 2，匯入後 0）'),
+                ('another revision', False, revision(['0000000000aa']), '結構版本'),
+                ('a second revision', True, revision([ALEMBIC, '0000000000aa']), '結構版本'),
+                ('no revision', False, revision(None), '結構版本')):
+            with self.subTest(name=name), self.after_the_last_write(change):
+                self.assert_stopped('job-failed', f'Omnigent 匯入後的資料和 HA 不同，已停止：{words}。', test_mode=test_mode)
+                self.assertIn(ha_omnigent.AUDIT_SQL, self.world.executed('omni-db'),
+                              'the answers after the data load, the schema and the audit were fine')
+                self.assertEqual(self.runs('controldata'), [])
+
+    def test_test_mode_that_left_a_task_active_stops_the_conversion(self):
+        """Test mode counts the active tasks again after its pause: a backup whose tasks would still run on this
+        device is never made (what the pause changed is asked, not assumed)."""
+        real = self.world.answer
+        self.world.answer = lambda role, sql, database: (
+            1 if role == 'omni-db' and sql == ha_omnigent.ACTIVE_SQL else real(role, sql, database))
+        self.addCleanup(setattr, self.world, 'answer', real)
+        self.assert_stopped('job-failed', '測試匯入沒有暫停全部 Omnigent 排程。', test_mode=True)
+        self.assertTrue(any(PAUSE in sql for sql in self.world.restricted()), 'the pause itself ran')
+        self.assertEqual(self.world.executed('omni-db').count(ha_omnigent.ACTIVE_SQL), 2, 'before and after the pause')
+        self.assertEqual(self.runs('controldata'), [])
+        self.world.forget()   # without test mode the active task is HA's to keep: nothing is asked or paused
+        self.convert(self.upload_omnigent(), ['omnigent'])
+        self.assertNotIn(ha_omnigent.ACTIVE_SQL, self.world.executed('omni-db'))
+
+    def test_a_cluster_that_did_not_stop_cleanly_is_never_exported(self):
+        """PostgreSQL's smart/fast shutdown ends with 0; 137 is the SIGKILL of `podman stop` after its grace time, 1
+        an error during the shutdown. The files are then no clean copy: no export, not even pg_controldata."""
+        for code in (137, 1, 143):
+            with self.subTest(code=code):
+                self.world.exit_codes['omni-db'] = code
+                self.assert_stopped('job-failed', f'新的 PostgreSQL 叢集沒有正常關閉（結束碼 {code}）。')
+                self.assertEqual(self.runs('controldata'), [])
+        self.assertIn(('stop', '--time', '300', f'woowbk-{self.job_id}-omni-db'), self.world.owner.calls)
+
+    def test_only_a_cluster_that_pg_controldata_calls_shut_down_is_exported(self):
+        """The second, independent answer about the same thing: pg_controldata of the live image reads the stopped
+        cluster's control file (its volume read only, no server running) and must say exactly "shut down" (every other
+        state of PostgreSQL 16's dbState(), or no answer, stops the job)."""
+        for state in (b'in production', b'shutting down', b'shut down in recovery', b'in crash recovery',
+                      b'in archive recovery', b'starting up', b'unrecognized status code', b''):
+            with self.subTest(state=state):
+                self.world.cluster_state = state
+                self.assert_stopped('job-failed', '新的 PostgreSQL 叢集沒有正常關閉。')
+                role, image, command, options = self.runs('controldata')[0]
+                self.assertEqual((image, command), ('docker.io/library/postgres:16.15-alpine3.24',
+                                                    ['pg_controldata', '/var/lib/postgresql/data']))
+                self.assertEqual(options['--volume'], [f'woowbk-{self.job_id}-omni-db:/var/lib/postgresql/data:ro'])
+                self.assertEqual((options['--user'], options['--network']), (['postgres'], ['none']))
+                self.assertIn('--read-only', options)
+                self.assertIn(('stop', '--time', '300', f'woowbk-{self.job_id}-omni-db'), self.world.owner.calls)
+        self.world.cluster_state = b'shut down'
+        self.world.forget()
+        self.convert(self.upload_omnigent(), ['omnigent'])
+        self.assertEqual(len(self.storage.list_backups()), 1)
+
+    def test_a_volume_podman_could_not_import_is_never_packed(self):
+        """Every volume of the converted backup is read as a restore would read it (nested.check_volume with the
+        owner's id maps) before it is packed: a restore empties the live volume first, so `podman volume import` must
+        not fail half-way. The database comes from the new cluster's export, the server and pi volumes from this
+        device's own (with HA's artifacts in the first)."""
+        owner = {'name': 'woowbk-unmapped', 'data': b'x', 'uid': 70000}     # the fakes' owner maps 0-65536
+        link = {'name': 'woowbk-outside', 'type': 'symlink', 'linkname': '../../outside'}
+        device = {'name': 'woowbk-device', 'type': 'chr'}
+        everything = ('omni-db', 'omnigent-server-data', 'omnigent-pi-data')
+        for source, member, reason in (
+                ('omni-db', owner, 'owner id outside the user namespace'),
+                ('omni-db', link, 'symlink pointing outside the volume'),
+                ('omni-db', device, 'member type not allowed (device, sparse or unknown)'),
+                ('omnigent-server-data', owner, 'owner id outside the user namespace'),
+                ('omnigent-pi-data', owner, 'owner id outside the user namespace'),
+                ('omnigent-pi-data', link, 'symlink pointing outside the volume'),
+                ('omnigent-pi-data', device, 'member type not allowed (device, sparse or unknown)')):
+            with self.subTest(source=source, member=member['name']):
+                self.world.extra_members = {source: [member]}
+                self.world.forget()
+                with self.assertRaises(BackupError) as caught:
+                    self.convert(self.upload_omnigent(), ['omnigent'])
+                self.assertEqual(caught.exception.code, 'job-failed')
+                self.assertTrue(caught.exception.message.startswith('轉換後的資料卷內容無法匯入（'), caught.exception.message)
+                self.assertEqual(caught.exception.details.get('reason'), reason)
+                self.assertEqual(sorted(self.world.exported()), sorted(everything), 'read out, but')
+                self.assertEqual(self.world.manifests, {}, 'never packed')
+                self.assertEqual(self.storage.list_backups(), [])
+        self.world.extra_members = {}
+        self.world.forget()
+        self.convert(self.upload_omnigent(), ['omnigent'])
+        self.assertEqual(len(self.storage.list_backups()), 1)
 
 
 class TrustedSchemaTests(OmnigentCase):
