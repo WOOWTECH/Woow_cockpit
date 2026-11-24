@@ -1,0 +1,85 @@
+{
+ "lane": "emqx-sr5",
+ "date": "2026-11-24",
+ "branch": "R-COCKPIT fix/emqx-sr5-hash-warning-20261124 (local only, never pushed)",
+ "commercial_acceptance": "not-complete",
+ "note": "Guarded runners (integration-3 guard.py for the suites, emqx-product guarded_unittest.py for the module sets: no podman/labpodman/ssh/sudo/systemctl/runuser process may start). Unit, page and mutation results are not acceptance; the real attempts (attempt-sr5-NN.json in ../emqx-product-20261123/) are the product-flow proof.",
+ "runs": [
+  {
+   "name": "full tests/backup (with the real batch-1 backups through the existing reader, --b1)",
+   "commit": "ae70328",
+   "backup_engine_tree": "5142e05c",
+   "where": "clean suite worktree, team/heavy.sh + host heavy-tests lock (suite s2)",
+   "tests": 1814,
+   "failures": 2,
+   "errors": 3,
+   "skipped": 1,
+   "blocked": 6,
+   "not_ok": "only the 5 guard-blocked tests of tests.backup.test_litellm_lab_runner (they start a lab command the guard refuses), exactly the not-ok set of the integration baseline (integration-3 c4/c5 at ae932f7/bb23531: 1790 tests, the same 5)"
+  },
+  {
+   "name": "full tests/backup, first run",
+   "commit": "85b24dc",
+   "backup_engine_tree": "5142e05c",
+   "tests": 1814,
+   "failures": 2,
+   "errors": 3,
+   "skipped": 1,
+   "blocked": 6,
+   "not_ok": "the same 5 known tests (suite s1)"
+  },
+  {
+   "name": "backup-ui (node tests/backup-ui.mjs, Playwright fixture pages)",
+   "commit": "ae70328",
+   "tests": 108,
+   "pass": 108,
+   "fail": 0,
+   "includes": "the new SR-5 page test (#106): the warning shown with the app importable and 轉換 enabled; the plain refusal blocks the app and disables 轉換",
+   "where": "suite s2 (suite s1 could not start it: the fresh worktree had no node_modules)"
+  },
+  {
+   "name": "tests.backup.test_ha_emqx_sr5 + tests.e2e.lab.test_emqx_product_real_ha",
+   "commit": "ae70328",
+   "tests": 67,
+   "failures": 0,
+   "errors": 0,
+   "blocked": 0
+  },
+  {
+   "name": "lab EMQX modules (test_emqx_product_real_ha, test_emqx_real_candidate, test_emqx_candidate_acl_component)",
+   "commit": "4093411 (code = ae70328)",
+   "tests": 61,
+   "failures": 0,
+   "errors": 0,
+   "blocked": 0
+  },
+  {
+   "name": "mutation sweep of the SR-5 code (37 one-place mutations; modules test_ha_emqx_sr5 + test_ha_emqx)",
+   "runs": [
+    {
+     "commit": "85b24dc",
+     "killed": 35,
+     "of": 37,
+     "survived": [
+      "pbkdf2 mac ignored",
+      "lenient base64"
+     ],
+     "evidence": "mutation-sr5-s1-85b24dc.json"
+    },
+    {
+     "commit": "ae70328",
+     "killed": 37,
+     "of": 37,
+     "survived": [],
+     "evidence": "mutation-sr5-s2-ae70328.json",
+     "note": "ae70328 added the two tests the first run asked for (another pbkdf2 MAC with the same derived length; excess base64 padding in the users answer)"
+    }
+   ]
+  },
+  {
+   "name": "scripts/check_source.py",
+   "commit": "ae70328 (clean suite worktree)",
+   "result": "passed; node --check backup/backup.js and tests/backup-ui.mjs passed"
+  }
+ ]
+}
