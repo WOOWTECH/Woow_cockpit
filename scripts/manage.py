@@ -12,6 +12,7 @@ from pathlib import Path
 import posixpath
 import pwd
 import re
+import signal
 import stat
 import subprocess
 import sys
@@ -756,13 +757,17 @@ def _timer_back(systemd, before, unit_touched, timer_present):
 # ---------------------------------------------------------------- host tools (the live root only)
 
 def run_tool(argv):
-    """A probe (30 s) or apt-get: noninteractive, needrestart's hook suspended (this installer restarts no service), the
-    administrator's proxy passed on and no time limit, because apt-get must not be killed while dpkg works (its network
-    and lock waits are bounded)."""
+    """A probe (30 s) or apt-get: noninteractive, needrestart's hook suspended (this installer restarts no service) and the
+    administrator's proxy passed on. apt-get must not be killed while dpkg works: no time limit (its network and lock
+    waits are bounded) and Ctrl-C waits for it."""
     if argv[0] != APT_GET:
         return run_fixed(argv, TOOL_ENV, 30)
     proxy = {key: os.environ[key] for key in ('http_proxy', 'https_proxy', 'no_proxy') if key in os.environ}
-    return run_fixed(argv, {**SAFE_ENV, **proxy, 'DEBIAN_FRONTEND': 'noninteractive', 'NEEDRESTART_SUSPEND': '1'}, None)
+    interrupt = signal.signal(signal.SIGINT, signal.SIG_IGN)
+    try:
+        return run_fixed(argv, {**SAFE_ENV, **proxy, 'DEBIAN_FRONTEND': 'noninteractive', 'NEEDRESTART_SUSPEND': '1'}, None)
+    finally:
+        signal.signal(signal.SIGINT, interrupt)
 
 
 def apt_reason(code, update, error):

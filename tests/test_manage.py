@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import posixpath
 import re
+import signal
 import stat
 import subprocess
 import sys
@@ -1435,10 +1436,16 @@ class HostToolsContract(HostFixture):
         self.assertEqual(self.main('status')[0], 0)
 
     def test_how_the_tools_and_apt_are_run(self):
-        calls = []
+        calls, interrupts, before = [], [], signal.getsignal(signal.SIGINT)
+
+        def run_fixed(*args):
+            calls.append(args)
+            interrupts.append(signal.getsignal(signal.SIGINT))
+            return 127, '', ''
+
         environ = {'http_proxy': 'http://proxy.example:3128', 'no_proxy': 'localhost', 'PATH': '/home/user/bin',
                    'PYTHONPATH': '/home/user/lib', 'LD_PRELOAD': '/home/user/x.so', 'APT_CONFIG': '/home/user/apt.conf'}
-        with (patch.object(manage, 'run_fixed', lambda *args: calls.append(args) or (127, '', '')),
+        with (patch.object(manage, 'run_fixed', run_fixed),
               patch.dict(os.environ, environ, clear=True), contextlib.redirect_stderr(io.StringIO()),
               self.assertRaisesRegex(ValueError, '結束碼 127')):
             manage.HostTools().ensure()
@@ -1448,6 +1455,9 @@ class HostToolsContract(HostFixture):
                    'http_proxy': 'http://proxy.example:3128', 'no_proxy': 'localhost'}
         self.assertEqual(calls, [*probes, (list(manage.APT_UPDATE), apt_env, None),
                                  ([*manage.APT_INSTALL, *manage.TOOL_PACKAGES], apt_env, None), *probes])
+        # Ctrl-C does not reach apt-get or the wait for it (a killed apt-get leaves dpkg half-way), only these two.
+        self.assertEqual(interrupts, [*[before] * len(probes), signal.SIG_IGN, signal.SIG_IGN, *[before] * len(probes)])
+        self.assertEqual(signal.getsignal(signal.SIGINT), before)
         for option in ('-y', '--no-remove', '--no-install-recommends', '--reinstall', 'DPkg::Lock::Timeout=300'):
             self.assertIn(option, manage.APT_INSTALL)
         self.assertEqual((manage.APT_UPDATE[0], manage.APT_INSTALL[0], manage.APT_INSTALL[-1]),
