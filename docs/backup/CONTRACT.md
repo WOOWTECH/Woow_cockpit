@@ -2142,8 +2142,21 @@ PostgreSQL 15).
    （例如 sha256 並加鹽，或 bcrypt），再替每個 MQTT 帳號重新設定一次密碼（EMQX 不會轉換已經存好的密碼，沒有重設的
    帳號在改完後就無法登入），然後重新製作 HA 備份再匯入。」 (update = create: the stored rows keep the plain value
    and are checked with the new hashing, emqx_authn_mnesia.erl:130-161; a password set again is hashed with it,
-   :390-401). Not covered: a SCRAM authenticator's algorithm, listener-level authenticators, and a bootstrap file of
-   type `hash` (the conversion still refuses one whose hashing differs).
+   :390-401).
+   Security re-review 2026-11-24 (iteration 7): HA's broker also answers `PLAIN_EXPR`: the number of `plain` built-in
+   password databases outside the global chain (an MQTT listener's `listeners.<type>.<name>.authentication`, a
+   gateway's `gateway.<name>.authentication` and a gateway listener's; their rows share the one exported table,
+   emqx_authn_mnesia.erl:105, and the `gateway` root is imported), the number of rows with an empty salt whose stored
+   value is neither hex nor a bcrypt string (stored in clear text: written under `plain` before HA changed the
+   algorithm, :130) and the first ten of their user ids (base64; never a hash or salt; a row of an unknown shape
+   answers `bad` and refuses like an unreadable answer). Either refuses (`incompatible`) at the check and in the
+   conversion before HA's export, after the global text above: 「HA 的 EMQX 在 MQTT
+   監聽器或閘道（gateway）的內建資料庫認證用「plain」（不加密）的方式保存 MQTT 帳號的密碼，搬過來會把明文密碼留在這台，所以不能匯入。請先在 HA 的 EMQX 把這些認證的密碼雜湊方式改成 plain
+   以外的方式，再替這些帳號重新設定一次密碼（或刪除這些認證和帳號），然後重新製作 HA 備份再匯入。」 or 「HA 的 EMQX 內建資料庫裡有 MQTT
+   帳號的密碼仍以明文保存（<names>；在改用其他雜湊方式之前用「plain」設定、之後沒有重新設定），搬過來會把明文密碼留在這台，所以不能匯入。請先在 HA 的 EMQX
+   替這些帳號重新設定一次密碼（或刪除不用的帳號），然後重新製作 HA 備份再匯入。」 (names through the shared name list). Not covered: a SCRAM
+   authenticator's algorithm, the account warning for listener-level or gateway users (the warning reads the global
+   chain only), and a bootstrap file of type `hash` (the conversion still refuses one whose hashing differs).
 5. `woow_emqx_data`: that broker's volume export without `configs/app.*.config`, `configs/vm.*.args` (the cookie),
    `configs/*.bak`, `backup/**`, `trace/**`; `woow_emqx_log`: its top folder only, owned like the live one.
 6. Readback (2026-11-23). Before the candidate stops, its readback goes into the converted backup's app section as

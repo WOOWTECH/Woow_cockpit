@@ -12,8 +12,9 @@ EMQX's own data export and import move the data, node-name independent, in two t
    `noexec,nosuid,nodev` volume at /data/emqx/data, HA's node name (its host mapped to 127.0.0.1 with `--add-host`),
    root like on HA, an empty default dashboard password (nothing is created at boot). It answers the default-account
    check (admin/public still valid: a blocker), the row counts, its root names and authenticators, the built-in
-   password database's hashing (SR-5: `plain` is refused; a hashing that no longer accepts this device's stored
-   passwords names this device's MQTT accounts on the check page, read-only from its running broker), then
+   password database's hashing (SR-5: `plain` is refused -- also an MQTT listener's or a gateway's, and rows still
+   stored in clear text; a hashing that no longer accepts this device's stored passwords names this device's MQTT
+   accounts on the check page, read-only from its running broker), then
    `emqx ctl data export` of the data roots (DATA_ROOTS; never listeners, dashboard, node, log or other settings) and
    the table sets (TABLE_SETS: MQTT users, ACL rules, banned, Dashboard users, API keys, PSK, retained messages).
 2. This device's broker (the candidate). First this device's running broker is read (target_static): its effective
@@ -131,6 +132,39 @@ HASH_EXPR = ('[{maps:get(enable, A, true), maps:get(name, H, none), maps:get(sal
 USERS_EXPR = ('L = lists:sort([U || {G, U} <- mnesia:dirty_all_keys(emqx_authn_mnesia), G =:= \'mqtt:global\', '
               'is_binary(U)]), io:format("WOOWUSERS:~b:~s:END", [length(L), lists:join(",", '
               '[base64:encode(U) || U <- lists:sublist(L, 10)])]).')
+# SR-5, security re-review 2026-11-24 (iteration 7): `plain` is not only possible in the global chain HASH_EXPR reads.
+# An MQTT listener (`listeners.<type>.<name>.authentication`, chain '<type>:<name>': emqx_authn_config.erl:371-374,
+# emqx_authn_chains.erl:1015-1021), a gateway (`gateway.<name>.authentication`, chain '<name>:global':
+# emqx_gateway_utils.erl:457-475) and a gateway's listener (emqx_gateway_insta_sup.erl:295-307) can each have a built-in
+# password database authenticator; all of them keep their rows in the one table the export carries whole
+# (emqx_authn_mnesia.erl:105, the user group is the chain name), and the `gateway` root itself is imported (DATA_ROOTS).
+# A row also keeps the hashing it was written with when HA changes the algorithm later (:130 update = create): a row
+# EMQX wrote under `plain` holds the password itself with an empty salt (emqx_authn_password_hashing.erl:206-207,
+# emqx_passwd.erl:104), every other algorithm stores lowercase hex (emqx_passwd.erl:106-113, 148-150) or, for bcrypt,
+# a bcrypt string with the same string as its salt (emqx_authn_password_hashing.erl:221-224). HA's broker answers the
+# number of `plain` built-in password databases outside the global chain, the number of rows with an empty salt whose
+# stored value is neither hex nor a bcrypt string (stored in clear text) and the first ten of their user ids (base64);
+# never a password, hash or salt. A row of an unknown shape answers `bad` (refused).
+PLAIN_EXPR = ('Lw = fun(X) when is_list(X) -> X; (X) when is_map(X) -> [X]; (_) -> [] end, '
+              'Ln = fun(M) when is_map(M) -> [Lc || {_, Lt} <- maps:to_list(M), is_map(Lt), {_, Lc} <- maps:to_list(Lt), '
+              'is_map(Lc)]; (_) -> [] end, '
+              'Pl = fun(A) when is_map(A) -> maps:get(mechanism, A, none) =:= password_based andalso '
+              'maps:get(backend, A, none) =:= built_in_database andalso '
+              'maps:get(name, maps:get(password_hash_algorithm, A, #{}), none) =:= plain; (_) -> false end, '
+              'Gw = [Gc || {_, Gc} <- maps:to_list(emqx:get_config([gateway], #{})), is_map(Gc)], '
+              'Other = [A1 || C1 <- Ln(emqx:get_config([listeners], #{})), A1 <- Lw(maps:get(authentication, C1, []))] '
+              '++ [A2 || G2 <- Gw, A2 <- Lw(maps:get(authentication, G2, []))] '
+              '++ [A3 || G3 <- Gw, C3 <- Ln(maps:get(listeners, G3, #{})), A3 <- Lw(maps:get(authentication, C3, []))], '
+              'Hex = fun(H) -> byte_size(H) > 0 andalso lists:all(fun(Ch) -> (Ch >= $0 andalso Ch =< $9) orelse '
+              '(Ch >= $a andalso Ch =< $f) orelse (Ch >= $A andalso Ch =< $F) end, binary_to_list(H)) end, '
+              'Bcr = fun(<<"$2", _/binary>>) -> true; (_) -> false end, '
+              'Fold = fun({user_info, {_, U}, H, S, _}, {N0, U0, B0}) when is_binary(U), is_binary(H), is_binary(S) -> '
+              'case S =:= <<>> andalso not (Hex(H) orelse Bcr(H)) of true -> {N0 + 1, [U | U0], B0}; '
+              'false -> {N0, U0, B0} end; (_, {N0, U0, B0}) -> {N0, U0, B0 + 1} end, '
+              '{Nc, Uc, Bad} = ets:foldl(Fold, {0, [], 0}, emqx_authn_mnesia), '
+              'case Bad of 0 -> io:format("WOOWPLAIN:~b:~b:~s:END", [length([A || A <- Other, Pl(A)]), Nc, '
+              'lists:join(",", [base64:encode(Ux) || Ux <- lists:sublist(lists:sort(Uc), 10)])]); '
+              '_ -> io:format("WOOWPLAIN:bad:END") end.')
 
 
 # ====================================================================== the add-on member
@@ -380,6 +414,8 @@ HASH_ROW = (r'\{\s*(true|false)\s*,\s*([a-z][a-z0-9_]{0,31})\s*,\s*([a-z][a-z_]{
 HASH_ANSWER = re.compile(r'\s*\[\s*(?:' + HASH_ROW + r'(?:\s*,\s*' + HASH_ROW + r')*)?\s*\]\s*')
 USERS_ANSWER = re.compile(r'\s*WOOWUSERS:([0-9]{1,9}):((?:[A-Za-z0-9+/]{1,87384}={0,2})'
                           r'(?:,[A-Za-z0-9+/]{1,87384}={0,2}){0,9})?:END(?:ok)?\s*')
+PLAIN_ANSWER = re.compile(r'\s*WOOWPLAIN:([0-9]{1,9}):([0-9]{1,9}):((?:[A-Za-z0-9+/]{1,87384}={0,2})'
+                          r'(?:,[A-Za-z0-9+/]{1,87384}={0,2}){0,9})?:END(?:ok)?\s*')
 
 
 def parse_hashing(text):
@@ -416,6 +452,24 @@ def parse_users(text):
     if len(names) != min(count, 10):
         raise ValueError('unreadable users')
     return count, names
+
+
+def parse_plain(text):
+    """PLAIN_EXPR's answer: {'elsewhere': `plain` built-in password databases outside the global chain, 'clear': rows
+    stored in clear text, 'names': the first ten of their user ids as text}. Anything else -- a row of an unknown shape
+    (`bad`), a cut, a count that does not match the names -- raises ValueError: the callers refuse (SR-5)."""
+    match = PLAIN_ANSWER.fullmatch(text or '')
+    if not match:
+        raise ValueError('unreadable plain answer')
+    clear = int(match.group(2))
+    try:
+        names = [base64.b64decode(item, validate=True).decode('utf-8', 'replace')
+                 for item in (match.group(3).split(',') if match.group(3) else [])]
+    except (ValueError, TypeError):
+        raise ValueError('unreadable plain answer') from None
+    if len(names) != min(clear, 10):
+        raise ValueError('unreadable plain answer')
+    return {'elsewhere': int(match.group(1)), 'clear': clear, 'names': names}
 
 
 def ha_broker(work, tmp, target, src, node, *, out_dir=None):
@@ -468,10 +522,12 @@ def ha_broker(work, tmp, target, src, node, *, out_dir=None):
         raise BackupError('incompatible', f'HA 的 EMQX 內建資料庫沒有完整載入（缺少 {hacommon.names(missing)}）。' + hint)
     try:   # SR-5: HA's `plain` is refused and a different hashing is named (hash_change); never guessed
         readings['hashing'] = parse_hashing(evaluate(tmp, 'emqx-ha', HASH_EXPR))
+        readings['plain'] = parse_plain(evaluate(tmp, 'emqx-ha', PLAIN_EXPR))   # listeners, gateways, old rows
     except ValueError:
         raise BackupError('incompatible', HASH_UNREADABLE.format(side='HA 的') + hint) from None
-    if out_dir is not None and plain_blocker(readings):   # the conversion never exports HA's clear-text passwords
-        raise BackupError('incompatible', f'EMQX 不能搬過來：{PLAIN_REFUSED}')
+    blocker = plain_blocker(readings)
+    if out_dir is not None and blocker:   # the conversion never exports HA's clear-text passwords
+        raise BackupError('incompatible', f'EMQX 不能搬過來：{blocker}')
     assert_system_ticker(tmp, 'emqx-ha', ticker_pid)
     if out_dir is not None:
         roots = [root for root in DATA_ROOTS if root in readings['roots']]
@@ -1772,15 +1828,37 @@ RESET_HOW = ('到這台 EMQX 管理頁「存取控制 → 認證」的內建資�
 ACCOUNTS_STOP = ('HA 的 EMQX 保存 MQTT 密碼的方式（{ha}）和這台（{mine}）不同，匯入後以 HA 的為準：這台現有的 MQTT 帳號'
                  '（{names}）匯入後無法再用原本的密碼登入，要在匯入後重新設定：' + RESET_HOW)
 HASH_UNREADABLE = '無法讀取{side} EMQX 帳號驗證設定（MQTT 密碼的雜湊方式），已停止。'
+# Security re-review 2026-11-24 (iteration 7, PLAIN_EXPR): the owner's refusal of `plain` (option C: 「不會留下明文密碼」)
+# also covers a `plain` built-in password database of an MQTT listener or a gateway, and rows HA's EMQX still keeps in
+# clear text (written under `plain` before HA changed the algorithm and never set again).
+PLAIN_ELSEWHERE = ('HA 的 EMQX 在 MQTT 監聽器或閘道（gateway）的內建資料庫認證用「plain」（不加密）的方式保存 MQTT 帳號的密碼，'
+                   '搬過來會把明文密碼留在這台，所以不能匯入。請先在 HA 的 EMQX 把這些認證的密碼雜湊方式改成 plain 以外的方式，'
+                   '再替這些帳號重新設定一次密碼（或刪除這些認證和帳號），然後重新製作 HA 備份再匯入。')
+CLEAR_ROWS = ('HA 的 EMQX 內建資料庫裡有 MQTT 帳號的密碼仍以明文保存（{names}；在改用其他雜湊方式之前用「plain」設定、之後沒有重新設定），'
+              '搬過來會把明文密碼留在這台，所以不能匯入。請先在 HA 的 EMQX 替這些帳號重新設定一次密碼（或刪除不用的帳號），'
+              '然後重新製作 HA 備份再匯入。')
 # pbkdf2 without `dk_length` derives the MAC's own length (emqx_passwd.erl:140-141, 153-158).
 PBKDF2_DK = {'sha': 20, 'sha224': 28, 'sha256': 32, 'sha384': 48, 'sha512': 64}
 SALT_TEXT = {'prefix': '，鹽在前', 'suffix': '，鹽在後', 'disable': '，不加鹽'}
 
 
 def plain_blocker(readings):
-    """PLAIN_REFUSED when HA's built-in password database hashes with `plain`, else None."""
-    hashing = (readings or {}).get('hashing')
-    return PLAIN_REFUSED if hashing is not None and hashing['name'] == 'plain' else None
+    """The refusal when HA's EMQX keeps MQTT passwords in clear text, else None: its global built-in password database
+    hashes with `plain` (PLAIN_REFUSED), one of an MQTT listener or a gateway does (PLAIN_ELSEWHERE), or rows are still
+    stored in clear text (CLEAR_ROWS, naming them through hacommon.names)."""
+    readings = readings or {}
+    hashing = readings.get('hashing')
+    if hashing is not None and hashing['name'] == 'plain':
+        return PLAIN_REFUSED
+    plain = readings.get('plain') or {}
+    if plain.get('elsewhere'):
+        return PLAIN_ELSEWHERE
+    if plain.get('clear'):
+        names = hacommon.names(plain['names'][:10], 10)
+        if plain['clear'] > 10:
+            names += f' 等 {plain["clear"]} 個'
+        return CLEAR_ROWS.format(names=names)
+    return None
 
 
 def rows_still_verify(mine, theirs):
