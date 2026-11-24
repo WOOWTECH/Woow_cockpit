@@ -5,8 +5,9 @@ for each (and pass on the unmodified copy). Nothing here touches Podman, a devic
 
   python3 -I tests/backup/omnigent_product_mutations.py [--json OUT] [--refusals]
 
-Prints one fixed line per mutation (`<id> <name>: caught|MISSED (<failures>/<tests>)`, the run of a mutation stops at
-its first failing test since 2026-11-24); exit 0 only when the baseline passes and every mutation is caught.
+Prints one fixed line per mutation (`<id> <name>: caught|MISSED (<failures>/<tests>) [by <the failing test>]`, the run
+of a mutation stops at its first failing test since 2026-11-24); exit 0 only when the baseline passes and every
+mutation is caught.
 `--refusals` checks instead of the list below what the module itself says no to: every `raise` and every blocker or
 problem it collects is removed, one at a time (`R<line>`), and so is every operand of an `or` that decides about one
 (`R<line>.<operand>`). An operand of REDUNDANT that no test needs is printed as `redundant`, with the reason.
@@ -234,7 +235,8 @@ def run_tests(root, *options):
     ran = next((int(m.group(1)) for line in tail if (m := re.match(r'Ran (\d+) tests?', line))), 0)
     last = tail[-1] if tail else ''
     failures = sum(int(n) for n in re.findall(r'(?:failures|errors)=(\d+)', last))
-    return proc.returncode, ran, failures
+    failed = [m.group(1) for line in tail if (m := re.match(r'(?:FAIL|ERROR): (\w+)', line))]
+    return proc.returncode, ran, failures, list(dict.fromkeys(failed))
 
 
 def main(argv):
@@ -258,8 +260,8 @@ def main(argv):
             else:
                 shutil.copy2(item, root / item.name)
         engine = root / 'backup-engine'
-        rc, ran, failures = run_tests(root)
-        baseline = {'returncode': rc, 'tests': ran, 'failures': failures}
+        rc, ran, failures, failed = run_tests(root)
+        baseline = {'returncode': rc, 'tests': ran, 'failures': failures, 'failed': failed}
         print(f'baseline: {"pass" if rc == 0 else "FAIL"} ({failures}/{ran})', flush=True)
         for ident, name, *change in refusals(source) if args.refusals else MUTATIONS:
             module = change[3] if len(change) > 3 else MODULE
@@ -276,14 +278,16 @@ def main(argv):
                     continue
             (engine / module).write_text(mutated, encoding='utf-8')
             try:
-                rc, ran, failures = run_tests(root, '--failfast')
+                rc, ran, failures, failed = run_tests(root, '--failfast')
             finally:
                 (engine / module).write_text(original, encoding='utf-8')
             caught = rc != 0 and failures > 0
             results.append({'id': ident, 'protection': name, 'module': module, 'applied': True, 'caught': caught,
-                            'failures': failures, 'tests': ran, **({'redundant': why} if why and not caught else {})})
+                            'failures': failures, 'tests': ran, 'failed': failed,
+                            **({'redundant': why} if why and not caught else {})})
             verdict = 'caught' if caught else f'redundant, {why}' if why else 'MISSED'
-            print(f'{ident} {name}: {verdict} ({failures}/{ran})', flush=True)
+            by = f' by {failed[0]}' if failed else ''
+            print(f'{ident} {name}: {verdict} ({failures}/{ran}){by}', flush=True)
     ok = baseline['returncode'] == 0 and all(
         r.get('applied') and (r.get('caught') or r.get('redundant')) for r in results)
     summary = {'what': 'every refusal of the module' if args.refusals else 'the list MUTATIONS', 'module': MODULE,
