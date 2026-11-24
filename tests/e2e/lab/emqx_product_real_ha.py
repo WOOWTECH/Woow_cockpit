@@ -38,6 +38,10 @@ Steps (run in the order given):
                Dashboard; the import itself never adds a source). Then: ha-check (ok), ha-convert (the real space check), inspect,
                restore (its readback must pass), the client probe after the restore, `systemctl --user restart
                emqx.service` and the probe again; the imported state is recorded for:
+               Before that restore the FIRST import attempt is made to fail twice from this device's own state (arm-cold,
+               x86-cold and x86-fileonly; asked for on 2026-11-24): a one-shot start failure, then a one-shot change of the
+               restored data that the readback must name; each time the restore must roll back by itself and exactly this
+               device's own state must be back (digest, markers, its own users; HA's admin and MQTT users refused)
   import:x86-fileonly:file | import:x86-noacl:file
                decision C's other half, the usual customer case: a backup WITHOUT ACL rows on dev-d's own target (the
                ACL file only, nothing added) is imported: the same chain as builtin (check ok, real conversion,
@@ -132,6 +136,19 @@ UNIT = 'emqx.service'
 DROPDIR = '.config/systemd/user/emqx.service.d'
 DROPIN = DROPDIR + '/woowbk-emqx-product-fail-once.conf'
 MARKER = '.config/emqx-woowbk-fail-once'
+# The one-shot start failure also records, at the moment the unit fails, whether the data volume holds HA's data (HA's
+# rule in the restored cluster.hocon): a restore that changed nothing could otherwise look like one that rolled back.
+FAIL_SCRIPT = '.config/emqx-woowbk-fail.sh'
+FAIL_SEEN = '.config/emqx-woowbk-fail-seen'
+FAIL_ONCE = (b'#!/bin/sh\n'
+             b'm="$HOME/.config/emqx-woowbk-fail-once"\n'
+             b'[ -f "$m" ] || exit 0\n'
+             b'rm -f "$m"\n'
+             b'd=$(podman volume inspect woow_emqx_data --format "{{.Mountpoint}}")\n'
+             b'podman unshare grep -c b1_rule_republish "$d/configs/cluster.hocon" '
+             b'> "$HOME/.config/emqx-woowbk-fail-seen" 2>/dev/null\n'
+             b'exit 1\n')
+FAIL_FILES = (DROPIN, FAIL_SCRIPT, MARKER, FAIL_SEEN)
 # The readback under test: a one-shot ExecStartPre that changes the RESTORED data right before the broker starts (one
 # HOCON line appended to the restored configs/cluster.hocon), so the restored broker no longer equals what the
 # conversion verified; the restore must name it and roll back by itself. Not log.console.level: dev-d's EnvironmentFile
@@ -146,7 +163,14 @@ TAMPER = (b'#!/bin/sh\n'
           b'd=$(podman volume inspect woow_emqx_data --format "{{.Mountpoint}}") || exit 0\n'
           b'podman unshare sh -c "printf \'\\nlog.console.formatter = json\\n\' >> \'$d/configs/cluster.hocon\'"\n'
           b'exit 0\n')
+TAMPER_FILES = (TAMPER_DROPIN, TAMPER_SCRIPT, TAMPER_MARKER)
 READBACK_LOG = 'EMQX 還原後核對一致'
+# Only the tampered root may differ: every other configuration root and every table of the running broker equals what the
+# conversion verified, i.e. HA's data really ran (compare_readback names each differing root and table).
+READBACK_DIFF = 'EMQX 還原後的設定（log）和轉換時核對的不同'
+# The imports whose FIRST attempt is made to fail from this device's own state (the third lab-made variant repeats the
+# second one's target).
+FIRST_ROUNDS = ('arm-cold', 'x86-cold', 'x86-fileonly')
 # OWNER DECISION 2026-11-23 「C」, the owner's text verbatim (independent of the product constant on purpose).
 OWNER_ACL_TEXT = ('Podman 上的 EMQX 沒有開啟『內建資料庫』權限，HA 的裝置權限搬過去不會生效，裝置會被拒絕。'
                   '請先在 Podman EMQX 的管理頁「存取控制 → 授權」新增「內建資料庫」（排在檔案規則之後），再匯入。')
@@ -438,6 +462,18 @@ try:
     out["config_roots"] = len(doc)
 except (ValueError, TypeError):
     out["config_sha256"] = None
+if REQ.get("own_mqtt"):
+    own = {}
+    for user, password in REQ["own_mqtt"]:
+        s, rc = connect("woowbk-own-" + user, user, password)
+        own["ha_" + user] = rc
+        if s:
+            close(s)
+    s, rc = connect("woowbk-own-bootstrap", "woow", secret("woow-emqx-mqtt-password"))
+    own["bootstrap_woow"] = rc
+    if s:
+        close(s)
+    out["own_mqtt"] = own
 if REQ.get("mqtt"):
     users = REQ["mqtt"]
     mq = {}
@@ -694,7 +730,7 @@ def ha_key(args, tag):
     return args.secrets['HA_BACKUP_KEY'] if drv.UPLOADS[tag][2] else None
 
 
-def probe_request(args, mode, tag=None, *, authz_add=False):
+def probe_request(args, mode, tag=None, *, authz_add=False, own_mqtt=False):
     s = args.secrets
     request = {'mode': mode, 'ha_admin_password': s['B1_EMQX_ADMIN_PW'], 'user2': s['B1_EMQX_USER2'],
                'user2_password': s['B1_EMQX_USER2_PW'], 'authz_add': authz_add}
@@ -702,13 +738,17 @@ def probe_request(args, mode, tag=None, *, authz_add=False):
         prefix = 'B1_ARM' if machine_of(tag) == 'arm' else 'B1_X86'
         request.update(mqtt=[[s[f'B1_MQTT_USER{i}'], s[f'B1_MQTT_PW{i}']] for i in (1, 2, 3)],
                        api_key=s[f'{prefix}_EMQX_API_KEY'], api_secret=s[f'{prefix}_EMQX_API_SECRET'])
+    if own_mqtt:
+        request['own_mqtt'] = [[s[f'B1_MQTT_USER{i}'], s[f'B1_MQTT_PW{i}']] for i in (1, 2, 3)]
     return request
 
 
-def run_probe(ev, args, label_text, mode, tag=None, *, authz_add=False):
-    probe = drv.event_device_python(PROBE, probe_request(args, mode, tag, authz_add=authz_add), args.secrets,
-                                    [('/api/v5/login', ('token',), False)] * 3, timeout=900)
+def run_probe(ev, args, label_text, mode, tag=None, *, authz_add=False, own_mqtt=False):
+    probe = drv.event_device_python(PROBE, probe_request(args, mode, tag, authz_add=authz_add, own_mqtt=own_mqtt),
+                                    args.secrets, [('/api/v5/login', ('token',), False)] * 3, timeout=900)
     ev.save(f'probe-{slug(label_text)}-{int(time.time())}.json', probe)
+    # Every successful login issued one token: the leak scan of this run must look for that many (step leaks).
+    args.logins = getattr(args, 'logins', 0) + sum(1 for code in (probe.get('login') or {}).values() if code == 200)
     return probe
 
 
@@ -883,49 +923,43 @@ def stat_owner(paths):
     return json.loads(drv.out(proc).strip().splitlines()[-1])
 
 
-def arm_fail_once():
-    """A one-shot ExecStartPre failure of emqx.service: the next start of the unit fails once (and removes the marker)."""
-    exists = stat_owner([DROPDIR, DROPIN, MARKER])
-    if exists[DROPIN] or exists[MARKER]:
-        raise Failed('a fail-once drop-in or marker already exists')
-    text = ('[Service]\nExecStartPre=/bin/sh -c \'if test -f %h/' + MARKER + '; then rm -f %h/' + MARKER +
-            '; exit 1; fi\'\n')
-    script = ('import os, sys\nhome = os.path.expanduser("~")\n'
-              f'os.makedirs(os.path.join(home, {DROPDIR!r}), mode=0o700, exist_ok=True)\n'
-              f'with open(os.path.join(home, {DROPIN!r}), "x") as h:\n    h.write(sys.stdin.read())\n'
-              f'with open(os.path.join(home, {MARKER!r}), "x") as h:\n    h.write("fail once\\n")\n')
-    proc = drv.run([drv.LP, 'exec', '-i', drv.DEVICE, drv.OWNER, 'python3', '-I', '-c', script],
-                   input=text.encode(), timeout=120)
+def arm(files, script, dropin, marker_text):
+    """A one-shot ExecStartPre of emqx.service: [drop-in, script, marker] written, never over an existing one. Returns
+    whether the drop-in folder existed."""
+    exists = stat_owner([DROPDIR, *files])
+    if any(exists[path] for path in files):
+        raise Failed('a drop-in, script, marker or record of an earlier round exists')
+    dropin_path, script_path, marker_path = files[:3]
+    request = {'script': script.decode(), 'dropin': dropin, 'marker': marker_text}
+    program = ('import json, os, sys\nhome = os.path.expanduser("~")\nreq = json.loads(sys.stdin.read())\n'
+               f'os.makedirs(os.path.join(home, {DROPDIR!r}), mode=0o700, exist_ok=True)\n'
+               f'fd = os.open(os.path.join(home, {script_path!r}), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o700)\n'
+               'os.write(fd, req["script"].encode()); os.close(fd)\n'
+               f'with open(os.path.join(home, {dropin_path!r}), "x") as h:\n    h.write(req["dropin"])\n'
+               f'with open(os.path.join(home, {marker_path!r}), "x") as h:\n    h.write(req["marker"])\n')
+    proc = drv.run([drv.LP, 'exec', '-i', drv.DEVICE, drv.OWNER, 'python3', '-I', '-c', program],
+                   input=json.dumps(request).encode(), timeout=120)
     if proc.returncode != 0:
-        raise Failed('cannot write the fail-once drop-in')
+        raise Failed('cannot write the one-shot drop-in')
     if drv.owner('systemctl', '--user', 'daemon-reload', timeout=120).returncode != 0:
         raise Failed('daemon-reload after the drop-in failed')
     return exists[DROPDIR]
 
 
+def arm_fail_once():
+    """The next start of emqx.service fails once (and records what the data volume held)."""
+    return arm(FAIL_FILES, FAIL_ONCE, '[Service]\nExecStartPre=/bin/sh %h/' + FAIL_SCRIPT + '\n', 'fail once\n')
+
+
 def arm_tamper_once():
-    exists = stat_owner([DROPDIR, TAMPER_DROPIN, TAMPER_SCRIPT, TAMPER_MARKER])
-    if exists[TAMPER_DROPIN] or exists[TAMPER_SCRIPT] or exists[TAMPER_MARKER]:
-        raise Failed('a tamper drop-in, script or marker already exists')
-    request = {'script': TAMPER.decode(), 'dropin': '[Service]\nExecStartPre=/bin/sh %h/' + TAMPER_SCRIPT + '\n'}
-    script = ('import json, os, sys\nhome = os.path.expanduser("~")\nreq = json.loads(sys.stdin.read())\n'
-              f'os.makedirs(os.path.join(home, {DROPDIR!r}), mode=0o700, exist_ok=True)\n'
-              f'fd = os.open(os.path.join(home, {TAMPER_SCRIPT!r}), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o700)\n'
-              'os.write(fd, req["script"].encode()); os.close(fd)\n'
-              f'with open(os.path.join(home, {TAMPER_DROPIN!r}), "x") as h:\n    h.write(req["dropin"])\n'
-              f'with open(os.path.join(home, {TAMPER_MARKER!r}), "x") as h:\n    h.write("tamper once\\n")\n')
-    proc = drv.run([drv.LP, 'exec', '-i', drv.DEVICE, drv.OWNER, 'python3', '-I', '-c', script],
-                   input=json.dumps(request).encode(), timeout=120)
-    if proc.returncode != 0:
-        raise Failed('cannot write the tamper drop-in')
-    if drv.owner('systemctl', '--user', 'daemon-reload', timeout=120).returncode != 0:
-        raise Failed('daemon-reload after the tamper drop-in failed')
-    return exists[DROPDIR]
+    """The next start of emqx.service appends one HOCON line to the restored cluster.hocon first."""
+    return arm(TAMPER_FILES, TAMPER, '[Service]\nExecStartPre=/bin/sh %h/' + TAMPER_SCRIPT + '\n', 'tamper once\n')
 
 
-def disarm_tamper(dir_existed):
+def disarm(files, dir_existed):
+    """The round's files are removed (and the drop-in folder when the round made it); what was found, per file."""
     script = ('import os, json\nhome = os.path.expanduser("~")\nout = {}\n'
-              f'for p in ({TAMPER_DROPIN!r}, {TAMPER_SCRIPT!r}, {TAMPER_MARKER!r}):\n'
+              f'for p in {tuple(files)!r}:\n'
               '    try:\n        os.remove(os.path.join(home, p)); out[p] = "removed"\n'
               '    except FileNotFoundError:\n        out[p] = "absent"\n'
               + ('' if dir_existed else
@@ -940,21 +974,77 @@ def disarm_tamper(dir_existed):
         return {'error': 'disarm output unreadable'}
 
 
-def disarm_fail_once(dir_existed):
-    script = ('import os, json\nhome = os.path.expanduser("~")\nout = {}\n'
-              f'for p in ({DROPIN!r}, {MARKER!r}):\n'
-              '    try:\n        os.remove(os.path.join(home, p)); out[p] = "removed"\n'
-              '    except FileNotFoundError:\n        out[p] = "absent"\n'
-              + ('' if dir_existed else
-                 f'try:\n    os.rmdir(os.path.join(home, {DROPDIR!r})); out["dir"] = "removed"\n'
-                 'except OSError:\n    out["dir"] = "kept"\n') +
-              'print(json.dumps(out))\n')
-    proc = drv.run([drv.LP, 'exec', '-i', drv.DEVICE, drv.OWNER, 'python3', '-I', '-c', script], timeout=120)
-    drv.owner('systemctl', '--user', 'daemon-reload', timeout=120)
+def disarmed(ev, label_text, what, files, dir_existed):
+    """The drop-in of a round is gone: removed by this step (the drop-in and its script were there) and read back."""
+    removed = disarm(files, dir_existed)
+    left = stat_owner(files)
+    ev.check(f'{label_text}: the {what} drop-in, script and marker are removed again (read back: nothing left)',
+             removed.get(files[0]) == 'removed' and removed.get(files[1]) == 'removed' and not any(left.values()),
+             {'removed': removed, 'left': [path for path, there in left.items() if there]})
+
+
+def start_failure_round(ev, label_text, converted, name):
+    """A restore of `converted` whose broker fails to start once: it must roll back by itself. The failing start itself
+    records whether the data volume held HA's data at that moment (the restore had really replaced the data)."""
+    dir_existed = arm_fail_once()
     try:
-        return json.loads(drv.out(proc).strip().splitlines()[-1])
-    except (ValueError, IndexError):
-        return {'error': 'disarm output unreadable'}
+        job, _log, took = restore_with(ev, converted, name)
+        error, result = job.get('error') or {}, job.get('result') or {}
+        left = stat_owner([MARKER])
+        ev.check(f'{label_text}: a restore whose EMQX fails to start rolls back by itself (job rolled-back, '
+                 'result rolled_back, the one-shot failure consumed)',
+                 job['state'] == 'rolled-back' and result.get('rolled_back') is True and not left[MARKER],
+                 {'state': job['state'], 'code': error.get('code') if isinstance(error, dict) else None,
+                  'rolled_back': result.get('rolled_back'), 'marker_left': left[MARKER], 'took_s': round(took, 1)})
+        seen = drv.out(drv.owner('sh', '-c', f'cat "$HOME/{FAIL_SEEN}"', timeout=60)).strip()
+        ev.check(f'{label_text}: when that start failed the data volume held HA\'s data (HA\'s rule in the restored '
+                 'cluster.hocon)', seen.isdigit() and int(seen) > 0, {'rule_lines': seen[:20]})
+    finally:
+        disarmed(ev, label_text, 'fail-once', FAIL_FILES, dir_existed)
+
+
+def readback_round(ev, label_text, converted, name):
+    """A restore of `converted` whose restored data is changed right before the start (one HOCON line): the readback must
+    name it (and nothing else) and the restore must roll back by itself."""
+    dir_existed = arm_tamper_once()
+    try:
+        job, log, took = restore_with(ev, converted, name)
+        error, result = job.get('error') or {}, job.get('result') or {}
+        left = stat_owner([TAMPER_MARKER])
+        message = (error.get('message') if isinstance(error, dict) else '') or ''
+        ev.check(f'{label_text}: a restored broker that differs from what the conversion verified fails the '
+                 'readback, named (設定（log）), and the restore rolls back by itself',
+                 job['state'] == 'rolled-back' and result.get('rolled_back') is True and not left[TAMPER_MARKER]
+                 and '設定（log）' in message and not job_log_has(log, READBACK_LOG),
+                 {'state': job['state'], 'code': error.get('code') if isinstance(error, dict) else None,
+                  'message': message, 'rolled_back': result.get('rolled_back'), 'took_s': round(took, 1)})
+        ev.check(f'{label_text}: the readback named ONLY the changed setting (every other setting and every table of the '
+                 'running broker were the converted ones: HA\'s data really ran)', message.startswith(READBACK_DIFF),
+                 {'message': message})
+    finally:
+        disarmed(ev, label_text, 'tamper', TAMPER_FILES, dir_existed)
+
+
+def own_state(ev, args, label_text, own, mode):
+    """This device's OWN state is back: digest, markers, its own users and authorization; nothing of HA."""
+    probe = run_probe(ev, args, label_text, 'base', own_mqtt=True)
+    base_checks(ev, label_text, probe, mode)
+    logins = probe.get('own_mqtt') or {}
+    refused = {k: v for k, v in logins.items() if k.startswith('ha_')}
+    ev.check(f'{label_text}: MQTT: this device\'s bootstrap user logs in, HA\'s three users are refused',
+             logins.get('bootstrap_woow') == 0 and len(refused) == 3 and all(v not in (0, None) for v in refused.values()),
+             logins)
+    markers(ev, label_text)
+    ev.check(f'{label_text}: EMQX state digest equals this device\'s own state right before that restore',
+             digest(probe) == own, {'differs': diff_digest(digest(probe), own)})
+
+
+def first_import_rounds(ev, args, label_text, converted, tag, mode, own):
+    """The FIRST import attempt fails, from this device's own state (nothing of HA was ever restored here): a one-shot
+    start failure, then a one-shot change the readback names. Each must bring exactly the own state back."""
+    for what, failing in (('start failure', start_failure_round), ('readback', readback_round)):
+        failing(ev, f'{label_text}: FIRST import attempt ({what})', converted, f'first-{what.split()[0]}-{tag}-{mode}')
+        own_state(ev, args, f'{label_text} after the failed first attempt ({what})', own, mode)
 
 
 def bind_store(ev):
@@ -1105,17 +1195,19 @@ def step_setup(ev, args):
     state = next((a for a in status.get('apps') or [] if a['id'] == 'emqx'), {})
     ev.check('setup: status: emqx running, no problems', state.get('state') == 'running' and not state.get('problems'),
              {k: state.get(k) for k in ('state', 'problems')})
-    leftovers = stat_owner([DROPIN, MARKER, TAMPER_DROPIN, TAMPER_SCRIPT, TAMPER_MARKER])
+    leftovers = stat_owner([*FAIL_FILES, *TAMPER_FILES])
     ev.check('setup: no fail-once or tamper drop-in, script or marker of an earlier run', not any(leftovers.values()),
              leftovers)
 
 
-def base_checks(ev, label_text, probe):
+def base_checks(ev, label_text, probe, mode='file'):
     login = probe.get('login') or {}
     ev.check(f'{label_text}: this device\'s admin logs in; HA\'s admin password does not', login.get('device_admin') == 200
              and login.get('ha_admin') == 401, login)
-    ev.check(f'{label_text}: authorization is this device\'s own (file ACL only, no_match deny)',
-             probe.get('authz_sources') == [['file', True]] and probe.get('authz_settings') ==
+    sources = [['file', True]] + ([['built_in_database', True]] if mode == 'builtin' else [])
+    ev.check(f'{label_text}: authorization is this device\'s own '
+             f'({"file ACL + the added built-in database" if mode == "builtin" else "file ACL only"}, no_match deny)',
+             probe.get('authz_sources') == sources and probe.get('authz_settings') ==
              {'no_match': 'deny', 'deny_action': 'ignore'} and probe.get('file_acl_readback_equal') is True,
              {k: probe.get(k) for k in ('authz_sources', 'authz_settings', 'file_acl_readback_equal')})
     names = {u[0] for u in probe.get('mqtt_users') or []}
@@ -1254,6 +1346,7 @@ def step_import(ev, args, tag, mode):
             manual_baseline(ev, args, label_text, False)   # never expected: bring the baseline back
         return
     draft_installed(ev, label_text)
+    own_expected = digest(pre)
     changed = False     # dev-d's EMQX may differ from the baseline: the finally block restores B0 ...
     kept = False        # ... unless the imported state was recorded for the rollback step (step_rollback)
     try:
@@ -1267,6 +1360,7 @@ def step_import(ev, args, tag, mode):
                             {'add': added.get('authz_add'), 'move': added.get('authz_move'),
                              'sources': added.get('authz_sources')}):
                 raise Failed('the builtin source could not be added')
+            own_expected = digest(added)
         if check_one(ev, args, tag, mode=mode) is None:
             raise Failed('the check job failed')
         before_ids = {b['id'] for b in drv.ok('list', ev=ev)['backups']}
@@ -1299,7 +1393,17 @@ def step_import(ev, args, tag, mode):
                                                              for a in pre_flight.get('apps') or []),
                  failed[:3] or [(a.get('id'), a.get('mode'), (a.get('settings') or {}).get('state'))
                                 for a in pre_flight.get('apps') or []])
+        own = digest(run_probe(ev, args, f'{label_text} before the first restore', 'base'))
+        ev.check(f'{label_text}: the check and the conversion changed nothing on this device (state digest equal)',
+                 own == own_expected, {'differs': diff_digest(own, own_expected)})
         changed = True
+        if tag in FIRST_ROUNDS:
+            if mode == 'builtin':
+                # A source added at runtime gets the schema's defaults at the next boot (attempt-05): the own state that
+                # must come back is the booted one. The conversion above saw the device as it was changed at runtime.
+                restart_emqx(ev, f'{label_text} (this device\'s own state)')
+                own = digest(run_probe(ev, args, f'{label_text} own state after a restart', 'base'))
+            first_import_rounds(ev, args, label_text, converted, tag, mode, own)
         rjob, rlog, rtook = restore_with(ev, converted, f'restore-{tag}-{mode}')
         rresult = rjob.get('result') or {}
         safety = rresult.get('safety_backup_id')
@@ -1354,41 +1458,14 @@ def step_rollback(ev, args, tag):
                         {'differs': diff_digest(stable(restarted), imported['stable'])}):
             raise Failed('the imported state changed between the lock holds')
         # AUTOMATIC rollback: the same converted backup again, a one-shot start failure armed right before it.
-        dir_existed = arm_fail_once()
-        try:
-            fjob, _flog, ftook = restore_with(ev, converted, f'autorollback-{tag}-{mode}')
-            error = fjob.get('error') or {}
-            fresult = fjob.get('result') or {}
-            left = stat_owner([MARKER])
-            ev.check(f'{label_text}: a restore whose EMQX fails to start rolls back by itself (job rolled-back, '
-                     'result rolled_back, the one-shot failure consumed)',
-                     fjob['state'] == 'rolled-back' and fresult.get('rolled_back') is True and not left[MARKER],
-                     {'state': fjob['state'], 'code': error.get('code') if isinstance(error, dict) else None,
-                      'rolled_back': fresult.get('rolled_back'), 'marker_left': left[MARKER],
-                      'took_s': round(ftook, 1)})
-        finally:
-            ev.check(f'{label_text}: the fail-once drop-in is removed again', True, disarm_fail_once(dir_existed))
+        start_failure_round(ev, label_text, converted, f'autorollback-{tag}-{mode}')
         rolled = run_probe(ev, args, f'{label_text} after automatic rollback', mode, tag)
         check_imported(ev, f'{label_text} after automatic rollback', rolled, src, mode, tag)
         ev.check(f'{label_text} after automatic rollback: the state equals the one before that restore',
                  stable(rolled) == stable(restarted), {'differs': diff_digest(stable(rolled), stable(restarted))})
         # THE READBACK: the restored data changed right before the start (one HOCON line); the restore must name the
         # differing root and roll back by itself.
-        dir_existed = arm_tamper_once()
-        try:
-            tjob, tlog, ttook = restore_with(ev, converted, f'readback-{tag}-{mode}')
-            error = tjob.get('error') or {}
-            tresult = tjob.get('result') or {}
-            left = stat_owner([TAMPER_MARKER])
-            message = error.get('message') if isinstance(error, dict) else ''
-            ev.check(f'{label_text}: a restored broker that differs from what the conversion verified fails the '
-                     'readback, named (設定（log）), and the restore rolls back by itself',
-                     tjob['state'] == 'rolled-back' and tresult.get('rolled_back') is True and not left[TAMPER_MARKER]
-                     and '設定（log）' in (message or '') and not job_log_has(tlog, READBACK_LOG),
-                     {'state': tjob['state'], 'code': error.get('code') if isinstance(error, dict) else None,
-                      'message': message, 'rolled_back': tresult.get('rolled_back'), 'took_s': round(ttook, 1)})
-        finally:
-            ev.check(f'{label_text}: the tamper drop-in is removed again', True, disarm_tamper(dir_existed))
+        readback_round(ev, label_text, converted, f'readback-{tag}-{mode}')
         tampered = run_probe(ev, args, f'{label_text} after the readback rollback', mode, tag)
         check_imported(ev, f'{label_text} after the readback rollback', tampered, src, mode, tag)
         ev.check(f'{label_text} after the readback rollback: the state equals the one before that restore',
@@ -1457,7 +1534,7 @@ def step_cleanup(ev, args):
     ev.check('cleanup: the test\'s converted and safety backups are deleted (B0 and dev-d\'s own backups stay)',
              not refused and BASELINE in left and (not b0 or b0 in left) and not (left & set(deleted)),
              {'deleted': len(deleted), 'refused': refused})
-    leftovers = stat_owner([DROPIN, MARKER, TAMPER_DROPIN, TAMPER_SCRIPT, TAMPER_MARKER])
+    leftovers = stat_owner([*FAIL_FILES, *TAMPER_FILES])
     ev.check('cleanup: no fail-once or tamper drop-in, script or marker left', not any(leftovers.values()), leftovers)
     names = drv.out(drv.owner('podman', 'ps', '--format', '{{.Names}}')).split()
     ev.check('cleanup: woow-emqx and woow-emqx-entrance run, no job container exists',
@@ -1639,8 +1716,9 @@ def step_leaks(ev, args):
         raise Failed('a lane secret is missing from the readers')
     issued = {k: v for k, v in args.secrets.values.items() if k.startswith('ISSUED_TOKEN_') and v}
     request['secrets'].update(issued)
-    ev.check(f'leaks: every Dashboard token issued to this run\'s probes ({len(issued)}) is in the scan', True,
-             {'issued_values': len(issued)})
+    logins = getattr(args, 'logins', 0)
+    ev.check(f'leaks: every Dashboard token issued to this run\'s probes ({len(issued)}) is in the scan (one per successful '
+             'login)', len(issued) == logins, {'issued_values': len(issued), 'successful_logins': logins})
     report = drv.device_python(LEAK_SCAN, request, as_owner=False, timeout=900)
     host = drv.scan_host_evidence(ev.dir, args.secrets)
     ev.save('leaks.json', {'device': report, 'host': host})
@@ -1710,7 +1788,7 @@ def parse_step(name):
 # load ~50, the slowest rollback rounds 723 s; refined after each attempt):
 # a step only starts when the hold so far plus its estimate stays within HOLD_LIMIT.
 HOLD_LIMIT = 40 * 60
-ESTIMATE = {'setup': 6, 'before': 6, 'check': 12, 'check-hot': 12, 'import:file': 15, 'import:builtin': 22,
+ESTIMATE = {'setup': 6, 'before': 6, 'check': 12, 'check-hot': 12, 'import:file': 15, 'import:builtin': 22, 'import:first': 28,
             'rollback': 24, 'suggest-health': 10, 'catalog-draft': 3, 'catalog-own': 2, 'cleanup': 4, 'cleanup-baseline': 2, 'reclaim': 3, 'leaks': 4}
 
 
@@ -1718,6 +1796,8 @@ def estimate(name):
     kind, tag, mode = parse_step(name)
     if kind == 'import':
         kind = 'import:builtin' if tag in LAB_MADE else f'import:{mode}'   # the whole chain, or the short refusal
+        if kind == 'import:builtin' and tag in FIRST_ROUNDS:
+            kind = 'import:first'
     return 60 * ESTIMATE[kind]
 
 

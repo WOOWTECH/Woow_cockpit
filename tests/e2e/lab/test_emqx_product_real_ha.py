@@ -67,6 +67,9 @@ def failed(results):
     return [name for name, ok, _detail in results if not ok]
 
 
+REAL_RUN_PROBE = real.run_probe   # before any test replaces it
+
+
 class EvaluateTests(unittest.TestCase):
     def test_a_complete_import_passes_in_both_modes(self):
         for mode in real.MODES:
@@ -154,8 +157,8 @@ class ProgramTests(unittest.TestCase):
                      'rollback:arm-cold', 'cleanup', 'cleanup-baseline', 'reclaim', 'leaks', 'import:x86-noacl:file',
                      'rollback:x86-noacl', 'import:x86-fileonly:file', 'rollback:x86-fileonly', 'suggest-health'):
             self.assertGreater(real.estimate(name), 0, name)
-        self.assertEqual(real.estimate('import:x86-noacl:file'), real.estimate('import:x86-cold:builtin'),
-                         'the lab-made backup runs the whole chain')
+        self.assertGreater(real.estimate('import:x86-noacl:file'), real.estimate('import:x86-cold:file'),
+                           'the lab-made backup runs the whole chain')
         self.assertLessEqual(real.estimate('setup') + real.estimate('import:x86-cold:builtin'), real.HOLD_LIMIT)
         self.assertLessEqual(real.estimate('setup') + real.estimate('rollback:x86-cold'), real.HOLD_LIMIT)
         self.assertLessEqual(real.HOLD_LIMIT, 40 * 60)
@@ -409,6 +412,175 @@ class DraftTests(unittest.TestCase):
     def test_without_a_draft_nothing_is_claimed(self):
         real.draft_installed(self.ev, 'import')
         self.assertEqual(self.ev.results, [])
+
+
+class RoundTests(unittest.TestCase):
+    """The failing restores: what each round checks can fail (no constant True)."""
+
+    def setUp(self):
+        from unittest import mock
+        self.ev = DecisionCTests.Ev()
+        self.job = {'state': 'rolled-back', 'result': {'rolled_back': True}, 'error': {'code': 'job-failed', 'message': 'x'}}
+        self.log, self.seen, self.left, self.removed = [], '2', set(), None
+        self.armed = []
+
+        def arm(files, script, dropin, marker_text):
+            self.armed.append((files, script, dropin))
+            return True
+
+        def disarm(files, dir_existed):
+            return self.removed if self.removed is not None else {f: 'removed' for f in files[:2]}
+
+        from types import SimpleNamespace
+        patches = (mock.patch.object(real, 'arm', arm), mock.patch.object(real, 'disarm', disarm),
+                   mock.patch.object(real, 'stat_owner', lambda paths: {p: p in self.left for p in paths}),
+                   mock.patch.object(real, 'restore_with', lambda *_a, **_k: (self.job, self.log, 1.0)),
+                   mock.patch.object(real.drv, 'owner', lambda *_a, **_k: SimpleNamespace(stdout=self.seen.encode(), returncode=0)))
+        for patch in patches:
+            patch.start()
+            self.addCleanup(patch.stop)
+
+    def failing(self, round_):
+        self.ev.results = []
+        round_(self.ev, 'x', 'backup', 'name')
+        return [name for name, ok in self.ev.results if not ok]
+
+    def test_the_start_failure_round(self):
+        self.assertEqual(self.failing(real.start_failure_round), [])
+        self.assertEqual(self.armed[0][0], real.FAIL_FILES)
+        self.assertEqual(len(self.ev.results), 3)
+        for change in ({'job': {'state': 'succeeded', 'result': {'rolled_back': False}}},
+                       {'job': dict(self.job, state='failed')}, {'left': {real.MARKER}},
+                       {'seen': '0'}, {'seen': ''}, {'removed': {f: 'absent' for f in real.FAIL_FILES}},
+                       {'removed': {'error': 'x'}}, {'left': {real.FAIL_SEEN}}, {'left': {real.DROPIN}}):
+            with self.subTest(change=change):
+                saved = {k: getattr(self, k) for k in change}
+                for key, value in change.items():
+                    setattr(self, key, value)
+                self.assertTrue(self.failing(real.start_failure_round))
+                for key, value in saved.items():
+                    setattr(self, key, value)
+
+    def test_the_readback_round(self):
+        good = {'code': 'job-failed', 'message': real.READBACK_DIFF + '，已停止；…'}
+        self.job = dict(self.job, error=good)
+        self.assertEqual(self.failing(real.readback_round), [])
+        self.assertEqual(self.armed[0][0], real.TAMPER_FILES)
+        for change in ({'job': dict(self.job, error=dict(good, message='EMQX 還原後的設定（listeners、log）和轉換時核對的不同'))},
+                       {'job': dict(self.job, error=dict(good, message='EMQX 還原後的設定（log）、內建資料庫（emqx_admin）和轉換時核對的不同'))},
+                       {'job': dict(self.job, error=dict(good, message='無法啟動服務'))},
+                       {'job': dict(self.job, state='succeeded')}, {'log': [real.READBACK_LOG]},
+                       {'left': {real.TAMPER_MARKER}}, {'removed': {f: 'absent' for f in real.TAMPER_FILES}}):
+            with self.subTest(change=change):
+                saved = {k: getattr(self, k) for k in change}
+                for key, value in change.items():
+                    setattr(self, key, value)
+                self.assertTrue(self.failing(real.readback_round))
+                for key, value in saved.items():
+                    setattr(self, key, value)
+
+    def test_the_readback_diff_text_is_the_products(self):
+        from woowbackup import ha_emqx
+        problems = ha_emqx.compare_readback({'config_roots': {'log': 'a', 'mqtt': 'b'}, 'tables': {'emqx_admin': [1, 'x']}},
+                                            {'config_roots': {'log': 'c', 'mqtt': 'b'}, 'tables': {'emqx_admin': [1, 'x']}})
+        self.assertTrue(('EMQX 還原後的' + '、'.join(problems) + '和轉換時核對的不同').startswith(real.READBACK_DIFF))
+
+    def test_the_failing_start_script(self):
+        import subprocess
+        import tempfile
+        with tempfile.TemporaryDirectory() as root:
+            home, bin_dir, volume = Path(root) / 'home', Path(root) / 'bin', Path(root) / 'volume'
+            for path in (home / '.config', bin_dir, volume / 'configs'):
+                path.mkdir(parents=True)
+            (volume / 'configs' / 'cluster.hocon').write_text('rule_engine {rules {b1_rule_republish {}}}\n')
+            (bin_dir / 'podman').write_text(f'#!/bin/sh\nif [ "$1" = volume ]; then echo {volume}; exit 0; fi\n'
+                                            '[ "$1" = unshare ] || exit 9\nshift\nexec "$@"\n')
+            (bin_dir / 'podman').chmod(0o755)
+            script = Path(root) / 'fail.sh'
+            script.write_bytes(real.FAIL_ONCE)
+
+            def run():
+                return subprocess.run(['sh', str(script)], env={'HOME': str(home), 'PATH': f'{bin_dir}:/usr/bin:/bin'},
+                                      timeout=30).returncode
+            seen = home / '.config' / 'emqx-woowbk-fail-seen'
+            self.assertEqual(run(), 0, 'without the marker the unit starts')
+            self.assertFalse(seen.exists())
+            (home / '.config' / 'emqx-woowbk-fail-once').write_text('fail once\n')
+            self.assertEqual(run(), 1)
+            self.assertEqual(seen.read_text().strip(), '1')
+            self.assertFalse((home / '.config' / 'emqx-woowbk-fail-once').exists(), 'one shot')
+            self.assertEqual(run(), 0)
+            (volume / 'configs' / 'cluster.hocon').write_text('nothing of HA\n')
+            (home / '.config' / 'emqx-woowbk-fail-once').write_text('fail once\n')
+            self.assertEqual(run(), 1)
+            self.assertEqual(seen.read_text().strip(), '0', 'the own data is told from HA\'s')
+
+
+class OwnStateTests(unittest.TestCase):
+    def setUp(self):
+        from unittest import mock
+        self.ev = DecisionCTests.Ev()
+        self.marked = True
+        self.probe = {'login': {'device_admin': 200, 'ha_admin': 401}, 'authz_sources': [['file', True]],
+                      'authz_settings': {'no_match': 'deny', 'deny_action': 'ignore'}, 'file_acl_readback_equal': True,
+                      'mqtt_users': [['woow', False]], 'rules': [], 'retained_api': {'woowbk-lab/baseline': 'h'},
+                      'api_keys': [], 'own_mqtt': {'ha_b1-sensor': 5, 'ha_b1-gateway': 5, 'ha_b1-admin': 4, 'bootstrap_woow': 0}}
+        self.requested = []
+
+        def run_probe(_ev, _args, _label, mode, tag=None, **kwargs):
+            self.requested.append((mode, kwargs))
+            return self.probe
+        patches = (mock.patch.object(real, 'run_probe', run_probe),
+                   mock.patch.object(real, 'markers', lambda ev, label_text: ev.check('markers', self.marked)))
+        for patch in patches:
+            patch.start()
+            self.addCleanup(patch.stop)
+
+    def failing(self, own=None, mode='file'):
+        self.ev.results = []
+        real.own_state(self.ev, None, 'x', real.digest(self.probe) if own is None else own, mode)
+        return [name for name, ok in self.ev.results if not ok]
+
+    def test_the_own_state_passes_and_every_part_can_fail(self):
+        self.assertEqual(self.failing(), [])
+        self.assertEqual(self.requested[0], ('base', {'own_mqtt': True}))
+        own = real.digest(self.probe)
+        for change in ({'own_mqtt': dict(self.probe['own_mqtt'], bootstrap_woow=5)},
+                       {'own_mqtt': dict(self.probe['own_mqtt'], **{'ha_b1-sensor': 0})},
+                       {'own_mqtt': dict(self.probe['own_mqtt'], **{'ha_b1-sensor': None})},
+                       {'own_mqtt': {'bootstrap_woow': 0}}, {'own_mqtt': None},
+                       {'login': {'device_admin': 401, 'ha_admin': 200}}, {'mqtt_users': [['b1-sensor', False]]},
+                       {'retained_api': {}}, {'authz_sources': [['file', True], ['built_in_database', True]]}):
+            with self.subTest(change=change):
+                saved = dict(self.probe)
+                self.probe.update(change)
+                self.assertTrue(self.failing(own))
+                self.probe = saved
+        self.marked = False
+        self.assertIn('markers', self.failing(own))
+
+    def test_the_builtin_target_keeps_its_added_source(self):
+        self.probe['authz_sources'] = [['file', True], ['built_in_database', True]]
+        self.assertEqual(self.failing(mode='builtin'), [])
+        self.assertTrue(self.failing(mode='file'))
+
+    def test_the_first_rounds_run_for_the_untouched_and_the_builtin_target(self):
+        self.assertEqual(set(real.FIRST_ROUNDS), {'arm-cold', 'x86-cold', 'x86-fileonly'})
+        self.assertEqual(real.estimate('import:x86-fileonly:file'), real.estimate('import:x86-cold:builtin'))
+        self.assertGreater(real.estimate('import:x86-cold:builtin'), real.estimate('import:x86-noacl:file'))
+        self.assertGreater(real.estimate('import:x86-cold:builtin'), real.estimate('import:x86-cold:file'))
+
+    def test_the_leak_scan_counts_one_token_per_successful_login(self):
+        from types import SimpleNamespace
+        from unittest import mock
+        args = SimpleNamespace(secrets=None)
+        answers = [{'login': {'ha_admin': 200, 'ha_user2': 200, 'device_admin': 401}}, {'login': {'device_admin': 200}}, {}]
+        with mock.patch.object(real.drv, 'event_device_python', lambda *_a, **_k: answers.pop(0)), \
+                mock.patch.object(real, 'probe_request', lambda *_a, **_k: {}):
+            self.real_run_probe = REAL_RUN_PROBE
+            for _ in range(3):
+                self.real_run_probe(self.ev, args, 'x', 'base')
+        self.assertEqual(args.logins, 3)
 
 
 if __name__ == '__main__':
