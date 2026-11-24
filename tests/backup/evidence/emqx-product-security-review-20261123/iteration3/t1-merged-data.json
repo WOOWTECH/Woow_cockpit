@@ -1,0 +1,44 @@
+{
+ "attempt": "t1-merged-data",
+ "backup_engine_tree": "865c930f392006e0080de506eb7c425fd81becd7",
+ "command": "-I t1_datadir_acl.py merged data",
+ "commercial_acceptance": "not-complete",
+ "credentials": "generated per run; HA key (T11) read in-process by the b1 Secrets reader, never printed",
+ "date": "2026-11-24",
+ "elapsed_s": 148.8,
+ "exit_code": 0,
+ "iteration": 3,
+ "lane": "emqx-secreview (SR-OWNER-1942)",
+ "result": {
+  "candidate_authorization_sources": [
+   {
+    "path": "/opt/emqx/data/authz/acl.conf",
+    "type": "file"
+   }
+  ],
+  "candidate_authz_stranger": "allow",
+  "candidate_data_acl_sha256": "4556e6af53719a140d1c808b3712b8ba00ed9a3001ff648d0e025332df378de8",
+  "candidate_no_match": "deny",
+  "codebase": "merged",
+  "conversion": "REFUSED: EMQX 不能搬過來：這台 EMQX 的 ACL 或憑證檔案放在資料卷裡（例如在 Dashboard 編輯過授權規則），匯入 HA 的資料會改寫這個檔案；為避免改變這台的存取權限，已停止。",
+  "elapsed_s": 148.5,
+  "ha_acl_sha256": "4556e6af53719a140d1c808b3712b8ba00ed9a3001ff648d0e025332df378de8",
+  "image": "docker.io/emqx/emqx:5.8.9",
+  "network": "none",
+  "store": "labpodman (separate --root)",
+  "target_acl_replaced_by_ha": true,
+  "target_acl_sha256": "a97ae69275ff98ad98a553fbffc16d21991823190ba036fef8af073b1dc94569",
+  "target_before_authz_stranger": "deny",
+  "test": "T1 this device ACL file in the data volume vs HA file ACL {allow, all}",
+  "variant": "data"
+ },
+ "source_commit": "cd66230 (sec/emqx-secreview3-trial-20261124: product 5786ae4 + abff1a0 + the 8613ffa tempctr patch)",
+ "started": "2026-11-24T09:06:36+0800",
+ "status_lines": [
+  " \"target_acl_replaced_by_ha\": true,",
+  " \"elapsed_s\": 148.5",
+  "}"
+ ],
+ "stdout_sha256": "4a64fc5b94787cf129faa5de1b1c716c86c5fcd9283bd9ba09d884b2e6cf6d88",
+ "store": "labpodman (separate --root, lab only), every podman run --network none"
+}

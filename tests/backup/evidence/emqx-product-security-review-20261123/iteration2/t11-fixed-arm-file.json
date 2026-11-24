@@ -1,0 +1,39 @@
+{
+ "attempt": "t11-fixed-arm-file",
+ "backup_engine_tree": "ede63cd5dbbd93c853c0ec305fbd66856f7a5ee7",
+ "command": "t11 fixed arm file",
+ "commercial_acceptance": "not-complete",
+ "credentials": "generated per run; HA key (T11) read in-process by the b1 Secrets reader, never printed",
+ "date": "2026-11-24",
+ "elapsed_s": 183.0,
+ "exit_code": 0,
+ "iteration": 2,
+ "lane": "emqx-secreview (SR-OWNER-1942)",
+ "result": {
+  "arch": "arm",
+  "candidate_built": false,
+  "codebase": "fixed",
+  "containers_left": 0,
+  "conversion": "REFUSED: EMQX 不能搬過來：Podman 上的 EMQX 沒有開啟『內建資料庫』權限，HA 的裝置權限搬過去不會生效，裝置會被拒絕。請先在 Podman EMQX 的管理頁「存取控制 → 授權」新增「內建資料庫」（排在檔案規則之後），再匯入。",
+  "dangling_volumes_new": 0,
+  "device_config_unchanged": true,
+  "device_profile": [
+   "file"
+  ],
+  "device_sources": "file",
+  "elapsed_s": 181.4,
+  "fixture": "woow-b1-arm-emqx-stopped-enc.tar",
+  "fixture_sha256_prefix": "b6eb257cc5790bee",
+  "image": "docker.io/emqx/emqx:5.8.9",
+  "network": "none",
+  "refused_with_owner_text": true,
+  "store": "labpodman (separate --root)",
+  "test": "T11 real batch-1 HA backup, conversion body with this device's profile and EnvironmentFile"
+ },
+ "source_commit": "abff1a0 (sec/emqx-secreview2-20261124)",
+ "status_lines": [
+  "{\"test\": \"T11 real batch-1 HA backup, conversion body with this device's profile and EnvironmentFile\", \"codebase\": \"fixed\", \"arch\": \"arm\", \"device_sources\": \"file\", \"fixture\": \"woow-b1-arm-emqx-stopped-enc.tar\", \"fixture_sha256_prefix\": \"b6eb257cc5790bee\", \"image\": \"docker.io/emqx/emqx:5.8.9\", \"network\": \"none\", \"store\": \"labpodman (separate --root)\", \"device_profile\": [\"file\"], \"conversion\": \"REFUSED: EMQX 不能搬過來：Podman 上的 EMQX 沒有開啟『內建資料庫』權限，HA 的裝置權限搬過去不會生效，裝置會被拒絕。請先在 Podman EMQX 的管理頁「存取控制 → 授權」新增「內建資料庫」（排在檔案規則之後），再匯入。\", \"refused_with_owner_text\": true, \"candidate_built\": false, \"device_config_unchanged\": true, \"dangling_volumes_new\": 0, \"containers_left\": 0, \"elapsed_s\": 181.4}"
+ ],
+ "stdout_sha256": "a05ed94ffb8c020f91636125793c1f82a74db48387c9e7c1d7333af430db41b3",
+ "store": "labpodman (separate --root, lab only), every podman run --network none"
+}

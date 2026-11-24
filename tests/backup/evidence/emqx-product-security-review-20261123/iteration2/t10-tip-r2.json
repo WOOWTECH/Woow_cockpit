@@ -1,0 +1,335 @@
+{
+ "attempt": "t10-tip-r2",
+ "backup_engine_tree": "5292c15d3e266361e87ddd54a1d89e77f0ecdc3a",
+ "command": "-I t10_envfile_parse.py tip",
+ "commercial_acceptance": "not-complete",
+ "credentials": "generated per run; HA key (T11) read in-process by the b1 Secrets reader, never printed",
+ "date": "2026-11-24",
+ "elapsed_s": 20.2,
+ "exit_code": 0,
+ "iteration": 2,
+ "lane": "emqx-secreview (SR-OWNER-1942)",
+ "result": {
+  "cases": {
+   "crlf": {
+    "outcome": "SAME",
+    "podman_keys": [
+     "EMQX_T1"
+    ],
+    "podman_rc": 0,
+    "product_keys": [
+     "EMQX_T1"
+    ],
+    "refusal_code": null,
+    "values_equal_for_common_keys": true
+   },
+   "crlf_twice": {
+    "outcome": "SAME",
+    "podman_keys": [
+     "EMQX_T26",
+     "EMQX_T26B"
+    ],
+    "podman_rc": 0,
+    "product_keys": [
+     "EMQX_T26",
+     "EMQX_T26B"
+    ],
+    "refusal_code": null,
+    "values_equal_for_common_keys": true
+   },
+   "empty_value": {
+    "outcome": "REFUSED",
+    "podman_keys": [
+     "EMQX_T21"
+    ],
+    "podman_rc": 0,
+    "product_keys": null,
+    "refusal_code": "incompatible",
+    "values_equal_for_common_keys": null
+   },
+   "export_prefix": {
+    "outcome": "DIFFERENT",
+    "podman_keys": [
+     "export EMQX_T16"
+    ],
+    "podman_rc": 0,
+    "product_keys": [],
+    "refusal_code": null,
+    "values_equal_for_common_keys": true
+   },
+   "ff_inside": {
+    "outcome": "DIFFERENT",
+    "podman_keys": [
+     "EMQX_T12"
+    ],
+    "podman_rc": 0,
+    "product_keys": [
+     "EMQX_T12",
+     "EMQX_T12B"
+    ],
+    "refusal_code": null,
+    "values_equal_for_common_keys": false
+   },
+   "fs_inside": {
+    "outcome": "DIFFERENT",
+    "podman_keys": [
+     "EMQX_T3"
+    ],
+    "podman_rc": 0,
+    "product_keys": [
+     "EMQX_T3",
+     "EMQX_T3B"
+    ],
+    "refusal_code": null,
+    "values_equal_for_common_keys": false
+   },
+   "gs_inside": {
+    "outcome": "DIFFERENT",
+    "podman_keys": [
+     "EMQX_T23"
+    ],
+    "podman_rc": 0,
+    "product_keys": [
+     "EMQX_T23",
+     "EMQX_T23B"
+    ],
+    "refusal_code": null,
+    "values_equal_for_common_keys": false
+   },
+   "inline_comment": {
+    "outcome": "SAME",
+    "podman_keys": [
+     "EMQX_T11"
+    ],
+    "podman_rc": 0,
+    "product_keys": [
+     "EMQX_T11"
+    ],
+    "refusal_code": null,
+    "values_equal_for_common_keys": true
+   },
+   "invalid_utf8": {
+    "outcome": "SAME",
+    "podman_keys": [
+     "EMQX_T7"
+    ],
+    "podman_rc": 0,
+    "product_keys": [
+     "EMQX_T7"
+    ],
+    "refusal_code": null,
+    "values_equal_for_common_keys": true
+   },
+   "leading_blanks": {
+    "outcome": "SAME",
+    "podman_keys": [
+     "EMQX_T9"
+    ],
+    "podman_rc": 0,
+    "product_keys": [
+     "EMQX_T9"
+    ],
+    "refusal_code": null,
+    "values_equal_for_common_keys": true
+   },
+   "leading_fs": {
+    "outcome": "DIFFERENT",
+    "podman_keys": [
+     "\\x1cEMQX_T20"
+    ],
+    "podman_rc": 0,
+    "product_keys": [
+     "EMQX_T20"
+    ],
+    "refusal_code": null,
+    "values_equal_for_common_keys": true
+   },
+   "leading_ideographic_space": {
+    "outcome": "DIFFERENT",
+    "podman_keys": [
+     "\\u3000EMQX_T19"
+    ],
+    "podman_rc": 0,
+    "product_keys": [
+     "EMQX_T19"
+    ],
+    "refusal_code": null,
+    "values_equal_for_common_keys": true
+   },
+   "leading_tab": {
+    "outcome": "SAME",
+    "podman_keys": [
+     "EMQX_T10"
+    ],
+    "podman_rc": 0,
+    "product_keys": [
+     "EMQX_T10"
+    ],
+    "refusal_code": null,
+    "values_equal_for_common_keys": true
+   },
+   "leading_us": {
+    "outcome": "DIFFERENT",
+    "podman_keys": [
+     "\\x1fEMQX_T27"
+    ],
+    "podman_rc": 0,
+    "product_keys": [
+     "EMQX_T27"
+    ],
+    "refusal_code": null,
+    "values_equal_for_common_keys": true
+   },
+   "lone_cr_inside": {
+    "outcome": "DIFFERENT",
+    "podman_keys": [
+     "EMQX_T6"
+    ],
+    "podman_rc": 0,
+    "product_keys": [
+     "EMQX_T6",
+     "EMQX_T6B"
+    ],
+    "refusal_code": null,
+    "values_equal_for_common_keys": false
+   },
+   "nel_inside": {
+    "outcome": "DIFFERENT",
+    "podman_keys": [
+     "EMQX_T5"
+    ],
+    "podman_rc": 0,
+    "product_keys": [
+     "EMQX_T5",
+     "EMQX_T5B"
+    ],
+    "refusal_code": null,
+    "values_equal_for_common_keys": false
+   },
+   "no_final_newline": {
+    "outcome": "SAME",
+    "podman_keys": [
+     "EMQX_T13"
+    ],
+    "podman_rc": 0,
+    "product_keys": [
+     "EMQX_T13"
+    ],
+    "refusal_code": null,
+    "values_equal_for_common_keys": true
+   },
+   "rs_inside": {
+    "outcome": "DIFFERENT",
+    "podman_keys": [
+     "EMQX_T24"
+    ],
+    "podman_rc": 0,
+    "product_keys": [
+     "EMQX_T24",
+     "EMQX_T24B"
+    ],
+    "refusal_code": null,
+    "values_equal_for_common_keys": false
+   },
+   "space_before_eq": {
+    "outcome": "REFUSED",
+    "podman_keys": [
+     "EMQX_T14 "
+    ],
+    "podman_rc": 0,
+    "product_keys": null,
+    "refusal_code": "incompatible",
+    "values_equal_for_common_keys": null
+   },
+   "tab_inside": {
+    "outcome": "SAME",
+    "podman_keys": [
+     "EMQX_T8"
+    ],
+    "podman_rc": 0,
+    "product_keys": [
+     "EMQX_T8"
+    ],
+    "refusal_code": null,
+    "values_equal_for_common_keys": true
+   },
+   "two_equals": {
+    "outcome": "SAME",
+    "podman_keys": [
+     "EMQX_T17"
+    ],
+    "podman_rc": 0,
+    "product_keys": [
+     "EMQX_T17"
+    ],
+    "refusal_code": null,
+    "values_equal_for_common_keys": true
+   },
+   "u2028_inside": {
+    "outcome": "DIFFERENT",
+    "podman_keys": [
+     "EMQX_T4"
+    ],
+    "podman_rc": 0,
+    "product_keys": [
+     "EMQX_T4",
+     "EMQX_T4B"
+    ],
+    "refusal_code": null,
+    "values_equal_for_common_keys": false
+   },
+   "u2029_inside": {
+    "outcome": "DIFFERENT",
+    "podman_keys": [
+     "EMQX_T25"
+    ],
+    "podman_rc": 0,
+    "product_keys": [
+     "EMQX_T25",
+     "EMQX_T25B"
+    ],
+    "refusal_code": null,
+    "values_equal_for_common_keys": false
+   },
+   "utf8_value": {
+    "outcome": "SAME",
+    "podman_keys": [
+     "EMQX_T22"
+    ],
+    "podman_rc": 0,
+    "product_keys": [
+     "EMQX_T22"
+    ],
+    "refusal_code": null,
+    "values_equal_for_common_keys": true
+   },
+   "vt_inside": {
+    "outcome": "DIFFERENT",
+    "podman_keys": [
+     "EMQX_T2"
+    ],
+    "podman_rc": 0,
+    "product_keys": [
+     "EMQX_T2",
+     "EMQX_T2B"
+    ],
+    "refusal_code": null,
+    "values_equal_for_common_keys": false
+   }
+  },
+  "codebase": "tip",
+  "podman": "4.9.3",
+  "summary": {
+   "DIFFERENT": 13,
+   "REFUSED": 2,
+   "SAME": 10
+  },
+  "test": "T10 EnvironmentFile parsing: product vs podman --env-file (SR-9)"
+ },
+ "source_commit": "7d9d468 (feat/ha-import-emqx-product-20261123; engine == 0d260db)",
+ "status_lines": [
+  "{\"SAME\": 10, \"DIFFERENT\": 13, \"REFUSED\": 2}"
+ ],
+ "stdout_sha256": "8a4c4d162317c9b78c2e639e51f8c5bb4581b1713fbe1382f5c722991ef18c68",
+ "store": "labpodman (separate --root, lab only), every podman run --network none"
+}

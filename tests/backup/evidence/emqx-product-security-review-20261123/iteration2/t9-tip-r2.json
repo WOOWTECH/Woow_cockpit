@@ -1,0 +1,47 @@
+{
+ "attempt": "t9-tip-r2",
+ "backup_engine_tree": "5292c15d3e266361e87ddd54a1d89e77f0ecdc3a",
+ "command": "-I t9_env_argv.py tip",
+ "commercial_acceptance": "not-complete",
+ "credentials": "generated per run; HA key (T11) read in-process by the b1 Secrets reader, never printed",
+ "date": "2026-11-24",
+ "elapsed_s": 20.4,
+ "exit_code": 0,
+ "iteration": 2,
+ "lane": "emqx-secreview (SR-OWNER-1942)",
+ "result": {
+  "canary_sha256": "0d895912bc3461c0358592f023b840295d2a043257f4ebd54e10615cc1d24446",
+  "candidate_env_has_key": true,
+  "codebase": "tip",
+  "dangling_volumes_after": 23,
+  "device_way": {
+   "container_got_value": true,
+   "podman_run_cmdlines_seen": 1,
+   "processes_with_value_in_cmdline": 0,
+   "samples": 95
+  },
+  "env_file_mode": "0600",
+  "proc_hidepid": false,
+  "product": {
+   "cmdline_modes": [
+    "0o444"
+   ],
+   "container_got_value": true,
+   "podman_run_cmdlines_seen": 1,
+   "process_names": [
+    "podman"
+   ],
+   "processes_with_value_in_cmdline": 1,
+   "samples": 68
+  },
+  "product_cleanup_left": 0,
+  "result": "EXPOSED",
+  "test": "T9 EnvironmentFile values on the candidate command line (SR-8)"
+ },
+ "source_commit": "7d9d468 (feat/ha-import-emqx-product-20261123; engine == 0d260db)",
+ "status_lines": [
+  "{\"result\": \"EXPOSED\", \"product\": {\"samples\": 68, \"podman_run_cmdlines_seen\": 1, \"processes_with_value_in_cmdline\": 1, \"process_names\": [\"podman\"], \"cmdline_modes\": [\"0o444\"], \"container_got_value\": true}, \"device_way\": {\"samples\": 95, \"podman_run_cmdlines_seen\": 1, \"processes_with_value_in_cmdline\": 0, \"container_got_value\": true}, \"proc_hidepid\": false, \"product_cleanup_left\": 0, \"dangling_volumes_after\": 23}"
+ ],
+ "stdout_sha256": "ade8ed7d5f50e12c5d1f3a5333104a43e86a841024c967c1487b2ad463f81921",
+ "store": "labpodman (separate --root, lab only), every podman run --network none"
+}

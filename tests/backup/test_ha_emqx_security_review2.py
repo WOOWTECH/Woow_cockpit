@@ -15,12 +15,16 @@ SR-9 (LOW, real run T10 against podman 4.9.3): candidate_env() split lines with 
 broker. podman now reads the values; the checks read the lines as podman does.
 """
 import copy
+import gzip
+import io
+import tarfile
 import unittest
 from types import SimpleNamespace
 
 from woowbackup import tempctr
 from woowbackup.errors import BackupError
 
+from . import hafixtures as hx
 from . import test_ha_emqx as base
 from . import test_ha_emqx_product as product
 
@@ -115,6 +119,55 @@ class EnvFilesArgvTests(unittest.TestCase):
                 with self.assertRaises(BackupError) as caught:
                     self.tmp().run_argv('x', 'docker.io/emqx/emqx:5.8.9', env_files=[bad])
                 self.assertEqual(caught.exception.code, 'internal-error')
+
+
+class VolumeTopTests(base.EmqxCase):
+    """Review iteration 3 of the Podman 6 volume fix (c8df1f2/8613ffa): TempObjects.volume_import applies the owner,
+    group and mode of a tar's first '.' member to the throwaway volume (`podman unshare chown` / `chmod`). The engine
+    writes that member itself for every EMQX volume: nothing of HA's backup may choose it, or any owner or mode."""
+
+    def setUp(self):
+        super().setUp()
+        self.world.target_config['authorization']['sources'] = copy.deepcopy(base.BUILTIN_TARGET)
+        self.world.current_config = copy.deepcopy(self.world.target_config)
+
+    def hostile(self):
+        """The add-on member with every entry (its top directory too) set-id, writable for all and foreign-owned."""
+        out = io.BytesIO()
+        with tarfile.open(fileobj=io.BytesIO(gzip.decompress(base.addon_tar(state='stopped')))) as source, \
+                tarfile.open(fileobj=out, mode='w', format=tarfile.PAX_FORMAT) as dest:
+            for member in source:
+                member.mode, member.uid, member.gid = 0o7777, 4242, 4343
+                member.uname = member.gname = 'ha'
+                dest.addfile(member, source.extractfile(member) if member.isfile() else None)
+        return self.upload(hx.outer_bytes([(f'{base.SLUG}.tar.gz', gzip.compress(out.getvalue(), mtime=0))],
+                                          hx.ha_doc(addons=(base.SLUG,))))
+
+    def test_ha_chooses_no_owner_and_no_mode_of_a_throwaway_volume(self):
+        done = self.convert(self.hostile(), ['emqx'])
+        self.assertTrue(done['backup_id'])
+        tops = {'emqx-src': (0, 0, 0o755), 'emqx-xfer': (0, 0, 0o755), 'emqx-in': (1000, 1000, 0o755),
+                'emqx-new': (1000, 1000, 0o700)}
+        for role, top in tops.items():
+            with self.subTest(role=role):
+                with tarfile.open(fileobj=io.BytesIO(self.world.imported[role])) as tar:
+                    members = tar.getmembers()
+                first = members[0]
+                self.assertTrue(first.isdir() and first.name == '.', 'the engine writes the top directory first')
+                self.assertEqual((first.uid, first.gid, first.mode), top)
+                self.assertEqual([m.name for m in members].count('.'), 1, 'and nothing writes it again')
+                for member in members:
+                    self.assertEqual((member.uid, member.gid), top[:2], member.name)
+                    self.assertFalse(member.mode & 0o7022, member.name)   # no set-id/sticky, not writable by others
+                    self.assertEqual(member.pax_headers.get('SCHILY.xattr.security.capability'), None)
+        allowed = {f'{uid}:{gid}' for uid, gid, _mode in tops.values()} | {'0:0'}
+        modes = {format(mode, '04o') for _uid, _gid, mode in tops.values()}
+        for call in self.world.owner.calls:   # only with the Podman 6 fix: the engine's own values, nothing else
+            words = [str(arg) for arg in call]
+            if 'unshare' in words and 'chown' in words:
+                self.assertIn(words[words.index('chown') + 2], allowed)
+            if 'unshare' in words and 'chmod' in words:
+                self.assertIn(words[words.index('chmod') + 1], modes)
 
 
 if __name__ == '__main__':

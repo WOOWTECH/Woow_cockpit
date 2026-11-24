@@ -1,0 +1,39 @@
+{
+ "attempt": "t5-merged",
+ "backup_engine_tree": "865c930f392006e0080de506eb7c425fd81becd7",
+ "command": "python3 -I t5_plain_bootstrap.py merged",
+ "commercial_acceptance": "not-complete",
+ "credentials": "generated per run; HA key (T11) read in-process by the b1 Secrets reader, never printed",
+ "date": "2026-11-24",
+ "elapsed_s": 264.7,
+ "exit_code": 0,
+ "iteration": 3,
+ "lane": "emqx-secreview (SR-OWNER-1942)",
+ "result": {
+  "candidate": "rows=1:plain=0",
+  "candidate_authn_algorithms": [
+   [
+    "plain",
+    true
+   ]
+  ],
+  "codebase": "merged",
+  "conversion": "REFUSED: EMQX 匯入後未能保留目標有效設定（authentication），已停止。",
+  "device_before": "rows=1:plain=0",
+  "device_bootstrap_password_stored_plaintext": false,
+  "elapsed_s": 264.0,
+  "image": "docker.io/emqx/emqx:5.8.9",
+  "network": "none",
+  "store": "labpodman (separate --root)",
+  "test": "T5 HA authenticator plain hashing vs this device bootstrap users"
+ },
+ "source_commit": "cd66230 (sec/emqx-secreview3-trial-20261124: product 5786ae4 + abff1a0 + the 8613ffa tempctr patch)",
+ "started": "2026-11-24T09:37:33+0800",
+ "status_lines": [
+  " \"device_bootstrap_password_stored_plaintext\": false,",
+  " \"elapsed_s\": 264.0",
+  "}"
+ ],
+ "stdout_sha256": "09232b05490201beea00057624f4e7bf9ae9b05c809b64381e135b8ef45bed94",
+ "store": "labpodman (separate --root, lab only), every podman run --network none"
+}
