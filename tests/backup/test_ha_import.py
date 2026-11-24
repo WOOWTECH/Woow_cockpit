@@ -510,6 +510,15 @@ class ConvertResultTests(FlowCase):
         self.assertEqual((row['status'], row['code'], row['issues'][0]['id']), ('skipped', 'not-found',
                                                                                 'ha.addon-missing'))
 
+    def test_an_app_that_is_not_deployed(self):
+        ha_id = self.upload(two_addons())
+        self.world.undeployed.add('n8n')
+        with mock.patch.object(ha_n8n, 'convert') as convert, self.assertRaises(BackupError) as caught:
+            self.convert(ha_id, ['n8n'])
+        row = caught.exception.result['results'][0]
+        self.assertEqual((convert.called, row['status'], row['code'], row['issues'][0]['id']),
+                         (False, 'skipped', 'not-deployed', 'ha.not-deployed'))
+
     def test_several_apps_in_one_job_stay_as_they_were(self):
         ha_id = self.upload(two_addons())
         with mock.patch.object(ha_odoo, 'convert', side_effect=RuntimeError('x')), self.assertRaises(RuntimeError):
@@ -539,7 +548,8 @@ class ConvertResultTests(FlowCase):
                     self.convert(ha_id, ['n8n'], **({} if acknowledged is None else {'acknowledged': acknowledged}))
                 row = caught.exception.result['results'][0]
                 self.assertEqual((row['status'], row['code']), ('skipped', 'confirmation-required'))
-                self.assertIn(key, [issue.get('key') for issue in row['issues']], 'what is to be confirmed')
+                self.assertEqual([(issue['level'], issue.get('key')) for issue in row['issues']],
+                                 [('confirm', key), ('auto', None)], 'what is to be confirmed, and what was found')
             result = self.convert(ha_id, ['n8n'], acknowledged={'n8n': [key]}, group={'id': 'g0123456789abcdef'})
         self.assertEqual([i['level'] for i in result['results'][0]['issues']], ['confirm', 'auto', 'notice'])
         row = haimport.load_registry(self.paths)[result['backup_id']]
@@ -662,6 +672,17 @@ class IsolationTests(FlowCase):
                 odoo, n8n = self.run_check(ha_id, ['odoo', 'n8n'], {'odoo': lambda w, a: answer})['apps']
                 self.assertEqual((odoo['importable'], self.ids(odoo), n8n['importable']),
                                  (False, ['failure.internal-error'], True))
+                self.assertNotIn('odoo', odoo, 'no section')
+                self.assertNotIn('choices', odoo)
+
+    def test_a_database_the_request_cannot_name_is_no_choice(self):
+        ha_id = self.upload(self.all_addons())
+        found = {'target_version': '1', 'odoo': {'databases': [{'name': 'a\nb', 'ok': True}, {'name': 'prod', 'ok': True}]}}
+        row = self.run_check(ha_id, ['odoo'], {'odoo': lambda w, a: found})['apps'][0]
+        self.assertEqual([(c['value'], c['label'], c['ok']) for c in row['choices']['database']],
+                         [('a\nb', 'a b', False), ('prod', 'prod', True)])
+        found['odoo']['databases'].pop()
+        self.assertFalse(self.run_check(ha_id, ['odoo'], {'odoo': lambda w, a: found})['apps'][0]['importable'])
 
     def test_issues_found_before_the_failure_stay(self):
         ha_id = self.upload(self.all_addons())
@@ -1127,6 +1148,9 @@ class RegistryTests(unittest.TestCase):
         self.assertIn('20261118T120007Z-0123abcd', rows, 'the newest stays')
         self.assertNotIn('20261118T120000Z-0123abcd', rows, 'the oldest goes')
         self.assertGreater(len(rows), 2)
+        now = '20261118T120009Z-0123abcd'
+        haimport.register(self.paths, now, self.row(workflows_to_fix=big, created='2026-11-18T11:00:00Z'), now=1794994800)
+        self.assertIn(now, haimport.load_registry(self.paths), 'the one just written stays, whatever its clock said')
 
     def test_rows_of_missing_backups_are_pruned_after_a_day(self):
         old = '20261101T000000Z-00000001'
@@ -1152,6 +1176,19 @@ class SmallPartsTests(unittest.TestCase):
             guard.wrote(haimport.GUARD_STEP)
         self.assertEqual((caught.exception.code, caught.exception.job_wide), ('insufficient-space', True),
                          'below the floor nothing else may start either')
+
+    def test_the_watchdogs_verdict_ends_the_whole_job(self):
+        from .test_ha_space import FakeWork
+        work = FakeWork(free=10)
+        dog = haimport.Watchdog(work)
+        dog.poll()
+        self.assertEqual((dog.abort().code, dog.abort().job_wide), ('insufficient-space', True))
+        work = FakeWork(free=10)
+        stale = work._temps.pop('appowner')
+        stale.containers.append(stale.name('hapg'))
+        work._stale = [stale]
+        haimport.Watchdog(work).poll()
+        self.assertIn(('kill', '--signal', 'KILL', stale.name('hapg')), work.runner.calls, 'also what an app left')
 
     def test_database_names(self):
         for good in ('woowtest', 'a', '客戶資料庫', 'x' * 63, 'a b', 'db-1.2$', "o'brien", '-d', 'a=b', '資' * 21):
