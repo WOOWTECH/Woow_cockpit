@@ -24,6 +24,9 @@ SRC = {'mqtt_users': [{'user_id': 'b1-sensor', 'is_superuser': False}, {'user_id
        'retained_messages': ['b1/retained/thermostat', 'b1/retained/door'],
        'rules': ['b1_rule_republish', 'b1_rule_http'], 'dashboard_users': ['admin', 'b1ops']}
 H1, H2 = 'a' * 64, 'b' * 64
+FACTS = {'version': '5.8.9', 'node': 'emqx@127.0.0.1',
+         'mnesia_sizes': {'emqx_authn_mnesia': 3, 'emqx_acl': 4, 'emqx_admin': 2, 'emqx_app': 1, 'emqx_banned': 1,
+                          'emqx_psk': 0, 'emqx_retainer_message': 2}}
 
 
 def imported_probe(mode):
@@ -78,6 +81,15 @@ class EvaluateTests(unittest.TestCase):
         probe['native_counts']['emqx_acl'] = 0
         self.assertTrue(any('inactive' in name for name in failed(real.evaluate_imported(probe, SRC, 'file'))))
 
+    def test_the_file_target_with_a_backup_without_acl_rows(self):
+        probe = imported_probe('file')
+        probe['native_counts']['emqx_acl'] = 0
+        self.assertEqual(failed(real.evaluate_imported(probe, SRC, 'file', acl_rows=0)), [])
+        probe['native_counts']['emqx_acl'] = 4   # rows appeared from nowhere
+        self.assertTrue(any('holds no ACL row' in name
+                            for name in failed(real.evaluate_imported(probe, SRC, 'file', acl_rows=0))))
+        self.assertEqual(real.ACL_ROWS, {'arm-cold': 4, 'x86-cold': 4, 'x86-fileonly': 0, 'x86-noacl': 0})
+
     def test_the_builtin_target_must_apply_has_rules(self):
         probe = imported_probe('builtin')
         probe['mqtt']['gateway_retained'] = {'connack': 0, 'suback': 0x80, 'retained': []}
@@ -130,14 +142,20 @@ class ProgramTests(unittest.TestCase):
         self.assertEqual(real.parse_step('import:arm-cold:builtin'), ('import', 'arm-cold', 'builtin'))
         self.assertEqual(real.parse_step('cleanup-baseline'), ('cleanup-baseline', None, None))
         self.assertEqual(real.parse_step('rollback:x86-cold'), ('rollback', 'x86-cold', 'builtin'))
+        for tag in ('x86-noacl', 'x86-fileonly'):
+            self.assertEqual(real.parse_step(f'import:{tag}:file'), ('import', tag, 'file'))
+            self.assertEqual(real.parse_step(f'rollback:{tag}'), ('rollback', tag, 'file'))
         for bad in ('import:arm-enc:file', 'import:x86-cold', 'import:x86-cold:mnesia', 'restore', 'rollback:arm-enc',
-                    'rollback'):
+                    'rollback', 'import:x86-noacl:builtin', 'import:x86-fileonly:builtin', 'import:x86-noacl'):
             self.assertEqual(real.parse_step(bad), (None, None, None))
 
     def test_every_step_has_an_estimate_and_the_two_halves_fit_one_hold_each(self):
         for name in ('setup', 'before', 'check', 'check-hot', 'import:arm-cold:file', 'import:arm-cold:builtin',
-                     'rollback:arm-cold', 'cleanup', 'cleanup-baseline', 'leaks'):
+                     'rollback:arm-cold', 'cleanup', 'cleanup-baseline', 'reclaim', 'leaks', 'import:x86-noacl:file',
+                     'rollback:x86-noacl', 'import:x86-fileonly:file', 'rollback:x86-fileonly'):
             self.assertGreater(real.estimate(name), 0, name)
+        self.assertEqual(real.estimate('import:x86-noacl:file'), real.estimate('import:x86-cold:builtin'),
+                         'the lab-made backup runs the whole chain')
         self.assertLessEqual(real.estimate('setup') + real.estimate('import:x86-cold:builtin'), real.HOLD_LIMIT)
         self.assertLessEqual(real.estimate('setup') + real.estimate('rollback:x86-cold'), real.HOLD_LIMIT)
         self.assertLessEqual(real.HOLD_LIMIT, 40 * 60)
@@ -165,7 +183,8 @@ class ProgramTests(unittest.TestCase):
                  'STEP import:arm-cold:builtin: PASS seconds=1234', 'STEP setup: FAIL seconds=3',
                  'backup id converted 20261123T101010Z-0123abcd', 'backup id baseline 20261123T101010Z-0123abcd',
                  "CHECK import arm-cold/emqx (file target) after restore: MQTT: HA's three users log in: PASS",
-                 'RESULT 120/121 passed']
+                 'dev-d reclaim headroom_before=1576128512 headroom_after=2700000000 journal_before=150000000 '
+                 'journal_after=60000000 rounds=3', 'RESULT 120/121 passed']
         self.assertEqual(capture.status_lines('\n'.join(lines + ['secret-looking detail'])), lines)
         self.assertEqual(real.label('a\nb|c'), 'a_b_c')
 
@@ -187,15 +206,22 @@ class DecisionCTests(unittest.TestCase):
         def save(self, *_args):
             pass
 
-    def failing(self, mode, result):
+    def failing(self, mode, result, tag='arm-cold'):
         from unittest import mock
         ev = self.Ev()
         args = type('Args', (), {'secrets': {'HA_BACKUP_KEY': 'not-a-key'}})()
         job = {'state': 'succeeded', 'result': {'ha_check': {'apps': [result]}}}
-        with mock.patch.object(real.drv, 'run_check', lambda *_a, **_k: (job, 1.0)), \
+        self.keys = []
+
+        def run_check(*_args, **kwargs):
+            self.keys.append(kwargs.get('key'))
+            return job, 1.0
+
+        with mock.patch.object(real.drv, 'run_check', run_check), \
                 mock.patch.object(real.drv, 'compare_check', lambda *_a, **_k: None), \
-                mock.patch.dict(real.drv.STATE, {'ha_arm-cold': 'ha-test'}):
-            real.check_one(ev, args, 'arm-cold', mode=mode)
+                mock.patch.object(real.drv, 'source', lambda _m: {'emqx': FACTS}), \
+                mock.patch.dict(real.drv.STATE, {f'ha_{tag}': 'ha-test'}):
+            real.check_one(ev, args, tag, mode=mode)
         return [name for name, ok in ev.results if not ok]
 
     def result(self, **changes):
@@ -212,6 +238,24 @@ class DecisionCTests(unittest.TestCase):
                     self.result(emqx={'target_authorization': ['file', 'built_in_database']})):
             with self.subTest(bad=bad):
                 self.assertTrue(self.failing('file', bad))
+
+    def test_the_lab_made_backup_without_rows_must_be_accepted_on_the_file_target(self):
+        section = {'target_authorization': ['file'], 'emqx_version': '5.8.9', 'target_version': '5.8.9',
+                   'node_name': 'emqx@127.0.0.1', 'mqtt_users': 3, 'acl_rules': 0, 'dashboard_users': 2, 'api_keys': 1,
+                   'banned': 1, 'psk': 0, 'default_dashboard_password': False, 'anonymous': False, 'hot_backup': False,
+                   'retained_messages': 5}
+        good = self.result(ok=True, blockers=[], arch='amd64', emqx=section)
+        for tag in real.LAB_MADE:
+            self.assertEqual(self.failing('file', good, tag), [])
+            self.assertEqual(self.keys, [None], 'an unencrypted upload is checked without a key')
+        for bad in (self.result(arch='amd64', emqx=section),                                      # still refused
+                    self.result(ok=True, blockers=[], arch='amd64', emqx=dict(section, acl_rules=4)),
+                    self.result(ok=True, blockers=[], arch='amd64', emqx=dict(section, retained_messages=1)),
+                    self.result(ok=True, blockers=[], arch='amd64', emqx=dict(section, target_authorization=['file', 'x']))):
+            with self.subTest(bad=bad):
+                self.assertTrue(self.failing('file', bad, 'x86-fileonly'))
+        self.assertEqual(self.failing('file', self.result()), [])
+        self.assertEqual(self.keys, ['not-a-key'], 'the real uploads are encrypted')
 
     def test_the_builtin_target_must_be_ok(self):
         good = self.result(ok=True, blockers=[], emqx={'target_authorization': ['file', 'built_in_database']})

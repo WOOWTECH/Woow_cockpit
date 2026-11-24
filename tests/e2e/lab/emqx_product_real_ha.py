@@ -38,6 +38,13 @@ Steps (run in the order given):
                Dashboard; the import itself never adds a source). Then: ha-check (ok), ha-convert (the real space check), inspect,
                restore (its readback must pass), the client probe after the restore, `systemctl --user restart
                emqx.service` and the probe again; the imported state is recorded for:
+  import:x86-fileonly:file | import:x86-noacl:file
+               decision C's other half, the usual customer case: a backup WITHOUT ACL rows on dev-d's own target (the
+               ACL file only, nothing added) is imported: the same chain as builtin (check ok, real conversion,
+               restore + readback, probe, restart, probe) with this device's file ACL governing. The input is LAB-MADE
+               (emqx_noacl_fixture.py: the real x86 cold backup with EMQX's ACL table cleared by EMQX itself;
+               x86-fileonly: HA's built-in source removed too, as the add-on is installed; x86-noacl: HA keeps it),
+               uploaded through the page's upload-begin/-finish and deleted again by cleanup (ha-delete)
   rollback:TAG the rollback rounds in their own lock hold, from the recorded imported state (proven again first): an
                AUTOMATIC rollback (a one-shot ExecStartPre failure of emqx.service armed right before a second
                restore of the same converted backup: the restore must fail and roll back by itself; the probe
@@ -49,8 +56,13 @@ Steps (run in the order given):
                container/volume/network, staging or key file; no drop-in or marker left
   cleanup-baseline
                B0 deleted too
+  reclaim      lab-only headroom for the next steps (no headroom check before it): dev-d's archived journal files older
+               than 24 h leave its tmpfs journal and clean page cache is returned to the host (dev-d's own
+               memory.reclaim, swappiness 0, bounded); counters before/after printed, no service, unit, configuration
+               or container change, the OOM events must not move. This run's own journal (younger than 24 h) stays
   leaks        no test secret (HA key, b1 test passwords, dev-d's EMQX secrets, issued Dashboard tokens) in the
-               engine's records, logs, journal or this run's private evidence
+               engine's records, logs, journal or this run's private evidence (the issued tokens are those of this
+               very run: put it after the probes of the same run)
 
 The client probe (inside dev-d, as appowner, through the b1 credential-event transport: every Dashboard login it makes
 is registered before it is acknowledged) checks with HA's credentials: Dashboard logins, MQTT logins of HA's three
@@ -95,6 +107,12 @@ MODES = ('file', 'builtin')
 STORE_IDS = {'arm-cold': 'ha-b6eb257cc5790bee3050', 'x86-cold': 'ha-0a53e93888209316040a'}
 FIXTURE_SHA256 = {'arm-cold': 'b6eb257cc5790bee30500f929d51ade66bfa8354dbe5bb61ba7c4bc08582f664',
                   'x86-cold': '0a53e93888209316040af505484bba3ee3891c2ad2df7ae689bc0d4fd02690f9'}
+# LAB-MADE (emqx_noacl_fixture.py): the real x86 cold backup whose emqx_acl table EMQX 5.8.9 itself cleared; unencrypted.
+# x86-fileonly: EMQX also removed HA's built-in database source (HA authorizes with its ACL file only, as installed).
+LAB_FOLDER = LAB / 'ha-fixtures' / '20261124-emqx-noacl-lab'
+LAB_MADE = {'x86-fileonly': 'woow-b1-x86-emqx-stopped-fileonly', 'x86-noacl': 'woow-b1-x86-emqx-stopped-noacl'}
+LAB_SHA256 = {'x86-fileonly': '503f9b1bba23bd2a93454f8aaf9218b936d5c4d76edbc99103113c85b719faf4', 'x86-noacl': '59f3062cce8734babf67035552ed088ec0200f986b9aa5096a22ce3a8f0845cf'}
+ACL_ROWS = {'arm-cold': 4, 'x86-cold': 4, **{tag: 0 for tag in LAB_MADE}}
 EMQX_SECRETS = ['woow-emqx-dashboard-password', 'woow-emqx-mqtt-password', 'woow-emqx-node-cookie',
                 'woow-emqx-mqtt-bootstrap']
 LANE_SECRETS = ('HA_BACKUP_KEY', 'B1_EMQX_ADMIN_PW', 'B1_EMQX_USER2_PW', 'B1_MQTT_PW1', 'B1_MQTT_PW2', 'B1_MQTT_PW3',
@@ -135,6 +153,9 @@ def _load_driver():
 drv = _load_driver()
 Failed = drv.Failed
 drv.state_path = lambda: LAB / 'run' / 'emqx_product_real_ha.json'   # never the b1 driver's own state file
+for _tag in LAB_MADE:
+    drv.UPLOADS[_tag] = ('x86', 'lab-made, see LAB_MADE', False, ('emqx',), False)
+    STORE_IDS[_tag] = 'ha-' + LAB_SHA256[_tag][:20]
 
 
 def label(text):
@@ -647,12 +668,19 @@ def sha256_file(path):
 
 
 def fixture_path(tag):
+    if tag in LAB_MADE:
+        return LAB_FOLDER / LAB_MADE[tag] / f'{LAB_MADE[tag]}.tar'
     machine, name = drv.UPLOADS[tag][0], drv.UPLOADS[tag][1]
     return drv.FIXTURES / machine / name / f'{name}.tar'
 
 
 def machine_of(tag):
     return drv.UPLOADS[tag][0]
+
+
+def ha_key(args, tag):
+    """The HA key of an encrypted upload, None for an unencrypted one (the page asks for no key then)."""
+    return args.secrets['HA_BACKUP_KEY'] if drv.UPLOADS[tag][2] else None
 
 
 def probe_request(args, mode, tag=None, *, authz_add=False):
@@ -684,8 +712,9 @@ def diff_digest(a, b):
     return sorted(k for k in set(a) | set(b) if a.get(k) != b.get(k))
 
 
-def evaluate_imported(probe, src, mode):
-    """[(check name, ok, detail)] of one probe after an import of `src` (the recorded HA facts) in `mode`."""
+def evaluate_imported(probe, src, mode, *, acl_rows=4):
+    """[(check name, ok, detail)] of one probe after an import of `src` (the recorded HA facts) in `mode`; `acl_rows` =
+    the ACL rows of the imported HA backup (0 = the lab-made one)."""
     results = []
     login = probe.get('login') or {}
     results.append(('the Dashboard takes HA\'s admin and HA\'s second user; this device\'s old admin password no '
@@ -710,8 +739,10 @@ def evaluate_imported(probe, src, mode):
                         acl.get('users') == [200, [['b1-gateway', 2], ['b1-sensor', 2]]]
                         and acl.get('clients') == [200, [['b1-dashboard-panel', 1]]] and acl.get('all') == [200, 1], acl))
     else:
-        results.append(('HA\'s ACL rows are in the built-in database table (4 rows) but inactive: the source is not '
-                        'configured here (API 404)', counts.get('emqx_acl') == 4
+        what = ('HA\'s ACL rows are in the built-in database table (4 rows) but inactive' if acl_rows else
+                'the HA backup holds no ACL row: the built-in database table is empty (0 rows)')
+        results.append((f'{what}: the source is not '
+                        'configured here (API 404)', counts.get('emqx_acl') == acl_rows
                         and all((acl.get(k) or [None])[0] == 404 for k in ('users', 'clients', 'all')),
                         {'emqx_acl': counts.get('emqx_acl'), 'api': {k: (acl.get(k) or [None])[0] for k in acl}}))
     retained = probe.get('retained_api') or {}
@@ -777,8 +808,8 @@ def evaluate_imported(probe, src, mode):
     return results
 
 
-def check_imported(ev, label_text, probe, src, mode):
-    for name, ok, detail in evaluate_imported(probe, src, mode):
+def check_imported(ev, label_text, probe, src, mode, tag=None):
+    for name, ok, detail in evaluate_imported(probe, src, mode, acl_rows=ACL_ROWS.get(tag, 4)):
         ev.check(f'{label_text}: {name}', ok, detail)
 
 
@@ -935,6 +966,42 @@ def bind_store(ev):
     drv.save_state()
 
 
+def bind_lab_made(ev, tag):
+    """The lab-made upload: exactly the recorded file, uploaded through the page's upload commands when it is missing."""
+    path = fixture_path(tag)
+    local = sha256_file(path)
+    if not ev.check(f'store {tag}: the lab-made file is the recorded one (SHA-256)', local == LAB_SHA256[tag],
+                    {'sha256': local}):
+        raise Failed('the lab-made fixture is not the recorded file')
+    listed = {h.get('id') for h in drv.ok('list', ev=ev).get('ha_backups') or []}
+    if STORE_IDS[tag] not in listed:
+        started = time.monotonic()
+        rc, reply = drv.upload(path, ev=ev)
+        meta = reply.get('ha_backup') or {}
+        ev.time('upload', tag, '-', time.monotonic() - started)
+        found = {a['app_id']: a['installed'] for a in meta.get('importable_apps') or []}
+        ev.check(f'store {tag}: uploaded through the page\'s upload-begin/-finish; importable app is EMQX', rc == 0
+                 and meta.get('id') == STORE_IDS[tag] and found == {'emqx': True}, {'id': meta.get('id'), 'apps': found})
+        if rc != 0 or meta.get('id') != STORE_IDS[tag]:
+            raise Failed('the upload of the lab-made file failed')
+    drv.STATE[f'ha_{tag}'] = STORE_IDS[tag]
+    drv.save_state()
+
+
+def compare_lab_made(ev, label_text, result):
+    """The check's EMQX facts of a lab-made backup: the recorded x86 source facts with 0 ACL rows."""
+    src = drv.source('x86')['emqx']
+    sizes, found = src['mnesia_sizes'], result.get('emqx') or {}
+    want = {'emqx_version': src['version'], 'target_version': '5.8.9', 'node_name': src['node'],
+            'mqtt_users': sizes['emqx_authn_mnesia'], 'acl_rules': 0, 'dashboard_users': sizes['emqx_admin'],
+            'api_keys': sizes['emqx_app'], 'banned': sizes['emqx_banned'], 'psk': sizes['emqx_psk'],
+            'default_dashboard_password': False, 'anonymous': False, 'hot_backup': False}
+    diff = {k: (found.get(k), v) for k, v in want.items() if found.get(k) != v}
+    retained = found.get('retained_messages')
+    ev.check(f'{label_text}: emqx section equals the source facts with 0 ACL rows (2 retained messages at least)',
+             not diff and isinstance(retained, int) and retained >= 2, diff or {'retained_messages': retained})
+
+
 def load_kit(args):
     if getattr(args, 'kit', None):
         return args.kit
@@ -1077,7 +1144,7 @@ def step_before(ev, args):
 def check_one(ev, args, tag, *, mode):
     """ha-check-start (emqx) of one cold upload, as the page starts it. builtin target: ok, no blocker. file target
     (dev-d's own): refused with exactly the owner's text (decision C). The app's result, or None when the job failed."""
-    key = args.secrets['HA_BACKUP_KEY']
+    key = ha_key(args, tag)
     job, took = drv.run_check(drv.STATE[f'ha_{tag}'], ['emqx'], ev=ev, key=key, tag=f'check-{tag}-{mode}-emqx')
     ev.time('check', tag, 'emqx', took, job)
     label_text = f'check {tag}/emqx ({mode} target)'
@@ -1086,11 +1153,13 @@ def check_one(ev, args, tag, *, mode):
     result = job['result']['ha_check']['apps'][0]
     ev.save(f'check-{tag}-{mode}-emqx.json', result)
     section = result.get('emqx') or {}
-    if mode == 'builtin':
+    if mode == 'builtin' or tag in LAB_MADE:
         ev.check(f'{label_text}: ok, no blockers', result.get('ok') is True and not result.get('blockers'),
                  result.get('blockers'))
-        ev.check(f'{label_text}: this device\'s authorization reads file + built-in database',
-                 section.get('target_authorization') == ['file', 'built_in_database'], section.get('target_authorization'))
+        profile = ['file', 'built_in_database'] if mode == 'builtin' else ['file']
+        reads = 'file + built-in database' if mode == 'builtin' else 'file only'
+        ev.check(f'{label_text}: this device\'s authorization reads {reads}',
+                 section.get('target_authorization') == profile, section.get('target_authorization'))
     else:
         ev.check(f'{label_text}: refused at check time with exactly the owner\'s text, the only blocker (decision C)',
                  result.get('ok') is False and result.get('blockers') == [OWNER_ACL_TEXT], result.get('blockers'))
@@ -1100,7 +1169,10 @@ def check_one(ev, args, tag, *, mode):
     ev.check(f'{label_text}: source {arch}, add-on 5.9.1, target 5.8.9', result.get('arch') == arch
              and result.get('version') == '5.9.1' and result.get('target_version') == '5.8.9',
              {k: result.get(k) for k in ('arch', 'version', 'target_version')})
-    drv.compare_check(ev, label_text, 'emqx', result, machine_of(tag), False, tag)
+    if tag in LAB_MADE:
+        compare_lab_made(ev, label_text, result)
+    else:
+        drv.compare_check(ev, label_text, 'emqx', result, machine_of(tag), False, tag)
     warnings = result.get('warnings') or []
     ev.check(f'{label_text}: no ACL warning (decision C made it a blocker)', not any('不會生效' in w for w in warnings),
              warnings)
@@ -1151,9 +1223,11 @@ def refuse_file(ev, args, tag, label_text):
 
 
 def step_import(ev, args, tag, mode):
-    if tag not in TAGS or mode not in MODES:
+    if not (tag in TAGS and mode in MODES or tag in LAB_MADE and mode == 'file'):
         raise Failed(f'unknown import {tag}:{mode}')
-    if drv.STATE.get(f'ha_{tag}') != STORE_IDS[tag]:
+    if tag in LAB_MADE:
+        bind_lab_made(ev, tag)
+    elif drv.STATE.get(f'ha_{tag}') != STORE_IDS[tag]:
         bind_store(ev)
     if 'digest_before' not in drv.STATE or not drv.STATE.get('baseline_b0'):
         raise Failed('run setup and before first (the before digest or B0 is missing)')
@@ -1164,7 +1238,7 @@ def step_import(ev, args, tag, mode):
     pre = run_probe(ev, args, f'{label_text} pre', 'base')
     if digest(pre) != drv.STATE['digest_before']:
         raise Failed('dev-d\'s EMQX is not at its baseline; refusing to import over unknown data')
-    if mode == 'file':
+    if mode == 'file' and tag not in LAB_MADE:
         if not refuse_file(ev, args, tag, label_text):
             manual_baseline(ev, args, label_text, False)   # never expected: bring the baseline back
         return
@@ -1184,7 +1258,7 @@ def step_import(ev, args, tag, mode):
         if check_one(ev, args, tag, mode=mode) is None:
             raise Failed('the check job failed')
         before_ids = {b['id'] for b in drv.ok('list', ev=ev)['backups']}
-        job, took = drv.convert(drv.STATE[f'ha_{tag}'], ['emqx'], False, ev=ev, key=args.secrets['HA_BACKUP_KEY'],
+        job, took = drv.convert(drv.STATE[f'ha_{tag}'], ['emqx'], False, ev=ev, key=ha_key(args, tag),
                                 tag=f'convert-{tag}-{mode}-emqx')
         ev.time('convert', tag, 'emqx', took, job)
         if not ev.check(f'{label_text}: conversion succeeded with a backup id', job['state'] == 'succeeded',
@@ -1226,17 +1300,17 @@ def step_import(ev, args, tag, mode):
         ev.check(f'{label_text}: the restore\'s own readback check passed (job log)', job_log_has(rlog, READBACK_LOG),
                  [str(line)[-300:] for line in rlog if 'EMQX' in str(line)][-6:])
         imported = run_probe(ev, args, f'{label_text} after restore', mode, tag)
-        check_imported(ev, f'{label_text} after restore', imported, src, mode)
+        check_imported(ev, f'{label_text} after restore', imported, src, mode, tag)
         restart_emqx(ev, label_text)
         restarted = run_probe(ev, args, f'{label_text} after restart', mode, tag)
-        check_imported(ev, f'{label_text} after restart', restarted, src, mode)
+        check_imported(ev, f'{label_text} after restart', restarted, src, mode, tag)
         if not ev.check(f'{label_text} after restart: the same state as right after the restore',
                         stable(restarted) == stable(imported),
                         {'differs': diff_digest(stable(restarted), stable(imported))}):
             return
         # The rollback rounds run in their own lock hold (step rollback:TAG; one hold stays under 40 min): dev-d's
         # EMQX keeps this imported state in between, recorded here and proven again before the rounds.
-        drv.STATE['imported'] = {'tag': tag, 'backup_id': converted, 'stable': stable(restarted)}
+        drv.STATE['imported'] = {'tag': tag, 'mode': mode, 'backup_id': converted, 'stable': stable(restarted)}
         drv.save_state()
         kept = True
     finally:
@@ -1247,17 +1321,17 @@ def step_import(ev, args, tag, mode):
 def step_rollback(ev, args, tag):
     """The rollback rounds of `import:TAG:builtin`, from the imported state it recorded: AUTOMATIC rollback (a
     one-shot start failure), the READBACK rollback (a one-shot HOCON change), then the MANUAL rollback to B0."""
-    mode = 'builtin'
+    mode = 'file' if tag in LAB_MADE else 'builtin'
     label_text = f'import {tag}/emqx ({mode} target)'
     imported = drv.STATE.get('imported') or {}
-    if imported.get('tag') != tag or not imported.get('backup_id'):
-        raise Failed(f'run import:{tag}:builtin first (no imported state recorded)')
+    if imported.get('tag') != tag or imported.get('mode', 'builtin') != mode or not imported.get('backup_id'):
+        raise Failed(f'run import:{tag}:{mode} first (no imported state recorded)')
     converted = imported['backup_id']
     src = drv.source(machine_of(tag))['emqx']
     tested = False
     try:
         restarted = run_probe(ev, args, f'{label_text} before the rollback rounds', mode, tag)
-        check_imported(ev, f'{label_text} before the rollback rounds', restarted, src, mode)
+        check_imported(ev, f'{label_text} before the rollback rounds', restarted, src, mode, tag)
         if not ev.check(f'{label_text} before the rollback rounds: dev-d\'s EMQX still holds the imported state',
                         stable(restarted) == imported['stable'],
                         {'differs': diff_digest(stable(restarted), imported['stable'])}):
@@ -1278,7 +1352,7 @@ def step_rollback(ev, args, tag):
         finally:
             ev.check(f'{label_text}: the fail-once drop-in is removed again', True, disarm_fail_once(dir_existed))
         rolled = run_probe(ev, args, f'{label_text} after automatic rollback', mode, tag)
-        check_imported(ev, f'{label_text} after automatic rollback', rolled, src, mode)
+        check_imported(ev, f'{label_text} after automatic rollback', rolled, src, mode, tag)
         ev.check(f'{label_text} after automatic rollback: the state equals the one before that restore',
                  stable(rolled) == stable(restarted), {'differs': diff_digest(stable(rolled), stable(restarted))})
         # THE READBACK: the restored data changed right before the start (one HOCON line); the restore must name the
@@ -1299,7 +1373,7 @@ def step_rollback(ev, args, tag):
         finally:
             ev.check(f'{label_text}: the tamper drop-in is removed again', True, disarm_tamper(dir_existed))
         tampered = run_probe(ev, args, f'{label_text} after the readback rollback', mode, tag)
-        check_imported(ev, f'{label_text} after the readback rollback', tampered, src, mode)
+        check_imported(ev, f'{label_text} after the readback rollback', tampered, src, mode, tag)
         ev.check(f'{label_text} after the readback rollback: the state equals the one before that restore',
                  stable(tampered) == stable(rolled), {'differs': diff_digest(stable(tampered), stable(rolled))})
         tested = True
@@ -1353,6 +1427,13 @@ def step_cleanup(ev, args):
     keys = [n for n in listing.get('/run/woowtech-backup') or [] if isinstance(n, str) and n.startswith('key-')]
     ev.check('cleanup: no staging folder and no key file left', staging in ([], 'missing') and not keys, listing)
     b0 = drv.STATE.get('baseline_b0')
+    lab_made = {STORE_IDS[t] for t in LAB_MADE} & {h.get('id') for h in drv.ok('list', ev=ev).get('ha_backups') or []}
+    if lab_made:
+        codes = [drv.helper('ha-delete', {'ha_backup_id': store_id, 'confirm': True})[0] for store_id in sorted(lab_made)]
+        listed = {h.get('id') for h in drv.ok('list', ev=ev).get('ha_backups') or []}
+        ev.check('cleanup: the lab-made uploads (no ACL rows) are deleted from the HA store; the real uploads stay',
+                 codes == [0] * len(lab_made) and not (lab_made & listed) and {STORE_IDS[t] for t in TAGS} <= listed,
+                 {'deleted': len(lab_made), 'listed': len(listed)})
     deleted, refused, left = delete_created(ev, keep=(b0,) if b0 else ())
     ev.check('cleanup: the test\'s converted and safety backups are deleted (B0 and dev-d\'s own backups stay)',
              not refused and BASELINE in left and (not b0 or b0 in left) and not (left & set(deleted)),
@@ -1373,6 +1454,39 @@ def step_cleanup_baseline(ev, args):
         drv.STATE['created_backups'] = [b for b in drv.STATE.get('created_backups') or [] if b != b0]
         drv.STATE['baseline_b0'] = None
         drv.save_state()
+
+
+MEMORY_COUNTERS = ('cat /sys/fs/cgroup/memory.current /sys/fs/cgroup/memory.max; '
+                   'grep -E "^(anon|file|shmem) " /sys/fs/cgroup/memory.stat; '
+                   'grep -E "^(oom|oom_kill|oom_group_kill) " /sys/fs/cgroup/memory.events; '
+                   'df -B1 --output=used /var/log/journal | tail -1')
+
+
+def memory_counters():
+    out = drv.out(drv.root('sh', '-c', MEMORY_COUNTERS, timeout=60)).split('\n')
+    stats = dict(line.split() for line in out[2:5])
+    events = dict(line.split() for line in out[5:8])
+    return {'current': int(out[0]), 'max': int(out[1]), **{k: int(v) for k, v in stats.items()},
+            'events': {k: int(v) for k, v in events.items()}, 'journal_used': int(out[8])}
+
+
+def step_reclaim(ev, args):
+    before = memory_counters()
+    vacuum = drv.root('journalctl', '--vacuum-time=24h', timeout=180)
+    rounds = 0
+    # Clean page cache only (swappiness 0), 128 MiB at a time, until 2.5 GiB of headroom or the kernel gives nothing more.
+    while rounds < 12 and (lambda c: c['max'] - c['current'])(memory_counters()) < 2560 * 1024 * 1024:
+        rounds += 1
+        proc = drv.root('sh', '-c', 'echo "128M swappiness=0" > /sys/fs/cgroup/memory.reclaim', timeout=120)
+        if proc.returncode != 0:
+            break
+    after = memory_counters()
+    ev.save('reclaim.json', {'before': before, 'after': after, 'rounds': rounds})
+    emit(f'dev-d reclaim headroom_before={before["max"] - before["current"]} headroom_after={after["max"] - after["current"]} '
+         f'journal_before={before["journal_used"]} journal_after={after["journal_used"]} rounds={rounds}')
+    ev.check('reclaim: journalctl --vacuum-time=24h and bounded clean-cache reclaim (limit unchanged, no OOM event)',
+             vacuum.returncode == 0 and before['max'] == after['max'] and before['events'] == after['events'],
+             {'rounds': rounds})
 
 
 def step_leaks(ev, args):
@@ -1431,7 +1545,7 @@ def step_check_hot(ev, args):
 
 
 STEPS = {'setup': step_setup, 'before': step_before, 'check': step_check, 'check-hot': step_check_hot,
-         'cleanup': step_cleanup,
+         'cleanup': step_cleanup, 'reclaim': step_reclaim,
          'cleanup-baseline': step_cleanup_baseline, 'leaks': step_leaks}
 
 
@@ -1441,8 +1555,12 @@ def parse_step(name):
     parts = name.split(':')
     if len(parts) == 3 and parts[0] == 'import' and parts[1] in TAGS and parts[2] in MODES:
         return 'import', parts[1], parts[2]
+    if len(parts) == 3 and parts[0] == 'import' and parts[1] in LAB_MADE and parts[2] == 'file':
+        return 'import', parts[1], 'file'
     if len(parts) == 2 and parts[0] == 'rollback' and parts[1] in TAGS:
         return 'rollback', parts[1], 'builtin'
+    if len(parts) == 2 and parts[0] == 'rollback' and parts[1] in LAB_MADE:
+        return 'rollback', parts[1], 'file'
     return None, None, None
 
 
@@ -1450,12 +1568,14 @@ def parse_step(name):
 # a step only starts when the hold so far plus its estimate stays within HOLD_LIMIT.
 HOLD_LIMIT = 40 * 60
 ESTIMATE = {'setup': 6, 'before': 6, 'check': 12, 'check-hot': 12, 'import:file': 15, 'import:builtin': 30,
-            'rollback': 24, 'cleanup': 4, 'cleanup-baseline': 2, 'leaks': 4}
+            'rollback': 24, 'cleanup': 4, 'cleanup-baseline': 2, 'reclaim': 3, 'leaks': 4}
 
 
 def estimate(name):
-    kind, _tag, mode = parse_step(name)
-    return 60 * ESTIMATE[f'import:{mode}' if kind == 'import' else kind]
+    kind, tag, mode = parse_step(name)
+    if kind == 'import':
+        kind = 'import:builtin' if tag in LAB_MADE else f'import:{mode}'   # the whole chain, or the short refusal
+    return 60 * ESTIMATE[kind]
 
 
 def self_check():
@@ -1483,7 +1603,7 @@ def main(argv):
         return 0
     steps = argv
     if not steps or any(parse_step(s)[0] is None for s in steps):
-        print('usage: emqx_product_real_ha.py <setup|before|check|check-hot|import:TAG:MODE|rollback:TAG|cleanup|cleanup-baseline|leaks> ...',
+        print('usage: emqx_product_real_ha.py <setup|before|check|check-hot|import:TAG:MODE|rollback:TAG|cleanup|cleanup-baseline|reclaim|leaks> ...',
               file=sys.stderr)
         return 2
     if not clean_tree():
@@ -1515,7 +1635,8 @@ def main(argv):
                 failed_steps.append(name)
                 continue
             try:
-                headroom()
+                if name != 'reclaim':
+                    headroom()
             except Failed as error:
                 ev.check(f'{name}: headroom before the step', False, str(error))
                 emit(f'STEP {name}: SKIP headroom=1')
