@@ -328,17 +328,27 @@ MUTATIONS = (
 )
 
 
+def outcome(text):
+    """(tests run, failures and errors) of unittest's own summary: its `Ran N tests` line and the `FAILED (...)` line after
+    it, wherever they are. Neither is always the last line: an archive writer a failed conversion left open is collected
+    when the interpreter ends and Python prints `Exception ignored in ...` after the summary (reading the last line called
+    13 of 106 caught mutations MISSED on 2026-11-24)."""
+    ran, failures = 0, 0
+    for line in text.splitlines():
+        if m := re.fullmatch(r'Ran (\d+) tests? in .*', line):
+            ran, failures = int(m.group(1)), 0
+        elif ran and (m := re.fullmatch(r'FAILED \((.*)\)', line)):
+            failures = sum(int(n) for n in re.findall(r'(?<!expected )\b(?:failures|errors)=(\d+)', m.group(1)))
+    return ran, failures
+
+
 def run_tests(root, tests=TESTS, failfast=True):
     """The unit tests `tests` in the throwaway copy `root` (tests/backup/__init__.py puts ITS backup-engine first)."""
     env = dict(os.environ, PYTHONPATH=os.pathsep.join([str(root / 'backup-engine'), str(root)]),
                PYTHONDONTWRITEBYTECODE='1')
     proc = subprocess.run([sys.executable, '-m', 'unittest', *(['-f'] if failfast else []), *tests], cwd=root, env=env,
                           capture_output=True, timeout=1800)
-    tail = proc.stderr.decode('utf-8', 'replace').strip().splitlines()
-    ran = next((int(m.group(1)) for line in tail if (m := re.match(r'Ran (\d+) tests?', line))), 0)
-    last = tail[-1] if tail else ''
-    failures = sum(int(n) for n in re.findall(r'(?:failures|errors)=(\d+)', last))
-    return proc.returncode, ran, failures
+    return proc.returncode, *outcome(proc.stderr.decode('utf-8', 'replace'))
 
 
 def main(argv):
