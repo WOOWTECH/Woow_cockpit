@@ -19,7 +19,11 @@ from .test_ha_emqx_sr5 import BCRYPT, users_answer
 
 
 def plain_answer(elsewhere=0, names=(), clear=None):
-    encoded = ','.join(base64.b64encode(name.encode()).decode() for name in names[:10])
+    """PLAIN_EXPR's answer; a name is a user id of the global chain or a (user id, user group) pair (iteration 8)."""
+    def item(name):
+        user, group = (name, 'mqtt:global') if isinstance(name, str) else name
+        return base64.b64encode(user.encode()).decode() + '.' + base64.b64encode(group.encode()).decode()
+    encoded = ','.join(item(name) for name in names[:10])
     return f'WOOWPLAIN:{elsewhere}:{len(names) if clear is None else clear}:{encoded}:ENDok\n'
 
 
@@ -107,11 +111,12 @@ class PlainExpressionTests(unittest.TestCase):
     def test_it_reads_the_global_chain_s_neighbours_and_the_table(self):
         expr = ha_emqx.PLAIN_EXPR
         for part in ('emqx:get_config([listeners], #{})', 'emqx:get_config([gateway], #{})',
-                     'maps:get(authentication, C1, [])', 'maps:get(authentication, G2, [])',
-                     'maps:get(listeners, G3, #{})', 'maps:get(authentication, C3, [])',
-                     'maps:get(backend, A, none) =:= built_in_database', '=:= plain',
-                     'ets:foldl(Fold, {0, [], 0}, emqx_authn_mnesia)', 'S =:= <<>>', 'Hex(H) orelse Bcr(H)',
-                     'fun(<<"$2", _/binary>>) -> true', 'case Bad of 0 -> io:format("WOOWPLAIN:~b:~b:~s:END"',
+                     'A2 <- Lw(maps:get(authentication, C2, []))', 'A3 <- Lw(maps:get(authentication, Gc3, []))',
+                     'Ln(maps:get(listeners, Gc4, #{}))', 'A4 <- Lw(maps:get(authentication, C4, []))',
+                     'emqx_gateway_utils:global_chain(G3)', 'emqx_gateway_utils:listener_chain(G4, T4, N4)',
+                     'maps:get(backend, A, none) =:= built_in_database', "maps:get(name, H, none) =:= plain",
+                     'ets:foldl(Fold, {0, [], 0}, emqx_authn_mnesia)', '[] -> Any(V)', 'Fits(Al, V)',
+                     'case Bad of 0 -> io:format("WOOWPLAIN:~b:~b:~s:END"',
                      '(_, {N0, U0, B0}) -> {N0, U0, B0 + 1}', '_ -> io:format("WOOWPLAIN:bad:END")'):
             with self.subTest(part=part):
                 self.assertIn(part, expr)
@@ -120,9 +125,10 @@ class PlainExpressionTests(unittest.TestCase):
         expr = ha_emqx.PLAIN_EXPR
         self.assertEqual(expr.count('io:format('), 2)
         printed = expr[expr.index('io:format("WOOWPLAIN:~b'):]
-        self.assertIn('[base64:encode(Ux) || Ux <- lists:sublist(lists:sort(Uc), 10)]', printed)
-        self.assertIn('{N0 + 1, [U | U0], B0}', expr, 'only the user id is collected')
-        for leak in ('[H |', '[S |', 'base64:encode(H)', 'base64:encode(S)', '~p', '~w'):
+        self.assertIn('[[base64:encode(Ux), ".", base64:encode(Kx)] || {Kx, Ux} <- lists:sublist(lists:sort(Uc), 10)]',
+                      printed)
+        self.assertIn('{N0 + 1, [{Kg, U} | U0], B0}', expr, 'only the user group and id are collected')
+        for leak in ('[V |', '[S |', 'base64:encode(V)', 'base64:encode(S)', '~p', '~w', '{Kg, V}', '{Kg, S}'):
             with self.subTest(leak=leak):
                 self.assertNotIn(leak, expr)
 
@@ -131,14 +137,15 @@ class ParsePlainTests(unittest.TestCase):
     def test_answers(self):
         parse = ha_emqx.parse_plain
         self.assertEqual(parse('WOOWPLAIN:0:0::ENDok\n'), {'elsewhere': 0, 'clear': 0, 'names': []})
-        self.assertEqual(parse(plain_answer(elsewhere=3, names=('a', 'b'))), {'elsewhere': 3, 'clear': 2,
-                                                                              'names': ['a', 'b']})
+        self.assertEqual(parse(plain_answer(elsewhere=3, names=('a', ('b', 'stomp:global')))), {
+            'elsewhere': 3, 'clear': 2, 'names': [('a', 'mqtt:global'), ('b', 'stomp:global')]})
         self.assertEqual(parse(plain_answer(names=[f'u{i}' for i in range(10)], clear=11))['names'],
-                         [f'u{i}' for i in range(10)])
+                         [(f'u{i}', 'mqtt:global') for i in range(10)])
         for bad in ('', 'ok', 'WOOWPLAIN:bad:ENDok', 'WOOWPLAIN:0:1::ENDok', 'WOOWPLAIN:0:1:YQ:ENDok',
                     'WOOWPLAIN:0:1:YQ===:ENDok', 'WOOWPLAIN:0:1:Y*==:ENDok', 'x WOOWPLAIN:0:0::ENDok',
                     'WOOWPLAIN:0:0::END ok x', 'WOOWPLAIN:-1:0::ENDok', 'WOOWPLAIN:0:0:YQ==:ENDok',
-                    'WOOWPLAIN:0:0::EN'):
+                    'WOOWPLAIN:0:0::EN', 'WOOWPLAIN:0:1:YQ==:ENDok', 'WOOWPLAIN:0:1:YQ==.:ENDok',
+                    'WOOWPLAIN:0:1:.YQ==:ENDok', 'WOOWPLAIN:0:1:YQ==.YQ==.YQ==:ENDok', 'WOOWPLAIN:0:1:YQ==.Y*==:ENDok'):
             with self.subTest(bad=bad), self.assertRaises(ValueError):
                 parse(bad)
 
@@ -148,7 +155,8 @@ class ParsePlainTests(unittest.TestCase):
         self.assertIsNone(ha_emqx.plain_blocker({'hashing': sha, 'plain': none}))
         self.assertEqual(ha_emqx.plain_blocker({'hashing': None, 'plain': dict(none, elsewhere=1)}),
                          ha_emqx.PLAIN_ELSEWHERE)
-        self.assertEqual(ha_emqx.plain_blocker({'hashing': sha, 'plain': {'elsewhere': 0, 'clear': 1, 'names': ['x']}}),
+        self.assertEqual(ha_emqx.plain_blocker({'hashing': sha, 'plain': {'elsewhere': 0, 'clear': 1,
+                                                                          'names': [('x', 'mqtt:global')]}}),
                          ha_emqx.CLEAR_ROWS.format(names='x'))
         self.assertEqual(ha_emqx.plain_blocker({'hashing': sr5.hashing('plain', 'disable'),
                                                 'plain': dict(none, elsewhere=1)}), ha_emqx.PLAIN_REFUSED)

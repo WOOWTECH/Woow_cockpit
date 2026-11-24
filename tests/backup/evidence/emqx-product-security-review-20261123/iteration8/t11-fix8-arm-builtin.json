@@ -1,0 +1,59 @@
+{
+ "attempt": "t11-fix8-arm-builtin",
+ "backup_engine_tree": "325f1f74038611bf5b53f545405e3c6ef3d39cb2",
+ "code": "sec/emqx-secreview8-20261124 (iteration 8: stored-form check, O-2, O-3)",
+ "command": "t11_profile_real.py fix8 arm builtin",
+ "commercial_acceptance": "not-complete",
+ "credentials": "generated per run; HA key (T11) read in-process by the b1 Secrets reader, never printed",
+ "date": "2026-11-24",
+ "elapsed_s": 154.5,
+ "exit_code": 0,
+ "harness_commit": "c2e601c23f562af91981ab15f00d505e245ce827",
+ "iteration": 8,
+ "lane": "emqx-secreview (SR-OWNER-1942)",
+ "result": {
+  "arch": "arm",
+  "candidate_cookie_on_command_line": false,
+  "candidate_env_file_flag": true,
+  "candidate_has_env_file_cookie": true,
+  "candidate_profile": [
+   "file",
+   "built_in_database"
+  ],
+  "candidate_rules": 2,
+  "codebase": "fix8",
+  "containers_left": 0,
+  "conversion": "PASSED (candidate built, all product checks green, profile equal)",
+  "dangling_volumes_new": 0,
+  "device_config_unchanged": true,
+  "device_profile": [
+   "file",
+   "built_in_database"
+  ],
+  "device_sources": "builtin",
+  "elapsed_s": 154.0,
+  "fixture": "woow-b1-arm-emqx-stopped-enc.tar",
+  "fixture_sha256_prefix": "b6eb257cc5790bee",
+  "ha_counts": {
+   "emqx_acl": 4,
+   "emqx_admin": 2,
+   "emqx_app": 1,
+   "emqx_authn_mnesia": 3,
+   "emqx_authn_scram_mnesia": 0,
+   "emqx_banned": 1,
+   "emqx_banned_rules": 0,
+   "emqx_psk": 0,
+   "emqx_retainer_message": 5
+  },
+  "image": "docker.io/emqx/emqx:5.8.9",
+  "network": "none",
+  "readback_roots": 44,
+  "store": "labpodman (separate --root)",
+  "test": "T11 real batch-1 HA backup, conversion body with this device's profile and EnvironmentFile"
+ },
+ "source_commit": "a1f194742d21b1041dbd23db2e36a05c20d5283e",
+ "started": "2026-11-24T20:23:51+0800",
+ "status_lines": [],
+ "stdout_sha256": "6759ef147d06c6c747b9304598f7db383da6237b2beb3925717338515c9197be",
+ "store": "labpodman (separate --root, lab only), every podman run --network none"
+}

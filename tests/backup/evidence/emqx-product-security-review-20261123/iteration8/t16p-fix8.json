@@ -1,0 +1,468 @@
+{
+ "attempt": "t16p-fix8",
+ "backup_engine_tree": "325f1f74038611bf5b53f545405e3c6ef3d39cb2",
+ "code": "sec/emqx-secreview8-20261124 (iteration 8: stored-form check, O-2, O-3)",
+ "command": "-I t16_product.py fix8 gwl-plain,past-digits,past-dollar2,hash-boot,orphan-plain,orphan-hash,bad-row,past-md5,mixed-ctl,ctl-sha256,db-off",
+ "commercial_acceptance": "not-complete",
+ "credentials": "generated per run; HA key (T11) read in-process by the b1 Secrets reader, never printed",
+ "date": "2026-11-24",
+ "elapsed_s": 1950.9,
+ "exit_code": 0,
+ "harness_commit": "3e1b411473f6dad13c1b9e5653d83d2709eae296",
+ "iteration": 8,
+ "lane": "emqx-secreview (SR-OWNER-1942)",
+ "result": {
+  "codebase": "fix8",
+  "device_users_added": "13",
+  "elapsed_s": 1947.8,
+  "image": "docker.io/emqx/emqx:5.8.9",
+  "lab_left": {
+   "containers": 0,
+   "volumes": 0
+  },
+  "modes": {
+   "bad-row": {
+    "check": {
+     "refused": "HASH_UNREADABLE"
+    },
+    "conversion": "REFUSED: HASH_UNREADABLE",
+    "device_leak": "rows=14:hash=0:salt=0:pwd=false",
+    "device_read_only_check": {
+     "equal": true
+    },
+    "device_read_only_conversion": {
+     "equal": true
+    },
+    "elapsed_s": 103.9,
+    "expect": {
+     "blocker": "HASH_UNREADABLE",
+     "warning": null
+    },
+    "export_called": false,
+    "plaintext_rows_in_candidate": 0,
+    "source": {
+     "added": "1:1",
+     "post": "ok",
+     "source_clear": "rows=2:clear=0:groups=['mqtt:global']"
+    },
+    "source_mnesia_files": 21,
+    "staged_sha256": "f727e4f6ec35687f6232a760452a1f68f04ef9770ca1d08ae5707c0d0c909a2c",
+    "text_scan": {
+     "bcrypt_prefix": 0,
+     "control_chars": 0,
+     "hex_runs_24": 0,
+     "texts": 2
+    }
+   },
+   "ctl-sha256": {
+    "candidate_clear": "rows=3:clear=0:groups=['mqtt:global']",
+    "candidate_leak": "rows=3:hash=0:salt=0:pwd=false",
+    "check": {
+     "accounts_stop": 0,
+     "blockers": [],
+     "db_off": 0,
+     "plain_answer": {
+      "clear": 0,
+      "elsewhere": 0
+     }
+    },
+    "conversion": "PASSED (candidate built, all product checks green)",
+    "device_leak": "rows=14:hash=0:salt=0:pwd=false",
+    "device_read_only_check": {
+     "equal": true
+    },
+    "device_read_only_conversion": {
+     "equal": true
+    },
+    "elapsed_s": 234.5,
+    "expect": {
+     "blocker": null,
+     "warning": null
+    },
+    "export_called": true,
+    "plaintext_rows_in_candidate": 0,
+    "source": {
+     "added": "2:2",
+     "source_clear": "rows=2:clear=0:groups=['mqtt:global']"
+    },
+    "source_mnesia_files": 21,
+    "staged_sha256": "f727e4f6ec35687f6232a760452a1f68f04ef9770ca1d08ae5707c0d0c909a2c",
+    "text_scan": {
+     "bcrypt_prefix": 0,
+     "control_chars": 0,
+     "hex_runs_24": 0,
+     "texts": 6
+    }
+   },
+   "db-off": {
+    "candidate_clear": "rows=2:clear=0:groups=['mqtt:global']",
+    "candidate_leak": "rows=2:hash=0:salt=0:pwd=false",
+    "check": {
+     "accounts_stop": 0,
+     "blockers": [],
+     "db_off": 1,
+     "db_off_exact": true,
+     "plain_answer": {
+      "clear": 0,
+      "elsewhere": 0
+     }
+    },
+    "conversion": "REFUSED: other EMQX 來源認證器無法唯一對應目標 bootstrap。",
+    "device_leak": "rows=14:hash=0:salt=0:pwd=false",
+    "device_read_only_check": {
+     "equal": true
+    },
+    "device_read_only_conversion": {
+     "equal": true
+    },
+    "elapsed_s": 228.4,
+    "expect": {
+     "blocker": null,
+     "warning": "DB_OFF"
+    },
+    "export_called": true,
+    "plaintext_rows_in_candidate": 0,
+    "source": {
+     "added": "1:1",
+     "source_clear": "rows=1:clear=0:groups=['mqtt:global']"
+    },
+    "source_mnesia_files": 21,
+    "staged_sha256": "5f352d7f58b8a855941effbe2806c23ccd3b0f9279b859d3578b47aefdefd427",
+    "text_scan": {
+     "bcrypt_prefix": 0,
+     "control_chars": 0,
+     "hex_runs_24": 0,
+     "texts": 5
+    }
+   },
+   "gwl-plain": {
+    "check": {
+     "accounts_stop": 0,
+     "blockers": [
+      "PLAIN_ELSEWHERE"
+     ],
+     "db_off": 0,
+     "plain_answer": {
+      "clear": 2,
+      "elsewhere": 1
+     }
+    },
+    "conversion": "REFUSED: PLAIN_ELSEWHERE",
+    "device_leak": "rows=14:hash=0:salt=0:pwd=false",
+    "device_read_only_check": {
+     "equal": true
+    },
+    "device_read_only_conversion": {
+     "equal": true
+    },
+    "elapsed_s": 170.9,
+    "expect": {
+     "blocker": "PLAIN_ELSEWHERE",
+     "warning": null
+    },
+    "export_called": false,
+    "plaintext_rows_in_candidate": 0,
+    "source": {
+     "added": "2:2",
+     "source_clear": "rows=2:clear=2:groups=['stomp:tcp:default']"
+    },
+    "source_mnesia_files": 21,
+    "staged_sha256": "1c5d9b8ac93dad2d17773b5a10d359f0ebf37f71986194e331774a207b63e33e",
+    "text_scan": {
+     "bcrypt_prefix": 0,
+     "control_chars": 0,
+     "hex_runs_24": 0,
+     "texts": 3
+    }
+   },
+   "hash-boot": {
+    "check": {
+     "accounts_stop": 0,
+     "blockers": [
+      "CLEAR_ROWS"
+     ],
+     "clear_rows_exact": true,
+     "db_off": 0,
+     "plain_answer": {
+      "clear": 2,
+      "elsewhere": 0
+     }
+    },
+    "conversion": "REFUSED: CLEAR_ROWS",
+    "device_leak": "rows=14:hash=0:salt=0:pwd=false",
+    "device_read_only_check": {
+     "equal": true
+    },
+    "device_read_only_conversion": {
+     "equal": true
+    },
+    "elapsed_s": 148.8,
+    "expect": {
+     "blocker": "CLEAR_ROWS",
+     "warning": null
+    },
+    "export_called": false,
+    "plaintext_rows_in_candidate": 0,
+    "source": {
+     "source_clear": "rows=2:clear=2:groups=['mqtt:global']"
+    },
+    "source_mnesia_files": 21,
+    "staged_sha256": "f727e4f6ec35687f6232a760452a1f68f04ef9770ca1d08ae5707c0d0c909a2c",
+    "text_scan": {
+     "bcrypt_prefix": 0,
+     "control_chars": 0,
+     "hex_runs_24": 0,
+     "texts": 3
+    }
+   },
+   "mixed-ctl": {
+    "candidate_clear": "rows=11:clear=0:groups=['mqtt-sn:global','mqtt:global','stomp:global','stomp:tcp:default','tcp:default']",
+    "candidate_leak": "rows=11:hash=0:salt=0:pwd=false",
+    "check": {
+     "accounts_stop": 1,
+     "accounts_stop_exact": true,
+     "blockers": [],
+     "db_off": 0,
+     "plain_answer": {
+      "clear": 0,
+      "elsewhere": 0
+     }
+    },
+    "conversion": "PASSED (candidate built, all product checks green)",
+    "device_leak": "rows=14:hash=0:salt=0:pwd=false",
+    "device_read_only_check": {
+     "equal": true
+    },
+    "device_read_only_conversion": {
+     "equal": true
+    },
+    "elapsed_s": 240.8,
+    "expect": {
+     "blocker": null,
+     "warning": "ACCOUNTS_STOP"
+    },
+    "export_called": true,
+    "plaintext_rows_in_candidate": 0,
+    "source": {
+     "added": "10:10",
+     "source_clear": "rows=10:clear=0:groups=['mqtt-sn:global','mqtt:global','stomp:global','stomp:tcp:default','tcp:default']"
+    },
+    "source_mnesia_files": 21,
+    "staged_sha256": "4f9c2350134df0c3966f327ebe22de49a8829b7e941c6ad2dce25fbf0cd2616e",
+    "text_scan": {
+     "bcrypt_prefix": 0,
+     "control_chars": 0,
+     "hex_runs_24": 0,
+     "texts": 9
+    }
+   },
+   "orphan-hash": {
+    "candidate_clear": "rows=3:clear=0:groups=['mqtt:global','stomp:global']",
+    "candidate_leak": "rows=3:hash=0:salt=0:pwd=false",
+    "check": {
+     "accounts_stop": 0,
+     "blockers": [],
+     "db_off": 0,
+     "plain_answer": {
+      "clear": 0,
+      "elsewhere": 0
+     }
+    },
+    "conversion": "PASSED (candidate built, all product checks green)",
+    "device_leak": "rows=14:hash=0:salt=0:pwd=false",
+    "device_read_only_check": {
+     "equal": true
+    },
+    "device_read_only_conversion": {
+     "equal": true
+    },
+    "elapsed_s": 234.3,
+    "expect": {
+     "blocker": null,
+     "warning": null
+    },
+    "export_called": true,
+    "plaintext_rows_in_candidate": 0,
+    "source": {
+     "added": "2:2",
+     "source_clear": "rows=2:clear=0:groups=['stomp:global']"
+    },
+    "source_mnesia_files": 21,
+    "staged_sha256": "f727e4f6ec35687f6232a760452a1f68f04ef9770ca1d08ae5707c0d0c909a2c",
+    "text_scan": {
+     "bcrypt_prefix": 0,
+     "control_chars": 0,
+     "hex_runs_24": 0,
+     "texts": 6
+    }
+   },
+   "orphan-plain": {
+    "check": {
+     "accounts_stop": 0,
+     "blockers": [
+      "CLEAR_ROWS"
+     ],
+     "clear_rows_exact": true,
+     "db_off": 0,
+     "plain_answer": {
+      "clear": 2,
+      "elsewhere": 0
+     }
+    },
+    "conversion": "REFUSED: CLEAR_ROWS",
+    "device_leak": "rows=14:hash=0:salt=0:pwd=false",
+    "device_read_only_check": {
+     "equal": true
+    },
+    "device_read_only_conversion": {
+     "equal": true
+    },
+    "elapsed_s": 132.0,
+    "expect": {
+     "blocker": "CLEAR_ROWS",
+     "warning": null
+    },
+    "export_called": false,
+    "plaintext_rows_in_candidate": 0,
+    "source": {
+     "added": "2:2",
+     "source_clear": "rows=2:clear=2:groups=['stomp:global']"
+    },
+    "source_mnesia_files": 21,
+    "staged_sha256": "f727e4f6ec35687f6232a760452a1f68f04ef9770ca1d08ae5707c0d0c909a2c",
+    "text_scan": {
+     "bcrypt_prefix": 0,
+     "control_chars": 0,
+     "hex_runs_24": 0,
+     "texts": 3
+    }
+   },
+   "past-digits": {
+    "check": {
+     "accounts_stop": 0,
+     "blockers": [
+      "CLEAR_ROWS"
+     ],
+     "clear_rows_exact": true,
+     "db_off": 0,
+     "plain_answer": {
+      "clear": 2,
+      "elsewhere": 0
+     }
+    },
+    "conversion": "REFUSED: CLEAR_ROWS",
+    "device_leak": "rows=14:hash=0:salt=0:pwd=false",
+    "device_read_only_check": {
+     "equal": true
+    },
+    "device_read_only_conversion": {
+     "equal": true
+    },
+    "elapsed_s": 183.7,
+    "expect": {
+     "blocker": "CLEAR_ROWS",
+     "warning": null
+    },
+    "export_called": false,
+    "plaintext_rows_in_candidate": 0,
+    "source": {
+     "added": "2:2",
+     "source_clear": "rows=2:clear=2:groups=['mqtt:global']"
+    },
+    "source_mnesia_files": 21,
+    "staged_sha256": "f727e4f6ec35687f6232a760452a1f68f04ef9770ca1d08ae5707c0d0c909a2c",
+    "text_scan": {
+     "bcrypt_prefix": 0,
+     "control_chars": 0,
+     "hex_runs_24": 0,
+     "texts": 3
+    }
+   },
+   "past-dollar2": {
+    "check": {
+     "accounts_stop": 0,
+     "blockers": [
+      "CLEAR_ROWS"
+     ],
+     "clear_rows_exact": true,
+     "db_off": 0,
+     "plain_answer": {
+      "clear": 2,
+      "elsewhere": 0
+     }
+    },
+    "conversion": "REFUSED: CLEAR_ROWS",
+    "device_leak": "rows=14:hash=0:salt=0:pwd=false",
+    "device_read_only_check": {
+     "equal": true
+    },
+    "device_read_only_conversion": {
+     "equal": true
+    },
+    "elapsed_s": 159.6,
+    "expect": {
+     "blocker": "CLEAR_ROWS",
+     "warning": null
+    },
+    "export_called": false,
+    "plaintext_rows_in_candidate": 0,
+    "source": {
+     "added": "2:2",
+     "source_clear": "rows=2:clear=2:groups=['mqtt:global']"
+    },
+    "source_mnesia_files": 21,
+    "staged_sha256": "f727e4f6ec35687f6232a760452a1f68f04ef9770ca1d08ae5707c0d0c909a2c",
+    "text_scan": {
+     "bcrypt_prefix": 0,
+     "control_chars": 0,
+     "hex_runs_24": 0,
+     "texts": 3
+    }
+   },
+   "past-md5": {
+    "check": {
+     "accounts_stop": 0,
+     "blockers": [
+      "CLEAR_ROWS"
+     ],
+     "clear_rows_exact": true,
+     "db_off": 0,
+     "plain_answer": {
+      "clear": 2,
+      "elsewhere": 0
+     }
+    },
+    "device_leak": "rows=14:hash=0:salt=0:pwd=false",
+    "device_read_only_check": {
+     "equal": true
+    },
+    "elapsed_s": 82.2,
+    "expect": {
+     "blocker": "CLEAR_ROWS",
+     "warning": null
+    },
+    "plaintext_rows_in_candidate": 0,
+    "source": {
+     "added": "2:2",
+     "source_clear": "rows=2:clear=0:groups=['mqtt:global']"
+    },
+    "source_mnesia_files": 21,
+    "staged_sha256": "f727e4f6ec35687f6232a760452a1f68f04ef9770ca1d08ae5707c0d0c909a2c",
+    "text_scan": {
+     "bcrypt_prefix": 0,
+     "control_chars": 0,
+     "hex_runs_24": 0,
+     "texts": 2
+    }
+   }
+  },
+  "network": "none",
+  "store": "labpodman (separate --root)",
+  "test": "T16P stored-form refusal, gateway-listener plain and unknown-format rows through the product check path and conversion body (rows written by EMQX itself)"
+ },
+ "source_commit": "a1f194742d21b1041dbd23db2e36a05c20d5283e",
+ "started": "2026-11-24T19:28:03+0800",
+ "status_lines": [],
+ "stdout_sha256": "ae3046356c614d0598ca2ba7d0b1b6e21d03e651d51f665ea6d45da526bb586f",
+ "store": "labpodman (separate --root, lab only), every podman run --network none"
+}

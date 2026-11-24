@@ -1,0 +1,226 @@
+{
+ "tree": "/tmp/emqx-secreview8-suite-20261124",
+ "modules": [
+  "tests.backup.test_ha_emqx_forms_review",
+  "tests.backup.test_ha_emqx_plain_review",
+  "tests.backup.test_ha_emqx_sr5",
+  "tests.backup.test_ha_emqx"
+ ],
+ "mutations": [
+  {
+   "file": "ha_emqx.py",
+   "name": "group dropped from the names",
+   "pattern_found": 1,
+   "exit": 1,
+   "tests": 71,
+   "killed": true,
+   "tail": "FAILED (failures=2)"
+  },
+  {
+   "file": "ha_emqx.py",
+   "name": "long id not cut before its group",
+   "pattern_found": 1,
+   "exit": 1,
+   "tests": 71,
+   "killed": true,
+   "tail": "FAILED (failures=1)"
+  },
+  {
+   "file": "ha_emqx.py",
+   "name": "no count beyond ten",
+   "pattern_found": 1,
+   "exit": 1,
+   "tests": 71,
+   "killed": true,
+   "tail": "FAILED (failures=4)"
+  },
+  {
+   "file": "ha_emqx.py",
+   "name": "group optional in the answer",
+   "pattern_found": 1,
+   "exit": 1,
+   "tests": 71,
+   "killed": true,
+   "tail": "FAILED (failures=2)"
+  },
+  {
+   "file": "ha_emqx.py",
+   "name": "group length unbounded",
+   "pattern_found": 1,
+   "exit": 1,
+   "tests": 71,
+   "killed": true,
+   "tail": "FAILED (failures=1)"
+  },
+  {
+   "file": "ha_emqx.py",
+   "name": "lenient answer",
+   "pattern_found": 1,
+   "exit": 1,
+   "tests": 71,
+   "killed": true,
+   "tail": "FAILED (failures=2)"
+  },
+  {
+   "file": "ha_emqx.py",
+   "name": "names count unchecked",
+   "pattern_found": 1,
+   "exit": 1,
+   "tests": 71,
+   "killed": true,
+   "tail": "FAILED (failures=2)"
+  },
+  {
+   "file": "ha_emqx.py",
+   "name": "elsewhere ignored",
+   "pattern_found": 1,
+   "exit": 1,
+   "tests": 71,
+   "killed": true,
+   "tail": "FAILED (failures=4)"
+  },
+  {
+   "file": "ha_emqx.py",
+   "name": "clear rows ignored",
+   "pattern_found": 1,
+   "exit": 1,
+   "tests": 71,
+   "killed": true,
+   "tail": "FAILED (failures=7, errors=1)"
+  },
+  {
+   "file": "ha_emqx.py",
+   "name": "global text not first",
+   "pattern_found": 1,
+   "exit": 1,
+   "tests": 71,
+   "killed": true,
+   "tail": "FAILED (failures=9)"
+  },
+  {
+   "file": "ha_emqx.py",
+   "name": "HA not asked",
+   "pattern_found": 1,
+   "exit": 1,
+   "tests": 71,
+   "killed": true,
+   "tail": "FAILED (failures=13)"
+  },
+  {
+   "file": "ha_emqx.py",
+   "name": "conversion refusal after the export",
+   "pattern_found": 1,
+   "exit": 1,
+   "tests": 71,
+   "killed": true,
+   "tail": "FAILED (failures=3)"
+  },
+  {
+   "file": "ha_emqx.py",
+   "name": "DB_OFF ignores enable",
+   "pattern_found": 1,
+   "exit": 1,
+   "tests": 71,
+   "killed": true,
+   "tail": "FAILED (failures=3)"
+  },
+  {
+   "file": "ha_emqx.py",
+   "name": "DB_OFF without accounts",
+   "pattern_found": 1,
+   "exit": 1,
+   "tests": 71,
+   "killed": true,
+   "tail": "FAILED (failures=2)"
+  },
+  {
+   "file": "ha_emqx.py",
+   "name": "DB_OFF next to a clear-text refusal",
+   "pattern_found": 1,
+   "exit": 1,
+   "tests": 71,
+   "killed": true,
+   "tail": "FAILED (failures=1)"
+  },
+  {
+   "file": "ha_emqx.py",
+   "name": "DB_OFF never added",
+   "pattern_found": 1,
+   "exit": 1,
+   "tests": 71,
+   "killed": true,
+   "tail": "FAILED (failures=3, errors=1)"
+  },
+  {
+   "file": "ha_emqx.py",
+   "name": "hashing warning next to DB_OFF",
+   "pattern_found": 1,
+   "exit": 1,
+   "tests": 71,
+   "killed": true,
+   "tail": "FAILED (failures=1)"
+  },
+  {
+   "file": "hacommon.py",
+   "name": "format characters kept",
+   "pattern_found": 1,
+   "exit": 1,
+   "tests": 71,
+   "killed": true,
+   "tail": "FAILED (failures=13)"
+  },
+  {
+   "file": "hacommon.py",
+   "name": "unassigned kept",
+   "pattern_found": 1,
+   "exit": 1,
+   "tests": 71,
+   "killed": true,
+   "tail": "FAILED (failures=1)"
+  },
+  {
+   "file": "hacommon.py",
+   "name": "surrogates kept",
+   "pattern_found": 1,
+   "exit": 1,
+   "tests": 71,
+   "killed": true,
+   "tail": "FAILED (failures=2)"
+  },
+  {
+   "file": "hacommon.py",
+   "name": "separators kept",
+   "pattern_found": 1,
+   "exit": 1,
+   "tests": 71,
+   "killed": true,
+   "tail": "FAILED (failures=3)"
+  },
+  {
+   "file": "hacommon.py",
+   "name": "not cut",
+   "pattern_found": 1,
+   "exit": 1,
+   "tests": 71,
+   "killed": true,
+   "tail": "FAILED (failures=1)"
+  },
+  {
+   "file": "hacommon.py",
+   "name": "one name too many shown",
+   "pattern_found": 1,
+   "exit": 1,
+   "tests": 71,
+   "killed": true,
+   "tail": "FAILED (failures=1)"
+  }
+ ],
+ "unmutated": {
+  "exit": 0,
+  "tests": 71,
+  "tail": "OK"
+ },
+ "killed": 23,
+ "total": 23,
+ "elapsed_s": 150.1
+}
