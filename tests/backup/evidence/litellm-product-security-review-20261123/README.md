@@ -229,13 +229,17 @@ Added by the product lane (2026-11-24 08:35, `planted-objects.json`, harness `b3
 case `planted_objects` = what the lane verifier (02:14) listed as never planted, created by HA's NON-superuser database
 owner on real PostgreSQL 18.7: a DOMAIN whose CHECK runs code and a table with a column of it, a row and a statement
 TRIGGER (ENABLE ALWAYS) on a LiteLLM table, a forced row-security policy, a rule, an expression index and a CHECK
-constraint that run code, the trusted EXTENSIONs pgcrypto and citext, and a large object. Result: **nothing ran** (no
-marker after the first connection, `analyse`, `salt_binding`, `read_schema` and `export_rows`; the planted function
-could have run `COPY … TO PROGRAM` in the superuser's session); the row of the trigger/policy table was exported
+constraint that run code, the trusted EXTENSIONs pgcrypto and citext, and a large object. Result: **nothing ran as the
+superuser** (no marker after the first connection, `analyse`, `salt_binding`, `read_schema` and `export_rows`; the planted
+function could have run `COPY … TO PROGRAM` in the superuser's session); the row of the trigger/policy table was exported
 unchanged; the large object is a blocker; the DOMAIN and its table are named as a data-shape difference (the product's
 schema blocker, compared with a clean cluster's schema standing for this device's). Triggers, policies, rules, indexes,
 constraints and extensions are not compared and not refused, because they never move: the conversion uses this device's
 schema and only copies rows.
+*Limits of that result (CORRECTED 2026-11-24, lane verifier):* the marker (`COPY … TO PROGRAM` inside `EXCEPTION WHEN
+OTHERS`) can only fire in a superuser session, so the case proves "nothing ran as the superuser" and says nothing about
+code run as the reader role or the database owner; it has no positive control of its own (the other cases' original code
+left markers), its crafted schema is small (a few LiteLLM tables), and it covers HA's side only, not a whole conversion.
 
 Findings of iteration 2:
 
@@ -287,7 +291,8 @@ Findings of iteration 2:
    `t2_hidden_hooks`, hooks `post_call_rules` and `custom_auth`) through upload → `ha-check-start` → `ha-convert-start`:
    the check answered ok (HA's side blind, as found here), the conversion exported 86 tables, loaded them into the new
    PostgreSQL 17 cluster and then ended failed naming both hooks, before the converted dump; no converted backup, no
-   throwaway object, this device's secrets, salt, data and keys unchanged.
+   throwaway object, this device's secrets, salt, data and keys unchanged (LiteLLM's own state; the run's container line is
+   one-sided and dev-d's crash-looping headscale container was gone afterwards, lane README "Iteration 5").
 10. **SR-9 (high for a foreign backup, like SR-6) — fixed `a06dc21`.** The SR-6 check cut the callback names to the
    first 50 before it looked for a dot, so 60 plain `success_callback` names that sort before a dotted one hid it
    (no blocker on `f2a2cb4`, `original3-stored_variants.json`; `1e29974` has the same code). LiteLLM imports every dotted entry of `success_callback`,
