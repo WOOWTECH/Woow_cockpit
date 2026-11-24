@@ -454,7 +454,7 @@ class TempObjects:
 
     def _apply_root(self, name, root):
         """Owner, group and mode of the tar's top-directory entry on the imported volume. Podman 6.1.1
-        (192.168.2.54, 2026-11-23) ignores a tar's '.' entry on `volume import` and keeps the top directory as `volume
+        (an ARM64 test machine, 2026-11-23) ignores a tar's '.' entry on `volume import` and keeps the top directory as `volume
         create` made it (root, 0755); a throwaway app running as its image user could not write its own data folder
         (EMQX's candidate on its seeded data volume exited at boot: emqx-real-arm-attempt1). Same commands as the
         adapter's _apply_volume_root (inside the owner's user namespace); None = left as Podman made it."""

@@ -276,7 +276,7 @@ class VolumeImportTests(unittest.TestCase):
 
 
 class VolumeRootTests(unittest.TestCase):
-    """Podman 6.1.1 ignores a tar's '.' entry on `volume import` (192.168.2.54): the entry is applied afterwards."""
+    """Podman 6.1.1 ignores a tar's '.' entry on `volume import` (an ARM64 test machine): the entry is applied afterwards."""
 
     @staticmethod
     def tar_with_root(uid, gid, mode, *, first='.'):
