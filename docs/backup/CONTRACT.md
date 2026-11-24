@@ -403,8 +403,9 @@ variant invalid (`field: "id"`): installing it would move that entry and its bac
   package's startup probe waits for (`suggest.READY_PATHS`, with a hint; an installed entry's checks are kept).
   LAN-only ports, HTTPS and unpublished ports give hints instead of URLs. A query
   string (`?…`, possibly a token) is never copied: the URL keeps only its path and a hint says so (review L5). A path
-  that answers only inside the container (`suggest.HEALTH_PATHS`: `emqx` `/readyz`, 403 through the published port) is
-  replaced by the path of the same port that answers the host (`/`, the Dashboard the broker serves), with a hint.
+  that can never answer the engine's check with 200 (`suggest.HEALTH_PATHS`: `emqx` `/readyz`, 403 through the published
+  port, and the Dashboard page `/`, 406 to the check's `Accept: application/json`) is replaced by the path of the same port
+  that can (`/api/v5/error_codes`, the broker's own public REST endpoint), with a hint.
 * `verify`: built-in digests (feature 1): one `postgres-digest` per PostgreSQL database (`{"postgres": "main"}` in export
   modes, `{"container","unit","user"}` in cold mode) and one `files-digest` per proposed volume and host directory, except
   a PostgreSQL data volume or directory (the table digest covers it); at most 16. If the validator rejects them (an engine
@@ -422,8 +423,8 @@ every variant of an installed app can be installed as proposed. One exception: a
 `suggest.HEALTH_TIMEOUTS` (`litellm`) with a shorter `timeout_seconds` (or none, the catalog's 60 s) gets that limit in
 the draft, with an info note `health-timeout` naming the old limits; it takes effect when the draft is installed (the
 engine never edits an installed entry by itself). The same way a `health` item that expects 200 on a path in
-`suggest.HEALTH_PATHS` gets the path that answers the host, with an info note `health-path` (a check adapted to another
-status is left alone). `installed.changes` is the structured diff
+`suggest.HEALTH_PATHS` gets the path that can answer (or is left out when the entry already asks it), with an info note
+`health-path` (a check adapted to another status is left alone). `installed.changes` is the structured diff
 installed → draft, `installed.drift` the zh-TW notes on structural differences (a volume, directory, secret, config file,
 unit, writer or Quadlet file on one side only), `installed.same` true when nothing differs.
 

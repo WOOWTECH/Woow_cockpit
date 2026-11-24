@@ -1938,7 +1938,7 @@ function llFixture({ check = llCheck() } = {}) {
 // The page's own reminder for the batch 1 HA file.
 const B1_DELETE_LINE = `匯入完成後，建議刪除這份 HA 備份檔（裡面可能有 HA 的密碼與權杖）。 前往 HA 備份「${B1_NAME}」`;
 const B1_STOP_LINES = B1_APPS.map(id => `請把 HA 那邊的「${B1[id].addon}」附加元件停掉，避免同一件事兩邊各做一次。`);
-// Batch 2 (2026-11-23): the WOOWTECH OpenDesign add-on as ha_opendesign.py reports the real x86 showcase backup (its
+// Batch 2 (2026-11-23): the WOOWTECH OpenDesign add-on as ha_opendesign.py reports the real x86 HA backup (its
 // section of HaCheck, CONTRACT §7; one engine warning), on a device with OpenDesign and its MCP admin app installed.
 const OD = { slug: '1b7b4ce7_woow_ha_opendesign', addon: 'Woow HA OpenDesign', version: '0.2.15', app: 'OpenDesign 設計工具', product: '0.24.1' };
 const HA_OD = 'ha-0d0d0d0d0d0d0d0d0d0d';
@@ -1959,7 +1959,7 @@ function odFixture() {
   Object.assign(data.scripts, haScripts({ check }));
   return data;
 }
-// Batch 2 (2026-11-23): the WOOWTECH code-server add-on as ha_codeserver.py reports the real x86 showcase backup (its
+// Batch 2 (2026-11-23): the WOOWTECH code-server add-on as ha_codeserver.py reports the real x86 HA backup (its
 // section of HaCheck, CONTRACT §7; the engine's warnings), with a Cloudflare Tunnel and an MCP admin add-on that never
 // move (CONTRACT §9 "Batch 2: add-ons that are not moved"), on a device with code-server and Odoo MCP 管理 installed.
 const CS = { slug: '1b7b4ce7_woow_ha_code_server', addon: 'Woow Code Server', version: '0.1.14', app: 'code-server 開發環境', product: '4.139.1' };
@@ -1995,7 +1995,7 @@ function csFixture() {
   Object.assign(data.scripts, haScripts({ check }));
   return data;
 }
-// Batch 2 (2026-11-23): the WOOWTECH Nextcloud Office add-on as ha_nextcloud.py reports the real x86 showcase backups
+// Batch 2 (2026-11-23): the WOOWTECH Nextcloud Office add-on as ha_nextcloud.py reports the real x86 HA backups
 // (its section of HaCheck, CONTRACT §7 and §9 "Batch 2: Nextcloud"): with HA's share folder the users' files come along;
 // without it the import is refused (a database without its files would lose them).
 const NC = { slug: '1b7b4ce7_woow-nextcloud-office', addon: 'Woow Nextcloud Office', version: '0.2.3', app: 'Nextcloud 雲端硬碟' };
@@ -2006,7 +2006,7 @@ const NC_WARNINGS = ['HA 的 Nextcloud 設定 filelocking.enabled、defaultapp �
 const NC_SECTION = { nextcloud_version: '35.0.1.1', addon_nextcloud_version: '35.0.1', users: 4, files: 381, shares: 3, tokens: 125,
   calendar_objects: 7, contacts: 8, datadir: '/share/nextcloud', datadir_in_backup: true, datadir_files: 412, datadir_bytes: 210 * MiB,
   custom_apps: ['notes', 'richdocuments', 'tasks'], pg_version: '16', office: true, ha_url: 'https://nextcloud.example.test',
-  target_url: 'http://192.168.2.46:18081' };
+  target_url: 'http://192.0.2.46:18081' };
 function ncFixture({ share = true } = {}) {
   const data = fixture();
   data.status.apps.push(app('nextcloud', NC.app));
@@ -2026,7 +2026,7 @@ function ncFixture({ share = true } = {}) {
 }
 const NC_FACTS = { 'Nextcloud 版本': '35.0.1.1', 使用者: '4 位', 檔案: '381 筆檔案紀錄', 使用者檔案: '412 個檔案（210 MiB），來自 /share/nextcloud',
   分享: '3 個', 行事曆與聯絡人: '7 個行程、8 位聯絡人', 自訂應用: 'notes、richdocuments、tasks', Office: 'HA 有啟用，匯入後使用這台的 Collabora',
-  'HA 的網址': 'https://nextcloud.example.test', 這台的網址: 'http://192.168.2.46:18081' };
+  'HA 的網址': 'https://nextcloud.example.test', 這台的網址: 'http://192.0.2.46:18081' };
 const openNc = async page => {
   await ready(page);
   await page.locator('[data-nav="backups"]').click();
@@ -5963,7 +5963,7 @@ try {
       assert.deepEqual(await card.locator('.check-warn .check-message').allTextContents(), NC_WARNINGS);
       assert.deepEqual((await metadataOf(card))[0], NC_FACTS);
       assert.equal(await card.locator('p.muted').last().textContent(),
-        '匯入後，用 HA 那邊 Nextcloud 的帳號和密碼登入；同步用戶端與行事曆、聯絡人要改連到這台的 http://192.168.2.46:18081。');
+        '匯入後，用 HA 那邊 Nextcloud 的帳號和密碼登入；同步用戶端與行事曆、聯絡人要改連到這台的 http://192.0.2.46:18081。');
       await page.locator('.wizard-card .notice-info').getByText('Nextcloud 的自訂應用是會在這台執行的程式，只匯入你信任的備份。').waitFor();
       await enabled(page, '[data-focus="ha-convert"]');
       await allWidths(page, 'batch 2 Nextcloud results');
