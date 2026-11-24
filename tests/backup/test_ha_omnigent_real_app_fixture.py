@@ -327,5 +327,5 @@ if sys.stdin.readline() != 'OK\n': raise SystemExit(2)
                        "import time; time.sleep(10)"):
             with self.subTest(ending=ending), self.assertRaises(Incomplete):
                 probe.run_events([sys.executable, '-I', '-c', auth + ending], {},
-                    probe.register_private, [('/auth/login', ('token','refresh_token'), True)], timeout=0.3)
+                    probe.register_private, [('/auth/login', ('token','refresh_token'), True)], timeout=5)
             self.assertIn(b'synthetic-token', probe.SECRET_VALUES)
