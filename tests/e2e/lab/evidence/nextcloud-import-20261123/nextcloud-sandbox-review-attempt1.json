@@ -1,0 +1,511 @@
+{
+ "kind": "nextcloud-sandbox-review",
+ "date": "2026-11-24T09:02:56+08:00",
+ "source_commit": "1e6dce7276fb070c365fb28055d8bc0857eca23a",
+ "tracked_changes": false,
+ "ha_nextcloud_sha256": "c7dcde38c27c5467a653c9e0ae1045f511818597128d78c214b835157a89d251",
+ "image": "docker.io/library/postgres:16-alpine",
+ "results": [
+  {
+   "case": "clean",
+   "steps": [
+    "ha_database"
+   ],
+   "live_markers": [],
+   "live_read": [
+    "appconfig",
+    "datacl",
+    "extensions",
+    "nspacl",
+    "role",
+    "roles"
+   ],
+   "scan": {
+    "pg_version": "16",
+    "config": true
+   },
+   "check_markers": [],
+   "check": {
+    "shape_problems": [],
+    "tables_read": true,
+    "lists": true
+   },
+   "dump_bytes": 9557,
+   "hapg_markers": [],
+   "built": {
+    "counts": {
+     "users": 1,
+     "files": 2,
+     "storages": 2
+    },
+    "removed_cache_rows": 2
+   },
+   "converted_markers": [],
+   "ok": true,
+   "seconds": 35.4
+  },
+  {
+   "case": "owner_trojan",
+   "steps": [
+    "ha_database"
+   ],
+   "live_markers": [],
+   "live_read": [
+    "appconfig",
+    "datacl",
+    "extensions",
+    "nspacl",
+    "role",
+    "roles"
+   ],
+   "scan": {
+    "pg_version": "16",
+    "config": true
+   },
+   "check_markers": [],
+   "check": {
+    "shape_problems": [
+     "函式"
+    ],
+    "tables_read": false,
+    "lists": false
+   },
+   "control_unpinned_markers": [
+    "woowbk-review-aggregate_json_agg_name_postgres.txt"
+   ],
+   "ok": true,
+   "seconds": 67.6
+  },
+  {
+   "case": "owner_view",
+   "steps": [
+    "ha_database"
+   ],
+   "live_markers": [],
+   "live_read": [
+    "appconfig",
+    "datacl",
+    "extensions",
+    "nspacl",
+    "role",
+    "roles"
+   ],
+   "scan": {
+    "pg_version": "16",
+    "config": true
+   },
+   "check_markers": [],
+   "check": {
+    "shape_problems": null,
+    "tables_read": false,
+    "lists": false
+   },
+   "control_read_markers": [
+    "woowbk-review-view_appconfig_postgres.txt"
+   ],
+   "ok": false,
+   "seconds": 32.0
+  },
+  {
+   "case": "owner_trigger",
+   "steps": [
+    "ha_database"
+   ],
+   "live_markers": [],
+   "live_read": [
+    "appconfig",
+    "datacl",
+    "extensions",
+    "nspacl",
+    "role",
+    "roles"
+   ],
+   "scan": {
+    "pg_version": "16",
+    "config": true
+   },
+   "check_markers": [],
+   "check": {
+    "shape_problems": [
+     "函式",
+     "觸發程序",
+     "規則",
+     "不是固定值的欄位預設值"
+    ],
+    "tables_read": false,
+    "lists": false
+   },
+   "ok": true,
+   "seconds": 17.4
+  },
+  {
+   "case": "hidden_trigger",
+   "steps": [
+    "ha_database"
+   ],
+   "live_markers": [],
+   "live_read": [
+    "appconfig",
+    "datacl",
+    "extensions",
+    "nspacl",
+    "role",
+    "roles"
+   ],
+   "scan": {
+    "pg_version": "16",
+    "config": true
+   },
+   "check_markers": [],
+   "check": {
+    "shape_problems": [],
+    "tables_read": true,
+    "lists": true
+   },
+   "dump_bytes": 12640,
+   "hapg_markers": [],
+   "stopped": {
+    "code": "incompatible",
+    "message": "HA 的 Nextcloud 資料庫含有 Nextcloud 不會建立的資料庫物件（函式、觸發程序），無法安全地搬過來。"
+   },
+   "converted_markers": [],
+   "control_superuser_markers": [
+    "woowbk-review-trigger_storages_nextcloud.txt"
+   ],
+   "ok": true,
+   "seconds": 48.3
+  },
+  {
+   "case": "hidden_aggregate",
+   "steps": [
+    "ha_database"
+   ],
+   "live_markers": [],
+   "live_read": [
+    "appconfig",
+    "datacl",
+    "extensions",
+    "nspacl",
+    "role",
+    "roles"
+   ],
+   "scan": {
+    "pg_version": "16",
+    "config": true
+   },
+   "check_markers": [],
+   "check": {
+    "shape_problems": [],
+    "tables_read": true,
+    "lists": true
+   },
+   "dump_bytes": 12690,
+   "hapg_markers": [],
+   "stopped": {
+    "code": "incompatible",
+    "message": "HA 的 Nextcloud 資料庫含有 Nextcloud 不會建立的資料庫物件（函式），無法安全地搬過來。"
+   },
+   "converted_markers": [],
+   "control_unpinned_markers": [
+    "woowbk-review-aggregate_json_agg_name_nextcloud.txt"
+   ],
+   "ok": true,
+   "seconds": 202.5
+  },
+  {
+   "case": "hidden_database",
+   "steps": [
+    "ha_database"
+   ],
+   "live_markers": [],
+   "live_read": [
+    "appconfig",
+    "datacl",
+    "extensions",
+    "nspacl",
+    "role",
+    "roles"
+   ],
+   "scan": {
+    "pg_version": "16",
+    "config": true
+   },
+   "check_markers": [],
+   "check": {
+    "shape_problems": [],
+    "tables_read": true,
+    "lists": true
+   },
+   "dump_bytes": 9928,
+   "hapg_markers": [],
+   "stopped": {
+    "code": "job-failed",
+    "message": "轉換後的 Nextcloud 資料庫檢查沒有通過：資料庫叢集裡有其他資料庫。"
+   },
+   "converted_markers": [],
+   "ok": true,
+   "seconds": 33.4
+  },
+  {
+   "case": "hidden_role_setting",
+   "steps": [
+    "ha_database"
+   ],
+   "live_markers": [],
+   "live_read": [
+    "appconfig",
+    "datacl",
+    "extensions",
+    "nspacl",
+    "role",
+    "roles"
+   ],
+   "scan": {
+    "pg_version": "16",
+    "config": true
+   },
+   "check_markers": [],
+   "check": {
+    "shape_problems": [],
+    "tables_read": true,
+    "lists": true
+   },
+   "dump_bytes": 9774,
+   "hapg_markers": [],
+   "stopped": {
+    "code": "incompatible",
+    "message": "HA 的 Nextcloud 資料庫含有 Nextcloud 不會建立的資料庫物件（角色或資料庫層級的設定），無法安全地搬過來。"
+   },
+   "converted_markers": [],
+   "ok": true,
+   "seconds": 31.3
+  },
+  {
+   "case": "hidden_password",
+   "steps": [
+    "ha_database"
+   ],
+   "live_markers": [],
+   "live_read": [
+    "appconfig",
+    "datacl",
+    "extensions",
+    "nspacl",
+    "role",
+    "roles"
+   ],
+   "scan": {
+    "pg_version": "16",
+    "config": true
+   },
+   "check_markers": [],
+   "check": {
+    "shape_problems": [],
+    "tables_read": true,
+    "lists": true
+   },
+   "dump_bytes": 9774,
+   "hapg_markers": [],
+   "stopped": {
+    "code": "job-failed",
+    "message": "轉換後的 Nextcloud 資料庫檢查沒有通過：oc_admin 角色的密碼設定和這台的不同。"
+   },
+   "converted_markers": [],
+   "ok": true,
+   "seconds": 32.2
+  },
+  {
+   "case": "hidden_grant",
+   "steps": [
+    "ha_database"
+   ],
+   "live_markers": [],
+   "live_read": [
+    "appconfig",
+    "datacl",
+    "extensions",
+    "nspacl",
+    "role",
+    "roles"
+   ],
+   "scan": {
+    "pg_version": "16",
+    "config": true
+   },
+   "check_markers": [],
+   "check": {
+    "shape_problems": [],
+    "tables_read": true,
+    "lists": true
+   },
+   "dump_bytes": 9767,
+   "hapg_markers": [],
+   "stopped": {
+    "code": "job-failed",
+    "message": "轉換後的 Nextcloud 資料庫檢查沒有通過：資料表或欄位多了權限設定。"
+   },
+   "converted_markers": [],
+   "ok": true,
+   "seconds": 32.2
+  },
+  {
+   "case": "hidden_default",
+   "steps": [
+    "ha_database"
+   ],
+   "live_markers": [],
+   "live_read": [
+    "appconfig",
+    "datacl",
+    "extensions",
+    "nspacl",
+    "role",
+    "roles"
+   ],
+   "scan": {
+    "pg_version": "16",
+    "config": true
+   },
+   "check_markers": [],
+   "check": {
+    "shape_problems": [],
+    "tables_read": true,
+    "lists": true
+   },
+   "dump_bytes": 9818,
+   "hapg_markers": [],
+   "stopped": {
+    "code": "incompatible",
+    "message": "HA 的 Nextcloud 資料庫含有 Nextcloud 不會建立的資料庫物件（不是固定值的欄位預設值），無法安全地搬過來。"
+   },
+   "converted_markers": [],
+   "ok": true,
+   "seconds": 32.4
+  },
+  {
+   "case": "hidden_rule",
+   "steps": [
+    "ha_database"
+   ],
+   "live_markers": [],
+   "live_read": [
+    "appconfig",
+    "datacl",
+    "extensions",
+    "nspacl",
+    "role",
+    "roles"
+   ],
+   "scan": {
+    "pg_version": "16",
+    "config": true
+   },
+   "check_markers": [],
+   "check": {
+    "shape_problems": [],
+    "tables_read": true,
+    "lists": true
+   },
+   "dump_bytes": 9798,
+   "hapg_markers": [],
+   "stopped": {
+    "code": "incompatible",
+    "message": "HA 的 Nextcloud 資料庫含有 Nextcloud 不會建立的資料庫物件（規則），無法安全地搬過來。"
+   },
+   "converted_markers": [],
+   "ok": true,
+   "seconds": 20.5
+  },
+  {
+   "case": "hidden_rls",
+   "steps": [
+    "ha_database"
+   ],
+   "live_markers": [],
+   "live_read": [
+    "appconfig",
+    "datacl",
+    "extensions",
+    "nspacl",
+    "role",
+    "roles"
+   ],
+   "scan": {
+    "pg_version": "16",
+    "config": true
+   },
+   "check_markers": [],
+   "check": {
+    "shape_problems": [],
+    "tables_read": true,
+    "lists": true
+   },
+   "dump_bytes": 9779,
+   "hapg_markers": [],
+   "stopped": {
+    "code": "incompatible",
+    "message": "HA 的 Nextcloud 資料庫含有 Nextcloud 不會建立的資料庫物件（資料列安全原則），無法安全地搬過來。"
+   },
+   "converted_markers": [],
+   "ok": true,
+   "seconds": 24.1
+  },
+  {
+   "case": "hidden_statistics",
+   "steps": [
+    "ha_database"
+   ],
+   "live_markers": [],
+   "live_read": [
+    "appconfig",
+    "datacl",
+    "extensions",
+    "nspacl",
+    "role",
+    "roles"
+   ],
+   "scan": {
+    "pg_version": "16",
+    "config": true
+   },
+   "check_markers": [],
+   "check": {
+    "shape_problems": [],
+    "tables_read": true,
+    "lists": true
+   },
+   "dump_bytes": 9801,
+   "hapg_markers": [],
+   "stopped": {
+    "code": "incompatible",
+    "message": "HA 的 Nextcloud 資料庫含有 Nextcloud 不會建立的資料庫物件（其他自訂資料庫物件），無法安全地搬過來。"
+   },
+   "converted_markers": [],
+   "ok": true,
+   "seconds": 34.1
+  },
+  {
+   "case": "live_trojan",
+   "steps": [],
+   "live_markers": [],
+   "live_read": [
+    "appconfig",
+    "datacl",
+    "extensions",
+    "nspacl",
+    "role",
+    "roles"
+   ],
+   "control_unpinned_markers": [
+    "woowbk-review-aggregate_json_agg_name_nextcloud.txt"
+   ],
+   "ok": true,
+   "seconds": 39.2
+  }
+ ],
+ "passed": 14,
+ "cases": 15,
+ "volumes_left_behind": [],
+ "elapsed_s": 683.0,
+ "acceptance": "not acceptance (attack runs against the real product steps in the lab store)"
+}

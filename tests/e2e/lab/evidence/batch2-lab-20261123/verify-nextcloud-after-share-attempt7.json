@@ -1,0 +1,19 @@
+{
+ "source_commit": "33929815fc8b9a91893961e6dd207fdb66589b36",
+ "scope": "batch2-verify-nextcloud",
+ "exit": 0,
+ "elapsed_seconds": 19.4,
+ "stdout_sha256": "41db776e1f6b593aaa694c18177d5072dbd7a58ebefb2f9c3290deb39f0a060a",
+ "fixed_status": [
+  "dev-e: running, network none, no published port: PASS",
+  "nextcloud: the baseline's own after-restore marker read exists: PASS",
+  "nextcloud: only the baseline markers (no leftover test marker): PASS",
+  "nextcloud: marker read equals the baseline's after-restore read (names and sha256, 20261123T211623-baseline): PASS",
+  "nextcloud: engine status running, no problems: PASS",
+  "nextcloud: catalog health URLs answer as expected: PASS",
+  "nextcloud: baseline backup 20261123T132013Z-34811d90 still listed, encrypted with the device key, this app only: PASS",
+  "batch2 verify nextcloud: 7/7 PASS"
+ ],
+ "stderr_bytes_not_published": 0,
+ "commercial_acceptance": "not-complete"
+}

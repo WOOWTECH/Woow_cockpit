@@ -1,0 +1,505 @@
+{
+ "source_commit": "04d8e50",
+ "what": "the list MUTATIONS",
+ "module": "woowbackup/ha_omnigent.py",
+ "module_sha256": "694da4e91afb2f0e119f0cd8c777984f6bf53ccc51eac0e2140f46325b6fb327",
+ "modules_sha256": {
+  "woowbackup/ha_omnigent.py": "694da4e91afb2f0e119f0cd8c777984f6bf53ccc51eac0e2140f46325b6fb327",
+  "woowbackup/hacommon.py": "ad058935b6a772cb7ac3ed48950aa76cec47a60747bfecbb09bfe84d78085d86",
+  "woowbackup/jobs.py": "c6e62948131bacedf70036bc2d7ef5d6839b5949e91adddcc68df6edf06c036d"
+ },
+ "tests": [
+  "tests.backup.test_ha_omnigent",
+  "tests.backup.test_ha_omnigent_candidate",
+  "tests.backup.test_ha_omnigent_trusted",
+  "tests.backup.test_b1_01_guard",
+  "tests.backup.test_ha_omnigent_server_volume",
+  "tests.backup.test_ha_omnigent_install"
+ ],
+ "baseline": {
+  "returncode": 0,
+  "tests": 80,
+  "failures": 0
+ },
+ "mutations": [
+  {
+   "id": "M01",
+   "protection": "only TABLE DATA / SEQUENCE SET of HA restored (data-only list)",
+   "module": "woowbackup/ha_omnigent.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 9
+  },
+  {
+   "id": "M02",
+   "protection": "each selected entry names a trusted table/sequence once (line-break injection)",
+   "module": "woowbackup/ha_omnigent.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 10
+  },
+  {
+   "id": "M03",
+   "protection": "HA's data loaded by the role without privileges, never the superuser",
+   "module": "woowbackup/ha_omnigent.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 22
+  },
+  {
+   "id": "M04",
+   "protection": "pre-data comes from this device's schema, never HA's archive",
+   "module": "woowbackup/ha_omnigent.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 22
+  },
+  {
+   "id": "M05",
+   "protection": "no DDL during the capture: live schema before == after == snapshot columns",
+   "module": "woowbackup/ha_omnigent.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 36
+  },
+  {
+   "id": "M06",
+   "protection": "the live revision did not move since the check (before the capture)",
+   "module": "woowbackup/ha_omnigent.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 34
+  },
+  {
+   "id": "M07",
+   "protection": "HA's columns, sequences and types equal the trusted schema (convert)",
+   "module": "woowbackup/ha_omnigent.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 37
+  },
+  {
+   "id": "M08",
+   "protection": "the new cluster's schema equals the trusted one (after post-data and after the last write)",
+   "module": "woowbackup/ha_omnigent.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 26
+  },
+  {
+   "id": "M09",
+   "protection": "the new cluster holds no other role, setting, ALTER SYSTEM value or large object",
+   "module": "woowbackup/ha_omnigent.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 43
+  },
+  {
+   "id": "M10",
+   "protection": "this device's accounts are added back by the restricted role, never the superuser",
+   "module": "woowbackup/ha_omnigent.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 9
+  },
+  {
+   "id": "M11",
+   "protection": "test mode pauses the scheduled tasks as the restricted role",
+   "module": "woowbackup/ha_omnigent.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 19
+  },
+  {
+   "id": "M12",
+   "protection": "the loader role has no privilege (NOSUPERUSER ...)",
+   "module": "woowbackup/ha_omnigent.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 22
+  },
+  {
+   "id": "M13",
+   "protection": "the loader role is dropped before the export",
+   "module": "woowbackup/ha_omnigent.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 16
+  },
+  {
+   "id": "M14",
+   "protection": "every Quadlet secret is registered in the catalog before anything runs",
+   "module": "woowbackup/ha_omnigent.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 45
+  },
+  {
+   "id": "M15",
+   "protection": "the check names a schema difference as a blocker",
+   "module": "woowbackup/ha_omnigent.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 2
+  },
+  {
+   "id": "M16",
+   "protection": "the new cluster runs with a read-only root and a noexec data volume",
+   "module": "woowbackup/ha_omnigent.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 22
+  },
+  {
+   "id": "M17",
+   "protection": "the runner's pi volume is this device's (never HA's)",
+   "module": "woowbackup/ha_omnigent.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 14
+  },
+  {
+   "id": "M18",
+   "protection": "HA's answers (accounts, schedules, shares, keys, counts) re-derived on the trusted new cluster (SR-1)",
+   "module": "woowbackup/ha_omnigent.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 35
+  },
+  {
+   "id": "M19",
+   "protection": "SEQUENCE SET entries are only bare setval calls of trusted sequences (SR-3)",
+   "module": "woowbackup/ha_omnigent.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 12
+  },
+  {
+   "id": "M20",
+   "protection": "HA's pg_dump runs as an OS user unrelated to HA's server (SR-2b)",
+   "module": "woowbackup/ha_omnigent.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 17
+  },
+  {
+   "id": "M23",
+   "protection": "HA's pg_dump uid is one the owner's id maps hold and never root or the image's postgres (SR-2b, dev-d)",
+   "module": "woowbackup/ha_omnigent.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 20
+  },
+  {
+   "id": "M24",
+   "protection": "HA's pg_dump uid is mapped in the owner's uid and gid maps (dev-d maps 1..55000: 65534 failed for real)",
+   "module": "woowbackup/ha_omnigent.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 20
+  },
+  {
+   "id": "M25",
+   "protection": "the names in the SR-1 message are cut and without control characters (verifier, SR-4 class)",
+   "module": "woowbackup/ha_omnigent.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 41
+  },
+  {
+   "id": "M26",
+   "protection": "every job log line stays one line without control characters: HA's PG_VERSION and backup name (secreview SR-6, shared jobs.py)",
+   "module": "woowbackup/jobs.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 4
+  },
+  {
+   "id": "M27",
+   "protection": "a job log line keeps its reading order: every Unicode bidirectional control becomes a space (the verifier's SR-6 gap, shared jobs.py)",
+   "module": "woowbackup/jobs.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 5
+  },
+  {
+   "id": "M28",
+   "protection": "names from HA's backup reach a message without a Unicode bidirectional control (the verifier's SR-6 gap, shared hacommon)",
+   "module": "woowbackup/hacommon.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 5
+  },
+  {
+   "id": "M21",
+   "protection": "HA-controlled names reach the job log and the page without control characters (SR-4, shared hacommon)",
+   "module": "woowbackup/hacommon.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 5
+  },
+  {
+   "id": "M22",
+   "protection": "HA's rows that this device's schema refuses end with the plain message, never their values (review v5)",
+   "module": "woowbackup/ha_omnigent.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 39
+  },
+  {
+   "id": "M29",
+   "protection": "the conversion itself refuses a version that does not match, not only the check (X7)",
+   "module": "woowbackup/ha_omnigent.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 13
+  },
+  {
+   "id": "M30",
+   "protection": "after the last write every table holds HA's rows (users this device's kept accounts too) and the revision is HA's (X8)",
+   "module": "woowbackup/ha_omnigent.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 16
+  },
+  {
+   "id": "M31",
+   "protection": "the row counts of that final comparison (X8)",
+   "module": "woowbackup/ha_omnigent.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 16
+  },
+  {
+   "id": "M32",
+   "protection": "the revision of that final comparison (X8)",
+   "module": "woowbackup/ha_omnigent.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 16
+  },
+  {
+   "id": "M33",
+   "protection": "a cluster whose stop did not end with 0 is never exported (X9)",
+   "module": "woowbackup/ha_omnigent.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 9
+  },
+  {
+   "id": "M34",
+   "protection": "only a cluster that pg_controldata calls \"shut down\" is exported (X10)",
+   "module": "woowbackup/ha_omnigent.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 18
+  },
+  {
+   "id": "M35",
+   "protection": "exactly \"shut down\", not \"shut down in recovery\" (X10)",
+   "module": "woowbackup/ha_omnigent.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 18
+  },
+  {
+   "id": "M36",
+   "protection": "test mode asks again after its pause: no task is left active (X11)",
+   "module": "woowbackup/ha_omnigent.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 19
+  },
+  {
+   "id": "M37",
+   "protection": "every volume is checked as a restore would read it before it is packed (X13)",
+   "module": "woowbackup/ha_omnigent.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 14
+  },
+  {
+   "id": "M38",
+   "protection": "the server and pi volumes too, not only the database's (X13)",
+   "module": "woowbackup/ha_omnigent.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 14
+  },
+  {
+   "id": "M39",
+   "protection": "that check uses the owner's id maps (X13)",
+   "module": "woowbackup/ha_omnigent.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 14
+  },
+  {
+   "id": "M40",
+   "protection": "the capture dumps this device's schema only, never its rows (X15)",
+   "module": "woowbackup/ha_omnigent.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 56
+  },
+  {
+   "id": "M41",
+   "protection": "the capture dumps what the exported snapshot shows (X15, the same line)",
+   "module": "woowbackup/ha_omnigent.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 56
+  },
+  {
+   "id": "M42",
+   "protection": "the capture reads the revision inside the snapshot again (the same script)",
+   "module": "woowbackup/ha_omnigent.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 55
+  },
+  {
+   "id": "M43",
+   "protection": "only a snapshot id reaches pg_dump's arguments (the same script)",
+   "module": "woowbackup/ha_omnigent.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 55
+  },
+  {
+   "id": "M44",
+   "protection": "HA's cluster is removed before the new cluster starts",
+   "module": "woowbackup/ha_omnigent.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 22
+  },
+  {
+   "id": "M45",
+   "protection": "the new cluster is ready when it answers on TCP, not the image's temporary server",
+   "module": "woowbackup/ha_omnigent.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 22
+  },
+  {
+   "id": "M46",
+   "protection": "HA's dump is private to the job (0600)",
+   "module": "woowbackup/ha_omnigent.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 23
+  },
+  {
+   "id": "M47",
+   "protection": "the new cluster's export is private to the job (0600)",
+   "module": "woowbackup/ha_omnigent.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 23
+  },
+  {
+   "id": "M48",
+   "protection": "this device's schema dump is private to the job (0600)",
+   "module": "woowbackup/ha_omnigent.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 23
+  },
+  {
+   "id": "M49",
+   "protection": "the conversion checks the space it needs before it starts a cluster",
+   "module": "woowbackup/ha_omnigent.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 28
+  },
+  {
+   "id": "M50",
+   "protection": "a live account row nobody asked for is not carried",
+   "module": "woowbackup/ha_omnigent.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 11
+  },
+  {
+   "id": "M51",
+   "protection": "the live version is asked on the loopback address only",
+   "module": "woowbackup/ha_omnigent.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 25
+  },
+  {
+   "id": "M52",
+   "protection": "an error page is no live version",
+   "module": "woowbackup/ha_omnigent.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 25
+  },
+  {
+   "id": "M53",
+   "protection": "only x.y.z is a live version",
+   "module": "woowbackup/ha_omnigent.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 25
+  }
+ ],
+ "all_caught": true,
+ "seconds": 688.9
+}

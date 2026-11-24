@@ -155,6 +155,24 @@
    "tests/backup full suite 97c994f (heavy lock 03:42:01-03:48:14)": "1423 run, 6 skipped; not ok = only the 10 pre-existing test_ha_emqx PRESERVATION_BLOCKER tests"
   }
  },
+ "iteration_5": {
+  "date": "2026-11-24",
+  "branch": "fix/omnigent-test-gaps-20261124 (from integration fdc922f, integration f2c9e03 merged in; code 01b36b4)",
+  "what": "tests, mutations, README and docstring corrections for the gaps the independent verifier found (X7 X8 X9 X10 X11 X13 X15); no run on dev-d",
+  "product_code": "unchanged: ha_omnigent.py without docstrings parses to the same code as at 97c994f; no other file under backup-engine, backup, docs or scripts differs from f2c9e03",
+  "mutation checks": {
+   "M29-M53 with the tests before iteration 5 (fdc922f)": "0/25 caught (mutation-before-iter5.json)",
+   "M29-M53, each by its own test alone (01b36b4)": "25/25 caught (mutation-named-iter5.json)",
+   "the whole list M01-M53 (04d8e50)": "53/53 caught (mutation-check-iter5.json)",
+   "every refusal and every or-operand of one (04d8e50)": "107/109 caught, 2 redundant and explained (mutation-refusals-iter5.json)"
+  },
+  "unit_tests": {
+   "six Omnigent modules": "80 OK",
+   "tests/backup full suite 01b36b4 (heavy lock 13:00:10-13:08:28)": "1681 run, OK, 6 skipped",
+   "lab omnigent tests": "24 OK"
+  },
+  "wording": "dev-d is a lab device (a rootless container), not a physical machine; corrected in both READMEs"
+ },
  "real_runs_final_engines": {
   "omnigent-arm-enc-attempt2.json": "fdf68dd exit 0: omnigent full flow arm enc: 112/112 PASS",
   "omnigent-arm-plain-attempt2.json": "4a3622b exit 0: omnigent full flow arm plain: 112/112 PASS",
