@@ -399,10 +399,10 @@ variant invalid (`field: "id"`): installing it would move that entry and its bac
   decision 2026-11-23, the catalog maximum) follows its package's own 10-minute start budget (40 readiness probes 15 s
   apart, `TimeoutStartSec=600`): real restores on a loaded test device took 251-345 s until `/health/readiness`
   answered, so 300 s could declare a restore that worked failed. A longer limit only waits longer; no check is relaxed.
+  LiteLLM's `/health/liveliness` (it does not look at the database) is proposed as `/health/readiness`, which its
+  package's startup probe waits for (`suggest.READY_PATHS`, with a hint; an installed entry's checks are kept).
   LAN-only ports, HTTPS and unpublished ports give hints instead of URLs. A query
-  string (`?…`, possibly a token) is never copied: the URL keeps only its path and a hint says so (review L5). A path
-  in `suggest.READY_PATHS` is replaced (LiteLLM: `/health/liveliness`, which does not look at the database, by
-  `/health/readiness`, which its package's startup probe waits for), with a hint; an installed entry's checks are kept.
+  string (`?…`, possibly a token) is never copied: the URL keeps only its path and a hint says so (review L5).
 * `verify`: built-in digests (feature 1): one `postgres-digest` per PostgreSQL database (`{"postgres": "main"}` in export
   modes, `{"container","unit","user"}` in cold mode) and one `files-digest` per proposed volume and host directory, except
   a PostgreSQL data volume or directory (the table digest covers it); at most 16. If the validator rejects them (an engine

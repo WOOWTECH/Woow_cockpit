@@ -30,8 +30,8 @@ How a directory becomes apps (each step is reported in the draft's `notes`/`warn
   installed yet defaults to the mode named there.
 * Volumes mounted only at runtime paths (`/run`, `/var/run`, `/tmp`, `/dev/shm`) are skipped; bind mounts of
   directories become `data_dirs` unless they are forbidden (`.ssh`, `.config/systemd`, ...) or personal
-  (`Desktop`, `Documents`, ...); bound files and `EnvironmentFile=` files become `config_files` when they lie in
-  `.config/<id>/` or `.local/share/<id>/` (and the files of `PACKAGE_CONFIGS`, which no Quadlet names).
+  (`Desktop`, `Documents`, ...); bound files, `EnvironmentFile=` files and PACKAGE_CONFIGS become `config_files` in
+  `.config/<id>/` or `.local/share/<id>/`.
 * Health URLs come from URLs in `HealthCmd=` mapped through a loopback `PublishPort=` (or `Network=host`).
 """
 import heapq
