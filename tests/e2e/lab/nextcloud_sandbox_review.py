@@ -10,6 +10,8 @@ PostgreSQL 16 laid out like Nextcloud's installer leaves it (superuser `nextclou
 
 Cases:
   clean             an honest cluster converts and verifies (the control of every other case).
+  team_folders      an honest cluster with a Team folder's own storage below the data directory and a local external
+                    storage: the first row gets this device's path and keeps its number, the second stays.
   T1, HA's NON-superuser database owner `nextcloud` (a compromised Nextcloud in HA) planted objects:
     owner_trojan    public.json_agg(name) aggregate (search-path trojan) and a per-database search_path.
     owner_view      oc_appconfig replaced by a view over a plpgsql function.
@@ -75,6 +77,12 @@ INSERT INTO public.oc_mimetypes (mimetype) VALUES ('httpd/unix-directory'), ('te
 INSERT INTO public.oc_filecache (storage, path, name, mimetype, size) VALUES (1, 'files', 'files', 1, 3),
   (1, 'files/a.txt', 'a.txt', 2, 3), (2, '{REMOTE}', 'remoteData', 1, 1), (2, '{REMOTE}/discovery', 'discovery', 2, 1);
 """
+TEAM_ROWS = """
+INSERT INTO public.oc_storages (id) VALUES ('local::/share/nextcloud/__groupfolders/1/'), ('local::/share/media/');
+INSERT INTO public.oc_filecache (storage, path, name, mimetype, size) VALUES (3, 'files/plan.txt', 'plan.txt', 2, 4);
+"""
+TEAM_AFTER = [[1, 'home::alice'], [2, 'local::/var/www/html/data/'], [3, 'local::/var/www/html/data/__groupfolders/1/'],
+              [4, 'local::/share/media/']]
 TROJAN_AGG = """CREATE FUNCTION public.woowbk_agg_step(state json, value name) RETURNS json LANGUAGE plpgsql AS $f$
 BEGIN
   PERFORM public.woowbk_probe('aggregate_json_agg_name');
@@ -115,10 +123,10 @@ HIDDEN_SQL = {
     'hidden_rls': ['ALTER TABLE public.oc_users ENABLE ROW LEVEL SECURITY'],
     'hidden_statistics': ['CREATE STATISTICS public.woowbk_s ON storage, size FROM public.oc_filecache'],
 }
-CASES = ['clean', *OWNER_SQL, *HIDDEN_SQL, 'live_trojan']
+CASES = ['clean', 'team_folders', *OWNER_SQL, *HIDDEN_SQL, 'live_trojan']
 # What the product must answer, and where: ('check', text of the blocker) or ('convert', code, text).
 EXPECT = {
-    'clean': None,
+    'clean': None, 'team_folders': None,
     # owner_view: oc_appconfig is no table any more, so the database is "not Nextcloud's" and nothing else is read.
     'owner_trojan': ('check', '函式'), 'owner_view': ('check', None), 'owner_trigger': ('check', '觸發程序'),
     'hidden_trigger': ('convert', 'incompatible', '觸發程序'), 'hidden_aggregate': ('convert', 'incompatible', '函式'),
@@ -164,7 +172,7 @@ def craft(runner, case, scratch):
         cluster.wait_ready(tcp=True)
         cluster.statement('CREATE ROLE nextcloud LOGIN NOSUPERUSER')
         cluster.statement("CREATE DATABASE nextcloud OWNER nextcloud ENCODING 'UTF8' TEMPLATE template0")
-        sql = 'SET ROLE nextcloud;\n' + NC_TABLES + HA_ROWS
+        sql = 'SET ROLE nextcloud;\n' + NC_TABLES + HA_ROWS + (TEAM_ROWS if case == 'team_folders' else '')
         if case in OWNER_SQL:
             sql += lsr.probe_function() + OWNER_SQL[case]
         cluster.script(sql + 'RESET ROLE;\n', 'nextcloud')
@@ -294,9 +302,19 @@ def run_case(runner, case, scratch):
         tmp.remove_volume('hapg')
         stopped = None
         try:
+            moves = nc.moves_of(src.config, {'datadirectory': '/var/www/html/data'}, details['local_storages'], None)
+            facts['moves'] = len(moves)
             built = nc.build_cluster(work, app, tmp, target, dump, details=details, old_root='local::/share/nextcloud/',
-                                     new_root='local::/var/www/html/data/', remote=REMOTE)
+                                     new_root='local::/var/www/html/data/', moves=moves, remote=REMOTE)
             facts['built'] = built
+            if case == 'team_folders':  # the converted cluster itself, opened again
+                tmp.run('after', PG16, [], detach=True, env=live.db_env, volumes=[(tmp.name('nc-db'), DATA, 'rw')])
+                after = ha_odoo.Cluster(tmp, 'after', superuser='nextcloud')
+                after.wait_ready(tcp=True)
+                facts['storages_after'] = after.query_json(
+                    'SELECT json_agg(json_build_array(numeric_id, id) ORDER BY numeric_id) FROM public.oc_storages', 'nextcloud')
+                facts['team_file_storage'] = after.query_json(
+                    "SELECT json_agg(storage) FROM public.oc_filecache WHERE path = 'files/plan.txt'", 'nextcloud')
         except BackupError as error:
             stopped = error
             facts['stopped'] = {'code': error.code, 'message': error.message[:300]}
@@ -321,7 +339,10 @@ def run_case(runner, case, scratch):
         controls = [v for k, v in facts.items() if k.startswith('control_')]
         quiet = not facts['check_markers'] and not facts['hapg_markers'] and not facts['converted_markers']
         if expect is None:
-            facts['ok'] = quiet and stopped is None and facts['built']['removed_cache_rows'] == 2
+            facts['ok'] = (quiet and stopped is None and facts['built']['removed_cache_rows'] == 2
+                           and facts['moves'] == (2 if case == 'team_folders' else 1))
+            if case == 'team_folders':
+                facts['ok'] = facts['ok'] and facts['storages_after'] == TEAM_AFTER and facts['team_file_storage'] == [3]
         else:
             facts['ok'] = (quiet and stopped is not None and stopped.code == expect[1] and expect[2] in stopped.message
                            and all(controls))

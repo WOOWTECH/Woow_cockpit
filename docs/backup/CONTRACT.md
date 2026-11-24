@@ -2215,7 +2215,9 @@ html,data}`; facts `phase3/facts/nextcloud.md`, owner decisions D1-D5 applied wi
    (§9 Odoo 1; the files of an online backup, `backup_label` and `tablespace_map`, are never streamed: blocker 「HA 的
    Nextcloud 資料庫不是在停止狀態下備份的…」, the cluster is not started); the database named by HA's `dbname` must hold Nextcloud's
    tables, only the plpgsql extension, no other schema, and the root storage `local::<HA datadirectory>/`
-   (lib/private/Files/Storage/Local.php `getId`; longer than 64 bytes → its md5). Every session in HA's cluster carries
+   (lib/private/Files/Storage/Local.php `getId`; longer than 64 bytes → its md5), and no row may already have an id this
+   device's data directory needs (blocker 「HA 的 Nextcloud 資料庫裡已經有這台使用者檔案資料夾（…）的儲存空間記錄…」). Every session in
+   HA's cluster carries
    PGOPTIONS `-c search_path=pg_catalog` (a client setting: above HA's per-database and per-role settings; no function,
    operator or table of HA's can stand in for a built-in). HA's catalogs are read first (`SHAPE_SQL`, extension members
    not counted): any function, procedure, aggregate, operator, type or domain, trigger, rule, policy or row security,
@@ -2232,7 +2234,7 @@ html,data}`; facts `phase3/facts/nextcloud.md`, owner decisions D1-D5 applied wi
    links). This device's own database is read as its superuser with `search_path = pg_catalog` (nothing the Nextcloud
    role could create in `public` stands in for a built-in). Warnings besides: apps HA enables that exist nowhere here,
    HA custom apps whose info.xml excludes this Nextcloud or PHP version or that hold programs for another processor,
-   local external storages, HA config keys that do not move (names).
+   local external storages (outside the data directory), HA config keys that do not move (names).
 4. convert: `pg_dump -Fc`; a NEW cluster from the live database image, environment and secret; the live config.php's
    `dbuser` role (e.g. `oc_admin`) with the LIVE attributes and password verifier (stdin, masked) and the grants
    Nextcloud's installer gives it (lib/private/Setup/PostgreSQL.php: `GRANT CONNECT`, `REVOKE ALL … FROM PUBLIC`, `GRANT
@@ -2244,7 +2246,9 @@ html,data}`; facts `phase3/facts/nextcloud.md`, owner decisions D1-D5 applied wi
    way; its superuser reads catalogs only (the `SHAPE_SQL` refusal again, now also any per-role or per-database setting)
    and every statement on HA's tables (the fix-ups, the counts, the kept settings) runs as the Nextcloud role itself, so
    nothing of HA's ever runs with more rights than Nextcloud has. Fix-ups in one transaction: the root storage id →
-   `local::<target datadirectory>/`; `richdocuments` `wopi_url`, `public_wopi_url`, `wopi_callback_url`,
+   `local::<target datadirectory>/`, and the id of every local storage below HA's data directory the same way (the Team
+   folders app keeps one per folder, `local::<datadirectory>/__groupfolders/<id>/`, and names it by its number:
+   groupfolders 23.0.2 lib/Mount/FolderStorageManager.php; ids over 64 bytes are stored as their md5); `richdocuments` `wopi_url`, `public_wopi_url`, `wopi_callback_url`,
    `wopi_allowlist`, `disable_certificate_verification` and `core.backgroundjobs_mode` exactly as the live database has
    them (Office uses this device's Collabora); HA's cached Collabora answers
    (`appdata_<instanceid>/richdocuments/remoteData`, `discovery` and `capabilities`) are replaced by this device's own
@@ -2253,8 +2257,8 @@ html,data}`; facts `phase3/facts/nextcloud.md`, owner decisions D1-D5 applied wi
    the hourly job that refreshes them (`OCA\Richdocuments\Backgroundjobs\ObtainCapabilities`) is made due at once in
    `oc_jobs`; this device without those files → a reminder with `occ richdocuments:activate-config`. Verified: every
    count (file cache minus those rows), table owners = the role, the role's attributes (never superuser) and password
-   verifier, root storage id, roles, extensions, database and public-schema grants and the kept settings equal the live
-   ones, no database besides `postgres`, `template0`, `template1` and Nextcloud's, no per-role or per-database setting,
+   verifier, the root storage id and every moved storage id, roles, extensions, database and public-schema grants and
+   the kept settings equal the live ones, no database besides `postgres`, `template0`, `template1` and Nextcloud's, no per-role or per-database setting,
    no table or column grant (the dump is restored with --no-acl, so one can only come from SQL hidden in it). Live
    PostgreSQL settings are carried (§9 Odoo); clean stop, `pg_controldata` "shut down"; the PostgreSQL dir is the volume
    export with its top folder owned like the live one.
@@ -2268,7 +2272,8 @@ html,data}`; facts `phase3/facts/nextcloud.md`, owner decisions D1-D5 applied wi
    live image's PHP (throwaway container, network none, read-only root, the file on stdin) must lint it and return
    exactly the merged values. html dir = the live pack without `config/config.php` and without the custom apps HA
    brings, plus the merged file and HA's custom apps (D2; owner www-data of the live image); data dir = HA's data
-   directory (owner www-data, HA's modes, top folder like the live one; `updater-*` skipped, previews kept: D5) with
+   directory (owner www-data, HA's modes, top folder like the live one; the web updater's own `updater-<instanceid>`
+   skipped, previews kept: D5) with
    Nextcloud's own `.htaccess` (Setup.php `protectDataDirectory`, deny all) written at its top instead of HA's, whether
    HA had one or not (HA's data directory is outside its web root, here it is inside); Redis dir = its top folder only,
    owned like the live one. Every dir tar is checked like a restore reads it.

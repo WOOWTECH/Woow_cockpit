@@ -30,12 +30,13 @@ the live extensions, then the dump restored AS THAT ROLE (`--no-owner --no-acl -
 refused before the restore when its list holds a kind of object Nextcloud never creates: TOC_ALLOWED); then, every
 session pinned, the superuser reads the catalogs only (the same SHAPE_SQL refusal, the role's attributes, no per-role
 or per-database setting) and the fix-ups and table reads run as that role, never as the superuser; fix-ups: the root
-storage id `local::<HA datadirectory>/` -> `local::<target datadirectory>/`, Office (richdocuments wopi_url, public_wopi_url, wopi_callback_url, wopi_allowlist,
-disable_certificate_verification) and core.backgroundjobs_mode exactly as the live database has them, HA's cached
-Collabora discovery (`appdata_<id>/richdocuments/remoteData`, files and rows) replaced by this device's own (the app
-never fetches it on demand) and the hourly job that refreshes it made due at once, so Office uses this device's
-Collabora from the first minute; every count, owner, grant, extension and value is verified; PostgreSQL settings of the live cluster are
-carried; clean stop, `pg_controldata` "shut down". config.php = the LIVE config.php (URLs, trusted domains, database
+storage id `local::<HA datadirectory>/` -> `local::<target datadirectory>/` and every local storage below it (Team
+folders keep one each: storage_moves), Office (richdocuments wopi_url, public_wopi_url, wopi_callback_url,
+wopi_allowlist, disable_certificate_verification) and core.backgroundjobs_mode exactly as the live database has them,
+HA's cached Collabora discovery (`appdata_<id>/richdocuments/remoteData`, files and rows) replaced by this device's own
+(the app never fetches it on demand) and the hourly job that refreshes it made due at once, so Office uses this device's
+Collabora from the first minute; every count, owner, grant, extension and value is verified; PostgreSQL settings of the
+live cluster are carried; clean stop, `pg_controldata` "shut down". config.php = the LIVE config.php (URLs, trusted domains, database
 credentials, mail, caches, data directory) plus HA's `instanceid`, `passwordsalt`, `secret` (app data folder, ICrypto:
 app passwords, TOTP, encrypted app values) and HA's two-factor enforcement and app_install_overwrite (owner decision
 D1; never weaker than the target's enforcement) and a new `data-fingerprint` (what the package's own restore sets with
@@ -43,10 +44,10 @@ D1; never weaker than the target's enforcement) and a new `data-fingerprint` (wh
 returns exactly the merged values.
 The html dir is the live dir without config.php and without the custom apps HA brings, plus the merged config.php and
 HA's custom apps (decision D2); the data dir is HA's data directory (owner www-data of the live image, top dir like
-the live one; web-updater backups `updater-*` skipped, previews kept: decision D5) with Nextcloud's own `.htaccess`
-written on top: here the data dir is inside the web root and that file is what keeps the users' files private (HA's
-data directory is outside its web root; any other `.htaccess` in it is refused); the Redis dir is empty; the
-PostgreSQL dir is the new cluster (top dir like the live one).
+the live one; the web updater's own folder `updater-<instanceid>` skipped, previews kept: decision D5) with Nextcloud's
+own `.htaccess` written on top: here the data dir is inside the web root and that file is what keeps the users' files
+private (HA's data directory is outside its web root; any other `.htaccess` in it is refused); the Redis dir is empty;
+the PostgreSQL dir is the new cluster (top dir like the live one).
 """
 import hashlib
 import io
@@ -208,6 +209,7 @@ MSG_NO_DATADIR = ('HA 備份裡找不到 Nextcloud 的使用者檔案資料夾 {
 # update: lib/private/Updater.php:225) and refuses any other .htaccess below (Nextcloud never creates nor accepts one:
 # `forbidden_filenames`).
 HTACCESS = '.htaccess'
+TEAM_FOLDERS = '__groupfolders'  # the Team folders app's folder in the data directory
 DATA_HTACCESS = b'''# Written by the WOOWTECH backup when it imported this data from Home Assistant: Nextcloud's own rules
 # Section for Apache 2.4 to 2.6
 <IfModule mod_authz_core.c>
@@ -238,6 +240,8 @@ DATA_HTACCESS = b'''# Written by the WOOWTECH backup when it imported this data 
 MSG_HTACCESS = ('HA 的 Nextcloud 使用者檔案裡有 {count} 個網站伺服器設定檔 .htaccess（例如 {sample}）。這台的使用者檔案在網站資料夾裡，'
                 '這種檔案可能讓檔案被公開或被當成程式執行，無法安全地搬過來。請在 HA 把它們改名或刪除後重新備份。')
 SCAN_COMMAND = 'podman exec -u www-data {container} php occ files:scan --all'
+MSG_STORAGE_TAKEN = ('HA 的 Nextcloud 資料庫裡已經有這台使用者檔案資料夾（{dir}）的儲存空間記錄，和 HA 自己的資料夾記錄衝突，'
+                     '無法安全地搬過來。')
 MSG_LISTS = ('HA 備份裡有 {count} 位 Nextcloud 使用者（例如 {names}）的檔案清單（資料庫）和實際檔案不一致：HA 先備份資料庫、'
              'Nextcloud 重新啟動後才備份使用者檔案，備份時可能有人在使用。')
 
@@ -540,15 +544,42 @@ def data_fingerprint():
     return hashlib.md5(str(int(time.time())).encode('ascii'), usedforsecurity=False).hexdigest()
 
 
+def _stored_id(value):
+    """A storage id as Nextcloud stores it: ids longer than 64 bytes as their md5 (lib/private/Files/Cache/Storage.php
+    adjustStorageId)."""
+    data = value.encode('utf-8', 'surrogateescape')
+    return hashlib.md5(data, usedforsecurity=False).hexdigest() if len(data) > 64 else value
+
+
+def _local_id(path):
+    """'local::' + the path with '//' collapsed and one trailing '/' (lib/private/Files/Storage/Local.php:53-62,84-85)."""
+    path = path.replace('//', '/')
+    return 'local::' + (path if path.endswith('/') else path + '/')
+
+
 def storage_id(datadir):
-    """Nextcloud's id of the local storage of `datadir`: 'local::' + the path with '//' collapsed and one trailing
-    '/' (lib/private/Files/Storage/Local.php:53-62,84-85); ids longer than 64 bytes are stored as their md5
-    (lib/private/Files/Cache/Storage.php adjustStorageId)."""
-    path = datadir.replace('//', '/')
-    if not path.endswith('/'):
-        path += '/'
-    value = 'local::' + path
-    return hashlib.md5(value.encode('utf-8')).hexdigest() if len(value.encode('utf-8')) > 64 else value
+    """Nextcloud's id of the local storage of `datadir`, as stored."""
+    return _stored_id(_local_id(datadir))
+
+
+def storage_moves(ha_datadir, target_datadir, storages, folders=()):
+    """[(HA's stored id, this device's stored id)] of the storage rows whose folder moves with the data directory: the
+    root storage and every local storage below it. Team folders keep one each, and their folder rows name it by its
+    number (groupfolders 23.0.2, for Nextcloud 35: lib/Mount/FolderStorageManager.php
+    getBaseStorageForFolderSeparateStorageLocal, `local::<datadirectory>/__groupfolders/<id>/`; lib/Folder/FolderManager.php
+    createFolder): a row left on HA's path would be another storage here, with new file numbers (shares, tags and
+    versions lost). `storages`: the stored ids of HA's database; `folders`: the folder names below `__groupfolders` in the
+    backup (an id stored as its md5 cannot be recognised by its text)."""
+    old, new = _local_id(ha_datadir), _local_id(target_datadir)
+    moves = {_stored_id(old): _stored_id(new)}
+    for item in storages:
+        if item.startswith(old) and item != old:
+            moves[item] = _stored_id(new + item[len(old):])
+    for name in folders:
+        rest = f'{TEAM_FOLDERS}/{name}/'
+        if _stored_id(old + rest) in storages:
+            moves[_stored_id(old + rest)] = _stored_id(new + rest)
+    return [(a, b) for a, b in moves.items() if a != b]
 
 
 def datadir_source(datadir):
@@ -734,6 +765,7 @@ class DataDir:
         self.htaccess = 0
         self.htaccess_samples = []
         self.users = set()
+        self.team_folders = set()  # the folder names below `__groupfolders`
         self.lists = {}     # user -> [files, bytes, digest] of `<user>/files/**` (FILES_SQL's values)
 
     def listed(self, user, path, size):
@@ -782,12 +814,15 @@ class DirTar:
 def scan_datadir(stream, report, prefix, *, addon, instanceid=None, out=None, ids=None, checkpoint=None):
     """Walk HA's data directory (`prefix` and below) in a member; with `out` (DirTar) write it as the data dir,
     every entry owned by `ids` (www-data of the live image), modes as in HA, the top written by the caller. Skipped:
-    web-updater backups (`updater-*`, decision D5), HA's cached Collabora discovery
+    the web updater's own folder (decision D5; core/BackgroundJobs/BackgroundCleanupUpdaterBackupsJob.php:44
+    `updater-<instanceid>`: a user may be called `updater-...`, lib/private/User/Manager.php:835-849 refuses other names
+    only), HA's cached Collabora discovery
     (`appdata_<instanceid>/richdocuments/remoteData`) and HA's own `.htaccess` at the top (the caller writes this
     device's: DATA_HTACCESS). Symlinks and every other `.htaccess` are counted (the caller refuses them)."""
     select = habackup.Select(include=(prefix,), symlinks=(), hardlinks=True)
     data = DataDir()
     remote = f'appdata_{instanceid}/richdocuments/remoteData' if instanceid else None
+    updater = f'updater-{instanceid}' if instanceid else None
     uid, gid = ids if ids is not None else (0, 0)
     entries = habackup.iter_entries(stream, select, report, addon=addon, checkpoint=checkpoint)
     for count, entry in enumerate(entries, 1):
@@ -798,7 +833,7 @@ def scan_datadir(stream, report, prefix, *, addon, instanceid=None, out=None, id
             continue
         rel = entry.name[len(prefix) + 1:]
         parts = rel.split('/')
-        if parts[0].startswith('updater-') or (remote is not None and _under(rel, remote)):
+        if parts[0] == updater or (remote is not None and _under(rel, remote)):
             if entry.kind == 'file':
                 data.skipped_files += 1
                 data.skipped_bytes += entry.size
@@ -816,6 +851,8 @@ def scan_datadir(stream, report, prefix, *, addon, instanceid=None, out=None, id
         own = not parts[0].startswith(('appdata_', '__'))  # a user's folder (not app data, not group folders)
         if len(parts) >= 2 and parts[1] == 'files' and own:
             data.users.add(parts[0])
+        if parts[0] == TEAM_FOLDERS and len(parts) >= 2 and len(data.team_folders) < MAX_ITEMS:
+            data.team_folders.add(parts[1])
         if entry.kind == 'dir':
             data.dirs += 1
             if out is not None:
@@ -836,10 +873,9 @@ def scan_datadir(stream, report, prefix, *, addon, instanceid=None, out=None, id
                                       member=shown(rel, 200))
                 out.add(rel, 'hardlink', mode=0o644, uid=uid, gid=gid, mtime=entry.mtime,
                         linkname=entry.linkname[len(prefix) + 1:])
-    samples = [s for s in report.skipped_symlink_samples if _under(s, prefix)]
-    if report.skipped_symlinks and samples:
+    if report.skipped_symlinks:  # every one is below `prefix` (Select.include)
         data.symlinks = report.skipped_symlinks
-        data.symlink_samples = samples
+        data.symlink_samples = list(report.skipped_symlink_samples)
     return data
 
 
@@ -1112,7 +1148,7 @@ HA_SQL = """SELECT json_build_object(
  'schemas', (SELECT coalesce(json_agg(nspname ORDER BY nspname), '[]'::json) FROM pg_namespace
              WHERE nspname !~ '^pg_' AND nspname NOT IN ('information_schema', 'public')),
  'local_storages', (SELECT coalesce(json_agg(id ORDER BY numeric_id), '[]'::json) FROM public.oc_storages
-                    WHERE id LIKE 'local::%'),
+                    WHERE id LIKE 'local::%' OR id ~ '^[0-9a-f]{32}$'),
  'enabled', (SELECT coalesce(json_agg(appid ORDER BY appid), '[]'::json) FROM public.oc_appconfig
              WHERE configkey = 'enabled' AND configvalue <> 'no'),
  'encryption', (SELECT configvalue FROM public.oc_appconfig WHERE appid = 'core' AND configkey = 'encryption_enabled'))"""
@@ -1195,6 +1231,12 @@ def datadir_blockers(config, data, ha_source):
     return blockers
 
 
+def moves_of(config, live, storages, data):
+    """storage_moves of HA's config.php, the live one, HA's stored ids and the walk of HA's data directory."""
+    folders = sorted(data.team_folders) if isinstance(data, DataDir) else ()
+    return storage_moves(config['datadirectory'], live['datadirectory'], storages, folders)
+
+
 def analyse(src, data, details, target, *, ha_source, pg_major):
     """(blockers, warnings) of everything a check found."""
     config, live = src.config, target.config
@@ -1232,9 +1274,13 @@ def analyse(src, data, details, target, *, ha_source, pg_major):
             storages = [s for s in details.get('local_storages') or [] if isinstance(s, str)]
             if isinstance(config, dict) and isinstance(config.get('datadirectory'), str):
                 root = storage_id(config['datadirectory'])
+                moves = moves_of(config, live, storages, data)
                 if root not in storages:
                     blockers.append('HA 的 Nextcloud 資料庫和它的資料夾設定不一致（找不到使用者檔案資料夾的儲存空間記錄），無法匯入。')
-                other = [s for s in storages if s != root]
+                if any(new in storages for _old, new in moves):
+                    blockers.append(MSG_STORAGE_TAKEN.format(dir=shown(live.get('datadirectory') or '', 200)))
+                moved = {old for old, _new in moves} | {root}
+                other = [s for s in storages if s.startswith('local::') and s not in moved]
                 if other:
                     warnings.append(f'HA 的 Nextcloud 有 {len(other)} 個本機外部儲存空間（例如 {shown(other[0][7:])}），'
                                     '那些路徑在這台不存在，匯入後需要重新設定。')
@@ -1318,6 +1364,8 @@ def datadir_pass(work, src, *, out=None, ids=None):
     with work.open(member) as stream:
         data = scan_datadir(stream, report, prefix, addon=kind == 'addon', instanceid=config.get('instanceid'),
                             out=out, ids=ids, checkpoint=work.checkpoint)
+    if report.skipped_other:
+        work.log(f'HA 的 Nextcloud 使用者檔案裡有 {report.skipped_other} 個特殊檔案（FIFO）沒有搬過來。')
     work.log(f'HA 的 Nextcloud 使用者檔案：{data.files} 個檔案（{ha_odoo._mib(data.bytes)}），'
              f'{len(data.users)} 位使用者的資料夾' + (f'，略過 {data.skipped_files} 個暫存檔' if data.skipped_files else ''))
     return data
@@ -1438,15 +1486,15 @@ def removed_sql(old_root, remote):
             f'WHERE id = {lit(old_root)}) AND (path = {lit(remote)} OR left(path, {len(remote) + 1}) = {lit(remote + "/")})')
 
 
-def fixup_sql(old_root, new_root, remote, live_rows, *, jobs=False):
-    """The conversion's changes inside the restored database (one transaction, as the tables' owner, pinned). `jobs`:
-    the database has oc_jobs; the job that refreshes the Office app's cache is made due at once (the converted backup may
-    be restored later than the cache it carries was read)."""
+def fixup_sql(moves, new_root, remote, live_rows, *, jobs=False):
+    """The conversion's changes inside the restored database (one transaction, as the tables' owner, pinned): the
+    storage rows of `moves` (storage_moves), this device's kept settings, HA's cached Collabora answers. `jobs`: the
+    database has oc_jobs; the job that refreshes the Office app's cache is made due at once (the converted backup may be
+    restored later than the cache it carries was read)."""
     lit = ha_odoo.sql_literal
     keys = ', '.join(f'({lit(a)}, {lit(k)})' for a, k in LIVE_APPCONFIG)
-    sql = [f'UPDATE public.oc_storages SET id = {lit(new_root)} WHERE id = {lit(old_root)};\n'
-           if old_root != new_root else '',
-           f'DELETE FROM public.oc_appconfig WHERE (appid, configkey) IN ({keys});\n']
+    sql = [f'UPDATE public.oc_storages SET id = {lit(new)} WHERE id = {lit(old)};\n' for old, new in moves]
+    sql.append(f'DELETE FROM public.oc_appconfig WHERE (appid, configkey) IN ({keys});\n')
     if live_rows:
         sql.append('INSERT INTO public.oc_appconfig SELECT * FROM json_populate_recordset(NULL::public.oc_appconfig, '
                    f'{lit(json.dumps(live_rows, ensure_ascii=False, sort_keys=True))});\n')
@@ -1460,15 +1508,19 @@ def fixup_sql(old_root, new_root, remote, live_rows, *, jobs=False):
     return ''.join(sql)
 
 
-def data_verify_sql(new_root, old_root, tables):
-    """The converted database's contents, read as the tables' owner (pinned)."""
+def data_verify_sql(new_root, moves, tables):
+    """The converted database's contents, read as the tables' owner (pinned): `root` = the root storage row, `moved` and
+    `old` = how many of the moved storage rows have this device's and still have HA's id."""
     lit = ha_odoo.sql_literal
     counts = [f"'{key}', (SELECT count(*) FROM public.{table})" for table, key in COUNTED if table in tables]
     keys = ' OR '.join(f'(appid = {lit(a)} AND configkey = {lit(k)})' for a, k in LIVE_APPCONFIG)
+    new_ids = ', '.join(lit(new) for _old, new in moves) or 'NULL'
+    old_ids = ', '.join(lit(old) for old, _new in moves) or 'NULL'
     return f"""SELECT json_build_object(
  'counts', json_build_object({', '.join(counts)}),
  'root', (SELECT count(*) FROM public.oc_storages WHERE id = {lit(new_root)}),
- 'old', (SELECT count(*) FROM public.oc_storages WHERE id = {lit(old_root)}),
+ 'moved', (SELECT count(*) FROM public.oc_storages WHERE id IN ({new_ids})),
+ 'old', (SELECT count(*) FROM public.oc_storages WHERE id IN ({old_ids})),
  'appconfig', (SELECT coalesce(json_agg(row_to_json(a) ORDER BY appid, configkey), '[]'::json)
                FROM public.oc_appconfig a WHERE {keys}))"""
 
@@ -1504,7 +1556,7 @@ def _rows(rows):
     return sorted(json.dumps(r, sort_keys=True, ensure_ascii=False) for r in rows or [])
 
 
-def verify_converted(doc, *, expected, db, role, dbname, old_root, new_root):
+def verify_converted(doc, *, expected, db, role, dbname, moves):
     """zh-TW problems of the converted database against what it must be."""
     if not isinstance(doc, dict):
         return ['無法讀取轉換後的資料庫']
@@ -1528,7 +1580,7 @@ def verify_converted(doc, *, expected, db, role, dbname, old_root, new_root):
     # hold exactly the live verifier, or Nextcloud's config.php password would not log in after the restore.
     if doc.get('verifier_md5') != hashlib.md5(db['role']['password'].encode('utf-8')).hexdigest():
         problems.append(f'{role} 角色的密碼設定和這台的不同')
-    if doc.get('root') != 1 or (old_root != new_root and doc.get('old') != 0):
+    if doc.get('root') != 1 or doc.get('moved') != len(moves) or doc.get('old') != 0:
         problems.append('使用者檔案資料夾的儲存空間記錄沒有改成這台的路徑')
     for key, label in (('roles', '資料庫角色'), ('extensions', '擴充功能'), ('datacl', '資料庫權限'),
                        ('nspacl', 'public schema 權限')):
@@ -1559,7 +1611,7 @@ def carry_settings(work, app, live, cluster):
     return carried
 
 
-def build_cluster(work, app, tmp, target, dump, *, details, old_root, new_root, remote):
+def build_cluster(work, app, tmp, target, dump, *, details, old_root, new_root, moves, remote):
     """The new cluster in the throwaway volume `nc-db` (stopped cleanly); returns the verified document."""
     live, db, role = target.live, target.db, target.role
     work.log('建立新的 PostgreSQL 資料庫叢集（與這台相同的映像與設定）')
@@ -1585,18 +1637,16 @@ def build_cluster(work, app, tmp, target, dump, *, details, old_root, new_root, 
     if shape:
         raise BackupError('incompatible', MSG_SHAPE.format(kinds=hacommon.names(shape)))
     removed = owner.query_json(removed_sql(old_root, remote), live.db_name) if remote else 0
-    owner.script(fixup_sql(old_root, new_root, remote, db['appconfig'], jobs='oc_jobs' in details['tables']),
-                 live.db_name)
+    owner.script(fixup_sql(moves, new_root, remote, db['appconfig'], jobs='oc_jobs' in details['tables']), live.db_name)
     expected = dict(details['counts'])
     expected['files'] = expected.get('files', 0) - int(removed or 0)
-    doc = owner.query_json(data_verify_sql(new_root, old_root, details['tables']), live.db_name)
+    doc = owner.query_json(data_verify_sql(new_root, moves, details['tables']), live.db_name)
     catalog = admin.query_json(catalog_verify_sql(role), live.db_name)
     if isinstance(doc, dict) and isinstance(catalog, dict):
         doc = {**doc, **catalog}
     else:
         doc = None
-    problems = verify_converted(doc, expected=expected, db=db, role=role, dbname=live.db_name, old_root=old_root,
-                                new_root=new_root)
+    problems = verify_converted(doc, expected=expected, db=db, role=role, dbname=live.db_name, moves=moves)
     if problems:
         raise BackupError('job-failed', f'轉換後的 Nextcloud 資料庫檢查沒有通過：{"；".join(problems)}。')
     carry_settings(work, app, live, admin)
@@ -1794,8 +1844,11 @@ def convert(work, app, test_mode, out_dir):
     work.checkpoint()
     old_root, new_root = storage_id(src.config['datadirectory']), storage_id(target.config['datadirectory'])
     remote = f'appdata_{src.config["instanceid"]}/richdocuments/remoteData'
+    moves = moves_of(src.config, target.config, details.get('local_storages') or [], data)
+    if len(moves) > 1:
+        work.log(f'Nextcloud 的儲存空間記錄：使用者檔案資料夾，和它裡面的 {len(moves) - 1} 個資料夾（團隊資料夾）一起改成這台的路徑')
     built = build_cluster(work, app, tmp, target, dump, details=details, old_root=old_root, new_root=new_root,
-                          remote=remote)
+                          moves=moves, remote=remote)
     dump.unlink()
     export = staging / 'nc-db.tar'
     with _private(export) as handle:

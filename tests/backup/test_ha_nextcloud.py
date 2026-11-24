@@ -5,6 +5,7 @@ import gzip
 import hashlib
 import io
 import json
+import re
 import tarfile
 import tempfile
 import unittest
@@ -331,8 +332,10 @@ class World(fk.World):
         if sql.startswith('SELECT count(*) FROM public.oc_filecache'):
             return 2
         if sql.startswith("SELECT json_build_object(\n 'counts'"):
+            moved = re.search(r"'moved', \(SELECT count\(\*\) FROM public\.oc_storages WHERE id IN \((.*)\)\),", sql).group(1)
             return self.verify if self.verify is not None else {
-                'counts': {**HA_COUNTS, 'files': 298}, 'root': 1, 'old': 0, 'appconfig': LIVE_DB['appconfig']}
+                'counts': {**HA_COUNTS, 'files': 298}, 'root': 1, 'moved': moved.count("'") // 2, 'old': 0,
+                'appconfig': LIVE_DB['appconfig']}
         if sql.startswith("SELECT json_build_object(\n 'owners'"):
             return self.catalog if self.catalog is not None else {
                 'owners': ['oc_admin'], 'verifier_md5': hashlib.md5(VERIFIER.encode()).hexdigest(),
@@ -462,6 +465,28 @@ class ConfigTests(unittest.TestCase):
                      '/share/../etc', 'share/nextcloud', None):
             self.assertIsNone(nc.datadir_source(path), path)
 
+    def test_the_storages_below_the_data_directory_move_with_it(self):
+        # The Team folders app (groupfolders 23) keeps one local storage per folder below the data directory and names it
+        # by its number: a row left on HA's path would be another storage here (new file numbers).
+        root = ('local::/share/nextcloud/', 'local::/var/www/html/data/')
+        ids = ['local::/share/nextcloud/', 'local::/share/nextcloud/__groupfolders/1/',
+               'local::/share/nextcloud/__groupfolders/12/', 'local::/share/nextcloud2/', 'local::/share/media/']
+        self.assertEqual(nc.storage_moves('/share/nextcloud', '/var/www/html/data', ids), [
+            root, ('local::/share/nextcloud/__groupfolders/1/', 'local::/var/www/html/data/__groupfolders/1/'),
+            ('local::/share/nextcloud/__groupfolders/12/', 'local::/var/www/html/data/__groupfolders/12/')])
+        self.assertEqual(nc.storage_moves('/share//nextcloud/', '/var/www/html/data/', ids[:1]), [root])
+        self.assertEqual(nc.storage_moves('/share/nextcloud', '/var/www/html/data', [], ['1']), [root])
+        self.assertEqual(nc.storage_moves('/var/www/html/data', '/var/www/html/data',
+                                          ['local::/var/www/html/data/', 'local::/var/www/html/data/__groupfolders/1/']), [])
+        # Ids longer than 64 bytes are stored as their md5: recognised by the folder names of the backup.
+        far = '/share/' + 'x' * 40
+        stored = hashlib.md5(f'local::{far}/__groupfolders/7/'.encode()).hexdigest()
+        self.assertEqual(nc.storage_moves(far, '/var/www/html/data', [f'local::{far}/', stored], ['7', '8', 'trash']), [
+            (f'local::{far}/', 'local::/var/www/html/data/'), (stored, 'local::/var/www/html/data/__groupfolders/7/')])
+        deep = 'local::/share/nextcloud/' + 'd' * 39 + '/'
+        self.assertEqual(len(deep), 64)
+        self.assertRegex(nc.storage_moves('/share/nextcloud', '/var/www/html/data', [deep])[1][1], r'\A[0-9a-f]{32}\Z')
+
 
 class AppTests(unittest.TestCase):
     def test_info_xml_and_versions(self):
@@ -502,6 +527,29 @@ class DataDirTests(unittest.TestCase):
         self.assertIn('./appdata_ochaabcdef12/preview/1.png', tar)
         self.assertFalse([n for n in tar if 'updater-' in n or 'remoteData' in n or 'woowtechbot' in n])
         self.assertEqual(found.skipped_files, 2)
+
+    def test_only_the_web_updaters_own_folder_is_skipped(self):
+        # Nextcloud refuses some user names (lib/private/User/Manager.php verifyUid) but not `updater-...`; the web
+        # updater's folder is exactly `updater-<instanceid>` (BackgroundCleanupUpdaterBackupsJob.php).
+        found, tar = self.walk(share_tar(extra=[
+            {'name': 'nextcloud/updater-team/files/plan.txt', 'data': b'plan'},
+            {'name': 'nextcloud/updater-ochaabcdef1/files/a.txt', 'data': b'a'}]))
+        self.assertEqual(tar['./updater-team/files/plan.txt'][1], b'plan')
+        self.assertIn('./updater-ochaabcdef1/files/a.txt', tar)
+        self.assertFalse([n for n in tar if n.startswith('./updater-ochaabcdef12')])
+        self.assertEqual((found.users, found.lists['updater-team'][:2], found.skipped_files),
+                         ({'admin', 'updater-team', 'updater-ochaabcdef1'}, [1, 4], 2))
+
+    def test_team_folders_and_links_far_down_are_seen(self):
+        found, _tar = self.walk(share_tar(extra=[
+            {'name': 'nextcloud/__groupfolders', 'type': 'dir'}, {'name': 'nextcloud/__groupfolders/1', 'type': 'dir'},
+            {'name': 'nextcloud/__groupfolders/12/files/a.txt', 'data': b'a'},
+            {'name': 'nextcloud/admin/__groupfolders/3/files', 'type': 'dir'}]))
+        self.assertEqual((found.team_folders, found.users), ({'1', '12'}, {'admin'}))
+        prefix = 'n/' * 110 + 'nextcloud'  # a sample of a refused link is cut at 200 characters
+        entries = [{'name': prefix, 'type': 'dir'}, {'name': f'{prefix}/admin/files/link', 'type': 'symlink', 'linkname': 'x'}]
+        found = nc.scan_datadir(io.BytesIO(hx.tar_bytes(entries)), habackup.Report(), prefix, addon=False)
+        self.assertEqual((found.symlinks, len(found.symlink_samples)), (1, 1))
 
     def test_encryption_symlinks_and_missing_marker(self):
         found, _tar = self.walk(share_tar(ncdata=False, extra=[
@@ -616,6 +664,51 @@ class CheckTests(NextcloudCase):
         self.assertEqual(caught.exception.code, 'incompatible')
         self.assertIn('admin/files/site/.htaccess', caught.exception.message)
         self.assertFalse(self.runs('nc-db'), 'no cluster is built')
+
+    def test_storages_below_the_data_directory_are_not_external_ones(self):
+        team = 'local::/share/nextcloud/__groupfolders/1/'
+        self.world.ha_details = dict(self.world.ha_details, local_storages=['local::/share/nextcloud/', team])
+        result = self.check(self.upload_nextcloud(), ['nextcloud'])[0]
+        self.assertTrue(result['ok'], result['blockers'])
+        self.assertFalse([w for w in result['warnings'] if '外部儲存' in w], result['warnings'])
+        self.world.ha_details = dict(self.world.ha_details, local_storages=[
+            'local::/share/nextcloud/', team, 'local::/share/media/', 'f' * 32])
+        result = self.check(self.upload_nextcloud(), ['nextcloud'])[0]
+        warning = [w for w in result['warnings'] if '本機外部儲存空間' in w]
+        self.assertEqual(len(warning), 1, result['warnings'])
+        self.assertIn('1 個本機外部儲存空間（例如 /share/media/）', warning[0])
+
+    def test_a_row_of_this_devices_data_dir_in_has_database_is_refused(self):
+        # E.g. an HA Nextcloud that was moved from a container before: the rename would meet a taken id.
+        for taken in ('local::/var/www/html/data/', 'local::/var/www/html/data/__groupfolders/1/'):
+            self.world.ha_details = dict(self.world.ha_details, local_storages=[
+                'local::/share/nextcloud/', 'local::/share/nextcloud/__groupfolders/1/', taken])
+            result = self.check(self.upload_nextcloud(), ['nextcloud'])[0]
+            self.assertEqual(len(result['blockers']), 1, result['blockers'])
+            self.assertIn('已經有這台使用者檔案資料夾（/var/www/html/data）的儲存空間記錄', result['blockers'][0])
+            with self.assertRaises(BackupError) as caught:
+                self.convert(self.upload_nextcloud(), ['nextcloud'])
+            self.assertEqual(caught.exception.code, 'incompatible')
+
+    def test_a_data_directory_whose_storage_id_is_stored_as_its_md5(self):
+        far = '/share/' + 'x' * 60
+        config = HA_CONFIG.replace(b"'/share/nextcloud'", f"'{far}'".encode())
+        entries = [{'name': 'x' * 60, 'type': 'dir'}, {'name': 'x' * 60 + '/.ncdata', 'data': b'# Nextcloud data directory\n'},
+                   {'name': 'x' * 60 + '/admin/files/hello.txt', 'data': b'hello from HA'},
+                   {'name': 'x' * 60 + '/admin/files/中文.txt', 'data': '測試'.encode()}]
+        share = gzip.compress(hx.tar_bytes(entries), mtime=0)
+        self.world.ha_details = dict(self.world.ha_details, local_storages=[nc.storage_id(far)])
+        result = self.check(self.upload_nextcloud(config=config, share=share), ['nextcloud'])[0]
+        self.assertEqual((result['ok'], result['blockers']), (True, []))
+        self.assertIn("id ~ '^[0-9a-f]{32}$'", nc.HA_SQL)
+        self.convert(self.upload_nextcloud(config=config, share=share), ['nextcloud'])
+        sql = '\n'.join(x['sql'] for x in self.world.sessions if x['role'] == 'nc-db')
+        self.assertIn(f"UPDATE public.oc_storages SET id = 'local::/var/www/html/data/' WHERE id = '{nc.storage_id(far)}'", sql)
+
+    def test_a_fifo_is_named_in_the_log(self):
+        share = share_tar(extra=[{'name': 'nextcloud/admin/files/pipe', 'type': 'fifo'}])
+        self.check(self.upload_nextcloud(share=share), ['nextcloud'])
+        self.assertTrue(any('1 個特殊檔案（FIFO）沒有搬過來' in line for line in self.reporter.logs), self.reporter.logs)
 
     def test_file_lists_that_differ_are_a_warning(self):
         result = self.check(self.upload_nextcloud(), ['nextcloud'])[0]
@@ -826,6 +919,31 @@ class ConvertTests(NextcloudCase):
         data = members(self.world.dirs[DIRS[3]])
         self.assertEqual(data['./.htaccess'][1], nc.DATA_HTACCESS)
         self.assertFalse(any('檔案掃描' in line for line in result['ha_import']['reminders_by_app']['nextcloud']))
+
+    def test_team_folders_keep_their_storages(self):
+        team = [f'local::/share/nextcloud/__groupfolders/{n}/' for n in (1, 12)]
+        self.world.ha_details = dict(self.world.ha_details, local_storages=['local::/share/nextcloud/', *team])
+        share = share_tar(extra=[{'name': 'nextcloud/__groupfolders/1/files/plan.txt', 'data': b'plan'}])
+        self.convert(self.upload_nextcloud(share=share), ['nextcloud'])
+        sql = '\n'.join(x['sql'] for x in self.world.sessions if x['pg_user'] == 'oc_admin')
+        for n in (1, 12):
+            self.assertIn(f"UPDATE public.oc_storages SET id = 'local::/var/www/html/data/__groupfolders/{n}/' WHERE id = "
+                          f"'local::/share/nextcloud/__groupfolders/{n}/'", sql)
+        verify = [x['sql'] for x in self.world.sessions if x['pg_user'] == 'oc_admin' and "'counts'" in x['sql']]
+        self.assertIn("'moved', (SELECT count(*) FROM public.oc_storages WHERE id IN ('local::/var/www/html/data/', "
+                      "'local::/var/www/html/data/__groupfolders/1/', 'local::/var/www/html/data/__groupfolders/12/'))", verify[0])
+        self.assertIn("'old', (SELECT count(*) FROM public.oc_storages WHERE id IN ('local::/share/nextcloud/', "
+                      "'local::/share/nextcloud/__groupfolders/1/', 'local::/share/nextcloud/__groupfolders/12/'))", verify[0])
+        self.assertEqual(members(self.world.dirs[DIRS[3]])['./__groupfolders/1/files/plan.txt'][1], b'plan')
+        self.assertTrue(any('2 個資料夾（團隊資料夾）' in line for line in self.reporter.logs), self.reporter.logs)
+        good = {'counts': {**HA_COUNTS, 'files': 298}, 'root': 1, 'moved': 3, 'old': 0, 'appconfig': LIVE_DB['appconfig']}
+        for change in ({'moved': 2}, {'old': 1}, {'root': 0}, {'moved': None}):
+            self.world.verify = dict(good, **change)
+            with self.assertRaises(BackupError) as caught:
+                self.convert(self.upload_nextcloud(share=share), ['nextcloud'])
+            self.assertIn('儲存空間記錄沒有改成這台的路徑', caught.exception.message, change)
+        self.world.verify = good
+        self.convert(self.upload_nextcloud(share=share), ['nextcloud'])
 
     def test_a_reminder_to_scan_when_the_file_lists_differ(self):
         self.world.lists = lists(('admin', 'files/hello.txt', 13))
