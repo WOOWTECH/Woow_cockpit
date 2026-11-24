@@ -1,0 +1,106 @@
+{
+ "what": "iteration 7 check of lane emqx-sr5 dev-d evidence (attempt-sr5-01/03/04/05/06): engine tree of each source commit, stdout_sha256 against the 0600 private stdout (stdout part before the stderr marker), fixed status lines against the private stdout, and the saved check results (texts only, no value printed)",
+ "time": "2026-11-24 18:02 +0800",
+ "attempts": {
+  "attempt-sr5-01": {
+   "scope": "sr5-plain-refusal",
+   "exit": 1,
+   "source_commit": "1ebfe816a41a",
+   "backup_engine_tree": "5142e05cb053",
+   "stdout_sha256_matches_private_log": true,
+   "stderr_bytes": 0,
+   "fixed_status_equals_private_stdout": true,
+   "checks_pass": 41,
+   "checks_fail": 1,
+   "result_line": [
+    "RESULT 41/42 passed"
+   ]
+  },
+  "attempt-sr5-03": {
+   "scope": "sr5-cleanup",
+   "exit": 0,
+   "source_commit": "f0538ff6a60c",
+   "backup_engine_tree": "5142e05cb053",
+   "stdout_sha256_matches_private_log": true,
+   "stderr_bytes": 0,
+   "fixed_status_equals_private_stdout": true,
+   "checks_pass": 23,
+   "checks_fail": 0,
+   "result_line": [
+    "RESULT 23/23 passed"
+   ]
+  },
+  "attempt-sr5-04": {
+   "scope": "sr5-plain-refusal",
+   "exit": 0,
+   "source_commit": "ae7032838fac",
+   "backup_engine_tree": "5142e05cb053",
+   "stdout_sha256_matches_private_log": true,
+   "stderr_bytes": 0,
+   "fixed_status_equals_private_stdout": true,
+   "checks_pass": 43,
+   "checks_fail": 0,
+   "result_line": [
+    "RESULT 43/43 passed"
+   ],
+   "saved_check": {
+    "ok": false,
+    "blockers": 1,
+    "warnings": 2,
+    "sr5_texts": [
+     "HA 的 EMQX 用「plain」（不加密）的方式保存 MQTT 帳號的密碼，搬過來會把明文密碼留在這台，所以不能匯入。請先在 HA 的 EMQX 管理頁「存取控制 → 認證」把內建資料庫的密碼雜湊方式（password_hash_algorithm）改成 plain 以外的方式（例如 sha256 並加鹽，或 bcrypt），再替每個 MQTT 帳號重新設定一次密碼（EMQX 不會轉換已經存好的密碼，沒有重設的帳號在改完後就無法登入），然後重新製作 HA 備份再匯入。"
+    ],
+    "hex_runs_24": 0,
+    "bcrypt_prefix": 0
+   },
+   "job_records": {
+    "files": 3,
+    "hex_runs_24": 0,
+    "bcrypt_prefix": 0
+   }
+  },
+  "attempt-sr5-05": {
+   "scope": "sr5-bcrypt-warning",
+   "exit": 0,
+   "source_commit": "409341181dab",
+   "backup_engine_tree": "5142e05cb053",
+   "stdout_sha256_matches_private_log": true,
+   "stderr_bytes": 0,
+   "fixed_status_equals_private_stdout": true,
+   "checks_pass": 91,
+   "checks_fail": 0,
+   "result_line": [
+    "RESULT 91/91 passed"
+   ],
+   "saved_check": {
+    "ok": true,
+    "blockers": 0,
+    "warnings": 3,
+    "sr5_texts": [
+     "HA 的 EMQX 保存 MQTT 密碼的方式（bcrypt）和這台（sha256，鹽在後）不同，匯入後以 HA 的為準：這台現有的 MQTT 帳號（woow、woowbk-lab-baseline）匯入後無法再用原本的密碼登入，要在匯入後重新設定：到這台 EMQX 管理頁「存取控制 → 認證」的內建資料庫替這些帳號重設密碼或重新建立；由這台 bootstrap 帳號檔建立的帳號，刪除後重新啟動 EMQX 就會用原本的密碼建回。"
+    ],
+    "hex_runs_24": 0,
+    "bcrypt_prefix": 0
+   },
+   "job_records": {
+    "files": 4,
+    "hex_runs_24": 0,
+    "bcrypt_prefix": 0
+   }
+  },
+  "attempt-sr5-06": {
+   "scope": "sr5-cleanup",
+   "exit": 0,
+   "source_commit": "c7524f7abc6c",
+   "backup_engine_tree": "5142e05cb053",
+   "stdout_sha256_matches_private_log": true,
+   "stderr_bytes": 0,
+   "fixed_status_equals_private_stdout": true,
+   "checks_pass": 23,
+   "checks_fail": 0,
+   "result_line": [
+    "RESULT 23/23 passed"
+   ]
+  }
+ }
+}

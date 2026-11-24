@@ -1,0 +1,23 @@
+{
+ "what": "iteration 8 host test steps on the clean detached worktree /tmp/emqx-secreview8-suite-20261124 at a1f1947 (backup-engine tree 325f1f74), each through team/heavy.sh under /tmp/woowbk-host-heavy-tests.lock; guarded runner = integration-3 guard.py (no podman/labpodman/ssh/sudo/systemctl process may start)",
+ "commit": "a1f1947",
+ "backup_engine_tree": "325f1f74",
+ "units": "tests=331 failures=0 errors=0 skipped=0 expected_failures=0 unexpected_successes=0 blocked=0 shim_hits=0 run_native=denied elapsed=13 (every tests/backup/test_ha_emqx* module + tests.e2e.lab test_emqx_product_real_ha, test_emqx_real_candidate, test_emqx_candidate_acl_component)",
+ "backup": "tests=1844 failures=2 errors=3 skipped=1 expected_failures=0 unexpected_successes=0 blocked=6 shim_hits=0 run_native=denied elapsed=334; the only not-ok are 5 tests of tests.backup.test_litellm_lab_runner.LabRunnerTests (the known guard-blocked ones, the same 5 ids as iteration 7 and the integration baseline)",
+ "not_ok_ids": [
+  "tests.backup.test_litellm_lab_runner.LabRunnerTests.test_abort_is_forwarded",
+  "tests.backup.test_litellm_lab_runner.LabRunnerTests.test_exact_reader_capture_boundary",
+  "tests.backup.test_litellm_lab_runner.LabRunnerTests.test_input_and_file_output_are_forwarded_and_bounded",
+  "tests.backup.test_litellm_lab_runner.LabRunnerTests.test_real_child_overflow_is_bounded_and_sanitized",
+  "tests.backup.test_litellm_lab_runner.LabRunnerTests.test_stderr_and_failures_are_not_returned"
+ ],
+ "mutation": "mut rc=0 {\"killed\": 23, \"total\": 23, \"elapsed_s\": 150.1, \"unmutated\": {\"exit\": 0, \"tests\": 71, \"tail\": \"OK\"}} 20:19:33",
+ "summary": [
+  "head a1f1947 engine 325f1f74 dirty=0 start 19:27:40",
+  "mut rc=0 {\"killed\": 23, \"total\": 23, \"elapsed_s\": 150.1, \"unmutated\": {\"exit\": 0, \"tests\": 71, \"tail\": \"OK\"}} 20:19:33",
+  "units rc=0 offline self-check passed: 3 embedded programs compiled, 2 cold uploads known 20:19:47",
+  "backup rc=1 tests=1844 failures=2 errors=3 skipped=1 expected_failures=0 unexpected_successes=0 blocked=6 shim_hits=0 run_native=denied elapsed=334 20:25:24",
+  "end 20:25:24 head-after a1f1947 dirty=0"
+ ],
+ "commercial_acceptance": "not-complete"
+}

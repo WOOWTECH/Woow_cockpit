@@ -1,0 +1,262 @@
+{
+ "attempt": "t15-sr5",
+ "backup_engine_tree": "5142e05cb05337936d5fd010082e1c07f3d88b06",
+ "code": "fix/emqx-sr5-hash-warning-20261124",
+ "command": "-I t15_sr5_review.py sr5 plain-off,same,bcrypt,conv-plain,gw-plain,listener-plain,past-plain",
+ "commercial_acceptance": "not-complete",
+ "credentials": "generated per run; HA key (T11) read in-process by the b1 Secrets reader, never printed",
+ "date": "2026-11-24",
+ "elapsed_s": 1230.8,
+ "exit_code": 0,
+ "harness_commit": "283865c5fe5ad65c6711a56692003d53a865b10c",
+ "iteration": 7,
+ "lane": "emqx-secreview (SR-OWNER-1942)",
+ "result": {
+  "codebase": "sr5",
+  "device_users_added": "13",
+  "device_users_expected": 14,
+  "elapsed_s": 1230.2,
+  "image": "docker.io/emqx/emqx:5.8.9",
+  "lab_left": {
+   "containers": 0,
+   "volumes": 0
+  },
+  "modes": {
+   "bcrypt": {
+    "candidate_clear": "rows=1:clear=0:groups=['mqtt:global']",
+    "candidate_leak": "rows=1:hash=0:salt=0:pwd=false",
+    "check": {
+     "accounts_stop": 1,
+     "accounts_stop_exact": true,
+     "blockers": [],
+     "device": {
+      "count": 14,
+      "hashing": {
+       "dk_length": null,
+       "enable": true,
+       "iterations": null,
+       "mac_fun": null,
+       "name": "sha256",
+       "salt": "suffix"
+      }
+     },
+     "device_ids_exact": true,
+     "hashing": {
+      "dk_length": null,
+      "enable": true,
+      "iterations": null,
+      "mac_fun": null,
+      "name": "bcrypt",
+      "salt": null
+     },
+     "names_expected_sha256": "a0a1d6b78c2819795a5db36f39e48a31ae2b6a39be5cab5630f55fb24589b945",
+     "plain_refused": false,
+     "warnings": [
+      "HA 的 EMQX 允許未符合規則的主題；這台會拒絕，搬過來後請確認 ACL 規則涵蓋裝置使用的主題。",
+      "HA 的 EMQX 保存 MQTT 密碼的方式（bcrypt）和這台（sha256，鹽在後）不同，匯入後以 HA 的為準：這台現有的 MQTT 帳號（0-esc?[31mred、1-newline?INJECT、2-tab?name、3-bidi?txt.exe、4-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx、5-��-invalid、6-%s~p~s{0}{names}、7-、separator、8-<img src=x onerror=alert(1)>、WOOWUSERS:1:d29vdw==:END 等 14 個）匯入後無法再用原本的密碼登入，要在匯入後重新設定：到這台 EMQX 管理頁「存取控制 → 認證」的內建資料庫替這些帳號重設密碼或重新建立；由這台 bootstrap 帳號檔建立的帳號，刪除後重新啟動 EMQX 就會用原本的密碼建回。"
+     ]
+    },
+    "conversion": "PASSED (candidate built, all product checks green)",
+    "conversion_notes_naming": 2,
+    "conversion_texts_exact": true,
+    "device_leak": "rows=14:hash=0:salt=0:pwd=false",
+    "device_read_only_check": {
+     "equal": true
+    },
+    "device_read_only_conversion": {
+     "equal": true
+    },
+    "elapsed_s": 232.1,
+    "export_called": true,
+    "plaintext_rows_in_candidate": 0,
+    "preflight": {
+     "blocker": null,
+     "profile": [
+      "file"
+     ]
+    },
+    "staged_sha256": "753a73c2e89f8c5043642adba3c0340db6b2b3364ad1ca2735a73ad5b7a93b25",
+    "text_scan": {
+     "bcrypt_prefix": 0,
+     "control_chars": 0,
+     "hex_runs_24": 0,
+     "texts": 9
+    }
+   },
+   "conv-plain": {
+    "check": {
+     "accounts_stop": 0,
+     "blockers": [
+      "HA 的 EMQX 用「plain」（不加密）的方式保存 MQTT 帳號的密碼，搬過來會把明文密碼留在這台，所以不能匯入。請先在 HA 的 EMQX 管理頁「存取控制 → 認證」把內建資料庫的密碼雜湊方式（password_hash_algorithm）改成 plain 以外的方式（例如 sha256 並加鹽，或 bcrypt），再替每個 MQTT 帳號重新設定一次密碼（EMQX 不會轉換已經存好的密碼，沒有重設的帳號在改完後就無法登入），然後重新製作 HA 備份再匯入。"
+     ],
+     "device": {
+      "count": 14,
+      "hashing": {
+       "dk_length": null,
+       "enable": true,
+       "iterations": null,
+       "mac_fun": null,
+       "name": "sha256",
+       "salt": "suffix"
+      }
+     },
+     "device_ids_exact": true,
+     "hashing": {
+      "dk_length": null,
+      "enable": true,
+      "iterations": null,
+      "mac_fun": null,
+      "name": "plain",
+      "salt": "disable"
+     },
+     "plain_refused": true,
+     "warnings": [
+      "HA 的 EMQX 允許未符合規則的主題；這台會拒絕，搬過來後請確認 ACL 規則涵蓋裝置使用的主題。"
+     ]
+    },
+    "conversion": "REFUSED: EMQX 不能搬過來：HA 的 EMQX 用「plain」（不加密）的方式保存 MQTT 帳號的密碼，搬過來會把明文密碼留在這台，所以不能匯入。請先在 HA 的 EMQX 管理頁「存取控制 → 認證」把內建資料庫的密碼雜湊方式（password_hash_algorithm）改成 plain 以外的方式（例如 sha256 並加鹽，或 bcrypt），再替每個 MQTT 帳號重新設定一次密碼（EMQX 不會轉換已經存好的密碼，沒有重設的帳號在改完後就無法登入），然後重新製作 HA 備份再匯入。",
+    "device_leak": "rows=14:hash=0:salt=0:pwd=false",
+    "device_read_only_check": {
+     "equal": true
+    },
+    "device_read_only_conversion": {
+     "equal": true
+    },
+    "elapsed_s": 117.6,
+    "export_called": false,
+    "plaintext_rows_in_candidate": 0,
+    "preflight": {
+     "blocker": null,
+     "profile": [
+      "file"
+     ]
+    },
+    "staged_sha256": "6b31923ff84b20a1cea985aab906d45bde92633f86c7147bddc310a5b8da407c",
+    "text_scan": {
+     "bcrypt_prefix": 0,
+     "control_chars": 0,
+     "hex_runs_24": 0,
+     "texts": 3
+    }
+   },
+   "gw-plain": {
+    "harness_error": "RuntimeError: source broker did not start"
+   },
+   "listener-plain": {
+    "harness_error": "RuntimeError: source broker did not start"
+   },
+   "past-plain": {
+    "harness_error": "RuntimeError: source broker did not start"
+   },
+   "plain-off": {
+    "check": {
+     "accounts_stop": 0,
+     "blockers": [
+      "HA 的 EMQX 用「plain」（不加密）的方式保存 MQTT 帳號的密碼，搬過來會把明文密碼留在這台，所以不能匯入。請先在 HA 的 EMQX 管理頁「存取控制 → 認證」把內建資料庫的密碼雜湊方式（password_hash_algorithm）改成 plain 以外的方式（例如 sha256 並加鹽，或 bcrypt），再替每個 MQTT 帳號重新設定一次密碼（EMQX 不會轉換已經存好的密碼，沒有重設的帳號在改完後就無法登入），然後重新製作 HA 備份再匯入。"
+     ],
+     "device": {
+      "count": 14,
+      "hashing": {
+       "dk_length": null,
+       "enable": true,
+       "iterations": null,
+       "mac_fun": null,
+       "name": "sha256",
+       "salt": "suffix"
+      }
+     },
+     "device_ids_exact": true,
+     "hashing": {
+      "dk_length": null,
+      "enable": false,
+      "iterations": null,
+      "mac_fun": null,
+      "name": "plain",
+      "salt": "suffix"
+     },
+     "plain_refused": true,
+     "warnings": [
+      "HA 的 EMQX 允許匿名連線；這台不允許，HA 上沒有帳號的裝置搬過來後需要建立 MQTT 帳號。",
+      "HA 的 EMQX 允許未符合規則的主題；這台會拒絕，搬過來後請確認 ACL 規則涵蓋裝置使用的主題。"
+     ]
+    },
+    "device_leak": "rows=14:hash=0:salt=0:pwd=false",
+    "device_read_only_check": {
+     "equal": true
+    },
+    "elapsed_s": 61.5,
+    "plaintext_rows_in_candidate": 0,
+    "preflight": {
+     "blocker": null,
+     "profile": [
+      "file"
+     ]
+    },
+    "staged_sha256": "5e8e66cdb859debbeeef6a03dd1c28930b5451fe5abbf2f8bfbe4e0cf5e47dc3",
+    "text_scan": {
+     "bcrypt_prefix": 0,
+     "control_chars": 0,
+     "hex_runs_24": 0,
+     "texts": 3
+    }
+   },
+   "same": {
+    "check": {
+     "accounts_stop": 0,
+     "blockers": [],
+     "device": {
+      "count": 14,
+      "hashing": {
+       "dk_length": null,
+       "enable": true,
+       "iterations": null,
+       "mac_fun": null,
+       "name": "sha256",
+       "salt": "suffix"
+      }
+     },
+     "device_ids_exact": true,
+     "hashing": {
+      "dk_length": null,
+      "enable": true,
+      "iterations": null,
+      "mac_fun": null,
+      "name": "sha256",
+      "salt": "suffix"
+     },
+     "plain_refused": false,
+     "warnings": [
+      "HA 的 EMQX 允許未符合規則的主題；這台會拒絕，搬過來後請確認 ACL 規則涵蓋裝置使用的主題。"
+     ]
+    },
+    "device_leak": "rows=14:hash=0:salt=0:pwd=false",
+    "device_read_only_check": {
+     "equal": true
+    },
+    "elapsed_s": 68.0,
+    "plaintext_rows_in_candidate": 0,
+    "preflight": {
+     "blocker": null,
+     "profile": [
+      "file"
+     ]
+    },
+    "staged_sha256": "f727e4f6ec35687f6232a760452a1f68f04ef9770ca1d08ae5707c0d0c909a2c",
+    "text_scan": {
+     "bcrypt_prefix": 0,
+     "control_chars": 0,
+     "hex_runs_24": 0,
+     "texts": 1
+    }
+   }
+  },
+  "network": "none",
+  "store": "labpodman (separate --root)",
+  "test": "T15 SR-5 option C re-review (warning leak, names, read-only device reads, plain before export, plain rows from gateway/listener/past authenticators)"
+ },
+ "source_commit": "3c857c3099d19333d7f0c7f7780c1aec5d4d8e2c",
+ "started": "2026-11-24T17:25:31+0800",
+ "status_lines": [],
+ "stdout_sha256": "18d2bca4dbedb9bb01e6b3cdd7b53eaa474b5ceaae2fd32c872bbae934948098",
+ "store": "labpodman (separate --root, lab only), every podman run --network none"
+}

@@ -1,0 +1,68 @@
+{
+ "lane": "emqx-sr5",
+ "date": "2026-11-24",
+ "scope": "OWNER DECISION 2026-11-24 SR-5 option C: the EMQX import check warns before any conversion and names this device's own MQTT accounts that stop working when HA's built-in database hashes passwords differently; HA's plain hashing is refused at check time (and by the conversion); equal hashing changes nothing",
+ "owner_words": "匯入前在檢查頁先警告，列出哪些 Podman 帳號會失效、要在匯入後重新設定；如果 HA 用的是「不加密」的方式，就直接擋下。客戶事先就知道後果，也不會留下明文密碼。",
+ "branch": "R-COCKPIT fix/emqx-sr5-hash-warning-20261124 (local only, never pushed)",
+ "base": "integration 8844851",
+ "trial_merge": "clean onto integration 13051d0 (git merge-tree)",
+ "product_commit": "74d237f",
+ "backup_engine_tree": "5142e05c",
+ "unit_tests": {
+  "tests_backup_full": "1814 at ae70328, not ok only the 5 known guard-blocked test_litellm_lab_runner tests (= integration baseline)",
+  "backup_ui": "108/108 at ae70328 (new SR-5 page test included)",
+  "sr5_module_and_harness": "67 OK",
+  "lab_emqx_modules": "61 OK",
+  "mutation": "37/37 at ae70328 (35/37 at 85b24dc, both gaps closed by tests in ae70328)",
+  "check_source": "passed"
+ },
+ "real_attempts": {
+  "attempt-sr5-01": {
+   "exit": 1,
+   "checks": "41/42",
+   "what": "plain; the failure was the harness assumption (dev-d has two own accounts)",
+   "source_commit": "1ebfe81"
+  },
+  "attempt-sr5-03": {
+   "exit": 0,
+   "checks": "23/23",
+   "what": "cleanup after 01",
+   "source_commit": "f0538ff"
+  },
+  "attempt-sr5-04": {
+   "exit": 0,
+   "checks": "43/43",
+   "what": "plain refused at the check and by the conversion, nothing on dev-d changed",
+   "source_commit": "ae70328"
+  },
+  "attempt-sr5-05": {
+   "exit": 0,
+   "checks": "91/91",
+   "what": "bcrypt: the check names woow and woowbk-lab-baseline; import; exactly those two refused while HA's three users log in (also after a restart); both remedies work; rollback to B0",
+   "source_commit": "4093411 (code ae70328)"
+  },
+  "attempt-sr5-06": {
+   "exit": 0,
+   "checks": "23/23",
+   "what": "cleanup, B0 deleted, leaks 0",
+   "source_commit": "c7524f7 (code ae70328)"
+  }
+ },
+ "evidence_folder_of_attempts": "tests/e2e/lab/evidence/emqx-product-20261123/attempt-sr5-NN.json",
+ "simulated": [
+  "lab-made HA inputs (the real x86 cold backup changed by EMQX itself)",
+  "dev-d's own accounts are two",
+  "the page is proven by the backup-ui fixture test, not opened against dev-d",
+  "MQTT clients are the harness probe inside dev-d"
+ ],
+ "not_covered": [
+  "SCRAM algorithm",
+  "listener-level authenticators",
+  "bootstrap file of type hash (the conversion refuses it, the check does not predict it)",
+  "ARM HA backups for SR-5",
+  "pbkdf2 and other salt positions only by vendor reading + unit tests",
+  "production (never touched)"
+ ],
+ "next": "narrow security re-review by emqx-secreview, then integration-3 merges",
+ "commercial_acceptance": "not-complete"
+}

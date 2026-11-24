@@ -39,9 +39,9 @@
     }
   },
   "integration_20261123": {
-    "as_of": "2026-11-24 16:17 Asia/Taipei",
+    "as_of": "2026-11-24 21:17 Asia/Taipei",
     "branch": "integration/ha-import-batch1-20261123 (R-COCKPIT, local only, not pushed, no PR)",
-    "last_merge_commit": "13051d0",
+    "last_merge_commit": "61e7226",
     "merged": [
       {
         "lane": "hasqlite fail-closed",
@@ -289,7 +289,7 @@
         "by": "integration-3"
       },
       {
-        "lane": "emqx-product FINAL (evidence only: attempts 33 153/153, 34 99/99, 35 95/95 and 36 106/106 on dev-d, README, status, integrated unit record)",
+        "lane": "emqx-product FINAL (evidence only: attempts 33 153/153 and 34 99/99 = lab-made input S7 on the earlier engine 45db404c; 35 95/95 and 36 106/106 = the real x86 cold backup on the export-check engine f6dfa9c4; README, status, integrated unit record)",
         "branch": "fix/emqx-health-suggest-20261124",
         "tip": "568e6f8",
         "merge_commit": "3697d35",
@@ -310,10 +310,38 @@
         "by": "integration-3"
       },
       {
-        "lane": "nextcloud-import FINAL (evidence only: Team folders probe 2 8/8, refusal attempt 4 34/34, one run of all 88 importer mutants 88/88)",
+        "lane": "nextcloud-import FINAL (evidence only: Team folders probe 2 8/8 = synthetic data on a real Nextcloud 35, not a whole import; refusal attempt 4 34/34 = a real device run; one run of all 88 importer mutants 88/88 = unit level with fakes)",
         "branch": "feat/ha-import-nextcloud-20261123",
         "tip": "b2eaa2e",
         "merge_commit": "13051d0",
+        "by": "integration-3"
+      },
+      {
+        "lane": "arm54-2 (ARM64 Podman test machine: product fixes 868894f/a351cd2 volume top directory, a7f32e9 Podman in /usr/local/bin, 98410bd /run/secrets tmpfs, ee5a3cc native code by this device's processor, 0316d7e importable Headscale draft; harness and evidence) SQUASHED as one commit, its history not merged (early lane commits hold the test password literal); the test machine's tailnet IPv4 masked in 67 inventory snapshots",
+        "branch": "test/arm54-integrated-20261124",
+        "tip": "f5cd781",
+        "merge_commit": "4353892",
+        "by": "integration-3 (squash, main 16:23)"
+      },
+      {
+        "lane": "emqx-sr5 (owner decision SR-5 = C: the check warns and names this device's MQTT accounts a different HA hashing breaks; HA plain refused at the check and in the conversion; dev-d lab-made inputs: plain 43/43, bcrypt 91/91, cleanup 23/23)",
+        "branch": "fix/emqx-sr5-hash-warning-20261124",
+        "tip": "3c857c3",
+        "merge_commit": "3723667",
+        "by": "integration-3"
+      },
+      {
+        "lane": "emqx-secreview iteration 7 (narrow SR-5 re-review DONE; SR-11 Low fixed by 9665533: plain in an MQTT listener or gateway database and rows still in clear text are refused at the check and before HA's export; lab-store real runs T15/T5/T5b/T11 x86+ARM)",
+        "branch": "sec/emqx-secreview7-20261124",
+        "tip": "3369a9c",
+        "merge_commit": "bcb4a2c",
+        "by": "integration-3"
+      },
+      {
+        "lane": "emqx-secreview iteration 8 (SR-12 Low fixed by a1f1947: every MQTT row not in the exact stored form of its hashing is refused at the check and before HA's export; O-2 hacommon.names hides format characters (display only); O-3 DB_OFF warning; O-4 documented; lab-store real brokers, 34 Erlang mutants killed, real batch-1 x86 + ARM not refused)",
+        "branch": "sec/emqx-secreview8-20261124",
+        "tip": "6b5c97e",
+        "merge_commit": "61e7226",
         "by": "integration-3"
       }
     ],
@@ -323,16 +351,12 @@
         "reason": "an HA Nextcloud that had the Memories app is refused and stays refused (no allowlist): its database holds the function memories_fcu_fun and the trigger memories_fcu_trg; disabling or removing Memories does not drop them (Memories 11.1.4 has no uninstall step; Nextcloud 35.0.1 app:disable runs only uninstall steps, app:remove only deletes the app folder); no safe customer step exists, so such an HA Nextcloud cannot be imported yet (PR text, docs/backup.md)"
       },
       {
-        "item": "arm54-2 (final branch test/arm54-integrated-20261124)",
-        "reason": "by design not merged here: the main session squash-merges it at the end; it also carries product fixes: volume_root 868894f/a351cd2, podman path a7f32e9, tempctr 98410bd (c8df1f2 already here as e08f8a1), native code checked against this device's processor (ed3758e/ee5a3cc), the Headscale draft's config folder (fix/ha-headscale-config-dir-20261124) and the comment-only commit 8040b17 (its two lines that were on this branch are here as d0f5d06, byte-equal)"
-      },
-      {
         "item": "public-safe PR branch",
-        "reason": "BUILT locally, not pushed, no PR: pr/ha-import-batch1-20261124 = a92a3bc, one commit on origin/main bb23531 (= GitHub main); 261 product, docs and unit files equal 13051d0, engine tree equal, 72 sanitized harness files, raw evidence left out, summary docs/backup/ha-import-tests.md; the same final suites as the integration tip; scans 0 lab secret values, 0 test-password hits, 0 owner backup hashes (scratchpad/integration-3/pr/scan-record-final.json). It does not hold the ARM64 lane: the main session squash-merges that (and then the PR tree is rebuilt or the squash goes on top); push and PR are the owner's decision"
+        "reason": "to be REBUILT from the final tip after the final real re-verification (main 16:23), then scanned again; the current local pr/ha-import-batch1-20261124 = a92a3bc (one commit on origin/main bb23531, not pushed, no PR) lacks the arm54 squash and SR-5, and its commit message says \"0 hits of the test password\" from a broken scanner (it looked only for strings of 6+ characters): the corrected rule (testpw2: quoted constants of the removed line, whole-token match) gives 0 quoted occurrences in the PR tree; a rehearsal build from 4353892 is clean (product, docs and unit files byte-equal, lab values 0/35); push and PR are the owner's decision"
       },
       {
         "item": "final real re-verification of the integrated version",
-        "reason": "not run by the integration lane (separate final step); the .54 OwnerRunner runs of arm54-2 and the dev-d chain of emqx-product use the integrated engine"
+        "reason": "RUNNING in lane final-verify (real devices, results so far all on the stated tips): on 4353892 (main 17:56: the final engine differs only in ha_emqx.py and the display-only hacommon.names) LiteLLM 83/83, Hermes 90/90, Omnigent 115/115, Headscale ARM 99/101 kept (lab precondition) + rerun 101/101 after a harness-only fix; EMQX PRE-FINAL on a1b690f with the real RPi5 ARM cold backup 101/101 and 101/101; the FINAL EMQX runs wait for the INTEGRATION FINAL-2 line; Odoo/n8n on dev-c and the dev-e apps (disk) still to come"
       },
       {
         "item": "KNOWN OPEN RISK: LiteLLM SR-7 (deferred by the owner 2026-11-24 07:22, not closed)",
@@ -348,7 +372,7 @@
       },
       {
         "item": "EMQX owner items",
-        "reason": "open owner decisions, asked by the main session on 2026-11-24 15:23; until the answer today's behavior stays: (1) the SR-5 policy: after importing an HA built-in authenticator that hashes differently, this device's own bootstrap MQTT account is refused (the conversion note names it; the check page does not): keep with the note, refuse at check, or show it on the check page (the review disproved the clear-text claim with 3 real conversions); (2) a merge policy for devices whose Dashboard edited the ACL file (the import refuses, fail closed). Human item: the boot-time loaders of HA's throwaway broker (stopped by a safety classifier, not retried)"
+        "reason": "DECIDED 2026-11-24 15:26: SR-5 = option C (implemented: 3723667, widened by the review fix SR-11 in bcb4a2c; the owner may rule on that widening) and the Dashboard-edited ACL file = option A (stays refused at the conversion, known limitation; customer step from the owner: reset the device's rule file to the default or tidy the rules on the HA side, then import; not lab-tested). Human item: the boot-time loaders of HA's throwaway broker (stopped by a safety classifier, not retried), with the review's two points: a crafted allowed-table file can write rows of other tables into the candidate before the refusal, and cluster_rpc_mfa rows are replayed at boot. The owner may rule on the strictness of SR-12 (rows of an older hashing that can no longer verify are refused too) and on the widening of option C by SR-11 and SR-12; O-1 (name the bootstrap accounts first) not done"
       },
       {
         "item": "changed default to show the owner",
@@ -368,8 +392,8 @@
       }
     ],
     "public_guards_on_this_branch": "no blanket public import guard is left (owner decision 1): Omnigent SECURITY_BLOCKER -> enforced product path in 97c22c9, LiteLLM -> product module ha_litellm in d72ae5f (the lab candidate keeps its GUARD and is not registered), EMQX PRESERVATION_BLOCKER -> enforced product path in 9bf8f5e; the per-app check and conversion refusals stay, and every replaced guard assertion is listed in those merge messages",
-    "unit_tests_latest": "integration-3: at ae5420d tests/backup 1471 (12 not-ok = test_ha_omnigent 7 SECURITY_BLOCKER + test_litellm_lab_runner 5 guard false positive, 6/6 with --exe-only), backup-ui 100/100, lab 1090 started / 1043 ok (73 not-ok records = run_native refused + 2 stale persisted_values); at fb284b8: backup-ui 101/101, tests/backup 1488 = 1475 ok, 1 skipped, the same 12 not-ok ids, RealBackupTests 1/1, lab 1097 started / 1050 ok with the same 73 records; at 17c81b8 (nextcloud): affected modules 101/101, backup-ui 101/103 (timeout + 320 px overflow, both 2/2 alone); at f8e0c1d (batch2-lab again + EMQX security review): tests/backup 1525 = 1512 ok, 1 skipped, the same 12 not-ok ids, RealBackupTests 1/1, backup-ui 103/103, EMQX + import + flows modules 177/177, test_batch2_lab + test_dev_d_guard 43/43; at d72ae5f (litellm-product): tests/backup 1574 = 1561 ok, 1 skipped, the same 12 not-ok ids, RealBackupTests 1/1, backup-ui 105/105, 54 HA/LiteLLM modules 803 (only the 7 Omnigent), lab LiteLLM 20/20; at 97c22c9 (litellm 600 s + omnigent-product): tests/backup 1604 = 1598 ok, 1 skipped, 5 not-ok (only the litellm_lab_runner guard false positive, 6/6 with --exe-only; the 7 Omnigent SECURITY_BLOCKER not-ok are gone), RealBackupTests 1/1, backup-ui 105/105, 17 Omnigent/shared modules 317/317, lab Omnigent 31/31. Evidence: tests/e2e/lab/evidence/integration-20261123/unit-tests-step3.json, unit-tests-step3b.json, unit-tests-step3c.json, unit-tests-step3d.json, unit-tests-step3e.json, unit-tests-step3f.json. At 4539aec (step 3g): tests/backup 1664 = 1658 ok, 1 skipped, 5 not-ok (the same litellm_lab_runner guard refusals), RealBackupTests 1/1, backup-ui 105/105. At 2b5fee1 (step 3h): the CI's unit command 1925 run = 1911 ok, 6 skipped, 8 not-ok (7 refusals of this lane's host guard in its default mode, 1 digest test that fails only under the harness umask 077 and passes under the CI runner's umask 022; test file unchanged since origin/main), tests/backup 1769 = 1763 ok, 1 skipped, 5 not-ok (the same guard refusals), RealBackupTests 1/1, backup-ui 107/107; targeted runs on every staged merge since: 523/523 (export check, 31 modules), 69/69 (review branch). Evidence: unit-tests-step3g.json, unit-tests-step3h.json. At ae932f7 (step 3i, FINAL; the tip 13051d0 adds evidence only): the CI's unit command in the CI runner's form (umask 022, --exe-only) 1946 = 1938 ok, 6 skipped, 2 DriverTests refused by the host guard (unchanged since origin/main), check_source and node --check pass; tests/backup with the real batch-1 backups 1790 = 1784 ok, 1 skipped, 5 default-mode guard refusals (pass in the CI form); RealBackupTests 1/1; backup-ui 107/107; the public-safe PR tree gives the same numbers. The CI command had failed on this branch (three large-archive test modules left the process umask at 077): fixed in the tests by 0d83f8b. Evidence: unit-tests-step3i.json.",
-    "evidence": "tests/e2e/lab/evidence/integration-20261123/README.md (integration-1/2/3 sections), unit-tests.json, unit-tests-step2.json, unit-tests-step3.json, unit-tests-step3b.json, unit-tests-step3c.json, unit-tests-step3d.json, unit-tests-step3e.json, unit-tests-step3f.json, unit-tests-step3g.json, unit-tests-step3h.json, unit-tests-step3i.json",
+    "unit_tests_latest": "integration-3: at ae5420d tests/backup 1471 (12 not-ok = test_ha_omnigent 7 SECURITY_BLOCKER + test_litellm_lab_runner 5 guard false positive, 6/6 with --exe-only), backup-ui 100/100, lab 1090 started / 1043 ok (73 not-ok records = run_native refused + 2 stale persisted_values); at fb284b8: backup-ui 101/101, tests/backup 1488 = 1475 ok, 1 skipped, the same 12 not-ok ids, RealBackupTests 1/1, lab 1097 started / 1050 ok with the same 73 records; at 17c81b8 (nextcloud): affected modules 101/101, backup-ui 101/103 (timeout + 320 px overflow, both 2/2 alone); at f8e0c1d (batch2-lab again + EMQX security review): tests/backup 1525 = 1512 ok, 1 skipped, the same 12 not-ok ids, RealBackupTests 1/1, backup-ui 103/103, EMQX + import + flows modules 177/177, test_batch2_lab + test_dev_d_guard 43/43; at d72ae5f (litellm-product): tests/backup 1574 = 1561 ok, 1 skipped, the same 12 not-ok ids, RealBackupTests 1/1, backup-ui 105/105, 54 HA/LiteLLM modules 803 (only the 7 Omnigent), lab LiteLLM 20/20; at 97c22c9 (litellm 600 s + omnigent-product): tests/backup 1604 = 1598 ok, 1 skipped, 5 not-ok (only the litellm_lab_runner guard false positive, 6/6 with --exe-only; the 7 Omnigent SECURITY_BLOCKER not-ok are gone), RealBackupTests 1/1, backup-ui 105/105, 17 Omnigent/shared modules 317/317, lab Omnigent 31/31. Evidence: tests/e2e/lab/evidence/integration-20261123/unit-tests-step3.json, unit-tests-step3b.json, unit-tests-step3c.json, unit-tests-step3d.json, unit-tests-step3e.json, unit-tests-step3f.json. At 4539aec (step 3g): tests/backup 1664 = 1658 ok, 1 skipped, 5 not-ok (the same litellm_lab_runner guard refusals), RealBackupTests 1/1, backup-ui 105/105. At 2b5fee1 (step 3h): the CI's unit command 1925 run = 1911 ok, 6 skipped, 8 not-ok (7 refusals of this lane's host guard in its default mode, 1 digest test that fails only under the harness umask 077 and passes under the CI runner's umask 022; test file unchanged since origin/main), tests/backup 1769 = 1763 ok, 1 skipped, 5 not-ok (the same guard refusals), RealBackupTests 1/1, backup-ui 107/107; targeted runs on every staged merge since: 523/523 (export check, 31 modules), 69/69 (review branch). Evidence: unit-tests-step3g.json, unit-tests-step3h.json. At ae932f7 (step 3i, FINAL; the tip 13051d0 adds evidence only): the CI's unit command in the CI runner's form (umask 022, --exe-only) 1946 = 1938 ok, 6 skipped, 2 DriverTests refused by the host guard (unchanged since origin/main), check_source and node --check pass; tests/backup with the real batch-1 backups 1790 = 1784 ok, 1 skipped, 5 default-mode guard refusals (pass in the CI form); RealBackupTests 1/1; backup-ui 107/107; the public-safe PR tree gives the same numbers. The CI command had failed on this branch (three large-archive test modules left the process umask at 077): fixed in the tests by 0d83f8b. Evidence: unit-tests-step3i.json. At bcb4a2c (step 3j, FINAL code; after the arm54 squash 4353892 and the SR-5 merges 3723667 and bcb4a2c): EVERY run: step of .github/workflows/validate.yml and pi-web-validation.yml (install steps skipped: the host has the pinned tools) passed except the 2 DriverTests the host guard refuses (unchanged since origin/main): unittest discover in the CI form 2016 = 2008 ok, 6 skipped, 2 refused; check_source, bash -n, 12 node --check, node --test stack-plans 3/3, pi-web tests 13/13 (both workflows), managed-owners 4/4, preview, brand-browser (both brands; services 10/10 and backup-ui 108/108 per brand), pwa-brands; extra: tests/backup with the real batch-1 backups 1860 = 1854 ok, 1 skipped, the same 5 default-mode guard refusals; RealBackupTests 1/1; backup-ui 108/108. The same run on 4353892 (wf1): 1974 / 1818 / 107, same not-ok ids. Targeted: 414/414 + lab 101/101 at 4353892, 329/329 + lab 39/39 at bcb4a2c. Evidence: unit-tests-step3j.json. At 61e7226 (step 3k, FINAL code: + emqx-secreview iteration 8): 56 modules (every test_ha_*, every hacommon user, test_suggest) 907 = 906 ok, 1 skipped; lab EMQX 39/39; wf4 = the whole validate workflow again: unittest CI form 2032 = 2024 ok, 6 skipped, the same 2 refused DriverTests; every other workflow step passed (brand-browser services 10/10 + backup-ui 108/108 per brand); tests/backup b1 1876 = 1870 ok, 1 skipped, the same 5 guard refusals; RealBackupTests 1/1; backup-ui 108/108. Evidence: unit-tests-step3k.json.",
+    "evidence": "tests/e2e/lab/evidence/integration-20261123/README.md (integration-1/2/3 sections), unit-tests.json, unit-tests-step2.json, unit-tests-step3.json, unit-tests-step3b.json, unit-tests-step3c.json, unit-tests-step3d.json, unit-tests-step3e.json, unit-tests-step3f.json, unit-tests-step3g.json, unit-tests-step3h.json, unit-tests-step3i.json, unit-tests-step3j.json",
     "commercial_acceptance": "not-complete"
   },
   "final_version": {

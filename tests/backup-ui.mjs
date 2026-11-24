@@ -6144,6 +6144,34 @@ try {
       assert.equal(await page.locator('.job-result [data-ha-app="emqx"] .check-fail .check-message').textContent(), EMQX_HALF_LOADED);
     });
 
+  // SR-5 (owner decision 2026-11-24, option C): the engine's texts (ha_emqx.ACCOUNTS_STOP for dev-d's woow, ha_emqx.PLAIN_REFUSED).
+  const EMQX_HASH_WARNING = 'HA 的 EMQX 保存 MQTT 密碼的方式（bcrypt）和這台（sha256，鹽在後）不同，匯入後以 HA 的為準：這台現有的 MQTT 帳號（woow）匯入後無法再用原本的密碼登入，要在匯入後重新設定：到這台 EMQX 管理頁「存取控制 → 認證」的內建資料庫替這些帳號重設密碼或重新建立；由這台 bootstrap 帳號檔建立的帳號，刪除後重新啟動 EMQX 就會用原本的密碼建回。';
+  const EMQX_PLAIN = 'HA 的 EMQX 用「plain」（不加密）的方式保存 MQTT 帳號的密碼，搬過來會把明文密碼留在這台，所以不能匯入。請先在 HA 的 EMQX 管理頁「存取控制 → 認證」把內建資料庫的密碼雜湊方式（password_hash_algorithm）改成 plain 以外的方式（例如 sha256 並加鹽，或 bcrypt），再替每個 MQTT 帳號重新設定一次密碼（EMQX 不會轉換已經存好的密碼，沒有重設的帳號在改完後就無法登入），然後重新製作 HA 備份再匯入。';
+  const emqxChecked = changes => ({ app_id: 'emqx', slug: B1.emqx.slug, name: B1.emqx.addon, arch: 'aarch64', version: B1.emqx.version,
+    target_version: B1.emqx.product, ok: true, blockers: [], warnings: [...B1_WARNINGS.emqx], emqx: structuredClone(B1_SECTIONS.emqx), ...changes });
+  await check('從 HA 備份匯入, batch 1: SR-5 — a different MQTT password hashing is a warning that names this device\'s accounts before any conversion (the conversion stays possible); HA\'s plain hashing is refused and the conversion cannot start',
+    b1Fixture({ check: b1Check({ emqx: emqxChecked({ warnings: [...B1_WARNINGS.emqx, EMQX_HASH_WARNING] }) }) }), async page => {
+      await ready(page);
+      await openB1(page);
+      for (const id of ['omnigent', 'hermes', 'headscale']) await page.locator(`#ha-app-${id}`).uncheck();
+      await page.locator('[data-focus="ha-apps-next"]').click();
+      const emqx = page.locator('[data-ha-app="emqx"]:not(.is-blocked)');
+      await emqx.waitFor();
+      assert.equal(await emqx.locator('.chip').first().textContent(), '可以匯入');
+      assert.deepEqual(await emqx.locator('.check-warn .check-message').allTextContents(), [...B1_WARNINGS.emqx, EMQX_HASH_WARNING],
+        'the warning, as the engine words it, with the account names, shown before the conversion');
+      assert.equal(await emqx.locator('.check-fail').count(), 0);
+      await enabled(page, '[data-focus="ha-convert"]');
+      await setScript(page, 'ha-check', haScripts({ check: b1Check({ emqx: emqxChecked({ ok: false, blockers: [EMQX_PLAIN] }) }) })['ha-check']);
+      await page.locator('[data-focus="ha-recheck"]').click();
+      const refused = page.locator('[data-ha-app="emqx"].is-blocked');
+      await refused.waitFor();
+      assert.equal(await refused.locator('.chip').first().textContent(), '無法匯入');
+      assert.deepEqual(await refused.locator('.check-fail .check-message').allTextContents(), [EMQX_PLAIN]);
+      assert.match(await refused.textContent(), /替每個 MQTT 帳號重新設定一次密碼/, 'the engine\'s advice, as it is');
+      assert.equal(await page.locator('[data-focus="ha-convert"]').isDisabled(), true);
+    });
+
   const haLong = (() => {
     const slug = `local_${'x'.repeat(70)}`;
     const addon = { slug, name: 'Very Long Add-on Name '.repeat(6).trim(), version: `1.0.0-${'9'.repeat(48)}` };
