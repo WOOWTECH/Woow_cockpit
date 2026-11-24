@@ -400,3 +400,52 @@ EMQX 的 `PRESERVATION_BLOCKER` 在 `97c22c9` 照舊。
 公開版 PR 分支（本機，沒有推送、沒有開 PR）：`pr/ha-import-batch1-20261124` = `a92a3bc`，在 `origin/main`（`bb23531`，與 GitHub 的 main 相同）上**只有一個 commit**。產品程式、頁面、文件、CONTRACT、單元測試共 261 個檔案與 `13051d0` 逐位元相同（內容與權限），`backup-engine` 樹相同；實驗室工具留 72 個（10 個去掉內部資料，共 35 處），另外 362 個工具與 975 個證據檔不放；新增摘要 `docs/backup/ha-import-tests.md`（只有每個應用、每種機器的通過數）。掃描整份新增內容：35 個實驗室密碼值 0 次、測試密碼 0 次、13 個擁有者備份雜湊 0 次、age 私鑰 0 個；其餘符合樣式的都是測試資料或通用預設值（分類與數字在 `scratchpad/integration-3/pr/scan-record-final.json`，不含任何值）。commit 的樹 `ecf9cb64` 只比測過的樹多換了摘要文件。沒有推送、沒有開 PR。
 
 擁有者 15:57 的決定（Memories 選 A）：裝過 Memories 的 HA Nextcloud 維持拒絕；檢查頁的訊息、`docs/backup.md` 與 PR 說明一致；依原廠原始碼，在 HA 停用或移除 Memories 不會刪掉它建立的函式與觸發程序（Memories 沒有解除安裝步驟；Nextcloud 35.0.1 的 `app:disable` 只跑應用自己的解除安裝步驟、`app:remove` 只刪應用資料夾），所以 PR 說明寫明「目前不能匯入、沒有可以建議的安全做法」。
+
+## 第三次整合（最後，續）：ARM64 那條線壓縮合併、EMQX SR-5（擁有者決定 C）與第 7 次窄範圍安全審查、整個 GitHub 驗證流程（`unit-tests-step3j.json`）
+
+| 合併 commit | 來源（tip） | 內容 |
+| --- | --- | --- |
+| `4353892` | `test/arm54-integrated-20261124`（`f5cd781`），**壓縮成一個 commit**，不帶它的歷史 | ARM64 測試機那條線（主線 16:23 交辦）：產品修正 `868894f`、`a351cd2`（還原資料卷後套用或保留最上層資料夾的擁有者與權限）、`a7f32e9`（Podman 在 `/usr/local/bin`）、`98410bd`（唯讀暫時容器的 `/run/secrets` tmpfs）、`ee5a3cc`（原生程式跟這台的處理器比對）、`0316d7e`（Headscale 草稿可以直接匯入），加上實驗室工具與證據。不合併它的歷史，因為那條線早期的 commit 有測試機的 SSH 測試密碼字面值。 |
+| `3723667` | `fix/emqx-sr5-hash-warning-20261124`（`3c857c3`） | 擁有者決定 SR-5 = C：檢查頁先警告並列出這台匯入後會失效的 MQTT 帳號；HA 用 plain 時檢查與轉換都拒絕。dev-d 實測（輸入是從真實 x86 冷備份做出來的實驗室版本）：plain 43/43、bcrypt 91/91、清理 23/23；第 1 次 41/42 保留（測試工具自己的假設錯誤，已修）。 |
+| `bcb4a2c` | `sec/emqx-secreview7-20261124`（`3369a9c`） | 第 7 次窄範圍安全審查完成（18:28）。新發現 SR-11（低）：MQTT 監聽器或閘道的內建資料庫用 plain、或資料庫裡還留著明文密碼的列，`3c857c3` 會照常轉換（實驗室實測 3/3，暫時容器裡留下 HA 的明文密碼）；`9665533` 修正後在檢查與匯出前都拒絕（實測 3/3），真實 x86 與 RPi5 batch-1 備份沒有被誤擋。 |
+
+壓縮合併前的檢查（`4353892`）：0 個衝突、1123 個檔案；遮蔽前的樹等於 arm54 那條線自己演練出來的樹 `51ce833f`。在這個 commit 裡把測試機自己的
+tailnet IPv4 位址遮掉（67 個盤點快照 JSON 的 tailscale0 那一行，共 201 處，改成 `100.X.X.X(tailnet-masked)`，每個檔案仍是合法 JSON）：
+它是這次壓縮合併裡唯一一個整合分支原本沒有的內部位址；原始快照留在 `f5cd781`。實驗室機密值 0/35；其餘新出現、看起來像位址的字串都是
+實驗室自己做的或通用的（網路命名空間裡的 TUN `10.254.54.0/24`、`probe.invalid` 測試信箱、暫時的實驗室帳號家目錄、systemd 單元與 cgroup 檔名、
+debian.org、`host.docker.internal`）。訊息裡列的 32 個真實結果都跟證據 JSON 的通過數一致。
+
+**更正（測試密碼掃描）**：之前的 `testpw_scan.py` 是錯的：它只找 6 個字元以上的字串，真正的字面值比較短，所以它找的其實是兩個引號字串之間的
+9 個字元。之前寫的「測試密碼 0 次」因此不算數。新的規則（`testpw2.py`：被移除那一行的所有引號常數，整個詞比對）：壓縮合併的 1123 個檔案 0 次；
+整個整合分支有 19 處同樣的字元，全部是不相關的舊測試資料（金鑰編號、UUID 片段、數字、字型檔），沒有一處是單獨的引號字串。
+
+合併 SR-5 的檢查：兩次都 0 個衝突；`docs/backup/CONTRACT.md` 兩次都是乾淨的三方合併（7＋3、7＋1 個區塊，`git merge-file` rc 0，與暫存的內容相同），
+其他檔案都等於來源分支。`bcb4a2c` 的 `backup-engine/` 與 `backup/` 跟 `4353892` 只差 `backup-engine/woowbackup/ha_emqx.py`（主線 17:56 給最後驗證的條件）。
+保護：沒有拿掉任何保護；SR-11 把 plain 的拒絕範圍放大。
+
+測試（主機守門）：`4353892` 上 15 個相關模組 414/414、實驗室 `test_arm54_final` 101/101；`bcb4a2c` 上 23 個 EMQX 模組＋`test_ha_b1_real`、
+`test_ha_registry`、`test_suggest` 329/329（真實 batch-1 備份）、實驗室 `test_emqx_product_real_ha` 39/39；以上 0 次被擋下的呼叫。
+
+**整個 GitHub 驗證流程**（主線 16:44：`.github/workflows/validate.yml` 與 `pi-web-validation.yml` 的每一個 `run:` 步驟，經 `team/heavy.sh` 與主機重測鎖；
+沒有跑安裝步驟：apt-get／pip、`npm ci`、`npx playwright-core install`——這台已有流程指定版本的 age、zstd、PyNaCl 1.5.0、cryptography 41.0.7，
+Python 3.12.3，`playwright-core` 1.58.2（= package-lock.json），chromium 1208）：
+
+| 步驟 | wf1：`4353892`（17:03–17:34） | wf2：`bcb4a2c`（18:40–19:11，最後） |
+| --- | --- | --- |
+| validate.yml「Installer and source contracts」：`python3 -m unittest discover -s tests -t .`（CI 的形式：umask 022、守門 `--exe-only`） | 1974 個：1966 通過、6 略過、2 個 DriverTests 被主機守門擋下 | 2016 個：2008 通過、6 略過、2 個 DriverTests 被主機守門擋下 |
+| 同一步驟：`scripts/check_source.py`、`bash -n`（2 個腳本）、12 個 `node --check`；pi-web-validation.yml 的 `bash -n install.sh` 與 2 個 `node --check` | 全部通過 | 全部通過 |
+| `node --test tests/stack-plans.mjs` | 3/3 | 3/3 |
+| `node --test pi-web-integration/tests/*.mjs`（validate.yml） | 13/13 | 13/13 |
+| `node --test tests/managed-owners.mjs` | 4/4 | 4/4 |
+| `node --test pi-web-integration/tests/*.mjs`（pi-web-validation.yml） | 13/13 | 13/13 |
+| `node tests/preview.mjs` | 通過 | 通過 |
+| `node tests/brand-browser.mjs`（兩個品牌都安裝到暫存根目錄再測） | 通過（787 秒；兩個品牌各：服務頁 10/10、備份頁 107/107，應用頁與主題也通過） | 通過（806 秒；兩個品牌各：服務頁 10/10、備份頁 108/108，應用頁與主題也通過） |
+| `node tests/pwa-brands.mjs` | 通過 | 通過 |
+| 另外：`tests/backup` 用兩份真實 batch-1 HA 備份（守門預設模式） | 1818 個：1812 通過、1 略過、5 個 LiteLLM 實驗室執行器測試被守門擋下（CI 形式裡通過） | 1860 個：1854 通過、1 略過、5 個 LiteLLM 實驗室執行器測試被守門擋下（CI 形式裡通過） |
+| 另外：`RealBackupTests`（真實 HA 2026.11 備份） | 1/1 | 1/1 |
+| 另外：`node tests/backup-ui.mjs` | 107/107 | 108/108 |
+
+未在這台跑的：2 個 `tests.e2e.test_dirs_fixture` 的 DriverTests（會在主機上執行 shell 腳本，被主機守門擋下；與 `origin/main` 相同，GitHub CI 會跑）、
+需要主機 `/usr/bin/podman` 的實驗室測試（run_native）。這一步沒有做任何真實還原（最後的真實重跑是 final-verify 那條線）。
+
+`commercial_acceptance`：not-complete。
