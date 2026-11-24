@@ -11,7 +11,9 @@ EMQX's own data export and import move the data, node-name independent, in two t
 1. HA's broker: HA's staged files (never its cookie, generated configs, logs, plugins or hot patches) in a
    `noexec,nosuid,nodev` volume at /data/emqx/data, HA's node name (its host mapped to 127.0.0.1 with `--add-host`),
    root like on HA, an empty default dashboard password (nothing is created at boot). It answers the default-account
-   check (admin/public still valid: a blocker), the row counts, its root names and authenticators, then
+   check (admin/public still valid: a blocker), the row counts, its root names and authenticators, the built-in
+   password database's hashing (SR-5: `plain` is refused; a hashing that no longer accepts this device's stored
+   passwords names this device's MQTT accounts on the check page, read-only from its running broker), then
    `emqx ctl data export` of the data roots (DATA_ROOTS; never listeners, dashboard, node, log or other settings) and
    the table sets (TABLE_SETS: MQTT users, ACL rules, banned, Dashboard users, API keys, PSK, retained messages).
 2. This device's broker (the candidate). First this device's running broker is read (target_static): its effective
@@ -113,6 +115,22 @@ AUTHN_EXPR = ('[{maps:get(mechanism, A, none), maps:get(backend, A, none), maps:
               'maps:get(salt_position, maps:get(password_hash_algorithm, A, #{}), none)} '
               '|| A <- emqx:get_config([authentication], [])].')
 STRICT_EXPR = '{emqx:get_config([authorization, no_match]), emqx:get_config([authorization, deny_action])}.'
+# SR-5 (OWNER DECISION 2026-11-24, option C): how the built-in password database (`password_based` + `built_in_database`,
+# at most one per chain: emqx_authn_config.erl:298) hashes a password, every field EMQX 5.8.9 checks a stored row with
+# (emqx_authn_password_hashing.erl:252-269 check_password: the name; `salt_position` for plain/md5/sha/sha256/sha512;
+# `mac_fun`, `iterations`, `dk_length` for pbkdf2; bcrypt reads its rounds and salt from the stored hash). `none` for
+# a field the algorithm does not have. Read from HA's broker and, read-only, from this device's running broker.
+HASH_EXPR = ('[{maps:get(enable, A, true), maps:get(name, H, none), maps:get(salt_position, H, none), '
+             'maps:get(mac_fun, H, none), maps:get(iterations, H, none), maps:get(dk_length, H, none)} '
+             '|| A <- emqx:get_config([authentication], []), maps:get(mechanism, A, none) =:= password_based, '
+             'maps:get(backend, A, none) =:= built_in_database, H <- [maps:get(password_hash_algorithm, A, #{})]].')
+# The user ids of this device's built-in password database in the global chain (the chain the `authentication` root
+# configures; its user group is the chain name: emqx_authn_chains.erl:1000-1008, ?GLOBAL = 'mqtt:global'): the count and
+# the first ten names, base64 each. Only the table's KEYS are read (emqx_authn_mnesia.erl:65-70 user_info): never a
+# password hash or salt.
+USERS_EXPR = ('L = lists:sort([U || {G, U} <- mnesia:dirty_all_keys(emqx_authn_mnesia), G =:= \'mqtt:global\', '
+              'is_binary(U)]), io:format("WOOWUSERS:~b:~s:END", [length(L), lists:join(",", '
+              '[base64:encode(U) || U <- lists:sublist(L, 10)])]).')
 
 
 # ====================================================================== the add-on member
@@ -357,6 +375,49 @@ def parse_strict(text):
     return (match.group(1), match.group(2)) if match else None
 
 
+HASH_ROW = (r'\{\s*(true|false)\s*,\s*([a-z][a-z0-9_]{0,31})\s*,\s*([a-z][a-z_]{0,31})\s*,\s*([a-z][a-z0-9_]{0,31})\s*,'
+            r'\s*([0-9]{1,10}|none|undefined)\s*,\s*([0-9]{1,10}|none|undefined)\s*\}')
+HASH_ANSWER = re.compile(r'\s*\[\s*(?:' + HASH_ROW + r'(?:\s*,\s*' + HASH_ROW + r')*)?\s*\]\s*')
+USERS_ANSWER = re.compile(r'\s*WOOWUSERS:([0-9]{1,9}):((?:[A-Za-z0-9+/]{1,87384}={0,2})'
+                          r'(?:,[A-Za-z0-9+/]{1,87384}={0,2}){0,9})?:END(?:ok)?\s*')
+
+
+def parse_hashing(text):
+    """HASH_EXPR's answer: None (no built-in password database authenticator) or its hashing {enable, name, salt,
+    mac_fun, iterations, dk_length} (a field the algorithm does not have: None). Any other answer -- two rows, a cut or
+    unknown shape -- raises ValueError: the callers refuse rather than guess (SR-5)."""
+    if not HASH_ANSWER.fullmatch(text or ''):
+        raise ValueError('unreadable hashing')
+    rows = re.findall(HASH_ROW, text)
+    if len(rows) > 1:
+        raise ValueError('more than one built-in password database authenticator')
+    if not rows:
+        return None
+    enable, name, salt, mac_fun, iterations, dk_length = rows[0]
+
+    def field(value):
+        return None if value in ('none', 'undefined') else value
+    return {'enable': enable == 'true', 'name': name, 'salt': field(salt), 'mac_fun': field(mac_fun),
+            'iterations': None if field(iterations) is None else int(iterations),
+            'dk_length': None if field(dk_length) is None else int(dk_length)}
+
+
+def parse_users(text):
+    """USERS_EXPR's answer: (the number of users, the first ten user ids as text). Anything else raises ValueError."""
+    match = USERS_ANSWER.fullmatch(text or '')
+    if not match:
+        raise ValueError('unreadable users')
+    count = int(match.group(1))
+    try:
+        names = [base64.b64decode(item, validate=True).decode('utf-8', 'replace')
+                 for item in (match.group(2).split(',') if match.group(2) else [])]
+    except (ValueError, TypeError):
+        raise ValueError('unreadable users') from None
+    if len(names) != min(count, 10):
+        raise ValueError('unreadable users')
+    return count, names
+
+
 def ha_broker(work, tmp, target, src, node, *, out_dir=None):
     """Start HA's broker on its staged data; returns its readings (and, with `out_dir`, the export file's path in
     `out_dir`). The caller removes the objects. Anything that shows HA's database did not load completely -- the broker
@@ -405,6 +466,12 @@ def ha_broker(work, tmp, target, src, node, *, out_dir=None):
     missing = [t for t in REQUIRED_TABLES if readings['counts'].get(t, -1) < 0]
     if missing:
         raise BackupError('incompatible', f'HA 的 EMQX 內建資料庫沒有完整載入（缺少 {hacommon.names(missing)}）。' + hint)
+    try:   # SR-5: HA's `plain` is refused and a different hashing is named (hash_change); never guessed
+        readings['hashing'] = parse_hashing(evaluate(tmp, 'emqx-ha', HASH_EXPR))
+    except ValueError:
+        raise BackupError('incompatible', HASH_UNREADABLE.format(side='HA 的') + hint) from None
+    if out_dir is not None and plain_blocker(readings):   # the conversion never exports HA's clear-text passwords
+        raise BackupError('incompatible', f'EMQX 不能搬過來：{PLAIN_REFUSED}')
     assert_system_ticker(tmp, 'emqx-ha', ticker_pid)
     if out_dir is not None:
         roots = [root for root in DATA_ROOTS if root in readings['roots']]
@@ -1646,7 +1713,7 @@ def acl_blocker(readings, profile):
     return ACL_NEEDS_BUILTIN
 
 
-def _source_analysis(src, readings, *, addon_version, version, live_authn=None):
+def _source_analysis(src, readings, *, addon_version, version):
     blockers, warnings = [], []
     blocker = VERSIONS.blocker(addon_version, version)
     if blocker:
@@ -1655,12 +1722,13 @@ def _source_analysis(src, readings, *, addon_version, version, live_authn=None):
         if readings['default_admin']:
             blockers.append('HA 的 EMQX Dashboard 仍在使用預設帳號密碼（admin／public），搬過來會讓這台的 Dashboard 也用這組密碼；'
                             '請先在 HA 修改密碼後再備份。')
+        blocker = plain_blocker(readings)
+        if blocker:
+            blockers.append(blocker)
         if not any(a['enable'] for a in readings['authn']):
             warnings.append('HA 的 EMQX 允許匿名連線；這台不允許，HA 上沒有帳號的裝置搬過來後需要建立 MQTT 帳號。')
         if readings['strict'] and readings['strict'][0] == 'allow':
             warnings.append('HA 的 EMQX 允許未符合規則的主題；這台會拒絕，搬過來後請確認 ACL 規則涵蓋裝置使用的主題。')
-        if hash_differs(readings['authn'], live_authn):
-            warnings.append('HA 的 MQTT 帳號驗證使用不同的密碼雜湊方式，搬過來後以 HA 的設定為準，這台原本的 MQTT 帳號可能無法登入。')
         if readings['counts'].get('emqx_app', 0) > 0:
             warnings.append('HA 的 EMQX API 金鑰會取代這台的，EMQX MCP 管理需要重新登入。')
     warnings += hocon_notes(src.hocon)
@@ -1672,25 +1740,114 @@ def _source_analysis(src, readings, *, addon_version, version, live_authn=None):
     return blockers, warnings
 
 
-def analyse(src, readings, *, addon_version, version, live_authn=None, profile=None):
+def analyse(src, readings, *, addon_version, version, profile=None, device=None):
     """The check's blockers and warnings. `profile`: this device's authorization sources (target_static), or None when
-    they could not be read (that refusal is a blocker of its own)."""
-    blockers, warnings = _source_analysis(src, readings, addon_version=addon_version,
-                                          version=version, live_authn=live_authn)
+    they could not be read (that refusal is a blocker of its own). `device`: this device's built-in password database
+    (device_accounts), None when it has none or could not be read (that refusal is a blocker of its own)."""
+    blockers, warnings = _source_analysis(src, readings, addon_version=addon_version, version=version)
     blocker = acl_blocker(readings, profile)
     if blocker:
         blockers.append(blocker)
+    change = None if plain_blocker(readings) else hash_change((readings or {}).get('hashing'), device)
+    if change:
+        warnings.append(ACCOUNTS_STOP.format(**change))
     return blockers, warnings
 
 
-def hash_differs(ha_authn, live_authn):
-    """True when an authenticator both sides have (mechanism, backend) hashes passwords differently."""
-    mine = {(a['mechanism'], a['backend']): a for a in ha_authn}
-    for row in live_authn or []:
-        other = mine.get((row['mechanism'], row['backend']))
-        if other and (other['algorithm'], other['salt']) != (row['algorithm'], row['salt']):
-            return True
-    return False
+# ---------------------------------------------------------------------- MQTT password hashing (SR-5)
+# OWNER DECISION 2026-11-24 (SR-5, option C): HA's `authentication` root replaces this device's (DATA_ROOTS) and EMQX
+# checks every stored row of the built-in password database with the authenticator's CURRENT hashing; it never re-hashes
+# a stored row (emqx_authn_mnesia.erl:130-131 update = create, :137-161 authenticate; the bootstrap import never
+# overwrites a row, :556-565 override => false). So when HA hashes differently this device's own MQTT accounts no longer
+# log in with their passwords: the check names them BEFORE the conversion (a warning) and the conversion repeats it in
+# its notes. HA's `plain` stores every password as it is (emqx_passwd.erl:104 hash_data(plain, P) = P, with an empty
+# salt: emqx_authn_password_hashing.erl:206-207): refused by the check and the conversion, whether that authenticator
+# is enabled or not (its rows would be imported either way).
+PLAIN_REFUSED = ('HA 的 EMQX 用「plain」（不加密）的方式保存 MQTT 帳號的密碼，搬過來會把明文密碼留在這台，所以不能匯入。'
+                 '請先在 HA 的 EMQX 管理頁「存取控制 → 認證」把內建資料庫的密碼雜湊方式（password_hash_algorithm）改成 plain '
+                 '以外的方式（例如 sha256 並加鹽，或 bcrypt），再替每個 MQTT 帳號重新設定一次密碼（EMQX 不會轉換已經存好的密碼，'
+                 '沒有重設的帳號在改完後就無法登入），然後重新製作 HA 備份再匯入。')
+RESET_HOW = ('到這台 EMQX 管理頁「存取控制 → 認證」的內建資料庫替這些帳號重設密碼或重新建立；由這台 bootstrap 帳號檔建立的帳號，'
+             '刪除後重新啟動 EMQX 就會用原本的密碼建回。')
+ACCOUNTS_STOP = ('HA 的 EMQX 保存 MQTT 密碼的方式（{ha}）和這台（{mine}）不同，匯入後以 HA 的為準：這台現有的 MQTT 帳號'
+                 '（{names}）匯入後無法再用原本的密碼登入，要在匯入後重新設定：' + RESET_HOW)
+HASH_UNREADABLE = '無法讀取{side} EMQX 帳號驗證設定（MQTT 密碼的雜湊方式），已停止。'
+# pbkdf2 without `dk_length` derives the MAC's own length (emqx_passwd.erl:140-141, 153-158).
+PBKDF2_DK = {'sha': 20, 'sha224': 28, 'sha256': 32, 'sha384': 48, 'sha512': 64}
+SALT_TEXT = {'prefix': '，鹽在前', 'suffix': '，鹽在後', 'disable': '，不加鹽'}
+
+
+def plain_blocker(readings):
+    """PLAIN_REFUSED when HA's built-in password database hashes with `plain`, else None."""
+    hashing = (readings or {}).get('hashing')
+    return PLAIN_REFUSED if hashing is not None and hashing['name'] == 'plain' else None
+
+
+def rows_still_verify(mine, theirs):
+    """Whether a row this device's built-in password database wrote with its hashing `mine` is still accepted when HA's
+    hashing `theirs` checks it (emqx_authn_password_hashing.erl:252-269 check_password, emqx_passwd.erl:67-104)."""
+    if 'bcrypt' in (mine['name'], theirs['name']):
+        return mine['name'] == theirs['name']   # bcrypt reads the rounds and the salt from the stored hash (:252-253)
+    if 'pbkdf2' in (mine['name'], theirs['name']):
+        def params(hashing):
+            return (hashing['name'], hashing['mac_fun'], hashing['iterations'],
+                    hashing['dk_length'] or PBKDF2_DK.get(hashing['mac_fun']))
+        return params(mine) == params(theirs)
+    # plain, md5, sha, sha256, sha512: the same function and salt position. A row written with `disable` has an empty
+    # salt (emqx_authn_password_hashing.erl:237-243), and an empty salt before or after the password hashes the password
+    # alone (emqx_passwd.erl:92-97), so it is accepted whatever position HA uses.
+    return mine['name'] == theirs['name'] and (mine['salt'] == theirs['salt'] or mine['salt'] == 'disable')
+
+
+def hashing_text(hashing):
+    """A short description of one hashing (the parser's tokens only: lowercase letters, digits, `_`, numbers)."""
+    if hashing['name'] == 'pbkdf2':
+        length = f'，{hashing["dk_length"]} 位元組' if hashing['dk_length'] else ''
+        return f'pbkdf2（{hashing["mac_fun"]}，{hashing["iterations"]} 次{length}）'
+    if hashing['name'] == 'bcrypt':
+        return 'bcrypt'
+    return hashing['name'] + SALT_TEXT.get(hashing['salt'], '')
+
+
+def device_execute(work, app, target):
+    """A read on this device's running broker as the owner (podman exec of a fixed command; nothing is changed)."""
+    def execute(command):
+        return work.runner(app).podman('exec', target.container, *command, timeout=120, max_output=MAX_HOCON,
+                                      check=False)
+    return execute
+
+
+def device_accounts(execute):
+    """This device's built-in password database, read-only from its running broker: None when it has no such
+    authenticator, else {'hashing', 'count', 'names'} (user ids only, the first ten: USERS_EXPR reads the table's keys,
+    never a password hash or salt). An answer that cannot be read refuses (SR-5: never guessed)."""
+    def answer(expression):
+        result = execute(['emqx', 'eval', expression])
+        if result.returncode:
+            raise ValueError('eval failed')
+        return (result.stdout or b'').decode('utf-8', 'replace')
+    try:
+        hashing = parse_hashing(answer(HASH_EXPR))
+        if hashing is None:
+            return None
+        count, names = parse_users(answer(USERS_EXPR))
+    except ValueError:
+        raise BackupError('incompatible', HASH_UNREADABLE.format(side='這台')) from None
+    return {'hashing': hashing, 'count': count, 'names': names}
+
+
+def hash_change(ha_hashing, device):
+    """None when the import leaves this device's MQTT accounts able to log in, else {'ha', 'mine', 'names'} for the
+    texts: HA has a built-in password database whose hashing no longer accepts the rows of this device's, and this device
+    has users there (`names`: through hacommon.names, control characters shown as `?`)."""
+    if ha_hashing is None or device is None or device['count'] <= 0:
+        return None
+    if rows_still_verify(device['hashing'], ha_hashing):
+        return None
+    names = hacommon.names(device['names'][:10], 10)
+    if device['count'] > 10:
+        names += f' 等 {device["count"]} 個'
+    return {'ha': hashing_text(ha_hashing), 'mine': hashing_text(device['hashing']), 'names': names}
 
 
 def section(src, node, readings, *, version, profile=None):
@@ -1789,6 +1946,12 @@ def check(work, app):
     tmp = work.temp(app)
     target, version = _prepare(work, app)
     profile, target_blocker = target_preflight(work, app, target)
+    device = None
+    if target_blocker is None:   # SR-5: this device's MQTT accounts and their hashing, read-only like the preflight
+        try:
+            device = device_accounts(device_execute(work, app, target))
+        except BackupError as error:
+            target_blocker = error.message
     src = member_pass(work, tmp)
     work.phase('check')
     node, blocker = node_name(src)
@@ -1797,7 +1960,7 @@ def check(work, app):
         readings = ha_broker(work, tmp, target, src, node)
         _clean(tmp, 'emqx-ha', volumes=('emqx-src', 'emqx-ha-log'))
     blockers, warnings = analyse(src, readings, addon_version=work.addon_info(SLUG).version, version=version,
-                                 profile=profile)
+                                 profile=profile, device=device)
     if blocker:
         blockers.insert(0, blocker)
     if target_blocker:
@@ -1908,9 +2071,10 @@ def convert(work, app, test_mode, out_dir):
         raise BackupError('incompatible', f'EMQX 不能搬過來：{blocker}', app=app.id)
     try:   # the check's own read-only preflight: an unsupported or stopped target stops before anything is built
         before = target_profile(work, app, target)
+        device = device_accounts(device_execute(work, app, target))   # SR-5: the check's read, again
     except BackupError as error:
         raise BackupError(error.code, error.message, app=app.id) from None
-    src, node, readings, export, counts, strict, live_authn, readback, profile = _build_candidate(
+    src, node, readings, export, counts, strict, _live_authn, readback, profile = _build_candidate(
         work, app, tmp, target, staging, version=version, profile=before)
     work.log(f'EMQX 資料匯入完成：{len(TABLES)} 個資料表的筆數都符合 HA；未符合規則的主題維持「{strict[0]}」')
     work.log('EMQX 這台的設定與授權來源（' + '＋'.join(SOURCE_NAMES[kind] for kind in profile) + '）已核對保留')
@@ -1919,7 +2083,7 @@ def convert(work, app, test_mode, out_dir):
     return {'volumes': volumes, 'node': node,
             'ha_hosts': hacommon.ha_hosts(src.hocon), 'plugins': sorted(src.plugins),
             'anonymous': not any(a['enable'] for a in readings['authn']),
-            'hash_differs': hash_differs(readings['authn'], live_authn),
+            'hash_change': hash_change(readings['hashing'], device),
             'api_keys': max(readings['counts'].get('emqx_app', 0), 0),
             'import_check': readback}
 
@@ -1935,8 +2099,11 @@ def import_texts(data):
                  '匯入後請用 HA 那邊的 EMQX Dashboard 帳號和密碼登入。']
     if data.get('anonymous'):
         reminders.append('HA 允許匿名連線，這台不允許：原本匿名連線的裝置需要建立 MQTT 帳號。')
-    if data.get('hash_differs'):
-        notes.append('HA 的 MQTT 帳號驗證使用不同的密碼雜湊方式，匯入後以 HA 的設定為準，這台原本的 MQTT 帳號（例如 woow）可能無法登入。')
+    change = data.get('hash_change')
+    if change:   # SR-5: the check page named these accounts before the conversion; the restore step repeats it
+        notes.append(f'HA 的 EMQX 保存 MQTT 密碼的方式（{change["ha"]}）和這台（{change["mine"]}）不同，匯入後以 HA 的為準：'
+                     f'這台原本的 MQTT 帳號（{change["names"]}）無法再用原本的密碼登入。')
+        reminders.append(f'請重新設定這台原本的 MQTT 帳號（{change["names"]}）：{RESET_HOW}')
     if data.get('ha_hosts'):
         reminders.append(f'HA 的 EMQX 規則或連接器連到 HA 內部的位址（{hacommon.names(data["ha_hosts"], 8)}），請改成這台連得到的位址。')
     if data.get('plugins'):

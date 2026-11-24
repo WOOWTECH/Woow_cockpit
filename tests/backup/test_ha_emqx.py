@@ -113,6 +113,12 @@ class World(fk.World):
         self.default_admin = False
         self.ha_authn = '[{password_based,built_in_database,true,sha256,suffix}]'
         self.live_authn = '[{password_based,built_in_database,true,sha256,suffix}]'
+        # SR-5: the built-in password database's hashing (ha_emqx.HASH_EXPR) of HA's broker and of this device, and this
+        # device's user ids there (ha_emqx.USERS_EXPR): its bootstrap user woow, as the product package seeds it.
+        self.ha_hashing = '[{true,sha256,suffix,none,none,none}]'
+        self.live_hashing = '[{true,sha256,suffix,none,none,none}]'
+        self.live_users = 'WOOWUSERS:1:d29vdw==:ENDok\n'
+        self.device_reads = []
         self.ha_strict = '{allow,ignore}'
         self.imported_into = False
         self.restored = False
@@ -198,6 +204,12 @@ class World(fk.World):
             if role == 'emqx-ha':
                 return self.ha_authn.encode()
             return (self.ha_authn if self.imported_into and self.ha_authn != '[]' else self.live_authn).encode()
+        if expression in (ha_emqx.HASH_EXPR, ha_emqx.USERS_EXPR):
+            if role != 'emqx-ha':
+                self.device_reads.append((role, 'hash' if expression == ha_emqx.HASH_EXPR else 'users'))
+            if expression == ha_emqx.USERS_EXPR:
+                return self.live_users.encode()
+            return (self.ha_hashing if role == 'emqx-ha' else self.live_hashing).encode()
         if expression == ha_emqx.STRICT_EXPR:
             if role == 'emqx-ha' or (self.imported_into and not self.restored):
                 return self.ha_strict.encode()
