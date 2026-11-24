@@ -288,6 +288,51 @@ class PipelineTests(unittest.TestCase):
             with self.assertRaises(ValueError): m.main()
         self.assertEqual(checked.call_count, 1)
 
+    def test_key_from_creds_file_only_on_stdin(self):
+        fake = 'TEST-ONLY-GENERATED-VALUE'
+        with tempfile.TemporaryDirectory() as d:
+            creds = Path(d) / 'creds.env'
+            creds.write_text('# lab\nOTHER=x\nHA_BACKUP_KEY="%s"\n' % fake, encoding='utf-8')
+            os.chmod(creds, 0o600)
+            self.assertEqual(m.creds_key(creds), fake)
+            request = Path(d) / 'request.json'
+            body = {'ha_backup_id': 'ha-x', 'archive_sha256': 'a' * 64, 'database': 'woowtest', 'baseline': 'b',
+                    'key_source': 'creds'}
+            request.write_text(json.dumps(body), encoding='utf-8')
+            os.chmod(request, 0o600)
+            replies = [b'true none {}', b'{"status":"captured","run_id":"r","acceptance":null}']
+            with patch.object(m.sys, 'argv', ['capture', 'run', '--slot-granted', '--request', str(request),
+                                              '--creds', str(creds)]), \
+                 patch.object(m, 'checked', side_effect=replies) as checked, \
+                 patch('builtins.print') as shown:
+                self.assertEqual(m.main(), 0)
+            sent = json.loads(checked.call_args_list[1].kwargs['input'])['request']
+            self.assertEqual(sent['key'], fake)
+            self.assertNotIn('key_source', sent)
+            self.assertNotIn(fake, ''.join(str(c) for c in shown.call_args_list))
+            self.assertNotIn(fake, request.read_text(encoding='utf-8'))
+
+    def test_creds_key_refusals(self):
+        with tempfile.TemporaryDirectory() as d:
+            creds = Path(d) / 'creds.env'
+            creds.write_text('HA_BACKUP_KEY=v\n', encoding='utf-8')
+            os.chmod(creds, 0o644)
+            with self.assertRaises(ValueError): m.creds_key(creds)  # readable by others
+            os.chmod(creds, 0o600)
+            link = Path(d) / 'link.env'
+            link.symlink_to(creds)
+            with self.assertRaises(ValueError): m.creds_key(link)
+            empty = Path(d) / 'empty.env'
+            empty.write_text('# HA_BACKUP_KEY=v\nHA_BACKUP_KEY=\n', encoding='utf-8')
+            os.chmod(empty, 0o600)
+            with self.assertRaises(ValueError): m.creds_key(empty)
+            with self.assertRaises(ValueError): m.creds_key(Path(d) / 'missing.env')
+            plain = {'ha_backup_id': 'ha-x', 'key': 'inline'}
+            self.assertIs(m.with_key(plain, creds), plain)
+            with self.assertRaises(ValueError): m.with_key(dict(plain, key_source='creds'), creds)
+            with self.assertRaises(ValueError): m.with_key({'key_source': 'env'}, creds)
+            self.assertEqual(m.with_key({'key_source': 'creds'}, creds), {'key': 'v'})
+
     def test_fetch_rejects_traversal_without_reading_device_files(self):
         with tempfile.TemporaryDirectory() as d, patch.object(m, 'checked', return_value=b'true none {}') as checked:
             with self.assertRaises(ValueError): m.fetch('labpodman', '../../etc', Path(d) / 'capture')

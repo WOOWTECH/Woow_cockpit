@@ -453,6 +453,37 @@ def cron_log(since_epoch):
     return {'started': sorted(started), 'completed': sorted(completed), 'lines': lines}
 
 
+CREDS = Path.home() / '.woowbk-lab/secrets/ha-import-creds.env'
+
+
+def creds_key(path, name='HA_BACKUP_KEY'):
+    """The lab HA archive key from the e2e driver's creds file (the same parsing as ha_import_e2e.Secrets).
+
+    Used when the request says "key_source": "creds", so no new file ever holds the key: the value only travels in
+    memory and on the device process's stdin, never into the request, the output or the evidence."""
+    path = Path(path)
+    require(path.is_file() and not path.is_symlink() and path.stat().st_mode & 0o077 == 0)
+    values = {}
+    for line in path.read_text(encoding='utf-8').splitlines():
+        key, sep, value = line.strip().partition('=')
+        if sep and not key.startswith('#'):
+            values[key.strip()] = value.strip().strip('"\'')
+    require(bool(values.get(name)))
+    return values[name]
+
+
+def with_key(request, creds):
+    """A request whose key comes from the creds file; an inline key and a creds reference never mix."""
+    source = request.get('key_source')
+    require(source in (None, 'creds'))
+    if source is None:
+        return request
+    require('key' not in request)
+    result = {k: v for k, v in request.items() if k != 'key_source'}
+    result['key'] = creds_key(creds)
+    return result
+
+
 def isolation(lp):
     require(checked([lp, 'container', 'inspect', 'woowbk-dev-c', '--format',
         '{{.State.Running}} {{.HostConfig.NetworkMode}} {{json .HostConfig.PortBindings}}']).strip() == b'true none {}')
@@ -478,7 +509,9 @@ def main():
     offline.add_argument('--fingerprint', help='HA-side fingerprint file: the source capture must equal it')
     run = sub.add_parser('run')
     run.add_argument('--slot-granted', action='store_true', required=True)
-    run.add_argument('--request', required=True, help='0600 JSON: ha_backup_id, archive_sha256, database, baseline, optional lab key')
+    run.add_argument('--request', required=True, help='0600 JSON: ha_backup_id, archive_sha256, database, baseline, '
+                     'optional lab key or "key_source": "creds" (the key is then read from --creds)')
+    run.add_argument('--creds', default=str(CREDS), help='0600 lab creds file holding HA_BACKUP_KEY (key_source creds)')
     download = sub.add_parser('fetch')
     download.add_argument('--run-id', required=True)
     download.add_argument('--output', required=True)
@@ -496,6 +529,7 @@ def main():
         require(path.is_file() and not path.is_symlink() and path.stat().st_mode & 0o077 == 0)
         request = loads(path.read_bytes())
         require(HEX.fullmatch(request['archive_sha256']) and re.fullmatch(r'woowtest(?:2)?', request['database']))
+        request = with_key(request, args.creds)
         # No host Podman store, shell command construction, or persistent runner modification.
         script = Path(__file__).read_text()
         sql = Path(__file__).with_name('odoo_capture.sql').read_text()

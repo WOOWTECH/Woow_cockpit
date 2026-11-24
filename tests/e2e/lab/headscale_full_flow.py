@@ -753,8 +753,14 @@ class Run:
                  'changed; the original kept next to it)', read_owner_file(CONFIG_REL) == variant
                  and read_owner_file(ORIG_REL) == original, {'original_sha256': self.original_sha,
                                                               'variant_sha256': hashlib.sha256(variant).hexdigest()})
-        proc = drv.owner('systemctl', '--user', 'restart', 'headscale.service', timeout=360)
-        ev.check('lab config: systemctl --user restart headscale.service', proc.returncode == 0, f'rc {proc.returncode}')
+        # All three units, not headscale alone: in the found state (crash loop on the original DERP-less config) a
+        # dependency failure stops headscale-entrance (Requires=headplane.service) and nothing starts it again, so a
+        # restart of headscale.service alone left it inactive (final-verify 2026-11-24 18:48, 'lab config: headscale,
+        # headplane and headscale-entrance are active' FAIL with headscale-entrance.service inactive). lab_config_off
+        # restarts the same three on the original config.
+        proc = drv.owner('systemctl', '--user', 'restart', *UNITS, timeout=360)
+        ev.check('lab config: systemctl --user restart headscale.service headplane.service headscale-entrance.service',
+                 proc.returncode == 0, f'rc {proc.returncode}')
         wait_units(ev, 'lab config')
         first = probe(ev, 'lab config')
         ev.check('lab config: dev-d\'s own Headscale serves (health 200, metrics 200)',
