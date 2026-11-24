@@ -4,15 +4,19 @@ CODES = frozenset({
     'invalid-request', 'not-found', 'busy', 'key-required', 'wrong-key', 'no-device-key',
     'not-a-backup', 'unsupported-format', 'corrupt-archive', 'invalid-manifest', 'limit-exceeded',
     'insufficient-space', 'incompatible', 'app-not-in-catalog', 'owner-missing', 'not-deployed',
-    'permission-denied', 'not-cancellable', 'job-failed', 'internal-error',
+    'permission-denied', 'not-cancellable', 'job-failed', 'internal-error', 'confirmation-required',
 })
 
 
 class BackupError(Exception):
     """Expected failure with a stable code and a Traditional Chinese message for the UI.
 
-    Never put secret or key material into `message` or `details`.
+    Never put secret or key material into `message` or `details`. `job_wide`: it ends the whole job whichever app it
+    came up in; `issues`: the haissues.Issue objects that say why one app stops (both set by the raiser, never sent).
     """
+
+    job_wide = False
+    issues = ()
 
     def __init__(self, code, message, **details):
         if code not in CODES:

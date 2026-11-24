@@ -8,11 +8,21 @@ offers), `haimport.APPS` (the jobs; also the order of the import's notes and rem
 validation).
 
 A module provides
-* `check(work, app)` -> {target_version, blockers?, warnings?, <app id>: {...}} (the app's section of the check result);
-  optionally `check_blockers(found)` -> [zh-TW] for blockers derived from the section (Odoo: no movable database);
+* `check(work, app)` -> {target_version, <app id>: {...}, choices?, issues?, blockers?, warnings?}: the app's section of
+  the check result and what it found. Findings go to `work.sink(app)` (haissues: stop / confirm / auto / notice) or into
+  `issues` ([haissues.Issue]); `choices` ({'database': [{value, label, ok}], 'node': [{value, label, default?}]}) is what
+  the customer picks. The old way stays possible while the importers change over: `blockers` / `warnings` sentences
+  (stop / notice) and `check_blockers(found)` -> [zh-TW] for blockers derived from the section (Odoo: no movable
+  database); Odoo's `section['databases']` then makes `choices.database`;
 * `convert(work, app, *convert_args, out_dir)` -> {volumes?, postgres?, dirs?, ...}: the catalog items handed to
-  `adapter.import_manifest`, the rest is the module's own (its texts); `convert_args` name the job params it takes;
-* `import_texts(data)` -> (notes, reminders) of a conversion.
+  `adapter.import_manifest`, the rest is the module's own (its texts); `convert_args` name the job params it takes. It
+  calls the same `work.sink(app)` again: there a stop raises, and a confirm raises unless the customer confirmed it;
+* `import_texts(data)` -> (notes, reminders) of a conversion;
+* `ISSUES` ({issue id: level}): every issue id it uses (fixed codes `<area>.<what>`; none while it has none).
+
+`needs_share`: the module reads HA's share folder when the backup has one, so that folder's encryption counts when a
+selected import needs the key (KEY-16). `choices`: what a request may choose for the app ('addon': the same add-on from
+two stores; 'database'; 'node').
 
 `mcp_admin` names this device's MCP admin app of the product and `mcp_addon` the HA MCP add-on; with `engine_mcp_lines`
 the engine writes the "MCP admin / claude.ai connector" reminder lines itself (batch 1); for Odoo and n8n the page does
@@ -32,6 +42,8 @@ class Importer:
     mcp_admin: str | None = None
     mcp_addon: str | None = None
     engine_mcp_lines: bool = False
+    needs_share: bool = False
+    choices: tuple = ('addon',)
 
     def load(self):
         """The importer's module (imported on first use; tests patch its functions in place)."""
@@ -40,23 +52,24 @@ class Importer:
 
 IMPORTERS = (
     Importer('odoo', 'odoo18ce', 'Odoo 18', 'ha_odoo', convert_args=('odoo_database', 'test_mode'),
-             mcp_admin='odoo-mcp-admin', mcp_addon='Woow Odoo MCP Server'),
+             mcp_admin='odoo-mcp-admin', mcp_addon='Woow Odoo MCP Server', needs_share=True,
+             choices=('addon', 'database')),
     Importer('n8n', 'woow-n8n', 'n8n 工作流程', 'ha_n8n', mcp_admin='n8n-mcp-admin', mcp_addon='Woow n8n MCP Server'),
     Importer('omnigent', 'woow-omnigent', 'Omnigent 協作平台', 'ha_omnigent', engine_mcp_lines=True),
     Importer('hermes', 'woow-hermes', 'Hermes 代理', 'ha_hermes', mcp_admin='hermes-mcp-admin',
              mcp_addon='Woow Hermes MCP Server', engine_mcp_lines=True),
     Importer('emqx', 'woow-emqx', 'EMQX MQTT 代理', 'ha_emqx', mcp_admin='emqx-mcp-admin',
-             mcp_addon='Woow EMQX MCP Server', engine_mcp_lines=True),
+             mcp_addon='Woow EMQX MCP Server', engine_mcp_lines=True, choices=('addon', 'node')),
     Importer('headscale', 'woow-headscale', 'Headscale VPN 控制伺服器', 'ha_headscale', mcp_admin='headscale-mcp-admin',
              mcp_addon='Woow Headscale MCP Server', engine_mcp_lines=True),
     # Batch 2: the MCP server is built into the add-on (no separate MCP add-on; ha_opendesign writes that line).
     Importer('open-design', 'woow_ha_opendesign', 'OpenDesign 設計工具', 'ha_opendesign',
              mcp_admin='opendesign-mcp-admin', engine_mcp_lines=True),
     # Batch 2: code-server has no MCP admin app and no HA MCP add-on (facts mcp-admin.md section 1.1).
-    Importer('woow-code-server', 'woow_ha_code_server', 'code-server 開發環境', 'ha_codeserver'),
+    Importer('woow-code-server', 'woow_ha_code_server', 'code-server 開發環境', 'ha_codeserver', needs_share=True),
     # Batch 2: the user files come from HA's share folder (ha_nextcloud refuses a backup without them).
     Importer('nextcloud', 'woow-nextcloud-office', 'Nextcloud 雲端硬碟', 'ha_nextcloud', mcp_admin='nextcloud-mcp-admin',
-             mcp_addon='Woow Nextcloud MCP Server', engine_mcp_lines=True),
+             mcp_addon='Woow Nextcloud MCP Server', engine_mcp_lines=True, needs_share=True),
     Importer('litellm', 'woow-litellm', 'LiteLLM 閘道', 'ha_litellm', mcp_admin='litellm-mcp-admin',
              mcp_addon='Woow LiteLLM MCP Server', engine_mcp_lines=True),
 )
