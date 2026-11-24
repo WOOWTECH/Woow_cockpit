@@ -59,6 +59,10 @@ Steps (run in the order given):
                the container-only /readyz, 403 from the device), it is installed, EMQX is backed up and that backup restored
                with the proposed health check (must succeed, not roll back), then dev-d's own entry is installed again
                (same SHA-256) and the EMQX state digest equals the one before
+  catalog-draft / catalog-own
+               the steps between the two run with the page's own fresh draft as the installed EMQX entry, unedited (its health
+               check and its data digests included, as on a customer's device); catalog-own installs dev-d's own entry again
+               (same SHA-256). A draft left behind by a stopped run is put back by cleanup
   cleanup      the test's converted and safety backups deleted (B0 stays until `cleanup-baseline`); no job
                container/volume/network, staging or key file; no drop-in or marker left
   cleanup-baseline
@@ -1249,6 +1253,7 @@ def step_import(ev, args, tag, mode):
         if not refuse_file(ev, args, tag, label_text):
             manual_baseline(ev, args, label_text, False)   # never expected: bring the baseline back
         return
+    draft_installed(ev, label_text)
     changed = False     # dev-d's EMQX may differ from the baseline: the finally block restores B0 ...
     kept = False        # ... unless the imported state was recorded for the rollback step (step_rollback)
     try:
@@ -1306,6 +1311,10 @@ def step_import(ev, args, tag, mode):
             return
         ev.check(f'{label_text}: the restore\'s own readback check passed (job log)', job_log_has(rlog, READBACK_LOG),
                  [str(line)[-300:] for line in rlog if 'EMQX' in str(line)][-6:])
+        if drv.STATE.get('own_entry'):
+            ev.check(f'{label_text}: the draft\'s own health check passed after the restore (job log)',
+                     job_log_has(rlog, '健康檢查通過') and not job_log_has(rlog, '健康檢查未通過'),
+                     [str(line)[-200:] for line in rlog if '健康檢查' in str(line)][-4:])
         imported = run_probe(ev, args, f'{label_text} after restore', mode, tag)
         check_imported(ev, f'{label_text} after restore', imported, src, mode, tag)
         restart_emqx(ev, label_text)
@@ -1335,6 +1344,7 @@ def step_rollback(ev, args, tag):
         raise Failed(f'run import:{tag}:{mode} first (no imported state recorded)')
     converted = imported['backup_id']
     src = drv.source(machine_of(tag))['emqx']
+    draft_installed(ev, f'{label_text} before the rollback rounds')
     tested = False
     try:
         restarted = run_probe(ev, args, f'{label_text} before the rollback rounds', mode, tag)
@@ -1433,6 +1443,8 @@ def step_cleanup(ev, args):
     staging = listing.get(drv.STAGING)
     keys = [n for n in listing.get('/run/woowtech-backup') or [] if isinstance(n, str) and n.startswith('key-')]
     ev.check('cleanup: no staging folder and no key file left', staging in ([], 'missing') and not keys, listing)
+    if drv.STATE.get('own_entry'):
+        step_catalog_own(ev, args)
     b0 = drv.STATE.get('baseline_b0')
     lab_made = {STORE_IDS[t] for t in LAB_MADE} & {h.get('id') for h in drv.ok('list', ev=ev).get('ha_backups') or []}
     if lab_made:
@@ -1476,11 +1488,8 @@ def catalog_put(ev, entry, label_text):
                   ev=ev, timeout=300)
 
 
-def step_suggest_health(ev, args):
-    name = 'suggest-health'
-    if drv.STATE.get('imported'):
-        raise Failed('an imported state waits for its rollback step (rollback:TAG) first')
-    before = digest(run_probe(ev, args, f'{name} before', 'base'))
+def read_own_entry(ev, name):
+    """dev-d's own installed EMQX entry and its SHA-256."""
     installed = suggested_emqx(ev).get('installed') or {}
     original = installed.get('entry')
     if not ev.check(f'{name}: dev-d\'s installed EMQX entry is read (catalog-suggest)',
@@ -1488,25 +1497,81 @@ def step_suggest_health(ev, args):
                     {'sha256': installed.get('sha256')}):
         raise Failed('no installed EMQX entry')
     ev.save('catalog-entry-original.json', original)
+    return original, installed['sha256']
+
+
+def install_fresh_draft(ev, name):
+    """dev-d's EMQX entry is removed, a FRESH draft is scanned (nothing of the old entry is carried over) and installed
+    unedited, as a customer does on the page."""
+    preview = drv.ok('catalog-remove', {'id': 'emqx'}, ev=ev)
+    drv.ok('catalog-remove', {'id': 'emqx', 'confirm': True, 'expected_sha256': preview['expected_sha256']}, ev=ev)
+    fresh = suggested_emqx(ev)
+    entry = fresh.get('entry') or {}
+    ev.save('suggested-emqx.json', fresh)
+    ev.check(f'{name}: a fresh draft asks the broker\'s public API through the entrance (/api/v5/error_codes, 200), not the '
+             'container-only /readyz',
+             [(h.get('url'), h.get('expect_status')) for h in entry.get('health') or []]
+             == [('http://127.0.0.1:18083/api/v5/error_codes', 200)] and fresh.get('valid') is True, entry.get('health'))
+    ev.check(f'{name}: the draft says why (/readyz answers 403 from the device)',
+             any('/readyz' in h and '403' in h for h in fresh.get('hints') or []), fresh.get('hints'))
+    catalog_put(ev, entry, f'{name}: the fresh draft')
+
+
+def reinstall_own_entry(ev, name, original, sha256):
+    done = catalog_put(ev, original, f'{name}: dev-d\'s own entry again')
+    if not ev.check(f'{name}: dev-d\'s own EMQX entry is installed again (same SHA-256)', done.get('sha256') == sha256,
+                    {'now': done.get('sha256')}):
+        raise Failed('dev-d\'s own EMQX entry is not back')
+
+
+def draft_installed(ev, label_text):
+    """Between catalog-draft and catalog-own: prove that the installed entry is the page's own draft, unedited."""
+    if drv.STATE.get('own_entry'):
+        found = suggested_emqx(ev)
+        ev.check(f'{label_text}: the installed EMQX entry is the page\'s own unedited draft (health check included)',
+                 (found.get('installed') or {}).get('same') is True and bool((found.get('entry') or {}).get('health')),
+                 {'changes': (found.get('installed') or {}).get('changes')})
+
+
+def step_catalog_draft(ev, args):
+    name = 'catalog-draft'
+    if drv.STATE.get('own_entry'):
+        raise Failed('a draft is installed already (catalog-own first)')
+    original, sha256 = read_own_entry(ev, name)
+    drv.STATE['own_entry'] = {'entry': original, 'sha256': sha256}
+    drv.save_state()
+    install_fresh_draft(ev, name)
+    status = drv.ok('status', ev=ev)
+    state = next((a for a in status.get('apps') or [] if a['id'] == 'emqx'), {})
+    ev.check(f'{name}: status: emqx running, no problems, with the draft installed', state.get('state') == 'running'
+             and not state.get('problems'), {k: state.get(k) for k in ('state', 'problems')})
+
+
+def step_catalog_own(ev, args):
+    own = drv.STATE.get('own_entry')
+    if not own:
+        raise Failed('no draft of this test is installed')
+    reinstall_own_entry(ev, 'catalog-own', own['entry'], own['sha256'])
+    drv.STATE['own_entry'] = None
+    drv.save_state()
+
+
+def step_suggest_health(ev, args):
+    name = 'suggest-health'
+    if drv.STATE.get('imported'):
+        raise Failed('an imported state waits for its rollback step (rollback:TAG) first')
+    if drv.STATE.get('own_entry'):
+        raise Failed('a draft is installed already (catalog-own first)')
+    before = digest(run_probe(ev, args, f'{name} before', 'base'))
+    original, sha256 = read_own_entry(ev, name)
     try:
-        preview = drv.ok('catalog-remove', {'id': 'emqx'}, ev=ev)
-        drv.ok('catalog-remove', {'id': 'emqx', 'confirm': True, 'expected_sha256': preview['expected_sha256']}, ev=ev)
-        fresh = suggested_emqx(ev)
-        entry = fresh.get('entry') or {}
-        ev.save('suggested-emqx.json', fresh)
-        ev.check(f'{name}: a fresh draft asks the broker\'s public API through the entrance (/api/v5/error_codes, 200), not the '
-                 'container-only /readyz',
-                 [(h.get('url'), h.get('expect_status')) for h in entry.get('health') or []]
-                 == [('http://127.0.0.1:18083/api/v5/error_codes', 200)] and fresh.get('valid') is True, entry.get('health'))
-        ev.check(f'{name}: the draft says why (/readyz answers 403 from the device)',
-                 any('/readyz' in h and '403' in h for h in fresh.get('hints') or []), fresh.get('hints'))
-        catalog_put(ev, entry, f'{name}: the fresh draft')
-        job, _log, took = run_job(ev, 'backup-start', {'apps': ['emqx'], 'note': 'emqx-product suggest-health'},
-                                  'suggest-health-backup')
+        install_fresh_draft(ev, name)
+        job, log, took = run_job(ev, 'backup-start', {'apps': ['emqx'], 'note': 'emqx-product suggest-health'},
+                                 'suggest-health-backup')
         backup_id = (job.get('result') or {}).get('backup_id')
         drv.created_backup(backup_id)
         if not ev.check(f'{name}: backup of EMQX with the proposed entry, its health check passed (no warning)',
-                        job['state'] == 'succeeded' and bool(backup_id) and not job_log_has(_log, '健康檢查未通過'),
+                        job['state'] == 'succeeded' and bool(backup_id) and not job_log_has(log, '健康檢查未通過'),
                         {'state': job['state'], 'error': job.get('error'), 'took_s': round(took, 1)}):
             raise Failed('the backup with the proposed entry failed')
         rjob, rlog, rtook = restore_with(ev, backup_id, 'suggest-health-restore')
@@ -1516,9 +1581,7 @@ def step_suggest_health(ev, args):
                  and job_log_has(rlog, '健康檢查通過'),
                  {'state': rjob['state'], 'error': rjob.get('error'), 'took_s': round(rtook, 1)})
     finally:
-        done = catalog_put(ev, original, f'{name}: dev-d\'s own entry again')
-        ev.check(f'{name}: dev-d\'s own EMQX entry is installed again (same SHA-256)',
-                 done.get('sha256') == installed.get('sha256'), {'now': done.get('sha256')})
+        reinstall_own_entry(ev, name, original, sha256)
     after = digest(run_probe(ev, args, f'{name} after', 'base'))
     ev.check(f'{name}: EMQX state digest equals the one before', after == before, {'differs': diff_digest(after, before)})
 
@@ -1623,7 +1686,8 @@ def step_check_hot(ev, args):
 
 
 STEPS = {'setup': step_setup, 'before': step_before, 'check': step_check, 'check-hot': step_check_hot,
-         'suggest-health': step_suggest_health, 'cleanup': step_cleanup, 'reclaim': step_reclaim,
+         'suggest-health': step_suggest_health, 'catalog-draft': step_catalog_draft, 'catalog-own': step_catalog_own,
+         'cleanup': step_cleanup, 'reclaim': step_reclaim,
          'cleanup-baseline': step_cleanup_baseline, 'leaks': step_leaks}
 
 
@@ -1646,7 +1710,7 @@ def parse_step(name):
 # a step only starts when the hold so far plus its estimate stays within HOLD_LIMIT.
 HOLD_LIMIT = 40 * 60
 ESTIMATE = {'setup': 6, 'before': 6, 'check': 12, 'check-hot': 12, 'import:file': 15, 'import:builtin': 30,
-            'rollback': 24, 'suggest-health': 10, 'cleanup': 4, 'cleanup-baseline': 2, 'reclaim': 3, 'leaks': 4}
+            'rollback': 24, 'suggest-health': 10, 'catalog-draft': 3, 'catalog-own': 2, 'cleanup': 4, 'cleanup-baseline': 2, 'reclaim': 3, 'leaks': 4}
 
 
 def estimate(name):
@@ -1687,7 +1751,7 @@ def main(argv):
         return 0
     steps = argv
     if not steps or any(parse_step(s)[0] is None for s in steps):
-        print('usage: emqx_product_real_ha.py <setup|before|check|check-hot|import:TAG:MODE|rollback:TAG|suggest-health|cleanup|cleanup-baseline|reclaim|leaks> ...',
+        print('usage: emqx_product_real_ha.py <setup|before|check|check-hot|import:TAG:MODE|rollback:TAG|suggest-health|catalog-draft|catalog-own|cleanup|cleanup-baseline|reclaim|leaks> ...',
               file=sys.stderr)
         return 2
     if not clean_tree():

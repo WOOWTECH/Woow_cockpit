@@ -307,5 +307,109 @@ class DecisionCTests(unittest.TestCase):
         self.assertEqual(real.OWNER_ACL_TEXT, ha_emqx.ACL_NEEDS_BUILTIN)
 
 
+class DraftTests(unittest.TestCase):
+    """catalog-draft / catalog-own: the page's own draft between the two, dev-d's own entry always back."""
+
+    class Helper:
+        """The engine's catalog commands over one installed entry (no device)."""
+
+        def __init__(self):
+            self.own = {'id': 'emqx', 'health': [], 'name': 'own'}
+            self.installed, self.calls = dict(self.own), []
+            self.draft = {'id': 'emqx', 'name': 'draft', 'health': [
+                {'type': 'http', 'url': 'http://127.0.0.1:18083/api/v5/error_codes', 'expect_status': 200}]}
+            self.break_install = False
+
+        @staticmethod
+        def sha(entry):
+            return 'sha-' + entry['name'] if entry else None
+
+        def ok(self, command, request=None, **_kwargs):
+            request = request or {}
+            self.calls.append((command, bool(request.get('confirm'))))
+            if command == 'catalog-suggest':
+                entry = dict(self.installed) if self.installed else dict(self.draft)
+                installed = ({'entry': dict(self.installed), 'sha256': self.sha(self.installed),
+                              'same': self.installed['name'] == 'draft', 'changes': []} if self.installed else None)
+                return {'apps': [{'id': 'emqx', 'entry': entry, 'valid': True, 'installed': installed,
+                                  'hints': ['emqx-entrance.container 的健康檢查網址 /readyz 只回應容器內部，會得到 403']}]}
+            if command == 'catalog-remove':
+                if request.get('confirm'):
+                    assert request['expected_sha256'] == self.sha(self.installed)
+                    self.installed = None
+                return {'expected_sha256': self.sha(self.installed)}
+            if command == 'catalog-install':
+                if request.get('confirm'):
+                    self.installed = dict(request['entry'], name='broken') if self.break_install else dict(request['entry'])
+                return {'valid': True, 'expected_sha256': 'x', 'sha256': self.sha(self.installed)}
+            if command == 'status':
+                return {'apps': [{'id': 'emqx', 'state': 'running', 'problems': []}]}
+            raise AssertionError(command)
+
+    def setUp(self):
+        from unittest import mock
+        self.helper = self.Helper()
+        self.ev = DecisionCTests.Ev()
+        patches = (mock.patch.object(real.drv, 'ok', self.helper.ok), mock.patch.object(real.drv, 'save_state', lambda: None),
+                   mock.patch.dict(real.drv.STATE, {}, clear=True))
+        for patch in patches:
+            patch.start()
+            self.addCleanup(patch.stop)
+
+    def failing(self):
+        return [name for name, ok in self.ev.results if not ok]
+
+    def test_the_draft_is_installed_unedited_and_the_own_entry_comes_back(self):
+        real.step_catalog_draft(self.ev, None)
+        self.assertEqual(self.helper.installed, self.helper.draft)
+        self.assertEqual(real.drv.STATE['own_entry'], {'entry': self.helper.own, 'sha256': 'sha-own'})
+        real.draft_installed(self.ev, 'import')
+        self.assertTrue([n for n, ok in self.ev.results if 'own unedited draft' in n])
+        with self.assertRaises(real.Failed):
+            real.step_catalog_draft(self.ev, None)          # never twice: the saved own entry must not be overwritten
+        with self.assertRaises(real.Failed):
+            real.step_suggest_health(self.ev, None)
+        real.step_catalog_own(self.ev, None)
+        self.assertEqual(self.helper.installed, self.helper.own)
+        self.assertIsNone(real.drv.STATE['own_entry'])
+        self.assertEqual(self.failing(), [])
+        with self.assertRaises(real.Failed):
+            real.step_catalog_own(self.ev, None)
+
+    def test_the_own_entry_is_recorded_before_anything_is_removed(self):
+        seen = []
+
+        def save():
+            seen.append((dict(real.drv.STATE.get('own_entry') or {}), list(self.helper.calls)))
+        from unittest import mock
+        with mock.patch.object(real.drv, 'save_state', save):
+            real.step_catalog_draft(self.ev, None)
+        self.assertEqual(seen[0][0], {'entry': self.helper.own, 'sha256': 'sha-own'})
+        self.assertNotIn('catalog-remove', [c for c, _confirm in seen[0][1]])
+
+    def test_another_entry_than_the_own_one_keeps_the_record(self):
+        real.step_catalog_draft(self.ev, None)
+        self.helper.break_install = True
+        with self.assertRaises(real.Failed):
+            real.step_catalog_own(self.ev, None)
+        self.assertTrue(real.drv.STATE['own_entry'])
+        self.assertTrue([n for n in self.failing() if 'installed again' in n])
+
+    def test_a_draft_that_asks_another_url_fails(self):
+        self.helper.draft['health'][0]['url'] = 'http://127.0.0.1:18083/'
+        real.step_catalog_draft(self.ev, None)
+        self.assertTrue([n for n in self.failing() if 'public API' in n])
+
+    def test_an_edited_entry_is_not_the_draft(self):
+        real.step_catalog_draft(self.ev, None)
+        self.helper.installed = dict(self.helper.installed, name='edited')
+        real.draft_installed(self.ev, 'import')
+        self.assertTrue([n for n in self.failing() if 'own unedited draft' in n])
+
+    def test_without_a_draft_nothing_is_claimed(self):
+        real.draft_installed(self.ev, 'import')
+        self.assertEqual(self.ev.results, [])
+
+
 if __name__ == '__main__':
     unittest.main()
