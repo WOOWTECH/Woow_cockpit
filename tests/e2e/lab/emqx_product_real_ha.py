@@ -197,6 +197,11 @@ SR5_NOTE = ('HA 的 EMQX 保存 MQTT 密碼的方式（{ha}）和這台（{mine}
 SR5_REMINDER = '請重新設定這台原本的 MQTT 帳號（{names}）：' + SR5_RESET
 # dev-d's EMQX hashes like the product package's base.hocon (Woow_podman_emqx: sha256, salt suffix).
 SR5_DEVICE_HASHING = 'sha256，鹽在後'
+# dev-d's own built-in database accounts (attempt-sr5-01 read them from its API): the bootstrap user woow (its password
+# is read inside dev-d from its podman secret) and the batch1 baseline marker user, created through the API by
+# batch1_markers.py (its password: the harness secret DEV_D_MARKER_EMQX). Every account the check names must be one of
+# these, so that each can be logged in and shown to fail after the import.
+SR5_OWN = {'woow': None, 'woowbk-lab-baseline': 'DEV_D_MARKER_EMQX'}
 SAFE_LABEL = re.compile(r"[^A-Za-z0-9 ,()/:'<>.=_+#-]")
 OWNER_UID = 1019
 
@@ -423,6 +428,11 @@ if token and REQ.get("delete_mqtt_user"):
     c, _ = call(E, "DELETE", "/api/v5/authentication/password_based:built_in_database/users/"
                 + urllib.parse.quote(REQ["delete_mqtt_user"], safe=""), token=token)
     out["delete_mqtt_user"] = c
+if token and REQ.get("create_mqtt_user"):
+    c, _ = call(E, "POST", "/api/v5/authentication/password_based:built_in_database/users",
+                {"user_id": REQ["create_mqtt_user"][0], "password": REQ["create_mqtt_user"][1], "is_superuser": False},
+                token=token)
+    out["create_mqtt_user"] = c
 if token:
     c, body = get("/api/v5/authentication/password_based:built_in_database/users?limit=1000", wait=120)
     out["mqtt_users"] = sorted([u.get("user_id"), u.get("is_superuser")] for u in items(body))
@@ -501,6 +511,14 @@ if REQ.get("own_mqtt"):
     if s:
         close(s)
     out["own_mqtt"] = own
+if REQ.get("logins"):
+    found = {}
+    for user, password in REQ["logins"]:
+        s, rc = connect("woowbk-login-" + user, user, password)
+        found[user] = rc
+        if s:
+            close(s)
+    out["logins"] = found
 if REQ.get("mqtt"):
     users = REQ["mqtt"]
     mq = {}
@@ -757,12 +775,17 @@ def ha_key(args, tag):
     return args.secrets['HA_BACKUP_KEY'] if drv.UPLOADS[tag][2] else None
 
 
-def probe_request(args, mode, tag=None, *, authz_add=False, own_mqtt=False, delete_user=None):
+def probe_request(args, mode, tag=None, *, authz_add=False, own_mqtt=False, delete_user=None, create_user=None,
+                  logins=()):
     s = args.secrets
     request = {'mode': mode, 'ha_admin_password': s['B1_EMQX_ADMIN_PW'], 'user2': s['B1_EMQX_USER2'],
                'user2_password': s['B1_EMQX_USER2_PW'], 'authz_add': authz_add}
     if delete_user is not None:
         request['delete_mqtt_user'] = delete_user
+    if create_user is not None:   # a user name whose password is a harness secret (SR5_OWN)
+        request['create_mqtt_user'] = [create_user, s[SR5_OWN[create_user]]]
+    if logins:                    # user names whose passwords are harness secrets (SR5_OWN)
+        request['logins'] = [[user, s[SR5_OWN[user]]] for user in logins]
     if tag is not None:
         prefix = 'B1_ARM' if machine_of(tag) == 'arm' else 'B1_X86'
         request.update(mqtt=[[s[f'B1_MQTT_USER{i}'], s[f'B1_MQTT_PW{i}']] for i in (1, 2, 3)],
@@ -772,9 +795,11 @@ def probe_request(args, mode, tag=None, *, authz_add=False, own_mqtt=False, dele
     return request
 
 
-def run_probe(ev, args, label_text, mode, tag=None, *, authz_add=False, own_mqtt=False, delete_user=None):
+def run_probe(ev, args, label_text, mode, tag=None, *, authz_add=False, own_mqtt=False, delete_user=None,
+              create_user=None, logins=()):
     probe = drv.event_device_python(PROBE, probe_request(args, mode, tag, authz_add=authz_add, own_mqtt=own_mqtt,
-                                                         delete_user=delete_user),
+                                                         delete_user=delete_user, create_user=create_user,
+                                                         logins=logins),
                                     args.secrets, [('/api/v5/login', ('token',), False)] * 3, timeout=900)
     ev.save(f'probe-{slug(label_text)}-{int(time.time())}.json', probe)
     # Every successful login issued one token: the leak scan of this run must look for that many (step leaks).
@@ -1511,9 +1536,10 @@ def sr5_warnings(result):
     return [w for w in (result or {}).get('warnings') or [] if '保存 MQTT 密碼的方式' in w]
 
 
-def evaluate_sr5(probe, src):
+def evaluate_sr5(probe, src, others=()):
     """[(check name, ok, detail)] of one probe after the import of the bcrypt variant: everything the x86-fileonly import
-    proves, except that this device's own account woow (the check named it) is now refused, bad username or password."""
+    proves, except that this device's own accounts (the check named them) are now refused with their own passwords:
+    the bootstrap user woow (its row stays, hashed the old way) and `others` (probe `logins`: gone with the import)."""
     results = []
     for name, ok, detail in evaluate_imported(probe, src, 'file', acl_rows=0):
         if name == 'MQTT: this device\'s bootstrap user woow still logs in':
@@ -1521,16 +1547,26 @@ def evaluate_sr5(probe, src):
             name, ok, detail = ('MQTT: this device\'s own account woow (named by the check) is refused with its own '
                                 'password (CONNACK 4/5)', code in (4, 5), code)
         results.append((name, ok, detail))
+    if others:
+        logins = probe.get('logins') or {}
+        results.append(('MQTT: this device\'s other own accounts (named by the check) are refused with their own '
+                        'passwords (CONNACK 4/5)', sorted(logins) == sorted(others)
+                        and all(logins.get(user) in (4, 5) for user in others), logins))
     return results
 
 
-def own_logins(ev, label_text, probe, *, own_ok):
-    """The own_mqtt part of a 'base' probe: woow with this device's bootstrap password, HA's three users."""
+def own_logins(ev, label_text, probe, *, own_ok, others=()):
+    """The own_mqtt part of a 'base' probe: woow with this device's bootstrap password, HA's three users; and
+    `others` (probe `logins`), this device's other own accounts with their passwords."""
     logins = probe.get('own_mqtt') or {}
     refused = {k: v for k, v in logins.items() if k.startswith('ha_')}
     ev.check(f'{label_text}: MQTT: this device\'s bootstrap user woow logs in, HA\'s three users are refused', own_ok
              and logins.get('bootstrap_woow') == 0 and len(refused) == 3
              and all(v not in (0, None) for v in refused.values()), logins)
+    if others:
+        found = probe.get('logins') or {}
+        ev.check(f'{label_text}: MQTT: this device\'s other own accounts log in with their own passwords',
+                 sorted(found) == sorted(others) and all(found.get(user) == 0 for user in others), found)
 
 
 def step_sr5(ev, args, tag):
@@ -1552,13 +1588,15 @@ def step_sr5(ev, args, tag):
     bind_lab_made(ev, tag)
     label_text = f'sr5 {tag}/emqx (file target)'
     src = drv.source('x86')['emqx']
-    pre = run_probe(ev, args, f'{label_text} pre', 'base', own_mqtt=True)
+    others = sorted(user for user in SR5_OWN if user != 'woow')
+    pre = run_probe(ev, args, f'{label_text} pre', 'base', own_mqtt=True, logins=others)
     if digest(pre) != drv.STATE['digest_before']:
         raise Failed('dev-d\'s EMQX is not at its baseline; refusing to go on over unknown data')
-    own_logins(ev, f'{label_text} pre', pre, own_ok=True)
     own_users = sorted(u[0] for u in pre.get('mqtt_users') or [])
-    ev.check(f'{label_text}: this device\'s own MQTT accounts (listed by its API) are exactly its bootstrap user woow',
-             own_users == ['woow'], own_users)
+    if not ev.check(f'{label_text}: this device\'s own MQTT accounts (listed by its API) are exactly the ones whose '
+                    'passwords this harness knows (woow, woowbk-lab-baseline)', own_users == sorted(SR5_OWN), own_users):
+        raise Failed('this device holds an MQTT account this run cannot log in')
+    own_logins(ev, f'{label_text} pre', pre, own_ok=True, others=others)
     before_ids = {b['id'] for b in drv.ok('list', ev=ev)['backups']}
     job, took = drv.run_check(drv.STATE[f'ha_{tag}'], ['emqx'], ev=ev, key=None, tag=f'check-{tag}-file-emqx')
     ev.time('check', tag, 'emqx', took, job)
@@ -1591,9 +1629,9 @@ def step_sr5(ev, args, tag):
         after_ids = {b['id'] for b in drv.ok('list', ev=ev)['backups']}
         ev.check(f'{label_text}: the refused conversion left nothing (no backup, no throwaway object)',
                  after_ids == before_ids and not any(objects.values()), {'new': sorted(after_ids - before_ids), **objects})
-        post = run_probe(ev, args, f'{label_text} after the refusals', 'base', own_mqtt=True)
+        post = run_probe(ev, args, f'{label_text} after the refusals', 'base', own_mqtt=True, logins=others)
         base_checks(ev, f'{label_text} after the refusals', post)
-        own_logins(ev, f'{label_text} after the refusals', post, own_ok=True)
+        own_logins(ev, f'{label_text} after the refusals', post, own_ok=True, others=others)
         markers(ev, f'{label_text} after the refusals')
         ev.check(f'{label_text}: dev-d\'s EMQX is unchanged (state digest equals the one before)',
                  digest(post) == drv.STATE['digest_before'],
@@ -1638,8 +1676,8 @@ def step_sr5(ev, args, tag):
                                                              for a in pre_flight.get('apps') or []),
                  failed[:3] or [(a.get('id'), a.get('mode'), (a.get('settings') or {}).get('state'))
                                 for a in pre_flight.get('apps') or []])
-        own = run_probe(ev, args, f'{label_text} before the restore', 'base', own_mqtt=True)
-        own_logins(ev, f'{label_text} before the restore', own, own_ok=True)
+        own = run_probe(ev, args, f'{label_text} before the restore', 'base', own_mqtt=True, logins=others)
+        own_logins(ev, f'{label_text} before the restore', own, own_ok=True, others=others)
         ev.check(f'{label_text}: the check and the conversion changed nothing on this device (state digest equal)',
                  digest(own) == own_expected, {'differs': diff_digest(digest(own), own_expected)})
         changed = True
@@ -1654,33 +1692,41 @@ def step_sr5(ev, args, tag):
             return
         ev.check(f'{label_text}: the restore\'s own readback check passed (job log)', job_log_has(rlog, READBACK_LOG),
                  [str(line)[-300:] for line in rlog if 'EMQX' in str(line)][-6:])
-        imported = run_probe(ev, args, f'{label_text} after restore', 'file', tag)
-        for name, ok, detail in evaluate_sr5(imported, src):
+        imported = run_probe(ev, args, f'{label_text} after restore', 'file', tag, logins=others)
+        for name, ok, detail in evaluate_sr5(imported, src, others):
             ev.check(f'{label_text} after restore: {name}', ok, detail)
         restart_emqx(ev, label_text)
-        restarted = run_probe(ev, args, f'{label_text} after restart', 'file', tag)
-        for name, ok, detail in evaluate_sr5(restarted, src):
+        restarted = run_probe(ev, args, f'{label_text} after restart', 'file', tag, logins=others)
+        for name, ok, detail in evaluate_sr5(restarted, src, others):
             ev.check(f'{label_text} after restart: {name}', ok, detail)
-        # The warning's own remedy for an account of this device's bootstrap file: delete it, restart EMQX.
+        # The warning's own remedies: an account of this device's bootstrap file is deleted and EMQX restarted (the file
+        # brings it back, hashed HA's way); every other account is created again with its password.
         removed = run_probe(ev, args, f'{label_text} remedy: delete woow', 'file', delete_user='woow')
         ev.check(f'{label_text} remedy: woow deleted through the API as HA\'s admin (204)',
                  removed.get('delete_mqtt_user') == 204 and ['woow', False] not in (removed.get('mqtt_users') or []),
                  {'code': removed.get('delete_mqtt_user'), 'users': removed.get('mqtt_users')})
+        for user in others:
+            made = run_probe(ev, args, f'{label_text} remedy: create {user}', 'file', create_user=user)
+            ev.check(f'{label_text} remedy: {user} created again through the API as HA\'s admin (201)',
+                     made.get('create_mqtt_user') in (200, 201) and [user, False] in (made.get('mqtt_users') or []),
+                     {'code': made.get('create_mqtt_user')})
         restart_emqx(ev, f'{label_text} remedy')
-        fixed = run_probe(ev, args, f'{label_text} after the remedy', 'file', tag)
-        mq = fixed.get('mqtt') or {}
+        fixed = run_probe(ev, args, f'{label_text} after the remedy', 'file', tag, logins=others)
+        mq, logins = fixed.get('mqtt') or {}, fixed.get('logins') or {}
         ha_names = [u['user_id'] for u in src['mqtt_users']]
         ev.check(f'{label_text} after the remedy: the bootstrap file brought woow back and it logs in with this '
-                 'device\'s password; HA\'s three users still log in',
+                 'device\'s password, the account created again logs in with its password; HA\'s three users still log in',
                  mq.get('bootstrap_woow') == 0 and ['woow', False] in (fixed.get('mqtt_users') or [])
+                 and sorted(logins) == others and all(logins.get(user) == 0 for user in others)
                  and all(mq.get(f'login_{u}') == 0 for u in ha_names),
-                 {'woow': mq.get('bootstrap_woow'), 'ha': {u: mq.get(f'login_{u}') for u in ha_names}})
+                 {'woow': mq.get('bootstrap_woow'), 'others': logins, 'ha': {u: mq.get(f'login_{u}') for u in ha_names}})
         tested = True
     finally:
         if changed:
             manual_baseline(ev, args, label_text, tested)
-            back = run_probe(ev, args, f'{label_text} after the baseline restore (own accounts)', 'base', own_mqtt=True)
-            own_logins(ev, f'{label_text} after the baseline restore', back, own_ok=True)
+            back = run_probe(ev, args, f'{label_text} after the baseline restore (own accounts)', 'base', own_mqtt=True,
+                             logins=others)
+            own_logins(ev, f'{label_text} after the baseline restore', back, own_ok=True, others=others)
 
 
 def stable(probe):

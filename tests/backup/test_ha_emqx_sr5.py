@@ -272,6 +272,9 @@ class RuleTests(unittest.TestCase):
                         'no dk_length = the MAC\'s own length (emqx_passwd.erl:140-141,153-158)')
         self.assertFalse(verify(mine, hashing('pbkdf2', mac_fun='sha256', iterations=4096, dk_length=64)))
         self.assertFalse(verify(mine, hashing('pbkdf2', mac_fun='sha512', iterations=4096)))
+        self.assertFalse(verify(hashing('pbkdf2', mac_fun='sha256', iterations=4096, dk_length=32),
+                                hashing('pbkdf2', mac_fun='sha512', iterations=4096, dk_length=32)),
+                         'another MAC with the same derived length (mutation run s1: the MAC was not compared alone)')
         self.assertFalse(verify(mine, hashing('pbkdf2', mac_fun='sha256', iterations=10000)))
         self.assertFalse(verify(mine, hashing('sha256', 'suffix')))
         self.assertFalse(verify(hashing('sha256', 'suffix'), mine))
@@ -331,7 +334,8 @@ class ParseTests(unittest.TestCase):
         self.assertEqual(parse('WOOWUSERS:0::ENDok'), (0, []))
         self.assertEqual(parse(users_answer(*[f'u{i}' for i in range(10)], count=12)), (12, [f'u{i}' for i in range(10)]))
         for bad in ('', 'ok', 'WOOWUSERS:2:d29vdw==:ENDok', 'WOOWUSERS:1:d29vdw:ENDok', 'WOOWUSERS:1:d29vdw==:END ok x',
-                    'WOOWUSERS:1:d2*vdw==:ENDok', 'x WOOWUSERS:1:d29vdw==:ENDok', 'WOOWUSERS:0:d29vdw==:ENDok'):
+                    'WOOWUSERS:1:d2*vdw==:ENDok', 'x WOOWUSERS:1:d29vdw==:ENDok', 'WOOWUSERS:0:d29vdw==:ENDok',
+                    'WOOWUSERS:1:d29==:ENDok'):   # excess padding: only a strict decoder refuses it (mutation run s1)
             with self.subTest(bad=bad), self.assertRaises(ValueError):
                 parse(bad)
 

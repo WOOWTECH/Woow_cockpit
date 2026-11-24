@@ -621,17 +621,32 @@ class Sr5Tests(unittest.TestCase):
         self.assertEqual(ha_emqx.hashing_text({'name': 'sha256', 'salt': 'suffix', 'mac_fun': None, 'iterations': None,
                                                'dk_length': None}), real.SR5_DEVICE_HASHING)
 
-    def test_after_the_import_woow_must_be_refused_and_everything_else_holds(self):
+    def test_after_the_import_the_own_accounts_must_be_refused_and_everything_else_holds(self):
+        others = ['woowbk-lab-baseline']
+        self.assertEqual(sorted(real.SR5_OWN), ['woow', 'woowbk-lab-baseline'])
         probe = imported_probe('file')
         probe['native_counts']['emqx_acl'] = 0
         probe['mqtt']['bootstrap_woow'] = 4
-        self.assertEqual(failed(real.evaluate_sr5(probe, SRC)), [])
+        probe['logins'] = {'woowbk-lab-baseline': 5}
+        self.assertEqual(failed(real.evaluate_sr5(probe, SRC, others)), [])
         for code in (0, None, 'connect:ConnectionRefusedError'):
             probe['mqtt']['bootstrap_woow'] = code
-            self.assertEqual(len(failed(real.evaluate_sr5(probe, SRC))), 1, code)
+            self.assertEqual(len(failed(real.evaluate_sr5(probe, SRC, others))), 1, code)
         probe['mqtt']['bootstrap_woow'] = 5
+        for logins in ({'woowbk-lab-baseline': 0}, {}, {'woowbk-lab-baseline': 5, 'x': 5}, None):
+            probe['logins'] = logins
+            self.assertEqual(len(failed(real.evaluate_sr5(probe, SRC, others))), 1, logins)
+        probe['logins'] = {'woowbk-lab-baseline': 4}
         probe['mqtt']['login_b1-sensor'] = 4
-        self.assertTrue(any('three users log in' in name for name in failed(real.evaluate_sr5(probe, SRC))))
+        self.assertTrue(any('three users log in' in name for name in failed(real.evaluate_sr5(probe, SRC, others))))
+
+    def test_the_own_accounts_passwords_are_harness_secrets(self):
+        args = type('Args', (), {'secrets': {'B1_EMQX_ADMIN_PW': 'a' * 8, 'B1_EMQX_USER2': 'u', 'B1_EMQX_USER2_PW': 'b' * 8,
+                                             'DEV_D_MARKER_EMQX': 'm' * 8}})()
+        request = real.probe_request(args, 'base', logins=['woowbk-lab-baseline'], create_user='woowbk-lab-baseline')
+        self.assertEqual(request['logins'], [['woowbk-lab-baseline', 'm' * 8]])
+        self.assertEqual(request['create_mqtt_user'], ['woowbk-lab-baseline', 'm' * 8])
+        self.assertNotIn('logins', real.probe_request(args, 'base'))
 
 
 class Sr5StepTests(unittest.TestCase):
@@ -639,8 +654,10 @@ class Sr5StepTests(unittest.TestCase):
 
     BEFORE = {'login': {'device_admin': 200, 'ha_admin': 401}, 'authz_sources': [['file', True]],
               'authz_settings': {'no_match': 'deny', 'deny_action': 'ignore'}, 'file_acl_readback_equal': True,
-              'mqtt_users': [['woow', False]], 'rules': [], 'retained_api': {'woowbk-lab/baseline': 'h'}, 'api_keys': [],
-              'own_mqtt': {'ha_b1-sensor': 5, 'ha_b1-gateway': 5, 'ha_b1-admin': 4, 'bootstrap_woow': 0}}
+              'mqtt_users': [['woow', False], ['woowbk-lab-baseline', False]], 'rules': [],
+              'retained_api': {'woowbk-lab/baseline': 'h'}, 'api_keys': [],
+              'own_mqtt': {'ha_b1-sensor': 5, 'ha_b1-gateway': 5, 'ha_b1-admin': 4, 'bootstrap_woow': 0},
+              'logins': {'woowbk-lab-baseline': 0}}
 
     def setUp(self):
         from unittest import mock
@@ -649,7 +666,7 @@ class Sr5StepTests(unittest.TestCase):
                         'node_name': 'emqx@127.0.0.1', 'mqtt_users': 3, 'acl_rules': 0, 'dashboard_users': 2,
                         'api_keys': 1, 'banned': 1, 'psk': 0, 'default_dashboard_password': False, 'anonymous': False,
                         'hot_backup': False, 'retained_messages': 5}
-        texts = {'ha': 'bcrypt', 'mine': real.SR5_DEVICE_HASHING, 'names': 'woow'}
+        texts = {'ha': 'bcrypt', 'mine': real.SR5_DEVICE_HASHING, 'names': 'woow、woowbk-lab-baseline'}
         self.check = {'ok': True, 'blockers': [], 'warnings': [real.SR5_WARNING.format(**texts)], 'emqx': self.section}
         self.convert = {'state': 'succeeded', 'result': {'backup_id': 'b-conv', 'ha_import': {
             'notes': [real.SR5_NOTE.format(**texts)], 'reminders_by_app': {'emqx': [real.SR5_REMINDER.format(**texts)]}}}}
@@ -657,13 +674,17 @@ class Sr5StepTests(unittest.TestCase):
         imported = imported_probe('file')
         imported['native_counts']['emqx_acl'] = 0
         imported['mqtt']['bootstrap_woow'] = 4
+        imported['logins'] = {'woowbk-lab-baseline': 5}
         fixed = copy.deepcopy(imported)
         fixed['mqtt']['bootstrap_woow'] = 0
+        fixed['logins'] = {'woowbk-lab-baseline': 0}
         before = lambda: copy.deepcopy(self.BEFORE)   # noqa: E731 - each probe its own copy
         self.probes = {'pre': before(), 'after the refusals': before(), 'before the restore': before(),
                        'after restore': imported, 'after restart': imported, 'remedy: delete woow':
-                       {'delete_mqtt_user': 204, 'mqtt_users': [['b1-admin', True]]}, 'after the remedy': fixed,
-                       'after the baseline restore (own accounts)': before()}
+                       {'delete_mqtt_user': 204, 'mqtt_users': [['b1-admin', True]]},
+                       'remedy: create woowbk-lab-baseline': {'create_mqtt_user': 201,
+                                                              'mqtt_users': [['woowbk-lab-baseline', False]]},
+                       'after the remedy': fixed, 'after the baseline restore (own accounts)': before()}
         self.requests, self.restores, self.restarts = [], [], []
         self.baseline = []
 
@@ -701,8 +722,16 @@ class Sr5StepTests(unittest.TestCase):
 
     def failing(self, tag):
         self.ev.results = []
-        real.step_sr5(self.ev, None, tag)
+        try:
+            real.step_sr5(self.ev, None, tag)
+        except real.Failed as error:   # the harness records it as a failed check of the step
+            self.ev.results.append((f'step ran to the end: {error}', False))
         return [name for name, ok in self.ev.results if not ok]
+
+    def third_account(self):
+        """dev-d at its baseline holds an account whose password this run does not know: refused before anything."""
+        self.probes['pre']['mqtt_users'].append(['someone', False])
+        real.drv.STATE['digest_before'] = real.digest(self.probes['pre'])
 
     def test_bcrypt_the_whole_chain(self):
         self.assertEqual(self.failing('x86-bcrypt'), [])
@@ -710,12 +739,15 @@ class Sr5StepTests(unittest.TestCase):
         self.assertEqual(len(self.restarts), 2, 'one restart after the restore, one for the remedy')
         self.assertEqual(self.baseline, [True], 'B0 comes back after the full chain')
         self.assertIn(('remedy: delete woow', 'file', None, {'delete_user': 'woow'}), self.requests)
-        self.assertEqual(self.requests[0], ('pre', 'base', None, {'own_mqtt': True}))
+        self.assertIn(('remedy: create woowbk-lab-baseline', 'file', None, {'create_user': 'woowbk-lab-baseline'}),
+                      self.requests)
+        self.assertEqual(self.requests[0], ('pre', 'base', None, {'own_mqtt': True, 'logins': ['woowbk-lab-baseline']}))
 
     def test_bcrypt_each_part_can_fail(self):
         cases = {
             'no warning': lambda: self.check.update(warnings=[]),
-            'another name': lambda: self.check.update(warnings=[self.check['warnings'][0].replace('（woow）', '（admin）')]),
+            'one name missing': lambda: self.check.update(warnings=[self.check['warnings'][0].replace(
+                '（woow、woowbk-lab-baseline）', '（woow）')]),
             'a blocker': lambda: self.check.update(ok=False, blockers=['x']),
             'no note': lambda: self.convert['result']['ha_import'].update(notes=[]),
             'woow still logs in': lambda: self.probes['after restore']['mqtt'].update(bootstrap_woow=0),
@@ -723,6 +755,13 @@ class Sr5StepTests(unittest.TestCase):
             'delete refused': lambda: self.probes['remedy: delete woow'].update(delete_mqtt_user=404),
             'own woow not back': lambda: self.probes['after the baseline restore (own accounts)']['own_mqtt'].update(
                 bootstrap_woow=4),
+            'the marker still logs in': lambda: self.probes['after restore']['logins'].update({'woowbk-lab-baseline': 0}),
+            'the marker not created again': lambda: self.probes['remedy: create woowbk-lab-baseline'].update(
+                create_mqtt_user=409),
+            'the marker not back': lambda: self.probes['after the remedy']['logins'].update({'woowbk-lab-baseline': 5}),
+            'own marker not back': lambda: self.probes['after the baseline restore (own accounts)']['logins'].update(
+                {'woowbk-lab-baseline': 5}),
+            'a third own account': self.third_account,
         }
         for label, change in cases.items():
             with self.subTest(label):
