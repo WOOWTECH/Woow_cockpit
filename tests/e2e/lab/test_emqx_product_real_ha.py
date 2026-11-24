@@ -152,7 +152,7 @@ class ProgramTests(unittest.TestCase):
     def test_every_step_has_an_estimate_and_the_two_halves_fit_one_hold_each(self):
         for name in ('setup', 'before', 'check', 'check-hot', 'import:arm-cold:file', 'import:arm-cold:builtin',
                      'rollback:arm-cold', 'cleanup', 'cleanup-baseline', 'reclaim', 'leaks', 'import:x86-noacl:file',
-                     'rollback:x86-noacl', 'import:x86-fileonly:file', 'rollback:x86-fileonly'):
+                     'rollback:x86-noacl', 'import:x86-fileonly:file', 'rollback:x86-fileonly', 'suggest-health'):
             self.assertGreater(real.estimate(name), 0, name)
         self.assertEqual(real.estimate('import:x86-noacl:file'), real.estimate('import:x86-cold:builtin'),
                          'the lab-made backup runs the whole chain')

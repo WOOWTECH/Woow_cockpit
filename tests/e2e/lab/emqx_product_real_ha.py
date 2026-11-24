@@ -52,6 +52,12 @@ Steps (run in the order given):
                cluster.hocon: the restore's readback must name 設定（log） and roll back by itself; the probe again),
                and the MANUAL rollback to the baseline (restore of B0: the state digest equals `before`, the
                markers are back)
+  suggest-health
+               the catalog entry a customer installs from the page's own draft (needs the suggest.py fix a3a0479): dev-d's
+               EMQX entry is removed, a fresh catalog-suggest draft must ask the Dashboard through the entrance (not the
+               container-only /readyz, 403 from the device), it is installed, EMQX is backed up and that backup restored
+               with the proposed health check (must succeed, not roll back), then dev-d's own entry is installed again
+               (same SHA-256) and the EMQX state digest equals the one before
   cleanup      the test's converted and safety backups deleted (B0 stays until `cleanup-baseline`); no job
                container/volume/network, staging or key file; no drop-in or marker left
   cleanup-baseline
@@ -1456,6 +1462,64 @@ def step_cleanup_baseline(ev, args):
         drv.save_state()
 
 
+def suggested_emqx(ev):
+    reply = drv.ok('catalog-suggest', {'owner': 'appowner'}, ev=ev, timeout=600)
+    return next((a for a in reply.get('apps') or [] if a.get('id') == 'emqx'), {})
+
+
+def catalog_put(ev, entry, label_text):
+    preview = drv.ok('catalog-install', {'entry': entry}, ev=ev, timeout=300)
+    if not ev.check(f'{label_text}: catalog-install preview valid', preview.get('valid') is True, preview.get('error')):
+        raise Failed('catalog-install preview refused')
+    return drv.ok('catalog-install', {'entry': entry, 'confirm': True, 'expected_sha256': preview.get('expected_sha256')},
+                  ev=ev, timeout=300)
+
+
+def step_suggest_health(ev, args):
+    name = 'suggest-health'
+    if drv.STATE.get('imported'):
+        raise Failed('an imported state waits for its rollback step (rollback:TAG) first')
+    before = digest(run_probe(ev, args, f'{name} before', 'base'))
+    installed = suggested_emqx(ev).get('installed') or {}
+    original = installed.get('entry')
+    if not ev.check(f'{name}: dev-d\'s installed EMQX entry is read (catalog-suggest)',
+                    isinstance(original, dict) and original.get('id') == 'emqx' and bool(installed.get('sha256')),
+                    {'sha256': installed.get('sha256')}):
+        raise Failed('no installed EMQX entry')
+    ev.save('catalog-entry-original.json', original)
+    try:
+        preview = drv.ok('catalog-remove', {'id': 'emqx'}, ev=ev)
+        drv.ok('catalog-remove', {'id': 'emqx', 'confirm': True, 'expected_sha256': preview['expected_sha256']}, ev=ev)
+        fresh = suggested_emqx(ev)
+        entry = fresh.get('entry') or {}
+        ev.save('suggested-emqx.json', fresh)
+        ev.check(f'{name}: a fresh draft asks the Dashboard through the entrance (/, 200), not the container-only /readyz',
+                 [(h.get('url'), h.get('expect_status')) for h in entry.get('health') or []]
+                 == [('http://127.0.0.1:18083/', 200)] and fresh.get('valid') is True, entry.get('health'))
+        ev.check(f'{name}: the draft says why (/readyz answers 403 from the device)',
+                 any('/readyz' in h and '403' in h for h in fresh.get('hints') or []), fresh.get('hints'))
+        catalog_put(ev, entry, f'{name}: the fresh draft')
+        job, _log, took = run_job(ev, 'backup-start', {'apps': ['emqx'], 'note': 'emqx-product suggest-health'},
+                                  'suggest-health-backup')
+        backup_id = (job.get('result') or {}).get('backup_id')
+        drv.created_backup(backup_id)
+        if not ev.check(f'{name}: backup of EMQX with the proposed entry', job['state'] == 'succeeded' and bool(backup_id),
+                        {'state': job['state'], 'error': job.get('error'), 'took_s': round(took, 1)}):
+            raise Failed('the backup with the proposed entry failed')
+        rjob, rlog, rtook = restore_with(ev, backup_id, 'suggest-health-restore')
+        result = rjob.get('result') or {}
+        ev.check(f'{name}: a restore with the proposed health check succeeds and is not rolled back (health passed)',
+                 rjob['state'] == 'succeeded' and result.get('rolled_back') is False
+                 and job_log_has(rlog, '健康檢查通過'),
+                 {'state': rjob['state'], 'error': rjob.get('error'), 'took_s': round(rtook, 1)})
+    finally:
+        done = catalog_put(ev, original, f'{name}: dev-d\'s own entry again')
+        ev.check(f'{name}: dev-d\'s own EMQX entry is installed again (same SHA-256)',
+                 done.get('sha256') == installed.get('sha256'), {'now': done.get('sha256')})
+    after = digest(run_probe(ev, args, f'{name} after', 'base'))
+    ev.check(f'{name}: EMQX state digest equals the one before', after == before, {'differs': diff_digest(after, before)})
+
+
 MEMORY_COUNTERS = ('cat /sys/fs/cgroup/memory.current /sys/fs/cgroup/memory.max; '
                    'grep -E "^(anon|file|shmem) " /sys/fs/cgroup/memory.stat; '
                    'grep -E "^(oom|oom_kill|oom_group_kill) " /sys/fs/cgroup/memory.events; '
@@ -1545,7 +1609,7 @@ def step_check_hot(ev, args):
 
 
 STEPS = {'setup': step_setup, 'before': step_before, 'check': step_check, 'check-hot': step_check_hot,
-         'cleanup': step_cleanup, 'reclaim': step_reclaim,
+         'suggest-health': step_suggest_health, 'cleanup': step_cleanup, 'reclaim': step_reclaim,
          'cleanup-baseline': step_cleanup_baseline, 'leaks': step_leaks}
 
 
@@ -1568,7 +1632,7 @@ def parse_step(name):
 # a step only starts when the hold so far plus its estimate stays within HOLD_LIMIT.
 HOLD_LIMIT = 40 * 60
 ESTIMATE = {'setup': 6, 'before': 6, 'check': 12, 'check-hot': 12, 'import:file': 15, 'import:builtin': 30,
-            'rollback': 24, 'cleanup': 4, 'cleanup-baseline': 2, 'reclaim': 3, 'leaks': 4}
+            'rollback': 24, 'suggest-health': 10, 'cleanup': 4, 'cleanup-baseline': 2, 'reclaim': 3, 'leaks': 4}
 
 
 def estimate(name):
@@ -1603,7 +1667,7 @@ def main(argv):
         return 0
     steps = argv
     if not steps or any(parse_step(s)[0] is None for s in steps):
-        print('usage: emqx_product_real_ha.py <setup|before|check|check-hot|import:TAG:MODE|rollback:TAG|cleanup|cleanup-baseline|reclaim|leaks> ...',
+        print('usage: emqx_product_real_ha.py <setup|before|check|check-hot|import:TAG:MODE|rollback:TAG|suggest-health|cleanup|cleanup-baseline|reclaim|leaks> ...',
               file=sys.stderr)
         return 2
     if not clean_tree():
