@@ -382,6 +382,32 @@ class DashboardChangedTargetTests(base.EmqxCase):
         self.assertEqual(len(self.storage.list_backups()), 1, 'only the first conversion made a backup')
 
 
+    def test_the_readback_records_the_boot_form_of_roots_the_import_changed(self):
+        """HA's import changes roots at runtime (rules, connectors, …): the running candidate's plain raw configuration
+        then lacks schema defaults a boot fills in, and the restored broker boots. The readback holds the boot form of
+        every root (a plain one would fail every restore of such a backup)."""
+        real_exec, real_view = self.world.exec, self.world.boot_view
+
+        def exec(role, command, data, stdout):
+            result = real_exec(role, command, data, stdout)
+            if command[:4] == ['emqx', 'ctl', 'data', 'import']:
+                self.world.current_config['rule_engine'] = {'rules': {}}   # runtime form, as the import stored it
+            return result
+
+        def boot_view(role, config):
+            config = copy.deepcopy(real_view(role, config))
+            if 'rule_engine' in config:
+                config['rule_engine'].setdefault('ignore_sys_message', True)   # what a boot fills in
+            return config
+        self.world.exec, self.world.boot_view = exec, boot_view
+        done = self.convert(self.upload_emqx(state='stopped'), ['emqx'])
+        self.assertTrue(done['backup_id'])
+        section = next(app for app in self.archive.writes[-1]['manifest']['apps'] if app['id'] == 'emqx')
+        self.assertEqual(section['import_check']['config_roots']['rule_engine'],
+                         ha_emqx.config_roots({'rule_engine': {'rules': {}, 'ignore_sys_message': True}})['rule_engine'],
+                         'the readback holds the boot form of a root HA\'s import changed')
+
+
 class EnvironmentFileTests(unittest.TestCase):
     """dev-d 2026-11-23 attempt-06: the product package sets EMQX_LOG__CONSOLE__LEVEL in the Quadlet's EnvironmentFile=;
     the candidate must get it like the running broker (podman --env-file: plain KEY=VALUE, value literal)."""

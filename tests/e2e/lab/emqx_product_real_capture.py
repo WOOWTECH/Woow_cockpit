@@ -26,6 +26,8 @@ STATUS = [re.compile(p) for p in (
     r'lock held for [0-9]{1,6} s',
     r'dev-d memory current=[0-9]{1,12} limit=[0-9]{1,12} headroom=-?[0-9]{1,12}',
     r'host MemAvailable=[0-9]{1,12} KiB disk free=[0-9]{1,15} B',
+    r'dev-d reclaim headroom_before=-?[0-9]{1,12} headroom_after=-?[0-9]{1,12} journal_before=[0-9]{1,12} '
+    r'journal_after=[0-9]{1,12} rounds=[0-9]{1,3}',
     r'STEP [a-z0-9:-]{1,40}: (PASS|FAIL|SKIP)( [a-z_]{1,30}=[0-9.]{1,12})?',
     r"CHECK [A-Za-z0-9 ,()/:'<>.=_+#-]{1,200}: (PASS|FAIL)",
     r'RESULT [0-9]{1,5}/[0-9]{1,5} passed',

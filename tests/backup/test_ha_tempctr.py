@@ -301,6 +301,12 @@ class VolumeRootTests(unittest.TestCase):
         self.assertIsNone(tempctr.tar_root(b'tar bytes' * 1000))
         self.assertIsNone(tempctr.tar_root(b''))
 
+    def test_a_negative_owner_is_never_applied(self):
+        # a pax header can carry any integer; `chown -1:...` would mean "leave unchanged" instead of an owner
+        for uid, gid in ((-1, 1000), (1000, -1)):
+            with self.subTest(uid=uid, gid=gid):
+                self.assertIsNone(tempctr.tar_root(self.tar_with_root(uid, gid, 0o700)))
+
     def test_the_top_entry_is_applied_after_the_import(self):
         runner = FakeRunner({('volume', 'inspect'): Result(0, b'/store/volumes/woowbk-x/_data\n', b'')})
         tmp = tempctr.TempObjects(runner, JOB)
