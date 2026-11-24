@@ -1495,6 +1495,7 @@ class SkippedEntryTests(WalkCase):
                 names = report.skips['device']
                 self.assertEqual((len(names), names.count, len(names.first)), (count, count, min(count, 20)))
                 self.assertEqual(len(names.key_items()), count if count <= few else 2)
+                self.assertLessEqual(len(names._names), few, 'never more in memory')
                 keys = {tuple(sorted(r.skips['device'].key_items())) for r in (report, other, more)}
                 self.assertEqual(len(keys), 3)
                 self.assertEqual(names.key_items(), skips(count).skips['device'].key_items(), 'the same file, the same key')
