@@ -2,12 +2,28 @@
 import contextlib
 import io
 import json
+import os
 from pathlib import Path
 import tempfile
 import unittest
 from unittest import mock
 
 from . import bounded_large_archive as probe
+
+
+# probe.main() sets the process umask to 077, as the probe does when it runs as its own program. Give the unittest
+# process its umask back after this module, so later modules (tests.e2e.test_dirs_fixture in the CI's discover order)
+# run under the CI's umask and not under 077.
+_UMASK = []
+
+
+def setUpModule():
+    _UMASK.append(os.umask(0o077))
+    os.umask(_UMASK[0])
+
+
+def tearDownModule():
+    os.umask(_UMASK.pop())
 
 
 class HarnessSafetyTests(unittest.TestCase):

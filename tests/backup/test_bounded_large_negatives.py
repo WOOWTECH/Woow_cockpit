@@ -13,6 +13,22 @@ from . import bounded_large_negatives as probe
 from . import bounded_stream_window as window
 from woowbackup.errors import BackupError
 
+
+# probe.main() sets the process umask to 077, as the probe does when it runs as its own program. Give the unittest
+# process its umask back after this module, so later modules (tests.e2e.test_dirs_fixture in the CI's discover order)
+# run under the CI's umask and not under 077.
+_UMASK = []
+
+
+def setUpModule():
+    _UMASK.append(os.umask(0o077))
+    os.umask(_UMASK[0])
+
+
+def tearDownModule():
+    os.umask(_UMASK.pop())
+
+
 MIB = window.MIB
 
 
