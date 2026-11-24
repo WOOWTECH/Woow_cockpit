@@ -115,6 +115,35 @@ class RestoreAcceptsTests(unittest.TestCase):
         self.assertEqual(kept['venv/lib/a.so'], (tarfile.LNKTYPE, 'uv/a.so'))
         self.assertEqual(kept['venv/python'], (tarfile.SYMTYPE, '/opt/data/uv/python3.12'))
 
+    def test_what_the_reader_hands_out_is_what_the_restore_takes(self):
+        """Whatever an add-on's data holds (HAOS parity): links as copies, nothing the restore would refuse -- no device
+        node, no link out of the volume, no name with control characters -- and the list of what was left out."""
+        entries = [{'name': 'v', 'type': 'dir'}, {'name': 'v/a', 'data': b'a' * 600}, {'name': 'x/cache', 'data': b'cached'},
+                   {'name': 'v/copy', 'type': 'hardlink', 'linkname': 'x/cache'},
+                   {'name': 'v/again', 'type': 'hardlink', 'linkname': 'v/a'},
+                   {'name': 'v/gone', 'type': 'hardlink', 'linkname': '../etc/shadow'},
+                   {'name': 'v/dev', 'type': 'chr'}, {'name': 'v/pipe', 'type': 'fifo'}, {'name': 'v/bad\nname', 'data': b'x'},
+                   {'name': 'v/in', 'type': 'symlink', 'linkname': 'a'}, {'name': 'v/out', 'type': 'symlink', 'linkname': '/etc'},
+                   {'name': 'v/up', 'type': 'symlink', 'linkname': '../x/cache'}]
+        for hardlinks in (False, True):
+            report, members = habackup.Report(), []
+            for entry in habackup.iter_entries(io.BytesIO(hx.tar_bytes(entries)), habackup.Select(
+                    include=('v',), symlinks=('v',), hardlinks=hardlinks), report, addon=False):
+                kind = {'hardlink': 'link'}.get(entry.kind, entry.kind)
+                name = entry.name[2:] or '.'
+                members.append({'name': name, 'type': kind, 'linkname': (entry.linkname or '').removeprefix('v/'),
+                                'data': entry.read_all(1 << 20) if entry.kind == 'file' else None})
+            with self.subTest(hardlinks=hardlinks):
+                _checked, kept = self.check(members)
+                again = (tarfile.LNKTYPE, 'a') if hardlinks else (tarfile.REGTYPE, '')
+                self.assertEqual({name: kept[name] for name in ('a', 'copy', 'again', 'in')},
+                                 {'a': (tarfile.REGTYPE, ''), 'copy': (tarfile.REGTYPE, ''), 'again': again,
+                                  'in': (tarfile.SYMTYPE, 'a')})
+                self.assertEqual(sorted(kept), ['.', 'a', 'again', 'copy', 'in'])
+                self.assertEqual({kind: names.first for kind, names in report.skips.items()},
+                                 {'device': ['v/dev'], 'fifo': ['v/pipe'], 'name': ['v/bad name'], 'hardlink': ['v/gone'],
+                                  'symlink': ['v/out', 'v/up']})
+
     def test_what_the_restore_refuses(self):
         for members, reason in (
                 ([{'name': 'l', 'type': 'link', 'linkname': 'later'}, {'name': 'later', 'data': b'x'}],

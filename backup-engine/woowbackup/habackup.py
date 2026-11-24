@@ -163,7 +163,8 @@ PROBLEMS = {
     'missing': ('not-found', 'HA 備份的說明檔有列出這一項，但檔案裡沒有它的資料（可能是 HA 備份時失敗，或檔案被刪減過），'
                              '所以不能匯入它。請在 HA 重新備份後再匯入。'),
     'duplicate': ('corrupt-archive', 'HA 備份檔裡有兩份同名的資料，分不出哪一份是真的，所以不會使用它。請在 HA 重新備份後再匯入。'),
-    'bad-slug': ('not-found', 'HA 備份的說明檔裡這個附加元件的代號無法辨識，找不到它的資料，所以不能匯入它。'),
+    'bad-slug': ('not-found', 'HA 備份的說明檔裡這個附加元件的代號無法辨識，找不到它的資料，所以不能匯入它。'
+                              '請在 HA 重新備份後再匯入。'),
     'encryption-unsupported': ('unsupported-format', 'HA 備份裡這一項使用這台還不支援的加密格式，所以不能匯入它。'
                                                      '請更新這台設備的備份元件後再試。'),
     'size-mismatch': ('corrupt-archive', hasecuretar.MEMBER_MESSAGE),

@@ -379,7 +379,8 @@ class DescribeTests(TempFiles):
     def test_version_1(self):
         """UP-24: the rules of Supervisor's validate.py; the add-ons' archives are the same as in version 2."""
         doc = {'slug': 'abcd1234', 'name': 'Old snapshot', 'date': '2021-03-01T01:02:03.000000+00:00', 'type': 'full',
-               'homeassistant': {'version': '2021.2.3', 'ssl': False, 'port': 8123}, 'protected': 'sha256$2$x', 'crypto': 'aes128',
+               'homeassistant': {'version': '2021.2.3', 'ssl': False, 'port': 8123}, 'protected': 'sha256$2$x',
+               'crypto': 'aes128',
                'addons': [{'slug': hx.ODOO, 'name': 'Odoo', 'version': '0.1', 'size': 1.5}],
                'folders': ['share', 'homeassistant', 'ssl', 'addons/local'], 'repositories': ['https://example.com/x']}
         empty = hx.tar_bytes([{'name': '.', 'type': 'dir'}], compress=True)
@@ -711,10 +712,11 @@ class MemberProblemTests(TempFiles):
                      'a bit at the end': flipped(len(odoo) - 20)}
             if kind == 'v2':
                 cases['padding'] = flipped(len(odoo) - 17)
-                cases['plaintext size smaller'] = odoo[:16] + struct.pack('!Q', struct.unpack('!Q', odoo[16:24])[0] - 16) + odoo[24:]
             if kind == 'v3':
                 cases['validated bytes'] = flipped(140)
-                cases['plaintext size smaller'] = odoo[:16] + struct.pack('!Q', struct.unpack('!Q', odoo[16:24])[0] - 16) + odoo[24:]
+            if kind != 'v1':
+                size = int.from_bytes(odoo[16:24], 'big')
+                cases['plaintext size smaller'] = odoo[:16] + (size - 16).to_bytes(8, 'big') + odoo[24:]
             for label, damaged in cases.items():
                 with self.subTest(kind=kind, case=label):
                     data = hx.two_addons(odoo=damaged, n8n=n8n, doc=doc)
@@ -1141,7 +1143,8 @@ class EntryTests(WalkCase):
         good = hx.tar_bytes([{'name': 'a', 'data': b'x' * 600}])
         end = 1024 + 512 + 1024  # PAX header + data, the ustar header, 600 bytes of data padded to 1024
         for label, tail in (('one zero block', bytes(512)), ('a byte', hx.END + b'\x01'),
-                            ('one zero block and more', bytes(512) + b'\x01' + bytes(511)), ('rubbish', hx.END + os.urandom(9999)),
+                            ('one zero block and more', bytes(512) + b'\x01' + bytes(511)),
+                            ('rubbish', hx.END + os.urandom(9999)),
                             ('many zeros', bytes(3 << 20)), ('a gzip stream', hx.END + gzip.compress(good)),
                             ('a tar out of step', hx.END + b'x' + good), ('half a header', hx.END + good[1024:1400]),
                             ('a word', hx.END + b'ustar' * 1000), ('a bad header', hx.END + b'x' + good[1025:1536])):
@@ -1174,7 +1177,8 @@ class EntryTests(WalkCase):
 
     def test_v7_and_mixed_headers(self):
         """IN-23: a tar from before POSIX (no magic)."""
-        raw = (hx.raw_member('data/', typeflag=b'\0', magic=hx.V7) + hx.raw_member('data/a', b'a' * 700, typeflag=b'\0', magic=hx.V7)
+        raw = (hx.raw_member('data/', typeflag=b'\0', magic=hx.V7)
+               + hx.raw_member('data/a', b'a' * 700, typeflag=b'\0', magic=hx.V7)
                + hx.raw_member('data/l', typeflag=b'2', linkname='a', magic=hx.V7)
                + hx.raw_member('data/h', typeflag=b'1', linkname='data/a', magic=hx.V7)
                + hx.raw_member('b', b'b', prefix='data', magic=hx.USTAR) + hx.raw_member('data/c', b'c', prefix='x', magic=hx.GNU)
@@ -1465,8 +1469,8 @@ class SkippedEntryTests(WalkCase):
     def test_addon_json_in_another_shape_stops_the_app(self):
         for kind in ('dir', 'symlink', 'hardlink', 'fifo', 'chr'):
             with self.subTest(kind=kind):
-                self.assertEqual(self.refused([{'name': 'x', 'data': b'x'}, {'name': 'addon.json', 'type': kind, 'linkname': 'x'}],
-                                              addon=True),
+                entries = [{'name': 'x', 'data': b'x'}, {'name': 'addon.json', 'type': kind, 'linkname': 'x'}]
+                self.assertEqual(self.refused(entries, addon=True),
                                  ('corrupt-archive', 'unexpected entry type for a metadata file'))
 
     def test_files_too_large_for_the_caller(self):
@@ -1596,7 +1600,8 @@ class HardLinkTests(WalkCase):
         """A second name must not hand out what is never read: a secret file, addon.json, what the caller excludes."""
         secret = b'fixture-admin-secret'
         for target, select, addon in (
-                ('data/options.json', habackup.Select(), True), ('data/odoo.conf', habackup.Select(include=('data/x', 'data/y')), True),
+                ('data/options.json', habackup.Select(), True),
+                ('data/odoo.conf', habackup.Select(include=('data/x', 'data/y')), True),
                 ('data/options.json/below', habackup.Select(), True), ('addon.json', habackup.Select(), True),
                 ('data/.ssh/id', habackup.Select(exclude=('data/.ssh',)), False),
                 ('data/.ssh/id', habackup.Select(include=('data',), exclude=('data/.ssh',), hardlinks=True), False)):
