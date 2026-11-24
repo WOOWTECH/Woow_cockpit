@@ -706,10 +706,14 @@ With the existing lab reader and scanner (`ha_import_b1_e2e.Secrets`, `scan_host
 This lane ran nothing on dev-d: lane emqx-product's chain10 held it, and that lane runs its attempts 35 and 36 (x86
 built-in import, rollback rounds with the page's own draft) on a tree that contains `dd3ae49`, after this lane's READY
 line (written at about 14:47). Those attempts are the packaging, restore, readback and rollback proof of the check on a
-device. State when this revision was written (15:0x, from team/emqx-product.md): the product lane merged `dd3ae49` into its
-branch as `d6f2c2f` (backup-engine tree `f6dfa9c4`, exactly this lane's trial-merge tree), ran its guarded unit set on it
-(259 EMQX + harness + lab candidate tests OK, 503 shared OK, 0 blocked) and started attempt-35 on dev-d at 14:52:38
-with that engine; attempt-36 follows. Their results and evidence are the product lane's (tests/e2e/lab/evidence/emqx-product-20261123/).
+device. Result (from team/emqx-product.md, 15:11, read here and not re-run): the product lane merged `dd3ae49` into its branch as
+`d6f2c2f` (backup-engine tree `f6dfa9c4`, exactly this lane's trial-merge tree; guarded unit set 259 + 503 OK, 0 blocked)
+and **attempt-35 PASSED 95/95** on dev-d with that engine (product evidence commit `7631adb`, 14:52-15:11): the real x86
+cold HA backup into the built-in target, check ok, the real conversion (HA's real export passed `check_export` right before
+`emqx ctl data import`), two deliberately failed first attempts rolled back to dev-d's own state, then the real restore
+(not rolled back), product readback, client probes after the restore and after a restart, and a leak scan with 0 hits.
+Attempt-36 (rollback rounds, cleanup) was queued at that time; its result is the product lane's
+(tests/e2e/lab/evidence/emqx-product-20261123/).
 
 ### Hand-over
 
