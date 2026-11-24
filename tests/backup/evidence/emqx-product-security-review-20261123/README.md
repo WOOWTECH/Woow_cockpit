@@ -341,7 +341,7 @@ user namespace (Podman 6.1.1 ignores that entry on import; EMQX's candidate then
 |---|---|
 | Can HA choose the owner or mode of a volume's top directory? | No. Every EMQX producer (`emqx-src`, `emqx-xfer`, `emqx-in`, `emqx-new`) writes the first member itself with fixed values; HA's entries are rewritten one by one (`hacommon.info`, no copied PAX records, no set-id bits), and a second `.` member is impossible (`_Sink.names`). New test `VolumeTopTests` (a hostile add-on: everything 07777, uid 4242): green on abff1a0 and on the merge; 6/6 mutations killed (`mutation-volume-top-iteration3.json`), two of them in `_apply_root` itself. |
 | Which other callers use it? | Headscale `hs-check`, n8n `n8nsrc`, Odoo/Omnigent `hapg`, Odoo `odoo-addons`: all write (or stream) an engine-made tar; the top entry comes from the engine or from this device's own converted volume. |
-| Is the decompression or parsing risky? | `tarfile.open(mode='r|')` reads a plain (never compressed) stream from at most 64 KiB; errors give "no entry" and nothing is applied. |
+| Is the decompression or parsing risky? | `tarfile.open(mode='r\|')` reads a plain (never compressed) stream from at most 64 KiB; errors give "no entry" and nothing is applied. |
 | Can the path be redirected? | The mountpoint is Podman's own answer for a volume this job created (`^woowbk-…`), must be absolute and one line; `chown` does not follow a link; the commands run as the owner inside their user namespace. Owners are never root (catalog rejects `root`). |
 | Behaviour on Podman 4.9.3 | `chown`/`chmod` to the values Podman already used: no change (the real runs below). On 6.1.1 the .54 runs of lane arm54-2 passed with it. |
 
