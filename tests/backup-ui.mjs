@@ -1880,6 +1880,51 @@ function llCheck(section = LL_SECTION, warnings = [LL_KEYS_WARNING]) {
   return { ha_check: { ha_backup_id: HA_LL, apps: [{ app_id: 'litellm', slug: LL.slug, name: LL.addon, arch: 'amd64', version: LL.version,
     target_version: LL.product, ok: true, blockers: [], warnings: [...warnings], litellm: structuredClone(section) }] } };
 }
+// The refusal of an entry that is not the single-database mode (ha_litellm.TARGET_SHAPE) and what the page says before.
+const LL_MODE_RULE = 'LiteLLM 的應用設定要用「單一資料庫」方式：在「應用設定」掃描時，還沒安裝的 LiteLLM 草稿已經選好；裝的是其他方式時，請先在那裡改選「單一資料庫」並安裝。';
+const LL_MODE_BLOCKER = '這台的 LiteLLM 應用設定不是 HA 匯入支援的樣子：資料庫要用「單一資料庫」方式備份（只有一個資料庫匯出項目，沒有資料卷或主機資料夾；冷備份與整個執行個體都不能匯入）。請到「應用設定」掃描，在 LiteLLM 的草稿選「單一資料庫」並安裝，再匯入一次。改變方式後，這個應用之前的備份無法以新設定還原。';
+function llBlockedCheck() {
+  const check = llCheck(null, []);
+  const [found] = check.ha_check.apps;
+  delete found.litellm;
+  Object.assign(found, { ok: false, blockers: [LL_MODE_BLOCKER], target_version: '' });
+  return check;
+}
+// The package LiteLLM's draft as catalog-suggest makes it (tests/backup/test_suggest.py LiteLLMPackageTests).
+const LL_MODE_NOTE = '草稿已選「單一資料庫」：從 Home Assistant 匯入這個應用只支援這個方式，資料庫執行個體只有這個應用的資料庫時也最適合。改選其他方式仍能備份與還原，但不能從 Home Assistant 匯入。';
+function litellmEntry(mode) {
+  const db = { id: 'main', container: 'litellm-postgres', unit: 'litellm-postgres.service', user: 'litellm', data_volume: 'litellm-pgdata' };
+  const cold = mode === 'cold';
+  return { schema: 1, id: 'litellm', name: 'litellm', description: '自動產生的草稿：2 個服務、PostgreSQL 17（單一資料庫）、2 個設定檔、5 個密鑰。請審查後再安裝。',
+    owner: 'appowner', adapter: 'quadlet-postgres',
+    quadlet: { files: ['litellm.network', 'litellm-pgdata.volume', 'litellm-postgres.container', 'litellm.container'] },
+    units: ['litellm-postgres.service', 'litellm.service'],
+    writer_units: cold ? ['litellm-postgres.service', 'litellm.service'] : ['litellm.service'],
+    postgres: cold ? [] : [mode === 'instance' ? { ...db, scope: 'instance' } : { ...db, database: 'litellm' }],
+    volumes: cold ? [{ name: 'litellm-pgdata', label: 'PostgreSQL 資料（冷備份）' }] : [],
+    secrets: ['postgres-password', 'database-url', 'master-key', 'ui-password', 'salt-key'].map(name => ({ name: `litellm-${name}` })),
+    config_files: [{ path: '.config/litellm/config.yaml', mode: '0644' }, { path: '.config/litellm/litellm.env', mode: '0600' }],
+    health: [{ type: 'http', url: 'http://127.0.0.1:4000/health/readiness', expect_status: 200, timeout_seconds: 600 }],
+    verify: [cold ? { id: 'db-main', type: 'postgres-digest', container: 'litellm-postgres', unit: 'litellm-postgres.service', user: 'litellm', label: 'PostgreSQL 資料表內容' }
+      : { id: 'db-main', type: 'postgres-digest', postgres: 'main', label: 'PostgreSQL 資料表內容' }] };
+}
+function litellmCatalog() {
+  const data = catalogData();
+  const image = 'docker.io/library/postgres:17.11-alpine3.23';
+  data.scans.appowner.apps = [{
+    id: 'litellm',
+    containers: [
+      { file: 'litellm-postgres.container', unit: 'litellm-postgres.service', container: 'litellm-postgres', image, state: 'active' },
+      { file: 'litellm.container', unit: 'litellm.service', container: 'litellm', image: 'localhost/woow-litellm:1.104.0-0.3.16', state: 'active' }],
+    databases: [{ unit: 'litellm-postgres.service', container: 'litellm-postgres', kind: 'postgres', image, major: 17, database: 'litellm',
+      user: 'litellm', guessed: false, data: { volume: 'litellm-pgdata' } }],
+    entry: litellmEntry('database'), valid: true, problem: null, field: null, variant: 'database',
+    variants: ['cold', 'instance', 'database'].map(id => ({ id, label: VARIANT_LABELS[id].replace('（預設）', ''), entry: litellmEntry(id),
+      valid: true, problem: null, field: null })),
+    installed: null, warnings: [], notes: [{ code: 'import-mode', level: 'info', message: LL_MODE_NOTE }], skipped: [],
+    hints: ['litellm.container 的健康檢查 /health/liveliness 只表示程式有回應；草稿改用 /health/readiness（會確認資料庫，也是這個套件啟動時等待的檢查）。'] }];
+  return data;
+}
 function llFixture({ check = llCheck() } = {}) {
   const data = fixture();
   data.status.apps.push(app('litellm', LL.app), app('hermes', 'Hermes 代理'), app('litellm-mcp-admin', 'LiteLLM MCP 管理'));
@@ -5677,6 +5722,9 @@ try {
       await page.locator(`[data-focus="ha-import-${HA_LL}"]`).click();
       assert.deepEqual(await page.locator('.wizard-card input[type="checkbox"]').evaluateAll(items => items.map(item => [item.id, item.checked, item.disabled])),
         [['ha-app-litellm', true, false]]);
+      // What the entry must look like is said before the check (only when LiteLLM is in the backup).
+      assert.deepEqual((await page.locator('aside[aria-labelledby="ha-side"] li').allTextContents()).slice(2, 4),
+        ['兩邊的版本必須相同：LiteLLM 本身都要同一個版本。', LL_MODE_RULE]);
       await page.locator('[data-focus="ha-apps-next"]').click();
       await page.locator('[data-ha-app="litellm"]').waitFor();
       const start = requestOf((await calls(page, 'ha-check-start')).at(-1));
@@ -5710,6 +5758,44 @@ try {
       assert.equal((await metadataOf(card))[0]['這台用 LiteLLM 金鑰的應用'], '沒有找到');
       assert.match(await page.locator('#ha-test-mode-help').textContent(),
         /正式搬家時，這台 LiteLLM 原本的虛擬金鑰會換成 HA 的，這台原本發出的金鑰都會失效（這台沒有找到其他使用 LiteLLM 金鑰的應用）。$/);
+    });
+
+  await check('從 HA 備份匯入, LiteLLM: an entry in another backup mode is refused by the check with what to choose and where',
+    llFixture({ check: llBlockedCheck() }), async page => {
+      await ready(page);
+      await page.locator('[data-nav="backups"]').click();
+      await page.locator(`[data-focus="open-${HA_LL}"]`).click();
+      await page.locator(`[data-focus="ha-import-${HA_LL}"]`).click();
+      await page.locator('[data-focus="ha-apps-next"]').click();
+      const card = page.locator('[data-ha-app="litellm"]');
+      await card.waitFor();
+      assert.equal(await card.locator('.chip').first().textContent(), '無法匯入');
+      assert.deepEqual(await card.locator('.check-fail .check-message').allTextContents(), [LL_MODE_BLOCKER]);
+      assert.equal(await page.locator('[data-focus="ha-convert"]').isDisabled(), true);
+      assert.equal((await calls(page, 'ha-convert-start')).length, 0);
+    });
+
+  await check('應用設定, LiteLLM: the draft has the single-database mode chosen (what the HA import fills) and says why; it installs as it is',
+    fixture({ catalogData: litellmCatalog() }), async page => {
+      await ready(page);
+      await page.locator('[data-nav="catalog"]').click();
+      await page.locator('[data-focus="catalog-scan"]').click();
+      await page.locator('[data-focus="draft-litellm"]').click();
+      await page.locator('#catalog-feedback').getByText('檢查通過：可以安裝這份應用設定。').waitFor();
+      assert.deepEqual(requestOf((await calls(page, 'catalog-install'))[0]), { entry: litellmEntry('database') });
+      assert.deepEqual(await page.locator('[data-focus^="variant-"]').evaluateAll(items => items.map(item => [item.dataset.focus, item.checked])),
+        [['variant-cold', false], ['variant-instance', false], ['variant-database', true]]);
+      const choices = await page.locator('section[aria-labelledby="draft-variants"] .choice strong').allTextContents();
+      assert.deepEqual(choices, ['冷備份', '整個執行個體', '單一資料庫（建議）']);
+      assert(!(await page.locator('section[aria-labelledby="draft-variants"]').textContent()).includes('（預設）'), 'cold is not the default here');
+      assert.deepEqual(await page.locator('section[aria-labelledby="draft-notes"] .check-message').allTextContents(), [LL_MODE_NOTE]);
+      assert.match((await metadataOf(page.locator('#catalog-review')))[0]['PostgreSQL'], /^單一資料庫 litellm（litellm-postgres）：以 pg_dump 匯出/);
+      await page.locator('[data-focus="catalog-install"]').click();
+      await page.locator('#confirm-ack').check();
+      await page.locator('#confirm-ok').click();
+      await page.locator('#confirm-dialog').waitFor({ state: 'hidden' });
+      const install = (await calls(page, 'catalog-install')).map(requestOf).filter(request => request.confirm);
+      assert.deepEqual(install, [{ entry: litellmEntry('database'), confirm: true, expected_sha256: null }]);
     });
 
   // ------------------------------------------------------------------ 從 HA 備份匯入, batch 1 (2026-11-19, CONTRACT §7, §9)

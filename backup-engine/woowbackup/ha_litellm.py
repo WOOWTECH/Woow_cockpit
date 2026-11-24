@@ -114,6 +114,11 @@ HA_SESSION_OPTIONS = ('-c search_path=pg_catalog -c DateStyle=ISO,MDY -c Interva
 HA_SUPERUSER_OPTIONS = HA_SESSION_OPTIONS + ' -c session_preload_libraries= -c event_triggers=off'
 SCHEMA_CHANGED = ('這台 LiteLLM 的資料庫結構在轉換期間改變了（可能正在升級或重新啟動），沒有匯入任何資料；'
                   '請等 LiteLLM 正常執行後再匯入一次。')
+# The catalog entry the import fills: exactly one single-database `postgres` item, nothing else (suggest.PREFERRED_MODES
+# makes it the default of a new draft; an entry installed as cold or instance mode must be changed on the page first).
+TARGET_SHAPE = ('這台的 LiteLLM 應用設定不是 HA 匯入支援的樣子：資料庫要用「單一資料庫」方式備份（只有一個資料庫匯出項目，沒有資料卷或'
+                '主機資料夾；冷備份與整個執行個體都不能匯入）。請到「應用設定」掃描，在 LiteLLM 的草稿選「單一資料庫」並安裝，'
+                '再匯入一次。改變方式後，這個應用之前的備份無法以新設定還原。')
 SALT_MISMATCH = ('HA 備份裡的加密金鑰（salt_key）和 HA 資料庫裡記錄的金鑰不一致，搬過來後儲存的供應商憑證都無法解密，'
                  '所以不能匯入；請在 HA 重新做一份 LiteLLM 的備份。')
 
@@ -198,10 +203,10 @@ class Target:
     def __init__(self, work, app):
         quadlets = work.quadlets(app)
         home = work.runner(app).home
-        problems = []
-        if len(app.postgres) != 1 or app.volumes or app.data_dirs:
-            problems.append('應用設定不是一個資料庫匯出項目（沒有資料卷或主機資料夾）')
-        pg = app.postgres[0] if len(app.postgres) == 1 else {}
+        if (len(app.postgres) != 1 or app.postgres[0].get('scope', 'database') != 'database' or app.volumes
+                or app.data_dirs):
+            raise BackupError('incompatible', TARGET_SHAPE, app=app.id)
+        pg = app.postgres[0]
         self.pg_id = pg.get('id')
         self.db_container = pg.get('container')
         self.database = pg.get('database')
@@ -209,10 +214,8 @@ class Target:
         db_file = hacommon.container_file(quadlets, self.db_container) if self.db_container else None
         app_file = hacommon.container_file(quadlets, APP_CONTAINER)
         if db_file is None or app_file is None:
-            problems.append('找不到 litellm-postgres 或 litellm 的 Quadlet 檔')
-        if problems:
-            raise BackupError('incompatible', f'這台的 LiteLLM 應用設定不是 HA 匯入支援的樣子：{"；".join(problems)}。',
-                              app=app.id)
+            raise BackupError('incompatible', '這台的 LiteLLM 應用設定不是 HA 匯入支援的樣子：找不到 litellm-postgres 或 litellm '
+                                              '的 Quadlet 檔。', app=app.id)
         text = quadlets[db_file]
         self.db_image = tempctr.quadlet_image(text)
         self.db_env = hacommon.environment(quadlets, db_file, ha_odoo.DB_ENV_KEYS)

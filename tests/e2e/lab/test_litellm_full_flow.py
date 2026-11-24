@@ -1,14 +1,18 @@
 """Offline tests of the LiteLLM product-flow driver (litellm_full_flow.py): the dev-d lock rule, the tree rule, the
-embedded device programs, what the lab derivation of the app image changes, and that no secret travels in argv.
-Nothing here touches a device, Podman or a secret file."""
+embedded device programs, what the lab derivation of the app image changes, that no secret travels in argv, that the
+catalog entry is the engine's own draft (asked here, not copied), and the container and digest comparisons. Nothing here
+touches a device, Podman or a secret file."""
+import copy
 import importlib.util
 import os
+import sys
 import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
 
 HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE.parents[2]))        # tests.backup (its __init__ puts this tree's engine first)
 
 
 def load():
@@ -129,12 +133,102 @@ class DriverRules(unittest.TestCase):
         self.assertNotIn('[Install]', flow.STUB_QUADLET)  # never started: no unit is enabled
         self.assertFalse(any(word in flow.STUB_QUADLET.upper() for word in ('KEY=', 'TOKEN', 'PASSWORD', 'SECRET')))
 
+    def test_the_containers_are_compared_both_ways(self):
+        base = ['hermes-agent', 'omnigent-server', 'woow-emqx']
+        self.assertEqual(flow.container_changes(base, base), ([], []))
+        self.assertEqual(flow.container_changes(base, base + ['litellm']), ([], ['litellm']), 'a new one is seen')
+        self.assertEqual(flow.container_changes(base, base[1:]), (['hermes-agent'], []), 'one that vanished is seen')
+        # dev-d's headscale in one snapshot or the other (attempts 07, 08, negative-01): a difference ...
+        self.assertEqual(flow.container_changes(base + ['headscale'], base), (['headscale'], []))
+        self.assertEqual(flow.container_changes(base, base + ['headscale']), ([], ['headscale']))
+        # ... left out only when its unit's own restart counter grew during the run
+        for before, after, apart in ((1363, 1500, {'headscale'}), (0, 0, set()), (5, 4, set()), (None, 3, set()),
+                                     (3, None, set())):
+            with self.subTest(before=before, after=after):
+                self.assertEqual(flow.restarting({'headscale': before}, {'headscale': after}), apart)
+        self.assertEqual(flow.container_changes(base, base + ['headscale'], {'headscale'}), ([], []))
+        self.assertEqual(flow.restarting({}, {}), set())
+        self.assertEqual(flow.RESTART_UNITS, {'headscale': 'headscale.service'})
+
+    def test_the_restart_counter_is_only_read(self):
+        calls = []
+
+        def owner(*argv, **_kwargs):
+            calls.append(argv)
+            return mock.Mock(stdout=b'1363\n', returncode=0)
+
+        with mock.patch.object(flow.drv, 'owner', side_effect=owner):
+            self.assertEqual(flow.restart_counts(), {'headscale': 1363})
+        self.assertEqual(calls, [('systemctl', '--user', 'show', '-p', 'NRestarts', '--value', 'headscale.service')])
+        with mock.patch.object(flow.drv, 'owner', return_value=mock.Mock(stdout=b'', returncode=1)):
+            self.assertEqual(flow.restart_counts(), {'headscale': None})
+
+    def test_the_digest_result_is_read_from_the_jobs_own_shape(self):
+        # flows.digest_entry / verification_entry: one entry per app with its checks
+        result = {'verification': [{'app': 'other', 'checks': [{'id': 'x', 'match': True}]},
+                                   {'app': 'litellm', 'match': None, 'before': {}, 'after': {},
+                                    'checks': [{'id': 'db-main', 'match': None, 'note': 'n'}]}]}
+        self.assertEqual(flow.digest_checks(result), {'db-main': None})
+        self.assertEqual(flow.digest_checks({'verification': []}), {})
+        self.assertEqual(flow.digest_checks({}), {})
+
     def test_optional_phases_stop_at_the_hold_budget(self):
         run = flow.Run(mock.Mock(), mock.Mock())
         run.lock_started = flow.time.monotonic()
         self.assertTrue(run.optional('autorb'))
         run.lock_started = flow.time.monotonic() - flow.OPTIONAL_BUDGET - 1
         self.assertFalse(run.optional('restart'))
+
+
+class TheProductsOwnDraft(unittest.TestCase):
+    """The run installs what the engine proposes, unedited: the expectations are the engine's answer for the package's
+    Quadlet files (tests.backup.test_suggest.LiteLLMPackageTests), for a fresh device and for one with the production
+    shape installed."""
+
+    def setUp(self):
+        from tests.backup import test_suggest
+        self.package = test_suggest.LiteLLMPackageTests('test_the_import_accepts_the_new_draft_as_it_is')
+        self.package.setUp()
+        self.addCleanup(self.package.doCleanups)
+        self.fresh = self.package.draft()
+
+    def test_the_fresh_draft_is_the_expected_entry(self):
+        self.assertEqual(flow.fresh_draft_problems(self.fresh), [])
+        self.assertEqual(self.package.import_target(self.fresh['entry']).pg_id, 'main', 'and the import takes it')
+
+    def test_what_attempt_10_edited_would_be_seen(self):
+        cold = next(v for v in self.fresh['variants'] if v['id'] == 'cold')
+        app = {**self.fresh, 'variant': 'cold', 'entry': cold['entry']}
+        self.assertEqual(flow.fresh_draft_problems(app), ['postgres', 'variant', 'verify', 'volumes'])
+        for key, value in (('verify', []), ('config_files', flow.DRAFT_CONFIGS[:1]),
+                           ('health', [{**flow.DRAFT_HEALTH[0], 'url': 'http://127.0.0.1:4000/health/liveliness'}]),
+                           ('health', [{**flow.DRAFT_HEALTH[0], 'timeout_seconds': 300}])):
+            with self.subTest(key=key, value=value):
+                app = copy.deepcopy(self.fresh)
+                app['entry'][key] = value
+                self.assertEqual(flow.fresh_draft_problems(app), [key])
+        self.assertIn('valid', flow.fresh_draft_problems({**self.fresh, 'valid': False}))
+        self.assertIn('installed', flow.fresh_draft_problems({**self.fresh, 'installed': {'same': True}}))
+
+    def test_the_production_shape_gets_exactly_two_changes_and_then_none(self):
+        old = flow.production_like(self.fresh['entry'])
+        self.assertEqual((old['verify'], [h['timeout_seconds'] for h in old['health']]), ([], [300]))
+        self.assertEqual(self.fresh['entry']['verify'], [flow.DIGEST], 'a copy was changed')
+        app = self.package.draft(installed=[old])
+        self.assertEqual(flow.installed_draft_problems(app), [])
+        self.assertEqual((app['entry']['verify'], app['entry']['health']), ([flow.DIGEST], flow.DRAFT_HEALTH))
+        self.assertEqual(flow.installed_draft_problems(self.fresh), ['changes', 'drift', 'health-timeout note',
+                                                                     'import-mode note'])
+        self.assertTrue(self.package.draft(installed=[app['entry']])['installed']['same'])
+        self.assertEqual(self.package.import_target(app['entry']).pg_id, 'main')
+
+    def test_the_run_never_edits_the_draft(self):
+        # The driver hands catalog-install the answer itself: no assignment to the proposed entry's keys is left.
+        source = (HERE / 'litellm_full_flow.py').read_text(encoding='utf-8')
+        setup = source[source.index('    def setup(self):'):source.index('    def draft(self, name):')]
+        self.assertIn("self.install_entry(app['entry'], 'the proposed draft, unedited')", setup)
+        for edit in ("entry['verify']", "entry['health']", "entry['config_files']", "entry['postgres']"):
+            self.assertNotIn(f'{edit} =', setup)
 
 
 if __name__ == '__main__':

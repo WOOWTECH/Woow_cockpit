@@ -73,8 +73,13 @@ class CandidateFlowTests(OmnigentCase):
         self.assertEqual(self.storage.list_backups(), [])
 
     def test_invalid_revision_rejected_before_capture(self):
-        with self.assertRaises(BackupError):
-            omni.capture_consistent_target_schema(mock.Mock(), self.catalog['omnigent'], None, None, ['bad;sql'])
+        for revision in (['bad;sql'], ['d0a1f879a01d', "x'"], [5], [], None):
+            work = mock.Mock()
+            with self.subTest(revision=revision), self.assertRaises(BackupError) as caught:
+                omni.capture_consistent_target_schema(work, self.catalog['omnigent'], None, None, revision)
+            self.assertEqual((caught.exception.code, caught.exception.message),
+                             ('incompatible', '目標 Omnigent 的結構版本不明。'))
+            self.assertEqual(work.mock_calls, [])
 
     def test_candidate_requires_ddl_quiescence(self):
         with self.assertRaises(BackupError) as caught:
