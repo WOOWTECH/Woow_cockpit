@@ -61,6 +61,7 @@ class FakeOwner:
         self.uid = None
         self.calls = []
         self.psql = {}
+        self.container_files = hafakes.ContainerFiles()   # what Cluster.write_file's writes received
 
     def _psql(self, container):
         if container not in self.psql:
@@ -92,7 +93,10 @@ class FakeOwner:
             container, command = args[i], list(args[i + 1:])
             if command[0] == 'psql':
                 return self._psql(container)(command, data)
-            return self.world.exec(container, command, data, stdout)
+            answer = self.container_files.read_back(container, command)
+            if answer is not None:
+                return answer
+            return self.container_files.wrote(container, command, data, self.world.exec(container, command, data, stdout))
         if verb == 'image' and args[1] == 'exists':
             return Result(0 if args[2] in self.world.images else 1, b'', b'')
         if verb == 'container' and args[1] == 'inspect':
