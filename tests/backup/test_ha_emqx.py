@@ -118,6 +118,9 @@ class World(fk.World):
         self.ha_hashing = '[{true,sha256,suffix,none,none,none}]'
         self.live_hashing = '[{true,sha256,suffix,none,none,none}]'
         self.live_users = 'WOOWUSERS:1:d29vdw==:ENDok\n'
+        # SR-5 re-review (iteration 7): HA's other `plain` built-in password databases and rows in clear text
+        # (ha_emqx.PLAIN_EXPR, HA's broker only): none.
+        self.ha_plain = 'WOOWPLAIN:0:0::ENDok\n'
         self.device_reads = []
         self.ha_strict = '{allow,ignore}'
         self.imported_into = False
@@ -204,6 +207,10 @@ class World(fk.World):
             if role == 'emqx-ha':
                 return self.ha_authn.encode()
             return (self.ha_authn if self.imported_into and self.ha_authn != '[]' else self.live_authn).encode()
+        if expression == ha_emqx.PLAIN_EXPR:
+            if role != 'emqx-ha':
+                self.device_reads.append((role, 'plain'))
+            return self.ha_plain.encode()
         if expression in (ha_emqx.HASH_EXPR, ha_emqx.USERS_EXPR):
             if role != 'emqx-ha':
                 self.device_reads.append((role, 'hash' if expression == ha_emqx.HASH_EXPR else 'users'))

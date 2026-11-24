@@ -1,0 +1,138 @@
+{
+ "tree": "/tmp/emqx-secreview7-suite-20261124",
+ "modules": [
+  "tests.backup.test_ha_emqx_plain_review",
+  "tests.backup.test_ha_emqx_sr5",
+  "tests.backup.test_ha_emqx"
+ ],
+ "mutations": [
+  {
+   "name": "elsewhere ignored",
+   "pattern_found": 1,
+   "exit": 1,
+   "tests": 55,
+   "killed": true,
+   "tail": "FAILED (failures=4)"
+  },
+  {
+   "name": "clear rows ignored",
+   "pattern_found": 1,
+   "exit": 1,
+   "tests": 55,
+   "killed": true,
+   "tail": "FAILED (failures=5)"
+  },
+  {
+   "name": "HA not asked",
+   "pattern_found": 1,
+   "exit": 1,
+   "tests": 55,
+   "killed": true,
+   "tail": "FAILED (failures=12)"
+  },
+  {
+   "name": "conversion refusal after the export",
+   "pattern_found": 1,
+   "exit": 1,
+   "tests": 55,
+   "killed": true,
+   "tail": "FAILED (failures=3)"
+  },
+  {
+   "name": "lenient answer",
+   "pattern_found": 1,
+   "exit": 1,
+   "tests": 55,
+   "killed": true,
+   "tail": "FAILED (failures=2)"
+  },
+  {
+   "name": "names count unchecked",
+   "pattern_found": 1,
+   "exit": 1,
+   "tests": 55,
+   "killed": true,
+   "tail": "FAILED (failures=3)"
+  },
+  {
+   "name": "names unsanitized",
+   "pattern_found": 1,
+   "exit": 1,
+   "tests": 55,
+   "killed": true,
+   "tail": "FAILED (failures=1)"
+  },
+  {
+   "name": "no count beyond ten",
+   "pattern_found": 1,
+   "exit": 1,
+   "tests": 55,
+   "killed": true,
+   "tail": "FAILED (failures=1)"
+  },
+  {
+   "name": "global text not first",
+   "pattern_found": 1,
+   "exit": 1,
+   "tests": 55,
+   "killed": true,
+   "tail": "FAILED (failures=8)"
+  },
+  {
+   "name": "bad shape accepted",
+   "pattern_found": 1,
+   "exit": 1,
+   "tests": 55,
+   "killed": true,
+   "tail": "FAILED (failures=1)"
+  },
+  {
+   "name": "listeners not read",
+   "pattern_found": 1,
+   "exit": 1,
+   "tests": 55,
+   "killed": true,
+   "tail": "FAILED (failures=1)"
+  },
+  {
+   "name": "gateways not read",
+   "pattern_found": 1,
+   "exit": 1,
+   "tests": 55,
+   "killed": true,
+   "tail": "FAILED (failures=1)"
+  },
+  {
+   "name": "gateway listeners not read",
+   "pattern_found": 1,
+   "exit": 1,
+   "tests": 55,
+   "killed": true,
+   "tail": "FAILED (failures=1)"
+  },
+  {
+   "name": "hash printed",
+   "pattern_found": 1,
+   "exit": 1,
+   "tests": 55,
+   "killed": true,
+   "tail": "FAILED (failures=1)"
+  },
+  {
+   "name": "salt not required empty",
+   "pattern_found": 1,
+   "exit": 1,
+   "tests": 55,
+   "killed": true,
+   "tail": "FAILED (failures=1)"
+  }
+ ],
+ "unmutated": {
+  "exit": 0,
+  "tests": 55,
+  "tail": "OK"
+ },
+ "killed": 15,
+ "total": 15,
+ "elapsed_s": 81.2
+}
