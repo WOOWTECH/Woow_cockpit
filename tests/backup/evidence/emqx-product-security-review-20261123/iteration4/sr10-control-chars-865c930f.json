@@ -1,0 +1,61 @@
+{
+ "test": "SR-10 control/bidi/line-separator in plugin name, /share path and skipped-symlink name",
+ "engine_dir": "/tmp/claude-1000/-home-woowtechopenclaw/a15a4de1-3ce4-4692-84a2-243bd175349a/scratchpad/emqx-secreview4/tree-865c930f/backup-engine",
+ "label": "product-865c930f",
+ "controls_tested": [
+  "0x202e",
+  "0x2066",
+  "0x2069",
+  "0x200e",
+  "0x61c",
+  "0x2028",
+  "0x2029",
+  "0x85",
+  "0x9b",
+  "0xa",
+  "0xd",
+  "0x0",
+  "0x1b"
+ ],
+ "plugin_warning_present": true,
+ "plugin_warning_leaks_control": [
+  "0x202e",
+  "0x2066",
+  "0x2069",
+  "0x200e",
+  "0x61c",
+  "0x2028",
+  "0x2029",
+  "0x85",
+  "0x9b",
+  "0xa",
+  "0xd",
+  "0x0",
+  "0x1b"
+ ],
+ "share_note_present": true,
+ "share_note_leaks_control": [
+  "0x202e",
+  "0x2066",
+  "0x2069",
+  "0x200e",
+  "0x61c"
+ ],
+ "symlink_note_raw_has_separator": true,
+ "symlink_logline_leaks_control": [
+  "0x2028",
+  "0x2029",
+  "0x85",
+  "0x9b",
+  "0x202e",
+  "0x2066",
+  "0x2069",
+  "0x200e",
+  "0x61c"
+ ],
+ "symlink_logline_is_single_line": false,
+ "naive_plugin_would_leak": true,
+ "naive_logline_would_forge": true,
+ "forged": true,
+ "ok": false
+}

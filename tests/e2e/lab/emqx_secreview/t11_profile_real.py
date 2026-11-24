@@ -114,7 +114,11 @@ def main(codebase, arch, variant):
                 result['candidate_rules'] = len(((cfg.get('rule_engine') or {}).get('rules') or {}))
                 inside = tmp.exec('emqx-new', ['printenv', 'EMQX_NODE__COOKIE'], check=False, timeout=60)
                 result['candidate_has_env_file_cookie'] = (inside.stdout or b'').strip() == cookie.encode()
-                result['candidate_env_file_flag'] = True
+                # podman's own record of the candidate's command line (was a constant until iteration 5)
+                created = json.loads(L.lab('container', 'inspect', '--format', '{{json .Config.CreateCommand}}',
+                                           tmp.name('emqx-new')).stdout)
+                result['candidate_env_file_flag'] = '--env-file' in created
+                result['candidate_cookie_on_command_line'] = any(cookie in arg for arg in created)
             except L.BackupError as error:
                 result['conversion'] = 'REFUSED: ' + error.message
                 result['refused_with_owner_text'] = ha_emqx.ACL_NEEDS_BUILTIN in error.message

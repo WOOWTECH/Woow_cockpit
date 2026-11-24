@@ -1,0 +1,10 @@
+{
+ "M1 table-allowlist off": "KILLED",
+ "M2 root-check off": "KILLED",
+ "M3 wrapped-guard off": "KILLED",
+ "M4 unexpected-member off": "KILLED",
+ "M5 filetype-check off": "KILLED",
+ "M6 depth-balance off": "KILLED",
+ "M7 wiring removed": "KILLED",
+ "baseline (unmutated)": "GREEN"
+}

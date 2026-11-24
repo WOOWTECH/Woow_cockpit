@@ -1,0 +1,177 @@
+{
+ "attempt": "t14-fix",
+ "backup_engine_tree": "345d18273d27a9c3fc7b1dda3c4a13397b092074",
+ "code": "fix/emqx-export-members-20261124",
+ "command": "python3 -I t14_export_check.py fix",
+ "commercial_acceptance": "not-complete",
+ "credentials": "generated per run; HA key (T11) read in-process by the b1 Secrets reader, never printed",
+ "date": "2026-11-24",
+ "elapsed_s": 60.1,
+ "exit_code": 0,
+ "harness_commit": "691f0d4ef8b4cecd4d5dda1a8f9cd5b3cb70c5ae",
+ "iteration": 5,
+ "lane": "emqx-secreview (SR-OWNER-1942)",
+ "result": {
+  "as_expected": 29,
+  "cases": {
+   "cluster-hocon-too-large": {
+    "got": "refuse",
+    "message": "EMQX 不能搬過來：HA 匯出的資料含有不屬於這次匯入的內容（檔案 emqx-export-2026-11-24-00-00-00.000/cluster.hocon），已在匯入前停止，這台沒有任何改變；請在 HA 停止 EMQX 附加元件後重新備份再匯入。",
+    "want": "refuse"
+   },
+   "cluster-hocon-twice": {
+    "got": "refuse",
+    "message": "EMQX 不能搬過來：HA 匯出的資料含有不屬於這次匯入的內容（檔案 emqx-export-2026-11-24-00-00-00.000/cluster.hocon），已在匯入前停止，這台沒有任何改變；請在 HA 停止 EMQX 附加元件後重新備份再匯入。",
+    "want": "refuse"
+   },
+   "document-in-braces": {
+    "got": "refuse",
+    "message": "EMQX 不能搬過來：HA 匯出的資料含有不屬於這次匯入的內容（設定 sysmon），已在匯入前停止，這台沒有任何改變；請在 HA 停止 EMQX 附加元件後重新備份再匯入。",
+    "want": "refuse"
+   },
+   "empty-file": {
+    "got": "refuse",
+    "message": "EMQX 不能搬過來：HA 匯出的資料在匯入前無法檢查，已停止，這台沒有任何改變。",
+    "want": "refuse"
+   },
+   "folder-entry": {
+    "got": "refuse",
+    "message": "EMQX 不能搬過來：HA 匯出的資料含有不屬於這次匯入的內容（檔案 emqx-export-2026-11-24-00-00-00.000/mnesia），已在匯入前停止，這台沒有任何改變；請在 HA 停止 EMQX 附加元件後重新備份再匯入。",
+    "want": "refuse"
+   },
+   "healthy": {
+    "got": "pass",
+    "message": "",
+    "want": "pass"
+   },
+   "healthy-all-tables": {
+    "got": "pass",
+    "message": "",
+    "want": "pass"
+   },
+   "healthy-empty-cluster-hocon": {
+    "got": "pass",
+    "message": "",
+    "want": "pass"
+   },
+   "healthy-no-cluster-hocon": {
+    "got": "pass",
+    "message": "",
+    "want": "pass"
+   },
+   "include-directive": {
+    "got": "refuse",
+    "message": "EMQX 不能搬過來：HA 匯出的資料在匯入前無法檢查，已停止，這台沒有任何改變。",
+    "want": "refuse"
+   },
+   "not-gzip": {
+    "got": "refuse",
+    "message": "EMQX 不能搬過來：HA 匯出的資料在匯入前無法檢查，已停止，這台沒有任何改變。",
+    "want": "refuse"
+   },
+   "not-hocon": {
+    "got": "refuse",
+    "message": "EMQX 不能搬過來：HA 匯出的資料在匯入前無法檢查，已停止，這台沒有任何改變。",
+    "want": "refuse"
+   },
+   "not-utf8": {
+    "got": "refuse",
+    "message": "EMQX 不能搬過來：HA 匯出的資料在匯入前無法檢查，已停止，這台沒有任何改變。",
+    "want": "refuse"
+   },
+   "other-file": {
+    "got": "refuse",
+    "message": "EMQX 不能搬過來：HA 匯出的資料含有不屬於這次匯入的內容（檔案 emqx-export-2026-11-24-00-00-00.000/authz/acl.conf），已在匯入前停止，這台沒有任何改變；請在 HA 停止 EMQX 附加元件後重新備份再匯入。",
+    "want": "refuse"
+   },
+   "other-table": {
+    "got": "refuse",
+    "message": "EMQX 不能搬過來：HA 匯出的資料含有不屬於這次匯入的內容（檔案 emqx-export-2026-11-24-00-00-00.000/mnesia/other_table），已在匯入前停止，這台沒有任何改變；請在 HA 停止 EMQX 附加元件後重新備份再匯入。",
+    "want": "refuse"
+   },
+   "other-table-second-gzip-member": {
+    "got": "refuse",
+    "message": "EMQX 不能搬過來：HA 匯出的資料在匯入前無法檢查，已停止，這台沒有任何改變。",
+    "want": "refuse"
+   },
+   "other-top-folder": {
+    "got": "refuse",
+    "message": "EMQX 不能搬過來：HA 匯出的資料含有不屬於這次匯入的內容（檔案 other/META.hocon），已在匯入前停止，這台沒有任何改變；請在 HA 停止 EMQX 附加元件後重新備份再匯入。",
+    "want": "refuse"
+   },
+   "parent-path": {
+    "got": "refuse",
+    "message": "EMQX 不能搬過來：HA 匯出的資料含有不屬於這次匯入的內容（檔案 emqx-export-2026-11-24-00-00-00.000/../x），已在匯入前停止，這台沒有任何改變；請在 HA 停止 EMQX 附加元件後重新備份再匯入。",
+    "want": "refuse"
+   },
+   "root-after-quote-in-comment": {
+    "got": "refuse",
+    "message": "EMQX 不能搬過來：HA 匯出的資料含有不屬於這次匯入的內容（設定 sysmon），已在匯入前停止，這台沒有任何改變；請在 HA 停止 EMQX 附加元件後重新備份再匯入。",
+    "want": "refuse"
+   },
+   "root-after-triple-quote-in-comment": {
+    "got": "refuse",
+    "message": "EMQX 不能搬過來：HA 匯出的資料含有不屬於這次匯入的內容（設定 sysmon），已在匯入前停止，這台沒有任何改變；請在 HA 停止 EMQX 附加元件後重新備份再匯入。",
+    "want": "refuse"
+   },
+   "root-colon": {
+    "got": "refuse",
+    "message": "EMQX 不能搬過來：HA 匯出的資料含有不屬於這次匯入的內容（設定 sysmon），已在匯入前停止，這台沒有任何改變；請在 HA 停止 EMQX 附加元件後重新備份再匯入。",
+    "want": "refuse"
+   },
+   "root-dotted": {
+    "got": "refuse",
+    "message": "EMQX 不能搬過來：HA 匯出的資料含有不屬於這次匯入的內容（設定 sysmon），已在匯入前停止，這台沒有任何改變；請在 HA 停止 EMQX 附加元件後重新備份再匯入。",
+    "want": "refuse"
+   },
+   "root-nbsp": {
+    "got": "refuse",
+    "message": "EMQX 不能搬過來：HA 匯出的資料含有不屬於這次匯入的內容（設定 sysmon），已在匯入前停止，這台沒有任何改變；請在 HA 停止 EMQX 附加元件後重新備份再匯入。",
+    "want": "refuse"
+   },
+   "root-plain": {
+    "got": "refuse",
+    "message": "EMQX 不能搬過來：HA 匯出的資料含有不屬於這次匯入的內容（設定 sysmon），已在匯入前停止，這台沒有任何改變；請在 HA 停止 EMQX 附加元件後重新備份再匯入。",
+    "want": "refuse"
+   },
+   "root-quoted": {
+    "got": "refuse",
+    "message": "EMQX 不能搬過來：HA 匯出的資料含有不屬於這次匯入的內容（設定 sysmon），已在匯入前停止，這台沒有任何改變；請在 HA 停止 EMQX 附加元件後重新備份再匯入。",
+    "want": "refuse"
+   },
+   "root-same-line": {
+    "got": "refuse",
+    "message": "EMQX 不能搬過來：HA 匯出的資料含有不屬於這次匯入的內容（設定 sysmon），已在匯入前停止，這台沒有任何改變；請在 HA 停止 EMQX 附加元件後重新備份再匯入。",
+    "want": "refuse"
+   },
+   "symlink-cluster-hocon": {
+    "got": "refuse",
+    "message": "EMQX 不能搬過來：HA 匯出的資料含有不屬於這次匯入的內容（檔案 emqx-export-2026-11-24-00-00-00.000/cluster.hocon），已在匯入前停止，這台沒有任何改變；請在 HA 停止 EMQX 附加元件後重新備份再匯入。",
+    "want": "refuse"
+   },
+   "symlink-table": {
+    "got": "refuse",
+    "message": "EMQX 不能搬過來：HA 匯出的資料含有不屬於這次匯入的內容（檔案 emqx-export-2026-11-24-00-00-00.000/mnesia/emqx_acl），已在匯入前停止，這台沒有任何改變；請在 HA 停止 EMQX 附加元件後重新備份再匯入。",
+    "want": "refuse"
+   },
+   "truncated": {
+    "got": "refuse",
+    "message": "EMQX 不能搬過來：HA 匯出的資料在匯入前無法檢查，已停止，這台沒有任何改變。",
+    "want": "refuse"
+   }
+  },
+  "check": "check_export",
+  "codebase": "fix",
+  "elapsed_s": 59.6,
+  "image": "docker.io/emqx/emqx:5.8.9",
+  "network": "none",
+  "store": "labpodman (separate --root)",
+  "test": "T14 check_export on EMQX 5.8.9's own erl_tar/hocon (no broker)",
+  "total": 29
+ },
+ "source_commit": "3ad74cacae3cc77ddb281eb166488ff5af0d15fb",
+ "started": "2026-11-24T13:46:09+0800",
+ "status_lines": [],
+ "stdout_sha256": "a9d69c6e5ec7b60aeb4934506ad75ca64cd1da3ffc88778bd55029872da2880b",
+ "store": "labpodman (separate --root, lab only), every podman run --network none"
+}

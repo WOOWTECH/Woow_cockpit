@@ -170,5 +170,22 @@ class VolumeTopTests(base.EmqxCase):
                 self.assertIn(words[words.index('chmod') + 1], modes)
 
 
+class TarRootTests(unittest.TestCase):
+    """Verifier of iteration 3: a mutation that let `tar_root` take any kind of first entry named '.' survived."""
+
+    def test_only_a_folder_named_dot_is_the_top_entry(self):
+        for kind in (tarfile.DIRTYPE, tarfile.REGTYPE, tarfile.SYMTYPE, tarfile.LNKTYPE, tarfile.FIFOTYPE, tarfile.CHRTYPE,
+                     tarfile.BLKTYPE):
+            for name in ('.', './', 'x'):
+                with self.subTest(kind=kind, name=name):
+                    out = io.BytesIO()
+                    with tarfile.open(fileobj=out, mode='w', format=tarfile.PAX_FORMAT) as tar:
+                        info = tarfile.TarInfo(name)
+                        info.type, info.mode, info.uid, info.gid, info.linkname = kind, 0o700, 1000, 1000, 'x'
+                        tar.addfile(info)
+                    want = (1000, 1000, 0o700) if kind == tarfile.DIRTYPE and name != 'x' else None
+                    self.assertEqual(tempctr.tar_root(out.getvalue()), want)
+
+
 if __name__ == '__main__':
     unittest.main()

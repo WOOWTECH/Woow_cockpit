@@ -1,0 +1,110 @@
+{
+ "attempt": "t13-tip",
+ "backup_engine_tree": "45db404c136e2c891283abf4d602c05bb14ff7c2",
+ "code": "integration/ha-import-batch1-20261123",
+ "command": "-I t13_forged_export.py tip control,all,listeners",
+ "commercial_acceptance": "not-complete",
+ "credentials": "generated per run; HA key (T11) read in-process by the b1 Secrets reader, never printed",
+ "date": "2026-11-24",
+ "elapsed_s": 388.2,
+ "exit_code": 0,
+ "harness_commit": "be36f75587cdc493e9a2365f459585254baa4af0",
+ "iteration": 5,
+ "lane": "emqx-secreview (SR-OWNER-1942)",
+ "result": {
+  "codebase": "tip",
+  "containers_left": 0,
+  "dangling_volumes_new": {
+   "empty": 0,
+   "emqx": 0,
+   "other": 0
+  },
+  "elapsed_s": 387.4,
+  "image": "docker.io/emqx/emqx:5.8.9",
+  "network": "none",
+  "real_export_members": [
+   "META.hocon",
+   "cluster.hocon",
+   "mnesia/emqx_psk",
+   "mnesia/emqx_app",
+   "mnesia/emqx_banned_rules",
+   "mnesia/emqx_banned",
+   "mnesia/emqx_authn_mnesia",
+   "mnesia/emqx_authn_scram_mnesia",
+   "mnesia/emqx_acl",
+   "mnesia/emqx_retainer_message",
+   "mnesia/emqx_admin"
+  ],
+  "simulated": "the extra roots are written into the real export by the harness",
+  "store": "labpodman (separate --root)",
+  "test": "T13 an export that brings roots of this device (B1-03)",
+  "variants": {
+   "all": {
+    "conversion": "REFUSED: HA 的 EMQX 資料匯入時發生錯誤（部分資料無法匯入），已停止。",
+    "data_imports": 1,
+    "device_unchanged": true,
+    "elapsed_s": 71.5,
+    "forged_roots": [
+     "alarm",
+     "broker",
+     "cluster",
+     "dashboard",
+     "flapping_detect",
+     "force_gc",
+     "listeners",
+     "log",
+     "mqtt",
+     "node",
+     "rpc",
+     "sysmon"
+    ]
+   },
+   "control": {
+    "candidate_restarted": true,
+    "conversion": "PASSED (candidate built, all product checks green)",
+    "data_imports": 1,
+    "device_roots_changed_by_the_import": [
+     "authorization"
+    ],
+    "device_roots_differing_after_restart": [],
+    "device_roots_differing_in_the_candidate": [],
+    "device_roots_kept_on_disk": [
+     "authorization",
+     "listeners",
+     "log"
+    ],
+    "device_unchanged": true,
+    "elapsed_s": 125.1,
+    "forged_marker_on_disk": false,
+    "forged_roots": []
+   },
+   "listeners": {
+    "candidate_restarted": true,
+    "conversion": "PASSED (candidate built, all product checks green)",
+    "data_imports": 1,
+    "device_roots_changed_by_the_import": [
+     "authorization",
+     "listeners"
+    ],
+    "device_roots_differing_after_restart": [],
+    "device_roots_differing_in_the_candidate": [],
+    "device_roots_kept_on_disk": [
+     "authorization",
+     "listeners",
+     "log"
+    ],
+    "device_unchanged": true,
+    "elapsed_s": 134.7,
+    "forged_marker_on_disk": false,
+    "forged_roots": [
+     "listeners"
+    ]
+   }
+  }
+ },
+ "source_commit": "9ebb2bfcbb51f527cd92af796d242aabdcb68a90",
+ "started": "2026-11-24T14:31:51+0800",
+ "status_lines": [],
+ "stdout_sha256": "e8af8043999555e4cfd3ff9580cf62b5ae8b1b6d10f10e6854a0858c9e8e6621",
+ "store": "labpodman (separate --root, lab only), every podman run --network none"
+}

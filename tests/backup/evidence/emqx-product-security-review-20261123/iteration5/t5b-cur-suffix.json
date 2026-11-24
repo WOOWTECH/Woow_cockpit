@@ -1,0 +1,48 @@
+{
+ "attempt": "t5b-cur-suffix",
+ "backup_engine_tree": "802154322779924bdeae5aae148ee125b4cd8eff",
+ "code": "f2c9e03 (git archive, byte-checked)",
+ "command": "python3 -I t5b_plain_explicit.py cur suffix",
+ "commercial_acceptance": "not-complete",
+ "credentials": "generated per run",
+ "date": "2026-11-24",
+ "elapsed_s": 235.2,
+ "exit_code": 0,
+ "harness_commit": "d9da23c192a3308a76476cdc20fac816e2ba7338",
+ "iteration": 5,
+ "lane": "emqx-secreview (SR-OWNER-1942)",
+ "note": "queued by iteration 4 without the recorder (one stdout log for both modes, its sha256 is stdout_sha256); the harness is the committed t5b_plain_explicit.py of d9da23c, read when the attempt got its slot (13:50)",
+ "result": {
+  "codebase": "cur",
+  "device_after": "rows=1:plain=0",
+  "device_before": "rows=1:plain=0",
+  "device_login_before": "own=login:wrong=refused",
+  "elapsed_s": 235.2,
+  "image": "docker.io/emqx/emqx:5.8.9",
+  "modes": {
+   "suffix": {
+    "candidate": "rows=1:plain=0",
+    "candidate_after_restart": "rows=1:plain=0",
+    "candidate_authn_algorithms": [
+     [
+      "plain",
+      true
+     ]
+    ],
+    "candidate_login": "own=refused:wrong=refused",
+    "candidate_login_after_restart": "own=refused:wrong=refused",
+    "conversion": "PASSED (candidate built, all product checks green)",
+    "conversion_refused": false,
+    "device_bootstrap_password_stored_plaintext": false,
+    "elapsed_s": 196.2,
+    "ha_hocon_sha256": "7346f5fe69f9b513cc465b72fa2c763f1f84154c787dd53812602d4369396550"
+   }
+  },
+  "network": "none",
+  "store": "labpodman (separate --root)",
+  "test": "T5b SR-5 HA plain authenticator with explicit salt_position vs this device bootstrap users"
+ },
+ "source_commit": "f2c9e03",
+ "stdout_sha256": "05636d1d865c26798177505755d5cdcb420c2161b3988ab347a662105554b1d4",
+ "store": "labpodman (separate --root, lab only), every podman run --network none"
+}
