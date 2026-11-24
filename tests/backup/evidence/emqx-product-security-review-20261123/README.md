@@ -686,10 +686,20 @@ of this lane at the start of iteration 6: none (lab store containers, volumes an
   member read into memory; the vendor import uses `hocon:files` on the extracted file (`:904-909`). They are the same
   library but not literally the same call. Without `include` (refused by the token scan) both read the same bytes; T14b's
   differential below tests exactly that on every HOCON document of T14 and T14b.
+- **`META.hocon` is not parsed by the check (accepted after reading the vendor code).** The import reads only `edition`
+  and `version` from it (`validate_backup`, `emqx_mgmt_data_backup.erl:605-621`; its result is dropped, `:440`, `:678`)
+  and reports a mismatch with fixed texts (`:363-368`), so extra keys or an `include` there bring no configuration in; the check still bounds its size and kind.
+- **The refusal texts carry no HA text but names.** `hint` is the constant `HOT_HINT` or empty (`hint_for`), and member and
+  root names go through `hacommon.names` (each cut at 60 characters, control characters shown as `?`; SR-10's fix).
 
 ### T14b
 
-T14b (harness `aa72e6f`) had not finished when this revision was written; its evidence goes to `iteration6/t14b-fix.json`.
+T14b (harness `aa72e6f`) was still queued in `heavy.sh` when this revision was written (both heavy slots held by long
+steps of other lanes); its evidence goes to `iteration6/t14b-fix.json` in a later commit.
+
+### Secret scan
+
+With the existing lab reader and scanner (`ha_import_b1_e2e.Secrets`, `scan_host_evidence`: every lab secret value, raw and JSON-escaped; user names excluded; values never printed), at 2026-11-24 15:08 +0800: committed evidence (all iterations) 72 files, 0 hits; harness folder 26 files, 0 hits; iteration 5 scratch evidence 13 files, 0 hits; iteration 5 run outputs 35 files, 0 hits; iteration 6 scratch 0 files, 0 hits.
 
 ### Product flow on a device
 
@@ -721,4 +731,7 @@ with that engine; attempt-36 follows. Their results and evidence are the product
 - No new broker run: the real broker evidence is iteration 5's T11/T13/T5b. T14b is component level.
 - No dev-d, dev-e or .54 run by this lane; no production access of any kind.
 - The vendor's handling of the content of an allowed table file (see iteration 5) and EMQX versions other than 5.8.9.
+- Process note: both heavy slots were held by long steps of other lanes, and a start of T14b outside `heavy.sh` (it is a
+  light component test) was refused by the auto-mode classifier at 15:08; it was not retried in any form, and T14b runs
+  only through `heavy.sh` (queued there since 14:53).
 - `commercial_acceptance: not-complete` (this is a security review, not the end-to-end acceptance).
