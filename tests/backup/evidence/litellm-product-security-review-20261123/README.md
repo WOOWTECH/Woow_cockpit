@@ -280,8 +280,14 @@ Findings of iteration 2:
    *How it is proven (precise, verifier 2026-11-24 02:14):* on real PostgreSQL 18.7 the blindness of HA's side; on a
    real fresh PostgreSQL 17.11 the product's own `stored_settings` + `stored_hooks_blocker` on the staged rows (the
    harness loaded them into a one-table cluster). That `convert()` itself asks there and stops before the dump is
-   proven by a unit test with fakes (and mutation M55); the product's `convert()` has not been run on the crafted
-   backup in this review.
+   proven by a unit test with fakes (and mutation M55); this review had not run the product's `convert()` on the
+   crafted backup. **Added 2026-11-24 09:09 (product lane, real, dev-d): it has now.** `negative-01` (58/58,
+   `tests/e2e/lab/evidence/litellm-product-20261123/negative-01.json`, harness `litellm_negative_flow.py`, product
+   `3a6e928e…`): a crafted data directory (this lab LiteLLM's own schema and generated rows, the operator edit of
+   `t2_hidden_hooks`, hooks `post_call_rules` and `custom_auth`) through upload → `ha-check-start` → `ha-convert-start`:
+   the check answered ok (HA's side blind, as found here), the conversion exported 86 tables, loaded them into the new
+   PostgreSQL 17 cluster and then ended failed naming both hooks, before the converted dump; no converted backup, no
+   throwaway object, this device's secrets, salt, data and keys unchanged.
 10. **SR-9 (high for a foreign backup, like SR-6) — fixed `a06dc21`.** The SR-6 check cut the callback names to the
    first 50 before it looked for a dot, so 60 plain `success_callback` names that sort before a dotted one hid it
    (no blocker on `f2a2cb4`, `original3-stored_variants.json`; `1e29974` has the same code). LiteLLM imports every dotted entry of `success_callback`,
