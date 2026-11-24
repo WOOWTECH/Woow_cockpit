@@ -1,0 +1,33 @@
+[Unit]
+Description=n8n queue worker task runners
+Documentation=https://github.com/WOOWTECH/Woow_podman_n8n
+PartOf=n8n.target
+Before=n8n-worker.service
+
+[Container]
+ContainerName=n8n-worker-runners
+Image=docker.io/n8nio/runners:2.43.6
+Network=n8n.network
+Volume=%h/.config/n8n/n8n-task-runners.json:/etc/n8n-task-runners.json:ro
+Environment=N8N_RUNNERS_TASK_BROKER_URI=http://n8n-worker:5679
+Environment=GENERIC_TIMEZONE=@@GENERIC_TIMEZONE@@
+Environment=TZ=@@TZ@@
+Secret=n8n-runners-auth-token,type=env,target=N8N_RUNNERS_AUTH_TOKEN
+Label=io.woowtech.app=n8n
+LogDriver=journald
+HealthCmd=wget -q -O /dev/null http://127.0.0.1:5680/healthz || exit 1
+HealthInterval=30s
+HealthTimeout=5s
+HealthRetries=3
+HealthStartPeriod=60s
+PodmanArgs=--stop-timeout=60
+
+[Service]
+SuccessExitStatus=143
+Restart=always
+RestartSec=10
+TimeoutStartSec=900
+TimeoutStopSec=90
+
+[Install]
+WantedBy=default.target

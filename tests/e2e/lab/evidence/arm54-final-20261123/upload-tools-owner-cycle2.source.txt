@@ -1,0 +1,6 @@
+import hashlib, json, pathlib
+root = pathlib.Path('/var/tmp/woow-arm54-final-20261123-ukydvpzu')
+same = {name: hashlib.sha256((root / 'input' / name).read_bytes()).hexdigest() == want
+        for name, want in sorted({'age.deb': 'd14f937ecb1cef9279879e779cf61fda682735dd9871cd7d60ba7a487608f4e6', 'zstd.deb': '97a58383b0ad55cc8183e59cbb112f2eb55c3dc1e90de816fa5cfb983d5c2ff0', 'uidmap.deb': '123d156d17ec56fd1cdc481c0e25531373bdb27d282803dd518df3bf59eecd82'}.items())}
+print(json.dumps(same, sort_keys=True))
+assert all(same.values()), 'uploaded-tool-digest-differs'

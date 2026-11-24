@@ -123,7 +123,8 @@ def _os_name():
 
 def _podman_version():
     try:
-        out = subprocess.run(['/usr/bin/podman', '--version'], stdin=subprocess.DEVNULL, capture_output=True,
+        from .podman import PODMAN
+        out = subprocess.run([PODMAN, '--version'], stdin=subprocess.DEVNULL, capture_output=True,
                              env={'PATH': '/usr/sbin:/usr/bin:/sbin:/bin', 'LANG': 'C.UTF-8'}, timeout=15,
                              check=False).stdout.decode('utf-8', 'replace')
     except (OSError, subprocess.TimeoutExpired):

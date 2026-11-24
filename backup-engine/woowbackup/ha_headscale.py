@@ -22,13 +22,15 @@ converted `db.sqlite` (0644), HA's noise key (0600, masked in every log) and HA'
 the version path, applies migrations and validates the schema exactly as the server will. `headplane-data` is the live
 export as it is (this device's Headplane logins and roles stay). The target keeps its `server_url`, prefixes, DNS and
 policy configuration, every config file and secret. Database policies are replaced by HA policies; a live database policy blocks the import.
+An app entry that names the package's read-only configuration folder as its one host folder -- the form catalog-suggest
+drafts -- gets this device's own folder, packed as it is while Headscale runs.
 """
 import os
 import re
 import tarfile
 import time
 
-from . import habackup, hacommon, hasqlite, ha_n8n, ha_odoo, tempctr
+from . import habackup, hacommon, hasqlite, ha_n8n, ha_odoo, nested, tempctr
 from .errors import BackupError
 
 SLUG = 'woow-headscale'
@@ -142,9 +144,12 @@ class Target:
         self.data_volume = next((s for s, t, _o in mounts if t == DATA_TARGET), None)
         config = next((s for s, t, _o in mounts if t == '/etc/headscale'), None)
         _file, self.headplane_volume = hacommon.mounted(quadlets, home, '/var/lib/headplane')
+        dirs = [d['path'] for d in app.data_dirs]
         if (self.data_volume not in declared or self.headplane_volume not in declared or len(declared) != 2
-                or app.postgres or app.data_dirs or config is None or not config.startswith(home + '/')):
+                or app.postgres or config is None or not config.startswith(home + '/')
+                or dirs not in ([], [config[len(home) + 1:]])):
             raise BackupError('incompatible', '這台的 Headscale 應用設定和 Quadlet 檔不一致，無法匯入。', app=app.id)
+        self.config_dir = dirs[0] if dirs else None  # the configuration folder as the entry's host folder (docstring)
         self.config_mount = (config, '/etc/headscale', 'ro')
         self.config_rel = config[len(home) + 1:] + '/config.yaml'
         self.image = tempctr.quadlet_image(quadlets[server_file])
@@ -463,10 +468,39 @@ def convert(work, app, test_mode, out_dir):
     hacommon.live_export(work, app, target.headplane_volume, headplane_path)
     for path in (data_path, headplane_path):
         ha_odoo.check_volume_tar(path, ids)
-    return {'volumes': {target.data_volume: data_path, target.headplane_volume: headplane_path},
+    dirs = {} if target.config_dir is None else {
+        'dirs': {target.config_dir: live_config_dir(work, app, target, out_dir, ids, config)}}
+    return {'volumes': {target.data_volume: data_path, target.headplane_volume: headplane_path}, **dirs,
             'users': details['users'], 'nodes': details['nodes'], 'api_keys_removed': details['api_keys'],
             'api_keys_kept': len(live_keys), 'server_url': config.get('server_url', ''),
             'ha_server_url': src.config.get('server_url', ''), 'dns_records': src.records_count}
+
+
+def live_config_dir(work, app, target, out_dir, ids, config):
+    """This device's configuration folder as it is (nothing of HA's goes into it), packed while Headscale runs and checked
+    like every host folder; its config.yaml must still say what the conversion was made with."""
+    (out_dir / 'dirs').mkdir(mode=0o700, parents=True, exist_ok=True)
+    path = out_dir / 'dirs' / '0.tar'
+    with open(path, 'xb') as handle:
+        os.fchmod(handle.fileno(), 0o600)
+        work.runner(app).dir_pack(target.config_dir, stdout=handle, timeout=3600, max_output=work.guard.budget(),
+                                  abort=work.abort)
+        handle.flush()
+        os.fsync(handle.fileno())
+    try:
+        nested.check_dir(path, ids=ids)
+    except BackupError as error:
+        raise BackupError('job-failed', f'這台的 Headscale 設定資料夾無法還原（{error.message}）。', app=app.id,
+                          reason=(error.details or {}).get('reason')) from None
+    text = None
+    with ha_odoo._live_tar(path, '這台的 Headscale 設定資料夾') as tar:
+        for member in tar:
+            if ha_odoo._norm(member.name) == 'config.yaml' and member.isfile() and member.size <= MAX_SMALL:
+                text = tar.extractfile(member).read().decode('utf-8', 'replace')
+            tar.members.clear()
+    if text is None or hacommon.scalars(text) != config:
+        raise BackupError('job-failed', '這台 Headscale 的設定檔在轉換期間改變了，已停止；請再試一次。', app=app.id)
+    return path
 
 
 class _Bytes:

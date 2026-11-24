@@ -1,0 +1,8 @@
+# Headplane's own state directory. Small, but it is what keeps admin sessions and cached
+# agent data across restarts.
+[Unit]
+Description=Woow Headplane data volume
+
+[Volume]
+VolumeName=headplane-data
+Label=io.woowtech.app=headscale

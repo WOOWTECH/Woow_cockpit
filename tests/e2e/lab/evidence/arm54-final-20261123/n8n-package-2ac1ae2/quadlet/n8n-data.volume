@@ -1,0 +1,11 @@
+# n8n-data.volume: /home/node/.n8n, which holds the credentials encryption key
+# (config -> encryptionKey), community nodes and binary data. Losing it makes every
+# credential stored in Postgres undecryptable, so scripts/backup.sh always exports it.
+# VolumeName= keeps the podman-compose name, so an existing install is adopted as-is.
+[Unit]
+Description=n8n user folder (encryption key, custom nodes)
+Documentation=https://github.com/WOOWTECH/Woow_podman_n8n
+
+[Volume]
+VolumeName=n8n_n8n_data
+Label=io.woowtech.app=n8n

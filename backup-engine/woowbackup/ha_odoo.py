@@ -64,7 +64,8 @@ DIGEST_RE = re.compile(r'sha256:[0-9a-f]{64}\Z')
 MAX_MANIFEST = 256 * 1024
 MAX_MODULE_ROWS = 20000
 ELF_HEAD = 20         # bytes of an ELF header up to and including e_machine
-EM_X86_64 = 0x3E
+EM_X86_64, EM_AARCH64 = 0x3E, 0xB7
+ELF_MACHINES = {'x86_64': EM_X86_64, 'amd64': EM_X86_64, 'aarch64': EM_AARCH64, 'arm64': EM_AARCH64}
 MAX_SMALL_FILE = 64 * 1024
 PG_READY_TIMEOUT = 300
 DUMP_TIMEOUT = 3 * 3600
@@ -296,11 +297,18 @@ class FileTar:
             self.handle.close()
 
 
+def host_elf_machine():
+    """ELF e_machine of this device's processor (x86-64 0x3E, aarch64 0xB7), None when unknown."""
+    return ELF_MACHINES.get(os.uname().machine.lower())
+
+
 def foreign_native(head):
-    """True when `head` (a file's first bytes) starts a Linux program or library for a processor other than x86-64."""
+    """True when `head` (a file's first bytes) starts a Linux program or library for a processor other than this
+    device's (a device of an unknown processor counts as x86-64)."""
     if len(head) < ELF_HEAD or head[:4] != b'\x7fELF':
         return False
-    return head[4:6] != b'\x02\x01' or int.from_bytes(head[18:20], 'little') != EM_X86_64
+    machine = host_elf_machine() or EM_X86_64
+    return head[4:6] != b'\x02\x01' or int.from_bytes(head[18:20], 'little') != machine
 
 
 def _note_native(info, tail, entry):
@@ -870,7 +878,8 @@ def database_verdict(details, target, candidates, *, ha_major, target_major, ext
         blockers.append(f'要一起搬過來的自訂模組需要這台沒有的東西：{_names(lacking)}。')
     foreign = sorted(name for name, candidate in copy.items() if candidate.get('foreign'))
     if foreign:
-        blockers.append(f'要一起搬過來的自訂模組含有只能在其他處理器（例如 ARM）上執行的程式：{_names(foreign)}。'
+        other = 'x86' if host_elf_machine() == EM_AARCH64 else 'ARM'
+        blockers.append(f'要一起搬過來的自訂模組含有只能在其他處理器（例如 {other}）上執行的程式：{_names(foreign)}。'
                         '請先在 HA 換成不含這類程式的版本，再做一次備份。')
     if details['mail_servers_active']:
         warnings.append(f'HA 的資料庫有 {details["mail_servers_active"]} 個啟用中的外寄郵件伺服器，搬過來後會開始寄信'

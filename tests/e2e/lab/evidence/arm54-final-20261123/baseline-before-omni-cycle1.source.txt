@@ -1,0 +1,59 @@
+import hashlib, json, os, pathlib, shutil, subprocess
+def run(args, timeout=60):
+    p = subprocess.run(args, capture_output=True, timeout=timeout)
+    return p.stdout.decode('utf-8', 'replace').splitlines() if p.returncode == 0 else ['<exit %d>' % p.returncode]
+def sha(path):
+    try:
+        return hashlib.sha256(pathlib.Path(path).read_bytes()).hexdigest()
+    except OSError as e:
+        return '<%s>' % type(e).__name__
+inv = {}
+inv['containers'] = run(['podman', 'ps', '-a', '--no-trunc', '--format', '{{.ID}} {{.Names}} {{.Image}} {{.State}} {{.Ports}}'])
+inv['container_started'] = {}
+for cid in run(['podman', 'ps', '-aq', '--no-trunc']):
+    d = json.loads(subprocess.check_output(['podman', 'inspect', cid], timeout=30))[0]
+    inv['container_started'][d['Name']] = [d['State']['Running'], d['State']['StartedAt'], d['State']['Pid']]
+inv['images'] = run(['podman', 'images', '-a', '--no-trunc', '--format', '{{.ID}} {{.Repository}}:{{.Tag}}'])
+inv['volumes'] = run(['podman', 'volume', 'ls', '--format', '{{.Name}}'])
+inv['networks'] = run(['podman', 'network', 'ls', '--format', '{{.Name}}'])
+inv['pods'] = run(['podman', 'pod', 'ps', '--format', '{{.Name}}'])
+inv['etc_containers_networks'] = sorted(os.listdir('/etc/containers/networks')) if os.path.isdir('/etc/containers/networks') else []
+inv['account_files'] = {p: sha(p) for p in ('/etc/passwd', '/etc/group', '/etc/subuid', '/etc/subgid')}
+inv['linger'] = sorted(os.listdir('/var/lib/systemd/linger')) if os.path.isdir('/var/lib/systemd/linger') else []
+inv['services_running'] = sorted(l.split()[0] for l in run(['systemctl', 'list-units', '--type=service', '--state=running', '--no-legend', '--plain']) if l.strip())
+inv['service_started'] = {u: run(['systemctl', 'show', '-p', 'ActiveEnterTimestampMonotonic', '--value', u]) for u in ('tailscaled.service', 'ssh.service', 'podman.socket')}
+inv['pi_user_units'] = sorted(l.split()[0] for l in run(['systemctl', '--machine=pi@.host', '--user', 'list-units', '--type=service', '--state=running', '--no-legend', '--plain']) if l.strip())
+inv['pi_web_started'] = run(['systemctl', '--machine=pi@.host', '--user', 'show', '-p', 'ActiveEnterTimestampMonotonic', '--value', 'pi-web.service'])
+inv['links'] = sorted(' '.join(l.split()[:2]) for l in run(['ip', '-br', 'link']))
+inv['addresses'] = sorted(run(['ip', '-br', 'addr']))
+inv['listening'] = sorted(set(' '.join(l.split()[0:1] + l.split()[4:5]) for l in run(['ss', '-H', '-lntu'])))
+inv['modules'] = sorted(l.split()[0] for l in run(['lsmod'])[1:])
+inv['packages_sha256'] = hashlib.sha256('\n'.join(run(['dpkg-query', '-W', '-f', '${Package} ${Version} ${Status}\n'])).encode()).hexdigest()
+nft = subprocess.run(['nft', '-s', 'list', 'ruleset'], capture_output=True, timeout=30) if shutil.which('nft') else None
+# -s (stateless): packet/byte counters change with traffic and must not decide identity.
+inv['nft_ruleset_stateless_sha256'] = hashlib.sha256(nft.stdout).hexdigest() if nft is not None and nft.returncode == 0 else None
+inv['nft_tables_chains'] = sorted(l.strip().rstrip('{').strip() for l in nft.stdout.decode().splitlines() if l.strip().startswith(('table ', 'chain '))) if nft is not None and nft.returncode == 0 else None
+inv['var_tmp_woow'] = sorted(n for n in os.listdir('/var/tmp') if n.startswith('woow'))
+mounts = pathlib.Path('/proc/self/mountinfo').read_text().splitlines()
+inv['mounts_naming_var_tmp_woow'] = sum('/var/tmp/woow' in m for m in mounts)
+inv['run_netns'] = sorted(os.listdir('/run/netns')) if os.path.isdir('/run/netns') else []
+inv['cgroup_libpod_parent'] = sorted(os.listdir('/sys/fs/cgroup/libpod_parent')) if os.path.isdir('/sys/fs/cgroup/libpod_parent') else []
+inv['cgroup_top'] = sorted(n for n in os.listdir('/sys/fs/cgroup') if os.path.isdir('/sys/fs/cgroup/' + n))
+
+import tempfile, time
+os.umask(0o077)
+free = shutil.disk_usage('/var/tmp').free
+assert free >= 12 * 1024 ** 3 + 2 * 1024 ** 3, 'reserve-refused'
+root = pathlib.Path(tempfile.mkdtemp(prefix='woow-arm54-final-20261123-', dir='/var/tmp'))
+for name in ('source', 'store', 'run', 'tmp', 'config', 'networks', 'input', 'work'):
+    (root / name).mkdir(mode=0o700)
+(root / 'empty-auth.json').write_text('{"auths":{}}')
+(root / 'containers-override.conf').write_text('[network]\nnetwork_config_dir = "%s"\n[engine]\nevents_logger = "file"\n' % (root / 'networks'))
+(root / 'store-driver').write_text('overlay' + '\n')
+(root / 'baseline.json').write_text(json.dumps(inv, sort_keys=True))
+inv['workspace'] = str(root)
+inv['store_driver'] = 'overlay'
+inv['free_bytes'] = shutil.disk_usage(root).free
+inv['started_epoch'] = time.time()
+
+print(json.dumps(inv, sort_keys=True))

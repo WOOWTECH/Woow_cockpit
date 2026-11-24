@@ -1,0 +1,134 @@
+{
+ "df_root_free_gib": 16.5,
+ "df_var_tmp_free_gib": 16.5,
+ "harness_procs": [],
+ "linger": [
+  "pi",
+  "woowbk54t"
+ ],
+ "meminfo": {
+  "MemAvailable": "2205536 kB",
+  "MemTotal": "4006528 kB",
+  "SwapFree": "1493816 kB"
+ },
+ "mounts_naming_owner": 0,
+ "mounts_naming_var_tmp_woow": 0,
+ "newuidmap": [
+  true,
+  true
+ ],
+ "owner": {
+  "home": "/home/woowbk54t",
+  "shell": "/usr/sbin/nologin",
+  "uid": 1101
+ },
+ "owner_home_du": [
+  "151M\t/home/woowbk54t"
+ ],
+ "owner_podman_images": [
+  1,
+  []
+ ],
+ "owner_podman_ps": [
+  1,
+  []
+ ],
+ "owner_podman_volumes": [
+  1,
+  []
+ ],
+ "owner_procs": [
+  [
+   465119,
+   "systemd"
+  ],
+  [
+   465120,
+   "(sd-pam)"
+  ],
+  [
+   465179,
+   "podman pause"
+  ],
+  [
+   465195,
+   "dbus-daemon"
+  ],
+  [
+   465670,
+   "pasta"
+  ],
+  [
+   465687,
+   "aardvark-dns"
+  ],
+  [
+   465692,
+   "rootlessport"
+  ],
+  [
+   465699,
+   "exe"
+  ],
+  [
+   465711,
+   "conmon"
+  ],
+  [
+   465725,
+   "headscale"
+  ]
+ ],
+ "owner_quadlets": [
+  "headplane-data.volume",
+  "headplane.container",
+  "headscale-data.volume",
+  "headscale-run.volume",
+  "headscale.container",
+  "headscale.network"
+ ],
+ "owner_user_service": [
+  "active"
+ ],
+ "owner_user_units": [
+  "dbus.service                  loaded active running D-Bus User Message Bus",
+  "headscale-data-volume.service loaded active exited  Woow Headscale data volume",
+  "headscale-network.service     loaded active exited  Woow Headscale network",
+  "headscale-run-volume.service  loaded active exited  Woow Headscale runtime socket volume",
+  "headscale.service             loaded active running Woow Headscale control plane"
+ ],
+ "root_podman_ps": [
+  "woow-auth-gateway running",
+  "matter-server running",
+  "homeassistant running"
+ ],
+ "run_netns": [],
+ "services_core": {
+  "ssh.service": [
+   "active"
+  ],
+  "tailscaled.service": [
+   "active"
+  ]
+ },
+ "subgid_lines": [
+  "pi",
+  "woowbk54t"
+ ],
+ "subuid_lines": [
+  "pi",
+  "woowbk54t"
+ ],
+ "uidmap_pkg": [
+  "uidmap 1:4.13+dfsg1-1+deb12u2 install ok installed"
+ ],
+ "uptime": "1131307.83",
+ "var_tmp_woow": [
+  "woow-arm54-final-20261123-bb3d979o"
+ ],
+ "var_tmp_woow_du": [
+  [
+   "622M\t/var/tmp/woow-arm54-final-20261123-bb3d979o"
+  ]
+ ]
+}

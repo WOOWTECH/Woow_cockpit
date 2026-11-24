@@ -1,0 +1,208 @@
+{
+ "audit_after_vs_baseline-before-owner-cycle1": {
+  "compared_keys": 28,
+  "containers_identical_without_container_ids": true,
+  "differing_keys": [
+   "cgroup_libpod_parent",
+   "cgroup_top",
+   "container_started",
+   "containers",
+   "pi_web_started",
+   "service_started"
+  ],
+  "explanation": {
+   "cgroup_libpod_parent, cgroup_top": "the empty cgroup /sys/fs/cgroup/libpod_parent was already there in the first baseline (2026-11-23 08:49) and is runtime kernel state; the reboot removed it",
+   "container_started, service_started, pi_web_started": "start times of the new boot",
+   "containers": "same names, image digests, state and ports; the IDs differ because the quadlet services create a new container at every service start"
+  },
+  "modules_identical": true
+ },
+ "commercial_acceptance": "not-complete",
+ "cycle_c9_leftover": "workspace /var/tmp/woow-arm54-final-20261123-36u3k_gg of the cycle killed at 03:33 (its real run emqx-real-x86-attempt1 had passed); removed by this lane's own harness after the reboot (branch test/arm54-emqx-20261123: emqx-cleanup-c9 exit 1, emqx-cleanup-c9-after-reboot exit 0)",
+ "measured_by_this_lane": {
+  "after_2026-11-24_07:36 (incident-54-reboot-20261123-after)": {
+   "boot_id": "291c2c97-1be0-495e-82ac-25010ee1fc67",
+   "container_units": [
+    "ha-matter-seed.service active exited",
+    "homeassistant.service active running",
+    "matter-server.service active running",
+    "tailscale-web.service active running",
+    "woow-auth-gateway.service active running"
+   ],
+   "d_state_processes": 0,
+   "failed_units": [
+    "vnstat.service"
+   ],
+   "ha_http_8123": "200",
+   "hung_task_reports": 0,
+   "matter_ws_port_5580_http": "200",
+   "modules": {
+    "bridge": [
+     null,
+     null
+    ],
+    "nf_conntrack": [
+     null,
+     null
+    ],
+    "nf_nat": [
+     "live",
+     "2"
+    ],
+    "nft_chain_nat": [
+     "live",
+     "1"
+    ],
+    "nft_masq": [
+     null,
+     null
+    ],
+    "veth": [
+     null,
+     null
+    ],
+    "xt_MASQUERADE": [
+     "live",
+     "1"
+    ]
+   },
+   "oops_count": 0,
+   "original_containers": [
+    "homeassistant|no|running|2026-11-24 07:23:52.023250069 +0800 CST",
+    "matter-server|no|running|2026-11-24 07:23:51.011271627 +0800 CST",
+    "woow-auth-gateway|no|running|2026-11-24 07:23:51.069404686 +0800 CST"
+   ],
+   "tainted": 1024,
+   "units": {
+    "docker.service": {
+     "ActiveEnterTimestamp": "",
+     "ActiveState": "inactive",
+     "SubState": "dead",
+     "UnitFileState": ""
+    },
+    "podman-restart.service": {
+     "ActiveEnterTimestamp": "",
+     "ActiveState": "inactive",
+     "SubState": "dead",
+     "UnitFileState": "disabled"
+    },
+    "ssh.service": {
+     "ActiveEnterTimestamp": "Tue 2026-11-24 07:23:53 CST",
+     "ActiveState": "active",
+     "SubState": "running",
+     "UnitFileState": "enabled"
+    },
+    "tailscaled.service": {
+     "ActiveEnterTimestamp": "Tue 2026-11-24 07:23:47 CST",
+     "ActiveState": "active",
+     "SubState": "running",
+     "UnitFileState": "enabled"
+    }
+   },
+   "uptime_s": 755.71
+  },
+  "before_2026-11-23_23:2x (incident-54-reboot-20261123-before)": {
+   "boot_id": "e5b15a94-75e9-4be4-a3fd-a8beb0dabb0b",
+   "container_units": [
+    "ha-matter-seed.service active exited",
+    "homeassistant.service active running",
+    "matter-server.service active running",
+    "tailscale-web.service active running",
+    "woow-auth-gateway.service active running"
+   ],
+   "d_state_processes": 0,
+   "failed_units": [
+    "vnstat.service"
+   ],
+   "ha_http_8123": "200",
+   "hung_task_reports": 0,
+   "matter_ws_port_5580_http": "200",
+   "modules": {
+    "bridge": [
+     null,
+     null
+    ],
+    "nf_conntrack": [
+     null,
+     null
+    ],
+    "nf_nat": [
+     "live",
+     "3"
+    ],
+    "nft_chain_nat": [
+     "live",
+     "1"
+    ],
+    "nft_masq": [
+     "going",
+     "-1"
+    ],
+    "veth": [
+     "live",
+     "0"
+    ],
+    "xt_MASQUERADE": [
+     "live",
+     "1"
+    ]
+   },
+   "oops_count": 1,
+   "original_containers": [
+    "homeassistant|no|running|2026-11-15 13:14:48.075002727 +0800 CST",
+    "matter-server|no|running|2026-11-10 17:31:02.896490161 +0800 CST",
+    "woow-auth-gateway|no|running|2026-11-10 17:31:02.880429627 +0800 CST"
+   ],
+   "tainted": 1152,
+   "units": {
+    "docker.service": {
+     "ActiveEnterTimestamp": "",
+     "ActiveState": "inactive",
+     "SubState": "dead",
+     "UnitFileState": ""
+    },
+    "podman-restart.service": {
+     "ActiveEnterTimestamp": "",
+     "ActiveState": "inactive",
+     "SubState": "dead",
+     "UnitFileState": "disabled"
+    },
+    "ssh.service": {
+     "ActiveEnterTimestamp": "Tue 2026-11-10 17:31:05 CST",
+     "ActiveState": "active",
+     "SubState": "running",
+     "UnitFileState": "enabled"
+    },
+    "tailscaled.service": {
+     "ActiveEnterTimestamp": "Tue 2026-11-10 17:31:00 CST",
+     "ActiveState": "active",
+     "SubState": "running",
+     "UnitFileState": "enabled"
+    }
+   },
+   "uptime_s": 1144772.61
+  }
+ },
+ "production_incident_caused_by_this_lane": {
+  "host_unit_journal": [
+   "headscale.service stopping 20:13:35, started 20:13:37",
+   "headscale.service stopping 20:18:51, started 20:18:55"
+  ],
+  "not_intended": true,
+  "prevention": "commit messages, notes and scripts only through heredocs with a quoted delimiter or the Write tool; history is not rewritten",
+  "reported_by_main": "the units restarted at 20:13:31 and 20:18:49; production Headscale, Headplane and their entrance were down about 10 s and 13 s",
+  "trace_in_the_commits": "both messages lack the command text (a line starts with a space where the output of the command, nothing, was substituted)",
+  "what": "two commit messages of this lane (5140be3, 2026-11-23 20:13:37, and afcae0d, 20:18:55) were written inside double quotes and held a backquoted user-systemd restart command for headscale.service; bash executed it on the HOST, so PRODUCTION Headscale was restarted twice"
+ },
+ "reason": "kernel oops of 2026-11-23 21:02:54 caused by this lane's own cleanup step (modprobe -r nft_masq); see incident-54-kernel-oops-nft-masq. The harness never unloads a module since 4ca92b5.",
+ "reported_by_main": {
+  "after_state": "07:26:35",
+  "before_state": "07:22:43",
+  "ha_http_200": "07:24:52",
+  "reboot": "07:23:03",
+  "ssh_back": "07:23:54"
+ },
+ "tainted_1024": "bit 10 (TAINT_CRAP, staging driver of the vendor kernel); it was part of the earlier 1152 too (1024 + 128 TAINT_DIE of the oops)",
+ "vnstat.service": "failed before (since 2026-11-12, not ours) and after the reboot",
+ "what": ".54 (192.168.2.54) was rebooted once, 2026-11-24 07:23:03, by the MAIN session over SSH on the owner's explicit instruction (the owner wrote that main may do it over SSH). This lane did not reboot it: its own attempt at about 23:30 on 2026-11-23 was denied by the Claude Code auto-mode classifier and was not retried through another route."
+}

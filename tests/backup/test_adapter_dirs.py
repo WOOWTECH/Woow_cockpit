@@ -322,7 +322,12 @@ class DirRestoreTests(DirRestoreCase):
         self.assertLess(unpack_at, min(i for i, a in enumerate(argvs) if a[:3] in ([PODMAN, 'secret', 'create'],
                                                                                    [PODMAN, 'volume', 'rm'])))
         import_at = argvs.index([PODMAN, 'volume', 'import', 'woowbk-demo-files', '-'])
-        self.assertEqual(argvs[import_at + 1:import_at + 6], [
+        mount = '/home/appowner/.local/share/containers/storage/volumes/woowbk-demo-files/_data'
+        self.assertEqual(argvs[import_at + 1:import_at + 9], [
+            # the replaced volume's top directory, put back (adapter _apply_volume_root; Podman 6.1.1)
+            [PODMAN, 'volume', 'inspect', '--format', '{{.Mountpoint}}', 'woowbk-demo-files'],
+            [PODMAN, 'unshare', 'chown', '--no-dereference', '0:0', '--', mount],
+            [PODMAN, 'unshare', 'chmod', '0755', '--', mount],
             [PODMAN, 'volume', 'rm', '-f', 'woowbk-demo-pgdata'],
             [PODMAN, 'ps', '--format', '{{.ID}}'],  # no container may still use a directory (review M5)
             dir_call('swap', HTML, JOB, 'inplace'), dir_call('swap', DATA, JOB, 'inplace'),

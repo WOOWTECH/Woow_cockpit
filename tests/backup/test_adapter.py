@@ -75,6 +75,7 @@ MAINTENANCE_SQL = (  # the exact query (golden argv); test_hd06_* checks the eng
     "(SELECT count(*) FROM pg_extension WHERE extname <> 'plpgsql')")
 MAINTENANCE = [psql(ALL_DATABASES_SQL), psql(MAINTENANCE_SQL, 'postgres')]
 ID_MAPS = [[PODMAN, 'unshare', 'cat', '/proc/self/uid_map'], [PODMAN, 'unshare', 'cat', '/proc/self/gid_map']]
+FILES_MOUNT = '/home/appowner/.local/share/containers/storage/volumes/woowbk-demo-files/_data'
 LAB_ID_MAP = '         0       1001          1\n         1      10000      55000\n'  # appowner:10000:55000 (lab)
 
 
@@ -406,6 +407,11 @@ class FakeOwner:
             if args[1:4] == ['du', '-s', '--inodes']:
                 assert args[4] == '--'
                 return self.out(0, b'7\t' + args[5].encode() + b'\n', stdout)
+            if args[1:5] == ['stat', '-c', '%u %g %a', '--']:   # a volume's top directory (adapter _volume_root_stat)
+                return self.out(0, b'0 0 755\n', stdout)
+            if args[1:3] == ['chown', '--no-dereference'] or args[1] == 'chmod':   # _apply_volume_root
+                assert args[-2] == '--' and args[-1].endswith('/_data')
+                return ok
             assert args[1:6] == ['du', '-s', '-B1', '--apparent-size', '--']
             return self.out(0, b'4096\t' + args[6].encode() + b'\n', stdout)
         if cmd == 'image':
@@ -935,8 +941,16 @@ class RestoreTests(AdapterCase):
             [PODMAN, 'secret', 'exists', 'woowbk-demo-app-key'], [PODMAN, 'secret', 'rm', 'woowbk-demo-app-key'],
             [PODMAN, 'secret', 'create', 'woowbk-demo-app-key', '-'],
             helper('write', '.config/woowbk-demo/app.env', '0600', '16777216'),
+            # The volume's top directory is read before it is replaced and put back after the import (Podman 6.1.1
+            # keeps an imported volume's top directory as `volume create` made it; adapter _apply_volume_root).
+            [PODMAN, 'volume', 'exists', 'woowbk-demo-files'],
+            [PODMAN, 'volume', 'inspect', '--format', '{{.Mountpoint}}', 'woowbk-demo-files'],
+            [PODMAN, 'unshare', 'stat', '-c', '%u %g %a', '--', FILES_MOUNT],
             [PODMAN, 'volume', 'rm', '-f', 'woowbk-demo-files'], [PODMAN, 'volume', 'create', 'woowbk-demo-files'],
             [PODMAN, 'volume', 'import', 'woowbk-demo-files', '-'],
+            [PODMAN, 'volume', 'inspect', '--format', '{{.Mountpoint}}', 'woowbk-demo-files'],
+            [PODMAN, 'unshare', 'chown', '--no-dereference', '0:0', '--', FILES_MOUNT],
+            [PODMAN, 'unshare', 'chmod', '0755', '--', FILES_MOUNT],
             [PODMAN, 'volume', 'rm', '-f', 'woowbk-demo-pgdata'],
             [SYSTEMCTL, '--user', 'start', '--', 'woowbk-demo-db.service'],
             [PODMAN, 'exec', 'woowbk-demo-db', 'pg_isready', '-h', '127.0.0.1', '-p', '5432', '-U', 'notes', '-d',

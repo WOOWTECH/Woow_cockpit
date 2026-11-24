@@ -1,0 +1,56 @@
+import json, os, pwd, shutil, subprocess
+def run(a, t=60, env=None):
+    try:
+        p = subprocess.run(a, capture_output=True, timeout=t, env=env)
+        return p.returncode, p.stdout.decode('utf-8', 'replace').splitlines()
+    except Exception as e:
+        return -1, ['<%s>' % type(e).__name__]
+out = {}
+try:
+    pw = pwd.getpwnam('woowbk54t'); out['owner'] = {'uid': pw.pw_uid, 'home': pw.pw_dir, 'shell': pw.pw_shell}
+except KeyError:
+    pw = None; out['owner'] = None
+out['linger'] = sorted(os.listdir('/var/lib/systemd/linger'))
+out['uidmap_pkg'] = run(['dpkg-query', '-W', '-f', '${Package} ${Version} ${Status}', 'uidmap'])[1]
+out['newuidmap'] = [os.path.exists('/usr/bin/newuidmap'), os.path.exists('/usr/bin/newgidmap')]
+out['subuid_lines'] = [l.split(':')[0] for l in open('/etc/subuid').read().splitlines()]
+out['subgid_lines'] = [l.split(':')[0] for l in open('/etc/subgid').read().splitlines()]
+procs = []
+if pw:
+    for pid in os.listdir('/proc'):
+        if not pid.isdigit():
+            continue
+        try:
+            st = os.stat('/proc/' + pid)
+            if st.st_uid != pw.pw_uid:
+                continue
+            comm = open('/proc/%s/comm' % pid).read().strip()
+            procs.append((int(pid), comm))
+        except OSError:
+            pass
+out['owner_procs'] = sorted(procs)
+out['owner_user_service'] = run(['systemctl', 'is-active', 'user@%d.service' % pw.pw_uid])[1] if pw else None
+if pw:
+    env = {'XDG_RUNTIME_DIR': '/run/user/%d' % pw.pw_uid, 'HOME': pw.pw_dir, 'PATH': '/usr/local/bin:/usr/bin:/bin'}
+    out['owner_podman_ps'] = run(["/usr/sbin/runuser", '-u', 'woowbk54t', '--', 'podman', 'ps', '-a', '--format', '{{.Names}} {{.State}} {{.Image}}'], env=env)
+    out['owner_podman_images'] = run(["/usr/sbin/runuser", '-u', 'woowbk54t', '--', 'podman', 'images', '--format', '{{.Repository}}:{{.Tag}} {{.Size}}'], env=env)
+    out['owner_podman_volumes'] = run(["/usr/sbin/runuser", '-u', 'woowbk54t', '--', 'podman', 'volume', 'ls', '--format', '{{.Name}}'], env=env)
+    out['owner_user_units'] = run(['systemctl', '--machine=woowbk54t@.host', '--user', 'list-units', '--no-legend', '--plain', '--type=service'])[1]
+    q = os.path.join(pw.pw_dir, '.config/containers/systemd')
+    out['owner_quadlets'] = sorted(os.listdir(q)) if os.path.isdir(q) else None
+    out['owner_home_du'] = run(['du', '-sh', pw.pw_dir])[1]
+out['root_podman_ps'] = run(['podman', 'ps', '-a', '--format', '{{.Names}} {{.State}}'])[1]
+out['var_tmp_woow'] = sorted(n for n in os.listdir('/var/tmp') if n.startswith('woow'))
+out['var_tmp_woow_du'] = [run(['du', '-sh', '/var/tmp/' + n])[1] for n in out['var_tmp_woow']]
+out['run_netns'] = sorted(os.listdir('/run/netns')) if os.path.isdir('/run/netns') else []
+mounts = open('/proc/self/mountinfo').read().splitlines()
+out['mounts_naming_var_tmp_woow'] = sum('/var/tmp/woow' in m for m in mounts)
+out['mounts_naming_owner'] = sum('woowbk54t' in m for m in mounts) if pw else 0
+out['harness_procs'] = sorted(set(open('/proc/%s/cmdline' % p, 'rb').read().split(b'\0')[1].decode('utf-8','replace')[-60:] for p in os.listdir('/proc') if p.isdigit() and os.path.exists('/proc/%s/cmdline' % p) and b'woow-arm54' in open('/proc/%s/cmdline' % p, 'rb').read()))
+du = shutil.disk_usage('/')
+out['df_root_free_gib'] = round(du.free / 1024**3, 2)
+out['df_var_tmp_free_gib'] = round(shutil.disk_usage('/var/tmp').free / 1024**3, 2)
+out['meminfo'] = {l.split(':')[0]: l.split(':')[1].strip() for l in open('/proc/meminfo') if l.startswith(('MemTotal', 'MemAvailable', 'SwapFree'))}
+out['services_core'] = {u: run(['systemctl', 'is-active', u])[1] for u in ('tailscaled.service', 'ssh.service')}
+out['uptime'] = open('/proc/uptime').read().split()[0]
+print(json.dumps(out, sort_keys=True, indent=1))

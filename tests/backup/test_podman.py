@@ -256,9 +256,31 @@ class FileHelperTests(unittest.TestCase):
                                  check=False)
         self.assertEqual(result.returncode, 8)
 
+    def test_relay_accepts_only_the_fixed_podman_paths(self):
+        # /usr/local/bin/podman is accepted (an upstream install, e.g. on an ARM64 test machine); a look-alike is not. No Podman
+        # is ever started here: the helper's fixed tuple is checked as text, and the same acceptance code runs with
+        # the paths renamed (p0dman) and the started program swapped for /bin/true, so no argv names podman (the
+        # host-test guard refuses any) and the host's Podman is never run.
+        self.assertIn("PODMANS = ('/usr/bin/podman', '/usr/local/bin/podman')\n", podman.FILE_HELPER)
+        helper = podman.FILE_HELPER.replace("PODMANS = ('/usr/bin/podman', '/usr/local/bin/podman')",
+                                            "PODMANS = ('/usr/bin/p0dman', '/usr/local/bin/p0dman')")
+        helper = helper.replace('proc = subprocess.Popen(argv, stdout=subprocess.PIPE)',
+                                "proc = subprocess.Popen(['/bin/true'], stdout=subprocess.PIPE)")
+        self.assertEqual(helper.count('p0dman'), 2)
+        self.assertIn("subprocess.Popen(['/bin/true']", helper)
+        for argv0, refused in (('/usr/local/bin/p0dman', False), ('/usr/bin/p0dman', False),
+                               ('/usr/local/bin/p0dmanx', True), ('/usr/local/sbin/p0dman', True), ('p0dman', True)):
+            result = self.runner.run(['/usr/bin/python3', '-I', '-c', helper, 'relay', argv0, '--version'],
+                                     check=False)
+            self.assertEqual(result.returncode == 8, refused, argv0)
+            if not refused:
+                self.assertEqual(result.returncode, 0, argv0)
+
     def test_relay_copies_stream_and_exit_code(self):
         # Same relay logic with the allowed binary swapped for /bin/sh (podman is never run on the host).
-        helper = podman.FILE_HELPER.replace("argv[0] != '/usr/bin/podman'", "argv[0] != '/bin/sh'")
+        helper = podman.FILE_HELPER.replace("PODMANS = ('/usr/bin/podman', '/usr/local/bin/podman')",
+                                            "PODMANS = ('/bin/sh',)")
+        self.assertNotEqual(helper, podman.FILE_HELPER)
         with tempfile.TemporaryFile() as sink:
             result = self.runner.run(['/usr/bin/python3', '-I', '-c', helper, 'relay', '/bin/sh', '-c',
                                       'head -c 300000 /dev/zero; exit 3'], stdout=sink, check=False)
@@ -694,3 +716,43 @@ class DirArgvTests(unittest.TestCase):
                 self.assertEqual(caught.exception.code, error_code)
                 self.assertIn(needle, caught.exception.message)
                 self.assertNotIn('import', caught.exception.message, 'never the helper code')
+
+
+class PodmanPathTests(unittest.TestCase):
+    """The fixed podman path: /usr/bin/podman, else /usr/local/bin/podman (lane arm54-2, an ARM64 test machine)."""
+
+    def test_helper_accepts_exactly_the_candidates(self):
+        self.assertIn('PODMANS = %r' % (podman.PODMAN_PATHS,), podman.FILE_HELPER)
+        self.assertEqual(podman.PODMAN_PATHS, ('/usr/bin/podman', '/usr/local/bin/podman'))
+
+    def test_distribution_path_first(self):
+        self.assertEqual(podman.find_podman(trusted=lambda p: True), '/usr/bin/podman')
+
+    def test_local_bin_when_distribution_path_is_missing(self):
+        self.assertEqual(podman.find_podman(trusted=lambda p: p == '/usr/local/bin/podman'), '/usr/local/bin/podman')
+
+    def test_falls_back_to_distribution_path_when_none_is_trusted(self):
+        self.assertEqual(podman.find_podman(trusted=lambda p: False), '/usr/bin/podman')
+
+    def test_module_constant_is_a_candidate(self):
+        self.assertIn(podman.PODMAN, podman.PODMAN_PATHS)
+
+    def test_root_only_accepts_a_system_binary(self):
+        self.assertTrue(podman.root_only('/usr/bin/env'))
+
+    def test_root_only_refuses_missing_user_owned_writable_and_directories(self):
+        self.assertFalse(podman.root_only('/nonexistent/podman'))
+        self.assertFalse(podman.root_only('/usr/bin'))
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / 'podman'
+            path.write_bytes(b'#!/bin/sh\n')
+            path.chmod(0o755)
+            self.assertFalse(podman.root_only(str(path)))  # not root-owned (tests never run as root)
+            link = Path(tmp) / 'link'
+            link.symlink_to('/usr/bin/env')
+            self.assertFalse(podman.root_only(str(link)))  # the link's own directory is user-owned
+
+    def test_root_only_follows_a_root_owned_symlink_target(self):
+        # /usr/bin/sh -> dash on Debian/Ubuntu: both directories root-owned.
+        if os.path.islink('/usr/bin/sh'):
+            self.assertTrue(podman.root_only('/usr/bin/sh'))

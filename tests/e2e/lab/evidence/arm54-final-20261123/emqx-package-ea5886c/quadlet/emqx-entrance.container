@@ -1,0 +1,29 @@
+# One HTTP entrance for the dashboard and MQTT WebSocket, as in PaaS chart 0.1.11.
+# Shares the broker's network namespace so backend listeners remain on loopback.
+[Unit]
+Description=Woow EMQX dashboard and MQTT WebSocket entrance
+Documentation=https://github.com/WOOWTECH/Woow_podman_emqx
+Requires=emqx.service
+After=emqx.service
+PartOf=emqx.service
+
+[Container]
+ContainerName=woow-emqx-entrance
+Image=docker.io/nginxinc/nginx-unprivileged:1.27-alpine@sha256:65e3e85dbaed8ba248841d9d58a899b6197106c23cb0ff1a132b7bfe0547e4c0
+Network=container:woow-emqx
+Label=io.woowtech.stack=emqx
+Volume=%h/.config/emqx/entrance.conf:/etc/nginx/nginx.conf:ro,Z
+NoNewPrivileges=true
+HealthCmd=wget -q -O /dev/null http://127.0.0.1:18083/readyz
+HealthInterval=30s
+HealthTimeout=5s
+HealthRetries=5
+HealthStartPeriod=30s
+
+[Service]
+SuccessExitStatus=143
+Restart=always
+TimeoutStartSec=300
+
+[Install]
+WantedBy=default.target

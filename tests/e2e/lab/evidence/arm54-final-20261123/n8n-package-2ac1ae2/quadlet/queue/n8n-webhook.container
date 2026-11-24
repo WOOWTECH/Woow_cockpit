@@ -1,0 +1,52 @@
+[Unit]
+Description=n8n webhook processor
+Documentation=https://github.com/WOOWTECH/Woow_podman_n8n
+PartOf=n8n.target
+Requires=n8n.service n8n-valkey.service n8n-postgres.service
+After=n8n.service n8n-valkey.service n8n-postgres.service
+
+[Container]
+ContainerName=n8n-webhook
+Image=docker.io/n8nio/n8n:2.43.6
+Network=n8n.network
+Volume=n8n-data.volume:/home/node/.n8n
+PublishPort=@@HOST_BIND@@:@@WEBHOOK_PORT@@:5678
+EnvironmentFile=%h/.config/n8n/n8n.env
+Environment=DB_TYPE=postgresdb
+Environment=DB_POSTGRESDB_HOST=n8n-postgres
+Environment=DB_POSTGRESDB_PORT=5432
+Environment=DB_POSTGRESDB_DATABASE=n8n
+Environment=DB_POSTGRESDB_USER=n8n
+Environment=NODE_ENV=production
+Environment=GENERIC_TIMEZONE=@@GENERIC_TIMEZONE@@
+Environment=TZ=@@TZ@@
+Environment=DB_POSTGRESDB_PASSWORD_FILE=/run/secrets/n8n-db-password
+Environment=N8N_ENFORCE_SETTINGS_FILE_PERMISSIONS=true
+Environment=EXECUTIONS_MODE=queue
+Environment=QUEUE_BULL_REDIS_HOST=n8n-valkey
+Environment=QUEUE_BULL_REDIS_PORT=6379
+Environment=QUEUE_BULL_REDIS_PASSWORD_FILE=/run/secrets/n8n-valkey-password
+Environment=N8N_DEFAULT_BINARY_DATA_MODE=database
+Environment=N8N_EVENTBUS_LOGWRITER_LOGFULLPATH=/home/node/.n8n/n8nEventLog-webhook.log
+Secret=n8n-db-password,type=mount,target=n8n-db-password
+Secret=n8n-valkey-password,type=mount,target=n8n-valkey-password
+Exec=webhook
+Label=io.woowtech.app=n8n
+LogDriver=journald
+HealthCmd=node -e "fetch('http://127.0.0.1:5678/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+HealthInterval=30s
+HealthTimeout=10s
+HealthRetries=3
+HealthStartPeriod=180s
+PodmanArgs=--stop-timeout=60
+
+[Service]
+ExecStartPre=/usr/bin/timeout 300 /bin/sh -c 'until /usr/bin/podman healthcheck run n8n >/dev/null 2>&1; do sleep 2; done'
+SuccessExitStatus=143
+Restart=always
+RestartSec=10
+TimeoutStartSec=900
+TimeoutStopSec=90
+
+[Install]
+WantedBy=default.target

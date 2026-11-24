@@ -14,8 +14,8 @@ on a copy of its own, with `SQLITE_DBCONFIG_DEFENSIVE`, `trusted_schema=OFF`
 and only ordinary tables (no virtual table or its shadow tables; explicit columns): the owner account (email and
 password set, else nothing can be moved), counts, and the workflows one per line, whose reasons (shell commands, SSH,
 local files, Home Assistant, HA-internal addresses, Redis/MQTT, webhooks) this process works out row by row within a
-size budget (review HA-SEC-02, HA-SEC-05); community packages (native `.node` files must be x86-64 for musl, like the
-n8n image); the version must equal `n8n --version` of the live image.
+size budget (review HA-SEC-02, HA-SEC-05); community packages (native `.node` files must be for this device's
+processor and for musl, like the n8n image); the version must equal `n8n --version` of the live image.
 
 convert: a throwaway volume holds the SQLite copy and HA's key; a throwaway n8n (live image, network none) runs
 `export:entities --includeExecutionHistoryDataTables=true`; a throwaway PostgreSQL (the live n8n-postgres image, user
@@ -45,7 +45,7 @@ from pathlib import Path
 
 from . import habackup, tempctr, util
 from .errors import BackupError
-from .ha_odoo import FileTar, _info, _int, check_volume_tar, quadlet_mounts
+from .ha_odoo import EM_X86_64, FileTar, _info, _int, check_volume_tar, host_elf_machine, quadlet_mounts
 
 SLUG = 'woow-n8n'
 APP_ID = 'n8n'
@@ -128,14 +128,14 @@ def packages_of(data):
 
 
 def elf_fits(data):
-    """True when an ELF shared object is x86-64 and does not need glibc (the n8n image is musl); False for another
-    machine or glibc; None when it is not ELF."""
+    """True when an ELF shared object is for this device's processor (the n8n image's) and does not need glibc (the
+    n8n image is musl); False for another machine or glibc; None when it is not ELF."""
     if len(data) < 64 or data[:4] != b'\x7fELF':
         return None
     if data[4] != 2 or data[5] != 1:   # 64-bit little endian
         return False
     machine = struct.unpack_from('<H', data, 18)[0]
-    if machine != 0x3E:
+    if machine != (host_elf_machine() or EM_X86_64):
         return False
     return not _needs_glibc(data)
 

@@ -318,6 +318,88 @@ class ConvertTests(HeadscaleCase):
         self.assertNotIn('extra_records.json', self.volume('headscale-data'))
 
 
+CONFIG_DIR = '.config/headscale/headscale'
+
+
+def config_dir_tar(config=LIVE_CONFIG, extra=()):
+    return fk.tar_of([{'name': '.', 'type': 'dir', 'mode': 0o755}, {'name': 'config.yaml', 'data': config, 'mode': 0o644},
+                      {'name': 'policy.json', 'data': b'{}', 'mode': 0o644}, *extra])
+
+
+class ConfigFolderTests(HeadscaleCase):
+    """The entry catalog-suggest drafts for the package names its read-only configuration folder as the app's host folder:
+    the import carries this device's own folder instead of refusing that entry (found on an ARM64 test machine)."""
+    dirs = [{'path': CONFIG_DIR}]
+
+    def setUp(self):
+        super().setUp()
+        self.world.dirs[CONFIG_DIR] = config_dir_tar()
+
+    def catalog_apps(self):
+        app = super().catalog_apps()['headscale']
+        app.data_dirs = list(self.dirs)
+        return {'headscale': app}
+
+    def packs(self):
+        return [c for c in self.world.owner.calls if c[0] == 'dir_pack']
+
+    def test_the_drafted_entry_is_importable_and_carries_this_devices_folder(self):
+        result = self.check(self.upload_headscale(), ['headscale'])[0]
+        self.assertEqual((result['ok'], result['blockers']), (True, []))
+        self.assertEqual(self.packs(), [], 'the check packs nothing')
+        carried = {}
+        seen = fk.Adapter.import_manifest
+
+        def import_manifest(adapter, staging_dir, **items):
+            carried.update({rel: Path(path).read_bytes() for rel, path in items['dirs'].items()})
+            carried['modes'] = {Path(path).stat().st_mode & 0o777 for path in items['dirs'].values()}
+            return seen(adapter, staging_dir, **items)
+
+        with mock.patch.object(fk.Adapter, 'import_manifest', import_manifest):
+            self.convert(self.upload_headscale(), ['headscale'])
+        self.assertEqual(self.packs(), [('dir_pack', CONFIG_DIR)])
+        self.assertEqual(carried, {CONFIG_DIR: config_dir_tar(), 'modes': {0o600}}, "this device's folder, byte for byte")
+        self.assertEqual(sorted(self.volume('headscale-data')),
+                         ['.', 'db.sqlite', 'extra_records.json', 'noise_private.key'])
+
+    def test_an_entry_without_the_folder_hands_over_no_folder(self):
+        self.catalog['headscale'].data_dirs = []
+        self.convert(self.upload_headscale(), ['headscale'])
+        self.assertNotIn('dirs', self.world.manifests['headscale'])
+        self.assertEqual(self.packs(), [])
+
+    def test_any_other_folder_is_refused(self):
+        for dirs in (['.config/headscale'], [CONFIG_DIR + '/sub'], [CONFIG_DIR, '.config/other'], ['.config/other'],
+                     [CONFIG_DIR, CONFIG_DIR]):
+            with self.subTest(dirs=dirs):
+                self.catalog['headscale'].data_dirs = [{'path': d} for d in dirs]
+                with self.assertRaises(BackupError) as caught:
+                    self.convert(self.upload_headscale(), ['headscale'])
+                self.assertEqual(caught.exception.code, 'incompatible')
+                self.assertIn('和 Quadlet 檔不一致', caught.exception.message)
+                self.assertEqual(self.packs(), [])
+                self.assertEqual(self.storage.list_backups(), [])
+
+    def test_a_config_that_changed_during_the_conversion_stops_it(self):
+        for tar in (config_dir_tar(LIVE_CONFIG.replace(b'ts.local', b'other.local')),
+                    fk.tar_of([{'name': '.', 'type': 'dir'}, {'name': 'sub', 'type': 'dir'},
+                               {'name': 'sub/config.yaml', 'data': LIVE_CONFIG}])):
+            with self.subTest(size=len(tar)):
+                self.world.dirs[CONFIG_DIR] = tar
+                with self.assertRaises(BackupError) as caught:
+                    self.convert(self.upload_headscale(), ['headscale'])
+                self.assertIn('設定檔在轉換期間改變了', caught.exception.message)
+                self.assertEqual(self.storage.list_backups(), [])
+
+    def test_a_folder_a_restore_would_refuse_stops_it(self):
+        self.world.dirs[CONFIG_DIR] = config_dir_tar(extra=[{'name': '../escape', 'data': b'x'}])
+        with self.assertRaises(BackupError) as caught:
+            self.convert(self.upload_headscale(), ['headscale'])
+        self.assertEqual(caught.exception.code, 'job-failed')
+        self.assertIn('設定資料夾無法還原', caught.exception.message)
+        self.assertEqual(self.storage.list_backups(), [])
+
+
 class RecordTests(unittest.TestCase):
     def test_identity_paths_reject_escapes_and_collisions(self):
         for value in ('/etc/headscale/db', '/var/lib/headscale/../db', '/var/lib/headscale/a//b'):

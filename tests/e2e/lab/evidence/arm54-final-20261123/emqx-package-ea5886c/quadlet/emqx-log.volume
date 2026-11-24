@@ -1,0 +1,6 @@
+[Unit]
+Description=Woow EMQX log volume
+
+[Volume]
+VolumeName=woow_emqx_log
+Label=io.woowtech.stack=emqx

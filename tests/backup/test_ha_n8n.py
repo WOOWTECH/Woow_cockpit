@@ -245,6 +245,16 @@ class AnalyseTests(unittest.TestCase):
         self.assertFalse(ha_n8n.elf_fits(elf(bits=1)), '32-bit')
         self.assertIsNone(ha_n8n.elf_fits(b'not elf' * 20))
 
+    def test_elf_follows_the_devices_processor(self):
+        with mock.patch.object(ha_n8n, 'host_elf_machine', lambda: 0xB7):  # an ARM64 device (lane arm54-2, .54)
+            self.assertTrue(ha_n8n.elf_fits(elf(machine=0xB7)), 'aarch64 musl code runs on the arm64 image')
+            self.assertFalse(ha_n8n.elf_fits(elf(machine=0xB7, glibc=True)), 'glibc code does not')
+            self.assertFalse(ha_n8n.elf_fits(elf()), 'x86-64 code does not')
+            self.assertFalse(ha_n8n.elf_fits(elf(machine=0xB7, bits=1)), '32-bit')
+        with mock.patch.object(ha_n8n, 'host_elf_machine', lambda: None):  # unknown: as before, x86-64
+            self.assertTrue(ha_n8n.elf_fits(elf()))
+            self.assertFalse(ha_n8n.elf_fits(elf(machine=0xB7)))
+
     def test_packages(self):
         data = json.dumps({'dependencies': {'n8n-nodes-a': '^1.0.0', '@scope/n8n-nodes-b': '2.0.0',
                                             '../evil': '1'}}).encode()

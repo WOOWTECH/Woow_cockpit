@@ -1,0 +1,67 @@
+# Headscale 0.29.4: the Tailscale control plane. This unit is the whole server; Headplane
+# (headplane.container) is only its web UI and is not needed for the VPN to work.
+#
+# The image is built locally by scripts/install.sh from ./Containerfile, because there is no
+# WOOWTECH registry image yet (decision D3) and the upstream ko image carries no shell, which
+# a HealthCmd needs. Its headscale binary comes from the upstream image pinned by digest, so
+# the control plane is the unmodified upstream build. No registry holds this tag: Pull=never.
+#
+# /etc/headscale is a read-only bind of ~/.config/headscale/headscale, rendered at install
+# time by scripts/install.sh from config/templates/headscale (decision D2). Edit
+# ~/.config/headscale/headscale.env and run scripts/install.sh again; never edit the
+# installed copies, the next install overwrites them (after keeping a backup).
+#
+# Ports are published on the loopback address by default (STANDARD section 5): Tailscale
+# clients reach server_url through a reverse proxy or a router port-forward, never by
+# talking to this port across the LAN. See README, "External access" - the Cloudflare
+# tunnel is NOT a usable path for the TS2021 control protocol.
+[Unit]
+Description=Woow Headscale control plane
+Documentation=https://github.com/WOOWTECH/Woow_podman_vpn_headscale_package
+Documentation=https://headscale.net/stable/
+After=headscale-ngrok.service
+
+[Container]
+ContainerName=headscale
+Image=localhost/woow-headscale:0.29.4-r1
+Pull=never
+Network=headscale.network
+HostName=headscale
+Exec=serve
+PublishPort=@@HEADSCALE_PUBLISH@@:8080
+PublishPort=@@HEADSCALE_METRICS_PUBLISH@@:9090
+Volume=headscale-data.volume:/var/lib/headscale
+Volume=headscale-run.volume:/var/run/headscale
+Volume=%h/.config/headscale/headscale:/etc/headscale:ro,Z
+# `headscale health` dials the unix socket in headscale-run, so this checks the running
+# server, not just the process. The image is ours, so the binary is guaranteed to be there.
+# This is what `podman healthcheck run headscale` and headplane.container's ExecStartPre= loop
+# execute on demand. The status podman RECORDS for it is not trusted anywhere in this
+# repository: podman updates it from a transient healthcheck timer that does not fire for a
+# Quadlet-started container on every host, so it can sit at "starting" while the server serves.
+# Readiness is decided by hs_wait_ready (HTTP /health) instead - see scripts/headscale-helpers.sh.
+HealthCmd=/ko-app/headscale health
+HealthInterval=15s
+HealthTimeout=5s
+HealthRetries=12
+HealthStartPeriod=20s
+NoNewPrivileges=true
+Environment=GOMEMLIMIT=900MiB
+Label=io.woowtech.app=headscale
+# 4.9.3 has no StopTimeout= key; this is the supported spelling.
+PodmanArgs=--stop-timeout=30
+
+[Service]
+# Read the agent's actual public URL before each Headscale start. If ngrok is
+# temporarily unavailable, keep the last known URL and let the local server run.
+ExecStartPre=/usr/bin/python3 %h/.config/headscale/ngrok-sync.py --apply
+# A container stopped by systemd is stopped with SIGTERM: an entrypoint that does not trap
+# it exits 143 (128+15), which would leave the unit failed after a clean stop.
+SuccessExitStatus=143
+Restart=always
+RestartSec=10
+TimeoutStartSec=300
+TimeoutStopSec=60
+
+[Install]
+WantedBy=default.target

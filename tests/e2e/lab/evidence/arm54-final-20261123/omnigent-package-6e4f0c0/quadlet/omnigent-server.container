@@ -1,0 +1,68 @@
+# omnigent-server: the Omnigent orchestration server and web UI (upstream image).
+#
+# Rendered by scripts/install.sh from ~/.config/omnigent/omnigent.env (the double-at tokens
+# are listed in quadlet/render-vars). Edit the env file and re-run install.sh; do not edit
+# the installed copy.
+#
+# - pinned to v0.21.0 by tag and by the digest of the multi-arch index (podman checks the
+#   digest and ignores the tag), and to the omnigent CLI version in the runner image: bump
+#   both together, with a database dump first
+# - DATABASE_URL comes from a podman secret derived from the generated DB password
+# - published on 127.0.0.1 by default; the outward door is a tailnet or tunnel front end
+[Unit]
+Description=omnigent-server: Omnigent orchestration server + web UI
+Documentation=https://github.com/WOOWTECH/Woow_podman_omnigent_package
+Requires=omnigent-postgres.service
+After=omnigent-postgres.service
+
+[Container]
+ContainerName=omnigent-server
+Image=ghcr.io/omnigent-ai/omnigent-server:v0.21.0@sha256:9bba2964f015ddbb61da0924267effd1801c0db8f44ecec95f401f24d9a3f90c
+Network=omnigent.network
+PublishPort=@@OMNIGENT_BIND@@:@@OMNIGENT_PORT@@:8000
+Volume=omnigent-server.volume:/data
+
+# Upstream reads DATABASE_URL from the environment first (deploy/docker/entrypoint.py).
+Secret=omnigent-database-url,type=env,target=DATABASE_URL
+
+Environment=HOST=0.0.0.0
+Environment=PORT=8000
+Environment=ARTIFACT_DIR=/data/artifacts
+Environment=OMNIGENT_AUTH_ENABLED=1
+Environment=OMNIGENT_AUTH_PROVIDER=accounts
+Environment=OMNIGENT_FEATURES=usage_page,harness_install
+Environment=OMNIGENT_PUBLIC_SHARING=0
+# Login and device grants stop refreshing this many days after they were approved; 365 is
+# the WOOW PaaS value (upstream's default is 30).
+Environment=OMNIGENT_GRANT_MAX_LIFETIME_DAYS=365
+# Only anchors upstream's data dir on the volume; nothing is written to this path. The data
+# dir holds what admins change at runtime (Settings > Sharing overrides, the optional admins
+# roster): left unset it is /root/.omnigent, which every restart recreates empty.
+Environment=OMNIGENT_ADMIN_CREDENTIALS_PATH=/data/admin-credentials
+Environment=TZ=Asia/Taipei
+Environment=OMNIGENT_ACCOUNTS_INIT_ADMIN_USERNAME=@@OMNIGENT_ADMIN_USERNAME@@
+Secret=omnigent-admin-password,type=env,target=OMNIGENT_ACCOUNTS_INIT_ADMIN_PASSWORD
+# Public or tailnet URL used in invite links and OAuth redirects. Empty lets upstream
+# derive it from HOST/PORT, which is fine for loopback-only use.
+Environment=OMNIGENT_ACCOUNTS_BASE_URL=@@OMNIGENT_ACCOUNTS_BASE_URL@@
+
+# /health is JSON; /healthz is swallowed by the SPA catch-all (always 200).
+HealthCmd=curl -sf http://127.0.0.1:8000/health
+HealthInterval=30s
+HealthTimeout=10s
+HealthStartPeriod=30s
+HealthRetries=3
+
+NoNewPrivileges=true
+DropCapability=ALL
+
+[Service]
+# A container stopped by systemd is stopped with SIGTERM: an entrypoint that does not
+# trap it exits 143 (128+15), which would leave the unit failed after a clean stop.
+SuccessExitStatus=143
+Restart=always
+RestartSec=10
+TimeoutStartSec=300
+
+[Install]
+WantedBy=default.target

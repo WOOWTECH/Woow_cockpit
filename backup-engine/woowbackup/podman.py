@@ -16,6 +16,7 @@ import re
 import select
 import selectors
 import signal
+import stat
 import subprocess
 import time
 from dataclasses import dataclass
@@ -24,7 +25,43 @@ from .errors import BackupError
 
 RUNUSER = '/usr/sbin/runuser'
 ENV = '/usr/bin/env'
-PODMAN = '/usr/bin/podman'
+# Podman's fixed path: the distribution's /usr/bin/podman, else an upstream install in /usr/local/bin (a test machine,
+# Debian 12 ARM64 with Podman 6.1.1 built into /usr/local, has no /usr/bin/podman: every owner command failed with
+# exit 127 there; lane arm54-2, 2026-11-23). Still one fixed argv[0] (CONTRACT section 10 rule 2), chosen once:
+# only a root-owned regular file nobody else may change, below directories only root may write.
+PODMAN_PATHS = ('/usr/bin/podman', '/usr/local/bin/podman')
+
+
+def root_only(path):
+    """True for a root-owned regular file without group/other write, whose directories (of the path and of the
+    file it resolves to) up to / are root-owned and not group/other-writable."""
+    try:
+        st = os.stat(path)
+    except OSError:
+        return False
+    if not stat.S_ISREG(st.st_mode) or st.st_uid != 0 or st.st_mode & 0o022:
+        return False
+    for start in (os.path.dirname(os.path.abspath(path)), os.path.dirname(os.path.realpath(path))):
+        directory = start
+        while True:
+            try:
+                st = os.stat(directory)
+            except OSError:
+                return False
+            if st.st_uid != 0 or st.st_mode & 0o022:
+                return False
+            if directory == '/':
+                break
+            directory = os.path.dirname(directory)
+    return True
+
+
+def find_podman(paths=PODMAN_PATHS, trusted=root_only):
+    """The first trusted candidate; the distribution path when none is (owner commands then fail as before)."""
+    return next((path for path in paths if trusted(path)), paths[0])
+
+
+PODMAN = find_podman()
 SYSTEMCTL = '/usr/bin/systemctl'
 PYTHON = '/usr/bin/python3'
 SAFE_PATH = '/usr/sbin:/usr/bin:/sbin:/bin'
@@ -51,7 +88,7 @@ HELPER_ERRORS = {3: 'not-found', 4: 'not-regular', 5: 'too-large', 6: 'bad-path'
 #   write <rel> <mode> <max>  stdin -> temp file (O_EXCL|O_NOFOLLOW) -> fchmod -> fsync -> rename
 #   remove <rel>              unlink a non-directory ("removed"/"absent" on stdout)
 #   stat <rel>...             JSON list of {path,type,size,mode}
-#   relay /usr/bin/podman ... run podman with an owner-created stdout pipe and copy it to our stdout
+#   relay <podman> ...        run podman (one of PODMAN_PATHS) with an owner-created stdout pipe, copied to our stdout
 #                             (podman volume export reopens /dev/stdout, which fails on root-owned fds)
 FILE_HELPER = r'''
 import errno, json, os, stat, subprocess, sys
@@ -157,8 +194,9 @@ def op_stat(rels):
         kind = 'file' if stat.S_ISREG(st.st_mode) else 'dir' if stat.S_ISDIR(st.st_mode) else 'link' if stat.S_ISLNK(st.st_mode) else 'other'
         result.append({'path': rel, 'type': kind, 'size': st.st_size, 'mode': stat.S_IMODE(st.st_mode)})
     sys.stdout.write(json.dumps(result))
+PODMANS = ('/usr/bin/podman', '/usr/local/bin/podman')
 def op_relay(argv):
-    if not argv or argv[0] != '/usr/bin/podman':
+    if not argv or argv[0] not in PODMANS:
         die('bad-command')
     proc = subprocess.Popen(argv, stdout=subprocess.PIPE)
     while True:

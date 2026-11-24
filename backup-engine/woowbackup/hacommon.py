@@ -17,12 +17,12 @@ import time
 from . import habackup, tempctr, util
 from .errors import BackupError
 from .ha_n8n import URL_HOST_RE
-from .ha_odoo import FileTar, _copy_info, _live_tar, _norm, _under, quadlet_container_name, quadlet_mounts
+from .ha_odoo import (ELF_MACHINES, FileTar, _copy_info, _live_tar, _norm, _under, host_elf_machine,  # noqa: F401
+                      quadlet_container_name, quadlet_mounts)
 
 LABELS_OUTPUT = 256 * 1024
 MAX_TEXT_SCAN = 16 * 1024 * 1024
 VERSION_RE = re.compile(r'v?([0-9]{1,4})\.([0-9]{1,4})\.([0-9]{1,4})\Z')
-ELF_MACHINES = {'x86_64': 0x3E, 'amd64': 0x3E, 'aarch64': 0xB7, 'arm64': 0xB7}
 
 
 # C0/C1 controls, U+2028/U+2029 and the Unicode bidirectional controls (PropList Bidi_Control: U+061C, U+200E,
@@ -312,11 +312,6 @@ def network(text):
         return ipaddress.ip_network(str(text).strip(), strict=False)
     except ValueError:
         return None
-
-
-def host_elf_machine():
-    """ELF e_machine of this device's processor (x86-64 0x3E, aarch64 0xB7), None when unknown."""
-    return ELF_MACHINES.get(os.uname().machine.lower())
 
 
 def foreign_elf(head, machine):

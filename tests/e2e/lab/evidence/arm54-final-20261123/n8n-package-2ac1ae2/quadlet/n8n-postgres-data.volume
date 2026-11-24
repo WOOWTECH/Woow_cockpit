@@ -1,0 +1,9 @@
+# n8n-postgres-data.volume: PGDATA for n8n-postgres.
+# VolumeName= keeps the podman-compose name, so an existing install is adopted as-is.
+[Unit]
+Description=n8n PostgreSQL data
+Documentation=https://github.com/WOOWTECH/Woow_podman_n8n
+
+[Volume]
+VolumeName=n8n_postgres_data
+Label=io.woowtech.app=n8n

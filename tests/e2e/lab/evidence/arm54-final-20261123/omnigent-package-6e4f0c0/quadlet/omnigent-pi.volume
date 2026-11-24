@@ -1,0 +1,10 @@
+# pi state of the runner, private mode (OMNIGENT_PI_STATE=private, the default).
+#
+# Owned by this package: created on first start, deleted only by `uninstall.sh --purge`.
+# Needs `podman exec -it omnigent-runner pi` then `/login`. In shared mode install.sh does not
+# install this file; the runner then references pi-agent-data.volume, the unit owned by
+# Woow_podman_pi_agent_package (scripts/render-args.sh picks the reference).
+[Volume]
+VolumeName=omnigent-pi-data
+Label=app=omnigent
+Label=io.woowtech.app=omnigent

@@ -3112,13 +3112,52 @@ class QuadletPostgresAdapter(Adapter):
         self.log(f'已重建應用機密 {name}（內容不記錄）')
 
     def _recreate_volume(self, name, path):
+        ids = self.owner_ids()
+        # The top directory as it is now (None when the volume does not exist): kept when the archive has no entry
+        # for it (`podman volume export` writes none), see _apply_volume_root.
+        current = self._volume_root_stat(name)
         self.runner.podman('volume', 'rm', '-f', name, timeout=STOP_TIMEOUT)
         self.runner.podman('volume', 'create', name, timeout=SHORT_TIMEOUT)
         # podman only ever reads a canonical tar of the validated members (review finding SEC-1).
-        ids = self.owner_ids()
         with nested.pipe_from(lambda out: nested.stream_volume(path, out, ids)) as feed:
             self.runner.podman('volume', 'import', name, '-', input=feed, timeout=EXPORT_TIMEOUT)
+        self._apply_volume_root(name, nested.volume_root(path, ids) or current)
         self.log(f'已重建資料卷 {name}')
+
+    def _volume_mountpoint(self, name):
+        mount = (self.runner.podman('volume', 'inspect', '--format', '{{.Mountpoint}}', name, timeout=SHORT_TIMEOUT,
+                                    max_output=SMALL_OUTPUT).stdout or b'').decode('utf-8', 'replace').strip()
+        if not mount.startswith('/') or '\n' in mount or len(mount) > 4096:
+            raise BackupError('job-failed', f'無法讀取資料卷 {name} 的位置。', app=self.app.id)
+        return mount
+
+    def _volume_root_stat(self, name):
+        """(uid, gid, mode) of an existing volume's top directory inside the owner's user namespace; None when the
+        volume does not exist."""
+        if self.runner.podman('volume', 'exists', name, check=False, timeout=SHORT_TIMEOUT).returncode != 0:
+            return None
+        out = (self.runner.podman('unshare', 'stat', '-c', '%u %g %a', '--', self._volume_mountpoint(name),
+                                  timeout=SHORT_TIMEOUT, max_output=SMALL_OUTPUT).stdout or b'').decode('ascii',
+                                                                                                         'replace')
+        parts = out.split()
+        if len(parts) != 3 or not parts[0].isdigit() or not parts[1].isdigit() \
+                or not re.fullmatch(r'[0-7]{1,4}', parts[2]):
+            raise BackupError('job-failed', f'無法讀取資料卷 {name} 的權限。', app=self.app.id)
+        return int(parts[0]), int(parts[1]), int(parts[2], 8)
+
+    def _apply_volume_root(self, name, root):
+        """Owner, group and mode of the new volume's top directory: the archive's top-directory entry, else the
+        replaced volume's. Podman 6.1.1 (an ARM64 test machine, 2026-11-23) keeps an imported volume's top directory as
+        `volume create` made it (the owner's root, 0755), ignores the archive's '.' entry, writes none on
+        `volume export`, and no longer hands an imported volume to the image's user at the first mount: an app
+        running as another user (n8n's `node`) could not write its own folder after a restore (EACCES; probes
+        n8n-volume-probe and -2). Applied inside the owner's user namespace; nothing known = left as Podman made it."""
+        if root is None:
+            return
+        uid, gid, mode = root
+        mount = self._volume_mountpoint(name)
+        self.runner.podman('unshare', 'chown', '--no-dereference', f'{uid}:{gid}', '--', mount, timeout=SHORT_TIMEOUT)
+        self.runner.podman('unshare', 'chmod', format(mode, '04o'), '--', mount, timeout=SHORT_TIMEOUT)
 
     def _postgres_ready(self, pg):
         result = self.runner.podman('exec', pg['container'], 'pg_isready', '-h', '127.0.0.1', '-p', '5432',

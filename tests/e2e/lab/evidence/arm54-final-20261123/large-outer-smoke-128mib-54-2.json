@@ -1,0 +1,1 @@
+{"commercial_acceptance": "not-complete", "deadline_seconds": 1200, "elapsed_seconds": 0.0, "error_code": "FileExistsError", "error_hint": null, "host": "192.168.2.54", "mib": 128, "owner_floor_bytes": 4294967296, "phase": "tools", "raw_stderr_exported": false, "reserve_gib": 4, "status": "failed", "tools_installed_system_wide": false}

@@ -373,6 +373,20 @@ def stream_volume(path, out, ids=None):
     return _stream(path, out, ids, VOLUME)
 
 
+def volume_root(path, ids=None):
+    """(uid, gid, mode) of a volume tar's top directory when its FIRST member is the root entry ('.', validated like
+    stream_volume validates it, owners inside `ids`); None when the tar does not start with one. Podman 6.1.1 does not
+    apply that entry on `podman volume import` (the restore applies it itself, adapter _apply_volume_root)."""
+    policy = _VolumePolicy(ids, VOLUME)
+    with _open(path, VOLUME, 'r|') as tar:
+        for member in _members(tar, VOLUME, MAX_VOLUME_MEMBERS):
+            name, kind, _link = policy.admit(member)
+            if name == '.' and kind == 'dir':
+                return int(member.uid), int(member.gid), member.mode & 0o7777
+            return None
+    return None
+
+
 def check_dir(path, ids=None):
     """Validate a host directory tar completely (no output); returns a VolumeReport (volume rules, see above)."""
     return _check(path, ids, DIRECTORY)

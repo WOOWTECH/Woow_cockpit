@@ -1,0 +1,212 @@
+"""Item C cleanup on .54 (root): remove everything the OwnerRunner rootless runs added -- the test owner's units,
+rootless storage, linger and processes, the account (home, group, subordinate ids), the user@<uid> drop-in, the
+uidmap package, the account-file backups' content (/etc/passwd- ... put back byte-exact from the setup copies) and
+the owner's journal files -- and report equal/not-equal booleans only (never a hash of a shadow file).
+Runs before arm54_final_cleanup.py (private store + workspace). Idempotent: every step checks first."""
+import json
+import os
+from pathlib import Path
+import shutil
+import signal
+import subprocess
+import sys
+import time
+
+from arm54_final_runtime import ROOT, report
+import arm54_final_owner_common as oc
+
+checks, facts = {}, {}
+out = {'status': 'failed', 'phase': 'start', 'owner': oc.OWNER, 'commercial_acceptance': 'not-complete',
+       'checks': checks, 'facts': facts}
+started = time.monotonic()
+state = ROOT / 'owner-state'
+SYS_ENV = {'PATH': '/usr/sbin:/usr/bin:/sbin:/bin', 'LANG': 'C.UTF-8', 'DEBIAN_FRONTEND': 'noninteractive'}
+
+
+def check(name, ok, **detail):
+    checks[name] = bool(ok)
+    if detail:
+        facts[name] = detail
+    return bool(ok)
+
+
+def sysrun(argv, timeout=120, ok_codes=(0,)):
+    p = subprocess.run(argv, capture_output=True, timeout=timeout, env=SYS_ENV)
+    if p.returncode not in ok_codes:
+        raise RuntimeError('cleanup-command-failed %s rc=%d %s' % (argv[0], p.returncode, oc.safe_tail(p.stderr)))
+    return p
+
+
+def sha(path):
+    import hashlib
+    try:
+        return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+    except OSError:
+        return None
+
+
+def pids_of_uid(uid):
+    found = []
+    for entry in Path('/proc').iterdir():
+        if entry.name.isdigit():
+            try:
+                if entry.stat().st_uid == uid:
+                    found.append(int(entry.name))
+            except OSError:
+                pass
+    return found
+
+
+def pids_in_netns(inode):
+    found = []
+    for entry in Path('/proc').iterdir():
+        if entry.name.isdigit() and int(entry.name) != os.getpid():
+            try:
+                if os.stat('/proc/%s/ns/net' % entry.name).st_ino == inode:
+                    found.append(int(entry.name))
+            except OSError:
+                pass
+    return found
+
+
+try:
+    owner_doc = json.loads((state / 'owner.json').read_text()) if (state / 'owner.json').exists() else {}
+    netns_doc = json.loads((state / 'owner-netns.json').read_text()) if (state / 'owner-netns.json').exists() else {}
+    acct = oc.account()
+    uid = acct.pw_uid if acct else owner_doc.get('uid')
+    facts['owner_present_at_start'] = acct is not None
+    if acct is not None:
+        out['phase'] = 'owner-units'
+        active = subprocess.run(['systemctl', 'is-active', 'user@%d.service' % uid], capture_output=True, text=True,
+                                timeout=30).stdout.strip()
+        if active == 'active':
+            oc.systemctl('stop', 'n8n.target', timeout=600, check=False)
+            oc.systemctl('stop', 'headscale.service', 'headplane.service', timeout=300, check=False)
+            units = oc.systemctl('list-units', '--all', '--no-legend', '--plain', '--type=service', check=False)
+            facts['owner_units_after_stop'] = sorted(l.split()[0] for l in units.stdout.decode().splitlines()
+                                                     if l.strip() and l.split()[2:3] == ['active'])
+        storage = oc.owner(['/usr/bin/test', '-d', '.local/share/containers'], check=False).returncode == 0
+        facts['owner_storage_present'] = storage
+        if storage:  # an account whose podman never ran has nothing to reset
+            reset = oc.podman('system', 'reset', '--force', timeout=600, check=False)
+            check('owner_podman_system_reset', reset.returncode == 0, rc=reset.returncode,
+                  tail=oc.safe_tail(reset.stderr, 300))
+        out['phase'] = 'linger'
+        sysrun(['loginctl', 'disable-linger', oc.OWNER], timeout=60)
+        deadline = time.monotonic() + 120
+        while time.monotonic() < deadline:
+            state_now = subprocess.run(['systemctl', 'is-active', 'user@%d.service' % uid], capture_output=True,
+                                       text=True, timeout=30).stdout.strip()
+            if state_now in ('inactive', 'failed', 'unknown'):
+                break
+            time.sleep(2)
+        check('user_manager_stopped', state_now in ('inactive', 'failed', 'unknown'), state=state_now)
+        out['phase'] = 'processes'
+        if netns_doc.get('inode'):
+            left = pids_in_netns(netns_doc['inode'])
+            facts['processes_left_in_owner_netns'] = len(left)
+            for pid in left:
+                try:
+                    os.kill(pid, signal.SIGKILL)
+                except OSError:
+                    pass
+        for _ in range(30):
+            left = pids_of_uid(uid)
+            if not left:
+                break
+            for pid in left:
+                try:
+                    os.kill(pid, signal.SIGKILL)
+                except OSError:
+                    pass
+            time.sleep(1)
+        check('no_owner_process_left', not pids_of_uid(uid))
+        out['phase'] = 'account'
+        sysrun(['userdel', '-r', oc.OWNER], timeout=300, ok_codes=(0, 12))  # 12: mail spool absent
+    check('owner_account_gone', oc.account() is None and not Path('/home/' + oc.OWNER).exists())
+    out['phase'] = 'modules'
+    # NEVER unload kernel modules on .54 again: owner-cleanup-cycle1 (2026-11-23 21:02) ran `modprobe -r` on the
+    # allowlisted networking modules and .54's kernel (6.18.38-ophub) oopsed in nft_masq's exit (NULL pointer in
+    # nf_nat_masquerade_inet_unregister_notifiers); nft_masq stays 'going' until a reboot
+    # (incident-54-kernel-oops-nft-masq). Modules loaded by a run are only reported; the audit shows them.
+    baseline_doc = ROOT / 'baseline.json'
+    if baseline_doc.exists():
+        baseline_modules = set(json.loads(baseline_doc.read_text()).get('modules') or [])
+        lines = subprocess.run(['lsmod'], capture_output=True, text=True, timeout=30).stdout.splitlines()[1:]
+        facts['modules_loaded_since_baseline'] = sorted({line.split()[0] for line in lines if line.strip()}
+                                                        - baseline_modules)
+        facts['modules_unloaded'] = False
+    out['phase'] = 'dropin'
+    if uid is not None:
+        dropdir = oc.dropin_dir(uid)
+        if (dropdir / oc.DROPIN_NAME).exists():
+            (dropdir / oc.DROPIN_NAME).unlink()
+        if dropdir.exists() and not any(dropdir.iterdir()):
+            dropdir.rmdir()
+        sysrun(['systemctl', 'daemon-reload'], timeout=120)
+        check('dropin_gone', not dropdir.exists())
+        check('runtime_dir_gone', not Path('/run/user/%d' % uid).exists())
+        check('linger_gone', not Path('/var/lib/systemd/linger/' + oc.OWNER).exists())
+    out['phase'] = 'uidmap'
+    if os.path.exists('/usr/bin/newuidmap') or os.path.exists('/var/lib/dpkg/info/uidmap.list'):
+        sysrun(['dpkg', '--purge', 'uidmap'], timeout=300)
+    check('uidmap_purged', not os.path.exists('/usr/bin/newuidmap') and not os.path.exists('/usr/bin/newgidmap')
+          and not os.path.exists('/var/lib/dpkg/info/uidmap.list'))
+    query = subprocess.run(['dpkg-query', '-W', '-f', '${Status}', 'uidmap'], capture_output=True, text=True, timeout=60)
+    facts['dpkg_query_uidmap_after_purge'] = {'rc': query.returncode, 'status': query.stdout.strip()}
+    out['phase'] = 'account-files'
+    before = json.loads((state / 'account-before.json').read_text()) if (state / 'account-before.json').exists() else {}
+    stats = json.loads((state / 'account-stat-before.json').read_text()) if (state / 'account-stat-before.json').exists() else {}
+    saved = state / 'account-backups'
+    restored = []
+    for path in oc.BACKUP_FILES:
+        if before.get(path) and sha(path) != before[path] and (saved / Path(path).name).exists():
+            tmp = path + '.woowbk-restore'
+            shutil.copy2(saved / Path(path).name, tmp)
+            mode, fuid, fgid = stats[path]
+            os.chown(tmp, fuid, fgid)
+            os.chmod(tmp, mode & 0o7777)
+            os.replace(tmp, path)
+            restored.append(path)
+    facts['account_backup_files_put_back'] = restored
+    equal = {path: sha(path) == before.get(path) for path in oc.ACCOUNT_FILES + oc.BACKUP_FILES if path in before}
+    check('account_files_equal_before', all(equal.values()), equal=equal)
+    stat_equal = {p: [os.stat(p).st_mode, os.stat(p).st_uid, os.stat(p).st_gid] == v for p, v in stats.items()
+                  if os.path.exists(p)}
+    check('account_files_mode_owner_equal_before', all(stat_equal.values()), equal=stat_equal)
+    out['phase'] = 'journal'
+    if uid is not None and (state / 'journal-before.json').exists():
+        known = set(json.loads((state / 'journal-before.json').read_text()))
+        removed = []
+        for directory in (Path('/var/log/journal'), Path('/run/log/journal')):
+            for path in sorted(directory.glob('*/user-%d*.journal*' % uid)) if directory.is_dir() else []:
+                if str(path) not in known:
+                    path.unlink()
+                    removed.append(path.name.split('@')[0])
+        facts['owner_journal_files_removed'] = len(removed)
+        check('owner_journal_files_gone', not any(d.is_dir() and list(d.glob('*/user-%d*.journal*' % uid))
+                                                  for d in (Path('/var/log/journal'), Path('/run/log/journal'))))
+    out['phase'] = 'tmp-dirs'
+    for name, path in (('var-tmp', '/var/tmp'), ('tmp', '/tmp')):
+        doc = state / ('%s-before.json' % name)
+        if doc.exists():
+            extra = sorted(set(os.listdir(path)) - set(json.loads(doc.read_text())))
+            start, count = (int(x) for x in (owner_doc.get('subuid') or [0, 0]))
+            ours = [n for n in extra if uid is not None and (os.lstat(os.path.join(path, n)).st_uid == uid
+                    or start <= os.lstat(os.path.join(path, n)).st_uid < start + count)]
+            facts['%s_new_entries' % name] = extra
+            for n in ours:
+                target = os.path.join(path, n)
+                shutil.rmtree(target) if os.path.isdir(target) and not os.path.islink(target) else os.unlink(target)
+            facts['%s_removed_owner_entries' % name] = ours
+    out['status'] = 'passed' if all(checks.values()) else 'failed'
+    out['phase'] = 'done'
+except Exception as error:  # noqa: BLE001
+    out['error'] = type(error).__name__
+    out['error_detail'] = oc.safe_tail(str(error), 600)
+finally:
+    out['elapsed_seconds'] = round(time.monotonic() - started, 1)
+    out['failed_check'] = next((k for k, v in checks.items() if not v), None)
+    report(ROOT / 'owner-cleanup-result.json', out)
+    print(json.dumps(out, sort_keys=True))
+sys.exit(0 if out['status'] == 'passed' else 1)

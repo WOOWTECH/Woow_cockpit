@@ -477,6 +477,22 @@ class ReferenceHostTests(unittest.TestCase):
                 self.assertEqual(got, want)
         self.assertEqual(facts(entry_for(self.apps['headscale'], 'cold'))['dirs'], ['.config/headscale/headscale'])
 
+    def test_the_headscale_draft_is_importable_from_home_assistant(self):
+        """ha_headscale.Target takes the drafted entry as it is, with the configuration folder as its host folder."""
+        import types
+
+        from woowbackup import ha_headscale
+        entry = entry_for(self.apps['headscale'], 'cold')
+        quadlets = {name: (FIXTURES / 'quadlet' / name).read_bytes() for name in entry['quadlet']['files']}
+        app = types.SimpleNamespace(id='headscale', volumes=entry['volumes'], data_dirs=entry['data_dirs'],
+                                    postgres=entry.get('postgres') or [])
+        work = types.SimpleNamespace(quadlets=lambda _app: quadlets,
+                                     runner=lambda _app: types.SimpleNamespace(home=str(self.home)))
+        target = ha_headscale.Target(work, app)
+        self.assertEqual(target.config_dir, '.config/headscale/headscale')
+        self.assertEqual(target.config_rel, '.config/headscale/headscale/config.yaml')
+        self.assertEqual({target.data_volume, target.headplane_volume}, {v['name'] for v in entry['volumes']})
+
     def test_embedded_expectations_are_the_reference_entries(self):
         if not REFERENCE.is_dir():
             self.skipTest('the lab reference directory is not on this machine')

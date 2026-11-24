@@ -1,0 +1,29 @@
+import json, os, re, subprocess
+def run(a, t=60):
+    try:
+        p = subprocess.run(a, capture_output=True, timeout=t)
+        return p.returncode, p.stdout.decode('utf-8', 'replace')
+    except Exception as e:
+        return -1, type(e).__name__
+out = {'read_only': True}
+out['kernel'] = os.uname().release
+out['tainted'] = int(open('/proc/sys/kernel/tainted').read())
+out['taint_flags'] = {'C_staging_1024': bool(out['tainted'] & 1024), 'D_oops_128': bool(out['tainted'] & 128)}
+out['nft_masq_initstate'] = open('/sys/module/nft_masq/initstate').read().strip() if os.path.exists('/sys/module/nft_masq/initstate') else None
+rc, mods = run(['lsmod'])
+out['lsmod_nat'] = sorted(' '.join(l.split()[:3]) for l in mods.splitlines() if l.split() and l.split()[0] in ('nft_masq', 'nf_nat', 'nft_chain_nat', 'xt_MASQUERADE', 'veth', 'nft_nat', 'nft_ct', 'nft_fib'))
+rc, dm = run(['dmesg'])
+lines = dm.splitlines()
+idx = [i for i, l in enumerate(lines) if 'Unable to handle kernel NULL pointer dereference' in l]
+out['oops_count_since_boot'] = len(idx)
+if idx:
+    seg = lines[idx[-1]: idx[-1] + 45]
+    out['oops_comm_modprobe'] = any('Comm: modprobe' in l for l in seg)
+    out['oops_call_trace_functions'] = [re.sub(r'^\[[^\]]*\]\s*', '', l).strip().split('+')[0] for l in seg
+                                        if '+0x' in l and ('nf_' in l or 'nft_' in l or 'delete_module' in l)][:6]
+out['containers'] = run(['podman', 'ps', '--format', '{{.Names}} {{.StartedAt}}'])[1].splitlines()
+out['services'] = {u: run(['systemctl', 'is-active', u])[1].strip() for u in ('tailscaled.service', 'ssh.service')}
+out['ha_http_8123'] = run(['curl', '-s', '-o', '/dev/null', '-m', '10', '-w', '%{http_code}', 'http://127.0.0.1:8123/'])[1]
+out['failed_units'] = [l.split()[1] if l.startswith('●') else l.split()[0] for l in run(['systemctl', '--failed', '--no-legend', '--plain'])[1].splitlines() if l.strip()]
+out['uptime_s'] = float(open('/proc/uptime').read().split()[0])
+print(json.dumps(out, sort_keys=True))

@@ -1,0 +1,914 @@
+"""SUBSTITUTE IMAGES, NOT THE PRODUCT SERVICE (owner decision 3A, 2026-11-23 「決定3 A」). Lane arm54-2, Odoo through the
+PRODUCTION engine on .54: a real RPi5 HA backup of 2026-11-19 (add-ons odoo18ce 0.4.13 + woow-n8n 2.43.6; owner-accepted
+provenance = the 2026-11-19 records) into the test owner's rootless Odoo 18 under his user systemd.
+
+usage (through arm54_final_control.py run): arm54_final_owner_odoo.py <workspace>
+
+The rootful run (odoo-real-attempt1, 38/38) called the product's check and convert directly; here every step is the
+production one: key-init, catalog-suggest (cold variant) + catalog-install, upload-begin/-finish, ha-check-start,
+ha-convert-start (database woowtest), restore-start, job-status, list through cli.main as root, every job executed by
+`run-job <id>` in its own process with the production dependencies (OwnerRunner; nothing is injected), the Woow_podman_odoo
+quadlets (c578b8a) with the two substitute images (official odoo:18.0-20260926 and pgvector 0.8.6-pg17, arm64 by index
+digest) as the owner's systemd units; the target keeps running during check and conversion, like on any device.
+
+One attempt = (1) remove what an earlier attempt left (the engine directory is moved aside), (2) deploy the target (a fresh
+tenant is emulated like the rootful run: role odoo, database odoo initialised by Odoo itself, a generated admin password,
+the upgrade-gate marker the product's tenant image writes -- STATED SIMULATION, the official image has no upgrade gate),
+(3) the engine as above, (4) inside the restore, before the restored web container starts (a drop-in of this harness holds
+its ExecStartPre until the comparison is done): every table of HA's database woowtest (count + md5 of all rows, read from
+HA's own cluster opened by the product's throwaway PostgreSQL 16) equals the restored database except the import's own
+settings rows, HA's filestore equals file by file (sha256), module versions equal; then logins with HA's passwords, the
+attachment, the custom module; restart; an AUTOMATIC rollback (a second restore whose web start fails once); the manual
+rollback (restore-start of the first restore's own safety backup); (5) the units are stopped. The very FIRST restore of the
+converted backup is one whose web start fails once (FIRST-IMPORT rollback): what comes back must be this device's own tenant
+from before any import, and the job's log must show that both volumes were rebuilt twice (import, then rollback).
+
+Stated deviations: substitute images; the owner's user manager runs in a private network namespace (lo only) with a memory
+cap; 127.0.0.1:18069 inside that namespace; no gateway; generated test secrets; the two drop-ins above (removed again).
+Secrets: HA's Odoo passwords arrive in a 0600 file read and unlinked at start; the target's passwords are generated here and
+only reach the owner's podman secrets and Odoo; cookies stay in memory; the output is scanned for every value before it is
+printed and replaced by a fixed failure on a hit."""
+import base64
+import hashlib
+import io
+import json
+import os
+from pathlib import Path
+import secrets
+import shutil
+import subprocess
+import sys
+import tarfile
+import threading
+import time
+import traceback
+import urllib.error
+import urllib.request
+import uuid
+from types import MethodType, SimpleNamespace
+
+from arm54_final_runtime import ROOT, kernel_state, private_dir, report, sha256_file
+import arm54_final_owner_common as oc
+
+from woowbackup import cli, habackup, haimport, ha_odoo, podman as product_podman, tempctr  # noqa: E402
+from woowbackup.paths import Paths  # noqa: E402
+
+LABEL_TEXT = 'substitute images, not the product service (owner decision 3A)'
+RECORDED = {'8e51e2ed': '546aecf3be5a13642603bd901d49ee4de01313049d4cddf8805ef8c2b973be44'}
+CHAIN = json.loads((ROOT / 'input/chain.json').read_text())
+ARCHIVE = ROOT / 'input' / CHAIN['archive']
+CREDS_FILE = ROOT / 'input/odoo-creds.json'
+PATHS = Paths(base=ROOT / 'engine')
+PACKAGE = ROOT / 'source/tests/e2e/lab/evidence/arm54-final-20261123/odoo-package-c578b8a'
+ODOO_IMAGE = 'docker.io/library/odoo:18.0-20260926'
+DB_IMAGE = 'docker.io/pgvector/pgvector:0.8.6-pg17'
+PG16_IMAGE = 'docker.io/pgvector/pgvector:0.8.6-pg16'
+IMAGES = (ODOO_IMAGE, DB_IMAGE, PG16_IMAGE)
+DB, WEB = 'odoo18-db', 'odoo18-web'
+CONTAINERS = (DB, WEB)
+UNITS = ('odoo-db.service', 'odoo.service')
+RESOURCE_UNITS = ('odoo-db-data-volume.service', 'odoo-web-data-volume.service', 'odoo-network.service')
+DBVOL, WEBVOL = 'odoo18-db-data-isolated', 'odoo18-web-data'
+VOLUMES = (DBVOL, WEBVOL)
+NETWORK = 'odoo18-network'
+ADDONS_REL = '.local/share/odoo18/addons'
+SUPER_SECRET, CONF_SECRET = 'odoo18-postgres-super-password', 'odoo18-odoo-conf'
+SECRET_NAMES = (SUPER_SECRET, CONF_SECRET)
+QUADLET_DIR, USER_UNIT_DIR = '.config/containers/systemd', '.config/systemd/user'
+DROPDIR = USER_UNIT_DIR + '/odoo.service.d'
+FAIL_DROPIN, FAIL_MARKER = DROPDIR + '/50-a54-fail-once.conf', '.config/a54-odoo-fail-once'
+GATE_DROPIN, GATE_SCRIPT = DROPDIR + '/40-a54-gate.conf', '.config/a54-odoo-gate.sh'
+GATE_ARMED, GATE_REACHED, GATE_OPEN = '.config/a54-odoo-gate-armed', '.config/a54-odoo-gate-reached', '.config/a54-odoo-gate-open'
+# Held only when armed; never longer than 400 s (the engine's own start limit is 600 s).
+GATE_TEXT = ('#!/bin/sh\n[ -f "$HOME/%s" ] || exit 0\n: > "$HOME/%s"\ni=0\nwhile [ $i -lt 400 ]; do\n'
+             '  [ -f "$HOME/%s" ] && exit 0\n  sleep 1\n  i=$((i+1))\ndone\nexit 1\n') % (GATE_ARMED, GATE_REACHED, GATE_OPEN)
+HA_DB, TARGET_DB = 'woowtest', 'odoo'
+PROBE_MODULE, ATTACHMENT = 'woow_import_probe', 'ha-probe.txt'
+PORT = 18069
+BASE_URL = 'http://127.0.0.1:%d' % PORT
+HEALTH = BASE_URL + '/web/health'
+JOB_PRINT = 'j20261124T140000Z-a54d0c12'
+IMPORT_KEYS = frozenset({'web.base.url', 'web.base.url.freeze', 'woow_paas_platform.upgrade_done',
+                         'woow_paas_platform.upgrade_attempt'})
+# ha_import_e2e.FINGERPRINT_SQL (the dev-c strict comparison), one JSON array of its lines; as arm54_final_odoo.py.
+PRINTS_SQL = (r"SELECT coalesce(json_agg(x ORDER BY x), '[]'::json) FROM (SELECT format('%s.%s %s %s', schemaname, "
+              r"relname, (xpath('/row/c/text()', query_to_xml(format('select count(*) as c from %I.%I', schemaname, "
+              r"relname), false, true, '')))[1]::text, (xpath('/row/m/text()', query_to_xml(format('select "
+              r"md5(coalesce(string_agg(t::text, %L order by t::text), %L)) as m from %I.%I t', E'\n', '', schemaname, "
+              r"relname), false, true, '')))[1]::text) AS x FROM pg_stat_user_tables) s")
+ICP_SQL = ("SELECT coalesce(json_agg(json_build_array(key, md5(t::text)) ORDER BY key), '[]'::json) "
+           "FROM ir_config_parameter t")
+MODULES_SQL = ("SELECT coalesce(json_agg(json_build_array(name, latest_version) ORDER BY name), '[]'::json) "
+               "FROM ir_module_module WHERE state = 'installed'")
+COUNTS_SQL = ("SELECT json_build_object('partners', (SELECT count(*) FROM res_partner), 'users', (SELECT count(*) "
+              "FROM res_users), 'attachments', (SELECT count(*) FROM ir_attachment), 'probe_rows', (SELECT count(*) "
+              "FROM pg_class WHERE relname = 'woow_import_probe'))")
+RUN_JOB = '''import sys
+for path in (%r, %r):
+    sys.path.insert(0, path)
+from woowbackup import cli
+from woowbackup.paths import Paths
+sys.exit(cli.main(['run-job', sys.argv[1]], paths=Paths(base=%r)))
+''' % (str(ROOT / 'pydeps'), str(ROOT / 'source/backup-engine'), str(ROOT / 'engine'))
+FRONTEND = 'http://127.0.0.1:8123/manifest.json'  # .54's own Home Assistant, read-only GET in .54's own namespace
+MEM_FLOOR = 250 * 1024 ** 2
+
+checks, facts, jobs_seen = {}, {}, {}
+PRIVATE = []
+LOGS = []
+out = {'status': 'failed', 'phase': 'start', 'commercial_acceptance': 'not-complete', 'owner': oc.OWNER, 'label': LABEL_TEXT,
+       'runner': 'production OwnerRunner (runuser + rootless Podman + systemd --user) via the root CLI and run-job',
+       'source': {'device': 'RPi5 HAOS 192.168.2.34 (2026-11-19; backups no longer there)', 'slug': CHAIN['slug'],
+                  'archive_sha256': RECORDED.get(CHAIN['slug']), 'addons': 'odoo18ce 0.4.13, woow-n8n 2.43.6',
+                  'encrypted_backup': False, 'database': HA_DB,
+                  'provenance': 'owner-accepted 2026-11-19 records (ha_backup_id = ha-<sha256[:20]>)'},
+       'target': {'web_image': ODOO_IMAGE, 'db_image': DB_IMAGE, 'package': 'Woow_podman_odoo c578b8a quadlets', 'label': LABEL_TEXT},
+       'checks': checks, 'facts': facts, 'jobs': jobs_seen}
+started = time.monotonic()
+launched = []
+WORK = private_dir('work', 'owner-odoo-%d' % int(time.time()))
+KERNEL_BEFORE = kernel_state()
+facts['kernel_before'] = dict(KERNEL_BEFORE, modules=len(KERNEL_BEFORE['modules']))
+
+
+def private(value):
+    if isinstance(value, str):
+        value = value.encode()
+    if isinstance(value, bytes) and len(value.strip()) >= 6:
+        PRIVATE.append(value)
+        PRIVATE.append(value.strip())
+    return value
+
+
+def check(name, ok, **detail):
+    checks[name] = bool(ok)
+    if detail:
+        facts[name] = detail
+    return bool(ok)
+
+
+def must(name, ok, **detail):
+    if not check(name, ok, **detail):
+        raise AssertionError(name)
+
+
+class Watch(threading.Thread):
+    """Every 5 s in .54's own network namespace (started before the engine joins the owner's one): MemAvailable and,
+    every 15 s, one GET of .54's own Home Assistant frontend. Below MEM_FLOOR three times in a row the owner's Odoo units
+    are stopped (the owner's manager is memory capped as well, so .54's own services are never the victims)."""
+
+    def __init__(self):
+        super().__init__(daemon=True)
+        self.stop = threading.Event()
+        self.min_mem, self.samples, self.low, self.tripped = None, 0, 0, False
+        self.frontend = {'every_seconds': 15, 'ok': 0, 'failed': 0, 'max_latency_seconds': 0.0, 'over_5s': 0}
+
+    def run(self):
+        while not self.stop.is_set():
+            for line in Path('/proc/meminfo').read_text().splitlines():
+                if line.startswith('MemAvailable:'):
+                    value = int(line.split()[1]) * 1024
+                    self.min_mem = value if self.min_mem is None else min(self.min_mem, value)
+                    self.low = self.low + 1 if value < MEM_FLOOR else 0
+            if self.low >= 3 and not self.tripped:
+                self.tripped = True
+                oc.systemctl('stop', *reversed(UNITS), timeout=300, check=False)
+            if self.samples % 3 == 0:
+                t0 = time.monotonic()
+                try:
+                    with urllib.request.urlopen(FRONTEND, timeout=20) as response:
+                        ok = response.status == 200
+                except Exception:  # noqa: BLE001 - informational sample
+                    ok = False
+                took = time.monotonic() - t0
+                self.frontend['ok' if ok else 'failed'] += 1
+                self.frontend['max_latency_seconds'] = round(max(self.frontend['max_latency_seconds'], took), 3)
+                self.frontend['over_5s'] += took > 5
+            self.samples += 1
+            self.stop.wait(5)
+
+
+def rid(tag):
+    return 'a54o-%s-%s' % (tag, uuid.uuid4().hex[:12])
+
+
+def call(command, request=None):
+    buf = io.StringIO()
+    svc = cli.Services(PATHS, launcher=launched.append, unit_active=lambda unit: False)
+    code = cli.main([command], stdin=io.StringIO(json.dumps(request or {})), stdout=buf, services=svc)
+    reply = json.loads(buf.getvalue().strip().splitlines()[-1])
+    if code != 0 or not reply.get('ok'):
+        err = reply.get('error') or {}
+        facts['cli_refusal'] = {'command': command, 'code': err.get('code'),
+                                'message': oc.LONG_TOKEN.sub('<masked>', str(err.get('message')))[:400]}
+        raise RuntimeError('cli-refused')
+    return reply
+
+
+def run_job(label, start_command, request, timeout, expect='succeeded', during=None):
+    """One job in its own process; `during(process)` runs in this thread while the job runs."""
+    before = len(launched)
+    job_id = call(start_command, request)['job_id']
+    must('%s_launched_once' % label, launched[before:] == [job_id])
+    t0 = time.monotonic()
+    p = subprocess.Popen(['/usr/bin/python3', '-I', '-c', RUN_JOB, job_id], stdin=subprocess.DEVNULL,
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                         env={'PATH': '/usr/sbin:/usr/bin:/sbin:/bin', 'LANG': 'C.UTF-8'})
+    problem = None
+    if during is not None:
+        try:
+            during(p)
+        except Exception as error:  # noqa: BLE001 - the job must still end by itself first
+            problem = error
+    p.wait(timeout=timeout)
+    status = call('job-status', {'job_id': job_id})
+    job, log = status['job'], status.get('log') or []
+    lines = log if isinstance(log, list) else str(log).splitlines()
+    jobs_seen[label] = {'job_id': job_id, 'type': job.get('type'), 'state': job.get('state'),
+                        'run_job_exit': p.returncode, 'seconds': round(time.monotonic() - t0, 1),
+                        'error': (job.get('error') or {}).get('code'),
+                        'rebuilt': {v: sum(('已重建資料卷 ' + v) in str(l) for l in lines) for v in VOLUMES},
+                        'log_tail': [oc.safe_tail(str(l), 200) for l in lines[-10:]]}
+    if problem is not None:
+        raise problem
+    must('%s_%s' % (label, expect.replace('-', '_')), job.get('state') == expect, state=job.get('state'),
+         error=jobs_seen[label]['error'], message=oc.safe_tail((job.get('error') or {}).get('message'), 300))
+    return job
+
+
+def verification_view(result):
+    return [(e.get('app'), e.get('match'), [(c.get('id'), c.get('match')) for c in e.get('checks') or []])
+            for e in result.get('verification') or [] if isinstance(e, dict)]
+
+
+# ---------------------------------------------------------------- JSON-RPC on the owner's private loopback
+
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, *args, **kwargs):
+        return None
+
+
+OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect())
+
+
+def http(method, path, body=None, cookie=None, timeout=60):
+    data = json.dumps(body).encode() if body is not None else None
+    headers = {'Content-Type': 'application/json', 'Accept': 'application/json'}
+    if cookie:
+        headers['Cookie'] = 'session_id=' + cookie
+    request = urllib.request.Request(BASE_URL + path, data=data, headers=headers, method=method)
+    try:
+        with OPENER.open(request, timeout=timeout) as response:
+            raw = response.read(16 * 1024 * 1024 + 1)
+            assert len(raw) <= 16 * 1024 * 1024, 'response-too-large'
+            jar = [h for k, h in response.headers.items() if k.lower() == 'set-cookie']
+            try:
+                return response.status, (json.loads(raw) if raw else None), jar
+            except ValueError:
+                return response.status, None, jar
+    except urllib.error.HTTPError as error:
+        return error.code, None, []
+    except (urllib.error.URLError, OSError):
+        return None, None, []
+
+
+def rpc(path, params, cookie=None):
+    status, body, jar = http('POST', path, {'jsonrpc': '2.0', 'method': 'call', 'params': params}, cookie)
+    return status, body if isinstance(body, dict) else {}, jar
+
+
+def login(user, password):
+    """(uid or None, session cookie or None) of /web/session/authenticate on database odoo."""
+    _s, body, jar = rpc('/web/session/authenticate', {'db': TARGET_DB, 'login': user, 'password': password})
+    result = body.get('result') if isinstance(body.get('result'), dict) else {}
+    uid = result.get('uid') if isinstance(result.get('uid'), int) and not body.get('error') else None
+    cookie = None
+    for header in jar:
+        first = header.split(';', 1)[0]
+        if first.startswith('session_id='):
+            cookie = first[len('session_id='):]
+    if cookie:
+        private(cookie)
+    return uid, (cookie if uid else None)
+
+
+def call_kw(cookie, model, method, args, kwargs=None):
+    _s, body, _jar = rpc('/web/dataset/call_kw', {'model': model, 'method': method, 'args': args,
+                                                  'kwargs': kwargs or {}}, cookie)
+    return body.get('result'), bool(body.get('error'))
+
+
+# ---------------------------------------------------------------- database and files
+
+def sql_json(statement, database=TARGET_DB):
+    raw = oc.podman('exec', '-i', DB, 'psql', '-X', '-A', '-t', '-q', '-v', 'ON_ERROR_STOP=1', '-U', 'postgres', '-d',
+                    database, '-f', '-', input=statement.encode(), timeout=900).stdout
+    return json.loads(raw.strip() or b'null')
+
+
+def sql_exec(statement, database='postgres'):
+    oc.podman('exec', '-i', DB, 'psql', '-X', '-q', '-v', 'ON_ERROR_STOP=1', '-U', 'postgres', '-d', database, '-f', '-',
+              input=statement.encode(), timeout=600)
+
+
+def wait_db(seconds=300):
+    deadline = time.monotonic() + seconds
+    while time.monotonic() < deadline:
+        p = oc.podman('exec', DB, 'pg_isready', '-h', '127.0.0.1', '-p', '5432', '-U', 'postgres', '-d', 'postgres',
+                      check=False, timeout=30)
+        if p.returncode == 0:
+            return True
+        time.sleep(2)
+    raise AssertionError('db-not-ready')
+
+
+def wait_web(seconds=1200):
+    deadline = time.monotonic() + seconds
+    while time.monotonic() < deadline:
+        if http('GET', '/web/health', timeout=10)[0] == 200:
+            return True
+        time.sleep(3)
+    raise AssertionError('odoo-not-ready')
+
+
+def export_file(volume, path):
+    with open(path, 'xb') as handle:
+        os.fchmod(handle.fileno(), 0o600)
+        oc.podman('volume', 'export', volume, stdout=handle, timeout=1800)
+    return path
+
+
+def volume_files(path, prefix):
+    """{rel: [size, sha256]} of the regular files below `prefix` in a volume export tar."""
+    found = {}
+    with tarfile.open(path) as tar:
+        for member in tar:
+            name = member.name.removeprefix('./')
+            if member.isfile() and name.startswith(prefix):
+                found[name[len(prefix):]] = [member.size, hashlib.sha256(tar.extractfile(member).read()).hexdigest()]
+    return found
+
+
+def ha_filestore(work):
+    """{rel: [size, sha256]} of HA's filestore of woowtest, read from the add-on in the backup itself."""
+    prefix = ha_odoo.FILESTORE_PREFIX + '/' + HA_DB
+    select = habackup.Select(include=(prefix,), exclude=(), symlinks=(), hardlinks=False)
+    found = {}
+    with work.open(work.addon_member(ha_odoo.SLUG)) as stream:
+        for entry in habackup.iter_entries(stream, select, habackup.Report()):
+            if entry.kind == 'file':
+                data = entry.read_all(256 * 1024 * 1024)
+                found[entry.name[len(prefix) + 1:]] = [len(data), hashlib.sha256(data).hexdigest()]
+    return found
+
+
+def prints_map(lines):
+    found = {}
+    for line in lines or []:
+        table, count, md5 = line.split(' ')
+        found[table] = (int(count), md5)
+    return found
+
+
+def compare_cold(source, restored, src_icp, new_icp):
+    """Every table identical except ir_config_parameter; its differing rows are import-settings keys only."""
+    differ = sorted(t for t in set(source) | set(restored) if source.get(t) != restored.get(t))
+    src_rows, new_rows = dict(map(tuple, src_icp)), dict(map(tuple, new_icp))
+    keys = sorted(k for k in set(src_rows) | set(new_rows) if src_rows.get(k) != new_rows.get(k))
+    return differ, keys
+
+
+# ---------------------------------------------------------------- the package and the owner's units
+
+def render(data, values):
+    for key, value in values.items():
+        data = data.replace('@@%s@@' % key, value)
+    assert '@@' not in data, 'unrendered-placeholder'
+    return data
+
+
+QUADLET_VALUES = {'DB_IMAGE': DB_IMAGE, 'ODOO_IMAGE': ODOO_IMAGE, 'DB_BOOTSTRAP_USER': 'postgres',
+                  'DB_BOOTSTRAP_SECRET': SUPER_SECRET, 'DB_VOLUME_NAME': DBVOL, 'ODOO_PUBLISH': '127.0.0.1:%d' % PORT,
+                  'ODOO_PRESTART': '', 'WOOW_ODOO_ADDONS_DIR': '%h/' + ADDONS_REL}
+
+
+def package_files():
+    files = {}
+    for name in ('odoo-db.container', 'odoo.container', 'odoo-db-data.volume', 'odoo-web-data.volume', 'odoo.network'):
+        files[QUADLET_DIR + '/' + name] = ('0644', render((PACKAGE / 'quadlet' / name).read_text(), QUADLET_VALUES))
+    return files
+
+
+def odoo_conf(db_password, admin_password):
+    """config/odoo.conf.template with the tenant profile's choices (the database container by its network name)."""
+    values = {'POSTGRES_PASSWORD': db_password, 'ODOO_ADMIN_PASSWORD': admin_password, 'WOOW_ODOO_LIST_DB': 'False',
+              'DB_NAME_LINE': 'db_name = odoo', 'DB_FILTER_LINE': 'dbfilter = ^odoo$', 'WOOW_ODOO_WORKERS': '0',
+              'WOOW_ODOO_MAX_CRON_THREADS': '2', 'WOOW_ODOO_DB_MAXCONN': '8', 'WOOW_ODOO_LIMIT_TIME_CPU': '600',
+              'WOOW_ODOO_LIMIT_TIME_REAL': '1200', 'WOOW_ODOO_LIMIT_TIME_REAL_CRON': '600',
+              'WOOW_ODOO_LIMIT_REQUEST': '65536', 'SMTP_LINES': ''}
+    return render((PACKAGE / 'config/odoo.conf.template').read_text(), values)
+
+
+def active(unit):
+    return oc.systemctl('is-active', unit, check=False).stdout.decode().strip()
+
+
+def unit_marks():
+    return {u: oc.systemctl('show', '-p', 'ActiveEnterTimestampMonotonic', '-p', 'NRestarts', u,
+                            check=False).stdout.decode().split() for u in UNITS}
+
+
+def start_stack():
+    oc.systemctl('start', 'odoo-db.service', timeout=700)
+    wait_db()
+    oc.systemctl('start', 'odoo.service', timeout=900)
+    wait_web()
+
+
+def stop_stack():
+    oc.systemctl('stop', *reversed(UNITS), timeout=400, check=False)
+
+
+def throwaways():
+    found = {}
+    for kind, argv in (('containers', ('ps', '-a', '--format', '{{.Names}}')), ('volumes', ('volume', 'ls', '--format', '{{.Name}}')),
+                       ('networks', ('network', 'ls', '--format', '{{.Name}}')), ('secrets', ('secret', 'ls', '--format', '{{.Name}}'))):
+        found[kind] = [n for n in oc.podman(*argv, timeout=60).stdout.decode().split() if n.startswith('woowbk-')]
+    return found
+
+
+def anonymous_volumes():
+    return sorted(n for n in oc.podman('volume', 'ls', '--format', '{{.Name}}', timeout=60).stdout.decode().split()
+                  if len(n) == 64 and all(c in '0123456789abcdef' for c in n))
+
+
+def remove_drop_ins():
+    home = Path(oc.account().pw_dir)
+    oc.owner(['/bin/rm', '-rf', str(home / DROPDIR), *[str(home / n) for n in (FAIL_MARKER, GATE_SCRIPT, GATE_ARMED,
+                                                                              GATE_REACHED, GATE_OPEN)]], timeout=60)
+    oc.systemctl('daemon-reload', timeout=120)
+
+
+def arm_gate():
+    """The next start of odoo.service waits in its ExecStartPre until open_gate()."""
+    oc.write_owner_files({GATE_SCRIPT: ('0700', GATE_TEXT), GATE_ARMED: ('0600', 'armed\n'),
+                          GATE_DROPIN: ('0644', '[Service]\nExecStartPre=/bin/sh %h/' + GATE_SCRIPT + '\n')})
+    oc.systemctl('daemon-reload', timeout=120)
+
+
+def open_gate():
+    oc.owner(['/usr/bin/touch', str(Path(oc.account().pw_dir) / GATE_OPEN)], timeout=60)
+
+
+def arm_one_shot_failure():
+    oc.write_owner_files({FAIL_DROPIN: ('0644', '[Service]\nExecStartPre=/bin/sh -c \'if test -f %h/' + FAIL_MARKER
+                                        + '; then rm -f %h/' + FAIL_MARKER + '; exit 1; fi\'\n'),
+                          FAIL_MARKER: ('0600', 'a54 one-shot failure\n')})
+    oc.systemctl('daemon-reload', timeout=120)
+
+
+def remove_previous():
+    """Whatever an earlier attempt of this script left in the owner's account (idempotent)."""
+    home = Path(oc.account().pw_dir)
+    qdir = home / QUADLET_DIR
+    left = sorted(p.name for p in qdir.iterdir() if p.name.startswith('odoo')) if qdir.is_dir() else []
+    facts['previous_attempt_left'] = {'quadlets': len(left), 'engine_dir': (ROOT / 'engine').exists()}
+    if left:
+        stop_stack()
+        oc.systemctl('stop', *RESOURCE_UNITS, timeout=200, check=False)
+        oc.owner(['/bin/rm', '-f', *[str(qdir / name) for name in left]], timeout=60)
+    remove_drop_ins()
+    for name in (WEB, DB, 'a54o-init'):
+        oc.podman('rm', '--force', '--volumes', '--time', '10', name, timeout=120, check=False)
+    for volume in VOLUMES:
+        oc.podman('volume', 'rm', '--force', volume, timeout=60, check=False)
+    for name in SECRET_NAMES:
+        oc.podman('secret', 'rm', name, timeout=60, check=False)
+    oc.podman('network', 'rm', '--force', NETWORK, timeout=60, check=False)
+    oc.owner(['/bin/rm', '-rf', str(home / '.local/share/odoo18')], timeout=60)
+    if (ROOT / 'engine').exists():
+        n = 1
+        while (ROOT / ('engine-before-odoo-%d' % n)).exists():
+            n += 1
+        os.rename(ROOT / 'engine', ROOT / ('engine-before-odoo-%d' % n))
+        facts['engine_moved_to'] = 'engine-before-odoo-%d' % n
+
+
+def folder_has_probe_module():
+    return oc.owner(['/usr/bin/test', '-f', str(Path(oc.account().pw_dir) / ADDONS_REL / PROBE_MODULE / '__manifest__.py')],
+                    check=False, timeout=60).returncode == 0
+
+
+def verify_restored(phase, creds, cold_counts, target_admin_password):
+    uid, cookie = login('admin', creds['admin_password'])
+    must(phase + '_ha_admin_logs_in_with_ha_password', uid is not None and cookie is not None)
+    p_uid, p_cookie = login('ha-probe', creds['probe_password'])
+    must(phase + '_ha_probe_logs_in_with_ha_password', p_uid is not None and p_cookie is not None)
+    t_uid, _c = login('admin', target_admin_password)
+    must(phase + '_target_admin_password_refused', t_uid is None)
+    rows, error = call_kw(cookie, 'ir.attachment', 'search_read', [[['name', '=', ATTACHMENT]]],
+                          {'fields': ['datas', 'checksum', 'file_size']})
+    rows = rows if isinstance(rows, list) else []
+    blob = base64.b64decode(rows[0]['datas']) if len(rows) == 1 and rows[0].get('datas') else b''
+    must(phase + '_attachment_reads_back', not error and len(rows) == 1 and len(blob) == rows[0].get('file_size')
+         and hashlib.sha1(blob).hexdigest() == rows[0].get('checksum'), size=len(blob))
+    counts = sql_json(COUNTS_SQL)
+    probe_records = sql_json('SELECT to_json(count(*)) FROM woow_import_probe') if counts.get('probe_rows') else 0
+    modules = dict(map(tuple, sql_json(MODULES_SQL)))
+    must(phase + '_counts_and_probe_module', counts['partners'] == cold_counts['partners']
+         and counts['users'] == cold_counts['users'] and PROBE_MODULE in modules and probe_records >= 1
+         and folder_has_probe_module(), counts=counts, probe_records=probe_records)
+    for unit in UNITS:
+        must(phase + '_unit_active_' + unit, active(unit) == 'active')
+    return modules
+
+
+def own_state(phase, creds, target_admin_password, target_counts):
+    """This device's own tenant from before any import."""
+    pre = phase + '_'
+    for unit in UNITS:
+        must(pre + 'unit_active_' + unit, active(unit) == 'active')
+    t_uid, _c = login('admin', target_admin_password)
+    ha_uid, _c = login('admin', creds['admin_password'])
+    p_uid, _c = login('ha-probe', creds['probe_password'])
+    must(pre + 'own_admin_in_ha_logins_refused', t_uid is not None and ha_uid is None and p_uid is None)
+    rows = sql_json(COUNTS_SQL)
+    modules = dict(map(tuple, sql_json(MODULES_SQL)))
+    must(pre + 'own_tenant_back', (rows['partners'], rows['users'], rows['probe_rows']) == (
+        target_counts['partners'], target_counts['users'], 0) and PROBE_MODULE not in modules and not folder_has_probe_module(),
+         rows=rows, modules=len(modules))
+
+
+watch = Watch()
+opened = None
+try:
+    out['phase'] = 'inputs'
+    acct = oc.account()
+    must('owner_present', acct is not None)
+    pid = oc.manager_pid(acct.pw_uid)
+    manager = subprocess.run(['systemctl', 'show', 'user@%d.service' % acct.pw_uid, '-p', 'MemoryMax', '-p',
+                              'MemorySwapMax', '-p', 'PrivateNetwork'], capture_output=True, text=True, timeout=30)
+    facts['owner_manager'] = dict(l.split('=', 1) for l in manager.stdout.splitlines() if '=' in l)
+    must('owner_manager_private_network_and_memory_cap', facts['owner_manager'].get('PrivateNetwork') == 'yes'
+         and facts['owner_manager'].get('MemoryMax', 'infinity') != 'infinity')
+    must('archive_sha256_equals_recorded_2026_11_19', CHAIN['slug'] in RECORDED and not CHAIN.get('key_file')
+         and CHAIN.get('sha256') == RECORDED[CHAIN['slug']] and sha256_file(ARCHIVE) == RECORDED[CHAIN['slug']])
+    raw = json.loads(CREDS_FILE.read_text())
+    CREDS_FILE.unlink()
+    creds = {'admin_password': raw['admin_password'], 'probe_password': raw['probe_password']}
+    for value in creds.values():
+        private(value)
+    watch.start()
+    time.sleep(1)
+    host_mnt, host_net = os.stat('/proc/1/ns/mnt').st_ino, oc.netns_inode(1)
+    facts['engine_tools'] = oc.enter_tools_namespace(ROOT)
+    oc.join_netns(pid)
+    must('engine_in_private_mount_and_owner_netns', os.stat('/proc/self/ns/mnt').st_ino != host_mnt
+         and os.stat('/proc/thread-self/ns/net').st_ino == oc.netns_inode(pid) != host_net)
+
+    out['phase'] = 'previous-attempt'
+    remove_previous()
+    for unit in ('headscale.service', 'n8n.target', 'emqx.service'):  # memory: one stack at a time on .54
+        oc.systemctl('stop', unit, timeout=300, check=False)
+
+    out['phase'] = 'target-images'
+    web_env = {}
+    for ref in IMAGES:
+        info = json.loads(oc.podman('image', 'inspect', ref, timeout=60).stdout)[0]
+        must('owner_image_arm64_' + ref.rsplit('/', 1)[-1], info.get('Architecture') == 'arm64', id=info['Id'][:12])
+        if ref == ODOO_IMAGE:
+            web_env = dict(i.split('=', 1) for i in (info.get('Config') or {}).get('Env') or [] if '=' in i)
+            web_id = info['Id'] if info['Id'].startswith('sha256:') else 'sha256:' + info['Id']  # as adapter.image_inspect
+    facts['web_image'] = {'odoo_version': web_env.get('ODOO_VERSION'), 'odoo_release': web_env.get('ODOO_RELEASE')}
+
+    out['phase'] = 'target-deploy'
+    files = package_files()
+    publish = [line for _m, t in files.values() for line in t.splitlines() if line.startswith('PublishPort=')]
+    must('published_only_on_loopback', publish == ['PublishPort=127.0.0.1:%d:8069' % PORT], publish=publish)
+    oc.write_owner_files(files)
+    oc.owner(['/bin/mkdir', '-p', '-m', '0755', str(Path(acct.pw_dir) / ADDONS_REL)], timeout=60)
+    oc.owner(['/bin/chmod', '0755', str(Path(acct.pw_dir) / '.local/share/odoo18'), str(Path(acct.pw_dir) / ADDONS_REL)], timeout=60)
+    passwords = {'super': secrets.token_urlsafe(32), 'odoo_role': secrets.token_urlsafe(32),
+                 'master': secrets.token_urlsafe(32), 'target_admin': 'A1' + secrets.token_urlsafe(18)}
+    for value in passwords.values():
+        private(value)
+    oc.podman('secret', 'create', SUPER_SECRET, '-', input=passwords['super'].encode(), timeout=60)
+    oc.podman('secret', 'create', CONF_SECRET, '-', input=odoo_conf(passwords['odoo_role'], passwords['master']).encode(),
+              timeout=60)
+    oc.systemctl('daemon-reload', timeout=120)
+    generated = oc.systemctl('list-unit-files', '--no-legend', '--plain', 'odoo*').stdout.decode()
+    facts['generated_units'] = sorted(l.split()[0] for l in generated.splitlines() if l.strip())
+    oc.systemctl('start', 'odoo-db.service', timeout=700)
+    wait_db()
+    # Fresh tenant (emulated): role odoo with a generated password (SQL on stdin, never in argv), database odoo initialised
+    # by Odoo itself in a one-shot container of the same image, secret, volume, folder and network, then the marker.
+    sql_exec("CREATE ROLE odoo LOGIN NOSUPERUSER CREATEDB NOCREATEROLE PASSWORD '%s';" % passwords['odoo_role'])
+    oc.systemctl('start', 'odoo-web-data-volume.service', timeout=120)
+    t0 = time.monotonic()
+    init = oc.podman('run', '--rm', '--name', 'a54o-init', '--pull=never', '--network', NETWORK,
+                     '--volume', WEBVOL + ':/var/lib/odoo', '--volume', str(Path(acct.pw_dir) / ADDONS_REL) + ':/mnt/extra-addons:ro',
+                     '--secret', CONF_SECRET + ',type=mount,target=/etc/odoo/odoo.conf,uid=100,gid=101,mode=0400',
+                     '--security-opt', 'no-new-privileges', ODOO_IMAGE, 'odoo', '-d', TARGET_DB, '-i', 'base',
+                     '--without-demo=all', '--stop-after-init', '--no-http', check=False, timeout=1800)
+    facts['tenant_init'] = {'exit': init.returncode, 'seconds': round(time.monotonic() - t0, 1)}
+    must('tenant_database_initialised_by_odoo', init.returncode == 0)
+    marker = json.dumps({'digest': web_id, 'core_date': web_env.get('ODOO_RELEASE') or ODOO_IMAGE.rsplit('-', 1)[1]},
+                        separators=(',', ':'))
+    sql_exec("INSERT INTO ir_config_parameter (key, value, create_uid, create_date, write_uid, write_date) VALUES "
+             "('woow_paas_platform.upgrade_done', '%s', 1, now() AT TIME ZONE 'UTC', 1, now() AT TIME ZONE 'UTC');"
+             % marker, TARGET_DB)
+    oc.systemctl('start', 'odoo.service', timeout=900)
+    wait_web()
+    uid, cookie = login('admin', 'admin')
+    must('fresh_tenant_admin_default_login', uid is not None)
+    changed, error = call_kw(cookie, 'res.users', 'change_password', ['admin', passwords['target_admin']])
+    must('target_admin_password_replaced', changed and not error)
+    t_uid, _c = login('admin', passwords['target_admin'])
+    must('target_admin_login_before_import', t_uid is not None)
+    ha_uid, _c = login('admin', creds['admin_password'])
+    must('ha_admin_password_unknown_before_import', ha_uid is None)
+    target_counts = sql_json(COUNTS_SQL)
+    facts['target_before_import'] = target_counts
+    volumes_before = anonymous_volumes()
+    must('host_netns_has_no_test_listener', b':%d' % PORT not in subprocess.run(
+        ['nsenter', '--net=/proc/1/ns/net', 'ss', '-H', '-lnt'], capture_output=True, timeout=30).stdout)
+
+    out['phase'] = 'engine-setup'
+    PATHS.data.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    call('key-init')
+    suggested = call('catalog-suggest', {'owner': oc.OWNER})
+    apps = [a for a in suggested.get('apps') or [] if a.get('id') == ha_odoo.APP_ID]
+    must('product_suggest_found_odoo', len(apps) == 1,
+         ids=[[a.get('id'), len(a.get('variants') or [])] for a in suggested.get('apps') or []])
+    variants = apps[0].get('variants') or []
+    variant = next((v for v in variants if v.get('id') == 'cold'), None)
+    entry = json.loads(json.dumps(variant['entry'] if variant is not None else apps[0].get('entry')))
+    facts['suggest_variants'] = [(v.get('id'), v.get('valid'), v.get('field')) for v in variants]
+    facts['suggested'] = {k: entry.get(k) for k in ('owner', 'units', 'writer_units', 'volumes', 'secrets', 'health',
+                                                    'postgres', 'data_dirs', 'config_files')}
+    facts['suggested']['verify'] = [(v.get('id'), v.get('type')) for v in entry.get('verify') or []]
+    facts['suggest_notes'] = sorted({n.get('code') for n in apps[0].get('notes') or []})
+    facts['suggest_warnings'] = sorted({w.get('code') for w in apps[0].get('warnings') or []})
+    must('suggest_draft_is_the_cold_form_the_import_needs', (variant is None or variant.get('valid') is True)
+         and not entry.get('postgres') and sorted(v['name'] for v in entry['volumes']) == sorted(VOLUMES)
+         and sorted(entry['units']) == sorted(UNITS) and [d.get('path') for d in entry.get('data_dirs') or []] == [ADDONS_REL],
+         volumes=[v.get('name') for v in entry.get('volumes') or []], units=entry.get('units'),
+         data_dirs=[d.get('path') for d in entry.get('data_dirs') or []])
+    changes = []
+    if not entry.get('health'):
+        entry['health'] = [{'type': 'http', 'url': HEALTH, 'expect_status': 200, 'timeout_seconds': 600}]
+        changes.append('health URL %s added (suggest found none)' % HEALTH)
+    facts['installed_entry_changes'] = changes
+    preview = call('catalog-install', {'entry': entry})
+    must('catalog_preview_valid', preview.get('valid') is True and bool(preview.get('new_sha256'))
+         and preview.get('expected_sha256') is None, error=(preview.get('error') or {}).get('code'))
+    call('catalog-install', {'entry': entry, 'confirm': True, 'expected_sha256': preview['expected_sha256']})
+
+    out['phase'] = 'ha-upload'
+    begun = call('upload-begin', {'filename': 'rpi5-%s.tar' % CHAIN['slug'], 'size': ARCHIVE.stat().st_size})
+    shutil.copyfile(ARCHIVE, begun['path'])
+    ha = call('upload-finish', {'upload_id': begun['upload_id']}).get('ha_backup') or {}
+    must('ha_backup_registered_with_odoo', ha.get('id') == 'ha-' + RECORDED[CHAIN['slug']][:20]
+         and 'odoo' in json.dumps(ha.get('importable_apps')))
+
+    out['phase'] = 'source-prints'   # HA's own cluster, opened by the product's throwaway PostgreSQL 16 as the owner
+    product_runner = product_podman.OwnerRunner(oc.OWNER)
+    staging = private_dir('work', 'owner-odoo-prints')
+    temp = tempctr.TempObjects(product_runner, JOB_PRINT, memory='768m', pids=1024)  # cpus: the job runner's own default
+    opened = habackup.open_backup(ARCHIVE)
+    app = SimpleNamespace(id='odoo', name='Odoo 18', owner=oc.OWNER, volumes=[{'name': n} for n in VOLUMES], data_dirs=[],
+                          secrets=[], postgres=[], units=list(UNITS), health=[])
+    work = SimpleNamespace(ha=opened, keys=None, _addons={}, staging=staging,
+                           guard=haimport.SpaceGuard([staging], 4 * 1024 ** 3), runner=lambda a: product_runner,
+                           temp=lambda a: temp, abort=lambda: None, checkpoint=lambda: None, phase=lambda p: None,
+                           log=LOGS.append)
+    for method in ('addon_member', 'addon_info', 'open', 'share_member'):
+        setattr(work, method, MethodType(getattr(haimport.Work, method), work))
+    try:
+        image16 = ha_odoo.pick_pg16(work, app)
+        pg_ids = temp.user_ids('ids-pg', image16, 'postgres')
+        src, _candidates = ha_odoo.member_pass(work, app, temp, pg_ids)
+        cluster = ha_odoo.start_ha_cluster(work, temp, image16)
+        source_prints = prints_map(cluster.query_json(PRINTS_SQL, HA_DB))
+        source_icp = cluster.query_json(ICP_SQL, HA_DB)
+        source_modules = dict(map(tuple, cluster.query_json(MODULES_SQL, HA_DB)))
+        source_counts = cluster.query_json(COUNTS_SQL, HA_DB)
+    finally:
+        left = temp.cleanup()
+    must('source_temp_objects_removed', not left and not any(throwaways().values()))
+    ha_files = ha_filestore(work)
+    opened.close()
+    opened = None
+    facts['source'] = {'pg16_image': image16, 'pg_version': src.pg_version, 'tables': len(source_prints),
+                       'modules_installed': len(source_modules), 'counts': source_counts, 'filestore_files': len(ha_files)}
+    must('source_has_tables_and_files', len(source_prints) > 100 and len(ha_files) >= 1)
+
+    out['phase'] = 'ha-check'
+    marks = unit_marks()
+    job = run_job('ha_check', 'ha-check-start', {'ha_backup_id': ha['id'], 'apps': ['odoo'], 'request_id': rid('check')}, 2400)
+    row = next((a for a in ((job.get('result') or {}).get('ha_check') or {}).get('apps') or []
+                if a.get('app_id') == 'odoo'), {})
+    section = row.get('odoo') or {}
+    databases = {db.get('name'): db for db in section.get('databases') or []}
+    facts['product_check'] = {'ok': row.get('ok'), 'blockers': [oc.safe_tail(b, 200) for b in row.get('blockers') or []],
+                              'target_version': row.get('target_version'), 'arch': row.get('arch'),
+                              'databases': {n: {k: db.get(k) for k in ('ok', 'partners', 'users', 'attachments', 'modules',
+                                                                       'filestore_files', 'custom_modules')}
+                                            for n, db in databases.items()},
+                              'db_blockers': {n: db.get('blockers') for n, db in databases.items()},
+                              'db_warnings': {n: len(db.get('warnings') or []) for n, db in databases.items()}}
+    must('product_check_no_blocker', row.get('ok') is True and (row.get('blockers') or []) == [],
+         blockers=len(row.get('blockers') or []))
+    must('product_check_woowtest_can_move', databases.get(HA_DB, {}).get('ok') is True
+         and not databases[HA_DB].get('blockers') and databases[HA_DB].get('partners') == source_counts['partners']
+         and databases[HA_DB].get('modules') == len(source_modules))
+
+    out['phase'] = 'ha-convert'
+    job = run_job('ha_convert', 'ha-convert-start', {'ha_backup_id': ha['id'], 'apps': ['odoo'], 'odoo_database': HA_DB,
+                                                      'test_mode': False, 'confirm': True, 'request_id': rid('convert')}, 3600)
+    converted = job.get('result') or {}
+    backup_id = converted.get('backup_id')
+    must('converted_backup_made_encrypted', bool(backup_id) and converted.get('encrypted') is True,
+         apps=converted.get('apps'), size=converted.get('size'))
+    listed = next((b for b in call('list').get('backups') or [] if b.get('id') == backup_id), {})
+    origin = listed.get('from_ha') or {}
+    must('converted_backup_lists_its_ha_origin', origin.get('ha_backup_id') == ha['id'] and origin.get('apps') == ['odoo']
+         and origin.get('odoo_database') == HA_DB)
+    must('convert_left_nothing_behind', not any(throwaways().values()) and anonymous_volumes() == volumes_before,
+         new_anonymous=len(set(anonymous_volumes()) - set(volumes_before)), **throwaways())
+    must('target_ran_without_a_break_during_check_and_convert', unit_marks() == marks)
+    t_uid, _c = login('admin', passwords['target_admin'])
+    ha_uid, _c = login('admin', creds['admin_password'])
+    must('target_untouched_by_check_and_convert', t_uid is not None and ha_uid is None
+         and sql_json(COUNTS_SQL) == target_counts and not folder_has_probe_module())
+
+    cold = {}
+
+    def compare_before_the_web_starts(process):
+        """Runs while the restore job waits for odoo.service, whose ExecStartPre waits for the gate."""
+        reached = Path(acct.pw_dir) / GATE_REACHED
+        try:
+            deadline = time.monotonic() + 1500
+            while time.monotonic() < deadline and not reached.exists() and process.poll() is None:
+                time.sleep(1)
+            assert reached.exists() and process.poll() is None, 'gate-not-reached'
+            wait_db()
+            t1 = time.monotonic()
+            cold['prints'] = prints_map(sql_json(PRINTS_SQL))
+            cold['icp'] = sql_json(ICP_SQL)
+            cold['modules'] = dict(map(tuple, sql_json(MODULES_SQL)))
+            cold['web_running'] = oc.podman('container', 'exists', WEB, check=False, timeout=30).returncode == 0
+            cold['files'] = volume_files(export_file(WEBVOL, WORK / 'cold-web.tar'), 'filestore/odoo/')
+            cold['probe_module_in_folder'] = folder_has_probe_module()
+            cold['seconds'] = round(time.monotonic() - t1, 1)
+        finally:
+            open_gate()
+
+    out['phase'] = 'first-import-rollback'
+    marker_path = Path(acct.pw_dir) / FAIL_MARKER
+    arm_one_shot_failure()
+    must('first_import_failure_armed', marker_path.exists())
+    job = run_job('first_import_rollback', 'restore-start', {'backup_id': backup_id, 'apps': ['odoo'], 'confirm': True,
+                                                              'request_id': rid('first')}, 3600, expect='rolled-back')
+    first = job.get('result') or {}
+    facts['first_import_rollback'] = {'changed': first.get('changed'), 'rolled_back': first.get('rolled_back'),
+                                      'error': oc.safe_tail((job.get('error') or {}).get('message'), 200),
+                                      'rebuilt': jobs_seen['first_import_rollback']['rebuilt']}
+    must('first_import_changed_then_rolled_back', first.get('changed') is True and first.get('rolled_back') is True
+         and all(n == 2 for n in jobs_seen['first_import_rollback']['rebuilt'].values()),
+         rebuilt=jobs_seen['first_import_rollback']['rebuilt'])
+    must('first_import_failure_fired', not marker_path.exists())
+    remove_drop_ins()
+    wait_web()
+    own_state('first_import_rolled_back', creds, passwords['target_admin'], target_counts)
+
+    out['phase'] = 'restore'
+    arm_gate()
+    job = run_job('restore', 'restore-start', {'backup_id': backup_id, 'apps': ['odoo'], 'confirm': True,
+                                                'request_id': rid('restore')}, 3600, during=compare_before_the_web_starts)
+    remove_drop_ins()
+    restored = job.get('result') or {}
+    safety = restored.get('safety_backup_id')
+    facts['restore'] = {'changed': restored.get('changed'), 'rolled_back': restored.get('rolled_back'),
+                        'safety_backup_id': safety, 'timing': restored.get('timing'),
+                        'health': [(c.get('id'), c.get('status')) for c in restored.get('health') or []],
+                        'verification': verification_view(restored), 'warnings': len(restored.get('warnings') or [])}
+    must('restore_changed_not_rolled_back_with_safety', restored.get('changed') is True
+         and restored.get('rolled_back') is False and bool(safety))
+    must('restore_health_checks_ok', bool(restored.get('health'))
+         and all(c.get('status') == 'ok' for c in restored.get('health')))
+    must('restore_verification_no_mismatch', all(e.get('match') is not False for e in restored.get('verification') or []))
+
+    out['phase'] = 'cold-compare'
+    differ, keys = compare_cold(source_prints, cold['prints'], source_icp, cold['icp'])
+    facts['cold_compare'] = {'tables_source': len(source_prints), 'tables_restored': len(cold['prints']),
+                             'identical': sum(1 for t in source_prints if cold['prints'].get(t) == source_prints[t]),
+                             'differing_tables': differ, 'differing_config_keys': keys, 'seconds': cold['seconds'],
+                             'web_container_existed': cold['web_running'], 'modules': len(cold['modules']),
+                             'filestore_files': len(cold['files'])}
+    must('cold_compared_before_the_web_container_existed', cold['web_running'] is False)
+    must('cold_same_table_inventory', set(source_prints) == set(cold['prints']))
+    must('cold_every_table_identical_but_import_settings', differ in ([], ['public.ir_config_parameter']))
+    must('cold_config_rows_differ_only_in_import_settings', set(keys) <= IMPORT_KEYS
+         and 'woow_paas_platform.upgrade_done' in keys)
+    must('cold_installed_modules_and_versions_equal_ha', cold['modules'] == source_modules, modules=len(source_modules))
+    must('filestore_equal_to_ha_file_by_file', cold['files'] == ha_files, files=len(ha_files))
+    must('custom_module_in_the_folder', cold['probe_module_in_folder'])
+    wait_web()
+    modules_live = verify_restored('installed', creds, source_counts, passwords['target_admin'])
+    must('installed_modules_after_start_equal_ha', modules_live == source_modules)
+
+    out['phase'] = 'restart'
+    stop_stack()
+    must('stack_stopped_before_restart', all(active(u) != 'active' for u in UNITS))
+    start_stack()
+    verify_restored('restarted', creds, source_counts, passwords['target_admin'])
+
+    out['phase'] = 'automatic-rollback'
+    arm_one_shot_failure()
+    must('one_shot_failure_armed', marker_path.exists())
+    job = run_job('automatic_rollback', 'restore-start', {'backup_id': backup_id, 'apps': ['odoo'], 'confirm': True,
+                                                           'request_id': rid('auto')}, 3600, expect='rolled-back')
+    auto = job.get('result') or {}
+    facts['automatic_rollback'] = {'changed': auto.get('changed'), 'rolled_back': auto.get('rolled_back'),
+                                   'health': [(c.get('id'), c.get('status')) for c in auto.get('health') or []],
+                                   'verification': verification_view(auto)}
+    must('automatic_rollback_reported_rolled_back', auto.get('rolled_back') is True)
+    must('one_shot_failure_fired', not marker_path.exists())
+    remove_drop_ins()
+    wait_web()
+    verify_restored('auto_rolled_back', creds, source_counts, passwords['target_admin'])
+
+    out['phase'] = 'rollback'
+    job = run_job('rollback', 'restore-start', {'backup_id': safety, 'apps': ['odoo'], 'confirm': True,
+                                                 'request_id': rid('rollback')}, 3600)
+    rolled = job.get('result') or {}
+    entries = rolled.get('verification') or []
+    facts['rollback'] = {'changed': rolled.get('changed'), 'rolled_back': rolled.get('rolled_back'),
+                         'health': [(c.get('id'), c.get('status')) for c in rolled.get('health') or []],
+                         'verification': verification_view(rolled)}
+    must('rollback_restore_ok', rolled.get('changed') is True and rolled.get('rolled_back') is False
+         and all(c.get('status') == 'ok' for c in rolled.get('health') or [])
+         and all(e.get('match') is not False for e in entries))
+    wait_web()
+    own_state('rolled_back', creds, passwords['target_admin'], target_counts)
+
+    out['phase'] = 'engine-leftovers'
+    must('nothing_of_the_engine_left', not any(throwaways().values()) and anonymous_volumes() == volumes_before,
+         new_anonymous=len(set(anonymous_volumes()) - set(volumes_before)), **throwaways())
+    left_staging = sorted(os.listdir(PATHS.staging)) if PATHS.staging.exists() else []
+    must('no_staging_left', left_staging == [], staging=left_staging)
+    must('memory_watch_never_stopped_the_stack', watch.tripped is False)
+    out['status'] = 'passed'
+    out['phase'] = 'done'
+except Exception as error:  # noqa: BLE001
+    out['error'] = type(error).__name__
+    out['error_where'] = [[Path(f.filename).name, f.lineno, f.name] for f in traceback.extract_tb(error.__traceback__)[-4:]]
+    if isinstance(error, (AssertionError, RuntimeError, oc.OwnerCommandFailed, KeyError)):
+        out['error_detail'] = oc.safe_tail(str(error), 400)
+    try:
+        facts['diagnosis_units'] = {u: active(u) for u in UNITS}
+        rows_ = oc.podman('ps', '-a', '--format', '{{.Names}}|{{.Status}}', check=False, timeout=60).stdout.decode()
+        facts['diagnosis_containers'] = sorted(l for l in rows_.splitlines() if l.strip())[:20]
+    except Exception:  # noqa: BLE001
+        facts['diagnosis_units'] = 'unknown'
+finally:
+    if CREDS_FILE.exists():
+        CREDS_FILE.unlink()
+        facts['staged_file_removed_late'] = True
+    if opened is not None:
+        opened.close()
+    try:
+        remove_drop_ins()
+        stop_stack()  # memory on .54: the stack does not stay up after an attempt (files stay for the cleanup)
+        facts['units_after_attempt'] = {u: active(u) for u in UNITS}
+    except Exception:  # noqa: BLE001
+        facts['units_after_attempt'] = 'unknown'
+    watch.stop.set()
+    if watch.is_alive():
+        watch.join(timeout=30)
+    facts['watch'] = {'samples': watch.samples, 'mem_available_min': watch.min_mem, 'tripped': watch.tripped,
+                      'home_assistant_frontend': watch.frontend}
+    shutil.rmtree(WORK, ignore_errors=True)
+    shutil.rmtree(ROOT / 'work/owner-odoo-prints', ignore_errors=True)
+    after = kernel_state()
+    facts['kernel_after'] = dict(after, modules=len(after['modules']))
+    facts['modules_loaded_by_the_kernel_during_the_run'] = sorted(set(after['modules']) - set(KERNEL_BEFORE['modules']))
+    for name, ok in (('no_new_oops', after['oops_count'] == KERNEL_BEFORE['oops_count']),
+                     ('no_new_hung_task_report', after['hung_task_reports'] == KERNEL_BEFORE['hung_task_reports']),
+                     ('no_new_d_state_task', after['d_state'] <= KERNEL_BEFORE['d_state']),
+                     ('kernel_taint_unchanged', after['tainted'] == KERNEL_BEFORE['tainted']),
+                     ('home_assistant_frontend_never_failed', watch.frontend['failed'] == 0)):
+        if not check(name, ok) and out['status'] == 'passed':
+            out['status'] = 'failed'
+    out['elapsed_seconds'] = round(time.monotonic() - started, 1)
+    out['failed_check'] = next((k for k, v in checks.items() if not v), None)
+    out['checks_total'], out['checks_true'] = len(checks), sum(checks.values())
+    needles = {v for v in PRIVATE if len(v) >= 6}
+    encoded = json.dumps(out, sort_keys=True, ensure_ascii=False).encode()
+    if any(v in encoded or json.dumps(v.decode('latin-1'))[1:-1].encode() in encoded for v in needles):
+        out = {'status': 'failed', 'failed_check': 'secret_in_output_suppressed', 'commercial_acceptance': 'not-complete',
+               'label': LABEL_TEXT}
+    report(ROOT / 'owner-odoo-result.json', out)
+    print(json.dumps(out, sort_keys=True))
+sys.exit(0 if out['status'] == 'passed' else 1)

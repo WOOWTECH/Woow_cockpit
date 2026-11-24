@@ -21,6 +21,7 @@ ROLE_RE = re.compile(r'^woowbk-j[0-9]{8}T[0-9]{6}Z-[0-9a-f]{8}-')
 VALUE_OPTIONS = {'--name', '--label', '--log-driver', '--network', '--security-opt', '--pids-limit', '--memory',
                  '--cpus', '--user', '--workdir', '--entrypoint', '--env', '--env-file', '--volume', '--secret', '--add-host'}
 FLAG_OPTIONS = {'--pull=never', '--detach', '--rm', '--interactive', '--read-only'}
+VALUE_OPTIONS |= {'--tmpfs'}  # tempctr: a read-only root with a secret file gets a tmpfs at /run/secrets (98410bd)
 
 
 def role_of(name):
@@ -77,6 +78,12 @@ class Owner:
             raise BackupError('not-found', f'找不到檔案 ~/{rel}。')
         return self.world.files[rel]
 
+    def dir_pack(self, rel, *, stdout, timeout=None, max_output=None, abort=None):
+        self.calls.append(('dir_pack', rel))
+        if rel not in self.world.dirs:
+            raise BackupError('not-found', f'找不到資料夾 ~/{rel}。')
+        stdout.write(self.world.dirs[rel])
+
 
 class Adapter:
     def __init__(self, app, world):
@@ -126,6 +133,7 @@ class World:
         self.owner = Owner(self)
         self.quadlets = {}
         self.files = {}
+        self.dirs = {}
         self.images = set()
         self.manifests, self.volume_data, self.imported = {}, {}, {}
         self.runs, self.execs, self.live_dumps = [], [], []

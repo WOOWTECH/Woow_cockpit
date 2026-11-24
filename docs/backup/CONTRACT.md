@@ -309,7 +309,8 @@ store) and the downtime of a stopped database is acceptable.
   directory (`data_dir`, a `data_dirs[]` path) as type, mode, numeric owner, size, link target and sha256. `exclude`: up
   to 64 fnmatch globs; a glob without `/` matches any name (file or directory, a directory with everything below it), a
   glob with `/` the path from the top. Sockets are not listed (tar never keeps them); a volume's top directory is not
-  listed (`podman volume import` creates it anew, 0755 owner 0 — lab 2026-11-13); setuid/setgid of a volume's files are
+  listed (`podman volume import` creates it anew, 0755 owner 0 — lab 2026-11-13; a restore sets its owner, group and mode
+  itself afterwards, §5); setuid/setgid of a volume's files are
   not compared (a volume restore drops them, §5). A listing is at most 1 GiB whatever the free space (about 2,000,000
   entries; review M4).
 * Every digest is read **twice** during a backup, around the copy it vouches for (§9): a check whose two reads differ --
@@ -665,7 +666,10 @@ already does, before the safety backup, and the restore reuses the result):
 
 Podman is then fed a canonical tar rebuilt from the validated members only, never the archive's bytes: for volumes
 setuid/setgid are dropped from non-directories, owner names dropped and only `SCHILY.xattr.user.*` kept (what was
-dropped is reported, §7 `warnings`); for images the index names the image `local_name(ref)`, the name
+dropped is reported, §7 `warnings`), and the new volume's top directory then gets the owner, group and mode of the tar's
+first `.` entry (validated like every member) or, when there is none (`podman volume export` writes none), of the volume
+it replaces, set inside the owner's user namespace: Podman 6.1.1 ignores that entry and no longer hands an imported volume
+to the image's user (an ARM64 test machine, 2026-11-23); for images the index names the image `local_name(ref)`, the name
 `podman tag <id> <ref>` gives it (`localhost/<short ref>`, Docker Hub `library/`, `:latest` added), which `<ref>`
 resolves to first, so the archive never chooses which image name of the owner moves. Exception: a short name with an
 alias (`/etc/containers/registries.conf.d/shortnames.conf`: `ubuntu`, `python`, `node`, `alpine`, …) resolves to an
@@ -916,8 +920,10 @@ Home Assistant OS backups (Supervisor) are uploaded like any backup and **read**
   entrypoint, user, workdir, input, stdout, timeout, max_output, check, remove)`, `run_argv(...)`, `exec(role, argv, *,
   user, env, input, stdout, timeout, max_output, check)`, `stop(role)` (exit code), `running(role)`, `remove(role)`,
   `remove_volume(role)`, `user_ids(role, image, user)` (`run`/`run_argv` also take `read_only_root` and, batch 1,
-  `add_hosts=[(name, IPv4)]` -> `--add-host`), `volume_import(role, produce)` (a producer writes the tar into a
-  pipe), `volume_export(role, handle)`, `kill_all()`, `cleanup() -> [names left]`, attributes `cpus`, `abort` (the
+  `add_hosts=[(name, IPv4)]` -> `--add-host`; a read-only root that mounts a secret file under `/run/secrets` also gets a
+  private tmpfs there for the mount points, runc refuses them otherwise), `volume_import(role, produce)` (a producer
+  writes the tar into a pipe; a leading `.` entry is applied to the volume's top directory afterwards, as in §5),
+  `volume_export(role, handle)`, `kill_all()`, `cleanup() -> [names left]`, attributes `cpus`, `abort` (the
   job's watchdog, handed to every long podman call); `sweep(runner, alive, *, log, only_job) -> (removed, left)`,
   `default_cpus(uid)`,
   `quadlet_secrets(text)`, `quadlet_image(text)`, `quadlet_environment(text, allowed)`, `parse_unit(text)`, `LABEL`.
@@ -1911,8 +1917,8 @@ secret and mounts); an entry of another shape is `incompatible`.
 **n8n** (add-on `woow-n8n` → app `n8n`: database `main`, volumes `n8n_n8n_data` and `n8n_valkey_data`).
 1. The pass stages `config/.n8n/database.sqlite` (+ `-wal`; never HA's `-shm` wal-index: SQLite rebuilds it from the
    WAL) and reads `config/.n8n/config`'s `encryptionKey`
-   (masked); `nodes/package.json` names the community packages; every native `.node` file must be x86-64 ELF without
-   glibc (the image is musl) or the package is named in a warning; a conversion stages `nodes/**` (relative links that
+   (masked); `nodes/package.json` names the community packages; every native `.node` file must be an ELF of this
+   device's processor (the n8n image's) without glibc (the image is musl) or the package is named in a warning; a conversion stages `nodes/**` (relative links that
    stay inside `nodes/` and whose `..` components all come before their names, so no chain of links can climb out)
    and `storage/**`. Caches, Redis, runner files, logs and `data/` never move.
 2. The SQLite file is never opened by the job process: a child (`python3 -I -S`) reads a copy of its own after it
@@ -2131,7 +2137,8 @@ PostgreSQL 15).
    (another kind or app) refuses the restore in its preflight, before anything changes. The digests are derived from
    data the same archive holds and never appear in a log or job record.
 
-**Headscale** (`woow-headscale` → `headscale`: volumes `headscale-data`, `headplane-data`).
+**Headscale** (`woow-headscale` → `headscale`: volumes `headscale-data`, `headplane-data`; an entry may also name the package's
+read-only configuration folder, the one mounted at `/etc/headscale`, as its one host folder: the form catalog-suggest drafts).
 1. Versions: add-on 0.1.1–0.1.3 → Headscale 0.29.4 (0.1.0 → 0.29.3) must equal the live image's
    `org.opencontainers.image.version`; HA's `database_versions` row must name it and every applied migration must be one
    0.29.4 knows (gormigrate's `SCHEMA_INIT` mark included). HA's prefixes (`config/config.yaml`) must equal this
@@ -2153,6 +2160,9 @@ PostgreSQL 15).
    (network none, read-only root, the live configuration read-only) opens a throwaway copy of that volume: version path,
    migrations and schema as the server will check them; failing it fails the job. `headplane-data`: the live export
    (this device's Headplane logins and roles stay).
+5. The configuration folder, when the entry names it: this device's own folder packed as it is while Headscale runs (nothing
+   of HA's goes into it), checked like every host folder (§5); its `config.yaml` must still say what the conversion was made
+   with, else the job stops. Any other host folder makes the entry `incompatible`.
 
 **Batch 2: code-server** (branch `feat/ha-import-code-server-20261123`; `ha_codeserver.py`; owner decision 2026-11-23
 「決定2 A」 = the facts' recommended answers D1 b, D2 a, D3, D4 a, D6; facts `phase3/facts/code-server.md`). Add-on
@@ -2417,7 +2427,9 @@ the slug after the repository prefix and must carry `system.slug` `woow_ha_opend
 
 1. Helper refuses to run unless `euid == 0`; entrypoint checks its library dir is root-owned and
    not group/world-writable before importing.
-2. No `shell=True`; fixed argv; validated names; sanitized env (`PATH`, `LANG=C.UTF-8`).
+2. No `shell=True`; fixed argv; validated names; sanitized env (`PATH`, `LANG=C.UTF-8`). Podman is `/usr/bin/podman`, else
+   `/usr/local/bin/podman` (an upstream install), chosen once: a root-owned regular file nobody else may write, below
+   directories only root may write.
 3. Owner operations via `runuser -u <owner> --` with `XDG_RUNTIME_DIR`/`DBUS_SESSION_BUS_ADDRESS`;
    root never opens paths inside an owner's home.
 4. Secrets/keys never in argv, environment, logs, job records or error messages.

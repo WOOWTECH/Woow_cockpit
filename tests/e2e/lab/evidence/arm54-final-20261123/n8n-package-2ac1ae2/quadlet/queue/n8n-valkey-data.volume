@@ -1,0 +1,7 @@
+[Unit]
+Description=n8n queue Valkey data
+Documentation=https://github.com/WOOWTECH/Woow_podman_n8n
+
+[Volume]
+VolumeName=n8n_valkey_data
+Label=io.woowtech.app=n8n

@@ -1,0 +1,28 @@
+import hashlib, json, subprocess, tarfile
+FILES = {'45670371': 'woow-b1-arm-plain', 'b6cbc980': 'woow-b1-arm-emqx-stopped-enc', 'a2dc9bfd': 'woow-b1-arm-enc', '79278485': 'woow-b1-arm-enc-uncompressed'}
+def sha(path):
+    d = hashlib.sha256()
+    with open(path, 'rb') as f:
+        for b in iter(lambda: f.read(1 << 20), b''):
+            d.update(b)
+    return d.hexdigest()
+listing = json.loads(subprocess.check_output(['ha', 'backups', 'list', '--raw-json'], timeout=40))
+rows = {}
+for b in listing.get('data', {}).get('backups', []):
+    rows[b.get('slug')] = b
+out = {'ha_result': listing.get('result'), 'backup_count': len(rows), 'backups': {}}
+for slug, name in sorted(FILES.items()):
+    info = json.loads(subprocess.check_output(['ha', 'backups', 'info', slug, '--raw-json'], timeout=40))
+    data = info.get('data') or {}
+    path = '/backup/' + name + '.tar'
+    with tarfile.open(path) as t:
+        doc = t.extractfile('./backup.json').read()
+    out['backups'][slug] = {
+        'listed': slug in rows, 'info_result': info.get('result'),
+        'name': data.get('name'), 'date': data.get('date'), 'type': data.get('type'),
+        'protected': data.get('protected'), 'compressed': data.get('compressed'),
+        'size_bytes': data.get('size_bytes'), 'location': data.get('location'),
+        'addons': sorted((a.get('slug'), a.get('version')) for a in data.get('addons') or []),
+        'file': path, 'file_bytes': __import__('os').stat(path).st_size, 'file_sha256': sha(path),
+        'backup_json_sha256': hashlib.sha256(doc).hexdigest()}
+print(json.dumps(out, sort_keys=True))

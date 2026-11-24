@@ -106,6 +106,20 @@ class NativeFileTests(unittest.TestCase):
         for head in (b'', b'\x7fELF', b'#!/bin/sh\n' + bytes(40), b'import os\n' * 5):
             self.assertFalse(ha_odoo.foreign_native(head), head[:8])
 
+    def test_foreign_native_follows_the_devices_processor(self):
+        with mock.patch.object(ha_odoo, 'host_elf_machine', lambda: 0xB7):  # an ARM64 device (lane arm54-2, .54)
+            self.assertFalse(ha_odoo.foreign_native(elf(0xB7)), 'aarch64 code runs on an ARM64 device')
+            self.assertTrue(ha_odoo.foreign_native(elf(0x3E)), 'x86-64 code does not')
+            self.assertTrue(ha_odoo.foreign_native(elf(0xB7, b'\x7fELF\x01\x01\x01')), '32-bit')
+        with mock.patch.object(ha_odoo, 'host_elf_machine', lambda: None):  # unknown: as before, x86-64
+            self.assertFalse(ha_odoo.foreign_native(elf(0x3E)))
+            self.assertTrue(ha_odoo.foreign_native(elf(0xB7)))
+
+    def test_the_machine_table(self):
+        for name, machine in (('x86_64', 0x3E), ('amd64', 0x3E), ('aarch64', 0xB7), ('ARM64', 0xB7), ('riscv64', None)):
+            with mock.patch.object(ha_odoo.os, 'uname', lambda name=name: mock.Mock(machine=name)):
+                self.assertEqual(ha_odoo.host_elf_machine(), machine, name)
+
     def test_the_scan_names_the_file_and_still_copies_it_whole(self):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)

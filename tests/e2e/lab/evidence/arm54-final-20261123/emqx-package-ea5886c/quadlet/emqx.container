@@ -1,0 +1,75 @@
+# Woow EMQX 5.8.9 MQTT broker: rootless Quadlet unit (podman 4.9.3, systemd --user).
+#
+# scripts/install.sh renders this file (tokens are filled from ~/.config/emqx/emqx.env through
+# scripts/render-args.sh) and installs it into ~/.config/containers/systemd/.
+#
+# Security defaults:
+#   * Anonymous MQTT is OFF. EMQX 5 has no allow-anonymous switch for MQTT; a client is anonymous
+#     whenever the authentication chain is empty. config/base.hocon declares a built-in-database
+#     authenticator, and the bootstrap CSV (a podman secret) seeds the first MQTT user.
+#   * The dashboard admin password is a generated podman secret. EMQX reads it only on the very first
+#     boot of an empty data volume; rotate it later with `emqx ctl admins passwd admin <new>`.
+#   * Every port binds 127.0.0.1 unless WOOW_EMQX_BIND says otherwise.
+[Unit]
+Description=Woow EMQX MQTT broker
+Documentation=https://github.com/WOOWTECH/Woow_podman_emqx
+
+[Container]
+ContainerName=woow-emqx
+Image=docker.io/emqx/emqx:5.8.9@sha256:35b46f7aa7a0d51f3959e4344221ac5ec7f948b03e43099286b6c40a07bb393b
+HostName=emqx
+Network=emqx.network
+Label=io.woowtech.stack=emqx
+
+# The node name is part of the mnesia path inside the data volume. Never change it on an existing volume.
+Environment=EMQX_NODE__NAME=emqx@127.0.0.1
+Environment=EMQX_DASHBOARD__DEFAULT_USERNAME=admin
+Environment="EMQX_DASHBOARD__LISTENERS__HTTP__BIND=\"0.0.0.0:18093\""
+Environment=EMQX_LISTENERS__WS__ENTRANCE__ENABLE=true
+Environment="EMQX_LISTENERS__WS__ENTRANCE__BIND=\"127.0.0.1:8093\""
+Environment="EMQX_LISTENERS__WS__ENTRANCE__WEBSOCKET__PROXY_ADDRESS_HEADER=\"x-forwarded-for\""
+Environment="EMQX_LISTENERS__WS__ENTRANCE__WEBSOCKET__PROXY_PORT_HEADER=\"x-forwarded-port\""
+Environment="EMQX_LISTENERS__WS__DEFAULT__WEBSOCKET__PROXY_ADDRESS_HEADER=\"\""
+Environment="EMQX_LISTENERS__WS__DEFAULT__WEBSOCKET__PROXY_PORT_HEADER=\"\""
+Environment=EMQX_LISTENERS__TCP__NGROK__ENABLE=true
+Environment="EMQX_LISTENERS__TCP__NGROK__BIND=\"127.0.0.1:1884\""
+Environment=EMQX_LISTENERS__TCP__NGROK__PROXY_PROTOCOL=true
+# Non-secret EMQX_* overrides plus the WOOW_* installer knobs (EMQX ignores those). Required file.
+EnvironmentFile=%h/.config/emqx/emqx.env
+Secret=woow-emqx-dashboard-password,type=env,target=EMQX_DASHBOARD__DEFAULT_PASSWORD
+Secret=woow-emqx-node-cookie,type=env,target=EMQX_NODE__COOKIE
+Secret=woow-emqx-mqtt-bootstrap,type=mount,target=/opt/emqx/etc/woow-mqtt-bootstrap.csv,uid=1000,gid=1000,mode=0400
+
+# Lowest-precedence config (base.hocon < data/configs/cluster.hocon < emqx.conf < env), so the
+# Dashboard can still override anything declared there.
+Volume=%h/.config/emqx/base.hocon:/opt/emqx/etc/base.hocon:ro,Z
+Volume=%h/.config/emqx/acl.conf:/opt/emqx/etc/acl.conf:ro,Z
+Volume=emqx-data.volume:/opt/emqx/data
+Volume=emqx-log.volume:/opt/emqx/log
+
+PublishPort=@@EMQX_PUBLISH_MQTT@@:1883
+PublishPort=@@EMQX_PUBLISH_MQTTS@@:8883
+PublishPort=@@EMQX_PUBLISH_WS@@:8083
+PublishPort=@@EMQX_PUBLISH_WSS@@:8084
+PublishPort=@@EMQX_PUBLISH_DASHBOARD@@:18083
+
+HealthCmd=emqx ctl status
+HealthInterval=30s
+HealthTimeout=10s
+HealthRetries=5
+HealthStartPeriod=60s
+
+NoNewPrivileges=true
+# Quadlet 4.9.3 has no StopTimeout= key; give EMQX time to flush mnesia on stop.
+PodmanArgs=--stop-timeout=30
+
+[Service]
+# A container stopped by systemd is stopped with SIGTERM: an entrypoint that does not
+# trap it exits 143 (128+15), which would leave the unit failed after a clean stop.
+SuccessExitStatus=143
+Restart=always
+TimeoutStartSec=600
+TimeoutStopSec=60
+
+[Install]
+WantedBy=default.target

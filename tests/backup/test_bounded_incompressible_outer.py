@@ -64,6 +64,37 @@ class PlanTests(unittest.TestCase):
                     probe.main()
             self.assertEqual(caught.exception.code, 2)
 
+    def test_default_floor_and_deadline_are_the_host_values(self):
+        with tempfile.TemporaryDirectory() as root:
+            _, report, _, _ = self.run_main(['--plan-only', '--scratch-parent', root], 10 ** 13)
+        self.assertEqual((report['reserve_bytes'], report['deadline_seconds']), (12 * GIB, 3600))
+        self.assertEqual(report['required_free_bytes'], probe.plan(8193 * MIB, 0)['required_free_bytes'])
+
+    def test_test_machine_floor_is_used_for_plan_and_refusal(self):
+        need = probe.plan(8193 * MIB, 0, 4 * GIB)['required_free_bytes']
+        self.assertEqual(need, 4 * GIB + probe.MARGIN + probe.archive_bound(8193 * MIB) + probe.WINDOW_PEAK)
+        with tempfile.TemporaryDirectory() as root:
+            code, report, limits, deps = self.run_main(['--scratch-parent', root, '--reserve-gib', '4',
+                                                        '--deadline', '9000'], need - 1)
+            self.assertEqual((code, report['status'], report['shortfall_bytes']),
+                             (probe.EXIT_NO_SPACE, 'insufficient-space', 1))
+            self.assertEqual((report['reserve_bytes'], report['deadline_seconds']), (4 * GIB, 9000))
+            limits.assert_not_called()
+            deps.assert_not_called()
+            self.assertEqual(list(Path(root).iterdir()), [])
+            code, report, _, _ = self.run_main(['--plan-only', '--scratch-parent', root, '--reserve-gib', '4'],
+                                               need)
+            self.assertEqual((code, report['shortfall_bytes'], report['required_free_bytes']), (0, 0, need))
+            self.assertEqual(report['platform']['machine'], probe.platform.machine())
+
+    def test_floor_and_deadline_bounds(self):
+        for argv in (['--reserve-gib', '3'], ['--reserve-gib', '65'], ['--deadline', '599'],
+                     ['--deadline', '14401']):
+            with mock.patch('sys.argv', ['probe', *argv]), contextlib.redirect_stderr(io.StringIO()):
+                with self.assertRaises(SystemExit) as caught:
+                    probe.main()
+            self.assertEqual(caught.exception.code, 2, argv)
+
 
 class HeaderTests(unittest.TestCase):
     def member(self, raw, size):

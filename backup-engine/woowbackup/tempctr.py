@@ -49,6 +49,20 @@ IPV4_RE = re.compile(r'(?:[0-9]{1,3}\.){3}[0-9]{1,3}\Z')
 SECRET_NAME_RE = re.compile(r'[A-Za-z0-9][A-Za-z0-9_.-]{0,252}\Z')
 SECRET_OPTION_RE = re.compile(r'(?:type=(?:mount|env)|target=[A-Za-z0-9_./-]{1,255}|uid=[0-9]{1,10}|gid=[0-9]{1,10}'
                               r'|mode=0?[0-7]{3,4})\Z')
+SECRETS_TMPFS = '/run/secrets:rw,noexec,nosuid,nodev,mode=0755'
+
+
+def secret_mount_path(spec):
+    """Where a `--secret` spec puts its file inside the container ('' for an environment secret): podman mounts
+    type=mount (the default) at `target`, relative targets and the default (the secret's name) under /run/secrets."""
+    parts = str(spec).split(',')
+    options = dict(part.split('=', 1) for part in parts[1:] if '=' in part)
+    if options.get('type', 'mount') != 'mount':
+        return ''
+    target = options.get('target') or parts[0]
+    return target if target.startswith('/') else '/run/secrets/' + target
+
+
 MEMORY = '2g'
 PIDS = 1024
 SHORT_TIMEOUT = 120
@@ -287,10 +301,18 @@ class TempObjects:
                                                                                              options)):
                 raise BackupError('internal-error', '容器掛載目標格式不正確。')
             argv += ['--volume', f'{source}:{target}' + (f':{options}' if options else '')]
+        secrets = list(secrets)
         for spec in secrets:
             parts = str(spec).split(',')
             if not SECRET_NAME_RE.fullmatch(parts[0]) or not all(SECRET_OPTION_RE.fullmatch(p) for p in parts[1:]):
                 raise BackupError('internal-error', '容器機密掛載格式不正確。')
+        if read_only_root and any(secret_mount_path(spec).startswith('/run/secrets/') for spec in secrets):
+            # A read-only root cannot take the mount point of a secret FILE: runc (1.5.1 under rootless Podman 6.1.1)
+            # creates /run/secrets/<target> inside the image's read-only filesystem and fails ("read-only file
+            # system", podman exit 126; crun 1.29.1 does not fail). A private tmpfs at /run/secrets holds the mount
+            # points with either runtime; the secret files are mounted into it exactly as before.
+            argv += ['--tmpfs', SECRETS_TMPFS]
+        for spec in secrets:
             argv += ['--secret', spec]
         argv.append(image)
         for arg in args:

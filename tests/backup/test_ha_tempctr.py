@@ -76,6 +76,26 @@ class ArgvTests(unittest.TestCase):
         self.assertNotIn('--publish', argv)
         self.assertNotIn('-p', argv)
 
+    def test_read_only_root_gets_a_private_secrets_tmpfs(self):
+        # runc 1.5.1 under rootless Podman 6.1.1 cannot create a secret file's mount point in a read-only root
+        # (exit 126, lane arm54-2 on the ARM test target); a tmpfs at /run/secrets holds it with any runtime.
+        image = 'docker.io/library/postgres:16.15-alpine'
+        mounted = ['pg-password,type=mount,target=/run/secrets/postgres-password,mode=0400']
+        argv = self.tmp.run_argv('omni-db', image, [], detach=True, read_only_root=True, secrets=mounted)
+        self.assertIn('--read-only', argv)
+        self.assertEqual(argv[argv.index('--tmpfs') + 1], '/run/secrets:rw,noexec,nosuid,nodev,mode=0755')
+        self.assertLess(argv.index('--tmpfs'), argv.index('--secret'))
+        self.assertEqual(argv[argv.index('--secret') + 1], mounted[0])
+        for secrets in (['pg-password'], ['pg-password,type=mount,target=postgres_password,uid=999,gid=999,mode=0400']):
+            self.assertIn('--tmpfs', self.tmp.run_argv('x', image, [], read_only_root=True, secrets=secrets))
+        for options in ({'read_only_root': False, 'secrets': mounted},
+                        {'read_only_root': True, 'secrets': ['pg-password,type=env,target=PGPASSWORD']},
+                        {'read_only_root': True, 'secrets': ['odoo-conf,type=mount,target=/etc/odoo/odoo.conf']},
+                        {'read_only_root': True, 'secrets': []}):
+            self.assertNotIn('--tmpfs', self.tmp.run_argv('x', image, [], **options), options)
+        self.assertEqual(tempctr.secret_mount_path('a,type=env,target=A'), '')
+        self.assertEqual(tempctr.secret_mount_path('a'), '/run/secrets/a')
+
     def test_run_argv_refuses_unsafe_values(self):
         image = 'docker.io/library/postgres:16.15-alpine'
         bad = [

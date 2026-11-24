@@ -1,0 +1,23 @@
+import json, os
+from pathlib import Path
+
+
+def remove_own_cgroup_parent(baseline_top, parent=Path('/sys/fs/cgroup/libpod_parent'), rmdir=os.rmdir):
+    """The private rootful store runs with --cgroup-manager cgroupfs: Podman makes <parent>/conmon and leaves it behind.
+    It goes only when the cycle's own baseline did not have it and the kernel reports every directory of it as empty
+    (rmdir only: the kernel itself refuses a directory that is still used)."""
+    report = {'present': parent.is_dir(), 'in_baseline': parent.name in baseline_top, 'removed': False}
+    if not report['present'] or report['in_baseline']:
+        return report
+    dirs = sorted((Path(d) for d, _subs, _files in os.walk(parent)), key=lambda p: len(p.parts), reverse=True)
+    report['directories'] = len(dirs)
+    report['populated'] = any(('populated 0' not in (d / 'cgroup.events').read_text() or (d / 'cgroup.procs').read_text().strip() for d in dirs))
+    if report['populated']:
+        return report
+    for path in dirs:
+        rmdir(path)
+    report['removed'] = not parent.exists()
+    return report
+
+
+print(json.dumps(remove_own_cgroup_parent(['dev-hugepages.mount', 'dev-mqueue.mount', 'init.scope', 'proc-sys-fs-binfmt_misc.mount', 'sys-fs-fuse-connections.mount', 'sys-kernel-config.mount', 'sys-kernel-debug.mount', 'sys-kernel-tracing.mount', 'system.slice', 'user.slice']), sort_keys=True))

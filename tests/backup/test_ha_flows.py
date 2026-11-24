@@ -42,6 +42,7 @@ N8N_QUADLETS = {
 SKIP = {'--name', '--label', '--log-driver', '--network', '--security-opt', '--pids-limit', '--memory', '--cpus',
         '--user', '--workdir', '--entrypoint', '--env', '--env-file', '--volume', '--secret'}
 FLAGS = {'--pull=never', '--detach', '--rm', '--interactive', '--read-only'}
+SKIP |= {'--tmpfs'}  # tempctr: a read-only root with a secret file gets a tmpfs at /run/secrets (98410bd)
 IDS = (nested.IdMap('0 1013 1\n1 100000 65536\n'), nested.IdMap('0 1013 1\n1 100000 65536\n'))
 
 

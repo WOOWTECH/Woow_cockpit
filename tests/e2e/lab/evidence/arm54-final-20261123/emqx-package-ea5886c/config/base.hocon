@@ -1,0 +1,42 @@
+## Woow EMQX defaults, installed to ~/.config/emqx/base.hocon and mounted read-only at
+## /opt/emqx/etc/base.hocon. scripts/install.sh overwrites local edits (it keeps a copy of the old file).
+##
+## Precedence in EMQX 5.8.9: etc/base.hocon < data/configs/cluster.hocon < etc/emqx.conf < EMQX_* env.
+## Anything here can still be changed from the Dashboard (the change lands in cluster.hocon, which wins).
+##
+## Why this file exists: EMQX 5 admits a client as "anonymous" whenever the MQTT authentication chain
+## is empty (emqx_authn_chains:authenticate/2 returns the initial `ignore`). The allow-anonymous
+## variable from the EMQX 4 era does not exist in the 5.x MQTT schema and is silently ignored.
+## Declaring one authenticator turns anonymous access off.
+
+authentication = [
+  {
+    mechanism = password_based
+    backend = built_in_database
+    user_id_type = username
+    password_hash_algorithm { name = sha256, salt_position = suffix }
+    enable = true
+    ## Seeded from the woow-emqx-mqtt-bootstrap podman secret (header: user_id,password,is_superuser).
+    ## Import runs when the authenticator starts and never overwrites an existing user.
+    bootstrap_file = "/opt/emqx/etc/woow-mqtt-bootstrap.csv"
+    bootstrap_type = plain
+  }
+]
+
+## PaaS chart 0.1.11 defaults: no unmatched topic may be used. An ordinary
+## MQTT user owns only <username>/#; dashboard changes in cluster.hocon win.
+authorization {
+  no_match = deny
+  deny_action = ignore
+  sources = [
+    {
+      type = file
+      enable = true
+      path = "${EMQX_ETC_DIR}/acl.conf"
+    }
+  ]
+}
+
+## Retained messages survive a broker restart; scrape endpoints require an API key.
+retainer.backend.storage_type = disc
+prometheus.enable_basic_auth = true

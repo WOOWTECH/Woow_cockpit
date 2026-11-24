@@ -1,0 +1,39 @@
+import hashlib, json, os, pathlib, tarfile
+root = pathlib.Path('/var/tmp/woow-arm54-final-20261123-36u3k_gg'); os.umask(0o077)
+def sha(p):
+    d = hashlib.sha256()
+    with open(p, 'rb') as f:
+        for b in iter(lambda: f.read(1 << 20), b''):
+            d.update(b)
+    return d.hexdigest()
+out = {}
+for name, want in sorted({'code.tar.gz': '335431cf822150918a64547b837f5ce94ce3ec6208573a202613631dcddb42c3', 'chain.json': '39e808bb07eba6923bb9ebe8b961a115c436f0aa0f38de1ea16fc0367a0da289', 'ha-backup.tar': '0a53e93888209316040af505484bba3ee3891c2ad2df7ae689bc0d4fd02690f9', 'emqx-expect.json': '7dd5687fd739ed3c7a26a23957178fdfbc6f2dab98a8297cd3db36318c5d9868', 'pydeps.tar': '16b851825027e0db571ec4646ccd740192a7f738ce6eb88c3a960b44622d4765'}.items()):
+    out[name] = sha(root / 'input' / name) == want
+with tarfile.open(root / 'input' / 'code.tar.gz') as tar:
+    for m in tar:
+        p = pathlib.PurePosixPath(m.name)
+        assert m.isfile() and m.size <= 8 * 1024 ** 2 and not p.is_absolute() and '..' not in p.parts
+        dest = root / 'source' / m.name
+        dest.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        with dest.open('xb') as handle:
+            handle.write(tar.extractfile(m).read())
+if (root / 'input' / 'pydeps.tar').exists():
+    with tarfile.open(root / 'input' / 'pydeps.tar') as tar:
+        for m in tar:
+            p = pathlib.PurePosixPath(m.name)
+            assert m.isfile() and m.size <= 16 * 1024 ** 2 and not p.is_absolute() and '..' not in p.parts
+            assert p.parts[0] == 'pydeps'
+            dest = root / m.name
+            dest.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+            with dest.open('xb') as handle:
+                handle.write(tar.extractfile(m).read())
+    out['pydeps_extracted'] = True
+if (root / 'input' / 'client-state.tar').exists():
+    os.chmod(root / 'input' / 'client-state.tar', 0o600)
+for name, label in (('ha-key', 'staged_backup_unlock_file_private'), ('omni-creds.json', 'staged_login_file_private'),
+                    ('n8n-creds.json', 'staged_n8n_login_file_private'),
+                    ('emqx-creds.json', 'staged_emqx_login_file_private')):
+    path = root / 'input' / name
+    out[label] = (not path.exists()) or (path.stat().st_mode & 0o777 == 0o600 and path.stat().st_size > 0)
+out['extracted'] = True
+print(json.dumps(out, sort_keys=True))

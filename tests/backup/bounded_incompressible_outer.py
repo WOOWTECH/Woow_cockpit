@@ -1,8 +1,12 @@
 #!/usr/bin/env python3
 """Opt-in: an INCOMPRESSIBLE encrypted archive whose outer tar member is above 8GiB, read by the real engine paths.
 python3 tests/backup/bounded_incompressible_outer.py [--mib 8193] [--scratch-parent /tmp] [--plan-only]
+    [--reserve-gib 12] [--deadline 3600]
 
-The disk need is computed first (engine's own archive bound + window + 12GiB reserve + guard margin). Without enough
+--reserve-gib is the free-space floor of the target disk (default 12 = the production host's floor; an authorized test
+machine with a smaller disk states its own floor, e.g. 4 on an ARM64 test machine). --deadline bounds the whole run.
+
+The disk need is computed first (engine's own archive bound + window + reserve (default 12GiB) + guard margin). Without
 free space nothing is generated: the report states the exact shortfall and the exit code is 3.
 Otherwise one deterministic SHAKE256 keystream (1MiB per index, incompressible) is streamed through the real age/zstd
 writer by a sliding-window source (only the archive itself is ever fully on disk; the engine's sha256 check proves
@@ -23,6 +27,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import platform
 import resource
 import shutil
 import signal
@@ -45,6 +50,8 @@ from woowbackup.paths import Paths
 MIB = 1024 ** 2
 GIB = 1024 ** 3
 RESERVE, MARGIN = common.RESERVE, common.MARGIN
+MIN_RESERVE_GIB, MAX_RESERVE_GIB = 4, 64
+MIN_DEADLINE, MAX_DEADLINE = 600, 4 * 3600
 require = common.require
 ENTRY, APP = negatives.ENTRY, negatives.APP
 DEADLINE = 3600
@@ -70,11 +77,11 @@ def expected_archive_bytes(size):
     return age + 8 * archive.BLOCK + archive.RECORD
 
 
-def plan(size, free):
+def plan(size, free, reserve=RESERVE):
     need = archive_bound(size) + WINDOW_PEAK
-    required = RESERVE + MARGIN + need
+    required = reserve + MARGIN + need
     return dict(archive_bound_bytes=archive_bound(size), expected_archive_bytes_model=expected_archive_bytes(size),
-                window_peak_bytes=WINDOW_PEAK, planned_peak_storage_bytes=need, reserve_bytes=RESERVE,
+                window_peak_bytes=WINDOW_PEAK, planned_peak_storage_bytes=need, reserve_bytes=reserve,
                 guard_margin_bytes=MARGIN, required_free_bytes=required, free_bytes_at_plan=free,
                 shortfall_bytes=max(0, required - free) if free is not None else None,
                 outer_over_8gib_expected=expected_archive_bytes(size) > 8 * GIB)
@@ -194,16 +201,26 @@ def main():
     parser.add_argument('--mib', type=int, default=8193)
     parser.add_argument('--scratch-parent', type=Path, default=Path('/tmp'))
     parser.add_argument('--plan-only', action='store_true', help='compute the disk need; generate nothing')
+    parser.add_argument('--reserve-gib', type=int, default=RESERVE // GIB,
+                        help='free-space floor of the target disk in GiB (default: the host floor)')
+    parser.add_argument('--deadline', type=int, default=DEADLINE, help='seconds for the whole run')
     args = parser.parse_args()
     if not 128 <= args.mib <= 8193:
         parser.error('mib must be 128..8193; default 8193 is the actual >8GiB outer archive')
+    if not MIN_RESERVE_GIB <= args.reserve_gib <= MAX_RESERVE_GIB:
+        parser.error('reserve-gib must be %d..%d' % (MIN_RESERVE_GIB, MAX_RESERVE_GIB))
+    if not MIN_DEADLINE <= args.deadline <= MAX_DEADLINE:
+        parser.error('deadline must be %d..%d seconds' % (MIN_DEADLINE, MAX_DEADLINE))
     size = args.mib * MIB
+    reserve, deadline = args.reserve_gib * GIB, args.deadline
     started = time.monotonic()
     report = dict(schema=1, status='running', payload_bytes=size, payload_method='shake256-1MiB-per-index '
                   '(incompressible)', fixture_generations=0, encryption='age-x25519', compression='zstd',
-                  deadline_seconds=DEADLINE, service_restore=False, hermes_attempts=0,
-                  commercial_acceptance='not-complete', cases={})
-    report.update(plan(size, SpaceGuard([args.scratch_parent], RESERVE).free()))
+                  deadline_seconds=deadline, service_restore=False, hermes_attempts=0,
+                  commercial_acceptance='not-complete', cases={},
+                  platform=dict(machine=platform.machine(), python=platform.python_version(),
+                                kernel=platform.release()))
+    report.update(plan(size, SpaceGuard([args.scratch_parent], reserve).free(), reserve))
     if args.plan_only or report['shortfall_bytes'] != 0:
         # Nothing is generated: the report carries the exact need and shortfall.
         report['status'] = 'plan-only' if args.plan_only else 'insufficient-space'
@@ -220,7 +237,7 @@ def main():
     try:
         with tempfile.TemporaryDirectory(prefix='woow-incompressible-outer-', dir=args.scratch_parent) as tmp:
             folder = Path(tmp)
-            guard = SpaceGuard([folder], RESERVE + MARGIN)
+            guard = SpaceGuard([folder], reserve + MARGIN)
             report['free_before'] = guard.free()
             guard.check(report['planned_peak_storage_bytes'])
             report['minimum_free_observed'] = report['free_before']
@@ -230,7 +247,7 @@ def main():
                 require(free is not None, 'lost free space measurement')
                 report['minimum_free_observed'] = min(report['minimum_free_observed'], free)
                 guard.check()
-                require(time.monotonic() - started < DEADLINE, 'deadline exceeded')
+                require(time.monotonic() - started < deadline, 'deadline exceeded')
 
             def interrupted(*_):
                 raise RuntimeError('interrupted')
@@ -241,6 +258,7 @@ def main():
             signal.setitimer(signal.ITIMER_REAL, .25, .25)
             try:
                 report['dependencies'] = common.encryption_dependencies()
+                report['dependency_paths'] = {name: util.find_tool(name) for name in ('age', 'age-keygen', 'zstd')}
                 keys = KeyStore(Paths(base=folder / 'ephemeral-key'))
                 key, _ = keys.ensure_device_key()
                 require(key.path.stat().st_mode & 0o777 == 0o600, 'identity mode unsafe')
@@ -333,8 +351,8 @@ def main():
         report['status'] = 'failed'
     report['elapsed_seconds'] = round(time.monotonic() - started, 3)
     report['max_rss_kib'] = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
-    report['minimum_reserve_preserved_in_samples'] = report.get('minimum_free_observed', 0) >= RESERVE
-    report['free_after_cleanup'] = SpaceGuard([args.scratch_parent], RESERVE).free()
+    report['minimum_reserve_preserved_in_samples'] = report.get('minimum_free_observed', 0) >= reserve
+    report['free_after_cleanup'] = SpaceGuard([args.scratch_parent], reserve).free()
     print(json.dumps(report, indent=2, ensure_ascii=False), flush=True)
     return 0 if report['status'] == 'passed' else 1
 

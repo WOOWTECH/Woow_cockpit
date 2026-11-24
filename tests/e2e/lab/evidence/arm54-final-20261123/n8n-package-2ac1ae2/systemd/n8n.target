@@ -1,0 +1,11 @@
+# n8n.target: one handle for the whole stack.
+#   systemctl --user start|stop|restart n8n.target
+# Every container unit has PartOf=n8n.target, so stop and restart propagate. Wants= on a
+# unit that is not installed (n8n-runners in internal mode) is ignored.
+[Unit]
+Description=n8n stack
+Documentation=https://github.com/WOOWTECH/Woow_podman_n8n
+Wants=n8n-postgres.service n8n-valkey.service n8n.service n8n-runners.service n8n-worker-runners.service n8n-worker.service n8n-webhook.service
+
+[Install]
+WantedBy=default.target

@@ -1,0 +1,10 @@
+# n8n.network: private bridge for n8n, its Postgres and the task-runner sidecar.
+# NetworkName= is the name the old docker-compose.yml declared, so a compose host is
+# adopted in place (Quadlet runs `podman network create --ignore n8n-network`).
+[Unit]
+Description=n8n bridge network
+Documentation=https://github.com/WOOWTECH/Woow_podman_n8n
+
+[Network]
+NetworkName=n8n-network
+Label=io.woowtech.app=n8n

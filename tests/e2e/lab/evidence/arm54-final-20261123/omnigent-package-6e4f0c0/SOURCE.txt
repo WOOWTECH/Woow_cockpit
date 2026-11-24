@@ -1,0 +1,1 @@
+source: WOOWTECH/Woow_podman_omnigent_package commit 6e4f0c0beef78fe43dee22a0e95930c78ff20cff (git show HEAD:quadlet/<file>)

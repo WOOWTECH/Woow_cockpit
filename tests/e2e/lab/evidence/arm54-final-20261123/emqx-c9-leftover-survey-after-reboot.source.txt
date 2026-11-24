@@ -1,0 +1,31 @@
+import json, os, pathlib, subprocess
+root = pathlib.Path('/var/tmp/woow-arm54-final-20261123-36u3k_gg')
+def run(a, t=60):
+    p = subprocess.run(a, capture_output=True, timeout=t)
+    return p.returncode, p.stdout.decode('utf-8', 'replace')
+out = {'root': str(root)}
+st = root.stat()
+out['root_mode'] = oct(st.st_mode & 0o7777); out['root_uid'] = st.st_uid
+out['top'] = {p.name: ('dir' if p.is_dir() else p.stat().st_size) for p in sorted(root.iterdir())}
+for name in ('input', 'work', 'run', 'networks', 'config', 'tmp'):
+    d = root / name
+    out['dir_' + name] = sorted(x.name for x in d.iterdir())[:40] if d.is_dir() else None
+out['du_kib'] = run(['du', '-sk', str(root)], 300)[1].split()[:1]
+mi = pathlib.Path('/proc/self/mountinfo').read_text().splitlines()
+out['mounts_in_workspace'] = [l.split()[4] for l in mi if str(root) in l]
+rc, so = run(['ps', '-eo', 'pid,comm,args'])
+out['processes_naming_workspace'] = sum(1 for l in so.splitlines() if root.name in l and 'ps -eo' not in l)
+out['run_netns'] = sorted(os.listdir('/run/netns')) if os.path.isdir('/run/netns') else []
+rc, so = run(['podman', 'ps', '-a', '--format', '{{.Names}}'])
+out['host_podman_containers'] = sorted(so.split())
+rc, so = run(['podman', 'images', '--format', '{{.Repository}}'])
+out['host_podman_image_repos'] = sorted(so.split())
+rc, so = run(['podman', 'volume', 'ls', '--format', '{{.Name}}'])
+out['host_podman_volumes'] = sorted(so.split())
+out['account_woowbk'] = [l.split(':')[0] for l in open('/etc/passwd') if l.startswith('woowbk')]
+out['linger'] = sorted(os.listdir('/var/lib/systemd/linger')) if os.path.isdir('/var/lib/systemd/linger') else []
+out['uidmap_binaries'] = [os.path.exists('/usr/bin/newuidmap'), os.path.exists('/usr/bin/newgidmap')]
+out['var_tmp'] = sorted(os.listdir('/var/tmp'))
+out['tmp_woow'] = sorted(n for n in os.listdir('/tmp') if 'woow' in n.lower())
+out['root_free_bytes'] = __import__('shutil').disk_usage('/').free
+print(json.dumps(out, sort_keys=True))

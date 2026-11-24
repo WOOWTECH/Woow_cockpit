@@ -1,0 +1,4 @@
+# Server /data: artifacts, the admin roster file and the cookie secret. Existing name.
+[Volume]
+VolumeName=omnigent-server-data
+Label=io.woowtech.app=omnigent

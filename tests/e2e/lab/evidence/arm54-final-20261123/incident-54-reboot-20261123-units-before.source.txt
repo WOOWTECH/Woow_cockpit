@@ -1,0 +1,11 @@
+import json, subprocess
+units = ['homeassistant.service', 'matter-server.service', 'woow-auth-gateway.service', 'tailscale-web.service',
+         'ha-matter-seed.service', 'tailscaled.service', 'ssh.service']
+out = {}
+for u in units:
+    p = subprocess.run(['systemctl', 'show', u, '-p', 'UnitFileState', '-p', 'WantedBy', '-p', 'Restart', '-p', 'FragmentPath',
+                        '-p', 'ActiveEnterTimestamp'], capture_output=True, text=True, timeout=30)
+    out[u] = dict(l.split('=', 1) for l in p.stdout.splitlines() if '=' in l)
+p = subprocess.run(['systemctl', 'get-default'], capture_output=True, text=True, timeout=30)
+out['default_target'] = p.stdout.strip()
+print(json.dumps(out, sort_keys=True))

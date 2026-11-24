@@ -1,0 +1,79 @@
+"""Lane arm54-2 item B diagnosis (runs on .54, private rootful store, network none, own network namespace not
+needed: no network is created). n8n-real-attempt4 stopped with EACCES on /home/node/.n8n after the product restore.
+This probe answers, with the pinned n8n image, what Podman does with a named volume's top directory:
+  A  new volume, first mounted by the n8n image (as the image's user node): owner of the top directory
+  B  new volume + `podman volume import` of a tar whose '.' entry is 1000:1000 0755 (the product's FileTar shape)
+  C  like B, then first mounted by the n8n image
+  D  like B, but the tar has no '.' entry
+  E  `podman volume export` of A: its first members (does the export carry the top directory entry?)
+Every container runs --rm --network none; all volumes are removed."""
+import io
+import json
+import sys
+import tarfile
+import time
+
+from arm54_final_runtime import LABEL, Runner, report, ROOT
+
+IMAGE = 'docker.io/n8nio/n8n:2.43.6'
+r = Runner()
+out = {'status': 'failed', 'commercial_acceptance': 'not-complete', 'cases': {}}
+VOLS = ('a54p-a', 'a54p-b', 'a54p-c', 'a54p-d')
+
+
+def tar_bytes(with_root):
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode='w', format=tarfile.PAX_FORMAT) as tar:
+        if with_root:
+            info = tarfile.TarInfo('.')
+            info.type, info.mode, info.uid, info.gid, info.mtime = tarfile.DIRTYPE, 0o755, 1000, 1000, int(time.time())
+            tar.addfile(info)
+        data = b'{"probe": true}'
+        info = tarfile.TarInfo('config')
+        info.size, info.mode, info.uid, info.gid, info.mtime = len(data), 0o600, 1000, 1000, int(time.time())
+        tar.addfile(info, io.BytesIO(data))
+    return buf.getvalue()
+
+
+def root_stat(volume):
+    mount = r.podman('volume', 'inspect', '--format', '{{.Mountpoint}}', volume).stdout.decode().strip()
+    import os
+    st = os.stat(mount)
+    return [st.st_uid, st.st_gid, oct(st.st_mode & 0o7777)]
+
+
+def container_view(volume):
+    script = 'id -u; stat -c "%u %g %a" /home/node/.n8n; touch /home/node/.n8n/probe-write && echo writable || echo denied'
+    p = r.podman('run', '--rm', '--network', 'none', '--pull=never', '--memory', '256m', '--label', LABEL,
+                 '--volume', volume + ':/home/node/.n8n', '--entrypoint', '/bin/sh', IMAGE, '-c', script,
+                 check=False, timeout=180)
+    return p.stdout.decode('utf-8', 'replace').split('\n')[:3]
+
+
+try:
+    for v in VOLS:
+        r.podman('volume', 'create', '--label', LABEL, v, timeout=60)
+    out['cases']['A_new_volume_root'] = root_stat('a54p-a')
+    out['cases']['A_first_mount_view'] = container_view('a54p-a')
+    out['cases']['A_root_after_first_mount'] = root_stat('a54p-a')
+    for v, with_root in (('a54p-b', True), ('a54p-c', True), ('a54p-d', False)):
+        r.podman('volume', 'import', v, '-', input=tar_bytes(with_root), timeout=120)
+        out['cases'][v + '_root_after_import'] = root_stat(v)
+    out['cases']['C_first_mount_view_after_import'] = container_view('a54p-c')
+    out['cases']['C_root_after_first_mount'] = root_stat('a54p-c')
+    out['cases']['D_first_mount_view_after_import'] = container_view('a54p-d')
+    # E: what `podman volume export` writes for the top directory (A is node-owned after its first mount).
+    exported = r.podman('volume', 'export', 'a54p-a', timeout=120, max_output=16 * 1024 * 1024).stdout
+    with tarfile.open(fileobj=io.BytesIO(exported)) as tar:
+        first = [[m.name, m.uid, m.gid, oct(m.mode & 0o7777), m.type.decode('latin-1')] for m in tar.getmembers()[:3]]
+    out['cases']['E_export_first_members'] = first
+    out['status'] = 'passed'
+except Exception as error:  # noqa: BLE001
+    out['error_code'] = type(error).__name__
+finally:
+    for v in VOLS:
+        r.podman('volume', 'rm', '--force', v, check=False, timeout=60)
+    out['volumes_left'] = [v for v in VOLS if r.podman('volume', 'exists', v, check=False).returncode == 0]
+    report(ROOT / 'n8n-volume-probe.json', out)
+    print(json.dumps(out, sort_keys=True))
+    sys.exit(0 if out['status'] == 'passed' and not out['volumes_left'] else 1)

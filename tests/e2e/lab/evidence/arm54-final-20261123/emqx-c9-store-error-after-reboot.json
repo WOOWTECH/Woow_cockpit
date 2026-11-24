@@ -1,0 +1,1 @@
+{"exit": 125, "stderr": "Error: current system boot ID differs from cached boot ID; an unhandled reboot has occurred. Please delete directories \"/var/tmp/woow-arm54-final-20261123-36u3k_gg/run\" and \"/var/tmp/woow-arm54-final-20261123-36u3k_gg/tmp\" and re-run Podman\n", "stdout_lines": 0}
