@@ -334,11 +334,11 @@ class FailureTests(unittest.TestCase):
                 self.assertIsNone(haissues.app_failure(error))
                 self.assertTrue(haissues.ends_job(error))
         self.assertFalse(haissues.ends_job(BackupError('insufficient-space', '這個應用自己的估算')))
-        self.assertFalse(BackupError('job-failed', 'x').job_wide)
+        self.assertFalse(haissues.is_job_wide(BackupError('job-failed', 'x')))
 
     def test_a_full_disk_is_insufficient_space(self):
         full = haissues.out_of_space(OSError(errno.ENOSPC, 'No space left on device'))
-        self.assertEqual((full.code, full.job_wide), ('insufficient-space', True))
+        self.assertEqual((full.code, haissues.is_job_wide(full)), ('insufficient-space', True))
         self.assertIsNone(haissues.out_of_space(OSError(errno.EIO, 'x')))
         self.assertIsNone(haissues.out_of_space(BackupError('insufficient-space', 'x')))
 

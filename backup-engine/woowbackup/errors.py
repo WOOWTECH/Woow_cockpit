@@ -11,11 +11,11 @@ CODES = frozenset({
 class BackupError(Exception):
     """Expected failure with a stable code and a Traditional Chinese message for the UI.
 
-    Never put secret or key material into `message` or `details`. `job_wide`: it ends the whole job whichever app it
-    came up in; `issues`: the haissues.Issue objects that say why one app stops (both set by the raiser, never sent).
+    Never put secret or key material into `message` or `details`. `issues`: the haissues.Issue objects that say why one
+    app stops; `job_wide = True` (haissues.job_wide): it ends the whole job whichever app it came up in. Both are set by
+    the raiser and never sent.
     """
 
-    job_wide = False
     issues = ()
 
     def __init__(self, code, message, **details):

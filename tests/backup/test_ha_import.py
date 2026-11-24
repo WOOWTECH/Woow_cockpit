@@ -406,7 +406,7 @@ class ConvertFlowTests(FlowCase):
             with self.subTest(error=repr(error)), mock.patch.object(FakeKeys, 'ensure_device_key', side_effect=error), \
                     mock.patch.object(ha_n8n, 'convert') as convert, self.assertRaises(BackupError) as caught:
                 self.convert(ha_id, ['n8n'])
-            self.assertEqual((caught.exception.code, caught.exception.job_wide, convert.called),
+            self.assertEqual((caught.exception.code, haissues.is_job_wide(caught.exception), convert.called),
                              ('no-device-key', True, False))
         with mock.patch.object(ha_n8n, 'convert', self.stub_n8n):
             self.assertFalse(self.convert(ha_id, ['n8n'], encrypt=False)['encrypted'], 'no key is needed then')
@@ -492,7 +492,7 @@ class ConvertResultTests(FlowCase):
     def test_a_full_disk(self):
         error, row = self.failed(OSError(errno.ENOSPC, 'No space left on device'), 'insufficient-space', 'failed',
                                  ['failure.insufficient-space'])
-        self.assertTrue(error.job_wide)
+        self.assertTrue(haissues.is_job_wide(error))
         self.assertIn('沒有任何變更', row['message'])
 
     def test_a_stop_is_a_skip(self):
@@ -818,7 +818,7 @@ class IsolationTests(FlowCase):
         with mock.patch.object(haimport.SpaceGuard, 'free', lambda guard: guard.floor - 1), \
                 self.assertRaises(BackupError) as caught:
             self.run_check(ha_id, ['odoo', 'n8n'], {})
-        self.assertEqual((caught.exception.code, caught.exception.job_wide), ('insufficient-space', True))
+        self.assertEqual((caught.exception.code, haissues.is_job_wide(caught.exception)), ('insufficient-space', True))
         self.assertEqual([self.ids(row) for row in caught.exception.result['ha_check']['apps']],
                          [['failure.insufficient-space'], ['ha.not-checked']])
 
@@ -989,12 +989,12 @@ class KeyTests(unittest.TestCase):
     def test_a_missing_key_ends_the_job(self):
         with self.assertRaises(BackupError) as caught:
             haimport.key_problems(self.Backup(), None, self.wanted('a', 'b', plain=('a',)))
-        self.assertEqual((caught.exception.code, caught.exception.job_wide), ('key-required', True))
+        self.assertEqual((caught.exception.code, haissues.is_job_wide(caught.exception)), ('key-required', True))
 
     def test_a_key_that_opens_nothing_ends_the_job(self):
         with self.assertRaises(BackupError) as caught:
             haimport.key_problems(self.Backup(), object(), self.wanted('a', 'b'))
-        self.assertEqual((caught.exception.code, caught.exception.job_wide), ('wrong-key', True))
+        self.assertEqual((caught.exception.code, haissues.is_job_wide(caught.exception)), ('wrong-key', True))
         with self.assertRaises(BackupError) as caught:
             haimport.key_problems(self.Backup(broken=('a',)), object(), self.wanted('a', 'b'))
         self.assertEqual(caught.exception.code, 'wrong-key')
@@ -1002,7 +1002,7 @@ class KeyTests(unittest.TestCase):
     def test_one_member_that_does_not_open_stops_only_its_app(self):
         found = haimport.key_problems(self.Backup(good=('a',)), object(), self.wanted('a', 'b'))
         self.assertEqual({app_id: error.code for app_id, error in found.items()}, {'b': 'wrong-key'})
-        self.assertFalse(found['b'].job_wide)
+        self.assertFalse(haissues.is_job_wide(found['b']))
         found = haimport.key_problems(self.Backup(broken=('a', 'b')), object(), self.wanted('a', 'b'))
         self.assertEqual({app_id: error.code for app_id, error in found.items()}, {'a': 'corrupt-archive',
                                                                                    'b': 'corrupt-archive'})
@@ -1236,13 +1236,13 @@ class SmallPartsTests(unittest.TestCase):
         self.assertEqual(guard.budget(), 8 * GIB)
         with self.assertRaises(BackupError) as caught:
             guard.check(9 * GIB)
-        self.assertEqual((caught.exception.code, caught.exception.job_wide), ('insufficient-space', False),
+        self.assertEqual((caught.exception.code, haissues.is_job_wide(caught.exception)), ('insufficient-space', False),
                          "one app's own estimate")
         free['value'] = 2 * GIB - 10
         guard.wrote(1)  # checked only every GUARD_STEP bytes
         with self.assertRaises(BackupError) as caught:
             guard.wrote(haimport.GUARD_STEP)
-        self.assertEqual((caught.exception.code, caught.exception.job_wide), ('insufficient-space', True),
+        self.assertEqual((caught.exception.code, haissues.is_job_wide(caught.exception)), ('insufficient-space', True),
                          'below the floor nothing else may start either')
 
     def test_the_watchdogs_verdict_ends_the_whole_job(self):
@@ -1250,7 +1250,7 @@ class SmallPartsTests(unittest.TestCase):
         work = FakeWork(free=10)
         dog = haimport.Watchdog(work)
         dog.poll()
-        self.assertEqual((dog.abort().code, dog.abort().job_wide), ('insufficient-space', True))
+        self.assertEqual((dog.abort().code, haissues.is_job_wide(dog.abort())), ('insufficient-space', True))
         work = FakeWork(free=10)
         stale = work._temps.pop('appowner')
         stale.containers.append(stale.name('hapg'))

@@ -414,6 +414,10 @@ def job_wide(error):
     return error
 
 
+def is_job_wide(error):
+    return getattr(error, 'job_wide', False) is True
+
+
 def out_of_space(error):
     """`insufficient-space` for the whole job when `error` is the engine's own disk running full, else None."""
     if isinstance(error, OSError) and error.errno in (errno.ENOSPC, errno.EDQUOT):
@@ -428,7 +432,7 @@ def ends_job(error):
     from .flows import Cancelled
     if not isinstance(error, Exception) or isinstance(error, Cancelled):
         return True
-    if getattr(error, 'job_wide', False) or out_of_space(error) is not None:
+    if is_job_wide(error) or out_of_space(error) is not None:
         return True
     return isinstance(error, BackupError) and error.code == 'busy'
 

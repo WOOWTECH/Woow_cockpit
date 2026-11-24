@@ -963,7 +963,7 @@ Home Assistant OS backups (Supervisor) are uploaded like any backup and **read**
   (the names of an arbitrarily long list), `Sink(app_id, acknowledged, *, database, log)` (`stop`, `confirm`, `auto`,
   `notice`, `refuse`, `add`, `extend`, `found`, `confirmed()`), `views(app_id, issues)`, `check_fields(app_id, issues,
   choices)`, `missing(app_id, issues, acknowledged)`, `confirmation_required(by_app, message)`, `stopped(issue, code)`,
-  `app_failure(error)` / `ends_job(error)` / `from_error(error)` / `job_wide(error)`, `version_issues(product,
+  `app_failure(error)` / `ends_job(error)` / `from_error(error)` / `job_wide(error)` / `is_job_wide(error)`, `version_issues(product,
   addon_version, upstream, target)`, `ISSUES`, `SHARED` (`_shared`). An error that ends the whole job carries
   `job_wide = True`, one that stops an app its `issues` (`errors.BackupError`, never sent).
 * `hacommon` (batch 1): `VersionTable(product, table)` (`upstream(addon_version)`, `blocker(addon_version, target)`),

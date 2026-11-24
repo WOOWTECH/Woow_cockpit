@@ -456,7 +456,7 @@ class Work:
             result = tmp.run(role, ref, list(command[1:]), entrypoint=command[0], read_only_root=True,
                              timeout=tempctr.SHORT_TIMEOUT, max_output=64 * 1024, check=False)
         except BackupError as error:
-            if error.job_wide:
+            if haissues.is_job_wide(error):
                 raise
             return None
         finally:
