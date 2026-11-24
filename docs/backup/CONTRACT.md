@@ -105,6 +105,23 @@ of a job, the phase labels of the HA jobs, throwaway containers of a job with th
 `tempctr.py`), the side registry `ha-imports.json` (§3, §8) and the conversion itself (§9 "Home Assistant import"): the
 converted backup is an ordinary format 2 `manual` backup that every reader since 2026.11.15.2 restores, so the import
 itself is the existing restore.
+Revised 2026-11-25 (**HAOS parity**, branch `feat/ha-import-haos-parity-20261125`; owner decisions 2026-11-25: importing a Home
+Assistant backup feels like restoring it on another HAOS): content and settings that differ are no reason to refuse any
+more, one app's problem never stops the others, and the customer confirms ONCE, on one page, what has a consequence.
+Foundation (lane F1): one **issue** model for the check, the conversion and the restore check (`haissues.py`; §7 `HaIssue`:
+`stop`, `confirm`, `auto`, `notice`) with confirmation keys over all names; `HaCheck` schema 2 (per app `importable`, `issues`,
+`choices`; `shared` issues; `ok`/`blockers`/`warnings` stay for older pages, conservatively: an app with a line to confirm is
+not `ok`); the check job isolates every app (§8 "Results"); `ha-import-start` (the whole import of several apps, started with
+the one confirmation; its chain of single-app jobs is §8's, lane F2), `choices` and `acknowledged` in the start commands and
+`restore-start`, the error code `confirmation-required`; per-app `results` of a conversion (§7); the device key is created
+where it was demanded (`key_created`; D11); one key for the whole backup, the share folder included (KEY-16); versions inform and
+no longer gate (CM-01, CM-02, CM-06: `haissues.version_issues`, `Work.image_version`; each importer changes over in its own lane);
+the image's processor name is no gate (HA-06); `ha-imports.json` schema 2 (§3). `api` stays 1: every new field is optional or
+belongs to a new command. Compatibility: older page + this engine reads `ok/blockers/warnings` (an app with lines to confirm
+shows as not importable until the page is reloaded); this page + an older engine sees no `schema: 2` and keeps the two-step
+flow, never sending the new fields (an older engine refuses unknown fields); after a downgrade a schema 2 `ha-imports.json` is
+kept untouched (rows an older engine would drop are not read), the converted backups stay ordinary format 2 backups. Which
+block of the import became what is registered row by row in `tests/backup/ha_parity_rows.json`.
 Product docs for customers are written separately in Traditional Chinese (`docs/backup.md`).
 All UI text is **Traditional Chinese (zh-TW)**. Code comments in English.
 
@@ -146,7 +163,7 @@ entry is generated or written per device and reviewed). Owner `root` is rejected
 | --- | --- | --- |
 | `backup-engine/woowbackup/{archive,keys,storage,util}.py` | E1 engine-core | format, crypto, local storage |
 | `backup-engine/woowbackup/{hasecuretar,habackup,hastore}.py` | E1 engine-core (format) | Home Assistant backups (read only): securetar decryption, outer/inner tars, the `ha-backups/` store (branch feat/ha-import) |
-| `backup-engine/woowbackup/{haimport,haapps,hacommon,hasqlite,ha_odoo,ha_n8n,ha_omnigent,ha_hermes,ha_emqx,ha_headscale,tempctr}.py` | E2 engine-ops | Home Assistant import: jobs, the registry of importers, shared helpers, the sandboxed SQLite child, one module per app, throwaway containers (branches feat/ha-import, feat/ha-import-batch1) |
+| `backup-engine/woowbackup/{haimport,haapps,haissues,hacommon,hasqlite,ha_odoo,ha_n8n,ha_omnigent,ha_hermes,ha_emqx,ha_headscale,tempctr}.py` | E2 engine-ops | Home Assistant import: jobs, the registry of importers, shared helpers, the sandboxed SQLite child, one module per app, throwaway containers (branches feat/ha-import, feat/ha-import-batch1) |
 | `backup-engine/woowbackup/{settings,deepcheck}.py` | E1 engine-core (format) | 預設加密備份 setting; deep verify checks |
 | `backup-engine/woowbackup/{errors,paths,__init__}.py` | coordinator (frozen) | shared; change only via coordinator |
 | `backup-engine/woowbackup/{catalog,podman,flows,jobs,cli,digests}.py`, `adapters/*` | E2 engine-ops | apps, podman, orchestration, CLI, data digests |
@@ -185,7 +202,7 @@ root). No `sudo`. Do not write user-supplied credentials anywhere.
 | `/etc/woowtech-cockpit/backup/settings.json` | root 0644 | `{"schema": 1, "encrypt_by_default": bool, "updated": "…Z"}` (預設加密備份); missing, not root-owned, group/world-writable, a symlink or invalid → ignored: **encrypted** (with a `problem` in `status.settings`) |
 | `/var/lib/woowtech-backup/` | root 0700 | `archives/<id>.tar` (format 2, every new backup) or `archives/<id>.woowbackup` (format 1) + `archives/<id>.json` (index), `uploads/<upload_id>.{part,json,done}` (`.done` names the backup of a finished upload for 24 h), `staging/<job>/`, `pending/<job>/` (an in-place restore's pre-restore copy: `pending.json` + `data/apps/<id>/…`, plaintext like staging, kept until it is packaged into the safety backup and removed only by that packaging or before the restore changed anything; §8, §9), `exports/<export_id>.tar` + `.json` (unencrypted download copies, 0600, deleted after `EXPORT_TTL` = 15 min; §8), `jobs/<job>.json` + `.log` + `.lock` (record lock, empty, 0600) + `.cancel` (pending cancel request), `requests.json`, `schedule-state.json` (0600, ≤ 4 MiB: the schedule's registry `{backup id: {job, slot, trigger}}`, last handled slot, the handled slot a clock reset put aside (`handled_before_reset`), the floor kept while the clock is below `armed_at` (`armed_floor{armed_at, floor}`), waiting slot, last run, events ≤ 50; §8) |
 | `/var/lib/woowtech-backup/ha-backups/` | root 0700 | uploaded Home Assistant backups (branch feat/ha-import, §5 "Home Assistant backups"): `<id>.tar` (the file exactly as uploaded, 0600) + `<id>.json` (sidecar, 0600, exactly the stored HaBackupMeta keys of §7, strictly validated; unknown keys make it unreadable and it is then never replaced), id `ha-` + sha256[:20] of the file (the same file uploaded twice is one record); written only by `upload-finish` (sidecar first, then the rename, under `index.lock`) and removed only by `ha-delete`; retention, orphan adoption, the schedule and `delete` never look here |
-| `/var/lib/woowtech-backup/ha-imports.json` | root 0600 | which backups were converted from an HA backup (branch feat/ha-import part B, §8 "Home Assistant import jobs"): `{"schema": 1, "imports": {<backup id>: {ha_backup_id, name, date, apps, odoo_database, test_mode, workflows_to_fix, reminders, reminders_by_app, notes, addons, job_id, created}}}` (rows written before `reminders_by_app` and `notes` existed read as empty ones), strict when read (an unreadable file is never replaced and `from_ha` is then omitted), every text cleaned and cut when a row is written (whatever a conversion found is accepted), written under `index.lock`; a row is dropped when its backup is deleted, when its job failed before the backup was in the index, and a day after its backup no longer exists; `ha-delete` never touches it |
+| `/var/lib/woowtech-backup/ha-imports.json` | root 0600 | which backups were converted from an HA backup (branch feat/ha-import part B, §8 "Home Assistant import jobs"): `{"schema": 2, "imports": {<backup id>: {ha_backup_id, name, date, apps, odoo_database, test_mode, workflows_to_fix, reminders, reminders_by_app, notes, addons, job_id, created, group, results, confirmed, left_databases, kept}}}` (2026-11-25; a schema 1 file is read, what its rows do not have is empty, and it becomes schema 2 with the next write: an older engine would drop a row with keys it does not know, so it must not take the file for its own and leaves it as it is; rows written before `reminders_by_app` and `notes` existed read as empty ones), strict when read (an unreadable file is never replaced and `from_ha` is then omitted), never written larger than it is read (8 MiB: the oldest rows go first), every text cleaned and cut when a row is written (whatever a conversion found is accepted), written under `index.lock`; a row is dropped when its backup is deleted, when its job failed before the backup was in the index, and a day after its backup no longer exists; `ha-delete` never touches it |
 | `/run/woowtech-backup/` | root 0700 (tmpfs) | `engine.lock`, `jobs.lock` (start lock), `index.lock` (index sidecar and HA store writes), transient key files `key-<random>` (0600, deleted in `finally`), `schedule-tick` (empty, 0600; its mtime is the last tick), `schedule-tick.lock` (one tick at a time), `schedule.lock` (state file writes), `schedule-state.reported` (an unreadable state file was journaled this boot) |
 
 `woowbackup.paths.Paths` holds these. Tests construct `Paths(base=tmpdir)`; real paths are used
@@ -938,7 +955,17 @@ Home Assistant OS backups (Supervisor) are uploaded like any backup and **read**
   `for_slug(suffix)`; every importer module has `check(work, app)` -> `{target_version, blockers?, warnings?, <app id>:
   section}`, optionally `check_blockers(found)`, `convert(work, app, *convert_args, out_dir)` -> `{volumes?, postgres?,
   dirs?, ...}` and `import_texts(data)` -> `(notes, reminders)`. `hastore.IMPORTABLE`, `haimport.APPS` and
-  `cli.HA_APP_IDS` are derived from it.
+  `cli.HA_APP_IDS` are derived from it. 2026-11-25 (HAOS parity): `Importer(..., needs_share, choices)`; `check` may also
+  return `issues` ([`haissues.Issue`]) and `choices` ({kind: [{value, label, ok?, default?}]}), findings go to
+  `work.sink(app)` in `check` and again in `convert`, and the module's `ISSUES` ({issue id: level}) declares its ids
+  (the sentences of `blockers`/`warnings` become `legacy.*` stops and notices while a module has not changed over).
+* `haissues` (2026-11-25): `Issue(id, level, message, items, *, action, database)` (`view(app_id)`, `key(app_id)`), `Names`
+  (the names of an arbitrarily long list), `Sink(app_id, acknowledged, *, database, log)` (`stop`, `confirm`, `auto`,
+  `notice`, `refuse`, `add`, `extend`, `found`, `confirmed()`), `views(app_id, issues)`, `check_fields(app_id, issues,
+  choices)`, `missing(app_id, issues, acknowledged)`, `confirmation_required(by_app, message)`, `stopped(issue, code)`,
+  `app_failure(error)` / `ends_job(error)` / `from_error(error)` / `job_wide(error)`, `version_issues(product,
+  addon_version, upstream, target)`, `ISSUES`, `SHARED` (`_shared`). An error that ends the whole job carries
+  `job_wide = True`, one that stops an app its `issues` (`errors.BackupError`, never sent).
 * `hacommon` (batch 1): `VersionTable(product, table)` (`upstream(addon_version)`, `blocker(addon_version, target)`),
   `semver`, `image_labels(work, app, ref)`, `container_file`, `mounted`, `environment`, `live_json`, `live_export`,
   `copy_live`, `top_only`, `TreeTar(path, uid, gid, guard)` (`root`, `dir`, `file`, `data`, `symlink`, `hardlink`,
@@ -950,7 +977,10 @@ Home Assistant OS backups (Supervisor) are uploaded like any backup and **read**
   `scan_member`, `Target`, and the pure parts the tests use (`toc_kinds`, `key_ok`, `strip_env`, `parse_counts`,
   `parse_authn`, `parse_strict`, `check_counts`, `valid_records`, `records_rel`, `nodes_outside`).
 * `haimport` (part B): `run_ha_check(ctx, params)`, `run_ha_convert(ctx, params)` (reached through `flows.run_verify` /
-  `flows.run_backup` when `params.source` is `ha`), `Work`, `SpaceGuard`, `Watchdog`, `job_key(ctx)`,
+  `flows.run_backup` when `params.source` is `ha`), `Work` (2026-11-25: `sink(app)`, `choice(app_id, kind)`,
+  `addon_choices(suffix)`, `image_version(app, ref, *, label, env, command)`, `reset_app(app)`), `key_problems(ha, keys,
+  wanted)`, `needed_members(layout, members)`, `addon_members(layout, suffix)`, `valid_database(name)`,
+  `device_key_for(ctx)`, `convert_result(app_id, error, issues)`, `SpaceGuard`, `Watchdog`, `job_key(ctx)`,
   `read_key_file(path)`, `import_texts(converted, catalog=None)`, `mcp_lines(importer, catalog)`, `clean_row(row)`,
   `register(paths, backup_id, row)`,
   `forget(paths, backup_id)`, `load_registry(paths)`, `from_ha_views(paths)`, `view_row(row)`, `note_for(record)`,
@@ -1015,7 +1045,7 @@ Key material only ever travels in stdin JSON field `key`.
 | `key-import` | `key` | `key{key_id,created}` |
 | `backup-start` | `apps[], include_images, note, request_id, encrypt?, acknowledge_plaintext?` | `job_id, deduplicated` (`encrypt` = 加密此備份, default the setting 預設加密備份; `encrypt: false` needs no device key, and while the setting is on it needs `acknowledge_plaintext: true`, else `invalid-request` with `details.field`; `encrypt: true` without a device key is `no-device-key`; params record `encrypt`) |
 | `verify-start` | `backup_id, request_id, key?` | `job_id, deduplicated` (the job verifies deeply, §5; `key` is refused for an unencrypted backup) |
-| `restore-start` | `backup_id, apps[], request_id, confirm:true, key?, save_key?, allow_no_safety?, accept_unauthenticated?` | `job_id, deduplicated` (`save_key` imports only a key that opens this backup; `allow_no_safety: true` is the explicit, separately confirmed "restore even if no safety backup can be made"; `accept_unauthenticated: true` is required — `invalid-request` with `details.field` otherwise — for an `unauthenticated` backup: the separately confirmed "I trust where this unencrypted file came from"; only the selected apps are read) |
+| `restore-start` | `backup_id, apps[], request_id, confirm:true, key?, save_key?, allow_no_safety?, accept_unauthenticated?, acknowledged?` | `job_id, deduplicated, key_created` (2026-11-25: an in-place restore that encrypts its pre-restore backup creates the missing device key, `key_created`, `no-device-key` only when that fails; lines a restore check wants confirmed, `Preflight.apps[].issues` of level `confirm`, need their keys in `acknowledged` (the shape of `ha-import-start`), else `confirmation-required` with `details.apps {app_id: [HaIssue]}` and nothing started; `save_key` imports only a key that opens this backup; `allow_no_safety: true` is the explicit, separately confirmed "restore even if no safety backup can be made"; `accept_unauthenticated: true` is required — `invalid-request` with `details.field` otherwise — for an `unauthenticated` backup: the separately confirmed "I trust where this unencrypted file came from"; only the selected apps are read) |
 | `settings-get` | – | `settings Settings` |
 | `settings-set` | `encrypt_by_default, acknowledge_plaintext?` | `settings Settings` (turning it off needs `acknowledge_plaintext: true`, the acknowledgement of `plaintext_warning`; audited) |
 | `export-start` | `backup_id, request_id, confirm:true, key?` | `job_id, deduplicated` (an **unencrypted copy** of an encrypted backup for one download; `invalid-request` for a backup that is not encrypted — download it as it is; `key-required` when the key is not on this device and none is given; audited) |
@@ -1036,8 +1066,9 @@ Key material only ever travels in stdin JSON field `key`.
 | `job-cancel` | `job_id` | `state` |
 | `delete` | `backup_id` | – (`busy` with `details.job_id` while a queued/running job uses it as source or as its `safety_backup_id`, or for any `safety` backup while a restore runs; checked under the start lock; journaled `backup-delete backup=… type=… encrypted=true\|false loginuid=…`, review L6) |
 | `ha-delete` | `ha_backup_id, confirm:true` | – (deletes an uploaded HA backup; `busy` with `details.job_id` while a queued/running job's `params.ha_backup_id` names it, checked under the start lock; `not-found`; journaled `ha-backup-delete ha_backup=… loginuid=…`; branch feat/ha-import) |
-| `ha-check-start` | `ha_backup_id, apps["odoo"\|"n8n"\|"omnigent"\|"hermes"\|"emqx"\|"headscale"], request_id, key?` | `job_id, deduplicated` — job type `verify`, `params {source:"ha", ha_backup_id, apps, key_provided}`; `key` is the HA key exactly as typed (never trimmed); refused before a job starts with `key-required` (a selected add-on member is encrypted and no key came) or `wrong-key` (it does not open it; v3 exact, v1/v2 heuristic), `invalid-request` (the backup has no such add-on), `not-found`; a key is kept only when something is encrypted; result `{ha_check: HaCheck}`; the job can also fail with `key-required`/`wrong-key`/`corrupt-archive` (branch feat/ha-import part B) |
-| `ha-convert-start` | `ha_backup_id, apps, test_mode(bool), request_id, confirm:true, odoo_database?, key?` | `job_id, deduplicated` — job type `backup`, `params {source:"ha", ha_backup_id, apps, odoo_database (null without odoo), test_mode, encrypt (預設加密備份 when it started), key_provided}`; `odoo_database` required when `apps` has `odoo`; refused like `ha-check-start` and with `app-not-in-catalog` 「請先到「應用軟體」安裝同版本的 <app>，再匯入。」 or `no-device-key`; result `{backup_id, size, apps, encrypted, ha_import: HaImport}`; nothing on the device changes (part B) |
+| `ha-check-start` | `ha_backup_id, apps["odoo"\|"n8n"\|"omnigent"\|"hermes"\|"emqx"\|"headscale"\|"open-design"\|"woow-code-server"\|"nextcloud"\|"litellm"], request_id, key?, choices?` | `job_id, deduplicated` — job type `verify`, `params {source:"ha", ha_backup_id, apps, key_provided, choices?}`; `key` is the HA key exactly as typed (never trimmed); refused before a job starts with `key-required` (a member the selection reads is encrypted and no key came: the selected add-ons and, for an importer that reads it, HA's share folder, KEY-16) or `wrong-key` (it opens none of them; v3 exact, v1/v2 heuristic; one that does not open while another does stops only its app), `invalid-request` (the backup holds none of the selected apps; one it does not hold stays in the job and its result says so), `not-found`; a key is kept only when something the selection reads is encrypted; `choices` `{app_id: {"addon"\|"database"\|"node": value}}`: what the customer chose (§7 `HaCheck.choices`), for checking again; result `{ha_check: HaCheck}`; the job can also fail with `key-required`/`wrong-key`/`corrupt-archive` (branch feat/ha-import part B) |
+| `ha-convert-start` | `ha_backup_id, apps, test_mode(bool), request_id, confirm:true, odoo_database?, key?, acknowledged?, choices?` | `job_id, deduplicated, key_created` — job type `backup`, `params {source:"ha", ha_backup_id, apps, odoo_database (null without odoo), test_mode, encrypt (預設加密備份 when it started), key_provided, acknowledged?, choices?}`; without an Odoo database the only one that can move is taken (`invalid-request` in the job when there are several); refused like `ha-check-start` (and, unlike it, when the backup lacks one of the apps) and with `app-not-in-catalog` 「這台還沒有「<app>」的應用設定。…」; a missing device key is created (`no-device-key` only when that fails); result `{backup_id, size, apps, encrypted, ha_import: HaImport, results[ConvertResult]}`; one app whose conversion fails still has `result.results[0]`; nothing on the device changes (part B) |
+| `ha-import-start` (2026-11-25) | `ha_backup_id, apps, request_id, confirm:true, test_mode(bool), then_restore(bool), overwrite? (true, required with then_restore), acknowledged?, choices?, check_job_id?, key?` | `job_id, deduplicated, group, key_created` — the whole import of the selected apps, one after the other. `acknowledged` `{app_id\|"_shared": [key]}`: the customer's one confirmation, every `confirm` line of the check by its key (≤ 80 keys each, `[a-z0-9.-]{4,70}:[0-9a-f]{16}`); `choices` as in `ha-check-start`; both only for selected apps. The key is checked like `ha-check-start`'s and the device key created before anything starts. An app the backup does not hold or this device has no settings for is left out (`GroupResult` `skipped`) while another one remains; none left: `invalid-request` / `app-not-in-catalog`. Starts the first app's conversion (job type `backup`) with `params.group {id, index, count, kind:"ha-import", step:"convert", app_id}` and `params.chain {apps[], test_mode, then_restore, encrypt, acknowledged, choices, results[GroupResult]}` (what the rest of the import needs; the chain itself: §8). `check_job_id` only tells the journal how many names a confirmed line had: `ha-import-confirm ha_backup=… group=… app=… issue=… items=N loginuid=…` (codes and counts, never names), one line per key; `busy` like every start |
 | `upload-begin` | `filename, size` | `upload_id, path, max_size` |
 | `upload-finish` | `upload_id` | `backup BackupMeta` (idempotent: a retry after success returns the same backup; a failure after the move puts the file back) — or, for a Home Assistant backup (recognised before the Cockpit formats, §5 "Home Assistant backups"), `ha_backup HaBackupMeta`: checked strictly without a key, hashed and stored in `ha-backups/`, idempotent the same way, the same file uploaded again returns its record; a broken HA file is `corrupt-archive`/`unsupported-format`/`limit-exceeded` and stays in uploads/ for `upload-abort` (branch feat/ha-import) |
 | `upload-abort` | `upload_id` | – |
@@ -1058,8 +1089,25 @@ Shapes:
   「Headscale VPN 控制伺服器」/「OpenDesign 設計工具」/「code-server 開發環境」/「LiteLLM 閘道」) and `other_addons[{slug, name, version}]` (add-ons without
   an app here: 「這台沒有對應的應用」; the page adds a to-do for the Cloudflare Tunnel and the MCP admin add-ons, §9
   "Batch 2: add-ons that are not moved").
-* `HaCheck` (part B): `ha_backup_id, apps[{app_id, slug, name (the add-on's name), arch("amd64"|"aarch64"|"unknown"),
-  version (the add-on's), target_version (Odoo: the target image's `18.0-YYYYMMDD`; n8n: its `n8n --version`), ok(bool),
+* `HaIssue` (2026-11-25; the check, a conversion's results and the restore check): `id` (`[a-z0-9-]{2,24}.[a-z0-9-]{2,40}`,
+  fixed codes), `level("stop"|"confirm"|"auto"|"notice")`, `message` (one zh-TW sentence ≤ 300), `items[str]` (names, ≤ 20
+  of ≤ 120 characters; control, bidirectional and invisible characters as spaces; never a secret value), `more` (how many
+  names are not listed), `action` (only `stop`: what the customer can do, ≤ 200), `database?` (only Odoo: the database it is
+  about), `key` (only `confirm`: `<id>:` + the first 16 hex digits of sha256 over the JSON `[app_id, id, database, all names
+  sorted]`; one more name is another key, a number in `message` is not part of it; a list of more than 1000 names counts by
+  its number and an order-independent digest). `stop`: this app (or that database) cannot be imported, the others go on, this
+  device stays as it is. `confirm`: a consequence the customer must know, a line of the one confirmation. `auto`: the system
+  handles it. `notice`: a reminder. Per app at most 40 lines and 40 KiB: names go first, then the last notices (counted in
+  one line `shared.more-lines`); a `stop` or `confirm` is never left out and a key always covers every name. Every string is
+  shown as text only.
+* `HaCheck` (part B; schema 2 since 2026-11-25): `schema(2), ha_backup_id, shared[HaIssue]` (what belongs to no single app,
+  keys under `_shared`: today `shared.device-key`, the device key the import will create), `apps[{app_id, slug, name (the
+  add-on's name), arch("amd64"|"aarch64"|"unknown"; only shown, HA-06),
+  version (the add-on's), target_version (Odoo: the target image's `18.0-YYYYMMDD`; n8n: its `n8n --version`),
+  importable(bool: no `stop` for the app and, with databases to choose from, at least one that can move), issues[HaIssue],
+  choices?{addon?[{value, label}] (the same add-on from two stores: a `stop` until one is chosen), database?[{value, label,
+  ok, default?}] (Odoo; `default`: the only one that can move), node?[{value, label, default?}] (EMQX)}, ok(bool: importable
+  and nothing to confirm; for older pages, like `blockers` = stop and confirm sentences and `warnings` = the others),
   blockers[zh-TW], warnings[zh-TW], odoo?{databases[{name, ok, blockers[], warnings[], partners, users (internal,
   active), attachments, attachment_bytes, modules (installed), custom_modules[{name, version, from ("data/addons",
   "data/odoo/addons/18.0" or "share/odoo_addons")}], crons_active, mail_servers_active, size (bytes), filestore_files,
@@ -1092,10 +1140,10 @@ Shapes:
   18), target_pg_major, users, teams, keys (virtual keys without the UI's session keys), models, credentials,
   organizations, spend_logs, chatgpt_accounts, salt_moves(true), key_users[names of this device's other catalog apps
   whose configuration uses LiteLLM today]}}]`
-  (batch 2: `target_version` of OpenDesign is the live image's `OD_APP_VERSION`; batch 2: `target_version` of code-server is the live image's `code-server --version`; batch 2: `target_version` of Nextcloud is the live config.php `version`; batch 1: `target_version` is
+  (an app the check could not finish has no section of its own; batch 2: `target_version` of OpenDesign is the live image's `OD_APP_VERSION`; batch 2: `target_version` of code-server is the live image's `code-server --version`; batch 2: `target_version` of Nextcloud is the live config.php `version`; batch 1: `target_version` is
   the live server's `/v1/info` version for Omnigent, the live image's Hermes base tag, the live image's version label
   for EMQX and Headscale) — an app
-  is `ok` only without blockers (Odoo: and at least one database `ok`); a blocker is a plain sentence (unknown processor, app
+  is `ok` only without blockers (Odoo: and at least one database `ok`); a blocker is a plain sentence (app
   not installed or not deployed here, no owner account in HA's n8n, different versions, missing modules with the
   share-folder hint, missing Python packages or programs of custom modules, a custom module to copy with an ELF file for
   another processor, newer PostgreSQL, unsupported extensions,
@@ -1120,9 +1168,17 @@ Shapes:
   Server」，請把它停掉，並把指向它的 MCP 連接器（例如 claude.ai）刪掉，改用這台的 MCP 網址重新建立。」; the MCP admin apps'
   state is never imported. Test mode pauses Omnigent's active scheduled tasks; it changes nothing of Hermes, EMQX or
   Headscale.
+  Since 2026-11-25 also `group` (the import's id `g` + 16 hex, null), `results[GroupResult]` (what became of the import's apps),
+  `left_databases[str]` (Odoo databases that stay on HA) and `kept` (the id of a full copy kept before the import, null).
+* `ConvertResult` (2026-11-25; `result.results`): `app_id, status("converted"|"skipped"|"failed"), code|null, message|null,
+  issues[HaIssue]` — `skipped`: kept out before its data was touched (a `stop`, a missing add-on, `confirmation-required`),
+  `failed`: it went wrong half way; this device is unchanged either way. A conversion of one app has it also when the job
+  fails; one of several apps (the labs) fails as a whole, as before.
+* `GroupResult` (2026-11-25): `app_id, status("imported"|"converted"|"rolled-back"|"failed"|"skipped"|"not-started"),
+  convert_job_id, restore_job_id, backup_id, safety_backup_id, code, message` (null where there is none).
 * `Settings`: `encrypt_by_default(bool), problem(zh-TW)|null, plaintext_warning(zh-TW)` — the text the page shows for every acknowledgement of an unencrypted backup or copy: database passwords, API keys and tokens are stored and downloaded in plain text.
 * `ManifestSummary`: `backup_id, created, type, note, tool, source, consistency, total_size, format(1|2), encryption("age-x25519"|"none"), apps[{id,name,adapter,owner{name,uid},images[{ref,included}],postgres[{id,database,major,scope("database"|"instance"),databases?[{name,owner}],roles_count?}],volumes[{name}],data_dirs[{path,size,label}],secrets_count,config_files_count,settings_included(bool),verify_snapshot,verify_digests[{id,type,target,summary}],archive_size?}]` (`databases`/`roles_count` only for scope `instance`; `archive_size` the app's member in a format 2 file)
-* `Preflight`: `ok(bool), checks[Check], apps[{id,name,restorable(bool),mode("inplace"|"fresh"),checks[Check],settings?{state("missing"|"unloadable"|"different"|"same"),entry}}]` (`settings`: only when the backup carries the app's settings, §5: `missing` where this device has none for the app and `unloadable` where its settings file could not be loaded (the app is not restorable until settings are installed; the check says what else is needed, e.g. the owner account, and never promises the restore), `different` where its settings differ, `entry` the carried settings for `catalog-install`; `settings_included` in `ManifestSummary` says the same for the backup's contents)
+* `Preflight`: `ok(bool), checks[Check], apps[{id,name,restorable(bool),mode("inplace"|"fresh"),checks[Check],issues?[HaIssue],settings?{state("missing"|"unloadable"|"different"|"same"),entry}}]` (`issues` (2026-11-25): only when there are any: `restore.device-key` (`auto`: the missing device key is created by `restore-start`, its check is a `warn` now) and what an adapter's preflight leaves in its `restore_issues`; `settings`: only when the backup carries the app's settings, §5: `missing` where this device has none for the app and `unloadable` where its settings file could not be loaded (the app is not restorable until settings are installed; the check says what else is needed, e.g. the owner account, and never promises the restore), `different` where its settings differ, `entry` the carried settings for `catalog-install`; `settings_included` in `ManifestSummary` says the same for the backup's contents)
 * `Check`: `id, status("ok"|"warn"|"fail"), message(zh-TW)`
 * `Owner`: `name, uid, linger(bool), catalog_apps[str]` (lingering accounts and owners of loaded entries; never root).
 * `Draft`: `id, containers[{file,unit,container,image,state}], databases[DatabaseView], entry, valid, problem|null,
@@ -1268,7 +1324,8 @@ Export: `prepare 準備`, `decrypt 解密並驗證檔案`, `package 封裝未加
 Error codes: `invalid-request, not-found, busy, key-required, wrong-key, no-device-key,
 not-a-backup, unsupported-format, corrupt-archive, invalid-manifest, limit-exceeded,
 insufficient-space, incompatible, app-not-in-catalog, owner-missing, not-deployed,
-permission-denied, not-cancellable, job-failed, internal-error`.
+permission-denied, not-cancellable, job-failed, internal-error, confirmation-required` (2026-11-25: a line to confirm is not
+confirmed; `details.apps {app_id: [HaIssue]}` in a start command; in a job only that app stops).
 
 Requests of the catalog and retention commands (strict like every command, unknown keys rejected): `owner`
 `^[a-z_][a-z0-9_-]{0,31}$` and not `root`; `entry` a JSON object (deep validation is the catalog validator's); `id`
@@ -1591,10 +1648,22 @@ no key); `busy` (`details.job_id`). `schedule-get` and `schedule-tick` take no i
   owner's home and Podman storage every 2 seconds and the engine re-checks every 64 MiB it writes itself
   (`haimport.SpaceGuard`, `Watchdog`): below the floor the job's containers are killed at once and the job fails with
   `insufficient-space`; nothing of the apps changed by then.
-* **Results** (§7 `HaCheck`, `HaImport`): an app that cannot move is a blocker in the check's result, never a failed job:
-  also an add-on that is there twice or whose addon.json is not WOOWTECH's, an owner that is gone, an app not
-  deployed, the live upgrade marker or the `odoo` role the conversion would refuse (failed jobs: key, corrupt file,
-  space, cancel). The conversion fails with the first blocker of the chosen database or app instead.
+* **Results** (§7 `HaCheck`, `HaImport`): an app that cannot move is a `stop` in the check's result, never a failed job:
+  also an add-on that is missing, there twice or whose addon.json is not WOOWTECH's, an owner that is gone, an app not
+  deployed, the live upgrade marker or the `odoo` role the conversion would refuse. Since 2026-11-25 (HA-12) **whatever** one
+  app meets stops only that app -- any error code (a damaged member, its own estimate of the space, permissions, a member the
+  key does not open) and any unexpected exception (told as 「處理這個應用時發生未預期的錯誤…」, its details only in the journal) -- and
+  after every app its open members are closed, its throwaway objects removed and staging emptied (`Work.reset_app`), so the
+  next one starts clean. Only these end the whole job, with what was found until then in `result.ha_check` (the app at whose
+  turn it happened and the ones after it carry a `stop`): a key that opens none of the encrypted members, no key, the
+  watchdog's verdict (below the floor), the engine's own disk running full (`insufficient-space`), another job (`busy`), a
+  cancel and a termination (for these two the result is on the exception, `error.result`; `jobs.run_job` records it only for
+  a `BackupError` so far), and the outer file itself (a damaged `backup.json`, a file that changed; nothing was found then).
+  The conversion fails with the first stop of the chosen database or app instead.
+* **Confirmations** (2026-11-25): a conversion finds its lines again (`Work.sink`); one whose key is not in
+  `params.acknowledged[app]` -- never confirmed, or with other names than confirmed -- stops that app with
+  `confirmation-required` before anything of it is changed; what was confirmed is kept in the row (`confirmed`: ids and up to
+  20 names).
 * **The converted backup**: one format 2 `manual` backup of the selected apps, written by `flows._package` (the normal
   packaging, encrypted with the device key when `params.encrypt`, verified, registered), note
   「由 HA 備份轉換：<HA name>（<HA date as local time>）」; its row in `ha-imports.json` is written under the index lock
@@ -1855,6 +1924,13 @@ and reported otherwise. Any error of a directory step (also an unexpected except
 stops the rollback of the other apps.
 
 ### Home Assistant import (branch feat/ha-import, part B; `ha_odoo.py`, `ha_n8n.py`, `haimport.py`)
+
+**Revised 2026-11-25 (HAOS parity).** What an importer below calls a blocker is a `stop` of that one app (§7 `HaIssue`); which of
+them become automatic, a line to confirm, a notice or nothing at all is decided row by row (owner's decision, the lanes of
+`tests/backup/ha_parity_rows.json`), each importer changing over in its own lane: until a paragraph below says otherwise it
+describes the block as it still is. Versions: `haissues.version_issues` replaces `VersionTable.blocker` there (an add-on version
+the table does not know and a version that cannot be read here are told, the data's own structure decides; known and
+different versions still stop).
 
 **Odoo** (add-on `odoo18ce` → app `odoo`, cold PostgreSQL mode: volumes `odoo18-db-data-isolated` (a whole cluster)
 and `odoo18-web-data`, host directory `.local/share/odoo18/addons`). The live Quadlet files describe the target (the
