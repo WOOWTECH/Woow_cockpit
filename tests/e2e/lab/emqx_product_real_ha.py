@@ -1706,10 +1706,11 @@ def parse_step(name):
     return None, None, None
 
 
-# Minutes a step is expected to hold dev-d (measured 2026-11-23 under host load ~50; refined after each attempt):
+# Minutes a step is expected to hold dev-d (measured 2026-11-23/24: the slowest full import chain took 988 s under host
+# load ~50, the slowest rollback rounds 723 s; refined after each attempt):
 # a step only starts when the hold so far plus its estimate stays within HOLD_LIMIT.
 HOLD_LIMIT = 40 * 60
-ESTIMATE = {'setup': 6, 'before': 6, 'check': 12, 'check-hot': 12, 'import:file': 15, 'import:builtin': 30,
+ESTIMATE = {'setup': 6, 'before': 6, 'check': 12, 'check-hot': 12, 'import:file': 15, 'import:builtin': 22,
             'rollback': 24, 'suggest-health': 10, 'catalog-draft': 3, 'catalog-own': 2, 'cleanup': 4, 'cleanup-baseline': 2, 'reclaim': 3, 'leaks': 4}
 
 
