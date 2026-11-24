@@ -88,8 +88,8 @@ class TrustedDataTests(unittest.TestCase):
                 if self.mode == 'timeout':
                     raise BackupError('job-failed', 'synthetic timeout')
                 kwargs['stdout'].write(self.mode + b'\nPGDMP')
-        # not JSON, JSON that is no list, no columns, a row that is no column
-        for mode in ('timeout', b'invalid-json', b'{"users": 1}', b'[]', b'[["users", "id"]]',
+        # not JSON, JSON that is no list (an object, a number), no columns, a row that is no column
+        for mode in ('timeout', b'invalid-json', b'{"users": 1}', b'5', b'[]', b'[["users", "id"]]',
                      b'[["users", "id", "text", true, "", ""], 1]'):
             with self.subTest(mode=mode), tempfile.TemporaryDirectory() as directory:
                 path = Path(directory) / 'schema'

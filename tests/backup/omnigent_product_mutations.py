@@ -8,7 +8,8 @@ for each (and pass on the unmodified copy). Nothing here touches Podman, a devic
 Prints one fixed line per mutation (`<id> <name>: caught|MISSED (<failures>/<tests>)`, the run of a mutation stops at
 its first failing test since 2026-11-24); exit 0 only when the baseline passes and every mutation is caught.
 `--refusals` checks instead of the list below what the module itself says no to: every `raise` and every blocker or
-problem it collects is removed, one at a time (`R<line>`).
+problem it collects is removed, one at a time (`R<line>`), and so is every operand of an `or` that decides about one
+(`R<line>.<operand>`). An operand of REDUNDANT that no test needs is printed as `redundant`, with the reason.
 """
 import argparse
 import ast
@@ -180,28 +181,47 @@ MUTATIONS = (
 )
 
 
+# Operands that cannot decide alone because another check of the product refuses the same thing first.
+REDUNDANT = {
+    'entry.linkname == ARTIFACTS': 'habackup.iter_entries hands out no hard link to a folder, and nothing below a file',
+    'not self.pgdata': 'none only without a data mount, and the volume comparison before it refuses that',
+}
+
+
 def refusals(source):
-    """MUTATIONS-like entries of every `raise` and every `blockers|problems|odd.append|insert(...)` of `source`, with
-    the whole mutated text as the last item."""
+    """(id, name, the whole mutated text, why it is redundant or None) of every `raise`, every
+    `blockers|problems|odd.append|insert(...)` and every operand of an `or` that is the condition of one."""
     tree, raw = ast.parse(source), source.encode('utf-8')
     starts = [0]
     for line in raw.split(b'\n'):
         starts.append(starts[-1] + len(line) + 1)
     scopes = [node for node in ast.walk(tree) if isinstance(node, (ast.FunctionDef, ast.ClassDef))]
     found = []
-    for node in ast.walk(tree):
+
+    def refuses(node):
         call = node.value if isinstance(node, ast.Expr) and isinstance(node.value, ast.Call) else None
-        collects = (call is not None and isinstance(call.func, ast.Attribute) and call.func.attr in ('append', 'insert')
-                    and isinstance(call.func.value, ast.Name) and call.func.value.id in ('blockers', 'problems', 'odd'))
-        if not isinstance(node, ast.Raise) and not collects:
-            continue
+        return isinstance(node, ast.Raise) or (
+            call is not None and isinstance(call.func, ast.Attribute) and call.func.attr in ('append', 'insert')
+            and isinstance(call.func.value, ast.Name) and call.func.value.id in ('blockers', 'problems', 'odd'))
+
+    def add(number, node, replacement):
         start = starts[node.lineno - 1] + node.col_offset
         end = starts[node.end_lineno - 1] + node.end_col_offset
         inside = [s for s in scopes if s.lineno <= node.lineno <= s.end_lineno]
         scope = min(inside, key=lambda s: s.end_lineno - s.lineno).name if inside else '<module>'
         text = ' '.join(raw[start:end].decode('utf-8').split())
-        found.append((node.lineno, f'{scope}: {text[:100]}', (raw[:start] + b'pass' + raw[end:]).decode('utf-8')))
-    return [(f'R{line}', name, mutated) for line, name, mutated in sorted(found)]
+        mutated = (raw[:start] + replacement + raw[end:]).decode('utf-8')
+        found.append((node.lineno, number, f'{scope}: {text[:100]}', mutated, REDUNDANT.get(text) if number else None))
+
+    for node in ast.walk(tree):
+        if refuses(node):
+            add(0, node, b'pass')
+        elif (isinstance(node, ast.If) and isinstance(node.test, ast.BoolOp) and isinstance(node.test.op, ast.Or)
+              and any(refuses(inner) for item in node.body for inner in ast.walk(item))):
+            for number, operand in enumerate(node.test.values, 1):
+                add(number, operand, b'(False)')
+    return [(f'R{line}.{number}' if number else f'R{line}', name, mutated, why)
+            for line, number, name, mutated, why in sorted(found, key=lambda entry: entry[:3])]
 
 
 def run_tests(root, *options):
@@ -244,8 +264,9 @@ def main(argv):
         for ident, name, *change in refusals(source) if args.refusals else MUTATIONS:
             module = change[3] if len(change) > 3 else MODULE
             original = sources[module]
+            why = None
             if args.refusals:
-                mutated = change[0]
+                mutated, why = change
             else:
                 old, new, count = change[:3]
                 mutated = original.replace(old, new)
@@ -260,9 +281,11 @@ def main(argv):
                 (engine / module).write_text(original, encoding='utf-8')
             caught = rc != 0 and failures > 0
             results.append({'id': ident, 'protection': name, 'module': module, 'applied': True, 'caught': caught,
-                            'failures': failures, 'tests': ran})
-            print(f'{ident} {name}: {"caught" if caught else "MISSED"} ({failures}/{ran})', flush=True)
-    ok = baseline['returncode'] == 0 and all(r.get('applied') and r.get('caught') for r in results)
+                            'failures': failures, 'tests': ran, **({'redundant': why} if why and not caught else {})})
+            verdict = 'caught' if caught else f'redundant, {why}' if why else 'MISSED'
+            print(f'{ident} {name}: {verdict} ({failures}/{ran})', flush=True)
+    ok = baseline['returncode'] == 0 and all(
+        r.get('applied') and (r.get('caught') or r.get('redundant')) for r in results)
     summary = {'what': 'every refusal of the module' if args.refusals else 'the list MUTATIONS', 'module': MODULE,
                'module_sha256': hashlib.sha256(source.encode('utf-8')).hexdigest(),
                'modules_sha256': {m: hashlib.sha256(t.encode('utf-8')).hexdigest() for m, t in sources.items()},
@@ -270,7 +293,9 @@ def main(argv):
                'seconds': round(time.monotonic() - started, 1)}
     if args.json:
         Path(args.json).write_text(json.dumps(summary, ensure_ascii=False, indent=1) + '\n', encoding='utf-8')
-    print(f'mutation check: {"PASS" if ok else "FAIL"} ({sum(1 for r in results if r.get("caught"))}/{len(results)} caught)')
+    redundant = sum(1 for r in results if r.get('redundant'))
+    print(f'mutation check: {"PASS" if ok else "FAIL"} ({sum(1 for r in results if r.get("caught"))}/{len(results)} caught'
+          f'{f", {redundant} redundant" if redundant else ""})')
     return 0 if ok else 1
 
 

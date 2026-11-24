@@ -632,6 +632,29 @@ class ConvertTests(OmnigentCase):
                 self.assertFalse([r for r in self.restores() if '-d' in r[1]], 'nothing was restored at all')
                 self.assert_nothing_loaded()
 
+    def test_the_sequence_script_is_one_setval_for_each_selected_sequence(self):
+        """The same rule on its own: nothing but comments follows a setval, not even one of pg_restore's own header
+        lines, and there are as many setval as selected entries, each of another trusted sequence."""
+        def setval(name, value):
+            return f"SELECT pg_catalog.setval('public.{name}', {value}, true);\n"
+        one, other = setval('conversation_items_id_seq', 7), setval('other_seq', -1)
+        tail = '\n--\n-- PostgreSQL database dump complete\n--\n\n\\unrestrict x1\n'
+        trusted = ['conversation_items_id_seq', 'other_seq']
+        for script, count in ((SEQ_SCRIPT_HEAD + one + tail, 1), (SEQ_SCRIPT_HEAD + one + other + tail, 2),
+                              (SEQ_SCRIPT_HEAD + tail, 0)):
+            ha_omnigent.require_sequence_sets(script, count, trusted)
+        for name, script, count in (
+                ('a search path after a setval (a value that ends in a comment)',
+                 one + "SELECT pg_catalog.set_config('search_path', 'evil', false);\n-- , true);\n", 1),
+                ('a setting after a setval', one + 'SET row_security = off;\n', 1),
+                ('one sequence twice, one entry', one + one, 1), ('one sequence twice, two entries', one + one, 2),
+                ('a setval more', one + other, 1), ('a setval less', one, 2),
+                ('a sequence this device does not have', one + setval('evil_seq', 1), 2)):
+            with self.subTest(name=name), self.assertRaises(BackupError) as caught:
+                ha_omnigent.require_sequence_sets(SEQ_SCRIPT_HEAD + script + tail, count, trusted)
+            self.assertEqual((caught.exception.code, caught.exception.message),
+                             ('incompatible', ha_omnigent.SEQUENCE_SET_ODD))
+
     def assert_stopped(self, code, message, *, exported=(), upload=(), **params):
         """One conversion that must end with `code` and exactly `message`: no backup, nothing packed, only the
         volumes in `exported` were read out, the staging folder is gone."""
@@ -955,11 +978,14 @@ class TrustedSchemaTests(OmnigentCase):
         self.world.exec_failure = None
 
     def test_unregistered_quadlet_secrets_refuse_before_anything(self):
-        self.catalog['omnigent'].secrets = [{'name': 'omnigent-postgres-password'}]
-        with self.assertRaises(BackupError) as caught:
-            self.convert(self.upload_omnigent(), ['omnigent'])
-        self.assertIn('機密未完整登記', caught.exception.message)
-        self.assertFalse(self.runs('hapg'))
+        password, url = {'name': 'omnigent-postgres-password'}, {'name': 'omnigent-database-url'}
+        for name, declared in (('one is missing', [password]), ('one is declared twice', [password, url, password])):
+            with self.subTest(name=name):
+                self.catalog['omnigent'].secrets = declared
+                with self.assertRaises(BackupError) as caught:
+                    self.convert(self.upload_omnigent(), ['omnigent'])
+                self.assertIn('機密未完整登記', caught.exception.message)
+                self.assertFalse(self.runs('hapg'))
 
 
 class RefusalTests(OmnigentCase):
@@ -1025,6 +1051,8 @@ class RefusalTests(OmnigentCase):
                 ('no runner', lambda app, files: files.pop(runner), missing),
                 ('one volume more', lambda app, files: app.volumes.append({'name': 'omnigent-other'}), mixed),
                 ('one volume less', lambda app, files: app.volumes.pop(), mixed),
+                ('another volume', lambda app, files: app.volumes.append(dict(app.volumes.pop(), name='omnigent-other')),
+                 mixed),
                 ('two folders in one volume', one_volume_twice, mixed),
                 ('another database', text(pg, b'POSTGRES_DB=omnigent', b'POSTGRES_DB=other'), mixed),
                 ('a user name', text(pg, b'POSTGRES_USER=omnigent', b'POSTGRES_USER=bad-name'), mixed),
@@ -1073,9 +1101,12 @@ class RefusalTests(OmnigentCase):
         for value, words in ((None, '無法讀取這台 Omnigent 的資料庫結構版本。'), (['older'], '資料庫結構版本不同：HA 是')):
             self.world.live_alembic = value
             self.refused('incompatible', 'Omnigent 不能搬過來：資料庫結構版本不同', check=words)
-        self.world.live_alembic, self.world.ha_alembic = [ALEMBIC], []
-        self.refused('incompatible', 'Omnigent 不能搬過來：資料庫結構版本不同：HA 是 未知', check='資料庫結構版本不同：HA 是 未知')
-        self.world.ha_alembic = [ALEMBIC]
+        self.world.ha_alembic = []
+        for live, shown in (([ALEMBIC], ALEMBIC), ([], '未知')):   # no revision is none to compare, also on both sides
+            self.world.live_alembic = live
+            words = f'資料庫結構版本不同：HA 是 未知，這台是 {shown}。'
+            self.refused('incompatible', f'Omnigent 不能搬過來：{words}', check=words)
+        self.world.ha_alembic, self.world.live_alembic = [ALEMBIC], [ALEMBIC]
         self.world.objects = dict(objects, tables=[t for t in objects['tables'] if t != 'hosts'])
         words = 'HA 的 Omnigent 資料庫缺少資料表（hosts），版本或資料可能不完整。'
         self.refused('incompatible', f'Omnigent 不能搬過來：{words}', check=words)
@@ -1098,12 +1129,14 @@ class RefusalTests(OmnigentCase):
                 ('no objects', 'hapg', ha_omnigent.OBJECTS_SQL, [], 0, 'job-failed', '無法讀取 HA 的 Omnigent 資料庫。'),
                 ("HA's columns: none", 'hapg', columns, [], 0, 'incompatible', no_tables),
                 ("HA's columns: no list", 'hapg', columns, {'users': 1}, 0, 'incompatible', no_tables),
+                ("HA's columns: a number", 'hapg', columns, 5, 0, 'incompatible', no_tables),
                 ("HA's columns: a short row", 'hapg', columns, odd_row, 0, 'incompatible', no_tables),
                 ("HA's signature: none", 'hapg', whole, None, 0, 'incompatible', no_schema),
                 ("HA's signature: a part missing", 'hapg', whole, short, 0, 'incompatible', no_schema),
                 ("HA's signature: a part more", 'hapg', whole, longer, 0, 'incompatible', no_schema),
                 ('live columns: none', live, columns, [], 0, 'incompatible', mine),
                 ('live columns: no list', live, columns, None, 0, 'incompatible', mine),
+                ('live columns: a number', live, columns, 5, 0, 'incompatible', mine),
                 ('live columns: a short row', live, columns, odd_row, 0, 'incompatible', mine),
                 ('live signature: a part missing', live, whole, short, 0, 'incompatible', no_schema),
                 ('live signature after the capture', live, whole, None, 1, 'incompatible', no_schema),
