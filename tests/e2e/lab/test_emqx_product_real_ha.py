@@ -178,6 +178,19 @@ class ProgramTests(unittest.TestCase):
         self.assertTrue(real.TAMPER_DROPIN.startswith(real.DROPDIR + '/') and real.DROPIN.startswith(real.DROPDIR + '/'))
         self.assertNotEqual(real.TAMPER_MARKER, real.MARKER)
 
+    def test_only_anonymous_and_job_volumes_count_as_left_behind(self):
+        from types import SimpleNamespace
+        from unittest import mock
+        anonymous, job = 'a1' * 32, 'woowbk-j20261124T000000Z-0123abcd-emqx-new'
+        listed = '\n'.join([anonymous, job, 'headscale-data', 'headscale-run', 'headplane-data', 'woow_emqx_data'])
+        proc = SimpleNamespace(returncode=0, stdout=listed.encode(), stderr=b'')
+        with mock.patch.object(real.drv, 'owner', lambda *_a, **_k: proc):
+            self.assertEqual(real.dangling_volumes(), {anonymous, job})
+        proc = SimpleNamespace(returncode=125, stdout=b'', stderr=b'')
+        with mock.patch.object(real.drv, 'owner', lambda *_a, **_k: proc):
+            with self.assertRaises(real.Failed):
+                real.dangling_volumes()
+
     def test_the_capture_wrapper_publishes_the_harness_lines(self):
         lines = ['source commit ' + '0' * 40, 'dev-d isolation: true none {}', 'lock acquired after 12 s',
                  'STEP import:arm-cold:builtin: PASS seconds=1234', 'STEP setup: FAIL seconds=3',

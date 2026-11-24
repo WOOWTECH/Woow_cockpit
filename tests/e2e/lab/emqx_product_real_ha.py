@@ -1651,14 +1651,20 @@ def self_check():
     print(f'offline self-check passed: {len(PROGRAMS)} embedded programs compiled, {len(TAGS)} cold uploads known')
 
 
+ANONYMOUS_RE = re.compile(r'[0-9a-f]{64}')   # podman's generated name of an anonymous volume
+
+
 def dangling_volumes():
-    """Names of dev-d's owner volumes that no container uses (`podman volume ls --filter dangling=true`): a throwaway
-    whose image VOLUME path had no mount leaves one behind (2026-11-24: one per EMQX check and conversion before
-    be5bc6f). Names only (random ids), never contents."""
+    """Names of dev-d's owner ANONYMOUS volumes (podman's generated 64 hex digits) and of job volumes (woowbk-*) that no
+    container uses: a throwaway whose image VOLUME path had no mount leaves one behind (2026-11-24: one per EMQX check
+    and conversion before be5bc6f). Another app's NAMED volume is no such leftover: it counts as dangling whenever that
+    app's container is absent, and dev-d's headscale.service has been restarting in a loop for days (attempt-21: its
+    headscale-data and headscale-run appeared as 2 "new" ones within the 24 s of a setup step, with 97 anonymous
+    volumes before and after). Names only, never contents."""
     proc = drv.owner('podman', 'volume', 'ls', '--filter', 'dangling=true', '--format', '{{.Name}}', timeout=120)
     if proc.returncode:
         raise Failed('cannot list dev-d\'s dangling volumes')
-    return set(drv.out(proc).split())
+    return {name for name in drv.out(proc).split() if ANONYMOUS_RE.fullmatch(name) or name.startswith('woowbk-')}
 
 
 def main(argv):
