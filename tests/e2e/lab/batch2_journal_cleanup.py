@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """dev-e journal cleanup (first use: nextcloud-import REQUEST 2026-11-23 23:58, a dead test public-link token in access-log
 journal entries).
-    flock -w 3600 /tmp/woowbk-dev-e-mutation.lock python3 -I tests/e2e/lab/batch2_journal_cleanup.py <evidence.json>
+    flock -w 3600 /tmp/woowbk-dev-e-mutation.lock python3 -I tests/e2e/lab/batch2_journal_cleanup.py <evidence.json> [reason]
 Runs as the dev-e owner lane under the dev-e lock: journalctl --rotate, then --vacuum-time=1s (every archived file goes),
 inside dev-e as root. Records sizes, file counts and the oldest entry's TIMESTAMP only (never log content) to the
 evidence JSON given as argv[1] (never overwritten). Exit 0 only when the oldest remaining entry is newer than the start."""
@@ -10,6 +10,9 @@ from pathlib import Path
 LP = str(Path.home() / '.woowbk-lab' / 'bin' / 'labpodman')
 DEV = 'woowbk-dev-e'
 target = Path(sys.argv[1])
+REASON = sys.argv[2] if len(sys.argv) > 2 else (
+    'nextcloud-import REQUEST 2026-11-23 23:58 (team/batch2-lab.md): the dead test public-link token of share '
+    'attempt 1 in 18 access-log journal entries (nextcloud-gateway.service, nextcloud-app.service)')
 if target.exists():
     raise SystemExit('evidence file exists; never overwrite an attempt')
 def run(*cmd, timeout=300):
@@ -45,8 +48,7 @@ ok = (rc_rotate == 0 and rc_vacuum == 0 and after['entries'] is not None
 doc_start_epoch = round(start_epoch, 3)
 doc = {'schema_version': 1, 'kind': 'lab-device-journal-cleanup', 'device': DEV, 'when_start': start_wall,
        'start_epoch': doc_start_epoch,
-       'reason': 'nextcloud-import REQUEST 2026-11-23 23:58 (team/batch2-lab.md): the dead test public-link token of share '
-                 'attempt 1 in 18 access-log journal entries (nextcloud-gateway.service, nextcloud-app.service)',
+       'reason': REASON,
        'isolation_before': iso, 'before': before, 'rotate_exit': rc_rotate, 'vacuum_exit': rc_vacuum,
        'vacuum_summary_sha256': hashlib.sha256(vac.encode()).hexdigest(), 'after': after,
        'elapsed_seconds': round(time.monotonic() - t0, 1), 'ok': ok,
