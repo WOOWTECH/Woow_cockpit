@@ -417,7 +417,7 @@ MUTATIONS = (
      "        if False:\n            limit = HEALTH_TIMEOUTS[app['id']]\n", 1, SUGGEST_TESTS),
     # The draft the import can fill as it is (lane verifier 2026-11-24: a new draft was cold mode, which it refuses).
     ('S01', 'a new LiteLLM draft is the single-database mode', SG,
-     "PREFERRED_MODES = {'litellm': 'database'}\n", 'PREFERRED_MODES = {}\n', 1, SUGGEST_TESTS),
+     "PREFERRED_MODES = {'litellm': 'database'", "PREFERRED_MODES = {'not-litellm': 'database'", 1, SUGGEST_TESTS),
     ('S02', "an installed entry's mode is never switched", SG,
      '        elif installed is None:\n', '        elif True:\n', 1, SUGGEST_TESTS),
     ('S03', 'a mode that cannot be installed is not preselected', SG,

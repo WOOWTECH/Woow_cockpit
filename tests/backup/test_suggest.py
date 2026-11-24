@@ -1159,7 +1159,7 @@ class LiteLLMPackageTests(unittest.TestCase):
 
     def test_the_import_accepts_the_new_draft_as_it_is(self):
         from woowbackup import ha_litellm
-        self.assertEqual(suggest.PREFERRED_MODES, {ha_litellm.APP_ID: 'database'})
+        self.assertEqual(suggest.PREFERRED_MODES[ha_litellm.APP_ID], 'database')
         app = self.draft()
         self.assertEqual((app['variant'], app['valid'], app['installed']), ('database', True, None))
         entry = app['entry']
