@@ -63,6 +63,15 @@ class SniffTests(unittest.TestCase):
         self.assertTrue(hasecuretar.ciphertext_ok('v1', 16 + 32, b''))
         self.assertFalse(hasecuretar.ciphertext_ok('v1', 16 + 33, b''))
         self.assertFalse(hasecuretar.ciphertext_ok('v1', 16, b''))
+        # KEY-07: shorter than its header says is cut off; KEY-13: what a longer one holds after that is not read.
+        for kind, version, size, exact in (('v2', 2, 100, 48 + 112), ('v3', 3, 100, 136 + 117)):
+            for extra, good in ((-1, False), (0, True), (1, True), (MiB, True)):
+                with self.subTest(kind=kind, extra=extra):
+                    self.assertIs(hasecuretar.ciphertext_ok(kind, exact + extra, head(version, size)), good)
+        for size in (2 ** 63, 2 ** 64 - 1):
+            self.assertFalse(hasecuretar.ciphertext_ok('v2', 10 ** 12, head(2, size)))
+            self.assertFalse(hasecuretar.ciphertext_ok('v3', 10 ** 12, head(3, size)))
+        self.assertFalse(hasecuretar.ciphertext_ok('v3', 10 ** 12, head(3, 0)[:31]))
 
 
 class KeysTests(unittest.TestCase):
@@ -149,6 +158,60 @@ class RealLibraryFixtureTests(unittest.TestCase):
             with self.subTest(fixture=name, kind='header only'):
                 code, _error = code_of(decrypt, data[:40])
                 self.assertEqual(code, 'corrupt-archive')
+
+    def test_damage_concerns_one_member(self):
+        """KEY-05 to KEY-12: the error says so (its scope and its message), so that the other apps can go on."""
+        data, _tarinfo = hx.member_bytes(hx.fixture('v3_gzip.tar'), f'{hx.ODOO}.tar.gz')
+        legacy, _tarinfo = hx.member_bytes(hx.fixture('v1_gzip.tar'), f'{hx.ODOO}.tar.gz')
+        cases = {'header cut': data[:10], 'metadata cut': data[:20], 'init cut': data[:100], 'cut': data[:-1],
+                 'flipped': data[:200] + bytes([data[200] ^ 1]) + data[201:], 'legacy blocks': legacy[:-3],
+                 'legacy salt only': legacy[:16], 'empty': b''}
+        for label, raw in cases.items():
+            with self.subTest(case=label):
+                code, error = code_of(decrypt, raw)
+                self.assertEqual((code, error.details['scope']), ('corrupt-archive', 'member'))
+                self.assertEqual(error.message, hasecuretar.MEMBER_MESSAGE)
+        code, error = code_of(decrypt, data[:9] + b'\x04' + data[10:])
+        self.assertEqual((code, error.details['scope']), ('unsupported-format', 'member'))
+        self.assertIn('請在 HA 重新備份後再匯入', hasecuretar.MEMBER_MESSAGE)
+        self.assertNotIn('scope', hasecuretar.corrupt('x').details)
+        self.assertEqual(hasecuretar.corrupt('x').message, hasecuretar.CORRUPT_MESSAGE)
+
+    def test_bytes_after_the_content_are_never_read(self):
+        """KEY-13: v2 and v3 say how long they are; the plaintext is the same and nothing behind it is touched."""
+        for name, member in (('v2_gzip.tar', f'{hx.ODOO}.tar.gz'), ('v2_2025_gzip.tar', f'{hx.N8N}.tar.gz'),
+                             ('v3_gzip.tar', f'{hx.ODOO}.tar.gz'), ('v3_plain.tar', 'supervisor.tar')):
+            data, _tarinfo = hx.member_bytes(hx.fixture(name), member)
+            whole = decrypt(data)
+            for tail in (b'x', bytes(16), hashlib.sha256(b'noise').digest() * 100, data):
+                with self.subTest(fixture=name, tail=len(tail)):
+                    source = io.BytesIO(data + tail)
+                    reader = hasecuretar.DecryptReader(source, len(data) + len(tail), hasecuretar.Keys(hx.PASSWORD))
+                    self.assertEqual(b''.join(iter(lambda: reader.read(65536), b'')), whole)
+                    reader.finish()
+                    self.assertEqual(source.tell(), len(data))
+            for cut in (1, 16, 17, 1000):  # the tail must not stand in for what is missing
+                with self.subTest(fixture=name, cut=cut):
+                    self.assertEqual(code_of(decrypt, data[:-cut] + b'x' * cut)[0], 'corrupt-archive')
+        # Without a header (v1) there is no telling content from what follows it.
+        legacy, _tarinfo = hx.member_bytes(hx.fixture('v1_gzip.tar'), f'{hx.ODOO}.tar.gz')
+        self.assertEqual(code_of(decrypt, legacy + b'x')[0], 'corrupt-archive')
+
+    def test_a_smaller_size_in_the_header_is_detected(self):
+        """The header is not authenticated: saying less than there is must not cut the content silently."""
+        for name in ('v2_gzip.tar', 'v3_gzip.tar'):
+            data, _tarinfo = hx.member_bytes(hx.fixture(name), f'{hx.ODOO}.tar.gz')
+            size = int.from_bytes(data[16:24], 'big')
+            from woowbackup import habackup
+            for less in (1, 16, 512, size - 1000):
+                with self.subTest(fixture=name, less=less):
+                    raw = data[:16] + (size - less).to_bytes(8, 'big') + data[24:]
+
+                    def whole():
+                        reader = hasecuretar.DecryptReader(io.BytesIO(raw), len(raw), hasecuretar.Keys(hx.PASSWORD))
+                        habackup._Gunzip(reader).finish()
+                        reader.finish()
+                    self.assertEqual(code_of(whole)[0], 'corrupt-archive')
 
     def test_tampered_v3_is_detected(self):
         data, _tarinfo = hx.member_bytes(hx.fixture('v3_gzip.tar'), f'{hx.ODOO}.tar.gz')

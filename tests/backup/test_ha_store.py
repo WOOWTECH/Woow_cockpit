@@ -15,7 +15,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from woowbackup import hastore, util
+from woowbackup import habackup, hastore, util
 from woowbackup.errors import BackupError
 from woowbackup.paths import Paths
 from woowbackup.storage import Storage
@@ -105,20 +105,84 @@ class UploadTests(StoreCase):
         self.assertFalse(self.root.exists())
 
     def test_a_broken_ha_upload_is_refused_and_kept_for_abort(self):
-        broken = hx.simple_backup(type='weekly')
-        begun = self.begin(broken)
-        with self.assertRaises(BackupError) as caught:
-            self.storage.finish_upload(begun['upload_id'])
-        self.assertEqual(caught.exception.code, 'corrupt-archive')
-        self.assertEqual(sorted(os.listdir(self.paths.uploads)),
-                         sorted([f'{begun["upload_id"]}.part', f'{begun["upload_id"]}.json']))
-        self.assertTrue(self.storage.abort_upload(begun['upload_id']))
-        self.assertEqual(self.store.list(), [])
-        unprotected_v1 = hx.outer_bytes([(f'{hx.ODOO}.tar.gz', b'\x01' * 4096)])
-        begun = self.begin(unprotected_v1)
-        with self.assertRaises(BackupError) as caught:
-            self.storage.finish_upload(begun['upload_id'])
-        self.assertEqual(caught.exception.code, 'corrupt-archive')
+        for broken in (hx.simple_backup(type='weekly'), hx.simple_backup(version=3),
+                       hx.two_addons(extra=[('backup.json', json.dumps(hx.ha_doc()).encode())])):
+            begun = self.begin(broken)
+            with self.assertRaises(BackupError) as caught:
+                self.storage.finish_upload(begun['upload_id'])
+            self.assertEqual(caught.exception.code, 'corrupt-archive')
+            self.assertEqual(sorted(os.listdir(self.paths.uploads)),
+                             sorted([f'{begun["upload_id"]}.part', f'{begun["upload_id"]}.json']))
+            self.assertTrue(self.storage.abort_upload(begun['upload_id']))
+            self.assertEqual(self.store.list(), [])
+
+    def test_one_bad_addon_no_longer_refuses_the_file(self):
+        """UP-19, UP-34, UP-44 to UP-47, UP-50: it is listed with its problem, the others as ever."""
+        head = b'SecureTar\x03' + bytes(6) + (100).to_bytes(8, 'big') + bytes(8)
+        cases = {'not-an-archive': b'\x01' * 4096, 'size-mismatch': head + bytes(10),
+                 'encryption-unsupported': b'SecureTar\x08' + bytes(600)}
+        for problem, member in cases.items():
+            with self.subTest(problem=problem):
+                rec, _begun = self.upload(hx.two_addons(odoo=member, doc=hx.ha_doc([hx.ODOO, hx.N8N], slug=problem)))
+                self.assertEqual([(a['slug'], a['encrypted'], a.get('problem')) for a in rec['addons']],
+                                 [(hx.ODOO, False, problem), (hx.N8N, False, None)])
+                self.assertEqual(self.store.get(rec['id']), rec)
+                view = hastore.view(rec)
+                self.assertEqual([(a['slug'], a.get('problem')) for a in view['importable_apps']],
+                                 [(hx.ODOO, problem), (hx.N8N, None)])
+                self.assertEqual(view['importable_apps'][0]['problem_text'], habackup.problem_text(problem))
+                self.assertNotIn('problem_text', view['importable_apps'][1])
+        doc = hx.ha_doc([hx.ODOO, hx.N8N, 'a0d7b954_vscode'])
+        doc['addons'].append({'slug': '../x_odoo18ce', 'name': 'Evil', 'version': '9'})
+        data = hx.outer_bytes([(f'{hx.ODOO}.tar.gz', b'1'), (f'{hx.ODOO}.tar.gz', b'2'),
+                               ('a0d7b954_vscode.tar.gz', b'broken')], doc)
+        rec, _begun = self.upload(data)
+        self.assertEqual({a['slug']: a.get('problem') for a in rec['addons']},
+                         {hx.ODOO: 'duplicate', hx.N8N: 'missing', 'a0d7b954_vscode': 'not-an-archive',
+                          'invalid-1': 'bad-slug'})
+        view = hastore.view(rec)
+        self.assertEqual([a['slug'] for a in view['importable_apps']], [hx.ODOO, hx.N8N])
+        self.assertEqual([(a['slug'], a['name'], a['problem']) for a in view['other_addons']],
+                         [('a0d7b954_vscode', 'name of a0d7b954_vscode', 'not-an-archive'),
+                          ('invalid-1', 'Evil', 'bad-slug')])
+        self.assertTrue(all(a['problem_text'] for a in view['importable_apps'] + view['other_addons']))
+
+    def test_texts_and_dates_that_cannot_be_shown(self):
+        """UP-26 to UP-30, UP-36, UP-38, UP-42, X-UP-01: cleaned, and a date nobody can read sorts by the upload."""
+        odd = {'empty': '', 'long': 'x' * 5000, 'control': 'a\nb\x00', 'bidi': 'a\u202eb', 'surrogate': '\ud800',
+               'number': 7, 'list': ['x'], 'null': None}
+        for label, value in odd.items():
+            doc = hx.ha_doc(slug=value, name=value, date=value, supervisor_version=value, homeassistant=value)
+            doc['addons'][0].update(name=value, version=value, size=value)
+            with self.subTest(value=label):
+                rec, _begun = self.upload(hx.outer_bytes([(f'{hx.ODOO}.tar.gz', hx.addon_member())], doc), 'a\nb\u202e')
+                self.assertIsNone(rec['date'])
+                self.assertEqual(self.store.get(rec['id']), rec)
+                texts = [rec['ha_slug'], rec['name'], rec['supervisor_version'], rec['filename'],
+                         rec['addons'][0]['name'], rec['addons'][0]['version']]
+                self.assertTrue(all(isinstance(t, str) and (t.isprintable() or t == '') for t in texts), texts)
+                self.assertTrue(rec['addons'][0]['name'])
+                self.assertEqual(rec['filename'], 'a b')
+        blank, _begun = self.upload(hx.simple_backup(date='?', slug='blank'), '\n')
+        self.assertRegex(blank['filename'], r'^ha-backup-[0-9]{8}-[0-9]{6}\.tar$')
+        self.assertEqual(blank['filename'][10:18], blank['uploaded_at'][:10].replace('-', ''))
+        dated, _begun = self.upload(hx.simple_backup(date='2020-01-01T00:00:00+00:00', slug='dated'))
+        future, _begun = self.upload(hx.simple_backup(date='2099-01-01T00:00:00+00:00', slug='future'))
+        order = [r['id'] for r in self.store.list()]
+        self.assertEqual((order[0], order[-1]), (future['id'], dated['id']))
+        self.assertIn(blank['id'], order[1:-1])
+
+    def test_the_largest_record_is_still_listed(self):
+        """UP-32, UP-39: a record of as many add-ons and folders as a backup may list fits its sidecar's limit."""
+        slugs = [f'{i:08x}_' + 's' * 91 for i in range(habackup.MAX_ADDONS)]
+        doc = hx.ha_doc(slugs, folders=[f'{i:040}' for i in range(habackup.MAX_FOLDERS)], name='\U0001f600' * 200)
+        for addon in doc['addons']:
+            addon.update(name='\U0001f600' * 200, version='\U0001f600' * 64)
+        rec, _begun = self.upload(hx.outer_bytes([], doc))
+        self.assertEqual((len(rec['addons']), len(rec['folders'])), (1000, 256))
+        self.assertEqual(self.store.list(), [rec])
+        self.assertLess((self.root / f'{rec["id"]}.json').stat().st_size, hastore.MAX_SIDECAR // 2)
+        self.assertEqual(len(hastore.view(rec)['other_addons']), 1000)
 
     def test_a_failure_while_publishing_puts_the_file_back(self):
         # The store directory is fsynced twice: after the sidecar is written and after the rename. A failure at either
@@ -185,6 +249,40 @@ class StoreTests(StoreCase):
         except BackupError as error:
             return error.code
         raise AssertionError('no error')
+
+    def test_sidecars_with_and_without_a_problem(self):
+        """Records written before `problem` existed are read as ever; a wrong one makes the sidecar unreadable."""
+        rec, _begun = self.upload(hx.two_addons())
+        side = self.root / f'{rec["id"]}.json'
+        record = json.loads(side.read_text())
+        self.assertEqual(set(record['addons'][0]), set(hastore.ADDON_KEYS))
+        old_engine = dict(record, ha_slug='c0ffee00', supervisor_version='2026.11.0', date='2026-11-18T09:01:20Z')
+        side.write_text(json.dumps(old_engine))
+        self.assertEqual(self.store.get(rec['id']), old_engine)
+        for problem, good in (('missing', True), ('a-code-of-a-newer-engine', True), ('', False), ('No!', False),
+                              ('x' * 41, False), (None, False), (5, False)):
+            record['addons'][0]['problem'] = problem
+            side.write_text(json.dumps(record))
+            with self.subTest(problem=problem):
+                self.assertEqual(self.store.exists(rec['id']), good)
+                if good:
+                    self.assertTrue(hastore.view(record)['importable_apps'][0]['problem_text'])
+        del record['addons'][0]['problem']
+        for field, value, good in (('date', None, True), ('date', 'yesterday', False), ('date', '', False),
+                                   ('ha_slug', '', True), ('ha_slug', 'x' * 65, False), ('ha_slug', 'a\nb', False),
+                                   ('ha_slug', None, False), ('supervisor_version', '', True),
+                                   ('supervisor_version', 'x' * 65, False), ('name', 'x' * 201, False),
+                                   ('folders', ['a', 'a'], False), ('folders', [['a']], False),
+                                   ('folders', [f'f{i}' for i in range(257)], False)):
+            side.write_text(json.dumps(dict(record, **{field: value})))
+            with self.subTest(field=field, value=value):
+                self.assertEqual(self.store.exists(rec['id']), good)
+        record['addons'][0]['extra'] = 1
+        side.write_text(json.dumps(record))
+        self.assertFalse(self.store.exists(rec['id']), 'an unknown key')
+        record['addons'] = [{'slug': f's{i}', 'name': 'x', 'version': '1', 'encrypted': False} for i in range(1001)]
+        side.write_text(json.dumps(record))
+        self.assertFalse(self.store.exists(rec['id']), 'more add-ons than a backup may list')
 
     def test_publish_conflicts(self):
         data = hx.simple_backup()
@@ -273,6 +371,14 @@ class StoreTests(StoreCase):
         self.assertEqual(hastore.addon_suffix('local_woow-n8n'), 'woow-n8n')
         self.assertEqual(hastore.importable_app('odoo18ce'), ('odoo', 'Odoo 18'))
         self.assertIsNone(hastore.importable_app('1b7b4ce7_odoo17'))
+        # UP-56: what has no app here is listed as not moving and never stops what has one.
+        others = ['a0d7b954_cloudflared', 'core_mosquitto', 'local_odoo-mcp', 'core_configurator']
+        rec, _begun = self.upload(hx.outer_bytes(
+            [(f'{slug}.tar.gz', hx.addon_member()) for slug in [*others[:2], hx.ODOO, *others[2:]]],
+            hx.ha_doc([*others[:2], hx.ODOO, *others[2:]])))
+        view = hastore.view(rec, catalog)
+        self.assertEqual([a['slug'] for a in view['other_addons']], others)
+        self.assertEqual([a['app_id'] for a in view['importable_apps']], ['odoo'])
         for given, kept in (('WOOW匯入測試_加密_2026-11-18.tar', True), ('../evil.tar', False), ('a\\b.tar', False),
                             ('a\tb.tar', False), ('x' * 201, False), ('', False), (None, False)):
             with self.subTest(name=given):
