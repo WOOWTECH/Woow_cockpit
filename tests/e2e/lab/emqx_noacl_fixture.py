@@ -6,7 +6,11 @@ Why: OWNER DECISION 2026-11-23 「C」 refuses HA backups WITH ACL rows on a dev
 a backup WITHOUT ACL rows is imported there (the usual customer case: EMQX in HA without built-in ACL rules). Both real
 cold test backups hold 4 rows, so that path had no real input. This tool makes one, openly lab-made:
 
-  python3 -I tests/e2e/lab/emqx_noacl_fixture.py <x86-cold|arm-cold> <private work dir> <out .tar>
+  python3 -I tests/e2e/lab/emqx_noacl_fixture.py <x86-cold|arm-cold> <private work dir> <out .tar> [fileonly]
+
+Two variants: without `fileonly` HA keeps its authorization sources (the built-in database stays enabled, empty); with
+`fileonly` EMQX also deletes HA's built-in database source (emqx_authz:update({delete, built_in_database}, #{}), what the
+Dashboard does), so HA authorizes with its ACL file only, as the add-on is installed (the most common customer case).
 
 1. the real backup (bound by SHA-256) is decrypted with the product's own reader (HA_BACKUP_KEY from the b1 harness
    secret file, in memory only);
@@ -14,8 +18,9 @@ cold test backups hold 4 rows, so that path had no real input. This tool makes o
    official emqx/emqx:5.8.9 of the LAB store (labpodman, --network none, --pull=never, read-only root, the product's own
    ha_broker environment: plugins pinned off), EMQX itself runs mnesia:clear_table(emqx_acl), stops cleanly, is started
    once more from the same volume (the counts must have persisted: 0 ACL rows, every other table as before) and stops;
-3. the add-on member is written again with the mnesia folder EMQX left, every other entry byte-identical; the outer file
-   is an UNENCRYPTED HA backup (backup.json protected false) of that one add-on, its name says it is lab-made.
+3. the add-on member is written again with the mnesia folder EMQX left (fileonly: and EMQX's own configs/cluster.hocon),
+   every other entry byte-identical; the outer file is an UNENCRYPTED HA backup (backup.json protected false) of that one
+   add-on, its name says it is lab-made.
 stdout: fixed facts only (sizes, SHA-256, table counts). Secrets are never printed. All containers and volumes of this
 tool are removed again.
 """
@@ -69,6 +74,14 @@ def lp(*argv, check=True, timeout=600, stdin=None, stdout=subprocess.PIPE):
 
 def emqx(*argv, timeout=120, check=True):
     return lp('exec', CTR, 'emqx', *argv, timeout=timeout, check=check)
+
+
+SOURCES_EXPR = '[maps:get(type, S) || S <- emqx:get_config([authorization, sources])].'
+DELETE_EXPR = ('case emqx_authz:update({delete, built_in_database}, #{}) of {ok, _} -> deleted; _ -> failed end.')
+
+
+def sources():
+    return ''.join(emqx('eval', SOURCES_EXPR).stdout.decode('utf-8', 'replace').split())
 
 
 def counts():
@@ -126,10 +139,11 @@ def sha256_file(path):
 
 
 def main(argv):
-    if len(argv) != 3 or argv[0] not in SLUGS:
-        print('usage: emqx_noacl_fixture.py <x86-cold|arm-cold> <private work dir> <out .tar>', file=sys.stderr)
+    if len(argv) not in (3, 4) or argv[0] not in SLUGS or argv[3:] not in ([], ['fileonly']):
+        print('usage: emqx_noacl_fixture.py <x86-cold|arm-cold> <private work dir> <out .tar> [fileonly]', file=sys.stderr)
         return 2
     tag, work, out_path = argv[0], Path(argv[1]).resolve(), Path(argv[2]).resolve()
+    fileonly = argv[3:] == ['fileonly']
     if out_path.exists() or work.exists():
         raise SystemExit('work dir or output exists')
     os.umask(0o077)
@@ -202,10 +216,18 @@ def main(argv):
         cleared = emqx('eval', 'mnesia:clear_table(emqx_acl).').stdout.decode('utf-8', 'replace').split()
         if ''.join(cleared) != '{atomic,ok}':
             raise SystemExit('clear_table was not confirmed')
+        sources_before = sources()
+        if fileonly and ''.join(emqx('eval', DELETE_EXPR).stdout.decode('utf-8', 'replace').split()) != 'deleted':
+            raise SystemExit('the built-in database source was not deleted')
         after = counts()
         stop()
         start(node)          # from the same volume: the change must have persisted
         again = counts()
+        sources_after = sources()
+        if fileonly and sources_after != '[file]':
+            raise SystemExit('HA does not authorize with its ACL file only')
+        if not fileonly and sources_after != sources_before:
+            raise SystemExit('HA\'s authorization sources changed')
         stop()
         wanted = dict(before, emqx_acl=0)
         stable = [t for t in TABLES if t != 'emqx_retainer_message']   # EMQX rewrites its own $SYS retained messages
@@ -224,8 +246,20 @@ def main(argv):
             gzip.GzipFile(fileobj=raw, mode='wb', compresslevel=6, mtime=0) as packed, \
             tarfile.open(fileobj=packed, mode='w|', format=tarfile.PAX_FORMAT) as new:
         written = False
+        hocon_written = False
         for info in old:
             norm = os.path.normpath(info.name)
+            if fileonly and norm == f'{DATA}/configs/cluster.hocon':
+                with tarfile.open(exported, mode='r:') as vol:
+                    for item in vol:
+                        if os.path.normpath(item.name) == 'configs/cluster.hocon' and item.isreg():
+                            entry = tarfile.TarInfo(info.name)
+                            entry.uid, entry.gid, entry.uname, entry.gname = info.uid, info.gid, info.uname, info.gname
+                            entry.mode, entry.mtime, entry.size = info.mode, int(item.mtime), item.size
+                            new.addfile(entry, vol.extractfile(item))
+                            replaced += 1
+                            hocon_written = True
+                continue
             if norm == prefix or norm.startswith(prefix + '/'):
                 if not written:
                     written = True
@@ -247,9 +281,9 @@ def main(argv):
                 continue
             new.addfile(info, old.extractfile(info) if info.isreg() else None)
             kept += 1
-        if not written:
-            raise SystemExit('no mnesia folder in the add-on member')
-    doc['name'] = (doc.get('name') or '') + '（實驗室改製：沒有 ACL 規則）'
+        if not written or fileonly and not hocon_written:
+            raise SystemExit('no mnesia folder or cluster.hocon in the add-on member')
+    doc['name'] = (doc.get('name') or '') + ('（實驗室改製：只用 ACL 檔案、沒有 ACL 規則）' if fileonly else '（實驗室改製：沒有 ACL 規則）')
     doc['protected'] = False
     doc['crypto'] = None
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -282,7 +316,8 @@ def main(argv):
     print(json.dumps({'source_backup_sha256': FIXTURE_SHA256[tag], 'lab_made': True, 'out_sha256': sha256_file(out_path),
                       'out_bytes': out_path.stat().st_size, 'entries_kept': kept, 'mnesia_entries_written': replaced,
                       'addon_version': info.version, 'addon_state': info.state, 'counts_before': before,
-                      'counts_after_clear': after, 'counts_after_restart': again}, sort_keys=True))
+                      'counts_after_clear': after, 'counts_after_restart': again, 'variant': 'fileonly' if fileonly else 'noacl',
+                      'ha_sources_before': sources_before, 'ha_sources_after': sources_after}, sort_keys=True))
     return 0
 
 
