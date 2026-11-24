@@ -1233,3 +1233,19 @@ Branch `sec/emqx-secreview8-20261124` (from `3369a9c`, local only, never pushed)
    credential file.
 (Decided, no longer open: SR-5 = option C, implemented; Dashboard-edited ACL files = option A, a known limitation;
 the Hermes FTS/SQLite review was done by the main session on 2026-11-23.)
+
+### Correction by integration-3 (2026-11-24, from the independent verifier of iteration 8, 21:20; main 21:25)
+
+Three statements above are narrower than written. No engine change follows from them now (main 21:25); they are known gaps:
+
+1. "pbkdf2 with md4 / md5 / ripemd160 is refused" holds only when the authenticator has NO `dk_length`. With an explicit
+   `dk_length` the form check takes the `dk_length` branch first (hex of 2 x dk_length) and does not look at `mac_fun`,
+   so such dead rows pass although no row of that kind can verify (code reading and a Python model by the verifier; not
+   run in a broker). Follow-up: count pbkdf2 rows whose `mac_fun` is outside sha / sha224 / sha256 / sha384 / sha512
+   whatever `dk_length` is.
+2. Residual risk, wider than the examples above suggest: `dk_length` can be any positive integer, so under pbkdf2 with a
+   small `dk_length` a short all-digit clear value is "in form" (dk_length 4 = every 8-digit number, 3 = every 6-digit
+   number). Same class as "a clear value that is exactly the form".
+3. "candidate clear 0" in the rows of `orphan-hash`, `mixed-ctl` and `ctl-sha256` (and the summary lines that repeat it)
+   is not a measurement: the clear-text search only looks for the derived test passwords, and these modes used random
+   passwords that EMQX hashed by construction. What these controls prove is "the conversion PASSED, no false refusal".
