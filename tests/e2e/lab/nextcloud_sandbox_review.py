@@ -119,7 +119,8 @@ CASES = ['clean', *OWNER_SQL, *HIDDEN_SQL, 'live_trojan']
 # What the product must answer, and where: ('check', text of the blocker) or ('convert', code, text).
 EXPECT = {
     'clean': None,
-    'owner_trojan': ('check', '函式'), 'owner_view': ('check', '檢視表或其他特殊資料表'), 'owner_trigger': ('check', '觸發程序'),
+    # owner_view: oc_appconfig is no table any more, so the database is "not Nextcloud's" and nothing else is read.
+    'owner_trojan': ('check', '函式'), 'owner_view': ('check', None), 'owner_trigger': ('check', '觸發程序'),
     'hidden_trigger': ('convert', 'incompatible', '觸發程序'), 'hidden_aggregate': ('convert', 'incompatible', '函式'),
     'hidden_database': ('convert', 'job-failed', '其他資料庫'),
     'hidden_role_setting': ('convert', 'incompatible', '角色或資料庫層級的設定'),
@@ -272,8 +273,9 @@ def run_case(runner, case, scratch):
                     pass
                 facts['control_read_markers'] = sorted(lsr.markers(tmp, 'hapg'))
             controls = [v for k, v in facts.items() if k.startswith('control_')]
-            facts['ok'] = (not facts['check_markers'] and not facts['check']['tables_read'] and isinstance(problems, list)
-                           and any(expect[1] in p for p in problems) and all(controls))
+            refused = (details.get('nextcloud') is False if expect[1] is None
+                       else isinstance(problems, list) and any(expect[1] in p for p in problems))
+            facts['ok'] = not facts['check_markers'] and not facts['check']['tables_read'] and refused and all(controls)
             return facts
         if problems:
             facts['ok'] = False
