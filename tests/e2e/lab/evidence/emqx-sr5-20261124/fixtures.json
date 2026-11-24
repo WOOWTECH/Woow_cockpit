@@ -1,0 +1,150 @@
+{
+ "built": {
+  "bcrypt": "2026-11-24 16:06-16:08 +08:00",
+  "plain": "2026-11-24 16:08-16:10 +08:00"
+ },
+ "commercial_acceptance": "not-complete",
+ "lab_made": true,
+ "note": "The hashing before/after is the product's own HASH_EXPR read on real EMQX 5.8.9 (the first real run of that expression). bcrypt: HA's three MQTT users got their b1 test passwords again through EMQX itself and log in with them after the restart [users, logins ok, wrong-password logins ok] = [3, 3, 0]. plain: no password was set again, so the fixture stores no clear-text password. No container or volume of the tool is left in the lab store.",
+ "source": "the real x86 cold batch-1 HA backup (add-on woow-emqx 5.9.1 made with EMQX stopped), bound by SHA-256",
+ "store": "labpodman (separate --root), network none",
+ "test": "SR-5 lab-made x86 fixtures (emqx_noacl_fixture.py fileonly hash=...)",
+ "tool": "tests/e2e/lab/emqx_noacl_fixture.py at 2867185 (detached worktree, clean), each build through team/heavy.sh",
+ "variants": {
+  "bcrypt": {
+   "addon_state": "stopped",
+   "addon_version": "5.9.1",
+   "counts_after_clear": {
+    "emqx_acl": 0,
+    "emqx_admin": 2,
+    "emqx_app": 1,
+    "emqx_authn_mnesia": 3,
+    "emqx_authn_scram_mnesia": 0,
+    "emqx_banned": 1,
+    "emqx_banned_rules": 0,
+    "emqx_psk": 0,
+    "emqx_retainer_message": 5
+   },
+   "counts_after_restart": {
+    "emqx_acl": 0,
+    "emqx_admin": 2,
+    "emqx_app": 1,
+    "emqx_authn_mnesia": 3,
+    "emqx_authn_scram_mnesia": 0,
+    "emqx_banned": 1,
+    "emqx_banned_rules": 0,
+    "emqx_psk": 0,
+    "emqx_retainer_message": 5
+   },
+   "counts_before": {
+    "emqx_acl": 4,
+    "emqx_admin": 2,
+    "emqx_app": 1,
+    "emqx_authn_mnesia": 3,
+    "emqx_authn_scram_mnesia": 0,
+    "emqx_banned": 1,
+    "emqx_banned_rules": 0,
+    "emqx_psk": 0,
+    "emqx_retainer_message": 5
+   },
+   "entries_kept": 27,
+   "ha_hashing_after": {
+    "dk_length": null,
+    "enable": true,
+    "iterations": null,
+    "mac_fun": null,
+    "name": "bcrypt",
+    "salt": null
+   },
+   "ha_hashing_before": {
+    "dk_length": null,
+    "enable": true,
+    "iterations": null,
+    "mac_fun": null,
+    "name": "sha256",
+    "salt": "suffix"
+   },
+   "ha_sources_after": "[file]",
+   "ha_sources_before": "[built_in_database,file]",
+   "ha_users_login_after_restart": [
+    3,
+    3,
+    0
+   ],
+   "ha_users_password_set_again": [
+    3,
+    3
+   ],
+   "lab_made": true,
+   "mnesia_entries_written": 28,
+   "out_bytes": 127385600,
+   "out_sha256": "1b76fc196be173652576077a59a8c5f4d4d9f08d0ed6f76b9a595a6d38c5abd9",
+   "source_backup_sha256": "0a53e93888209316040af505484bba3ee3891c2ad2df7ae689bc0d4fd02690f9",
+   "variant": "fileonly+hash=bcrypt"
+  },
+  "plain": {
+   "addon_state": "stopped",
+   "addon_version": "5.9.1",
+   "counts_after_clear": {
+    "emqx_acl": 0,
+    "emqx_admin": 2,
+    "emqx_app": 1,
+    "emqx_authn_mnesia": 3,
+    "emqx_authn_scram_mnesia": 0,
+    "emqx_banned": 1,
+    "emqx_banned_rules": 0,
+    "emqx_psk": 0,
+    "emqx_retainer_message": 5
+   },
+   "counts_after_restart": {
+    "emqx_acl": 0,
+    "emqx_admin": 2,
+    "emqx_app": 1,
+    "emqx_authn_mnesia": 3,
+    "emqx_authn_scram_mnesia": 0,
+    "emqx_banned": 1,
+    "emqx_banned_rules": 0,
+    "emqx_psk": 0,
+    "emqx_retainer_message": 5
+   },
+   "counts_before": {
+    "emqx_acl": 4,
+    "emqx_admin": 2,
+    "emqx_app": 1,
+    "emqx_authn_mnesia": 3,
+    "emqx_authn_scram_mnesia": 0,
+    "emqx_banned": 1,
+    "emqx_banned_rules": 0,
+    "emqx_psk": 0,
+    "emqx_retainer_message": 5
+   },
+   "entries_kept": 27,
+   "ha_hashing_after": {
+    "dk_length": null,
+    "enable": true,
+    "iterations": null,
+    "mac_fun": null,
+    "name": "plain",
+    "salt": "disable"
+   },
+   "ha_hashing_before": {
+    "dk_length": null,
+    "enable": true,
+    "iterations": null,
+    "mac_fun": null,
+    "name": "sha256",
+    "salt": "suffix"
+   },
+   "ha_sources_after": "[file]",
+   "ha_sources_before": "[built_in_database,file]",
+   "ha_users_login_after_restart": null,
+   "ha_users_password_set_again": null,
+   "lab_made": true,
+   "mnesia_entries_written": 28,
+   "out_bytes": 127385600,
+   "out_sha256": "9643c8716c1e2dbe08f8418d3114645839f6839314924d093c2e9526cd0cf200",
+   "source_backup_sha256": "0a53e93888209316040af505484bba3ee3891c2ad2df7ae689bc0d4fd02690f9",
+   "variant": "fileonly+hash=plain"
+  }
+ }
+}
