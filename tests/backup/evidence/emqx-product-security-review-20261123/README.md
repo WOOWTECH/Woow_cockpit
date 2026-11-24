@@ -692,14 +692,58 @@ of this lane at the start of iteration 6: none (lab store containers, volumes an
 - **The refusal texts carry no HA text but names.** `hint` is the constant `HOT_HINT` or empty (`hint_for`), and member and
   root names go through `hacommon.names` (each cut at 60 characters, control characters shown as `?`; SR-10's fix).
 
-### T14b
+### T14b: more archive shapes and the parser differential (`iteration6/t14b-fix.json`)
 
-T14b (harness `aa72e6f`) was still queued in `heavy.sh` when this revision was written (both heavy slots held by long
-steps of other lanes); its evidence goes to `iteration6/t14b-fix.json` in a later commit.
+Component level, like T14: the product's unmodified expression in a throwaway container of the EMQX 5.8.9 image (its own
+`erl_tar`, `hocon`, `emqx_utils`; `--network none`, read-only, no capabilities, 512 MiB), no broker; `check_export`
+decides. Engine `dd3ae49` (tree `345d1827`). Exit 0, 97.2 s, harness `501a603`.
+Result: **22/22 as expected** (cases with an expectation; 35 cases in all);
+differential ran on 24/24 documents, equal on 22;
+documents where `hocon:files` returns a root `hocon:binary` does not: ['bom-data-only', 'bom-root']; **cases the check passed
+while `hocon:files` (what the import reads) returns a root outside `DATA_ROOTS`: none**; passed by the check
+but failing in `hocon:files` (the import would then fail and the product refuse): none.
+
+| Case | Expected | Check | Differential (`hocon:binary` / `hocon:files` roots) |
+|---|---|---|---|
+| `absolute-name` | refuse | refuse | — |
+| `bom-data-only` | no expectation | refuse | DIFFERENT (error / 3 roots) |
+| `bom-root` | refuse | refuse | DIFFERENT (error / 4 roots) |
+| `char-device-table` | refuse | refuse | — |
+| `cr-only-root` | refuse | refuse | equal (4 / 4 roots) |
+| `crlf-root` | refuse | refuse | equal (4 / 4 roots) |
+| `data-root-twice` | pass | pass | equal (3 / 3 roots) |
+| `declared-size-over-limit` | refuse | refuse | — |
+| `dot-segment-cluster-hocon` | refuse | refuse | — |
+| `double-slash-cluster-hocon` | refuse | refuse | — |
+| `fifo-table` | refuse | refuse | — |
+| `folder-other-case` | refuse | refuse | — |
+| `gnu-long-name` | refuse | refuse | — |
+| `hard-link-table` | refuse | refuse | — |
+| `include-required` | refuse | refuse | equal (error / error roots) |
+| `include-word-in-comment` | pass | pass | equal (3 / 3 roots) |
+| `include-word-in-string` | pass | pass | equal (4 / 4 roots) |
+| `pax-path-cluster-hocon` | refuse | refuse | — |
+| `pax-path-other-table` | refuse | refuse | — |
+| `quoted-dotted-key` | refuse | refuse | equal (4 / 4 roots) |
+| `slash-comment-root` | refuse | refuse | equal (4 / 4 roots) |
+| `t14-document-in-braces` | no expectation | refuse | equal (4 / 4 roots) |
+| `t14-healthy` | no expectation | pass | equal (3 / 3 roots) |
+| `t14-include-directive` | no expectation | refuse | equal (3 / 3 roots) |
+| `t14-not-hocon` | no expectation | refuse | equal (error / error roots) |
+| `t14-root-after-quote-in-comment` | no expectation | refuse | equal (4 / 4 roots) |
+| `t14-root-after-triple-quote-in-comment` | no expectation | refuse | equal (4 / 4 roots) |
+| `t14-root-colon` | no expectation | refuse | equal (4 / 4 roots) |
+| `t14-root-dotted` | no expectation | refuse | equal (4 / 4 roots) |
+| `t14-root-nbsp` | no expectation | refuse | equal (4 / 4 roots) |
+| `t14-root-plain` | no expectation | refuse | equal (4 / 4 roots) |
+| `t14-root-quoted` | no expectation | refuse | equal (4 / 4 roots) |
+| `t14-root-same-line` | no expectation | refuse | equal (5 / 5 roots) |
+| `tab-root` | refuse | refuse | equal (4 / 4 roots) |
+| `unicode-escape-quoted-key` | refuse | refuse | equal (4 / 4 roots) |
 
 ### Secret scan
 
-With the existing lab reader and scanner (`ha_import_b1_e2e.Secrets`, `scan_host_evidence`: every lab secret value, raw and JSON-escaped; user names excluded; values never printed), at 2026-11-24 15:08 +0800: committed evidence (all iterations) 72 files, 0 hits; harness folder 26 files, 0 hits; iteration 5 scratch evidence 13 files, 0 hits; iteration 5 run outputs 35 files, 0 hits; iteration 6 scratch 0 files, 0 hits.
+With the existing lab reader and scanner (`ha_import_b1_e2e.Secrets`, `scan_host_evidence`: every lab secret value, raw and JSON-escaped; user names excluded; values never printed), at 2026-11-24 15:24 +0800: committed evidence (all iterations) 73 files, 0 hits; harness folder 26 files, 0 hits; iteration 5 scratch evidence 13 files, 0 hits; iteration 5 run outputs 36 files, 0 hits; iteration 6 scratch 3 files, 0 hits.
 
 ### Product flow on a device
 
