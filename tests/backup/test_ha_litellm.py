@@ -20,7 +20,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from woowbackup import ha_litellm, ha_litellm_candidate, ha_odoo, haapps, haimport, jobs
+from woowbackup import habackup, ha_litellm, ha_litellm_candidate, ha_odoo, haapps, haimport, jobs
 from woowbackup.errors import BackupError
 from woowbackup.podman import Result
 
@@ -1339,10 +1339,20 @@ class OtherRefusalTests(LiteLLMCase):
 
     def test_r15_a_state_file_that_is_not_one_says_nothing(self):
         large = {'name': 'data/woow/state.json', 'data': b'{"litellm_version": "1.103.0"' + b' ' * 65536 + b'}'}
+        read, real = [], habackup.Entry.read_all
+
+        def read_all(entry, max_bytes):
+            read.append(entry.name)
+            return real(entry, max_bytes)
+
         for name, extra in (('none', []), ('a folder', [{'name': 'data/woow/state.json', 'type': 'dir'}]),
                             ('too large', [large])):
-            with self.subTest(name):
+            with self.subTest(name), mock.patch.object(habackup.Entry, 'read_all', read_all):
+                del read[:]
                 self.assertEqual(self.blockers(state=None, extra=extra), [])
+                # Not read at all: a folder would read as nothing (Entry.read gives b'' for an entry that is not a
+                # file, strict_json makes that None), so only this line notices when its kind is not checked (R15).
+                self.assertNotIn(ha_litellm.STATE_FILE, read)
 
     def test_r16_the_names_of_a_schema_are_bounded(self):
         def schema(tables):
