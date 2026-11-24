@@ -152,6 +152,7 @@ class World(fk.World):
         self.salt_digest = None
         self.salt_rows = UNSET             # the new cluster's whole answer to SALT_DIGEST_SQL
         self.ha_major, self.new_major, self.image_major = 18, 17, '17'
+        self.new_migrations = None         # the new cluster's migrations after the rows (None: HA's)
         self.new_columns = None            # the new cluster's columns after the pre-data (None: HA's)
         self.new_signatures = []           # the new cluster's signature answers in order (then restored_signature)
         self.new_dump = None               # what pg_dump of the new cluster writes
@@ -233,6 +234,8 @@ class World(fk.World):
                 return self.new_signatures.pop(0)
             return self.restored_signature if self.restored_signature is not None else self.live_signature
         if sql == ha_litellm.MIGRATIONS_SQL:
+            if role == 'll-db' and self.new_migrations is not None:
+                return self.new_migrations
             return self.live_migrations if role == 'litellm-postgres' else self.ha_migrations
         if role == 'll-db':
             if sql == ha_litellm.AUDIT_SQL:
@@ -1080,6 +1083,29 @@ class SingleProtectionTests(LiteLLMCase):
             with self.assertRaises(BackupError) as caught:
                 ha_litellm.scan_member(None, report)
         self.assertEqual((caught.exception.code, caught.exception.message), ('incompatible', self.BAD_SALT_FILE))
+
+    def test_m13_the_rows_the_migrations_and_the_number_of_tables_are_all_compared(self):
+        words = 'LiteLLM 匯入後的資料和 HA 不同，已停止：'
+        self.world.new_counts = dict(self.world.counts, **{'public.LiteLLM_UserTable': 1})
+        self.refused(f'{words}public.LiteLLM_UserTable（HA 2，匯入後 1）。', 'job-failed')
+        self.world.new_counts = None
+        for now in (MIGRATIONS[:2], MIGRATIONS + ['20991231000000_later'], [], 'x'):
+            self.world.new_migrations = now
+            with self.subTest(migrations=now):
+                self.refused(f'{words}結構版本。', 'job-failed')
+        self.world.new_migrations = None
+        original = self.world.answer
+
+        def one_table_less(role, sql, database):
+            found = original(role, sql, database)
+            if role == 'hapg' and isinstance(found, dict) and 'public.LiteLLM_UserTable' in found:
+                return {key: value for key, value in found.items() if key != 'public.LiteLLM_UserTable'}
+            return found
+
+        self.world.answer = one_table_less
+        self.refused(f'{words}結構版本。', 'job-failed')
+        self.world.answer = original
+        self.assertTrue(self.convert(self.upload_litellm(), ['litellm'])['backup_id'])
 
     def test_n16_the_new_clusters_schema_is_compared_after_post_data_and_after_the_last_write(self):
         evil = dict(signature(), triggers=[['public', 'LiteLLM_UserTable', 'evil', 'CREATE T']])
