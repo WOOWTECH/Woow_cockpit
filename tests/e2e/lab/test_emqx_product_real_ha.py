@@ -178,6 +178,33 @@ class ProgramTests(unittest.TestCase):
         self.assertTrue(real.TAMPER_DROPIN.startswith(real.DROPDIR + '/') and real.DROPIN.startswith(real.DROPDIR + '/'))
         self.assertNotEqual(real.TAMPER_MARKER, real.MARKER)
 
+    def test_the_leak_scan_reads_the_engines_whole_state(self):
+        """The driver's program with the engine's two state folders as roots, run on a made-up tree."""
+        import subprocess
+        import sys
+        import tempfile
+        self.assertNotIn('index.json', real.LEAK_SCAN)
+        compile(real.LEAK_SCAN, 'LEAK_SCAN', 'exec')
+        with tempfile.TemporaryDirectory() as root:
+            state, run, bin_dir = Path(root) / 'lib', Path(root) / 'run', Path(root) / 'bin'
+            for path in (state / 'jobs', state / 'archives', state / 'ha-backups', run, bin_dir):
+                path.mkdir(parents=True)
+            (state / 'requests.json').write_text('{"note": "canary-secret-value"}')      # one hit
+            (state / 'archives' / 'b.tar').write_text('canary-secret-value')              # a backup: not read
+            (state / 'jobs' / 'j.json').write_text('{}')
+            (bin_dir / 'journalctl').write_text('#!/bin/sh\necho nothing\n')
+            (bin_dir / 'runuser').write_text('#!/bin/sh\necho device-secret-value\n')
+            for path in bin_dir.iterdir():
+                path.chmod(0o755)
+            program = real.LEAK_SCAN.replace('"/var/lib/woowtech-backup"', json.dumps(str(state)))
+            program = program.replace('"/run/woowtech-backup"', json.dumps(str(run)))
+            request = {'secrets': {'A': 'canary-secret-value'}, 'podman_secrets': ['x'], 'uid': 1, 'since': 0}
+            proc = subprocess.run([sys.executable, '-I', '-c', program], input=json.dumps(request).encode(),
+                                  capture_output=True, env={'PATH': f'{bin_dir}:/usr/bin:/bin'}, timeout=60)
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            report = json.loads(proc.stdout)
+            self.assertEqual((report['scanned'], report['hits']), (2, 1))
+
     def test_only_anonymous_and_job_volumes_count_as_left_behind(self):
         from types import SimpleNamespace
         from unittest import mock

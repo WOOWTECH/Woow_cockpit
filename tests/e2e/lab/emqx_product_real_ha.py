@@ -1520,6 +1520,17 @@ def step_suggest_health(ev, args):
     ev.check(f'{name}: EMQX state digest equals the one before', after == before, {'differs': diff_digest(after, before)})
 
 
+# The engine's whole state (records, requests, uploads, exports, pending, staging) instead of the b1 driver's list of
+# paths, which names a file this engine does not have (index.json; attempt-22 stopped there). The backups themselves (.tar
+# in archives/ and ha-backups/) stay out, as in the driver.
+DRIVER_ROOTS = ('roots = ["/var/lib/woowtech-backup/jobs", "/var/lib/woowtech-backup/ha-backups", '
+                '"/var/lib/woowtech-backup/ha-imports.json",\n'
+                '         "/var/lib/woowtech-backup/index.json", "/var/lib/woowtech-backup/archives", "/run/woowtech-backup",\n'
+                '         "/var/lib/woowtech-backup/uploads", "/var/lib/woowtech-backup/staging"]\n')
+if drv.LEAK_SCAN.count(DRIVER_ROOTS) != 1:
+    raise SystemExit('the b1 driver\'s leak scan changed: review its roots')
+LEAK_SCAN = drv.LEAK_SCAN.replace(DRIVER_ROOTS, 'roots = ["/var/lib/woowtech-backup", "/run/woowtech-backup"]\n')
+PROGRAMS['LEAK_SCAN'] = LEAK_SCAN
 MEMORY_COUNTERS = ('cat /sys/fs/cgroup/memory.current /sys/fs/cgroup/memory.max; '
                    'grep -E "^(anon|file|shmem) " /sys/fs/cgroup/memory.stat; '
                    'grep -E "^(oom|oom_kill|oom_group_kill) " /sys/fs/cgroup/memory.events; '
@@ -1564,7 +1575,7 @@ def step_leaks(ev, args):
     request['secrets'].update(issued)
     ev.check(f'leaks: every Dashboard token issued to this run\'s probes ({len(issued)}) is in the scan', True,
              {'issued_values': len(issued)})
-    report = drv.device_python(drv.LEAK_SCAN, request, as_owner=False, timeout=900)
+    report = drv.device_python(LEAK_SCAN, request, as_owner=False, timeout=900)
     host = drv.scan_host_evidence(ev.dir, args.secrets)
     ev.save('leaks.json', {'device': report, 'host': host})
     ev.check('leaks: no test secret, HA key, kit, dev-d EMQX secret or issued token in engine records, logs, journal or '
