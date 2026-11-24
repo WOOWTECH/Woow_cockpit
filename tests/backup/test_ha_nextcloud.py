@@ -210,6 +210,15 @@ def live_html():
     return hx.tar_bytes(entries)
 
 
+def strings(value):
+    """Every text of a JSON value."""
+    if isinstance(value, dict):
+        return [text for key, item in value.items() for text in [key] + strings(item)]
+    if isinstance(value, list):
+        return [text for item in value for text in strings(item)]
+    return [value] if isinstance(value, str) else []
+
+
 def members(data):
     with tarfile.open(fileobj=io.BytesIO(data)) as tar:
         return {m.name: (m, tar.extractfile(m).read() if m.isfile() else None) for m in tar.getmembers()}
@@ -626,6 +635,58 @@ class CheckTests(NextcloudCase):
         for part in ('版本不同', '伺服器端加密', 'pg_trgm'):
             self.assertIn(part, text)
 
+    def test_texts_of_has_backup_are_shown_safely(self):
+        # A path, a version or a URL of HA's is text on the page and in the job log: no control character (a forged
+        # line, a terminal escape) and no bidirectional control (text that reads in another order) gets through.
+        self.assertEqual(nc.shown('a\n\u202e\x1b[2J\u2028x'), 'a???[2J?x')
+        self.assertEqual(nc.shown('x' * 300, 200), 'x' * 200)
+        info = INFO_RD.replace(b'9.0.3', b'9.0&#x202e;3')
+        warnings = nc.app_warnings({'richdocuments': {**nc.parse_info_xml(info), 'foreign': ['a\u2066b']}},
+                                   nc_version_text='35.0.1.1', php_version='8.5.11')
+        self.assertTrue(any('9.0?3' in w for w in warnings) and any('a?b' in w for w in warnings), warnings)
+        url = HA_CONFIG.replace(b"'https://woowtech-nextcloud.woowtech.io'", b"'https://h\n\xe2\x80\xaeio'")
+        media = HA_CONFIG.replace(b"'/share/nextcloud'", b"'/media/\n\xe2\x80\xaenc'")
+        self.assertTrue(HA_CONFIG not in (url, media))
+        link = {'name': 'nextcloud/admin/files/l\u202el', 'type': 'symlink', 'linkname': 'hello.txt'}
+        storages = dict(self.world.ha_details, local_storages=['local::/share/nextcloud/', 'local::/mnt/\x9b\u202e/'])
+        cases = ((dict(config=url), None, ('ha_url', 'https://h??io')),
+                 (dict(config=media), '/media/??nc', ('datadir', '/media/??nc')),
+                 (dict(pg_version=b'17\x1b[2J\n'), None, ('pg_version', '17?[2J')),
+                 (dict(share=share_tar(extra=[{'name': 'nextcloud/admin/files/a\u202eb/.htaccess', 'data': b'x'}])),
+                  'admin/files/a?b/.htaccess', None),
+                 (dict(share=share_tar(extra=[link])), 'admin/files/l?l', None),
+                 (dict(extra=[{'name': 'data/nextcloud/custom_apps/A\u202eB/x', 'data': b'x'}]), 'A?B', None))
+        for kwargs, text, item in cases:
+            with self.subTest(text=text, item=item):
+                result = self.check(self.upload_nextcloud(**kwargs), ['nextcloud'])[0]
+                self.assertEqual([x for x in strings(result) if nc.hacommon.CONTROL_RE.search(x)], [])
+                if text is not None:
+                    self.assertIn(text, '\n'.join(result['blockers'] + result['warnings']))
+                if item is not None:
+                    self.assertEqual(result['nextcloud'][item[0]], item[1])
+        self.world.ha_details = storages
+        result = self.check(self.upload_nextcloud(), ['nextcloud'])[0]
+        self.assertIn('/mnt/??/', '\n'.join(result['warnings']))
+        self.assertEqual([x for x in strings(result) if nc.hacommon.CONTROL_RE.search(x)], [])
+        with self.assertRaises(BackupError) as caught:
+            self.convert(self.upload_nextcloud(share=share_tar(extra=[
+                {'name': 'nextcloud/admin/files/h\u202eh', 'type': 'hardlink',
+                 'linkname': 'nextcloud/updater-ochaabcdef12/backups/old.zip'}])), ['nextcloud'])
+        self.assertIn('h?h', caught.exception.message)
+
+    def test_files_of_an_online_backup_are_refused_unstarted(self):
+        # A cold add-on backup has neither; tablespace_map makes PostgreSQL create the tablespace links itself.
+        for name in ('backup_label', 'tablespace_map'):
+            extra = [{'name': f'data/postgres/{name}', 'data': b'START WAL LOCATION: 0/2000028\n'}]
+            runs = len(self.runs('hapg'))
+            result = self.check(self.upload_nextcloud(extra=extra), ['nextcloud'])[0]
+            self.assertEqual((result['ok'], result['blockers']), (False, [nc.MSG_ONLINE]))
+            self.assertNotIn(name, members(self.world.imported['hapg']), 'never streamed into the volume')
+            with self.assertRaises(BackupError) as caught:
+                self.convert(self.upload_nextcloud(extra=extra), ['nextcloud'])
+            self.assertEqual((caught.exception.code, caught.exception.message), ('incompatible', nc.MSG_ONLINE))
+            self.assertEqual(len(self.runs('hapg')), runs, 'the cluster is never started')
+
     def test_unreadable_config_and_wrong_postgres(self):
         result = self.check(self.upload_nextcloud(config=b"<?php $CONFIG = array('a' => getenv('X'));"),
                             ['nextcloud'])[0]
@@ -850,6 +911,7 @@ class ShapeTests(unittest.TestCase):
         self.assertEqual(nc.shape_problems(dict(CLEAN_SHAPE, role_settings=2), converted=True), ['角色或資料庫層級的設定'])
         self.assertEqual(nc.shape_problems(dict(CLEAN_SHAPE, relations=1, defaults=['now()'])),
                          ['檢視表或其他特殊資料表', '不是固定值的欄位預設值'])
+        self.assertEqual(nc.shape_problems(dict(CLEAN_SHAPE, tablespaces=1)), ['另外的表空間（tablespace）'])
         for bad in (None, [], dict(CLEAN_SHAPE, defaults=None), dict(CLEAN_SHAPE, checks=True),
                     dict(CLEAN_SHAPE, others=-1)):
             self.assertIsNone(nc.shape_problems(bad), bad)

@@ -84,6 +84,9 @@ MAX_INFO_XML = 256 * 1024
 MAX_DEPTH = 16
 MAX_ITEMS = 20000
 PREFIX = 'oc_'
+# Files of an online (hot) backup: a cold HA backup (the add-on is `backup: cold`) has neither, and tablespace_map makes
+# the server create tablespace links itself (the class of LiteLLM review SR-4): never streamed, refused.
+RECOVERY_FILES = ('backup_label', 'tablespace_map')
 # config.php keys taken from HA: the instance identity (appdata_<instanceid>, ICrypto `secret`, legacy hashes).
 FROM_HA = ('instanceid', 'passwordsalt', 'secret')
 # Owner decision D1 (facts nextcloud.md section 5): HA's two-factor enforcement and app_install_overwrite (the apps
@@ -165,13 +168,15 @@ SELECT json_build_object(
            + (SELECT count(*) FROM pg_publication) + (SELECT count(*) FROM pg_largeobject_metadata)
            + (SELECT count(*) FROM pg_default_acl) + (SELECT count(*) FROM pg_transform)
            + (SELECT count(*) FROM pg_statistic_ext),
+ 'tablespaces', (SELECT count(*) FROM pg_tablespace WHERE spcname NOT IN ('pg_default', 'pg_global')),
  'role_settings', (SELECT count(*) FROM pg_db_role_setting),
  'defaults', (SELECT coalesce(json_agg(DISTINCT pg_get_expr(adbin, adrelid)), '[]'::json) FROM pg_attrdef
               WHERE adrelid IN (SELECT oid FROM rel)))"""
 SHAPE_LABELS = (('functions', '函式'), ('operators', '運算子'), ('types', '自訂資料型別'), ('triggers', '觸發程序'),
                 ('rules', '規則'), ('policies', '資料列安全原則'), ('event_triggers', '事件觸發程序'),
                 ('relations', '檢視表或其他特殊資料表'), ('checks', 'CHECK 等限制'), ('generated', '產生欄位'),
-                ('inherits', '繼承的資料表'), ('others', '其他自訂資料庫物件'))
+                ('inherits', '繼承的資料表'), ('others', '其他自訂資料庫物件'),
+                ('tablespaces', '另外的表空間（tablespace）'))
 # A column default Nextcloud writes: nextval() of a sequence or a constant (dev-e's 35.0.1: '', 0, '-1'::integer,
 # 'x'::character varying, NULL::timestamp without time zone, false...); anything else (a function call) is refused.
 _PG_TYPE = r'[a-z][a-z ]{0,40}(?:\([0-9]{1,4}(?:,[0-9]{1,4})?\))?(?: with(?:out)? time zone)?(?:\[\])?'
@@ -180,6 +185,8 @@ DEFAULT_RE = re.compile(rf"(?:nextval\('(?:public\.)?[a-z0-9_]{{1,63}}'::regclas
 MSG_SHAPE = 'HA 的 Nextcloud 資料庫含有 Nextcloud 不會建立的資料庫物件（{kinds}），無法安全地搬過來。'
 MSG_SHAPE_UNREAD = '無法讀取 HA 的 Nextcloud 資料庫結構，無法確認可以安全地搬過來。'
 MSG_TOC = 'HA 的 Nextcloud 資料庫匯出檔含有 Nextcloud 不會建立的物件（{kinds}），無法安全地搬過來。'
+MSG_ONLINE = ('HA 的 Nextcloud 資料庫不是在停止狀態下備份的（含有 backup_label 或 tablespace_map），無法安全地搬過來；'
+              '請在 HA 重新做一份 Nextcloud 的備份。')
 MSG_NO_SHARE = ('這份 HA 備份沒有包含 share 資料夾，Nextcloud 的使用者檔案（{dir}）不在備份裡，無法匯入'
                 '（只搬資料庫會讓檔案遺失）。請在 HA 重新做一份備份，並勾選 share 資料夾。')
 MSG_NO_DATADIR = ('HA 備份裡找不到 Nextcloud 的使用者檔案資料夾 {dir}（或缺少 Nextcloud 的 .ncdata 標記），'
@@ -228,6 +235,12 @@ MSG_LISTS = ('HA 備份裡有 {count} 位 Nextcloud 使用者（例如 {names}�
 
 def _under(name, prefix):
     return name == prefix or name.startswith(prefix + '/')
+
+
+def shown(text, limit=120):
+    """A text HA's backup chose (a path, a version, a URL), as a message or the check result shows it: cut, control
+    characters and bidirectional controls as `?` (hacommon.names does the same for lists of names)."""
+    return hacommon.CONTROL_RE.sub('?', str(text)[:limit])
 
 
 # ====================================================================== config.php (strict; never executed)
@@ -599,14 +612,14 @@ def app_warnings(apps, *, nc_version_text, php_version):
             continue
         low, high = info.get('nextcloud') or ('', '')
         if not _fits(nc_version_text, low, high):
-            warnings.append(f'HA 的 Nextcloud 應用 {app_id}（{info.get("version") or "?"}）不支援這台的 Nextcloud '
+            warnings.append(f'HA 的 Nextcloud 應用 {app_id}（{shown(info.get("version") or "?", 32)}）不支援這台的 Nextcloud '
                             f'{nc_version_text}，匯入後 Nextcloud 可能停用它。')
         low, high = info.get('php') or ('', '')
         if php_version and not _fits(php_version, low, high):
-            warnings.append(f'HA 的 Nextcloud 應用 {app_id}（{info.get("version") or "?"}）不支援這台的 PHP '
+            warnings.append(f'HA 的 Nextcloud 應用 {app_id}（{shown(info.get("version") or "?", 32)}）不支援這台的 PHP '
                             f'{php_version}，匯入後可能無法使用。')
         if info.get('foreign'):
-            warnings.append(f'HA 的 Nextcloud 應用 {app_id} 含有給其他處理器的程式（例如 {info["foreign"][0][:80]}），'
+            warnings.append(f'HA 的 Nextcloud 應用 {app_id} 含有給其他處理器的程式（例如 {shown(info["foreign"][0], 80)}），'
                             '在這台可能無法執行。')
     return warnings
 
@@ -614,7 +627,8 @@ def app_warnings(apps, *, nc_version_text, php_version):
 # ====================================================================== the HA backup
 
 class Source:
-    """One pass over the add-on's inner tar: `addon`, `pg_version`, `pg_files`/`pg_bytes`, `config` (parsed
+    """One pass over the add-on's inner tar: `addon`, `pg_version`, `pg_files`/`pg_bytes`, `recovery_files` (files of an
+    online backup, not streamed), `config` (parsed
     config.php or None; `config_found`), `apps` {id: {version, files, bytes, nextcloud, php, info_ok, foreign}},
     `app_bytes`, `bad_apps` (folders that are no app id)."""
 
@@ -622,6 +636,7 @@ class Source:
         self.addon = None
         self.pg_version = None
         self.pg_files = self.pg_bytes = 0
+        self.recovery_files = 0
         self.config = None
         self.config_found = False
         self.apps = {}
@@ -641,13 +656,16 @@ def scan_member(stream, report, *, pg=None, apps=None, machine=None, checkpoint=
         name = entry.name
         if _under(name, PG_PREFIX):
             rel = name[len(PG_PREFIX) + 1:] if name != PG_PREFIX else '.'
+            if rel.split('/', 1)[0] in RECOVERY_FILES:
+                src.recovery_files += 1  # never reaches the volume; the check refuses
+                continue
             data = None
             if entry.kind == 'file':
                 src.pg_files += 1
                 src.pg_bytes += entry.size
                 if rel == 'PG_VERSION':
                     data = entry.read_all(ha_odoo.MAX_SMALL_FILE)
-                    src.pg_version = data.decode('ascii', 'replace').strip()[:16]
+                    src.pg_version = shown(data.decode('ascii', 'replace').strip(), 16)
             if pg is not None:
                 pg.add(rel, entry, data)
             continue
@@ -665,7 +683,7 @@ def scan_member(stream, report, *, pg=None, apps=None, machine=None, checkpoint=
         app_id, _, tail = name[len(CUSTOM_APPS) + 1:].partition('/')
         if not APP_ID_RE.fullmatch(app_id):
             if app_id not in src.bad_apps:
-                src.bad_apps.append(app_id[:60])
+                src.bad_apps.append(shown(app_id, 60))
             continue
         info = src.apps.setdefault(app_id, {'version': '', 'files': 0, 'bytes': 0, 'info_ok': False, 'foreign': []})
         target = app_id + (f'/{tail}' if tail else '')
@@ -740,8 +758,8 @@ class DirTar:
 
     def add(self, rel, kind, *, mode, uid, gid, mtime, size=0, fileobj=None, linkname=None):
         if kind == 'hardlink' and linkname not in self.files:
-            raise BackupError('incompatible', f'HA 備份中的 {rel[:200]} 是另一個沒有搬過來的檔案的硬連結，無法只搬一半；'
-                                              '已停止。', member=rel[:200])
+            raise BackupError('incompatible', f'HA 備份中的 {shown(rel, 200)} 是另一個沒有搬過來的檔案的硬連結，無法只搬一半；'
+                                              '已停止。', member=shown(rel, 200))
         mode = mode & (0o1777 if kind == 'dir' else 0o777)
         self.tar.add_member(hacommon.info(self.name(rel), kind, mode=mode, uid=uid, gid=gid, mtime=mtime, size=size,
                                           linkname=self.name(linkname) if kind == 'hardlink' else linkname), fileobj)
@@ -804,8 +822,8 @@ def scan_datadir(stream, report, prefix, *, addon, instanceid=None, out=None, id
             data.hardlinks += 1
             if out is not None:
                 if not _under(entry.linkname, prefix) or entry.linkname == prefix:
-                    raise BackupError('incompatible', f'HA 備份中的 {rel[:200]} 是資料夾外檔案的硬連結，無法搬過來。',
-                                      member=rel[:200])
+                    raise BackupError('incompatible', f'HA 備份中的 {shown(rel, 200)} 是資料夾外檔案的硬連結，無法搬過來。',
+                                      member=shown(rel, 200))
                 out.add(rel, 'hardlink', mode=0o644, uid=uid, gid=gid, mtime=entry.mtime,
                         linkname=entry.linkname[len(prefix) + 1:])
     samples = [s for s in report.skipped_symlink_samples if _under(s, prefix)]
@@ -1122,18 +1140,18 @@ def datadir_blockers(config, data, ha_source):
         if not isinstance(datadir, str):
             blockers.append('HA 的 Nextcloud 設定檔沒有使用者檔案資料夾（datadirectory）。')
         elif ha_source is None:
-            blockers.append(f'HA 的 Nextcloud 使用者檔案放在 {datadir[:200]}，不在 HA 備份會包含的位置'
+            blockers.append(f'HA 的 Nextcloud 使用者檔案放在 {shown(datadir, 200)}，不在 HA 備份會包含的位置'
                             '（/share、/data 或 /config），無法匯入。')
         elif data == 'no-share':
-            blockers.append(MSG_NO_SHARE.format(dir=datadir[:200]))
+            blockers.append(MSG_NO_SHARE.format(dir=shown(datadir, 200)))
         elif not isinstance(data, DataDir) or not data.present or not data.ncdata:
-            blockers.append(MSG_NO_DATADIR.format(dir=datadir[:200]))
+            blockers.append(MSG_NO_DATADIR.format(dir=shown(datadir, 200)))
         else:
             if data.symlinks:
                 blockers.append(f'HA 的 Nextcloud 使用者檔案裡有 {data.symlinks} 個符號連結（例如 '
-                                f'{data.symlink_samples[0][:120]}），無法安全地搬過來。')
+                                f'{shown(data.symlink_samples[0])}），無法安全地搬過來。')
             if data.htaccess:
-                blockers.append(MSG_HTACCESS.format(count=data.htaccess, sample=data.htaccess_samples[0][:120]))
+                blockers.append(MSG_HTACCESS.format(count=data.htaccess, sample=shown(data.htaccess_samples[0])))
             if data.encryption:
                 blockers.append('HA 的 Nextcloud 開啟了伺服器端加密（files_encryption），目前不支援匯入。')
     return blockers
@@ -1151,8 +1169,10 @@ def analyse(src, data, details, target, *, ha_source, pg_major):
         blockers.append(f'HA 的 PostgreSQL 是 {src.pg_version} 版，目前只支援 16 版。')
     elif pg_major is None or ha_major > pg_major:
         blockers.append(f'HA 的 PostgreSQL（{src.pg_version}）比這台的（{pg_major or "未知"}）新，無法匯入。')
+    if src.recovery_files:
+        blockers.append(MSG_ONLINE)
     blockers += datadir_blockers(config, data, ha_source)
-    if details is None and ha_major == 16:
+    if details is None and ha_major == 16 and not src.recovery_files:
         blockers.append('HA 的 PostgreSQL 裡沒有 Nextcloud 的資料庫。')
     elif isinstance(details, dict):
         shape = shape_problems(details.get('shape')) if details.get('nextcloud') else None
@@ -1178,7 +1198,7 @@ def analyse(src, data, details, target, *, ha_source, pg_major):
                     blockers.append('HA 的 Nextcloud 資料庫和它的資料夾設定不一致（找不到使用者檔案資料夾的儲存空間記錄），無法匯入。')
                 other = [s for s in storages if s != root]
                 if other:
-                    warnings.append(f'HA 的 Nextcloud 有 {len(other)} 個本機外部儲存空間（例如 {other[0][7:120]}），'
+                    warnings.append(f'HA 的 Nextcloud 有 {len(other)} 個本機外部儲存空間（例如 {shown(other[0][7:])}），'
                                     '那些路徑在這台不存在，匯入後需要重新設定。')
             differ = lists_differ(data, details)
             if differ:
@@ -1210,12 +1230,12 @@ def section(src, data, details, target):
             'users': counts.get('users', 0), 'files': counts.get('files', 0), 'shares': counts.get('shares', 0),
             'tokens': counts.get('tokens', 0), 'calendar_objects': counts.get('calendar_objects', 0),
             'contacts': counts.get('contacts', 0),
-            'datadir': str(config.get('datadirectory') or '')[:200],
+            'datadir': shown(config.get('datadirectory') or '', 200),
             'datadir_in_backup': present and data.ncdata,
             'datadir_files': data.files if present else 0, 'datadir_bytes': data.bytes if present else 0,
             'custom_apps': sorted(src.apps), 'pg_version': src.pg_version or '',
             'office': 'richdocuments' in ((details or {}).get('enabled') or []) if isinstance(details, dict) else False,
-            'ha_url': str(config.get('overwrite.cli.url') or '')[:200],
+            'ha_url': shown(config.get('overwrite.cli.url') or '', 200),
             'target_url': str(target.config.get('overwrite.cli.url') or '')[:200]}
 
 
@@ -1281,7 +1301,7 @@ def check(work, app):
         work.phase('check')
         details = None
         if isinstance(src.config, dict) and isinstance(src.config.get('dbname'), str) \
-                and DB_RE.fullmatch(src.config['dbname']) and ha_odoo._ha_major(src) == 16:
+                and DB_RE.fullmatch(src.config['dbname']) and ha_odoo._ha_major(src) == 16 and not src.recovery_files:
             cluster = ha_odoo.start_ha_cluster(work, Pinned(tmp, 'hapg'), image)
             details = ha_database(cluster, src.config['dbname'])
     finally:
@@ -1699,6 +1719,8 @@ def convert(work, app, test_mode, out_dir):
     early = datadir_blockers(src.config, data, datadir_source(src.config.get('datadirectory')))
     if ha_odoo._ha_major(src) != 16:
         early.append(f'HA 的 PostgreSQL 是 {src.pg_version or "未知"} 版，目前只支援 16 版。')
+    if src.recovery_files:
+        early.append(MSG_ONLINE)
     if early:  # refused before any cluster is started or anything else is built
         raise BackupError('incompatible', early[0], app=app.id)
     work.phase('convert')

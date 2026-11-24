@@ -2134,15 +2134,16 @@ html,data}`; facts `phase3/facts/nextcloud.md`, owner decisions D1-D5 applied wi
    or run files as programs; Nextcloud never creates nor accepts one) are blockers. The add-on version (0.2.3/0.2.4 →
    35.0.1) is shown only.
 3. check: the cluster is streamed into a throwaway volume and opened by a throwaway PostgreSQL 16 exactly like Odoo's (§9
-   Odoo 1); the database named by HA's `dbname` must hold Nextcloud's tables, only the plpgsql extension, no other schema,
+   Odoo 1; the files of an online backup, `backup_label` and `tablespace_map`, are never streamed: blocker 「HA 的
+   Nextcloud 資料庫不是在停止狀態下備份的…」, the cluster is not started); the database named by HA's `dbname` must hold Nextcloud's tables, only the plpgsql extension, no other schema,
    and the root storage `local::<HA datadirectory>/` (lib/private/Files/Storage/Local.php `getId`; longer than 64 bytes →
    its md5). Every session in HA's cluster carries PGOPTIONS `-c search_path=pg_catalog` (a client setting: above HA's
    per-database and per-role settings; no function, operator or table of HA's can stand in for a built-in). HA's catalogs
    are read first (`SHAPE_SQL`, extension members not counted): any function, procedure, aggregate, operator, type or
    domain, trigger, rule, policy or row security, event trigger, view or other relation kind than table/sequence/index,
    CHECK or exclusion constraint, generated column, inheritance, collation, conversion, text search object, operator
-   class/family, cast, foreign server, user mapping, publication, large object, default privilege, transform or extended
-   statistics, or a column default that is neither a constant nor `nextval()` → blocker 「HA 的 Nextcloud 資料庫含有 Nextcloud 不會建立的
+   class/family, cast, foreign server, user mapping, publication, large object, default privilege, transform, extended
+   statistics or tablespace, or a column default that is neither a constant nor `nextval()` → blocker 「HA 的 Nextcloud 資料庫含有 Nextcloud 不會建立的
    資料庫物件（…），無法安全地搬過來。」 and HA's tables are not read at all (an unreadable shape → blocker too); a
    genuine Nextcloud 35.0.1 database has none of them (dev-e, 2026-11-24). Counts (users, file cache, shares, tokens,
    calendar objects, contacts, storages, mounts, external mounts) are read; per user the database's file list (home
