@@ -436,8 +436,8 @@ Which mode a draft proposes (the general guidance is the "PostgreSQL modes" tabl
 | Restore needs | the same PostgreSQL major | the same or a newer major | the same or a newer major |
 
 The draft for an app that is already installed in an export mode keeps that mode, because switching modes makes its
-existing backups unrestorable under the new entry (`compat` says so before installing). LiteLLM is the one id whose
-new draft is single-database (`suggest.PREFERRED_MODES`).
+existing backups unrestorable under the new entry (`compat` says so before installing). LiteLLM, n8n and Hermes are the ids
+whose new draft is single-database (`suggest.PREFERRED_MODES`): the only mode their Home Assistant imports fill.
 
 ### Installing and removing entries (`catalog-install`, `catalog-remove`)
 

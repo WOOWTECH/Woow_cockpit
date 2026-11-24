@@ -498,9 +498,9 @@ class ReferenceHostTests(unittest.TestCase):
 
     def test_databases_default_to_cold_with_export_variants(self):
         n8n = self.apps['n8n']
-        self.assertEqual(n8n['variant'], 'cold')
+        self.assertEqual(self.apps['odoo']['variant'], 'cold', 'cold unless the import needs another mode (PREFERRED_MODES)')
         self.assertEqual([v['id'] for v in n8n['variants']], ['cold', 'instance', 'database'])
-        cold = n8n['entry']
+        cold = variant(n8n, 'cold')['entry']
         self.assertEqual(cold['postgres'], [])
         self.assertIn({'name': 'n8n_postgres_data', 'label': 'PostgreSQL 資料（冷備份）'}, cold['volumes'])
         self.assertIn('n8n-postgres.service', cold['writer_units'])
@@ -525,13 +525,50 @@ class ReferenceHostTests(unittest.TestCase):
         self.assertIn({'path': '.local/share/nextcloud-office/postgres', 'label': 'PostgreSQL 資料（冷備份）'},
                       nextcloud['entry']['data_dirs'])
 
-    def test_only_litellm_defaults_to_the_mode_its_import_needs(self):
+    def test_only_these_apps_default_to_the_mode_their_import_needs(self):
+        needs = {'litellm', 'n8n', 'hermes'}
+        self.assertEqual(set(suggest.PREFERRED_MODES), needs)
         for app_id, app in self.apps.items():
             with self.subTest(app=app_id):
-                self.assertEqual(app['variant'], 'database' if app_id == 'litellm' else 'cold')
-                self.assertEqual('import-mode' in [n['code'] for n in app['notes']], app_id == 'litellm')
+                self.assertEqual(app['variant'], 'database' if app_id in needs else 'cold')
+                self.assertEqual('import-mode' in [n['code'] for n in app['notes']], app_id in needs)
                 for item in app['variants']:
-                    self.assertEqual('（預設）' in item['label'], item['id'] == 'cold' and app_id != 'litellm')
+                    self.assertEqual('（預設）' in item['label'], item['id'] == 'cold' and app_id not in needs)
+
+    def import_target(self, app_id, entry):
+        """What the app's Home Assistant import says about this device with the entry installed."""
+        from woowbackup import ha_hermes, ha_n8n, ha_odoo
+        module = {'n8n': ha_n8n, 'hermes': ha_hermes, 'odoo': ha_odoo}[app_id]
+        self.assertEqual(module.APP_ID, app_id)
+        app = catalog.validate_entry(entry, paths=Paths(base=Path(self.tmp.name)), user_lookup=lookup_for(self.home))
+        quadlets = {name: (FIXTURES / 'quadlet' / name).read_bytes() for name in entry['quadlet']['files']}
+        work = types.SimpleNamespace(quadlets=lambda _app: quadlets,
+                                     runner=lambda _app: types.SimpleNamespace(home=str(self.home)))
+        return module.Target(work, app)
+
+    def test_the_default_drafts_are_the_entries_the_imports_fill(self):
+        for app_id in ('n8n', 'hermes', 'odoo'):
+            with self.subTest(app=app_id):
+                app = self.apps[app_id]
+                self.assertTrue(app['valid'])
+                self.import_target(app_id, app['entry'])  # accepted as it is, without a hand edit
+        for app_id in ('n8n', 'hermes'):
+            for mode in ('cold', 'instance'):
+                with self.subTest(app=app_id, mode=mode), self.assertRaises(BackupError) as caught:
+                    self.import_target(app_id, variant(self.apps[app_id], mode)['entry'])
+                self.assertEqual(caught.exception.code, 'incompatible')
+
+    def test_an_installed_cold_entry_keeps_its_mode_and_is_told_what_to_choose(self):
+        installed = [variant(self.apps[app_id], 'cold')['entry'] for app_id in ('n8n', 'hermes')]
+        with tempfile.TemporaryDirectory() as base:
+            result, _fake = run_suggest(base, self.home, installed=installed, linger=(OWNER,))
+        apps = {app['id']: app for app in result['apps']}
+        for app_id in ('n8n', 'hermes'):
+            with self.subTest(app=app_id):
+                self.assertEqual(apps[app_id]['variant'], 'cold', 'changing it would strand the existing backups')
+                notes = [(n['level'], n['message']) for n in apps[app_id]['notes'] if n['code'] == 'import-mode']
+                self.assertEqual([level for level, _m in notes], ['warn'])
+                self.assertIn('請在這裡改選「單一資料庫」並安裝', notes[0][1])
 
     def test_start_order_follows_the_dependencies(self):
         for app in self.result['apps']:
