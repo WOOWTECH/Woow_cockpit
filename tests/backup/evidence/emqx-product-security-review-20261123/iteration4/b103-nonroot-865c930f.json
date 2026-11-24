@@ -1,0 +1,47 @@
+{
+ "test": "B1-03 non-data roots never reach the restored target",
+ "engine_dir": "/tmp/claude-1000/-home-woowtechopenclaw/a15a4de1-3ce4-4692-84a2-243bd175349a/scratchpad/emqx-secreview4/tree-865c930f/backup-engine",
+ "label": "product-865c930f",
+ "export_root_keys_restricted_to_DATA_ROOTS": true,
+ "DATA_ROOTS": [
+  "authentication",
+  "authorization",
+  "rule_engine",
+  "connectors",
+  "actions",
+  "sources",
+  "bridges",
+  "rewrite",
+  "auto_subscribe",
+  "exhook",
+  "gateway",
+  "psk_authentication",
+  "topic_metrics",
+  "retainer"
+ ],
+ "non_data_roots_tested": [
+  "listeners",
+  "dashboard",
+  "node",
+  "cluster",
+  "sysmon",
+  "log"
+ ],
+ "preserved_roots_are_non_data_plus_authorization": true,
+ "data_roots_correctly_excluded": [
+  "authentication",
+  "retainer",
+  "rule_engine"
+ ],
+ "exotic_non_data_root_would_be_refused": true,
+ "refusal_text_for_added_root": "EMQX 匯入新增了無法安全移除的目標設定，已停止。",
+ "roots_the_guard_flags_before_revert": [
+  "dashboard",
+  "listeners",
+  "message_transformation",
+  "node"
+ ],
+ "shared_non_data_roots_reverted_to_device": true,
+ "guard_names_differences_as_root_names_only": true,
+ "ok": true
+}

@@ -5,18 +5,33 @@ malicious HA backup would, fixed what it could prove, and reran the attacks agai
 
 ## Summary (read this first)
 
-- **Nine findings, SR-1 to SR-9.** Five High/Medium findings were confirmed by real attacks and fixed (SR-1, SR-2, SR-3,
+- **Ten findings, SR-1 to SR-10.** Five High/Medium findings were confirmed by real attacks and fixed (SR-1, SR-2, SR-3,
   SR-6, SR-8); SR-7 (Medium) is a refusal added because the vendor code proves the leak, its ExHook trigger is
-  exercised by T12 (iteration 2); SR-4 and SR-9 are Low and fixed; SR-5 was exercised for real (T5) and is refused fail-closed, no finding left.
+  exercised by T12 (iteration 2); SR-4 and SR-9 are Low and fixed. **SR-5 (Low) is OPEN**: iteration 3's "refused fail
+  closed, no finding left" was wrong — the verifier showed the refusal was an artefact of a crafted HOCON without an
+  explicit `salt_position`; with one, no engine check refuses a built-in-database `plain` authenticator, so this
+  device's own bootstrap password is stored in clear text in the migrated built-in database (see Iteration 4). **SR-10
+  (Low) was found in iteration 4** in exactly the handed-over tree 865c930f and is fixed on the integration branch
+  only (65d8a51, 97c994f): a C0/C1/bidirectional/line-separator character in an HA plugin name, a `/share` path or a
+  skipped-symlink name reached a check warning raw or forged a second job-log line.
 - **Where the fixes are:** SR-1, SR-2, SR-3 75aad7a; SR-6 f397590; SR-7 7b173af; SR-4 in the product's own 7449540; SR-8 and
-  SR-9 abff1a0. All of them are in the product engine that is handed over (the last one merged as 620bdd5).
+  SR-9 abff1a0 (all in the handed-over engine 865c930f, the last merged as 620bdd5). SR-10 is on the integration branch
+  (65d8a51, 97c994f), NOT in 865c930f. SR-5 is open (remediation is an owner policy choice, see Iteration 4).
 - **Engine reviewed in iteration 3:** `feat/ha-import-emqx-product-20261124` @ `e08f8a1` (product READY of 08:30), `backup-engine` tree `865c930f392006e0080de506eb7c425fd81becd7` = the product tip `5786ae4` + `abff1a0` (merge `620bdd5`) + the Podman 6 tempctr fix (cherry-pick `e08f8a1`, patch id equal to `8613ffa` and `c8df1f2`); the review reruns used the same tree as trial commit `cd66230`.
 - **What passing here means:** this review proves conversion and refusal behaviour of the product's own code against
   real EMQX 5.8.9 brokers in throwaway rootless lab containers with `--network none`. It is not the commercial
   acceptance; the product lane's dev-d chain and the .54 runs (Podman 6.1.1, ARM and x86 backups) are the product flow
   evidence. `commercial_acceptance: not-complete`.
-- **Not covered:** see the last section. Two items need a human: the boot-time behaviour of HA's throwaway broker on HA's
-  own files (reviewed only in part, see there) and a merge policy for Dashboard-edited ACL files.
+- **Not covered:** see the last section. Items that need a human/owner: the boot-time behaviour of HA's throwaway
+  broker on HA's own files (reviewed only in part, one analysis step stopped by a safety classifier in iterations 3
+  and 4 — a human item, not retried), a merge policy for Dashboard-edited ACL files, the SR-5 remediation policy
+  (refuse a `plain` authenticator vs re-hash the device's bootstrap users), and the independent Hermes/FTS review.
+- **Iteration 4 (this revision)** closed the independent verifier's points against iterations 1-3: SR-10 found and
+  proven (fixed at integration), SR-5 reopened and decided, B1-03 proven and a pre-import export-member check added as
+  product hardening (branch `fix/emqx-export-members-20261124`), and the overclaims corrected (what T4/T10/T11 really
+  ran, that an exit code of 0 is not a verdict, the hard-coded `candidate_env_file_flag`, 6 of 24 volumes attributed
+  by timing only, the follower ended by main at 08:14, the first T9/T10 runs with no attempt JSON, and the host-wide
+  Podman event dump that iteration 2 kept and main deleted). See **## Iteration 4**.
 
 ## How it was tested (all iterations; details of iteration 1)
 
@@ -48,9 +63,10 @@ malicious HA backup would, fixed what it could prove, and reran the attacks agai
 | SR-6 | High | Migrated rule SQL `jq('env…')` exposes this device's env secrets (bypasses SR-3) | fixed f397590 |
 | SR-7 | Medium | A migrated HTTP/JWT/LDAP/SQL authenticator or ExHook server would receive this device's own service logins (bootstrap passwords); vendor-proven, the HTTP path was not reproduced end to end (stopped earlier by the authentication-equality check) | refusal 7b173af; its ExHook trigger is exercised for real by T12 (iterations 2 and 3) |
 | SR-4 | Low | The product readback hashed RAW config roots that contain env secrets (`dashboard.default_password`, `node.cookie`) into `import_check` | fixed by the product lane (redaction, in 7449540); reviewed in iteration 1, unchanged since |
-| SR-5 | Low / info | HA's authenticator hash settings (e.g. `plain`) would apply to this device's bootstrap users, which the product re-attaches to HA's built-in authenticator | exercised for real in iteration 3 (T5): with HA's `plain` algorithm the conversion refuses because the restored `authentication` root differs from this device's (fail closed); the device's bootstrap user was not stored in plain text. No finding left; a backup with a plain-hash authenticator is refused instead of migrated (availability) |
+| SR-5 | Low | **OPEN.** HA's authenticator hash settings (e.g. `plain`) apply to this device's bootstrap users, which the product re-attaches to HA's built-in authenticator (`preserved_bootstrap_authn`). With an explicit `salt_position`, no engine check refuses a built-in-database `plain` authenticator, so this device's own bootstrap MQTT password is stored verbatim (`emqx_passwd.erl:92-105` `hash_data(plain, P) = P`) in the candidate's built-in database, and so in the converted backup. Iteration 3's "refused fail closed" was an artefact of a crafted HOCON without `salt_position` (verifier). | OPEN Low (Iteration 4); remediation is an owner policy choice (refuse a `plain` authenticator when the device has bootstrap users, or re-hash the device's bootstrap users with the device's own algorithm) |
 | SR-8 | Medium | 3761d18: the device's `EnvironmentFile=` values reached a world-readable command line of the candidate | fixed abff1a0, reproduced and verified for real (T9) |
 | SR-9 | Low | 3761d18: the candidate's environment was not read the way podman reads it for the broker | fixed abff1a0, verified against podman (T10) |
+| SR-10 | Low | A C0/C1/bidirectional/line-separator character (e.g. U+202E, U+2066, U+0085, U+2028) in an HA EMQX plugin name, a `/share` file reference or a skipped-symlink name reached a check warning raw, or forged a second job-log line, in the handed-over tree 865c930f | fixed on the integration branch only (65d8a51 `hacommon.names`; 97c994f the twelve bidi controls in names and `jobs.LOG_CONTROL_RE`); NOT in 865c930f. Proven in process: forged=True on 865c930f, forged=False on the integration tip (Iteration 4) |
 
 ### SR-1 — code execution in HA's broker (B1-06)
 
@@ -301,7 +317,9 @@ branch, after its first agent got stuck): `183dd6e` + `efd620b`, and `620bdd5` +
 | Interplay of the two changes in `tempctr.py` | independent: `run_argv` (env files) and `volume_import`/`_apply_root` (volume owner) share no code path |
 | Product evidence for the merged engine (read, not re-run here) | attempt-18 ARM full chain PASS 74/74, attempt-19 ARM rollback rounds PASS 84/84 and attempt-20 x86 full chain PASS 66/66 on dev-d (engine 865c930f); attempts 21 to 23 (x86 rollback rounds, decision-C refusal, cleanup) were still running when this README was written (attempt-21's first try failed at its own setup check, reported by the product lane as a harness false alarm on dev-d's named headscale volumes, fixed in f0a34e2; no product step ran); lane arm54-2's .54 run (`e08f8a1` merged with that lane's other Podman fixes, `ha_emqx.py` byte-equal): 164/164; unit and mutation sets of the product lane 222 + 438 + 6 OK, 81 mutations (79 killed, 2 test gaps closed in 7e530cf without an engine change) |
 
-Verdict: no new finding. SR-8 and SR-9 are fixed in the engine that is handed over.
+Verdict (iteration 3, superseded): "no new finding" for tree 865c930f was wrong. Iteration 4's independent verifier
+found SR-10 (Low) in exactly that tree (control/bidirectional characters in names and a forged job-log line), fixed on
+the integration branch only. SR-8 and SR-9 are fixed in the handed-over engine; SR-10 is not. See **## Iteration 4**.
 
 ### The Podman 6 volume fix (tempctr `tar_root` / `_apply_root`, c8df1f2 = 8613ffa)
 
@@ -383,3 +401,120 @@ attempt per row, JSON in `iteration3/`.
   the .54 runs of lane arm54-2 are that evidence); Omnigent/LiteLLM SQL schema attacks (their own review lanes); the
   independent Hermes FTS review; other EMQX versions than 5.8.9 and add-on versions outside VERSIONS; the host's Podman
   Quadlet generator; anything that needs a network.
+
+## Iteration 4 (2026-11-24): the independent verifier's points, SR-10, SR-5 and B1-03
+
+Iteration 4 (owner instance, token SR-OWNER-1942) acted only on the verifier's corrections of iterations 1-3 and the
+two open items the main session named. The EMQX engine is byte-identical between the integration tip this iteration
+started from (`f2c9e03`, `backup-engine` tree `80215432`) and the current tip (`0562c55`, after a LiteLLM merge):
+`ha_emqx.py`, `hacommon.py`, `jobs.py`, `habackup.py`, `tempctr.py` all unchanged, so the findings below carry over.
+
+### SR-10 (Low) — control / bidirectional / line-separator characters in HA names and the job log (found by the verifier)
+
+The verifier contradicted iteration 3's "no new finding" for the handed-over tree `865c930f`: in that tree a C0/C1,
+bidirectional (U+061C, U+200E/F, U+202A-E, U+2066-9) or line-separator (U+2028/9) character in an HA EMQX **plugin
+name**, a **`/share` / `/ssl` / `/config` file reference** or a **skipped-symlink sample name** either reaches a check
+warning raw (reordering how the rest of the line reads on the page, e.g. U+202E) or forges a second job-log line
+(U+2028, which the old CR/LF-only log sink did not neutralise).
+
+This is the same class as omnigent-secreview SR-4/SR-6 and is fixed on the **integration branch only**, not in
+`865c930f`:
+
+- `65d8a51` — `hacommon.names` neutralises control characters in HA names (C0/C1).
+- `97c994f` — extends `hacommon.names` and `jobs.LOG_CONTROL_RE` to the twelve Unicode bidirectional controls **and**
+  U+2028/U+2029, so a name reaching a warning becomes `?` and a log line can no longer be split.
+
+Both commits are **ancestors of the integration tip** and **not ancestors of `e08f8a1`** (checked with
+`git merge-base --is-ancestor`). The EMQX paths they cover: the plugin warning (`ha_emqx._source_analysis` →
+`hacommon.names`), the `/share` note (`ha_emqx.hocon_notes` → `hacommon.names`) and the skipped-symlink note
+(`habackup.Report.warnings`) written through the job log (`jobs.JobStore` → `jobs.LOG_CONTROL_RE`).
+
+Proof (in process, no container, no network — a log-injection / name-spoofing check, not a network attack):
+`tests/e2e/lab/emqx_secreview/sr10_control_chars.py` drives the real warning builders and the real log sink against
+both trees. `iteration4/sr10-control-chars-865c930f.json`: `forged=True` (plugin warning, `/share` note and the
+symlink log line all leak the thirteen test code points; the symlink log line is not single-line).
+`iteration4/sr10-control-chars-integration.json`: `forged=False`, `ok=True`. The script also shows the naive
+old-tree code paths would leak/forge, so the two commits are load-bearing. (The product lane may want to carry these
+two commits into the product branch so the product engine alone is clean; today they arrive through integration.)
+
+### SR-5 (Low) — decided for real: OPEN (reachable)
+
+Iteration 3 reported T5 as "refused fail closed, no finding left." The verifier showed the refusal was an **artefact**
+of a crafted HOCON that omitted `salt_position`: `conf load` then fills the schema default
+(`emqx_authn_password_hashing.erl` `salt_position(default) -> prefix`), and the authentication-root comparison, not a
+comparison with this device's hashing, is what refused.
+
+With an **explicit** `salt_position`, no engine check refuses a built-in-database `plain` authenticator:
+`credential_receivers` allows `{password_based|scram, built_in_database}`; `preserved_bootstrap_authn` only refuses
+when **this device's** `bootstrap_type` is `hash` and the algorithms differ (a `plain`-bootstrap device does not
+trip it); and the final authentication-root equality holds because the engine builds the expected rows from the
+already-default-filled post-import config. The device's own bootstrap MQTT users are then re-attached to HA's `plain`
+authenticator and, at the candidate's boot, `boostrap_user_from_file` hashes them with `plain`:
+`emqx_authn_password_hashing:hash(#{name:=plain}, P)` → `emqx_passwd:hash({plain, <<>>, _}, P)` →
+`hash_data(plain, P) = P` (`emqx_passwd.erl:92-105`). So **this device's own bootstrap password is stored verbatim**
+in the candidate's `emqx_authn_mnesia`, and so in the converted backup (a secret that was not in HA's backup).
+
+Severity **Low**: it needs HA's authenticator configured with `plain` (unusual; the defaults are sha256/bcrypt), this
+device to have bootstrap users, and access to the converted backup; the device's bootstrap password is already stored
+in clear in its own bootstrap CSV mount, so this is an additional copy of an on-device plaintext secret into the
+backup. **Remediation is an owner policy choice** (like decision C): either refuse a HA backup whose built-in-database
+authenticator uses `plain` when this device has bootstrap users, or re-hash the device's bootstrap users with the
+device's own prior algorithm instead of HA's. No behaviour-changing refusal was added unilaterally (a new refusal
+rejects backups that convert today). Harness for the empirical confirmation:
+`tests/e2e/lab/emqx_secreview/t5b_plain_explicit.py` (explicit `salt_position`, lab store, `--network none`); the
+real run was queued through `heavy.sh` and was still waiting for a host heavy-slot at hand-off (recorded in the lane
+file), so SR-5's decision here rests on the vendor source and the guard analysis above, with the lab run pending.
+
+### B1-03 — non-data roots do not reach the restored target (proven), plus a pre-import hardening
+
+The verifier noted B1-03 (the other half of the old preservation guard, `reports/b1-02-03.md`) was not named in the
+README and that no forged export with non-data roots had been run. B1-03 holds in two layers, both verified in process
+(`tests/e2e/lab/emqx_secreview/b103_nonroot.py`, `iteration4/b103-nonroot-*.json`, `ok=True` on both trees):
+
+1. **Export scope.** `ha_broker` exports only `DATA_ROOTS` (`emqx ctl data export --root-keys <DATA_ROOTS∩present>`);
+   the vendor applies `raw_conf_transform = maps:with(Keys, RawConf)` (`emqx_mgmt_data_backup.erl:525-531`), so a
+   healthy export's `cluster.hocon` never carries `listeners`, `dashboard`, `node`, `log` or `cluster`.
+2. **Post-import guard.** Even if a compromised HA broker ignored `--root-keys`, the vendor import only applies a root
+   with an importer (`?CONF_KEYS` + the `emqx_config_backup` modules, e.g. `listeners` via
+   `emqx_mgmt_listeners_conf`); `restore_target_settings` then compares every preserved (non-data) root of the
+   candidate to this device's and **refuses an added root** (`EMQX 匯入新增了無法安全移除的目標設定`) or **reverts a
+   shared root** to this device's value (the final whole-root equality demands this device's value). The in-process
+   proof exercises `preserved_settings` and that final difference for benign forged post-import configs (an exotic
+   `message_transformation` root → refused; `listeners`/`dashboard`/`node` differing → flagged then reverted).
+
+Because the vendor import applies cluster.hocon roots **before** the product's checks run (inside the candidate that
+mounts this device's secrets), iteration 4 also implemented the hardening iteration 1's README recommended — a
+**pre-import export-member check** — as a product change on branch **`fix/emqx-export-members-20261124`** (from the
+current integration tip `0562c55`; `backup-engine` tree `b6b1c0c1`, local only):
+
+- `ha_emqx.check_export_members(path)`, run at the top of `target_broker` before the candidate starts, allows only
+  `<name>/META.hocon`, `<name>/cluster.hocon` and `<name>/mnesia/<table in TABLES>` (each a regular file, under one
+  top directory); `ha_emqx.export_cluster_roots` refuses any `cluster.hocon` top-level root outside `DATA_ROOTS`,
+  scanning conservatively and fail-closed (strings/comments removed, `{}`/`[]` depth tracked; a wrapped or
+  unbalanced document raises).
+- Tests `tests/backup/test_ha_emqx_export_members.py` (16 cases); **7/7 mutations killed**
+  (`iteration4/export-members-mutation.json`). The two internal conversion-chain doubles now emit a structurally valid
+  `.tar.gz` export instead of a non-tar stub, and the focused authentication-guard test mocks the new check; EMQX
+  modules + `test_ha_import` + `test_ha_flows` **245 OK, 0 blocked**. This is defence in depth; the authoritative
+  guarantee stays the post-import whole-root equality.
+
+### Corrections to iterations 1-3 (the verifier's remaining points)
+
+| Earlier claim | What is true |
+|---|---|
+| "no new finding" for tree 865c930f | Wrong — SR-10 (above) is in that tree, fixed only at integration. |
+| T5/SR-5 "refused fail closed, no finding left" | Artefact of a HOCON without `salt_position`; SR-5 is an open Low (above). |
+| "14/14 attacks in containers with real EMQX" (iteration 3 reruns) | Not all are attacks in a broker: T4 (`t4_members`) starts no container (it drives `scan_member` in process); T10 runs `/usr/bin/env` in the image to compare env parsing, not an EMQX attack; about 5 of the 14 reruns are parser/structure or real-backup regressions, not exploit attempts. The wording "every `podman run` carried `--network none`" is right for the rows that start a broker. |
+| exit code 0 means the attack was contained | No — an exit of 0 only means the harness ran; the **result fields** decide (e.g. `t9-tip-r2.json` is `EXPOSED` with exit 0). Read `conversion` / `forged` / `*_leaks_*`, not the exit code. |
+| T11 `candidate_env_file_flag` | Hard-coded `True` in `t11_profile_real.py` (it asserts the Target carried env files, not that podman applied them); the SR-8/SR-9 evidence for "podman read the env file" is T9/T10, not this flag. |
+| "24 anonymous EMQX volumes proven and removed" (iteration 2) | 18 were tied by journald `container create` events within 2 s of this lane's probes/brokers; **6 were attributed by run-start timing only**, not by a container-to-volume link. |
+| open item "follower 634612-634614 still there" | False — main ended it at 08:14; nothing of this lane is left running except the queued T5b (recorded in the lane file). |
+| first T9/T10 runs | `abff1a0`'s first T9/T10 ("2 command lines", "8 of 20") have **no attempt JSON** (overwritten by the r2 reruns); the test docstring's `iteration2/t10-tip.json` does not exist. The committed evidence is the r2 files. |
+| host-wide Podman event dump | Iteration 2 kept `scratchpad/emqx-secreview2/events-2000-2210.txt` (host-wide, held production container names); it was never committed and **main deleted it**. This lane does not read the host's Podman events or store in any form (rules 11, 15). |
+
+### Not repeated (safety classifier)
+
+One light vendor probe of the HOCON pretty-printer/parser round trip was stopped by the safety classifier this
+iteration (not a tool or permission denial). Per the standing rule it is not reproduced in any form; B1-03 was
+completed defensively instead (the engine's own guards + the pre-import member check). The boot-time-loader analysis
+that a classifier stopped in iteration 3 likewise stays a human item.
