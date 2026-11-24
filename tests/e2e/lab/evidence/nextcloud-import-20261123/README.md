@@ -65,6 +65,7 @@ HA's rows as they are.
 | `nextcloud-x86-noshare-attempt1.json` | 162a51c | 1 | 33/34: the product's refusal correct; the FAIL was the harness's expected calendar/contact counts (1dd0106) |
 | `nextcloud-x86-noshare-attempt2.json` | 1dd0106 | 0 | **34/34 PASS**: the real backup without HA's share folder is refused at check and convert; dev-e unchanged |
 | `nextcloud-x86-noshare-attempt3.json` | 6ecb7a0 | 0 | **34/34 PASS**: the same on the code after the self review |
+| `nextcloud-x86-noshare-attempt4.json` | 7e969f0 | 0 | **34/34 PASS**: the refusal run on the lane tip (integration 0562c55 merged, the Team folders fix) |
 | `nextcloud-x86-share-attempt1.json` | 863179e | 1 | 85/86: every import, client, restart, rollback and cleanup check PASS; the FAIL was the leak scan's scope (the public link token in dev-e's own web access logs, scoped in 3ade81d) |
 | `nextcloud-x86-share-attempt2.json` | 3ade81d | 1 | 20/21: stopped by the host-floor guard before the check (other lanes' disk use); dev-e untouched |
 | `nextcloud-x86-share-attempt3.json` | aaed6cf | 1 | 32/35: the host floor touched while the safety backup was packaged; the recovery put dev-e's own Nextcloud back (harness fix c91b3c1) |
