@@ -1,0 +1,1361 @@
+{
+ "lane": "emqx-product",
+ "date": "2026-11-24",
+ "branch": "feat/ha-import-emqx-product-20261124",
+ "commit_at_write": "14a1944ede19b300b92178abbbf01c455261aa78",
+ "backup_engine_tree": "865c930f392006e0080de506eb7c425fd81becd7",
+ "commercial_acceptance": "not-complete",
+ "note": "host runs under the guarded runner (no podman/ssh/sudo/systemctl), each heavy one through team/heavy.sh; generated transports only, no broker: unit results are not acceptance",
+ "runs": [
+  {
+   "name": "emqx-modules+harness+lab-candidate",
+   "tree": "e08f8a1",
+   "modules": "tests/backup/test_ha_emqx*.py (20 modules) + tests.e2e.lab.test_emqx_product_real_ha + tests.e2e.lab.test_emqx_real_candidate",
+   "tests": 222,
+   "failures": 0,
+   "errors": 0,
+   "skipped": 0,
+   "blocked": 0
+  },
+  {
+   "name": "shared-suites",
+   "tree": "e08f8a1",
+   "modules": "test_archive, test_archive_security, test_archive_v2, test_cli, test_flows, test_ha_cli, test_ha_flows, test_ha_import, test_ha_registry, test_ha_tempctr",
+   "tests": 438,
+   "failures": 0,
+   "errors": 0,
+   "skipped": 0,
+   "blocked": 0
+  },
+  {
+   "name": "lab-candidate-acl-component",
+   "tree": "e08f8a1",
+   "modules": "tests.e2e.lab.test_emqx_candidate_acl_component",
+   "tests": 6,
+   "failures": 0,
+   "errors": 0,
+   "skipped": 0,
+   "blocked": 0
+  },
+  {
+   "name": "emqx-modules+harness+lab-candidate",
+   "tree": "fc0e3bc (engine unchanged; +4 tests)",
+   "modules": "tests/backup/test_ha_emqx*.py (20 modules) + tests.e2e.lab.test_emqx_product_real_ha + tests.e2e.lab.test_emqx_real_candidate",
+   "tests": 226,
+   "failures": 0,
+   "errors": 0,
+   "skipped": 0,
+   "blocked": 0
+  },
+  {
+   "name": "shared-suites",
+   "tree": "fc0e3bc (engine unchanged; +1 test)",
+   "modules": "the same modules as above",
+   "tests": 439,
+   "failures": 0,
+   "errors": 0,
+   "skipped": 0,
+   "blocked": 0
+  },
+  {
+   "name": "lab-candidate-acl-component",
+   "tree": "fc0e3bc",
+   "modules": "tests.e2e.lab.test_emqx_candidate_acl_component",
+   "tests": 6,
+   "failures": 0,
+   "errors": 0,
+   "skipped": 0,
+   "blocked": 0
+  },
+  {
+   "name": "emqx-modules+harness+lab-candidate",
+   "tree": "4ec3174 (integration bca3d65 + the health fix a3a0479; engine 80215432)",
+   "modules": "tests/backup/test_ha_emqx*.py + tests.e2e.lab.test_emqx_product_real_ha + tests.e2e.lab.test_emqx_real_candidate",
+   "tests": 228,
+   "failures": 0,
+   "errors": 0,
+   "skipped": 0,
+   "blocked": 0
+  },
+  {
+   "name": "shared-suites + test_suggest",
+   "tree": "4ec3174 (integration bca3d65 + the health fix a3a0479; engine 80215432)",
+   "modules": "test_archive, test_archive_security, test_archive_v2, test_cli, test_flows, test_ha_cli, test_ha_flows, test_ha_import, test_ha_registry, test_ha_tempctr, test_suggest",
+   "tests": 488,
+   "failures": 0,
+   "errors": 0,
+   "skipped": 0,
+   "blocked": 0
+  },
+  {
+   "name": "lab-candidate-acl-component",
+   "tree": "4ec3174 (integration bca3d65 + the health fix a3a0479; engine 80215432)",
+   "modules": "tests.e2e.lab.test_emqx_candidate_acl_component",
+   "tests": 6,
+   "failures": 0,
+   "errors": 0,
+   "skipped": 0,
+   "blocked": 0
+  }
+ ],
+ "mutation_checks": [
+  {
+   "tree": "e08f8a1",
+   "note": "81 = M01-M68 without M21 (its line became M67 in 0d260db) + SRM1-8 (review SR-8/SR-9) + TC1-6 (tempctr top directory); the two survivors are gaps of the tests, closed by 7e530cf",
+   "mutations": 81,
+   "killed": 79,
+   "not_killed": [
+    "M52",
+    "TC6"
+   ],
+   "results": [
+    {
+     "id": "M01",
+     "protection": "vendor ACL template resolved only after EMQX_ETC_DIR is proven",
+     "file": "backup-engine/woowbackup/ha_emqx.py",
+     "tests": [
+      "tests.backup.test_ha_emqx_product"
+     ],
+     "result": "killed",
+     "failing_tests": [
+      "tests.backup.test_ha_emqx_product.TemplatePathTests.test_the_vendor_template_resolves_only_on_the_proven_etc_dir",
+      "tests.backup.test_ha_emqx_product.TemplatePathTests.test_the_vendor_template_resolves_only_on_the_proven_etc_dir"
+     ]
+    },
+    {
+     "id": "M02",
+     "protection": "EMQX_ETC_DIR read from this device's running broker",
+     "file": "backup-engine/woowbackup/ha_emqx.py",
+     "tests": [
+      "tests.backup.test_ha_emqx_product"
+     ],
+     "result": "killed",
+     "failing_tests": [
+      "tests.backup.test_ha_emqx_product.TargetProfileTests.test_the_conversion_reads_the_etc_dir_of_target_and_candidate",
+      "tests.backup.test_ha_emqx_product.TargetProfileTests.test_the_conversion_reads_the_etc_dir_of_target_and_candidate"
+     ]
+    },
+    {
+     "id": "M03",
+     "protection": "EMQX_ETC_DIR read from the candidate before the import",
+     "file": "backup-engine/woowbackup/ha_emqx.py",
+     "tests": [
+      "tests.backup.test_ha_emqx_product"
+     ],
+     "result": "killed",
+     "failing_tests": [
+      "tests.backup.test_ha_emqx_product.TargetProfileTests.test_the_conversion_reads_the_etc_dir_of_target_and_candidate",
+      "tests.backup.test_ha_emqx_product.TargetProfileTests.test_the_conversion_reads_the_etc_dir_of_target_and_candidate"
+     ]
+    },
+    {
+     "id": "M04",
+     "protection": "only /opt/emqx/etc is accepted as EMQX_ETC_DIR",
+     "file": "backup-engine/woowbackup/ha_emqx.py",
+     "tests": [
+      "tests.backup.test_ha_emqx_product"
+     ],
+     "result": "killed",
+     "failing_tests": [
+      "tests.backup.test_ha_emqx_product.TargetProfileTests.test_the_conversion_reads_the_etc_dir_of_target_and_candidate",
+      "tests.backup.test_ha_emqx_product.TargetProfileTests.test_the_conversion_reads_the_etc_dir_of_target_and_candidate",
+      "tests.backup.test_ha_emqx_product.TargetProfileTests.test_the_etc_dir_must_be_the_images"
+     ]
+    },
+    {
+     "id": "M05",
+     "protection": "authorization sources exactly [file] or [file, built_in_database]",
+     "file": "backup-engine/woowbackup/ha_emqx.py",
+     "tests": [
+      "tests.backup.test_ha_emqx_product",
+      "tests.backup.test_ha_emqx_builtin_authorizer_flow"
+     ],
+     "result": "killed",
+     "failing_tests": [
+      "tests.backup.test_ha_emqx_product.AclNeedsBuiltinTests.test_the_conversion_reads_this_devices_profile_before_anything_runs",
+      "tests.backup.test_ha_emqx_product.CheckPreflightTests.test_an_unsupported_target_is_the_apps_blocker_and_the_facts_stay",
+      "tests.backup.test_ha_emqx_product.TargetProfileTests.test_a_profile_outside_the_proven_ones_stops_before_the_snapshot",
+      "tests.backup.test_ha_emqx_product.TargetProfileTests.test_only_the_proven_combinations_are_supported"
+     ]
+    },
+    {
+     "id": "M06",
+     "protection": "target template kept through the ACL switch only on the proven etc dir",
+     "file": "backup-engine/woowbackup/ha_emqx_acl_preservation.py",
+     "tests": [
+      "tests.backup.test_ha_emqx_product",
+      "tests.backup.test_ha_emqx_acl_imported_default_path"
+     ],
+     "result": "killed",
+     "failing_tests": [
+      "tests.backup.test_ha_emqx_product.TemplatePathTests.test_disabled_intermediate_keeps_the_target_template_only_on_the_proven_etc_dir",
+      "tests.backup.test_ha_emqx_acl_imported_default_path.ImportedDefaultAclPathTests.test_original_target_does_not_get_relative_or_template_waiver"
+     ]
+    },
+    {
+     "id": "M07",
+     "protection": "a stopped broker is named",
+     "file": "backup-engine/woowbackup/ha_emqx.py",
+     "tests": [
+      "tests.backup.test_ha_emqx_product"
+     ],
+     "result": "killed",
+     "failing_tests": [
+      "tests.backup.test_ha_emqx_product.AclNeedsBuiltinTests.test_the_conversion_reads_this_devices_profile_before_anything_runs",
+      "tests.backup.test_ha_emqx_product.CheckPreflightTests.test_a_stopped_target_is_named_in_the_check",
+      "tests.backup.test_ha_emqx_product.TargetProfileTests.test_a_stopped_target_is_named"
+     ]
+    },
+    {
+     "id": "M08",
+     "protection": "decision C: acl_blocker refuses HA's ACL rows on a target without the built-in database",
+     "file": "backup-engine/woowbackup/ha_emqx.py",
+     "tests": [
+      "tests.backup.test_ha_emqx_product"
+     ],
+     "result": "killed",
+     "failing_tests": [
+      "tests.backup.test_ha_emqx_product.AclNeedsBuiltinTests.test_a_file_only_target_refuses_has_acl_rows_at_the_check",
+      "tests.backup.test_ha_emqx_product.AclNeedsBuiltinTests.test_a_file_only_target_stops_the_conversion_before_any_candidate",
+      "tests.backup.test_ha_emqx_product.AclNeedsBuiltinTests.test_the_rule"
+     ]
+    },
+    {
+     "id": "M09",
+     "protection": "an unsupported target is the check's blocker",
+     "file": "backup-engine/woowbackup/ha_emqx.py",
+     "tests": [
+      "tests.backup.test_ha_emqx_product"
+     ],
+     "result": "killed",
+     "failing_tests": [
+      "tests.backup.test_ha_emqx_product.CheckPreflightTests.test_a_stopped_target_is_named_in_the_check",
+      "tests.backup.test_ha_emqx_product.CheckPreflightTests.test_an_unsupported_target_is_the_apps_blocker_and_the_facts_stay"
+     ]
+    },
+    {
+     "id": "M10",
+     "protection": "the conversion records the readback",
+     "file": "backup-engine/woowbackup/ha_emqx.py",
+     "tests": [
+      "tests.backup.test_ha_emqx_product"
+     ],
+     "result": "killed",
+     "failing_tests": [
+      "tests.backup.test_ha_emqx_product.AclNeedsBuiltinTests.test_a_backup_without_acl_rows_needs_no_builtin_source",
+      "tests.backup.test_ha_emqx_product.ConvertReadbackTests.test_the_public_conversion_carries_the_readback_into_the_app_section",
+      "tests.backup.test_ha_emqx_product.DashboardChangedTargetTests.test_the_conversion_compares_and_records_boot_forms",
+      "tests.backup.test_ha_emqx_product.SchedulerTests.test_the_candidate_runs_with_this_devices_schedulers"
+     ]
+    },
+    {
+     "id": "M11",
+     "protection": "the readback goes into the converted backup's app section",
+     "file": "backup-engine/woowbackup/haimport.py",
+     "tests": [
+      "tests.backup.test_ha_emqx_product"
+     ],
+     "result": "killed",
+     "failing_tests": [
+      "tests.backup.test_ha_emqx_product.AclNeedsBuiltinTests.test_a_backup_without_acl_rows_needs_no_builtin_source",
+      "tests.backup.test_ha_emqx_product.ConvertReadbackTests.test_the_public_conversion_carries_the_readback_into_the_app_section",
+      "tests.backup.test_ha_emqx_product.DashboardChangedTargetTests.test_the_conversion_compares_and_records_boot_forms",
+      "tests.backup.test_ha_emqx_product.SchedulerTests.test_the_candidate_runs_with_this_devices_schedulers"
+     ]
+    },
+    {
+     "id": "M12",
+     "protection": "the archive accepts a readback only of its own app and kind",
+     "file": "backup-engine/woowbackup/archive.py",
+     "tests": [
+      "tests.backup.test_ha_emqx_product"
+     ],
+     "result": "killed",
+     "failing_tests": [
+      "tests.backup.test_ha_emqx_product.ManifestFormatTests.test_the_archive_accepts_exactly_the_readback_shape",
+      "tests.backup.test_ha_emqx_product.ManifestFormatTests.test_the_archive_accepts_exactly_the_readback_shape"
+     ]
+    },
+    {
+     "id": "M13",
+     "protection": "an unknown readback refuses the restore in its preflight",
+     "file": "backup-engine/woowbackup/flows.py",
+     "tests": [
+      "tests.backup.test_ha_emqx_product"
+     ],
+     "result": "killed",
+     "failing_tests": [
+      "tests.backup.test_ha_emqx_product.RestoreReadbackTests.test_an_unknown_readback_refuses_before_anything_changes"
+     ]
+    },
+    {
+     "id": "M14",
+     "protection": "the restore compares the readback after the units started",
+     "file": "backup-engine/woowbackup/flows.py",
+     "tests": [
+      "tests.backup.test_ha_emqx_product"
+     ],
+     "result": "killed",
+     "failing_tests": [
+      "tests.backup.test_ha_emqx_product.RestoreReadbackTests.test_a_difference_rolls_the_restore_back",
+      "tests.backup.test_ha_emqx_product.RestoreReadbackTests.test_the_readback_runs_after_the_health_checks"
+     ]
+    },
+    {
+     "id": "M15",
+     "protection": "every configuration root is compared",
+     "file": "backup-engine/woowbackup/ha_emqx.py",
+     "tests": [
+      "tests.backup.test_ha_emqx_product"
+     ],
+     "result": "killed",
+     "failing_tests": [
+      "tests.backup.test_ha_emqx_product.ReadbackTests.test_the_record_and_its_comparison_name_what_differs",
+      "tests.backup.test_ha_emqx_product.ReadbackTests.test_the_record_and_its_comparison_name_what_differs",
+      "tests.backup.test_ha_emqx_product.ReadbackTests.test_the_record_and_its_comparison_name_what_differs",
+      "tests.backup.test_ha_emqx_product.ReadbackTests.test_the_record_and_its_comparison_name_what_differs"
+     ]
+    },
+    {
+     "id": "M16",
+     "protection": "every administrator table is compared",
+     "file": "backup-engine/woowbackup/ha_emqx.py",
+     "tests": [
+      "tests.backup.test_ha_emqx_product"
+     ],
+     "result": "killed",
+     "failing_tests": [
+      "tests.backup.test_ha_emqx_product.ReadbackTests.test_the_record_and_its_comparison_name_what_differs",
+      "tests.backup.test_ha_emqx_product.ReadbackTests.test_verify_restored_waits_for_the_broker_then_compares_everything"
+     ]
+    },
+    {
+     "id": "M17",
+     "protection": "a readback difference fails the restore",
+     "file": "backup-engine/woowbackup/ha_emqx.py",
+     "tests": [
+      "tests.backup.test_ha_emqx_product"
+     ],
+     "result": "killed",
+     "failing_tests": [
+      "tests.backup.test_ha_emqx_product.ReadbackTests.test_the_restored_broker_is_compared_in_its_boot_form",
+      "tests.backup.test_ha_emqx_product.ReadbackTests.test_verify_restored_waits_for_the_broker_then_compares_everything"
+     ]
+    },
+    {
+     "id": "M18",
+     "protection": "the readback waits until the restored broker is started",
+     "file": "backup-engine/woowbackup/ha_emqx.py",
+     "tests": [
+      "tests.backup.test_ha_emqx_product"
+     ],
+     "result": "killed",
+     "failing_tests": [
+      "tests.backup.test_ha_emqx_product.ReadbackTests.test_a_broker_that_never_starts_or_an_unknown_record_fails",
+      "tests.backup.test_ha_emqx_product.ReadbackTests.test_verify_restored_waits_for_the_broker_then_compares_everything"
+     ]
+    },
+    {
+     "id": "M19",
+     "protection": "the table receipt must list exactly the administrator tables",
+     "file": "backup-engine/woowbackup/ha_emqx.py",
+     "tests": [
+      "tests.backup.test_ha_emqx_product"
+     ],
+     "result": "killed",
+     "failing_tests": [
+      "tests.backup.test_ha_emqx_product.ReadbackTests.test_the_receipt_answer_is_parsed_strictly",
+      "tests.backup.test_ha_emqx_product.ReadbackTests.test_the_receipt_answer_is_parsed_strictly"
+     ]
+    },
+    {
+     "id": "M20",
+     "protection": "verify_import refuses an unknown kind before the importer",
+     "file": "backup-engine/woowbackup/haimport.py",
+     "tests": [
+      "tests.backup.test_ha_emqx_product"
+     ],
+     "result": "killed",
+     "failing_tests": [
+      "tests.backup.test_ha_emqx_product.ManifestFormatTests.test_verify_import_dispatches_only_a_known_kind_to_its_importer"
+     ]
+    },
+    {
+     "id": "M22",
+     "protection": "every table holds HA's rows (at most plus the seed)",
+     "file": "backup-engine/woowbackup/ha_emqx.py",
+     "tests": [
+      "tests.backup.test_ha_emqx"
+     ],
+     "result": "killed",
+     "failing_tests": [
+      "tests.backup.test_ha_emqx.ConvertTests.test_lost_rows_stop_the_conversion",
+      "tests.backup.test_ha_emqx.ParseTests.test_eval_answers"
+     ]
+    },
+    {
+     "id": "M23",
+     "protection": "no anonymous login after the import",
+     "file": "backup-engine/woowbackup/ha_emqx.py",
+     "tests": [
+      "tests.backup.test_ha_emqx"
+     ],
+     "result": "killed",
+     "failing_tests": [
+      "tests.backup.test_ha_emqx.ConvertTests.test_an_import_that_would_open_anonymous_login_is_refused"
+     ]
+    },
+    {
+     "id": "M24",
+     "protection": "configuration and override unchanged during the snapshot",
+     "file": "backup-engine/woowbackup/ha_emqx.py",
+     "tests": [
+      "tests.backup.test_ha_emqx_candidate_flow"
+     ],
+     "result": "killed",
+     "failing_tests": [
+      "tests.backup.test_ha_emqx_candidate_flow.CandidateFlowTests.test_absence_does_not_skip_explicit_cluster_reference_or_moving_state",
+      "tests.backup.test_ha_emqx_candidate_flow.CandidateFlowTests.test_absence_does_not_skip_explicit_cluster_reference_or_moving_state",
+      "tests.backup.test_ha_emqx_candidate_flow.CandidateFlowTests.test_actual_entry_preserves_known_mount_config_when_override_is_absent",
+      "tests.backup.test_ha_emqx_candidate_flow.CandidateFlowTests.test_changed_live_config_stops_before_candidate_start"
+     ]
+    },
+    {
+     "id": "M25",
+     "protection": "image TLS files unchanged after the import",
+     "file": "backup-engine/woowbackup/ha_emqx.py",
+     "tests": [
+      "tests.backup.test_ha_emqx_operational"
+     ],
+     "result": "killed",
+     "failing_tests": [
+      "tests.backup.test_ha_emqx_operational.OperationalTests.test_import_changed_tls_refused_at_readback"
+     ]
+    },
+    {
+     "id": "M26",
+     "protection": "HA's ACL rows proven unchanged through the authorization switch",
+     "file": "backup-engine/woowbackup/ha_emqx.py",
+     "tests": [
+      "tests.backup.test_ha_emqx_acl_preservation"
+     ],
+     "result": "killed",
+     "failing_tests": [
+      "tests.backup.test_ha_emqx_acl_preservation.CandidateAclRemovalTests.test_entry_disables_then_removes_and_preserves_all_rows",
+      "tests.backup.test_ha_emqx_acl_preservation.CandidateAclRemovalTests.test_same_count_changes_row_loss_config_changes_and_failures_refuse",
+      "tests.backup.test_ha_emqx_acl_preservation.CandidateAclRemovalTests.test_same_count_changes_row_loss_config_changes_and_failures_refuse",
+      "tests.backup.test_ha_emqx_acl_preservation.CandidateAclRemovalTests.test_same_count_changes_row_loss_config_changes_and_failures_refuse"
+     ]
+    },
+    {
+     "id": "M27",
+     "protection": "the hot-backup hint stays",
+     "file": "backup-engine/woowbackup/ha_emqx.py",
+     "tests": [
+      "tests.backup.test_ha_emqx",
+      "tests.backup.test_ha_emqx_preservation_guard"
+     ],
+     "result": "killed",
+     "failing_tests": [
+      "tests.backup.test_ha_emqx.CheckTests.test_a_hot_backup_is_tried_and_named",
+      "tests.backup.test_ha_emqx_preservation_guard.PreservationGuardTests.test_the_real_blockers_still_come"
+     ]
+    },
+    {
+     "id": "M28",
+     "protection": "HA's default Dashboard account is a blocker",
+     "file": "backup-engine/woowbackup/ha_emqx.py",
+     "tests": [
+      "tests.backup.test_ha_emqx"
+     ],
+     "result": "killed",
+     "failing_tests": [
+      "tests.backup.test_ha_emqx.CheckTests.test_blockers"
+     ]
+    },
+    {
+     "id": "M29",
+     "protection": "versions must match (EMQX 5.8.9)",
+     "file": "backup-engine/woowbackup/ha_emqx.py",
+     "tests": [
+      "tests.backup.test_ha_emqx",
+      "tests.backup.test_ha_emqx_preservation_guard"
+     ],
+     "result": "killed",
+     "failing_tests": [
+      "tests.backup.test_ha_emqx.CheckTests.test_blockers",
+      "tests.backup.test_ha_emqx.CheckTests.test_blockers",
+      "tests.backup.test_ha_emqx_preservation_guard.PreservationGuardTests.test_the_real_blockers_still_come"
+     ]
+    },
+    {
+     "id": "M30",
+     "protection": "this device's bootstrap file stays attached",
+     "file": "backup-engine/woowbackup/ha_emqx.py",
+     "tests": [
+      "tests.backup.test_ha_emqx_bootstrap_flow"
+     ],
+     "result": "killed",
+     "failing_tests": [
+      "tests.backup.test_ha_emqx_bootstrap_flow.BootstrapFlowTests.test_ha_import_restores_target_bootstrap_before_restart",
+      "tests.backup.test_ha_emqx_bootstrap_flow.BootstrapFlowTests.test_plain_bootstrap_keeps_source_password_algorithm"
+     ]
+    },
+    {
+     "id": "M31",
+     "protection": "decision C: the check reports the ACL blocker",
+     "file": "backup-engine/woowbackup/ha_emqx.py",
+     "tests": [
+      "tests.backup.test_ha_emqx_product"
+     ],
+     "result": "killed",
+     "failing_tests": [
+      "tests.backup.test_ha_emqx_product.AclNeedsBuiltinTests.test_a_file_only_target_refuses_has_acl_rows_at_the_check"
+     ]
+    },
+    {
+     "id": "M32",
+     "protection": "decision C: the conversion stops right after HA's rows are counted",
+     "file": "backup-engine/woowbackup/ha_emqx.py",
+     "tests": [
+      "tests.backup.test_ha_emqx_product"
+     ],
+     "result": "killed",
+     "failing_tests": [
+      "tests.backup.test_ha_emqx_product.AclNeedsBuiltinTests.test_a_file_only_target_stops_the_conversion_before_any_candidate"
+     ]
+    },
+    {
+     "id": "M33",
+     "protection": "decision C: the public conversion hands this device's profile to the build",
+     "file": "backup-engine/woowbackup/ha_emqx.py",
+     "tests": [
+      "tests.backup.test_ha_emqx_product"
+     ],
+     "result": "killed",
+     "failing_tests": [
+      "tests.backup.test_ha_emqx_product.AclNeedsBuiltinTests.test_a_file_only_target_stops_the_conversion_before_any_candidate",
+      "tests.backup.test_ha_emqx_product.AclNeedsBuiltinTests.test_the_finished_candidate_must_hold_the_profile_read_before_the_build"
+     ]
+    },
+    {
+     "id": "M34",
+     "protection": "decision C: a built-in database source takes HA's rows",
+     "file": "backup-engine/woowbackup/ha_emqx.py",
+     "tests": [
+      "tests.backup.test_ha_emqx_product"
+     ],
+     "result": "killed",
+     "failing_tests": [
+      "tests.backup.test_ha_emqx_product.AclNeedsBuiltinTests.test_a_target_with_the_builtin_source_takes_has_rows",
+      "tests.backup.test_ha_emqx_product.AclNeedsBuiltinTests.test_the_finished_candidate_must_hold_the_profile_read_before_the_build",
+      "tests.backup.test_ha_emqx_product.AclNeedsBuiltinTests.test_the_rule",
+      "tests.backup.test_ha_emqx_product.CheckPreflightTests.test_the_vendor_template_target_of_the_product_package_is_supported"
+     ]
+    },
+    {
+     "id": "M35",
+     "protection": "decision C: a backup without ACL rows is not refused",
+     "file": "backup-engine/woowbackup/ha_emqx.py",
+     "tests": [
+      "tests.backup.test_ha_emqx_product"
+     ],
+     "result": "killed",
+     "failing_tests": [
+      "tests.backup.test_ha_emqx_product.AclNeedsBuiltinTests.test_a_backup_without_acl_rows_needs_no_builtin_source",
+      "tests.backup.test_ha_emqx_product.AclNeedsBuiltinTests.test_the_rule",
+      "tests.backup.test_ha_emqx_product.AclNeedsBuiltinTests.test_the_rule",
+      "tests.backup.test_ha_emqx_product.AclNeedsBuiltinTests.test_the_rule"
+     ]
+    },
+    {
+     "id": "M36",
+     "protection": "the finished candidate must hold the profile read before the build",
+     "file": "backup-engine/woowbackup/ha_emqx.py",
+     "tests": [
+      "tests.backup.test_ha_emqx_product"
+     ],
+     "result": "killed",
+     "failing_tests": [
+      "tests.backup.test_ha_emqx_product.AclNeedsBuiltinTests.test_the_finished_candidate_must_hold_the_profile_read_before_the_build"
+     ]
+    },
+    {
+     "id": "M37",
+     "protection": "the conversion reads this device's profile before anything runs",
+     "file": "backup-engine/woowbackup/ha_emqx.py",
+     "tests": [
+      "tests.backup.test_ha_emqx_product"
+     ],
+     "result": "killed",
+     "failing_tests": [
+      "tests.backup.test_ha_emqx_product.AclNeedsBuiltinTests.test_a_file_only_target_stops_the_conversion_before_any_candidate",
+      "tests.backup.test_ha_emqx_product.AclNeedsBuiltinTests.test_the_conversion_reads_this_devices_profile_before_anything_runs",
+      "tests.backup.test_ha_emqx_product.AclNeedsBuiltinTests.test_the_finished_candidate_must_hold_the_profile_read_before_the_build"
+     ]
+    },
+    {
+     "id": "M38",
+     "protection": "SR-4: config roots are hashed after redaction",
+     "file": "backup-engine/woowbackup/ha_emqx.py",
+     "tests": [
+      "tests.backup.test_ha_emqx_product"
+     ],
+     "result": "killed",
+     "failing_tests": [
+      "tests.backup.test_ha_emqx_product.ReadbackTests.test_secret_values_never_enter_the_digests_but_everything_else_is_compared"
+     ]
+    },
+    {
+     "id": "M39",
+     "protection": "SR-4: every value below headers is redacted",
+     "file": "backup-engine/woowbackup/ha_emqx.py",
+     "tests": [
+      "tests.backup.test_ha_emqx_product"
+     ],
+     "result": "killed",
+     "failing_tests": [
+      "tests.backup.test_ha_emqx_product.ReadbackTests.test_secret_values_never_enter_the_digests_but_everything_else_is_compared"
+     ]
+    },
+    {
+     "id": "M40",
+     "protection": "SR-4: the user part of a URL is redacted",
+     "file": "backup-engine/woowbackup/ha_emqx.py",
+     "tests": [
+      "tests.backup.test_ha_emqx_product"
+     ],
+     "result": "killed",
+     "failing_tests": [
+      "tests.backup.test_ha_emqx_product.ReadbackTests.test_secret_values_never_enter_the_digests_but_everything_else_is_compared"
+     ]
+    },
+    {
+     "id": "M41",
+     "protection": "SR-4: cookie is a secret word",
+     "file": "backup-engine/woowbackup/ha_emqx.py",
+     "tests": [
+      "tests.backup.test_ha_emqx_product"
+     ],
+     "result": "killed",
+     "failing_tests": [
+      "tests.backup.test_ha_emqx_product.ReadbackTests.test_secret_values_never_enter_the_digests_but_everything_else_is_compared"
+     ]
+    },
+    {
+     "id": "M42",
+     "protection": "SR-1 (merged 75aad7a): HA's broker pins EMQX_PLUGINS__STATES=[] through the environment",
+     "file": "backup-engine/woowbackup/ha_emqx.py",
+     "tests": [
+      "tests.backup.test_ha_emqx_security_review"
+     ],
+     "result": "killed",
+     "failing_tests": [
+      "tests.backup.test_ha_emqx_security_review.PluginPinTests.test_check_pins_plugins_and_mounts_noexec",
+      "tests.backup.test_ha_emqx_security_review.PluginPinTests.test_conversion_mounts_the_transfer_volume_noexec"
+     ]
+    },
+    {
+     "id": "M43",
+     "protection": "SR-2 (merged 75aad7a): data-volume files of the target snapshot must be byte-identical",
+     "file": "backup-engine/woowbackup/ha_emqx.py",
+     "tests": [
+      "tests.backup.test_ha_emqx_security_review"
+     ],
+     "result": "killed",
+     "failing_tests": [
+      "tests.backup.test_ha_emqx_security_review.CaptureFlowDigestTests.test_a_rewritten_device_acl_refuses",
+      "tests.backup.test_ha_emqx_security_review.CaptureFlowDigestTests.test_untouched_files_pass_and_are_hashed_after_the_restore",
+      "tests.backup.test_ha_emqx_security_review.DataVolumeAclTests.test_an_import_that_keeps_the_device_acl_passes",
+      "tests.backup.test_ha_emqx_security_review.DataVolumeAclTests.test_an_import_that_rewrites_the_device_acl_is_refused"
+     ]
+    },
+    {
+     "id": "M44",
+     "protection": "SR-3 (merged 75aad7a): file:// secrets in HA's roots refuse the conversion",
+     "file": "backup-engine/woowbackup/ha_emqx.py",
+     "tests": [
+      "tests.backup.test_ha_emqx_security_review"
+     ],
+     "result": "killed",
+     "failing_tests": [
+      "tests.backup.test_ha_emqx_security_review.FileSecretTests.test_a_file_secret_in_migrated_settings_refuses"
+     ]
+    },
+    {
+     "id": "M45",
+     "protection": "SR-1: HA's broker pins the image's plugin folder through the environment",
+     "file": "backup-engine/woowbackup/ha_emqx.py",
+     "tests": [
+      "tests.backup.test_ha_emqx_security_review"
+     ],
+     "result": "killed",
+     "failing_tests": [
+      "tests.backup.test_ha_emqx_security_review.PluginPinTests.test_check_pins_plugins_and_mounts_noexec"
+     ]
+    },
+    {
+     "id": "M46",
+     "protection": "SR-1: HA's transfer volume (/work) is noexec,nosuid,nodev",
+     "file": "backup-engine/woowbackup/ha_emqx.py",
+     "tests": [
+      "tests.backup.test_ha_emqx_security_review"
+     ],
+     "result": "killed",
+     "failing_tests": [
+      "tests.backup.test_ha_emqx_security_review.PluginPinTests.test_conversion_mounts_the_transfer_volume_noexec"
+     ]
+    },
+    {
+     "id": "M47",
+     "protection": "SR-1: HA's log volume is noexec,nosuid,nodev",
+     "file": "backup-engine/woowbackup/ha_emqx.py",
+     "tests": [
+      "tests.backup.test_ha_emqx_security_review"
+     ],
+     "result": "killed",
+     "failing_tests": [
+      "tests.backup.test_ha_emqx_security_review.PluginPinTests.test_check_pins_plugins_and_mounts_noexec",
+      "tests.backup.test_ha_emqx_security_review.PluginPinTests.test_conversion_mounts_the_transfer_volume_noexec"
+     ]
+    },
+    {
+     "id": "M48",
+     "protection": "SR-1: HA's data volume (staged files) is noexec,nosuid,nodev",
+     "file": "backup-engine/woowbackup/ha_emqx.py",
+     "tests": [
+      "tests.backup.test_ha_emqx_security_review",
+      "tests.backup.test_ha_emqx"
+     ],
+     "result": "killed",
+     "failing_tests": [
+      "tests.backup.test_ha_emqx_security_review.PluginPinTests.test_check_pins_plugins_and_mounts_noexec",
+      "tests.backup.test_ha_emqx_security_review.PluginPinTests.test_conversion_mounts_the_transfer_volume_noexec",
+      "tests.backup.test_ha_emqx.CheckTests.test_a_clean_backup"
+     ]
+    },
+    {
+     "id": "M49",
+     "protection": "SR-6 (merged 7b173af): migrated rules calling jq refuse the conversion",
+     "file": "backup-engine/woowbackup/ha_emqx.py",
+     "tests": [
+      "tests.backup.test_ha_emqx_security_review"
+     ],
+     "result": "killed",
+     "failing_tests": [
+      "tests.backup.test_ha_emqx_security_review.JqRuleTests.test_a_migrated_jq_rule_refuses"
+     ]
+    },
+    {
+     "id": "M50",
+     "protection": "SR-7 (merged 7b173af): migrated credential receivers refuse the conversion",
+     "file": "backup-engine/woowbackup/ha_emqx.py",
+     "tests": [
+      "tests.backup.test_ha_emqx_security_review"
+     ],
+     "result": "killed",
+     "failing_tests": [
+      "tests.backup.test_ha_emqx_security_review.CredentialReceiverTests.test_an_enabled_exhook_refuses",
+      "tests.backup.test_ha_emqx_security_review.CredentialReceiverTests.test_an_http_authenticator_before_the_builtin_database_refuses"
+     ]
+    },
+    {
+     "id": "M51",
+     "protection": "the candidate is compared with this device's BOOT form after it booted",
+     "file": "backup-engine/woowbackup/ha_emqx.py",
+     "tests": [
+      "tests.backup.test_ha_emqx_product"
+     ],
+     "result": "killed",
+     "failing_tests": [
+      "tests.backup.test_ha_emqx_product.DashboardChangedTargetTests.test_a_candidate_that_differs_is_refused_naming_the_roots"
+     ]
+    },
+    {
+     "id": "M52",
+     "protection": "the readback records the candidate's boot form",
+     "file": "backup-engine/woowbackup/ha_emqx.py",
+     "tests": [
+      "tests.backup.test_ha_emqx_product"
+     ],
+     "result": "SURVIVED",
+     "failing_tests": []
+    },
+    {
+     "id": "M53",
+     "protection": "verify_restored compares the restored broker's boot form",
+     "file": "backup-engine/woowbackup/ha_emqx.py",
+     "tests": [
+      "tests.backup.test_ha_emqx_product"
+     ],
+     "result": "killed",
+     "failing_tests": [
+      "tests.backup.test_ha_emqx_product.ReadbackTests.test_the_restored_broker_is_compared_in_its_boot_form"
+     ]
+    },
+    {
+     "id": "M54",
+     "protection": "the public path reads this device's boot form for the candidate check",
+     "file": "backup-engine/woowbackup/ha_emqx.py",
+     "tests": [
+      "tests.backup.test_ha_emqx_product"
+     ],
+     "result": "killed",
+     "failing_tests": [
+      "tests.backup.test_ha_emqx_product.DashboardChangedTargetTests.test_a_candidate_that_differs_is_refused_naming_the_roots",
+      "tests.backup.test_ha_emqx_product.DashboardChangedTargetTests.test_the_conversion_compares_and_records_boot_forms",
+      "tests.backup.test_ha_emqx_product.DashboardChangedTargetTests.test_the_loaded_settings_must_equal_this_devices_boot_form"
+     ]
+    },
+    {
+     "id": "M55",
+     "protection": "the candidate runs with this device's EnvironmentFile= settings (podman reads the files)",
+     "file": "backup-engine/woowbackup/ha_emqx.py",
+     "tests": [
+      "tests.backup.test_ha_emqx_product"
+     ],
+     "result": "killed",
+     "failing_tests": [
+      "tests.backup.test_ha_emqx_product.ConvertReadbackTests.test_the_public_conversion_carries_the_readback_into_the_app_section"
+     ]
+    },
+    {
+     "id": "M56",
+     "protection": "every checked EnvironmentFile= path is handed to podman for the candidate",
+     "file": "backup-engine/woowbackup/ha_emqx.py",
+     "tests": [
+      "tests.backup.test_ha_emqx_security_review2",
+      "tests.backup.test_ha_emqx_product"
+     ],
+     "result": "killed",
+     "failing_tests": [
+      "tests.backup.test_ha_emqx_security_review2.EnvFileConversionTests.test_env_file_values_never_reach_a_command_line",
+      "tests.backup.test_ha_emqx_security_review2.EnvFileLinesTests.test_a_final_carriage_return_is_dropped_like_podman",
+      "tests.backup.test_ha_emqx_security_review2.EnvFileLinesTests.test_one_podman_line_is_one_line",
+      "tests.backup.test_ha_emqx_security_review2.EnvFileLinesTests.test_one_podman_line_is_one_line"
+     ]
+    },
+    {
+     "id": "M57",
+     "protection": "an EnvironmentFile value that disagrees with Environment= refuses",
+     "file": "backup-engine/woowbackup/ha_emqx.py",
+     "tests": [
+      "tests.backup.test_ha_emqx_security_review2",
+      "tests.backup.test_ha_emqx_product"
+     ],
+     "result": "killed",
+     "failing_tests": [
+      "tests.backup.test_ha_emqx_security_review2.EnvFileLinesTests.test_only_blanks_and_tabs_are_trimmed",
+      "tests.backup.test_ha_emqx_security_review2.EnvFileLinesTests.test_only_blanks_and_tabs_are_trimmed",
+      "tests.backup.test_ha_emqx_security_review2.EnvFileLinesTests.test_only_blanks_and_tabs_are_trimmed",
+      "tests.backup.test_ha_emqx_product.EnvironmentFileTests.test_what_cannot_be_reproduced_exactly_refuses_naming_the_file"
+     ]
+    },
+    {
+     "id": "M58",
+     "protection": "only plain env-file values are reproduced (quotes, backslash, $, blanks refuse)",
+     "file": "backup-engine/woowbackup/ha_emqx.py",
+     "tests": [
+      "tests.backup.test_ha_emqx_product"
+     ],
+     "result": "killed",
+     "failing_tests": [
+      "tests.backup.test_ha_emqx_product.EnvironmentFileTests.test_what_cannot_be_reproduced_exactly_refuses_naming_the_file",
+      "tests.backup.test_ha_emqx_product.EnvironmentFileTests.test_what_cannot_be_reproduced_exactly_refuses_naming_the_file",
+      "tests.backup.test_ha_emqx_product.EnvironmentFileTests.test_what_cannot_be_reproduced_exactly_refuses_naming_the_file",
+      "tests.backup.test_ha_emqx_product.EnvironmentFileTests.test_what_cannot_be_reproduced_exactly_refuses_naming_the_file"
+     ]
+    },
+    {
+     "id": "M59",
+     "protection": "the candidate starts with this device's scheduler counts (ERL_AFLAGS +S)",
+     "file": "backup-engine/woowbackup/ha_emqx.py",
+     "tests": [
+      "tests.backup.test_ha_emqx_product"
+     ],
+     "result": "killed",
+     "failing_tests": [
+      "tests.backup.test_ha_emqx_product.AclNeedsBuiltinTests.test_the_finished_candidate_must_hold_the_profile_read_before_the_build",
+      "tests.backup.test_ha_emqx_product.ConvertReadbackTests.test_a_readback_that_cannot_be_read_stops_the_conversion",
+      "tests.backup.test_ha_emqx_product.DashboardChangedTargetTests.test_a_candidate_that_differs_is_refused_naming_the_roots",
+      "tests.backup.test_ha_emqx_product.AclNeedsBuiltinTests.test_a_backup_without_acl_rows_needs_no_builtin_source"
+     ]
+    },
+    {
+     "id": "M60",
+     "protection": "a candidate whose scheduler counts differ from this device's is refused",
+     "file": "backup-engine/woowbackup/ha_emqx.py",
+     "tests": [
+      "tests.backup.test_ha_emqx_product"
+     ],
+     "result": "killed",
+     "failing_tests": [
+      "tests.backup.test_ha_emqx_product.SchedulerTests.test_a_candidate_with_other_schedulers_is_refused",
+      "tests.backup.test_ha_emqx_product.SchedulerTests.test_the_candidate_runs_with_this_devices_schedulers"
+     ]
+    },
+    {
+     "id": "M61",
+     "protection": "this device's scheduler counts are read before the candidate is built",
+     "file": "backup-engine/woowbackup/ha_emqx.py",
+     "tests": [
+      "tests.backup.test_ha_emqx_product"
+     ],
+     "result": "killed",
+     "failing_tests": [
+      "tests.backup.test_ha_emqx_product.SchedulerTests.test_a_candidate_with_other_schedulers_is_refused",
+      "tests.backup.test_ha_emqx_product.SchedulerTests.test_a_device_without_a_scheduler_answer_is_refused_before_any_candidate",
+      "tests.backup.test_ha_emqx_product.SchedulerTests.test_the_candidate_runs_with_this_devices_schedulers"
+     ]
+    },
+    {
+     "id": "M62",
+     "protection": "a scheduler answer outside 1 <= online <= total <= 1024 refuses",
+     "file": "backup-engine/woowbackup/ha_emqx.py",
+     "tests": [
+      "tests.backup.test_ha_emqx_product"
+     ],
+     "result": "killed",
+     "failing_tests": [
+      "tests.backup.test_ha_emqx_product.SchedulerTests.test_a_device_answer_that_is_not_exact_refuses",
+      "tests.backup.test_ha_emqx_product.SchedulerTests.test_a_device_answer_that_is_not_exact_refuses"
+     ]
+    },
+    {
+     "id": "M63",
+     "protection": "HA's throwaway broker mounts this job's volume at the image VOLUME path /opt/emqx/data",
+     "file": "backup-engine/woowbackup/ha_emqx.py",
+     "tests": [
+      "tests.backup.test_ha_emqx_product"
+     ],
+     "result": "killed",
+     "failing_tests": [
+      "tests.backup.test_ha_emqx_product.ImageVolumeTests.test_every_throwaway_broker_covers_the_image_volume_paths",
+      "tests.backup.test_ha_emqx_product.ImageVolumeTests.test_every_throwaway_broker_covers_the_image_volume_paths",
+      "tests.backup.test_ha_emqx_product.ImageVolumeTests.test_every_throwaway_broker_covers_the_image_volume_paths"
+     ]
+    },
+    {
+     "id": "M64",
+     "protection": "the image-path volume of HA's broker is noexec,nosuid,nodev (SR-1)",
+     "file": "backup-engine/woowbackup/ha_emqx.py",
+     "tests": [
+      "tests.backup.test_ha_emqx_product",
+      "tests.backup.test_ha_emqx_security_review"
+     ],
+     "result": "killed",
+     "failing_tests": [
+      "tests.backup.test_ha_emqx_product.ImageVolumeTests.test_every_throwaway_broker_covers_the_image_volume_paths",
+      "tests.backup.test_ha_emqx_security_review.PluginPinTests.test_check_pins_plugins_and_mounts_noexec",
+      "tests.backup.test_ha_emqx_security_review.PluginPinTests.test_conversion_mounts_the_transfer_volume_noexec"
+     ]
+    },
+    {
+     "id": "M65",
+     "protection": "the flags go into ERL_AFLAGS (prepended), not ERL_FLAGS (appended after bin/emqx's -emqx_data_dir)",
+     "file": "backup-engine/woowbackup/ha_emqx.py",
+     "tests": [
+      "tests.backup.test_ha_emqx_product"
+     ],
+     "result": "killed",
+     "failing_tests": [
+      "tests.backup.test_ha_emqx_product.AclNeedsBuiltinTests.test_the_finished_candidate_must_hold_the_profile_read_before_the_build",
+      "tests.backup.test_ha_emqx_product.ConvertReadbackTests.test_a_readback_that_cannot_be_read_stops_the_conversion",
+      "tests.backup.test_ha_emqx_product.DashboardChangedTargetTests.test_a_candidate_that_differs_is_refused_naming_the_roots",
+      "tests.backup.test_ha_emqx_product.AclNeedsBuiltinTests.test_a_backup_without_acl_rows_needs_no_builtin_source"
+     ]
+    },
+    {
+     "id": "M66",
+     "protection": "a root loaded back must equal this device's boot form (conf load fills defaults)",
+     "file": "backup-engine/woowbackup/ha_emqx.py",
+     "tests": [
+      "tests.backup.test_ha_emqx_product"
+     ],
+     "result": "killed",
+     "failing_tests": [
+      "tests.backup.test_ha_emqx_product.DashboardChangedTargetTests.test_the_conversion_compares_and_records_boot_forms",
+      "tests.backup.test_ha_emqx_product.DashboardChangedTargetTests.test_the_loaded_settings_must_equal_this_devices_boot_form"
+     ]
+    },
+    {
+     "id": "M67",
+     "protection": "after the settings came back every preserved root (and the bootstrap authentication) is compared",
+     "file": "backup-engine/woowbackup/ha_emqx.py",
+     "tests": [
+      "tests.backup.test_ha_emqx_product",
+      "tests.backup.test_ha_emqx_candidate_flow",
+      "tests.backup.test_ha_emqx"
+     ],
+     "result": "killed",
+     "failing_tests": [
+      "tests.backup.test_ha_emqx_product.DashboardChangedTargetTests.test_the_loaded_settings_must_equal_this_devices_boot_form",
+      "tests.backup.test_ha_emqx_candidate_flow.CandidateFlowTests.test_failed_restore_is_rejected",
+      "tests.backup.test_ha_emqx.ConvertTests.test_the_strict_settings_must_come_back"
+     ]
+    },
+    {
+     "id": "M68",
+     "protection": "the public path hands this device's boot form to the settings restore",
+     "file": "backup-engine/woowbackup/ha_emqx.py",
+     "tests": [
+      "tests.backup.test_ha_emqx_product"
+     ],
+     "result": "killed",
+     "failing_tests": [
+      "tests.backup.test_ha_emqx_product.DashboardChangedTargetTests.test_the_conversion_compares_and_records_boot_forms",
+      "tests.backup.test_ha_emqx_product.DashboardChangedTargetTests.test_the_loaded_settings_must_equal_this_devices_boot_form"
+     ]
+    },
+    {
+     "id": "SRM1",
+     "protection": "SR-8: EnvironmentFile values never go back on --env",
+     "file": "backup-engine/woowbackup/ha_emqx.py",
+     "tests": [
+      "tests.backup.test_ha_emqx_security_review2",
+      "tests.backup.test_ha_emqx_product"
+     ],
+     "result": "killed",
+     "failing_tests": [
+      "tests.backup.test_ha_emqx_security_review2.EnvFileConversionTests.test_env_file_values_never_reach_a_command_line",
+      "tests.backup.test_ha_emqx_security_review2.EnvFileLinesTests.test_one_podman_line_is_one_line",
+      "tests.backup.test_ha_emqx_security_review2.EnvFileLinesTests.test_one_podman_line_is_one_line",
+      "tests.backup.test_ha_emqx_security_review2.EnvFileLinesTests.test_one_podman_line_is_one_line"
+     ]
+    },
+    {
+     "id": "SRM2",
+     "protection": "SR-9: lines are split as podman does (not str.splitlines)",
+     "file": "backup-engine/woowbackup/ha_emqx.py",
+     "tests": [
+      "tests.backup.test_ha_emqx_security_review2",
+      "tests.backup.test_ha_emqx_product"
+     ],
+     "result": "killed",
+     "failing_tests": [
+      "tests.backup.test_ha_emqx_security_review2.EnvFileLinesTests.test_one_podman_line_is_one_line",
+      "tests.backup.test_ha_emqx_security_review2.EnvFileLinesTests.test_one_podman_line_is_one_line",
+      "tests.backup.test_ha_emqx_security_review2.EnvFileLinesTests.test_one_podman_line_is_one_line",
+      "tests.backup.test_ha_emqx_security_review2.EnvFileLinesTests.test_one_podman_line_is_one_line"
+     ]
+    },
+    {
+     "id": "SRM3",
+     "protection": "SR-9: only blanks and tabs are trimmed",
+     "file": "backup-engine/woowbackup/ha_emqx.py",
+     "tests": [
+      "tests.backup.test_ha_emqx_security_review2",
+      "tests.backup.test_ha_emqx_product"
+     ],
+     "result": "killed",
+     "failing_tests": [
+      "tests.backup.test_ha_emqx_security_review2.EnvFileLinesTests.test_only_blanks_and_tabs_are_trimmed",
+      "tests.backup.test_ha_emqx_security_review2.EnvFileLinesTests.test_only_blanks_and_tabs_are_trimmed"
+     ]
+    },
+    {
+     "id": "SRM4",
+     "protection": "env_files paths are checked in tempctr.run_argv",
+     "file": "backup-engine/woowbackup/tempctr.py",
+     "tests": [
+      "tests.backup.test_ha_emqx_security_review2",
+      "tests.backup.test_ha_emqx_product"
+     ],
+     "result": "killed",
+     "failing_tests": [
+      "tests.backup.test_ha_emqx_security_review2.EnvFilesArgvTests.test_a_path_that_is_not_plain_and_absolute_refuses",
+      "tests.backup.test_ha_emqx_security_review2.EnvFilesArgvTests.test_a_path_that_is_not_plain_and_absolute_refuses",
+      "tests.backup.test_ha_emqx_security_review2.EnvFilesArgvTests.test_a_path_that_is_not_plain_and_absolute_refuses",
+      "tests.backup.test_ha_emqx_security_review2.EnvFilesArgvTests.test_a_path_that_is_not_plain_and_absolute_refuses"
+     ]
+    },
+    {
+     "id": "SRM5",
+     "protection": "tempctr passes --env-file",
+     "file": "backup-engine/woowbackup/tempctr.py",
+     "tests": [
+      "tests.backup.test_ha_emqx_security_review2",
+      "tests.backup.test_ha_emqx_product"
+     ],
+     "result": "killed",
+     "failing_tests": [
+      "tests.backup.test_ha_emqx_security_review2.EnvFileConversionTests.test_env_file_values_never_reach_a_command_line",
+      "tests.backup.test_ha_emqx_product.ConvertReadbackTests.test_the_public_conversion_carries_the_readback_into_the_app_section",
+      "tests.backup.test_ha_emqx_security_review2.EnvFilesArgvTests.test_env_files_become_env_file_flags"
+     ]
+    },
+    {
+     "id": "SRM6",
+     "protection": "target_broker passes this device's env files",
+     "file": "backup-engine/woowbackup/ha_emqx.py",
+     "tests": [
+      "tests.backup.test_ha_emqx_security_review2",
+      "tests.backup.test_ha_emqx_product"
+     ],
+     "result": "killed",
+     "failing_tests": [
+      "tests.backup.test_ha_emqx_security_review2.EnvFileConversionTests.test_env_file_values_never_reach_a_command_line",
+      "tests.backup.test_ha_emqx_product.ConvertReadbackTests.test_the_public_conversion_carries_the_readback_into_the_app_section"
+     ]
+    },
+    {
+     "id": "SRM7",
+     "protection": "SR-9: a final CR is dropped like podman",
+     "file": "backup-engine/woowbackup/ha_emqx.py",
+     "tests": [
+      "tests.backup.test_ha_emqx_security_review2",
+      "tests.backup.test_ha_emqx_product"
+     ],
+     "result": "killed",
+     "failing_tests": [
+      "tests.backup.test_ha_emqx_security_review2.EnvFileLinesTests.test_a_final_carriage_return_is_dropped_like_podman"
+     ]
+    },
+    {
+     "id": "SRM8",
+     "protection": "two lines of the files that disagree about one key refuse",
+     "file": "backup-engine/woowbackup/ha_emqx.py",
+     "tests": [
+      "tests.backup.test_ha_emqx_security_review2",
+      "tests.backup.test_ha_emqx_product"
+     ],
+     "result": "killed",
+     "failing_tests": [
+      "tests.backup.test_ha_emqx_security_review2.EnvFileLinesTests.test_a_final_carriage_return_is_dropped_like_podman"
+     ]
+    },
+    {
+     "id": "TC1",
+     "protection": "a tar's top-directory entry is applied to the volume after podman volume import",
+     "file": "backup-engine/woowbackup/tempctr.py",
+     "tests": [
+      "tests.backup.test_ha_tempctr"
+     ],
+     "result": "killed",
+     "failing_tests": [
+      "tests.backup.test_ha_tempctr.VolumeRootTests.test_a_bad_mountpoint_refuses",
+      "tests.backup.test_ha_tempctr.VolumeRootTests.test_the_top_entry_is_applied_after_the_import"
+     ]
+    },
+    {
+     "id": "TC2",
+     "protection": "the owner of the top-directory entry is applied",
+     "file": "backup-engine/woowbackup/tempctr.py",
+     "tests": [
+      "tests.backup.test_ha_tempctr"
+     ],
+     "result": "killed",
+     "failing_tests": [
+      "tests.backup.test_ha_tempctr.VolumeRootTests.test_the_top_entry_is_applied_after_the_import"
+     ]
+    },
+    {
+     "id": "TC3",
+     "protection": "the mode of the top-directory entry is applied",
+     "file": "backup-engine/woowbackup/tempctr.py",
+     "tests": [
+      "tests.backup.test_ha_tempctr"
+     ],
+     "result": "killed",
+     "failing_tests": [
+      "tests.backup.test_ha_tempctr.VolumeRootTests.test_the_top_entry_is_applied_after_the_import"
+     ]
+    },
+    {
+     "id": "TC4",
+     "protection": "an unreadable volume mountpoint refuses",
+     "file": "backup-engine/woowbackup/tempctr.py",
+     "tests": [
+      "tests.backup.test_ha_tempctr"
+     ],
+     "result": "killed",
+     "failing_tests": [
+      "tests.backup.test_ha_tempctr.VolumeRootTests.test_a_bad_mountpoint_refuses"
+     ]
+    },
+    {
+     "id": "TC5",
+     "protection": "only a tar whose first member is '.' gets its entry applied",
+     "file": "backup-engine/woowbackup/tempctr.py",
+     "tests": [
+      "tests.backup.test_ha_tempctr"
+     ],
+     "result": "killed",
+     "failing_tests": [
+      "tests.backup.test_ha_tempctr.VolumeRootTests.test_tar_root_reads_the_top_entry_behind_a_pax_header",
+      "tests.backup.test_ha_tempctr.VolumeRootTests.test_no_top_entry_changes_nothing"
+     ]
+    },
+    {
+     "id": "TC6",
+     "protection": "a top-directory entry with a negative uid/gid is not applied",
+     "file": "backup-engine/woowbackup/tempctr.py",
+     "tests": [
+      "tests.backup.test_ha_tempctr"
+     ],
+     "result": "SURVIVED",
+     "failing_tests": []
+    }
+   ]
+  },
+  {
+   "tree": "7e530cf (engine unchanged)",
+   "note": "M52 and TC6 again with the two new unit tests",
+   "mutations": 2,
+   "killed": 2,
+   "not_killed": [],
+   "results": [
+    {
+     "id": "M52",
+     "protection": "the readback records the candidate's boot form",
+     "file": "backup-engine/woowbackup/ha_emqx.py",
+     "tests": [
+      "tests.backup.test_ha_emqx_product"
+     ],
+     "result": "killed",
+     "failing_tests": [
+      "tests.backup.test_ha_emqx_product.DashboardChangedTargetTests.test_the_readback_records_the_boot_form_of_roots_the_import_changed"
+     ]
+    },
+    {
+     "id": "TC6",
+     "protection": "a top-directory entry with a negative uid/gid is not applied",
+     "file": "backup-engine/woowbackup/tempctr.py",
+     "tests": [
+      "tests.backup.test_ha_tempctr"
+     ],
+     "result": "killed",
+     "failing_tests": [
+      "tests.backup.test_ha_tempctr.VolumeRootTests.test_a_negative_owner_is_never_applied",
+      "tests.backup.test_ha_tempctr.VolumeRootTests.test_a_negative_owner_is_never_applied"
+     ]
+    }
+   ]
+  },
+  {
+   "tree": "a3a0479 (health fix, its own branch)",
+   "note": "H1-H7: catalog-suggest /readyz mapping and note",
+   "mutations": 7,
+   "killed": 7,
+   "not_killed": [],
+   "results": [
+    {
+     "id": "H1",
+     "protection": "the draft replaces a container-only health path",
+     "file": "backup-engine/woowbackup/suggest.py",
+     "tests": [
+      "tests.backup.test_suggest"
+     ],
+     "result": "killed",
+     "failing_tests": [
+      "tests.backup.test_suggest.InstalledEntryTests.test_emqx_health_asks_the_dashboard_not_the_container_only_readyz"
+     ]
+    },
+    {
+     "id": "H2",
+     "protection": "the draft of an installed entry replaces it too",
+     "file": "backup-engine/woowbackup/suggest.py",
+     "tests": [
+      "tests.backup.test_suggest"
+     ],
+     "result": "killed",
+     "failing_tests": [
+      "tests.backup.test_suggest.InstalledEntryTests.test_installed_emqx_draft_replaces_a_readyz_check_that_expects_200"
+     ]
+    },
+    {
+     "id": "H3",
+     "protection": "the replacement proves the broker (not nginx's own /healthz)",
+     "file": "backup-engine/woowbackup/suggest.py",
+     "tests": [
+      "tests.backup.test_suggest"
+     ],
+     "result": "killed",
+     "failing_tests": [
+      "tests.backup.test_suggest.InstalledEntryTests.test_emqx_health_asks_the_dashboard_not_the_container_only_readyz",
+      "tests.backup.test_suggest.InstalledEntryTests.test_installed_emqx_draft_replaces_a_readyz_check_that_expects_200",
+      "tests.backup.test_suggest.InstalledEntryTests.test_replace_health_paths_leaves_every_other_check_alone",
+      "tests.backup.test_suggest.InstalledEntryTests.test_replace_health_paths_leaves_every_other_check_alone"
+     ]
+    },
+    {
+     "id": "H4",
+     "protection": "a check adapted to another status is left alone",
+     "file": "backup-engine/woowbackup/suggest.py",
+     "tests": [
+      "tests.backup.test_suggest"
+     ],
+     "result": "killed",
+     "failing_tests": [
+      "tests.backup.test_suggest.InstalledEntryTests.test_replace_health_paths_leaves_every_other_check_alone"
+     ]
+    },
+    {
+     "id": "H5",
+     "protection": "no second check of the same URL",
+     "file": "backup-engine/woowbackup/suggest.py",
+     "tests": [
+      "tests.backup.test_suggest"
+     ],
+     "result": "killed",
+     "failing_tests": [
+      "tests.backup.test_suggest.InstalledEntryTests.test_replace_health_paths_leaves_every_other_check_alone"
+     ]
+    },
+    {
+     "id": "H6",
+     "protection": "only the listed app is touched",
+     "file": "backup-engine/woowbackup/suggest.py",
+     "tests": [
+      "tests.backup.test_suggest"
+     ],
+     "result": "killed",
+     "failing_tests": [
+      "tests.backup.test_suggest.InstalledEntryTests.test_replace_health_paths_leaves_every_other_check_alone"
+     ]
+    },
+    {
+     "id": "H7",
+     "protection": "the replacement of an installed entry is named in a note",
+     "file": "backup-engine/woowbackup/suggest.py",
+     "tests": [
+      "tests.backup.test_suggest"
+     ],
+     "result": "killed",
+     "failing_tests": [
+      "tests.backup.test_suggest.InstalledEntryTests.test_installed_emqx_draft_replaces_a_readyz_check_that_expects_200"
+     ]
+    }
+   ]
+  }
+ ],
+ "mutation_method": "each protection removed in a copy of the tree; the named modules run under the guarded runner with a fresh bytecode cache; the baseline must be green; the original bytes are restored and checked (SHA-256)",
+ "full_suites": [
+  {
+   "tree": "e08f8a1 (detached worktree; backup, ha118, page suite)",
+   "summary_lines": [
+    "backup head e08f8a1 dirty=0 start 08:46:24",
+    "backup rc=1 tests=1543 failures=7 errors=5 skipped=1 expected_failures=0 unexpected_successes=0 blocked=6 shim_hits=0 run_native=denied elapsed=238",
+    "ha118 rc=0 tests=1 failures=0 errors=0 skipped=0 expected_failures=0 unexpected_successes=0 blocked=0 shim_hits=0 run_native=denied elapsed=9",
+    "backup end 08:50:35 head-after e08f8a1 dirty=0",
+    "ui head e08f8a1 dirty=0 start 08:50:35",
+    "ui rc=0 # tests 100 # pass 100 # fail 0 ",
+    "ui end 08:57:10 head-after e08f8a1 dirty=0"
+   ],
+   "not_ok_test_ids": [
+    "tests.backup.test_ha_omnigent.CheckTests.test_a_clean_backup",
+    "tests.backup.test_ha_omnigent.CheckTests.test_a_same_named_account_is_a_warning",
+    "tests.backup.test_ha_omnigent.CheckTests.test_versions",
+    "tests.backup.test_ha_omnigent.ConvertTests.test_a_dump_with_code_is_refused_before_the_restore",
+    "tests.backup.test_ha_omnigent.ConvertTests.test_a_same_named_ha_account_wins",
+    "tests.backup.test_ha_omnigent.ConvertTests.test_counts_that_differ_stop_the_conversion",
+    "tests.backup.test_ha_omnigent.ConvertTests.test_the_whole_conversion_in_test_mode",
+    "tests.backup.test_litellm_lab_runner.LabRunnerTests.test_abort_is_forwarded",
+    "tests.backup.test_litellm_lab_runner.LabRunnerTests.test_exact_reader_capture_boundary",
+    "tests.backup.test_litellm_lab_runner.LabRunnerTests.test_input_and_file_output_are_forwarded_and_bounded",
+    "tests.backup.test_litellm_lab_runner.LabRunnerTests.test_real_child_overflow_is_bounded_and_sanitized",
+    "tests.backup.test_litellm_lab_runner.LabRunnerTests.test_stderr_and_failures_are_not_returned"
+   ]
+  }
+ ]
+}
