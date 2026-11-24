@@ -1,0 +1,195 @@
+{
+ "kind": "nextcloud-team-folders",
+ "date": "2026-11-24T12:30:13+0800",
+ "device": "woowbk-dev-e",
+ "image": "localhost/woow-nextcloud:35.0.1-office2",
+ "source_commit": "5f7ee7dd80b2ec0f9203b7024c97ba57e221e3cd",
+ "tracked_changes": true,
+ "app_archive_sha256": "6a5d42927963fb500843328aea9c4df2656f7104e3e70ee8aabb2653e4834872",
+ "stopped": null,
+ "facts": {
+  "ha": {
+   "folder_id": 1,
+   "nextcloud": "35.0.1.1",
+   "groupfolders": "23.0.2",
+   "client": {
+    "put": 201,
+    "share": 200,
+    "list": " plan.txt ",
+    "propfind": 207,
+    "fileid": "18",
+    "get": 200,
+    "sha256": "3b34067844f85452d436ff48f0d049f40c3d64c50f9a6386a63d3fd303b53f13",
+    "bob": 200,
+    "bob_sha256": "3b34067844f85452d436ff48f0d049f40c3d64c50f9a6386a63d3fd303b53f13",
+    "bob_wrong": 401
+   },
+   "storages": [
+    [
+     1,
+     "local::/work/ha/share/nextcloud/"
+    ],
+    [
+     2,
+     "home::admin"
+    ],
+    [
+     3,
+     "local::/work/ha/share/nextcloud/__groupfolders/1/"
+    ],
+    [
+     4,
+     "home::bob"
+    ]
+   ],
+   "folder": [
+    1,
+    3,
+    14,
+    "{\"separate-storage\":true}"
+   ],
+   "client_again": {
+    "put": 0,
+    "share": 0,
+    "list": " plan.txt ",
+    "propfind": 207,
+    "fileid": "18",
+    "get": 200,
+    "sha256": "3b34067844f85452d436ff48f0d049f40c3d64c50f9a6386a63d3fd303b53f13",
+    "bob": 200,
+    "bob_sha256": "3b34067844f85452d436ff48f0d049f40c3d64c50f9a6386a63d3fd303b53f13",
+    "bob_wrong": 401
+   }
+  },
+  "control": {
+   "renamed": 1,
+   "storages_before_use": [
+    [
+     1,
+     "local::/work/control/data/"
+    ],
+    [
+     2,
+     "home::admin"
+    ],
+    [
+     3,
+     "local::/work/ha/share/nextcloud/__groupfolders/1/"
+    ],
+    [
+     4,
+     "home::bob"
+    ]
+   ],
+   "client": {
+    "put": 0,
+    "share": 0,
+    "list": " ",
+    "propfind": 500,
+    "fileid": "",
+    "get": 500,
+    "sha256": "e62cdca480cc28f36e74b789daa1088115216b74d05b61755af7449568ea7a64",
+    "bob": 503,
+    "bob_sha256": "dc73a70c8c57e4ac750276e4a92393ed85534eb04398f49e9dcede8fae66c7d5",
+    "bob_wrong": 401
+   },
+   "storages_after_use": [
+    [
+     1,
+     "local::/work/control/data/"
+    ],
+    [
+     2,
+     "home::admin"
+    ],
+    [
+     3,
+     "local::/work/ha/share/nextcloud/__groupfolders/1/"
+    ],
+    [
+     4,
+     "home::bob"
+    ],
+    [
+     5,
+     "local::/work/control/data/__groupfolders/1/"
+    ]
+   ],
+   "folder": [
+    1,
+    3,
+    14,
+    "{\"separate-storage\":true}"
+   ]
+  },
+  "import": {
+   "renamed": 2,
+   "storages_before_use": [
+    [
+     1,
+     "local::/work/import/data/"
+    ],
+    [
+     2,
+     "home::admin"
+    ],
+    [
+     3,
+     "local::/work/import/data/__groupfolders/1/"
+    ],
+    [
+     4,
+     "home::bob"
+    ]
+   ],
+   "client": {
+    "put": 0,
+    "share": 0,
+    "list": " plan.txt ",
+    "propfind": 207,
+    "fileid": "18",
+    "get": 200,
+    "sha256": "3b34067844f85452d436ff48f0d049f40c3d64c50f9a6386a63d3fd303b53f13",
+    "bob": 200,
+    "bob_sha256": "3b34067844f85452d436ff48f0d049f40c3d64c50f9a6386a63d3fd303b53f13",
+    "bob_wrong": 401
+   },
+   "storages_after_use": [
+    [
+     1,
+     "local::/work/import/data/"
+    ],
+    [
+     2,
+     "home::admin"
+    ],
+    [
+     3,
+     "local::/work/import/data/__groupfolders/1/"
+    ],
+    [
+     4,
+     "home::bob"
+    ]
+   ],
+   "folder": [
+    1,
+    3,
+    14,
+    "{\"separate-storage\":true}"
+   ]
+  }
+ },
+ "checks": {
+  "dev-e isolation before: true none {}": "PASS",
+  "nothing of this run is left in dev-e": "PASS",
+  "dev-e isolation after: true none {}": "PASS",
+  "the app gives a new Team folder a local storage of its own below the data directory, named by its number in the folder row": "PASS",
+  "HA side: the file is written, shared and read by both users": "PASS",
+  "import: the Team folder's file keeps its number and content, the listing and the share are the same": "PASS",
+  "import: no storage row is added by using it, every row below the data directory names this device's path": "PASS",
+  "control (only the root row renamed): the file gets another number or the share is lost": "PASS"
+ },
+ "elapsed_seconds": 83.9,
+ "acceptance": "not acceptance (real Nextcloud 35.0.1 and real Team folders app, synthetic data, SQLite; the importer function storage_moves itself)"
+}
