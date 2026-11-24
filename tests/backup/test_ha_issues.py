@@ -7,6 +7,7 @@ import errno
 import hashlib
 import io
 import json
+import random
 import unittest
 from pathlib import Path
 
@@ -169,6 +170,36 @@ class ListTests(unittest.TestCase):
         self.assertEqual(int(''.join(ch for ch in rows[-1]['message'] if ch.isdigit())) + len(rows) - 1, len(issues))
         only = [Issue('emqx.rules', 'confirm', '確' * 300, [f'x{i}']) for i in range(45)]
         self.assertEqual(len(haissues.views(APP, only)), 45, 'too many lines to confirm: all of them are sent anyway')
+
+    def test_whatever_the_list_looks_like(self):
+        """A fixed number of random lists: every stop and confirm is sent with its whole key, every name is counted, the
+        limits hold (they give way only to the stops and confirms themselves)."""
+        rng = random.Random(20261125)
+        for _round in range(60):
+            issues = []
+            for number in range(rng.choice((0, 1, 5, 39, 40, 41, 70))):
+                level = rng.choice(haissues.LEVELS)
+                names = [''.join(rng.choice('a字𠀀\u202e\n') for _ in range(rng.choice((1, 30, 130))))
+                         for _ in range(rng.choice((0, 1, 19, 20, 21, 60)))]
+                issues.append(Issue('emqx.rules', level, rng.choice(('短', '長' * 300, '𠀀' * 400)), names,
+                                    action='做' * rng.choice((0, 200)), database=rng.choice((None, f'db{number}'))))
+            rows = haissues.views(APP, issues)
+            for level in ('stop', 'confirm'):
+                self.assertEqual(sum(row['level'] == level for row in rows), sum(i.level == level for i in issues))
+            self.assertEqual(sorted(row['key'] for row in rows if 'key' in row),
+                             sorted(i.key(APP) for i in issues if i.level == 'confirm'))
+            more = [row for row in rows if row['id'] == 'shared.more-lines']
+            dropped = int(''.join(ch for ch in more[0]['message'] if ch.isdigit())) if more else 0
+            self.assertEqual(len(rows) - len(more) + dropped, len(issues))
+            kept = [row for row in rows if row['id'] != 'shared.more-lines']
+            for level in ('stop', 'confirm'):
+                self.assertEqual(sum(len(row['items']) + row['more'] for row in kept if row['level'] == level),
+                                 sum(i.count for i in issues if i.level == level), 'every name is counted')
+            must = [row for row in rows if row['level'] in ('stop', 'confirm')]
+            self.assertLessEqual(len(rows), max(haissues.MAX_ISSUES, len(must) + 1))
+            if any(row['level'] in ('auto', 'notice') for row in kept):
+                self.assertLessEqual(self.size(rows), haissues.MAX_BYTES)
+            self.assertFalse({'\u202e', '\n'} & set(''.join(name for row in rows for name in row['items'])))
 
     def test_small_lists_are_untouched(self):
         issues = [confirm(), Issue('emqx.version', 'notice', 'n')]
