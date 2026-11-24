@@ -32,8 +32,9 @@ session pinned, the superuser reads the catalogs only (the same SHAPE_SQL refusa
 or per-database setting) and the fix-ups and table reads run as that role, never as the superuser; fix-ups: the root
 storage id `local::<HA datadirectory>/` -> `local::<target datadirectory>/`, Office (richdocuments wopi_url, public_wopi_url, wopi_callback_url, wopi_allowlist,
 disable_certificate_verification) and core.backgroundjobs_mode exactly as the live database has them, HA's cached
-Collabora discovery (`appdata_<id>/richdocuments/remoteData`, files and rows) dropped so Office uses this device's
-Collabora; every count, owner, grant, extension and value is verified; PostgreSQL settings of the live cluster are
+Collabora discovery (`appdata_<id>/richdocuments/remoteData`, files and rows) replaced by this device's own (the app
+never fetches it on demand) and the hourly job that refreshes it made due at once, so Office uses this device's
+Collabora from the first minute; every count, owner, grant, extension and value is verified; PostgreSQL settings of the live cluster are
 carried; clean stop, `pg_controldata` "shut down". config.php = the LIVE config.php (URLs, trusted domains, database
 credentials, mail, caches, data directory) plus HA's `instanceid`, `passwordsalt`, `secret` (app data folder, ICrypto:
 app passwords, TOTP, encrypted app values) and HA's two-factor enforcement and app_install_overwrite (owner decision
@@ -106,6 +107,14 @@ SECRET_KEYS = ('secret', 'passwordsalt', 'dbpassword', 'mail_smtppassword')
 LIVE_APPCONFIG = (('richdocuments', 'wopi_url'), ('richdocuments', 'public_wopi_url'),
                   ('richdocuments', 'wopi_callback_url'), ('richdocuments', 'wopi_allowlist'),
                   ('richdocuments', 'disable_certificate_verification'), ('core', 'backgroundjobs_mode'))
+# richdocuments reads Collabora's discovery and capabilities only from its cache: Redis (empty after the import), else
+# these files of `appdata_<instanceid>/richdocuments/remoteData` (12.0.1 lib/Service/CachedRequestService.php get(): it
+# never fetches on demand; without them opening a document is an HTTP 500, share attempt 5 of 2026-11-24). An hourly
+# background job refreshes them (lib/Backgroundjobs/ObtainCapabilities.php:30,40-50).
+OFFICE_CACHE = ('capabilities', 'discovery')
+MAX_OFFICE_CACHE = 4 * 1024 * 1024
+OFFICE_JOB = 'OCA\\Richdocuments\\Backgroundjobs\\ObtainCapabilities'
+OFFICE_COMMAND = 'podman exec -u www-data {container} php occ richdocuments:activate-config'
 # Counted in HA's database and again after the restore (table -> key); optional tables only when they exist.
 COUNTED = (('oc_users', 'users'), ('oc_filecache', 'files'), ('oc_share', 'shares'), ('oc_authtoken', 'tokens'),
            ('oc_calendarobjects', 'calendar_objects'), ('oc_cards', 'contacts'), ('oc_storages', 'storages'),
@@ -834,6 +843,19 @@ def scan_datadir(stream, report, prefix, *, addon, instanceid=None, out=None, id
     return data
 
 
+def add_office_cache(out, instanceid, files, www):
+    """This device's cached Collabora answers as the Office app's cache of the converted data dir (HA's was left out;
+    Nextcloud finds files it has no row for and adds them: lib/private/Files/View.php getCacheEntry)."""
+    rel = ''
+    for part in (f'appdata_{instanceid}', 'richdocuments', 'remoteData') if files else ():
+        rel = f'{rel}/{part}' if rel else part
+        if out.name(rel) not in out.names:
+            out.add(rel, 'dir', mode=0o755, uid=www[0], gid=www[1], mtime=time.time())
+    for name, data in sorted(files.items()):
+        out.add(f'{rel}/{name}', 'file', mode=0o644, uid=www[0], gid=www[1], mtime=time.time(), size=len(data),
+                fileobj=io.BytesIO(data))
+
+
 # ====================================================================== the live target
 
 APP_ENV_KEYS = frozenset()  # nothing of the app container's environment is passed to a throwaway copy
@@ -950,6 +972,21 @@ def live_apps(work, app, live):
                     max_output=256 * 1024)
         found.append({name for name in out.decode('utf-8', 'replace').split('\n') if APP_ID_RE.fullmatch(name)})
     return found[0], found[1]
+
+
+def live_office_cache(work, app, live, config):
+    """{name: bytes}: what this device's Office app has cached of its Collabora (OFFICE_CACHE); {} when it has none."""
+    instance = config.get('instanceid')
+    if not (isinstance(instance, str) and INSTANCE_RE.fullmatch(instance)):
+        return {}
+    folder = f'/var/www/html/data/appdata_{instance}/richdocuments/remoteData'
+    files = {}
+    for name in OFFICE_CACHE:
+        data = _exec(work, app, live.app_container, ['sh', '-c', 'if [ -f "$1" ]; then cat "$1"; fi', 'sh',
+                                                     f'{folder}/{name}'], 'Office 設定', max_output=MAX_OFFICE_CACHE)
+        if data:
+            files[name] = data
+    return files
 
 
 def image_env(work, app, image, key):
@@ -1339,6 +1376,9 @@ def import_texts(data):
                          + SCAN_COMMAND.format(container=data.get('app_container') or 'nextcloud-app'))
     if not data.get('office'):
         reminders.append('HA 的 Nextcloud 沒有啟用 Office（richdocuments），需要的話請在這台 Nextcloud 的應用程式頁面啟用。')
+    elif len(data.get('office_cache') or []) < len(OFFICE_CACHE):
+        reminders.append('這台的 Office 還沒有取得 Collabora 的設定，匯入後第一次開文件前請先執行一次：'
+                         + OFFICE_COMMAND.format(container=data.get('app_container') or 'nextcloud-app'))
     return notes, reminders
 
 
@@ -1398,8 +1438,10 @@ def removed_sql(old_root, remote):
             f'WHERE id = {lit(old_root)}) AND (path = {lit(remote)} OR left(path, {len(remote) + 1}) = {lit(remote + "/")})')
 
 
-def fixup_sql(old_root, new_root, remote, live_rows):
-    """The conversion's changes inside the restored database (one transaction, as the tables' owner, pinned)."""
+def fixup_sql(old_root, new_root, remote, live_rows, *, jobs=False):
+    """The conversion's changes inside the restored database (one transaction, as the tables' owner, pinned). `jobs`:
+    the database has oc_jobs; the job that refreshes the Office app's cache is made due at once (the converted backup may
+    be restored later than the cache it carries was read)."""
     lit = ha_odoo.sql_literal
     keys = ', '.join(f'({lit(a)}, {lit(k)})' for a, k in LIVE_APPCONFIG)
     sql = [f'UPDATE public.oc_storages SET id = {lit(new_root)} WHERE id = {lit(old_root)};\n'
@@ -1412,6 +1454,9 @@ def fixup_sql(old_root, new_root, remote, live_rows):
         sql.append(f'DELETE FROM public.oc_filecache WHERE storage = (SELECT numeric_id FROM public.oc_storages WHERE '
                    f'id = {lit(new_root)}) AND (path = {lit(remote)} OR left(path, {len(remote) + 1}) = '
                    f'{lit(remote + "/")});\n')
+    if jobs:
+        sql.append('UPDATE public.oc_jobs SET last_run = 0, last_checked = 0, reserved_at = 0 WHERE class = '
+                   f'{lit(OFFICE_JOB)};\n')
     return ''.join(sql)
 
 
@@ -1540,7 +1585,8 @@ def build_cluster(work, app, tmp, target, dump, *, details, old_root, new_root, 
     if shape:
         raise BackupError('incompatible', MSG_SHAPE.format(kinds=hacommon.names(shape)))
     removed = owner.query_json(removed_sql(old_root, remote), live.db_name) if remote else 0
-    owner.script(fixup_sql(old_root, new_root, remote, db['appconfig']), live.db_name)
+    owner.script(fixup_sql(old_root, new_root, remote, db['appconfig'], jobs='oc_jobs' in details['tables']),
+                 live.db_name)
     expected = dict(details['counts'])
     expected['files'] = expected.get('files', 0) - int(removed or 0)
     doc = owner.query_json(data_verify_sql(new_root, old_root, details['tables']), live.db_name)
@@ -1715,6 +1761,8 @@ def convert(work, app, test_mode, out_dir):
         data_out.add(HTACCESS, 'file', mode=0o644, uid=www[0], gid=www[1], mtime=time.time(), size=len(DATA_HTACCESS),
                      fileobj=io.BytesIO(DATA_HTACCESS))
         data = datadir_pass(work, src, out=data_out, ids=www)
+        office_cache = live_office_cache(work, app, live, target.config) if isinstance(data, DataDir) else {}
+        add_office_cache(data_out, src.config['instanceid'], office_cache, www)
     finally:
         data_out.close()
     early = datadir_blockers(src.config, data, datadir_source(src.config.get('datadirectory')))
@@ -1790,5 +1838,6 @@ def convert(work, app, test_mode, out_dir):
             'policy': carried, 'counts': built['counts'], 'datadir_files': data.files, 'datadir_bytes': data.bytes,
             'mail': any(isinstance(k, str) and k.startswith('mail_') for k in src.config),
             'office': 'richdocuments' in (details.get('enabled') or []),
+            'office_cache': sorted(office_cache),
             'lists_differ': len(lists_differ(data, details)), 'app_container': live.app_container,
             'target_url': str(target.config.get('overwrite.cli.url') or '')[:200]}

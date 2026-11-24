@@ -128,8 +128,10 @@ CLEAN_SHAPE = {**{key: 0 for key, _label in nc.SHAPE_LABELS}, 'role_settings': 0
                             "'OCA\\WorkflowEngine\\Entity\\File'::character varying", 'false',
                             "NULL::character varying", 'NULL::timestamp without time zone',
                             "nextval('public.oc_accounts_data_id_seq'::regclass)"]}
-TABLES = ['oc_appconfig', 'oc_authtoken', 'oc_calendarobjects', 'oc_cards', 'oc_filecache', 'oc_mimetypes', 'oc_mounts',
-          'oc_share', 'oc_storages', 'oc_users']
+TABLES = ['oc_appconfig', 'oc_authtoken', 'oc_calendarobjects', 'oc_cards', 'oc_filecache', 'oc_jobs', 'oc_mimetypes',
+          'oc_mounts', 'oc_share', 'oc_storages', 'oc_users']
+# This device's Office cache (richdocuments reads Collabora's answers only from there).
+OFFICE_CACHE = {'discovery': b'<wopi-discovery>this device</wopi-discovery>', 'capabilities': b'{"productName": "here"}'}
 
 
 def lists(*files):
@@ -251,6 +253,8 @@ class World(fk.World):
         self.catalog = None
         self.shape = {'hapg': dict(CLEAN_SHAPE), 'nc-db': dict(CLEAN_SHAPE)}
         self.lists = HA_LISTS
+        self.tables = TABLES
+        self.office_cache = dict(OFFICE_CACHE)
         self.toc = b';\n; Archive\n201; 1259 16390 TABLE public oc_users nextcloud\n'
         self.sessions = []
         self.php = []
@@ -292,6 +296,10 @@ class World(fk.World):
     def exec(self, role, command, data, stdout):
         if role == 'nextcloud-app' and command[:1] == ['cat']:
             return Result(0, LIVE_CONFIG, b'')
+        if role == 'nextcloud-app' and command[:2] == ['sh', '-c']:
+            folder, _sep, name = command[-1].rpartition('/')
+            assert folder == '/var/www/html/data/appdata_oclive123456/richdocuments/remoteData', command
+            return Result(0, self.office_cache.get(name, b''), b'')
         if command[:1] == ['ls']:
             return Result(0, b'files\ndav\nsettings\n' if command[-1].endswith('/apps') else b'richdocuments\nliveonly\n',
                           b'')
@@ -309,7 +317,7 @@ class World(fk.World):
         if sql.startswith('SELECT coalesce(json_agg(json_build_array(datname'):
             return [['nextcloud', 1000, 'C.UTF-8', 'C.UTF-8']]
         if sql == nc.TABLES_SQL:
-            return TABLES
+            return self.tables
         if sql == nc.HA_SQL:
             return self.ha_details
         if sql == nc.SHAPE_SQL:
@@ -765,6 +773,52 @@ class ConvertTests(NextcloudCase):
         reminders = '\n'.join(row['reminders_by_app']['nextcloud'])
         for part in ('永久停用', 'http://127.0.0.1:18081', 'SMTP', 'Woow Nextcloud MCP Server'):
             self.assertIn(part, reminders)
+
+    def test_office_gets_this_devices_collabora_answers(self):
+        # The Office app never fetches Collabora's discovery on demand (CachedRequestService.php get()): without its two
+        # cached files every document is an HTTP 500 until an hourly job runs. HA's are replaced by this device's.
+        self.convert(self.upload_nextcloud(), ['nextcloud'])
+        folder = './appdata_ochaabcdef12/richdocuments/remoteData'
+        data = members(self.world.dirs[DIRS[3]])
+        self.assertEqual({n.rsplit('/', 1)[1]: d for n, (_m, d) in data.items() if n.startswith(folder + '/')},
+                         OFFICE_CACHE)
+        for name in (folder, folder + '/discovery'):
+            self.assertEqual((data[name][0].uid, data[name][0].gid), (33, 33), name)
+        self.assertEqual((data[folder][0].mode, data[folder + '/discovery'][0].mode), (0o755, 0o644))
+        self.assertIn('./appdata_ochaabcdef12/richdocuments', data)
+        with tarfile.open(fileobj=io.BytesIO(self.world.dirs[DIRS[3]])) as tar:
+            names = tar.getnames()
+        self.assertEqual(len(names), len(set(names)), 'nothing twice')
+        sql = '\n'.join(x['sql'] for x in self.world.sessions if x['pg_user'] == 'oc_admin')
+        self.assertIn("UPDATE public.oc_jobs SET last_run = 0, last_checked = 0, reserved_at = 0 WHERE class = "
+                      "'OCA\\Richdocuments\\Backgroundjobs\\ObtainCapabilities'", sql)
+
+    def test_office_cache_without_has_app_data_or_this_devices_answers(self):
+        bare = [{'name': 'nextcloud', 'type': 'dir'}, {'name': 'nextcloud/.ncdata', 'data': b'# Nextcloud data directory\n'},
+                {'name': 'nextcloud/admin/files/hello.txt', 'data': b'hello from HA'},
+                {'name': 'nextcloud/admin/files/中文.txt', 'data': '測試'.encode()}]
+        share = gzip.compress(hx.tar_bytes(bare), mtime=0)
+        self.world.tables = [t for t in TABLES if t != 'oc_jobs']
+        result = self.convert(self.upload_nextcloud(share=share), ['nextcloud'])
+        data = members(self.world.dirs[DIRS[3]])
+        for name in ('./appdata_ochaabcdef12', './appdata_ochaabcdef12/richdocuments',
+                     './appdata_ochaabcdef12/richdocuments/remoteData'):
+            self.assertTrue(data[name][0].isdir() and data[name][0].uid == 33, name)
+        self.assertNotIn('oc_jobs', '\n'.join(x['sql'] for x in self.world.sessions if x['role'] == 'nc-db'))
+        self.assertFalse(any('activate-config' in line for line in result['ha_import']['reminders_by_app']['nextcloud']))
+        for cache in ({}, {'capabilities': b'{}'}):
+            self.world.office_cache = cache
+            result = self.convert(self.upload_nextcloud(), ['nextcloud'])
+            data = members(self.world.dirs[DIRS[3]])
+            self.assertNotIn('./appdata_ochaabcdef12/richdocuments/remoteData/discovery', data)
+            lines = [line for line in result['ha_import']['reminders_by_app']['nextcloud'] if 'activate-config' in line]
+            self.assertEqual(len(lines), 1, cache)
+            self.assertIn('podman exec -u www-data nextcloud-app php occ richdocuments:activate-config', lines[0])
+        self.world.ha_details = dict(self.world.ha_details, enabled=['files'])
+        result = self.convert(self.upload_nextcloud(), ['nextcloud'])
+        lines = '\n'.join(result['ha_import']['reminders_by_app']['nextcloud'])
+        self.assertNotIn('activate-config', lines)
+        self.assertIn('沒有啟用 Office', lines)
 
     def test_the_protection_file_replaces_has_own(self):
         share = share_tar(extra=[{'name': 'nextcloud/.htaccess', 'data': b'Require all granted\n'}])
