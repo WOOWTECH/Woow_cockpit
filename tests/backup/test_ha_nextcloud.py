@@ -66,11 +66,11 @@ $CONFIG = array (
   'instanceid' => 'ochaabcdef12',
   'passwordsalt' => 'hasaltHAsalt+/=hasalt',
   'secret' => 'hasecretHAsecret/+hasecretHAsecret',
-  'trusted_domains' => array (0 => 'woowtech-nextcloud.woowtech.io', 1 => 'localhost'),
+  'trusted_domains' => array (0 => 'nextcloud.example.com', 1 => 'localhost'),
   'datadirectory' => '/share/nextcloud',
   'dbtype' => 'pgsql',
   'version' => '35.0.1.1',
-  'overwrite.cli.url' => 'https://woowtech-nextcloud.woowtech.io',
+  'overwrite.cli.url' => 'https://nextcloud.example.com',
   'dbname' => 'nextcloud',
   'dbhost' => '/run/postgresql',
   'dbport' => '',
@@ -385,10 +385,10 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual((config['installed'], config['maintenance_window_start']), (True, 1))
         self.assertEqual(nc.parse_config(nc.render_config(config)), config)
         ha = nc.parse_config(HA_CONFIG)
-        self.assertEqual((ha['trusted_domains'], ha['ratio']), ({0: 'woowtech-nextcloud.woowtech.io', 1: 'localhost'},
+        self.assertEqual((ha['trusted_domains'], ha['ratio']), ({0: 'nextcloud.example.com', 1: 'localhost'},
                                                                 nc.Float('1.5')))
         self.assertEqual(nc.parse_config(nc.render_config(ha)), ha)
-        self.assertEqual(nc.jsonable(ha)['trusted_domains'], ['woowtech-nextcloud.woowtech.io', 'localhost'])
+        self.assertEqual(nc.jsonable(ha)['trusted_domains'], ['nextcloud.example.com', 'localhost'])
         self.assertEqual(nc.parse_config(b"<?php\n$CONFIG = ['a' => \"x\" ];\n".replace(b'"x"', b"'it\\'s'")),
                          {'a': "it's"})
 
@@ -633,7 +633,7 @@ class CheckTests(NextcloudCase):
                           section['custom_apps'], section['office']),
                          (3, 300, '/share/nextcloud', True, ['notes', 'richdocuments'], True))
         self.assertEqual((section['ha_url'], section['target_url']),
-                         ('https://woowtech-nextcloud.woowtech.io', 'http://127.0.0.1:18081'))
+                         ('https://nextcloud.example.com', 'http://127.0.0.1:18081'))
         warnings = '\n'.join(result['warnings'])
         self.assertIn('gone_app', warnings)
         self.assertIn('PHP 8.5.11', warnings)
@@ -750,7 +750,7 @@ class CheckTests(NextcloudCase):
         warnings = nc.app_warnings({'richdocuments': {**nc.parse_info_xml(info), 'foreign': ['a\u2066b']}},
                                    nc_version_text='35.0.1.1', php_version='8.5.11')
         self.assertTrue(any('9.0?3' in w for w in warnings) and any('a?b' in w for w in warnings), warnings)
-        url = HA_CONFIG.replace(b"'https://woowtech-nextcloud.woowtech.io'", b"'https://h\n\xe2\x80\xaeio'")
+        url = HA_CONFIG.replace(b"'https://nextcloud.example.com'", b"'https://h\n\xe2\x80\xaeio'")
         media = HA_CONFIG.replace(b"'/share/nextcloud'", b"'/media/\n\xe2\x80\xaenc'")
         self.assertTrue(HA_CONFIG not in (url, media))
         link = {'name': 'nextcloud/admin/files/l\u202el', 'type': 'symlink', 'linkname': 'hello.txt'}
