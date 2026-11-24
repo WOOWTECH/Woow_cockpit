@@ -1,4 +1,4 @@
-"""The real batch 1 backups (made 2026-11-19 by Supervisor 2026.11.0 on the RPi5 (aarch64) and the showcase HA (x86-64);
+"""The real batch 1 backups (made 2026-11-19 by Supervisor 2026.11.0 on the RPi5 (aarch64) and an x86-64 HA;
 never committed): every member reads strictly, and each importer's pass and its sandboxed SQLite reads find what the
 add-ons were given (counts from the lab's evidence summary). No container runs here: the broker and database steps are
 covered by the fakes and the lab. Set WOOWBK_HA_B1_FIXTURES to the folder holding arm/ and x86/ and WOOWBK_HA_B1_KEY to
