@@ -1101,7 +1101,8 @@ Shapes:
   one line `shared.more-lines`); a `stop` or `confirm` is never left out and a key always covers every name. Every string is
   shown as text only.
 * `HaCheck` (part B; schema 2 since 2026-11-25): `schema(2), ha_backup_id, shared[HaIssue]` (what belongs to no single app,
-  keys under `_shared`: today `shared.device-key`, the device key the import will create), `apps[{app_id, slug, name (the
+  keys under `_shared`: `shared.device-key`, the device key the import will create, and what the apps' checks found that is no
+  single app's, each line once), `apps[{app_id, slug, name (the
   add-on's name), arch("amd64"|"aarch64"|"unknown"; only shown, HA-06),
   version (the add-on's), target_version (Odoo: the target image's `18.0-YYYYMMDD`; n8n: its `n8n --version`),
   importable(bool: no `stop` for the app and, with databases to choose from, at least one that can move), issues[HaIssue],

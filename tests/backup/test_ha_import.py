@@ -857,6 +857,21 @@ class IsolationTests(FlowCase):
         with self.assertRaises(BackupError):
             self.run_check(ha_id, ['odoo'], {})
 
+    def test_what_is_no_single_apps_is_told_once(self):
+        ha_id = self.upload(self.all_addons())
+
+        def check(work, app_):
+            work.sink(haissues.SHARED).confirm('legacy.warning', '匯入時會暫停', ['filebrowser'])
+            work.sink(haissues.SHARED).notice('legacy.warning', f'{app_.id} 的提醒')
+            return {'target_version': '1', app_.id: {}}
+
+        check_result = self.run_check(ha_id, ['odoo', 'n8n'], {'odoo': check, 'n8n': check})
+        line = Issue('legacy.warning', 'confirm', '匯入時會暫停', ['filebrowser'])
+        self.assertEqual([(i['level'], i['message'], i.get('key')) for i in check_result['shared']],
+                         [('confirm', '匯入時會暫停', line.key(haissues.SHARED)), ('notice', 'odoo 的提醒', None),
+                          ('notice', 'n8n 的提醒', None)])
+        self.assertTrue(all(row['importable'] and not row['issues'] for row in check_result['apps']))
+
     def test_a_key_is_created_by_the_import_and_the_check_says_so(self):
         ha_id = self.upload(self.all_addons())
         self.keys.device = None

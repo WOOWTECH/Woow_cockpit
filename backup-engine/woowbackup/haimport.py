@@ -318,8 +318,9 @@ class Work:
 
     # ---------------------------------------------------------- what is found
     def sink(self, app):
-        """The haissues.Sink of an app (its catalog entry or its id): the check collects, the conversion refuses what
-        the customer did not confirm. (Reads only what it has: lab harnesses bind this method to a stand-in.)"""
+        """The haissues.Sink of an app (its catalog entry or its id; haissues.SHARED in a check: what is no single app's):
+        the check collects, the conversion refuses what the customer did not confirm. (Reads only what it has: lab
+        harnesses bind this method to a stand-in.)"""
         app_id = app if isinstance(app, str) else app.id
         sinks = self.__dict__.setdefault('_sinks', {})
         if app_id not in sinks:
@@ -750,8 +751,15 @@ def shared_issues(ctx):
 
 
 def _check_view(work, results, shared):
+    """`shared` also holds what the apps' checks found that is no single app's (work.sink(haissues.SHARED)), once."""
+    lines, seen = [], set()
+    for issue in [*shared, *work.sink(haissues.SHARED).found]:
+        line = (issue.id, issue.level, issue.text, issue.key(haissues.SHARED))
+        if line not in seen:
+            seen.add(line)
+            lines.append(issue)
     return {'schema': CHECK_SCHEMA, 'ha_backup_id': work.record['id'],
-            'shared': haissues.views(haissues.SHARED, shared), 'apps': results}
+            'shared': haissues.views(haissues.SHARED, lines), 'apps': results}
 
 
 def _check_app(work, app_id, member, problem, index, count):
