@@ -45,7 +45,9 @@ class TrustedDataTests(unittest.TestCase):
     def test_the_old_public_guards_are_replaced_by_the_product_checks(self):
         self.assertFalse(hasattr(omni, 'SECURITY_BLOCKER'))
         self.assertFalse(hasattr(omni, 'restore_dump'))
-        self.assertEqual(omni.SIGNATURE_KEYS[:3], ('relations', 'columns', 'constraints'))
+        self.assertEqual(omni.SIGNATURE_KEYS, (   # every part of a schema that is compared (none may go missing)
+            'relations', 'columns', 'constraints', 'indexes', 'sequences', 'types', 'functions', 'triggers', 'rules',
+            'views', 'policies', 'extensions', 'schemas', 'other'))
 
     def test_candidate_uses_target_schema_and_restricted_loader(self):
         import tempfile
@@ -85,15 +87,19 @@ class TrustedDataTests(unittest.TestCase):
             def podman(self, *args, **kwargs):
                 if self.mode == 'timeout':
                     raise BackupError('job-failed', 'synthetic timeout')
-                kwargs['stdout'].write(b'invalid-json\nPGDMP')
-        for mode in ('timeout', 'invalid'):
+                kwargs['stdout'].write(self.mode + b'\nPGDMP')
+        # not JSON, JSON that is no list, no columns, a row that is no column
+        for mode in ('timeout', b'invalid-json', b'{"users": 1}', b'[]', b'[["users", "id"]]',
+                     b'[["users", "id", "text", true, "", ""], 1]'):
             with self.subTest(mode=mode), tempfile.TemporaryDirectory() as directory:
                 path = Path(directory) / 'schema'
                 work = SimpleNamespace(runner=lambda app: Runner(mode),
                     guard=SimpleNamespace(budget=lambda: 1024, check=lambda n: None), abort=lambda: None)
-                with self.assertRaises(BackupError):
+                with self.assertRaises(BackupError) as caught:
                     omni.capture_consistent_target_schema(work, SimpleNamespace(id='omnigent'),
                         SimpleNamespace(db_container='synthetic', db_user='postgres'), path, ['revision'])
+                self.assertEqual(caught.exception.message, 'synthetic timeout' if mode == 'timeout' else
+                                 '目標 Omnigent 的結構快照格式不正確。')
                 self.assertFalse(path.exists())
                 self.assertFalse(path.with_name(path.name + '.capture').exists())
 

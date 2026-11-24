@@ -3,12 +3,14 @@
 the lab proved is removed, one at a time, in a throwaway copy of the engine, and the Omnigent unit tests must FAIL
 for each (and pass on the unmodified copy). Nothing here touches Podman, a device or a secret.
 
-  python3 -I tests/backup/omnigent_product_mutations.py [--json OUT]
+  python3 -I tests/backup/omnigent_product_mutations.py [--json OUT] [--refusals]
 
 Prints one fixed line per mutation (`<id> <name>: caught|MISSED (<failures>/<tests>)`); exit 0 only when the
-baseline passes and every mutation is caught.
+baseline passes and every mutation is caught. `--refusals` checks instead of the list below what the module itself
+says no to: every `raise` and every blocker or problem it collects is removed, one at a time (`R<line>`).
 """
 import argparse
+import ast
 import hashlib
 import json
 import os
@@ -24,7 +26,7 @@ REPO = Path(__file__).resolve().parents[2]
 MODULE = 'woowbackup/ha_omnigent.py'
 TESTS = ('tests.backup.test_ha_omnigent', 'tests.backup.test_ha_omnigent_candidate',
          'tests.backup.test_ha_omnigent_trusted', 'tests.backup.test_b1_01_guard',
-         'tests.backup.test_ha_omnigent_install')
+         'tests.backup.test_ha_omnigent_server_volume', 'tests.backup.test_ha_omnigent_install')
 
 # (id, protection, exact text, replacement, occurrences[, module under backup-engine/; default MODULE])
 MUTATIONS = (
@@ -153,11 +155,35 @@ MUTATIONS = (
 )
 
 
-def run_tests(root):
+def refusals(source):
+    """MUTATIONS-like entries of every `raise` and every `blockers|problems|odd.append|insert(...)` of `source`, with
+    the whole mutated text as the last item."""
+    tree, raw = ast.parse(source), source.encode('utf-8')
+    starts = [0]
+    for line in raw.split(b'\n'):
+        starts.append(starts[-1] + len(line) + 1)
+    scopes = [node for node in ast.walk(tree) if isinstance(node, (ast.FunctionDef, ast.ClassDef))]
+    found = []
+    for node in ast.walk(tree):
+        call = node.value if isinstance(node, ast.Expr) and isinstance(node.value, ast.Call) else None
+        collects = (call is not None and isinstance(call.func, ast.Attribute) and call.func.attr in ('append', 'insert')
+                    and isinstance(call.func.value, ast.Name) and call.func.value.id in ('blockers', 'problems', 'odd'))
+        if not isinstance(node, ast.Raise) and not collects:
+            continue
+        start = starts[node.lineno - 1] + node.col_offset
+        end = starts[node.end_lineno - 1] + node.end_col_offset
+        inside = [s for s in scopes if s.lineno <= node.lineno <= s.end_lineno]
+        scope = min(inside, key=lambda s: s.end_lineno - s.lineno).name if inside else '<module>'
+        text = ' '.join(raw[start:end].decode('utf-8').split())
+        found.append((node.lineno, f'{scope}: {text[:100]}', (raw[:start] + b'pass' + raw[end:]).decode('utf-8')))
+    return [(f'R{line}', name, mutated) for line, name, mutated in sorted(found)]
+
+
+def run_tests(root, *options):
     """The Omnigent tests in the throwaway copy `root` (tests/backup/__init__.py puts ITS backup-engine first)."""
     env = dict(os.environ, PYTHONPATH=os.pathsep.join([str(root / 'backup-engine'), str(root)]),
                PYTHONDONTWRITEBYTECODE='1')
-    proc = subprocess.run([sys.executable, '-m', 'unittest', *TESTS], cwd=root, env=env, capture_output=True,
+    proc = subprocess.run([sys.executable, '-m', 'unittest', *options, *TESTS], cwd=root, env=env, capture_output=True,
                           timeout=1800)
     tail = proc.stderr.decode('utf-8', 'replace').strip().splitlines()
     ran = next((int(m.group(1)) for line in tail if (m := re.match(r'Ran (\d+) tests?', line))), 0)
@@ -169,6 +195,7 @@ def run_tests(root):
 def main(argv):
     parser = argparse.ArgumentParser()
     parser.add_argument('--json')
+    parser.add_argument('--refusals', action='store_true')
     args = parser.parse_args(argv)
     modules = sorted({MODULE} | {m[5] for m in MUTATIONS if len(m) > 5})
     sources = {module: (REPO / 'backup-engine' / module).read_text(encoding='utf-8') for module in modules}
@@ -189,16 +216,21 @@ def main(argv):
         rc, ran, failures = run_tests(root)
         baseline = {'returncode': rc, 'tests': ran, 'failures': failures}
         print(f'baseline: {"pass" if rc == 0 else "FAIL"} ({failures}/{ran})', flush=True)
-        for ident, name, old, new, count, *where in MUTATIONS:
-            module = where[0] if where else MODULE
+        for ident, name, *change in refusals(source) if args.refusals else MUTATIONS:
+            module = change[3] if len(change) > 3 else MODULE
             original = sources[module]
-            if original.count(old) != count:
-                results.append({'id': ident, 'protection': name, 'module': module, 'applied': False})
-                print(f'{ident} {name}: NOT APPLIED (pattern count {original.count(old)})', flush=True)
-                continue
-            (engine / module).write_text(original.replace(old, new), encoding='utf-8')
+            if args.refusals:
+                mutated, options = change[0], ('--failfast',)   # the first failing test says it all
+            else:
+                old, new, count = change[:3]
+                mutated, options = original.replace(old, new), ()
+                if original.count(old) != count:
+                    results.append({'id': ident, 'protection': name, 'module': module, 'applied': False})
+                    print(f'{ident} {name}: NOT APPLIED (pattern count {original.count(old)})', flush=True)
+                    continue
+            (engine / module).write_text(mutated, encoding='utf-8')
             try:
-                rc, ran, failures = run_tests(root)
+                rc, ran, failures = run_tests(root, *options)
             finally:
                 (engine / module).write_text(original, encoding='utf-8')
             caught = rc != 0 and failures > 0
@@ -206,7 +238,8 @@ def main(argv):
                             'failures': failures, 'tests': ran})
             print(f'{ident} {name}: {"caught" if caught else "MISSED"} ({failures}/{ran})', flush=True)
     ok = baseline['returncode'] == 0 and all(r.get('applied') and r.get('caught') for r in results)
-    summary = {'module': MODULE, 'module_sha256': hashlib.sha256(source.encode('utf-8')).hexdigest(),
+    summary = {'what': 'every refusal of the module' if args.refusals else 'the list MUTATIONS', 'module': MODULE,
+               'module_sha256': hashlib.sha256(source.encode('utf-8')).hexdigest(),
                'modules_sha256': {m: hashlib.sha256(t.encode('utf-8')).hexdigest() for m, t in sources.items()},
                'tests': list(TESTS), 'baseline': baseline, 'mutations': results, 'all_caught': ok,
                'seconds': round(time.monotonic() - started, 1)}

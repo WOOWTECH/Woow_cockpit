@@ -928,6 +928,180 @@ class TrustedSchemaTests(OmnigentCase):
         self.assertFalse(self.runs('hapg'))
 
 
+class RefusalTests(OmnigentCase):
+    """The import's other refusals, one case each: a device that is not set up like the Omnigent package, an HA
+    database that is not this Omnigent's, and answers that are not what was asked for (never guessed, never read as
+    "nothing")."""
+
+    def refused(self, code, message, *, upload=(), check=None):
+        """The conversion ends with `code` and a message that starts with `message`: no backup, nothing packed.
+        `check`: the same words are the check's blocker too."""
+        self.world.forget()
+        ha_id = self.upload_omnigent(**dict(upload))
+        with self.assertRaises(BackupError) as caught:
+            self.convert(ha_id, ['omnigent'])
+        self.assertEqual((caught.exception.code, caught.exception.message[:len(message)]), (code, message))
+        self.assertEqual((self.storage.list_backups(), self.world.manifests), ([], {}))
+        if check is not None:
+            self.world.forget()
+            result = self.check(ha_id, ['omnigent'])[0]
+            self.assertFalse(result['ok'])
+            self.assertIn(check, '\n'.join(result['blockers']))
+
+    @contextlib.contextmanager
+    def answering(self, role, wanted, value, *, skip=0):
+        """`role`'s answer to the statement `wanted` (its whole text or its start) is `value`, after `skip` answers as
+        usual."""
+        real, asked = self.world.answer, []
+
+        def answer(found, sql, database):
+            if found == role and sql.startswith(wanted):
+                asked.append(sql)
+                if len(asked) > skip:
+                    return value
+            return real(found, sql, database)
+        self.world.answer = answer
+        try:
+            yield
+        finally:
+            self.world.answer = real
+        self.assertGreater(len(asked), skip, 'the statement was asked')
+
+    def test_a_device_that_is_not_set_up_like_the_package_is_no_target(self):
+        layout = '這台的 Omnigent 應用設定不是 HA 匯入支援的樣子：'
+        missing = layout + '找不到 PostgreSQL、伺服器或 runner 的 Quadlet 檔'
+        items = layout + '應用設定含有資料庫匯出項目或主機資料夾'
+        mixed = '這台的 Omnigent 資料卷、資料庫設定和 Quadlet 檔不一致，無法匯入。'
+        pg, runner = 'omnigent-postgres.container', 'omnigent-runner.container'
+
+        def text(name, old, new):
+            def change(app, files):
+                self.assertIn(old, files[name])
+                files[name] = files[name].replace(old, new)
+            return change
+
+        def one_volume_twice(app, files):
+            text(runner, b'omnigent-pi.volume', b'omnigent-server.volume')(app, files)
+            app.volumes.pop()
+        for name, change, message in (
+                ('a database item', lambda app, files: setattr(app, 'postgres', [{'id': 'omnigent'}]), items),
+                ('a host folder', lambda app, files: setattr(app, 'data_dirs', [{'path': 'omnigent'}]), items),
+                ('no database', lambda app, files: files.pop(pg), missing),
+                ('no server', lambda app, files: files.pop('omnigent-server.container'), missing),
+                ('no runner', lambda app, files: files.pop(runner), missing),
+                ('one volume more', lambda app, files: app.volumes.append({'name': 'omnigent-other'}), mixed),
+                ('one volume less', lambda app, files: app.volumes.pop(), mixed),
+                ('two folders in one volume', one_volume_twice, mixed),
+                ('another database', text(pg, b'POSTGRES_DB=omnigent', b'POSTGRES_DB=other'), mixed),
+                ('a user name', text(pg, b'POSTGRES_USER=omnigent', b'POSTGRES_USER=bad-name'), mixed),
+                ('a data folder', text(pg, b'POSTGRES_USER=omnigent',
+                                       b'POSTGRES_USER=omnigent PGDATA=relative/path'), mixed),
+                ('no image', text(pg, b'Image=docker.io/library/postgres:16.15-alpine3.24\n', b''),
+                 '這台 Omnigent 的 Quadlet 設定缺少映像。')):
+            with self.subTest(name=name):
+                self.catalog, files = self.catalog_apps(), dict(QUADLETS)
+                change(self.catalog['omnigent'], files)
+                self.world.quadlets = {'omnigent': files}
+                self.refused('incompatible', message, check=message)
+                self.assertEqual((self.world.runs, self.world.imported), ([], {}), 'nothing of HA was read')
+
+    def test_what_has_database_must_be(self):
+        """Each part of the verdict on its own: the check shows it as its only blocker and the conversion stops with
+        it before anything of HA is dumped."""
+        objects = dict(self.world.objects)
+        odd = 'HA 的 Omnigent 資料庫含有 Omnigent 不會建立的物件（{}），無法安全地搬過來。'
+        for name, changed, upload, words in (
+                ('triggers', {'triggers': 1}, {}, odd.format('觸發程序')),
+                ('views', {'views': 2}, {}, odd.format('檢視表')),
+                ('rules', {'rules': 1}, {}, odd.format('規則')),
+                ('policies', {'policies': 1}, {}, odd.format('資料列政策')),
+                ('functions', {'functions': 1}, {}, odd.format('函式')),
+                ('schemas', {'schemas': ['evil']}, {}, odd.format('其他結構描述（evil）')),
+                ('extensions', {'extensions': ['dblink', 'pg_trgm', 'plpgsql']}, {},
+                 'HA 的 Omnigent 資料庫使用了這台不支援的擴充功能：dblink。'),
+                ('encoding', {'encoding': 'SQL_ASCII'}, {}, 'HA 的 Omnigent 資料庫不是 UTF8 編碼。'),
+                ('a table more', {'tables': objects['tables'] + ['evil']}, {},
+                 'HA 的 Omnigent 資料庫有 Omnigent 不會建立的資料表（evil），無法安全地搬過來。'),
+                ('a newer PostgreSQL', {}, {'pg_version': b'17\n'},
+                 'HA 的 PostgreSQL 是 17 版，這台是 16 版；只能從相同或較舊的版本搬過來。'),
+                ('no PostgreSQL version', {}, {'pg_version': b'x\n'},
+                 'HA 的 PostgreSQL 是 未知 版，這台是 16 版；只能從相同或較舊的版本搬過來。'),
+                ('no cookie key', {}, {'cookie': False}, 'HA 備份裡找不到 Omnigent 的登入金鑰（accounts-cookie-secret）')):
+            with self.subTest(name=name):
+                self.world.objects = dict(objects, **changed)
+                self.refused('incompatible', f'Omnigent 不能搬過來：{words}', upload=upload, check=words)
+                self.assertFalse([cmd for _r, cmd, _d in self.world.execs if cmd[0] == 'pg_dump'])
+                self.assertEqual(self.runs('omni-db'), [])
+        self.world.objects = objects
+        with self.answering('hapg', ha_odoo.SUPERUSER_SQL, ['EVENT TRIGGER']):
+            words = 'HA 的 Omnigent 資料庫含有只有資料庫超級使用者才能建立的物件（EVENT TRIGGER），無法安全地搬過來。'
+            self.refused('incompatible', f'Omnigent 不能搬過來：{words}', check=words)
+        for value, words in ((None, '無法讀取這台 Omnigent 的資料庫結構版本。'), (['older'], '資料庫結構版本不同：HA 是')):
+            self.world.live_alembic = value
+            self.refused('incompatible', 'Omnigent 不能搬過來：資料庫結構版本不同', check=words)
+        self.world.live_alembic, self.world.ha_alembic = [ALEMBIC], []
+        self.refused('incompatible', 'Omnigent 不能搬過來：資料庫結構版本不同：HA 是 未知', check='資料庫結構版本不同：HA 是 未知')
+        self.world.ha_alembic = [ALEMBIC]
+        self.world.objects = dict(objects, tables=[t for t in objects['tables'] if t != 'hosts'])
+        words = 'HA 的 Omnigent 資料庫缺少資料表（hosts），版本或資料可能不完整。'
+        self.refused('incompatible', f'Omnigent 不能搬過來：{words}', check=words)
+        self.world.objects = objects
+        words = 'HA 的 PostgreSQL 是 16 版，這台是 未知 版；只能從相同或較舊的版本搬過來。'
+        with mock.patch.object(self.world, 'image_info', lambda image: {'id': 'sha256:' + 'c' * 64, 'env': []}):
+            self.refused('incompatible', f'Omnigent 不能搬過來：{words}', check=words)
+
+    def test_answers_that_are_not_what_was_asked_for_stop_the_job(self):
+        no_tables, no_schema = '無法確認 Omnigent 的資料表結構。', '無法確認 Omnigent 的資料庫結構。'
+        mine, no_revision = '無法確認這台 Omnigent 的資料表結構。', '無法讀取這台 Omnigent 的資料庫結構版本。'
+        short = {key: value for key, value in signature().items() if key != 'triggers'}
+        longer = dict(signature(), more=[])
+        live, odd_row = 'omnigent-postgres', COLUMNS + [['users', 'x']]
+        columns, whole = ha_omnigent.SCHEMA_COLUMNS_SQL, ha_omnigent.SCHEMA_SIGNATURE_SQL
+        revision, accounts = 'SELECT coalesce(json_agg(version_num)', 'SELECT coalesce(json_agg(u ORDER BY u.id)'
+        for name, role, wanted, value, skip, code, message in (
+                ('no omnigent database', 'hapg', ha_odoo.DATABASES_SQL, [['other', 1, 'C', 'C']], 0,
+                 'incompatible', 'HA 的 Omnigent 沒有 omnigent 資料庫。'),
+                ('no objects', 'hapg', ha_omnigent.OBJECTS_SQL, [], 0, 'job-failed', '無法讀取 HA 的 Omnigent 資料庫。'),
+                ("HA's columns: none", 'hapg', columns, [], 0, 'incompatible', no_tables),
+                ("HA's columns: no list", 'hapg', columns, {'users': 1}, 0, 'incompatible', no_tables),
+                ("HA's columns: a short row", 'hapg', columns, odd_row, 0, 'incompatible', no_tables),
+                ("HA's signature: none", 'hapg', whole, None, 0, 'incompatible', no_schema),
+                ("HA's signature: a part missing", 'hapg', whole, short, 0, 'incompatible', no_schema),
+                ("HA's signature: a part more", 'hapg', whole, longer, 0, 'incompatible', no_schema),
+                ('live columns: none', live, columns, [], 0, 'incompatible', mine),
+                ('live columns: no list', live, columns, None, 0, 'incompatible', mine),
+                ('live columns: a short row', live, columns, odd_row, 0, 'incompatible', mine),
+                ('live signature: a part missing', live, whole, short, 0, 'incompatible', no_schema),
+                ('live signature after the capture', live, whole, None, 1, 'incompatible', no_schema),
+                ('live revision before the capture', live, revision, {}, 1, 'incompatible', no_revision),
+                ('live revision after the capture', live, revision, [1], 2, 'incompatible', no_revision),
+                ('new cluster: columns', 'omni-db', columns, None, 0, 'incompatible', no_tables),
+                ('new cluster: schema after the load', 'omni-db', whole, short, 0, 'incompatible', no_schema),
+                ('new cluster: schema after the last write', 'omni-db', whole, None, 1, 'incompatible', no_schema),
+                ("this device's accounts", live, accounts, {}, 0, 'job-failed', '無法讀取這台 Omnigent 的帳號。'),
+                ("HA's accounts in the new cluster", 'omni-db', 'SELECT coalesce(json_agg(id)', None, 0,
+                 'job-failed', '無法確認 Omnigent 帳號。'),
+                ('audit', 'omni-db', ha_omnigent.AUDIT_SQL, None, 0, 'job-failed', '無法檢查新的 PostgreSQL 叢集。')):
+            with self.subTest(name=name), self.answering(role, wanted, value, skip=skip):
+                self.refused(code, message)
+
+    def test_a_schema_that_changed_with_the_last_write_stops_the_conversion(self):
+        """The second comparison on its own: the new cluster's schema was the trusted one after the data load and is
+        not any more after the accounts and the test-mode pause."""
+        changed = dict(signature(), triggers=[['users', 'evil', 'CREATE TRIGGER evil ...']])
+        with self.answering('omni-db', ha_omnigent.SCHEMA_SIGNATURE_SQL, changed, skip=1):
+            self.refused('job-failed', '新的 PostgreSQL 叢集的資料庫結構和這台 Omnigent 的不同（triggers）')
+        self.assertIn('DROP ROLE woowbk_restore', self.world.executed('omni-db'))
+
+    def test_the_space_check_of_the_conversion(self):
+        """HA's cluster, the new one and its WAL must fit above the floor before HA's cluster is even started (the
+        first estimate of the job, three times the add-on's member, passed)."""
+        with mock.patch.object(haimport.SpaceGuard, 'free', lambda guard: guard.floor + ha_odoo.WAL_ALLOWANCE):
+            self.refused('insufficient-space', '空間不足：轉換需要再保留')
+        self.assertIn('hapg', self.world.imported)
+        self.assertEqual(self.runs('hapg'), [])
+
+
 class ScanTests(unittest.TestCase):
     def test_what_is_never_read_or_moved(self):
         report = habackup.Report()
@@ -946,6 +1120,15 @@ class ScanTests(unittest.TestCase):
             with self.subTest(extra=extra[0]['name']), self.assertRaises(BackupError) as caught:
                 ha_omnigent.scan_member(io.BytesIO(gzip.decompress(addon_tar(extra=extra))), habackup.Report())
             self.assertEqual(caught.exception.code, 'incompatible')
+
+    def test_a_tablespace_or_a_symlink_in_the_cluster_is_refused(self):
+        for extra in ([{'name': 'data/postgres/pg_tblspc', 'type': 'dir'},
+                       {'name': 'data/postgres/pg_tblspc/16999', 'type': 'symlink', 'linkname': '/mnt/other'}],
+                      [{'name': 'data/postgres/base/1/9999', 'type': 'symlink', 'linkname': '1259'}]):
+            with self.subTest(extra=extra[-1]['name']), self.assertRaises(BackupError) as caught:
+                ha_omnigent.scan_member(io.BytesIO(gzip.decompress(addon_tar(extra=extra))), habackup.Report())
+            self.assertEqual(caught.exception.code, 'incompatible')
+            self.assertIn('表空間', caught.exception.message)
 
     def test_toc_kinds(self):
         text = TOC.decode() + '3700; 1255 16700 FUNCTION public evil() omnigent\n9; 1 2 WEIRD thing\n'
