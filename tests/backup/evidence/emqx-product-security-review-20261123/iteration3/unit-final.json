@@ -1,0 +1,16 @@
+{
+ "attempt": "unit-final",
+ "lane": "emqx-secreview (SR-OWNER-1942)",
+ "iteration": 3,
+ "date": "2026-11-24",
+ "what": "EMQX modules, test_ha_tempctr, test_tempctr_cleanup_dependency, test_ha_import, test_ha_flows (guarded runner: no podman/ssh/sudo/systemctl) on the merge of product fc0e3bc and review 5f93f6b",
+ "tests": 260,
+ "failures": 0,
+ "errors": 0,
+ "blocked": 0,
+ "exit_code": 0,
+ "stdout_sha256": "b937ccb6ba684e07bddbe46226cb90e85de4b288c4666c9b826b696e306cfae8",
+ "status_line": "tests=260 failures=0 errors=0 skipped=0 expected_failures=0 unexpected_successes=0 blocked=0",
+ "source": "git merge-tree of feat/ha-import-emqx-product-20261124@fc0e3bc and sec/emqx-secreview2-20261124@5f93f6b (tree 5649969, backup-engine 865c930f)",
+ "commercial_acceptance": "not-complete"
+}
