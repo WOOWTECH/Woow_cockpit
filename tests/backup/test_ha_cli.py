@@ -542,6 +542,59 @@ class ImportStartTests(HaCliCase):
         self.assertFalse(any('cred1' in line or 'filebrowser' in line for line in self.audit))
         self.assertNotIn('check_job_id', self.params(response), 'the audit only')
 
+    def run_first_job(self, response, convert):
+        """The first job in this process, as its unit runs it (stubbed app step and adapter)."""
+        from .test_ha_import import HaWorld, app
+        world = HaWorld()
+        self.deps.adapter_factory = world.factory
+        for importer in haapps.IMPORTERS:
+            self.catalog[importer.app_id] = app(importer.app_id, importer.name)
+        with contextlib.ExitStack() as stack:
+            stack.enter_context(mock.patch.object(ha_odoo, 'convert', convert))
+            stack.enter_context(mock.patch.object(flows, 'running_reserve', lambda ctx: 0))
+            stack.enter_context(mock.patch.object(haimport.SpaceGuard, 'free', lambda guard: 1024 ** 4))
+            stack.enter_context(contextlib.redirect_stderr(io.StringIO()))
+            return jobs.run_job(self.paths, response['job_id'], deps=self.deps)
+
+    def test_the_first_job_runs_and_reports_itself(self):
+        key = Issue('odoo.modules', 'confirm', 'x', ['m'], database='客戶 a').key('odoo')
+        request = {**self.base, 'choices': {'odoo': {'database': '客戶 a'}}, 'acknowledged': {'odoo': [key]}}
+        response = self.call(['ha-import-start'], request)
+
+        def convert(work, app, database, test_mode, out_dir):
+            sink = work.sink(app)
+            sink.confirm('odoo.modules', '缺少的模組', ['m'], database=database)
+            sink.confirm('odoo.modules', '缺少的模組', ['other'], database='test')
+            (out_dir / 'volumes').mkdir(parents=True)
+            path = out_dir / 'volumes' / 'odoo18-web-data.tar'
+            path.write_bytes(b'volume')
+            return {'volumes': {'odoo18-web-data': path}, 'database': database, 'custom_modules': [],
+                    'left_databases': ['test']}
+
+        record = self.run_first_job(response, convert)
+        self.assertEqual((record['state'], record['error']), ('succeeded', None))
+        result = record['result']
+        self.assertEqual([(row['app_id'], row['status'], [i['id'] for i in row['issues']]) for row in result['results']],
+                         [('odoo', 'converted', ['odoo.modules'])])
+        self.assertEqual((result['ha_import']['group'], result['ha_import']['odoo_database'],
+                          result['ha_import']['left_databases']), (response['group'], '客戶 a', ['test']))
+        row = haimport.load_registry(self.paths)[result['backup_id']]
+        self.assertEqual(row['confirmed'], [{'app_id': 'odoo', 'id': 'odoo.modules', 'items': ['m']}])
+        self.assertEqual(record['params']['chain']['apps'], ['odoo', 'n8n'], 'what the rest of the import needs stays')
+
+    def test_the_first_job_that_fails_reports_itself_in_the_record(self):
+        for error, status, code in ((BackupError('corrupt-archive', '讀不出來。'), 'failed', 'corrupt-archive'),
+                                    (RuntimeError('x'), 'failed', 'internal-error'),
+                                    (BackupError('confirmation-required', 'x'), 'skipped', 'confirmation-required')):
+            response = self.call(['ha-import-start'], {**self.base, 'request_id': f'req-import-{code}',
+                                                       'choices': {'odoo': {'database': 'prod'}}})
+            record = self.run_first_job(response, mock.Mock(side_effect=error))
+            self.assertEqual((record['state'], record['error']['code']), ('failed', code))
+            row = record['result']['results'][0]
+            self.assertEqual((row['app_id'], row['status'], row['code']), ('odoo', status, code))
+            self.assertEqual((self.storage.list_backups(), haimport.load_registry(self.paths)), ([], {}))
+            self.assertEqual(os.listdir(self.paths.staging), [])
+
     def test_the_command_is_listed(self):
         self.assertIn('ha-import-start', cli.COMMANDS)
 
