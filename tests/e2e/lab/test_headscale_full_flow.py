@@ -304,3 +304,31 @@ class CleanupOrderTest(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class LabConfigRestartTest(unittest.TestCase):
+    def test_the_lab_config_restarts_all_three_package_units(self):
+        """final-verify 2026-11-24 18:48: in the found state (crash loop on the original DERP-less config) a dependency
+        failure stops headscale-entrance (Requires=headplane.service); restarting headscale.service alone left it
+        inactive, so the lab config restarts all three units (the check that all three are active is unchanged)."""
+        files = {hsff.CONFIG_REL: DEV_D_CONFIG.encode('utf-8')}
+        calls = []
+
+        def owner(*argv, **_kwargs):
+            calls.append(argv)
+            return mock.Mock(returncode=0, stdout=b'', stderr=b'')
+
+        run = hsff.Run.__new__(hsff.Run)
+        run.ev = mock.Mock()
+        run.ev.check = lambda name, ok, detail='': ok
+        with mock.patch.object(hsff, 'owner_exists', lambda rel: rel in files), \
+                mock.patch.object(hsff, 'read_owner_file', lambda rel: files[rel]), \
+                mock.patch.object(hsff, 'write_owner_file', lambda rel, data, mode='0644': files.__setitem__(rel, data)), \
+                mock.patch.object(hsff.drv, 'owner', owner), \
+                mock.patch.object(hsff, 'wait_units', lambda *_a, **_k: True), \
+                mock.patch.object(hsff, 'probe', lambda *_a, **_k: {'health': 200, 'metrics': 200}):
+            run.lab_config_on()
+        self.assertIn(('systemctl', '--user', 'restart', *hsff.UNITS), calls)
+        self.assertNotIn(('systemctl', '--user', 'restart', 'headscale.service'), calls)
+        self.assertEqual(hsff.UNITS, ('headscale.service', 'headplane.service', 'headscale-entrance.service'))
+        self.assertEqual(files[hsff.ORIG_REL], DEV_D_CONFIG.encode('utf-8'))   # the original kept next to it
