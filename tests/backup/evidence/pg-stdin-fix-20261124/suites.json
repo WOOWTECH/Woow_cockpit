@@ -1,0 +1,81 @@
+{
+ "lane": "pg-stdin-fix (PF-OWNER-2245)",
+ "source_commit": "155d7443ea4b8bcb66d453dee8082d26f86c6d1c",
+ "tree": "/tmp/pg-stdin-fix-suite-20261124",
+ "runner": "team/heavy.sh + flock /tmp/woowbk-host-heavy-tests.lock (scratchpad/pgfix/chain1.sh mut b1 ui)",
+ "baseline_final2": {
+  "tests": 1876,
+  "failures": 2,
+  "errors": 3,
+  "skipped": 1,
+  "blocked": 6,
+  "source": "integration-3 wf5 on FINAL-2: the 5 test_litellm_lab_runner guard refusals"
+ },
+ "known_guard_refusals": [
+  "tests.backup.test_litellm_lab_runner.LabRunnerTests.test_abort_is_forwarded",
+  "tests.backup.test_litellm_lab_runner.LabRunnerTests.test_exact_reader_capture_boundary",
+  "tests.backup.test_litellm_lab_runner.LabRunnerTests.test_input_and_file_output_are_forwarded_and_bounded",
+  "tests.backup.test_litellm_lab_runner.LabRunnerTests.test_real_child_overflow_is_bounded_and_sanitized",
+  "tests.backup.test_litellm_lab_runner.LabRunnerTests.test_stderr_and_failures_are_not_returned"
+ ],
+ "only_known_not_ok": true,
+ "new_tests_expected": 25,
+ "steps": [
+  {
+   "name": "tests/backup --b1 (integration-3 guard.py)",
+   "command": "guard.py --b1 --discover tests/backup --top . (PYTHONPATH=backup-engine:tests/e2e/lab)",
+   "summary_line": "tests=1901 failures=2 errors=3 skipped=1 expected_failures=0 unexpected_successes=0 blocked=6 shim_hits=0 run_native=denied elapsed=387",
+   "tests": 1901,
+   "failures": 2,
+   "errors": 3,
+   "skipped": 1,
+   "blocked": 6,
+   "not_ok_ids": [
+    "tests.backup.test_litellm_lab_runner.LabRunnerTests.test_abort_is_forwarded",
+    "tests.backup.test_litellm_lab_runner.LabRunnerTests.test_exact_reader_capture_boundary",
+    "tests.backup.test_litellm_lab_runner.LabRunnerTests.test_input_and_file_output_are_forwarded_and_bounded",
+    "tests.backup.test_litellm_lab_runner.LabRunnerTests.test_real_child_overflow_is_bounded_and_sanitized",
+    "tests.backup.test_litellm_lab_runner.LabRunnerTests.test_stderr_and_failures_are_not_returned"
+   ],
+   "stdout_sha256": "82d08f566b8f263fc5b749e4ec3640c97d82deed51ec7ca049c2ee481240b3d8",
+   "exit_code": 1,
+   "seconds": 393
+  },
+  {
+   "name": "RealBackupTests --b1 --ha118",
+   "command": "guard.py --b1 --ha118 tests.backup.test_ha_backup.RealBackupTests",
+   "summary_line": "tests=1 failures=0 errors=0 skipped=0 expected_failures=0 unexpected_successes=0 blocked=0 shim_hits=0 run_native=denied elapsed=13",
+   "tests": 1,
+   "failures": 0,
+   "errors": 0,
+   "skipped": 0,
+   "blocked": 0,
+   "not_ok_ids": [],
+   "stdout_sha256": "b407e35f68cdc04810e882ad5a530c0c3bc24f6672dce0a8dc7259cc1dc5a464",
+   "exit_code": 0,
+   "seconds": 13
+  },
+  {
+   "name": "node tests/backup-ui.mjs",
+   "exit_code": 0,
+   "seconds": 472,
+   "tests": 108,
+   "pass": 108,
+   "fail": 0,
+   "log_sha256": "280b435c00754f51647583eeb5560accb074f137954d1ec92fce4d718c5195b4"
+  }
+ ],
+ "mutation_check": {
+  "all_caught": true,
+  "baseline": {
+   "returncode": 0,
+   "tests": 68,
+   "failures": 0
+  },
+  "caught": 15,
+  "mutations": 15,
+  "controls_unnoticed": true
+ },
+ "commercial_acceptance": "not-complete",
+ "note": "unit, emulator and mutation results are not acceptance; the real lab test is pg-stdin-real-20261124"
+}
