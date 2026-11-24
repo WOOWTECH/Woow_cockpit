@@ -22,7 +22,7 @@
  },
  "tests": {
   "unit_test_ha_nextcloud": "47 OK (fakes)",
-  "mutations": "43/43 of the first self review, 59/59 with the Office fix, 32/32 of the Team folders change: all killed",
+  "mutations": "all 88 one-place changes of ha_nextcloud.py in one run on c9b1e26 (nextcloud-mutations.json: 43 of the first self review, 13 of the Office fix and the file lists, 32 of the Team folders change): 88/88 killed. Earlier partial runs: 43/43 (b7761a2), 32/32 (4fb7af7). The earlier \"59/59 with the Office fix\" had no full run behind it; this run replaces it.",
   "affected_ha_modules": "130 OK (nextcloud, registry, suggest, cli) on the tree merged with integration 0562c55",
   "backup_full": "tests/backup on 501a13f (guarded: host podman and other host tools refused): 1766 run, 0 failures, 0 errors, 6 skipped, 0 refused calls, 313 s",
   "real_sql_pg16": "every importer SQL statement on a real PostgreSQL 16 (lab, network none)",
@@ -164,5 +164,5 @@
  "owner_items": [
   "HA Nextclouds that had the Memories app are refused (it creates a database function and a trigger); leaving exactly these two out would relax a security check: owner decision"
  ],
- "state": "2026-11-24 14:10: done. Share attempts 4, 6 and 7 are fully green (87/87, 109/109, 113/113); attempt 7 ran the integrated engine (integration af92b38) with the Team folders change and the page's own catalog draft, unedited (backup-engine tree 5445ad92). The refusal run is 34/34 three times, the last one (attempt 4) on the lane tip 7e969f0 (integration 0562c55, engine tree febd20ea). Sandbox attack review 16/16, Team folders probe 8/8 twice, full tests/backup 1766 OK. Closing work on dev-e: baseline verify 7/7, journal cleanup, leak re-scan 0 hits, its Nextcloud hibernated (0 containers), isolation true none {}. commercial_acceptance stays not-complete (see not_covered)."
+ "state": "2026-11-24 15:45: done. Share attempts 4, 6 and 7 are fully green (87/87, 109/109, 113/113); attempt 7 ran the integrated engine (integration af92b38) with the Team folders change and the page's own catalog draft, unedited (backup-engine tree 5445ad92). The refusal run is 34/34 three times, the last one (attempt 4) on the lane tip 7e969f0 (integration 0562c55, engine tree febd20ea). Sandbox attack review 16/16, Team folders probe 8/8 twice, full tests/backup 1766 OK, all 88 one-place mutants of ha_nextcloud.py killed in one run on c9b1e26. Closing work on dev-e: baseline verify 7/7, journal cleanup, leak re-scan 0 hits, its Nextcloud hibernated (0 containers, every unit inactive, checked again 14:44), isolation true none {}. commercial_acceptance stays not-complete (see not_covered)."
 }

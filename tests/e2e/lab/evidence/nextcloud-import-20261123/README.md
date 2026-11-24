@@ -114,6 +114,13 @@ Synthetic data; the importer function itself; not a whole import.
 By design (owner decision D2, shown to the administrator before the restore): HA's custom apps are PHP code and come along, so an
 HA backup is as trusted as the HA it came from; its Nextcloud administrators become this Nextcloud's administrators.
 
+## Unit tests (fakes, not acceptance)
+
+`tests/backup/test_ha_nextcloud.py`: 47 OK. Mutation run `nextcloud-mutations.json` (source c9b1e26): 88 one-place changes of
+`ha_nextcloud.py` (43 of the first self review, 13 of the Office fix and the file lists, 32 of the Team folders change), each must
+make the test module fail: 88/88 killed. Full guarded `tests/backup` on 501a13f (host podman and other host tools refused by the
+guard): 1766 run, 0 failures, 0 errors, 6 skipped, 0 refused calls.
+
 ## Not covered
 
 - A browser: the Cockpit page itself (its Nextcloud cases are in `tests/backup-ui.mjs`) and the Office page's JavaScript.
