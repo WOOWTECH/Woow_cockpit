@@ -394,7 +394,9 @@ variant invalid (`field: "id"`): installing it would move that entry and its bac
   apart, `TimeoutStartSec=600`): real restores on a loaded test device took 251-345 s until `/health/readiness`
   answered, so 300 s could declare a restore that worked failed. A longer limit only waits longer; no check is relaxed.
   LAN-only ports, HTTPS and unpublished ports give hints instead of URLs. A query
-  string (`?…`, possibly a token) is never copied: the URL keeps only its path and a hint says so (review L5).
+  string (`?…`, possibly a token) is never copied: the URL keeps only its path and a hint says so (review L5). A path
+  that answers only inside the container (`suggest.HEALTH_PATHS`: `emqx` `/readyz`, 403 through the published port) is
+  replaced by the path of the same port that answers the host (`/`, the Dashboard the broker serves), with a hint.
 * `verify`: built-in digests (feature 1): one `postgres-digest` per PostgreSQL database (`{"postgres": "main"}` in export
   modes, `{"container","unit","user"}` in cold mode) and one `files-digest` per proposed volume and host directory, except
   a PostgreSQL data volume or directory (the table digest covers it); at most 16. If the validator rejects them (an engine
@@ -408,7 +410,9 @@ installed checks do not cover are appended), its list order (new items last; the
 added), and leaves out empty lists the installed entry leaves out. One exception: a `health` item of an id in
 `suggest.HEALTH_TIMEOUTS` (`litellm`) with a shorter `timeout_seconds` (or none, the catalog's 60 s) gets that limit in
 the draft, with an info note `health-timeout` naming the old limits; it takes effect when the draft is installed (the
-engine never edits an installed entry by itself). `installed.changes` is the structured diff
+engine never edits an installed entry by itself). The same way a `health` item that expects 200 on a path in
+`suggest.HEALTH_PATHS` gets the path that answers the host, with an info note `health-path` (a check adapted to another
+status is left alone). `installed.changes` is the structured diff
 installed → draft, `installed.drift` the zh-TW notes on structural differences (a volume, directory, secret, config file,
 unit, writer or Quadlet file on one side only), `installed.same` true when nothing differs.
 
