@@ -1,0 +1,98 @@
+{
+ "after_analyse": [],
+ "after_first_connection": {},
+ "after_salt_binding": [],
+ "binding": "match",
+ "blockers": [
+  "HA 的 LiteLLM 資料庫含有大型物件（LiteLLM 不會建立），無法安全地搬過來。"
+ ],
+ "case": "planted_objects",
+ "container": {
+  "cap_add": [],
+  "cap_drop": [],
+  "memory": 1073741824,
+  "mounts": [
+   "volume:/var/lib/postgresql:noexec,nosuid,nodev,rbind"
+  ],
+  "network_mode": "none",
+  "pids_limit": 512,
+  "ports": {},
+  "privileged": false,
+  "read_only_root": true,
+  "security_opt": [
+   "no-new-privileges"
+  ],
+  "user": ""
+ },
+ "elapsed_seconds": 43.5,
+ "found": {
+  "migrations": [
+   "20250326162113_baseline"
+  ],
+  "schemas": [
+   "woow",
+   "woow_platform"
+  ],
+  "superuser": []
+ },
+ "image_pg18": "sha256:4ea77c7055dec6a632156aa2cd9f1abaaedeba5f812f104f4e9e1ac37363469b",
+ "markers_final": {},
+ "notes": [],
+ "planted": {
+  "check_constraints": 1,
+  "domains": 1,
+  "expression_indexes": 1,
+  "extensions": [
+   "citext",
+   "pgcrypto",
+   "plpgsql"
+  ],
+  "large_objects": 1,
+  "policies": 1,
+  "rules": 1,
+  "triggers": 2
+ },
+ "scan": {
+  "pg_version": "18",
+  "salt_valid": true,
+  "symlinks": 0
+ },
+ "schema_blocker": true,
+ "schema_differences": [
+  "public.woowbk_domain",
+  "public.woowbk_domain_table"
+ ],
+ "session_settings": {
+  "datestyle": "ISO, MDY",
+  "event_triggers": "off",
+  "extra_float_digits": "3",
+  "review": null,
+  "search_path": "pg_catalog",
+  "session_preload_libraries": "",
+  "shared_preload_libraries": ""
+ },
+ "source": {
+  "commit": "b3e587d85bfd21a464bfaab512c13997d989fd32",
+  "ha_litellm_sha256": "3a6e928e075af3c3f96c9560c89502bbb3576e6b13d4fac5277aee419e53cfac",
+  "tracked_changes": false
+ },
+ "steps": [
+  "start_ha_cluster",
+  "analyse",
+  "salt_binding",
+  "read_schema",
+  "export_rows"
+ ],
+ "stored_hooks_blocker": null,
+ "stored_settings": null,
+ "stored_settings_line": null,
+ "user_row_as_exported": [
+  "u1",
+  "proxy_admin",
+  "0.123456789012345",
+  "2026-11-05 10:00:00",
+  "2026-11-05 10:00:00+00"
+ ],
+ "volumes_left_behind": [],
+ "warnings": []
+}

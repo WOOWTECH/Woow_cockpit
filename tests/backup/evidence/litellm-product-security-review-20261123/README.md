@@ -17,6 +17,9 @@ SR-7 was found and proven on a real LiteLLM, and SR-9 (a truncation bypass of SR
 manager file) were found. Fixes: branch `review/litellm-secreview-fix2-20261124` from the product's `215fdf0` (merge
 `c65ef56` of the review branch, fixes `f2a2cb4`, `a06dc21`, `1a83926`); see "Iteration 2" below.
 
+**Open on purpose (owner, 2026-11-24 07:22):** SR-7 and the `ssl_verify`-type settings are DEFERRED, not closed; they
+are listed under "KNOWN OPEN RISKS" and must be named in the PR text.
+
 ## How it was tested
 
 - **Real attacks, real product code, throwaway containers only.** Every attack ran in rootless containers of the
@@ -159,8 +162,10 @@ until a trusted schema, a secret transfer and real tests exist) still refuses in
 The product path answers its finding: the schema is this device's own (captured in one snapshot, proven unchanged),
 only HA's rows move through a role that may only insert, the salt binding refuses a mismatch, only the declared
 `litellm-salt-key` can be replaced, and the product lane's real run on `3bde418` (attempt 4) decrypted 72/72 + 5/5
-stored values with the moved salt (0 with a random one) and put this device's own salt and data back on both the
-automatic and the manual rollback. That real proof was on `3bde418`; on the final review code (`1a83926`) the same flow passed 69/69 (iteration 2, `attempt-secreview-01.json`).
+stored values with the moved salt (0 with a random one) and put this device's own salt back on both the automatic
+and the manual rollback (CORRECTED 2026-11-24: `attempt-04.json` marks both rollbacks' own-DATA/key line FAIL; the
+first committed proof that both rollbacks restore this device's data and key is attempt 08 and attempt-secreview-01).
+That real proof was on `3bde418`; on the final review code (`1a83926`) the same flow passed 69/69 (iteration 2, `attempt-secreview-01.json`).
 
 ## Iteration 2 (2026-11-24): re-review of the final diff
 
@@ -220,6 +225,18 @@ with the custom secret manager, crafted operator, stored settings, the real back
 and a `custom_provider_map` object refuse; 20/20 variants as expected); `sr7-env-ref-probe*.json` (SR-7).
 Each file's `source` names the clean commit and the `ha_litellm.py` SHA-256 it ran with.
 
+Added by the product lane (2026-11-24 08:35, `planted-objects.json`, harness `b3e587d`, product `3a6e928e…`): the
+case `planted_objects` = what the lane verifier (02:14) listed as never planted, created by HA's NON-superuser database
+owner on real PostgreSQL 18.7: a DOMAIN whose CHECK runs code and a table with a column of it, a row and a statement
+TRIGGER (ENABLE ALWAYS) on a LiteLLM table, a forced row-security policy, a rule, an expression index and a CHECK
+constraint that run code, the trusted EXTENSIONs pgcrypto and citext, and a large object. Result: **nothing ran** (no
+marker after the first connection, `analyse`, `salt_binding`, `read_schema` and `export_rows`; the planted function
+could have run `COPY … TO PROGRAM` in the superuser's session); the row of the trigger/policy table was exported
+unchanged; the large object is a blocker; the DOMAIN and its table are named as a data-shape difference (the product's
+schema blocker, compared with a clean cluster's schema standing for this device's). Triggers, policies, rules, indexes,
+constraints and extensions are not compared and not refused, because they never move: the conversion uses this device's
+schema and only copies rows.
+
 Findings of iteration 2:
 
 7. **SR-6 was incomplete (high for a foreign backup, like SR-6) — fixed `f2a2cb4`.** LiteLLM's `get_instance_fn`
@@ -234,7 +251,7 @@ Findings of iteration 2:
    `stored_settings()` failed open: any read error returned `None` and gave no blocker. Fix: `NESTED_HOOKS` (one
    SQL/JSON path per place, labels only, never a value) refuse like the SR-6 hooks; an answer that cannot be read
    completely is `UNREADABLE` and refuses (fail closed).
-8. **SR-7 (medium; owner decision) — not fixed.** HA's rows can make this device's LiteLLM send this device's own
+8. **SR-7 (medium) — NOT FIXED; deferred by the owner 2026-11-24 07:22 (KNOWN OPEN RISKS).** HA's rows can make this device's LiteLLM send this device's own
    secrets to a host they name. Database model parameters are decrypted and then `os.environ/NAME` is resolved
    against this device's environment (`proxy_server.py:7119-7126`; a value that does not decrypt is used as plain
    text, `common_utils/encrypt_decrypt_utils.py:180-206`); the whole DB-merged configuration too (`get_config`
@@ -260,6 +277,17 @@ Findings of iteration 2:
    conversion asks the same question in the new cluster (this device's image and schema, HA's data only as rows),
    refuses there before the converted dump is written, and the import note names what that answer found. The check
    job (HA's side only) can still be blinded by a crafted data directory; the conversion cannot.
+   *How it is proven (precise, verifier 2026-11-24 02:14):* on real PostgreSQL 18.7 the blindness of HA's side; on a
+   real fresh PostgreSQL 17.11 the product's own `stored_settings` + `stored_hooks_blocker` on the staged rows (the
+   harness loaded them into a one-table cluster). That `convert()` itself asks there and stops before the dump is
+   proven by a unit test with fakes (and mutation M55); this review had not run the product's `convert()` on the
+   crafted backup. **Added 2026-11-24 09:09 (product lane, real, dev-d): it has now.** `negative-01` (58/58,
+   `tests/e2e/lab/evidence/litellm-product-20261123/negative-01.json`, harness `litellm_negative_flow.py`, product
+   `3a6e928e…`): a crafted data directory (this lab LiteLLM's own schema and generated rows, the operator edit of
+   `t2_hidden_hooks`, hooks `post_call_rules` and `custom_auth`) through upload → `ha-check-start` → `ha-convert-start`:
+   the check answered ok (HA's side blind, as found here), the conversion exported 86 tables, loaded them into the new
+   PostgreSQL 17 cluster and then ended failed naming both hooks, before the converted dump; no converted backup, no
+   throwaway object, this device's secrets, salt, data and keys unchanged.
 10. **SR-9 (high for a foreign backup, like SR-6) — fixed `a06dc21`.** The SR-6 check cut the callback names to the
    first 50 before it looked for a dot, so 60 plain `success_callback` names that sort before a dotted one hid it
    (no blocker on `f2a2cb4`, `original3-stored_variants.json`; `1e29974` has the same code). LiteLLM imports every dotted entry of `success_callback`,
@@ -310,6 +338,32 @@ dev-d isolation `true none {}`. This is the real proof of the fixed code; `comme
   cluster, the notes from it, the dotted-callback clause, the custom secret manager). M43's text now names its line
   (the re-check repeats the old text; same removal); the product's Pi agent and search_path mutations are M45–M47.
 
+## KNOWN OPEN RISKS (owner, 2026-11-24 07:22: deferred, NOT closed)
+
+The owner was shown SR-7's three options (A refuse, B warn, C nothing; the review recommended A) and wrote
+「這個可以先不用管」. That is a deferral, not an acceptance of the risk as closed: there is no product behaviour change for
+either item below, they stay open, and the PR text must name them. (A prepared option A is on the local branch
+`wip/litellm-sr7-prep-20261124`; it is NOT merged and not to be merged.)
+
+1. **SR-7 — a stored `os.environ/NAME` reference makes this device send its own secrets to a host HA's rows name.**
+   Medium. Real proof on dev-d (`sr7-env-ref-probe.json`, finding 8): LiteLLM 1.104.0 sent this device's (generated
+   canary) master key as the Bearer token to the row's `api_base`, for a plaintext and for an HA-salt-encrypted
+   reference. The import neither refuses nor warns about it today. Only import a backup you made yourself.
+2. **`ssl_verify`-type settings — a stored `litellm_settings` key may change how this device's LiteLLM talks to
+   providers, and the check says nothing.** Found by the lane verifier (2026-11-24 02:14); vendor source only, NOT
+   probed on a running LiteLLM. `load_config` goes through every stored `litellm_settings` key (merged from the
+   database by `get_config` `proxy_server.py`:5815-5821 → `_update_config_from_db` :7741-7772; the loop at
+   :6048-6063) and a key it has no branch for ends in `setattr(litellm, key, value)` (:6388). Example:
+   `ssl_verify: false` (`litellm/__init__.py`:322) turns off the TLS verification of outbound provider calls
+   (`llms/custom_httpx/http_handler.py`:331-348, unless `SSL_VERIFY` is set in the environment; the package
+   `dd690ae` sets neither), so someone on the path could read provider keys and traffic. SR-5's warning names only
+   environment variables and callbacks, not such keys. The owner's own HA settings are meant to move, so refusing
+   every unknown key is not obviously right; naming them in the check (like SR-5) would be the smallest change.
+
+Other open questions (offered by the review, not decided; not part of the deferral): refusing the environment-variable
+names the vendor itself refuses in config files (`PATH`, `LD_PRELOAD`, `PYTHONPATH`, …), and naming stored `custom_code`
+guardrails, MCP servers and pass-through hosts in the check (see "Residual risk").
+
 ## Residual risk
 
 - **A crafted data directory (T2) still runs SQL as the superuser inside the throwaway PostgreSQL 18** (it can point
@@ -328,8 +382,8 @@ dev-d isolation `true none {}`. This is the real proof of the fixed code; `comme
   was tried); other guardrail types, MCP servers and pass-through URLs send this device's traffic to the hosts HA's
   rows name. Recommendation: name them in the check like SR-5 (owner decision).
 - **SR-7** (above, proven on a real LiteLLM 1.104.0): `os.environ/` references in HA's rows resolve against this
-  device's environment and are sent to the hosts HA's rows name (this device's master key in the probe); owner
-  decision.
+  device's environment and are sent to the hosts HA's rows name (this device's master key in the probe); deferred by
+  the owner 2026-11-24 (KNOWN OPEN RISKS).
 - **Stored environment variables bypass the vendor's own blocklist:** a config file may not set `PATH`,
   `LD_PRELOAD`, `LD_LIBRARY_PATH`, `PYTHONPATH`, `PYTHONSTARTUP`, `PYTHONHOME`, `HOME`, `NO_PROXY`, …
   (`proxy_server.py:5924-5939`), but the database path skips only the MCP stdio flag (:7347-7372). SR-5 names them
