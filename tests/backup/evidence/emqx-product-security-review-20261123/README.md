@@ -1,23 +1,26 @@
 # EMQX HA import (product path) — independent adversarial security review (2026-11-23 and 2026-11-24)
 
-Lane emqx-secreview (owner instance SR-OWNER-1942), six iterations. This review attacked the product import as a
+Lane emqx-secreview (owner instance SR-OWNER-1942), seven iterations. This review attacked the product import as a
 malicious HA backup would, fixed what it could prove, and reran the attacks against the engine that is handed over.
 
 ## Summary (read this first)
 
-- **Ten findings, SR-1 to SR-10.** Five High/Medium findings were confirmed by real attacks and fixed (SR-1, SR-2, SR-3,
+- **Eleven findings, SR-1 to SR-11.** Five High/Medium findings were confirmed by real attacks and fixed (SR-1, SR-2, SR-3,
   SR-6, SR-8); SR-7 (Medium) is a refusal added because the vendor code proves the leak, its ExHook trigger is
   exercised by T12 (iteration 2); SR-4 and SR-9 are Low and fixed. **SR-5 (Low): iteration 4's clear-text claim is disproven** by three real
   conversions with HA's `plain` authenticator and a same-hash control (Iteration 5): this device's bootstrap password is never stored in
-  clear text. What remains is behaviour the owner has to rule on (listed below, not decided here): after the import
-  this device's own bootstrap MQTT account is refused, and a bootstrap row written later is hashed HA's way.
+  clear text. **The owner decided SR-5 on 2026-11-24 15:26 (option C):** the check page warns and names this device's
+  MQTT accounts that stop working, and HA's `plain` is refused at check time; lane emqx-sr5 implemented it (`3c857c3`).
+  **Iteration 7 re-reviewed that change and found SR-11 (Low):** `plain` outside the global chain (an MQTT listener's
+  or a gateway's built-in database) and rows HA still keeps in clear text passed the refusal and reached the
+  candidate as clear text (real attack, 3 of 3); fixed on `sec/emqx-secreview7-20261124` (`9665533`).
   **SR-10
   (Low) was found in iteration 4** in exactly the handed-over tree 865c930f and is fixed on the integration branch
   only (65d8a51, 97c994f): a C0/C1/bidirectional/line-separator character in an HA plugin name, a `/share` path or a
   skipped-symlink name reached a check warning raw or forged a second job-log line.
 - **Where the fixes are:** SR-1, SR-2, SR-3 75aad7a; SR-6 f397590; SR-7 7b173af; SR-4 in the product's own 7449540; SR-8 and
   SR-9 abff1a0 (all in the handed-over engine 865c930f, the last merged as 620bdd5). SR-10 is on the integration branch
-  (65d8a51, 97c994f), NOT in 865c930f. SR-5 has no code fix; its remaining behaviour is an owner policy item (Iteration 5).
+  (65d8a51, 97c994f), NOT in 865c930f. SR-5: owner decision C, implemented by lane emqx-sr5 (`74d237f`, engine `5142e05c`); SR-11: `9665533` (engine `3ea9610f`, Iteration 7).
 - **Engine reviewed in iteration 3:** `feat/ha-import-emqx-product-20261124` @ `e08f8a1` (product READY of 08:30), `backup-engine` tree `865c930f392006e0080de506eb7c425fd81becd7` = the product tip `5786ae4` + `abff1a0` (merge `620bdd5`) + the Podman 6 tempctr fix (cherry-pick `e08f8a1`, patch id equal to `8613ffa` and `c8df1f2`); the review reruns used the same tree as trial commit `cd66230`.
 - **What passing here means:** this review proves conversion and refusal behaviour of the product's own code against
   real EMQX 5.8.9 brokers in throwaway rootless lab containers with `--network none`. It is not the commercial
@@ -25,9 +28,9 @@ malicious HA backup would, fixed what it could prove, and reran the attacks agai
   evidence. `commercial_acceptance: not-complete`.
 - **Not covered:** see the last section. Items that need a human/owner: the boot-time behaviour of HA's throwaway
   broker on HA's own files (reviewed only in part, one analysis step stopped by a safety classifier in iterations 3
-  and 4 — a human item, not retried), a merge policy for Dashboard-edited ACL files, the SR-5 policy (Iteration 5:
-  keep converting with the `hash_differs` note as today, refuse at check time, or say it on the check page; a re-hash
-  is not possible), and the independent Hermes/FTS review.
+  and 4 — a human item, not retried). Decided by the owner on 2026-11-24 15:26: SR-5 = option C (implemented) and
+  Dashboard-edited ACL files = option A (keep refusing, a known limitation). The independent Hermes FTS/SQLite review
+  is NOT open: the main session did it on 2026-11-23 (`tests/backup/evidence/hermes-fts-security-review-20261123/`).
 - **Iteration 4** worked on the independent verifier's points against iterations 1-3: SR-10 found and
   proven (fixed at integration), SR-5 reopened, B1-03 named, a first export check, and the overclaims corrected (what T4/T10/T11 really
   ran, that an exit code of 0 is not a verdict, the hard-coded `candidate_env_file_flag`, 6 of 24 volumes attributed
@@ -37,10 +40,14 @@ malicious HA backup would, fixed what it could prove, and reran the attacks agai
   merged) could be passed by a crafted export, its SR-5 statement was disproven by the real run, and its B1-03 "proof"
   was partly true by construction. The check was rewritten with the vendor's own parsers and proven with the real x86
   and ARM HA backups; B1-03 has real runs (T13). See **## Iteration 5**.
-- **Iteration 6 (this revision)** harvested the runs iteration 5 left running (T13 on the integration tip, a second x86
+- **Iteration 6** harvested the runs iteration 5 left running (T13 on the integration tip, a second x86
   run, both mutation runs, a second unit run), read the rewritten check again as an attacker, added T14b (more archive
   shapes and a `hocon:binary` vs `hocon:files` differential) and handed the check over as READY (`dd3ae49`). See
   **## Iteration 6**.
+- **Iteration 7 (this revision)** re-reviewed SR-5 option C (`fix/emqx-sr5-hash-warning-20261124` @ `3c857c3`): no
+  password, hash or salt in any text, names sanitized, `plain` refused before HA's export, this device only read,
+  the lane's dev-d evidence as claimed; T5/T5b rerun; SR-11 found, proven for real, fixed and rerun. See
+  **## Iteration 7**.
 
 ## How it was tested (all iterations; details of iteration 1)
 
@@ -72,10 +79,11 @@ malicious HA backup would, fixed what it could prove, and reran the attacks agai
 | SR-6 | High | Migrated rule SQL `jq('env…')` exposes this device's env secrets (bypasses SR-3) | fixed f397590 |
 | SR-7 | Medium | A migrated HTTP/JWT/LDAP/SQL authenticator or ExHook server would receive this device's own service logins (bootstrap passwords); vendor-proven, the HTTP path was not reproduced end to end (stopped earlier by the authentication-equality check) | refusal 7b173af; its ExHook trigger is exercised for real by T12 (iterations 2 and 3) |
 | SR-4 | Low | The product readback hashed RAW config roots that contain env secrets (`dashboard.default_password`, `node.cookie`) into `import_check` | fixed by the product lane (redaction, in 7449540); reviewed in iteration 1, unchanged since |
-| SR-5 | Low | HA's authenticator hash settings (e.g. `plain`) also govern this device's bootstrap file, which the product re-attaches to HA's built-in authenticator (`preserved_bootstrap_authn`). Iteration 4 claimed that this device's bootstrap password is then stored in clear text. **Disproven** by three real conversions with `plain` and an explicit `salt_position` plus a same-hash control (Iteration 5): one row, not equal to the password, also after a restart: the candidate wrote that row under this device's OWN authenticator at its boot and a bootstrap import never overwrites a row (`emqx_authn_mnesia.erl:556-565` `override => false`, `:346-362`). What remains: after the import this device's own bootstrap MQTT account is refused (the conversion note `hash_differs` names it), and a bootstrap row written later (a new user in a `plain`-type bootstrap file, or a deleted row) is hashed with HA's algorithm (`:113-127`, `:528-545`; verbatim for `plain`, `emqx_passwd.erl:104`; vendor reading, not run). | clear-text claim disproven (T5b); no code fix; the remaining behaviour is an **owner policy item**, not decided here |
+| SR-5 | Low | HA's authenticator hash settings (e.g. `plain`) also govern this device's bootstrap file, which the product re-attaches to HA's built-in authenticator (`preserved_bootstrap_authn`). Iteration 4 claimed that this device's bootstrap password is then stored in clear text. **Disproven** by three real conversions with `plain` and an explicit `salt_position` plus a same-hash control (Iteration 5): one row, not equal to the password, also after a restart: the candidate wrote that row under this device's OWN authenticator at its boot and a bootstrap import never overwrites a row (`emqx_authn_mnesia.erl:556-565` `override => false`, `:346-362`). What remains: after the import this device's own bootstrap MQTT account is refused (the conversion note `hash_differs` names it), and a bootstrap row written later (a new user in a `plain`-type bootstrap file, or a deleted row) is hashed with HA's algorithm (`:113-127`, `:528-545`; verbatim for `plain`, `emqx_passwd.erl:104`; vendor reading, not run). | clear-text claim disproven (T5b). Owner decision 2026-11-24 15:26: option C, implemented by lane emqx-sr5 (`3c857c3`, engine `5142e05c`), re-reviewed in iteration 7 (T5/T5b/T15: as decided, except SR-11) |
 | SR-8 | Medium | 3761d18: the device's `EnvironmentFile=` values reached a world-readable command line of the candidate | fixed abff1a0, reproduced and verified for real (T9) |
 | SR-9 | Low | 3761d18: the candidate's environment was not read the way podman reads it for the broker | fixed abff1a0, verified against podman (T10) |
 | SR-10 | Low | A C0/C1/bidirectional/line-separator character (e.g. U+202E, U+2066, U+0085, U+2028) in an HA EMQX plugin name, a `/share` file reference or a skipped-symlink name reached a check warning raw, or forged a second job-log line, in the handed-over tree 865c930f | fixed on the integration branch only (65d8a51 `hacommon.names`; 97c994f the twelve bidi controls in names and `jobs.LOG_CONTROL_RE`); NOT in 865c930f. Proven in process: forged=True on 865c930f, forged=False on the integration tip (Iteration 4) |
+| SR-11 | Low | SR-5 option C refuses `plain` only in the global chain (`HASH_EXPR` reads `[authentication]`). A `plain` built-in database of an MQTT listener or a gateway, and rows HA wrote under `plain` before it changed the algorithm, passed the check and the conversion; the export carries the whole `emqx_authn_mnesia` table (`emqx_authn_mnesia.erl:105`) and the `gateway` root is a data root, so the candidate held HA's passwords in clear text (real: 3 of 3, `iteration7/t15-sr5b.json`), against the owner's 「不會留下明文密碼」 | fixed `9665533` (`PLAIN_EXPR`, refused at the check and before HA's export; real: 3 of 3 refused, `iteration7/t15-fix7.json`) |
 
 ### SR-1 — code execution in HA's broker (B1-06)
 
@@ -409,7 +417,7 @@ attempt per row, JSON in `iteration3/`.
   (quotes, backslashes, `$`, blanks); that difference was not attacked on Podman 6.
 - **Not covered here:** packaging, restore, readback, restart and rollback on a device (the product lane's dev-d chain and
   the .54 runs of lane arm54-2 are that evidence); Omnigent/LiteLLM SQL schema attacks (their own review lanes); the
-  independent Hermes FTS review; other EMQX versions than 5.8.9 and add-on versions outside VERSIONS; the host's Podman
+  Hermes FTS review (done separately by the main session on 2026-11-23, its own evidence folder); other EMQX versions than 5.8.9 and add-on versions outside VERSIONS; the host's Podman
   Quadlet generator; anything that needs a network.
 
 ## Iteration 4 (2026-11-24): the independent verifier's points, SR-10, SR-5 and B1-03
@@ -772,7 +780,7 @@ Attempt-36 (rollback rounds, cleanup) was queued at that time; its result is the
 2. **Boot-time loaders of HA's throwaway broker** (human security review): stopped by a safety classifier in iterations
    3 and 4, not retried in any form.
 3. **Merge policy for Dashboard-edited ACL files** (owner, SR-2 fails closed today).
-4. **Independent Hermes FTS/SQLite review** (human; refused by the auto-review earlier, not retried).
+4. ~~Independent Hermes FTS/SQLite review~~ — corrected in iteration 7 (main session, 2026-11-24 15:23): not open; the owner authorized it on 2026-11-23 and the main session did it that day (`tests/backup/evidence/hermes-fts-security-review-20261123/README.md`).
 
 ### Not covered in iteration 6
 
@@ -783,3 +791,197 @@ Attempt-36 (rollback rounds, cleanup) was queued at that time; its result is the
   light component test) was refused by the auto-mode classifier at 15:08; it was not retried in any form, and T14b runs
   only through `heavy.sh` (queued there since 14:53).
 - `commercial_acceptance: not-complete` (this is a security review, not the end-to-end acceptance).
+
+## Iteration 7 (2026-11-24): narrow re-review of SR-5 option C
+
+Scope (main session, token SR-OWNER-1942): the owner decided SR-5 on 2026-11-24 15:26 (option C: warn on the check
+page and name this device's MQTT accounts that must be set up again; refuse HA's `plain` at check time, so that no
+clear-text password is left here). Lane emqx-sr5 implemented it on `fix/emqx-sr5-hash-warning-20261124` (base
+`8844851`; product `74d237f`, backup-engine tree `5142e05c`, unchanged up to its READY tip `3c857c3`). This iteration
+reviewed the `ha_emqx.py` diff against `8844851` for five properties, reran T5 and T5b in the lab store, attacked the
+new code paths with a new harness (T15, `tests/e2e/lab/emqx_secreview/t15_sr5_review.py`), and checked the lane's
+dev-d evidence. Review branch: `sec/emqx-secreview7-20261124` from `3c857c3` (local only, never pushed). The boot-time
+loader review stays a human item.
+
+### The five questions
+
+1. **No password, hash or salt in the warning or in any other text — holds.** `HASH_EXPR` reads configuration fields
+   only (`enable`, `name`, `salt_position`, `mac_fun`, `iterations`, `dk_length` of the global `password_based` +
+   `built_in_database` authenticator). `USERS_EXPR` reads only the table KEYS (`mnesia:dirty_all_keys`; the key is
+   `{user group, user id}`, `emqx_authn_mnesia.erl:65-70`) and prints the count and ten base64 ids. Both answers are
+   parsed by full matches with token alphabets and strict base64 (the count must match the names); an unreadable answer
+   refuses with a constant text, no raw output reaches a message. Real (T15): every text the product produced in a
+   mode (blockers, warnings, job log, notes, reminders, refusal messages) was handed INTO the device broker and the
+   candidate, which compared it with every stored `password_hash` and `salt` and with the mounted bootstrap password:
+   0 / 0 / false in every mode, on the SR-5 engine and on the fix; the texts held no control character, no hex run of 24
+   or more characters and no bcrypt prefix. dev-d: the saved check results and the job records of attempt-sr5-04/05
+   (private run folders) hold the owner-decided texts only, 0 hex runs, 0 bcrypt prefixes
+   (`iteration7/devd-sr5-evidence-check.json`).
+2. **Names sanitized — holds.** `hash_change` passes the first ten ids through `hacommon.names` (each cut at 60
+   characters; C0/C1, U+2028/U+2029 and the bidi controls shown as `?`) and adds 「等 N 個」 itself; the template is
+   formatted once, so `{…}` in an id is inserted literally; the page renders engine texts as text (`h('li', {text})`,
+   `checkList`). Real (T15 `bcrypt`): this device got 13 crafted ids next to `woow`. The first ten sorted bytewise
+   (ESC, LF, TAB, U+202E, 202 characters, invalid UTF-8, `%s~p~s{0}{names}`, 、, HTML, the `WOOWUSERS:1:d29vdw==:END`
+   marker) came back exactly through the base64 transport and the warning equals the independently computed text
+   exactly (cut, `?` and U+FFFD where expected, 「等 14 個」); the other three (a comma, `:END`, a zero-width space) and
+   `woow` sort after them and are only counted.
+3. **`plain` refused before any conversion — holds for the global chain; not for the rest (SR-11).** The check adds
+   `PLAIN_REFUSED` as a blocker (enabled or not) and then no account warning; the conversion raises right after HA's
+   readings, before `emqx ctl data export`. Real: T5b `disable`/`suffix`, T5 (no `salt_position`) and T15 `conv-plain`
+   and `plain-off` (disabled) refused with exactly that text; T15's spy on `ha_emqx.ctl` saw no `data export`; no
+   candidate was built. The lane's dev-d attempt-sr5-04 shows the same on a device (43/43).
+4. **The live capture is read-only — holds.** `device_execute` = `podman exec <this device's broker> emqx eval
+   <constant>` as the owner (the target capture's OwnerRunner path, `check=False`, 120 s, bounded output); both
+   expressions only read (`emqx:get_config`, `mnesia:dirty_all_keys`, `io:format`); no HA value reaches the command.
+   Real (T15): a digest of the device's `emqx_authn_mnesia` table and raw `authentication` config before and after the
+   check and the conversion of every mode: equal. dev-d attempt-sr5-05: "the check and the conversion changed nothing on
+   this device (state digest equal)".
+5. **The real dev-d evidence shows what is claimed — holds.** For all five attempts the source commit's backup-engine
+   tree is `5142e05c`, `stdout_sha256` equals the sha256 of the stdout part of the 0600 private log, and the fixed status
+   lines equal the private stdout's status lines; attempt-01's one failure is the harness's own assumption (one own
+   account), fixed in `ae70328` and passed in 04/05. Inputs were LAB-MADE from the real x86 cold backup (the lane's
+   `fixtures.json`); no unmodified real HA backup and no ARM backup went through the SR-5 engine on dev-d.
+
+| attempt | scope | exit | engine | stdout sha256 = private log | status lines = private stdout | CHECK pass / fail |
+|---|---|---|---|---|---|---|
+| attempt-sr5-01 | sr5-plain-refusal | 1 | `5142e05c` | True | True | 41 / 1 |
+| attempt-sr5-03 | sr5-cleanup | 0 | `5142e05c` | True | True | 23 / 0 |
+| attempt-sr5-04 | sr5-plain-refusal | 0 | `5142e05c` | True | True | 43 / 0 |
+| attempt-sr5-05 | sr5-bcrypt-warning | 0 | `5142e05c` | True | True | 91 / 0 |
+| attempt-sr5-06 | sr5-cleanup | 0 | `5142e05c` | True | True | 23 / 0 |
+
+### SR-11 (Low) — `plain` outside the global chain and rows still stored in clear text pass the SR-5 refusal
+
+`HASH_EXPR` reads `emqx:get_config([authentication])`, the global chain only. EMQX 5.8.9 has more places for a
+built-in password database: an MQTT listener (`listeners.<type>.<name>.authentication`, chain `'<type>:<name>'`:
+`emqx_authn_config.erl:371-374`, created at boot with the global one: `emqx_authn_chains.erl:1015-1021`), a gateway
+(`gateway.<name>.authentication`, chain `'<name>:global'`: `emqx_gateway_utils.erl:457-475`) and a gateway listener
+(`emqx_gateway_insta_sup.erl:295-307`). All of them keep their rows in the one table the export carries whole
+(`emqx_authn_mnesia.erl:105` `backup_tables`; the user group is the chain name), and `gateway` is a data root, so a
+gateway's `plain` authenticator is imported too (later gateway users would be stored in clear text here). A row also
+keeps the hashing it was written with: an algorithm change never re-hashes it (`emqx_authn_mnesia.erl:130` update =
+create), and a row written under `plain` holds the password itself with an empty salt
+(`emqx_authn_password_hashing.erl:206-207`, `emqx_passwd.erl:104`). `PLAIN_REFUSED`'s own advice (change the algorithm,
+then set every password again) leads there when one account is skipped.
+
+**Proven for real on the SR-5 engine** (`iteration7/t15-sr5b.json`): EMQX itself (a throwaway source broker in HA's
+layout) wrote two rows under a `plain` built-in database of (a) a STOMP gateway, (b) an MQTT listener, (c) the global
+chain before HA's config switched it to sha256; the product's check showed no blocker and no warning, the conversion
+PASSED with HA's export, and the candidate held two rows whose stored value IS the password:
+- `gw-plain`: check blockers none; no account warning; ids exact; conversion PASSED; HA export ran; candidate rows=3 clear=2; device digest equal; leak rows 14, hash 0, salt 0, bootstrap password false; texts 6: control 0, hex runs 0, bcrypt prefix 0
+- `listener-plain`: check blockers none; no account warning; ids exact; conversion PASSED; HA export ran; candidate rows=3 clear=2; device digest equal; leak rows 14, hash 0, salt 0, bootstrap password false; texts 6: control 0, hex runs 0, bcrypt prefix 0
+- `past-plain`: check blockers none; no account warning; ids exact; conversion PASSED; HA export ran; candidate rows=3 clear=2; device digest equal; leak rows 14, hash 0, salt 0, bootstrap password false; texts 6: control 0, hex runs 0, bcrypt prefix 0
+
+Severity **Low**: the passwords are HA's own and were already in clear text in HA's backup; here they would sit in
+the converted backup and, after the restore, in this device's EMQX data volume. But it defeats the owner's stated goal of option C (「也不會留下明文
+密碼」), and path (c) follows from the product's own advice.
+
+**Fix** (`9665533`, `ha_emqx.py` only in `backup-engine/`; tree `3ea9610f`): `PLAIN_EXPR`, evaluated in HA's broker only,
+answers the number of `plain` built-in databases outside the global chain (MQTT listeners, gateways, gateway listeners),
+the number of rows with an empty salt whose stored value is neither hex (every other algorithm stores lowercase hex:
+`emqx_passwd.erl:106-113`, `148-150`) nor a bcrypt string (bcrypt's salt is never empty:
+`emqx_authn_password_hashing.erl:221-224`), and the first ten of their user ids (base64; never a password, hash or
+salt; a row of an unknown shape answers `bad`, which refuses). `parse_plain` is strict like `parse_users`.
+`plain_blocker` returns `PLAIN_REFUSED` first, then `PLAIN_ELSEWHERE`, then `CLEAR_ROWS` (names through
+`hacommon.names`); both new texts tell the customer what to do in HA. They refuse at the check and stop the conversion
+right after HA's readings, before HA's export, like `PLAIN_REFUSED`. docs/backup.md and CONTRACT §9 quote them. The
+page needs no change (a blocker disables 轉換; the lane's page test covers that for `PLAIN_REFUSED`).
+Blind spot (residual): a clear-text password that is itself lowercase or uppercase hex of any even length is not
+detected by the row check (the configuration checks still catch every `plain` authenticator that still exists).
+
+**Tests:** `tests/backup/test_ha_emqx_plain_review.py` (14: refusal texts at the check and in the conversion, nothing
+built or exported, order with `PLAIN_REFUSED`, no account warning next to the refusal, names sanitized and counted,
+unreadable answers refuse, only HA's broker is asked, expression pins, parser and blocker units, docs quote the engine);
+the World double in `test_ha_emqx.py` answers `PLAIN_EXPR`. Mutation check (`iteration7/mutation-s1-9665533.json`):
+**15/15 killed**, unmutated 55 tests OK (elsewhere ignored, clear rows ignored, HA not asked, conversion refusal after the export, lenient answer, names count unchecked, names unsanitized, no count beyond ten, global text not first, bad shape accepted, listeners not read, gateways not read, gateway listeners not read, hash printed, salt not required empty). Guarded runner
+(integration-3 `guard.py`, no podman/ssh/sudo/systemctl process): every `tests/backup/test_ha_emqx*` module + the lab
+EMQX modules the SR-5 lane ran: tests=315 failures=0 errors=0 skipped=0 expected_failures=0 unexpected_successes=0 blocked=0 shim_hits=0 run_native=denied elapsed=14 (every tests/backup/test_ha_emqx* module + tests.e2e.lab test_emqx_product_real_ha, test_emqx_real_candidate, test_emqx_candidate_acl_component); full `tests/backup` with the real batch-1 backups (`--b1`):
+tests=1828 failures=2 errors=3 skipped=1 expected_failures=0 unexpected_successes=0 blocked=6 shim_hits=0 run_native=denied elapsed=301; the only not-ok are 5 tests of tests.backup.test_litellm_lab_runner.LabRunnerTests (the known guard-blocked ones, the same 5 ids as the SR-5 lane's s2 run at ae70328 and the integration baseline) (`iteration7/units-s1-9665533.json`).
+
+**Rerun on the fix** (`iteration7/t15-fix7.json`, all seven modes) and on HA's REAL rows (T11):
+- `bcrypt`: check blockers none; account warning exact; ids exact; conversion PASSED; HA export ran; note + reminder exact; candidate rows=1 clear=0; device digest equal; leak rows 14, hash 0, salt 0, bootstrap password false; texts 9: control 0, hex runs 0, bcrypt prefix 0
+- `conv-plain`: check blockers PLAIN_REFUSED; no account warning; ids exact; conversion REFUSED; HA export never ran; device digest equal; leak rows 14, hash 0, salt 0, bootstrap password false; texts 3: control 0, hex runs 0, bcrypt prefix 0
+- `gw-plain`: check blockers PLAIN_ELSEWHERE; no account warning; ids exact; conversion REFUSED; HA export never ran; device digest equal; leak rows 14, hash 0, salt 0, bootstrap password false; texts 3: control 0, hex runs 0, bcrypt prefix 0
+- `listener-plain`: check blockers PLAIN_ELSEWHERE; no account warning; ids exact; conversion REFUSED; HA export never ran; device digest equal; leak rows 14, hash 0, salt 0, bootstrap password false; texts 3: control 0, hex runs 0, bcrypt prefix 0
+- `past-plain`: check blockers CLEAR_ROWS; no account warning; ids exact; conversion REFUSED; HA export never ran; device digest equal; leak rows 14, hash 0, salt 0, bootstrap password false; texts 3: control 0, hex runs 0, bcrypt prefix 0
+- `plain-off`: check blockers PLAIN_REFUSED; no account warning; ids exact; device digest equal; leak rows 14, hash 0, salt 0, bootstrap password false; texts 3: control 0, hex runs 0, bcrypt prefix 0
+- `same`: check blockers none; no account warning; ids exact; device digest equal; leak rows 14, hash 0, salt 0, bootstrap password false; texts 1: control 0, hex runs 0, bcrypt prefix 0
+- T11 x86 (real b1 x86 cold backup, `[file, built_in_database]` target, conversion body with this device's profile):
+  exit 0; PASSED (candidate built, all product checks green, profile equal); fixture `woow-b1-x86-emqx-stopped-enc.tar` (sha256 prefix 0a53e93888209316); HA rows: 3 MQTT users, 4 ACL, 2 Dashboard users, 5 retained; candidate profile ['file', 'built_in_database']; device config unchanged True; 44 readback roots; containers left 0, new dangling volumes 0; cookie on the command line False
+- T11 ARM (real b1 RPi5 ARM cold backup, same): exit 0; PASSED (candidate built, all product checks green, profile equal); fixture `woow-b1-arm-emqx-stopped-enc.tar` (sha256 prefix b6eb257cc5790bee); HA rows: 3 MQTT users, 4 ACL, 2 Dashboard users, 5 retained; candidate profile ['file', 'built_in_database']; device config unchanged True; 44 readback roots; containers left 0, new dangling volumes 0; cookie on the command line False
+
+### T5 and T5b on the SR-5 engine (`5142e05c`)
+
+- T5 (iteration 3's HOCON: `plain` without `salt_position`): REFUSED with exactly 「EMQX 不能搬過來：」 + `PLAIN_REFUSED`
+  (41.2 s); device bootstrap row before: rows=1:plain=0.
+  Iteration 3's artefact (the authentication-root comparison) is gone: the refusal is now the decided one.
+- T5b: `disable`: REFUSED (PLAIN_REFUSED), 29.6 s; `suffix`: REFUSED (PLAIN_REFUSED), 26.4 s; `control`: PASSED, 126.7 s; candidate rows=1:plain=0, own=login:wrong=refused; after restart rows=1:plain=0, own=login:wrong=refused. Device before
+  rows=1:plain=0 (own=login:wrong=refused), after rows=1:plain=0.
+- T15 on the SR-5 engine, the decided behaviour (`iteration7/t15-sr5.json`):
+  - `bcrypt`: check blockers none; account warning exact; ids exact; conversion PASSED; HA export ran; note + reminder exact; candidate rows=1 clear=0; device digest equal; leak rows 14, hash 0, salt 0, bootstrap password false; texts 9: control 0, hex runs 0, bcrypt prefix 0
+  - `conv-plain`: check blockers PLAIN_REFUSED; no account warning; ids exact; conversion REFUSED; HA export never ran; device digest equal; leak rows 14, hash 0, salt 0, bootstrap password false; texts 3: control 0, hex runs 0, bcrypt prefix 0
+  - `plain-off`: check blockers PLAIN_REFUSED; no account warning; ids exact; device digest equal; leak rows 14, hash 0, salt 0, bootstrap password false; texts 3: control 0, hex runs 0, bcrypt prefix 0
+  - `same`: check blockers none; no account warning; ids exact; device digest equal; leak rows 14, hash 0, salt 0, bootstrap password false; texts 1: control 0, hex runs 0, bcrypt prefix 0
+
+### Real runs of iteration 7 (lab store `labpodman`, every container `--network none`, generated values only)
+
+| run | engine | exit | seconds | evidence |
+|---|---|---|---|---|
+| T15 first attempt: 4 modes real, 3 plain-row modes = harness error (source broker data dir; fixed 698f39b, kept) | `5142e05c` | 0 | 1230.8 | `iteration7/t15-sr5.json` |
+| T5b (SR-5): `disable`, `suffix` (plain) and the same-hash `control` | `5142e05c` | 0 | 197.6 | `iteration7/t5b-sr5.json` |
+| T5 (SR-5): `plain` without `salt_position` (EMQX fills `prefix`) | `5142e05c` | 0 | 41.4 | `iteration7/t5-sr5.json` |
+| T15 plain-row modes on the SR-5 engine (the SR-11 proof) | `5142e05c` | 0 | 643.3 | `iteration7/t15-sr5b.json` |
+| T15 all 7 modes on the SR-11 fix | `3ea9610f` | 0 | 960.5 | `iteration7/t15-fix7.json` |
+| T11 real b1 x86 cold backup, conversion body, `[file, built_in_database]` target, on the fix | `3ea9610f` | 0 | 211.6 | `iteration7/t11-fix7-x86-builtin.json` |
+| T11 real b1 ARM (RPi5) cold backup, same, on the fix | `3ea9610f` | 0 | 227.8 | `iteration7/t11-fix7-arm-builtin.json` |
+
+Every run went through `team/heavy.sh` under this lane's own lock. Lab left by this lane after the last run (18:25):
+0 containers, 0 volumes, 0 secrets (by label and by name); T11: 0 containers and 0 new dangling volumes per run. Code identities: `5142e05c` = `3c857c3` (SR-5 READY), `3ea9610f` = `9665533` (SR-11 fix).
+
+### Other observations (no code change here; for the product lane)
+
+- **O-1 (UX):** the warning lists the first ten ids sorted bytewise; with more than ten accounts this device's own
+  service account (`woow`, the bootstrap user) can be hidden behind 「等 N 個」 (T15: `woow` sorted last). Listing the
+  bootstrap file's accounts first would help the customer.
+- **O-2:** zero-width and other format characters (U+200B-U+200D, U+2060, U+FEFF, U+00AD) are not replaced by
+  `hacommon.names`, so two names can look alike in the list. Shown only to this device's owner, about this device's
+  own accounts; Low.
+- **O-3 (the SR-5 verifier's open edge):** `hash_change` ignores HA's `enable` and a missing HA built-in database. With
+  HA's built-in database disabled or absent the check names no account; on a device with bootstrap users the
+  conversion then refuses (`preserved_bootstrap_authn`: no single enabled HA authenticator for the bootstrap file), so
+  the check passes and the conversion refuses (fail closed, but the page does not predict it); on a device without
+  bootstrap users its accounts stop working and only the general note says the MQTT accounts become HA's.
+- **O-4:** accounts this device created in its Dashboard are replaced by HA's in every import (the candidate keeps only
+  the bootstrap rows), equal hashing or not; the warning covers the hashing case, the general import note the rest.
+- **O-5:** listener-level and gateway accounts of this device are not named by the warning (CONTRACT §9 says so).
+
+### Secret scan
+
+With the existing lab reader and scanner (`ha_import_b1_e2e.Secrets`, `scan_host_evidence`: every lab secret value, raw
+and JSON-escaped; values never printed), at 2026-11-24 18:26 +0800: committed evidence (all iterations) 84 files, 0 hits; harness folder 21 files, 0 hits; SR-5 lane evidence (emqx-sr5-20261124) 6 files, 0 hits; EMQX product attempts folder (incl. attempt-sr5-*) 41 files, 0 hits; iteration 7 scratch evidence 24 files, 0 hits; iteration 7 run outputs 30 files, 0 hits; SR-5 private run logs 20261124T161203 16 files, 0 hits; SR-5 private run logs 20261124T161757 4 files, 0 hits; SR-5 private run logs 20261124T162320 15 files, 0 hits; SR-5 private run logs 20261124T163039 21 files, 0 hits; SR-5 private run logs 20261124T164629 4 files, 0 hits.
+
+### Not covered in iteration 7
+
+- **No dev-d run by this lane.** The device product flow of the SR-11 engine is the final verification's EMQX run on
+  the final tip (main session 17:23 and 17:56: the real RPi5 ARM cold backup through the full chain on dev-d, after
+  integration-3's final line; that run also shows that neither the SR-5 warning nor an SR-11 refusal appears for real
+  backups with equal hashing). The final tip's backup-engine differs from the SR-5 engine only in `ha_emqx.py`.
+- SCRAM, pbkdf2 and other salt variants (unit level and vendor reading only), the account warning for listener or
+  gateway users, a device that itself uses `plain` (its own choice; only HA's side is refused), EMQX versions other
+  than 5.8.9.
+- The clear-row check's blind spot (a clear-text password that is entirely hex), see SR-11.
+- Other secrets HA's data carries as they are, by design and outside option C (which is about MQTT account passwords):
+  TLS-PSK shared secrets (`emqx_psk`, TLS-PSK needs them in clear) and passwords or tokens inside migrated connectors,
+  bridges and actions (EMQX keeps those in its configuration; SR-3/SR-6/SR-7 stop the paths to THIS device's secrets).
+- `commercial_acceptance: not-complete` (a security review, not the end-to-end acceptance).
+
+### Owner and human items
+
+1. **Boot-time loaders of HA's throwaway broker** (human security review): stopped by a safety classifier in iterations
+   3 and 4, not retried in any form.
+2. **SR-11 widens option C's refusal** to the other places `plain` lives (as the owner's stated goal requires); it
+   refuses HA backups that `3c857c3` converted. If the owner prefers another remedy for old clear-text rows (for
+   example dropping them with a note instead of refusing), that is a new decision; the code follows option C as
+   worded today.
+(Decided, no longer open: SR-5 = option C, implemented; Dashboard-edited ACL files = option A, a known limitation;
+the Hermes FTS/SQLite review was done by the main session on 2026-11-23.)
