@@ -1,18 +1,24 @@
-# EMQX HA import (product path) — independent adversarial security review (2026-11-23)
+# EMQX HA import (product path) — independent adversarial security review (2026-11-23 and 2026-11-24)
 
-Lane emqx-secreview (owner instance SR-OWNER-1942). Reviewed: the EMQX import code on
-`integration/ha-import-batch1-20261123` (ae5420d: `ha_emqx.py`, `ha_emqx_acl_preservation.py`,
-`ha_emqx_acl_path_proof.py`, `ha_emqx_settings.py`, the shared member reader `habackup.py`, `tempctr.py`) and the
-emqx-product lane's product patch that removes the public guard `PRESERVATION_BLOCKER` (scratch
-`product-engine.patch`, sha256 `442dd509…2954`; target preflight `target_static`, readback `import_check` /
-`verify_restored`, `flows`/`archive`/`haimport` hooks). The product lane's READY commit `7449540` is reviewed below ("Final product diff").
+Lane emqx-secreview (owner instance SR-OWNER-1942), three iterations. This review attacked the product import as a
+malicious HA backup would, fixed what it could prove, and reran the attacks against the engine that is handed over.
 
-Fixes: branch `sec/emqx-secreview-20261123` (local only, not pushed): **75aad7a** (SR-1, SR-2, SR-3),
-**f397590** (SR-6) and **7b173af** (SR-7), on top of integration ae5420d. The product branch `feat/ha-import-emqx-product-20261123`
-merged 75aad7a as its base (3bb261d) and, after this review flagged it, 7b173af (41ad5ef); its tip 9036688 has a
-`backup-engine` byte-identical to the merged tree the final real runs here used (`merged`, tree 99b7cae).
+## Summary (read this first)
 
-## How it was tested
+- **Nine findings, SR-1 to SR-9.** Five High/Medium findings were confirmed by real attacks and fixed (SR-1, SR-2, SR-3,
+  SR-6, SR-8); SR-7 (Medium) is a refusal added because the vendor code proves the leak, its ExHook trigger is
+  exercised by T12 (iteration 2); SR-4 and SR-9 are Low and fixed; SR-5 was exercised for real (T5) and is refused fail-closed, no finding left.
+- **Where the fixes are:** SR-1, SR-2, SR-3 75aad7a; SR-6 f397590; SR-7 7b173af; SR-4 in the product's own 7449540; SR-8 and
+  SR-9 abff1a0. All of them are in the product engine that is handed over (the last one merged as 620bdd5).
+- **Engine reviewed in iteration 3:** `feat/ha-import-emqx-product-20261124` @ `e08f8a1` (product READY of 08:30), `backup-engine` tree `865c930f392006e0080de506eb7c425fd81becd7` = the product tip `5786ae4` + `abff1a0` (merge `620bdd5`) + the Podman 6 tempctr fix (cherry-pick `e08f8a1`, patch id equal to `8613ffa` and `c8df1f2`); the review reruns used the same tree as trial commit `cd66230`.
+- **What passing here means:** this review proves conversion and refusal behaviour of the product's own code against
+  real EMQX 5.8.9 brokers in throwaway rootless lab containers with `--network none`. It is not the commercial
+  acceptance; the product lane's dev-d chain and the .54 runs (Podman 6.1.1, ARM and x86 backups) are the product flow
+  evidence. `commercial_acceptance: not-complete`.
+- **Not covered:** see the last section. Two items need a human: the boot-time behaviour of HA's throwaway broker on HA's
+  own files (reviewed only in part, see there) and a merge policy for Dashboard-edited ACL files.
+
+## How it was tested (all iterations; details of iteration 1)
 
 - The product's OWN code ran against real EMQX 5.8.9 brokers: `member_pass`/`scan_member`, `ha_broker`,
   `take_export`, `capture_target_seed`, `target_broker`, `restore_target_settings`, the readback — through the real
@@ -40,9 +46,11 @@ merged 75aad7a as its base (3bb261d) and, after this review flagged it, 7b173af 
 | SR-2 | High | Removing the guard reopens B1-02: a device ACL file in the data volume (where the Dashboard writes edited rules) is overwritten by HA's file ACL; all config/readback comparisons stay equal | fixed 75aad7a (fail closed) |
 | SR-3 | High | Migrated connectors/authenticators with `file://` secrets read THIS device's bootstrap credentials and `/proc/self/environ` (Dashboard password) and send them to the server HA names | fixed 75aad7a |
 | SR-6 | High | Migrated rule SQL `jq('env…')` exposes this device's env secrets (bypasses SR-3) | fixed f397590 |
-| SR-7 | Medium | A migrated HTTP/JWT/LDAP/SQL authenticator or ExHook server would receive this device's own service logins (bootstrap passwords); vendor-proven, NOT reproduced end to end | refusal added 7b173af (defense in depth) |
-| SR-4 | Low | The product readback hashes RAW config roots that contain env secrets (`dashboard.default_password`, `node.cookie`) into `import_check` | product lane (redaction), not on this branch |
-| SR-5 | Low / info | HA's authenticator hash settings (e.g. `plain`) would apply to this device's bootstrap users, which the product re-attaches to HA's built-in authenticator | not exercised (T5 written, dropped for host load); residual |
+| SR-7 | Medium | A migrated HTTP/JWT/LDAP/SQL authenticator or ExHook server would receive this device's own service logins (bootstrap passwords); vendor-proven, the HTTP path was not reproduced end to end (stopped earlier by the authentication-equality check) | refusal 7b173af; its ExHook trigger is exercised for real by T12 (iterations 2 and 3) |
+| SR-4 | Low | The product readback hashed RAW config roots that contain env secrets (`dashboard.default_password`, `node.cookie`) into `import_check` | fixed by the product lane (redaction, in 7449540); reviewed in iteration 1, unchanged since |
+| SR-5 | Low / info | HA's authenticator hash settings (e.g. `plain`) would apply to this device's bootstrap users, which the product re-attaches to HA's built-in authenticator | exercised for real in iteration 3 (T5): with HA's `plain` algorithm the conversion refuses because the restored `authentication` root differs from this device's (fail closed); the device's bootstrap user was not stored in plain text. No finding left; a backup with a plain-hash authenticator is refused instead of migrated (availability) |
+| SR-8 | Medium | 3761d18: the device's `EnvironmentFile=` values reached a world-readable command line of the candidate | fixed abff1a0, reproduced and verified for real (T9) |
+| SR-9 | Low | 3761d18: the candidate's environment was not read the way podman reads it for the broker | fixed abff1a0, verified against podman (T10) |
 
 ### SR-1 — code execution in HA's broker (B1-06)
 
@@ -99,7 +107,7 @@ Proven in a throwaway broker: `emqx:get_raw_config([dashboard])` has `default_pa
 `import_check`; a converted HA backup does not otherwise contain these podman secrets, so an unencrypted converted
 backup gives offline brute-force material. Recommended (product lane): replace secret-named values before hashing.
 
-## Final product diff (feat/ha-import-emqx-product-20261123 @ 7449540)
+## Iteration 1: final product diff (feat/ha-import-emqx-product-20261123 @ 7449540)
 
 - **Was blocking (resolved by 41ad5ef):** `7449540` merged only 75aad7a; SR-6 (f397590) and SR-7 (7b173af) are missing, and SR-6 was proven
   for real on exactly that code state. `git merge-tree --write-tree 7449540 7b173af` is clean (tree 99b7cae); on that
@@ -115,7 +123,7 @@ backup gives offline brute-force material. Recommended (product lane): replace s
   readback coverage.
 - `archive.py`, `flows.py`, `haimport.py` hunks are the ones reviewed in the scratch patch. No new finding.
 
-## Real attack and regression runs (lab store, `--network none`)
+## Iteration 1: real attack and regression runs (lab store, `--network none`)
 
 Each row is one attempt with its own JSON file here. "attack" rows ran the code without the fix and show the
 exploit; "fixed" rows ran the same crafted backup on the fixed code. The real-backup rows are the regression on the
@@ -158,13 +166,201 @@ refusal, credential-receiver refusal); baseline green after restoring (`mutation
 | Secrets in the product lane's real-run harness | values pass through the b1 `Secrets` redactor; CHECK lines are fixed; a `leaks` step scans the evidence | code review of the draft harness |
 | Privileges | throwaways are rootless, `--network none`, `no-new-privileges`, pids/memory limits; HA's broker read-only root, uid 0 inside the user namespace; the candidate runs as the image user | tempctr.py, ha_emqx.py, every run here |
 
+### Corrections to iteration 1's own claims (independent verifier, 2026-11-23 22:42, and iteration 2/3)
+
+| Claim of iteration 1 | What is true |
+|---|---|
+| "5 fixed and verified by real attacks" | SR-7 was never exercised for real in iteration 1: the HTTP-authenticator run was refused earlier by another check and ExHook was untested. Iteration 2 ran the ExHook case for real (T12, refused naming ExHook); the HTTP-authenticator path is still stopped by the earlier check, not by SR-7's own refusal. |
+| "No lab leftovers" | 24 anonymous EMQX data/log volumes of 20:02 to 22:07 stayed in the lab store (one held this lane's `secrev-*.hocon` probe files). Listed and removed by name in iteration 2; none left (checked again in iteration 3). |
+| T7 (real backups) covered the decision-C and profile checks | T7 called `_build_candidate` with `profile=None`. T11 (iterations 2 and 3) runs it with this device's profile. Packaging, restore, readback and rollback stay product-lane evidence (dev-d). |
+| SR-2 control with a read-only ACL on fixed code | That run failed with BrokenPipe and was not rerun; iterations 2 and 3 rerun it (PASSED, stranger denied). |
+| `vendor-probes.json` | A hand-written summary of vendor probes; it has no exit code and no stdout hash. |
+| stdout hashes | Three iteration-1 attempts (SR-1 attack, SR-2 attack, T4) printed their result in the session and were not saved; their JSON has no stdout hash. The reruns of iterations 2 and 3 have one. |
+
+## Iteration 2 (2026-11-24): the product delta since the 21:52 review
+
+Reviewed: `feat/ha-import-emqx-product-20261123` from 9036688 (the tree iteration 1 approved) to 7d9d468: 28e9492
+(boot-form comparisons), 3761d18 (`EnvironmentFile=` into the candidate), fdb7cfe and 0d260db (refusals name the
+differing roots; a root loaded back is compared in this device's boot form), 92f2461 and be2c92d (the candidate starts
+with this device's scheduler counts, `ERL_AFLAGS`), be5bc6f (HA's broker mounts a job volume at `/opt/emqx/data`),
+7d9d468 (docs). `backup-engine` of 7d9d468 == 0d260db == tree 5292c15 (the engine of the product lane's dev-d attempts
+12-14). Fix branch: `sec/emqx-secreview2-20261124` (local only): **abff1a0** (SR-8, SR-9) on 7d9d468, plus a merge of
+the iteration-1 branch (cad50dd) for this README.
+
+### SR-8 (Medium) — the device's EnvironmentFile values on a command line (3761d18) — fixed abff1a0
+
+3761d18 read the Quadlet's `EnvironmentFile=` files and passed their `EMQX_*` values to the candidate as
+`podman run --env KEY=VALUE`. Such a file may hold secrets (the product backs it up as a 0600 config file, CONTRACT
+`config_files`; a customer may keep `EMQX_DASHBOARD__DEFAULT_PASSWORD` or `EMQX_NODE__COOKIE` there), and every local
+account can read every process's command line (`/proc/<pid>/cmdline` is 0444; this host has no `hidepid`). It broke
+the runner's rule (`podman.py:9-10` "Secrets and keys never appear in argv") and tempctr's own (`run_argv`: an `env`
+value is never a secret). The device's own broker never exposes them: Quadlet passes `--env-file`.
+**Real run T9** (lab store, `--network none`, generated canary in a 0600 env file, the product's `Target.candidate_env()`
++ `TempObjects.run('emqx-new', …)` exactly as `target_broker` calls them, a sampler reading every
+`/proc/<pid>/cmdline`): on 7d9d468 the canary was in world-readable command lines of the podman processes while the
+candidate started (2 in the first run, 1 in the recorded rerun; the sampler saw the `podman run` command line itself in
+every run); the device's way (`--env-file`) put it in none; both containers received the value. On abff1a0: 0, and the
+candidate still received the value. Exposure needs a local account on the device during each conversion; the product's
+own package keeps its secrets in Podman secrets (passed by name), so dev-d was not exposed.
+**Fix:** `tempctr.run_argv(env_files=…)` passes `--env-file <absolute plain path>` (no empty, `.` or `..` component);
+`Target.candidate_env()` returns `(env, env_files)` and `target_broker` gives podman the device's own files, which podman
+reads for the candidate exactly as for the running broker. Every refusal of 3761d18 stays (quotes, backslashes, `$`,
+blanks, conflicts, files outside the owner's home). The candidate's `ERL_AFLAGS` stays on `--env`: real podman 4.9.3
+applies `--env` over `--env-file` in either order. Behaviour change: the candidate now also gets the file's non-EMQX
+lines, as the device's broker does (they configure nothing in EMQX; `getenv` in rules only reads `EMQXVAR_*`, which the
+restored broker exposes to the same rules anyway, and no rule runs in the candidate: no client, `$SYS` ticker quiesced).
+
+### SR-9 (Low) — the candidate's environment was not the broker's (3761d18) — fixed abff1a0
+
+`candidate_env()` split lines with `str.splitlines()` and trimmed every Unicode blank; podman splits at `\n` only (a
+final `\r` dropped) and trims blanks and tabs. **Real run T10** (podman 4.9.3 as the oracle: `--env-file` + `env -0` in
+the image, 25 crafted files of generated values): on 7d9d468 13 of 25 files gave the candidate another environment than podman gives the broker (a separator character inside a value, a leading non-ASCII blank, an `export ` line), 10 the same, 2 refused (an empty value, a blank before `=`); mostly the boot-form comparison then refuses
+(fail closed), but the claim "exactly what the running broker got" was false. On abff1a0, where podman reads the
+files itself and the started candidate's environment is compared: 23 of 25 the same and the same 2 refused.
+
+### Regression tests and mutation checks
+
+- `tests/backup/test_ha_emqx_security_review2.py` (7 tests): no podman command line of a whole conversion holds an
+  EnvironmentFile value, the file goes with `--env-file`, lines are read as podman reads them, `env_files` paths are
+  checked. Two product assertions encoded SR-8 and now assert the opposite (EnvironmentFileTests,
+  ConvertReadbackTests). The fake podman knows `--env-file`.
+- EMQX modules + harness + lab candidate: 222 OK, 0 blocked (guarded runner). Shared modules that use the changed
+  fakes or tempctr: 162, only the 7 known `test_ha_omnigent` SECURITY_BLOCKER refusals, identical on 7d9d468.
+- Mutations of the fix: 7/7 killed (values back on `--env`, `splitlines()`, Unicode `lstrip()`, unchecked paths, no
+  `--env-file`, `target_broker` without the files, a final `\r` kept): `iteration2/mutation-sr8-sr9.json`.
+- Decision C on the fixed tree: 3/3 killed (`acl_blocker` never blocks; the check does not add it; the conversion skips
+  it): `iteration2/mutation-decision-c.json`.
+
+### The rest of the delta (reviewed, attacked where possible, no finding)
+
+| Commit | What was checked | Result |
+|---|---|---|
+| 28e9492 boot forms | `BOOT_CONFIG_EXPR` is a fixed string; `read_effective_config(_expr=…)` accepts only the two constants. `emqx_config:fill_defaults/1` = `hocon_tconf:check_plain(…, make_serializable)` per root (`emqx_config.erl:487-523`), the processing EMQX applies at every boot and `conf load` (`:341,345`): no new evaluation of HA data; it runs in the `--network none` candidate and on the restored broker, which reads the same files at boot. Whole-root equality; filled defaults hide only "explicit default vs absent". The readback record hashes the boot form after SR-4 redaction (secret-named leaves, e.g. `node.cookie`, `dashboard.default_password`, now also when they come from an EnvironmentFile) | OK; residual: the boot form is larger (limit `MAX_HOCON` 8 MiB): a huge HA configuration refuses (availability only) |
+| fdb7cfe, 0d260db root names | `hacommon.names(…, 8)` gets map keys only (cut at 60). In `target_broker` the keys come from this device and its snapshot before any HA data; in `restore_target_settings` from `preserved_settings` (non-data roots + `authorization`). HA's export carries only `DATA_ROOTS` (`--root-keys` from `ROOTS_EXPR`, `[a-z_]+`), and an added root refuses earlier with a fixed text. 0d260db: a loaded-back root (`conf load --replace` of this device's own value) must equal this device's boot form: it cannot hide an HA value other than the schema default this device's next boot uses anyway | OK: only this device's EMQX schema root names, never values |
+| 92f2461, be2c92d schedulers | `VM_EXPR` fixed; the answer must be exactly `WOOWVM:a:b:END` (+`ok`), `[1-9][0-9]{0,3}`, online ≤ total ≤ 1024, else a fixed refusal; `ERL_AFLAGS` is `+S a:b` from those two integers (no injection, not secret); the candidate's own answer must equal before anything is compared. With SR-8's fix a device file's `ERL_AFLAGS` cannot replace it (`--env` wins, real podman) | OK |
+| be5bc6f image volume | HA's broker mounts this job's own volume at `/opt/emqx/data` (`rw,noexec,nosuid,nodev`), removed with the job. Vendor: bin/emqx runs `nodetool hocon` at every boot (`bin/emqx:476-478,536,590`), which prepends `RUNNER_ROOT_DIR/data/patches` = `/opt/emqx/data/patches` to its code path (`bin/nodetool:28,364-374`); `noexec` does not stop BEAM loading. In HA's broker that path is the fresh job volume (image copy-up, empty `patches/`); HA's members go to `HA_DATA_DIR` (`/data/emqx/data`) only, so nothing HA controls is there at boot. SR-1 attack rerun on the fixed engine: the HA broker started and exported, the plugin did not run and left no marker (`t2-plugin-exec-fixed.json`) | OK; real runs left no anonymous volume: T11, T12 and T9 counted the dangling volumes before and after: 0 new ones |
+| decision C (owner 「C」) | `acl_blocker`/`analyse`/`_build_candidate` unchanged by the delta. **Real T11** (REAL batch-1 HA backups, the product's own `target_profile` on a device stand-in with the product package's EnvironmentFile, `_build_candidate(profile=…)` as `convert()` calls it, fixed engine): x86 and ARM: on a [file] device the conversion refuses with exactly the owner's text before a candidate exists and the device's configuration digest is unchanged; on [file, built_in_database] it passes every product check (44 readback roots, HA rows ACL 4, admins 2, API keys 1, MQTT users 3, banned 1, retained 5, 2 rules), the candidate holds the same profile, and the value from the device's EnvironmentFile (`EMQX_NODE__COOKIE`, compared in memory) reached the candidate through podman | holds |
+
+### Iteration-1 items re-checked
+
+- **Lab volumes:** the 24 anonymous EMQX volumes iteration 1 left (2026-11-23 20:02-22:07) were listed and removed by
+  name (`iteration2/lab-volume-cleanup-list.json`, `-remove.json`): 18 tied by journald `container create` events within
+  2 s to this lane's `woowbk-secrev-*` probes or the `emqx-ha` brokers its runs started (pre-be5bc6f), 6 by timing to
+  this lane's recorded run starts; shapes: image copy-ups of `/opt/emqx/data`, probe data dirs (one held this lane's
+  `secrev-*.hocon` probe files), empty log volumes. 19 other dangling volumes (other lanes, earlier days; later also
+  PostgreSQL ones from another lane) were not touched.
+- **SR-7 real trigger:** T12 (HA's `cluster.hocon` with an enabled ExHook server through the conversion body, real EMQX 5.8.9): the conversion refuses and names ExHook (292.7 s); the HTTP-authenticator trigger stays refused earlier by the authentication-equality check (iteration 1)
+- **SR-2 read-only control** (failed with BrokenPipe in iteration 1, never rerun): PASSED on the fixed engine; the device's read-only ACL governs, a stranger is denied in the candidate; the SR-2 attack on the
+  fixed engine: REFUSED with the SNAPSHOT_CHANGED text.
+- **T7 had no profile:** T11 now runs the conversion body with this device's profile (decision C, profile equality at
+  the end) and the product's `Target` (EnvironmentFile through podman).
+- **SR-5** (plain hashing of the device's bootstrap users): not exercised in iteration 2; exercised for real in iteration 3 (T5, refused fail-closed).
+
+### Real runs of iteration 2 (lab store, `--network none`, generated credentials)
+
+| Run | Code | Result | Exit | Elapsed s | Evidence (`iteration2/`) |
+|---|---|---|---|---|---|
+| T9 EnvironmentFile value on a command line, before the fix | 7d9d468 | EXPOSED: 1 command line(s) with the value | 0 | 20.4 | t9-tip-r2.json |
+| T9, after the fix | abff1a0 | NOT-EXPOSED: 0 command line(s) with the value | 0 | 19.6 | t9-fixed-r2.json |
+| T10 25 crafted env files vs podman 4.9.3, before | 7d9d468 | DIFFERENT 13, REFUSED 2, SAME 10 | 0 | 20.2 | t10-tip-r2.json |
+| T10, after | abff1a0 | REFUSED 2, SAME 23 | 0 | 59.6 | t10-fixed-r2.json |
+| SR-1 plugin attack, fixed engine | abff1a0 | HA's broker started+exported; plugin running False; code executed False | 0 | 101.0 | t2-plugin-exec-fixed.json |
+| SR-2 control: device ACL read-only mount (rerun of iteration 1's failed run) | abff1a0 | PASSED (candidate built, all product checks green); stranger in the candidate: deny | 0 | 348.0 | t1-datadir-acl-fixed-ro.json |
+| SR-2 attack: device ACL in the data volume | abff1a0 | REFUSED: EMQX 不能搬過來：這台 EMQX 的 ACL 或憑證檔案放在資料卷裡（例如在 Dashboard 編輯過授…; stranger in the candidate: allow | 0 | 257.0 | t1-datadir-acl-fixed-data.json |
+| SR-7 ExHook server in HA's settings | abff1a0 | REFUSED naming ExHook | 0 | 293.0 | t12-exhook-fixed.json |
+| Decision C: REAL x86 b1 backup, device [file] | abff1a0 | REFUSED with the owner's text: True; candidate built: False; device unchanged: True | 0 | 215.0 | t11-fixed-x86-file.json |
+| Decision C: REAL ARM b1 backup, device [file] | abff1a0 | REFUSED with the owner's text: True; candidate built: False; device unchanged: True | 0 | 183.0 | t11-fixed-arm-file.json |
+| REAL x86 b1 backup, device [file, built_in_database] | abff1a0 | PASSED; readback roots 44; profile ['file', 'built_in_database']; device unchanged: True; new dangling volumes 0 | 0 | 387.0 | t11-fixed-x86-builtin.json |
+| REAL ARM b1 backup, device [file, built_in_database] | abff1a0 | PASSED; readback roots 44; profile ['file', 'built_in_database']; device unchanged: True; new dangling volumes 0 | 0 | 540.0 | t11-fixed-arm-builtin.json |
+
+## Iteration 3 (2026-11-24): the merged engine and the Podman 6 volume fix
+
+### What was audited before any new run
+
+- Iteration 2's detached runs survived the 03:33 kill of all agents and ended with exit 0 (T9, T10, T11 x4, T12, T1, T2);
+  their JSONs are in `iteration2/`.
+- The dev-d attempt of iteration 2 did run (04:07): `attempt-secreview2-01` deployed the fixed engine (setup 8/8) and the
+  harness then skipped the import step because dev-d's headroom was 1.5 GiB. Exit 1, kept as a failed attempt
+  (`tests/e2e/lab/evidence/emqx-product-20261123/attempt-secreview2-01.json`). Iteration 3 queued no dev-d run: the
+  product lane's own chain runs the fixed engine on dev-d.
+- **Lab volumes:** of the 24 anonymous EMQX volumes of iteration 1, all 24 were removed by iteration 2 (listed first, names
+  only, `iteration2/lab-volume-cleanup-*.json`). Iteration 3 looked at every remaining dangling volume: none holds EMQX
+  data (the 8 newest hold PostgreSQL clusters of other lanes). Nothing is left to remove for this lane.
+
+### Review of the merged diff
+
+The product lane merged this review's fix twice with the same result (the first branch of 08:14, then the new owner's
+branch, after its first agent got stuck): `183dd6e` + `efd620b`, and `620bdd5` + `e08f8a1`. Compared:
+
+| Check | Result |
+|---|---|
+| `backup-engine`, `docs` and `tests/backup` of the merge vs abff1a0 | 0 engine lines differ (merge 183dd6e and 620bdd5); `efd620b`/`e08f8a1` change only `tempctr.py` (+53/-2) and `test_ha_tempctr.py` |
+| Patch id of the cherry-pick | equal to 8613ffa and to c8df1f2 |
+| `backup-engine` tree hash | `865c930f392006e0080de506eb7c425fd81becd7` on both product branches and on the trial commit that the reruns used |
+| SR-8/SR-9 code and its tests after the merge | present unchanged (`candidate_env` returns `(env, env_files)`, `target_broker` passes `env_files`); the `_env_files` path check and `--env-file` order kept |
+| Interplay of the two changes in `tempctr.py` | independent: `run_argv` (env files) and `volume_import`/`_apply_root` (volume owner) share no code path |
+| Product evidence for the merged engine (read, not re-run here) | attempt-18 ARM full chain PASS 74/74, attempt-19 ARM rollback rounds PASS 84/84 and attempt-20 x86 full chain PASS 66/66 on dev-d (engine 865c930f); attempts 21 to 23 (x86 rollback rounds, decision-C refusal, cleanup) were still running when this README was written (attempt-21's first try stopped at its own setup check, a leftover anonymous volume on dev-d, before any product step); lane arm54-2's .54 run (`e08f8a1` merged with that lane's other Podman fixes, `ha_emqx.py` byte-equal): 164/164; unit and mutation sets of the product lane 222 + 438 + 6 OK, 81 mutations (79 killed, 2 test gaps closed in 7e530cf without an engine change) |
+
+Verdict: no new finding. SR-8 and SR-9 are fixed in the engine that is handed over.
+
+### The Podman 6 volume fix (tempctr `tar_root` / `_apply_root`, c8df1f2 = 8613ffa)
+
+`TempObjects.volume_import` now keeps the stream's first 64 KiB, reads the owner, group and mode of a leading `.`
+member and applies them to the volume's mountpoint with `podman unshare chown --no-dereference` / `chmod` in the owner's
+user namespace (Podman 6.1.1 ignores that entry on import; EMQX's candidate then could not write its data folder on
+.54). Checked:
+
+| Question | Answer |
+|---|---|
+| Can HA choose the owner or mode of a volume's top directory? | No. Every EMQX producer (`emqx-src`, `emqx-xfer`, `emqx-in`, `emqx-new`) writes the first member itself with fixed values; HA's entries are rewritten one by one (`hacommon.info`, no copied PAX records, no set-id bits), and a second `.` member is impossible (`_Sink.names`). New test `VolumeTopTests` (a hostile add-on: everything 07777, uid 4242): green on abff1a0 and on the merge; 6/6 mutations killed (`mutation-volume-top-iteration3.json`), two of them in `_apply_root` itself. |
+| Which other callers use it? | Headscale `hs-check`, n8n `n8nsrc`, Odoo/Omnigent `hapg`, Odoo `odoo-addons`: all write (or stream) an engine-made tar; the top entry comes from the engine or from this device's own converted volume. |
+| Is the decompression or parsing risky? | `tarfile.open(mode='r|')` reads a plain (never compressed) stream from at most 64 KiB; errors give "no entry" and nothing is applied. |
+| Can the path be redirected? | The mountpoint is Podman's own answer for a volume this job created (`^woowbk-…`), must be absolute and one line; `chown` does not follow a link; the commands run as the owner inside their user namespace. Owners are never root (catalog rejects `root`). |
+| Behaviour on Podman 4.9.3 | `chown`/`chmod` to the values Podman already used: no change (the real runs below). On 6.1.1 the .54 runs of lane arm54-2 passed with it. |
+
+### Regression reruns of the attacks on the merged engine
+
+Every `podman run` below carried `--network none` in the separate lab store; nothing touched a device or production. One
+attempt per row, JSON in `iteration3/`.
+
+| Run | Result | Exit | Elapsed s | Evidence (`iteration3/`) |
+|---|---|---|---|---|
+| SR-8 env file value on a command line | NOT-EXPOSED: 0 command line(s) with the value; the candidate received it: True | 0 | 21.0 | t9-merged.json |
+| SR-9 25 crafted env files vs podman | REFUSED 2, SAME 23 (podman 4.9.3) | 0 | 41.6 | t10-merged.json |
+| 16 crafted add-on members | 16 crafted members: 10 refused, 6 accepted only with the hostile part dropped or neutralised | 0 | 0.6 | t4-merged.json |
+| SR-1 plugin attack | HA's broker started+exported; plugin running False; code executed False | 0 | 47.9 | t2-merged.json |
+| Decision C: REAL x86 b1 backup, device [file] | REFUSED with the owner's text: True; candidate built: False; device unchanged: True; new volumes 0 | 0 | 90.3 | t11-merged-x86-file.json |
+| Decision C: REAL ARM b1 backup, device [file] | REFUSED with the owner's text: True; candidate built: False; device unchanged: True; new volumes 0 | 0 | 142.8 | t11-merged-arm-file.json |
+| REAL ARM b1 backup, device [file, built_in_database] | PASSED (candidate built, all product checks green, profile e; readback roots 44; profile ['file', 'built_in_database']; device unchanged: True; new volumes 0 | 0 | 192.5 | t11-merged-arm-builtin.json |
+| REAL x86 b1 backup, device [file, built_in_database] | PASSED (candidate built, all product checks green, profile e; readback roots 44; profile ['file', 'built_in_database']; device unchanged: True; new volumes 0 | 0 | 214.2 | t11-merged-x86-builtin.json |
+| SR-7 ExHook server in HA's settings | REFUSED naming ExHook | 0 | 290.2 | t12-merged.json |
+| SR-2 control: device ACL read-only mount | PASSED (candidate built, all product checks green); stranger in the (discarded) candidate: deny | 0 | 198.1 | t1-merged-ro.json |
+| SR-2 attack: device ACL in the data volume | REFUSED: EMQX 不能搬過來：這台 EMQX 的 ACL 或憑證檔案放在資料卷裡（例如在 Dashboard …; stranger in the (discarded) candidate: allow | 0 | 148.8 | t1-merged-data.json |
+| SR-3 file:// secrets | REFUSED: EMQX 不能搬過來：HA 的 EMQX 設定（connectors）用「file://」讀取本機檔案當作密碼；搬過來後這台的 EMQX 會讀… | 0 | 236.0 | t3-merged.json |
+| SR-6 rule jq env | REFUSED: EMQX 不能搬過來：HA 的 EMQX 規則（1 條）使用 jq 函式；EMQX 的 jq 能讀取這台 EMQX 的環境變數（其中有 Das… | 0 | 249.0 | t6-merged.json |
+| SR-5 plain password hash | REFUSED: EMQX 匯入後未能保留目標有效設定（authentication），已停止。; bootstrap user before (device) rows=1:plain=0, after (candidate) rows=1:plain=0; candidate authenticators [['plain', True]]; bootstrap password stored in plain text: False | 0 | 264.7 | t5-merged.json |
+
+### Other checks of iteration 3
+
+- Unit tests on the merged tree (EMQX modules, `test_ha_tempctr`, `test_tempctr_cleanup_dependency`, `test_ha_import`,
+  `test_ha_flows`, guarded runner: no podman, ssh, sudo or systemctl): 258 tests OK, 0 blocked (`iteration3/unit-merged.json`).
+- The product lane's 17 attempt JSONs and its unit-test record on the product branch (5786ae4) were scanned for
+  credential-like values: none (only commit hashes, digests, test names, memory figures and fixed status lines).
+- The page text and CONTRACT changes of the product delta describe what the code does (a refusal for a file-only device,
+  the root names of a differing setting, the scheduler counts); the owner's decision-C text is verbatim in both.
+
 ## Residual risk and what was not covered
 
-- **HA's broker still executes HA's configuration.** With SR-1 no plugin loads, but other boot-time loaders were not
-  reviewed one by one (schema registry Protobuf/Avro compilation, LwM2M `xml_dir` XML parsing, durable storage). A
-  compromised HA broker could still forge the export, and the vendor import restores every known backup table it
-  finds (`emqx_mgmt_data_backup.erl:706-747`). Recommended defense in depth (not implemented): check the export's
-  members (only the TABLE_SETS tables, `cluster.hocon` roots within DATA_ROOTS) before `data import`.
+- **HA's throwaway broker runs HA's own files at boot.** SR-1 closes plugin loading; the other boot-time paths
+  (schema registry Protobuf/Avro compilation, LwM2M `xml_dir` XML parsing, durable storage, and the broker's handling
+  of HA's own database files) were not reviewed one by one. One deeper analysis step of iteration 3 in this area was stopped
+  by a safety classifier and was not continued or repeated: **a human security review is needed here before commercial
+  acceptance.** What contains it today: rootless, `--network none`, read-only root, `no-new-privileges`, memory and
+  pids limits, no device secret or device volume mounted, the broker's own job volumes mounted `noexec,nosuid,nodev`, the
+  export as its only output through a bounded reader, and the candidate's outcome checks after the import (whole-root
+  equality of every setting that is not HA data, table counts, SR-2/SR-3/SR-6/SR-7 refusals, decision C). Recommended
+  defense in depth (not implemented): check the export's members before `data import` (only the TABLE_SETS tables and
+  `cluster.hocon` roots within DATA_ROOTS) and `--cap-drop=all` for `emqx-ha`.
 - **Migrated integrations are HA's by design.** HA's MQTT users, ACL rows, Dashboard users and API keys replace this
   device's; HTTP/MQTT connectors, actions and rules may publish to or call hosts HA's settings name, and a migrated rule
   sees every message on this broker (`SELECT * FROM "#"` + republish/forward reads this device's MQTT traffic); gateways may
@@ -173,13 +369,17 @@ refusal, credential-receiver refusal); baseline green after restoring (`mutation
   hosts, not every external host; recommended: list every external host the migrated settings contact.
 - Migrated `psk_authentication.init_file`, LwM2M `xml_dir` and TLS file paths may name files of this device (read
   locally; no path found that sends their content out; not exercised).
-- SR-2 fails closed: a device whose Dashboard edited its ACL file cannot import until a merge policy exists.
-- The throwaway brokers keep Podman's default capability set (no `--cap-drop`); HA's broker runs as uid 0 inside
-  the rootless user namespace. Recommended: `--cap-drop=all` for `emqx-ha`.
+- SR-2 fails closed: a device whose Dashboard edited its ACL file cannot import until a merge policy exists (a human
+  decision, not a defect).
+- The throwaway brokers keep Podman's default capability set; HA's broker runs as uid 0 inside the rootless user
+  namespace.
 - The ExHook/authenticator rule (SR-7) allows only built-in database authenticators; HA backups with an external
   authenticator or an enabled ExHook are refused (a later, reviewed migration could re-allow specific backends).
-- **Not covered here:** Omnigent/LiteLLM SQL schema attacks (their own review lanes); the product lane's dev-d real
-  flow with restore, readback and rollback on the device (product lane EP-OWNER-2045); ARM .54; the product lane's
-  final diff (decision C blocker, SR-4 redaction) unless reviewed in the lane hand-off; the independent Hermes FTS
-  review (separate). This review's real runs prove conversion behaviour in the lab store; they are not commercial
-  acceptance (`commercial_acceptance: not-complete`).
+- SR-8/SR-9 were attacked for real against podman 4.9.3 only. Lane arm54-2's product run on .54 (Podman 6.1.1, `e08f8a1`
+  merged with that lane's other Podman fixes, `ha_emqx.py` byte-equal, 164/164, note of 09:18, read here and not re-run) reports the candidate started with `--env-file` and no file setting
+  name or value on its command line. Podman 6 reads an env file differently only in places the engine refuses anyway
+  (quotes, backslashes, `$`, blanks); that difference was not attacked on Podman 6.
+- **Not covered here:** packaging, restore, readback, restart and rollback on a device (the product lane's dev-d chain and
+  the .54 runs of lane arm54-2 are that evidence); Omnigent/LiteLLM SQL schema attacks (their own review lanes); the
+  independent Hermes FTS review; other EMQX versions than 5.8.9 and add-on versions outside VERSIONS; the host's Podman
+  Quadlet generator; anything that needs a network.

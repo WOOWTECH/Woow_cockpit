@@ -1,0 +1,166 @@
+{
+ "attempt": "t4-merged",
+ "backup_engine_tree": "865c930f392006e0080de506eb7c425fd81becd7",
+ "command": "python3 -I t4_members.py merged",
+ "commercial_acceptance": "not-complete",
+ "credentials": "generated per run; HA key (T11) read in-process by the b1 Secrets reader, never printed",
+ "date": "2026-11-24",
+ "elapsed_s": 0.6,
+ "exit_code": 0,
+ "iteration": 3,
+ "lane": "emqx-secreview (SR-OWNER-1942)",
+ "result": {
+  "cases": {
+   "absolute_name": {
+    "code": "corrupt-archive",
+    "message": "HA 備份檔已損毀或遭到修改，無法使用。",
+    "outcome": "refused"
+   },
+   "absolute_symlink_acl": {
+    "outcome": "accepted",
+    "skipped_other": 0,
+    "skipped_symlinks": 1,
+    "staged": {
+     "authz": [
+      "5",
+      "0o755",
+      0,
+      0,
+      0
+     ]
+    }
+   },
+   "block_device": {
+    "code": "corrupt-archive",
+    "message": "HA 備份檔已損毀或遭到修改，無法使用。",
+    "outcome": "refused"
+   },
+   "char_device": {
+    "code": "corrupt-archive",
+    "message": "HA 備份檔已損毀或遭到修改，無法使用。",
+    "outcome": "refused"
+   },
+   "control_char_name": {
+    "code": "corrupt-archive",
+    "message": "HA 備份檔已損毀或遭到修改，無法使用。",
+    "outcome": "refused"
+   },
+   "dotdot_name": {
+    "code": "corrupt-archive",
+    "message": "HA 備份檔已損毀或遭到修改，無法使用。",
+    "outcome": "refused"
+   },
+   "duplicate_cluster_hocon": {
+    "code": "corrupt-archive",
+    "message": "HA 備份檔已損毀或遭到修改，無法使用。",
+    "outcome": "refused"
+   },
+   "entry_below_file": {
+    "code": "corrupt-archive",
+    "message": "HA 備份檔已損毀或遭到修改，無法使用。",
+    "outcome": "refused"
+   },
+   "fifo": {
+    "outcome": "accepted",
+    "skipped_other": 1,
+    "skipped_symlinks": 0,
+    "staged": {}
+   },
+   "generated_configs_never_staged": {
+    "outcome": "accepted",
+    "skipped_other": 0,
+    "skipped_symlinks": 0,
+    "staged": {}
+   },
+   "hardlink_to_node_file": {
+    "code": "corrupt-archive",
+    "message": "HA 備份檔已損毀或遭到修改，無法使用。",
+    "outcome": "refused"
+   },
+   "oversized_cluster_hocon": {
+    "code": "limit-exceeded",
+    "message": "HA 備份檔超出安全限制（檔案數量或大小），已拒絕處理。",
+    "outcome": "refused"
+   },
+   "pax_path_override": {
+    "code": "corrupt-archive",
+    "message": "HA 備份檔已損毀或遭到修改，無法使用。",
+    "outcome": "refused"
+   },
+   "relative_symlink_escape": {
+    "outcome": "accepted",
+    "skipped_other": 0,
+    "skipped_symlinks": 1,
+    "staged": {
+     "certs": [
+      "5",
+      "0o755",
+      0,
+      0,
+      0
+     ]
+    }
+   },
+   "setuid_executable_cert": {
+    "outcome": "accepted",
+    "skipped_other": 0,
+    "skipped_symlinks": 0,
+    "staged": {
+     "certs": [
+      "5",
+      "0o755",
+      0,
+      0,
+      0
+     ],
+     "certs/run.sh": [
+      "0",
+      "0o600",
+      0,
+      0,
+      10
+     ]
+    }
+   },
+   "setuid_executable_mnesia": {
+    "outcome": "accepted",
+    "skipped_other": 0,
+    "skipped_symlinks": 0,
+    "staged": {
+     "mnesia": [
+      "5",
+      "0o755",
+      0,
+      0,
+      0
+     ],
+     "mnesia/emqx@127.0.0.1": [
+      "5",
+      "0o755",
+      0,
+      0,
+      0
+     ],
+     "mnesia/emqx@127.0.0.1/x": [
+      "0",
+      "0o644",
+      0,
+      0,
+      10
+     ]
+    }
+   }
+  },
+  "codebase": "merged",
+  "test": "T4 crafted add-on members through scan_member"
+ },
+ "source_commit": "cd66230 (sec/emqx-secreview3-trial-20261124: product 5786ae4 + abff1a0 + the 8613ffa tempctr patch)",
+ "started": "2026-11-24T08:09:18+0800",
+ "status_lines": [
+  "  }",
+  " }",
+  "}"
+ ],
+ "stdout_sha256": "13ccba272c80daafa33760b421af74052744176f35d4c23d8012e4216317aa8b",
+ "store": "labpodman (separate --root, lab only), every podman run --network none"
+}
