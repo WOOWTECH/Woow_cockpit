@@ -372,3 +372,31 @@ EMQX 的 `PRESERVATION_BLOCKER` 在 `97c22c9` 照舊。
 - `tests/backup`：**1769** 個，1763 通過、1 略過、5 未通過（與 3g 相同，只有 `test_litellm_lab_runner` 被守門擋下）；`RealBackupTests` 1/1；
   `node tests/backup-ui.mjs` **107/107**。
 - 最後一次合併之後的整套，CI 指令改用 CI 執行器的形式（umask 022、`--exe-only`）重跑。
+
+## 第三次整合（最後）：EMQX 匯出檔檢查、EMQX 安全審查 4～6 次與 T14b、EMQX／LiteLLM／Nextcloud 最終證據、CI 的 umask 修正（`unit-tests-step3i.json`）
+
+| 合併 commit | 來源（tip） | 內容 |
+| --- | --- | --- |
+| `ff16d6b` | `fix/emqx-export-members-20261124`（`dd3ae49`） | 匯入前用 EMQX 自己的 `erl_tar`、`hocon` 檢查 HA 的匯出檔，多出不該有的設定區塊就拒絕（B1-03 的多一層保護；匯入後整個設定比對仍是決定性的保護）。審查組實測：真的 x86 與 RPi5 備份通過、偽造的匯出檔在匯入前擋下（0 次匯入）、突變 37/37。 |
+| `a51d754`、`ba9f734`、`8844851` | `sec/emqx-secreview4-20261124`（`8c40a8c`、`501a603`、`b939534`） | 審查第 4～6 次：SR-10 已修、SR-5「明文存放」的說法被 3 次實測推翻（剩下的是擁有者的政策選擇）、T14b 35 種封存形狀乾淨；README、證據、審查工具。 |
+| `3697d35` | `fix/emqx-health-suggest-20261124`（`568e6f8`） | 只有證據：第 33 次 153/153、34 次 99/99、35 次 95/95、36 次 106/106（35、36 用含匯出檔檢查的引擎、頁面自己的草稿、第一次匯入故意失敗兩次）。 |
+| `ae932f7` | `fix/litellm-test-gaps-20261124`（`ef2e7bc`） | 只有測試與證據：`test_r15` 補上整組突變漏掉的那一個（175/175）。 |
+| `13051d0` | `feat/ha-import-nextcloud-20261123`（`b2eaa2e`） | 只有證據：Team folders 第 2 次 8/8、拒絕流程第 4 次 34/34、88 個突變一次跑完 88/88。 |
+
+本組自己的 commit：`d0f5d06`（註解：`tempctr.py` 與 `test_ha_tempctr.py` 不再寫 ARM64 測試機的區網位址，兩行與 arm54 的 `8040b17` 逐位元相同）、
+`0d83f8b`（只改測試：CI 指令在同一個程序裡跑完三個大檔案測試後 umask 變成 077，之後的 `tests.e2e.test_dirs_fixture` 摘要測試失敗；
+三個模組結束時把 umask 還回去。修正前三個模組各自接著跑該測試都失敗 1 個，修正後都通過；沒有改任何斷言、探針或產品程式）、`e92e8ae`（狀態檔中途更新）。
+
+衝突：都沒有；每次合併後那邊改的檔案都等於來源分支（`ff16d6b` 的 docs、CONTRACT 逐行證明差異 0 行）。
+
+測試（主機守門，真實 batch-1 備份）：`ff16d6b` 31 個模組 523/523；`a51d754` 69/69；`3697d35` 實驗室 32/32；`ae932f7` 188/188（以上 0 次拒絕的呼叫）。
+
+整套（自己的工作樹，經 `team/heavy.sh` 與主機重測鎖）：
+
+- `e92e8ae`（c3，15:14–15:38）：CI 指令（CI 執行器的形式：umask 022、`--exe-only`）**1942** 個，1933 通過、6 略過、3 未通過（2 個 DriverTests 被守門擋下；1 個就是 umask 外洩造成的摘要測試失敗，因此找到並修正 `0d83f8b`）；`tests/backup` **1786** 個，1780 通過、1 略過、5 個守門預設模式擋下的 `test_litellm_lab_runner`；`RealBackupTests` 1/1；`node tests/backup-ui.mjs` **107/107**。
+- **最後一次** `ae932f7`（c4，15:38–16:06；整合分支最新的 `13051d0` 只多 Nextcloud 的證據檔，程式相同）：CI 指令 **1946** 個，1938 通過、6 略過，只剩 2 個 DriverTests 被守門擋下（與 `origin/main` 相同）；`check_source`、`node --check` 通過；`tests/backup` **1790** 個，1784 通過、1 略過、5 個守門擋下（在 CI 形式裡都通過）；`RealBackupTests` 1/1；`node tests/backup-ui.mjs` **107/107**。
+- 公開版 PR 的樹（c5，15:42–16:14）：結果與 c4 **完全相同**（同樣的數字、同樣的未通過項目）。
+
+公開版 PR 分支（本機，沒有推送、沒有開 PR）：`pr/ha-import-batch1-20261124` = `a92a3bc`，在 `origin/main`（`bb23531`，與 GitHub 的 main 相同）上**只有一個 commit**。產品程式、頁面、文件、CONTRACT、單元測試共 261 個檔案與 `13051d0` 逐位元相同（內容與權限），`backup-engine` 樹相同；實驗室工具留 72 個（10 個去掉內部資料，共 35 處），另外 362 個工具與 975 個證據檔不放；新增摘要 `docs/backup/ha-import-tests.md`（只有每個應用、每種機器的通過數）。掃描整份新增內容：35 個實驗室密碼值 0 次、測試密碼 0 次、13 個擁有者備份雜湊 0 次、age 私鑰 0 個；其餘符合樣式的都是測試資料或通用預設值（分類與數字在 `scratchpad/integration-3/pr/scan-record-final.json`，不含任何值）。commit 的樹 `ecf9cb64` 只比測過的樹多換了摘要文件。沒有推送、沒有開 PR。
+
+擁有者 15:57 的決定（Memories 選 A）：裝過 Memories 的 HA Nextcloud 維持拒絕；檢查頁的訊息、`docs/backup.md` 與 PR 說明一致；依原廠原始碼，在 HA 停用或移除 Memories 不會刪掉它建立的函式與觸發程序（Memories 沒有解除安裝步驟；Nextcloud 35.0.1 的 `app:disable` 只跑應用自己的解除安裝步驟、`app:remove` 只刪應用資料夾），所以 PR 說明寫明「目前不能匯入、沒有可以建議的安全做法」。
