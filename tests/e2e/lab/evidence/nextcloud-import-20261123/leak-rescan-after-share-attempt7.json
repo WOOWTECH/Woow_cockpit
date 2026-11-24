@@ -1,0 +1,20 @@
+{
+ "kind": "nextcloud-leak-rescan",
+ "date": "2026-11-24T13:44:36+0800",
+ "source_commit": "33929815fc8b9a91893961e6dd207fdb66589b36",
+ "device": "woowbk-dev-e",
+ "report": {
+  "scanned": 194,
+  "journal_bytes": 9240,
+  "names": 9,
+  "hits": 0,
+  "url_token_access_log_hits": 0,
+  "url_token_hits_elsewhere": 0
+ },
+ "checks": {
+  "leak re-scan: no secret in the engine records, uploads, staging, run dir or the device journal": "PASS",
+  "leak re-scan: the public link token is in no access log entry any more": "PASS",
+  "dev-e isolation true none {}": "PASS"
+ },
+ "acceptance": "not acceptance (lab hygiene after the last share attempt)"
+}
