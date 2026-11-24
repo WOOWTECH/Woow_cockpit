@@ -14,6 +14,28 @@ from woowbackup.errors import BackupError
 from woowbackup.podman import Result
 
 
+def valid_export_bytes():
+    """A structurally valid EMQX export (.tar.gz) so ha_emqx.check_export_members passes before import; the Transport
+    fakes the imported config independently, so the contents only have to satisfy the structural check."""
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode='w:gz', format=tarfile.PAX_FORMAT) as tar:
+        base = 'emqx-export-2026-11-19-10-11-12.345'
+        for rel, data, isdir in [('', None, True), ('META.hocon', b'{version = "5.8.9", edition = ce}\n', False),
+                                 ('cluster.hocon', b'authorization {no_match = deny}\nrule_engine {rules {}}\n', False),
+                                 ('mnesia', None, True), ('mnesia/emqx_acl', b'row', False),
+                                 ('mnesia/emqx_admin', b'row', False)]:
+            info = tarfile.TarInfo(f'{base}/{rel}' if rel else base)
+            if isdir:
+                info.type = tarfile.DIRTYPE
+                info.mode = 0o755
+                tar.addfile(info)
+            else:
+                info.mode = 0o644
+                info.size = len(data)
+                tar.addfile(info, io.BytesIO(data))
+    return buf.getvalue()
+
+
 def response(config):
     return Result(0, b'WOOWCFG:' + base64.b64encode(json.dumps(config).encode()) + b':END\nok\n', b'')
 
@@ -151,7 +173,7 @@ class CandidateFlowTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             staging = Path(directory)
             export = staging / 'source.tar.gz'
-            export.write_bytes(b'fixture export')
+            export.write_bytes(valid_export_bytes())
             work = SimpleNamespace(runner=lambda app: transport, abort=None,
                 guard=SimpleNamespace(budget=lambda: 1000000), checkpoint=lambda: None,
                 log=transport.logs.append)

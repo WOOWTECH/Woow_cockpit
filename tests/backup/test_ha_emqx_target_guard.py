@@ -16,7 +16,7 @@ class TargetAuthenticationGuardTests(unittest.TestCase):
         self.assertEqual(ha_emqx.parse_strict("{deny,ignore}"), ("deny", "ignore"))
         values = ["WOOWSYS:<0.1.0>:suspended\nok", counts, "{deny,ignore}", initial, "ticker_unchanged", "{deny,ignore}", after, counts, "ticker_unchanged"]
         ctl = mock.Mock(return_value=Result(0, b"data imported successfully", b""))
-        with mock.patch.object(ha_emqx, "wait_ready"), mock.patch.object(ha_emqx, "evaluate", side_effect=values), mock.patch.object(ha_emqx, "ctl", ctl):
+        with mock.patch.object(ha_emqx, "wait_ready"), mock.patch.object(ha_emqx, "evaluate", side_effect=values), mock.patch.object(ha_emqx, "ctl", ctl), mock.patch.object(ha_emqx, "check_export_members"):
             try:
                 result = ha_emqx.target_broker(work, tmp, target, "/tmp/input.tar.gz", (1000, 1000))
                 return result, ctl
