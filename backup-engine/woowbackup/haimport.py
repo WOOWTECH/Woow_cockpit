@@ -354,6 +354,10 @@ class Work:
         """The member of the add-on called `suffix`; the same add-on from two stores needs a choice (HA-04)."""
         found = addon_members(self.ha.layout, suffix)
         if not found:
+            for addon in (getattr(self.ha.layout, 'doc', None) or {}).get('addons') or ():
+                # Listed without a member that can be used: the layout says why.
+                if hastore.addon_suffix(addon['slug']) == suffix:
+                    self.ha.layout.addon(addon['slug'])
             raise haissues.stopped(Issue('ha.addon-missing', 'stop', ADDON_MISSING, action=ADDON_MISSING_ACTION),
                                    'not-found', slug=suffix)
         importer = haapps.for_slug(suffix)
@@ -870,7 +874,7 @@ def note_for(record):
     try:
         when = util.parse_iso_utc(record['date']).astimezone().strftime('%Y-%m-%d %H:%M')
     except (ValueError, KeyError, OSError):
-        when = str(record.get('date') or '')[:20]
+        when = str(record.get('date') or '日期不明')[:20]  # a backup.json without a date that can be read (UP-26)
     name = str(record.get('name') or '').strip() or '（沒有名稱）'
     return f'{NOTE_PREFIX}{name[:200]}（{when}）'
 
@@ -1288,7 +1292,8 @@ def valid_row(row):
         return False
     if not _valid_lines(row['notes']):
         return False
-    if not hastore.valid_id(row['ha_backup_id']) or not _text(row['name'], 200) or not util.is_iso_utc(row['date']):
+    if not hastore.valid_id(row['ha_backup_id']) or not _text(row['name'], 200) \
+            or not (row['date'] is None or util.is_iso_utc(row['date'])):
         return False
     apps = row['apps']
     if not isinstance(apps, list) or not 1 <= len(apps) <= len(APPS) or not all(a in APPS for a in apps) \

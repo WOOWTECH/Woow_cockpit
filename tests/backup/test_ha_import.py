@@ -891,6 +891,29 @@ class AddonTests(FlowCase):
         self.assertEqual((called, row['importable'], row['issues'][0]['id']), (False, False, 'ha.addon-missing'))
         self.assertIn('請在 HA 建立備份時勾選', row['issues'][0]['action'])
 
+    def test_a_listed_add_on_without_a_usable_member_says_why(self):
+        """READ (UP-44..50) keeps such an add-on listed: the layout's own reason is the app's stop."""
+        ha_id = self.upload(hx.outer_bytes([(f'{hx.N8N}.tar.gz', N8N_MEMBER)], hx.ha_doc(addons=(hx.N8N,))))
+        real = habackup.open_backup
+
+        def opened(path):
+            backup = real(path)
+            doc = dict(backup.layout.doc, addons=[*backup.layout.doc['addons'], {'slug': hx.ODOO, 'problem': 'missing'}])
+
+            class Layout(habackup.Layout):
+                def addon(self, slug):
+                    if slug == hx.ODOO:
+                        raise BackupError('corrupt-archive', '這個附加元件的檔案不在備份檔裡。')
+                    return super().addon(slug)
+
+            backup.layout = Layout(doc, backup.layout.members, backup.layout.size)
+            return backup
+
+        with mock.patch.object(habackup, 'open_backup', opened):
+            called, row = self.checked(ha_id)
+        self.assertEqual((called, [(i['id'], i['message']) for i in row['issues']]),
+                         (False, [('failure.corrupt-archive', '這個附加元件的檔案不在備份檔裡。')]))
+
     def test_two_stores_need_a_choice(self):
         ha_id = self.upload(self.twice())
         called, row = self.checked(ha_id)
@@ -1066,6 +1089,13 @@ class RegistryTests(unittest.TestCase):
                 haimport.register(self.paths, '20261118T120001Z-0123abcd', self.row())
             self.assertEqual(path.read_text(), text, 'never replaced')
 
+    def test_a_backup_without_a_readable_date_keeps_its_origin(self):
+        bid = '20261118T120001Z-0123abcd'
+        haimport.register(self.paths, bid, self.row(date=None), now=1794994800)
+        self.assertIsNone(haimport.from_ha_views(self.paths)[bid]['date'])
+        with self.assertRaises(BackupError):
+            haimport.register(self.paths, bid, self.row(date='yesterday'), now=1794994800)
+
     def test_rows_written_before_the_per_app_texts_still_count(self):
         bid = '20261118T120001Z-0123abcd'
         haimport.register(self.paths, bid, self.row())
@@ -1233,6 +1263,7 @@ class SmallPartsTests(unittest.TestCase):
         note = haimport.note_for({'name': 'WOOW 測試', 'date': '2026-11-18T09:01:20Z'})
         self.assertTrue(note.startswith('由 HA 備份轉換：WOOW 測試（') and note.endswith('）'))
         self.assertEqual(haimport.note_for({'name': '', 'date': 'bad'}), '由 HA 備份轉換：（沒有名稱）（bad）')
+        self.assertEqual(haimport.note_for({'name': 'x', 'date': None}), '由 HA 備份轉換：x（日期不明）')
 
     def test_key_file_is_raw_and_masked(self):
         tmp = tempfile.TemporaryDirectory()
