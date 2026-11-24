@@ -1019,7 +1019,7 @@ class SingleProtectionTests(LiteLLMCase):
                 self.assertFalse(self.world.copies_out or self.world.copies_in or self.world.snapshots)
 
     def test_n09_the_new_cluster_must_be_this_devices_major(self):
-        for major in (16, 18, '17', None, True):
+        for major in (16, 18, '17', 17.0, None, True):
             self.world.new_major = major
             with self.subTest(major=major):
                 self.refused('新的 PostgreSQL 叢集版本和這台的不同', 'job-failed')
@@ -1244,7 +1244,7 @@ class SingleProtectionTests(LiteLLMCase):
 
 class OtherRefusalTests(LiteLLMCase):
     """Refusals of ha_litellm.py that no test ran until 2026-11-24 (line coverage of the LiteLLM modules): an answer that is
-    not what the import expects stops it, each with its own message (litellm_product_mutations.py R01..R14)."""
+    not what the import expects stops it, each with its own message (litellm_product_mutations.py R01..R16)."""
 
     def answer(self, wanted, value, role='hapg'):
         """The fake cluster `role` answers `value` to every query `wanted` says yes to."""
@@ -1337,6 +1337,24 @@ class OtherRefusalTests(LiteLLMCase):
                 self.refused('HA 的 LiteLLM 資料庫不是預期的 PostgreSQL 18（是 未知 版）。', pg_version=data)
         self.assertFalse(self.world.copies_out)
 
+    def test_r15_a_state_file_that_is_not_one_says_nothing(self):
+        large = {'name': 'data/woow/state.json', 'data': b'{"litellm_version": "1.103.0"' + b' ' * 65536 + b'}'}
+        for name, extra in (('none', []), ('a folder', [{'name': 'data/woow/state.json', 'type': 'dir'}]),
+                            ('too large', [large])):
+            with self.subTest(name):
+                self.assertEqual(self.blockers(state=None, extra=extra), [])
+
+    def test_r16_the_names_of_a_schema_are_bounded(self):
+        def schema(tables):
+            return ha_litellm.Schema([['public', t, 'id', 'text', True, '', ''] for t in tables],
+                                     dict(signature(), sequences=[], relations=[['public', t, 'r'] for t in tables]), [])
+
+        ha_litellm.require_names(schema([f't{i}' for i in range(ha_litellm.MAX_TABLES)]))
+        for tables in ([f't{i}' for i in range(ha_litellm.MAX_TABLES + 1)], [], ['a"b'], ['a', 'x y']):
+            with self.subTest(tables=len(tables)), self.assertRaises(BackupError) as caught:
+                ha_litellm.require_names(schema(tables))
+            self.assertIn('沒有讀取任何資料就停止了', caught.exception.message)
+
     def test_r11_no_snapshot_is_taken_for_migrations_that_are_not_known(self):
         for bad in (None, [], ["x'; DROP TABLE y; --"], [1]):
             with self.subTest(expected=bad), self.assertRaises(BackupError) as caught:
@@ -1428,6 +1446,60 @@ class KeyUserSourceTests(LiteLLMCase):
                 self.assertEqual(self.users(), ['OpenDesign'] if named else [])
         self.world.files.clear()
         self.assertEqual(self.users(), [], 'no drop-in: nothing is joined')
+
+
+class TargetConsistencyTests(LiteLLMCase):
+    """ha_litellm.Target: the catalog entry, the two Quadlet files and the declared secrets must fit each other, one
+    condition at a time (litellm_product_mutations.py T01..T12)."""
+    WORDS = '這台的 LiteLLM 資料庫、加密金鑰（litellm-salt-key）和 Quadlet 檔的設定不一致，無法匯入。'
+    DB, PROXY = 'litellm-postgres.container', 'litellm.container'
+
+    def quadlet(self, name, old, new):
+        self.assertEqual(QUADLETS[name].count(old), 1, old)
+        return dict(QUADLETS, **{name: QUADLETS[name].replace(old, new)})
+
+    def refuses(self, name, words, quadlets=None, item=None, secrets=None):
+        app = self.catalog['litellm']
+        original, files = vars(app).copy(), self.world.quadlets['litellm']
+        if item:
+            app.postgres = [dict(app.postgres[0], **item)]
+        if secrets is not None:
+            app.secrets = [{'name': secret} for secret in secrets]
+        if quadlets:
+            self.world.quadlets['litellm'] = quadlets
+        with self.subTest(name):
+            self.assertEqual(self.blockers(), [words])
+            self.refused(words)
+        vars(app).update(original)
+        self.world.quadlets['litellm'] = files
+
+    def test_each_condition_refuses_by_itself(self):
+        image = b'Image=docker.io/library/postgres:17.11-alpine3.23@sha256:bc27\n'
+        salt = b'Secret=litellm-salt-key,type=env,target=LITELLM_SALT_KEY\n'
+        user, plain = b'POSTGRES_USER=litellm\n', b'POSTGRES_USER=lite-llm\n'
+        self.refuses('T01 another database in the entry', self.WORDS, item={'database': 'other'})
+        self.refuses('T02 another POSTGRES_DB', self.WORDS, self.quadlet(self.DB, b'POSTGRES_DB=litellm', b'POSTGRES_DB=other'))
+        self.refuses('T03 another POSTGRES_USER', self.WORDS, self.quadlet(self.DB, user, b'POSTGRES_USER=other\n'))
+        self.refuses('T04 a user name that is not plain', self.WORDS, self.quadlet(self.DB, user, plain),
+                     item={'user': 'lite-llm'})
+        self.refuses('T05 no database image', self.WORDS, self.quadlet(self.DB, image, b''))
+        self.refuses('T06 no proxy image', self.WORDS,
+                     self.quadlet(self.PROXY, b'Image=localhost/woow-litellm:1.104.0-0.3.16\n', b''))
+        self.refuses('T07 another data volume', self.WORDS, item={'data_volume': 'other-pgdata'})
+        self.refuses('T08 a PGDATA that is not a plain path', self.WORDS,
+                     self.quadlet(self.DB, b'data/pgdata\n', b'data/pg:data\n'))
+        self.refuses('T09 the salt secret twice', self.WORDS,
+                     self.quadlet(self.PROXY, salt, salt + b'Secret=litellm-salt-key,type=env,target=OTHER\n'))
+        self.refuses('T09b the salt as another variable', self.WORDS,
+                     self.quadlet(self.PROXY, salt, salt.replace(b'LITELLM_SALT_KEY', b'OTHER')))
+        self.refuses('T09c no salt secret in the proxy', self.WORDS, self.quadlet(self.PROXY, salt, b''))
+        self.refuses('T10 the salt secret is not declared', self.WORDS, secrets=[n for n in SECRETS if 'salt' not in n])
+        self.refuses('T11 a declared secret twice', self.WORDS, secrets=SECRETS + ['litellm-master-key'])
+        missing = '這台的 LiteLLM 應用設定不是 HA 匯入支援的樣子：找不到 litellm-postgres 或 litellm 的 Quadlet 檔。'
+        for name in (self.DB, self.PROXY):
+            self.refuses(f'T12 without {name}', missing, {k: v for k, v in QUADLETS.items() if k != name})
+        self.assertFalse(self.world.runs, 'refused before anything ran')
+        self.assertEqual(self.blockers(), [], 'the fixture itself fits')
 
 
 class SnapshotScriptTests(unittest.TestCase):
