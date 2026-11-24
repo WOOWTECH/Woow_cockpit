@@ -342,3 +342,33 @@ EMQX 的 `PRESERVATION_BLOCKER` 在 `97c22c9` 照舊。
 `team/heavy.sh` 與主機重測鎖，10:39:53–10:51:44；本組的 agent 在 10:28 被停止，測試自己跑完，12:03 才讀取）：`tests/backup` **1664** 個，
 1658 通過、1 略過、5 未通過（只有 `test_litellm_lab_runner`，守門擋下測試自己的假子程序；`--exe-only` 6/6）；`RealBackupTests` 1/1；
 `node tests/backup-ui.mjs` **105/105**。
+
+## 第三次整合（續）：EMQX 產品證據、Omnigent／LiteLLM 測試補強、匯入模式預設、修正後的 EMQX 健康檢查、Nextcloud 強化（`unit-tests-step3h.json`）
+
+| 合併 commit | 來源（tip） | 內容 |
+| --- | --- | --- |
+| `7165235` | `feat/ha-import-emqx-product-20261124`（`d8c6d1b`） | 只有證據：第 23 次 55/55、第 24 次 20/20、README、狀態、單元與突變紀錄；引擎樹仍是審查過的 `865c930f`。 |
+| `d6cbb33`、`9ebb2bf` | `fix/omnigent-test-gaps-20261124`（`01b36b4`，再 `ea6a07f`） | 每個保護都有單元測試與突變；`ha_omnigent.py` 只改一段 docstring（去掉 docstring 後 AST 相同）；之後只有證據。 |
+| `0562c55` | `fix/litellm-test-gaps-20261124`（`ccfe201`） | 新的 LiteLLM 草稿就是匯入會填的「單一資料庫」項目、改用就緒檢查、保留 `litellm.env`；`ha_litellm.py` 的拒絕訊息寫出要選什麼（沒有拿掉任何保護）；頁面一句、文件、CONTRACT、測試。 |
+| `10b9594` | `fix/suggest-import-modes-20261124`（`d528653`，主線 12:59 同意） | **新的** n8n、Hermes 草稿預設改成匯入需要的「單一資料庫」；已安裝的設定不動（PR 說明要寫出這是預設值的改變）。 |
+| `431201e`、`2b5fee1` | `fix/emqx-health-suggest-20261124`（`575f2fd`，再 `3891601`） | EMQX 提案的健康檢查改問 broker 公開的 `/api/v5/error_codes`（第 30 次證明 `66c1142` 提案的 `/` 會得到 HTTP 406）；第 32 次真實流程 109/109：頁面自己沒改過的 EMQX 草稿，備份沒有健康警告、還原沒有退回。 |
+| `31c83e2` | `feat/ha-import-nextcloud-20261123`（`7e969f0`） | Nextcloud：資料庫強化、使用者檔案私有（`data/.htaccess`）、匯入後 Office 可用、Team folders；share 第 7 次 113/113（整合後的引擎）。 |
+
+本組自己的 commit：`032aec2`（測試等待時間：公開版預演在負載 14 下發現的時序問題，修正後連跑 3 次 18/18）、`f2c9e03`（`check_source` 列出每個匯入模組，只檢查存在）、
+`e07da5a`、`6592c76`（只有文字：不寫擁有者的位址與機器名稱）。
+
+衝突：都沒有；每次合併後，只有那邊改的檔案都等於來源分支（Nextcloud 27/29，另外兩個 `docs/backup.md`、CONTRACT 逐行證明差異 0 行）。
+
+測試（主機守門，真實 batch-1 備份）：`d6cbb33` 141/141、實驗室 22/22；`0562c55` 440/440、實驗室 39/39；`10b9594` 349/349；`431201e` 158/158、實驗室 40/40；
+`31c83e2` 241/241；`6592c76` 47/47；`2b5fee1` 實驗室 32/32（以上 0 次拒絕的呼叫）。
+
+整套在 `2b5fee1`（自己的工作樹，經 `team/heavy.sh` 與主機重測鎖，14:03–14:25；本組的 agent 在 14:2x 因額度停止，測試自己跑完，14:44 讀取）：
+
+- CI 自己的單元測試指令（不設 `PYTHONPATH`、`WOOWBK_REQUIRE_HA_CRYPTO=1`、discover 整個 `tests`）：**1925** 個，1911 通過、6 略過、8 未通過，都不是產品問題：
+  5 個 `test_litellm_lab_runner` 與 2 個 `tests.e2e.test_dirs_fixture` DriverTests 是守門在預設模式擋下的（參數裡有 podman 字樣的假子程序、提到禁用程式的 sh 腳本；
+  3g 的 `m26-runner` 用 `--exe-only` 跑同一模組 6/6）；1 個 `test_digest_tracks_what_a_restore_must_keep` 只因這次跑在 umask 077（檔案一建立就是 0600，測試的
+  `chmod 0600` 沒有改變任何東西）：同一個測試類別 umask 077 2/3、umask 022（CI 執行器的設定）3/3，這個測試檔與 `origin/main` 相同。`check_source` 通過，
+  CI 的 9 個頁面與腳本檔 `node --check` 通過。
+- `tests/backup`：**1769** 個，1763 通過、1 略過、5 未通過（與 3g 相同，只有 `test_litellm_lab_runner` 被守門擋下）；`RealBackupTests` 1/1；
+  `node tests/backup-ui.mjs` **107/107**。
+- 最後一次合併之後的整套，CI 指令改用 CI 執行器的形式（umask 022、`--exe-only`）重跑。
