@@ -57,6 +57,12 @@ text read back, an edit saved into Nextcloud), restart
 must end rolled-back, verify again; b: the import's safety backup restored: dev-e's own markers are back, the HA-only
 users are gone, dev-e's own account logs in), after (as --negative), cleanup, leaks (every secret named above).
 
+--run --draft-entry does the same with the catalog entry a customer gets: the page's own draft (catalog-suggest), unedited,
+installed with catalog-install before anything else and replaced by dev-e's own entry file (exact bytes) at the end. The
+draft adds data checks (a digest of every database table, file lists with digests of the Redis, html and data folders): the
+converted backup has none (nothing is compared at the import), the safety backups have them, so the manual rollback must
+report every one of them equal.
+
 stdout carries only fixed lines (`<check>: PASS|FAIL`, the source commit, the lock time); details go to the private,
 redacted evidence folder ~/.woowbk-lab/evidence/nextcloud-flow/<time>/ (0700). Not covered by --negative (stated):
 a restore (the product refuses to build one), the users' files, Office, a browser.
@@ -207,6 +213,16 @@ for d, dirs, files in os.walk(lib):
             out[os.path.relpath(p, lib)] = hashlib.sha256(open(p, "rb").read()).hexdigest()
 print(json.dumps(out))
 '''
+
+ENTRY_FILE = '/etc/woowtech-cockpit/backup/apps/nextcloud.json'
+ENTRY_READ = (f'import base64, hashlib, json\ndata = open({ENTRY_FILE!r}, "rb").read()\n'
+              'print(json.dumps({"data": base64.b64encode(data).decode(), "sha256": hashlib.sha256(data).hexdigest()}))')
+ENTRY_WRITE = (f'import base64, hashlib, json, os, sys\nreq = json.loads(sys.stdin.read())\npath = {ENTRY_FILE!r}\n'
+               'data = base64.b64decode(req["data"])\nassert hashlib.sha256(data).hexdigest() == req["sha256"]\n'
+               'with open(path + ".woowbk-lab", "xb") as handle:\n    handle.write(data)\n    os.fchmod(handle.fileno(), 0o644)\n'
+               'os.replace(path + ".woowbk-lab", path)\n'
+               'print(json.dumps({"sha256": hashlib.sha256(open(path, "rb").read()).hexdigest()}))')
+DRAFT_CHECKS = {'db-main': 'postgres-digest', 'dir-redis': 'files-digest', 'dir-html': 'files-digest', 'dir-data': 'files-digest'}
 
 LEAKS = 'import json\n' + __import__('inspect').getsource(drv.secret_scan_needles) + r'''
 import os, subprocess, sys
@@ -661,6 +677,7 @@ class Run:
         self.section = {}
         self.safety = None          # the import's safety backup: dev-e's own Nextcloud before the import
         self.restored_back = False  # True once that safety backup is restored (manual rollback)
+        self.entry_file = None      # dev-e's own catalog entry file while the draft is installed (--draft-entry)
 
     def budget(self, phase, need=NEED, *, timed=True):
         """Before a step: the lock hold budget (`timed`; never for putting dev-e's own data back) and the host floor."""
@@ -707,6 +724,8 @@ class Run:
         if not ev.check('setup: the nextcloud catalog entry names the five units and the four data dirs', ok,
                         {'units': entry.get('units'), 'data_dirs': entry.get('data_dirs')}):
             raise Failed('catalog entry')
+        if self.args.draft_entry:
+            self.install_draft()
         key = drv.ok('key-init', ev=ev)
         ev.check('setup: a device key exists (key-init)', bool((key.get('key') or {}).get('key_id')),
                  {'created': key.get('created')})
@@ -718,6 +737,34 @@ class Run:
                         running and status.get('installed') is True and status.get('version') == '35.0.1.1'
                         and status.get('maintenance') is False, {'units': state.get('units'), 'status': status}):
             raise Failed('Nextcloud not running')
+
+    def install_draft(self):
+        """The page's own draft of dev-e's Nextcloud, unedited, installed as the page does it (--draft-entry)."""
+        ev = self.ev
+        self.entry_file = drv.device_python(ENTRY_READ, as_owner=False)
+        reply = drv.ok('catalog-suggest', {'owner': 'appowner'}, ev=ev, timeout=600)
+        draft = next((a for a in reply.get('apps') or [] if a.get('id') == 'nextcloud'), {})
+        ev.save('catalog-draft.json', draft)
+        entry = draft.get('entry') or {}
+        checks = {c.get('id'): c.get('type') for c in entry.get('verify') or [] if isinstance(c, dict)}
+        if not ev.check('setup: the catalog draft of this Nextcloud is valid: cold, the four data dirs, its own data checks',
+                        draft.get('valid') is True and draft.get('variant') == 'cold' and not entry.get('postgres')
+                        and not entry.get('volumes') and len(entry.get('data_dirs') or []) == 4 and checks == DRAFT_CHECKS,
+                        {'valid': draft.get('valid'), 'problem': draft.get('problem'), 'verify': checks}):
+            raise Failed('catalog draft')
+        preview = drv.ok('catalog-install', {'entry': entry}, ev=ev, timeout=300)
+        drv.ok('catalog-install', {'entry': entry, 'confirm': True, 'expected_sha256': preview.get('expected_sha256')}, ev=ev,
+               timeout=300)
+        if not ev.check('setup: the draft is installed unedited (catalog-install: preview, then confirm)',
+                        preview.get('valid') is True and drv.catalog('nextcloud') == entry):
+            raise Failed('catalog-install')
+
+    def restore_entry(self):
+        """dev-e's own catalog entry file again, byte for byte."""
+        if self.entry_file:
+            done = drv.device_python(ENTRY_WRITE, self.entry_file, as_owner=False)
+            self.ev.check('after: dev-e has its own catalog entry file again, byte for byte',
+                          done.get('sha256') == self.entry_file['sha256'])
 
     def base_client(self):
         """dev-e's own account through the same client program (read only): logins, Office capabilities, the data
@@ -1172,6 +1219,11 @@ class Run:
         ev.check(f'{phase}: the import\'s safety backup restored (manual rollback), every health check ok',
                  self.restored_back and not tripped and all(h.get('status') == 'ok' for h in result.get('health') or []),
                  {'state': job.get('state'), 'took_s': round(took, 1), 'tripped': tripped})
+        if self.args.draft_entry:
+            compared = {c.get('id'): c.get('match') for entry in result.get('verification') or [] for c in entry.get('checks') or []}
+            ev.save(f'{phase.replace(" ", "-")}-verification.json', result.get('verification'))
+            ev.check(f'{phase}: the safety backup\'s data checks (database, Redis, html and data digests) are all equal',
+                     compared == dict.fromkeys(DRAFT_CHECKS, True), compared)
         found = self.markers()
         users = self.state().get('users') or []
         ha_only = set(self.args.facts.get('digests') or {}) - set(self.before['state'].get('users') or [])
@@ -1289,6 +1341,10 @@ def negative(args):
                 run.leaks()
             except Failed as error:
                 ev.check(f'cleanup stopped: {label(error)}', False)
+            try:
+                run.restore_entry()
+            except Failed as error:
+                ev.check(f'catalog entry restore stopped: {label(error)}', False)
             held = int(time.monotonic() - run.lock_started)
             emit(f'lock held for {held} s')
     ev.check('end: dev-e isolation true none {}', isolation() == 'true none {}', isolation())
@@ -1297,7 +1353,7 @@ def negative(args):
 
 def self_check():
     compile((HERE / 'nextcloud_flow.py').read_text(encoding='utf-8'), 'nextcloud_flow.py', 'exec')
-    for script in (STATE, ENGINE_HASHES, LEAKS, CANDIDATE, CLIENT, OFFICE):
+    for script in (STATE, ENGINE_HASHES, LEAKS, CANDIDATE, CLIENT, OFFICE, ENTRY_READ, ENTRY_WRITE):
         compile(script, 'device', 'exec')
     assert all(SAFE_LABEL.sub('', name) == name for name in ('check: amd64, add-on 0.2.3, target 35.0.1.1',))
     print('self-check: PASS')
@@ -1311,10 +1367,13 @@ def main(argv):
     group.add_argument('--candidate', action='store_true')
     group.add_argument('--run', action='store_true')
     parser.add_argument('--facts', type=Path)
+    parser.add_argument('--draft-entry', action='store_true', help='with --run: the page\'s own catalog draft, unedited')
     group.add_argument('--self-check', action='store_true')
     args = parser.parse_args(argv)
     if args.self_check:
         return self_check()
+    if args.draft_entry and not args.run:
+        parser.error('--draft-entry goes with --run')
     if args.run:
         if args.facts is None:
             parser.error('--run needs --facts FILE')

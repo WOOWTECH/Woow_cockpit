@@ -2226,7 +2226,8 @@ html,data}`; facts `phase3/facts/nextcloud.md`, owner decisions D1-D5 applied wi
    mapping, publication, large object, default privilege, transform, extended statistics or tablespace, or a column
    default that is neither a constant nor `nextval()` → blocker 「HA 的 Nextcloud 資料庫含有 Nextcloud 不會建立的資料庫物件（…），無法安全地搬過來。」
    and HA's tables are not read at all (an unreadable shape → blocker too); a genuine Nextcloud 35.0.1 database has none
-   of them (dev-e, 2026-11-24). Counts (users, file cache, shares, tokens, calendar objects, contacts, storages, mounts,
+   of them (dev-e, 2026-11-24). Known app that creates some: Memories (pulsejet/memories lib/Db/FilecacheTriggers.php:
+   function `memories_fcu_fun`, trigger `memories_fcu_trg` on `oc_filecache`): an HA Nextcloud that had it is refused. Counts (users, file cache, shares, tokens, calendar objects, contacts, storages, mounts,
    external mounts) are read; per user the database's file list (home storages, `files/**`: number, bytes and an
    order-free md5 digest of size and path, `FILES_SQL`) is compared with the files in the backup (HA archives the share
    folder after the add-on runs again): a difference is a warning and a reminder with the command `podman exec -u

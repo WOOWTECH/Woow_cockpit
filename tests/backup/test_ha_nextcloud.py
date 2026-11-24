@@ -457,6 +457,9 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(nc.storage_id('/var/www/html//data/'), 'local::/var/www/html/data/')
         long = '/share/' + 'x' * 70
         self.assertRegex(nc.storage_id(long), r'\A[0-9a-f]{32}\Z')
+        fits = '/share/' + 'x' * 49  # 64 bytes is still stored as it is (Cache/Storage.php adjustStorageId: > 64)
+        self.assertEqual((nc.storage_id(fits), len(nc.storage_id(fits))), (f'local::{fits}/', 64))
+        self.assertEqual(nc.storage_id(fits + 'x'), hashlib.md5(f'local::{fits}x/'.encode()).hexdigest())
         self.assertEqual(nc.datadir_source('/share/nextcloud'), ('share', 'nextcloud'))
         self.assertEqual(nc.datadir_source('/share/nc/data/'), ('share', 'nc/data'))
         self.assertEqual(nc.datadir_source('/data/userfiles'), ('addon', 'data/userfiles'))
