@@ -128,7 +128,8 @@ LAB_FOLDER = LAB / 'ha-fixtures' / '20261124-emqx-noacl-lab'
 LAB_MADE = {'x86-fileonly': 'woow-b1-x86-emqx-stopped-fileonly', 'x86-noacl': 'woow-b1-x86-emqx-stopped-noacl',
             'x86-bcrypt': 'woow-b1-x86-emqx-stopped-bcrypt', 'x86-plain': 'woow-b1-x86-emqx-stopped-plain'}
 LAB_SHA256 = {'x86-fileonly': '503f9b1bba23bd2a93454f8aaf9218b936d5c4d76edbc99103113c85b719faf4', 'x86-noacl': '59f3062cce8734babf67035552ed088ec0200f986b9aa5096a22ce3a8f0845cf',
-              'x86-bcrypt': 'SHA256-BCRYPT', 'x86-plain': 'SHA256-PLAIN'}
+              'x86-bcrypt': '1b76fc196be173652576077a59a8c5f4d4d9f08d0ed6f76b9a595a6d38c5abd9',
+              'x86-plain': '9643c8716c1e2dbe08f8418d3114645839f6839314924d093c2e9526cd0cf200'}
 # SR-5 (OWNER DECISION 2026-11-24, option C; lane emqx-sr5): the x86-fileonly variant whose HA built-in password database
 # EMQX itself switched to bcrypt (HA's three users got their b1 passwords again) or to plain (emqx_noacl_fixture.py
 # fileonly hash=...). Step sr5:TAG: bcrypt = the check warns and names this device's own MQTT accounts, the import goes
