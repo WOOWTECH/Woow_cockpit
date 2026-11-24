@@ -27,8 +27,9 @@ product path itself enforce every protection the lab-proven internal candidate h
 | Each of the three volume tars is read as a restore would read it (the owner's id maps) before it is packed | `convert` (`ha_odoo.check_volume_tar`) | M37–M39 |
 | The capture script dumps the live schema only (`--schema-only`), as the exported snapshot shows it, after it read the revision inside that snapshot again; only a snapshot id reaches pg_dump | `SNAPSHOT_SCRIPT` | M40–M43 |
 
-(M18–M28 are the security review's and the verifier's, listed in the iteration 2 and 3 sections below. M29–M43 were
-added in iteration 5: the protections were there since 805ff1b or earlier, but no unit test failed without them.)
+(M18–M28 are the security review's and the verifier's, listed in the iteration 2 and 3 sections below. M29–M53 were
+added in iteration 5, M44–M53 are listed there: the code of these protections has not changed since 82ac971, but no unit
+test failed without them until then -- `mutation-before-iter5.json`: 0 of the 25 caught by the tests of fdc922f.)
 
 Removed: `SECURITY_BLOCKER`, `restore_dump` (restored HA's DDL), `carry_accounts` (wrote as the superuser through
 `pg_read_file`), `haimport._run_ha_convert(omnigent_candidate=)`. Kept for the lab harnesses of 2026-11-20..23:
@@ -133,6 +134,10 @@ Unit and suites:
 
 ## Iteration 5 (2026-11-24): the independent verifier's gaps (tests, mutations and text only; no run on dev-d)
 
+The product did not change: `ha_omnigent.py` without its docstrings parses to the same code as at 97c994f (the commit of
+the last real run) and at f2c9e03 (the integration tip merged into this branch), and no other file under
+`backup-engine`, `backup`, `docs` or `scripts` differs from that tip.
+
 The verifier removed protections one at a time on 97c994f and 7 of them were caught by none of 147 tests (its X7, X8,
 X9, X10, X11, X13, X15). Branch `fix/omnigent-test-gaps-20261124` (from integration fdc922f) adds a test for each that
 fails when the protection is removed, and the mutations M29–M43 (the verifier's own 7 replacements: M29, M30, M33, M34,
@@ -149,3 +154,58 @@ that precondition is established").
 | X11 | test mode's second count of active tasks | `ConvertTests.test_test_mode_that_left_a_task_active_stops_the_conversion` |
 | X13 | `check_volume_tar` | `ConvertTests.test_a_volume_podman_could_not_import_is_never_packed`: an owner id outside the owner's maps, a symlink out of the volume, a device node, in the database, server and pi volume |
 | X15 | `--schema-only` of the capture | `SnapshotScriptTests` (`test_ha_omnigent_trusted`): the real script under a real shell with stand-ins for psql and pg_dump: pg_dump's exact arguments, the transaction still open while it runs, the archive without the columns line (0600), the private folder removed; another revision, no revision, no or a wrong snapshot id, a lock not granted and a failed pg_dump never become a schema |
+
+### The same question asked of the other refusals (tests only, same branch)
+
+X7–X15 were found by removing some protections. Every refusal of the module, and ten protections that are no refusal,
+got the same question.
+
+* **`omnigent_product_mutations.py --refusals`** (new) removes what the module itself says no to, one at a time: all 61
+  `raise` statements and collected blockers or problems, and all 48 operands of an `or` that decides about one. (How many
+  of the 61 no test failed without before iteration 5 was not measured; of the 48 operands it was 12 at a85e0ef: 10 have
+  a test now, 2 are redundant, see below.) Tests added:
+  * `RefusalTests` (new): a device that is not set up like the package is no target (database items, host folders, a
+    missing PostgreSQL/server/runner file, one volume more, less or of another name, two folders in one volume, another
+    database, user name or data folder, no image); what HA's database must be (each part of the verdict on its own, in
+    the check and in the conversion); answers that are not what was asked for (no database, no objects, columns,
+    signatures, revisions, accounts, audit: nothing, the wrong type or a part missing, from HA's, the live and the new
+    cluster); a live version that cannot be read (an error page, no JSON, no text, not x.y.z; a health address that is
+    not the loopback one is never asked); a schema that changed with the last write; the space check of the conversion.
+  * `ConvertTests.test_the_sequence_script_is_one_setval_for_each_selected_sequence`: SR-3's rule on its own (nothing
+    but comments after a setval, not even one of pg_restore's header lines: an injected value that ends in a comment
+    could set a search path; as many setval as selected entries, each of another trusted sequence).
+  * a secret declared twice, a tablespace or symlink in HA's cluster, no or a malformed expected revision before the
+    capture, captured columns that are not JSON, an object, a number, empty or have a short row, the whole list
+    `SIGNATURE_KEYS`.
+* Two operands cannot decide alone (`REDUNDANT` in the script, printed as such): `entry.linkname == ARTIFACTS`
+  (`habackup.iter_entries` hands out no hard link to a folder and no entry below a file) and `not self.pgdata` (None only
+  without a data mount, which the volume comparison before it refuses).
+* **M44–M53**, protections that are no refusal: HA's cluster and its volume are removed before the new cluster starts
+  (M44); the new cluster is ready when it answers on TCP, not the image's temporary server of its first start (M45);
+  HA's dump, this device's schema dump and the new cluster's export are 0600 in a 0700 folder (M46–M48,
+  `test_what_the_job_writes_is_private_to_it`); the space check before a cluster starts (M49); a live account row nobody
+  asked for is not carried (M50); the live version is asked on the loopback address only, from an answer with status 200
+  and only x.y.z (M51–M53).
+
+Not claimed: that every statement of the module has a test that fails without it. Mutated were the list, every refusal
+and every `or` operand of a refusal.
+
+### Results (offline: no Podman, no device, no secret; heavy steps through heavy.sh)
+
+| Record | Commit | What ran | Result |
+| --- | --- | --- | --- |
+| `mutation-before-iter5.json` | fdc922f (the base) | M29–M53 against the tests as they were before iteration 5 (63) | 0/25 caught |
+| `mutation-named-iter5.json` | 01b36b4 | `--named`: M29–M53, each against its own test alone (13 tests) | 25/25 caught |
+| `mutation-check-iter5.json` | 04d8e50 | the whole list M01–M53 against the six Omnigent modules (80 tests) | 53/53 caught |
+| `mutation-refusals-iter5.json` | 04d8e50 | `--refusals`: 61 statements and 48 operands | 107/109 caught, the 2 of `REDUNDANT` not |
+| `full-suite-iter5.json` | 01b36b4 | full `tests/backup` under the host-heavy lock | 1681 run, OK, 6 skipped |
+
+01b36b4 differs from 04d8e50 only in `omnigent_product_mutations.py` (it names the failing test; `--named`). Both
+contain integration f2c9e03. Also run directly on the branch: the six Omnigent modules 80 OK (also without PYTHONPATH,
+as CI does, two of them), lab Omnigent 24 OK, `test_ha_registry`/`test_ha_flows`/`test_ha_redact`/`test_ha_common`/
+`test_ha_omnigent_install_harness` 41 OK, `scripts/check_source.py` passed. `SnapshotScriptTests` eight times at load
+18–20: 24/24 OK; once by hand with busybox ash (the shell of the PostgreSQL image) as `sh`: 3/3 OK. A mutation counts
+as caught when the run stops at a failing test (`--failfast`), so `failures` is 1 in these records.
+
+Nothing of this is a real run: the real runs are those of `tests/e2e/lab/evidence/omnigent-product-20261123/`
+(`commercial_acceptance` stays not-complete).
