@@ -128,12 +128,16 @@ def main(codebase):
                     L.IMAGE, '/eval/eval.escript', '/eval/expression.txt', check=False)
         return SimpleNamespace(returncode=run.returncode, stdout=run.stdout, stderr=run.stderr)
 
+    result['check'] = 'check_export_members (in process)' if hasattr(ha_emqx, 'check_export_members') else 'check_export'
     for label, data, want in cases(ha_emqx):
         with open(os.path.join(work, 'in', NAME), 'wb') as handle:
             handle.write(data)
         os.chmod(os.path.join(work, 'in', NAME), 0o644)
         try:
-            ha_emqx.check_export(execute, NAME)
+            if hasattr(ha_emqx, 'check_export_members'):   # bcb6245, iteration 4's check in Python (never merged)
+                ha_emqx.check_export_members(os.path.join(work, 'in', NAME))
+            else:
+                ha_emqx.check_export(execute, NAME)
             got, message = 'pass', ''
         except L.BackupError as error:
             got, message = 'refuse', error.message
