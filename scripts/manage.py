@@ -55,6 +55,43 @@ SYSTEMD_RUNNING = Path('/run/systemd/system')
 MASKED_NOTICE = (f'{SCHEDULE_TIMER} is masked (systemctl mask): left as it is, so scheduled backups do not start; run '
                  f'"systemctl unmask {SCHEDULE_TIMER}" and install again to turn the schedule checks on.')
 SAFE_ENV = {'PATH': '/usr/sbin:/usr/bin:/sbin:/bin', 'LANG': 'C.UTF-8', 'LC_ALL': 'C.UTF-8'}
+# Host tools of the backup engine (tool, Ubuntu package, probe): age and zstd for the archives, age-keygen for the keys,
+# PyNaCl and cryptography to read encrypted Home Assistant backups. Probed the way the engine uses them: its fixed PATH
+# (woowbackup/util.py) and the helper's isolated interpreter. scripts/bootstrap-ubuntu.sh installs the same packages;
+# `install` on the live root adds missing ones again.
+TOOL_ENV = {**SAFE_ENV, 'PATH': '/usr/local/sbin:/usr/local/bin:' + SAFE_ENV['PATH']}
+PROBE = ('/usr/bin/python3', '-I', '-B', '-c')
+HOST_TOOLS = (
+    ('age', 'age', ('age', '--version')),
+    ('age-keygen', 'age', ('age-keygen', '--version')),
+    ('zstd', 'zstd', ('zstd', '--version')),
+    ('python3-nacl', 'python3-nacl', (*PROBE, (
+        'from nacl import bindings, exceptions; from nacl.pwhash import argon2id; '
+        'argon2id.kdf, exceptions.CryptoError, bindings.crypto_secretstream_xchacha20poly1305_init_pull'))),
+    ('python3-cryptography', 'python3-cryptography', (*PROBE, (
+        'from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes; '
+        'Cipher(algorithms.AES(bytes(16)), modes.CBC(bytes(16))).decryptor().update(bytes(16))'))),
+)
+TOOL_PACKAGES = tuple(dict.fromkeys(package for _tool, package, _probe in HOST_TOOLS))
+APT_GET = '/usr/bin/apt-get'
+# Waits for an automatic update that holds the dpkg lock; never removes a package to make room for these.
+APT_UPDATE = (APT_GET, '-q', '-o', 'Acquire::Retries=1', 'update')
+APT_INSTALL = (APT_GET, '-q', '-o', 'Acquire::Retries=1', '-o', 'DPkg::Lock::Timeout=300', '-y',
+               '--no-install-recommends', '--no-remove', '--reinstall', 'install')
+# Why apt could not add a package, from its messages in the C locale. Only these texts are shown: apt's own lines can
+# name a private mirror or a proxy.
+OFFLINE = '這台連不到套件庫（網路、DNS 或代理伺服器）'
+OFFLINE_TEXT = re.compile(r'Failed to fetch|Temporary failure resolving|Could not (?:resolve|connect)|Unable to connect'
+                          r'|Network is unreachable|Connection (?:timed out|refused|failed)')
+APT_REASONS = (
+    (re.compile(r'Could not get lock|Unable to (?:acquire|lock)'), '另一個套件作業（例如系統自動更新）正在進行'),
+    (re.compile(r'dpkg was interrupted'), '上一次的套件安裝沒有完成，請先執行 sudo dpkg --configure -a'),
+    (re.compile(r'No space left on device|enough free space'), '磁碟空間不足'),
+    (OFFLINE_TEXT, OFFLINE),
+    (re.compile(r'[Uu]nmet dependencies|[Hh]eld (?:broken )?packages|need to be removed'),
+     '和這台已安裝或鎖定（hold）的其他套件衝突'),
+)
+NOT_IN_ARCHIVE = re.compile(r'Unable to locate package|has no installation candidate')
 DEMO_APP = 'woowbk-demo'
 DEMO_CATALOG = f'{BACKUP_CATALOG}/{DEMO_APP}.json'
 DEMO_TEMPLATES = f'{BACKUP_TEMPLATES}/{DEMO_APP}'
@@ -605,14 +642,19 @@ def restore_records(root, backup, records):
 
 # ---------------------------------------------------------------- systemd (the live root only)
 
-def run_systemctl(argv):
-    """Run one fixed systemctl argv (no shell, no input, sanitized environment); (returncode, stdout, stderr)."""
+def run_fixed(argv, env=SAFE_ENV, timeout=120):
+    """Run one fixed argv (no shell, no input, sanitized environment); (returncode, stdout, stderr), 127 when it cannot
+    start or does not answer in time."""
     try:
-        result = subprocess.run(argv, stdin=subprocess.DEVNULL, capture_output=True, env=dict(SAFE_ENV), timeout=120,
+        result = subprocess.run(argv, stdin=subprocess.DEVNULL, capture_output=True, env=dict(env), timeout=timeout,
                                 check=False)
     except (OSError, subprocess.TimeoutExpired) as error:
         return 127, '', str(error)
     return result.returncode, result.stdout.decode('utf-8', 'replace'), result.stderr.decode('utf-8', 'replace')
+
+
+def run_systemctl(argv):
+    return run_fixed(argv)
 
 
 class Systemd:
@@ -711,12 +753,83 @@ def _timer_back(systemd, before, unit_touched, timer_present):
         systemd.run('start', SCHEDULE_TIMER, check=False)
 
 
-def install(root, desired, state, systemd=None):
+# ---------------------------------------------------------------- host tools (the live root only)
+
+def run_tool(argv):
+    """A probe (30 s) or apt-get: noninteractive, needrestart's hook suspended (this installer restarts no service), the
+    administrator's proxy passed on and no time limit, because apt-get must not be killed while dpkg works (its network
+    and lock waits are bounded)."""
+    if argv[0] != APT_GET:
+        return run_fixed(argv, TOOL_ENV, 30)
+    proxy = {key: os.environ[key] for key in ('http_proxy', 'https_proxy', 'no_proxy') if key in os.environ}
+    return run_fixed(argv, {**SAFE_ENV, **proxy, 'DEBIAN_FRONTEND': 'noninteractive', 'NEEDRESTART_SUSPEND': '1'}, None)
+
+
+def apt_reason(code, update, error):
+    """Why the packages could not be added (zh-TW, never apt's own lines), from the stderr of update and install."""
+    for pattern, reason in APT_REASONS:
+        if pattern.search(error):
+            return reason
+    unknown = NOT_IN_ARCHIVE.search(error)
+    if OFFLINE_TEXT.search(update) and (unknown or code == 0):
+        return OFFLINE  # an index never downloaded reads like an unknown package, a reinstall without one like a success
+    if unknown:
+        return '套件庫沒有這些套件（age 在 Ubuntu 的 universe：sudo add-apt-repository universe）'
+    return f'apt-get 失敗（結束碼 {code}）' if code else '套件已安裝，但工具仍然不能使用'
+
+
+class HostTools:
+    """The probes of HOST_TOOLS and the apt-get steps that add missing packages, through an injectable
+    `runner(argv) -> (code, stdout, stderr)`. Only the fixed argv above are ever run."""
+
+    def __init__(self, runner=run_tool):
+        self.runner = runner
+
+    def working(self):
+        """{tool: whether the engine can use it} (read-only)."""
+        return {tool: self.runner(list(probe))[0] == 0 for tool, _package, probe in HOST_TOOLS}
+
+    def missing(self, working=None):
+        """The packages of the tools that are missing or do not answer (read-only)."""
+        working = self.working() if working is None else working
+        return list(dict.fromkeys(package for tool, package, _probe in HOST_TOOLS if not working[tool]))
+
+    def ensure(self):
+        """Add the missing packages and return their names; with every tool working nothing runs. Refuses when a tool
+        still does not work afterwards (apt's exit code alone is not trusted)."""
+        packages = self.missing()
+        if not packages:
+            return []
+        print(f'Note: 備份與還原需要的套件沒有裝好：{"、".join(packages)}。正在用 apt 自動補裝（可能要幾分鐘）……',
+              file=sys.stderr)
+        _code, _out, update = self.runner(list(APT_UPDATE))  # best effort: an older index or apt's cache may do
+        code, _out, error = self.runner([*APT_INSTALL, *packages])
+        left = self.missing()
+        if left:
+            raise ValueError(
+                f'備份與還原需要的套件沒有裝好：{"、".join(left)}。自動補裝沒有成功：{apt_reason(code, update, error)}。'
+                f'沒有更新任何檔案。請排除後重新執行，或先自行安裝（sudo apt-get install {" ".join(left)}；'
+                '不能上網時用帶來的 .deb 檔）；只要更新備份以外的部分，可以加 --no-backup。')
+        return packages
+
+
+def engine_tools(root, state, tools=None):
+    """The host tools of a run that manages the backup engine on the live root; None otherwise (--no-backup, --root)."""
+    if BACKUP_HELPER not in state['files']:
+        return None
+    return HostTools() if tools is None and root == Path('/') else tools
+
+
+def install(root, desired, state, systemd=None, tools=None):
     systemd = live_systemd(root) if systemd is None else systemd
     names = changes(root, desired)
     directories = directory_plan(root, state)
+    tools = engine_tools(root, state, tools)
+    packages = tools.ensure() if tools is not None else []  # refused before the first file changes
     if not names and not directories:
         result = {'changed': 0, 'status': 'already-current'}
+        if packages:
+            result['packages'] = packages
         if systemd is not None and TIMER_FILE in state.get('files', {}):
             _ensure_timer(systemd, state)  # e.g. disabled by hand: the installed package runs its timer
             result['timer'] = timer_view(systemd.timer_state())
@@ -782,6 +895,8 @@ def install(root, desired, state, systemd=None):
               'removed': sum(1 for rec in records if rec['after_sha256'] is None),
               'directories': len(directories), 'backup_id': backup_id,
               'backup': str(backup), 'source_version': state['source_version']}
+    if packages:
+        result['packages'] = packages
     if systemd is not None:
         result['systemctl'] = list(systemd.steps)
         result['timer'] = timer_view(systemd.timer_state())
@@ -928,6 +1043,20 @@ def verify(root, systemd=None):
     return result
 
 
+def status(root, tools=None):
+    """The installed version and whether the engine's host tools work; read-only (`install` adds missing ones)."""
+    state = json.loads(safe_path(root, STATE).read_text())
+    result = {'status': 'ready', 'source_version': state['source_version'], 'tools': 'not-managed', 'packages': []}
+    tools = engine_tools(root, state, tools)
+    if tools is not None:
+        working = tools.working()
+        missing = tools.missing(working)
+        result.update(status='tools-missing' if missing else 'ready', tools=working, packages=missing)
+    elif BACKUP_HELPER in state['files']:
+        result.update(status='not-checked', tools='not-checked')  # --root: nothing is run there
+    return result
+
+
 def selected_brand(root, requested=None):
     """An explicit switch wins; unattended upgrades retain the installed brand."""
     if requested is not None:
@@ -964,6 +1093,7 @@ def main():
         sub.add_argument('--backup-demo-catalog', action='store_true',
                          help='LAB ONLY: also install the woowbk-demo trusted catalog entry and its Quadlet templates.')
     subs.add_parser('verify')
+    subs.add_parser('status', help='Installed version and whether the host tools of the engine work; changes nothing.')
     sub = subs.add_parser('rollback')
     sub.add_argument('backup_id')
     args = parser.parse_args()
@@ -990,14 +1120,22 @@ def main():
                       file=sys.stderr)
             for notice in notices:
                 print(f'Note: {notice}', file=sys.stderr)
+            if root != Path('/') and BACKUP_HELPER in state['files']:
+                print(f'Note: --root：不會在 {root} 檢查或補裝備份與還原需要的套件；請在那個系統安裝：'
+                      f'sudo apt-get install {" ".join(TOOL_PACKAGES)}', file=sys.stderr)
             if args.command == 'plan':
                 names = changes(root, desired)
                 systemd = live_systemd(root)
                 before = systemd.timer_state() if systemd else None
                 if before and masked(before) and TIMER_FILE in state['files']:
                     notices.append(MASKED_NOTICE)
+                tools = engine_tools(root, state)
+                packages = tools.missing() if tools else []
+                if packages:
+                    print(f'Note: 備份與還原需要的套件沒有裝好：{"、".join(packages)}。執行 install 時會用 apt 自動補裝。',
+                          file=sys.stderr)
                 result = {'source_version': state['source_version'], 'cockpit_version': state['cockpit_version'],
-                          'changed': names,
+                          'changed': names, 'packages': packages,
                           'remove': [name for name, (data, _) in desired.items() if data is None],
                           'directories': [f'{rec["path"]}/' for rec in directory_plan(root, state)],
                           'managed_files': len(state['files']), 'notices': notices,
@@ -1013,10 +1151,15 @@ def main():
                 print(f'Note: systemd is not running here ({SYSTEMD_RUNNING} is missing): no systemctl command runs '
                       'for the scheduled-backup timer.', file=sys.stderr)
             result = rollback(root, args.backup_id)
+        elif args.command == 'status':
+            result = status(root)
+            if result['packages']:
+                print(f'Note: 備份與還原需要的套件沒有裝好：{"、".join(result["packages"])}。請重新執行安裝'
+                      '（sudo python3 scripts/manage.py install），會用 apt 自動補裝。', file=sys.stderr)
         else:
             result = verify(root)
         print(json.dumps(result, indent=2, ensure_ascii=False))
-        return 1 if result.get('status') == 'drift' else 0
+        return 1 if result.get('status') in ('drift', 'tools-missing') else 0
     except (OSError, ValueError, KeyError) as error:
         print(f'Error: {error}', file=sys.stderr)
         return 1

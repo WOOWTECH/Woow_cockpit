@@ -1,10 +1,12 @@
 import contextlib
 import gzip
 import importlib.util
+import io
 import json
 import os
 from pathlib import Path
 import posixpath
+import re
 import stat
 import subprocess
 import sys
@@ -1207,6 +1209,409 @@ class ScheduleTimerContract(HostFixture):
         self.assertEqual(planned['systemctl'], [])
         self.assertIn(manage.TIMER_FILE, planned['changed'])
         self.assertIn(f'{manage.UNIT_DIR}/', planned['directories'])
+
+
+class FakeHost:
+    """The device behind `manage.HostTools` (its runner): the tools that do not work and what apt-get does about it.
+    `adds`: the packages apt can add; `code`, `update`, `error`: how apt-get answers; `seen(argv)`: before it acts."""
+
+    def __init__(self, broken=(), *, adds=manage.TOOL_PACKAGES, code=0, update='', error='', seen=lambda argv: None):
+        self.broken, self.adds = set(broken), set(adds)
+        self.code, self.update, self.error, self.seen = code, update, error, seen
+        self.apt = []
+
+    def __call__(self, argv):
+        if argv[0] != manage.APT_GET:
+            tool = next(tool for tool, _package, probe in manage.HOST_TOOLS if list(probe) == argv)
+            return (127 if tool in self.broken else 0), '', ''
+        self.seen(argv)
+        self.apt.append(argv)
+        if argv == list(manage.APT_UPDATE):
+            return 0, '', self.update  # apt-get update ends with 0 when it is offline (apt 2.8.4)
+        wanted = set(argv[len(manage.APT_INSTALL):])
+        assert wanted and wanted <= set(manage.TOOL_PACKAGES), argv
+        self.broken -= {tool for tool, package, _probe in manage.HOST_TOOLS if package in wanted & self.adds}
+        return self.code, '', self.error
+
+
+class HostToolsContract(HostFixture):
+    """Rows KEY-14, KEY-15, X-AR-06 and X-KEY-02 of the HA import (on HAOS the tools are simply there): the packages the
+    backup engine needs come with it. An install on the live root adds missing ones with apt before it changes a file
+    and is refused only when that fails; plan and status report them; --no-backup and --root run nothing. Without its
+    tools the engine itself still stops."""
+
+    # row: (the tool that does not work, the package that brings it)
+    ROWS = {'KEY-14': ('python3-nacl', 'python3-nacl'), 'KEY-15': ('python3-cryptography', 'python3-cryptography'),
+            'X-AR-06 age': ('age', 'age'), 'X-AR-06 zstd': ('zstd', 'zstd'), 'X-KEY-02': ('age-keygen', 'age')}
+    # What apt 2.8.4 writes offline (recorded with a private apt root, 2026-11-25; host names replaced).
+    OFFLINE_UPDATE = ('W: Failed to fetch http://archive.example/ubuntu/dists/noble/InRelease  Could not resolve '
+                      "'archive.example'\nW: Some index files failed to download. They have been ignored, or old ones "
+                      'used instead.\n')
+    NO_PACKAGE = 'E: Unable to locate package age\n'
+    add_source = BackupPackageContract.add_source
+    add_backup_source = BackupPackageContract.add_backup_source
+    tree = BackupPackageContract.tree
+
+    def setUp(self):
+        super().setUp()
+        self.add_backup_source()
+
+    def live(self, host, systemctl=None, **options):
+        """An install as on the live root: `host` answers for the tools, `systemctl` for the timer."""
+        desired, state = manage.desired_files(self.root, **options)
+        self.notes = io.StringIO()
+        with contextlib.redirect_stderr(self.notes):
+            return manage.install(self.root, desired, state, tools=manage.HostTools(host),
+                                  systemd=manage.Systemd(systemctl) if systemctl else None)
+
+    def main(self, *args):
+        """manage.main() on the fixture root: (exit code, its JSON, stderr)."""
+        out, err = io.StringIO(), io.StringIO()
+        with (patch.object(sys, 'argv', ['manage.py', '--root', str(self.root), *args]),
+              contextlib.redirect_stdout(out), contextlib.redirect_stderr(err)):
+            code = manage.main()
+        return code, json.loads(out.getvalue()), err.getvalue()
+
+    def test_the_installer_the_bootstrap_and_the_engine_mean_the_same_tools(self):
+        bootstrap = (REPO / 'scripts/bootstrap-ubuntu.sh').read_text()
+        self.assertEqual([tuple(words.split()) for words in re.findall(r'(?m)^backup_packages=\((.*)\)$', bootstrap)],
+                         [manage.TOOL_PACKAGES])
+        self.assertEqual({(tool, package) for tool, package, _probe in manage.HOST_TOOLS}, set(self.ROWS.values()))
+        # Probed where the engine looks for a program and with the interpreter of its helper.
+        engine = REPO / 'backup-engine/woowbackup'
+        source = ''.join(path.read_text() for path in sorted(engine.rglob('*.py')))
+        self.assertIn(f"SAFE_PATH = '{manage.TOOL_ENV['PATH']}'\n", (engine / 'util.py').read_text())
+        self.assertEqual(set(re.findall(r"find_tool\('([^']+)'\)", source)),
+                         {probe[0] for _tool, _package, probe in manage.HOST_TOOLS if not probe[0].startswith('/')})
+        self.assertEqual(manage.HELPER_SHEBANG.decode(), f'#!{" ".join(manage.PROBE[:2])}\n')
+        for module in ('nacl import bindings', 'nacl.pwhash import argon2id',
+                       'cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes'):
+            self.assertIn(f'from {module}\n', source)
+            self.assertEqual(sum(module in probe[-1] for _tool, _package, probe in manage.HOST_TOOLS), 1, module)
+
+    def test_with_every_tool_working_nothing_runs_and_nothing_is_reported(self):
+        host = FakeHost()
+        for status in ('installed', 'already-current'):
+            result = self.live(host)
+            self.assertEqual((result['status'], host.apt, self.notes.getvalue()), (status, [], ''))
+            self.assertNotIn('packages', result)
+
+    def test_a_missing_package_is_added_before_a_file_changes(self):
+        for number, (row, (tool, package)) in enumerate(self.ROWS.items()):
+            with self.subTest(row=row):
+                self.add_source({'backup-engine/woowbackup/cli.py': f'VERSION = {number}\n'})
+                before, at_apt = self.tree(''), []
+                host = FakeHost({tool}, seen=lambda argv, at=at_apt: at.append(self.tree('')))
+                result = self.live(host)
+                self.assertEqual((result['status'], result['packages']), ('installed', [package]))
+                self.assertEqual(host.apt, [list(manage.APT_UPDATE), [*manage.APT_INSTALL, package]])
+                self.assertEqual(at_apt, [before, before], 'apt-get runs before anything changes')
+                self.assertIn(f'備份與還原需要的套件沒有裝好：{package}。正在用 apt 自動補裝', self.notes.getvalue())
+                self.assertEqual((self.root / manage.BACKUP_ENGINE / 'cli.py').read_text(), f'VERSION = {number}\n')
+                # Removed later (e.g. apt autoremove): installing again adds it, with no file to change.
+                host.broken.add(tool)
+                host.apt.clear()
+                result = self.live(host)
+                self.assertEqual((result['status'], result['changed'], result['packages']),
+                                 ('already-current', 0, [package]))
+                self.assertEqual(host.apt, [list(manage.APT_UPDATE), [*manage.APT_INSTALL, package]])
+                host.apt.clear()
+                self.assertNotIn('packages', self.live(host))
+                self.assertEqual(host.apt, [], 'idempotent')
+
+    def test_every_missing_package_goes_into_one_apt_run(self):
+        host = FakeHost(tool for tool, _package, _probe in manage.HOST_TOOLS)
+        self.assertEqual(self.live(host)['packages'], ['age', 'zstd', 'python3-nacl', 'python3-cryptography'])
+        self.assertEqual(host.apt, [list(manage.APT_UPDATE), [*manage.APT_INSTALL, *manage.TOOL_PACKAGES]])
+
+    def test_an_install_that_cannot_add_them_is_refused_with_the_reason_and_changes_nothing(self):
+        fetch = ('E: Failed to fetch http://archive.example/pool/age_1.1.1_amd64.deb  Could not connect to '
+                 'archive.example:80 (192.0.2.1). - connect (111: Connection refused)\n'
+                 'E: Unable to fetch some archives, maybe run apt-get update or try with --fix-missing?\n')
+        cases = (
+            # An index that was never downloaded reads like a package the archive does not have.
+            ('offline, no index', self.OFFLINE_UPDATE, self.NO_PACKAGE, manage.OFFLINE),
+            ('offline, old index', self.OFFLINE_UPDATE, fetch, manage.OFFLINE),
+            ('universe is off', '', "E: Package 'age' has no installation candidate\n", 'add-apt-repository universe'),
+            ('unknown package', '', self.NO_PACKAGE, 'add-apt-repository universe'),
+            ('lock', '', 'E: Could not get lock /var/lib/dpkg/lock-frontend. It is held by process 42 (unattended-upgr)\n',
+             '另一個套件作業'),
+            ('interrupted', '', "E: dpkg was interrupted, you must manually run 'sudo dpkg --configure -a' to correct "
+             'the problem. \n', 'sudo dpkg --configure -a'),
+            ('disk', '', "E: You don't have enough free space in /var/cache/apt/archives/.\n", '磁碟空間不足'),
+            ('conflict', '', 'E: Packages need to be removed but remove is disabled.\n', '其他套件衝突'),
+            ('held', '', 'E: Held packages were changed and -y was used without --allow-change-held-packages.\n',
+             '其他套件衝突'),
+            ('other', '', 'E: something else\n', '結束碼 100'),
+        )
+        for label, update, error, reason in cases:
+            with self.subTest(case=label):
+                before = self.tree('')
+                host = FakeHost({'age', 'age-keygen', 'python3-nacl'}, adds=(), code=100, update=update, error=error)
+                systemctl = FakeSystemctl(self.root)
+                with self.assertRaises(ValueError) as refused:
+                    self.live(host, systemctl)
+                message = str(refused.exception)
+                self.assertIn('備份與還原需要的套件沒有裝好：age、python3-nacl。', message)
+                self.assertIn(reason, message)
+                for part in ('沒有更新任何檔案', 'sudo apt-get install age python3-nacl', '--no-backup'):
+                    self.assertIn(part, message)
+                self.assertEqual((self.tree(''), systemctl.calls), (before, []), 'nothing was changed')
+                self.assertEqual(host.apt[-1], [*manage.APT_INSTALL, 'age', 'python3-nacl'])
+
+    def test_a_refusal_never_shows_the_lines_of_apt(self):
+        mirror = 'http://mirror-user:MIRROR-PASSWORD@mirror.example/ubuntu'
+        host = FakeHost({'zstd'}, adds=(), code=100, update=f'W: Failed to fetch {mirror}  x\n',
+                        error=f'E: Failed to fetch {mirror}/pool/z/zstd.deb  Temporary failure resolving\n')
+        with self.assertRaises(ValueError) as refused:
+            self.live(host)
+        shown = str(refused.exception) + self.notes.getvalue()
+        for part in ('mirror', 'PASSWORD', 'http', 'E:', 'W:'):
+            self.assertNotIn(part, shown)
+
+    def test_what_works_afterwards_decides_not_the_exit_code_of_apt(self):
+        host = FakeHost({'age-keygen', 'zstd'}, adds={'zstd'})  # apt is content, age-keygen still does not answer
+        before = self.tree('')
+        with self.assertRaisesRegex(ValueError, '沒有裝好：age。自動補裝沒有成功：套件已安裝，但工具仍然不能使用。'):
+            self.live(host)
+        self.assertEqual(self.tree(''), before)
+        host = FakeHost({'zstd'}, code=100, error='E: a hook of another package failed\n')  # added all the same
+        self.assertEqual(self.live(host)['packages'], ['zstd'])
+        # Offline, a damaged tool: apt has nothing to reinstall it from and ends with 0.
+        host = FakeHost({'zstd'}, adds=(), update=self.OFFLINE_UPDATE)
+        with self.assertRaisesRegex(ValueError, f'沒有裝好：zstd。自動補裝沒有成功：{re.escape(manage.OFFLINE)}。'):
+            self.live(host)
+
+    def test_no_backup_and_other_roots_check_and_run_nothing(self):
+        host = FakeHost({'age', 'zstd'}, adds=())
+        result = self.live(host, include_backup=False)
+        self.assertEqual((result['status'], host.apt), ('installed', []))
+        self.assertNotIn('packages', result)
+        # A source tree without the engine (its helper is not installed by this run) needs no tools either.
+        (self.source / 'backup-engine/woowbackup/cli.py').unlink()
+        self.assertEqual((self.live(host)['status'], host.apt), ('installed', []))
+        self.add_backup_source()
+
+        def forbidden(*args):
+            raise AssertionError(f'run for a --root install: {args}')
+
+        with patch.object(manage, 'run_fixed', forbidden):
+            self.assertEqual(self.install()['status'], 'installed')  # self.root is not "/"
+            self.assertEqual(manage.status(self.root), {'status': 'not-checked', 'source_version': 'test.1',
+                                                        'tools': 'not-checked', 'packages': []})
+            code, planned, notes = self.main('plan', '--no-preview', '--no-services')
+        self.assertEqual((code, planned['packages']), (0, []))
+        self.assertIn(f'sudo apt-get install {" ".join(manage.TOOL_PACKAGES)}', notes)
+        _code, planned, notes = self.main('plan', '--no-preview', '--no-services', '--no-backup')
+        self.assertEqual((planned['packages'], notes), ([], ''))
+        state = json.loads((self.root / manage.STATE).read_text())
+        self.assertIsNone(manage.engine_tools(self.root, state))
+        self.assertIsInstance(manage.engine_tools(Path('/'), state), manage.HostTools)
+        self.assertIsNone(manage.engine_tools(Path('/'), {'files': {}}))
+
+    def test_plan_and_status_report_missing_packages_and_change_nothing(self):
+        self.live(FakeHost())
+        host = FakeHost({'age-keygen', 'python3-nacl'})
+        before = self.tree('')
+        with patch.object(manage, 'engine_tools', lambda root, state, tools=None: manage.HostTools(host)):
+            code, planned, notes = self.main('plan', '--no-preview', '--no-services')
+            self.assertEqual((code, planned['packages']), (0, ['age', 'python3-nacl']))
+            self.assertIn('沒有裝好：age、python3-nacl。執行 install 時會用 apt 自動補裝。', notes)
+            code, result, notes = self.main('status')
+            self.assertEqual((code, result), (1, {
+                'status': 'tools-missing', 'source_version': 'test.1', 'packages': ['age', 'python3-nacl'],
+                'tools': {'age': True, 'age-keygen': False, 'zstd': True, 'python3-nacl': False,
+                          'python3-cryptography': True}}))
+            self.assertIn('沒有裝好：age、python3-nacl。請重新執行安裝（sudo python3 scripts/manage.py install）', notes)
+            host.broken.clear()
+            code, result, notes = self.main('status')
+            self.assertEqual((code, result['status'], set(result['tools'].values()), notes), (0, 'ready', {True}, ''))
+            self.assertEqual(self.main('plan', '--no-preview', '--no-services')[1]['packages'], [])
+        self.assertEqual((self.tree(''), host.apt), (before, []), 'read-only')
+        self.live(FakeHost(), include_backup=False)
+        self.assertEqual(manage.status(self.root, tools=manage.HostTools(host)), {
+            'status': 'ready', 'source_version': 'test.1', 'tools': 'not-managed', 'packages': []})
+        self.assertEqual(self.main('status')[0], 0)
+
+    def test_how_the_tools_and_apt_are_run(self):
+        calls = []
+        environ = {'http_proxy': 'http://proxy.example:3128', 'no_proxy': 'localhost', 'PATH': '/home/user/bin',
+                   'PYTHONPATH': '/home/user/lib', 'LD_PRELOAD': '/home/user/x.so', 'APT_CONFIG': '/home/user/apt.conf'}
+        with (patch.object(manage, 'run_fixed', lambda *args: calls.append(args) or (127, '', '')),
+              patch.dict(os.environ, environ, clear=True), contextlib.redirect_stderr(io.StringIO()),
+              self.assertRaisesRegex(ValueError, '結束碼 127')):
+            manage.HostTools().ensure()
+        probes = [(list(probe), manage.TOOL_ENV, 30) for _tool, _package, probe in manage.HOST_TOOLS]
+        apt_env = {'PATH': '/usr/sbin:/usr/bin:/sbin:/bin', 'LANG': 'C.UTF-8', 'LC_ALL': 'C.UTF-8',
+                   'DEBIAN_FRONTEND': 'noninteractive', 'NEEDRESTART_SUSPEND': '1',
+                   'http_proxy': 'http://proxy.example:3128', 'no_proxy': 'localhost'}
+        self.assertEqual(calls, [*probes, (list(manage.APT_UPDATE), apt_env, None),
+                                 ([*manage.APT_INSTALL, *manage.TOOL_PACKAGES], apt_env, None), *probes])
+        for option in ('-y', '--no-remove', '--no-install-recommends', '--reinstall', 'DPkg::Lock::Timeout=300'):
+            self.assertIn(option, manage.APT_INSTALL)
+        self.assertEqual((manage.APT_UPDATE[0], manage.APT_INSTALL[0], manage.APT_INSTALL[-1]),
+                         ('/usr/bin/apt-get', '/usr/bin/apt-get', 'install'))
+        # A program that is not there or does not answer does not work (X-KEY-02).
+        self.assertEqual(manage.run_fixed(['woowbk-no-such-program'])[0], 127)
+        self.assertEqual(manage.run_fixed(['/bin/sleep', '30'], timeout=0.2)[0], 127)
+        self.assertEqual(manage.run_fixed(['/bin/sh', '-c', 'cat; printf %s "$HOME$LANG"; exit 3']), (3, 'C.UTF-8', ''))
+
+    def test_the_engine_still_stops_without_its_tools(self):
+        # X-AR-06 and X-KEY-02 at run time; KEY-14 and KEY-15: tests/backup/test_ha_securetar.py MissingPackageTests.
+        engine = str(REPO / 'backup-engine')
+        if engine not in sys.path:
+            sys.path.insert(0, engine)
+        from woowbackup import archive, keys
+        from woowbackup.errors import BackupError
+        from woowbackup.paths import Paths
+
+        def stopped(callable_):
+            with self.assertRaises(BackupError) as error:
+                callable_()
+            self.assertEqual(error.exception.code, 'internal-error')
+            return error.exception.message
+
+        def without(gone):
+            return patch('woowbackup.util.find_tool', lambda name: None if name == gone else f'/usr/bin/{name}')
+
+        for tool in ('age', 'zstd'):
+            with self.subTest(tool=tool), without(tool):
+                self.assertIn('age 或 zstd', stopped(archive._tools))
+        store = keys.KeyStore(Paths(base=Path(self.temp.name) / 'engine'))
+        with without('age-keygen'):
+            self.assertIn('age-keygen', stopped(store.ensure_device_key))
+        with without(None), patch.object(keys.subprocess, 'run',
+                                         side_effect=subprocess.TimeoutExpired(['age-keygen'], keys.KEYGEN_TIMEOUT)):
+            self.assertIn('沒有回應', stopped(store.ensure_device_key))
+        self.assertEqual((store.device_key(), list(store.dir.glob('*.key'))), (None, []), 'no key was made')
+
+
+class BootstrapContract(unittest.TestCase):
+    """scripts/bootstrap-ubuntu.sh with stub commands (a copy whose root and release checks are opened for the test):
+    running it again is harmless, and an offline device is only refused when a package is really missing."""
+
+    BACKUP = ['age', 'zstd', 'python3-nacl', 'python3-cryptography']
+    COCKPIT = ['cockpit', 'cockpit-podman', 'cockpit-storaged', 'cockpit-networkmanager', 'cockpit-packagekit']
+    # The stub device: a file per installed package in $STATE/installed (its content: the dpkg selection) and per package
+    # of the index in $STATE/index; $STATE/offline: nothing can be downloaded, $STATE/newer: newer versions exist.
+    STUBS = {
+        'dpkg-query': """[[ -f $STATE/installed/$3 ]] || exit 1
+read -r want < "$STATE/installed/$3"
+printf '%s ok installed 1.0-1' "$want"
+""",
+        'apt-cache': '[[ -f $STATE/installed/$2 || -f $STATE/index/$2 ]]\n',
+        'systemctl': ':\n',
+        'apt-get': """if [[ $1 == update ]]; then [[ ! -f $STATE/offline ]] || exit 100; exit 0; fi
+names=()
+while (( $# )); do case $1 in -t) shift ;; -*|install) ;; *) names+=("$1") ;; esac; shift; done
+for name in "${names[@]}"; do
+  if [[ -f $STATE/installed/$name ]]; then
+    read -r want < "$STATE/installed/$name"
+    if [[ -f $STATE/newer && $want == hold ]]; then printf 'E: Held packages were changed\\n' >&2; exit 100; fi
+    if [[ -f $STATE/newer && -f $STATE/offline ]]; then printf 'E: Failed to fetch\\n' >&2; exit 100; fi
+  elif [[ -f $STATE/offline ]]; then
+    printf 'E: Failed to fetch\\n' >&2; exit 100
+  fi
+done
+for name in "${names[@]}"; do [[ -f $STATE/installed/$name ]] || printf 'install\\n' > "$STATE/installed/$name"; done
+""",
+    }
+
+    def setUp(self):
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        base = Path(temp.name)
+        self.bin, self.device = base / 'bin', base / 'device'
+        for directory in (self.bin, self.device / 'installed', self.device / 'index'):
+            directory.mkdir(parents=True)
+        for name, body in self.STUBS.items():
+            (self.bin / name).write_text(f'#!/bin/bash\nprintf "%s\\n" "{name} $*" >> "$STATE/calls"\n{body}')
+            (self.bin / name).chmod(0o755)
+        (base / 'os-release').write_text('ID=ubuntu\nVERSION_ID=24.04\nVERSION_CODENAME=noble\nPRETTY_NAME=test\n')
+        text = (REPO / 'scripts/bootstrap-ubuntu.sh').read_text()
+        for real, opened in (('. /etc/os-release\n', f'. {base}/os-release\n'), ('[[ $EUID -ne 0 ]]', '[[ 0 -ne 0 ]]')):
+            self.assertEqual(text.count(real), 1)
+            text = text.replace(real, opened)
+        self.script = base / 'bootstrap.sh'
+        self.script.write_text(text)
+
+    def package(self, *names, where='installed', want='install'):
+        for name in names:
+            (self.device / where / name).write_text(want + '\n')
+
+    def flag(self, *names):
+        for name in names:
+            (self.device / name).touch()
+
+    def run_script(self, *args):
+        """(result, the changing calls). Only the stubs are on PATH: no command of this host can run."""
+        calls = self.device / 'calls'
+        calls.unlink(missing_ok=True)
+        result = subprocess.run(['/bin/bash', str(self.script), *args], capture_output=True, text=True, timeout=60,
+                                env={'PATH': str(self.bin), 'STATE': str(self.device), 'LC_ALL': 'C.UTF-8'})
+        made = calls.read_text().splitlines() if calls.exists() else []
+        return result, [call for call in made if not call.startswith(('dpkg-query', 'apt-cache'))]
+
+    def installed(self):
+        return sorted(path.name for path in (self.device / 'installed').iterdir())
+
+    def test_plan_changes_nothing_and_shows_held_packages_as_installed(self):
+        self.package('zstd', want='hold')
+        result, calls = self.run_script()
+        self.assertEqual((result.returncode, calls, self.installed()), (0, [], ['zstd']))
+        self.assertIn('  zstd: installed 1.0-1\n', result.stdout)
+        self.assertIn('  age: not installed\n', result.stdout)
+
+    def test_apply_installs_everything_and_again_is_harmless(self):
+        self.package(*self.BACKUP, where='index')  # only these are looked up beforehand
+        steps = ['apt-get update --error-on=any', f'apt-get install -y -t noble-backports {" ".join(self.COCKPIT)}',
+                 f'apt-get install -y {" ".join(self.BACKUP)}', 'systemctl enable --now cockpit.socket']
+        for _run in ('first', 'again'):
+            result, calls = self.run_script('--apply')
+            self.assertEqual((result.returncode, calls, result.stderr), (0, steps, ''))
+            self.assertEqual(self.installed(), sorted(self.COCKPIT + self.BACKUP))
+
+    def test_an_offline_device_that_has_everything_is_not_refused(self):
+        self.package(*self.COCKPIT, *self.BACKUP)
+        self.flag('offline')
+        result, calls = self.run_script('--apply')
+        self.assertEqual((result.returncode, calls[-1]), (0, 'systemctl enable --now cockpit.socket'))
+        self.assertIn('套件索引無法更新', result.stderr)
+
+    def test_a_newer_version_that_cannot_be_installed_is_no_reason_to_refuse(self):
+        self.package(*self.COCKPIT)
+        self.package(*self.BACKUP, want='hold')
+        self.flag('newer')
+        result, calls = self.run_script('--apply')
+        self.assertEqual((result.returncode, calls[-1]), (0, 'systemctl enable --now cockpit.socket'))
+        self.assertNotIn('沒有裝好', result.stderr)
+
+    def test_a_held_tool_does_not_keep_a_missing_one_from_being_added(self):
+        self.package(*self.COCKPIT, 'zstd', 'python3-cryptography')
+        self.package('age', want='hold')
+        self.package('python3-nacl', where='index')
+        self.flag('newer')
+        result, calls = self.run_script('--apply')
+        self.assertEqual((result.returncode, calls[-2:]), (0, ['apt-get install -y python3-nacl',
+                                                               'systemctl enable --now cockpit.socket']))
+        self.assertIn('python3-nacl', self.installed())
+
+    def test_missing_and_offline_is_refused_with_the_names(self):
+        self.package(*self.COCKPIT, 'age', 'zstd')
+        self.package('python3-nacl', 'python3-cryptography', where='index')
+        self.flag('offline')
+        result, calls = self.run_script('--apply')
+        self.assertEqual(result.returncode, 1)
+        self.assertIn('備份與還原需要的套件沒有裝好：python3-nacl python3-cryptography。', result.stderr)
+        self.assertNotIn('systemctl enable --now cockpit.socket', calls)
+
+    def test_a_package_no_index_knows_is_refused_before_anything_is_installed(self):
+        self.package(*self.COCKPIT, 'zstd', 'python3-nacl', 'python3-cryptography', where='index')
+        result, calls = self.run_script('--apply')
+        self.assertEqual((result.returncode, calls, self.installed()), (1, ['apt-get update --error-on=any'], []))
+        self.assertIn('age is not available from the configured apt sources', result.stderr)
+        self.assertIn('套件庫找不到 age：', result.stderr)
+        self.assertIn('沒有安裝任何套件', result.stderr)
 
 
 if __name__ == '__main__':
