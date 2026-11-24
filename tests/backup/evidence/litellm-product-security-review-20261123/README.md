@@ -225,6 +225,18 @@ with the custom secret manager, crafted operator, stored settings, the real back
 and a `custom_provider_map` object refuse; 20/20 variants as expected); `sr7-env-ref-probe*.json` (SR-7).
 Each file's `source` names the clean commit and the `ha_litellm.py` SHA-256 it ran with.
 
+Added by the product lane (2026-11-24 08:35, `planted-objects.json`, harness `b3e587d`, product `3a6e928e…`): the
+case `planted_objects` = what the lane verifier (02:14) listed as never planted, created by HA's NON-superuser database
+owner on real PostgreSQL 18.7: a DOMAIN whose CHECK runs code and a table with a column of it, a row and a statement
+TRIGGER (ENABLE ALWAYS) on a LiteLLM table, a forced row-security policy, a rule, an expression index and a CHECK
+constraint that run code, the trusted EXTENSIONs pgcrypto and citext, and a large object. Result: **nothing ran** (no
+marker after the first connection, `analyse`, `salt_binding`, `read_schema` and `export_rows`; the planted function
+could have run `COPY … TO PROGRAM` in the superuser's session); the row of the trigger/policy table was exported
+unchanged; the large object is a blocker; the DOMAIN and its table are named as a data-shape difference (the product's
+schema blocker, compared with a clean cluster's schema standing for this device's). Triggers, policies, rules, indexes,
+constraints and extensions are not compared and not refused, because they never move: the conversion uses this device's
+schema and only copies rows.
+
 Findings of iteration 2:
 
 7. **SR-6 was incomplete (high for a foreign backup, like SR-6) — fixed `f2a2cb4`.** LiteLLM's `get_instance_fn`
@@ -390,9 +402,6 @@ guardrails, MCP servers and pass-through hosts in the check (see "Residual risk"
 
 - Kernel or container escapes; PostgreSQL 18 bugs reachable with crafted data pages (no page fuzzing).
 - The arm64 PostgreSQL 18 image (`d4e55489…`).
-- Planted DOMAIN, table TRIGGER, EXTENSION and large-object cases: the sandbox planted only functions, an aggregate,
-  views, event triggers, per-role and per-database settings, a tablespace map and an edited built-in operator
-  (verifier 2026-11-24 02:14).
 - Iteration 1's note that the real end-to-end flow had not run on the fixed tip is superseded: it ran on the final
   code in iteration 2 (69/69 PASS, above).
 - The page was checked by reading (`backup.js` builds text nodes only, no `innerHTML`), not fuzzed.
