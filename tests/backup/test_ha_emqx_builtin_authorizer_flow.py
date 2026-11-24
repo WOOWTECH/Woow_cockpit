@@ -15,10 +15,20 @@ class BuiltinProductFlowTests(unittest.TestCase):
         transport.running_config=copy.deepcopy(transport.config)
         return transport
 
+    def assert_disabled_builtin_refused(self,t):
+        """Only [file] and [file, built_in_database] (enabled) are proven end to end (2026-11-23): a disabled
+        built-in source is refused before anything is read from the volume, naming the combination."""
+        with self.assertRaises(BackupError) as caught:self.invoke(t)
+        self.assertIn('授權來源組合（ACL 檔案＋內建資料庫（停用））',caught.exception.message)
+        self.assertNotIn('export',t.events)
+
     def test_raw_observation_preserves_order_and_exact_sources_through_import(self):
         for enabled in (True,False):
             t=self.fixture({'type':'built_in_database','enable':enabled})
             original=copy.deepcopy(t.config['authorization'])
+            if not enabled:
+                with self.subTest(enabled=enabled):self.assert_disabled_builtin_refused(t)
+                continue
             with self.subTest(enabled=enabled):
                 self.assertEqual(len(self.invoke(t)),4)
                 self.assertEqual(t.restore['authorization'],original)
@@ -75,6 +85,9 @@ class BuiltinProductFlowTests(unittest.TestCase):
     def test_three_key_target_source_survives_product_restore_and_readback(self):
         for enabled in (True,False):
             t=self.fixture({'type':'built_in_database','enable':enabled,'max_rules':100})
+            if not enabled:
+                with self.subTest(enabled=enabled):self.assert_disabled_builtin_refused(t)
+                continue
             self.invoke(t)
             self.assertEqual(t.running_config['authorization'],t.config['authorization'])
             self.assertEqual(t.restore['authorization']['sources'][-1],
