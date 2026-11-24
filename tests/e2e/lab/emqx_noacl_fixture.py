@@ -6,7 +6,7 @@ Why: OWNER DECISION 2026-11-23 「C」 refuses HA backups WITH ACL rows on a dev
 a backup WITHOUT ACL rows is imported there (the usual customer case: EMQX in HA without built-in ACL rules). Both real
 cold test backups hold 4 rows, so that path had no real input. This tool makes one, openly lab-made:
 
-  python3 -I tests/e2e/lab/emqx_noacl_fixture.py <x86-cold|arm-cold> <private work dir> <out .tar> [fileonly]
+  python3 -I tests/e2e/lab/emqx_noacl_fixture.py <x86-cold|arm-cold> <private work dir> <out .tar> [fileonly] [hash=bcrypt|hash=plain]
 
 Two variants: without `fileonly` HA keeps its authorization sources (the built-in database stays enabled, empty); with
 `fileonly` EMQX also deletes HA's built-in database source (emqx_authz:update({delete, built_in_database}, #{}), what the
@@ -18,6 +18,14 @@ Dashboard does), so HA authorizes with its ACL file only, as the add-on is insta
    official emqx/emqx:5.8.9 of the LAB store (labpodman, --network none, --pull=never, read-only root, the product's own
    ha_broker environment: plugins pinned off), EMQX itself runs mnesia:clear_table(emqx_acl), stops cleanly, is started
    once more from the same volume (the counts must have persisted: 0 ACL rows, every other table as before) and stops;
+SR-5 variants (emqx-sr5, 2026-11-24; with `fileonly`): EMQX also changes HA's built-in password database hashing through
+its own configuration update (emqx_conf:update([authentication], {update_authenticator, ...}), what the Dashboard's PUT
+/authentication/{id} does: emqx_authn_api.erl:1051-1062,1179-1183). `hash=bcrypt`: then sets the password of HA's three
+MQTT users again, through emqx_authn_chains:update_user (hashed with the new hashing, emqx_authn_mnesia.erl:390-401), with
+the b1 test passwords the harness reader gives (piped into the throwaway's tmpfs, read and deleted there, never on a
+command line or in the output); after the restart HA's users must log in with them inside the throwaway, a wrong
+password must not. `hash=plain` (salt_position disable): no password is set again, so the fixture stores no clear-text
+password (the import check refuses it on the configuration alone).
 3. the add-on member is written again with the mnesia folder EMQX left (fileonly: and EMQX's own configs/cluster.hocon),
    every other entry byte-identical; the outer file is an UNENCRYPTED HA backup (backup.json protected false) of that one
    add-on, its name says it is lab-made.
@@ -138,12 +146,57 @@ def sha256_file(path):
     return digest.hexdigest()
 
 
+HASHINGS = {'bcrypt': '#{<<"name">> => <<"bcrypt">>, <<"salt_rounds">> => 10}',
+            'plain': '#{<<"name">> => <<"plain">>, <<"salt_position">> => <<"disable">>}'}
+HASH_UPDATE_EXPR = ('[A0] = [A || A <- emqx:get_raw_config([<<"authentication">>], []), '
+                    'maps:get(<<"mechanism">>, A, none) =:= <<"password_based">>, '
+                    'maps:get(<<"backend">>, A, none) =:= <<"built_in_database">>], '
+                    'A1 = A0#{<<"password_hash_algorithm">> => {hashing}}, '
+                    'case emqx_conf:update([authentication], {update_authenticator, \'mqtt:global\', '
+                    '<<"password_based:built_in_database">>, A1}, #{rawconf_with_defaults => true, override_to => cluster}) of '
+                    '{ok, _} -> hashing_updated; _ -> hashing_failed end.')
+PW_FILE = '/tmp/woowbk-fixture-pw'
+_ROWS = ('{ok, B} = file:read_file("' + PW_FILE + '"), ok = file:delete("' + PW_FILE + '"), '
+         'Rows = [binary:split(L, <<",">>) || L <- binary:split(B, <<"\\n">>, [global, trim_all])], ')
+SET_PW_EXPR = (_ROWS + 'R = [emqx_authn_chains:update_user(\'mqtt:global\', <<"password_based:built_in_database">>, U, '
+               '#{password => P}) || [U, P] <- Rows], '
+               'io:format("WOOWUPD:~b:~b:END", [length(Rows), length([x || {ok, _} <- R])]).')
+LOGIN_EXPR = (_ROWS + 'C = fun(U, W) -> case emqx_access_control:authenticate(#{clientid => <<"woowbk-fixture">>, '
+              'username => U, password => W, zone => default, listener => \'tcp:default\', protocol => mqtt, '
+              'peerhost => {127,0,0,1}, is_superuser => false, mountpoint => undefined}) of {ok, _} -> 1; _ -> 0 end end, '
+              'io:format("WOOWLOGIN:~b:~b:~b:END", [length(Rows), lists:sum([C(U, P) || [U, P] <- Rows]), '
+              'lists:sum([C(U, <<P/binary, "x">>) || [U, P] <- Rows])]).')
+
+
+def put_passwords(rows):
+    """HA's three MQTT users and their b1 test passwords into the throwaway's tmpfs (stdin; never argv or output)."""
+    data = ''.join(f'{user},{password}\n' for user, password in rows).encode()
+    proc = subprocess.run([LP, 'exec', '-i', CTR, 'sh', '-c', f'umask 077; cat > {PW_FILE}'], input=data,
+                          stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=120)
+    if proc.returncode:
+        raise SystemExit('the password file could not be written into the throwaway')
+
+
+def answer(expression, mark):
+    text = emqx('eval', expression).stdout.decode('utf-8', 'replace')
+    match = re.search(mark + r'([0-9:]{1,40}):END', text)
+    if not match:
+        raise SystemExit('the throwaway EMQX gave no answer')
+    return [int(n) for n in match.group(1).split(':')]
+
+
 def main(argv):
-    if len(argv) not in (3, 4) or argv[0] not in SLUGS or argv[3:] not in ([], ['fileonly']):
-        print('usage: emqx_noacl_fixture.py <x86-cold|arm-cold> <private work dir> <out .tar> [fileonly]', file=sys.stderr)
+    options = argv[3:]
+    if (len(argv) < 3 or argv[0] not in SLUGS or len(set(options)) != len(options)
+            or not set(options) <= {'fileonly', 'hash=bcrypt', 'hash=plain'}
+            or sum(o.startswith('hash=') for o in options) > 1 or any(o.startswith('hash=') for o in options)
+            and 'fileonly' not in options):
+        print('usage: emqx_noacl_fixture.py <x86-cold|arm-cold> <private work dir> <out .tar> [fileonly] '
+              '[hash=bcrypt|hash=plain] (hash= needs fileonly)', file=sys.stderr)
         return 2
     tag, work, out_path = argv[0], Path(argv[1]).resolve(), Path(argv[2]).resolve()
-    fileonly = argv[3:] == ['fileonly']
+    fileonly = 'fileonly' in options
+    hashing = next((o.split('=', 1)[1] for o in options if o.startswith('hash=')), None)
     if out_path.exists() or work.exists():
         raise SystemExit('work dir or output exists')
     os.umask(0o077)
@@ -155,7 +208,10 @@ def main(argv):
     src = drv.FIXTURES / machine / name / f'{name}.tar'
     if sha256_file(src) != FIXTURE_SHA256[tag]:
         raise SystemExit('the fixture is not the recorded real backup')
-    secrets = drv.Secrets([drv.SECRET_DIR / 'ha-import-creds.env'], drv.SECRET_DIR / 'dev-d-markers.json')
+    secrets = drv.Secrets([drv.SECRET_DIR / 'b1-creds.env', drv.SECRET_DIR / 'ha-import-creds.env'],
+                          drv.SECRET_DIR / 'dev-d-markers.json')
+    ha_users = [(secrets[f'B1_MQTT_USER{i}'], secrets[f'B1_MQTT_PW{i}']) for i in (1, 2, 3)]
+    from woowbackup import ha_emqx   # the product's own reading of the hashing (HASH_EXPR, parse_hashing)
     keys = hasecuretar.Keys(secrets['HA_BACKUP_KEY'])
     member_tar = work / 'member.tar'
     with habackup.open_backup(str(src)) as backup:
@@ -219,11 +275,32 @@ def main(argv):
         sources_before = sources()
         if fileonly and ''.join(emqx('eval', DELETE_EXPR).stdout.decode('utf-8', 'replace').split()) != 'deleted':
             raise SystemExit('the built-in database source was not deleted')
+        hashing_before = updated = None
+        if hashing:
+            hashing_before = ha_emqx.parse_hashing(emqx('eval', ha_emqx.HASH_EXPR).stdout.decode('utf-8', 'replace'))
+            reply = emqx('eval', HASH_UPDATE_EXPR.replace('{hashing}', HASHINGS[hashing])).stdout.decode()
+            if reply.split() != ['hashing_updated']:
+                raise SystemExit('the hashing was not changed')
+            if hashing == 'bcrypt':
+                put_passwords(ha_users)
+                updated = answer(SET_PW_EXPR, 'WOOWUPD:')
+                if updated != [3, 3]:
+                    raise SystemExit('HA\'s users did not all get their password again')
         after = counts()
         stop()
         start(node)          # from the same volume: the change must have persisted
         again = counts()
         sources_after = sources()
+        hashing_after = logins = None
+        if hashing:
+            hashing_after = ha_emqx.parse_hashing(emqx('eval', ha_emqx.HASH_EXPR).stdout.decode('utf-8', 'replace'))
+            if hashing_after is None or hashing_after['name'] != hashing or not hashing_after['enable']:
+                raise SystemExit('the hashing did not persist')
+            if hashing == 'bcrypt':
+                put_passwords(ha_users)
+                logins = answer(LOGIN_EXPR, 'WOOWLOGIN:')
+                if logins != [3, 3, 0]:
+                    raise SystemExit('HA\'s users do not log in with the new hashing (or a wrong password does)')
         if fileonly and sources_after != '[file]':
             raise SystemExit('HA does not authorize with its ACL file only')
         if not fileonly and sources_after != sources_before:
@@ -249,7 +326,7 @@ def main(argv):
         hocon_written = False
         for info in old:
             norm = os.path.normpath(info.name)
-            if fileonly and norm == f'{DATA}/configs/cluster.hocon':
+            if (fileonly or hashing) and norm == f'{DATA}/configs/cluster.hocon':
                 with tarfile.open(exported, mode='r:') as vol:
                     for item in vol:
                         if os.path.normpath(item.name) == 'configs/cluster.hocon' and item.isreg():
@@ -281,9 +358,10 @@ def main(argv):
                 continue
             new.addfile(info, old.extractfile(info) if info.isreg() else None)
             kept += 1
-        if not written or fileonly and not hocon_written:
+        if not written or (fileonly or hashing) and not hocon_written:
             raise SystemExit('no mnesia folder or cluster.hocon in the add-on member')
-    doc['name'] = (doc.get('name') or '') + ('（實驗室改製：只用 ACL 檔案、沒有 ACL 規則）' if fileonly else '（實驗室改製：沒有 ACL 規則）')
+    doc['name'] = (doc.get('name') or '') + ('（實驗室改製：只用 ACL 檔案、沒有 ACL 規則' if fileonly else '（實驗室改製：沒有 ACL 規則') + (
+        f'、MQTT 密碼改用 {hashing}）' if hashing else '）')
     doc['protected'] = False
     doc['crypto'] = None
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -316,7 +394,10 @@ def main(argv):
     print(json.dumps({'source_backup_sha256': FIXTURE_SHA256[tag], 'lab_made': True, 'out_sha256': sha256_file(out_path),
                       'out_bytes': out_path.stat().st_size, 'entries_kept': kept, 'mnesia_entries_written': replaced,
                       'addon_version': info.version, 'addon_state': info.state, 'counts_before': before,
-                      'counts_after_clear': after, 'counts_after_restart': again, 'variant': 'fileonly' if fileonly else 'noacl',
+                      'counts_after_clear': after, 'counts_after_restart': again,
+                      'variant': ('fileonly' if fileonly else 'noacl') + (f'+hash={hashing}' if hashing else ''),
+                      'ha_hashing_before': hashing_before, 'ha_hashing_after': hashing_after,
+                      'ha_users_password_set_again': updated, 'ha_users_login_after_restart': logins,
                       'ha_sources_before': sources_before, 'ha_sources_after': sources_after}, sort_keys=True))
     return 0
 
