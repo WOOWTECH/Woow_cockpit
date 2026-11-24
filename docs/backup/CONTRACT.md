@@ -982,7 +982,7 @@ Home Assistant OS backups (Supervisor) are uploaded like any backup and **read**
   wanted)`, `needed_members(layout, members)`, `addon_members(layout, suffix)`, `valid_database(name)`,
   `device_key_for(ctx)`, `convert_result(app_id, error, issues)`, `SpaceGuard`, `Watchdog`, `job_key(ctx)`,
   `read_key_file(path)`, `import_texts(converted, catalog=None)`, `mcp_lines(importer, catalog)`, `clean_row(row)`,
-  `register(paths, backup_id, row)`,
+  `register(paths, backup_id, row)`, `update_row(paths, backup_id, results=, kept=)` (2026-11-25),
   `forget(paths, backup_id)`, `load_registry(paths)`, `from_ha_views(paths)`, `view_row(row)`, `note_for(record)`,
   `sweep_job(job_id, owners)`, `sweep_finished(paths, *, log, current)`,
   `interrupted_message(job_type)`, `APPS` (from `haapps`), `ITEM_KEYS`.

@@ -932,11 +932,13 @@ class KeyTests(unittest.TestCase):
     """HA-12, KEY-16: which members are opened with the key, and what a key that does not fit stops."""
 
     class Backup:
-        def __init__(self, good=(), broken=()):
-            self.good, self.broken, self.opened = good, broken, []
+        def __init__(self, good=(), broken=(), strange=()):
+            self.good, self.broken, self.strange, self.opened = good, broken, dict(strange), []
 
         def open_member(self, name, keys=None):
             self.opened.append(name)
+            if name in self.strange:
+                raise self.strange[name]
             if name in self.broken:
                 raise BackupError('corrupt-archive', '損毀')
             if name not in self.good:
@@ -976,6 +978,16 @@ class KeyTests(unittest.TestCase):
         found = haimport.key_problems(self.Backup(broken=('a', 'b')), object(), self.wanted('a', 'b'))
         self.assertEqual({app_id: error.code for app_id, error in found.items()}, {'a': 'corrupt-archive',
                                                                                    'b': 'corrupt-archive'})
+
+    def test_anything_unexpected_while_opening_stops_only_its_app(self):
+        error = RuntimeError('crypto library')
+        found = haimport.key_problems(self.Backup(good=('a',), strange={'b': error}), object(), self.wanted('a', 'b'))
+        self.assertEqual(found, {'b': error})
+        found = haimport.key_problems(self.Backup(strange={'a': error}), object(), self.wanted('a'))
+        self.assertEqual(found, {'a': error}, 'nothing says that the key is wrong')
+        for error in (OSError(errno.ENOSPC, 'x'), flows.Cancelled()):
+            with self.assertRaises(type(error)):
+                haimport.key_problems(self.Backup(good=('a',), strange={'b': error}), object(), self.wanted('a', 'b'))
 
     def test_a_member_two_apps_read_is_opened_once(self):
         share = self.member('share.tar.gz', role='folder', slug='share')
@@ -1121,6 +1133,27 @@ class RegistryTests(unittest.TestCase):
         self.assertEqual((len(row['confirmed']), row['group'], row['kept']), (haimport.MAX_CONFIRMED, None, None))
         self.assertLessEqual(sum(len(n) for line in row['confirmed'] for n in line['items']),
                              haimport.MAX_CONFIRMED_TEXT)
+
+    def test_what_comes_later_is_added_to_the_row(self):
+        bid = '20261118T120001Z-0123abcd'
+        self.assertFalse(haimport.update_row(self.paths, bid, kept='k1'), 'no file')
+        haimport.register(self.paths, bid, self.row(group='g0123456789abcdef'), now=1794994800)
+        before = haimport.load_registry(self.paths)[bid]
+        rows = [{'app_id': 'odoo', 'status': 'rolled-back', 'convert_job_id': before['job_id'], 'restore_job_id': None,
+                 'backup_id': bid, 'safety_backup_id': None, 'code': 'job-failed', 'message': '退回\n原狀'}]
+        self.assertTrue(haimport.update_row(self.paths, bid, results=rows, kept='kept-1'))
+        after = haimport.load_registry(self.paths)[bid]
+        self.assertEqual(after, dict(before, kept='kept-1', results=[dict(rows[0], message='退回 原狀')]))
+        self.assertTrue(haimport.update_row(self.paths, bid, kept=None))
+        self.assertIsNone(haimport.load_registry(self.paths)[bid]['kept'])
+        self.assertFalse(haimport.update_row(self.paths, '20261118T120002Z-0123abcd', kept='k1'))
+        for fields in ({}, {'name': 'x'}, {'results': [], 'apps': []}):
+            with self.assertRaises(BackupError):
+                haimport.update_row(self.paths, bid, **fields)
+        path = haimport.registry_path(self.paths)
+        path.write_text('{"schema": 3, "imports": {}}')
+        self.assertFalse(haimport.update_row(self.paths, bid, kept='k1'))
+        self.assertEqual(path.read_text(), '{"schema": 3, "imports": {}}')
 
     def test_a_row_with_anything_else_is_not_believed(self):
         bid = '20261118T120001Z-0123abcd'

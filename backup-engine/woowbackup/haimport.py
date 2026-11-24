@@ -98,6 +98,8 @@ ADDON_TWICE = '這份 HA 備份有兩個相同的附加元件（來自不同的�
 ADDON_CHOICE_ACTION = '請選擇要搬的那一個附加元件，再重新檢查。'
 ADDON_GONE = '選的附加元件不在這份 HA 備份裡，請重新選擇。'
 ADDON_OTHER = '這個附加元件不是 WOOWTECH 的版本（addon.json 不符），無法匯入。'
+ADDON_OTHER_ACTION = '請確認 HA 上裝的是 WOOWTECH 商店的附加元件，再重新備份；或不要匯入這個應用。'
+PROBLEM_ACTION = '請先讓它恢復正常，再重新檢查。'
 NOT_CHECKED = '檢查作業在檢查這個應用之前就停止了，這個應用還沒有結果。'
 KEY_CREATED = '這台還沒有加密金鑰，匯入時會自動建立，用來加密匯入前備份和轉換出來的備份；完成後請到「加密金鑰」下載並保存。'
 NO_KEY_CREATED = '無法自動建立這台的加密金鑰，沒有開始匯入，這台沒有任何變更。'
@@ -390,7 +392,8 @@ class Work:
             with self.open(member) as stream:
                 info = habackup.read_addon_info(stream)
             if info is None or info.slug != suffix:
-                raise haissues.stopped(Issue('ha.addon-other', 'stop', ADDON_OTHER), slug=suffix)
+                raise haissues.stopped(Issue('ha.addon-other', 'stop', ADDON_OTHER, action=ADDON_OTHER_ACTION),
+                                       slug=suffix)
             self._addons[suffix] = info
         return self._addons[suffix]
 
@@ -596,7 +599,8 @@ def _deployed_issue(work, app):
     if not info.get('deployed'):
         return Issue('ha.not-deployed', 'stop', f'這台的「{app.name}」還沒有部署完成。', action=DEPLOY_ACTION)
     if info.get('problems'):
-        return Issue('ha.app-problem', 'stop', f'這台的「{app.name}」狀態異常：{info["problems"][0]}')
+        return Issue('ha.app-problem', 'stop', f'這台的「{app.name}」狀態異常：{info["problems"][0]}',
+                     action=PROBLEM_ACTION)
     return None
 
 
@@ -628,7 +632,7 @@ def needed_members(layout, members):
 
 
 def key_problems(ha, keys, wanted):
-    """{app id: BackupError} of the encrypted members that cannot be opened, checked before any plaintext is read.
+    """{app id: exception} of the encrypted members that cannot be opened, checked before any plaintext is read.
     `key-required` (no key came and something is encrypted) and a `wrong-key` that opens nothing at all end the whole
     job (DESIGN C1); one member that does not open while another does stops only its app."""
     encrypted = [(app_id, member) for app_id, member in wanted if member.encrypted]
@@ -643,12 +647,14 @@ def key_problems(ha, keys, wanted):
                 with ha.open_member(member.name, keys):
                     pass  # the decrypting reader checks the key when it opens
                 tried[member.name] = None
-            except BackupError as error:
+            except Exception as error:  # noqa: BLE001 - whatever keeps a member shut is its apps' (haissues.app_failure)
+                if haissues.ends_job(error):
+                    raise
                 tried[member.name] = error
         if tried[member.name] is not None:
             problems.setdefault(app_id, tried[member.name])
     if all(error is not None for error in tried.values()):
-        wrong = next((error for error in tried.values() if error.code == 'wrong-key'), None)
+        wrong = next((error for error in tried.values() if getattr(error, 'code', None) == 'wrong-key'), None)
         if wrong is not None:
             raise haissues.job_wide(wrong)
     return problems
@@ -1348,6 +1354,18 @@ def _row_bytes(backup_id, row):
     return len(text.encode('utf-8', 'surrogatepass')) + 4 * (text.count('\n') + 1)
 
 
+def _fit(rows, backup_id):
+    """Drop the oldest rows (never `backup_id`'s) until the file is one load_registry reads: a larger one would lose
+    every row."""
+    sizes = {bid: _row_bytes(bid, item) for bid, item in rows.items()}
+    for bid in sorted(rows, key=lambda b: rows[b]['created']):
+        if sum(sizes.values()) <= REGISTRY_MAX_BYTES - 4096:
+            break
+        if bid != backup_id:
+            rows.pop(bid)
+            sizes.pop(bid)
+
+
 def _save_registry(paths, rows):
     util.atomic_write_json(registry_path(paths), {'schema': REGISTRY_SCHEMA, 'imports': rows}, 0o600)
 
@@ -1381,14 +1399,30 @@ def register(paths, backup_id, row, *, now=None):
             for bid in sorted(rows, key=lambda b: rows[b]['created'])[:len(rows) - REGISTRY_MAX]:
                 if bid != backup_id:
                     rows.pop(bid)
-        sizes = {bid: _row_bytes(bid, item) for bid, item in rows.items()}
-        for bid in sorted(rows, key=lambda b: rows[b]['created']):
-            if sum(sizes.values()) <= REGISTRY_MAX_BYTES - 4096:
-                break
-            if bid != backup_id:  # a file larger than load_registry reads would lose every row
-                rows.pop(bid)
-                sizes.pop(bid)
+        _fit(rows, backup_id)
         _save_registry(paths, rows)
+
+
+# What may be added to a row after its backup was made (the import's chain, the restore's kept copy).
+ROW_LATER = ('results', 'kept')
+
+
+def update_row(paths, backup_id, **fields):
+    """Set `results` (GroupResult rows) and/or `kept` (the id of a kept copy) of a converted backup's row, cleaned like
+    every row; False when there is no such row or the file cannot be read (then nothing is written)."""
+    if not fields or not set(fields) <= set(ROW_LATER):
+        raise BackupError('internal-error', 'HA 匯入紀錄的欄位不正確。')
+    with _index_lock(paths):
+        rows = load_registry(paths)
+        if not rows or backup_id not in rows:
+            return False
+        row = clean_row(dict(rows[backup_id], **fields))
+        if not valid_row(row):
+            raise BackupError('internal-error', 'HA 匯入紀錄的格式不正確。')
+        rows[backup_id] = row
+        _fit(rows, backup_id)
+        _save_registry(paths, rows)
+        return True
 
 
 def forget(paths, backup_id):
