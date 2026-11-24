@@ -1,22 +1,23 @@
 # EMQX HA import (product path) — independent adversarial security review (2026-11-23 and 2026-11-24)
 
-Lane emqx-secreview (owner instance SR-OWNER-1942), three iterations. This review attacked the product import as a
+Lane emqx-secreview (owner instance SR-OWNER-1942), six iterations. This review attacked the product import as a
 malicious HA backup would, fixed what it could prove, and reran the attacks against the engine that is handed over.
 
 ## Summary (read this first)
 
 - **Ten findings, SR-1 to SR-10.** Five High/Medium findings were confirmed by real attacks and fixed (SR-1, SR-2, SR-3,
   SR-6, SR-8); SR-7 (Medium) is a refusal added because the vendor code proves the leak, its ExHook trigger is
-  exercised by T12 (iteration 2); SR-4 and SR-9 are Low and fixed. **SR-5 (Low) is OPEN**: iteration 3's "refused fail
-  closed, no finding left" was wrong — the verifier showed the refusal was an artefact of a crafted HOCON without an
-  explicit `salt_position`; with one, no engine check refuses a built-in-database `plain` authenticator, so this
-  device's own bootstrap password is stored in clear text in the migrated built-in database (see Iteration 4). **SR-10
+  exercised by T12 (iteration 2); SR-4 and SR-9 are Low and fixed. **SR-5 (Low): iteration 4's clear-text claim is disproven** by three real
+  conversions with HA's `plain` authenticator and a same-hash control (Iteration 5): this device's bootstrap password is never stored in
+  clear text. What remains is behaviour the owner has to rule on (listed below, not decided here): after the import
+  this device's own bootstrap MQTT account is refused, and a bootstrap row written later is hashed HA's way.
+  **SR-10
   (Low) was found in iteration 4** in exactly the handed-over tree 865c930f and is fixed on the integration branch
   only (65d8a51, 97c994f): a C0/C1/bidirectional/line-separator character in an HA plugin name, a `/share` path or a
   skipped-symlink name reached a check warning raw or forged a second job-log line.
 - **Where the fixes are:** SR-1, SR-2, SR-3 75aad7a; SR-6 f397590; SR-7 7b173af; SR-4 in the product's own 7449540; SR-8 and
   SR-9 abff1a0 (all in the handed-over engine 865c930f, the last merged as 620bdd5). SR-10 is on the integration branch
-  (65d8a51, 97c994f), NOT in 865c930f. SR-5 is open (remediation is an owner policy choice, see Iteration 4).
+  (65d8a51, 97c994f), NOT in 865c930f. SR-5 has no code fix; its remaining behaviour is an owner policy item (Iteration 5).
 - **Engine reviewed in iteration 3:** `feat/ha-import-emqx-product-20261124` @ `e08f8a1` (product READY of 08:30), `backup-engine` tree `865c930f392006e0080de506eb7c425fd81becd7` = the product tip `5786ae4` + `abff1a0` (merge `620bdd5`) + the Podman 6 tempctr fix (cherry-pick `e08f8a1`, patch id equal to `8613ffa` and `c8df1f2`); the review reruns used the same tree as trial commit `cd66230`.
 - **What passing here means:** this review proves conversion and refusal behaviour of the product's own code against
   real EMQX 5.8.9 brokers in throwaway rootless lab containers with `--network none`. It is not the commercial
@@ -24,14 +25,22 @@ malicious HA backup would, fixed what it could prove, and reran the attacks agai
   evidence. `commercial_acceptance: not-complete`.
 - **Not covered:** see the last section. Items that need a human/owner: the boot-time behaviour of HA's throwaway
   broker on HA's own files (reviewed only in part, one analysis step stopped by a safety classifier in iterations 3
-  and 4 — a human item, not retried), a merge policy for Dashboard-edited ACL files, the SR-5 remediation policy
-  (refuse a `plain` authenticator vs re-hash the device's bootstrap users), and the independent Hermes/FTS review.
-- **Iteration 4 (this revision)** closed the independent verifier's points against iterations 1-3: SR-10 found and
-  proven (fixed at integration), SR-5 reopened and decided, B1-03 proven and a pre-import export-member check added as
-  product hardening (branch `fix/emqx-export-members-20261124`), and the overclaims corrected (what T4/T10/T11 really
+  and 4 — a human item, not retried), a merge policy for Dashboard-edited ACL files, the SR-5 policy (Iteration 5:
+  keep converting with the `hash_differs` note as today, refuse at check time, or say it on the check page; a re-hash
+  is not possible), and the independent Hermes/FTS review.
+- **Iteration 4** worked on the independent verifier's points against iterations 1-3: SR-10 found and
+  proven (fixed at integration), SR-5 reopened, B1-03 named, a first export check, and the overclaims corrected (what T4/T10/T11 really
   ran, that an exit code of 0 is not a verdict, the hard-coded `candidate_env_file_flag`, 6 of 24 volumes attributed
   by timing only, the follower ended by main at 08:14, the first T9/T10 runs with no attempt JSON, and the host-wide
   Podman event dump that iteration 2 kept and main deleted). See **## Iteration 4**.
+- **Iteration 5** reviewed iteration 4's own work and found three things wrong in it: its export check (bcb6245, never
+  merged) could be passed by a crafted export, its SR-5 statement was disproven by the real run, and its B1-03 "proof"
+  was partly true by construction. The check was rewritten with the vendor's own parsers and proven with the real x86
+  and ARM HA backups; B1-03 has real runs (T13). See **## Iteration 5**.
+- **Iteration 6 (this revision)** harvested the runs iteration 5 left running (T13 on the integration tip, a second x86
+  run, both mutation runs, a second unit run), read the rewritten check again as an attacker, added T14b (more archive
+  shapes and a `hocon:binary` vs `hocon:files` differential) and handed the check over as READY (`dd3ae49`). See
+  **## Iteration 6**.
 
 ## How it was tested (all iterations; details of iteration 1)
 
@@ -63,7 +72,7 @@ malicious HA backup would, fixed what it could prove, and reran the attacks agai
 | SR-6 | High | Migrated rule SQL `jq('env…')` exposes this device's env secrets (bypasses SR-3) | fixed f397590 |
 | SR-7 | Medium | A migrated HTTP/JWT/LDAP/SQL authenticator or ExHook server would receive this device's own service logins (bootstrap passwords); vendor-proven, the HTTP path was not reproduced end to end (stopped earlier by the authentication-equality check) | refusal 7b173af; its ExHook trigger is exercised for real by T12 (iterations 2 and 3) |
 | SR-4 | Low | The product readback hashed RAW config roots that contain env secrets (`dashboard.default_password`, `node.cookie`) into `import_check` | fixed by the product lane (redaction, in 7449540); reviewed in iteration 1, unchanged since |
-| SR-5 | Low | **OPEN.** HA's authenticator hash settings (e.g. `plain`) apply to this device's bootstrap users, which the product re-attaches to HA's built-in authenticator (`preserved_bootstrap_authn`). With an explicit `salt_position`, no engine check refuses a built-in-database `plain` authenticator, so this device's own bootstrap MQTT password is stored verbatim (`emqx_passwd.erl:92-105` `hash_data(plain, P) = P`) in the candidate's built-in database, and so in the converted backup. Iteration 3's "refused fail closed" was an artefact of a crafted HOCON without `salt_position` (verifier). | OPEN Low (Iteration 4); remediation is an owner policy choice (refuse a `plain` authenticator when the device has bootstrap users, or re-hash the device's bootstrap users with the device's own algorithm) |
+| SR-5 | Low | HA's authenticator hash settings (e.g. `plain`) also govern this device's bootstrap file, which the product re-attaches to HA's built-in authenticator (`preserved_bootstrap_authn`). Iteration 4 claimed that this device's bootstrap password is then stored in clear text. **Disproven** by three real conversions with `plain` and an explicit `salt_position` plus a same-hash control (Iteration 5): one row, not equal to the password, also after a restart: the candidate wrote that row under this device's OWN authenticator at its boot and a bootstrap import never overwrites a row (`emqx_authn_mnesia.erl:556-565` `override => false`, `:346-362`). What remains: after the import this device's own bootstrap MQTT account is refused (the conversion note `hash_differs` names it), and a bootstrap row written later (a new user in a `plain`-type bootstrap file, or a deleted row) is hashed with HA's algorithm (`:113-127`, `:528-545`; verbatim for `plain`, `emqx_passwd.erl:104`; vendor reading, not run). | clear-text claim disproven (T5b); no code fix; the remaining behaviour is an **owner policy item**, not decided here |
 | SR-8 | Medium | 3761d18: the device's `EnvironmentFile=` values reached a world-readable command line of the candidate | fixed abff1a0, reproduced and verified for real (T9) |
 | SR-9 | Low | 3761d18: the candidate's environment was not read the way podman reads it for the broker | fixed abff1a0, verified against podman (T10) |
 | SR-10 | Low | A C0/C1/bidirectional/line-separator character (e.g. U+202E, U+2066, U+0085, U+2028) in an HA EMQX plugin name, a `/share` file reference or a skipped-symlink name reached a check warning raw, or forged a second job-log line, in the handed-over tree 865c930f | fixed on the integration branch only (65d8a51 `hacommon.names`; 97c994f the twelve bidi controls in names and `jobs.LOG_CONTROL_RE`); NOT in 865c930f. Proven in process: forged=True on 865c930f, forged=False on the integration tip (Iteration 4) |
@@ -376,9 +385,10 @@ attempt per row, JSON in `iteration3/`.
   acceptance.** What contains it today: rootless, `--network none`, read-only root, `no-new-privileges`, memory and
   pids limits, no device secret or device volume mounted, the broker's own job volumes mounted `noexec,nosuid,nodev`, the
   export as its only output through a bounded reader, and the candidate's outcome checks after the import (whole-root
-  equality of every setting that is not HA data, table counts, SR-2/SR-3/SR-6/SR-7 refusals, decision C). Recommended
-  defense in depth (not implemented): check the export's members before `data import` (only the TABLE_SETS tables and
-  `cluster.hocon` roots within DATA_ROOTS) and `--cap-drop=all` for `emqx-ha`.
+  equality of every setting that is not HA data, table counts, SR-2/SR-3/SR-6/SR-7 refusals, decision C). Defense in
+  depth: the export's members and roots are checked before `data import` on branch `fix/emqx-export-members-20261124`
+  (Iterations 5 and 6; READY at `dd3ae49`, merged when integration decides); `--cap-drop=all` for `emqx-ha` is
+  recommended, not implemented.
 - **Migrated integrations are HA's by design.** HA's MQTT users, ACL rows, Dashboard users and API keys replace this
   device's; HTTP/MQTT connectors, actions and rules may publish to or call hosts HA's settings name, and a migrated rule
   sees every message on this broker (`SELECT * FROM "#"` + republish/forward reads this device's MQTT traffic); gateways may
@@ -439,6 +449,10 @@ two commits into the product branch so the product engine alone is clean; today 
 
 ### SR-5 (Low) — decided for real: OPEN (reachable)
 
+> **Superseded: disproven by the real runs of iteration 5.** The text below is kept as it was written; the claim
+> "stored verbatim" and the remedy "re-hash with the device's own algorithm" are both wrong (one authenticator per
+> mechanism and backend, `emqx_authn_config.erl:293-298`; every row of it is checked with its one algorithm).
+
 Iteration 3 reported T5 as "refused fail closed, no finding left." The verifier showed the refusal was an **artefact**
 of a crafted HOCON that omitted `salt_position`: `conf load` then fills the schema default
 (`emqx_authn_password_hashing.erl` `salt_position(default) -> prefix`), and the authentication-root comparison, not a
@@ -466,6 +480,11 @@ real run was queued through `heavy.sh` and was still waiting for a host heavy-sl
 file), so SR-5's decision here rests on the vendor source and the guard analysis above, with the lab run pending.
 
 ### B1-03 — non-data roots do not reach the restored target (proven), plus a pre-import hardening
+
+> **Superseded in part by iteration 5.** In `iteration4/b103-nonroot-*.json` the fields
+> `shared_non_data_roots_reverted_to_device` and `guard_names_differences_as_root_names_only` are true by construction
+> (the script applies the result it then checks; the second ends in `or True`), so they prove nothing; the real runs are
+> T13. The check described below (bcb6245: `check_export_members`, `export_cluster_roots`) was bypassable and is replaced.
 
 The verifier noted B1-03 (the other half of the old preservation guard, `reports/b1-02-03.md`) was not named in the
 README and that no forged export with non-data roots had been run. B1-03 holds in two layers, both verified in process
@@ -518,3 +537,188 @@ One light vendor probe of the HOCON pretty-printer/parser round trip was stopped
 iteration (not a tool or permission denial). Per the standing rule it is not reproduced in any form; B1-03 was
 completed defensively instead (the engine's own guards + the pre-import member check). The boot-time-loader analysis
 that a classifier stopped in iteration 3 likewise stays a human item.
+
+
+## Iteration 5 (2026-11-24): iteration 4's own work reviewed, the export check rewritten, SR-5 and B1-03 decided by real runs
+
+Iteration 5 (owner instance, token SR-OWNER-1942) finished the 12:32 list of the main session and, before anything was
+merged, attacked iteration 4's own changes. Engines under test: the integration tip `9ebb2bf` (`backup-engine` tree
+`45db404c…`; `ha_emqx.py` is byte-equal to the reviewed `e08f8a1`) and `fix/emqx-export-members-20261124` (`3ad74ca`;
+tree `345d1827…` = `45db404c` plus `ha_emqx.py` only; the later commits `8e46fb6` and `dd3ae49` add tests only).
+
+### What was wrong in iteration 4
+
+| Iteration 4 said | What is true (how it was found) |
+|---|---|
+| `check_export_members` / `export_cluster_roots` (bcb6245): "a crafted export cannot hide a non-DATA_ROOT from the scan" | False. Ten spellings of one harmless extra root (quoted key, `:` as separator, a quote inside a comment, `include`, NBSP as white space…) were not seen by the scanner, and 9 of the 25 crafted archives of T14 pass bcb6245 (folder-entry, include-directive, not-utf8, other-table-second-gzip-member, root-after-quote-in-comment, root-after-triple-quote-in-comment, root-colon, root-nbsp, root-quoted). A hand-written HOCON scan and Python's tar reader do not read every file the way EMQX does. The branch was held before any merge. |
+| (not said, but true) the check had only run on test doubles | Now proven with real exports (T11, T13 below). |
+| SR-5 "OPEN (reachable) … stored verbatim"; remedy "re-hash with the device's own algorithm" | Disproven by three real conversions with `plain` and a same-hash control (T5b, below). The remedy is not possible anyway (`emqx_authn_config.erl:293-298`). What remains is an owner policy item (below). |
+| B1-03 "proven in process (`ok=True` on both trees)" | Two of the script's fields are true by construction. Real runs: T13. |
+
+### The export check, rewritten (fix/emqx-export-members-20261124)
+
+`ha_emqx.check_export` runs in `target_broker` just before `emqx ctl data import`. The candidate (this device's image)
+lists HA's export on the very file the import reads, with the vendor's own libraries: `erl_tar:table` (vendor
+`emqx_mgmt_data_backup.erl:880-900`) and `hocon` on `cluster.hocon` (`:904-912`). Allowed: `META.hocon`, `cluster.hocon`
+(8 MiB, roots within `DATA_ROOTS`, no `include` token) and the backup files of `TABLES`, each once, a regular file, in
+the export's own folder. Anything else, or an answer that is not exactly the listing, refuses (`incompatible`, member
+and root names only, control characters neutralised), and nothing is imported. The expression is fixed but for the
+file name, which must be a plain export name. It stays defence in depth: the comparison of every setting of this device
+after the import is the authoritative guard (T13 on the tip, below).
+
+- Tests: `tests/backup/test_ha_emqx_export_members.py` (16 test methods: healthy listings, the device's roots,
+  unexpected files, kinds, duplicates, sizes, control characters, malformed answers, the expression and its file name,
+  the order start → check → import, the conversion body with nothing stored, a hot backup's advice). Unit set (30
+  modules, guarded runner): on `8e46fb6` tests=388 failures=0 errors=0 skipped=0 expected_failures=0 unexpected_successes=0 blocked=0; on `dd3ae49` tests=388 failures=0 errors=0 skipped=0 expected_failures=0 unexpected_successes=0 blocked=0
+  (`iteration5/unit-fix.json`, `unit-fix-2.json`).
+- Mutations (one place each, on copies): run 1 on `8e46fb6` **36/37 killed**, surviving:
+  prefix ignored; `dd3ae49` adds the test for it ("an answer with another expression's prefix is not
+  the export listing"); run 2 on `dd3ae49` **37/37 killed**
+  (`iteration5/mutation-export-check-1.json`, `-2.json`).
+- The verifier's surviving mutation of `tempctr.tar_root` (a first entry named `.` that is no folder) is killed by the new
+  `TarRootTests` (50eaf17, on the review branch).
+
+### Real runs of iteration 5 (lab store, `--network none`, generated credentials; HA key read in-process by the b1 reader)
+
+| Run | Exit | Elapsed s | Evidence (`iteration5/`) |
+|---|---|---|---|
+| T11, REAL x86 batch-1 HA backup, device [file, built_in_database], fixed engine: PASSED (candidate built, all product checks green, profile equal); rows 16; readback roots 44; device unchanged: True | 0 | 243.0 | t11-fix-x86-builtin.json |
+| T11 again (harness be36f75 reads the candidate's command line from podman instead of a constant): PASSED (candidate built, all product checks green, profile equal); rows 16; readback roots 44; device unchanged: True; candidate env file flag True, cookie on its command line False | 0 | 191.8 | t11-fix-x86-builtin-2.json |
+| T11, REAL ARM batch-1 HA backup, same device, fixed engine: PASSED (candidate built, all product checks green, profile equal); rows 16; readback roots 44; device unchanged: True | 0 | 231.4 | t11-fix-arm-builtin.json |
+| T13, forged export, fixed engine (rows below) | 0 | 316.5 | t13-fix.json |
+| T13, forged export, integration tip without the check (rows below) | 0 | 388.2 | t13-tip.json |
+| T14, check_export on EMQX's own libraries, no broker: 29/29 as expected | 0 | 60.1 | t14-fix.json |
+| T14, the same archives on bcb6245 (in process): 20/29; 9 of 25 crafted ones pass | 0 | 1.9 | t14-old.json |
+| T5b (SR-5), engine `80215432` (f2c9e03): `disable`: PASSED, rows=1:plain=0, after restart rows=1:plain=0, login own=refused:wrong=refused (after restart own=refused:wrong=refused) | 0 | 225.1 | t5b-cur-disable.json |
+| T5b, same engine: `suffix`: PASSED, rows=1:plain=0, after restart rows=1:plain=0, login own=refused:wrong=refused (after restart own=refused:wrong=refused) | 0 | 235.2 | t5b-cur-suffix.json |
+| T5b on the fixed engine, first try: failed after 1 s (this lane's own collision with the two runs above: same lab names), kept | 1 | 1.0 | t5b-fix.json |
+| T5b on the fixed engine, with the same-hash `control`: `control`: PASSED, rows=1:plain=0, after restart rows=1:plain=0, login own=login:wrong=refused (after restart own=login:wrong=refused); `suffix`: PASSED, rows=1:plain=0, after restart rows=1:plain=0, login own=refused:wrong=refused (after restart own=refused:wrong=refused) | 0 | 373.5 | t5b-fix-2.json |
+
+T13 in detail. Real: HA's throwaway broker makes the export of a crafted add-on, the device stand-in and the candidate are
+real EMQX 5.8.9 brokers, the import is the vendor's. Simulated: the extra roots are written into that real export by the
+harness (a healthy broker never exports them). `control` is the same export repacked by the same code without a change, so
+that a refusal is not the repacking's. Values are harmless and differ from the device's.
+
+| Case | Result |
+|---|---|
+| T13 fixed engine, `all` (12 forged roots) | imports: 0; device roots changed by the import: not reached (refused before the import); REFUSED: EMQX 不能搬過來：HA 匯出的資料含有不屬於這次匯入的內容（設定 alarm、broker、cluster、dashboard、flapping_detect、force_gc、listeners、log、mqtt、node 等 12 個），已在匯入前停止，這台沒有任何改變；請在 HA 停止 EMQX 附加元件後重新備份再匯入。; device unchanged: True |
+| T13 fixed engine, `control` (0 forged roots) | imports: 1; device roots changed by the import: ['authorization']; PASSED (candidate built, all product checks green); device roots differing in the built candidate [], after its restart []; forged marker on disk: False; device unchanged: True |
+| T13 integration tip, `all` (12 forged roots) | imports: 1; device roots changed by the import: not measured (the import failed); REFUSED: HA 的 EMQX 資料匯入時發生錯誤（部分資料無法匯入），已停止。; device unchanged: True |
+| T13 integration tip, `control` (0 forged roots) | imports: 1; device roots changed by the import: ['authorization']; PASSED (candidate built, all product checks green); device roots differing in the built candidate [], after its restart []; forged marker on disk: False; device unchanged: True |
+| T13 integration tip, `listeners` (1 forged root) | imports: 1; device roots changed by the import: ['authorization', 'listeners']; PASSED (candidate built, all product checks green); device roots differing in the built candidate [], after its restart []; forged marker on disk: False; device unchanged: True |
+
+What T13 shows:
+
+- **Fixed engine (`3ad74ca`, tree `345d1827` = `dd3ae49`):** the export with all twelve forged roots is refused by
+  `check_export` **before** `emqx ctl data import` (0 imports); the refusal names the roots (names only) and says that
+  nothing changed; this device's settings are unchanged. The unchanged control passes: no root of this device differs
+  in the built candidate, after its restart or on its disk, and the forged marker is not on disk.
+- **Integration tip without the check (`9ebb2bf`, tree `45db404c`):** with all twelve forged roots the vendor import runs
+  (1 import), reports that some data could not be imported, and the product refuses ("部分資料無法匯入"); this device is
+  unchanged. With a forged `listeners` root alone, the vendor import **does apply it inside the candidate**
+  (`device_roots_changed_by_the_import` names `listeners`), and the product's post-import comparison puts every root of
+  this device back: the built candidate, its restart and its disk hold this device's `listeners`, the forged marker
+  is not on disk, the conversion passes. So B1-03 holds on the integration tip through the authoritative post-import
+  guard; the check makes the same export refuse before anything is imported. While the forged listener existed it was
+  inside a throwaway candidate that runs with `--network none` (tempctr), as every throwaway container of a job does.
+- `control` passing on both trees shows that the refusals are not caused by the repacking.
+
+### SR-5: decided by the real runs; the policy stays with the owner
+
+`plain` with an explicit `salt_position` (`disable`, `suffix`) converts: HA's authenticator settings are HA's by design.
+This device's bootstrap row is not rewritten (compared inside the candidate with its mounted bootstrap file: one row, not
+equal to the password), neither at the re-attachment nor after a restart, because `import_users` runs with
+`override => false` for a bootstrap file (`emqx_authn_mnesia.erl:556-565`; an existing row is kept, `:346-362`). So the
+confidentiality claim of iteration 4 is wrong. The other half of the truth: that row is hashed this device's way while
+the authenticator now checks HA's way, so **this device's own MQTT account is refused** after such an import (before:
+login; the control with the same hash: login; a wrong password: always refused). The converted backup's note
+(`hash_differs`) says so; the check page cannot, because `check()` passes no `live_authn` to `analyse` (observation, not
+changed here). Not run, from the vendor code: a bootstrap row written AFTER the import (a new user in a `plain`-type
+bootstrap file, or a row deleted and recreated at the next boot) is hashed with HA's algorithm (`:113-127`,
+`:528-545`), i.e. stored verbatim when HA uses `plain` (`emqx_passwd.erl:104`), like every MQTT user HA itself has.
+
+**Owner item (listed, not decided):** what the product should do when HA's built-in authenticator hashes differently
+from this device and this device has bootstrap users: (a) keep converting with the `hash_differs` note (today's
+behaviour), (b) refuse at check time with advice, or (c) say it on the check page before the import (needs `live_authn`
+in `check()`). One authenticator per mechanism and backend (`emqx_authn_config.erl:293-298`) rules out keeping both hash
+settings at once.
+
+### Not repeated, not covered (iteration 5)
+
+- The two items a safety classifier stopped (the boot-time loaders of HA's throwaway broker in iteration 3; a vendor probe
+  of the HOCON pretty-printer round trip in iteration 4) were not touched; they stay human items.
+- T13's forged roots are configuration only. A backup file of an allowed table whose content is crafted was not built: the
+  vendor import then reports errors (`emqx_mgmt_data_backup.erl:745-760` expects exactly that table) and the product
+  refuses any import that is not "imported successfully"; the candidate is thrown away.
+- Two runs (T13 on the fixed engine, T11 ARM) ran while the older T5b of this lane was running: their `containers_left` 1
+  and `dangling_volumes_new` -1 are that run's objects. At the end no container, volume or secret of this lane was left
+  (checked by name).
+- Process slips of this lane, for the record: a batch script was edited while bash was reading it (the batch's own exit 2
+  after both its attempts had ended with 0), and two runs used the same lab names (attempt `t5b-fix`).
+
+## Iteration 6 (2026-11-24): the runs iteration 5 left, the check read again, T14b, hand-over
+
+Iteration 6 is a new owner instance (token SR-OWNER-1942) after the previous account's session limit stopped every lane
+agent between 14:24 and 14:31. It started nothing again that was still alive: every detached run of iterations 4 and 5
+had ended (the last, T13 on the integration tip, at 14:38) and their evidence is now in `iteration5/` (`t13-tip`,
+`t11-fix-x86-builtin-2`, `unit-fix-2`, `mutation-export-check-1`/`-2`; rows above).
+
+Correction of iteration 5's lane notes (not of its evidence): they said "8 of 23" crafted archives pass bcb6245; the
+committed evidence (`iteration5/t14-old.json`) says 9 of 25, as the table above does. Lab leftovers
+of this lane at the start of iteration 6: none (lab store containers, volumes and secrets checked by label and name).
+
+### The rewritten check, read again as an attacker (dd3ae49)
+
+- **File name into the expression.** The name enters an Erlang string literal only after `EXPORT_NAME_RE`
+  (`[A-Za-z0-9.-]{1,80}\.tar\.gz\Z`, `re.match`): no quote, backslash or slash, so no expression injection and no path
+  outside `/work/in`; the rest of the expression is constant.
+- **Nothing skipped in the listing.** `erl_tar:table(F, [compressed, verbose])` answers a 7-tuple for every entry, so
+  the comprehension's pattern drops none; a name that is not valid Unicode or any odd answer crashes the expression,
+  which refuses (`EXPORT_UNREADABLE`). The Python side takes only `WOOWEXP:<base64>:END` then `ok`, strict JSON with
+  exactly two keys and typed rows, 1 MiB at most.
+- **Exact names.** Allowed members are looked up exactly (`limits.get(member, -1)`), so `./`, `//`, another case, an
+  absolute name, links and devices refuse, and so does a duplicate. The vendor's own `validate_filenames`
+  (`emqx_mgmt_data_backup.erl:887-902`) checks only the first path element; the product is stricter.
+- **Same file, no window.** The product copies the export into a fresh volume `emqx-in` that only the candidate mounts
+  (`target_broker`, `tmp.volume_import('emqx-in', …)`); HA's broker cannot reach it. `check_export` runs right before the
+  only `data import` call (one call site in the engine).
+- **One imprecise sentence (product comment, not a defect).** The check parses `cluster.hocon` with `hocon:binary` on the
+  member read into memory; the vendor import uses `hocon:files` on the extracted file (`:904-909`). They are the same
+  library but not literally the same call. Without `include` (refused by the token scan) both read the same bytes; T14b's
+  differential below tests exactly that on every HOCON document of T14 and T14b.
+
+### T14b
+
+T14b (harness `aa72e6f`) had not finished when this revision was written; its evidence goes to `iteration6/t14b-fix.json`.
+
+### Product flow on a device
+
+This lane ran nothing on dev-d: lane emqx-product's chain10 held it, and that lane runs its attempts 35 and 36 (x86
+built-in import, rollback rounds with the page's own draft) on a tree that contains `dd3ae49`, after this lane's READY
+line (written at about 14:47). Those attempts are the packaging, restore, readback and rollback proof of the check on a
+device. State when this revision was written (15:0x, from team/emqx-product.md): the product lane merged `dd3ae49` into its
+branch as `d6f2c2f` (backup-engine tree `f6dfa9c4`, exactly this lane's trial-merge tree), ran its guarded unit set on it
+(259 EMQX + harness + lab candidate tests OK, 503 shared OK, 0 blocked) and started attempt-35 on dev-d at 14:52:38
+with that engine; attempt-36 follows. Their results and evidence are the product lane's (tests/e2e/lab/evidence/emqx-product-20261123/).
+
+### Hand-over
+
+- Product fix READY: `fix/emqx-export-members-20261124` @ `dd3ae49` (backup-engine tree `345d1827`). A trial merge onto
+  the integration tip `2b5fee1` is clean (`git merge-tree` exit 0); merged backup-engine tree `f6dfa9c4` = `843f1881` plus
+  `ha_emqx.py` of `dd3ae49` only.
+- This review branch: `sec/emqx-secreview4-20261124` (evidence, harness, this README); its hash is in the lane file.
+
+### Owner and human items (listed, not decided)
+
+1. **SR-5 policy** (owner): see "SR-5: decided by the real runs" above, options (a) to (c).
+2. **Boot-time loaders of HA's throwaway broker** (human security review): stopped by a safety classifier in iterations
+   3 and 4, not retried in any form.
+3. **Merge policy for Dashboard-edited ACL files** (owner, SR-2 fails closed today).
+4. **Independent Hermes FTS/SQLite review** (human; refused by the auto-review earlier, not retried).
+
+### Not covered in iteration 6
+
+- No new broker run: the real broker evidence is iteration 5's T11/T13/T5b. T14b is component level.
+- No dev-d, dev-e or .54 run by this lane; no production access of any kind.
+- The vendor's handling of the content of an allowed table file (see iteration 5) and EMQX versions other than 5.8.9.
+- `commercial_acceptance: not-complete` (this is a security review, not the end-to-end acceptance).
