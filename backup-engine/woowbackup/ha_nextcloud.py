@@ -804,7 +804,8 @@ def scan_datadir(stream, report, prefix, *, addon, instanceid=None, out=None, id
             data.encryption = True
         if rel == '.ncdata' and entry.kind == 'file':
             data.ncdata = True
-        if len(parts) >= 2 and parts[1] == 'files' and not parts[0].startswith(('appdata_', '__')):
+        own = not parts[0].startswith(('appdata_', '__'))  # a user's folder (not app data, not group folders)
+        if len(parts) >= 2 and parts[1] == 'files' and own:
             data.users.add(parts[0])
         if entry.kind == 'dir':
             data.dirs += 1
@@ -813,7 +814,7 @@ def scan_datadir(stream, report, prefix, *, addon, instanceid=None, out=None, id
         elif entry.kind == 'file':
             data.files += 1
             data.bytes += entry.size
-            if len(parts) >= 3 and parts[1] == 'files':
+            if len(parts) >= 3 and parts[1] == 'files' and own:
                 data.listed(parts[0], '/'.join(parts[1:]), entry.size)
             if out is not None:
                 out.add(rel, 'file', mode=entry.mode, uid=uid, gid=gid, mtime=entry.mtime, size=entry.size,

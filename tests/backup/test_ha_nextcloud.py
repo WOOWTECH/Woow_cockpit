@@ -527,7 +527,9 @@ class DataDirTests(unittest.TestCase):
     def test_the_users_file_lists(self):
         found, _tar = self.walk(share_tar(extra=[
             {'name': 'nextcloud/admin/files_versions/hello.txt.v1', 'data': b'old'},
-            {'name': 'nextcloud/admin/cache/x', 'data': b'x'}]))
+            {'name': 'nextcloud/admin/cache/x', 'data': b'x'},
+            {'name': 'nextcloud/appdata_ochaabcdef12/files/x', 'data': b'x'},
+            {'name': 'nextcloud/__groupfolders/files/1', 'data': b'x'}]))
         self.assertEqual(nc.lists_differ(found, {'lists': HA_LISTS}), [])
         # The same numbers PostgreSQL gives: md5('<size>:<path>'), its first 16 digits as a (signed) bigint, XORed.
         digest = 0
