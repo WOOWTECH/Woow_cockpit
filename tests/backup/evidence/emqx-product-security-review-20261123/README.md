@@ -341,7 +341,7 @@ user namespace (Podman 6.1.1 ignores that entry on import; EMQX's candidate then
 |---|---|
 | Can HA choose the owner or mode of a volume's top directory? | No. Every EMQX producer (`emqx-src`, `emqx-xfer`, `emqx-in`, `emqx-new`) writes the first member itself with fixed values; HA's entries are rewritten one by one (`hacommon.info`, no copied PAX records, no set-id bits), and a second `.` member is impossible (`_Sink.names`). New test `VolumeTopTests` (a hostile add-on: everything 07777, uid 4242): green on abff1a0 and on the merge; 6/6 mutations killed (`mutation-volume-top-iteration3.json`), two of them in `_apply_root` itself. |
 | Which other callers use it? | Headscale `hs-check`, n8n `n8nsrc`, Odoo/Omnigent `hapg`, Odoo `odoo-addons`: all write (or stream) an engine-made tar; the top entry comes from the engine or from this device's own converted volume. |
-| Is the decompression or parsing risky? | `tarfile.open(mode='r|')` reads a plain (never compressed) stream from at most 64 KiB; errors give "no entry" and nothing is applied. |
+| Is the decompression or parsing risky? | `tarfile.open(mode='r\|')` reads a plain (never compressed) stream from at most 64 KiB; errors give "no entry" and nothing is applied. |
 | Can the path be redirected? | The mountpoint is Podman's own answer for a volume this job created (`^woowbk-…`), must be absolute and one line; `chown` does not follow a link; the commands run as the owner inside their user namespace. Owners are never root (catalog rejects `root`). |
 | Behaviour on Podman 4.9.3 | `chown`/`chmod` to the values Podman already used: no change (the real runs below). On 6.1.1 the .54 runs of lane arm54-2 passed with it. |
 
@@ -686,20 +686,34 @@ of this lane at the start of iteration 6: none (lab store containers, volumes an
   member read into memory; the vendor import uses `hocon:files` on the extracted file (`:904-909`). They are the same
   library but not literally the same call. Without `include` (refused by the token scan) both read the same bytes; T14b's
   differential below tests exactly that on every HOCON document of T14 and T14b.
+- **`META.hocon` is not parsed by the check (accepted after reading the vendor code).** The import reads only `edition`
+  and `version` from it (`validate_backup`, `emqx_mgmt_data_backup.erl:605-621`; its result is dropped, `:440`, `:678`)
+  and reports a mismatch with fixed texts (`:363-368`), so extra keys or an `include` there bring no configuration in; the check still bounds its size and kind.
+- **The refusal texts carry no HA text but names.** `hint` is the constant `HOT_HINT` or empty (`hint_for`), and member and
+  root names go through `hacommon.names` (each cut at 60 characters, control characters shown as `?`; SR-10's fix).
 
 ### T14b
 
-T14b (harness `aa72e6f`) had not finished when this revision was written; its evidence goes to `iteration6/t14b-fix.json`.
+T14b (harness `aa72e6f`) was still queued in `heavy.sh` when this revision was written (both heavy slots held by long
+steps of other lanes); its evidence goes to `iteration6/t14b-fix.json` in a later commit.
+
+### Secret scan
+
+With the existing lab reader and scanner (`ha_import_b1_e2e.Secrets`, `scan_host_evidence`: every lab secret value, raw and JSON-escaped; user names excluded; values never printed), at 2026-11-24 15:08 +0800: committed evidence (all iterations) 72 files, 0 hits; harness folder 26 files, 0 hits; iteration 5 scratch evidence 13 files, 0 hits; iteration 5 run outputs 35 files, 0 hits; iteration 6 scratch 0 files, 0 hits.
 
 ### Product flow on a device
 
 This lane ran nothing on dev-d: lane emqx-product's chain10 held it, and that lane runs its attempts 35 and 36 (x86
 built-in import, rollback rounds with the page's own draft) on a tree that contains `dd3ae49`, after this lane's READY
 line (written at about 14:47). Those attempts are the packaging, restore, readback and rollback proof of the check on a
-device. State when this revision was written (15:0x, from team/emqx-product.md): the product lane merged `dd3ae49` into its
-branch as `d6f2c2f` (backup-engine tree `f6dfa9c4`, exactly this lane's trial-merge tree), ran its guarded unit set on it
-(259 EMQX + harness + lab candidate tests OK, 503 shared OK, 0 blocked) and started attempt-35 on dev-d at 14:52:38
-with that engine; attempt-36 follows. Their results and evidence are the product lane's (tests/e2e/lab/evidence/emqx-product-20261123/).
+device. Result (from team/emqx-product.md, 15:11, read here and not re-run): the product lane merged `dd3ae49` into its branch as
+`d6f2c2f` (backup-engine tree `f6dfa9c4`, exactly this lane's trial-merge tree; guarded unit set 259 + 503 OK, 0 blocked)
+and **attempt-35 PASSED 95/95** on dev-d with that engine (product evidence commit `7631adb`, 14:52-15:11): the real x86
+cold HA backup into the built-in target, check ok, the real conversion (HA's real export passed `check_export` right before
+`emqx ctl data import`), two deliberately failed first attempts rolled back to dev-d's own state, then the real restore
+(not rolled back), product readback, client probes after the restore and after a restart, and a leak scan with 0 hits.
+Attempt-36 (rollback rounds, cleanup) was queued at that time; its result is the product lane's
+(tests/e2e/lab/evidence/emqx-product-20261123/).
 
 ### Hand-over
 
@@ -721,4 +735,7 @@ with that engine; attempt-36 follows. Their results and evidence are the product
 - No new broker run: the real broker evidence is iteration 5's T11/T13/T5b. T14b is component level.
 - No dev-d, dev-e or .54 run by this lane; no production access of any kind.
 - The vendor's handling of the content of an allowed table file (see iteration 5) and EMQX versions other than 5.8.9.
+- Process note: both heavy slots were held by long steps of other lanes, and a start of T14b outside `heavy.sh` (it is a
+  light component test) was refused by the auto-mode classifier at 15:08; it was not retried in any form, and T14b runs
+  only through `heavy.sh` (queued there since 14:53).
 - `commercial_acceptance: not-complete` (this is a security review, not the end-to-end acceptance).
