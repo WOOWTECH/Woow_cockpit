@@ -2168,15 +2168,18 @@ html,data}`; facts `phase3/facts/nextcloud.md`, owner decisions D1-D5 applied wi
    nothing of HA's ever runs with more rights than Nextcloud has. Fix-ups in one transaction: the root storage id →
    `local::<target datadirectory>/`; `richdocuments` `wopi_url`, `public_wopi_url`, `wopi_callback_url`,
    `wopi_allowlist`, `disable_certificate_verification` and `core.backgroundjobs_mode` exactly as the live database has
-   them (Office uses this device's Collabora); HA's cached Collabora discovery
-   (`appdata_<instanceid>/richdocuments/remoteData`) is dropped from the data dir and its file cache rows deleted, so
-   discovery is fetched again from this device's Collabora. Verified: every count (file cache minus those rows), table
-   owners = the role, the role's attributes (never superuser) and password verifier, root storage id, roles, extensions,
-   database and public-schema grants and the kept settings equal the live ones, no database besides `postgres`,
-   `template0`, `template1` and Nextcloud's, no per-role or per-database setting, no table or column grant (the dump is
-   restored with --no-acl, so one can only come from SQL hidden in it). Live PostgreSQL settings are carried (§9 Odoo);
-   clean stop, `pg_controldata` "shut down"; the PostgreSQL dir is the volume export with its top folder owned like the
-   live one.
+   them (Office uses this device's Collabora); HA's cached Collabora answers
+   (`appdata_<instanceid>/richdocuments/remoteData`, `discovery` and `capabilities`) are replaced by this device's own
+   cached files (their file cache rows deleted; Nextcloud adds files it finds), because the Office app never fetches
+   them on demand (12.0.1 lib/Service/CachedRequestService.php `get`; without them every document is an HTTP 500), and
+   the hourly job that refreshes them (`OCA\Richdocuments\Backgroundjobs\ObtainCapabilities`) is made due at once in
+   `oc_jobs`; this device without those files → a reminder with `occ richdocuments:activate-config`. Verified: every
+   count (file cache minus those rows), table owners = the role, the role's attributes (never superuser) and password
+   verifier, root storage id, roles, extensions, database and public-schema grants and the kept settings equal the live
+   ones, no database besides `postgres`, `template0`, `template1` and Nextcloud's, no per-role or per-database setting,
+   no table or column grant (the dump is restored with --no-acl, so one can only come from SQL hidden in it). Live
+   PostgreSQL settings are carried (§9 Odoo); clean stop, `pg_controldata` "shut down"; the PostgreSQL dir is the volume
+   export with its top folder owned like the live one.
 5. config.php = the live one (base: URLs, trusted domains, proxies, database credentials, data directory, caches, mail,
    maintenance window) + HA's `instanceid`, `passwordsalt`, `secret` + HA's `twofactor_enforced*` and
    `app_install_overwrite` (D1; the three two-factor keys are one policy, MandatoryTwoFactor.php: all of HA's, or all of
