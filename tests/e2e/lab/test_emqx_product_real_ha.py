@@ -91,7 +91,8 @@ class EvaluateTests(unittest.TestCase):
         probe['native_counts']['emqx_acl'] = 4   # rows appeared from nowhere
         self.assertTrue(any('holds no ACL row' in name
                             for name in failed(real.evaluate_imported(probe, SRC, 'file', acl_rows=0))))
-        self.assertEqual(real.ACL_ROWS, {'arm-cold': 4, 'x86-cold': 4, 'x86-fileonly': 0, 'x86-noacl': 0})
+        self.assertEqual(real.ACL_ROWS, {'arm-cold': 4, 'x86-cold': 4, 'x86-fileonly': 0, 'x86-noacl': 0,
+                                        'x86-bcrypt': 0, 'x86-plain': 0})
 
     def test_the_builtin_target_must_apply_has_rules(self):
         probe = imported_probe('builtin')
@@ -592,6 +593,157 @@ class OwnStateTests(unittest.TestCase):
             for _ in range(3):
                 self.real_run_probe(self.ev, args, 'x', 'base')
         self.assertEqual(args.logins, 3)
+
+
+class Sr5Tests(unittest.TestCase):
+    """SR-5 (OWNER DECISION 2026-11-24, option C; lane emqx-sr5): the step sr5:TAG offline, every check can fail."""
+
+    def test_the_steps_and_their_holds(self):
+        self.assertEqual(real.parse_step('sr5:x86-bcrypt'), ('sr5', 'x86-bcrypt', 'file'))
+        self.assertEqual(real.parse_step('sr5:x86-plain'), ('sr5', 'x86-plain', 'file'))
+        for bad in ('sr5:x86-cold', 'sr5:x86-fileonly', 'sr5', 'sr5:x86-bcrypt:file', 'import:x86-bcrypt:file',
+                    'import:x86-plain:file', 'rollback:x86-bcrypt', 'rollback:x86-plain'):
+            self.assertEqual(real.parse_step(bad), (None, None, None), bad)
+        self.assertLessEqual(real.estimate('reclaim') + real.estimate('setup') + real.estimate('sr5:x86-bcrypt'),
+                             real.HOLD_LIMIT)
+        self.assertLess(real.estimate('sr5:x86-plain'), real.estimate('sr5:x86-bcrypt'))
+        self.assertEqual({tag: real.ACL_ROWS[tag] for tag in real.SR5}, {'x86-bcrypt': 0, 'x86-plain': 0})
+
+    def test_the_texts_are_the_products(self):
+        from woowbackup import ha_emqx
+        self.assertEqual(real.SR5_PLAIN, ha_emqx.PLAIN_REFUSED)
+        self.assertEqual(real.SR5_RESET, ha_emqx.RESET_HOW)
+        texts = {'ha': 'bcrypt', 'mine': real.SR5_DEVICE_HASHING, 'names': 'woow'}
+        self.assertEqual(real.SR5_WARNING.format(**texts), ha_emqx.ACCOUNTS_STOP.format(**texts))
+        notes, reminders = ha_emqx.import_texts({'hash_change': texts})
+        self.assertIn(real.SR5_NOTE.format(**texts), notes)
+        self.assertIn(real.SR5_REMINDER.format(**texts), reminders)
+        self.assertEqual(ha_emqx.hashing_text({'name': 'sha256', 'salt': 'suffix', 'mac_fun': None, 'iterations': None,
+                                               'dk_length': None}), real.SR5_DEVICE_HASHING)
+
+    def test_after_the_import_woow_must_be_refused_and_everything_else_holds(self):
+        probe = imported_probe('file')
+        probe['native_counts']['emqx_acl'] = 0
+        probe['mqtt']['bootstrap_woow'] = 4
+        self.assertEqual(failed(real.evaluate_sr5(probe, SRC)), [])
+        for code in (0, None, 'connect:ConnectionRefusedError'):
+            probe['mqtt']['bootstrap_woow'] = code
+            self.assertEqual(len(failed(real.evaluate_sr5(probe, SRC))), 1, code)
+        probe['mqtt']['bootstrap_woow'] = 5
+        probe['mqtt']['login_b1-sensor'] = 4
+        self.assertTrue(any('three users log in' in name for name in failed(real.evaluate_sr5(probe, SRC))))
+
+
+class Sr5StepTests(unittest.TestCase):
+    """The step itself against a fake device: the happy paths pass, and a wrong device answer fails."""
+
+    BEFORE = {'login': {'device_admin': 200, 'ha_admin': 401}, 'authz_sources': [['file', True]],
+              'authz_settings': {'no_match': 'deny', 'deny_action': 'ignore'}, 'file_acl_readback_equal': True,
+              'mqtt_users': [['woow', False]], 'rules': [], 'retained_api': {'woowbk-lab/baseline': 'h'}, 'api_keys': [],
+              'own_mqtt': {'ha_b1-sensor': 5, 'ha_b1-gateway': 5, 'ha_b1-admin': 4, 'bootstrap_woow': 0}}
+
+    def setUp(self):
+        from unittest import mock
+        self.ev = DecisionCTests.Ev()
+        self.section = {'target_authorization': ['file'], 'emqx_version': '5.8.9', 'target_version': '5.8.9',
+                        'node_name': 'emqx@127.0.0.1', 'mqtt_users': 3, 'acl_rules': 0, 'dashboard_users': 2,
+                        'api_keys': 1, 'banned': 1, 'psk': 0, 'default_dashboard_password': False, 'anonymous': False,
+                        'hot_backup': False, 'retained_messages': 5}
+        texts = {'ha': 'bcrypt', 'mine': real.SR5_DEVICE_HASHING, 'names': 'woow'}
+        self.check = {'ok': True, 'blockers': [], 'warnings': [real.SR5_WARNING.format(**texts)], 'emqx': self.section}
+        self.convert = {'state': 'succeeded', 'result': {'backup_id': 'b-conv', 'ha_import': {
+            'notes': [real.SR5_NOTE.format(**texts)], 'reminders_by_app': {'emqx': [real.SR5_REMINDER.format(**texts)]}}}}
+        self.restore = {'state': 'succeeded', 'result': {'safety_backup_id': 'b-safe', 'rolled_back': False}}
+        imported = imported_probe('file')
+        imported['native_counts']['emqx_acl'] = 0
+        imported['mqtt']['bootstrap_woow'] = 4
+        fixed = copy.deepcopy(imported)
+        fixed['mqtt']['bootstrap_woow'] = 0
+        before = lambda: copy.deepcopy(self.BEFORE)   # noqa: E731 - each probe its own copy
+        self.probes = {'pre': before(), 'after the refusals': before(), 'before the restore': before(),
+                       'after restore': imported, 'after restart': imported, 'remedy: delete woow':
+                       {'delete_mqtt_user': 204, 'mqtt_users': [['b1-admin', True]]}, 'after the remedy': fixed,
+                       'after the baseline restore (own accounts)': before()}
+        self.requests, self.restores, self.restarts = [], [], []
+        self.baseline = []
+
+        def run_probe(_ev, _args, label_text, mode, tag=None, **kwargs):
+            key = label_text.split('(file target) ', 1)[1]
+            self.requests.append((key, mode, tag, kwargs))
+            return copy.deepcopy(self.probes[key])
+
+        def ok(command, request=None, **_kwargs):
+            if command == 'list':
+                return {'backups': [{'id': 'b0'}]}
+            if command == 'inspect':
+                return {'preflight': {'ok': True, 'checks': [], 'apps': [{'id': 'emqx', 'mode': 'inplace',
+                                                                           'settings': {'state': 'same'}}]}}
+            raise AssertionError(command)
+        state = {'digest_before': real.digest(self.BEFORE), 'baseline_b0': 'b0', 'imported': None,
+                 'ha_x86-bcrypt': 'ha-b', 'ha_x86-plain': 'ha-p'}
+        patches = (mock.patch.object(real, 'run_probe', run_probe), mock.patch.object(real, 'bind_lab_made', lambda *_a: None),
+                   mock.patch.object(real, 'markers', lambda ev, label_text: ev.check('markers', True)),
+                   mock.patch.object(real, 'restore_with', lambda ev, b, name, key=None: self.restores.append(b)
+                                     or (self.restore, ['EMQX 還原後核對一致：…'], 1.0)),
+                   mock.patch.object(real, 'restart_emqx', lambda ev, label_text: self.restarts.append(label_text)),
+                   mock.patch.object(real, 'manual_baseline', lambda ev, args, label_text, tested: self.baseline.append(tested)),
+                   mock.patch.object(real, 'emit', lambda line: None),
+                   mock.patch.object(real.drv, 'run_check', lambda *_a, **_k: ({'state': 'succeeded', 'result': {
+                       'ha_check': {'apps': [self.check]}}}, 1.0)),
+                   mock.patch.object(real.drv, 'convert', lambda *_a, **_k: (self.convert, 1.0)),
+                   mock.patch.object(real.drv, 'ok', ok), mock.patch.object(real.drv, 'labelled', lambda: {}),
+                   mock.patch.object(real.drv, 'created_backup', lambda b: None),
+                   mock.patch.object(real.drv, 'source', lambda _m: {'emqx': dict(FACTS, **SRC)}),
+                   mock.patch.dict(real.drv.STATE, state))
+        for patch in patches:
+            patch.start()
+            self.addCleanup(patch.stop)
+
+    def failing(self, tag):
+        self.ev.results = []
+        real.step_sr5(self.ev, None, tag)
+        return [name for name, ok in self.ev.results if not ok]
+
+    def test_bcrypt_the_whole_chain(self):
+        self.assertEqual(self.failing('x86-bcrypt'), [])
+        self.assertEqual(self.restores, ['b-conv'])
+        self.assertEqual(len(self.restarts), 2, 'one restart after the restore, one for the remedy')
+        self.assertEqual(self.baseline, [True], 'B0 comes back after the full chain')
+        self.assertIn(('remedy: delete woow', 'file', None, {'delete_user': 'woow'}), self.requests)
+        self.assertEqual(self.requests[0], ('pre', 'base', None, {'own_mqtt': True}))
+
+    def test_bcrypt_each_part_can_fail(self):
+        cases = {
+            'no warning': lambda: self.check.update(warnings=[]),
+            'another name': lambda: self.check.update(warnings=[self.check['warnings'][0].replace('（woow）', '（admin）')]),
+            'a blocker': lambda: self.check.update(ok=False, blockers=['x']),
+            'no note': lambda: self.convert['result']['ha_import'].update(notes=[]),
+            'woow still logs in': lambda: self.probes['after restore']['mqtt'].update(bootstrap_woow=0),
+            'remedy failed': lambda: self.probes['after the remedy']['mqtt'].update(bootstrap_woow=4),
+            'delete refused': lambda: self.probes['remedy: delete woow'].update(delete_mqtt_user=404),
+            'own woow not back': lambda: self.probes['after the baseline restore (own accounts)']['own_mqtt'].update(
+                bootstrap_woow=4),
+        }
+        for label, change in cases.items():
+            with self.subTest(label):
+                self.setUp()
+                change()
+                self.assertTrue(self.failing('x86-bcrypt'), label)
+
+    def test_plain_refused_and_nothing_changes(self):
+        self.check.update(ok=False, blockers=[real.SR5_PLAIN], warnings=[])
+        self.convert = {'state': 'failed', 'error': {'code': 'incompatible', 'message': 'EMQX 不能搬過來：' + real.SR5_PLAIN}}
+        self.assertEqual(self.failing('x86-plain'), [])
+        self.assertEqual((self.restores, self.restarts, self.baseline), ([], [], []), 'nothing was restored')
+        for change in (lambda: self.check.update(blockers=[real.SR5_PLAIN, 'x']),
+                       lambda: self.check.update(ok=True, blockers=[]),
+                       lambda: self.convert['error'].update(code='job-failed'),
+                       lambda: self.probes.update({'after the refusals': dict(self.BEFORE, mqtt_users=[])})):
+            with self.subTest(change=change):
+                saved = (copy.deepcopy(self.check), copy.deepcopy(self.convert), dict(self.probes))
+                change()
+                self.assertTrue(self.failing('x86-plain'))
+                self.check, self.convert, self.probes = saved
 
 
 if __name__ == '__main__':
