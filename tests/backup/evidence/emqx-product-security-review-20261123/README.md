@@ -343,7 +343,7 @@ attempt per row, JSON in `iteration3/`.
 ### Other checks of iteration 3
 
 - Unit tests on the merged tree (EMQX modules, `test_ha_tempctr`, `test_tempctr_cleanup_dependency`, `test_ha_import`,
-  `test_ha_flows`, guarded runner: no podman, ssh, sudo or systemctl): 258 tests OK, 0 blocked (`iteration3/unit-merged.json`).
+  `test_ha_flows`, guarded runner: no podman, ssh, sudo or systemctl): 258 tests OK, 0 blocked (`iteration3/unit-merged.json`); 260 tests OK on the merge of the product tip `fc0e3bc` and this branch (`iteration3/unit-final.json`).
 - The product lane's 17 attempt JSONs and its unit-test record on the product branch (5786ae4) were scanned for
   credential-like values: none (only commit hashes, digests, test names, memory figures and fixed status lines).
 - The page text and CONTRACT changes of the product delta describe what the code does (a refusal for a file-only device,
