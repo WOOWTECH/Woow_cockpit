@@ -1343,6 +1343,7 @@ class HostToolsContract(HostFixture):
             ('held', '', 'E: Held packages were changed and -y was used without --allow-change-held-packages.\n',
              '其他套件衝突'),
             ('other', '', 'E: something else\n', '結束碼 100'),
+            ('other, with an old index', self.OFFLINE_UPDATE, 'E: something else\n', '結束碼 100'),
         )
         for label, update, error, reason in cases:
             with self.subTest(case=label):
