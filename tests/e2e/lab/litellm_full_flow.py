@@ -19,27 +19,36 @@ deploy-src.sh. Phases:
             0c71bec8 of the package on the public LiteLLM 1.104.0 base, derived once with USER 1000:0 and its prisma
             folder owned by it, because dev-d maps container IDs 0..55000 and the image's 65534 cannot run -- the
             lab difference services-b used too), scripts/install.sh --no-pull (fresh secrets, units, smoke); the
-            catalog entry from catalog-suggest -> catalog-install; key-init; this device's OWN data seeded through
-            the API with its master key (a credential, a model using it, a virtual key with a value chosen here);
-            a lab STUB app (catalog entry + Quadlet file, never started) whose Quadlet points at LiteLLM
+            catalog entry is the PRODUCT'S OWN DRAFT, not edited here (until attempt 10 this driver changed its mode,
+            checks, health URL and config files): the fresh catalog-suggest draft must be the single-database entry
+            the import fills; an entry of the shape the production host has installed (300 s, no data check) is
+            installed first and its draft must only raise the limit to 600 s and add the table digest; that draft is
+            what catalog-install gets; key-init; this device's OWN data seeded through the API with its master key
+            (a credential, a model using it, a virtual key with a value chosen here); a lab STUB app (catalog entry +
+            Quadlet file, never started) whose Quadlet points at LiteLLM
   before    this device's own state: secret digests, DB counts and salt digest, schema signature digest, own key 200
   upload    upload-begin, the file copied to the path the helper gave, upload-finish
   check     ha-check-start litellm with the HA key: ok, versions 0.1.15 / 1.104.0, PG 18 -> 17, counts 1/1/24, keys,
             the derived key_users (dev-d's real catalog and configuration) must name the stub
   convert   the real free space and the product floor, ha-convert-start (real SpaceGuard/Watchdog), the job log
-            names the trusted-schema steps, the list row, inspect (preflight in place, settings same)
+            names the trusted-schema steps, the list row, inspect (preflight in place, settings same; the converted
+            backup has no table digest: a warning, nothing fails)
   autorb    restore-start with a one-shot ExecStartPre failure of litellm.service: must end rolled-back with THIS
-            device's own salt, data and key back (automatic rollback restores the old secret and database)
-  import    restore-start of the converted backup: succeeded, safety backup, health ok
+            device's own salt, data and key back (automatic rollback restores the old secret and database), compared
+            row by row with the safety backup's table digest (db-main) before the app starts
+  import    restore-start of the converted backup: succeeded, safety backup, health ok; the table digest is not
+            compared (null) and the safety backup holds this device's own one
   verify    HA's test virtual key 200 on /key/info (alias), users/teams/models 1/1/24, every stored provider value
             decrypts in the running app with the moved salt and none with a random one, the litellm-salt-key secret
             and the database salt are HA's, the master key / UI password / DB password / DB URL secrets unchanged,
             this device's master key works, this device's own key 401, the schema is this device's (signature)
   restart   systemctl --user restart litellm-postgres.service litellm.service: verified again
-  rollback  restore-start of the import's safety backup: this device's own salt, data and key back, HA's key 401
+  rollback  restore-start of the import's safety backup: the table digest matches, this device's own salt, data and
+            key back, HA's key 401
   cleanup   test backups deleted, the HA store record this run made deleted, the catalog entry removed, LiteLLM
             removed from dev-d (units, volume, network, secrets, config, package copy, the derived image tag, the
-            PG17 tag), no job object, staging or key file; the baseline containers as found
+            PG17 tag), no job object, staging or key file; the containers are the baseline's, compared BOTH ways
+            (a container whose unit restarted by itself during the run apart: RESTART_UNITS)
   leaks     every registered value (HA key, HA test key, HA's four secret files, the own seed credential and key,
             dev-d's five LiteLLM secrets) looked for in the engine's records, uploads, staging, run dir, the device
             journal and this run's private evidence (before the LiteLLM secrets are removed)
@@ -106,6 +115,21 @@ STUB_ENTRY = {'schema': 1, 'id': STUB_ID, 'name': STUB_ID, 'owner': 'appowner',
               'adapter': 'quadlet-postgres', 'quadlet': {'files': [STUB_FILE]}, 'units': [STUB_UNIT],
               'writer_units': [STUB_UNIT], 'health': [], 'verify': []}
 QUADLET_DIR_REL = '.config/containers/systemd'
+# What catalog-suggest must propose by itself for the package LiteLLM (nothing is edited here): the entry its Home
+# Assistant import fills (ha_litellm.Target), the readiness check at 600 s and the table digest.
+DRAFT_POSTGRES = [{'id': 'main', 'container': 'litellm-postgres', 'unit': 'litellm-postgres.service',
+                   'database': 'litellm', 'user': 'litellm', 'data_volume': 'litellm-pgdata'}]
+READINESS = 'http://127.0.0.1:4000/health/readiness'
+DRAFT_HEALTH = [{'type': 'http', 'url': READINESS, 'expect_status': 200, 'timeout_seconds': 600}]
+DRAFT_CONFIGS = [{'path': '.config/litellm/config.yaml', 'mode': '0644'},
+                 {'path': '.config/litellm/litellm.env', 'mode': '0600'}]
+DIGEST = {'id': 'db-main', 'type': 'postgres-digest', 'postgres': 'main', 'label': 'PostgreSQL 資料表內容'}
+PRODUCTION_LIMIT = 300
+# dev-d's headscale.service was in a restart loop of its own (NRestarts 1363 on 2026-11-24 00:59: the network-none lab
+# cannot fetch the default DERP map), so a snapshot has its container only some seconds of every cycle (attempts 07 and
+# 08 and negative-01 saw it in one snapshot only). Its container is left out of the comparison ONLY when its unit's own
+# restart counter grew between the two snapshots; every other container must be in both.
+RESTART_UNITS = {'headscale': 'headscale.service'}
 SAFE_LABEL = re.compile(r"[^A-Za-z0-9 ,()/:'<>.=_-]")
 
 
@@ -119,6 +143,71 @@ def _load(name):
 drv = _load('ha_import_b1_e2e')
 Failed = drv.Failed
 drv.state_path = lambda: LAB / 'run' / 'litellm_full_flow.json'   # never the b1 driver's own state file
+
+
+def fresh_draft_problems(app):
+    """What of a fresh catalog-suggest answer for LiteLLM is not the entry the import fills ([]: it is, unedited)."""
+    entry = app.get('entry') if isinstance(app.get('entry'), dict) else {}
+    found = {'variant': app.get('variant'), 'valid': app.get('valid'), 'installed': app.get('installed'),
+             'postgres': entry.get('postgres'), 'volumes': entry.get('volumes'), 'data_dirs': entry.get('data_dirs'),
+             'health': entry.get('health'), 'verify': entry.get('verify'), 'config_files': entry.get('config_files'),
+             'units': entry.get('units'), 'secrets': sorted(s.get('name') for s in entry.get('secrets') or []),
+             'import-mode note': [n.get('level') for n in app.get('notes') or [] if n.get('code') == 'import-mode']}
+    wanted = {'variant': 'database', 'valid': True, 'installed': None, 'postgres': DRAFT_POSTGRES, 'volumes': [],
+              'data_dirs': None, 'health': DRAFT_HEALTH, 'verify': [DIGEST], 'config_files': DRAFT_CONFIGS,
+              'units': list(UNITS), 'secrets': LITELLM_SECRETS, 'import-mode note': ['info']}
+    return sorted(key for key, value in wanted.items() if found[key] != value)
+
+
+def production_like(entry):
+    """The entry a device has that installed LiteLLM before the readiness decision and the digests: the shape of the
+    production host's entry (single database, readiness at 300 s, both configuration files, no data check)."""
+    old = json.loads(json.dumps(entry))
+    old.update(name='LiteLLM 模型閘道', description='LiteLLM 代理、PostgreSQL 17 資料庫、模型設定與應用機密', verify=[])
+    for item in old['health']:
+        item['timeout_seconds'] = PRODUCTION_LIMIT
+    return old
+
+
+def installed_draft_problems(app):
+    """What of the draft of a production_like entry differs from the two changes it may propose ([]: exactly those)."""
+    view = app.get('installed') if isinstance(app.get('installed'), dict) else {}
+    codes = [n.get('code') for n in app.get('notes') or []]
+    found = {'variant': app.get('variant'), 'valid': app.get('valid'), 'drift': view.get('drift'),
+             'changes': [(c.get('path'), c.get('op'), c.get('old'), c.get('new')) for c in view.get('changes') or []],
+             'health-timeout note': codes.count('health-timeout'), 'import-mode note': codes.count('import-mode')}
+    wanted = {'variant': 'database', 'valid': True, 'drift': [],
+              'changes': [(f'health[url={READINESS}].timeout_seconds', 'change', PRODUCTION_LIMIT, 600),
+                          ('verify[id=db-main]', 'add', None, DIGEST)],
+              'health-timeout note': 1, 'import-mode note': 0}
+    return sorted(key for key, value in wanted.items() if found[key] != value)
+
+
+def digest_checks(result):
+    """{check id: match} of a restore job's data checks of LiteLLM (result.verification[].checks[])."""
+    entry = next((e for e in result.get('verification') or [] if isinstance(e, dict) and e.get('app') == 'litellm'), {})
+    return {c.get('id'): c.get('match') for c in entry.get('checks') or [] if isinstance(c, dict)}
+
+
+def restart_counts():
+    """{container: NRestarts of its unit or None} of RESTART_UNITS (read only)."""
+    found = {}
+    for name, unit in RESTART_UNITS.items():
+        text = drv.out(drv.owner('systemctl', '--user', 'show', '-p', 'NRestarts', '--value', unit, timeout=60)).strip()
+        found[name] = int(text) if text.isdigit() else None
+    return found
+
+
+def restarting(before, after):
+    """The containers of RESTART_UNITS whose unit restarted by itself between two restart_counts()."""
+    return {name for name in RESTART_UNITS if isinstance(before.get(name), int) and isinstance(after.get(name), int)
+            and after[name] > before[name]}
+
+
+def container_changes(before, after, apart=frozenset()):
+    """(gone, new) container names between two snapshots, compared both ways without the names in `apart`."""
+    before, after = set(before) - set(apart), set(after) - set(apart)
+    return sorted(before - after), sorted(after - before)
 
 
 def label(text):
@@ -470,6 +559,7 @@ class Run:
         self.converted = self.safety = self.store_id = None
         self.ha_salt_sha = self.own_key = None
         self.baseline_containers = []
+        self.baseline_restarts = {}
         self.key_users = None
 
     def optional(self, phase):
@@ -516,7 +606,8 @@ class Run:
     def setup(self):
         ev = self.ev
         self.baseline_containers = sorted(drv.out(drv.owner('podman', 'ps', '-a', '--format', '{{.Names}}')).split())
-        ev.save('baseline-containers.json', self.baseline_containers)
+        self.baseline_restarts = restart_counts()
+        ev.save('baseline-containers.json', {'containers': self.baseline_containers, 'restarts': self.baseline_restarts})
         state = drv.out(drv.root('systemctl', 'is-enabled', TIMER, timeout=60)).strip()
         if state != 'masked':
             proc = drv.root('systemctl', 'mask', '--now', TIMER, timeout=120)
@@ -541,52 +632,36 @@ class Run:
         self.deploy_litellm()
         status = drv.ok('status', ev=ev)
         if 'litellm' not in {a['id'] for a in status.get('apps') or []}:
-            suggestion = drv.ok('catalog-suggest', {'owner': 'appowner'}, ev=ev, timeout=300)
-            ev.save('catalog-suggest.json', suggestion)
-            app = next((a for a in suggestion.get('apps') or [] if a.get('id') == 'litellm'), {})
-            variant = next((v for v in app.get('variants') or [] if v.get('id') == 'database'), {})
-            # The production catalog of this package (tests/backup/test_suggest.py fixture, facts CAT): the single
-            # database mode (postgres item main), no built-in digests, the readiness URL; since 98427dc the product's
-            # draft gives LiteLLM's health checks 600 s (owner decision 2026-11-23 23:28; the host's installed entry
-            # was made with the earlier 300 s proposal).
-            proposed = sorted({h.get('timeout_seconds') for v in app.get('variants') or []
-                               for h in (v.get('entry') or {}).get('health') or [] if isinstance(h, dict)}, key=str)
-            ev.check("setup: catalog-suggest proposes 600 s for LiteLLM's health checks in every variant (owner "
-                     'decision 2026-11-23; other apps keep 300/180 s)', proposed == [600], {'timeouts': proposed})
-            entry = json.loads(json.dumps(variant.get('entry'))) if isinstance(variant.get('entry'), dict) else None
-            if entry is not None:
-                # The package's production entry (tests/backup/test_suggest.py fixture, facts CAT): no built-in
-                # digests, GET /health/readiness (the draft proposes the Quadlet's liveness URL), both config files.
-                entry['verify'] = []
-                # 600 s = the product's proposal for LiteLLM (catalog maximum).
-                entry['health'] = [{'type': 'http', 'url': 'http://127.0.0.1:4000/health/readiness', 'expect_status': 200,
-                                    'timeout_seconds': 600}]
-                files = [c for c in entry.get('config_files') or [] if c.get('path') != '.config/litellm/litellm.env']
-                entry['config_files'] = files + [{'path': '.config/litellm/litellm.env', 'mode': '0600'}]
-            if not ev.check('setup: catalog-suggest proposes the litellm entry (single-database mode) from the installed '
-                            'Quadlet files', isinstance(entry, dict) and variant.get('valid') is True,
-                            {'apps': [a.get('id') for a in suggestion.get('apps') or []],
-                             'variants': [v.get('id') for v in app.get('variants') or []]}):
-                raise Failed('no litellm suggestion')
-            preview = drv.ok('catalog-install', {'entry': entry}, ev=ev, timeout=300)
-            if not ev.check('setup: catalog-install preview of the litellm entry is valid', preview.get('valid') is True,
-                            {k: preview.get(k) for k in ('valid', 'errors', 'warnings', 'conflicts')}):
-                raise Failed('catalog preview refused')
-            drv.ok('catalog-install', {'entry': entry, 'confirm': True,
-                                       'expected_sha256': preview.get('expected_sha256')}, ev=ev, timeout=300)
-            self.installed_entry = True
+            app = self.draft('catalog-suggest.json')
+            problems = fresh_draft_problems(app)
+            if not ev.check('setup: catalog-suggest proposes by itself the entry the import fills (single database, '
+                            'readiness 600 s, both config files, table digest)', not problems,
+                            {'differ': problems, 'variant': app.get('variant'), 'verify': (app.get('entry') or {}).get(
+                                'verify'), 'health': (app.get('entry') or {}).get('health')}):
+                raise Failed('the fresh draft is not the entry the import fills')
+            self.install_entry(production_like(app['entry']), 'an entry of the production shape (300 s, no data check)')
+            app = self.draft('catalog-suggest-installed.json')
+            problems = installed_draft_problems(app)
+            if not ev.check("setup: that entry's draft only raises the limit to 600 s (health-timeout note) and adds the "
+                            'table digest', not problems, {'differ': problems, 'changes': (app.get('installed') or {}).get(
+                                'changes')}):
+                raise Failed('the draft of the production shape is not the two expected changes')
+            self.install_entry(app['entry'], 'the proposed draft, unedited')
+            app = self.draft('catalog-suggest-after.json')
+            ev.check('setup: after installing the draft nothing is left to change', (app.get('installed') or {}).get(
+                'same') is True, (app.get('installed') or {}).get('changes'))
         entry = drv.catalog('litellm')
         ev.save('catalog-litellm-installed.json', entry)
         pg = (entry.get('postgres') or [{}])[0]
-        ev.check('setup: the litellm catalog entry has the package units, the postgres item main, the five secrets, '
-                 'both config files and the readiness health URL', set(UNITS) <= set(entry.get('units') or [])
-                 and sorted(c.get('path') for c in entry.get('config_files') or []) == ['.config/litellm/config.yaml',
-                                                                                    '.config/litellm/litellm.env']
+        ev.check('setup: the installed litellm entry has the package units, the postgres item main, the five secrets, both '
+                 'config files, readiness 600 s and the table digest', set(UNITS) <= set(entry.get('units') or [])
+                 and entry.get('config_files') == DRAFT_CONFIGS and entry.get('health') == DRAFT_HEALTH
+                 and entry.get('verify') == [DIGEST]
                  and (pg.get('id'), pg.get('container'), pg.get('database'), pg.get('user')) ==
                  ('main', 'litellm-postgres', 'litellm', 'litellm')
-                 and sorted(s['name'] for s in entry.get('secrets') or []) == LITELLM_SECRETS
-                 and any('/health/readiness' in h.get('url', '') for h in entry.get('health') or []),
-                 {'units': entry.get('units'), 'postgres': pg, 'secrets': [s['name'] for s in entry.get('secrets') or []]})
+                 and sorted(s['name'] for s in entry.get('secrets') or []) == LITELLM_SECRETS,
+                 {'units': entry.get('units'), 'postgres': pg, 'secrets': [s['name'] for s in entry.get('secrets') or []],
+                  'verify': entry.get('verify'), 'health': entry.get('health')})
         self.add_stub()
         key = drv.ok('key-init', ev=ev)
         ev.check('setup: a device key exists (key-init)', bool((key.get('key') or {}).get('key_id')),
@@ -598,6 +673,26 @@ class Run:
         ev.check("setup: this device's own data seeded with its master key (credential, model, key with a chosen value)",
                  sd.get('credential') == 200 and sd.get('model') == 200 and sd.get('key') == 200
                  and sd.get('key_echo_matches') is True, sd)
+
+    def draft(self, name):
+        """LiteLLM's draft as the page gets it (catalog-suggest for appowner); the whole answer is saved as `name`."""
+        suggestion = drv.ok('catalog-suggest', {'owner': 'appowner'}, ev=self.ev, timeout=300)
+        self.ev.save(name, suggestion)
+        return next((a for a in suggestion.get('apps') or [] if a.get('id') == 'litellm'), {})
+
+    def install_entry(self, entry, what):
+        """catalog-install like the page: the preview, then the confirmed install of the same entry."""
+        preview = drv.ok('catalog-install', {'entry': entry}, ev=self.ev, timeout=300)
+        if not self.ev.check(f'setup: catalog-install accepts {what}', preview.get('valid') is True,
+                             {k: preview.get(k) for k in ('valid', 'error', 'warnings', 'compat')}):
+            raise Failed('catalog preview refused')
+        drv.ok('catalog-install', {'entry': entry, 'confirm': True,
+                                   'expected_sha256': preview.get('expected_sha256')}, ev=self.ev, timeout=300)
+        self.installed_entry = True
+
+    def job_log(self, job):
+        return '\n'.join(str(line) for line in (drv.ok('job-status', {'job_id': job['id']}, ev=self.ev).get('log')
+                                                or []))
 
     def add_stub(self):
         """The never-started stub client (STUB_*): its Quadlet file and its catalog entry (removed at cleanup)."""
@@ -849,6 +944,12 @@ class Run:
                                                       and a.get('mode') == 'inplace' for a in pre.get('apps') or [])
                  and [(p.get('id'), p.get('major')) for p in app.get('postgres') or []] == [('main', 17)]
                  and app.get('secrets_count') == 5, {'failed': failed[:3], 'postgres': app.get('postgres')})
+        checks = [c for a in pre.get('apps') or [] if a.get('id') == 'litellm' for c in a.get('checks') or []]
+        missing = [c for c in checks if c.get('id') == 'litellm/digests-missing']
+        ev.check('convert: inspect: the converted backup has no table digest (a warning that db-main is not compared; no '
+                 'check fails)', app.get('verify_digests') == [] and [c.get('status') for c in missing] == ['warn']
+                 and 'db-main' in str(missing[0].get('message')) and not any(c.get('status') == 'fail' for c in checks),
+                 {'verify_digests': app.get('verify_digests'), 'missing': missing})
 
     # -------- the automatic rollback of a failing import restore (this device's salt and data come back)
     def inject_on(self):
@@ -884,6 +985,12 @@ class Run:
                  and result.get('rolled_back') is True and consumed,
                  {'state': job['state'], 'error': job.get('error'), 'took_s': round(took, 1)})
         ev.check('auto rollback: the injected drop-in and marker are gone', not self.dropin, '')
+        log = self.job_log(job)
+        ev.save('restore-inject-log.txt', log)
+        ev.check("auto rollback: this device's own rows were compared with the safety backup's table digest before the app "
+                 'started (db-main equal, nothing left uncompared)', '資料摘要 db-main 與備份時一致' in log
+                 and not any('未比對資料' in str(w) for w in result.get('warnings') or []),
+                 {'warnings': result.get('warnings'), 'import_checks': digest_checks(result)})
         self.wait_units('auto rollback')
         self.own_state('auto rollback')
 
@@ -903,6 +1010,15 @@ class Run:
                          'health': [(h.get('id'), h.get('status')) for h in health]}):
             raise Failed('restore failed')
         drv.save_state()
+        ev.check('import: the table digest has nothing to compare with (reported as not compared, the restore succeeded)',
+                 digest_checks(result) == {'db-main': None}, {'verification': result.get('verification')})
+        inspect = drv.ok('inspect', {'backup_id': self.safety}, ev=ev, timeout=900)
+        app = next((a for a in (inspect.get('manifest') or {}).get('apps') or [] if a.get('id') == 'litellm'), {})
+        kept = [(d.get('id'), d.get('target'), (d.get('summary') or {}).get('databases'),
+                 (d.get('summary') or {}).get('tables')) for d in app.get('verify_digests') or []]
+        ev.check("import: the safety backup made before it holds this device's own table digest (db-main, one database)",
+                 [k[:3] for k in kept] == [('db-main', 'postgres:main', 1)] and kept[0][3] > 50,
+                 {'verify_digests': app.get('verify_digests')})
 
     def verify(self, label_text):
         ev = self.ev
@@ -964,6 +1080,8 @@ class Run:
                  job['state'] == 'succeeded' and result.get('rolled_back') is False and health
                  and all(h.get('status') == 'ok' for h in health),
                  {'state': job['state'], 'error': job.get('error'), 'took_s': round(time.monotonic() - started, 1)})
+        ev.check("rollback: the table digest of the safety backup matches this device's restored rows (db-main)",
+                 digest_checks(result) == {'db-main': True}, {'verification': result.get('verification')})
         self.wait_units('rollback')
         self.own_state('rollback')
 
@@ -1018,9 +1136,13 @@ class Run:
         if self.deployed:
             self.remove_litellm()
         names = sorted(drv.out(drv.owner('podman', 'ps', '-a', '--format', '{{.Names}}')).split())
-        ev.check('cleanup: the containers are the ones found before the run (no LiteLLM container left)',
-                 set(names) <= set(self.baseline_containers) and not {'litellm', 'litellm-postgres'} & set(names),
-                 {'before': self.baseline_containers, 'after': names})
+        counts = restart_counts()
+        apart = restarting(self.baseline_restarts, counts)
+        gone, new = container_changes(self.baseline_containers, names, apart)
+        ev.check('cleanup: the containers are exactly the ones found before the run, both ways (one whose unit restarted by '
+                 'itself apart), no LiteLLM one left', not gone and not new and not {'litellm', 'litellm-postgres'} & set(names),
+                 {'before': self.baseline_containers, 'after': names, 'gone': gone, 'new': new, 'apart': sorted(apart),
+                  'restarts': [self.baseline_restarts, counts]})
         if self.timer_masked_here:
             proc = drv.root('systemctl', 'unmask', TIMER, timeout=120)
             drv.root('systemctl', 'start', TIMER, timeout=120)
