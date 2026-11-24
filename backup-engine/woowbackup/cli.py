@@ -999,10 +999,13 @@ def _needs_safety_key(svc, app_ids):
 def confirm_restore(svc, req, header, key_text):
     """Refuses a restore whose preflight has lines to confirm that the request does not confirm (`confirmation-required`,
     `details.apps`; nothing started). Only adapters that report such lines (`restore_issues`, a class attribute) are
-    asked; none of them is asked twice for a backup that has none."""
-    adapters = {app.id: svc.adapter(app) for app in flows.resolve_apps(svc.catalog(), req['apps'])}
-    adapters = {app_id: adapter for app_id, adapter in adapters.items()
-                if getattr(type(adapter), 'restore_issues', None) is not None}
+    asked; one that cannot be made is the job's to report."""
+    adapters = {}
+    for app in flows.resolve_apps(svc.catalog(), req['apps']):
+        with contextlib.suppress(BackupError):
+            adapter = svc.adapter(app)
+            if getattr(type(adapter), 'restore_issues', None) is not None:
+                adapters[app.id] = adapter
     if not adapters:
         return
     path = svc.storage.archive_path(req['backup_id'])

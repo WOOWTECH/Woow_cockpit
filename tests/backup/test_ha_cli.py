@@ -63,7 +63,7 @@ class UploadFinishTests(HaCliCase):
         self.assertEqual(reply['backup']['id'], '20261101T080000Z-0123abcd')
 
     def test_a_broken_ha_file(self):
-        begin, reply = self.upload(hx.simple_backup(protected='yes'))
+        begin, reply = self.upload(hx.simple_backup(version=99))
         self.assertEqual(reply['error']['code'], 'corrupt-archive')
         self.assertEqual(reply['error']['message'], 'HA 備份檔已損毀或遭到修改，無法使用。')
         self.assertEqual(self.call(['upload-abort'], {'upload_id': begin['upload_id']}), {'ok': True})
@@ -655,6 +655,13 @@ class RestoreConfirmTests(HaCliCase):
         self.deps.adapter_factory = self.world.factory
         with mock.patch.object(self.archive, 'read_manifest', side_effect=AssertionError('not read')):
             self.assertTrue(self.call(['restore-start'], self.request)['ok'])
+
+    def test_an_adapter_that_cannot_be_made_is_the_jobs_to_report(self):
+        def factory(app, **_kwargs):
+            raise BackupError('owner-missing', '找不到應用擁有者帳號。')
+
+        self.deps.adapter_factory = factory
+        self.assertTrue(self.call(['restore-start'], self.request)['ok'])
 
     def test_the_lines_are_validated(self):
         for acknowledged in ({'woowbk-demo': ['x']}, {'woowbk-demo': 'x'}, [], {'Bad App': []}):
