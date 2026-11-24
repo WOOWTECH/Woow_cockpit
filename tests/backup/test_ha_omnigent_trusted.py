@@ -150,7 +150,7 @@ class SnapshotScriptTests(unittest.TestCase):
     PSQL = r"""#!/bin/sh
 printf '%s\n' "$@" > "$STUB/psql.argv"
 folder=$(dirname "$(readlink /proc/self/fd/0)")
-printf '%s\n' "$folder" "$(stat -c %a "$folder")" > "$STUB/psql.folder"
+printf '%s\n' "$folder" "$(stat -c %a "$folder")" "$(stat -c %a "$folder/in")" > "$STUB/psql.folder"
 out=/dev/null
 while IFS= read -r line; do
     printf '%s\n' "$line" >> "$STUB/psql.stdin"
@@ -208,10 +208,11 @@ printf 'PGDMP-schema-only'
         return path.read_text(encoding='utf-8').splitlines() if path.exists() else None
 
     def assert_private_folder_removed(self):
-        folder, mode = self.recorded('psql.folder')
+        folder, *modes = self.recorded('psql.folder')
         self.assertRegex(folder, r'\A/tmp/woowbk-schema\.[A-Za-z0-9]{8}\Z')
-        self.assertEqual(mode, '700')
+        self.assertEqual(modes, ['700', '600'])
         self.assertFalse(os.path.exists(folder), "the script's private folder is removed")
+        return folder
 
     def test_the_dump_is_schema_only_and_reads_the_exported_snapshot(self):
         """pg_dump of the live database takes its schema and nothing else (`--schema-only`: this device's rows --
@@ -224,19 +225,20 @@ printf 'PGDMP-schema-only'
                           '--lock-wait-timeout=15s', f'--snapshot={self.SNAPSHOT}'])
         self.assertEqual(self.recorded('psql.argv'), ['-X', '-q', '-A', '-t', '-v', 'ON_ERROR_STOP=1', '-U', 'appuser',
                                                       '-d', 'omnigent'])
-        sent = self.recorded('psql.stdin')
-        self.assertEqual(sent[0], 'BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY;')
-        self.assertIn('LOCK TABLE public.alembic_version IN ACCESS SHARE MODE;', sent)
-        self.assertLess(sent.index('LOCK TABLE public.alembic_version IN ACCESS SHARE MODE;'),
-                        sent.index('SELECT pg_export_snapshot();'))
-        self.assertIn('= \'["d0a1f879a01d"]\' THEN \'ok\'', next(s for s in sent if s.startswith('SELECT CASE WHEN ')))
-        self.assertIn(' '.join(omni.SCHEMA_COLUMNS_SQL.split()) + ';', sent)
-        self.assertEqual(sent[-2:], ['COMMIT;', '\\q'])
-        self.assertNotIn('COMMIT;', self.recorded('psql.stdin.at-dump'), 'the transaction is open while pg_dump runs')
+        folder = self.assert_private_folder_removed()
+        sent = ['BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY;',
+                "SET LOCAL application_name = 'woowbk-schema-snapshot';", "SET LOCAL lock_timeout = '15s';",
+                "SET LOCAL idle_in_transaction_session_timeout = '10920s';",
+                'LOCK TABLE public.alembic_version IN ACCESS SHARE MODE;',
+                f'\\o {folder}/snapshot', 'SELECT pg_export_snapshot();', f'\\o {folder}/revision',
+                "SELECT CASE WHEN (SELECT coalesce(json_agg(version_num ORDER BY version_num), '[]'::json)::text "
+                'FROM public.alembic_version) = \'["d0a1f879a01d"]\' THEN \'ok\' ELSE \'mismatch\' END;',
+                f'\\o {folder}/columns', ' '.join(omni.SCHEMA_COLUMNS_SQL.split()) + ';', '\\o']
+        self.assertEqual(self.recorded('psql.stdin'), sent + ['COMMIT;', '\\q'])
+        self.assertIn(self.recorded('psql.stdin.at-dump'), (sent, sent[:-1]), 'the transaction is open while pg_dump runs')
         self.assertEqual(self.path.read_bytes(), b'PGDMP-schema-only', 'the archive without the columns line')
         self.assertEqual(self.path.stat().st_mode & 0o777, 0o600)
         self.assertEqual([p.name for p in self.root.iterdir() if p.name.startswith('target')], ['target-schema.dump'])
-        self.assert_private_folder_removed()
 
     def test_nothing_is_dumped_when_the_snapshot_is_not_the_expected_one(self):
         for name, code, answers in (

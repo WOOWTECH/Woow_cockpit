@@ -519,6 +519,7 @@ class ConvertTests(OmnigentCase):
 
     def test_a_same_named_ha_account_wins(self):
         self.world.ha_users = ['admin', 'alice']
+        self.world.live_rows.append(dict(self.world.live_rows[0], id='mallory'))   # not asked for, never carried
         result = self.convert(self.upload_omnigent(), ['omnigent'])
         self.assertEqual([row['id'] for row in self.world.carried()], ['operator'])
         self.assertTrue(any('HA 也有帳號 admin' in line for line in result['ha_import']['notes']))
@@ -1084,6 +1085,24 @@ class RefusalTests(OmnigentCase):
                 ('audit', 'omni-db', ha_omnigent.AUDIT_SQL, None, 0, 'job-failed', '無法檢查新的 PostgreSQL 叢集。')):
             with self.subTest(name=name), self.answering(role, wanted, value, skip=skip):
                 self.refused(code, message)
+
+    def test_a_live_version_that_cannot_be_read_is_no_version(self):
+        """The live version is what this device's own server answers on the loopback address, or none: the conversion
+        (and the check) then refuse instead of assuming a version."""
+        def reply(status, body):
+            return lambda url: (status, body)
+        for name, info in (('an error page', reply(503, b'{"server_version": "0.21.0"}')),
+                           ('no JSON', reply(200, b'<html>')), ('no object', reply(200, b'["0.21.0"]')),
+                           ('no version', reply(200, b'{}')), ('no text', reply(200, b'{"server_version": 21}')),
+                           ('no x.y.z', reply(200, b'{"server_version": "0.21.0\\n"}'))):
+            with self.subTest(name=name), mock.patch.object(self, 'info', info):
+                self.refused('incompatible', 'Omnigent 不能搬過來：無法讀取這台 Omnigent 的版本。',
+                             check='無法讀取這台 Omnigent 的版本。')
+        for url in ('http://192.0.2.1:8000/health', 'https://127.0.0.1:8000/health', None):
+            with self.subTest(url=url), mock.patch.object(self, 'info', side_effect=AssertionError('asked')) as info:
+                self.catalog['omnigent'].health = [{'type': 'http', 'url': url}] if url else []
+                self.refused('incompatible', 'Omnigent 不能搬過來：無法讀取這台 Omnigent 的版本。')
+                info.assert_not_called()
 
     def test_a_schema_that_changed_with_the_last_write_stops_the_conversion(self):
         """The second comparison on its own: the new cluster's schema was the trusted one after the data load and is
