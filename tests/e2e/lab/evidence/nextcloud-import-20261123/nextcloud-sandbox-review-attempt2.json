@@ -1,0 +1,45 @@
+{
+ "kind": "nextcloud-sandbox-review",
+ "date": "2026-11-24T09:18:50+08:00",
+ "source_commit": "37544809ed16f21669356e84d3dd9b06c1761942",
+ "tracked_changes": false,
+ "ha_nextcloud_sha256": "c7dcde38c27c5467a653c9e0ae1045f511818597128d78c214b835157a89d251",
+ "image": "docker.io/library/postgres:16-alpine",
+ "results": [
+  {
+   "case": "owner_view",
+   "steps": [
+    "ha_database"
+   ],
+   "live_markers": [],
+   "live_read": [
+    "appconfig",
+    "datacl",
+    "extensions",
+    "nspacl",
+    "role",
+    "roles"
+   ],
+   "scan": {
+    "pg_version": "16",
+    "config": true
+   },
+   "check_markers": [],
+   "check": {
+    "shape_problems": null,
+    "tables_read": false,
+    "lists": false
+   },
+   "control_read_markers": [
+    "woowbk-review-view_appconfig_postgres.txt"
+   ],
+   "ok": true,
+   "seconds": 36.0
+  }
+ ],
+ "passed": 1,
+ "cases": 1,
+ "volumes_left_behind": [],
+ "elapsed_s": 36.7,
+ "acceptance": "not acceptance (attack runs against the real product steps in the lab store)"
+}
