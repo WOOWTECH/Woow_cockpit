@@ -249,6 +249,17 @@ class CheckFieldTests(unittest.TestCase):
                                                             'default': True})
         self.assertTrue(fields['importable'])
 
+    def test_ten_apps_fit_into_a_job_record(self):
+        """A record takes 1 MiB (jobs.MAX_RECORD_BYTES); a larger one could not be read any more."""
+        names = ['字' * 120] * 20
+        total = 0
+        for app_id in haapps.APP_IDS:
+            issues = haissues.from_legacy(['長' * 2000] * 12, ['提' * 2000] * 60) + [
+                Issue('emqx.rules', 'confirm', '確' * 300, names) for _ in range(10)]
+            choices = {'database': [{'value': f'{i:063d}', 'label': '名' * 300} for i in range(200)]} if app_id == 'odoo' else {}
+            total += len(json.dumps(haissues.check_fields(app_id, issues, choices), ensure_ascii=False).encode())
+        self.assertLess(total, jobs.MAX_RECORD_BYTES * 3 // 4)
+
     def test_old_text_lists_are_bounded(self):
         issues = haissues.from_legacy(['長' * 5000] * 60, ['提' * 5000] * 60)
         fields = haissues.check_fields(APP, issues)

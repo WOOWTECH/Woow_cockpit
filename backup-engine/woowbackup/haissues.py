@@ -49,7 +49,7 @@ MAX_ISSUES = 40              # per app; never at the cost of a stop or a confirm
 MAX_BYTES = 40 * 1024        # per app, the JSON of its issues (a job record takes 1 MiB for 10 apps)
 MAX_ACKNOWLEDGED = 80        # confirmation keys one app's request may carry
 MAX_TEXT = 2000              # the text older pages get (`blockers` / `warnings`) is cut later than a message
-MAX_TEXT_BYTES = 24 * 1024   # ... and all of an app's, per list
+MAX_TEXT_BYTES = 12 * 1024   # ... and all of an app's, per list
 MAX_CHOICES = 100
 # What a shown text never carries as it is: controls, format characters (the bidirectional controls, zero-width ones,
 # the byte order mark, tag characters), lone surrogates, unassigned code points and the line / paragraph separators.
