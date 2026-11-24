@@ -13,6 +13,8 @@ from woowbackup import ha_emqx as emqx
 from woowbackup.errors import BackupError
 from woowbackup.podman import Result
 
+from .test_ha_emqx import export_listing
+
 
 def response(config):
     return Result(0, b'WOOWCFG:' + base64.b64encode(json.dumps(config).encode()) + b':END\nok\n', b'')
@@ -107,6 +109,9 @@ class Transport:
         if command == ['emqx', 'eval', emqx.CONFIG_EXPR]:
             self.events.append('read-candidate')
             return response(self.running_config)
+        if command == ['emqx', 'eval', emqx.export_expression('source.tar.gz')]:
+            self.events.append('check-export')
+            return Result(0, export_listing('source.tar.gz'), b'')
         if command == ['emqx', 'eval', emqx.ETC_EXPR]:
             return Result(0, ETC_REPLY, b'')
         if command == ['emqx', 'eval', emqx.TABLES_RECEIPT_EXPR]:
@@ -164,7 +169,8 @@ class CandidateFlowTests(unittest.TestCase):
         self.assertEqual(len(self.invoke(transport)), 4)
         self.assertEqual(transport.running_config, transport.config)
         self.assertEqual(transport.seed['authz/custom.acl'], b'{deny, all}.')
-        for first, second in [('export', 'seed'), ('seed', 'start'), ('start', 'import'), ('import', 'restore')]:
+        for first, second in [('export', 'seed'), ('seed', 'start'), ('start', 'check-export'), ('check-export', 'import'),
+                              ('import', 'restore')]:
             self.assertLess(transport.events.index(first), transport.events.index(second))
         self.assertEqual(transport.events[-1], 'read-candidate')
 

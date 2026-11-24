@@ -23,6 +23,18 @@ NODE = 'emqx@homeassistant.local'
 EXPORT = '/work/out/emqx-export-2026-11-19-10-11-12.345.tar.gz'
 HOCON = (b'connectors {http {ha {url = "http://homeassistant:8123/api/webhook/x"}}}\n'
          b'listeners.ssl.default {ssl_options {certfile = "/ssl/fullchain.pem"}}\n')
+
+
+def export_listing(name, *, roots=('authentication', 'authorization', 'rule_engine'), members=None):
+    """The candidate's answer to ha_emqx.export_expression(name): EMQX's own listing of HA's export (a healthy one)."""
+    base = name[:-len('.tar.gz')]
+    if members is None:
+        members = [[f'{base}/META.hocon', 'regular', 40], [f'{base}/cluster.hocon', 'regular', 900],
+                   *([f'{base}/mnesia/{table}', 'regular', 512] for table in ha_emqx.TABLES)]
+    doc = json.dumps({'roots': list(roots), 'members': members}).encode()
+    return b'WOOWEXP:' + base64.b64encode(doc) + b':END\nok\n'
+
+
 QUADLETS = {
     'emqx.container': b'[Container]\nContainerName=woow-emqx\nImage=docker.io/emqx/emqx:5.8.9\n'
                       b'Environment=EMQX_NODE__NAME=emqx@127.0.0.1\n'
@@ -160,6 +172,8 @@ class World(fk.World):
         return Result(0, b'', b'')
 
     def evaluate(self, role, expression):
+        if expression == ha_emqx.export_expression(EXPORT.rsplit('/', 1)[1]):
+            return export_listing(EXPORT.rsplit('/', 1)[1])
         if expression == ha_emqx.ETC_EXPR:
             return b'WOOWETC:/opt/emqx/etc:ENDok\n'
         if expression == ha_emqx.VM_EXPR:
