@@ -118,7 +118,7 @@ MAX_GZIP_TRAILER = 64
 MAX_GZIP_MEMBERS = 1_000_000
 GZIP_FEED = 64 * 1024            # inflated at a time (what is left over of a piece is copied)
 SAMPLES = 20                     # names listed per area or kind
-MAX_KEPT_NAMES = 2000            # names of skipped entries kept per kind (their digest covers the rest)
+MAX_KEPT_NAMES = 1000            # names of skipped entries kept per kind (above that their digest stands for them)
 MAX_SHOWN_NAME = 120
 # Hard links handed out as files: links that may wait for the second pass, passes over the member, and the size up to
 # which a file with several waiting links is kept in memory for them.
@@ -793,8 +793,10 @@ class _Slice:
         if n <= 0:
             return b''
         data = os.pread(self.fd, n, self.pos)
-        if not data:
-            raise _corrupt('the backup file is truncated')
+        if not data:  # the file was cut off after it was described: no member of it can be trusted any more
+            error = _corrupt('the backup file is truncated')
+            error.job_wide = True
+            raise error
         self.pos += len(data)
         return data
 
@@ -1183,33 +1185,42 @@ SKIP_KINDS = {
 }
 
 
-class _Skipped:
-    """The skipped entries of one kind: their number, the first MAX_KEPT_NAMES names (shown_name) and a digest of the
-    names after those."""
+class SkipList:
+    """The skipped entries of one kind, without keeping them all: how many (`count`), the first SAMPLES names as they may
+    be shown (`first`) and, for a confirmation's key, what stands for every one of them (`key_items`: the names up to
+    MAX_KEPT_NAMES, above that their number and an order-independent digest). The interface of haissues.Names."""
 
     def __init__(self):
         self.count = 0
-        self.names = []
-        self._rest = hashlib.sha256()
+        self.first = []
+        self._names = []
+        self._sum = 0
 
     def add(self, name):
         self.count += 1
-        if len(self.names) < MAX_KEPT_NAMES:
-            self.names.append(shown_name(name))
-        else:
-            self._rest.update(name.encode(ENCODING, ERRORS) + b'\0')
+        if len(self.first) < SAMPLES:
+            self.first.append(name)
+        if self.count <= MAX_KEPT_NAMES:
+            self._names.append(name)
+        digest = hashlib.sha256(name.encode('utf-8', 'surrogatepass')).digest()
+        self._sum = (self._sum + int.from_bytes(digest, 'big')) % (1 << 256)
 
-    def items(self):
-        rest = self.count - len(self.names)
-        return self.names + ([f'另有 {rest} 個（{self._rest.hexdigest()[:16]}）'] if rest else [])
+    def __len__(self):
+        return self.count
+
+    def key_items(self):
+        if self.count <= MAX_KEPT_NAMES:
+            return tuple(self._names)
+        return (f'count={self.count}', f'sum={self._sum:064x}')
 
 
 class Report:
     """What a walk saw: counts of entries handed out, bytes, what was skipped (`skips`; symlinks outside the allowed
     areas, FIFOs and NEVER_READ files also in the older counters) and the add-on's AddonInfo (`addon`, from
-    addon.json)."""
+    addon.json). `names`: what keeps the names of one kind in `skips` (SkipList; an importer passes haissues.Names and
+    hands `skips[kind]` to its confirmation as it is)."""
 
-    def __init__(self):
+    def __init__(self, names=SkipList):
         self.entries = 0            # every entry of the tar
         self.files = self.dirs = self.symlinks = self.hardlinks = 0   # handed out
         self.bytes = 0              # bytes of the regular files handed out
@@ -1219,13 +1230,16 @@ class Report:
         self.absolute_symlinks = 0  # handed out with an absolute target (Select.absolute_symlinks)
         self.skipped_other = 0      # FIFOs (no data)
         self.secret_files = 0       # NEVER_READ entries skipped unread
-        self.skips = {}             # {kind of SKIP_KINDS: _Skipped}
+        self.skips = {}             # {kind of SKIP_KINDS: the names}
         self.addon = None           # AddonInfo
         self.complete = False       # the end of the tar and every final check of the stream passed
         self._areas = {}
+        self._new_names = names
 
     def skip(self, kind, name):
-        self.skips.setdefault(kind, _Skipped()).add(name)
+        if kind not in self.skips:
+            self.skips[kind] = self._new_names()
+        self.skips[kind].add(shown_name(name))
 
     def _skip_symlink(self, name, area):
         self.skip('symlink', name)
@@ -1242,9 +1256,8 @@ class Report:
         return sum(self.skips[kind].count for kind in self._kinds(kinds))
 
     def skip_names(self, *kinds):
-        """Their names as shown to the customer, in the tar's order per kind: all of them up to MAX_KEPT_NAMES per kind,
-        then one item with the number and a digest of the others, so that a confirmation over the list covers all."""
-        return [item for kind in self._kinds(kinds) for item in self.skips[kind].items()]
+        """Their names as they may be shown: the first SAMPLES of every kind, in the tar's order."""
+        return [name for kind in self._kinds(kinds) for name in self.skips[kind].first]
 
     def skip_text(self, *kinds):
         """「裝置檔 2 個、…」 ('' when nothing was skipped)."""
@@ -1261,7 +1274,7 @@ class Report:
         for kind in self._kinds(set(SKIP_KINDS) - {'symlink', 'fifo'}):
             skipped = self.skips[kind]
             notes.append(f'HA 備份中有 {skipped.count} 個{SKIP_KINDS[kind]}沒有搬過來（例如 '
-                         f'{"、".join(skipped.names[:5])}）。')
+                         f'{"、".join(skipped.first[:5])}）。')
         return notes
 
 

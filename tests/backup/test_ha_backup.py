@@ -14,7 +14,9 @@ import io
 import json
 import os
 import random
+import shutil
 import struct
+import subprocess
 import tarfile
 import tempfile
 import time
@@ -946,6 +948,30 @@ class MemberStreamTests(TempFiles):
         gunzip = habackup._Gunzip(io.BytesIO(bomb))
         self.assertLessEqual(len(gunzip.read(10 ** 9)), habackup.CHUNK)
 
+    def test_a_file_cut_off_while_it_is_read(self):
+        """The whole file is at fault then, not one add-on: the job ends (`job_wide`, DESIGN C1)."""
+        path = self.write(hx.two_addons(odoo=hx.tar_bytes([{'name': 'big', 'data': os.urandom(4 << 20)}], compress=True)))
+        with habackup.open_backup(path) as ha, ha.open_addon(hx.ODOO) as stream:
+            os.truncate(path, 1 << 20)
+            with self.assertRaises(BackupError) as caught:
+                list(habackup.iter_entries(stream, habackup.Select(include=())))
+        self.assertEqual((caught.exception.code, caught.exception.job_wide, caught.exception.details),
+                         ('corrupt-archive', True, {'reason': 'the backup file is truncated'}))
+        self.assertFalse(hasattr(hasecuretar.broken('x'), 'job_wide'))
+
+    def test_a_zip_bomb_stops_at_the_budget(self):
+        """IN-20: 256 MiB of zeros in 260 KB, in an entry and behind the archive; nothing of it is kept in memory."""
+        for label, raw in (('entry', hx.tar_bytes([{'name': 'zeros', 'data': bytes(64 << 20)}])),
+                           ('behind the archive', hx.tar_bytes([{'name': 'a', 'data': b'x'}]) + bytes(64 << 20))):
+            data = hx.outer_bytes([(f'{hx.ODOO}.tar.gz', gzip.compress(raw, mtime=0))])
+            with self.subTest(case=label), mock.patch.object(habackup, 'INFLATE_FLOOR', 8 << 20), \
+                    mock.patch.object(habackup, 'INFLATE_RATIO', 100):
+                code, error = code_of(self.read_addon, data, hx.ODOO)
+                self.assertEqual((code, error.details['reason']), ('limit-exceeded', 'the add-on archive inflates too much'))
+                self.assertLess(error.details['limit'], 16 << 20)
+            with self.subTest(case=label, floor='as it is'):
+                self.assertTrue(self.read_addon(data, hx.ODOO)[1].complete, 'below the floor it is only large')
+
     def test_a_stream_can_be_opened_again(self):
         data = hx.two_addons()
         with habackup.open_backup(self.write(data)) as ha, ha.open_addon(hx.ODOO) as first:
@@ -1233,7 +1259,7 @@ class EntryTests(WalkCase):
         self.assertEqual(len([n for n in report.skipped_symlink_samples if n.startswith('data/postgres/')]),
                          habackup.SAMPLES)
         self.assertEqual(len(report.skipped_symlink_samples), 2 * habackup.SAMPLES)
-        self.assertEqual(len(report.skip_names()), 200, 'the customer sees every one')
+        self.assertEqual((len(report.skips['symlink'].key_items()), len(report.skip_names())), (200, habackup.SAMPLES))
         self.assertEqual(report.warnings()[0].count('modules/l'), 5, 'a log line names five')
 
     def test_link_chains_cannot_climb_out_in_any_order(self):
@@ -1456,25 +1482,36 @@ class SkippedEntryTests(WalkCase):
                          (['m1/__manifest__.py'], '大小超出上限的設定檔 1 個'))
 
     def test_the_list_for_the_confirmation(self):
-        """All names up to 2000 a kind, then one item that stands for the others: another name, another list."""
-        def skips(last):
-            raw = b''.join(hx.raw_member(f'd{i:05}', typeflag=b'3') for i in range(habackup.MAX_KEPT_NAMES + 4))
-            report = self.walk([], raw=raw + hx.raw_member(last, typeflag=b'3') + hx.raw_member('a\nb', b'x') + hx.END)[1]
-            return report
-        report, other = skips('last'), skips('lost')
-        self.assertEqual(report.skip_count('device'), habackup.MAX_KEPT_NAMES + 5)
-        self.assertEqual(report.skip_count(), habackup.MAX_KEPT_NAMES + 6)
-        names = report.skip_names('device')
-        self.assertEqual(len(names), habackup.MAX_KEPT_NAMES + 1)
-        self.assertRegex(names[-1], r'^另有 5 個（[0-9a-f]{16}）$')
-        self.assertEqual(report.skip_names('device'), names)
-        self.assertNotEqual(names, other.skip_names('device'))
-        self.assertEqual(names[:-1], other.skip_names('device')[:-1])
-        self.assertEqual(report.skip_names()[0], 'a b', 'kind by kind')
-        self.assertEqual(report.skip_text(), '檔名空白、太長或含控制字元的項目 1 個、裝置檔 2005 個')
+        """What a confirmation is made of covers every name, however many there are: another name, another key."""
+        def skips(count, last='last', **kwargs):
+            raw = b''.join(hx.raw_member(f'd{i:05}', typeflag=b'3') for i in range(count - 1))
+            raw += hx.raw_member(last, typeflag=b'3') + hx.raw_member('a\nb', b'x') + hx.END
+            return self.walk([], raw=raw, report=habackup.Report(**kwargs))[1]
+        few, many = habackup.MAX_KEPT_NAMES, habackup.MAX_KEPT_NAMES + 1
+        for count in (3, few, many):
+            report, other, more = skips(count), skips(count, 'lost'), skips(count + 1)
+            with self.subTest(count=count):
+                self.assertEqual((report.skip_count('device'), report.skip_count()), (count, count + 1))
+                names = report.skips['device']
+                self.assertEqual((len(names), names.count, len(names.first)), (count, count, min(count, 20)))
+                self.assertEqual(len(names.key_items()), count if count <= few else 2)
+                keys = {tuple(sorted(r.skips['device'].key_items())) for r in (report, other, more)}
+                self.assertEqual(len(keys), 3)
+                self.assertEqual(names.key_items(), skips(count).skips['device'].key_items(), 'the same file, the same key')
+        report = skips(many)
+        self.assertEqual(report.skip_names(), ['a b', *(f'd{i:05}' for i in range(20))], 'kind by kind')
+        self.assertEqual(report.skip_text(), '檔名空白、太長或含控制字元的項目 1 個、裝置檔 1001 個')
         self.assertEqual((report.skip_text('fifo'), report.skip_names('fifo'), report.skip_count('fifo')), ('', [], 0))
         self.assertEqual(len(report.warnings()), 2)
         self.assertTrue(all(line.isprintable() for line in report.warnings()))
+        backwards = habackup.SkipList()
+        for name in reversed(['last', *(f'd{i:05}' for i in range(many - 1))]):
+            backwards.add(name)
+        self.assertEqual(backwards.key_items(), report.skips['device'].key_items(), 'in any order')
+
+        class Names(habackup.SkipList):  # an importer's own collector (haissues.Names)
+            pass
+        self.assertIsInstance(skips(3, names=Names).skips['device'], Names)
 
     def test_log_lines_cannot_be_forged(self):
         raw = hx.raw_member('a\n2026-11-25 fake line', b'x') + hx.raw_member('b\u202eevil', typeflag=b'3') + hx.END
@@ -1900,6 +1937,76 @@ class HaosParityTests(TempFiles):
                     names = {os.path.normpath(m.name) for m in tar.getmembers() if m.isreg()}
                 self.assertEqual(f'{hx.ODOO}.tar.gz' in names, found, 'what HAOS does')
                 self.assertEqual(self.problems(data), {hx.ODOO: None if found else 'missing'})
+
+
+class RepackedTests(TempFiles):
+    """UP-03, UP-08, UP-10, UP-13, UP-17: a customer unpacked the backup and packed it again (to take out media, to
+    rename something) -- with the tools of this machine, else as those tools write it."""
+
+    FORMATS = ('gnu', 'oldgnu', 'posix', 'ustar', 'v7')
+
+    def unpack(self, data):
+        folder = Path(tempfile.mkdtemp(dir=self.dir))
+        with tarfile.open(fileobj=io.BytesIO(data)) as tar:
+            for member in tar.getmembers():
+                (folder / member.name.removeprefix('./')).write_bytes(tar.extractfile(member).read())
+        return folder
+
+    def check(self, data, whole=True):
+        path = self.write(data)
+        with open(path, 'rb') as handle:
+            self.assertTrue(habackup.looks_like_ha(handle.fileno()))
+        with habackup.open_backup(path) as ha:
+            self.assertEqual({a['slug']: a.get('problem') for a in ha.layout.summary()['addons']},
+                             {hx.ODOO: None, hx.N8N: None if whole else 'missing'})
+            for slug in (hx.ODOO, hx.N8N) if whole else (hx.ODOO,):
+                with ha.open_addon(slug) as stream:
+                    report = habackup.Report()
+                    self.assertTrue(list(habackup.iter_entries(stream, None, report)))
+                    self.assertTrue(report.complete)
+
+    def run_tool(self, tool, *args, cwd):
+        found = shutil.which(tool)
+        if found is None:
+            self.skipTest(f'no {tool} here')
+        subprocess.run([found, *args], cwd=cwd, check=True, capture_output=True, timeout=60)
+        return (Path(cwd).parent / 'again.tar').read_bytes()
+
+    def test_gnu_tar(self):
+        folder = self.unpack(hx.two_addons())
+        (folder / 'media').mkdir()
+        (folder / 'a link').symlink_to('/etc/passwd')
+        for fmt in self.FORMATS:
+            for names in (['.'], sorted(p.name for p in folder.iterdir())):
+                with self.subTest(format=fmt, names=names[0]):
+                    self.check(self.run_tool('tar', f'--format={fmt}', '-cf', '../again.tar', '--', *names, cwd=folder))
+        (folder / f'{hx.N8N}.tar.gz').unlink()
+        self.check(self.run_tool('tar', '--format=gnu', '-b', '1', '-cf', '../again.tar', '.', cwd=folder), whole=False)
+        encrypted = self.run_tool('tar', '-cf', '../again.tar', '.', cwd=self.unpack(hx.fixture('v3_gzip.tar').read_bytes()))
+        self.assertEqual({m.name: m.encryption for m in self.describe(encrypted).members},
+                         {name: info['encryption'] for name, info in hx.META['fixtures']['v3_gzip.tar']['members'].items()})
+
+    def test_busybox_tar(self):
+        folder = self.unpack(hx.two_addons())
+        if shutil.which('busybox') is None:
+            self.skipTest('no busybox here')
+        self.check(self.run_tool('busybox', 'tar', '-cf', '../again.tar', '.', cwd=folder))
+
+    def test_bsdtar_and_macos(self):
+        """Not on this machine: their PAX records, AppleDouble files, the folder entry and the padding to 10 KiB."""
+        member, n8n, doc = hx.addon_member(), hx.addon_member('woow-n8n'), json.dumps(hx.ha_doc([hx.ODOO, hx.N8N])).encode()
+
+        def mac(name, data):
+            extra = {'LIBARCHIVE.xattr.com.apple.provenance': 'AQIAvA==', 'SCHILY.xattr.com.apple.provenance': b'\x01\x02',
+                     'LIBARCHIVE.creationtime': '1794992487.1234567', 'mtime': '1794992487.123456789',
+                     'SCHILY.dev': '16777231', 'SCHILY.ino': '8652412', 'SCHILY.nlink': '1'}
+            double = hx.pax_member(extra, name=f'./PaxHeader/._{name}') + hx.raw_member(f'./._{name}', b'\0\5\x16\7Mac OS X')
+            return double + hx.pax_member(extra, name=f'./PaxHeader/{name}') + hx.raw_member(f'./{name}', data)
+        data = (hx.pax_member({'mtime': '1794992487.1'}, name='./PaxHeader/.') + hx.raw_member('./', typeflag=b'5')
+                + mac(f'{hx.ODOO}.tar.gz', member) + mac('backup.json', doc) + mac(f'{hx.N8N}.tar.gz', n8n) + hx.END)
+        self.check(data + bytes(-len(data) % 10240))
+        layout = self.describe(data)
+        self.assertEqual(layout.ignored_count, 4, 'the folder and the three AppleDouble files')
 
 
 class FuzzTests(TempFiles):
