@@ -49,8 +49,9 @@ and health checks; the uploaded HA file is deleted first, as the page allows: th
 HA's app password, a wrong password 401; the second user reads the shared file; the public link with its password,
 401 without or with a wrong one; CalDAV and CardDAV objects; the older version on disk and in the versions API;
 richdocuments wopi keys and the cron mode exactly dev-e's; Office capabilities as for dev-e's own account; the
-discovery on this device's gateway; a new data fingerprint; nothing below the data dir is served by the web server;
-root storage and table owners; Office: a document of the second HA user opened in this device's Collabora over WOPI, its
+discovery on this device's gateway; a new data fingerprint; occ files:scan finds the database and the files in agreement;
+nothing below the data dir is served by the web server, Nextcloud's own setup check says so too; root storage and table
+owners; Office: a document of the second HA user opened in this device's Collabora over WOPI, its
 text read back, an edit saved into Nextcloud), restart
 (nextcloud-app.service restarted, verify again), rollback (a: a second restore with a one-shot ExecStartPre failure
 must end rolled-back, verify again; b: the import's safety backup restored: dev-e's own markers are back, the HA-only
@@ -404,6 +405,23 @@ out["web"] = {"control": call("GET", "/core/img/logo/logo.svg")[0], "picked": pi
                         + (["/data/" + q(picked[2:])] if picked.startswith("./") else [])],
               "htaccess": app_sh("sha256sum /var/www/html/data/.htaccess | cut -c1-64"),
               "htaccess_below": app_sh('find /var/www/html/data -mindepth 2 -name .htaccess | wc -l')}
+# Nextcloud's own view: a scan of every user's files against the database, and its setup checks (severities only).
+def occ(*args):
+    p = subprocess.run(["podman", "exec", "-u", "www-data", "nextcloud-app", "php", "occ", *args], capture_output=True,
+                       timeout=1800)
+    return p.returncode, p.stdout.decode("utf-8", "replace")
+rc, text = occ("files:scan", "--all")
+rows = [re.findall(r"[0-9]+", line.rsplit("|", 2)[0]) for line in text.splitlines() if re.match(r"\| [0-9]", line)]
+out["scan"] = dict(zip(("folders", "files", "new", "updated", "removed", "errors"), map(int, rows[-1][:6])), rc=rc) if rows \
+    else {"rc": rc}
+rc, text = occ("setupchecks", "--output=json")
+try:
+    checks = {name.rsplit("\\", 1)[-1]: item.get("severity") for group in json.loads(text).values()
+              for name, item in group.items()}
+except (ValueError, AttributeError):
+    checks = {}
+out["setup"] = {"checks": len(checks), "data_dir": checks.get("DataDirectoryProtected"),
+                "not_success": sorted("%s=%s" % (k, v) for k, v in checks.items() if v not in ("success", "info"))[:40]}
 out["storage"] = sql("SELECT id FROM oc_storages WHERE id LIKE 'local::%' ORDER BY numeric_id")
 out["owners"] = sql("SELECT string_agg(DISTINCT tableowner, ',') FROM pg_tables WHERE schemaname = 'public'")
 out["lastcron"] = sql("SELECT configvalue FROM oc_appconfig WHERE appid = 'core' AND configkey = 'lastcron'")
@@ -1061,6 +1079,13 @@ class Run:
                  fp[0] == 207 and bool(fp[1]) and fp[1] == state.get('fingerprint')
                  and fp[1] != ((self.before.get('client') or {}).get('fingerprint') or [None, None])[1],
                  {'dav': fp, 'config': state.get('fingerprint')})
+        scan = found.get('scan') or {}
+        ev.check(f'{phase}: occ files:scan --all: nothing new, nothing removed, no error (the database and the files agree)',
+                 scan.get('rc') == 0 and scan.get('files', 0) > 0
+                 and all(scan.get(k) == 0 for k in ('new', 'removed', 'errors')), scan)
+        setup = found.get('setup') or {}
+        ev.check(f'{phase}: Nextcloud\'s own setup check says the data directory is protected',
+                 setup.get('data_dir') == 'success' and setup.get('checks', 0) > 20, setup)
         web = found.get('web') or {}
         ev.check(f'{phase}: the web server serves nothing below the data dir (Nextcloud\'s own protection file; static '
                  'control served)',
