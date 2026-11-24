@@ -29,6 +29,12 @@ Cases (each crafts its own cluster in a throwaway container, packs it as an HA a
   t2_hidden_hooks   (iteration 2) a crafted data directory: LiteLLM_Config holds code hooks and the superuser pointed
                     the built-in =(text,text) operator at a SQL function that hides the hook names; what the check
                     sees vs. what export_rows (COPY) moves.
+  planted_objects   (product lane, 2026-11-24; the lane verifier's list) what HA's NON-superuser database owner can
+                    plant besides the cases above: a DOMAIN whose CHECK runs code (and a table with a column of it), row
+                    and statement TRIGGERs (ENABLE ALWAYS) on a LiteLLM table, a forced row-security policy, a rule, an
+                    expression index and a CHECK constraint that run code, trusted EXTENSIONs (pgcrypto, citext) and a
+                    large object; what the check steps and export_rows run, and what the product decides (the
+                    data-shape comparison against a clean cluster's schema, the large-object refusal).
 Every attacker action writes a marker inside the container only (/tmp/woowbk-review-*); the harness reads the markers
 back before the throwaway objects are removed. Output: one JSON document of fixed facts (no data value, no secret;
 the salt is a generated test value, the clusters use trust on their unix socket only)."""
@@ -160,6 +166,47 @@ ALTER DATABASE litellm SET "DateStyle" = 'SQL, DMY';
 ALTER DATABASE litellm SET extra_float_digits = -10;
 ALTER ROLE postgres IN DATABASE litellm SET event_triggers = on;
 """
+
+
+# Objects HA's non-superuser database owner may create itself (each would run woowbk_probe when PostgreSQL uses it).
+PLANTED_SQL = r"""
+SET ROLE litellm;
+CREATE DOMAIN public.woowbk_domain AS text CHECK (public.woowbk_probe('domain_check'));
+CREATE TABLE public.woowbk_domain_table (id integer, v public.woowbk_domain);
+INSERT INTO public.woowbk_domain_table VALUES (1, 'x');
+CREATE FUNCTION public.woowbk_row_trigger() RETURNS trigger LANGUAGE plpgsql AS $f$
+BEGIN PERFORM public.woowbk_probe('table_trigger'); RETURN coalesce(NEW, OLD); END $f$;
+CREATE FUNCTION public.woowbk_stmt_trigger() RETURNS trigger LANGUAGE plpgsql AS $f$
+BEGIN PERFORM public.woowbk_probe('statement_trigger'); RETURN NULL; END $f$;
+CREATE TRIGGER woowbk_trg_row BEFORE INSERT OR UPDATE OR DELETE ON public."LiteLLM_UserTable"
+  FOR EACH ROW EXECUTE FUNCTION public.woowbk_row_trigger();
+CREATE TRIGGER woowbk_trg_stmt AFTER INSERT OR UPDATE OR DELETE OR TRUNCATE ON public."LiteLLM_UserTable"
+  FOR EACH STATEMENT EXECUTE FUNCTION public.woowbk_stmt_trigger();
+ALTER TABLE public."LiteLLM_UserTable" ENABLE ALWAYS TRIGGER woowbk_trg_row;
+ALTER TABLE public."LiteLLM_UserTable" ENABLE ALWAYS TRIGGER woowbk_trg_stmt;
+ALTER TABLE public."LiteLLM_UserTable" ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public."LiteLLM_UserTable" FORCE ROW LEVEL SECURITY;
+CREATE POLICY woowbk_policy ON public."LiteLLM_UserTable" USING (public.woowbk_probe('policy'));
+CREATE RULE woowbk_rule AS ON INSERT TO public."LiteLLM_UserTable" DO ALSO SELECT public.woowbk_probe('rule');
+CREATE FUNCTION public.woowbk_idx(value text) RETURNS text LANGUAGE plpgsql IMMUTABLE AS $f$
+BEGIN PERFORM public.woowbk_probe('index_expr'); RETURN value; END $f$;
+CREATE INDEX woowbk_expr_idx ON public."LiteLLM_UserTable" ((public.woowbk_idx(user_id)));
+ALTER TABLE public."LiteLLM_UserTable" ADD CONSTRAINT woowbk_chk CHECK (public.woowbk_probe('check_constraint')) NOT VALID;
+CREATE EXTENSION pgcrypto;
+CREATE EXTENSION citext;
+SELECT pg_catalog.lo_create(424242);
+RESET ROLE;
+"""
+PLANTED_OBJECTS_SQL = """SELECT json_build_object(
+ 'domains', (SELECT count(*) FROM pg_catalog.pg_type WHERE typtype = 'd' AND typname = 'woowbk_domain'),
+ 'triggers', (SELECT count(*) FROM pg_catalog.pg_trigger WHERE tgname LIKE 'woowbk_trg%' AND tgenabled = 'A'),
+ 'policies', (SELECT count(*) FROM pg_catalog.pg_policy WHERE polname = 'woowbk_policy'),
+ 'rules', (SELECT count(*) FROM pg_catalog.pg_rewrite WHERE rulename = 'woowbk_rule'),
+ 'expression_indexes', (SELECT count(*) FROM pg_catalog.pg_index i JOIN pg_catalog.pg_class c ON c.oid = i.indexrelid
+                        WHERE c.relname = 'woowbk_expr_idx'),
+ 'check_constraints', (SELECT count(*) FROM pg_catalog.pg_constraint WHERE conname = 'woowbk_chk'),
+ 'extensions', (SELECT coalesce(json_agg(extname ORDER BY extname), '[]'::json) FROM pg_catalog.pg_extension),
+ 'large_objects', (SELECT count(*) FROM pg_catalog.pg_largeobject_metadata))"""
 
 
 # LiteLLM_Config as LiteLLM 1.104.0's schema.prisma has it (param_value Json? = jsonb); placeholder values only.
@@ -410,6 +457,8 @@ def craft(case, salt, fingerprint, scratch):
         elif case == 't2_hidden_hooks':
             cluster.script(CONFIG_TABLE_SQL, 'litellm')
             cluster.script(T2_SQL, 'litellm')
+        elif case == 'planted_objects':
+            cluster.script(PLANTED_SQL, 'litellm')
         # The crafting session must not leave markers behind: the volume is what HA's backup would carry.
         tmp.exec('craft', ['sh', '-c', 'rm -f /tmp/woowbk-review-*'], user='postgres', check=False, max_output=4096)
         tmp.stop('craft', timeout=60)
@@ -496,8 +545,9 @@ def inspect(runner, name):
             'ports': host.get('PortBindings') or {}, 'user': (doc.get('Config') or {}).get('User')}
 
 
-def product_path(case, inner, salt):
-    """The product's check steps (and export_rows) on HA's cluster, as ha_litellm.check/convert run them."""
+def product_path(case, inner, salt, trusted=None):
+    """The product's check steps (and export_rows) on HA's cluster, as ha_litellm.check/convert run them; `trusted`:
+    a Schema to compare HA's data shape with (ha_litellm.schema_differences), as the product does with the live one."""
     runner = LabRunner()
     work = Work()
     facts = {'case': case}
@@ -551,6 +601,12 @@ def product_path(case, inner, salt):
                 facts['text_eq_operator_code'] = cluster.query_json(
                     "SELECT to_json((SELECT oprcode::text FROM pg_catalog.pg_operator "
                     "WHERE oid = '=(text,text)'::pg_catalog.regoperator))", 'litellm')
+            if case == 'planted_objects':
+                facts['planted'] = cluster.query_json(PLANTED_OBJECTS_SQL, 'litellm')
+            if trusted is not None and ha_schema is not None:
+                differ = ha_litellm.schema_differences(ha_schema, trusted)
+                facts['schema_differences'] = differ
+                facts['schema_blocker'] = bool(differ and ha_litellm.schema_blocker(differ))
             blockers, warnings = ha_litellm.verdict(src, found, ha_major=18, target_major=17,
                                                     live_migrations_value=found['migrations'], binding=binding)
             facts['blockers'] = blockers
@@ -596,6 +652,23 @@ def product_path(case, inner, salt):
     return facts
 
 
+def clean_schema(inner):
+    """The Schema the product reads from a clean cluster (no planted object)."""
+    runner = LabRunner()
+    with tempctr.TempObjects(runner, job_id('clean'), memory='1g', pids=512, cpus='1') as tmp:
+        pg_ids = tmp.user_ids('ids-pg', PG18, 'postgres')
+        tmp.volume('hapg')
+
+        def produce(out):
+            sink = ha_odoo.PgSink(out, *pg_ids)
+            ha_litellm.scan_member(io.BytesIO(inner), habackup.Report(), pg=sink)
+            sink.close()
+
+        tmp.volume_import('hapg', produce)
+        cluster = ha_litellm.start_ha_cluster(Work(), tmp, PG18)
+        return ha_litellm.read_schema(cluster, ha_litellm.analyse(cluster)['migrations'])
+
+
 def copy_injection():
     """PostgreSQL 17.11's psql (the live litellm-postgres image) fed the way load_rows feeds HA's rows."""
     runner = LabRunner()
@@ -635,7 +708,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--case', required=True,
                         choices=('owner_trojan', 'owner_view', 'superuser_catalog', 'tablespace_map', 'stored_settings',
-                                 'copy_injection', 'stored_variants', 't2_hidden_hooks'))
+                                 'copy_injection', 'stored_variants', 't2_hidden_hooks', 'planted_objects'))
     args = parser.parse_args()
     started = time.monotonic()
     if args.case == 'copy_injection':
@@ -645,8 +718,12 @@ def main():
         fingerprint = hashlib.sha256(b'woow-litellm-salt-v1:' + salt.encode()).hexdigest()[:16]
         scratch = Path(tempfile.mkdtemp(prefix='woowbk-review-', dir=os.environ.get('WOOWBK_REVIEW_SCRATCH')))
         os.chmod(scratch, 0o700)
+        trusted = None
+        if args.case == 'planted_objects':     # the clean cluster's schema stands for this device's (same base tables)
+            clean = craft('clean_base', salt, fingerprint, scratch)
+            trusted = clean_schema(clean)
         inner = craft(args.case, salt, fingerprint, scratch)
-        facts = product_path(args.case, inner, salt)
+        facts = product_path(args.case, inner, salt, trusted)
         for path in scratch.iterdir():
             path.unlink()
         scratch.rmdir()

@@ -1,0 +1,14 @@
+{
+ "source_commit": "92f2461e471a9b4e61498339ca8c5d34160f4fc7",
+ "scope": "arm-builtin",
+ "exit": -15,
+ "elapsed_seconds": 228.4,
+ "stdout_sha256": "dc0b0a24b35c7e166999bac5c90b1ce3bc1a135ec6afc3a0eec436aa982d4a36",
+ "fixed_status": [
+  "source commit 92f2461e471a9b4e61498339ca8c5d34160f4fc7",
+  "dev-d isolation: true none {}"
+ ],
+ "stdout_lines_not_published": 0,
+ "stderr_bytes_not_published": 0,
+ "commercial_acceptance": "not-complete"
+}

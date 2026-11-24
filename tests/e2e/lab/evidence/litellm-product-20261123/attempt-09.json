@@ -1,0 +1,18 @@
+{
+ "source_commit": "a0475c5b588a6e634163c9fff2294e210be94928",
+ "scope": "litellm product flow x86-enc real HA backup on dev-d (attempt 9)",
+ "exit": 1,
+ "elapsed_seconds": 1043.3,
+ "stdout_sha256": "71fd08c3a0bd2c29acb87ba261805e9687576433149d4cdb6d534c8b2a319cb8",
+ "fixed_status": [
+  "source commit a0475c5b588a6e634163c9fff2294e210be94928",
+  "source tree committed: PASS",
+  "dev-d mutation lock acquired: PASS (waited 1039 s)",
+  "dev-d isolation: true none {}",
+  "dev-d memory current=2308022272 limit=4294967296; headroom >= 1.86 GiB; host MemAvailable 4108136 KiB",
+  "dev-d isolation: true none {}",
+  "lock held for 0 s"
+ ],
+ "stderr_bytes_not_published": 517,
+ "commercial_acceptance": "not-complete"
+}

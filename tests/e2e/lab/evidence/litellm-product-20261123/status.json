@@ -1,9 +1,9 @@
 {
  "lane": "litellm-product",
  "date": "2026-11-23",
- "updated": "2026-11-24T03:22+08:00",
+ "updated": "2026-11-24T09:18+08:00",
  "scope": "LiteLLM HA import as the PRODUCT path (owner decision 2026-11-23 「決定1 做」): haapps registers litellm, ha_litellm.py converts with the Omnigent trust rules (this device's schema, HA's rows only), HA's salt replaces litellm-salt-key; the real test runs the Cockpit page's helper commands on dev-d",
- "branch": "R-COCKPIT feat/ha-import-litellm-product-20261123 (base integration/ha-import-batch1-20261123 d812699; merged into integration as d72ae5f at 033f2f7; later commits to be merged again)",
+ "branch": "R-COCKPIT feat/ha-import-litellm-product-20261123 (base integration/ha-import-batch1-20261123 d812699; merged into integration as d72ae5f at 033f2f7 and again as ba637b7 at a0475c5; after a0475c5 only evidence and lab harness commits)",
  "product_commits": [
   "e0c9e56",
   "3bde418",
@@ -18,7 +18,8 @@
   "ce95602",
   "82e68ac",
   "6c5610c",
-  "ec6ac32 (real flow: the 600 s draft check + option A positive case with a lab stub)"
+  "ec6ac32 (real flow: the 600 s draft check + option A positive case with a lab stub)",
+  "b3e587d (litellm_negative_flow.py: real negative product flow; sandbox case planted_objects)"
  ],
  "source": "owner-made real encrypted showcase HA backup woow-litellm 0.1.15 (LiteLLM 1.104.0, PostgreSQL 18.6), SHA-256 9dc5994497d9d6ff4c3ee8d3fcf86f295cf25c69d1eae98227854fee85286f27",
  "target": "dev-d with the WOOWTECH Podman package Woow_podman_litellm dd690ae installed for the run and removed after it (outer network none, isolation checked before/after); production untouched",
@@ -75,17 +76,40 @@
   "secreview-01": {
    "commit": "14be8bc (product code 1a83926)",
    "result": "PASS 69/69 exit 0: the whole product flow on the final code (run by lane litellm-secreview with this driver)"
+  },
+  "09": {
+   "commit": "a0475c5",
+   "result": "FAIL exit 1 (lock held 0 s): the driver's own memory pre-check stopped it before any dev-d change (cgroup 2.3 of 4.3 GB used right after another lane's run)"
+  },
+  "10": {
+   "commit": "6b55ec5 (final product code: ha_litellm.py of 1a83926, suggest.py of 98427dc)",
+   "result": "PASS 73/73 exit 0: the whole Cockpit helper flow with the owner's real encrypted backup; adds the 600 s draft (owner decision 23:28) and option A's positive case (a lab stub app named in check, note and reminders)",
+   "elapsed_s": 1738.2,
+   "lock_held_s": 1737
+  },
+  "negative-01": {
+   "commit": "5dcc569",
+   "exit": 0,
+   "result": "litellm negative flow: 58/58 PASS",
+   "elapsed_s": 704.1,
+   "what": "crafted backups (generated data) must be refused by the product: salt mismatch, unknown add-on version, code hooks, the SR-8 hidden hooks"
   }
  },
  "unit": {
-  "full tests/backup (host-heavy lock)": {
-   "source_commit": "98427dc",
-   "state": "running under the host-heavy lock (results follow in the next evidence commit)"
+  "full tests/backup": {
+   "source_commit": "6b55ec5",
+   "tests": 1507,
+   "not_ok": 7,
+   "which": "only the 7 pre-existing test_ha_omnigent (5F/2E; this branch's base; gone in the integration branch)",
+   "skipped": 6,
+   "seconds": 301,
+   "file": "tests/backup/evidence/litellm-product-20261123/unit-tests-6b55ec5.json"
   },
-  "python3 -I tests/backup/litellm_product_mutations.py (host-heavy lock)": {
-   "source_commit": "98427dc",
+  "mutation check": {
+   "source_commit": "6b55ec5",
    "mutations": 67,
-   "state": "running: 40/40 caught so far (M59-M67 = the readiness limit, run with test_suggest)"
+   "caught": 67,
+   "file": "tests/backup/evidence/litellm-product-20261123/mutation-check-6b55ec5.json"
   },
   "tests.backup.test_suggest (readiness 600 s)": {
    "source_commit": "98427dc",
@@ -93,21 +117,19 @@
    "result": "OK",
    "new": 4
   },
-  "tests/e2e/lab/test_litellm_full_flow.py": {
-   "source_commit": "ec6ac32",
-   "tests": 9,
-   "result": "OK",
-   "new": 1
+  "tests/e2e/lab LiteLLM driver tests": {
+   "source_commit": "b3e587d",
+   "tests": 32,
+   "result": "OK"
   },
   "earlier": "tests/backup/evidence/litellm-product-20261123/unit-tests.json; final review code 1a83926: mutations 58/58 (mutation-check-1a83926.json in the review folder)"
  },
  "open": [
-  "OWNER: SR-7 (os.environ/ references in HA's stored rows make this device's LiteLLM send its own secrets to HA-named hosts; proven on dev-d): refuse the package's secret names (A, review recommendation) / warn (B) / nothing (C) -- asked by main 2026-11-24 02:32, no answer yet",
-  "OWNER (review lane, offered): stricter SR-5 env-var names (the vendor blocklist PATH/LD_PRELOAD/PYTHONPATH...: refuse vs warn); naming stored guardrails with custom_code, MCP servers and pass-through hosts in the check",
+  "KNOWN OPEN RISKS: SR-7 and the ssl_verify-type stored settings (see known_open_risks), deferred by the owner",
+  "OWNER (review lane, offered, not asked yet): stricter SR-5 env-var names (the vendor blocklist PATH/LD_PRELOAD/PYTHONPATH...: refuse vs warn); naming stored custom_code guardrails, MCP servers and pass-through hosts in the check",
   "the host's installed production LiteLLM entry keeps 300 s until the owner installs the new draft from the page (98427dc shows it with a health-timeout note; no production file was touched)",
   "Woow_podman_litellm install waiter (QL_HEALTH_ACTIVE=1 eats the startup-probe budget): package follow-up",
   "ARM: no ARM LiteLLM HA backup exists (the add-on is amd64-only)",
-  "option A non-empty reminder: real proof pending in the next real run (lab stub, ec6ac32); dev-d's real answer is [] (its Hermes LITELLM_API_KEY is empty)",
   "dev-d headscale.service restart loop (team/services-a-2.md; not LiteLLM)"
  ],
  "owner_notes": [
@@ -124,12 +146,27 @@
  ],
  "commercial_acceptance": "not-complete",
  "security_review_fixes_merged": "review/litellm-secreview-20261123 cdf6eba (SR-1..SR-5), fast-forwarded 2026-11-23 22:20",
- "final_product_code": "ha_litellm.py etc. = 1a83926 (review/litellm-secreview-fix2-20261124, merged); suggest.py = 98427dc (readiness 600 s)",
+ "final_product_code": "ha_litellm.py etc. = 1a83926 (review/litellm-secreview-fix2-20261124, merged); suggest.py = 98427dc (readiness 600 s); proven on the real flow by attempt 10",
  "corrections_20261124": [
   "attempt 04: both rollbacks' own-data/key line is FAIL in the record (overclaimed as restored)",
   "attempts 02/03: one product fix (3bde418) + one lab-only workaround (QL_HEALTH_ACTIVE=0), not \"two issues fixed\"",
   "attempt 05: the import and both rollback restores failed; lock 5738 s > 40 min",
   "db73107 spend_logs >= rule: vendor file:line now cited (README Corrections)",
   "the 23:28 readiness decision was listed as an owner decision although decided: implemented in 98427dc"
+ ],
+ "known_open_risks": [
+  {
+   "id": "SR-7",
+   "state": "OPEN, deferred by the owner 2026-11-24 07:22 (「這個可以先不用管」; not accepted as closed, no behaviour change); must be named in the PR text",
+   "what": "os.environ/ references in HA's stored model rows make this device's LiteLLM send its own secrets (the master key) to the host the row names",
+   "proof": "real, dev-d: tests/backup/evidence/litellm-product-security-review-20261123/sr7-env-ref-probe.json",
+   "prepared_not_merged": "wip/litellm-sr7-prep-20261124 (option A); do not merge without an owner decision"
+  },
+  {
+   "id": "ssl_verify-type stored settings",
+   "state": "OPEN, deferred with SR-7 (no behaviour change); must be named in the PR text",
+   "what": "a stored litellm_settings key without its own branch is set on the litellm module (e.g. ssl_verify false turns off TLS verification of provider calls); the check does not name it",
+   "proof": "vendor source only (litellm 1.104.0 proxy_server.py:5815-5821, :6048-6063, :6388; llms/custom_httpx/http_handler.py:331-348); not probed on a running LiteLLM"
+  }
  ]
 }

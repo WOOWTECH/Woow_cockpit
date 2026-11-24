@@ -1,0 +1,29 @@
+{
+ "source_commit": "ef73c0e9dc7a9fd1be4fc3209c546364353eb30e",
+ "scope": "x86-rollback",
+ "exit": 1,
+ "elapsed_seconds": 24.5,
+ "stdout_sha256": "b535d33c5609c72c3b746bd3822d5f222e074728a2d52c4b6ed890455b13d1e6",
+ "fixed_status": [
+  "source commit ef73c0e9dc7a9fd1be4fc3209c546364353eb30e",
+  "dev-d isolation: true none {}",
+  "lock acquired after 0 s",
+  "dev-d isolation: true none {}",
+  "dev-d memory current=1600413696 limit=4294967296 headroom=2694553600",
+  "host MemAvailable=3062104 KiB disk free=18819837952 B",
+  "CHECK setup: the scheduled-backup timer is masked before the install (shared lab, no schedule wanted): PASS",
+  "CHECK setup: the installed engine is this tree (every module and the helper SHA-256 equal): PASS",
+  "CHECK setup: the installed helper answers status with this tree's VERSION: PASS",
+  "CHECK setup: a device key exists (key-init_ the kit is never read): PASS",
+  "CHECK setup: status: emqx running, no problems: PASS",
+  "CHECK setup: no fail-once or tamper drop-in, script or marker of an earlier run: PASS",
+  "CHECK setup: no anonymous volume left on dev-d (every image VOLUME path of a throwaway mounted): FAIL",
+  "STEP setup: FAIL seconds=23",
+  "dev-d isolation: true none {}",
+  "lock held for 23 s",
+  "RESULT 6/7 passed"
+ ],
+ "stdout_lines_not_published": 0,
+ "stderr_bytes_not_published": 0,
+ "commercial_acceptance": "not-complete"
+}

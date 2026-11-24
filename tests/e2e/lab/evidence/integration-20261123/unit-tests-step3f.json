@@ -1,0 +1,172 @@
+{
+  "schema_version": 1,
+  "kind": "unit-tests",
+  "lane": "integration-3",
+  "step": "3f (litellm-product follow-up: 600 s; omnigent-product merge, owner decision 1)",
+  "tested_commits": {
+    "targeted modules": "the staged merges in the integration worktree (committed unchanged as ba637b7 and 97c22c9)",
+    "full tests/backup + RealBackupTests": "97c22c9 (detached worktree /tmp/int3-suite-20261124)",
+    "node tests/backup-ui.mjs": "97c22c9 (detached worktree /tmp/int3-suite-20261124)"
+  },
+  "tree": "62fa9af (step 3e evidence) + ba637b7 (merge feat/ha-import-litellm-product-20261123 a0475c5) + 97c22c9 (merge feat/ha-import-omnigent-product-20261123 cd96340)",
+  "merges": [
+    {
+      "lane": "litellm-product (follow-up)",
+      "branch": "feat/ha-import-litellm-product-20261123",
+      "tip": "a0475c5",
+      "merge_commit": "ba637b7",
+      "contains": "98427dc LiteLLM health checks 600 s in catalog-suggest (owner decision 2026-11-23 23:28), ec6ac32 harness, a0475c5 evidence corrections",
+      "conflicts": "none; 8 of 9 files == a0475c5, docs/backup/CONTRACT.md auto-merged (patch-id equal)",
+      "taken_at": "the main session's 07:33 order (a0475c5 named); SR-7 is deferred by the owner (2026-11-24 07:22), wip/litellm-sr7-prep-20261124 NOT merged"
+    },
+    {
+      "lane": "omnigent-product",
+      "branch": "feat/ha-import-omnigent-product-20261123",
+      "tip": "cd96340",
+      "merge_commit": "97c22c9",
+      "contains": "product code 97c994f: the public SECURITY_BLOCKER hold replaced by the enforced product path (only HA's data, this device's schema, HA rows loaded without privileges, answers re-checked on the new cluster), security review SR-1..SR-6 of iterations 1 and 2, the bidirectional-control hardening of the shared job log and hacommon.names; real dev-d runs 112/112 (x86/ARM, plain/encrypted) and 118/118 (test mode)",
+      "conflicts": "none; 55 theirs-only files == cd96340; 7 files changed on both sides auto-merged (ha_odoo.py, haimport.py, backup.js, docs/backup.md, CONTRACT.md, backup-ui.mjs, omnigent_real_ha.py): line proof 0 differing lines for all seven, patch-id both ways SAME for six",
+      "owner_decision_1_replaced_assertions": [
+        "tests/backup/test_b1_01_guard.py: 'convert/restore refuse with SECURITY_BLOCKER before any work' -> the old restore_dump/carry_accounts/SECURITY_BLOCKER names must not exist; the product entry reads this device's schema before anything of HA's runs",
+        "tests/backup/test_ha_omnigent_candidate.py::test_request_fields_cannot_enable_public_conversion (message == SECURITY_BLOCKER) -> request fields select nothing, the product conversion is the only one",
+        "tests/backup/test_ha_omnigent_trusted.py::test_public_guards_stay_closed -> assertFalse(hasattr(omni, 'SECURITY_BLOCKER')) + trusted-schema tests",
+        "tests/backup/test_ha_omnigent.py: whole-dump conversion assertions (pg_restore of HA's schema, REASSIGN OWNED, TOC) -> data-only conversion assertions",
+        "tests/e2e/lab/omnigent_real_ha.py: 'public guard still refuses' -> 'product path enforced (no SECURITY_BLOCKER, trusted_schema present)'"
+      ],
+      "guards_kept": "EMQX PRESERVATION_BLOCKER unchanged at 97c22c9; LiteLLM as merged in d72ae5f",
+      "taken_at": "the product lane's READY/DONE line 07:41 (cd96340) after omnigent-secreview's iteration-2 hand-off (00:22) and its verifier (02:31)"
+    }
+  ],
+  "suites": {
+    "tests.backup suggest/catalog/litellm modules on the staged merge ba637b7": {
+      "tests": 154,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "expected_failures": 0,
+      "unexpected_successes": 0,
+      "guard_refused_calls": 0,
+      "shim_hits": 0,
+      "run_native": "denied",
+      "elapsed_seconds": 9,
+      "not_ok_ids": [],
+      "ok": 154
+    },
+    "lab test_litellm_full_flow + test_litellm_real_ha on the staged merge ba637b7": {
+      "tests": 21,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "expected_failures": 0,
+      "unexpected_successes": 0,
+      "guard_refused_calls": 0,
+      "shim_hits": 0,
+      "run_native": "denied",
+      "elapsed_seconds": 1,
+      "not_ok_ids": [],
+      "ok": 21
+    },
+    "17 tests/backup modules (9 Omnigent, b1_01_guard, common, jobs, import, flows, redact, b1_real, registry, odoo, cli) on the staged merge 97c22c9": {
+      "tests": 317,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "expected_failures": 0,
+      "unexpected_successes": 0,
+      "guard_refused_calls": 0,
+      "shim_hits": 0,
+      "run_native": "denied",
+      "elapsed_seconds": 137,
+      "not_ok_ids": [],
+      "ok": 317
+    },
+    "lab test_omnigent_full_flow + test_omnigent_real_ha + test_dev_d_guard on the staged merge 97c22c9": {
+      "tests": 31,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "expected_failures": 0,
+      "unexpected_successes": 0,
+      "guard_refused_calls": 0,
+      "shim_hits": 0,
+      "run_native": "denied",
+      "elapsed_seconds": 2,
+      "not_ok_ids": [],
+      "ok": 31
+    },
+    "tests.backup.test_litellm_lab_runner --exe-only at 97c22c9": {
+      "tests": 6,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "expected_failures": 0,
+      "unexpected_successes": 0,
+      "guard_refused_calls": 0,
+      "shim_hits": 0,
+      "run_native": "denied",
+      "elapsed_seconds": 1,
+      "not_ok_ids": [],
+      "ok": 6
+    },
+    "tests/backup full at 97c22c9 (real batch-1 backups)": {
+      "not_ok_explained": "only test_litellm_lab_runner 5 (this lane's host guard refuses the test's own fake child; 6/6 with --exe-only above); the 7 test_ha_omnigent SECURITY_BLOCKER not-ok of earlier steps are gone with the Omnigent merge",
+      "tests": 1604,
+      "failures": 2,
+      "errors": 3,
+      "skipped": 1,
+      "expected_failures": 0,
+      "unexpected_successes": 0,
+      "guard_refused_calls": 6,
+      "shim_hits": 0,
+      "run_native": "denied",
+      "elapsed_seconds": 392,
+      "not_ok_ids": [
+        "tests.backup.test_litellm_lab_runner.LabRunnerTests.test_abort_is_forwarded",
+        "tests.backup.test_litellm_lab_runner.LabRunnerTests.test_exact_reader_capture_boundary",
+        "tests.backup.test_litellm_lab_runner.LabRunnerTests.test_input_and_file_output_are_forwarded_and_bounded",
+        "tests.backup.test_litellm_lab_runner.LabRunnerTests.test_real_child_overflow_is_bounded_and_sanitized",
+        "tests.backup.test_litellm_lab_runner.LabRunnerTests.test_stderr_and_failures_are_not_returned"
+      ],
+      "ok": 1598
+    },
+    "tests.backup.test_ha_backup.RealBackupTests with the 20261118 backups at 97c22c9": {
+      "tests": 1,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "expected_failures": 0,
+      "unexpected_successes": 0,
+      "guard_refused_calls": 0,
+      "shim_hits": 0,
+      "run_native": "denied",
+      "elapsed_seconds": 13,
+      "not_ok_ids": [],
+      "ok": 1
+    },
+    "node tests/backup-ui.mjs at 97c22c9": {
+      "tests": 105,
+      "pass": 105,
+      "fail": 0,
+      "skipped": 0,
+      "cancelled": 0,
+      "elapsed_seconds": 593,
+      "not_ok": []
+    }
+  },
+  "not_run_here": "tests/e2e/lab full discover (last at fb284b8; runs again after the last merge). Lab tests that need run_native (host /usr/bin/podman) stay unrun.",
+  "not_changed": "No test, assertion or public guard was changed by this lane; the replaced assertions are the product lane's own change under owner decision 1.",
+  "commercial_acceptance": "not-complete",
+  "private_logs_sha256": {
+    "m20-lit.log": "e64ff7b8d35314083abd43f99e1c59f8b32b688ac5db55aa26db8b403a93cdb4",
+    "m20-lit.out": "e1756164c1a3d2516083e150db6874757c827b1743668a4c4e83df1a395dd876",
+    "m20-litlab.out": "f58cc93c9f2baf519af5e78f00efc46320d9c63353bdb0ddbd4bab997854731d",
+    "m21-omni.log": "863f0f083d43dbdfc318135fd28dbfdce78644e04dfbf94b76d9a19b52ae201f",
+    "m21-omni.out": "3e7a3544c9e5d2070024a63102217111c687bb4e296783a2f52e336c40486c40",
+    "m21-omnilab.out": "8eb3defa5940cce1f316b9d06f8b3a656741438b2621455eef57f875d62d06ee",
+    "m21-runner.out": "de1d4a0cd0ce2eecaf58b00cae07b85c022e3e9bea8d8f44fd6afcf99e8a2e7a",
+    "m21-backup.log": "d85c2fff789fb300a1ef3f4d7b9b950beb6e68a101870083623fbf4fa7306d64",
+    "m21-backup.out": "5c3cefe9369c08ba480361080e109146e201b140600be8d0358fc68978805ac6",
+    "m21-ha118.out": "b407e35f68cdc04810e882ad5a530c0c3bc24f6672dce0a8dc7259cc1dc5a464",
+    "m21-ui.log": "d628b05c1ba2f2632246779ee1bac040f9ad29fe2a745fdff557d7785d4974f4"
+  }
+}

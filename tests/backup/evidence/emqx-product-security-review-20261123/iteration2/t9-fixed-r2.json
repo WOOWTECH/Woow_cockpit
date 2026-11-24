@@ -1,0 +1,43 @@
+{
+ "attempt": "t9-fixed-r2",
+ "backup_engine_tree": "ede63cd5dbbd93c853c0ec305fbd66856f7a5ee7",
+ "command": "-I t9_env_argv.py fixed",
+ "commercial_acceptance": "not-complete",
+ "credentials": "generated per run; HA key (T11) read in-process by the b1 Secrets reader, never printed",
+ "date": "2026-11-24",
+ "elapsed_s": 19.6,
+ "exit_code": 0,
+ "iteration": 2,
+ "lane": "emqx-secreview (SR-OWNER-1942)",
+ "result": {
+  "canary_sha256": "5c00c223703333eeb95ab8abc0b4941d82a4c73eeff2392e21ebad7a6f5f358b",
+  "candidate_env_has_key": false,
+  "codebase": "fixed",
+  "dangling_volumes_after": 23,
+  "device_way": {
+   "container_got_value": true,
+   "podman_run_cmdlines_seen": 1,
+   "processes_with_value_in_cmdline": 0,
+   "samples": 78
+  },
+  "env_file_mode": "0600",
+  "proc_hidepid": false,
+  "product": {
+   "cmdline_modes": [],
+   "container_got_value": true,
+   "podman_run_cmdlines_seen": 1,
+   "process_names": [],
+   "processes_with_value_in_cmdline": 0,
+   "samples": 85
+  },
+  "product_cleanup_left": 0,
+  "result": "NOT-EXPOSED",
+  "test": "T9 EnvironmentFile values on the candidate command line (SR-8)"
+ },
+ "source_commit": "abff1a0 (sec/emqx-secreview2-20261124)",
+ "status_lines": [
+  "{\"result\": \"NOT-EXPOSED\", \"product\": {\"samples\": 85, \"podman_run_cmdlines_seen\": 1, \"processes_with_value_in_cmdline\": 0, \"process_names\": [], \"cmdline_modes\": [], \"container_got_value\": true}, \"device_way\": {\"samples\": 78, \"podman_run_cmdlines_seen\": 1, \"processes_with_value_in_cmdline\": 0, \"container_got_value\": true}, \"proc_hidepid\": false, \"product_cleanup_left\": 0, \"dangling_volumes_after\": 23}"
+ ],
+ "stdout_sha256": "55fac4870345db53b9d83ede501704547330fa9304f71941ad70f78df8c151df",
+ "store": "labpodman (separate --root, lab only), every podman run --network none"
+}
