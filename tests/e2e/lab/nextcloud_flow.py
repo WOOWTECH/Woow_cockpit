@@ -50,7 +50,8 @@ HA's app password, a wrong password 401; the second user reads the shared file; 
 401 without or with a wrong one; CalDAV and CardDAV objects; the older version on disk and in the versions API;
 richdocuments wopi keys and the cron mode exactly dev-e's; Office capabilities as for dev-e's own account; the
 discovery on this device's gateway; a new data fingerprint; nothing below the data dir is served by the web server;
-root storage and table owners), restart
+root storage and table owners; Office: a document of the second HA user opened in this device's Collabora over WOPI, its
+text read back, an edit saved into Nextcloud), restart
 (nextcloud-app.service restarted, verify again), rollback (a: a second restore with a one-shot ExecStartPre failure
 must end rolled-back, verify again; b: the import's safety backup restored: dev-e's own markers are back, the HA-only
 users are gone, dev-e's own account logs in), after (as --negative), cleanup, leaks (every secret named above).
@@ -406,6 +407,203 @@ out["web"] = {"control": call("GET", "/core/img/logo/logo.svg")[0], "picked": pi
 out["storage"] = sql("SELECT id FROM oc_storages WHERE id LIKE 'local::%' ORDER BY numeric_id")
 out["owners"] = sql("SELECT string_agg(DISTINCT tableowner, ',') FROM pg_tables WHERE schemaname = 'public'")
 out["lastcron"] = sql("SELECT configvalue FROM oc_appconfig WHERE appid = 'core' AND configkey = 'lastcron'")
+print(json.dumps(out))
+'''
+# Office, as the page opens a document (richdocuments: OCS createDirect -> the direct page -> cool.html): the second HA user's
+# own .docx, copied, is opened in THIS device's Collabora over WOPI, its text read back, a text typed and saved, and found in
+# Nextcloud; the copy and its trash entry are deleted. Settings are this device's own and unchanged: Collabora calls Nextcloud
+# back at http://127.0.0.1:18081 (dev-e's public address), which inside the Office container is the container itself, so a
+# throwaway relay (the gateway's own image) in THAT container's network passes the call on to the gateway container. That one
+# network hop is the lab's; everything else is the product. Prints codes and booleans only (never a token or a URL).
+OFFICE = r'''
+import base64, hashlib, html, io, json, os, re, shutil, socket, struct, subprocess, sys, time, urllib.error, urllib.parse
+import urllib.request, zipfile
+REQ = json.loads(sys.stdin.read())
+HOST, PORT = "127.0.0.1", 18081
+NC = "http://%s:%d" % (HOST, PORT)
+user, pw = REQ["user"], REQ["user_pw"]
+assert re.fullmatch(r"[A-Za-z0-9._@-]{1,64}", user)
+RELAY, RDIR = "woowbk-ncoffice-relay", os.path.expanduser("~/.woowbk-ncoffice")
+CONF = ("server { listen 127.0.0.1:18081; client_max_body_size 0; location / { proxy_pass http://nextcloud-gateway:8080; "
+        "proxy_http_version 1.1; proxy_set_header Host $http_host; } }\n")
+MARK = "WOOWOFFICECHECK"
+out = {}
+def run(*cmd, timeout=180):
+    return subprocess.run(list(cmd), capture_output=True, timeout=timeout)
+def call(method, path, headers=None, body=None, auth=True):
+    h = dict(headers or {})
+    if auth:
+        h["Authorization"] = "Basic " + base64.b64encode(("%s:%s" % (user, pw)).encode()).decode()
+    req = urllib.request.Request(path if path.startswith(NC + "/") else NC + path, method=method, headers=h, data=body)
+    try:
+        with urllib.request.urlopen(req, timeout=120) as r:
+            return r.status, r.read()
+    except urllib.error.HTTPError as e:
+        return e.code, e.read()
+def q(text):
+    return urllib.parse.quote(text, safe="/")
+def enc(text):
+    return urllib.parse.quote(text, safe="")
+def initial(page, name):
+    m = re.search(rb'id="initial-state-richdocuments-' + name + rb'" value="([A-Za-z0-9+/=]+)"', page or b"")
+    return json.loads(base64.b64decode(m.group(1))) if m else {}
+def docx_text(data):
+    with zipfile.ZipFile(io.BytesIO(data)) as z:
+        return [html.unescape(t) for t in re.findall(r"<w:t(?: [^>]*)?>([^<]+)</w:t>", z.read("word/document.xml").decode("utf-8"))]
+def words_of(text):
+    return re.findall(r"[A-Za-z]{4,}", text)
+class WS:
+    def __init__(self, path):
+        self.s = socket.create_connection((HOST, PORT), timeout=60)
+        key = base64.b64encode(os.urandom(16)).decode()
+        self.s.sendall(("GET %s HTTP/1.1\r\nHost: %s:%d\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: %s\r\n"
+                        "Sec-WebSocket-Version: 13\r\nOrigin: %s\r\n\r\n" % (path, HOST, PORT, key, NC)).encode())
+        self.buf = b""
+        while b"\r\n\r\n" not in self.buf:
+            part = self.s.recv(4096)
+            if not part:
+                break
+            self.buf += part
+        head, _sep, self.buf = self.buf.partition(b"\r\n\r\n")
+        want = base64.b64encode(hashlib.sha1((key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11").encode()).digest()).decode()
+        self.ok = head.startswith(b"HTTP/1.1 101 ") and want in head.decode("latin-1")
+    def send(self, text, op=1):
+        data = text.encode() if isinstance(text, str) else text
+        mask, n = os.urandom(4), len(data)
+        head = bytes([0x80 | op]) + (bytes([0x80 | n]) if n < 126 else bytes([0xFE]) + struct.pack(">H", n))
+        assert n < 65536
+        self.s.sendall(head + mask + bytes(b ^ mask[i % 4] for i, b in enumerate(data)))
+    def need(self, n):
+        while len(self.buf) < n:
+            part = self.s.recv(65536)
+            if not part:
+                raise EOFError
+            self.buf += part
+        data, self.buf = self.buf[:n], self.buf[n:]
+        return data
+    def message(self):
+        parts = b""
+        while True:
+            a, b = self.need(2)
+            n = b & 127
+            n = struct.unpack(">H", self.need(2))[0] if n == 126 else struct.unpack(">Q", self.need(8))[0] if n == 127 else n
+            data, op = self.need(n), a & 15
+            if op == 9:
+                self.send(data, 10)
+            elif op == 8:
+                raise EOFError
+            elif op in (0, 1, 2):
+                parts += data
+                if a & 128:
+                    return parts
+def wait_for(ws, wanted, seconds):
+    # The first message that starts with one of `wanted`, else None (timeout) or b"closed".
+    end = time.monotonic() + seconds
+    while time.monotonic() < end:
+        ws.s.settimeout(max(1, end - time.monotonic()))
+        try:
+            msg = ws.message()
+        except (socket.timeout, TimeoutError):
+            return None
+        except EOFError:
+            return b"closed"
+        if msg.startswith(b"perm: "):
+            out["perm"] = msg[:20].decode("ascii", "replace")
+        if msg.startswith(wanted):
+            return msg
+    return None
+p = run("podman", "exec", "-u", "www-data", "nextcloud-app", "sh", "-c",
+        'cd "$1" && find . -type f -name "*.docx" | LC_ALL=C sort | head -n 1', "sh", "/var/www/html/data/%s/files" % user)
+name = p.stdout.decode("utf-8", "replace").strip()[2:]
+data = run("podman", "exec", "-u", "www-data", "nextcloud-app", "cat", "/var/www/html/data/%s/files/%s" % (user, name)).stdout
+words = words_of(" ".join(docx_text(data))) if name else []
+out["document"] = [bool(name), len(data) > 1000, len(words) >= 20]
+COPY = "woow-office-check-%d.docx" % os.getpid()
+dav = "/remote.php/dav/files/%s/%s" % (q(user), COPY)
+try:
+    out["copy"] = call("PUT", dav, {"Content-Type": "application/octet-stream"}, data)[0]
+    _c, body = call("PROPFIND", dav, {"Depth": "0", "Content-Type": "application/xml"}, b'<?xml version="1.0"?><d:propfind '
+                    b'xmlns:d="DAV:" xmlns:oc="http://owncloud.org/ns"><d:prop><oc:fileid/></d:prop></d:propfind>')
+    m = re.search(rb"<oc:fileid>([0-9]{1,18})</oc:fileid>", body or b"")
+    c, body = call("POST", "/ocs/v2.php/apps/richdocuments/api/v1/document?format=json",
+                   {"OCS-APIRequest": "true", "Content-Type": "application/json"}, json.dumps({"fileId": int(m.group(1))}).encode())
+    url = json.loads(body)["ocs"]["data"]["url"] if c == 200 else ""
+    out["direct"] = [c, url.startswith((NC + "/index.php/apps/richdocuments/direct/", NC + "/apps/richdocuments/direct/"))]
+    c, page = call("GET", url, auth=False)
+    doc = initial(page, b"document")
+    out["page"] = [c, bool(doc), str(doc.get("urlsrc", "")).startswith(NC + "/browser/")]
+    token, ttl = str(doc.get("token", "")), str(int(doc.get("token_ttl") or 0) * 1000)  # 1e3*, as richdocuments' page does
+    src = NC + "/index.php/apps/richdocuments/wopi/files/" + str(doc.get("fileId"))
+    c, body = call("GET", src + "?access_token=" + enc(token), auth=False)
+    info = json.loads(body) if c == 200 else {}
+    out["wopi_info"] = [c, info.get("BaseFileName") == COPY, info.get("UserId") == user, info.get("UserCanWrite") is True]
+    c, body = call("GET", src + "/contents?access_token=" + enc(token), auth=False)
+    out["wopi_file"] = [c, body == data]
+    out["wopi_wrong_token"] = call("GET", src + "?access_token=" + "x" * 32, auth=False)[0]
+    os.makedirs(RDIR, mode=0o755, exist_ok=True)
+    with open(RDIR + "/relay.conf", "w") as f:
+        f.write(CONF)
+    os.chmod(RDIR + "/relay.conf", 0o644)
+    out["relay"] = run("podman", "run", "-d", "--rm", "--pull=never", "--name", RELAY, "--label", "woowbk.lab=ncoffice-relay",
+                       "--network", "container:nextcloud-office", "--memory", "64m",
+                       "-v", RDIR + "/relay.conf:/etc/nginx/conf.d/default.conf:ro",
+                       "docker.io/nginxinc/nginx-unprivileged:1.29.3-alpine").returncode
+    inner = src + "?access_token=" + enc(token) + "&access_token_ttl=" + ttl
+    started = time.monotonic()
+    for attempt in (1, 2, 3):  # the relay needs a moment; a busy host more
+        time.sleep(5 * attempt)
+        ws = WS("/cool/%s/ws?WOPISrc=%s&compat=/ws" % (enc(inner), enc(src)))
+        msg = None
+        if ws.ok:
+            ws.send("coolclient 0.1 %d 0" % int(time.time() * 1000))
+            ws.send("load url=%s accessibilityState=false deviceFormFactor=desktop darkTheme=false timezone=Asia/Taipei" % enc(inner))
+            msg = wait_for(ws, (b"status:", b"error:"), 180)
+        out["loaded"] = [attempt, ws.ok, bool(msg) and msg.startswith(b"status:"), round(time.monotonic() - started, 1)]
+        if out["loaded"][2]:
+            break
+        ws.s.close()
+    if out["loaded"][2]:
+        ws.send("downloadas name=woowprobe.txt id=export format=txt options=")
+        msg = wait_for(ws, (b"downloadas:", b"error:"), 120) or b""
+        m = re.search(rb"downloadid=([A-Za-z0-9_-]+)", msg)
+        c, body = call("GET", "/cool/%s/download/%s?WOPISrc=%s&attachment=0" % (enc(inner), m.group(1).decode(), enc(src)),
+                       auth=False) if m else (None, b"")
+        got = words_of(body.decode("utf-8", "replace"))
+        out["text"] = [c, len(words), sum(w in set(got) for w in words), got[:20] == words[:20]]
+        ws.send("uno .uno:GoToEndOfDoc")
+        ws.send("textinput id=0 text=" + MARK)
+        time.sleep(2)
+        ws.send("save dontTerminateEdit=1 dontSaveIfUnmodified=1")
+        msg, end = b"", time.monotonic() + 120
+        while time.monotonic() < end and msg is not None and msg != b"closed" and b".uno:Save" not in msg and not msg.startswith(b"error:"):
+            msg = wait_for(ws, (b"unocommandresult:", b"error:"), 120)
+        out["saved"] = bool(msg) and b'.uno:Save' in msg and b'"success":true' in msg
+        found, body = False, b""
+        for _ in range(30):
+            c, body = call("GET", dav)
+            found = c == 200 and MARK in "".join(docx_text(body))
+            if found:
+                break
+            time.sleep(2)
+        out["saved_in_nextcloud"] = [found, found and words_of(" ".join(docx_text(body)))[:20] == words[:20]]
+        try:
+            ws.send(b"\x03\xe8", 8)
+        except OSError:
+            pass
+        ws.s.close()
+finally:
+    for _ in range(20):  # the editor may still hold the file for a moment
+        out["deleted"] = call("DELETE", dav)[0]
+        if out["deleted"] in (204, 404):
+            break
+        time.sleep(3)
+    _c, body = call("PROPFIND", "/remote.php/dav/trashbin/%s/trash" % q(user), {"Depth": "1"})
+    hrefs = [h for h in re.findall(r"<d:href>([^<]+)</d:href>", (body or b"").decode("utf-8", "replace"))
+             if urllib.parse.unquote(h).rsplit("/", 1)[-1].startswith(COPY)]
+    out["trash_deleted"] = [call("DELETE", h)[0] for h in hrefs]
+    run("podman", "rm", "-f", "-t", "5", RELAY)
+    shutil.rmtree(RDIR, ignore_errors=True)
+    out["relay_gone"] = run("podman", "container", "exists", RELAY).returncode != 0
 print(json.dumps(out))
 '''
 DROPIN_DIR_REL = '.config/systemd/user/nextcloud-app.service.d'
@@ -781,6 +979,29 @@ class Run:
                 request.update({kind: facts[kind], f'{kind}_uid': facts[f'{kind}_uid']})
         return drv.device_python(CLIENT, request, timeout=1800)
 
+    def office(self, phase):
+        """A document of the second HA user opened, read and edited in this device's Collabora (OFFICE)."""
+        ev, facts, secrets = self.ev, self.args.facts, self.args.secrets
+        if not facts.get('user2'):
+            return
+        out = drv.device_python(OFFICE, {'user': facts['user2'], 'user_pw': secrets[facts['user2_pw']]}, timeout=1800)
+        ev.save(f'office-{phase}.json', out)
+        ev.check(f'{phase}: Office: the HA user\'s document has a WOPI session of this device (its file served, wrong token 403)',
+                 out.get('document') == [True, True, True] and out.get('copy') == 201 and out.get('direct') == [200, True]
+                 and out.get('page') == [200, True, True] and out.get('wopi_info') == [200, True, True, True]
+                 and out.get('wopi_file') == [200, True] and out.get('wopi_wrong_token') == 403, out)
+        text = out.get('text') or [None, 0, 0, False]
+        ev.check(f'{phase}: Office: this device\'s Collabora opens the document over WOPI and its text is the document\'s',
+                 out.get('relay') == 0 and bool(out.get('loaded')) and out['loaded'][2] is True
+                 and out.get('perm') == 'perm: edit' and text[0] == 200 and text[1] >= 20 and text[2] == text[1] and text[3] is True,
+                 {k: out.get(k) for k in ('relay', 'loaded', 'perm', 'text')})
+        ev.check(f'{phase}: Office: a text typed in Collabora is saved into Nextcloud (the rest of the document kept)',
+                 out.get('saved') is True and out.get('saved_in_nextcloud') == [True, True],
+                 {k: out.get(k) for k in ('saved', 'saved_in_nextcloud')})
+        ev.check(f'{phase}: Office: the copy, its trash entry and the lab relay are gone',
+                 out.get('deleted') == 204 and out.get('trash_deleted') == [204] and out.get('relay_gone') is True,
+                 {k: out.get(k) for k in ('deleted', 'trash_deleted', 'relay_gone')})
+
     @staticmethod
     def same_sha(found, want):
         """A full SHA-256 equals; a recorded 16-character prefix (the showcase lane prints prefixes) is its start."""
@@ -850,6 +1071,7 @@ class Run:
                  found.get('storage') == 'local::/var/www/html/data/' and found.get('owners') == 'oc_admin',
                  {k: found.get(k) for k in ('storage', 'owners')})
         ev.log(f'{phase}: lastcron {found.get("lastcron")}')
+        self.office(phase)
         return found
 
     def restart(self):
@@ -1050,7 +1272,7 @@ def negative(args):
 
 def self_check():
     compile((HERE / 'nextcloud_flow.py').read_text(encoding='utf-8'), 'nextcloud_flow.py', 'exec')
-    for script in (STATE, ENGINE_HASHES, LEAKS, CANDIDATE, CLIENT):
+    for script in (STATE, ENGINE_HASHES, LEAKS, CANDIDATE, CLIENT, OFFICE):
         compile(script, 'device', 'exec')
     assert all(SAFE_LABEL.sub('', name) == name for name in ('check: amd64, add-on 0.2.3, target 35.0.1.1',))
     print('self-check: PASS')
