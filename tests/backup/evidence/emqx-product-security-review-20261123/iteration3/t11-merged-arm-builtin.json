@@ -1,0 +1,58 @@
+{
+ "attempt": "t11-merged-arm-builtin",
+ "backup_engine_tree": "865c930f392006e0080de506eb7c425fd81becd7",
+ "command": "t11_profile_real.py merged arm builtin",
+ "commercial_acceptance": "not-complete",
+ "credentials": "generated per run; HA key (T11) read in-process by the b1 Secrets reader, never printed",
+ "date": "2026-11-24",
+ "elapsed_s": 192.5,
+ "exit_code": 0,
+ "iteration": 3,
+ "lane": "emqx-secreview (SR-OWNER-1942)",
+ "result": {
+  "arch": "arm",
+  "candidate_env_file_flag": true,
+  "candidate_has_env_file_cookie": true,
+  "candidate_profile": [
+   "file",
+   "built_in_database"
+  ],
+  "candidate_rules": 2,
+  "codebase": "merged",
+  "containers_left": 0,
+  "conversion": "PASSED (candidate built, all product checks green, profile equal)",
+  "dangling_volumes_new": 0,
+  "device_config_unchanged": true,
+  "device_profile": [
+   "file",
+   "built_in_database"
+  ],
+  "device_sources": "builtin",
+  "elapsed_s": 191.8,
+  "fixture": "woow-b1-arm-emqx-stopped-enc.tar",
+  "fixture_sha256_prefix": "b6eb257cc5790bee",
+  "ha_counts": {
+   "emqx_acl": 4,
+   "emqx_admin": 2,
+   "emqx_app": 1,
+   "emqx_authn_mnesia": 3,
+   "emqx_authn_scram_mnesia": 0,
+   "emqx_banned": 1,
+   "emqx_banned_rules": 0,
+   "emqx_psk": 0,
+   "emqx_retainer_message": 5
+  },
+  "image": "docker.io/emqx/emqx:5.8.9",
+  "network": "none",
+  "readback_roots": 44,
+  "store": "labpodman (separate --root)",
+  "test": "T11 real batch-1 HA backup, conversion body with this device's profile and EnvironmentFile"
+ },
+ "source_commit": "cd66230 (sec/emqx-secreview3-trial-20261124: product 5786ae4 + abff1a0 + the 8613ffa tempctr patch)",
+ "started": "2026-11-24T08:11:38+0800",
+ "status_lines": [
+  "{\"test\": \"T11 real batch-1 HA backup, conversion body with this device's profile and EnvironmentFile\", \"codebase\": \"merged\", \"arch\": \"arm\", \"device_sources\": \"builtin\", \"fixture\": \"woow-b1-arm-emqx-stopped-enc.tar\", \"fixture_sha256_prefix\": \"b6eb257cc5790bee\", \"image\": \"docker.io/emqx/emqx:5.8.9\", \"network\": \"none\", \"store\": \"labpodman (separate --root)\", \"device_profile\": [\"file\", \"built_in_database\"], \"conversion\": \"PASSED (candidate built, all product checks green, profile equal)\", \"ha_counts\": {\"emqx_acl\": 4, \"emqx_admin\": 2, \"emqx_app\": 1, \"emqx_authn_mnesia\": 3, \"emqx_authn_scram_mnesia\": 0, \"emqx_banned\": 1, \"emqx_banned_rules\": 0, \"emqx_psk\": 0, \"emqx_retainer_message\": 5}, \"readback_roots\": 44, \"candidate_profile\": [\"file\", \"built_in_database\"], \"candidate_rules\": 2, \"candidate_has_env_file_cookie\": true, \"candidate_env_file_flag\": true, \"device_config_unchanged\": true, \"dangling_volumes_new\": 0, \"containers_left\": 0, \"elapsed_s\": 191.8}"
+ ],
+ "stdout_sha256": "41a03950cad9a5d198b6bfe0aeffe934f05005022dfea0ccb8a49009c8ceab3a",
+ "store": "labpodman (separate --root, lab only), every podman run --network none"
+}

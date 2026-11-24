@@ -1,0 +1,318 @@
+{
+ "what": "lab-store anonymous EMQX volumes left by emqx-secreview iteration 1 (2026-11-23 20:02-22:07)",
+ "listed_at": "2026-11-24T02:48:18",
+ "mode": "list",
+ "count": 24,
+ "volumes": [
+  {
+   "volume": "0d0227678f254a49f4429494a0ce08e4949f69d58db8c66dd43c6cabf6425810",
+   "created": "2026-11-23T20:09:49",
+   "still_dangling": true,
+   "kib": 20,
+   "top_level": [
+    "configs",
+    "mnesia",
+    "patches",
+    "scripts"
+   ],
+   "attribution": "journald container create within 2 s: woowbk-j20261123T120948Z-6fce951c-emqx-ha"
+  },
+  {
+   "volume": "16f6d08c54f7025aaf4d094469f9802148cd76daaab769e45d2df9d9afb9751c",
+   "created": "2026-11-23T20:38:48",
+   "still_dangling": true,
+   "kib": 196,
+   "top_level": [
+    "cluster.uuid",
+    "configs",
+    "mnesia",
+    "node.uuid",
+    "patches",
+    "scripts",
+    "trace"
+   ],
+   "attribution": "journald container create within 2 s: woowbk-secrev-jq"
+  },
+  {
+   "volume": "198caf8a37a00aec14d961c9e351d4206c9de7aeacaa318135e471fa46a0d477",
+   "created": "2026-11-23T20:17:02",
+   "still_dangling": true,
+   "kib": 20,
+   "top_level": [
+    "configs",
+    "mnesia",
+    "patches",
+    "scripts"
+   ],
+   "attribution": "journald container create within 2 s: woowbk-j20261123T121700Z-5d87d1f3-emqx-ha"
+  },
+  {
+   "volume": "2ffb8274186f6dcf99108f104417d506c0193daa8ac18eeab7cc4d883c37997e",
+   "created": "2026-11-23T20:25:36",
+   "still_dangling": true,
+   "kib": 4,
+   "top_level": [],
+   "attribution": "journald container create within 2 s: woowbk-j20261123T122518Z-7b631912-atk,woowbk-secrev-rawcfg"
+  },
+  {
+   "volume": "319d4d79d47f5de44d1dc6fdcaa34b4476f131b7f91a57df9306af2ee516979b",
+   "created": "2026-11-23T20:43:09",
+   "still_dangling": true,
+   "kib": 20,
+   "top_level": [
+    "configs",
+    "mnesia",
+    "patches",
+    "scripts"
+   ],
+   "attribution": "journald container create within 2 s: woowbk-j20261123T124307Z-61c7ab03-emqx-ha"
+  },
+  {
+   "volume": "33022e09694e35ec26f7bce1bbf929803f8d69be54d0937f5273b6f8573ccebc",
+   "created": "2026-11-23T20:30:15",
+   "still_dangling": true,
+   "kib": 4,
+   "top_level": [],
+   "attribution": "journald container create within 2 s: woowbk-secrev-hoconpp"
+  },
+  {
+   "volume": "348537017d45023639c07ae980c35ba513a0a5510abd53e33277bde574edfc1a",
+   "created": "2026-11-23T20:06:43",
+   "still_dangling": true,
+   "kib": 20,
+   "top_level": [
+    "configs",
+    "mnesia",
+    "patches",
+    "scripts"
+   ],
+   "attribution": "journald container create within 2 s: woowbk-j20261123T120640Z-728c661e-emqx-ha,woowbk-j20261123T120643Z-3a6b3838-craft"
+  },
+  {
+   "volume": "3d14fa3cb0acfceb920c20b8732d0231114f4ac244b67b77e110d7452850237d",
+   "created": "2026-11-23T21:13:00",
+   "still_dangling": true,
+   "kib": 20,
+   "top_level": [
+    "configs",
+    "mnesia",
+    "patches",
+    "scripts"
+   ],
+   "attribution": "timing: t6_rule_jq_env final3 start 21:11:21"
+  },
+  {
+   "volume": "4d7fa84a48d07a23b6ec9df4accb64f4ee68e7f025a00d088e146a356c13737a",
+   "created": "2026-11-23T21:59:20",
+   "still_dangling": true,
+   "kib": 20,
+   "top_level": [
+    "configs",
+    "mnesia",
+    "patches",
+    "scripts"
+   ],
+   "attribution": "timing: t7_real_backup merged arm start 21:57:32"
+  },
+  {
+   "volume": "544ccef8161e9aa0b5d4c0d04ed2cbe1198ce631a9a6fe5d757ece8da1c543fc",
+   "created": "2026-11-23T20:30:15",
+   "still_dangling": true,
+   "kib": 196,
+   "top_level": [
+    "cluster.uuid",
+    "configs",
+    "mnesia",
+    "node.uuid",
+    "patches",
+    "scripts",
+    "trace"
+   ],
+   "attribution": "journald container create within 2 s: woowbk-secrev-hoconpp"
+  },
+  {
+   "volume": "5650c68838aeb97639320fc7b2a4fd47de2c341e65aed4e8c200c234ab7ce85b",
+   "created": "2026-11-23T20:25:36",
+   "still_dangling": true,
+   "kib": 196,
+   "top_level": [
+    "cluster.uuid",
+    "configs",
+    "mnesia",
+    "node.uuid",
+    "patches",
+    "scripts",
+    "trace"
+   ],
+   "attribution": "journald container create within 2 s: woowbk-j20261123T122518Z-7b631912-atk,woowbk-secrev-rawcfg"
+  },
+  {
+   "volume": "5e041e6d5c26676035033bcdfa534bea4f5f4e2841bd79fc284df4d1453c00fb",
+   "created": "2026-11-23T20:24:47",
+   "still_dangling": true,
+   "kib": 20,
+   "top_level": [
+    "configs",
+    "mnesia",
+    "patches",
+    "scripts"
+   ],
+   "attribution": "journald container create within 2 s: woowbk-j20261123T122446Z-3cec1313-emqx-ha"
+  },
+  {
+   "volume": "6d8542182588031dce2d740980a5346ed2a77562b849f519a244bd965e633c2d",
+   "created": "2026-11-23T21:00:33",
+   "still_dangling": true,
+   "kib": 20,
+   "top_level": [
+    "configs",
+    "mnesia",
+    "patches",
+    "scripts"
+   ],
+   "attribution": "timing: t6_rule_jq_env final start 20:58:32"
+  },
+  {
+   "volume": "6e9848c164d975806b3efe69f67141fce3296b3af4b3e577c7f126c48b3ae244",
+   "created": "2026-11-23T20:31:41",
+   "still_dangling": true,
+   "kib": 208,
+   "top_level": [
+    "cluster.uuid",
+    "configs",
+    "mnesia",
+    "node.uuid",
+    "patches",
+    "scripts",
+    "secrev-env.hocon",
+    "secrev-pp.hocon",
+    "secrev-probe.erl",
+    "trace"
+   ],
+   "attribution": "journald container create within 2 s: woowbk-secrev-hoconpp"
+  },
+  {
+   "volume": "71254a7904db586b6c9f7c8568e34cba7e6db837b3f3ec40366a3b221f45fb3c",
+   "created": "2026-11-23T20:35:19",
+   "still_dangling": true,
+   "kib": 20,
+   "top_level": [
+    "configs",
+    "mnesia",
+    "patches",
+    "scripts"
+   ],
+   "attribution": "journald container create within 2 s: woowbk-j20261123T123516Z-70c89842-emqx-ha"
+  },
+  {
+   "volume": "74bd1a06654e3c27061c906e07c5b7125c5cd9a7816e88436c0272676367daab",
+   "created": "2026-11-23T20:28:19",
+   "still_dangling": true,
+   "kib": 20,
+   "top_level": [
+    "configs",
+    "mnesia",
+    "patches",
+    "scripts"
+   ],
+   "attribution": "journald container create within 2 s: woowbk-j20261123T122817Z-d106a04f-emqx-ha"
+  },
+  {
+   "volume": "7f4fd3dda2db94760a664bc7fe5463853d4fc9d5e41e376cc066038490307ea3",
+   "created": "2026-11-23T21:37:57",
+   "still_dangling": true,
+   "kib": 20,
+   "top_level": [
+    "configs",
+    "mnesia",
+    "patches",
+    "scripts"
+   ],
+   "attribution": "timing: t8_http_authn final3 (queue8) start ~21:36"
+  },
+  {
+   "volume": "8f75c39db7f7beaf76838296140301a951a3665214788a666a783421938f7f5b",
+   "created": "2026-11-23T20:02:10",
+   "still_dangling": true,
+   "kib": 20,
+   "top_level": [
+    "configs",
+    "mnesia",
+    "patches",
+    "scripts"
+   ],
+   "attribution": "journald container create within 2 s: woowbk-j20261123T120209Z-027d1c24-emqx-ha"
+  },
+  {
+   "volume": "90d195c8757c097af0725cfbaf0484e3469ad5ee6243c8eef11a645a42d11573",
+   "created": "2026-11-23T20:47:41",
+   "still_dangling": true,
+   "kib": 20,
+   "top_level": [
+    "configs",
+    "mnesia",
+    "patches",
+    "scripts"
+   ],
+   "attribution": "journald container create within 2 s: woowbk-j20261123T124733Z-312c3eee-emqx-ha"
+  },
+  {
+   "volume": "9be3d4bc369d56966c3fef20548c05ed6aa61860395b3183673c4900075272f0",
+   "created": "2026-11-23T20:38:48",
+   "still_dangling": true,
+   "kib": 4,
+   "top_level": [],
+   "attribution": "journald container create within 2 s: woowbk-secrev-jq"
+  },
+  {
+   "volume": "aa054f59ea095e78d659e33dc29e7ea71972b5bd7fc040f12868dbb7acaac89e",
+   "created": "2026-11-23T21:26:04",
+   "still_dangling": true,
+   "kib": 20,
+   "top_level": [
+    "configs",
+    "mnesia",
+    "patches",
+    "scripts"
+   ],
+   "attribution": "timing: t8_http_authn final2 start 21:24:30"
+  },
+  {
+   "volume": "aee5a680944b9d6b460ae56ebccc4d890bfe0a2633cfa8f2b6e4e505334eb943",
+   "created": "2026-11-23T20:31:41",
+   "still_dangling": true,
+   "kib": 4,
+   "top_level": [],
+   "attribution": "journald container create within 2 s: woowbk-secrev-hoconpp"
+  },
+  {
+   "volume": "af96e579a4fa91eef3188f1573d70aecbace4d4cc7bac0a79e9c76b2d8ef61ac",
+   "created": "2026-11-23T22:07:55",
+   "still_dangling": true,
+   "kib": 20,
+   "top_level": [
+    "configs",
+    "mnesia",
+    "patches",
+    "scripts"
+   ],
+   "attribution": "journald container create within 2 s: woowbk-j20261123T140752Z-3be7f67e-emqx-ha"
+  },
+  {
+   "volume": "bd484c68637ec0c92e43c67da516d54e39082c9584346fe941d71516953cc640",
+   "created": "2026-11-23T21:49:21",
+   "still_dangling": true,
+   "kib": 20,
+   "top_level": [
+    "configs",
+    "mnesia",
+    "patches",
+    "scripts"
+   ],
+   "attribution": "timing: t7_real_backup merged x86 start 21:47:25"
+  }
+ ],
+ "dangling_total_after": 43,
+ "removed_ok": 0,
+ "not_touched": "every dangling volume created outside 2026-11-23 20:00-22:10 (other lanes / earlier days)"
+}

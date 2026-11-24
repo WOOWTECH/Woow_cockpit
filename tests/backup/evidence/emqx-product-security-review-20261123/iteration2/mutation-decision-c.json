@@ -1,0 +1,59 @@
+{
+ "what": "mutation check: owner decision C refusal (acl_blocker) on the fixed tree",
+ "commit": "abff1a0",
+ "tests": [
+  "tests.backup.test_ha_emqx",
+  "tests.backup.test_ha_emqx_acl_generated_charlist",
+  "tests.backup.test_ha_emqx_acl_imported_default_path",
+  "tests.backup.test_ha_emqx_acl_preservation",
+  "tests.backup.test_ha_emqx_acl_raw_profile",
+  "tests.backup.test_ha_emqx_authorizers",
+  "tests.backup.test_ha_emqx_bootstrap_flow",
+  "tests.backup.test_ha_emqx_builtin_authorizer_flow",
+  "tests.backup.test_ha_emqx_builtin_shape_diagnostic",
+  "tests.backup.test_ha_emqx_candidate_flow",
+  "tests.backup.test_ha_emqx_effective_acl",
+  "tests.backup.test_ha_emqx_fileless_roots",
+  "tests.backup.test_ha_emqx_operational",
+  "tests.backup.test_ha_emqx_package",
+  "tests.backup.test_ha_emqx_preservation_guard",
+  "tests.backup.test_ha_emqx_product",
+  "tests.backup.test_ha_emqx_security_review",
+  "tests.backup.test_ha_emqx_security_review2",
+  "tests.backup.test_ha_emqx_snapshot",
+  "tests.backup.test_ha_emqx_target_guard"
+ ],
+ "killed": 3,
+ "total": 3,
+ "mutations": {
+  "C1 acl_blocker never blocks": {
+   "applied": true,
+   "rc": 1,
+   "summary": "tests=193 failures=3 errors=0 skipped=0 expected_failures=0 unexpected_successes=0 blocked=0",
+   "killed": true,
+   "failing_tests": [
+    "test_a_file_only_target_refuses_has_acl_rows_at_the_check",
+    "test_a_file_only_target_stops_the_conversion_before_any_candidate",
+    "test_the_rule"
+   ]
+  },
+  "C2 the check does not add the blocker": {
+   "applied": true,
+   "rc": 1,
+   "summary": "tests=193 failures=1 errors=0 skipped=0 expected_failures=0 unexpected_successes=0 blocked=0",
+   "killed": true,
+   "failing_tests": [
+    "test_a_file_only_target_refuses_has_acl_rows_at_the_check"
+   ]
+  },
+  "C3 the conversion skips the blocker": {
+   "applied": true,
+   "rc": 1,
+   "summary": "tests=193 failures=1 errors=0 skipped=0 expected_failures=0 unexpected_successes=0 blocked=0",
+   "killed": true,
+   "failing_tests": [
+    "test_a_file_only_target_stops_the_conversion_before_any_candidate"
+   ]
+  }
+ }
+}

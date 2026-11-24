@@ -1296,6 +1296,11 @@ def run_restore(ctx, params):
                         ctx.log(f'備份未包含「{plan.app.name}」的資料核對快照，已略過資料比對。')
                     else:
                         ctx.log(f'應用「{plan.app.name}」資料核對一致')
+                if plan.manifest.get('import_check') is not None:
+                    # A converted Home Assistant backup: the app must hold exactly what the conversion verified
+                    # (CONTRACT section 9); a difference raises here and the restore rolls back.
+                    from . import haimport
+                    haimport.verify_import(plan.app, plan.adapter, plan.manifest['import_check'], log=ctx.log)
                 timing = timing_entry(plan.app, plan.adapter)
                 result['timing'].append(timing)
                 if timing['unavailable_seconds'] is not None:
@@ -1997,6 +2002,12 @@ def _preflight(ctx, apps, manifest, extract_dir=None):
         adapter = ctx.adapter(app)
         mode = adapter.detect_mode()
         checks = adapter.preflight(app_manifest, mode=mode, entry_sizes=entry_sizes, extracted_dir=extract_dir)
+        if app_manifest.get('import_check') is not None:
+            # A converted Home Assistant backup's readback: only a kind this engine can compare is restored.
+            from . import haimport
+            problem = haimport.import_check_problem(app, app_manifest['import_check'])
+            if problem:
+                checks = list(checks) + [{'id': f'{app.id}/import-check', 'status': 'fail', 'message': problem}]
         for check in checks:
             if check['status'] == 'warn':
                 ctx.log(f'注意：{check["message"]}')

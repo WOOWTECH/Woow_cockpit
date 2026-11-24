@@ -1,0 +1,37 @@
+{
+ "attempt": "t2-merged",
+ "backup_engine_tree": "865c930f392006e0080de506eb7c425fd81becd7",
+ "command": "python3 -I t2_plugin_exec.py merged",
+ "commercial_acceptance": "not-complete",
+ "credentials": "generated per run; HA key (T11) read in-process by the b1 Secrets reader, never printed",
+ "date": "2026-11-24",
+ "elapsed_s": 47.9,
+ "exit_code": 0,
+ "iteration": 3,
+ "lane": "emqx-secreview (SR-OWNER-1942)",
+ "result": {
+  "code_executed": false,
+  "codebase": "merged",
+  "elapsed_s": 47.3,
+  "ha_broker": "started+exported",
+  "image": "docker.io/emqx/emqx:5.8.9",
+  "marker_in_src_volume": null,
+  "marker_in_work_volume": null,
+  "network": "none",
+  "node": "emqx@127.0.0.1",
+  "node_blocker": null,
+  "plugin_running": false,
+  "plugins_list_has_secrev": false,
+  "store": "labpodman (separate --root)",
+  "test": "T2 plugin code execution in the HA broker (B1-06)"
+ },
+ "source_commit": "cd66230 (sec/emqx-secreview3-trial-20261124: product 5786ae4 + abff1a0 + the 8613ffa tempctr patch)",
+ "started": "2026-11-24T08:09:19+0800",
+ "status_lines": [
+  " \"code_executed\": false,",
+  " \"elapsed_s\": 47.3",
+  "}"
+ ],
+ "stdout_sha256": "8590576afbc1b97d42f5352e70d53941f728b4abb5c0205885abcd9bba0806be",
+ "store": "labpodman (separate --root, lab only), every podman run --network none"
+}

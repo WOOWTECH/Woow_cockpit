@@ -1,0 +1,82 @@
+{
+ "what": "mutation check of the SR-8/SR-9 fix",
+ "commit": "abff1a0",
+ "tests": [
+  "tests.backup.test_ha_emqx_security_review2",
+  "tests.backup.test_ha_emqx_product"
+ ],
+ "killed": 7,
+ "total": 7,
+ "mutations": {
+  "M1 env-file values back on --env (SR-8)": {
+   "applied": true,
+   "rc": 1,
+   "summary": "tests=50 failures=12 errors=0 skipped=0 expected_failures=0 unexpected_successes=0 blocked=0",
+   "killed": true,
+   "failing_tests": [
+    "test_env_file_values_never_reach_a_command_line",
+    "test_one_podman_line_is_one_line",
+    "test_the_env_file_settings_reach_the_candidate",
+    "test_the_public_conversion_carries_the_readback_into_the_app_section"
+   ]
+  },
+  "M2 str.splitlines() again (SR-9)": {
+   "applied": true,
+   "rc": 1,
+   "summary": "tests=50 failures=0 errors=10 skipped=0 expected_failures=0 unexpected_successes=0 blocked=0",
+   "killed": true,
+   "failing_tests": [
+    "test_one_podman_line_is_one_line",
+    "test_only_blanks_and_tabs_are_trimmed"
+   ]
+  },
+  "M3 every Unicode blank trimmed (SR-9)": {
+   "applied": true,
+   "rc": 1,
+   "summary": "tests=50 failures=0 errors=2 skipped=0 expected_failures=0 unexpected_successes=0 blocked=0",
+   "killed": true,
+   "failing_tests": [
+    "test_only_blanks_and_tabs_are_trimmed"
+   ]
+  },
+  "M4 env_files paths not checked": {
+   "applied": true,
+   "rc": 1,
+   "summary": "tests=50 failures=12 errors=0 skipped=0 expected_failures=0 unexpected_successes=0 blocked=0",
+   "killed": true,
+   "failing_tests": [
+    "test_a_path_that_is_not_plain_and_absolute_refuses"
+   ]
+  },
+  "M5 tempctr drops --env-file": {
+   "applied": true,
+   "rc": 1,
+   "summary": "tests=50 failures=2 errors=1 skipped=0 expected_failures=0 unexpected_successes=0 blocked=0",
+   "killed": true,
+   "failing_tests": [
+    "test_env_file_values_never_reach_a_command_line",
+    "test_env_files_become_env_file_flags",
+    "test_the_public_conversion_carries_the_readback_into_the_app_section"
+   ]
+  },
+  "M6 target_broker passes no env file": {
+   "applied": true,
+   "rc": 1,
+   "summary": "tests=50 failures=2 errors=0 skipped=0 expected_failures=0 unexpected_successes=0 blocked=0",
+   "killed": true,
+   "failing_tests": [
+    "test_env_file_values_never_reach_a_command_line",
+    "test_the_public_conversion_carries_the_readback_into_the_app_section"
+   ]
+  },
+  "M7 a final CR kept (SR-9)": {
+   "applied": true,
+   "rc": 1,
+   "summary": "tests=50 failures=0 errors=1 skipped=0 expected_failures=0 unexpected_successes=0 blocked=0",
+   "killed": true,
+   "failing_tests": [
+    "test_a_final_carriage_return_is_dropped_like_podman"
+   ]
+  }
+ }
+}

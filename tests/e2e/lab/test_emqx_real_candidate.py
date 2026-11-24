@@ -120,6 +120,8 @@ class RealCallerTests(unittest.TestCase):
             stack.enter_context(patch.object(ha_emqx, 'ha_broker', side_effect=self.broker))
             stack.enter_context(patch.object(ha_emqx, 'take_export', side_effect=self.export))
             stack.enter_context(patch.object(ha_emqx, 'candidate_from_target', return_value=({}, {}, ('deny', 'ignore'), [])))
+            # The candidate is patched out above, so is the readback read from it (ha_emqx.candidate_readback).
+            stack.enter_context(patch.object(ha_emqx, 'candidate_readback', return_value=({}, ('file',))))
             return caller.build_verified_candidate(
                 self.work, self.app, self.adapter, self.target, self.path, self.root,
                 'j20261121T000000Z-12345678', expected_sha256=self.digest, keys=self.keys)
@@ -170,14 +172,17 @@ class RealCallerTests(unittest.TestCase):
             self.assertTrue(report.complete)
             self.assertEqual(report.addon.slug, 'woow-emqx')
 
-    def test_public_conversion_stays_blocked_after_private_candidate_build(self):
+    def test_public_conversion_never_reuses_the_private_candidate_build(self):
+        # Owner decision 2026-11-23 「決定1 做」: the blanket PRESERVATION_BLOCKER is gone; the public conversion is
+        # the product path and enforces the protections itself (tests/backup/test_ha_emqx_product.py). What stays
+        # here: a private build leaves nothing the public conversion picks up -- given this lab's bound work (not a
+        # product job's Work: no adapter) it stops before any runtime event and writes no output.
         self.fixture()
         self.invoke()
         before = list(self.runtime.events)
-        with self.assertRaises(BackupError) as caught:
+        self.assertFalse(hasattr(ha_emqx, 'PRESERVATION_BLOCKER'))
+        with self.assertRaises((BackupError, AttributeError)):
             ha_emqx.convert(self.work, self.app, True, self.root / 'public-output')
-        self.assertEqual(caught.exception.code, 'incompatible')
-        self.assertEqual(caught.exception.message, ha_emqx.PRESERVATION_BLOCKER)
         self.assertEqual(self.runtime.events, before)
         self.assertFalse((self.root / 'public-output').exists())
 

@@ -163,7 +163,7 @@ class LabTarget:
     """A stand-in for this device's running `woow-emqx` (lab store, network none): a data volume seeded with
     `files` (uid/gid 1000 like the image user), optional read-only host files and podman secrets."""
 
-    def __init__(self, tag, files, *, ro_files=(), secrets_spec=(), env=None):
+    def __init__(self, tag, files, *, ro_files=(), secrets_spec=(), env=None, env_file=None):
         self.tag = tag
         self.container = f'woowbk-secrev-{tag}-emqx'
         self.data_volume = f'woowbk-secrev-{tag}-data'
@@ -181,6 +181,8 @@ class LabTarget:
                 '--memory', '1g', '-v', f'{self.data_volume}:/opt/emqx/data', '-v', f'{self.log_volume}:/opt/emqx/log']
         for k, v in self.env.items():
             argv += ['-e', f'{k}={v}']
+        if env_file is not None:   # the device's Quadlet EnvironmentFile= (podman reads it)
+            argv += ['--env-file', env_file]
         for s, t, o in self.files:
             argv += ['-v', f'{s}:{t}:{o}']
         for spec in self.secrets:
@@ -227,3 +229,18 @@ def evidence(path, record):
     with open(path, 'w') as handle:
         json.dump(record, handle, indent=1, sort_keys=True, ensure_ascii=False)
         handle.write('\n')
+
+
+def dangling_names():
+    return set(lab('volume', 'ls', '--filter', 'dangling=true', '--format', '{{.Name}}').stdout.decode().split())
+
+
+def new_dangling(before):
+    """New dangling volumes since `before`, by shape: EMQX data (configs/mnesia/patches), empty (EMQX log), other (for
+    example another lane's PostgreSQL throwaway at the same time). Names only."""
+    shapes = {'emqx': 0, 'empty': 0, 'other': 0}
+    for name in dangling_names() - set(before):
+        mp = lab('volume', 'inspect', '--format', '{{.Mountpoint}}', name).stdout.decode().strip()
+        top = set(lab('unshare', 'ls', '-A', mp, check=False).stdout.decode().split())
+        shapes['emqx' if top & {'configs', 'mnesia', 'patches'} else 'empty' if not top else 'other'] += 1
+    return shapes
