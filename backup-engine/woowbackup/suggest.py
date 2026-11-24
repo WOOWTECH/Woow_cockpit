@@ -26,10 +26,11 @@ How a directory becomes apps (each step is reported in the draft's `notes`/`warn
   must be one.
 * PostgreSQL (image name or POSTGRES_* environment): cold mode by default (database unit is a writer, its data
   volume or directory is backed up whole); `instance` (pg_dumpall + every database) and `database` (one
-  pg_dump) are offered as variants when the data lives in a named volume.
+  pg_dump) are offered as variants when the data lives in a named volume. An app in `PREFERRED_MODES` that is not
+  installed yet defaults to the mode named there.
 * Volumes mounted only at runtime paths (`/run`, `/var/run`, `/tmp`, `/dev/shm`) are skipped; bind mounts of
   directories become `data_dirs` unless they are forbidden (`.ssh`, `.config/systemd`, ...) or personal
-  (`Desktop`, `Documents`, ...); bound files and `EnvironmentFile=` files become `config_files` when they lie in
+  (`Desktop`, `Documents`, ...); bound files, `EnvironmentFile=` files and PACKAGE_CONFIGS become `config_files` in
   `.config/<id>/` or `.local/share/<id>/`.
 * Health URLs come from URLs in `HealthCmd=` mapped through a loopback `PublishPort=` (or `Network=host`); a path that
   answers only inside the container is replaced (`HEALTH_PATHS`).
@@ -68,6 +69,25 @@ MAX_HEALTH = 8
 # that worked as failed ("rollback incomplete"). 600 is the catalog maximum (catalog.validate_entry). The draft of an
 # installed entry keeps its own checks but raises a shorter limit of these apps (`health-timeout` note).
 HEALTH_TIMEOUTS = {'litellm': 600}
+# The PostgreSQL mode a draft of an app that is not installed yet defaults to, instead of `cold`. litellm: its Home
+# Assistant import (ha_litellm.Target) fills exactly one single-database item and refuses the cold and the instance
+# entry, and it is the mode that suits the package (CONTRACT section 4 "Which mode a draft proposes"): its instance holds
+# exactly the app's database, owned by the image's bootstrap user (Woow_podman_litellm dd690ae
+# quadlet/litellm-postgres.container POSTGRES_USER=litellm, POSTGRES_DB=litellm). An installed entry keeps its mode
+# (changing it makes its backups unrestorable under the new entry); when that mode cannot be imported into, the
+# `import-mode` note says what to choose.
+PREFERRED_MODES = {'litellm': 'database'}
+# A health path of an app's HealthCmd that says less than another one of the same server, with that one. litellm:
+# /health/liveliness answers without looking at the database, /health/readiness is 503 while its database cannot be
+# reached (litellm 1.104.0 litellm/proxy/health_endpoints/_health_endpoints.py:1957-1976, :1833-1870) and is what the
+# package's own startup probe waits for (Woow_podman_litellm dd690ae quadlet/litellm.container:73-75, :82). Only a new
+# draft's own proposal: the checks of an installed entry are kept as they are.
+READY_PATHS = {('litellm', '/health/liveliness'): '/health/readiness'}
+# Configuration files of an app's package that no Quadlet names: proposed like an environment file (0600) when the owner
+# has them. litellm: scripts/install.sh renders the Quadlets from ~/.config/litellm/litellm.env (Woow_podman_litellm
+# dd690ae scripts/install.sh:18-19, quadlet/litellm.container:3-5). The installed entry of the reference host has it: a
+# draft without it would take it out of the app's backups.
+PACKAGE_CONFIGS = {'litellm': ('.config/litellm/litellm.env',)}
 # Per container: an owner's file could repeat a key thousands of times; the analysis stays bounded.
 MAX_ITEMS = 128
 MAX_VERIFY = 16
@@ -1175,6 +1195,7 @@ class Analyzer:
                 for _path, rel in container.env_files:
                     if rel:
                         rels.append(rel)
+            rels.extend(PACKAGE_CONFIGS.get(app['id'], ()))
         wanted, seen = [], set()
         for rel in rels:
             if rel in seen:
@@ -1495,6 +1516,10 @@ class Analyzer:
                 if mount.kind == 'bind' and mount.rel and mount.rel in files:
                     info = files[mount.rel]
                     add(mount.rel, info['mode'], 'bind')
+        for rel in PACKAGE_CONFIGS.get(app_id, ()):
+            state = stats.get(rel)
+            if isinstance(state, dict) and state.get('type') == 'file':
+                add(rel, state.get('mode'), 'env')
         return result
 
     def _secrets(self, app, containers):
@@ -1543,6 +1568,11 @@ class Analyzer:
                 if host_port is None:
                     hints.append(f'{container.file} 的健康檢查連到容器埠 {cport}，但它沒有發佈到 127.0.0.1，未列入。')
                     continue
+                ready = READY_PATHS.get((app['id'], path))
+                if ready is not None:
+                    hints.append(f'{container.file} 的健康檢查 {path} 只表示程式有回應；草稿改用 {ready}（會確認資料庫，'
+                                 '也是這個套件啟動時等待的檢查）。')
+                    path = ready
                 answers = HEALTH_PATHS.get((app['id'], path))
                 if answers is not None:
                     hints.append(f'{container.file} 的健康檢查網址 {path} 只回應容器內部，從這台設備連線會得到 403；'
@@ -1610,8 +1640,11 @@ class Analyzer:
                 valid, problem, where = self._validate(entry)
                 app['notes'].append(_warn('no-digests', '這個版本的備份元件不支援內建資料核對，草稿未加入核對項目。',
                                           level='info'))
-            variants.append({'id': mode, 'label': VARIANT_LABELS[mode] if pg else '', 'entry': entry, 'valid': valid,
-                             'problem': problem, 'field': where})
+            label = VARIANT_LABELS[mode] if pg else ''
+            if PREFERRED_MODES.get(app['id'], 'cold') != 'cold':
+                label = label.replace('（預設）', '')  # cold is not this app's default
+            variants.append({'id': mode, 'label': label, 'entry': entry, 'valid': valid, 'problem': problem,
+                             'field': where})
         if any(v['entry']['verify'] for v in variants):
             app['hints'].append('草稿已加入內建資料核對（資料庫資料表的筆數與內容雜湊、資料卷與主機資料夾的檔案清單與雜湊）：'
                                 '備份時在寫入服務停止期間計算，還原後在應用啟動前比對；資料量大的項目會延長停機時間，'
@@ -1827,14 +1860,31 @@ class Analyzer:
     def _selected_variant(self, app, variants):
         installed = next((entry for entry in self.installed if entry.id == app['id']), None)
         ids = [v['id'] for v in variants]
+        selected = 'cold'
         if installed is not None and installed.postgres:
             scoped = any((p.get('scope') if isinstance(p, dict) else None) == 'instance' for p in installed.postgres)
             wanted = 'instance' if scoped else 'database'
             if wanted in ids:
                 app['notes'].append(_warn('installed-mode', '已安裝的應用設定以匯出方式備份資料庫，草稿沿用相同方式；'
                                                             '改用冷備份會讓之前的備份無法以新設定還原。', level='info'))
-                return wanted
-        return 'cold'
+                selected = wanted
+        preferred = PREFERRED_MODES.get(app['id'])
+        if preferred is None or selected == preferred:
+            return selected
+        label = VARIANT_LABELS[preferred].split('：', 1)[0]
+        if not any(v['id'] == preferred and v['valid'] for v in variants):
+            app['notes'].append(_warn('import-mode', f'從 Home Assistant 匯入這個應用需要「{label}」方式，但這台沒有能用這個方式備份的 '
+                                                     'PostgreSQL（資料要在具名資料卷中），所以不能從 Home Assistant 匯入。'))
+        elif installed is None:
+            app['notes'].append(_warn('import-mode', f'草稿已選「{label}」：從 Home Assistant 匯入這個應用只支援這個方式，'
+                                                     '資料庫執行個體只有這個應用的資料庫時也最適合。改選其他方式仍能備份與還原，'
+                                                     '但不能從 Home Assistant 匯入。', level='info'))
+            selected = preferred
+        else:
+            app['notes'].append(_warn('import-mode', f'已安裝的應用設定不是「{label}」方式，不能從 Home Assistant 匯入這個應用，草稿'
+                                                     f'沿用已安裝的方式。要匯入時，請在這裡改選「{label}」並安裝；這個應用之前的'
+                                                     '備份無法以新設定還原（需要時先裝回原本的設定），安裝後請再做一次備份。'))
+        return selected
 
     def _installed_view(self, app, variants, selected):
         """The installed entry of this app id (None when there is none). Every variant keeps the installed entry's
@@ -1923,7 +1973,7 @@ def carry_over(installed, entry):
         result['health'] = json.loads(json.dumps(installed['health']))
     if isinstance(installed.get('verify'), list):
         # The installed checks stay; built-in digests of targets they do not cover yet are proposed after them.
-        kept = json.loads(json.dumps(installed['verify']))
+        kept = [digest_for_mode(item, installed, entry) for item in json.loads(json.dumps(installed['verify']))]
         targets = {digest_target(item) for item in kept if isinstance(item, dict)} - {None}
         ids = {item.get('id') for item in kept if isinstance(item, dict)}
         for item in result.get('verify') or []:
@@ -1947,6 +1997,31 @@ def carry_over(installed, entry):
         if key in result and (key in installed or result[key] != []):  # an empty list the entry left out stays out
             ordered[key] = result[key]
     return ordered
+
+
+def digest_for_mode(item, installed, entry):
+    """An installed check in the form the draft's PostgreSQL mode needs: a `postgres-digest` reads a cold database by its
+    container and an exported one by its `postgres` item, and the validator refuses the other form. In a variant of
+    another mode than the installed one the check becomes that variant's own check of the same database container, with
+    the installed check's id, label and table exclusions (otherwise choosing another mode on the page gave a draft that
+    could not be installed). Every other check is returned as it is."""
+    if not isinstance(item, dict) or item.get('type') != 'postgres-digest':
+        return item
+    exported = {p['id']: p['container'] for p in entry.get('postgres') or []}
+    if item.get('postgres'):
+        if item['postgres'] in exported:
+            return item
+        container = next((p.get('container') for p in installed.get('postgres') or []
+                          if isinstance(p, dict) and p.get('id') == item['postgres']), None)
+    else:
+        container = item.get('container')
+        if container not in exported.values():
+            return item
+    own = next((check for check in entry.get('verify') or [] if check.get('type') == 'postgres-digest'
+                and container in (check.get('container'), exported.get(check.get('postgres')))), None)
+    if own is None or not isinstance(container, str):
+        return item
+    return {**own, 'id': item.get('id'), **{key: item[key] for key in ('label', 'exclude_tables') if key in item}}
 
 
 def raise_health_timeouts(app_id, entry):
