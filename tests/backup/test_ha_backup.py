@@ -2061,9 +2061,9 @@ class RepackedTests(TempFiles):
 
 class FuzzTests(TempFiles):
     """Damage anywhere: a BackupError or the same content as before, never another exception, never other content.
-    Fixed seed; SECONDS bounds the time."""
+    Fixed seed; ROUNDS always, more while SECONDS last (the time one kind of member may take)."""
 
-    SECONDS = 12
+    ROUNDS, SECONDS = 40, 3
 
     def entries(self, path, keys=None):
         result = {}
@@ -2098,10 +2098,10 @@ class FuzzTests(TempFiles):
     def fuzz(self, data, keys=None, *, checked=True):
         rng = random.Random(20261125)
         good = self.entries(self.write(data), keys)
-        outcomes, until = {}, time.monotonic() + self.SECONDS / 4
+        outcomes, until = {}, time.monotonic() + self.SECONDS
         path = self.dir / 'fuzz.tar'
-        for _round in range(400):
-            if time.monotonic() > until:
+        for round_ in range(400):
+            if round_ >= self.ROUNDS and time.monotonic() > until:
                 break
             path.write_bytes(self.damage(rng, data))
             try:
@@ -2115,7 +2115,7 @@ class FuzzTests(TempFiles):
             if checked:  # a checksum or authentication covers every byte of a member
                 for name, rows in got.items():
                     self.assertEqual(rows, good.get(name), 'what is read is what was written')
-        self.assertGreater(sum(outcomes.values()), 30, outcomes)
+        self.assertGreaterEqual(sum(outcomes.values()), self.ROUNDS, outcomes)
         self.assertGreater(outcomes.get('corrupt-archive', 0), 10, outcomes)
 
     def test_gzip_members(self):
