@@ -704,14 +704,15 @@ class IsolationTests(FlowCase):
 
         def after(work, app_):
             tmp = work.temp(app_)
-            seen.update(same=tmp is made[0], containers=list(tmp.containers), volumes=list(tmp.volumes),
+            seen.update(first=(made[0].containers, made[0].volumes), containers=list(tmp.containers),
                         staging=os.listdir(work.staging), closed=seen['stream'].closed)
             return {'target_version': '1', 'n8n': {}}
 
         with mock.patch.object(tempctr, 'TempObjects', Temp):
             self.run_check(ha_id, ['odoo', 'n8n'], {'odoo': failing, 'n8n': after})
-        self.assertEqual(seen, {'stream': seen['stream'], 'same': True, 'containers': [], 'volumes': [], 'staging': [],
+        self.assertEqual(seen, {'stream': seen['stream'], 'first': ([], []), 'containers': [], 'staging': [],
                                 'closed': True})
+        self.assertEqual(self.reporter.partial['temp_owners'], [])
         # What could not be removed does not stand in the next app's way, and is tried again at the end.
         made.clear()
 
@@ -721,9 +722,34 @@ class IsolationTests(FlowCase):
 
         with mock.patch.object(tempctr, 'TempObjects', Temp):
             rows = self.run_check(ha_id, ['odoo', 'n8n'], {'odoo': stuck, 'n8n': after})['apps']
-        self.assertTrue(rows[1]['importable'])
-        self.assertEqual((len(made), seen['same']), (2, False))
+        self.assertEqual((rows[1]['importable'], len(made)), (True, 2))
         self.assertEqual(self.reporter.partial['temp_owners'], ['appowner'], 'left for the recovery')
+        with mock.patch.object(tempctr, 'TempObjects', Temp), \
+                mock.patch.object(Temp, 'cleanup', side_effect=RuntimeError('podman is gone')):
+            rows = self.run_check(ha_id, ['odoo', 'n8n'], {'odoo': failing, 'n8n': after})['apps']
+        self.assertTrue(rows[1]['importable'], 'a clean-up that fails costs no result')
+        self.assertEqual(self.reporter.partial['temp_owners'], ['appowner'])
+
+    def test_every_app_gets_throwaway_objects_of_its_own(self):
+        """Once tempctr knows scopes (F3) each app's objects have names of their own: the app's place in the job."""
+        ha_id = self.upload(self.all_addons())
+        made = []
+
+        def temp_objects(runner, job_id, **kwargs):
+            made.append(kwargs.get('scope'))
+            return types.SimpleNamespace(cleanup=lambda: [], kill_all=lambda: None)
+
+        def check(work, app_):
+            self.assertIs(work.temp(app_), work.temp(app_))
+            return {'target_version': '1', app_.id: {}}
+
+        checks = {app_id: check for app_id in ('odoo', 'n8n', 'hermes')}
+        with mock.patch.object(tempctr, 'TempObjects', temp_objects):
+            self.run_check(ha_id, list(checks), checks)
+            self.assertEqual(made, [None, None, None])
+            with mock.patch.object(tempctr, 'SCOPES', True, create=True):
+                self.run_check(ha_id, list(checks), checks)
+        self.assertEqual(made[3:], ['0', '1', '2'])
 
     def test_a_successful_app_is_reset_too(self):
         ha_id = self.upload(self.all_addons())

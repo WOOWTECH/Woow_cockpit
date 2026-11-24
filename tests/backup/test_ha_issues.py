@@ -48,6 +48,8 @@ class ShapeTests(unittest.TestCase):
         view = Issue('emqx.rules', 'stop', '句' * 400, [hostile, 'n' * 200], action='做' * 300).view(APP)
         self.assertEqual((len(view['message']), len(view['action']), len(view['items'][1])),
                          (haissues.MAX_MESSAGE, haissues.MAX_ACTION, haissues.MAX_ITEM))
+        self.assertTrue(view['message'].endswith('句…'), 'a sentence that was cut says so')
+        self.assertEqual(Issue('emqx.rules', 'stop', '句' * 300).view(APP)['message'], '句' * 300)
         for ch in '\n\x1b‮⁦​﻿\ud800':
             self.assertNotIn(ch, view['items'][0])
         self.assertTrue(view['items'][0].startswith('a b'))
@@ -207,6 +209,14 @@ class CheckFieldTests(unittest.TestCase):
         fields = haissues.check_fields('odoo', [line], {'database': rows[:2]})
         self.assertEqual((fields['importable'], fields['ok'], fields['blockers']), (True, False, ['prod：缺模組']))
         self.assertTrue(all(row['ok'] for row in fields['choices']['database']), 'a line to confirm does not stop it')
+
+    def test_a_long_list_of_choices_keeps_what_can_be_chosen(self):
+        rows = [{'value': f'db{i}', 'ok': i == 150} for i in range(200)]
+        fields = haissues.check_fields('odoo', [], {'database': rows})
+        self.assertEqual(len(fields['choices']['database']), haissues.MAX_CHOICES)
+        self.assertEqual(fields['choices']['database'][0], {'value': 'db150', 'label': 'db150', 'ok': True,
+                                                            'default': True})
+        self.assertTrue(fields['importable'])
 
     def test_old_text_lists_are_bounded(self):
         issues = haissues.from_legacy(['長' * 5000] * 60, ['提' * 5000] * 60)

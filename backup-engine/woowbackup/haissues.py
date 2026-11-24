@@ -167,7 +167,7 @@ class Issue:
 
     @property
     def message(self):
-        return clean(self.text, MAX_MESSAGE)
+        return self.text if len(self.text) <= MAX_MESSAGE else self.text[:MAX_MESSAGE - 1] + '…'
 
     def key(self, app_id):
         return confirm_key(app_id, self.id, self._key_items, self.database)
@@ -245,9 +245,13 @@ def views(app_id, issues):
 
 
 def choice_rows(rows):
-    """`choices.<kind>` as it is sent: [{value, label, ok?, default?}], labels cleaned and cut, at most MAX_CHOICES."""
+    """`choices.<kind>` as it is sent: [{value, label, ok?, default?}], labels cleaned and cut, at most MAX_CHOICES (of a
+    longer list those that can be chosen first)."""
+    rows = list(rows or ())
+    if len(rows) > MAX_CHOICES:
+        rows.sort(key=lambda row: row.get('ok') is False)  # stable
     result = []
-    for row in list(rows or ())[:MAX_CHOICES]:
+    for row in rows[:MAX_CHOICES]:
         item = {'value': str(row['value']), 'label': clean(_redact(str(row.get('label') or row['value'])), 200)}
         for flag in ('ok', 'default'):
             if flag in row:

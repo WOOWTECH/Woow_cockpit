@@ -411,8 +411,11 @@ class Work:
         if owner not in self._temps:
             self._owners.add(owner)
             self.ctx.reporter.set_partial(temp_owners=sorted(self._owners))
+            # A name of the app's own for every object it makes, once tempctr knows scopes (two apps of one check use the
+            # same roles): what one app could not remove then never stands in the way of the next one's.
+            scope = {'scope': str(self._app[0])} if self._app and getattr(tempctr, 'SCOPES', False) else {}
             self._temps[owner] = tempctr.TempObjects(self.runner(app), self.job_id, log=self.log,
-                                                     abort=self.watchdog.abort)
+                                                     abort=self.watchdog.abort, **scope)
             for folder in self.storage_folders(app):
                 if folder not in self.guard.folders:
                     self.guard.folders.append(folder)
@@ -479,16 +482,15 @@ class Work:
             with contextlib.suppress(Exception):
                 stream.close()
         self._streams.clear()
-        owner = getattr(app, 'owner', None)
-        tmp = self._temps.get(owner)
+        tmp = self._temps.pop(getattr(app, 'owner', None), None)  # the next app gets its own
         if tmp is not None:
             try:
                 left = tmp.cleanup()
             except Exception:  # noqa: BLE001 - the job's end and the next job's sweep try again
                 traceback.print_exc(file=sys.stderr)
                 left = True
-            if left:  # what could not be removed must not keep the next app from its own objects
-                self._stale.append(self._temps.pop(owner))
+            if left:
+                self._stale.append(tmp)
         try:
             names = [name for name in os.listdir(self.staging) if name not in keep]
         except OSError:
@@ -506,7 +508,11 @@ class Work:
         self.watchdog.stop()
         left = []
         for tmp in [*self._temps.values(), *self._stale]:
-            left += tmp.cleanup()
+            try:
+                left += tmp.cleanup()
+            except Exception:  # noqa: BLE001 - the result of the job stands; the record keeps the owners for the sweep
+                traceback.print_exc(file=sys.stderr)
+                left.append('?')
         if self._owners and not left:
             with contextlib.suppress(Exception):
                 self.ctx.reporter.set_partial(temp_owners=[])
