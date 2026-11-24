@@ -294,6 +294,30 @@ class LiteLLMCase(fk.ConversionCase):
     def logs(self):
         return '\n'.join(str(line) for line in getattr(self.reporter, 'logs', []))
 
+    def refused(self, words, code='incompatible', **upload):
+        """A conversion that must stop with `words` and make no backup; the BackupError."""
+        with self.assertRaises(BackupError) as caught:
+            self.convert(self.upload_litellm(**upload), ['litellm'])
+        self.assertEqual(caught.exception.code, code, caught.exception.message)
+        self.assertIn(words, caught.exception.message)
+        self.assertEqual(self.storage.list_backups(), [])
+        return caught.exception
+
+    def blockers(self, **upload):
+        result = self.check(self.upload_litellm(**upload), ['litellm'])[0]
+        self.assertEqual(result['ok'], not result['blockers'])
+        return result['blockers']
+
+    def watch_podman(self, seen):
+        """Call seen(args) before every podman call of the fake owner."""
+        podman = self.world.podman
+
+        def watched(args, data, stdout):
+            seen(args)
+            return podman(args, data, stdout)
+
+        self.world.podman = watched
+
 
 class RegistryTests(unittest.TestCase):
     def test_litellm_is_a_product_importer(self):
@@ -979,30 +1003,6 @@ class SingleProtectionTests(LiteLLMCase):
     test noticed: each test here fails when that one protection is gone (litellm_product_mutations.py N01..N34; the
     ids are the verifier's)."""
 
-    def refused(self, words, code='incompatible', **upload):
-        """A conversion that must stop with `words` and make no backup; the BackupError."""
-        with self.assertRaises(BackupError) as caught:
-            self.convert(self.upload_litellm(**upload), ['litellm'])
-        self.assertEqual(caught.exception.code, code, caught.exception.message)
-        self.assertIn(words, caught.exception.message)
-        self.assertEqual(self.storage.list_backups(), [])
-        return caught.exception
-
-    def blockers(self, **upload):
-        result = self.check(self.upload_litellm(**upload), ['litellm'])[0]
-        self.assertEqual(result['ok'], not result['blockers'])
-        return result['blockers']
-
-    def watch_podman(self, seen):
-        """Call seen(args) before every podman call of the fake owner."""
-        podman = self.world.podman
-
-        def watched(args, data, stdout):
-            seen(args)
-            return podman(args, data, stdout)
-
-        self.world.podman = watched
-
     def test_n01_a_version_the_check_refuses_never_converts(self):
         for upload, live, words in (({'version': '0.1.14'}, '1.104.0', '還不認得'),
                                     ({}, '1.105.0', '版本不同：HA 的 LiteLLM 是 1.104.0'),
@@ -1214,6 +1214,194 @@ class SingleProtectionTests(LiteLLMCase):
         self.convert(self.upload_litellm(), ['litellm'])
         self.assertLess(order.index('container'), order.index('new cluster'))
         self.assertLess(order.index('volume'), order.index('new cluster'))
+
+
+class OtherRefusalTests(LiteLLMCase):
+    """Refusals of ha_litellm.py that no test ran until 2026-11-24 (line coverage of the LiteLLM modules): an answer that is
+    not what the import expects stops it, each with its own message (litellm_product_mutations.py R01..R14)."""
+
+    def answer(self, wanted, value, role='hapg'):
+        """The fake cluster `role` answers `value` to every query `wanted` says yes to."""
+        original = self.world.answer
+
+        def answer(asked, sql, database):
+            return value if asked == role and wanted(sql) else original(asked, sql, database)
+
+        self.world.answer = answer
+
+    def test_r01_a_state_file_of_another_version_never_converts(self):
+        error = self.refused('最後由 LiteLLM 1.103.0 遷移', state='1.103.0')
+        self.assertTrue(error.message.startswith('LiteLLM 不能搬過來：'), error.message)
+        self.assertFalse(self.world.copies_out or self.world.snapshots or self.runs('ll-db'))
+
+    def test_r02_another_add_ons_member_is_not_litellm(self):
+        for addon in (None, types.SimpleNamespace(slug='woow-litellm-mcp'), types.SimpleNamespace(slug='')):
+            report = types.SimpleNamespace(addon=addon, skipped_symlinks=0)
+            with self.subTest(addon=addon), mock.patch.object(ha_litellm.habackup, 'iter_entries', return_value=iter([])):
+                with self.assertRaises(BackupError) as caught:
+                    ha_litellm.scan_member(None, report)
+            self.assertEqual((caught.exception.code, caught.exception.message),
+                             ('incompatible', '備份不是可辨識的 LiteLLM 附加元件。'))
+
+    def test_r03_r04_an_odd_schema_answer_is_not_a_schema(self):
+        row = COLUMNS[0]
+        for bad in (None, {}, [], [row[:6]], [row + ['x']], ['row'], [row] * 20001):
+            self.world.ha_columns = bad
+            with self.subTest(columns=str(bad)[:40]):
+                self.assertEqual(self.blockers(), ['無法確認HA 的 LiteLLM的資料表結構。'])
+                self.refused('無法確認HA 的 LiteLLM的資料表結構。')
+        self.world.ha_columns = copy.deepcopy(COLUMNS)
+        partial = {key: value for key, value in signature().items() if key != 'triggers'}
+        for bad in (None, [], partial, dict(signature(), more=[])):
+            self.world.ha_signature = bad
+            with self.subTest(signature=str(bad)[:40]):
+                self.assertEqual(self.blockers(), ['無法確認HA 的 LiteLLM的資料庫結構。'])
+                self.refused('無法確認HA 的 LiteLLM的資料庫結構。')
+        self.assertFalse(self.world.copies_out)
+
+    def test_r05_this_devices_migrations_must_be_readable(self):
+        for bad in (None, [], 'x', [1], ['a;b'], ['m'] * 2001):
+            self.world.live_migrations = bad
+            with self.subTest(migrations=str(bad)[:40]):
+                self.assertEqual(self.blockers(), ['無法讀取這台 LiteLLM 的資料庫結構版本（Prisma 遷移紀錄）。'])
+                self.refused('資料庫結構版本不同（Prisma 遷移紀錄：')
+        self.assertFalse(self.world.copies_out)
+
+    def test_r06_r07_names_are_quoted_only_when_they_are_plain(self):
+        self.assertEqual(ha_litellm.copy_out_sql('public', 'LiteLLM_UserTable', ['user_id', 'spend']),
+                         'COPY "public"."LiteLLM_UserTable" ("user_id", "spend") TO STDOUT')
+        for schema, name in (('public', 'a"; DROP TABLE x; --'), ('pub"lic', 'x'), ('public', ''), ('', 'x')):
+            with self.subTest(name=(schema, name)), self.assertRaises(BackupError) as caught:
+                ha_litellm.copy_in_sql(schema, name, ['id'])
+            self.assertEqual(caught.exception.message, 'LiteLLM 的資料表名稱不是這個匯入支援的格式，無法匯入。')
+        for columns in ([], ['a"b'], ['id', 'x) TO PROGRAM']):
+            with self.subTest(columns=columns), self.assertRaises(BackupError) as caught:
+                ha_litellm.copy_out_sql('public', 'x', columns)
+            self.assertEqual(caught.exception.message, 'LiteLLM 的資料表欄位名稱不是這個匯入支援的格式，無法匯入。')
+
+    def test_r08_a_salt_that_could_not_be_compared_is_not_a_match(self):
+        def script(_sql, _database):
+            raise BackupError('job-failed', 'the reader role cannot be made')
+
+        src = types.SimpleNamespace(salt_valid=True, salt=lambda: SALT)
+        binding = ha_litellm.salt_binding(types.SimpleNamespace(script=script), src)
+        self.assertEqual(binding, 'unknown')
+        with mock.patch.object(ha_litellm, 'salt_binding', return_value=binding):
+            words = 'HA 備份裡找不到格式正確的 LiteLLM 加密金鑰（salt_key）'
+            self.assertTrue([b for b in self.blockers() if b.startswith(words)])
+            self.refused(words)
+        self.assertFalse(self.world.copies_out)
+
+    def test_r09_has_cluster_must_hold_the_litellm_database(self):
+        self.answer(lambda sql: sql == ha_odoo.DATABASES_SQL, [['postgres', 100, 'C', 'C.UTF-8']])
+        self.assertEqual(self.blockers(), ['HA 的 LiteLLM 沒有 litellm 資料庫。'])
+        self.refused('HA 的 LiteLLM 沒有 litellm 資料庫。')
+
+    def test_r10_what_has_database_holds_must_be_readable(self):
+        for bad in (None, [], 'x'):
+            self.world.objects = bad
+            with self.subTest(objects=bad):
+                self.assertEqual(self.blockers(), ['無法讀取 HA 的 LiteLLM 資料庫。'])
+                self.refused('無法讀取 HA 的 LiteLLM 資料庫。', 'job-failed')
+
+    def test_r14_a_cluster_version_that_cannot_be_read_is_not_18(self):
+        for data in (b'x\n', b'18.6\n', b'', b'\xff18\n', b'018\n'):
+            with self.subTest(pg_version=data):
+                self.assertIn('HA 的 LiteLLM 資料庫不是預期的 PostgreSQL 18（是 未知 版）。', self.blockers(pg_version=data))
+                self.refused('HA 的 LiteLLM 資料庫不是預期的 PostgreSQL 18（是 未知 版）。', pg_version=data)
+        self.assertFalse(self.world.copies_out)
+
+    def test_r11_no_snapshot_is_taken_for_migrations_that_are_not_known(self):
+        for bad in (None, [], ["x'; DROP TABLE y; --"], [1]):
+            with self.subTest(expected=bad), self.assertRaises(BackupError) as caught:
+                ha_litellm.capture_schema(mock.Mock(), mock.Mock(id='litellm'), mock.Mock(), Path('/nonexistent/x'), bad)
+            self.assertEqual(caught.exception.message, '目標 LiteLLM 的資料庫結構版本不明。')
+
+    def test_a_snapshot_whose_first_line_is_not_the_columns_stops_and_leaves_nothing(self):
+        podman, removed, left = self.world.podman, [], []
+
+        def garbled(args, data, stdout):
+            if args[:5] == ['exec', '-i', 'litellm-postgres', 'sh', '-s']:
+                stdout.write(b'psql: not json\nPGDMP')
+                return Result(0, None, b'')
+            return podman(args, data, stdout)
+
+        self.world.podman = garbled
+        unlink = Path.unlink
+
+        def seen(path, *args, **kwargs):
+            result = unlink(path, *args, **kwargs)
+            if path.name.startswith('target-schema.dump'):
+                removed.append(path.name)
+                left.extend(sorted(x.name for x in path.parent.glob('target-schema.dump*')))
+            return result
+
+        with mock.patch.object(Path, 'unlink', seen):
+            self.refused('目標 LiteLLM 的結構快照格式不正確。')
+        self.assertEqual((removed, left), (['target-schema.dump.capture'], []), 'the captured text is gone at once')
+        self.assertFalse(self.runs('ll-db'))
+
+    def test_r12_a_new_cluster_that_cannot_be_audited_stops(self):
+        for bad in (None, [], 'x'):
+            self.world.audit = bad
+            with self.subTest(audit=bad):
+                self.refused('無法檢查新的 PostgreSQL 叢集。', 'job-failed')
+
+    def test_r13_a_sequence_value_that_is_not_one_stops(self):
+        original = self.world.answer
+        for bad in (None, [41], ['41', True], [41, 1], [True, True], [41, True, 0], [41.5, True]):
+            self.world.answer = original
+            self.answer(lambda sql: sql.startswith('SELECT json_build_array(last_value, is_called)'), bad)
+            with self.subTest(value=bad):
+                self.refused('無法讀取 HA 的 LiteLLM 序號 public.LiteLLM_AuditLog_id_seq。')
+                self.assertFalse(self.runs('ll-db'), 'no new cluster was started')
+
+
+class KeyUserSourceTests(LiteLLMCase):
+    """Option A's reminder (owner decision 2026-11-23): each source an app's use of LiteLLM is derived from names the app by
+    itself -- a declared config file, a Quadlet file (a setting or LiteLLM's network), LiteLLM's own drop-in that joins
+    one of the app's networks, a Pi agent's provider list (CheckTests)."""
+
+    def setUp(self):
+        super().setUp()
+        self.world.files.clear()
+        self.world.quadlets = {'litellm': QUADLETS}
+
+    def users(self):
+        return self.check(self.upload_litellm(), ['litellm'])[0]['litellm']['key_users']
+
+    def dropin(self, text):
+        self.world.files[f'{ha_litellm.DROPIN_DIR}/{ha_litellm.DROPINS[0]}'] = text.encode()
+
+    def test_an_app_that_does_not_use_it_is_not_named(self):
+        self.world.quadlets['opendesign'] = {'open-design.container': b'[Container]\nContainerName=od\nImage=x\n'}
+        self.assertEqual(self.users(), [])
+
+    def test_a_declared_config_file(self):
+        self.world.files['.config/hermes/hermes.env'] = b'LITELLM_API_KEY=sk-x\n'
+        self.assertEqual(self.users(), ['Hermes 代理'], "LiteLLM's own MCP administration reads that file too: not named")
+
+    def test_a_quadlet_setting_or_network(self):
+        for line in ('Environment=OPENAI_BASE_URL=http://litellm:4000/v1', 'Network=litellm.network',
+                     'Network=litellm-net:alias=x'):
+            self.world.quadlets['opendesign'] = {'open-design.container': f'[Container]\nImage=x\n{line}\n'.encode()}
+            with self.subTest(line=line):
+                self.assertEqual(self.users(), ['OpenDesign'])
+
+    def test_litellms_own_drop_in_that_joins_the_apps_network(self):
+        container = b'[Container]\nContainerName=od\nImage=x\nNetwork=design.network\n'
+        for network, joined, named in (
+                (b'[Network]\nNetworkName=design-net\n', 'podman network connect design-net litellm', True),
+                (b'[Network]\nNetworkName=design-net\n', 'podman network connect other-net litellm', False),
+                (b'[Network]\nDriver=bridge\n', 'podman network connect systemd-design litellm', True),
+                (b'[Network]\nDriver=bridge\n', 'podman network connect design litellm', True),
+                (b'[Network]\nDriver=bridge\n', 'podman network connect systemd-other litellm', False)):
+            self.world.quadlets['opendesign'] = {'open-design.container': container, 'design.network': network}
+            self.dropin(f'[Service]\nExecStartPost=/usr/bin/{joined}\n')
+            with self.subTest(network=network, joined=joined):
+                self.assertEqual(self.users(), ['OpenDesign'] if named else [])
+        self.world.files.clear()
+        self.assertEqual(self.users(), [], 'no drop-in: nothing is joined')
 
 
 class SnapshotScriptTests(unittest.TestCase):

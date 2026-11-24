@@ -1236,6 +1236,14 @@ class LiteLLMPackageTests(unittest.TestCase):
         app = self.draft(installed=[installed])
         self.assertEqual(app['entry']['health'], installed['health'], 'READY_PATHS is for a new proposal only')
 
+    def test_a_check_that_is_not_proposed_is_not_said_to_be_changed(self):
+        quadlets = dict(LITELLM_PACKAGE)
+        quadlets['litellm.container'] = quadlets['litellm.container'].replace('PublishPort=127.0.0.1:4000:4000\n', '')
+        app = self.draft(quadlets=quadlets)
+        self.assertEqual(app['entry'].get('health') or [], [])
+        self.assertTrue(any('沒有發佈到 127.0.0.1，未列入' in h for h in app['hints']), app['hints'])
+        self.assertFalse([h for h in app['hints'] if '草稿改用 /health/readiness' in h])
+
     def test_the_package_settings_file_is_proposed_only_when_the_owner_has_it(self):
         app = self.draft(files=LITELLM_FILES[:1])
         self.assertEqual([c['path'] for c in app['entry']['config_files']], ['.config/litellm/config.yaml'])

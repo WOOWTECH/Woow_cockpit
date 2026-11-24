@@ -18,7 +18,7 @@ class MutationToolTests(unittest.TestCase):
 
     def test_the_tool_never_runs_this_module(self):
         modules = set(self.tool.TESTS) | set(self.tool.SUGGEST_TESTS)
-        for entry in self.tool.MUTATIONS:
+        for entry in self.tool.MUTATIONS + self.tool.CONTROLS:
             modules.update(*entry[6:])
         self.assertEqual(modules, {'tests.backup.test_ha_litellm', 'tests.backup.test_adapter_import_secrets',
                                    'tests.backup.test_ha_litellm_candidate', 'tests.backup.test_suggest'})
@@ -40,9 +40,9 @@ class MutationToolTests(unittest.TestCase):
     def test_every_removal_is_one_place_of_the_current_sources(self):
         engine = Path(ha_litellm.__file__).resolve().parents[1]
         sources = {}
-        ids = [entry[0] for entry in self.tool.MUTATIONS]
+        ids = [entry[0] for entry in self.tool.MUTATIONS + self.tool.CONTROLS]
         self.assertEqual(len(ids), len(set(ids)))
-        for ident, _name, module, old, new, count, *_tests in self.tool.MUTATIONS:
+        for ident, _name, module, old, new, count, *_tests in self.tool.MUTATIONS + self.tool.CONTROLS:
             with self.subTest(ident):
                 text = sources.setdefault(module, (engine / module).read_text(encoding='utf-8'))
                 self.assertEqual((count, text.count(old)), (1, 1), 'one entry disables one place')
@@ -51,6 +51,14 @@ class MutationToolTests(unittest.TestCase):
         for ident in ('N01', 'N09', 'N10', 'N11', 'N12', 'N14', 'N16', 'N18', 'N19', 'N21', 'N28', 'N29', 'N30', 'N32',
                       'N33', 'N34'):
             self.assertIn(ident, ids)
+
+    def test_the_controls_change_a_comment_only_one_per_module(self):
+        self.assertEqual(sorted(entry[2] for entry in self.tool.CONTROLS),
+                         sorted({entry[2] for entry in self.tool.MUTATIONS}))
+        for ident, _name, _module, old, new, _count, _tests in self.tool.CONTROLS:
+            with self.subTest(ident):
+                self.assertTrue(old.startswith('# ') and new.startswith('# '))
+                self.assertNotIn('\n', old + new)
 
 
 if __name__ == '__main__':

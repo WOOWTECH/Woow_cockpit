@@ -1564,15 +1564,15 @@ class Analyzer:
                     path = path.split('?', 1)[0] or '/'
                     hints.append(f'{container.file} 的健康檢查網址有查詢參數（? 之後的部分，可能含有存取權杖），未列入草稿；'
                                  '應用設定可被所有帳號讀取，確實需要時再自行加入。')
+                host_port = self._host_port(container, cport)
+                if host_port is None:
+                    hints.append(f'{container.file} 的健康檢查連到容器埠 {cport}，但它沒有發佈到 127.0.0.1，未列入。')
+                    continue
                 ready = READY_PATHS.get((app['id'], path))
                 if ready is not None:
                     hints.append(f'{container.file} 的健康檢查 {path} 只表示程式有回應；草稿改用 {ready}（會確認資料庫，'
                                  '也是這個套件啟動時等待的檢查）。')
                     path = ready
-                host_port = self._host_port(container, cport)
-                if host_port is None:
-                    hints.append(f'{container.file} 的健康檢查連到容器埠 {cport}，但它沒有發佈到 127.0.0.1，未列入。')
-                    continue
                 answers = HEALTH_PATHS.get((app['id'], path))
                 if answers is not None:
                     hints.append(f'{container.file} 的健康檢查網址 {path} 只回應容器內部，從這台設備連線會得到 403；'
