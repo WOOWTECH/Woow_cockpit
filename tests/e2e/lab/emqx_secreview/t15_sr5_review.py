@@ -106,22 +106,30 @@ def wait_started(execute, timeout=240):
 
 def make_ha_mnesia(mode, chain, maker_hocon):
     """EMQX itself writes MAKER_USERS into `chain` under the maker config's `plain` authenticator; returns
-    ({'mnesia/<node>/<file>': bytes}, the source broker's own CLEAR answer)."""
-    vol, log = f'woowbk-secrev-t15src-{mode}-data', f'woowbk-secrev-t15src-{mode}-log'
+    ({'mnesia/<node>/<file>': bytes}, the source broker's own CLEAR answer). The source broker runs HA's layout (data
+    dir /data/emqx/data with HA's authz/acl.conf, like ha_broker: HA's file source names that path), the image's
+    VOLUME paths on labelled volumes. First attempt (t15-sr5) used /opt/emqx/data: HA's ACL path did not exist there and
+    the broker never reported started (kept as evidence)."""
+    vol, img, log = (f'woowbk-secrev-t15src-{mode}-{part}' for part in ('data', 'img', 'log'))
     ctr = f'woowbk-secrev-t15src-{mode}-emqx'
-    for name in (vol, log):
+    for name in (vol, img, log):
         L.lab('volume', 'create', '--label', L.LABEL, name)
     try:
-        L.lab('volume', 'import', vol, '-', input=L.tar_bytes({'configs/cluster.hocon': maker_hocon}, uid=1000,
-                                                              gid=1000))
+        L.lab('volume', 'import', vol, '-', input=L.tar_bytes({'configs/cluster.hocon': maker_hocon,
+                                                               'authz/acl.conf': T1.HA_ACL}, uid=1000, gid=1000))
         L.lab('run', '-d', '--name', ctr, '--label', L.LABEL, '--network', 'none', '--pull=never', '--memory', '1g',
-              '-e', 'EMQX_NODE__NAME=emqx@127.0.0.1', '-e', 'EMQX_DASHBOARD__DEFAULT_PASSWORD=',
-              '-v', f'{vol}:/opt/emqx/data', '-v', f'{log}:/opt/emqx/log', L.IMAGE)
+              '-e', 'EMQX_NODE__NAME=emqx@127.0.0.1', '-e', 'EMQX_NODE__DATA_DIR=/data/emqx/data',
+              '-e', 'EMQX_DASHBOARD__DEFAULT_PASSWORD=', '-v', f'{vol}:/data/emqx/data', '-v', f'{img}:/opt/emqx/data',
+              '-v', f'{log}:/opt/emqx/log', L.IMAGE)
 
         def execute(command):
             return L.lab('exec', ctr, *command, timeout=180, check=False)
         if not wait_started(execute):
-            raise RuntimeError('source broker did not start')
+            tail = L.lab('logs', '--tail', '40', ctr, check=False)
+            private = os.path.join(L.SR, 'runs', f't15src-{mode}-logs.txt')   # lab broker output, not evidence
+            with open(os.open(private, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), 'wb') as handle:
+                handle.write((tail.stdout or b'') + b'\n--- stderr ---\n' + (tail.stderr or b''))
+            raise RuntimeError(f'source broker did not start (its last log lines: {os.path.basename(private)})')
         users = ', '.join('<<"' + u.decode() + '">>' for u in MAKER_USERS)
         added = mark(execute(['emqx', 'eval', DERIVE + 'R = [emqx_authn_chains:add_user(\'' + chain + '\', '
                               '<<"password_based:built_in_database">>, #{user_id => U, password => D(U)}) || U <- ['
@@ -132,7 +140,7 @@ def make_ha_mnesia(mode, chain, maker_hocon):
         data = L.lab('volume', 'export', vol, timeout=300).stdout
     finally:
         L.lab('rm', '-f', '-t', '0', ctr, check=False)
-        for name in (vol, log):
+        for name in (vol, img, log):
             L.lab('volume', 'rm', '-f', name, check=False)
     files = {}
     with tarfile.open(fileobj=io.BytesIO(data)) as tar:
