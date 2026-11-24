@@ -210,12 +210,13 @@ class TempObjects:
 
     def run_argv(self, role, image, args=(), *, detach=False, network=None, volumes=(), secrets=(), env=None,
                  entrypoint=None, user=None, workdir=None, interactive=False, remove=False, read_only_root=False,
-                 add_hosts=()):
+                 add_hosts=(), env_files=()):
         """The `podman run` argument list (without `podman`) of a throwaway container; every value is checked.
         `volumes`: (source, target, options|None); a source is a volume name or an absolute host path. `secrets`:
         Quadlet `Secret=` values (quadlet_secrets). `env`: {key: value} (never a secret value: it would be visible
-        in the process list). `add_hosts`: (name, IPv4) lines for the container's /etc/hosts (no network is
-        opened by them)."""
+        in the process list). `env_files`: absolute paths podman itself reads (`--env-file`, like a Quadlet's
+        `EnvironmentFile=`): their values, which may be secret, never reach a command line; `env` wins over them.
+        `add_hosts`: (name, IPv4) lines for the container's /etc/hosts (no network is opened by them)."""
         name = self.name(role)
         if not isinstance(image, str) or not IMAGE_RE.fullmatch(image):
             raise BackupError('internal-error', '映像名稱格式不正確。')
@@ -251,6 +252,11 @@ class TempObjects:
             if not isinstance(entrypoint, str) or not re.fullmatch(r'[A-Za-z0-9_./-]{1,255}', entrypoint):
                 raise BackupError('internal-error', '容器進入點格式不正確。')
             argv += ['--entrypoint', entrypoint]
+        for path in env_files:
+            if (not isinstance(path, str) or not TARGET_RE.fullmatch(path) or path.endswith('/')
+                    or {'', '.', '..'} & set(path[1:].split('/'))):
+                raise BackupError('internal-error', '容器環境變數檔路徑格式不正確。')
+            argv += ['--env-file', path]
         for key, value in sorted((env or {}).items()):
             if not ENV_KEY_RE.fullmatch(key) or not isinstance(value, str) or not ENV_VALUE_RE.fullmatch(value):
                 raise BackupError('internal-error', '容器環境變數格式不正確。')

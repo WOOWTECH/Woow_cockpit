@@ -1974,7 +1974,9 @@ PostgreSQL 15).
    reviewed for 5.8.9. The data volume's `configs/cluster.hocon` and the data-volume files the configuration names are
    snapshotted (an override that is absent stays absent, proven by a complete volume traversal); configuration and
    override state are read again afterwards and must be unchanged. The candidate is the live image with the Quadlet's
-   `EMQX_*` environment, its `Secret=` mounts and its read-only host files, the snapshot in an otherwise empty data
+   `EMQX_*` environment, its `EnvironmentFile=` files (in the owner's home, plain `EMQX_*` lines only, read by podman
+   itself with `--env-file` as for the running broker: their values never appear in a command line, which every local
+   account can read), its `Secret=` mounts and its read-only host files, the snapshot in an otherwise empty data
    volume and the export (owned by the image's emqx user) at `/work/in`. It starts with this device's scheduler
    counts (fixed `emqx eval` of `erlang:system_info(schedulers)` and `schedulers_online` on the running broker,
    passed as `ERL_AFLAGS="+S total:online"` at the start of the command line; `ERL_FLAGS` would land after the
