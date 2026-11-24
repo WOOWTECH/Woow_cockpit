@@ -6,6 +6,14 @@ Source: R-COCKPIT branch `feat/ha-import-omnigent-product-20261123` (the product
 `tests/e2e/lab/services_a_capture.py` (one JSON per attempt: exit, fixed status lines only, elapsed seconds, stdout
 SHA-256, source commit, `commercial_acceptance: not-complete`). Failed attempts are kept.
 
+**Where it ran.** dev-d is a lab device: a rootless container with systemd as PID 1 on the development host
+(`tests/e2e/lab/README.md`), `network=none`, no published port, its own nested rootless Podman. It is NOT a physical
+machine and no customer device. "Real" in this file means: the real HA backups of the batch-1 fixtures (an x86 HA and
+the RPi5 HAOS; the one lab-made file says so), the real product engine and helper, the real Omnigent and PostgreSQL
+images running in dev-d, real HTTP logins and SQL reads. The ARM backup is restored on amd64 dev-d; this lane made no
+Omnigent run on ARM hardware. (Correction of 2026-11-24: the headline of the iteration-4 hand-off said 「真機全流程」; it
+must read 「實驗機 dev-d 全流程」.)
+
 What one run is (all through the root helper the Cockpit page calls, inside dev-d; the engine of the attempt's commit
 installed by `deploy-src.sh` and checked module by module):
 
@@ -30,6 +38,15 @@ Stated limits: the browser page itself is not driven (dev-d publishes no port; t
 no host reboot; the Pi agent / model provider is out of scope; HA's own runner stays offline after the move (by
 design); tokens the server issues to the runner itself are not observable by the leak scan; the server-data and
 pi-data volumes are live exports during the convert (CONTRACT B1-11, unchanged).
+
+More limits, named by the independent verifier (2026-11-24): the upload step of the four real backups found the HA
+store record of an earlier upload (the id is the file's SHA-256); only the x86 active-task run uploaded a new file.
+The restore that the injected failure interrupts carries the data that is already installed, so equal data alone does
+not tell "rolled back" from "restored": the job status `rolled-back`, the consumed one-shot failure and the units tell
+it; the manual rollback to dev-d's own state is the one that shows a data difference. Only x86-enc ran on the last
+code commit 97c994f; the other forms ran on fdf68dd, bd0f630 and 4a3622b (the differences are message and log-line
+code). The raw output of the read-only dev-d audit of 2026-11-24 07:36 was not kept (its result is text in
+`status.json`; the verifier repeated the audit with the same result).
 
 ## Attempts
 

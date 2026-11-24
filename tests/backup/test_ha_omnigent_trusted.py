@@ -1,10 +1,17 @@
-"""The trusted-schema load: archive selection (data only, trusted names once), the restricted loader and the
-snapshot provider's failure cleanup."""
+"""The trusted-schema load: archive selection (data only, trusted names once), the restricted loader, the snapshot
+provider's failure cleanup and the script it runs in the live database's container (by a real shell, with stand-ins
+for psql and pg_dump)."""
+import json
+import os
+import subprocess
+import tempfile
 import unittest
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 from woowbackup import ha_omnigent as omni
 from woowbackup.errors import BackupError
+from woowbackup.podman import CommandError, Result
 
 class TrustedDataTests(unittest.TestCase):
     def test_schema_entries_are_not_selected(self):
@@ -38,7 +45,9 @@ class TrustedDataTests(unittest.TestCase):
     def test_the_old_public_guards_are_replaced_by_the_product_checks(self):
         self.assertFalse(hasattr(omni, 'SECURITY_BLOCKER'))
         self.assertFalse(hasattr(omni, 'restore_dump'))
-        self.assertEqual(omni.SIGNATURE_KEYS[:3], ('relations', 'columns', 'constraints'))
+        self.assertEqual(omni.SIGNATURE_KEYS, (   # every part of a schema that is compared (none may go missing)
+            'relations', 'columns', 'constraints', 'indexes', 'sequences', 'types', 'functions', 'triggers', 'rules',
+            'views', 'policies', 'extensions', 'schemas', 'other'))
 
     def test_candidate_uses_target_schema_and_restricted_loader(self):
         import tempfile
@@ -78,15 +87,19 @@ class TrustedDataTests(unittest.TestCase):
             def podman(self, *args, **kwargs):
                 if self.mode == 'timeout':
                     raise BackupError('job-failed', 'synthetic timeout')
-                kwargs['stdout'].write(b'invalid-json\nPGDMP')
-        for mode in ('timeout', 'invalid'):
+                kwargs['stdout'].write(self.mode + b'\nPGDMP')
+        # not JSON, JSON that is no list (an object, a number), no columns, a row that is no column
+        for mode in ('timeout', b'invalid-json', b'{"users": 1}', b'5', b'[]', b'[["users", "id"]]',
+                     b'[["users", "id", "text", true, "", ""], 1]'):
             with self.subTest(mode=mode), tempfile.TemporaryDirectory() as directory:
                 path = Path(directory) / 'schema'
                 work = SimpleNamespace(runner=lambda app: Runner(mode),
                     guard=SimpleNamespace(budget=lambda: 1024, check=lambda n: None), abort=lambda: None)
-                with self.assertRaises(BackupError):
+                with self.assertRaises(BackupError) as caught:
                     omni.capture_consistent_target_schema(work, SimpleNamespace(id='omnigent'),
                         SimpleNamespace(db_container='synthetic', db_user='postgres'), path, ['revision'])
+                self.assertEqual(caught.exception.message, 'synthetic timeout' if mode == 'timeout' else
+                                 '目標 Omnigent 的結構快照格式不正確。')
                 self.assertFalse(path.exists())
                 self.assertFalse(path.with_name(path.name + '.capture').exists())
 
@@ -126,3 +139,131 @@ class TrustedDataTests(unittest.TestCase):
                     SimpleNamespace(db_container='synthetic', db_user='postgres'), path, ['revision'])
             self.assertFalse(path.exists())
             self.assertFalse(path.with_name('schema.capture').exists())
+
+
+class SnapshotScriptTests(unittest.TestCase):
+    """SNAPSHOT_SCRIPT as the capture runs it (`podman exec -i <live database> sh -s -- <user> <database>`), here by a
+    real shell of this machine whose PATH starts with stand-ins: psql answers the script's statements into the `\\o`
+    files they name, pg_dump records its arguments. No PostgreSQL, no container."""
+    COLUMNS = [['users', 'id', 'character varying(128)', True, '', '']]
+    SNAPSHOT = '00000003-0000001B-1'
+    PSQL = r"""#!/bin/sh
+printf '%s\n' "$@" > "$STUB/psql.argv"
+folder=$(dirname "$(readlink /proc/self/fd/0)")
+printf '%s\n' "$folder" "$(stat -c %a "$folder")" "$(stat -c %a "$folder/in")" > "$STUB/psql.folder"
+out=/dev/null
+while IFS= read -r line; do
+    printf '%s\n' "$line" >> "$STUB/psql.stdin"
+    case $line in
+        '\o '*) out=${line#* } ;;
+        '\o') out=/dev/null ;;
+        'SELECT pg_export_snapshot();') printf '%s\n' "$STUB_SNAPSHOT" > "$out" ;;
+        'LOCK TABLE '*) [ "$STUB_LOCKED" = no ] || exit 3 ;;
+        'SELECT CASE WHEN '*) printf '%s\n' "$STUB_REVISION" > "$out" ;;
+        'SELECT coalesce(json_agg(json_build_array(c.relname, '*) printf '%s\n' "$STUB_COLUMNS" > "$out" ;;
+        '\q') exit 0 ;;
+    esac
+done
+"""
+    PG_DUMP = r"""#!/bin/sh
+printf '%s\n' "$@" > "$STUB/pg_dump.argv"
+cp "$STUB/psql.stdin" "$STUB/psql.stdin.at-dump"
+[ "$STUB_DUMP" = ok ] || exit 1
+printf 'PGDMP-schema-only'
+"""
+
+    def setUp(self):
+        folder = tempfile.TemporaryDirectory(prefix='omni-snapshot-')
+        self.addCleanup(folder.cleanup)
+        self.root = Path(folder.name)
+        for name, text in (('psql', self.PSQL), ('pg_dump', self.PG_DUMP)):
+            stub = self.root / 'bin' / name
+            stub.parent.mkdir(exist_ok=True)
+            stub.write_text(text, encoding='utf-8')
+            stub.chmod(0o755)
+        self.path = self.root / 'target-schema.dump'
+        self.calls = []
+
+    def capture(self, **answers):
+        env = {'PATH': f'{self.root / "bin"}:/usr/bin:/bin', 'LC_ALL': 'C', 'STUB': str(self.root),
+               'STUB_SNAPSHOT': self.SNAPSHOT, 'STUB_REVISION': 'ok', 'STUB_COLUMNS': json.dumps(self.COLUMNS),
+               'STUB_LOCKED': 'no', 'STUB_DUMP': 'ok', **answers}
+
+        def podman(*args, input, stdout, **kwargs):
+            self.calls.append(args)
+            script = subprocess.run(['sh', *args[args.index('sh') + 1:]], input=input, stdout=stdout,
+                                    stderr=subprocess.PIPE, env=env, timeout=300, start_new_session=True)
+            if script.returncode:
+                raise CommandError(f'podman exec 執行失敗（結束碼 {script.returncode}）。', returncode=script.returncode,
+                                   stderr=script.stderr)
+            return Result(0, None, b'')
+        work = SimpleNamespace(runner=lambda app: SimpleNamespace(podman=podman), abort=lambda: None,
+                               guard=SimpleNamespace(budget=lambda: 1024 * 1024, check=lambda n: None))
+        return omni.capture_consistent_target_schema(
+            work, SimpleNamespace(id='omnigent'),
+            SimpleNamespace(db_container='omnigent-postgres', db_user='appuser'), self.path, ['d0a1f879a01d'])
+
+    def recorded(self, name):
+        path = self.root / name
+        return path.read_text(encoding='utf-8').splitlines() if path.exists() else None
+
+    def assert_private_folder_removed(self):
+        folder, *modes = self.recorded('psql.folder')
+        self.assertRegex(folder, r'\A/tmp/woowbk-schema\.[A-Za-z0-9]{8}\Z')
+        self.assertEqual(modes, ['700', '600'])
+        self.assertFalse(os.path.exists(folder), "the script's private folder is removed")
+        return folder
+
+    def test_the_dump_is_schema_only_and_reads_the_exported_snapshot(self):
+        """pg_dump of the live database takes its schema and nothing else (`--schema-only`: this device's rows --
+        accounts, sessions, keys -- are never written into the job's staging folder), as the exported snapshot shows
+        it, while the transaction that exported it is still open."""
+        self.assertEqual(self.capture(), self.COLUMNS)
+        self.assertEqual(self.calls, [('exec', '-i', 'omnigent-postgres', 'sh', '-s', '--', 'appuser', 'omnigent')])
+        self.assertEqual(self.recorded('pg_dump.argv'),
+                         ['-U', 'appuser', '-d', 'omnigent', '-Fc', '--schema-only', '--no-owner', '--no-acl',
+                          '--lock-wait-timeout=15s', f'--snapshot={self.SNAPSHOT}'])
+        self.assertEqual(self.recorded('psql.argv'), ['-X', '-q', '-A', '-t', '-v', 'ON_ERROR_STOP=1', '-U', 'appuser',
+                                                      '-d', 'omnigent'])
+        folder = self.assert_private_folder_removed()
+        sent = ['BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY;',
+                "SET LOCAL application_name = 'woowbk-schema-snapshot';", "SET LOCAL lock_timeout = '15s';",
+                "SET LOCAL idle_in_transaction_session_timeout = '10920s';",
+                'LOCK TABLE public.alembic_version IN ACCESS SHARE MODE;',
+                f'\\o {folder}/snapshot', 'SELECT pg_export_snapshot();', f'\\o {folder}/revision',
+                "SELECT CASE WHEN (SELECT coalesce(json_agg(version_num ORDER BY version_num), '[]'::json)::text "
+                'FROM public.alembic_version) = \'["d0a1f879a01d"]\' THEN \'ok\' ELSE \'mismatch\' END;',
+                f'\\o {folder}/columns', ' '.join(omni.SCHEMA_COLUMNS_SQL.split()) + ';', '\\o']
+        self.assertEqual(self.recorded('psql.stdin'), sent + ['COMMIT;', '\\q'])
+        self.assertIn(self.recorded('psql.stdin.at-dump'), (sent, sent[:-1]), 'the transaction is open while pg_dump runs')
+        self.assertEqual(self.path.read_bytes(), b'PGDMP-schema-only', 'the archive without the columns line')
+        self.assertEqual(self.path.stat().st_mode & 0o777, 0o600)
+        self.assertEqual([p.name for p in self.root.iterdir() if p.name.startswith('target')], ['target-schema.dump'])
+
+    def test_nothing_is_dumped_when_the_snapshot_is_not_the_expected_one(self):
+        for name, code, answers in (
+                ('another revision inside the snapshot', 22, {'STUB_REVISION': 'mismatch'}),
+                ('no revision', 22, {'STUB_REVISION': ''}),
+                ('not a snapshot id', 23, {'STUB_SNAPSHOT': '00000003-0000001B-1 --file=/tmp/x'}),
+                ('no snapshot id', 23, {'STUB_SNAPSHOT': ''}),
+                ('a lock that was not granted ends psql', 21, {'STUB_LOCKED': 'yes'})):
+            with self.subTest(name=name):
+                for file in ('pg_dump.argv', 'psql.stdin', 'psql.folder'):
+                    (self.root / file).unlink(missing_ok=True)
+                with self.assertRaises(CommandError) as caught:
+                    self.capture(**answers)
+                self.assertEqual(caught.exception.returncode, code)
+                self.assertIsNone(self.recorded('pg_dump.argv'), 'pg_dump never ran')
+                self.assertEqual([p.name for p in self.root.iterdir() if p.name.startswith('target')], [])
+                self.assert_private_folder_removed()
+
+    def test_a_failed_dump_is_not_a_schema(self):
+        with self.assertRaises(CommandError):
+            self.capture(STUB_DUMP='fails')
+        self.assertEqual([p.name for p in self.root.iterdir() if p.name.startswith('target')], [])
+        self.assertNotIn('COMMIT;', self.recorded('psql.stdin'))
+        self.assert_private_folder_removed()
+
+
+if __name__ == '__main__':
+    unittest.main()
