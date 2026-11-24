@@ -474,10 +474,15 @@ class ConvertResultTests(FlowCase):
         self.assertFalse((Path(self.paths.staging) / self.job_id).exists())
         return caught.exception, row
 
-    def test_a_failure_half_way(self):
-        self.failed(BackupError('corrupt-archive', '資料讀不出來。'), 'corrupt-archive', 'failed',
-                    ['failure.corrupt-archive'])
-        self.failed(BackupError('job-failed', '核對不一致。'), 'job-failed', 'failed', ['failure.job-failed'])
+    def test_every_error_code_of_a_conversion(self):
+        """Each leaves no backup, no row and no staging (`failed`) and says which app and why."""
+        for code in sorted(errors.CODES):
+            with self.subTest(code=code):
+                _error, row = self.failed(BackupError(code, f'{code} 的原因。'), code,
+                                          'skipped' if code in haimport.SKIP_CODES else 'failed', [f'failure.{code}'])
+                self.assertEqual(row['message'], f'{code} 的原因。')
+        self.assertTrue({'corrupt-archive', 'job-failed', 'incompatible', 'insufficient-space', 'internal-error'}
+                        .isdisjoint(haimport.SKIP_CODES), 'what went wrong half way is no skip')
 
     def test_an_unexpected_error_is_generic_and_only_this_apps(self):
         error, row = self.failed(RuntimeError('secret detail'), 'internal-error', 'failed', ['failure.internal-error'])
