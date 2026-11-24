@@ -1,11 +1,11 @@
 # EMQX HA import (product path) — independent adversarial security review (2026-11-23 and 2026-11-24)
 
-Lane emqx-secreview (owner instance SR-OWNER-1942), seven iterations. This review attacked the product import as a
+Lane emqx-secreview (owner instance SR-OWNER-1942), eight iterations. This review attacked the product import as a
 malicious HA backup would, fixed what it could prove, and reran the attacks against the engine that is handed over.
 
 ## Summary (read this first)
 
-- **Eleven findings, SR-1 to SR-11.** Five High/Medium findings were confirmed by real attacks and fixed (SR-1, SR-2, SR-3,
+- **Twelve findings, SR-1 to SR-12.** Five High/Medium findings were confirmed by real attacks and fixed (SR-1, SR-2, SR-3,
   SR-6, SR-8); SR-7 (Medium) is a refusal added because the vendor code proves the leak, its ExHook trigger is
   exercised by T12 (iteration 2); SR-4 and SR-9 are Low and fixed. **SR-5 (Low): iteration 4's clear-text claim is disproven** by three real
   conversions with HA's `plain` authenticator and a same-hash control (Iteration 5): this device's bootstrap password is never stored in
@@ -14,13 +14,16 @@ malicious HA backup would, fixed what it could prove, and reran the attacks agai
   **Iteration 7 re-reviewed that change and found SR-11 (Low):** `plain` outside the global chain (an MQTT listener's
   or a gateway's built-in database) and rows HA still keeps in clear text passed the refusal and reached the
   candidate as clear text (real attack, 3 of 3); fixed on `sec/emqx-secreview7-20261124` (`9665533`).
+  **Iteration 8 found SR-12 (Low, the iteration-7 verifier's point):** the SR-11 row check still let all-digit,
+  `$2…` and salted clear values through (real on `9665533`); fixed on `sec/emqx-secreview8-20261124` (`a1f1947`):
+  every stored row must be in the exact form of its hashing, proven in real brokers with 34 behavioural mutants.
   **SR-10
   (Low) was found in iteration 4** in exactly the handed-over tree 865c930f and is fixed on the integration branch
   only (65d8a51, 97c994f): a C0/C1/bidirectional/line-separator character in an HA plugin name, a `/share` path or a
   skipped-symlink name reached a check warning raw or forged a second job-log line.
 - **Where the fixes are:** SR-1, SR-2, SR-3 75aad7a; SR-6 f397590; SR-7 7b173af; SR-4 in the product's own 7449540; SR-8 and
   SR-9 abff1a0 (all in the handed-over engine 865c930f, the last merged as 620bdd5). SR-10 is on the integration branch
-  (65d8a51, 97c994f), NOT in 865c930f. SR-5: owner decision C, implemented by lane emqx-sr5 (`74d237f`, engine `5142e05c`); SR-11: `9665533` (engine `3ea9610f`, Iteration 7).
+  (65d8a51, 97c994f), NOT in 865c930f. SR-5: owner decision C, implemented by lane emqx-sr5 (`74d237f`, engine `5142e05c`); SR-11: `9665533` (engine `3ea9610f`, Iteration 7); SR-12: `a1f1947` (engine `325f1f74`, Iteration 8).
 - **Engine reviewed in iteration 3:** `feat/ha-import-emqx-product-20261124` @ `e08f8a1` (product READY of 08:30), `backup-engine` tree `865c930f392006e0080de506eb7c425fd81becd7` = the product tip `5786ae4` + `abff1a0` (merge `620bdd5`) + the Podman 6 tempctr fix (cherry-pick `e08f8a1`, patch id equal to `8613ffa` and `c8df1f2`); the review reruns used the same tree as trial commit `cd66230`.
 - **What passing here means:** this review proves conversion and refusal behaviour of the product's own code against
   real EMQX 5.8.9 brokers in throwaway rootless lab containers with `--network none`. It is not the commercial
@@ -84,6 +87,7 @@ malicious HA backup would, fixed what it could prove, and reran the attacks agai
 | SR-9 | Low | 3761d18: the candidate's environment was not read the way podman reads it for the broker | fixed abff1a0, verified against podman (T10) |
 | SR-10 | Low | A C0/C1/bidirectional/line-separator character (e.g. U+202E, U+2066, U+0085, U+2028) in an HA EMQX plugin name, a `/share` file reference or a skipped-symlink name reached a check warning raw, or forged a second job-log line, in the handed-over tree 865c930f | fixed on the integration branch only (65d8a51 `hacommon.names`; 97c994f the twelve bidi controls in names and `jobs.LOG_CONTROL_RE`); NOT in 865c930f. Proven in process: forged=True on 865c930f, forged=False on the integration tip (Iteration 4) |
 | SR-11 | Low | SR-5 option C refuses `plain` only in the global chain (`HASH_EXPR` reads `[authentication]`). A `plain` built-in database of an MQTT listener or a gateway, and rows HA wrote under `plain` before it changed the algorithm, passed the check and the conversion; the export carries the whole `emqx_authn_mnesia` table (`emqx_authn_mnesia.erl:105`) and the `gateway` root is a data root, so the candidate held HA's passwords in clear text (real: 3 of 3, `iteration7/t15-sr5b.json`), against the owner's 「不會留下明文密碼」 | fixed `9665533` (`PLAIN_EXPR`, refused at the check and before HA's export; real: 3 of 3 refused, `iteration7/t15-fix7.json`) |
+| SR-12 | Low | The SR-11 row check counted a row as clear text only with an EMPTY salt and a value that is neither hex (any length) nor starts with `$2`: all-digit passwords, passwords starting with `$2` and clear values stored WITH a salt by a `hash` import or bootstrap file (`emqx_authn_mnesia.erl:541-542`) passed the check and the conversion (found by the iteration-7 verifier; real on `9665533`: `iteration8/t16p-fix7.json`) | fixed `a1f1947` (every row in the exact form of its group's hashing, vendor forms + image probe; real: `iteration8/t16f-fix8.json` 34/34 mutants killed by behaviour, `iteration8/t16p-fix8.json`) |
 
 ### SR-1 — code execution in HA's broker (B1-06)
 
@@ -983,5 +987,249 @@ and JSON-escaped; values never printed), at 2026-11-24 18:26 +0800: committed ev
    refuses HA backups that `3c857c3` converted. If the owner prefers another remedy for old clear-text rows (for
    example dropping them with a note instead of refusing), that is a new decision; the code follows option C as
    worded today.
+(Decided, no longer open: SR-5 = option C, implemented; Dashboard-edited ACL files = option A, a known limitation;
+the Hermes FTS/SQLite review was done by the main session on 2026-11-23.)
+
+## Iteration 8 (2026-11-24): every stored MQTT row in the form of its hashing (SR-12), O-2, O-3, O-4
+
+Scope (main session 18:44, token SR-OWNER-1942): the owner's words for option C include 「也不會留下明文密碼」, and the
+iteration-7 verifier showed that the SR-11 row check still missed common clear values. This iteration (1) decides from
+the vendor source which stored form each algorithm produces and refuses every row in another form, (2) runs the
+gateway-LISTENER `plain` branch and the unknown-row-shape branch for real, (3) does the small UX items O-2 and O-3,
+documents O-4 and records why O-1 was not done, and (4) adds the iteration-6 verifier's two points to the human review
+list. Branch `sec/emqx-secreview8-20261124` from `3369a9c` (local only, never pushed); lab store only (dev-d belongs to
+the final verification).
+
+### SR-12 (Low) — the SR-11 row check missed all-digit, `$2…` and salted clear values (found by the iteration-7 verifier)
+
+`9665533` counted a row as clear text only when its salt was empty AND its value was neither hex (any length) nor
+started with `$2`. So a clear password that is all digits (any length: digits are hex), one that starts with `$2`, and
+any clear value stored WITH a salt (a `hash` import or a `hash` bootstrap file stores the given value and salt as they
+are: `emqx_authn_mnesia.erl:541-542`, `:556-565`) passed the check and the conversion.
+
+**Vendor facts used by the fix** (EMQX 5.8.9; the bcrypt part proven by running the 5.8.9 image's own erlang-bcrypt
+0.6.2, `scratchpad/emqx-secreview8/probe`, nothing but structure printed):
+
+| hashing | the only stored form EMQX can verify | vendor |
+|---|---|---|
+| md5 / sha / sha256 / sha512 | hex of 32 / 40 / 64 / 128 characters; compared without case; the salt never changes the form | `emqx_passwd.erl:77-79, 92-97, 106-113, 119-122, 148-150` |
+| pbkdf2 | hex of 2 × `dk_length`; without `dk_length` the MAC's own length (sha 20, sha224 28, sha256 32, sha384 48, sha512 64 bytes); md4 / md5 / ripemd160 no longer hash in 5.8.9 | `emqx_passwd.erl:67-69, 140-158` |
+| bcrypt | `$2` + one of `a b x y` + `$` + rounds `04`…`31` + `$` + 53 characters of `[./A-Za-z0-9]` (60 in all); EMQX itself writes `$2a$`; the stored hash is its own salt | `emqx_authn_password_hashing.erl:220-224, 252-253`; image probe: minors a/b/x/y verify, c and none do not; rounds 03, 1a, 32 refused; 59 and 61 characters never verify |
+| plain | the password itself (refused: PLAIN_REFUSED / PLAIN_ELSEWHERE) | `emqx_passwd.erl:104` |
+
+A value in any other form can never log in under that authenticator, so it is either a dead row or a clear password.
+
+**Fix** (`a1f1947`, `ha_emqx.py` + `hacommon.py` in `backup-engine/`; tree `325f1f74`): `PLAIN_EXPR` (HA's throwaway
+broker only) maps every row to the built-in database of its user group (global chain; MQTT listeners `'<type>:<name>'`;
+gateways through the vendor's own `emqx_gateway_utils:global_chain/1`, so mqttsn is `'mqtt-sn:global'`; gateway
+listeners through `listener_chain/3`) and counts every row whose stored value is not in that algorithm's form, whatever
+its salt. A row of a group no built-in database of HA's configuration owns (a removed gateway leaves its rows behind:
+`emqx_gateway_insta_sup.erl:394-421` deletes no chain) must have one of the forms above. The answer gives the count and
+the first ten as base64 user id + base64 user group (never a hash or salt; an unknown row shape still answers `bad`,
+which refuses). `CLEAR_ROWS` now says what the rows are, that they cannot log in now, and what to do in HA (set the
+password again or delete the account; for a removed gateway or listener, create its built-in database authentication
+again and delete them); a non-global account is named with its chain in brackets.
+
+**Deliberate strictness (owner may rule):** a row hashed with an older algorithm (for example md5 rows after HA switched
+to sha256) is refused too: it is not clear text, but it cannot be told apart from a clear value of that shape and it
+cannot log in in HA either. The same holds for pbkdf2 with md4 / md5 / ripemd160 (no row can verify in 5.8.9).
+**Residual:** a clear-text password that is itself exactly the form of its group's hashing (for example 64 hex
+characters under sha256, or a 60-character bcrypt-shaped string), or, for a group without an authenticator, one of the
+forms. The iteration-7 blind spot (hex of ANY length, any `$2…`, any salted value) is closed.
+
+### O-2, O-3, O-4, O-1
+
+- **O-2 (done):** `hacommon.names` (every HA importer's shown names) now shows every character of the Unicode general
+  categories Cc, Cf, Cs, Cn, Zl and Zp as `?` (zero-width space and joiners, word joiner, BOM, soft hyphen, tag
+  characters, lone surrogates, unassigned code points), a superset of `CONTROL_RE`; cut at 60 and counts unchanged.
+- **O-3 (done):** `DB_OFF`: when HA's built-in password database is disabled or absent and this device has MQTT
+  accounts, the check warns (names them; says a bootstrap file of this device then stops the conversion, because
+  `preserved_bootstrap_authn` finds no enabled HA authenticator) instead of the hashing warning; nothing else changes.
+- **O-4 (documented as expected behaviour):** docs/backup.md now says that MQTT accounts created in this device's
+  Dashboard are replaced by HA's in every import (only the bootstrap file's accounts stay), equal hashing or not. The
+  sentence for the PR text went to integration-3.
+- **O-1 (not done, on purpose):** naming this device's bootstrap accounts first needs their ids, which only the
+  bootstrap credential file holds (a podman secret mounted in this device's broker). Reading that file in the product,
+  even for ids only, is a new read of a credential: not "small and safe". The warning keeps the first ten sorted ids
+  and the count; the docs name the bootstrap account (`woow`) and how to restore it.
+
+### T16F: the stored-form check in real brokers, with behavioural mutants (`iteration8/t16f-fix8.json`)
+
+`tests/e2e/lab/emqx_secreview/t16_forms.py` (harness `3e1b411`) runs the product's own `PLAIN_EXPR` (engine `325f1f74`)
+in two real EMQX 5.8.9 brokers (lab store, `--network none`). Rows come from EMQX itself (`emqx_authn_chains:add_user`,
+random passwords made inside the broker) and from crafted shapes written with `mnesia:dirty_write` whose values are made
+inside the broker from a shape (hex of a length, upper-case hex, a `g` in hex, digits, bcrypt-like strings of a given
+minor / rounds / length / bad character, a clear prefix, empty; with and without a salt). The expectation is written by
+hand from the vendor facts into the row ids (`f-ok-*`, `f-cnt-*`), independent of the product.
+
+- **F1** (exit 0): 7 chains as the broker lists them (`mqtt:global` bcrypt; `tcp:default`, `ws:default`, `stomp:global`,
+  `stomp:tcp:default`, `mqtt-sn:global`, `mqttsn:udp:default` each pbkdf2 with its own `dk_length`, so a wrong chain
+  mapping cannot pass by accident); EMQX wrote 14 of 14 users; 40 crafted rows. The product answered exactly the expected
+  `elsewhere 0`, `clear 25` and first ten (diagnostic copy: missed 0, extra 0). With a row of an unknown shape added
+  (integer hash) the answer is `bad` and `parse_plain` raises (the callers refuse).
+- **F2** (exit 0): 10 chains (sha256 / md5 / sha / pbkdf2-md5 listeners and global chain, sha512 and pbkdf2-default
+  gateways and gateway listeners, a `plain` CoAP gateway listener); EMQX wrote 18 of 18; 33 crafted rows. Exact again:
+  `elsewhere 1` (the gateway-listener `plain`, in a real broker), `clear 21`, first ten exact, missed 0, extra 0; the
+  unknown shape answers `bad`.
+- **34 one-place mutants** of the expression (every one valid Erlang), each evaluated in both table states of both
+  configurations: **all 34 killed by behaviour** (a different answer), none only by an error, none surviving both
+  configurations (F1 kills 24, F2 kills 25; the bcrypt mutants die in F1, the simple-hash and default-length mutants in
+  F2, by design). Mutants: `hex-lower-only`, `hex-any-length`, `hex-g-is-hex`, `md5-40`, `sha-32`, `sha256-128`,
+  `sha512-64`, `bcrypt-anything`, `bcrypt-no-y`, `bcrypt-c-too`, `rounds-from-3`, `rounds-to-32`, `bcrypt-any-tail`,
+  `bcrypt-any-char`, `dk-ignored`, `dk-sha512-32`, `dk-sha-32`, `unknown-mac-ok`, `other-name-ok`, `orphan-any-ok`,
+  `orphan-refused`, `any-no-56`, `any-no-bcrypt`, `listeners-unread`, `gateways-unread`, `gateway-listeners-unread`,
+  `gateway-chain-naive` (`'mqttsn:global'` instead of the vendor's `'mqtt-sn:global'`), `gateway-listener-chain-naive`,
+  `single-map-ignored`, `global-chain-misnamed`, `elsewhere-not-plain`, `bad-row-ignored` (killed in the bad-row state),
+  `names-unsorted`, `names-group-lost`.
+
+### T16P: the product's check path and conversion body on rows EMQX itself wrote (`iteration8/t16p-fix8.json`)
+
+`tests/e2e/lab/emqx_secreview/t16_product.py` (harness `3e1b411`; T15's flow: `member_pass` → `node_name` →
+`ha_broker` → `target_preflight` → `device_accounts` → `analyse`, then `_build_candidate` with an export spy) against
+T15's lab stand-in device (sha256 + salt suffix, bootstrap `woow` + 13 crafted ids). A throwaway SOURCE broker in HA's
+layout writes the mode's rows with EMQX's own `add_user` (or a `hash` bootstrap file, or `mnesia:dirty_write` for the
+unknown shape); derived test passwords only, asked for inside the brokers (counts only). Engine `325f1f74` (`a1f1947`),
+exit 0, 1950.9 s, lab left 0 containers / 0 volumes. In every mode: this device's user table + raw authentication
+config digest equal before and after the check and the conversion; the leak test inside this device found 0 stored
+hashes, 0 salts and not the bootstrap password in any product text; the texts have 0 control characters, 0 hex runs of
+24+, 0 `$2`.
+
+| mode | what EMQX stored in HA | check | conversion |
+|---|---|---|---|
+| `gwl-plain` | 2 rows under a `plain` built-in database of a STOMP gateway LISTENER (`stomp:tcp:default`) | `PLAIN_ELSEWHERE` (answer elsewhere 1) | refused, HA's export never ran |
+| `past-digits` | 2 rows written under `plain` with all-digit passwords (8 and 12 digits), then HA switched to sha256 | `CLEAR_ROWS`, names exact | refused before the export |
+| `past-dollar2` | 2 rows written under `plain` with passwords starting with `$2`, then sha256 | `CLEAR_ROWS`, names exact | refused before the export |
+| `hash-boot` | 2 rows from a `hash` bootstrap file: the clear value AS the hash, with a non-empty salt | `CLEAR_ROWS`, names exact | refused before the export |
+| `orphan-plain` | 2 rows of a `plain` STOMP gateway that HA's configuration no longer has | `CLEAR_ROWS`, names exact with `（stomp:global）` | refused before the export |
+| `bad-row` | 1 normal row + 1 row of an unknown shape (integer hash, `mnesia:dirty_write`) | refused: `HASH_UNREADABLE` | refused: `HASH_UNREADABLE`, export never ran |
+| `past-md5` | 2 md5 rows, then HA switched to sha256 (dead rows, not clear text) | `CLEAR_ROWS`, names exact (the deliberate strictness) | (check only) |
+| `orphan-hash` | 2 sha256 rows of a STOMP gateway HA no longer has | nothing | PASSED; candidate rows 3, clear 0 |
+| `mixed-ctl` | 10 rows: bcrypt global, pbkdf2 (dk 12) listener, pbkdf2 (sha512, dk 24) gateway, md5 gateway listener, sha512 mqttsn gateway | no blocker; the SR-5 account warning, exact | PASSED; candidate rows 11, clear 0 |
+| `ctl-sha256` | 2 sha256 + suffix rows (the device's own hashing) | nothing | PASSED; candidate rows 3, clear 0 |
+| `db-off` | HA's built-in database disabled, 1 row | `DB_OFF` warning, exact (this device's 14 ids: first ten + 「等 14 個」), no hashing warning | refused late by `preserved_bootstrap_authn` (「EMQX 來源認證器無法唯一對應目標 bootstrap。」), as the warning says; candidate held 0 clear rows |
+
+**SR-12 proven for real on the iteration-7 engine** (`iteration8/t16p-fix7.json`, engine `3ea9610f` = `9665533`, exit 0,
+949.5 s): `past-digits`, `past-dollar2` and `hash-boot`: the check showed no blocker and no warning
+(`PLAIN_EXPR` answered clear 0), the conversion PASSED with HA's export, and each candidate held 2 rows whose stored
+value IS the password (`rows=3:clear=2`). `gwl-plain` refused there too (`PLAIN_ELSEWHERE`): the iteration-7
+gateway-listener branch works in a real broker; only the row check had the gaps.
+
+### No false refusal on HA's real rows (real batch-1 backups, x86 and the RPi5 ARM one)
+
+- **T16R, the check path** (`iteration8/t16r-fix8-x86.json`, `iteration8/t16r-fix8-arm.json`; harness `c2e601c`,
+  `t16_real_check.py`): `member_pass` → `node_name` → `ha_broker` → `target_preflight` → `device_accounts` →
+  `analyse` against T11's device stand-in with the `[file, built_in_database]` profile. Both (fixtures
+  `woow-b1-x86-emqx-stopped-enc.tar` sha256 prefix `0a53e93888209316`, `woow-b1-arm-emqx-stopped-enc.tar`
+  `b6eb257cc5790bee`): exit 0 (57.2 s, 59.1 s); HA's built-in database enabled, sha256 + suffix; 3 MQTT users;
+  `PLAIN_EXPR` elsewhere 0, clear 0; **no blocker**; the only warnings are the two general ones (HA allows topics no
+  rule matches; HA's API keys replace this device's): no `CLEAR_ROWS`, no `DB_OFF`, no hashing warning (equal
+  hashing); containers left 0. Only kinds, counts and hashing names were recorded, never HA's user ids.
+- **T11, the conversion body** (`iteration8/t11-fix8-x86-builtin.json`, `iteration8/t11-fix8-arm-builtin.json`): exit 0
+  (187.5 s, 154.5 s); PASSED (candidate built, all product checks green, profile equal); HA rows: 3 MQTT users, 4 ACL,
+  2 Dashboard users, 5 retained; candidate profile `['file', 'built_in_database']`; device config unchanged; 44
+  readback roots; containers left 0, new dangling volumes 0; cookie on the command line False.
+
+### T15 again on this engine (`iteration8/t15-fix8.json`, exit 0, 682.4 s)
+
+Iteration 7's T15 (crafted device ids, leak test inside the device and the candidate, read-only digest, export spy),
+all seven modes on `325f1f74`: `bcrypt` no blocker, the account warning exact, ids exact, conversion PASSED with the
+exact note and reminder, candidate clear 0; `conv-plain` and `plain-off` `PLAIN_REFUSED`; `gw-plain` and
+`listener-plain` `PLAIN_ELSEWHERE`; `past-plain` `CLEAR_ROWS` (the new text); every refusal before HA's export;
+`same` nothing. Device digests equal, leak 0 (14 rows: 0 hashes, 0 salts, bootstrap password false), texts: 0 control
+characters, 0 hex runs, 0 `$2`; lab left 0 / 0.
+
+### Tests and mutation checks of the Python side
+
+- **Units:** `tests/backup/test_ha_emqx_forms_review.py` (16: the answer carries the user group and is strict, the
+  refusal names users with their chain, long ids keep their chain, hidden characters become `?`, the text says what to
+  do, the vendor forms are in the expression, the salt never decides and the iteration-7 rules are gone, O-2 over
+  every code point of Python's Unicode database, O-3 through the product's check with the World double, docs quote the
+  engine); `tests/backup/test_ha_emqx_plain_review.py` updated to the new answer (its iteration-7 pins of the old
+  expression replaced by the new rules; nothing weakened).
+- **Mutation** (`iteration8/mutation-s1-a1f1947.json`, `mutate8.py`): **23/23 killed**, unmutated 71 tests OK (group
+  dropped from the names, long id not cut before its group, no count beyond ten, group optional in the answer, group
+  length unbounded, lenient answer, names count unchecked, elsewhere ignored, clear rows ignored, global text not
+  first, HA not asked, conversion refusal after the export, DB_OFF ignores `enable`, DB_OFF without accounts, DB_OFF
+  next to a clear-text refusal, DB_OFF never added, hashing warning next to DB_OFF, format characters kept, unassigned
+  kept, surrogates kept, separators kept, not cut, one name too many shown). The Erlang side's 34 mutants ran in real
+  brokers (T16F above).
+- **Guarded runner** (integration-3 `guard.py`, no podman/ssh/sudo/systemctl process; `iteration8/units-s1-a1f1947.json`):
+  every `tests/backup/test_ha_emqx*` module + the three lab EMQX modules: tests=331 failures=0 errors=0 blocked=0;
+  full `tests/backup` with the real batch-1 backups (`--b1`): tests=1844 failures=2 errors=3 skipped=1 blocked=6; the
+  only not-ok are the 5 known guard-blocked `tests.backup.test_litellm_lab_runner` tests (the same 5 ids as iteration
+  7). `hacommon.names` is shared by every HA importer: the full suite is the check that no other importer's text broke.
+
+### Real runs of iteration 8 (lab store `labpodman`, every container `--network none`, generated or derived test values only)
+
+| run | engine | harness | exit | seconds | evidence |
+|---|---|---|---|---|---|
+| vendor probe: bcrypt minors / rounds / length and hash forms in the 5.8.9 image (no broker) | image `1b8bcb217955` | `probe/` | 0 | 6.6 | `iteration8/probe-bcrypt-forms.json` |
+| T16F stored forms F1 + F2 in real brokers, 34 Erlang mutants | `325f1f74` | `3e1b411` | 0 | 447.0 | `iteration8/t16f-fix8.json` |
+| T16P 11 product-flow modes on the fix | `325f1f74` | `3e1b411` | 0 | 1950.9 | `iteration8/t16p-fix8.json` |
+| T16P SR-12 gap proof + gateway listener on the iteration-7 engine | `3ea9610f` | `c2e601c` | 0 | 949.5 | `iteration8/t16p-fix7.json` |
+| T11 real b1 x86 cold backup, conversion body, `[file, built_in_database]` | `325f1f74` | `c2e601c` | 0 | 187.5 | `iteration8/t11-fix8-x86-builtin.json` |
+| T11 real b1 ARM (RPi5) cold backup, same | `325f1f74` | `c2e601c` | 0 | 154.5 | `iteration8/t11-fix8-arm-builtin.json` |
+| T15 all 7 modes (iteration 7's harness) on the fix | `325f1f74` | `c2e601c` | 0 | 682.4 | `iteration8/t15-fix8.json` |
+| T16R real b1 x86, check path | `325f1f74` | `c2e601c` | 0 | 57.2 | `iteration8/t16r-fix8-x86.json` |
+| T16R real b1 ARM (RPi5), check path | `325f1f74` | `c2e601c` | 0 | 59.1 | `iteration8/t16r-fix8-arm.json` |
+
+Every run went through `team/heavy.sh` under this lane's own lock (`secrev8.lock`), committed code only (the recorder
+refuses a dirty harness folder); every evidence JSON carries the exit code, elapsed seconds, the stdout sha256 (checked
+against the kept stdout: 8 of 8 equal), the source commit, the backup-engine tree and `commercial_acceptance:
+not-complete`. `3e1b411` → `c2e601c` only adds `t16_real_check.py`. Code identities: `325f1f74` = `a1f1947`,
+`3ea9610f` = `9665533` (scratch engine copies checked file by file against `git archive`). Lab left by this lane after
+the last run (20:40): 0 containers, 0 volumes, 0 secrets (by label and by name); no process of this lane running.
+
+### Secret scan
+
+With the existing lab reader and scanner (`ha_import_b1_e2e.Secrets`, `scan_host_evidence`: every lab secret value, raw
+and JSON-escaped; values never printed): committed evidence (all iterations) 95 files, 0 hits; harness folder 29 files,
+0 hits; iteration 8 scratch evidence 27 files, 0 hits; iteration 8 run outputs 35 files, 0 hits; suite outputs 14
+files, 0 hits; the bcrypt probe 3 files, 0 hits. Shape scan of the 22 iteration-8 JSON files (hex runs of 24+, `$2`
+prefixes, base64 runs of 40+, outside commit / digest fields): only the public image id (64 hex) and the crafted
+58-`x` device id of T15; 0 bcrypt-shaped strings.
+
+### Not covered in iteration 8
+
+- **No dev-d run by this lane** (dev-d belongs to the final verification). The device product flow of this engine is
+  the final verification's EMQX run after integration-3 merges `sec/emqx-secreview8-20261124`; the merged
+  backup-engine differs from the integration tip only in `ha_emqx.py` and `hacommon.py`.
+- The residual above (a clear value that is exactly the form of its group's hashing); rows of a SCRAM authenticator
+  (another table holding derived keys; no `plain` there); the account warning for listener or gateway users of this
+  device (O-5, unchanged); EMQX versions other than 5.8.9.
+- bcrypt rounds `31` were not run (2^31 rounds); the form accepts `04`…`31` like the vendor's own range check, proven
+  for 03 / 04 / 1a / 32 in the image. pbkdf2 with md4 / md5 / ripemd160: vendor reading + the image probe (no hash at
+  all in 5.8.9), counted by the check (F2 `ssl:default`).
+- ARM: the real RPi5 backup went through the check path (T16R) and the conversion body (T11) on this engine; the
+  T16F / T16P brokers ran the x86 image only (the expression is plain Erlang, nothing architecture-specific).
+- O-1 (see above). `commercial_acceptance: not-complete` (a security review, not the end-to-end acceptance).
+
+### Hand-over
+
+Branch `sec/emqx-secreview8-20261124` (from `3369a9c`, local only, never pushed): `a1f1947` product fix (SR-12, O-2, O-3, O-4 docs; engine `325f1f74`), `3e1b411` and `c2e601c` harness, then this evidence commit. Trial merge onto the integration tip `a1b690f` is clean (`git merge-tree`); the merged backup-engine (`70b6c874`) differs from the integration tip only in `ha_emqx.py` and `hacommon.py`. The device product flow of this engine is the final verification's next EMQX run.
+
+### Owner and human items (current list)
+
+1. **Boot-time loaders of HA's throwaway broker** (human security review; stopped by a safety classifier in iterations
+   3 and 4, not retried in any form). Two vendor-reading points of the iteration-6 verifier belong to it (nothing was
+   run for them):
+   - (a) **`mnesia:restore` writes before a refusal.** EMQX restores a table file with
+     `mnesia:restore(File, [{default_op, keep_tables}])`: every table present in the file is written in one committed
+     transaction, and only afterwards does EMQX compare `{atomic, [TabName]}` (`emqx_mgmt_data_backup.erl:747-749`);
+     the validators accept a schema entry of ANY table whose attributes match (`:842-852`,
+     `emqx_mgmt_auth.erl:91-104`). A crafted `mnesia/<allowed table>` can therefore write rows of OTHER tables into the
+     candidate before the refusal (the candidate is thrown away afterwards, but those writes happened).
+     Precondition: control of the export bytes (a compromised HA broker).
+   - (b) **`cluster_rpc_mfa` replay.** `emqx_cluster_rpc` subscribes to that table (`emqx_cluster_rpc.erl:358`), catches
+     up at boot and on every table event (`:366-371`, `:396-397`) and applies the next row as
+     `erlang:apply(M, F, A ++ [Map])` (`:413-419`, `:655-658`). HA's throwaway broker boots on HA's full mnesia folder
+     (only `DROPPED` is left out) and the candidate mounts this device's secret and environment files. Neither the
+     engine nor the review harness mentions `cluster_rpc`.
+2. **SR-11 and SR-12 widen option C's refusal:** to `plain` outside the global chain, to clear rows of every shape, and
+   (deliberately strict) to dead rows hashed with an older algorithm and to pbkdf2 with md4 / md5 / ripemd160. If the
+   owner prefers another remedy for rows that cannot log in anyway (for example leaving them out with a note), that is
+   a new decision; the code follows option C as worded.
+3. **O-1** (bootstrap accounts named first) is not done: it needs a product read of this device's bootstrap
+   credential file.
 (Decided, no longer open: SR-5 = option C, implemented; Dashboard-edited ACL files = option A, a known limitation;
 the Hermes FTS/SQLite review was done by the main session on 2026-11-23.)

@@ -1,0 +1,481 @@
+{
+ "attempt": "t16f-fix8",
+ "backup_engine_tree": "325f1f74038611bf5b53f545405e3c6ef3d39cb2",
+ "code": "sec/emqx-secreview8-20261124 (iteration 8: stored-form check, O-2, O-3)",
+ "command": "-I t16_forms.py fix8 F1,F2",
+ "commercial_acceptance": "not-complete",
+ "credentials": "generated per run; HA key (T11) read in-process by the b1 Secrets reader, never printed",
+ "date": "2026-11-24",
+ "elapsed_s": 447.0,
+ "exit_code": 0,
+ "harness_commit": "3e1b411473f6dad13c1b9e5653d83d2709eae296",
+ "iteration": 8,
+ "lane": "emqx-secreview (SR-OWNER-1942)",
+ "result": {
+  "codebase": "fix8",
+  "elapsed_s": 446.5,
+  "image": "docker.io/emqx/emqx:5.8.9",
+  "lab_left": {
+   "containers": 0,
+   "volumes": 0
+  },
+  "mutants": 34,
+  "network": "none",
+  "states": {
+   "F1": {
+    "bad_row": "ok",
+    "chains": [
+     "mqtt-sn:global",
+     "mqtt:global",
+     "mqttsn:udp:default",
+     "stomp:global",
+     "stomp:tcp:default",
+     "tcp:default",
+     "ws:default"
+    ],
+    "config_sha256": "ac96b8ed7c21bd23ae03dfc2f0fdb9709420f018455d8819df26aab8d9f73024",
+    "crafted": "40",
+    "expected": {
+     "clear": 25,
+     "elsewhere": 0,
+     "first_ten": [
+      "lwm2m:global/f-cnt-l-clr",
+      "mqtt-sn:global/f-cnt-m-56",
+      "mqtt:global/f-cnt-g-b2c",
+      "mqtt:global/f-cnt-g-b2n",
+      "mqtt:global/f-cnt-g-bad",
+      "mqtt:global/f-cnt-g-dig",
+      "mqtt:global/f-cnt-g-dol",
+      "mqtt:global/f-cnt-g-emp",
+      "mqtt:global/f-cnt-g-hex64",
+      "mqtt:global/f-cnt-g-l52"
+     ]
+    },
+    "mutant_summary": {
+     "SURVIVED": 10,
+     "killed (behaviour)": 24,
+     "killed (error)": 0,
+     "not_applicable": 0
+    },
+    "mutants": {
+     "any-no-56": {
+      "bad": "same",
+      "normal": "same",
+      "verdict": "SURVIVED"
+     },
+     "any-no-bcrypt": {
+      "bad": "same",
+      "normal": "diff",
+      "verdict": "killed (behaviour)"
+     },
+     "bad-row-ignored": {
+      "bad": "diff",
+      "normal": "same",
+      "verdict": "killed (behaviour)"
+     },
+     "bcrypt-any-char": {
+      "bad": "same",
+      "normal": "diff",
+      "verdict": "killed (behaviour)"
+     },
+     "bcrypt-any-tail": {
+      "bad": "same",
+      "normal": "diff",
+      "verdict": "killed (behaviour)"
+     },
+     "bcrypt-anything": {
+      "bad": "same",
+      "normal": "diff",
+      "verdict": "killed (behaviour)"
+     },
+     "bcrypt-c-too": {
+      "bad": "same",
+      "normal": "diff",
+      "verdict": "killed (behaviour)"
+     },
+     "bcrypt-no-y": {
+      "bad": "same",
+      "normal": "diff",
+      "verdict": "killed (behaviour)"
+     },
+     "dk-ignored": {
+      "bad": "same",
+      "normal": "diff",
+      "verdict": "killed (behaviour)"
+     },
+     "dk-sha-32": {
+      "bad": "same",
+      "normal": "same",
+      "verdict": "SURVIVED"
+     },
+     "dk-sha512-32": {
+      "bad": "same",
+      "normal": "same",
+      "verdict": "SURVIVED"
+     },
+     "elsewhere-not-plain": {
+      "bad": "same",
+      "normal": "same",
+      "verdict": "SURVIVED"
+     },
+     "gateway-chain-naive": {
+      "bad": "same",
+      "normal": "diff",
+      "verdict": "killed (behaviour)"
+     },
+     "gateway-listener-chain-naive": {
+      "bad": "same",
+      "normal": "diff",
+      "verdict": "killed (behaviour)"
+     },
+     "gateway-listeners-unread": {
+      "bad": "same",
+      "normal": "diff",
+      "verdict": "killed (behaviour)"
+     },
+     "gateways-unread": {
+      "bad": "same",
+      "normal": "diff",
+      "verdict": "killed (behaviour)"
+     },
+     "global-chain-misnamed": {
+      "bad": "same",
+      "normal": "diff",
+      "verdict": "killed (behaviour)"
+     },
+     "hex-any-length": {
+      "bad": "same",
+      "normal": "diff",
+      "verdict": "killed (behaviour)"
+     },
+     "hex-g-is-hex": {
+      "bad": "same",
+      "normal": "diff",
+      "verdict": "killed (behaviour)"
+     },
+     "hex-lower-only": {
+      "bad": "same",
+      "normal": "diff",
+      "verdict": "killed (behaviour)"
+     },
+     "listeners-unread": {
+      "bad": "same",
+      "normal": "diff",
+      "verdict": "killed (behaviour)"
+     },
+     "md5-40": {
+      "bad": "same",
+      "normal": "same",
+      "verdict": "SURVIVED"
+     },
+     "names-group-lost": {
+      "bad": "same",
+      "normal": "diff",
+      "verdict": "killed (behaviour)"
+     },
+     "names-unsorted": {
+      "bad": "same",
+      "normal": "diff",
+      "verdict": "killed (behaviour)"
+     },
+     "orphan-any-ok": {
+      "bad": "same",
+      "normal": "diff",
+      "verdict": "killed (behaviour)"
+     },
+     "orphan-refused": {
+      "bad": "same",
+      "normal": "diff",
+      "verdict": "killed (behaviour)"
+     },
+     "other-name-ok": {
+      "bad": "same",
+      "normal": "same",
+      "verdict": "SURVIVED"
+     },
+     "rounds-from-3": {
+      "bad": "same",
+      "normal": "diff",
+      "verdict": "killed (behaviour)"
+     },
+     "rounds-to-32": {
+      "bad": "same",
+      "normal": "diff",
+      "verdict": "killed (behaviour)"
+     },
+     "sha-32": {
+      "bad": "same",
+      "normal": "same",
+      "verdict": "SURVIVED"
+     },
+     "sha256-128": {
+      "bad": "same",
+      "normal": "same",
+      "verdict": "SURVIVED"
+     },
+     "sha512-64": {
+      "bad": "same",
+      "normal": "same",
+      "verdict": "SURVIVED"
+     },
+     "single-map-ignored": {
+      "bad": "same",
+      "normal": "diff",
+      "verdict": "killed (behaviour)"
+     },
+     "unknown-mac-ok": {
+      "bad": "same",
+      "normal": "same",
+      "verdict": "SURVIVED"
+     }
+    },
+    "product": {
+     "clear": 25,
+     "elsewhere": 0,
+     "extra": [],
+     "kind": "answer",
+     "match": true,
+     "missed": []
+    },
+    "product_bad": {
+     "kind": "bad",
+     "parse_plain": "ValueError (the callers refuse)",
+     "refused": true
+    },
+    "written": "14:14"
+   },
+   "F2": {
+    "bad_row": "ok",
+    "chains": [
+     "coap:global",
+     "coap:udp:default",
+     "mqtt-sn:global",
+     "mqtt:global",
+     "mqttsn:udp:default",
+     "ssl:default",
+     "stomp:global",
+     "stomp:tcp:default",
+     "tcp:default",
+     "ws:default"
+    ],
+    "config_sha256": "8e7a80f860a921c953169b8457cea1e4a8369bc15ce3e3cfd85113a9b52b8bd1",
+    "crafted": "33",
+    "expected": {
+     "clear": 21,
+     "elsewhere": 1,
+     "first_ten": [
+      "coap:global/f-cnt-c2-128",
+      "coap:udp:default/e-cnt-cu-1",
+      "coap:udp:default/e-cnt-cu-2",
+      "mqtt-sn:global/f-cnt-m2-64",
+      "mqtt:global/f-cnt-g2-32",
+      "mqtt:global/f-cnt-g2-63",
+      "mqtt:global/f-cnt-g2-65",
+      "mqtt:global/f-cnt-g2-bc",
+      "mqtt:global/f-cnt-g2-dig8",
+      "mqtt:global/f-cnt-g2-dol"
+     ]
+    },
+    "mutant_summary": {
+     "SURVIVED": 9,
+     "killed (behaviour)": 25,
+     "killed (error)": 0,
+     "not_applicable": 0
+    },
+    "mutants": {
+     "any-no-56": {
+      "bad": "same",
+      "normal": "diff",
+      "verdict": "killed (behaviour)"
+     },
+     "any-no-bcrypt": {
+      "bad": "same",
+      "normal": "same",
+      "verdict": "SURVIVED"
+     },
+     "bad-row-ignored": {
+      "bad": "diff",
+      "normal": "same",
+      "verdict": "killed (behaviour)"
+     },
+     "bcrypt-any-char": {
+      "bad": "same",
+      "normal": "same",
+      "verdict": "SURVIVED"
+     },
+     "bcrypt-any-tail": {
+      "bad": "same",
+      "normal": "same",
+      "verdict": "SURVIVED"
+     },
+     "bcrypt-anything": {
+      "bad": "same",
+      "normal": "same",
+      "verdict": "SURVIVED"
+     },
+     "bcrypt-c-too": {
+      "bad": "same",
+      "normal": "same",
+      "verdict": "SURVIVED"
+     },
+     "bcrypt-no-y": {
+      "bad": "same",
+      "normal": "same",
+      "verdict": "SURVIVED"
+     },
+     "dk-ignored": {
+      "bad": "same",
+      "normal": "same",
+      "verdict": "SURVIVED"
+     },
+     "dk-sha-32": {
+      "bad": "same",
+      "normal": "diff",
+      "verdict": "killed (behaviour)"
+     },
+     "dk-sha512-32": {
+      "bad": "same",
+      "normal": "diff",
+      "verdict": "killed (behaviour)"
+     },
+     "elsewhere-not-plain": {
+      "bad": "same",
+      "normal": "diff",
+      "verdict": "killed (behaviour)"
+     },
+     "gateway-chain-naive": {
+      "bad": "same",
+      "normal": "diff",
+      "verdict": "killed (behaviour)"
+     },
+     "gateway-listener-chain-naive": {
+      "bad": "same",
+      "normal": "diff",
+      "verdict": "killed (behaviour)"
+     },
+     "gateway-listeners-unread": {
+      "bad": "same",
+      "normal": "diff",
+      "verdict": "killed (behaviour)"
+     },
+     "gateways-unread": {
+      "bad": "same",
+      "normal": "diff",
+      "verdict": "killed (behaviour)"
+     },
+     "global-chain-misnamed": {
+      "bad": "same",
+      "normal": "diff",
+      "verdict": "killed (behaviour)"
+     },
+     "hex-any-length": {
+      "bad": "same",
+      "normal": "diff",
+      "verdict": "killed (behaviour)"
+     },
+     "hex-g-is-hex": {
+      "bad": "same",
+      "normal": "diff",
+      "verdict": "killed (behaviour)"
+     },
+     "hex-lower-only": {
+      "bad": "same",
+      "normal": "diff",
+      "verdict": "killed (behaviour)"
+     },
+     "listeners-unread": {
+      "bad": "same",
+      "normal": "diff",
+      "verdict": "killed (behaviour)"
+     },
+     "md5-40": {
+      "bad": "same",
+      "normal": "diff",
+      "verdict": "killed (behaviour)"
+     },
+     "names-group-lost": {
+      "bad": "same",
+      "normal": "diff",
+      "verdict": "killed (behaviour)"
+     },
+     "names-unsorted": {
+      "bad": "same",
+      "normal": "diff",
+      "verdict": "killed (behaviour)"
+     },
+     "orphan-any-ok": {
+      "bad": "same",
+      "normal": "diff",
+      "verdict": "killed (behaviour)"
+     },
+     "orphan-refused": {
+      "bad": "same",
+      "normal": "diff",
+      "verdict": "killed (behaviour)"
+     },
+     "other-name-ok": {
+      "bad": "same",
+      "normal": "diff",
+      "verdict": "killed (behaviour)"
+     },
+     "rounds-from-3": {
+      "bad": "same",
+      "normal": "same",
+      "verdict": "SURVIVED"
+     },
+     "rounds-to-32": {
+      "bad": "same",
+      "normal": "same",
+      "verdict": "SURVIVED"
+     },
+     "sha-32": {
+      "bad": "same",
+      "normal": "diff",
+      "verdict": "killed (behaviour)"
+     },
+     "sha256-128": {
+      "bad": "same",
+      "normal": "diff",
+      "verdict": "killed (behaviour)"
+     },
+     "sha512-64": {
+      "bad": "same",
+      "normal": "diff",
+      "verdict": "killed (behaviour)"
+     },
+     "single-map-ignored": {
+      "bad": "same",
+      "normal": "diff",
+      "verdict": "killed (behaviour)"
+     },
+     "unknown-mac-ok": {
+      "bad": "same",
+      "normal": "diff",
+      "verdict": "killed (behaviour)"
+     }
+    },
+    "product": {
+     "clear": 21,
+     "elsewhere": 1,
+     "extra": [],
+     "kind": "answer",
+     "match": true,
+     "missed": []
+    },
+    "product_bad": {
+     "kind": "bad",
+     "parse_plain": "ValueError (the callers refuse)",
+     "refused": true
+    },
+    "written": "18:18"
+   }
+  },
+  "store": "labpodman (separate --root)",
+  "test": "T16F stored-form check of PLAIN_EXPR in real EMQX 5.8.9 brokers + behavioural mutants"
+ },
+ "source_commit": "a1f194742d21b1041dbd23db2e36a05c20d5283e",
+ "started": "2026-11-24T19:19:27+0800",
+ "status_lines": [],
+ "stdout_sha256": "6733a4858961e4b1b190f93f6158bd0c677dbee618fe7bd90b4e10e857aaf241",
+ "store": "labpodman (separate --root, lab only), every podman run --network none"
+}
