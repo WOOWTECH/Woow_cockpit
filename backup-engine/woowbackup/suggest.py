@@ -73,10 +73,12 @@ HEALTH_TIMEOUTS = {'litellm': 600}
 # Assistant import (ha_litellm.Target) fills exactly one single-database item and refuses the cold and the instance
 # entry, and it is the mode that suits the package (CONTRACT section 4 "Which mode a draft proposes"): its instance holds
 # exactly the app's database, owned by the image's bootstrap user (Woow_podman_litellm dd690ae
-# quadlet/litellm-postgres.container POSTGRES_USER=litellm, POSTGRES_DB=litellm). An installed entry keeps its mode
+# quadlet/litellm-postgres.container POSTGRES_USER=litellm, POSTGRES_DB=litellm). n8n and hermes: the same for their
+# imports (ha_n8n.Target, ha_hermes.Target) and their packages (Woow_podman_n8n 2ac1ae2 quadlet/n8n-postgres.container,
+# the hermes package's hermes-postgres.container: one database, one role). An installed entry keeps its mode
 # (changing it makes its backups unrestorable under the new entry); when that mode cannot be imported into, the
 # `import-mode` note says what to choose.
-PREFERRED_MODES = {'litellm': 'database'}
+PREFERRED_MODES = {'litellm': 'database', 'n8n': 'database', 'hermes': 'database'}
 # A health path of an app's HealthCmd that says less than another one of the same server, with that one. litellm:
 # /health/liveliness answers without looking at the database, /health/readiness is 503 while its database cannot be
 # reached (litellm 1.104.0 litellm/proxy/health_endpoints/_health_endpoints.py:1957-1976, :1833-1870) and is what the
