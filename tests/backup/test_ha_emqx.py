@@ -21,38 +21,20 @@ from . import hafixtures as hx
 SLUG = '1b7b4ce7_woow-emqx'
 NODE = 'emqx@homeassistant.local'
 EXPORT = '/work/out/emqx-export-2026-11-19-10-11-12.345.tar.gz'
-
-
-def _valid_export_tarball():
-    """A structurally valid EMQX `data export` stub (real .tar.gz: META + a DATA_ROOTS-only cluster.hocon + mnesia
-    tables in TABLES), so the pre-import ha_emqx.check_export_members passes. The World fakes the imported CONFIG via
-    its `data import` exec, independent of this content; this only has to satisfy the structural check."""
-    import gzip as _gzip, io as _io, tarfile as _tarfile  # noqa: local to keep the module header small
-    base = EXPORT.rsplit('/', 1)[1][:-len('.tar.gz')]
-    buf = _io.BytesIO()
-    with _tarfile.open(fileobj=buf, mode='w:gz', format=_tarfile.PAX_FORMAT) as tar:
-        def add(rel, data=None, isdir=False):
-            info = _tarfile.TarInfo(f'{base}/{rel}' if rel else base)
-            if isdir:
-                info.type = _tarfile.DIRTYPE
-                info.mode = 0o755
-                tar.addfile(info)
-            else:
-                info.mode = 0o644
-                info.size = len(data)
-                tar.addfile(info, _io.BytesIO(data))
-        add('', isdir=True)
-        add('META.hocon', b'{version = "5.8.9", edition = ce}\n')
-        add('cluster.hocon', b'authentication = []\nauthorization {no_match = deny}\nrule_engine {rules {}}\n')
-        add('mnesia', isdir=True)
-        for _t in ('emqx_authn_mnesia', 'emqx_acl', 'emqx_admin', 'emqx_app', 'emqx_banned'):
-            add(f'mnesia/{_t}', b'row')
-    return buf.getvalue()
-
-
-VALID_EXPORT = _valid_export_tarball()
 HOCON = (b'connectors {http {ha {url = "http://homeassistant:8123/api/webhook/x"}}}\n'
          b'listeners.ssl.default {ssl_options {certfile = "/ssl/fullchain.pem"}}\n')
+
+
+def export_listing(name, *, roots=('authentication', 'authorization', 'rule_engine'), members=None):
+    """The candidate's answer to ha_emqx.export_expression(name): EMQX's own listing of HA's export (a healthy one)."""
+    base = name[:-len('.tar.gz')]
+    if members is None:
+        members = [[f'{base}/META.hocon', 'regular', 40], [f'{base}/cluster.hocon', 'regular', 900],
+                   *([f'{base}/mnesia/{table}', 'regular', 512] for table in ha_emqx.TABLES)]
+    doc = json.dumps({'roots': list(roots), 'members': members}).encode()
+    return b'WOOWEXP:' + base64.b64encode(doc) + b':END\nok\n'
+
+
 QUADLETS = {
     'emqx.container': b'[Container]\nContainerName=woow-emqx\nImage=docker.io/emqx/emqx:5.8.9\n'
                       b'Environment=EMQX_NODE__NAME=emqx@127.0.0.1\n'
@@ -190,6 +172,8 @@ class World(fk.World):
         return Result(0, b'', b'')
 
     def evaluate(self, role, expression):
+        if expression == ha_emqx.export_expression(EXPORT.rsplit('/', 1)[1]):
+            return export_listing(EXPORT.rsplit('/', 1)[1])
         if expression == ha_emqx.ETC_EXPR:
             return b'WOOWETC:/opt/emqx/etc:ENDok\n'
         if expression == ha_emqx.VM_EXPR:
@@ -232,7 +216,7 @@ class World(fk.World):
     def export(self, volume):
         if volume.endswith('emqx-xfer'):
             return fk.tar_of([{'name': '.', 'type': 'dir'}, {'name': 'out', 'type': 'dir'},
-                              {'name': EXPORT[len('/work/'):], 'data': VALID_EXPORT}])
+                              {'name': EXPORT[len('/work/'):], 'data': b'export-tarball'}])
         return fk.tar_of([{'name': '.', 'type': 'dir', 'uid': 1000, 'gid': 1000},
                           {'name': 'mnesia', 'type': 'dir', 'uid': 1000},
                           {'name': 'mnesia/emqx@127.0.0.1', 'type': 'dir', 'uid': 1000},
@@ -423,7 +407,7 @@ class ConvertTests(EmqxCase):
         self.assertIn('/home/appowner/.config/emqx/base.hocon:/opt/emqx/etc/base.hocon:ro', options['--volume'])
         self.assertFalse([v for v in options['--volume'] if 'woow_emqx_data' in v])
         incoming = tarfile.open(fileobj=io.BytesIO(self.world.imported['emqx-in']))
-        self.assertEqual(incoming.extractfile('in/' + EXPORT.rsplit('/', 1)[1]).read(), VALID_EXPORT)
+        self.assertEqual(incoming.extractfile('in/' + EXPORT.rsplit('/', 1)[1]).read(), b'export-tarball')
         self.assertEqual({(m.uid, m.gid) for m in incoming.getmembers()}, {(1000, 1000)})
         self.assertIn(['data', 'import', '/work/in/' + EXPORT.rsplit('/', 1)[1]], [c[1] for c in self.world.ctl_calls])
         self.assertEqual(json.loads(self.world.snippet)['authorization'], self.world.target_config['authorization'])

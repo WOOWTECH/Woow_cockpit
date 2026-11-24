@@ -2080,8 +2080,12 @@ PostgreSQL 15).
    `-emqx_data_dir` that bin/emqx reads back from `ps`, bin/emqx:570,1321-1324): a boot stores schema defaults derived from them in
    the raw configuration (Dashboard listeners' `num_acceptors` = online schedulers, emqx_dashboard_schema.erl:125-131;
    node pool sizes, emqx_conf_schema.erl:688-706) and the candidate runs under `--cpus`. Before anything is imported
-   its scheduler counts, `EMQX_ETC_DIR`, effective configuration and image TLS fingerprints must equal this device's. `emqx ctl data import`
-   must say "imported successfully". Then this device's settings come back: every root that is not HA data
+   its scheduler counts, `EMQX_ETC_DIR`, effective configuration and image TLS fingerprints must equal this device's, and HA's
+   export is listed in it by the vendor's own functions on the very file the import reads (`erl_tar`, `hocon`; bounded
+   at 1800 s like the import): `META.hocon`, `cluster.hocon` (8 MiB, roots within `DATA_ROOTS`, no `include`) and the
+   backup files of the exported tables, each once and a regular file in the export's own folder; anything else, or an
+   unreadable listing, refuses (`incompatible`, member and root names only) and nothing is imported (B1-03).
+   `emqx ctl data import` must say "imported successfully". Then this device's settings come back: every root that is not HA data
    (`DATA_ROOTS`), and `authorization`, is loaded back exactly as it was (`emqx ctl conf load --replace`, no merge of
    stale fields); the bootstrap file of this device's built-in authenticator is re-attached to HA's matching
    authenticator. When this device authorizes with the file ACL only and HA's import enabled the built-in database
@@ -2104,7 +2108,7 @@ PostgreSQL 15).
    (`password_based`/`scram`) or an enabled ExHook server remains (SR-7: they receive every client's credentials).
    The final effective configuration must equal this device's in every preserved root; node, rpc and cluster never change; an enabled authenticator must remain (no
    anonymous login); every table holds at least HA's rows and at most HA's plus what the empty broker seeded. HA's
-   API keys replace this device's. The candidate's fixed `emqx eval` reads are bounded at 120 s each (the vendor CLI
+   API keys replace this device's. The candidate's other fixed `emqx eval` reads are bounded at 120 s each (the vendor CLI
    itself waits without a limit, bin/nodetool); their output bounds are unchanged.
    Hot backups (addon.json `state` `started`: the add-on has no cold backup mode) are tried; when HA's broker does not
    start, a table is missing, EMQX's own export fails or the import reports errors, the job refuses (`incompatible`) with

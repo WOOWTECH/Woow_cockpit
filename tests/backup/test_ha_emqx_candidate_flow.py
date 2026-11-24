@@ -13,27 +13,7 @@ from woowbackup import ha_emqx as emqx
 from woowbackup.errors import BackupError
 from woowbackup.podman import Result
 
-
-def valid_export_bytes():
-    """A structurally valid EMQX export (.tar.gz) so ha_emqx.check_export_members passes before import; the Transport
-    fakes the imported config independently, so the contents only have to satisfy the structural check."""
-    buf = io.BytesIO()
-    with tarfile.open(fileobj=buf, mode='w:gz', format=tarfile.PAX_FORMAT) as tar:
-        base = 'emqx-export-2026-11-19-10-11-12.345'
-        for rel, data, isdir in [('', None, True), ('META.hocon', b'{version = "5.8.9", edition = ce}\n', False),
-                                 ('cluster.hocon', b'authorization {no_match = deny}\nrule_engine {rules {}}\n', False),
-                                 ('mnesia', None, True), ('mnesia/emqx_acl', b'row', False),
-                                 ('mnesia/emqx_admin', b'row', False)]:
-            info = tarfile.TarInfo(f'{base}/{rel}' if rel else base)
-            if isdir:
-                info.type = tarfile.DIRTYPE
-                info.mode = 0o755
-                tar.addfile(info)
-            else:
-                info.mode = 0o644
-                info.size = len(data)
-                tar.addfile(info, io.BytesIO(data))
-    return buf.getvalue()
+from .test_ha_emqx import export_listing
 
 
 def response(config):
@@ -129,6 +109,9 @@ class Transport:
         if command == ['emqx', 'eval', emqx.CONFIG_EXPR]:
             self.events.append('read-candidate')
             return response(self.running_config)
+        if command == ['emqx', 'eval', emqx.export_expression('source.tar.gz')]:
+            self.events.append('check-export')
+            return Result(0, export_listing('source.tar.gz'), b'')
         if command == ['emqx', 'eval', emqx.ETC_EXPR]:
             return Result(0, ETC_REPLY, b'')
         if command == ['emqx', 'eval', emqx.TABLES_RECEIPT_EXPR]:
@@ -173,7 +156,7 @@ class CandidateFlowTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             staging = Path(directory)
             export = staging / 'source.tar.gz'
-            export.write_bytes(valid_export_bytes())
+            export.write_bytes(b'fixture export')
             work = SimpleNamespace(runner=lambda app: transport, abort=None,
                 guard=SimpleNamespace(budget=lambda: 1000000), checkpoint=lambda: None,
                 log=transport.logs.append)
@@ -186,7 +169,8 @@ class CandidateFlowTests(unittest.TestCase):
         self.assertEqual(len(self.invoke(transport)), 4)
         self.assertEqual(transport.running_config, transport.config)
         self.assertEqual(transport.seed['authz/custom.acl'], b'{deny, all}.')
-        for first, second in [('export', 'seed'), ('seed', 'start'), ('start', 'import'), ('import', 'restore')]:
+        for first, second in [('export', 'seed'), ('seed', 'start'), ('start', 'check-export'), ('check-export', 'import'),
+                              ('import', 'restore')]:
             self.assertLess(transport.events.index(first), transport.events.index(second))
         self.assertEqual(transport.events[-1], 'read-candidate')
 

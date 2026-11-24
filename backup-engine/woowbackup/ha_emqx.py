@@ -461,111 +461,68 @@ def take_export(work, tmp, path, staging):
     return dest
 
 
-EXPORT_TAMPERED = ('EMQX 不能搬過來：HA 匯出的資料含有非預期的內容（{what}），可能是 HA 端的 EMQX 被竄改；'
-                   '為保護這台的設定與機密，在匯入前已停止。請在 HA 停止 EMQX 附加元件後重新備份再匯入。')
-# cluster.hocon string and comment spans, removed before the depth-0 root scan.
-_HOCON_TRIPLE = re.compile(r'"""(?:[^"]|"(?!""))*"""', re.DOTALL)
-_HOCON_STRING = re.compile(r'"(?:\\.|[^"\\])*"')
-_HOCON_COMMENT = re.compile(r'(?m)(?:#|//)[^\n]*')
-_HOCON_IDENT = frozenset('abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_.')
+EXPORT_NAME_RE = re.compile(r'[A-Za-z0-9.-]{1,80}\.tar\.gz\Z')
+EXPORT_TAMPERED = ('EMQX 不能搬過來：HA 匯出的資料含有不屬於這次匯入的內容（{what}），已在匯入前停止，這台沒有任何改變；'
+                   '請在 HA 停止 EMQX 附加元件後重新備份再匯入。')
+EXPORT_UNREADABLE = 'EMQX 不能搬過來：HA 匯出的資料在匯入前無法檢查，已停止，這台沒有任何改變。'
+MAX_LISTING = 1024 * 1024
+# What the vendor import would read from HA's export (emqx_mgmt_data_backup.erl:880-900 erl_tar, :904-912 hocon), listed
+# in the candidate by those very functions on the very file before anything is imported: a second parser here would
+# read a crafted archive or HOCON document differently. `include` makes hocon read another file (hocon 0.44.0,
+# hocon_token:load_include) and EMQX's own export never writes one. Fixed but for the checked file name (argv).
+EXPORT_EXPR = ('F = "{path}", {ok, L} = erl_tar:table(F, [compressed, verbose]), '
+               'C = filename:basename(F, ".tar.gz") ++ "/cluster.hocon", '
+               'R = case [{T, S} || {N, T, S, _, _, _, _} <- L, N =:= C] of '
+               '[{regular, Z}] when Z =< {limit} -> '
+               '{ok, [{C, B}]} = erl_tar:extract(F, [compressed, memory, {files, [C]}]), '
+               '{ok, K, _} = hocon_scanner:string(unicode:characters_to_list(B)), '
+               'false = lists:keymember(include, 1, K), {ok, H} = hocon:binary(B), maps:keys(H); _ -> [] end, '
+               'io:format("WOOWEXP:~s:END~n", [base64:encode(emqx_utils_json:encode(#{roots => R, members => '
+               '[[unicode:characters_to_binary(N), T, S] || {N, T, S, _, _, _, _} <- L]}))]).')
 
 
-def export_cluster_roots(text):
-    """The top-level HOCON root names of the export's `cluster.hocon`. EMQX writes it with `hocon_pp:do` as bare
-    depth-0 fields (`key {` / `key = ` / `key [`), so after triple- and single-quoted strings and comments are
-    removed, a root is an identifier at `{}`/`[]` depth 0 whose next non-blank character is `{`, `=` or `[` (its
-    first dotted segment). Conservative and fail-closed: a document that is wrapped in an outer object/array, or whose
-    braces are unbalanced, raises `corrupt-archive`, so a tampered export cannot hide a non-DATA_ROOT from the scan.
-    This is defence in depth; the authoritative guarantee stays the post-import whole-root equality
-    (`restore_target_settings`). Returns a set of root names."""
-    s = _HOCON_COMMENT.sub(' ', _HOCON_STRING.sub('""', _HOCON_TRIPLE.sub('""', text)))
-    head = s.lstrip()
-    if head and head[0] in '{[':
-        raise BackupError('corrupt-archive', 'EMQX 匯出設定格式非預期。')
-    roots, depth, i, n = set(), 0, 0, len(s)
-    while i < n:
-        ch = s[i]
-        if ch in '{[':
-            depth += 1
-            i += 1
-        elif ch in '}]':
-            depth -= 1
-            if depth < 0:
-                raise BackupError('corrupt-archive', 'EMQX 匯出設定無法解析。')
-            i += 1
-        elif depth == 0 and ch in _HOCON_IDENT:
-            j = i
-            while j < n and s[j] in _HOCON_IDENT:
-                j += 1
-            k = j
-            while k < n and s[k] in ' \t\r\n':
-                k += 1
-            if k < n and s[k] in '{=[':
-                roots.add(s[i:j].split('.', 1)[0])
-            i = j
-        else:
-            i += 1
-    if depth != 0:
-        raise BackupError('corrupt-archive', 'EMQX 匯出設定無法解析。')
-    return roots
+def export_expression(name):
+    if not EXPORT_NAME_RE.match(name):
+        raise BackupError('internal-error', 'EMQX 匯出檔名不正確。')
+    return EXPORT_EXPR.replace('{path}', f'{WORK}/in/{name}').replace('{limit}', str(MAX_HOCON))
 
 
-def check_export_members(path):
-    """Defence in depth for B1-03: before `emqx ctl data import` runs in the candidate (which mounts THIS device's
-    secrets), refuse a tampered EMQX export. HA's broker runs HA's own code and could ignore the `--root-keys` /
-    `--table-sets` we pass and write extra roots or tables into the export; the vendor import then applies every
-    cluster.hocon root that has an importer (emqx_mgmt_data_backup.erl `?CONF_KEYS` and the `emqx_config_backup`
-    modules, e.g. `listeners` through `emqx_mgmt_listeners_conf`). The post-import whole-root equality
-    (`restore_target_settings`) is the authoritative guard and reverts or refuses any such root, but only after the
-    import; this stops the tampered export first. Allowed: `<name>/META.hocon`, `<name>/cluster.hocon` and
-    `<name>/mnesia/<table in TABLES>`, each a regular file (plus the `<name>` and `<name>/mnesia` directories) under
-    one top directory; `cluster.hocon` may hold only DATA_ROOTS."""
-    top = None
-    hocon = None
+def check_export(execute, name, *, hint=''):
+    """Refuse an export that holds anything ha_broker did not ask for, before `emqx ctl data import` applies it.
+
+    ha_broker exports DATA_ROOTS and TABLE_SETS only, but the file was written by HA's broker from HA's own data. The
+    vendor import unpacks every archive member into the candidate's data volume (emqx_mgmt_data_backup.erl:880-884) and
+    applies every root it has an importer for at once (:68-90, :983-1050, the emqx_config_backup modules). Allowed:
+    META.hocon, cluster.hocon with DATA_ROOTS only and the backup files of TABLES, each once and a regular file, in the
+    export's own folder. This is defence in depth: whatever the import changed, every setting of this device is compared
+    whole afterwards (restore_target_settings). Member and root names only, never values."""
+    base = name[:-len('.tar.gz')]
     try:
-        with tarfile.open(path, 'r|gz', encoding=habackup.ENCODING, errors=habackup.ERRORS) as tar:
-            for member in tar:
-                name = ha_odoo._norm(member.name)
-                if name is None:
-                    raise BackupError('incompatible', EXPORT_TAMPERED.format(what='無法解析的項目名稱'))
-                if name == '.':
-                    continue
-                if not (member.isfile() or member.isdir()):
-                    raise BackupError('incompatible', EXPORT_TAMPERED.format(what='非一般檔案的項目'))
-                parts = name.split('/')
-                if top is None:
-                    top = parts[0]
-                if parts[0] != top:
-                    raise BackupError('incompatible', EXPORT_TAMPERED.format(what='多個頂層資料夾'))
-                rel = parts[1:]
-                if not rel:
-                    continue   # the top directory itself
-                if member.size > MAX_EXPORT:
-                    raise BackupError('incompatible', EXPORT_TAMPERED.format(what='過大的項目'))
-                if member.isfile() and rel == ['META.hocon']:
-                    continue
-                if member.isdir() and rel == ['mnesia']:
-                    continue
-                if member.isfile() and len(rel) == 2 and rel[0] == 'mnesia':
-                    if rel[1] not in TABLES:
-                        raise BackupError('incompatible', EXPORT_TAMPERED.format(
-                            what='非預期的資料表 ' + hacommon.names([rel[1]])))
-                    continue
-                if member.isfile() and rel == ['cluster.hocon']:
-                    if member.size > MAX_HOCON:
-                        raise BackupError('incompatible', EXPORT_TAMPERED.format(what='過大的設定檔'))
-                    handle = tar.extractfile(member)
-                    hocon = handle.read(MAX_HOCON + 1) if handle is not None else b''
-                    if len(hocon) > MAX_HOCON:
-                        raise BackupError('incompatible', EXPORT_TAMPERED.format(what='過大的設定檔'))
-                    continue
-                raise BackupError('incompatible', EXPORT_TAMPERED.format(what='非預期的項目 ' + hacommon.names([name])))
-    except (tarfile.TarError, OSError):
-        raise BackupError('job-failed', 'EMQX 的匯出資料無法讀取。') from None
-    if hocon is not None:
-        extra = sorted(export_cluster_roots(hocon.decode('utf-8', 'replace')) - set(DATA_ROOTS))
-        if extra:
-            raise BackupError('incompatible', EXPORT_TAMPERED.format(what='設定根 ' + hacommon.names(extra)))
+        result = execute(['emqx', 'eval', export_expression(name)])
+        body = result.stdout or b''
+        if result.returncode or not body.startswith(b'WOOWEXP:'):
+            raise ValueError()
+        encoded, tail = body[8:].split(b':END', 1)
+        if tail.strip() not in (b'', b'ok'):
+            raise ValueError()
+        listing = util.loads_strict(base64.b64decode(encoded, validate=True), max_bytes=MAX_LISTING)
+        members, roots = listing['members'], listing['roots']
+        if (len(listing) != 2 or type(members) is not list or type(roots) is not list
+                or any(type(root) is not str for root in roots)
+                or any(type(row) is not list or [type(value) for value in row] != [str, str, int] for row in members)):
+            raise ValueError()
+    except (ValueError, TypeError, KeyError, RecursionError):
+        raise BackupError('incompatible', EXPORT_UNREADABLE + hint) from None
+    limits = {f'{base}/META.hocon': MAX_HOCON, f'{base}/cluster.hocon': MAX_HOCON}
+    limits.update({f'{base}/mnesia/{table}': MAX_EXPORT for table in TABLES})
+    seen = set()
+    for member, kind, size in members:
+        if kind != 'regular' or member in seen or not 0 <= size <= limits.get(member, -1):
+            raise BackupError('incompatible', EXPORT_TAMPERED.format(what='檔案 ' + hacommon.names([member])))
+        seen.add(member)
+    extra = sorted(set(roots) - set(DATA_ROOTS))
+    if extra:
+        raise BackupError('incompatible', EXPORT_TAMPERED.format(what='設定 ' + hacommon.names(extra)))
 
 
 def target_config_snapshot(volume_tar, snapshot_path, required, *, limit=MAX_HOCON, absent=()):
@@ -1418,7 +1375,6 @@ def target_broker(work, tmp, target, export, ids, *, hint='', target_snapshot=No
     `target_vm`: this device's (total, online) schedulers (schedulers); the candidate starts with them and must answer
     them before anything is compared."""
     name = os.path.basename(export)
-    check_export_members(export)   # defence in depth (B1-03): refuse a tampered export before the candidate starts
     snapshot_digests = snapshot_file_digests(target_snapshot) if target_snapshot is not None else None
     tmp.volume('emqx-in')
     tmp.volume_import('emqx-in', lambda out: _folder_tar(out, 'in', ids[0], ids[1], [(name, export)]))
@@ -1458,6 +1414,8 @@ def target_broker(work, tmp, target, export, ids, *, hint='', target_snapshot=No
     authn = parse_authn(evaluate(tmp, 'emqx-new', AUTHN_EXPR))
     if strict is None or len(seeded) != len(TABLES) or not authn:
         raise BackupError('job-failed', '無法讀取這台 EMQX 的設定。')
+    check_export(lambda command: tmp.exec('emqx-new', command, timeout=1800, max_output=MAX_HOCON, check=False), name,
+                 hint=hint)
     assert_system_ticker(tmp, 'emqx-new', ticker_pid)
     work.log('把 HA 的 EMQX 資料匯入暫用的 EMQX（這台的映像與設定）')
     out = ctl(tmp, 'emqx-new', ['data', 'import', f'{WORK}/in/{name}'], timeout=1800).stdout or b''
