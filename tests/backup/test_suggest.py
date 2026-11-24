@@ -14,6 +14,7 @@ import tempfile
 import types
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from woowbackup import catalog, podman, suggest
 from woowbackup.errors import BackupError
@@ -497,9 +498,9 @@ class ReferenceHostTests(unittest.TestCase):
 
     def test_databases_default_to_cold_with_export_variants(self):
         n8n = self.apps['n8n']
-        self.assertEqual(n8n['variant'], 'cold')
+        self.assertEqual(self.apps['odoo']['variant'], 'cold', 'cold unless the import needs another mode (PREFERRED_MODES)')
         self.assertEqual([v['id'] for v in n8n['variants']], ['cold', 'instance', 'database'])
-        cold = n8n['entry']
+        cold = variant(n8n, 'cold')['entry']
         self.assertEqual(cold['postgres'], [])
         self.assertIn({'name': 'n8n_postgres_data', 'label': 'PostgreSQL 資料（冷備份）'}, cold['volumes'])
         self.assertIn('n8n-postgres.service', cold['writer_units'])
@@ -523,6 +524,51 @@ class ReferenceHostTests(unittest.TestCase):
         self.assertIn('db-dir', [n['code'] for n in nextcloud['notes']])
         self.assertIn({'path': '.local/share/nextcloud-office/postgres', 'label': 'PostgreSQL 資料（冷備份）'},
                       nextcloud['entry']['data_dirs'])
+
+    def test_only_these_apps_default_to_the_mode_their_import_needs(self):
+        needs = {'litellm', 'n8n', 'hermes'}
+        self.assertEqual(set(suggest.PREFERRED_MODES), needs)
+        for app_id, app in self.apps.items():
+            with self.subTest(app=app_id):
+                self.assertEqual(app['variant'], 'database' if app_id in needs else 'cold')
+                self.assertEqual('import-mode' in [n['code'] for n in app['notes']], app_id in needs)
+                for item in app['variants']:
+                    self.assertEqual('（預設）' in item['label'], item['id'] == 'cold' and app_id not in needs)
+
+    def import_target(self, app_id, entry):
+        """What the app's Home Assistant import says about this device with the entry installed."""
+        from woowbackup import ha_hermes, ha_n8n, ha_odoo
+        module = {'n8n': ha_n8n, 'hermes': ha_hermes, 'odoo': ha_odoo}[app_id]
+        self.assertEqual(module.APP_ID, app_id)
+        app = catalog.validate_entry(entry, paths=Paths(base=Path(self.tmp.name)), user_lookup=lookup_for(self.home))
+        quadlets = {name: (FIXTURES / 'quadlet' / name).read_bytes() for name in entry['quadlet']['files']}
+        work = types.SimpleNamespace(quadlets=lambda _app: quadlets,
+                                     runner=lambda _app: types.SimpleNamespace(home=str(self.home)))
+        return module.Target(work, app)
+
+    def test_the_default_drafts_are_the_entries_the_imports_fill(self):
+        for app_id in ('n8n', 'hermes', 'odoo'):
+            with self.subTest(app=app_id):
+                app = self.apps[app_id]
+                self.assertTrue(app['valid'])
+                self.import_target(app_id, app['entry'])  # accepted as it is, without a hand edit
+        for app_id in ('n8n', 'hermes'):
+            for mode in ('cold', 'instance'):
+                with self.subTest(app=app_id, mode=mode), self.assertRaises(BackupError) as caught:
+                    self.import_target(app_id, variant(self.apps[app_id], mode)['entry'])
+                self.assertEqual(caught.exception.code, 'incompatible')
+
+    def test_an_installed_cold_entry_keeps_its_mode_and_is_told_what_to_choose(self):
+        installed = [variant(self.apps[app_id], 'cold')['entry'] for app_id in ('n8n', 'hermes')]
+        with tempfile.TemporaryDirectory() as base:
+            result, _fake = run_suggest(base, self.home, installed=installed, linger=(OWNER,))
+        apps = {app['id']: app for app in result['apps']}
+        for app_id in ('n8n', 'hermes'):
+            with self.subTest(app=app_id):
+                self.assertEqual(apps[app_id]['variant'], 'cold', 'changing it would strand the existing backups')
+                notes = [(n['level'], n['message']) for n in apps[app_id]['notes'] if n['code'] == 'import-mode']
+                self.assertEqual([level for level, _m in notes], ['warn'])
+                self.assertIn('請在這裡改選「單一資料庫」並安裝', notes[0][1])
 
     def test_start_order_follows_the_dependencies(self):
         for app in self.result['apps']:
@@ -744,7 +790,7 @@ class InstalledEntryTests(unittest.TestCase):
         for item in app['variants']:
             with self.subTest(variant=item['id']):
                 self.assertEqual([h['timeout_seconds'] for h in item['entry']['health']], [600, 600])
-        self.assertEqual(app['variant'], 'cold')  # the installed (cold) mode
+        self.assertEqual(app['variant'], 'database')  # the installed mode = what a new draft installs
         self.assertTrue(app['valid'], app['problem'])
         notes = [n for n in app['notes'] if n['code'] == 'health-timeout']
         self.assertEqual(len(notes), 1)
@@ -1106,6 +1152,241 @@ class GroupingTests(unittest.TestCase):
         self.assertEqual(sorted(apps), ['x1'])
         self.assertEqual(suggest.sanitize_id('A'), 'a-app')
         self.assertEqual(suggest.sanitize_id('My_App..Prod'), 'my-app-prod')
+
+
+# The WOOWTECH LiteLLM package's Quadlet files as scripts/install.sh writes them (Woow_podman_litellm dd690ae quadlet/,
+# the tokens rendered with the package defaults): the lines that matter to the scan (names, mounts, ports, probes, labels,
+# the names of the secrets). Unlike the reference-host fixture there is no EnvironmentFile= and HealthCmd= asks for
+# liveliness (readiness is the startup probe).
+LITELLM_PACKAGE = {
+    'litellm.network': '[Network]\nNetworkName=litellm-net\nDriver=bridge\nLabel=app=litellm\n'
+                       'Label=io.woowtech.stack=litellm-gw\nLabel=io.woowtech.app=litellm\n',
+    'litellm-pgdata.volume': '[Volume]\nVolumeName=litellm-pgdata\nLabel=app=litellm-postgres\n'
+                             'Label=io.woowtech.stack=litellm-gw\nLabel=io.woowtech.app=litellm\n',
+    'litellm-postgres.container':
+        '[Container]\nContainerName=litellm-postgres\n'
+        'Image=docker.io/library/postgres:17.11-alpine3.23@sha256:'
+        'bc2701f9a79f9248bcb18743bc9b2c732d9a1d16737ca44a8f577752fc43b61f\n'
+        'Network=litellm.network\nVolume=litellm-pgdata.volume:/var/lib/postgresql/data\n'
+        'Environment=PGDATA=/var/lib/postgresql/data/pgdata\nEnvironment=POSTGRES_USER=litellm\n'
+        'Environment=POSTGRES_DB=litellm\nEnvironment=POSTGRES_PASSWORD_FILE=/run/secrets/postgres-password\n'
+        'Secret=litellm-postgres-password,type=mount,target=/run/secrets/postgres-password,mode=0400\n'
+        'HealthCmd=pg_isready -h 127.0.0.1 -p 5432 -U litellm -d litellm\nPodmanArgs=--memory=1g --cpus=1.0\n'
+        'Label=app=litellm-postgres\nLabel=io.woowtech.stack=litellm-gw\nLabel=io.woowtech.app=litellm\n',
+    'litellm.container':
+        '[Unit]\nRequires=litellm-postgres.service\nAfter=litellm-postgres.service\n\n'
+        '[Container]\nContainerName=litellm\nImage=localhost/woow-litellm:1.104.0-0.3.16\nPull=never\n'
+        'Network=litellm.network\nPublishPort=127.0.0.1:4000:4000\n'
+        'Volume=%h/.config/litellm/config.yaml:/app/config.yaml:ro,Z\nExec=--config /app/config.yaml --port 4000\n'
+        'Secret=litellm-database-url,type=env,target=DATABASE_URL\n'
+        'Secret=litellm-master-key,type=env,target=LITELLM_MASTER_KEY\n'
+        'Secret=litellm-ui-password,type=env,target=UI_PASSWORD\n'
+        'Secret=litellm-postgres-password,type=env,target=DATABASE_PASSWORD\n'
+        'Secret=litellm-salt-key,type=env,target=LITELLM_SALT_KEY\n'
+        'Environment=DATABASE_HOST=litellm-postgres\nEnvironment=STORE_MODEL_IN_DB=True\n'
+        'PodmanArgs=--tmpfs=/run/woow-chatgpt:rw,size=64m,mode=1777\n'
+        'HealthStartupCmd=python -c "import urllib.request,sys; sys.exit(0 if '
+        'urllib.request.urlopen(\'http://localhost:4000/health/readiness\').status==200 else 1)"\n'
+        'HealthCmd=python -c "import urllib.request,sys; sys.exit(0 if '
+        'urllib.request.urlopen(\'http://localhost:4000/health/liveliness\').status==200 else 1)"\n'
+        'PodmanArgs=--memory=2g --cpus=2.0\nLabel=app=litellm\nLabel=io.woowtech.stack=litellm-gw\n'
+        'Label=io.woowtech.app=litellm\n'}
+LITELLM_FILES = ('.config/litellm/config.yaml', '.config/litellm/litellm.env')
+LITELLM_SECRETS = ['litellm-database-url', 'litellm-master-key', 'litellm-ui-password', 'litellm-postgres-password',
+                   'litellm-salt-key']
+
+
+class LiteLLMPackageTests(unittest.TestCase):
+    """The draft of the package LiteLLM is the entry its Home Assistant import fills (ha_litellm.Target), without a hand
+    edit: the single-database mode, the readiness check at 600 s, both configuration files and the table digest. The
+    import refuses the other modes; an installed entry keeps its mode and is told what to choose."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.lookup = lookup_for('/home/woowtechopenclaw')
+
+    def app(self, entry):
+        return catalog.validate_entry(entry, paths=Paths(base=Path(self.tmp.name)), user_lookup=self.lookup)
+
+    def draft(self, installed=(), files=LITELLM_FILES, quadlets=None):
+        _result, apps = analyze(quadlets or LITELLM_PACKAGE, files=files, installed=[self.app(e) for e in installed])
+        return apps['litellm']
+
+    def entry(self, mode='database', **changes):
+        """The entry of a fresh draft in `mode`, as a device would have installed it."""
+        return {**copy.deepcopy(variant(self.draft(), mode)['entry']), **changes}
+
+    def import_target(self, entry, quadlets=None):
+        """What the import says about this device with the entry installed (ha_litellm.Target)."""
+        from woowbackup import ha_litellm
+        files = {name: text.encode() for name, text in (quadlets or LITELLM_PACKAGE).items()}
+        work = types.SimpleNamespace(quadlets=lambda _app: files,
+                                     runner=lambda _app: types.SimpleNamespace(home='/home/woowtechopenclaw'))
+        return ha_litellm.Target(work, self.app(entry))
+
+    def notes(self, app, code):
+        return [(n['level'], n['message']) for n in app['notes'] if n['code'] == code]
+
+    def test_the_import_accepts_the_new_draft_as_it_is(self):
+        from woowbackup import ha_litellm
+        self.assertEqual(suggest.PREFERRED_MODES[ha_litellm.APP_ID], 'database')
+        app = self.draft()
+        self.assertEqual((app['variant'], app['valid'], app['installed']), ('database', True, None))
+        entry = app['entry']
+        self.assertEqual(entry['postgres'], [{'id': 'main', 'container': 'litellm-postgres',
+                                              'unit': 'litellm-postgres.service', 'database': 'litellm',
+                                              'user': 'litellm', 'data_volume': 'litellm-pgdata'}])
+        self.assertEqual((entry['volumes'], entry.get('data_dirs')), ([], None))
+        self.assertEqual(entry['units'], ['litellm-postgres.service', 'litellm.service'])
+        self.assertEqual(entry['writer_units'], ['litellm.service'])
+        self.assertEqual(entry['config_files'], [{'path': '.config/litellm/config.yaml', 'mode': '0644'},
+                                                 {'path': '.config/litellm/litellm.env', 'mode': '0600'}])
+        self.assertEqual(sorted(s['name'] for s in entry['secrets']), sorted(LITELLM_SECRETS))
+        self.assertEqual(entry['health'], [{'type': 'http', 'url': 'http://127.0.0.1:4000/health/readiness',
+                                            'expect_status': 200, 'timeout_seconds': 600}])
+        self.assertEqual(entry['verify'], [{'id': 'db-main', 'type': 'postgres-digest', 'postgres': 'main',
+                                            'label': 'PostgreSQL 資料表內容'}])
+        target = self.import_target(entry)
+        self.assertEqual((target.pg_id, target.db_container, target.database, target.db_user, target.db_volume),
+                         ('main', 'litellm-postgres', 'litellm', 'litellm', 'litellm-pgdata'))
+        notes = self.notes(app, 'import-mode')
+        self.assertEqual([level for level, _m in notes], ['info'])
+        self.assertIn('草稿已選「單一資料庫」', notes[0][1])
+        self.assertTrue(any('/health/liveliness 只表示程式有回應；草稿改用 /health/readiness' in h for h in app['hints']))
+
+    def test_the_import_refuses_the_other_modes_of_the_same_draft(self):
+        from woowbackup import ha_litellm
+        app = self.draft()
+        self.assertEqual([v['id'] for v in app['variants']], ['cold', 'instance', 'database'])
+        for mode in ('cold', 'instance'):
+            item = variant(app, mode)
+            self.assertTrue(item['valid'], item['problem'])
+            with self.subTest(mode=mode), self.assertRaises(BackupError) as caught:
+                self.import_target(item['entry'])
+            self.assertEqual(caught.exception.message, ha_litellm.TARGET_SHAPE)
+        self.assertEqual([v['id'] for v in app['variants'] if '（預設）' in v['label']], [], 'cold is not the default here')
+
+    def test_an_installed_entry_keeps_its_mode_and_is_told_what_to_choose(self):
+        for mode, codes in (('cold', []), ('instance', ['info'])):
+            app = self.draft(installed=[self.entry(mode)])
+            with self.subTest(mode=mode):
+                self.assertEqual(app['variant'], mode, 'changing it would strand the existing backups')
+                self.assertEqual([level for level, _m in self.notes(app, 'installed-mode')], codes)
+                notes = self.notes(app, 'import-mode')
+                self.assertEqual([level for level, _m in notes], ['warn'])
+                for words in ('不是「單一資料庫」方式', '請在這裡改選「單一資料庫」並安裝', '無法以新設定還原'):
+                    self.assertIn(words, notes[0][1])
+                # what the note says works: the variant it names is installable and the import accepts it
+                chosen = variant(app, 'database')
+                self.assertTrue(chosen['valid'], chosen['problem'])
+                self.assertEqual(self.import_target(chosen['entry']).pg_id, 'main')
+                self.assertEqual([(v['id'], v.get('postgres')) for v in chosen['entry']['verify']], [('db-main', 'main')])
+
+    def test_the_draft_of_the_production_entry_only_raises_the_limit_and_adds_the_digest(self):
+        # The installed entry of the reference host (~/.woowbk-lab/evidence/prod-catalogs/litellm.json): single database,
+        # readiness at 300 s, both configuration files, no data check.
+        installed = self.entry('database', name='LiteLLM 模型閘道', description='LiteLLM 代理', verify=[])
+        installed['health'][0]['timeout_seconds'] = 300
+        app = self.draft(installed=[installed])
+        self.assertEqual((app['variant'], app['valid']), ('database', True))
+        self.assertEqual([(c['path'], c['op'], c.get('old'), c.get('new')) for c in app['installed']['changes']],
+                         [('health[url=http://127.0.0.1:4000/health/readiness].timeout_seconds', 'change', 300, 600),
+                          ('verify[id=db-main]', 'add', None,
+                           {'id': 'db-main', 'type': 'postgres-digest', 'postgres': 'main',
+                            'label': 'PostgreSQL 資料表內容'})])
+        self.assertEqual((app['installed']['drift'], self.notes(app, 'import-mode')), ([], []))
+        self.assertEqual(self.import_target(app['entry']).pg_id, 'main', 'the import accepts it with the digest')
+        again = self.draft(installed=[app['entry']])
+        self.assertTrue(again['installed']['same'], again['installed']['changes'])
+
+    def test_the_checks_of_an_installed_entry_are_kept_as_they_are(self):
+        installed = self.entry('database')
+        installed['health'] = [{'type': 'http', 'url': 'http://127.0.0.1:4000/health/liveliness', 'expect_status': 200,
+                                'timeout_seconds': 600}]
+        app = self.draft(installed=[installed])
+        self.assertEqual(app['entry']['health'], installed['health'], 'READY_PATHS is for a new proposal only')
+
+    def test_a_check_that_is_not_proposed_is_not_said_to_be_changed(self):
+        quadlets = dict(LITELLM_PACKAGE)
+        quadlets['litellm.container'] = quadlets['litellm.container'].replace('PublishPort=127.0.0.1:4000:4000\n', '')
+        app = self.draft(quadlets=quadlets)
+        self.assertEqual(app['entry'].get('health') or [], [])
+        self.assertTrue(any('沒有發佈到 127.0.0.1，未列入' in h for h in app['hints']), app['hints'])
+        self.assertFalse([h for h in app['hints'] if '草稿改用 /health/readiness' in h])
+
+    def test_the_package_settings_file_is_proposed_only_when_the_owner_has_it(self):
+        app = self.draft(files=LITELLM_FILES[:1])
+        self.assertEqual([c['path'] for c in app['entry']['config_files']], ['.config/litellm/config.yaml'])
+        self.assertTrue(app['valid'], app['problem'])
+        installed = self.entry('database')
+        kept = self.draft(installed=[installed])
+        self.assertNotIn('config_files', [c['path'].split('[')[0] for c in kept['installed']['changes']])
+        self.assertEqual(kept['installed']['drift'], [], 'the installed entry does not lose the file')
+
+    def test_a_database_in_a_host_directory_cannot_be_imported_into(self):
+        quadlets = {name: text for name, text in LITELLM_PACKAGE.items() if not name.endswith('.volume')}
+        quadlets['litellm-postgres.container'] = quadlets['litellm-postgres.container'].replace(
+            'litellm-pgdata.volume:', '%h/.local/share/litellm/pg:')
+        _result, apps = analyze(quadlets, files=LITELLM_FILES, dirs=('.local/share/litellm/pg',))
+        app = apps['litellm']
+        self.assertEqual((app['variant'], [v['id'] for v in app['variants']]), ('cold', ['cold']))
+        notes = self.notes(app, 'import-mode')
+        self.assertEqual([level for level, _m in notes], ['warn'])
+        self.assertIn('這台沒有能用這個方式備份的 PostgreSQL', notes[0][1])
+
+    def test_a_mode_that_cannot_be_installed_is_not_preselected(self):
+        with mock.patch.object(suggest.Analyzer, '_validate', lambda _self, entry: (
+                (True, None, None) if not entry['postgres'] else (False, 'no', 'postgres'))):
+            app = self.draft()
+        self.assertEqual((app['variant'], app['valid']), ('cold', True))
+        self.assertEqual([level for level, _m in self.notes(app, 'import-mode')], ['warn'])
+
+
+class ModeChangeTests(unittest.TestCase):
+    """Choosing another PostgreSQL mode for an installed app on the page: a kept table digest takes the form that mode
+    needs (the draft could not be installed before)."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.home = build_home(self.tmp.name)
+
+    def test_every_mode_of_an_installed_app_can_be_installed(self):
+        draft, _ = run_suggest(self.tmp.name, self.home)
+        fresh = {a['id']: a for a in draft['apps']}
+        for app_id in ('n8n', 'litellm'):
+            for mode in ('cold', 'instance', 'database'):
+                installed = copy.deepcopy(variant(fresh[app_id], mode)['entry'])
+                check = next(v for v in installed['verify'] if v['type'] == 'postgres-digest')
+                check.update(id='tables', label='我們的資料表', exclude_tables=['public.cron_*'])
+                result, _ = run_suggest(self.tmp.name, self.home, installed=[installed])
+                app = next(a for a in result['apps'] if a['id'] == app_id)
+                self.assertEqual(app['variant'], mode)
+                for item in app['variants']:
+                    with self.subTest(app=app_id, installed=mode, chosen=item['id']):
+                        self.assertTrue(item['valid'], item['problem'])
+                        found = [v for v in item['entry']['verify'] if v['type'] == 'postgres-digest']
+                        kept = {'id': 'tables', 'type': 'postgres-digest', 'label': '我們的資料表',
+                                'exclude_tables': ['public.cron_*']}
+                        source = ({'container': f'{app_id}-postgres', 'unit': f'{app_id}-postgres.service',
+                                   'user': app_id} if item['id'] == 'cold' else {'postgres': 'main'})
+                        self.assertEqual(found, [{**kept, **source}])
+
+    def test_other_checks_are_returned_as_they_are(self):
+        entry = {'postgres': [{'id': 'main', 'container': 'db'}],
+                 'verify': [{'id': 'db-main', 'type': 'postgres-digest', 'postgres': 'main', 'label': 'x'},
+                            {'id': 'db-cold', 'type': 'postgres-digest', 'container': 'cold', 'unit': 'u', 'user': 'p'}]}
+        for item in ({'id': 'a', 'type': 'http-json', 'url': 'u', 'compare': ['n']},
+                     {'id': 'b', 'type': 'files-digest', 'volume': 'v'},
+                     {'id': 'c', 'type': 'postgres-digest', 'postgres': 'main', 'databases': ['x']},
+                     {'id': 'd', 'type': 'postgres-digest', 'container': 'elsewhere', 'unit': 'u', 'user': 'p'},
+                     {'id': 'g', 'type': 'postgres-digest', 'container': 'cold', 'unit': 'u', 'user': 'p',
+                      'databases': ['x']},
+                     {'id': 'e', 'type': 'postgres-digest', 'postgres': 'gone'}, 'not an object',
+                     {'id': 'f', 'type': 'postgres-digest'}):
+            with self.subTest(item=item):
+                self.assertEqual(suggest.digest_for_mode(copy.deepcopy(item), {'postgres': []}, entry), item)
 
 
 class ParserTests(unittest.TestCase):

@@ -320,3 +320,25 @@ EMQX 的 `PRESERVATION_BLOCKER` 在 `97c22c9` 照舊。
 
 給 arm54 最後的壓縮合併：`arm54_final_omnigent.py`、`arm54_final_owner_omnigent.py` 會檢查 `ha_omnigent.SECURITY_BLOCKER`，
 這個名稱從 `97c22c9` 起不存在；它們是合併前那些實測的紀錄，照原樣在整合版上重跑會停在那一行。
+
+## 第三次整合（續）：LiteLLM 最終證據、EMQX 產品線、EMQX 安全審查、健康檢查提案（`unit-tests-step3g.json`，擁有者決定 1 與 C）
+
+| 合併 commit | 來源（tip） | 內容 |
+| --- | --- | --- |
+| `fdc922f` | `feat/ha-import-litellm-product-20261123`（`db9455a`） | 只有證據與實驗室 harness：第 10 次真實流程 **73/73**（最終產品程式、600 秒草稿、選項 A 的正向案例）、真實負向流程 negative-01 **58/58**、沙盒的 planted_objects；SR-7 與 `ssl_verify` 明列為 KNOWN OPEN RISKS。 |
+| `9bf8f5e` | `feat/ha-import-emqx-product-20261124`（`c6435b4`，引擎樹 `865c930f`） | EMQX 匯入成為正式產品路徑：公開的 `PRESERVATION_BLOCKER` 換成真正會執行的保護（HA 的資料在一個用**這台**開機設定與環境檔起動的候選 broker 上合併，設定必須與這台一致；還原後讀回核對，不同就自動退回；擁有者決定 C 的拒絕；審查的拒絕 SR-2／3／6／7、SR-8／SR-9；Podman 6.x 的磁碟區最上層目錄）。 |
+| `bca3d65`、`4539aec` | `sec/emqx-secreview2-20261124`（`5f93f6b`，再 `28c6d97`） | 只有測試、harness、證據與最終審查 README（引擎不變）。 |
+| `66c1142` | `fix/emqx-health-suggest-20261124`（`4ec3174`＝`bca3d65`＋`a3a0479`） | `catalog-suggest` 對 EMQX 改提案 Dashboard（`/`），不再提案只在容器內能用的 `/readyz`（從這台看是 403，會讓每次還原的健康檢查失敗、自己退回）。審查結束後才寫的 42 行，本組逐行看過；真實 dev-d 的證明由產品線另外補。 |
+
+**擁有者決定 1**：換掉的斷言（取產品線的版本，沒有文字衝突）逐條列在 `9bf8f5e` 的合併訊息與 `unit-tests-step3g.json`。
+`9bf8f5e` 之後不再有「整個應用都不能匯入」的公開保護；各應用自己的檢查與轉換拒絕照舊。
+
+衝突：`9bf8f5e` 有 2 個區塊（`haimport.py` 的 `ITEM_KEYS`、`docs/backup.md` 的 EMQX／Nextcloud 條列），兩邊都保留，逐行證明差異 0 行；
+只有那邊改的 44 個檔案等於 `c6435b4`，只有這邊改的 248 個檔案不變。其他四次沒有衝突，檔案逐一等於來源分支。
+
+測試（主機守門，真實 batch-1 備份）：`fdc922f` 模組 114/114、實驗室 32/32；`9bf8f5e` 30 個模組 425/425、實驗室 42/42；`bca3d65` 96/96；
+`66c1142` 94/94（以上 0 次拒絕的呼叫）。整套 `tests/e2e/lab` 在 `fdc922f`：1144 個開始，1071 通過，73 筆未通過紀錄與 `fb284b8` **完全相同**
+（需要 `run_native` 的 71 筆被守門拒絕、2 筆過期的 `persisted_values`；0 個 podman 程序）。整套在 `4539aec`（自己的工作樹，經
+`team/heavy.sh` 與主機重測鎖，10:39:53–10:51:44；本組的 agent 在 10:28 被停止，測試自己跑完，12:03 才讀取）：`tests/backup` **1664** 個，
+1658 通過、1 略過、5 未通過（只有 `test_litellm_lab_runner`，守門擋下測試自己的假子程序；`--exe-only` 6/6）；`RealBackupTests` 1/1；
+`node tests/backup-ui.mjs` **105/105**。

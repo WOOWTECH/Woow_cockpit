@@ -21,7 +21,8 @@ with generated secret files. Cases, each: upload -> ha-check-start -> ha-convert
   salt     the salt file is not the salt HA's database is bound to
   version  an add-on version this import does not know (0.1.14)
   hooks    LiteLLM_Config holds settings that load code (post_call_rules, custom_auth, a guardrail module, a module
-           pass-through target, router plugins, a dotted callback behind 60 plain names)
+           pass-through target, router plugins, a dotted callback behind 60 plain names): six labels, not every kind the
+           product refuses (HOOK_LABELS)
   hidden   review SR-8: the same kind of hooks, and the data directory's superuser pointed the built-in text equality
            operator at a function that hides their names, so HA's side (the check) is blind; the conversion decides
            again on the rows that moved and must refuse BEFORE the converted backup is written
@@ -68,7 +69,10 @@ SLUG = 'c0ffee01_woow-litellm'
 VERSION, UPSTREAM, OTHER_VERSION = '0.1.15', '1.104.0', '0.1.14'
 CONFIG = 'public."LiteLLM_Config"'
 HOOK = review.HOOK
-# The label names the product must give (ha_litellm.MODULE_HOOKS / NESTED_HOOKS): one of each kind.
+# Six of the label names the product gives (ha_litellm.MODULE_HOOKS / NESTED_HOOKS), NOT one of each kind: the other six
+# MODULE_HOOKS, litellm_settings.custom_provider_map, general_settings.litellm_jwtauth.custom_validate,
+# general_settings.custom_secret_manager (SR-10) and a string litellm_settings.callbacks are proven by the review's sandbox
+# (stored_variants) and the unit tests only.
 HOOK_ROWS = {
     'litellm_settings': {'post_call_rules': HOOK,
                          'guardrails': [{'guardrail_name': 'woowbk_g2',
