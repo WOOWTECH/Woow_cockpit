@@ -1,0 +1,177 @@
+{
+ "attempt": "t14-old",
+ "backup_engine_tree": "b6b1c0c1979ae70f9c8e168e2694026c0954e714",
+ "code": "bcb6245",
+ "command": "python3 -I t14_export_check.py old",
+ "commercial_acceptance": "not-complete",
+ "credentials": "generated per run; HA key (T11) read in-process by the b1 Secrets reader, never printed",
+ "date": "2026-11-24",
+ "elapsed_s": 1.9,
+ "exit_code": 0,
+ "harness_commit": "691f0d4ef8b4cecd4d5dda1a8f9cd5b3cb70c5ae",
+ "iteration": 5,
+ "lane": "emqx-secreview (SR-OWNER-1942)",
+ "result": {
+  "as_expected": 20,
+  "cases": {
+   "cluster-hocon-too-large": {
+    "got": "refuse",
+    "message": "EMQX 不能搬過來：HA 匯出的資料含有非預期的內容（過大的設定檔），可能是 HA 端的 EMQX 被竄改；為保護這台的設定與機密，在匯入前已停止。請在 HA 停止 EMQX 附加元件後重新備份再匯入。",
+    "want": "refuse"
+   },
+   "cluster-hocon-twice": {
+    "got": "refuse",
+    "message": "EMQX 不能搬過來：HA 匯出的資料含有非預期的內容（設定根 sysmon），可能是 HA 端的 EMQX 被竄改；為保護這台的設定與機密，在匯入前已停止。請在 HA 停止 EMQX 附加元件後重新備份再匯入。",
+    "want": "refuse"
+   },
+   "document-in-braces": {
+    "got": "refuse",
+    "message": "EMQX 匯出設定格式非預期。",
+    "want": "refuse"
+   },
+   "empty-file": {
+    "got": "refuse",
+    "message": "EMQX 的匯出資料無法讀取。",
+    "want": "refuse"
+   },
+   "folder-entry": {
+    "got": "pass",
+    "message": "",
+    "want": "refuse"
+   },
+   "healthy": {
+    "got": "pass",
+    "message": "",
+    "want": "pass"
+   },
+   "healthy-all-tables": {
+    "got": "pass",
+    "message": "",
+    "want": "pass"
+   },
+   "healthy-empty-cluster-hocon": {
+    "got": "pass",
+    "message": "",
+    "want": "pass"
+   },
+   "healthy-no-cluster-hocon": {
+    "got": "pass",
+    "message": "",
+    "want": "pass"
+   },
+   "include-directive": {
+    "got": "pass",
+    "message": "",
+    "want": "refuse"
+   },
+   "not-gzip": {
+    "got": "refuse",
+    "message": "EMQX 的匯出資料無法讀取。",
+    "want": "refuse"
+   },
+   "not-hocon": {
+    "got": "refuse",
+    "message": "EMQX 匯出設定格式非預期。",
+    "want": "refuse"
+   },
+   "not-utf8": {
+    "got": "pass",
+    "message": "",
+    "want": "refuse"
+   },
+   "other-file": {
+    "got": "refuse",
+    "message": "EMQX 不能搬過來：HA 匯出的資料含有非預期的內容（非預期的項目 emqx-export-2026-11-24-00-00-00.000/authz/acl.conf），可能是 HA 端的 EMQX 被竄改；為保護這台的設定與機密，在匯入前已停止。請在 HA 停止 EMQX 附加元件後重新備份再匯入。",
+    "want": "refuse"
+   },
+   "other-table": {
+    "got": "refuse",
+    "message": "EMQX 不能搬過來：HA 匯出的資料含有非預期的內容（非預期的資料表 other_table），可能是 HA 端的 EMQX 被竄改；為保護這台的設定與機密，在匯入前已停止。請在 HA 停止 EMQX 附加元件後重新備份再匯入。",
+    "want": "refuse"
+   },
+   "other-table-second-gzip-member": {
+    "got": "pass",
+    "message": "",
+    "want": "refuse"
+   },
+   "other-top-folder": {
+    "got": "refuse",
+    "message": "EMQX 不能搬過來：HA 匯出的資料含有非預期的內容（多個頂層資料夾），可能是 HA 端的 EMQX 被竄改；為保護這台的設定與機密，在匯入前已停止。請在 HA 停止 EMQX 附加元件後重新備份再匯入。",
+    "want": "refuse"
+   },
+   "parent-path": {
+    "got": "refuse",
+    "message": "EMQX 不能搬過來：HA 匯出的資料含有非預期的內容（無法解析的項目名稱），可能是 HA 端的 EMQX 被竄改；為保護這台的設定與機密，在匯入前已停止。請在 HA 停止 EMQX 附加元件後重新備份再匯入。",
+    "want": "refuse"
+   },
+   "root-after-quote-in-comment": {
+    "got": "pass",
+    "message": "",
+    "want": "refuse"
+   },
+   "root-after-triple-quote-in-comment": {
+    "got": "pass",
+    "message": "",
+    "want": "refuse"
+   },
+   "root-colon": {
+    "got": "pass",
+    "message": "",
+    "want": "refuse"
+   },
+   "root-dotted": {
+    "got": "refuse",
+    "message": "EMQX 不能搬過來：HA 匯出的資料含有非預期的內容（設定根 sysmon），可能是 HA 端的 EMQX 被竄改；為保護這台的設定與機密，在匯入前已停止。請在 HA 停止 EMQX 附加元件後重新備份再匯入。",
+    "want": "refuse"
+   },
+   "root-nbsp": {
+    "got": "pass",
+    "message": "",
+    "want": "refuse"
+   },
+   "root-plain": {
+    "got": "refuse",
+    "message": "EMQX 不能搬過來：HA 匯出的資料含有非預期的內容（設定根 sysmon），可能是 HA 端的 EMQX 被竄改；為保護這台的設定與機密，在匯入前已停止。請在 HA 停止 EMQX 附加元件後重新備份再匯入。",
+    "want": "refuse"
+   },
+   "root-quoted": {
+    "got": "pass",
+    "message": "",
+    "want": "refuse"
+   },
+   "root-same-line": {
+    "got": "refuse",
+    "message": "EMQX 不能搬過來：HA 匯出的資料含有非預期的內容（設定根 sysmon），可能是 HA 端的 EMQX 被竄改；為保護這台的設定與機密，在匯入前已停止。請在 HA 停止 EMQX 附加元件後重新備份再匯入。",
+    "want": "refuse"
+   },
+   "symlink-cluster-hocon": {
+    "got": "refuse",
+    "message": "EMQX 不能搬過來：HA 匯出的資料含有非預期的內容（非一般檔案的項目），可能是 HA 端的 EMQX 被竄改；為保護這台的設定與機密，在匯入前已停止。請在 HA 停止 EMQX 附加元件後重新備份再匯入。",
+    "want": "refuse"
+   },
+   "symlink-table": {
+    "got": "refuse",
+    "message": "EMQX 不能搬過來：HA 匯出的資料含有非預期的內容（非一般檔案的項目），可能是 HA 端的 EMQX 被竄改；為保護這台的設定與機密，在匯入前已停止。請在 HA 停止 EMQX 附加元件後重新備份再匯入。",
+    "want": "refuse"
+   },
+   "truncated": {
+    "got": "refuse",
+    "message": "EMQX 的匯出資料無法讀取。",
+    "want": "refuse"
+   }
+  },
+  "check": "check_export_members (in process)",
+  "codebase": "old",
+  "elapsed_s": 0.6,
+  "image": "docker.io/emqx/emqx:5.8.9",
+  "network": "none",
+  "store": "labpodman (separate --root)",
+  "test": "T14 check_export on EMQX 5.8.9's own erl_tar/hocon (no broker)",
+  "total": 29
+ },
+ "source_commit": "bcb62455b7ca93cc5d414eec99cb9400eb639d26",
+ "started": "2026-11-24T13:45:46+0800",
+ "status_lines": [],
+ "stdout_sha256": "8e3e8d7e5bf061131475cacc06beb353b4059f1f1cda862010bb230e678912df",
+ "store": "labpodman (separate --root, lab only), every podman run --network none"
+}

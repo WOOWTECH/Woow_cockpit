@@ -1,0 +1,88 @@
+{
+ "attempt": "t13-fix",
+ "backup_engine_tree": "345d18273d27a9c3fc7b1dda3c4a13397b092074",
+ "code": "fix/emqx-export-members-20261124",
+ "command": "-I t13_forged_export.py fix control,all",
+ "commercial_acceptance": "not-complete",
+ "credentials": "generated per run; HA key (T11) read in-process by the b1 Secrets reader, never printed",
+ "date": "2026-11-24",
+ "elapsed_s": 316.5,
+ "exit_code": 0,
+ "harness_commit": "d9da23c192a3308a76476cdc20fac816e2ba7338",
+ "iteration": 5,
+ "lane": "emqx-secreview (SR-OWNER-1942)",
+ "result": {
+  "codebase": "fix",
+  "containers_left": 1,
+  "dangling_volumes_new": {
+   "empty": 0,
+   "emqx": 0,
+   "other": 0
+  },
+  "elapsed_s": 316.0,
+  "image": "docker.io/emqx/emqx:5.8.9",
+  "network": "none",
+  "real_export_members": [
+   "META.hocon",
+   "cluster.hocon",
+   "mnesia/emqx_psk",
+   "mnesia/emqx_app",
+   "mnesia/emqx_banned_rules",
+   "mnesia/emqx_banned",
+   "mnesia/emqx_authn_mnesia",
+   "mnesia/emqx_authn_scram_mnesia",
+   "mnesia/emqx_acl",
+   "mnesia/emqx_retainer_message",
+   "mnesia/emqx_admin"
+  ],
+  "simulated": "the extra roots are written into the real export by the harness",
+  "store": "labpodman (separate --root)",
+  "test": "T13 an export that brings roots of this device (B1-03)",
+  "variants": {
+   "all": {
+    "conversion": "REFUSED: EMQX 不能搬過來：HA 匯出的資料含有不屬於這次匯入的內容（設定 alarm、broker、cluster、dashboard、flapping_detect、force_gc、listeners、log、mqtt、node 等 12 個），已在匯入前停止，這台沒有任何改變；請在 HA 停止 EMQX 附加元件後重新備份再匯入。",
+    "data_imports": 0,
+    "device_unchanged": true,
+    "elapsed_s": 81.4,
+    "forged_roots": [
+     "alarm",
+     "broker",
+     "cluster",
+     "dashboard",
+     "flapping_detect",
+     "force_gc",
+     "listeners",
+     "log",
+     "mqtt",
+     "node",
+     "rpc",
+     "sysmon"
+    ]
+   },
+   "control": {
+    "candidate_restarted": true,
+    "conversion": "PASSED (candidate built, all product checks green)",
+    "data_imports": 1,
+    "device_roots_changed_by_the_import": [
+     "authorization"
+    ],
+    "device_roots_differing_after_restart": [],
+    "device_roots_differing_in_the_candidate": [],
+    "device_roots_kept_on_disk": [
+     "authorization",
+     "listeners",
+     "log"
+    ],
+    "device_unchanged": true,
+    "elapsed_s": 158.7,
+    "forged_marker_on_disk": false,
+    "forged_roots": []
+   }
+  }
+ },
+ "source_commit": "3ad74cacae3cc77ddb281eb166488ff5af0d15fb",
+ "started": "2026-11-24T13:50:11+0800",
+ "status_lines": [],
+ "stdout_sha256": "d318d6c5d7fff0457a8bb577d2e342a433f57a68ed45cfeda01685a05646d2b8",
+ "store": "labpodman (separate --root, lab only), every podman run --network none"
+}
