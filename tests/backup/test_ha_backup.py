@@ -1141,7 +1141,6 @@ class EntryTests(WalkCase):
             for member, good in ((packed, True), (packed[:-8] + bytes(8), False), (packed[:-1], False)):
                 with self.subTest(tail=tail[:4], good=good):
                     stream = habackup._Gunzip(io.BytesIO(member))
-                    stream.checked_to_the_end = True
                     if good:
                         self.assertEqual([row[0] for row in self.walk([], stream=stream, addon=True)[0]][-1], 'config')
                     else:
@@ -1661,7 +1660,6 @@ class HardLinkTests(WalkCase):
         entries = [{'name': 'x/a', 'data': os.urandom(5000)}, {'name': 'y/b', 'type': 'hardlink', 'linkname': 'x/a'}]
         packed = gzip.compress(hx.tar_bytes(entries), mtime=0)
         stream = habackup._Gunzip(io.BytesIO(packed[:-8] + bytes(8)))
-        stream.checked_to_the_end = True
         stream.reopen = lambda: self.fail('the first pass was not complete')
         self.assertEqual(self.refused([], habackup.Select(include=('y',)), stream=stream, addon=False)[0], 'corrupt-archive')
 
@@ -1706,6 +1704,275 @@ class NamesTests(unittest.TestCase):
         with self.assertRaises(BackupError) as caught:
             list(habackup.iter_entries(io.BytesIO(hx.tar_bytes(deep)), habackup.Select(max_members=100), addon=False))
         self.assertEqual(caught.exception.code, 'limit-exceeded')
+
+
+def haos_doc(doc):
+    """Does Supervisor take this backup.json? backups/validate.py SCHEMA_BACKUP (git e610ca81, 2026-11-16), by hand; it
+    gave the same answers as the real schema (voluptuous 0.16) for every document of HaosParityTests."""
+    def text(value):
+        return isinstance(value, str)
+
+    def number(value):
+        try:
+            return float(value) is not None
+        except (TypeError, ValueError):
+            return False
+
+    def boolean(value):
+        return not text(value) or value.lower() in ('1', 'true', 'yes', 'on', 'enable', '0', 'false', 'no', 'off', 'disable')
+    try:
+        if int(doc.get('version', 1)) not in (1, 2):
+            return False
+    except (TypeError, ValueError, OverflowError):
+        return False
+    core = doc.get('homeassistant') or None
+    folders = doc.get('folders', [])
+    addons = doc.get('addons', [])
+    repositories = doc.get('repositories', [])
+    if core is not None and (not isinstance(core, dict) or core.get('version') is not None and not (
+            number(core.get('size', 0)) and boolean(core.get('exclude_database', False)))):
+        return False
+    if not isinstance(folders, list) and folders != '' or not all(text(f) for f in folders):
+        return False  # (v1_folderlist turns an empty text into an empty list)
+    folders = [{'addons/local': 'apps/local'}.get(f, f) for f in folders if f != 'homeassistant']
+    if not isinstance(addons, list) or not all(isinstance(a, dict) and text(a.get('slug')) and text(a.get('name'))
+                                               and 'version' in a and number(a.get('size', 0)) for a in addons):
+        return False
+    return (text(doc.get('slug')) and text(doc.get('name')) and text(doc.get('date'))
+            and doc.get('type') in ('full', 'partial') and boolean(doc.get('compressed', True))
+            and set(folders) <= {'share', 'apps/local', 'ssl', 'media'} and len(set(folders)) == len(folders)
+            and len({a['slug'] for a in addons}) == len(addons) and isinstance(repositories, list)
+            and all(text(r) and r.startswith(('https://', 'core', 'local')) for r in repositories)
+            and isinstance(doc.get('extra', {}), dict))
+
+
+def haos_takes(data):
+    """Does Supervisor load this file and open it for a restore? backups/backup.py load() and open(), by hand."""
+    try:
+        with tarfile.open(fileobj=io.BytesIO(data), mode='r:') as tar:
+            members = tar.getmembers()
+            name = './snapshot.json' if './snapshot.json' in [m.name for m in members] else './backup.json'
+            doc = json.loads(tar.extractfile(name).read())
+            for member in members:
+                tarfile.tar_filter(member, '/tmp')
+            return isinstance(doc, dict) and haos_doc(doc)
+    except (tarfile.TarError, KeyError, ValueError, OverflowError):
+        return False
+
+
+class HaosParityTests(TempFiles):
+    """What HAOS takes, this device takes -- or the reason why not stands here."""
+
+    STRICT_JSON = 'UP-22 (kept): one key with two values, NaN or another encoding leaves open what is meant'
+    DAMAGED = 'UP-04, UP-16 (kept): the file is damaged or cut off; tarfile silently stops there and loses the rest'
+    EXTENDED = 'UP-06, UP-11 (kept): which name or size belongs to which member is open'
+    MOVED = 'a global header that moves names or sizes: they cannot be trusted for any member'
+    SPARSE = 'UP-07 (kept): HA writes no sparse members, expanding them wrongly would corrupt data'
+    NUMBERS = 'UP-05, UP-09 (kept): a size or owner that is no number puts every member out of place'
+    LIMITS = 'UP-12, UP-15, UP-21, UP-32, UP-39, UP-43: limits far above any backup'
+    TWICE = 'UP-19: two descriptions, which one is meant is open'
+    REFUSED_DOCUMENTS = {'folders empty': 'UP-39: what is no list is refused (HAOS takes an empty text by accident)'}
+
+    def ours(self, data):
+        try:
+            self.describe(data)
+        except BackupError:
+            return False
+        return True
+
+    def documents(self):
+        """(label, document) of every field in every odd shape, and whole documents."""
+        for field in ('slug', 'name', 'date', 'supervisor_version', 'homeassistant', 'protected', 'compressed', 'type', 'version',
+                      'folders', 'addons', 'repositories', 'extra', 'crypto', 'something'):
+            doc = hx.ha_doc()
+            doc.pop(field, None)
+            yield f'{field} absent', doc
+            for label, value in {**DescribeTests.ODD, 'zero': 0, 'false': False, 'two': '2', 'no': 'no', 'one': 1,
+                                 'dict list': [{}], 'text list': ['share']}.items():
+                yield f'{field} {label}', dict(hx.ha_doc(), **{field: value})
+        for field in ('slug', 'name', 'version', 'size'):
+            for label, value in {**DescribeTests.ODD, 'absent': None}.items():
+                doc = hx.ha_doc([hx.ODOO, hx.N8N])
+                doc['addons'][1][field] = value
+                if label == 'absent':
+                    del doc['addons'][1][field]
+                yield f'add-on {field} {label}', doc
+        for label, override in {
+                'core': {'homeassistant': {'version': '1'}}, 'core without a version': {'homeassistant': {'size': 1}},
+                'core with odd fields': {'homeassistant': {'version': [1], 'size': '1.5', 'exclude_database': 'yes'}},
+                'every folder': {'folders': ['share', 'ssl', 'media', 'apps/local', 'homeassistant']},
+                'old folder': {'folders': ['addons/local']}, 'both folders': {'folders': ['addons/local', 'apps/local']},
+                'another folder': {'folders': ['data']}, 'a folder twice': {'folders': ['ssl', 'ssl']},
+                'repositories': {'repositories': ['https://github.com/woowtech/x', 'core', 'local']},
+                'a newer key': {'newer': {'x': [1]}}, 'version 1': {'version': 1}, 'version text': {'version': '1'},
+                'version 2.9': {'version': 2.9}, 'version true': {'version': True}, 'version 3': {'version': 3}}.items():
+            yield label, dict(hx.ha_doc(), **override)
+        doc = hx.ha_doc()
+        doc['addons'] *= 2
+        yield 'an add-on twice', doc
+
+    def test_documents(self):
+        odoo, n8n = (f'{hx.ODOO}.tar.gz', hx.addon_member()), (f'{hx.N8N}.tar.gz', hx.addon_member('woow-n8n'))
+        seen = {True: 0, False: 0}
+        for label, doc in self.documents():
+            with self.subTest(document=label):
+                data = hx.outer_bytes([odoo, n8n], doc)
+                haos = haos_takes(data)
+                self.assertEqual(haos, haos_doc(json.loads(json.dumps(doc))))
+                seen[haos] += 1
+                if haos:
+                    self.assertEqual(self.ours(data), label not in self.REFUSED_DOCUMENTS,
+                                     'HAOS takes it and so does this device')
+        self.assertGreater(min(seen.values()), 60, 'both answers are well covered')
+
+    def test_files(self):
+        """(label, file, HAOS takes it, this device takes it, why not)."""
+        name, member, doc = f'{hx.ODOO}.tar.gz', hx.addon_member(), json.dumps(hx.ha_doc()).encode()
+        addon, info = hx.raw_member(name, member), hx.raw_member('./backup.json', doc)
+        whole = addon + info + hx.END
+
+        def with_(blocks):
+            return blocks + whole
+        table = [
+            ('as Supervisor writes it', hx.outer_bytes([(name, member)]), True, True, None),
+            ('GNU tar', hx.outer_bytes([(name, member)], fmt=tarfile.GNU_FORMAT), True, True, None),
+            ('ustar', hx.outer_bytes([(name, member)], fmt=tarfile.USTAR_FORMAT), True, True, None),
+            ('v7', hx.raw_member(name, member, magic=hx.V7) + hx.raw_member('./backup.json', doc, magic=hx.V7) + hx.END,
+             True, True, None),
+            ('an unknown PAX record', with_(hx.pax_member({'SCHILY.ino': '1'}) + hx.raw_member('x')), True, True, None),
+            ('a folder', with_(hx.raw_member('d/', typeflag=b'5')), True, True, None),
+            ('a link', with_(hx.raw_member('l', typeflag=b'2', linkname='x')), True, True, None),
+            ('a device', with_(hx.raw_member('n', typeflag=b'3')), True, True, None),
+            ('another file', with_(hx.raw_member('mine.txt', b'x')), True, True, None),
+            ('a file in a folder', with_(hx.raw_member('a/b', b'x')), True, True, None),
+            ('an absolute name', with_(hx.raw_member('/a', b'x')), True, True, None),
+            ('a name outside', with_(hx.raw_member('../a', b'x')), False, True, None),
+            ('a link name', hx.raw_member(name, member, linkname='x') + info + hx.END, True, True, None),
+            ('a member twice', with_(hx.raw_member(name, b'other')), True, True, None),
+            ('a listed member missing', info + hx.END, True, True, None),
+            ('bytes after the end', whole + b'x' * 700, True, True, None),
+            ('one zero block', addon + info + bytes(512), True, True, None),
+            ('dirty padding', (addon[:-1] + b'x') + info + hx.END, True, True, None),
+            ('backup.json without ./', addon + hx.raw_member('backup.json', doc) + hx.END, False, True, None),
+            ('a comment for all', with_(hx.pax_member({'comment': 'x'}, typeflag=b'g')), True, True, None),
+            ('backup.json twice', whole[:-1024] + info + hx.END, True, False, self.TWICE),
+            ('a second one without ./', whole[:-1024] + hx.raw_member('backup.json', b'x') + hx.END, True, False, self.TWICE),
+            ('one key twice', addon + hx.raw_member('./backup.json', doc[:-1] + b', "name": "x"}') + hx.END, True, False,
+             self.STRICT_JSON),
+            ('NaN', addon + hx.raw_member('./backup.json', doc[:-1] + b', "x": NaN}') + hx.END, True, False,
+             self.STRICT_JSON),
+            ('UTF-16', addon + hx.raw_member('./backup.json', doc.decode().encode('utf-16')) + hx.END, True, False,
+             self.STRICT_JSON),
+            ('a BOM', addon + hx.raw_member('./backup.json', b'\xef\xbb\xbf' + doc) + hx.END, True, False, self.STRICT_JSON),
+            ('no end', addon + info, True, False, self.DAMAGED),
+            ('a bad header after backup.json', addon + info + b'\1' * 512 + hx.END, True, False, self.DAMAGED),
+            ('cut off in a member', whole[:900], False, False, None),
+            ('two PAX headers', with_(hx.pax_member({'comment': 'x'}) * 2 + hx.raw_member('x')), True, False, self.EXTENDED),
+            ('a PAX key twice', with_(hx.pax_member(hx.pax_records({'comment': 'x'}) * 2) + hx.raw_member('x')), True, False,
+             self.EXTENDED),
+            ('a PAX key that is no ASCII', with_(hx.pax_member({'é': 'x'}) + hx.raw_member('x')), True, False, self.EXTENDED),
+            ('a name for all', with_(hx.pax_member({'gname': 'x', 'path': 'y'}, typeflag=b'g')), None, False, self.MOVED),
+            ('sparse', with_(hx.raw_member('s', bytes(512), typeflag=b'S', magic=hx.GNU)), None, False, self.SPARSE),
+            ('a size that is none', with_(hx.pax_member({'size': 'x'}) + hx.raw_member('x')), None, False, self.NUMBERS),
+            ('too many entries', hx.raw_member('d/', typeflag=b'5') * 5000 + whole, True, False, self.LIMITS),
+            ('too many add-ons', hx.outer_bytes([], hx.ha_doc([f'a{i}' for i in range(1001)])), True, False, self.LIMITS),
+            ('too many repositories', hx.outer_bytes([], hx.ha_doc([], repositories=['core'] * 501)), True, False,
+             self.LIMITS),
+            ('a large PAX header', with_(hx.pax_member({'comment': 'x' * (2 << 20)}) + hx.raw_member('x')), True, False,
+             self.LIMITS),
+            ('compressed', gzip.compress(whole), False, False, None),
+        ]
+        for label, data, haos, ours, reason in table:
+            with self.subTest(file=label):
+                if haos is not None:  # None: tarfile versions differ
+                    self.assertEqual(haos_takes(data), haos, 'what HAOS does')
+                self.assertEqual(self.ours(data), ours, 'what this device does')
+                self.assertEqual(bool(reason), haos is not False and not ours, 'a refusal of its own needs a reason')
+
+    def test_members_home_assistant_would_find(self):
+        """`_get_inner_tar`: `<slug>.tar[.gz]` by its normalised name, else only that one is missing."""
+        member, doc = hx.addon_member(), hx.ha_doc()
+        for name, found in ((f'{hx.ODOO}.tar.gz', True), (f'./{hx.ODOO}.tar.gz', True), (f'././{hx.ODOO}.tar.gz', True),
+                            (f'{hx.ODOO}.tar', False), (f'{hx.ODOO}.TAR.GZ', False), (f'x/{hx.ODOO}.tar.gz', False)):
+            with self.subTest(name=name):
+                data = hx.outer_bytes([(name, member)], doc)
+                with tarfile.open(fileobj=io.BytesIO(data)) as tar:
+                    names = {os.path.normpath(m.name) for m in tar.getmembers() if m.isreg()}
+                self.assertEqual(f'{hx.ODOO}.tar.gz' in names, found, 'what HAOS does')
+                self.assertEqual(self.problems(data), {hx.ODOO: None if found else 'missing'})
+
+
+class FuzzTests(TempFiles):
+    """Damage anywhere: a BackupError or the same content as before, never another exception, never other content.
+    Fixed seed; SECONDS bounds the time."""
+
+    SECONDS = 12
+
+    def entries(self, path, keys=None):
+        result = {}
+        with habackup.open_backup(path) as ha:
+            for member in ha.layout.members:
+                with ha.open_member(member.name, keys) as stream:
+                    report = habackup.Report()
+                    rows = []
+                    for entry in habackup.iter_entries(stream, habackup.Select(symlinks=('.',), hardlinks=True), report):
+                        data = entry.read_all(1 << 22) if entry.kind == 'file' else None
+                        rows.append((entry.name, entry.kind, entry.mode, entry.uid, entry.gid, entry.linkname, data))
+                    self.assertTrue(report.complete)
+                    result[member.name] = rows
+        return result
+
+    def damage(self, rng, data):
+        data = bytearray(data)
+        kind = rng.randrange(5)
+        at = rng.randrange(len(data))
+        if kind == 0:
+            data[at] ^= 1 << rng.randrange(8)
+        elif kind == 1:
+            data[at:at + rng.randrange(1, 600)] = bytes(rng.randrange(1, 600))
+        elif kind == 2:
+            del data[at:at + rng.randrange(1, 2000)]
+        elif kind == 3:
+            data[at:at] = rng.randbytes(rng.randrange(1, 2000))
+        else:
+            del data[at:]
+        return bytes(data)
+
+    def fuzz(self, data, keys=None, *, checked=True):
+        rng = random.Random(20261125)
+        good = self.entries(self.write(data), keys)
+        outcomes, until = {}, time.monotonic() + self.SECONDS / 4
+        path = self.dir / 'fuzz.tar'
+        for _round in range(400):
+            if time.monotonic() > until:
+                break
+            path.write_bytes(self.damage(rng, data))
+            try:
+                got = self.entries(path, keys)
+            except BackupError as error:
+                self.assertIn(error.code, ('corrupt-archive', 'limit-exceeded', 'unsupported-format', 'not-found',
+                                           'wrong-key', 'key-required'))
+                outcomes[error.code] = outcomes.get(error.code, 0) + 1
+                continue
+            outcomes['read'] = outcomes.get('read', 0) + 1
+            if checked:  # a checksum or authentication covers every byte of a member
+                for name, rows in got.items():
+                    self.assertEqual(rows, good.get(name), 'what is read is what was written')
+        self.assertGreater(sum(outcomes.values()), 30, outcomes)
+        self.assertGreater(outcomes.get('corrupt-archive', 0), 10, outcomes)
+
+    def test_gzip_members(self):
+        self.fuzz(hx.two_addons(doc=hx.ha_doc([hx.ODOO, hx.N8N])))
+
+    def test_plain_members(self):
+        """No checksum covers these: content may change, but nothing else goes wrong."""
+        self.fuzz(hx.outer_bytes([(f'{hx.ODOO}.tar', hx.addon_member(compress=False))], hx.ha_doc(compressed=False)),
+                  checked=False)
+
+    @hx.needs_crypto
+    def test_encrypted_members(self):
+        self.fuzz(hx.fixture('v3_gzip.tar').read_bytes(), hasecuretar.Keys(hx.PASSWORD))
+        self.fuzz(hx.fixture('v2_gzip.tar').read_bytes(), hasecuretar.Keys(hx.PASSWORD))
 
 
 @unittest.skipUnless(os.environ.get('WOOWBK_HA_FIXTURES'), 'set WOOWBK_HA_FIXTURES (and WOOWBK_HA_KEY) to read the '

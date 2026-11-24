@@ -43,8 +43,8 @@ limits are wide but there are limits, and text from a backup is cleaned before a
   the marker was not the end. Two kinds of files are never handed out: `addon.json` (it holds the add-on's options with
   passwords and tokens) is parsed into `report.addon` (AddonInfo: slug, version, image, arch, name -- never options or
   tokens), and NEVER_READ (`data/options.json`, `data/odoo.conf` with HA passwords, `data/n8n-runners-auth-token`, the
-  HA-side secrets of the batch 1 add-ons) with everything below such a name is skipped unread, under any other name
-  (a hard link) too.
+  HA-side secrets of the batch 1 add-ons) with everything below such a name is skipped unread; a hard link that names
+  one is not followed either.
 
 Symlinks are only ever handed out as link entries (names and targets), never followed: a later entry may not lie
 below one. A relative target must stay inside the caller's area; an absolute one is handed out only when the caller
@@ -80,6 +80,7 @@ import posixpath
 import re
 import secrets
 import stat
+import typing
 import unicodedata
 import zlib
 
@@ -246,7 +247,7 @@ def _number(field, bad=_corrupt):
     text = field.split(b'\0', 1)[0].strip(b' ')
     if not text:
         return 0
-    if not all(48 <= c <= 55 for c in text):
+    if text.strip(b'01234567'):
         raise bad('tar number field is not octal')
     return int(text, 8)
 
@@ -309,8 +310,7 @@ def _pax_time(records, key, default, bad=_corrupt):
     return float(text)
 
 
-@dataclasses.dataclass(frozen=True)
-class _Head:
+class _Head(typing.NamedTuple):
     """One member's header block with the extended headers before it applied."""
     block: bytes
     pax: dict
@@ -1134,14 +1134,15 @@ def parse_addon_json(data):
 @dataclasses.dataclass(frozen=True)
 class Select:
     """Which entries of an inner tar a caller wants (normalised names, e.g. `data/postgres`; a prefix selects itself
-    and everything below it). `include` None = everything, () = nothing; `exclude` wins over `include` and is never
-    handed out, under no name. `symlinks`: prefixes below which a selected symlink is handed out when its target is
-    relative and, resolved from the link's directory, stays inside that prefix (other symlinks are skipped and counted).
-    `absolute_symlinks`: absolute target prefixes (e.g. `/opt/data`) for which a symlink below a `symlinks` area is
-    handed out too, when its target is clean (`_absolute_ok`); () = never. `hardlinks`: the caller takes hard links: a
-    selected one that names an earlier selected regular file is handed out as `hardlink`; every other selected one (all
-    of them when False) as a regular `file` with that file's content, after the walk (`_copy_links`). Budgets:
-    `max_members` entries in the whole tar, `max_bytes` bytes of selected regular files (the copies count)."""
+    and everything below it). `include` None = everything, () = nothing; `exclude` wins over `include` (what lies there
+    is not handed out for a hard link elsewhere either). `symlinks`: prefixes below which a selected symlink is handed
+    out when its target is relative and, resolved from the link's directory, stays inside that prefix (other symlinks
+    are skipped and counted). `absolute_symlinks`: absolute target prefixes (e.g. `/opt/data`) for which a symlink below
+    a `symlinks` area is handed out too, when its target is clean (`_absolute_ok`); () = never. `hardlinks`: the caller
+    takes hard links: a selected one that names an earlier selected regular file is handed out as `hardlink`; every
+    other selected one (all of them when False) as a regular `file` with that file's content, after the walk
+    (`_copy_links`). Budgets: `max_members` entries in the whole tar, `max_bytes` bytes of selected regular files (the
+    copies count)."""
     include: tuple | None = None
     exclude: tuple = ()
     symlinks: tuple = ()
@@ -1746,10 +1747,11 @@ def iter_entries(stream, select=None, report=None, *, addon=None, until_addon=Fa
     budgets and the module notes for what is skipped, what stops the walk and what is never handed out. The first
     end-of-archive block ends the tar; what follows is only read (within the budget) for the checks of
     `stream.finish()` or, without any, to see that the tar does not go on. `report.complete` is True only after the last
-    entry. A caller that stops early skips those checks. `addon`: the tar is an add-on's (its top-level addon.json is metadata, parsed into `report.addon`, never
-    handed out); None = a MemberStream's member role, True for other streams. `until_addon`: stop as soon as addon.json
-    was read (read_addon_info). `checkpoint`: called every CHECK_ENTRIES headers and CHECK_BYTES read (a cancel stops
-    the walk also where nothing is selected); a MemberStream may inflate to inflate_budget() bytes (HA-SEC-05)."""
+    entry. A caller that stops early skips those checks. `addon`: the tar is an add-on's (its top-level addon.json is
+    metadata, parsed into `report.addon`, never handed out); None = a MemberStream's member role, True for other
+    streams. `until_addon`: stop as soon as addon.json was read (read_addon_info). `checkpoint`: called every
+    CHECK_ENTRIES headers and CHECK_BYTES read (a cancel stops the walk also where nothing is selected); a MemberStream
+    may inflate to inflate_budget() bytes (HA-SEC-05)."""
     select = select or Select()
     report = report if report is not None else Report()
     if addon is None:
@@ -1855,7 +1857,7 @@ def iter_entries(stream, select=None, report=None, *, addon=None, until_addon=Fa
                 links.wait(link, report)
     except _Truncated:
         raise _broken('the inner tar is truncated') from None
-    if getattr(stream, 'checked_to_the_end', False):
+    if getattr(stream, 'checked_to_the_end', hasattr(stream, 'finish')):
         reader.drain()
         stream.finish()
     elif reader.another_header():  # no checksum covers this stream: zeros in its middle must not pass for its end
@@ -1887,63 +1889,75 @@ def _copy_links(stream, start, links, names, select, report, addon, checkpoint):
         if again is None:
             break
         later = {}
-        reader = _Reader(again, checkpoint=checkpoint, max_bytes=inflate_budget(stream))
         try:
-            count = 0
-            while wanted:
-                header = _inner_header(reader)
-                if header is None:
-                    break
-                count += 1
-                if checkpoint is not None and count % CHECK_ENTRIES == 0:
-                    checkpoint()
-                name = _entry_name(header.name)[0]
-                key = names.digest(name)
-                waiting = wanted.pop(key, None) if KINDS.get(header.typeflag) == 'file' else None
-                pad = (-header.size) % BLOCK
-                if waiting is None or never_read(name) or addon and name == ADDON_JSON or select.excludes(name):
-                    for link in waiting or ():
-                        report.skip('hardlink', link.name)
-                    reader.skip(header.size + pad)
-                    continue
-                held = None
-                if len(waiting) > 1 and not select.hardlinks and header.size <= LINK_MEMORY:
-                    held = reader.read_exact(header.size)
-                for index, link in enumerate(waiting):
-                    if index and held is None:
-                        if not select.hardlinks:
-                            later.setdefault(key, []).append(link)
-                            continue
-                        report.hardlinks += 1
-                        entry = _link_entry(link, waiting[0].name, report)
-                        yield entry
-                        if entry._copy:
-                            report.hardlinks -= 1
-                            later.setdefault(key, []).append(link)
-                        continue
-                    if report.bytes + header.size > select.max_bytes:
-                        raise _limit('the selected files are too large', limit=select.max_bytes)
-                    report.bytes += header.size
-                    report.files += 1
-                    report.copied_links += 1
-                    entry = Entry(link.name, 'file', link.mode, link.uid, link.gid, header.size, link.mtime, None,
-                                  reader if held is None else _Held(held), report)
-                    try:
-                        yield entry
-                    except BaseException:
-                        entry._reader = None
-                        raise
-                    entry._release()
-                reader.skip(pad)
+            yield from _copy_pass(again, inflate_budget(stream), wanted, later, names, select, report, addon,
+                                  checkpoint)
         except _Truncated:
             raise _broken('the inner tar is truncated') from None
-        for missing in wanted.values():
-            for link in missing:
-                report.skip('hardlink', link.name)
+        finally:
+            if again is not stream:
+                again.close()
+        _skip_links(wanted, report)
         wanted = later
-    for missing in wanted.values():
-        for link in missing:
+    _skip_links(wanted, report)
+
+
+def _skip_links(links, report):
+    for waiting in links.values():
+        for link in waiting:
             report.skip('hardlink', link.name)
+
+
+def _copy_pass(stream, budget, wanted, later, names, select, report, addon, checkpoint):
+    """One pass for `_copy_links`: takes out of `wanted` ({digest of a file's name: [_Link]}) what it finds; `later`
+    gets what needs another pass. It stops once nothing is wanted any more: the first pass has checked the whole
+    stream."""
+    reader = _Reader(stream, checkpoint=checkpoint, max_bytes=budget)
+    count = 0
+    while wanted:
+        header = _inner_header(reader)
+        if header is None:
+            return
+        count += 1
+        if checkpoint is not None and count % CHECK_ENTRIES == 0:
+            checkpoint()
+        name = _entry_name(header.name)[0]
+        key = names.digest(name)
+        waiting = wanted.pop(key, None) if KINDS.get(header.typeflag) == 'file' else None
+        pad = (-header.size) % BLOCK
+        if waiting is None or never_read(name) or addon and name == ADDON_JSON or select.excludes(name):
+            _skip_links({key: waiting or ()}, report)
+            reader.skip(header.size + pad)
+            continue
+        held = None
+        if len(waiting) > 1 and not select.hardlinks and header.size <= LINK_MEMORY:
+            held = reader.read_exact(header.size)
+        for index, link in enumerate(waiting):
+            if index and held is None:
+                if not select.hardlinks:
+                    later.setdefault(key, []).append(link)
+                    continue
+                report.hardlinks += 1
+                entry = _link_entry(link, waiting[0].name, report)
+                yield entry
+                if entry._copy:
+                    report.hardlinks -= 1
+                    later.setdefault(key, []).append(link)
+                continue
+            if report.bytes + header.size > select.max_bytes:
+                raise _limit('the selected files are too large', limit=select.max_bytes)
+            report.bytes += header.size
+            report.files += 1
+            report.copied_links += 1
+            entry = Entry(link.name, 'file', link.mode, link.uid, link.gid, header.size, link.mtime, None,
+                          reader if held is None else _Held(held), report)
+            try:
+                yield entry
+            except BaseException:
+                entry._reader = None
+                raise
+            entry._release()
+        reader.skip(pad)
 
 
 def _link_entry(link, target, report):
