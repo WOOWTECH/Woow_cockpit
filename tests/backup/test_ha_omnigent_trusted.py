@@ -1,4 +1,5 @@
-"""Candidate archive selection and public guard remain independent."""
+"""The trusted-schema load: archive selection (data only, trusted names once), the restricted loader and the
+snapshot provider's failure cleanup."""
 import unittest
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
@@ -21,13 +22,23 @@ class TrustedDataTests(unittest.TestCase):
             with self.subTest(toc=toc), self.assertRaises(BackupError):
                 omni.data_only_toc(toc)
 
-    def test_public_guards_stay_closed(self):
-        work = Mock()
-        with self.assertRaises(BackupError):
-            omni.convert(work, SimpleNamespace(id='omnigent'), False, None)
-        with self.assertRaises(BackupError):
-            omni.restore_dump(work, None, None, None)
-        self.assertEqual(work.method_calls, [])
+    def test_strict_list_takes_each_trusted_name_once(self):
+        toc = ('1; 0 0 TABLE DATA public users owner\n2; 0 0 SEQUENCE SET public users_id_seq owner\n'
+               '3; 0 0 DEFAULT public users x owner\n')
+        self.assertEqual(omni.data_only_toc(toc, tables=['users'], sequences=['users_id_seq']),
+                         '1; 0 0 TABLE DATA public users owner\n2; 0 0 SEQUENCE SET public users_id_seq owner\n')
+        # A name with a line break in HA's database could add any entry id: an unknown or repeated name is refused.
+        for extra in ('4; 0 0 TABLE DATA public users other\n', '4; 0 0 TABLE DATA public evil owner\n',
+                      '4; 0 0 SEQUENCE SET public other_seq owner\n', '4; 0 0 TABLE DATA other users owner\n',
+                      '4; 0 0 TABLE DATA public users two owners\n'):
+            with self.subTest(extra=extra), self.assertRaises(BackupError) as caught:
+                omni.data_only_toc(toc + extra, tables=['users'], sequences=['users_id_seq'])
+            self.assertIn('不屬於這台 Omnigent 資料庫結構', caught.exception.message)
+
+    def test_the_old_public_guards_are_replaced_by_the_product_checks(self):
+        self.assertFalse(hasattr(omni, 'SECURITY_BLOCKER'))
+        self.assertFalse(hasattr(omni, 'restore_dump'))
+        self.assertEqual(omni.SIGNATURE_KEYS[:3], ('relations', 'columns', 'constraints'))
 
     def test_candidate_uses_target_schema_and_restricted_loader(self):
         import tempfile

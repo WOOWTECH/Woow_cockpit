@@ -1,0 +1,159 @@
+{
+ "what": "iteration 2: HA-cluster hardening probe attempt 1: A (today) measured; B NOT READY because the probe used --read-only-tmpfs=false (removes the writable /dev/shm; diagnosed: PostgreSQL 'could not open shared memory segment: Read-only file system'); kept as the 'what could break' evidence",
+ "harness": "tests/e2e/lab/ha_cluster_hardening_probe.py",
+ "source_commit": "a8a5978",
+ "exit_code": 0,
+ "elapsed_s": null,
+ "stdout_sha256": "19eaf43821a7660ec323a87c8457bf74823beb296c39f5e01aa8a683aa50f061",
+ "stdout_status_lines": [
+  "exit=0"
+ ],
+ "lab": "isolated labpodman store (~/.woowbk-lab), throwaway containers, --network none; never production, never dev-d",
+ "commercial_acceptance": "not-complete",
+ "result": {
+  "probe": "tests/e2e/lab/ha_cluster_hardening_probe.py",
+  "image": "docker.io/library/postgres:16-alpine",
+  "started": "2026-11-23T23:54:43+0800",
+  "server_args": [
+   "-c",
+   "listen_addresses=",
+   "-c",
+   "max_connections=20",
+   "-c",
+   "shared_preload_libraries=",
+   "-c",
+   "session_preload_libraries=",
+   "-c",
+   "local_preload_libraries=",
+   "-c",
+   "dynamic_library_path=$libdir",
+   "-c",
+   "archive_mode=off",
+   "-c",
+   "archive_command=",
+   "-c",
+   "archive_library=",
+   "-c",
+   "restore_command=",
+   "-c",
+   "archive_cleanup_command=",
+   "-c",
+   "recovery_end_command=",
+   "-c",
+   "primary_conninfo=",
+   "-c",
+   "primary_slot_name=",
+   "-c",
+   "ssl=off",
+   "-c",
+   "jit=off",
+   "-c",
+   "logging_collector=off",
+   "-c",
+   "hba_file=/var/lib/postgresql/data/pg_hba.conf",
+   "-c",
+   "ident_file=/var/lib/postgresql/data/pg_ident.conf",
+   "-c",
+   "unix_socket_directories=/var/run/postgresql"
+  ],
+  "variants": {
+   "A-today": {
+    "started": true,
+    "flags": [
+     "--pull=never",
+     "--log-driver",
+     "none",
+     "--network",
+     "none",
+     "--security-opt",
+     "no-new-privileges",
+     "--pids-limit",
+     "1024",
+     "--memory",
+     "768m",
+     "--read-only"
+    ],
+    "ready": true,
+    "select_1": true,
+    "mounts": {
+     "/dev/shm": "noexec",
+     "/run": "EXEC",
+     "/tmp": "EXEC",
+     "/var/lib/postgresql/data": "noexec",
+     "/var/tmp": "EXEC"
+    },
+    "memory_max": "805306368",
+    "memory_swap_max": "805306368",
+    "oom_score_adj": "200",
+    "socket_dir": "3775:postgres",
+    "writable_places": {
+     "/tmp": {
+      "copy_library": true,
+      "load_library": true,
+      "load_error": "",
+      "run_copied_busybox": false
+     },
+     "/var/tmp": {
+      "copy_library": true,
+      "load_library": true,
+      "load_error": "",
+      "run_copied_busybox": false
+     },
+     "/run/postgresql": {
+      "copy_library": true,
+      "load_library": true,
+      "load_error": "",
+      "run_copied_busybox": false
+     },
+     "/dev/shm": {
+      "copy_library": true,
+      "load_library": false,
+      "load_error": "dev/shm/x4aa6.so\": Error loading shared library /dev/shm/x4aa6.so: Operation not permitted",
+      "run_copied_busybox": false
+     },
+     "/var/lib/postgresql/data": {
+      "copy_library": true,
+      "load_library": false,
+      "load_error": "\": Error loading shared library /var/lib/postgresql/data/x836e.so: Operation not permitted",
+      "run_copied_busybox": false
+     }
+    },
+    "image_shell_runs": true,
+    "seconds": 29.9
+   },
+   "B-hardened": {
+    "started": true,
+    "flags": [
+     "--pull=never",
+     "--log-driver",
+     "none",
+     "--network",
+     "none",
+     "--security-opt",
+     "no-new-privileges",
+     "--pids-limit",
+     "1024",
+     "--memory",
+     "256m",
+     "--read-only",
+     "--read-only-tmpfs=false",
+     "--tmpfs",
+     "/tmp:rw,noexec,nosuid,nodev,size=64m,mode=1777",
+     "--tmpfs",
+     "/var/tmp:rw,noexec,nosuid,nodev,size=16m,mode=1777",
+     "--tmpfs",
+     "/run:rw,noexec,nosuid,nodev,size=16m,mode=755",
+     "--memory-swap",
+     "256m",
+     "--oom-score-adj",
+     "1000"
+    ],
+    "ready": false,
+    "seconds": 109.2
+   }
+  },
+  "init_ready": true,
+  "left_after_cleanup": [],
+  "finished": "2026-11-23T23:57:18+0800"
+ }
+}

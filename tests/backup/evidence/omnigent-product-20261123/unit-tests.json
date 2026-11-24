@@ -1,0 +1,50 @@
+{
+ "date": "2026-11-23",
+ "branch": "feat/ha-import-omnigent-product-20261123",
+ "base": "82ac971",
+ "suites": {
+  "tests/backup (python3 -m unittest discover -s tests/backup -t . ; host-heavy lock)": {
+   "tests": 1411,
+   "seconds": 404.806,
+   "summary": "FAILED (failures=9, errors=1, skipped=6)",
+   "not_ok": [
+    "tests.backup.test_ha_emqx.CheckTests.test_a_clean_backup.test_a_clean_backup",
+    "tests.backup.test_ha_emqx.ConvertTests.test_a_failed_export_stops_the_conversion_with_the_advice.test_a_failed_export_stops_the_conversion_with_the_advice",
+    "tests.backup.test_ha_emqx.CheckTests.test_a_hot_backup_is_tried_and_named.test_a_hot_backup_is_tried_and_named",
+    "tests.backup.test_ha_emqx.ConvertTests.test_a_partial_import_stops_the_conversion.test_a_partial_import_stops_the_conversion",
+    "tests.backup.test_ha_emqx.ConvertTests.test_an_import_that_would_open_anonymous_login_is_refused.test_an_import_that_would_open_anonymous_login_is_refused",
+    "tests.backup.test_ha_emqx.CheckTests.test_an_ip_node_name_needs_no_host_line.test_an_ip_node_name_needs_no_host_line",
+    "tests.backup.test_ha_emqx.CheckTests.test_blockers.test_blockers",
+    "tests.backup.test_ha_emqx.ConvertTests.test_lost_rows_stop_the_conversion.test_lost_rows_stop_the_conversion",
+    "tests.backup.test_ha_emqx.ConvertTests.test_the_strict_settings_must_come_back.test_the_strict_settings_must_come_back",
+    "tests.backup.test_ha_emqx.ConvertTests.test_the_whole_conversion.test_the_whole_conversion"
+   ],
+   "not_ok_explained": "all 10 are tests.backup.test_ha_emqx: the EMQX PRESERVATION_BLOCKER guard kept (pre-existing, identical at integration 82ac971 / b2f63ce; owned by the emqx-product lane). The 7 Omnigent SECURITY_BLOCKER failures of the base are gone (rewritten to the product contract)."
+  },
+  "Omnigent modules (test_ha_omnigent, _candidate, _trusted, _install, _server_volume, test_b1_01_guard)": {
+   "tests": 54,
+   "ok": true
+  },
+  "tests.backup.test_ha_omnigent_real_app_fixture + test_ha_omnigent_install_harness": {
+   "tests": 34,
+   "ok": true
+  },
+  "tests/e2e/lab test_omnigent*.py (incl. new test_omnigent_full_flow.py)": {
+   "tests": 16,
+   "ok": true
+  },
+  "mutation check (tests/backup/omnigent_product_mutations.py)": {
+   "mutations": 17,
+   "caught": 17,
+   "evidence": "mutation-check.json"
+  },
+  "node tests/backup-ui.mjs (host-heavy lock, chromium headless shell 1248; source 805ff1b)": {
+   "tests": 99,
+   "pass": 99,
+   "fail": 0,
+   "seconds": 639.6
+  }
+ },
+ "commercial_acceptance": "not-complete",
+ "source_commit": "805ff1b"
+}
