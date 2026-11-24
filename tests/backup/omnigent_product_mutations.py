@@ -3,7 +3,7 @@
 the lab proved is removed, one at a time, in a throwaway copy of the engine, and the Omnigent unit tests must FAIL
 for each (and pass on the unmodified copy). Nothing here touches Podman, a device or a secret.
 
-  python3 -I tests/backup/omnigent_product_mutations.py [--json OUT] [--refusals]
+  python3 -I tests/backup/omnigent_product_mutations.py [--json OUT] [--refusals | --named]
 
 Prints one fixed line per mutation (`<id> <name>: caught|MISSED (<failures>/<tests>) [by <the failing test>]`, the run
 of a mutation stops at its first failing test since 2026-11-24); exit 0 only when the baseline passes and every
@@ -11,6 +11,7 @@ mutation is caught.
 `--refusals` checks instead of the list below what the module itself says no to: every `raise` and every blocker or
 problem it collects is removed, one at a time (`R<line>`), and so is every operand of an `or` that decides about one
 (`R<line>.<operand>`). An operand of REDUNDANT that no test needs is printed as `redundant`, with the reason.
+`--named` checks only the mutations of NAMED, and each one by its own test alone (about a minute).
 """
 import argparse
 import ast
@@ -182,6 +183,24 @@ MUTATIONS = (
 )
 
 
+# The test of each protection added in iteration 5: it alone must fail without the protection (--named).
+OMNI, SCRIPT = 'tests.backup.test_ha_omnigent.', 'tests.backup.test_ha_omnigent_trusted.SnapshotScriptTests.'
+NAMED = {ident: test for test, idents in (
+    (OMNI + 'ConvertTests.test_a_version_that_does_not_match_stops_the_conversion_itself', ('M29',)),
+    (OMNI + 'ConvertTests.test_counts_that_differ_stop_the_conversion', ('M30', 'M31', 'M32')),
+    (OMNI + 'ConvertTests.test_a_cluster_that_did_not_stop_cleanly_is_never_exported', ('M33',)),
+    (OMNI + 'ConvertTests.test_only_a_cluster_that_pg_controldata_calls_shut_down_is_exported', ('M34', 'M35')),
+    (OMNI + 'ConvertTests.test_test_mode_that_left_a_task_active_stops_the_conversion', ('M36',)),
+    (OMNI + 'ConvertTests.test_a_volume_podman_could_not_import_is_never_packed', ('M37', 'M38', 'M39')),
+    (SCRIPT + 'test_the_dump_is_schema_only_and_reads_the_exported_snapshot', ('M40', 'M41')),
+    (SCRIPT + 'test_nothing_is_dumped_when_the_snapshot_is_not_the_expected_one', ('M42', 'M43')),
+    (OMNI + 'ConvertTests.test_the_whole_conversion_in_test_mode', ('M44', 'M45')),
+    (OMNI + 'ConvertTests.test_what_the_job_writes_is_private_to_it', ('M46', 'M47', 'M48')),
+    (OMNI + 'RefusalTests.test_the_space_check_of_the_conversion', ('M49',)),
+    (OMNI + 'ConvertTests.test_a_same_named_ha_account_wins', ('M50',)),
+    (OMNI + 'RefusalTests.test_a_live_version_that_cannot_be_read_is_no_version', ('M51', 'M52', 'M53')),
+) for ident in idents}
+
 # Operands that cannot decide alone because another check of the product refuses the same thing first.
 REDUNDANT = {
     'entry.linkname == ARTIFACTS': 'habackup.iter_entries hands out no hard link to a folder, and nothing below a file',
@@ -225,11 +244,11 @@ def refusals(source):
             for line, number, name, mutated, why in sorted(found, key=lambda entry: entry[:3])]
 
 
-def run_tests(root, *options):
+def run_tests(root, *options, tests=TESTS):
     """The Omnigent tests in the throwaway copy `root` (tests/backup/__init__.py puts ITS backup-engine first)."""
     env = dict(os.environ, PYTHONPATH=os.pathsep.join([str(root / 'backup-engine'), str(root)]),
                PYTHONDONTWRITEBYTECODE='1')
-    proc = subprocess.run([sys.executable, '-m', 'unittest', *options, *TESTS], cwd=root, env=env, capture_output=True,
+    proc = subprocess.run([sys.executable, '-m', 'unittest', *options, *tests], cwd=root, env=env, capture_output=True,
                           timeout=1800)
     tail = proc.stderr.decode('utf-8', 'replace').strip().splitlines()
     ran = next((int(m.group(1)) for line in tail if (m := re.match(r'Ran (\d+) tests?', line))), 0)
@@ -242,8 +261,11 @@ def run_tests(root, *options):
 def main(argv):
     parser = argparse.ArgumentParser()
     parser.add_argument('--json')
-    parser.add_argument('--refusals', action='store_true')
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument('--refusals', action='store_true')
+    mode.add_argument('--named', action='store_true')
     args = parser.parse_args(argv)
+    all_tests = tuple(dict.fromkeys(NAMED.values())) if args.named else TESTS
     modules = sorted({MODULE} | {m[5] for m in MUTATIONS if len(m) > 5})
     sources = {module: (REPO / 'backup-engine' / module).read_text(encoding='utf-8') for module in modules}
     source = sources[MODULE]
@@ -260,10 +282,11 @@ def main(argv):
             else:
                 shutil.copy2(item, root / item.name)
         engine = root / 'backup-engine'
-        rc, ran, failures, failed = run_tests(root)
+        rc, ran, failures, failed = run_tests(root, tests=all_tests)
         baseline = {'returncode': rc, 'tests': ran, 'failures': failures, 'failed': failed}
         print(f'baseline: {"pass" if rc == 0 else "FAIL"} ({failures}/{ran})', flush=True)
-        for ident, name, *change in refusals(source) if args.refusals else MUTATIONS:
+        listed = [m for m in MUTATIONS if m[0] in NAMED] if args.named else MUTATIONS
+        for ident, name, *change in refusals(source) if args.refusals else listed:
             module = change[3] if len(change) > 3 else MODULE
             original = sources[module]
             why = None
@@ -278,7 +301,8 @@ def main(argv):
                     continue
             (engine / module).write_text(mutated, encoding='utf-8')
             try:
-                rc, ran, failures, failed = run_tests(root, '--failfast')
+                rc, ran, failures, failed = run_tests(root, '--failfast',
+                                                      tests=(NAMED[ident],) if args.named else TESTS)
             finally:
                 (engine / module).write_text(original, encoding='utf-8')
             caught = rc != 0 and failures > 0
@@ -290,10 +314,12 @@ def main(argv):
             print(f'{ident} {name}: {verdict} ({failures}/{ran}){by}', flush=True)
     ok = baseline['returncode'] == 0 and all(
         r.get('applied') and (r.get('caught') or r.get('redundant')) for r in results)
-    summary = {'what': 'every refusal of the module' if args.refusals else 'the list MUTATIONS', 'module': MODULE,
+    what = 'every refusal of the module' if args.refusals else (
+        'the mutations of NAMED, each by its own test alone' if args.named else 'the list MUTATIONS')
+    summary = {'what': what, 'module': MODULE,
                'module_sha256': hashlib.sha256(source.encode('utf-8')).hexdigest(),
                'modules_sha256': {m: hashlib.sha256(t.encode('utf-8')).hexdigest() for m, t in sources.items()},
-               'tests': list(TESTS), 'baseline': baseline, 'mutations': results, 'all_caught': ok,
+               'tests': list(all_tests), 'baseline': baseline, 'mutations': results, 'all_caught': ok,
                'seconds': round(time.monotonic() - started, 1)}
     if args.json:
         Path(args.json).write_text(json.dumps(summary, ensure_ascii=False, indent=1) + '\n', encoding='utf-8')
