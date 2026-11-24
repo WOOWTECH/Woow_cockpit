@@ -80,8 +80,15 @@ class WarningTests(Sr5Case):
                          [ha_emqx.HASH_EXPR, ha_emqx.USERS_EXPR], 'each read once, in the check')
         self.assertFalse([e for e in evals if 'password' in e and e != ha_emqx.HASH_EXPR],
                          'no other device read mentions a password')
-        # The users read only lists the table's keys: never a password hash or salt (emqx_authn_mnesia.erl:65-70).
+        # The users read only lists the table's keys: never a password hash or salt (emqx_authn_mnesia.erl:65-70),
+        # and only the global chain's (its user group is the chain name: emqx_authn_chains.erl:1000-1008).
         self.assertIn('mnesia:dirty_all_keys(emqx_authn_mnesia)', ha_emqx.USERS_EXPR)
+        self.assertIn("G =:= 'mqtt:global'", ha_emqx.USERS_EXPR)
+        self.assertIn('lists:sublist(L, 10)', ha_emqx.USERS_EXPR)
+        # The hashing read is the built-in password database's only.
+        for words in ('maps:get(mechanism, A, none) =:= password_based', 'maps:get(backend, A, none) =:= built_in_database',
+                      'emqx:get_config([authentication], [])'):
+            self.assertIn(words, ha_emqx.HASH_EXPR)
         for never in ('dirty_read', 'match_object', 'select', 'password', 'salt', 'user_info', 'ets:'):
             self.assertNotIn(never, ha_emqx.USERS_EXPR)
 
