@@ -32,7 +32,8 @@ How a directory becomes apps (each step is reported in the draft's `notes`/`warn
   directories become `data_dirs` unless they are forbidden (`.ssh`, `.config/systemd`, ...) or personal
   (`Desktop`, `Documents`, ...); bound files, `EnvironmentFile=` files and PACKAGE_CONFIGS become `config_files` in
   `.config/<id>/` or `.local/share/<id>/`.
-* Health URLs come from URLs in `HealthCmd=` mapped through a loopback `PublishPort=` (or `Network=host`).
+* Health URLs come from URLs in `HealthCmd=` mapped through a loopback `PublishPort=` (or `Network=host`); a path that
+  answers only inside the container is replaced (`HEALTH_PATHS`).
 """
 import heapq
 import json
@@ -197,6 +198,12 @@ PG_IDENT_RE = re.compile(r'[A-Za-z_][A-Za-z0-9_]{0,62}\Z')
 SECRETISH_RE = re.compile(r'(PASSWORD|PASSWD|SECRET|TOKEN|API_?KEY|PRIVATE_?KEY|_KEY\Z|CREDENTIAL)', re.I)
 URL_IN_CMD_RE = re.compile(r'(https?)://(localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\]|\[::\])(?::([0-9]{1,5}))?'
                            r'(/[A-Za-z0-9._~!$*+,=:@%/?-]*)?')
+# Health paths an app's own HealthCmd asks from inside the container and that answer no one else, with the path on the
+# same port that answers the host. emqx (Woow_podman_emqx ea5886c): config/entrance.conf:35-41 answers /readyz for
+# 127.0.0.1 only, i.e. the container itself; through the published port it is 403 (measured 2026-11-24 on an x86 and an
+# ARM64 test device), so a restore with that check always failed and rolled back. `/` is the Dashboard, which the broker
+# itself serves through the entrance (entrance.conf:70-81: 200, and 502 while the broker does not answer).
+HEALTH_PATHS = {('emqx', '/readyz'): '/'}
 TAG_MAJOR_RE = re.compile(r'\A(?:pg)?([0-9]{1,3})(?:[._-]|\Z)')
 # Personal folders and whole configuration trees: never proposed as host directories (the administrator can add
 # them by hand after deciding the scope). Compared without regard to case on the first segment(s).
@@ -1566,6 +1573,11 @@ class Analyzer:
                 if host_port is None:
                     hints.append(f'{container.file} 的健康檢查連到容器埠 {cport}，但它沒有發佈到 127.0.0.1，未列入。')
                     continue
+                answers = HEALTH_PATHS.get((app['id'], path))
+                if answers is not None:
+                    hints.append(f'{container.file} 的健康檢查網址 {path} 只回應容器內部，從這台設備連線會得到 403；'
+                                 f'草稿改用 http://127.0.0.1:{host_port}{answers}。')
+                    path = answers
                 url = f'http://127.0.0.1:{host_port}{path}'
                 if catalog_mod.URL_RE.fullmatch(url) and url not in urls:
                     urls.append(url)
@@ -1881,10 +1893,11 @@ class Analyzer:
         if installed is None:
             return None
         current = json.loads(json.dumps(installed.raw))
-        raised = []
+        raised, replaced = [], []
         for variant in variants:
             variant['entry'] = carry_over(current, variant['entry'])
             raised = raise_health_timeouts(app['id'], variant['entry']) or raised
+            replaced = replace_health_paths(app['id'], variant['entry']) or replaced
             valid, problem, where = self._validate(variant['entry'])
             variant.update(valid=valid, problem=problem, field=where)
         if raised:
@@ -1893,6 +1906,10 @@ class Analyzer:
             app['notes'].append(_warn('health-timeout', f'已安裝設定的健康檢查逾時（{old} 秒）在草稿中提高為 {limit} 秒：'
                                                         '這個應用在負載高的設備上，還原後可能要 5 分鐘以上才就緒，'
                                                         '太短的逾時會把成功的還原判定為失敗。安裝草稿後生效。',
+                                      level='info'))
+        for old, new in replaced:
+            app['notes'].append(_warn('health-path', f'已安裝設定的健康檢查 {old} 只回應容器內部，從這台設備連線會得到 403，'
+                                                     f'還原會因此被判定失敗而自動回復；草稿改為 {new}。安裝草稿後生效。',
                                       level='info'))
         chosen = next(v for v in variants if v['id'] == selected)
         changes = diff_entries(current, chosen['entry'])
@@ -2023,6 +2040,27 @@ def raise_health_timeouts(app_id, entry):
             raised.append(current)
             item['timeout_seconds'] = limit
     return raised
+
+
+def replace_health_paths(app_id, entry):
+    """Replace the health URLs of `entry` whose path answers only inside the container (HEALTH_PATHS), in place. Only
+    checks that expect 200 (which such a URL never answers from the host): a check an administrator adapted to another
+    status is left alone, and so is a URL the entry already has. Returns [(old URL, new URL)]."""
+    replaced = []
+    health = entry.get('health')
+    if not isinstance(health, list):
+        return replaced
+    present = {item.get('url') for item in health if isinstance(item, dict)}
+    for item in health:
+        if not isinstance(item, dict) or not isinstance(item.get('url'), str) or item.get('expect_status', 200) != 200:
+            continue
+        match = re.fullmatch(r'(http://127\.0\.0\.1:[0-9]{1,5})(/.*)', item['url'])
+        new = match and HEALTH_PATHS.get((app_id, match.group(2)))
+        if not new or match.group(1) + new in present:
+            continue
+        replaced.append((item['url'], match.group(1) + new))
+        item['url'] = match.group(1) + new
+    return replaced
 
 
 def _follow(old_items, new_items, ident=None):

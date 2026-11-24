@@ -775,6 +775,72 @@ class InstalledEntryTests(unittest.TestCase):
         self.assertNotIn('health-timeout', [n['code'] for n in app['notes']])
         self.assertTrue(app['installed']['same'], app['installed']['changes'])
 
+    # ---- EMQX's entrance: /readyz answers only inside the container (arm54-2 real run on an ARM64 device, 2026-11-24)
+    def _emqx_on_loopback(self):
+        """The reference EMQX with the package's own health command and the Dashboard published on 127.0.0.1."""
+        qdir = self.home / '.config/containers/systemd'
+        broker, entrance = qdir / 'emqx.container', qdir / 'emqx-entrance.container'
+        text = broker.read_text()
+        self.assertIn('PublishPort=192.0.2.10:18083:18083\n', text)
+        broker.write_text(text.replace('PublishPort=192.0.2.10:18083:18083\n', 'PublishPort=127.0.0.1:18083:18083\n'))
+        text = entrance.read_text()
+        self.assertIn('Network=container:emqx\n', text)
+        entrance.write_text(text.replace('Network=container:emqx\n', 'Network=container:emqx\nHealthCmd=wget -q -O '
+                                         '/dev/null http://127.0.0.1:18083/readyz\n'))
+
+    def _emqx(self, installed=()):
+        result, _ = run_suggest(self.tmp.name, self.home, installed=installed)
+        return next(a for a in result['apps'] if a['id'] == 'emqx')
+
+    def test_emqx_health_asks_the_dashboard_not_the_container_only_readyz(self):
+        self._emqx_on_loopback()
+        app = self._emqx()
+        self.assertEqual(app['entry']['health'], [{'type': 'http', 'url': 'http://127.0.0.1:18083/',
+                                                   'expect_status': 200, 'timeout_seconds': 180}])
+        hints = [h for h in app['hints'] if '/readyz' in h]
+        self.assertEqual(len(hints), 1, app['hints'])
+        self.assertIn('emqx-entrance.container', hints[0])
+        self.assertIn('403', hints[0])
+        self.assertIn('http://127.0.0.1:18083/。', hints[0])
+        self.assertTrue(app['valid'], app['problem'])
+        self.assertNotIn('health-path', [n['code'] for n in app['notes']])   # nothing installed was replaced
+
+    def test_installed_emqx_draft_replaces_a_readyz_check_that_expects_200(self):
+        self._emqx_on_loopback()
+        installed = copy.deepcopy(self._emqx()['entry'])
+        installed['health'] = [{'type': 'http', 'url': 'http://127.0.0.1:18083/readyz', 'timeout_seconds': 300}]
+        app = self._emqx([installed])
+        self.assertEqual([h['url'] for h in app['entry']['health']], ['http://127.0.0.1:18083/'])
+        self.assertEqual(app['entry']['health'][0]['timeout_seconds'], 300, 'its own limit stays')
+        for item in app['variants']:
+            self.assertEqual([h['url'] for h in item['entry']['health']], ['http://127.0.0.1:18083/'])
+        notes = [n for n in app['notes'] if n['code'] == 'health-path']
+        self.assertEqual(len(notes), 1)
+        self.assertEqual(notes[0]['level'], 'info')
+        self.assertIn('http://127.0.0.1:18083/readyz', notes[0]['message'])
+        self.assertIn('草稿改為 http://127.0.0.1:18083/。', notes[0]['message'])
+        self.assertEqual(app['installed']['entry']['health'], installed['health'], 'the installed entry is never edited')
+        self.assertFalse(app['installed']['same'])
+
+    def test_replace_health_paths_leaves_every_other_check_alone(self):
+        def entry(*items):
+            return {'health': [dict({'type': 'http'}, **item) for item in items]}
+        readyz = {'url': 'http://127.0.0.1:18083/readyz'}
+        for app_id, value in (('emqx', entry(dict(readyz, expect_status=403))),       # adapted by the administrator
+                              ('emqx', entry(dict(readyz, expect_status=200), {'url': 'http://127.0.0.1:18083/'})),  # has it
+                              ('emqx', entry({'url': 'http://127.0.0.1:18083/readyz/x'})),
+                              ('emqx', entry({'url': 'http://127.0.0.1:18083/healthz'})),
+                              ('other', entry(readyz)), ('emqx', {}), ('emqx', {'health': 'x'})):
+            with self.subTest(app=app_id, value=value):
+                before = copy.deepcopy(value)
+                self.assertEqual(suggest.replace_health_paths(app_id, value), [])
+                self.assertEqual(value, before)
+        value = entry(readyz, dict(readyz, url='http://127.0.0.1:18084/readyz', expect_status=200))
+        self.assertEqual(suggest.replace_health_paths('emqx', value),
+                         [('http://127.0.0.1:18083/readyz', 'http://127.0.0.1:18083/'),
+                          ('http://127.0.0.1:18084/readyz', 'http://127.0.0.1:18084/')])
+        self.assertEqual(suggest.HEALTH_PATHS, {('emqx', '/readyz'): '/'})
+
     def test_raise_health_timeouts_only_touches_shorter_limits_of_the_listed_apps(self):
         def entry(*timeouts):
             return {'health': [{'url': f'u{i}', **({} if t is None else {'timeout_seconds': t})}

@@ -14,13 +14,23 @@ EMQX's own data export and import move the data, node-name independent, in two t
    check (admin/public still valid: a blocker), the row counts, its root names and authenticators, then
    `emqx ctl data export` of the data roots (DATA_ROOTS; never listeners, dashboard, node, log or other settings) and
    the table sets (TABLE_SETS: MQTT users, ACL rules, banned, Dashboard users, API keys, PSK, retained messages).
-2. This device's broker: the live environment and secret mounts, the live base.hocon/acl.conf read-only, an empty
-   data volume (so it boots with this device's admin password and bootstrap MQTT user, the node name and cookie),
-   `emqx ctl data import`; then this device's `authorization.no_match` / `deny_action` are loaded back (HA's
-   authorization root would replace them) and checked, and an enabled authenticator must remain (no anonymous login
-   where this device has none); every table must hold at least HA's rows and at most HA's plus what the empty broker
-   seeded. HA's API keys arrive and nothing else of the target's survives in an empty volume: they replace this
-   device's (the EMQX MCP admin must log in again).
+2. This device's broker (the candidate). First this device's running broker is read (target_static): its effective
+   RAW configuration, EMQX_ETC_DIR, the override state; it must be inside the proven profile (authorization sources
+   exactly [file] or [file, built_in_database]; reviewed roots and file references only), else the check and the
+   conversion refuse with a message naming what. HA's ACL rows only take effect through a built-in database source
+   and the import never adds or changes this device's sources (OWNER DECISION 2026-11-23 「C」): a target that
+   authorizes with the ACL file only refuses a backup with ACL rows (acl_blocker: the check's blocker, and the
+   conversion stops as soon as HA's rows are counted). Its cluster.hocon and the data-volume files it names are
+   snapshotted. The candidate: the live environment and secret mounts, the live base.hocon/acl.conf read-only, the
+   snapshot in an otherwise empty data volume, `emqx ctl data import`; then every setting root of this device
+   (authorization among them) is loaded back exactly as it was, its bootstrap file stays attached, HA's ACL rows are
+   kept through the switch of the authorization sources (native receipts), an enabled authenticator must remain (no
+   anonymous login); every table must hold at least HA's rows and at most HA's plus what the empty broker seeded.
+   HA's API keys replace this device's (the EMQX MCP admin must log in again).
+3. Readback: the finished candidate's configuration (a SHA-256 per root, this device's secret values redacted first)
+   and the administrator tables (rows and a row-hash receipt) go into the converted backup (`import_check`); after the
+   restore started the units, verify_restored reads the same from the restored broker and any difference fails the
+   restore, which then rolls back by itself.
 
 `woow_emqx_data` is that broker's volume without its generated configs (one holds the cookie), backups of
 cluster.hocon, data exports and traces; `woow_emqx_log` is only its top folder. Versions: the add-on version maps to
@@ -61,7 +71,23 @@ TABLES = ('emqx_authn_mnesia', 'emqx_authn_scram_mnesia', 'emqx_acl', 'emqx_bann
           'emqx_app', 'emqx_psk', 'emqx_retainer_message')
 # Tables a running EMQX 5.8.9 always has: one missing in HA's broker means its database did not load completely.
 REQUIRED_TABLES = ('emqx_authn_mnesia', 'emqx_acl', 'emqx_banned', 'emqx_admin', 'emqx_app')
-PRESERVATION_BLOCKER = ('目前無法確認匯入後仍保留這台 EMQX 的授權規則與叢集設定，為避免變更存取權限或遺失設定，已停止匯入。')
+# This device's broker: the image's etc dir (vendor rel/emqx_vars:16 + rebar.config.erl:407: "$BASE_RUNNER_ROOT_DIR/etc"
+# in the tgz/docker build, exported by bin/emqx:269-273), proven in the running broker before its template is resolved.
+ETC_DIR = '/opt/emqx/etc'
+ACL_TEMPLATE = '${EMQX_ETC_DIR}/acl.conf'
+ETC_EXPR = 'io:format("WOOWETC:~s:END", [os:getenv("EMQX_ETC_DIR", "")]).'
+# The authorization source combinations proven end to end (2026-11-23: real ARM and x86 HA backups, EMQX 5.8.9).
+PROFILES = {(('file', True),): ('file',), (('file', True), ('built_in_database', True)): ('file', 'built_in_database')}
+SOURCE_NAMES = {'file': 'ACL 檔案', 'built_in_database': '內建資料庫', 'http': 'HTTP', 'redis': 'Redis', 'mysql': 'MySQL',
+                'postgresql': 'PostgreSQL', 'mongodb': 'MongoDB', 'ldap': 'LDAP', 'client_info': '用戶端資訊'}
+# One plain `EMQX_KEY=value` line of an EnvironmentFile, the only form supported (podman --env-file keeps such a value
+# literal on every version): no quotes, backslashes, `$` or surrounding blanks. podman itself reads the file for the
+# candidate (Target.candidate_env), as for the running broker.
+ENV_FILE_LINE = re.compile(r'(EMQX_[A-Z0-9_]{1,100})=([^\s"\'\\$](?:[^"\'\\$]{0,4094}[^\s"\'\\$])?)')
+NOT_RUNNING = '這台的 EMQX 沒有在執行，無法讀取它的設定；請先到「應用軟體」啟動 EMQX 後再試一次。'
+# OWNER DECISION 2026-11-23 「C」 (EMQX 權限): the owner's text, verbatim (acl_blocker).
+ACL_NEEDS_BUILTIN = ('Podman 上的 EMQX 沒有開啟『內建資料庫』權限，HA 的裝置權限搬過去不會生效，裝置會被拒絕。'
+                     '請先在 Podman EMQX 的管理頁「存取控制 → 授權」新增「內建資料庫」（排在檔案規則之後），再匯入。')
 HOT_HINT = ('這份備份是在 EMQX 執行中製作的，內建資料庫可能只寫了一半；請先在 HA 停止 EMQX 附加元件，再重新製作備份後匯入'
             '（附加元件停止時製作的備份最可靠）。')
 NODE_RE = re.compile(r'([A-Za-z][A-Za-z0-9_-]{0,63})@([A-Za-z0-9](?:[A-Za-z0-9.-]{0,251}[A-Za-z0-9])?)\Z')
@@ -208,6 +234,53 @@ class Target:
         self.files = [(s, t, 'ro') for s, t, _o in ha_odoo.quadlet_mounts(quadlets, broker, home)
                       if s.startswith('/') and t not in (DATA_TARGET, LOG_TARGET)]
         self.node = self.env.get('EMQX_NODE__NAME', 'emqx@127.0.0.1')
+        body = text.decode('utf-8', 'replace') if isinstance(text, bytes) else str(text)
+        self.env_files = [value for key, value in tempctr.parse_unit(body).get('Container', [])
+                          if key == 'EnvironmentFile']
+        self._runner = work.runner(app)
+
+    def candidate_env(self):
+        """The environment this device's broker runs with, for the candidate, as (env, env_files): `env` holds the
+        Quadlet's `Environment=` EMQX_* settings (podman --env, on the command line as this device's own Quadlet puts
+        them), `env_files` the absolute paths of its `EnvironmentFile=` files (dev-d's product package sets
+        EMQX_LOG__CONSOLE__LEVEL there, 2026-11-23 attempt-06), which podman reads for the candidate with --env-file
+        exactly as for this device's broker. Their values never reach a command line: such a file may hold secrets
+        (CONTRACT keeps it 0600) and every local account can read /proc/<pid>/cmdline (security review SR-8,
+        2026-11-24: a value passed with --env was in two world-readable command lines; tempctr.run_argv, podman.py's
+        runner rule). podman's own parser reads them, so the candidate gets what the running broker got (SR-9: Python's
+        splitlines() also splits at \\v, \\f, \\x1c-\\x1e, \\x85, \\u2028, \\u2029 and a lone \\r, podman 4.9.3 at \\n
+        only). The EMQX_* lines are still checked as podman reads them (one line per \\n, a final \\r dropped, leading
+        blanks and tabs trimmed): only plain values in the owner's home are supported; anything else refuses, naming
+        the file. Values are never logged."""
+        env, seen, files = dict(self.env), {}, []
+        home = str(self._runner.home).rstrip('/')
+        for value in self.env_files:
+            optional = value.startswith('-')
+            path = value.lstrip('-')
+            rel = path[3:] if path.startswith('%h/') else None
+            if rel is None or not re.fullmatch(r'[A-Za-z0-9._/-]{1,200}', rel) or '..' in rel.split('/'):
+                raise BackupError('incompatible', f'EMQX 不能搬過來：這台 EMQX 的 EnvironmentFile（{path[:120]}）不在'
+                                                  '應用擁有者的家目錄下，尚未支援。')
+            try:
+                data = self._runner.read_file(rel, max_bytes=256 * 1024)
+            except BackupError:
+                if optional:
+                    continue
+                raise BackupError('incompatible', f'EMQX 不能搬過來：無法讀取這台 EMQX 的 EnvironmentFile（~/{rel}）。') from None
+            for raw in data.split(b'\n'):   # podman --env-file: one line per \n, a final \r dropped
+                line = raw[:-1] if raw.endswith(b'\r') else raw
+                stripped = line.decode('utf-8', 'replace').lstrip(' \t')   # podman trims leading blanks and tabs only
+                if not stripped.startswith('EMQX_'):
+                    continue   # comments, blank lines, other programs' settings: not EMQX configuration
+                match = ENV_FILE_LINE.fullmatch(stripped)
+                key = match.group(1) if match is not None else None
+                if (match is None or (key in env and env[key] != match.group(2))
+                        or (key in seen and seen[key] != match.group(2))):
+                    raise BackupError('incompatible', f'EMQX 不能搬過來：這台 EMQX 的 EnvironmentFile（~/{rel}）有無法安全'
+                                                      '重現的 EMQX 設定（引號、跳脫字元、變數或重複的設定），尚未支援。')
+                seen[key] = match.group(2)
+            files.append(f'{home}/{rel}')
+        return env, files
 
 
 # ====================================================================== the brokers
@@ -308,6 +381,11 @@ def ha_broker(work, tmp, target, src, node, *, out_dir=None):
         volumes.append((tmp.name('emqx-xfer'), WORK, 'rw,noexec,nosuid,nodev'))
     tmp.volume('emqx-ha-log')
     volumes.append((tmp.name('emqx-ha-log'), LOG_TARGET, 'rw,noexec,nosuid,nodev'))
+    # The image declares VOLUME /opt/emqx/data and /opt/emqx/log: a path no mount covers gets an anonymous volume that
+    # `podman rm` keeps (dev-d 2026-11-24: one left on the device by every check and every conversion). This broker's
+    # data lives in HA_DATA_DIR; the image path gets this job's own volume, removed with the others.
+    tmp.volume('emqx-ha-image')
+    volumes.append((tmp.name('emqx-ha-image'), DATA_TARGET, 'rw,noexec,nosuid,nodev'))
     try:
         tmp.run('emqx-ha', target.image, [], detach=True, user='0', read_only_root=True, add_hosts=hosts, env=env,
                 volumes=volumes)
@@ -433,13 +511,17 @@ def target_config_snapshot(volume_tar, snapshot_path, required, *, limit=MAX_HOC
     return found
 
 
-def authorization_file_references(authorization, mounts, *, include_cluster=True, observe=None):
+def authorization_file_references(authorization, mounts, *, include_cluster=True, observe=None, etc_dir=None):
     """Resolve an already-decoded effective authorization object; reject unsupported sources.
 
     This covers file ACL sources and exact raw builtin database source objects,
     not other EMQX configuration roots. Host paths are never read here. Exact
     existing read-only file mounts may satisfy an external reference. Builtin
     objects are checked without default expansion or unknown-field stripping.
+    The vendor's own template `${EMQX_ETC_DIR}/acl.conf` (EMQX 5.8.9 resolves it with
+    naive_env_interpolation: emqx_authz_file.erl:116-117, emqx_schema.erl:3466-3503) is
+    accepted only when the caller proved `etc_dir` == ETC_DIR in the running broker
+    (target_etc_dir); it must then be the same unique read-only mount as the plain path.
     """
     if not isinstance(authorization, dict) or not isinstance(authorization.get('sources'), list):
         raise BackupError('incompatible', '無法取得目標 EMQX 的有效授權來源。')
@@ -457,6 +539,8 @@ def authorization_file_references(authorization, mounts, *, include_cluster=True
         path = source.get('path')
         if not isinstance(path, str) or not path or '\x00' in path:
             raise BackupError('incompatible', '目標 EMQX 的 ACL 路徑無效。')
+        if path == ACL_TEMPLATE and etc_dir == ETC_DIR:
+            path = ETC_DIR + '/acl.conf'   # resolved exactly as the broker does, then the same mount rule
         prefix = DATA_TARGET + '/'
         if path.startswith(prefix):
             relative = path[len(prefix):]
@@ -522,9 +606,16 @@ def import_target_snapshot(tmp, snapshot_path, ids):
 # Fixed expression: no configuration or credential is interpolated into argv.
 CONFIG_EXPR = ('io:format("WOOWCFG:~s:END~n", '
                '[base64:encode(emqx_utils_json:encode(emqx:get_raw_config([])))]).')
+# The same configuration in the form a boot of the same files gives it. EMQX 5.8.9 stores
+# fill_defaults_for_all_roots(...) as the raw configuration at boot (emqx_config.erl:341,345) but a change made at
+# runtime (the Dashboard, the REST API, `conf load`) stores the new raw value without defaults: a built-in database
+# source added in the Dashboard reads `max_rules` only after a restart. fill_defaults/1 (exported, :32, :487-505) is
+# not idempotent on every root (`retainer`), so comparisons across a boot compare THIS form on both sides (boot_form).
+BOOT_CONFIG_EXPR = ('io:format("WOOWCFG:~s:END~n", '
+                    '[base64:encode(emqx_utils_json:encode(emqx_config:fill_defaults(emqx:get_raw_config([]))))]).')
 
 
-def read_effective_config(execute, *, allow_authz_omission=False, _native_digest=None):
+def read_effective_config(execute, *, allow_authz_omission=False, _native_digest=None, _expr=CONFIG_EXPR):
     """Read merged RAW broker config, not cooked schema-expanded defaults.
 
     CONFIG_EXPR calls get_raw_config; retain every returned field unchanged so
@@ -532,7 +623,9 @@ def read_effective_config(execute, *, allow_authz_omission=False, _native_digest
     the body in errors.
     """
     try:
-        result = execute(['emqx', 'eval', CONFIG_EXPR])
+        if _expr not in (CONFIG_EXPR, BOOT_CONFIG_EXPR):
+            raise ValueError()
+        result = execute(['emqx', 'eval', _expr])
         body = result.stdout or b''
         if result.returncode or len(body) > MAX_HOCON or not body.startswith(b'WOOWCFG:'):
             raise ValueError()
@@ -557,6 +650,47 @@ def read_effective_config(execute, *, allow_authz_omission=False, _native_digest
         return config
     except (BackupError, ValueError, TypeError, RecursionError):
         raise BackupError('incompatible', '無法安全取得 EMQX 有效設定，已停止。') from None
+
+
+def boot_form(execute):
+    """A running broker's configuration as a boot of the same files gives it (BOOT_CONFIG_EXPR): compared on both sides
+    wherever a boot stands between them (this device -> the candidate booted from its snapshot; the conversion's
+    candidate -> the restored broker). Every other check keeps the plain raw configuration."""
+    return read_effective_config(execute, _expr=BOOT_CONFIG_EXPR)
+
+
+# Fixed expression: a running broker's scheduler threads (total, online). EMQX 5.8.9 derives schema defaults from them
+# and a boot stores those in the raw configuration (emqx_config.erl:341,345): dashboard.listeners.{http,https}.
+# num_acceptors = schedulers_online (emqx_dashboard_schema.erl:125-131), node.broker_pool_size = 2 x schedulers and
+# generic_pool_size = schedulers (emqx_conf_schema.erl:688-706, emqx_vm.erl:174-175). The candidate runs with fewer CPUs
+# (tempctr --cpus), so the VM gives it fewer online schedulers (dev-d 2026-11-24 attempt-08: `dashboard` differed); it
+# therefore starts with this device's counts: ERL_AFLAGS "+S total:online" (erlexec puts it at the START of the
+# command line). Not ERL_FLAGS: erlexec appends that after bin/emqx's trailing `-emqx_data_dir <dir>`, which bin/emqx
+# then reads back from `ps -ef` for every ctl/eval command (bin/emqx:570, :1321-1324 "order matters"): the data dir
+# became "/opt/emqx/data --", mkdir failed on the read-only root, `emqx ctl status` never answered (dev-d 2026-11-24
+# attempt-10; reproduced in the lab store).
+VM_EXPR = ('io:format("WOOWVM:~b:~b:END~n", '
+           '[erlang:system_info(schedulers), erlang:system_info(schedulers_online)]).')
+MAX_SCHEDULERS = 1024
+
+
+def schedulers(execute):
+    """(total, online) scheduler threads of a running broker (VM_EXPR); anything else refuses."""
+    try:
+        result = execute(['emqx', 'eval', VM_EXPR])
+        body = result.stdout or b''
+        if result.returncode or not body.startswith(b'WOOWVM:'):
+            raise ValueError()
+        counts, tail = body[7:].split(b':END', 1)
+        if tail.strip() not in (b'', b'ok'):
+            raise ValueError()
+        match = re.fullmatch(rb'([1-9][0-9]{0,3}):([1-9][0-9]{0,3})', counts)
+        total, online = int(match.group(1)), int(match.group(2))
+        if not online <= total <= MAX_SCHEDULERS:
+            raise ValueError()
+        return total, online
+    except (BackupError, ValueError, TypeError, AttributeError):
+        raise BackupError('incompatible', '無法安全取得 EMQX 的執行環境（排程器數量），已停止。') from None
 
 
 def bootstrap_references(config, mounts, secrets):
@@ -683,7 +817,7 @@ def tls_fingerprints(execute, paths):
     return result
 
 
-def configuration_references(config, mounts, secrets=(), *, include_cluster=True, observe=None):
+def configuration_references(config, mounts, secrets=(), *, include_cluster=True, observe=None, etc_dir=None):
     """Resolve file ACL and explicit TLS file fields in supported configuration roots.
 
     Unknown roots are rejected until their schema/file dependencies have been reviewed.
@@ -696,7 +830,8 @@ def configuration_references(config, mounts, secrets=(), *, include_cluster=True
     if set(config) - SUPPORTED_CONFIGURATION_ROOTS:
         raise BackupError('incompatible', 'EMQX 含有尚未完成檔案參照審查的設定類型。')
     bootstrap_references(config, mounts, secrets)
-    required = authorization_file_references(config['authorization'], mounts, include_cluster=False, observe=observe)
+    required = authorization_file_references(config['authorization'], mounts, include_cluster=False, observe=observe,
+                                             etc_dir=etc_dir)
     for key in ('banned', 'api_key'):
         bootstrap_path = config.get(key, {}).get('bootstrap_file')
         if bootstrap_path:
@@ -746,6 +881,70 @@ def target_override_state(execute):
     raise BackupError('incompatible', '無法驗證 EMQX 原始覆寫設定檔，已停止。')
 
 
+def target_etc_dir(execute):
+    """EMQX_ETC_DIR of a running broker (fixed eval, nothing interpolated). Only ETC_DIR is supported: the vendor
+    resolves `${EMQX_ETC_DIR}` with os:getenv (emqx_schema.erl:3466-3503)."""
+    result = execute(['emqx', 'eval', ETC_EXPR])
+    raw = (result.stdout or b'').strip()
+    if result.returncode == 0 and raw in (b'WOOWETC:' + ETC_DIR.encode() + b':ENDok', b'WOOWETC:' + ETC_DIR.encode() + b':END'):
+        return ETC_DIR
+    if result.returncode == 0 and raw.startswith(b'WOOWETC:') and len(raw) <= 4096:
+        raise BackupError('incompatible', 'EMQX 不能搬過來：這台 EMQX 的設定目錄（EMQX_ETC_DIR）不是 /opt/emqx/etc，尚未支援。')
+    raise BackupError('incompatible', '無法安全取得 EMQX 有效設定，已停止。')
+
+
+def source_profile(config):
+    """This device's authorization source combination: one of PROFILES (the order matters: EMQX asks the sources in
+    turn), else a refusal that names the combination. Returns the source types, e.g. ('file', 'built_in_database')."""
+    auth = config.get('authorization') if isinstance(config, dict) else None
+    sources = auth.get('sources') if isinstance(auth, dict) else None
+    kinds = None
+    if isinstance(sources, list) and all(isinstance(s, dict) for s in sources):
+        kinds = tuple((s.get('type'), s.get('enable', True)) for s in sources)
+    if kinds in PROFILES:
+        return PROFILES[kinds]
+    names = []
+    for kind, enable in kinds or ():
+        name = SOURCE_NAMES.get(kind) if isinstance(kind, str) else None
+        if name is None:
+            name = kind if isinstance(kind, str) and re.fullmatch(r'[a-z_]{1,32}', kind) else '未知的來源'
+        names.append(name + ('' if enable is True else '（停用）'))
+    shown = '＋'.join(names) if names else '沒有任何來源'
+    raise BackupError('incompatible', f'EMQX 不能搬過來：這台 EMQX 的授權來源組合（{shown}）還沒有經過驗證；'
+                                      '目前只支援「ACL 檔案」或「ACL 檔案＋內建資料庫」。')
+
+
+def target_running(work, app, target):
+    result = work.runner(app).podman('container', 'inspect', '--format', '{{.State.Running}}', target.container,
+                                     timeout=60, max_output=1024, check=False)
+    return result.returncode == 0 and (result.stdout or b'').strip() == b'true'
+
+
+def target_static(work, app, target, execute, *, observe=None):
+    """The read-only part of this device's preflight, shared by the check and the conversion: the effective RAW
+    configuration, its file references, the override state and the authorization profile. Every refusal names what is
+    not supported; nothing is changed."""
+    def stage(name):
+        if observe is not None:observe(name)
+    if (target.env.get('EMQX_LOG_DIR', LOG_TARGET) != LOG_TARGET or
+            target.env.get('EMQX_ETC_DIR', ETC_DIR) != ETC_DIR):
+        raise BackupError('incompatible', 'EMQX 自訂日誌目錄尚未支援。')
+    stage('target_config')
+    try:
+        original=read_effective_config(execute)
+    except BackupError:
+        if not target_running(work, app, target):
+            raise BackupError('incompatible', NOT_RUNNING) from None
+        raise
+    profile=source_profile(original)
+    etc=target_etc_dir(execute)
+    stage('target_references')
+    explicit=configuration_references(original,target.files,target.secrets,include_cluster=False,observe=observe,
+                                      etc_dir=etc)
+    state=target_override_state(execute)
+    return original,explicit,state,profile
+
+
 def capture_target_seed(work, app, target, staging):
     """Exact product target preflight, including explicitly proven absence.
 
@@ -760,13 +959,7 @@ def capture_target_seed(work, app, target, staging):
     def execute(command):
         return work.runner(app).podman('exec', target.container, *command, timeout=120,
                                       max_output=MAX_HOCON, check=False)
-    if (target.env.get('EMQX_LOG_DIR', LOG_TARGET) != LOG_TARGET or
-            target.env.get('EMQX_ETC_DIR', '/opt/emqx/etc') != '/opt/emqx/etc'):
-        raise BackupError('incompatible', 'EMQX 自訂日誌目錄尚未支援。')
-    stage('target_config');original=read_effective_config(execute)
-    stage('target_references')
-    explicit=configuration_references(original,target.files,target.secrets,include_cluster=False,observe=observe)
-    state=target_override_state(execute)
+    original,explicit,state,_profile=target_static(work,app,target,execute,observe=observe)
     absent=({'configs/cluster.hocon'} if state in ('absent','parent-absent')
             and 'configs/cluster.hocon' not in explicit else set())
     required=explicit | {'configs/cluster.hocon'}
@@ -780,12 +973,20 @@ def capture_target_seed(work, app, target, staging):
 
 
 def candidate_from_target(work, app, tmp, target, staging, export, ids, *, hint=''):
-    """Internal candidate; public conversion preservation guard remains enabled."""
+    """This device's capture (capture_target_seed) and the candidate built from it: the public conversion's path."""
     original,snapshot,fingerprints=capture_target_seed(work,app,target,staging)
+    # This device's configuration as its next boot will read it (a source added in the Dashboard since the last
+    # restart reads its defaults only then): the candidate, booted from the snapshot, must equal THIS form.
+    device=lambda command: work.runner(app).podman('exec', target.container, *command, timeout=120,
+                                                   max_output=MAX_HOCON, check=False)
+    target_boot=boot_form(device)
+    # ... and the candidate starts with this device's scheduler counts, which some of those defaults come from.
+    target_vm=schedulers(device)
     observe=getattr(work,'_emqx_build_stage',None)
     if observe is not None:observe('target_runtime')
     return target_broker(work,tmp,target,export,ids,hint=hint,
-        target_snapshot=snapshot,target_config=original,image_fingerprints=fingerprints)
+        target_snapshot=snapshot,target_config=original,image_fingerprints=fingerprints,target_boot=target_boot,
+        target_vm=target_vm)
 
 def candidate_with_effective_acl(work, app, tmp, target, staging, export, ids, authorization, *, hint=''):
     """Stage known file ACL references and seed a candidate; not a complete preservation check.
@@ -831,11 +1032,12 @@ def preserved_bootstrap_authn(original, imported):
     return rows
 
 
-def restore_target_settings(tmp, original, read_candidate, *, observe=None):
+def restore_target_settings(tmp, original, read_candidate, *, observe=None, original_boot=None):
     """Replace changed target setting roots, not merge stale/imported fields into them.
 
     Roots absent on the target cannot be restored by guessing an empty/default value.
     Any such extra operational root remains a failure until removal is implemented.
+    `original_boot`: this device's configuration in its boot form (boot_form); a root loaded back must equal it there.
     """
     before_digest=[]
     before = read_effective_config(read_candidate, allow_authz_omission=True,_native_digest=before_digest)
@@ -865,7 +1067,8 @@ def restore_target_settings(tmp, original, read_candidate, *, observe=None):
     if original_file_only and enabled_builtin and uses_generated_acl_charlist(before):
         if observe is not None: observe('acl_path_proof')
         path_proof=observe_generated_path(tmp,before,before_digest[0],observe=observe)
-    intermediate = disabled_intermediate(original, before, observe=observe,path_proof=path_proof)
+    # The capture proved ETC_DIR in this device's broker and target_broker in the candidate before this point.
+    intermediate = disabled_intermediate(original, before, observe=observe,path_proof=path_proof,target_etc_dir=ETC_DIR)
     def load_settings(settings):
         snippet = json.dumps(settings, ensure_ascii=True).encode()
         try:
@@ -913,8 +1116,19 @@ def restore_target_settings(tmp, original, read_candidate, *, observe=None):
         if path_proof is not None:
             if observe is not None: observe('acl_path_final')
             verify_generated_path(tmp,path_proof,after_digest[0],observe=observe)
-    if preserved_settings(after) != expected or (authn is not None and after.get('authentication') != authn):
-        raise BackupError('incompatible', 'EMQX 匯入後未能保留目標有效設定，已停止。')
+    want = dict(expected)
+    if original_boot is not None:
+        # `emqx ctl conf load` stores every root it loads with its schema defaults filled (emqx_conf_cli.erl:350-353,
+        # 541-546), per root as fill_defaults/1 does (emqx_config.erl:487-505): a loaded root of this device equals its
+        # boot form, not its plain raw form when it was changed at runtime (dev-d 2026-11-24 attempt-11: the
+        # 「內建資料庫」 source added in the Dashboard lacks `max_rules` until a restart).
+        want.update({key: original_boot[key] for key in changed if key in want and key in original_boot})
+    kept = preserved_settings(after)
+    differ = sorted(key for key in set(kept) | set(want) if kept.get(key) != want.get(key))
+    if authn is not None and after.get('authentication') != authn:
+        differ.append('authentication')
+    if differ:   # root names only (schema keys), never values
+        raise BackupError('incompatible', f'EMQX 匯入後未能保留目標有效設定（{hacommon.names(differ, 8)}），已停止。')
 
 
 FILE_SECRET = ('EMQX 不能搬過來：HA 的 EMQX 設定（{roots}）用「file://」讀取本機檔案當作密碼；搬過來後這台的 EMQX 會讀取'
@@ -1089,8 +1303,13 @@ def check_candidate_bootstrap(tmp, target, config):
 
 
 def target_broker(work, tmp, target, export, ids, *, hint='', target_snapshot=None, target_config=None,
-                  image_fingerprints=None):
-    """This device's broker on an empty volume: import HA's export, load the strict settings back, verify."""
+                  image_fingerprints=None, target_boot=None, target_vm=None):
+    """This device's broker on an empty volume: import HA's export, load the strict settings back, verify.
+
+    `target_boot`: this device's configuration in its boot form (boot_form); the candidate, just booted from the
+    snapshot, must equal it. Without it the plain raw configuration must be equal (callers that read no boot form).
+    `target_vm`: this device's (total, online) schedulers (schedulers); the candidate starts with them and must answer
+    them before anything is compared."""
     name = os.path.basename(export)
     snapshot_digests = snapshot_file_digests(target_snapshot) if target_snapshot is not None else None
     tmp.volume('emqx-in')
@@ -1099,17 +1318,31 @@ def target_broker(work, tmp, target, export, ids, *, hint='', target_snapshot=No
     if target_snapshot is not None:
         import_target_snapshot(tmp, target_snapshot, ids)
     tmp.volume('emqx-new-log')
-    tmp.run('emqx-new', target.image, [], detach=True, read_only_root=True, env=target.env, secrets=target.secrets,
+    # The product's Target adds its EnvironmentFile= files, which podman reads itself (their values never reach a
+    # command line, SR-8); internal callers' target objects carry their env as given.
+    env, env_files = target.candidate_env() if isinstance(target, Target) else (target.env, [])
+    if target_vm is not None:   # Target.env holds EMQX_* settings only: this is the candidate's one Erlang flag
+        env = dict(env, ERL_AFLAGS=f'+S {target_vm[0]}:{target_vm[1]}')   # --env wins over an env file's value
+    tmp.run('emqx-new', target.image, [], detach=True, read_only_root=True, env=env, env_files=env_files,
+            secrets=target.secrets,
             volumes=[(tmp.name('emqx-new'), DATA_TARGET, None), (tmp.name('emqx-new-log'), LOG_TARGET, None),
                      (tmp.name('emqx-in'), WORK, None)] + target.files)
     wait_ready(tmp, 'emqx-new', checkpoint=work.checkpoint)
     ticker_pid = quiesce_system_ticker(tmp, 'emqx-new')
     read_candidate = lambda command: tmp.exec('emqx-new', command, timeout=120,
                                                max_output=MAX_HOCON, check=False)
+    if target_vm is not None and schedulers(read_candidate) != target_vm:
+        raise BackupError('incompatible', 'EMQX 候選的執行環境（排程器數量）和這台不同，已停止。')
     if image_fingerprints is not None and tls_fingerprints(read_candidate, image_fingerprints) != image_fingerprints:
         raise BackupError('incompatible', 'EMQX 候選憑證與目標不一致，已停止。')
-    if target_config is not None and read_effective_config(read_candidate) != target_config:
-        raise BackupError('incompatible', 'EMQX 候選啟動後設定與目標不一致，已停止。')
+    if target_config is not None:
+        if target_etc_dir(read_candidate) != ETC_DIR:
+            raise BackupError('incompatible', 'EMQX 候選啟動後設定與目標不一致，已停止。')
+        want = target_boot if target_boot is not None else target_config
+        got = boot_form(read_candidate) if target_boot is not None else read_effective_config(read_candidate)
+        differ = sorted(root for root in set(want) | set(got) if want.get(root) != got.get(root))
+        if differ:   # root names only (schema keys), never values
+            raise BackupError('incompatible', f'EMQX 候選啟動後設定與目標不一致（{hacommon.names(differ, 8)}），已停止。')
     if target_config is not None:
         check_candidate_bootstrap(tmp, target, target_config)
     seeded = parse_counts(evaluate(tmp, 'emqx-new', COUNT_EXPR))
@@ -1124,7 +1357,7 @@ def target_broker(work, tmp, target, export, ids, *, hint='', target_snapshot=No
         raise BackupError('incompatible', 'HA 的 EMQX 資料匯入時發生錯誤（部分資料無法匯入），已停止。' + hint)
     if target_config is not None:
         restore_target_settings(tmp, target_config, read_candidate,
-                                observe=getattr(work, '_emqx_build_stage', None))
+                                observe=getattr(work, '_emqx_build_stage', None), original_boot=target_boot)
         if image_fingerprints is not None and tls_fingerprints(read_candidate, image_fingerprints) != image_fingerprints:
             raise BackupError('incompatible', 'EMQX 匯入後憑證與目標不一致，已停止。')
         if snapshot_digests:   # after every settings change; the remaining checks only read
@@ -1181,7 +1414,171 @@ def data_volume(src_path, out):
                               what='暫用 EMQX 的資料卷')
 
 
+# ====================================================================== readback after the restore
+
+READBACK_KIND = 'emqx-readback'
+READBACK_VERSION = 1
+# The tables only an administrator changes (clients, expiry and the broker itself move the retained messages and the
+# banned list at any time; those are counted by the conversion, never compared after the restore).
+STABLE_TABLES = ('emqx_authn_mnesia', 'emqx_authn_scram_mnesia', 'emqx_acl', 'emqx_admin', 'emqx_app', 'emqx_psk',
+                 'emqx_banned_rules')
+# Fixed expression, one read-locked transaction per table: the row count and the SHA-256 of the sorted SHA-256s of the
+# rows' external terms (order independent). A table this broker does not have answers -1. Values never leave it.
+TABLES_RECEIPT_EXPR = ' '.join(('''
+try
+ <<"5.8.9">> = iolist_to_binary(emqx_release:version()),
+ One = fun(T) ->
+   case catch mnesia:table_info(T, size) of
+     N0 when is_integer(N0) ->
+       {atomic, {N, H}} = mnesia:transaction(fun() ->
+           ok = mnesia:read_lock_table(T),
+           {K, Hs} = mnesia:foldl(fun(Row, {C, Acc}) -> {C + 1, [crypto:hash(sha256, term_to_binary(Row)) | Acc]} end,
+                                  {0, []}, T),
+           K = mnesia:table_info(T, size),
+           {K, crypto:hash(sha256, term_to_binary(lists:sort(Hs)))}
+         end),
+       io_lib:format("~s:~B:~s;", [T, N, binary:encode_hex(H)]);
+     _ -> io_lib:format("~s:-1:-;", [T])
+   end
+ end,
+ io:format("WOOWTAB:~s:END", [lists:flatten([One(T) || T <- [''' + ', '.join(STABLE_TABLES) + ''']])])
+catch _:_ -> io:put_chars("WOOWTAB:REFUSED") end.
+''').split())
+RECEIPT_RE = re.compile(rb'WOOWTAB:((?:[a-z_]{1,64}:(?:-1:-|[0-9]{1,10}:[0-9A-F]{64});){1,32}):END(?:ok)?')
+
+
+def table_receipts(execute):
+    """{table: [rows, sha256 hex lowercase | None]} of STABLE_TABLES, from one fixed `emqx eval`."""
+    result = execute(['emqx', 'eval', TABLES_RECEIPT_EXPR])
+    raw = (result.stdout or b'').strip()
+    match = RECEIPT_RE.fullmatch(raw) if result.returncode == 0 and len(raw) <= 16384 else None
+    if match is None:
+        raise BackupError('job-failed', '無法讀取 EMQX 內建資料庫的核對資料，已停止。')
+    found = {}
+    for item in match[1].decode('ascii').split(';')[:-1]:
+        name, rows, digest = item.split(':')
+        found[name] = [int(rows), None if digest == '-' else digest.lower()]
+    if set(found) != set(STABLE_TABLES):
+        raise BackupError('job-failed', '無法讀取 EMQX 內建資料庫的核對資料，已停止。')
+    return found
+
+
+# Security review SR-4 (2026-11-23): the RAW configuration also holds this device's own secrets that a converted
+# backup does not otherwise carry (dashboard.default_password and node.cookie come from the environment, a 5.8.9 broker
+# answers them in emqx:get_raw_config/1). The readback travels in the converted backup, so before hashing every value
+# under a secret-named key, every HTTP header value and the user part of a URL become one fixed marker (both sides:
+# the conversion and verify_restored); a changed secret is then not compared, every other value still is.
+SECRET_WORDS = ('password', 'passwd', 'secret', 'cookie', 'token', 'key')
+REDACTED = '<redacted>'
+URL_USER_RE = re.compile(r'(?<=//)[^/@\s]+@')
+
+
+def _secret_name(name):
+    return isinstance(name, str) and any(word in name.lower() for word in SECRET_WORDS)
+
+
+def redacted(value, secret=False, everything=False):
+    """`value` with its secret leaves replaced by REDACTED: a scalar under a secret-named key (also inside a list
+    there), every scalar below a `headers` key, the user part of `scheme://user[:password]@host`. Containers stay; below
+    a secret-named key a map's own keys decide again (e.g. password_hash_algorithm.name is still compared)."""
+    if isinstance(value, dict):
+        return {key: redacted(item, everything or _secret_name(key), everything or key == 'headers')
+                for key, item in value.items()}
+    if isinstance(value, list):
+        return [redacted(item, secret, everything) for item in value]
+    if secret or everything:
+        return REDACTED
+    if isinstance(value, str) and '@' in value:
+        return URL_USER_RE.sub(REDACTED + '@', value)
+    return value
+
+
+def config_roots(config):
+    """{root: sha256 hex} of an effective RAW configuration (canonical JSON per root: key order never matters, list
+    order does), secrets redacted first (SR-4). Derived from what the backup itself holds; never logged."""
+    return {root: hashlib.sha256(json.dumps(redacted(value), sort_keys=True, ensure_ascii=True,
+                                            separators=(',', ':')).encode('ascii')).hexdigest()
+            for root, value in config.items()}
+
+
+def readback_record(config, tables):
+    return {'kind': READBACK_KIND, 'version': READBACK_VERSION, 'config_roots': config_roots(config), 'tables': tables}
+
+
+def candidate_readback(tmp):
+    """(readback record, authorization profile) of the finished candidate: read after this device's settings came back
+    and its rows were counted; the profile is this device's again (restore_target_settings proved it)."""
+    read = lambda command: tmp.exec('emqx-new', command, timeout=120, max_output=MAX_HOCON, check=False)
+    config = read_effective_config(read)
+    # The restored broker reads these settings at its boot: the record holds their boot form (boot_form).
+    return readback_record(boot_form(read), table_receipts(read)), source_profile(config)
+
+
+def compare_readback(expected, actual):
+    """What differs between two readback records, as names only (roots, tables); [] when equal."""
+    problems = []
+    want, have = expected.get('config_roots') or {}, actual.get('config_roots') or {}
+    roots = sorted(name for name in set(want) | set(have) if want.get(name) != have.get(name))
+    if roots:
+        problems.append(f'設定（{hacommon.names(roots, 8)}）')
+    want, have = expected.get('tables') or {}, actual.get('tables') or {}
+    tables = sorted(name for name in set(want) | set(have) if want.get(name) != have.get(name))
+    if tables:
+        problems.append(f'內建資料庫（{hacommon.names(tables, 8)}）')
+    return problems
+
+
+def wait_live_ready(execute, *, sleep=time.sleep, clock=time.monotonic, timeout=READY_TIMEOUT):
+    deadline = clock() + timeout
+    while True:
+        try:
+            result = execute(['emqx', 'ctl', 'status'])
+            if result.returncode == 0 and b'is started' in (result.stdout or b''):
+                return
+        except BackupError:
+            pass   # a timed-out probe is "not ready yet"; the deadline still holds
+        if clock() >= deadline:
+            raise BackupError('job-failed', f'還原後的 EMQX 在 {timeout} 秒內沒有啟動完成，已停止。')
+        sleep(2)
+
+
+def verify_restored(adapter, app, check, *, log, sleep=time.sleep, clock=time.monotonic):
+    """After a restore of a converted backup started the units: the restored broker must hold exactly the readback the
+    conversion verified (every configuration root, this device's authorization among them, and the administrator
+    tables). Raises BackupError (the restore then rolls back by itself); logs one line when everything is equal."""
+    if (not isinstance(check, dict) or check.get('kind') != READBACK_KIND
+            or check.get('version') != READBACK_VERSION):
+        raise BackupError('incompatible', '這份備份的 EMQX 核對資料格式不受支援，無法還原。', app=app.id)
+    quadlets = adapter.read_quadlets()
+    shim = type('LiveWork', (), {'quadlets': lambda self, _app: quadlets, 'runner': lambda self, _app: adapter.runner})()
+    target = Target(shim, app)
+
+    def execute(command):
+        return adapter.runner.podman('exec', target.container, *command, timeout=120, max_output=MAX_HOCON,
+                                     check=False)
+    wait_live_ready(execute, sleep=sleep, clock=clock)
+    actual = readback_record(boot_form(execute), table_receipts(execute))
+    problems = compare_readback(check, actual)
+    if problems:
+        raise BackupError('job-failed', f'EMQX 還原後的{"、".join(problems)}和轉換時核對的不同，已停止；'
+                                        '通常是轉換之後這台 EMQX 的設定改過，請重新檢查與轉換後再還原。', app=app.id)
+    log('EMQX 還原後核對一致：設定（含授權來源、ACL 檔案路徑、節點與叢集）和內建資料庫的帳號與 ACL 規則都和轉換時相同')
+
+
 # ====================================================================== analysis
+
+def acl_blocker(readings, profile):
+    """OWNER DECISION 2026-11-23 「C」: HA's ACL rows live in the built-in database (emqx_acl); this device's
+    authorization sources stay as they are (restore_target_settings) and the import never adds or changes a source
+    itself. Without an enabled built-in database source the rows would never be asked (EMQX asks only the configured
+    sources, emqx_authz.erl), so HA's devices would be denied: a backup with ACL rows is refused, at the check and again
+    in the conversion before anything is built. None when `profile` is unknown (that refusal is a blocker of its own),
+    holds the built-in database, or HA has no ACL rows."""
+    rows = ((readings or {}).get('counts') or {}).get('emqx_acl', 0)
+    if profile is None or 'built_in_database' in profile or type(rows) is not int or rows <= 0:
+        return None
+    return ACL_NEEDS_BUILTIN
+
 
 def _source_analysis(src, readings, *, addon_version, version, live_authn=None):
     blockers, warnings = [], []
@@ -1209,10 +1606,15 @@ def _source_analysis(src, readings, *, addon_version, version, live_authn=None):
     return blockers, warnings
 
 
-def analyse(src, readings, *, addon_version, version, live_authn=None):
+def analyse(src, readings, *, addon_version, version, live_authn=None, profile=None):
+    """The check's blockers and warnings. `profile`: this device's authorization sources (target_static), or None when
+    they could not be read (that refusal is a blocker of its own)."""
     blockers, warnings = _source_analysis(src, readings, addon_version=addon_version,
                                           version=version, live_authn=live_authn)
-    return [PRESERVATION_BLOCKER, *blockers], warnings
+    blocker = acl_blocker(readings, profile)
+    if blocker:
+        blockers.append(blocker)
+    return blockers, warnings
 
 
 def hash_differs(ha_authn, live_authn):
@@ -1225,7 +1627,7 @@ def hash_differs(ha_authn, live_authn):
     return False
 
 
-def section(src, node, readings, *, version):
+def section(src, node, readings, *, version, profile=None):
     counts = (readings or {}).get('counts') or {}
 
     def rows(*tables):
@@ -1240,7 +1642,7 @@ def section(src, node, readings, *, version):
             'default_dashboard_password': bool((readings or {}).get('default_admin')),
             'anonymous': readings is not None and not any(a['enable'] for a in readings['authn']),
             'hot_backup': bool(hint_for(src.addon)), 'plugins': sorted(src.plugins),
-            'ha_hosts': hacommon.ha_hosts(src.hocon)[:20]}
+            'ha_hosts': hacommon.ha_hosts(src.hocon)[:20], 'target_authorization': list(profile or ())}
 
 
 # ====================================================================== the job steps
@@ -1298,9 +1700,29 @@ def _clean(tmp, *roles, volumes=()):
         tmp.remove_volume(role)
 
 
+def target_profile(work, app, target):
+    """This device's authorization profile from a read-only look at its running broker (target_static); raises the
+    refusal that names what is not supported. Nothing is changed."""
+    def execute(command):
+        return work.runner(app).podman('exec', target.container, *command, timeout=120,
+                                      max_output=MAX_HOCON, check=False)
+    _original, _explicit, _state, profile = target_static(work, app, target, execute)
+    return profile
+
+
+def target_preflight(work, app, target):
+    """The check's read-only look at this device's broker: (profile, blocker). A target outside the proven profile is
+    the app's blocker with the conversion's own message, so the page says it before anything is converted."""
+    try:
+        return target_profile(work, app, target), None
+    except BackupError as error:
+        return None, error.message
+
+
 def check(work, app):
     tmp = work.temp(app)
     target, version = _prepare(work, app)
+    profile, target_blocker = target_preflight(work, app, target)
     src = member_pass(work, tmp)
     work.phase('check')
     node, blocker = node_name(src)
@@ -1308,18 +1730,27 @@ def check(work, app):
     if blocker is None:
         readings = ha_broker(work, tmp, target, src, node)
         _clean(tmp, 'emqx-ha', volumes=('emqx-src', 'emqx-ha-log'))
-    blockers, warnings = analyse(src, readings, addon_version=work.addon_info(SLUG).version, version=version)
+    blockers, warnings = analyse(src, readings, addon_version=work.addon_info(SLUG).version, version=version,
+                                 profile=profile)
     if blocker:
         blockers.insert(0, blocker)
+    if target_blocker:
+        blockers.append(target_blocker)
     return {'target_version': version or '', 'blockers': blockers, 'warnings': warnings,
-            'emqx': section(src, node, readings, version=version)}
+            'emqx': section(src, node, readings, version=version, profile=profile)}
 
 
-def _build_candidate(work, app, tmp, target, staging, *, version):
-    """Internal build only. Public convert/analyse remain blocked; never replaces live volumes.
+def _build_candidate(work, app, tmp, target, staging, *, version, profile=None):
+    """The conversion's build (also driven by the lab harnesses); never replaces live volumes.
 
-    Used by the isolated synthetic integration harness and the guarded conversion body.
+    `profile`: this device's authorization profile read before the build (the public conversion always passes it):
+    HA's ACL rows on a target without the built-in database stop the build as soon as HA's rows are counted
+    (acl_blocker), and the finished candidate must hold that same profile.
+    Returns (src, node, readings, export, counts, strict, live_authn, readback, profile): `readback` is the finished
+    candidate's readback record (read after this device's settings came back and every row was counted), `profile`
+    this device's authorization sources it holds again.
     """
+    expected_profile = profile
     # Internal test-owner diagnostics receive fixed stages only, never source
     # values or exception text. Ordinary product callers have no observer.
     observe=getattr(work,'_emqx_build_stage',None)
@@ -1342,6 +1773,9 @@ def _build_candidate(work, app, tmp, target, staging, *, version):
     blockers, _warnings = _source_analysis(src, readings, addon_version=work.addon_info(SLUG).version, version=version)
     if blockers:
         raise BackupError('incompatible', f'EMQX 不能搬過來：{blockers[0]}', app=app.id)
+    blocker = acl_blocker(readings, expected_profile)
+    if blocker:
+        raise BackupError('incompatible', f'EMQX 不能搬過來：{blocker}', app=app.id)
     tmp.stop('emqx-ha', timeout=60)
     tmp.remove('emqx-ha')
     stage('source_export')
@@ -1356,7 +1790,10 @@ def _build_candidate(work, app, tmp, target, staging, *, version):
         observe=(lambda table, direction: stage('row_counts_'+table+'_'+direction)) if observe is not None else None)
     if problems:
         raise BackupError('job-failed', f'EMQX 匯入後的資料筆數和 HA 不同，已停止：{"、".join(problems[:10])}。')
-    return src, node, readings, export, counts, strict, live_authn
+    readback, profile = candidate_readback(tmp)
+    if expected_profile is not None and profile != expected_profile:
+        raise BackupError('incompatible', 'EMQX 設定於轉換期間改變，已停止。', app=app.id)
+    return src, node, readings, export, counts, strict, live_authn, readback, profile
 
 
 def _package_candidate(work, tmp, target, staging, out_dir, export, *, ids, log_root):
@@ -1391,8 +1828,8 @@ def _package_candidate(work, tmp, target, staging, out_dir, export, *, ids, log_
 
 
 def convert(work, app, test_mode, out_dir):
-    """Build target volumes only when target ACL and settings preservation is verified."""
-    raise BackupError('incompatible', PRESERVATION_BLOCKER, app=app.id)
+    """This device's volumes from HA's data, with this device's settings and authorization preserved and verified
+    (_build_candidate); the result carries the readback the restore compares (`import_check`, CONTRACT section 9)."""
     adapter = work.adapter(app)
     tmp = work.temp(app)
     target, version = _prepare(work, app)
@@ -1403,23 +1840,31 @@ def convert(work, app, test_mode, out_dir):
     blocker = VERSIONS.blocker(work.addon_info(SLUG).version, version)
     if blocker:
         raise BackupError('incompatible', f'EMQX 不能搬過來：{blocker}', app=app.id)
-    src, node, readings, export, counts, strict, live_authn = _build_candidate(
-        work, app, tmp, target, staging, version=version)
+    try:   # the check's own read-only preflight: an unsupported or stopped target stops before anything is built
+        before = target_profile(work, app, target)
+    except BackupError as error:
+        raise BackupError(error.code, error.message, app=app.id) from None
+    src, node, readings, export, counts, strict, live_authn, readback, profile = _build_candidate(
+        work, app, tmp, target, staging, version=version, profile=before)
     work.log(f'EMQX 資料匯入完成：{len(TABLES)} 個資料表的筆數都符合 HA；未符合規則的主題維持「{strict[0]}」')
+    work.log('EMQX 這台的設定與授權來源（' + '＋'.join(SOURCE_NAMES[kind] for kind in profile) + '）已核對保留')
     volumes = _package_candidate(work, tmp, target, staging, out_dir, export, ids=ids,
                                  log_root=ha_n8n.volume_root(work, app, target.log_volume))
     return {'volumes': volumes, 'node': node,
             'ha_hosts': hacommon.ha_hosts(src.hocon), 'plugins': sorted(src.plugins),
             'anonymous': not any(a['enable'] for a in readings['authn']),
             'hash_differs': hash_differs(readings['authn'], live_authn),
-            'api_keys': max(readings['counts'].get('emqx_app', 0), 0)}
+            'api_keys': max(readings['counts'].get('emqx_app', 0), 0),
+            'import_check': readback}
 
 
 # ====================================================================== texts
 
 def import_texts(data):
     notes = ['EMQX 的 MQTT 帳號、ACL 規則、Dashboard 帳號、API 金鑰、封鎖名單、PSK、保留訊息與規則、連接器設定會換成 HA 的；'
-             '這台的節點名稱、連接埠、匿名登入限制與「未符合規則的主題拒絕」設定保持不變。']
+             '這台的節點名稱、連接埠、匿名登入限制與「未符合規則的主題拒絕」設定保持不變。',
+             '這台 EMQX 的授權設定（ACL 檔案、授權來源與順序）與 bootstrap 帳號檔保持不變；還原後會再核對設定與內建資料庫'
+             '都和轉換時相同，不同就自動回復。']
     reminders = ['請把 MQTT 裝置與服務（例如 Home Assistant 的 MQTT 整合、Zigbee2MQTT）改連到這台的 EMQX。',
                  '匯入後請用 HA 那邊的 EMQX Dashboard 帳號和密碼登入。']
     if data.get('anonymous'):

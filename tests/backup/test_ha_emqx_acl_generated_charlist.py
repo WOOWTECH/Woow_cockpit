@@ -36,7 +36,8 @@ class ProviderTransport(NativeRemovalTransport):
 
     def exec(self,role,command,**kwargs):
         if command in (['emqx','eval',PATH_PROOF_EXPR],['emqx','eval',DISABLE_PROVIDER_EXPR]):
-            assert role=='emqx-new' and kwargs=={'timeout':10,'max_output':MAX_WIRE,'check':False}
+            # Wall-clock bound 120 s (vendor CLI eval is unbounded, bin/nodetool:172-176); the wire bound is unchanged.
+            assert role=='emqx-new' and kwargs=={'timeout':120,'max_output':MAX_WIRE,'check':False}
             self.path_queries+=1
             if type(self.fault) is str and self.fault.startswith('native:'):
                 return Result(0,b'WOOWACLPATH:REFUSED:'+self.fault[7:].encode()+b'ok\n',b'')

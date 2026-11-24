@@ -18,11 +18,16 @@ def response(config):
     return Result(0, b'WOOWCFG:' + base64.b64encode(json.dumps(config).encode()) + b':END\nok\n', b'')
 
 
+ETC_REPLY = b'WOOWETC:/opt/emqx/etc:ENDok\n'
+RECEIPT_REPLY = ('WOOWTAB:' + ''.join(f'{t}:0:{"A" * 64};' for t in emqx.STABLE_TABLES) + ':ENDok').encode()
+
+
 class Transport:
     def __init__(self):
+        # One file source: EMQX 5.8.9 refuses two sources of one type (emqx_authz.erl:145-148, 386-408
+        # check_dup_types), so a running broker never has two file ACLs.
         self.config = {'authorization': {'no_match': 'deny', 'deny_action': 'ignore',
-            'sources': [{'type': 'file', 'path': '/opt/emqx/data/authz/custom.acl'},
-                        {'type': 'file', 'path': '/opt/emqx/etc/acl.conf'}]},
+            'sources': [{'type': 'file', 'path': '/opt/emqx/data/authz/custom.acl'}]},
             'listeners': {'ssl': {'default': {'ssl_options': {'certfile': '/opt/emqx/data/certs/lab.pem'}}}}}
         self.events, self.seed = [], {}
         self.running_config = copy.deepcopy(self.config)
@@ -35,11 +40,21 @@ class Transport:
         self.logs = []
 
     def podman(self, *args, **kwargs):
+        if args == ('container', 'inspect', '--format', '{{.State.Running}}', 'lab-target'):
+            self.events.append('inspect-live')
+            return Result(0, b'true\n', b'')
         assert args[:2] == ('exec', 'lab-target')
+        if args[2:] == ('emqx', 'eval', emqx.ETC_EXPR):
+            return Result(0, ETC_REPLY, b'')
         if args[2:] == ('emqx','eval',emqx.OVERRIDE_STATE_EXPR):
             state=self.override_states[min(self.override_reads,len(self.override_states)-1)]
             self.override_reads+=1
             return Result(0,b'WOOWOVERRIDE:'+state.encode()+b':ENDok\n',b'')
+        if args[2:] == ('emqx', 'eval', emqx.BOOT_CONFIG_EXPR):   # no schema defaults here: same answer, no event
+            assert kwargs['max_output'] == emqx.MAX_HOCON
+            return self.live_response or response(self.config)
+        if args[2:] == ('emqx', 'eval', emqx.VM_EXPR):   # this device's schedulers (total, online); no event
+            return Result(0, b'WOOWVM:4:4:END\nok\n', b'')
         assert args[2:] == ('emqx', 'eval', emqx.CONFIG_EXPR)
         assert kwargs['max_output'] == emqx.MAX_HOCON
         self.events.append('read-live')
@@ -76,12 +91,27 @@ class Transport:
     def run(self, *args, **kwargs):
         assert 'authz/custom.acl' in self.seed
         assert 'certs/lab.pem' in self.seed
+        self.run_env = dict(kwargs.get('env') or {})
         self.events.append('start')
 
     def exec(self, role, command, **kwargs):
+        if command == ['emqx', 'eval', emqx.VM_EXPR]:
+            # The candidate's VM: half the CPUs (tempctr --cpus) give 2 online schedulers unless ERL_AFLAGS sets them.
+            flags = getattr(self, 'run_env', {}).get('ERL_AFLAGS', '')
+            counts = flags[3:].encode() if flags.startswith('+S ') else b'4:2'
+            return Result(0, b'WOOWVM:' + counts + b':END\nok\n', b'')
+        if command == ['emqx', 'eval', emqx.BOOT_CONFIG_EXPR]:
+            # The generated transport has no schema defaults: its boot form is its raw configuration (no event, so
+            # the recorded read sequences stay those of the plain reads).
+            return response(self.running_config)
         if command == ['emqx', 'eval', emqx.CONFIG_EXPR]:
             self.events.append('read-candidate')
             return response(self.running_config)
+        if command == ['emqx', 'eval', emqx.ETC_EXPR]:
+            return Result(0, ETC_REPLY, b'')
+        if command == ['emqx', 'eval', emqx.TABLES_RECEIPT_EXPR]:
+            self.events.append('receipt')
+            return Result(0, RECEIPT_REPLY, b'')
         if command[:2] == ['emqx', 'eval']:
             expression = command[2]
             value = {emqx.SUSPEND_SYS_EXPR: 'WOOWSYS:<0.1.0>:suspended\nok',

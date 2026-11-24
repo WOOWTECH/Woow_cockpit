@@ -24,7 +24,8 @@ class NativeRemovalTransport(flow.Transport):
     def exec(self,role,command,**kwargs):
         if command==['emqx','eval',ACL_RECEIPT_EXPR]:
             assert role=='emqx-new'
-            assert kwargs['timeout']==10 and kwargs['max_output']==256 and kwargs['check'] is False
+            # Wall-clock bound: 120 s (the vendor CLI waits without a limit, bin/nodetool:172-176; 10 s failed under load).
+            assert kwargs['timeout']==120 and kwargs['max_output']==256 and kwargs['check'] is False
             self.events.append('acl-receipt');self.receipts+=1
             if self.break_at=='receipt-refused':return Result(0,b'WOOWACL:REFUSED',b'')
             if self.break_at==('receipt-mutation',self.receipts):self.acl_rows[0]=b'changed-same-count'
