@@ -95,7 +95,7 @@ CANDIDATE_NEED = 4608 * 1024 ** 2  # the candidate: live html pack + html dir ta
 # own need is computed after the check from dev-e's live html and PostgreSQL dirs and HA's data dir (convert_need);
 # every restore checks its own need (restore_need) and the host-floor watchdog guards each job.
 RUN_CHECK_NEED = 1024 ** 3
-RUN_START_NEED = 3 * 1024 ** 3   # at the start of a share run: the conversion's need after the upload, with margin
+RUN_START_NEED = 2700 * 1024 ** 2  # at the start of a share run: the conversion's need after the upload (2.54 GB), with margin
 LIVE_ROOT = '/home/appowner/.local/share/nextcloud-office'
 WATCH_FLOOR = FLOOR + 256 * 1024 ** 2  # below it every running job of dev-e is cancelled (the job cleans up)
 FIXTURE = (LAB / 'ha-fixtures' / '20261123-batch2' / 'x86' / 'woow-b2-nextcloud-x86-enc-noshare'
