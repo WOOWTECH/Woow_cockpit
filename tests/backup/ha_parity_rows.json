@@ -553,5 +553,5 @@
   "NC-21": {"lane": "wave2", "app": "Nextcloud", "act": "auto", "status": "later", "issues": {}, "tests": [], "note": ""},
   "NC-31": {"lane": "wave2", "app": "Nextcloud", "act": "auto", "status": "later", "issues": {}, "tests": [], "note": ""},
   "OP-03": {"lane": "wave2", "app": "OpenDesign", "act": "auto", "status": "later", "issues": {}, "tests": [], "note": ""},
-  "HA-15": {"lane": "unclear", "app": "共用", "act": "warn", "status": "later", "issues": {}, "tests": [], "note": ""}
+  "HA-15": {"lane": "unclear", "app": "共用", "act": "warn", "status": "later", "issues": {}, "tests": [], "note": "老闆 2026-11-25 10:0x 決定：HA-15 拿掉、E-87 保留（不認得的匯入核對資料，還原前就擋並請更新備份元件）；沒有改程式。保留的行為由 test_ha_emqx_product.ManifestFormatTests 的 readback 種類測試證明"}
  }}

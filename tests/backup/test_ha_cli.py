@@ -698,6 +698,13 @@ class RestoreConfirmTests(HaCliCase):
         params = jobs.JobStore(self.paths).get(response['job_id'])['params']
         self.assertEqual(params['acknowledged'], {'woowbk-demo': keys['woowbk-demo']})
 
+    def test_only_the_lines_of_the_restored_apps_stay_in_the_job_record(self):
+        keys = {'woowbk-demo': [self.issue.key('woowbk-demo')], 'woowbk-two': [self.issue.key('woowbk-two')]}
+        response = self.call(['restore-start'], {**self.request, 'acknowledged': keys})
+        params = jobs.JobStore(self.paths).get(response['job_id'])['params']
+        self.assertEqual(params['acknowledged'], {'woowbk-demo': keys['woowbk-demo']},
+                         'the keys of an app that is not restored are not kept')
+
     def test_one_more_name_must_be_confirmed_again(self):
         keys = {'woowbk-demo': [self.issue.key('woowbk-demo')]}
         self.Adapter.found = [Issue('restore.device-key', 'confirm', '還原時會先停止。', ['filebrowser', 'code-server'])]

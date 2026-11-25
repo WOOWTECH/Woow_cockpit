@@ -974,7 +974,9 @@ def cmd_restore_start(svc, req):
         params['allow_no_safety'] = True
     if req.get('accept_unauthenticated'):
         params['accept_unauthenticated'] = True
-    acknowledged = {app_id: list(keys) for app_id, keys in (req.get('acknowledged') or {}).items() if keys}
+    # Only the lines of the apps this restore touches stay in the job record (a request may carry the keys of 33 apps).
+    acknowledged = {app_id: list(keys) for app_id, keys in (req.get('acknowledged') or {}).items()
+                    if keys and app_id in req['apps']}
     if acknowledged:
         params['acknowledged'] = acknowledged
     return dict(svc.start('restore', params, req['request_id'], key_text=key_text), key_created=created)
