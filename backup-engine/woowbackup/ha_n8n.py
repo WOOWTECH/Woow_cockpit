@@ -943,11 +943,8 @@ NO_KEY = ('HA 備份裡找不到 n8n 能用的加密金鑰（沒有設定檔、�
 KEY_CREATED = 'HA 備份裡找不到 n8n 的加密金鑰（HA 的 n8n 也沒有儲存任何憑證，沒有東西要重新輸入），這台自動產生了新的金鑰。'
 
 
-def analyse(sink, src, info, version, target, *, fixed_key=()):
-    """What HA's n8n and this device's make of each other, as issues in `sink` (the check collects them all; the
-    conversion calls this again, with the same words, so that it stops at what stops and asks for what was not confirmed:
-    N8-18). `version`: the add-on's version, `target`: `n8n --version` here, None when it cannot be read (N8-10: no
-    comparison, a notice). `info`: inspect_sqlite's answer, None when there is no database to read."""
+def analyse_data(sink, src, info, *, fixed_key=()):
+    """What HA's n8n holds, as issues (see `analyse`): the findings that need no look at the image of this device."""
     if fixed_key:
         sink.stop('n8n.fixed-key', '這台的 n8n 設定了固定的加密金鑰（N8N_ENCRYPTION_KEY）；匯入後 n8n 會因金鑰和 HA 的資料不同而無法啟動。',
                   items=fixed_key, action='請先移除這個設定（所在的檔案見名單）再匯入；這台的 n8n 不會有任何變更。')
@@ -962,7 +959,6 @@ def analyse(sink, src, info, version, target, *, fixed_key=()):
             sink.confirm('n8n.no-key', NO_KEY.format(count=count), haissues.Names(info['credential_names']))
         else:
             sink.auto('n8n.key-created', KEY_CREATED)
-    sink.extend(haissues.version_issues('n8n', version, version or None, target))
     if src.native_bad:
         sink.notice('n8n.native-code', f'有 {len(src.native_bad)} 個社群節點含有與這台不相容的程式（{"、".join(src.native_bad[:5])}'
                     f'{"…" if len(src.native_bad) > 5 else ""}），搬過來後需要重新安裝。', src.native_bad)
@@ -971,6 +967,30 @@ def analyse(sink, src, info, version, target, *, fixed_key=()):
         sink.notice('n8n.community-packages', (f'HA 的 n8n 裝了 {len(src.packages)} 個社群節點套件，' if src.packages else
                                               'HA 的 n8n 裝了社群節點套件（清單太大，沒有逐一列出），')
                     + '搬過來後請確認它們能正常使用。', names)
+
+
+def analyse_version(sink, version, target):
+    """The add-on's version against `n8n --version` here: both known and different stops n8n, a version that cannot be read
+    here (`target` None, N8-10) or is not known is only told (CM-01, CM-02)."""
+    sink.extend(haissues.version_issues('n8n', version, version or None, target))
+
+
+def analyse(sink, src, info, version, target, *, fixed_key=()):
+    """What HA's n8n and this device's make of each other, as issues in `sink` (the check collects them all; the
+    conversion calls this again, with the same words, so that it stops at what stops and asks for what was not confirmed:
+    N8-18). `version`: the add-on's version, `target`: `n8n --version` here, None when it cannot be read (N8-10: no
+    comparison, a notice). `info`: inspect_sqlite's answer, None when there is no database to read."""
+    analyse_data(sink, src, info, fixed_key=fixed_key)
+    analyse_version(sink, version, target)
+
+
+def _this_devices_version(work, app, tmp, items, sink):
+    """`n8n --version` of this device's image (downloaded first when it is not here, CM-05), None when it prints none (N8-10).
+    Not asked for an app that has stopped already: no image is downloaded for what cannot be imported."""
+    if any(issue.level == 'stop' for issue in sink.found):
+        return None
+    hatarget.ensure_image(work, app, items.n8n_image)
+    return target_version(tmp, items.n8n_image)
 
 
 def check(work, app):
@@ -985,9 +1005,10 @@ def check(work, app):
     work.phase('check')
     info = (inspect_sqlite(src.sqlite['database.sqlite'], checkpoint=work.checkpoint, log=work.log)
             if 'database.sqlite' in src.sqlite else None)
-    hatarget.ensure_image(work, app, items.n8n_image)   # CM-05: an image of this device that is not here is downloaded
-    version = target_version(tmp, items.n8n_image)
-    analyse(sink, src, info, addon.version if addon else '', version, fixed_key=fixed_key_settings(work, app))
+    analyse_data(sink, src, info, fixed_key=fixed_key_settings(work, app))
+    version = _this_devices_version(work, app, tmp, items, sink)   # CM-05: an image that is not here is downloaded
+    if not any(issue.level == 'stop' for issue in sink.found):
+        analyse_version(sink, addon.version if addon else '', version)
     sink.skipped(src.report)   # the one line about what the reader left out (IN-19, IN-27, ..., N8-28)
     fix = workflows_to_fix(info['workflows']) if info else []
     counts = info['counts'] if info else {}
@@ -1097,10 +1118,10 @@ def convert(work, app, test_mode, out_dir):
     work.guard.check(4 * sqlite_bytes)
     info = (inspect_sqlite(src.sqlite['database.sqlite'], checkpoint=work.checkpoint, log=work.log)
             if 'database.sqlite' in src.sqlite else None)
-    hatarget.ensure_image(work, app, items.n8n_image)   # CM-05: downloaded as the owner when it is not here
+    analyse_data(sink, src, info, fixed_key=fixed_key_settings(work, app))   # a stop or an unconfirmed line ends it here
+    version = _this_devices_version(work, app, tmp, items, sink)             # CM-05: downloaded as the owner when not here
+    analyse_version(sink, addon.version if addon else '', version)
     hatarget.ensure_image(work, app, items.pg_image)
-    version = target_version(tmp, items.n8n_image)
-    analyse(sink, src, info, addon.version if addon else '', version, fixed_key=fixed_key_settings(work, app))
     sink.skipped(src.report)
     carry_report = habackup.Report(names=haissues.Names)
     carried = {'volumes': {}, 'dirs': {}}

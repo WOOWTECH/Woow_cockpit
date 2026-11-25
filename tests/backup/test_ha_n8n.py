@@ -1231,6 +1231,13 @@ class CheckFlowTests(N8nCase):
         self.assertEqual(self.levels(row), {'n8n.extras-carried': 'auto', 'n8n.mount-skipped': 'notice'})
         self.assertEqual(sorted(self.issue(row, 'n8n.extras-carried')['items']), ['.local/share/n8n-files', 'n8n_files'])
 
+    def test_no_image_is_downloaded_for_an_app_that_cannot_be_imported(self):
+        """Gigabytes for nothing: n8n stops at its data, the version of this device's image is not asked."""
+        self.world.present = {'docker.io/library/postgres:16.15-alpine'}
+        row = self.row(owner=False)
+        self.assertEqual((self.world.pulls, row['importable'], row['target_version']), ([], False, ''))
+        self.assertEqual([r for r in self.built() if r == 'n8n-version'], [])
+
     def test_an_image_that_is_not_here_is_downloaded_first(self):
         """CM-05: the check runs `n8n --version` in it."""
         self.world.present = {'docker.io/library/postgres:16.15-alpine'}
