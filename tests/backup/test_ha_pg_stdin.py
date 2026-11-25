@@ -20,6 +20,7 @@ from woowbackup.errors import BackupError
 from woowbackup.podman import CommandError, Result
 
 from . import hafakes
+from . import hafixtures as hx
 
 TOC = ''.join(f'{n}; 1259 {16000 + n} TABLE public t{n} odoo\n' for n in range(1, 4001)).encode()   # ~150 KiB
 PATH = '/tmp/woowbk-odoo.toc'
@@ -372,6 +373,106 @@ class StatementTests(unittest.TestCase):
         self.assertEqual(tmp.calls, [])
         ha_odoo.Cluster(tmp, 'odoo-db').statement("ALTER SYSTEM SET a TO 'x;y';")
         self.assertIn(b"ALTER SYSTEM SET a TO 'x;y';\n", tmp.calls[0][2])
+
+
+LISTING = [f'{n}; 1259 {16000 + n} TABLE public t{n} odoo' for n in range(1, 401)]   # a few hundred entries
+
+
+def run_restore(listing, *, cut_write=None, sink=None):
+    """Odoo's restore_dump against a double: `pg_restore -l` prints `listing`, everything else works; `cut_write(n, data)`
+    is what arrives of the n-th file written into the container."""
+    def pg_restore(role, argv, data, stdout):
+        return Result(0, listing if argv[:2] == ['pg_restore', '-l'] else b'', b'')
+
+    tmp = Lossy(cut=(lambda kind, n, data: cut_write(n, data) if kind == 'write' and cut_write else data),
+                handlers={'pg_restore': pg_restore})
+    rec = Recorder()
+    with tempfile.TemporaryDirectory() as folder:
+        dump = Path(folder) / 'odoo.dump'
+        dump.write_bytes(b'PGDMP-data')
+        try:
+            ha_odoo.restore_dump(__import__('types').SimpleNamespace(log=rec.log), tmp, dump, 'woowtest', sink=sink)
+            error = None
+        except BackupError as caught:
+            error = caught
+    return tmp, rec, error
+
+
+class ListingTests(unittest.TestCase):
+    """pg-stdin follow-up F4: the list `pg_restore -l` prints is checked against the entry count in its own header before
+    anything is restored from it (a list that came back short would restore only the part it names)."""
+
+    def test_a_whole_listing_passes_with_and_without_the_archive_settings_shown(self):
+        hidden = hx.toc_listing(LISTING)                        # the plain listing: ENCODING, STDSTRINGS, SEARCHPATH kept back
+        self.assertEqual(ha_odoo.check_listing(hidden.decode()), len(LISTING))
+        shown = hx.toc_listing(['1; 0 0 ENCODING - ENCODING', '2; 0 0 STDSTRINGS - STDSTRINGS',
+                                '3; 0 0 SEARCHPATH - SEARCHPATH', *LISTING], hidden=0)
+        self.assertEqual(ha_odoo.check_listing(shown.decode()), len(LISTING) + 3)
+
+    def test_a_listing_that_lost_entries_is_refused_wherever_they_were_lost(self):
+        whole = hx.toc_listing(LISTING).decode()
+        lines = whole.splitlines()
+        first = lines.index(LISTING[0])
+        cases = {'the last line': lines[:-1], 'a middle line': lines[:first + 100] + lines[first + 101:],
+                 'the first entry': lines[:first] + lines[first + 1:], 'half': lines[:first + 200],
+                 'every entry': lines[:first], 'a few at the end': lines[:-3]}
+        for name, kept in cases.items():
+            with self.subTest(name), self.assertRaises(BackupError) as caught:
+                ha_odoo.check_listing('\n'.join(kept) + '\n')
+            self.assertEqual((caught.exception.code, caught.exception.message), ('job-failed', ha_odoo.INCOMPLETE_LIST))
+            self.assertEqual(caught.exception.details['declared'], len(LISTING) + 3, 'the numbers say what was counted')
+            self.assertLess(caught.exception.details['listed'], len(LISTING))
+        shown = hx.toc_listing(['1; 0 0 ENCODING - ENCODING', '2; 0 0 STDSTRINGS - STDSTRINGS',
+                                '3; 0 0 SEARCHPATH - SEARCHPATH', *LISTING], hidden=0).decode().splitlines()
+        with self.assertRaises(BackupError):
+            ha_odoo.check_listing('\n'.join(shown[:-1]) + '\n')
+
+    def test_a_listing_without_its_header_or_with_a_header_that_is_no_count_cannot_be_checked(self):
+        body = ''.join(line + '\n' for line in LISTING)
+        for name, text in (('no header', ';\n; Archive created\n;\n' + body), ('nothing', ''),
+                           ('no number', ';     TOC Entries: many\n' + body),
+                           ('negative', ';     TOC Entries: -3\n' + body),
+                           ('twice the lines', hx.toc_listing(LISTING + LISTING, declared=len(LISTING) + 3).decode())):
+            with self.subTest(name), self.assertRaises(BackupError) as caught:
+                ha_odoo.check_listing(text)
+            self.assertEqual(caught.exception.message, ha_odoo.INCOMPLETE_LIST)
+        self.assertIn('主機可能太忙', ha_odoo.INCOMPLETE_LIST)
+        self.assertIn('沒有做任何變更', ha_odoo.INCOMPLETE_LIST)
+
+    def test_a_short_listing_stops_the_restore_before_anything_is_written_or_restored(self):
+        whole = hx.toc_listing(LISTING)
+        tmp, rec, error = run_restore(whole[:len(whole) - 2000])
+        self.assertEqual((error.code, error.message), ('job-failed', ha_odoo.INCOMPLETE_LIST))
+        commands = [argv for _role, argv, _data in tmp.calls]
+        self.assertEqual([c for c in commands if c[:1] == ['sh']], [], 'no list was written into the container')
+        self.assertEqual([c for c in commands if c[:1] == ['pg_restore'] and '-d' in c], [], 'nothing restored')
+        for text in rec.lines + [error.message, str(error.details)]:
+            self.assertNotIn('TABLE public', text)
+
+    def test_a_whole_listing_restores(self):
+        tmp, _rec, error = run_restore(hx.toc_listing(LISTING))
+        self.assertIsNone(error)
+        self.assertTrue([argv for _r, argv, _d in tmp.calls if argv[:1] == ['pg_restore'] and '-d' in argv])
+
+
+class RestoreLogTests(unittest.TestCase):
+    """pg-stdin follow-up F3: the note that the list had to be written again reaches the job's log."""
+
+    def test_the_rewrite_of_the_list_is_in_the_job_log(self):
+        tmp, rec, error = run_restore(hx.toc_listing(LISTING), cut_write=lambda n, data: data[:100] if n == 1 else data)
+        self.assertIsNone(error)
+        self.assertEqual(len(tmp.sent['write']), 2)
+        notes = [line for line in rec.lines if '沒有完整寫入，重新寫入' in line]
+        self.assertEqual(len(notes), 1, rec.lines)
+        for line in rec.lines:
+            self.assertNotIn('TABLE public', line)
+            self.assertNotIn(hashlib.sha256(tmp.sent['write'][0]).hexdigest(), line)
+
+    def test_three_short_writes_stop_this_conversion_with_the_reason(self):
+        tmp, rec, error = run_restore(hx.toc_listing(LISTING), cut_write=lambda n, data: data[:100])
+        self.assertEqual((error.code, error.message), ('job-failed', ha_odoo.INCOMPLETE_FILE))
+        self.assertEqual(len([line for line in rec.lines if '沒有完整寫入，重新寫入' in line]), 2)
+        self.assertEqual([argv for _r, argv, _d in tmp.calls if argv[:1] == ['pg_restore'] and '-d' in argv], [])
 
 
 class EmulatorTests(unittest.TestCase):
