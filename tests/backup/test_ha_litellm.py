@@ -1067,9 +1067,11 @@ class SingleProtectionTests(LiteLLMCase):
 
     def test_n14_a_second_salt_file_refuses(self):
         # The strict archive reader already refuses a name that is there twice; the scan refuses it by itself, too.
+        # Since 2026-11-25 (HA-12) a damaged add-on member stops only its app, the check job ends well.
         second = {'name': 'data/secrets/salt_key', 'data': OTHER_SALT + b'\n', 'mode': 0o600}
-        with self.assertRaises(BackupError):
-            self.check(self.upload_litellm(extra=[second]), ['litellm'])
+        row = self.check(self.upload_litellm(extra=[second]), ['litellm'])[0]
+        self.assertEqual((row['importable'], [issue['id'] for issue in row['issues']]),
+                         (False, ['failure.corrupt-archive']))
 
         def entry():
             data = SALT + b'\n'
