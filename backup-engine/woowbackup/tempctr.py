@@ -22,7 +22,7 @@ containers of their own, made from images that are already on the device, and re
 
 HAOS parity (2026-11-25, lane F3-helpers):
 
-* `scope` (SCOPES = True): the throwaway objects of one app of a check are named `woowbk-<job>-<scope>-<role>`, so two
+* `scope` (switch SCOPES): the throwaway objects of one app of a check are named `woowbk-<job>-<scope>-<role>`, so two
   apps of one job never meet the same name and what one app could not remove never stands in the way of the next one's
   (X-TC-05; the label stays the job id, so `sweep` and the recovery keep matching).
 * An object that cannot be removed only takes space: `remove` / `remove_volume` say so in the log, keep it listed for
@@ -61,8 +61,11 @@ SECRET_NAME_RE = re.compile(r'[A-Za-z0-9][A-Za-z0-9_.-]{0,252}\Z')
 SECRET_OPTION_RE = re.compile(r'(?:type=(?:mount|env)|target=[A-Za-z0-9_./-]{1,255}|uid=[0-9]{1,10}|gid=[0-9]{1,10}'
                               r'|mode=0?[0-7]{3,4})\Z')
 SECRETS_TMPFS = '/run/secrets:rw,noexec,nosuid,nodev,mode=0755'
-SCOPES = True    # TempObjects takes `scope` (haimport.Work.temp passes the app's place in the job)
-SCOPE_RE = re.compile(r'[a-z0-9]{1,3}\Z')
+# TempObjects takes `scope`; haimport.Work.temp passes the app's place in the job once this is True. It stays False until
+# the doubles of the importer tests (hab1fakes.role_of, test_ha_flows, test_ha_omnigent: they read the role out of the name)
+# know scoped names: the patches that do, and the one-line switch, are snippets/parity-f3/scopes-on/ (verified together).
+SCOPES = False
+SCOPE_RE = re.compile(r'[0-9]{1,2}\Z')
 REMOVE_ARGS = {'container': ('rm', '--force', '--time', '10'), 'volume': ('volume', 'rm', '--force'),
                'network': ('network', 'rm', '--force')}
 KIND_LABELS = {'container': '容器', 'volume': '資料卷', 'network': '網路'}
@@ -220,6 +223,7 @@ class TempObjects:
         self.networks = []
         self._noted = set()    # objects whose removal failed once (one log line each: X-TC-05)
         self._puts_back = []   # [(label, action)] what cleanup() puts back first (put_back_later)
+        self.services = {}     # {container: unit} of the services this job started for its reading (hatarget.ensure_running)
 
     def _long(self, kwargs):
         """kwargs of a long podman call: the job's abort hook when there is one."""

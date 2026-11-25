@@ -967,6 +967,19 @@ def classify(stderr, returncode=None):
     return BY_EXIT.get(returncode, (None, ''))
 
 
+KNOWN_REASONS = frozenset(row[0] for row in REASONS) | {'timeout'}
+
+
+def reason_code(error):
+    """The kind of failure behind a BackupError a podman or systemctl command raised (REASONS, or 'timeout'): the one the
+    runner found, else what the error's own stderr says (a CommandError of another runner); None when nothing is known."""
+    for code in (getattr(error, 'reason', None), (getattr(error, 'details', None) or {}).get('reason')):
+        if code in KNOWN_REASONS:
+            return code
+    stderr = getattr(error, 'stderr', None)
+    return classify(stderr, getattr(error, 'returncode', None))[0] if stderr else None
+
+
 def reason_of(result):
     """The reason code of a command that was run with check=False and failed (None when it did not or nothing is known)."""
     if result is None or result.returncode == 0:

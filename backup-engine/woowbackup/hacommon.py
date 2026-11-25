@@ -5,7 +5,11 @@ volume export, small text scans and version tables (CONTRACT section 9 "Home Ass
 Writing a volume tar (`TreeTar`): every member gets the owner the caller names, permission bits without setuid/setgid,
 the HA entry's mtime; a symlink is written as a link entry with its target as stored (habackup already admitted it),
 a hard link only when it names a regular file this tar already holds -- a file the caller skipped or deferred can
-never be the target of a later link (a hard-linked subtree is never cut in half silently: the import stops instead).
+never be the target of a later link, and a subtree is never cut in half silently (HAOS parity, 2026-11-25, CM-11): the
+file is copied instead (`hardlink(..., entry=entry)`: the reader hands it out again as a regular file), and what cannot
+be copied is left out and listed in the walk's `report` (kind `hardlink`), never silently. The same list takes the
+symlinks that would leave the volume (kind `symlink`; X-NS-08): the restore refuses such a link (nested.py), so a
+conversion that is given a `report` leaves it out and says so; without a `report` nothing changes.
 """
 import ipaddress
 import json
@@ -15,13 +19,15 @@ import tarfile
 import time
 import unicodedata
 
-from . import habackup, tempctr, util
+from . import habackup, nested, podman, tempctr, util
 from .errors import BackupError
 from .ha_n8n import URL_HOST_RE
 from .ha_odoo import (ELF_MACHINES, FileTar, _copy_info, _live_tar, _norm, _under, host_elf_machine,  # noqa: F401
                       quadlet_container_name, quadlet_mounts)
 
 LABELS_OUTPUT = 256 * 1024
+LIVE_JSON_OUTPUT = 64 * 1024 * 1024        # one JSON cell of this device's own database (was 4 MiB: a catalog can be bigger)
+LIVE_JSON_CEILING = 256 * 1024 * 1024
 MAX_TEXT_SCAN = 16 * 1024 * 1024
 VERSION_RE = re.compile(r'v?([0-9]{1,4})\.([0-9]{1,4})\.([0-9]{1,4})\Z')
 
@@ -86,12 +92,23 @@ class VersionTable:
         return None
 
 
-def image_labels(work, app, ref):
-    """{label: value} of a local image (strings only; {} when it has none). Read as the owner, nothing pulled."""
+def image_labels(work, app, ref, *, pull=True):
+    """{label: value} of a local image (strings only; {} when it has none). Read as the owner. An image this device does
+    not have is downloaded first, as the owner (`hatarget.ensure_image`, CM-05; `pull=False`: never); when that fails only
+    this app stops, with the reason."""
     if not isinstance(ref, str) or not tempctr.IMAGE_RE.fullmatch(ref):
         raise BackupError('incompatible', '映像名稱格式不正確。', app=app.id)
-    result = work.runner(app).podman('image', 'inspect', '--format', '{{json .Config.Labels}}', ref, timeout=120,
-                                     max_output=LABELS_OUTPUT, check=False)
+    runner = work.runner(app)
+
+    def read():
+        return runner.podman('image', 'inspect', '--format', '{{json .Config.Labels}}', ref, timeout=120,
+                             max_output=LABELS_OUTPUT, check=False)
+
+    result = read()
+    if result.returncode != 0 and pull:
+        from . import hatarget
+        if hatarget.ensure_image(work, app, ref):    # not here: downloaded (or this app stops, with the reason)
+            result = read()
     if result.returncode != 0:
         raise BackupError('incompatible', f'找不到這台使用的映像 {ref[:120]}。', app=app.id)
     try:
@@ -128,38 +145,75 @@ def environment(quadlets, name, keys):
     return tempctr.quadlet_environment(quadlets[name], set(keys))
 
 
-def live_json(work, app, container, user, database, sql):
+def live_json(work, app, container, user, database, sql, *, size=None):
     """One JSON cell read from a LIVE database container as its user over the socket (`podman exec ... psql`; read
-    only; never a statement that writes)."""
+    only; never a statement that writes). A database that is not running (or still starting up) is started first and put
+    back when the app's throwaway objects are cleaned (`hatarget.ensure_running`, CM-07); only when that fails, or the
+    account or database name does not fit this device's settings, this app stops, and the message says which. `size`:
+    the bytes of data the cell is about (a bigger one gets more time and room: X-PD-05, X-PD-04)."""
     runner = work.runner(app)
+    limit = podman.scaled_limit(LIVE_JSON_OUTPUT, size, ratio=2, ceiling=LIVE_JSON_CEILING)
+    started = False
+    while True:
+        try:
+            out = runner.podman('exec', container, 'psql', '-X', '-A', '-t', '-q', '-v', 'ON_ERROR_STOP=1', '-U', user,
+                                '-d', database, '-c', sql, timeout=podman.scaled_timeout(120, size),
+                                max_output=limit).stdout or b''
+            break
+        except BackupError as error:
+            if error.code != 'job-failed':
+                raise
+            reason = podman.reason_code(error)
+            if not started and reason in ('no-container', 'db-not-ready'):
+                from . import hatarget
+                hatarget.ensure_running(work, app, container, ready='postgres', size=size)
+                started = True
+                continue
+            sentence = dict((row[0], row[1]) for row in podman.REASONS).get(reason)
+            if reason in LIVE_REASONS and sentence:
+                raise BackupError('job-failed', f'無法讀取這台「{app.name}」的資料庫：{sentence}', app=app.id,
+                                  reason=reason) from None
+            raise BackupError('job-failed', f'無法讀取這台「{app.name}」的資料庫，請確認它正在執行。', app=app.id) from None
     try:
-        out = runner.podman('exec', container, 'psql', '-X', '-A', '-t', '-q', '-v', 'ON_ERROR_STOP=1', '-U', user,
-                            '-d', database, '-c', sql, timeout=120, max_output=4 * 1024 * 1024).stdout or b''
-    except BackupError as error:
-        if error.code != 'job-failed':
-            raise
-        raise BackupError('job-failed', f'無法讀取這台「{app.name}」的資料庫，請確認它正在執行。', app=app.id) from None
-    try:
-        return util.loads_strict(out.strip() or b'null', max_bytes=4 * 1024 * 1024)
+        return util.loads_strict(out.strip() or b'null', max_bytes=limit)
     except ValueError:
         raise BackupError('job-failed', f'無法讀取這台「{app.name}」的資料庫。', app=app.id) from None
 
 
-def live_export(work, app, volume, path):
-    """`podman volume export` of a live volume into the staging file `path` (0600), read while the app runs."""
+# What the customer is told when the database of this device cannot be read for a reason the account or the name tells
+# (the other reasons keep the old sentence: "make sure it is running").
+LIVE_REASONS = frozenset({'db-auth', 'db-missing', 'role-missing', 'no-user-manager', 'no-space', 'permission'})
+
+
+def live_export(work, app, volume, path, *, size=None):
+    """`podman volume export` of a live volume into the staging file `path` (0600), read while the app runs. `size`: the
+    volume's bytes when known (the wait grows with it: X-PD-05; the 3 hours of before are the floor)."""
     with open(path, 'xb') as handle:
         os.fchmod(handle.fileno(), 0o600)
-        work.runner(app).relay(['volume', 'export', volume], stdout=handle, timeout=3 * 3600,
+        work.runner(app).relay(['volume', 'export', volume], stdout=handle, timeout=podman.scaled_timeout(3 * 3600, size),
                                max_output=work.guard.budget(), abort=work.abort)
         handle.flush()
         os.fsync(handle.fileno())
     return path
 
 
-def copy_live(src_path, out, *, drop=lambda _name: False, what='這台的資料卷'):
+def link_escapes(name, target):
+    """True when the symlink `name` -> `target` leaves the volume, by the restore's own rule (nested._escapes: the target
+    joined to the link's folder, an absolute one too)."""
+    return nested._escapes(name, target)
+
+
+def copy_live(src_path, out, *, drop=lambda _name: False, what='這台的資料卷', report=None, label=''):
     """Copy a live volume export into the FileTar `out` without the members `drop(name)` says (names normalised,
-    '.' for the root); returns {name: (uid, gid, mode)} of the directories it read (also dropped ones)."""
+    '.' for the root); returns {name: (uid, gid, mode)} of the directories it read (also dropped ones).
+
+    `report` (a habackup.Report; X-NS-08, CM-11): the restore refuses a symlink that leaves the volume and a hard link
+    to a member that is not in the archive. A customer's own link of that kind is left out of the copy instead, and
+    listed in the report with its full count (`symlink`, `hardlink`; `label` goes in front of the name, e.g. the volume's
+    name): the importer asks the customer once (`Sink.skipped(report)`), the rest of the volume is copied as it is. Without
+    a `report` everything is copied as before."""
     dirs = {}
+    kept = set()
     try:
         with _live_tar(src_path, what) as tar:
             for member in tar:
@@ -169,7 +223,13 @@ def copy_live(src_path, out, *, drop=lambda _name: False, what='這台的資料�
                 if member.isdir():
                     dirs[name] = (member.uid, member.gid, member.mode & 0o7777)
                 if not drop(name):
-                    out.add_member(_copy_info(member, name), tar.extractfile(member) if member.isfile() else None)
+                    if report is not None and member.issym() and link_escapes(name, member.linkname):
+                        report.skip('symlink', f'{label}{name}')
+                    elif report is not None and member.islnk() and _norm(member.linkname) not in kept:
+                        report.skip('hardlink', f'{label}{name}')
+                    else:
+                        out.add_member(_copy_info(member, name), tar.extractfile(member) if member.isfile() else None)
+                        kept.add(name)
                 tar.members.clear()
     except tarfile.TarError:
         raise BackupError('job-failed', f'{what}的匯出內容無法讀取。') from None
@@ -217,13 +277,18 @@ class _Exact:
 
 
 class TreeTar:
-    """A volume tar written from an HA tree (see the module notes). `uid`/`gid`: every member's owner."""
+    """A volume tar written from an HA tree (see the module notes). `uid`/`gid`: every member's owner. `report`: the walk's
+    habackup.Report; what cannot be written is left out and listed in it (a link that leaves the volume: `symlink`; a
+    hard link whose file is not in the tar and cannot be copied: `hardlink`), for the one confirmation line
+    (`Sink.skipped`). Without one the tar is written as before and a hard link without its file stops the import."""
 
-    def __init__(self, path, uid, gid, guard=None):
+    def __init__(self, path, uid, gid, guard=None, report=None):
         self.tar = FileTar(path, guard)
         self.uid, self.gid = uid, gid
         self.guard = guard
+        self.report = report
         self.files = set()      # names of the regular files written (hard link targets)
+        self.copied = 0         # hard links the reader hands out again as regular files (hardlink(entry=...))
         self.counts = {'files': 0, 'dirs': 0, 'symlinks': 0, 'hardlinks': 0, 'bytes': 0}
 
     @property
@@ -254,17 +319,36 @@ class TreeTar:
         self.counts['bytes'] += len(data)
 
     def symlink(self, name, target, mtime):
+        """Write a link entry. One that leaves the volume (the restore refuses it) is left out and listed when the tar has
+        a report (X-NS-08); returns whether it was written."""
+        if self.report is not None and link_escapes(name, target):
+            self.report.skip('symlink', name)
+            return False
         self.tar.add_member(info(name, 'symlink', mode=0o777, uid=self.uid, gid=self.gid, mtime=mtime,
                                  linkname=target))
         self.counts['symlinks'] += 1
+        return True
 
-    def hardlink(self, name, target, mtime):
-        if target not in self.files:
-            raise BackupError('incompatible', f'HA 備份中的 {name[:200]} 是另一個沒有搬過來的檔案的硬連結，無法只搬一半；'
-                                              '已停止。', member=name[:200], target=target[:200])
-        self.tar.add_member(info(name, 'hardlink', mode=0o644, uid=self.uid, gid=self.gid, mtime=mtime,
-                                 linkname=target))
-        self.counts['hardlinks'] += 1
+    def hardlink(self, name, target, mtime, *, entry=None):
+        """Write a hard link to a regular file this tar already holds ('link'). Any other: the file is copied instead when
+        the walk's `entry` can say so (`entry.copy_later()`: the reader hands the same name out again, after the walk, as a
+        regular file with the content: 'copy'; CM-11), else left out and listed in the report ('skip'), else the import
+        stops as it always did."""
+        if target in self.files:
+            self.tar.add_member(info(name, 'hardlink', mode=0o644, uid=self.uid, gid=self.gid, mtime=mtime,
+                                     linkname=target))
+            self.counts['hardlinks'] += 1
+            return 'link'
+        copy_later = getattr(entry, 'copy_later', None)
+        if copy_later is not None:
+            copy_later()
+            self.copied += 1
+            return 'copy'
+        if self.report is not None:
+            self.report.skip('hardlink', name)
+            return 'skip'
+        raise BackupError('incompatible', f'HA 備份中的 {name[:200]} 是另一個沒有搬過來的檔案的硬連結，無法只搬一半；'
+                                          '已停止。', member=name[:200], target=target[:200])
 
     def close(self):
         self.tar.close()

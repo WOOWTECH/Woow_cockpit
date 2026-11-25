@@ -406,7 +406,7 @@ class ScopeTests(unittest.TestCase):
     """DESIGN C2 (lane F3): one name for every object an app of a check makes, so two apps never meet the same one."""
 
     def test_the_scope_is_part_of_the_name_the_label_stays_the_job(self):
-        self.assertIs(tempctr.SCOPES, True)
+        self.assertIs(tempctr.SCOPES, False, 'the switch: off until the importer tests\' doubles know scoped names')
         runner = FakeRunner()
         tmp = tempctr.TempObjects(runner, JOB, scope='0')
         name = tmp.name('hapg')
@@ -429,7 +429,7 @@ class ScopeTests(unittest.TestCase):
 
     def test_a_bad_scope_or_a_role_too_long_for_it_is_refused(self):
         runner = FakeRunner()
-        for scope in ('', 'A', '1234', 'a b', 'a-b', 5, b'0'):
+        for scope in ('', 'A', '123', 'a', 'x1', 'a b', 'a-b', -1, 5, b'0'):
             with self.subTest(scope=scope), self.assertRaises(BackupError):
                 tempctr.TempObjects(runner, JOB, scope=scope)
         tmp = tempctr.TempObjects(runner, JOB, scope='12')
