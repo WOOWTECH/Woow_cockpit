@@ -106,7 +106,10 @@ ISSUES = {
     'nextcloud.not-nextcloud-db': 'stop',         # NC-36
     'nextcloud.shape-unreadable': 'stop',         # NC-37
     'nextcloud.db-objects': 'stop',               # NC-38: objects that cannot be left out
-    'nextcloud.extension-missing': 'stop',        # NC-39
+    'nextcloud.db-objects-skipped': 'confirm',    # NC-38, NC-45: functions and triggers of other apps are left out
+    'nextcloud.extension-enabled': 'auto',        # NC-39: an extension this device's database image has is enabled
+    'nextcloud.extension-missing': 'stop',        # NC-39: ... and one it has not
+    'nextcloud.schemas-skipped': 'confirm',       # NC-40: only the schema public is moved
     'nextcloud.storage-missing': 'stop',          # NC-41
     'nextcloud.storage-taken': 'stop',            # NC-42
 }
@@ -118,6 +121,7 @@ SECRET_VALUE_RE = re.compile(r'[A-Za-z0-9+/=._-]{8,512}\Z')
 # control character (habackup leaves such a name out of what it hands out) and no slash (NC-25).
 DATADIR_SEG_RE = re.compile(r'[^\x00-\x1f\x7f/]{1,255}\Z')
 ROLE_RE = re.compile(r'[a-z_][a-z0-9_]{0,62}\Z')
+EXT_RE = re.compile(r'[A-Za-z_][A-Za-z0-9_-]{0,62}\Z')
 DB_RE = re.compile(r'[a-z_][a-z0-9_]{0,62}\Z')
 STAT_RE = re.compile(rb'\s*([0-9]{1,10}) ([0-9]{1,10}) ([0-7]{1,4})\s*\Z')
 MAX_CONFIG = 1024 * 1024
@@ -221,6 +225,21 @@ SELECT json_build_object(
  'role_settings', (SELECT count(*) FROM pg_db_role_setting),
  'defaults', (SELECT coalesce(json_agg(DISTINCT pg_get_expr(adbin, adrelid)), '[]'::json) FROM pg_attrdef
               WHERE adrelid IN (SELECT oid FROM rel)))"""
+# NC-38, NC-45: what another app (Memories makes a function and a trigger) creates in the database. Programs of that kind are
+# left out of the restore and listed, the tables and their data are moved; nothing else of the shape list may be left out
+# (a type, a view, a rule, a CHECK or a default that calls a function would break the tables that use it).
+SKIPPABLE = ('functions', 'triggers')
+SKIPPED_TOC = ('FUNCTION', 'TRIGGER')
+OBJECTS_SQL = """WITH ns AS (SELECT oid FROM pg_namespace WHERE nspname !~ '^pg_' AND nspname <> 'information_schema'),
+ ext AS (SELECT classid, objid FROM pg_depend WHERE deptype = 'e')
+SELECT json_build_object(
+ 'functions', (SELECT coalesce(json_agg(q.name ORDER BY q.name), '[]'::json) FROM (
+    SELECT n.nspname || '.' || p.proname AS name FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+    WHERE p.pronamespace IN (SELECT oid FROM ns) AND p.oid NOT IN (SELECT objid FROM ext WHERE classid = 'pg_proc'::regclass)
+    ORDER BY 1 LIMIT 100) q),
+ 'triggers', (SELECT coalesce(json_agg(q.name ORDER BY q.name), '[]'::json) FROM (
+    SELECT c.relname || '.' || t.tgname AS name FROM pg_trigger t JOIN pg_class c ON c.oid = t.tgrelid
+    WHERE NOT t.tgisinternal ORDER BY 1 LIMIT 100) q))"""
 SHAPE_LABELS = (('functions', '函式'), ('operators', '運算子'), ('types', '自訂資料型別'), ('triggers', '觸發程序'),
                 ('rules', '規則'), ('policies', '資料列安全原則'), ('event_triggers', '事件觸發程序'),
                 ('relations', '檢視表或其他特殊資料表'), ('checks', 'CHECK 等限制'), ('generated', '產生欄位'),
@@ -232,6 +251,10 @@ _PG_TYPE = r'[a-z][a-z ]{0,40}(?:\([0-9]{1,4}(?:,[0-9]{1,4})?\))?(?: with(?:out)
 DEFAULT_RE = re.compile(rf"(?:nextval\('(?:public\.)?[a-z0-9_]{{1,63}}'::regclass\)|'(?:[^']|''){{0,1024}}'::{_PG_TYPE}"
                         rf"|-?[0-9]{{1,20}}(?:\.[0-9]{{1,20}})?|true|false|NULL::{_PG_TYPE})")
 MSG_SHAPE = 'HA 的 Nextcloud 資料庫含有 Nextcloud 不會建立、這台也無法略過的資料庫物件（{kinds}），無法安全地搬過來。'
+MSG_SKIPPED = ('HA 的 Nextcloud 資料庫含有 Nextcloud 不會建立的程式（{kinds}）。它們不會搬過來，資料表和資料照搬；'
+               '用到它們的應用（例如 Memories 相簿）匯入後部分功能可能要重新設定或重新安裝。')
+MSG_SCHEMAS = ('HA 的 Nextcloud 資料庫除了 Nextcloud 用的 public 之外還有其他 schema（資料庫裡的分組）。'
+               '只搬 public，其他 schema 不會搬過來，Nextcloud 本身不受影響。')
 MSG_SHAPE_UNREAD = '無法讀取 HA 的 Nextcloud 資料庫結構，無法確認可以安全地搬過來。'
 MSG_TOC = 'HA 的 Nextcloud 資料庫匯出檔含有 Nextcloud 不會建立、這台也無法略過的物件（{kinds}），無法安全地搬過來。'
 MSG_ONLINE = ('HA 的 Nextcloud 資料庫不是在停止狀態下備份的（含有 backup_label 或 tablespace_map），無法安全地搬過來；'
@@ -1196,6 +1219,7 @@ def live_db_sql(role):
           'bypassrls', rolbypassrls, 'connlimit', rolconnlimit) FROM pg_authid WHERE rolname = {lit(role)}),
  'roles', (SELECT coalesce(json_agg(rolname ORDER BY rolname), '[]'::json) FROM pg_roles WHERE rolname !~ '^pg_'),
  'extensions', (SELECT coalesce(json_agg(extname ORDER BY extname), '[]'::json) FROM pg_extension),
+ 'available', (SELECT coalesce(json_agg(name ORDER BY name), '[]'::json) FROM pg_available_extensions),
  'datacl', (SELECT datacl::text FROM pg_database WHERE datname = current_database()),
  'nspacl', (SELECT nspacl::text FROM pg_namespace WHERE nspname = 'public'),
  'appconfig', (SELECT coalesce(json_agg(row_to_json(a) ORDER BY appid, configkey), '[]'::json)
@@ -1221,6 +1245,8 @@ def live_database(work, app, live, role):
         raise BackupError('job-failed', '無法讀取這台 Nextcloud 的 Office 設定。', app=app.id)
     if not all(isinstance(doc.get(key), list) for key in ('roles', 'extensions')):
         raise BackupError('job-failed', '無法讀取這台 Nextcloud 的資料庫設定。', app=app.id)
+    available = doc.get('available')
+    doc['available'] = [name for name in available if isinstance(name, str)] if isinstance(available, list) else []
     return doc
 
 
@@ -1288,6 +1314,29 @@ def shape_problems(doc, *, converted=False):
     return found
 
 
+def shape_objects(doc):
+    """(left out, stopping): the labels of what HA's database holds beyond Nextcloud's own objects, split into what is left
+    out of the conversion (SKIPPABLE: the functions and triggers of other apps) and what stops it; None when the document
+    cannot be read (shape_problems)."""
+    problems = shape_problems(doc)
+    if problems is None:
+        return None
+    left_out = [label for key, label in SHAPE_LABELS if key in SKIPPABLE and doc.get(key)]
+    return left_out, [label for label in problems if label not in left_out]
+
+
+def object_names(doc):
+    """The names OBJECTS_SQL gives, as a list of texts ('函式 public.f', ...); [] when the answer is not what it should be."""
+    if not isinstance(doc, dict):
+        return []
+    names = []
+    for key, label in (('functions', '函式'), ('triggers', '觸發程序')):
+        value = doc.get(key)
+        if isinstance(value, list):
+            names += [f'{label} {name}' for name in value if isinstance(name, str)]
+    return names
+
+
 def _counts_sql(tables):
     parts = [f"'{key}', (SELECT count(*) FROM public.{table})" for table, key in COUNTED if table in tables]
     return 'SELECT json_build_object(' + ', '.join(parts) + ')'
@@ -1333,10 +1382,10 @@ def lists_differ(data, details):
 
 
 def ha_database(cluster, dbname):
-    """HA's database: {tables, shape, counts, extensions, schemas, local_storages, enabled, encryption, lists}.
+    """HA's database: {tables, shape, skipped, counts, extensions, schemas, local_storages, enabled, encryption, lists}.
     `cluster` runs pinned (Pinned). Its catalogs are read first: a database that holds anything beyond Nextcloud's own
-    objects (shape_problems) is not read any further, so no view or function of HA's runs even in the throwaway
-    cluster."""
+    objects that cannot be left out (shape_objects) is not read any further, so no view or rule of HA's runs even in the
+    throwaway cluster; the functions and triggers of other apps (which are left out) are only named (`skipped`)."""
     names = [d['name'] for d in ha_odoo.ha_databases(cluster)]
     if dbname not in names:
         return None
@@ -1347,13 +1396,15 @@ def ha_database(cluster, dbname):
     if not {'oc_appconfig', 'oc_storages', 'oc_users', 'oc_filecache'} <= tables:
         return {'tables': tables, 'nextcloud': False}
     shape = cluster.query_json(SHAPE_SQL, dbname)
-    if shape_problems(shape) != []:
+    split = shape_objects(shape)
+    if split is None or split[1]:      # unreadable, or something that cannot be left out: nothing more is read
         return {'tables': tables, 'nextcloud': True, 'shape': shape}
+    skipped = object_names(cluster.query_json(OBJECTS_SQL, dbname)) if split[0] else []
     doc = cluster.query_json(HA_SQL, dbname)
     counts = cluster.query_json(_counts_sql(tables), dbname)
     if not isinstance(doc, dict) or not isinstance(counts, dict):
         raise BackupError('job-failed', '無法讀取 HA 的 Nextcloud 資料庫內容。')
-    doc.update(tables=tables, shape=shape, counts={k: int(v) for k, v in counts.items() if isinstance(v, int)},
+    doc.update(tables=tables, shape=shape, skipped=skipped, counts={k: int(v) for k, v in counts.items() if isinstance(v, int)},
                nextcloud=True, lists=cluster.query_json(FILES_SQL, dbname) if 'oc_mimetypes' in tables else None)
     return doc
 
@@ -1434,22 +1485,30 @@ def database_issues(sink, src, data, details, target):
     if details is None and ha_major == 16 and not src.recovery_files:
         sink.stop('nextcloud.no-database-name', 'HA 的 PostgreSQL 裡沒有 Nextcloud 的資料庫。')
     elif isinstance(details, dict):
-        shape = shape_problems(details.get('shape')) if details.get('nextcloud') else None
+        split = shape_objects(details.get('shape')) if details.get('nextcloud') else None
         reasons = ['files_encryption'] if isinstance(data, DataDir) and data.encryption else []
         if not details.get('nextcloud'):
             sink.stop('nextcloud.not-nextcloud-db', 'HA 的資料庫不是 Nextcloud 的資料庫（找不到 Nextcloud 的資料表）。')
-        elif shape is None:
+        elif split is None:
             sink.stop('nextcloud.shape-unreadable', MSG_SHAPE_UNREAD)
-        elif shape:
-            sink.stop('nextcloud.db-objects', MSG_SHAPE.format(kinds=hacommon.names(shape)))
+        elif split[1]:
+            sink.stop('nextcloud.db-objects', MSG_SHAPE.format(kinds=hacommon.names(split[1])))
         else:
+            if split[0]:
+                sink.confirm('nextcloud.db-objects-skipped', MSG_SKIPPED.format(kinds=hacommon.names(split[0])),
+                             details.get('skipped') or split[0])
             extra = [e for e in details.get('extensions') or [] if e not in EXTENSIONS_OK]
-            if extra:
+            enable = [e for e in extra if e in target.db.get('available', ())]
+            if enable:
+                sink.auto('nextcloud.extension-enabled',
+                          'HA 的 Nextcloud 資料庫使用了擴充功能，這台的資料庫映像也有，已自動啟用後再放資料。', enable)
+            if len(enable) < len(extra):
                 sink.stop('nextcloud.extension-missing',
-                          f'HA 的 Nextcloud 資料庫使用了擴充功能 {hacommon.names(extra)}，目前無法搬過來。')
+                          'HA 的 Nextcloud 資料庫使用了這台的資料庫映像沒有的擴充功能，相依的欄位放不進去，無法匯入。',
+                          items=[e for e in extra if e not in enable],
+                          action='請先在這台安裝帶有這個擴充功能的 PostgreSQL 映像，或在 HA 移除它之後重新備份。')
             if details.get('schemas'):
-                sink.stop('nextcloud.db-objects',
-                          f'HA 的 Nextcloud 資料庫有額外的 schema（{hacommon.names(details["schemas"])}），目前無法搬過來。')
+                sink.confirm('nextcloud.schemas-skipped', MSG_SCHEMAS, details['schemas'])
             if details.get('encryption') == 'yes':
                 reasons.append('encryption_enabled')
             storages = [s for s in details.get('local_storages') or [] if isinstance(s, str)]
@@ -1683,11 +1742,23 @@ def restore_failed(majors):
             '這台的 Nextcloud 沒有任何變更。')
 
 
-def restore_dump(work, tmp, dump, role, dbname, *, majors=None):
+def skip_toc(text, kinds):
+    """A `pg_restore -l` listing without the entries of these kinds (`FUNCTION`, `TRIGGER`) and the comments on them: what
+    is left out of the restore and listed to the customer (NC-38, NC-45)."""
+    if not kinds:
+        return text
+    names = '|'.join(re.escape(kind) for kind in kinds)
+    entry = re.compile(rf'\s*\d+;\s+\d+\s+\d+\s+(?:{names})\s')
+    comment = re.compile(rf'\s*\d+;\s+\d+\s+\d+\s+COMMENT\s+\S+\s+(?:{names})\s')
+    return ''.join(line for line in text.splitlines(True) if not entry.match(line) and not comment.match(line))
+
+
+def restore_dump(work, tmp, dump, role, dbname, *, majors=None, skip=()):
     """HA's dump into the new database AS THE NEXTCLOUD ROLE (HA's server is untrusted: review HA-SEC-01), without
     its EXTENSION entries, refused when it holds superuser-only objects; streamed on stdin. The listing is cross-checked
     against its own header first and the retry note of its write reaches the job log (pg-stdin follow-ups F4, F3).
-    `majors`: (HA's, this device's) PostgreSQL major, to say why a refused restore was refused (NC-32)."""
+    `majors`: (HA's, this device's) PostgreSQL major, to say why a refused restore was refused (NC-32). `skip`: the kinds
+    of entries the customer confirmed to leave out (SKIPPED_TOC); any other kind Nextcloud never creates stops it."""
     with open(dump, 'rb') as handle:
         toc = tmp.exec('nc-db', ['pg_restore', '-l'], user='postgres', input=handle, timeout=ha_odoo.DUMP_TIMEOUT,
                        max_output=ha_odoo.TOC_OUTPUT).stdout or b''
@@ -1697,11 +1768,11 @@ def restore_dump(work, tmp, dump, role, dbname, *, majors=None):
     if kinds:
         raise BackupError('incompatible', f'HA 的 Nextcloud 資料庫含有只有資料庫超級使用者才能建立的物件'
                                           f'（{hacommon.names(kinds)}），無法安全地搬過來。')
-    odd = [kind for kind in toc_kinds(text) if kind not in TOC_ALLOWED]
+    odd = [kind for kind in toc_kinds(text) if kind not in TOC_ALLOWED and kind not in skip]
     if odd:
         raise BackupError('incompatible', MSG_TOC.format(kinds=hacommon.names(odd)))
-    ha_odoo.Cluster(tmp, 'nc-db', log=work.log).write_file('/tmp/woowbk-nc.toc',
-                                                           ha_odoo.filter_toc(text).encode('utf-8', 'surrogateescape'))
+    left = ha_odoo.filter_toc(skip_toc(text, skip))
+    ha_odoo.Cluster(tmp, 'nc-db', log=work.log).write_file('/tmp/woowbk-nc.toc', left.encode('utf-8', 'surrogateescape'))
     work.log(f'把 HA 的 Nextcloud 資料庫還原到新的叢集（以 {role} 角色還原）')
     with open(dump, 'rb') as handle:
         try:
@@ -1713,6 +1784,13 @@ def restore_dump(work, tmp, dump, role, dbname, *, majors=None):
                 raise
             raise BackupError('job-failed', restore_failed(majors)) from None
     tmp.exec('nc-db', ['rm', '-f', '/tmp/woowbk-nc.toc'], user='postgres', timeout=120)
+
+
+def _ext_ident(name):
+    """An extension's name as an SQL identifier (the names are this device's own list, checked against EXT_RE)."""
+    if not isinstance(name, str) or not EXT_RE.fullmatch(name):
+        raise BackupError('internal-error', '擴充功能名稱格式不正確。')
+    return f'"{name}"'
 
 
 def removed_sql(old_root, remote):
@@ -1858,9 +1936,13 @@ def build_cluster(work, app, tmp, target, dump, *, details, old_root, new_root, 
     pg.wait_ready(tcp=True, checkpoint=work.checkpoint)
     pg.script(role_sql(role, db['role'], live.db_name))
     extensions = [e for e in db['extensions'] if e != 'plpgsql' and ROLE_RE.fullmatch(e)]
+    # NC-39: what HA's database uses and this device's database image has is enabled too (before HA's data is put in)
+    extras = [e for e in details.get('extensions') or [] if e not in EXTENSIONS_OK and e not in extensions
+              and e in db.get('available', ()) and EXT_RE.fullmatch(e)]
     pg.script(f'GRANT CREATE ON SCHEMA public TO {ha_odoo.pg_ident(role)};\n'
-              + ''.join(f'CREATE EXTENSION IF NOT EXISTS {ha_odoo.pg_ident(e)};\n' for e in extensions), live.db_name)
-    restore_dump(work, tmp, dump, role, live.db_name, majors=majors)
+              + ''.join(f'CREATE EXTENSION IF NOT EXISTS {_ext_ident(e)};\n' for e in extensions + extras), live.db_name)
+    left_out = shape_objects(details.get('shape'))
+    restore_dump(work, tmp, dump, role, live.db_name, majors=majors, skip=SKIPPED_TOC if left_out and left_out[0] else ())
     # From here on the cluster holds HA's objects: every session is pinned (Pinned); the superuser reads catalogs only
     # and never touches a table of HA's, the fix-ups and table reads run as the tables' owner (the live Nextcloud role),
     # so a default, constraint or index expression of HA's never runs with more rights than Nextcloud itself has.
@@ -1882,7 +1964,8 @@ def build_cluster(work, app, tmp, target, dump, *, details, old_root, new_root, 
         doc = {**doc, **catalog}
     else:
         doc = None
-    problems = verify_converted(doc, expected=expected, db=db, role=role, dbname=live.db_name, moves=moves)
+    problems = verify_converted(doc, expected=expected, db=dict(db, extensions=sorted(set(db['extensions']) | set(extras))),
+                                role=role, dbname=live.db_name, moves=moves)
     if problems:
         raise BackupError('job-failed', f'轉換後的 Nextcloud 資料庫檢查沒有通過：{"；".join(problems)}。')
     carry_settings(work, app, live, admin)
@@ -2075,8 +2158,8 @@ def convert(work, app, test_mode, out_dir):
     dump = staging / 'nextcloud.dump'
     work.log('匯出 HA 的 Nextcloud 資料庫')
     with _private(dump) as handle:
-        hapg.exec('hapg', ['pg_dump', '-U', 'postgres', '-Fc', '-d', dbname], user='postgres', stdout=handle,
-                  timeout=ha_odoo.DUMP_TIMEOUT, max_output=work.guard.budget())
+        hapg.exec('hapg', ['pg_dump', '-U', 'postgres', '-Fc', '-d', dbname] + (['-n', 'public'] if details.get('schemas') else []),
+                  user='postgres', stdout=handle, timeout=ha_odoo.DUMP_TIMEOUT, max_output=work.guard.budget())
     tmp.remove('hapg')
     tmp.remove_volume('hapg')
     work.checkpoint()

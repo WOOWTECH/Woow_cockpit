@@ -119,6 +119,7 @@ LIVE_APPCONFIG = [{'appid': 'core', 'configkey': 'backgroundjobs_mode', 'configv
 LIVE_DB = {'role': {'password': VERIFIER, 'super': False, 'login': True, 'createdb': True, 'createrole': False,
                     'replication': False, 'bypassrls': False, 'connlimit': -1},
            'roles': ['nextcloud', 'oc_admin'], 'extensions': ['plpgsql', 'vector'],
+           'available': ['btree_gin', 'pg_trgm', 'plpgsql', 'uuid-ossp', 'vector'],
            'datacl': '{nextcloud=CTc/nextcloud,oc_admin=c/nextcloud}',
            'nspacl': '{pg_database_owner=UC/pg_database_owner,=U/pg_database_owner,oc_admin=C/pg_database_owner}',
            'appconfig': LIVE_APPCONFIG}
@@ -271,6 +272,7 @@ class World(fk.World):
         self.verify = None
         self.catalog = None
         self.shape = {'hapg': dict(CLEAN_SHAPE), 'nc-db': dict(CLEAN_SHAPE)}
+        self.objects = {'functions': [], 'triggers': []}
         self.lists = HA_LISTS
         self.tables = TABLES
         self.office_cache = dict(OFFICE_CACHE)
@@ -341,6 +343,8 @@ class World(fk.World):
             return self.ha_details
         if sql == nc.SHAPE_SQL:
             return self.shape.get(role)
+        if sql == nc.OBJECTS_SQL:
+            return self.objects
         if sql == nc.FILES_SQL:
             return self.lists
         if sql.startswith("SELECT json_build_object('users'"):
@@ -955,12 +959,11 @@ class CheckTests(NextcloudCase):
         self.assertNotIn('FROM oc_appconfig', live[0]['sql'])
 
     def test_other_blockers(self):
-        self.world.ha_details = dict(self.world.ha_details, encryption='yes', extensions=['plpgsql', 'pg_trgm'])
+        self.world.ha_details = dict(self.world.ha_details, extensions=['plpgsql', 'postgis'])
         result = self.check(self.upload_nextcloud(config=HA_CONFIG.replace(b"'35.0.1.1'", b"'35.0.3.1'")),
                             ['nextcloud'])[0]
-        text = '\n'.join(result['blockers'])
-        for part in ('版本不同', '伺服器端加密', 'pg_trgm'):
-            self.assertIn(part, text)
+        self.assertIn('版本不同', '\n'.join(result['blockers']))
+        self.assertEqual(issue_of(result, 'nextcloud.extension-missing')['items'], ['postgis'])
 
     def test_texts_of_has_backup_are_shown_safely(self):
         # A path, a version or a URL of HA's is text on the page and in the job log: no control character (a forged
@@ -1018,19 +1021,145 @@ class CheckTests(NextcloudCase):
         self.assertTrue(any('只支援 16 版' in b for b in result['blockers']))
         self.assertFalse(self.runs('hapg')[1:], 'the PostgreSQL 17 cluster is never started')
 
-    def test_a_database_with_objects_nextcloud_never_creates_is_refused_unread(self):
-        # A trigger function, a trojan aggregate in public and a default that reads a server file: refused from the
-        # catalogs alone; none of HA's tables is read (no view or function of HA's runs, even in the throwaway cluster).
-        self.world.shape['hapg'] = dict(CLEAN_SHAPE, functions=2, triggers=1,
+    def test_what_cannot_be_left_out_is_refused_unread(self):
+        # A type, a view, a rule, a check or a default that reads a server file: refused from the catalogs alone (the
+        # tables of HA's are not read: no view or function of HA's runs, even in the throwaway cluster). Functions and
+        # triggers beside them do not change that.
+        self.world.shape['hapg'] = dict(CLEAN_SHAPE, functions=2, triggers=1, types=1, relations=1,
                                         defaults=CLEAN_SHAPE['defaults'] + ["pg_read_file('/etc/passwd'::text)"])
-        result = self.check(self.upload_nextcloud(), ['nextcloud'])[0]
-        self.assertFalse(result['ok'])
-        self.assertEqual(len(result['blockers']), 1, result['blockers'])
-        for part in ('Nextcloud 不會建立、這台也無法略過的資料庫物件', '函式', '觸發程序', '不是固定值的欄位預設值', '無法安全地搬過來'):
-            self.assertIn(part, result['blockers'][0])
+        row = self.check(self.upload_nextcloud(), ['nextcloud'])[0]
+        self.assertFalse(row['importable'])
+        stops = [i for i in row['issues'] if i['level'] == 'stop']
+        self.assertEqual([i['id'] for i in stops], ['nextcloud.db-objects'])
+        for part in ('Nextcloud 不會建立、這台也無法略過的資料庫物件', '自訂資料型別', '檢視表或其他特殊資料表',
+                     '不是固定值的欄位預設值', '無法安全地搬過來'):
+            self.assertIn(part, stops[0]['message'])
+        for part in ('函式', '觸發程序'):
+            self.assertNotIn(part, stops[0]['message'], 'they alone would be left out')
+        self.assertIsNone(issue_of(row, 'nextcloud.db-objects-skipped'), 'nothing is moved: nothing to confirm')
         ha = [x for x in self.world.sessions if x['role'] == 'hapg' and x['tool'] == 'psql']
         self.assertTrue(ha and all(x['env'].get('PGOPTIONS') == '-c search_path=pg_catalog' for x in ha))
         self.assertFalse([x for x in ha if 'public.oc_' in x['sql']], 'no table of HA is read')
+        self.assertFalse([x for x in ha if x['sql'] == nc.OBJECTS_SQL], 'the names are only read when they are left out')
+        for key in ('rules', 'policies', 'operators', 'checks', 'generated', 'inherits', 'others', 'tablespaces',
+                    'event_triggers'):
+            with self.subTest(key=key):
+                self.world.shape['hapg'] = dict(CLEAN_SHAPE, functions=1, **{key: 1})
+                row = self.check(self.upload_nextcloud(), ['nextcloud'])[0]
+                self.assertFalse(row['importable'], key)
+                self.assertEqual([i['id'] for i in row['issues'] if i['level'] == 'stop'], ['nextcloud.db-objects'])
+
+    def test_functions_and_triggers_of_other_apps_are_left_out_and_listed(self):
+        # NC-38 and NC-45: Memories makes a function and a trigger. Programs are not moved (they would run as Nextcloud's
+        # database role), the tables and their data are, and the customer is told which; the second gate (the list of the
+        # dump) leaves out exactly the kinds that were confirmed.
+        self.world.shape['hapg'] = dict(CLEAN_SHAPE, functions=1, triggers=1)
+        self.world.objects = {'functions': ['public.memories_f'], 'triggers': ['oc_filecache.memories_t']}
+        self.world.toc = toc_of('201; 1259 16390 TABLE public oc_users nextcloud',
+                                '202; 1255 16400 FUNCTION public memories_f() nextcloud',
+                                '203; 2620 16401 TRIGGER public oc_filecache memories_t nextcloud',
+                                '204; 0 0 COMMENT public FUNCTION memories_f() nextcloud',
+                                '205; 0 0 COMMENT public TRIGGER memories_t ON oc_filecache nextcloud',
+                                '206; 0 0 COMMENT public COLUMN oc_users.uid nextcloud',
+                                '207; 0 16390 TABLE DATA public oc_users nextcloud')
+        row, result = self.confirm_flow('nextcloud.db-objects-skipped', self.upload_nextcloud(),
+                                        items=['函式 public.memories_f', '觸發程序 oc_filecache.memories_t'], spoken='不會搬過來',
+                                        clusters=('nc-db',))
+        self.assertTrue(row['importable'])
+        self.assertIn('Memories', issue_of(row, 'nextcloud.db-objects-skipped')['message'])
+        listing = self.world.container_files.files[('nc-db', '/tmp/woowbk-nc.toc')].decode()
+        self.assertEqual([line.split(' ', 3)[3].split(' ')[0] for line in listing.splitlines() if line[:1].isdigit()],
+                         ['TABLE', 'COMMENT', 'TABLE'], 'the tables, the comment on a column and the data stay')
+        self.assertNotIn('memories', listing)
+        self.assertEqual(result['results'][0]['status'], 'converted')
+        # one more program is one more name: it asks again
+        self.world.objects = {'functions': ['public.memories_f', 'public.other_f'], 'triggers': ['oc_filecache.memories_t']}
+        with self.assertRaises(BackupError) as caught:
+            self.convert(self.upload_nextcloud(), ['nextcloud'], acknowledged=ack(row, 'nextcloud.db-objects-skipped'))
+        self.assertEqual(caught.exception.code, 'confirmation-required')
+
+    def test_the_dump_may_not_hold_more_than_was_confirmed(self):
+        # NC-45, second gate: confirmed are the kinds the check showed; any other kind that Nextcloud never creates stops
+        self.world.shape['hapg'] = dict(CLEAN_SHAPE, functions=1)
+        self.world.objects = {'functions': ['public.f'], 'triggers': []}
+        for lines, kinds in ((('201; 1259 16390 TABLE public oc_users nextcloud', '202; 1255 16400 FUNCTION public f() nextcloud',
+                               '205; 2617 16403 OPERATOR public = nextcloud'), ('OPERATOR',)),
+                             (('201; 1259 16390 TABLE public oc_users nextcloud', '204; 1259 16402 VIEW public v nextcloud'),
+                              ('VIEW',))):
+            with self.subTest(kinds=kinds):
+                self.world.toc = toc_of(*lines)
+                row = self.check(self.upload_nextcloud(), ['nextcloud'])[0]
+                seen = len(self.world.execs)
+                with self.assertRaises(BackupError) as caught:
+                    self.convert(self.upload_nextcloud(), ['nextcloud'], acknowledged=ack(row, 'nextcloud.db-objects-skipped'))
+                self.assertEqual(caught.exception.code, 'incompatible')
+                self.assertIn(kinds[0], caught.exception.message)
+                self.assertFalse([c for r, c, _d in self.world.execs[seen:] if c[:1] == ['pg_restore'] and '-U' in c])
+
+    def test_a_program_that_stays_in_the_new_cluster_stops_the_conversion(self):
+        # the shape of the NEW cluster is read again after the restore: nothing of HA's may be left there
+        self.world.shape['hapg'] = dict(CLEAN_SHAPE, functions=1)
+        self.world.objects = {'functions': ['public.f'], 'triggers': []}
+        row = self.check(self.upload_nextcloud(), ['nextcloud'])[0]
+        self.world.shape['nc-db'] = dict(CLEAN_SHAPE, functions=1)
+        with self.assertRaises(BackupError) as caught:
+            self.convert(self.upload_nextcloud(), ['nextcloud'], acknowledged=ack(row, 'nextcloud.db-objects-skipped'))
+        self.assertEqual(caught.exception.code, 'incompatible')
+        self.assertIn('函式', caught.exception.message)
+        sql = '\n'.join(x['sql'] for x in self.world.sessions if x['role'] == 'nc-db')
+        self.assertNotIn('UPDATE public.oc_storages', sql)
+
+    def test_an_extension_this_devices_image_has_is_enabled_first(self):
+        # NC-39
+        self.world.ha_details = dict(self.world.ha_details, extensions=['plpgsql', 'pg_trgm', 'uuid-ossp'])
+        row = self.check(self.upload_nextcloud(), ['nextcloud'])[0]
+        issue = issue_of(row, 'nextcloud.extension-enabled')
+        self.assertEqual((row['ok'], issue['level'], issue['items']), (True, 'auto', ['pg_trgm', 'uuid-ossp']))
+        self.world.catalog = {'owners': ['oc_admin'], 'verifier_md5': hashlib.md5(VERIFIER.encode()).hexdigest(),
+                              'role': {k: v for k, v in LIVE_DB['role'].items() if k != 'password'}, 'role_settings': 0,
+                              'grants': 0, 'databases': ['nextcloud', 'postgres', 'template0', 'template1'],
+                              **{key: LIVE_DB[key] for key in ('roles', 'datacl', 'nspacl')},
+                              'extensions': ['pg_trgm', 'plpgsql', 'uuid-ossp', 'vector']}
+        self.convert(self.upload_nextcloud(), ['nextcloud'])
+        joined = '\n'.join(script for _db, script, _tx in self.world.psql['nc-db'].executed)
+        for name in ('"vector"', '"pg_trgm"', '"uuid-ossp"'):
+            self.assertIn(f'CREATE EXTENSION IF NOT EXISTS {name}', joined)
+        self.assertLess(joined.index('CREATE EXTENSION IF NOT EXISTS "pg_trgm"'), joined.index('UPDATE public.oc_storages'))
+        # the catalog says the extension is not there afterwards: the verification stops it
+        self.world.catalog = dict(self.world.catalog, extensions=['plpgsql', 'vector'])
+        with self.assertRaises(BackupError) as caught:
+            self.convert(self.upload_nextcloud(), ['nextcloud'])
+        self.assertIn('擴充功能和這台的不同', caught.exception.message)
+
+    def test_an_extension_this_devices_image_does_not_have_stops_only_nextcloud(self):
+        # NC-39: the columns that need it could not be put in: refused, the name is shown
+        self.world.ha_details = dict(self.world.ha_details, extensions=['plpgsql', 'pg_trgm', 'postgis'])
+        row = self.check(self.upload_nextcloud(), ['nextcloud'])[0]
+        issue = issue_of(row, 'nextcloud.extension-missing')
+        self.assertEqual((row['importable'], issue['level'], issue['items']), (False, 'stop', ['postgis']))
+        self.assertEqual(issue_of(row, 'nextcloud.extension-enabled')['items'], ['pg_trgm'])
+        self.assertTrue(issue['action'])
+        with self.assertRaises(BackupError) as caught:
+            self.convert(self.upload_nextcloud(), ['nextcloud'])
+        self.assertEqual(caught.exception.code, 'incompatible')
+        self.assertFalse(self.runs('nc-db'))
+
+    def test_only_the_schema_public_is_moved(self):
+        # NC-40: another schema is left out and listed; the dump is of public only. Without one the dump is the plain one.
+        def dump_args():
+            return [c for r, c, _d in self.world.execs if r == 'hapg' and c[:1] == ['pg_dump']][-1]
+
+        self.convert(self.upload_nextcloud(), ['nextcloud'])
+        self.assertNotIn('-n', dump_args())
+        self.world.ha_details = dict(self.world.ha_details, schemas=['memories', 'x y'])
+        row, result = self.confirm_flow('nextcloud.schemas-skipped', self.upload_nextcloud(), items=['memories', 'x y'],
+                                        spoken='只搬 public', clusters=('nc-db',))
+        self.assertEqual(dump_args()[-2:], ['-n', 'public'])
+        self.assertEqual(result['results'][0]['status'], 'converted')
+        self.world.ha_details = dict(self.world.ha_details, schemas=['memories', 'x y', 'more'])
+        with self.assertRaises(BackupError) as caught:
+            self.convert(self.upload_nextcloud(), ['nextcloud'], acknowledged=ack(row, 'nextcloud.schemas-skipped'))
+        self.assertEqual(caught.exception.code, 'confirmation-required')
 
     def test_an_unreadable_database_shape_is_refused(self):
         for shape in (None, dict(CLEAN_SHAPE, triggers='1'), {k: v for k, v in CLEAN_SHAPE.items() if k != 'rules'}):
