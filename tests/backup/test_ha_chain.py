@@ -956,6 +956,16 @@ class CancelTests(ChainCase):
                          ('converted', 'cancelled', backup_id(1), None, self.first))
         self.assertEqual(row['message'], hachain.CANCELLED_RESTORE)
 
+    def test_a_first_job_that_is_cancelled_before_it_starts_answers_with_its_results(self):
+        self.start_chain()
+        jobs.cancel_job(self.paths, self.first, wait_seconds=0)
+        first = self.run_chain()
+        self.assertEqual((first['state'], self.script.events), ('cancelled', []))
+        results = first['result']['group']['results']
+        self.assertEqual({row['app_id']: row['status'] for row in results}, {app: 'not-started' for app in APPS})
+        self.assertEqual({row['code'] for row in results}, {'cancelled'})
+        self.assertEqual(len(self.records()), 1)
+
     def test_stop_after_this_app_lets_its_restore_run(self):
         self.answers = []
         self.script.before[('convert', 'n8n')] = lambda ctx, params: self.answers.append(

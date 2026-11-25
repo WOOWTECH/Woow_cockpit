@@ -1620,6 +1620,7 @@ class _Run:
             if outcome == 'cancelled' and self.follow and hachain.in_chain(reporter.record):
                 with contextlib.suppress(Exception):  # the record is finished: only what the import did so far is added
                     hachain.unstarted(self.paths, store, reporter.record)
+                    reporter.record = store.get(job_id)
             return reporter.record, None
         key_file = store.key_path(job_id) if first else self.key_file
         ctx = flows.FlowContext(self.paths, job_id, self.deps, reporter,
