@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import posixpath
 import re
+import shutil
 import signal
 import stat
 import subprocess
@@ -1212,13 +1213,478 @@ class ScheduleTimerContract(HostFixture):
         self.assertIn(f'{manage.UNIT_DIR}/', planned['directories'])
 
 
+# What the real apt-get 2.8.4 wrote in the C locale: {case: (update, install)}, each (exit code, stdout, stderr). Recorded
+# 2026-11-25 with the exact argv of manage.HostTools in a private unprivileged apt root (local repository, dpkg replaced by a
+# stub; host names, ports and paths replaced), every line as apt wrote it. The raw files and the script that made them:
+# tests/backup/evidence/parity-pkg-20261125/real-apt/.
+APT_RECORDED = {
+    'offline-no-index': (
+        (0,
+         'Ign:1 http://repo.example:80/ubuntu ./ InRelease\n'
+         'Err:1 http://repo.example:80/ubuntu ./ InRelease\n'
+         '  Could not connect to repo.example:80 (192.0.2.1). - connect (111: Connection refused)\n'
+         'Reading package lists...\n',
+         'W: Failed to fetch http://repo.example:80/ubuntu/./InRelease  Could not connect to repo.example:80 (192.0.2.1). - connect (111: Connection refused)\n'
+         'W: Some index files failed to download. They have been ignored, or old ones used instead.\n'),
+        (100,
+         'Reading package lists...\n'
+         'Building dependency tree...\n',
+         'E: Unable to locate package age\n'
+         'E: Unable to locate package zstd\n'
+         'E: Unable to locate package python3-nacl\n'
+         'E: Unable to locate package python3-cryptography\n')),
+    'offline-dns': (
+        (0,
+         'Ign:1 http://no-such-host.invalid/ubuntu ./ InRelease\n'
+         'Err:1 http://no-such-host.invalid/ubuntu ./ InRelease\n'
+         "  Could not resolve 'no-such-host.invalid'\n"
+         'Reading package lists...\n',
+         "W: Failed to fetch http://no-such-host.invalid/ubuntu/./InRelease  Could not resolve 'no-such-host.invalid'\n"
+         'W: Some index files failed to download. They have been ignored, or old ones used instead.\n'),
+        (100,
+         'Reading package lists...\n'
+         'Building dependency tree...\n',
+         'E: Unable to locate package age\n'
+         'E: Unable to locate package zstd\n'
+         'E: Unable to locate package python3-nacl\n'
+         'E: Unable to locate package python3-cryptography\n')),
+    'offline-old-index': (
+        (0,
+         'Ign:1 http://repo.example:80 ./ InRelease\n'
+         'Err:1 http://repo.example:80 ./ InRelease\n'
+         '  Could not connect to repo.example:80 (192.0.2.1). - connect (111: Connection refused)\n'
+         'Reading package lists...\n',
+         'W: Failed to fetch http://repo.example:80/./InRelease  Could not connect to repo.example:80 (192.0.2.1). - connect (111: Connection refused)\n'
+         'W: Some index files failed to download. They have been ignored, or old ones used instead.\n'),
+        (100,
+         'Reading package lists...\n'
+         'Building dependency tree...\n'
+         'The following NEW packages will be installed:\n'
+         '  age python3-cryptography python3-nacl zstd\n'
+         '0 upgraded, 4 newly installed, 0 to remove and 0 not upgraded.\n'
+         'Need to get 2468 B of archives.\n'
+         'After this operation, 0 B of additional disk space will be used.\n'
+         'Ign:1 http://repo.example:80 ./ age 1.1.1-1\n'
+         'Ign:2 http://repo.example:80 ./ python3-cryptography 41.0.7-4\n'
+         'Ign:3 http://repo.example:80 ./ python3-nacl 1.5.0-4\n'
+         'Ign:4 http://repo.example:80 ./ zstd 1.5.5-1\n'
+         'Err:1 http://repo.example:80 ./ age 1.1.1-1\n'
+         '  Could not connect to repo.example:80 (192.0.2.1). - connect (111: Connection refused)\n'
+         'Err:2 http://repo.example:80 ./ python3-cryptography 41.0.7-4\n'
+         '  Unable to connect to repo.example:80:\n'
+         'Err:3 http://repo.example:80 ./ python3-nacl 1.5.0-4\n'
+         '  Unable to connect to repo.example:80:\n'
+         'Err:4 http://repo.example:80 ./ zstd 1.5.5-1\n'
+         '  Unable to connect to repo.example:80:\n',
+         'E: Failed to fetch http://repo.example:80/./age_1.1.1-1_all.deb  Could not connect to repo.example:80 (192.0.2.1). - connect (111: Connection refused)\n'
+         'E: Failed to fetch http://repo.example:80/./python3-cryptography_41.0.7-4_all.deb  Unable to connect to repo.example:80:\n'
+         'E: Failed to fetch http://repo.example:80/./python3-nacl_1.5.0-4_all.deb  Unable to connect to repo.example:80:\n'
+         'E: Failed to fetch http://repo.example:80/./zstd_1.5.5-1_all.deb  Unable to connect to repo.example:80:\n'
+         'E: Unable to fetch some archives, maybe run apt-get update or try with --fix-missing?\n')),
+    'dists-offline-old-index': (
+        (0,
+         'Ign:1 http://repo.example:80/ubuntu noble InRelease\n'
+         'Err:1 http://repo.example:80/ubuntu noble InRelease\n'
+         '  Could not connect to repo.example:80 (192.0.2.1). - connect (111: Connection refused)\n'
+         'Reading package lists...\n',
+         'W: Failed to fetch http://repo.example:80/ubuntu/dists/noble/InRelease  Could not connect to repo.example:80 (192.0.2.1). - connect (111: Connection refused)\n'
+         'W: Some index files failed to download. They have been ignored, or old ones used instead.\n'),
+        (100,
+         'Reading package lists...\n'
+         'Building dependency tree...\n'
+         'The following NEW packages will be installed:\n'
+         '  age python3-cryptography python3-nacl zstd\n'
+         '0 upgraded, 4 newly installed, 0 to remove and 0 not upgraded.\n'
+         'Need to get 2464 B of archives.\n'
+         'After this operation, 0 B of additional disk space will be used.\n'
+         'Ign:1 http://repo.example:80/ubuntu noble/universe amd64 age all 1.1.1-1\n'
+         'Ign:2 http://repo.example:80/ubuntu noble/main amd64 python3-cryptography all 41.0.7-4\n'
+         'Ign:3 http://repo.example:80/ubuntu noble/main amd64 python3-nacl all 1.5.0-4\n'
+         'Ign:4 http://repo.example:80/ubuntu noble/main amd64 zstd all 1.5.5-1\n'
+         'Err:1 http://repo.example:80/ubuntu noble/universe amd64 age all 1.1.1-1\n'
+         '  Could not connect to repo.example:80 (192.0.2.1). - connect (111: Connection refused)\n'
+         'Err:2 http://repo.example:80/ubuntu noble/main amd64 python3-cryptography all 41.0.7-4\n'
+         '  Unable to connect to repo.example:80:\n'
+         'Err:3 http://repo.example:80/ubuntu noble/main amd64 python3-nacl all 1.5.0-4\n'
+         '  Unable to connect to repo.example:80:\n'
+         'Err:4 http://repo.example:80/ubuntu noble/main amd64 zstd all 1.5.5-1\n'
+         '  Unable to connect to repo.example:80:\n',
+         'E: Failed to fetch http://repo.example:80/ubuntu/pool/universe/age_1.1.1-1_all.deb  Could not connect to repo.example:80 (192.0.2.1). - connect (111: Connection refused)\n'
+         'E: Failed to fetch http://repo.example:80/ubuntu/pool/main/python3-cryptography_41.0.7-4_all.deb  Unable to connect to repo.example:80:\n'
+         'E: Failed to fetch http://repo.example:80/ubuntu/pool/main/python3-nacl_1.5.0-4_all.deb  Unable to connect to repo.example:80:\n'
+         'E: Failed to fetch http://repo.example:80/ubuntu/pool/main/zstd_1.5.5-1_all.deb  Unable to connect to repo.example:80:\n'
+         'E: Unable to fetch some archives, maybe run apt-get update or try with --fix-missing?\n')),
+    'proxy-407': (
+        (100,
+         'Ign:1 http://repo.example:80 ./ InRelease\n'
+         'Ign:2 http://repo.example:80 ./ Release\n'
+         'Ign:3 http://repo.example:80 ./ Packages\n'
+         'Ign:4 http://repo.example:80 ./ Translation-en\n'
+         'Ign:3 http://repo.example:80 ./ Packages\n'
+         'Ign:4 http://repo.example:80 ./ Translation-en\n'
+         'Ign:3 http://repo.example:80 ./ Packages\n'
+         'Ign:4 http://repo.example:80 ./ Translation-en\n'
+         'Ign:3 http://repo.example:80 ./ Packages\n'
+         'Ign:4 http://repo.example:80 ./ Translation-en\n'
+         'Ign:3 http://repo.example:80 ./ Packages\n'
+         'Ign:4 http://repo.example:80 ./ Translation-en\n'
+         'Ign:3 http://repo.example:80 ./ Packages\n'
+         'Ign:4 http://repo.example:80 ./ Translation-en\n'
+         'Err:3 http://repo.example:80 ./ Packages\n'
+         '  407  Proxy Authentication Required [IP: 192.0.2.2 80]\n'
+         'Ign:4 http://repo.example:80 ./ Translation-en\n'
+         'Reading package lists...\n',
+         'E: Failed to fetch http://repo.example:80/./Packages  407  Proxy Authentication Required [IP: 192.0.2.2 80]\n'
+         'E: Some index files failed to download. They have been ignored, or old ones used instead.\n'),
+        (100,
+         'Reading package lists...\n'
+         'Building dependency tree...\n',
+         'E: Unable to locate package age\n'
+         'E: Unable to locate package zstd\n'
+         'E: Unable to locate package python3-nacl\n'
+         'E: Unable to locate package python3-cryptography\n')),
+    'captive-portal': (
+        (100,
+         'Get:1 http://repo.example:80 ./ InRelease [39 B]\n'
+         'Err:1 http://repo.example:80 ./ InRelease\n'
+         "  Clearsigned file isn't valid, got 'NOSPLIT' (does the network require authentication?)\n"
+         'Reading package lists...\n',
+         "E: Failed to fetch http://repo.example:80/./InRelease  Clearsigned file isn't valid, got 'NOSPLIT' (does the network require authentication?)\n"
+         "E: The repository 'http://repo.example:80 ./ InRelease' is not signed.\n"),
+        (100,
+         'Reading package lists...\n'
+         'Building dependency tree...\n',
+         'E: Unable to locate package age\n'
+         'E: Unable to locate package zstd\n'
+         'E: Unable to locate package python3-nacl\n'
+         'E: Unable to locate package python3-cryptography\n')),
+    'dists-universe-off': (
+        (0,
+         'Ign:1 http://repo.example:80/ubuntu noble InRelease\n'
+         'Get:2 http://repo.example:80/ubuntu noble Release [1056 B]\n'
+         'Ign:3 http://repo.example:80/ubuntu noble Release.gpg\n'
+         'Get:4 http://repo.example:80/ubuntu noble/main amd64 Packages [1463 B]\n'
+         'Fetched 2519 B in 0s (115 kB/s)\n'
+         'Reading package lists...\n',
+         ''),
+        (100,
+         'Reading package lists...\n'
+         'Building dependency tree...\n',
+         'E: Unable to locate package age\n')),
+    'no-sources': (
+        (0,
+         'Reading package lists...\n',
+         ''),
+        (100,
+         'Reading package lists...\n'
+         'Building dependency tree...\n',
+         'E: Unable to locate package age\n'
+         'E: Unable to locate package zstd\n'
+         'E: Unable to locate package python3-nacl\n'
+         'E: Unable to locate package python3-cryptography\n')),
+    'third-party-404': (
+        (100,
+         'Ign:1 http://third.example:80/thirdparty noble InRelease\n'
+         'Err:2 http://third.example:80/thirdparty noble Release\n'
+         '  404  Not Found [IP: 192.0.2.2 80]\n'
+         'Ign:3 http://repo.example:80 ./ InRelease\n'
+         'Get:4 http://repo.example:80 ./ Release [816 B]\n'
+         'Ign:5 http://repo.example:80 ./ Release.gpg\n'
+         'Get:6 http://repo.example:80 ./ Packages [1438 B]\n'
+         'Reading package lists...\n',
+         "E: The repository 'http://third.example:80/thirdparty noble Release' does not have a Release file.\n"),
+        (100,
+         'Reading package lists...\n'
+         'Building dependency tree...\n',
+         'E: Unable to locate package age\n')),
+    'third-party-down': (
+        (0,
+         'Ign:1 http://third.example:80/thirdparty noble InRelease\n'
+         'Ign:2 http://repo.example:80 ./ InRelease\n'
+         'Get:3 http://repo.example:80 ./ Release [816 B]\n'
+         'Ign:4 http://repo.example:80 ./ Release.gpg\n'
+         'Get:5 http://repo.example:80 ./ Packages [1438 B]\n'
+         'Err:1 http://third.example:80/thirdparty noble InRelease\n'
+         '  Could not connect to third.example:80 (192.0.2.2). - connect (111: Connection refused)\n'
+         'Fetched 2254 B in 1s (2211 B/s)\n'
+         'Reading package lists...\n',
+         'W: Failed to fetch http://third.example:80/thirdparty/dists/noble/InRelease  Could not connect to third.example:80 (192.0.2.2). - connect (111: Connection refused)\n'
+         'W: Some index files failed to download. They have been ignored, or old ones used instead.\n'),
+        (100,
+         'Reading package lists...\n'
+         'Building dependency tree...\n',
+         'E: Unable to locate package age\n')),
+    'sources-unreadable': (
+        (100,
+         '',
+         'E: Malformed entry 1 in list file <root>/etc/sources.list.d/broken.list (Suite)\n'
+         'E: The list of sources could not be read.\n'),
+        (100,
+         '',
+         'E: Malformed entry 1 in list file <root>/etc/sources.list.d/broken.list (Suite)\n'
+         'E: The list of sources could not be read.\n')),
+    'signature-no-key': (
+        (100,
+         'Get:1 http://repo.example:80 ./ InRelease [1020 B]\n'
+         'Err:1 http://repo.example:80 ./ InRelease\n'
+         "  The following signatures couldn't be verified because the public key is not available: NO_PUBKEY 0000000000000000\n"
+         'Reading package lists...\n',
+         "W: GPG error: http://repo.example:80 ./ InRelease: The following signatures couldn't be verified because the public key is not available: NO_PUBKEY 0000000000000000\n"
+         "E: The repository 'http://repo.example:80 ./ InRelease' is not signed.\n"),
+        (100,
+         'Reading package lists...\n'
+         'Building dependency tree...\n',
+         'E: Unable to locate package age\n'
+         'E: Unable to locate package zstd\n'
+         'E: Unable to locate package python3-nacl\n'
+         'E: Unable to locate package python3-cryptography\n')),
+    'release-expired': (
+        (100,
+         'Get:1 http://repo.example:80 ./ InRelease [1063 B]\n'
+         'Reading package lists...\n',
+         'E: Release file for http://repo.example:80/./InRelease is expired (invalid since 1059d 2h 20min 28s). Updates for this repository will not be applied.\n'),
+        (100,
+         'Reading package lists...\n'
+         'Building dependency tree...\n',
+         'E: Unable to locate package age\n'
+         'E: Unable to locate package zstd\n'
+         'E: Unable to locate package python3-nacl\n'
+         'E: Unable to locate package python3-cryptography\n')),
+    'dists-release-expired': (
+        (100,
+         'Get:1 http://repo.example:80/ubuntu noble InRelease [1636 B]\n'
+         'Reading package lists...\n',
+         'E: Release file for http://repo.example:80/ubuntu/dists/noble/InRelease is expired (invalid since 1059d 2h 20min 52s). Updates for this repository will not be applied.\n'),
+        (100,
+         'Reading package lists...\n'
+         'Building dependency tree...\n',
+         'E: Unable to locate package age\n'
+         'E: Unable to locate package zstd\n'
+         'E: Unable to locate package python3-nacl\n'
+         'E: Unable to locate package python3-cryptography\n')),
+    'dists-release-not-valid-yet': (
+        (100,
+         'Get:1 http://repo.example:80/ubuntu noble InRelease [1591 B]\n'
+         'Reading package lists...\n',
+         'E: Release file for http://repo.example:80/ubuntu/dists/noble/InRelease is not valid yet (invalid for another 1497d 21h 38min 58s). Updates for this repository will not be applied.\n'),
+        (100,
+         'Reading package lists...\n'
+         'Building dependency tree...\n',
+         'E: Unable to locate package age\n'
+         'E: Unable to locate package zstd\n'
+         'E: Unable to locate package python3-nacl\n'
+         'E: Unable to locate package python3-cryptography\n')),
+    'locked': (
+        (100,
+         'Reading package lists...\n',
+         'E: Could not get lock <root>/lists/lock. It is held by process 606600 (python3)\n'
+         'E: Unable to lock directory <root>/lists/\n'),
+        (100,
+         'Waiting for cache lock: Could not get lock <root>/dpkg/lock-frontend. It is held by process 606604 (python3)...\n'
+         'Waiting for cache lock: Could not get lock <root>/dpkg/lock-frontend. It is held by process 606604 (python3)...\n',
+         'E: Unable to acquire the dpkg frontend lock (<root>/dpkg/lock-frontend), is another process using it?\n')),
+    'package-gone': (
+        (0,
+         'Ign:1 http://repo.example:80 ./ InRelease\n'
+         'Hit:2 http://repo.example:80 ./ Release\n'
+         'Ign:3 http://repo.example:80 ./ Release.gpg\n'
+         'Reading package lists...\n',
+         ''),
+        (100,
+         'Reading package lists...\n'
+         'Building dependency tree...\n'
+         'The following NEW packages will be installed:\n'
+         '  age python3-cryptography python3-nacl zstd\n'
+         '0 upgraded, 4 newly installed, 0 to remove and 0 not upgraded.\n'
+         'Need to get 2472 B of archives.\n'
+         'After this operation, 0 B of additional disk space will be used.\n'
+         'Err:1 http://repo.example:80 ./ age 1.1.1-1\n'
+         '  404  File not found [IP: 192.0.2.1 80]\n'
+         'Err:2 http://repo.example:80 ./ python3-cryptography 41.0.7-4\n'
+         '  404  File not found [IP: 192.0.2.1 80]\n'
+         'Err:3 http://repo.example:80 ./ python3-nacl 1.5.0-4\n'
+         '  404  File not found [IP: 192.0.2.1 80]\n'
+         'Err:4 http://repo.example:80 ./ zstd 1.5.5-1\n'
+         '  404  File not found [IP: 192.0.2.1 80]\n',
+         'E: Failed to fetch http://repo.example:80/./age_1.1.1-1_all.deb  404  File not found [IP: 192.0.2.1 80]\n'
+         'E: Failed to fetch http://repo.example:80/./python3-cryptography_41.0.7-4_all.deb  404  File not found [IP: 192.0.2.1 80]\n'
+         'E: Failed to fetch http://repo.example:80/./python3-nacl_1.5.0-4_all.deb  404  File not found [IP: 192.0.2.1 80]\n'
+         'E: Failed to fetch http://repo.example:80/./zstd_1.5.5-1_all.deb  404  File not found [IP: 192.0.2.1 80]\n'
+         'E: Unable to fetch some archives, maybe run apt-get update or try with --fix-missing?\n')),
+    'disk-full': (
+        (0,
+         'Ign:1 http://repo.example:80 ./ InRelease\n'
+         'Get:2 http://repo.example:80 ./ Release [483 B]\n'
+         'Ign:3 http://repo.example:80 ./ Release.gpg\n'
+         'Get:4 http://repo.example:80 ./ Packages [1943 B]\n'
+         'Fetched 2426 B in 0s (124 kB/s)\n'
+         'Reading package lists...\n',
+         ''),
+        (100,
+         'Reading package lists...\n'
+         'Building dependency tree...\n'
+         'The following NEW packages will be installed:\n'
+         '  age python3-cryptography python3-nacl zstd\n'
+         '0 upgraded, 4 newly installed, 0 to remove and 0 not upgraded.\n'
+         'Need to get 4000 TB of archives.\n'
+         'After this operation, 0 B of additional disk space will be used.\n',
+         "E: You don't have enough free space in <root>/cache/archives/.\n")),
+    'dpkg-interrupted': (
+        (0,
+         'Ign:1 http://repo.example:80 ./ InRelease\n'
+         'Get:2 http://repo.example:80 ./ Release [483 B]\n'
+         'Ign:3 http://repo.example:80 ./ Release.gpg\n'
+         'Get:4 http://repo.example:80 ./ Packages [1891 B]\n'
+         'Fetched 2374 B in 0s (47.3 kB/s)\n'
+         'Reading package lists...\n',
+         ''),
+        (100,
+         '',
+         "E: dpkg was interrupted, you must manually run 'dpkg --configure -a' to correct the problem. \n")),
+    'held': (
+        (0,
+         'Ign:1 http://repo.example:80 ./ InRelease\n'
+         'Get:2 http://repo.example:80 ./ Release [483 B]\n'
+         'Ign:3 http://repo.example:80 ./ Release.gpg\n'
+         'Get:4 http://repo.example:80 ./ Packages [1891 B]\n'
+         'Fetched 2374 B in 0s (36.8 kB/s)\n'
+         'Reading package lists...\n',
+         ''),
+        (100,
+         'Reading package lists...\n'
+         'Building dependency tree...\n'
+         'The following NEW packages will be installed:\n'
+         '  python3-cryptography python3-nacl zstd\n'
+         'The following held packages will be changed:\n'
+         '  age\n'
+         'The following packages will be upgraded:\n'
+         '  age\n'
+         '1 upgraded, 3 newly installed, 0 to remove and 0 not upgraded.\n',
+         'E: Held packages were changed and -y was used without --allow-change-held-packages.\n')),
+    'conflict': (
+        (0,
+         'Ign:1 http://repo.example:80 ./ InRelease\n'
+         'Get:2 http://repo.example:80 ./ Release [483 B]\n'
+         'Ign:3 http://repo.example:80 ./ Release.gpg\n'
+         'Get:4 http://repo.example:80 ./ Packages [1907 B]\n'
+         'Fetched 2390 B in 0s (51.9 kB/s)\n'
+         'Reading package lists...\n',
+         ''),
+        (100,
+         'Reading package lists...\n'
+         'Building dependency tree...\n'
+         'Some packages could not be installed. This may mean that you have\n'
+         'requested an impossible situation or if you are using the unstable\n'
+         'distribution that some required packages have not yet been created\n'
+         'or been moved out of Incoming.\n'
+         'The following information may help to resolve the situation:\n'
+         '\n'
+         'The following packages have unmet dependencies:\n'
+         ' age : Conflicts: zstd but 1.5.5-1 is to be installed\n',
+         'E: Unable to correct problems, you have held broken packages.\n')),
+    'unmet-dependencies': (
+        (0,
+         'Ign:1 http://repo.example:80 ./ InRelease\n'
+         'Get:2 http://repo.example:80 ./ Release [483 B]\n'
+         'Ign:3 http://repo.example:80 ./ Release.gpg\n'
+         'Get:4 http://repo.example:80 ./ Packages [1923 B]\n'
+         'Fetched 2406 B in 0s (26.4 kB/s)\n'
+         'Reading package lists...\n',
+         ''),
+        (100,
+         'Reading package lists...\n'
+         'Building dependency tree...\n'
+         'Some packages could not be installed. This may mean that you have\n'
+         'requested an impossible situation or if you are using the unstable\n'
+         'distribution that some required packages have not yet been created\n'
+         'or been moved out of Incoming.\n'
+         'The following information may help to resolve the situation:\n'
+         '\n'
+         'The following packages have unmet dependencies:\n'
+         ' age : Depends: woowbk-no-such-library but it is not installable\n',
+         'E: Unable to correct problems, you have held broken packages.\n')),
+    'dpkg-fails': (
+        (0,
+         'Ign:1 http://repo.example:80 ./ InRelease\n'
+         'Get:2 http://repo.example:80 ./ Release [483 B]\n'
+         'Ign:3 http://repo.example:80 ./ Release.gpg\n'
+         'Get:4 http://repo.example:80 ./ Packages [1891 B]\n'
+         'Fetched 2374 B in 0s (42.9 kB/s)\n'
+         'Reading package lists...\n',
+         ''),
+        (100,
+         'Reading package lists...\n'
+         'Building dependency tree...\n'
+         'The following NEW packages will be installed:\n'
+         '  age python3-cryptography python3-nacl zstd\n'
+         '0 upgraded, 4 newly installed, 0 to remove and 0 not upgraded.\n'
+         'Need to get 2470 B of archives.\n'
+         'After this operation, 0 B of additional disk space will be used.\n'
+         'Get:1 http://repo.example:80 ./ age 1.1.1-1 [604 B]\n'
+         'Get:2 http://repo.example:80 ./ python3-cryptography 41.0.7-4 [634 B]\n'
+         'Get:3 http://repo.example:80 ./ python3-nacl 1.5.0-4 [622 B]\n'
+         'Get:4 http://repo.example:80 ./ zstd 1.5.5-1 [610 B]\n'
+         'Fetched 2470 B in 0s (84.6 kB/s)\n',
+         'E: Sub-process <root>/dpkg-stub returned an error code (1)\n')),
+    'damaged-offline-no-index': (
+        (0,
+         'Ign:1 http://repo.example:80/ubuntu ./ InRelease\n'
+         'Err:1 http://repo.example:80/ubuntu ./ InRelease\n'
+         '  Could not connect to repo.example:80 (192.0.2.1). - connect (111: Connection refused)\n'
+         'Reading package lists...\n',
+         'W: Failed to fetch http://repo.example:80/ubuntu/./InRelease  Could not connect to repo.example:80 (192.0.2.1). - connect (111: Connection refused)\n'
+         'W: Some index files failed to download. They have been ignored, or old ones used instead.\n'),
+        (0,
+         'Reading package lists...\n'
+         'Building dependency tree...\n'
+         'Reinstallation of age is not possible, it cannot be downloaded.\n'
+         'Reinstallation of zstd is not possible, it cannot be downloaded.\n'
+         'Reinstallation of python3-nacl is not possible, it cannot be downloaded.\n'
+         'Reinstallation of python3-cryptography is not possible, it cannot be downloaded.\n'
+         '0 upgraded, 0 newly installed, 0 to remove and 0 not upgraded.\n',
+         '')),
+    'damaged-offline-old-index': (
+        (0,
+         'Ign:1 http://repo.example:80 ./ InRelease\n'
+         'Err:1 http://repo.example:80 ./ InRelease\n'
+         '  Could not connect to repo.example:80 (192.0.2.1). - connect (111: Connection refused)\n'
+         'Reading package lists...\n',
+         'W: Failed to fetch http://repo.example:80/./InRelease  Could not connect to repo.example:80 (192.0.2.1). - connect (111: Connection refused)\n'
+         'W: Some index files failed to download. They have been ignored, or old ones used instead.\n'),
+        (100,
+         'Reading package lists...\n'
+         'Building dependency tree...\n'
+         '0 upgraded, 0 newly installed, 4 reinstalled, 0 to remove and 0 not upgraded.\n'
+         'Need to get 2470 B of archives.\n'
+         'After this operation, 0 B of additional disk space will be used.\n'
+         'Ign:1 http://repo.example:80 ./ age 1.1.1-1\n'
+         'Ign:2 http://repo.example:80 ./ python3-cryptography 41.0.7-4\n'
+         'Ign:3 http://repo.example:80 ./ python3-nacl 1.5.0-4\n'
+         'Ign:4 http://repo.example:80 ./ zstd 1.5.5-1\n'
+         'Err:1 http://repo.example:80 ./ age 1.1.1-1\n'
+         '  Could not connect to repo.example:80 (192.0.2.1). - connect (111: Connection refused)\n'
+         'Err:2 http://repo.example:80 ./ python3-cryptography 41.0.7-4\n'
+         '  Unable to connect to repo.example:80:\n'
+         'Err:3 http://repo.example:80 ./ python3-nacl 1.5.0-4\n'
+         '  Unable to connect to repo.example:80:\n'
+         'Err:4 http://repo.example:80 ./ zstd 1.5.5-1\n'
+         '  Unable to connect to repo.example:80:\n',
+         'E: Failed to fetch http://repo.example:80/./age_1.1.1-1_all.deb  Could not connect to repo.example:80 (192.0.2.1). - connect (111: Connection refused)\n'
+         'E: Failed to fetch http://repo.example:80/./python3-cryptography_41.0.7-4_all.deb  Unable to connect to repo.example:80:\n'
+         'E: Failed to fetch http://repo.example:80/./python3-nacl_1.5.0-4_all.deb  Unable to connect to repo.example:80:\n'
+         'E: Failed to fetch http://repo.example:80/./zstd_1.5.5-1_all.deb  Unable to connect to repo.example:80:\n'
+         'E: Unable to fetch some archives, maybe run apt-get update or try with --fix-missing?\n')),
+}
+
+
 class FakeHost:
     """The device behind `manage.HostTools` (its runner): the tools that do not work and what apt-get does about it.
-    `adds`: the packages apt can add; `code`, `update`, `error`: how apt-get answers; `seen(argv)`: before it acts."""
+    `adds`: the packages apt can add; `update` and `install`: (exit code, stdout, stderr) of the two apt-get runs;
+    `seen(argv)`: called before apt-get acts (another package job may change files meanwhile)."""
 
-    def __init__(self, broken=(), *, adds=manage.TOOL_PACKAGES, code=0, update='', error='', seen=lambda argv: None):
-        self.broken, self.adds = set(broken), set(adds)
-        self.code, self.update, self.error, self.seen = code, update, error, seen
+    def __init__(self, broken=(), *, adds=manage.TOOL_PACKAGES, update=(0, '', ''), install=(0, '', ''),
+                 seen=lambda argv: None):
+        self.broken, self.adds, self.update, self.install, self.seen = set(broken), set(adds), update, install, seen
         self.apt = []
 
     def __call__(self, argv):
@@ -1228,27 +1694,49 @@ class FakeHost:
         self.seen(argv)
         self.apt.append(argv)
         if argv == list(manage.APT_UPDATE):
-            return 0, '', self.update  # apt-get update ends with 0 when it is offline (apt 2.8.4)
+            return self.update
         wanted = set(argv[len(manage.APT_INSTALL):])
         assert wanted and wanted <= set(manage.TOOL_PACKAGES), argv
         self.broken -= {tool for tool, package, _probe in manage.HOST_TOOLS if package in wanted & self.adds}
-        return self.code, '', self.error
+        return self.install
+
+
+ALL_TOOLS = tuple(tool for tool, _package, _probe in manage.HOST_TOOLS)
+
+
+def recorded(case, **options):
+    """A device whose tools are all missing and whose apt-get answers as it did in APT_RECORDED[case]."""
+    update, install = APT_RECORDED[case]
+    return FakeHost(ALL_TOOLS, adds=(), update=update, install=install, **options)
 
 
 class HostToolsContract(HostFixture):
     """Rows KEY-14, KEY-15, X-AR-06 and X-KEY-02 of the HA import (on HAOS the tools are simply there): the packages the
-    backup engine needs come with it. An install on the live root adds missing ones with apt before it changes a file
-    and is refused only when that fails; plan and status report them; --no-backup and --root run nothing. Without its
-    tools the engine itself still stops."""
+    backup engine needs come with it. An install on the live root adds missing ones with apt before it changes a file;
+    when that does not work it goes on all the same and says what is missing, why and what does not work meanwhile (an
+    offline device is not refused its update); plan and status report them; --no-backup and --root run nothing. Without
+    its tools the engine itself still stops."""
 
     # row: (the tool that does not work, the package that brings it)
     ROWS = {'KEY-14': ('python3-nacl', 'python3-nacl'), 'KEY-15': ('python3-cryptography', 'python3-cryptography'),
             'X-AR-06 age': ('age', 'age'), 'X-AR-06 zstd': ('zstd', 'zstd'), 'X-KEY-02': ('age-keygen', 'age')}
-    # What apt 2.8.4 writes offline (recorded with a private apt root, 2026-11-25; host names replaced).
-    OFFLINE_UPDATE = ('W: Failed to fetch http://archive.example/ubuntu/dists/noble/InRelease  Could not resolve '
-                      "'archive.example'\nW: Some index files failed to download. They have been ignored, or old ones "
-                      'used instead.\n')
-    NO_PACKAGE = 'E: Unable to locate package age\n'
+    # recorded case -> what the reason in the notice must say (the sentence of manage.py, or parts of it)
+    REASONS = {
+        'offline-no-index': [manage.OFFLINE], 'offline-dns': [manage.OFFLINE], 'offline-old-index': [manage.OFFLINE],
+        'dists-offline-old-index': [manage.OFFLINE], 'proxy-407': [manage.OFFLINE], 'captive-portal': [manage.OFFLINE],
+        'damaged-offline-no-index': [manage.OFFLINE], 'damaged-offline-old-index': [manage.OFFLINE],
+        'dists-universe-off': ['這台啟用的套件來源沒有 age', 'sudo add-apt-repository universe'],
+        'no-sources': ['這台啟用的套件來源沒有 age、zstd、python3-nacl、python3-cryptography', 'main 與 universe 都要啟用'],
+        'third-party-404': ['有套件來源無法更新（網址不存在），其他來源沒有 age', '也請確認已啟用 universe'],
+        'third-party-down': ['有套件來源無法更新（連不上），其他來源沒有 age', '也請確認已啟用 universe'],
+        'sources-unreadable': ['套件來源的設定檔有錯', 'sources.list.d'],
+        'signature-no-key': [manage.SIGNATURE], 'release-expired': [manage.SIGNATURE],
+        'dists-release-expired': [manage.SIGNATURE], 'dists-release-not-valid-yet': [manage.SIGNATURE],
+        'locked': ['另一個套件作業（例如系統自動更新）正在進行'], 'package-gone': [manage.GONE],
+        'disk-full': ['磁碟空間不足'], 'dpkg-interrupted': ['sudo dpkg --configure -a'],
+        'held': ['套件被鎖定（apt-mark hold）'], 'conflict': [manage.CONFLICT_REASON],
+        'unmet-dependencies': ['相依的套件湊不齊'], 'dpkg-fails': ['原因不明（apt-get 結束碼 100）'],
+    }
     add_source = BackupPackageContract.add_source
     add_backup_source = BackupPackageContract.add_backup_source
     tree = BackupPackageContract.tree
@@ -1257,18 +1745,31 @@ class HostToolsContract(HostFixture):
         super().setUp()
         self.add_backup_source()
 
+    def reset(self):
+        """The device as it was before any install (a fresh one for the next case of a loop)."""
+        shutil.rmtree(self.root)
+        for name, (data, file_mode) in self.original.items():
+            path = self.root / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(data)
+            path.chmod(file_mode)
+
     def live(self, host, systemctl=None, **options):
-        """An install as on the live root: `host` answers for the tools, `systemctl` for the timer."""
+        """An install as on the live root (what main() does): `host` answers for the tools, `systemctl` for the timer;
+        the plan is made again after the packages step."""
         desired, state = manage.desired_files(self.root, **options)
         self.notes = io.StringIO()
         with contextlib.redirect_stderr(self.notes):
-            return manage.install(self.root, desired, state, tools=manage.HostTools(host),
-                                  systemd=manage.Systemd(systemctl) if systemctl else None)
+            return manage.install_with_tools(self.root, desired, state, lambda: manage.desired_files(self.root, **options),
+                                             systemd=manage.Systemd(systemctl) if systemctl else None,
+                                             tools=manage.HostTools(host))
 
-    def main(self, *args):
-        """manage.main() on the fixture root: (exit code, its JSON, stderr)."""
+    def main(self, *args, host=None):
+        """manage.main() on the fixture root: (exit code, its JSON, stderr); `host` answers for the tools."""
         out, err = io.StringIO(), io.StringIO()
+        tools = (lambda root, engine, tools=None: manage.HostTools(host) if engine else None) if host else manage.engine_tools
         with (patch.object(sys, 'argv', ['manage.py', '--root', str(self.root), *args]),
+              patch.object(manage, 'engine_tools', tools),
               contextlib.redirect_stdout(out), contextlib.redirect_stderr(err)):
             code = manage.main()
         return code, json.loads(out.getvalue()), err.getvalue()
@@ -1290,12 +1791,75 @@ class HostToolsContract(HostFixture):
             self.assertIn(f'from {module}\n', source)
             self.assertEqual(sum(module in probe[-1] for _tool, _package, probe in manage.HOST_TOOLS), 1, module)
 
+    # What each Python probe needs from its package: (file, the name defined there). The stand-in tree is complete or lacks one.
+    STAND_IN = {
+        'python3-nacl': {
+            'nacl/__init__.py': '', 'nacl/bindings.py': 'crypto_secretstream_xchacha20poly1305_init_pull = 1\n',
+            'nacl/exceptions.py': 'class CryptoError(Exception): pass\n', 'nacl/pwhash/__init__.py': '',
+            'nacl/pwhash/argon2id.py': 'def kdf(*args): pass\n'},
+        'python3-cryptography': {
+            'cryptography/__init__.py': '', 'cryptography/hazmat/__init__.py': '',
+            'cryptography/hazmat/primitives/__init__.py': '',
+            'cryptography/hazmat/primitives/ciphers/__init__.py': (
+                'class Cipher:\n    def __init__(self, algorithm, mode): pass\n    def decryptor(self): return self\n'
+                '    def update(self, data): return data\n'
+                'class algorithms:\n    AES = staticmethod(lambda key: key)\n'
+                'class modes:\n    CBC = staticmethod(lambda iv: iv)\n')},
+    }
+    STAND_IN_NAMES = {
+        'python3-nacl': (('nacl/bindings.py', 'crypto_secretstream_xchacha20poly1305_init_pull'),
+                         ('nacl/exceptions.py', 'CryptoError'), ('nacl/pwhash/argon2id.py', 'kdf')),
+        'python3-cryptography': (('cryptography/hazmat/primitives/ciphers/__init__.py', 'Cipher'),
+                                 ('cryptography/hazmat/primitives/ciphers/__init__.py', 'algorithms'),
+                                 ('cryptography/hazmat/primitives/ciphers/__init__.py', 'modes')),
+    }
+
+    def run_probe(self, probe, files):
+        """The probe code, run by an isolated interpreter (-I), with a package tree made of `files` in front."""
+        with tempfile.TemporaryDirectory() as directory:
+            for name, text in files.items():
+                path = Path(directory) / name
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(text)
+            code = f'import sys; sys.path.insert(0, {directory!r}); {probe[-1]}'
+            return subprocess.run([sys.executable, '-I', '-B', '-c', code], capture_output=True).returncode
+
+    def test_the_probes_really_run_and_every_name_they_use_counts(self):
+        """Not through a stand-in runner: a misspelled import or name in a probe fails here (KEY-14, KEY-15, X-KEY-02)."""
+        for tool, package, probe in manage.HOST_TOOLS:
+            with self.subTest(tool=tool, where='this machine'):
+                if probe[0].startswith('/'):
+                    module = {'python3-nacl': 'nacl', 'python3-cryptography': 'cryptography'}[package]
+                    present = subprocess.run([*manage.PROBE, f'import {module}'], capture_output=True).returncode == 0
+                else:
+                    present = shutil.which(probe[0], path=manage.TOOL_ENV['PATH']) is not None
+                if not present:
+                    self.skipTest(f'{tool} is not installed on this machine')
+                self.assertEqual(manage.run_tool(list(probe))[0], 0)
+        # On every machine: a complete stand-in for the package passes the probe, and each name the probe uses is needed.
+        for tool, package, probe in manage.HOST_TOOLS:
+            if not probe[0].startswith('/'):
+                continue
+            with self.subTest(tool=tool, stand_in='complete'):
+                self.assertEqual(self.run_probe(probe, self.STAND_IN[package]), 0)
+            for module, name in self.STAND_IN_NAMES[package]:
+                with self.subTest(tool=tool, without=name):
+                    files = dict(self.STAND_IN[package])
+                    renamed = re.sub(rf'\b{name}\b', f'{name}_gone', files[module])
+                    self.assertNotEqual(renamed, files[module])
+                    files[module] = renamed
+                    self.assertNotEqual(self.run_probe(probe, files), 0)
+        # A program that is not there, or does not answer, does not work (X-KEY-02).
+        self.assertEqual(manage.run_fixed(['woowbk-no-such-program'])[0], 127)
+        self.assertEqual(manage.run_fixed(['/bin/sleep', '30'], timeout=0.2)[0], 127)
+
     def test_with_every_tool_working_nothing_runs_and_nothing_is_reported(self):
         host = FakeHost()
         for status in ('installed', 'already-current'):
             result = self.live(host)
             self.assertEqual((result['status'], host.apt, self.notes.getvalue()), (status, [], ''))
-            self.assertNotIn('packages', result)
+            for key in ('packages', 'missing_packages', 'notices'):
+                self.assertNotIn(key, result)
 
     def test_a_missing_package_is_added_before_a_file_changes(self):
         for number, (row, (tool, package)) in enumerate(self.ROWS.items()):
@@ -1309,6 +1873,8 @@ class HostToolsContract(HostFixture):
                 self.assertEqual(at_apt, [before, before], 'apt-get runs before anything changes')
                 self.assertIn(f'備份與還原需要的套件沒有裝好：{package}。正在用 apt 自動補裝', self.notes.getvalue())
                 self.assertEqual((self.root / manage.BACKUP_ENGINE / 'cli.py').read_text(), f'VERSION = {number}\n')
+                for key in ('missing_packages', 'notices'):
+                    self.assertNotIn(key, result)
                 # Removed later (e.g. apt autoremove): installing again adds it, with no file to change.
                 host.broken.add(tool)
                 host.apt.clear()
@@ -1321,74 +1887,193 @@ class HostToolsContract(HostFixture):
                 self.assertEqual(host.apt, [], 'idempotent')
 
     def test_every_missing_package_goes_into_one_apt_run(self):
-        host = FakeHost(tool for tool, _package, _probe in manage.HOST_TOOLS)
+        host = FakeHost(ALL_TOOLS)
         self.assertEqual(self.live(host)['packages'], ['age', 'zstd', 'python3-nacl', 'python3-cryptography'])
         self.assertEqual(host.apt, [list(manage.APT_UPDATE), [*manage.APT_INSTALL, *manage.TOOL_PACKAGES]])
 
-    def test_an_install_that_cannot_add_them_is_refused_with_the_reason_and_changes_nothing(self):
-        fetch = ('E: Failed to fetch http://archive.example/pool/age_1.1.1_amd64.deb  Could not connect to '
-                 'archive.example:80 (192.0.2.1). - connect (111: Connection refused)\n'
-                 'E: Unable to fetch some archives, maybe run apt-get update or try with --fix-missing?\n')
-        cases = (
-            # An index that was never downloaded reads like a package the archive does not have.
-            ('offline, no index', self.OFFLINE_UPDATE, self.NO_PACKAGE, manage.OFFLINE),
-            ('offline, old index', self.OFFLINE_UPDATE, fetch, manage.OFFLINE),
-            ('universe is off', '', "E: Package 'age' has no installation candidate\n", 'add-apt-repository universe'),
-            ('unknown package', '', self.NO_PACKAGE, 'add-apt-repository universe'),
-            ('lock', '', 'E: Could not get lock /var/lib/dpkg/lock-frontend. It is held by process 42 (unattended-upgr)\n',
-             '另一個套件作業'),
-            ('interrupted', '', "E: dpkg was interrupted, you must manually run 'sudo dpkg --configure -a' to correct "
-             'the problem. \n', 'sudo dpkg --configure -a'),
-            ('disk', '', "E: You don't have enough free space in /var/cache/apt/archives/.\n", '磁碟空間不足'),
-            ('conflict', '', 'E: Packages need to be removed but remove is disabled.\n', '其他套件衝突'),
-            ('held', '', 'E: Held packages were changed and -y was used without --allow-change-held-packages.\n',
-             '其他套件衝突'),
-            ('other', '', 'E: something else\n', '結束碼 100'),
-            ('other, with an old index', self.OFFLINE_UPDATE, 'E: something else\n', '結束碼 100'),
-        )
-        for label, update, error, reason in cases:
-            with self.subTest(case=label):
-                before = self.tree('')
-                host = FakeHost({'age', 'age-keygen', 'python3-nacl'}, adds=(), code=100, update=update, error=error)
-                systemctl = FakeSystemctl(self.root)
-                with self.assertRaises(ValueError) as refused:
-                    self.live(host, systemctl)
-                message = str(refused.exception)
-                self.assertIn('備份與還原需要的套件沒有裝好：age、python3-nacl。', message)
-                self.assertIn(reason, message)
-                for part in ('沒有更新任何檔案', 'sudo apt-get install age python3-nacl', '--no-backup'):
-                    self.assertIn(part, message)
-                self.assertEqual((self.tree(''), systemctl.calls), (before, []), 'nothing was changed')
-                self.assertEqual(host.apt[-1], [*manage.APT_INSTALL, 'age', 'python3-nacl'])
+    def test_an_install_that_cannot_add_them_goes_on_and_says_what_is_missing(self):
+        """No refusal because of the environment (decision of 2026-11-25): an offline device is updated all the same."""
+        self.assertEqual(set(self.REASONS), set(APT_RECORDED), 'every recorded case has an expectation')
+        names = '、'.join(manage.TOOL_PACKAGES)
+        for number, case in enumerate(APT_RECORDED):
+            with self.subTest(case=case):
+                self.reset()
+                self.add_source({'backup-engine/woowbackup/cli.py': f'VERSION = {number}\n'})
+                host, systemctl = recorded(case), FakeSystemctl(self.root)
+                result = self.live(host, systemctl)
+                self.assertEqual(result['status'], 'installed')
+                self.assertEqual((self.root / manage.BACKUP_ENGINE / 'cli.py').read_text(), f'VERSION = {number}\n')
+                self.assertEqual(systemctl.calls, ['daemon-reload', f'enable --now {manage.SCHEDULE_TIMER}'],
+                                 'the rest of the update is done, the schedule timer included')
+                self.assertEqual((result['packages'], result['missing_packages']), ([], list(manage.TOOL_PACKAGES)))
+                self.assertEqual(len(result['notices']), 1)
+                notice = result['notices'][0]
+                self.assertIn(f'備份與還原需要的套件沒有裝好：{names}。自動補裝沒有成功：', notice)
+                for reason in self.REASONS[case]:
+                    self.assertIn(reason, notice)
+                for part in ('更新照常進行，裝好之前：缺 age、zstd 不能建立、檢查與還原加密的備份（預設的備份都是加密的',
+                             '缺 age 不能建立與檢查加密金鑰', '缺 python3-nacl 不能讀取 2026 年 3 月以後的 HA 加密備份',
+                             '缺 python3-cryptography 不能讀取 2026 年 3 月以前的 HA 加密備份',
+                             'sudo python3 scripts/manage.py install', '.deb',
+                             f'sudo apt-get install {" ".join(manage.TOOL_PACKAGES)}', 'sudo python3 scripts/manage.py status'):
+                    self.assertIn(part, notice)
+                self.assertIn(f'Note: {notice}', self.notes.getvalue())
+                self.assertEqual(host.apt, [list(manage.APT_UPDATE), [*manage.APT_INSTALL, *manage.TOOL_PACKAGES]])
+                # What is missing is not forgotten: status says it.
+                status = manage.status(self.root, tools=manage.HostTools(host))
+                self.assertEqual((status['status'], status['packages']), ('tools-missing', list(manage.TOOL_PACKAGES)))
+        # The same files as on a device that has the tools.
+        self.reset()
+        self.live(recorded('offline-no-index'))
+        offline = self.snapshot()
+        self.reset()
+        self.live(FakeHost())
+        self.assertEqual(offline, self.snapshot())
 
-    def test_a_refusal_never_shows_the_lines_of_apt(self):
-        mirror = f'http://{":".join(("mirror-user", "mirror-word"))}@mirror.example/ubuntu'  # not a real credential
-        host = FakeHost({'zstd'}, adds=(), code=100, update=f'W: Failed to fetch {mirror}  x\n',
-                        error=f'E: Failed to fetch {mirror}/pool/z/zstd.deb  Temporary failure resolving\n')
-        with self.assertRaises(ValueError) as refused:
-            self.live(host)
-        shown = str(refused.exception) + self.notes.getvalue()
-        for part in ('mirror', 'http', 'E:', 'W:'):
-            self.assertNotIn(part, shown)
+    def test_the_reason_is_told_from_what_the_real_apt_wrote(self):
+        self.assertEqual(set(self.REASONS), set(APT_RECORDED))
+        for case, (update, install) in APT_RECORDED.items():
+            with self.subTest(case=case):
+                reason = manage.apt_reason(update, install, list(manage.TOOL_PACKAGES))
+                for part in self.REASONS[case]:
+                    self.assertIn(part, reason)
+        # Only some of the packages are missing: the reason names what apt could not find.
+        update, install = APT_RECORDED['dists-universe-off']
+        self.assertIn('沒有 age', manage.apt_reason(update, install, ['age']))
+        self.assertIn('沒有 age', manage.apt_reason(update, install, ['age', 'zstd']))
+        self.assertIn('沒有 zstd', manage.apt_reason(update, (100, '', 'E: Unable to locate package zstd\n'), ['zstd']))
+
+    def test_what_apt_wrote_is_never_shown(self):
+        for case, (update, install) in APT_RECORDED.items():
+            with self.subTest(case=case):
+                notice = self.live_notice(recorded(case))
+                apt_lines = [line for stream in (*update[1:], *install[1:]) for line in stream.splitlines()]
+                for line in apt_lines:
+                    if len(line) > 10:
+                        self.assertNotIn(line.strip(), notice)
+                for part in ('repo.example', 'third.example', '192.0.2', 'no-such-host', 'http', 'E:', 'W:', 'N:', 'Err:', '<root>'):
+                    self.assertNotIn(part, notice)
+
+    def live_notice(self, host):
+        self.reset()
+        return self.live(host)['notices'][0]
+
+    def test_what_is_not_proven_is_called_unknown_with_the_exit_code(self):
+        missing = [100, '', 'E: Unable to locate package age\n']
+        cases = (  # (update, install, left, what the reason says)
+            ((100, '', 'E: something odd\n'), tuple(missing), ['age'], '原因不明（apt-get update 結束碼 100）'),
+            ((0, '', ''), (100, '', 'E: something odd\n'), ['zstd'], '原因不明（apt-get 結束碼 100）'),
+            ((0, '', ''), (0, '', ''), ['zstd'], manage.BROKEN_TOOL),
+            ((127, '', 'OSError'), (127, '', 'OSError'), ['zstd'], manage.NO_APT),
+            # Several sources, each with its own problem: all of them are named.
+            ((100, 'Err:1 http://a.example/ubuntu noble InRelease\n  Could not resolve \'a.example\'\n'
+                   'Err:2 http://b.example/extra noble Release\n  404  Not Found [IP: 192.0.2.9 80]\n', ''),
+             tuple(missing), ['age'], '套件來源都無法更新（連不上、網址不存在）'),
+            ((0, 'Err:1 http://a.example/ubuntu noble InRelease\n  Hash Sum mismatch\n', ''), tuple(missing), ['age'],
+             '套件來源都無法更新（索引和檔案對不上）'),
+            # A download that ends on a mirror that is being synchronised.
+            ((0, '', ''), (100, 'Err:1 http://a.example/ubuntu noble/main amd64 age 1.1.1\n  Hash Sum mismatch\n',
+                           'E: Failed to fetch http://a.example/ubuntu/pool/age.deb  Hash Sum mismatch\n'), ['age'], manage.GONE),
+            # A hash problem and a lost connection together: not enough to say which one it is.
+            ((0, '', ''), (100, 'Err:1 http://a.example/x noble/main amd64 age 1.1.1\n  Hash Sum mismatch\n'
+                           'Err:2 http://a.example/x noble/main amd64 zstd 1.5\n  Could not resolve \'a.example\'\n', ''),
+             ['age', 'zstd'], '原因不明（apt-get 結束碼 100）'),
+        )
+        for number, (update, install, left, reason) in enumerate(cases):
+            with self.subTest(number=number):
+                self.assertIn(reason, manage.apt_reason(update, install, left))
 
     def test_what_works_afterwards_decides_not_the_exit_code_of_apt(self):
-        host = FakeHost({'age-keygen', 'zstd'}, adds={'zstd'})  # apt is content, age-keygen still does not answer
-        before = self.tree('')
-        with self.assertRaisesRegex(ValueError, '沒有裝好：age。自動補裝沒有成功：套件已安裝，但工具仍然不能使用。'):
+        # apt is content, age-keygen still does not answer: said so, nothing is claimed about the network.
+        host = FakeHost({'age-keygen', 'zstd'}, adds={'zstd'})
+        result = self.live(host)
+        self.assertEqual((result['packages'], result['missing_packages']), (['zstd'], ['age']))
+        self.assertIn(f'自動補裝沒有成功：{manage.BROKEN_TOOL}。', result['notices'][0])
+        # apt reports a failure of a hook of another package, the tool works all the same: no notice.
+        self.reset()
+        host = FakeHost({'zstd'}, install=(100, '', 'E: a hook of another package failed\n'))
+        result = self.live(host)
+        self.assertEqual(result['packages'], ['zstd'])
+        self.assertNotIn('notices', result)
+        # Offline, a damaged tool: apt has nothing to reinstall it from and ends with 0 (recorded).
+        self.reset()
+        update, install = APT_RECORDED['damaged-offline-no-index']
+        self.assertEqual(install[0], 0)
+        result = self.live(FakeHost({'zstd'}, adds=(), update=update, install=install))
+        self.assertEqual(result['missing_packages'], ['zstd'])
+        self.assertIn(f'自動補裝沒有成功：{manage.OFFLINE}。', result['notices'][0])
+
+    def test_a_page_changed_while_apt_ran_is_not_overwritten(self):
+        """apt-get can wait minutes for the dpkg lock of an automatic update: the plan is made again afterwards."""
+        page = self.root / 'usr/share/cockpit/systemd/logs.html'
+
+        def another_job(_argv):
+            page.write_bytes(b'<html><head></head><body>native log view of the newer Cockpit</body></html>')
+
+        host = FakeHost({'zstd'}, seen=another_job)
+        code, result, _notes = self.main('install', '--no-preview', '--no-services', host=host)
+        self.assertEqual((code, result['status'], result['packages']), (0, 'installed', ['zstd']))
+        html = page.read_bytes()
+        self.assertIn(b'native log view of the newer Cockpit', html, 'the newer page is not replaced by the old one')
+        self.assertIn(b'static/branding.css', html, 'and it gets the branding link all the same')
+
+    def test_a_cockpit_podman_upgraded_while_apt_ran_keeps_its_new_bundle(self):
+        native = self.source / 'native/podman/dist'
+        (native / 'licenses').mkdir(parents=True)
+        (native / 'index.js.gz').write_bytes(gzip.compress(b'integrated JavaScript'))
+        (native / 'index.js.LEGAL.txt').write_text('license notice')
+        (native / 'licenses/NOTICE').write_text('runtime attribution')
+        target = self.root / manage.PODMAN / 'index.js.gz'
+        target.parent.mkdir(parents=True)
+        target.write_bytes(gzip.compress(b'distribution JavaScript'))
+        status = self.root / 'var/lib/dpkg/status'
+        cockpit = status.read_text()
+        status.write_text(cockpit + 'Package: cockpit-podman\nStatus: install ok installed\nVersion: 124-1~bpo24.04.1\n\n')
+
+        def another_job(_argv):  # cockpit-podman 125 arrives (automatic update) while apt-get waits
+            status.write_text(cockpit + 'Package: cockpit-podman\nStatus: install ok installed\nVersion: 125-1\n\n')
+            target.write_bytes(gzip.compress(b'newer distribution JavaScript'))
+
+        host = FakeHost({'zstd'}, seen=another_job)
+        code, result, _notes = self.main('install', '--no-preview', host=host)
+        self.assertEqual((code, result['status']), (0, 'installed'))
+        self.assertEqual(gzip.decompress(target.read_bytes()), b'newer distribution JavaScript')
+        # Without the package step the same install replaces the bundle of 124 (the gate works).
+        self.reset()
+        target.parent.mkdir(parents=True)
+        target.write_bytes(gzip.compress(b'distribution JavaScript'))
+        status.write_text(cockpit + 'Package: cockpit-podman\nStatus: install ok installed\nVersion: 124-1~bpo24.04.1\n\n')
+        self.main('install', '--no-preview', host=FakeHost())
+        self.assertEqual(gzip.decompress(target.read_bytes()), b'integrated JavaScript')
+
+    def test_the_installers_own_refusal_comes_before_apt(self):
+        for name in ('changes', 'directory_plan'):
+            with self.subTest(refusal=name):
+                host = FakeHost(ALL_TOOLS)
+                with patch.object(manage, name, side_effect=ValueError('refused by the installer (test)')):
+                    with self.assertRaisesRegex(ValueError, 'refused by the installer'):
+                        self.live(host)
+                self.assertEqual(host.apt, [], 'no apt-get ran, nothing was changed')
+        # And a refusal after the packages step (the plan is made again) leaves the files alone.
+        before = self.snapshot()
+        seen = []
+
+        def unreadable_page(argv):
+            seen.append(argv)
+            (self.root / 'usr/share/cockpit/systemd/logs.html').write_bytes(b'<html>no head here</html>')
+
+        host = FakeHost({'zstd'}, seen=unreadable_page)
+        with self.assertRaisesRegex(ValueError, 'Unknown native template'):
             self.live(host)
-        self.assertEqual(self.tree(''), before)
-        host = FakeHost({'zstd'}, code=100, error='E: a hook of another package failed\n')  # added all the same
-        self.assertEqual(self.live(host)['packages'], ['zstd'])
-        # Offline, a damaged tool: apt has nothing to reinstall it from and ends with 0.
-        host = FakeHost({'zstd'}, adds=(), update=self.OFFLINE_UPDATE)
-        with self.assertRaisesRegex(ValueError, f'沒有裝好：zstd。自動補裝沒有成功：{re.escape(manage.OFFLINE)}。'):
-            self.live(host)
+        (self.root / 'usr/share/cockpit/systemd/logs.html').write_bytes(before['usr/share/cockpit/systemd/logs.html'][0])
+        self.assertEqual(self.snapshot(), before)
 
     def test_no_backup_and_other_roots_check_and_run_nothing(self):
         host = FakeHost({'age', 'zstd'}, adds=())
         result = self.live(host, include_backup=False)
         self.assertEqual((result['status'], host.apt), ('installed', []))
-        self.assertNotIn('packages', result)
+        for key in ('packages', 'missing_packages', 'notices'):
+            self.assertNotIn(key, result)
         # A source tree without the engine (its helper is not installed by this run) needs no tools either.
         (self.source / 'backup-engine/woowbackup/cli.py').unlink()
         self.assertEqual((self.live(host)['status'], host.apt), ('installed', []))
@@ -1406,34 +2091,88 @@ class HostToolsContract(HostFixture):
         self.assertIn(f'sudo apt-get install {" ".join(manage.TOOL_PACKAGES)}', notes)
         _code, planned, notes = self.main('plan', '--no-preview', '--no-services', '--no-backup')
         self.assertEqual((planned['packages'], notes), ([], ''))
-        state = json.loads((self.root / manage.STATE).read_text())
-        self.assertIsNone(manage.engine_tools(self.root, state))
-        self.assertIsInstance(manage.engine_tools(Path('/'), state), manage.HostTools)
-        self.assertIsNone(manage.engine_tools(Path('/'), {'files': {}}))
+        self.assertIsNone(manage.engine_tools(self.root, True))
+        self.assertIsInstance(manage.engine_tools(Path('/'), True), manage.HostTools)
+        self.assertIsNone(manage.engine_tools(Path('/'), False))
+
+    def test_status_after_no_backup_still_checks_the_engine_that_is_there(self):
+        """The advice of an earlier refusal was --no-backup: the engine it leaves on the device needs its tools all the same."""
+        self.live(FakeHost())
+        helper = self.root / manage.BACKUP_HELPER
+        self.assertTrue(helper.is_file())
+        (self.source / 'VERSION').write_bytes(b'test.2')
+        broken = FakeHost({'python3-nacl', 'age'}, adds=())
+        result = self.live(broken, include_backup=False)
+        self.assertEqual((result['status'], broken.apt), ('installed', []), 'this run manages no engine: nothing probed or run')
+        self.assertTrue(helper.is_file(), 'the engine stays')
+        self.assertNotIn(manage.BACKUP_HELPER, json.loads((self.root / manage.STATE).read_text())['files'])
+        status = manage.status(self.root, tools=manage.HostTools(broken))
+        self.assertEqual((status['status'], status['source_version'], status['packages']),
+                         ('tools-missing', 'test.2', ['age', 'python3-nacl']))
+        code, out, notes = self.main('status', host=broken)
+        self.assertEqual((code, out['status'], out['packages']), (1, 'tools-missing', ['age', 'python3-nacl']))
+        self.assertIn('裝好之前：缺 age 不能建立、檢查與還原加密的備份', notes)
+        self.assertEqual(self.main('status', host=FakeHost())[0:2], (0, {
+            'status': 'ready', 'source_version': 'test.2', 'packages': [], 'tools': dict.fromkeys(ALL_TOOLS, True)}))
+        # No engine on the device at all: nothing to check.
+        self.reset()
+        self.live(FakeHost(), include_backup=False)
+        self.assertFalse(helper.exists())
+        host = FakeHost(ALL_TOOLS, adds=())
+        self.assertEqual(self.main('status', host=host)[0:2], (0, {
+            'status': 'ready', 'source_version': 'test.2', 'packages': [], 'tools': 'no-engine'}))
+        self.assertEqual(host.apt, [])
 
     def test_plan_and_status_report_missing_packages_and_change_nothing(self):
         self.live(FakeHost())
         host = FakeHost({'age-keygen', 'python3-nacl'})
         before = self.tree('')
-        with patch.object(manage, 'engine_tools', lambda root, state, tools=None: manage.HostTools(host)):
-            code, planned, notes = self.main('plan', '--no-preview', '--no-services')
-            self.assertEqual((code, planned['packages']), (0, ['age', 'python3-nacl']))
-            self.assertIn('沒有裝好：age、python3-nacl。執行 install 時會用 apt 自動補裝。', notes)
-            code, result, notes = self.main('status')
-            self.assertEqual((code, result), (1, {
-                'status': 'tools-missing', 'source_version': 'test.1', 'packages': ['age', 'python3-nacl'],
-                'tools': {'age': True, 'age-keygen': False, 'zstd': True, 'python3-nacl': False,
-                          'python3-cryptography': True}}))
-            self.assertIn('沒有裝好：age、python3-nacl。請重新執行安裝（sudo python3 scripts/manage.py install）', notes)
-            host.broken.clear()
-            code, result, notes = self.main('status')
-            self.assertEqual((code, result['status'], set(result['tools'].values()), notes), (0, 'ready', {True}, ''))
-            self.assertEqual(self.main('plan', '--no-preview', '--no-services')[1]['packages'], [])
+        code, planned, notes = self.main('plan', '--no-preview', '--no-services', host=host)
+        self.assertEqual((code, planned['packages']), (0, ['age', 'python3-nacl']))
+        self.assertIn('沒有裝好：age、python3-nacl。執行 install 時會用 apt 自動補裝（補不了也會照常更新）。', notes)
+        code, result, notes = self.main('status', host=host)
+        self.assertEqual((code, result), (1, {
+            'status': 'tools-missing', 'source_version': 'test.1', 'packages': ['age', 'python3-nacl'],
+            'tools': {'age': True, 'age-keygen': False, 'zstd': True, 'python3-nacl': False, 'python3-cryptography': True}}))
+        self.assertIn('沒有裝好：age、python3-nacl。', notes)
+        for part in ('裝好之前：缺 age 不能建立、檢查與還原加密的備份', '缺 age 不能建立與檢查加密金鑰',
+                     '缺 python3-nacl 不能讀取 2026 年 3 月以後的 HA 加密備份'):
+            self.assertIn(part, notes)
+        self.assertIn('請重新執行安裝（sudo python3 scripts/manage.py install）', notes)
+        host.broken.clear()
+        code, result, notes = self.main('status', host=host)
+        self.assertEqual((code, result['status'], set(result['tools'].values()), notes), (0, 'ready', {True}, ''))
+        self.assertEqual(self.main('plan', '--no-preview', '--no-services', host=host)[1]['packages'], [])
         self.assertEqual((self.tree(''), host.apt), (before, []), 'read-only')
-        self.live(FakeHost(), include_backup=False)
-        self.assertEqual(manage.status(self.root, tools=manage.HostTools(host)), {
-            'status': 'ready', 'source_version': 'test.1', 'tools': 'not-managed', 'packages': []})
-        self.assertEqual(self.main('status')[0], 0)
+
+    def test_the_command_line_goes_on_with_a_notice_and_status_exits_1(self):
+        host = recorded('offline-no-index')
+        code, result, notes = self.main('install', '--no-preview', '--no-services', host=host)
+        self.assertEqual((code, result['status'], result['packages'], result['missing_packages']),
+                         (0, 'installed', [], list(manage.TOOL_PACKAGES)))
+        self.assertIn(f'Note: {result["notices"][0]}\n', notes)
+        self.assertIn(manage.OFFLINE, result['notices'][0])
+        self.assertIn('After installation, sign out/in', notes)
+        code, status, _notes = self.main('status', host=host)
+        self.assertEqual((code, status['status'], status['packages']), (1, 'tools-missing', list(manage.TOOL_PACKAGES)))
+        # Installing again once the device has the packages (network back): they are added, no notice.
+        host.update, host.install, host.adds = (0, '', ''), (0, '', ''), set(manage.TOOL_PACKAGES)
+        code, result, _notes = self.main('install', '--no-preview', '--no-services', host=host)
+        self.assertEqual((code, result['status'], result['packages']), (0, 'already-current', list(manage.TOOL_PACKAGES)))
+        self.assertNotIn('notices', result)
+        self.assertEqual(self.main('status', host=host)[0], 0)
+
+    def test_status_needs_the_administrator_to_read_the_install_record(self):
+        self.live(FakeHost())
+        with patch.object(Path, 'read_text', side_effect=PermissionError(13, 'Permission denied')):
+            with self.assertRaisesRegex(ValueError, 'sudo python3 scripts/manage.py status'):
+                manage.status(self.root)
+        out, err = io.StringIO(), io.StringIO()
+        with (patch.object(sys, 'argv', ['manage.py', '--root', str(self.root), 'status']),
+              patch.object(Path, 'read_text', side_effect=PermissionError(13, 'Permission denied')),
+              contextlib.redirect_stdout(out), contextlib.redirect_stderr(err)):
+            self.assertEqual(manage.main(), 1)
+        self.assertIn('請用 sudo 執行', err.getvalue())
 
     def test_how_the_tools_and_apt_are_run(self):
         calls, interrupts, before = [], [], signal.getsignal(signal.SIGINT)
@@ -1446,9 +2185,10 @@ class HostToolsContract(HostFixture):
         environ = {'http_proxy': 'http://proxy.example:3128', 'no_proxy': 'localhost', 'PATH': '/home/user/bin',
                    'PYTHONPATH': '/home/user/lib', 'LD_PRELOAD': '/home/user/x.so', 'APT_CONFIG': '/home/user/apt.conf'}
         with (patch.object(manage, 'run_fixed', run_fixed),
-              patch.dict(os.environ, environ, clear=True), contextlib.redirect_stderr(io.StringIO()),
-              self.assertRaisesRegex(ValueError, '結束碼 127')):
-            manage.HostTools().ensure()
+              patch.dict(os.environ, environ, clear=True), contextlib.redirect_stderr(io.StringIO())):
+            report = manage.HostTools().ensure()
+        self.assertEqual(report['missing_packages'], list(manage.TOOL_PACKAGES))
+        self.assertIn(manage.NO_APT, report['notices'][0])
         probes = [(list(probe), manage.TOOL_ENV, 30) for _tool, _package, probe in manage.HOST_TOOLS]
         apt_env = {'PATH': '/usr/sbin:/usr/bin:/sbin:/bin', 'LANG': 'C.UTF-8', 'LC_ALL': 'C.UTF-8',
                    'DEBIAN_FRONTEND': 'noninteractive', 'NEEDRESTART_SUSPEND': '1',
@@ -1462,9 +2202,6 @@ class HostToolsContract(HostFixture):
             self.assertIn(option, manage.APT_INSTALL)
         self.assertEqual((manage.APT_UPDATE[0], manage.APT_INSTALL[0], manage.APT_INSTALL[-1]),
                          ('/usr/bin/apt-get', '/usr/bin/apt-get', 'install'))
-        # A program that is not there or does not answer does not work (X-KEY-02).
-        self.assertEqual(manage.run_fixed(['woowbk-no-such-program'])[0], 127)
-        self.assertEqual(manage.run_fixed(['/bin/sleep', '30'], timeout=0.2)[0], 127)
         self.assertEqual(manage.run_fixed(['/bin/sh', '-c', 'cat; printf %s "$HOME$LANG"; exit 3']), (3, 'C.UTF-8', ''))
 
     def test_the_engine_still_stops_without_its_tools(self):
@@ -1615,6 +2352,28 @@ for name in "${names[@]}"; do [[ -f $STATE/installed/$name ]] || printf 'install
         self.assertEqual(result.returncode, 1)
         self.assertIn('備份與還原需要的套件沒有裝好：python3-nacl python3-cryptography。', result.stderr)
         self.assertNotIn('systemctl enable --now cockpit.socket', calls)
+
+    def test_the_cockpit_packages_step_is_as_before_it_still_needs_the_network(self):
+        """The relaxed checks are about the four backup packages only: what happens to the five Cockpit packages is unchanged."""
+        self.package(*self.COCKPIT, *self.BACKUP)
+        self.flag('offline', 'newer')  # the index knows newer versions that cannot be downloaded
+        result, calls = self.run_script('--apply')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(calls[-1], f'apt-get install -y -t noble-backports {" ".join(self.COCKPIT)}')
+        self.assertNotIn('systemctl enable --now cockpit.socket', calls)
+        self.reset_device()
+        self.package(*self.BACKUP)  # a Cockpit package that is not installed, no network
+        self.flag('offline')
+        result, calls = self.run_script('--apply')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertNotIn('systemctl enable --now cockpit.socket', calls)
+
+    def reset_device(self):
+        for where in ('installed', 'index'):
+            for path in (self.device / where).iterdir():
+                path.unlink()
+        for name in ('offline', 'newer', 'calls'):
+            (self.device / name).unlink(missing_ok=True)
 
     def test_a_package_no_index_knows_is_refused_before_anything_is_installed(self):
         self.package(*self.COCKPIT, 'zstd', 'python3-nacl', 'python3-cryptography', where='index')

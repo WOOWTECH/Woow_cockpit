@@ -35,7 +35,9 @@ if [[ $EUID -ne 0 ]]; then
   printf 'Run --apply with sudo.\n' >&2
   exit 1
 fi
-# An index that cannot be refreshed (offline, a broken third-party source) decides nothing by itself.
+# About the four backup packages only (the Cockpit packages below are installed as before, and need the network when
+# something has to be downloaded): an index that cannot be refreshed (offline, a broken third-party source) decides
+# nothing by itself; a package that is really missing and cannot be found or installed stops the script.
 apt-get update --error-on=any || printf '有套件索引無法更新（網路、DNS、代理伺服器或某個套件來源），先用這台現有的索引繼續。\n' >&2
 for package in "${missing[@]}"; do
   if ! apt-cache show "$package" >/dev/null 2>&1; then
@@ -45,7 +47,8 @@ for package in "${missing[@]}"; do
   fi
 done
 apt-get install -y -t "${VERSION_CODENAME}-backports" "${packages[@]}"
-# All of them as before (newest version, kept by autoremove); when that fails, only the missing ones decide.
+# All four as before (newest version, kept by autoremove); when that fails, only the missing ones decide: a held or
+# not downloadable newer version of an installed one is no reason to stop.
 if ! apt-get install -y "${backup_packages[@]}" && (( ${#missing[@]} )) && ! apt-get install -y "${missing[@]}"; then
   printf '備份與還原需要的套件沒有裝好：%s。原因見上面 apt 的訊息（常見是這台連不到套件庫）；排除後重新執行即可。\n' "${missing[*]}" >&2
   exit 1

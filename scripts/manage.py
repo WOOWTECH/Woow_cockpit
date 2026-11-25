@@ -79,15 +79,18 @@ APT_GET = '/usr/bin/apt-get'
 APT_UPDATE = (APT_GET, '-q', '-o', 'Acquire::Retries=1', 'update')
 APT_INSTALL = (APT_GET, '-q', '-o', 'Acquire::Retries=1', '-o', 'DPkg::Lock::Timeout=300', '-y',
                '--no-install-recommends', '--no-remove', '--reinstall', 'install')
-WITHOUT = {
-    'age': '建立、檢查與還原加密的備份（預設就是加密，從 HA 匯入也是）、建立加密金鑰',
-    'zstd': '建立、檢查與還原加密的備份（預設就是加密，從 HA 匯入也是）',
-    'python3-nacl': '讀取 2026 年 3 月以後的 HA 加密備份',
-    'python3-cryptography': '讀取 2026 年 3 月以前的 HA 加密備份',
-}
-# Why apt-get could not add a package, from what it writes in the C locale (recorded with apt 2.8.4). Only these sentences
-# are shown: apt's own lines can name a private mirror or a proxy. What its lines do not prove is 原因不明.
-APT_REASONS = (
+# What cannot be done while a package is missing: (the packages of which one is needed, what stops without it).
+WITHOUT = (
+    (('age', 'zstd'), '建立、檢查與還原加密的備份（預設的備份都是加密的，HA 匯入轉換出來的備份也是）'),
+    (('age',), '建立與檢查加密金鑰'),
+    (('python3-nacl',), '讀取 2026 年 3 月以後的 HA 加密備份'),
+    (('python3-cryptography',), '讀取 2026 年 3 月以前的 HA 加密備份'),
+)
+# Why apt-get could not add a package, from what it writes in the C locale. The cases of tests/test_manage.py APT_RECORDED
+# were recorded with apt 2.8.4; the other patterns are messages of apt's own catalogue (libapt-pkg, apt) that were not
+# provoked ("No space left on device" is libc's text for ENOSPC). Only the sentences below are shown: apt's own lines can
+# name a private mirror or a proxy. What its lines do not prove is called 原因不明, with the exit code.
+APT_REASONS = (  # on stderr
     (re.compile(r'Could not get lock|is another process using it'),
      '另一個套件作業（例如系統自動更新）正在進行，請等它完成'),
     (re.compile(r'dpkg was interrupted'), '上一次的套件安裝沒有完成，請先執行 sudo dpkg --configure -a'),
@@ -98,16 +101,25 @@ APT_REASONS = (
     (re.compile(r'need to be removed'), '要先移除別的套件才能安裝，不會自動移除'),
     (re.compile(r'nmet dependencies|held broken packages'), '相依的套件湊不齊（缺少、版本不合或被鎖定）'),
 )
+CONFLICT = re.compile(r'(?m)^ \S+ : (?:Conflicts|Breaks): ')  # on stdout, with "held broken packages" on stderr
+CONFLICT_REASON = '和已安裝的套件衝突，要移除或更換已安裝的套件才能裝，這裡不會自動移除'
 OFFLINE = '這台連不到套件庫（網路、DNS、代理伺服器，或要先登入的網路）'
 GONE = '套件庫已經沒有這台索引記的版本（索引太舊或套件庫正在同步），請先讓 sudo apt-get update 成功'
 SIGNATURE = '套件來源的簽章或有效期限驗證不過（金鑰、這台的時間或來源設定不對）'
-SOURCE_PROBLEMS = {'network': '連不上', 'gone': '網址不存在', 'signature': '簽章或有效期限驗證不過', 'other': '其他錯誤'}
+UNSURE = '原因不明（apt-get {what}結束碼 {code}）'
+NO_APT = 'apt-get 無法執行（這台沒有 /usr/bin/apt-get，或它不能執行）'
+BROKEN_TOOL = '套件已經裝好，但這個工具仍然沒有正常回應（status 會顯示是哪一個）'
+SOURCE_PROBLEMS = {'network': '連不上', 'gone': '網址不存在', 'sync': '索引和檔案對不上',
+                   'signature': '簽章或有效期限驗證不過', 'other': '其他錯誤'}
 # One address of apt-get's progress: what became of it, the source (URI, suite) and, after Err, why.
-APT_ITEM = re.compile(r'(?m)^(Hit|Get|Err):\d+ (\S+) ([^\s/]+).*(?:\n  (.*))?')
+APT_ITEM = re.compile(r'(?m)^(Hit|Get|Err):\d+ (\S+) (\S+)(?: [^\n]*)?(?:\n  (.*))?')
+FAILED_FETCH = re.compile(r'(?m)^[EW]: Failed to fetch \S+\s+(.*)')
 NETWORK_TEXT = re.compile(r'Temporary failure resolving|Could not (?:resolve|connect)|Unable to connect|wicked happened resolving'
                           r'|Cannot initiate the connection|Network is unreachable|No route to host'
                           r'|[Cc]onnection (?:timed out|failed|refused|reset)|^407 |network require authentication')
 SIGNATURE_TEXT = re.compile(r'signature|GPG error|is not signed|no longer signed|is expired|not valid yet')
+GONE_TEXT = re.compile(r'^4(?:04|10) ')
+SYNC_TEXT = re.compile(r'Hash Sum mismatch|File has unexpected size')
 NOT_IN_INDEX = re.compile(r"Unable to locate package (\S+)|Package '(\S+)' has no installation candidate"
                           r'|Reinstallation of (\S+) is not possible')
 DEMO_APP = 'woowbk-demo'
@@ -793,7 +805,24 @@ def apt_problem(why):
         return 'network'
     if SIGNATURE_TEXT.search(why):
         return 'signature'
-    return 'gone' if re.match(r'4(?:04|10) ', why) else 'other'
+    if GONE_TEXT.search(why):
+        return 'gone'
+    return 'sync' if SYNC_TEXT.search(why) else 'other'
+
+
+def index_problems(out, error):
+    """({(uri, suite): kind} of the sources apt-get update could not use, every (uri, suite) it worked on), from its stdout
+    (progress: Err lines say why) and stderr (what is only said there: an expired Release file, a source that is not signed)."""
+    items = APT_ITEM.findall(out)
+    sources = {(uri, suite) for _word, uri, suite, _why in items}
+    bad = {(uri, suite): apt_problem(why) for word, uri, suite, why in items if word == 'Err'}
+    for line in error.splitlines():
+        kind = apt_problem(line) if line.startswith(('E:', 'W:')) else 'other'
+        for uri, suite in sources - set(bad):
+            if (kind != 'other' or line.startswith('E:')) and any(
+                    mark in line for mark in (f'{uri} {suite} ', f'{uri}/dists/{suite}/', f'{uri}/{suite}')):
+                bad[uri, suite] = kind
+    return bad, sources
 
 
 def index_reason(update, absent):
@@ -802,54 +831,55 @@ def index_reason(update, absent):
     for pattern, reason in APT_REASONS:  # e.g. another job that holds the lock of the lists
         if pattern.search(error):
             return reason
-    items = APT_ITEM.findall(out)
-    bad = {(uri, suite): apt_problem(why) for word, uri, suite, why in items if word == 'Err'}
-    sources = {(uri, suite) for _word, uri, suite, _why in items}
-    for uri, suite in sources - set(bad):  # read but refused, without an Err line: not signed, expired, not valid yet
-        lines = [line for line in error.splitlines()
-                 if line.startswith('E:') and (f'{uri} {suite} ' in line or f'{uri}/dists/{suite}/' in line)]
-        if lines:
-            bad[uri, suite] = apt_problem(' '.join(lines))
-    kinds, names = set(bad.values()), '、'.join(absent)
-    if not kinds:
+    bad, sources = index_problems(out, error)
+    names = '、'.join(absent)
+    if not bad:
         if code:
-            return f'原因不明（apt-get update 結束碼 {code}）'
+            return UNSURE.format(what='update ', code=code)
         where = ('age 在 Ubuntu 的 universe，可用 sudo add-apt-repository universe 啟用' if absent == ['age']
                  else 'Ubuntu 的 main 與 universe 都要啟用')
         return f'這台啟用的套件來源沒有 {names}，或設定把它排除了（{where}）'
-    if sources - set(bad):
-        return (f'有套件來源無法更新（{"、".join(text for kind, text in SOURCE_PROBLEMS.items() if kind in kinds)}），'
-                f'其他來源沒有 {names}：請用 sudo apt-get update 找出並修正那個來源，也請確認已啟用 universe')
+    kinds = set(bad.values())
+    shown = '、'.join(text for kind, text in SOURCE_PROBLEMS.items() if kind in kinds)
+    if sources - set(bad):  # the others are fine and do not have them
+        return (f'有套件來源無法更新（{shown}），其他來源沒有 {names}：請用 sudo apt-get update 找出並修正那個來源，'
+                '也請確認已啟用 universe')
     if kinds == {'network'}:
         return OFFLINE
     if kinds == {'signature'}:
         return SIGNATURE
-    return (f'套件來源都無法更新（{"、".join(text for kind, text in SOURCE_PROBLEMS.items() if kind in kinds)}）：'
-            '請用 sudo apt-get update 找出並修正')
+    return f'套件來源都無法更新（{shown}）：請用 sudo apt-get update 找出並修正'
 
 
 def apt_reason(update, install, left):
     """Why the packages `left` could not be added (zh-TW, never apt's own lines), from the (code, stdout, stderr) of
     apt-get update and install."""
     code, out, error = install
+    if code == 127:  # run_fixed: it did not start
+        return NO_APT
+    if CONFLICT.search(out):  # before the general "held broken packages" below
+        return CONFLICT_REASON
     for pattern, reason in APT_REASONS:
         if pattern.search(error):
             return reason
-    kinds = {apt_problem(why) for word, _uri, _suite, why in APT_ITEM.findall(out) if word == 'Err'}  # downloads
+    # What the downloads said: the Err lines of the progress and the "Failed to fetch" lines.
+    kinds = {apt_problem(why) for word, _uri, _suite, why in APT_ITEM.findall(out) if word == 'Err'}
+    kinds |= {apt_problem(why) for why in FAILED_FETCH.findall(error)}
     found = {name for names in NOT_IN_INDEX.findall(out + error) for name in names}
     absent = [package for package in left if package in found]
     if absent and not kinds:
         return index_reason(update, absent)
     if kinds == {'network'}:
         return OFFLINE
-    if kinds == {'gone'}:
+    if kinds and kinds <= {'gone', 'sync'}:
         return GONE
-    return f'原因不明（apt-get 結束碼 {code}）' if code else '套件已安裝，但工具仍然不能使用'
+    return UNSURE.format(what='', code=code) if code else BROKEN_TOOL
 
 
 def without(packages):
-    """What does not work without these packages."""
-    return '；'.join(f'{package}：{WITHOUT[package]}' for package in packages)
+    """What cannot be done without these packages, e.g. 缺 age 不能建立與檢查加密金鑰."""
+    return '；'.join(f'缺 {"、".join(names)} 不能{effect}' for needed, effect in WITHOUT
+                    for names in [[name for name in needed if name in packages]] if names)
 
 
 class HostTools:
@@ -883,8 +913,10 @@ class HostTools:
         report = {'packages': [package for package in packages if package not in left]}
         if left:
             notice = (f'備份與還原需要的套件沒有裝好：{"、".join(left)}。自動補裝沒有成功：{apt_reason(update, added, left)}。'
-                      f'更新照常進行；裝好之前不能用的功能：{without(left)}。請排除後重新執行安裝（會再自動補裝），'
-                      f'或自行安裝（sudo apt-get install {" ".join(left)}；不能上網時用帶來的 .deb 檔）。')
+                      f'更新照常進行，裝好之前：{without(left)}。'
+                      '排除後重新執行 sudo python3 scripts/manage.py install 會再自動補裝，'
+                      f'也可以自行安裝（sudo apt-get install {" ".join(left)}；不能上網時用帶來的 .deb 檔）；'
+                      'sudo python3 scripts/manage.py status 可以查看現況。')
             print(f'Note: {notice}', file=sys.stderr)
             report.update(missing_packages=left, notices=[notice])
         return report
@@ -1135,10 +1167,13 @@ def verify(root, systemd=None):
 
 def status(root, tools=None):
     """The installed version and whether the engine's host tools work; read-only (`install` adds missing ones)."""
-    state = json.loads(safe_path(root, STATE).read_text())
+    try:
+        state = json.loads(safe_path(root, STATE).read_text())
+    except PermissionError:
+        raise ValueError('讀取安裝紀錄需要管理者權限，請用 sudo 執行：sudo python3 scripts/manage.py status') from None
     # An engine that --no-backup kept is not in the state of that install: it needs its tools all the same.
     engine = BACKUP_HELPER in state['files'] or safe_path(root, BACKUP_HELPER).is_file()
-    result = {'status': 'ready', 'source_version': state['source_version'], 'tools': 'not-installed', 'packages': []}
+    result = {'status': 'ready', 'source_version': state['source_version'], 'tools': 'no-engine', 'packages': []}
     tools = engine_tools(root, engine, tools)
     if tools is not None:
         working = tools.working()
@@ -1251,7 +1286,7 @@ def main():
             result = status(root)
             if result['packages']:
                 print(f'Note: 備份與還原需要的套件沒有裝好：{"、".join(result["packages"])}。'
-                      f'不能用的功能：{without(result["packages"])}。請重新執行安裝'
+                      f'裝好之前：{without(result["packages"])}。請重新執行安裝'
                       '（sudo python3 scripts/manage.py install），會用 apt 自動補裝。', file=sys.stderr)
         else:
             result = verify(root)
