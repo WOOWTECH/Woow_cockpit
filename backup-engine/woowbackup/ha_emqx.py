@@ -2151,7 +2151,7 @@ def target_broker(work, tmp, target, export, ids, *, hint='', target_snapshot=No
         raise BackupError('incompatible', 'EMQX 候選憑證與目標不一致，已停止。')
     if target_config is not None:
         if target_etc_dir(read_candidate) != notes.get('etc_dir', ETC_DIR):   # E-24: this device's own etc directory
-            raise BackupError('incompatible', 'EMQX 候選啟動後設定與目標不一致，已停止。')
+            raise BackupError('incompatible', ETC_DIFFERS)
         want = target_boot if target_boot is not None else target_config
         got = boot_form(read_candidate) if target_boot is not None else read_effective_config(read_candidate)
         differ = sorted(root for root in set(want) | set(got) if want.get(root) != got.get(root))
@@ -2766,6 +2766,8 @@ FILES_MISSING = '這台 EMQX 的設定提到的檔案不在資料卷裡（{names
 TICKER_LOOSE = '暫用的 EMQX 的系統訊息沒辦法暫停，保留訊息的筆數可能差幾筆；核對時已容許這個差異，其他資料不受影響。'
 RECEIPT_UNREADABLE = '讀不到這台 EMQX 內建資料庫的核對值，這次略過還原後的帳號與 ACL 規則核對；筆數在轉換時已核對過。'
 BOOTSTRAP_LOST = ('這台預先建立的 MQTT 帳號（{names}）可能要在匯入後重新建立或重設密碼：{why}。' + RESET_HOW)
+ETC_DIFFERS = ('EMQX 不能搬過來：這台 EMQX 執行中的設定目錄（EMQX_ETC_DIR）和用它的設定啟動的暫用 EMQX 不同，多半是改過設定還沒重新啟動；'
+               '為避免匯入後設定跑掉，已停止，這台沒有任何改變。請先重新啟動這台 EMQX，再重新檢查與匯入。')
 DIRS_FOLLOW = ('這台 EMQX 的日誌或設定目錄不是預設的位置；暫用的 EMQX 用同樣的目錄（日誌放在暫用空間，不會搬），不影響匯入。')
 FILES_NOT_CARRIED = ('這台 EMQX 的設定提到 {count} 個暫用的 EMQX 帶不過去的檔案（下列設定項目）：它們放在只有執行時才有的位置、'
                      '找不到的環境變數底下或不會搬的資料夾。匯入不會搬動它們，匯入後請確認它們還在原處。')

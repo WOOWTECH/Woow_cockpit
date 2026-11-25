@@ -853,7 +853,9 @@ class FoldersAndFilesInTheRealFlowTests(base.EmqxCase):
         self.world.etc = {'woow-emqx': '/custom/etc'}
         result = self.check(self.upload_emqx(), ['emqx'])[0]
         self.assertFalse(result['importable'])
-        self.assertEqual([i['id'] for i in result['issues'] if i['level'] == 'stop'], ['failure.incompatible'])
+        [stop] = [i for i in result['issues'] if i['level'] == 'stop']
+        self.assertEqual((stop['id'], stop['message']), ('failure.incompatible', ha_emqx.ETC_DIFFERS))
+        self.assertIn('重新啟動這台 EMQX', stop['message'], 'it says what to do')
         self.assertEqual([c for c in self.world.ctl_calls if c[1][:2] == ['data', 'import']], [], 'nothing was imported')
 
     def test_an_etc_folder_the_broker_cannot_tell_stops_only_this_app(self):
@@ -933,7 +935,7 @@ class OwnDocsTests(unittest.TestCase):
         return [ha_emqx.DIRS_FOLLOW, ha_emqx.FILES_NOT_CARRIED.format(**plain), ha_emqx.DEVICE_INTEGRATIONS.format(**plain),
                 ha_emqx.DEVICE_ROUTING.format(**plain), ha_emqx.DEVICE_PSK, ha_emqx.DEVICE_PLUGINS.format(**plain),
                 ha_emqx.DURABLE_SESSIONS, ha_emqx.OUTPUT_DIR_UNUSABLE, ha_emqx.OUTPUT_DIR_ACTION, ha_emqx.DATA_DIR_MOVED,
-                ha_emqx.DATA_DIR_ACTION]
+                ha_emqx.DATA_DIR_ACTION, ha_emqx.ETC_DIFFERS]
 
     def test_the_docs_quote_the_engine(self):
         guide = (self.ROOT / 'docs' / 'backup.md').read_text(encoding='utf-8')
