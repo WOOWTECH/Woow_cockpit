@@ -2076,6 +2076,9 @@ way (`FlowContext.ha_import`, `adapter.ha_import`); every other restore keeps to
   cannot be told stops that app only.
 * **The check after the restore (X-AD-39).** A conversion stores no snapshot, so nothing is read; a value the app does not
   answer counts as not compared (`match` null, a warning); digests and a differing answer still fail the restore.
+  The same flag (`verification_entry(..., lenient=ctx.ha_import)`) governs the check after the automatic rollback of such a restore
+  (found by the RESTORE verifier, note D, 2026-11-25): a value the app does not answer is a warning that says the data was not
+  compared (health checks and digests were); a differing answer or a digest mismatch is still a problem of that app's rollback.
 * **Other services that use the data (D10: X-AD-14, X-AD-50).** The running containers of other services that mount one of
   the app's host directories (or the whole home) or write to one of its volumes are one line of the confirmation, issue
   `restore.pauses` (`confirm`, items: the service names without `.service`; in `Preflight.apps[].issues` and in `params.acknowledged`
