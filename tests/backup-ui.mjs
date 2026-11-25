@@ -5469,13 +5469,17 @@ try {
     haNoDeviceKey, async page => {
       await ready(page);
       await openHa(page, HA_PLAIN);
+      // From the start: this device makes the key when the import starts (UI-17), with the way to 加密金鑰.
+      const early = page.locator('.wizard-card .notice-info').filter({ hasText: '這台還沒有加密金鑰。匯入開始時會自動建立一把' });
+      await early.waitFor();
+      assert.equal(await early.locator('[data-focus="ha-keys"]').getAttribute('href'), '#/keys');
+      // The check needs no device key. This engine's check has no schema 2 (it does not make the key itself): the two steps
+      // keep the old rule, the conversion waits for the key.
+      await page.locator('[data-focus="ha-apps-next"]').click();
+      await page.locator('[data-ha-app="odoo"]').waitFor();
       const notice = page.locator('.wizard-card .notice-warn').filter({ hasText: '尚未建立加密金鑰。轉換好的備份會依「預設加密備份」用這台設備的金鑰加密' });
       await notice.waitFor();
       assert.equal(await notice.locator('[data-focus="ha-keys"]').getAttribute('href'), '#/keys');
-      // The check needs no device key; the conversion does.
-      await page.locator('[data-focus="ha-apps-next"]').click();
-      await page.locator('[data-ha-app="odoo"]').waitFor();
-      await notice.waitFor();
       assert.equal(await page.locator('#ha-db-0').isChecked(), true);
       assert.equal(await page.locator('[data-focus="ha-convert"]').isDisabled(), true, 'no conversion without the device key');
       // Set up meanwhile: the page hears of the key on its next status.
@@ -5509,7 +5513,7 @@ try {
       assert.equal(await page.locator('.wizard-card .notice-error').textContent(), KEY_REQUIRED.message);
     });
 
-  await check('從 HA 備份匯入: check results — a blocker disables 下一步; the Odoo database picker with its counts; n8n facts and workflows to fix; 「這只是測試」 starts unchecked',
+  await check('從 HA 備份匯入: check results — a blocker leaves out only its own app (UI-14); the Odoo database picker with its counts; n8n facts and workflows to fix; 「這只是測試」 starts unchecked',
     haFixture({ ha: { backups: [haMeta(HA_PLAIN, { protected: false, name: '未加密的 HA 備份' })] } }), async page => {
       await ready(page);
       // As the engine says it: every database is blocked (a module of another version), so Odoo is (review F-02).
@@ -5529,8 +5533,9 @@ try {
       assert.equal(await odoo.locator('.muted').first().textContent(), 'HA 附加元件版本 0.4.12，這台的 Odoo 18.0-20260926；Odoo 逐一比對每個模組，結果見下方各資料庫。');
       assert.equal(await page.locator('[data-ha-app="n8n"] .muted').first().textContent(), 'HA 的版本 2.43.6，這台的版本 2.43.6。');
       assert.equal(await page.locator('#ha-db-0').isDisabled(), true, 'no database can be chosen while Odoo is blocked');
-      assert.equal(await page.locator('[data-focus="ha-convert"]').isDisabled(), true, 'a blocker disables 下一步');
-      await page.getByText('有應用沒有通過檢查，無法轉換。請依上面的說明處理後按「重新檢查」，或按「上一步」取消勾選沒有通過的應用，只匯入其他應用。').waitFor();
+      // Odoo does not pass, n8n does: only Odoo is left out and the conversion of n8n can go on (UI-14).
+      assert.equal(await page.locator('[data-focus="ha-convert"]').isDisabled(), false, 'one blocker never holds back the other app');
+      await page.getByText('「Odoo 18」沒有通過檢查，這次不會匯入，這台的它也不會有任何變更；其他應用可以繼續轉換。').waitFor();
       // Odoo's custom modules and n8n's community nodes run here: import only a trusted backup.
       await page.locator('.wizard-card .notice-info').getByText('Odoo 的自訂模組和 n8n 的社群節點是會在這台執行的程式，只匯入你信任的備份。').waitFor();
       const n8n = page.locator('[data-ha-app="n8n"]');
@@ -6231,7 +6236,7 @@ try {
       assert.equal(facts['使用者檔案'], '不在這份備份裡（/share/nextcloud）');
       assert.equal(facts['使用者'], '3 位');
       assert.equal(await page.locator('[data-focus="ha-convert"]').isDisabled(), true);
-      await page.getByText('有應用沒有通過檢查，無法轉換。請依上面的說明處理後按「重新檢查」。').waitFor();
+      await page.getByText('沒有應用通過檢查，無法轉換。請依上面的說明處理後按「重新檢查」，或按「上一步」改選其他應用。').waitFor();
       assert.equal((await calls(page, 'ha-convert-start')).length, 0);
       await allWidths(page, 'batch 2 Nextcloud refused');
       assert.deepEqual((await contrastOf(page)).failures, [], 'the refused Nextcloud card keeps WCAG AA contrast');
@@ -6364,7 +6369,7 @@ try {
       assert.equal(await emqx.locator('.muted').first().textContent(), 'HA 附加元件版本 5.9.1。');
       assert.equal(await emqx.locator('dl.metadata').count(), 0);
       assert.equal(await page.locator('[data-focus="ha-convert"]').isDisabled(), true);
-      await page.getByText('有應用沒有通過檢查，無法轉換。請依上面的說明處理後按「重新檢查」。').waitFor();
+      await page.getByText('沒有應用通過檢查，無法轉換。請依上面的說明處理後按「重新檢查」，或按「上一步」改選其他應用。').waitFor();
       // EMQX alone brings no code, and a test import turns nothing of it off.
       await page.locator('.wizard-card .notice-info').getByText('搬過來的帳號、金鑰和設定都來自這份 HA 備份，只匯入你信任的備份。').waitFor();
       assert.equal(await page.locator('#ha-test-mode-help').textContent(), '勾選時，EMQX 不會先關掉任何功能，還原後會照常運作；正式搬家請不要勾。');
