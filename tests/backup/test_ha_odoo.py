@@ -751,6 +751,57 @@ class ConfTests(unittest.TestCase):
         self.assertEqual(ha_odoo.LIVE_ROLE_SQL, ha_odoo.live_role_sql('odoo'))
 
 
+class ConfScriptTests(unittest.TestCase):
+    """The script that reads this device's odoo.conf in the container, run here by a real Python on the committed template
+    of the tenant install (rendered with test values): only the three settings come out, in any of the shapes the file has."""
+
+    TEMPLATE = (Path(__file__).resolve().parents[1] / 'e2e' / 'lab' / 'evidence' / 'arm54-final-20261123'
+                / 'odoo-package-c578b8a' / 'config' / 'odoo.conf.template')
+
+    def run_script(self, text):
+        import subprocess
+        import sys
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / 'odoo.conf'
+            path.write_text(text, encoding='utf-8')
+            done = subprocess.run([sys.executable, '-I', '-', str(path)], input=ha_odoo.CONF_SCRIPT.encode(),
+                                  capture_output=True, timeout=60)
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertEqual(done.stderr, b'', 'nothing on stderr: a value never reaches it')
+        return json.loads(done.stdout)
+
+    def rendered(self, **values):
+        base = {'POSTGRES_PASSWORD': 'Pw-from-the-template-0123', 'ODOO_ADMIN_PASSWORD': 'Master-0123456789',
+                'WOOW_ODOO_LIST_DB': 'False', 'DB_NAME_LINE': 'db_name = odoo', 'DB_FILTER_LINE': 'dbfilter = ^odoo$',
+                'WOOW_ODOO_WORKERS': '0', 'WOOW_ODOO_MAX_CRON_THREADS': '2', 'WOOW_ODOO_DB_MAXCONN': '8',
+                'WOOW_ODOO_LIMIT_TIME_CPU': '600', 'WOOW_ODOO_LIMIT_TIME_REAL': '1200',
+                'WOOW_ODOO_LIMIT_TIME_REAL_CRON': '600', 'WOOW_ODOO_LIMIT_REQUEST': '65536', 'SMTP_LINES': ''}
+        base.update(values)
+        text = self.TEMPLATE.read_text(encoding='utf-8')
+        for key, value in base.items():
+            text = text.replace(f'@@{key}@@', value)
+        return text
+
+    def test_the_tenants_own_template_gives_its_database_account_and_password_and_nothing_else(self):
+        doc = self.run_script(self.rendered())
+        self.assertEqual(doc, {'db_name': 'odoo', 'db_user': 'odoo', 'db_password': 'Pw-from-the-template-0123'})
+        self.assertNotIn('Master-0123456789', json.dumps(doc), 'the master password is never printed')
+
+    def test_other_shapes_of_the_file(self):
+        self.assertEqual(self.run_script(self.rendered(DB_NAME_LINE='db_name = prod,other')).get('db_name'), 'prod')
+        self.assertNotIn('db_name', self.run_script(self.rendered(DB_NAME_LINE='')), 'no database named: the tenant default')
+        self.assertNotIn('db_name', self.run_script(self.rendered(DB_NAME_LINE='db_name = False')))
+        self.assertEqual(self.run_script(self.rendered(POSTGRES_PASSWORD='p%w=d $x'))['db_password'], 'p%w=d $x')
+        self.assertNotIn('db_password', self.run_script(self.rendered(POSTGRES_PASSWORD='False')))
+        self.assertEqual(self.run_script('[other]\ndb_user = x\n'), {})
+        self.assertEqual(self.run_script(''), {})
+
+    def test_a_file_that_does_not_parse_says_only_what_kind_of_error_it_was(self):
+        doc = self.run_script('this is = not a config file\nno section at all db_password = LeakMe-0123\n')
+        self.assertEqual(set(doc), {'error'})
+        self.assertNotIn('LeakMe', json.dumps(doc))
+
+
 class InventoryTests(unittest.TestCase):
     """OD-35, OD-73: one module that cannot be read is skipped; the wait and the room grow with the data."""
 

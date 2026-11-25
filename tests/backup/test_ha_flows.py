@@ -215,6 +215,7 @@ class World(HaWorld):
         self.ha_databases = [['woowtest', 9000000, 'C', 'C']]
         self.extensions_by_db = {}
         self.dir_data = {}
+        self.extra_symlink = False
         self.scan_broken = []
         self.live_db_stopped = False
         self.superuser_kinds = []
@@ -276,7 +277,8 @@ class World(HaWorld):
 
     def export(self, volume):
         if volume == 'odoo-extra-vol':
-            return tar_of([{'name': '.', 'type': 'dir'}, {'name': 'kept.txt', 'data': b'this device'}])
+            link = [{'name': 'escape', 'type': 'symlink', 'linkname': '../../etc/passwd'}] if self.extra_symlink else []
+            return tar_of([{'name': '.', 'type': 'dir'}, {'name': 'kept.txt', 'data': b'this device'}, *link])
         if volume == 'odoo18-web-data':
             return tar_of([{'name': '.', 'type': 'dir', 'uid': 100, 'gid': 101},
                            {'name': 'filestore', 'type': 'dir', 'uid': 100, 'gid': 101},
@@ -627,6 +629,14 @@ class OdooTargetTests(OdooCase):
         self.assertEqual((restore[restore.index('-U') + 1], restore[restore.index('-d') + 1]), ('odoo18', 'prod'))
         self.assertTrue(any(db == 'prod' for psql in self.world.owner.psql.values() for db, _s, _t in psql.executed))
         self.assertEqual(result['apps'], ['odoo'])
+
+    def test_a_role_password_that_is_no_verifier_is_set_again_from_the_configuration(self):
+        """OD-21: only a SCRAM or md5 verifier is taken over; anything else (a plain text, nothing) is not."""
+        for password in (None, '', 'plain-text-password', 'SCRAM-SHA-256$bad', "md5'; DROP ROLE x; --"):
+            with self.subTest(password=password):
+                self.world.live_role = {**self.world.live_role, 'password': password}
+                row = self.check()
+                self.assertEqual(self.ids(row)['odoo.role-password-reset'], 'auto')
 
     def test_a_password_of_the_configuration_never_reaches_a_command_line_or_a_log(self):
         """OD-20, OD-21: it is sent on stdin to psql and masked."""
@@ -1020,6 +1030,21 @@ class OdooDatabaseTests(OdooCase):
         self.assertEqual(sorted(items['dirs']), ['.local/share/odoo-extra', '.local/share/odoo18/addons'])
         with tarfile.open(fileobj=io.BytesIO(self.world.volume_data['odoo-extra-vol'])) as tar:
             self.assertEqual(tar.extractfile('kept.txt').read(), b'this device')
+
+    def test_a_link_of_this_devices_own_volume_that_leaves_it_is_left_out_and_confirmed_once(self):
+        """OD-12, X-NS-08: the restore would refuse the volume for it; the link is left out and listed instead."""
+        self.catalog['odoo'].volumes = [*self.catalog['odoo'].volumes, {'name': 'odoo-extra-vol'}]
+        self.world.extra_symlink = True
+        ha_id = self.upload_odoo()
+        with self.assertRaises(BackupError) as caught:
+            self.convert(ha_id, ['odoo'])
+        self.assertEqual(caught.exception.code, 'confirmation-required')
+        (line,) = caught.exception.issues
+        self.assertEqual((line.id, list(line.names)), ('files.skipped', ['odoo-extra-vol：escape']))
+        self.assertEqual([run[0] for run in self.world.runs if run[0] in ('hapg', 'odoo-db')], [], 'before the heavy part')
+        self.convert(ha_id, ['odoo'], acknowledged={'odoo': [line.key('odoo')]})
+        with tarfile.open(fileobj=io.BytesIO(self.world.volume_data['odoo-extra-vol'])) as tar:
+            self.assertEqual(tar.getnames(), ['.', 'kept.txt'])
 
     def test_a_layout_the_import_does_not_know_still_stops_only_odoo_and_says_what_to_do(self):
         self.catalog['odoo'].volumes = [{'name': 'odoo18-db-data-isolated'}]      # the data dir volume is not declared
