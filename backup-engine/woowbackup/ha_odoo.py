@@ -2412,7 +2412,8 @@ def ext_ident(name):
     return '"' + name + '"'
 
 
-ARCHIVE_SETTINGS = ('ENCODING', 'STDSTRINGS', 'SEARCHPATH')   # the three entries every pg_dump 16 archive begins with
+ARCHIVE_SETTINGS = ('ENCODING', 'STDSTRINGS', 'SEARCHPATH')   # the three entries every pg_dump archive of 11 and later begins with
+LISTING_SLACK = 9      # entries beyond the three settings a plain listing may keep back (a real PostgreSQL 16.15 listing: 2)
 
 
 def toc_entries(text):
@@ -2436,14 +2437,21 @@ INCOMPLETE_LIST = '資料庫匯出檔的項目清單沒有完整送達（主機�
 
 
 def check_listing(text):
-    """The `pg_restore -l` listing is whole when the number of its entries is what its own header says the archive has
-    (pg-stdin follow-up F4: a listing that came back short would restore only the part it names, and nothing would notice).
-    The header counts the three archive settings of a pg_dump 16 archive (ENCODING, STDSTRINGS, SEARCHPATH), which pg_restore
-    keeps out of a plain listing: the lines are short by exactly the ones they do not show. A listing without the header
-    cannot be checked and is refused. Returns the number of entries."""
+    """The `pg_restore -l` listing is whole when its entries are the ones its own header says the archive has, less the
+    few a plain listing keeps back (pg-stdin follow-up F4: a listing that came back short would restore only the part it
+    names, and nothing would notice). What a plain listing keeps back is no exact number: a REAL listing (PostgreSQL
+    16.15, the Nextcloud lane's probe of 2026-11-24) has 1131 entry lines under `TOC Entries: 1136`, so it holds back
+    the three archive settings ENCODING, STDSTRINGS and SEARCHPATH and two more entries (such as the public schema's,
+    which has no definition). The lines may be short of the header by the settings not shown, plus LISTING_SLACK; a
+    listing without the header, with more lines than the header or with a larger gap is refused. A gap inside the slack
+    goes unnoticed (a listing that was cut short loses a stretch of its end, for an Odoo database hundreds of entries;
+    the real run, FOR-REAL.txt 1, brings the numbers of an Odoo listing and the slack can then be tightened). Returns
+    the number of entries."""
     entries, declared, shown = toc_entries(text)
-    if declared is None or declared != entries + len(ARCHIVE_SETTINGS) - shown:
-        # the numbers (no content) go with the error: what a real run shows decides whether the relation is right (R5)
+    held_back = None if declared is None else declared - entries
+    lowest = len(ARCHIVE_SETTINGS) - shown
+    if held_back is None or not lowest <= held_back <= lowest + LISTING_SLACK:
+        # the numbers (no content) go with the error: what a real run shows decides how tight the check can be (R5)
         raise BackupError('job-failed', INCOMPLETE_LIST, listed=entries, shown=shown,
                           **({} if declared is None else {'declared': declared}))
     return entries
@@ -2463,7 +2471,8 @@ def restore_dump(work, tmp, dump, database, *, new_db=DEFAULT_DB_NAME, role=DEFA
                        max_output=podman.scaled_limit(TOC_OUTPUT, size, ratio=TOC_OUTPUT_RATIO,
                                                       ceiling=TOC_OUTPUT_CEILING)).stdout or b''
     text = toc.decode('utf-8', 'surrogateescape')
-    check_listing(text)
+    listed = check_listing(text)
+    work.log(f'已檢查資料庫匯出檔的項目清單：共 {listed} 項（檔頭記載 {toc_entries(text)[1]} 項）。')
     kinds = superuser_kinds(text)
     if kinds:
         if sink is None:
