@@ -282,6 +282,68 @@ class PinnedPreRestoreBackupTests(ConvertedRestoreCase):
         self.assertFalse(kept.is_kept(self.storage.get(result['safety_backup_id'])))
 
 
+class KeptCopyListAndDeleteTests(CliCase):
+    """The page needs no magic string to find a kept copy: the backup list says `kept` (derived from the note, only when true),
+    and the converted backup stops pointing at a copy the administrator deleted."""
+
+    def setUp(self):
+        super().setUp()
+        self.source = self.backup()['backup_id']
+        self.copy = self.backup()['backup_id']
+        self.storage.index[self.copy].update(type='safety', note=kept.NOTE_PREFIX + '示範（匯入前整個資料庫服務，含其他資料庫）')
+        os.makedirs(self.paths.data, mode=0o700, exist_ok=True)
+        haimport.register(self.paths, self.source, ha_registry_row(), now=time.time())
+        haimport.update_row(self.paths, self.source, kept=self.copy)
+
+    def listed(self):
+        return {b['id']: b for b in self.call(['list'], {})['backups']}
+
+    def test_the_list_marks_the_kept_copy_and_only_it(self):
+        listed = self.listed()
+        self.assertIs(listed[self.copy].get('kept'), True)
+        self.assertNotIn('kept', listed[self.source])
+        self.assertEqual(listed[self.source]['from_ha']['kept'], self.copy, 'the converted backup names its copy')
+
+    def test_an_ordinary_pre_restore_backup_is_not_marked(self):
+        self.storage.index[self.copy]['note'] = '還原前自動備份（還原來源 x）'
+        self.assertNotIn('kept', self.listed()[self.copy])
+
+    def test_a_pinned_pre_restore_backup_is_marked_too(self):
+        self.storage.index[self.copy]['note'] = kept.note_for(None, source_note='還原前自動備份（還原來源 x）')
+        self.assertIs(self.listed()[self.copy].get('kept'), True)
+
+    def test_deleting_the_copy_clears_the_pointer_and_nothing_else_of_the_row(self):
+        before = haimport.load_registry(self.paths)[self.source]
+        got = self.call(['delete'], {'backup_id': self.copy})
+        self.assertNotIn('error', got)
+        row = haimport.load_registry(self.paths)[self.source]
+        self.assertIsNone(row['kept'])
+        self.assertEqual({k: v for k, v in row.items() if k != 'kept'}, {k: v for k, v in before.items() if k != 'kept'})
+        self.assertIsNone(self.listed()[self.source]['from_ha']['kept'])
+
+    def test_deleting_another_backup_leaves_the_pointer(self):
+        other = self.backup()['backup_id']
+        self.assertNotIn('error', self.call(['delete'], {'backup_id': other}))
+        self.assertEqual(haimport.load_registry(self.paths)[self.source]['kept'], self.copy)
+
+    def test_deleting_one_copy_leaves_the_pointer_of_another_converted_backup(self):
+        second_source = self.backup()['backup_id']
+        second_copy = self.backup()['backup_id']
+        self.storage.index[second_copy].update(type='safety', note=kept.NOTE_PREFIX + '另一份')
+        haimport.register(self.paths, second_source, ha_registry_row(), now=time.time())
+        haimport.update_row(self.paths, second_source, kept=second_copy)
+        self.assertNotIn('error', self.call(['delete'], {'backup_id': self.copy}))
+        rows = haimport.load_registry(self.paths)
+        self.assertIsNone(rows[self.source]['kept'])
+        self.assertEqual(rows[second_source]['kept'], second_copy)
+
+    def test_an_unreadable_registry_does_not_stop_the_delete(self):
+        with mock.patch.object(haimport, 'load_registry', side_effect=OSError('unreadable')):
+            got = self.call(['delete'], {'backup_id': self.copy})
+        self.assertNotIn('error', got)
+        self.assertNotIn(self.copy, self.listed())
+
+
 class KeptModuleTests(unittest.TestCase):
     def test_only_a_safety_backup_with_the_note_is_a_kept_copy(self):
         good = {'id': 'a', 'type': 'safety', 'note': kept.NOTE_PREFIX + 'x'}

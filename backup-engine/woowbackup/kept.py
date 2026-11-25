@@ -51,6 +51,16 @@ def kept_ids(backups):
     return {record['id'] for record in backups if is_kept(record) and isinstance(record.get('id'), str)}
 
 
+def forget_pointer(paths, backup_id):
+    """The copy `backup_id` was deleted: the converted backup whose ha-imports.json row names it no longer does (the row says
+    `kept` null again). Nothing else of the row changes; a file that cannot be read or written is left as it is."""
+    from . import haimport
+    rows = haimport.load_registry(paths) or {}
+    for source_id, row in rows.items():
+        if row.get('kept') == backup_id:
+            haimport.update_row(paths, source_id, kept=None)
+
+
 def wants_pin(plans):
     """True when an app of the restore asks for its pre-restore backup to be kept (`keep_safety`, see the module text)."""
     return any(isinstance(getattr(plan, 'manifest', None), dict) and plan.manifest.get('keep_safety') is True

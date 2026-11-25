@@ -19,6 +19,7 @@ from concurrent.futures import ThreadPoolExecutor
 from contextlib import ExitStack
 
 from . import flows, haapps, hachain, haissues, hastore
+from . import kept as kept_copies
 from . import jobs as jobmod
 from . import version as engine_version
 from .errors import BackupError
@@ -554,7 +555,8 @@ def backup_view(meta, key_ids, scheduled=frozenset(), from_ha=None):
     """BackupMeta for the page: `format` (1|2), `encrypted`, `key_available` (always true without encryption),
     `unauthenticated` (an unencrypted upload: a restore needs `accept_unauthenticated`) and `scheduled` (a manual backup
     the schedule's registry lists: 排程備份; the index itself is unchanged); `from_ha` only for a manual backup converted
-    from a Home Assistant backup (ha-imports.json; branch feat/ha-import)."""
+    from a Home Assistant backup (ha-imports.json; branch feat/ha-import); `kept` (true, only then) for a kept copy of a
+    database service (kept.py: the administrator's to download or delete; nothing prunes it)."""
     from .storage import unauthenticated
     view = dict(meta)
     view.setdefault('format', 1)
@@ -565,6 +567,8 @@ def backup_view(meta, key_ids, scheduled=frozenset(), from_ha=None):
     origin = (from_ha or {}).get(view.get('id')) if view.get('type') == 'manual' else None
     if origin is not None:
         view['from_ha'] = origin
+    if kept_copies.is_kept(view):
+        view['kept'] = True  # a kept copy (S4) or a pinned pre-restore backup: derived from the note, only when true
     return view
 
 
@@ -1121,6 +1125,9 @@ def cmd_delete(svc, req):
         from . import haimport
         with contextlib.suppress(Exception):  # a converted backup's origin row goes with it (ha-imports.json)
             haimport.forget(svc.paths, backup_id)
+    elif kept_copies.is_kept(meta):
+        with contextlib.suppress(Exception):  # the converted backup no longer points at a copy that is gone
+            kept_copies.forget_pointer(svc.paths, backup_id)
     # Every deletion is journaled, like retention's (review L6).
     svc.audit(f'backup-delete backup={backup_id} type={meta.get("type")} '
               f'encrypted={"false" if meta.get("encrypted") is False else "true"} loginuid={_login_uid()}')
