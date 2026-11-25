@@ -1042,6 +1042,37 @@ class CheckTests(NextcloudCase):
         row = self.check(self.upload_nextcloud(share=share), ['nextcloud'])[0]
         self.assertEqual(issue_of(row, 'nextcloud.server-side-encryption')['items'], ['files_encryption'])
 
+    def test_what_the_reader_leaves_out_of_the_data_directory_is_one_line(self):
+        # READ's line `files.skipped`: a device file and a FIFO of the users' files are not moved and are listed (check and
+        # conversion alike); a symlink has its own line
+        share = share_tar(extra=[{'name': 'nextcloud/admin/files/pipe', 'type': 'fifo'},
+                                 {'name': 'nextcloud/admin/files/disk', 'type': 'chr', 'devmajor': 1, 'devminor': 3}])
+        row = self.check(self.upload_nextcloud(share=share), ['nextcloud'])[0]
+        issue = issue_of(row, 'files.skipped')
+        self.assertEqual((issue['level'], issue['items']), ('confirm', ['nextcloud/admin/files/pipe', 'nextcloud/admin/files/disk']))
+        self.assertEqual(issue_of(row, 'nextcloud.symlinks-skipped'), None)
+        with self.assertRaises(BackupError) as caught:
+            self.convert(self.upload_nextcloud(share=share), ['nextcloud'])
+        self.assertEqual(caught.exception.code, 'confirmation-required')
+        result = self.convert(self.upload_nextcloud(share=share), ['nextcloud'], acknowledged=ack(row, 'files.skipped'))
+        self.assertEqual(result['results'][0]['status'], 'converted')
+        data = members(self.world.dirs[DIRS[3]])
+        self.assertFalse([n for n in data if n.endswith(('/pipe', '/disk'))])
+        self.assertEqual(data['./admin/files/hello.txt'][1], b'hello from HA')
+
+    def test_what_the_reader_leaves_out_of_the_add_on_is_one_line(self):
+        extra = [{'name': 'data/nextcloud/custom_apps/notes/link', 'type': 'symlink', 'linkname': '../../../../etc/passwd'}]
+        row = self.check(self.upload_nextcloud(extra=extra), ['nextcloud'])[0]
+        issue = issue_of(row, 'files.skipped')
+        self.assertEqual((issue['level'], issue['items']), ('confirm', ['data/nextcloud/custom_apps/notes/link']))
+        with self.assertRaises(BackupError) as caught:
+            self.convert(self.upload_nextcloud(extra=extra), ['nextcloud'])
+        self.assertEqual(caught.exception.code, 'confirmation-required')
+        self.convert(self.upload_nextcloud(extra=extra), ['nextcloud'], acknowledged=ack(row, 'files.skipped'))
+        html = members(self.world.dirs[DIRS[2]])
+        self.assertIn('./custom_apps/notes/lib/Notes.php', html)
+        self.assertNotIn('./custom_apps/notes/link', html)
+
     def test_a_nextcloud_that_was_never_set_up_stops_only_nextcloud(self):          # NC-13
         row = self.check(self.upload_nextcloud(config=HA_CONFIG.replace(b"'installed' => true,", b"'installed' => false,")),
                          ['nextcloud'])[0]
@@ -1776,6 +1807,25 @@ class LiveTargetTests(NextcloudCase):
                 self.convert(self.upload_nextcloud(), ['nextcloud'])
                 scripts = '\n'.join(script for _db, script, _tx in self.world.psql['nc-db'].executed)
                 self.assertIn('CONNECTION LIMIT 5 PASSWORD \'SCRAM-SHA-256$', scripts)
+
+    def test_the_verifier_is_the_one_of_rfc_7677(self):
+        # RFC 7677 section 3 (user "user", password "pencil", salt W22ZaJ0SNY7soEsUEjb6gQ==, 4096 iterations): the verifier
+        # PostgreSQL keeps, and the server signature and client proof of the RFC's exchange come out of its keys
+        import base64
+        import hmac
+        verifier = nc.scram_verifier('pencil', iterations=4096, salt=base64.b64decode('W22ZaJ0SNY7soEsUEjb6gQ=='))
+        self.assertEqual(verifier, 'SCRAM-SHA-256$4096:W22ZaJ0SNY7soEsUEjb6gQ==$WG5d8oPm3OtcPnkdi4Uo7BkeZkBFzpcXkuLmtbsT4qY=:'
+                                   'wfPLwcE6nTWhTAmQ7tl2KeoiWGPlZqQxSrmfPwDl2dU=')
+        self.assertRegex(verifier, nc.ha_odoo.VERIFIER_RE)
+        stored, server = [base64.b64decode(x) for x in verifier.split('$')[2].split(':')]
+        auth = (b'n=user,r=rOprNGfwEbeRWgbNEkqO,r=rOprNGfwEbeRWgbNEkqO%hvYDpWUa2RaTCAfuxFIlj)hNlF$k0,s=W22ZaJ0SNY7soEsUEjb6gQ==,'
+                b'i=4096,c=biws,r=rOprNGfwEbeRWgbNEkqO%hvYDpWUa2RaTCAfuxFIlj)hNlF$k0')
+        self.assertEqual(base64.b64encode(hmac.new(server, auth, hashlib.sha256).digest()).decode(),
+                         '6rriTRBi23WpRR/wtup+mMhUZUn/dB5nLTJRsjl95G4=')
+        proof = base64.b64decode('dHzbZapWIk4jUhN+Ute9ytag9zjfMHgsqmmiz7AndVQ=')
+        client_key = bytes(a ^ b for a, b in zip(proof, hmac.new(stored, auth, hashlib.sha256).digest()))
+        self.assertEqual(hashlib.sha256(client_key).digest(), stored)
+        self.assertNotEqual(nc.scram_verifier('pencil'), nc.scram_verifier('pencil'), 'a new salt every time')
 
     def test_a_role_that_cannot_be_made_stops_only_nextcloud(self):
         # NC-07: no usable password anywhere: config.php has none, or one SCRAM cannot take as it is
