@@ -718,10 +718,12 @@ def paused(work, app, sink, units, *, issue_id=PAUSE_ID):
     happens in it; a unit that cannot be started again is tried again by the app's clean-up (put_back_later)."""
     runner = work.runner(app)
     temp = work.temp(app)
-    stopped = []
+    stopped, started = [], set()
 
     def start(unit):
-        runner.systemctl('start', '--', unit, timeout=hatarget.START_TIMEOUT, max_output=64 * 1024)
+        if unit not in started:       # the clean-up's put-back finds it started already
+            runner.systemctl('start', '--', unit, timeout=hatarget.START_TIMEOUT, max_output=64 * 1024)
+            started.add(unit)
 
     try:
         for unit, _container in units:
@@ -916,7 +918,7 @@ def copy_kept(live_path, out, *, keep_prefs, keep_mcp=False, what='這台 OpenDe
     except tarfile.TarError:
         raise BackupError('job-failed', f'{what}的匯出內容無法讀取。') from None
     if pending:
-        done = links_as_files(live_path, out.tar, pending, what, report=report)
+        done = links_as_files(live_path, out.tar, pending, what, report=report, label='這台：')
         if stats is not None:
             stats['links_copied'] = done
     return (live_prefs if isinstance(live_prefs, dict) else None), (live_mcp if isinstance(live_mcp, dict) else None)
