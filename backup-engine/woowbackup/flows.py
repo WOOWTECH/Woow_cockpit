@@ -36,6 +36,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from . import haissues, util
+from . import kept as kept_copies  # (flows has many locals named kept)
 from . import version as engine_version
 from .adapters.base import PAUSED_PREFIX
 from .errors import BackupError
@@ -1031,6 +1032,7 @@ def prune_safety(ctx, app_ids, keep=SAFETY_KEEP, exclude=()):
         return
     exclude = set(exclude) | pinned
     backups = [b for b in ctx.storage.list_backups() if b.get('type') == 'safety']
+    exclude |= kept_copies.kept_ids(backups)  # a kept copy (S4) is the administrator's to delete: never pruned
     backups.sort(key=lambda b: (b.get('created') or '', b.get('id') or ''), reverse=True)
     keepers, per_app = set(), {}
     for backup in backups:
@@ -1258,6 +1260,7 @@ def run_restore(ctx, params):
     keep_fresh_marker = False
     dirs_marked = False
     plans, handover = [], {}
+    kept_info = {}  # {app id: kept.Kept}: the copies of whole database services this restore kept (S4)
     pending = None  # the pre-restore copy (pending/<job>/) until it is packaged into the safety backup
     try:
         ctx.phase('decrypt')
@@ -1271,6 +1274,8 @@ def run_restore(ctx, params):
         ctx.phase('preflight')
         plans = _preflight(ctx, apps, manifest, extract_dir)
         _require_confirmed(ctx, plans, ctx.acknowledged)
+        if ctx.ha_import:
+            kept_copies.check_space(ctx, plans)  # S4: before anything stops, there must be room for the kept copy of a database service
         device_key = ctx.keys.device_key()
         inplace = [plan for plan in plans if plan.mode == 'inplace']
         if inplace and encrypt_safety and device_key is None:
@@ -1303,6 +1308,9 @@ def run_restore(ctx, params):
                 ctx.skip('safety')
             if pending is None:
                 ctx.skip('safety-package')
+            if ctx.ha_import:
+                kept_info.update(kept_copies.keep(ctx, plans, handover, staging=staging, key=device_key if encrypt_safety else None,
+                                           source_backup_id=backup_id, result=result))
         except BaseException:
             _undo_preparation(ctx, plans, handover)
             _drop_pending(ctx, pending, result)
@@ -1382,8 +1390,9 @@ def run_restore(ctx, params):
             error = exc if isinstance(exc, BackupError) else BackupError(
                 'internal-error', '還原過程發生未預期的錯誤。')
             _rollback(ctx, touched, result, staging, error, pending,
-                      untouched=[plan for plan in plans if plan not in touched], handover=handover)
+                      untouched=[plan for plan in plans if plan not in touched], handover=handover, kept_info=kept_info)
         result['changed'] = True
+        kept_copies.put_back(ctx, plans, kept_info, result)  # S4: the other databases of a kept service go back into the new one
         resume_paused(ctx, plans, result)  # D10: the services paused for the restore run again, the data is in place
         # The job succeeded: the host-directory copies its restore moved aside can go now, and only now. Recorded
         # first, so a job that dies while deleting them is reported as a finished restore (review L4).
@@ -1578,6 +1587,8 @@ def _take_safety_copy(ctx, inplace, backup_id, meta, params, key, result, handov
     (review 2026-11-14)."""
     ctx.log('保存還原前資料…' if key is not None else '保存還原前資料（還原前備份依設定不加密）…')
     note = f'還原前自動備份（還原來源 {backup_id}）'
+    if kept_copies.wants_pin(inplace):  # L-38: the pre-restore backup holds what the restore replaces and nothing else does: keep it
+        note = kept_copies.note_for(None, source_note=note)
     source_is_safety = meta.get('type') == 'safety'
     # Recovering *to* a pre-restore backup, or the user explicitly accepted it (review CR-16): the current state is
     # the broken one being replaced.
@@ -2134,7 +2145,7 @@ def _preflight(ctx, apps, manifest, extract_dir=None):
     return plans
 
 
-def _rollback(ctx, touched, result, staging, error, pending, *, untouched=(), handover=None):
+def _rollback(ctx, touched, result, staging, error, pending, *, untouched=(), handover=None, kept_info=None):
     """Bring every app the failed restore changed back to its state before the restore, from the pre-restore copy
     `pending` (no extraction: it is laid out like an extracted archive) or, when the copy went after its packaging in
     the downtime, from the safety backup extracted as before 2026.11.14.2; remove fresh deployments, then package the
@@ -2201,8 +2212,9 @@ def _rollback(ctx, touched, result, staging, error, pending, *, untouched=(), ha
                 (handover or {}).pop(plan.app.id, None)
                 ctx.note_writers(plan.app.id, [])
                 swapped = getattr(plan.adapter, 'swapped_dirs', None)
+                whole = kept_copies.rollback_volumes(kept_info, plan.app.id)  # S4: a service whose copy was kept comes back whole
                 adapter.restore(app_manifest, source['data'], mode='inplace', rollback=True,
-                                replaced_dirs=swapped() if swapped else ())
+                                replaced_dirs=swapped() if swapped else (), **({'kept_volumes': whole} if whole else {}))
                 failed = [c for c in adapter.health() if c['status'] == 'fail']
                 if failed:
                     problems.append(f'「{name}」回復後健康檢查未通過')

@@ -405,6 +405,12 @@ class World:
         self.pauses = {}          # app id -> other services its pre-restore copy / restore pauses (D10)
         self.resume_fail = set()  # services resume_paused() cannot start again
         self.paused_started = []  # units start_paused() was asked for (the recovery of a dead job)
+        self.kept_wanted = {}     # app id -> pg ids whose whole database service the restore keeps a copy of first (S4)
+        self.fail_keep = set()    # app ids whose keep_cluster() fails
+        self.put_back_failed = {}  # app id -> [(database, reason)] put_back_databases() cannot put back
+        self.put_back_raises = {}  # app id -> exception put_back_databases() raises
+        self.keep_safety = set()  # app ids whose backups carry keep_safety (L-38)
+        self.kept_estimate = 0
 
     def factory(self, app, *, log, phase=None, checkpoint=None, writers_hook=None, imported_hook=None):
         adapter = FakeAdapter(app, self, log, phase, checkpoint, writers_hook, imported_hook)
@@ -437,6 +443,9 @@ class FakeAdapter:
         self.ha_import = False
         self.restore_issues = []
         self.paused = []
+        self.kept_wanted = []
+        self.kept_estimate = 0
+        self.acknowledged = frozenset()
 
     def probe(self):
         deployed = self.world.deployed[self.app.id]
@@ -503,20 +512,26 @@ class FakeAdapter:
                     'verify_snapshot': {} if self.app.id in self.world.no_snapshot else snapshot_of(data)}
         if keep_stopped and self.world.keep_stopped_drops_snapshot:
             manifest['verify_snapshot'] = {}
+        if self.app.id in self.world.keep_safety:
+            manifest['keep_safety'] = True
         return manifest, [entry]
 
     def preflight(self, app_manifest, *, mode, entry_sizes=None, extracted_dir=None):
         self.world.preflight_dirs.append(extracted_dir)
         self.restore_issues = list(self.world.restore_issues.get(self.app.id, []))
+        self.kept_wanted = list(self.world.kept_wanted.get(self.app.id, []))
+        self.kept_estimate = self.world.kept_estimate if self.kept_wanted else 0
         if self.app.id in self.world.preflight_fail:
             return [{'id': f'{self.app.id}/image', 'status': 'fail', 'message': '缺少映像 localhost/x:1。'}]
         return [{'id': f'{self.app.id}/items', 'status': 'ok', 'message': '項目齊全。'},
                 {'id': f'{self.app.id}/catalog', 'status': 'warn', 'message': '設定與備份時不同。'}]
 
     def restore(self, app_manifest, extracted_dir, *, mode, rollback=False, unchecked_databases_ok=False,
-                replaced_dirs=()):
+                replaced_dirs=(), kept_volumes=None):
         assert rollback == (self.phase is noop), 'rollbacks (and only they) use rollback=True and no phases'
         self.world.events.append(('restore', self.app.id, mode, 'rollback' if rollback else 'restore'))
+        if kept_volumes:
+            self.world.events.append(('kept-volumes', self.app.id, tuple(sorted(kept_volumes))))
         if rollback:
             self.world.events.append(('replaced_dirs', self.app.id, tuple(sorted(replaced_dirs))))
         self.run = 'rollback' if rollback else 'restore'
@@ -553,6 +568,39 @@ class FakeAdapter:
         self.world.events.append(('imported', self.app.id))
         self.imported_hook()  # like the real adapter: the import finished, the units start next (HD-04)
         self.phase('start')
+
+    def keep_cluster(self, work):
+        """Like the real adapter: stops the app's units, writes the cold copy and the dumps under `work`."""
+        self.world.events.append(('keep', self.app.id))
+        if self.app.id in self.world.fail_keep:
+            raise BackupError('job-failed', '無法匯出資料庫服務的資料卷。', app=self.app.id)
+        (Path(work) / 'volumes').mkdir(mode=0o700, parents=True, exist_ok=True)
+        (Path(work) / 'postgres').mkdir(mode=0o700, exist_ok=True)
+        volume = Path(work) / 'volumes' / 'pgdata.tar'
+        volume.write_bytes(b'COLD-COPY-' + self.world.data[self.app.id])
+        dump = Path(work) / 'postgres' / 'main.globals.sql'
+        dump.write_bytes(b'CREATE ROLE other;\n')
+        entries = [Entry(f'apps/{self.app.id}/volumes/pgdata.tar', volume, volume.stat().st_size,
+                         hashlib.sha256(volume.read_bytes()).hexdigest()),
+                   Entry(f'apps/{self.app.id}/postgres/main.globals.sql', dump, dump.stat().st_size,
+                         hashlib.sha256(dump.read_bytes()).hexdigest())]
+        self.kept_stopped = list(self.app.units)
+        self.timing.setdefault('first_stop', 99.0)
+        section = {'id': self.app.id, 'name': self.app.name, 'adapter': 'quadlet-postgres', 'adapter_version': 1,
+                   'catalog_sha256': self.app.sha256, 'owner': {'name': 'appowner', 'uid': 1001}, 'images': [],
+                   'postgres': [], 'volumes': [{'name': 'pgdata', 'entry': entries[0].path}], 'secrets': [],
+                   'config_files': [], 'quadlet_files': [], 'verify_snapshot': {}}
+        info = {'volumes': {'pgdata': volume}, 'logical': {'main': {'globals': dump, 'databases': []}},
+                'databases': ['nextcloud', 'grafana'], 'notes': []}
+        return section, entries, info
+
+    def put_back_databases(self, pg, dump):
+        self.world.events.append(('put-back', self.app.id, pg['id']))
+        if self.app.id in self.world.put_back_raises:
+            raise self.world.put_back_raises[self.app.id]
+        failed = list(self.world.put_back_failed.get(self.app.id, []))
+        bad = {name for name, _reason in failed}
+        return [name for name in ('nextcloud', 'grafana') if name not in bad], failed
 
     def take_over(self, units, first_stop):
         self.world.events.append(('take_over', self.app.id, tuple(units)))

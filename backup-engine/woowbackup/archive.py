@@ -576,7 +576,7 @@ def _validate_app(app, where, ref, by_path):
     # written before them have none; so is `import_check` (2026-11-23: a Home Assistant import's readback).
     _obj(app, where, ('id', 'name', 'adapter', 'adapter_version', 'catalog_sha256', 'owner', 'images',
                       'postgres', 'volumes', 'secrets', 'config_files', 'quadlet_files', 'verify_snapshot'),
-         ('data_dirs', 'verify_digests', 'catalog_entry', 'import_check'))
+         ('data_dirs', 'verify_digests', 'catalog_entry', 'import_check', 'keep_safety'))
     _str(app['id'], f'{where}.id', APP_ID_RE, max_len=41)
     app_id = app['id']
     _str(app['name'], f'{where}.name', min_len=1, max_len=200)
@@ -663,6 +663,9 @@ def _validate_app(app, where, ref, by_path):
 
     if 'import_check' in app:
         _import_check(app['import_check'], f'{where}.import_check', app_id)
+
+    if 'keep_safety' in app:  # RESTORE lane (L-38): the restore keeps its pre-restore backup (kept.py); only `true`
+        _need(app['keep_safety'] is True, f'{where}.keep_safety must be true')
 
     snapshot = app['verify_snapshot']
     _need(isinstance(snapshot, dict) and len(snapshot) <= 20, f'{where}.verify_snapshot must be an object')

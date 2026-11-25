@@ -61,11 +61,16 @@ QUADLET_DIR = '.config/containers/systemd'
 ISSUES = {
     'restore.pauses': 'confirm',    # X-AD-14, X-AD-50: other services use what the restore replaces; they are paused meanwhile
     'restore.id-range': 'confirm',  # X-NS-09: the account's range of ids is widened (all its services stop for a minute)
+    'restore.other-databases': 'confirm',  # X-AD-07, X-AD-08 (S4): other data in the database service is copied, then put back
 }
 UNIT_RE = re.compile(r'[A-Za-z0-9][A-Za-z0-9_.@:-]{0,190}\.service\Z')
 MAX_PAUSED = 40
 ID_RANGE_TEXT = ('備份裡有檔案的擁有者編號超出這個應用的帳號目前可用的範圍；匯入前會先擴大這個帳號可用的編號範圍，'
                  '這個帳號的所有服務會因此停止約 1 分鐘，完成後自動啟動。')
+KEPT_TEXT = ('這個應用的資料庫服務裡還有其他資料庫；匯入會重建整個資料庫服務。匯入前會先把整個資料庫服務存成完整複本'
+             '（保留在「還原前備份」，不會自動刪除），匯入完成後再自動把這些資料庫放回；放不回去的會告訴你，資料仍在完整複本裡。')
+KEPT_UNKNOWN_TEXT = ('無法確認這個應用的資料庫服務裡是否還有其他資料庫；匯入前會先把整個資料庫服務存成完整複本'
+                     '（保留在「還原前備份」，不會自動刪除），匯入完成後如果有其他資料庫會自動放回。')
 PAUSES_TEXT = ('匯入這個應用時，會先暫停下列也在使用它的資料的服務，匯入完成後自動啟動；暫停期間這些服務無法使用，'
                '它們使用的資料夾也會被備份裡的內容取代。')
 MAX_QUADLET_BYTES = 1024 * 1024
@@ -124,6 +129,8 @@ DIGEST_OUTPUT = 32 * 1024 * 1024  # psql's JSON answer of a digest query (about 
 DIGEST_LISTING_MAX = 1024 * 1024 * 1024
 GLOBALS_MAX = 16 * 1024 * 1024    # a pg_dumpall --globals-only script
 PG_ROLE_NAME_MAX = 63
+SQL_END_MARK = 'woowbk-sql-end-'
+INCOMPLETE_SQL = '送進資料庫的指令沒有完整送達（主機可能太忙），已停止；請稍後再試。'
 # Database facts recorded for an instance-mode backup (names checked against catalog.DB_NAME_RE).
 DATABASES_JSON_SQL = (
     "SELECT coalesce(json_agg(json_build_object('name', d.datname, 'owner', pg_get_userbyid(d.datdba), 'encoding', "
@@ -477,6 +484,9 @@ class QuadletPostgresAdapter(Adapter):
         self.restore_issues = []  # haissues.Issue lines of the last preflight() (see the class attribute)
         self.paused = []          # other services this restore paused (D10): started again by resume_paused()
         self._planned_pauses = []  # the services the last preflight() listed for the confirmation
+        self.kept_wanted = []     # ids of the databases whose whole service the restore keeps a copy of first (S4)
+        self.kept_estimate = 0    # bytes the kept copy takes (the volumes' export size)
+        self.kept_done = False    # keep_cluster() made the copy: other databases cannot be lost any more
         self._own_noted = []      # the app's own units the last writers_hook() call listed as stopped
         self.digest_results = []  # per digest check of the last restore: CONTRACT section 7 `verification[].checks`
         self.unstable_digests = []  # digest checks the last backup dropped because two reads differed (H2, F3)
@@ -2015,7 +2025,7 @@ class QuadletPostgresAdapter(Adapter):
         """{file name: bytes} of the app's Quadlet files as the owner has them (the HA import reads the live setup)."""
         return self._read_owner_quadlets()
 
-    def import_manifest(self, staging_dir, *, postgres=None, volumes=None, dirs=None, secrets=None):
+    def import_manifest(self, staging_dir, *, postgres=None, volumes=None, dirs=None, secrets=None, keep_safety=False):
         """The app section and entries of a backup whose data items were made elsewhere -- a Home Assistant import
         (haimport.py, CONTRACT section 9): images, secrets, config files and Quadlet files are read from the live app
         as the owner, without stopping anything, exactly like backup() reads them; the data items are `postgres`
@@ -2023,7 +2033,9 @@ class QuadletPostgresAdapter(Adapter):
         for every item the catalog declares. `secrets` {name: file}: a secret the conversion brings from HA instead
         of the live one (LiteLLM's salt key, which belongs to the database it encrypted); only a secret the catalog
         declares, one small regular file each. No http-json snapshot and no digests are recorded (nothing to compare
-        them with on this device); the installed settings are carried like in every backup."""
+        them with on this device); the installed settings are carried like in every backup. `keep_safety` (L-38, RESTORE
+        lane): the restore of this backup writes its pre-restore backup as a kept copy (kept.py), because the database
+        it replaces holds data nothing else keeps (other schemas); the importer lists its own line to confirm."""
         app = self.app
         staging = Path(staging_dir)
         postgres, volumes, dirs = dict(postgres or {}), dict(volumes or {}), dict(dirs or {})
@@ -2061,6 +2073,8 @@ class QuadletPostgresAdapter(Adapter):
             'images': [], 'postgres': [], 'volumes': [], 'secrets': [], 'config_files': [], 'quadlet_files': [],
             'verify_snapshot': {},
         }
+        if keep_safety:
+            manifest['keep_safety'] = True
         if isinstance(app.raw, dict) and app.raw:
             problem = carried_settings_problem(app.raw, app.id)
             if problem is None:
@@ -2475,6 +2489,7 @@ class QuadletPostgresAdapter(Adapter):
         checks = []
         seen = {}
         self.restore_issues = []
+        self.kept_wanted, self.kept_estimate = [], 0
 
         def add(check_id, status, message):
             seen[check_id] = seen.get(check_id, 0) + 1
@@ -2553,6 +2568,17 @@ class QuadletPostgresAdapter(Adapter):
                     if pg['unit'] in down:
                         continue
                     found = self.undeclared(pg)
+                    if self.ha_import and (found is None or found[0]):
+                        # S4 (X-AD-07, X-AD-08; HAOS parity, owner decisions D7 and H4): nothing is deleted silently. The
+                        # whole database service is copied first (kept as a "保留的複本"), and the other databases are put
+                        # back after the import; the customer confirms that in the ONE confirmation.
+                        self._preflight_other_databases(pg, found, add)
+                        if found is None:
+                            continue
+                        databases, roles = found
+                        if roles:
+                            add('roles', 'warn', f'還原後不會保留這些資料庫角色與權限設定：{", ".join(roles[:10])}。')
+                        continue
                     if found is None:
                         # Review finding HD-06: unknown is not "none"; the restore would delete whatever is there.
                         add('databases', 'fail', f'無法列出資料庫 {pg["id"]} 執行個體中的資料庫與角色。原位還原會重建整個資料庫資料卷，'
@@ -2596,6 +2622,26 @@ class QuadletPostgresAdapter(Adapter):
                 add('dir-ids', 'fail', error.message)
         self._preflight_space(app_manifest, entry_sizes, add, mode=mode)
         return checks
+
+    def _preflight_other_databases(self, pg, found, add):
+        """S4: the database service of `pg` holds databases the app does not declare, or cannot be listed. The restore keeps
+        a copy of the whole service (`keep_cluster`) and puts them back; this is the line of the confirmation, and the
+        check that says how much space the copy takes (`kept_estimate`)."""
+        names = list(found[0]) if found is not None else []
+        try:
+            size = self._volume_size(pg['data_volume'])
+        except BackupError:
+            size = 0
+        self.kept_wanted.append(pg['id'])
+        self.kept_estimate += size
+        if found is None:
+            add('databases', 'warn', f'無法列出資料庫 {pg["id"]} 執行個體中的資料庫與角色；為免遺失資料，匯入前會先存整個資料庫服務的完整複本。')
+            text = KEPT_UNKNOWN_TEXT
+        else:
+            add('databases', 'warn', f'資料庫執行個體中還有應用設定未宣告的資料庫：{", ".join(names[:10])}；匯入前會先存整個資料庫服務的完整複本，'
+                                     '匯入後再自動放回。')
+            text = KEPT_TEXT
+        self.restore_issues.append(Issue('restore.other-databases', 'confirm', text, names))
 
     def _preflight_instance(self, pg, item, add, *, running):
         """Instance mode: the restore's own superuser must stay one, the image must have every extension the backup
@@ -2957,7 +3003,7 @@ class QuadletPostgresAdapter(Adapter):
         return result, self.entry_path(root, item.get('entry'))
 
     def restore(self, app_manifest, extracted_dir, *, mode, rollback=False, unchecked_databases_ok=False,
-                replaced_dirs=()):
+                replaced_dirs=(), kept_volumes=None):
         """Restore one app from an extracted archive. `rollback=True` (restoring the pre-restore safety backup
         after a failure) never pulls an image: the exact pre-restore image must still be here, and host directories
         move back from the failed restore's `-old-` copies (`replaced_dirs`: the directories it swapped, extracted
@@ -2968,7 +3014,11 @@ class QuadletPostgresAdapter(Adapter):
         Order (CONTRACT section 9): every unit stops with one `systemctl --user stop` (units a safety backup already
         stopped stay stopped), the data is put in place (directories stage_dirs() wrote are only swapped), the
         files digests are compared before anything starts, then the database units start alone (pg_restore, the
-        SQL digests), and only then the other units, in groups where their dependencies allow."""
+        SQL digests), and only then the other units, in groups where their dependencies allow.
+
+        `kept_volumes` {data volume name: the cold copy's tar} (a rollback of a restore that kept a copy of the whole database
+        service, S4): that volume is put back whole, with every database and role in it, instead of being rebuilt from the
+        pre-restore dump."""
         app = self.app
         root = Path(extracted_dir)
         self.destructive_started = False
@@ -3004,7 +3054,7 @@ class QuadletPostgresAdapter(Adapter):
         self._check_dir_targets(mode)
         if mode == 'inplace' and not rollback:
             # A rollback rebuilds the volume the failed restore itself created from the archive: nothing else is in it.
-            self._refuse_undeclared_databases(unchecked_ok=unchecked_databases_ok)
+            self._refuse_undeclared_databases(unchecked_ok=unchecked_databases_ok)  # (not for a service whose copy was kept)
         self._remember_tags(needed)
         try:
             self._prepare_images(app_manifest, root, needed, loads, allow_pull=not rollback)
@@ -3048,10 +3098,15 @@ class QuadletPostgresAdapter(Adapter):
                 self.log(f'已寫入設定檔 ~/{config["path"]}')
             for volume in app.volumes:
                 self._recreate_volume(volume['name'], files['volumes'][volume['name']])
-            removed_at = {}
+            removed_at, whole = {}, set()
             for pg in app.postgres:
                 removed_at[pg['id']] = self.wall()  # an instance restore checks that the cluster is newer (F4)
-                self.runner.podman('volume', 'rm', '-f', pg['data_volume'], timeout=STOP_TIMEOUT)
+                copy = (kept_volumes or {}).get(pg['data_volume']) if rollback else None
+                if copy is not None:
+                    self._recreate_volume(pg['data_volume'], copy)  # S4: the database service as it was, whole
+                    whole.add(pg['id'])
+                else:
+                    self.runner.podman('volume', 'rm', '-f', pg['data_volume'], timeout=STOP_TIMEOUT)
             if app.data_dirs:
                 if self.ha_import:
                     # D10 (X-AD-14): a service that started since the pre-restore copy is paused too (it is in the
@@ -3084,6 +3139,9 @@ class QuadletPostgresAdapter(Adapter):
                     self._start(pg['unit'])
                     started.append(pg['unit'])
                 self._wait_for_postgres(pg)
+                if pg['id'] in whole:
+                    self.log(f'資料庫 {pg["id"]} 已用保留的完整複本整個放回')
+                    continue
                 self._check_target_major(pg, app_manifest)
                 if pg['scope'] == 'instance':
                     self._restore_instance(pg, *instances[pg['id']], removed_at=removed_at.get(pg['id']))
@@ -3115,6 +3173,136 @@ class QuadletPostgresAdapter(Adapter):
             self._log_command_error(error)
             raise
 
+    # ----------------------------------------------------------------- a copy of the whole database service (S4)
+    def keep_cluster(self, work):
+        """S4 (X-AD-07, X-AD-08; owner decisions D7 and H4): before the restore rebuilds the database service, keep a copy of
+        all of it -- the other databases and roles it holds would be gone for good (a single-database pre-restore copy has
+        only the app's own). Stops the app's units, reads every database and the roles into `work` (`pg_dumpall` + `pg_dump`,
+        what puts them back afterwards; when that cannot be done the physical copy is all there is, and the notice says so),
+        then stops the database and exports its data volume as it is (the cold copy a rollback puts back whole). Returns
+        (the app section of the kept copy's manifest, [Entry], info) for kept.py; the units it stopped are in
+        `kept_stopped`, so a refusal before the restore's first step starts them again."""
+        app = self.app
+        work = Path(work)
+        for sub in ('postgres', 'volumes'):
+            (work / sub).mkdir(mode=0o700, parents=True, exist_ok=True)
+        wanted = [pg for pg in app.postgres if pg['id'] in self.kept_wanted]
+        if not wanted:
+            raise BackupError('internal-error', '沒有需要保留完整複本的資料庫。', app=app.id)
+        states = self.unit_states(app.units)
+        running = [unit for unit in app.units if states[unit].get('ActiveState') == 'active']
+        databases_units = {pg['unit'] for pg in wanted}
+        writers = [unit for unit in running if unit not in databases_units]
+        for pg in wanted:
+            if states[pg['unit']].get('ActiveState') != 'active':
+                self.log(f'啟動資料庫服務 {pg["unit"]}，以便保留完整複本')
+                self.runner.systemctl('start', '--', pg['unit'], timeout=START_TIMEOUT)
+            self._wait_for_postgres(pg)
+        if writers:
+            self._hook([*self._own_noted, *[unit for unit in writers if unit not in self._own_noted]])
+            self._stop_units(writers, label='暫停服務')
+        self.kept_stopped = list(dict.fromkeys([*self.kept_stopped, *writers]))
+        info = {'volumes': {}, 'logical': {}, 'databases': [], 'notes': []}
+        manifest_postgres = []
+        entries = []
+
+        def entry(kind, name, path):
+            size, digest = file_digest(path)
+            item = Entry(path=f'apps/{app.id}/{kind}/{name}', source=Path(path), size=size, sha256=digest)
+            entries.append(item)
+            return item.path
+
+        for pg in wanted:
+            try:
+                dump = self._dump_instance(pg, work)
+            except BackupError as error:
+                note = (f'資料庫 {pg["id"]} 的其他資料庫無法逐一匯出（{error.message.rstrip("。")}）；已保留整個資料庫服務的完整複本，'
+                        '但匯入後不會自動放回，需要時請從完整複本取出。')
+                self.log(f'注意：{note}')
+                info['notes'].append(note)
+                continue
+            info['logical'][pg['id']] = dump
+            info['databases'] += [item['name'] for item in dump['databases'] if item['name'] not in (pg['database'], 'postgres')]
+            manifest_postgres.append(self._instance_manifest(dump, entry))
+        self._stop_units(sorted(databases_units, key=app.units.index), label='停止資料庫服務')
+        self.kept_stopped = list(dict.fromkeys([*self.kept_stopped, *sorted(databases_units, key=app.units.index)]))
+        volumes = []
+        for pg in wanted:
+            exported = self._export_volume(pg['data_volume'], work)
+            self._check_exported_volume(exported)
+            info['volumes'][pg['data_volume']] = exported['file']
+            volumes.append({'name': pg['data_volume'], 'entry': entry('volumes', f'{pg["data_volume"]}.tar', exported['file'])})
+        self.kept_done = True
+        section = {'id': app.id, 'name': app.name, 'adapter': self.name, 'adapter_version': self.version,
+                   'catalog_sha256': app.sha256, 'owner': {'name': self.runner.owner, 'uid': self.runner.uid},
+                   'images': [], 'postgres': manifest_postgres, 'volumes': volumes, 'secrets': [], 'config_files': [],
+                   'quadlet_files': [], 'verify_snapshot': {}}
+        return section, entries, info
+
+    def put_back_databases(self, pg, dump):
+        """S4: after the restore, the databases and roles `keep_cluster` read from the old cluster go back into the new one,
+        unless the new cluster has them: the roles first (only ones that do not exist now: the app's own account and what the
+        HA data brought are never altered), then every database with its owner and privileges (`pg_restore --create`, one
+        after the other; one that fails is dropped again and named). Returns (names put back, [(name, reason)] that were not)."""
+        container, user = pg['container'], pg['user']
+        what = f'資料庫 {pg["id"]}'
+        maint = INSTANCE_MAINTENANCE_DB
+        existing_roles = {row for row in self._psql_json(container, user, maint, 'SELECT coalesce(json_agg(rolname), '
+                                                         "'[]'::json) FROM pg_roles", what)}
+        statements = [statement for statement, role in self._role_statements(dump['globals'], user)
+                      if role is not None and role not in existing_roles]
+        if statements:
+            self._run_sql(container, user, maint, ''.join(f'{statement};\n' for statement in statements))
+            self.log(f'已放回 {len(statements)} 個角色相關設定')
+        current = {name for name, _template, _connects in self._instance_catalog(container, user, maint, what)}
+        done, failed = [], []
+        for item in dump['databases']:
+            name = item['name']
+            if name in (pg['database'], 'postgres') or name in current:
+                continue
+            self.checkpoint()
+            try:
+                with open(item['file'], 'rb') as handle:
+                    self.runner.podman('exec', '-i', container, 'pg_restore', '--create', '--exit-on-error',
+                                       '--no-tablespaces', '-w', '-U', user, '-d', maint, input=handle,
+                                       timeout=RESTORE_TIMEOUT)
+            except BackupError as error:
+                self._log_command_error(error)
+                with contextlib.suppress(BackupError):
+                    if item.get('template'):
+                        self._psql_command(container, user, maint, f'ALTER DATABASE "{name}" IS_TEMPLATE false')
+                    self._psql_command(container, user, maint, f'DROP DATABASE IF EXISTS "{name}"')
+                failed.append((name, error.message.rstrip('。')[:200]))
+                continue
+            done.append(name)
+            self.log(f'已放回資料庫 {name}（擁有者 {item.get("owner", "?")}）')
+        return done, failed
+
+    @staticmethod
+    def _role_statements(globals_path, session_user):
+        """[(statement, role name)] of the CREATE ROLE and ALTER ROLE statements of a roles script the engine wrote
+        (checked again like a restore checks it); a statement of another kind has role None and is not used here."""
+        with open(globals_path, 'rb') as handle:
+            data = handle.read(GLOBALS_MAX + 1)
+        found = []
+        for statement in globals_statements(data, session_user=session_user):
+            match = re.match(r'(?:CREATE|ALTER) ROLE ("(?:[^"]|"")*"|[A-Za-z_][A-Za-z0-9_$]*)(?:\s|$)', statement)
+            found.append((statement, _unquote_ident(match.group(1)) if match else None))
+        return found
+
+    def _run_sql(self, container, user, database, text):
+        """`text` as one psql script in ONE transaction that the input itself opens and closes, followed by an end mark
+        psql prints only after it has run everything before it (pg-stdin follow-up F1, 2026-11-25): a `podman exec` stdin
+        transfer can arrive short under host load; without COMMIT PostgreSQL rolls the transaction back when psql ends
+        (psql still exits 0), and the missing mark stops the restore instead of leaving it half done."""
+        mark = SQL_END_MARK + secrets.token_hex(8)
+        body = f'BEGIN;\n{text}COMMIT;\n\\echo {mark}\n'.encode()
+        out = self.runner.podman('exec', '-i', container, 'psql', '-X', '-w', '-q', '-v', 'ON_ERROR_STOP=1', '-U', user, '-d',
+                                 database, '-f', '-', input=body, timeout=RESTORE_TIMEOUT,
+                                 max_output=SMALL_OUTPUT).stdout or b''
+        if out.rstrip(b'\n').rsplit(b'\n', 1)[-1] != mark.encode('ascii'):
+            raise BackupError('job-failed', INCOMPLETE_SQL, app=self.app.id)
+
     def _restore_instance(self, pg, databases, globals_path, *, removed_at=None):
         """Instance mode into the fresh cluster the image just initialized (CONTRACT section 9): the cluster must be
         newer than the removal of the data volume, extension preflight, the roles (the bootstrap superuser reconciled,
@@ -3141,8 +3329,9 @@ class QuadletPostgresAdapter(Adapter):
             raise BackupError('limit-exceeded', f'備份中資料庫 {pg["id"]} 的角色定義超過 16 MiB。', app=self.app.id)
         script = globals_script(data, session_user=user)
         self.log(f'還原資料庫 {pg["id"]} 的角色與密碼設定（{user} 為此設備映像建立的管理帳號，只更新它的屬性與密碼）')
-        self.runner.podman('exec', '-i', container, 'psql', '-X', '-w', '-q', '-v', 'ON_ERROR_STOP=1', '-U', user, '-d',
-                           maint, '-f', '-', input=script, stdout=DEVNULL, timeout=RESTORE_TIMEOUT)
+        # pg-stdin follow-up F1: one transaction and an end mark, so a script that arrived short is never half applied
+        # (psql exits 0 on a cut input) and is noticed.
+        self._run_sql(container, user, maint, script.decode('utf-8'))
         # A new session of the restore's role: still a superuser that can log in, and not read-only. The script was
         # checked statement by statement; this catches every other way it could have taken that away (L2, F8).
         state = self._psql_json(container, user, maint, SESSION_STATE_SQL, what)
@@ -3204,6 +3393,8 @@ class QuadletPostgresAdapter(Adapter):
 
     def _refuse_undeclared_databases(self, unchecked_ok=False):
         for pg in self.app.postgres:
+            if self.kept_done and pg['id'] in self.kept_wanted:
+                continue  # S4: a copy of the whole service was kept (keep_cluster): nothing in it can be lost any more
             if pg['scope'] == 'instance':
                 # The whole instance comes from the archive, but a database that accepts no connections is in neither
                 # it nor the safety backup: the volume is removed only when there is none (review F1).
