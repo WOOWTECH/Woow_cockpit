@@ -414,6 +414,8 @@ class EnsureImageTests(Case):
         self.work.adapter = lambda _app: types.SimpleNamespace(container_images=lambda sources: dict(images))
         self.assertEqual(hatarget.ensure_app_images(self.work, APP), ['docker.io/odoo:18'])
         self.assertEqual(hatarget.ensure_app_images(self.work, APP), [])
+        self.work.adapter = lambda _app: types.SimpleNamespace()      # a double that cannot list its images
+        self.assertEqual(hatarget.ensure_app_images(self.work, APP), [])
 
 
 class ImageLabelTests(Case):
