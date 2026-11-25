@@ -1472,6 +1472,25 @@ class ImagesAndNamesFlowTests(N8nCase):
 
 
 class BigFilesFlowTests(N8nCase):
+    def test_a_config_file_too_large_to_be_a_key_file_is_listed_once_and_no_key_is_the_other_line(self):
+        """N8-28 with N8-15: the file is left out and listed (not a stop), and without a key there is the second line to confirm."""
+        config = json.dumps({'encryptionKey': KEY, 'pad': 'x' * 3000}).encode()
+        with contextlib_patch({'MAX_KEY_FILE': 500}):
+            ha_id = self.upload_n8n(config=config, credentials=('Telegram bot',))
+            row = self.check(ha_id, ['n8n'])[0]
+            self.assertEqual(self.levels(row), {'files.skipped': 'confirm', 'n8n.no-key': 'confirm'})
+            self.assertEqual((row['importable'], row['ok']), (True, False))
+            self.assertEqual(self.issue(row, 'files.skipped')['items'], ['config/.n8n/config'])
+            only_one = {'n8n': [self.issue(row, 'n8n.no-key')['key']]}
+            error = self.convert_stopped(ha_id, acknowledged=only_one)
+            self.assertEqual(error.code, 'confirmation-required')
+            both = {'n8n': [self.issue(row, 'n8n.no-key')['key'], self.issue(row, 'files.skipped')['key']]}
+            result = self.convert(ha_id, ['n8n'], acknowledged=both)
+        self.assertEqual(result['results'][0]['status'], 'converted')
+        key = json.loads(self.data_tar()['config'][1])['encryptionKey']
+        self.addCleanup(jobs.unmask_secret, key)
+        self.assertNotEqual(key, KEY, 'HA\'s key was in the file that was left out: it is not used')
+
     def test_a_big_native_node_and_a_big_package_json_are_moved_and_the_conversion_is_not_stopped(self):
         """N8-28 as a whole: no limit-exceeded any more."""
         big = elf(glibc=True) + b'\x00' * 300_000
