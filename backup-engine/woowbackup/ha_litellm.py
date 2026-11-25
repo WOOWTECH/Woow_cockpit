@@ -55,15 +55,39 @@ This device's virtual keys are replaced by HA's: the check and the conversion na
 configuration uses LiteLLM today (key_users: catalog config files and Quadlet files, LiteLLM's own network drop-ins,
 the Pi agent provider list models.json of pi-web / Omnigent's runner),
 whose keys stop working after the import (owner decision 2026-11-23, option A: a reminder, nothing else changes).
+
+HAOS parity (2026-11-25, DESIGN F-a LITELLM; owner decision "what HAOS does not have is taken away"): every finding is an
+issue of the issue model (haissues; ISSUES below), found by the check and found again by the conversion. A line to confirm
+(`confirm`) stops only this app unless the customer confirmed exactly its names. What used to stop the import only
+because of a version, a shape or a limit does not any more:
+* the version numbers inform and decide nothing (L-31..L-34, L-45): HA's and this device's finished Prisma migrations and
+  the data shape (L-26, L-09) decide; this device's PostgreSQL major is no gate (L-20, L-53: read from the new cluster);
+* a stored setting that makes LiteLLM load code (L-13, L-14, L-47, L-49) is never moved: the conversion names it in one
+  line to confirm, loads the rest, takes the setting out of the NEW cluster by key (the whole setting, never a part of it),
+  and looks again in that cluster, whose catalog is this device's own, before anything is packed; a stored-settings table
+  that cannot be read completely is not moved at all (and says so);
+* schemas, superuser-only objects (L-21, L-23) and large objects (L-24) of HA's database beyond LiteLLM's own are never
+  moved (only this device's tables' rows are), they are named; other schemas in THIS device's database (L-38) are named
+  too, and the pre-restore backup that holds them is kept (`keep_safety`, RESTORE lane: kept.py) instead of deleted;
+* a device whose app settings use the cold mode, or have other volumes and folders, is filled too (L-03): the new cluster
+  is exported as the data volume, the rest is carried as it is; only the whole-instance dump stays a stop;
+* the proxy's Quadlet is found by what it mounts (L-04), a database without finished migrations is given the first start of
+  the proxy (L-08), a snapshot that came out wrong is taken again (L-36, L-37, L-39, L-54, L-55), extension versions that
+  differ from this device's are aligned or named (L-40), the PostgreSQL 18 image is fetched with the reason for a failure
+  (L-58), names of tables, columns and sequences are quoted instead of refused (L-10..L-12).
+The COPY data of every table goes to the new cluster inside a script that ends with an end mark (pg-stdin follow-up F2): a
+tail that did not arrive, a cut last field included, never commits and is noticed.
 """
 import hashlib
 import json
 import os
 import re
+import secrets
 import shutil
 
-from . import habackup, hacommon, ha_litellm_candidate as candidate, ha_odoo, tempctr
+from . import habackup, haissues, hacommon, hatarget, ha_litellm_candidate as candidate, ha_odoo, podman, tempctr
 from .errors import BackupError
+from .haissues import Issue
 
 SLUG = 'woow-litellm'
 APP_ID = 'litellm'
@@ -77,8 +101,7 @@ APP_CONTAINER = 'litellm'
 # The add-on versions whose LiteLLM and PostgreSQL were verified (HA build-info.json / CHANGELOG; facts section 3).
 VERSIONS = hacommon.VersionTable('LiteLLM', {'0.1.15': '1.104.0'})
 HA_PG_MAJOR = 18
-SCHEMAS = ('public', 'woow_platform')           # moved: data only
-HA_ONLY = {'woow': ('meta',)}                   # HA's bookkeeping (salt fingerprint): never moved
+SCHEMAS = ('public', 'woow_platform')           # moved: data only (HA's `woow` bookkeeping and anything else never moves: L-22)
 RESTORE_ROLE = 'woowbk_restore'
 READER_ROLE = 'woowbk_litellm_reader'
 DASHBOARD_TEAM = 'litellm-dashboard'            # the UI's session keys: deleted by the proxy at the first start
@@ -89,7 +112,6 @@ MIGRATION_RE = re.compile(r'[0-9A-Za-z_. -]{1,200}\Z')
 VERSION_RE = re.compile(r'[0-9]{1,4}\.[0-9]{1,4}\.[0-9]{1,4}\Z')
 SALT_RE = re.compile(rb'[A-Za-z0-9_-]{16,256}\Z')   # HA woow_init.py SECRET_VALUE_RE (read_secret strips)
 MAX_SALT_FILE = 1024
-MAX_TABLES = 400
 DUMP_TIMEOUT = ha_odoo.DUMP_TIMEOUT
 # The official PostgreSQL 18.7 alpine image by content: Docker Hub index sha256:ff64c9e3... (registry-1.docker.io,
 # checked 2026-11-23) has these linux/amd64 and linux/arm64 config digests = the image IDs Podman shows. A device
@@ -114,13 +136,55 @@ HA_SESSION_OPTIONS = ('-c search_path=pg_catalog -c DateStyle=ISO,MDY -c Interva
 HA_SUPERUSER_OPTIONS = HA_SESSION_OPTIONS + ' -c session_preload_libraries= -c event_triggers=off'
 SCHEMA_CHANGED = ('這台 LiteLLM 的資料庫結構在轉換期間改變了（可能正在升級或重新啟動），沒有匯入任何資料；'
                   '請等 LiteLLM 正常執行後再匯入一次。')
-# The catalog entry the import fills: exactly one single-database `postgres` item, nothing else (suggest.PREFERRED_MODES
-# makes it the default of a new draft; an entry installed as cold or instance mode must be changed on the page first).
-TARGET_SHAPE = ('這台的 LiteLLM 應用設定不是 HA 匯入支援的樣子：資料庫要用「單一資料庫」方式備份（只有一個資料庫匯出項目，沒有資料卷或'
-                '主機資料夾；冷備份與整個執行個體都不能匯入）。請到「應用設定」掃描，在 LiteLLM 的草稿選「單一資料庫」並安裝，'
-                '再匯入一次。改變方式後，這個應用之前的備份無法以新設定還原。')
+# The catalog entry the import fills (L-03): one single-database `postgres` item (suggest.PREFERRED_MODES makes it the default
+# of a new draft) or, when the entry declares none, the data volume of the database among its volumes (cold mode); every
+# other volume or folder of the entry is carried as it is. What it cannot fill is an entry that dumps the whole database
+# instance (adapter.import_manifest has no instance form) or names no database at all.
+LAYOUT_INSTANCE = '這台的 LiteLLM 應用設定用「整個資料庫執行個體」的方式備份資料庫，這個匯入還不支援這種方式。'
+LAYOUT_NONE = '這台的 LiteLLM 應用設定裡沒有資料庫的匯出項目，也沒有資料庫的資料卷，匯入不知道要把資料放在哪裡。'
+LAYOUT_MANY = '這台的 LiteLLM 應用設定有不只一個資料庫匯出項目，這個匯入只支援一個。'
+LAYOUT_ACTION = ('請到「應用設定」掃描，在 LiteLLM 的草稿選「單一資料庫」（預設）或「冷備份」並安裝，再重新檢查。'
+                 '改變方式後，這個應用之前的備份無法以新設定還原。')
+TARGET_MISSING = '這台找不到 LiteLLM 的資料庫或代理服務的 Quadlet 檔（沒有掛載 litellm-salt-key 的容器，或資料庫容器），當作還沒安裝。'
+TARGET_MISSING_ACTION = '請先用它的安裝套件在這台安裝並啟動 LiteLLM，再到「應用設定」加入它，然後重新檢查。'
+TARGET_MISMATCH = '這台的 LiteLLM 資料庫、加密金鑰（litellm-salt-key）和 Quadlet 檔的設定不一致，無法匯入。'
+TARGET_MISMATCH_ACTION = '請到「應用設定」修正這台 LiteLLM 的設定，使它和 Quadlet 檔一致，再重新檢查。'
+MIGRATIONS_UNREADABLE = '無法讀取這台 LiteLLM 的資料庫結構版本（Prisma 遷移紀錄）。'
 SALT_MISMATCH = ('HA 備份裡的加密金鑰（salt_key）和 HA 資料庫裡記錄的金鑰不一致，搬過來後儲存的供應商憑證都無法解密，'
                  '所以不能匯入；請在 HA 重新做一份 LiteLLM 的備份。')
+SALT_MISSING = 'HA 備份裡找不到格式正確的 LiteLLM 加密金鑰（salt_key），搬過來後儲存的供應商憑證都無法解密，所以不能匯入。'
+SALT_ACTION = '請在 HA 重新做一份 LiteLLM 的備份，再匯入。'
+
+ISSUES = {
+    'litellm.layout-unsupported': 'stop',     # L-03: an entry that dumps the whole instance, or names no database
+    'litellm.extras-carried': 'auto',         # L-03: this device's other volumes and folders go along as they are
+    'litellm.target-missing': 'stop',         # L-04: no Quadlet file of the database or of the proxy: not installed
+    'litellm.target-mismatch': 'stop',        # L-05 (kept)
+    'litellm.target-migrations': 'stop',      # L-08: this device's migrations stay unreadable, also after the proxy ran once
+    'litellm.salt-file-invalid': 'stop',      # L-01 (kept)
+    'litellm.no-database': 'stop',            # L-15: HA's PostgreSQL has no litellm database: nothing to move
+    'litellm.tablespaces': 'stop',            # L-17 (kept)
+    'litellm.not-cold-backup': 'stop',        # L-18 (kept)
+    'litellm.pg-major': 'stop',               # L-19 (kept)
+    'litellm.encoding': 'stop',               # L-25 (kept)
+    'litellm.migrations-differ': 'stop',      # L-26 (kept)
+    'litellm.schema-differs': 'stop',         # L-09 (kept)
+    'litellm.salt-mismatch': 'stop',          # L-27 (kept)
+    'litellm.salt-missing': 'stop',           # L-28 (kept)
+    'litellm.schemas-skipped': 'confirm',     # L-21: HA's other schemas are not moved
+    'litellm.superuser-objects': 'confirm',   # L-23: objects only a superuser can make are not moved
+    'litellm.large-objects': 'notice',        # L-24: large objects are not moved
+    'litellm.hooks-removed': 'confirm',       # L-13, L-14, L-47, L-49: stored settings that load code are not moved
+    'litellm.config-unreadable': 'confirm',   # L-13: the stored-settings table cannot be read completely: not moved
+    'litellm.other-schemas': 'confirm',       # L-38 (S4): other schemas in this device's database; the pre-restore backup is kept
+    'litellm.keep-unsupported': 'stop',       # L-38: this engine cannot keep that backup (haimport.ITEM_KEYS lacks keep_safety)
+    'litellm.version-differs': 'notice',      # L-34, L-45: both versions are known and differ; the data decides
+    'litellm.extension-versions': 'auto',     # L-40: an extension's version in the new cluster is not this device's
+    'litellm.databases-left': 'notice',       # HA's cluster has other databases: not moved
+    'litellm.stored-settings': 'notice',      # HA's environment variables and callbacks in its database take effect here
+    'litellm.key-users': 'notice',            # other apps use this device's virtual keys: they stop working
+    'litellm.chatgpt-accounts': 'notice',     # ChatGPT sign-ins move along; stop HA's LiteLLM
+}
 
 
 # ====================================================================== HA's member
@@ -164,21 +228,23 @@ def scan_member(stream, report, *, pg=None, checkpoint=None):
             if rel.split('/', 1)[0] in RECOVERY_FILES:
                 src.recovery_files += 1  # never reaches the volume (SR-4); the verdict refuses
                 continue
-            data = None
             if entry.kind == 'file':
                 src.pg_files += 1
                 src.pg_bytes += entry.size
                 if rel == 'PG_VERSION':
-                    data = entry.read_all(64)
-                    text = data.decode('ascii', 'replace').strip()
+                    # L-57: its first bytes say the version; a file that is longer is no PostgreSQL's and the cluster does
+                    # not open (nothing is refused here). The whole file still goes to the volume.
+                    text = entry.peek(64).decode('ascii', 'replace').strip()
                     src.pg_version = text if re.fullmatch(r'[1-9][0-9]?', text) else None
             if pg is not None:
-                pg.add(rel, entry, data)
+                pg.add(rel, entry, None)
             continue
         if name == SALT_FILE:
             salts += 1
             if entry.kind != 'file' or entry.size > MAX_SALT_FILE or salts > 1:
-                raise BackupError('incompatible', 'LiteLLM 附加元件的加密金鑰檔格式不正確，無法匯入。')
+                raise haissues.stopped(Issue('litellm.salt-file-invalid', 'stop',
+                                             'LiteLLM 附加元件的加密金鑰檔格式不正確，無法匯入。',
+                                             action='請在 HA 重新備份 LiteLLM 後再匯入。'))
             value = entry.read_all(MAX_SALT_FILE).strip()
             src.salt_valid = bool(SALT_RE.fullmatch(value))
             src._salt = value if src.salt_valid else None
@@ -188,76 +254,153 @@ def scan_member(stream, report, *, pg=None, checkpoint=None):
             src.state_version = value if isinstance(value, str) and VERSION_RE.fullmatch(value) else None
     src.addon = report.addon
     src.symlinks = report.skipped_symlinks
-    if src.addon is None or src.addon.slug != SLUG:
-        raise BackupError('incompatible', '備份不是可辨識的 LiteLLM 附加元件。')
-    return src
+    return src   # L-02: whose add-on this is was settled before (Work.addon_info: ha.addon-other); not asked again here
 
 
 # ====================================================================== this device's app
 
-class Target:
-    """The litellm app's catalog items the import fills, resolved against the live Quadlet files: the catalog's one
-    database item (the container, database and user of litellm-postgres), the proxy's container and the salt secret
-    it reads as LITELLM_SALT_KEY."""
+def _sink(work, app):
+    """The issues of this app (a work without sinks -- a harness, a lab driver -- collects nowhere)."""
+    maker = getattr(work, 'sink', None)
+    app_id = getattr(app, 'id', None) or APP_ID
+    return maker(app_id) if callable(maker) else haissues.Sink(app_id)
 
-    def __init__(self, work, app):
+
+def _text_of(data):
+    return data.decode('utf-8', 'replace') if isinstance(data, bytes) else str(data)
+
+
+def _is_proxy(text):
+    """The proxy's Quadlet file is the one that mounts the salt secret (L-04: not found by the container's name)."""
+    return any(spec.split(',', 1)[0] == SALT_SECRET for spec in tempctr.quadlet_secrets(_text_of(text)))
+
+
+def _is_database(text):
+    text = _text_of(text)
+    return 'POSTGRES_' in text and '/var/lib/postgresql' in text
+
+
+def _stop(app, issue_id, message, action, code='incompatible'):
+    return haissues.stopped(Issue(issue_id, 'stop', message, action=action), code, app=app.id)
+
+
+def _layout_stop(app, message):
+    return _stop(app, 'litellm.layout-unsupported', message, LAYOUT_ACTION)
+
+
+class Target:
+    """The litellm app's catalog items the import fills, resolved against the live Quadlet files: the database (the
+    catalog's one database item and its container -- `mode` 'database' -- or, when the entry declares none, the container
+    that holds the cluster in one of the entry's volumes -- `mode` 'cold'), the proxy (the container that mounts the salt
+    secret as LITELLM_SALT_KEY, whatever it is called: L-04) and the salt secret. What else the entry declares -- other
+    volumes, other folders -- is `extra_volumes` and `extra_dirs`, carried as it is (L-03)."""
+
+    def __init__(self, work, app, sink=None):
+        sink = sink if sink is not None else _sink(work, app)
         quadlets = work.quadlets(app)
         home = work.runner(app).home
-        if (len(app.postgres) != 1 or app.postgres[0].get('scope', 'database') != 'database' or app.volumes
-                or app.data_dirs):
-            raise BackupError('incompatible', TARGET_SHAPE, app=app.id)
-        pg = app.postgres[0]
+        self.app = app
+        pgs = list(app.postgres)
+        if any(isinstance(pg, dict) and pg.get('scope', 'database') == 'instance' for pg in pgs):
+            raise _layout_stop(app, LAYOUT_INSTANCE)
+        if len(pgs) > 1:
+            raise _layout_stop(app, LAYOUT_MANY)
+        declared_volumes = [item['name'] for item in app.volumes]
+        if not pgs and not declared_volumes:
+            raise _layout_stop(app, LAYOUT_NONE)
+        files = sorted(name for name in quadlets if name.endswith('.container'))
+        self.mode = 'database' if pgs else 'cold'
+        pg = pgs[0] if pgs else {}
         self.pg_id = pg.get('id')
         self.db_container = pg.get('container')
-        self.database = pg.get('database')
-        self.db_user = pg.get('user')
         db_file = hacommon.container_file(quadlets, self.db_container) if self.db_container else None
-        app_file = hacommon.container_file(quadlets, APP_CONTAINER)
-        if db_file is None or app_file is None:
-            raise BackupError('incompatible', '這台的 LiteLLM 應用設定不是 HA 匯入支援的樣子：找不到 litellm-postgres 或 litellm '
-                                              '的 Quadlet 檔。', app=app.id)
+        if db_file is None and pgs:     # no file of that container's name: the one that mounts the data volume (L-04)
+            db_file = next((name for name in files if self._mounts(quadlets, name, home, pg.get('data_volume'))), None)
+        if db_file is None and not pgs:
+            db_file = next((name for name in files if _is_database(quadlets[name])), None)
+        proxies = [name for name in files if _is_proxy(quadlets[name])]
+        if db_file is None or not proxies:
+            raise _stop(app, 'litellm.target-missing', TARGET_MISSING, TARGET_MISSING_ACTION)
+        if len(proxies) != 1:
+            raise _stop(app, 'litellm.target-mismatch', TARGET_MISMATCH, TARGET_MISMATCH_ACTION)
+        app_file = proxies[0]
         text = quadlets[db_file]
         self.db_image = tempctr.quadlet_image(text)
         self.db_env = hacommon.environment(quadlets, db_file, ha_odoo.DB_ENV_KEYS)
         self.db_secrets = tempctr.quadlet_secrets(text)
+        if self.db_container is None:
+            self.db_container = ha_odoo.quadlet_container_name(quadlets, db_file)
+        self.db_user = pg.get('user') if pgs else self.db_env.get('POSTGRES_USER', 'postgres')
+        self.database = pg.get('database') if pgs else self.db_env.get('POSTGRES_DB', self.db_user)
         mounts = ha_odoo.quadlet_mounts(quadlets, db_file, home)
-        self.db_volume, self.db_target = (mounts[0][0], mounts[0][1]) if mounts else (None, None)
+        wanted = self.db_env.get('PGDATA') or '/var/lib/postgresql/data'
+        holder = next((m for m in mounts if wanted == m[1] or wanted.startswith(m[1].rstrip('/') + '/')), None)
+        holder = holder or (mounts[0] if mounts else None)
+        self.db_volume, self.db_target = (holder[0], holder[1]) if holder else (None, None)
         self.pgdata = self.db_env.get('PGDATA') or self.db_target
+        self.app_container = ha_odoo.quadlet_container_name(quadlets, app_file)
         self.app_image = tempctr.quadlet_image(quadlets[app_file])
         salt_specs = [spec for spec in tempctr.quadlet_secrets(quadlets[app_file])
                       if spec.split(',', 1)[0] == SALT_SECRET]
         declared = [item['name'] for item in app.secrets]
+        wanted_volume = pg.get('data_volume') if pgs else (self.db_volume if self.db_volume in declared_volumes else None)
         if (self.database != DATABASE or self.db_env.get('POSTGRES_DB', self.db_user) != DATABASE
                 or self.db_env.get('POSTGRES_USER', 'postgres') != self.db_user
                 or not isinstance(self.db_user, str) or not IDENT_RE.fullmatch(self.db_user)
-                or not self.db_image or not self.app_image or self.db_volume != pg.get('data_volume')
+                or not self.db_image or not self.app_image or self.db_volume is None or self.db_volume != wanted_volume
                 or not self.pgdata or not tempctr.TARGET_RE.fullmatch(self.pgdata)
                 or len(salt_specs) != 1 or f'target={SALT_ENV}' not in salt_specs[0].split(',')[1:]
                 or SALT_SECRET not in declared or len(declared) != len(set(declared))):
-            raise BackupError('incompatible', '這台的 LiteLLM 資料庫、加密金鑰（litellm-salt-key）和 Quadlet 檔的設定不一致，'
-                                              '無法匯入。', app=app.id)
+            raise _stop(app, 'litellm.target-mismatch', TARGET_MISMATCH, TARGET_MISMATCH_ACTION)
+        # L-03: what the entry declares besides the database is this device's own data; it goes along as it is.
+        self.extra_volumes, self.extra_dirs = hatarget.extras(
+            app, handled_volumes=(self.db_volume,) if self.mode == 'cold' else ())
+        if self.extra_volumes or self.extra_dirs:
+            sink.auto('litellm.extras-carried', '這台 LiteLLM 的應用設定還有其他資料卷或資料夾，匯入時會照這台現在的內容原樣帶過去，'
+                      '不會被 HA 的資料取代。', [*self.extra_volumes, *self.extra_dirs])
+
+    @staticmethod
+    def _mounts(quadlets, name, home, volume):
+        try:
+            return volume is not None and any(source == volume for source, _t, _o in ha_odoo.quadlet_mounts(quadlets, name, home))
+        except BackupError:
+            return False
 
 
 VERSION_PROBE = ('import importlib.metadata as m, sys; '
                  'sys.stdout.write(m.version("litellm"))')
 
 
-def target_version(work, app):
-    """The running proxy's LiteLLM version (`podman exec litellm python -I -c ...`: read only), else None."""
-    result = work.runner(app).podman('exec', APP_CONTAINER, 'python', '-I', '-c', VERSION_PROBE, timeout=120,
+def target_version(work, app, target):
+    """The proxy's LiteLLM version, read in the running container (`podman exec <proxy> python -I -c ...`: read only), else
+    from its image (`Work.image_version`: the same program in a throwaway container without a network); None when neither
+    says it (L-33: that only goes unsaid, it stops nothing)."""
+    result = work.runner(app).podman('exec', target.app_container, 'python', '-I', '-c', VERSION_PROBE, timeout=120,
                                      max_output=4096, check=False)
     text = (result.stdout or b'').decode('ascii', 'replace').strip()
-    return text if result.returncode == 0 and VERSION_RE.fullmatch(text) else None
+    if result.returncode == 0 and VERSION_RE.fullmatch(text):
+        return text
+    reader = getattr(work, 'image_version', None)
+    if reader is None or not target.app_image:
+        return None
+    try:
+        return reader(app, target.app_image, label=None, command=('python', '-I', '-c', VERSION_PROBE))
+    except BackupError as error:
+        if haissues.is_job_wide(error) or error.code in ('insufficient-space', 'busy'):
+            raise
+        return None
 
 
 MIGRATIONS_SQL = ('SELECT coalesce(json_agg(migration_name ORDER BY migration_name COLLATE "C"), \'[]\'::json) '
                   'FROM public."_prisma_migrations" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL')
+MIGRATIONS_PRESENT_SQL = "SELECT to_json(pg_catalog.to_regclass('public._prisma_migrations') IS NOT NULL)"
 
 
 # HA's migrations are read only from an ordinary table: a view (or anything else) there could run HA's code as the
 # superuser at the read (review SR-1).
 MIGRATIONS_TABLE_SQL = ("SELECT to_json(coalesce((SELECT c.relkind = 'r' FROM pg_catalog.pg_class c "
                         "WHERE c.oid = pg_catalog.to_regclass('public._prisma_migrations')), false))")
+FIRST_START_WAIT = 900     # seconds the proxy gets to build its schema at its first start (L-08)
 
 
 def _migrations(value):
@@ -267,9 +410,39 @@ def _migrations(value):
     return sorted(value)
 
 
+def _read_live_migrations(work, app, target):
+    """(table is there, the answer) of this device's database: a database whose proxy never ran has no table yet."""
+    present = hacommon.live_json(work, app, target.db_container, target.db_user, target.database, MIGRATIONS_PRESENT_SQL)
+    if present is not True:
+        return False, None
+    return True, hacommon.live_json(work, app, target.db_container, target.db_user, target.database, MIGRATIONS_SQL)
+
+
+def _migrations_ready(target):
+    """`ensure_running`'s test: the database answers with at least one finished migration."""
+    def ready(runner, _container):
+        result = runner.podman('exec', target.db_container, 'psql', '-X', '-A', '-t', '-q', '-v', 'ON_ERROR_STOP=1', '-U',
+                               target.db_user, '-d', target.database, '-c', MIGRATIONS_SQL, timeout=60,
+                               max_output=1024 * 1024, check=False)
+        try:
+            return result.returncode == 0 and bool(json.loads((result.stdout or b'null').strip() or b'null'))
+        except ValueError:
+            return False
+    return ready
+
+
 def live_migrations(work, app, target):
-    return _migrations(hacommon.live_json(work, app, target.db_container, target.db_user, target.database,
-                                          MIGRATIONS_SQL))
+    """This device's finished Prisma migrations (sorted), None when they cannot be read. LiteLLM builds its schema at its
+    first start: a database with no table or no finished migration yet gets that one start (the proxy is started, waited
+    for and put back with the app's other throwaway objects), then it is read again (L-08); what is there but not usable
+    (more than 2000, a name that is no migration's) is not helped by a start."""
+    present, value = _read_live_migrations(work, app, target)
+    if present and value:
+        return _migrations(value)
+    work.log('這台 LiteLLM 的資料庫還沒有完成的結構遷移紀錄，先啟動它的代理服務讓它建立資料庫結構，讀完會恢復原狀。')
+    hatarget.ensure_running(work, app, target.app_container, ready=_migrations_ready(target), timeout=FIRST_START_WAIT)
+    present, value = _read_live_migrations(work, app, target)
+    return _migrations(value) if present else None
 
 
 # ====================================================================== the schema of the moved schemas
@@ -439,10 +612,11 @@ def live_schema(work, app, target):
 
 
 def _by(rows, key_width, width):
+    """{(schema, name): [the rest of every row]}: keyed by the names themselves (a name may hold a dot: L-10..L-12)."""
     groups = {}
     for row in rows or []:
         if isinstance(row, list) and len(row) >= width:
-            groups.setdefault('.'.join(str(v) for v in row[:key_width]), []).append(tuple(row[key_width:width]))
+            groups.setdefault(tuple(str(v) for v in row[:key_width]), []).append(tuple(row[key_width:width]))
     return groups
 
 
@@ -455,19 +629,19 @@ def schema_differences(ha, trusted):
     differ |= {t for t in set(ha_cols) | set(trusted_cols) if ha_cols.get(t) != trusted_cols.get(t)}
 
     def seqs(schema):
-        return {f'{r[0]}.{r[1]}': (r[2], r[9]) for r in schema.signature.get('sequences') or []
+        return {(str(r[0]), str(r[1])): (r[2], r[9]) for r in schema.signature.get('sequences') or []
                 if isinstance(r, list) and len(r) == 10}
 
     ha_seq, trusted_seq = seqs(ha), seqs(trusted)
     differ |= {s for s in set(ha_seq) | set(trusted_seq) if ha_seq.get(s) != trusted_seq.get(s)}
 
     def types(schema):
-        return {f'{r[0]}.{r[1]}': (r[2], r[3], r[6]) for r in schema.signature.get('types') or []
+        return {(str(r[0]), str(r[1])): (r[2], r[3], r[6]) for r in schema.signature.get('types') or []
                 if isinstance(r, list) and len(r) == 7}
 
     ha_types, trusted_types = types(ha), types(trusted)
     differ |= {t for t in set(ha_types) | set(trusted_types) if ha_types.get(t) != trusted_types.get(t)}
-    return sorted(differ)
+    return sorted('.'.join(key) for key in differ)
 
 
 def schema_blocker(differ):
@@ -476,26 +650,44 @@ def schema_blocker(differ):
 
 
 def require_names(schema, app=None):
-    """Every moved table, column and sequence name is a plain identifier (the copy statements quote them)."""
+    """The moved tables, columns and sequences all have names the copy statements can quote (`_ident`): every name is
+    quoted, none is refused for its characters and there is no limit on how many tables (L-10, L-11, L-12); a database
+    without a table stops."""
     names = [n for pair in schema.tables() + schema.sequences() for n in pair]
     names += [row[2] for row in schema.columns]
-    bad = [n for n in names if not isinstance(n, str) or not IDENT_RE.fullmatch(n)]
-    if bad or len(schema.tables()) > MAX_TABLES or not schema.tables():
-        raise BackupError('incompatible', f'LiteLLM 有 {len(bad)} 個資料表、欄位或序號的名稱不是這個匯入支援的格式'
-                                          f'（{len(schema.tables())} 個資料表），沒有讀取任何資料就停止了。',
+    for name in names:
+        _ident(name, TABLE_NAME_BAD)
+    if not schema.tables():
+        raise BackupError('incompatible', 'LiteLLM 的資料庫沒有任何資料表，沒有讀取任何資料就停止了。',
                           **({'app': app.id} if app is not None else {}))
 
 
+TABLE_NAME_BAD = 'LiteLLM 的資料表名稱不是這個匯入支援的格式，無法匯入。'
+COLUMN_NAME_BAD = 'LiteLLM 的資料表欄位名稱不是這個匯入支援的格式，無法匯入。'
+
+
+def _ident(name, message):
+    """`name` as an SQL identifier: in double quotes, a double quote inside doubled. What PostgreSQL cannot hold in a name
+    (nothing, a NUL, more than 63 bytes) or that is no text cannot come from a catalog and is refused."""
+    if (not isinstance(name, str) or not name or '\x00' in name
+            or len(name.encode('utf-8', 'surrogatepass')) > 63):
+        raise BackupError('incompatible', message)
+    return '"' + name.replace('"', '""') + '"'
+
+
+def _literal(text):
+    """`text` as an SQL string literal (standard_conforming_strings is on in every session the engine opens)."""
+    return "'" + text.replace("'", "''") + "'"
+
+
 def _q(schema, name):
-    if not IDENT_RE.fullmatch(schema) or not IDENT_RE.fullmatch(name):
-        raise BackupError('incompatible', 'LiteLLM 的資料表名稱不是這個匯入支援的格式，無法匯入。')
-    return f'"{schema}"."{name}"'
+    return f'{_ident(schema, TABLE_NAME_BAD)}.{_ident(name, TABLE_NAME_BAD)}'
 
 
 def _cols(columns):
-    if not columns or any(not IDENT_RE.fullmatch(c) for c in columns):
-        raise BackupError('incompatible', 'LiteLLM 的資料表欄位名稱不是這個匯入支援的格式，無法匯入。')
-    return ', '.join(f'"{c}"' for c in columns)
+    if not columns:
+        raise BackupError('incompatible', COLUMN_NAME_BAD)
+    return ', '.join(_ident(c, COLUMN_NAME_BAD) for c in columns)
 
 
 def copy_out_sql(schema, table, columns):
@@ -507,16 +699,19 @@ def copy_in_sql(schema, table, columns):
 
 
 def counts_sql(tables):
-    parts = ', '.join(f"'{s}.{t}', (SELECT count(*) FROM {_q(s, t)})" for s, t in tables)
-    return f'SELECT json_build_object({parts})'
+    """One count per table, in the order of `tables` (a position, not a name: names may hold any character)."""
+    parts = ', '.join(f'(SELECT count(*) FROM {_q(s, t)})' for s, t in tables)
+    return f'SELECT json_build_array({parts})'
 
 
 def table_counts(cluster, tables):
+    """{(schema, table): rows}; a table whose count did not come back is left out."""
     found = {}
-    for start in range(0, len(tables), 40):  # 2 arguments each; PostgreSQL allows 100
-        doc = cluster.query_json(counts_sql(tables[start:start + 40]), DATABASE)
-        if isinstance(doc, dict):
-            found.update({k: ha_odoo._int(v) for k, v in doc.items()})
+    for start in range(0, len(tables), 40):  # one argument each; PostgreSQL allows 100
+        batch = tables[start:start + 40]
+        doc = cluster.query_json(counts_sql(batch), DATABASE)
+        if isinstance(doc, list) and len(doc) == len(batch):
+            found.update({table: ha_odoo._int(value) for table, value in zip(batch, doc)})
     return found
 
 
@@ -525,8 +720,6 @@ def table_counts(cluster, tables):
 OBJECTS_SQL = """SELECT json_build_object(
  'schemas', (SELECT coalesce(json_agg(nspname ORDER BY nspname), '[]'::json) FROM pg_catalog.pg_namespace
              WHERE nspname NOT IN ('public', 'information_schema') AND nspname !~ '^pg_'),
- 'ha_only', (SELECT coalesce(json_agg(c.relname ORDER BY c.relname), '[]'::json) FROM pg_catalog.pg_class c
-             JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'woow' AND c.relkind NOT IN ('i', 'S')),
  'extensions', (SELECT coalesce(json_agg(extname ORDER BY extname), '[]'::json) FROM pg_catalog.pg_extension),
  'encoding', pg_catalog.pg_encoding_to_char((SELECT encoding FROM pg_catalog.pg_database WHERE datname = current_database())),
  'large_objects', (SELECT count(*) FROM pg_catalog.pg_largeobject_metadata))"""
@@ -630,9 +823,12 @@ def stored_settings(cluster, schema):
     columns = {row[2]: row[3] for row in schema.columns if (row[0], row[1]) == CONFIG_TABLE}
     if columns.get('param_value') != 'jsonb' or 'param_name' not in columns:
         return None
-    try:
-        found = cluster.query_json(STORED_SETTINGS_SQL, DATABASE)
-    except BackupError:
+    try:   # L-13: a read that failed for a moment is tried once more; only what stays unreadable is not moved
+        found = hatarget.retry(lambda: cluster.query_json(STORED_SETTINGS_SQL, DATABASE), attempts=2, pause_first=2.0,
+                               log=getattr(cluster, 'log', None), what='讀取 HA 的 LiteLLM 存在資料庫裡的設定')
+    except BackupError as error:
+        if haissues.is_job_wide(error):
+            raise
         return dict(UNREADABLE)
     if not isinstance(found, dict):
         return dict(UNREADABLE)
@@ -644,12 +840,14 @@ def stored_settings(cluster, schema):
     hooks = (names(found.get('hooks')) + names(found.get('nested'))
              + [f'litellm_settings 回呼 {c}'[:60] for c in callbacks if '.' in c])
     return {'sections': names(found.get('sections')), 'env': names(found.get('env')),
-            'callbacks': [c for c in callbacks if '.' not in c], 'hooks': hooks}
+            'callbacks': [c for c in callbacks if '.' not in c], 'hooks': hooks,
+            'labels': sorted(set(names(found.get('hooks')) + names(found.get('nested'))))}
 
 
 def stored_hooks_blocker(found):
-    """The blocker when HA's stored settings make LiteLLM load and run code (MODULE_HOOKS, NESTED_HOOKS) or cannot be
-    read completely, else None."""
+    """The sentence of the refusal this import made until 2026-11-25 (L-13, L-14: the stored settings make LiteLLM load and
+    run code, or cannot be read completely). The import does not stop for them any more (`settings_issues`: the settings are
+    left out and named); the sentence stays for the lab drivers (tests/e2e/lab) that quote it."""
     if found and found.get('unreadable'):
         return ('無法完整讀取 HA 的 LiteLLM 存在資料庫裡的設定（內容過大或讀取逾時），無法確認其中沒有會載入並執行程式的設定，'
                 '無法安全地搬過來。')
@@ -657,6 +855,74 @@ def stored_hooks_blocker(found):
         return None
     return (f'HA 的 LiteLLM 在資料庫裡存了會載入並執行程式的設定（{hacommon.names(found["hooks"])}），匯入後這台的 LiteLLM '
             '會照著執行，無法安全地搬過來；請先在 HA 的 LiteLLM 移除這些設定，再重新備份。')
+
+
+HOOKS_REMOVED = ('HA 的 LiteLLM 在資料庫裡存了會載入並執行程式的設定，匯入後這台的 LiteLLM 會照著執行，所以這些設定不會搬過來'
+                 '（其他設定照搬）。需要它們的話，請匯入後自己在這台的 LiteLLM 重新設定。')
+CONFIG_UNREADABLE = ('HA 的 LiteLLM 存在資料庫裡的代理設定（資料表 LiteLLM_Config）讀不完整（內容過大或讀取逾時），無法確認其中沒有會載入並'
+                     '執行程式的設定，所以這個資料表這次不搬；匯入後請在這台的 LiteLLM 重新設定代理設定。')
+HOOKS_STAYED = '匯入後的資料庫裡還留有會載入並執行程式的設定，沒有完全拿掉，已停止，這台的應用沒有任何變更。'
+# What is taken out of a stored section for every label STORED_SETTINGS_SQL gives (MODULE_HOOKS pairs, NESTED_HOOKS labels, the
+# callback lists): the whole setting, by its key or its path -- never a part of its value, so what is taken out can be told
+# from what stays by the key alone. tests/backup/test_ha_litellm.py proves that no label the detection can give is without one.
+NESTED_REMOVAL = {
+    'custom_provider_map': ('key', 'custom_provider_map'), 'guardrails': ('key', 'guardrails'),
+    'pass_through_endpoints': ('key', 'pass_through_endpoints'),
+    'litellm_jwtauth.custom_validate': ('path', ('litellm_jwtauth', 'custom_validate')),
+    'custom_secret_manager': ('path', ('key_management_settings', 'custom_secret_manager')),
+    'plugins': ('key', 'plugins'),
+}
+
+
+def hook_removals():
+    """{label: (section, ('key', name) | ('path', (a, b)))} of every label STORED_SETTINGS_SQL can give for a setting that
+    loads code."""
+    table = {f'{section}.{key}': (section, ('key', key)) for section, key in MODULE_HOOKS}
+    for section, label, _path in NESTED_HOOKS:
+        table[f'{section}.{label}'] = (section, NESTED_REMOVAL[label])
+    table['litellm_settings.callbacks'] = ('litellm_settings', ('key', 'callbacks'))
+    for key in CALLBACK_KEYS:
+        table[f'litellm_settings.{key}'] = ('litellm_settings', ('key', key))
+    return table
+
+
+def removal_sql(labels):
+    """The UPDATEs that take the named settings out of the stored sections of the NEW cluster (one per label, in a script)."""
+    table = hook_removals()
+    statements = []
+    for label in sorted(set(labels)):
+        section, (kind, arg) = table[label]
+        if kind == 'key':
+            expr = f'param_value - {_literal(arg)}::text'
+        else:
+            expr = f"param_value #- {_literal('{' + ','.join(arg) + '}')}::text[]"
+        statements.append(f'UPDATE public."LiteLLM_Config" SET param_value = {expr} WHERE param_name = {_literal(section)} '
+                          "AND jsonb_typeof(param_value) = 'object';")
+    return '\n'.join(statements) + '\n'
+
+
+def settings_issues(sink, found):
+    """What HA's stored settings say, as lines: the settings that load code are named in one line to confirm (they are not
+    moved), a table that cannot be read completely is named in another (it is not moved), the rest that takes effect here is
+    a reminder. Returns whether the table's rows are moved (False: the table stays empty)."""
+    if found and found.get('unreadable'):
+        sink.confirm('litellm.config-unreadable', CONFIG_UNREADABLE, [CONFIG_TABLE[1]])
+        return False
+    if found and found.get('hooks'):
+        sink.confirm('litellm.hooks-removed', HOOKS_REMOVED, found['hooks'])
+    line = stored_settings_line(found)
+    if line:
+        sink.notice('litellm.stored-settings', line)
+    return True
+
+
+def again(sink, issue_id, message, items):
+    """The same line to confirm, found a second time in the NEW cluster: it must have exactly the names the customer
+    confirmed (the same key), else this app stops (`confirmation-required`). A line already said is not said twice."""
+    issue = Issue(issue_id, 'confirm', message, items)
+    key = issue.key(sink.app_id)
+    if not any(known.id == issue.id and known.level == 'confirm' and known.key(sink.app_id) == key for known in sink.found):
+        sink.add(issue)
 
 
 def stored_settings_line(found):
@@ -698,8 +964,9 @@ def salt_binding(cluster, src):
 def analyse(cluster):
     """What HA's database holds (from the hardened throwaway cluster)."""
     databases = {db['name']: db for db in ha_odoo.ha_databases(cluster)}
-    if DATABASE not in databases:
-        raise BackupError('incompatible', 'HA 的 LiteLLM 沒有 litellm 資料庫。')
+    if DATABASE not in databases:   # L-15: nothing to move; only this app stops, this device's data is not touched
+        raise haissues.stopped(Issue('litellm.no-database', 'stop', 'HA 的 LiteLLM 沒有 litellm 資料庫。',
+                                     action='請先確認 HA 的 LiteLLM 有資料並重新備份，再匯入；這台的 LiteLLM 不會有任何變更。'))
     objects = cluster.query_json(OBJECTS_SQL, DATABASE)
     if not isinstance(objects, dict):
         raise BackupError('job-failed', '無法讀取 HA 的 LiteLLM 資料庫。')
@@ -710,49 +977,61 @@ def analyse(cluster):
             'superuser': [str(k)[:40] for k in superuser[:20]] if isinstance(superuser, list) else []}
 
 
-def verdict(src, found, *, ha_major, target_major, live_migrations_value, binding):
-    """(blockers, warnings) of HA's LiteLLM against this device."""
-    blockers, warnings = [], []
+REBACKUP = '請在 HA 重新做一份 LiteLLM 的備份後再匯入。'
+
+
+def judge(sink, src, found, *, ha_major, live_migrations_value, binding):
+    """HA's LiteLLM against this device, as the issues of `sink` (the check collects them all; a conversion stops at the
+    first stop and asks for every line to confirm). What this device's PostgreSQL major is, and which version either side's
+    LiteLLM has, decide nothing here (L-20, L-31..L-34): the migrations (L-26) and the data shape (L-09) do."""
     objects = found['objects']
     if src.symlinks:
-        blockers.append('HA 的 LiteLLM 資料庫使用了表格空間或符號連結，無法安全地搬過來。')
+        sink.stop('litellm.tablespaces', 'HA 的 LiteLLM 資料庫使用了表格空間或符號連結，無法安全地搬過來。', action=REBACKUP)
     if src.recovery_files:
-        blockers.append('HA 的 LiteLLM 資料庫不是在停止狀態下備份的（含有 backup_label 或 tablespace_map），無法安全地搬過來；'
-                        '請在 HA 重新做一份 LiteLLM 的備份。')
+        sink.stop('litellm.not-cold-backup', 'HA 的 LiteLLM 資料庫不是在停止狀態下備份的（含有 backup_label 或 tablespace_map），'
+                  '無法安全地搬過來；請在 HA 重新做一份 LiteLLM 的備份。', action=REBACKUP)
     if ha_major != HA_PG_MAJOR or src.pg_version is None:
-        blockers.append(f'HA 的 LiteLLM 資料庫不是預期的 PostgreSQL {HA_PG_MAJOR}（是 {ha_major or "未知"} 版）。')
-    if target_major is None or not 13 <= target_major < HA_PG_MAJOR + 1:
-        blockers.append(f'無法確認這台 LiteLLM 的 PostgreSQL 版本（{target_major or "未知"}）。')
+        sink.stop('litellm.pg-major', f'HA 的 LiteLLM 資料庫不是預期的 PostgreSQL {HA_PG_MAJOR}（是 {ha_major or "未知"} 版）。',
+                  action='請把 HA 的 LiteLLM 更新到使用 PostgreSQL 18 的版本，重新備份後再匯入。')
     extra_dbs = [d for d in found['databases'] if d != DATABASE]
     if extra_dbs:
-        warnings.append(f'HA 的 LiteLLM 資料庫叢集還有其他資料庫（{hacommon.names(extra_dbs, 5)}），不會搬過來。')
+        sink.notice('litellm.databases-left', f'HA 的 LiteLLM 資料庫叢集還有其他資料庫（{hacommon.names(extra_dbs, 5)}），不會搬過來。')
     schemas = [str(s) for s in objects.get('schemas') or []]
     odd = [s for s in schemas if s not in ('woow_platform', 'woow')]
-    if odd or 'woow_platform' not in schemas:
-        blockers.append(f'HA 的 LiteLLM 資料庫的結構描述不是 LiteLLM 會建立的（{hacommon.names(odd or ["缺少 woow_platform"], 5)}），'
-                        '無法安全地搬過來。')
-    ha_only = [str(t) for t in objects.get('ha_only') or []]
-    if any(t not in HA_ONLY['woow'] for t in ha_only):
-        blockers.append(f'HA 的 LiteLLM 資料庫的 woow 結構描述有不認得的物件（{hacommon.names(ha_only, 5)}），無法安全地搬過來。')
-    if found['superuser']:
-        blockers.append(f'HA 的 LiteLLM 資料庫含有只有資料庫超級使用者才能建立的物件（{hacommon.names(found["superuser"])}），'
-                        '無法安全地搬過來。')
-    if ha_odoo._int(objects.get('large_objects')):
-        blockers.append('HA 的 LiteLLM 資料庫含有大型物件（LiteLLM 不會建立），無法安全地搬過來。')
+    if odd:   # L-21: what LiteLLM does not make is not moved; a missing woow_platform is told by the shape comparison (L-09)
+        sink.confirm('litellm.schemas-skipped', 'HA 的 LiteLLM 資料庫還有 LiteLLM 不會建立的結構描述，它們不會搬過來'
+                     '（只搬 LiteLLM 自己的資料表的資料列）。', haissues.Names(odd))
+    if found['superuser']:   # L-23: never moved; they only ever exist inside HA's sandboxed cluster
+        sink.confirm('litellm.superuser-objects', 'HA 的 LiteLLM 資料庫含有只有資料庫超級使用者才能建立的物件，它們不會搬過來'
+                     '（LiteLLM 不會建立這類物件；只搬資料表的資料列，由這台自己的資料庫結構接收）。', found['superuser'])
+    large = ha_odoo._int(objects.get('large_objects'))
+    if large:   # L-24
+        sink.notice('litellm.large-objects', f'HA 的 LiteLLM 資料庫含有 {large} 個大型物件（LiteLLM 不會建立），它們不會搬過來。')
     if objects.get('encoding') != 'UTF8':
-        blockers.append('HA 的 LiteLLM 資料庫不是 UTF8 編碼。')
+        sink.stop('litellm.encoding', 'HA 的 LiteLLM 資料庫不是 UTF8 編碼。', action=REBACKUP)
     ha_migrations = found['migrations']
     if ha_migrations is None or live_migrations_value is None or ha_migrations != live_migrations_value:
         only_ha = sorted(set(ha_migrations or []) - set(live_migrations_value or []))
         only_here = sorted(set(live_migrations_value or []) - set(ha_migrations or []))
-        blockers.append('資料庫結構版本不同（Prisma 遷移紀錄：只在 HA 的 '
-                        f'{len(only_ha) if ha_migrations is not None else "未知"} 筆，只在這台的 '
-                        f'{len(only_here) if live_migrations_value is not None else "未知"} 筆）。'
-                        '請先讓兩邊的 LiteLLM 版本一致後再匯入。')
+        sink.stop('litellm.migrations-differ', '資料庫結構版本不同（Prisma 遷移紀錄：只在 HA 的 '
+                  f'{len(only_ha) if ha_migrations is not None else "未知"} 筆，只在這台的 '
+                  f'{len(only_here) if live_migrations_value is not None else "未知"} 筆）。'
+                  '請先讓兩邊的 LiteLLM 版本一致後再匯入。',
+                  action='請把 HA 和這台的 LiteLLM 更新到同一版，在 HA 重新備份後再匯入。')
     if binding != 'match':
-        blockers.append(SALT_MISMATCH if binding in ('mismatch', 'invalid_rows')
-                        else 'HA 備份裡找不到格式正確的 LiteLLM 加密金鑰（salt_key），搬過來後儲存的供應商憑證都無法解密，所以不能匯入。')
-    return blockers, warnings
+        if binding in ('mismatch', 'invalid_rows'):
+            sink.stop('litellm.salt-mismatch', SALT_MISMATCH, action=SALT_ACTION)
+        else:
+            sink.stop('litellm.salt-missing', SALT_MISSING, action=SALT_ACTION)
+
+
+def verdict(src, found, *, ha_major, live_migrations_value, binding, target_major=None):
+    """(blockers, warnings) as sentences: `judge` on a sink that only collects. Kept for the lab drivers of tests/e2e/lab;
+    `target_major` is no gate any more (L-20)."""
+    sink = haissues.Sink(APP_ID)
+    judge(sink, src, found, ha_major=ha_major, live_migrations_value=live_migrations_value, binding=binding)
+    return ([i.message for i in sink.found if i.level in ('stop', 'confirm')],
+            [i.message for i in sink.found if i.level in ('auto', 'notice')])
 
 
 def section(src, detail, *, version, migrations, target_major, key_users_value):
@@ -983,7 +1262,7 @@ def pick_pg18(work, app):
         if runner.podman('image', 'exists', image_id, timeout=60, check=False).returncode == 0:
             return image_id
     work.log('這台沒有 PostgreSQL 18 映像，下載固定版本的官方 postgres 18.7 映像（以內容摘要固定）')
-    runner.podman('pull', '--quiet', PG18_PINNED, timeout=1800, max_output=64 * 1024, abort=work.abort)
+    hatarget.ensure_image(work, app, PG18_PINNED)   # L-58: a second try, then only this app stops, with the reason
     for image_id in PG18_IDS:
         if runner.podman('image', 'exists', image_id, timeout=60, check=False).returncode == 0:
             return image_id
@@ -1021,35 +1300,38 @@ class HaSessions:
         return self._tmp.exec(role, argv, env=env, **kwargs)
 
 
-def start_ha_cluster(work, tmp, image):
+def start_ha_cluster(work, tmp, image, size=None):
     """PostgreSQL 18 on HA's (untrusted) cluster, as hardened as ha_odoo.start_ha_cluster: read-only root, no network,
-    the data volume noexec/nosuid/nodev at the image's VOLUME path, every library/command setting overridden."""
+    the data volume noexec/nosuid/nodev at the image's VOLUME path, every library/command setting overridden. `size`: the
+    cluster's bytes (the wait for it to open grows with them)."""
     tmp.run('hapg', image, ha_server_args(), detach=True, read_only_root=True, env={'PGDATA': HA_PGDATA},
             volumes=[(tmp.name('hapg'), HA_PGDATA, 'rw,noexec,nosuid,nodev')])
     cluster = ha_odoo.Cluster(HaSessions(tmp, 'hapg'), 'hapg', log=work.log)
-    cluster.wait_ready(checkpoint=work.checkpoint)
-    major = cluster.query_json("SELECT to_json(current_setting('server_version_num')::int / 10000)", DATABASE)
-    if major != HA_PG_MAJOR:
-        raise BackupError('job-failed', '暫用的 PostgreSQL 18 版本不符，已停止，這台的應用沒有任何變更。')
-    return cluster
+    cluster.wait_ready(checkpoint=work.checkpoint, timeout=podman.scaled_timeout(ha_odoo.PG_READY_TIMEOUT, size))
+    return cluster   # L-30: the image is the pinned one by content (pick_pg18); which version it says is not asked again
 
 
-def member_pass(work, app, tmp, pg_ids):
+def member_pass(work, app, tmp, pg_ids, sink=None):
+    """HA's cluster streamed into the throwaway volume `hapg`, the salt file and state.json read. What the reader left out of
+    the member (a device file, a fifo, a name it cannot show ...) is one line to confirm (`Sink.skipped`; symlinks are not
+    among them: they stop the import, L-17)."""
     member = work.addon_member(SLUG)
-    report = habackup.Report()
+    report = habackup.Report(names=haissues.Names)
     holder = {}
 
     def produce(out):
-        sink = ha_odoo.PgSink(out, *pg_ids, guard=work.guard)
+        pgsink = ha_odoo.PgSink(out, *pg_ids, guard=work.guard)
         with work.open(member) as stream:
-            holder['src'] = scan_member(stream, report, pg=sink, checkpoint=work.checkpoint)
-        sink.close()
+            holder['src'] = scan_member(stream, report, pg=pgsink, checkpoint=work.checkpoint)
+        pgsink.close()
 
     tmp.volume('hapg')
     tmp.volume_import('hapg', produce)
     for note in report.warnings():
         work.log(note)
     src = holder['src']
+    if sink is not None:
+        sink.skipped(report, *[kind for kind in habackup.SKIP_KINDS if kind != 'symlink'])
     if src.salt() is not None:
         from . import jobs
         jobs.mask_secret(src.salt().decode('ascii'))  # every log line, progress message and error of this job
@@ -1065,32 +1347,84 @@ def _ha_major(src):
         return None
 
 
-def _prepare(work, app):
-    """(Target, live LiteLLM version, live migrations, target PG major, version blocker or None)."""
-    target = Target(work, app)
-    addon = work.addon_info(SLUG)
-    version = target_version(work, app)
-    blocker = VERSIONS.blocker(addon.version if addon else '', version)
-    return (target, version, live_migrations(work, app, target),
-            ha_odoo.target_pg_major(work, app, target.db_image), blocker)
+def target_major(work, app, target):
+    """The PostgreSQL major this device's image says (shown only: the new cluster's own answer is what counts, L-20, L-53)."""
+    try:
+        return ha_odoo.target_pg_major(work, app, target.db_image)
+    except BackupError as error:
+        if haissues.is_job_wide(error) or error.code in ('insufficient-space', 'busy'):
+            raise
+        return None
 
 
-def _state_blocker(src, addon):
-    expected = VERSIONS.upstream(addon.version if addon else '')
-    if src.state_version is not None and expected is not None and src.state_version != expected:
-        return (f'HA 的 LiteLLM 資料庫最後由 LiteLLM {src.state_version} 遷移，和附加元件 {addon.version} '
-                f'搭配的 {expected} 不同，無法確認資料庫結構。')
-    return None
+def version_issues(addon_version, target):
+    """The lines about versions: the table that maps HA's add-on version to LiteLLM's does not know it, this device's
+    version cannot be read (both only inform), or both are known and differ (a reminder, never a gate: HA's and this
+    device's migrations and data shape decide; L-31..L-34, L-45)."""
+    upstream = VERSIONS.upstream(addon_version)
+    result = []
+    for issue in haissues.version_issues(VERSIONS.product, addon_version, upstream, target):
+        if issue.id == 'version.different':
+            issue = Issue('litellm.version-differs', 'notice',
+                          f'HA 的 LiteLLM 是 {haissues.clean(upstream, 40)}（附加元件 {haissues.clean(addon_version, 40)}），'
+                          f'這台的是 {haissues.clean(target, 40)}；版本不同不會擋下匯入：只要兩邊的資料庫結構相同'
+                          '（遷移紀錄與資料表結構一致）就照常匯入，匯入後這台的 LiteLLM 用 HA 的資料執行。')
+        result.append(issue)
+    return result
+
+
+def schema_stops(sink, ha_schema, live):
+    """The shape of HA's tables against this device's live ones (L-09) and what else this device's database holds (L-38)."""
+    differ = schema_differences(ha_schema, live)
+    if differ:
+        sink.stop('litellm.schema-differs', schema_blocker(differ),
+                  action='請把 HA 和這台的 LiteLLM 更新到同一版，在 HA 重新備份後再匯入。')
+    others = other_schemas(live)
+    if others:
+        sink.confirm('litellm.other-schemas', OTHER_SCHEMAS, others)
+        if not keep_supported():
+            sink.stop('litellm.keep-unsupported', KEEP_UNSUPPORTED,
+                      action='請先更新這台的備份元件（需要能保留匯入前備份的版本），再匯入。')
+
+
+OTHER_SCHEMAS = ('這台 LiteLLM 的資料庫裡還有 LiteLLM 不會建立的結構描述（資料）。匯入會用 HA 的資料取代整個資料庫，它們不會留在資料庫裡；'
+                 '匯入前會先把整個資料庫存成「保留的複本」，不會自動刪除，需要時可以從備份清單取回。')
+KEEP_UNSUPPORTED = ('這台的備份元件還不能保留匯入前的備份，所以不能在會失去這台資料庫裡其他資料的情況下匯入（匯入沒有開始，'
+                    '這台沒有任何變更）。')
+
+
+def other_schemas(live):
+    """The schemas of this device's database besides `public` and `woow_platform` (L-38)."""
+    return [str(name) for name in live.signature.get('schemas') or [] if name != 'woow_platform']
+
+
+def keep_supported():
+    """Whether this engine hands `keep_safety` to the adapter (haimport.ITEM_KEYS): without it the converted backup would not
+    make the restore keep its pre-restore backup, and the schemas the confirmation promises to keep would go (L-38)."""
+    from . import haimport
+    return 'keep_safety' in haimport.ITEM_KEYS
+
+
+def _prepare(work, app, sink):
+    """(Target, live LiteLLM version or None, live migrations or None) of this device, ready to be read."""
+    target = Target(work, app, sink)
+    hatarget.ensure_image(work, app, target.db_image)
+    version = target_version(work, app, target)
+    migrations = live_migrations(work, app, target)
+    return target, version, migrations
 
 
 def check(work, app):
+    sink = _sink(work, app)
     tmp = work.temp(app)
-    target, version, migrations, target_major, blocker = _prepare(work, app)
+    target, version, migrations = _prepare(work, app, sink)
+    addon = work.addon_info(SLUG)
+    major = target_major(work, app, target)
     image18 = pick_pg18(work, app)
     pg_ids = tmp.user_ids('ids-pg', image18, 'postgres')
-    src = member_pass(work, app, tmp, pg_ids)
+    src = member_pass(work, app, tmp, pg_ids, sink)
     work.phase('check')
-    cluster = start_ha_cluster(work, tmp, image18)
+    cluster = start_ha_cluster(work, tmp, image18, size=src.pg_bytes)
     found = analyse(cluster)
     binding = salt_binding(cluster, src)
     ha_schema = read_schema(cluster, found['migrations']) if found['migrations'] else None
@@ -1100,31 +1434,21 @@ def check(work, app):
     settings = stored_settings(cluster, ha_schema) if ha_schema else None
     tmp.remove('hapg')
     tmp.remove_volume('hapg')
-    blockers, warnings = verdict(src, found, ha_major=_ha_major(src), target_major=target_major,
-                                 live_migrations_value=migrations, binding=binding)
-    stored_line = stored_settings_line(settings)
-    if stored_line:
-        warnings.append(stored_line)
-    hooks = stored_hooks_blocker(settings)
-    if hooks:
-        blockers.append(hooks)
-    for item in (_state_blocker(src, work.addon_info(SLUG)), blocker):
-        if item:
-            blockers.insert(0, item)
+    judge(sink, src, found, ha_major=_ha_major(src), live_migrations_value=migrations, binding=binding)
+    settings_issues(sink, settings)
+    sink.extend(version_issues(addon.version, version))
     if ha_schema is not None:
-        differ = schema_differences(ha_schema, live_schema(work, app, target))
-        if differ:
-            blockers.append(schema_blocker(differ))
+        schema_stops(sink, ha_schema, live_schema(work, app, target))
     users = key_users(work, app)
     line = key_users_line(users)
     if line:
-        warnings.append(line)
+        sink.notice('litellm.key-users', line)
     if ha_odoo._int((detail or {}).get('chatgpt_accounts')):
-        warnings.append(f'HA 的 LiteLLM 有 {detail["chatgpt_accounts"]} 個 ChatGPT 訂閱登入會一起搬過來；請先停掉 HA 那邊的 '
-                        'LiteLLM（它的登入權杖會輪替，兩邊同時使用會讓其中一邊失效）。')
-    return {'target_version': version or '', 'blockers': blockers, 'warnings': warnings,
-            'litellm': section(src, detail, version=VERSIONS.upstream(work.addon_info(SLUG).version),
-                               migrations=found['migrations'], target_major=target_major, key_users_value=users)}
+        sink.notice('litellm.chatgpt-accounts', f'HA 的 LiteLLM 有 {detail["chatgpt_accounts"]} 個 ChatGPT 訂閱登入會一起搬過來；請先停掉 HA 那邊的 '
+                    'LiteLLM（它的登入權杖會輪替，兩邊同時使用會讓其中一邊失效）。')
+    return {'target_version': version or '',
+            'litellm': section(src, detail, version=VERSIONS.upstream(addon.version) or src.state_version,
+                               migrations=found['migrations'], target_major=major, key_users_value=users)}
 
 
 # ---------------------------------------------------------------------- the trusted schema
@@ -1180,7 +1504,12 @@ pid=
 def snapshot_script(expected):
     """SNAPSHOT_SCRIPT with the migrations the snapshot must hold (json_agg's text: `["a", "b"]`) and the columns
     query; no value of the database is in it."""
-    text = json.dumps(sorted(expected), ensure_ascii=True)
+    values = list(expected or [])
+    if any(not isinstance(v, str) or not MIGRATION_RE.fullmatch(v) for v in values):
+        # Not a customer's case (L-35: `live_migrations` only gives names that are migrations'): the names are put into a shell
+        # here-document, so one that is no migration's is a programming error and never reaches it.
+        raise BackupError('internal-error', '結構快照腳本的遷移名稱格式不正確。')
+    text = json.dumps(sorted(values), ensure_ascii=True)
     return (SNAPSHOT_SCRIPT.replace('__MIGRATIONS__', MIGRATIONS_SQL).replace('__EXPECTED__', text.replace("'", "''"))
             .replace('__COLUMNS__', ' '.join(COLUMNS_SQL.split())))
 
@@ -1188,8 +1517,6 @@ def snapshot_script(expected):
 def capture_schema(work, app, target, path, expected):
     """The live database's columns and schema-only archive from ONE exported snapshot (the snapshot's migrations must
     be `expected`). Returns the snapshot's columns; the archive is written to `path` (0600)."""
-    if not expected or any(not isinstance(v, str) or not MIGRATION_RE.fullmatch(v) for v in expected):
-        raise BackupError('incompatible', '目標 LiteLLM 的資料庫結構版本不明。', app=app.id)
     capture = path.with_name(path.name + '.capture')
     created = output = False
     try:
@@ -1207,7 +1534,7 @@ def capture_schema(work, app, target, path, expected):
             try:
                 columns = util.loads_strict(source.readline(4 * 1024 * 1024 + 1), max_bytes=4 * 1024 * 1024)
             except ValueError:
-                raise BackupError('incompatible', '目標 LiteLLM 的結構快照格式不正確。', app=app.id) from None
+                raise unsteady('目標 LiteLLM 的結構快照格式不正確。', app) from None
             _columns(columns, '這台 LiteLLM 的結構快照')
             with open(path, 'xb') as dest:
                 output = True
@@ -1225,28 +1552,85 @@ def capture_schema(work, app, target, path, expected):
             capture.unlink(missing_ok=True)
 
 
+def unsteady(message, app):
+    """A capture that came out wrong although nothing is wrong with the data (the device was busy, its schema moved for a
+    moment): it is made again (`trusted_schema`); only what stays that way stops the app."""
+    return BackupError('incompatible', message, app=app.id, unsteady=True)
+
+
+def _unsteady(error):
+    """Whether a failed capture may be made again (L-36, L-37, L-39, L-54, L-55): the schema moved, the snapshot came back
+    garbled, or the script ended early (its exit codes 21 and 22: psql was gone / the snapshot is of other migrations)."""
+    if haissues.is_job_wide(error):
+        return False
+    if (getattr(error, 'details', None) or {}).get('unsteady') is True:
+        return True
+    return isinstance(error, BackupError) and error.code == 'job-failed' and getattr(error, 'returncode', None) in (21, 22)
+
+
 def trusted_schema(work, app, target, path, migrations):
     """This device's schema as the new cluster gets it: the live schema (signature, columns, migrations) before and
-    after the capture and the snapshot's columns must all be equal -- no DDL ran meanwhile (enforced here)."""
-    before = live_schema(work, app, target)
-    if before.migrations != sorted(migrations or []):
-        raise BackupError('incompatible', SCHEMA_CHANGED, app=app.id)
-    if [s for s in before.signature.get('schemas') or [] if s != 'woow_platform']:
-        raise BackupError('incompatible', '這台 LiteLLM 的資料庫有 LiteLLM 不會建立的結構描述，無法匯入。', app=app.id)
-    columns = capture_schema(work, app, target, path, migrations)
-    after = live_schema(work, app, target)
-    if columns != before.columns or after != before:
-        path.unlink(missing_ok=True)
-        raise BackupError('incompatible', SCHEMA_CHANGED, app=app.id)
-    return before
+    after the capture and the snapshot's columns must all be equal -- no DDL ran meanwhile (enforced here). A capture that
+    came out wrong because the device was busy or its schema was moving is made again after a pause (L-36, L-37, L-39,
+    L-54, L-55); only a schema that does not hold still stops this app, and nothing was changed."""
+    def once():
+        before = live_schema(work, app, target)
+        if before.migrations != sorted(migrations or []):
+            raise unsteady(SCHEMA_CHANGED, app)
+        columns = capture_schema(work, app, target, path, migrations)
+        after = live_schema(work, app, target)
+        if columns != before.columns or after != before:
+            path.unlink(missing_ok=True)
+            raise unsteady(SCHEMA_CHANGED, app)
+        return before
+
+    return hatarget.retry(once, attempts=3, pause_first=5.0, longest=30.0, retry_if=_unsteady, abort=work.abort,
+                          log=work.log, what='讀取這台 LiteLLM 的資料庫結構')
 
 
-def require_schema(cluster, trusted, stage):
+def comparable(signature):
+    """A signature without the versions of the extensions (L-40): the new cluster has the version its image makes of an
+    extension, this device's database the one it was created with; a different version is told (`extension_notes`), a
+    different extension is a different schema."""
+    value = dict(signature)
+    value['extensions'] = [[row[0], row[2]] for row in signature.get('extensions') or []
+                           if isinstance(row, list) and len(row) == 3]
+    return value
+
+
+def extension_versions(signature):
+    return {row[0]: row[1] for row in signature.get('extensions') or [] if isinstance(row, list) and len(row) == 3}
+
+
+def require_schema(cluster, trusted, stage, notes=None):
     found = _signature(cluster.query_json(SIGNATURE_SQL, DATABASE), '新的 PostgreSQL 叢集')
-    differ = [key for key in SIGNATURE_KEYS if found.get(key) != trusted.signature.get(key)]
+    wanted = comparable(trusted.signature)
+    seen = comparable(found)
+    differ = [key for key in SIGNATURE_KEYS if seen.get(key) != wanted.get(key)]
     if differ:
         raise BackupError('job-failed', f'新的 PostgreSQL 叢集的資料庫結構和這台 LiteLLM 的不同（{"、".join(differ)}），'
                                         '已停止，這台的應用沒有任何變更。', stage=stage)
+    if notes is not None:
+        live, new = extension_versions(trusted.signature), extension_versions(found)
+        notes.update({name for name in live if name in new and new[name] != live[name]})
+
+
+def align_extensions(cluster, trusted):
+    """L-40: the new cluster gets the extensions this device's database has at the versions it has them, when its image still
+    ships those (CREATE EXTENSION ... VERSION from the live catalog's own names, before the schema is restored); what it
+    cannot make that way is left to the image's version, which `require_schema` then only names."""
+    for row in trusted.signature.get('extensions') or []:
+        if not isinstance(row, list) or len(row) != 3 or row[0] == 'plpgsql':
+            continue
+        name, version, schema = row
+        if not all(isinstance(v, str) and v for v in row):
+            continue
+        try:
+            cluster.script(f'CREATE EXTENSION IF NOT EXISTS {_ident(name, TABLE_NAME_BAD)} WITH SCHEMA '
+                           f'{_ident(schema, TABLE_NAME_BAD)} VERSION {_literal(version)};\n', DATABASE)
+        except BackupError as error:
+            if haissues.is_job_wide(error):
+                raise
 
 
 def audit_new_cluster(cluster, superuser):
@@ -1270,21 +1654,38 @@ SALT_DIGEST_SQL = ("SELECT coalesce(json_agg(encode(pg_catalog.sha256(convert_to
                    "FROM woow_platform.settings WHERE key OPERATOR(pg_catalog.=) 'litellm_salt_key'")
 
 
-def export_rows(work, cluster, trusted, staging):
-    """HA's rows of every trusted table into staging files (COPY text, the trusted columns) and every trusted
-    sequence's value: {(schema, table): path}, {(schema, sequence): (value, called)}."""
+def copy_script(schema, table, columns, mark):
+    """(head, tail) of the script one table's rows travel in (pg-stdin follow-up F2): one transaction that the script itself
+    opens and closes around the COPY, then an end mark psql prints only after it has read and run everything before it. A
+    tail that did not arrive -- on a row boundary or inside the last field -- never reaches COMMIT and never the mark: nothing
+    is committed and the load notices (`load_table`)."""
+    return (f'BEGIN;\nCOPY {_q(schema, table)} ({_cols(columns)}) FROM STDIN;\n', f'\\.\nCOMMIT;\n\\echo {mark}\n')
+
+
+def export_rows(work, cluster, trusted, staging, skip=()):
+    """HA's rows of every trusted table into staging files -- each one the whole script of its load (`copy_script`: the COPY
+    text of the trusted columns between its head and its tail) -- and every trusted sequence's value:
+    {(schema, table): (path, end mark)}, {(schema, sequence): (value, called)}. A table in `skip` is not read."""
     files, sequences = {}, {}
     for index, (schema, table) in enumerate(trusted.tables()):
+        if (schema, table) in skip:
+            continue
         path = staging / f'rows-{index:03d}.copy'
+        columns = trusted.copy_columns(schema, table)
+        mark = ha_odoo.SQL_END_MARK + secrets.token_hex(8)
+        head, tail = copy_script(schema, table, columns, mark)
         with open(path, 'xb') as handle:
             os.fchmod(handle.fileno(), 0o600)
+            handle.write(head.encode('utf-8'))
+            handle.flush()
             cluster.tmp.exec(cluster.role, ['psql', '-X', '-q', '-v', 'ON_ERROR_STOP=1', '-U', 'postgres', '-d', DATABASE,
-                                            '-c', copy_out_sql(schema, table, trusted.copy_columns(schema, table))],
+                                            '-c', copy_out_sql(schema, table, columns)],
                              user='postgres', stdout=handle, timeout=DUMP_TIMEOUT, max_output=work.guard.budget())
+            handle.write(tail.encode('utf-8'))
             handle.flush()
             os.fsync(handle.fileno())
         work.guard.wrote(os.path.getsize(path))
-        files[(schema, table)] = path
+        files[(schema, table)] = (path, mark)
         work.checkpoint()
     for schema, name in trusted.sequences():
         value = cluster.query_json(SEQUENCE_SQL.format(name=_q(schema, name)), DATABASE)
@@ -1304,10 +1705,21 @@ def grants_sql(trusted):
     return '\n'.join(lines) + '\n'
 
 
-def load_rows(work, tmp, role, superuser, schema_dump, files, sequences, trusted, ha_columns):
+def load_table(tmp, role, path, mark):
+    """One table's script into the new cluster as the restricted role; its stdout must end with the end mark."""
+    with open(path, 'rb') as handle:
+        out = tmp.exec(role, ['psql', '-X', '-q', '-v', 'ON_ERROR_STOP=1', '-U', RESTORE_ROLE, '-d', DATABASE, '-f', '-'],
+                       user='postgres', input=handle, timeout=DUMP_TIMEOUT, max_output=1024 * 1024).stdout or b''
+    if out.rstrip(b'\n').rsplit(b'\n', 1)[-1] != mark.encode('ascii'):
+        raise BackupError('job-failed', ha_odoo.INCOMPLETE_SQL)
+
+
+def load_rows(work, tmp, role, superuser, schema_dump, files, sequences, trusted, ha_columns, notes=None):
     """Into the new cluster: the trusted pre-data, HA's rows (the restricted role, table by table) and sequence
-    values, then the trusted post-data (HA's rows must satisfy this device's constraints)."""
+    values, then the trusted post-data (HA's rows must satisfy this device's constraints). `notes`: gets the names of the
+    extensions whose version the image could not make like this device's (L-40)."""
     cluster = ha_odoo.Cluster(tmp, role, superuser=superuser, log=work.log)
+    align_extensions(cluster, trusted)
     with open(schema_dump, 'rb') as handle:
         tmp.exec(role, ['pg_restore', '-U', superuser, '--no-owner', '--no-acl', '--exit-on-error',
                         '--single-transaction', '--section=pre-data', '-d', DATABASE], user='postgres',
@@ -1315,22 +1727,19 @@ def load_rows(work, tmp, role, superuser, schema_dump, files, sequences, trusted
     if _columns(cluster.query_json(COLUMNS_SQL, DATABASE), '新的 PostgreSQL 叢集') != ha_columns:
         raise BackupError('incompatible', 'HA 與目標 LiteLLM 的資料表欄位結構不同。')
     cluster.script(grants_sql(trusted), DATABASE)
-    for (schema, table), path in files.items():
-        with open(path, 'rb') as handle:
-            tmp.exec(role, ['psql', '-X', '-q', '-v', 'ON_ERROR_STOP=1', '-1', '-U', RESTORE_ROLE, '-d', DATABASE,
-                            '-c', copy_in_sql(schema, table, trusted.copy_columns(schema, table))],
-                     user='postgres', input=handle, timeout=DUMP_TIMEOUT, max_output=1024 * 1024)
+    for (schema, table), (path, mark) in files.items():
+        load_table(tmp, role, path, mark)
         os.unlink(path)
         work.checkpoint()
     if sequences:
-        script = ''.join(f"SELECT pg_catalog.setval('{_q(s, n)}', {int(v)}, {'true' if called else 'false'});\n"
+        script = ''.join(f"SELECT pg_catalog.setval({_literal(_q(s, n))}, {int(v)}, {'true' if called else 'false'});\n"
                          for (s, n), (v, called) in sorted(sequences.items()))
         ha_odoo.Cluster(tmp, role, superuser=RESTORE_ROLE, log=work.log).script(script, DATABASE)
     with open(schema_dump, 'rb') as handle:
         tmp.exec(role, ['pg_restore', '-U', superuser, '--no-owner', '--no-acl', '--exit-on-error',
                         '--single-transaction', '--section=post-data', '-d', DATABASE], user='postgres',
                  input=handle, timeout=DUMP_TIMEOUT, max_output=1024 * 1024)
-    require_schema(cluster, trusted, 'restored')
+    require_schema(cluster, trusted, 'restored', notes)
     cluster.script(f'DROP OWNED BY {RESTORE_ROLE};\nDROP ROLE {RESTORE_ROLE};\n', DATABASE)
     return cluster
 
@@ -1344,50 +1753,74 @@ def write_secret(path, value):
     return path
 
 
+def take_out_hooks(sink, pg, trusted):
+    """L-14, L-47, L-49 (and review SR-8): decide again on what actually moved, in the NEW cluster -- this device's image and
+    schema, HA's data only as rows, so its catalog is this device's own. The settings that make LiteLLM load code are named
+    (the same line to confirm as the check's: the same names, else this app stops with `confirmation-required`), taken out
+    by their keys (the whole setting, never a part of it) and looked for again: one that is still there stops the app and
+    nothing is packed. Returns the stored settings that stay (None: the table is not there)."""
+    found = stored_settings(pg, trusted)
+    if found is None:
+        return None
+    if found.get('unreadable'):
+        raise BackupError('job-failed', '無法完整讀取匯入後資料庫裡的 LiteLLM 設定，無法確認其中沒有會載入並執行程式的設定，'
+                                        '已停止，這台的應用沒有任何變更。')
+    if found.get('hooks'):
+        again(sink, 'litellm.hooks-removed', HOOKS_REMOVED, found['hooks'])
+        pg.script(removal_sql(found['labels']), DATABASE)
+        found = stored_settings(pg, trusted)
+        if found is None or found.get('unreadable') or found.get('hooks'):
+            raise BackupError('job-failed', HOOKS_STAYED)
+    return found
+
+
 def convert(work, app, test_mode, out_dir):
-    """The converted database `out_dir/postgres/main.dump` and HA's salt as `litellm-salt-key` (module docstring: the
-    trusted schema, HA's rows only); returns {postgres, secrets, counts, key_users, ...}. `test_mode` changes nothing
-    for LiteLLM (it has no scheduled work of its own to pause)."""
+    """The converted database (module docstring: the trusted schema, HA's rows only) as `out_dir/postgres/<id>.dump` -- or,
+    for an app whose settings use the cold mode, the new cluster itself as the data volume (L-03) --, HA's salt as
+    `litellm-salt-key`, and this device's other volumes and folders as they are; returns {postgres, volumes, dirs, secrets,
+    counts, key_users, ...}. The same lines as the check (`work.sink`): a stop raises at once, a line to confirm raises unless
+    the customer confirmed it with these names. `test_mode` changes nothing for LiteLLM (it has no scheduled work of its own
+    to pause)."""
+    sink = _sink(work, app)
     tmp = work.temp(app)
-    target, version, migrations, target_major, blocker = _prepare(work, app)
-    if blocker:
-        raise BackupError('incompatible', f'LiteLLM 不能搬過來：{blocker}', app=app.id)
+    target, version, migrations = _prepare(work, app, sink)
+    addon = work.addon_info(SLUG)
+    sink.extend(version_issues(addon.version, version))
+    ids = work.adapter(app).owner_ids()
+    size = hatarget.size_hint(getattr(work, 'ha', None))
     staging = work.staging / 'litellm-work'
     staging.mkdir(mode=0o700)
     (out_dir / 'postgres').mkdir(mode=0o700, parents=True, exist_ok=True)
     (out_dir / 'ha-secrets').mkdir(mode=0o700, parents=True, exist_ok=True)
+    carried = {'volumes': {}, 'dirs': {}}
+    if target.extra_volumes or target.extra_dirs:   # L-03: this device's own other data goes along as it is (cheap, first)
+        report = habackup.Report(names=haissues.Names)
+        carried = hatarget.carry(work, app, out_dir, ids, volumes=target.extra_volumes, dirs=target.extra_dirs,
+                                 report=report, size=size)
+        sink.skipped(report)
     image18 = pick_pg18(work, app)
     pg_ids = tmp.user_ids('ids-pg', image18, 'postgres')
-    src = member_pass(work, app, tmp, pg_ids)
+    src = member_pass(work, app, tmp, pg_ids, sink)
     work.phase('convert')
     work.guard.check(3 * src.pg_bytes + ha_odoo.WAL_ALLOWANCE)
-    cluster = start_ha_cluster(work, tmp, image18)
+    cluster = start_ha_cluster(work, tmp, image18, size=src.pg_bytes)
     found = analyse(cluster)
     binding = salt_binding(cluster, src)
-    blockers, _warnings = verdict(src, found, ha_major=_ha_major(src), target_major=target_major,
-                                  live_migrations_value=migrations, binding=binding)
-    state = _state_blocker(src, work.addon_info(SLUG))
-    if state:
-        blockers.insert(0, state)
-    if blockers:
-        raise BackupError('incompatible', f'LiteLLM 不能搬過來：{blockers[0]}', app=app.id)
+    judge(sink, src, found, ha_major=_ha_major(src), live_migrations_value=migrations, binding=binding)
     ha_schema = read_schema(cluster, found['migrations'])
     settings = stored_settings(cluster, ha_schema)
-    hooks = stored_hooks_blocker(settings)
-    if hooks:
-        raise BackupError('incompatible', f'LiteLLM 不能搬過來：{hooks}', app=app.id)
+    moves_config = settings_issues(sink, settings)   # L-13, L-14, L-47: before anything else is read
     schema_dump = staging / 'target-schema.dump'
     work.log('讀取這台 LiteLLM 自己的資料庫結構（同一個快照；前後比對確認期間沒有結構變更）')
     trusted = trusted_schema(work, app, target, schema_dump, migrations)
-    differ = schema_differences(ha_schema, trusted)
-    if differ:
-        raise BackupError('incompatible', f'LiteLLM 不能搬過來：{schema_blocker(differ)}', app=app.id)
+    schema_stops(sink, ha_schema, trusted)
     require_names(trusted, app)
     tables = trusted.tables()
-    expected = table_counts(cluster, tables)
+    skipped = set() if moves_config else {CONFIG_TABLE}   # L-13: this table's rows are not read, the new one stays empty
+    expected = {table: (0 if table in skipped else count) for table, count in table_counts(cluster, tables).items()}
     detail = cluster.query_json(detail_sql(tables), DATABASE) if detail_sql(tables) else {}
-    work.log(f'匯出 HA 的 LiteLLM 資料：{len(tables)} 個資料表的資料列（只當作資料來源，HA 的資料庫結構不會使用）')
-    files, sequences = export_rows(work, cluster, trusted, staging)
+    work.log(f'匯出 HA 的 LiteLLM 資料：{len(tables) - len(skipped)} 個資料表的資料列（只當作資料來源，HA 的資料庫結構不會使用）')
+    files, sequences = export_rows(work, cluster, trusted, staging, skip=skipped)
     tmp.remove('hapg')
     tmp.remove_volume('hapg')
     work.checkpoint()
@@ -1398,21 +1831,20 @@ def convert(work, app, test_mode, out_dir):
             volumes=[(tmp.name('ll-db'), target.db_target, 'rw,noexec,nosuid,nodev')],
             env=target.db_env, secrets=target.db_secrets, read_only_root=True)
     pg = ha_odoo.Cluster(tmp, 'll-db', superuser=target.db_user, log=work.log)
-    pg.wait_ready(tcp=True, checkpoint=work.checkpoint)
+    pg.wait_ready(tcp=True, checkpoint=work.checkpoint, timeout=podman.scaled_timeout(ha_odoo.PG_READY_TIMEOUT, src.pg_bytes))
     work.log('用這台的資料庫結構建立資料表，只把 HA 的資料列與序號以沒有任何管理權限的暫用角色載入')
-    load_rows(work, tmp, 'll-db', target.db_user, schema_dump, files, sequences, trusted, ha_schema.columns)
+    versions = set()
+    load_rows(work, tmp, 'll-db', target.db_user, schema_dump, files, sequences, trusted, ha_schema.columns, versions)
     os.unlink(schema_dump)
-    require_schema(pg, trusted, 'loaded')
+    require_schema(pg, trusted, 'loaded', versions)
     audit_new_cluster(pg, target.db_user)
-    # Review SR-8: the check above ran in HA's cluster, whose catalog HA's data directory controls (an edited built-in
-    # operator hid two stored hooks from it while COPY moved them). Decide again on what actually moved: the same
-    # query in the new cluster (this device's image and schema, HA's data only as rows); its names are the notes'.
-    settings = stored_settings(pg, trusted)
-    hooks = stored_hooks_blocker(settings)
-    if hooks:
-        raise BackupError('incompatible', f'LiteLLM 不能搬過來：{hooks}', app=app.id)
+    if versions:   # L-40
+        sink.auto('litellm.extension-versions', '這台資料庫的擴充功能版本和新資料庫的不同，匯入以這台映像附的版本為準，資料不受影響。',
+                  sorted(versions))
+    settings = take_out_hooks(sink, pg, trusted) if moves_config else None
     counts = table_counts(pg, tables)
-    differ = [f'{t}（HA {n}，匯入後 {counts.get(t)}）' for t, n in sorted(expected.items()) if counts.get(t) != n]
+    differ = [f'{s}.{t}（HA {n}，匯入後 {counts.get((s, t))}）' for (s, t), n in sorted(expected.items())
+              if counts.get((s, t)) != n]
     now = _migrations(pg.query_json(MIGRATIONS_SQL, DATABASE))
     if differ or now != found['migrations'] or len(expected) != len(tables):
         raise BackupError('job-failed', f'LiteLLM 匯入後的資料和 HA 不同，已停止：{"、".join(differ[:10]) or "結構版本"}。')
@@ -1420,34 +1852,63 @@ def convert(work, app, test_mode, out_dir):
     if salt_rows != [hashlib.sha256(src.salt()).hexdigest()]:
         raise BackupError('job-failed', '匯入後資料庫裡的加密金鑰和要搬過來的不同，已停止，這台的應用沒有任何變更。')
     work.log(f'LiteLLM 資料匯入完成：{len(tables)} 個資料表的筆數都和 HA 相同，資料庫結構和這台的相同')
-    dump = out_dir / 'postgres' / f'{target.pg_id}.dump'
-    with open(dump, 'xb') as handle:
-        os.fchmod(handle.fileno(), 0o600)
-        tmp.exec('ll-db', ['pg_dump', '-U', target.db_user, '-d', DATABASE, '-Fc'], user='postgres', stdout=handle,
-                 timeout=DUMP_TIMEOUT, max_output=work.guard.budget())
-        handle.flush()
-        os.fsync(handle.fileno())
-    if dump.stat().st_size == 0:
-        raise BackupError('job-failed', 'LiteLLM 轉換後的資料庫匯出結果為空。', app=app.id)
-    with open(dump, 'rb') as handle:  # a full read: every data block decompresses (adapter._pg_dump, lab H3)
-        tmp.exec('ll-db', ['pg_restore', '-f', '/dev/null'], user='postgres', input=handle, timeout=DUMP_TIMEOUT,
-                 max_output=1024 * 1024)
     server_version = str(pg.query_json("SELECT to_json(current_setting('server_version'))", DATABASE) or '')
     server_version = server_version.split(' ')[0][:32]
     major = pg.query_json("SELECT to_json(current_setting('server_version_num')::int / 10000)", DATABASE)
-    if type(major) is not int or major != target_major:
-        raise BackupError('job-failed', '新的 PostgreSQL 叢集版本和這台的不同，已停止。', app=app.id)
-    tmp.stop('ll-db', timeout=120)
-    tmp.remove('ll-db')
-    tmp.remove_volume('ll-db')
+    if type(major) is not int:   # L-53: this cluster's own answer is the version; what the image says is not asked
+        raise BackupError('job-failed', '無法讀取新的 PostgreSQL 叢集的版本，已停止。', app=app.id)
+    postgres, volumes = {}, dict(carried['volumes'])
+    if target.mode == 'cold':
+        pg.statement('CHECKPOINT;')
+        code = tmp.stop('ll-db', timeout=300)
+        if code != 0:
+            raise BackupError('job-failed', f'新的 PostgreSQL 叢集沒有正常關閉（結束碼 {code}）。')
+        state = tmp.run('controldata', target.db_image, ['pg_controldata', target.pgdata], user='postgres',
+                        volumes=[(tmp.name('ll-db'), target.db_target, 'ro')], timeout=300, read_only_root=True,
+                        max_output=1024 * 1024).stdout or b''
+        if not re.search(rb'Database cluster state:\s+shut down\s*$', state, re.M):
+            raise BackupError('job-failed', '新的 PostgreSQL 叢集沒有正常關閉。')
+        tmp.remove('ll-db')
+        (out_dir / 'volumes').mkdir(mode=0o700, parents=True, exist_ok=True)
+        db_path = out_dir / 'volumes' / f'{target.db_volume}.tar'
+        with open(db_path, 'xb') as handle:
+            os.fchmod(handle.fileno(), 0o600)
+            tmp.volume_export('ll-db', handle, max_output=work.guard.budget())
+            handle.flush()
+            os.fsync(handle.fileno())
+        tmp.remove_volume('ll-db')
+        ha_odoo.check_volume_tar(db_path, ids)
+        volumes[target.db_volume] = db_path
+    else:
+        dump = out_dir / 'postgres' / f'{target.pg_id}.dump'
+        with open(dump, 'xb') as handle:
+            os.fchmod(handle.fileno(), 0o600)
+            tmp.exec('ll-db', ['pg_dump', '-U', target.db_user, '-d', DATABASE, '-Fc'], user='postgres', stdout=handle,
+                     timeout=DUMP_TIMEOUT, max_output=work.guard.budget())
+            handle.flush()
+            os.fsync(handle.fileno())
+        if dump.stat().st_size == 0:
+            raise BackupError('job-failed', 'LiteLLM 轉換後的資料庫匯出結果為空。', app=app.id)
+        with open(dump, 'rb') as handle:  # a full read: every data block decompresses (adapter._pg_dump, lab H3)
+            tmp.exec('ll-db', ['pg_restore', '-f', '/dev/null'], user='postgres', input=handle, timeout=DUMP_TIMEOUT,
+                     max_output=1024 * 1024)
+        tmp.stop('ll-db', timeout=120)
+        tmp.remove('ll-db')
+        tmp.remove_volume('ll-db')
+        postgres = {target.pg_id: {'database': DATABASE, 'server_version': server_version, 'major': major, 'file': dump}}
     salt_path = write_secret(out_dir / 'ha-secrets' / SALT_SECRET, src.salt())
     users = key_users(work, app)
-    return {'postgres': {target.pg_id: {'database': DATABASE, 'server_version': server_version, 'major': major,
-                                        'file': dump}},
-            'secrets': {SALT_SECRET: salt_path},
-            'counts': section(src, detail, version=version, migrations=found['migrations'],
-                              target_major=target_major, key_users_value=users),
-            'tables': len(tables), 'key_users': users, 'stored_settings': settings}
+    others = other_schemas(trusted)
+    converted = {'postgres': postgres, 'volumes': volumes, 'dirs': carried['dirs'], 'secrets': {SALT_SECRET: salt_path},
+                 'counts': section(src, detail, version=version, migrations=found['migrations'],
+                                   target_major=target_major(work, app, target), key_users_value=users),
+                 'tables': len(tables), 'key_users': users, 'stored_settings': settings,
+                 'hooks_removed': [issue for found_issue in sink.found if found_issue.id == 'litellm.hooks-removed'
+                                   for issue in found_issue.names][:20],
+                 'config_skipped': not moves_config, 'other_schemas': others[:20]}
+    if others:   # L-38 (S4): the restore of this backup keeps its pre-restore backup, which holds every schema (kept.py)
+        converted['keep_safety'] = True
+    return converted
 
 
 # ====================================================================== texts
@@ -1464,10 +1925,18 @@ def import_texts(data):
     stored_line = stored_settings_line(data.get('stored_settings'))
     if stored_line:
         notes.append(stored_line)
+    if data.get('other_schemas'):
+        notes.append(f'這台 LiteLLM 資料庫原本的其他結構描述（{hacommon.names(data["other_schemas"], 5)}）的資料沒有搬過來；'
+                     '匯入前的整個資料庫已存成「保留的複本」，需要時可以從備份清單取回。')
     reminders = ['請用這台 LiteLLM 的主金鑰與管理介面密碼登入（HA 的主金鑰在這台不能用）；HA 的虛擬金鑰在這台繼續有效，'
                  '請把原本連到 HA 的用戶端改連到這台的 LiteLLM 網址。']
     if data.get('key_users'):
         reminders.append(f'請為 {hacommon.names(data["key_users"])} 重新設定 LiteLLM 金鑰（這台原本發出的虛擬金鑰已失效）。')
+    if data.get('hooks_removed'):
+        reminders.append(f'HA 的 LiteLLM 有會載入並執行程式的設定（{hacommon.names(data["hooks_removed"], 5)}）沒有搬過來；'
+                         '需要的話，請自己在這台的 LiteLLM 重新設定。')
+    if data.get('config_skipped'):
+        reminders.append('HA 的 LiteLLM 存在資料庫裡的代理設定（資料表 LiteLLM_Config）沒有搬過來，請在這台的 LiteLLM 重新設定代理設定。')
     if ha_odoo._int(counts.get('chatgpt_accounts')):
         reminders.append('請停掉 HA 那邊的 LiteLLM；如果 HA 在備份之後還在執行，請到這台 LiteLLM 的 ChatGPT 頁面重新連結訂閱帳號。')
     reminders.append('如果 HA 的模型設定連到 HA 內部的位址（例如 homeassistant、*.local），請改成這台連得到的位址。')
