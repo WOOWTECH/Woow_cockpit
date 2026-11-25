@@ -608,6 +608,10 @@ def parse_authn(text):
     return [{'mechanism': m, 'backend': b, 'enable': e == 'true', 'algorithm': a, 'salt': s} for m, b, e, a, s in rows]
 
 
+AUTHN_ROW = (r'\{\s*[a-z_]{1,40}\s*,\s*[a-z_]{1,40}\s*,\s*(?:true|false)\s*,\s*[a-z0-9_]{1,40}\s*,\s*[a-z_]{1,40}\s*\}')
+AUTHN_ANSWER = re.compile(r'\s*\[\s*(?:' + AUTHN_ROW + r'(?:\s*,\s*' + AUTHN_ROW + r')*)?\s*\]\s*(?:ok\s*)?')
+
+
 def parse_authz(text):
     """AUTHZ_EXPR's answer as [{'type', 'enable'}] in order; None when it is not that shape."""
     body = (text or '').strip()
@@ -735,9 +739,14 @@ def ha_broker(work, tmp, target, src, node, *, out_dir=None):
     readings = {'default_admin': 'default' in evaluate(tmp, 'emqx-ha', DEFAULT_ADMIN_EXPR).split(),
                 'counts': parse_counts(evaluate(tmp, 'emqx-ha', COUNT_EXPR)),
                 'roots': set(re.findall(r'<<"([a-z_]+)">>', evaluate(tmp, 'emqx-ha', ROOTS_EXPR))),
-                'authn': parse_authn(evaluate(tmp, 'emqx-ha', AUTHN_EXPR)),
+                'authn': evaluate(tmp, 'emqx-ha', AUTHN_EXPR),
                 'authz': parse_authz(evaluate(tmp, 'emqx-ha', AUTHZ_EXPR)),
                 'strict': parse_strict(evaluate(tmp, 'emqx-ha', STRICT_EXPR))}
+    # S2: an empty list IS an answer (HA's broker asks nobody to log in) and makes this device's authenticators go; an
+    # answer that is not exactly the list is not that answer and is never guessed (the same as authorization below).
+    if not AUTHN_ANSWER.fullmatch(readings['authn']):
+        raise BackupError('incompatible', '無法讀取 HA 的 EMQX 帳號驗證設定。' + hint)
+    readings['authn'] = parse_authn(readings['authn'])
     if len(readings['counts']) != len(TABLES):
         raise BackupError('incompatible', '無法讀取 HA 的 EMQX 資料筆數。' + hint)
     if readings['authz'] is None or readings['strict'] is None:   # D0 makes them this device's: never guessed
@@ -1484,13 +1493,16 @@ def access_roots(after, original, readings, lost_paths):
     This device's bootstrap file (its own MQTT accounts, e.g. woow) is attached to HA's built-in database authenticator
     of the same identity when that one is enabled and, for a `hash` file, hashes the same way (E-68, E-69); every other
     case leaves it off and says why. Returns ({root: value to load}, {'bootstrap': [reasons], 'removed_builtin':
-    bool}). `lost_paths`: bootstrap files that could not be followed at all (E-48, E-49): left off."""
-    changed, facts = {}, {'bootstrap': [], 'removed_builtin': False}
+    bool, 'absent': [HA's authenticators and authorization sources the candidate does not hold]}). `lost_paths`: bootstrap
+    files that could not be followed at all (E-48, E-49): left off."""
+    changed, facts = {}, {'bootstrap': [], 'removed_builtin': False, 'absent': []}
     rows = after.get('authentication')
     rows = [row for row in rows if isinstance(row, dict)] if isinstance(rows, list) else []
     held = {}
     for row in rows:
         held.setdefault((row.get('mechanism'), row.get('backend')), row)
+    facts['absent'] += [f"{item['mechanism']}／{item['backend']}" for item in readings['authn']
+                        if (item['mechanism'], item['backend']) not in held]
     want = [dict(held[(item['mechanism'], item['backend'])]) for item in readings['authn']
             if (item['mechanism'], item['backend']) in held]
     originals = original.get('authentication')
@@ -1519,6 +1531,7 @@ def access_roots(after, original, readings, lost_paths):
     for source in sources:
         by_type.setdefault(source.get('type'), source)
     ha_types = [item['type'] for item in readings['authz']]
+    facts['absent'] += [kind for kind in dict.fromkeys(ha_types) if kind not in by_type]
     wanted = [dict(by_type[kind]) for kind in dict.fromkeys(ha_types) if kind in by_type]
     flags = {item['type']: item['enable'] for item in readings['authz']}
     for source in wanted:
@@ -1542,6 +1555,13 @@ def apply_ha_access(tmp, read_candidate, readings, original, lost_paths, *, obse
     stay (the row counts check it)."""
     after = read_effective_config(read_candidate, allow_authz_omission=True)
     changed, facts = access_roots(after, original, readings, lost_paths)
+    if facts['absent']:
+        # Access control is not one of the items E-67 lets an import skip: when one of HA's authenticators or sources is not in
+        # the candidate, the list that would be loaded is not HA's, and cutting this device's own to it could leave nobody to
+        # log in or everybody in (S2 is HA's own choice, confirmed by name; this is a failed import). Stops only this app.
+        raise BackupError('incompatible', 'EMQX 匯入後，HA 的帳號驗證或授權設定（' + hacommon.names(facts['absent'], 8)
+                          + '）沒有出現在暫用的 EMQX 裡，已停止；這台沒有任何改變。請在 HA 先停止 EMQX 附加元件，重新備份後再匯入；'
+                            '如果仍然一樣，請把這份備份交給支援人員檢查。')
     if changed:
         if observe is not None:
             observe('access_apply')
@@ -2822,13 +2842,21 @@ def convert(work, app, test_mode, out_dir):
 
 # ====================================================================== texts
 
+# D0 (4), DESIGN H-c: HA's add-on options (the `env_vars` page of the EMQX add-on: the customer's own EMQX_* settings) are not in
+# what the reader hands out (habackup: addon.json and data/options.json are never read), so HA's throwaway broker starts
+# without them and nothing of them is moved. The customer is told, once, after the import; there is no way to say whether
+# the add-on had any.
+OPTIONS_NOT_MOVED = ('HA 的 EMQX 附加元件頁的選項（例如自己設的 EMQX_ 環境變數 env_vars）沒有搬過來：備份工具不讀附加元件的選項檔，'
+                     '也無法得知您有沒有設過。如果您在 HA 設過，請在匯入後到這台 EMQX 的環境設定檔補上。')
+
 def import_texts(data):
     notes = ['EMQX 的 MQTT 帳號、ACL 規則、Dashboard 帳號、API 金鑰、封鎖名單、PSK、保留訊息，以及帳號驗證、授權來源（含 ACL 檔案）、'
              '「沒有符合規則的主題時」的處理、規則和連接器設定，都換成 HA 的（和 HAOS 還原一樣）；這台的節點名稱、連接埠、位址和其他'
              '設定保持不變。',
              '還原後會再核對 MQTT 帳號、ACL 規則和金鑰都和轉換時相同，不同就自動回復。']
     reminders = ['請把 MQTT 裝置與服務（例如 Home Assistant 的 MQTT 整合、Zigbee2MQTT）改連到這台的 EMQX。',
-                 '匯入後請用 HA 那邊的 EMQX Dashboard 帳號和密碼登入。']
+                 '匯入後請用 HA 那邊的 EMQX Dashboard 帳號和密碼登入。',
+                 OPTIONS_NOT_MOVED]
     if data.get('anonymous'):
         reminders.append('HA 的 EMQX 沒有啟用帳號驗證，匯入後這台也一樣：連得到這台 MQTT 的人不用帳號就能連線。')
     change = data.get('hash_change')

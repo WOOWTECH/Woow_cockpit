@@ -143,6 +143,18 @@ class World(fk.World):
         self.imported_into = self.restored = False
         self.current_config = copy.deepcopy(self.target_config)
 
+    def merged_authentication(self):
+        """This device's authenticators with HA's merged in (emqx_utils:merge_lists: by mechanism and backend)."""
+        rows = copy.deepcopy(self.current_config.get('authentication') or [])
+        for item in ha_emqx.parse_authn(self.ha_authn):
+            for row in rows:
+                if (row.get('mechanism'), row.get('backend')) == (item['mechanism'], item['backend']):
+                    row['enable'] = item['enable']
+                    break
+            else:
+                rows.append({'mechanism': item['mechanism'], 'backend': item['backend'], 'enable': item['enable']})
+        return rows
+
     def labels(self, image):
         return {'org.opencontainers.image.version': self.version}
 
@@ -176,10 +188,14 @@ class World(fk.World):
                               .encode(), b'')
             if command[2:4] == ['data', 'import']:
                 self.imported_into = True
-                # HA's authorization comes with the import (D0): its sources as HA's broker answers AUTHZ_EXPR
+                # HA's authorization comes with the import (D0): its sources as HA's broker answers AUTHZ_EXPR (the file source
+                # is HA's own ACL file, which the export carries); HA's authenticators are merged into this device's by
+                # mechanism and backend, so every one of them is in the candidate (a test that wants them gone says so in
+                # `import_changes`).
                 self.current_config['authorization'] = {'no_match': 'allow', 'deny_action': 'ignore', 'sources': [
-                    {'type': 'file', 'enable': True, 'path': '/opt/emqx/data/authz/acl.conf'},
-                    {'type': 'built_in_database', 'enable': True}]}
+                    {'type': 'file', 'enable': True, 'path': '/opt/emqx/data/authz/acl.conf'} if item['type'] == 'file' else
+                    {'type': item['type'], 'enable': item['enable']} for item in ha_emqx.parse_authz(self.ha_authz) or []]}
+                self.current_config['authentication'] = self.merged_authentication()
                 self.current_config.update(copy.deepcopy(self.import_changes))
                 return Result(0, self.import_output, b'')
             if command[2:4] == ['conf', 'load']:

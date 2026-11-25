@@ -521,6 +521,216 @@ class NoticeLinesTests(unittest.TestCase):
         self.assertNotIn(secret, json.dumps([i.view('emqx') for i in found.values()]))
 
 
+class HaReadingTests(base.EmqxCase):
+    """S2, D0: what HA's broker says about who may log in and who may do what is read exactly or not at all. An empty list is
+    an answer (nobody has to log in: HA's own choice, restored as it is); an answer that is not the list must never be taken
+    for it, or this device's own authenticators would go on a misreading. Stops only this app, before anything is imported."""
+
+    def stopped(self, field, text, words):
+        setattr(self.world, field, text)
+        result = self.check(self.upload_emqx(), ['emqx'])[0]
+        self.assertFalse(result['ok'], text)
+        self.assertIn(words, result['blockers'][0], text)
+        self.assertEqual([c for c in self.world.ctl_calls if c[1][:2] == ['data', 'import']], [], 'nothing was imported')
+
+    def test_an_authenticator_list_that_cannot_be_read_stops_the_app(self):
+        for garbage in ('{badrpc,nodedown}', '', '[{password_based,built_in_database,true}]',
+                        '[{password_based,built_in_database,true,sha256,suffix},{broken}]', 'error: nope',
+                        '[{password_based,built_in_database,maybe,sha256,suffix}]'):
+            with self.subTest(garbage):
+                self.stopped('ha_authn', garbage, '無法讀取 HA 的 EMQX 帳號驗證設定')
+
+    def test_an_authorization_list_that_cannot_be_read_stops_the_app(self):
+        for garbage in ('{badrpc,nodedown}', '[{file,true},{broken}]', ''):
+            with self.subTest(garbage):
+                self.stopped('ha_authz', garbage, '無法讀取 HA 的 EMQX 授權設定')
+
+    def test_the_lists_as_the_shell_prints_them_are_read(self):
+        """Whitespace, line breaks and the trailing ok of `emqx eval` are not a reason to stop; an empty list is an answer."""
+        for text in ('[{password_based,built_in_database,true,sha256,suffix}]\nok\n',
+                     '[{password_based,built_in_database,true,\n   sha256,suffix},\n {jwt,none,true,none,none}]\n', '[]', ' [ ]\nok'):
+            with self.subTest(text):
+                self.world.ha_authn = text
+                result = self.check(self.upload_emqx(), ['emqx'])[0]
+                self.assertTrue(result['importable'], text)
+                self.assertNotIn('無法讀取 HA 的 EMQX 帳號驗證設定', ' '.join(result['blockers']))
+
+
+class AccessMustBeWholeTests(base.EmqxCase):
+    """D0, S2: this device's authenticators and authorization sources are cut to HA's -- and only when everything HA has is in
+    the candidate. An import that did not bring one of them (it said so or not: E-67 skips rules and connectors, not access
+    control) must not end with a list that is not HA's, which could leave nobody able to log in or everybody in."""
+
+    def no_load_of_access(self):
+        loads = [c for c in self.world.ctl_calls if c[1][:2] == ['conf', 'load']]
+        self.assertEqual(loads, [], 'nothing of the candidate was changed after the import')
+
+    def test_an_authenticator_of_ha_that_the_import_did_not_bring_stops_the_app(self):
+        self.world.import_changes = {'authentication': []}
+        result = self.check(self.upload_emqx(), ['emqx'])[0]
+        self.assertFalse(result['ok'])
+        self.assertIn('沒有出現在暫用的 EMQX 裡', result['blockers'][0])
+        self.assertIn('password_based／built_in_database', result['blockers'][0])
+        self.no_load_of_access()
+
+    def test_a_source_of_ha_that_the_import_did_not_bring_stops_the_app(self):
+        self.world.import_changes = {'authorization': {'no_match': 'allow', 'deny_action': 'ignore', 'sources': [
+            {'type': 'file', 'enable': True, 'path': '/opt/emqx/data/authz/acl.conf'}]}}
+        result = self.check(self.upload_emqx(), ['emqx'])[0]
+        self.assertFalse(result['ok'])
+        self.assertIn('沒有出現在暫用的 EMQX 裡', result['blockers'][0])
+        self.assertIn('built_in_database', result['blockers'][0])
+        self.no_load_of_access()
+
+    def test_a_partial_import_that_lost_the_access_settings_is_no_line_to_confirm_but_a_stop(self):
+        self.world.import_output = b'imported, but errors in authentication\n'
+        self.world.import_changes = {'authentication': []}
+        result = self.check(self.upload_emqx(), ['emqx'])[0]
+        self.assertFalse(result['ok'])
+        self.assertNotIn('emqx.import-partial', ids_of(result))
+        self.assertIn('沒有出現在暫用的 EMQX 裡', result['blockers'][0])
+
+    def test_a_partial_import_of_something_else_still_goes_on_as_a_line_to_confirm(self):
+        self.world.import_output = b'imported, but errors in rule_engine\n'
+        result = self.check(self.upload_emqx(), ['emqx'])[0]
+        self.assertTrue(result['importable'])
+        self.assertIn('emqx.import-partial', ids_of(result))
+
+    def test_access_roots_names_what_is_absent_and_ha_with_nothing_is_not_absent(self):
+        readings = {'authn': [{'mechanism': 'password_based', 'backend': 'built_in_database', 'enable': True},
+                              {'mechanism': 'jwt', 'backend': 'none', 'enable': True}],
+                    'authz': [{'type': 'file', 'enable': True}, {'type': 'http', 'enable': True}], 'strict': ('allow', 'ignore')}
+        after = {'authentication': [{'mechanism': 'password_based', 'backend': 'built_in_database'}],
+                 'authorization': {'no_match': 'deny', 'deny_action': 'ignore', 'sources': [{'type': 'file', 'enable': True}]}}
+        _changed, facts = ha_emqx.access_roots(after, {}, readings, [])
+        self.assertEqual(facts['absent'], ['jwt／none', 'http'])
+        empty = {'authn': [], 'authz': [], 'strict': ('deny', 'ignore')}   # HA asks nobody and has no source: nothing is absent
+        _changed, facts = ha_emqx.access_roots(after, {}, empty, [])
+        self.assertEqual(facts['absent'], [])
+
+
+def ids_of(result):
+    return [issue['id'] for issue in result['issues']]
+
+
+class NeverGuessedTests(base.EmqxCase):
+    """What the coverage run of the lane showed no test ran: the places that stop only this app (with a sentence that says what
+    to do) when a reading of either broker is not what it must be, and the conversion's own choice of HA's database."""
+
+    def answers(self, role, expression, text, after_import=False):
+        real = self.world.evaluate
+
+        def evaluate(role_, expression_):
+            if role_ == role and expression_ == expression and (self.world.imported_into or not after_import):
+                return text.encode()
+            return real(role_, expression_)
+        self.world.evaluate = evaluate
+
+    def test_the_rule_the_candidate_answers_after_applying_must_be_ha_s(self):
+        """E-80, second reading: the raw configuration says HA's rule but the broker's own answer is another."""
+        self.answers('emqx-new', ha_emqx.STRICT_EXPR, '{deny,ignore}', after_import=True)
+        result = self.check(self.upload_emqx(), ['emqx'])[0]
+        self.assertFalse(result['ok'])
+        self.assertIn('無法確認匯入後的 EMQX 存取政策', result['blockers'][0])
+
+    def test_this_devices_rule_that_cannot_be_read_stops_the_app(self):
+        self.answers('emqx-new', ha_emqx.STRICT_EXPR, '{badrpc,nodedown}')
+        result = self.check(self.upload_emqx(), ['emqx'])[0]
+        self.assertFalse(result['ok'])
+        self.assertIn('無法讀取這台 EMQX 的設定', result['blockers'][0])
+
+    def test_ha_s_row_counts_that_cannot_be_read_stop_the_app_with_the_advice(self):
+        self.answers('emqx-ha', ha_emqx.COUNT_EXPR, '[]')
+        result = self.check(self.upload_emqx(), ['emqx'])[0]
+        self.assertFalse(result['ok'])
+        self.assertIn('無法讀取 HA 的 EMQX 資料筆數', result['blockers'][0])
+        self.assertIn('停止 EMQX 附加元件', result['blockers'][0])
+
+    def test_a_broker_that_cannot_be_started_with_ha_s_node_name_is_said_with_the_name(self):
+        real = self.world.run
+
+        def run(role, image, command, options, data):
+            if role == 'emqx-ha':
+                raise BackupError('job-failed', 'podman said no')
+            return real(role, image, command, options, data)
+        self.world.run = run
+        result = self.check(self.upload_emqx(), ['emqx'])[0]
+        self.assertFalse(result['ok'])
+        self.assertIn('無法以 HA 的 EMQX 節點名稱', result['blockers'][0])
+        self.assertIn(base.NODE, result['blockers'][0])
+
+    def test_the_file_the_settings_are_written_to_that_cannot_be_written_stops_the_app(self):
+        real = self.world.exec
+
+        def exec_(role, command, data, stdout):
+            if role == 'emqx-new' and command[:2] == ['sh', '-c'] and 'target-settings.hocon' in command[2]:
+                return Result(1, b'', b'read-only')
+            return real(role, command, data, stdout)
+        self.world.exec = exec_
+        # a setting of this device's own that the import changed has to be loaded back: that is what writes the file
+        self.world.target_config['mqtt'] = {'max_packet_size': '1MB'}
+        self.world.current_config = copy.deepcopy(self.world.target_config)
+        self.world.import_changes = {'mqtt': {'max_packet_size': '9MB'}}
+        result = self.check(self.upload_emqx(), ['emqx'])[0]
+        self.assertFalse(result['ok'])
+        self.assertIn('無法恢復 EMQX 目標設定', result['blockers'][0])
+
+    def test_the_conversion_uses_the_database_the_customer_chose_and_else_the_last_written_one(self):
+        other = 'emqx@127.0.0.1'
+
+        def node_of_ha_broker():
+            options = self.runs('emqx-ha')[-1][3]
+            return [value for value in options['--env'] if value.startswith('EMQX_NODE__NAME=')][0].split('=', 1)[1]
+        ha_id = self.upload_emqx(node_file=None, nodes=(base.NODE, other), state='stopped')
+        self.convert(ha_id, ['emqx'], choices={'emqx': {'node': other}})
+        self.assertEqual(node_of_ha_broker(), other, "the customer's choice")
+        self.world.again()
+        self.convert(self.upload_emqx(node_file=None, nodes=(base.NODE, other), state='stopped'), ['emqx'])
+        self.assertIn(node_of_ha_broker(), (base.NODE, other))   # the last written one: said in the job, never asked again
+
+    def test_a_ticker_that_cannot_be_asked_again_is_a_notice_never_a_stop(self):
+        """E-13: the broker's answer about its paused system process fails midway: the retained messages may differ by a few rows
+        (said), the app goes on; a full disk or a busy host still stops the job."""
+        class Tmp:
+            def __init__(self, error):
+                self.error = error
+
+            def exec(self, role, command, **kwargs):
+                raise self.error
+        self.assertFalse(ha_emqx.assert_system_ticker(Tmp(BackupError('job-failed', 'x')), 'emqx-new', '<0.1.0>'))
+        for code in ('insufficient-space', 'busy'):
+            with self.assertRaises(BackupError):
+                ha_emqx.assert_system_ticker(Tmp(BackupError(code, 'x')), 'emqx-new', '<0.1.0>')
+        self.assertFalse(ha_emqx.assert_system_ticker(Tmp(BackupError('job-failed', 'x')), 'emqx-ha', None), 'nothing was paused')
+
+    def test_a_probe_that_fails_while_the_restored_broker_starts_is_not_ready_yet_and_not_an_end(self):
+        """E-88: a status call that raises is waited past (the deadline and the container's life decide)."""
+        calls = []
+
+        def execute(command):
+            calls.append(command)
+            if len(calls) < 3:
+                raise BackupError('job-failed', 'timed out')
+            return Result(0, b"Node 'emqx@127.0.0.1' 5.8.9 is started\n", b'')
+        ticks = iter(range(0, 1000, 2))
+        ha_emqx.wait_live_ready(execute, sleep=lambda _s: None, clock=lambda: next(ticks), running=lambda: True)
+        self.assertEqual(len(calls), 3)
+
+
+class ImportTextsTests(unittest.TestCase):
+    """D0 (4), DESIGN H-c: HA's add-on options (env_vars) are never read, so the customer is told once, after the import, that
+    they did not move -- whatever else the conversion found, and without a value of any kind."""
+
+    def test_the_add_on_options_that_did_not_move_are_one_reminder_in_every_result(self):
+        for data in ({}, {'anonymous': True}, {'hash_change': {'ha': 'bcrypt', 'mine': 'sha256', 'names': 'woow'}},
+                     {'ha_hosts': ['homeassistant'], 'plugins': ['p1'], 'api_keys': 2}):
+            _notes, reminders = ha_emqx.import_texts(data)
+            self.assertEqual(reminders.count(ha_emqx.OPTIONS_NOT_MOVED), 1, data)
+        self.assertIn('env_vars', ha_emqx.OPTIONS_NOT_MOVED)
+        self.assertIn('沒有搬過來', ha_emqx.OPTIONS_NOT_MOVED)
+        self.assertIn('請在匯入後', ha_emqx.OPTIONS_NOT_MOVED)   # what to do, not only what happened
+
+
 class MarkerTests(base.EmqxCase):
     """H-2: the data volume says its access settings are HA's, so the package's smoke test can tell (and upgrade.sh does not
     roll every upgrade back)."""
