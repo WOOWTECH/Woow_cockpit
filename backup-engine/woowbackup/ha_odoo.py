@@ -1852,6 +1852,18 @@ def _read(work, app, tmp, live, image16, *, size=None, can_copy=True):
     return src, databases, target
 
 
+def _unique(found):
+    """`found` (a sink's list) without the lines that are exactly the same as an earlier one (id, level, database, text and
+    names), in place."""
+    seen, kept = set(), []
+    for issue in found:
+        signature = (issue.id, issue.level, issue.database, issue.text, issue.count, tuple(issue.names))
+        if signature not in seen:
+            seen.add(signature)
+            kept.append(issue)
+    found[:] = kept
+
+
 def check(work, app):
     """The check job's Odoo part: (app result fields, internal notes). This device's side is read first and made ready,
     as the conversion does it (review C-05): the image (downloaded when it is not here), the configuration, the database
@@ -1882,6 +1894,7 @@ def check(work, app):
         else:
             image16 = PG16_IMAGES[0]
             src, databases, target = _read(work, app, tmp, live, image16, size=size, can_copy=can_copy)
+            _unique(sink.found)   # the second walk of the same member said the same things again
     if target.get('broken'):
         sink.notice('odoo.target-modules-partial', '這台 Odoo 有些模組讀不出來（可能壞了或設定錯了），比對時略過了它們；'
                     '資料庫要用到它們的話會被當成缺模組。', target['broken'])

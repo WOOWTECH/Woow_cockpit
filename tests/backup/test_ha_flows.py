@@ -963,6 +963,12 @@ class OdooDatabaseTests(OdooCase):
         self.assertEqual(images, ['docker.io/library/postgres:16.15-alpine', ha_odoo.PG16_IMAGES[0]])
         self.assertIn('target.image-pulled', self.ids(row))
 
+    def test_a_second_walk_of_the_backup_does_not_say_the_same_line_twice(self):
+        self.world.ha_extensions = [['plpgsql', '1.0'], ['vector', '0.8.0']]
+        row = self.check(self.upload_odoo([{'name': 'data/addons/woow_import_probe/node0', 'type': 'chr'}]))
+        self.assertEqual(len(self.runs('hapg')), 2, 'it was read twice')
+        self.assertEqual([i['id'] for i in row['issues']].count('files.skipped'), 1)
+
     def test_without_the_vector_image_only_the_databases_that_use_it_stop(self):
         self.world.ha_databases = [['woowtest', 9000000, 'C', 'C'], ['plain', 10, 'C', 'C']]
         self.world.extensions_by_db = {'woowtest': [['plpgsql', '1.0'], ['vector', '0.8.0']]}
