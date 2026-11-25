@@ -812,7 +812,6 @@ class Target:
             if image:
                 self.queue_images[volume] = image
         self.queue_volumes = list(self.queue_images)
-        self.valkey_volume = self.queue_volumes[0] if self.queue_volumes else None
         self.extra_volumes, self.extra_dirs = hatarget.extras(
             app, handled_volumes=(self.data_volume, self.pg_data_volume, *self.queue_volumes))
         if self.extra_volumes or self.extra_dirs:

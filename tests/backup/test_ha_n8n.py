@@ -1696,5 +1696,41 @@ class ReferenceHostTests(unittest.TestCase):
         self.assertEqual(target.import_secrets, ['n8n-db-password,type=env,target=DB_POSTGRESDB_PASSWORD'])
 
 
+@unittest.skipUnless(os.environ.get('WOOWBK_HA_FIXTURES'), 'set WOOWBK_HA_FIXTURES to read the real HA backups made for this feature')
+class RealN8nBackupTests(unittest.TestCase):
+    """The n8n add-on of a REAL HA backup (Supervisor 2026.11.0, plain, never committed; only structure is asserted, nothing is
+    printed): the strict pass, the sandboxed SQLite child on the real database and what the check says of it."""
+
+    def test_the_real_n8n_addon_is_read_whole_and_says_nothing_that_stops_it(self):
+        path = Path(os.environ['WOOWBK_HA_FIXTURES']) / 'woow-import-test-plain' / 'woow-import-test-plain.tar'
+        if not path.exists():
+            self.skipTest('the plain real backup is not in WOOWBK_HA_FIXTURES')
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        root = Path(tmp.name)
+        (root / 'stage').mkdir()
+        report = habackup.Report(names=haissues.Names)
+        files = ha_n8n.FileTar(root / 'files.tar')
+        with habackup.open_backup(path) as ha:
+            member = next(m for m in ha.layout.members if m.role == 'addon' and m.name.endswith('woow-n8n.tar.gz'))
+            with ha.open_member(member.name, None) as stream:
+                src = ha_n8n.scan_member(stream, report, root / 'stage', files=files)
+        files.close()
+        self.addCleanup(lambda: src.key and jobs.unmask_secret(src.key))
+        self.assertTrue(report.complete)
+        self.assertEqual(report.skip_count(), 0, 'nothing of a real n8n add-on is left out')
+        self.assertEqual((src.addon.slug, src.addon.arch), ('woow-n8n', 'amd64'))
+        self.assertEqual(sorted(src.sqlite), ['database.sqlite', 'database.sqlite-wal'])
+        self.assertIsNotNone(src.key, 'the key of a real n8n is a key')
+        info = ha_n8n.inspect_sqlite(src.sqlite['database.sqlite'])
+        self.assertTrue(info['owner_ok'])
+        self.assertGreater(len(info['tables']), 100, 'the real schema has more than a hundred tables')
+        self.assertEqual(len(info['credential_names']), info['counts']['credentials'])
+        self.assertTrue(info['migration'])
+        sink = Sink('n8n')
+        ha_n8n.analyse_data(sink, src, info)
+        self.assertEqual([issue.id for issue in sink.found], [])
+
+
 if __name__ == '__main__':
     unittest.main()
