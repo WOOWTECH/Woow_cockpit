@@ -1,0 +1,2 @@
+E: Could not get lock <root>/lists/lock. It is held by process 606600 (python3)
+E: Unable to lock directory <root>/lists/

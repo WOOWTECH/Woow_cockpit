@@ -1,0 +1,1 @@
+every address answers 200 with a login page

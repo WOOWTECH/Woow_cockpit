@@ -1,0 +1,4 @@
+tag final head dd491d9 dirty 0 start 06:33:38
+step top rc=0 seconds=62 tests=139 failures=0 errors=0 skipped=0 expected_failures=0 unexpected_successes=0 blocked=0 shim_hits=0 run_native=denied elapsed=63
+step b1 rc=1 seconds=230 tests=1876 failures=2 errors=3 skipped=1 expected_failures=0 unexpected_successes=0 blocked=6 shim_hits=0 run_native=denied elapsed=228
+end 06:38:31 head-after dd491d9 dirty 0

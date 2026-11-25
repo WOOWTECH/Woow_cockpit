@@ -1,0 +1,89 @@
+{
+ "started": "2026-11-25 06:32:23",
+ "results": [
+  {
+   "mutation": "needrestart not suspended",
+   "file": "scripts/manage.py",
+   "verdict": "caught",
+   "last": "FAILED (failures=1)",
+   "failed": [
+    "test_how_the_tools_and_apt_are_run"
+   ]
+  },
+  {
+   "mutation": "interactive frontend",
+   "file": "scripts/manage.py",
+   "verdict": "caught",
+   "last": "FAILED (failures=1)",
+   "failed": [
+    "test_how_the_tools_and_apt_are_run"
+   ]
+  },
+  {
+   "mutation": "whole environment passed to apt",
+   "file": "scripts/manage.py",
+   "verdict": "caught",
+   "last": "FAILED (failures=1)",
+   "failed": [
+    "test_how_the_tools_and_apt_are_run"
+   ]
+  },
+  {
+   "mutation": "proxy not passed",
+   "file": "scripts/manage.py",
+   "verdict": "caught",
+   "last": "FAILED (failures=1)",
+   "failed": [
+    "test_how_the_tools_and_apt_are_run"
+   ]
+  },
+  {
+   "mutation": "apt-get killed after two minutes",
+   "file": "scripts/manage.py",
+   "verdict": "caught",
+   "last": "FAILED (failures=1)",
+   "failed": [
+    "test_how_the_tools_and_apt_are_run"
+   ]
+  },
+  {
+   "mutation": "Ctrl-C reaches apt-get",
+   "file": "scripts/manage.py",
+   "verdict": "caught",
+   "last": "FAILED (failures=1)",
+   "failed": [
+    "test_how_the_tools_and_apt_are_run"
+   ]
+  },
+  {
+   "mutation": "Ctrl-C stays ignored afterwards",
+   "file": "scripts/manage.py",
+   "verdict": "caught",
+   "last": "FAILED (failures=1)",
+   "failed": [
+    "test_how_the_tools_and_apt_are_run"
+   ]
+  },
+  {
+   "mutation": "probes without a time limit",
+   "file": "scripts/manage.py",
+   "verdict": "caught",
+   "last": "FAILED (failures=1)",
+   "failed": [
+    "test_how_the_tools_and_apt_are_run"
+   ]
+  }
+ ],
+ "baseline": {
+  "code": 0,
+  "last": "OK",
+  "failed": []
+ },
+ "baseline_after": {
+  "code": 0,
+  "last": "OK"
+ },
+ "survived": 0,
+ "total": 68,
+ "finished": "2026-11-25 06:33:20"
+}

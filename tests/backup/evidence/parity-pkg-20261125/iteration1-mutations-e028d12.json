@@ -1,0 +1,675 @@
+{
+ "started": "2026-11-25 06:25:35",
+ "results": [
+  {
+   "mutation": "install never adds packages",
+   "file": "scripts/manage.py",
+   "verdict": "caught",
+   "last": "FAILED (failures=13, errors=6)",
+   "failed": [
+    "test_a_missing_package_is_added_before_a_file_changes",
+    "test_a_refusal_never_shows_the_lines_of_apt",
+    "test_an_install_that_cannot_add_them_is_refused_with_the_reason_and_changes_nothing",
+    "test_every_missing_package_goes_into_one_apt_run",
+    "test_what_works_afterwards_decides_not_the_exit_code_of_apt"
+   ]
+  },
+  {
+   "mutation": "packages added after the files",
+   "file": "scripts/manage.py",
+   "verdict": "caught",
+   "last": "FAILED (failures=17)",
+   "failed": [
+    "test_a_missing_package_is_added_before_a_file_changes",
+    "test_an_install_that_cannot_add_them_is_refused_with_the_reason_and_changes_nothing",
+    "test_what_works_afterwards_decides_not_the_exit_code_of_apt"
+   ]
+  },
+  {
+   "mutation": "refusal dropped",
+   "file": "scripts/manage.py",
+   "verdict": "caught",
+   "last": "FAILED (failures=14)",
+   "failed": [
+    "test_a_refusal_never_shows_the_lines_of_apt",
+    "test_an_install_that_cannot_add_them_is_refused_with_the_reason_and_changes_nothing",
+    "test_how_the_tools_and_apt_are_run",
+    "test_what_works_afterwards_decides_not_the_exit_code_of_apt"
+   ]
+  },
+  {
+   "mutation": "apt exit code trusted instead of the probe",
+   "file": "scripts/manage.py",
+   "verdict": "caught",
+   "last": "FAILED (failures=1)",
+   "failed": [
+    "test_what_works_afterwards_decides_not_the_exit_code_of_apt"
+   ]
+  },
+  {
+   "mutation": "tools checked with --no-backup",
+   "file": "scripts/manage.py",
+   "verdict": "caught",
+   "last": "FAILED (failures=1, errors=1)",
+   "failed": [
+    "test_no_backup_and_other_roots_check_and_run_nothing",
+    "test_plan_and_status_report_missing_packages_and_change_nothing"
+   ]
+  },
+  {
+   "mutation": "tools checked with --root",
+   "file": "scripts/manage.py",
+   "verdict": "caught",
+   "last": "FAILED (failures=1)",
+   "failed": [
+    "test_no_backup_and_other_roots_check_and_run_nothing"
+   ]
+  },
+  {
+   "mutation": "no tools on the live root",
+   "file": "scripts/manage.py",
+   "verdict": "caught",
+   "last": "FAILED (failures=1)",
+   "failed": [
+    "test_no_backup_and_other_roots_check_and_run_nothing"
+   ]
+  },
+  {
+   "mutation": "age not probed",
+   "file": "scripts/manage.py",
+   "verdict": "caught",
+   "last": "FAILED (failures=2, errors=1)",
+   "failed": [
+    "test_a_missing_package_is_added_before_a_file_changes",
+    "test_plan_and_status_report_missing_packages_and_change_nothing",
+    "test_the_installer_the_bootstrap_and_the_engine_mean_the_same_tools"
+   ]
+  },
+  {
+   "mutation": "age-keygen not probed",
+   "file": "scripts/manage.py",
+   "verdict": "caught",
+   "last": "FAILED (failures=3, errors=1)",
+   "failed": [
+    "test_a_missing_package_is_added_before_a_file_changes",
+    "test_plan_and_status_report_missing_packages_and_change_nothing",
+    "test_the_installer_the_bootstrap_and_the_engine_mean_the_same_tools",
+    "test_what_works_afterwards_decides_not_the_exit_code_of_apt"
+   ]
+  },
+  {
+   "mutation": "zstd not probed",
+   "file": "scripts/manage.py",
+   "verdict": "caught",
+   "last": "FAILED (failures=4, errors=2)",
+   "failed": [
+    "test_a_missing_package_is_added_before_a_file_changes",
+    "test_a_refusal_never_shows_the_lines_of_apt",
+    "test_every_missing_package_goes_into_one_apt_run",
+    "test_plan_and_status_report_missing_packages_and_change_nothing",
+    "test_the_installer_the_bootstrap_and_the_engine_mean_the_same_tools",
+    "test_what_works_afterwards_decides_not_the_exit_code_of_apt"
+   ]
+  },
+  {
+   "mutation": "age-keygen brought by another package",
+   "file": "scripts/manage.py",
+   "verdict": "caught",
+   "last": "FAILED (failures=15)",
+   "failed": [
+    "test_a_missing_package_is_added_before_a_file_changes",
+    "test_an_install_that_cannot_add_them_is_refused_with_the_reason_and_changes_nothing",
+    "test_plan_and_status_report_missing_packages_and_change_nothing",
+    "test_the_installer_the_bootstrap_and_the_engine_mean_the_same_tools",
+    "test_what_works_afterwards_decides_not_the_exit_code_of_apt"
+   ]
+  },
+  {
+   "mutation": "nacl probe imports nothing",
+   "file": "scripts/manage.py",
+   "verdict": "caught",
+   "last": "FAILED (failures=1)",
+   "failed": [
+    "test_the_installer_the_bootstrap_and_the_engine_mean_the_same_tools"
+   ]
+  },
+  {
+   "mutation": "cryptography probe imports nothing",
+   "file": "scripts/manage.py",
+   "verdict": "caught",
+   "last": "FAILED (failures=1)",
+   "failed": [
+    "test_the_installer_the_bootstrap_and_the_engine_mean_the_same_tools"
+   ]
+  },
+  {
+   "mutation": "--no-remove dropped",
+   "file": "scripts/manage.py",
+   "verdict": "caught",
+   "last": "FAILED (failures=1)",
+   "failed": [
+    "test_how_the_tools_and_apt_are_run"
+   ]
+  },
+  {
+   "mutation": "--no-install-recommends dropped",
+   "file": "scripts/manage.py",
+   "verdict": "caught",
+   "last": "FAILED (failures=1)",
+   "failed": [
+    "test_how_the_tools_and_apt_are_run"
+   ]
+  },
+  {
+   "mutation": "--reinstall dropped",
+   "file": "scripts/manage.py",
+   "verdict": "caught",
+   "last": "FAILED (failures=1)",
+   "failed": [
+    "test_how_the_tools_and_apt_are_run"
+   ]
+  },
+  {
+   "mutation": "lock wait dropped",
+   "file": "scripts/manage.py",
+   "verdict": "caught",
+   "last": "FAILED (failures=1)",
+   "failed": [
+    "test_how_the_tools_and_apt_are_run"
+   ]
+  },
+  {
+   "mutation": "-y dropped",
+   "file": "scripts/manage.py",
+   "verdict": "caught",
+   "last": "FAILED (failures=1)",
+   "failed": [
+    "test_how_the_tools_and_apt_are_run"
+   ]
+  },
+  {
+   "mutation": "needrestart not suspended",
+   "file": "scripts/manage.py",
+   "verdict": "caught",
+   "last": "FAILED (failures=1)",
+   "failed": [
+    "test_how_the_tools_and_apt_are_run"
+   ]
+  },
+  {
+   "mutation": "interactive frontend",
+   "file": "scripts/manage.py",
+   "verdict": "caught",
+   "last": "FAILED (failures=1)",
+   "failed": [
+    "test_how_the_tools_and_apt_are_run"
+   ]
+  },
+  {
+   "mutation": "whole environment passed to apt",
+   "file": "scripts/manage.py",
+   "verdict": "caught",
+   "last": "FAILED (failures=1)",
+   "failed": [
+    "test_how_the_tools_and_apt_are_run"
+   ]
+  },
+  {
+   "mutation": "proxy not passed",
+   "file": "scripts/manage.py",
+   "verdict": "caught",
+   "last": "FAILED (failures=1)",
+   "failed": [
+    "test_how_the_tools_and_apt_are_run"
+   ]
+  },
+  {
+   "mutation": "apt-get killed after two minutes",
+   "file": "scripts/manage.py",
+   "verdict": "caught",
+   "last": "FAILED (failures=1)",
+   "failed": [
+    "test_how_the_tools_and_apt_are_run"
+   ]
+  },
+  {
+   "mutation": "probes without a time limit",
+   "file": "scripts/manage.py",
+   "verdict": "caught",
+   "last": "FAILED (failures=1)",
+   "failed": [
+    "test_how_the_tools_and_apt_are_run"
+   ]
+  },
+  {
+   "mutation": "a hanging tool is an error",
+   "file": "scripts/manage.py",
+   "verdict": "caught",
+   "last": "FAILED (errors=1)",
+   "failed": [
+    "test_how_the_tools_and_apt_are_run"
+   ]
+  },
+  {
+   "mutation": "a missing program is an error",
+   "file": "scripts/manage.py",
+   "verdict": "caught",
+   "last": "FAILED (errors=1)",
+   "failed": [
+    "test_how_the_tools_and_apt_are_run"
+   ]
+  },
+  {
+   "mutation": "raw apt lines shown",
+   "file": "scripts/manage.py",
+   "verdict": "caught",
+   "last": "FAILED (failures=3)",
+   "failed": [
+    "test_an_install_that_cannot_add_them_is_refused_with_the_reason_and_changes_nothing",
+    "test_how_the_tools_and_apt_are_run"
+   ]
+  },
+  {
+   "mutation": "raw apt lines shown for every reason",
+   "file": "scripts/manage.py",
+   "verdict": "caught",
+   "last": "FAILED (failures=6)",
+   "failed": [
+    "test_a_refusal_never_shows_the_lines_of_apt",
+    "test_an_install_that_cannot_add_them_is_refused_with_the_reason_and_changes_nothing"
+   ]
+  },
+  {
+   "mutation": "offline reported as a missing component",
+   "file": "scripts/manage.py",
+   "verdict": "caught",
+   "last": "FAILED (failures=1)",
+   "failed": [
+    "test_an_install_that_cannot_add_them_is_refused_with_the_reason_and_changes_nothing"
+   ]
+  },
+  {
+   "mutation": "offline reinstall reported as a broken tool",
+   "file": "scripts/manage.py",
+   "verdict": "caught",
+   "last": "FAILED (failures=1)",
+   "failed": [
+    "test_what_works_afterwards_decides_not_the_exit_code_of_apt"
+   ]
+  },
+  {
+   "mutation": "any failure with an old index called offline",
+   "file": "scripts/manage.py",
+   "verdict": "caught",
+   "last": "FAILED (failures=1)",
+   "failed": [
+    "test_an_install_that_cannot_add_them_is_refused_with_the_reason_and_changes_nothing"
+   ]
+  },
+  {
+   "mutation": "a disabled component not recognized",
+   "file": "scripts/manage.py",
+   "verdict": "caught",
+   "last": "FAILED (failures=2)",
+   "failed": [
+    "test_an_install_that_cannot_add_them_is_refused_with_the_reason_and_changes_nothing"
+   ]
+  },
+  {
+   "mutation": "a broken tool after a successful apt not recognized",
+   "file": "scripts/manage.py",
+   "verdict": "caught",
+   "last": "FAILED (failures=1)",
+   "failed": [
+    "test_what_works_afterwards_decides_not_the_exit_code_of_apt"
+   ]
+  },
+  {
+   "mutation": "reasons dropped",
+   "file": "scripts/manage.py",
+   "verdict": "caught",
+   "last": "FAILED (failures=6)",
+   "failed": [
+    "test_an_install_that_cannot_add_them_is_refused_with_the_reason_and_changes_nothing"
+   ]
+  },
+  {
+   "mutation": "index not refreshed",
+   "file": "scripts/manage.py",
+   "verdict": "caught",
+   "last": "FAILED (failures=9)",
+   "failed": [
+    "test_a_missing_package_is_added_before_a_file_changes",
+    "test_an_install_that_cannot_add_them_is_refused_with_the_reason_and_changes_nothing",
+    "test_every_missing_package_goes_into_one_apt_run",
+    "test_how_the_tools_and_apt_are_run",
+    "test_what_works_afterwards_decides_not_the_exit_code_of_apt"
+   ]
+  },
+  {
+   "mutation": "already-current does not report the packages",
+   "file": "scripts/manage.py",
+   "verdict": "caught",
+   "last": "FAILED (errors=5)",
+   "failed": [
+    "test_a_missing_package_is_added_before_a_file_changes"
+   ]
+  },
+  {
+   "mutation": "installed does not report the packages",
+   "file": "scripts/manage.py",
+   "verdict": "caught",
+   "last": "FAILED (errors=7)",
+   "failed": [
+    "test_a_missing_package_is_added_before_a_file_changes",
+    "test_every_missing_package_goes_into_one_apt_run",
+    "test_what_works_afterwards_decides_not_the_exit_code_of_apt"
+   ]
+  },
+  {
+   "mutation": "only the first missing package",
+   "file": "scripts/manage.py",
+   "verdict": "caught",
+   "last": "FAILED (failures=13, errors=1)",
+   "failed": [
+    "test_an_install_that_cannot_add_them_is_refused_with_the_reason_and_changes_nothing",
+    "test_every_missing_package_goes_into_one_apt_run",
+    "test_how_the_tools_and_apt_are_run",
+    "test_plan_and_status_report_missing_packages_and_change_nothing"
+   ]
+  },
+  {
+   "mutation": "every package counted as missing",
+   "file": "scripts/manage.py",
+   "verdict": "caught",
+   "last": "FAILED (failures=12, errors=8)",
+   "failed": [
+    "test_a_missing_package_is_added_before_a_file_changes",
+    "test_an_install_that_cannot_add_them_is_refused_with_the_reason_and_changes_nothing",
+    "test_every_missing_package_goes_into_one_apt_run",
+    "test_plan_and_status_report_missing_packages_and_change_nothing",
+    "test_what_works_afterwards_decides_not_the_exit_code_of_apt",
+    "test_with_every_tool_working_nothing_runs_and_nothing_is_reported"
+   ]
+  },
+  {
+   "mutation": "a failing probe counts as working",
+   "file": "scripts/manage.py",
+   "verdict": "caught",
+   "last": "FAILED (failures=15, errors=6)",
+   "failed": [
+    "test_a_missing_package_is_added_before_a_file_changes",
+    "test_a_refusal_never_shows_the_lines_of_apt",
+    "test_an_install_that_cannot_add_them_is_refused_with_the_reason_and_changes_nothing",
+    "test_every_missing_package_goes_into_one_apt_run",
+    "test_how_the_tools_and_apt_are_run",
+    "test_plan_and_status_report_missing_packages_and_change_nothing",
+    "test_what_works_afterwards_decides_not_the_exit_code_of_apt"
+   ]
+  },
+  {
+   "mutation": "status always ready",
+   "file": "scripts/manage.py",
+   "verdict": "caught",
+   "last": "FAILED (failures=1)",
+   "failed": [
+    "test_plan_and_status_report_missing_packages_and_change_nothing"
+   ]
+  },
+  {
+   "mutation": "status lists no package",
+   "file": "scripts/manage.py",
+   "verdict": "caught",
+   "last": "FAILED (failures=1)",
+   "failed": [
+    "test_plan_and_status_report_missing_packages_and_change_nothing"
+   ]
+  },
+  {
+   "mutation": "status adds packages",
+   "file": "scripts/manage.py",
+   "verdict": "caught",
+   "last": "FAILED (failures=1)",
+   "failed": [
+    "test_plan_and_status_report_missing_packages_and_change_nothing"
+   ]
+  },
+  {
+   "mutation": "status of --root claims ready",
+   "file": "scripts/manage.py",
+   "verdict": "caught",
+   "last": "FAILED (failures=1)",
+   "failed": [
+    "test_no_backup_and_other_roots_check_and_run_nothing"
+   ]
+  },
+  {
+   "mutation": "status exit code",
+   "file": "scripts/manage.py",
+   "verdict": "caught",
+   "last": "FAILED (failures=1)",
+   "failed": [
+    "test_plan_and_status_report_missing_packages_and_change_nothing"
+   ]
+  },
+  {
+   "mutation": "plan does not list packages",
+   "file": "scripts/manage.py",
+   "verdict": "caught",
+   "last": "FAILED (failures=1)",
+   "failed": [
+    "test_plan_and_status_report_missing_packages_and_change_nothing"
+   ]
+  },
+  {
+   "mutation": "plan adds packages",
+   "file": "scripts/manage.py",
+   "verdict": "caught",
+   "last": "FAILED (failures=1)",
+   "failed": [
+    "test_plan_and_status_report_missing_packages_and_change_nothing"
+   ]
+  },
+  {
+   "mutation": "other search path than the engine",
+   "file": "scripts/manage.py",
+   "verdict": "caught",
+   "last": "FAILED (failures=1)",
+   "failed": [
+    "test_the_installer_the_bootstrap_and_the_engine_mean_the_same_tools"
+   ]
+  },
+  {
+   "mutation": "probes not isolated",
+   "file": "scripts/manage.py",
+   "verdict": "caught",
+   "last": "FAILED (failures=1)",
+   "failed": [
+    "test_the_installer_the_bootstrap_and_the_engine_mean_the_same_tools"
+   ]
+  },
+  {
+   "mutation": "probes by another python",
+   "file": "scripts/manage.py",
+   "verdict": "caught",
+   "last": "FAILED (failures=1)",
+   "failed": [
+    "test_the_installer_the_bootstrap_and_the_engine_mean_the_same_tools"
+   ]
+  },
+  {
+   "mutation": "refusal without the escape",
+   "file": "scripts/manage.py",
+   "verdict": "caught",
+   "last": "FAILED (failures=11)",
+   "failed": [
+    "test_an_install_that_cannot_add_them_is_refused_with_the_reason_and_changes_nothing"
+   ]
+  },
+  {
+   "mutation": "refusal without the names",
+   "file": "scripts/manage.py",
+   "verdict": "caught",
+   "last": "FAILED (failures=12)",
+   "failed": [
+    "test_an_install_that_cannot_add_them_is_refused_with_the_reason_and_changes_nothing",
+    "test_what_works_afterwards_decides_not_the_exit_code_of_apt"
+   ]
+  },
+  {
+   "mutation": "--root note dropped",
+   "file": "scripts/manage.py",
+   "verdict": "caught",
+   "last": "FAILED (failures=1)",
+   "failed": [
+    "test_no_backup_and_other_roots_check_and_run_nothing"
+   ]
+  },
+  {
+   "mutation": "--root note also without the engine",
+   "file": "scripts/manage.py",
+   "verdict": "caught",
+   "last": "FAILED (failures=1)",
+   "failed": [
+    "test_no_backup_and_other_roots_check_and_run_nothing"
+   ]
+  },
+  {
+   "mutation": "no progress note",
+   "file": "scripts/manage.py",
+   "verdict": "caught",
+   "last": "FAILED (failures=5)",
+   "failed": [
+    "test_a_missing_package_is_added_before_a_file_changes"
+   ]
+  },
+  {
+   "mutation": "bootstrap list without python3-nacl",
+   "file": "scripts/bootstrap-ubuntu.sh",
+   "verdict": "caught",
+   "last": "FAILED (failures=4)",
+   "failed": [
+    "test_a_held_tool_does_not_keep_a_missing_one_from_being_added",
+    "test_apply_installs_everything_and_again_is_harmless",
+    "test_missing_and_offline_is_refused_with_the_names",
+    "test_the_installer_the_bootstrap_and_the_engine_mean_the_same_tools"
+   ]
+  },
+  {
+   "mutation": "bootstrap: failed index update is fatal",
+   "file": "scripts/bootstrap-ubuntu.sh",
+   "verdict": "caught",
+   "last": "FAILED (failures=2)",
+   "failed": [
+    "test_an_offline_device_that_has_everything_is_not_refused",
+    "test_missing_and_offline_is_refused_with_the_names"
+   ]
+  },
+  {
+   "mutation": "bootstrap: transient update errors unnoticed",
+   "file": "scripts/bootstrap-ubuntu.sh",
+   "verdict": "caught",
+   "last": "FAILED (failures=2)",
+   "failed": [
+    "test_a_package_no_index_knows_is_refused_before_anything_is_installed",
+    "test_apply_installs_everything_and_again_is_harmless"
+   ]
+  },
+  {
+   "mutation": "bootstrap: held counts as missing",
+   "file": "scripts/bootstrap-ubuntu.sh",
+   "verdict": "caught",
+   "last": "FAILED (failures=3)",
+   "failed": [
+    "test_a_held_tool_does_not_keep_a_missing_one_from_being_added",
+    "test_a_newer_version_that_cannot_be_installed_is_no_reason_to_refuse",
+    "test_plan_changes_nothing_and_shows_held_packages_as_installed"
+   ]
+  },
+  {
+   "mutation": "bootstrap: no fallback to the missing ones",
+   "file": "scripts/bootstrap-ubuntu.sh",
+   "verdict": "caught",
+   "last": "FAILED (failures=1)",
+   "failed": [
+    "test_a_held_tool_does_not_keep_a_missing_one_from_being_added"
+   ]
+  },
+  {
+   "mutation": "bootstrap: refused although nothing is missing",
+   "file": "scripts/bootstrap-ubuntu.sh",
+   "verdict": "caught",
+   "last": "FAILED (failures=2)",
+   "failed": [
+    "test_a_held_tool_does_not_keep_a_missing_one_from_being_added",
+    "test_a_newer_version_that_cannot_be_installed_is_no_reason_to_refuse"
+   ]
+  },
+  {
+   "mutation": "bootstrap: missing packages do not matter",
+   "file": "scripts/bootstrap-ubuntu.sh",
+   "verdict": "caught",
+   "last": "FAILED (failures=1)",
+   "failed": [
+    "test_missing_and_offline_is_refused_with_the_names"
+   ]
+  },
+  {
+   "mutation": "bootstrap: index not consulted",
+   "file": "scripts/bootstrap-ubuntu.sh",
+   "verdict": "caught",
+   "last": "FAILED (failures=1)",
+   "failed": [
+    "test_a_package_no_index_knows_is_refused_before_anything_is_installed"
+   ]
+  },
+  {
+   "mutation": "bootstrap: cockpit packages counted as backup tools",
+   "file": "scripts/bootstrap-ubuntu.sh",
+   "verdict": "caught",
+   "last": "FAILED (failures=1)",
+   "failed": [
+    "test_apply_installs_everything_and_again_is_harmless"
+   ]
+  },
+  {
+   "mutation": "bootstrap: socket not enabled",
+   "file": "scripts/bootstrap-ubuntu.sh",
+   "verdict": "caught",
+   "last": "FAILED (failures=4)",
+   "failed": [
+    "test_a_held_tool_does_not_keep_a_missing_one_from_being_added",
+    "test_a_newer_version_that_cannot_be_installed_is_no_reason_to_refuse",
+    "test_an_offline_device_that_has_everything_is_not_refused",
+    "test_apply_installs_everything_and_again_is_harmless"
+   ]
+  },
+  {
+   "mutation": "bootstrap: plan goes on",
+   "file": "scripts/bootstrap-ubuntu.sh",
+   "verdict": "caught",
+   "last": "FAILED (failures=5, errors=2)",
+   "failed": [
+    "test_a_held_tool_does_not_keep_a_missing_one_from_being_added",
+    "test_a_newer_version_that_cannot_be_installed_is_no_reason_to_refuse",
+    "test_a_package_no_index_knows_is_refused_before_anything_is_installed",
+    "test_an_offline_device_that_has_everything_is_not_refused",
+    "test_apply_installs_everything_and_again_is_harmless",
+    "test_missing_and_offline_is_refused_with_the_names",
+    "test_plan_changes_nothing_and_shows_held_packages_as_installed"
+   ]
+  }
+ ],
+ "baseline": {
+  "code": 0,
+  "last": "OK",
+  "failed": []
+ },
+ "baseline_after": {
+  "code": 0,
+  "last": "OK"
+ },
+ "survived": 0,
+ "total": 66,
+ "finished": "2026-11-25 06:31:26"
+}

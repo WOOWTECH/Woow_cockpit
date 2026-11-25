@@ -1,0 +1,5 @@
+E: Failed to fetch http://repo.example:80/ubuntu/pool/universe/age_1.1.1-1_all.deb  Could not connect to repo.example:80 (192.0.2.1). - connect (111: Connection refused)
+E: Failed to fetch http://repo.example:80/ubuntu/pool/main/python3-cryptography_41.0.7-4_all.deb  Unable to connect to repo.example:80:
+E: Failed to fetch http://repo.example:80/ubuntu/pool/main/python3-nacl_1.5.0-4_all.deb  Unable to connect to repo.example:80:
+E: Failed to fetch http://repo.example:80/ubuntu/pool/main/zstd_1.5.5-1_all.deb  Unable to connect to repo.example:80:
+E: Unable to fetch some archives, maybe run apt-get update or try with --fix-missing?

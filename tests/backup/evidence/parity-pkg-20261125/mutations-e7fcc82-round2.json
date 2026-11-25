@@ -1,0 +1,268 @@
+{
+ "started": "2026-11-25 12:13:38",
+ "head": "e7fcc82",
+ "results": [
+  {
+   "mutation": "plan made again from the old state",
+   "file": "scripts/manage.py",
+   "verdict": "caught",
+   "last": "FAILED (failures=1)",
+   "failed": [
+    "test_the_install_uses_the_new_plan_as_a_whole"
+   ]
+  },
+  {
+   "mutation": "notices of the install lost",
+   "file": "scripts/manage.py",
+   "verdict": "caught",
+   "last": "FAILED (failures=1)",
+   "failed": [
+    "test_the_notices_of_the_install_and_of_the_packages_come_together"
+   ]
+  },
+  {
+   "mutation": "reasons: removal needed",
+   "file": "scripts/manage.py",
+   "verdict": "caught",
+   "last": "FAILED (failures=1)",
+   "failed": [
+    "test_texts_of_apt_that_were_not_provoked_are_told_from_its_catalogue"
+   ]
+  },
+  {
+   "mutation": "reasons: unsigned source",
+   "file": "scripts/manage.py",
+   "verdict": "caught",
+   "last": "FAILED (failures=1)",
+   "failed": [
+    "test_an_install_that_cannot_add_them_goes_on_and_says_what_is_missing"
+   ]
+  },
+  {
+   "mutation": "reasons: absent packages decide first",
+   "file": "scripts/manage.py",
+   "verdict": "caught",
+   "last": "FAILED (failures=1)",
+   "failed": [
+    "test_what_the_downloads_say_beats_what_the_index_lacks"
+   ]
+  },
+  {
+   "mutation": "reasons: lock text of apt",
+   "file": "scripts/manage.py",
+   "verdict": "caught",
+   "last": "FAILED (failures=1)",
+   "failed": [
+    "test_texts_of_apt_that_were_not_provoked_are_told_from_its_catalogue"
+   ]
+  },
+  {
+   "mutation": "reasons: ENOSPC",
+   "file": "scripts/manage.py",
+   "verdict": "caught",
+   "last": "FAILED (failures=1)",
+   "failed": [
+    "test_texts_of_apt_that_were_not_provoked_are_told_from_its_catalogue"
+   ]
+  },
+  {
+   "mutation": "reasons: unmet dependencies on stderr",
+   "file": "scripts/manage.py",
+   "verdict": "caught",
+   "last": "FAILED (failures=1)",
+   "failed": [
+    "test_texts_of_apt_that_were_not_provoked_are_told_from_its_catalogue"
+   ]
+  },
+  {
+   "mutation": "reasons: held broken packages",
+   "file": "scripts/manage.py",
+   "verdict": "caught",
+   "last": "FAILED (failures=1)",
+   "failed": [
+    "test_an_install_that_cannot_add_them_goes_on_and_says_what_is_missing"
+   ]
+  },
+  {
+   "mutation": "reasons: Breaks",
+   "file": "scripts/manage.py",
+   "verdict": "caught",
+   "last": "FAILED (failures=1)",
+   "failed": [
+    "test_texts_of_apt_that_were_not_provoked_are_told_from_its_catalogue"
+   ]
+  },
+  {
+   "mutation": "reasons: temporary failure resolving",
+   "file": "scripts/manage.py",
+   "verdict": "caught",
+   "last": "FAILED (failures=1)",
+   "failed": [
+    "test_texts_of_apt_that_were_not_provoked_are_told_from_its_catalogue"
+   ]
+  },
+  {
+   "mutation": "reasons: wicked",
+   "file": "scripts/manage.py",
+   "verdict": "caught",
+   "last": "FAILED (failures=1)",
+   "failed": [
+    "test_texts_of_apt_that_were_not_provoked_are_told_from_its_catalogue"
+   ]
+  },
+  {
+   "mutation": "reasons: cannot initiate the connection",
+   "file": "scripts/manage.py",
+   "verdict": "caught",
+   "last": "FAILED (failures=1)",
+   "failed": [
+    "test_texts_of_apt_that_were_not_provoked_are_told_from_its_catalogue"
+   ]
+  },
+  {
+   "mutation": "reasons: network is unreachable",
+   "file": "scripts/manage.py",
+   "verdict": "caught",
+   "last": "FAILED (failures=1)",
+   "failed": [
+    "test_texts_of_apt_that_were_not_provoked_are_told_from_its_catalogue"
+   ]
+  },
+  {
+   "mutation": "reasons: no route to host",
+   "file": "scripts/manage.py",
+   "verdict": "caught",
+   "last": "FAILED (failures=1)",
+   "failed": [
+    "test_texts_of_apt_that_were_not_provoked_are_told_from_its_catalogue"
+   ]
+  },
+  {
+   "mutation": "reasons: connection timed out",
+   "file": "scripts/manage.py",
+   "verdict": "caught",
+   "last": "FAILED (failures=1)",
+   "failed": [
+    "test_texts_of_apt_that_were_not_provoked_are_told_from_its_catalogue"
+   ]
+  },
+  {
+   "mutation": "reasons: connection failed",
+   "file": "scripts/manage.py",
+   "verdict": "caught",
+   "last": "FAILED (failures=1)",
+   "failed": [
+    "test_texts_of_apt_that_were_not_provoked_are_told_from_its_catalogue"
+   ]
+  },
+  {
+   "mutation": "reasons: connection reset",
+   "file": "scripts/manage.py",
+   "verdict": "caught",
+   "last": "FAILED (failures=1)",
+   "failed": [
+    "test_texts_of_apt_that_were_not_provoked_are_told_from_its_catalogue"
+   ]
+  },
+  {
+   "mutation": "reasons: GPG error",
+   "file": "scripts/manage.py",
+   "verdict": "caught",
+   "last": "FAILED (failures=1)",
+   "failed": [
+    "test_texts_of_apt_that_were_not_provoked_are_told_from_its_catalogue"
+   ]
+  },
+  {
+   "mutation": "reasons: no longer signed",
+   "file": "scripts/manage.py",
+   "verdict": "caught",
+   "last": "FAILED (failures=1)",
+   "failed": [
+    "test_texts_of_apt_that_were_not_provoked_are_told_from_its_catalogue"
+   ]
+  },
+  {
+   "mutation": "reasons: 410 is not gone",
+   "file": "scripts/manage.py",
+   "verdict": "caught",
+   "last": "FAILED (failures=1)",
+   "failed": [
+    "test_texts_of_apt_that_were_not_provoked_are_told_from_its_catalogue"
+   ]
+  },
+  {
+   "mutation": "reasons: unexpected size",
+   "file": "scripts/manage.py",
+   "verdict": "caught",
+   "last": "FAILED (failures=1)",
+   "failed": [
+    "test_texts_of_apt_that_were_not_provoked_are_told_from_its_catalogue"
+   ]
+  },
+  {
+   "mutation": "reasons: no installation candidate",
+   "file": "scripts/manage.py",
+   "verdict": "caught",
+   "last": "FAILED (failures=1)",
+   "failed": [
+    "test_texts_of_apt_that_were_not_provoked_are_told_from_its_catalogue"
+   ]
+  },
+  {
+   "mutation": "reasons: warnings of a source count",
+   "file": "scripts/manage.py",
+   "verdict": "caught",
+   "last": "FAILED (failures=1)",
+   "failed": [
+    "test_texts_of_apt_that_were_not_provoked_are_told_from_its_catalogue"
+   ]
+  },
+  {
+   "mutation": "reasons: a component warning is a problem",
+   "file": "scripts/manage.py",
+   "verdict": "caught",
+   "last": "FAILED (failures=1)",
+   "failed": [
+    "test_texts_of_apt_that_were_not_provoked_are_told_from_its_catalogue"
+   ]
+  },
+  {
+   "mutation": "reasons: an error of no kind is no problem",
+   "file": "scripts/manage.py",
+   "verdict": "caught",
+   "last": "FAILED (failures=1)",
+   "failed": [
+    "test_texts_of_apt_that_were_not_provoked_are_told_from_its_catalogue"
+   ]
+  },
+  {
+   "mutation": "control: a comment",
+   "file": "scripts/manage.py",
+   "verdict": "unnoticed (as a control must be)",
+   "last": "OK",
+   "failed": []
+  },
+  {
+   "mutation": "control: a docstring",
+   "file": "scripts/manage.py",
+   "verdict": "unnoticed (as a control must be)",
+   "last": "OK",
+   "failed": []
+  }
+ ],
+ "baseline": {
+  "code": 0,
+  "last": "OK",
+  "failed": []
+ },
+ "baseline_after": {
+  "code": 0,
+  "last": "OK"
+ },
+ "wrong": 0,
+ "total": 26,
+ "controls": 2,
+ "caught": 26,
+ "finished": "2026-11-25 12:18:55"
+}

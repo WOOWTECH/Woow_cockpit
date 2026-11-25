@@ -1,0 +1,6 @@
+Ign:1 http://repo.example:80/ubuntu noble InRelease
+Get:2 http://repo.example:80/ubuntu noble Release [1056 B]
+Ign:3 http://repo.example:80/ubuntu noble Release.gpg
+Get:4 http://repo.example:80/ubuntu noble/main amd64 Packages [1463 B]
+Fetched 2519 B in 0s (115 kB/s)
+Reading package lists...

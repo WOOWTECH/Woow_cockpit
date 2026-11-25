@@ -1,0 +1,6 @@
+Ign:1 http://repo.example:80 ./ InRelease
+Get:2 http://repo.example:80 ./ Release [483 B]
+Ign:3 http://repo.example:80 ./ Release.gpg
+Get:4 http://repo.example:80 ./ Packages [1891 B]
+Fetched 2374 B in 0s (105 kB/s)
+Reading package lists...

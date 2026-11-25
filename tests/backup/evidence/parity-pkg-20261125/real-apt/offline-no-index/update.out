@@ -1,0 +1,4 @@
+Ign:1 http://repo.example:80/ubuntu ./ InRelease
+Err:1 http://repo.example:80/ubuntu ./ InRelease
+  Could not connect to repo.example:80 (192.0.2.1). - connect (111: Connection refused)
+Reading package lists...

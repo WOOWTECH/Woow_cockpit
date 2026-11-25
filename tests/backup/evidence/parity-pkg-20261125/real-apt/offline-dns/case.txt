@@ -1,0 +1,1 @@
+a source whose name does not resolve (.invalid), no index

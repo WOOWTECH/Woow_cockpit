@@ -1,0 +1,8 @@
+# Output of real-ubuntu-archive.py (code of b2e5ee5, apt argv unchanged since; REAL apt-get 2.8.4 and the REAL Ubuntu archive tw.archive.ubuntu.com in a private unprivileged apt root, dpkg replaced by an unpacking stub; run 2026-11-25 10:3x)
+Note: 備份與還原需要的套件沒有裝好：age、zstd、python3-nacl、python3-cryptography。正在用 apt 自動補裝（可能要幾分鐘）……
+before {"age": false, "age-keygen": false, "zstd": false, "python3-nacl": false, "python3-cryptography": false}
+first ensure -> {"packages": ["age", "zstd", "python3-nacl", "python3-cryptography"]}
+  apt-get -q -o Acquire::Retries=1 update | rc 0 | stderr lines 0 | Get:4 http://tw.archive.ubuntu.com/ubuntu noble/universe amd64 Packages [15.0 MB] / Get:5 http://tw.archive.ubuntu.com/ubuntu noble/universe Translation-en [5982 kB] / Fetched 23.2 MB in 7s (3449 kB/s
+  apt-get -q -o Acquire::Retries=1 -o DPkg::Lock::Timeout=300 -y --no-install-recommends --no-remove --reinstall install age zstd python3-nacl python3-cryptography | rc 0 | stderr lines 2 | Get:40 http://tw.archive.ubuntu.com/ubuntu noble/main amd64 python3-cryptography amd64 41.0.7-4build3 [809 kB] / Get:41 http://tw.archive.ubuntu.com/ubuntu noble/main amd64 python3-nacl amd64 1.5.0-4b
+after {"age": true, "age-keygen": true, "zstd": true, "python3-nacl": true, "python3-cryptography": true}
+second ensure -> {} | apt-get runs: 0

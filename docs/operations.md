@@ -11,6 +11,8 @@ git rev-parse HEAD
 dpkg-query -W cockpit-bridge cockpit-podman
 ```
 
+更新時，`install` 會自動補裝備份元件缺的套件（age、zstd、python3-nacl、python3-cryptography）；補不了（例如這台連不到套件庫）時更新照常完成，並說明缺什麼、原因與怎麼辦。
+
 出貨時記錄 commit、`VERSION`、實際套件版本及安裝輸出的 `backup_id`。安裝腳本沒有背景更新工作。要固定來源可先 `git checkout <已驗證的 commit>` 再執行安裝。
 
 更新或回退前，先確認「備份與還原」沒有進行中的作業（見 [deployment.md](deployment.md)）；安裝器不會自行檢查。開啟了「排程備份」時，避開排程時間前後安裝（見下方「排程備份」）。
@@ -68,8 +70,9 @@ for n in $(pm network ls --filter label=io.woowtech.backup.job --format '{{.Name
 | 還原被拒絕：資料庫執行個體中還有應用設定未宣告的資料庫 | 原位還原會重建整個資料庫資料卷，那些資料庫會遺失，所以沒有做任何變更。先把它們移到其他執行個體（或確認不需要後刪除）再還原；應用本身需要多個資料庫時，目前的備份方式不適用（見 [production-onboarding.md](backup/production-onboarding.md)） |
 | 還原被拒絕：備份中的資料卷或容器映像含有不安全或不支援的內容 | 設備沒有任何變更；不要再用這份備份，改用其他備份，並保留檔案回報工程人員 |
 | 備份失敗：資料卷含有還原時無法匯入的內容 | 依訊息處理該資料卷中的項目（例如指向資料卷外的相對符號連結、擁有者不在應用擁有者的 UID 對應範圍內）；應用已恢復執行 |
-| 錯誤 `internal-error`，訊息提到 age 或 zstd | 安裝 `age`、`zstd`（`bootstrap-ubuntu.sh --apply` 會安裝） |
-| 錯誤 `internal-error`，訊息提到 python3-nacl 或 python3-cryptography | 讀取 Home Assistant 加密備份需要這兩個套件：安裝 `python3-nacl`、`python3-cryptography`（`bootstrap-ubuntu.sh --apply` 會安裝） |
+| 錯誤 `internal-error`，訊息提到 age、age-keygen 或 zstd | `sudo python3 scripts/manage.py status` 查看缺哪個工具；重新執行 `sudo python3 scripts/manage.py install` 會自動補裝（`bootstrap-ubuntu.sh --apply` 也會安裝） |
+| 錯誤 `internal-error`，訊息提到 python3-nacl 或 python3-cryptography | 讀取 Home Assistant 加密備份需要這兩個套件：重新執行 `sudo python3 scripts/manage.py install` 會自動補裝（`bootstrap-ubuntu.sh --apply` 也會安裝） |
+| 安裝完成，但訊息說「備份與還原需要的套件沒有裝好」 | 更新已經完成；訊息裡有套件名稱、原因（連不到套件庫、沒有啟用 universe、套件來源有問題、另一個套件作業正在進行、磁碟空間不足…；不確定時寫「原因不明」和 apt 的結束碼）和補到之前不能用的功能。排除後重新執行安裝會再自動補裝，或照訊息裡的指令自行安裝；`sudo python3 scripts/manage.py status` 查看現況（缺套件時結束碼 1） |
 
 不要為了讓圖集出現而重新啟動所有容器；圖集只是 Cockpit 套件。此安裝器不主動中斷 Cockpit 或既有應用服務。
 

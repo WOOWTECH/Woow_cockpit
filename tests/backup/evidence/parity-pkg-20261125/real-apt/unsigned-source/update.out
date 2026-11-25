@@ -1,0 +1,4 @@
+Ign:1 http://repo.example:80 ./ InRelease
+Get:2 http://repo.example:80 ./ Release [483 B]
+Ign:3 http://repo.example:80 ./ Release.gpg
+Reading package lists...

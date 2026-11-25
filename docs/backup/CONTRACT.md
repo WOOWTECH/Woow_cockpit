@@ -208,6 +208,34 @@ root). No `sudo`. Do not write user-supplied credentials anywhere.
 `woowbackup.paths.Paths` holds these. Tests construct `Paths(base=tmpdir)`; real paths are used
 when `base` is None. The entrypoint never honours environment overrides when running as root.
 
+**Host tools (revised 2026-11-25, HAOS parity).** The engine needs `age` and `age-keygen` (package `age`), `zstd`, PyNaCl
+(`python3-nacl`) and cryptography (`python3-cryptography`). `scripts/bootstrap-ubuntu.sh` installs these four packages: a
+package that is really missing and cannot be added stops that script, an index that cannot be refreshed or a held or not
+downloadable newer version of an installed one does not. That is about the four backup packages only; the step of the five
+Cockpit packages is unchanged and needs the network when something has to be downloaded.
+
+`scripts/manage.py install` on the live root, when it manages the engine, probes the tools the way the engine uses them
+(programs on `util.SAFE_PATH` that answer `--version` within 30 s; the imports and calls in `/usr/bin/python3 -I`) after its own
+checks and before it changes a file. It adds the packages of the tools that do not work with fixed `apt-get` argv: `update`
+(best effort), then `install -y --no-install-recommends --no-remove --reinstall <packages>`; noninteractive, a sanitized
+environment plus the administrator's `http_proxy`/`https_proxy`/`no_proxy`, `NEEDRESTART_SUSPEND=1` (no service is restarted),
+up to 300 s wait for the dpkg lock, never killed while dpkg works (no time limit, Ctrl-C waits). The probes after apt decide,
+not its exit code. The plan (desired files, the Cockpit and cockpit-podman checks) is made again after this step, because apt
+can wait minutes for the lock of an automatic update and what that update changed counts.
+
+When a tool still does not work the update goes on all the same: no refusal because of the environment (an offline device is
+updated). `install` then returns `missing_packages` and one zh-TW notice in `notices` (also on stderr): the names, the reason,
+what cannot be done until they are there, and what to do. The reason is a fixed sentence chosen from what apt wrote (never its
+own lines): no network (a proxy or a portal that asks for a login included), universe not enabled or no source has the
+package, a broken third-party source, signature or validity of a source (no key, expired, not valid yet), the lists or dpkg
+locked by another job, an interrupted dpkg, disk space, an unreadable source list, a held package, a conflict or unmet
+dependencies, package gone or mirror being synchronised; what its lines do not prove is called 原因不明 with the exit code.
+`plan` lists the packages it would add (`packages`). `status` (new; read-only; needs sudo to read the install record) shows
+every tool, also for an engine that `--no-backup` left on the device, and exits 1 while a package is missing. `install`
+returns the packages it added (`packages`). Nothing is probed or run with `--no-backup`, `--root` (a note names the packages) or
+a source tree without the engine, and rollback never removes a package. The engine never runs apt: at run time a missing tool
+still stops only what needs it (`internal-error` that names it).
+
 ## 4. Trusted catalog entry (schema 1)
 
 ```json
@@ -831,7 +859,7 @@ Home Assistant OS backups (Supervisor) are uploaded like any backup and **read**
   bytes must look like gzip or tar, a heuristic). Truncation and tampering are `corrupt-archive`: v3 authenticates every
   chunk and requires exactly the writer's tags and chunk sizes, v2 its padding and plaintext size; v1 has no integrity of
   its own (the gzip CRC/ISIZE or the tar structure catches it). PyNaCl (`python3-nacl`, v3) and cryptography
-  (`python3-cryptography`, v1/v2) are imported only when needed; a missing package is `internal-error` naming it.
+  (`python3-cryptography`, v1/v2) are imported only when needed; a missing package is `internal-error` naming it (`scripts/manage.py install` adds it, section 3).
 * **Member streams**: decrypted, then gunzipped by the engine's own reader (RFC 1952 header parse, raw inflate with
   bounded output, CRC32 and ISIZE checked; a v1 member may end `pad | CRC | 0x0c × 12 | ISIZE`, the trailer securetar
   ≤ 2024.11 wrote because it padded every write, also checked).
@@ -2635,7 +2663,8 @@ the slug after the repository prefix and must carry `system.slug` `woow_ha_opend
    successful or partial scheduled run. Turning the schedule on while 預設加密備份 is on needs the device key and a
    confirmed emergency kit. Every settings change, run, wait, skip, missed slot, result and deletion is journaled. The
    installer names only `woowtech-cockpit-backup-schedule.timer` in systemctl argv, only on the live root, never runs
-   `systemd-analyze verify`, and the unit names stay outside `woowtech-backup-*`.
+   `systemd-analyze verify`, and runs `apt-get` only with the fixed argv and the four package names of section 3,
+   and the unit names stay outside `woowtech-backup-*`.
 18. Home Assistant backups (branch feat/ha-import) are hostile input read only by the strict readers of §5: nothing of
    them is ever extracted with tarfile or GNU tar, every name and type is checked before use, memory stays bounded
    (one ~1 MiB chunk, budgets on members and bytes, bounded decompression). The HA key travels only in the stdin field

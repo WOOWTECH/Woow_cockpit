@@ -1,0 +1,2 @@
+W: Failed to fetch http://no-such-host.invalid/ubuntu/./InRelease  Could not resolve 'no-such-host.invalid'
+W: Some index files failed to download. They have been ignored, or old ones used instead.

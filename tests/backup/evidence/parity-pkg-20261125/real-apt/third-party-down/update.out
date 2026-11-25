@@ -1,0 +1,9 @@
+Ign:1 http://third.example:80/thirdparty noble InRelease
+Ign:2 http://repo.example:80 ./ InRelease
+Get:3 http://repo.example:80 ./ Release [816 B]
+Ign:4 http://repo.example:80 ./ Release.gpg
+Get:5 http://repo.example:80 ./ Packages [1438 B]
+Err:1 http://third.example:80/thirdparty noble InRelease
+  Could not connect to third.example:80 (192.0.2.2). - connect (111: Connection refused)
+Fetched 2254 B in 1s (2211 B/s)
+Reading package lists...

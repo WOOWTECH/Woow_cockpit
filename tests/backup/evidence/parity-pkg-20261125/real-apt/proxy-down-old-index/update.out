@@ -1,0 +1,4 @@
+Ign:1 http://repo.example:80 ./ InRelease
+Err:1 http://repo.example:80 ./ InRelease
+  Could not connect to third.example:80 (192.0.2.2). - connect (111: Connection refused)
+Reading package lists...

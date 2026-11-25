@@ -1,0 +1,1 @@
+installed, index and files reachable: a reinstall works

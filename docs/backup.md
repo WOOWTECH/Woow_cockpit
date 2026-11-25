@@ -461,7 +461,7 @@ Cockpit「備份與還原」頁為 rootless Podman Quadlet 應用建立備份，
 - **這台的 EMQX 沒有在執行**：檢查與轉換都要讀取這台 EMQX 執行中的設定：「這台的 EMQX 沒有在執行，無法讀取它的設定；請先到「應用軟體」啟動 EMQX 後再試一次。」
 - **還原後 EMQX 核對不一致**：還原會停止並自動回復到還原前的狀態，訊息寫出不同的項目，例如「EMQX 還原後的設定（log）和轉換時核對的不同，已停止；通常是轉換之後這台 EMQX 的設定改過，請重新檢查與轉換後再還原。」
 - **檢查或轉換比較久**：Hermes 的資料可能有好幾 GB，EMQX 與 Headscale 的附加元件裡還有 HA 自己建立的映像檔（每個約 100–500 MB，會解開後略過），所以比 Odoo、n8n 久；進度會寫出正在處理哪個應用。
-- **系統缺少 python3-nacl 或 python3-cryptography**：2026 年 3 月以後的 HA 加密備份需要 python3-nacl，較舊的 HA 加密備份需要 python3-cryptography；請重新執行安裝程式（`bootstrap-ubuntu.sh`）後再試。
+- **系統缺少 python3-nacl 或 python3-cryptography**：2026 年 3 月以後的 HA 加密備份需要 python3-nacl，較舊的 HA 加密備份需要 python3-cryptography。安裝或更新 Cockpit 時會自動補裝，所以正常不會看到這句；看到時請管理者重新執行安裝（`sudo python3 scripts/manage.py install`），缺的套件會自動補裝。這台連不到套件庫時，更新仍然照常完成，安裝訊息會說明沒補到哪些套件、原因與怎麼辦；補到之前這些備份讀不了（`sudo python3 scripts/manage.py status` 可以查看，讓這台連上網路或自行安裝這些套件後，再執行一次安裝即可）。
 - **備份元件太舊**：上傳 HA 備份檔時會被拒絕為「這不是 woowtech 備份檔」，頁面另外提示「如果這是 Home Assistant 的備份檔…請先更新備份元件」；匯入相關的按鈕則顯示「這台設備的備份元件版本還不能匯入 Home Assistant 的備份」。請把備份元件更新到與頁面相同的版本。
 
 ## 應用設定：產生與安裝目錄項目
@@ -610,7 +610,7 @@ Cockpit「備份與還原」頁為 rootless Podman Quadlet 應用建立備份，
 | `permission-denied` | 沒有管理員權限；或目錄項目、部署範本與其資料夾的擁有者或權限不安全（不是 root 擁有、可被其他帳號寫入、符號連結）；或擁有者家目錄中的路徑含符號連結 | 在 Cockpit 開啟管理員存取權限；檔案權限由 root 修正（root 擁有，檔案 0644、資料夾 0755） |
 | `not-cancellable` | 作業已進入不能中斷的階段 | 等作業結束；還原失敗時會自動回復 |
 | `job-failed` | 作業步驟失敗：服務無法停止或啟動、資料庫匯出或匯入失敗、資料摘要與備份時不一致（應用不會啟動，作業自動回復）、資料卷含有還原時無法匯入的內容、健康檢查未通過、資料核對不一致、無法建立還原前備份等；「已中斷」的作業也記錄此代碼 | 查看結果訊息與作業紀錄最後幾行；到「服務管理」檢查服務；出現「需人工處理」時，用列出的還原前備份再次還原 |
-| `internal-error` | 未預期的錯誤，例如備份元件安裝不完整或權限不安全、缺少 age 或 zstd、無法啟動背景作業 | 用 `manage.py verify` 檢查、`install` 修復，確認 age 與 zstd 已安裝；查看系統日誌（見 [operations.md](operations.md)） |
+| `internal-error` | 未預期的錯誤，例如備份元件安裝不完整或權限不安全、缺少 age、age-keygen 或 zstd（用 `manage.py status` 查看，重新執行 `install` 會自動補裝）、無法啟動背景作業 | 用 `manage.py verify` 檢查、`install` 修復，確認 age 與 zstd 已安裝；查看系統日誌（見 [operations.md](operations.md)） |
 
 頁面另有幾種非代碼狀態：「找不到備份管理程式」表示這台主機未安裝或未完整安裝備份元件；「管理連線已中斷」時按「重新連線」，已送出的背景作業會繼續、不會重送；「操作回應逾時」時先重新整理確認狀態，再決定是否重試。
 

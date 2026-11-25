@@ -1,0 +1,9 @@
+Reading package lists...
+Building dependency tree...
+The following NEW packages will be installed:
+  python3-cryptography python3-nacl zstd
+The following held packages will be changed:
+  age
+The following packages will be upgraded:
+  age
+1 upgraded, 3 newly installed, 0 to remove and 0 not upgraded.

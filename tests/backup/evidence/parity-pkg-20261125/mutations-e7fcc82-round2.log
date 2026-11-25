@@ -1,0 +1,30 @@
+baseline 0 OK
+caught plan made again from the old state | FAILED (failures=1) | test_the_install_uses_the_new_plan_as_a_whole
+caught notices of the install lost | FAILED (failures=1) | test_the_notices_of_the_install_and_of_the_packages_come_together
+caught reasons: removal needed | FAILED (failures=1) | test_texts_of_apt_that_were_not_provoked_are_told_from_its_catalogue
+caught reasons: unsigned source | FAILED (failures=1) | test_an_install_that_cannot_add_them_goes_on_and_says_what_is_missing
+caught reasons: absent packages decide first | FAILED (failures=1) | test_what_the_downloads_say_beats_what_the_index_lacks
+caught reasons: lock text of apt | FAILED (failures=1) | test_texts_of_apt_that_were_not_provoked_are_told_from_its_catalogue
+caught reasons: ENOSPC | FAILED (failures=1) | test_texts_of_apt_that_were_not_provoked_are_told_from_its_catalogue
+caught reasons: unmet dependencies on stderr | FAILED (failures=1) | test_texts_of_apt_that_were_not_provoked_are_told_from_its_catalogue
+caught reasons: held broken packages | FAILED (failures=1) | test_an_install_that_cannot_add_them_goes_on_and_says_what_is_missing
+caught reasons: Breaks | FAILED (failures=1) | test_texts_of_apt_that_were_not_provoked_are_told_from_its_catalogue
+caught reasons: temporary failure resolving | FAILED (failures=1) | test_texts_of_apt_that_were_not_provoked_are_told_from_its_catalogue
+caught reasons: wicked | FAILED (failures=1) | test_texts_of_apt_that_were_not_provoked_are_told_from_its_catalogue
+caught reasons: cannot initiate the connection | FAILED (failures=1) | test_texts_of_apt_that_were_not_provoked_are_told_from_its_catalogue
+caught reasons: network is unreachable | FAILED (failures=1) | test_texts_of_apt_that_were_not_provoked_are_told_from_its_catalogue
+caught reasons: no route to host | FAILED (failures=1) | test_texts_of_apt_that_were_not_provoked_are_told_from_its_catalogue
+caught reasons: connection timed out | FAILED (failures=1) | test_texts_of_apt_that_were_not_provoked_are_told_from_its_catalogue
+caught reasons: connection failed | FAILED (failures=1) | test_texts_of_apt_that_were_not_provoked_are_told_from_its_catalogue
+caught reasons: connection reset | FAILED (failures=1) | test_texts_of_apt_that_were_not_provoked_are_told_from_its_catalogue
+caught reasons: GPG error | FAILED (failures=1) | test_texts_of_apt_that_were_not_provoked_are_told_from_its_catalogue
+caught reasons: no longer signed | FAILED (failures=1) | test_texts_of_apt_that_were_not_provoked_are_told_from_its_catalogue
+caught reasons: 410 is not gone | FAILED (failures=1) | test_texts_of_apt_that_were_not_provoked_are_told_from_its_catalogue
+caught reasons: unexpected size | FAILED (failures=1) | test_texts_of_apt_that_were_not_provoked_are_told_from_its_catalogue
+caught reasons: no installation candidate | FAILED (failures=1) | test_texts_of_apt_that_were_not_provoked_are_told_from_its_catalogue
+caught reasons: warnings of a source count | FAILED (failures=1) | test_texts_of_apt_that_were_not_provoked_are_told_from_its_catalogue
+caught reasons: a component warning is a problem | FAILED (failures=1) | test_texts_of_apt_that_were_not_provoked_are_told_from_its_catalogue
+caught reasons: an error of no kind is no problem | FAILED (failures=1) | test_texts_of_apt_that_were_not_provoked_are_told_from_its_catalogue
+unnoticed (as a control must be) control: a comment | OK | 
+unnoticed (as a control must be) control: a docstring | OK | 
+mutations 26 caught 26 wrong 0 after 0 OK

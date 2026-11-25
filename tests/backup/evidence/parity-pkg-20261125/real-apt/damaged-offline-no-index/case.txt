@@ -1,0 +1,1 @@
+the packages are installed (a tool does not answer), no index, the repository is not reachable
