@@ -229,6 +229,7 @@ class LeftOutLinksTests(unittest.TestCase):
         members = [{'name': '.', 'type': 'dir', 'uid': 1000, 'gid': 1000},
                    {'name': 'data', 'data': b'd', 'uid': 1000, 'gid': 1000},
                    {'name': 'ok', 'type': 'symlink', 'linkname': 'data', 'uid': 1000, 'gid': 1000},
+                   {'name': 'data-link', 'type': 'hardlink', 'linkname': 'data', 'uid': 1000, 'gid': 1000},
                    {'name': 'gone', 'data': b'g', 'uid': 1000, 'gid': 1000},
                    {'name': 'gone-link', 'type': 'hardlink', 'linkname': 'gone', 'uid': 1000, 'gid': 1000}]
         members += [{'name': f'out{i:02d}', 'type': 'symlink', 'linkname': '../' * (1 + i % 3) + 'etc', 'uid': 1000, 'gid': 1000}
@@ -248,10 +249,11 @@ class LeftOutLinksTests(unittest.TestCase):
         report = habackup.Report(names=haissues.Names)
         path = self.copy_live(3, report)
         kept = self.members(path)
-        self.assertEqual(sorted(kept), ['.', 'data', 'ok'])
+        self.assertEqual(sorted(kept), ['.', 'data', 'data-link', 'ok'])
+        self.assertEqual(kept['data-link'][:2], (tarfile.LNKTYPE, 'data'), 'a link to a file that was copied stays a link')
         self.assertEqual(report.skips['symlink'].first, ['n8n-data：out00', 'n8n-data：out01', 'n8n-data：out02'])
         self.assertEqual(report.skips['hardlink'].first, ['n8n-data：gone-link'], 'a link to a file that was dropped')
-        self.assertEqual(nested.check_volume(path, ids=IDS).members, 3, 'what the restore refuses never reaches it')
+        self.assertEqual(nested.check_volume(path, ids=IDS).members, 4, 'what the restore refuses never reaches it')
         # without a report everything is copied as before, and the restore refuses it
         plain = self.dir / 'plain.tar'
         out = hacommon.FileTar(plain)

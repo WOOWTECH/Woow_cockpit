@@ -938,6 +938,14 @@ class CarryTests(Case):
         self.assertEqual(carried['dirs'], {rel: out_dir / 'dirs' / 'carry-0.tar'})
         self.assertIn(('dir_pack', rel), self.world.calls)
 
+    def test_a_folder_the_restore_would_refuse_is_never_carried(self):
+        rel = '.local/share/odoo/files'
+        self.world.dirs[rel] = self.tar([{'name': '.', 'type': 'dir', 'uid': 1000, 'gid': 1000},
+                                         {'name': './f.txt', 'data': b'x', 'uid': 999999, 'gid': 1000}])   # an owner of no one's range
+        with self.assertRaises(BackupError) as caught:
+            self.carried(dirs=[rel])
+        self.assertEqual(caught.exception.code, 'job-failed')
+
     def test_a_bad_name_or_a_broken_copy_stops_this_app_and_leaves_nothing(self):
         for name in ('../x', 'a b', '', None, 'x/y'):
             with self.subTest(name=name), self.assertRaises(BackupError) as caught:

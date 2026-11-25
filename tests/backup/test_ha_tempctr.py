@@ -474,6 +474,8 @@ class ScopeTests(unittest.TestCase):
         import gc
         first, _runner = self.stuck_first_app()
         self.assertEqual(tempctr.stuck(JOB, 'appowner'), {f'woowbk-{JOB}-hapg'})
+        self.assertEqual(tempctr.stuck(OTHER, 'appowner'), frozenset(), 'only the names of the job that is asked for')
+        self.assertEqual(tempctr.stuck(JOB, 'someone-else'), frozenset(), 'only the owner that is asked for')
         del first
         gc.collect()
         self.assertEqual(tempctr.stuck(JOB, 'appowner'), frozenset())
@@ -745,6 +747,7 @@ class ScaledWaitTests(unittest.TestCase):
                 runner, seen = self.runner()
                 tmp = tempctr.TempObjects(runner, JOB, cpus=None)
                 tmp.scale_to(size)
+                self.assertEqual(tmp.size, 10 if size == 10 else None, 'a size that is no size is not kept')
                 tmp.run('db', 'img:1', [], detach=True, timeout=600)
                 self.assertEqual(seen[('run',)], 600)
         tmp = tempctr.TempObjects(FakeRunner(), JOB, cpus=None)

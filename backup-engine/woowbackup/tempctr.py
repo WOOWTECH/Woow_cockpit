@@ -92,12 +92,11 @@ def stuck(job_id, owner=None, exclude=None):
     """The names of this job's throwaway objects of `owner` (whose Podman storage they are in) that another TempObjects of
     this process still lists -- what it created and could not remove (an app that left something behind), or a sibling that
     is still working: a scoped TempObjects takes a name of its own instead of the same one."""
+    prefix = f'{PREFIX}{job_id}-'
     names = set()
     for other in list(_LIVE):
-        if other is not exclude and other.job_id == job_id and other._owner == owner:
-            names.update(other.containers)
-            names.update(other.volumes)
-            names.update(other.networks)
+        if other is not exclude and other._owner == owner:
+            names.update(name for name in (*other.containers, *other.volumes, *other.networks) if name.startswith(prefix))
     return frozenset(names)
 
 
