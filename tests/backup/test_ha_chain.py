@@ -11,6 +11,7 @@ import errno
 import io
 import json
 import os
+import random
 import signal
 import tarfile
 import tempfile
@@ -22,7 +23,7 @@ from pathlib import Path
 from unittest import mock
 
 from woowbackup import catalog as catalogmod
-from woowbackup import flows, hachain, haissues, jobs, nested
+from woowbackup import flows, habackup, hachain, haissues, jobs, nested
 from woowbackup.errors import BackupError
 
 from . import hafixtures as hx
@@ -1748,11 +1749,11 @@ class OuterFileTests(HaFlowCase):
 
     def test_another_backup_in_its_place_is_one_although_it_opens(self):
         """haimport._open compares the size with what was uploaded: a valid HA file of another size is 'the file changed'."""
-        other = hx.outer_bytes([(f'{hx.ODOO}.tar.gz', hx.addon_member(extra=({'name': 'data/more.bin', 'data': bytes(range(256)) * 64},)))],
+        other = hx.outer_bytes([(f'{hx.ODOO}.tar.gz', hx.addon_member(extra=({'name': 'data/more.bin', 'data': random.Random(1).randbytes(30000)},)))],
                                hx.ha_doc(addons=(hx.ODOO,)))
         self.assertNotEqual(len(other), self.path.stat().st_size)
         self.path.write_bytes(other)
-        with hachain.habackup.open_backup(self.path) as backup:  # it does open: only its size tells
+        with habackup.open_backup(self.path) as backup:  # it does open: only its size tells
             self.assertEqual(backup.layout.size, len(other))
         self.assertTrue(hachain._outer_file_damaged(self.ctx, self.chain))
 
