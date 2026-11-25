@@ -2080,7 +2080,7 @@ def verify_converted(doc, *, expected, db, role, dbname, moves):
     if doc.get('role_settings') != 0:
         problems.append('出現了角色或資料庫層級的設定')
     # The role may create databases (CREATEDB, as on the live cluster): SQL hidden in HA's dump could leave one behind.
-    if doc.get('databases') != sorted({'postgres', 'template0', 'template1', dbname}):
+    if not _same(doc.get('databases'), sorted({'postgres', 'template0', 'template1', dbname})):
         problems.append('資料庫叢集裡有其他資料庫')
     # The dump is restored with --no-acl: a grant on a table or column can only come from SQL hidden in HA's dump.
     if doc.get('grants') != 0:

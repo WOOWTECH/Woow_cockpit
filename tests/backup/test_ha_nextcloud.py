@@ -1483,6 +1483,15 @@ class CheckTests(NextcloudCase):
         sql = '\n'.join(x['sql'] for x in self.world.sessions if x['role'] == 'nc-db')
         self.assertNotIn('UPDATE public.oc_storages', sql)
 
+    def test_another_database_in_the_new_cluster_stops_the_conversion(self):
+        # SQL hidden in HA's dump could make one (the role may create databases): the cluster must hold only its own
+        self.world.catalog_changes = [{'databases': ['nextcloud', 'postgres', 'template0', 'template1', 'evil']}]
+        with self.assertRaises(BackupError) as caught:
+            self.convert(self.upload_nextcloud(), ['nextcloud'])
+        self.assertIn('資料庫叢集裡有其他資料庫', caught.exception.message)
+        self.world.catalog_changes = [{'databases': ['template1', 'template0', 'postgres', 'nextcloud']}]      # the same, in another order
+        self.assertEqual(self.convert(self.upload_nextcloud(), ['nextcloud'])['results'][0]['status'], 'converted')
+
     def test_lists_of_names_are_compared_whatever_their_order(self):
         # the database sorts the names by its own collation (en_US: `_` and `-` do not count, pgcrypto comes before pg_trgm), Python's
         # order is another: the verification compares the names, not the order they came in
