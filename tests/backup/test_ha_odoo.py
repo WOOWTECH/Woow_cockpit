@@ -71,6 +71,16 @@ class VersionTests(unittest.TestCase):
         self.assertFalse(ha_odoo.same_version('18.0.x', '18.0.x'))
         self.assertIsNone(ha_odoo.version_key('1'))
 
+    def test_a_version_of_any_other_text_is_no_version_and_never_a_crash(self):
+        # str.isdigit() accepts a superscript two (int() refuses it) and int() refuses thousands of digits: a manifest of
+        # the backup is any text, and such a version ended the whole check in a ValueError.
+        for text in ('18.0.1.\u00b2', '18.0.\u00b2.1', '18.0.1.' + '9' * 5000, '18.0.1.' + '9' * 19, '\uff11\uff18.0.1',
+                     '18.0.\u0661', '18.0.1.3\n', ' 18.0.1.3', '18.0.-1'):
+            with self.subTest(text=text[:30]):
+                self.assertIsNone(ha_odoo.version_key(text))
+                self.assertFalse(ha_odoo.same_version(text, text))
+        self.assertEqual(ha_odoo.version_key('18.0.1.' + '9' * 18), (18, 0, 1, 10 ** 18 - 1, 0))
+
     def test_manifest_is_read_never_run(self):
         info = ha_odoo.parse_manifest(MANIFEST)
         self.assertEqual(info, {'version': '18.0.1.0.0', 'installable': True, 'python': ['lxml'],
@@ -80,6 +90,26 @@ class VersionTests(unittest.TestCase):
                      b'x' * (ha_odoo.MAX_MANIFEST + 1)):
             with self.subTest(data=data[:30]):
                 self.assertIsNone(ha_odoo.parse_manifest(data))
+
+    def test_dependencies_that_are_no_list_make_the_manifest_unreadable_and_never_a_crash(self):
+        # A manifest of the backup is data nobody vouches for: `external_dependencies` entries Odoo cannot go through (a
+        # number, a flag, a single string, a dict that has keys) made the strict pass end in a TypeError, an unexplained
+        # failure of the whole app; now the module simply has no readable manifest (a module the device lacks, then).
+        for entry in ('5', 'True', '3.5', "'requests'", "{'a': 1}", '1j'):
+            for key in ('python', 'bin'):
+                data = f"{{'version': '1.2', 'external_dependencies': {{'{key}': {entry}}}}}".encode()
+                with self.subTest(data=data):
+                    self.assertIsNone(ha_odoo.parse_manifest(data))
+        # what is plainly nothing (or a list of anything) is read as before
+        for entry in ('None', '[]', '()', '{}', "''"):
+            data = f"{{'external_dependencies': {{'python': {entry}, 'bin': {entry}}}}}".encode()
+            with self.subTest(data=data):
+                self.assertEqual(ha_odoo.parse_manifest(data), {'version': '18.0.1.0', 'installable': True,
+                                                                 'python': [], 'bin': []})
+        info = ha_odoo.parse_manifest(b"{'external_dependencies': {'python': ('lxml', 3, 'pytz'), 'bin': ['a', None]}}")
+        self.assertEqual((info['python'], info['bin']), (['lxml', 'pytz'], ['a']))
+        many = ha_odoo.parse_manifest(("{'external_dependencies': {'python': [" + ', '.join(f"'p{i}'" for i in range(80)) + "]}}").encode())
+        self.assertEqual(len(many['python']), 50)
 
 
 def details(modules, **counts):

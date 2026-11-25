@@ -198,9 +198,11 @@ def adapt_version(version):
 
 
 def version_key(value):
-    """verify-modules.py's comparison key: 2-5 numeric parts padded to 5, None when it is not such a version."""
+    """verify-modules.py's comparison key: 2-5 numeric parts padded to 5, None when it is not such a version. The parts are
+    ASCII digits of at most 18 (a manifest of the backup may hold any text: `str.isdigit()` also accepts a superscript two,
+    which int() refuses, and a part of thousands of digits is refused by int() too -- both ended the check in a ValueError)."""
     parts = str(value or '').split('.')
-    if not 2 <= len(parts) <= 5 or not all(part.isdigit() for part in parts):
+    if not 2 <= len(parts) <= 5 or not all(part.isascii() and part.isdigit() and len(part) <= 18 for part in parts):
         return None
     return tuple(int(part) for part in parts + ['0'] * (5 - len(parts)))
 
@@ -225,10 +227,22 @@ def parse_manifest(data):
     if not isinstance(version, (str, int, float)):
         return None
     external = doc.get('external_dependencies') if isinstance(doc.get('external_dependencies'), dict) else {}
-    python = [d for d in external.get('python', []) or [] if isinstance(d, str)][:50]
-    binaries = [d for d in external.get('bin', []) or [] if isinstance(d, str)][:50]
+    python, binaries = _dependency_names(external.get('python')), _dependency_names(external.get('bin'))
+    if python is None or binaries is None:   # not a list: Odoo cannot go through it either, so the manifest is no manifest
+        return None
     return {'version': adapt_version(version), 'installable': doc.get('installable', True) is not False,
             'python': python, 'bin': binaries}
+
+
+def _dependency_names(value):
+    """The names in one `external_dependencies` entry (Odoo goes through it): the strings of a list or tuple (at most 50),
+    nothing when the entry is not there, None when it is another kind of value (a number or a single string would only be
+    taken apart into nothing useful, or end the check with a TypeError)."""
+    if value is None or (isinstance(value, (str, dict, set, frozenset)) and not value):   # nothing to go through
+        return []
+    if not isinstance(value, (list, tuple)):
+        return None
+    return [d for d in value if isinstance(d, str)][:50]
 
 
 # ====================================================================== the add-on member
