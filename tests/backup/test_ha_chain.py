@@ -1746,6 +1746,16 @@ class OuterFileTests(HaFlowCase):
         self.path.write_bytes(self.path.read_bytes()[:-2048])
         self.assertTrue(hachain._outer_file_damaged(self.ctx, self.chain))
 
+    def test_another_backup_in_its_place_is_one_although_it_opens(self):
+        """haimport._open compares the size with what was uploaded: a valid HA file of another size is 'the file changed'."""
+        other = hx.outer_bytes([(f'{hx.ODOO}.tar.gz', hx.addon_member(extra=({'name': 'data/more.bin', 'data': bytes(range(256)) * 64},)))],
+                               hx.ha_doc(addons=(hx.ODOO,)))
+        self.assertNotEqual(len(other), self.path.stat().st_size)
+        self.path.write_bytes(other)
+        with hachain.habackup.open_backup(self.path) as backup:  # it does open: only its size tells
+            self.assertEqual(backup.layout.size, len(other))
+        self.assertTrue(hachain._outer_file_damaged(self.ctx, self.chain))
+
     def test_a_file_that_is_no_longer_a_backup_is_one(self):
         self.path.write_bytes(b'x' * self.path.stat().st_size)
         self.assertTrue(hachain._outer_file_damaged(self.ctx, self.chain))
