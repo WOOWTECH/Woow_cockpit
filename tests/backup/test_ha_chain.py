@@ -180,7 +180,8 @@ class ParamsTests(unittest.TestCase):
                 ('index type', lambda p: p['group'].update(index=True)), ('count', lambda p: p['group'].update(count=2)),
                 ('app', lambda p: p['group'].update(app_id='Odoo')), ('restore kind with a convert step',
                                                                          lambda p: p['group'].update(kind='ha-restore')),
-                ('apps do not hold the app', lambda p: p['chain']['apps'].__setitem__(0, 'n8n')),
+                ('apps do not hold the app at its index', lambda p: p['chain'].update(apps=['n8n', 'odoo', 'emqx'])),
+                ('apps do not hold the app', lambda p: p['chain'].update(apps=['n8n', 'hermes', 'emqx'])),
                 ('apps twice', lambda p: p['chain']['apps'].__setitem__(1, 'odoo')),
                 ('apps type', lambda p: p['chain'].update(apps='odoo')), ('no chain', lambda p: p.pop('chain')),
                 ('no group', lambda p: p.pop('group')), ('chain type', lambda p: p.update(chain=[])),
@@ -237,6 +238,9 @@ class ParamsTests(unittest.TestCase):
                                            'step': 'convert', 'app_id': 'n8n'})
         _t, odoo = hachain._step_job(chain, group, record, 'convert', 'odoo', [], None)
         self.assertEqual(odoo['odoo_database'], 'prod', 'the chosen Odoo database goes to the conversion of Odoo only')
+        odd = hachain.chain_of(self.params(choices={'odoo': {'database': 'prod'}, 'n8n': {'database': 'not-for-n8n'}}))
+        _t, other = hachain._step_job(odd, group, record, 'convert', 'n8n', [], None)
+        self.assertIsNone(other['odoo_database'], 'a database choice of another app is never taken for Odoo\'s')
         self.assertEqual(params['chain']['apps'], APPS)
         self.assertEqual(params['chain']['results'], [])
 
