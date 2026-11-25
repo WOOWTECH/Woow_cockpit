@@ -90,9 +90,10 @@ PACKAGE_RE = re.compile(r'(?:@[a-z0-9][a-z0-9._-]{0,100}/)?[a-z0-9][a-z0-9._-]{0
 # no key; the text is only ever written into a JSON file (json.dumps), never into a command line.
 KEY_RE = re.compile(r'[^\x00-\x1f\x7f-\x9f]{1,1024}\Z')
 MASK_MIN = 4                            # a key shorter than this cannot be hidden from a log without hiding ordinary text
-# A container whose image is one of these keeps n8n's queue: its volume is emptied by the import (HA's queued jobs never run
-# here), every other volume of the app is this device's own data and goes along as it is (N8-02).
-QUEUE_IMAGE_RE = re.compile(r'(?:^|[/_-])(?:valkey|redis)(?:$|[/_:@-])', re.I)
+# A container whose image is named valkey or redis (the last part of the name: `valkey/valkey:8`, `library/redis:7`,
+# `woow-valkey:2026`) keeps n8n's queue: its volume is emptied by the import (HA's queued jobs never run here), every other
+# volume of the app is this device's own data and goes along as it is (N8-02).
+QUEUE_REPOSITORY_RE = re.compile(r'(?:^|[-_.])(?:valkey|redis)(?:$|[-_.])')
 NO_OWNER = 'HA 的 n8n 還沒建立管理者帳號，沒有可搬的資料。'
 # Tables a fresh PostgreSQL schema fills during its migrations or that are not entities of the export; their rows are
 # not compared (the rest must match exactly: import:entities exits 0 even when it skipped a table).
@@ -829,9 +830,15 @@ def _queue_image(quadlets, users):
             image = tempctr.quadlet_image(quadlets[file])
         except BackupError:
             return None
-        if not image or not QUEUE_IMAGE_RE.search(image):
+        if not image or not _is_queue_image(image):
             return None
     return image
+
+
+def _is_queue_image(image):
+    """True when the name of the image's repository (no registry, no organisation, no tag) says Valkey or Redis."""
+    repository = image.split('@', 1)[0].rsplit('/', 1)[-1].split(':', 1)[0].lower()
+    return QUEUE_REPOSITORY_RE.search(repository) is not None
 
 
 def _queue_owner(tmp, image):
