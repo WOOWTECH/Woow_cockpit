@@ -975,7 +975,7 @@ def cmd_restore_start(svc, req):
             svc.archive.read_manifest(path, [identity])
         svc.keys.import_key(key_text)
         key_text = None
-    confirm_restore(svc, req, header, key_text)
+    confirm_restore(svc, req, header, key_text, meta)
     created = ensure_key(svc, 'restore') if _needs_safety_key(svc, req['apps']) else False
     apps = list(req['apps'])
     params = {'backup_id': req['backup_id'], 'apps': apps, 'key_provided': key_text is not None}
@@ -1034,12 +1034,12 @@ def _needs_safety_key(svc, app_ids):
     return False
 
 
-def confirm_restore(svc, req, header, key_text):
+def confirm_restore(svc, req, header, key_text, meta=None):
     """Refuses a restore whose preflight has lines to confirm that the request does not confirm (`confirmation-required`,
     `details.apps`; nothing started). Only adapters that report such lines (`restore_issues`, a class attribute) are
     asked; one that cannot be made is the job's to report."""
     adapters = {}
-    ha_import = flows.from_ha(svc.paths, req['backup_id'])
+    ha_import = flows.from_ha(svc.paths, req['backup_id'], meta)  # (the same answer the job gets: the note counts while the registry cannot be read)
     for app in flows.resolve_apps(svc.catalog(), req['apps']):
         with contextlib.suppress(BackupError):
             adapter = svc.adapter(app)

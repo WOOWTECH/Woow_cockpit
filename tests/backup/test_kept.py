@@ -129,6 +129,15 @@ class ConvertedBackupCliTests(CliCase):
         self.assertNotIn('error', got)
         self.assertEqual(self.params(got['job_id'])['acknowledged'], {'woowbk-demo': [self.key()]})
 
+    def test_a_registry_that_cannot_be_read_gives_the_same_answer_as_the_job(self):
+        """While ha-imports.json cannot be read the note of a converted backup tells (the rule the job and retention use): the
+        command asks for the lines exactly like the job will, so a restore is not started only to stop at its first step."""
+        self.storage.index[self.backup_id]['note'] = haimport.NOTE_PREFIX + '示範'
+        with mock.patch.object(haimport, 'load_registry', return_value=None):
+            got = self.call(['restore-start'], self.request())
+        self.assertEqual(got['error']['code'], 'confirmation-required')
+        self.assertEqual(self.launched, [])
+
     def test_an_ordinary_backup_is_not_asked(self):
         got = self.call(['restore-start'], self.request())
         self.assertNotIn('error', got)
