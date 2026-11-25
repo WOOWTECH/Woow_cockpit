@@ -15,7 +15,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from woowbackup import ha_n8n, habackup, haissues, jobs
+from woowbackup import ha_n8n, ha_odoo, habackup, haissues, jobs
 from woowbackup.errors import BackupError
 from woowbackup.haissues import Sink
 from woowbackup.podman import Result
@@ -1730,6 +1730,48 @@ class RealN8nBackupTests(unittest.TestCase):
         sink = Sink('n8n')
         ha_n8n.analyse_data(sink, src, info)
         self.assertEqual([issue.id for issue in sink.found], [])
+
+    def test_the_real_arm_made_n8n_addons_are_read_too_and_a_native_node_for_another_processor_is_told(self):
+        """The add-ons of the real backups made on the ARM test machine (Supervisor of 2026-11-19, plain): the same reader on a
+        second processor (`aarch64`); `woow-arm-native` holds a native community node for that processor, which an x86-64
+        device cannot run (a notice, never a stop). Only structure is asserted, nothing is printed."""
+        base = Path(os.environ['WOOWBK_HA_FIXTURES']).parent / '20261119-arm'
+        x86 = ha_odoo.host_elf_machine() in (None, ha_odoo.EM_X86_64)
+        read = 0
+        for name, native in (('woow-arm-plain', False), ('woow-arm-downloaded', False), ('woow-arm-native', True)):
+            path = base / name / f'{name}.tar'
+            if not path.exists():
+                continue
+            read += 1
+            with self.subTest(backup=name):
+                tmp = tempfile.TemporaryDirectory()
+                self.addCleanup(tmp.cleanup)
+                root = Path(tmp.name)
+                (root / 'stage').mkdir()
+                report = habackup.Report(names=haissues.Names)
+                with habackup.open_backup(path) as ha:
+                    member = next(m for m in ha.layout.members
+                                  if m.role == 'addon' and m.name.endswith(('woow-n8n.tar.gz', 'woow-n8n.tar')))
+                    with ha.open_member(member.name, None) as stream:
+                        src = ha_n8n.scan_member(stream, report, root / 'stage')
+                self.addCleanup(lambda src=src: src.key and jobs.unmask_secret(src.key))
+                self.assertTrue(report.complete)
+                self.assertEqual(report.skip_count(), 0, 'nothing of a real n8n add-on is left out')
+                self.assertEqual((src.addon.slug, src.addon.arch), ('woow-n8n', 'aarch64'))
+                self.assertEqual(sorted(src.sqlite), ['database.sqlite', 'database.sqlite-wal'])
+                self.assertIsNotNone(src.key)
+                self.assertTrue(src.packages, 'the community package of the test machine is listed')
+                info = ha_n8n.inspect_sqlite(src.sqlite['database.sqlite'])
+                self.assertTrue(info['owner_ok'])
+                sink = Sink('n8n')
+                ha_n8n.analyse_data(sink, src, info)
+                levels = {issue.id: issue.level for issue in sink.found}
+                self.assertEqual(levels.get('n8n.community-packages'), 'notice')
+                self.assertEqual('n8n.native-code' in levels, native and x86, levels)
+                self.assertEqual([i.id for i in sink.found if i.level in ('stop', 'confirm')], [],
+                                 'nothing of a real ARM-made n8n stops it or asks')
+        if not read:
+            self.skipTest('the ARM-made real backups are not next to WOOWBK_HA_FIXTURES')
 
 
 if __name__ == '__main__':
