@@ -1374,14 +1374,15 @@ def version_issues(addon_version, target):
 
 
 def schema_stops(sink, ha_schema, live):
-    """The shape of HA's tables against this device's live ones (L-09) and what else this device's database holds (L-38)."""
+    """The shape of HA's tables against this device's live ones (L-09) and what else this device's database holds (L-38).
+    The conversion asks it twice (before the capture, and of the captured schema): a line already said is not said twice."""
     differ = schema_differences(ha_schema, live)
     if differ:
         sink.stop('litellm.schema-differs', schema_blocker(differ),
                   action='請把 HA 和這台的 LiteLLM 更新到同一版，在 HA 重新備份後再匯入。')
     others = other_schemas(live)
     if others:
-        sink.confirm('litellm.other-schemas', OTHER_SCHEMAS, others)
+        again(sink, 'litellm.other-schemas', OTHER_SCHEMAS, others)
         if not keep_supported():
             sink.stop('litellm.keep-unsupported', KEEP_UNSUPPORTED,
                       action='請先更新這台的備份元件（需要能保留匯入前備份的版本），再匯入。')
@@ -1411,6 +1412,9 @@ def _prepare(work, app, sink):
     hatarget.ensure_image(work, app, target.db_image)
     version = target_version(work, app, target)
     migrations = live_migrations(work, app, target)
+    if migrations is None:   # L-08: also after the proxy's first start the migrations cannot be read: nothing to compare with
+        raise _stop(app, 'litellm.target-migrations', MIGRATIONS_UNREADABLE,
+                    '請先在這台啟動 LiteLLM，等它建好資料庫（約一兩分鐘）後再重新檢查；仍然不行時請把作業紀錄交給工程人員。')
     return target, version, migrations
 
 
@@ -1812,6 +1816,7 @@ def convert(work, app, test_mode, out_dir):
     moves_config = settings_issues(sink, settings)   # L-13, L-14, L-47: before anything else is read
     schema_dump = staging / 'target-schema.dump'
     work.log('讀取這台 LiteLLM 自己的資料庫結構（同一個快照；前後比對確認期間沒有結構變更）')
+    schema_stops(sink, ha_schema, live_schema(work, app, target))   # before anything is captured: the shape, what else is there
     trusted = trusted_schema(work, app, target, schema_dump, migrations)
     schema_stops(sink, ha_schema, trusted)
     require_names(trusted, app)
