@@ -344,6 +344,11 @@ class AdapterKeptCase(strength.StrengthCase):
         adapter.job_id = 'j20261125T100000Z-aaaaaaaa'
         return adapter
 
+    def manifest(self):
+        return {'id': 'woowbk-demo', 'adapter': 'quadlet-postgres', 'adapter_version': 1, 'catalog_sha256': self.app.sha256,
+                'owner': {'name': 'appowner', 'uid': 1001}, 'postgres': [], 'volumes': [], 'secrets': [], 'config_files': [],
+                'quadlet_files': [], 'images': []}
+
 
 class KeptClusterTests(AdapterKeptCase):
     def test_the_check_lists_the_other_databases_in_one_line_to_confirm(self):
@@ -375,11 +380,6 @@ class KeptClusterTests(AdapterKeptCase):
         self.owner.db['databases'] = {'notes'}
         self.adapter.preflight(self.manifest(), mode='inplace')
         self.assertEqual((self.adapter.restore_issues, self.adapter.kept_wanted), ([], []))
-
-    def manifest(self):
-        return {'id': 'woowbk-demo', 'adapter': 'quadlet-postgres', 'adapter_version': 1, 'catalog_sha256': self.app.sha256,
-                'owner': {'name': 'appowner', 'uid': 1001}, 'postgres': [], 'volumes': [], 'secrets': [], 'config_files': [],
-                'quadlet_files': [], 'images': []}
 
     def test_the_copy_stops_the_service_and_takes_the_cold_copy_and_every_database(self):
         self.adapter.preflight(self.manifest(), mode='inplace')
@@ -443,6 +443,65 @@ class KeptClusterTests(AdapterKeptCase):
             adapter._run_sql(container, 'notes', 'template1', 'CREATE ROLE b;\n')
         self.assertIn('沒有完整送達', caught.exception.message)
         self.assertEqual(caught.exception.code, 'job-failed')
+
+
+class KeptRestoreAndRollbackTests(AdapterKeptCase):
+    """The adapter's restore of a service whose copy was kept: the refusal of the other databases is no longer needed, and a
+    rollback puts the data volume back whole from the cold copy instead of rebuilding it from the dump."""
+
+    def restore_case(self):
+        manifest, entries = self.run_backup()
+        extract = self.root / 'job' / 'extract'
+        extract.mkdir(parents=True)
+        extract_entries(entries, extract)
+        return manifest, extract
+
+    def test_a_restore_without_the_copy_refuses_the_other_databases_and_with_it_does_not(self):
+        manifest, extract = self.restore_case()
+        refusing = self.converted()
+        with self.assertRaises(BackupError) as caught:
+            refusing.restore(manifest, extract, mode='inplace')
+        self.assertIn('還有應用設定未宣告的資料庫', caught.exception.message)
+        self.assertEqual(self.owner.units['woowbk-demo-db.service'], 'active', 'refused before anything stopped')
+        self.adapter.preflight(self.manifest(), mode='inplace')
+        self.adapter.keep_cluster(self.work)
+        self.adapter.restore(manifest, extract, mode='inplace')
+        self.assertTrue(any(a[:3] == [PODMAN, 'volume', 'rm'] for a in self.owner.argvs()))
+
+    def test_a_rollback_puts_the_cold_copy_back_whole_and_does_not_rebuild_the_database_from_the_dump(self):
+        manifest, extract = self.restore_case()
+        self.adapter.preflight(self.manifest(), mode='inplace')
+        _section, _entries, info = self.adapter.keep_cluster(self.work)
+        rollback = self.converted()
+        self.owner.calls.clear()
+        rollback.restore(manifest, extract, mode='inplace', rollback=True, kept_volumes=info['volumes'])
+        argvs = self.owner.argvs()
+        self.assertIn([PODMAN, 'volume', 'import', 'woowbk-demo-pgdata', '-'], argvs, 'the cold copy is imported')
+        self.assertFalse(any('pg_restore' in a for a in argvs), 'nothing is rebuilt from the pre-restore dump')
+        self.assertTrue(any('已用保留的完整複本整個放回' in line for line in self.logs), self.logs)
+        ordinary = self.converted()
+        ordinary.job_id = 'j20261125T100000Z-bbbbbbbb'
+        self.owner.calls.clear()
+        ordinary.restore(manifest, extract, mode='inplace', rollback=True)
+        self.assertTrue(any('pg_restore' in a for a in self.owner.argvs()), 'without a copy the rollback uses the dump')
+
+
+class KeepSafetyManifestTests(unittest.TestCase):
+    """The L-38 pin API: the optional `keep_safety` key of an app section is `true` or the archive is invalid."""
+
+    def test_only_true_is_accepted(self):
+        from woowbackup import archive
+        from .test_archive import APP
+        from .test_archive_v2 import small_inner
+        inner = small_inner(APP, 'AAAA-BBBB-CCCC-DDDD', {f'apps/{APP}/secrets/db-password': b'x'})
+        archive.validate_app_manifest(inner)
+        inner['app']['keep_safety'] = True
+        archive.validate_app_manifest(inner)
+        for bad in (False, 'yes', 1, None):
+            with self.subTest(bad=bad), self.assertRaises(BackupError) as caught:
+                inner['app']['keep_safety'] = bad
+                archive.validate_app_manifest(inner)
+            self.assertEqual(caught.exception.code, 'invalid-manifest')
 
 
 if __name__ == '__main__':
