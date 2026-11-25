@@ -2242,6 +2242,21 @@ function v2Issue(app, level, id, message, { items = [], more = 0, action = '', d
   if (level === 'confirm') issue.key = keyOf(app, id, items, database);
   return issue;
 }
+// The record of one job of an import chain as `job-status` answers it (hachain.py `_step_job`): `done` are the GroupResults
+// known when it was written.
+const V2_GROUP = 'g1a2b3c4d5e6f0042';
+function v2ChainRecord({ app = 'n8n', step = 'convert', index = 1, state = 'running', done = [], id = J_HA_RUN, apps = ['odoo', 'n8n'] } = {}) {
+  const params = { ...(step === 'convert' ? { source: 'ha', ha_backup_id: HA_V2, apps: [app], odoo_database: app === 'odoo' ? 'prod' : null, test_mode: false, encrypt: true, key_provided: false }
+    : { backup_id: B_V2[app], apps: [app], key_provided: false, ha_backup_id: HA_V2 }),
+  group: { id: V2_GROUP, index, count: apps.length, kind: 'ha-import', step, app_id: app },
+  chain: { apps, test_mode: false, then_restore: true, encrypt: true, key_provided: false, ha_backup_id: HA_V2, acknowledged: {}, choices: {}, results: done } };
+  const kind = step === 'convert' ? 'ha-convert' : 'restore';
+  const job = step === 'convert' ? haJob(id, kind, state, '2026-11-25T03:20:00Z', { params })
+    : { ...haJob(id, 'ha-convert', state, '2026-11-25T03:20:00Z'), type: 'restore', phase: 'restore', phases: phasesAt('restore', 'restore'), params };
+  if (step === 'convert') Object.assign(job, { phase: 'convert', phases: phasesAt('ha-convert', 'convert') });
+  Object.assign(job, { cancellable: true, params });
+  return { job, log: ['2026-11-25T03:20:01Z 階段：進行中'], steps: [] };
+}
 const V2_PAUSES = v2Issue('_shared', 'confirm', 'shared.pauses', '匯入時會先暫停下列服務，完成後自動啟動回來（約 2 分鐘）。', { items: ['檔案管理 filebrowser', 'code-server'] });
 const V2_DEVICE_KEY = v2Issue('_shared', 'auto', 'shared.device-key', '這台還沒有加密金鑰：匯入開始時會自動建立一把，完成後請下載並保存緊急金鑰。');
 const V2_ODOO_MODULES = v2Issue('odoo', 'confirm', 'odoo.missing-modules', 'HA 的資料庫「prod」有 1 個模組這台沒有；匯入後它們顯示為未安裝，下次更新 Odoo 會被擋下。', { items: ['website_sale_extra'], database: 'prod' });
@@ -6712,6 +6727,29 @@ try {
       await route.fulfill({ response, body });
     }) });
 
+  await check('HAOS 一次確認: when every try ran out of time the status decides: the job the engine started is found and followed (UI-22)',
+    v2Fixture(), async page => {
+      await ready(page);
+      await v2Check1(page, { keep: ['odoo', 'n8n'] });
+      await page.locator('#ha-db-0').check();
+      await page.locator('#ha-ack').check();
+      await page.evaluate(() => window.__fixture.hold.push('ha-import-start'));
+      await v2Import(page).click();
+      await page.waitForFunction(() => window.testcalls.filter(call => call.argv[1] === 'ha-import-start').length >= 1);
+      // The engine did start the import (the answer was lost): its first job is the active one now.
+      const record = v2ChainRecord({ app: 'odoo', index: 0, id: J_HA_RUN });
+      await page.evaluate(([id, item]) => { window.__fixture.jobs[id] = item; window.__fixture.status.active_job = structuredClone(item.job); }, [J_HA_RUN, record]);
+      await page.locator('.ha-group-list').waitFor({ timeout: 30000 });
+      assert.equal(await activeStep(page), '匯入');
+      assert.equal(await page.locator('.ha-group-row[data-ha-app="odoo"]').getAttribute('data-status'), 'pending');
+      assert.match(await page.locator('.ha-group-row[data-ha-app="odoo"]').textContent(), /轉換中/);
+      assert.equal(await page.locator('.wizard-card .notice-error').count(), 0, 'nothing is reported as failed');
+    }, { beforeGoto: async (page, context) => context.route('**/backup.js', async route => {
+      const response = await route.fetch();
+      const body = (await response.text()).replace('"ha-import-start": 120000', '"ha-import-start": 400').replace('const HA_START_PAUSE_MS = 3000;', 'const HA_START_PAUSE_MS = 50;');
+      await route.fulfill({ response, body });
+    }) });
+
   await check('HAOS 一次確認: a key with a Tab is tried as it is and a refusal says why it may have failed; only an empty key stops the page (UI-12)',
     v2Fixture({ meta: v2Meta({ protected: true, addons: v2Meta().addons.map(addon => ({ ...addon, encrypted: true })) }) }), async page => {
       await ready(page);
@@ -6830,15 +6868,10 @@ try {
   await check('HAOS 一次確認: a job of an import found again after a reload shows every app of the import, what became of each, and the way to the next job',
     (() => {
       const data = v2Fixture();
-      const group = 'g1a2b3c4d5e6f0042';
-      const chainParams = (results, step, app) => ({ source: 'ha', ha_backup_id: HA_V2, apps: [app], odoo_database: app === 'odoo' ? 'prod' : null, test_mode: false, encrypt: true, key_provided: false,
-        group: { id: group, index: app === 'odoo' ? 0 : 1, count: 2, kind: 'ha-import', step, app_id: app },
-        chain: { apps: ['odoo', 'n8n'], test_mode: false, then_restore: true, encrypt: true, key_provided: false, ha_backup_id: HA_V2, acknowledged: {}, choices: {}, results } });
       const done = { app_id: 'odoo', status: 'imported', convert_job_id: J_HA_CONVERT, restore_job_id: J_HA_RESTORE, backup_id: B_V2.odoo, safety_backup_id: B_V2_SAFETY.odoo, code: null, message: null };
-      const running = haJob(J_HA_RUN, 'ha-convert', 'running', '2026-11-25T03:20:00Z', { params: chainParams([done], 'convert', 'n8n') });
-      Object.assign(running, { phase: 'convert', phases: phasesAt('ha-convert', 'convert'), cancellable: true });
-      data.jobs = { [J_HA_RUN]: { job: running, log: ['2026-11-25T03:20:01Z 階段：轉換資料'], steps: [] } };
-      data.status.active_job = structuredClone(running);
+      const record = v2ChainRecord({ done: [done] });
+      data.jobs = { [J_HA_RUN]: record };
+      data.status.active_job = structuredClone(record.job);
       return data;
     })(), async page => {
       await ready(page);

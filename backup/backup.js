@@ -4034,7 +4034,7 @@
     Object.assign(wizard, { busy: true, error: null, notice: null, keyError: null });
     render();
     try {
-      const data = await haStartCall(wizard, "ha-check-start", request);
+      const data = await haStartCall(wizard, "ha-check-start", request, job => job.type === "verify" && job.params?.source === "ha" && job.params.ha_backup_id === wizard.haId);
       requireShape(isString(data.job_id) && JOB_ID_RE.test(data.job_id), "作業資訊");
       if (state.haWizard !== wizard) return;
       Object.assign(wizard, { requestId: null, signature: "", step: "check", jobId: data.job_id, check: null, checkJobId: data.job_id,
@@ -4533,7 +4533,8 @@
     if (key) request.key = key;
     let data;
     try {
-      data = await haStartCall(wizard, "ha-convert-start", request);
+      data = await haStartCall(wizard, "ha-convert-start", request, job => job.type === "backup" && job.params?.source === "ha" && !groupOf(job)
+        && job.params.ha_backup_id === wizard.haId);
     } catch (error) {
       if (unsupported(error)) throw new HelperError(HA_UNSUPPORTED, { code: "unsupported" });
       if (!["key-required", "wrong-key"].includes(error.code) || state.haWizard !== wizard) throw error;
@@ -4844,8 +4845,10 @@
   // ------------------------------------------------------------------ starting the import and following its chain
 
   // A start that is answered `timeout`: the job may have started. The same request (same request id) is sent again, so
-  // the engine answers with the job it already has; the status is read in between (UI-22).
-  async function haStartCall(wizard, command, request) {
+  // the engine answers with the job it already has; the status is read in between (UI-22). When every try ran out of time,
+  // the status decides: an active HA job of this HA backup that this page did not know before is the one that was started
+  // (the page never starts while another job runs), and the page follows it; else the customer is told in words.
+  async function haStartCall(wizard, command, request, adopt = null) {
     let last = null;
     for (let attempt = 1; attempt <= HA_START_TRIES; attempt += 1) {
       try {
@@ -4855,11 +4858,21 @@
         last = error;
         wizard.notice = "回應比較久，作業可能已經開始。正在重新確認它的狀態…";
         render();
-        loadStatus({ quiet: true });
-        if (attempt < HA_START_TRIES) await new Promise(resolve => setTimeout(resolve, HA_START_PAUSE_MS));
+        if (attempt < HA_START_TRIES) {
+          loadStatus({ quiet: true });
+          await new Promise(resolve => setTimeout(resolve, HA_START_PAUSE_MS));
+        }
       }
     }
     wizard.notice = null;
+    try {
+      const data = await call("status");
+      const job = isObject(data.active_job) && validJob(data.active_job) ? data.active_job : null;
+      if (job && adopt && ACTIVE.has(job.state) && adopt(job)) {
+        state.status = data;
+        return { job_id: job.id, deduplicated: true, group: groupOf(job)?.id ?? null, key_created: false };
+      }
+    } catch { /* the words below say what to do */ }
     throw new HelperError("這台設備還沒有回應，作業可能已經開始。請再按一次剛才的按鈕：不會重複開始，只會接上同一個作業；"
       + "也可以到「活動紀錄」看有沒有進行中的作業。", { code: "timeout", details: last?.details });
   }
@@ -4892,7 +4905,8 @@
     Object.assign(wizard, { busy: true, error: null, notice: null, keyError: null });
     render();
     try {
-      const data = await haStartCall(wizard, "ha-import-start", request);
+      const data = await haStartCall(wizard, "ha-import-start", request, job => job.params?.source === "ha" && groupOf(job)?.kind === "ha-import"
+        && job.params.ha_backup_id === wizard.haId);
       requireShape(isString(data.job_id) && JOB_ID_RE.test(data.job_id), "作業資訊");
       if (state.haWizard !== wizard) return;
       // The engine holds the HA key for the whole import now: the page does not need it any more.
