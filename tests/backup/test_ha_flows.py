@@ -21,7 +21,7 @@ from woowbackup.podman import Result
 from . import hafakes
 from . import hafixtures as hx
 from .test_ha_import import FlowCase, HaWorld
-from .test_ha_odoo import MANIFEST, QUADLETS, odoo_tar
+from .test_ha_odoo import MANIFEST, QUADLETS, elf, odoo_tar
 
 WEB_ID = 'sha256:' + 'b' * 64
 MARKER = json.dumps({'digest': WEB_ID, 'core_date': '18.0.20260926'}, separators=(',', ':'))
@@ -139,6 +139,7 @@ class FakeOwner:
 
     def relay(self, args, *, stdout, timeout=None, max_output=None, check=True, abort=None):
         self.calls.append(('relay', *args))
+        self.limits.append((('relay', *args), timeout, max_output))
         stdout.write(self.world.export(args[-1]))
         return Result(0, None, b'')
 
@@ -173,6 +174,7 @@ class FakeAdapter:
     def import_manifest(self, staging_dir, **items):
         self.world.manifests[self.app.id] = items
         self.world.volume_data = {name: Path(source).read_bytes() for name, source in (items.get('volumes') or {}).items()}
+        self.world.dir_data = {rel: Path(source).read_bytes() for rel, source in (items.get('dirs') or {}).items()}
         from woowbackup.archive import Entry
         from woowbackup.adapters.quadlet_postgres import file_digest
         entries = []
@@ -211,6 +213,8 @@ class World(HaWorld):
                                 ['pgcrypto', True], ['dblink', False]]
         self.ha_extensions = [['plpgsql', '1.0'], ['pg_trgm', '1.6']]
         self.ha_databases = [['woowtest', 9000000, 'C', 'C']]
+        self.extensions_by_db = {}
+        self.dir_data = {}
         self.scan_broken = []
         self.live_db_stopped = False
         self.superuser_kinds = []
@@ -271,6 +275,8 @@ class World(HaWorld):
         return Result(0, b'', b'')
 
     def export(self, volume):
+        if volume == 'odoo-extra-vol':
+            return tar_of([{'name': '.', 'type': 'dir'}, {'name': 'kept.txt', 'data': b'this device'}])
         if volume == 'odoo18-web-data':
             return tar_of([{'name': '.', 'type': 'dir', 'uid': 100, 'gid': 101},
                            {'name': 'filestore', 'type': 'dir', 'uid': 100, 'gid': 101},
@@ -311,7 +317,8 @@ class World(HaWorld):
                 modules = [['bad-name', '1', 'installed']] if kind == 'modules' else self.ha_modules
                 return {'modules': modules, 'partners': 5, 'users': 2, 'attachments': 1,
                         'attachment_bytes': 10, 'crons_active': 1, 'mail_servers_active': 0, 'size': 9000000,
-                        'extensions': self.ha_extensions, 'base_url': 'https://ha.local'}
+                        'extensions': self.extensions_by_db.get(database, self.ha_extensions),
+                        'base_url': 'https://ha.local'}
             if sql == ha_odoo.SUPERUSER_SQL:
                 return self.superuser_kinds
             if sql == ha_odoo.HAS_WEBSITE_SQL:
@@ -517,8 +524,8 @@ class OdooCase(ConversionCase):
         return {i['id']: i['level'] for i in OdooCase.issues(row, database)}
 
     @staticmethod
-    def keys(row):
-        return [i['key'] for i in row['issues'] if i['level'] == 'confirm']
+    def confirm_keys(row, database=None):
+        return [i['key'] for i in row['issues'] if i['level'] == 'confirm' and (database is None or i.get('database') == database)]
 
     def executed(self):
         db = next(c for c in self.world.owner.psql if c.endswith('-odoo-db'))
@@ -704,6 +711,330 @@ class OdooTargetTests(OdooCase):
         self.assertTrue(row['importable'], row['blockers'])
         user = [args[args.index('-U') + 1] for args in self.world.owner.calls if args[:2] == ('exec', 'odoo18-db')]
         self.assertTrue(user and set(user) == {'my admin$1'})
+
+
+def module_entries(name, manifest, *, extra=()):
+    """The tar entries of a custom module of the HA add-on (data/addons/<name>)."""
+    return [{'name': f'data/addons/{name}', 'type': 'dir'},
+            {'name': f'data/addons/{name}/__manifest__.py', 'data': manifest},
+            {'name': f'data/addons/{name}/__init__.py', 'data': b''}, *extra]
+
+
+def manifest_of(*, python=(), binaries=(), installable=True, version='18.0.1.0.0'):
+    return (f"{{'name': 'M', 'version': '{version}', 'depends': ['base'], 'installable': {installable!r}, "
+            f"'external_dependencies': {{'python': {list(python)!r}, 'bin': {list(binaries)!r}}}}}").encode()
+
+
+class OdooDatabaseTests(OdooCase):
+    """HAOS parity, HA's side: every database has its own verdict (rows OD-31 .. OD-50, UI-20)."""
+
+    def several(self):
+        self.world.ha_databases = [['woowtest', 9000000, 'C', 'C'], ['notodoo', 10, 'C', 'C'],
+                                   ['broken', 10, 'C', 'C'], ['junkmods', 10, 'C', 'C'], ['ha prod=1$', 9000000, 'C', 'C']]
+        self.world.not_odoo = {'notodoo'}
+        self.world.unreadable = {'broken': 'raise', 'junkmods': 'modules'}
+
+    def test_a_database_that_cannot_be_read_stops_only_itself(self):
+        """OD-32, OD-33, OD-34: not an Odoo database, a module list nobody can read, a content query that fails."""
+        self.several()
+        row = self.check()
+        self.assertTrue(row['importable'])
+        self.assertEqual(self.ids(row, 'notodoo'), {'odoo.not-odoo': 'stop'})
+        self.assertEqual(self.ids(row, 'broken'), {'odoo.db-unreadable': 'stop'})
+        self.assertEqual(self.ids(row, 'junkmods'), {'odoo.db-unreadable': 'stop'})
+        self.assertIn('模組清單', self.issues(row, 'junkmods')[0]['message'])
+        self.assertIn('資料庫的內容', self.issues(row, 'broken')[0]['message'])
+        self.assertEqual({row_['value']: row_['ok'] for row_ in row['choices']['database']},
+                         {'woowtest': True, 'notodoo': False, 'broken': False, 'junkmods': False, 'ha prod=1$': True})
+        databases = {db['name']: db for db in row['odoo']['databases']}
+        self.assertEqual((databases['woowtest']['ok'], databases['notodoo']['ok']), (True, False))
+        self.assertEqual(databases['notodoo']['blockers'], [ha_odoo.MSG_NOT_ODOO])
+        self.assertEqual(self.world.runs and sum(1 for run in self.world.runs if run[0] == 'hapg'), 1, 'one server for all')
+
+    def test_there_is_no_database_or_none_that_can_move(self):
+        """OD-47, OD-48: only the app stops."""
+        self.world.ha_databases = []
+        row = self.check()
+        self.assertFalse(row['importable'])
+        self.assertEqual([(i['id'], i['level']) for i in row['issues']], [('odoo.no-database', 'stop')])
+        self.world.ha_databases = [['notodoo', 10, 'C', 'C']]
+        self.world.not_odoo = {'notodoo'}
+        row = self.check()
+        self.assertFalse(row['importable'])
+        self.assertEqual({i['id'] for i in row['issues'] if i['level'] == 'stop'}, {'odoo.not-odoo', 'odoo.no-movable-database'})
+
+    def test_a_database_name_is_handed_to_the_tools_through_pgdatabase_never_on_a_command_line(self):
+        """OD-31: spaces, `=`, `$`, any text; `psql -d` would read `a=b` as a connection string."""
+        self.several()
+        name = 'ha prod=1$'
+        ha_id = self.upload_odoo()
+        row = self.check(ha_id)
+        self.assertEqual(self.ids(row, name).get('odoo.not-odoo'), None)
+        result = self.convert(ha_id, ['odoo'], odoo_database=name, acknowledged={'odoo': self.confirm_keys(row, name)})
+        self.assertEqual(result['ha_import']['odoo_database'], name)
+        with_name = [(c, cmd, env) for c, cmd, env in self.world.exec_env if env.get('PGDATABASE') == name]
+        self.assertTrue(any(cmd[0] == 'pg_dump' for _c, cmd, _e in with_name), 'pg_dump')
+        self.assertTrue(any(cmd[0] == 'psql' for _c, cmd, _e in with_name), 'psql')
+        for _c, cmd, env in with_name:
+            self.assertNotIn('-d', cmd)
+            self.assertFalse([part for part in cmd if name in part])
+        calls = [args for args in self.world.owner.calls if args[0] == 'exec']
+        self.assertFalse([args for args in calls if '-d' in args and name == args[args.index('-d') + 1]],
+                         'the name is never the argument of -d')
+        self.assertFalse([args for args in calls if name in args], 'nor any other argument')
+
+    def test_a_name_that_cannot_be_passed_stops_only_that_database(self):
+        self.world.ha_databases = [['woowtest', 9000000, 'C', 'C'], ['bad\nname', 1, 'C', 'C']]
+        row = self.check()
+        self.assertEqual(self.ids(row, 'bad\nname'), {'odoo.database-name': 'stop'})
+        self.assertEqual({r['value']: r['ok'] for r in row['choices']['database']}, {'woowtest': True, 'bad\nname': False})
+
+    def test_the_conversion_looks_at_its_database_again_by_the_same_rules(self):
+        """OD-50: what stops the database in the check stops its conversion, only that app; nothing is kept."""
+        self.several()
+        ha_id = self.upload_odoo()
+        for name, code in (('notodoo', 'odoo.not-odoo'), ('broken', 'odoo.db-unreadable')):
+            with self.subTest(name), self.assertRaises(BackupError) as caught:
+                self.convert(ha_id, ['odoo'], odoo_database=name)
+            self.assertEqual(caught.exception.code, 'incompatible')
+            self.assertEqual([i.id for i in caught.exception.issues], [code])
+        self.assertEqual(self.storage.list_backups(), [])
+        self.assertEqual(self.reporter.partial.get('temp_owners'), [])
+        self.world.ha_modules = [['base', '18.0.1.4', 'installed'], *self.world.ha_modules[1:]]   # it changed since the check
+        with self.assertRaises(BackupError) as caught:
+            self.convert(ha_id, ['odoo'])
+        self.assertEqual([i.id for i in caught.exception.issues], ['odoo.module-version-different'])
+
+    def test_the_databases_that_stay_on_ha_are_said_and_recorded(self):
+        """UI-20, S6: one line to confirm per database that can move; the conversion returns the names that stay."""
+        self.several()
+        ha_id = self.upload_odoo()
+        row = self.check(ha_id)
+        (line,) = [i for i in self.issues(row, 'woowtest') if i['id'] == 'odoo.databases-left']
+        self.assertEqual(line['level'], 'confirm')
+        self.assertEqual(sorted(line['items']), ['broken', 'ha prod=1$', 'junkmods', 'notodoo'])
+        self.assertIn('以後再匯入另一個會取代這次的', line['message'])
+        self.assertIn('odoo.databases-left', self.ids(row, 'ha prod=1$'))
+        with self.assertRaises(BackupError) as caught:
+            self.convert(ha_id, ['odoo'])      # not confirmed: only this app, nothing kept
+        self.assertEqual(caught.exception.code, 'confirmation-required')
+        self.assertEqual(self.storage.list_backups(), [])
+        result = self.convert(ha_id, ['odoo'], acknowledged={'odoo': [line['key']]})
+        self.assertEqual(result['ha_import']['left_databases'], ['notodoo', 'broken', 'junkmods', 'ha prod=1$'])
+        self.assertTrue(any('會留在 HA' in note for note in result['ha_import']['notes']))
+        self.assertEqual([i['id'] for i in result['results'][0]['issues'] if i['level'] == 'confirm'],
+                         ['odoo.databases-left'])
+
+    def test_one_more_database_on_ha_needs_the_confirmation_again(self):
+        self.several()
+        ha_id = self.upload_odoo()
+        row = self.check(ha_id)
+        keys = self.confirm_keys(row, 'woowtest')
+        self.world.ha_databases = [*self.world.ha_databases, ['newcomer', 10, 'C', 'C']]
+        with self.assertRaises(BackupError) as caught:
+            self.convert(ha_id, ['odoo'], acknowledged={'odoo': keys})
+        self.assertEqual(caught.exception.code, 'confirmation-required')
+        self.assertIn('請再確認一次', caught.exception.message)
+
+    def test_a_module_the_device_lacks_is_a_line_to_confirm_and_the_data_moves_with_it(self):
+        """OD-37: the functions of the module stop, the data stays; the message says the next update is stopped."""
+        self.world.ha_modules = [*self.world.ha_modules, ['gone_mod', '18.0.1.0.0', 'installed']]
+        ha_id = self.upload_odoo()
+        row = self.check(ha_id)
+        self.assertTrue(row['importable'])
+        (line,) = [i for i in row['issues'] if i['id'] == 'odoo.modules-missing']
+        self.assertEqual((line['level'], line['items'], line['database']), ('confirm', ['gone_mod'], 'woowtest'))
+        self.assertIn('結束碼 4', line['message'])
+        with self.assertRaises(BackupError) as caught:
+            self.convert(ha_id, ['odoo'])
+        self.assertEqual(caught.exception.code, 'confirmation-required')
+        self.assertEqual(self.storage.list_backups(), [])
+        result = self.convert(ha_id, ['odoo'], acknowledged={'odoo': [line['key']]})
+        self.assertEqual(result['apps'], ['odoo'])
+        self.world.ha_modules = [*self.world.ha_modules, ['gone_two', '18.0.1.0.0', 'installed']]   # one more name
+        with self.assertRaises(BackupError) as caught:
+            self.convert(ha_id, ['odoo'], acknowledged={'odoo': [line['key']]})
+        self.assertEqual(caught.exception.code, 'confirmation-required')
+
+    def test_a_custom_module_that_needs_a_missing_package_stays_out_and_the_rest_moves(self):
+        """OD-44."""
+        entries = module_entries('needs_zeep', manifest_of(python=['zeep']))
+        self.world.ha_modules = [*self.world.ha_modules, ['needs_zeep', '18.0.1.0.0', 'installed']]
+        ha_id = self.upload_odoo(entries)
+        row = self.check(ha_id)
+        (line,) = [i for i in row['issues'] if i['id'] == 'odoo.modules-skipped-deps']
+        self.assertEqual((line['level'], line['items']), ('confirm', ['needs_zeep（缺 zeep）']))
+        self.assertEqual([c['name'] for c in row['odoo']['databases'][0]['custom_modules']], ['woow_import_probe'])
+        with self.assertRaises(BackupError) as caught:
+            self.convert(ha_id, ['odoo'])
+        self.assertEqual(caught.exception.code, 'confirmation-required')
+        self.convert(ha_id, ['odoo'], acknowledged={'odoo': [line['key']]})
+        names = set(tarfile.open(fileobj=io.BytesIO(self.world.dir_data['.local/share/odoo18/addons'])).getnames())
+        self.assertIn('./woow_import_probe/__manifest__.py', names)
+        self.assertFalse([n for n in names if 'needs_zeep' in n], 'its files stay behind')
+
+    def test_custom_modules_with_odd_needs_are_copied_and_reminded(self):
+        """OD-43, OD-45, OD-46."""
+        entries = (module_entries('not_installable', manifest_of(installable=False))
+                   + module_entries('needs_program', manifest_of(binaries=['antiword']))
+                   + module_entries('native', manifest_of(), extra=[{'name': 'data/addons/native/lib.so',
+                                                                     'data': elf(0xB7) + b'x'}]))
+        self.world.ha_modules = [*self.world.ha_modules] + [[n, '18.0.1.0.0', 'installed']
+                                                           for n in ('not_installable', 'needs_program', 'native')]
+        ha_id = self.upload_odoo(entries)
+        row = self.check(ha_id)
+        self.assertTrue(row['importable'])
+        found = {i['id']: i for i in row['issues'] if i['id'].startswith(('odoo.module-', 'odoo.program'))}
+        self.assertEqual({k: v['level'] for k, v in found.items()},
+                         {'odoo.module-not-installable': 'notice', 'odoo.program-missing': 'notice',
+                          'odoo.module-foreign-native': 'notice'})
+        self.assertEqual(found['odoo.module-foreign-native']['items'], ['native'])
+        self.convert(ha_id, ['odoo'])     # nothing to confirm: all three are copied
+        names = set(tarfile.open(fileobj=io.BytesIO(self.world.dir_data['.local/share/odoo18/addons'])).getnames())
+        self.assertTrue({'./not_installable/__manifest__.py', './needs_program/__manifest__.py',
+                         './native/lib.so'} <= names)
+
+    def test_modules_waiting_for_an_installation_move_as_they_are_and_are_said_once(self):
+        """OD-36, OD-61."""
+        self.world.ha_modules = [*self.world.ha_modules, ['pending_mod', '18.0.1.0.0', 'to upgrade']]
+        ha_id = self.upload_odoo()
+        row = self.check(ha_id)
+        self.assertEqual(self.ids(row, 'woowtest')['odoo.modules-pending'], 'notice')
+        result = self.convert(ha_id, ['odoo'])
+        self.assertEqual([i['id'] for i in result['results'][0]['issues']].count('odoo.modules-pending'), 1)
+
+    def test_the_target_modules_that_cannot_be_read_are_left_out_of_the_comparison(self):
+        """OD-35: one broken module no longer hides the rest of the list."""
+        self.world.scan_broken = ['broken_one']
+        row = self.check()
+        self.assertTrue(row['importable'])
+        (line,) = [i for i in row['issues'] if i['id'] == 'odoo.target-modules-partial']
+        self.assertEqual((line['level'], line['items']), ('notice', ['broken_one']))
+
+    def test_a_target_whose_module_list_cannot_be_read_at_all_stops_only_odoo(self):
+        original = self.world.run
+
+        def run(name, image, args, argv, data):
+            if name.endswith('-scan'):
+                return Result(0, json.dumps({'error': 'ImportError', 'python': {}, 'bin': {}}).encode(), b'')
+            return original(name, image, args, argv, data)
+
+        self.world.run = run
+        row = self.check()
+        self.assertFalse(row['importable'])
+        self.assertEqual(row['issues'][0]['id'], 'failure.job-failed')
+        self.assertIn('模組清單', row['issues'][0]['message'])
+
+    def test_an_extension_the_device_has_and_trusts_is_created_one_it_does_not_trust_stops_the_database(self):
+        """OD-39."""
+        self.world.ha_databases = [['woowtest', 9000000, 'C', 'C'], ['linked', 10, 'C', 'C']]
+        self.world.extensions_by_db = {'woowtest': [['plpgsql', '1.0'], ['pgcrypto', '1.3']],
+                                       'linked': [['plpgsql', '1.0'], ['dblink', '1.2'], ['postgis', '3.4']]}
+        ha_id = self.upload_odoo()
+        row = self.check(ha_id)
+        self.assertEqual(self.ids(row, 'linked')['odoo.extension-unsupported'], 'stop')
+        self.assertEqual(sorted(self.issues(row, 'linked')[0]['items']), ['dblink', 'postgis'])
+        self.assertTrue({r['value']: r['ok'] for r in row['choices']['database']}['woowtest'])
+        self.convert(ha_id, ['odoo'], acknowledged={'odoo': self.confirm_keys(row, 'woowtest')})
+        self.assertIn('CREATE EXTENSION IF NOT EXISTS "pgcrypto"', '\n'.join(self.executed()))
+
+    def test_vector_is_created_only_when_the_image_has_it_or_the_database_uses_it(self):
+        """OD-57."""
+        self.world.live_extensions = [['plpgsql', True], ['pg_trgm', True], ['unaccent', True]]
+        ha_id = self.upload_odoo()
+        self.convert(ha_id, ['odoo'])
+        executed = '\n'.join(self.executed())
+        self.assertIn('CREATE EXTENSION IF NOT EXISTS "pg_trgm"', executed)
+        self.assertNotIn('vector', executed)
+        self.world.live_extensions = [['plpgsql', True], ['pg_trgm', True], ['vector', True]]
+        self.world.owner.psql.clear()
+        self.convert(ha_id, ['odoo'])
+        executed = '\n'.join(self.executed())
+        self.assertIn('CREATE EXTENSION IF NOT EXISTS "vector"', executed)
+        self.assertIn('ALTER EXTENSION vector UPDATE', executed)
+
+    def test_the_image_that_reads_vector_is_downloaded_and_the_database_read_again(self):
+        """OD-40."""
+        self.world.ha_extensions = [['plpgsql', '1.0'], ['vector', '0.8.0']]
+        row = self.check()
+        self.assertTrue(row['importable'], row['blockers'])
+        self.assertEqual(self.world.pulls, [ha_odoo.PG16_IMAGES[0]])
+        images = [run[1] for run in self.runs('hapg')]
+        self.assertEqual(images, ['docker.io/library/postgres:16.15-alpine', ha_odoo.PG16_IMAGES[0]])
+        self.assertIn('target.image-pulled', self.ids(row))
+
+    def test_without_the_vector_image_only_the_databases_that_use_it_stop(self):
+        self.world.ha_databases = [['woowtest', 9000000, 'C', 'C'], ['plain', 10, 'C', 'C']]
+        self.world.extensions_by_db = {'woowtest': [['plpgsql', '1.0'], ['vector', '0.8.0']]}
+        self.world.ha_extensions = [['plpgsql', '1.0']]
+        self.world.pull_works = False
+        row = self.check()
+        self.assertTrue(row['importable'])
+        self.assertEqual(self.ids(row, 'woowtest'), {'odoo.vector-image-missing': 'stop', 'odoo.databases-left': 'confirm',
+                                                     'odoo.crons-active': 'notice', 'odoo.website-domains': 'notice'})
+        self.assertEqual({r['value']: r['ok'] for r in row['choices']['database']}, {'woowtest': False, 'plain': True})
+
+    def test_reminders_after_the_conversion_do_not_stop_it(self):
+        """OD-66, OD-67, OD-69."""
+        self.world.verify_base_url = 'https://ha.local'
+        self.world.verify_domains = ['https://shop.ha.example']
+        self.world.refuse_setting = 'work_mem'
+        result = self.convert(self.upload_odoo(), ['odoo'])
+        ids = {i['id']: i for i in result['results'][0]['issues']}
+        self.assertEqual({ids[k]['level'] for k in ('odoo.url-differs', 'odoo.website-domain-kept',
+                                                    'odoo.settings-not-carried')}, {'notice'})
+        self.assertEqual(ids['odoo.settings-not-carried']['items'], ['work_mem'])
+        self.assertEqual(ids['odoo.website-domain-kept']['items'], ['https://shop.ha.example'])
+
+    def test_a_modules_folder_that_the_settings_do_not_list_is_not_filled(self):
+        """OD-72: the check says so; nothing fails at the end; the module of the backup counts as missing."""
+        self.catalog['odoo'].data_dirs = []
+        ha_id = self.upload_odoo()
+        row = self.check(ha_id)
+        self.assertTrue(row['importable'])
+        self.assertEqual(self.ids(row)['odoo.addons-folder-undeclared'], 'notice')
+        (line,) = [i for i in row['issues'] if i['id'] == 'odoo.modules-missing']
+        self.assertEqual(line['items'], ['woow_import_probe'])
+        result = self.convert(ha_id, ['odoo'], acknowledged={'odoo': [line['key']]})
+        self.assertEqual(self.world.manifests['odoo']['dirs'] if 'dirs' in self.world.manifests['odoo'] else {}, {})
+        self.assertEqual(result['apps'], ['odoo'])
+
+    def test_this_devices_other_volumes_and_folders_go_along_as_they_are(self):
+        """OD-12, OD-13."""
+        self.catalog['odoo'].volumes = [*self.catalog['odoo'].volumes, {'name': 'odoo-extra-vol'}]
+        self.catalog['odoo'].data_dirs = [*self.catalog['odoo'].data_dirs, {'path': '.local/share/odoo-extra'}]
+        ha_id = self.upload_odoo()
+        row = self.check(ha_id)
+        self.assertTrue(row['importable'], row['blockers'])
+        (line,) = [i for i in row['issues'] if i['id'] == 'odoo.extras-carried']
+        self.assertEqual((line['level'], line['items']), ('auto', ['odoo-extra-vol', '.local/share/odoo-extra']))
+        self.convert(ha_id, ['odoo'])
+        items = self.world.manifests['odoo']
+        self.assertEqual(sorted(items['volumes']), ['odoo-extra-vol', 'odoo18-db-data-isolated', 'odoo18-web-data'])
+        self.assertEqual(sorted(items['dirs']), ['.local/share/odoo-extra', '.local/share/odoo18/addons'])
+        with tarfile.open(fileobj=io.BytesIO(self.world.volume_data['odoo-extra-vol'])) as tar:
+            self.assertEqual(tar.extractfile('kept.txt').read(), b'this device')
+
+    def test_a_layout_the_import_does_not_know_still_stops_only_odoo_and_says_what_to_do(self):
+        self.catalog['odoo'].volumes = [{'name': 'odoo18-db-data-isolated'}]      # the data dir volume is not declared
+        row = self.check()
+        self.assertFalse(row['importable'])
+        self.assertEqual([(i['id'], i['level']) for i in row['issues']], [('odoo.layout-unsupported', 'stop')])
+        self.assertIn('應用設定', row['issues'][0]['action'])
+
+    def test_a_big_backup_is_given_the_time_and_room_it_needs(self):
+        """OD-28, OD-73: the exports, the module scan and the dump wait longer; the module list gets more room."""
+        with mock.patch.object(ha_odoo.hatarget, 'size_hint', lambda _ha: 200 * 1024 ** 3):
+            self.convert(self.upload_odoo(), ['odoo'])
+        limits = self.world.owner.limits
+        export = next(timeout for args, timeout, _m in limits if args[:3] == ('relay', 'volume', 'export'))
+        self.assertGreater(export, 3 * 3600)
+        scan = next((timeout, room) for args, timeout, room in limits
+                    if any(str(part).endswith('-scan') for part in args) and args[0] == 'run')
+        self.assertGreater(scan[0], 600)
+        self.assertGreater(scan[1], ha_odoo.SCAN_OUTPUT)
+        dump = next(timeout for args, timeout, _m in limits if 'pg_dump' in args)
+        self.assertGreater(dump, ha_odoo.DUMP_TIMEOUT)
 
 
 class VerifyConvertedTests(unittest.TestCase):

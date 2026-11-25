@@ -1129,7 +1129,7 @@ def read_conf(work, app, live):
 # ====================================================================== the verdict
 
 def database_issues(name, details, target, candidates, *, ha_major, target_major, extra_target='/mnt/extra-addons',
-                    vector_ok=True, others=()):
+                    vector_ok=True, others=(), can_copy=True):
     """(issues, copy, unavailable) of one HA database against the target: what to say about it (every issue belongs to
     the database `name`), the custom modules of the backup that go into the target's folder, and the modules that will not
     work on this device and that the customer confirms.
@@ -1141,7 +1141,9 @@ def database_issues(name, details, target, candidates, *, ha_major, target_major
     custom module that needs a package the target lacks, objects only a superuser can create and the databases that stay on
     HA are lines to confirm; modules still waiting for an installation or upgrade, a module that cannot be installed or
     needs a program, mail servers and crons are reminders; only what the data itself makes impossible stops this database
-    (another version of a module, a PostgreSQL that is newer, an extension this device's PostgreSQL does not have)."""
+    (another version of a module, a PostgreSQL that is newer, an extension this device's PostgreSQL does not have).
+    `can_copy` False (this device has no custom modules folder in its app settings): nothing can be put there, so a module
+    that only the backup has is a module the device lacks."""
     issues, copy, unavailable = [], {}, set()
 
     def add(issue_id, level, message, items=(), action=''):
@@ -1158,7 +1160,7 @@ def database_issues(name, details, target, candidates, *, ha_major, target_major
         has_copy = candidate is not None and manifest and same_version(manifest.get('version'), version)
         if effective is not None and same_version(effective[0], version):
             continue
-        if has_copy and (effective is None or effective[2].rstrip('/') == extra_target):
+        if has_copy and can_copy and (effective is None or effective[2].rstrip('/') == extra_target):
             copy[module] = candidate
             continue
         if effective is None:
@@ -1732,7 +1734,7 @@ def live_extensions(work, app, live):
     return found or None
 
 
-def analyse(work, app, tmp, src, candidates, cluster, live, *, image16, size=None):
+def analyse(work, app, tmp, src, candidates, cluster, live, *, image16, size=None, can_copy=True):
     """Per HA database: {name, ok, blockers, warnings, counts…, custom_modules, _details, _copy, _issues, _unavailable}
     (`_issues`: [haissues.Issue] of that database; `ok`: none of them stops it; `blockers` and `warnings` are the same
     sentences for the pages that do not read issues); plus the target inventory and the two PostgreSQL major versions.
@@ -1778,7 +1780,7 @@ def analyse(work, app, tmp, src, candidates, cluster, live, *, image16, size=Non
                 issues, copy, unavailable = database_issues(
                     name, details, target, candidates, ha_major=ha_major, target_major=target_major,
                     extra_target=extra_target or '/mnt/extra-addons', vector_ok='pgvector' in image16,
-                    others=[other for other in names if other != name])
+                    others=[other for other in names if other != name], can_copy=can_copy)
                 files, size_bytes = src.filestore.get(name, [0, 0])
                 if details['attachments'] and not files:
                     issues.append(Issue('odoo.filestore-missing', 'notice', '這個資料庫在 HA 備份裡沒有附件檔案（filestore）；'
@@ -1822,7 +1824,7 @@ def image_release(work, app, live):
     return None
 
 
-def _read(work, app, tmp, live, image16, *, size=None):
+def _read(work, app, tmp, live, image16, *, size=None, can_copy=True):
     """Stream HA's cluster into a throwaway volume, open it with the PostgreSQL 16 image `image16` and read every database;
     the server and its volume are removed again whatever happens. Returns (Source, databases, target)."""
     pg_ids = tmp.user_ids('ids-pg', image16, 'postgres')
@@ -1831,7 +1833,7 @@ def _read(work, app, tmp, live, image16, *, size=None):
         work.phase('check')
         cluster = start_ha_cluster(work, tmp, image16, size=src.pg_bytes)
         databases, target, _target_major, _ha_major_ = analyse(work, app, tmp, src, candidates, cluster, live,
-                                                               image16=image16, size=size)
+                                                               image16=image16, size=size, can_copy=can_copy)
     finally:
         tmp.remove('hapg')
         tmp.remove_volume('hapg')
@@ -1856,7 +1858,8 @@ def check(work, app):
     live_role(work, app, live, conf, sink)
     image16 = pick_pg16(work, app)
     size = hatarget.size_hint(getattr(work, 'ha', None))
-    src, databases, target = _read(work, app, tmp, live, image16, size=size)
+    can_copy = target_items.addons_rel is not None
+    src, databases, target = _read(work, app, tmp, live, image16, size=size, can_copy=can_copy)
     if 'pgvector' not in image16 and any('vector' in (entry.get('_details') or {}).get('extensions', ())
                                          for entry in databases):
         try:   # OD-40: a database uses vector, the image that read it cannot: the one that can is downloaded, and it reads again
@@ -1866,7 +1869,7 @@ def check(work, app):
                 raise
         else:
             image16 = PG16_IMAGES[0]
-            src, databases, target = _read(work, app, tmp, live, image16, size=size)
+            src, databases, target = _read(work, app, tmp, live, image16, size=size, can_copy=can_copy)
     if target.get('broken'):
         sink.notice('odoo.target-modules-partial', '這台 Odoo 有些模組讀不出來（可能壞了或設定錯了），比對時略過了它們；'
                     '資料庫要用到它們的話會被當成缺模組。', target['broken'])
@@ -2113,6 +2116,8 @@ def convert(work, app, database, test_mode, out_dir):
     The chosen database is looked at again exactly as the check did and by the same rules (OD-50): what stops it stops this
     app, a line to confirm that was not confirmed -- or confirmed with other names -- is `confirmation-required`."""
     sink = work.sink(app)
+    if getattr(sink, 'database', None) is None:   # what concerns another database than this one is not this conversion's
+        sink.database = database
     runner = work.runner(app)
     adapter = work.adapter(app)
     tmp = work.temp(app)
@@ -2161,7 +2166,8 @@ def convert(work, app, database, test_mode, out_dir):
     web.close()
     work.phase('convert')
     cluster = start_ha_cluster(work, tmp, image16, size=src.pg_bytes)
-    databases, target, _major, _ha = analyse(work, app, tmp, src, candidates, cluster, live, image16=image16, size=size)
+    databases, target, _major, _ha = analyse(work, app, tmp, src, candidates, cluster, live, image16=image16, size=size,
+                                             can_copy=items.addons_rel is not None)
     entry = next((db for db in databases if db['name'] == database), None)
     if entry is None:
         raise BackupError('not-found', f'HA 備份裡沒有資料庫 {database}。', database=database)
@@ -2241,8 +2247,10 @@ def convert(work, app, database, test_mode, out_dir):
                                 unavailable=unavailable)
     if problems:
         raise BackupError('job-failed', f'轉換後的 Odoo 資料庫檢查沒有通過：{"；".join(problems)}。')
+    said = {(issue.id, issue.database) for issue in sink.found}
     for issue_id, message, names in converted_notes(doc, details, live_values):
-        sink.notice(issue_id, message, names, database=database)
+        if (issue_id, database) not in said:   # the check's own line about the same thing is not said twice
+            sink.notice(issue_id, message, names, database=database)
     carry_settings(work, app, live, pg17)
     pg17.statement('CHECKPOINT;')
     code = tmp.stop('odoo-db', timeout=300)

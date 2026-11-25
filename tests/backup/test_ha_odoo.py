@@ -533,7 +533,7 @@ class CheckCleanupTests(unittest.TestCase):
         temp = mock.Mock()
         work = mock.Mock()
         work.temp.return_value = temp
-        target = types.SimpleNamespace(live=mock.Mock())
+        target = types.SimpleNamespace(live=mock.Mock(), addons_rel='.local/share/odoo18/addons')
         with mock.patch.object(ha_odoo, 'Target', return_value=target), \
              mock.patch.object(ha_odoo, 'read_conf', return_value={}), \
              mock.patch.object(ha_odoo.hatarget, 'ensure_image'), \
