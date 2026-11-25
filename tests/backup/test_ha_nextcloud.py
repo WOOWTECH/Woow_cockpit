@@ -1640,11 +1640,41 @@ class ConvertTests(NextcloudCase):
                 self.assertEqual(caught.exception.code, 'job-failed')
                 self.assertIn(text, caught.exception.message)
 
-    def test_no_share_is_refused_before_anything_is_built(self):
+    def test_no_share_stops_before_anything_is_built_until_it_is_confirmed(self):
         with self.assertRaises(BackupError) as caught:
             self.convert(self.upload_nextcloud(share=None), ['nextcloud'])
         self.assertIn('沒有包含 share 資料夾', caught.exception.message)
         self.assertFalse(self.runs('nc-db') or self.runs('hapg'), 'no cluster is started')
+
+
+class StopsHoldTests(NextcloudCase):
+    """The stops that remain stay stops for a conversion whatever sink it was given: one that only collects (haissues.Sink
+    without confirmations) raises nothing itself, the conversion does."""
+
+    def collecting(self):
+        return mock.patch.object(haimport.Work, 'sink', lambda work, app: work.__dict__.setdefault('_collect', {}).setdefault(
+            'x', haissues.Sink('nextcloud')))
+
+    def test_a_stop_of_the_add_on_stops_the_conversion(self):
+        config = HA_CONFIG.replace(b"'installed' => true,", b"'installed' => false,")
+        with self.collecting(), self.assertRaises(BackupError) as caught:
+            self.convert(self.upload_nextcloud(config=config), ['nextcloud'])
+        self.assertEqual([i.id for i in caught.exception.issues], ['nextcloud.not-installed'])
+        self.assertFalse(self.runs('nc-db') or self.runs('hapg'), 'nothing is built')
+
+    def test_a_stop_of_the_data_directory_stops_the_conversion(self):
+        config = HA_CONFIG.replace(b"'datadirectory' => '/share/nextcloud',", b'')
+        with self.collecting(), self.assertRaises(BackupError) as caught:
+            self.convert(self.upload_nextcloud(config=config), ['nextcloud'])
+        self.assertIn('nextcloud.no-datadir-setting', [i.id for i in caught.exception.issues])
+        self.assertFalse(self.runs('nc-db') or self.runs('hapg'))
+
+    def test_a_stop_of_the_database_stops_the_conversion_before_the_new_cluster(self):
+        self.world.ha_details = dict(self.world.ha_details, extensions=['plpgsql', 'postgis'])
+        with self.collecting(), self.assertRaises(BackupError) as caught:
+            self.convert(self.upload_nextcloud(), ['nextcloud'])
+        self.assertIn('nextcloud.extension-missing', [i.id for i in caught.exception.issues])
+        self.assertFalse(self.runs('nc-db'))
 
 
 class LiveTargetTests(NextcloudCase):
