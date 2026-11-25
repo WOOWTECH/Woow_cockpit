@@ -1212,8 +1212,11 @@ def _mark_interrupted(paths, store, record, now, restart_writers, cleanup_fresh,
     """Finish a dead job's fresh record as `interrupted`; the state is committed before any clean-up runs, so a
     helper killed during the clean-up leaves a finished record whose leftovers the next pass completes."""
     message, result = interrupted_details(record)
-    from . import hachain
-    message, result = hachain.interrupted(record, message, result)  # a job of an import's chain: which apps are done
+    try:
+        from . import hachain
+        message, result = hachain.interrupted(record, message, result)  # a job of an import's chain: which apps are done
+    except Exception:  # noqa: BLE001 - recovery must never break status/jobs: the job's own words stay
+        traceback.print_exc(file=sys.stderr)
     if result is not None:
         record['result'] = result
     for item in record.get('phases') or []:

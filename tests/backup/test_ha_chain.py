@@ -274,6 +274,52 @@ class ParamsTests(unittest.TestCase):
             self.assertLessEqual(len(text), haissues.MAX_MESSAGE)
             self.assertNotRegex(text, r'[`$]')
 
+    def test_odd_records_never_raise_where_recovery_reads_them(self):
+        """Fixed-seed fuzz: whatever a record holds, group_of / chain_of / in_chain / interrupted answer (never raise): recovery
+        reads every record on every status call."""
+        import random
+        rng = random.Random(20261125)
+        good = self.params(results=[hachain.group_result('odoo', 'imported', None, 'x')])
+        values = [None, True, 0, -1, 5, 2 ** 70, 1.5, '', 'g0123456789abcdef', 'odoo', 'x' * 500, [], [1, 2], {}, {'a': 1},
+                  ['odoo', 'odoo'], {'apps': 5}, '\u202e', 'a\x00b']
+
+        def mutate(value, depth=0):
+            if isinstance(value, dict) and value:
+                out = dict(value)
+                key = rng.choice(sorted(out, key=str))
+                if depth < 2 and rng.random() < 0.5:
+                    out[key] = mutate(out[key], depth + 1)
+                elif rng.random() < 0.2:
+                    del out[key]
+                else:
+                    out[key] = rng.choice(values)
+                return out
+            if isinstance(value, list) and value:
+                out = list(value)
+                out[rng.randrange(len(out))] = rng.choice(values) if rng.random() < 0.5 else mutate(out[rng.randrange(len(out))], depth + 1)
+                return out
+            return rng.choice(values)
+
+        accepted = 0
+        for _ in range(600):
+            params = mutate(json.loads(json.dumps(good)))
+            record = {'id': 'j20261125T100000Z-00000001', 'params': params, 'started': rng.choice([None, '2026-11-25T10:00:00Z', 5])}
+            group, chain = hachain.group_of(params), hachain.chain_of(params)
+            self.assertEqual(hachain.in_chain(record), chain is not None)
+            message, result = hachain.interrupted(record, 'm', {'x': 1})
+            self.assertIsInstance(message, str)
+            if chain is None:
+                self.assertEqual((message, result), ('m', {'x': 1}))
+            else:
+                accepted += 1
+                self.assertEqual(result['group']['id'], group['id'])
+                for row in result['group']['results']:
+                    self.assertEqual(list(row), list(hachain.RESULT_KEYS))
+        self.assertGreater(accepted, 50, 'the fuzz reaches the accepting paths too')
+        self.assertIsNone(hachain.group_of(5))
+        self.assertEqual(hachain.interrupted({'params': 5}, 'm', None), ('m', None))
+        self.assertEqual(hachain.interrupted({}, 'm', None), ('m', None))
+
     def test_the_stop_names_its_reason_and_text(self):
         for code, key in (('cancelled', 'cancelled'), ('stopped', 'stopped'), ('interrupted', 'interrupted'),
                           ('key-required', 'key'), ('wrong-key', 'key'), ('insufficient-space', 'space'),
@@ -1195,6 +1241,18 @@ class RecoveryTests(ChainCase):
         self.assertEqual((row['status'], row['backup_id'], row['code']), ('converted', backup_id(1), 'interrupted'))
         self.assertEqual({app: r['status'] for app, r in self.last_results().items() if app != 'odoo'},
                          {'n8n': 'not-started', 'emqx': 'not-started'})
+
+    def test_a_record_recovery_cannot_read_is_still_marked_interrupted(self):
+        """jobs._mark_interrupted guards hachain: whatever it raises, the job is finished with its own words."""
+        job = self.store.create('backup', {'apps': ['a']}, now=time.time() - 1000)
+        record = self.store.get(job['id'])
+        record['state'] = 'running'
+        self.store.save(record)
+        with mock.patch.object(hachain, 'interrupted', side_effect=RuntimeError('boom')), \
+                contextlib.redirect_stderr(io.StringIO()):
+            changed = jobs.recover_interrupted(self.paths, unit_active=lambda unit: False)
+        self.assertEqual(changed, [job['id']])
+        self.assertEqual(self.store.get(job['id'])['state'], 'interrupted')
 
     def test_while_the_unit_lives_neither_job_is_touched(self):
         """Every job of the import carries the unit of the first one: it keeps the queued job from being judged dead."""
