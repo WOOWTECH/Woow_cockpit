@@ -5164,7 +5164,7 @@
         : done.length ? `${done.length} 個應用${converted ? "已轉換" : "已匯入"}，其他沒有` : "沒有應用被匯入";
     return [
       h("h3", { class: "step-title", text: "匯入結果" }),
-      h("div", { class: `result result-${tone}`, role: "status", dataset: { result: "group" } },
+      h("div", { class: `ha-result result-${tone}`, role: "status", dataset: { result: "group" } },
         h("p", { class: "ha-summary", text: title }),
         error ? errorNotice(error, { live: false }) : null,
         info ? h("p", { class: "muted", text: haGroupSummary(info) }) : null),

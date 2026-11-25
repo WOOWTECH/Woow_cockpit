@@ -670,6 +670,8 @@ input.switch[type="checkbox"]:disabled { cursor: default; opacity: .6; }
 .ha-group-message { margin: 0; overflow-wrap: anywhere; }
 .ha-group-message.strong { font-weight: 600; }
 .ha-group-row .secondary { margin: 0; overflow-wrap: anywhere; }
+.ha-result { border: 1px solid var(--hairline); border-radius: var(--radius); padding: 6px 16px 14px; display: grid; gap: 6px; min-inline-size: 0; }
+.ha-result .ha-summary { margin-block-start: 8px; }
 .ha-after { margin-block-start: 18px; }
 .ha-job-group { margin-block-start: 6px; }
 :root.pf-v6-theme-dark .ha-issue-stop, :root.pf-v6-theme-dark .ha-group-row.needs-person { border-color: #ff8a96; }
